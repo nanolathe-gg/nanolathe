@@ -381,7 +381,7 @@ func runGameShell(opts Options, cs *contentSet) error {
 		}
 	}
 	fmt.Fprintf(os.Stderr, "nanolathe: retail frontend: %d skirmish maps\n", len(maps))
-	return ebitenapp.Run(cl, rendererMode(opts))
+	return ebitenapp.Run(cl, rendererMode(opts), windowRunOptions(opts))
 }
 
 func loadMenuAssets(cs *contentSet) *menuAssets {

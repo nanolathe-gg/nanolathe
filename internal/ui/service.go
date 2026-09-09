@@ -398,7 +398,6 @@ func (p *Panel) serviceList(idx int, hooks WidgetHooks) {
 	if rows <= 0 {
 		return
 	}
-	p.listMaxTop[idx] = maxInt(0, l.Len()-rows)
 	if p.pointerX < r.X || p.pointerX > r.X+r.W-1 || p.pointerY < r.Y+2 || p.pointerY > r.Y+r.H-4 {
 		return
 	}
@@ -412,7 +411,7 @@ func (p *Panel) serviceList(idx int, hooks WidgetHooks) {
 	if sel < 0 {
 		return
 	}
-	if g.Attribs&0x200 != 0 && strings.HasPrefix(l.items[sel], "&G") {
+	if g.Attribs&0x200 != 0 && p.listHeading(idx, sel) {
 		return
 	}
 	p.setListSelection(idx, sel, hooks)
@@ -440,7 +439,7 @@ func (p *Panel) scrollCapturedList(idx int, hooks WidgetHooks) {
 	if p.Window.Gadgets[idx].Attribs&0x10 == 0 {
 		return
 	}
-	if p.pointerY > r.Y+r.H-4 && l.top < p.listMaxTop[idx] {
+	if p.pointerY > r.Y+r.H-4 && l.top < p.ListMaxTopAt(idx) {
 		l.top++
 		if !p.listHeading(idx, l.top+rows-1) {
 			p.setListSelection(idx, l.top+rows-1, hooks)
@@ -541,7 +540,7 @@ func (p *Panel) syncSlider(idx int, hooks WidgetHooks) {
 			visible := int(p.Window.PlacedRect(i).H) / int(other.ItemHeight)
 			e := 0
 			if other.Attribs&0x20 != 0 {
-				e = travel / (p.listMaxTop[i] + 1)
+				e = travel / (p.ListMaxTopAt(i) + 1)
 			}
 			l.top = (count - visible) * (p.knob[idx] + e) / (travel - 1)
 			if l.top < 0 {
@@ -552,14 +551,15 @@ func (p *Panel) syncSlider(idx int, hooks WidgetHooks) {
 }
 
 // listRows is the pointer and edge-scroll geometry. The default is the
-// selected font metric plus one; an authored item height replaces it [07 R-WGT-01 §4].
+// selected font metric plus one; fill normalizes authored heights through that
+// floor before service reads them [07 R-WGT-01 §4].
 func (p *Panel) listRows(idx, metric int) (rowH, rows int) {
 	if p == nil || p.Window == nil || idx < 0 || idx >= len(p.Window.Gadgets) {
 		return 0, 0
 	}
 	g, r := p.Window.Gadgets[idx], p.Window.PlacedRect(idx)
 	rowH = int(g.ItemHeight)
-	if rowH == 0 {
+	if rowH <= metric+1 {
 		rowH = metric + 1
 	}
 	if rowH <= 0 {
@@ -653,10 +653,10 @@ func (p *Panel) setListSelection(idx, sel int, hooks WidgetHooks) {
 		}
 		if other.Kind == gui.KindScrollBar && l.Len() > 1 {
 			travel := p.sliderTravel(i, hooks)
-			if p.listMaxTop[idx] == 0 || travel <= 0 {
+			if p.ListMaxTopAt(idx) == 0 || travel <= 0 {
 				p.knob[i] = 0
 			} else {
-				p.knob[i] = l.top * travel / p.listMaxTop[idx]
+				p.knob[i] = l.top * travel / p.ListMaxTopAt(idx)
 			}
 			p.markDirty()
 			continue
@@ -694,11 +694,11 @@ func (p *Panel) listPointerSelectable(idx int, hooks WidgetHooks) bool {
 	sel := l.top + int((p.pointerY-(r.Y+2))/int32(rowH))
 	sel = minInt(sel, l.top+rows-1)
 	sel = minInt(sel, l.Len()-1)
-	return sel >= 0 && !(g.Attribs&0x200 != 0 && strings.HasPrefix(l.items[sel], "&G"))
+	return sel >= 0 && !(g.Attribs&0x200 != 0 && p.listHeading(idx, sel))
 }
 func (p *Panel) listHeading(idx, selection int) bool {
 	l := p.ListAt(idx)
-	return l != nil && selection >= 0 && selection < l.Len() && p.Window.Gadgets[idx].Attribs&0x200 != 0 && strings.HasPrefix(l.items[selection], "&G")
+	return l != nil && selection >= 0 && selection < l.Len() && (p.ListRowFlagAt(idx, selection) == 1 || strings.HasPrefix(l.items[selection], "&G"))
 }
 func (p *Panel) serviceLinkOrFire(idx int, button uint8, result *ServiceResult) bool {
 	g := p.Window.Gadgets[idx]

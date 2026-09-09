@@ -8,6 +8,7 @@ import (
 // by the owning screen; selection and scrolling do not mutate simulation.
 type List struct {
 	items    []string
+	flags    []byte
 	selected int
 	top      int
 }
@@ -71,6 +72,16 @@ func (p *Panel) ListValuesAt(index int) (items []string, selected, top int, ok b
 		return nil, 0, 0, false
 	}
 	return l.Items(), l.selected, l.top, true
+}
+
+// ListRowFlagAt returns the copied flag for one text-list row. Only a value of
+// one has a known presentation meaning [07 R-WGT-01 §4].
+func (p *Panel) ListRowFlagAt(index, row int) byte {
+	l := p.ListAt(index)
+	if l == nil || row < 0 || row >= len(l.flags) {
+		return 0
+	}
+	return l.flags[row]
 }
 
 // ListFor returns the runtime list object for geometry code that needs to
@@ -849,6 +860,7 @@ func (p *Panel) SetListAt(index int, items []string) {
 		state.list = l
 	}
 	l.items = append(l.items[:0], items...)
+	l.flags = l.flags[:0]
 	if len(l.items) == 0 {
 		l.selected, l.top = 0, 0
 		return
@@ -864,6 +876,64 @@ func (p *Panel) SetListAt(index int, items []string) {
 	}
 	if l.top < 0 {
 		l.top = 0
+	}
+}
+
+// FillTextListAt installs a text-list source and its fill-time geometry. The
+// list owner supplies the current text metric; service and associated bars use
+// the resulting max top without deriving a second limit [07 R-WGT-01 §4].
+func (p *Panel) FillTextListAt(index int, items []string, flags []byte, metric int) {
+	state := p.stateAt(index)
+	if state == nil || p.Window == nil || index < 0 || index >= len(p.Window.Gadgets) || p.Window.Gadgets[index].Kind != gui.KindListBox {
+		return
+	}
+	l := state.list
+	if l == nil {
+		l = &List{}
+		state.list = l
+	}
+	l.items = append(l.items[:0], items...)
+	l.flags = append(l.flags[:0], flags...)
+	l.selected, l.top = 0, 0
+
+	g := &p.Window.Gadgets[index]
+	g.Attribs |= 0x10
+	if flags != nil {
+		g.Attribs |= 0x800
+	} else {
+		g.Attribs &^= 0x800
+	}
+	rowH := int(g.ItemHeight)
+	if rowH <= metric+1 {
+		rowH = metric + 1
+		g.ItemHeight = int16(rowH)
+	}
+	remaining := int(p.Window.PlacedRect(index).H)
+	maxTop := maxInt(0, len(l.items)-1)
+	for row := len(l.items) - 1; row >= 0; row-- {
+		remaining -= rowH
+		if remaining < 0 {
+			break
+		}
+		maxTop = row
+	}
+	p.listMaxTop[index] = maxTop
+
+	overflow := maxTop > 0
+	for i, other := range p.Window.Gadgets {
+		if other.Assoc != g.Assoc {
+			continue
+		}
+		if other.Kind == gui.KindScrollBar {
+			p.knob[i] = 0
+			if p.ActiveAt(index) {
+				p.SetActiveAt(i, overflow)
+			}
+			continue
+		}
+		if p.ActiveAt(index) && other.Kind == gui.KindButton && other.Attribs&0x1800 != 0 {
+			p.SetActiveAt(i, overflow)
+		}
 	}
 }
 
@@ -910,8 +980,8 @@ func (p *Panel) ScrollListAt(index int, delta, visibleRows int) (int, bool) {
 }
 
 // SetListTop sets a list's scroll origin and clamps it to the supplied
-// geometry-derived maximum top row. Callers that have row geometry should
-// derive maxTop from items-visibleRows before calling this method.
+// geometry-derived maximum top row. It stores that supplied screen-owned
+// bound so later drawing and service share the same range.
 func (p *Panel) SetListTop(name string, top, maxTop int) bool {
 	return p.SetListTopAt(p.Index(name), top, maxTop)
 }
@@ -922,16 +992,18 @@ func (p *Panel) SetListTopAt(index int, top, maxTop int) bool {
 	if l == nil {
 		return false
 	}
-	if len(l.items) == 0 {
-		l.top = 0
-		return true
-	}
 	if maxTop < 0 {
 		maxTop = 0
+	}
+	if len(l.items) == 0 {
+		l.top = 0
+		p.SetListMaxTopAt(index, maxTop)
+		return true
 	}
 	if maxTop >= len(l.items) {
 		maxTop = len(l.items) - 1
 	}
+	p.SetListMaxTopAt(index, maxTop)
 	l.top = top
 	if l.top < 0 {
 		l.top = 0

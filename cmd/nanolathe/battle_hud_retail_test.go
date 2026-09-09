@@ -129,6 +129,7 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 	if choice1 < 0 {
 		t.Fatal("YESORNO has no CHOICE1 gadget")
 	}
+	b.hud.openConfirmWindow()
 	if got := b.hud.modalGadgetRect(b.hud.confirmWin, choice1, nil); got.W != 96 || got.H != 20 {
 		t.Fatalf("YESORNO CHOICE1 runtime size = %dx%d, want stock frame 96x20", got.W, got.H)
 	}

@@ -169,7 +169,7 @@ func (c *Client) modelStates(m *unitModel, pieces []frame.PieceView) []compiledm
 		states[idx] = compiledmodel.PieceState{
 			RotX: pv.RotX, RotY: pv.RotY, RotZ: pv.RotZ,
 			Trans:     [3]numeric.Fixed{pv.Tx, pv.Ty, pv.Tz},
-			DontShade: pv.DontShade, Hidden: pv.Hidden, DontShadow: pv.DontShadow,
+			DontShade: pv.DontShade, Hidden: pv.Hidden, DontShadow: pv.DontShadow, DontCache: pv.DontCache,
 		}
 	}
 	return states
@@ -205,7 +205,7 @@ func modelStatesForCompiled(m *compiledmodel.Model, pieces []frame.PieceView) []
 		states[idx] = compiledmodel.PieceState{
 			RotX: pv.RotX, RotY: pv.RotY, RotZ: pv.RotZ,
 			Trans:     [3]numeric.Fixed{pv.Tx, pv.Ty, pv.Tz},
-			DontShade: pv.DontShade, Hidden: pv.Hidden, DontShadow: pv.DontShadow,
+			DontShade: pv.DontShade, Hidden: pv.Hidden, DontShadow: pv.DontShadow, DontCache: pv.DontCache,
 		}
 	}
 	return states
@@ -233,12 +233,42 @@ func (c *Client) drawUnitModel(v frame.UnitView, sx, sy int32) bool {
 	// [03 §5.2][R-REN-03A §1]. The parameters are the caller's bucket
 	// coordinates and are retained only so the two present passes read alike.
 	_, _ = sx, sy
-	draw, ok := c.unitDrawFor(v)
+	if c.geometryOnlyModels {
+		draw, ok := c.unitDrawFor(v)
+		if !ok {
+			return false
+		}
+		reveal, outline := c.unitNanoframeReveal(v)
+		return c.recordModelGeometryOnly(draw, v.Owner, unitTeamColor(v), unitPresentationID(v), modelCursorUnit, reveal, outline)
+	}
+	m, ok := c.composeUnitModel(v)
 	if !ok {
 		return false
 	}
-	reveal, outline := c.unitNanoframeReveal(v)
-	return c.drawModel(draw, v.Owner, unitTeamColor(v), unitPresentationID(v), modelCursorUnit, reveal, outline)
+	id := unitPresentationID(v)
+	if m.direct {
+		live, ok := c.composeDirectLiveModel(m.draw, unitTeamColor(v), id, modelCursorUnit, m.directLane)
+		if !ok {
+			return false
+		}
+		c.finishModel(live, nil)
+		return true
+	}
+	if m.image == nil {
+		return false
+	}
+	if m.image.height == nil {
+		// The cached body commits first; every live piece then draws directly
+		// in reverse piece order, without a key plane [03 R-REN-03A §4].
+		c.finishModel(m, nil)
+		live, liveOK := c.composeDirectLiveModel(m.draw, unitTeamColor(v), id, modelCursorUnit, presentationrender.PieceLaneLive)
+		if liveOK {
+			c.emitModel(pendingModelCommit{m: live, blit: live.image, body: true, trace: true})
+		}
+		return true
+	}
+	c.finishModel(m, nil)
+	return true
 }
 
 // drawFeatureModel and drawProjectileModel share the same concrete traversal.

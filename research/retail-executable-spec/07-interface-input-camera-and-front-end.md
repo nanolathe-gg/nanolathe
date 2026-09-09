@@ -1233,8 +1233,9 @@ common GAF (or the saved-under image), then rows `i = 0, 1, …` while
 1 / 2 / 4 = `gx+2` / centred / `gx+w−textW`, Y the row top; a row taller
 than `metric + 6` uses the word-wrapping drawer, else the single-line
 drawer; text colour = the window colour-table entry the gadget's `colorf`
-selects. A heading row (`&G` prefix, or a per-row flag byte of 1) is drawn
-without its prefix and darkened four times (19, 20, 21, 22 palette steps);
+selects. A text heading with the `&G` prefix is drawn without that prefix; a
+per-row flag byte of 1 also marks a heading but preserves its text bytes. Both
+forms are darkened four times (19, 20, 21, 22 palette steps);
 the selected row (attribute `0x100` clear) is lightened by 30 steps whether
 or not the list has focus. Record lists draw each item's frame and lighten
 the selected one by 20.
@@ -2321,9 +2322,9 @@ horizontal frames. The staged common entries used by this menu are
   in their own records.
 * List controls retain a selected item and a top visible item. A row hit is
   resolved against the list's two-pixel inner origin and the runtime font
-  height. The row pitch is the authored `itemheight` when it is non-zero and
-  the GAF-font metric plus one otherwise; the row-pitch initializer raises a
-  zero authored value to that same default. The selected row is not painted
+  height. Filling a text list raises an authored `itemheight` at or below the
+  metric-plus-one floor to that floor; the GAF-font metric is capital-I height
+  plus two and the FNT metric is its header height. The selected row is not painted
   with art: the row renderer draws the row's text first and then hands the row
   rectangle to the light-level remapper at level `+30`. A non-negative level
   there indexes the 32-row
@@ -3372,19 +3373,20 @@ localised help (or the empty string when nothing is hovered) into the gadget
 named `HELPTEXT` and requests a redraw ([R-WGT-01 §1]); the skirmish rows
 use it for their runtime help lines.
 
-**Established fact — listbox fill.** The list filler takes a gadget name
-(fatal lookup), the item block, the count and an optional per-row flag
-array. It stores count and block, sets attribute `0x10` (row-select mode),
-and computes the row metric `m` — the capital-`I` frame height `+ 2` for a
-GAF font, else the FNT height; when the authored `itemheight ≤ m + 1` it is
-replaced by `m + 1`. The flag array, when given, is stored with attribute
-`0x800`. `top` and `selected` become 0 and `maxTop` is computed by walking
-rows from the last: starting with the gadget height, subtract the row height
-(`itemheight`, or `m + 1` when it is 0) once per row; `maxTop` is the
-lowest row index reached before the height goes negative (0 when every row
-fits). When the gadget is active, the kind-4 gadget with the same association
-id on the top window is shown when the rows overflow and hidden otherwise,
-and on overflow its knob is re-synchronised ([R-WGT-01 §5]).
+**Established fact — listbox fill.** The list filler takes a gadget name,
+the item text, its count and an optional per-row flag array. It copies those
+rows, enables row selection, and computes metric `m` — capital-I height plus
+two for a GAF font, otherwise the FNT height. An authored item height at or
+below `m + 1` becomes `m + 1`. It resets `top`, selection and the associated
+knob to zero. It initializes `maxTop` to `count − 1`, then walks backward from
+that row while subtracting the row height from the gadget height; it replaces
+the candidate only while the remainder is non-negative. Thus a row ending
+exactly at the bottom is retained. An active list with overflow activates its
+same-association kind-4 control and its synthesized arrows; a fresh fill with
+no overflow leaves those controls inactive. A row flag value exactly `1`, as
+well as the text prefix `&G`, marks a heading; the flagged form leaves its
+text bytes intact. The variable record-list payload remains unknown
+([R-WGT-01 §4], §5).
 
 **Established fact — synthesised gadgets.** Screens append gadgets at run
 time by two helpers. *Append label* adds a kind-5 record named as given at
@@ -7697,7 +7699,7 @@ and the decider that would close it.
   trace.
 - The meaning of the window key-navigation flag's clear state per front-end
   screen · §3 · per-screen static trace.
-- Who fills each listbox's `maxTop`; the record-list item structures · §4
+- The record-list item structures beyond their known height path · §4
   [R-WGT-01 §4, §5] · static trace.
 - Whether the label under a briefing blink word also draws the run, or
   elides it · §5 [R-FE-02 §7] · static trace of the pager's copy loop.

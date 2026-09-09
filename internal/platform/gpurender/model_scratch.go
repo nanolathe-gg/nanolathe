@@ -37,9 +37,13 @@ func (s *frameArena[T]) take(n int) []T {
 		n = 0
 	}
 	if s.off+n > len(s.buf) {
-		size := 2 * len(s.buf)
-		if size < n {
-			size = n
+		// The fresh array has to hold what this frame has already handed out as
+		// well as this request, or the same frame grows again a few takes later
+		// and the arena converges one request at a time instead of at once
+		// (docs/DESIGN_GPU_RENDERER.md §13 "CPU/allocation policy").
+		size := 2 * (s.off + n)
+		if size < 2*len(s.buf) {
+			size = 2 * len(s.buf)
 		}
 		s.buf = make([]T, size)
 		s.off = 0
@@ -56,6 +60,7 @@ func (s *frameArena[T]) reset() { s.off = 0 }
 // [DESIGN_GPU_RENDERER.md §11.2 "Allocation policy"].
 type modelPrepScratch struct {
 	strips   frameArena[modelGPUFace]
+	crosses  frameArena[bool]
 	vertices frameArena[modelGPUVertex]
 	prepared frameArena[preparedModelFace]
 	ears     frameArena[int]
@@ -64,13 +69,14 @@ type modelPrepScratch struct {
 
 func (s *modelPrepScratch) reset() {
 	s.strips.reset()
+	s.crosses.reset()
 	s.vertices.reset()
 	s.prepared.reset()
 	s.ears.reset()
 	s.indices.reset()
 }
 
-func (r *Renderer) prepareSpanStrips(f drawlist.ModelFace) []modelGPUFace {
+func (r *Renderer) prepareSpanStrips(f *drawlist.ModelFace) []modelGPUFace {
 	rows := 0
 	if len(f.Vertices) > 0 {
 		lo, hi := f.Vertices[0].Y, f.Vertices[0].Y

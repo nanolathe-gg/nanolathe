@@ -465,7 +465,7 @@ func (t *modelTarget) commit(dst []uint8, width, height int) {
 		src := iy * t.width
 		for ix := 0; ix < t.width; ix++ {
 			i := src + ix
-			if !t.covered[i] {
+			if t.color[i] == t.transparent {
 				continue
 			}
 			sx := t.screenX(int32(ix))

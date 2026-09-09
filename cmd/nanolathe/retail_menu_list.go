@@ -31,20 +31,12 @@ func (g *gameShell) drawRetailList(c *client.Client, p *ui.Panel, index int, gad
 		return
 	}
 	g.drawListBox(c, r)
-	// The selection and top row are read back after SetListTop clamps the top,
-	// so the pre-clamp selection from this first read is deliberately dropped.
-	items, _, top, ok := p.ListValuesAt(index)
+	// The list owner installs maxTop while it fills rows. Drawing reads that
+	// state without deriving or mutating a competing visible-row limit.
+	items, selected, top, ok := p.ListValuesAt(index)
 	if !ok || len(items) == 0 || !g.hasRetailTextFont() {
 		return
 	}
-	itemHeight := retailListItemHeight(gad, g.retailTextHeight())
-	visible := retailVisibleListRows(r, itemHeight)
-	maxTop := len(items) - visible
-	if maxTop < 0 {
-		maxTop = 0
-	}
-	p.SetListTopAt(index, top, maxTop)
-	_, selected, top, _ := p.ListValuesAt(index)
 	// The list painter selects the FNT the gadget's `fontnumber` picks from
 	// the window's kind-7 records (the common font when none matches) and
 	// then draws every row through the GAF pen, so the selected FNT is only
@@ -56,8 +48,8 @@ func (g *gameShell) drawRetailList(c *client.Client, p *ui.Panel, index int, gad
 		rowHeight = metric + 1
 	}
 	// Painting reserves a full font metric below each admitted row. Its
-	// boundary differs from click/scroll geometry, and nonzero authored row
-	// heights are not clamped to the metric [07 R-WGT-01 §4].
+	// boundary differs from click/scroll geometry. Fill has already normalized
+	// the stored row height [07 R-WGT-01 §4].
 	for row := 0; int(r.H)-(row+1)*rowHeight >= metric; row++ {
 		idx := top + row
 		if idx >= len(items) {
@@ -69,12 +61,24 @@ func (g *gameShell) drawRetailList(c *client.Client, p *ui.Panel, index int, gad
 		// skipped. Its inclusive row rectangle is also the shade boundary
 		// [07 R-WGT-01 §4].
 		x, width := retailListTextPen(r, gad.Attribs, measure(text))
-		heading := strings.HasPrefix(text, "&G")
-		if strings.HasPrefix(text, "&") && len(text) >= 2 {
+		heading := p.ListRowFlagAt(index, idx) == 1 || strings.HasPrefix(text, "&G")
+		if p.ListRowFlagAt(index, idx) != 1 && strings.HasPrefix(text, "&") && len(text) >= 2 {
 			text = text[2:]
 		}
 		color := g.guiColor(byte(gad.ColorF & 0xff))
-		g.drawRetailStringSelected(c, text, x, y, width, color, 0, rowFont)
+		if rowHeight > metric+6 {
+			remaining := int(r.H) - 1
+			for line, run := range retailListWrapLines(text, measure, width) {
+				if remaining < 1 {
+					break
+				}
+				lineY := y + line*(metric+2)
+				g.drawRetailStringSelected(c, run, x, lineY, width, color, 0, rowFont)
+				remaining -= metric + 2
+			}
+		} else {
+			g.drawRetailStringSelected(c, text, x, y, width, color, 0, rowFont)
+		}
 		if heading {
 			if g.assets != nil && g.assets.pal != nil {
 				for level := -19; level >= -22; level-- {
@@ -85,6 +89,52 @@ func (g *gameShell) drawRetailList(c *client.Client, p *ui.Panel, index int, gad
 			g.drawListSelection(c, r, y, rowHeight)
 		}
 	}
+}
+
+// retailListWrapLines keeps the longest space- or CR-delimited run that fits
+// the supplied width. Exact fits remain on the current line [07 R-WGT-01 §4].
+func retailListWrapLines(text string, measure func(string) int, width int) []string {
+	if text == "" || measure == nil || width < 0 {
+		return []string{text}
+	}
+	var lines []string
+	for len(text) != 0 {
+		end := len(text)
+		if cut := strings.IndexAny(text, " \r"); cut >= 0 {
+			end = cut
+		}
+		best := end
+		for cursor := end; cursor < len(text); {
+			if text[cursor] == '\r' {
+				break
+			}
+			for cursor < len(text) && text[cursor] == ' ' {
+				cursor++
+			}
+			if cursor >= len(text) || text[cursor] == '\r' {
+				break
+			}
+			next := cursor
+			for next < len(text) && text[next] != ' ' && text[next] != '\r' {
+				next++
+			}
+			if measure(text[:next]) > width {
+				break
+			}
+			best, cursor = next, next
+		}
+		if best == 0 {
+			best = end
+		}
+		lines = append(lines, text[:best])
+		text = text[best:]
+		if len(text) > 0 && text[0] == '\r' {
+			text = text[1:]
+		} else {
+			text = strings.TrimLeft(text, " ")
+		}
+	}
+	return lines
 }
 
 // retailListTextPen keeps the row's inclusive bounds and the builder's
@@ -216,15 +266,10 @@ func (g *gameShell) drawRetailScrollbar(c *client.Client, p *ui.Panel, index int
 		drawRetailScrollbarTrack(c, track0, track1, track2, trackTop, trackX, trackBottom, false)
 
 		l := listForAssocPanel(p, gad.Assoc)
+		listIndex := listIndexForAssocPanel(p, gad.Assoc)
 		itemHeight := retailListAssocItemHeightPanel(g, p, gad.Assoc)
 		visible := retailVisibleListRows(listRectForAssocPanel(p, gad.Assoc), itemHeight)
-		maxTop := 0
-		if l != nil {
-			maxTop = l.Len() - visible
-			if maxTop < 0 {
-				maxTop = 0
-			}
-		}
+		maxTop := p.ListMaxTopAt(listIndex)
 		total := 0
 		if l != nil {
 			total = l.Len()
@@ -265,15 +310,10 @@ func (g *gameShell) drawRetailScrollbar(c *client.Client, p *ui.Panel, index int
 	blitRetailFrame(c, arrow1, right-int(arrow1.Width), top+(int(r.H)-int(arrow1.Height))/2)
 	drawRetailScrollbarTrack(c, track0, track1, track2, trackLeft, trackY, trackRight, true)
 	l := listForAssocPanel(p, gad.Assoc)
+	listIndex := listIndexForAssocPanel(p, gad.Assoc)
 	itemHeight := retailListAssocItemHeightPanel(g, p, gad.Assoc)
 	visible := retailVisibleListRows(listRectForAssocPanel(p, gad.Assoc), itemHeight)
-	maxTop := 0
-	if l != nil {
-		maxTop = l.Len() - visible
-		if maxTop < 0 {
-			maxTop = 0
-		}
-	}
+	maxTop := p.ListMaxTopAt(listIndex)
 	total := 0
 	if l != nil {
 		total = l.Len()
@@ -434,15 +474,9 @@ func (g *gameShell) retailScrollbarGeometry(gad gui.Gadget, r gui.Rect) (retailS
 	if arrow0 == nil || arrow1 == nil || thumb0 == nil || thumb1 == nil || thumb2 == nil {
 		return retailScrollbarGeometry{}, false
 	}
-	listRect := g.listRectForAssoc(gad.Assoc)
-	itemHeight := g.retailListAssocItemHeight(gad.Assoc)
-	visible := retailVisibleListRows(listRect, itemHeight)
 	maxTop := 0
-	if l := g.listForAssoc(gad.Assoc); l != nil {
-		maxTop = l.Len() - visible
-		if maxTop < 0 {
-			maxTop = 0
-		}
+	if p := g.activePanel(); p != nil {
+		maxTop = p.ListMaxTopAt(listIndexForAssocPanel(p, gad.Assoc))
 	}
 	geometry := retailScrollbarGeometry{
 		vertical: vertical,
@@ -517,14 +551,9 @@ func (g *gameShell) adjustRetailScrollbar(index int, gad gui.Gadget, delta int) 
 	if l == nil || l.Len() == 0 {
 		return
 	}
-	r := g.listRectForAssoc(gad.Assoc)
-	visible := retailVisibleListRows(r, g.retailListAssocItemHeight(gad.Assoc))
-	maxTop := l.Len() - visible
-	if maxTop < 0 {
-		maxTop = 0
-	}
 	if p := g.activePanel(); p != nil {
-		_ = p.SetListTopAt(listIndexForAssocPanel(p, gad.Assoc), l.Top()+delta, maxTop)
+		listIndex := listIndexForAssocPanel(p, gad.Assoc)
+		_ = p.SetListTopAt(listIndex, l.Top()+delta, p.ListMaxTopAt(listIndex))
 	}
 }
 

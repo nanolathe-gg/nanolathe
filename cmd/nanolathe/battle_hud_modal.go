@@ -291,7 +291,7 @@ func (h *retailBattleHUD) drawBattleButtonCaption(c *client.Client, clip gui.Rec
 	if gad.Stages != 0 {
 		color = h.guiColor(0)
 	}
-	measure := func(s string) int { return textWidth }
+	var measure func(string) int
 	if h.modalFont != nil {
 		measure = func(s string) int { return retailGAFTextWidth(h.modalFont, s) }
 	} else if selected != nil {

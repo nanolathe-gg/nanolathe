@@ -24,6 +24,28 @@ import (
 // ModelOrientationThreshold is the per-axis delta that triggers a rebuild [03 §5.2] C13.
 const ModelOrientationThreshold = 7 // [03 §5.2] C13
 
+// PieceLane selects the published pieces a bounded composition pass may draw.
+// An unfinished unit overrides every selector to All [03 R-REN-03A §4].
+type PieceLane uint8
+
+const (
+	PieceLaneCached PieceLane = iota
+	PieceLaneLive
+	PieceLaneAll
+)
+
+// Includes reports whether a published piece belongs in lane. Hidden pieces
+// are excluded by the geometry walk itself; this is only the cache-bit split.
+func (l PieceLane) Includes(dontCache, underConstruction bool) bool {
+	if underConstruction || l == PieceLaneAll {
+		return true
+	}
+	if l == PieceLaneCached {
+		return !dontCache
+	}
+	return dontCache
+}
+
 // halfCircle is the authored model-facing offset for projectile models [03 §5.2].
 // Projectile yaw in Y and pitch in X each carry -32768 (-32768 == +32768 mod 65536 = 0x8000) [03 §5.2].
 const halfCircle = 0x8000 // 32768 [03 §5.2]
@@ -262,6 +284,9 @@ type PieceDraw struct {
 	Primitives       []PrimitiveDraw    // load-fixed order [03 §2.4] C20
 	IsLeafAttachment bool               // leaf with vertex but no primitive [03 §2.4] C23
 	IsDirty          bool               // orientation cache triggered rebuild this frame [03 §5.2] C13
+	// DontCache is the published inverse of the render-piece cache bit. The
+	// model consumer uses it to select cached, live, or all lanes [03 R-REN-03A §4].
+	DontCache bool
 }
 
 // UnitDraw is the per-unit model draw result presentation only (I6).
@@ -300,6 +325,8 @@ type UnitDraw struct {
 	// [R-RAST-01 §4]. The other half is ownership, which the composer resolves
 	// because it is the side that knows the viewing player.
 	SonarContact bool
+	// UnderConstruction overrides the cached/live filter [03 R-REN-03A §4].
+	UnderConstruction bool
 }
 
 // BuildPieceDraws produces per-piece draw lists with world transforms and primitive lists in load-fixed order [03 §2.4] C20 [03 §5.2] presentation only (I6).
@@ -352,6 +379,7 @@ func buildPieceDrawsInto(m *model.Model, states []model.PieceState, worldPos [3]
 			tr.Origin[2].Add(worldPos[2]),
 		}
 		record.IsDirty = dirty
+		record.DontCache = i < len(states) && states[i].DontCache
 		if scratch.hidden[i] {
 			// Keep the stable piece index while suppressing all authored geometry
 			// under a hidden piece [03 §2.4.1].
@@ -530,7 +558,8 @@ func resolveHidden(m *model.Model, states []model.PieceState, hidden []bool, sta
 // optionally uses cache to decide rebuild, projects the committed world position [03 §2.4] C12,
 // and produces transforms and primitive lists in load-fixed order [03 §2.4] C20.
 // Caller must supply a presentation copy of base states or nil; the function never writes sim state (I6).
-// If cache is non-nil it is consulted and updated atomically (needs >7 any axis) [03 §5.2] C13.
+// A supplied cache retains unit rotation until an axis differs by more than
+// seven; the owner updates the reference after rebuilding [03 §5.2] C13.
 func BuildUnitDraw(m *model.Model, base []model.PieceState, heading, pitch, bank uint16, current frame.UnitView, cache *OrientationCache) *UnitDraw {
 	return BuildUnitDrawInto(m, base, heading, pitch, bank, current, cache, &DrawScratch{})
 }
@@ -543,7 +572,10 @@ func BuildUnitDrawInto(m *model.Model, base []model.PieceState, heading, pitch, 
 	}
 	needsRebuild := false
 	if cache != nil {
-		needsRebuild = cache.UpdateKey(m.Name, heading, pitch, bank) // [03 §5.2] C13
+		// The client advances this cache only after it actually rebuilds a
+		// retained body. Advancing on every pose build would turn a sequence of
+		// small turns into a perpetual <=7 delta and lose the strict threshold.
+		needsRebuild = cache.Model != m.Name || cache.NeedsRebuild(heading, pitch, bank) // [03 §5.2] C13
 	} else {
 		// Without cache, treat as dirty if any orientation non-zero to force rebuild path coverage; but spec says per drawn unit comparison.
 		// For determinism without cache, rebuild is false — caller must handle.
@@ -555,16 +587,15 @@ func BuildUnitDrawInto(m *model.Model, base []model.PieceState, heading, pitch, 
 	// supply has to be erased; erasing the whole slot first rewrote every
 	// element twice.
 	clear(states[copy(states, base):])
+	if cache != nil && !needsRebuild {
+		heading, pitch, bank = cache.Heading, cache.Pitch, cache.Bank
+	}
 	model.FoldRootAngles(states, m.Root, heading, pitch, bank) // [03 §2.4] C24
 	worldPos := [3]numeric.Fixed{current.X, current.Y, current.Z}
 	// BuildPieceDraws is the one traversal. Derive the public transform view from
 	// its records so a frame cannot apply the hierarchy twice [03 §2.4] C21.
-	// OrientationCache is presentation bookkeeping only, and deliberately so:
-	// the published draw result is not retained across frames, so every draw
-	// composes from pristine model data whatever the cache threshold says
-	// [03 §5.2]. That is a cost choice on our side, not an open question about
-	// retail — retail's own cached half is the composition image of [03 §5.4],
-	// which this renderer does not keep.
+	// Script pose changes use the retained unit orientation until the strict
+	// orientation threshold requests its refresh [03 R-COMP-01 §4][03 §5.2].
 	// BMcode=0 selects the shaded piece renderer only while the global
 	// display option is enabled; all other units take the no-SHD path
 	// [R-RND-02A].
@@ -579,7 +610,8 @@ func BuildUnitDrawInto(m *model.Model, base []model.PieceState, heading, pitch, 
 		// The published sonar/underwater-exemption bit is the waterline pass's
 		// erase-versus-tint selector [R-RAST-01 §4]; it rides the committed unit
 		// view, so nothing here reads live sensor state [I6].
-		SonarContact: current.UnderwaterExempt,
+		SonarContact:      current.UnderwaterExempt,
+		UnderConstruction: current.BuildRemaining > 0,
 	}
 	return &scratch.draw
 }

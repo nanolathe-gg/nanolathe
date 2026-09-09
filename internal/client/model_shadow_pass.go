@@ -227,7 +227,7 @@ func (t *modelTarget) punchOut(body *modelTarget) {
 		row := int(iy) * t.width
 		src := by * body.width
 		for bx := 0; bx < body.width; bx++ {
-			if !body.covered[src+bx] {
+			if body.color[src+bx] == body.transparent {
 				continue
 			}
 			ix := t.imageX(body.screenX(int32(bx)))

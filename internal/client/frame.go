@@ -233,6 +233,10 @@ func (c *Client) composeIndexed(cur *frame.Frame, ok bool) {
 	c.modelScratch.reset()
 	c.modelScratch.active = true
 	defer func() { c.modelScratch.active = false }()
+	// Retained model-local bodies are client presentation state. Prune them at
+	// the composed-frame boundary from the immutable publication, so an old
+	// unit cannot retain an image after it leaves the published live set [I6].
+	c.pruneCachedModelBodies(cur)
 	// The point arena backs this frame's Points batches; it is truncated in
 	// lockstep with the list so a batch recorded as a sub-slice of it lines up
 	// with fresh data and no batch survives into the next frame (WU-1.8).

@@ -37,12 +37,14 @@ type modelGPUFace struct {
 // order. This is a conventional approximation for the GPU prototype; a crossed
 // ring is rejected rather than being fan-filled into invented coverage.
 func modelFaceTriangles(f drawlist.ModelFace) ([]uint16, bool, bool) {
-	return modelFaceTrianglesInto(f, nil)
+	return modelFaceTrianglesInto(&f, nil, polygonCrosses(f.Vertices))
 }
 
 // modelFaceTrianglesInto is the same triangulation over reusable frame scratch;
-// a nil scratch allocates, which only the unit tests do.
-func modelFaceTrianglesInto(f drawlist.ModelFace, scratch *modelPrepScratch) ([]uint16, bool, bool) {
+// a nil scratch allocates, which only the unit tests do. crosses is the ring's
+// self-intersection verdict, computed once per face per frame by the caller
+// (docs/DESIGN_GPU_RENDERER.md §13 "CPU/allocation policy").
+func modelFaceTrianglesInto(f *drawlist.ModelFace, scratch *modelPrepScratch, crosses bool) ([]uint16, bool, bool) {
 	n := len(f.Vertices)
 	if n < 3 || n > 1<<16 {
 		return nil, false, n < 3
@@ -55,7 +57,7 @@ func modelFaceTrianglesInto(f drawlist.ModelFace, scratch *modelPrepScratch) ([]
 	if area <= 0 {
 		return nil, false, true
 	}
-	if polygonCrosses(f.Vertices) {
+	if crosses {
 		return nil, true, false
 	}
 	// The two authored rings that dominate stock geometry share one immutable
@@ -138,6 +140,16 @@ func insideTriangle(p, a, b, c drawlist.ModelVertex) bool {
 }
 func polygonCrosses(v []drawlist.ModelVertex) bool {
 	n := len(v)
+	// The two rings that dominate stock geometry answer without the loop. Every
+	// pair of a triangle's edges shares an endpoint, so a triangle cannot cross
+	// itself; a quadrilateral has exactly two pairs of non-adjacent edges. The
+	// general loop stays for the larger authored rings [03 R-RAST-01 §1].
+	switch {
+	case n < 4:
+		return false
+	case n == 4:
+		return segmentsCross(v[0], v[1], v[2], v[3]) || segmentsCross(v[1], v[2], v[3], v[0])
+	}
 	for i := 0; i < n; i++ {
 		a, b := v[i], v[(i+1)%n]
 		for j := i + 1; j < n; j++ {
@@ -160,7 +172,10 @@ func segmentsCross(a, b, c, d drawlist.ModelVertex) bool {
 // already rasterized. The shadow commits first, then the body or its
 
 type preparedModelFace struct {
-	face     drawlist.ModelFace
+	// face points into the recorded geometry, which the list owns for the whole
+	// frame; copying the record here cost a struct copy per face per frame
+	// (docs/DESIGN_GPU_RENDERER.md §13 "CPU/allocation policy").
+	face     *drawlist.ModelFace
 	tex      modelTextureSlot
 	strips   []modelGPUFace
 	vertices []modelGPUVertex
@@ -171,8 +186,11 @@ type preparedModelFace struct {
 	quad int
 }
 
-func (r *Renderer) prepareModelFace(f drawlist.ModelFace, origin image.Point) preparedModelFace {
-	out := preparedModelFace{face: f}
+// prepareModelFace prepares one recorded face into out. crosses is the ring's
+// self-intersection verdict, which the face admission already computed for this
+// frame (docs/DESIGN_GPU_RENDERER.md §13 "CPU/allocation policy").
+func (r *Renderer) prepareModelFace(out *preparedModelFace, f *drawlist.ModelFace, origin image.Point, crosses bool) {
+	*out = preparedModelFace{face: f}
 	// A textured quad may not use a GPU diagonal for its lanes: that diagonal
 	// made solar-panel textures visibly zig-zag [03 R-RAST-01 §1]. It still
 	// draws as two device triangles, because the fragment shader evaluates the
@@ -182,26 +200,26 @@ func (r *Renderer) prepareModelFace(f drawlist.ModelFace, origin image.Point) pr
 	// or one whose lanes do not fit the parameter image, still needs CPU rows.
 	if f.Texture != nil && len(f.Vertices) == 4 {
 		r.modelStats.TexturedQuadFaces++
-		if tri, paints, supported := modelFaceTrianglesInto(f, &r.modelPrep); supported {
+		if tri, paints, supported := modelFaceTrianglesInto(f, &r.modelPrep, crosses); supported {
 			if !paints {
-				return out
+				return
 			}
 			if q := r.modelAtlas.quads.add(f.Vertices, origin.X, origin.Y); q != 0 {
 				out.vertices, out.indices, out.quad = r.prepareModelVertices(f.Vertices), tri, q
-				return out
+				return
 			}
 		}
 		out.strips = r.prepareSpanStrips(f)
 		r.modelStats.TexturedQuadStrips += len(out.strips)
-		return out
+		return
 	}
-	if polygonCrosses(f.Vertices) {
+	if crosses {
 		out.strips = r.prepareSpanStrips(f)
 		r.modelStats.FoldedFaces++
 		r.modelStats.FoldedStrips += len(out.strips)
-		return out
+		return
 	}
-	tri, paints, supported := modelFaceTrianglesInto(f, &r.modelPrep)
+	tri, paints, supported := modelFaceTrianglesInto(f, &r.modelPrep, crosses)
 	if !supported {
 		// A touching ring can have no valid ear yet retain positive two-chain rows
 		// [03 R-RAST-01 §1]. Keep that geometry; the GPU still rasterizes its pixels.
@@ -210,7 +228,6 @@ func (r *Renderer) prepareModelFace(f drawlist.ModelFace, origin image.Point) pr
 	} else if paints {
 		out.vertices, out.indices = r.prepareModelVertices(f.Vertices), tri
 	}
-	return out
 }
 
 func (r *Renderer) prepareModelVertices(v []drawlist.ModelVertex) []modelGPUVertex {
@@ -294,7 +311,7 @@ func foldedStrips(f drawlist.ModelFace) []modelGPUFace {
 // whether a folded ring paints anything at all, and preparing its strips there
 // allocated a backing store per folded face per frame
 // [DESIGN_GPU_RENDERER.md §11.2 "Allocation policy"].
-func modelSpanRows(f drawlist.ModelFace) int {
+func modelSpanRows(f *drawlist.ModelFace) int {
 	v := f.Vertices
 	n := len(v)
 	if n < 3 {
@@ -328,8 +345,8 @@ func modelTextureStrips(f drawlist.ModelFace) []modelGPUFace {
 	return modelSpanStrips(f)
 }
 
-func modelSpanStrips(f drawlist.ModelFace) []modelGPUFace { return modelSpanStripsInto(f, nil, nil) }
-func modelSpanStripsInto(f drawlist.ModelFace, out []modelGPUFace, corners []modelGPUVertex) []modelGPUFace {
+func modelSpanStrips(f drawlist.ModelFace) []modelGPUFace { return modelSpanStripsInto(&f, nil, nil) }
+func modelSpanStripsInto(f *drawlist.ModelFace, out []modelGPUFace, corners []modelGPUVertex) []modelGPUFace {
 	v := f.Vertices
 	n := len(v)
 	if n < 3 {

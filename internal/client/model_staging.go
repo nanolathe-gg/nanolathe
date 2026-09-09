@@ -55,7 +55,7 @@ func (c *Client) composeCarrier(v frame.UnitView, sx, sy int32, children []frame
 	if len(children) == 0 {
 		return c.drawUnitModel(v, sx, sy)
 	}
-	carrier, ok := c.composeUnitModel(v)
+	carrier, ok := c.composeUnitModelState(v, false, false)
 	if !ok {
 		// The carrier has no resolvable model of its own. Its children are
 		// still real units and still present, each on its own.
@@ -64,11 +64,30 @@ func (c *Client) composeCarrier(v frame.UnitView, sx, sy int32, children []frame
 		}
 		return false
 	}
+	if carrier.direct {
+		live, drawn := c.composeDirectLiveModel(carrier.draw, unitTeamColor(v), unitPresentationID(v), modelCursorUnit, carrier.directLane)
+		if drawn {
+			c.finishModel(live, nil)
+		}
+		for i := range children {
+			c.drawChildModel(children[i])
+		}
+		return drawn
+	}
+	if carrier.image == nil {
+		return false
+	}
 	if carrier.image.height == nil {
 		// No key plane: the cached image is blitted and each child is
-		// rasterized straight to the framebuffer after it, in painter order
+		// rasterized straight to the framebuffer after it, in painter order.
+		// The carrier's own live lane is part of that direct pass too; it is
+		// separate from attached children but must still follow the cached body
 		// [R-REN-03A §4].
 		c.finishModel(carrier, nil)
+		id := unitPresentationID(v)
+		if live, ok := c.composeDirectLiveModel(carrier.draw, unitTeamColor(v), id, modelCursorUnit, presentationrender.PieceLaneLive); ok {
+			c.emitModel(pendingModelCommit{m: live, blit: live.image, body: true, trace: true})
+		}
 		for i := range children {
 			c.drawChildModel(children[i])
 		}
@@ -93,6 +112,7 @@ func (c *Client) composeCarrier(v frame.UnitView, sx, sy int32, children []frame
 		})
 	}
 	if len(staged) == 0 {
+		c.finalizeModelImage(carrier.image, carrier.draw, v.Owner, modelCursorUnit)
 		c.finishModel(carrier, nil)
 		return true
 	}
@@ -103,6 +123,7 @@ func (c *Client) composeCarrier(v frame.UnitView, sx, sy int32, children []frame
 			carrier.geometry.Children = append(carrier.geometry.Children, drawlist.ModelChild{Geometry: staged[i].model.geometry, KeyDelta: staged[i].keyDelta})
 		}
 	}
+	c.finalizeModelImage(staging, carrier.draw, v.Owner, modelCursorUnit)
 	c.finishModel(carrier, staging)
 	// A child's parity trace is resolved only now: the pixels it describes are
 	// final once the staging image is on the framebuffer.
@@ -180,12 +201,114 @@ func (c *Client) finishStagedChild(child stagingChild) {
 // composeUnitModel builds one unit's draw record and composes it, without
 // committing. It is drawUnitModel's first half.
 func (c *Client) composeUnitModel(v frame.UnitView) (composedModel, bool) {
+	return c.composeUnitModelState(v, false, true)
+}
+
+// A child forces a two-plane image; a carrier defers its water/digger pass
+// until attached children have joined it [03 R-REN-03A §4].
+func (c *Client) composeUnitModelState(v frame.UnitView, child, finalPasses bool) (composedModel, bool) {
 	draw, ok := c.unitDrawFor(v)
 	if !ok {
 		return composedModel{}, false
 	}
+	if child {
+		draw.KeyPlane = true
+	}
 	reveal, outline := c.unitNanoframeReveal(v)
-	return c.composeModel(draw, v.Owner, unitTeamColor(v), unitPresentationID(v), modelCursorUnit, reveal, outline)
+	id := unitPresentationID(v)
+	// Slot zero is the pool's null sentinel. Standalone preview/test poses may
+	// intentionally use it without publication revisions, so they take the
+	// non-retained all-piece adapter rather than pretending to be a live unit.
+	if id == 0 || !c.modelScratch.active {
+		m, ok := c.composeModelLane(draw, v.Owner, unitTeamColor(v), id, modelCursorUnit, reveal, outline, presentationrender.PieceLaneAll, false)
+		if ok && reveal != nil {
+			c.outlineModelInto(m.image, m.raster, draw, outline)
+		}
+		if ok && finalPasses {
+			c.finalizeModelImage(m.image, draw, v.Owner, modelCursorUnit)
+		}
+		return m, ok
+	}
+	body := c.cachedBody(id)
+	missing := body == nil || body.image == nil || body.cacheRevision != v.CacheRevision
+	required := draw.Structure || draw.KeyPlane
+	orient := c.orientationCache(id)
+	if c.cachedBodyMustRebuild(body, v, draw, orient) || missing && required || draw.KeyPlane && body != nil && body.image != nil && body.image.height == nil {
+		cached, built := c.composeModelLane(draw, v.Owner, unitTeamColor(v), id, modelCursorUnit, nil, 0, presentationrender.PieceLaneCached, false)
+		if !built {
+			return composedModel{}, false
+		}
+		c.replaceCachedBody(id, v, draw, cached.image)
+		body = c.cachedBody(id)
+		missing = false
+		// A settings or script rebuild may still use the retained orientation.
+		// Advance its reference only when this draw crossed the orientation gate;
+		// otherwise the key would describe angles never rasterized [03 §5.2].
+		if draw.NeedsRebuild {
+			orient.UpdateKey(draw.Model.Name, v.Heading, v.Pitch, v.Bank)
+		}
+	}
+	if missing || body == nil || body.image == nil {
+		// A valid image-less mobile with no required key plane takes the direct
+		// all-piece route. The direct framebuffer target is
+		// installed by the no-key consumer; until then retain its full-pose body
+		// rather than inventing a key plane [03 R-REN-03A §4].
+		// Do not advance the orientation reference here: it belongs to an actual
+		// cached-body rebuild, and changing it for a direct pose would lose a
+		// sequence of sub-threshold turns [03 §5.2].
+		return composedModel{draw: draw, direct: true, directLane: presentationrender.PieceLaneAll}, true
+	}
+	base := c.cachedBodyImage(body, draw)
+	if base == nil {
+		return composedModel{}, false
+	}
+	if base.height == nil {
+		// Keyless cached/live presentation uses a direct framebuffer live pass.
+		// It is selected by drawUnitModel after the cached body commits; return
+		// the body here so carrier handling keeps its established fallback.
+		return composedModel{image: base, raster: base, draw: draw}, true
+	}
+	if !child {
+		c.revealModelImage(base, draw, reveal, outline)
+	}
+	// A keyed image stages live geometry against the copied cached plane. A
+	// structure under construction keeps every piece in its cached lane and
+	// skips this second pass [03 R-REN-03A §4].
+	if !(draw.Structure && draw.UnderConstruction) {
+		base = c.stageLivePieces(base, draw, unitTeamColor(v), id)
+
+	}
+	if child {
+		c.revealModelImage(base, draw, reveal, outline)
+	}
+	if finalPasses {
+		c.finalizeModelImage(base, draw, v.Owner, modelCursorUnit)
+	}
+	return composedModel{image: base, raster: base, draw: draw}, true
+}
+
+// stageLivePieces rasterizes into the union itself, at native scale. A live
+// texel equal to the image key still writes color and height, erasing a cached
+// color behind it; it must not be treated as a keyed child blit
+// [03 R-REN-03A §4/§5].
+func (c *Client) stageLivePieces(base *modelTarget, draw *presentationrender.UnitDraw, selector teamColor, id uint64) *modelTarget {
+	polys := c.collectDrawPolysLane(draw, selector, id, modelCursorUnit, presentationrender.PieceLaneLive)
+	if len(polys) == 0 {
+		return base
+	}
+	w, h, ox, oy := modelExtent(polys)
+	ax, ay := c.modelAnchor(draw)
+	extent := modelTarget{width: w, heightPx: h, originX: ox, originY: oy, anchorX: ax, anchorY: ay}
+	stage := stagingImage(base, []stagingChild{{model: composedModel{image: &extent}}}, c.borrowModelImage)
+	placeFaces(polys, stage.originX, stage.originY, 1)
+	for i := range polys {
+		if polys[i].frame != nil {
+			c.blitTexturedPolyTarget(stage, &polys[i], polys[i].frame, nil, id)
+		} else {
+			c.fillPolyTarget(stage, &polys[i], polys[i].color, nil, id)
+		}
+	}
+	return stage
 }
 
 // composeChildModel composes one attached child for the staging path.
@@ -198,13 +321,7 @@ func (c *Client) composeChildModel(v frame.UnitView) (composedModel, bool) {
 	if c == nil || c.cam == nil {
 		return composedModel{}, false
 	}
-	draw, ok := c.unitDrawFor(v)
-	if !ok {
-		return composedModel{}, false
-	}
-	draw.KeyPlane = true
-	reveal, outline := c.unitNanoframeReveal(v)
-	m, ok := c.composeModel(draw, v.Owner, unitTeamColor(v), unitPresentationID(v), modelCursorUnit, reveal, outline)
+	m, ok := c.composeUnitModelState(v, true, true)
 	if !ok {
 		return composedModel{}, false
 	}
@@ -341,7 +458,7 @@ func (t *modelTarget) compositeChild(child *modelTarget, keyDelta int32) {
 		base := cy * child.width
 		for cx := 0; cx < child.width; cx++ {
 			ci := base + cx
-			if !child.covered[ci] {
+			if child.color[ci] == child.transparent {
 				continue // the child image's own transparent index
 			}
 			ix := t.imageX(child.screenX(int32(cx)))
@@ -391,6 +508,7 @@ func (c *Client) unitDrawFor(v frame.UnitView) (*presentationrender.UnitDraw, bo
 	// always gets the height plane because the nanoframe reveal reads it
 	// [R-REN-03A §2].
 	draw.Structure = !v.BMCode
+	draw.UnderConstruction = v.BuildRemaining > 0
 	draw.KeyPlane = v.ZBuffer || v.BuildRemaining > 0
 	// Digger selects its silhouette branch before the structure/mobile split;
 	// even a structure-class Digger must pass the vehicle gates [R-REN-03D §1].

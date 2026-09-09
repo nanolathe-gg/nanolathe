@@ -38,7 +38,7 @@ func TestServiceSliderTrackIsUnthrottled(t *testing.T) {
 
 func TestServiceListHeadingRejectsDoubleClick(t *testing.T) {
 	p := servicePanel(gui.Gadget{Kind: gui.KindListBox, Active: 1, Attribs: 0x10 | 0x200, ItemHeight: 10, Rect: gui.Rect{W: 40, H: 30}})
-	p.SetListAt(1, []string{"&G heading", "row"})
+	p.FillTextListAt(1, []string{"&flagged heading", "row"}, []byte{1, 0}, 0)
 	r := p.ServiceFrame(WidgetFrame{PointerX: 3, PointerY: 3, HeldButtons: 1, PointerEvents: []input.PointerEvent{{Kind: input.LeftDoubleClick, X: 3, Y: 3}}}, WidgetHooks{})
 	if r.Fired || p.ListAt(1).Selected() != 0 {
 		t.Fatalf("heading result = %+v selected=%d", r, p.ListAt(1).Selected())
@@ -62,13 +62,56 @@ func TestServiceAssociatedTextListComputesLoadedBarGeometry(t *testing.T) {
 		gui.Gadget{Kind: gui.KindScrollBar, Active: 1, Assoc: 4, Range: 99, KnobSize: 1, Rect: gui.Rect{W: 8, H: 40}},
 	)
 	items := make([]string, 20)
-	p.SetListAt(1, items)
+	p.FillTextListAt(1, items, nil, 4)
 	hooks := WidgetHooks{Metric: func(int) int { return 4 }}
 	if got := p.sliderKnobSize(2, hooks); got != 10 {
 		t.Fatalf("knob length = %d, want 10", got)
 	}
 	if got := p.sliderTravel(2, hooks); got != 27 {
 		t.Fatalf("travel = %d, want 27 from loaded dimensions", got)
+	}
+}
+
+// The fill pass owns the list bound: an exact bottom-edge row remains a
+// candidate, and the associated controls follow that overflow verdict
+// [07 R-WGT-01 §4].
+func TestFillTextListInstallsBoundaryAndAssociatedControls(t *testing.T) {
+	p := servicePanel(
+		gui.Gadget{Kind: gui.KindListBox, Active: 1, Assoc: 8, Rect: gui.Rect{W: 30, H: 6}},
+		gui.Gadget{Kind: gui.KindScrollBar, Assoc: 8, Rect: gui.Rect{W: 8, H: 20}},
+		gui.Gadget{Kind: gui.KindButton, Assoc: 8, Attribs: gui.AttribSliderDecrement},
+		gui.Gadget{Kind: gui.KindButton, Assoc: 8, Attribs: gui.AttribSliderIncrement},
+	)
+	items := []string{"zero", "&flagged", "two", "three"}
+	flags := []byte{0, 1, 2, 0}
+	p.FillTextListAt(1, items, flags, 2)
+	items[0], flags[1] = "changed", 0
+
+	if got := p.Window.Gadgets[1].ItemHeight; got != 3 {
+		t.Fatalf("item height=%d, want metric+1", got)
+	}
+	if got := p.ListMaxTopAt(1); got != 2 {
+		t.Fatalf("max top=%d, want 2 after an exact-bottom row", got)
+	}
+	p.Window.Gadgets[1].Rect.H = 2
+	p.FillTextListAt(1, []string{"zero", "&flagged", "two", "three"}, []byte{0, 1, 2, 0}, 2)
+	if got := p.ListMaxTopAt(1); got != 3 {
+		t.Fatalf("max top=%d, want last row when no row fits", got)
+	}
+	p.Window.Gadgets[1].Rect.H = 6
+	p.FillTextListAt(1, []string{"zero", "&flagged", "two", "three"}, []byte{0, 1, 2, 0}, 2)
+	if got := p.ListAt(1).Items()[0]; got != "zero" || p.ListRowFlagAt(1, 1) != 1 || p.ListRowFlagAt(1, 2) != 2 || p.Window.Gadgets[1].Attribs&0x800 == 0 {
+		t.Fatalf("copied rows/flags=%q/%d/%d", got, p.ListRowFlagAt(1, 1), p.ListRowFlagAt(1, 2))
+	}
+	for _, index := range []int{2, 3, 4} {
+		if !p.ActiveAt(index) {
+			t.Fatalf("associated control %d was not activated", index)
+		}
+	}
+	p.SetSliderKnobAt(2, 7)
+	p.FillTextListAt(1, []string{"zero", "&flagged"}, nil, 2)
+	if p.SliderKnobAt(2) != 0 || p.ActiveAt(2) || p.ActiveAt(3) || p.ActiveAt(4) || p.Window.Gadgets[1].Attribs&0x800 != 0 {
+		t.Fatalf("fresh non-overflow fill did not reset associated controls")
 	}
 }
 
@@ -162,7 +205,7 @@ func TestServiceScrollbarToListUsesItemHeightFormula(t *testing.T) {
 		gui.Gadget{Kind: gui.KindListBox, Active: 1, Assoc: 3, Attribs: 0x10, ItemHeight: 5, Rect: gui.Rect{W: 20, H: 20}},
 		gui.Gadget{Kind: gui.KindScrollBar, Active: 1, Assoc: 3, Range: 9, Rect: gui.Rect{W: 8, H: 20}},
 	)
-	p.SetListAt(1, make([]string, 10))
+	p.FillTextListAt(1, make([]string, 10), nil, 0)
 	p.SetSliderKnobAt(2, 4)
 	p.syncSlider(2, WidgetHooks{})
 	if got := p.ListAt(1).Top(); got != 4 { // (10-(20/5))*4/(7-1)

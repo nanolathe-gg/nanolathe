@@ -3,6 +3,7 @@ package gpurender
 import (
 	"image"
 	"image/color"
+	"slices"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/nanolathe/nanolathe/internal/drawlist"
@@ -103,11 +104,25 @@ type modelSlot struct {
 	overflow bool
 }
 
+// image is the page region a commit or a group merge samples. It comes from the
+// recyclable pool: the box of a slot moves with the frame's packing, so the
+// image's own sub-image cache would gain an entry per subject per frame and pay
+// a full sweep of that cache once a tick
+// (docs/DESIGN_GPU_RENDERER.md §13 "CPU/allocation policy", §11.5 "CPU"). The
+// caller recycles it as soon as the draw that binds it has been issued.
 func (s modelSlot) image() *ebiten.Image {
 	if s.page == nil || s.page.img == nil {
 		return nil
 	}
-	return s.page.img.SubImage(s.box).(*ebiten.Image)
+	return s.page.img.RecyclableSubImage(s.box)
+}
+
+// recycleImage returns an image() result to the pool. A nil image is ignored, so
+// callers do not have to test for the empty slot twice.
+func recycleImage(img *ebiten.Image) {
+	if img != nil {
+		img.Recycle()
+	}
 }
 
 // modelFaceRun is one device draw of the page's shared vertex list. Indices are
@@ -262,14 +277,20 @@ func modelSlotBounds(g *drawlist.ModelGeometry) image.Rectangle {
 	if g.Width <= 0 || g.Height <= 0 {
 		return b
 	}
+	// The union is taken over the corner coordinates directly: a rectangle union
+	// per vertex ran the empty-rectangle test on every corner of every face of
+	// every subject of the frame (docs/DESIGN_GPU_RENDERER.md §13 "CPU/allocation
+	// policy"). The producer's box is never empty here, so the result is the same.
+	x0, y0, x1, y1 := int32(b.Min.X), int32(b.Min.Y), int32(b.Max.X), int32(b.Max.Y)
 	for _, faces := range [][]drawlist.ModelFace{g.Faces, g.Outline} {
 		for i := range faces {
 			for _, v := range faces[i].Vertices {
-				b = b.Union(image.Rect(int(v.X), int(v.Y), int(v.X)+1, int(v.Y)+1))
+				x0, y0 = min(x0, v.X), min(y0, v.Y)
+				x1, y1 = max(x1, v.X+1), max(y1, v.Y+1)
 			}
 		}
 	}
-	return b
+	return image.Rect(int(x0), int(y0), int(x1), int(y1))
 }
 
 // prepareModelSlots reserves one slot per eligible subject of the frame and
@@ -323,13 +344,20 @@ func (r *Renderer) reserveModelSlot(g *drawlist.ModelGeometry) {
 	if _, ok := a.slots[g]; ok {
 		return
 	}
-	if !r.modelGeometryConfigSupported(g) || !r.modelFacesSupported(g) {
+	if !r.modelGeometryConfigSupported(g) {
 		return
 	}
-	if ss := g.Supersample; ss != nil && !r.modelFacesSupported(ss) {
+	crosses, ok := r.modelFacesSupported(g)
+	if !ok {
 		return
 	}
-	slot, ok := r.placeModelSubject(g, &a.page, &a.resolves)
+	var ssCrosses []bool
+	if ss := g.Supersample; ss != nil {
+		if ssCrosses, ok = r.modelFacesSupported(ss); !ok {
+			return
+		}
+	}
+	slot, ok := r.placeModelSubject(g, crosses, ssCrosses, &a.page, &a.resolves)
 	if !ok {
 		// The frame does not fit; this subject takes the per-subject route at
 		// commit time rather than disappearing from the frame.
@@ -343,7 +371,7 @@ func (r *Renderer) reserveModelSlot(g *drawlist.ModelGeometry) {
 // placeModelSubject reserves the native slot and the doubled slot a structure
 // resolve needs, and appends the page subjects that rasterize them. Both land on
 // the same page, so a doubled body costs no pass of its own.
-func (r *Renderer) placeModelSubject(g *drawlist.ModelGeometry, page *modelPage, resolves *[]modelResolveJob) (modelSlot, bool) {
+func (r *Renderer) placeModelSubject(g *drawlist.ModelGeometry, crosses, ssCrosses []bool, page *modelPage, resolves *[]modelResolveJob) (modelSlot, bool) {
 	local := modelSlotBounds(g)
 	if local.Empty() {
 		return modelSlot{}, false
@@ -379,7 +407,7 @@ func (r *Renderer) placeModelSubject(g *drawlist.ModelGeometry, page *modelPage,
 		}
 		ssOrigin := ssRect.Min.Sub(ssLocal.Min)
 		ssSub := modelPageSubject{origin: ssOrigin, rect: ssRect, keyed: ss.KeyPlane, reveal: ss.Reveal, doubled: true}
-		ssSub.faces = r.prepareModelFaces(ss, ssOrigin)
+		ssSub.faces = r.prepareModelFaces(ss, ssOrigin, ssCrosses)
 		// The resolve reads the doubled plane out of the post scratch while it
 		// writes the page, so every doubled subject reaches post whether or not
 		// it carries a reveal.
@@ -393,7 +421,7 @@ func (r *Renderer) placeModelSubject(g *drawlist.ModelGeometry, page *modelPage,
 		r.modelStats.StructureResolves++
 		r.modelStats.RasterPixels += ssRect.Dx() * ssRect.Dy()
 	} else {
-		sub.faces = r.prepareModelFaces(g, origin)
+		sub.faces = r.prepareModelFaces(g, origin, crosses)
 		sub.reveal = g.Reveal
 	}
 	if sub.reveal != nil {
@@ -409,12 +437,21 @@ func (r *Renderer) placeModelSubject(g *drawlist.ModelGeometry, page *modelPage,
 
 // prepareModelFaces prepares one subject's faces. origin is where the subject's
 // local (0,0) lands on its page, so a textured quad's parameters describe the
-// page pixels its fragment shader compares against.
-func (r *Renderer) prepareModelFaces(g *drawlist.ModelGeometry, origin image.Point) []preparedModelFace {
+// page pixels its fragment shader compares against. crosses is the admission's
+// per-face self-intersection verdict; a nil slice makes each face compute its
+// own, which is what the per-subject fallback route needs.
+func (r *Renderer) prepareModelFaces(g *drawlist.ModelGeometry, origin image.Point, crosses []bool) []preparedModelFace {
 	out := r.modelPrep.prepared.take(len(g.Faces))
 	for i := range g.Faces {
-		out[i] = r.prepareModelFace(g.Faces[i], origin)
-		out[i].tex = r.modelTextureFor(g.Faces[i].Texture)
+		f := &g.Faces[i]
+		x := false
+		if i < len(crosses) {
+			x = crosses[i]
+		} else {
+			x = polygonCrosses(f.Vertices)
+		}
+		r.prepareModelFace(&out[i], f, origin, x)
+		out[i].tex = r.modelTextureFor(f.Texture)
 	}
 	return out
 }
@@ -533,32 +570,47 @@ func (r *Renderer) buildModelFaceRuns(p *modelPage, outline bool) {
 		}
 		base := uint32(len(a.verts) - run.v0)
 		dx, dy := float32(origin.X), float32(origin.Y)
-		for _, q := range v {
-			vertex := ebiten.Vertex{
-				DstX: dx + q.X, DstY: dy + q.Y,
-				SrcX: float32(slot.x), SrcY: float32(slot.y),
-				ColorR: q.Key, ColorG: q.Shade, ColorB: float32(flat), ColorA: boolFloat(keyed),
-				Custom0: q.U, Custom1: q.V, Custom3: boolFloat(shaded),
+		// Every lane but the position and the source corner is constant over the
+		// face, so it is resolved once here rather than per vertex; a battle frame
+		// emits tens of thousands of these vertices
+		// (docs/DESIGN_GPU_RENDERER.md §13 "CPU/allocation policy").
+		sx, sy := float32(slot.x), float32(slot.y)
+		colorB, custom2 := float32(flat), float32(0)
+		if textured {
+			custom2 = float32(slot.w*4096 + slot.h)
+			if slot.w >= 4096 || slot.h >= 4096 {
+				// Too large to pack; the fragment reads the frame's own
+				// image from its origin instead.
+				custom2 = -1
 			}
-			if textured {
-				vertex.Custom2 = float32(slot.w*4096 + slot.h)
-				if slot.w >= 4096 || slot.h >= 4096 {
-					// Too large to pack; the fragment reads the frame's own
-					// image from its origin instead.
-					vertex.Custom2 = -1
-				}
-				// The flat colour lane is dead on a textured face, so a mapped
-				// quad rides it as a one-based parameter index. A face whose
-				// texture slot did not resolve keeps the flat fallback the
-				// shader's untextured branch already writes.
-				if quad != 0 && vertex.Custom2 != 0 {
-					vertex.ColorB = float32(quad)
-				}
+			// The flat colour lane is dead on a textured face, so a mapped
+			// quad rides it as a one-based parameter index. A face whose
+			// texture slot did not resolve keeps the flat fallback the
+			// shader's untextured branch already writes.
+			if quad != 0 && custom2 != 0 {
+				colorB = float32(quad)
 			}
-			a.verts = append(a.verts, vertex)
 		}
-		for _, i := range idx {
-			a.idx = append(a.idx, base+uint32(i))
+		colorA, custom3 := boolFloat(keyed), boolFloat(shaded)
+		// Both stores are grown once for the whole face and written in place, so
+		// the per-element append bound check disappears.
+		nv := len(a.verts)
+		a.verts = slices.Grow(a.verts, len(v))[:nv+len(v)]
+		out := a.verts[nv:]
+		for i := range v {
+			q := &v[i]
+			out[i] = ebiten.Vertex{
+				DstX: dx + q.X, DstY: dy + q.Y,
+				SrcX: sx, SrcY: sy,
+				ColorR: q.Key, ColorG: q.Shade, ColorB: colorB, ColorA: colorA,
+				Custom0: q.U, Custom1: q.V, Custom2: custom2, Custom3: custom3,
+			}
+		}
+		ni := len(a.idx)
+		a.idx = slices.Grow(a.idx, len(idx))[:ni+len(idx)]
+		into := a.idx[ni:]
+		for i, ix := range idx {
+			into[i] = base + uint32(ix)
 		}
 	}
 	for _, keyed := range [2]bool{true, false} {
@@ -848,7 +900,9 @@ func (r *Renderer) rasterizeModelOverflow(g *drawlist.ModelGeometry, set int) (m
 	page := &a.overflow[set]
 	page.reset(modelPageMaxHeight)
 	a.overflowResolves = a.overflowResolves[:0]
-	slot, ok := r.placeModelSubject(g, page, &a.overflowResolves)
+	// The fallback route re-prepares the subject outside the admission pass, so
+	// its faces recompute their own ring test.
+	slot, ok := r.placeModelSubject(g, nil, nil, page, &a.overflowResolves)
 	if !ok {
 		return modelSlot{}, false
 	}

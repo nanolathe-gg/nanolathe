@@ -35,7 +35,8 @@ func TestModelPreparationReusesFrameScratch(t *testing.T) {
 		r.modelAtlas.quads.reset()
 		out := r.modelPrep.prepared.take(len(g.Faces))
 		for i := range g.Faces {
-			out[i] = r.prepareModelFace(g.Faces[i], image.Point{})
+			f := &g.Faces[i]
+			r.prepareModelFace(&out[i], f, image.Point{}, polygonCrosses(f.Vertices))
 		}
 		r.prepareModelOutline(g)
 	}

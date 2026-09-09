@@ -124,6 +124,10 @@ type PieceState struct {
 	DontShade  bool // presentation flag selecting identity SHD row [03 §2.4.1]
 	Hidden     bool // presentation visibility state [03 §2.4.1]
 	DontShadow bool // presentation shadow suppression state [03 §5.3]
+	// DontCache mirrors the committed render-piece cache polarity. It belongs
+	// to the presentation pose so consumers can select cached/live lanes without
+	// reading a mutable unit record [03 R-REN-03A §4][I6].
+	DontCache bool
 }
 
 // SetAngle sets the accumulator for axis, last writer wins per [03 §2.4] C22.

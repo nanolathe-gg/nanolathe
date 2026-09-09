@@ -147,6 +147,10 @@ type Client struct {
 	modelPresentation map[modelTextureKey]*modelTextureCursor
 	modelPlayers      []phase7Stepper
 	modelOrientation  map[uint64]*presentationrender.OrientationCache
+	// cachedModelBodies retains only local composition planes keyed by committed
+	// presentation identity. Its invalidation keys are published revisions; it
+	// never holds a frame pointer or mutable simulation state [03 R-REN-03A §4][I6].
+	cachedModelBodies map[uint64]*cachedModelBody
 	// DET-04: shake state is authoritative phase 10. The owning battle
 	// presentation updates its camera from the committed offset; this renderer
 	// never keeps a second shake/camera accumulator.
@@ -324,6 +328,7 @@ func New(opts Options) (*Client, error) {
 		modelPresentation: map[modelTextureKey]*modelTextureCursor{},
 		modelPlayers:      nil,
 		modelOrientation:  map[uint64]*presentationrender.OrientationCache{},
+		cachedModelBodies: map[uint64]*cachedModelBody{},
 		featureGAFs:       map[string]*formats.GAF{},
 		featureFrames:     map[string]*formats.GAFFrame{},
 		featureGACErr:     map[string]error{},
@@ -553,6 +558,7 @@ func (c *Client) SetModelFS(fs *vfs.FS) {
 	c.modelPlayers = nil
 	c.modelTextures = nil
 	c.modelOrientation = map[uint64]*presentationrender.OrientationCache{}
+	c.cachedModelBodies = map[uint64]*cachedModelBody{}
 	c.models = map[string]*unitModel{}
 	c.texIndex = map[string]texRef{}
 	c.logoIndex = map[string]texRef{}
@@ -581,6 +587,12 @@ func (c *Client) SetModelFS(fs *vfs.FS) {
 func (c *Client) SetModelTextureRegistry(registry *ModelTextureRegistry) {
 	if c == nil {
 		return
+	}
+	if c.modelTextures != registry {
+		// A registry boundary is a battle boundary. Unit slots are reusable, so
+		// no retained body or orientation reference may cross it.
+		c.modelOrientation = map[uint64]*presentationrender.OrientationCache{}
+		c.cachedModelBodies = map[uint64]*cachedModelBody{}
 	}
 	c.modelTextures = registry
 	if registry == nil {

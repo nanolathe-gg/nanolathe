@@ -255,7 +255,7 @@ func runBattleView(opts Options, cs *contentSet) error {
 	}
 	cl.SetCursors(cursors)
 	fmt.Fprintln(os.Stderr, "nanolathe: battle view — drag=select left-click=action right-click=deselect/cancel M=move A=attack P=patrol R=repair E=reclaim C=capture G=guard D=blast B=build X=cancel O=on/off N=stockpile Esc=cancel 1..9/Alt+1..9=pages/groups (SwitchAlt swaps) Shift=queue")
-	return ebitenapp.Run(cl, rendererMode(opts))
+	return ebitenapp.Run(cl, rendererMode(opts), windowRunOptions(opts))
 }
 
 // restartDirectBattle is the --map lifecycle's fresh skirmish entry. The
@@ -297,6 +297,17 @@ func rendererMode(opts Options) ebitenapp.RendererMode {
 		return ebitenapp.RendererModern
 	}
 	return ebitenapp.RendererClassic
+}
+
+// windowRunOptions carries the host-side window settings to the adapter. The cap is
+// a presentation setting only: the simulation never observes how often the
+// window presents [I6].
+func windowRunOptions(opts Options) ebitenapp.RunOptions {
+	fps := opts.FPS
+	if fps < 0 {
+		fps = 0
+	}
+	return ebitenapp.RunOptions{MaxFPS: fps}
 }
 
 // composeBattleEntry is the single presentation composition for every

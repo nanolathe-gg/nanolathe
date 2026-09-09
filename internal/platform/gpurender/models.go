@@ -111,11 +111,19 @@ func (r *Renderer) modelGeometryConfigSupported(g *drawlist.ModelGeometry) bool 
 	return true
 }
 
-func (r *Renderer) modelFacesSupported(g *drawlist.ModelGeometry) bool {
+// modelFacesSupported admits one subject's faces and returns, for each of them,
+// whether its ring crosses itself. Preparation reads that verdict rather than
+// testing every ring a second time: the test is the largest single item in face
+// preparation and the recorded geometry does not change within a frame
+// (docs/DESIGN_GPU_RENDERER.md §13 "CPU/allocation policy"). The slice is frame
+// scratch and is only meaningful when the subject is supported.
+func (r *Renderer) modelFacesSupported(g *drawlist.ModelGeometry) ([]bool, bool) {
 	r.modelStats.UnsupportedFace = -1
+	crosses := r.modelPrep.crosses.take(len(g.Faces))
 	for i := range g.Faces {
-		f := g.Faces[i]
-		if polygonCrosses(f.Vertices) {
+		f := &g.Faces[i]
+		crosses[i] = polygonCrosses(f.Vertices)
+		if crosses[i] {
 			if modelSpanRows(f) == 0 {
 				// The established winding/two-chain admission can retain a
 				// projected ring with no positive row. It contributes no body
@@ -124,24 +132,24 @@ func (r *Renderer) modelFacesSupported(g *drawlist.ModelGeometry) bool {
 			}
 			if !modelFaceMaterialSupported(r, f) {
 				r.modelStats.MissingTexture++
-				return false
+				return nil, false
 			}
 			continue
 		}
 		if len(f.Vertices) > 1<<16 {
 			r.modelStats.UnsupportedGeometry++
 			r.modelStats.UnsupportedFace = i
-			return false
+			return nil, false
 		}
 		if !modelFaceMaterialSupported(r, f) {
 			r.modelStats.MissingTexture++
-			return false
+			return nil, false
 		}
 	}
-	return true
+	return crosses, true
 }
 
-func modelFaceMaterialSupported(r *Renderer, f drawlist.ModelFace) bool {
+func modelFaceMaterialSupported(r *Renderer, f *drawlist.ModelFace) bool {
 	return r != nil && (!f.Shaded || r.tables.shade != nil) && (f.Texture == nil || r.gafImageFor(f.Texture) != nil)
 }
 
@@ -344,7 +352,9 @@ func (r *Renderer) composeModelChildren(g *drawlist.ModelGeometry, parent modelS
 	r.modelStageOp.Blend = ebiten.BlendCopy
 	r.modelStageOp.GeoM.Reset()
 	r.modelStageOp.GeoM.Translate(float64(d.X), float64(d.Y))
-	stage.DrawImage(parent.image(), &r.modelStageOp)
+	parentImg := parent.image()
+	stage.DrawImage(parentImg, &r.modelStageOp)
+	recycleImage(parentImg)
 	for _, child := range g.Children {
 		cg := child.Geometry
 		if !mergeableChild(cg) {
@@ -361,7 +371,9 @@ func (r *Renderer) composeModelChildren(g *drawlist.ModelGeometry, parent modelS
 		scratch.DrawImage(stage, &r.modelStageOp)
 		cb := modelWorldBounds(cg).Sub(b.Min)
 		r.appendModelQuad(cb, slot.box, [4]float32{}, [4]float32{float32(child.KeyDelta), 0, 0, 0})
-		r.modelDraw(scratch, r.modelChild, ebiten.BlendCopy, slot.image(), stage, nil, nil)
+		childImg := slot.image()
+		r.modelDraw(scratch, r.modelChild, ebiten.BlendCopy, childImg, stage, nil, nil)
+		recycleImage(childImg)
 		stage, scratch = scratch, stage
 		stageImg, scratchImg = scratchImg, stageImg
 		r.modelStats.GPU++

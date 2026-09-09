@@ -267,7 +267,9 @@ func (r *Renderer) composeModelStage() {
 		r.modelStageOp.GeoM.Translate(
 			float64(grp.region.Min.X+grp.parentOffset.X),
 			float64(grp.region.Min.Y+grp.parentOffset.Y))
-		sub.DrawImage(grp.parent.image(), &r.modelStageOp)
+		parentImg := grp.parent.image()
+		sub.DrawImage(parentImg, &r.modelStageOp)
+		recycleImage(parentImg)
 		sub.Recycle()
 		r.modelStats.Draws += 2
 	}
@@ -296,7 +298,9 @@ func (r *Renderer) composeModelStage() {
 			r.modelStats.Draws++
 			r.appendModelQuad(child.dst.Add(grp.region.Min), child.slot.box,
 				[4]float32{}, [4]float32{float32(child.keyDelta), 0, 0, 0})
-			r.modelDraw(dstSub, r.modelChild, ebiten.BlendCopy, child.slot.image(), srcSub, nil, nil)
+			childImg := child.slot.image()
+			r.modelDraw(dstSub, r.modelChild, ebiten.BlendCopy, childImg, srcSub, nil, nil)
+			recycleImage(childImg)
 			dstSub.Recycle()
 			srcSub.Recycle()
 			grp.plane = dst

@@ -309,17 +309,23 @@ frame, and the base frame's geometry. The authored lookup name remains intact.
 Service, painting and captions read that installed record; `Panel.StageAt`
 alone carries the mutable current stage [07 R-WGT-01 §3].
 
-**I13 bounded text-list painter contract.** `drawRetailList` retains its
-existing API and list-top preparation, but paints rows using the selected
-font's metric and the painter's stopping predicate [07 R-WGT-01 §4]. An
-authored nonzero item height is used directly; only zero selects the metric
-default. The click/scroll row count is not the painter's row limit. Attribute
-`0x100` suppresses selection brightening. Production-painter fixtures cover
-exact metric equality, one-pixel-short rejection, short authored rows, and
-locked versus ordinary selection. This bounded unit owns only this paragraph,
-`cmd/nanolathe/retail_menu_list.go` and `cmd/nanolathe/list_rows_test.go`.
-Alignment, heading/record rows, wrapping, highlight rectangle geometry and
-list-top lifecycle remain separate I13 work.
+**I13 text-list contract.** `Panel.FillTextListAt` copies text rows and
+optional raw row flags, enables row selection, resets selection/top and
+computes the screen-owned `maxTop`; `SetListTopAt` stores any supplied bound.
+The reverse walk begins at `count − 1`, subtracts the normalized row height
+from the gadget height, and retains a candidate only while the remainder is
+non-negative. Filling an active overflowing list activates its associated
+scrollbar and synthesized arrows and resets the scrollbar knob. Service,
+drawing and scrollbar movement read `ListMaxTopAt` rather than deriving or
+mutating a second bound. A row flag of exactly `1` is a heading without removing an
+ampersand from its text; `&G` retains its existing heading form. A row height
+at or below the metric-plus-one floor becomes that floor. `drawRetailList`
+uses the selected font metric and painter stopping predicate; tall rows are
+strictly taller than metric plus six and use space/CR wrapping, with equality
+fitting, a metric-plus-two line step and an `H−1` list budget. The click/scroll
+row count is not the painter's row limit. Attribute `0x100` suppresses
+selection brightening. Record-list payload beyond the known height path and
+unaligned pen scratch remain unresolved [07 R-WGT-01 §4].
 
 **The panel** (`panel.go`). `Panel` is one authored window's mutable state:
 per-record active, status, text, help and list state; named operations find the
@@ -1239,9 +1245,10 @@ world scale; this build adds a presentation zoom so a capture or an inspection
 can magnify the composed frame. It changes no authoritative state, is never read
 by a simulation phase, and is not saved [I6].
 
-* **The value.** `Scale` is a `float32` with `0` meaning 1. `EffectiveScale`
-  clamps it to `[0.25, 4]`. This is one of the presentation-side `float64`/
-  `float32` uses the invariant allowlist covers [I2].
+* **The value.** `Scale` is an `int32` with `0` and `1` meaning native and
+  `2` the detail view; `EffectiveScale` clamps it to `[1, 2]`. It was a
+  fractional `float32` clamped to `[0.25, 4]` until DESIGN_GPU_RENDERER §14
+  made the scale an integer so the projection and its inverse are exact.
 * **What it scales.** `EffectiveView` divides the framebuffer view by the scale,
   so zooming in shows less world; `clampInsets` divides the viewport insets by
   it, so the clamp and every recentre stay expressed in world pixels;
@@ -1250,28 +1257,27 @@ by a simulation phase, and is not saved [I6].
 * **The native fast path is exact.** At scale 1 both conversions take the
   original integer path unchanged, so nothing composed at native scale differs
   by a pixel from a build without the feature.
-* **Its writers.** The mouse wheel through `AddZoom`, which steps by a factor of
-  1.1 per notch; middle-drag through `Drag`, which converts the screen delta by
-  the inverse of the scale before panning; and `--shot-zoom` with `--shot-focus`
+* **Its writers.** F9 in the battle, which toggles between 1 and 2 about the
+  viewport centre; middle-drag through `Drag`, which converts the screen delta
+  by the inverse of the scale before panning; and `--zoom` with `--shot-focus`
   through `SetScaleAbout`. `SetScaleAbout` keeps the world point under a given
-  screen position fixed and then clamps.
+  screen position fixed and then clamps. The wheel is not a camera control:
+  it belongs to the GUI list under the pointer [07 §2][07 §10].
 
-The next-generation Enhanced camera is planned in DESIGN_GPU_RENDERER §5.2:
-dynamic 1×–2× detail with remastered resources, then zoom out to a full-screen
-strategic view with player-known unit markers. It must share camera anchoring,
-selection/order picking and fog/radar transforms while keeping HUD sizing separate.
-This does not alter the existing [F-P1-008] implementation. The current GPU
-prototype milestone exposes only `--renderer=modern`; the three-mode runtime
-selector and the Enhanced camera are deferred until human review.
+What the scale does to every world-space layer, the 2× art it selects and the
+load-time remaster that produces that art are DESIGN_GPU_RENDERER §14. F10
+toggles the executor at runtime (§14.6). The strategic view below 1× remains
+planned there (§5.2).
 
 **I13 text-list raster correction.** The frontend list painter measures
-stored text before removing ampersand prefixes, applies the traced 1/4/2
+stored text before handling a heading prefix, applies the traced 1/4/2
 alignment precedence and inclusive row bounds, and performs heading shading
-as four successive table operations instead of selection brightening. The
-unaligned authored case retains the previous host inset with `TODO(T25)`
-because retail leaves that pen scratch unset. Row metadata/record images,
-tall-row wrapping, screen-owned top limits and inherited child-surface clips
-remain separate open I13 work `[07 R-WGT-01 §4]`.
+as four successive table operations instead of selection brightening. Flagged
+headings keep their stored ampersand. Tall rows use the closed list wrapper
+and list-owned scroll limit. The unaligned authored case retains the previous
+host inset with `TODO(T25)` because retail leaves that pen scratch unset.
+Record-list images and inherited child-surface clips remain separate work
+`[07 R-WGT-01 §4]`.
 
 ### 3.9 Not implemented
 

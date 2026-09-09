@@ -75,6 +75,23 @@ type app struct {
 	// scaled units. Like inputStarted it is platform time and never reaches the
 	// client's clock or the sim [I6].
 	updatedAt time.Time
+	// presentInterval is the minimum spacing between two presented modern
+	// frames, zero for the display's own refresh; presentedAt is when the last
+	// one was presented. See RunOptions.MaxFPS.
+	presentInterval time.Duration
+	presentedAt     time.Time
+}
+
+// RunOptions are the window's host-side settings, none of which the client or
+// the simulation can observe.
+type RunOptions struct {
+	// MaxFPS caps how often the modern path presents. Zero presents on every
+	// Draw, the display's refresh rate. Draw still arrives on the display's
+	// vsync grid, so the cap lands on the nearest refresh multiple below it: 60
+	// on a 120 Hz display presents every second refresh, and a cap the display
+	// cannot divide into (90 on 120 Hz) rounds down the same way. Classic is
+	// untouched: it presents once per 30 Hz update whatever the cap says.
+	MaxFPS int
 }
 
 // Update runs at presentationTPS. Delta is the fixed 1/TPS period: stable
@@ -136,6 +153,9 @@ func (a *app) Draw(screen *ebiten.Image) {
 	// cadence — so it does not consume the update's pending flag; the blended
 	// view differs between two Draws of one update (§13.5).
 	if a.mode == RendererModern {
+		if !a.presentDue() {
+			return
+		}
 		a.drawModern(screen, width, height)
 		return
 	}
@@ -178,6 +198,24 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 		return
 	}
 	screen.DrawImage(img, &ebiten.DrawImageOptions{})
+}
+
+// presentDue applies RunOptions.MaxFPS to one modern Draw. The screen is
+// retained between Draws (Run configures that), so a skipped Draw leaves the
+// last presented frame on the display. The test allows an eighth of the
+// interval of slack: Draw calls sit on the vsync grid and jitter by a fraction
+// of a refresh, and without the slack a 60 cap on a 120 Hz display would skip
+// every refresh that landed a few microseconds early and present at 40.
+func (a *app) presentDue() bool {
+	if a.presentInterval <= 0 {
+		return true
+	}
+	now := time.Now()
+	if !a.presentedAt.IsZero() && now.Sub(a.presentedAt) < a.presentInterval-a.presentInterval/8 {
+		return false
+	}
+	a.presentedAt = now
+	return true
 }
 
 func (a *app) consumePresentation() bool {
@@ -251,7 +289,7 @@ func DesktopSize() (int, int) {
 // must be called from main after option parsing. mode selects the start-up
 // executor (docs/DESIGN_GPU_RENDERER.md §2.4); an unrecognised value presents
 // through the classic executor.
-func Run(c *client.Client, mode RendererMode) error {
+func Run(c *client.Client, mode RendererMode, options RunOptions) error {
 	if c == nil {
 		return fmt.Errorf("nanolathe: run window: logical path %s, providers searched [], expected client with installed retail software cursor", client.CursorGAFPath)
 	}
@@ -288,5 +326,9 @@ func Run(c *client.Client, mode RendererMode) error {
 	// clearing the last presented frame.
 	ebiten.SetScreenClearedEveryFrame(false)
 	ebiten.SetTPS(presentationTPS)
-	return ebiten.RunGame(&app{c: c, windowW: width, windowH: height, mode: mode})
+	game := &app{c: c, windowW: width, windowH: height, mode: mode}
+	if options.MaxFPS > 0 {
+		game.presentInterval = time.Second / time.Duration(options.MaxFPS)
+	}
+	return ebiten.RunGame(game)
 }

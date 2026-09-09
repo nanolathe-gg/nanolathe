@@ -152,6 +152,19 @@ func teamTextureFrame(ref texRef, selector teamColor) *formats.GAFFrame {
 // need ownership, and keeping the values separate prevents a player slot from
 // becoming a colour.
 func (c *Client) collectDrawPolys(draw *presentationrender.UnitDraw, selector teamColor, id uint64, kind uint8) []screenPoly {
+	return c.collectDrawPolysLane(draw, selector, id, kind, presentationrender.PieceLaneAll)
+}
+
+// collectDrawPolysLane resolves only the requested cached/live body lane.
+// The direct live path chooses its own target and projection; this helper only
+// preserves the published piece order and material resolution [03 R-REN-03A §4].
+func (c *Client) collectDrawPolysLane(draw *presentationrender.UnitDraw, selector teamColor, id uint64, kind uint8, lane presentationrender.PieceLane) []screenPoly {
+	return c.collectDrawPolysLaneProjected(draw, selector, id, kind, lane, false)
+}
+
+// collectDrawPolysLaneProjected keeps the cache-lane material walk shared while
+// selecting either the local cached projection or direct live projection.
+func (c *Client) collectDrawPolysLaneProjected(draw *presentationrender.UnitDraw, selector teamColor, id uint64, kind uint8, lane presentationrender.PieceLane, direct bool) []screenPoly {
 	if c == nil || c.cam == nil || draw == nil || draw.Model == nil {
 		return nil
 	}
@@ -172,6 +185,9 @@ func (c *Client) collectDrawPolys(draw *presentationrender.UnitDraw, selector te
 	// collector's panels swallow the column they intersect [R-REN-03A §3].
 	for pi := len(draw.Pieces) - 1; pi >= 0; pi-- {
 		piece := &draw.Pieces[pi]
+		if !lane.Includes(piece.DontCache, draw.UnderConstruction) {
+			continue
+		}
 		if pi >= len(draw.Model.Pieces) {
 			continue
 		}
@@ -247,7 +263,10 @@ func (c *Client) collectDrawPolys(draw *presentationrender.UnitDraw, selector te
 			}
 			poly := scratch.next(n)
 			poly.color, poly.frame = color, texFrame
-			poly.useSHD = pr.ShadeRow != presentationrender.NoShadeRow
+			// The live-piece invocation is the separate unshaded renderer entry.
+			// A BMcode=0 body may have prepared SHD rows for its cached half, but
+			// its DontCache pieces still bypass SHD here [R-RND-02A][03 R-REN-03A §4].
+			poly.useSHD = lane != presentationrender.PieceLaneLive && pr.ShadeRow != presentationrender.NoShadeRow
 			poly.candidate, poly.piece, poly.primitive, poly.texture = uint32(len(scratch.polys)-1), piece.SourceIndex, pri, pr.TextureName
 			if texFrame != nil && c.rendererTraceSink != nil {
 				poly.frameState = RendererValueAvailable
@@ -264,11 +283,18 @@ func (c *Client) collectDrawPolys(draw *presentationrender.UnitDraw, selector te
 			}
 			for corner, vi := range pr.VertexIndices {
 				v := piece.WorldVertices[vi]
-				// Retail composes model-relative: the piece chain result is
-				// narrowed once, the shear applied, and the unit's position
-				// enters only at the final blit [03 §5.2][R-REN-03A §1].
-				lx, ly, ry := modelLocalVertex(v, draw.WorldPos)
-				lx, ly = c.scaleModelLocal(lx, ly)
+				// Local cached projection floors model-relative coordinates before
+				// placement. Direct live projection adds the world offset first;
+				// the two differ by a pixel for fractional coordinates
+				// [03 R-RAST-01 §2].
+				var lx, ly, ry int32
+				if direct {
+					lx, ly = c.modelDirectVertex(v, draw.WorldPos)
+					ry = int32(v[1].Floor())
+				} else {
+					lx, ly, ry = modelLocalVertex(v, draw.WorldPos)
+					lx, ly = c.scaleModelLocal(lx, ly)
+				}
 				poly.x[corner], poly.y[corner] = lx, ly
 				poly.oddHeight[corner] = ry&1 != 0
 				poly.attr[spanKey][corner] = modelHeightKey(v[1].Sub(draw.WorldPos[1]), draw.DiggerClip)
@@ -296,6 +322,19 @@ func (c *Client) collectDrawPolys(draw *presentationrender.UnitDraw, selector te
 		}
 	}
 	return scratch.polys
+}
+
+// modelDirectVertex projects a live piece straight into the framebuffer. The
+// model-space Z component is mirrored when it becomes a world point, and the
+// camera helper then floors the complete 16.16 sums [03 R-RAST-01 §2].
+func (c *Client) modelDirectVertex(v [3]numeric.Fixed, world [3]numeric.Fixed) (int32, int32) {
+	if c == nil || c.cam == nil {
+		return 0, 0
+	}
+	localZ := v[2].Sub(world[2])
+	worldZ := world[2].Sub(localZ)
+	sx, sy := c.cam.WorldToScreen(v[0], v[1], worldZ)
+	return sx - camera.OriginX, sy - camera.OriginY
 }
 
 func (c *Client) resolveModelTexture(name string) (texRef, bool) {
@@ -372,10 +411,31 @@ func (c *Client) supersampleModel(structure bool) bool {
 // doubled scratch while anti-aliasing, which is what the outline and the trace
 // read) and the draw record itself.
 type composedModel struct {
-	image    *modelTarget
-	raster   *modelTarget
-	draw     *presentationrender.UnitDraw
-	geometry *drawlist.ModelGeometry
+	image      *modelTarget
+	raster     *modelTarget
+	draw       *presentationrender.UnitDraw
+	geometry   *drawlist.ModelGeometry
+	directLane presentationrender.PieceLane
+	direct     bool
+}
+
+// composeDirectLiveModel rasterizes one live lane onto a native framebuffer
+// target. It has no key plane; the shared exclusive fill limits leave the
+// final framebuffer row and column untouched [03 R-RAST-01 §1/§2].
+func (c *Client) composeDirectLiveModel(draw *presentationrender.UnitDraw, selector teamColor, id uint64, kind uint8, lane presentationrender.PieceLane) (composedModel, bool) {
+	polys := c.collectDrawPolysLaneProjected(draw, selector, id, kind, lane, true)
+	if len(polys) == 0 {
+		return composedModel{}, false
+	}
+	target := c.borrowModelImage(c.width, c.height, 0, 0, 0, 0, false, 1)
+	for i := range polys {
+		if polys[i].frame != nil {
+			c.blitTexturedPolyTarget(target, &polys[i], polys[i].frame, nil, id)
+			continue
+		}
+		c.fillPolyTarget(target, &polys[i], polys[i].color, nil, id)
+	}
+	return composedModel{image: target, raster: target, draw: draw, direct: true, directLane: lane}, true
 }
 
 // composeModel composes one unit into its own image and returns it
@@ -390,14 +450,29 @@ type composedModel struct {
 // child there with the key test, and blits once at the end. A composer that
 // blitted as it finished could never be a staging source.
 func (c *Client) composeModel(draw *presentationrender.UnitDraw, owner uint8, selector teamColor, id uint64, kind uint8, reveal *presentationrender.NanoframeReveal, outline uint8) (composedModel, bool) {
-	polys := c.collectDrawPolys(draw, selector, id, kind)
-	if len(polys) == 0 {
+	return c.composeModelLane(draw, owner, selector, id, kind, reveal, outline, presentationrender.PieceLaneAll, true)
+}
+
+// composeModelLane builds one local cached/live image. The composition bounds
+// always measure every visible piece, even when the selected lane rasterizes a
+// subset; otherwise a live door could escape the cached body's staging box
+// [03 R-REN-03A §1][03 R-REN-03A §4]. finalPasses applies waterline and Digger
+// only to the per-frame subject image, never the retained body source.
+func (c *Client) composeModelLane(draw *presentationrender.UnitDraw, owner uint8, selector teamColor, id uint64, kind uint8, reveal *presentationrender.NanoframeReveal, outline uint8, lane presentationrender.PieceLane, finalPasses bool) (composedModel, bool) {
+	all := c.collectDrawPolys(draw, selector, id, kind)
+	if len(all) == 0 {
 		return composedModel{}, false
 	}
+	// The collector borrows one scratch slice: measure before a lane walk
+	// replaces its contents [03 R-REN-03A §1].
 	anchorX, anchorY := c.modelAnchor(draw)
-	width, height, originX, originY := modelExtent(polys)
+	width, height, originX, originY := modelExtent(all)
+	polys := all
+	if lane != presentationrender.PieceLaneAll {
+		polys = c.collectDrawPolysLane(draw, selector, id, kind, lane)
+	}
 	var geometry *drawlist.ModelGeometry
-	if c.recordModelGeometry {
+	if c.recordModelGeometry && len(polys) != 0 {
 		// The outer packet describes native output. An optional doubled body
 		// projection below supplies the GPU resolve; neither packet inherits
 		// pixels from the classic composition.
@@ -405,14 +480,16 @@ func (c *Client) composeModel(draw *presentationrender.UnitDraw, owner uint8, se
 		placeFaces(native, originX, originY, 1)
 		geometry = modelGeometryPacketAt(native, int32(width), int32(height), originX, originY, anchorX, anchorY, 1, draw.KeyPlane, drawlist.ModelFallbackNone)
 		c.configureModelGeometry(geometry, draw, owner, kind, reveal, outline)
-		geometry.Supersample = c.modelSupersampleGeometry(polys, draw, width, height, originX, originY)
+		if lane != presentationrender.PieceLaneLive {
+			geometry.Supersample = c.modelSupersampleGeometry(polys, draw, width, height, originX, originY)
+		}
 		if geometry.Supersample != nil {
 			geometry.Supersample.Reveal = geometry.Reveal
 		}
 	}
 
 	scale := int32(1)
-	if c.supersampleModel(draw.Structure) {
+	if lane != presentationrender.PieceLaneLive && c.supersampleModel(draw.Structure) {
 		scale = 2
 	}
 	placeFaces(polys, originX, originY, scale)
@@ -438,7 +515,7 @@ func (c *Client) composeModel(draw *presentationrender.UnitDraw, owner uint8, se
 	if scale == 2 {
 		raster.resolveSupersample(target, &c.pal.Alpha)
 	}
-	if reveal != nil {
+	if finalPasses && reveal != nil {
 		// The nanoframe outline is a pass over the composition image, not an
 		// overdraw on the framebuffer: retail runs the reveal and the outline
 		// over the image it is about to composite from — the unit's own image
@@ -454,8 +531,10 @@ func (c *Client) composeModel(draw *presentationrender.UnitDraw, owner uint8, se
 	// [R-WATER-01 §2]. It acts on the image the reveal and the outline have
 	// just written into, so a nanoframe rising under water is tinted like any
 	// other submerged geometry [R-COMP-01 §3].
-	c.waterlinePass(target, draw, owner, kind)
-	if draw.DiggerClip {
+	if finalPasses {
+		c.waterlinePass(target, draw, owner, kind)
+	}
+	if finalPasses && draw.DiggerClip {
 		// A Digger definition raises every key by 75; erasing at or below 125
 		// therefore removes exactly the geometry at or below the model origin,
 		// which is the buried half of a pop-up defence [R-REN-03A §8].
@@ -508,6 +587,34 @@ func (c *Client) waterlinePass(target *modelTarget, draw *presentationrender.Uni
 		return
 	}
 	target.tintAtOrBelow(threshold, &c.pal.Blue)
+}
+
+// revealModelImage applies the current reveal to a copied composition, after
+// cached supersampling and before later live/child composition [03 R-COMP-01 §3].
+func (c *Client) revealModelImage(target *modelTarget, draw *presentationrender.UnitDraw, reveal *presentationrender.NanoframeReveal, outline uint8) {
+	if target == nil || reveal == nil {
+		return
+	}
+	for i, color := range target.color {
+		if color == target.transparent {
+			continue
+		}
+		color, present := nanoframeVerdict(*reveal, target.storedKey(i), color)
+		target.write(i, color, present)
+	}
+	c.outlineModelInto(target, target, draw, outline)
+}
+
+// finalizeModelImage runs after the subject's live pieces and attached children
+// have joined the staging image [03 R-REN-03A §4/§9].
+func (c *Client) finalizeModelImage(target *modelTarget, draw *presentationrender.UnitDraw, owner, kind uint8) {
+	if target == nil {
+		return
+	}
+	c.waterlinePass(target, draw, owner, kind)
+	if draw.DiggerClip {
+		target.eraseAtOrBelow(uint8(diggerEraseThreshold))
+	}
 }
 
 // waterlineTints resolves the erase-versus-tint bit of [R-RAST-01 §4]: the

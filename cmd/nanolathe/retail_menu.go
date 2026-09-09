@@ -573,19 +573,10 @@ func (g *gameShell) setListItems(name string, items []string, selected int) {
 			}
 		}
 	}
-	if changed {
-		p.SetList(name, items)
-		// A new row source starts at its first row; an identical refresh below
-		// leaves the user's manual scrollbar position untouched.
-		visible := g.retailListVisibleRows(name)
-		maxTop := len(items) - visible
-		if maxTop < 0 {
-			maxTop = 0
-		}
-		p.SetListTop(name, 0, maxTop)
+	if changed || len(items) == 0 {
+		p.FillTextListAt(p.Index(name), items, nil, g.retailTextHeight())
 	}
 	if len(items) == 0 {
-		p.SetList(name, nil)
 		return
 	}
 	if selected < 0 {
@@ -596,7 +587,9 @@ func (g *gameShell) setListItems(name string, items []string, selected int) {
 	}
 	selectionChanged := oldSelected != selected
 	if changed || selectionChanged {
-		p.SetListSelection(name, selected, g.retailListVisibleRows(name))
+		index := p.Index(name)
+		p.SetListSelectionAt(index, selected, g.retailListVisibleRows(name))
+		_ = p.SetListTopAt(index, p.ListAt(index).Top(), p.ListMaxTopAt(index))
 		g.ensureRetailListVisible(name)
 	}
 }
@@ -624,6 +617,7 @@ func (g *gameShell) ensureRetailListIndexVisible(p *ui.Panel, index int) {
 	}
 	gad := p.Window.Gadgets[index]
 	p.SetListSelectionAt(index, l.Selected(), retailVisibleListRows(p.Window.PlacedRect(index), retailListItemHeight(gad, g.retailTextHeight())))
+	_ = p.SetListTopAt(index, l.Top(), p.ListMaxTopAt(index))
 }
 
 func (g *gameShell) currentGadget(index int) (gui.Gadget, bool) {

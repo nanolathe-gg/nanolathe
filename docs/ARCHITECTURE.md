@@ -147,6 +147,7 @@ package implements.
 | `internal/platform/benchlock` | Host file lock serializing benchmark startup and execution across worktrees | BATTLE_BENCHMARK |
 | `internal/drawlist` | The recorded committed-frame draw list: command families carrying physical palette indices, the `Sink` executor interface, ordered replay and model packet boundary | DESIGN_GPU_RENDERER |
 | `internal/platform/gpurender` | The modern executor: replays a draw list through Ebitengine in palette-index space, table textures, atlases, per-subject GPU model prototypes, expansion to RGB | DESIGN_GPU_RENDERER |
+| `internal/upscale` | Load-time 2× synthesis of terrain tiles and feature sprite banks from the map's own pixels, with the on-disk cache; the `tools/mapupscale` synthesizers are wrappers over it | DESIGN_GPU_RENDERER §14 |
 
 ### Commands
 
@@ -178,6 +179,7 @@ anything in a lower layer and nothing in a higher one.
 
 ```
 platform      cmd/nanolathe ─► platform/ebitenapp ─► client, audiobackend
+              cmd/nanolathe ─► upscale ─► formats, palette   (load-time 2× art, DESIGN_GPU_RENDERER §14)
               cmd/nanolathe-headless ─► headless        cmd/remaster ─► client, cob, formats, vfs
 
 presentation  client ─► render, hud, audio, camera, palette, input, model, frame,
@@ -325,7 +327,7 @@ authoritative state hash. Two entries exist; a third is not to be added.
 
 `nanolathe --shot <file.png>` composes one battle frame after a number of
 authoritative ticks and exits without opening a window; `--shot-select`,
-`--shot-modal`, `--shot-zoom`, `--shot-focus` and `--shot-size` stage the
+`--shot-modal`, `--zoom`, `--shot-focus` and `--shot-size` stage the
 capture. A capture is the evidence for any visual change.
 
 Retail gaps that remain are explicit at their site as `TODO(T23)`,
@@ -436,7 +438,7 @@ at its sites, never defined here.
 | `[Cn]`, `Cn` (plan-relative) | contract `n` of the contract list the package's design document carries, numbered as its source plan numbered it: `internal/mission`, `internal/triggers`, `internal/ai` → DESIGN_SESSIONS_AI_SAVE; `internal/visibility` → DESIGN_WORLD_VISIBILITY (C1–C16); `internal/construction`, `internal/economy` → DESIGN_ECONOMY_CONSTRUCTION; `internal/session`, `internal/clock` → DESIGN_RUNTIME_DETERMINISM; `[C-1]`, `[C-3]` in `internal/client` → DESIGN_PRESENTATION_CLIENT |
 | `WU-nn-n`, `RWU-nn-n` | historical work-unit ids. They name the commit series that did the work, nothing in the current documents; resolve with `git log --grep 'WU-nn-n'` |
 | `RS-nn`, `RS-P0-nnn`, `RX-nn`, `ON-nn`, `F-P0-nnn`, `M-n`, `CNT-nn`, `P2-nn`, `SP-REV-nn`, `P28-OBS-nn` | historical review and dispatch-round item ids, same disposition as work-unit ids: `git log --grep`. Two are still defined by a document: `P2-03` in SPEC_CONFLICTS, `P28-OBS-00C` in INVARIANTS I2 |
-| `[F-P1-008]` | presentation-only zoom. `camera.Scale` (1 = native) scales the world view, the chrome insets and pointer conversions; it is not a retail concept, changes no authoritative state, and is driven by the wheel, middle-drag and `--shot-zoom`. DESIGN_INTERFACE_HUD_INPUT and DESIGN_PRESENTATION_CLIENT |
+| `[F-P1-008]` | presentation-only zoom. `camera.Scale` (integer, 1 = native, 2 = the detail view) scales the world view, the chrome insets and pointer conversions; it is not a retail concept, changes no authoritative state, and is driven by F9, middle-drag and `--zoom`. DESIGN_INTERFACE_HUD_INPUT §3.8 and DESIGN_GPU_RENDERER §14 |
 | `DET-01` | random-stream ownership: no package-global fallback; the session injects the streams it constructs; presentation uses private copies. Enforced by the three guards in `internal/architecture` (§3) |
 | `DET-02` | the single phase registry: `Session.Step` delegates to one complete sub-tick boundary, which calls each of the twelve phases exactly once, in order, from one site |
 | `DET-03` | the complete scheduled wind redraw runs in phase 8 (one CRT interval draw, then simulation strength and heading, then vectors); battle entry zeroes the deadline and draws nothing |
