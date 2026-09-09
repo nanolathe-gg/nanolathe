@@ -68,6 +68,10 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 	if err != nil {
 		return nil, fmt.Errorf("session: retail catalog resolution: %w", err)
 	}
+	// Save records can overwrite definition-side active bytes. Each staged
+	// battle owns its copies before any forced unit allocation or fix-up
+	// [08 R-SAVE-WEAPON-01].
+	cat = cat.Clone()
 	m, err := loadRetailStageMission(deps.FS, image.Summary)
 	if err != nil {
 		return nil, fmt.Errorf("session: retail mission resolution: %w", err)

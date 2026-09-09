@@ -17,6 +17,12 @@ import (
 // DefinitionHeader must be the first field per catalog convention [02 §5].
 type WeaponDef struct {
 	DefinitionHeader
+	// The definition-side active byte initially equals its catalog slot index.
+	// A battle restore may replace it independently of identity; the explicit
+	// state keeps hand-authored definitions initialized from ID as well
+	// [02 §5] [08 R-SAVE-WEAPON-01].
+	activeByte         uint8
+	activeByteRestored bool
 	// Identity [02 "Weapon record"] Record identity: ID read first with default -1
 	// selects the record; section name becomes catalog key; name is display string.
 	ID   int32  // ID integer default -1 [02 "Weapon record"]
@@ -628,4 +634,27 @@ func WeaponByID(weapons map[string]*WeaponDef, id int32) (*WeaponDef, bool) {
 		}
 	}
 	return found, ok
+}
+
+// ActiveByte returns the definition-side byte used as the active gate and
+// copied by retail saves. ID continues to select catalog identity after load
+// [08 R-SAVE-WEAPON-01]. A nil definition represents an absent inactive link.
+func (w *WeaponDef) ActiveByte() uint8 {
+	if w == nil {
+		return 0
+	}
+	if w.activeByteRestored {
+		return w.activeByte
+	}
+	return uint8(w.ID)
+}
+
+// RestoreActiveByte applies a saved definition byte to a battle-local copy.
+// Callers must isolate the catalog first; this does not change weapon identity
+// or the independently persisted slot-enabled bit [08 R-SAVE-WEAPON-01].
+func (w *WeaponDef) RestoreActiveByte(value uint8) {
+	if w != nil {
+		w.activeByte = value
+		w.activeByteRestored = true
+	}
 }

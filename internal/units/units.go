@@ -149,6 +149,11 @@ const ImmunityStatus uint32 = 0x00008000
 // inside the status word, and the save writer projects the bool back into it.
 const CloakRequestedStatus uint32 = 0x00000800
 
+// DeathPendingStatus projects the runtime Dying latch into the saved status
+// word. Finalization remains owned by the unit visit [04 R-MOV-03 §1]
+// [08 R-SAVE-02 §6].
+const DeathPendingStatus uint32 = 1 << 14
+
 // The two standing-order fields live in the status word as two-bit pairs: the
 // move stance at bits 18-19, the fire stance at bits 20-21 [04 R-STANCE-01 §2].
 // They are seeded here at creation from one packed definition byte the FBI

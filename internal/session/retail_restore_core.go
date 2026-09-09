@@ -10,6 +10,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/features"
 	"github.com/nanolathe-gg/nanolathe/internal/movement"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/save"
 	"github.com/nanolathe-gg/nanolathe/internal/triggers"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
@@ -280,7 +281,12 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 				return fmt.Errorf("session: retail restore: unit %d script: %w", rec.StableID, err)
 			}
 		}
-		if err := units.RetailUnitWeaponTargets(s.Units.Unit(h), stage.StableUnit); err != nil {
+		if err := units.RetailUnitWeaponDefinitions(owner, rec.Data); err != nil {
+			return fmt.Errorf("session: retail restore: unit %d weapons: %w", rec.StableID, err)
+		}
+		if err := units.RetailUnitWeaponTargets(s.Units.Unit(h), func(id uint16) (pool.Handle, bool) {
+			return pool.Handle(id), id != 0 && int(id) < s.Units.TotalRecords()
+		}); err != nil {
 			return fmt.Errorf("session: retail restore: unit %d weapon targets: %w", rec.StableID, err)
 		}
 	}

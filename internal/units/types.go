@@ -111,10 +111,7 @@ type Slot struct {
 	// after all forced unit slots exist [08 R-SAVE-WEAPON-01].
 	SavedTargetLow  uint16
 	SavedTargetHigh uint16
-	// SavedActiveByte and payload words are copied from the fixed record. The
-	// active byte gates the resolved definition; it is never a weapon identity,
-	// while the payload words remain intentionally unnamed [08 R-SAVE-WEAPON-01].
-	SavedActiveByte   uint8
+	// Payload words remain intentionally unnamed [08 R-SAVE-WEAPON-01].
 	SavedPayloadWord0 uint32
 	SavedPayloadWord1 uint32
 }

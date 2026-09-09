@@ -62,7 +62,8 @@ func TestSlotControlByteRoundTripsThroughTheSave(t *testing.T) {
 	u.Slots[2].Flags = 0xE0 | SlotFlagEnabled
 
 	ids := map[pool.Handle]uint16{7: 9}
-	image, err := RetailUnitImage(u, 0, func(h pool.Handle) (uint16, bool) { id, ok := ids[h]; return id, ok }, RetailUnitWriterScratch{})
+	resolve := func(h pool.Handle) (uint16, bool) { id, ok := ids[h]; return id, ok }
+	image, err := RetailUnitImage(u, 0, resolve, resolve, RetailUnitWriterScratch{})
 	if err != nil {
 		t.Fatal(err)
 	}

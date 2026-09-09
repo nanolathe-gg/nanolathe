@@ -977,29 +977,28 @@ func (c *Catalog) WeaponByName(name string) (*WeaponDef, bool) {
 // (consumers recognize the sentinel by its zero slot number), so active is
 // false whenever the link points there. When the catalog holds no record 0, a
 // miss returns a nil def with active false — the explicit inactive marker.
+// A restored battle uses the current definition-side byte for active, while
+// preserving that initial name-resolution identity [08 R-SAVE-WEAPON-01].
 //
 // LinkUnitWeapons (compile_unit.go) stores this resolution on the unit's
 // link defs: a missed link holds the record-0 def when the family carries
 // one, else nil [02 §5 R-CONTENT-02].
 func (c *Catalog) WeaponLink(name string) (def *WeaponDef, active bool) {
 	if w, ok := c.WeaponByName(name); ok {
-		return w, w.ID != 0
+		return w, !IsWeaponInactive(w)
 	}
 	// Miss: the link references record 0 when the table has one [02 §5 R-CONTENT-02].
 	if w, ok := c.WeaponByID(0); ok {
-		return w, false
+		return w, !IsWeaponInactive(w)
 	}
 	return nil, false
 }
 
-// IsWeaponInactive is the one inactive rule for a resolved weapon link [02 §5
-// R-CONTENT-02]: the link is inactive when it is nil (no record 0 in the
-// family) OR points at the record occupying slot 0 — ID 0, stock [noweapon],
-// recognized by its zero slot-number byte, never by name. WeaponLink fills
-// missed links with that record, so every consumer that used to treat
-// non-nil as active must gate on this predicate instead.
+// IsWeaponInactive reads the resolved definition-side active byte. Initially
+// only nil links and record 0 are inactive [02 §5 R-CONTENT-02]. Battle restore
+// can replace this byte without changing catalog identity [08 R-SAVE-WEAPON-01].
 func IsWeaponInactive(def *WeaponDef) bool {
-	return def == nil || def.ID == 0
+	return def.ActiveByte() == 0
 }
 
 // WeaponByID selects the record occupying the given slot (I1) [02 "Weapon
