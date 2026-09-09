@@ -6,6 +6,9 @@ package hud
 // draw instructions and never retains a pointer into simulation state.
 
 import (
+	"fmt"
+	"math"
+
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
@@ -33,6 +36,7 @@ const (
 	QueuePrimitiveDash
 	QueuePrimitiveCircle
 	QueuePrimitiveIcon
+	QueuePrimitiveLabel
 )
 
 // QueuePoint is an integer screen-space point.  Integer points preserve the
@@ -78,6 +82,51 @@ type QueuePrimitive struct {
 	// anchor [R-P0-11 §3][07 §8].  It is nonzero on every icon primitive,
 	// because an icon byte of zero is exactly the "no icon" encoding.
 	IconCursor uint8
+	// Text is populated only for QueuePrimitiveLabel. A is that label's
+	// screen-space pen and Color is its known GUI semantic colour.
+	Text string
+}
+
+// RangeWeapon is one weapon slot's immutable inputs to the queued-order range
+// overlay. The integration adapter resolves the authored definition and
+// normalizes its stored field widths; Enabled remains the separately published
+// live slot bit [06 R-WPN-05 §3][07 R-P0-11 §3].
+type RangeWeapon struct {
+	Enabled      bool
+	Range        int32
+	Coverage     int32
+	AreaOfEffect int32
+}
+
+// RangeSet is the fixed, presentation-only input to retail's compact and
+// labelled queued-order range helpers. The integration adapter resolves these
+// values from the immutable catalog by UnitView.DefName, while the live slot bits
+// come from the committed UnitView; no definition pointer crosses the frame
+// boundary [07 R-P0-11 §3][I6].
+//
+// The unit radii and ExplosionAreaOfEffect are already normalized to their
+// retail consumer widths: the six sensor fields are signed 16-bit, the build,
+// maneuver, kamikaze, attack-run and explosion fields unsigned 16-bit, and
+// weapon Range/Coverage retain their authored dwords [02 "Unit record"]
+// [02 "Weapon record"].
+type RangeSet struct {
+	MinCloak int32
+	Sight    int32
+	Radar    int32
+	Sonar    int32
+	RadarJam int32
+	SonarJam int32
+
+	BuildDistance    int32
+	Maneuver         int32
+	KamikazeDistance int32
+	AttackRunLength  int32
+
+	Kamikaze              bool
+	HasMover              bool
+	ExplosionResolved     bool
+	ExplosionAreaOfEffect int32
+	Weapons               [3]RangeWeapon
 }
 
 // QueueOverlayOptions supplies the camera/content facts not carried by a
@@ -104,8 +153,17 @@ type QueueOverlayOptions struct {
 	// Icon resolves the animated cursor-GAF frame index for one icon byte.
 	// The client owns the artwork, so it owns both the frame count and the
 	// ticks-per-frame the index is formed from [R-P0-11 §3].
-	Icon  func(cursorIndex uint8, tick uint32) (int32, bool)
-	Range func(frame.UnitView) (int32, bool)
+	Icon func(cursorIndex uint8, tick uint32) (int32, bool)
+	// ShowRanges selects the labelled range branch and the extra attack-icon
+	// rings. It does not bypass Shift or the descriptor's range/icon bits.
+	ShowRanges bool
+	// Range resolves the immutable authored inputs for one committed unit. A
+	// false result suppresses range helpers for that unit rather than inventing
+	// definition data.
+	Range func(frame.UnitView) (RangeSet, bool)
+	// GroundHeight supplies the presentation terrain sample used to lift each
+	// range-ring endpoint. A missing callback suppresses range geometry.
+	GroundHeight func(x, z numeric.Fixed) numeric.Fixed
 	// Builder reports whether a unit's definition carries the builder
 	// capability.  It gates the marker-only fallback alone [R-P0-11 §3]; a nil
 	// callback therefore suppresses that fallback rather than admitting every
@@ -191,11 +249,23 @@ func QueueOverlay(f *frame.Frame, opt QueueOverlayOptions) []QueuePrimitive {
 			continue
 		}
 		u := units[q.Unit]
+		var ranges RangeSet
+		rangesResolved, rangesKnown := false, false
+		resolveRanges := func() (RangeSet, bool) {
+			if !rangesResolved {
+				rangesResolved = true
+				if isPrivileged && opt.Range != nil {
+					ranges, rangesKnown = opt.Range(u)
+				}
+			}
+			return ranges, rangesKnown
+		}
 		// The per-unit dispatcher seeds the running anchor from the unit's own
 		// position and each helper advances it, so a queue's first dash segment
 		// runs from the unit to its first order [R-P0-11 §3].
 		prevWorld := QueueWorldPoint{X: u.X, Y: u.Y, Z: u.Z}
 		prev := opt.Project(prevWorld.X, prevWorld.Y, prevWorld.Z)
+		rangeDrawn := false
 		for list, orders := range [][]frame.OrderView{q.Primary, q.Secondary} {
 			for _, order := range orders {
 				orderMask := queueOrderMask(order.Kind) & mask
@@ -215,13 +285,25 @@ func QueueOverlay(f *frame.Frame, opt QueueOverlayOptions) []QueuePrimitive {
 				// [R-P0-11 §3 "The dash chain's artwork, and the anchor getter
 				// that doubles as the icon"].
 				icon, iconByte := queueOrderIcon(order.Kind)
-				drawIcon := iconByte && icon != 0 && opt.Icon != nil &&
+				runIconHelper := iconByte && icon != 0 &&
 					orderMask&(QueueDashMask|QueueIconMask) != 0
+				iconHandled := false
 				emitIcon := func() {
-					if !drawIcon {
+					if !runIconHelper || iconHandled {
 						return
 					}
-					drawIcon = false
+					iconHandled = true
+					centerWorld := world[len(world)-1]
+					center := points[len(points)-1]
+					if opt.ShowRanges && (icon == 1 || icon == 2) {
+						if set, ok := resolveRanges(); ok {
+							base := QueuePrimitive{Unit: q.Unit, List: uint8(list), Index: order.Index, OrderKind: order.Kind, Mask: orderMask, Selected: isSelected, Center: center}
+							out = appendAttackRanges(out, base, centerWorld, set, opt)
+						}
+					}
+					if opt.Icon == nil {
+						return
+					}
 					frameIndex, ok := opt.Icon(icon, opt.Tick)
 					if !ok {
 						return
@@ -229,7 +311,6 @@ func QueueOverlay(f *frame.Frame, opt QueueOverlayOptions) []QueuePrimitive {
 					// The anchor is the order's own point — the target's
 					// position for a targeted node, the node's stored position
 					// otherwise — which is the last of this order's points.
-					center := points[len(points)-1]
 					out = append(out, QueuePrimitive{Kind: QueuePrimitiveIcon, Unit: q.Unit, List: uint8(list), Index: order.Index, OrderKind: order.Kind, Mask: orderMask, Selected: isSelected, Center: center, IconFrame: frameIndex, IconKnown: true, IconCursor: icon})
 				}
 				// Helpers run in draw-mask bit order: marker (1), dash (2),
@@ -270,28 +351,201 @@ func QueueOverlay(f *frame.Frame, opt QueueOverlayOptions) []QueuePrimitive {
 					if radius, ok := opt.Circle(order); ok && radius > 0 {
 						center := points[len(points)-1]
 						for _, chord := range circle15(center, radius) {
-							// The runtime color-index block is unresolved. Preserve
-							// geometry only; the client must suppress this primitive
-							// until authored color data is supplied [R-P0-11 §3].
-							out = append(out, QueuePrimitive{Kind: QueuePrimitiveCircle, Unit: q.Unit, List: uint8(list), Index: order.Index, OrderKind: order.Kind, Mask: orderMask, Selected: isSelected, A: chord[0], B: chord[1], Center: center, Radius: radius})
+							out = append(out, QueuePrimitive{Kind: QueuePrimitiveCircle, Unit: q.Unit, List: uint8(list), Index: order.Index, OrderKind: order.Kind, Mask: orderMask, Selected: isSelected, Color: compactRangeColor, ColorKnown: true, A: chord[0], B: chord[1], Center: center, Radius: radius})
 						}
 					}
 				}
 				if orderMask&QueueIconMask != 0 {
 					emitIcon()
 				}
-			}
-		}
-		if isPrivileged && opt.Range != nil {
-			if radius, ok := opt.Range(u); ok && radius > 0 {
-				center := opt.Project(u.X, u.Y, u.Z)
-				for _, chord := range circle15(center, radius) {
-					out = append(out, QueuePrimitive{Kind: QueuePrimitiveCircle, Unit: q.Unit, OrderKind: "range", Mask: QueueRangeMask, Selected: isSelected, A: chord[0], B: chord[1], Center: center, Radius: radius})
+				if orderMask&QueueRangeMask != 0 && !rangeDrawn {
+					// The one-shot latch belongs to the per-unit descriptor walk: the
+					// first range-bit node consumes it even when the integration has no
+					// range data, and later nodes never run the helper [R-P0-11 §3].
+					rangeDrawn = true
+					if set, ok := resolveRanges(); ok {
+						base := QueuePrimitive{Unit: q.Unit, List: uint8(list), Index: order.Index, OrderKind: order.Kind, Mask: orderMask, Selected: isSelected, Center: opt.Project(u.X, u.Y, u.Z)}
+						out = appendUnitRanges(out, base, QueueWorldPoint{X: u.X, Y: u.Y, Z: u.Z}, u.Cloaked, set, opt)
+					}
 				}
 			}
 		}
 	}
 	return out
+}
+
+const (
+	compactCloakColor = uint8(15)
+	compactRangeColor = uint8(12)
+	detailRangeColor  = uint8(14)
+	detailEvenColor   = uint8(12)
+	detailOddColor    = uint8(4)
+	rangeLabelColor   = uint8(15)
+)
+
+func appendUnitRanges(out []QueuePrimitive, base QueuePrimitive, center QueueWorldPoint, cloaked bool, set RangeSet, opt QueueOverlayOptions) []QueuePrimitive {
+	if !opt.ShowRanges {
+		if set.MinCloak != 0 && cloaked {
+			out = appendRangeRing(out, base, center, set.MinCloak, compactCloakColor, "", 0, opt)
+		}
+		if set.Kamikaze && set.ExplosionResolved {
+			half := set.ExplosionAreaOfEffect >> 1
+			pulse := int32((int64(opt.Tick%60) * int64(half) * 2) / 60)
+			if pulse < 8 {
+				pulse = 8
+			}
+			if pulse >= half {
+				pulse = half
+			}
+			out = appendRangeRing(out, base, center, pulse, compactRangeColor, "", 0, opt)
+			radius := set.Sight
+			if set.HasMover {
+				radius = set.KamikazeDistance
+			}
+			out = appendRangeRing(out, base, center, radius, compactRangeColor, "", 0, opt)
+		}
+		return out
+	}
+
+	ordinal := 0
+	unitRadii := [...]struct {
+		radius int32
+		label  string
+	}{
+		{set.MinCloak, "mincloak"},
+		{set.Sight, "sight"},
+		{set.Radar, "radar"},
+		{set.Sonar, "sonar"},
+		{set.RadarJam, "radarjam"},
+		{set.SonarJam, "sonarjam"},
+		{set.BuildDistance, "build distance"},
+		{set.Maneuver, "maneuver"},
+		{set.KamikazeDistance, "kamikazedistance"},
+	}
+	for _, item := range unitRadii {
+		if item.radius == 0 {
+			continue
+		}
+		out = appendRangeRing(out, base, center, item.radius, detailRangeColor, item.label, ordinal, opt)
+		ordinal++
+	}
+
+	color := detailEvenColor
+	if opt.Tick&1 != 0 {
+		color = detailOddColor
+	}
+	for slot := range set.Weapons {
+		enabled := set.Weapons[slot].Enabled
+		if slot == 2 {
+			// Retail's third authored-range branch tests slot one's enabled bit,
+			// while still reading slot three's weapon and radius. Preserve that
+			// observable asymmetry [07 R-P0-11 §3].
+			enabled = set.Weapons[0].Enabled
+		}
+		if enabled && set.Weapons[slot].Range != 0 {
+			out = appendRangeRing(out, base, center, set.Weapons[slot].Range, color, fmt.Sprintf("weapon%d range", slot+1), slot, opt)
+		}
+	}
+	return out
+}
+
+func appendAttackRanges(out []QueuePrimitive, base QueuePrimitive, center QueueWorldPoint, set RangeSet, opt QueueOverlayOptions) []QueuePrimitive {
+	color := detailEvenColor
+	if opt.Tick&1 != 0 {
+		color = detailOddColor
+	}
+	for slot, weapon := range set.Weapons {
+		if !weapon.Enabled {
+			continue
+		}
+		if weapon.AreaOfEffect != 0 {
+			out = appendRangeRing(out, base, center, weapon.AreaOfEffect, color, fmt.Sprintf("weapon %d: area of effect", slot), 0, opt)
+		}
+		if weapon.Coverage != 0 {
+			out = appendRangeRing(out, base, center, weapon.Coverage, color, fmt.Sprintf("weapon %d: coverage", slot), 1, opt)
+		}
+	}
+	if set.AttackRunLength != 0 {
+		out = appendRangeRing(out, base, center, set.AttackRunLength, color, "attack length", 2, opt)
+	}
+	return out
+}
+
+// appendRangeRing emits the shared range helper's adaptive, terrain-conforming
+// chord walk and then its optional FNT label [07 R-P0-11 §3].
+func appendRangeRing(out []QueuePrimitive, base QueuePrimitive, center QueueWorldPoint, radius int32, color uint8, label string, labelOrdinal int, opt QueueOverlayOptions) []QueuePrimitive {
+	if radius == 0 || opt.Project == nil || opt.GroundHeight == nil {
+		return out
+	}
+	chords := rangeChordCount(radius)
+	if chords < 1 {
+		// Divergence (I11 bounds rejection): retail divides by this chord count
+		// and a malformed input can produce a nonpositive count. Reject that draw
+		// at the host boundary rather than panicking the application.
+		return out
+	}
+	step := int32(65536 / chords)
+	angle := int32(0)
+	a := rangeRingPoint(center, numeric.Angle(uint16(angle)), radius, opt)
+	last := a
+	labelAt := QueuePoint{}
+	for chord := int32(0); chord <= chords; chord++ {
+		angle += step
+		b := rangeRingPoint(center, numeric.Angle(uint16(angle)), radius, opt)
+		line := base
+		line.Kind = QueuePrimitiveCircle
+		line.Color, line.ColorKnown = color, true
+		line.A, line.B = a, b
+		line.Radius = radius
+		out = append(out, line)
+		if chord == int32(labelOrdinal*3) {
+			labelAt = b
+		}
+		a, last = b, b
+	}
+	if label != "" {
+		if labelAt.X == 0 && labelAt.Y == 0 {
+			labelAt = last
+		}
+		text := base
+		text.Kind = QueuePrimitiveLabel
+		text.Color, text.ColorKnown = rangeLabelColor, true
+		text.A = QueuePoint{X: labelAt.X, Y: labelAt.Y + 4}
+		text.Text = label
+		out = append(out, text)
+	}
+	return out
+}
+
+func rangeChordCount(radius int32) int32 {
+	if radius <= 0 {
+		return 0
+	}
+	// Retail forms trunc(radius * 2pi * 1/8) in working precision. This is a
+	// presentation-only transient and retains the full authored dword domain;
+	// a fixed rational approximation would drift near integer boundaries.
+	return int32(float64(radius) * (2 * math.Pi) * 0.125)
+}
+
+func rangeRingPoint(center QueueWorldPoint, angle numeric.Angle, radius int32, opt QueueOverlayOptions) QueuePoint {
+	// The shared trig helpers consume an int32 16.16 magnitude; the shift and
+	// coordinate additions therefore retain the original dword wrap.
+	magnitude := radius << 16
+	dx := numeric.MulRound(numeric.Sin(angle), magnitude)
+	dz := numeric.MulRound(numeric.Cos(angle), magnitude)
+	x := numeric.Fixed(int32(int64(int32(center.X)) + int64(dx)))
+	z := numeric.Fixed(int32(int64(int32(center.Z)) + int64(dz)))
+
+	centerWhole := int32(int16(uint16(uint64(center.Y) >> 16)))
+	groundWhole := int32(opt.GroundHeight(x, z) >> 16)
+	whole := centerWhole
+	if groundWhole > whole {
+		whole = groundWhole
+	}
+	// The terrain result replaces the high word while the center's fractional
+	// low word survives. Projection consumes that signed high word.
+	y := numeric.Fixed(int32(uint32(uint16(whole))<<16 | uint32(uint16(center.Y))))
+	return opt.Project(x, y, z)
 }
 
 // queueDescriptor is one order descriptor's two overlay bytes: the draw-mask

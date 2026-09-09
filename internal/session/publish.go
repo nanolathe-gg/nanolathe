@@ -266,6 +266,14 @@ func (s *Session) publishSnapshot(tick uint32) {
 					v.IsBuilding = true
 				}
 			}
+			// The queued-order range overlay reads the live enabled bit for each
+			// weapon slot, including retail's slot-three/slot-one gate asymmetry.
+			// Publish the three value bits rather than exposing a slot or definition
+			// pointer across the presentation boundary [06 R-WPN-05 §3]
+			// [07 R-P0-11 §3][I6].
+			for slot := range v.EnabledWeaponSlots {
+				v.EnabledWeaponSlots[slot] = u.SlotAt(slot).IsEnabled()
+			}
 			views = appendUnitView(views, v)
 			vp := &views[len(views)-1]
 			// Copy the linkage owner's traversal order; it can change without

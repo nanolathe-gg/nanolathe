@@ -5051,10 +5051,12 @@ name. In the unlabelled mode, only when `kamikaze` is set **and** the
 definition's `explodeas` resolved: a pulsing ring of radius
 `clamp(((tick mod 60) × h × 2) / 60, 8, h)` where `h` is half of a 16-bit field
 of the `explodeas` weapon record, plus — when the unit has a mover — a
-second ring at `kamikazedistance`. **Supported inference:** the weapon field is
-`areaofeffect` (the only 16-bit radius-shaped field a self-destruct ring would
-want); *decider:* match the weapon parser's store against the ring drawer's
-load. Presentation only; no simulation effect.
+second ring at `kamikazedistance`. The halved field is Established as the
+unsigned 16-bit `areaofeffect` value: the weapon parser stores that authored
+key in the field the ring helper reads. The branch tests the resolved link's
+presence rather than the weapon record's active byte, so a record-0 sentinel
+link enters with a zero half-radius, emits no pulse, and still reaches the
+second ring. Presentation only; no simulation effect.
 
 ### `teleporter` is inert; the `Teleport` order is ungated and free [R-SPEC-01 §2]
 
@@ -13776,9 +13778,6 @@ and the decider that would close it.
   admits every candidate in the shared target search regardless of `shootme`
   · §3.9 [R-SPEC-01 §5], [06 §3.2] · static trace over the option byte's
   writers. Until then Nanolathe treats the bit as clear.
-- Identity of the 16-bit `explodeas` weapon field the HUD kamikaze ring
-  halves (inferred `areaofeffect`) · §3.9 [R-SPEC-01 §1], [R-P0-11 §3] ·
-  static trace matching the weapon parser's store to the ring drawer's load.
 - Meaning of the one definition byte that gates the creation notification in
   the pre-built creation path, and what the emitter shows for a status kind
   whose caption text is empty (`selfdestructcountdown` 6 and 7) · §3.9

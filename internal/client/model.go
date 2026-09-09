@@ -479,3 +479,11 @@ func (c *Client) groundHeightUnder(x, z numeric.Fixed) numeric.Fixed {
 	}
 	return c.terrain.HeightAt(x, z)
 }
+
+// GroundHeightAt exposes the presentation terrain's bilinear height sample to
+// world-space overlay geometry. It is the same immutable terrain input used by
+// model shadows and keeps a draw-time overlay from reaching back into the live
+// session world [03 §2.3][07 R-P0-11 §3][I6].
+func (c *Client) GroundHeightAt(x, z numeric.Fixed) numeric.Fixed {
+	return c.groundHeightUnder(x, z)
+}

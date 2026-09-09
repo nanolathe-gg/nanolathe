@@ -119,6 +119,11 @@ type UnitView struct {
 	// never line of sight [R-VIS-01 §5].
 	Cloaked    bool
 	Decloaking bool
+	// EnabledWeaponSlots is the committed enabled bit of each of the unit's
+	// three weapon-slot control bytes. The queued-order range overlay reads the
+	// live bits independently of the immutable weapon links [06 R-WPN-05 §3]
+	// [07 R-P0-11 §3].
+	EnabledWeaponSlots [3]bool
 	// Kills is the credited-kill counter the footer's kills line reads
 	// [07 R-HUD-03 §2].
 	Kills int32

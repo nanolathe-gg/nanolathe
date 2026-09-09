@@ -463,3 +463,132 @@ func TestQueueOverlayFirstDashOriginatesAtUnitNotAStandbyHeadsZeroGoal(t *testin
 		t.Fatal("no dash primitive produced for the queued move")
 	}
 }
+
+// TestQueueOverlayRangeOrderingAndLatch locks the two ordering edges that are
+// easy to lose when the draw-mask helpers are refactored: attack-icon detail
+// rings precede that icon, and the first bit-16 order consumes the per-unit
+// range latch across both queue lists [07 R-P0-11 §3].
+func TestQueueOverlayRangeOrderingAndLatch(t *testing.T) {
+	f := queueTestFrame()
+	f.OrderQueues[0].Primary = []frame.OrderView{
+		{Unit: 1, Index: 0, Kind: "Attack_Chase", GoalX: numeric.Fixed(8 << 16)},
+		{Unit: 1, Index: 1, Kind: "Standby"},
+	}
+	f.OrderQueues[0].Secondary = []frame.OrderView{
+		{Unit: 1, Index: 2, Kind: "HelpBuild", GoalX: numeric.Fixed(16 << 16)},
+	}
+	rangeCalls := 0
+	ops := QueueOverlay(f, QueueOverlayOptions{
+		Tick: 20, ShiftHeld: true, LocalOwner: 0, ShowRanges: true,
+		Project:      queueTestProject,
+		GroundHeight: func(numeric.Fixed, numeric.Fixed) numeric.Fixed { return 0 },
+		Icon:         func(uint8, uint32) (int32, bool) { return 0, true },
+		Range: func(frame.UnitView) (RangeSet, bool) {
+			rangeCalls++
+			return RangeSet{
+				Sight: 24, AttackRunLength: 28,
+				Weapons: [3]RangeWeapon{
+					{Enabled: true, Range: 32, Coverage: 20, AreaOfEffect: 16},
+					{},
+					// Retail gates this third range on slot one's enabled bit.
+					{Enabled: false, Range: 40},
+				},
+			}, true
+		},
+	})
+	if rangeCalls != 1 {
+		t.Fatalf("range resolver calls = %d, want one per unit", rangeCalls)
+	}
+
+	var sequence []string
+	for _, op := range ops {
+		switch op.Kind {
+		case QueuePrimitiveLabel:
+			sequence = append(sequence, op.Text)
+		case QueuePrimitiveIcon:
+			sequence = append(sequence, "icon")
+		}
+	}
+	want := []string{
+		"weapon 0: area of effect", "weapon 0: coverage", "attack length", "icon",
+		"sight", "weapon1 range", "weapon3 range", "icon",
+	}
+	if len(sequence) != len(want) {
+		t.Fatalf("range/icon sequence = %q, want %q", sequence, want)
+	}
+	for i := range want {
+		if sequence[i] != want[i] {
+			t.Fatalf("range/icon sequence[%d] = %q, want %q (full %q)", i, sequence[i], want[i], sequence)
+		}
+	}
+}
+
+// TestQueueOverlayCompactKamikazePulse locks the compact helper's integer
+// pulse and its ring order: cloak, explosion pulse, then mover trigger
+// distance [04 R-SPEC-01 §1][07 R-P0-11 §3].
+func TestQueueOverlayCompactKamikazePulse(t *testing.T) {
+	f := queueTestFrame()
+	f.Tick = 15
+	f.Units[0].Cloaked = true
+	f.OrderQueues[0].Primary = []frame.OrderView{{Unit: 1, Kind: "Standby"}}
+	ops := QueueOverlay(f, QueueOverlayOptions{
+		Tick: 15, ShiftHeld: true, LocalOwner: 0,
+		Project:      queueTestProject,
+		GroundHeight: func(numeric.Fixed, numeric.Fixed) numeric.Fixed { return 0 },
+		Range: func(frame.UnitView) (RangeSet, bool) {
+			return RangeSet{
+				MinCloak: 16, Kamikaze: true, ExplosionResolved: true,
+				ExplosionAreaOfEffect: 40, HasMover: true, KamikazeDistance: 24,
+			}, true
+		},
+	})
+	var radii []int32
+	for _, op := range ops {
+		if op.Kind != QueuePrimitiveCircle {
+			continue
+		}
+		if len(radii) == 0 || radii[len(radii)-1] != op.Radius {
+			radii = append(radii, op.Radius)
+		}
+	}
+	want := []int32{16, 10, 24} // ((15 mod 60) * (40/2) * 2) / 60 = 10.
+	if len(radii) != len(want) {
+		t.Fatalf("compact range radii = %v, want %v", radii, want)
+	}
+	for i := range want {
+		if radii[i] != want[i] {
+			t.Fatalf("compact range radius %d = %d, want %d", i, radii[i], want[i])
+		}
+	}
+}
+
+// TestRangeRingAdaptiveTerrainAndBounds locks adaptive chord count, inclusive
+// closure, terrain lifting and the narrow malformed-radius rejection at the
+// host boundary [07 R-P0-11 §3][I11].
+func TestRangeRingAdaptiveTerrainAndBounds(t *testing.T) {
+	project := func(x, y, z numeric.Fixed) QueuePoint {
+		return QueuePoint{X: int32(x >> 16), Y: int32(y >> 16)}
+	}
+	opt := QueueOverlayOptions{
+		Project:      project,
+		GroundHeight: func(numeric.Fixed, numeric.Fixed) numeric.Fixed { return numeric.Fixed(20 << 16) },
+	}
+	center := QueueWorldPoint{Y: numeric.Fixed(10 << 16)}
+	out := appendRangeRing(nil, QueuePrimitive{}, center, 32, 14, "sight", 2, opt)
+	const chords = 25         // trunc(32 * 2pi * 1/8)
+	if len(out) != chords+2 { // n+1 inclusive lines, then label.
+		t.Fatalf("range primitives = %d, want %d lines plus one label", len(out), chords+1)
+	}
+	for i, op := range out[:chords+1] {
+		if op.Kind != QueuePrimitiveCircle || op.A.Y != 20 || op.B.Y != 20 {
+			t.Fatalf("range chord %d = %+v, want terrain-lifted circle at y=20", i, op)
+		}
+	}
+	label := out[len(out)-1]
+	if label.Kind != QueuePrimitiveLabel || label.Text != "sight" || label.A.Y != 24 {
+		t.Fatalf("range label = %+v, want sight at terrain y+4", label)
+	}
+	if got := appendRangeRing(nil, QueuePrimitive{}, center, 1, 14, "bad", 0, opt); len(got) != 0 {
+		t.Fatalf("sub-chord malformed radius emitted %d primitives, want rejection", len(got))
+	}
+}
