@@ -748,10 +748,12 @@ dispatched. Completion arrives through the receiver embedded on that deferred
 callback: an explicit script return delivers its value, and the dispatcher
 delivers zero when the script name is absent, the script identity is invalid,
 or all eight COB thread slots are occupied; signal termination and abnormal
-termination do not call the receiver. A zero delivery — explicit return or
-dispatcher — leaves the latch without permission and does not clear it; a
-nonzero delivery grants permission; and no timeout is present, the absence of a
-timeout writer being established by a bounded search over the weapon-slot code.
+termination do not call the receiver. Before a new receiver-bearing dispatch,
+the receiver is zeroed. A zero delivery — explicit return or dispatcher — keeps
+that new request without permission; an explicit nonzero delivery grants
+permission. A held request receives neither reset nor delivery. No timeout is
+present, the absence of a timeout writer being established by a bounded search
+over the weapon-slot code.
 A nil VM or missing script must therefore not set an Aim-ready state for a
 family that requires a result: a missing or blocked Aim script delivers zero
 through the same receiver.

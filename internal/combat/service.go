@@ -427,6 +427,11 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		if needResult && !suppress {
 			if !slot.Aim.IssueBit {
 				weaponID := weapon.ID
+				// A receiver belongs to this particular dispatch. Clear the
+				// preceding request's permission before the callback start, because
+				// a failed start can synchronously deliver zero [06 §3.3]. A held
+				// request never enters this block, so its state remains untouched.
+				slot.Aim.Ready = false
 				if bridge == nil {
 					slot.Aim.IssueBit = true
 				} else {
@@ -443,9 +448,10 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 						}
 						sum.ReturnSeen = true
 						sum.ReturnValue = ret.Value
-						if ret.Explicit && ret.Value != 0 {
-							slot.Aim.Ready = true
-						}
+						// Every delivered value replaces this request's readiness.
+						// Only an explicit nonzero script return grants it; failed
+						// starts deliver zero and therefore revoke it [06 §3.3].
+						slot.Aim.Ready = ret.Explicit && ret.Value != 0
 					})
 					slot.Aim.IssueBit = true
 					slot.Flags |= 0x01

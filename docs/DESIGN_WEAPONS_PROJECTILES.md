@@ -208,8 +208,9 @@ drift pair is relative on both sides `[06 R-WPN-05 §4]`. Which angle each
 velocity build negates, and where the half-turn numbering is crossed, is a
 named contract rather than a convention `[06 R-WPN-05 §11]`.
 
-The aim handshake itself is a latch: the latch is set immediately after
-dispatch and clears only on an explicit nonzero return, with no timeout
+The aim handshake itself is a latch: a new receiver clears readiness before
+dispatch; an explicit nonzero return grants it, while every delivered zero
+clears it. The request latch is set immediately after dispatch, and there is no timeout
 `[06 §3.3]` `[06 §3.4]`. Which of the three readiness ladders a weapon takes is
 decided by its executor flags alone — a turret needs the latch and a nonzero
 result, vertical launch needs the result only, and the line-of-sight,
@@ -697,9 +698,11 @@ explosion, sound, shake, end smoke or damage. The spray perturbs a scratch
 heading and never rewrites the parent's stored yaw `[06 §4.3]`
 `[06 R-WPN-01 §2]`.
 
-**C9 — aim-ready is granted only on an explicit nonzero return.** The latch is
-set immediately after dispatch and clears only on that return; there is no
-timeout, and a missing script or an exhausted thread pool never authorizes fire
+**C9 — aim-ready is granted only on an explicit nonzero return.** A new dispatch
+first clears readiness; every delivered return replaces it, so zero clears and
+an explicit nonzero grants. A held request remains untouched. The request latch
+is set immediately after dispatch; there is no timeout, and a missing script or
+an exhausted thread pool never authorizes fire
 `[06 §3.3]` `[06 §3.4]` `[06 R-P0-07]`.
 
 ### 3.2 The pool — C10–C12
