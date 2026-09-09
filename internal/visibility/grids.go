@@ -195,6 +195,12 @@ func (s *Service) Mode() Mode {
 }
 
 // SetMode updates the mode word; callers use it for history/current toggles.
+// TODO(question): Retail's four live visibility commands refresh presentation
+// after changing these semantic bits, but the refresh callee's effect on the
+// word grid, byte grids, and stored observer footprints is not established.
+// Trace that callee and its callers to determine whether it reconstructs
+// coverage, preserves mapping history, or intentionally leaves it unchanged
+// [03 R-VIS-01 §1][03 R-VIS-01 §2][07 R-CAM-01 §6].
 func (s *Service) SetMode(m Mode) {
 	if s == nil {
 		return
