@@ -806,9 +806,9 @@ func (g *gameShell) refreshRetailOptionsPage() {
 		// pair. `ANTI`, `BSHADOWS` and `SHADING` are bits 1, 4 and 5 of the
 		// display option word, and `BSHADOWS` drives all three shadow values
 		// together [07 R-FE-01 §6].
-		p.SetStatus("ANTI", boolInt(g.display.AntiAlias != 0))
-		p.SetStatus("SHADING", boolInt(g.display.Shading != 0))
-		p.SetStatus("BSHADOWS", boolInt(g.display.FeatureShadows != 0))
+		p.SetStageAt(p.Index("ANTI"), boolInt(g.display.AntiAlias != 0))
+		p.SetStageAt(p.Index("SHADING"), boolInt(g.display.Shading != 0))
+		p.SetStageAt(p.Index("BSHADOWS"), boolInt(g.display.FeatureShadows != 0))
 		g.syncRetailVideoLabel()
 	case "sound":
 		g.syncRetailSoundPage()
@@ -1307,18 +1307,18 @@ func (g *gameShell) activateRetailOptionsGadget(name string) bool {
 		g.undoRetailOptionsPage()
 		return true
 	case "ANTI":
-		g.display.AntiAlias = boolInt(g.display.AntiAlias == 0)
-		optionsPanel.SetStatus("ANTI", g.display.AntiAlias)
+		g.display.AntiAlias = g.retailOptionsStage("ANTI", 2, boolInt(g.display.AntiAlias != 0))
+		optionsPanel.SetStageAt(optionsPanel.Index("ANTI"), g.display.AntiAlias)
 		g.applyRetailVisualOptions(clPtr)
 		return true
 	case "SHADING":
-		g.display.Shading = boolInt(g.display.Shading == 0)
-		optionsPanel.SetStatus("SHADING", g.display.Shading)
+		g.display.Shading = g.retailOptionsStage("SHADING", 2, boolInt(g.display.Shading != 0))
+		optionsPanel.SetStageAt(optionsPanel.Index("SHADING"), g.display.Shading)
 		g.applyRetailVisualOptions(clPtr)
 		return true
 	case "BSHADOWS":
-		g.setRetailShadowBits(g.display.FeatureShadows == 0)
-		optionsPanel.SetStatus("BSHADOWS", g.display.FeatureShadows)
+		g.setRetailShadowBits(g.retailOptionsStage("BSHADOWS", 2, boolInt(g.display.FeatureShadows != 0)) != 0)
+		optionsPanel.SetStageAt(optionsPanel.Index("BSHADOWS"), g.display.FeatureShadows)
 		g.applyRetailVisualOptions(clPtr)
 		return true
 

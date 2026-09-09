@@ -224,6 +224,30 @@ func TestRetailOptionsScreenVisualsPageDrivesDisplayMode(t *testing.T) {
 	if optionsState.page != "visuals" {
 		t.Fatalf("VISUALS merged page %q", optionsState.page)
 	}
+	for _, name := range []string{"ANTI", "SHADING", "BSHADOWS"} {
+		i := optionsPanel.Index(name)
+		if optionsPanel.StageAt(i) != 1 || optionsPanel.DownAt(i) != 0 {
+			t.Errorf("%s does not display enabled default", name)
+		}
+	}
+	// Direct activation and reopening must agree with the displayed stage,
+	// independently of the button's momentary down-state [07 R-WGT-01 §3].
+	for _, name := range []string{"ANTI", "SHADING", "BSHADOWS"} {
+		shell.activateGadget(name)
+		shell.refreshRetailOptionsPage()
+		i := optionsPanel.Index(name)
+		if optionsPanel.StageAt(i) != 0 || optionsPanel.DownAt(i) != 0 {
+			t.Fatalf("%s does not display disabled selection", name)
+		}
+		shell.activateGadget(name)
+		shell.refreshRetailOptionsPage()
+		if optionsPanel.StageAt(i) != 1 || optionsPanel.DownAt(i) != 0 {
+			t.Fatalf("%s does not display re-enabled selection", name)
+		}
+	}
+	if shell.display.Gamma != settings.DefaultGamma {
+		t.Errorf("opening visuals changed default gamma to %d", shell.display.Gamma)
+	}
 	slider := shell.retailOptionsSlider("VIDSLDR")
 	if slider == nil {
 		t.Fatal("the merged page installed no VIDSLDR slider")
@@ -563,9 +587,8 @@ func TestRetailOptionsEveryPageOpensAndPersists(t *testing.T) {
 				t.Errorf("page %s did not merge its %s control", page.key, name)
 			}
 		}
-		// These six are authored staged buttons: their labels and art consume
-		// the stage byte, while the other rows in this table are toggles that
-		// retain down-state [07 R-WGT-01 §3].
+		// Authored staged buttons display their stage independently of the
+		// momentary down-state [07 R-WGT-01 §3].
 		for _, name := range []string{"MODE", "SPEECH", "TRACKMODE", "TRACKTYPE", "LEFTCLICK", "UNITCHAT"} {
 			if index := shell.activePanel().Index(name); index >= 0 && shell.activePanel().Window.Gadgets[index].Stages == 0 {
 				t.Errorf("page %s merged %s without authored stages", page.key, name)
