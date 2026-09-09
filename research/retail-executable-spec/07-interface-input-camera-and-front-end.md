@@ -3244,11 +3244,14 @@ left by `PREV` persist at the next save point.
 `Gamma` registry value loads as 12. A loaded DWORD equal to 10 is changed to 12
 in memory only; every other DWORD is retained without a slider-range clamp.
 The `Gamma n` command computes and stores the binary32 display factor as
-`float32(float64(n) × float64(float32(0.1)))`, with `n` the signed parsed
-integer. Slider changes and initial application instead compute
-`float32(0.5 − float64(g) × float64(float32(−1.0/24)))`, equivalent to the
-familiar `0.5 + g/24` only after preserving that binary32 reciprocal and the
-single final store.
+`binary32(n × binary32(0.1))`, with `n` the signed parsed integer and
+the product retained at working precision. Slider changes and initial
+application instead compute `binary32(0.5 − g × binary32(−1.0/24))`, with
+the product and sum retained until the single final store. The exact forms
+are `binary32(n × 13421773) × 2^-27` for the command and
+`binary32(g × 11184811 + 2^27) × 2^-28` for the slider; their integer
+intermediates fit signed 64 bits. This avoids prematurely rounding the
+working sum even for saved values outside the slider range.
 
 Rebuilding the display palette starts from the preserved 256-entry source
 palette. Each source red, green and blue byte is treated as unsigned and

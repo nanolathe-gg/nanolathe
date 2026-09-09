@@ -21,6 +21,7 @@ func TestGammaCommandPersistenceAndOptionConversion(t *testing.T) {
 	}
 	var pal palette.Tables
 	pal.Base[7] = [4]byte{120, 120, 120, 0}
+	pal.Base[8] = [4]byte{1, 1, 1, 0}
 	cl.SetPalette(&pal)
 	b := &battleSession{cl: cl}
 	for _, tc := range []struct {
@@ -44,6 +45,12 @@ func TestGammaCommandPersistenceAndOptionConversion(t *testing.T) {
 		if err != nil || raw.Display.Gamma != tc.value || loaded.Display.Gamma != tc.loaded || cl.DisplayPalette()[7][0] != tc.channel {
 			t.Fatalf("gamma %d: written=%d loaded=%d channel=%d err=%v", tc.value, raw.Display.Gamma, loaded.Display.Gamma, cl.DisplayPalette()[7][0], err)
 		}
+	}
+	// This saved value distinguishes a single final store from a rounded
+	// binary64 working sum [07 R-FE-01 §11].
+	applyGammaOption(cl, -1040187389)
+	if cl.DisplayPalette()[8][0] != 172 {
+		t.Fatal("gamma option rounded its working sum prematurely")
 	}
 	oldClient := clPtr
 	t.Cleanup(func() { clPtr = oldClient })

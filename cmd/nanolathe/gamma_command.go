@@ -10,7 +10,9 @@ import (
 // therefore leave the current factor alone.
 func applyGammaOption(cl *client.Client, value int) {
 	if cl != nil {
-		cl.SetGammaFactor(float32(0.5 - float64(value)*float64(float32(-1.0/24))))
+		// Binary32(1/24) is 11184811 / 2^28. Keep the working sum exact
+		// before its single binary32 store, including large saved integers.
+		cl.SetGammaFactor(float32(int64(int32(value))*11184811+(1<<27)) * 0x1p-28)
 	}
 }
 
@@ -19,7 +21,8 @@ func (b *battleSession) setGammaCommand(value int) {
 		return
 	}
 	b.gammaSetting = value
-	b.cl.SetGammaFactor(float32(float64(value) * float64(float32(0.1))))
+	// Binary32(0.1) is 13421773 / 2^27 [07 R-FE-01 §11].
+	b.cl.SetGammaFactor(float32(int64(int32(value))*13421773) * 0x1p-27)
 	if b.shell != nil {
 		b.shell.display.Gamma = value
 		b.shell.saveSettings()

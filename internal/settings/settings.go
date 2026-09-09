@@ -447,6 +447,7 @@ func (d *Display) Normalize() {
 		}
 	}
 	d.DitheredFog &= 1
+	d.Gamma = int(int32(d.Gamma)) // retain the signed DWORD [07 R-FE-01 §11]
 }
 
 // DitheredFogEnabled reports the persisted display word's bit-6 source.
