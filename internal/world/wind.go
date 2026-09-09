@@ -10,7 +10,7 @@
 //     (max-min+1)+min`, then `rand() & 0x3F` — a countdown, not a direction;
 //     the briefing has no heading) are FRONT-END DISPLAY STATE only: their
 //     globals have no battle-side reader. Battle entry itself consumes NO wind draws — it
-//     zeroes the deadline, and the strict gate (not due while tick < deadline)
+//     zeroes the deadline, and the strict gate (not due while tick <= deadline)
 //     leaves the zeroed deadline unfired at tick 0. The first wind chain runs
 //     inside the first sub-tick (tick 1 > 0) [R-CORE-02].
 //   - In sim, when the global tick passes the wind deadline: the deadline
@@ -153,7 +153,7 @@ func (w *Wind) BriefingUpdate(crt *rng.CRT, tick uint32) bool {
 // strength/heading) is wrong — phase 8 owns the whole chain and phase 9 is
 // the meteor shower, not a wind pass.
 //
-// It runs every sub-tick. The deadline gate is strict: while `tick <
+// It runs every sub-tick. The deadline gate is strict: while `tick <=
 // NextChange` the redraw is not due and only the one-tick Changed burst flag
 // clears. When due it consumes, in order: one CRT interval draw
 // `((crt*10)/0x8000+5)*30`, then the sim strength
@@ -166,13 +166,13 @@ func (w *Wind) Jitter(tick uint32, crt *rng.CRT, sim *rng.Simulation) bool {
 	if w == nil || crt == nil || sim == nil {
 		return false
 	}
-	if tick < w.NextChange {
+	if tick <= w.NextChange {
 		w.Changed = false
 		return false
 	}
 	// CRT interval draw, drawn before the new speed and heading [01 §7.3] —
 	// 64-bit multiply/divide path.
-	w.NextChange = tick + windInterval(crt)
+	w.NextChange += windInterval(crt)
 	// New strength: simRand(maxWind-minWind) + minWind [01 §7.3]. Exclusive
 	// span here vs briefing display's inclusive max-min+1. Bound<2 returns 0
 	// without advancing per [01 §7.1] contract.
@@ -217,13 +217,13 @@ func windInterval(crt *rng.CRT) uint32 {
 
 // windVectors recomputes the world X/Z wind vectors from strength and heading
 // using the shared simulation trig table [04 §5.1]. The direction vector pair
-// is −2 × the fixed-point trig of the heading with the speed as the magnitude
+// is −2 times the rounded fixed-point trig component at the speed magnitude
 // [01 §4.4]. [R-WIND-01] closes the axis question this function once left
 // open: the FIRST word is the X term −2·speed·sin(heading) and
 // the SECOND word is the Z term −2·speed·cos(heading) — one shared 512-entry
 // sine table (entry k = 8192·sin(2πk/512)) serves both axes, the cosine
-// reading the same table a quarter turn (128 entries) ahead, and the product
-// rounds to nearest (half-up) before the −2 amplitude is stored. Verified in
+// reading the same table a quarter turn (128 entries) ahead, and each positive
+// strength component rounds to nearest (half-up) before its −2 scale. Verified in
 // two independent consumer families: the strip-5/9 smoke drift applies the
 // first word to world X and the second to world Z, and the feature fire-spread
 // probe accumulates them into its X- and Z-cell coordinates.
@@ -239,8 +239,7 @@ func windVectors(strength int32, heading uint16) (int32, int32) {
 		return 0, 0
 	}
 	a := numeric.Angle(heading)
-	amp := int32(-2 * strength)
-	// MulRound is (a*b + 4096) >> 13: round to nearest before truncation [04 §5.1].
+	// MulRound is (a*b + 4096) >> 13: round to nearest before the −2 scale [04 §5.1].
 	// [R-WIND-01]: sin feeds X, cos feeds Z.
-	return numeric.MulRound(amp, numeric.Sin(a)), numeric.MulRound(amp, numeric.Cos(a))
+	return -2 * numeric.MulRound(strength, numeric.Sin(a)), -2 * numeric.MulRound(strength, numeric.Cos(a))
 }

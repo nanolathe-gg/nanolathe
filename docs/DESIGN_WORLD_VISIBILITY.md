@@ -153,10 +153,13 @@ algebraic inverse that would land a move order north of the clicked pixel
 
 **Wind** (`wind.go`). `Wind` holds the authoritative bounds, strength, 16-bit
 heading, published scalar and world vectors. `Jitter` is the complete scheduled
-redraw the eighth tick phase calls every sub-tick: a strict deadline gate, then
-one CRT interval draw, then the simulation strength draw, then — only when the
-strength is nonzero — the simulation heading draw, then the vectors and the
-one-tick change flag `[01 §7.3]` `[01 R-CORE-01 §4.4.1]` `[03 R-WIND-01]`.
+redraw the eighth tick phase calls every sub-tick: it returns while the saved
+deadline is greater than or equal to the global tick; when due, it adds one CRT
+interval to that prior deadline, then draws simulation strength and — only when
+the strength is nonzero — simulation heading, then publishes vectors and the
+one-tick change flag. Each call redraws at most once. Vector words are minus two
+times the rounded fixed-point trig component for the positive strength
+`[05 R-PROD-01 §3]` `[01 §7.3]` `[03 R-WIND-01]` `[01 R-CORE-01 §4.4.1]`.
 Battle entry zeroes the deadline and draws nothing, so the first chain fires on
 the first sub-tick `[01 R-CORE-02]`. The briefing-screen draws are front-end
 display state with no battle-side reader.

@@ -106,11 +106,20 @@ func TestWindChangeDrawCounts(t *testing.T) {
 		t.Fatalf("undue tick drew: crt %d sim %d", crt.Draws()-crtAfter, sim.Draws()-simAfter)
 	}
 
-	// The next due tick again draws exactly one CRT and two simulation values.
+	// Equality is not due: the deadline must be strictly less than the current
+	// tick, and this call must not disturb either stream.
 	crtAfter, simAfter = crt.Draws(), sim.Draws()
 	due := w.NextChange
-	if !w.Jitter(due, &crt, &sim) {
-		t.Fatal("wind did not change on its deadline")
+	if w.Jitter(due, &crt, &sim) {
+		t.Fatal("wind changed on its deadline; due requires tick > deadline")
+	}
+	if crt.Draws() != crtAfter || sim.Draws() != simAfter {
+		t.Fatalf("deadline-equality tick drew: crt %d sim %d", crt.Draws()-crtAfter, sim.Draws()-simAfter)
+	}
+
+	// The tick after the deadline again draws exactly one CRT and two simulation values.
+	if !w.Jitter(due+1, &crt, &sim) {
+		t.Fatal("wind did not change after its deadline")
 	}
 	if got := crt.Draws() - crtAfter; got != 1 {
 		t.Fatalf("change consumed %d CRT draws, want 1 (interval)", got)
@@ -135,6 +144,59 @@ func TestZeroStrengthSkipsHeadingDraw(t *testing.T) {
 	}
 	if crt.Draws() != 1 {
 		t.Fatalf("zero-span change consumed %d CRT draws, want 1", crt.Draws())
+	}
+}
+
+// TestWindDeadlineAccumulatesFromPriorDeadline preserves the phase's strict
+// deadline test and additive reschedule. A restored scheduler can invoke the
+// phase long after the zeroed deadline; each invocation redraws once and adds
+// its interval to that old deadline rather than anchoring it to the restored
+// tick [05 R-PROD-01 §3], [01 §7.3].
+func TestWindDeadlineAccumulatesFromPriorDeadline(t *testing.T) {
+	const restoredTick uint32 = 10001
+	crt := rng.NewCRT(1)
+	sim := rng.NewSimulation(7)
+	w := NewWind(100, 2000)
+
+	intervals := rng.NewCRT(1)
+	var wantDeadline uint32
+	for i := 0; i < 10; i++ {
+		wantDeadline += windInterval(&intervals)
+		beforeCRT, beforeSim := crt.Draws(), sim.Draws()
+		if !w.Jitter(restoredTick+uint32(i), &crt, &sim) {
+			t.Fatalf("overdue invocation %d did not redraw", i)
+		}
+		if got := w.NextChange; got != wantDeadline {
+			t.Fatalf("overdue invocation %d deadline = %d, want accumulated %d", i, got, wantDeadline)
+		}
+		if got := crt.Draws() - beforeCRT; got != 1 {
+			t.Fatalf("overdue invocation %d CRT draws = %d, want 1", i, got)
+		}
+		if got := sim.Draws() - beforeSim; got != 2 {
+			t.Fatalf("overdue invocation %d simulation draws = %d, want 2", i, got)
+		}
+	}
+}
+
+// TestWindFreshCadenceUsesStrictDeadline documents the ordinary continuous
+// cadence: strict equality and additive rescheduling produce a redraw at tick
+// 1, then one tick after each accumulated deadline [05 R-PROD-01 §3].
+func TestWindFreshCadenceUsesStrictDeadline(t *testing.T) {
+	crt := rng.NewCRT(1)
+	sim := rng.NewSimulation(7)
+	w := NewWind(100, 2000)
+	if !w.Jitter(1, &crt, &sim) {
+		t.Fatal("fresh wind did not redraw at tick 1")
+	}
+	firstDeadline := w.NextChange
+	if w.Jitter(firstDeadline, &crt, &sim) {
+		t.Fatal("fresh wind redrew at deadline equality")
+	}
+	if !w.Jitter(firstDeadline+1, &crt, &sim) {
+		t.Fatal("fresh wind did not redraw after its deadline")
+	}
+	if w.NextChange <= firstDeadline {
+		t.Fatalf("fresh cadence deadline = %d, want advance after %d", w.NextChange, firstDeadline)
 	}
 }
 
@@ -197,5 +259,16 @@ func TestWindVectorAxes(t *testing.T) {
 	}
 	if x, z := windVectors(0, 12345); x != 0 || z != 0 {
 		t.Fatalf("zero strength: vectors = (%d, %d), want zeroed", x, z)
+	}
+}
+
+// TestWindVectorsRoundBeforeNegativeScale locks the non-axis component
+// boundary: vector words are −2 times the rounded positive-strength trig
+// components, not one rounded product with a negative doubled amplitude
+// [05 R-PROD-01 §3].
+func TestWindVectorsRoundBeforeNegativeScale(t *testing.T) {
+	x, _ := windVectors(5000, 128)
+	if x != -124 {
+		t.Fatalf("heading 128 X vector = %d, want -124", x)
 	}
 }

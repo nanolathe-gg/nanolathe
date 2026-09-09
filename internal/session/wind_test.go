@@ -41,7 +41,7 @@ func TestWindBattleEntryConsumesNoDraws(t *testing.T) {
 
 // TestWindTick1Chain locks the first sub-tick wind chain [R-CORE-02 census]:
 // with the deadline zeroed at entry and the strict gate (not due while
-// tick < deadline), phase 8 at tick 1 consumes exactly 1 CRT interval draw,
+// tick <= deadline), phase 8 at tick 1 consumes exactly 1 CRT interval draw,
 // then 1 sim strength draw, then 1 sim heading draw only when the strength is
 // nonzero. A not-due tick consumes nothing.
 func TestWindTick1Chain(t *testing.T) {
