@@ -63,6 +63,7 @@ func RetailRestoreOrdersAtTick(u *units.Unit, records []save.OrderRecord, stable
 			}
 		}
 		queueFlags := binary.LittleEndian.Uint32(record.Main[0x32:])
+		staticGate, flags, captionPending := restoreRetailQueueFlags(queueFlags)
 		n := &Node{
 			ID: id, Phase: record.Main[9], DynamicGate: binary.LittleEndian.Uint32(record.Main[0x0A:]),
 			Deadline: int32(binary.LittleEndian.Uint32(record.Main[0x0E:])), Owner: u.Handle, Target: target,
@@ -72,7 +73,7 @@ func RetailRestoreOrdersAtTick(u *units.Unit, records []save.OrderRecord, stable
 			GuardX: int16(binary.LittleEndian.Uint16(record.Main[0x1E:])), GuardY: int16(binary.LittleEndian.Uint16(record.Main[0x20:])),
 			CachedX: int16(binary.LittleEndian.Uint16(record.Main[0x22:])), CachedY: int16(binary.LittleEndian.Uint16(record.Main[0x24:])),
 			Param1: binary.LittleEndian.Uint32(record.Main[0x26:]), Param2: binary.LittleEndian.Uint32(record.Main[0x2A:]), Param3: binary.LittleEndian.Uint32(record.Main[0x2E:]),
-			StaticGate: queueFlags, Flags: queueFlags, Satisfied: binary.LittleEndian.Uint32(record.Main[0x36:]),
+			StaticGate: staticGate, Flags: flags, CaptionPending: captionPending, Satisfied: binary.LittleEndian.Uint32(record.Main[0x36:]),
 			BuildDefKey: record.BuildTypeName, CreationTick: tick,
 			RetailSubtypeCode: record.SubtypeCode,
 			RetailSubtype:     append([]byte(nil), record.Subtype...),
@@ -89,10 +90,9 @@ func RetailRestoreOrdersAtTick(u *units.Unit, records []save.OrderRecord, stable
 		}
 	}
 	q := NewQueueWith(front, rear)
-	// No marker repair. The saved order box carries the record's whole
-	// static-mask copy, and the active marker is bit 12 of that word
-	// [04 R-ORD-01 §13] — the loop above restores it verbatim along with the
-	// tombstone, auto-op and caption bits. A repair here would invent a marker
+	// No marker repair. The saved order box carries the canonical static-mask
+	// copy; restoreRetailQueueFlags reconstructs the local active flag from its
+	// bit-12 marker. A repair here would invent a marker
 	// for a saved queue that genuinely carried none, which is a state retail
 	// reaches whenever the marked record was freed ("with no marked record it
 	// appends at the tail", [04 §3.1]).

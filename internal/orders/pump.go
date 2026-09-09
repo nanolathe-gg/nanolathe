@@ -143,10 +143,11 @@ type Node struct {
 	// `BuildWeapon` and `SelfDestruct` [04 R-ORDER-02 §1], and neither calls
 	// the caption clear in [04 R-ORD-01 §2]'s contracts.
 	//
-	// It is a field rather than a bit of StaticGate/Flags because the retail
-	// save word is `StaticGate | Flags` and the traced bit position collides
-	// with nothing this build allocates there; keeping it separate is what
-	// stops a restored record from inheriting an invented static bit.
+	// It is a field rather than a local Flags bit because local runtime flag
+	// values are an implementation representation. The retail save codec maps
+	// this state explicitly to the canonical caption-pending wire bit and back,
+	// while retaining unrelated static-mask bits unchanged [04 R-ORD-01 §13]
+	// [08 R-SAVE-ORDER-01].
 	//
 	// The arming is conditional, and the condition is now wired (WU-19-181):
 	// the insertion helper takes a queued/non-queued argument and arms the bit

@@ -657,6 +657,17 @@ The reader's partial-load behaviour is preserved: a missing account is created
 empty and each subsystem's defaults govern `[08 "File naming and write
 policy"]` `[08 "Load process"]`.
 
+**C14a — order queue-word boundary.** The order main box's queue word is the
+retail static-mask copy, not Nanolathe's local `Node.Flags` domain. Save maps
+the local active, caption-pending, auto/default, tombstone, completion, and
+StopBuilding-pending states to their established wire bits; restore performs
+the inverse mapping. Purge survivorship is reconstructed from retained static
+bit 2. All other static bits stay verbatim, including constructor mutations
+such as a cleared target-observer bit, so restoring an order never regenerates
+its descriptor mask. This is one canonical wire form: it neither reuses local
+flag numbers nor attempts to recover an older lossy image `[04 R-MOV-03 §6]`
+`[04 R-ORD-01 §13]` `[08 R-SAVE-ORDER-01]`.
+
 **C15 — the 28-byte scheduler box and the deadlines.** The scheduler image and
 the per-player settlement deadlines round-trip as absolute ticks. Neither
 random stream is saved; the load entry creates fresh stream seeds before the

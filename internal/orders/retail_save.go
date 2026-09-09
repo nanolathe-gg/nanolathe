@@ -117,9 +117,10 @@ func retailOrderImage(n *Node, ownerID uint16, sequence uint32, rear bool, stabl
 	binary.LittleEndian.PutUint32(main[0x26:], n.Param1)
 	binary.LittleEndian.PutUint32(main[0x2a:], n.Param2)
 	binary.LittleEndian.PutUint32(main[0x2e:], n.Param3)
-	// Nanolathe gives the runtime marker bits and the descriptor mask named
-	// fields; retail stores their combined record word [08 R-SAVE-ORDER-01].
-	queueFlags := n.StaticGate | n.Flags
+	// The local runtime flags do not share retail's bit positions. Convert them
+	// into the canonical saved word rather than ORing the two domains [04
+	// R-ORD-01 §13][08 R-SAVE-ORDER-01].
+	queueFlags := retailQueueFlags(n)
 	if rear {
 		queueFlags |= 0x40000
 	} else {
