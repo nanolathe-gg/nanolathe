@@ -119,3 +119,19 @@ func BenchmarkInstancesWalkRestingForest(b *testing.B) {
 		_ = svc.Instances()
 	}
 }
+
+// BenchmarkTickMotionRestingForest records the remaining reconciliation cost
+// separately from phase-six reproduction and active work (design P01).
+func BenchmarkTickMotionRestingForest(b *testing.B) {
+	for _, side := range []int{8, 64} {
+		b.Run(fmt.Sprintf("resting-%d", side*side), func(b *testing.B) {
+			svc := restingForestService(b, side, 8)
+			svc.TickMotion(0) // warm the deterministic key cache
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				svc.TickMotion(uint32(i + 1))
+			}
+		})
+	}
+}

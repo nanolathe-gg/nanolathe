@@ -407,6 +407,11 @@ latched and keeps taking slices from its own player's accumulator until that
 accumulator goes non-positive. The scheduler runs once per tick, before the
 per-player unit sweeps `[04 §7.3]` `[04 R-PATH-01 §6]` `[04 R-PATH-01 §10]`.
 
+The movement provider reads eligibility from the session player record at the
+actual slot index; the participant count remains only the equal-share divisor.
+Sparse restored slots are never compacted or represented by a count cutoff
+`[04 R-PATH-01 §6]`.
+
 **C12 — full or empty.** Requests are full-or-empty. Budget exhaustion leaves
 the heap and the request active and publishes nothing — never a partial prefix.
 Heap exhaustion publishes an empty route, and carries no charge `[04 §7.3]`

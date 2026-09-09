@@ -35,7 +35,7 @@ func TestFollowerRepathArmNeedsAnInstalledPayload(t *testing.T) {
 			system := NewSystem(syntheticTerrainForIntegrate(), wiringProfile, NewOccupancyGrid())
 			w := newMovementFixtureWorld(10)
 			system.BindWorld(w)
-			system.ConfigurePath(1, 10)
+			system.ConfigurePath(1, 10, func(player int) bool { return player >= 0 && player < 1 })
 			def := &content.UnitDef{
 				UnitName: "repath-gate", FootprintX: 1, FootprintZ: 1,
 				MaxVelocity: int32(worldUnitsPerCell), Acceleration: int32(worldUnitsPerCell),

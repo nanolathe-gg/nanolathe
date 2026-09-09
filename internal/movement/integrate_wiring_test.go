@@ -150,7 +150,7 @@ func TestConfiguredSchedulerPublishesOwnerOneRequest(t *testing.T) {
 	sys := NewSystem(terrain, wiringProfile, NewOccupancyGrid())
 	w := newMovementFixtureWorld(10)
 	sys.BindWorld(w)
-	sys.ConfigurePath(2, 10)
+	sys.ConfigurePath(2, 10, func(player int) bool { return player >= 0 && player < 2 })
 	h, err := w.Create(wiringDef(), 1, world.CellToWorld(2), terrain.HeightAt(world.CellToWorld(2), world.CellToWorld(2)), world.CellToWorld(2))
 	if err != nil {
 		t.Fatalf("create owner-one unit: %v", err)
@@ -177,7 +177,7 @@ func TestMobileBuildRequestsStartAtCommittedAnchor(t *testing.T) {
 	profile := wiringProfile
 	profile.FootPrintX, profile.FootPrintZ = 2, 2
 	sys := NewSystem(terrain, profile, NewOccupancyGrid())
-	sys.ConfigurePath(2, 10)
+	sys.ConfigurePath(2, 10, func(player int) bool { return player >= 0 && player < 2 })
 	w := newMovementFixtureWorld(10)
 	sys.BindWorld(w)
 
@@ -333,7 +333,7 @@ func TestEnsureUnitStampFeedsClassLayerRevision(t *testing.T) {
 	sys := NewSystem(terrain, wiringProfile, grid)
 	w := newMovementFixtureWorld(10)
 	sys.BindWorld(w)
-	sys.ConfigurePath(2, 10)
+	sys.ConfigurePath(2, 10, func(player int) bool { return player >= 0 && player < 2 })
 
 	requester, err := w.Create(wiringDef(), 0, world.CellToWorld(2), terrain.HeightAt(world.CellToWorld(2), world.CellToWorld(2)), world.CellToWorld(2))
 	if err != nil {

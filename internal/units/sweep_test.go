@@ -322,22 +322,20 @@ func TestDeadUnitNotStepped(t *testing.T) {
 	// Mark dying and finalize
 	world.Destroy(h, DeathKilled)
 	world.FinalizeDeath(h, 1)
-	// StepPreUpdate should be no-op (dead)
-	// We can detect stepping by checking that unitPreUpdate would be called; but it is placeholder no-op.
-	// Instead verify that NeedsDeath is false and Unit is nil and Step does not panic and does not resurrect.
-	world.StepPreUpdate(h, 2)
+	// Status refresh cannot revive the freed slot.
+	world.StepPostCOBStatus(h, 2)
 	if world.Unit(h) != nil {
-		t.Fatalf("dead unit should remain nil after StepPreUpdate")
+		t.Fatalf("dead unit should remain nil after StepPostCOBStatus")
 	}
 	// Create new unit reusing same slot and ensure it can be stepped (not considered dead)
 	h2, _ := world.Create(def, 0, 0, 0, 0)
 	if h2 != h {
 		t.Fatalf("reuse should give same slot %d want %d", h2, h)
 	}
-	// This new unit is alive, not dying, StepPreUpdate should be callable without error
-	world.StepPreUpdate(h2, 3)
+	// This new unit is alive, not dying, StepPostCOBStatus should be callable without error
+	world.StepPostCOBStatus(h2, 3)
 	if world.Unit(h2) == nil {
-		t.Fatalf("new unit should still be alive after StepPreUpdate")
+		t.Fatalf("new unit should still be alive after StepPostCOBStatus")
 	}
 	if world.NeedsDeathFinalization(h2) {
 		t.Fatalf("new unit should not need death finalization")

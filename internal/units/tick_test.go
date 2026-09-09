@@ -55,12 +55,12 @@ func TestHealthSampleKeepsCurrentAndPriorWindows(t *testing.T) {
 	}
 	u := world.Unit(h)
 	u.Health = 100
-	world.StepPreUpdate(h, 30)
+	world.StepPostCOBStatus(h, 30)
 	if u.CurrentSample != 100 || u.PriorSample != 0 {
 		t.Fatalf("first health window current=%d prior=%d, want 100/0", u.CurrentSample, u.PriorSample)
 	}
 	u.Health = 50
-	world.StepPreUpdate(h, 60)
+	world.StepPostCOBStatus(h, 60)
 	if u.CurrentSample != 50 || u.PriorSample != 100 {
 		t.Fatalf("second health window current=%d prior=%d, want 50/100", u.CurrentSample, u.PriorSample)
 	}

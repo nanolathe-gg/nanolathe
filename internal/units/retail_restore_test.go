@@ -34,7 +34,7 @@ func TestRetailUnitBaseRestoresEstablishedFields(t *testing.T) {
 	if err := RetailUnitBase(u, data); err != nil {
 		t.Fatal(err)
 	}
-	if u.X != 3<<16 || u.Move.Heading != 0x1234 || u.Health != -7 || u.SpotMetal != 4.5 || !u.HasMover || u.RestoredAIGroup != -1 || u.Dying || u.DeathCause != DeathReclaimed || !u.InBuildStance || u.Flags&0x4000 == 0 || u.Flags&(1<<12|0xc0000000) != (1<<12|0xc0000000) {
+	if u.X != 3<<16 || u.Move.Heading != 0x1234 || u.Health != -7 || u.SpotMetal != 4.5 || !u.HasMover || u.RestoredAIGroup != -1 || !u.Dying || u.DeathCause != DeathReclaimed || !u.InBuildStance || u.Flags&0x4000 == 0 || u.Flags&(1<<12|0xc0000000) != (1<<12|0xc0000000) {
 		t.Fatalf("restored fields: x=%v heading=%x health=%d metal=%v dying=%v cause=%v stance=%v", u.X, u.Move.Heading, u.Health, u.SpotMetal, u.Dying, u.DeathCause, u.InBuildStance)
 	}
 	// The kind byte itself restores verbatim; the label above is derived from
@@ -112,10 +112,10 @@ func TestRetailUnitWeaponTargetAndPayloadFixup(t *testing.T) {
 	if err := RetailUnitBase(u, data); err != nil {
 		t.Fatal(err)
 	}
-	if u.Slots[0].SavedActiveByte != 1 || u.Slots[0].SavedPayloadWord0 != 0x11223344 || u.Slots[0].SavedPayloadWord1 != 0x55667788 || u.Slots[0].Target.Kind != TargetNone {
+	if u.Slots[0].SavedPayloadWord0 != 0x11223344 || u.Slots[0].SavedPayloadWord1 != 0x55667788 || u.Slots[0].Target.Kind != TargetNone {
 		t.Fatalf("base pass interpreted target/payload early: %#v", u.Slots[0])
 	}
-	if err := RetailUnitWeaponTargets(u, map[uint16]pool.Handle{7: 11}); err != nil {
+	if err := RetailUnitWeaponTargets(u, retailTargetSlotMap(map[uint16]pool.Handle{7: 11})); err != nil {
 		t.Fatal(err)
 	}
 	if u.Slots[0].Target.Kind != TargetUnit || u.Slots[0].Target.Unit != 11 {

@@ -220,12 +220,23 @@ session pointer, catalog object or presentation cache crosses the boundary
 fully detached staging result validated before anything live is touched — and
 `RestoreRetailBattleCore` commits it. `RetailLoadResult` names the route the
 `Summary` account selected and carries exactly one of a campaign continuation
-or a staged battle `[08 R-SAVE-02 §11]`. The unit writer resolves handles to
-stable slots strictly — its own identity and a weapon slot's unit target must
-name a live unit — except for the two links a record may legitimately lack:
-the carrier and the engagement target are written as the stable slot, or 0
-when the linked unit is absent or dead, so a save taken on the tick of a kill
-is not refused `[08 R-SAVE-02 §6]` `[08 R-SAVE-WEAPON-01]`.
+or a staged battle `[08 R-SAVE-02 §11]`. The unit writer requires a live
+subject and writes carrier and engagement
+links as zero when absent or dead. Weapon targets instead preserve valid pool
+slot identity, including a slot freed later in the same tick; restoration
+checks bounds and the ordinary weapon visit resolves liveness
+`[08 R-SAVE-02 §6]` `[08 R-SAVE-WEAPON-01]`. The writer projects `Dying`
+into the packed pending-death bit without changing live state, and the reader
+restores that logical latch independently of health and damage cause.
+
+The definition active byte is read through `WeaponDef.ActiveByte`, whose
+fresh value is its catalog slot byte. A restored value overrides that initial
+projection without changing catalog identity. Staging clones the catalog
+before allocation; each unit's post-script weapon pass applies its saved bytes
+to those battle-local definitions in slot order. The slot enabled bit stays
+independent. This also keeps hand-authored fixture definitions initialized from
+ID without requiring a separate constructor, and removes the unused slot
+scratch field that previously supplied the writer's active byte.
 
 **The trigger adapter.** The session supplies the trigger evaluator its
 world-facing callbacks: the stamped footprint anchor a boundary condition

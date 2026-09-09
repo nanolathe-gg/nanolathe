@@ -248,6 +248,14 @@ func (c *SkirmishConfig) ApplyDefaults() {
 			if c.Players[i].AllyGroup == 0 {
 				c.Players[i].AllyGroup = SkirmishDefaultAllyGroup
 			}
+			// Zero is a valid choice after initialization; only the missing
+			// preference takes these defaults [08 R-SKIR-01 §1, §2].
+			if c.Players[i].Color == 0 {
+				c.Players[i].Color = i
+			}
+			if c.Players[i].Side == 0 {
+				c.Players[i].Side = i & 1
+			}
 		}
 		c.rulesDefaultsApplied = true
 	}
@@ -272,14 +280,6 @@ func (c *SkirmishConfig) ApplyDefaults() {
 		}
 		if p.Energy == 0 {
 			p.Energy = SkirmishDefaultEnergy
-		}
-		// Colour = slot index [GAP T14]; missing (0 for non-zero slot) installs slot.
-		if i != 0 && p.Color == 0 {
-			p.Color = i
-		}
-		// Side = slot &1 [02 §3]; missing for odd slots installs 1.
-		if p.Side == 0 && (i&1) == 1 {
-			p.Side = 1
 		}
 		if len(p.Nickname) > skirmishNickPayload {
 			// 17-byte buffer includes NUL, so truncate to 16 bytes [02 §3].
@@ -382,6 +382,14 @@ func (c *SkirmishConfig) Normalize() error {
 			if c.Players[i].AllyGroup == 0 {
 				c.Players[i].AllyGroup = SkirmishDefaultAllyGroup
 			}
+			// Zero is a valid choice after initialization; only the missing
+			// preference takes these defaults [08 R-SKIR-01 §1, §2].
+			if c.Players[i].Color == 0 {
+				c.Players[i].Color = i
+			}
+			if c.Players[i].Side == 0 {
+				c.Players[i].Side = i & 1
+			}
 		}
 		c.rulesDefaultsApplied = true
 	}
@@ -392,12 +400,6 @@ func (c *SkirmishConfig) Normalize() error {
 		}
 		if p.Energy == 0 {
 			p.Energy = SkirmishDefaultEnergy
-		}
-		if i != 0 && p.Color == 0 {
-			p.Color = i
-		}
-		if p.Side == 0 && (i&1) == 1 {
-			p.Side = 1
 		}
 		if len(p.Nickname) > skirmishNickPayload {
 			p.Nickname = p.Nickname[:skirmishNickPayload]

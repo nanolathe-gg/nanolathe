@@ -5803,13 +5803,13 @@ records”], [04 §2.3]]
 The three records at `0x41 + 0x18*n`, for `n = 0..2`, are fixed-width,
 little-endian 24-byte records. The save writer and unit reconstructor use the
 same byte positions; the reconstruction writes the decoded values into the
-slot's initialized runtime words before order and script fix-up. This is a
+slot's initialized runtime words after order and script fix-up. This is a
 wire map, not a prescription for Nanolathe's in-memory layout. [Established;
 [01 §6.1], [06 §1.2]]
 
 | Record bytes | Wire form | Runtime meaning and restore rule |
 |---|---|---|
-| `0x00..0x03` | `u32` pair of `s16` words | Low word is the target-unit pool index in unit mode, or ground X in point mode. High word is the target-mode/ground-Z word: `0x8000` is the unit-target sentinel; any other signed value selects a ground point and is its ground-Z component. The writer and reader copy the full pair, so the target kind is not inferred from zero/nonzero. A nonzero unit index is resolved only after all fixed slots have been allocated. [Established; [06 §3.1]] |
+| `0x00..0x03` | `u32` pair of `s16` words | Low word is the target-unit pool index in unit mode, or ground X in point mode. High word is the target-mode/ground-Z word: `0x8000` is the unit-target sentinel; any other signed value selects a ground point and is its ground-Z component. The writer and reader copy the full pair, so the target kind is not inferred from zero/nonzero. A nonzero unit index retains pool-slot identity even when that slot is free; the reader does not recursively reconstruct or validate the target record. [Established; [06 §3.1]] |
 | `0x04..0x07` | `u32` | Copy of a slot target/aim payload word. It is restored byte-for-byte into the corresponding slot word. Its exact axis and packing are not established by the save census; do not name it X, Y, or Z. [Established wire copy; Unknown semantic name] |
 | `0x08..0x0B` | zero-extended `u8` | The resolved weapon definition's active/inactive byte, not a weapon catalog ID. Nonzero is the definition-side active gate; zero is the inactive case. The weapon identity comes from the unit definition's ordered `weapon1..3` links and the catalog, with record 0 (`noweapon`, ID 0) as the inactive sentinel when that family is present. The reader writes this byte back to the resolved definition's active field, but it cannot select a different weapon definition. [Established; [02 §5], [06 §1.2]] |
 | `0x0C..0x0F` | `u32` | Copy of a second slot payload word. It is restored into the matching runtime word. The bounded target census does not establish a public target axis or identity for it; retain it as an opaque staged value. [Established wire copy; Unknown semantic name] |
@@ -5820,11 +5820,17 @@ wire map, not a prescription for Nanolathe's in-memory layout. [Established;
 | `0x17` | `u8` | Only bits 0..4 are meaningful persisted slot flags. Bit 0 is the Aim-request/result latch, bit 1 is armed/has-target, bits 2–3 hold the **slot's own index** (0, 1, 2 — written once by the slot initializer at unit construction and read by the muzzle queries, the projectile creators and the fire packet, `[06 R-WPN-05 §3]`), and bit 4 is tracking. The writer and reader discard/overwrite the upper three bits; their observed high-bit values are stack residue, not state, and bits 5–7 are inert in the executable as well. A reader that restores the byte wholesale restores the slot index correctly; one that rebuilds the byte must put the record's position `n` into bits 2–3. [Established; [06 §3.3]] |
 
 The active-definition byte at `0x08..0x0B` is the important identity
-boundary. Two different weapon definitions with the same active gate produce
-the same byte, so a loader must never interpret this field as a catalog index.
+boundary. At catalog construction this byte is stamped with the record
+index, including values greater than one [02 §5]. Save restoration overwrites
+the byte of the already resolved definition; it does not select a catalog
+record. Thus the exact byte is copied, not reduced to a Boolean. Definitions
+are shared within the battle: later restored units and later slots referring
+to the same definition overwrite earlier restored byte values. **Established**
+from the writer and the reader's post-script three-slot loop.
 Conversely, an empty or unresolved unit weapon link resolves to the inactive
 record-0 definition when available; its identity is supplied by the restored
-unit definition, while this field remains zero. A catalog without a record-0
+unit definition. That definition starts with byte zero, but a restored byte
+can replace it like any other resolved definition. A catalog without a record-0
 definition leaves the link nil/inactive, as specified by the content linker.
 [Established; [02 §5]]
 
@@ -5837,11 +5843,11 @@ part of Aim setup, so neither is a second target-kind discriminator.
 Consequently:
 
 - a unit-mode pair must resolve its low-word logical stable ID against the
-  staged pool and preserve the high-word sentinel;
+  staged pool bounds and preserve the high-word sentinel, including a free slot;
 - a point-mode pair must restore both signed coordinate words and derive the
   terrain height through the normal target resolver;
-- the order/subtype pass may replace this target pair, but it must not infer
-  target kind from zero/nonzero values.
+- the order/subtype pass precedes the saved weapon-pair copy; it must not
+  infer the final target kind from zero/nonzero values.
 
 This preserves the established logical-reference rule (pool indices are
 16-bit, slot zero is null, and there are no generations) with the exact
@@ -5861,21 +5867,25 @@ recomputed after restore. [Established omission; [04 §5.3], [06 §3.3], [06
 records within the enclosing `0xB8` unit form and rejects an overrun or any
 record boundary other than `0x18*n`. It resolves weapon identity from the
 unit definition before applying the active byte and validates that a nonzero
-target-unit index names a staged, live slot when the later target pass elects
-unit mode. It preserves reload, yaw, pitch, ammo, and flags without clamping;
+target-unit index lies within the staged pool when the later target pass elects
+unit mode. This bounds check is host validation, not a retail liveness gate:
+the reader copies the target pair after script restoration without consulting
+the target unit or its saved record. The ordinary target resolver later clears
+a free slot or observes its replacement after reuse [06 R-WPN-04 §1].
+It preserves reload, yaw, pitch, ammo, and flags without clamping;
 the normal tick gates perform their retail checks. It masks the final flag
-byte to bits 0..4 and never uses its high three bits. The deterministic order
-is: resolve definition links; copy the persistent scalar fields; retain the
-target payload and latch; allocate every referenced unit; let order/subtype
-records install target kind and logical links; restore COB/Aim callbacks; then
-publish the staged unit. [Established for the copies and ordering; Supported
-inference for the transactional rejection boundary]
+byte to bits 0..4 and never uses its high three bits. The established per-unit
+ordering is definition-linked allocation, scalar and recursive object-reference
+restoration, account/mover/order/script restoration, then the three weapon
+record copies and the yard re-stamp [R-SAVE-02 §6]. Transactional staging and
+bounds rejection are host validation policy.
+
 
 **Boundary probes.** Implementation tests should:
 
 - save units with three distinct slot definitions, including `noweapon` and
-  two different active weapons sharing the same active byte, proving that the
-  byte at `0x08` is not identity;
+  two active weapons whose initial bytes are greater than one; independently
+  author a changed saved byte and verify the resolved identity stays fixed;
 - use reload values `-1`, `0`, and `32767`, desired yaw/pitch at both signed
   boundaries, ammo `0`, `1`, and `255`, and all eight flag-byte patterns to
   verify signed/byte preservation and low-five-bit masking;
@@ -6720,14 +6730,16 @@ The reader inverts it bit-for-bit: word bits 0..3 into `s`, 4..15 into flags
 26..31 are **not persisted** and keep whatever the allocator set. Named
 flag bits, in word positions: mover-mode mirror at word bits 4–5 (also fed to
 the allocator and to the re-attach command), move-rate tier at 6–7,
-completion marker (flags bit 13) at word bit 16, the auto/initial-posture
-flag (flags bit 14) at 20, standing-move (flags 18–19) at 24–25 and
+completion marker (flags bit 13) at word bit 16, the death-pending latch
+(flags bit 14) at 20, standing-move (flags 18–19) at 24–25 and
 standing-fire (flags 20–21) at 26–27 ([R-STANCE-01 §6]). The live bit
 (flags bit 28) is **not in the save word at all** — the shift drops flags
 bits 26..31; a loaded unit is alive because the forced-slot allocator made
-it so, and there is no saved live bit to compare. Flags bit 14 is the auto
-flag, not a death mark ([04 R-P0-09]); the completion marker is flags bit
-13. Word bits 17..19 can contain writer-side uninitialized values.
+it so, and there is no saved live bit to compare. Flags bit 14 is the
+death-pending latch tested at the end of the unit visit [04 R-MOV-03 §1]; the earlier description excluding pending death
+was incorrect. Its saved word bit 20 restores the pending transaction,
+independently of health and the last-damage-kind byte. The completion marker
+is flags bit 13. Word bits 17..19 can contain writer-side uninitialized values.
 
 **Established — what the reader does with the record, in order.** Definition
 lookup by name; forced-slot allocation with the saved owner, position and

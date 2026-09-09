@@ -142,6 +142,9 @@ type UnitView struct {
 	// only as its own entry in its own Z row.
 	Carrier      pool.Handle
 	CarriedPiece int16
+	// Cargo is the copied head-first attachment list [04 R-UNIT-06 §3].
+	// It includes piece-less cargo; presentation applies the draw gate.
+	Cargo []pool.Handle
 	// Group is the unit's one stored control-group value [07 §9].  The
 	// health-bar pass draws the digit '0'+Group beside the bar of a unit whose
 	// group number is nonzero [03 R-FX-01 §6].
@@ -1032,9 +1035,10 @@ func (f *Frame) Reset() {
 		return
 	}
 	for i := range f.Units {
-		pieces := f.Units[i].Pieces
+		pieces, cargo := f.Units[i].Pieces, f.Units[i].Cargo
 		clear(pieces)
-		f.Units[i] = UnitView{Pieces: pieces[:0]}
+		clear(cargo)
+		f.Units[i] = UnitView{Pieces: pieces[:0], Cargo: cargo[:0]}
 	}
 	for i := range f.Effects {
 		a, b := f.Effects[i].DurationsA, f.Effects[i].DurationsB

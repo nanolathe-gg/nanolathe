@@ -83,6 +83,7 @@ func RetailUnitBase(u *Unit, data []byte) error {
 	// cloaked bit. Two bits, two sources; the bool is the runtime authority and
 	// the flag word keeps its restored copy so the save writer round-trips.
 	u.IsCloaked = flags&CloakRequestedStatus != 0
+	u.Dying = flags&DeathPendingStatus != 0
 	state := binary.LittleEndian.Uint16(data[0xB2:])
 	u.Activated = state&1 != 0
 	u.Armored = state&2 != 0
@@ -108,7 +109,6 @@ func RetailUnitBase(u *Unit, data []byte) error {
 		// authority there.
 		s.SavedTargetLow = binary.LittleEndian.Uint16(data[off:])
 		s.SavedTargetHigh = binary.LittleEndian.Uint16(data[off+2:])
-		s.SavedActiveByte = data[off+0x08]
 		s.SavedPayloadWord0 = binary.LittleEndian.Uint32(data[off+0x04:])
 		s.SavedPayloadWord1 = binary.LittleEndian.Uint32(data[off+0x0C:])
 		// Target identity is fixed up from the saved pair only after every
@@ -123,9 +123,12 @@ func RetailUnitBase(u *Unit, data []byte) error {
 // stable slots have been forced-allocated. The high word is the discriminator
 // [08 R-SAVE-WEAPON-01]: the unit sentinel 0x8000 over a zero low word is the
 // empty encoding, the same sentinel over a nonzero low word is a unit target
-// named by its stable ID, and any other high word is a ground point whose
+// named by its pool slot, and any other high word is a ground point whose
 // signed 16-bit coordinates widen to 16.16.
-func RetailUnitWeaponTargets(u *Unit, stable map[uint16]pool.Handle) error {
+// The held pair uses pool-slot identity,
+// including currently free slots. Liveness is tested by the ordinary weapon
+// target resolver on its next visit [08 R-SAVE-WEAPON-01] [06 R-WPN-04 §1].
+func RetailUnitWeaponTargets(u *Unit, slot func(uint16) (pool.Handle, bool)) error {
 	if u == nil {
 		return fmt.Errorf("units: retail restore: nil unit")
 	}
@@ -141,7 +144,10 @@ func RetailUnitWeaponTargets(u *Unit, stable map[uint16]pool.Handle) error {
 				s.Target = Target{Kind: TargetNone}
 				continue
 			}
-			h, ok := stable[s.SavedTargetLow]
+			if slot == nil {
+				return fmt.Errorf("units: retail restore: missing weapon target slot resolver")
+			}
+			h, ok := slot(s.SavedTargetLow)
 			if !ok || h == 0 {
 				return fmt.Errorf("units: retail restore: unresolved weapon target %d", s.SavedTargetLow)
 			}
@@ -169,6 +175,22 @@ func RetailUnitReferences(u *Unit, carrier, engagement pool.Handle, attachPiece 
 	u.Attachment.AttachPiece = -1
 	if carrier != 0 {
 		u.Attachment.AttachPiece = int(attachPiece)
+	}
+	return nil
+}
+
+// RetailUnitWeaponDefinitions applies each saved active byte to the resolved
+// battle-local definition after this unit's script restore. Record order is
+// significant when slots share a definition [08 R-SAVE-02 §6]
+// [08 R-SAVE-WEAPON-01]. The caller must supply isolated definition ownership.
+func RetailUnitWeaponDefinitions(u *Unit, data []byte) error {
+	if u == nil || len(data) != retailUnitRecordSize {
+		return fmt.Errorf("units: retail restore: invalid unit weapon image")
+	}
+	for i := range u.Slots {
+		definition := retailWeaponDefinition(u, i)
+		definition.RestoreActiveByte(data[0x41+i*0x18+8])
+		u.Slots[i].Weapon = definition
 	}
 	return nil
 }

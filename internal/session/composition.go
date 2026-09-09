@@ -1780,7 +1780,15 @@ func createAndBindServices(s *Session) error {
 	})
 	// Path work is shared across the existing session players and uses the
 	// session unit-limit word as its pressure divisor [04 R-PATH-01 §6].
-	s.Movement.ConfigurePath(s.activePlayerCount(), sessionPathUnitLimit(s))
+	s.Movement.ConfigurePath(s.activePlayerCount(), sessionPathUnitLimit(s), func(player int) bool {
+		if s.Econ == nil || player < 0 || player >= len(s.Econ.Players) {
+			return false
+		}
+		// Path admission has the same player-record gate as the unit sweep
+		// [04 R-PATH-01 §6][04 R-MOV-03 §11].
+		visit, _ := s.sweepPlayerGate(uint8(player))
+		return visit
+	})
 	// Path is alias to movement scheduler; one scheduler only [04 §7.3]
 	if s.Movement.Scheduler == nil {
 		return fmt.Errorf("session: Movement.Scheduler nil")

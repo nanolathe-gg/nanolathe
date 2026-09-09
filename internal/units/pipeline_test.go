@@ -1,15 +1,8 @@
 package units
 
-// Test-only per-unit pipeline stages [04 §1.1][GAP T15] C17.
-//
-// These helpers were the production per-unit pipeline behind the removed
-// package-wide World.Tick sweep. The authoritative sweep is the session's
-// phase-2 entry point: VisitActiveSlots with StepPreUpdate at the front and
-// FinalizeDeath at slot-end, with weapon/COB/orders/movement work between
-// those boundaries [01 §4.4][04 R-MOV-03 §1]. Package tests drive the same
-// traversal shape through runPhase2Sweep, which composes the stage helpers
-// below in the established per-unit order. They live in this test-only file
-// so no production code can bypass the authoritative entry point.
+// Test-only per-unit stages. The session owns the production visit; this
+// fixture preserves weapons, drain, status, water and slot-end order
+// [04 R-MOV-03 §1].
 
 import (
 	"testing"
@@ -18,45 +11,22 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 )
 
-// runPhase2Sweep drives the per-unit pipeline through the authoritative
-// traversal entry point: one visit per active slot in players-ascending then
-// slots-ascending order [01 §6.2] C2 [P0-16], with the established per-unit
-// stage order inside each visit [04 §1.1][GAP T15] C17 (I7):
-//
-//  1. pre-update/status (StepPreUpdate)
-//  2. water damage and timed work (stub, no invented damage)
-//  3. weapon-slot update (reload decrement; Aim can block)
-//  4. normal COB drain delta 1
-//  5. build/order work deferred (construction pump owns Remaining)
-//  6. movement callbacks preserved for the movement window
-//  7. slot-end death latch, then NeedsDeathFinalization → FinalizeDeath,
-//     mirroring the session's phase-2 slot-end handling
-//
-// It never frees slots other than via FinalizeDeath at slot-end, and never
-// mutates Remaining [05 "Construction target state"].
+// runPhase2Sweep drives the package fixtures through the same traversal and
+// status/death boundaries as the session [04 R-MOV-03 §1].
 func runPhase2Sweep(w *World, tick uint32) {
 	w.VisitActiveSlots(func(v SlotVisit) {
-		w.StepPreUpdate(v.Handle, tick)
-		w.unitWaterDamage(v.Unit, tick)
 		w.weaponSlotUpdate(v.Unit, tick)
 		w.cobDrain(v.Unit, tick)
-		// Steps 5 (orders/build) and 6 (movement) are other windows' work:
-		// the orders pump runs in phase 5, movement integration in the
-		// movement window [01 §4.4][GAP T15] C17-C18.
+		w.StepPostCOBStatus(v.Handle, tick)
+		w.unitWaterDamage(v.Unit, tick)
+		// The session supplies orders and movement at the remainder of
+		// step 9; this units-only fixture owns neither package.
 		w.slotEndDeathHandling(v.Unit, tick)
 		if w.NeedsDeathFinalization(v.Handle) {
 			w.FinalizeDeath(v.Handle, tick)
 		}
 	})
 }
-
-// A tickUnit method on World stood here: a second copy of the per-unit
-// stage sequence runPhase2Sweep above already drives, kept "for tests that
-// assert the per-unit stages directly" and called by none of them. Dead
-// code that reads like a contract is how an invention outlives the session
-// that wrote it, and the clean-room paragraph it carried about the ten
-// numbered acts of [04 R-MOV-03 §1] is owned by unitPreUpdate in
-// pipeline.go, on the production side of the line.
 
 // unitWaterDamage is a placeholder for the sweep's step-9 water damage
 // [04 §9.2][04 R-MOV-03 §1 step 9], and it stays a placeholder.
@@ -85,7 +55,7 @@ func (w *World) weaponSlotUpdate(u *Unit, tick uint32) {
 		}
 		// Decrement nonzero reload countdown at the per-slot reload word
 		// [06 §1.2][06 §4.1] P0-10. This is the sole weapon-driven mutation in
-		// the pre-update window; it does not imply a firing and does not touch
+		// the weapon window; it does not imply a firing and does not touch
 		// resources or stockpile.
 		if slot.Reload > 0 {
 			slot.Reload-- // [06 §1.2][06 §4.1] P0-10 decrement nonzero reload
@@ -186,7 +156,7 @@ func TestBlinkByteDecrementsToZeroIn240Visits(t *testing.T) {
 	}
 	u.BlinkSuppress = int8(-16) // the byte retail writes as 240
 	for visit := 1; visit <= 240; visit++ {
-		world.StepPreUpdate(h, uint32(visit))
+		world.StepPostCOBStatus(h, uint32(visit))
 		want := int8(uint8(240 - visit)) // one decrement per visit, byte arithmetic
 		if u.BlinkSuppress != want {
 			t.Fatalf("visit %d: blink byte = %d, want %d", visit, u.BlinkSuppress, want)
@@ -197,7 +167,7 @@ func TestBlinkByteDecrementsToZeroIn240Visits(t *testing.T) {
 	}
 	// Zero is a floor, not a wrap: a further visit must not restart the
 	// countdown at 255.
-	world.StepPreUpdate(h, 241)
+	world.StepPostCOBStatus(h, 241)
 	if u.BlinkSuppress != 0 {
 		t.Fatalf("blink byte after the zero floor = %d, want 0", u.BlinkSuppress)
 	}
@@ -228,7 +198,7 @@ func TestSelectionMaintenanceClearsUnreadyUnits(t *testing.T) {
 	t.Run("ready unit keeps the bit", func(t *testing.T) {
 		w := newFixtureWorld(4, nil)
 		h, u := newSelected(t, w)
-		w.StepPreUpdate(h, 1)
+		w.StepPostCOBStatus(h, 1)
 		if u.Flags&SelectedStatus == 0 {
 			t.Fatal("a ready unit lost the selected bit")
 		}
@@ -238,7 +208,7 @@ func TestSelectionMaintenanceClearsUnreadyUnits(t *testing.T) {
 		w := newFixtureWorld(4, nil)
 		h, u := newSelected(t, w)
 		u.Remaining = 0.5 // the remaining-build fraction is not exactly 0.0
-		w.StepPreUpdate(h, 1)
+		w.StepPostCOBStatus(h, 1)
 		if u.Flags&SelectedStatus != 0 {
 			t.Fatal("an incomplete unit kept the selected bit")
 		}
@@ -248,7 +218,7 @@ func TestSelectionMaintenanceClearsUnreadyUnits(t *testing.T) {
 		w := newFixtureWorld(4, nil)
 		h, u := newSelected(t, w)
 		u.ClearClassifierEligibility()
-		w.StepPreUpdate(h, 1)
+		w.StepPostCOBStatus(h, 1)
 		if u.Flags&SelectedStatus != 0 {
 			t.Fatal("a unit without the selectable bit kept the selected bit")
 		}
@@ -262,7 +232,7 @@ func TestSelectionMaintenanceClearsUnreadyUnits(t *testing.T) {
 		}
 		h, u := newSelected(t, w)
 		u.Attachment.Carrier = carrier
-		w.StepPreUpdate(h, 1)
+		w.StepPostCOBStatus(h, 1)
 		if u.Flags&SelectedStatus != 0 {
 			t.Fatal("cargo aboard a non-airbase carrier kept the selected bit")
 		}
@@ -279,7 +249,7 @@ func TestSelectionMaintenanceClearsUnreadyUnits(t *testing.T) {
 		}
 		h, u := newSelected(t, w)
 		u.Attachment.Carrier = carrier
-		w.StepPreUpdate(h, 1)
+		w.StepPostCOBStatus(h, 1)
 		if u.Flags&SelectedStatus == 0 {
 			t.Fatal("cargo aboard an airbase lost the selected bit")
 		}

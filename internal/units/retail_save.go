@@ -6,10 +6,11 @@ import (
 	"math"
 	"strings"
 
+	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 )
 
-// RetailStableID resolves a live handle to the logical unit identifier used by
+// RetailStableID resolves a handle to the logical unit identifier used by
 // retail save records. Callers must supply the mapping; a pool handle is not
 // assumed to be the persisted identifier [08 R-SAVE-02 §6].
 type RetailStableID func(pool.Handle) (uint16, bool)
@@ -24,7 +25,11 @@ type RetailUnitWriterScratch struct {
 // RetailUnitImage returns a detached 0xB8 base record. orderCount is supplied
 // by the queue writer so the base record and the emitted order boxes cannot
 // acquire separate ownership of queue traversal [08 R-SAVE-02 §6].
-func RetailUnitImage(u *Unit, orderCount uint32, stableID RetailStableID, scratch RetailUnitWriterScratch) ([]byte, error) {
+// Live object references and held weapon target slots have separate resolvers.
+// targetSlot admits every valid pool slot, including a currently free slot;
+// stableID admits live subjects, carriers and engagement links
+// [08 R-SAVE-WEAPON-01].
+func RetailUnitImage(u *Unit, orderCount uint32, stableID, targetSlot RetailStableID, scratch RetailUnitWriterScratch) ([]byte, error) {
 	if u == nil || !u.Alive || u.Def == nil {
 		return nil, fmt.Errorf("units: retail save: unit is not live or has no definition")
 	}
@@ -63,7 +68,7 @@ func RetailUnitImage(u *Unit, orderCount uint32, stableID RetailStableID, scratc
 	binary.LittleEndian.PutUint16(data[0x3f:], uint16(u.Kills))
 
 	for i := range u.Slots {
-		if err := writeRetailWeaponSlot(data[0x41+i*0x18:], &u.Slots[i], stableID); err != nil {
+		if err := writeRetailWeaponSlot(data[0x41+i*0x18:], &u.Slots[i], retailWeaponDefinition(u, i), targetSlot); err != nil {
 			return nil, fmt.Errorf("units: retail save: unit %d weapon slot %d: %w", id, i, err)
 		}
 	}
@@ -140,8 +145,12 @@ func RetailUnitImage(u *Unit, orderCount uint32, stableID RetailStableID, scratc
 	// The cloak-REQUESTED bit is status-word bit 11, and the runtime authority
 	// for it is the bool, so project it back over the flag word's copy before
 	// packing [05 R-ECO-01 §9]. A unit restored and re-saved untouched packs
-	// exactly what it loaded.
-	statusFlags := u.Flags &^ CloakRequestedStatus
+	// exactly what it loaded. Pending death is also bool-owned: project Dying
+	// independently of health or the last damage kind [08 R-SAVE-02 §6].
+	statusFlags := u.Flags &^ (CloakRequestedStatus | DeathPendingStatus)
+	if u.Dying {
+		statusFlags |= DeathPendingStatus
+	}
 	if u.IsCloaked {
 		statusFlags |= CloakRequestedStatus
 	}
@@ -150,7 +159,7 @@ func RetailUnitImage(u *Unit, orderCount uint32, stableID RetailStableID, scratc
 	return data, nil
 }
 
-func writeRetailWeaponSlot(data []byte, s *Slot, stableID RetailStableID) error {
+func writeRetailWeaponSlot(data []byte, s *Slot, definition *content.WeaponDef, stableID RetailStableID) error {
 	// The LIVE target is the authority for the pair. The restore scratch
 	// (SavedTargetLow/High) is written only by the reader and is never read
 	// here: it carries the on-disk words from the scalar pass to
@@ -189,7 +198,7 @@ func writeRetailWeaponSlot(data []byte, s *Slot, stableID RetailStableID) error 
 	binary.LittleEndian.PutUint16(data, low)
 	binary.LittleEndian.PutUint16(data[2:], high)
 	binary.LittleEndian.PutUint32(data[4:], s.SavedPayloadWord0)
-	data[8] = s.SavedActiveByte
+	data[8] = definition.ActiveByte()
 	binary.LittleEndian.PutUint32(data[0x0c:], s.SavedPayloadWord1)
 	if s.Reload < math.MinInt16 || s.Reload > math.MaxInt16 {
 		return fmt.Errorf("units: reload %d is outside signed 16-bit", s.Reload)
@@ -211,12 +220,9 @@ func writeRetailWeaponSlot(data []byte, s *Slot, stableID RetailStableID) error 
 	return nil
 }
 
-// resolveRetailStableID is the strict form: the unit's own identity and a
-// weapon slot's unit-mode target must name a live stable slot. A weapon slot
-// holding a dead unit is a state the tick's target resolver rewrites to the
-// empty encoding before any writer sees it [06 R-WPN-04 §1], so the writer
-// copies the pair as held and refuses one it cannot resolve
-// [08 R-SAVE-WEAPON-01].
+// resolveRetailStableID requires a nonzero identity admitted by the supplied
+// resolver. Weapon targets use pool bounds; object links use live membership
+// [08 R-SAVE-WEAPON-01] [08 R-SAVE-02 §6].
 func resolveRetailStableID(resolve RetailStableID, h pool.Handle, kind string) (uint16, error) {
 	if h == 0 || resolve == nil {
 		return 0, fmt.Errorf("units: retail save: unresolved %s handle %d", kind, h)
@@ -247,3 +253,15 @@ func optionalRetailStableID(resolve RetailStableID, h pool.Handle) uint16 {
 func fitsInt32(v int64) bool     { return v >= math.MinInt32 && v <= math.MaxInt32 }
 func putI32(dst []byte, v int32) { binary.LittleEndian.PutUint32(dst, uint32(v)) }
 func putI16(dst []byte, v int16) { binary.LittleEndian.PutUint16(dst, uint16(v)) }
+
+// retailWeaponDefinition retains the inactive record-0 identity even when the
+// runtime slot uses nil for an inactive link [08 R-SAVE-WEAPON-01].
+func retailWeaponDefinition(u *Unit, index int) *content.WeaponDef {
+	if u.Slots[index].Weapon != nil {
+		return u.Slots[index].Weapon
+	}
+	if u.Def == nil {
+		return nil
+	}
+	return [NumSlots]*content.WeaponDef{u.Def.Weapon1Def, u.Def.Weapon2Def, u.Def.Weapon3Def}[index]
+}

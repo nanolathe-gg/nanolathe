@@ -838,7 +838,12 @@ nonzero construction fraction forces variant zero after any query
 `Killed` callback after the synchronous query `[06 §12.1]`
 `[06 R-DMG-01 §3]`.
 
-**C26 — area damage, and the absence of impulse.** The blast radius is the
+**C26 — area damage, and the absence of impulse.** Each cell discovers and
+applies its first unit hit, second unit hit, then feature hit before advancing;
+later discovery observes earlier damage and footprint replacement. Each call
+owns its bounded memories: 20 unit entries before the radius test and 64
+feature anchors after it. Overflow candidates remain unremembered and are
+processed on each subsequent encounter. The blast radius is the
 authored area shifted right once; the broad phase is `(radius / 16) + 1` cells
 around the impact cell; falloff is
 `(1 − edgeEffectiveness) · (d/R − 1)² + edgeEffectiveness` with zero distance

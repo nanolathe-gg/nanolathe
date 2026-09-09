@@ -82,6 +82,12 @@ func TestSettingsRoundTripThroughShell(t *testing.T) {
 	// The row values that skirmishConfigForStart actually reads must survive
 	// too: row 0 is the human, rows 1 and 2 are computers.
 	cfg := dst.skirmishConfigForStart(dst.setup.MapName)
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Players[1].Side != 0 || cfg.Players[1].Color != 0 {
+		t.Fatalf("stored Arm/colour-zero choices changed at battle entry: %+v", cfg.Players[1])
+	}
 	if cfg.NumPlayers != 3 {
 		t.Fatalf("start config NumPlayers = %d, want 3", cfg.NumPlayers)
 	}

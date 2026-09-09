@@ -23,11 +23,11 @@ func TestRetailUnitImageRoundTripEstablishedFieldsAndStableIDs(t *testing.T) {
 		Attachment: AttachmentState{Carrier: 42, AttachPiece: 7}, EngagementTarget: 43,
 	}
 	u.Move.Bank, u.Move.Heading, u.Move.Pitch = 11, 12, 13
-	u.Slots[0] = Slot{Target: Target{Kind: TargetUnit, Unit: 44}, Reload: -1, DesiredYaw: 14, DesiredPitch: 15, Ammo: 9, Flags: 0xff, SavedActiveByte: 1, SavedPayloadWord0: 0x11223344, SavedPayloadWord1: 0x55667788}
+	u.Slots[0] = Slot{Target: Target{Kind: TargetUnit, Unit: 44}, Reload: -1, DesiredYaw: 14, DesiredPitch: 15, Ammo: 9, Flags: 0xff, Weapon: &content.WeaponDef{ID: 1}, SavedPayloadWord0: 0x11223344, SavedPayloadWord1: 0x55667788}
 	u.Slots[1] = Slot{Target: Target{Kind: TargetGround, X: numeric.Fixed(-2 << 16), Z: numeric.Fixed(3 << 16)}}
 	ids := map[pool.Handle]uint16{41: 9, 42: 10, 43: 11, 44: 12}
 	resolve := func(h pool.Handle) (uint16, bool) { id, ok := ids[h]; return id, ok }
-	image, err := RetailUnitImage(u, 4, resolve, RetailUnitWriterScratch{PackedStatusBits17To19: 0xa0000})
+	image, err := RetailUnitImage(u, 4, resolve, resolve, RetailUnitWriterScratch{PackedStatusBits17To19: 0xa0000})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestRetailUnitImageRoundTripEstablishedFieldsAndStableIDs(t *testing.T) {
 	if err := RetailUnitBase(v, image); err != nil {
 		t.Fatal(err)
 	}
-	if err := RetailUnitWeaponTargets(v, map[uint16]pool.Handle{12: 94}); err != nil {
+	if err := RetailUnitWeaponTargets(v, retailTargetSlotMap(map[uint16]pool.Handle{12: 94})); err != nil {
 		t.Fatal(err)
 	}
 	if v.X != u.X || v.Y != u.Y || v.Z != u.Z || v.Health != u.Health || v.Move.Heading != u.Move.Heading || v.Slots[0].Target.Unit != 94 || v.Slots[1].Target.Kind != TargetGround || v.Slots[1].Target.X != -2<<16 || v.Pending != uint32(uint16(u.Pending)) {
@@ -123,7 +123,7 @@ func TestRetailWeaponTargetPairWireEncoding(t *testing.T) {
 		if u.Slots[0].Target.Kind != TargetNone {
 			t.Fatalf("(0,0x8000) decoded as kind %d, want TargetNone [06 R-WPN-04 §1]", u.Slots[0].Target.Kind)
 		}
-		image, err := RetailUnitImage(u, 0, resolve, RetailUnitWriterScratch{})
+		image, err := RetailUnitImage(u, 0, resolve, resolve, RetailUnitWriterScratch{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -139,7 +139,7 @@ func TestRetailWeaponTargetPairWireEncoding(t *testing.T) {
 		if err := RetailUnitBase(u, targetPairFixture(5, 0x8000)); err != nil {
 			t.Fatal(err)
 		}
-		if err := RetailUnitWeaponTargets(u, map[uint16]pool.Handle{5: 44}); err != nil {
+		if err := RetailUnitWeaponTargets(u, retailTargetSlotMap(map[uint16]pool.Handle{5: 44})); err != nil {
 			t.Fatal(err)
 		}
 		if u.Slots[0].Target.Kind != TargetUnit || u.Slots[0].Target.Unit != 44 {
@@ -148,7 +148,7 @@ func TestRetailWeaponTargetPairWireEncoding(t *testing.T) {
 		// Exactly what orders' clearSlotTarget does: the kind goes to TargetNone
 		// and nothing touches the restore scratch.
 		u.Slots[0].Target = Target{Kind: TargetNone}
-		image, err := RetailUnitImage(u, 0, resolve, RetailUnitWriterScratch{})
+		image, err := RetailUnitImage(u, 0, resolve, resolve, RetailUnitWriterScratch{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -162,11 +162,11 @@ func TestRetailWeaponTargetPairWireEncoding(t *testing.T) {
 		if err := RetailUnitBase(u, targetPairFixture(5, 0x8000)); err != nil {
 			t.Fatal(err)
 		}
-		if err := RetailUnitWeaponTargets(u, map[uint16]pool.Handle{5: 44}); err != nil {
+		if err := RetailUnitWeaponTargets(u, retailTargetSlotMap(map[uint16]pool.Handle{5: 44})); err != nil {
 			t.Fatal(err)
 		}
 		u.Slots[0].Target = Target{Kind: TargetNone}
-		image, err := RetailUnitImage(u, 0, resolve, RetailUnitWriterScratch{})
+		image, err := RetailUnitImage(u, 0, resolve, resolve, RetailUnitWriterScratch{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -176,7 +176,7 @@ func TestRetailWeaponTargetPairWireEncoding(t *testing.T) {
 		}
 		// Stable ID 5 is gone from the staged image: the unit was removed
 		// between the clear and the save. The reload must still succeed.
-		if err := RetailUnitWeaponTargets(v, map[uint16]pool.Handle{}); err != nil {
+		if err := RetailUnitWeaponTargets(v, retailTargetSlotMap(map[uint16]pool.Handle{})); err != nil {
 			t.Fatalf("reload after the target died: %v", err)
 		}
 		if v.Slots[0].Target.Kind != TargetNone {
@@ -195,7 +195,7 @@ func TestRetailWeaponTargetPairWireEncoding(t *testing.T) {
 		if u.Slots[0].Target != (Target{Kind: TargetGround}) {
 			t.Fatalf("(0,0) decoded as %+v, want the ground point (0,0) [08 R-SAVE-WEAPON-01]", u.Slots[0].Target)
 		}
-		image, err := RetailUnitImage(u, 0, resolve, RetailUnitWriterScratch{})
+		image, err := RetailUnitImage(u, 0, resolve, resolve, RetailUnitWriterScratch{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -207,7 +207,7 @@ func TestRetailWeaponTargetPairWireEncoding(t *testing.T) {
 	t.Run("unit target keeps the sentinel", func(t *testing.T) {
 		u := pairFixtureUnit()
 		u.Slots[0].Target = Target{Kind: TargetUnit, Unit: 7}
-		image, err := RetailUnitImage(u, 0, resolve, RetailUnitWriterScratch{})
+		image, err := RetailUnitImage(u, 0, resolve, resolve, RetailUnitWriterScratch{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -219,11 +219,11 @@ func TestRetailWeaponTargetPairWireEncoding(t *testing.T) {
 
 func TestRetailUnitImageRequiresExplicitValidScratchAndResolver(t *testing.T) {
 	u := &Unit{Handle: 20, Def: &content.UnitDef{UnitName: "u"}, Alive: true}
-	if _, err := RetailUnitImage(u, 0, nil, RetailUnitWriterScratch{}); err == nil {
+	if _, err := RetailUnitImage(u, 0, nil, nil, RetailUnitWriterScratch{}); err == nil {
 		t.Fatal("missing stable-ID resolver accepted")
 	}
 	resolve := func(pool.Handle) (uint16, bool) { return 1, true }
-	if _, err := RetailUnitImage(u, 0, resolve, RetailUnitWriterScratch{PackedStatusBits17To19: 1}); err == nil {
+	if _, err := RetailUnitImage(u, 0, resolve, resolve, RetailUnitWriterScratch{PackedStatusBits17To19: 1}); err == nil {
 		t.Fatal("out-of-mask writer scratch accepted")
 	}
 }
@@ -231,7 +231,7 @@ func TestRetailUnitImageRequiresExplicitValidScratchAndResolver(t *testing.T) {
 // A carrier or engagement-target link whose unit is no longer live is written
 // as 0, never refused: both words are "the stable slot, or 0 when absent or
 // dead" [08 R-SAVE-02 §6]. The weapon-slot unit target has no such clause and
-// stays strict [08 R-SAVE-WEAPON-01].
+// uses an independent pool-slot resolver [08 R-SAVE-WEAPON-01].
 func TestRetailUnitImageDeadOptionalLinksWriteZero(t *testing.T) {
 	u := &Unit{
 		Handle: 20, Def: &content.UnitDef{UnitName: "u"}, Alive: true,
@@ -244,7 +244,7 @@ func TestRetailUnitImageDeadOptionalLinksWriteZero(t *testing.T) {
 		}
 		return 0, false
 	}
-	image, err := RetailUnitImage(u, 0, resolve, RetailUnitWriterScratch{})
+	image, err := RetailUnitImage(u, 0, resolve, resolve, RetailUnitWriterScratch{})
 	if err != nil {
 		t.Fatalf("dead optional links refused the save: %v [08 R-SAVE-02 §6]", err)
 	}
@@ -255,7 +255,112 @@ func TestRetailUnitImageDeadOptionalLinksWriteZero(t *testing.T) {
 		t.Fatalf("attach slot byte = %#x with a dead carrier, want 0xff [08 R-SAVE-02 §6]", image[0x8d])
 	}
 	u.Slots[0] = Slot{Target: Target{Kind: TargetUnit, Unit: 32}}
-	if _, err := RetailUnitImage(u, 0, resolve, RetailUnitWriterScratch{}); err == nil {
-		t.Fatal("a weapon slot naming a dead unit target was accepted; that resolution stays strict [08 R-SAVE-WEAPON-01]")
+	if _, err := RetailUnitImage(u, 0, resolve, resolve, RetailUnitWriterScratch{}); err == nil {
+		t.Fatal("a weapon slot without an explicit slot identity was accepted [08 R-SAVE-WEAPON-01]")
 	}
+}
+
+// Pending death is a saved latch, independently of health or last damage kind
+// [08 R-SAVE-02 §6]. Inspect the wire and author the reader input independently.
+func TestRetailPendingDeathProjection(t *testing.T) {
+	u := pairFixtureUnit()
+	u.LastDamageCause = 1
+	MarkDeath(u, DeathKilled, 2)
+	live := func(h pool.Handle) (uint16, bool) { return uint16(h), h == 1 || h == 2 }
+	image, err := RetailUnitImage(u, 0, live, live, RetailUnitWriterScratch{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binary.LittleEndian.Uint32(image[0xb4:])&(1<<20) == 0 || u.Flags&DeathPendingStatus != 0 {
+		t.Fatal("pending death was omitted or saving changed the runtime flag mirror")
+	}
+	v := pairFixtureUnit()
+	data := targetPairFixture(0, 0x8000)
+	data[0xab] = 1
+	binary.LittleEndian.PutUint32(data[0xb4:], 1<<20)
+	if err := RetailUnitBase(v, data); err != nil {
+		t.Fatal(err)
+	}
+	if !v.Dying || v.DeathCause != DeathKilled {
+		t.Fatalf("pending death restore: %+v", v)
+	}
+	binary.LittleEndian.PutUint32(data[0xb4:], 0)
+	if err := RetailUnitBase(v, data); err != nil {
+		t.Fatal(err)
+	}
+	if v.Dying {
+		t.Fatal("clear pending bit retained death latch from earlier state or nonfatal damage kind")
+	}
+	u.Dying = false
+	u.Flags |= DeathPendingStatus
+	image, err = RetailUnitImage(u, 0, live, live, RetailUnitWriterScratch{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binary.LittleEndian.Uint32(image[0xb4:])&(1<<20) != 0 {
+		t.Fatal("stale flag mirror overrode the clear logical latch")
+	}
+}
+
+func TestRetailWeaponDefinitionByteIsCanonical(t *testing.T) {
+	u := pairFixtureUnit()
+	defs := [NumSlots]*content.WeaponDef{{ID: 7}, {ID: 193}, {ID: 0}}
+	u.Def.Weapon1Def, u.Def.Weapon2Def, u.Def.Weapon3Def = defs[0], defs[1], defs[2]
+	installWeapons(u, u.Def)
+	// Slot enabled is independent of the saved definition byte.
+	u.Slots[0].Flags &^= SlotFlagEnabled
+	live := func(h pool.Handle) (uint16, bool) { return uint16(h), h == 1 }
+	image, err := RetailUnitImage(u, 0, live, live, RetailUnitWriterScratch{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []uint32{7, 193, 0} {
+		if got := binary.LittleEndian.Uint32(image[slotRecordAt(i)+8:]); got != want {
+			t.Errorf("slot %d definition byte=%d, want %d", i, got, want)
+		}
+	}
+	for i, value := range []byte{0, 29, 0} {
+		image[slotRecordAt(i)+8] = value
+	}
+	if err := RetailUnitWeaponDefinitions(u, image); err != nil {
+		t.Fatal(err)
+	}
+	if !content.IsWeaponInactive(defs[0]) || defs[1].ActiveByte() != 29 || defs[1].ID != 193 {
+		t.Fatal("restored definition byte did not reach the active predicate independently of identity")
+	}
+}
+
+func TestRetailHeldFreeTargetUsesSlotResolver(t *testing.T) {
+	u := pairFixtureUnit()
+	u.Slots[0].Target = Target{Kind: TargetUnit, Unit: 5}
+	u.EngagementTarget = 5
+	live := func(h pool.Handle) (uint16, bool) { return uint16(h), h == 1 }
+	slot := func(h pool.Handle) (uint16, bool) { return uint16(h), h > 0 && h < 8 }
+	image, err := RetailUnitImage(u, 0, live, slot, RetailUnitWriterScratch{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if low, high := slotPair(image, 0); low != 5 || high != 0x8000 {
+		t.Fatalf("free target pair=%d,%x", low, high)
+	}
+	if binary.LittleEndian.Uint16(image[0x8b:]) != 0 {
+		t.Fatal("optional object reference used pool membership as liveness")
+	}
+	if err := RetailUnitBase(u, image); err != nil {
+		t.Fatal(err)
+	}
+	if err := RetailUnitWeaponTargets(u, func(id uint16) (pool.Handle, bool) { return pool.Handle(id), id > 0 && id < 8 }); err != nil {
+		t.Fatal(err)
+	}
+	if u.Slots[0].Target.Unit != 5 {
+		t.Fatal("reader lost free slot identity")
+	}
+	u.Slots[0].Target.Unit = 8
+	if _, err := RetailUnitImage(u, 0, live, slot, RetailUnitWriterScratch{}); err == nil {
+		t.Fatal("out-of-pool target accepted")
+	}
+}
+
+func retailTargetSlotMap(slots map[uint16]pool.Handle) func(uint16) (pool.Handle, bool) {
+	return func(id uint16) (pool.Handle, bool) { h, ok := slots[id]; return h, ok }
 }
