@@ -8898,8 +8898,16 @@ the play command succeeded. Consequence: the last audio track (and, on a
 disc with a data track, the second-to-last) plays with no end bound —
 through to the end of the disc.
 
-**Established fact — the tick** (once per host frame from the front-end and
-battle pumps; MCI completion notifications also run it):
+**Established fact — the tick and its callers.** The ordinary CD tick is
+explicit, not an unconditional part of the per-host-frame sound service.
+Callers are CD play-zero, music/options actions, category-transition branches,
+fade and delay completion, and front-end/battle transitions that request
+playback. A successful media-completion notification invokes it only when
+controller status is playing and a fresh mode query does not report playing;
+a failed query counts as not playing. Other notification outcomes do not
+invoke it. Timer service remains part of busy-pump housekeeping
+[01 R-PLAT-02 §4]. The tick itself has no fade/delay guard:
+
 
 1. `count == 0` → return.
 2. `desired == 4` (`Unused`) → `stop cdaudio`, `next = 1` (or 0 when no
@@ -8930,9 +8938,10 @@ battle pumps; MCI completion notifications also run it):
    from `next` for up to `(u + 1) · count` steps, wrapping `count → 1`; the
    `max(1, u)`-th track whose category equals `desired` is played
    ([R-AUD-01 §8]; the `(u+1)·count` budget guarantees a hit whenever at
-   least one matches); none → stop and reset (status 0, `next = 1`), skip
-   step 7.
-7. Tail: re-apply the base volume through the fade-aware setter; status = 1.
+   least one matches); none → stop and reset (status 0, `next = 1`, fade step zero and both
+   timers cancelled), then step 7.
+7. Tail: force-apply the base volume, bypassing the nonzero-step gauge guard;
+   status = 1. An explicit tick can therefore restore volume during a fade or delay.
 
 The "not `playing`" test is the exact string compare of the `status cdaudio
 mode` reply against `playing`; a failed query counts as not playing. The CRT
@@ -8940,27 +8949,44 @@ draws (`rand mod count + 1`, `rand & 15`) are on the presentation stream
 and interleave with the variant picks of §8.3 ([R-AUD-01 §6]).
 
 **Established fact — changing the desired category (`SetDesired(n)`).** If
-unchanged, nothing. Else the current *next* is remembered per outgoing
-category (a five-entry table; nothing reads it — bounded negative),
-`desired = n`, and:
+unchanged, nothing. Otherwise the current/next track is remembered under the
+outgoing category when that category is nonnegative, then `desired = n`.
+There is no upper bound on that history write, and no recovered reader of its
+five defined entries. Outgoing categories above four therefore cause an
+out-of-range memory write; this unsupported input effect has no bounded
+history interpretation. The new signed desired value is not clamped.
 
-* if the play mode is `Custom` or `n ∈ {2, 3}`: the fade volume is set to
-  the base volume; if the outgoing category was 4 (silence) the fade timers
-  are cancelled, the base volume re-applied, and the tick run at once (the
-  new music starts immediately); else if a fade is already running, both
-  timers are cancelled and the tick runs at once; else a **fade-out**
-  starts: `step = −trunc(base / 18)` and a repeating timer at period 2 (in
-  the scaled-tick units of the timer table [07 R-CAM-01 §1]) subtracts the
-  step each firing, applying the reduced level to the CD aux volume; when
-  the level reaches ≤ 0 the timer stops, the level is set to 0, and either
-  the tick runs (new category ≠ 0) or — for `Building` — a one-shot timer of
-  period 120 delays the tick (a pause between battle and calm music);
-* otherwise (modes `Play All`/`Random`/`Repeat` and `n ∈ {0, 1, 4}`) only
-  the desired value changes and the next tick acts on it.
+If the play mode is not `Custom` and `n` is neither 2 nor 3, return. Otherwise
+copy base volume to fade level, then:
 
-While a fade is running, base-volume sets from the gauges are ignored (the
-setter's from-fade flag), so a slider drag during a fade does not fight the
-fade.
+* If outgoing category was 4: cancel the repeating fade timer, then the delay
+  timer, marking each absent; attempt an ordinary base-volume application;
+  run the ordinary tick immediately.
+* Else, if the repeating fade timer is registered: cancel it, then cancel the
+  delay timer; run the ordinary tick immediately. This branch does **not**
+  clear the stored fade step.
+* Else set `step = -trunc(base / 18)` and register a repeating period-2 fade
+  timer. An existing delay timer is not cancelled by this branch.
+
+Each fade callback **adds** the negative step to fade level. If the result is
+positive it force-applies that level. Otherwise it cancels the repeating
+registration, sets both fade level and step to zero, and force-applies zero.
+For desired category 0 (Building), it then registers the period-120 delay;
+for other categories it runs the ordinary tick immediately. The delay
+callback cancels the registration identified by the stored delay ID before
+running the tick. Timer registration itself services existing timers first;
+slot order and nested service are specified in [01 R-PLAT-02 §4].
+
+**Established fact — volume state.** Initial raw base volume is the selected
+CD auxiliary device's queried low 16-bit channel value, or signed `-1` if no
+device is selected or the query fails. Gauge calls pass their signed integer
+shifted left ten bits. An ordinary volume call returns without updating base
+or output while `step != 0`; otherwise it clamps the signed level to
+`0..65535`, stores base, and applies both channels. A forced call bypasses the
+step guard and does not change base. Thus gauges are accepted during the
+Building delay (step has been cleared), but may remain blocked after a fade
+registration is cancelled (step retained). Base levels 1..17 yield step zero,
+so a positive fade level does not decrease. No minimum step is substituted.
 
 **Established fact — pause/resume and notifications.** The in-battle options
 menu (`ARMOPT.GUI`) pauses the CD on open and resumes on close. Pause:
@@ -8969,7 +8995,8 @@ menu (`ARMOPT.GUI`) pauses the CD on open and resumes on close. Pause:
 (when `t < count`: ` from ` + the reply of `status cdaudio position` + ` to `
 + the reply of `status cdaudio position track %i`) + ` notify`; status 1.
 The notify window receives `MM_MCINOTIFY` (successful completion, while
-status is 1 → poll; not `playing` → tick) and `WM_DEVICECHANGE` (any → stop
+status is 1 → poll; not `playing` → tick, preserving status until the tick
+runs its own ordinary branch and fresh device query) and `WM_DEVICECHANGE` (any → stop
 and reset; media arrival → recount tracks and re-run the disc
 identification, which reloads the category list and restarts per the tick).
 The application loop also handles eject/insert around the CD object: on

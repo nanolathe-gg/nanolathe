@@ -301,3 +301,127 @@ func TestMusic_CategoryScanPlaysTheMaxOneUthMatch(t *testing.T) {
 		}
 	}
 }
+
+func TestMusicFadeDelayAndGaugeBoundary(t *testing.T) {
+	m := NewMusicController()
+	if m.baseVolume != -1 {
+		t.Fatal("missing device must initialize raw volume to -1")
+	}
+	m.Open(4)
+	m.Configure(ModeCategoryShuffle, 1)
+	m.SetVolume(64)
+	if m.baseVolume != 65535 {
+		t.Fatal("gauge upper clamp differs")
+	}
+	m.SetVolume(-1)
+	if m.baseVolume != 0 {
+		t.Fatal("negative gauge was not clamped after signed shift")
+	}
+	m.SetVolume(18)
+	var now uint32
+	m.SetPresentationClock(func() uint32 { return now })
+	m.SetPresentationClock(func() uint32 { t.Fatal("attachment rebound the running clock"); return 999 })
+	m.SetDesired(0)
+	if m.fadeStep != -1024 {
+		t.Fatalf("step=%d", m.fadeStep)
+	}
+	now = 1
+	m.ServiceTimers()
+	if m.fadeLevel != 18432 {
+		t.Fatal("period-two timer fired early")
+	}
+	m.SetVolume(7)
+	if m.Volume() != 18 {
+		t.Fatal("gauge overwrote volume during fade")
+	}
+	now = 40
+	m.ServiceTimers()
+	if m.fadeLevel != 17408 {
+		t.Fatal("late service caught up multiple firings")
+	}
+	for i := 0; i < 17; i++ {
+		now += 2
+		m.ServiceTimers()
+	}
+	if m.fadeStep != 0 || m.fadeTimer != -1 || m.delayTimer != 0 || m.outputVolume != 0 {
+		t.Fatalf("completion step=%d fade=%d delay=%d output=%d", m.fadeStep, m.fadeTimer, m.delayTimer, m.outputVolume)
+	}
+	m.SetVolume(7)
+	if m.baseVolume != 7168 {
+		t.Fatal("Building delay incorrectly blocks gauge")
+	}
+	now += 119
+	m.ServiceTimers()
+	if m.delayTimer < 0 {
+		t.Fatal("Building delay fired before 120")
+	}
+	now++
+	m.ServiceTimers()
+	if m.delayTimer != -1 {
+		t.Fatal("Building delay did not remove itself")
+	}
+}
+
+func TestMusicRegistrationServicesBeforeFirstFreeReuse(t *testing.T) {
+	m := NewMusicController()
+	m.Configure(ModeCategoryShuffle, 1)
+	var now uint32
+	reads := 0
+	m.SetPresentationClock(func() uint32 { reads++; return now })
+	m.baseVolume = 18
+	m.SetDesired(0)
+	// Last fade firing removes slot zero, then registering the delay services
+	// the live table again before claiming that same first-free slot.
+	m.fadeLevel = 1
+	reads = 0
+	now = 2
+	m.ServiceTimers()
+	if reads != 4 || m.delayTimer != 0 || m.timers[0].remaining != 120 {
+		t.Fatalf("reads=%d delay=%d remaining=%d", reads, m.delayTimer, m.timers[0].remaining)
+	}
+	// A second timer can coexist. Registration first services the old delay;
+	// it must not replace it or impose a fixed fade-before-delay order.
+	now = 3
+	m.SetDesired(1)
+	if m.fadeTimer != 1 || m.delayTimer != 0 || m.timers[0].remaining != 119 {
+		t.Fatalf("fade=%d delay=%d remaining=%d", m.fadeTimer, m.delayTimer, m.timers[0].remaining)
+	}
+}
+
+func TestMusicFadeCancellationAndCompletionPolling(t *testing.T) {
+	m := NewMusicController()
+	m.Open(4)
+	m.Configure(ModeCategoryShuffle, 0)
+	m.SetVolume(18)
+	m.SetPresentationClock(func() uint32 { return 0 })
+	m.SetDesired(1)
+	m.SetDesired(2)
+	if m.fadeTimer != -1 || m.delayTimer != -1 || m.fadeStep != -1024 || m.outputVolume != 18432 {
+		t.Fatal("cancellation reset step or skipped immediate volume restoration")
+	}
+	m.SetVolume(7)
+	if m.Volume() != 18 {
+		t.Fatal("cancelled timer incorrectly unlocked nonzero-step gauge")
+	}
+	m.Stop()
+	m.Configure(ModeSequential, 0)
+	m.Play(1)
+	playing := true
+	polls := 0
+	m.SetPlaybackPoll(func() bool {
+		polls++
+		if m.Status() != StatusPlaying {
+			t.Fatal("notification changed controller status before the tick poll")
+		}
+		return playing
+	})
+	m.NotifySuccessfulCompletion()
+	if m.CurTrack() != 1 || polls != 1 {
+		t.Fatal("completion advanced or repolled while media still plays")
+	}
+	playing = false
+	m.NotifySuccessfulCompletion()
+	if m.CurTrack() != 2 || polls != 3 {
+		t.Fatal("successful completion did not freshly poll and advance stopped media")
+	}
+}

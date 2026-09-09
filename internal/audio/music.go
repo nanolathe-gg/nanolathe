@@ -75,11 +75,20 @@ type Controller struct {
 	position      int
 	volume        int
 	volumeApplied int
-	lastFrame     uint32
-	hasFrame      bool
+	baseVolume    int32
+	outputVolume  int32
+	fadeLevel     int32
+	fadeStep      int32
+	fadeTimer     int
+	delayTimer    int
+	timers        [10]musicTimer
+	clock         func() uint32
+	lastService   uint32
+	playbackPoll  func() bool
 }
 
-// NewMusicController creates a controller with retail's trackCategory cycle
+// NewMusicController starts without a CD device: the raw queried volume is
+// -1 until a gauge supplies a level [03 R-AUD-01 §4]. It uses retail's trackCategory cycle
 // (i%4)+1 for 100 entries [03 §8.4] and sequential default.
 func NewMusicController() *Controller {
 	c := &Controller{
@@ -91,6 +100,13 @@ func NewMusicController() *Controller {
 		nextTrack:    0,
 		status:       StatusIdle,
 		numTracks:    0,
+		baseVolume:   -1,
+		outputVolume: -1,
+		fadeTimer:    -1,
+		delayTimer:   -1,
+	}
+	for i := range c.timers {
+		c.timers[i].period = -1
 	}
 	for i := 0; i < 100; i++ {
 		// Categories repeat in the authored four-track cycle.
@@ -227,18 +243,172 @@ func (c *Controller) drawCRT() uint32 {
 	return (c.crtState >> 16) & 0x7FFF
 }
 
-// TickFrame runs at most once for a presentation frame. This keeps media
-// polling in the committed frame identity domain [03 §8.4]. A failed poll is
-// passed as playing=false and follows the normal transition path.
-func (c *Controller) TickFrame(frame uint32, playing bool) {
-	if c == nil {
+// SetPresentationClock binds the host's scaled clock, sampled in 30 units per
+// second. It is not the simulation tick [01 R-PLAT-02 §4]. The first nonnil
+// binding wins; transferring the controller between screens neither rebases
+// its clock nor resets timers. Bind before commands.
+func (c *Controller) SetPresentationClock(now func() uint32) {
+	if c == nil || c.clock != nil || now == nil {
 		return
 	}
-	if c.hasFrame && c.lastFrame == frame {
+	c.clock = now
+	c.lastService = now()
+}
+
+// SetPlaybackPoll installs a media-mode query. A failed query returns false.
+// Without a device, the existing controller uses its modeled playback status;
+// it never synthesizes a completion notification [03 R-AUD-01 §4].
+func (c *Controller) SetPlaybackPoll(poll func() bool) { c.playbackPoll = poll }
+
+func (c *Controller) pollPlaying() bool {
+	if c.playbackPoll != nil {
+		return c.playbackPoll()
+	}
+	return c.IsPlaying()
+}
+
+// NotifySuccessfulCompletion handles only a successful playback notification.
+// Other notification outcomes must not invoke it [03 R-AUD-01 §4].
+func (c *Controller) NotifySuccessfulCompletion() {
+	if c == nil || c.status != StatusPlaying || c.pollPlaying() {
 		return
 	}
-	c.hasFrame, c.lastFrame = true, frame
-	c.Tick(playing)
+	// Preserve controller status; the ordinary tick performs its own fresh
+	// device query after the notification gate [03 R-AUD-01 §4].
+	c.tickFromMedia()
+}
+
+// Tick's early exits do not query the device [03 R-AUD-01 §4].
+func (c *Controller) tickFromMedia() {
+	if c.numTracks == 0 || c.desiredCat == 4 || c.status == StatusPaused {
+		c.Tick(false)
+		return
+	}
+	c.Tick(c.pollPlaying())
+}
+
+// TODO(T23): delayed stream opening shares these retail slots; the current
+// CD-only table does not model that competition [01 R-PLAT-02 §4].
+type musicTimerKind uint8
+
+const (
+	musicFade musicTimerKind = iota
+	musicDelay
+)
+
+type musicTimer struct {
+	kind              musicTimerKind
+	period, remaining int32
+}
+
+// ServiceTimers runs once on the busy presentation pump. Registration also
+// calls it, including from a callback: slots are live, not snapshotted, and
+// callback replacement affects the post-callback reload [01 R-PLAT-02 §4].
+func (c *Controller) ServiceTimers() {
+	if c == nil || c.clock == nil {
+		return
+	}
+	elapsed := int32(c.clock() - c.lastService)
+	c.lastService = c.clock()
+	for i := range c.timers {
+		timer := &c.timers[i]
+		if timer.period < 0 {
+			continue
+		}
+		timer.remaining -= elapsed
+		if timer.remaining <= 0 {
+			if timer.kind == musicFade {
+				c.stepFade()
+			} else {
+				c.cancelTimer(c.delayTimer)
+				c.delayTimer = -1
+				c.tickFromMedia()
+			}
+			timer.remaining = timer.period
+		}
+	}
+}
+
+func (c *Controller) registerTimer(kind musicTimerKind, period int32) int {
+	if c.clock == nil {
+		// TODO(T23): timer admission needs an actual host scaled clock; do
+		// not substitute committed simulation ticks when no host is bound.
+		return -1
+	}
+	c.ServiceTimers()
+	for i := range c.timers {
+		if c.timers[i].period < 0 {
+			c.timers[i] = musicTimer{kind: kind, period: period, remaining: period}
+			return i
+		}
+	}
+	return -1
+}
+
+func (c *Controller) cancelTimer(index int) {
+	if index >= 0 && index < len(c.timers) {
+		c.timers[index].period = -1
+	}
+}
+
+func (c *Controller) cancelMusicTimers() {
+	c.cancelTimer(c.delayTimer)
+	c.cancelTimer(c.fadeTimer)
+	c.delayTimer, c.fadeTimer = -1, -1
+}
+
+// SetDesired accepts the signed command category without clamping. Retail's
+// write-only outgoing-category history has no readers and is omitted: its
+// nonnegative-only guard permits out-of-range memory writes for categories
+// above four, which have no safe modeled counterpart [03 R-AUD-01 §4].
+func (c *Controller) SetDesired(desired int32) {
+	if c == nil || c.desiredCat == int(desired) {
+		return
+	}
+	outgoing := c.desiredCat
+	c.desiredCat = int(desired)
+	if c.playMode != ModeCategoryShuffle && desired != 2 && desired != 3 {
+		return
+	}
+	c.fadeLevel = c.baseVolume
+	if outgoing == 4 {
+		c.cancelTimer(c.fadeTimer)
+		c.fadeTimer = -1
+		c.cancelTimer(c.delayTimer)
+		c.delayTimer = -1
+		c.setRawVolume(c.baseVolume, false)
+		c.tickFromMedia()
+		return
+	}
+	if c.fadeTimer >= 0 {
+		c.cancelTimer(c.fadeTimer)
+		c.fadeTimer = -1
+		c.cancelTimer(c.delayTimer)
+		c.delayTimer = -1
+		// Cancellation deliberately leaves the step intact; the ordinary
+		// volume guard reads the step, not timer presence [03 R-AUD-01 §4].
+		c.tickFromMedia()
+		return
+	}
+	c.fadeStep = -(c.baseVolume / 18)
+	c.fadeTimer = c.registerTimer(musicFade, 2)
+}
+
+func (c *Controller) stepFade() {
+	c.fadeLevel += c.fadeStep
+	if c.fadeLevel > 0 {
+		c.setRawVolume(c.fadeLevel, true)
+		return
+	}
+	c.cancelTimer(c.fadeTimer)
+	c.fadeTimer = -1
+	c.fadeLevel, c.fadeStep = 0, 0
+	c.setRawVolume(0, true)
+	if c.desiredCat == 0 {
+		c.delayTimer = c.registerTimer(musicDelay, 120)
+	} else {
+		c.tickFromMedia()
+	}
 }
 
 // Open marks the media initialized without requiring a platform MCI adapter and
@@ -250,6 +420,8 @@ func (c *Controller) Open(numTracks int) bool {
 		return false
 	}
 	c.initialized = true
+	c.fadeStep = 0
+	c.cancelMusicTimers()
 	c.SetNumTracks(numTracks)
 	c.status = StatusIdle
 	c.curTrack = 0
@@ -277,6 +449,8 @@ func (c *Controller) Stop() {
 	if c == nil {
 		return
 	}
+	c.fadeStep = 0
+	c.cancelMusicTimers()
 	c.status = StatusIdle
 	if c.numTracks == 0 {
 		c.nextTrack = 0
@@ -324,11 +498,13 @@ func (c *Controller) Position() int {
 	return c.position
 }
 
-// SetVolume stores the authored music volume and reapplies it on play or
-// resume transitions [03 §8.4]. The backend owns its scale.
+// SetVolume accepts the authored slider integer. The raw device level is
+// its signed 32-bit value shifted ten bits, clamped to 0..65535. A nonzero fade
+// step ignores the entire gauge update [03 R-AUD-01 §4].
 func (c *Controller) SetVolume(v int) {
-	if c != nil {
+	if c != nil && c.fadeStep == 0 {
 		c.volume = v
+		c.setRawVolume(int32(v)<<10, false)
 	}
 }
 
@@ -349,7 +525,26 @@ func (c *Controller) VolumeApplications() int {
 	return c.volumeApplied
 }
 
-func (c *Controller) applyVolume() { c.volumeApplied++ }
+func (c *Controller) setRawVolume(level int32, forced bool) {
+	if c.fadeStep != 0 && !forced {
+		return
+	}
+	if level < 0 {
+		level = 0
+	}
+	if level > 65535 {
+		level = 65535
+	}
+	if !forced {
+		c.baseVolume = level
+	}
+	c.outputVolume = level
+	c.volumeApplied++
+	// TODO(T23): apply this requested level to an actual CD auxiliary-volume
+	// backend when one is installed; recording it is not audible playback.
+}
+
+func (c *Controller) applyVolume() { c.setRawVolume(c.baseVolume, true) }
 
 // IsPlaying reports true iff status==playing.
 // Retail polls via mciSendStringA status cdaudio mode vs "playing".
@@ -446,9 +641,7 @@ func (c *Controller) playSingle() {
 // desiredCat 0 (Building) is a real, selectable category, not "no category" —
 // the tick's "new category ≠ 0" clause that the research once flagged as a
 // possible sentinel belongs to SetDesired's fade-completion handoff (which
-// this controller does not model: it delays running the tick by a one-shot
-// pause when the *transition* lands on Building, so calm music doesn't cut in
-// immediately after battle), not to the shuffle scan itself
+// delays running the tick when the transition lands on Building), not to the shuffle scan itself
 // [03 R-AUD-01 §4, "Established fact — changing the desired category"].
 //
 // Correction (RWU-19-198): this used to stop and reset before scanning, scan
@@ -456,10 +649,6 @@ func (c *Controller) playSingle() {
 // re-anchors the scan, and the pick index is max(1,u), not the first match.
 func (c *Controller) categoryBranch(isPlaying bool) {
 	if c.numTracks == 0 {
-		return
-	}
-	if c.desiredCat < 0 || c.desiredCat > 4 {
-		c.Stop()
 		return
 	}
 	u := int(c.drawCRT() & 0xF) // 0..15, drawn before the poll is consulted
@@ -488,7 +677,7 @@ func (c *Controller) categoryBranch(isPlaying bool) {
 	c.Stop()
 }
 
-// Tick advances media state once per presentation frame. The boolean isPlaying
+// Tick explicitly advances media state; it is not a per-frame service. The boolean isPlaying
 // reflects the mci poll `status cdaudio mode` vs "playing". The dispatch is
 // retail's, in retail's order [03 R-AUD-01 §4 steps 1-7] [03 R-AUD-01 §8]:
 //
@@ -504,10 +693,9 @@ func (c *Controller) categoryBranch(isPlaying bool) {
 //
 // The two overrides were an open question here until RWU-19-198 read the tick:
 // they are Established, and load-bearing only once a caller drives desiredCat
-// independently of the play mode (Configure sets both together today).
+// independently of the play mode.
 //
-// The controller must be polled each rendered frame (presentation), not each
-// presentation loop polling.
+// Explicit calls remain valid during fades and delays [03 R-AUD-01 §4].
 func (c *Controller) Tick(isPlaying bool) {
 	if c == nil || c.numTracks == 0 {
 		return
@@ -521,6 +709,8 @@ func (c *Controller) Tick(isPlaying bool) {
 	}
 	if c.desiredCat == 2 || c.desiredCat == 3 || c.playMode == ModeCategoryShuffle {
 		c.categoryBranch(isPlaying)
+		c.applyVolume()
+		c.status = StatusPlaying
 		return
 	}
 	// Handle the mode transition only after a not-playing poll.
@@ -532,6 +722,8 @@ func (c *Controller) Tick(isPlaying bool) {
 		return
 	}
 	if isPlaying {
+		c.applyVolume()
+		c.status = StatusPlaying
 		// retail polls and if playing does nothing except ensure nextTrack in bounds for seq etc.
 		// For seq, it ensures nextTrack >=1 etc but not advance until next not-playing tick.
 		return
@@ -547,9 +739,8 @@ func (c *Controller) Tick(isPlaying bool) {
 	}
 }
 
-// NotifyTrackEnd marks the current track as ended; the next presentation poll
-// performs the configured transition.
-// Under our model, the next Tick with isPlaying==false will advance, so Notify just marks not playing.
+// NotifyTrackEnd marks modeled media as ended without inventing a completion
+// notification. An explicit Tick performs its next transition.
 func (c *Controller) NotifyTrackEnd() {
 	if c == nil {
 		return

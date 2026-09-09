@@ -245,6 +245,26 @@ alias table), `SampleCache`, the music controller, the positional viewport, and
 one private CRT copy. `internal/audiobackend.Backend` is the PCM device behind
 it — keeping the Ebitengine audio import there is what lets authoritative
 packages import `internal/audio` without initialising a graphics platform [I6].
+The music controller's `SetDesired(int32)` owns category transitions, the
+raw volume/fade state, and a private ten-slot CD timer table. The host binds
+`SetPresentationClock(func() uint32)` before commands and calls
+`ServiceTimers()` only on the busy presentation pump. The callback returns
+actual scaled host time (30 units per second), and registration samples it
+again because registration services the live table before allocating.
+`SetVolume(int)` retains its authored-slider API and performs the signed
+shift and raw clamp internally. `SetPlaybackPoll` supplies a device query;
+without a media device the existing controller models playback internally.
+Only actual successful completion signals call `NotifySuccessfulCompletion`.
+`DrainEvents` does not advance ordinary CD transitions. Explicit `Tick` calls
+remain allowed during fades and delays [03 R-AUD-01 §4][01 R-PLAT-02 §4].
+The missing CD device/volume output and absent host timer binding are T23
+platform residuals, not simulated completion or a simulation-clock timer.
+The private CD table does not model retail slot competition and callback
+ordering with delayed stream opening, which shares the retail timer table
+[01 R-PLAT-02 §4][03 R-AUD-02 §1]. This remains a T23 platform residual.
+The write-only outgoing-category history is omitted; its unbounded retail
+write for unsupported categories is documented in the owning research.
+
 The backend keeps base attenuation separate from its application-local FX
 output gain, so slider changes affect already-playing cues and narration.
 Zero FX mutes an existing buffer without restarting its timeline. MODE Off

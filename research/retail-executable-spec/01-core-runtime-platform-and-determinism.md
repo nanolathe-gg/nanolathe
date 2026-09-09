@@ -652,10 +652,26 @@ The two `GetTickCount` reads can differ by a millisecond; the difference is
 lost, not accumulated. The service runs only on the busy path, so timers
 stall while an inactive single-player window blocks in `GetMessageA`.
 
-**Registrants (Established, bounded to the recovered image).** The only
-callers of the registration routine are the CD-audio fade timers of
-[03 R-AUD-01 §4] (the repeating period-2 fade step and the one-shot period-120
-pause), and the removal routine's callers are all in the same audio module.
+**Registration and callback mutation (Established).** Registration first
+performs the same timer service with fresh time samples, then scans slots in
+ascending order and installs into the first slot whose period is negative.
+The new remaining value equals its period. This also applies to registration
+inside a callback: a nested live service walk precedes the new installation.
+The enclosing walk reloads the current slot's current period after the
+callback returns, and continues through later slots using live contents.
+Newly armed later slots can therefore be visited in that enclosing walk;
+a replacement in an already visited slot waits for a later walk. There is
+no armed-slot snapshot, fixed callback-kind ordering, or catch-up loop.
+Removal only marks the indexed slot's period negative; it does not service
+the table. The two CD timer IDs identify registrations independently, and
+one callback kind can have more than one outstanding registration if a new
+ID replaces the stored reference without removing an older timer.
+
+**Registrants (Established, bounded to the recovered image).** Registration
+is shared by the CD-audio fade timers of [03 R-AUD-01 §4] (the repeating
+period-2 fade step and the one-shot period-120 pause) and the delayed stream
+opener of [03 R-AUD-02 §1]. They compete for slots in the same ten-slot table;
+stream registration also performs the nested pre-allocation service.
 No simulation state is touched by the table or by any registrant.
 
 ### 4.2 Budget algorithm
@@ -2333,7 +2349,8 @@ byte `0x0C` and the 768-byte palette.
   quit-request routine sets the quit bit and posts `WM_DESTROY`; the
   game-state teardown runs only on a requested quit ([R-PLAT-02 §1], §2).
 - A ten-slot scaled-clock timer table is serviced once per busy pump
-  iteration; only the CD-audio fades register in it ([R-PLAT-02 §4]).
+  iteration; CD-audio fades and delayed stream opening share its slots
+  ([R-PLAT-02 §4]).
 - The post-loop expiry list is the 20 × 36-byte temporary-sight ("eyeball")
   observer list, fed by the central unit-death handler and therefore populated
   in every session kind; the control keepalive byte is type 6; the start
