@@ -100,3 +100,30 @@ func TestZeroGravityFeatureKeepsAboveWaterVelocity(t *testing.T) {
 		t.Fatalf("zero gravity: y=%d vy=%d", inst.Y, inst.Vy)
 	}
 }
+
+// Phase-four reconciliation does not consume the reproduction draw. Phase-six
+// reproduction sees the stream left by intervening player work, including for
+// a zero-rate source [01 §4.4][05 R-FEAT-01 §10, §12].
+func TestReproductionDrawBelongsToLifecycle(t *testing.T) {
+	terrain := newEmptyTerrain(4, 4)
+	sim := rng.SimulationFromState(42)
+	svc := NewService(terrain, &sim, nil, nil)
+	def := featureDef("zero-rate", 0, 0, 100)
+	if svc.PlaceAt(1, 1, def) == nil {
+		t.Fatal("placement refused")
+	}
+	svc.SetCursor(6)
+	expected := sim
+	svc.TickMotion(1)
+	if sim.State != expected.State || sim.Draws() != expected.Draws() {
+		t.Fatal("phase four consumed reproduction draw")
+	}
+	if got, want := sim.Uint32n(100), expected.Uint32n(100); got != want {
+		t.Fatalf("intervening player draw=%d, want %d", got, want)
+	}
+	expected.Uint32n(100)
+	svc.TickLifecycle(1)
+	if sim.State != expected.State || sim.Draws() != expected.Draws() || svc.LastReproIdx != 5 {
+		t.Fatal("lifecycle did not consume exactly the following zero-rate draw")
+	}
+}

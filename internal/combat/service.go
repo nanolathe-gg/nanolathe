@@ -2170,8 +2170,8 @@ func emitWaterCrossing(s *Service, h pool.Handle, p *Projectile, weapon *content
 // ExplodeWeaponAt applies area damage without central-impact presentation.
 // The feature burn-weapon producer uses this entry; pooled and stack impacts
 // reach the same area walk after their effects [05 R-FEAT-01 §11][06 §9.3].
-// Recipients are collected in cell order before delivery so mutations during
-// damage intake cannot change the remaining candidate walk [06 §9.3].
+// Each admitted hit completes before the next candidate is discovered, so
+// later cells observe earlier replacements [06 §9.3][05 R-FEAT-01 §5].
 func (s *Service) ExplodeWeaponAt(w *units.World, terrain *world.Terrain, weapon *content.WeaponDef, impact Vec3, shooter pool.Handle, tick uint32) {
 	shooterSide := NeutralSide
 	if attacker := w.Unit(shooter); attacker != nil {
@@ -2197,17 +2197,6 @@ func (s *Service) explodeWeaponAt(w *units.World, terrain *world.Terrain, weapon
 		mapW = terrain.CellW
 		mapH = terrain.CellH
 	}
-	type victim struct {
-		h       pool.Handle
-		u       *units.Unit
-		dist    int32
-		falloff float32
-		// feature marks a recipient that is a FEATURE anchor rather than a
-		// unit; fcx/fcz are then the anchor cell [05 R-FEAT-01 §8].
-		feature  bool
-		fcx, fcz int
-	}
-	var victims []victim
 	// The feature walk is skipped entirely by `unitsonly` [06 §9.3][05
 	// R-FEAT-01 §8], and needs the feature runtime the session installs.
 	featureWalk := !weapon.UnitsOnly && s != nil && s.Features != nil
@@ -2231,7 +2220,12 @@ func (s *Service) explodeWeaponAt(w *units.World, terrain *world.Terrain, weapon
 		// sits in did nothing at all, and the cell ordering, the ground-before-
 		// air ordering and the bounded deduplication were all unobservable.
 		if cell := terrain.PlotAt(cx, cz); cell != nil {
-			for _, word := range [2]int16{cell.OccupantA(), cell.OccupantB()} {
+			for slot := 0; slot < 2; slot++ {
+				// Read the second word after the first hit completes [06 §9.3].
+				word := cell.OccupantA()
+				if slot == 1 {
+					word = cell.OccupantB()
+				}
 				// A unit candidate must be nonzero and must NOT be the record's
 				// shooter: the shooter is unconditionally excluded from every
 				// blast, and that exclusion is the whole of retail's
@@ -2301,14 +2295,12 @@ func (s *Service) explodeWeaponAt(w *units.World, terrain *world.Terrain, weapon
 				if dist != 0 {
 					falloff = Falloff(float32(dist), float32(radius), float32(weapon.EdgeEffectiveness)) // [06 §9.3] float32
 				}
-				victims = append(victims, victim{h: u.Handle, u: u, dist: dist, falloff: falloff})
+				p := &Projectile{Pos: impact, Shooter: shooter, ShooterSide: shooterSide}
+				applyDamageToUnit(s, u, p, weapon, falloff, dist, w, tick)
 			}
 		}
-		// "Within each cell the order is unit slot zero, unit slot one, then
-		// the feature/terrain candidate" [06 §9.3]. The feature therefore joins
-		// the SAME ordered recipient list, after this cell's units and before
-		// the next cell's, which is what fixes the position of an ignition's
-		// simulation draw relative to the unit damage around it (I4).
+		// Discover the feature after both unit hits have completed, before
+		// advancing to the next cell [06 §9.3].
 		if !featureWalk {
 			return
 		}
@@ -2337,51 +2329,25 @@ func (s *Service) explodeWeaponAt(w *units.World, terrain *world.Terrain, weapon
 		if featDedup.SeenFeature(int32(cand.CX), int32(cand.CZ)) {
 			return
 		}
-		victims = append(victims, victim{feature: true, fcx: cand.CX, fcz: cand.CZ, dist: fdist})
+		// Features receive the full default damage, without unit falloff or
+		// veterancy; ignition precedes accumulation [05 R-FEAT-01 §8].
+		s.Features.Ignite(cand.CX, cand.CZ, weapon.Firestarter, weapon.DamageDefault)
 	})
 	if terrain == nil || mapW == 0 {
-		// Fallback when no terrain map (mirrors TickProjectiles fallback) — planar dist2 check, no float64
-		if len(victims) == 0 {
-			for _, u := range w.Iter() { // deterministic (I1)
-				if u == nil || !u.Alive || u.Dying {
-					continue
-				}
-				if shooter != 0 && u.Handle == shooter {
-					continue // the shooter is excluded from every blast [06 §9.3]
-				}
-				dx := impact.X.Int() - u.X.Int()
-				dz := impact.Z.Int() - u.Z.Int()
-				dist2 := int64(dx)*int64(dx) + int64(dz)*int64(dz)
-				if dist2 >= int64(radius)*int64(radius) {
-					continue
-				}
-				victims = append(victims, victim{h: u.Handle, u: u, dist: 0, falloff: 1})
+		// Preserve the terrain-free fixture path's planar acceptance.
+		for _, u := range w.Iter() { // deterministic [I1]
+			if u == nil || !u.Alive || u.Dying || (shooter != 0 && u.Handle == shooter) {
+				continue
 			}
+			dx := impact.X.Int() - u.X.Int()
+			dz := impact.Z.Int() - u.Z.Int()
+			dist2 := int64(dx)*int64(dx) + int64(dz)*int64(dz)
+			if dist2 >= int64(radius)*int64(radius) {
+				continue
+			}
+			p := &Projectile{Pos: impact, Shooter: shooter, ShooterSide: shooterSide}
+			applyDamageToUnit(s, u, p, weapon, 1, 0, w, tick)
 		}
-	}
-	// Apply deterministically in collected order (EnumerateArea rows Z asc, cols X asc, Iter pool asc) [I1]
-	for _, vi := range victims {
-		if vi.feature {
-			// The feature damage entry [06 §13.1][05 R-FEAT-01 §8]: the
-			// weapon's authored DEFAULT damage word exactly — no area falloff,
-			// no armour table, no veterancy, no global double/half gate — and
-			// the firestarter byte, whose only reader is the ignition test and
-			// which carries no roll of its own. Ignition takes precedence: a
-			// flammable feature hit by a firestarter weapon never accumulates
-			// damage on that hit. Service.Ignite is that whole cascade.
-			//
-			// Step 1's global settings bit is not modelled: its only writer
-			// sets it unconditionally at startup and nothing clears it, so the
-			// gate is always open in retail [05 R-FEAT-01 §8 step 1].
-			s.Features.Ignite(vi.fcx, vi.fcz, weapon.Firestarter, weapon.DamageDefault)
-			continue
-		}
-		cand := vi.u
-		if cand == nil || !cand.Alive || cand.Dying {
-			continue
-		}
-		p := &Projectile{Pos: impact, Shooter: shooter, ShooterSide: shooterSide} // synthetic projectile for damage pipeline [06 §9.1]
-		applyDamageToUnit(s, cand, p, weapon, vi.falloff, vi.dist, w, tick)
 	}
 }
 

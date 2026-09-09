@@ -37,8 +37,10 @@ The boundary runs at five places:
 
 * **The tick belongs to `internal/session`.** The per-player ledger runs inside
   the fifth phase, as the economy half of the same per-player walk that carries
-  orders and visibility; the feature lifecycle is the sixth phase; the feature
-  motion and reproduction walk rides the fourth `[01 §4.4]`
+  orders and visibility; phase six advances catalog rest cursors, then calls
+  `TickLifecycle` for reproduction and the active walk. Phase four calls
+  `TickMotion` only to reconcile external grid writes `[01 §4.4]`
+  `[05 R-FEAT-01 §10]`
   `[01 R-CORE-01 §4.4.1]`. Sharing runs once after the phases. None of these
   packages reads a clock or logs inside a tick.
 * **The order queue belongs to `internal/orders`.** A build is a typed payload
@@ -637,7 +639,8 @@ return `[05 "Construction arithmetic"]` `[05 "Worker quantum"]`
 
 ### 3.4 Features — C25…C28
 
-**C25 — reproduction.** One cell per tick, walking a global cursor
+**C25 — reproduction.** Phase six, after catalog rest cursors and before the
+active walk, visits one cell per tick, walking a global cursor
 **descending** from `W×H − 1` with wrap-skip, so cell `W×H − 1` is never
 scanned. Eligibility is an anchor below the sentinel band with the animation bit
 clear. The percentile draw is consumed **even when `reproduce` is 0**; on a
@@ -649,7 +652,10 @@ with its sentinels, played through the named sequence when one **resolves** and
 taken immediately when none does; the record completes on the visit its cursor
 clears the sequence pointer — the sum over frames of `max(delay, 1)` visits —
 and replaces itself at that visit; removal clears the whole stamped footprint
-and returns the plot cell to the free sentinel
+and returns the plot cell to the free sentinel. General replacement passes
+only an attached predecessor's position and orientation to its
+successor; a resting sprite lookup supplies neither. Burn completion supplies
+neither transform and snaps the successor to its footprint centre
 `[05 "Removal and successor replacement"]` `[05 R-FEAT-01 §5]`
 `[05 R-FEAT-01 §10]`.
 
@@ -754,6 +760,17 @@ active-list order `[05 R-FEAT-01 §10]` [I1].
   push, no stacking and no force placement `[04 R-FAC-02 §6]`.
 
 ## 5. Divergences
+
+**Grid reconciliation cost (P01).** `TickMotion` still scans sorted lookup
+instances. Live resurrection removes plot words through
+`construction.Service.removeFeature`; session integration then bumps the
+static-obstacle revision. Ordinary session reclaim uses `Features.ReclaimAt`,
+but the terrain-only `ReclaimTransition` remains callable and can replace
+nonblocking definitions without changing that revision. World stamp/teardown
+APIs and exposed plot cells also have no feature-identity revision. Therefore
+static-obstacle revision alone cannot safely skip reconciliation. A narrow
+optimization requires covering those writers or routing them through the
+feature service; that ownership change remains open.
 
 **Feature arena boundary (EC-G2).** The service enforces the researched live
 arena capacity and active-list order, but its Go records are fresh allocations,
