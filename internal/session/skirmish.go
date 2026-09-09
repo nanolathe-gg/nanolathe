@@ -1031,8 +1031,7 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 	// Setup owns a disposable loading stream seeded from the explicit battle
 	// bootstrap seed. The simulation stream and retained session CRT are not
 	// read [01 R-CORE-02][01 R-PLAT-01 §7][08 R-ENTRY-01 §5] [I4] DET-01.
-	setupCRT := rng.NewCRT(cfg.RNGCrtSeed)
-	crt := &setupCRT
+	crt := rng.NewCRT(cfg.RNGCrtSeed)
 	// Build the permutation of eligible slots.
 	local28 := make([]int, n)
 	copy(local28, eligible)
@@ -1040,15 +1039,12 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 		// Location==0 → randomized via CRT Fisher-Yates [P0-04].
 		if n < 3 {
 			// Gate: (CRT_rand()*2)/0x8000 unbiased 0/1 ; if 0 skip shuffle [P0-04].
-			if crt != nil {
-				gate := (int(crt.Rand()) * 2) / 0x8000
-				if gate != 0 {
-					// proceed to shuffle
-					for j := 1; j < n; j++ {
-						bound := uint32(j + 1)
-						r := crt.Uint32n(bound)
-						local28[j], local28[r] = local28[r], local28[j]
-					}
+			gate := (int(crt.Rand()) * 2) / 0x8000
+			if gate != 0 {
+				for j := 1; j < n; j++ {
+					bound := uint32(j + 1)
+					r := crt.Uint32n(bound)
+					local28[j], local28[r] = local28[r], local28[j]
 				}
 			}
 		} else {
