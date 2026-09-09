@@ -3,8 +3,8 @@ package session
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/ai"
-	"github.com/nanolathe/nanolathe/internal/mission"
+	"github.com/nanolathe-gg/nanolathe/internal/ai"
+	"github.com/nanolathe-gg/nanolathe/internal/mission"
 )
 
 // TestBattleAIBindsTheSessionUnitLimit locks the first seam: the session's

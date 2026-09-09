@@ -6,12 +6,12 @@ package client
 // ownership of render dispatch or asset policy.
 
 import (
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/camera"
-	"github.com/nanolathe/nanolathe/internal/drawlist"
-	"github.com/nanolathe/nanolathe/internal/frame"
-	"github.com/nanolathe/nanolathe/internal/render"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/render"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // ProjectileDrawStats reports what the adapter actually rendered.  A

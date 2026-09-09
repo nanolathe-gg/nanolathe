@@ -6,13 +6,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/ai"
-	"github.com/nanolathe/nanolathe/internal/clock"
-	"github.com/nanolathe/nanolathe/internal/combat"
-	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
-	"github.com/nanolathe/nanolathe/internal/world"
+	"github.com/nanolathe-gg/nanolathe/internal/ai"
+	"github.com/nanolathe-gg/nanolathe/internal/clock"
+	"github.com/nanolathe-gg/nanolathe/internal/combat"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // TestRS06_TwoDamagedEnemiesSlotOrder verifies that simultaneous damage notifies AI in slot order [RS-P0-014][INVARIANTS I1].
@@ -392,7 +392,7 @@ func TestRS06_MapIterationDetector(t *testing.T) {
 func findRepoRoot(t *testing.T) string {
 	t.Helper()
 	for _, root := range []string{"../..", "."} {
-		if b, err := os.ReadFile(root + "/go.mod"); err == nil && strings.Contains(string(b), "module github.com/nanolathe/nanolathe") {
+		if b, err := os.ReadFile(root + "/go.mod"); err == nil && strings.Contains(string(b), "module github.com/nanolathe-gg/nanolathe") {
 			return root
 		}
 	}

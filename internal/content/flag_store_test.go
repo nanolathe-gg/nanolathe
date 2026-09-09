@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/formats"
 )
 
 // These cases distinguish a packed-bit write from both byte truncation and

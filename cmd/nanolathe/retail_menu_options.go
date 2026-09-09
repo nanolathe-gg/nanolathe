@@ -21,14 +21,14 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/audio"
-	"github.com/nanolathe/nanolathe/internal/client"
-	"github.com/nanolathe/nanolathe/internal/gui"
-	"github.com/nanolathe/nanolathe/internal/input"
-	"github.com/nanolathe/nanolathe/internal/platform/ebitenapp"
-	"github.com/nanolathe/nanolathe/internal/settings"
-	"github.com/nanolathe/nanolathe/internal/ui"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/audio"
+	"github.com/nanolathe-gg/nanolathe/internal/client"
+	"github.com/nanolathe-gg/nanolathe/internal/gui"
+	"github.com/nanolathe-gg/nanolathe/internal/input"
+	"github.com/nanolathe-gg/nanolathe/internal/platform/ebitenapp"
+	"github.com/nanolathe-gg/nanolathe/internal/settings"
+	"github.com/nanolathe-gg/nanolathe/internal/ui"
 )
 
 const (

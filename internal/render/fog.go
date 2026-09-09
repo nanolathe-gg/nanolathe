@@ -12,11 +12,11 @@ package render
 // DONT_SHADE pin, row 15 [03 R-RAST-01 §5], and no marker remains here.
 
 import (
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/camera"
-	"github.com/nanolathe/nanolathe/internal/palette"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/visibility"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
+	"github.com/nanolathe-gg/nanolathe/internal/palette"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/visibility"
 )
 
 // FogFrames is the resolved, immutable fog art supplied by the presentation

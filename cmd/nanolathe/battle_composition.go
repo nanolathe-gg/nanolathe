@@ -3,9 +3,9 @@ package main
 import (
 	"fmt"
 
-	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/headless"
-	"github.com/nanolathe/nanolathe/internal/session"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/headless"
+	"github.com/nanolathe-gg/nanolathe/internal/session"
 )
 
 // freshBattleRequest is a value-only command adapter around the shared

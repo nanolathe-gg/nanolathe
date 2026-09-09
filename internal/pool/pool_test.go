@@ -3,7 +3,7 @@ package pool
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 )
 
 func TestP016_PlayerPermutationComparatorAndModeGate(t *testing.T) {

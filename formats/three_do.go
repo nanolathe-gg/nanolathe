@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // ThreeDOLimits bounds the object, vertex and primitive counts one model may

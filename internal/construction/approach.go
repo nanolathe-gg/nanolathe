@@ -1,10 +1,10 @@
 package construction
 
 import (
-	"github.com/nanolathe/nanolathe/internal/orders"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/units"
-	"github.com/nanolathe/nanolathe/internal/world"
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // The mobile-build approach [04 R-PATH-01 §13][04 R-ORD-01 §5].

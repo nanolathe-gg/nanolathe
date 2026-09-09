@@ -27,7 +27,7 @@ import (
 	"flag"
 	"path/filepath"
 
-	"github.com/nanolathe/nanolathe/probes/kit/author"
+	"github.com/nanolathe-gg/nanolathe/probes/kit/author"
 )
 
 func main() {

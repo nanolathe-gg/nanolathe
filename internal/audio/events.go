@@ -1,6 +1,6 @@
 package audio
 
-import "github.com/nanolathe/nanolathe/internal/content"
+import "github.com/nanolathe-gg/nanolathe/internal/content"
 
 // Slot constants mirror the static table [03 §8.3] C15.
 // Slot 0 is sentinel; 1..23 are real events named by Key.

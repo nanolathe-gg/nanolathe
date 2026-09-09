@@ -1,8 +1,8 @@
 package economy
 
 import (
-	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // MakerStall is the strict positive-carry gate for makers and extractors

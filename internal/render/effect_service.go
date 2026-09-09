@@ -1,8 +1,8 @@
 package render
 
 import (
-	"github.com/nanolathe/nanolathe/internal/frame"
-	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 )
 
 // Event and Kind are local aliases for the ordered cue input; routing and admission remain outside the renderer.

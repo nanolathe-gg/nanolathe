@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/palette"
+	"github.com/nanolathe-gg/nanolathe/internal/palette"
 )
 
 func TestLoadPresentationAssetsEagerlyIndexesAuthoredEntries(t *testing.T) {

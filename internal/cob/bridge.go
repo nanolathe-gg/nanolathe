@@ -1,8 +1,8 @@
 package cob
 
 import (
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 )
 
 // SetSimulationRNG binds the session-owned simulation stream to the bridged

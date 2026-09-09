@@ -10,13 +10,13 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/frame"
-	compiledmodel "github.com/nanolathe/nanolathe/internal/model"
-	presentationrender "github.com/nanolathe/nanolathe/internal/render"
-	"github.com/nanolathe/nanolathe/internal/world"
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	compiledmodel "github.com/nanolathe-gg/nanolathe/internal/model"
+	presentationrender "github.com/nanolathe-gg/nanolathe/internal/render"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // texKind classifies a resolved texture entry [03 §2.4.1]:

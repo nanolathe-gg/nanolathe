@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/orders"
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // TestSparseVsDenseDivergence locks A27 [P0-04][P0-06]: retail uses sparse

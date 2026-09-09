@@ -1,10 +1,10 @@
 package session
 
 import (
-	"github.com/nanolathe/nanolathe/internal/cob"
-	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/cob"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // bindQueryPorts installs engine ports 7 through 15 — the QUERY half of the

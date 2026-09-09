@@ -1,9 +1,9 @@
 package client
 
 import (
-	"github.com/nanolathe/nanolathe/internal/drawlist"
-	"github.com/nanolathe/nanolathe/internal/frame"
-	presentationrender "github.com/nanolathe/nanolathe/internal/render"
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	presentationrender "github.com/nanolathe-gg/nanolathe/internal/render"
 )
 
 // modelGeometryPacket makes the durable P3 input from the already-resolved

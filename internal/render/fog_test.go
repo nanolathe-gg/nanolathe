@@ -4,11 +4,11 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/camera"
-	"github.com/nanolathe/nanolathe/internal/palette"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/visibility"
-	"github.com/nanolathe/nanolathe/internal/world"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
+	"github.com/nanolathe-gg/nanolathe/internal/palette"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/visibility"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // helper to create a visibility service with grid W=4 H=4 (CellW=8 CellH=8) and return its FogCache.

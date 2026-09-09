@@ -1,7 +1,7 @@
 package movement
 
 import (
-	"github.com/nanolathe/nanolathe/internal/world"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // AuditVerdict is the small set of observations needed by a movement audit.

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/testsupport"
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/internal/testsupport"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // makeCOB builds a synthetic COB file per [fmt cob] with header 44 bytes,

@@ -4,9 +4,9 @@ import (
 	"math"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/model"
-	"github.com/nanolathe/nanolathe/internal/render"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/model"
+	"github.com/nanolathe-gg/nanolathe/internal/render"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // TestRenderedFacingFollowsSimHeading separates "the simulation does not turn"

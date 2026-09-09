@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // MaxProgramStaticBytes is Nanolathe's host-safety limit for one VM's static

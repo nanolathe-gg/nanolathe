@@ -4,10 +4,10 @@ import (
 	"math"
 	"strings"
 
-	"github.com/nanolathe/nanolathe/internal/camera"
-	"github.com/nanolathe/nanolathe/internal/drawlist"
-	"github.com/nanolathe/nanolathe/internal/frame"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // The Enhanced trail layer (docs/DESIGN_GPU_RENDERER.md §15): mobile ground

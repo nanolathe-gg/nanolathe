@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/save"
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/internal/save"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 func retailLoadBank(t *testing.T, summary save.Summary, includeSummary bool) *save.Bank {

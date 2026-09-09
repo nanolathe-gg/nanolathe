@@ -1,6 +1,6 @@
 package audio
 
-import "github.com/nanolathe/nanolathe/internal/sim/rng"
+import "github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 
 // presentationCRT is a presentation-only RNG with the same recurrence as the
 // retail CRT stream (*214013+2531011) but is a distinct type so presentation

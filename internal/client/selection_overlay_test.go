@@ -3,7 +3,7 @@ package client
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/palette"
+	"github.com/nanolathe-gg/nanolathe/internal/palette"
 )
 
 func TestSelectionDragUsesNormalizedInclusiveFramesAndPaletteMap(t *testing.T) {

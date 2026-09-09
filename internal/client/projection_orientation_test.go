@@ -3,9 +3,9 @@ package client
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/camera"
-	presentationrender "github.com/nanolathe/nanolathe/internal/render"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
+	presentationrender "github.com/nanolathe-gg/nanolathe/internal/render"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // Contract locked here: every client path that turns a composed model-space

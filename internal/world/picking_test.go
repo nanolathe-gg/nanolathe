@@ -3,8 +3,8 @@ package world
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // pickFixture builds a flat terrain of the given height, 16x16 cells.

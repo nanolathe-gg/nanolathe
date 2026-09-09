@@ -3,9 +3,9 @@ package orders
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // The three contracts [04 R-ORD-01 §12] and [04 R-AIR-01 §16] closed and this

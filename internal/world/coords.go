@@ -2,7 +2,7 @@
 
 package world
 
-import "github.com/nanolathe/nanolathe/internal/sim/numeric"
+import "github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 
 // World units per map pixel and derived cell/tile sizes [03 §2.1].
 //

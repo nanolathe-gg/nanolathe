@@ -1,7 +1,7 @@
 package ui
 
 import (
-	"github.com/nanolathe/nanolathe/internal/gui"
+	"github.com/nanolathe-gg/nanolathe/internal/gui"
 )
 
 // List is presentation state for one authored list gadget. Items are supplied

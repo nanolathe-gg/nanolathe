@@ -16,7 +16,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/formats"
 )
 
 const (

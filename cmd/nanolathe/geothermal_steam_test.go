@@ -3,9 +3,9 @@ package main
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/headless"
-	"github.com/nanolathe/nanolathe/internal/testsupport"
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/internal/headless"
+	"github.com/nanolathe-gg/nanolathe/internal/testsupport"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // TestGeothermalVentSteamsOnGreatDivide is the play-test report's second half

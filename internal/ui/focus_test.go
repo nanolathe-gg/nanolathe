@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/gui"
+	"github.com/nanolathe-gg/nanolathe/internal/gui"
 )
 
 func focusWindow(gadgets ...gui.Gadget) *gui.Window {

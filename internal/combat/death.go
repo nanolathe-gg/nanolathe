@@ -3,8 +3,8 @@ package combat
 import (
 	"strings"
 
-	"github.com/nanolathe/nanolathe/internal/cob"
-	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/cob"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
 )
 
 // Cause is the death-cause nibble [06 §12.1] [04 §5.1]. High four bits of the packed death byte.

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // ParseDiagnostic is one of retail's five TDF parse diagnostics [02 §4][P1-12].

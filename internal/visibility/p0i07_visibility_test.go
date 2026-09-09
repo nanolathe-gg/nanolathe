@@ -3,8 +3,8 @@ package visibility
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/world"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // TestP0I07_LOSRequiresCoverage locks that enemy outside LOS cannot be acquired without sensor.

@@ -1,8 +1,8 @@
 package audio
 
 import (
-	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 )
 
 // Slot is a sound event slot [03 §8.3]. Slot 0 is an unused sentinel.

@@ -3,7 +3,7 @@ package hud
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
 )
 
 // The slide arithmetic of [07 R-HUD-04 §1]: a quarter of the remaining

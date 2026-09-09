@@ -3,7 +3,7 @@ package hud
 import (
 	"fmt"
 
-	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
 )
 
 // Rect is a corner rectangle stored verbatim as x1,y1,x2,y2 — not normalized,

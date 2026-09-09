@@ -1,6 +1,6 @@
 package world
 
-import "github.com/nanolathe/nanolathe/formats"
+import "github.com/nanolathe-gg/nanolathe/formats"
 
 // PlotCell is the 13-byte runtime terrain cell [03 §2.2][GAP T14][P0-17] W*H*4 → 13B typed table.
 //

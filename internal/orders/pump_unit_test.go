@@ -3,10 +3,10 @@ package orders
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 func TestPumpUnit_Isolation(t *testing.T) {

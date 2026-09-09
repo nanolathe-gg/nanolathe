@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // Rect is a corner rectangle stored verbatim as x1,y1,x2,y2 — not normalized,

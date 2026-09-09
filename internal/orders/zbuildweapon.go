@@ -3,10 +3,10 @@
 package orders
 
 import (
-	"github.com/nanolathe/nanolathe/internal/combat"
-	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/economy"
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/combat"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/economy"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // noWeaponRecord is weapon record 0, the `[noweapon]` sentinel every empty

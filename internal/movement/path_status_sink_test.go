@@ -3,10 +3,10 @@ package movement
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/orders"
-	"github.com/nanolathe/nanolathe/internal/path"
-	"github.com/nanolathe/nanolathe/internal/units"
-	"github.com/nanolathe/nanolathe/internal/world"
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
+	"github.com/nanolathe-gg/nanolathe/internal/path"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 func newGroundPathStatusFixture(t *testing.T, start, goal path.Cell) (*System, *units.Unit, *orders.Queue, *orders.Node, path.Request) {

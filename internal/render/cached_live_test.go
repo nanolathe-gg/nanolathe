@@ -3,8 +3,8 @@ package render
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/frame"
-	"github.com/nanolathe/nanolathe/internal/model"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/model"
 )
 
 func TestPieceLaneUsesPublishedCachePolarity(t *testing.T) {

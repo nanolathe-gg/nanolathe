@@ -7,11 +7,11 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/cob"
-	"github.com/nanolathe/nanolathe/internal/model"
-	"github.com/nanolathe/nanolathe/internal/palette"
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/cob"
+	"github.com/nanolathe-gg/nanolathe/internal/model"
+	"github.com/nanolathe-gg/nanolathe/internal/palette"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // SkirmishAsset is one file or named resource required by a skirmish bundle.

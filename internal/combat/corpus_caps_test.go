@@ -5,7 +5,7 @@ package combat
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/testsupport/retailcat"
+	"github.com/nanolathe-gg/nanolathe/internal/testsupport/retailcat"
 )
 
 // TestCorpusProjectileCaps_Retail proves the projectile pool cap 300 is

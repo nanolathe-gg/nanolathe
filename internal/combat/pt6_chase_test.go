@@ -7,14 +7,14 @@ package combat_test
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/headless"
-	"github.com/nanolathe/nanolathe/internal/input"
-	"github.com/nanolathe/nanolathe/internal/orders"
-	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/session"
-	"github.com/nanolathe/nanolathe/internal/testsupport"
-	"github.com/nanolathe/nanolathe/internal/units"
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/internal/headless"
+	"github.com/nanolathe-gg/nanolathe/internal/input"
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/session"
+	"github.com/nanolathe-gg/nanolathe/internal/testsupport"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // TestPT6_OrderedAttackClosesAndKills is the play-test report "units are still

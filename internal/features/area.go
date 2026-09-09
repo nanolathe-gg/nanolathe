@@ -1,8 +1,8 @@
 package features
 
 import (
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/world"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // AreaCandidate is the feature one covered cell of a blast offers to the area

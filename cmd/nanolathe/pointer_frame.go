@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/nanolathe/nanolathe/internal/input"
-	"github.com/nanolathe/nanolathe/internal/ui"
+	"github.com/nanolathe-gg/nanolathe/internal/input"
+	"github.com/nanolathe-gg/nanolathe/internal/ui"
 )
 
 // pointerFrame is the one adapter from the published pointer record to the

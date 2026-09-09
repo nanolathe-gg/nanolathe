@@ -3,7 +3,7 @@ package session
 import (
 	"strings"
 
-	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
 )
 
 // PostBattleState is the small presentation-state word used by the retail

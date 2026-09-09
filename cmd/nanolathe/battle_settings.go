@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/nanolathe/nanolathe/internal/client"
-	"github.com/nanolathe/nanolathe/internal/palette"
-	"github.com/nanolathe/nanolathe/internal/settings"
+	"github.com/nanolathe-gg/nanolathe/internal/client"
+	"github.com/nanolathe-gg/nanolathe/internal/palette"
+	"github.com/nanolathe-gg/nanolathe/internal/settings"
 )
 
 // loadedSettings reads the persisted block, ignoring a read failure the same

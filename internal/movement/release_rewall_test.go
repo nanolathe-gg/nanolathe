@@ -3,8 +3,8 @@ package movement
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/path"
-	"github.com/nanolathe/nanolathe/internal/world"
+	"github.com/nanolathe-gg/nanolathe/internal/path"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // TestParkedRequesterIsRewalledAtRelease locks the request release's re-wall

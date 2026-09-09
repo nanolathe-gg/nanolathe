@@ -11,9 +11,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/nanolathe/nanolathe/formats"
-	retailpalette "github.com/nanolathe/nanolathe/internal/palette"
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	retailpalette "github.com/nanolathe-gg/nanolathe/internal/palette"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 const tileSize = 32

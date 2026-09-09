@@ -3,11 +3,11 @@ package client
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/frame"
-	compiledmodel "github.com/nanolathe/nanolathe/internal/model"
-	presentationrender "github.com/nanolathe/nanolathe/internal/render"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	compiledmodel "github.com/nanolathe-gg/nanolathe/internal/model"
+	presentationrender "github.com/nanolathe-gg/nanolathe/internal/render"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // publishSeaLevel republishes the committed frame with one sea level, so the

@@ -4,13 +4,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
 
-	compiledmodel "github.com/nanolathe/nanolathe/internal/model"
-	presentationrender "github.com/nanolathe/nanolathe/internal/render"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/testsupport"
-	"github.com/nanolathe/nanolathe/vfs"
+	compiledmodel "github.com/nanolathe-gg/nanolathe/internal/model"
+	presentationrender "github.com/nanolathe-gg/nanolathe/internal/render"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/testsupport"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // TestWindingCullKeepsClockwiseRings locks the sense of the cull

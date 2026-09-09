@@ -3,7 +3,7 @@ package camera
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 func TestMiddleDragChangesCameraOnly(t *testing.T) {

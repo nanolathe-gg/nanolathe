@@ -3,7 +3,7 @@
 package visibility
 
 import (
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // Status-field roles [03 §3.4][R-VIS-01 §4]. The sonar bit doubles as the

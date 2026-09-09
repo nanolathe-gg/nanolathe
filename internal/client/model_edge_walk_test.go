@@ -3,9 +3,9 @@ package client
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/palette"
-	presentationrender "github.com/nanolathe/nanolathe/internal/render"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/palette"
+	presentationrender "github.com/nanolathe-gg/nanolathe/internal/render"
 )
 
 // walkPoly builds one face straight from projected corners, bypassing the

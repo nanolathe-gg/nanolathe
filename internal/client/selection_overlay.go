@@ -4,7 +4,7 @@ package client
 // selection state. It is composed after world/fog and before the UI stage
 // [03 §1][R-SEL-02A].
 
-import "github.com/nanolathe/nanolathe/internal/drawlist"
+import "github.com/nanolathe-gg/nanolathe/internal/drawlist"
 
 // SelectionDrag is the current input-owned drag gesture in logical framebuffer
 // coordinates. The caller supplies the latch state because the renderer does

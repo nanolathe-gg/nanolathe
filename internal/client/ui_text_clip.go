@@ -1,8 +1,8 @@
 package client
 
 import (
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/drawlist"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 )
 
 // UITextWidthClipped records the usual FNT run with the private GUI surface

@@ -5,8 +5,8 @@ import (
 	"image"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/drawlist"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 )
 
 // The quad mapper replaces one device quad per source row with two device

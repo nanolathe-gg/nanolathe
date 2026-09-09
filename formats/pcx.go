@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"image/color"
 
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // PCX is a decoded PCX image: indexed pixels and the palette they index

@@ -1,8 +1,8 @@
 package features
 
 import (
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/world"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // sinkVelocity is the fixed vertical velocity for submerged wrecks [05 "Feature sinking and water interaction"].

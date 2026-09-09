@@ -6,8 +6,8 @@ package main
 import (
 	"fmt"
 
-	"github.com/nanolathe/nanolathe/internal/client"
-	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/client"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
 )
 
 // The unit count and the game clock were drawn here, at the TOTALUNITS and

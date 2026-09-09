@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/nanolathe/nanolathe/internal/camera"
-	"github.com/nanolathe/nanolathe/internal/client"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
+	"github.com/nanolathe-gg/nanolathe/internal/client"
 )
 
 // battleViewCentre is the screen point a scale change is taken about: the

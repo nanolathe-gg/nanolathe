@@ -3,7 +3,7 @@ package orders
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // TestOwnedHandlerIsDispatchedLikeADescriptorHandler locks the first half of

@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/nanolathe/nanolathe/internal/model"
+	"github.com/nanolathe-gg/nanolathe/internal/model"
 )
 
 // RetailScriptRestore restores one exact Script%i image into an already bound

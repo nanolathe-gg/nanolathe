@@ -6,10 +6,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/audio"
-	"github.com/nanolathe/nanolathe/internal/settings"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/internal/audio"
+	"github.com/nanolathe-gg/nanolathe/internal/settings"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 type cueGainSpy struct{ gains []float64 }

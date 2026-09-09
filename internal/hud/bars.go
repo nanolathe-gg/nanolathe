@@ -1,6 +1,6 @@
 package hud
 
-import "github.com/nanolathe/nanolathe/internal/sim/numeric"
+import "github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 
 // Bars: health/metal/energy bar geometry from the anchor data per [02 §6]
 // "SIDE and battle interface data" and [07 §6] battle-HUD. Pure presentation-side

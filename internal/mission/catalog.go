@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // Campaign is a discovered campaign file in camps/*.tdf. [08 "Campaign discovery"]

@@ -17,13 +17,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/client"
-	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/palette"
-	"github.com/nanolathe/nanolathe/internal/upscale"
-	"github.com/nanolathe/nanolathe/internal/world"
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/client"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/palette"
+	"github.com/nanolathe-gg/nanolathe/internal/upscale"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // familyDetailArt is the load family the remaster reports progress under. The

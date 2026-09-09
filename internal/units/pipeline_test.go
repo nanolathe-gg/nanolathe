@@ -14,8 +14,8 @@ package units
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 )
 
 // runPhase2Sweep drives the per-unit pipeline through the authoritative

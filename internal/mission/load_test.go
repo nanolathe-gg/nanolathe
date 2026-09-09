@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 func fsFromMapLoad(t *testing.T, files map[string]string) *vfs.FS {

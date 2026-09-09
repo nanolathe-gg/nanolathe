@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/orders"
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // TestRetailCommanderCapturesEnemyLab is WU-19-177's real-content regression:

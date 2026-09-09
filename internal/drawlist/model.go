@@ -1,6 +1,6 @@
 package drawlist
 
-import "github.com/nanolathe/nanolathe/formats"
+import "github.com/nanolathe-gg/nanolathe/formats"
 
 // ModelVertex is one projected corner of an authored model polygon. Coordinates
 // are composition-image pixels; Key is the signed integer source for the

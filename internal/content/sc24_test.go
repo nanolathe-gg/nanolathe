@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // topologyFixtureFS gives every authored file an explicit provider identity.

@@ -1,6 +1,6 @@
 package movement
 
-import "github.com/nanolathe/nanolathe/internal/pool"
+import "github.com/nanolathe-gg/nanolathe/internal/pool"
 
 // AirExecutorSnapshot is a read-only copy of the movement-side air executor
 // state for one unit [04 R-AIR-01 §1]. It exists so a diagnostic harness can

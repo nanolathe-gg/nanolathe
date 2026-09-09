@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/gui"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/gui"
 )
 
 // battleWindowContext carries the startup-selected caption table and the

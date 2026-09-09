@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/palette"
+	"github.com/nanolathe-gg/nanolathe/internal/palette"
 )
 
 // retailPaletteForTest loads the shared retail palette tables the way the

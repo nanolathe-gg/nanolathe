@@ -3,7 +3,7 @@ package mission
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/triggers"
+	"github.com/nanolathe-gg/nanolathe/internal/triggers"
 )
 
 // bothSchemaOTA carries a campaign family and a network family, which is the

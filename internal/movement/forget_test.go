@@ -3,7 +3,7 @@ package movement
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 )
 
 // TestForgetUnitLeavesNoPerHandleState locks P0-011. Pool slots are reused by

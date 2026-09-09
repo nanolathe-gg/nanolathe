@@ -3,8 +3,8 @@ package session
 import (
 	"fmt"
 
-	"github.com/nanolathe/nanolathe/internal/frame"
-	"github.com/nanolathe/nanolathe/internal/mission"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/mission"
 )
 
 // The kill-lead rank shift and its status line [08 R-CAMP-01 §9 "Kill lead"]

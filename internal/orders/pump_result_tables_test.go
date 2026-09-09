@@ -16,8 +16,8 @@ package orders
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 const probeTick uint32 = 1000

@@ -3,9 +3,9 @@ package gpurender
 import (
 	"fmt"
 
-	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/formats"
 
-	"github.com/nanolathe/nanolathe/internal/drawlist"
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 )
 
 // The minimap producer now uses the existing Surface executor. Check real

@@ -3,8 +3,8 @@ package construction
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/orders"
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // The construction aircraft's approach phase [04 R-ORD-02 §2]: `VTOL_MobileBuild`

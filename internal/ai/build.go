@@ -1,8 +1,8 @@
 package ai
 
 import (
-	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // BuildKind identifies the construction path [P0-04][P0-07] F-P0-004.

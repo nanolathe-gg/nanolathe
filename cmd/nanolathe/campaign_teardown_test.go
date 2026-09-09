@@ -3,8 +3,8 @@ package main
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/mission"
-	"github.com/nanolathe/nanolathe/internal/session"
+	"github.com/nanolathe-gg/nanolathe/internal/mission"
+	"github.com/nanolathe-gg/nanolathe/internal/session"
 )
 
 // Drive the actual return boundary, including the session writer before its

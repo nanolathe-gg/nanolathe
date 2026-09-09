@@ -3,9 +3,9 @@ package main
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/client"
-	"github.com/nanolathe/nanolathe/internal/clock"
-	"github.com/nanolathe/nanolathe/internal/session"
+	"github.com/nanolathe-gg/nanolathe/internal/client"
+	"github.com/nanolathe-gg/nanolathe/internal/clock"
+	"github.com/nanolathe-gg/nanolathe/internal/session"
 )
 
 // The Enhanced blend fraction is the budget's own input read un-floored:

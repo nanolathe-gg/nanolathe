@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // ---------------------------------------------------------------------------

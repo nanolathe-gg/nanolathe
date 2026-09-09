@@ -37,8 +37,8 @@ func TestHeadlessCommandHasNoDesktopDependency(t *testing.T) {
 		t.Fatalf("list headless dependencies: %v", err)
 	}
 	for _, dependency := range strings.Fields(string(output)) {
-		if dependency == "github.com/nanolathe/nanolathe/internal/client" ||
-			dependency == "github.com/nanolathe/nanolathe/internal/audiobackend" ||
+		if dependency == "github.com/nanolathe-gg/nanolathe/internal/client" ||
+			dependency == "github.com/nanolathe-gg/nanolathe/internal/audiobackend" ||
 			strings.HasPrefix(dependency, "github.com/hajimehoshi/ebiten/v2") {
 			t.Fatalf("displayless command imports desktop dependency %s", dependency)
 		}

@@ -3,8 +3,8 @@ package render
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/model"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/model"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // A model projectile's angle block is {roll, yaw, pitch} onto the {Z, Y, X}

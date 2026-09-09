@@ -3,7 +3,7 @@ package audio
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 )
 
 // TestEmptyRowStillConsumesVariantDraw locks the ordering of [03 §8.3] step 2:

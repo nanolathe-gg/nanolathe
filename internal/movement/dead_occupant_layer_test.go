@@ -3,7 +3,7 @@ package movement
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/world"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // TestDeadMoverLeavesNoBlockedAnchors locks the class-layer half of the

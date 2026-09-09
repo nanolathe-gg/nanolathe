@@ -7,14 +7,14 @@ import (
 	"math"
 	"sort"
 
-	"github.com/nanolathe/nanolathe/internal/cob"
-	"github.com/nanolathe/nanolathe/internal/economy"
-	"github.com/nanolathe/nanolathe/internal/features"
-	"github.com/nanolathe/nanolathe/internal/movement"
-	"github.com/nanolathe/nanolathe/internal/orders"
-	"github.com/nanolathe/nanolathe/internal/path"
-	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/cob"
+	"github.com/nanolathe-gg/nanolathe/internal/economy"
+	"github.com/nanolathe-gg/nanolathe/internal/features"
+	"github.com/nanolathe-gg/nanolathe/internal/movement"
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
+	"github.com/nanolathe-gg/nanolathe/internal/path"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // ParityUnit is the session-owned, value-only unit diagnostic. It is not a

@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/clock"
+	"github.com/nanolathe-gg/nanolathe/internal/clock"
 )
 
 // TestBulkUnitBoxRoundTrip locks 0xB8 byte-exact layout [P1-13 §2.2].

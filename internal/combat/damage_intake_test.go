@@ -3,8 +3,8 @@ package combat
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/cob"
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/cob"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 func TestAcceptDamageFixedPacketScalingAndDeathLatch(t *testing.T) {

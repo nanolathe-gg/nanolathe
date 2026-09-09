@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	compiledmodel "github.com/nanolathe/nanolathe/internal/model"
-	"github.com/nanolathe/nanolathe/internal/render"
-	"github.com/nanolathe/nanolathe/internal/testsupport/retailcat"
+	compiledmodel "github.com/nanolathe-gg/nanolathe/internal/model"
+	"github.com/nanolathe-gg/nanolathe/internal/render"
+	"github.com/nanolathe-gg/nanolathe/internal/testsupport/retailcat"
 )
 
 // TestRetailProjectileModelHeaderChildCensus records the corpus fact that

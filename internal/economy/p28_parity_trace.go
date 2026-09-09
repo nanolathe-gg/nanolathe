@@ -1,8 +1,8 @@
 package economy
 
 import (
-	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // UnitTrace is a copy of the economy state relevant to settlement and HUD

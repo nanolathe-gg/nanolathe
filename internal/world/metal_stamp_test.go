@@ -3,7 +3,7 @@ package world
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
 )
 
 // TestMetalDepositSeedsFootprint locks [05 R-FEAT-01 §7]: the deposit pass

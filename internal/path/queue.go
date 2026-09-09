@@ -1,7 +1,7 @@
 package path
 
 import (
-	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 )
 
 // DefaultBase is the compiled-in heuristic base [04 R-PATH-01 §10].

@@ -4,10 +4,10 @@ package main
 // gadget's caption [07 R-HUD-03 §1].
 
 import (
-	"github.com/nanolathe/nanolathe/internal/client"
-	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/frame"
-	"github.com/nanolathe/nanolathe/internal/hud"
+	"github.com/nanolathe-gg/nanolathe/internal/client"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/hud"
 )
 
 // drawFooter paints the ordinary footer [07 R-HUD-03 §1–§3]. It replaces the

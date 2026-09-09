@@ -1,8 +1,8 @@
 package render
 
 import (
-	"github.com/nanolathe/nanolathe/internal/frame"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // EffectDraw is the immutable presentation instruction for one admitted

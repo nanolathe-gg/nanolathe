@@ -1,7 +1,7 @@
 package construction
 
 import (
-	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe-gg/nanolathe/internal/economy"
 	"math"
 	"testing"
 )

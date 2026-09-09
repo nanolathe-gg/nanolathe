@@ -3,9 +3,9 @@ package combat
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/cob"
-	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/cob"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // The UnitStepSummary contract [ON-09 evidence contract]: the per-unit weapon

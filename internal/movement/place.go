@@ -13,7 +13,7 @@ package movement
 // because it is already inside the commit.
 
 import (
-	"github.com/nanolathe/nanolathe/internal/orders"
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
 )
 
 // PlaceUnit commits one live unit to a world position without the placement

@@ -6,9 +6,9 @@ package hud
 // draw instructions and never retains a pointer into simulation state.
 
 import (
-	"github.com/nanolathe/nanolathe/internal/frame"
-	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // QueueOverlayMask is the five-bit helper mask used by retail's descriptor

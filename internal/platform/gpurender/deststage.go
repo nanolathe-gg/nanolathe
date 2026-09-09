@@ -2,8 +2,8 @@ package gpurender
 
 import (
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/drawlist"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 )
 
 // The destination-compositing families for the modern executor beyond fog: the

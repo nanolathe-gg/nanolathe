@@ -3,7 +3,7 @@ package frame
 import (
 	"fmt"
 
-	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 )
 
 // MessageLine is one immutable copy of the battle message-line ring entry.

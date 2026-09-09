@@ -5,7 +5,7 @@ package session
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // TestSkirmishConfigUnitLimitDefaults locks the configured limit's

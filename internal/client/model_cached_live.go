@@ -1,10 +1,10 @@
 package client
 
 import (
-	"github.com/nanolathe/nanolathe/internal/drawlist"
-	"github.com/nanolathe/nanolathe/internal/frame"
-	"github.com/nanolathe/nanolathe/internal/palette"
-	presentationrender "github.com/nanolathe/nanolathe/internal/render"
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/palette"
+	presentationrender "github.com/nanolathe-gg/nanolathe/internal/render"
 )
 
 // cachedModelBody is the persistent, unfinalized cached-piece composition.

@@ -3,8 +3,8 @@ package combat
 import (
 	"math"
 
-	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // The two zero-tolerance drift gates [06 R-WPN-03 §2]. A weapon that authors

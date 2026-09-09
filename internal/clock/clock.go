@@ -5,7 +5,7 @@ import (
 	"errors"
 	"math"
 
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // ErrMalformedBox reports a scheduler image that cannot represent the defined

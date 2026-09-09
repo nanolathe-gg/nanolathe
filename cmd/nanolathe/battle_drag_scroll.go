@@ -1,6 +1,6 @@
 package main
 
-import "github.com/nanolathe/nanolathe/internal/client"
+import "github.com/nanolathe-gg/nanolathe/internal/client"
 
 func (b *battleSession) beginDragScroll(x, y int32, cl *client.Client) {
 	if b == nil || b.cam == nil {

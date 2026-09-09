@@ -18,7 +18,7 @@ package client
 import (
 	"strings"
 
-	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/formats"
 )
 
 // DetailArt is the 2x art of DESIGN_GPU_RENDERER §14.3. Tiles is one 64x64

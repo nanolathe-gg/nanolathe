@@ -3,10 +3,10 @@ package session
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/combat"
-	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
-	"github.com/nanolathe/nanolathe/internal/world"
+	"github.com/nanolathe-gg/nanolathe/internal/combat"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // TestMeteorDeterminism_TwoRunsIdentical verifies meteor scheduler determinism per [08 "Meteor showers"] [06 §6.5] I4.

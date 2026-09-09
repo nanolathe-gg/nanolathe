@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nanolathe/nanolathe/internal/save"
+	"github.com/nanolathe-gg/nanolathe/internal/save"
 )
 
 // RestoreSaveAccounts applies the typed trigger state emitted by the battle

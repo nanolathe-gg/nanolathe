@@ -1,6 +1,6 @@
 package session
 
-import "github.com/nanolathe/nanolathe/internal/clock"
+import "github.com/nanolathe-gg/nanolathe/internal/clock"
 
 // SetPaused applies a local single-player pause at the session scheduling
 // boundary. It changes only the clock gate; AdvanceSP therefore retains its

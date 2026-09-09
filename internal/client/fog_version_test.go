@@ -3,8 +3,8 @@ package client
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/frame"
-	"github.com/nanolathe/nanolathe/internal/world"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 func TestDrawFogRefreshesZeroVersionAndReplacementSource(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 )
 
 // RetailUnitAccountImage returns the detached 48-byte u%04xacc image. Wire

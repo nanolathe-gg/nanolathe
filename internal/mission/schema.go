@@ -4,7 +4,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/formats"
 )
 
 // Schema is the selected schema variant [08 "Schema choice"].

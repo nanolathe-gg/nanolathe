@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/content"
-	compiledmodel "github.com/nanolathe/nanolathe/internal/model"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
+	compiledmodel "github.com/nanolathe-gg/nanolathe/internal/model"
 )
 
 func TestLoadedModelTextureRegistrySharesOneLoadAndSeparatesPrimitives(t *testing.T) {

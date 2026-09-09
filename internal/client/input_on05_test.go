@@ -3,7 +3,7 @@ package client
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/input"
+	"github.com/nanolathe-gg/nanolathe/internal/input"
 )
 
 func TestMiddleButtonPollingFixed(t *testing.T) {

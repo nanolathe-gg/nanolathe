@@ -3,7 +3,7 @@ package content
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/formats"
 )
 
 // TestSoundSC7Gather locks SPEC_CONFLICTS SC7: gather K1.. regardless of bare [P1-12].

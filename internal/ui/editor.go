@@ -3,8 +3,8 @@ package ui
 import (
 	"unicode"
 
-	"github.com/nanolathe/nanolathe/internal/gui"
-	"github.com/nanolathe/nanolathe/internal/input"
+	"github.com/nanolathe-gg/nanolathe/internal/gui"
+	"github.com/nanolathe-gg/nanolathe/internal/input"
 )
 
 // editorState is the mutable state of the one captured kind-3 gadget in a

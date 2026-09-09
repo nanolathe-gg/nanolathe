@@ -6,8 +6,8 @@ import (
 	"image"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/drawlist"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 )
 
 // Preparation runs for every subject of every frame, so it must reuse its

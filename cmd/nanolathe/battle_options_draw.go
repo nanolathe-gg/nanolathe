@@ -3,9 +3,9 @@ package main
 // The in-battle options window's painter [07 R-FE-01 §6][07 R-FE-01 §7].
 
 import (
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/client"
-	"github.com/nanolathe/nanolathe/internal/gui"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/client"
+	"github.com/nanolathe-gg/nanolathe/internal/gui"
 )
 
 // drawBattleOptionsWindow composes the in-battle options root and its merged

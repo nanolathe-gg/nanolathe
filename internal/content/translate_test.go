@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"errors"
 
-	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/formats"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 func translateFS(t *testing.T, files map[string]string) *vfs.FS {

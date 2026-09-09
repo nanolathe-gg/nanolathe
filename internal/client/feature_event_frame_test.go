@@ -3,7 +3,7 @@ package client
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
 )
 
 // A cell carrying a live event record blits that record's own cursor frames;

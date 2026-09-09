@@ -12,7 +12,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/nanolathe/nanolathe/internal/path"
+	"github.com/nanolathe-gg/nanolathe/internal/path"
 )
 
 // Point is the canonical published route coordinate from internal/path.

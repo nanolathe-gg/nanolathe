@@ -7,11 +7,11 @@ import (
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/nanolathe/nanolathe/internal/audio"
-	"github.com/nanolathe/nanolathe/internal/audiobackend"
-	"github.com/nanolathe/nanolathe/internal/client"
-	"github.com/nanolathe/nanolathe/internal/clock"
-	"github.com/nanolathe/nanolathe/internal/platform/gpurender"
+	"github.com/nanolathe-gg/nanolathe/internal/audio"
+	"github.com/nanolathe-gg/nanolathe/internal/audiobackend"
+	"github.com/nanolathe-gg/nanolathe/internal/client"
+	"github.com/nanolathe-gg/nanolathe/internal/clock"
+	"github.com/nanolathe-gg/nanolathe/internal/platform/gpurender"
 )
 
 // presentationTPS is the window's Update rate. It stays at 30: every per-host-

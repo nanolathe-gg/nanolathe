@@ -33,7 +33,7 @@ package client
 // the overlay are passed in by the caller.
 
 import (
-	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/formats"
 )
 
 // baselineDescender returns the signed FNT baseline adjustment. Glyph rows are

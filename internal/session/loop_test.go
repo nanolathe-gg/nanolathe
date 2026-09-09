@@ -3,11 +3,11 @@ package session
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/ai"
-	"github.com/nanolathe/nanolathe/internal/clock"
-	"github.com/nanolathe/nanolathe/internal/economy"
-	"github.com/nanolathe/nanolathe/internal/frame"
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/ai"
+	"github.com/nanolathe-gg/nanolathe/internal/clock"
+	"github.com/nanolathe-gg/nanolathe/internal/economy"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // TestPublishAfterEachSubTick verifies C6: 0..5 sub-ticks publishing after phase 12

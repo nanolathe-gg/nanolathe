@@ -6,11 +6,11 @@ package orders
 // broad target predicate [04 R-ORD-01 §3, §4, §7][04 R-ORD-02 §4].
 
 import (
-	"github.com/nanolathe/nanolathe/internal/combat"
-	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/units"
-	"github.com/nanolathe/nanolathe/internal/world"
+	"github.com/nanolathe-gg/nanolathe/internal/combat"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 func bindingFor(u *units.Unit) *QueueBinding {

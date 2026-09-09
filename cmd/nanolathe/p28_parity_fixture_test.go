@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/testsupport"
+	"github.com/nanolathe-gg/nanolathe/internal/testsupport"
 )
 
 // TestP28OBS00ParityFixture reserves the acceptance gate for the authored

@@ -3,8 +3,8 @@ package orders
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/combat"
-	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/combat"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
 )
 
 // TestSelfDestructArmorGateReadsTheRuntimeBit locks the operand of the damage

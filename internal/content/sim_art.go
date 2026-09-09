@@ -40,8 +40,8 @@ package content
 import (
 	"sort"
 
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // DefaultEffectBank is the bank an effect request names when it carries no

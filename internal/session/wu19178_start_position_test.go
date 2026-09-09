@@ -3,8 +3,8 @@ package session
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/mission"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/mission"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // The two tests here lock the kind-2 (skirmish) start-position contract of

@@ -3,7 +3,7 @@ package content
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/formats"
 )
 
 // TestParsedDefinitionCarriesTheUnlimitedLimitDefault locks [05 R-SHARE-01 §9]:

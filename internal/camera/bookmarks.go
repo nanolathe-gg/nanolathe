@@ -1,6 +1,6 @@
 package camera
 
-import "github.com/nanolathe/nanolathe/internal/pool"
+import "github.com/nanolathe-gg/nanolathe/internal/pool"
 
 // BookmarkSlots is the number of camera bookmark slots retail keeps in the
 // camera block: four origins with a valid byte each [07 R-CAM-01 §12].

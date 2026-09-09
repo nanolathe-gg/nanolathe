@@ -3,7 +3,7 @@ package world
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 )
 
 // TestBriefingDisplayDraws is the R2 regression for the FRONT-END briefing

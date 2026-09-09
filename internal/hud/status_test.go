@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/frame"
-	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 )
 
 func TestSnapshotStatusSelectedBuildAndFactory(t *testing.T) {

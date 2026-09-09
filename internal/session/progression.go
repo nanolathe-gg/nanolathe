@@ -6,8 +6,8 @@ package session
 // and the P1-01 end-of-mission countdown/teardown [P1-01].
 
 import (
-	"github.com/nanolathe/nanolathe/internal/save"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/save"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // Latch arms to 4 then decrements ~1/s before latch word bits [P0-05][P1-01].

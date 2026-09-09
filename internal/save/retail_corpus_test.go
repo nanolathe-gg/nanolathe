@@ -6,7 +6,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/clock"
+	"github.com/nanolathe-gg/nanolathe/internal/clock"
 )
 
 // TestRetailBankHeaderCorpus locks the 34-byte HAPIBANK header and its

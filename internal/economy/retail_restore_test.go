@@ -5,7 +5,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 )
 
 func TestRetailUnitAccountRestoresAllAccumulators(t *testing.T) {

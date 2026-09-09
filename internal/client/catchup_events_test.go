@@ -3,9 +3,9 @@ package client
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/audio"
-	"github.com/nanolathe/nanolathe/internal/frame"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/audio"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // publishAudioTick publishes one committed tick carrying the supplied events.

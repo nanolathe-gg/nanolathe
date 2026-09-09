@@ -1,4 +1,4 @@
-module github.com/nanolathe/nanolathe
+module github.com/nanolathe-gg/nanolathe
 
 go 1.25.0
 

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 )
 
 // restingForestService builds a side×side map carrying a resting sprite on

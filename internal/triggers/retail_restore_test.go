@@ -3,7 +3,7 @@ package triggers
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/save"
+	"github.com/nanolathe-gg/nanolathe/internal/save"
 )
 
 func TestRestoreSaveAccountsTypedState(t *testing.T) {

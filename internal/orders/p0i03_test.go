@@ -3,10 +3,10 @@ package orders
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // TestNewNodeForOrderPayload verifies the canonical constructor writes goal, target, tick, owner and queue modifier [P0-I03][04 §3.2].

@@ -3,7 +3,7 @@ package combat
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 )
 
 // TestCombatTailAppendNeverFillsHoles locks [06 §5.1], [01 §6.1] append-at-tail contract.

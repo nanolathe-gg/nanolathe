@@ -1,8 +1,8 @@
 package mission
 
 import (
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/triggers"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/triggers"
 )
 
 // DecodeTriggers reads the mission's end conditions out of `[GlobalHeader]`

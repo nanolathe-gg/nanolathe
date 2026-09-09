@@ -7,9 +7,9 @@ package client
 // committed UnitViews after each completed sub-tick [03 §2.5] [07 §9].
 
 import (
-	"github.com/nanolathe/nanolathe/internal/camera"
-	"github.com/nanolathe/nanolathe/internal/frame"
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // IsUnitViewInRect reports whether the projected UnitView falls inside the

@@ -5,7 +5,7 @@ import (
 	"io"
 	"testing"
 
-	retailaudio "github.com/nanolathe/nanolathe/internal/audio"
+	retailaudio "github.com/nanolathe-gg/nanolathe/internal/audio"
 )
 
 func TestPanReaderMatchesWholeConversionAcrossShortReads(t *testing.T) {

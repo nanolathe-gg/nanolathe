@@ -1,6 +1,6 @@
 package render
 
-import "github.com/nanolathe/nanolathe/internal/sim/numeric"
+import "github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 
 // Model-shadow geometry and gates, kept in the presentation package as the
 // shared statement of the contract. The live shadow pass is the client's, and

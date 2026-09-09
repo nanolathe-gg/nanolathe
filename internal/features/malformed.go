@@ -1,7 +1,7 @@
 package features
 
 import (
-	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
 )
 
 // IsMalformed reports whether a feature definition is malformed per custom/mod handling [P1-I05].

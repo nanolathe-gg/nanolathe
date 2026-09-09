@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nanolathe/nanolathe/internal/audio"
-	"github.com/nanolathe/nanolathe/internal/ui"
+	"github.com/nanolathe-gg/nanolathe/internal/audio"
+	"github.com/nanolathe-gg/nanolathe/internal/ui"
 )
 
 type pumpProbe struct {

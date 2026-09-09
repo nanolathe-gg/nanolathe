@@ -3,7 +3,7 @@ package ebitenapp
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/client"
+	"github.com/nanolathe-gg/nanolathe/internal/client"
 )
 
 // F10 swaps executors between two Updates (docs/DESIGN_GPU_RENDERER.md §14.6).

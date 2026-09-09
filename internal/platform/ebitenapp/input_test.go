@@ -3,7 +3,7 @@ package ebitenapp
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/input"
+	"github.com/nanolathe-gg/nanolathe/internal/input"
 )
 
 func TestApplyInputPublishesObservedPointerTransitions(t *testing.T) {

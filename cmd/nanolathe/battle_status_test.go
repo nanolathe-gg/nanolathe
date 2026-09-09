@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
 )
 
 // TestSpeedMessageLifetimeFollowsSharedRingTextScroll locks that the

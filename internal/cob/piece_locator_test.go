@@ -3,8 +3,8 @@ package cob
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/model"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/model"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // The authored (file-space) mounting point the three locator tests share, one

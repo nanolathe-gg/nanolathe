@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/drawlist"
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 )
 
 // TestTrailsReplayThroughOptionalSink locks the draw-list contract of §15: a

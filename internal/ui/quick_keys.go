@@ -1,6 +1,6 @@
 package ui
 
-import "github.com/nanolathe/nanolathe/internal/gui"
+import "github.com/nanolathe-gg/nanolathe/internal/gui"
 
 // ButtonQuickKeyAction checks one matching button accelerator without taking
 // pointer capture [07 R-WGT-01 §3]. The caller supplies its current capture

@@ -5,8 +5,8 @@ package frame
 // an ordered value list and cannot feed anything back into authoritative state.
 
 import (
-	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // Kind identifies the authored presentation cue. The ordering of these values

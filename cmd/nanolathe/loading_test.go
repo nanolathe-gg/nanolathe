@@ -3,8 +3,8 @@ package main
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/session"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/session"
 )
 
 // TestLoadingStageMapping locks the two things the loading screen must not get

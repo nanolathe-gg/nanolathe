@@ -3,7 +3,7 @@ package units
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 )
 
 // TestBobPhaseIsTheAllocatorFullDomainDraw locks [04 R-MOV-01 §5c]: the unit

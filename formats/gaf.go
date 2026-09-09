@@ -1,7 +1,7 @@
 package formats
 
 import (
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // GAF is a decoded animation bank: named entries, each a sequence of frames

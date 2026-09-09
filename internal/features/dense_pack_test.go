@@ -3,8 +3,8 @@ package features
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
-	"github.com/nanolathe/nanolathe/internal/world"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // The three regressions for R12: the dense-pack rule of [05 R-FEAT-01 §3]

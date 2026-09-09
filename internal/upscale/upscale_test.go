@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/formats"
 )
 
 // The fixtures below are authored here, not copied from retail art. The

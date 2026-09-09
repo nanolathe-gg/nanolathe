@@ -1,7 +1,7 @@
 package visibility
 
 import (
-	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
 )
 
 // Authored raster inputs [03 §3.2].

@@ -42,7 +42,7 @@
 package units
 
 import (
-	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 )
 
 // SlotVisit is one deterministic visit of an active slot [01 §4.4][01 §6.2].

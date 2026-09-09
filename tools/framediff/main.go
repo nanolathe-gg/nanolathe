@@ -27,7 +27,7 @@ import (
 	"image/png"
 	"os"
 
-	"github.com/nanolathe/nanolathe/internal/framediff"
+	"github.com/nanolathe-gg/nanolathe/internal/framediff"
 )
 
 func main() {

@@ -8,7 +8,7 @@ import (
 	"math"
 	"sync"
 
-	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/formats"
 )
 
 // FromGAFFrame reads one decoded GAF frame as a Sprite. Transparent is

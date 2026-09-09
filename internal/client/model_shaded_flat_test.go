@@ -3,8 +3,8 @@ package client
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/palette"
-	presentationrender "github.com/nanolathe/nanolathe/internal/render"
+	"github.com/nanolathe-gg/nanolathe/internal/palette"
+	presentationrender "github.com/nanolathe-gg/nanolathe/internal/render"
 )
 
 // shadeTestTables builds a palette whose SHD rows are trivially identifiable:

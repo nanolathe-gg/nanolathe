@@ -1,6 +1,6 @@
 package session
 
-import "github.com/nanolathe/nanolathe/internal/units"
+import "github.com/nanolathe-gg/nanolathe/internal/units"
 
 // finalizeReclaimRefund runs within the victim's one normal death visit, after
 // ordinary teardown and before explosion/corpse processing. The raw attacker

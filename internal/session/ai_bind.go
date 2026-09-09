@@ -10,8 +10,8 @@ package session
 import (
 	"fmt"
 
-	"github.com/nanolathe/nanolathe/internal/ai"
-	"github.com/nanolathe/nanolathe/internal/construction"
+	"github.com/nanolathe-gg/nanolathe/internal/ai"
+	"github.com/nanolathe-gg/nanolathe/internal/construction"
 )
 
 func bindAIQueue(mgr *ai.Manager, s *Session) {

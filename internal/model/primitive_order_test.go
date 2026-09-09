@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/formats"
 )
 
 func orderedObject(vertices []int32, faces ...[]uint16) formats.ThreeDOObject {

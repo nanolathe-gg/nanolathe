@@ -5,7 +5,7 @@ import (
 	"slices"
 
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/nanolathe/nanolathe/internal/drawlist"
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 )
 
 // A textured quad draws as two device triangles whose fragment shader evaluates

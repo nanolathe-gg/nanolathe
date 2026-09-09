@@ -3,7 +3,7 @@ package content
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 func TestUnitCompatibilityGatesAndCollectedWarning(t *testing.T) {

@@ -3,8 +3,8 @@ package client
 import (
 	"math"
 
-	"github.com/nanolathe/nanolathe/internal/drawlist"
-	"github.com/nanolathe/nanolathe/internal/render"
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
+	"github.com/nanolathe-gg/nanolathe/internal/render"
 )
 
 // The calculated (procedural) explosion frames of [06 R-WFX-01 §2].

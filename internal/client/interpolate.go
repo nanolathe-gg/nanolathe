@@ -1,8 +1,8 @@
 package client
 
 import (
-	"github.com/nanolathe/nanolathe/internal/frame"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // Enhanced interpolation. The simulation stays at its 30 Hz authoritative

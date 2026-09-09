@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
 )
 
 func TestResolveModelPreviewDefinitionUsesUnitDisplayProperties(t *testing.T) {

@@ -23,10 +23,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nanolathe/nanolathe/formats"
-	retailpalette "github.com/nanolathe/nanolathe/internal/palette"
-	"github.com/nanolathe/nanolathe/internal/upscale"
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	retailpalette "github.com/nanolathe-gg/nanolathe/internal/palette"
+	"github.com/nanolathe-gg/nanolathe/internal/upscale"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // colorKey is the transparent index of raw GAF frames [fmt gaf]; output PNGs

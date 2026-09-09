@@ -3,8 +3,8 @@ package client
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/formats"
-	presentationrender "github.com/nanolathe/nanolathe/internal/render"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	presentationrender "github.com/nanolathe-gg/nanolathe/internal/render"
 )
 
 func heightPlaneClient() *Client {

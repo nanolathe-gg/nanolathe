@@ -38,7 +38,7 @@ package client
 // geometry and deterministic picking.
 
 import (
-	"github.com/nanolathe/nanolathe/internal/hud"
+	"github.com/nanolathe-gg/nanolathe/internal/hud"
 )
 
 // Rect is an alias for the HUD's canonical drag rectangle. Client owns only

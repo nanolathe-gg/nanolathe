@@ -3,7 +3,7 @@ package path
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 )
 
 type testCandidateProvider struct {

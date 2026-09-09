@@ -1,7 +1,7 @@
 package economy
 
 import (
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // settleInterval is the per-player settlement deadline advance per [05 "Authoritative settlement order"] C2 and [GAP T1].

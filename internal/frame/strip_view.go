@@ -1,6 +1,6 @@
 package frame
 
-import "github.com/nanolathe/nanolathe/internal/sim/numeric"
+import "github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 
 // StripFamily names the researched strip-object family one mirrored
 // sub-record belongs to [03 R-STRIP-01 §1][03 R-FX-01 §3].

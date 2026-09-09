@@ -2,7 +2,7 @@ package gpurender
 
 import (
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/nanolathe/nanolathe/internal/drawlist"
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 )
 
 // The destination-independent 2D primitive families for the modern executor:

@@ -9,7 +9,7 @@ package units
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/cob"
+	"github.com/nanolathe-gg/nanolathe/internal/cob"
 )
 
 // drainWrites runs one script of engine writes against a bound unit and

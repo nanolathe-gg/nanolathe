@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/nanolathe/nanolathe/internal/cleanroom"
+	"github.com/nanolathe-gg/nanolathe/internal/cleanroom"
 )
 
 func main() {

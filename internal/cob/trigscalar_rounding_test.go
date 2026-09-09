@@ -3,7 +3,7 @@ package cob
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // floorDiv is the reference the retail sequence reduces to: the 64-bit sum is

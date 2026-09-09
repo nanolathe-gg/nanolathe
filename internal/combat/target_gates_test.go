@@ -3,8 +3,8 @@ package combat
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 )
 
 // Acquisition-time physical admission is separate from retention and firing

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
 )
 
 // stampedCatalog returns a fixture catalog whose definitions carry the

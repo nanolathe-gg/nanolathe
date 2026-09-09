@@ -3,7 +3,7 @@ package frame
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 )
 
 func TestMessageRingCaptionBudgetAndExpiry(t *testing.T) {

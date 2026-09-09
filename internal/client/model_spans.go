@@ -4,8 +4,8 @@ package client
 // blit, each with the nanoframe reveal gate [03 R-REN-03A §5].
 
 import (
-	"github.com/nanolathe/nanolathe/formats"
-	presentationrender "github.com/nanolathe/nanolathe/internal/render"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	presentationrender "github.com/nanolathe-gg/nanolathe/internal/render"
 )
 
 // nanoframeVerdict resolves one composed nanoframe pixel. It returns the

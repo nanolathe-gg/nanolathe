@@ -3,7 +3,7 @@ package combat
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // The autonomous target scan's PER-UNIT preconditions [06 §3.2]: "The visited

@@ -1,6 +1,6 @@
 package camera
 
-import "github.com/nanolathe/nanolathe/internal/pool"
+import "github.com/nanolathe-gg/nanolathe/internal/pool"
 
 // TargetPoint is a map-pixel point used by the phase-10 follow writer. Y is
 // the vertical/shear component, not a screen coordinate [01 §4.4][07 §10].

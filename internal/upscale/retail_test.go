@@ -18,10 +18,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nanolathe/nanolathe/formats"
-	retailpalette "github.com/nanolathe/nanolathe/internal/palette"
-	"github.com/nanolathe/nanolathe/internal/testsupport"
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	retailpalette "github.com/nanolathe-gg/nanolathe/internal/palette"
+	"github.com/nanolathe-gg/nanolathe/internal/testsupport"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 func processCPU() time.Duration {

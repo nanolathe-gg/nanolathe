@@ -5,9 +5,9 @@ package client
 // test and the supersample resolve [03 R-RAST-01].
 
 import (
-	"github.com/nanolathe/nanolathe/formats"
-	presentationrender "github.com/nanolathe/nanolathe/internal/render"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	presentationrender "github.com/nanolathe-gg/nanolathe/internal/render"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // spanU..spanRow index the attributes the two-chain edge walk carries beside

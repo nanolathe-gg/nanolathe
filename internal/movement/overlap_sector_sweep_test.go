@@ -3,7 +3,7 @@ package movement
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/world"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // The clear's overlap scan visits its candidates in sector-bucket order

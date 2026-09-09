@@ -3,8 +3,8 @@ package orders
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/economy"
 )
 
 func weaponDefForBuild(stockpile bool, reload int32) *content.WeaponDef {

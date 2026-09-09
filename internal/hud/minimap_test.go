@@ -3,8 +3,8 @@ package hud
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/camera"
-	"github.com/nanolathe/nanolathe/internal/world"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 func TestMinimapHUDHitTestInclusive(t *testing.T) { // retail's minimap hit test is Rect-inclusive [07 §10][03 §3.11]

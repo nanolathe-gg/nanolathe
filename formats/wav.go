@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // WAV describes PCM metadata for canonical RIFF/WAVE and supported legacy

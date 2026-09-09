@@ -3,9 +3,9 @@ package mission
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/movement"
-	"github.com/nanolathe/nanolathe/internal/orders"
-	"github.com/nanolathe/nanolathe/internal/world"
+	"github.com/nanolathe-gg/nanolathe/internal/movement"
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // TestMissionRecordsCarryTheirOwningUnit locks the field [04 §3.2] lists as

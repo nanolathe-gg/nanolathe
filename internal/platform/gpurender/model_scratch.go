@@ -2,7 +2,7 @@ package gpurender
 
 import (
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/nanolathe/nanolathe/internal/drawlist"
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 )
 
 // frameArena is the per-type preparation store of one frame. Execute owns it

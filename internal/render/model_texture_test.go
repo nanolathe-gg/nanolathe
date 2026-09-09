@@ -3,7 +3,7 @@ package render
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
 )
 
 func TestTexturePlayersAreIndependentAndTickBound(t *testing.T) {

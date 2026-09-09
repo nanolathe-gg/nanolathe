@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/testsupport"
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/internal/testsupport"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 func retailFS(t *testing.T) *vfs.FS {

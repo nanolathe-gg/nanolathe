@@ -12,8 +12,8 @@ package session
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/mission"
-	"github.com/nanolathe/nanolathe/internal/testsupport/retailcat"
+	"github.com/nanolathe-gg/nanolathe/internal/mission"
+	"github.com/nanolathe-gg/nanolathe/internal/testsupport/retailcat"
 )
 
 // The ARMMOHO record of `maps/a shortage of water.ota`, schema 0.

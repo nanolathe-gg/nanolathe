@@ -11,7 +11,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/client"
+	"github.com/nanolathe-gg/nanolathe/internal/client"
 )
 
 // TestSpeedMessageShot composes one frame with the "Game Speed  +1"

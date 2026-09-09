@@ -3,9 +3,9 @@ package main
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/session"
-	"github.com/nanolathe/nanolathe/internal/settings"
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/internal/session"
+	"github.com/nanolathe-gg/nanolathe/internal/settings"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // TestUnitLimitReachesTheBattleRequest follows the configured per-player unit

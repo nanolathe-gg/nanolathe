@@ -3,7 +3,7 @@ package client
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
 )
 
 // BenchmarkClassifyEffectStrips locks the per-frame strip staging at zero

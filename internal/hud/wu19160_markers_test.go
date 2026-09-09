@@ -3,7 +3,7 @@ package hud
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
 )
 
 // The radar rectangle is compiled-in, not authored: the fitted radar inside the

@@ -1,8 +1,8 @@
 package client
 
 import (
-	"github.com/nanolathe/nanolathe/internal/drawlist"
-	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
 )
 
 // MessageRing returns the client's shared caption/chat ring [07 R-HUD-03

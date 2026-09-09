@@ -3,7 +3,7 @@ package ai
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
 )
 
 // TestWindGeneratorZeroingComparesMaxWindStrictlyBelow2500 locks the third

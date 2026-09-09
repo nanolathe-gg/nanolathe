@@ -1,6 +1,6 @@
 package render
 
-import "github.com/nanolathe/nanolathe/internal/sim/numeric"
+import "github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 
 // Nanoframe reveal [03 §5.2]. An unfinished unit is composed exactly like a
 // finished one and then recoloured band by band against the model's own

@@ -3,8 +3,8 @@ package construction
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/orders"
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // statusRaise is one (kind, text) the shared status emitter received

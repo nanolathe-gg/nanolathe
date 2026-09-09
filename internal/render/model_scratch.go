@@ -1,8 +1,8 @@
 package render
 
 import (
-	"github.com/nanolathe/nanolathe/internal/model"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/model"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // DrawScratch retains presentation-only arrays for one borrowed UnitDraw.

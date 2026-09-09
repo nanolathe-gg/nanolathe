@@ -1,6 +1,6 @@
 package ui
 
-import "github.com/nanolathe/nanolathe/internal/gui"
+import "github.com/nanolathe-gg/nanolathe/internal/gui"
 
 // ResultAction is the semantic action emitted by an authored end-mission
 // control. It is passed across the UI boundary as a typed value; no control

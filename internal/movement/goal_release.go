@@ -1,8 +1,8 @@
 package movement
 
 import (
-	"github.com/nanolathe/nanolathe/internal/orders"
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // goalReleasedPending is pending bit `0x80`, "a previous goal object is

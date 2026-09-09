@@ -3,7 +3,7 @@ package session
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/mission"
+	"github.com/nanolathe-gg/nanolathe/internal/mission"
 )
 
 func TestP28MissionAngleOverwritesAfterAllocatorDrawSequence(t *testing.T) {

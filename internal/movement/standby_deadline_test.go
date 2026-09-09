@@ -3,7 +3,7 @@ package movement
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 )
 
 // TestVTOLStandbyLoiterHoldsItsDeadline locks the idle circle's cadence: a

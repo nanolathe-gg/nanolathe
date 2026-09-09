@@ -3,8 +3,8 @@ package content
 import (
 	"fmt"
 
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // SightShape is one authored visibility-mask shape [03 §3.2].

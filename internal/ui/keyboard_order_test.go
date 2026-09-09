@@ -3,8 +3,8 @@ package ui
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/gui"
-	"github.com/nanolathe/nanolathe/internal/input"
+	"github.com/nanolathe-gg/nanolathe/internal/gui"
+	"github.com/nanolathe-gg/nanolathe/internal/input"
 )
 
 func TestKeyboardMatrixPrecedesCapturedEditor(t *testing.T) {

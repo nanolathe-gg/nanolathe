@@ -3,7 +3,7 @@ package units
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/cob"
+	"github.com/nanolathe-gg/nanolathe/internal/cob"
 )
 
 // Generic engine reads carry four argument cells. They must use the port read

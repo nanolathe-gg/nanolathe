@@ -3,7 +3,7 @@ package session
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
 )
 
 // TestBurnWeaponFiresThroughTheSharedSplashEntry is the burn-weapon census:

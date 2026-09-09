@@ -3,7 +3,7 @@
 package visibility
 
 import (
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // underwaterExempt is the runtime status bit that exempts a unit from the

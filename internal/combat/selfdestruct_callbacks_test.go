@@ -3,7 +3,7 @@ package combat
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/cob"
+	"github.com/nanolathe-gg/nanolathe/internal/cob"
 )
 
 // The damage funnel starts HitByWeapon and TakeDamage from a single equality

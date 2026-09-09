@@ -1,8 +1,8 @@
 package session
 
 import (
-	"github.com/nanolathe/nanolathe/internal/mission"
-	"github.com/nanolathe/nanolathe/internal/world"
+	"github.com/nanolathe-gg/nanolathe/internal/mission"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // InitBattleWind is the single battle-entry wind initializer per [01 §7.3]

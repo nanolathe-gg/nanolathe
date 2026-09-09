@@ -1,7 +1,7 @@
 package session
 
 import (
-	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe-gg/nanolathe/internal/economy"
 )
 
 // InitShareThresholds applies the battle initializer's zero writes to both

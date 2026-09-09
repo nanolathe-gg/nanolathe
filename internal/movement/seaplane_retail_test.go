@@ -5,7 +5,7 @@ package movement
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/testsupport/retailcat"
+	"github.com/nanolathe-gg/nanolathe/internal/testsupport/retailcat"
 )
 
 // TestStockSeaplanesCompileToALandableWaterFloor ties the two halves of the

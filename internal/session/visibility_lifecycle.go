@@ -1,7 +1,7 @@
 package session
 
 import (
-	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 )
 
 // CaptureUnit transfers ownership and republishes coverage under the new owner [P0-11].

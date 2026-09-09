@@ -3,8 +3,8 @@ package session
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // TestBurstAnchorSweepRunsAtTheDeathFinalizer locks the wiring of [06 §4.3]'s

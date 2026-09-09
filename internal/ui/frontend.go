@@ -3,7 +3,7 @@ package ui
 import (
 	"strconv"
 
-	"github.com/nanolathe/nanolathe/internal/gui"
+	"github.com/nanolathe-gg/nanolathe/internal/gui"
 )
 
 // Mode identifies an authored frontend surface or the two platform hand-off

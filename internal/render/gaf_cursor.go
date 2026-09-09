@@ -5,7 +5,7 @@ package render
 import (
 	"strings"
 
-	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/formats"
 )
 
 // Cursor index constants name the handle-array slots [07 §8]. Slot 0 is

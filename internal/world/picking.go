@@ -1,6 +1,6 @@
 package world
 
-import "github.com/nanolathe/nanolathe/internal/sim/numeric"
+import "github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 
 // CursorToWorld converts a cursor position already expressed in map pixels
 // (camera origin plus the viewport-relative pointer) into the ground point the

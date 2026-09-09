@@ -6,9 +6,9 @@ package main
 import (
 	"fmt"
 
-	"github.com/nanolathe/nanolathe/internal/client"
-	"github.com/nanolathe/nanolathe/internal/frame"
-	"github.com/nanolathe/nanolathe/internal/hud"
+	"github.com/nanolathe-gg/nanolathe/internal/client"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/hud"
 )
 
 func (h *retailBattleHUD) drawResources(c *client.Client, f *frame.Frame) {

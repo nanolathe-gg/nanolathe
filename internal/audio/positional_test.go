@@ -3,7 +3,7 @@ package audio
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 func TestAttenuate_InsideVsOutside(t *testing.T) {

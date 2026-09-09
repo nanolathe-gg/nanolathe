@@ -1,8 +1,8 @@
 package economy
 
 import (
-	"github.com/nanolathe/nanolathe/internal/cob"
-	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/cob"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
 )
 
 // economyFixtureDef supplies the smallest authored Create program to economy

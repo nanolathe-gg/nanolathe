@@ -3,8 +3,8 @@ package movement
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/combat"
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/combat"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // Cargo delivery keeps the common receiver's guards, signed health and raw

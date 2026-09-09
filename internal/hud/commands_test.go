@@ -3,7 +3,7 @@ package hud
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/input"
+	"github.com/nanolathe-gg/nanolathe/internal/input"
 )
 
 func TestLatchToCodeMapping(t *testing.T) {

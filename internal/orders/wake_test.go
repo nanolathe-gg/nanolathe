@@ -3,8 +3,8 @@ package orders
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // TestIdleRefillMissionCondition locks the three-term condition of the primary

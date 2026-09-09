@@ -3,7 +3,7 @@ package features
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 )
 
 // TestRestingSpritesLeaveTheArenaFree is R05's fixture regression. The arena of

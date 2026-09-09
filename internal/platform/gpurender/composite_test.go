@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/nanolathe/nanolathe/internal/drawlist"
-	"github.com/nanolathe/nanolathe/internal/palette"
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
+	"github.com/nanolathe-gg/nanolathe/internal/palette"
 )
 
 // The §13.4 comparison the device fixtures below use.

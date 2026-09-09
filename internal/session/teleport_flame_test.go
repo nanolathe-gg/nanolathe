@@ -3,7 +3,7 @@ package session
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // teleportFlameEndpoints is a span long enough that the segment life

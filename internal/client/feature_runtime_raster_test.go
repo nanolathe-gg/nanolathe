@@ -7,8 +7,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/drawlist"
-	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
 )
 
 type runtimeSpriteCollector struct{ sprites []drawlist.Sprite }

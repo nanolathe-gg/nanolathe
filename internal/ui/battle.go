@@ -3,8 +3,8 @@ package ui
 import (
 	"time"
 
-	"github.com/nanolathe/nanolathe/internal/gui"
-	"github.com/nanolathe/nanolathe/internal/input"
+	"github.com/nanolathe-gg/nanolathe/internal/gui"
+	"github.com/nanolathe-gg/nanolathe/internal/input"
 )
 
 // Panel detents and throttle are authored battle-rail values [07 §6].  The

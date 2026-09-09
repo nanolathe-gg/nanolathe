@@ -3,7 +3,7 @@ package client
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/formats"
 )
 
 // uiBlitClippedReference is UIBlitClipped as it read before the clip was

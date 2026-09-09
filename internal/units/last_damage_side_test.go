@@ -3,8 +3,8 @@ package units
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 )
 
 // TestSpawnSeedsNeutralAttackerSide locks the spawn seed of [06 R-WPN-04 §2]:

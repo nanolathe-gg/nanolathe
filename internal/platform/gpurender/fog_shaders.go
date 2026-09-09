@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/nanolathe/nanolathe/internal/render"
+	"github.com/nanolathe-gg/nanolathe/internal/render"
 )
 
 // Geometry of the compiled fog pass (docs/DESIGN_GPU_RENDERER.md §11.2 "Fog as

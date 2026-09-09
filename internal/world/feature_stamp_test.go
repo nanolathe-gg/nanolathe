@@ -3,8 +3,8 @@ package world
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
 )
 
 func TestFeatureStampSourceOrderAndOrphans(t *testing.T) {

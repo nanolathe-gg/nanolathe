@@ -2,7 +2,7 @@ package gpurender
 
 import (
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/formats"
 )
 
 // modelTextureAtlas packs every resolved 3DO texture frame into shared pages, so

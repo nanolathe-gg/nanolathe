@@ -3,7 +3,7 @@ package session
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
 )
 
 // stepUntil advances one presentation unit at a time until the controller

@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/gui"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/gui"
 )
 
 // retailButtonRenderVerdict is the button painter's state reduction. Art is

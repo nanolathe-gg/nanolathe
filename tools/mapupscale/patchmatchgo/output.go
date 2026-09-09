@@ -12,7 +12,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/nanolathe/nanolathe/internal/upscale"
+	"github.com/nanolathe-gg/nanolathe/internal/upscale"
 )
 
 func writeTileCache(prefix string, result upscale.TerrainResult) error {

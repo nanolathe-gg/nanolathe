@@ -3,10 +3,10 @@ package headless
 import (
 	"sort"
 
-	"github.com/nanolathe/nanolathe/internal/ai"
-	"github.com/nanolathe/nanolathe/internal/orders"
-	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/session"
+	"github.com/nanolathe-gg/nanolathe/internal/ai"
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/session"
 )
 
 // groupSampleInterval is the cadence, in authoritative ticks, at which the

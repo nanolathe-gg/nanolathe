@@ -3,7 +3,7 @@ package triggers
 import (
 	"strings"
 
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // PollContext supplies session-owned state to the trigger dispatch slots.

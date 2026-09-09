@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // FNT is a decoded bitmap font: one glyph per byte code, all of the font's

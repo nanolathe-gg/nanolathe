@@ -3,7 +3,7 @@ package orders
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // CancelFrontMost removes the first match walking from the head, where

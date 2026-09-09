@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 )
 
 func mustParseTDF(t *testing.T, text string) *formats.Section {

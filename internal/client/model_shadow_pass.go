@@ -1,9 +1,9 @@
 package client
 
 import (
-	"github.com/nanolathe/nanolathe/internal/camera"
-	presentationrender "github.com/nanolathe/nanolathe/internal/render"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
+	presentationrender "github.com/nanolathe-gg/nanolathe/internal/render"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // Model shadows [R-REN-03D]. Diggers and ordinary mobiles flatten the finished

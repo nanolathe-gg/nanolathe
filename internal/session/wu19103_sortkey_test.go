@@ -3,8 +3,8 @@ package session
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // TestSessionKindConstantsMatchResearch locks the two session-kind constants

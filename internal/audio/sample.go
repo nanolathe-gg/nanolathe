@@ -5,8 +5,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // Sample holds decoded PCM for one alias [fmt wav] [03 §8.2] (I13).

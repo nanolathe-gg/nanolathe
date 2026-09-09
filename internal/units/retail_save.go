@@ -6,7 +6,7 @@ import (
 	"math"
 	"strings"
 
-	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 )
 
 // RetailStableID resolves a live handle to the logical unit identifier used by

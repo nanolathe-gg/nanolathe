@@ -3,7 +3,7 @@ package render
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
 )
 
 // TestFogWindowMatchesClippedFullBuild locks BuildFogOpsWindowInto against the

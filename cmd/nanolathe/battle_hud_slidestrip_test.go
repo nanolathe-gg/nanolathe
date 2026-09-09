@@ -3,8 +3,8 @@ package main
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
 )
 
 // The slide strip's three lines are literal formats around translated keys:

@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
 )
 
 // TestYardMapControlBytes locks the ten control bytes exactly

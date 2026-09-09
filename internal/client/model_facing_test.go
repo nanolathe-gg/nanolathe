@@ -3,9 +3,9 @@ package client
 import (
 	"testing"
 
-	compiledmodel "github.com/nanolathe/nanolathe/internal/model"
-	presentationrender "github.com/nanolathe/nanolathe/internal/render"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	compiledmodel "github.com/nanolathe-gg/nanolathe/internal/model"
+	presentationrender "github.com/nanolathe-gg/nanolathe/internal/render"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // TestModelNoseFacesTravelDirection locks the one relationship that ties the

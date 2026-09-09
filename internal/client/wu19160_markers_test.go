@@ -3,7 +3,7 @@ package client
 import (
 	"testing"
 
-	presentationrender "github.com/nanolathe/nanolathe/internal/render"
+	presentationrender "github.com/nanolathe-gg/nanolathe/internal/render"
 )
 
 // The shading display option has one consumer that matters — the model

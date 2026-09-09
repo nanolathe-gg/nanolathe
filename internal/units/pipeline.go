@@ -15,7 +15,7 @@
 package units
 
 import (
-	"github.com/nanolathe/nanolathe/internal/cob"
+	"github.com/nanolathe-gg/nanolathe/internal/cob"
 )
 
 // unitPreUpdate is the per-unit pre-update/status work [04 §2.4][04 §5.1].

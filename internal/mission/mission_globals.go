@@ -13,7 +13,7 @@ package mission
 import (
 	"strings"
 
-	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/formats"
 )
 
 // GlobalClass distinguishes authoritative vs presentation vs inert [P1-02 §2.1].

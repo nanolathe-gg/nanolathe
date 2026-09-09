@@ -3,9 +3,9 @@ package main
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/audio"
-	"github.com/nanolathe/nanolathe/internal/audiobackend"
-	"github.com/nanolathe/nanolathe/internal/settings"
+	"github.com/nanolathe-gg/nanolathe/internal/audio"
+	"github.com/nanolathe-gg/nanolathe/internal/audiobackend"
+	"github.com/nanolathe-gg/nanolathe/internal/settings"
 )
 
 func TestApplyRetailAudioOptionsPushesSelectedSoundMode(t *testing.T) {

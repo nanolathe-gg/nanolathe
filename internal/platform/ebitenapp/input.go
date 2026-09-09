@@ -2,7 +2,7 @@ package ebitenapp
 
 import (
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/nanolathe/nanolathe/internal/input"
+	"github.com/nanolathe-gg/nanolathe/internal/input"
 )
 
 // sampledInput is one complete Ebiten poll. The adapter collects all of these

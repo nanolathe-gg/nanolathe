@@ -3,7 +3,7 @@ package save
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe-gg/nanolathe/internal/economy"
 )
 
 // TestPlayerAccountCarriesNoPassAggregates locks the bounded-negative census of

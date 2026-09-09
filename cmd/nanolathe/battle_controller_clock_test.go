@@ -30,9 +30,9 @@ package main
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/hud"
-	"github.com/nanolathe/nanolathe/internal/input"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/hud"
+	"github.com/nanolathe-gg/nanolathe/internal/input"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // pinnedHostMillis is a host millisecond source frozen at one reading.

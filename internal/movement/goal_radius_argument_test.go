@@ -3,8 +3,8 @@ package movement
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/orders"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
 )
 
 // nodeNamed builds a bare record of the named descriptor. The radius helper

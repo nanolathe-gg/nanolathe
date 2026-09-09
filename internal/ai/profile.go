@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // Difficulty selects the plan gate [08 "Established AI-facing data and rooted planner"] [PLAN 11 C4].

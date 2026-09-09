@@ -3,7 +3,7 @@ package combat
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // TestInitCommonRetainsCollisionCachePair locks [R-DMG-01 §13]: neither the

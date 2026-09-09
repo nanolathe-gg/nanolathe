@@ -3,8 +3,8 @@ package session
 import (
 	"fmt"
 
-	"github.com/nanolathe/nanolathe/internal/frame"
-	"github.com/nanolathe/nanolathe/internal/mission"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/mission"
 )
 
 // The elimination announcement [01 §7.5 "The elimination announcement"]

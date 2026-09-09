@@ -4,8 +4,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/session"
-	"github.com/nanolathe/nanolathe/internal/settings"
+	"github.com/nanolathe-gg/nanolathe/internal/session"
+	"github.com/nanolathe-gg/nanolathe/internal/settings"
 )
 
 // TestSettingsRoundTripThroughShell locks the conversion in both directions:

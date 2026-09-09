@@ -2,7 +2,7 @@ package gpurender
 
 import (
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/nanolathe/nanolathe/internal/palette"
+	"github.com/nanolathe-gg/nanolathe/internal/palette"
 )
 
 // tables holds the palette lookup textures the modern executor samples, uploaded

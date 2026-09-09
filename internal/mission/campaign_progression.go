@@ -3,7 +3,7 @@ package mission
 import (
 	"fmt"
 
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // NextCampaignMission reports whether the campaign contains a mission after curIdx.

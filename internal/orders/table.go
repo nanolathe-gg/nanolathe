@@ -5,7 +5,7 @@ package orders
 import (
 	"sort"
 
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // ID is the index into the sorted descriptor table; 0 is the reject sentinel [04 §3.1] C4.

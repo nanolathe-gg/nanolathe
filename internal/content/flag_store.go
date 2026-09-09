@@ -1,6 +1,6 @@
 package content
 
-import "github.com/nanolathe/nanolathe/formats"
+import "github.com/nanolathe-gg/nanolathe/formats"
 
 // storedFlag models a definition's one-bit store after the integer accessor,
 // not the accessor's general nonzero truth test [02 R-KEYS-01 §5].

@@ -3,7 +3,7 @@ package world
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
 )
 
 // TestSampleMetalOverTheMapEdge locks the per-cell bounds test of

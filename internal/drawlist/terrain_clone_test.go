@@ -1,7 +1,7 @@
 package drawlist
 
 import (
-	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"testing"
 )
 

@@ -1,8 +1,7 @@
-# Curated publication candidate
+# Curated publication history
 
 Prepared 2026-09-08 in an independent repository copy. The original development
-repository and its history were not rewritten. No remote is configured and
-nothing has been published.
+history is retained privately. This repository contains the curated history.
 
 ## History
 
@@ -13,7 +12,8 @@ no group contains more than ten first-parent steps. Redundant sanitized
 snapshots were omitted. Publication follow-ups update the documentation and make a test helper
 portable. Two further integration commits bring in subsequent command, fragment,
 minimap-mask and terrain-trail updates, followed by removal of the obsolete model-authoring tools, giving 296 commits
-in this candidate.
+in the reviewed candidate. A publication follow-up aligns the module path and
+clone instructions with the public GitHub repository.
 
 The original merge graph sometimes follows a topic branch before merging other
 work. These commits are curated integration snapshots, not a reconstruction of
@@ -45,7 +45,7 @@ history. Do not merge original development refs into this repository.
   diagnostics were redacted as well. Explicit omission markers preserve the fact that the
   removed material has not been replaced by independently worded evidence.
 - Retail byte-dump examples and stock-derived COB/BOS script examples in the
-  format references. Authored file schemas are retained in the final reference. Retained engine Go
+  format references. Authored file schemas are retained in the final reference. Apart from the public module/import path, retained engine Go
   executable tokens match the original source endpoint except for the art-override
   diagnostic, which no longer refers to the removed tools. The citation checker
   no longer scans the removed authoring directory.

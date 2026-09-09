@@ -78,10 +78,10 @@ func forbiddenRuntimeImport(path string) bool {
 	}
 	for _, prefix := range []string{
 		"github.com/hajimehoshi/ebiten/v2",
-		"github.com/nanolathe/nanolathe/cmd/nanolathe",
-		"github.com/nanolathe/nanolathe/internal/client",
-		"github.com/nanolathe/nanolathe/internal/cleanroom",
-		"github.com/nanolathe/nanolathe/internal/testsupport",
+		"github.com/nanolathe-gg/nanolathe/cmd/nanolathe",
+		"github.com/nanolathe-gg/nanolathe/internal/client",
+		"github.com/nanolathe-gg/nanolathe/internal/cleanroom",
+		"github.com/nanolathe-gg/nanolathe/internal/testsupport",
 	} {
 		if path == prefix || strings.HasPrefix(path, prefix+"/") {
 			return true

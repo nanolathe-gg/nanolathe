@@ -3,7 +3,7 @@ package cob
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // The nine query ports 7..15 were unbound until WU-19-234 and answered zero

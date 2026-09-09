@@ -1,7 +1,7 @@
 package economy
 
 import (
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // settlePure computes settlement stages without mutating state. Live fields

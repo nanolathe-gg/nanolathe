@@ -3,8 +3,8 @@ package session
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/clock"
-	"github.com/nanolathe/nanolathe/internal/visibility"
+	"github.com/nanolathe-gg/nanolathe/internal/clock"
+	"github.com/nanolathe-gg/nanolathe/internal/visibility"
 )
 
 // TestCloakGateReadsTheRequestBitAndTheSensorBreach locks the three terms the

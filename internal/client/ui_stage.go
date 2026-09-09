@@ -1,6 +1,6 @@
 package client
 
-import "github.com/nanolathe/nanolathe/internal/frame"
+import "github.com/nanolathe-gg/nanolathe/internal/frame"
 
 // UIFrame is the immutable presentation value handed to the one UI stage
 // after the committed-world passes. Committed is valid only for the duration

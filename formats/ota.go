@@ -3,7 +3,7 @@ package formats
 import (
 	"fmt"
 
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // OTA contains the map metadata needed by menus and the game-start path.

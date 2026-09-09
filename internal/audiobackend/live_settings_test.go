@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	retailaudio "github.com/nanolathe/nanolathe/internal/audio"
+	retailaudio "github.com/nanolathe-gg/nanolathe/internal/audio"
 )
 
 type observedPlayer struct {

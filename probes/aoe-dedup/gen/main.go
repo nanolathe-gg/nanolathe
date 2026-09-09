@@ -24,7 +24,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/nanolathe/nanolathe/probes/kit/author"
+	"github.com/nanolathe-gg/nanolathe/probes/kit/author"
 )
 
 func block(name string, color byte) []byte {

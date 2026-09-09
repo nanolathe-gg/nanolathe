@@ -1,8 +1,8 @@
 package gpurender
 
 import (
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/drawlist"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 )
 
 // The FNT text family for the modern executor (docs/DESIGN_GPU_RENDERER.md §2.3,

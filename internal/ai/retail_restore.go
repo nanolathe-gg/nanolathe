@@ -1,8 +1,8 @@
 package ai
 
 import (
-	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // RestoreGroupsFromUnits rebuilds only the nine tactical vectors represented by

@@ -18,6 +18,8 @@ builds also need a C toolchain and graphics/audio development headers; the
 packages used by CI on Ubuntu.
 
 ```sh
+git clone https://github.com/nanolathe-gg/nanolathe.git
+cd nanolathe
 go build -o nanolathe ./cmd/nanolathe
 ./nanolathe --root "$HOME/TotalAnnihilation"
 ```

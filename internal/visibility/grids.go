@@ -5,8 +5,8 @@ package visibility
 import (
 	"sync/atomic"
 
-	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/world"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 var presentationIdentity atomic.Uint64

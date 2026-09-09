@@ -1,6 +1,6 @@
 package orders
 
-import "github.com/nanolathe/nanolathe/internal/units"
+import "github.com/nanolathe-gg/nanolathe/internal/units"
 
 // makeSelectableHandler implements the MakeSelectable order handler [04 §3.1].
 // The engine returns completion code 5 after mutating the owning unit's

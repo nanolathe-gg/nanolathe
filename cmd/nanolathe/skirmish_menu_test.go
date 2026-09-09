@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/session"
+	"github.com/nanolathe-gg/nanolathe/internal/session"
 )
 
 func TestSkirmishMenuDefaultsAndOpponentCount(t *testing.T) {

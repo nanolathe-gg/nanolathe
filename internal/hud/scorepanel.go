@@ -11,7 +11,7 @@ package hud
 // The composer in cmd/nanolathe owns the painting: which surface, which font,
 // which palette tables. Everything here is integers.
 
-import "github.com/nanolathe/nanolathe/internal/frame"
+import "github.com/nanolathe-gg/nanolathe/internal/frame"
 
 // Panel constants, all from [07 R-HUD-04 §1].
 const (

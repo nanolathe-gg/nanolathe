@@ -3,8 +3,8 @@ package ai
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
-	"github.com/nanolathe/nanolathe/internal/world"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // depositTerrain is a canonical-map shape: every cell carries the uniform

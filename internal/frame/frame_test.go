@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 func TestBufferFlipsSlotsAndKeepsCommittedStableDuringWrite(t *testing.T) {

@@ -8,8 +8,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/nanolathe/nanolathe/internal/platform/benchlock"
-	"github.com/nanolathe/nanolathe/internal/version"
+	"github.com/nanolathe-gg/nanolathe/internal/platform/benchlock"
+	"github.com/nanolathe-gg/nanolathe/internal/version"
 )
 
 // BattleSeeds is the explicit pair selected at a battle boundary. The

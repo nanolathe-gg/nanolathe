@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nanolathe/nanolathe/internal/save"
-	"github.com/nanolathe/nanolathe/internal/session"
+	"github.com/nanolathe-gg/nanolathe/internal/save"
+	"github.com/nanolathe-gg/nanolathe/internal/session"
 )
 
 // writeContinuationSlot authors one continuation bank whose Description is the

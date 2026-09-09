@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/save"
+	"github.com/nanolathe-gg/nanolathe/internal/save"
 )
 
 // TestEnemyCommanderDeathEndsTheMatchBeforeAndAfterALoad locks the whole

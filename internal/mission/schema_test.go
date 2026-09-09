@@ -3,7 +3,7 @@ package mission
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/formats"
 )
 
 func mustLoadOTA(t *testing.T, src string) *formats.OTA {

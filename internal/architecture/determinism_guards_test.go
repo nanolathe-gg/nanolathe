@@ -79,7 +79,7 @@ func TestPresentationPackagesDoNotImportRNG(t *testing.T) {
 			importsRNG := false
 			for _, imp := range f.Imports {
 				p, _ := strconv.Unquote(imp.Path.Value)
-				if p == "github.com/nanolathe/nanolathe/internal/sim/rng" {
+				if p == "github.com/nanolathe-gg/nanolathe/internal/sim/rng" {
 					importsRNG = true
 				}
 			}

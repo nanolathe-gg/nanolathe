@@ -1,6 +1,6 @@
 package gui
 
-import "github.com/nanolathe/nanolathe/formats"
+import "github.com/nanolathe-gg/nanolathe/formats"
 
 // PreclearButtonQuickKeys clears only button keys. It is the builder's
 // whole-window prelude; labels retain their current key for collision checks

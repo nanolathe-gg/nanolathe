@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe-gg/nanolathe/internal/economy"
 )
 
 func TestHashStateIncludesAIAggregatesAndPreservesOrdering(t *testing.T) {

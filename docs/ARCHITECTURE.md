@@ -70,7 +70,7 @@ and evidence boundary", "Dependencies" and "Missing and unknown".
 
 ## 2. Source layout
 
-Module path `github.com/nanolathe/nanolathe`. One line per package; the
+Module path `github.com/nanolathe-gg/nanolathe`. One line per package; the
 design document named is the one whose contract list and research map the
 package implements.
 

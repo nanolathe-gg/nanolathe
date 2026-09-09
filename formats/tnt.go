@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // Version is the TNT version word [03 §2.2] [fmt tnt].

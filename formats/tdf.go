@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // ItemKind distinguishes a key/value assignment from a nested section.

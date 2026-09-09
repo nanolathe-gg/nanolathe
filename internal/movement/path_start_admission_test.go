@@ -3,7 +3,7 @@ package movement
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/path"
+	"github.com/nanolathe-gg/nanolathe/internal/path"
 )
 
 // TestPathRequestSetupReadsTheAdmissionTimeCommittedCell locks [04 R-PATH-01

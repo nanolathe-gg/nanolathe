@@ -1,6 +1,6 @@
 package frame
 
-import "github.com/nanolathe/nanolathe/internal/sim/numeric"
+import "github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 
 // Strip identifies the established effect-strip destination. Event kind is
 // not a routing key: producer identity is required by the retail strip

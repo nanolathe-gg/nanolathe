@@ -3,8 +3,8 @@ package client
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/audio"
-	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/audio"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
 )
 
 func TestCommittedStatusEventReachesMessageLines(t *testing.T) {

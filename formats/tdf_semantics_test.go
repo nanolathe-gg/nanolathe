@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 func TestTDFSemanticValuesTrimOnlyAuthoredWhitespace(t *testing.T) {

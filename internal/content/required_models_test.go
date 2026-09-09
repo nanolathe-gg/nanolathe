@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/formats"
 )
 
 // authoredRequiredModel3DO builds the small checked 3DO fixtures used here.

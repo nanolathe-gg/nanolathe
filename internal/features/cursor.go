@@ -1,6 +1,6 @@
 package features
 
-import "github.com/nanolathe/nanolathe/internal/content"
+import "github.com/nanolathe-gg/nanolathe/internal/content"
 
 // eventCursor is the live animation cursor of a sprite EVENT record — the
 // burn, death or reclaim animation an instance is playing [05 R-FEAT-01 §10].

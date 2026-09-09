@@ -1,6 +1,6 @@
 package orders
 
-import "github.com/nanolathe/nanolathe/internal/units"
+import "github.com/nanolathe-gg/nanolathe/internal/units"
 
 // stopHandler is the `Stop` order [04 R-ORD-01 §2]. Its row is three steps and
 // a completion:

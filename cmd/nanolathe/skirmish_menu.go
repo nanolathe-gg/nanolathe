@@ -1,6 +1,6 @@
 package main
 
-import "github.com/nanolathe/nanolathe/internal/session"
+import "github.com/nanolathe-gg/nanolathe/internal/session"
 
 const (
 	resourceMin  = 200

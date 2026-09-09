@@ -1,6 +1,6 @@
 package ui
 
-import "github.com/nanolathe/nanolathe/internal/gui"
+import "github.com/nanolathe-gg/nanolathe/internal/gui"
 
 // DefaultKeyAction chooses Enter's usable default before its focused fallback;
 // Space (enter=false) has only that fallback [07 R-WGT-01 §2]. It preserves

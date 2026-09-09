@@ -3,7 +3,7 @@ package session
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/cob"
+	"github.com/nanolathe-gg/nanolathe/internal/cob"
 )
 
 // Weaponless scripted units must have their COB threads progressed by the

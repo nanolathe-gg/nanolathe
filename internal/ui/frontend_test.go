@@ -3,7 +3,7 @@ package ui
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/gui"
+	"github.com/nanolathe-gg/nanolathe/internal/gui"
 )
 
 func TestFrontendOpenOwnsModeAndSaveUnder(t *testing.T) {

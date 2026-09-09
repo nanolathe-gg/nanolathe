@@ -1,6 +1,6 @@
 package ui
 
-import "github.com/nanolathe/nanolathe/internal/gui"
+import "github.com/nanolathe-gg/nanolathe/internal/gui"
 
 // FocusDirection is the supported reading-order traversal direction.
 type FocusDirection uint8

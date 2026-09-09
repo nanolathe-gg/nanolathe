@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"testing"
 
-	compiledmodel "github.com/nanolathe/nanolathe/internal/model"
-	"github.com/nanolathe/nanolathe/internal/testsupport"
-	"github.com/nanolathe/nanolathe/vfs"
+	compiledmodel "github.com/nanolathe-gg/nanolathe/internal/model"
+	"github.com/nanolathe-gg/nanolathe/internal/testsupport"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 func TestModelPreviewRejectsUnusableInputs(t *testing.T) {

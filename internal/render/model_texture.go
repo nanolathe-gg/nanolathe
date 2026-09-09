@@ -1,6 +1,6 @@
 package render
 
-import "github.com/nanolathe/nanolathe/internal/content"
+import "github.com/nanolathe-gg/nanolathe/internal/content"
 
 // TexturePlayer is one cursor embedded in a loaded model primitive. Its owner
 // chooses registration and phase-7 lifetime; runtime model instances only read

@@ -1,8 +1,8 @@
 package hud
 
 import (
-	"github.com/nanolathe/nanolathe/internal/camera"
-	"github.com/nanolathe/nanolathe/internal/world"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // MinimapHUD holds retail minimap HUD state that is presentation-only (I6).

@@ -1,8 +1,8 @@
 package ui
 
 import (
-	"github.com/nanolathe/nanolathe/internal/gui"
-	"github.com/nanolathe/nanolathe/internal/input"
+	"github.com/nanolathe-gg/nanolathe/internal/gui"
+	"github.com/nanolathe-gg/nanolathe/internal/input"
 )
 
 // serviceKeyboardToken applies the one-token matrix before the pointer walk.

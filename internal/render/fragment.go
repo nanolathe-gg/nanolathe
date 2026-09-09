@@ -3,7 +3,7 @@ package render
 import (
 	"math"
 
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // FrozenFragmentMaterial is the scalar material identity copied when a shatter

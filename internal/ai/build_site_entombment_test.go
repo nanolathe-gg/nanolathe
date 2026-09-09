@@ -3,8 +3,8 @@ package ai_test
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/units"
-	"github.com/nanolathe/nanolathe/internal/world"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // TestComputerCommanderIsNeverBuiltOver is the PT5 liveness lock, and it is a

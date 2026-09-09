@@ -3,7 +3,7 @@ package session
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 )
 
 // TestResult_StateTransitionAndNoTick verifies 6→7→2 and no tick after terminal [RS-05][08].

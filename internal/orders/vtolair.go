@@ -31,7 +31,7 @@ package orders
 // are built from.
 
 import (
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // pendNoRoute is the pending word's `0x40`: "an empty route is published while

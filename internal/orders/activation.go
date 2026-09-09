@@ -1,6 +1,6 @@
 package orders
 
-import "github.com/nanolathe/nanolathe/internal/units"
+import "github.com/nanolathe-gg/nanolathe/internal/units"
 
 // activateHandler and deactivateHandler are the trivial activation handlers
 // [04 R-ORD-01 §2]: if the definition has `onoffable`, raise / lower edge bit 0

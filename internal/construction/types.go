@@ -2,7 +2,7 @@
 
 package construction
 
-import "github.com/nanolathe/nanolathe/internal/sim/numeric"
+import "github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 
 // FactoryPayload is the typed payload for factory production orders [05 "Factory production lifecycle"][P0-I05].
 // It lives on orders.Node in the PRIMARY segment: definition catalog index in Param1,

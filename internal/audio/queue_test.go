@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 )
 
 func categoryFixture() *Category {
@@ -404,7 +404,7 @@ func TestNoSimImport(t *testing.T) {
 	if err != nil {
 		t.Skip("no queue.go")
 	}
-	if strings.Contains(string(data), "\"github.com/nanolathe/nanolathe/internal/sim/rng\"") {
+	if strings.Contains(string(data), "\"github.com/nanolathe-gg/nanolathe/internal/sim/rng\"") {
 		// If it imports rng, ensure it doesn't use Sim
 		if strings.Contains(string(data), ".Sim") {
 			t.Fatal("must not use rng.Sim")

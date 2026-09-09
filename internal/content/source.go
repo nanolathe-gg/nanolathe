@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // archiveContentFile preserves the union enumerator's winning entry and its

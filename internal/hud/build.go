@@ -3,8 +3,8 @@ package hud
 import (
 	"fmt"
 
-	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
 )
 
 // RetailBuildButtonsPerPage is the stock builder-page product count. The

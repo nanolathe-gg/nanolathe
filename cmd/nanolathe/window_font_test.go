@@ -3,8 +3,8 @@ package main
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/gui"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/gui"
 )
 
 // The button painter's font walk selects the FNT the button's `fontnumber`

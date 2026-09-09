@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/input"
+	"github.com/nanolathe-gg/nanolathe/internal/input"
 )
 
 func TestPointerFrameRetainsPublishedDoubleClickRecord(t *testing.T) {

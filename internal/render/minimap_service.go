@@ -3,7 +3,7 @@ package render
 import (
 	"sync/atomic"
 
-	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
 )
 
 var minimapSurfaceIdentity atomic.Uint64

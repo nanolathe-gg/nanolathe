@@ -1,6 +1,6 @@
 package session
 
-import "github.com/nanolathe/nanolathe/internal/mission"
+import "github.com/nanolathe-gg/nanolathe/internal/mission"
 
 // CommitCampaignTeardown records the current mission's W/L mark from the live
 // win bit. Both the ordinary ending transition and manual battle teardown use

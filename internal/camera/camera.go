@@ -1,7 +1,7 @@
 package camera
 
 import (
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // Viewport origin for the observed beam/line projection [03 §2.5].

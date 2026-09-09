@@ -1,6 +1,6 @@
 package render
 
-import "github.com/nanolathe/nanolathe/internal/sim/numeric"
+import "github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 
 // StripObject is the strip lifecycle contract [03 §1] C4.
 // The update dispatcher evaluates ShouldRemove BEFORE Update for every object.

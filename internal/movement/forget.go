@@ -1,6 +1,6 @@
 package movement
 
-import "github.com/nanolathe/nanolathe/internal/pool"
+import "github.com/nanolathe-gg/nanolathe/internal/pool"
 
 // ForgetUnit drops every piece of per-handle movement state the system holds
 // and releases the handle's occupancy contribution. It is the only lifecycle

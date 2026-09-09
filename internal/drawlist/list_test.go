@@ -3,8 +3,8 @@ package drawlist
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/render"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/render"
 )
 
 // recorder is a Sink stub that appends a tag per call plus the last-seen values

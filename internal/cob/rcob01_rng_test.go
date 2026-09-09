@@ -13,7 +13,7 @@ package cob
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 )
 
 // newCensusVM authors a one-script VM with the given code and a fresh bound

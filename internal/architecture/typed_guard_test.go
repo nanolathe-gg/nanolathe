@@ -102,7 +102,7 @@ func loadAuthoritativeTypedPackages(t *testing.T, root string) []typedPackage {
 }
 
 func isAuthoritativeImportPath(path string) bool {
-	const prefix = "github.com/nanolathe/nanolathe/"
+	const prefix = "github.com/nanolathe-gg/nanolathe/"
 	for _, dir := range authoritativeDirs {
 		base := prefix + dir
 		if path == base || strings.HasPrefix(path, base+"/") {

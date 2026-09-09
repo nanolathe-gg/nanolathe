@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/world"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // TestAirMoveCompletesAtItsOrderedGoal prints every tick of the first seventy

@@ -3,7 +3,7 @@ package audio
 import (
 	"math"
 
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // Positional audio is presentation-only and must never mutate authoritative

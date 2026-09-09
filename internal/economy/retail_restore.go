@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 )
 
 const retailUnitAccountSize = 48

@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // LOSTable is one compiled LOS table [02 "SIDE and battle interface data"] [fmt tdf] [PLAN_02 C15].

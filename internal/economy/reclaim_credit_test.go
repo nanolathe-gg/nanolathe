@@ -3,7 +3,7 @@ package economy
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 )
 
 // reclaimCreditService is a bare ledger with one computer-controlled slot and

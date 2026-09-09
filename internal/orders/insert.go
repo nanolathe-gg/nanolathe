@@ -10,7 +10,7 @@ package orders
 import (
 	"fmt"
 
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // staticPurgeSurvivor is bit 2 of a descriptor's static gate mask. It is the

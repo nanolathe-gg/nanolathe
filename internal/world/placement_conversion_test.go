@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 func TestPlacementConversionRejectsInvalidExtents(t *testing.T) {

@@ -1,7 +1,7 @@
 package ebitenapp
 
 import (
-	"github.com/nanolathe/nanolathe/internal/client"
+	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"testing"
 )
 

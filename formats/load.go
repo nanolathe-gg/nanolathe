@@ -3,7 +3,7 @@ package formats
 import (
 	"io"
 
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 func readVFS(fs vfs.FSOps, name string) ([]byte, error) {

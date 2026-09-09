@@ -14,7 +14,7 @@ import (
 	"runtime/pprof"
 	"time"
 
-	"github.com/nanolathe/nanolathe/internal/headless"
+	"github.com/nanolathe-gg/nanolathe/internal/headless"
 )
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }

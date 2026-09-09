@@ -1,6 +1,6 @@
 package client
 
-import "github.com/nanolathe/nanolathe/internal/input"
+import "github.com/nanolathe-gg/nanolathe/internal/input"
 
 // MouseState is internal/input's mouse vocabulary, re-exported at the client
 // edge so UI and command code share one state model.

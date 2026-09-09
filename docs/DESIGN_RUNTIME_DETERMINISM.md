@@ -394,7 +394,7 @@ under a `B` prefix so it cannot collide with the runtime set; a comment reading
 
 ### 3.1 Boot — B1…B6
 
-**B1 — one module.** The module path is `github.com/nanolathe/nanolathe` and
+**B1 — one module.** The module path is `github.com/nanolathe-gg/nanolathe` and
 `vfs/` and `formats/` compile under it with no remnant of an earlier module.
 
 **B2 — one content root.** `--root` defaults to `$NANOLATHE_TA_ROOT`, then to

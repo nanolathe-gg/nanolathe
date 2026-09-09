@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/nanolathe/nanolathe/internal/session"
-	"github.com/nanolathe/nanolathe/internal/settings"
+	"github.com/nanolathe-gg/nanolathe/internal/session"
+	"github.com/nanolathe-gg/nanolathe/internal/settings"
 )
 
 // attachSettings loads the persisted frontend preferences and applies them to

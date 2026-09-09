@@ -3,7 +3,7 @@ package combat
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // The mission Immunity bit (units.ImmunityStatus, status-word bit 15) keeps a

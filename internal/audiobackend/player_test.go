@@ -3,7 +3,7 @@ package audiobackend
 import (
 	"testing"
 
-	retailaudio "github.com/nanolathe/nanolathe/internal/audio"
+	retailaudio "github.com/nanolathe-gg/nanolathe/internal/audio"
 )
 
 func TestBackendIsLazy(t *testing.T) {

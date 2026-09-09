@@ -5,8 +5,8 @@ package gui
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/testsupport"
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/internal/testsupport"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 func TestRetailCommanderPagesUseAuthoredSixProductSlots(t *testing.T) {

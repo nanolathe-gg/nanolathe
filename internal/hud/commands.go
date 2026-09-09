@@ -3,7 +3,7 @@ package hud
 import (
 	"strings"
 
-	"github.com/nanolathe/nanolathe/internal/input"
+	"github.com/nanolathe-gg/nanolathe/internal/input"
 )
 
 // NotHandled is the result ParseButtonLatch returns when the button name

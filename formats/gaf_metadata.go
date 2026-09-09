@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // GAFMetadata is the validated, pixel-free index of an animation bank. It

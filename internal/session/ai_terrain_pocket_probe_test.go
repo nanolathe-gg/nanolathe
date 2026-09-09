@@ -17,8 +17,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/movement"
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe-gg/nanolathe/internal/movement"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // tanksh2 is the stock MOVEINFO class the level-1/2 ground vehicles carry:

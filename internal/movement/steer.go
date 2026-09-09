@@ -35,7 +35,7 @@
 package movement
 
 import (
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // Flag bits for the below-water halving gate [04 §8.1] C21.

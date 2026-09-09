@@ -1,6 +1,6 @@
 package movement
 
-import "github.com/nanolathe/nanolathe/internal/world"
+import "github.com/nanolathe-gg/nanolathe/internal/world"
 
 func commitRectInBounds(t *world.Terrain, anchor Cell, fx, fz int16) bool {
 	if t == nil {

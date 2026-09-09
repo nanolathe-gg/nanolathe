@@ -1,6 +1,6 @@
 package gui
 
-import "github.com/nanolathe/nanolathe/formats"
+import "github.com/nanolathe-gg/nanolathe/formats"
 
 // Kind is the stored control-type byte [02 §6 "Interface panel files (.gui)"] [07 §4].
 // Retail gadgets have 347-byte record identity [07 §4][02 §6 "Control-kind mapping"]; Go uses named fields per I13.

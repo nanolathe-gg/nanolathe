@@ -3,7 +3,7 @@ package movement
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/path"
+	"github.com/nanolathe-gg/nanolathe/internal/path"
 )
 
 func TestP28CollisionHistoryOnlyCommitsWhenEnabled(t *testing.T) {

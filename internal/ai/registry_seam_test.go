@@ -3,7 +3,7 @@ package ai
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 )
 
 // The per-side target registry rebuild and the 30-tick strategic refresh are

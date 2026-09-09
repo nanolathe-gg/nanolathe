@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/nanolathe/nanolathe/internal/cob"
-	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/cob"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
 )
 
 // authorTestUnitScripts supplies the smallest behavior-free script needed by

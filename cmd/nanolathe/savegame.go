@@ -6,9 +6,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/nanolathe/nanolathe/internal/gui"
-	"github.com/nanolathe/nanolathe/internal/save"
-	"github.com/nanolathe/nanolathe/internal/session"
+	"github.com/nanolathe-gg/nanolathe/internal/gui"
+	"github.com/nanolathe-gg/nanolathe/internal/save"
+	"github.com/nanolathe-gg/nanolathe/internal/session"
 )
 
 // The save and load dialogs are one authored file, `LOADGAME.GUI`, opened in

@@ -1,6 +1,6 @@
 package session
 
-import "github.com/nanolathe/nanolathe/internal/units"
+import "github.com/nanolathe-gg/nanolathe/internal/units"
 
 // Presentation caches must retire when a new unit occupies the same slot,
 // including replacement between two publications [03 R-COMP-01 §4][I6].

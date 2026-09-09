@@ -3,8 +3,8 @@ package gpurender
 import (
 	"image"
 
-	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/drawlist"
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 )
 
 // Geometry preparation for the model slot atlas: face triangulation, the

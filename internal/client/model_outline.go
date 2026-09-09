@@ -4,7 +4,7 @@ package client
 // [03 R-RAST-01 §5].
 
 import (
-	presentationrender "github.com/nanolathe/nanolathe/internal/render"
+	presentationrender "github.com/nanolathe-gg/nanolathe/internal/render"
 )
 
 // attachModelTrace wires the parity trace to the image actually rasterized

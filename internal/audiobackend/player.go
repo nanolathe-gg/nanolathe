@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2/audio"
-	retailaudio "github.com/nanolathe/nanolathe/internal/audio"
+	retailaudio "github.com/nanolathe-gg/nanolathe/internal/audio"
 )
 
 // Backend is the PCM output over Ebitengine audio [03 §8.2][03 §8.3].
