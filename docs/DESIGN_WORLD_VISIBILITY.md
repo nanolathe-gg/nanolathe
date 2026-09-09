@@ -674,3 +674,11 @@ Open questions carried by the contracts above rather than by a marker:
 * The word grid's universal semantic name is deliberately not established, so
   the code calls it the word mask and never `explored` or `radar`; its consumer
   census is closed `[03 §3.1]` `[03 R-LAYER §1]`.
+* **Live visibility-mode transition.** The command boundary can change Mapping,
+  Line of Sight, and LOS Type during a battle `[07 R-CAM-01 §6]`. `SetMode`
+  currently changes the mode and invalidates presentation while retaining its
+  grids and observer footprints. The retail refresh operation's effect on those
+  stores is Unknown, including mapping-history preservation and removal of a
+  footprint published under the preceding raster `[03 R-VIS-01 §1]`
+  `[03 R-VIS-01 §2]`. No reset policy is a design contract until that operation
+  is traced.
