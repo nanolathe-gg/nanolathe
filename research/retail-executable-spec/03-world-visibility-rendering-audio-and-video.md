@@ -2714,12 +2714,31 @@ Mapping = 0 is `Terrain is visible.`; Mapping ≠ 0 is `Terrain is blacked out
 until explored.` The retail default (all three = 1) is therefore **Unmapped +
 True line of sight**.
 
-**Established — live commands alter the same word.** The chat commands
-`LOSType`, `LOS`, `Mapping`, and `NowISee` modify live bits 2, 1, 0, and
-bits 0–1 respectively, then invoke a visibility-presentation refresh
-([07 R-CAM-01 §6]). They do not alter the separate setup record. The exact
-grid and observer-record effects of that refresh remain Unknown below; the
-established command path means a mid-battle mode change is reachable.
+**Established — live commands alter the same word and immediately rebuild
+coverage.** The chat commands `LOSType`, `LOS`, `Mapping`, and `NowISee`
+modify live bits 2, 1, 0, and bits 0–1 respectively, then invoke the bulk
+visibility refresh ([07 R-CAM-01 §6]). They do not alter the separate setup
+record. The refresh always refills every eligible current-coverage byte grid
+from the new bit 1. Its per-unit clear and publication pass is gated by current
+coverage: when bit 1 is clear it preserves every stored observer field and
+does no immediate unit raster. When bit 1 is set, Circular mode re-rasterizes
+every defined unit from its current position with the new shape. The terrain-ray
+path clears each defined unit's stored coverage byte and calls its ordinary
+refresh, so the new raster does not compare a ray emitter height with a
+circular shape index. It retains the stored tile pair, however: any ray
+observer whose current tile still equals that pair and whose newly computed
+emitter byte is in `0..5` can pass that ordinary throttle after the grid wipe
+and publish nothing. Apart from this retained-tile case, moved and stationary
+ray observers are rasterized from their current state. A removed unit has no
+defined record to re-publish. The byte-grid reset, rather than an attempted
+retirement through the new raster, disposes of every preceding current-coverage
+footprint.
+
+The refresh has a separate history-reset argument. `LOSType` and `LOS` leave
+the mapping word grid intact, preserving history while rebuilding current
+coverage. `Mapping` and `NowISee` request a word-grid refill using the new bit
+0: mapped fills every usable player bit, unmapped clears the grid before the
+new stamps accumulate. The refresh then invalidates the fog presentation.
 
 **What each state changes in the simulation.** Nothing branches on a
 "LOS mode" enumeration; the three bits are consumed separately:
@@ -3047,10 +3066,14 @@ raised Y.
 mode it is the emitter height byte; in sprite-mask mode it is the quantized
 shape index. The refresh throttle compares whichever one its own mode
 produces. A live change of mode-word bit 2 is reachable through `LOSType`
-([07 R-CAM-01 §6]), so the next ordinary refresh would otherwise compare
-incommensurable values. Whether the command's separate refresh operation
-reconstructs the grids and observer records before that comparison is Unknown
-below.
+([07 R-CAM-01 §6]). When switching to terrain-ray with current coverage
+enabled, its command refresh clears the stored byte and re-enters each defined unit through the ray refresh
+before a later ordinary refresh can compare the two encodings. The retained
+tile pair admits the low-emitter exception stated above. When current coverage
+is disabled, the command instead preserves those observer fields and performs
+no immediate raster. In both cases the current-coverage grids are refilled
+first, so a preceding current-coverage footprint cannot survive the mode
+change.
 
 **The refresh throttle and the publication gates**, exactly, with all shifts
 arithmetic (floor) unless stated:
@@ -9534,14 +9557,6 @@ body — most under `R-<id>` headings — and are not restated here.
   row-first, column-first, and diagonal orderings). Marked `TODO(question)`.
 - Minimap marker blit site · §3.9 · static trace. The layer ordering
   (contacts overwrite markers) is supported inference. Marked `TODO(question)`.
-- The visibility-presentation refresh reached by `LOSType`, `LOS`, `Mapping`,
-  and `NowISee`: whether it rebuilds or clears the word grid, byte grids, and
-  saved observer footprints; whether mapping history survives; and which
-  raster removes a prior Circular or True footprint · [R-VIS-01 §1]
-  `[R-VIS-01 §2]` [07 R-CAM-01 §6] · trace the refresh callee's grid and
-  observer-record writes, then observe stationary, moved, and retired observers
-  across each command transition.
-
 ### Renderer
 
 - **Implementation reconciliation (Unknown):** the normal-scale CPU model

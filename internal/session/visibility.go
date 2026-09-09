@@ -112,7 +112,18 @@ func spriteObserverTile(u *units.Unit, seaLevel uint8) (cx, cz int32) {
 // the per-tick phase-5 sweep — must ask through here; applying the ray shear in
 // Circular mode moves what units can see.
 func observerCell(s *Session, u *units.Unit, emitter uint8) (cx, cz int32) {
-	if s != nil && s.Vis != nil && !s.Vis.TerrainRay() {
+	if s != nil && s.Vis != nil {
+		return observerCellForMode(s, u, emitter, s.Vis.Mode())
+	}
+	return observerTile(u, emitter)
+}
+
+// observerCellForMode derives a record for an explicitly selected raster. A
+// live mode command builds target-mode records before it updates the service;
+// reusing observerCell there would incorrectly retain the previous raster's
+// coordinate system [03 R-VIS-01 §1][03 R-VIS-01 §2].
+func observerCellForMode(s *Session, u *units.Unit, emitter uint8, mode visibility.Mode) (cx, cz int32) {
+	if !mode.TerrainRay() {
 		return spriteObserverTile(u, seaLevelFor(s))
 	}
 	return observerTile(u, emitter)
@@ -407,4 +418,37 @@ func (s *Session) ownerLocallySimulated(owner uint8) bool {
 	}
 	p := &s.Econ.Players[owner]
 	return p.Exists && (p.ControllerState == 1 || p.ControllerState == 2)
+}
+
+// visibilityModeRefreshInputs assembles the active player byte-grid eligibility
+// and target-raster observer records for one live visibility command. IterSliced
+// preserves the established player-then-slot enumeration; removed units have no
+// record and are not re-published [03 R-VIS-01 §1].
+func visibilityModeRefreshInputs(s *Session, mode visibility.Mode) ([10]bool, []visibility.ModeRefreshObserver) {
+	var eligible [10]bool
+	if s == nil {
+		return eligible, nil
+	}
+	if s.Econ != nil {
+		for i := range s.Econ.Players {
+			p := &s.Econ.Players[i]
+			eligible[i] = p.Exists && p.ControllerState >= 1 && p.ControllerState <= 3 && p.Side != 10
+		}
+	}
+	if s.Units == nil {
+		return eligible, nil
+	}
+	observers := make([]visibility.ModeRefreshObserver, 0)
+	for _, u := range s.Units.IterSliced() {
+		if u == nil || !u.Alive {
+			continue
+		}
+		hb := heightByteAt(u, seaLevelFor(s))
+		cx, cz := observerCellForMode(s, u, hb, mode)
+		observers = append(observers, visibility.ModeRefreshObserver{
+			ID:       visibility.ObserverID(u.Handle),
+			Observer: visibility.Observer{Owner: visibility.PlayerID(u.Owner), CX: cx, CZ: cz, HeightByte: hb, Radius: radiusFor(u)},
+		})
+	}
+	return eligible, observers
 }

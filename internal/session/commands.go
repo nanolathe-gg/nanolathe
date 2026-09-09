@@ -665,7 +665,13 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		mode := s.Vis.Mode()
 		mode ^= c.Visibility.ToggleMask & semantic
 		mode &^= c.Visibility.ClearMask & semantic
-		s.Vis.SetMode(mode)
+		// Mapping and NowISee carry the bulk refresh's history-reset argument.
+		// The latter still resets history when bits are already clear; the command
+		// itself, rather than a detected mode transition, selects that argument.
+		resetHistory := c.Visibility.ToggleMask&visibility.ModeHistoryEnabled != 0 ||
+			c.Visibility.ClearMask&visibility.ModeHistoryEnabled != 0
+		eligible, observers := visibilityModeRefreshInputs(s, mode)
+		s.Vis.RefreshMode(mode, resetHistory, eligible, observers)
 		return
 	case HumanDoubleShot, HumanHalfShot:
 		if s.Mission != nil && s.Mission.Type == mission.TypeCampaign {

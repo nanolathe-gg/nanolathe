@@ -223,6 +223,17 @@ mode, the quantized shape index changed. Removal is branch-specific, because the
 stored coverage byte means the emitter height in one branch and the shape index
 in the other `[03 R-VIS-01 §2]`.
 
+A live `LOSType`, `LOS`, `Mapping`, or `NowISee` command uses `RefreshMode`,
+not `SetMode`: it always refills eligible current grids, refills history only
+for Mapping and NowISee (including a repeated NowISee), and skips every observer
+mutation while current coverage is disabled. Circular mode directly stamps each
+defined unit under the target raster. The ray branch clears only its saved byte,
+retains the saved pair, and enters the normal `<=5` low-emitter throttle; the
+saved pair is a sprite frame origin after a Circular transition, while a ray
+record holds its terrain tile. The cleared current grids dispose of old coverage
+without attempting a retirement through the new raster `[03 R-VIS-01 §1]`
+`[03 R-VIS-01 §2]` `[07 R-CAM-01 §6]`.
+
 The observer record itself is built session-side: the unit's world height raised
 to at least one above sea level and narrowed to a signed word, plus the model
 top as the low byte of the definition's reference height, clamped into a byte;
@@ -492,7 +503,15 @@ and returns, and only then does the new raster publish `[03 §3.2]`
 otherwise zero; with current coverage disabled every player's byte grid fills
 with one, otherwise zero. Then every active footprint republishes and the stored
 footprint table is replaced, so no stale record can throttle a republication
-`[03 §3.2]`.
+`[03 §3.2]`. Live commands use a separate refresh contract. It always resets
+current coverage. With current coverage enabled, Circular mode reconstructs
+each defined observer footprint; terrain-ray mode clears the saved byte then
+re-enters the ordinary throttle, so an unchanged saved tile with an emitter
+byte in `0..5` may remain unstamped after the reset. With current coverage
+disabled, it preserves observer fields and performs no immediate unit raster.
+Removed units do not republish. `LOSType` and `LOS` preserve word-grid history,
+while `Mapping` and `NowISee` refill it from the new mapping bit before
+publication `[03 R-VIS-01 §1]` `[07 R-CAM-01 §6]`.
 
 **C8** The predicate evaluates in this order `[03 §3.2]`:
 1. owner identity bypass — the queried player record equals the unit's owner ⇒
@@ -674,11 +693,3 @@ Open questions carried by the contracts above rather than by a marker:
 * The word grid's universal semantic name is deliberately not established, so
   the code calls it the word mask and never `explored` or `radar`; its consumer
   census is closed `[03 §3.1]` `[03 R-LAYER §1]`.
-* **Live visibility-mode transition.** The command boundary can change Mapping,
-  Line of Sight, and LOS Type during a battle `[07 R-CAM-01 §6]`. `SetMode`
-  currently changes the mode and invalidates presentation while retaining its
-  grids and observer footprints. The retail refresh operation's effect on those
-  stores is Unknown, including mapping-history preservation and removal of a
-  footprint published under the preceding raster `[03 R-VIS-01 §1]`
-  `[03 R-VIS-01 §2]`. No reset policy is a design contract until that operation
-  is traced.

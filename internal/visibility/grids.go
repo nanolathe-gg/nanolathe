@@ -87,12 +87,21 @@ type ObserverID uint32
 
 // footprint is a stored raster: what was published, and where [03 §3.2] C6.
 type footprint struct {
-	owner      PlayerID
+	owner PlayerID
+	// cx/cz and the fields below are an active byte-grid contribution. They
+	// serve retirement and stay separate from the retail saved observer record.
 	cx, cz     int32
 	heightByte uint8
 	radius     int32
 	quantized  int32 // shape index (sprite) or table index (ray)
 	live       bool
+
+	// storedCX/storedCZ/storedByte are retail's shared saved record. A sprite
+	// stores its frame origin and shape byte; a ray stores its tile and emitter
+	// byte. Mode changes may reinterpret these bytes, so an inactive contribution
+	// must not erase them [03 R-VIS-01 §1][03 R-VIS-01 §2].
+	storedCX, storedCZ int32
+	storedByte         uint8
 }
 
 // New creates a Service for terrain t and mode [03 §3.1] C1.
@@ -194,12 +203,9 @@ func (s *Service) Mode() Mode {
 	return s.mode
 }
 
-// SetMode updates the mode word; callers use it for history/current toggles.
-// TODO(question): Retail's four live visibility commands refresh presentation
-// after changing these semantic bits, but the refresh callee's effect on the
-// word grid, byte grids, and stored observer footprints is not established.
-// Trace that callee and its callers to determine whether it reconstructs
-// coverage, preserves mapping history, or intentionally leaves it unchanged
+// SetMode updates the mode word without rebuilding grids. It is retained for
+// initialization and direct service users; live visibility commands must use
+// RefreshMode so their command-specific grid and observer refresh runs
 // [03 R-VIS-01 §1][03 R-VIS-01 §2][07 R-CAM-01 §6].
 func (s *Service) SetMode(m Mode) {
 	if s == nil {

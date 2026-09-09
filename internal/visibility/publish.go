@@ -246,36 +246,36 @@ func (s *Service) Refresh(id ObserverID, ob Observer) {
 	if ray {
 		quantized = int32(s.rayTableIndex(ob.Radius))
 	}
+	storedCX, storedCZ := ob.CX, ob.CZ
+	storedByte := ob.HeightByte
+	if !ray {
+		storedCX, storedCZ = s.spriteStoredOrigin(ob.CX, ob.CZ, ob.Radius)
+		storedByte = uint8(quantized)
+	}
 
 	old, had := s.footprints[id]
-	if had && old.live {
-		moved := old.cx != ob.CX || old.cz != ob.CZ || old.owner != ob.Owner
-		var changed bool
+	if had {
+		moved := old.owner != ob.Owner || old.storedCX != storedCX || old.storedCZ != storedCZ
+		changed := old.storedByte != storedByte
 		if ray {
-			d := int32(ob.HeightByte) - int32(old.heightByte)
+			d := int32(ob.HeightByte) - int32(old.storedByte)
 			if d < 0 {
 				d = -d
 			}
 			changed = d > 5 // strictly more than 5 [C6]
-		} else {
-			changed = old.quantized != quantized
 		}
 		if !moved && !changed {
-			return // throttled: nothing recomputed [C6]
+			return // throttled even when no active contribution remains [C6]
 		}
-		// Remove the old current-coverage footprint, gated exactly as [C6]
-		// states: only when current coverage is enabled and the stored height
-		// byte was nonzero.
-		s.removeFootprint(old)
+		if old.live {
+			s.removeFootprint(old)
+		}
 	}
 
 	next := footprint{
-		owner:      ob.Owner,
-		cx:         ob.CX,
-		cz:         ob.CZ,
-		heightByte: ob.HeightByte,
-		radius:     ob.Radius,
-		quantized:  quantized,
+		owner: ob.Owner, cx: ob.CX, cz: ob.CZ, heightByte: ob.HeightByte,
+		radius: ob.Radius, quantized: quantized,
+		storedCX: storedCX, storedCZ: storedCZ, storedByte: storedByte,
 	}
 	// An out-of-bounds origin stores an empty footprint and returns [C6].
 	if uint32(ob.CX) >= uint32(s.W) || uint32(ob.CZ) >= uint32(s.H) {
