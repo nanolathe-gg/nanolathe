@@ -872,6 +872,25 @@ func (s *Session) initMeteor() error {
 	return nil
 }
 
+// armMeteor enters one storm window and consumes its four scheduling draws.
+// The ordinary phase-9 caller applies the enabled-bit test afterwards; the
+// argument-free local command deliberately does not [06 §6.5][07 R-CAM-01 §6].
+func (s *Session) armMeteor(tick uint32) {
+	if s == nil || !s.Meteor.Initialized || s.World == nil {
+		return
+	}
+	crt := s.CrtRNG()
+	if crt == nil {
+		return
+	}
+	s.Meteor.Active = true
+	s.Meteor.StrikeEnds = tick + uint32(s.Meteor.DurationTicks)
+	s.Meteor.NextStrike = s.Meteor.StrikeEnds + uint32(s.Meteor.IntervalTicks)
+	s.Meteor.NextHit = tick
+	mapW, mapH := s.World.CellW, s.World.CellH
+	s.Meteor.TargetX, s.Meteor.TargetZ, s.Meteor.OriginX, s.Meteor.OriginZ = combat.MeteorSchedule(crt, mapW, mapH)
+}
+
 // tickMeteor implements the phase-9 shower scheduler per [R-CORE-01 §4.4.1]
 // [08 "Meteor showers"] [02 Meteor scheduler] [06 §6.5].
 // DET-03 audit: the four scheduling draws are consumed ONLY on due
@@ -910,12 +929,7 @@ func (s *Session) tickMeteor(tick uint32) {
 		// is disabled [06 §6.5][R-CORE-01 §4.4.1]. Target = one draw scaled by
 		// map depth then one by map width; origin = target plus a depth-axis
 		// offset (draw*10)/0x8000−15 and a width-axis offset (draw*30)/0x8000−15.
-		mapW, mapH := s.World.CellW, s.World.CellH
-		s.Meteor.TargetX, s.Meteor.TargetZ, s.Meteor.OriginX, s.Meteor.OriginZ = combat.MeteorSchedule(crt, mapW, mapH)
-		s.Meteor.Active = true
-		s.Meteor.StrikeEnds = tick + uint32(s.Meteor.DurationTicks)                // trunc(duration*30) at load
-		s.Meteor.NextStrike = s.Meteor.StrikeEnds + uint32(s.Meteor.IntervalTicks) // trunc(interval*30) at load
-		s.Meteor.NextHit = tick                                                    // first hit on the opening tick
+		s.armMeteor(tick)
 		if !s.Meteor.Enabled {
 			s.Meteor.Active = false
 		}

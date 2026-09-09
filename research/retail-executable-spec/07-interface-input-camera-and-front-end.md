@@ -522,7 +522,7 @@ true-local, while visibility and status-caption ownership use the viewing slot
 | `DoubleShot` | toggle flags bit 7 |
 | `HalfShot` | toggle flags bit 8 |
 | `NowISee` | clear render-flags bits 0 and 1; refresh |
-| `Meteor [n]` | one word: meteor event; `Meteor n`: `n ≠ 0` → one meteor kind, `0` → the other (doc 03 / doc 06 effects) |
+| `Meteor [n]` | one word: force-arm a storm immediately; `Meteor n`: set the scheduler's enable word to one when parsed `n ≠ 0`, otherwise zero, without changing the current storm (doc 06 §6.5) |
 | `MakePoster …` | write a `BIGSHOT` capture into `<install>\screenshots` and reset the wall-clock base (argument grammar not traced — **Unknown**, static trace; developer tooling) |
 
 **Established fact — visibility commands and setup persistence.** The four
@@ -3240,6 +3240,23 @@ left by `PREV` persist at the next save point.
 | `side` | `NEWGAME` side buttons; load-game `summary` | `SINGLE` opener, briefing planet override, briefing font index |
 | `Difficulty` | `NEWGAME` / `ENDMSN` / `RESTART` / `SKIRMISH` `Difficulty` | [08 R-CAMP-01 §3] |
 
+**Established fact — gamma load, factor and palette application.** A missing
+`Gamma` registry value loads as 12. A loaded DWORD equal to 10 is changed to 12
+in memory only; every other DWORD is retained without a slider-range clamp.
+The `Gamma n` command computes and stores the binary32 display factor as
+`float32(float64(n) × float64(float32(0.1)))`, with `n` the signed parsed
+integer. Slider changes and initial application instead compute
+`float32(0.5 − float64(g) × float64(float32(−1.0/24)))`, equivalent to the
+familiar `0.5 + g/24` only after preserving that binary32 reciprocal and the
+single final store.
+
+Rebuilding the display palette starts from the preserved 256-entry source
+palette. Each source red, green and blue byte is treated as unsigned and
+multiplied by that binary32 factor at working precision. A product greater
+than 255 is replaced by 255; there is no lower clamp and no power curve. The
+remaining value is truncated toward zero and its low byte is retained. The
+fourth output byte of every entry is zero.
+
 `WindowPositions\` is not a game key: it belongs to the Cavedog library's
 developer overlay windows (`Performance status`, `Memory Status`), under
 `Software\Cavedog Entertainment\Cavedog library\WindowPositions\<title>`
@@ -3613,8 +3630,6 @@ validation, and endgame continuation.
 
 ### Unknown
 
-- The `Gamma` factor's exact palette application beyond the `0.5 + g/24`
-  factor · §5 [R-FE-01 §11], doc 03 · static trace.
 - Whether the label under a briefing blink word also draws the run (so the
   blink overdraws it) or elides it · §5 [R-FE-02 §7] · static trace of the
   pager's copy loop.

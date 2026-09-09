@@ -263,6 +263,17 @@ func (b *battleSession) dispatchLocalCommand(text string) {
 		if b.sess != nil && battleSessionKind(b) == 2 {
 			b.radarOptions ^= radarAllContactsOption
 		}
+	case "meteor":
+		if b.sess != nil && battleSessionKind(b) == 2 {
+			argumentPresent := len(words) > 1
+			_ = b.sess.EnqueueHumanCommand(session.HumanCommand{
+				Kind: session.HumanMeteor,
+				Meteor: session.HumanMeteorCommand{
+					ArgumentPresent: argumentPresent,
+					Enabled:         localCommandInt(words, 1) != 0,
+				},
+			})
+		}
 	case "switchalt":
 		persist := len(words) == 1
 		value := localCommandInt(words, 1) & 1

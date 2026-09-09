@@ -58,6 +58,7 @@ const (
 	HumanVisibility
 	HumanDoubleShot
 	HumanHalfShot
+	HumanMeteor
 )
 
 type HumanSelectionCommand struct{ Handles []pool.Handle }
@@ -133,6 +134,10 @@ type HumanVisibilityCommand struct {
 	ToggleMask visibility.Mode
 	ClearMask  visibility.Mode
 }
+type HumanMeteorCommand struct {
+	ArgumentPresent bool
+	Enabled         bool
+}
 type HumanStockpileCommand struct {
 	Unit   pool.Handle
 	Queued bool
@@ -185,6 +190,7 @@ type HumanCommand struct {
 	View             HumanViewCommand
 	Give             HumanGiveCommand
 	Visibility       HumanVisibilityCommand
+	Meteor           HumanMeteorCommand
 }
 
 func cloneHumanHandles(in []pool.Handle) []pool.Handle {
@@ -659,6 +665,19 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		} else {
 			s.Combat.ToggleHalfShot()
 		}
+		return
+	case HumanMeteor:
+		if s.Mission != nil && s.Mission.Type == mission.TypeCampaign {
+			return
+		}
+		if c.Meteor.ArgumentPresent {
+			s.Meteor.Enabled = c.Meteor.Enabled
+			return
+		}
+		// The command-only form enters the same storm-arm body as a due
+		// schedule, but deliberately bypasses the enabled-bit test [07
+		// R-CAM-01 §6][06 §6.5].
+		s.armMeteor(tick)
 		return
 	}
 	if s.Units == nil {
