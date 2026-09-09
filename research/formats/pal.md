@@ -54,8 +54,9 @@ while its resolved colors are opaque.
 Real example — the first 8 entries of `palettes/PALETTE.PAL`
 (`totala1.hpi`), which are the classic Windows/VGA primaries:
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
-
+**Publication omission:** The retail-derived example is omitted from this
+edition. The surrounding format description retains its stated evidence and
+confidence.
 
 index 0 = black, 1 = maroon, 2 = green, 3 = olive, 4 = navy, 5 = purple,
 6 = teal, 7 = gray … index 255 = white.
@@ -96,8 +97,9 @@ result = LHT[level * 256 + index]          level 0 .. 31, index 0 .. 255
 Byte-for-byte layout: 8192 raw bytes, no header, row stride 256. The engine
 loads the file as a single 8192-byte block and indexes it as
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
-
+```
+dst = table[level * 256 + src]
+```
 
 where `src` is the source palette index after the 256-byte logical-to-physical
 lookup and `dst` is again a palette index (resolved to RGB only at present time

@@ -53,8 +53,9 @@ Immediately followed by `entry_count` × u32 absolute offsets, one per entry.
 
 Real example — `anims/ARMALAB.GAF` from `totala1.hpi`:
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
-
+**Publication omission:** The retail-derived example is omitted from this
+edition. The surrounding format description retains its stated evidence and
+confidence.
 
 version `0x00010100`, 6 entries, unknown 0, first entry @ 0x5D0.
 
@@ -82,8 +83,9 @@ These are whole simulation ticks per frame. The cursor's test is "countdown belo
 
 Real example — entry 0 of `ARMALAB.GAF`:
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
-
+**Publication omission:** The retail-derived example is omitted from this
+edition. The surrounding format description retains its stated evidence and
+confidence.
 
 2 frames, unknown1=1, name `ARMACONM`, frame ref 0 = { ptr 0x510,
 value 10 }. Note that pixel data is deduplicated: in `ARMALAB.GAF` the
@@ -109,8 +111,9 @@ but readers must not assume pixel extents are uniquely owned.
 
 Real example — frame @ 0x510 of `ARMALAB.GAF`:
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
-
+**Publication omission:** The retail-derived example is omitted from this
+edition. The surrounding format description retains its stated evidence and
+confidence.
 
 64×64, offset (281, 171), unknown1=9, compressed=1, no subframes, data @
 0x24, trailing u32 = 0.
@@ -157,8 +160,9 @@ pixel, not transparency.
 Real example — first row of the 80×40 `Credits` frame in
 `anims/MAINMENU.GAF` (row payload is 52 bytes):
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
-
+**Publication omission:** The retail-derived example is omitted from this
+edition. The surrounding format description retains its stated evidence and
+confidence.
 
 If a row's commands would exceed `width` pixels, or the payload runs out
 early, the file is malformed. After producing `width` pixels the payload

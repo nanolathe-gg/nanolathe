@@ -20,8 +20,19 @@ compiler value scaling, BOS authored vocabulary, and retail asset census.
 
 ## Format at a glance
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
-
+```
++--------------------------------+ 0x00
+| Header (44 bytes = 11 × u32)   |
++--------------------------------+
+| Code (u32 words × code_len)    |  all scripts back to back;
+|                                |  entry points via index table
++--------------------------------+
+| ScriptCodeIndexArray  u32[n]   |  entry word index per script
+| ScriptNameOffsetArray u32[n]   |  -> "Create\0" ...
+| PieceNameOffsetArray  u32[m]   |  -> "base\0" "turret\0" ...
+| name strings                   |
++--------------------------------+
+```
 
 Every field, table entry, and instruction word is a little-endian u32. All
 offsets are absolute file offsets. Code addresses (jump targets, entry
@@ -50,8 +61,9 @@ Real example — `scripts/CORTRUCK.COB` from `totala1.hpi` (this is the same
 unit the original format note documented; the retail file matches it
 byte-for-byte):
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
-
+**Publication omission:** The retail-derived example is omitted from this
+edition. The surrounding format description retains its stated evidence and
+confidence.
 
 version=4, 3 scripts, 1 piece, 165 code words, 0 statics, code @ 0x2C,
 index array @ 0x2C0 = `[0, 83, 86]`, script names @ 0x2CC =
@@ -268,8 +280,9 @@ version-4 files.
 `CORTRUCK.COB`'s `Create` (entry word 83) and the start of `Killed`
 (entry word 86), disassembled from the retail file:
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
-
+**Publication omission:** The retail-derived example is omitted from this
+edition. The surrounding format description retains its stated evidence and
+confidence.
 
 ## The BOS language
 
@@ -280,8 +293,9 @@ stock scripts (`scripts/ARMFLASH.BOS` and the BOS guide's excerpts of
 
 ### Declarations and preprocessor
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
-
+**Publication omission:** The retail-derived example is omitted from this
+edition. The surrounding format description retains its stated evidence and
+confidence.
 
 The `piece` list order defines the piece indexes used when a script assigns
 a piece *by number* (e.g. `piecenum = 1;` in `QueryLandingPad` refers to the
@@ -301,8 +315,9 @@ source for both the constants and idiomatic BOS.
 
 ### Statements
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
-
+**Publication omission:** The retail-derived example is omitted from this
+edition. The surrounding format description retains its stated evidence and
+confidence.
 
 Axis keywords: `x-axis`, `y-axis`, `z-axis`. For a piece, −Z is its facing
 (see [3do.md](3do.md) — the modeling notes say +Z, retail data says −Z);

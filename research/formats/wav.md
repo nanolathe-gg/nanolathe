@@ -35,8 +35,9 @@ The currently inspected installation also contains these legacy containers:
 
 Real example — `sounds/BUTTON12.WAV` from `totala1.hpi`:
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
-
+**Publication omission:** The retail-derived example is omitted from this
+edition. The surrounding format description retains its stated evidence and
+confidence.
 
 PCM, 1 channel, 11025 Hz, 8-bit → a 471-sample button click.
 

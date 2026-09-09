@@ -71,8 +71,8 @@ type Rect struct {
 // Go uses these named fields per I13, not packing.
 type Gadget struct {
 	// Common header [02 §6 "COMMON"] — every gadget.
-	Kind          Kind   // TODO(question): Historical analysis omitted; independently worded behavior is needed.
-	Name          string // TODO(question): Historical analysis omitted; independently worded behavior is needed.
+	Kind          Kind   // Authored gadget ID [02 §6].
+	Name          string // Authored gadget name [02 §6][07 §4].
 	Assoc         int32  // assoc/group index [02 §6]
 	Rect          Rect   // xpos,ypos,width,height stored as int16 [02 §6]
 	Attribs       uint32 // 32-bit attribute word [02 §6]

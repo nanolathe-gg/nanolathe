@@ -58,8 +58,9 @@ each section.
 
 Real example — `maps/The Pass.tnt` from `totala2.hpi`:
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
-
+**Publication omission:** The retail-derived example is omitted from this
+edition. The surrounding format description retains its stated evidence and
+confidence.
 
 version 0x2000; 224×102 attribute cells (= 3584×1632 pixels, the OTA says
 `size=7 x 4` 512-pixel squares); tile map @ 0x40; attributes @ 0x2CE0;

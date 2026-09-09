@@ -158,7 +158,11 @@ layer stamping, A* blocking only on layer 0 — is `[04 §6.1 R-DOC04-B]`.
 
 **Status:** Closed.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Spec A** `[fmt tnt]`, fringe-anchor fields: "at fringe members, signed offsets
+locating their anchor cell", marked *supported inference*. **Spec B**
+`[04 §6.2]`: the cell stores **target-cell coordinates**, and the resolver
+re-reads that cell's feature identifier before classifying. Two encodings of
+the same two bytes; only one can be right.
 
 **Observed:** the field is two bytes, and absolute cell coordinates cannot
 address a map wider than 256 cells per axis. The reference install's maps run

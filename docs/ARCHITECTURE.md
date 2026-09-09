@@ -4,8 +4,8 @@ Nanolathe is a clean-room reimplementation of the Total Annihilation engine in
 Go. Behavior comes from `research/retail-executable-spec/` (what the retail
 executable does) and `research/formats/` (how its files are laid out);
 content comes from the original assets, mounted at run time. See the
-[publication review](PUBLICATION.md) for the tracked remaster examples that
-need separate disposition. This document is the map of the Go tree: what each package is for,
+[publication review](PUBLICATION.md) for the excluded generated remaster art
+and the curated history boundary. This document is the map of the Go tree: what each package is for,
 how packages depend on each other, where the authoritative tick lives, how the
 build is verified, and how a citation in a comment is resolved. Each subsystem
 has its own design document; this one only says where the boundaries are.
@@ -436,8 +436,8 @@ at its sites, never defined here.
 | `[PLAN 11 Cn]` | contract `n` of the computer-player contract list, carried under the same numbers (C4–C9) by DESIGN_SESSIONS_AI_SAVE |
 | `[PLAN 01 C13]` | the content/VFS contract that a diagnostic names a provider without exposing a host path; DESIGN_CONTENT_VFS |
 | `[Cn]`, `Cn` (plan-relative) | contract `n` of the contract list the package's design document carries, numbered as its source plan numbered it: `internal/mission`, `internal/triggers`, `internal/ai` → DESIGN_SESSIONS_AI_SAVE; `internal/visibility` → DESIGN_WORLD_VISIBILITY (C1–C16); `internal/construction`, `internal/economy` → DESIGN_ECONOMY_CONSTRUCTION; `internal/session`, `internal/clock` → DESIGN_RUNTIME_DETERMINISM; `[C-1]`, `[C-3]` in `internal/client` → DESIGN_PRESENTATION_CLIENT |
-| `WU-nn-n`, `RWU-nn-n` | historical work-unit ids. They name the commit series that did the work, nothing in the current documents; resolve with `git log --grep 'WU-nn-n'` |
-| `RS-nn`, `RS-P0-nnn`, `RX-nn`, `ON-nn`, `F-P0-nnn`, `M-n`, `CNT-nn`, `P2-nn`, `SP-REV-nn`, `P28-OBS-nn` | historical review and dispatch-round item ids, same disposition as work-unit ids: `git log --grep`. Two are still defined by a document: `P2-03` in SPEC_CONFLICTS, `P28-OBS-00C` in INVARIANTS I2 |
+| `WU-nn-n`, `RWU-nn-n` | historical work-unit ids. They name the commit series that did the work, nothing in the current documents; resolve with `git -C /path/to/private-development-repository log --grep 'WU-nn-n'` |
+| `RS-nn`, `RS-P0-nnn`, `RX-nn`, `ON-nn`, `F-P0-nnn`, `M-n`, `CNT-nn`, `P2-nn`, `SP-REV-nn`, `P28-OBS-nn` | historical review and dispatch-round item ids, same disposition as work-unit ids: `git -C /path/to/private-development-repository log --grep`. Two are still defined by a document: `P2-03` in SPEC_CONFLICTS, `P28-OBS-00C` in INVARIANTS I2 |
 | `[F-P1-008]` | presentation-only zoom. `camera.Scale` (integer, 1 = native, 2 = the detail view) scales the world view, the chrome insets and pointer conversions; it is not a retail concept, changes no authoritative state, and is driven by F9, middle-drag and `--zoom`. DESIGN_INTERFACE_HUD_INPUT §3.8 and DESIGN_GPU_RENDERER §14 |
 | `DET-01` | random-stream ownership: no package-global fallback; the session injects the streams it constructs; presentation uses private copies. Enforced by the three guards in `internal/architecture` (§3) |
 | `DET-02` | the single phase registry: `Session.Step` delegates to one complete sub-tick boundary, which calls each of the twelve phases exactly once, in order, from one site |
@@ -498,3 +498,13 @@ implementation completion or a complete recovered-function census.
 | DESIGN_SESSIONS_AI_SAVE | session mode dispatch; battle session bootstrap; battle entry orchestrator; mission unit spawner; end of battle report screen; computer player manager; computer player per-player work; computer player order dispatch; placement builder; save writer; save reader; save account restore; feature account writer |
 | DESIGN_PRESENTATION_CLIENT | battle frame composer; terrain tile blitter; surface and clip descriptor; fixed effect pool tick; fixed effect draw pass; effect GAF handle table init; effect strip append; effect strip update sweep; effect strip notify pass; animation sequence advance; GAF playback cursor; GAF font loader; audio subsystem init; sound device buffer; sound cue emitter; CD audio tick |
 | out of scope (§1) | network packet drain; the LOUNGE2, MODEM, NEWMULTI, TCP, SERIAL and SELPROV screens |
+
+## Curated history boundary
+
+Historical work-unit identifiers in this document refer to the original private
+development record. The public history combines adjacent integration steps and
+does not promise to retain every work-unit message or intermediate correction.
+Use the current category documents and retained section anchors for behavioral
+citations; consult the original private record when a historical audit trail is
+needed. Publication omissions are marked explicitly and are not new behavioral
+claims.

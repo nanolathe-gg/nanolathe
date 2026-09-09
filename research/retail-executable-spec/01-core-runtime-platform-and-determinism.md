@@ -1691,7 +1691,17 @@ only when 28 bytes are returned (a larger on-disk box is tolerated — the
 request copies the first 28 bytes and ignores the remainder; a shorter box
 fails the scheduler restore without partial application). The layout is:
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+| Offset | Size | Field |
+|---:|---:|---|
+| 0x00 | 4 | scaled wall-clock anchor |
+| 0x04 | 4 | pending ticks to run |
+| 0x08 | 4 | last scaled delta |
+| 0x0C | 4 | fractional carry (`float32`) |
+| 0x10 | 4 | global simulation tick |
+| 0x14 | 2 | requested speed |
+| 0x16 | 2 | active speed |
+| 0x18 | 2 | slew counter |
+| 0x1A | 2 | pause/lag/pending bits |
 
 RNG state (Park–Miller process-wide and CRT TLS state) is outside this block
 and is absent from the bounded save-writer graph. Load re-enters the battle-entry

@@ -2121,7 +2121,14 @@ a clear; a row it would consider unwritten cannot occur.
   `xl < L → a += da * (L - xl), xl = L` and `xr > R → xr = R`, and writes the
   pixels `[xl, xr)` (nothing when the clamped width is not `> 0`).
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+So a pixel column `c` on row `r` is covered exactly when
+`ceil(xL(r)) <= c < ceil(xR(r))`, where `xL(r)`/`xR(r)` are the chains'
+16.16 edge positions sampled at the integer row `r` — the `+0xFFFF` bias
+followed by the arithmetic shift is a ceiling for every non-integer edge
+position and the identity for an integer one. Rows are `[yTop, yBottom)`.
+Left and top are inclusive; right and bottom are exclusive; two faces
+sharing an edge neither overlap nor leave a gap along it; there is no
+half-pixel centre convention anywhere.
 
 **6. Per pixel.** The textured writers sample `texel = pixels[(v >> 16) * w
 + (u >> 16)]` (the widths 8, 16, 32, 64 and 128 use a shift-and-mask form of
@@ -2204,7 +2211,11 @@ sit one pixel left of, or one pixel below/above, where the same vertex would
 have landed in the cached body. Reproduce both expressions as written; do
 not share one projection helper between the two paths.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Rounding at each remaining step.** Edge steps and attribute steps truncate
+toward zero (§1 step 3); edge positions round up (the `+0xFFFF` bias);
+attributes round down at the pixel (`>> 16`). The `SHD` row itself is
+`trunc(dot · 5.0) & 0x1F` per [03 §2.4.1] and is carried as an integer into
+the same 16.16 interpolation as the key.
 
 #### Team colour: the owner's colour index selects the `LOGOS` frame, and the frame's own size feeds the default corners [R-RAST-01 §3]
 
@@ -4780,7 +4791,17 @@ For presentation, it obtains the window DC, calls `SelectPalette` and
 releases the DC. Palette installation creates a 256-entry Windows logical
 palette and calls `SetDIBColorTable`.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+Negotiated surface width and height are set by a dedicated size setter. The
+surface builder uses byte pitch `(w+3)&~3` and a top-down DIB height of `-h`.
+On mode changes, the visible game viewport is rebuilt with inclusive bounds
+`left=128`, `top=32`, `right=W-1`, `bottom=H-33`, giving width `W-128` and
+height `H-64`. A separate hidden-panel expansion writer was not established
+in the bounded search; this remains `TODO(T23)`.
+
+The composer copies the surface description and re-establishes its clip
+rectangle before drawing tiles. Tiles use the viewport's left and top as
+their destination origin. Beam and site projection separately add 128 and 32;
+those equal the visible viewport origin at 640×480 but are independent inputs.
 
 | Mode (W×H) | Viewport `left,top,right,bottom` incl | Viewport `W×H` | Pitch `(W+3)&~3` | Status |
 |---|---|---|---|---|

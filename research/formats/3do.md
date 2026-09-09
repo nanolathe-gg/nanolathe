@@ -71,8 +71,9 @@ base            @ 0x0000  36 verts, 20 prims
 Real example — the root object of `objects3d/bomb1.3do` (a projectile,
 one-piece model):
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
-
+**Publication omission:** The retail-derived example is omitted from this
+edition. The surrounding format description retains its stated evidence and
+confidence.
 
 VersionSignature=1, 9 vertices, 9 primitives, selection = -1, translation
 (0,0,0), name @ 0x224 (`base`), vertices @ 0x98, primitives @ 0x104, no
@@ -109,8 +110,9 @@ are never shared across pieces.
 Real example — a textured quad from `armflash.3do`'s base piece
 (primitive record at 0x346):
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
-
+**Publication omission:** The retail-derived example is omitted from this
+edition. The surrounding format description retains its stated evidence and
+confidence.
 
 ColorIndex=0x0344E9FF (junk — textured face), 4 vertex indexes @ 0xDE,
 texture name @ 0x34 = `Tredside2`, Unknown_1=0, Unknown_2=0, IsColored=0.

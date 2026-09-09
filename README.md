@@ -6,9 +6,9 @@ development, with incomplete behavior and compatibility gaps.
 
 The engine reads content from your own local Total Annihilation installation.
 Nanolathe's original code is [MIT licensed](LICENSE); the license does not grant
-rights to the original game or retail-derived artwork. The current development
-tree includes retail-derived remaster examples that need to be excluded or
-cleared before publication; see the [publication review](docs/PUBLICATION.md).
+rights to the original game or retail-derived artwork. Retail-derived remaster exports are excluded from this curated copy. See the
+[publication review](docs/PUBLICATION.md) for the history policy and remaining
+provenance questions.
 
 ## Run
 
@@ -119,3 +119,12 @@ confidence level and a document/section citation. Executable addresses,
 decompiler output, generated names, register narration, and raw analysis stay
 outside the repository in `$HOME/ta-decompile`. See `AGENTS.md` before changing
 research or authoritative behavior.
+
+## About this history
+
+This repository presents curated integration snapshots of the original
+private development history. Adjacent changes have been combined in ancestry
+order; development-only artifacts and raw-analysis material were removed.
+Intermediate snapshots represent work in progress, not individually verified
+releases. The final source was checked separately. See the
+[publication review](docs/PUBLICATION.md) for scope and limitations.

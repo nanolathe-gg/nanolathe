@@ -5416,7 +5416,15 @@ native object image.
 engine also uses elsewhere. Its header is exactly 34 bytes (`0x22`), written
 zero-initialized and rewritten after the pool is complete:
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+| Offset | Size | Type | Writer value / meaning |
+|---:|---:|---|---|
+| `0x00` | 8 | bytes | Exact ASCII magic `HAPIBANK` (case-sensitive compare). |
+| `0x08` | 4 | `u32` | Logical string-pool offset of the bank tag (normally 0). |
+| `0x0C` | 4 | `u32` | Absolute file offset of the stored trailing string pool; also the end boundary for account enumeration. |
+| `0x10` | 4 | `u32` | Absolute file offset of the first account, written as `0x22`. |
+| `0x14` | 4 | `u32` | Bank version, exactly `1`; any other value rejects the bank. |
+| `0x18` | 1 | `u8` | String-pool compression flag: 0 raw, 1 compressed. |
+| `0x19` | 9 | bytes | Reserved, zero in retail output and ignored by the reader. |
 
 The bank tag compared after pool load is `Total Annihilation 3.0`
 (case-insensitive). The reader seeks to `stringPoolFileOffset`, reads to EOF,
@@ -5436,7 +5444,16 @@ a decompression failure emits a `HapiBank::OpenBank::Decompression...` /
 begins with a 32-byte header; empty accounts are not emitted and the body may
 be compressed as one unit:
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+| Offset | Size | Type | Meaning |
+|---:|---:|---|---|
+| `0x00` | 4 | `u32` | Total stored span including header; when compressed this is `32 + compressedBodySize`. |
+| `0x04` | 4 | `u32` | Logical string-pool offset of the account name. |
+| `0x08` | 4 | `i32` | Integer-item count. |
+| `0x0C` | 4 | `i32` | Double-item count. |
+| `0x10` | 4 | `i32` | String-item count. |
+| `0x14` | 4 | `i32` | Count of nonempty binary-box descriptors. |
+| `0x18` | 4 | `u32` | Body compression flag: 0 raw, 1 compressed. |
+| `0x1C` | 4 | bytes | Reserved, zero and ignored. |
 
 The account body follows and, when the flag says so, is separately
 decompressed. Reading an account seeks past it using the declared span, so an
@@ -7242,7 +7259,17 @@ scheduler timing block. The writer copies those 28
 bytes verbatim; the loader requires at least 28 bytes and continues only if that
 amount is available (larger boxes have trailing bytes ignored).
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+| Box offset | Size | Fields | File | Post-read | Before first budget | After first clock-budget pass |
+|---:|---:|---|---|---|---|---|
+| `0x00` | 4 | `lastScaled` | current word copied | restored | unchanged | replaced with current clock |
+| `0x04` | 4 | `ticksToRun` / pending ticks | copied | restored | unchanged | recomputed from delta, speed, carry; clamped 0..5 or 0 while paused |
+| `0x08` | 4 | `lastDelta` | copied | restored | unchanged | replaced with `currentClock - restoredAnchor` |
+| `0x0C` | 4 | `fractionalCarry` (`f32`) | copied | restored | unchanged | used then replaced with remainder |
+| `0x10` | 4 | `globalTick` | copied | restored | unchanged | not changed by the budget pass; may advance at the scheduled tick step |
+| `0x14` | 2 | requested speed | copied | restored | unchanged | retained; compared with active |
+| `0x16` | 2 | active speed | copied | restored | unchanged | retained; may step toward requested via slew counter |
+| `0x18` | 2 | speed-slew counter (`i16`) | copied | restored | unchanged | incremented/decremented/reset by thresholds when not paused |
+| `0x1A` | 2 | scheduler flags | copied | restored | unchanged | bit 0 is pause gate; bit 1 recomputed from lag, bit 2 from speed mismatch; other bits masked-preserved |
 
 The battle-loading state initializes the timing block before the worker starts, but
 the battle-setup initializer overwrites all 28 bytes. No direct code between the read and the

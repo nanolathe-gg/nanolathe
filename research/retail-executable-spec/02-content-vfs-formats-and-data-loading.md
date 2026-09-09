@@ -2885,34 +2885,94 @@ The loader accepts both versions, allocates a tile map of
 `(Width/2 × Height/2)` `uint16` entries, allocates tile graphics, reads the
 feature name table (`TileAnims × 132` bytes: `uint32` index plus 128-byte name),
 and then expands the attribute array into a dense plot array of `Width × Height`
-13-byte cells in row-major order (west to east, north to south).
+cells in row-major order (west to east, north to south).
 
-The runtime plot cell is 13 bytes with a typed layout. All multi-byte fields
-are little-endian.
+**Established — plot-cell fields.** The expanded terrain grid holds a
+loader-zeroed marker whose nonzero meaning remains open (feature reproduction
+requires zero), the authored height, derived maximum and minimum neighbourhood
+heights, metal content, a feature reference, unsigned anchor-to-fringe deltas,
+and flags. The allocation loop does not initialize the derived minimum height;
+it clears the lowest two flag bits. The feature deltas record positive
+anchor-to-fringe distances and are subtracted to recover the anchor.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
-
-The pass that derives `0x05`/`0x06` takes the minimum and maximum over the
-cell's own height byte and its east, south and south-east neighbours, and
+The pass that derives neighbourhood heights takes the minimum and maximum over
+the cell's own height byte and its east, south and south-east neighbours, and
 clips its extent to `W−1` and `H−1` **exclusive** — so the last column and the
 last row never receive a derived pair and those two bytes keep whatever the
 plot allocation held, which is a plain heap block and not zero-filled
 ([04 §6.1]). Nothing observes it: the strip pass voids those edges and every
 footprint validator rejects a rectangle reaching them.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+Feature sentinels on the 16-bit feature reference are quaternary and tested by a
+threshold. Consumers treat any value below `0xFFFB` as a live feature-table
+index; higher values are void or fringe:
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+| Value | Meaning | Consumer test |
+|---|---|---|
+| `< 0xFFFB` | live feature-table index | `feature < 0xFFFB` — dereference after bounds check |
+| `0xFFFE` | fringe member of a multi-cell feature — not a feature itself; resolve via the unsigned anchor deltas to the anchor cell | `feature == 0xFFFE` — follow offsets |
+| `0xFFFF` | empty — no feature | `feature == 0xFFFF` — empty |
+| `0xFFFD` | void hole — engine-derived map edge or lava-world fill; never dereferenced | `feature == 0xFFFD` |
+| `0xFFFC` and `0xFFFB` | further void thresholds; treated like void by the `< 0xFFFB` test and by explicit equality checks | `feature == 0xFFFC` / threshold |
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+The threshold `0xFFFB` is the canonical value; the legacy path uses `0x00FC`.
+The resolver is: read the cell's feature word; if it is below `0xFFFB`,
+return it directly; if it is `0xFFFE`, read the Z and X anchor deltas as
+**unsigned** values, **subtract** them from the current cell
+coordinates (`anchorX = x − DX`, `anchorZ = z − DZ`) to locate the anchor
+cell, bounds-check the anchor, and return the anchor's feature word only when
+that anchor word is itself below `0xFFFB`; otherwise report not-found.
+An unresolved fringe (`0xFFFE` whose offsets do not reach a live anchor) stays
+not-found and is treated by the footprint validator as blocking for yard bit 5
+and non-satisfying for geothermal bit 7.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Encoding of the two offset bytes.** The stamp writer stores, at footprint
+cell `(i, j)` other than the anchor, `DX = i` and `DZ = j` — the
+**positive** anchor→fringe deltas, `0..footX−1` and `0..footZ−1` — and all
+three resolvers (the world-position resolver, the cell-address hop, and the
+transition/replace path) read them **zero-extended** and **subtract**:
+`anchor = fringe − (DZ·width + DX)`. The encoding is an unsigned offset, not
+a signed one and not an absolute coordinate; an 8-bit absolute field could not
+address the corpus's 402×408-cell maps in any case. The Z delta is multiplied
+by the map width when locating the anchor;
+the X delta is unscaled. Deltas beyond 255 cannot be stored; no
+authored footprint approaches that.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+The flag byte is stamped for every cell at load as
+`flags = (flags & 0xD7) | 0x50`: preserve bits 0, 1, 2, and 7, clear bits 3 and
+5, and set bits 4 and 6 (`0xD7 = 11010111`, `0x50 = 01010000`). Bits 3–6 carry
+the placer's nibble as `(placer & 0xF) << 3` with bits 0,1,2,7 preserved; map
+load passes placer value 10. Bit 0 marks a live feature instance present at the
+anchor, bit 1 marks a building footprint occupied, bit 2 is the never-seen fog
+state owned by the visibility phase (presentation only), and bit 7 is preserved
+by the mask but has no isolated reader in the bounded census — reported as
+`TODO(T23)` platform residual.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+There are no hidden map sections or flood-fill state beyond the plot-cell array
+and the two anchor deltas. A bounded census over the terrain loader's writers
+found only two sites that store the anchor deltas: the expansion zero and the
+derived anchor-offset stamp — no writer copies hidden attribute bytes beyond
+height and feature, no separate stamping geometry, and no use of the occupancy
+fields to propagate anchors. This is a negative bounded result
+over the loader's writer set.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+Fringe-anchor reconstruction is a derived step, not a loaded field: the TNT
+attribute record carries no anchor data.
+At load (and at every runtime feature stamp) the placement writer stamps the
+feature's footprint rectangle in feature-definition order: the anchor cell
+receives the feature index and, for multi-cell features, every other cell of
+the rectangle receives the fringe sentinel `0xFFFE` with the **positive
+anchor→fringe offsets** in its two offset bytes (Z delta scaled by the map
+width when locating the anchor; X delta unscaled). A later
+stamp overwrites earlier fringe cells wherever rectangles overlap, so the
+effective anchor for a fringe cell is the last stamp that covered it — there
+is no left/above propagation. Fringe cells whose `0xFFFE` no longer points at
+a live anchor (overwritten by another feature's anchor, or the map-authoring
+case of raw `0xFFFE` with no covering footprint) resolve to not-found; the
+writer contract resolves every footprint-covered fringe cell by construction
+(see `research/retail-executable-spec/03` [R-P0-04] for the
+resolver's shared use). An unresolved fringe stays not-found per the resolver
+above.
 
 Void and edge generation runs after the derived minimum/maximum heights are
 recomputed for the full map and after feature placement. It performs:
@@ -2943,7 +3003,10 @@ recomputed for the full map and after feature placement. It performs:
   sets `0xFFFD` for every cell where `hmin ≤ SeaLevel` and the feature word is
   `0xFFFF` or `0xFFFE`, turning the entire low basin into void.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+All four edge rules test the **raw** height byte (the
+north/south predicates) or the derived `hmin` (lava), and only cells whose
+feature word is empty or fringe are converted — placed features and anchors
+are never voided.
 
 Outside the map rectangle, height returns the sentinel `-1` with unsigned
 candidate bounds before any terrain read; the movement validator returns
@@ -2952,9 +3015,30 @@ LOS writer stores an empty footprint and returns; projectiles report no terrain
 collision; and the camera is clamped to the `PlayRight`/`PlayBottom` insets
 above.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+Per-cell metal is uniform on canonical maps: the loader writes the signed
+byte of the mission `SurfaceMetal` scalar to the metal field of **every** plot cell
+at load, gated on the authored value being non-negative and the terrain being
+the canonical version (negative or legacy → seed 0). No per-cell metal raster
+is allocated — a negative bounded census found no `Width × Height`
+metal allocation beyond the plot-cell array — and the canonical TNT unknown byte
+at attribute `+3` is uniformly zero and not carried. **The legacy (0x1020)
+path differs: the per-cell seed comes from the legacy attribute record
+itself** (byte 6 of the 8-byte record, copied to every cell's metal field), so
+legacy maps carry per-cell metal without any separate file — the "varying
+per-cell metal source file" question is answered: there is no such file; the
+varying source is the legacy attribute byte. An extractor samples once at
+placement by summing `unsigned(metalByte) + 1` over its footprint cells and
+multiplying by the definition's `extractsmetal` scalar; the result is stored on
+the unit and never resampled. Feature-definition metal is reclaim
+reward only and does not enter the extractor sum.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Legacy attribute record (established).** The legacy terrain attribute array
+is `Width × Height × 8` bytes with an 8-byte stride: byte 0 is the height
+(copied to the plot-cell height), byte 2 is a one-byte feature reference
+(values below `0xFC` are feature-table indices; `0xFC` and above are
+void/none — a single sentinel band rather than the canonical quaternary),
+byte 6 is the per-cell metal seed (copied to the plot-cell metal field), and bytes
+1, 3, 4, 5, 7 are never read.
 
 ### The map-load pipeline: entry points, order, and the resource-path slots [R-MAP-01 §1]
 

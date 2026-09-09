@@ -7077,7 +7077,10 @@ heading. After either start the engine emits a network event packet type `0x10`
 `{u16 unitId, u16 slot, u8 arity=2, heading, pitch}` behind the aim event's global option bit (mask `1`)
 and sets the weapon flags byte bit 0 (the issue bit).
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Established fact:** `RockUnit` (also emitted by a shared emission helper that has no direct caller in the bounded call census (negative-bounded)) follows its matching `Fire*` start in the
+same producer (mode D, arity 2, receiver null) with arguments `(-cos(rel)·800, -sin(rel)·800)`,
+where `rel = (int16)(commanded heading − current unit heading)` (commanded barrel direction minus unit heading) evaluated
+through the shared 512-entry word sine table (`entry[i]=round(8192·sin(i·2π/512))`; sine reads the table at the angle, cosine a quarter turn ahead at `angle+0x4000`) with round-to-nearest fixed-point (multiply, add `0x1000`, shift right by 13); both signs are negative and there is no completion receiver. The two component routines here are the *same* pair [R-MOV-01 §4] and [R-ORD-02 §3] describe — a signed 16-bit table entry times a signed 32-bit magnitude formed at full 64-bit width, `0x1000` added to the 64-bit sum, and the low word of an **arithmetic** right shift by 13 returned. The shift **floors**; there is no divide and no truncation toward zero anywhere in either body, so a negative product rounds toward negative infinity after the half is added, and a tie rounds up. The same two routines and the same rounding serve `HitByWeapon`'s radius-400 pair.
 
 **Established fact:** `StartBuilding` has an argument-less edge form, issued
 on the cached building-bit rising edge (mode D, 0 cells), and **one**
@@ -10319,7 +10322,13 @@ post-move correction of §5.
 component(angle, magnitude) = (table[((angle + 0x20) >> 7) & 0x1ff] * magnitude + 0x1000) >> 13
 ```
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+as a 64-bit product with an arithmetic shift; the `+0x1000` is round-to-nearest
+at the table's 8192 scale. Cosine is the same table read at `angle + 0x4000`
+(a quarter circle) with the same `+0x20` rounding bias, i.e. the index is
+`((angle + 0x4020) >> 7) & 0x1ff`. The angle-to-index step is 128 angle units
+(512 steps per circle) with a rounding bias of 32 rather than 64 — retail
+rounds the index down at 3/4 of each step, not at its midpoint. The same table
+and rounding serve the blocked-mover velocity recomputation of section 8.2.
 
 ### The post-move Y, pitch, and roll correction [R-MOV-01 §5]
 
@@ -10869,7 +10878,13 @@ if speed > half:                                          (strict)
         vx = −sinq(heading, half);  vy = 0;  vz = −cosq(heading, half)
 ```
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+`sinq`/`cosq` are the 512-entry table lookups with `+0x1000` rounding of
+[R-MOV-01 §4], and `heading` the unit's current heading word — the one the
+steering step just turned, so a blocked unit keeps turning toward its
+waypoint at full turn rate while its speed is capped. The step then writes
+the clamped X, Y, Z and the dirty bit and returns. The cached cell pair, the
+mode mirror, the occupancy grid and the mover's last-stamp tick are all
+untouched. Comparisons are signed 32-bit.
 
 **Established — the success branch, in order.** (1) *clear* the old footprint
 (§4) at the cached cell pair; (2) write proposed X, Y, Z; (3) write the new
@@ -12802,7 +12817,23 @@ defaulting to `0x1FDB` when neither the OTA nor the TNT header supplies one.
 
 **Established — `AirToGround`: the strafing run.** Six phases.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+* 0 — status caption `Attacking`; shared takeoff preamble.
+* 1 — set the manual-target latch on all three slots; the same `±0x2000` random jitter about the bearing to
+  the goal at half the current distance, horizontal arrival radius `0x80`;
+  gate `= 0x100E8`.
+* 2 — release the slot-0 latch; order the weapons at the target if one is bound, else
+  at the cached goal point; build a point marker on the cached goal whose
+  horizontal arrival radius is **the unit's first weapon slot's `Range`**;
+  gate `= 0x100E8`.
+* 3 — the fly-through. `h = atan2(unitX − goalX, unitZ − goalZ)`; build a point
+  marker at `goalPos − offset(h, Range · 3)` with horizontal arrival radius
+  `0x80 + random below 0x80` (128 to 255); gate `= 0x100EA`.
+* 4 — if health is below three quarters of `MaxDamage`, run the base scan of
+  [R-AIR-01 §11] but **free the result unused** — a damaged strafer never
+  lands from this leg. Otherwise draw `random below 2` and break `+0xC000` on `0` or `+0x4000`
+  otherwise from the unit's own heading, at radius `Range` world units,
+  horizontal arrival radius `0x80`; gate `= 0x100EA`.
+* 5 — set the phase to 2 and return 2, closing the loop.
 
 **Established — `AirToGroundHover`: the `hoverattack` standoff.** Phases 0 and 1
 match `AirToGround`. Phase 2 releases the slot-0 latch, aims at the target, builds a point marker on the
@@ -13559,7 +13590,15 @@ sinComponent(a, m) = (table[((a + 0x20) >> 7) & 0x1ff] * m + 0x1000) >> 13
 cosComponent(a, m) = sinComponent(a + 0x4000, m)      // same table, quarter turn
 ```
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+with `table` the 512-entry signed table of [R-MOV-01 §4] and the same `+0x20`
+index bias. A third shared routine — the **offset builder** — calls both and
+writes the **negated** triple `(-sin(a)*m, 0, -cos(a)*m)`. Because a ground
+mover's velocity is `(-sin(heading)*speed, 0, -cos(heading)*speed)`
+[R-MOV-01 §4], that negated triple is exactly *the direction of the angle*, and
+`bearing(a, b)`'s result is the angle whose direction points **from a toward
+b**. This is the axis the doc's air legs mean when they write
+`pos - offset(...)` or `pos + offset(...)`; only four legs call the builder,
+every other site inlines the two component calls.
 
 **The station.** On every tick with `globalTick % 150 == 0`, with `me` the
 builder, `T` the work target and `bd` the builder definition's `builddistance`:

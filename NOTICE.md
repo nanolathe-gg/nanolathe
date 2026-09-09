@@ -2,8 +2,8 @@
 
 Nanolathe's original code and documentation are licensed under [MIT](LICENSE).
 That grant does not cover rights in Total Annihilation game content, extracted
-assets, or derivatives of those assets. The development remaster examples need
-separate disposition before publication; see [the review](docs/PUBLICATION.md).
+assets, or derivatives of those assets. Generated remaster artwork is excluded from this curated copy; see
+[the review](docs/PUBLICATION.md) for provenance limits.
 
 ## Go dependencies
 

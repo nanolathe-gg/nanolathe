@@ -34,8 +34,8 @@ restating the arithmetic. Citations into this directory are by document —
 so headings are free to change.
 
 **One voice.** Each document states one thing. A finding that replaces an
-earlier one replaces the text it corrects instead of arguing with it; git
-history is the audit trail. Claims carry a confidence level —
+earlier one replaces the text it corrects instead of arguing with it; the original private development
+history is the complete audit trail; this public history retains selected snapshots. Claims carry a confidence level —
 **Established**, **Supported inference**, or **Unknown** — and warnings about
 readings the community documents differently are written as warnings about
 those readings, not as this directory's own history.
@@ -128,8 +128,9 @@ verified and extended by direct inspection of retail data and, where stated,
 bounded static analysis of the retail executable. Every document lists its
 sources as original web URLs; those sites may disappear (the Wayback Machine at `web.archive.org`
 holds captures), which is exactly why these documents are written to stand
-alone — nothing in them requires the originals. Hex dumps labelled with an
-archive path are real bytes from the retail game files.
+alone — nothing in them requires the originals. Retail byte dumps and stock-script examples have been omitted from this
+public edition. Omission markers do not imply replacement evidence; file-format
+layouts and named constants remain documented separately.
 
 One further source appears in [fbi.md](fbi.md), [tdf.md](tdf.md) and
 [ota.md](ota.md): a whole-string census of the retail executable's data

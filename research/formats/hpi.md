@@ -65,8 +65,9 @@ archive offsets**.
 
 Real example — the first 20 bytes of `totala1.hpi`:
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
-
+**Publication omission:** The retail-derived example is omitted from this
+edition. The surrounding format description retains its stated evidence and
+confidence.
 
 marker=`HAPI`, version=`0x00010000`, directory_end=`0xE795`,
 header_key=`0xBF`, directory_start=`0x14`.
@@ -124,8 +125,9 @@ record**:
 
 Real example — the decrypted start of the `totala1.hpi` directory:
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
-
+**Publication omission:** The retail-derived example is omitted from this
+edition. The surrounding format description retains its stated evidence and
+confidence.
 
 The root node at 0x14 says: 15 entries, entry list at 0x1C. The first entry
 (at 0x1C) is `name @ 0xA3, data @ 0xAA, flag 01` — a subdirectory whose name
@@ -183,8 +185,9 @@ Real example — the single chunk of `sounds/BEEP2.WAV` in `totala1.hpi`
 (after archive-level decryption). The chunk size table holds one entry,
 `1927`; the chunk follows at 0xE799:
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
-
+**Publication omission:** The retail-derived example is omitted from this
+edition. The surrounding format description retains its stated evidence and
+confidence.
 
 marker=`SQSH`, unknown=2, method=1 (LZ77), encoded=1, compressed=1908
 (1908 + 19 = 1927, the table entry), decompressed=2100 (the file size),

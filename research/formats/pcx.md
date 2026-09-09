@@ -64,8 +64,9 @@ palette-installation behavior remains Unknown below.
 
 Real example — `unitpics/ARMFLASH.PCX` from `totala1.hpi`:
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
-
+**Publication omission:** The retail-derived example is omitted from this
+edition. The surrounding format description retains its stated evidence and
+confidence.
 
 manufacturer 0x0A, version 5, RLE, 8 bpp, extent (0,0)–(95,95) → 96×96,
 72 DPI; planes=1, bytes_per_line=96; trailer byte at `len−769` = `0x0C`
