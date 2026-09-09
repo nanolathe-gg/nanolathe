@@ -85,6 +85,11 @@ func (b *battleSession) saveDirectChatSetting(change func(*settings.Settings)) {
 		s.Display.DitheredFog = boolInt(b.cl.DitheredFog())
 	}
 	s.Display.Gamma = b.gammaSetting
+	// A direct battle owns the live clock preference just as it owns the live
+	// display values above. Every write-all captures it before applying the
+	// requested setting mutation, so an unrelated command cannot restore a
+	// stale value from disk [07 R-CAM-01 §6].
+	s.Clock = boolInt(b.clockVisible)
 	change(&s)
 	if err := s.Save(); err != nil {
 		fmt.Fprintf(os.Stderr, "nanolathe: %v\n", err)

@@ -83,3 +83,25 @@ func TestClockCommandTogglesAndWritesSetting(t *testing.T) {
 		t.Fatalf("second toggle runtime=%t stored=%d, want off", b.clockShown(), stored.Clock)
 	}
 }
+
+func TestDirectWriteAllCapturesLiveClock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	t.Setenv(settings.EnvPath, path)
+	stale := settings.Defaults()
+	stale.Clock = 0
+	if err := stale.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	// ScrollSpeed is an unrelated direct command that still uses the common
+	// write-all. The live clock bit must win over the stale disk snapshot.
+	b := &battleSession{clockVisible: true}
+	b.dispatchLocalCommand("+ScrollSpeed 7")
+	stored, err := settings.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stored.ClockEnabled() || stored.ScrollSpeed != 7 {
+		t.Fatalf("unrelated write stored clock=%d scroll=%d, want 1/7", stored.Clock, stored.ScrollSpeed)
+	}
+}

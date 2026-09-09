@@ -1350,6 +1350,10 @@ independent of the Space-held `LIGHTBAR` strip. The HUD binds COMIX alongside
 the side console FNT because the retail draw site inherits COMIX after a live
 message-column pass and inherits the side console when `textlines` is zero
 `[07 R-CAM-01 §6]` `[07 R-HUD-03 §14.4]` `[I6]`.
+There is no live interface-suppressed battle-composition route in this build;
+movie capture remains excluded below. If that route is implemented later, it
+must supply the retail selector-inheritance condition at this painter rather
+than adding a dormant mode flag now.
 
 These commands are partial I10. Shell and direct-map entry use the same live
 display bits, including the persisted low bit that selects dithered fog; a
