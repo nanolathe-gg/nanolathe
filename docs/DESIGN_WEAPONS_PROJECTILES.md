@@ -98,7 +98,10 @@ decrement a nonzero reload → validate or resolve the target → dispatch `Aim*
 and wait on readiness → the shot-admission gate → the family spawner → store
 reload and ammunition → debit `[06 §4.1]` `[06 §4.2]`. A gate that fails
 short-circuits the later steps and reorders none of the earlier ones; the
-reload decrement happens whether or not anything downstream succeeds.
+reload decrement happens whether or not anything downstream succeeds. Admission
+tests the decremented word. Starts 0, 1, and 2 become 0, 0, and 1 after their
+first decrement and respectively reach fire admission on visits 1, 1, and 2
+when all other gates pass `[06 §3.3]` `[06 §4.2]`.
 
 `StepWeaponsForUnit` is the authoritative per-unit entry point the session's
 slot visit calls. It is what makes the script handshake single-drain: all three
@@ -208,8 +211,9 @@ drift pair is relative on both sides `[06 R-WPN-05 §4]`. Which angle each
 velocity build negates, and where the half-turn numbering is crossed, is a
 named contract rather than a convention `[06 R-WPN-05 §11]`.
 
-The aim handshake itself is a latch: the latch is set immediately after
-dispatch and clears only on an explicit nonzero return, with no timeout
+The aim handshake itself is a latch: a new receiver clears readiness before
+dispatch; an explicit nonzero return grants it, while every delivered zero
+clears it. The request latch is set immediately after dispatch, and there is no timeout
 `[06 §3.3]` `[06 §3.4]`. Which of the three readiness ladders a weapon takes is
 decided by its executor flags alone — a turret needs the latch and a nonzero
 result, vertical launch needs the result only, and the line-of-sight,
@@ -697,9 +701,12 @@ explosion, sound, shake, end smoke or damage. The spray perturbs a scratch
 heading and never rewrites the parent's stored yaw `[06 §4.3]`
 `[06 R-WPN-01 §2]`.
 
-**C9 — aim-ready is granted only on an explicit nonzero return.** The latch is
-set immediately after dispatch and clears only on that return; there is no
-timeout, and a missing script or an exhausted thread pool never authorizes fire
+**C9 — aim-ready is granted only on an explicit nonzero return.** A new dispatch
+first clears readiness; every delivered return replaces it, so zero clears and
+an explicit nonzero grants. Revisiting a held request does not reset its receiver
+or synthesize a delivery; its deferred completion still may arrive. The request
+latch is set immediately after dispatch and a zero delivery does not clear it;
+there is no timeout, and a missing script or an exhausted thread pool never authorizes fire
 `[06 §3.3]` `[06 §3.4]` `[06 R-P0-07]`.
 
 ### 3.2 The pool — C10–C12

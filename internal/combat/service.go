@@ -252,10 +252,8 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		// It happens for every populated slot, before the target is resolved
 		// and before any later gate can skip the visit, so a weapon that is
 		// out of range or waiting on Aim still recovers its shot
-		// [06 §1.2][06 §4.1]. Only after the decrement can the reload-zero
-		// fire-time pipeline below admit the visit, which is why a one-tick
-		// reloadtime fires on the tick after the decrement, never the same
-		// tick [06 §4.1].
+		// [06 §1.2][06 §4.1]. The fire-time pipeline tests this updated word,
+		// so a one-tick reload reaches zero and may fire on this same visit.
 		if slot.Reload > 0 {
 			slot.Reload--
 		}
@@ -427,6 +425,11 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		if needResult && !suppress {
 			if !slot.Aim.IssueBit {
 				weaponID := weapon.ID
+				// A receiver belongs to this particular dispatch. Clear the
+				// preceding request's permission before the callback start, because
+				// a failed start can synchronously deliver zero [06 §3.3]. A held
+				// request never enters this block, so its state remains untouched.
+				slot.Aim.Ready = false
 				if bridge == nil {
 					slot.Aim.IssueBit = true
 				} else {
@@ -443,9 +446,10 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 						}
 						sum.ReturnSeen = true
 						sum.ReturnValue = ret.Value
-						if ret.Explicit && ret.Value != 0 {
-							slot.Aim.Ready = true
-						}
+						// Every delivered value replaces this request's readiness.
+						// Only an explicit nonzero script return grants it; failed
+						// starts deliver zero and therefore revoke it [06 §3.3].
+						slot.Aim.Ready = ret.Explicit && ret.Value != 0
 					})
 					slot.Aim.IssueBit = true
 					slot.Flags |= 0x01

@@ -715,8 +715,10 @@ in this order: decrement the reload timer when it is nonzero; resolve the
 target point (§3.2); abandon the slot when no executor pointer was installed;
 run the family-specific Aim dispatch below; and then, **only when the reload
 timer is now zero**, run the admission gate, the cost precheck, and the
-executor. A weapon authored with `reloadtime` of one tick therefore fires on
-the tick after the decrement, never on the same tick.
+executor. **Established fact:** the admission test reads the updated timer.
+Starting values 0, 1, and 2 become 0, 0, and 1 after their first decrement and,
+with every other gate passing, reach admission on visits 1, 1, and 2
+respectively. A one-tick reload can therefore fire on its decrementing visit.
 
 **Established fact:** Which executor a weapon uses is decided once, at catalog
 compile time, by the first matching flag in this order: `turret`; else
@@ -748,9 +750,12 @@ dispatched. Completion arrives through the receiver embedded on that deferred
 callback: an explicit script return delivers its value, and the dispatcher
 delivers zero when the script name is absent, the script identity is invalid,
 or all eight COB thread slots are occupied; signal termination and abnormal
-termination do not call the receiver. A zero delivery — explicit return or
-dispatcher — leaves the latch without permission and does not clear it; a
-nonzero delivery grants permission; and no timeout is present, the absence of a
+termination do not call the receiver. Before a new receiver-bearing dispatch,
+the receiver is zeroed. A zero delivery — explicit return or dispatcher — keeps
+that new request without permission; an explicit nonzero delivery grants
+permission. A zero delivery does not clear the Aim-request latch. Revisiting a
+held request does not reset its receiver or synthesize a delivery; its actual
+deferred completion may still arrive. No timeout is present, the absence of a
 timeout writer being established by a bounded search over the weapon-slot code.
 A nil VM or missing script must therefore not set an Aim-ready state for a
 family that requires a result: a missing or blocked Aim script delivers zero
@@ -1821,8 +1826,12 @@ stored reload  = (health factor * veteran reload) / 100             ; signed
 ```
 
 and the result is stored into the slot as a signed 16-bit tick count. The stored
-value is decremented once per tick at the top of the slot's own pass, so a
-stored reload of *n* blocks *n* subsequent ticks. Stockpile launch does not
+value is decremented once per tick at the top of the slot's own pass, then the
+updated value is tested for zero. Thus starts 0 and 1 can admit a shot on the
+first visit, while start 2 admits it on the second if other gates pass; a stored
+positive reload of *n* blocks firing for the next *n - 1* populated-slot visits,
+and its *n*th visit may fire if other gates pass. The decrement still happens
+when a prior visit is out of range or waiting on Aim. Stockpile launch does not
 write reload. The zero-maximum-health contract is closed in §9.1 (healing clamps
 to zero without dividing; the TakeDamage percentage and this health term perform
 unguarded unsigned divisions and must be guarded as an error path). Negative
