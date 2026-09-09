@@ -14,28 +14,11 @@
 // slot-end death handling; explicit TeardownCleanup is teardown-only [01 §4.4].
 //
 // Per-unit micro-order within one visit [04 R-MOV-03 §1][01 §4.4]:
-//  1. general unit update (StepPreUpdate) — exposed as boundary
-//  2. weapon update (reload, target acquisition, Aim latch) — between boundaries
-//  3. COB drain (delta 1, eight threads then one piece pass) — between
-//  4. orders / construction pump — between
-//  5. movement integration (D+wake starts) — between
-//  6. slot-end death handling (FinalizeDeath) — exposed as boundary
-//
-// The central caller (built by another agent) should do:
-//
-//	w.VisitActiveSlots(func(v SlotVisit) {
-//	    w.StepPreUpdate(v.Handle, tick)
-//	    // --- weaponSlotUpdate, cobDrain, orders, movement between ---
-//	    // e.g., w.weaponSlotUpdate(v.Unit, tick) is internal; external callers
-//	    // run combat.Slots, cob.VM.Drain, orders pump, movement.StepUnit
-//	    // directly on v.Unit. All between stages must respect Dying (skip).
-//	    if w.NeedsDeathFinalization(v.Handle) {
-//	        w.FinalizeDeath(v.Handle, tick)
-//	    }
-//	})
-//
-// A live death-marked unit is still stepped by normal stages; only the final
-// slot-end call retires it [04 R-MOV-03 §1]. A freed slot cannot be stepped.
+// general update, weapons, normal COB drain, StepPostCOBStatus, then water
+// damage/self-repair/orders/movement, and finally FinalizeDeath at slot end.
+// Allocated death-marked units still receive the normal drain and status
+// refresh. Other stages retain their own eligibility gates; only the final
+// slot-end call retires the unit. A freed slot cannot be stepped.
 // Death hooks and pool free happen exactly once via FinalizeDeath; second
 // call is a no-op [01 §4.4].
 
@@ -103,12 +86,11 @@ func (w *World) VisitActiveSlots(fn func(SlotVisit)) {
 	}
 }
 
-// StepPreUpdate executes the per-unit pre-update/status work for the given
-// handle [04 R-MOV-03 §1][01 §4.4]. It is the explicit first boundary call
-// that the central loop runs inside VisitActiveSlots before weapon/COB/
-// orders/movement stages. A freed slot cannot be stepped; a live Dying unit
-// still reaches the normal stage sequence [04 §5.4].
-func (w *World) StepPreUpdate(handle pool.Handle, tick uint32) {
+// StepPostCOBStatus refreshes status after the unit's one normal COB drain
+// and before water damage, self-repair, orders and movement [04 R-MOV-03 §1].
+// Allocated Dying units receive this refresh before slot-end finalization,
+// including the health-sample roll consumed by local Killed [04 §5.1].
+func (w *World) StepPostCOBStatus(handle pool.Handle, tick uint32) {
 	if w == nil || w.pool == nil || handle == 0 {
 		return
 	}
@@ -123,7 +105,7 @@ func (w *World) StepPreUpdate(handle pool.Handle, tick uint32) {
 	if u == nil || !u.Alive {
 		return
 	}
-	w.unitPreUpdate(u, tick)
+	w.unitPostCOBStatus(u, tick)
 }
 
 // NeedsDeathFinalization reports whether the handle's unit is latched Dying
@@ -154,7 +136,7 @@ func (w *World) NeedsDeathFinalization(handle pool.Handle) bool {
 // §4.4]. The tick argument is the current global tick for hook context. Free
 // retains the stored slot index stale [P0-16 §3.4] and decrements per-player
 // live counters. Zero RNG draws. Dead unit cannot be stepped afterwards
-// because the slot is freed and pool.Alive is false, so StepPreUpdate becomes
+// because the slot is freed and pool.Alive is false, so StepPostCOBStatus becomes
 // a no-op.
 func (w *World) FinalizeDeath(handle pool.Handle, tick uint32) DeathResult {
 	_ = tick // retained for hook context / future tick-dependent corpse logic

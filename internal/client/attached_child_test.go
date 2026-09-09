@@ -12,6 +12,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/headless"
 	"github.com/nanolathe-gg/nanolathe/internal/palette"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 	"github.com/nanolathe-gg/nanolathe/internal/testsupport"
@@ -26,7 +27,7 @@ import (
 // locks the list order as the carrier's LIFO cargo list.
 func TestAttachedChildIndex(t *testing.T) {
 	units := []frame.UnitView{
-		{Slot: 1},                                // carrier
+		{Slot: 1, Cargo: []pool.Handle{4, 2, 3}}, // non-slot attachment order
 		{Slot: 2, Carrier: 1, CarriedPiece: 3},   // real hang piece
 		{Slot: 3, Carrier: 1, CarriedPiece: 0},   // piece 0 is a real piece
 		{Slot: 4, Carrier: 1, CarriedPiece: -1},  // piece-less carry: excluded
@@ -40,10 +41,9 @@ func TestAttachedChildIndex(t *testing.T) {
 	for i := b.firstChild(1); i >= 0; i = b.nextChild(i) {
 		got = append(got, int(b.units[i].Slot))
 	}
-	// Children link to the front of the list, so the walk is descending slot:
-	// the most recently attached child first [04 R-UNIT-06 §3].
-	if len(got) != 2 || got[0] != 3 || got[1] != 2 {
-		t.Fatalf("carrier 1 children = %v, want [3 2] with the piece-less slot 4 excluded", got)
+	// Publication carries the head-first list independently of pool slots.
+	if len(got) != 2 || got[0] != 2 || got[1] != 3 {
+		t.Fatalf("carrier 1 children = %v, want [2 3] with the piece-less slot 4 excluded", got)
 	}
 	if b.firstChild(5) >= 0 {
 		t.Fatal("a unit that names itself as its carrier must not be its own child")
@@ -273,5 +273,88 @@ func writeIndexedPNG(t *testing.T, c *Client, indexed []uint8, path string) {
 	defer f.Close()
 	if err := png.Encode(f, img); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Equal-height overlapping children expose their traversal order in the final
+// classic pixels and in the independent geometry packet consumed by modern.
+// The most recently attached child is traversed first [04 R-UNIT-06 §3];
+// later equal keys overwrite earlier children [03 R-REN-03A §4].
+func TestPublishedCargoOrderReachesCarrierComposition(t *testing.T) {
+	for _, geometryOnly := range []bool{false, true} {
+		c := newPieceFixtureClient(t)
+		c.geometryOnlyModels = geometryOnly
+		c.recordModelGeometry = true
+		for i, name := range []string{"carrier-order", "low-order", "high-order"} {
+			c.models[name] = syntheticModel([]pieceInfo{{name: "base", parent: -1}}, []syntheticTri{
+				makeTriangle(0, "base", [3][3]float64{{0, 0, 0}, {24, 0, 0}, {0, 0, 24}}, uint8(40+i*60), 0),
+			}, 0)
+		}
+		views := []frame.UnitView{
+			{Slot: 1, InstanceID: 1, Model: "carrier-order", ZBuffer: true, Cargo: []pool.Handle{2, 3}},
+			{Slot: 2, InstanceID: 2, Model: "low-order", Carrier: 1, CarriedPiece: 0, ZBuffer: true},
+			{Slot: 3, InstanceID: 3, Model: "high-order", Carrier: 1, CarriedPiece: 0, ZBuffer: true},
+		}
+		for pass := 0; pass < 2; pass++ {
+			clearIndexed(c)
+			c.resetListForTest()
+			c.worldBuckets.reset()
+			c.worldBuckets.indexChildren(views)
+			c.presentUnit(worldDrawable{unit: &views[0]})
+			commands := c.list.ModelCommands()
+			group := commands[len(commands)-1].Geometry
+			if group == nil || len(group.Children) != 2 {
+				t.Fatalf("carrier geometry = %#v", group)
+			}
+			wantFirst, wantLast := uint8(100), uint8(160)
+			if pass == 1 {
+				wantFirst, wantLast = wantLast, wantFirst
+			}
+			if group.Children[0].Geometry.Faces[0].Color != wantFirst || group.Children[1].Geometry.Faces[0].Color != wantLast {
+				t.Fatal("geometry children lost published order")
+			}
+			if !geometryOnly {
+				c.list.Replay(c.classicSink())
+				pixels := 0
+				for _, color := range c.indexed {
+					if color == wantFirst {
+						t.Fatal("earlier equal-height cargo painted over later cargo")
+					}
+					if color == wantLast {
+						pixels++
+					}
+				}
+				if pixels == 0 {
+					t.Fatal("cargo composed no pixels")
+				}
+				if dir := os.Getenv("NANOLATHE_CAPTURE_DIR"); dir != "" {
+					if err := os.MkdirAll(dir, 0o755); err != nil {
+						t.Fatal(err)
+					}
+					name := "cargo-attachment-order.png"
+					if pass == 1 {
+						name = "cargo-reattachment-order.png"
+					}
+					writeCachedLivePNG(t, c, dir+"/"+name)
+				}
+			}
+			// The next publication after reattaching slot 3 changes only linkage order.
+			views[0].Cargo = []pool.Handle{3, 2}
+		}
+	}
+}
+
+func TestInterpolatedCarrierUsesCurrentCommittedCargoOrder(t *testing.T) {
+	prev := frame.Frame{Tick: 1, Units: []frame.UnitView{{Slot: 1, InstanceID: 1, Cargo: []pool.Handle{2, 3}}}}
+	cur := frame.Frame{Tick: 2, Units: []frame.UnitView{{Slot: 1, InstanceID: 1, Cargo: []pool.Handle{3, 2}}}}
+	var in interpolator
+	for _, fraction := range []int64{0, int64(fractionOne) / 2, int64(fractionOne)} {
+		got := in.blend(&prev, &cur, fraction).Units[0].Cargo
+		if len(got) != 2 || got[0] != 3 || got[1] != 2 {
+			t.Fatalf("fraction %d cargo = %v, want current [3 2]", fraction, got)
+		}
+		if prev.Units[0].Cargo[0] != 2 || cur.Units[0].Cargo[0] != 3 {
+			t.Fatal("blending mutated committed cargo")
+		}
 	}
 }

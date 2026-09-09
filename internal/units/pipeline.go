@@ -1,13 +1,6 @@
-// This file: the pre-update stage [04 §1.1][04 §5.1][01 §4.4].
-//
-// The authoritative phase-2 unit sweep is the explicit traversal API in
-// sweep.go, driven by the session: VisitActiveSlots with StepPreUpdate at the
-// front and FinalizeDeath at slot-end, with weapon/COB/orders/movement work
-// between those boundaries [01 §4.4][04 R-MOV-03 §1]. This file owns the
-// pre-update stage that StepPreUpdate exposes; the remaining per-unit stage
-// helpers (weapon-slot update, COB drain, slot-end death latch) are
-// test-only fixtures in pipeline_test.go that drive the same traversal shape
-// for package tests [04 §1.1][GAP T15] C17.
+// Post-normal-COB status maintenance [04 R-MOV-03 §1 steps 5–8].
+// The session owns the visit: weapons, exactly one normal COB drain, this
+// refresh, water/orders/movement, then slot-end death finalization.
 //
 // Construction Remaining is owned exclusively by construction.Service [05
 // "Construction target state"]; no stage here reads or writes it.
@@ -18,7 +11,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/cob"
 )
 
-// unitPreUpdate is the per-unit pre-update/status work [04 §2.4][04 §5.1].
+// unitPostCOBStatus is the per-unit post-normal-COB status work [04 §2.4][04 §5.1].
 //
 // [04 R-MOV-03 §1] lists ten numbered acts per unit visit. Four of them are
 // this stage, and they run here in the listed order:
@@ -41,8 +34,8 @@ import (
 // Steps 2 (the general unit update carrying the wind-generator notifier of
 // [05 R-PROD-01 §3]) and 9 (water damage, self-repair, the order pumps, the
 // mover) belong to other windows and other packages; they are not this stage.
-func (w *World) unitPreUpdate(u *Unit, tick uint32) {
-	if u == nil || !u.Alive || u.Dying {
+func (w *World) unitPostCOBStatus(u *Unit, tick uint32) {
+	if u == nil || !u.Alive {
 		return
 	}
 	// Step 5: the damage-flash byte of [06 R-WPN-04 §2]. The damage dispatcher
@@ -92,7 +85,7 @@ func (w *World) unitPreUpdate(u *Unit, tick uint32) {
 // the shared eligibility predicate of [07 R-WGT-01 §9] read on a unit that is
 // already selected: selectable bit 5 set, remaining-build fraction exactly 0.0,
 // post-capture grace counter zero (constant in single-player, see
-// unitPreUpdate), and either no carrier or a carrier whose status word carries
+// unitPostCOBStatus), and either no carrier or a carrier whose status word carries
 // the cargo-selectable bit 30. Eligible() is the first two clauses; the carrier
 // clause is spelled out here because it needs the world to resolve the carrier.
 //

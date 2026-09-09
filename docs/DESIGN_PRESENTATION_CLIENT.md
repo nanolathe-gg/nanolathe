@@ -206,6 +206,11 @@ with a per-pixel **height key**, and that image is blitted. The split across
   composition image has a key plane, its cargo is composed into a union box and
   resolved per pixel against one height plane, which is why a transport hull can
   stand in front of the unit it carries `[03 R-REN-03A §4]`.
+  The committed unit view copies each carrier's head-first cargo list from the
+  linkage owner. Both executors receive children in that order, including after
+  detach/reattach; pool-slot order never substitutes for attachment order.
+  Piece-less children and children without models retain their existing draw
+  gates `[04 R-UNIT-06 §3]` `[03 R-RAST-01 §7]` `[03 R-REN-03A §4]` [I6].
 * `model_shadow_pass.go` — a second rasterization sheared 45°, every face
   filled with palette index 0, composited through the tinted blitter, which is
   an `ALP` blend `[03 R-REN-03D]`.

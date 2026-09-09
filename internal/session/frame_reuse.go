@@ -6,9 +6,9 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 )
 
-// appendUnitView reuses the destination unit and nested piece storage left by
-// Frame.Reset. The source value is copied only after its destination slot's
-// retained pieces have been saved. A frame without reserved capacity still
+// appendUnitView reuses the destination unit and nested piece/cargo storage
+// left by Frame.Reset. The source value is copied only after the destination
+// buffers have been saved. A frame without reserved capacity still
 // grows (append), so a session published before any Frame.Reserve call works.
 func appendUnitView(dst []frame.UnitView, src frame.UnitView) []frame.UnitView {
 	i := len(dst)
@@ -17,9 +17,10 @@ func appendUnitView(dst []frame.UnitView, src frame.UnitView) []frame.UnitView {
 	} else {
 		dst = append(dst, frame.UnitView{})
 	}
-	pieces := dst[i].Pieces
+	pieces, cargo := dst[i].Pieces, dst[i].Cargo
 	dst[i] = src
 	dst[i].Pieces = pieces[:0]
+	dst[i].Cargo = cargo[:0]
 	return dst
 }
 
