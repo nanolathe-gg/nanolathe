@@ -2958,8 +2958,9 @@ The rules that stand from the factory boundary passes, stated once:
   slope gates run at the exit against the product's definition (§5). The
   building stamp writes the ground word ([R-COLL-01 §8]); a placement query
   that skips the terrain aggregates at factory exits is a divergence from
-  retail, and [R-P0-08-A §1]'s occupancy-layer inference is bounded by
-  this.
+  retail. The common ground word remains held by a completed mobile product
+  until its ordinary mover commit or aircraft mode change releases it
+  ([R-P0-08-A §1], §6).
 * The exit-piece locator folds the unit's three orientation words into the
   root node's angles before rotating ([R-REV-02]); the orientation copy of §2
   uses the same fold. No factory-specific takeoff state exists before
@@ -4286,6 +4287,11 @@ runtime bits in it are:
 | 16 | every removal path except the primary front head | the tombstone bit of [R-ORDER-02 §2] |
 | 21 | the order-overlay presentation helper | the cached target position |
 | 22 | the `StartBuilding` emitter | StopBuilding-pending [R-ORDER-02 §2] |
+| 23 | the primary pump's code-9 arm | completion flag; written before the rearm/removal branch, never cleared during the record lifetime |
+
+The ground goal installer reads bit 23 and suppresses its synthetic
+straight-line fallback when it is set `[R-PATH-01 §8]`. The flag stays set
+through a code-9 rearm; it is not a fresh-goal installer output.
 
 **The caption-pending bit's writer.** The bit is tested and cleared by the
 caption-clear
@@ -8537,8 +8543,9 @@ port write before phase 2 runs, and the exit caller's terrain-check mode is 1
 1, and every allocator call site passes 1 — with self identity 0, so the
 inline gates run at exits exactly as at a chosen site and any non-zero ground
 word blocks. There is no producer/product exemption: foreign stamps block
-silently, and a product's construction reservation must release at completion
-for the next product to validate ([R-FAC-02 §6]). The separate bit-4 height
+silently, and a completed mobile product retains its ground stamp until its
+ordinary mover commits away or an aircraft mode change moves the stamp to the
+air plane ([R-FAC-02 §6]). The separate bit-4 height
 maximum is a yard-map participation, which a yardless mobile product never
 contributes to.
 

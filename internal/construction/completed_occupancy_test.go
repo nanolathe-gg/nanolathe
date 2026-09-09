@@ -83,7 +83,7 @@ func TestCompletedAllOYardRetainsCanonicalGroundWordsUntilRelease(t *testing.T) 
 	}
 }
 
-func TestCompletedMobileStillReleasesPlacement(t *testing.T) {
+func TestCompletedMobileRetainsPadOccupancyUntilMovementReleasesIt(t *testing.T) {
 	terrain := completedOccupancyTerrain(8, 8)
 	def := &content.UnitDef{UnitName: "mobile", FootprintX: 2, FootprintZ: 2, BMCode: 1}
 	rect := completedOccupancyRect(t, 2, 2, 2, 2)
@@ -95,12 +95,12 @@ func TestCompletedMobileStillReleasesPlacement(t *testing.T) {
 	svc.recordPlacement(u.Handle, def, rect)
 	svc.applyCompletionPosture(u)
 	if _, ok := svc.PlacementForProduct(u.Handle); ok {
-		t.Fatal("completed mobile retained its placement record")
+		t.Fatal("completed mobile retained construction placement bookkeeping")
 	}
 	for z := rect.MinZ(); z < rect.MaxZ(); z++ {
 		for x := rect.MinX(); x < rect.MaxX(); x++ {
-			if got := terrain.PlotAt(x, z).OccupantA(); got != 0 {
-				t.Fatalf("completed mobile cell %d,%d occupant=%d, want 0", x, z, got)
+			if got := terrain.PlotAt(x, z).OccupantA(); got != int16(u.Handle) {
+				t.Fatalf("completed mobile cell %d,%d occupant=%d, want %d", x, z, got, u.Handle)
 			}
 		}
 	}

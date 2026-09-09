@@ -84,7 +84,7 @@ func TestMobileBuildCompletionRemovesCoalescedRecordOnce(t *testing.T) {
 			if _, ok := svc.BuilderLink(product.Handle); ok {
 				t.Fatal("completed product retained builder link")
 			}
-			if product.Remaining != 0 || product.Flags&FlagCompleted == 0 || product.Health != product.MaxHealth {
+			if product.Remaining != 0 || product.Flags&FlagCompleted == 0 || product.Health != 0 {
 				t.Fatalf("product completion posture = remaining %v flags %x health %d/%d", product.Remaining, product.Flags, product.Health, product.MaxHealth)
 			}
 		})

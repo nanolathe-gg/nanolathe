@@ -158,7 +158,7 @@ func TestAssistRunsTheCompletionTransitionAfterEveryExit(t *testing.T) {
 	if svc.Assist(helper, product, 10) {
 		t.Fatal("a step on an already-zero fraction reported committed work [05 R-WORK-01 §1]")
 	}
-	if product.Flags&FlagCompleted == 0 || product.Health != product.MaxHealth {
+	if product.Flags&FlagCompleted == 0 || product.Health != 0 {
 		t.Fatalf("the not-committed exit skipped the completion transition: flags %#x health %d/%d [05 R-WORK-01 §1]",
 			product.Flags, product.Health, product.MaxHealth)
 	}

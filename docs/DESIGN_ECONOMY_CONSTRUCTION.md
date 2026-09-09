@@ -555,10 +555,16 @@ outcome: a permanent diagnostic, not the silent loop.
 **C18 — nanoframe allocation.** On success the allocator creates the unit **at
 the resolved exit transform, not at the derived anchor**, with the owner, the
 product definition, remaining fraction 1, health 0 and the build stance cleared.
+For a mobile product, allocation also establishes its mover and collision state
+before the product is attached or a counted successor can revisit the exit. The
+ground footprint stays at the pad after completion until an ordinary mover
+commit clears it, or an aircraft changes to the air plane; construction does
+not release it.
 The removal index records the builder/product relation, while the product's own
 `GetBuilt` node carries the same live builder handle in `Target`; that node is
 the canonical rally and save relationship. `[05 "Nanoframe allocation"]`
-`[04 §3.8]` `[04 R-FAC-02 §1]` `[04 R-FAC-02 §4]`.
+`[04 §3.8]` `[04 R-FAC-02 §1]` `[04 R-FAC-02 §4]` `[04 R-FAC-02 §6]`
+`[04 R-COLL-01 §4]`.
 
 **C19 — rally inheritance.** The factory's own queued move and patrol nodes are
 re-enqueued on the product in queue-traversal order; with none, the product
@@ -634,7 +640,8 @@ maximum cap, and self-kills the frame when the fraction clamps back to 1.0 —
 the clamp kill is the only thing that removes an abandoned frame. The completion
 transition is governed by the stored fraction's zero test after **every** exit of
 the step, including the admission-refused path, not by the step's committed
-return `[05 "Construction arithmetic"]` `[05 "Worker quantum"]`
+return. Completion does not add a heal: the stored health is the shared step's
+earned, capped result, including its final quantum `[05 "Construction arithmetic"]` `[05 "Worker quantum"]`
 `[05 "Remaining fraction"]` `[05 "Health gain and fractional carry"]`
 `[05 "Multiple builders"]` `[05 "Completion"]` `[05 R-WORK-01 §1]`
 `[05 R-WORK-01 §9]` `[05 R-WORK-01 §11]` `[04 R-ORD-01 §11]`.

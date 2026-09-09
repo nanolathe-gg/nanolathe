@@ -318,7 +318,7 @@ func (s *Service) handleCancelCurrent(factory *units.Unit, node *orders.Node, ti
 	// `OnRefresh(factory)` below, never the product's [04 R-SPEC-01 §12].
 	// The queued count is intentionally untouched [R-P0-09][05 C21].
 	if product != nil {
-		s.applyCompletionPosture(product)
+		s.applyCompletionPostureWithRetirement(product, false)
 	}
 
 	// Send the ordinary fixed-nominal kind-9 packet. Armor applies only below
@@ -378,6 +378,14 @@ func (s *Service) handleCancelCurrent(factory *units.Unit, node *orders.Node, ti
 }
 
 func (s *Service) applyCompletionPosture(product *units.Unit) {
+	s.applyCompletionPostureWithRetirement(product, true)
+}
+
+// applyCompletionPostureWithRetirement keeps cancellation's documented
+// completion-then-kill ordering. Normal completion retires only construction
+// bookkeeping; cancel retains it through the damage packet so that packet's
+// teardown can release the frame stamp in its ordinary position [05 C21].
+func (s *Service) applyCompletionPostureWithRetirement(product *units.Unit, retire bool) {
 	if product == nil {
 		return
 	}
@@ -422,10 +430,15 @@ func (s *Service) applyCompletionPosture(product *units.Unit) {
 		product.LastDamageCause = uint8(combat.CauseFeatureConversion)
 		s.World.Destroy(product.Handle, units.DeathKilled) // direct latch, null attacker [06 §12.1]
 	}
-	product.Health = product.MaxHealth
-	// Completion releases mobile products but retains building-class products
-	// on exactly the cells selected by the current yard state [04 R-COLL-01 §4].
-	s.retirePlacement(product.Handle)
+	// sharedStep already stored the capped difference-of-truncations health
+	// result. Completion changes construction state only; assigning MaxHealth
+	// here would erase the final-step arithmetic [05 R-WORK-01 §1].
+	// Both mobile and building products retain their live stamps. Ordinary
+	// movement or an aircraft's mode transition owns a mobile pad release
+	// [04 R-FAC-02 §6][04 R-COLL-01 §4].
+	if retire {
+		s.retirePlacement(product.Handle)
+	}
 }
 
 // removeHead removes the head node from factory's primary queue without

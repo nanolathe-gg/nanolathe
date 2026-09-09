@@ -7,6 +7,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/movement"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
@@ -22,6 +23,10 @@ func ownerFixture(t *testing.T, count uint32) (*Service, *units.World, *movement
 	prod.BuildTime = 1
 	prod.BuildCostEnergy = 1
 	prod.BuildCostMetal = 1
+	prod.MaxVelocity = 2 * 65536
+	prod.Acceleration = 65536 / 2
+	prod.BrakeRate = 65536 / 2
+	prod.TurnRate = 1000
 	cat := exitCatalog(lab, prod)
 	cat.Movement["exitmove"].MinWaterDepth = -10000
 	terrain := exitTerrain(24, 24)
@@ -30,6 +35,8 @@ func ownerFixture(t *testing.T, count uint32) (*Service, *units.World, *movement
 	sys.SetClasses(cat.Movement)
 	sys.BindWorld(w)
 	svc.Movement = sys
+	sim := rng.NewSimulation(19)
+	svc.OrderBinding = &orders.QueueBinding{SimRNG: &sim, Lookup: w.Unit}
 	for i := range svc.Economy.Players {
 		svc.Economy.Players[i].Stock[0] = 1e9
 		svc.Economy.Players[i].Stock[1] = 1e9
@@ -50,6 +57,7 @@ func ownerFixture(t *testing.T, count uint32) (*Service, *units.World, *movement
 		t.Fatal("factory yard refused to open")
 	}
 	q := orders.QueueForUnit(factory)
+	svc.RegisterOrderHandlers(q)
 	q.Push(orders.Lookup("BuildingBuild"), orders.Node{
 		Owner: factory.Handle, BuildDefKey: prod.CanonicalKey,
 		Param1: prodIdx(cat, prod.CanonicalKey), Param2: count,
@@ -207,14 +215,15 @@ func TestTwoProductsOfOneFactoryHaveIndependentGoalBuckets(t *testing.T) {
 
 	ctx := TickContext{World: w, Economy: svc.Economy, Terrain: svc.Terrain, Catalog: svc.Catalog}
 	var made []pool.Handle
-	for i := 1; i <= 200 && len(made) < 2; i++ {
-		ctx.Tick = uint32(i)
-		svc.Economy.TickPlayer(0, uint32(i), w, func() {})
-		res := svc.StepUnit(ctx, factory.Handle)
-		if res.Completed && res.Product != 0 {
-			made = append(made, res.Product)
-			svc.rallyInheritance(factory, w.Unit(res.Product), uint32(i))
-		}
+	pump := &orders.Pump{World: w}
+	seen := map[pool.Handle]bool{}
+	for tick := uint32(1); tick <= 1000 && len(made) < 2; tick++ {
+		advanceFactoryEgressTick(t, svc, w, sys, pump, &ctx, tick, func(product pool.Handle) {
+			if !seen[product] {
+				seen[product] = true
+				made = append(made, product)
+			}
+		})
 	}
 	if len(made) != 2 {
 		t.Fatalf("factory produced %d units, want 2; messages=%v", len(made), svc.Messages())

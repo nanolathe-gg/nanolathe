@@ -18,10 +18,9 @@ import (
 // TestYardCannotCloseOverAProductInTheYard locks [04 R-FAC-02 §5]: "A factory
 // therefore cannot close its yard while a released product still stands on a
 // `c`/`C` cell". Retail reads one ground word per cell; Nanolathe splits that
-// plane into the terrain plot and the movement occupancy grid, and a completed
-// mobile product's plot stamp is released at completion, so the grid is the
-// only layer still holding the pad. Testing the plot alone admitted the close
-// and shut the doors on the product standing in the yard.
+// plane into the terrain plot and the movement occupancy grid. This fixture
+// isolates the grid contribution; an ordinary completed product retains both
+// representations until its mover releases the pad.
 func TestYardCannotCloseOverAProductInTheYard(t *testing.T) {
 	lab := newFactoryDef("closelab", 4, 4, 300)
 	// 'o' is selected in both yard states, 'c' only while closed [04 R-COLL-01 §4].
@@ -47,8 +46,8 @@ func TestYardCannotCloseOverAProductInTheYard(t *testing.T) {
 		t.Fatal("no placement record")
 	}
 	// A released product standing on one of the yard's closed-only cells: it
-	// holds the grid half of the ground plane, and nothing at all in the plot,
-	// which is exactly the state completion leaves behind.
+	// holds the grid half of the ground plane. The isolated grid fixture does
+	// not mirror into the plot; the yard-close query must still see it.
 	yard, err := world.ParseYardMap(lab.YardMap, int(rect.Width()), int(rect.Depth()))
 	if err != nil {
 		t.Fatalf("ParseYardMap: %v", err)
@@ -168,25 +167,30 @@ func TestStateZeroDoesNotRestartActivateMidProduction(t *testing.T) {
 	}
 }
 
-// TestCompletionIsReportedWhenASuccessorAllocatesInTheSamePass locks the
-// completion hand-off. [05 "Factory production lifecycle"] state 4 "returns
-// result 0 — the state machine restarts at state 0 within the same pump pass,
-// so coalesced counts build back-to-back with no gap", which means the node's
-// target is the SUCCESSOR's nanoframe by the time StepUnit reads it back.
-// Deriving the completed handle from the post-pump head therefore reported only
-// the last product of a run; every earlier one never reached the session's
-// completion hook, so it got no mover and could not leave the pad.
-func TestCompletionIsReportedWhenASuccessorAllocatesInTheSamePass(t *testing.T) {
+// Completion is reported before a counted successor's placement retry, while
+// the completed product still owns its pad. Ordinary egress permits the next
+// allocation [04 R-FAC-02 §3, §6].
+func TestCompletionIsReportedBeforeSuccessorLeavesBlockedRetry(t *testing.T) {
 	facDef := newFactoryDef("passlab", 4, 4, 3000)
 	facDef.YardMap = "yccy yccy yccy yccy" // 'c' pad lane released while open
 	prodDef := exitMobileDef("passprod", 1, 1)
 	prodDef.BuildTime = 1
 	prodDef.BuildCostEnergy = 1
 	prodDef.BuildCostMetal = 1
+	prodDef.MaxVelocity = 2 * 65536
+	prodDef.Acceleration = 65536 / 2
+	prodDef.BrakeRate = 65536 / 2
+	prodDef.TurnRate = 1000
 	cat := exitCatalog(facDef, prodDef)
 	cat.Movement["exitmove"].MinWaterDepth = -10000
-	svc, w := exitService(t, exitTerrain(24, 24), cat)
-	svc.Movement = &movement.System{Grid: movement.NewOccupancyGrid()}
+	terrain := exitTerrain(24, 24)
+	svc, w := exitService(t, terrain, cat)
+	sys := movement.NewSystem(terrain, movement.Profile{}, movement.NewOccupancyGrid())
+	sys.SetClasses(cat.Movement)
+	sys.BindWorld(w)
+	svc.Movement = sys
+	sim := rng.NewSimulation(17)
+	svc.OrderBinding = &orders.QueueBinding{SimRNG: &sim, Lookup: w.Unit}
 	for i := range svc.Economy.Players {
 		svc.Economy.Players[i].Stock[0] = 1e9
 		svc.Economy.Players[i].Stock[1] = 1e9
@@ -206,23 +210,29 @@ func TestCompletionIsReportedWhenASuccessorAllocatesInTheSamePass(t *testing.T) 
 		t.Fatal("factory yard refused to open")
 	}
 	q := orders.QueueForUnit(factory)
+	svc.RegisterOrderHandlers(q)
 	q.Push(orders.Lookup("BuildingBuild"), orders.Node{BuildDefKey: prodDef.CanonicalKey, Param1: prodIdx(cat, prodDef.CanonicalKey), Param2: 2, Phase: uint8(State2), Deadline: -1})
 	q.Primary()[0].Phase = uint8(State2)
 
 	ctx := TickContext{World: w, Economy: svc.Economy, Terrain: svc.Terrain, Catalog: cat}
+	pump := &orders.Pump{World: w}
 	var first pool.Handle
 	reported := map[pool.Handle]int{}
-	for i := 1; i <= 40; i++ {
-		ctx.Tick = uint32(i)
-		svc.Economy.TickPlayer(0, uint32(i), w, func() {})
-		res := svc.StepUnit(ctx, h)
-		if first == 0 {
-			if node := headNodeForTest(factory); node != nil && node.Target != 0 {
-				first = node.Target
+	blockedRetry := false
+	for tick := uint32(1); tick <= 400 && len(reported) < 2; tick++ {
+		advanceFactoryEgressTick(t, svc, w, sys, pump, &ctx, tick, func(product pool.Handle) {
+			reported[product]++
+			if first == 0 {
+				first = product
 			}
-		}
-		if res.Completed && res.Product != 0 {
-			reported[res.Product]++
+			p := w.Unit(product)
+			cx, cz := world.WorldToCell(p.X), world.WorldToCell(p.Z)
+			if id, occupied := sys.Grid.OccupantAt(movement.Cell{X: cx, Z: cz}); !occupied || id != int(product) {
+				t.Fatalf("completed product %d has no ground stamp at allocation cell (%d,%d)", product, cx, cz)
+			}
+		})
+		if node := headNodeForTest(factory); first != 0 && node != nil && node.Target == 0 && node.Phase == uint8(State2) && node.Deadline == int32(tick)+15 {
+			blockedRetry = true
 		}
 	}
 	if first == 0 {
@@ -232,7 +242,11 @@ func TestCompletionIsReportedWhenASuccessorAllocatesInTheSamePass(t *testing.T) 
 		t.Fatalf("first product %d completed but was never reported to the session; reported=%v", first, reported)
 	}
 	if len(reported) < 2 {
-		t.Fatalf("a two-count run reported %d distinct completions, want both: %v", len(reported), reported)
+		n := headNodeForTest(factory)
+		t.Fatalf("a two-count run reported %d distinct completions, want both: %v; node=%+v", len(reported), reported, n)
+	}
+	if !blockedRetry {
+		t.Fatal("successor never retained the pad block with its 15-tick retry before egress")
 	}
 }
 
@@ -574,4 +588,39 @@ func allClearOfRect(w *units.World, handles []pool.Handle, rect world.FootprintR
 		}
 	}
 	return true
+}
+
+// advanceFactoryEgressTick is the reduced phase-2 boundary for factory-output
+// egress tests: ordinary order delivery, construction, and then mover work.
+// Allocation already owns mover initialization. The completion callback runs
+// before any later mover or publication call can hide a transient clear.
+func advanceFactoryEgressTick(t *testing.T, svc *Service, w *units.World, sys *movement.System, pump *orders.Pump, ctx *TickContext, tick uint32, completed func(pool.Handle)) {
+	ctx.Tick = tick
+	svc.Economy.TickPlayer(0, tick, w, func() {})
+	sys.Scheduler.Tick(tick)
+	sys.BeginTick(tick)
+	for _, u := range w.IterSliced() {
+		if u == nil || !u.Alive {
+			continue
+		}
+		h := u.Handle
+		pump.PumpUnit(h, tick)
+		if head := headNodeForTest(u); head != nil {
+			switch orders.DescriptorFor(head.ID).Name {
+			case "Move_Ground", "QMove", "Park", "VTOL_Move":
+				sys.ActivateMove(u, head)
+			}
+		}
+		res := svc.StepUnit(*ctx, h)
+		if res.Product != 0 {
+			if c := sys.Collisions[res.Product]; c == nil || !c.HasStamp {
+				t.Fatalf("product %d left construction without its allocation-time collision stamp", res.Product)
+			}
+			if res.Completed && completed != nil {
+				completed(res.Product)
+			}
+		}
+		sys.StepUnit(h, tick)
+	}
+	sys.EndTick(tick)
 }

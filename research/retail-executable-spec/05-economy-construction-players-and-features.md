@@ -3087,12 +3087,14 @@ yet, so the retry is silent — no message, no sound, no allocation — and
 repeats every 15 ticks for as long as the footprint is obstructed. There is
 no timeout and no force-placement.
 
-**Supported inference — what "obstructed" reads.** Stock exits sit inside the
-factory's own footprint, so retail's validator must be reading an occupancy
-layer finished buildings do not write; [04 §6.4 R-P0-08-A §1] carries the
-argument and its limits. An implementation that retains a completed product
-on the same occupancy shorts its exit validation reads will deadlock every
-first product.
+**Established — what "obstructed" reads.** The validator reads the common
+ground word. The factory's open yard releases the exit cells before allocation;
+the first mobile product then keeps its own ground footprint at that pad until
+an ordinary cross-cell mover commit, or an aircraft mode change, releases those
+cells. Thus a later state-2 visit sees the first product and takes the ordinary
+15-tick silent retry. There is no separate completed-unit occupancy layer and
+no completion-time release `[04 R-FAC-02 §5]` `[04 R-FAC-02 §6]`
+`[04 R-COLL-01 §4]`.
 
 **Nanoframe creation at the exit spot.** On validation success the allocator
 creates the unit *at* the exit spot with owner, product definition, remaining

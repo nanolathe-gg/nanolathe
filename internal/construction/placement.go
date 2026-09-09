@@ -121,9 +121,13 @@ func (s *Service) reservePlacement(product pool.Handle, def *content.UnitDef, re
 	return nil
 }
 
-// retirePlacement releases a completed mobile product. A completed building
-// keeps its placement record and its canonical yard-selected ground stamp, so
-// Terrain.CheckPlacement remains the single blocker source [04 R-COLL-01 §3].
+// retirePlacement closes construction's completion bookkeeping without
+// releasing the product's live footprint. A completed mobile product remains
+// stamped at its carried pad until an ordinary mover commit, or an aircraft
+// mode change, moves that stamp; its collision record owns later release and
+// death cleanup. A completed building keeps its yard-selected stamp and its
+// placement record
+// [04 R-FAC-02 §6][04 R-COLL-01 §4].
 func (s *Service) retirePlacement(product pool.Handle) {
 	if s == nil || product == 0 {
 		return
@@ -133,7 +137,7 @@ func (s *Service) retirePlacement(product pool.Handle) {
 		return
 	}
 	if record.def == nil || record.def.BMCode != 0 {
-		s.ReleasePlacement(product)
+		delete(s.placements, product)
 		return
 	}
 	open := false

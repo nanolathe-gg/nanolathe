@@ -127,6 +127,7 @@ func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, r
 				return nil, err
 			}
 			s.recordPlacement(prod.Handle, def, rect)
+			s.ensureProductMover(prod)
 		}
 		return prod, nil
 	}
@@ -155,7 +156,20 @@ func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, r
 	}
 	s.recordPlacement(prod.Handle, def, rect)
 	initializeNanoframe(prod, def)
+	s.ensureProductMover(prod)
 	return prod, nil
+}
+
+// ensureProductMover gives a mobile factory product its collision state at
+// allocation, before it is attached and before a same-pump successor can test
+// the exit. Completion may detach it in that same pump; waiting for the
+// session's later publication hook leaves that product without the mover that
+// owns its retained ground stamp [04 R-FAC-02 §1–§3][04 R-COLL-01 §4].
+func (s *Service) ensureProductMover(product *units.Unit) {
+	if s == nil || s.Movement == nil || s.Movement.Routes == nil || product == nil || product.Def == nil || product.Def.BMCode == 0 {
+		return
+	}
+	s.Movement.EnsureUnit(product)
 }
 
 // freeNeverExistedProduct unwinds a nanoframe allocation this service completed

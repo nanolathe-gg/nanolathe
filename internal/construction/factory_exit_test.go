@@ -198,9 +198,10 @@ func TestFactoryExitValidatesInsideOwnCompletedYard(t *testing.T) {
 			return prodU.Flags
 		}())
 	}
-	// Completed mobile unit: frame stamps and placement record release.
+	// Completed mobile unit: construction bookkeeping retires while the mover
+	// retains the live pad footprint until it leaves.
 	if _, ok := svc.PlacementForProduct(prodH); ok {
-		t.Fatal("completed mobile unit must not retain frame placement")
+		t.Fatal("completed mobile unit retained construction placement bookkeeping")
 	}
 	if _, ok := svc.PlacementForProduct(labH); !ok {
 		t.Fatal("completed factory placement record was lost during production")
