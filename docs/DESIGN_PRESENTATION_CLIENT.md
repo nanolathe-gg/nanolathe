@@ -259,6 +259,9 @@ Only actual successful completion signals call `NotifySuccessfulCompletion`.
 remain allowed during fades and delays [03 R-AUD-01 §4][01 R-PLAT-02 §4].
 The missing CD device/volume output and absent host timer binding are T23
 platform residuals, not simulated completion or a simulation-clock timer.
+The private CD table does not model retail slot competition and callback
+ordering with delayed stream opening, which shares the retail timer table
+[01 R-PLAT-02 §4][03 R-AUD-02 §1]. This remains a T23 platform residual.
 The write-only outgoing-category history is omitted; its unbounded retail
 write for unsupported categories is documented in the owning research.
 

@@ -273,7 +273,8 @@ func (c *Controller) NotifySuccessfulCompletion() {
 	if c == nil || c.status != StatusPlaying || c.pollPlaying() {
 		return
 	}
-	c.NotifyTrackEnd()
+	// Preserve controller status; the ordinary tick performs its own fresh
+	// device query after the notification gate [03 R-AUD-01 §4].
 	c.tickFromMedia()
 }
 
@@ -286,6 +287,8 @@ func (c *Controller) tickFromMedia() {
 	c.Tick(c.pollPlaying())
 }
 
+// TODO(T23): delayed stream opening shares these retail slots; the current
+// CD-only table does not model that competition [01 R-PLAT-02 §4].
 type musicTimerKind uint8
 
 const (
@@ -496,7 +499,7 @@ func (c *Controller) Position() int {
 }
 
 // SetVolume accepts the authored slider integer. The raw device level is
-// its signed low word shifted ten bits, clamped to 0..65535. A nonzero fade
+// its signed 32-bit value shifted ten bits, clamped to 0..65535. A nonzero fade
 // step ignores the entire gauge update [03 R-AUD-01 §4].
 func (c *Controller) SetVolume(v int) {
 	if c != nil && c.fadeStep == 0 {

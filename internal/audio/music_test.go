@@ -407,14 +407,21 @@ func TestMusicFadeCancellationAndCompletionPolling(t *testing.T) {
 	m.Configure(ModeSequential, 0)
 	m.Play(1)
 	playing := true
-	m.SetPlaybackPoll(func() bool { return playing })
+	polls := 0
+	m.SetPlaybackPoll(func() bool {
+		polls++
+		if m.Status() != StatusPlaying {
+			t.Fatal("notification changed controller status before the tick poll")
+		}
+		return playing
+	})
 	m.NotifySuccessfulCompletion()
-	if m.CurTrack() != 1 {
-		t.Fatal("completion advanced while media still plays")
+	if m.CurTrack() != 1 || polls != 1 {
+		t.Fatal("completion advanced or repolled while media still plays")
 	}
 	playing = false
 	m.NotifySuccessfulCompletion()
-	if m.CurTrack() != 2 {
-		t.Fatal("successful completion did not advance stopped media")
+	if m.CurTrack() != 2 || polls != 3 {
+		t.Fatal("successful completion did not freshly poll and advance stopped media")
 	}
 }

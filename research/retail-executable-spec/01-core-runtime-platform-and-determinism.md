@@ -667,10 +667,11 @@ the table. The two CD timer IDs identify registrations independently, and
 one callback kind can have more than one outstanding registration if a new
 ID replaces the stored reference without removing an older timer.
 
-**Registrants (Established, bounded to the recovered image).** The only
-callers of the registration routine are the CD-audio fade timers of
-[03 R-AUD-01 §4] (the repeating period-2 fade step and the one-shot period-120
-pause), and the removal routine's callers are all in the same audio module.
+**Registrants (Established, bounded to the recovered image).** Registration
+is shared by the CD-audio fade timers of [03 R-AUD-01 §4] (the repeating
+period-2 fade step and the one-shot period-120 pause) and the delayed stream
+opener of [03 R-AUD-02 §1]. They compete for slots in the same ten-slot table;
+stream registration also performs the nested pre-allocation service.
 No simulation state is touched by the table or by any registrant.
 
 ### 4.2 Budget algorithm
@@ -2348,7 +2349,8 @@ byte `0x0C` and the 768-byte palette.
   quit-request routine sets the quit bit and posts `WM_DESTROY`; the
   game-state teardown runs only on a requested quit ([R-PLAT-02 §1], §2).
 - A ten-slot scaled-clock timer table is serviced once per busy pump
-  iteration; only the CD-audio fades register in it ([R-PLAT-02 §4]).
+  iteration; CD-audio fades and delayed stream opening share its slots
+  ([R-PLAT-02 §4]).
 - The post-loop expiry list is the 20 × 36-byte temporary-sight ("eyeball")
   observer list, fed by the central unit-death handler and therefore populated
   in every session kind; the control keepalive byte is type 6; the start

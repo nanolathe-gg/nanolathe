@@ -8995,7 +8995,8 @@ menu (`ARMOPT.GUI`) pauses the CD on open and resumes on close. Pause:
 (when `t < count`: ` from ` + the reply of `status cdaudio position` + ` to `
 + the reply of `status cdaudio position track %i`) + ` notify`; status 1.
 The notify window receives `MM_MCINOTIFY` (successful completion, while
-status is 1 → poll; not `playing` → tick) and `WM_DEVICECHANGE` (any → stop
+status is 1 → poll; not `playing` → tick, preserving status until the tick
+runs its own ordinary branch and fresh device query) and `WM_DEVICECHANGE` (any → stop
 and reset; media arrival → recount tracks and re-run the disc
 identification, which reloads the category list and restarts per the tick).
 The application loop also handles eject/insert around the CD object: on
