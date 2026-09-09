@@ -922,6 +922,12 @@ type PlayerRow struct {
 	// compacts a vacated rank in the same frame [07 R-HUD-04 §1], and a
 	// credited kill moves the rank up the ladder [08 R-CAMP-01 §9].
 	Rank uint8
+	// Allies is this slot's first alliance row, indexed by the target owner.
+	// The contextual-order hostility predicate reads the acting slot's row
+	// only; the frame carries the same directional relation so cursor
+	// prediction never reaches mutable session state [04 §3.4][05 R-SHARE-01
+	// §1][I6].
+	Allies [PlayerRowSlots]bool
 }
 
 // FogView is the committed two-channel fog cache [03 §3.3].

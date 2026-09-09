@@ -211,18 +211,25 @@ func (b *battleSession) snapshotUnitCopy(v frame.UnitView) *units.Unit {
 	return u
 }
 
-// hostile routes the cursor's side test through the acting unit's own
-// diplomacy predicate, the one the order resolver consults [04 §3.4].
+// hostile applies the acting unit's committed directional alliance row, which
+// is the exact hostility rule the order resolver uses [04 §3.4][05
+// R-SHARE-01 §1][I6]. Snapshot units intentionally do not carry live order
+// queues or economy bindings.
 func (b *battleSession) hostile(actor, target *units.Unit) bool {
 	if actor == nil || target == nil {
 		return false
 	}
-	if q := orders.QueueForUnit(actor); q != nil {
-		if binding := q.Binding(); binding != nil && binding.Hostility != nil {
-			return binding.Hostility(actor, target)
-		}
+	if actor.Owner == target.Owner {
+		return false
 	}
-	return actor.Owner != target.Owner
+	f, ok := b.currentSnapshot()
+	if !ok || int(actor.Owner) >= len(f.Players) || int(target.Owner) >= len(f.Players) {
+		// This is the resolver's invalid-player fallback. A current committed
+		// frame always has all ten rows, but preserving it avoids turning an
+		// incomplete presentation fixture into a friendly relation.
+		return true
+	}
+	return !f.Players[actor.Owner].Allies[target.Owner]
 }
 
 // ownSelectableUnit is the census's "own selectable unit" predicate

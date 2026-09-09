@@ -996,6 +996,11 @@ func publishPlayerRows(s *Session, published *frame.Frame) {
 			// [07 R-HUD-04 §1]. The panel's vacated-rank compaction runs on the
 			// published copy, never back onto the record.
 			Rank: p.Rank,
+			// Preserve the acting player's directional row exactly. The cursor
+			// predictor uses this committed copy for the same hostility answer as
+			// the order resolver; it must not combine the reverse declaration
+			// [04 §3.4][05 R-SHARE-01 §1][I6].
+			Allies: p.Allies,
 		}
 		if s.Units != nil {
 			row.LiveUnits = s.Units.LiveCountForPlayer(i)

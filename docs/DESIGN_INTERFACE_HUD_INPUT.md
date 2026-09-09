@@ -776,6 +776,14 @@ options window `ARMOPT`'s `PREFS` opens over it;
 to the shared message ring;
 `battle_queue_overlay.go` the overlay's art resolution and draw.
 
+The cursor's hostile-target prediction reads the selected actor's directional
+alliance row from `frame.PlayerRow`, copied at tick-end publication. It uses
+the actor row indexed by the target owner, exactly as the command resolver
+does; it neither consults a snapshot unit's unbound order queue nor combines
+the reverse declaration. Thus an allied different-owner target, an enemy, and
+an asymmetric declaration all retain the authoritative answer across the
+presentation boundary `[04 §3.4]` `[05 R-SHARE-01 §1]` `[I6]`.
+
 **One message ring.** Retail has a single 30-entry message ring, fed alike by
 unit captions, chat and the game-speed announcement `[07 R-HUD-03 §14]`. The
 presentation client (`internal/client`) owns the one instance: it is what

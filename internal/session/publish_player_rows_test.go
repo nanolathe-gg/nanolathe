@@ -102,6 +102,37 @@ func TestPlayerRowsTrackKillsAndLossesAcrossAScriptedKill(t *testing.T) {
 	}
 }
 
+// Cursor prediction receives the same directional alliance row as command
+// resolution. The reverse declaration is deliberately different here: a
+// publication must not quietly symmetrize it [04 §3.4][05 R-SHARE-01 §1][I6].
+func TestPlayerRowsPublishDirectionalAllianceRows(t *testing.T) {
+	s := newLoopTestSession(t, 3)
+	s.Econ.Players[0].Allies[1] = true
+	s.Econ.Players[1].Allies[0] = false
+	s.Econ.Players[1].Allies[2] = true
+
+	rows := publishedPlayerRows(t, s, 1)
+	if !rows[0].Allies[1] {
+		t.Fatal("slot 0 alliance row omitted its declaration toward slot 1")
+	}
+	if rows[1].Allies[0] {
+		t.Fatal("slot 1 alliance row inherited slot 0's reverse declaration")
+	}
+	if !rows[1].Allies[2] {
+		t.Fatal("slot 1 alliance row omitted its independent declaration toward slot 2")
+	}
+	// Publication owns a value copy. A later mutation cannot rewrite the
+	// already-committed frame that presentation may still be reading [I6].
+	s.Econ.Players[0].Allies[1] = false
+	if !rows[0].Allies[1] {
+		t.Fatal("saved player row changed after live alliance mutation")
+	}
+	after := publishedPlayerRows(t, s, 2)
+	if after[0].Allies[1] {
+		t.Fatal("next player row did not reflect the later alliance mutation")
+	}
+}
+
 // Two identical runs publish identical rows: the publication reads only
 // authoritative state and iterates slots 0..9 ascending [I1][I6].
 func TestPlayerRowsAreStableAcrossTwoIdenticalRuns(t *testing.T) {
