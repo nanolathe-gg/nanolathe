@@ -3,6 +3,7 @@
 package construction
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
@@ -14,6 +15,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/model"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/save"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
@@ -521,6 +523,9 @@ func TestNanoframeCreationValues(t *testing.T) {
 			if n.Param2 != 0 {
 				t.Fatalf("GetBuilt queued mode zero count expected 0 got %d", n.Param2)
 			}
+			if n.Target != factory.Handle {
+				t.Fatalf("GetBuilt builder target=%d, want %d", n.Target, factory.Handle)
+			}
 		}
 	}
 	if !foundGetBuilt {
@@ -580,6 +585,136 @@ func TestNanoframeCreationValues(t *testing.T) {
 	}
 	if head3.Phase != uint8(State2) {
 		t.Fatalf("should stay state2 on allocator failure")
+	}
+}
+
+// TestFactoryProductSaveRestoreCompletesGetBuilt makes a product through the
+// factory allocator, passes its actual queue through the retail order codec,
+// then lets a fresh service consume completion. The builder link is therefore
+// exercised as a saved node target rather than a service-side reconstruction
+// [04 R-FAC-02 §1, §4][08 R-SAVE-02 §6, §10].
+func TestFactoryProductSaveRestoreCompletesGetBuilt(t *testing.T) {
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
+	factoryDef := newFactoryDef("save-factory", 2, 2, 300)
+	productDef := newProductDef("save-product", 1, 1, 100, 50)
+	productDef.BMCode = 1
+	productDef.MobilityDomain = content.MobilityAircraft
+	productDef.MinWaterDepth = -10000
+	cat.Units[factoryDef.CanonicalKey] = factoryDef
+	cat.Units[productDef.CanonicalKey] = productDef
+
+	source := newConstructionFixtureWorld(10, cat)
+	factoryH, _ := source.CreateWithForcedSlot(factoryDef, 0, world.CellToWorld(5), 0, world.CellToWorld(5), 1)
+	factory := source.Unit(factoryH)
+	bindConstructionFixture(factory, trivialModel(1, nil), true)
+	build := orders.QueueForUnit(factory)
+	build.Push(orders.Lookup("BuildingBuild"), orders.Node{BuildDefKey: productDef.CanonicalKey, Param2: 1, Phase: uint8(State2)})
+	sourceService := NewService(exitTerrain(12, 12), cat, source, &economy.Service{})
+	sourceService.Pump(factory, 100)
+	productH := build.Primary()[0].Target
+	product := source.Unit(productH)
+	if product == nil {
+		t.Fatalf("factory did not allocate source product: node=%+v messages=%v admissions=%v", build.Primary()[0], sourceService.Messages(), sourceService.AdmissionDiagnostics())
+	}
+	if product.Remaining == 0 {
+		t.Fatal("factory source product was not unfinished at save time")
+	}
+	getBuilt := orders.Lookup("GetBuilt")
+	var sourceGetBuilt *orders.Node
+	for _, node := range orders.QueueForUnit(product).Primary() {
+		if node.ID == getBuilt {
+			sourceGetBuilt = node
+			break
+		}
+	}
+	if sourceGetBuilt == nil || sourceGetBuilt.Owner != productH || sourceGetBuilt.Target != factoryH {
+		t.Fatalf("source GetBuilt=%+v, want owner=%d target=%d", sourceGetBuilt, productH, factoryH)
+	}
+	stable := map[pool.Handle]uint16{factoryH: 1, productH: 2}
+	resolve := func(h pool.Handle) (uint16, bool) { id, ok := stable[h]; return id, ok }
+	image, err := orders.RetailOrderImages(product, resolve, func(h pool.Handle) bool { return source.Unit(h) != nil })
+	if err != nil {
+		t.Fatalf("save product orders: %v", err)
+	}
+	if len(image) == 0 || binary.LittleEndian.Uint16(image[0].Main[2:]) != 1 {
+		t.Fatalf("saved GetBuilt builder target=%v, want stable factory 1", image)
+	}
+	records := make([]save.OrderRecord, len(image))
+	for i, entry := range image {
+		records[i] = save.OrderRecord{ParentStableID: entry.ParentStableID, Sequence: entry.Sequence, Secondary: entry.Secondary, Main: entry.Main, SubtypeCode: entry.SubtypeCode, Subtype: entry.Subtype, DescriptorName: entry.DescriptorName, BuildTypeName: entry.BuildTypeName}
+	}
+
+	for _, tc := range []struct {
+		name        string
+		rally       bool
+		deadBuilder bool
+	}{
+		{name: "rally", rally: true},
+		{name: "park"},
+		{name: "dead builder", deadBuilder: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newConstructionFixtureWorld(10, cat)
+			freshFactoryH, _ := w.CreateWithForcedSlot(factoryDef, 0, world.CellToWorld(5), 0, world.CellToWorld(5), 5)
+			freshProductH, _ := w.CreateWithForcedSlot(productDef, 0, world.CellToWorld(5), 0, world.CellToWorld(5), 6)
+			freshFactory, freshProduct := w.Unit(freshFactoryH), w.Unit(freshProductH)
+			freshProduct.Remaining = 0
+			if tc.rally {
+				orders.QueueForUnit(freshFactory).Push(orders.Lookup("QMove"), orders.Node{GoalX: world.CellToWorld(2), GoalZ: world.CellToWorld(3)})
+			}
+			if tc.deadBuilder {
+				w.FreeImmediate(freshFactoryH)
+			}
+			if err := orders.RetailRestoreOrders(freshProduct, records, map[uint16]pool.Handle{1: freshFactoryH, 2: freshProductH}, nil); err != nil {
+				t.Fatalf("restore product orders: %v", err)
+			}
+			var restoredGetBuilt *orders.Node
+			for _, node := range orders.QueueForUnit(freshProduct).Primary() {
+				if node.ID == getBuilt {
+					restoredGetBuilt = node
+					break
+				}
+			}
+			if restoredGetBuilt == nil || restoredGetBuilt.Owner != freshProductH || restoredGetBuilt.Target != freshFactoryH {
+				t.Fatalf("restored GetBuilt=%+v, want owner=%d target=%d", restoredGetBuilt, freshProductH, freshFactoryH)
+			}
+			fresh := NewService(nil, cat, w, &economy.Service{})
+			fresh.queueForUnit(freshProduct)
+			orders.QueueForUnit(freshProduct).Pump(freshProduct, 101)
+			for _, node := range orders.QueueForUnit(freshProduct).Primary() {
+				if node.ID == orders.Lookup("GetBuilt") {
+					t.Fatal("restored GetBuilt did not complete")
+				}
+			}
+			if tc.deadBuilder {
+				for _, node := range orders.QueueForUnit(freshProduct).Primary() {
+					if node.ID == orders.Lookup("Park") || node.ID == orders.Resolve(2, freshProduct, nil, nil) {
+						t.Fatalf("dead builder inserted completion order %s", orders.DescriptorFor(node.ID).Name)
+					}
+				}
+				return
+			}
+			want := orders.Lookup("Park")
+			if tc.rally {
+				want = orders.Resolve(2, freshProduct, nil, nil)
+			}
+			for _, node := range orders.QueueForUnit(freshProduct).Primary() {
+				if node.ID == want {
+					if node.Owner != freshProductH {
+						t.Fatalf("completion order owner=%d, want product %d", node.Owner, freshProductH)
+					}
+					if tc.rally && (node.GoalX != world.CellToWorld(2) || node.GoalZ != world.CellToWorld(3)) {
+						t.Fatalf("rally goal=(%d,%d), want (%d,%d)", node.GoalX, node.GoalZ, world.CellToWorld(2), world.CellToWorld(3))
+					}
+					return
+				}
+			}
+			var ids []orders.ID
+			for _, node := range orders.QueueForUnit(freshProduct).Primary() {
+				ids = append(ids, node.ID)
+			}
+			t.Fatalf("restored completion queue=%v, want %s", ids, orders.DescriptorFor(want).Name)
+		})
 	}
 }
 

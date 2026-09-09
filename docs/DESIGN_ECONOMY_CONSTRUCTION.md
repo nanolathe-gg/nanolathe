@@ -554,9 +554,11 @@ outcome: a permanent diagnostic, not the silent loop.
 
 **C18 — nanoframe allocation.** On success the allocator creates the unit **at
 the resolved exit transform, not at the derived anchor**, with the owner, the
-product definition, remaining fraction 1, health 0 and the build stance cleared;
-the builder/product link is established and `GetBuilt` is queued on the product
-`[05 "Nanoframe allocation"]` `[04 §3.8]` `[04 R-P0-09]`.
+product definition, remaining fraction 1, health 0 and the build stance cleared.
+The removal index records the builder/product relation, while the product's own
+`GetBuilt` node carries the same live builder handle in `Target`; that node is
+the canonical rally and save relationship. `[05 "Nanoframe allocation"]`
+`[04 §3.8]` `[04 R-FAC-02 §1]` `[04 R-FAC-02 §4]`.
 
 **C19 — rally inheritance.** The factory's own queued move and patrol nodes are
 re-enqueued on the product in queue-traversal order; with none, the product

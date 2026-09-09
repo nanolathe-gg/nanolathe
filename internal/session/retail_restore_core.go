@@ -239,27 +239,24 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 		}
 		// A mover box is read only inside the established HasMover branch;
 		// detached boxes for a no-mover unit are ignored [08 R-SAVE-02 §6, §8].
-		//
-		// A unit still under construction is skipped entirely. In this build a
-		// nanoframe holds its cells through the construction service's placement
-		// record — re-registered by the session's COB binder when the forced slot
-		// is allocated — and never receives a movement collision record until it
-		// completes. Calling EnsureUnit here would hand a restored frame mover
-		// state that the same frame does not have in a live session.
-		if s.Movement != nil && owner.Remaining == 0 {
-			s.Movement.EnsureUnit(owner)
-			if owner.HasMover {
-				moverIdx := otherByName[unitBoxName(rec.StableID, "mob")]
-				if len(moverIdx) > 1 {
-					return fmt.Errorf("session: retail restore: unit %d has duplicate mover boxes", rec.StableID)
-				}
-				if len(moverIdx) == 0 {
-					return fmt.Errorf("session: retail restore: unit %d has mover flag but no mover box", rec.StableID)
-				}
-				if err := s.Movement.RestoreMover(h, image.Units.Other[moverIdx[0]].Data); err != nil {
-					return fmt.Errorf("session: retail restore: unit %d mover: %w", rec.StableID, err)
-				}
+		// Construction progress does not suppress the saved mover branch: a
+		// factory product can be unfinished and still own a mover.
+		if s.Movement != nil && owner.HasMover {
+			moverIdx := otherByName[unitBoxName(rec.StableID, "mob")]
+			if len(moverIdx) > 1 {
+				return fmt.Errorf("session: retail restore: unit %d has duplicate mover boxes", rec.StableID)
 			}
+			if len(moverIdx) == 0 {
+				return fmt.Errorf("session: retail restore: unit %d has mover flag but no mover box", rec.StableID)
+			}
+			if err := s.Movement.RestoreMover(h, image.Units.Other[moverIdx[0]].Data); err != nil {
+				return fmt.Errorf("session: retail restore: unit %d mover: %w", rec.StableID, err)
+			}
+		} else if s.Movement != nil && owner.Remaining == 0 {
+			// A completed no-mover structure still has the collision surface that
+			// owns its saved yard/footprint stamp. This is structure support, not a
+			// fabricated mover, and it remains separate from HasMover.
+			s.Movement.EnsureUnit(owner)
 		}
 		// Rebuild queues after the account and mover state, then bind any saved
 		// goal payload on the front head before the script snapshot. This does
@@ -299,15 +296,9 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 	// every cell mutation still goes through movement's ordinary stamp path
 	// [08 R-SAVE-02 §11].
 	//
-	// Retail re-stamps every unit here because retail has one occupancy owner.
-	// This build has two: a completed unit's committed anchor belongs to the
-	// movement collision record, while a unit still under construction holds
-	// its cells through the construction service's placement reservation and
-	// has no collision record at all. Its saved cell pair is therefore not a
-	// mover anchor and must not be pushed through the mover re-stamp. Its
-	// footprint is already held: the forced-slot allocation runs the session's
-	// COB binder, which registers a building placement for every non-`bmcode`
-	// unit, and the restored rectangle matches the saved session's exactly.
+	// Saved movers and completed structures both restore their committed anchor.
+	// The latter use their building collision surface for yard/footprint support;
+	// an unfinished no-mover frame remains owned by construction placement.
 	if s.Movement != nil {
 		for _, rec := range image.Units.Records {
 			if rec.Compat {
@@ -315,7 +306,7 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 			}
 			h := stage.StableUnit[rec.StableID]
 			u := s.Units.Unit(h)
-			if u.Remaining != 0 {
+			if !u.HasMover && u.Remaining != 0 {
 				continue
 			}
 			if err := s.Movement.RestoreOccupancy(h, u.CachedOccupancyX, u.CachedOccupancyZ); err != nil {

@@ -223,7 +223,6 @@ type Service struct {
 	// codec [I13]; do not invent a factory-only format.
 	placements    map[pool.Handle]placementRecord // product -> occupancy footprint and immutable definition
 	productIndex  map[uint32]string               // product id -> catalog key, built once
-	getBuiltLinks map[pool.Handle]pool.Handle     // product -> builder until GetBuilt consumes it [R-P0-09]
 	messages      []string                        // verbatim diagnostics [05 C18][05 C21][05 C22]
 	admissions    []AdmissionDiagnostic           // state-2 outcomes, diagnostic only
 	commands      []CommandDiagnostic             // command-boundary rejections
@@ -376,14 +375,13 @@ type TickContext struct {
 // It carries the builder identity, product handle, definition key, and owner
 // for session hooks without presentation calls. Completion is exactly-once.
 type WorkResult struct {
-	Builder     pool.Handle // builder that was stepped
-	Product     pool.Handle // nanoframe/new unit handle, 0 if none
-	DefKey      string      // canonical def key for the product
-	Owner       uint8       // builder owner
-	Completed   bool        // true if a unit completed this tick (exactly once)
-	State       State       // phase after step
-	Err         error       // explicit error for descriptor mismatch or other failure
-	Diagnostics []string    // verbatim diagnostics (e.g., "Starting construction")
+	Builder   pool.Handle // builder that was stepped
+	Product   pool.Handle // nanoframe/new unit handle, 0 if none
+	DefKey    string      // canonical def key for the product
+	Owner     uint8       // builder owner
+	Completed bool        // true if a unit completed this tick (exactly once)
+	State     State       // phase after step
+	Err       error       // explicit error for descriptor mismatch or other failure
 }
 
 // isMobileBuilder reports whether the builder is a mobile builder [04 §3.1][P0-I05].
@@ -652,7 +650,6 @@ func NewService(terrain *world.Terrain, catalog *content.Catalog, w *units.World
 	s := &Service{Terrain: terrain, Catalog: catalog, World: w, Economy: econ}
 	s.builderLinks = make(map[pool.Handle]pool.Handle)
 	s.placements = make(map[pool.Handle]placementRecord)
-	s.getBuiltLinks = make(map[pool.Handle]pool.Handle)
 	s.buildProductIndex()
 	return s
 }
@@ -1150,8 +1147,8 @@ func (s *Service) handleGetBuiltOrder(product *units.Unit, node *orders.Node, sa
 	// Completion is observed only on GetBuilt's own due visit. Rally/park is
 	// appended behind this record; code 5 lets the pump unlink it and continue
 	// in the same pass [04 R-FAC-02 §4].
-	builderHandle, ok := s.getBuiltLinks[product.Handle]
-	if ok && builderHandle != 0 && s.World != nil {
+	builderHandle := node.Target
+	if builderHandle != 0 && s.World != nil {
 		if builder := s.World.Unit(builderHandle); builder != nil {
 			if s.OnRefresh != nil {
 				s.OnRefresh(builder)
@@ -1161,7 +1158,6 @@ func (s *Service) handleGetBuiltOrder(product *units.Unit, node *orders.Node, sa
 			}
 		}
 	}
-	delete(s.getBuiltLinks, product.Handle)
 	return 5
 }
 
@@ -1199,7 +1195,6 @@ func (s *Service) killDecayedNanoframe(product *units.Unit, tick uint32) {
 	// combat state.
 	s.ReleasePlacement(product.Handle)
 	delete(s.builderLinks, product.Handle)
-	delete(s.getBuiltLinks, product.Handle)
 }
 
 // StepUnit is this service's per-unit step: the one entry the session's unit
@@ -1237,7 +1232,7 @@ func (s *Service) StepUnit(ctx TickContext, handle pool.Handle) WorkResult {
 	}
 	q := s.queueForUnit(builder)
 	if q == nil || q.LenPrimary() == 0 {
-		return WorkResult{Builder: handle, Owner: builder.Owner, State: State0, Diagnostics: append([]string(nil), s.messages...)}
+		return WorkResult{Builder: handle, Owner: builder.Owner, State: State0}
 	}
 	prim := q.Primary()
 	// A standalone GetBuilt head is advanced through the real queue pump. This
@@ -1249,13 +1244,13 @@ func (s *Service) StepUnit(ctx TickContext, handle pool.Handle) WorkResult {
 		prim = q.Primary()
 	}
 	if len(prim) == 0 {
-		return WorkResult{Builder: handle, Owner: builder.Owner, State: State0, Diagnostics: append([]string(nil), s.messages...)}
+		return WorkResult{Builder: handle, Owner: builder.Owner, State: State0}
 	}
 	// Work discovery skips standing ops (GetBuilt pending resolution, Park)
 	// so a completed factory keeps producing [RX-05][05 "Queue insertion"].
 	head := firstWorkNode(prim)
 	if head == nil {
-		return WorkResult{Builder: handle, Owner: builder.Owner, State: State0, Diagnostics: append([]string(nil), s.messages...)}
+		return WorkResult{Builder: handle, Owner: builder.Owner, State: State0}
 	}
 	// Unit reclaim is an order-driven worker state distinct from factory/mobile
 	// construction. It must run through the same per-unit construction window,
@@ -1266,7 +1261,7 @@ func (s *Service) StepUnit(ctx TickContext, handle pool.Handle) WorkResult {
 	}
 	// Non-build orders (e.g., Move_Ground) are not construction work; ignore without mutating queue [05][P0-I05].
 	if !isBuildOrderID(head.ID) {
-		return WorkResult{Builder: handle, Product: head.Target, DefKey: head.BuildDefKey, Owner: builder.Owner, State: State(head.Phase), Diagnostics: append([]string(nil), s.messages...)}
+		return WorkResult{Builder: handle, Product: head.Target, DefKey: head.BuildDefKey, Owner: builder.Owner, State: State(head.Phase)}
 	}
 	// Distinct descriptor check [P0-I05][04 §3.1]: factory BuildingBuild vs mobile MobileBuild/VTOL_MobileBuild.
 	factoryID := orders.Lookup(FactoryBuildOrder)
@@ -1282,7 +1277,7 @@ func (s *Service) StepUnit(ctx TickContext, handle pool.Handle) WorkResult {
 	if mismatch != nil {
 		// Explicit failure, never silently cleared [P0-I05][04 §3.1] (ON-02).
 		s.logMessage(mismatch.Error())
-		return WorkResult{Builder: handle, Product: head.Target, DefKey: head.BuildDefKey, Owner: builder.Owner, State: State(head.Phase), Err: mismatch, Diagnostics: append([]string(nil), s.messages...)}
+		return WorkResult{Builder: handle, Product: head.Target, DefKey: head.BuildDefKey, Owner: builder.Owner, State: State(head.Phase), Err: mismatch}
 	}
 	// Capture before state for completion detection.
 	beforeTarget := head.Target
@@ -1388,13 +1383,12 @@ func (s *Service) StepUnit(ctx TickContext, handle pool.Handle) WorkResult {
 		defKey = beforeKey
 	}
 	return WorkResult{
-		Builder:     handle,
-		Product:     productHandle,
-		DefKey:      defKey,
-		Owner:       beforeOwner,
-		Completed:   completed,
-		State:       afterState,
-		Diagnostics: append([]string(nil), s.messages...),
+		Builder:   handle,
+		Product:   productHandle,
+		DefKey:    defKey,
+		Owner:     beforeOwner,
+		Completed: completed,
+		State:     afterState,
 	}
 }
 

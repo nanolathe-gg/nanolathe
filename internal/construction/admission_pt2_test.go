@@ -171,11 +171,10 @@ func TestCarriedProductDecaysWhenUnworked(t *testing.T) {
 	}
 	q := orders.QueueForUnit(product)
 	q.Push(orders.Lookup("BeCarried"), orders.Node{Target: factory.Handle})
-	q.Push(orders.Lookup("GetBuilt"), orders.Node{Phase: uint8(State0), Deadline: -1})
+	q.Push(orders.Lookup("GetBuilt"), orders.Node{Target: factory.Handle, Phase: uint8(State0), Deadline: -1})
 	svc := NewService(nil, cat, w, nil)
 	sim := rng.NewSimulation(12345)
 	svc.OrderBinding = &orders.QueueBinding{SimRNG: &sim}
-	svc.getBuiltLinks[product.Handle] = factory.Handle
 	svc.queueForUnit(product)
 
 	product.Remaining = 0.5

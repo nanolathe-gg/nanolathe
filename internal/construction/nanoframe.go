@@ -180,9 +180,6 @@ func (s *Service) freeNeverExistedProduct(prod *units.Unit) {
 	handle := prod.Handle
 	s.ReleasePlacement(handle)
 	s.ClearBuilderLink(handle)
-	if s.getBuiltLinks != nil {
-		delete(s.getBuiltLinks, handle)
-	}
 	if s.World != nil && s.World.Unit(handle) == prod {
 		s.World.FreeNeverCreated(handle)
 		return
@@ -299,13 +296,9 @@ func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, produc
 	s.raiseStatus(factory, statusBuild, "Starting construction")
 
 	// Register builder link on product [05 C18].
-	// The local builder link is retained for the product's GetBuilt lookup;
-	// retail cleanup beyond that bounded handoff remains unresolved [R-FAC-01C].
+	// The placement link is the removal index. GetBuilt carries its own builder
+	// reference on the product node, which is the saved canonical relationship.
 	s.SetBuilderLink(productHandle, factory.Handle)
-	if s.getBuiltLinks == nil {
-		s.getBuiltLinks = make(map[pool.Handle]pool.Handle)
-	}
-	s.getBuiltLinks[productHandle] = factory.Handle
 
 	// Initial standing-field merge has the same recovered class/auto guard as
 	// GetBuilt. Do not copy order bits to a product whose flags do not prove the
@@ -345,7 +338,7 @@ func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, produc
 		s.registerGetBuilt(pq)
 		s.RegisterOrderHandlers(pq)
 		// Queued, count zero [05 C18].
-		pq.Push(getBuiltID, productRecord(product, tick, orders.Node{Param2: 0, QueuedIssue: true}))
+		pq.Push(getBuiltID, productRecord(product, tick, orders.Node{Target: factory.Handle, Param2: 0, QueuedIssue: true}))
 	}
 
 	// The factory uses ONLY the edge form: it raises the building-bit edge here

@@ -182,7 +182,6 @@ func TestFactoryCarriedGetBuiltRunsAtTheHead(t *testing.T) {
 	svc := NewService(nil, cat, w, nil)
 	sim := rng.NewSimulation(12345)
 	svc.OrderBinding = &orders.QueueBinding{SimRNG: &sim}
-	svc.getBuiltLinks[product.Handle] = factory.Handle
 	svc.queueForUnit(product)
 	drawsBefore, stateBefore := sim.Draws(), sim.State
 	product.Remaining = 0.5
@@ -256,13 +255,12 @@ func TestGetBuiltCompletionRebindsAndConsumesWatcher(t *testing.T) {
 	fq.Push(moveID, orders.Node{GoalX: world.CellToWorld(2), GoalZ: world.CellToWorld(3)})
 	fq.Push(patrolID, orders.Node{GoalX: world.CellToWorld(4), GoalZ: world.CellToWorld(5)})
 	pq := orders.QueueForUnit(product)
-	pq.Push(orders.Lookup("GetBuilt"), orders.Node{Phase: uint8(State2), DynamicGate: 0, Deadline: -1})
+	pq.Push(orders.Lookup("GetBuilt"), orders.Node{Target: factory.Handle, Phase: uint8(State2), DynamicGate: 0, Deadline: -1})
 	pq.Primary()[0].DynamicGate = 0
 	hostility := func(*units.Unit, *units.Unit) bool { return true }
 	lookup := func(pool.Handle) *units.Unit { return factory }
 	pq.SetBinding(&orders.QueueBinding{Hostility: hostility, Lookup: lookup, Economy: &economy.Service{}})
 	svc := NewService(nil, cat, w, nil)
-	svc.getBuiltLinks[product.Handle] = factory.Handle
 	svc.queueForUnit(product)
 	product.Remaining = 0
 	pq.Pump(product, 10)
@@ -272,9 +270,6 @@ func TestGetBuiltCompletionRebindsAndConsumesWatcher(t *testing.T) {
 		if n.ID == orders.Lookup("GetBuilt") {
 			t.Fatalf("completed queue retained GetBuilt: %v", prim)
 		}
-	}
-	if _, ok := svc.getBuiltLinks[product.Handle]; ok {
-		t.Fatal("GetBuilt side-map link survived watcher consumption")
 	}
 	if binding := newQ.Binding(); binding == nil || binding.Hostility == nil || binding.Lookup == nil || binding.Economy == nil {
 		t.Fatal("rally queue hooks were not preserved")
@@ -294,11 +289,10 @@ func TestBuildingClassGetBuiltCompletesWithoutRallyOrPark(t *testing.T) {
 	factory, product := w.Unit(fh), w.Unit(ph)
 	orders.QueueForUnit(factory).Push(orders.Lookup("QMove"), orders.Node{GoalX: world.CellToWorld(3), GoalZ: world.CellToWorld(4)})
 	pq := orders.QueueForUnit(product)
-	pq.Push(orders.Lookup("GetBuilt"), orders.Node{Phase: uint8(State2), Deadline: -1})
+	pq.Push(orders.Lookup("GetBuilt"), orders.Node{Target: factory.Handle, Phase: uint8(State2), Deadline: -1})
 	pq.Primary()[0].DynamicGate = 0
 	product.Remaining = 0
 	svc := NewService(nil, cat, w, nil)
-	svc.getBuiltLinks[product.Handle] = factory.Handle
 	refreshes := 0
 	svc.OnRefresh = func(got *units.Unit) {
 		if got != factory {
@@ -621,7 +615,6 @@ func TestCancelCurrentRunsCompletionPostureBeforeCause9(t *testing.T) {
 	}
 	svc.recordPlacement(ph, nil, placement)
 	svc.SetBuilderLink(ph, fh)
-	svc.getBuiltLinks[ph] = fh
 	svc.handleCancelCurrent(factory, node, 4)
 	if product.Remaining != 0 || product.Health >= 0 || product.Flags&FlagCompleted == 0 {
 		t.Fatalf("cancel completion posture missing: remaining=%v health=%d flags=%x", product.Remaining, product.Health, product.Flags)
@@ -641,8 +634,8 @@ func TestCancelCurrentRunsCompletionPostureBeforeCause9(t *testing.T) {
 	if node.Param2 != 2 {
 		t.Fatalf("cancel decremented queued count to %d", node.Param2)
 	}
-	if _, ok := svc.BuilderLink(ph); ok || len(svc.getBuiltLinks) != 0 {
-		t.Fatal("cancel leaked builder/product side-map links")
+	if _, ok := svc.BuilderLink(ph); ok {
+		t.Fatal("cancel leaked builder/product removal link")
 	}
 	if _, ok := svc.PlacementForProduct(ph); ok || svc.Terrain.PlotAt(0, 0).OccupantA() != 0 {
 		t.Fatal("cancel leaked product occupancy")

@@ -12,7 +12,6 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/model"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
-	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
@@ -428,17 +427,13 @@ func (s *Service) successEpilogueMobile(builder *units.Unit, node *orders.Node, 
 	s.logMessage("Starting construction")
 	s.raiseStatus(builder, statusBuild, "Starting construction")
 	s.SetBuilderLink(productHandle, builder.Handle)
-	if s.getBuiltLinks == nil {
-		s.getBuiltLinks = make(map[pool.Handle]pool.Handle)
-	}
-	s.getBuiltLinks[productHandle] = builder.Handle
 	s.copyStandingFlags(builder, product)
 	getBuiltID := orders.Lookup("GetBuilt")
 	if getBuiltID != 0 {
 		pq := orders.BindQueueBinding(product, s.OrderBinding)
 		// Queued, like the factory's [04 R-FAC-02 §1]; the record's bit 5 puts
 		// it at the head of the nanoframe's own queue [04 R-ORD-01 §13].
-		pq.Push(getBuiltID, productRecord(product, tick, orders.Node{Param2: 0, QueuedIssue: true}))
+		pq.Push(getBuiltID, productRecord(product, tick, orders.Node{Target: builder.Handle, Param2: 0, QueuedIssue: true}))
 	}
 	// No heading snap here. The question this site used to record — whether
 	// retail rotates the unit or leaves the turn to the script — is answered:

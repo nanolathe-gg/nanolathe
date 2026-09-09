@@ -520,3 +520,23 @@ func TestStepUnit_NoPresentationCalls(t *testing.T) {
 		t.Fatalf("StepUnit should not call presentation OnRefresh")
 	}
 }
+
+func TestStepUnitDoesNotCopyDiagnosticHistoryForNonBuildOrder(t *testing.T) {
+	def := &content.UnitDef{UnitName: "diagnostic-builder", MaxDamage: 100}
+	w := newConstructionFixtureWorld(8, nil)
+	h, err := w.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(nil, nil, w, &economy.Service{})
+	svc.messages = []string{"Starting construction", "Building complete"}
+	q := orders.QueueForUnit(w.Unit(h))
+	q.Push(orders.Lookup("Move_Ground"), orders.Node{})
+	ctx := TickContext{World: w, Economy: svc.Economy}
+	if got := testing.AllocsPerRun(100, func() { _ = svc.StepUnit(ctx, h) }); got != 0 {
+		t.Fatalf("StepUnit copied diagnostic history: allocations/run=%v", got)
+	}
+	if got := svc.Messages(); len(got) != 2 {
+		t.Fatalf("explicit diagnostic reader lost messages: %v", got)
+	}
+}

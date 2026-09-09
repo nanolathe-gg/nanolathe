@@ -64,3 +64,18 @@ func TestRetailOrderImagesMainTargetLiveness(t *testing.T) {
 		t.Fatal("live main target without a stable ID did not fail")
 	}
 }
+
+func TestRetailOrderImagesPreservesLiveGetBuiltBuilderTarget(t *testing.T) {
+	product := &units.Unit{Handle: 100, Alive: true}
+	builder := pool.Handle(101)
+	BindQueue(product, NewQueueWith([]*Node{{ID: Lookup("GetBuilt"), Owner: product.Handle, Target: builder}}, nil))
+	ids := map[pool.Handle]uint16{product.Handle: 9, builder: 12}
+	resolve := func(h pool.Handle) (uint16, bool) { id, ok := ids[h]; return id, ok }
+	images, err := RetailOrderImages(product, resolve, func(h pool.Handle) bool { return h == builder })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := binary.LittleEndian.Uint16(images[0].Main[2:]); got != 12 {
+		t.Fatalf("GetBuilt target stable ID=%d, want builder 12", got)
+	}
+}

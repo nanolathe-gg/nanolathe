@@ -624,6 +624,15 @@ persisted key, and the world rebuild's reset precedes the dispatcher, so a
 load resumes unarmed and the settlement gate stays open `[05 R-ECO-01 §12]`
 `[08 R-TRIG-01 §6]` `[08 R-ENTRY-01 §8]`.
 
+During core restoration, `HasMover` alone selects the 35-byte mover reader;
+an unfinished product therefore restores its saved mover fields and committed
+occupancy before the staged session is published. Route, follower and proposal
+state remain derived and are not reconstructed from the mover box. A completed
+no-mover structure separately rebuilds its yard/footprint collision support at
+the saved anchor; an unfinished no-mover frame stays under construction
+placement ownership. `[08 R-SAVE-02 §6]` `[08 R-SAVE-02 §8]`
+`[08 R-SAVE-02 §11]`.
+
 **C11 — the container header.** 34 bytes: magic `HAPIBANK` compared
 case-sensitively, the tag's pool offset, the absolute pool offset, the first
 account offset, version exactly 1, a compression flag byte, nine reserved

@@ -187,13 +187,15 @@ func TestRestoreRetailBattleCoreDuplicateMoverBoxesError(t *testing.T) {
 func TestRestoreRetailBattleCoreMissingMoverBoxErrors(t *testing.T) {
 	s, fixtures := newRestoreCoreFixture(t, 1)
 	u := fixtures[0]
+	data := unitRecordData(true)
+	binary.LittleEndian.PutUint32(data[0xA7:], math.Float32bits(.5))
 	s.Movement = movement.NewSystem(nil, movement.Profile{}, movement.NewOccupancyGrid())
 	stage := &RetailBattleStage{
 		Session:    s,
 		StableUnit: stableUnitMap(fixtures),
 		Image: &save.BattleImage{
 			Units: save.UnitImage{
-				Records: []save.UnitRecord{{StableID: u.stableID, Data: unitRecordData(true)}},
+				Records: []save.UnitRecord{{StableID: u.stableID, Data: data}},
 			},
 		},
 	}
@@ -203,6 +205,72 @@ func TestRestoreRetailBattleCoreMissingMoverBoxErrors(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no mover box") {
 		t.Fatalf("error = %q, want the missing-mover-box diagnostic", err.Error())
+	}
+}
+
+// TestRestoreRetailBattleCoreRestoresUnfinishedMover locks the independent
+// saved HasMover branch: a nanoframe may carry a mover, whose fixed fields and
+// saved anchor must be installed without running an order or construction tick
+// [08 R-SAVE-02 §6, §8, §11].
+func TestRestoreRetailBattleCoreRestoresUnfinishedMover(t *testing.T) {
+	s, fixtures := newRestoreCoreFixture(t, 1)
+	u := fixtures[0]
+	s.Movement = movement.NewSystem(nil, movement.Profile{}, movement.NewOccupancyGrid())
+	base := unitRecordData(true)
+	binary.LittleEndian.PutUint32(base[0xA7:], math.Float32bits(.5))
+	binary.LittleEndian.PutUint16(base[0x93:], uint16(3))
+	binary.LittleEndian.PutUint16(base[0x95:], uint16(4))
+	mover := make([]byte, 35)
+	binary.LittleEndian.PutUint32(mover[0:], uint32(11))
+	binary.LittleEndian.PutUint32(mover[24:], uint32(22))
+	binary.LittleEndian.PutUint16(mover[28:], uint16(33))
+	binary.LittleEndian.PutUint32(mover[30:], 44)
+	mover[34] = 5 // grounded mode plus blocked bit
+	stage := &RetailBattleStage{Session: s, StableUnit: stableUnitMap(fixtures), Image: &save.BattleImage{Units: save.UnitImage{
+		Records: []save.UnitRecord{{StableID: u.stableID, Data: base}},
+		Other:   []save.RawBox{{Name: "u0007mob", Data: mover}},
+	}}}
+	if err := RestoreRetailBattleCore(stage); err != nil {
+		t.Fatal(err)
+	}
+	restored := s.Units.Unit(u.handle)
+	if restored.Remaining != .5 {
+		t.Fatalf("remaining=%v, want unfinished frame", restored.Remaining)
+	}
+	got, err := s.Movement.RetailMoverImage(u.handle)
+	if err != nil || string(got) != string(mover) {
+		t.Fatalf("restored mover=%x err=%v, want %x", got, err, mover)
+	}
+	if occupant, ok := s.Movement.Grid.OccupantAt(movement.Cell{X: 3, Z: 4}); !ok || occupant != int(u.handle) {
+		t.Fatalf("saved occupancy=%d present=%t, want handle %d", occupant, ok, u.handle)
+	}
+}
+
+// TestRestoreRetailBattleCoreRestoresNoMoverStructureSupport keeps structural
+// collision support separate from HasMover: a completed building restores its
+// saved anchor without acquiring a mover record [08 R-SAVE-02 §6, §8, §11].
+func TestRestoreRetailBattleCoreRestoresNoMoverStructureSupport(t *testing.T) {
+	s, fixtures := newRestoreCoreFixture(t, 1)
+	u := fixtures[0]
+	s.Units.Unit(u.handle).Def.BMCode = 0
+	s.Units.Unit(u.handle).Def.YardMap = "o"
+	s.Movement = movement.NewSystem(nil, movement.Profile{}, movement.NewOccupancyGrid())
+	base := unitRecordData(false)
+	binary.LittleEndian.PutUint16(base[0x93:], uint16(3))
+	binary.LittleEndian.PutUint16(base[0x95:], uint16(4))
+	stage := &RetailBattleStage{Session: s, StableUnit: stableUnitMap(fixtures), Image: &save.BattleImage{Units: save.UnitImage{
+		Records: []save.UnitRecord{{StableID: u.stableID, Data: base}},
+		Other:   []save.RawBox{{Name: "u0007mob", Data: make([]byte, 35)}},
+	}}}
+	if err := RestoreRetailBattleCore(stage); err != nil {
+		t.Fatal(err)
+	}
+	if s.Movement.HasMover(u.handle) {
+		t.Fatal("no-mover structure acquired a mover")
+	}
+	c := s.Movement.Collisions[u.handle]
+	if c == nil || !c.Building || c.CachedAnchor != (movement.Cell{X: 3, Z: 4}) {
+		t.Fatalf("structure support=%+v, want saved building anchor (3,4)", c)
 	}
 }
 

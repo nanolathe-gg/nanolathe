@@ -347,9 +347,6 @@ func (s *Service) handleCancelCurrent(factory *units.Unit, node *orders.Node, ti
 		if s.builderLinks != nil {
 			delete(s.builderLinks, product.Handle)
 		}
-		if s.getBuiltLinks != nil {
-			delete(s.getBuiltLinks, product.Handle)
-		}
 		// Also clear any reverse mapping? product -> builder only, so delete above suffices.
 		// Ensure product's own builder link cleared on cancel (before and after nanoframe unified) [05 C21].
 	}
