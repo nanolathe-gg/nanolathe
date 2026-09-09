@@ -76,13 +76,16 @@ type modelTextureKey struct {
 // of Client: a renderer replacement, an off-screen unit, or no renderer at
 // all cannot change which players phase 7 advances [03 R-CRD-005 §1].
 type ModelTextureRegistry struct {
-	fs              *vfs.FS
-	primary         map[string]texRef
-	logos           map[string]texRef
-	loads           map[modelTextureLoadKey]*unitModel
-	byCompiled      map[*compiledmodel.Model]modelTextureLoadKey
-	unitByName      map[string]modelTextureLoadKey
-	unitByID        map[uint16]modelTextureLoadKey
+	fs         *vfs.FS
+	primary    map[string]texRef
+	logos      map[string]texRef
+	loads      map[modelTextureLoadKey]*unitModel
+	byCompiled map[*compiledmodel.Model]modelTextureLoadKey
+	unitByName map[string]modelTextureLoadKey
+	unitByID   map[uint16]modelTextureLoadKey
+	// trailDefs keeps the trail classifier's inputs per unit load
+	// (DESIGN_GPU_RENDERER §15).
+	trailDefs       map[modelTextureLoadKey]trailDefInfo
 	hullByName      map[string]*compiledmodel.Model
 	projectileByID  map[int32]modelTextureLoadKey
 	featurePrepared map[string]*unitModel
@@ -183,8 +186,34 @@ func (r *ModelTextureRegistry) bindUnitModels(cat *content.Catalog) error {
 		}
 		r.unitByName[ckey(key)] = load
 		r.unitByID[uint16(def.UnitDefID)] = load
+		if r.trailDefs == nil {
+			r.trailDefs = map[modelTextureLoadKey]trailDefInfo{}
+		}
+		r.trailDefs[load] = trailDefInfo{
+			ted: tedClassOf(def.Unknown), move: def.MovementClass,
+			aircraft: def.CanFly || def.MobilityDomain == content.MobilityAircraft,
+		}
 	}
 	return nil
+}
+
+// trailInfo is the trail classifier's view of a unit definition, by the same
+// name-then-id lookup unitModel uses (DESIGN_GPU_RENDERER §15).
+func (r *ModelTextureRegistry) trailInfo(defName string, defID uint16) trailDefInfo {
+	if r == nil {
+		return trailDefInfo{}
+	}
+	if defName != "" {
+		if load, ok := r.unitByName[ckey(defName)]; ok {
+			return r.trailDefs[load]
+		}
+	}
+	if defID != 0 {
+		if load, ok := r.unitByID[defID]; ok {
+			return r.trailDefs[load]
+		}
+	}
+	return trailDefInfo{}
 }
 
 func (r *ModelTextureRegistry) bindProjectileModels(cat *content.Catalog) error {

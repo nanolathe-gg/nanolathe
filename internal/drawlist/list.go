@@ -355,6 +355,7 @@ const (
 	familySurface
 	familyCursor
 	familyExpand
+	familyTrails
 )
 
 // tag is one ordering entry: which family, and which element of that family's
@@ -378,6 +379,7 @@ type List struct {
 	points  []Points
 	model   []Model
 	fog     []Fog
+	trails  []Trails
 	surface []Surface
 	cursor  []Cursor
 
@@ -495,6 +497,7 @@ func (l *List) Reset() {
 	l.points = l.points[:0]
 	l.model = l.model[:0]
 	l.fog = l.fog[:0]
+	l.trails = l.trails[:0]
 	l.surface = l.surface[:0]
 	l.cursor = l.cursor[:0]
 }
@@ -503,6 +506,9 @@ func (l *List) Reset() {
 // matching Sink method for each (C-G3, I1). It never reads the committed frame
 // and mutates no simulation state [I6].
 func (l *List) Replay(s Sink) {
+	// The trail family is optional: an executor that cannot present it (the
+	// Original executor) simply lacks the hook.
+	trails, _ := s.(TrailSink)
 	for _, t := range l.order {
 		switch t.fam {
 		case familyClear:
@@ -529,6 +535,10 @@ func (l *List) Replay(s Sink) {
 			s.Cursor(l.cursor[t.idx])
 		case familyExpand:
 			s.Expand()
+		case familyTrails:
+			if trails != nil {
+				trails.Trails(l.trails[t.idx])
+			}
 		}
 	}
 }
@@ -589,6 +599,11 @@ func (l *List) Clone() List {
 			Identity: sf.Identity,
 			Revision: sf.Revision,
 		}
+	}
+	// Trail batches borrow the client's reusable mark arena; copy each.
+	c.trails = make([]Trails, len(l.trails))
+	for i, tr := range l.trails {
+		c.trails[i] = Trails{Marks: append([]Trail(nil), tr.Marks...)}
 	}
 	return c
 }

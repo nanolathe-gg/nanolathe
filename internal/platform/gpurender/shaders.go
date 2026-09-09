@@ -99,6 +99,11 @@ const (
 	// body slot's page bounds. The punch reads the body plane, never the
 	// destination, so this run takes no read copy (§13.3).
 	destOpShadowCommit = 2
+	// destOpTrail scales the destination by the trail mark's darkening times
+	// a coverage evaluated from the quad's local coordinates: an oval for a
+	// footprint, a soft-sided segment for a track (§15). The colour lanes
+	// carry the centre scale split like destOpTable's.
+	destOpTrail = 3
 )
 
 // The composite's blends (docs/DESIGN_GPU_RENDERER.md §13.3 "Blend classes").
@@ -288,6 +293,22 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 		// part the colour factor can express and the part the alpha factor adds:
 		// the blend forms dst * (min(k,1) + max(k-1,0)) = dst * k (§13.3).
 		return vec4(color.r, color.r, color.r, color.g)
+	}
+	if op == ` + fmt.Sprint(destOpTrail) + ` {
+		// custom.xy is the mark's local position, −1..1 along and across the
+		// travel direction; custom.z selects the oval (0) or the segment (1).
+		// The coverage fades to nothing at the edge so the mark has no hard
+		// outline, and the scale is 1 − (1 − k) × coverage: unchanged terrain
+		// outside, the mark's own scale at its centre (§15).
+		d := 0.0
+		if custom.z < 0.5 {
+			d = dot(custom.xy, custom.xy)
+		} else {
+			d = custom.y * custom.y
+		}
+		cov := 1.0 - smoothstep(0.6, 1.0, d)
+		k := 1.0 - (1.0-color.r)*cov
+		return vec4(k, k, k, 0.0)
 	}
 	idx := 0.0
 	if op == ` + fmt.Sprint(destOpTint) + ` {

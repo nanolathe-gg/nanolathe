@@ -758,6 +758,48 @@ func (s *scheduler) quad(class int, dx0, dy0, dx1, dy1, sx0, sy0, sx1, sy1 float
 	run.iLen += 6
 }
 
+// quadCorners appends one quad with explicit corner positions and per-vertex
+// custom lanes to the open run, in the same vertex order as quad; the trail
+// marks are rotated quads (§15). Source coordinates are zero: the run's
+// shader op reads no texture.
+func (s *scheduler) quadCorners(class int, xs, ys [4]float32, col [4]float32, custom [4][4]float32) {
+	if s.curPhase < 0 || class != s.curClass {
+		return
+	}
+	b := &s.phases[s.curPhase].batch[class]
+	if len(b.runs) == 0 {
+		return
+	}
+	run := &b.runs[len(b.runs)-1]
+	if int(run.vLen)+quadVertices > schedRunVertexLimit {
+		imgs, shader, blend, readSlot := run.imgs, run.shader, run.blend, run.readSlot
+		b.openRun(imgs, shader, blend, readSlot)
+		run = &b.runs[len(b.runs)-1]
+	}
+	base := uint32(run.vLen)
+	nv := len(b.verts)
+	if nv+quadVertices > cap(b.verts) {
+		b.verts = s.growVerts(b.verts, maxInt(nv+quadVertices, int(b.vHint)))
+	}
+	b.verts = b.verts[:nv+quadVertices]
+	v := b.verts[nv : nv+quadVertices : nv+quadVertices]
+	for i := 0; i < quadVertices; i++ {
+		v[i] = ebiten.Vertex{DstX: xs[i], DstY: ys[i],
+			ColorR: col[0], ColorG: col[1], ColorB: col[2], ColorA: col[3],
+			Custom0: custom[i][0], Custom1: custom[i][1], Custom2: custom[i][2], Custom3: custom[i][3]}
+	}
+	ni := len(b.idx)
+	if ni+6 > cap(b.idx) {
+		b.idx = s.growIdx(b.idx, maxInt(ni+6, int(b.iHint)))
+	}
+	b.idx = b.idx[:ni+6]
+	i := b.idx[ni : ni+6 : ni+6]
+	i[0], i[1], i[2] = base, base+1, base+2
+	i[3], i[4], i[5] = base+1, base+2, base+3
+	run.vLen += quadVertices
+	run.iLen += 6
+}
+
 // submitSchedule draws every compiled phase of the current segment and clears it.
 // It runs at every barrier — a composed attached-unit group, an overflowing model
 // subject, the clear and the Expand marker — and at the end of Execute.

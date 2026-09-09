@@ -340,6 +340,11 @@ func (c *Client) drawCommittedFrame(cur *frame.Frame, ok bool) {
 	// Terrain/static preparation, radar preparation, and viewport clipping are
 	// unconditional. Radar and clip have no concrete frame input yet.
 	c.drawTerrainPrep()
+	// The Enhanced trail layer lies on the terrain under every strip
+	// (DESIGN_GPU_RENDERER §15). Marks are placed from the committed tick, not
+	// the blended view, so the layer never moves with the blend fraction.
+	c.placeTrails(c.buffer.Current())
+	c.drawTrails()
 	// Strips 0 and 1 are unconditional but producerless; strip 2 is the first
 	// published effect barrier [03 §1][03 R-STRIP-01 §2].
 	//

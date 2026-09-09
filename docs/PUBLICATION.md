@@ -11,14 +11,17 @@ along their first-parent ancestry. The original root, bootstrap, early phase
 boundaries, date changes and nearby subsystem transitions guided the groups;
 no group contains more than ten first-parent steps. Redundant sanitized
 snapshots were omitted. Publication follow-ups update the documentation and make a test helper
-portable, giving 293 commits in this curated candidate.
+portable. Two further integration commits bring in subsequent command, fragment,
+minimap-mask and terrain-trail updates, giving 295 commits in this candidate.
 
 The original merge graph sometimes follows a topic branch before merging other
 work. These commits are curated integration snapshots, not a reconstruction of
 an original linear mainline. Authors and source endpoint author dates are
 retained; the curator's committer identity and date identify the rewrite.
 Intermediate snapshots are not individually certified releases. Their commit
-messages describe the aggregate areas and selected constituent changes.
+messages describe the aggregate areas and selected constituent changes. Files
+that existed only between selected snapshots may disappear through grouping,
+in addition to the explicit path exclusions.
 
 A private audit outside this repository records source-to-curated mappings,
 path exclusions and affected text versions. It is not part of the public Git

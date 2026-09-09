@@ -184,9 +184,15 @@ func runShot(opts Options, cs *contentSet) error {
 	const tickSeconds = 1.0 / 30.0
 	millis := &shotMillisSource{}
 	b.millisSource = millis
+	// The Enhanced trail layer lays its marks per committed tick, and a capture
+	// presents only the last one, so the capture route observes each tick as
+	// the window would (DESIGN_GPU_RENDERER §15). The executor choice is the
+	// same one the capture below installs.
+	cl.SetEnhanced(effectiveShotRenderer(opts) != "classic")
 	for i := 0; i < opts.ShotTicks; i++ {
 		millis.step = uint32(i) + 1
 		b.viewerStep(tickSeconds, cl)
+		cl.ObserveCommittedTick()
 	}
 
 	// A capture has no pointer and no click history, so it composes the battle

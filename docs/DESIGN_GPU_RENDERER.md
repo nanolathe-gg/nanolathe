@@ -1790,3 +1790,92 @@ by whoever owns the cached-live lanes.
 Owed: a human look at the window with `--renderer=modern --zoom 2`, F9 and
 F10 during motion, and at projectiles, effects, halos and health bars at
 2×, which no capture scene produced.
+
+## 15. Trails: Enhanced ground marks
+
+### 15.1 Decision
+
+Mobile ground units leave fading marks on the terrain: alternating footprints
+for legged units, a pair of track segments for tracked ones. Retail leaves no
+marks, so this is a Nanolathe presentation feature under the Enhanced umbrella
+of §14.3: on while the modern executor presents, absent from Original, and
+never a simulation input [I6]. The classic executor is unchanged and stays
+the byte-exact reference.
+
+The marks are geometry, not art: an oval and a segment whose coverage the
+shader evaluates, darkening whatever terrain is under them. There is nothing
+to author and the look is right on every tile set, because the terrain's own
+colour is what fades.
+
+### 15.2 Placement — contract T1
+
+`internal/client/trails.go` keeps one ring of at most 4,096 marks and one
+tracker per unit, keyed by the publication identity the orientation cache
+uses and pruned with the live unit set. Once per committed tick, only while
+Enhanced presents, every unit the classifier accepts is compared with the
+point where it last laid a mark:
+
+- **Class.** The FBI's `TEDClass` word decides: `KBOT` and `COMMANDER` lay
+  feet, `TANK` lays tracks, the fixed and flying classes lay nothing. The
+  movement class names describe footprint size and terrain rules (most kbots
+  ride `TANKSH2`), so they only exclude: a `HOVER` or `BOAT` class lays
+  nothing. `CNSTR` and `SPECIAL` cover both walkers and vehicles and fall back
+  to the model: a piece named for a leg makes it a walker. The class is
+  cached per definition.
+- **Gate.** The unit must be mobile (BMcode), on the ground (mode mirror 1),
+  complete, within two world pixels of the terrain under it, above sea level,
+  and visible to the local player by the painter's own gate: a trail is the
+  memory of a walk that was watched, never a sensor. A unit that fails the
+  gate restarts its stride where it next qualifies.
+- **Stride.** Feet every 10 world pixels, tracks every 8, laid along the
+  straight line from the last mark to the current position, several per tick
+  if the unit is fast. A step above eight strides is a move (factory exit,
+  transport drop, restore), not a walk, and bridges nothing. Feet alternate
+  sides at each mark.
+- **Age.** A mark lives 300 committed ticks and its strength fades linearly
+  to zero over that life. Ages are tick differences, never wall time.
+
+### 15.3 Recording and drawing — contract T2
+
+Recording projects each live mark through the view transform of §14.2 at the
+terrain height under it, culls to the viewport plus a margin, and records the
+whole frame as ONE `drawlist.Trails` batch between the terrain record and
+strip 0, so features, shadows, units and the fog composite draw over it. The
+batch rides the optional `drawlist.TrailSink` hook: a sink without it (the
+classic executor, every test collector) replays the frame unchanged.
+
+Mark geometry at view scale s, with the direction of travel mapped straight
+onto the screen plane:
+
+| mark | centre | half-length | half-width | peak darkening |
+|---|---|---|---|---|
+| footprint | ±2·FootX·s px across the path, alternating | 4·s px along the path | 2·s px | 0.4 |
+| track (two per mark) | ±(4·FootX + 2)·s px across the path | 4·s px (the stride, so segments join) | 1.75·s px | 0.3 |
+
+The modern executor draws the batch as one destination command over the
+union of its marks under the row families' scale blend (§13.3): each mark is
+a rotated quad whose fragment is `1 − strength × coverage`, the coverage a
+soft oval for a footprint and a soft-sided, hard-ended segment for a track,
+evaluated by the scene destination shader's `destOpTrail` from the quad's
+local coordinates. Multiplies commute, so marks that overlap need no phase
+ordering between them, and the scheduler still places the batch after the
+terrain it darkens and before everything drawn over it.
+
+The capture route observes every tick it advances (`Client.ObserveCommittedTick`)
+so a `--shot` shows the marks the window would.
+
+### 15.4 Verification
+
+- `internal/client/trails_test.go`: the classifier table; a walker laying two
+  alternating footprints along its step, nothing on first sighting, nothing
+  re-recording the same tick, fading and expiry, nothing in Original; and no
+  marks for airborne, elevated or moved units.
+- `internal/platform/gpurender/trails_test.go`: the optional-sink replay, and
+  the device fixture (`NANOLATHE_GPU_DEVICE_TEST=1`): a full-strength
+  footprint darkens its centre to near zero and leaves the field untouched
+  beyond its half-width and half-length; a half-strength track halves the
+  field along its whole length and not beside or past it.
+- Captures: `--renderer=modern --shot-renderer=modern` at 1× and 2× on the
+  seeded Ashap Plateau scene, viewed.
+- 120 TPS modern benchmark at 1× against main on the same machine state:
+  Record and Submit within noise.

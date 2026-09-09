@@ -225,6 +225,9 @@ type Client struct {
 	// detail scale (DESIGN_GPU_RENDERER §14.3).
 	doubledFrames map[*formats.GAFFrame]*formats.GAFFrame
 	enhanced      bool
+	// trails is the Enhanced trail layer's retained state (DESIGN_GPU_RENDERER
+	// §15): presentation only, reset with the model registry and the terrain.
+	trails trailState
 	// featureSeqs memoises the compiled animation sequences the SIMULATION
 	// reads through Client.FeatureSequence — the burn frame geometry and the
 	// die/reclaim/burn lifetimes of [05 R-FEAT-01 §10]. A nil value is a
@@ -455,6 +458,7 @@ func New(opts Options) (*Client, error) {
 func (c *Client) SetTerrain(t *world.Terrain) {
 	if c != nil && c.terrain != t {
 		c.resetFogCache()
+		c.resetTrails()
 		c.terrain = t
 		if t == nil {
 			c.SetDetailArt(nil)
@@ -673,6 +677,7 @@ func (c *Client) SetModelFS(fs *vfs.FS) {
 	c.modelOrientation = map[uint64]*presentationrender.OrientationCache{}
 	c.cachedModelBodies = map[uint64]*cachedModelBody{}
 	c.models = map[string]*unitModel{}
+	c.resetTrails()
 	c.texIndex = map[string]texRef{}
 	c.logoIndex = map[string]texRef{}
 	c.featureGAFs = map[string]*formats.GAF{}
