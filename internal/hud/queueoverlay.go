@@ -7,7 +7,6 @@ package hud
 
 import (
 	"fmt"
-	"math"
 
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
@@ -521,10 +520,10 @@ func rangeChordCount(radius int32) int32 {
 	if radius <= 0 {
 		return 0
 	}
-	// Retail forms trunc(radius * 2pi * 1/8) in working precision. This is a
+	// Retail uses this stored approximation of 2pi, not math.Pi*2. This is a
 	// presentation-only transient and retains the full authored dword domain;
 	// a fixed rational approximation would drift near integer boundaries.
-	return int32(float64(radius) * (2 * math.Pi) * 0.125)
+	return int32(float64(radius) * 6.28318530717958 * 0.125)
 }
 
 func rangeRingPoint(center QueueWorldPoint, angle numeric.Angle, radius int32, opt QueueOverlayOptions) QueuePoint {

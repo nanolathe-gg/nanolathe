@@ -566,6 +566,10 @@ func TestQueueOverlayCompactKamikazePulse(t *testing.T) {
 // closure, terrain lifting and the narrow malformed-radius rejection at the
 // host boundary [07 R-P0-11 §3][I11].
 func TestRangeRingAdaptiveTerrainAndBounds(t *testing.T) {
+	// This authored dword distinguishes the stored constant from 2*math.Pi.
+	if got := rangeChordCount(313027116); got != 245850921 {
+		t.Fatalf("stored range constant produced %d chords, want 245850921", got)
+	}
 	project := func(x, y, z numeric.Fixed) QueuePoint {
 		return QueuePoint{X: int32(x >> 16), Y: int32(y >> 16)}
 	}
