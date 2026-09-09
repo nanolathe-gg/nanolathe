@@ -137,7 +137,9 @@ battle wind strength and 16-bit heading use the simulation stream.
 
 **Check.** Identical seeded session setups have stable simulation and CRT draw
 counts; setup and briefing draws leave the retained battle CRT fresh; the
-runtime exposes no separate headless execution path.
+graphical and headless hosts compose and advance the same authoritative
+session with explicit battle seeds. Host timing and profiling do not enter
+simulation decisions.
 
 ## I5 — Pools, not handles
 
@@ -168,7 +170,10 @@ state. Presentation never writes sim state. The only channel is the committed
 frame, published once after every completed sub-tick and sampled at the
 current committed tick by the renderer, or by Enhanced presentation the two
 most recent committed ticks (DESIGN_GPU_RENDERER §13.5). The active runtime
-has one Ebitengine window path; there is no alternate headless entry.
+has one authoritative session implementation, hosted by the Ebitengine window
+or the graphical command's headless mode and dedicated headless command
+(ARCHITECTURE §5). A host may measure elapsed time or profile execution, but
+those observations never determine simulation state or tick behavior.
 Presentation and front-end random histories never become session seed inputs;
 the explicit battle seed pair is the only RNG handoff into composition
 (DESIGN_RUNTIME_DETERMINISM §2.2 and §5).
