@@ -40,15 +40,22 @@ func TestFragmentFrozenMaterialAndFaceProjection(t *testing.T) {
 	}
 	v.Angles = [3]uint16{2048, 4096, 8192}
 	// Compare the fragment's standalone rotation against the existing detached
-	// piece entry, including fractional world placement [03 R-COMP-02 §6].
+	// piece entry after mapping fragment Z/Y/X lanes to debris X/Y/Z,
+	// including fractional world placement [04 R-COB-04 §3][03 R-COMP-02 §6].
 	v.Position[0]++
 	polys := c.collectFragmentPolys(v, want)
 	m := model.Model{Root: 0, Pieces: []model.Piece{{Parent: -1, Vertices: v.Vertices[:]}}}
-	draw := render.BuildDebrisModelPieceInto(&m, frame.DebrisView{X: v.Position[0], Y: v.Position[1], Z: v.Position[2], Angles: v.Angles}, nil)
+	draw := render.BuildDebrisModelPieceInto(&m, frame.DebrisView{X: v.Position[0], Y: v.Position[1], Z: v.Position[2], Angles: [3]uint16{v.Angles[2], v.Angles[1], v.Angles[0]}}, nil)
+	// Template order and side-face material are retail contracts, independent
+	// of the renderer's index table [04 R-COB-04 §5].
+	rings := [6][4]int{{0, 1, 2, 3}, {2, 1, 6, 5}, {0, 3, 4, 7}, {1, 0, 7, 6}, {3, 2, 5, 4}, {4, 5, 6, 7}}
+	if len(polys) != len(rings) {
+		t.Fatalf("fragment faces = %d, want six template quads", len(polys))
+	}
 	for face := range polys {
 		for corner := 0; corner < 4; corner++ {
-			x, y := c.modelDirectVertex(draw.Pieces[0].WorldVertices[4*face+corner], v.Position)
-			if polys[face].x[corner] != x || polys[face].y[corner] != y || polys[face].useSHD {
+			x, y := c.modelDirectVertex(draw.Pieces[0].WorldVertices[rings[face][corner]], v.Position)
+			if polys[face].x[corner] != x || polys[face].y[corner] != y || polys[face].useSHD || polys[face].frame != want {
 				t.Fatal("fragment changed standalone projection or shading")
 			}
 		}

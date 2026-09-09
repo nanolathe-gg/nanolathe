@@ -39,7 +39,14 @@ func (c *Client) fragmentTexture(v frame.FragmentView) *formats.GAFFrame {
 	return ref.entry.Frames[v.FrameIndex].Frame
 }
 
-// collectFragmentPolys presents the two copied faces, preserving their stored
+// fragmentFaces is the initialized six-quad template in stored painter order;
+// admission copies the source material onto every face [04 R-COB-04 §5].
+var fragmentFaces = [6][4]int{
+	{0, 1, 2, 3}, {2, 1, 6, 5}, {0, 3, 4, 7},
+	{1, 0, 7, 6}, {3, 2, 5, 4}, {4, 5, 6, 7},
+}
+
+// collectFragmentPolys presents the six template faces, preserving their stored
 // winding and extrusion. The standalone rotation and projection have no key
 // plane or shading; both executors consume these same polygons
 // [04 R-COB-04 §3][03 R-COMP-02 §6].
@@ -49,19 +56,21 @@ func (c *Client) collectFragmentPolys(v frame.FragmentView, texture *formats.GAF
 	}
 	pieces := [1]model.Piece{{Parent: -1}}
 	m := model.Model{Pieces: pieces[:], Root: 0}
-	states := [1]model.PieceState{{RotX: v.Angles[0], RotY: v.Angles[1], RotZ: v.Angles[2]}}
+	// Fragment lanes retain the initializer's raw order: Z, Y, X. The
+	// standalone helper rotates Z, then X, then Y [04 R-COB-04 §3].
+	states := [1]model.PieceState{{RotX: v.Angles[2], RotY: v.Angles[1], RotZ: v.Angles[0]}}
 	transform := model.Compose(&m, states[:], 0)
 	var vertices [8][3]numeric.Fixed
 	transform.ApplyOffsetInto(vertices[:], v.Vertices[:], v.Position)
-	scratch := c.borrowPolys(2, 8)
+	scratch := c.borrowPolys(len(fragmentFaces), 4*len(fragmentFaces))
 	u := [4]int32{0, int32(texture.Width) - 1, int32(texture.Width) - 1, 0}
 	vv := [4]int32{0, 0, int32(texture.Height) - 1, int32(texture.Height) - 1}
-	for face := 0; face < 2; face++ {
+	for _, indices := range fragmentFaces {
 		poly := scratch.next(4)
 		poly.frame = texture
 		poly.piece, poly.primitive = v.PieceIndex, v.PrimitiveIndex
 		for corner := 0; corner < 4; corner++ {
-			poly.x[corner], poly.y[corner] = c.modelDirectVertex(vertices[4*face+corner], v.Position)
+			poly.x[corner], poly.y[corner] = c.modelDirectVertex(vertices[indices[corner]], v.Position)
 			poly.attr[spanU][corner], poly.attr[spanV][corner] = u[corner], vv[corner]
 		}
 	}
