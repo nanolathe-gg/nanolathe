@@ -495,6 +495,50 @@ func newModelTextureCursor(ref texRef) *modelTextureCursor {
 	}), frames: frames}
 }
 
+// FreezeFragmentMaterial copies only the selected material identity at COB
+// admission. Neither subsequent phase-7 advances nor player colour changes
+// can change the returned value [04 R-COB-04 §3]. No cursor is registered here.
+func (r *ModelTextureRegistry) FreezeFragmentMaterial(unitDefID uint16, pieceIndex, primitiveIndex int, ownerColor uint8) presentationrender.FrozenFragmentMaterial {
+	material := presentationrender.FrozenFragmentMaterial{
+		UnitDefID: unitDefID, PieceIndex: pieceIndex, PrimitiveIndex: primitiveIndex,
+	}
+	if r == nil {
+		return material
+	}
+	load, ok := r.unitByID[unitDefID]
+	if !ok {
+		return material
+	}
+	m := r.loads[load]
+	if m == nil || m.compiled == nil || pieceIndex < 0 || pieceIndex >= len(m.compiled.Pieces) {
+		return material
+	}
+	piece := &m.compiled.Pieces[pieceIndex]
+	if primitiveIndex < 0 || primitiveIndex >= len(piece.Primitives) {
+		return material
+	}
+	ref, ok := r.resolve(piece.Primitives[primitiveIndex].TextureName)
+	if !ok {
+		return material
+	}
+	switch ref.kind {
+	case texStatic:
+		material.Valid = ref.frame != nil
+	case texTeam:
+		material.FrameIndex = int32(ownerColor)
+		material.Valid = ref.entry != nil && int(ownerColor) < len(ref.entry.Frames) && ref.entry.Frames[ownerColor].Frame != nil
+	case texAnimated:
+		cursor := r.bindings[modelTexturePrimitiveKey{load: load, piece: pieceIndex, primitive: primitiveIndex}]
+		if cursor == nil || cursor.player == nil {
+			return material
+		}
+		index, active := cursor.player.FrameIndex()
+		material.FrameIndex = int32(index)
+		material.Valid = active && index >= 0 && index < len(cursor.frames) && cursor.frames[index] != nil
+	}
+	return material
+}
+
 // StepPhase7 is the session callback. It snapshots the count and visits newest
 // to oldest exactly once, without visibility or renderer involvement [03
 // R-CRD-005 §1].

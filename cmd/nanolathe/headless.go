@@ -68,6 +68,7 @@ func installHeadlessModelTextureRegistry(sess *session.Session, fs *vfs.FS) (*cl
 		return nil, fmt.Errorf("nanolathe: headless session load failed: model textures: %w", err)
 	}
 	sess.SetPhase7Service(registry)
+	sess.SetFragmentMaterialResolver(registry.FreezeFragmentMaterial)
 	if sess.Features != nil {
 		sess.Features.SetDefinitionAdmissionObserver(registry.AdmitFeatureDefinition)
 	}

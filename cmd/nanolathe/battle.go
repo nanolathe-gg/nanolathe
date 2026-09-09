@@ -448,6 +448,7 @@ func composeBattleEntryDetached(sess *session.Session, cat *content.Catalog, cs 
 		return nil, fmt.Errorf("nanolathe: battle composition failed: model textures: %w", err)
 	}
 	sess.SetPhase7Service(b.modelTextures)
+	sess.SetFragmentMaterialResolver(b.modelTextures.FreezeFragmentMaterial)
 	if sess.Features != nil {
 		sess.Features.SetDefinitionAdmissionObserver(b.modelTextures.AdmitFeatureDefinition)
 	}
@@ -584,6 +585,7 @@ func (b *battleSession) teardown(cl *client.Client) {
 		// The score teardown also runs for manual exits [08 R-CAMP-01 §7].
 		b.sess.CommitCampaignTeardown()
 		b.sess.SetPhase7Service(nil)
+		b.sess.SetFragmentMaterialResolver(nil)
 		b.sess.SetPublicationObserver(nil)
 		if b.sess.Features != nil {
 			b.sess.Features.SetDefinitionAdmissionObserver(nil)
