@@ -236,8 +236,8 @@ type Service struct {
 	// by the time StepUnit inspects the node again its Target is the SUCCESSOR's
 	// nanoframe, so deriving the completed handle from the post-pump head
 	// reported completion only for the last product of a run. Every earlier
-	// product silently never reached the session's completion hook — it got no
-	// mover, so it never left the pad and never took a ground word there.
+	// product silently never reached the session's completion hook, so its
+	// post-completion session services were skipped.
 	completedInPump pool.Handle
 
 	// Registration operands, resolved once per service. queueForUnit runs for
@@ -246,12 +246,12 @@ type Service struct {
 	// was a string lookup and three closure allocations per builder per tick.
 	// The values are derived from the immutable descriptor table and from this
 	// service; nothing here is per-queue or per-tick state.
-	rowsResolved         bool
-	externallyDrivenRows []orders.ID
-	mobileWakeRows       []orders.ID
-	getBuiltRow          orders.ID
-	boundMobileWake      orders.OwnedHandler
-	boundGetBuilt        orders.OwnedHandler
+	rowsResolved          bool
+	stepDrivenRows        []orders.ID
+	mobileWakeRows        []orders.ID
+	getBuiltRow           orders.ID
+	boundConstructionWake orders.OwnedHandler
+	boundGetBuilt         orders.OwnedHandler
 }
 
 // ensureRegistrationRows resolves this service's row ids and binds its two
@@ -263,7 +263,7 @@ func (s *Service) ensureRegistrationRows() {
 	s.rowsResolved = true
 	for _, name := range buildRowsDrivenByStepUnit {
 		if id := orders.Lookup(name); id != 0 {
-			s.externallyDrivenRows = append(s.externallyDrivenRows, id)
+			s.stepDrivenRows = append(s.stepDrivenRows, id)
 		}
 	}
 	for _, name := range []string{MobileBuildOrder, VTOLMobileBuildOrder} {
@@ -272,7 +272,7 @@ func (s *Service) ensureRegistrationRows() {
 		}
 	}
 	s.getBuiltRow = orders.Lookup(GetBuiltOrder)
-	s.boundMobileWake = s.mobileBuildWakeVisit
+	s.boundConstructionWake = s.constructionWakeVisit
 	// The same adaptation Queue.SetGetBuiltHandler performs — a GetBuilt visit
 	// always advances the record — bound once instead of per registration.
 	s.boundGetBuilt = func(u *units.Unit, n *orders.Node, satisfied uint32, tick uint32) (orders.Code, bool) {
@@ -345,18 +345,52 @@ func (s *Service) RegisterOrderHandlers(q *orders.Queue) {
 		return
 	}
 	s.ensureRegistrationRows()
-	for _, id := range s.externallyDrivenRows {
-		q.SetExternallyDrivenHandler(id)
+	for _, id := range s.stepDrivenRows {
+		q.SetOwnedHandler(id, s.boundConstructionWake)
 	}
-	// The two mobile-build rows have one thing the pump, and only the pump, can
-	// do for them: deliver the approach phase's movement outcome. Their approach
-	// parks on retail's `0xE0` gate, so the pump's satisfied set IS the wake and
-	// it arrives as the ordinary handler argument [04 §3.3][05 R-WORK-01 §13].
-	// The body still reports that it did not advance the record on every arm but
-	// the row's abandon, so StepUnit keeps owning the rest of the machine.
+	// The two mobile-build rows use the same handler so their stop/cancel
+	// notifications are delivered before their phase-1 movement wake. Their
+	// approach parks on retail's `0xE0` gate, so the pump's satisfied set IS the
+	// wake and arrives as the ordinary handler argument [04 §3.3][05 R-WORK-01
+	// §13]. StepUnit still owns all continuing state-machine arms.
 	for _, id := range s.mobileWakeRows {
-		q.SetOwnedHandler(id, s.boundMobileWake)
+		q.SetOwnedHandler(id, s.boundConstructionWake)
 	}
+}
+
+// constructionWakeVisit receives an ordinary pump delivery for a row whose
+// state machine StepUnit otherwise advances. The pump has already consumed the
+// delivered bits from the record and unit words, so construction must act on
+// this argument while it is valid. In particular, a product-removal notice
+// reaches the stopped-build arm here rather than being discarded before
+// StepUnit can inspect Pending [04 §3.3][04 R-ORD-01 §6][05 C22].
+//
+// The handler does not apply a result code for the continuing arms: StepUnit
+// remains the owner of their phase, gate and deadline. Mobile-build phase 1 is
+// the established exception, retaining its movement-wake body.
+func (s *Service) constructionWakeVisit(builder *units.Unit, node *orders.Node, satisfied uint32, tick uint32) (orders.Code, bool) {
+	if s == nil || builder == nil || node == nil {
+		return 0, false
+	}
+	if isBuildOrderID(node.ID) {
+		if satisfied&InterruptCancel != 0 {
+			s.handleCancelCurrent(builder, node, tick)
+			// Cancel-current applies completion posture before its kind-9 packet,
+			// but its dying product is not an ordinary completed product for the
+			// session hook. This ordinary-pump arm must leave no completion token
+			// for a later builder's StepUnit visit.
+			s.completedInPump = 0
+			return 0, false
+		}
+		if satisfied&InterruptStop != 0 {
+			s.handleStop(builder, node, tick)
+			return 0, false
+		}
+	}
+	if isMobileBuild(node.ID) {
+		return s.mobileBuildWakeVisit(builder, node, satisfied, tick)
+	}
+	return 0, false
 }
 
 // TickContext carries per-tick shared services for unit-local stepping (ON-02).
@@ -1198,10 +1232,9 @@ func (s *Service) killDecayedNanoframe(product *units.Unit, tick uint32) {
 }
 
 // StepUnit is this service's per-unit step: the one entry the session's unit
-// phase calls for a builder, and the reason the build rows are registered as
-// externally driven on every queue this service binds — the pump dispatches
-// them and writes nothing, and the state machine below owns each record's
-// phase, gate and deadline [04 §3.3][05 "Factory production lifecycle"].
+// phase calls for a builder. The pump dispatches their construction wake
+// handler, while the state machine below owns every continuing record's phase,
+// gate and deadline [04 §3.3][05 "Factory production lifecycle"].
 //
 // It reports what the visit did through WorkResult, which the session's
 // diagnostics and the AI read; the authoritative effects are on the world.
@@ -1347,8 +1380,7 @@ func (s *Service) StepUnit(ctx TickContext, handle pool.Handle) WorkResult {
 			if prod.Def != nil && defKey == "" {
 				defKey = prod.Def.UnitName
 			}
-			// Completion initializes unit exactly once: Remaining 0→0, health MaxHealth set in handleState4 [05 C18].
-			// Detect exactly-once via transition from non-zero to zero.
+			// Detect the stored remaining-fraction transition exactly once.
 		} else {
 			// Product destroyed (cancel after nanoframe): not completed, but handle retained for hook.
 			// Builder link already cleared deterministically in handleCancelCurrent (ON-02).
