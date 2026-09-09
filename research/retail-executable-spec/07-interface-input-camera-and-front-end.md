@@ -451,7 +451,7 @@ controller kind is `1..3` and its side byte is not `10`.
 | `Light a b c` | replace the global model light vector from three signed integers, then invalidate shared model images ([03 §2.4.1]); no settings write |
 | `RCache` | invalidate shared model image allocations; subsequent draws rebuild as required without resetting retained pose ([03 §2.4.1]); no settings write |
 | `Selectable` | set the selectable bit on every unit whose status word has bit 28 (alive) set |
-| `MusicMode n` | music mode `n` into the audio device |
+| `MusicMode n` | store the signed desired music category through the category-change fade/delay path, without changing playback mode or writing settings [03 R-AUD-01 §4] |
 | `Logo n p` | valid slot `p` and `0 ≤ n <` logo count: slot `p`'s logo byte = `n`; renderer rebuild; otherwise post `Invalid logo setting` |
 | `ScreenChat` | toggle the screen-chat dword; write settings |
 | `Gamma n` | gamma = `n × 0.1` into the display; store `n`; write settings |
@@ -6365,8 +6365,50 @@ dispatch:
 | `1` | Build-site marker — the eight lines of the marker paragraph above. Age is the global tick minus the order's birth tick, clamped `0..10`, driving the `(w·age)/10` and `(h·age)/10` offsets; the color pair is that paragraph's 3/10 vs 1/9, outer/inner. |
 | `2` | Travelling-dash chain between the order's previous position and its anchor (target tracking and the cached-position flag live in the anchor getter). The distance is a float square root truncated toward zero; segments under one world unit draw nothing. The artwork is **not procedural**: sprites come from a GAF sprite chain (a frame table with a ticks-per-frame field), blitted through the ordinary GAF byte-copy blitter, with frame index `(age/tpf) % nFrames` where age is the global tick minus the order's birth tick — the cadence is driven by the order's **creation tick**, not the global phase. The chain's phase offset starts at `((age mod 30) * 3 << 20) / 30` (integer division) and advances `3 << 20` per sprite until the segment end; the 30-tick wrap of the phase is what makes the dashes march. Each sprite's position interpolates the segment linearly with a 16.16 fraction `(phase << 16) / distance`, so sprites sit three cells apart. |
 | `4` | A sixteen-segment circle at the order point. The radius is the truncated product `src * 0.9` where `src` is the target unit definition's radius field for unit targets and a constant 32 otherwise; chords are drawn through the line primitive in color-map entry 12. |
-| `8` | Queued-order icon: an animated cursor-GAF frame at the order point, index `tick/(tpf*2) % nFrames` into the cursor handle array at the descriptor's icon byte, drawn with the half-height shear; in battle the attack icons (1/2) alternate color-map entries 12/4 on the low tick bit and additionally draw the weapon AOE/coverage/attack-length rings. |
-| `16` | Once per unit: labeled range rings — sight/radar/sonar/jammer/build-distance/maneuver/kamikaze radii read straight from the unit definition's fields (the kamikaze radius is the trigger distance of [04 R-SPEC-01 §1]), weapon ranges from the weapon definition's authored range field — in color-map entries 15/12/14 per branch; the weapon-range pulse grows from 8 to the authored range over `tick mod 60`. |
+| `8` | Queued-order icon: an animated cursor-GAF frame at the order point, index `tick/(tpf*2) % nFrames` into the cursor handle array at the descriptor's icon byte, drawn with the half-height shear; in battle the attack icons (1/2) first draw weapon AOE/coverage/attack-length rings using color-map entries 12/4 on the low tick bit, then use the ordinary GAF icon blit without that GUI colour argument. |
+| `16` | Once per unit: labeled range rings — sight/radar/sonar/jammer/build-distance/maneuver/kamikaze radii read straight from the unit definition's fields (the kamikaze radius is the trigger distance of [04 R-SPEC-01 §1]), weapon ranges from the weapon definition's authored range field — in color-map entries 15/12/14 per branch; the compact kamikaze pulse uses half the resolved explosion area of effect, as detailed below. |
+
+**Established — `ShowRanges` selection.** The command toggles a process-only
+word, initially zero, without reading an argument or writing settings. It does
+not bypass the Shift gate. The bit-16 helper runs once per unit, at the first
+order whose effective descriptor mask contains that bit, after that node's
+other helpers. Marker-only fallback units never reach it. The helper reads
+unit-definition radii regardless of visibility.
+
+With the switch off, a cloaked unit draws its nonzero signed-16 minimum-cloak
+radius in GUI colour 15. A kamikaze unit with a resolved explosion definition
+then draws a GUI-12 pulse: `h = uint16(areaOfEffect) >> 1`, with radius
+`min(h, max(8, ((tick % 60) * h * 2) / 60))`. It next draws unsigned-16
+kamikaze distance for a mover (`BMCode == 1`), or signed-16 sight distance
+otherwise, in GUI colour 12. A resolved explosion with zero area still reaches
+this second ring.
+
+With the switch on, nonzero unit fields draw in this order in GUI colour 14:
+`mincloak`, `sight`, `radar`, `sonar`, `radarjam`, `sonarjam`, `build distance`,
+`maneuver`, `kamikazedistance`. The first six radii are signed-16; the last
+three are unsigned-16. Label ordinals count preceding nonzero fields. Authored
+weapon ranges then use GUI colour 12 on even ticks and 4 on odd ticks, with
+labels `weapon1 range` through `weapon3 range` and fixed ordinals 0 through 2.
+Slot three's range tests slot one's enabled bit; the other slots test their
+own. Definition activity is not an additional gate.
+
+With the switch on, each attack icon (descriptor icon 1 or 2) first draws each
+enabled weapon slot's nonzero unsigned-16 area of effect and authored coverage,
+then the unit's nonzero unsigned-16 attack length. The labels are
+`weapon N: area of effect`, `weapon N: coverage` (zero-based slot N), and
+`attack length`; their ordinals are 0, 1, and 2 respectively. The line colour
+uses the same even/odd tick pair.
+
+These range helpers use terrain-following chords, not the bit-4 target circle.
+For radius `r`, the chord count is
+`trunc(r * 6.28318530717958 * 0.125)` and the integer angle step is
+`65536 / count`; the inclusive loop emits `count + 1` chords from angle zero.
+Each endpoint uses the greater of centre height and sampled terrain height,
+then the ordinary projection and clipped integer line drawer. A label uses the
+second endpoint of chord `ordinal * 3`, falling back to the final endpoint
+when both saved screen coordinates are zero. Its pen is four pixels below
+that point, using the active battle FNT in GUI colour 15. The owning unit
+behaviour detail is [04 R-SPEC-01].
 
 Descriptor-table facts: the table is runtime-built with base and end pointers
 installed at startup; the records are fixed-stride with stride 25, proven by

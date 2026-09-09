@@ -46,6 +46,7 @@ func (g *gameShell) openCampaignBriefing() {
 	}
 	if g.audioOwner == nil {
 		g.audioOwner = audio.NewService(g.cs.fs)
+		bindMusicClock(g.audioOwner)
 	}
 	if clPtr != nil {
 		clPtr.SetAudioService(g.audioOwner)

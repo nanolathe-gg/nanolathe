@@ -148,6 +148,9 @@ type battleSession struct {
 	// clock draw site for a direct battle. A shell-backed battle reads its live
 	// text-line setting because MAXLINES may change it while battle is running.
 	clockUsePrimaryFont bool
+	// showRanges is a process-lifetime presentation toggle, retained by the
+	// shell across battles and never written to settings [07 R-CAM-01 §6].
+	showRanges bool
 
 	// interfaceType is the persisted LEFTCLICK stage for a direct battle. A
 	// frontend-backed battle reads the shell's live copy instead, so an
@@ -780,6 +783,9 @@ func (b *battleSession) noteTickTiming() {
 func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	if b == nil || cl == nil {
 		return
+	}
+	if b.shell == nil && cl.IsFocused() && b.sess != nil && b.sess.Audio != nil && b.sess.Audio.Music != nil {
+		b.sess.Audio.Music.ServiceTimers()
 	}
 	b.dragScrollStepped = false
 	if b.dragScrollActive && (!cl.IsFocused() || b.isResultVisible() || b.battleState().Modal() != ui.BattleModalClosed) {

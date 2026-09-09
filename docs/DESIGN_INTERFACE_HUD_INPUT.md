@@ -1317,8 +1317,10 @@ as local chat. The implemented handlers are:
 | `AntiAlias`, `Shading`, `Shadow` | toggle the independent live display bit and persist immediately |
 | `Gamma n` | apply the command factor to the shared output palette and persist the signed integer; startup and slider callbacks use their distinct factor conversion |
 | `Clock` | toggle and persist the stand-alone battle-clock bit; draw the committed unsigned tick in the late HUD layer |
+| `ShowRanges` | toggle detailed terrain-following range rings and labels inside the existing Shift-held queue overlay; retained by the shell across battles, without settings or simulation writes |
 | `Dither` | toggle the live current-fog pattern selector and persist `0` or `1` immediately |
 | `TShadow`, `FShadow` | toggle vehicle or feature shadows independently; persist on the next settings write |
+| `MusicMode n` | set the signed desired category through the existing music controller; fade/delay timers use the busy presentation pump and do not write settings |
 | `CDPlay n`, `CDStop` | use the existing music controller; argument zero runs its enabled music tick |
 | `Sound3D` | toggle the live audio output mode; write settings while retaining the separate stored sound-mode preference |
 | `Sing` | toggle the existing voice queue's audible alias override; preserve captions, arbitration and random draws; no settings write |
@@ -1332,6 +1334,16 @@ as local chat. The implemented handlers are:
 | `DoubleShot`, `HalfShot` | skirmish only; enqueue independent damage gates, applying signed doubling before halving in the existing weapon pipeline; no settings write |
 | `Radar` | skirmish only; toggle the battle-local full-radar bit for unit contacts; no settings write |
 | `Meteor [n]` | skirmish only; no argument queues a forced storm arm through the existing scheduler owner, while an explicit argument only sets its enable bit from `n != 0`; no settings write |
+
+`ShowRanges` reads authored radii from the catalog and live weapon-enabled
+bits from `UnitView`; no visibility-derived radius cache or live unit access is
+needed. The existing queue walker emits range chords and labels in descriptor
+order. Radii producing fewer than one chord are rejected before division, a
+narrow malformed-input bounds departure under I11; no substitute radius is
+invented `[07 R-P0-11 §3]` `[I6]`. The separate bit-4 target-circle
+helper still needs its model-radius binding and replacement of the old flat
+approximation with the established sixteen-segment world projection; it is
+not enabled by the range adapter.
 
 The resource strip retains its existing 30-tick rate latch across `View`.
 The retail viewing-player display deadline is not yet a live presentation

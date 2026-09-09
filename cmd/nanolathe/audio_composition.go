@@ -30,6 +30,7 @@ func attachBattleAudio(cl *client.Client, sess *session.Session, fs vfs.FSOps) {
 	// The session's audio service owns queue/cache/music; the client receives
 	// only that owner and drains it at the presentation boundary.
 	sess.InitAudio(fs)
+	bindMusicClock(sess.Audio)
 	cl.SetAudioService(sess.Audio)
 	cl.SetPresentationCRT(sess.PresentationCRT())
 
@@ -145,6 +146,7 @@ func (g *gameShell) ensureFrontendAudio() *audio.Service {
 	}
 	if g.audioOwner == nil {
 		g.audioOwner = audio.NewService(g.cs.fs)
+		bindMusicClock(g.audioOwner)
 	}
 	if !g.frontendAliasesBound && g.audioOwner.Registry != nil {
 		// Interface cue names are mode-0 alias registrations, so they resolve

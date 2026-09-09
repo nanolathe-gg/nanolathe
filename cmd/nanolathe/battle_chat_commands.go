@@ -131,6 +131,10 @@ func (b *battleSession) dispatchLocalCommand(text string) {
 		if b.sess != nil && battleSessionKind(b) == 2 {
 			_ = b.sess.EnqueueHumanCommand(session.HumanCommand{Kind: session.HumanATM})
 		}
+	case "musicmode":
+		if b.sess != nil && b.sess.Audio != nil && b.sess.Audio.Music != nil {
+			b.sess.Audio.Music.SetDesired(int32(localCommandInt(words, 1)))
+		}
 	case "cdplay":
 		if b.sess != nil && b.sess.Audio != nil && b.sess.Audio.Music != nil {
 			music := b.sess.Audio.Music
@@ -157,6 +161,11 @@ func (b *battleSession) dispatchLocalCommand(text string) {
 			b.shell.saveSettings()
 		} else {
 			b.saveDirectChatSetting(func(s *settings.Settings) { s.Clock = boolInt(value) })
+		}
+	case "showranges":
+		b.showRanges = !b.rangesShown()
+		if b.shell != nil {
+			b.shell.showRanges = b.showRanges
 		}
 	case "sound3d":
 		audio.ToggleOutput3D()

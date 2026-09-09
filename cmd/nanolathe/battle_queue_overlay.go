@@ -119,12 +119,19 @@ func drawQueueOverlay(c *client.Client, b *battleSession, f *frame.Frame, tick u
 		return hud.QueuePoint{X: sx - camera.OriginX, Y: sy - camera.OriginY}
 	}
 	opts := hud.QueueOverlayOptions{
-		Tick:        tick,
-		ShiftHeld:   shiftHeld,
-		LocalOwner:  localOwner,
-		TrackedUnit: tracked,
-		HoveredUnit: hovered,
-		Project:     project,
+		Tick:         tick,
+		ShiftHeld:    shiftHeld,
+		LocalOwner:   localOwner,
+		TrackedUnit:  tracked,
+		HoveredUnit:  hovered,
+		Project:      project,
+		ShowRanges:   b.rangesShown(),
+		Range:        b.snapshotRanges,
+		GroundHeight: c.GroundHeightAt,
+		// TODO(I10): bind the separate target-circle radius and replace
+		// its old flat approximation with the established sixteen-segment
+		// world projection. The target model radius needs a presentation
+		// catalog binding [07 R-P0-11 §3].
 		// The builder-capability test that gates the marker-only fallback
 		// [R-P0-11 §3].  It reads an immutable compiled definition, the same
 		// way the production dispatcher's builder check does; no live pool or
@@ -150,10 +157,6 @@ func drawQueueOverlay(c *client.Client, b *battleSession, f *frame.Frame, tick u
 			l, t, r, btm := b.siteRectToScreen(cx*16, cz*16, (cx+fx)*16, (cz+fz)*16, int32(o.GoalY>>16))
 			return hud.QueueRect{Left: l, Top: t, Right: r, Bottom: btm}, true
 		},
-		// Target-unit radii for the circle helper and the labelled range rings
-		// are not in the immutable frame yet.  Suppressing those callbacks is
-		// required by the clean-room contract; do not substitute a guessed
-		// radius.
 	}
 	chain := dashChainEntry(b.fs)
 	// The overlay's positions come through the projection and scale with it;
@@ -171,12 +174,13 @@ func drawQueueOverlay(c *client.Client, b *battleSession, f *frame.Frame, tick u
 		case hud.QueuePrimitiveDash:
 			drawDashChain(c, chain, op, project, scale)
 		case hud.QueuePrimitiveCircle:
-			// The overlay color-index initialization for the circle helper is
-			// not yet available at this presentation seam. A guessed GUI color
-			// would contradict [R-P0-11 §3], so retain the immutable instruction
-			// for inspection and suppress rasterization.
+			// Chords carry the established GUI colour of their helper branch.
 			if op.ColorKnown {
 				drawQueueLine(c, op.A, op.B, c.GUIColor(op.Color))
+			}
+		case hud.QueuePrimitiveLabel:
+			if b.hud != nil {
+				c.UIText(b.hud.console, op.Text, int(op.A.X), int(op.A.Y), c.GUIColor(op.Color))
 			}
 		case hud.QueuePrimitiveIcon:
 			drawQueueIcon(c, queueIconEntry(b.fs, op.IconCursor), op, scale)
@@ -235,12 +239,9 @@ var overlayDetailFrames = map[*formats.GAFFrame]*formats.GAFFrame{}
 // [fmt gaf "Placement offsets"].  The anchor is already projected through the
 // half-height shear by the overlay's own projection callback.
 //
-// The battle attack icons additionally alternate two colour-map entries on the
-// low tick bit and draw the weapon AOE/coverage/attack-length rings around
-// themselves [R-P0-11 §3].  Neither is drawn here: the icon frames are authored
-// indexed GAF bytes, blitted rather than recoloured, and the ring radii are the
-// weapon-definition fields the committed frame does not publish.  Suppressing
-// them keeps a guessed radius or palette entry out of the overlay.
+// The queue walker emits the attack-icon range rings before this blit. Their
+// GUI12/4 tick-parity colour belongs to those lines; the icon itself follows
+// the ordinary GAF path [07 R-P0-11 §3].
 func drawQueueIcon(c *client.Client, entry *formats.GAFEntry, op hud.QueuePrimitive, scale int32) {
 	if entry == nil || !op.IconKnown {
 		return

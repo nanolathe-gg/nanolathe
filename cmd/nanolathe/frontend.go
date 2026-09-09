@@ -159,6 +159,7 @@ type gameShell struct {
 	// options-page gadget; `+Clock` changes it during battle and the shell
 	// carries the result into later battles [07 R-CAM-01 §6].
 	clockVisible bool
+	showRanges   bool // process-only Shift overlay detail switch [07 R-CAM-01 §6]
 
 	campaigns       []mission.Campaign
 	campaignOptions []mission.Campaign
@@ -710,6 +711,9 @@ func (g *gameShell) panelWindowNeedsUnder(mode shellMode) bool {
 
 func (g *gameShell) step(delta float64, cl *client.Client) {
 	pumpAudio(time.Now())
+	if cl != nil && cl.IsFocused() && g.audioOwner != nil && g.audioOwner.Music != nil {
+		g.audioOwner.Music.ServiceTimers()
+	}
 	g.playPendingMenuBGM()
 	switch g.frontend.Mode {
 	case modeBattle:
