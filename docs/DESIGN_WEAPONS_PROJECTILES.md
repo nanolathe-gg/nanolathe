@@ -42,9 +42,10 @@ places.
   (ARCHITECTURE §4, `[01 §4.4]`). Neither the pool nor the damage funnel reads
   a clock or logs inside the tick.
 * **Scripts belong to `internal/cob`.** Combat queues each slot's
-  `TargetCleared` and `Aim*` callbacks in slot order and drains the unit's
-  virtual machine exactly once per visit, then applies the fire permissions the
-  drain produced; it never runs a second drain to chase a pending aim
+  `TargetCleared` and `Aim*` callbacks in slot order. The session performs the
+  unit visit's one normal virtual-machine drain after weapon work, so a return
+  from a newly dispatched Aim is available on a later visit; it never runs a
+  second drain to chase a pending aim
   `[06 §3.3]` `[06 §3.4]` `[04 R-CB-01 §6]`. Fire callbacks — the weapon's
   `FirePrimary`/`FireSecondary`/`FireTertiary` and `RockUnit` — are dispatched
   through a port, not called into the VM from here `[06 §4.1]`.
@@ -106,10 +107,10 @@ negative restored value, blocks admission; decrement wraps in that same signed
 16-bit word `[06 §3.3]` `[06 §4.2]`.
 
 `StepWeaponsForUnit` is the authoritative per-unit entry point the session's
-slot visit calls. It is what makes the script handshake single-drain: all three
-slots' `TargetCleared` and `Aim*` callbacks are queued in ascending slot order,
-the VM is drained once, the explicit aim returns are collected, and the fire
-permissions are applied in slot order afterwards. A missing script or an
+slot visit calls. It completes each slot's target resolution, Aim dispatch and
+firing decision before visiting the next slot, so an earlier slot's Fire/Rock
+starts precede a later slot's query or Aim preparation. The session owns the
+one normal drain after all three slots [04 R-MOV-03 §1]. A missing script or an
 exhausted thread pool never authorizes a shot `[06 §3.3]` `[06 §3.4]`.
 
 ### 2.2 Acquisition and the per-side target registry
@@ -208,10 +209,23 @@ That velocity triple reaches combat through `units.MoveState`, which
 `[04 R-MOV-01 §1]` `[04 R-COLL-01 §1]`. It is a different quantity from the
 scalar speed word beside it: a magnitude versus a signed per-axis displacement.
 
-The yaw handed to the script is **relative** to the unit's heading, and the
-drift pair is relative on both sides `[06 R-WPN-05 §4]`. Which angle each
+For a turret, the yaw handed to the script is **relative** to the unit's heading, and the drift pair is relative on both sides `[06 R-WPN-05 §4]`. Which angle each
 velocity build negates, and where the half-turn numbering is crossed, is a
 named contract rather than a convention `[06 R-WPN-05 §11]`.
+
+Executor selection follows [06 §3.3], independently of creation and motion
+families. The vertical executor dispatches the zero argument pair, with its
+stockpile ammunition gate, and skips aim-origin queries and angle solving;
+its absolute slot angles are installed only after the fire-time muzzle query.
+Turret takes precedence when both flags are authored.
+
+The live slot keeps retail-numbered angles throughout an attempt. The turret
+adds heading after the muzzle query; spread then mutates the per-shot copy.
+`fireScriptAdapter` reads that same copy for recoil before it is copied back,
+including retention on a full pool. The ballistic creator converts only the
+yaw numbering at its input boundary and launches from the stored pair; the
+ordinary creator continues to solve its flight from muzzle and target. Neither
+path applies spread a second time [06 R-WPN-03 §4][06 R-WPN-05 §4][06 R-WPN-05 §5][06 R-WPN-05 §11].
 
 The aim handshake itself is a latch: a new receiver clears readiness before
 dispatch; an explicit nonzero return grants it, while every delivered zero

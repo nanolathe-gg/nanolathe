@@ -64,16 +64,25 @@ func TestAimKilledBySignalIsNotGrantedByTheSlotsNextOccupant(t *testing.T) {
 	if aimThread != 0 {
 		t.Fatalf("Aim thread = %d, want slot 0", aimThread)
 	}
+	// The session's post-weapons drain actually runs Aim to its sleep. Without
+	// this window the signal/reuse fixture would pass only because neither
+	// authored callback executed.
+	drainTestUnitCOB(t, shooter)
+	if vm.Threads[0].Status != cob.ThreadSleeping {
+		t.Fatalf("Aim did not reach its sleep before Replace, status %d", vm.Threads[0].Status)
+	}
 	// The signalling script is engine-started like any other callback and takes
 	// the next free slot.
 	if !vm.StartByName("Replace", nil) {
 		t.Fatal("Replace did not start")
 	}
 
-	// Tick 2's drain runs Replace: the Aim dies to the signal and Child takes
-	// slot 0 in the same pass. Tick 3's drain runs Child, which returns 1.
+	// Tick 2's post-weapons drain runs Replace: the Aim dies to the signal and
+	// Child takes slot 0 in the same pass. Tick 3's drain runs Child, which
+	// returns 1. The weapon visit never drains the VM itself.
 	for tick := uint32(2); tick <= 4; tick++ {
 		svc.StepWeaponsForUnit(shooter, tick, w, nil, terrain, nil, cat, nil, nil)
+		drainTestUnitCOB(t, shooter)
 	}
 	if slot.Aim.Ready {
 		t.Fatal("a signalled Aim was granted readiness by the return of the script that reused its thread slot [04 §5.3][06 §3.3]")

@@ -69,6 +69,7 @@ func runProbeVisits(svc *Service, shooter *units.Unit, w *units.World, terrain *
 	vis := allVisibleService(terrain)
 	for tick := uint32(1); tick <= visitsPerProbe; tick++ {
 		svc.StepWeaponsForUnit(shooter, tick, w, vis, terrain, nil, cat, sim, nil)
+		shooter.ScriptState.VM.Drain(1)
 		// Phase 5 scans the previous registry before rebuilding it [06 §3.1–§3.2].
 		svc.StepAutonomousForPlayer(shooter.Owner, w, vis, terrain, nil, cat, sim)
 		rebuildEverySlot(svc, tick, w, vis, terrain, nil)
@@ -182,6 +183,7 @@ func TestManualTargetStillFiresACommandFireWeapon(t *testing.T) {
 	// With no manual target the human's command-fire slot stays silent.
 	for tick := uint32(1); tick <= 5; tick++ {
 		svc.StepWeaponsForUnit(shooter, tick, w, vis, terrain, nil, cat, simRNGPtr(1), nil)
+		drainTestUnitCOB(t, shooter)
 	}
 	if svc.Count() != 0 {
 		t.Fatalf("command-fire slot fired %d projectiles before any order [06 §3.2]", svc.Count())
@@ -193,6 +195,7 @@ func TestManualTargetStillFiresACommandFireWeapon(t *testing.T) {
 	fired := false
 	for tick := uint32(6); tick <= 20 && !fired; tick++ {
 		svc.StepWeaponsForUnit(shooter, tick, w, vis, terrain, nil, cat, simRNGPtr(1), nil)
+		drainTestUnitCOB(t, shooter)
 		fired = svc.Count() != 0
 	}
 	if !fired {

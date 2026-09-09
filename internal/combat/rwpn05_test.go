@@ -224,7 +224,7 @@ func TestTurretStoresRelativeYawAndCarriesTheHullTurn(t *testing.T) {
 		if sum := svc.StepWeaponsForUnit(shooter, 3, w, nil, terrain, nil, cat, &r, nil); sum.Fired != 1 {
 			t.Fatalf("heading %#04x: an unturned hull must fire, fired %d", heading, sum.Fired)
 		}
-		if want := retailYawFromGo(wantRel + heading); slot.DesiredYaw != want {
+		if want := wantRel + heading; slot.DesiredYaw != want {
 			t.Fatalf("heading %#04x: after the gate the stored yaw is absolute %#04x, got %#04x [06 R-WPN-05 §4]",
 				heading, want, slot.DesiredYaw)
 		}

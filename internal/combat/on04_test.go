@@ -46,6 +46,17 @@ func attachTestCOB(u *units.Unit, vm *cob.VM) {
 	}
 }
 
+// drainTestUnitCOB is the session-owned post-weapons VM window. Combat only
+// queues callback work; a completed Aim can affect the next slot visit, never
+// the visit that started it [04 §4.2][06 §3.3].
+func drainTestUnitCOB(t *testing.T, u *units.Unit) {
+	t.Helper()
+	if u == nil || u.ScriptState == nil || u.ScriptState.VM == nil {
+		t.Fatal("fixture has no COB VM to drain")
+	}
+	u.ScriptState.VM.Drain(1)
+}
+
 func weaponTurret(id int32) *content.WeaponDef {
 	return &content.WeaponDef{
 		ID:             id,
@@ -146,8 +157,12 @@ func TestON04_AimReturnsZero_NoProjectile_LatchPreserved(t *testing.T) {
 	if slot.Aim.Ready {
 		t.Fatalf("Ready should stay false on zero return [06 §3.3]")
 	}
-	if !sum.ReturnSeen || sum.ReturnValue != 0 {
-		t.Fatalf("want explicit zero Aim return, got %+v", sum)
+	if sum.ReturnSeen || sum.Drained {
+		t.Fatalf("visit must return before deferred Aim completion, got %+v", sum)
+	}
+	drainTestUnitCOB(t, shooter)
+	if slot.Aim.Ready {
+		t.Fatal("zero return granted readiness after the post-weapons drain")
 	}
 	// Second tick: should still not fire, still blocked, no new dispatch
 	svc.StepWeaponsForUnit(shooter, 2, w, nil, terrain, nil, cat, nil, nil)
@@ -156,7 +171,7 @@ func TestON04_AimReturnsZero_NoProjectile_LatchPreserved(t *testing.T) {
 	}
 }
 
-func TestON04_AimReturnsNonzero_Fires(t *testing.T) {
+func TestON04_AimReturnsNonzeroFiresOnFollowingVisit(t *testing.T) {
 	w, terrain, shooter, target := newTestWorldAndUnits(t)
 	code := []uint32{
 		0x10021001, 1, // push 1
@@ -175,14 +190,23 @@ func TestON04_AimReturnsNonzero_Fires(t *testing.T) {
 	cat := &content.Catalog{Weapons: map[string]*content.WeaponDef{"w1": weapon}}
 	cat.RebuildWeaponIndex()
 	sum := svc.StepWeaponsForUnit(shooter, 1, w, nil, terrain, nil, cat, nil, nil)
-	if svc.Count() != 1 {
-		t.Fatalf("aim 1 should create projectile when gates pass, count %d", svc.Count())
+	first := sum
+	if svc.Count() != 0 || sum.Fired != 0 {
+		t.Fatalf("Aim dispatch visit fired before its deferred completion: %+v count=%d", sum, svc.Count())
+	}
+	drainTestUnitCOB(t, shooter)
+	if !slot.Aim.Ready {
+		t.Fatal("nonzero Aim completion did not set readiness")
+	}
+	sum = svc.StepWeaponsForUnit(shooter, 2, w, nil, terrain, nil, cat, nil, nil)
+	if svc.Count() != 1 || sum.Fired != 1 {
+		t.Fatalf("ready next visit fired=%d count=%d, want one root", sum.Fired, svc.Count())
 	}
 	if slot.Aim.IssueBit || slot.Aim.Ready {
 		t.Fatalf("after successful fire latch and ready should be cleared [06 §3.3], IssueBit %v Ready %v", slot.Aim.IssueBit, slot.Aim.Ready)
 	}
-	if !sum.Dispatched || !sum.ReturnSeen || sum.ReturnValue == 0 || sum.Fired == 0 {
-		t.Fatalf("missing dispatch/return/fire summary: %+v", sum)
+	if !first.Dispatched || first.ReturnSeen || first.Drained {
+		t.Fatalf("dispatch summary incorrectly includes deferred completion: %+v", first)
 	}
 }
 
@@ -206,17 +230,17 @@ func TestON04_AimSleeping_NoFireBeforeWake(t *testing.T) {
 	var svc Service
 	cat := &content.Catalog{Weapons: map[string]*content.WeaponDef{"w1": weapon}}
 	cat.RebuildWeaponIndex()
-	// Tick 1: dispatch, drain makes sleeping, no fire
+	// Tick 1 queues Aim; the session owns the following drain.
 	sum := svc.StepWeaponsForUnit(shooter, 1, w, nil, terrain, nil, cat, nil, nil)
 	if svc.Count() != 0 {
 		t.Fatalf("sleeping aim should not fire tick1")
 	}
-	if !sum.Dispatched || !sum.Drained {
-		t.Fatalf("expected sleeping Aim dispatch and drain, got %+v", sum)
+	if !sum.Dispatched || sum.Drained {
+		t.Fatalf("expected sleeping Aim dispatch with no combat drain, got %+v", sum)
 	}
 	// Simulate intervening VM drains (units.Tick would do Drain(1) each tick)
-	// Do 3 drains to wake
-	for i := 0; i < 3; i++ {
+	// Four post-weapons drains: the original visit no longer consumes one.
+	for i := 0; i < 4; i++ {
 		vm.Drain(1)
 	}
 	svc.StepWeaponsForUnit(shooter, 2, w, nil, terrain, nil, cat, nil, nil)
@@ -225,7 +249,7 @@ func TestON04_AimSleeping_NoFireBeforeWake(t *testing.T) {
 	}
 }
 
-func TestON04_SameTickReturn_FiresSameVisit(t *testing.T) {
+func TestON04_SameTickReturnCannotFireUntilNextVisit(t *testing.T) {
 	w, terrain, shooter, target := newTestWorldAndUnits(t)
 	code := []uint32{
 		0x10021001, 1,
@@ -242,10 +266,19 @@ func TestON04_SameTickReturn_FiresSameVisit(t *testing.T) {
 	var svc Service
 	cat := &content.Catalog{Weapons: map[string]*content.WeaponDef{"w1": weapon}}
 	cat.RebuildWeaponIndex()
-	// Single step should dispatch, drain, return nonzero, and fire same visit
+	// The current visit only schedules Aim. Its immediate script return is
+	// observed by session's later VM window and cannot re-enter this slot.
 	svc.StepWeaponsForUnit(shooter, 1, w, nil, terrain, nil, cat, nil, nil)
+	if svc.Count() != 0 {
+		t.Fatalf("Aim dispatch visit created %d roots", svc.Count())
+	}
+	drainTestUnitCOB(t, shooter)
+	if !slot.Aim.Ready {
+		t.Fatal("nonzero immediate Aim return did not become ready after drain")
+	}
+	svc.StepWeaponsForUnit(shooter, 2, w, nil, terrain, nil, cat, nil, nil)
 	if svc.Count() != 1 {
-		t.Fatalf("same-tick return should fire same visit [06 §3.3], count %d", svc.Count())
+		t.Fatalf("next visit after Aim return should fire, count %d", svc.Count())
 	}
 }
 

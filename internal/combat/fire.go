@@ -212,6 +212,15 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 		target = pos
 	}
 
+	// Vertical launch installs absolute firing geometry after the forced muzzle
+	// query, including on allocation failure [06 §3.3][06 §4.4]. It never
+	// derives the Aim callback arguments from this pair.
+	if !w.Turret && w.VLaunch {
+		dx, dy, dz := target.X.Sub(muzzle.X), target.Y.Sub(muzzle.Y), target.Z.Sub(muzzle.Z)
+		slot.DesiredYaw = retailYawFromGo(uint16(YawFromDelta(dx, dz)))
+		slot.DesiredPitch = uint16(PitchFromDelta(dx, dy, dz))
+	}
+
 	// The accuracy spread. It lives in the **turret** executor and only there
 	// [06 §4.4] [06 R-WPN-03 §4]: a weapon without `turret` reaches the same
 	// ordinary creator, computes no spread and consumes no randomness at all.
@@ -240,10 +249,8 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 		// The spread lands on the slot's stored angles, and that mutation is
 		// retained on a pool-full failure: the next tick's drift gate then
 		// measures a freshly solved pair against angles that already carry a
-		// draw [06 §4.4 "Retention after a full pool"]. Our stored yaw is
-		// already absolute where retail's is relative-plus-heading at this
-		// point (see the convention marker in StepWeaponsForUnit), so only the
-		// draw is added here.
+		// draw [06 R-WPN-03 §4]. The slot already carries retail absolute yaw;
+		// the creator alone converts to projectile numbering.
 		if yawSpread != 0 || pitchSpread != 0 {
 			slot.DesiredYaw = uint16(int32(slot.DesiredYaw) + yawSpread)
 			slot.DesiredPitch = uint16(int32(slot.DesiredPitch) + pitchSpread)
@@ -258,39 +265,30 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 		return 0, false
 	}
 
-	// Ballistic weapons need a launch angle before allocation: a target with no
-	// solution is not admitted [06 §3.3] [06 §6.4].
+	// Ballistic creation copies the admitted slot pair [06 §6.4].
 	var solvedPitch, solvedYaw numeric.Angle
 	var h pool.Handle
 	var ok bool
-	// Reserve before solve to reproduce #DE leak per P0-10 [06 §6.4]
+	// Reservation precedes the ballistic velocity divide [06 §6.4].
 	ballisticReserved := false
 	if fam == CreationBallistic {
-		// Reserve before solve to reproduce #DE leak per P0-10 [06 §6.4]
+		// The creator reserves before its zero-velocity divide [06 §6.4]. Its
+		// trajectory feasibility was settled by the slot's aim/admission path;
+		// this creator consumes the accepted stored pair and does not re-solve.
 		h, ok = svc.Reserve()
 		if !ok {
-			// Pool-full retains trajectory validation without count leak [06 §4.4] C5
-			dx := target.X.Sub(muzzle.X)
-			dy := target.Y.Sub(muzzle.Y)
-			dz := target.Z.Sub(muzzle.Z)
-			_, _ = BallisticSolve(dx, dy, dz, numeric.Fixed(int64(w.WeaponVelocity)), ports.Gravity, 0)
 			return 0, false
 		}
 		ballisticReserved = true
 		if w.WeaponVelocity == 0 {
 			panic("combat: ballistic zero velocity divide fault after reserve [06 §6.4]")
 		}
-		dx := target.X.Sub(muzzle.X)
-		dy := target.Y.Sub(muzzle.Y)
-		dz := target.Z.Sub(muzzle.Z)
-		raw, solverOk := BallisticSolve(dx, dy, dz, numeric.Fixed(int64(w.WeaponVelocity)), ports.Gravity, 0)
-		if !solverOk {
-			// No solution: admission gate prevents allocation [06 §3.3]; roll back early reserve for non-fault case
-			svc.CancelReserve(h)
-			return 0, false
-		}
-		solvedPitch = numeric.Angle(raw)
-		solvedYaw = YawFromDelta(dx, dz)
+		// The ballistic creator launches with the accepted slot pair, after the turret has
+		// made its relative yaw absolute and spread has mutated that pair
+		// [06 §6.4][06 R-WPN-05 §5].  Projectile storage uses this engine's
+		// half-turn yaw convention, so cross it only at this creator boundary.
+		solvedPitch = numeric.Angle(slot.DesiredPitch)
+		solvedYaw = numeric.Angle(retailYawFromGo(slot.DesiredYaw))
 	}
 
 	// C2 root allocation before callbacks [06 §4.1] [06 §5.1]; the pool-full
@@ -384,40 +382,9 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 		p.TargetProjectile = interceptorLink
 	}
 
-	// Apply the retained spread to the aimed trajectory, recomputing the
-	// velocity components from the perturbed angles through the fixed-point
-	// helpers rather than nudging them in Cartesian space.
-	//
-	// BALLISTIC ONLY [06 R-WPN-05 §5]. The turret executor hands both creators
-	// the same muzzle point and the same resolved, lead-adjusted target point
-	// it received from the pipeline, and never derives an aim point from the
-	// slot's stored angles. The ballistic creator copies the slot's stored yaw
-	// and pitch into the record [06 §6.4], so the draw reaches its trajectory;
-	// the ordinary creator (`lineofsight` or `selfprop`) recomputes yaw and
-	// pitch from the muzzle and the target point [06 §6.3] and reads the
-	// slot's stored yaw once, for RockUnit's recoil direction alone. So for a
-	// turret weapon of the ordinary family, `accuracy`, the health term and
-	// the kill divisor change the recoil and NOTHING else: the shot leaves
-	// exactly toward the aim point, at full health or near death. Only
-	// `ballistic` turret weapons scatter, and burst clones inherit the root's
-	// velocity, so a burst of an ordinary weapon is unjittered too until its
-	// own spray [06 §4.3].
-	//
-	// This corrects [06 R-WPN-03 §4], whose "shape of the bound" paragraph
-	// states the effect in firing terms ("fires exactly on its solved
-	// angles") and was transcribed here as a nudge to both families. The
-	// draws themselves are unchanged: they are still taken at the same site
-	// for every turret weapon, so the shared simulation stream is untouched
-	// [I4], and the mutation of the slot's stored angles is still retained.
-	if fam == CreationBallistic && (yawSpread != 0 || pitchSpread != 0) {
-		p.Yaw = numeric.Angle(uint16(int32(p.Yaw) + yawSpread))
-		p.Pitch = numeric.Angle(uint16(int32(p.Pitch) + pitchSpread))
-		// The rebuild goes through the ballistic launch build, not the bare
-		// angle helper: retail's spread mutates the SLOT's stored angles before
-		// the creator reads them, so the creator's `T0 × gravity` pre-decrement
-		// applies to the perturbed trajectory too [06 §6.4][06 R-WPN-03 §4].
-		p.Velocity = ballisticLaunchVelocity(p.Yaw, p.Pitch, p.Speed, slot.DistanceWord, ports.Gravity)
-	}
+	// The spread already mutated the launch pair before the ballistic creator
+	// read it. Ordinary creators re-solve from muzzle to target and therefore
+	// retain the draw only for RockUnit [06 R-WPN-05 §5].
 
 	// Burst state copied from the weapon into the root [06 §4.3] C8.
 	p.BurstRemaining = w.Burst

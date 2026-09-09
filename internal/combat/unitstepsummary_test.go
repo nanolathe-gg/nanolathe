@@ -12,7 +12,7 @@ import (
 // step observes dispatch/return/fire outcomes so the central loop can emit
 // truthful trace events and own the exactly-once COB drain [04 §4.2].
 
-func TestRX03_Summary_AimReturnOne_Fires(t *testing.T) {
+func TestRX03_Summary_AimReturnOneFiresOnNextVisit(t *testing.T) {
 	w, terrain, shooter, target := newTestWorldAndUnits(t)
 	code := []uint32{
 		0x10021001, 1, // push 1
@@ -33,14 +33,15 @@ func TestRX03_Summary_AimReturnOne_Fires(t *testing.T) {
 	if !sum.Dispatched || sum.DispatchSlot != 0 {
 		t.Fatalf("Dispatched=%v slot=%d want true/0", sum.Dispatched, sum.DispatchSlot)
 	}
-	if !sum.ReturnSeen || sum.ReturnValue != 1 {
-		t.Fatalf("ReturnSeen=%v val=%d want true/1", sum.ReturnSeen, sum.ReturnValue)
+	if sum.ReturnSeen || sum.Drained || sum.Fired != 0 {
+		t.Fatalf("first visit reported deferred completion or fired: %+v", sum)
 	}
-	if !sum.Drained {
-		t.Fatalf("combat must own the drain when Aim dispatched [04 §4.2]")
+	drainTestUnitCOB(t, shooter)
+	if !slot.Aim.Ready {
+		t.Fatal("post-weapons drain did not deliver the nonzero Aim result")
 	}
-	if sum.Fired < 1 {
-		t.Fatalf("Fired=%d want >=1 after nonzero return", sum.Fired)
+	if next := svc.StepWeaponsForUnit(shooter, 2, w, nil, terrain, nil, cat, nil, nil); next.Fired != 1 {
+		t.Fatalf("next visit fired=%d, want 1 after the delivered Aim result", next.Fired)
 	}
 }
 
@@ -62,9 +63,10 @@ func TestRX03_Summary_AimReturnZero_NoFire(t *testing.T) {
 	cat.RebuildWeaponIndex()
 	var svc Service
 	sum := svc.StepWeaponsForUnit(shooter, 1, w, nil, terrain, nil, cat, nil, nil)
-	if !sum.Dispatched || !sum.ReturnSeen || sum.ReturnValue != 0 {
-		t.Fatalf("want dispatched+zero return, got %+v", sum)
+	if !sum.Dispatched || sum.ReturnSeen || sum.Drained {
+		t.Fatalf("want queued Aim with no combat drain, got %+v", sum)
 	}
+	drainTestUnitCOB(t, shooter)
 	if sum.Fired != 0 {
 		t.Fatalf("zero return must block fire, Fired=%d", sum.Fired)
 	}
@@ -94,8 +96,8 @@ func TestRX03_Summary_AimSleeping_PendingNotReturned(t *testing.T) {
 	if !sum.Dispatched || sum.ReturnSeen {
 		t.Fatalf("sleeping aim: Dispatched=%v ReturnSeen=%v want true/false", sum.Dispatched, sum.ReturnSeen)
 	}
-	if !sum.Drained {
-		t.Fatalf("dispatch path drains synchronously [GAP T15 C17]")
+	if sum.Drained {
+		t.Fatalf("combat must not drain the VM: %+v", sum)
 	}
 }
 

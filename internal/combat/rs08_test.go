@@ -63,15 +63,23 @@ func TestRS08_ThreeAimSlotsOneDrain(t *testing.T) {
 	var svc Service
 	vm.DrainCalls = 0
 	sum := svc.StepWeaponsForUnit(shooter, 1, w, nil, terrain, nil, cat, nil, nil)
-	if vm.DrainCalls != 1 {
-		t.Fatalf("three Aim slots should produce exactly one Drain, got %d sum %+v", vm.DrainCalls, sum)
+	if vm.DrainCalls != 0 {
+		t.Fatalf("combat must not drain the VM, got %d sum %+v", vm.DrainCalls, sum)
 	}
 	if !sum.Dispatched {
 		t.Fatalf("expected dispatched")
 	}
-	// Fired count may be up to 3 if all succeed same visit (after single drain)
-	if sum.Fired == 0 {
-		t.Fatalf("expected at least one fire after single drain, got %d", sum.Fired)
+	if sum.Fired != 0 {
+		t.Fatalf("the dispatch visit fired %d before its deferred callbacks", sum.Fired)
+	}
+	vm.Drain(1)
+	for i := 0; i < 3; i++ {
+		if !shooter.SlotAt(i).Aim.Ready {
+			t.Fatalf("slot %d did not receive its Aim result after session drain", i)
+		}
+	}
+	if next := svc.StepWeaponsForUnit(shooter, 2, w, nil, terrain, nil, cat, nil, nil); next.Fired != 3 {
+		t.Fatalf("post-drain visit fired %d, want all three ready slots", next.Fired)
 	}
 }
 
@@ -108,9 +116,10 @@ func TestRS08_AimReturnSemantics(t *testing.T) {
 	if sum0.Fired != 0 {
 		t.Fatalf("Aim 0 should block fire, fired %d", sum0.Fired)
 	}
-	if sum0.ReturnSeen && sum0.ReturnValue != 0 {
-		t.Fatalf("return value should be 0")
+	if sum0.ReturnSeen || sum0.Drained {
+		t.Fatalf("first visit must not report deferred return/drain: %+v", sum0)
 	}
+	vm0.Drain(1)
 	// Reset for nonzero
 	shooter.SlotAt(0).Aim = cob.AimSlot{}
 	shooter.SlotAt(0).Flags |= 0x02
@@ -122,8 +131,12 @@ func TestRS08_AimReturnSemantics(t *testing.T) {
 	cat.Weapons["w0"] = wdef0
 	svc2 := Service{}
 	sum1 := svc2.StepWeaponsForUnit(shooter, 2, w, nil, terrain, nil, cat, nil, nil)
-	if sum1.Fired == 0 {
-		t.Fatalf("Aim nonzero should fire, fired %d", sum1.Fired)
+	if sum1.Fired != 0 {
+		t.Fatalf("Aim dispatch fired before drain, fired %d", sum1.Fired)
+	}
+	vm1.Drain(1)
+	if sum1 = svc2.StepWeaponsForUnit(shooter, 3, w, nil, terrain, nil, cat, nil, nil); sum1.Fired == 0 {
+		t.Fatalf("Aim nonzero should fire on the visit after drain, fired %d", sum1.Fired)
 	}
 	// Missing name: VM exists but no AimPrimary
 	progMissing := &cob.Program{

@@ -65,6 +65,7 @@ func TestPT4_ReloadCountdownRecoversAndTargetDies(t *testing.T) {
 	)
 	for tick := uint32(1); tick <= 400 && target.Health > 0; tick++ {
 		sum := svc.StepWeaponsForUnit(shooter, tick, w, nil, terrain, nil, cat, nil, nil)
+		drainTestUnitCOB(t, shooter)
 		shots += sum.Fired
 		if slot.Aim.Ready {
 			everReady = true
@@ -170,6 +171,7 @@ func TestPT4_BurstAnchorRefreshesFromShooterMuzzle(t *testing.T) {
 	sawAnchor := false
 	for tick := uint32(1); tick <= 40; tick++ {
 		svc.StepWeaponsForUnit(shooter, tick, w, nil, terrain, nil, cat, nil, nil)
+		drainTestUnitCOB(t, shooter)
 		svc.TickProjectiles(tick, w, terrain, nil, nil, nil, nil, cat, nil, nil)
 		for i := 0; i < svc.Count(); i++ {
 			p := &svc.Records[i]

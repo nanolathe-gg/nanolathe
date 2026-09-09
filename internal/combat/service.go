@@ -118,10 +118,19 @@ type UnitStepSummary struct {
 	Dispatched       bool  // any Aim* dispatched this visit [04 §5.3]
 	DispatchSlot     int   // weapon slot of the first dispatch (-1 if none)
 	DispatchWeaponID int32 // weapon ID of the first dispatch
-	ReturnSeen       bool  // an explicit COB return was consumed this visit [06 §3.3]
-	ReturnValue      int32 // value of the last consumed return (0 or nonzero)
-	Drained          bool  // combat performed the visit's synchronous vm.Drain(1) [04 §4.2][GAP T15 C17]
+	ReturnSeen       bool  // synchronous Aim start-failure delivery before this call returned
+	ReturnValue      int32 // last synchronous delivery; deferred readiness lives on the slot
+	Drained          bool  // always false: the normal drain belongs to the session [04 R-MOV-03 §1]
 	Fired            int   // projectiles created via TryFire this visit [06 §4]
+}
+
+type slotPrep struct {
+	needLatch    bool
+	needResult   bool
+	weapon       *content.WeaponDef
+	tgtPos       Vec3
+	desiredYaw   uint16
+	desiredPitch uint16
 }
 
 // retailYawFromGo converts this build's absolute yaw into retail's.
@@ -175,9 +184,9 @@ func hitDirectionByte(p *Projectile, victim *units.Unit) uint8 {
 // pool-order loop and invokes this method directly [06 §1.2] C1 (I1).
 // Dependencies are the session's world, visibility, terrain, economy, catalog,
 // simulation RNG, and CRT RNG services.
-// RS-08: exactly one VM drain per unit visit at the normal window [04 §4.2][04 §4.6][GAP T15 C17] (I7):
-// queue all TargetCleared/Aim callbacks in slot order 0..2, drain once delta 1 (eight threads then one piece pass),
-// collect actual explicit Aim returns, then apply post-drain fire permissions in slot order without second drain.
+// Each slot completes its Aim dispatch and firing decision before the next
+// begins. The session then runs the normal delta-one script drain; deferred
+// Aim returns from that drain are available on a later visit [04 R-MOV-03 §1].
 // Missing script or thread exhaustion never authorizes fire (explicit check) [GAP T15] [06 §3.3].
 func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World, vis *visibility.Service, terrain *world.Terrain, econ *economy.Service, catalog *content.Catalog, simRNG *rng.Simulation, crtRNG *rng.CRT) UnitStepSummary {
 	var sum UnitStepSummary
@@ -212,19 +221,6 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 	// economy settlement, cloak/upkeep ... are outside the blocked task
 	// runner").
 	bridge := s.callbackBridgeForUnit(u)
-	// --- Phase: pre-drain callback scheduling (TargetCleared + Aim) in slot order 0..2 [GAP T15] ---
-	type slotPrep struct {
-		needLatch    bool
-		needResult   bool
-		weapon       *content.WeaponDef
-		tgtPos       Vec3
-		tgtHandle    pool.Handle
-		desiredYaw   uint16
-		desiredPitch uint16
-		suppressAim  bool
-	}
-	var preps [NumSlots]*slotPrep
-	var queuedTargetCleared bool
 	// Target resolution in the weapon pipeline clears its Aim state when the
 	// installed target has become stale [06 R-WPN-04 §1][06 R-WPN-05 §3].
 	// The phase-5 scanner has a separate target-word-only clear [06 §3.2].
@@ -240,7 +236,6 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		}
 		if (clearedHeading || clearedPitch) && bridge != nil {
 			bridge.TargetCleared(int32(idx))
-			queuedTargetCleared = true
 		}
 	}
 	for idx := 0; idx < NumSlots; idx++ {
@@ -248,6 +243,7 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		if slot == nil || !slot.IsPopulated() || !slot.IsEnabled() {
 			continue
 		}
+		var pre *slotPrep
 		// The slot visit's first step: decrement a nonzero signed-16 reload countdown.
 		// It happens for every populated slot, before the target is resolved
 		// and before any later gate can skip the visit, so a weapon that is
@@ -305,6 +301,19 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		} else {
 			tgtPos = Vec3{X: slot.Target.X, Y: PointTargetHeight(terrain, slot.Target.X, slot.Target.Z), Z: slot.Target.Z}
 		}
+		// Executor selection is a ladder, not a combination of family flags.
+		// A vertical launcher has no aim-time geometry: it dispatches zero
+		// arguments, and a stockpile launcher requires a nonzero ammunition
+		// byte before it starts that callback [06 §3.3]. Turret wins when both
+		// flags are authored.
+		if !weapon.Turret && weapon.VLaunch {
+			pre = &slotPrep{weapon: weapon, tgtPos: tgtPos, needResult: true}
+			if !slot.Aim.IssueBit && (!weapon.Stockpile || slot.Ammo != 0) {
+				s.dispatchSlotAim(u, slot, idx, tick, bridge, 0, 0, &sum)
+			}
+			s.firePreparedSlot(u, slot, idx, pre, tick, terrain, econ, simRNG, w, catalog, &sum)
+			continue
+		}
 		// The AIM ORIGIN: the `AimFrom[k]` query seeded −1, falling back to
 		// `Query[k]` seeded 0 only on the −1 sentinel [06 §3.4][R-P0-07]. It
 		// is the point the yaw and pitch are solved FROM [06 §3.3], and it is
@@ -338,21 +347,15 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 				grav = terrain.Gravity
 			}
 			vel := numeric.Fixed(int64(weapon.WeaponVelocity))
-			if vel.Raw() == 0 {
-				desiredYaw = uint16(YawFromDelta(dx, dz))
-				desiredPitch = 0x8000
-				slot.DesiredYaw = desiredYaw
-				slot.DesiredPitch = desiredPitch
-				preps[idx] = &slotPrep{weapon: weapon, tgtPos: tgtPos, tgtHandle: tgtHandle, desiredYaw: desiredYaw, desiredPitch: desiredPitch, suppressAim: true}
-				continue
-			}
 			pitch, ok := BallisticSolve(dx, dy, dz, vel, grav, weapon.MinBarrelAngle)
 			if !ok {
-				desiredYaw = uint16(YawFromDelta(dx, dz))
-				desiredPitch = 0x8000
-				slot.DesiredYaw = desiredYaw
-				slot.DesiredPitch = desiredPitch
-				preps[idx] = &slotPrep{weapon: weapon, tgtPos: tgtPos, tgtHandle: tgtHandle, desiredYaw: desiredYaw, desiredPitch: desiredPitch, suppressAim: true}
+				slot.DesiredYaw = aimYawForScript(uint16(YawFromDelta(dx, dz)), u.Move.Heading)
+				slot.DesiredPitch = 0x8000
+				if weapon.Turret {
+					u.Pending |= units.PendingCouldNotFire
+					slot.Aim.IssueBit = false
+					slot.Flags &^= units.SlotFlagAimLatch
+				}
 				continue
 			}
 			// The aim-time solve runs from the AimFrom/Query muzzle piece
@@ -406,233 +409,121 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		// comparison are then relative, so its error carries however far the
 		// hull turned while the Aim was outstanding; storing the absolute
 		// bearing and comparing absolute against absolute loses that term.
-		// Every other executor writes absolute angles at fire time, so they
-		// keep this build's own absolute yaw.
-		storedYaw := desiredYaw
+		// Slots retain retail-numbered yaw. Projectile creation crosses to this
+		// implementation's convention at its input boundary [06 R-WPN-05 §11].
+		storedYaw := retailYawFromGo(desiredYaw)
 		if weapon.Turret {
 			storedYaw = aimYawForScript(desiredYaw, u.Move.Heading)
 		}
-		if !weapon.Turret || !slot.Aim.IssueBit {
+		canDispatch := weapon.Ballistic || weapon.LineOfSight
+		if !weapon.Turret || (!slot.Aim.IssueBit && canDispatch) {
 			slot.DesiredYaw = storedYaw
 			slot.DesiredPitch = desiredPitch
 		}
-		preps[idx] = &slotPrep{weapon: weapon, tgtPos: tgtPos, tgtHandle: tgtHandle, desiredYaw: desiredYaw, desiredPitch: desiredPitch, needLatch: needLatch, needResult: needResult, suppressAim: suppress}
-		// Aim dispatch is gated on the latch being clear and on nothing else
-		// [06 §3.3]. The aim-ready word is a separate latch that a nonzero
-		// completion sets: a drift-gate failure clears the request latch and
-		// leaves the ready word alone [06 R-WPN-03 §2], and the slot must
-		// re-dispatch on its next visit for that recovery to happen at all.
-		if needResult && !suppress {
-			if !slot.Aim.IssueBit {
-				weaponID := weapon.ID
-				// A receiver belongs to this particular dispatch. Clear the
-				// preceding request's permission before the callback start, because
-				// a failed start can synchronously deliver zero [06 §3.3]. A held
-				// request never enters this block, so its state remains untouched.
-				slot.Aim.Ready = false
-				if bridge == nil {
-					slot.Aim.IssueBit = true
-				} else {
-					key := pendingKey{Unit: u.Handle, Slot: idx}
-					// The first argument of Aim* is the RELATIVE yaw —
-					// (bearing - heading) mod 65536, zero meaning dead ahead —
-					// and the second is the absolute pitch
-					// [06 R-WPN-05 §4]. The authored scripts assume that;
-					// handing them the un-shifted absolute yaw is right only
-					// for a unit whose heading is 0x8000.
-					result := bridge.Aim(cob.WeaponSlot(idx), aimYawForScript(desiredYaw, u.Move.Heading), desiredPitch, func(ret cob.CallbackReturn) {
-						if s.pendingAims != nil {
-							delete(s.pendingAims, key)
-						}
-						sum.ReturnSeen = true
-						sum.ReturnValue = ret.Value
-						// Every delivered value replaces this request's readiness.
-						// Only an explicit nonzero script return grants it; failed
-						// starts deliver zero and therefore revoke it [06 §3.3].
-						slot.Aim.Ready = ret.Explicit && ret.Value != 0
-					})
-					slot.Aim.IssueBit = true
-					slot.Flags |= 0x01
-					if result.Started {
-						if s.pendingAims == nil {
-							s.pendingAims = make(map[pendingKey]pendingAim)
-						}
-						s.pendingAims[key] = pendingAim{ThreadIdx: result.Thread, DispatchedTick: tick}
-						if !sum.Dispatched {
-							sum.Dispatched = true
-							sum.DispatchSlot = idx
-							sum.DispatchWeaponID = weaponID
-						}
-					} else {
-					}
-				}
-			}
+		pre = &slotPrep{weapon: weapon, tgtPos: tgtPos, desiredYaw: desiredYaw, desiredPitch: desiredPitch, needLatch: needLatch, needResult: needResult}
+		if needResult && canDispatch && !suppress && !slot.Aim.IssueBit {
+			s.dispatchSlotAim(u, slot, idx, tick, bridge, storedYaw, desiredPitch, &sum)
 		}
-	}
-	hasPending := false
-	for idx := 0; idx < NumSlots; idx++ {
-		if s.pendingAims != nil {
-			if _, ok := s.pendingAims[pendingKey{Unit: u.Handle, Slot: idx}]; ok {
-				hasPending = true
-				break
-			}
-		}
-	}
-	shouldDrain := sum.Dispatched || hasPending || queuedTargetCleared
-	if shouldDrain && bridge != nil {
-		bridge.Drain(1)
-		sum.Drained = true
-	}
-	for idx := 0; idx < NumSlots; idx++ {
-		pre := preps[idx]
-		slot := u.SlotAt(idx)
-		if slot == nil || !slot.IsPopulated() || !slot.IsEnabled() || pre == nil {
-			continue
-		}
-		weapon := pre.weapon
-		needLatch, needResult := pre.needLatch, pre.needResult
-		key := pendingKey{Unit: u.Handle, Slot: idx}
-		if _, ok := s.pendingAims[key]; ok {
-			continue
-		} else {
-			if needResult && slot.Aim.IssueBit && !slot.Aim.Ready {
-				continue
-			}
-		}
-		if needLatch && !slot.Aim.IssueBit {
-			continue
-		}
-		if needResult && !slot.Aim.Ready {
-			continue
-		}
-		if slot.Reload != 0 {
-			continue
-		}
-		if !checkAdmission(u, weapon, pre.tgtPos, terrain) {
-			// A failed shot-time gate sets the shooter's "could not fire"
-			// status and clears no latch [06 §3.3]. Clearing the aim issue
-			// bit and the aim result here — which this path used to do for
-			// turret weapons — discarded a completed handshake every time a
-			// moving target stepped briefly out of range, so the turret had
-			// to re-run the whole Aim* turn before it could shoot again and
-			// in practice never caught up with a mover.
-			//
-			// The status bit is bit 12 of the unit's order-event word
-			// [06 R-WPN-05 §6]. The reload was already zero above, so a shot
-			// really was attempted. The weapon layer never reads the bit back;
-			// it is the attack handlers' disengage signal.
-			u.Pending |= units.PendingCouldNotFire
-			continue
-		}
-		if weapon.Stockpile {
-			if slot.Ammo <= 0 {
-				continue
-			}
-		} else if econ != nil {
-			eCost := float32(weapon.EnergyPerShot)
-			mCost := float32(weapon.MetalPerShot)
-			if eCost != 0 || mCost != 0 {
-				p := &econ.Players[u.Owner]
-				if p.Stock[economy.Energy] < eCost || p.Stock[economy.Metal] < mCost {
-					continue
-				}
-			}
-		}
-		// The angular-drift gate, in the unit phase at fire time and before the
-		// muzzle query [06 §3.3] [06 R-WPN-03 §1]. Which executor a weapon uses
-		// is decided by the first matching flag in the order turret, vlaunch,
-		// lineofsight-or-selfprop, dropped [06 §3.3], and only two of them gate:
-		//
-		//   turret — the slot's stored angles (written when Aim was dispatched)
-		//     against the pair just re-solved from current geometry, so the
-		//     error is the target's angular drift since the request went out;
-		//   line-of-sight/self-propelled — the just-solved absolute direction
-		//     against the unit's own heading and pitch, so a fixed-forward
-		//     weapon fires only when the target sits ahead within the gate.
-		//
-		// Vertical-launch and dropped do not call the gate at all.
-		//
-		// The turret pair is RELATIVE on both sides [06 R-WPN-05 §4]: the
-		// stored yaw is the relative one written when Aim was dispatched, and
-		// the executor re-solves the relative yaw from the CURRENT muzzle,
-		// target and heading. With the target still, a unit that turned by d
-		// since the dispatch reads a yaw error of -d, so a turret whose script
-		// has already finished turning must re-aim when its hull turns further
-		// than the tolerance. Only after the gate passes does the executor add
-		// the current heading back (relative -> absolute) for the spread and
-		// the creator.
-		switch {
-		case weapon.Turret:
-			wantRelYaw := aimYawForScript(pre.desiredYaw, u.Move.Heading)
-			if !DriftGatePass(weapon, unitStationary(u), slot.DesiredYaw, wantRelYaw, slot.DesiredPitch, pre.desiredPitch) {
-				// Failure clears the Aim-issued latch and returns failure
-				// without touching the reload timer, the aim-ready word or the
-				// RNG, so the next slot visit re-solves and re-dispatches Aim
-				// [06 R-WPN-03 §2].
-				slot.Aim.IssueBit = false
-				slot.Flags &^= 0x01
-				if s.pendingAims != nil {
-					delete(s.pendingAims, pendingKey{Unit: u.Handle, Slot: idx})
-				}
-				continue
-			}
-			// Relative -> absolute, before the spread of [06 §4.4] and the
-			// creator [06 R-WPN-05 §4]. The result is this build's own
-			// absolute convention, which is what the projectile arithmetic and
-			// the ballistic creator consume.
-			slot.DesiredYaw = retailYawFromGo(slot.DesiredYaw + u.Move.Heading)
-		case weapon.VLaunch:
-			// no gate [06 §3.3]
-		case weapon.LineOfSight || weapon.SelfProp:
-			// This executor owns no latch: it simply returns failure, leaving
-			// the absolute angles it just wrote in the slot [06 R-WPN-03 §2].
-			//
-			// The solved yaw is compared against the unit's own HEADING, so it
-			// has to be expressed in the heading's convention — retail's
-			// [06 R-WPN-05 §4]. The un-shifted comparison this used to make
-			// was half a turn out and could never come inside a gate of 150,
-			// 2,000, or an authored `tolerance`, so a fixed-forward weapon
-			// only ever passed with its target behind it.
-			if !DriftGatePass(weapon, unitStationary(u), retailYawFromGo(pre.desiredYaw), u.Move.Heading, pre.desiredPitch, u.Move.Pitch) {
-				continue
-			}
-		}
-		if !tryFireForSlot(u, slot, idx, tick, terrain, simRNG, s, w, catalog, pre.tgtPos) {
-			continue
-		}
-		if needResult || needLatch {
-			slot.Aim.IssueBit = false
-			slot.Aim.Ready = false
-			slot.Flags &^= 0x01
-			if s.pendingAims != nil {
-				delete(s.pendingAims, pendingKey{Unit: u.Handle, Slot: idx})
-			}
-		}
-		if !weapon.Stockpile {
-			stored := ComputeStoredReload(u.Health, u.MaxHealth, u.Kills, weapon.ReloadTime)
-			slot.Reload = int32(int16(stored))
-		}
-		if weapon.Stockpile && slot.Ammo > 0 {
-			slot.Ammo--
-			if slot.Ammo < 0 {
-				slot.Ammo = 0
-			}
-		}
-		if !weapon.Stockpile && econ != nil {
-			eCost := float32(weapon.EnergyPerShot)
-			mCost := float32(weapon.MetalPerShot)
-			if eCost != 0 || mCost != 0 {
-				// The direct two-resource payment credits the SHOOTER's
-				// subrecord, not the player mirror: the helper reaches through
-				// the subrecord's owner pointer only for the live stock
-				// [05 R-ECO-01 §7]. Pass totals are identical either way — the
-				// settlement fold sums the subrecords into the mirror.
-				economy.ImmediateDebit(&econ.Players[u.Owner], econ.UnitBuckets(u.Handle), eCost, mCost)
-			}
-		}
-		sum.Fired++
+		s.firePreparedSlot(u, slot, idx, pre, tick, terrain, econ, simRNG, w, catalog, &sum)
 	}
 	return sum
+}
+
+// dispatchSlotAim installs a fresh receiver without advancing the VM [06 §3.3].
+// Deferred returns update the slot, not the already-returned visit summary.
+func (s *Service) dispatchSlotAim(u *units.Unit, slot *units.Slot, idx int, tick uint32, bridge *cob.CallbackBridge, yaw, pitch uint16, sum *UnitStepSummary) {
+	slot.Aim.Ready = false
+	if bridge != nil {
+		key := pendingKey{Unit: u.Handle, Slot: idx}
+		returned, value := false, int32(0)
+		result := bridge.Aim(cob.WeaponSlot(idx), yaw, pitch, func(ret cob.CallbackReturn) {
+			delete(s.pendingAims, key)
+			returned, value = true, ret.Value
+			slot.Aim.Ready = ret.Explicit && ret.Value != 0
+		})
+		if returned {
+			sum.ReturnSeen, sum.ReturnValue = true, value
+		}
+		if result.Started {
+			if s.pendingAims == nil {
+				s.pendingAims = make(map[pendingKey]pendingAim)
+			}
+			s.pendingAims[key] = pendingAim{ThreadIdx: result.Thread, DispatchedTick: tick}
+			if !sum.Dispatched {
+				sum.Dispatched, sum.DispatchSlot, sum.DispatchWeaponID = true, idx, slot.Weapon.ID
+			}
+		}
+	}
+	slot.Aim.IssueBit = true
+	slot.Flags |= units.SlotFlagAimLatch
+}
+
+// firePreparedSlot completes one slot before the next slot begins its weapon
+// work. The unit's normal COB drain is deliberately outside this method.
+func (s *Service) firePreparedSlot(u *units.Unit, slot *units.Slot, idx int, pre *slotPrep, tick uint32, terrain *world.Terrain, econ *economy.Service, simRNG *rng.Simulation, w *units.World, catalog *content.Catalog, sum *UnitStepSummary) {
+	if slot == nil || !slot.IsPopulated() || !slot.IsEnabled() || pre == nil {
+		return
+	}
+	key := pendingKey{Unit: u.Handle, Slot: idx}
+	if _, ok := s.pendingAims[key]; ok || (pre.needLatch && !slot.Aim.IssueBit) || (pre.needResult && !slot.Aim.Ready) || slot.Reload != 0 {
+		return
+	}
+	weapon := pre.weapon
+	if !checkAdmission(u, weapon, pre.tgtPos, terrain) {
+		u.Pending |= units.PendingCouldNotFire
+		return
+	}
+	if weapon.Stockpile {
+		if slot.Ammo <= 0 {
+			return
+		}
+	} else if econ != nil {
+		eCost, mCost := float32(weapon.EnergyPerShot), float32(weapon.MetalPerShot)
+		p := &econ.Players[u.Owner]
+		if (eCost != 0 || mCost != 0) && (p.Stock[economy.Energy] < eCost || p.Stock[economy.Metal] < mCost) {
+			return
+		}
+	}
+	switch {
+	case weapon.Turret:
+		want := aimYawForScript(pre.desiredYaw, u.Move.Heading)
+		if !DriftGatePass(weapon, unitStationary(u), slot.DesiredYaw, want, slot.DesiredPitch, pre.desiredPitch) {
+			slot.Aim.IssueBit = false
+			slot.Flags &^= units.SlotFlagAimLatch
+			if s.pendingAims != nil {
+				delete(s.pendingAims, key)
+			}
+			return
+		}
+	case weapon.VLaunch:
+		// Vertical launch has no drift gate, even with lower-precedence flags.
+	case weapon.LineOfSight || weapon.SelfProp:
+		if !DriftGatePass(weapon, unitStationary(u), slot.DesiredYaw, u.Move.Heading, pre.desiredPitch, u.Move.Pitch) {
+			return
+		}
+	}
+	if !tryFireForSlot(u, slot, idx, tick, terrain, simRNG, s, w, catalog, pre.tgtPos) {
+		return
+	}
+	if pre.needResult || pre.needLatch {
+		slot.Aim.IssueBit = false
+		slot.Aim.Ready = false
+		slot.Flags &^= units.SlotFlagAimLatch
+		if s.pendingAims != nil {
+			delete(s.pendingAims, key)
+		}
+	}
+	if weapon.Stockpile {
+		if slot.Ammo > 0 {
+			slot.Ammo--
+		}
+	} else {
+		slot.Reload = int32(int16(ComputeStoredReload(u.Health, u.MaxHealth, u.Kills, weapon.ReloadTime)))
+		if econ != nil && (weapon.EnergyPerShot != 0 || weapon.MetalPerShot != 0) {
+			economy.ImmediateDebit(&econ.Players[u.Owner], econ.UnitBuckets(u.Handle), float32(weapon.EnergyPerShot), float32(weapon.MetalPerShot))
+		}
+	}
+	sum.Fired++
 }
 
 // TickWeapons runs the integrated per-unit weapon pipeline [06 §3][06 §4][04 §5.3][GAP T15].
@@ -1437,11 +1328,18 @@ func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terra
 	// spawn point are two different pieces on most stock models (a Peewee
 	// aims from `ruparm`/`luparm` and fires from `rfire`/`lfire`), so the
 	// shot left from the shoulder.
+	var cSlot Slot
 	muzzlePieceFn := func(slotIdx int) int32 {
-		if bridge == nil {
-			return -1
+		piece := int32(-1)
+		if bridge != nil {
+			piece = bridge.QueryWeapon(cob.WeaponSlot(slotIdx)).QueryValue()
 		}
-		return bridge.QueryWeapon(cob.WeaponSlot(slotIdx)).QueryValue()
+		if weapon.Turret {
+			// The drift gate accepted retail-relative yaw. Convert after the
+			// synchronous muzzle query and before accuracy draws [06 §4.4].
+			cSlot.DesiredYaw += u.Move.Heading
+		}
+		return piece
 	}
 	scriptAdapter := &fireScriptAdapter{bridge: bridge, unit: u}
 	ports := FirePorts{
@@ -1480,7 +1378,7 @@ func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terra
 		ShooterMaxHealth: u.MaxHealth,
 		ShooterKills:     u.Kills,
 	}
-	cSlot := Slot{
+	cSlot = Slot{
 		Weapon:       weapon,
 		Reload:       slot.Reload,
 		Flags:        slot.Flags,
@@ -1495,6 +1393,10 @@ func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terra
 		Aim:          slot.Aim,
 		Target:       tgt,
 	}
+	// Fire and RockUnit run before cSlot is copied back. Bind recoil to the
+	// shot-state owner so RockUnit observes the just-mutated spread [06
+	// R-WPN-05 §5].
+	scriptAdapter.slot = &cSlot
 	_, ok := TryFire(svc, &cSlot, idx, tgt, tick, ports)
 	// The spread's mutation of the slot's stored angles is retained whether or
 	// not the allocation succeeded [06 §4.4].
@@ -1520,6 +1422,7 @@ func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terra
 type fireScriptAdapter struct {
 	bridge *cob.CallbackBridge
 	unit   *units.Unit
+	slot   *Slot
 }
 
 func (a *fireScriptAdapter) FireWeapon(slotIdx int) {
@@ -1540,15 +1443,14 @@ func (a *fireScriptAdapter) RockUnit(slotIdx int) {
 		return
 	}
 	u := a.unit
-	slot := u.SlotAt(slotIdx)
-	if slot == nil {
+	if a.slot == nil {
 		return
 	}
 	// RockUnit's recoil direction is the slot's stored yaw minus the heading,
 	// in retail's convention [06 R-WPN-05 §3][06 R-WPN-05 §5]. By this point
 	// the stored yaw is absolute and carries the accuracy draw — which for an
 	// ordinary-family weapon is the ONLY thing the draw reaches.
-	rel := int16(retailYawFromGo(slot.DesiredYaw) - u.Move.Heading)
+	rel := int16(a.slot.DesiredYaw - u.Move.Heading)
 	a.bridge.RockUnit(rel)
 }
 

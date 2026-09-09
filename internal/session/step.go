@@ -457,14 +457,11 @@ func (s *Session) stepUnitPhase(tick uint32) {
 			// 2 only"; the COB drain of step 4 is unconditional, so the else
 			// arm below still owns it for a remote-peer owner.
 			if work && s.Combat != nil && s.Catalog != nil && u != nil && u.Alive {
-				wsum := s.Combat.StepWeaponsForUnit(u, tick, s.Units, s.Vis, s.World, s.Econ, s.Catalog, s.SimRNG(), s.CrtRNG())
-				// Exactly-one synchronous COB drain per unit visit [04 §4.2][04 §4.6][GAP T15 C17].
-				// Combat drains only inside the Aim handshake; when it did not, this visit owns
-				// the drain so pending threads progress even without weapons or on non-turret arms.
-				if !wsum.Drained {
-					if vm := u.GetScript(); vm != nil {
-						vm.Drain(1)
-					}
+				s.Combat.StepWeaponsForUnit(u, tick, s.Units, s.Vis, s.World, s.Econ, s.Catalog, s.SimRNG(), s.CrtRNG())
+				// Exactly one normal delta-one COB drain follows the complete
+				// weapon update, including Fire/RockUnit starts [04 R-MOV-03 §1].
+				if vm := u.GetScript(); vm != nil {
+					vm.Drain(1)
 				}
 			} else if u != nil {
 				// No weapon service for this unit: the visit still owns the COB drain [04 §4.2]

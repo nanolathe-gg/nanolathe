@@ -418,7 +418,8 @@ func ballisticLaunchVelocity(yaw, pitch numeric.Angle, speed numeric.Fixed, slot
 }
 
 // InitBallistic initializes a ballistic projectile per [06 §6.4].
-// solvedPitch must be the pitch from BallisticSolve [06 §3.3] [06 §6.4].
+// solvedPitch is the accepted slot pitch after executor spread [06 §6.4]
+// [06 R-WPN-05 §5]; the creator does not solve it again.
 // slotDistance is the firing slot's distance word — the `T0` divisor written
 // once at unit construction [06 R-WPN-05 §3] — and gravity is the map's
 // per-tick gravity global in 16.16.

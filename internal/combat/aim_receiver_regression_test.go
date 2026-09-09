@@ -59,9 +59,14 @@ func TestAimReceiverReplacesReadinessAfterDriftRetry(t *testing.T) {
 			econ.Players[shooter.Owner].Stock[economy.Metal] = 100
 			var svc Service
 
-			// The first real Aim returns nonzero, but reload holds fire.
-			if sum := svc.StepWeaponsForUnit(shooter, 1, w, nil, terrain, econ, catalog, nil, nil); !sum.ReturnSeen || !slot.Aim.Ready || sum.Fired != 0 {
-				t.Fatalf("first Aim did not grant held readiness: %+v aim=%+v", sum, slot.Aim)
+			// The first Aim is deferred. The session drain grants readiness, while
+			// reload still holds fire on the next weapon visit.
+			if sum := svc.StepWeaponsForUnit(shooter, 1, w, nil, terrain, econ, catalog, nil, nil); sum.ReturnSeen || sum.Fired != 0 {
+				t.Fatalf("first Aim visit included a deferred result: %+v", sum)
+			}
+			drainTestUnitCOB(t, shooter)
+			if !slot.Aim.Ready {
+				t.Fatalf("post-weapons drain did not grant held readiness: aim=%+v", slot.Aim)
 			}
 			// Turn the hull past tolerance. The second visit consumes the last
 			// reload tick, then rejects at drift and clears only IssueBit.
@@ -84,13 +89,17 @@ func TestAimReceiverReplacesReadinessAfterDriftRetry(t *testing.T) {
 			energyBefore := econ.Players[shooter.Owner].Stock[economy.Energy]
 			metalBefore := econ.Players[shooter.Owner].Stock[economy.Metal]
 			sum := svc.StepWeaponsForUnit(shooter, 3, w, nil, terrain, econ, catalog, nil, nil)
+			if !tc.exhaust {
+				drainTestUnitCOB(t, shooter)
+			}
+			sum = svc.StepWeaponsForUnit(shooter, 4, w, nil, terrain, econ, catalog, nil, nil)
 			if tc.wantFire {
 				if sum.Fired != 1 || svc.Count() != 1 {
 					t.Fatalf("nonzero replacement Aim did not fire: %+v count=%d", sum, svc.Count())
 				}
 				return
 			}
-			if !sum.ReturnSeen || sum.ReturnValue != 0 || sum.Fired != 0 || svc.Count() != 0 || slot.Aim.Ready {
+			if sum.Fired != 0 || svc.Count() != 0 || slot.Aim.Ready {
 				t.Fatalf("zero replacement Aim retained permission: %+v count=%d aim=%+v", sum, svc.Count(), slot.Aim)
 			}
 			if slot.Reload != 0 || slot.Ammo != 0 || econ.Players[shooter.Owner].Stock[economy.Energy] != energyBefore || econ.Players[shooter.Owner].Stock[economy.Metal] != metalBefore {

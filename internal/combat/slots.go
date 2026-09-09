@@ -59,7 +59,9 @@ type Slot struct {
 	// Flags is the slot flags byte: 0x02 armed, 0x01 Aim latch, 0x10 tracking [06 §1.2] P0-10.
 	Flags uint8
 
-	// DesiredYaw is the desired yaw, TA angle units 0..65535 [06 §1.2] P0-10.
+	// DesiredYaw uses retail numbering: relative at turret Aim, absolute after
+	// its muzzle query. Failed attempts retain the rewritten value plus spread
+	// [06 R-WPN-05 §4][06 R-WPN-03 §4].
 	DesiredYaw uint16
 
 	// DesiredPitch is the desired pitch, TA angle units [06 §1.2] P0-10.
