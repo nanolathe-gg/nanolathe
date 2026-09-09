@@ -24,6 +24,7 @@ type Capacities struct {
 	Projectiles     int
 	Features        int
 	Effects         int
+	Fragments       int
 	Debris          int
 	OrderQueues     int
 	Builds          int
@@ -33,6 +34,19 @@ type Capacities struct {
 	Visibility      int
 	RadarContacts   int
 	Fog             int
+}
+
+// FragmentView freezes detached shatter geometry and its concrete material
+// frame. Slot is one-based, matching EffectView.FragmentSlot [04 R-COB-04 §3].
+type FragmentView struct {
+	Slot                       uint16
+	UnitDefID                  uint16
+	PieceIndex, PrimitiveIndex int
+	FrameIndex                 int32
+	MaterialValid              bool
+	Position                   [3]numeric.Fixed
+	Angles                     [3]uint16
+	Vertices                   [8][3]numeric.Fixed
 }
 
 // DebrisView is the committed presentation copy of one whole-piece debris
@@ -944,6 +958,7 @@ type Frame struct {
 	Features    []FeatureView
 	Effects     []EffectView
 	Debris      []DebrisView
+	Fragments   []FragmentView
 	// Strips is every live strip-object sub-record, in the composer's walk
 	// order: strips ascending, objects in insertion order, sub-records in
 	// vector order [03 §1][03 R-STRIP-01 §2]. Strip objects are authoritative
@@ -1014,6 +1029,7 @@ func (f *Frame) Reserve(c Capacities) {
 	f.Features = reserve(f.Features, c.Features)
 	f.Effects = reserve(f.Effects, c.Effects)
 	f.Debris = reserve(f.Debris, c.Debris)
+	f.Fragments = reserve(f.Fragments, c.Fragments)
 	f.OrderQueues = reserve(f.OrderQueues, c.OrderQueues)
 	f.Builds = reserve(f.Builds, c.Builds)
 	f.Events = reserve(f.Events, c.Cues)
@@ -1081,6 +1097,7 @@ func (f *Frame) Reset() {
 	clear(f.Projectiles)
 	clear(f.Features)
 	clear(f.Debris)
+	clear(f.Fragments)
 	clear(f.Economy)
 	clear(f.Builds)
 	clear(f.Strips)
@@ -1089,6 +1106,7 @@ func (f *Frame) Reset() {
 	f.Features = f.Features[:0]
 	f.Effects = f.Effects[:0]
 	f.Debris = f.Debris[:0]
+	f.Fragments = f.Fragments[:0]
 	f.Strips = f.Strips[:0]
 	f.OrderQueues = f.OrderQueues[:0]
 	f.Economy = f.Economy[:0]
