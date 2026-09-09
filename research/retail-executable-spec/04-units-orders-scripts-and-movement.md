@@ -127,7 +127,8 @@ velocity marker are **multiplayer transport** and out of Nanolathe's scope;
 they write no simulation state other than the player's last-sync tick, which
 only the network layer reads.
 
-**The sweep tail — the `+BigBrother` cycle.** When the camera-flags bit that
+**The sweep tail — the `+BigBrother` cycle (Established).** This tail follows
+the phase-2 unit sweep, before phase 3. When the camera-flags bit that
 `+BigBrother` toggles ([07 R-CAM-01 §12]) is set and **Shift** is
 not held, the 16-bit companion counter is decremented here; when it falls below 1 it is reset to **90** and
 two things happen in order: (a) the **next-ready-unit selector** runs, and
@@ -136,10 +137,13 @@ key does ([07 R-CAM-01 §2]). The selector walks the local player's slice in
 ascending order remembering the first *ready* unit (the same four-part
 predicate as step 7); if it meets a ready unit that is currently selected it
 clears the selected bit and the two selection-companion bits (bits 4, 6, 7)
-on **every** unit of the whole pool, closes the command panel pages (doc 07),
+on **every allocated record** from the null slot through the inclusive final
+slot of the whole pool, including inactive/free records, then requests command
+panel closure with force zero (doc 07),
 and selects the next ready unit after it — wrapping to the remembered first
 ready unit when none follows; if no selected ready unit exists it selects the
-remembered first ready unit. In every case it raises the interface's
+remembered first ready unit without the whole-pool clear or page-close call.
+In every case, including no ready unit, it raises the interface's
 selection-changed flag (Supported inference for the flag's name; the write is
 direct). The counter starts from whatever value the toggle wrote, so the first
 cycle after enabling is not 90 ticks long. The held-key identity is

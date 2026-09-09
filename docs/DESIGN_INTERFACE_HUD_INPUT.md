@@ -1367,6 +1367,16 @@ movie capture remains excluded below. If that route is implemented later, it
 must supply the retail selector-inheritance condition at this painter rather
 than adding a dormant mode flag now.
 
+`BigBrother` remains unbound. Its retail phase-2 selection cycle must feed
+that same sub-tick's phase-10 follow, including intermediate catch-up ticks.
+The current client latches the tracked unit before a batch and follows only
+the final publication. A post-batch toggle/repick would change that behavior.
+The prerequisite is to move the existing follow/shake bundle to each committed
+sub-tick, pass held Shift through an explicit command-owned latch, and publish
+the cycle/reset indication. That cadence correction is separate from these
+bounded command adapters; no approximate handler is installed
+`[04 R-MOV-03 §1]` `[07 R-CAM-01 §12]` `[I6]`.
+
 These commands are partial I10. Shell and direct-map entry use the same live
 display bits, including the persisted low bit that selects dithered fog; a
 later direct-entry settings write includes deferred shadow preferences. The remaining ordinary local

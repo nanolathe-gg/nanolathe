@@ -7324,7 +7324,16 @@ counter of the unit sweep tail ([04 R-MOV-03 §1]): while the camera-flags
 bit is set and **Shift** (held-key query for token `0xF9`, §2) is not held,
 the tail decrements it each tick and, when it falls below 1, resets it to 90
 and re-picks the selection and the tracked object as `t` does. Shift held
-pauses the cycle.
+pauses the cycle. The tail is after the phase-2 unit sweep, before phase 3.
+
+**Established — cycle lifecycle.** Process initialization starts the flag off
+and the signed 16-bit counter at zero. Each battle-entry world rebuild,
+including in-place save restore, resets follow state and clears the cycle
+flag; it does not write the counter. The Camera save account restores only
+origin. Teardown does not write either cycle field. Enabling always overwrites
+the counter with one; disabling clears the flag and follow triple while
+retaining the counter. The dormant counter retained between battles is never
+read while disabled and is overwritten before the next enabled read.
 
 Unit positions enter the desired origin through one conversion:
 `desiredX = sext16(unitX >> 16) − trunc(viewWidth / 2)`,

@@ -99,6 +99,9 @@ func (b *battleSession) saveDirectChatSetting(change func(*settings.Settings)) {
 // dispatchLocalCommand handles the bounded command set currently owned by
 // the engine. Unknown names remain plain local chat and do not create a
 // placeholder command framework [07 R-CAM-01 §6][07 R-FE-02 §12].
+// TODO(I10): BigBrother needs per-committed-subtick follow/shake and a
+// command-owned Shift latch; a post-batch repick loses the same-tick camera
+// response [04 R-MOV-03 §1][07 R-CAM-01 §12].
 func (b *battleSession) dispatchLocalCommand(text string) {
 	trimmed := strings.TrimLeft(text, " ")
 	if len(trimmed) == 0 || trimmed[0] != '+' {
