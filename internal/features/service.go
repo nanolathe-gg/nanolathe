@@ -342,17 +342,15 @@ func (s *Service) crt() *rng.CRT {
 	return nil // DET-01: no global fallback
 }
 
-// TickMotion advances only the prepass/reproduction walker which belongs in
-// phase 4 (effects/feature motion) [01 §4.4][06 §13.1]. Lifecycle (burning and
-// sinking) belongs in phase 6. Splitting keeps reproduction ordering before
-// burning/sinking and avoids double Tick when both phases call [P0-I06].
+// TickMotion reconciles externally written grid state during phase 4.
+// Reproduction belongs to phase 6, after the catalog rest cursors and before
+// the active walk [01 §4.4][05 R-FEAT-01 §10].
 func (s *Service) TickMotion(tick uint32) {
 	_ = tick
 	s.syncInstancesToGrid()
-	s.reproduceTick()
 }
 
-// TickLifecycle is pass 3 of the feature phase, phase 6 of the tick
+// TickLifecycle runs reproduction, then pass 3 of feature phase 6
 // [01 §4.4][05 R-FEAT-01 §10]: ONE walk of the active list, LIFO, in which a
 // moving 3D record integrates its descent (or goes dormant at zero velocity),
 // a die/reclaim record advances its cursor and replaces itself at the visit
@@ -361,6 +359,7 @@ func (s *Service) TickMotion(tick uint32) {
 // deferred completion queue: what a later record observes is what the earlier
 // visits left.
 func (s *Service) TickLifecycle(tick uint32) {
+	s.reproduceTick()
 	s.activeWalk(tick)
 }
 
@@ -764,6 +763,10 @@ func (s *Service) Reclaim(u *units.Unit, f *Instance, tick uint32) (metal, energ
 // successor means final removal. It clears the whole stamped footprint and
 // returns the plot cell to the free sentinel 0xFFFF [05 "Removal and successor replacement"].
 func (s *Service) replaceFeatureAt(cx, cz int, successor *content.FeatureDef) {
+	s.replaceFeatureStamp(cx, cz, successor, true)
+}
+
+func (s *Service) replaceFeatureStamp(cx, cz int, successor *content.FeatureDef, preserveTransform bool) {
 	if s.Terrain == nil {
 		return
 	}
@@ -771,8 +774,17 @@ func (s *Service) replaceFeatureAt(cx, cz int, successor *content.FeatureDef) {
 	// Locate current instance to derive footprint for clearing.
 	idx := cz*int(s.Terrain.CellW) + cx
 	var def *content.FeatureDef
+	var pos *[3]numeric.Fixed
+	var orient *Orientation
 	if inst, ok := s.instances[idx]; ok && inst != nil {
 		def = inst.Def
+		// Only an attached runtime record supplies a transform; a resting
+		// sprite lookup record does not [05 R-FEAT-01 §5 step 6].
+		if preserveTransform && inst.runtimeLive {
+			position := [3]numeric.Fixed{inst.X, inst.Y, inst.Z}
+			orientation := inst.Orientation
+			pos, orient = &position, &orientation
+		}
 	} else {
 		// Fallback: try to resolve feature at cell via world.ResolveFeature with
 		// signed-offset reading [SPEC_CONFLICTS SC6] [04 §6.2][02 "Terrain file"].
@@ -787,11 +799,11 @@ func (s *Service) replaceFeatureAt(cx, cz int, successor *content.FeatureDef) {
 	s.clearFootprintNoRevision(cx, cz, def)
 	placed := false
 	if successor != nil {
-		placed = s.spawnFeatureAt(cx, cz, successor) != nil
+		placed = s.stampFeature(cx, cz, successor, pos, orient) != nil
 	}
 	// If the old blocking footprint was removed, the transition changes the
 	// static layer even when a successor is absent or cannot be stamped. A
-	// successful blocking successor bumps in spawnFeatureAt, so this remains
+	// successful blocking successor bumps in stampFeature, so this remains
 	// one bump for the whole replacement [05 "Removal and successor replacement"].
 	if def != nil && def.Blocking && (!placed || successor == nil || !successor.Blocking) {
 		s.Terrain.BumpStaticObstacleRevision()
@@ -881,18 +893,10 @@ func (s *Service) clearFootprintNoRevision(cx, cz int, def *content.FeatureDef) 
 	}
 }
 
-// spawnFeatureAt stamps a feature with NO position override, which is what
-// every source but the corpse creator passes [05 R-FEAT-01 §3 step 4]: the
-// terrain file, the mission file, a successor, the reproduction walk and the
-// reload all hand the stamp a null position and get the footprint centre with
-// the terrain height snapped under it.
-// Pools 0x100 catalog / 0x800 anim slots / WH*0xD grid silent fail, successors 0xFFFF [P1-10][P1-15].
-// Malformed/custom: zero/negative footprints are normalized to 1x1, nil canonical keys handled, and unknown successors are sentinel 0xFFFF [P1-I05][02 "Feature record"].
-// The successor hop passes through here too, and that is the point: a
-// `featuredead`/`featureburnt`/`featurereclamate` replacement is not a corpse
-// placement, so it supplies neither pointer and its orientation is three zeros
-// [05 "Feature instance and terrain cell"]. A wreck's triple does not survive
-// into whatever it decays into.
+// spawnFeatureAt supplies neither optional transform to the common stamp:
+// map and mission placement, reproduction, and burn completion snap to the
+// footprint centre [05 R-FEAT-01 §3, §10]. General replacement uses the
+// attached predecessor's transform instead [05 R-FEAT-01 §5].
 func (s *Service) spawnFeatureAt(cx, cz int, def *content.FeatureDef) *Instance {
 	return s.stampFeature(cx, cz, def, nil, nil)
 }
@@ -1336,6 +1340,11 @@ func (s *Service) RemoveFeatureAt(cx, cz int, cause Cause) {
 			succ = def.FeatureBurntDef // featureburnt [05 ...]
 		}
 	}
+	if cause == CauseBurnt {
+		// Burn completion is a bare stamp [05 R-FEAT-01 §10 pass 3c].
+		s.replaceFeatureStamp(cx, cz, succ, false)
+		return
+	}
 	s.replaceFeatureAt(cx, cz, succ)
 }
 
@@ -1680,9 +1689,8 @@ func featureIndexIn(t *world.Terrain, def *content.FeatureDef) uint16 {
 // grid is authoritative for what stands on a cell [05 R-FEAT-01 §3, §5]; an
 // instance whose anchor no longer carries its definition is a stale animation
 // record, and one whose anchor now carries a DIFFERENT definition is the
-// successor that transition stamped. It runs at the head of the feature phase,
-// after the tick's order and construction work, so a reclaim completed this
-// tick is gone from the same tick's published frame.
+// successor that transition stamped. TickMotion runs it in phase 4, after
+// the unit phase's order and construction work.
 //
 // The walk is over sorted instance keys, so it is deterministic (I1), and it is
 // idempotent: with no grid transition since the last visit it changes nothing.
