@@ -128,9 +128,8 @@ they write no simulation state other than the player's last-sync tick, which
 only the network layer reads.
 
 **The sweep tail — the `+BigBrother` cycle.** When the camera-flags bit that
-`+BigBrother` toggles ([07 R-CAM-01 §12]) is set and the camera's hold key is
-**not** held, the 16-bit companion counter that closure left with an unlocated
-reader is decremented here; when it falls below 1 it is reset to **90** and
+`+BigBrother` toggles ([07 R-CAM-01 §12]) is set and **Shift** is
+not held, the 16-bit companion counter is decremented here; when it falls below 1 it is reset to **90** and
 two things happen in order: (a) the **next-ready-unit selector** runs, and
 (b) the camera's tracked object is re-picked from the selection as the `t`
 key does ([07 R-CAM-01 §2]). The selector walks the local player's slice in
@@ -143,9 +142,8 @@ ready unit when none follows; if no selected ready unit exists it selects the
 remembered first ready unit. In every case it raises the interface's
 selection-changed flag (Supported inference for the flag's name; the write is
 direct). The counter starts from whatever value the toggle wrote, so the first
-cycle after enabling is not 90 ticks long. **Unknown:** the identity of the
-held key the query tests (doc 07 owns the key table; decider: the camera
-held-key census of [07 R-CAM-01 §2]).
+cycle after enabling is not 90 ticks long. The held-key identity is
+**Established** by the camera census [07 R-CAM-01 §12].
 
 **Band-classifier note.** The medium classifier of [R-MOV-01 §8a] evaluates
 its tests in a fixed order with later results overriding earlier ones: above
@@ -13757,8 +13755,6 @@ and the decider that would close it.
 - Whether a stock rotated producer's exit transform coincides with its
   footprint's geometric centre · §6.3.1 [R-REV-02] · asset census of the stock
   factory models.
-- The identity of the held key the `+BigBrother` sweep tail tests · §1
-  [R-MOV-03 §1] · the camera held-key census of [07 R-CAM-01 §2].
 - Restore side of pending script state · doc 08 [P1-13] · static trace.
 - Complete lockstep packet ordering, replay state, state-hash contents, and
   resynchronization behavior · doc 08 · static trace. Out of Nanolathe's
