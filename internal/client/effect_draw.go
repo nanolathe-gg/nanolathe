@@ -21,6 +21,8 @@ type EffectDrawOptions struct {
 	// composed terrain. A nil predicate leaves a light effect unresolved; the
 	// halo must never brighten units, effects, or HUD pixels [03 §4.3.1].
 	TerrainCoverage func(x, y int) bool
+	// Fragments are immutable geometry joined by the one-based effect slot.
+	Fragments []frame.FragmentView
 }
 
 // EffectDrawStats reports actual effect work.  Skipped means the immutable
@@ -28,6 +30,7 @@ type EffectDrawOptions struct {
 type EffectDrawStats struct {
 	Admitted int
 	Sprites  int
+	Models   int
 	Halos    int
 	Skipped  int
 	Strokes  int
@@ -122,7 +125,9 @@ func (c *Client) drawFixedEffects(cur *frame.Frame) {
 	if len(effects) == 0 {
 		return
 	}
-	c.DrawEffectViews(effects, c.effectDrawOptions())
+	options := c.effectDrawOptions()
+	options.Fragments = cur.Fragments
+	c.DrawEffectViews(effects, options)
 }
 
 // DrawEffectViews draws snapshot effects in stable producer admission order.
@@ -160,8 +165,29 @@ func (c *Client) DrawEffectViews(effects []frame.EffectView, options EffectDrawO
 			stats.Halos++
 		}
 	}
+	var fragments [render.FixedEffectCap + 1]*frame.FragmentView
+	for i := range options.Fragments {
+		v := &options.Fragments[i]
+		if v.Slot > 0 && int(v.Slot) < len(fragments) {
+			fragments[v.Slot] = v
+		}
+	}
 	for i, d := range draws {
 		view := effects[i]
+		if view.FragmentSlot != 0 {
+			drawn := false
+			if int(view.FragmentSlot) < len(fragments) {
+				if fragment := fragments[view.FragmentSlot]; fragment != nil {
+					drawn = c.drawFragment(*fragment)
+				}
+			}
+			if drawn {
+				stats.Models++
+			} else {
+				stats.Skipped++
+			}
+			continue
+		}
 		if d.Kind == frame.EventKindNanolathe.String() && d.Strip == 6 {
 			// A nano segment is an emitter, not a line. Its particles are owned
 			// by the nanolathe field, which advances once per committed tick and
