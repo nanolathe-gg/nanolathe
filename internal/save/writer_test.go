@@ -2,6 +2,7 @@ package save
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"testing"
@@ -200,5 +201,55 @@ func TestRetailSQSHEncoderRoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(got, plain) {
 		t.Fatal("encoded chunk did not round-trip")
+	}
+}
+
+func TestRetailLZGoldenFixtures(t *testing.T) {
+	mixed := make([]byte, 0, 10000)
+	for i := 0; i < 2500; i++ {
+		mixed = append(mixed, byte(i), byte(i>>3), 'M', 'X')
+	}
+	boundary := make([]byte, 4096+17)
+	for i := range boundary[:4096] {
+		boundary[i] = byte(i*73 + i/31)
+	}
+	copy(boundary[4096:], boundary[:17])
+	// payloadSHA values were captured from the baseline encoder. They lock the
+	// greedy token stream, including its tag grouping and terminator placement.
+	fixtures := []struct {
+		name       string
+		plain      []byte
+		payloadSHA string
+	}{
+		{"repetitive", bytes.Repeat([]byte("AB"), 6000), "065f7b92be964d011c1a2e9913d33b28d1784e011147995e95a855de6a9dd279"},
+		{"mixed", mixed, "c89406551d69aabb1ee98d502033cd5f4c3f412237f77dac25edb8c27e953173"},
+		{"window-boundary", boundary, "6792156c53eb7c375a79cfacda4a326b6ec862e12c8164656bb674b14f143adc"},
+		{"partial-tag", []byte("partial tag"), "82c6f5ea31500063fea13700619ab681a7884e0245bd6720f40caf8630a91b22"},
+	}
+	for _, fixture := range fixtures {
+		t.Run(fixture.name, func(t *testing.T) {
+			payload := encodeRetailLZ(fixture.plain)
+			if got := fmt.Sprintf("%x", sha256.Sum256(payload)); got != fixture.payloadSHA {
+				t.Fatalf("LZ payload SHA-256 %s, want %s", got, fixture.payloadSHA)
+			}
+			chunk := encodeRetailSQSH(fixture.plain)
+			got, err := decodeSQSH(chunk)
+			if err != nil {
+				t.Fatalf("decodeSQSH: %v", err)
+			}
+			if !bytes.Equal(got, fixture.plain) {
+				t.Fatal("SQSH fixture did not round-trip")
+			}
+		})
+	}
+}
+
+func BenchmarkEncodeRetailLZRepetitive(b *testing.B) {
+	plain := bytes.Repeat([]byte("AB"), 32768/2)
+	b.ReportAllocs()
+	b.SetBytes(int64(len(plain)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = encodeRetailLZ(plain)
 	}
 }

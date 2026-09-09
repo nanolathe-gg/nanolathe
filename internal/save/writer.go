@@ -185,7 +185,7 @@ func encodeRetailSQSH(raw []byte) []byte {
 // window for each two-byte prefix and accepts the first longest match in
 // newest-to-oldest order; match lengths are bounded at the format's 17 bytes.
 func encodeRetailLZ(src []byte) []byte {
-	positions := make(map[uint16][]int)
+	positions := make(map[uint16]retailHistory)
 	var payload bytes.Buffer
 	for pos := 0; pos < len(src); {
 		var tag byte
@@ -231,31 +231,43 @@ func encodeRetailLZ(src []byte) []byte {
 	return payload.Bytes()
 }
 
-func retailRemember(positions map[uint16][]int, src []byte, pos int) {
+// retailHistory retains one prefix's positions in encounter order. head moves
+// past positions outside the compression window; once at least half of a full
+// backing slice has expired, that storage is reused. This keeps compaction
+// amortized while preserving the encoder's newest-first search.
+type retailHistory struct {
+	positions []int
+	head      int
+}
+
+func retailRemember(positions map[uint16]retailHistory, src []byte, pos int) {
 	if pos+1 >= len(src) {
 		return
 	}
 	key := uint16(src[pos])<<8 | uint16(src[pos+1])
-	list := append(positions[key], pos)
+	history := positions[key]
+	if len(history.positions) > 0 && len(history.positions) == cap(history.positions) && history.head >= len(history.positions)/2 {
+		copy(history.positions, history.positions[history.head:])
+		history.positions = history.positions[:len(history.positions)-history.head]
+		history.head = 0
+	}
+	history.positions = append(history.positions, pos)
 	cutoff := pos - 4096
-	first := 0
-	for first < len(list) && list[first] < cutoff {
-		first++
+	for history.head < len(history.positions) && history.positions[history.head] < cutoff {
+		history.head++
 	}
-	if first > 0 {
-		list = append([]int(nil), list[first:]...)
-	}
-	positions[key] = list
+	positions[key] = history
 }
 
-func retailMatch(src []byte, pos int, positions map[uint16][]int) (int, int) {
+func retailMatch(src []byte, pos int, positions map[uint16]retailHistory) (int, int) {
 	if pos+1 >= len(src) {
 		return 0, 0
 	}
 	key := uint16(src[pos])<<8 | uint16(src[pos+1])
-	list := positions[key]
+	history := positions[key]
+	list := history.positions
 	bestPos, bestLen := 0, 0
-	for i := len(list) - 1; i >= 0; i-- {
+	for i := len(list) - 1; i >= history.head; i-- {
 		candidate := list[i]
 		distance := pos - candidate
 		if distance > 4096 {
