@@ -3,6 +3,7 @@ package gpurender
 import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/nanolathe-gg/nanolathe/internal/palette"
+	"image"
 )
 
 // tables holds the palette lookup textures the modern executor samples, uploaded
@@ -167,4 +168,15 @@ func uploadRedTable256x1(table *[256]byte) *ebiten.Image {
 	img := ebiten.NewImage(256, 1)
 	img.WritePixels(buf)
 	return img
+}
+
+// setDisplayPalette replaces only the colour row; the surrounding atlas rows
+// remain index-to-index lookup tables [07 R-FE-01 §11].
+func (t *tables) setDisplayPalette(p [256][4]byte) {
+	var pixels [256 * 4]byte
+	for i, entry := range p {
+		copy(pixels[i*4:i*4+3], entry[:3])
+		pixels[i*4+3] = 255
+	}
+	t.atlas.SubImage(image.Rect(0, tableRowPAL, 256, tableRowPAL+1)).(*ebiten.Image).WritePixels(pixels[:])
 }

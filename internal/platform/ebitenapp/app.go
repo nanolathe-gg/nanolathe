@@ -238,6 +238,7 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 		a.interpolating = true
 	}
 	list := a.c.RecordFrame()
+	a.gpu.SetDisplayPalette(a.c.DisplayPalette())
 	img := a.gpu.Execute(list, width, height)
 	if img == nil {
 		return

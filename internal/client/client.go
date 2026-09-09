@@ -15,6 +15,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/palette"
 	presentationrender "github.com/nanolathe-gg/nanolathe/internal/render"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 	"github.com/nanolathe-gg/nanolathe/internal/visibility"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
@@ -129,13 +130,14 @@ type Client struct {
 	// Runtime is presentation-only bookkeeping for backend frame cadence.
 	runtime float64
 
-	// base is the installed PALETTE.PAL display palette. Every final indexed
-	// pixel resolves through it and nothing else at present time [03 §4.3].
+	// base is the gamma-adjusted output palette. Every final indexed pixel
+	// resolves through it; pal.Base retains the authored source [03 §4.3].
 	// The logical→physical map lives on palette.Tables and is consulted only
 	// where a semantic colour entry is resolved, before that byte is written
 	// into the indexed surface [07 "Retail palette contract"].
-	base [256][4]byte
-	pal  *palette.Tables
+	base        [256][4]byte
+	gammaFactor float32
+	pal         *palette.Tables
 
 	// World / camera for Gate 1 terrain viewer [PLAN_04A]. When set, Frame
 	// draws real TNT terrain instead of the placeholder gradient.
@@ -441,6 +443,7 @@ func New(opts Options) (*Client, error) {
 	// client instead of these defaults standing for the whole session
 	// (WU-19-170).
 	c.in = *newInputState()
+	c.gammaFactor = 1
 	// Fallback display palette: grayscale. This keeps the framebuffer path
 	// valid before SetPalette installs PALETTE.PAL [03 §4.3].
 	for i := 0; i < 256; i++ {
@@ -473,8 +476,39 @@ func (c *Client) SetCamera(cam *camera.Camera) { c.cam = cam }
 func (c *Client) SetPalette(p *palette.Tables) {
 	c.pal = p
 	if p != nil {
-		c.base = p.Base
+		c.rebuildDisplayPalette()
 		c.ResolveUnitStyle()
+	}
+}
+
+// SetGammaFactor rebuilds the output palette from authored channels. Retail
+// stores the factor as binary32, clamps only above 255, then truncates and
+// retains the low byte; negative command factors wrap [07 R-FE-01 §11].
+func (c *Client) SetGammaFactor(factor float32) {
+	c.gammaFactor = factor
+	c.rebuildDisplayPalette()
+}
+
+// DisplayPalette is the final physical-index-to-colour table for both backends.
+// Indexed lighting, blending and semantic colour tables remain immutable.
+func (c *Client) DisplayPalette() [256][4]byte { return c.base }
+
+func (c *Client) rebuildDisplayPalette() {
+	for i := range c.base {
+		source := [4]byte{byte(i), byte(i), byte(i), 255}
+		if c.pal != nil {
+			source = c.pal.Base[i]
+		}
+		for channel := 0; channel < 3; channel++ {
+			// The binary32 factor times an eight-bit integer is exact in
+			// binary64; do not round the product back to binary32.
+			value := float64(source[channel]) * float64(c.gammaFactor)
+			if value > 255 {
+				value = 255
+			}
+			c.base[i][channel] = byte(numeric.TruncateFloat64ToLow32(value))
+		}
+		c.base[i][3] = source[3]
 	}
 }
 
