@@ -28,7 +28,7 @@ type RetailSaveInputs struct {
 	Summary save.Summary
 	Camera  save.Camera
 
-	// StableIDs maps every live unit handle and every referenced unit handle to
+	// StableIDs maps every live unit handle and every referenced pool slot to
 	// its save-stable identifier. Missing entries are an exact projection
 	// failure, never an implicit handle-as-ID conversion.
 	StableIDs map[pool.Handle]uint16
@@ -170,7 +170,7 @@ func projectUnitImage(w *units.World, econ *economy.Service, movement *movement.
 	image := save.UnitImage{Version: save.UnitsVersionRetail}
 	resolve := func(h pool.Handle) (uint16, bool) {
 		id, ok := in.StableIDs[h]
-		return id, ok && id != 0
+		return id, ok && id != 0 && w.Unit(h) != nil
 	}
 	for slot := 1; slot < w.TotalRecords(); slot++ {
 		h := pool.Handle(slot)
@@ -217,7 +217,13 @@ func projectUnitImage(w *units.World, econ *economy.Service, movement *movement.
 		if err != nil {
 			return save.UnitImage{}, fmt.Errorf("nanolathe: retail save projection: unit %04x economy: %w", h, err)
 		}
-		base, err := units.RetailUnitImage(u, uint32(len(ordersImage)), resolve, scratch)
+		base, err := units.RetailUnitImage(u, uint32(len(ordersImage)), resolve, func(target pool.Handle) (uint16, bool) {
+			if target == 0 || int(target) >= w.TotalRecords() {
+				return 0, false
+			}
+			id, ok := in.StableIDs[target]
+			return id, ok && id != 0
+		}, scratch)
 		if err != nil {
 			return save.UnitImage{}, fmt.Errorf("nanolathe: retail save projection: unit %04x base: %w", h, err)
 		}
@@ -400,7 +406,8 @@ func RetailMappingImage(s *Session) ([]byte, error) {
 // RetailBattleSaveInputs assembles the caller-owned side of a live-battle
 // save from the session itself.
 //
-// StableIDs is the unit's pool slot: retail's save identities are "stable
+// StableIDs includes free pool slots so a held weapon target survives a save
+// after its target was freed. Retail's save identities are "stable
 // identifiers rather than native pointers: unit slot zero is null and each
 // live unit's slot index is its stable identifier"
 // [08 "Account inventory"] [08 R-SAVE-02 §6].
@@ -446,13 +453,13 @@ func (s *Session) RetailBattleSaveInputs(summary save.Summary, camera save.Camer
 	}
 	for slot := 1; slot < s.Units.TotalRecords(); slot++ {
 		h := pool.Handle(slot)
-		if s.Units.Unit(h) == nil {
-			continue
-		}
 		if slot > 0xffff {
 			return RetailSaveInputs{}, fmt.Errorf("nanolathe: retail save inputs: unit slot %d exceeds the 16-bit stable identifier: logical path save/Units, providers searched [Session.Units], expected a slot below 65536", slot)
 		}
 		in.StableIDs[h] = uint16(slot)
+		if s.Units.Unit(h) == nil {
+			continue
+		}
 		in.UnitWriterScratch[h] = units.RetailUnitWriterScratch{}
 		in.ScriptWriterScratch[h] = retailBattleScriptScratch
 	}

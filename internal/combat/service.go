@@ -245,7 +245,7 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 	}
 	for idx := 0; idx < NumSlots; idx++ {
 		slot := u.SlotAt(idx)
-		if slot == nil || !slot.IsPopulated() {
+		if slot == nil || !slot.IsPopulated() || !slot.IsEnabled() {
 			continue
 		}
 		// The slot visit's first step: decrement a nonzero reload countdown.
@@ -482,7 +482,7 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 	for idx := 0; idx < NumSlots; idx++ {
 		pre := preps[idx]
 		slot := u.SlotAt(idx)
-		if slot == nil || !slot.IsPopulated() || pre == nil {
+		if slot == nil || !slot.IsPopulated() || !slot.IsEnabled() || pre == nil {
 			continue
 		}
 		weapon := pre.weapon

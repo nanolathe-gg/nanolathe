@@ -62,7 +62,7 @@ func TestRetailCodecRoundTripsAttackerSideSnapshot(t *testing.T) {
 			RestoredAIGroup: -1, LastDamageSide: side,
 		}
 		resolve := func(pool.Handle) (uint16, bool) { return 7, true }
-		image, err := RetailUnitImage(u, 0, resolve, RetailUnitWriterScratch{})
+		image, err := RetailUnitImage(u, 0, resolve, resolve, RetailUnitWriterScratch{})
 		if err != nil {
 			t.Fatalf("save side %d: %v", side, err)
 		}
@@ -82,7 +82,7 @@ func TestRetailCodecRoundTripsAttackerSideSnapshot(t *testing.T) {
 		// emitting the value the first save captured.
 		v.Def, v.Owner, v.Alive, v.RestoredAIGroup = u.Def, u.Owner, true, -1
 		v.LastDamageSide = 6
-		again, err := RetailUnitImage(v, 0, resolve, RetailUnitWriterScratch{})
+		again, err := RetailUnitImage(v, 0, resolve, resolve, RetailUnitWriterScratch{})
 		if err != nil {
 			t.Fatalf("re-save side %d: %v", side, err)
 		}
