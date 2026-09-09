@@ -139,15 +139,15 @@ func TestStepUnitGroundArrival(t *testing.T) {
 	q.Push(id, orders.Node{GoalX: world.CellToWorld(15), GoalZ: world.CellToWorld(1)})
 	system.ActivateMove(u, q.Head())
 	// Scheduler must tick to publish route
-	system.Scheduler.Tick(1)
+	system.Scheduler.Tick(60)
 	route := system.Routes[h]
 	if route == nil || !route.Active {
 		t.Fatalf("route not published after scheduler tick: %v", route)
 	}
 	// First step should not be arrived: route prune (<=25) is not completion [R-P0-01].
-	system.BeginTick(2)
-	res := system.StepUnit(h, 2)
-	system.EndTick(2)
+	system.BeginTick(61)
+	res := system.StepUnit(h, 61)
+	system.EndTick(61)
 	if res.Arrived {
 		t.Fatalf("route prune must not immediately complete Move_Ground; arrival is cell threshold [R-P0-01]")
 	}
@@ -467,7 +467,7 @@ func TestStepUnitAircraftAndTransportRegression(t *testing.T) {
 	system.SubmitMove(hTrans, 0, path.Cell{X: 5, Z: 5}, path.Cell{X: 12, Z: 5})
 	qTrans := orders.QueueForUnit(uTrans)
 	qTrans.Push(idMove, orders.Node{GoalX: world.CellToWorld(12), GoalZ: world.CellToWorld(5)})
-	system.Scheduler.Tick(1)
+	system.Scheduler.Tick(60)
 	startAirX := uAir.X
 	startCargoX := w.Unit(hCargo).X
 	// Step several ticks using per-unit API
@@ -626,14 +626,14 @@ func TestStepUnitPublishedRouteNoDuplicate(t *testing.T) {
 	if system.pathProvider.pending(0) != 1 {
 		t.Fatalf("pending should be 1 after submit")
 	}
-	system.Scheduler.Tick(1)
+	system.Scheduler.Tick(60)
 	if system.pathProvider.pending(0) != 0 {
 		t.Fatalf("pending should be 0 after publish")
 	}
 	// After route published, StepUnit should consume it without re-submitting
-	system.BeginTick(2)
-	res := system.StepUnit(h, 2)
-	system.EndTick(2)
+	system.BeginTick(61)
+	res := system.StepUnit(h, 61)
+	system.EndTick(61)
 	if system.pathProvider.pending(0) != 0 {
 		t.Fatalf("StepUnit must not duplicate request submission, pending %d", system.pathProvider.pending(0))
 	}

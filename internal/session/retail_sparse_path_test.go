@@ -37,14 +37,19 @@ func TestDecodedSparsePlayersComposePathService(t *testing.T) {
 	if s.Movement.PathPlayers != 2 || s.Econ.Players[1].Exists {
 		t.Fatal("sparse topology was compacted or divisor changed")
 	}
+	// This fixture submits a ground route, so give its minimal commander the
+	// authored mover classification a real mobile definition carries.
+	cat.Units["armcom"].BMCode = 1
+	cat.Units["armcom"].CanMove = true
 	h, err := s.Units.Create(cat.Units["armcom"], 3, world.CellToWorld(2), 0, world.CellToWorld(2))
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.Movement.EnsureUnit(s.Units.Unit(h))
-	s.Movement.BeginTick(1)
+	s.Movement.BindWorld(s.Units)
+	s.Movement.BeginTick(60)
 	s.Movement.SubmitMove(h, 3, path.Cell{X: 2, Z: 2}, path.Cell{X: 9, Z: 9})
-	for tick := uint32(1); tick < 10 && s.Movement.HasPathRequest(h); tick++ {
+	for tick := uint32(60); tick < 160 && s.Movement.HasPathRequest(h); tick++ {
 		s.Path.Tick(tick)
 	}
 	if route := s.Movement.Routes[h]; route == nil || route.Count == 0 || route.Status != 0 {

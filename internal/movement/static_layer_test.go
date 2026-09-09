@@ -63,7 +63,7 @@ func TestClassLayerAvoidsStaleMover(t *testing.T) {
 		t.Fatalf("ActivateMove failed")
 	}
 	// Scheduler tick should publish a successful route even though (5,5) is occupied [04 §8.2]
-	sys.Scheduler.Tick(1)
+	sys.Scheduler.Tick(60)
 	route := sys.Routes[hReq]
 	if route == nil || !route.Active {
 		t.Fatalf("route should be active through transient mover cell [04 §8.2] static layer, got active=%v status=%v", route.Active, route.Status)
@@ -134,7 +134,7 @@ func TestStaticLayerDeterministicFixture(t *testing.T) {
 		q := orders.QueueForUnit(w.Unit(hReq))
 		q.Push(id, orders.Node{GoalX: world.CellToWorld(8), GoalZ: world.CellToWorld(8)})
 		sys.ActivateMove(w.Unit(hReq), q.Head())
-		sys.Scheduler.Tick(1)
+		sys.Scheduler.Tick(60)
 		route := sys.Routes[hReq]
 		if route == nil || !route.Active {
 			return nil

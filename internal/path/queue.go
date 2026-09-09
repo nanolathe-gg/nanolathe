@@ -70,6 +70,13 @@ type mutableCandidateProvider interface {
 	HasRequest(unit pool.Handle) bool
 }
 
+// tickCandidateProvider is an optional timing boundary for providers whose
+// live candidate state includes the scheduler tick. Keeping it optional
+// preserves the public CandidateProvider surface used by standalone schedulers.
+type tickCandidateProvider interface {
+	SetPathTick(tick uint32)
+}
+
 // PollResult is what one poll of a player's candidate provider produced.
 type PollResult uint8
 
@@ -423,6 +430,9 @@ func (s *Scheduler) Tick(tick uint32) {
 	}
 	if s.unitLimit <= 0 {
 		return
+	}
+	if p, ok := s.provider.(tickCandidateProvider); ok {
+		p.SetPathTick(tick)
 	}
 	s.callCount++
 	if s.callCount > replenishInterval {

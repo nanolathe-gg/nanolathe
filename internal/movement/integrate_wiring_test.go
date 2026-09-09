@@ -38,6 +38,7 @@ func TestSearchFuncConfigBindsClassLayer(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	sys.EnsureUnit(w.Unit(h))
+	sys.BindWorld(w)
 
 	sys.BeginTick(100) // searchFunc binds the revision tick from the tick in scope
 	req := path.Request{
@@ -113,7 +114,7 @@ func TestSystemSearchConsultsLayer(t *testing.T) {
 	layer.NoteCommit(h, 50)
 
 	sys.SubmitMove(h, 0, start, goal)
-	sys.Scheduler.Tick(50)
+	sys.Scheduler.Tick(60)
 	route := sys.Routes[h]
 	if route == nil || route.Count == 0 || route.Status != 0 {
 		t.Fatalf("flat terrain must publish a route, got %+v", route)
@@ -132,14 +133,14 @@ func TestSystemSearchConsultsLayer(t *testing.T) {
 	}
 	paintRing(LayerBlocked)
 	sys.SubmitMove(h, 0, start, goal)
-	sys.Scheduler.Tick(51)
+	sys.Scheduler.Tick(120)
 	if route.Status != path.StatusRejected {
 		t.Fatalf("layer enclosure must reject the search, status %d", route.Status)
 	}
 
 	paintRing(LayerClear)
 	sys.SubmitMove(h, 0, start, goal)
-	sys.Scheduler.Tick(52)
+	sys.Scheduler.Tick(180)
 	if route.Status != 0 || route.Count == 0 {
 		t.Fatalf("cleared layer must publish a route again, status %d count %d", route.Status, route.Count)
 	}
@@ -158,7 +159,7 @@ func TestConfiguredSchedulerPublishesOwnerOneRequest(t *testing.T) {
 	sys.EnsureUnit(w.Unit(h))
 	sys.BeginTick(1)
 	sys.SubmitMove(h, 1, path.Cell{X: 2, Z: 2}, path.Cell{X: 9, Z: 9})
-	for tick := uint32(1); tick < 10; tick++ {
+	for tick := uint32(60); tick < 70; tick++ {
 		sys.Scheduler.Tick(tick)
 		if route := sys.Routes[h]; route != nil && route.Count > 0 && route.Status == 0 {
 			return
@@ -256,18 +257,19 @@ func TestMobileBuildRequestsStartAtCommittedAnchor(t *testing.T) {
 	if retry.Start != first.Start || retry.Activation != first.Activation || !reflect.DeepEqual(path.DescribeGoal(retry.Goal), path.DescribeGoal(first.Goal)) {
 		t.Fatalf("boundary request changed identity: first=%+v retry=%+v", first, retry)
 	}
-	if route.LastRequestTick != 160 {
-		t.Fatalf("boundary request tick = %d, want 160", route.LastRequestTick)
-	}
 	sys.serviceGroundFollower(u, head, route, 160)
 	if got := sys.PathRequestsSnapshot(); len(got) != 1 {
 		t.Fatalf("repeated boundary visit duplicated request: %v", got)
 	}
 	if got := sys.Scheduler.TraceState(); !reflect.DeepEqual(got, schedulerBefore) {
-		t.Fatalf("repath submission consumed scheduler budget: before=%+v after=%+v", schedulerBefore, got)
+		t.Fatalf("repath staging consumed scheduler budget: before=%+v after=%+v", schedulerBefore, got)
 	}
 	if q.Head() != head || !reflect.DeepEqual(*head, wantNode) || sys.activeOrders[h] != binding {
-		t.Fatalf("repath mutated order/binding: head=%p/%p got=%+v want=%+v binding=%p/%p", q.Head(), head, *head, wantNode, sys.activeOrders[h], binding)
+		t.Fatalf("repath staging mutated order/binding: head=%p/%p got=%+v want=%+v binding=%p/%p", q.Head(), head, *head, wantNode, sys.activeOrders[h], binding)
+	}
+	sys.Scheduler.Tick(160)
+	if route.LastRequestTick != 160 {
+		t.Fatalf("boundary request tick = %d, want 160", route.LastRequestTick)
 	}
 }
 

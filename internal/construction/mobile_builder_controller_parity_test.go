@@ -100,14 +100,14 @@ func runMobileApproachControllerCase(t *testing.T, controller uint8) mobileAppro
 		t.Fatalf("controller %d moved before route publication: start=(%d,%d,%d) got=(%d,%d,%d)", controller,
 			startX, startY, startZ, builder.X, builder.Y, builder.Z)
 	}
-	svc.Movement.Scheduler.Tick(0)
+	svc.Movement.Scheduler.Tick(60)
 	route := svc.Movement.Routes[builder.Handle]
 	if route == nil || !route.Active || route.Count == 0 {
 		t.Fatalf("controller %d phase-5 scheduler did not publish the approach route: %+v", controller, route)
 	}
 
 	firstMoveTick, reachedTick, startTick := int32(-1), int32(-1), int32(-1)
-	for tick := uint32(1); tick < 2000; tick++ {
+	for tick := uint32(61); tick < 2000; tick++ {
 		// Construction runs before movement. Every visit before the mover reaches
 		// the shared range gate must remain product-free [04 R-ORD-01 §5].
 		pumpApproach(svc, builder, tick)

@@ -67,6 +67,7 @@ func TestSchedulerRouteSteerArrival(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	u := w.Unit(h)
+	system.BindWorld(w)
 	system.EnsureUnit(u)
 
 	// Goal cell (8,8) ~ 7 cells away
@@ -82,7 +83,7 @@ func TestSchedulerRouteSteerArrival(t *testing.T) {
 	q.Push(id, orders.Node{GoalX: world.CellToWorld(8), GoalZ: world.CellToWorld(8)})
 
 	// Tick scheduler once to publish route (search needs 1 tick)
-	system.Scheduler.Tick(1)
+	system.Scheduler.Tick(60)
 	route := system.Routes[h]
 	if route == nil || !route.Active {
 		t.Fatalf("route not published after scheduler tick: active %v count %d", route.Active, route.Count)
@@ -267,6 +268,7 @@ func TestBigRequestStaysActiveAcrossTicks(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	u := w.Unit(h)
+	system.BindWorld(w)
 	system.EnsureUnit(u)
 
 	startCell := path.Cell{X: 1, Z: 1}
@@ -327,7 +329,7 @@ func TestBigRequestStaysActiveAcrossTicks(t *testing.T) {
 	}
 	done := false
 	ticksTaken := uint32(0)
-	for tick := uint32(1); tick < 10 && !done; tick++ {
+	for tick := uint32(60); tick < 70 && !done; tick++ {
 		system.Scheduler.Tick(tick)
 		if fullOrEmpty(tick) {
 			done = true

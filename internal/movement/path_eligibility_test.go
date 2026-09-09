@@ -28,7 +28,7 @@ func TestPathEligibilityUsesSlotsSeparatelyFromCount(t *testing.T) {
 		sys.EnsureUnit(w.Unit(h))
 		sys.BeginTick(1)
 		sys.SubmitMove(h, owner, path.Cell{X: 2, Z: 2}, path.Cell{X: 9, Z: 9})
-		for tick := uint32(1); tick < 10 && sys.HasPathRequest(h); tick++ {
+		for tick := uint32(60); tick < 70 && sys.HasPathRequest(h); tick++ {
 			sys.Scheduler.Tick(tick)
 		}
 		if route := sys.Routes[h]; route == nil || route.Count == 0 || route.Status != 0 {

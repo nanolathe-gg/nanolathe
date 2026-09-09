@@ -723,6 +723,7 @@ func TestSchedulerForNaval(t *testing.T) {
 	sz := world.CellToWorld(10)
 	sy := ter.HeightAt(sx, sz)
 	sh, _ := w.Create(shipDef, 0, sx, sy, sz)
+	sys.BindWorld(w)
 	sys.EnsureUnit(w.Unit(sh))
 	// Submit naval move across water (both on water)
 	startCell := path.Cell{X: 20, Z: 10}
@@ -731,7 +732,7 @@ func TestSchedulerForNaval(t *testing.T) {
 	id := orders.Lookup("Move_Ground")
 	q := orders.QueueForUnit(w.Unit(sh))
 	q.Push(id, orders.Node{GoalX: world.CellToWorld(28), GoalZ: world.CellToWorld(10)})
-	sys.Scheduler.Tick(1)
+	sys.Scheduler.Tick(60)
 	route := sys.Routes[sh]
 	if route == nil || !route.Active {
 		t.Fatalf("ship route not published after scheduler tick")

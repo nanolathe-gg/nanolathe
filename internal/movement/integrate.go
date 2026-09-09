@@ -155,8 +155,15 @@ type System struct {
 // The per-route follower state arms submissions through serviceGroundFollower
 // at the established 60-tick cadence [04 R-MOV-01 §3][04 R-MOV-01 §7].
 type pathProvider struct {
-	requests [10][]path.Request
+	// requests is keyed by unit only as derived request payload. It never
+	// chooses the next candidate: Poll walks the bound world's physical unit
+	// slots, including holes and non-movers [04 R-PATH-01 §6].
+	requests [10]map[pool.Handle]path.Request
 	cursor   [10]int
+	started  [10]bool
+	world    *units.World
+	system   *System
+	tick     uint32
 	players  int
 	eligible func(int) bool
 	limit    int32
@@ -194,8 +201,9 @@ func (s *System) PathRequestsSnapshot() []path.Request {
 	}
 	return s.pathProvider.allRequests()
 }
-func (p *pathProvider) PlayerCount() int { return p.players }
-func (p *pathProvider) UnitLimit() int32 { return p.limit }
+func (p *pathProvider) PlayerCount() int        { return p.players }
+func (p *pathProvider) UnitLimit() int32        { return p.limit }
+func (p *pathProvider) SetPathTick(tick uint32) { p.tick = tick }
 func (p *pathProvider) Eligible(player int) bool {
 	// Eligibility is player-record existence, not queue non-emptiness. Retail
 	// accrues and spends the equal share while polling that player's followers
@@ -203,33 +211,69 @@ func (p *pathProvider) Eligible(player int) bool {
 	return player >= 0 && player < len(p.requests) && p.eligible != nil && p.eligible(player)
 }
 func (p *pathProvider) Poll(player int) (path.Request, path.PollResult) {
-	if !p.Eligible(player) || len(p.requests[player]) == 0 {
+	if !p.Eligible(player) || p.world == nil || p.system == nil {
 		return path.Request{}, path.PollNoUnit
 	}
-	q := p.requests[player]
-	i := p.cursor[player] % len(q)
-	r := q[i]
-	// A request is removed only when admitted; the cursor advances and wraps
-	// on every visit, preserving stable follower polling [04 R-PATH-01 §6].
-	//
-	// Removing index i shifts the request that was at i+1 down INTO i, so the
-	// cursor that advances past this visit is i, not i+1. Storing i+1 stepped
-	// the cursor over that shifted-down request, and every poll skipped one
-	// waiting follower. The established consequence of the admission walk is
-	// that fairness comes from the round-robin alone — "no starvation guard
-	// beyond the round-robin and no priority" [04 R-PATH-01 §6] — and a poll
-	// that skips every other waiting request breaks exactly that guarantee.
-	// The follower cannot compensate: while a request is pending its per-tick
-	// service returns at the has-request gate without re-submitting
-	// [04 R-MOV-01 §7], so a skipped request waits for the cursor to come all
-	// the way round while the mover stands blocked against the cell its stale
-	// route steers into.
-	p.requests[player] = append(q[:i], q[i+1:]...)
-	if i >= len(p.requests[player]) {
-		p.cursor[player] = 0
-	} else {
-		p.cursor[player] = i
+	start, end, ok := p.world.SliceForPlayer(player)
+	if !ok || end < start {
+		return path.Request{}, path.PollNoUnit
 	}
+	if !p.started[player] {
+		p.cursor[player] = start - 1
+		p.started[player] = true
+	}
+	p.cursor[player]++
+	if p.cursor[player] > end {
+		p.cursor[player] = start
+	}
+	h := pool.Handle(p.cursor[player])
+	u := p.world.Unit(h)
+	if u == nil {
+		return path.Request{}, path.PollNoUnit
+	}
+	// The scheduler reaches definitions, mover records, and movement classes
+	// through the selected physical slot. A defined non-mover consumes the
+	// visit but cannot ask a route follower [04 R-PATH-01 §6].
+	if u.Def == nil || p.system.Steers[h] == nil || p.system.Routes[h] == nil {
+		return path.Request{}, path.PollVisited
+	}
+	if _, ok := p.system.profiles[h]; !ok {
+		return path.Request{}, path.PollVisited
+	}
+	if collision := p.system.Collisions[h]; collision == nil || collision.Building {
+		return path.Request{}, path.PollVisited
+	}
+	r, ok := p.requests[player][h]
+	if !ok {
+		return path.Request{}, path.PollVisited
+	}
+	route := p.system.Routes[h]
+	if !route.WantsRepath || route.LastRequestTick+60 > p.tick {
+		return path.Request{}, path.PollVisited
+	}
+	if r.Activation != 0 {
+		binding := p.system.activeOrders[h]
+		if binding == nil || binding.token != r.Activation || binding.order == nil {
+			delete(p.requests[player], h)
+			return path.Request{}, path.PollVisited
+		}
+		// The request's target and committed start are read at the positive
+		// follower poll, never retained from its earlier staging visit [04
+		// R-PATH-01 §4][04 R-PATH-01 §6].
+		start, goal, _, ok := p.system.pathCellsForOrder(u, binding.order)
+		if !ok {
+			delete(p.requests[player], h)
+			return path.Request{}, path.PollVisited
+		}
+		fx, fz := p.system.pathFootprint(u)
+		r.Start = start
+		r.Goal = p.system.goalForOrderWithFootprint(u, goal, binding.order, fx, fz)
+	}
+	// This is the follower's admission boundary: the timestamp is not a
+	// submission-time snapshot, and the flag stays armed until publication
+	// [04 R-MOV-01 §7][04 R-PATH-01 §6].
+	route.LastRequestTick = p.tick
+	delete(p.requests[player], h)
 	return r, path.PollRequest
 }
 func (p *pathProvider) Submit(r path.Request) {
@@ -237,32 +281,28 @@ func (p *pathProvider) Submit(r path.Request) {
 		return
 	}
 	for player := range p.requests {
-		for i := range p.requests[player] {
-			if p.requests[player][i].Unit == r.Unit {
-				p.requests[player] = append(p.requests[player][:i], p.requests[player][i+1:]...)
-				break
-			}
+		if p.requests[player] != nil {
+			delete(p.requests[player], r.Unit)
 		}
 	}
-	p.requests[r.Player] = append(p.requests[r.Player], r)
+	if p.requests[r.Player] == nil {
+		p.requests[r.Player] = make(map[pool.Handle]path.Request)
+	}
+	p.requests[r.Player][r.Unit] = r
 }
 func (p *pathProvider) Cancel(unit pool.Handle) bool {
 	for player := range p.requests {
-		for i := range p.requests[player] {
-			if p.requests[player][i].Unit == unit {
-				p.requests[player] = append(p.requests[player][:i], p.requests[player][i+1:]...)
-				return true
-			}
+		if _, ok := p.requests[player][unit]; ok {
+			delete(p.requests[player], unit)
+			return true
 		}
 	}
 	return false
 }
 func (p *pathProvider) HasRequest(unit pool.Handle) bool {
 	for player := range p.requests {
-		for _, r := range p.requests[player] {
-			if r.Unit == unit {
-				return true
-			}
+		if _, ok := p.requests[player][unit]; ok {
+			return true
 		}
 	}
 	return false
@@ -270,8 +310,19 @@ func (p *pathProvider) HasRequest(unit pool.Handle) bool {
 func (p *pathProvider) pending(player uint8) int { return len(p.requests[player]) }
 func (p *pathProvider) allRequests() []path.Request {
 	var out []path.Request
-	for player := range p.requests {
-		out = append(out, p.requests[player]...)
+	if p.world == nil {
+		return out
+	}
+	for player := 0; player < len(p.requests); player++ {
+		start, end, ok := p.world.SliceForPlayer(player)
+		if !ok {
+			continue
+		}
+		for slot := start; slot <= end; slot++ {
+			if r, ok := p.requests[player][pool.Handle(slot)]; ok {
+				out = append(out, r)
+			}
+		}
 	}
 	return out
 }
@@ -553,7 +604,7 @@ func NewSystem(terrain *world.Terrain, fallback Profile, grid *OccupancyGrid) *S
 		grid.AttachPlot(terrain)
 	}
 	sched := path.NewScheduler(s.searchFunc, s.publishFunc)
-	s.pathProvider = &pathProvider{players: s.PathPlayers, limit: s.PathUnitLimit, eligible: func(player int) bool { return player == 0 }}
+	s.pathProvider = &pathProvider{system: s, players: s.PathPlayers, limit: s.PathUnitLimit, eligible: func(player int) bool { return player == 0 }}
 	sched.SetCandidateProvider(s.pathProvider)
 	// Use DefaultBase unless overridden [P0-I16]; no longer reads mutable global.
 	sched.SetBase(path.DefaultBase)
@@ -599,6 +650,17 @@ func (s *System) BindWorld(w *units.World) {
 		return
 	}
 	s.world = w
+	if s.pathProvider != nil {
+		changedWorld := s.pathProvider.world != w
+		s.pathProvider.world = w
+		if changedWorld {
+			// A newly bound unit pool defines the physical cursor boundaries. The
+			// next poll starts at each slice's first slot [04 R-PATH-01 §6]. A
+			// same-world bind is an ordinary per-tick composition refresh and must
+			// retain the scheduler's persistent physical cursor.
+			s.pathProvider.started = [10]bool{}
+		}
+	}
 	// The layer registry must use the current bound unit world for the request
 	// revision pass [04 §6.1 R-DOC04-B]. Occupancy publication can allocate it
 	// before this bind, so refresh an existing registry as well as constructing
@@ -1770,6 +1832,12 @@ func (s *System) submitMove(handle pool.Handle, player uint8, start, goal path.C
 	if s.pathProvider != nil {
 		s.pathProvider.Submit(req)
 	}
+	// The legacy direct surface has no order installer to arm the follower.
+	// It still stages only payload; Poll reads this live flag and stamps the
+	// timestamp if and when its physical slot is admitted.
+	if route := s.Routes[handle]; route != nil {
+		route.WantsRepath = true
+	}
 }
 
 func (s *System) submitMoveForOrder(u *units.Unit, head *orders.Node, start, goal path.Cell, activation uint64) {
@@ -2097,9 +2165,9 @@ func (s *System) serviceGroundFollower(u *units.Unit, head *orders.Node, route *
 	if s.hasControllerGoal(u.Handle) && (blocked || !route.Active || route.Count < 2) {
 		route.WantsRepath = true
 	}
-	// The follower owns both the wants-repath arm and the exact inclusive
-	// admission boundary. Session only invokes this once in the unit sweep;
-	// it never submits a second copy [04 R-MOV-01 §7][04 R-PATH-01 §6].
+	// The follower stages the current request payload once. Its poll at the
+	// scheduler's physical-slot visit owns the inclusive throttle comparison
+	// and timestamp write [04 R-MOV-01 §7][04 R-PATH-01 §6].
 	if !route.WantsRepath || route.LastRequestTick+60 > tick || s.HasPathRequest(u.Handle) {
 		return arrived
 	}
@@ -2112,7 +2180,6 @@ func (s *System) serviceGroundFollower(u *units.Unit, head *orders.Node, route *
 		return arrived
 	}
 	s.submitMoveForOrder(u, head, start, goal, binding.token)
-	route.LastRequestTick = tick
 	return arrived
 }
 

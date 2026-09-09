@@ -128,8 +128,13 @@ is the acceptance threshold and the connect flag `[04 R-PATH-01 §5]`
 **The scheduler** (`queue.go`). `Scheduler` holds one active request at a time.
 `CandidateProvider` is the admission surface the movement system implements:
 player count, unit limit, per-player eligibility and a stable per-player cursor
-poll — path derives neither cursor nor eligibility from the queued requests
-`[04 R-PATH-01 §6]`. `SearchFunc` is the search boundary and reports the work it
+poll. The provider advances that cursor through the bound player's fixed unit
+slice one physical slot per poll; holes and units without a route follower
+still consume visits. Staged request data is lookup-only: the selected
+follower's wants-repath flag, inclusive 60-tick throttle, committed start and
+goal are read at a positive poll, which stamps the timestamp. Path derives
+neither cursor nor eligibility from staged requests `[04 R-PATH-01 §6]`
+`[04 R-MOV-01 §7]`. `SearchFunc` is the search boundary and reports the work it
 actually did, setup-ray steps and heap pops, which is exactly what the scheduler
 charges. `PublishFunc` is called only when the search is done, never at a budget
 boundary. `Trace`, `RequestTrace`, `GoalTrace` and `SchedulerTraceState` are

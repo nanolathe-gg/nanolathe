@@ -25,6 +25,7 @@ func TestPathFailureRecoveryRearmsEverySixtyTicks(t *testing.T) {
 		MaxVelocity: 2 * int32(worldUnitsPerCell), Acceleration: 2 * int32(worldUnitsPerCell),
 		BrakeRate: 2 * int32(worldUnitsPerCell), TurnRate: 65535,
 	}
+	setScratchMovement(def, wiringProfile)
 	h, err := w.Create(def, 0, world.CellToWorld(1), 0, world.CellToWorld(1))
 	if err != nil {
 		t.Fatalf("create mover: %v", err)
@@ -73,8 +74,12 @@ func TestPathFailureRecoveryRearmsEverySixtyTicks(t *testing.T) {
 	}
 	system.serviceGroundFollower(u, head, route, 60)
 	second := system.PathRequestsSnapshot()
-	if len(second) != 1 || route.LastRequestTick != 60 {
-		t.Fatalf("tick-60 request=%v last=%d, want one request and last=60", second, route.LastRequestTick)
+	if len(second) != 1 || route.LastRequestTick != 0 {
+		t.Fatalf("tick-60 staging=%v timestamp=%d, want one request and unchanged zero timestamp", second, route.LastRequestTick)
+	}
+	system.Scheduler.Tick(60)
+	if route.LastRequestTick != 60 {
+		t.Fatalf("tick-60 poll timestamp=%d, want 60", route.LastRequestTick)
 	}
 
 	// A second failure must remain recoverable. No session-side retry counter is
@@ -89,13 +94,17 @@ func TestPathFailureRecoveryRearmsEverySixtyTicks(t *testing.T) {
 	}
 	system.serviceGroundFollower(u, head, route, 120)
 	third := system.PathRequestsSnapshot()
-	if len(third) != 1 || route.LastRequestTick != 120 {
-		t.Fatalf("tick-120 request=%v last=%d, want one request and last=120", third, route.LastRequestTick)
+	if len(third) != 1 {
+		t.Fatalf("tick-120 staged request=%v, want one", third)
 	}
 	// Repeated service in the same poll window cannot duplicate the request.
 	system.serviceGroundFollower(u, head, route, 120)
 	if got := system.PathRequestsSnapshot(); len(got) != 1 {
 		t.Fatalf("duplicate request at tick 120: %v", got)
+	}
+	system.Scheduler.Tick(120)
+	if route.LastRequestTick != 120 {
+		t.Fatalf("tick-120 poll timestamp=%d, want 120", route.LastRequestTick)
 	}
 
 	// Replacing the authoritative head cancels the old request and clears the

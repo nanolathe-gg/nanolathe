@@ -10839,10 +10839,11 @@ poll answers "yes" and stamps the current tick only when
 (follower.flags & wants-repath) != 0  and  lastRequestTick + 60 <= currentTick
 ```
 
-— an inclusive comparison against a 60-tick (two-second) throttle, with
-`lastRequestTick` zero-initialised so the first request after the flag is armed
-is immediate. On a "yes" the scheduler charges 100 to its per-tick budget and
-starts a search for that unit. The flag is not cleared by the poll; it is
+— an inclusive comparison against a 60-tick (two-second) throttle. The
+zero-initialised timestamp does **not** bypass that comparison: a newly armed
+follower cannot answer yes before tick 60. On a "yes" the scheduler charges
+100 to its per-tick budget and starts a search for that unit. The flag is not
+cleared by the poll; it is
 cleared by every publication, empty ones included, and by a goal install
 (the follower's install path clears bit 1 before deciding whether to accept
 the new route) — [R-PATH-01 §7], [R-PATH-01 §8].

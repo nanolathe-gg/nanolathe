@@ -39,6 +39,7 @@ func TestFollowerRequestsContinuationAtSixtyTicks(t *testing.T) {
 		UnitName: "continuation-test", FootprintX: 2, FootprintZ: 2,
 		MaxVelocity: 65536, Acceleration: 65536, BrakeRate: 65536, TurnRate: 1024,
 	}
+	setScratchMovement(def, profile)
 	x, z := world.PlacementCenter(4, 6, 2, 2)
 	h, err := w.Create(def, 0, x, 0, z)
 	if err != nil {
@@ -76,7 +77,8 @@ func TestFollowerRequestsContinuationAtSixtyTicks(t *testing.T) {
 	if goal.Center != (path.Cell{X: 19, Z: 21}) {
 		t.Fatalf("request goal=%#v want footprint-biased cell (19,21)", requests[0].Goal)
 	}
-	if !route.WantsRepath || route.LastRequestTick != 60 {
+	system.Scheduler.Tick(60)
+	if route.WantsRepath || route.LastRequestTick != 60 {
 		t.Fatalf("follower poll state wants=%v tick=%d", route.WantsRepath, route.LastRequestTick)
 	}
 }
