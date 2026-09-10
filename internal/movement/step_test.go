@@ -781,20 +781,5 @@ func TestArrivalIsPlanarNoYHeading(t *testing.T) {
 	_ = res
 }
 
-// Ensure no presentation/camera state leaks into movement [task][I6].
-func TestStepUnitNoPresentation(t *testing.T) {
-	// This is a compile-time check: movement package must not import client/camera.
-	// Runtime check: StepResult does not contain alpha or camera fields.
-	var r StepResult
-	_ = r.Arrived
-	_ = r.DistToGoal
-	// If movement imported camera, vet would fail due to forbidden import.
-}
-
 // helper for pool handle creation in tests
 var _ = pool.Handle(1)
-
-func init() {
-	// Ensure orders descriptors are registered (init in orders package loads via content)
-	// The lookup above requires descriptors sorted; orders init does it.
-}

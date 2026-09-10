@@ -15,71 +15,6 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
-// TestRS06_TwoDamagedEnemiesSlotOrder verifies that simultaneous damage notifies AI in slot order [RS-P0-014][INVARIANTS I1].
-func TestRS06_TwoDamagedEnemiesSlotOrder(t *testing.T) {
-	rng.SeedGlobal(123, 456)
-	cat := &content.Catalog{
-		Units: map[string]*content.UnitDef{
-			"armcom": {DefinitionHeader: content.DefinitionHeader{CanonicalKey: "armcom"}, UnitName: "armcom", MaxDamage: 1000, Category: "COMMANDER", Side: "ARM", Builder: true},
-			"cormex": {DefinitionHeader: content.DefinitionHeader{CanonicalKey: "cormex"}, UnitName: "cormex", MaxDamage: 500, Category: "METAL", Side: "CORE"},
-			"armlab": {DefinitionHeader: content.DefinitionHeader{CanonicalKey: "armlab"}, UnitName: "armlab", MaxDamage: 800, Category: "FACTORY", Side: "ARM"},
-		},
-		Weapons: map[string]*content.WeaponDef{},
-	}
-	uw := newSessionFixtureWorld(3, cat)
-	// Create session with AI manager for player 0 (local)
-	mgr := &ai.Manager{Player: 0, IsAlliance: func(a, b uint8) bool { return false }}
-	s := &Session{
-		Units:   uw,
-		Catalog: cat,
-		AI:      [10]*ai.Manager{0: mgr},
-		Econ:    nil,
-		Combat:  &combat.Service{},
-		World:   &world.Terrain{},
-	}
-	mgr.RNG = s.SimRNG()
-	h1, err := uw.Create(cat.Units["cormex"], 1, 0, 0, 0)
-	if err != nil {
-		t.Fatalf("create h1: %v", err)
-	}
-	h2, err := uw.Create(cat.Units["cormex"], 1, 0, 0, 0)
-	if err != nil {
-		t.Fatalf("create h2: %v", err)
-	}
-	if h1 == h2 {
-		t.Fatalf("handles equal")
-	}
-	if h1 > h2 {
-		h1, h2 = h2, h1
-	}
-	var before []struct {
-		Handle pool.Handle
-		Health int32
-	}
-	for _, u := range uw.IterSliced() {
-		if u == nil {
-			continue
-		}
-		before = append(before, struct {
-			Handle pool.Handle
-			Health int32
-		}{Handle: u.Handle, Health: u.Health})
-	}
-	uw.Unit(h1).Health -= 100
-	uw.Unit(h2).Health -= 100
-	for _, snap := range before {
-		h := snap.Handle
-		beforeHealth := snap.Health
-		u := uw.Unit(h)
-		if u == nil {
-			continue
-		}
-		if u.Health >= beforeHealth {
-			continue
-		}
-	}
-}
-
 // TestRS06_MapSeedNotAffectState verifies that randomized Go map seed cannot change state [RS-06][INVARIANTS I1].
 func TestRS06_MapSeedNotAffectState(t *testing.T) {
 	const simSeed, crtSeed uint32 = 777, 888
@@ -337,54 +272,6 @@ func TestRS06_LegacyProductionGuard(t *testing.T) {
 	for _, forbidden := range []string{"stepSharingPhase", "stepResultPhase", "publishSnapshot"} {
 		if strings.Contains(phaseRegistry, forbidden) {
 			t.Fatalf("phase registry must not own %s [01 §4.4][DET-02]", forbidden)
-		}
-	}
-}
-
-// TestRS06_MapIterationDetector ensures no map iteration on sim-visible paths [I1][RS-06].
-func TestRS06_MapIterationDetector(t *testing.T) {
-	root := findRepoRoot(t)
-	re := regexp.MustCompile(`for\s+\w+.*:=\s*range\s+\w+`)
-	filesToCheck := []string{
-		"internal/session/session.go",
-		"internal/session/step.go",
-		"internal/session/commands.go",
-		"internal/session/publish.go",
-		"internal/combat/service.go",
-		"internal/orders/pump.go",
-		"internal/ai/manager.go",
-	}
-	for _, rel := range filesToCheck {
-		b, err := os.ReadFile(root + "/" + rel)
-		if err != nil {
-			continue
-		}
-		lines := strings.Split(string(b), "\n")
-		for i, line := range lines {
-			trim := strings.TrimSpace(line)
-			if strings.HasPrefix(trim, "//") {
-				continue
-			}
-			if re.MatchString(line) && strings.Contains(line, "range") {
-				if strings.Contains(line, "IterSliced") || strings.Contains(line, "Iter(") || strings.Contains(line, "AllRequests") || strings.Contains(line, "primary") || strings.Contains(line, "secondary") || strings.Contains(line, "beforeHealth") {
-					// beforeHealth is now slice, not map [RS-P0-014]; IterSliced is deterministic [I1]
-					continue
-				}
-				if strings.Contains(line, "range s.AI") {
-					continue
-				}
-				if strings.Contains(line, "range s.Units") {
-					continue
-				}
-				// Any other range in these authoritative files that is not over slice Iter may be map iteration — log for inventory [I1][RS-06]
-				if strings.Contains(string(b), "map[") && strings.Contains(line, "range") {
-					// Allow range over maps that are immediately sorted or order-independent (e.g., ClassVectors existence check, cat.Units key collection)
-					if strings.Contains(line, "ClassVectors") || strings.Contains(line, "cat.Units") || strings.Contains(line, "cat.Weapons") {
-						continue
-					}
-					t.Logf("potential map iteration %s line %d: %s [I1][RS-06] — ensure sorted keys or slot-ordered slice", rel, i+1, trim)
-				}
-			}
 		}
 	}
 }

@@ -7,16 +7,8 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/render"
 )
 
-// classicSink is the software (classic) executor for a recorded committed-frame
-// List: it implements drawlist.Sink as the existing byte-writing blitters of
-// internal/client (docs/DESIGN_GPU_RENDERER.md §2.2). One walk records the
-// List; both executors replay it, and the simulation cannot tell which ran
-// [03 §1][I6].
-//
-// In this unit only the Expand family is recorded and therefore reached; every
-// other family still writes into c.indexed directly from drawCommittedFrame, so
-// those Sink methods are unreached stubs that later units fill in as they move
-// each byte writer behind the list (C-G1, C-G3).
+// classicSink replays recorded draw commands through the software byte-writing
+// routines in internal/client (docs/DESIGN_GPU_RENDERER.md §2.2).
 type classicSink struct {
 	c *Client
 }

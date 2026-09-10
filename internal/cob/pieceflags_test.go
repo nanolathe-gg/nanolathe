@@ -2,86 +2,13 @@ package cob
 
 import (
 	"testing"
-
-	"github.com/nanolathe-gg/nanolathe/internal/model"
-	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
-
-// TestPieceFlagPolarity_GeometryDefaults verifies the fill walk [04 §"Piece flag polarity"].
-// Allocation zero-filled then per piece sets bit1|bit2 unconditionally and bit0 only when >=3 vertices.
-func TestPieceFlagPolarity_GeometryDefaults(t *testing.T) {
-	// We test via the units helper? Here we directly verify the VM fallback matches spec for bound case.
-	// Instead we construct a unit-like flag array via model.
-	mdl := &model.Model{
-		Pieces: []model.Piece{
-			{Name: "base", Parent: -1, Vertices: nil},                                   // 0 -> 0x06
-			{Name: "p2", Parent: 0, Vertices: [][3]numeric.Fixed{{0, 0, 0}, {1, 0, 0}}}, // 2 -> 0x06
-		},
-		Root: 0,
-	}
-	mdl2 := &model.Model{
-		Pieces: []model.Piece{
-			{Name: "a", Parent: -1, Vertices: [][3]numeric.Fixed{{0, 0, 0}, {1, 0, 0}, {2, 0, 0}}}, // 3 -> 0x07
-		},
-		Root: 0,
-	}
-	_ = mdl
-	_ = mdl2
-	// The actual flag building is in internal/units; here we verify the VM's bound flag handling
-	// uses those values. The geometry test itself lives in internal/units/pieces_test.go;
-	// this test locks the opcode polarity.
-}
 
 // TestPieceFlagOpcodePolarity checks each of the six flag opcodes toggles exactly its bit [04 §"Piece flag polarity"].
 // Lower opcode sets, higher clears: show(0x10005000)/hide(0x10006000) bit0, cache(0x10007000)/dont-cache(0x10008000) bit1, shade(0x1000d000)/dont-shade(0x1000e000) bit2.
 func TestPieceFlagOpcodePolarity(t *testing.T) {
 	// Standalone VM path (no unit) still must toggle exactly its bit via VM-local fallback.
 	// We test both the fallback and the bound path.
-	runOne := func(t *testing.T, vm *VM, piece int, prepare uint8, opcode uint32, mask uint8, set bool) {
-		t.Helper()
-		// Prepare flags for piece
-		var flags []uint8
-		if vm.renderFlagsBound {
-			if vm.renderFlagGet != nil {
-				flags = vm.renderFlagGet()
-			} else {
-				flags = vm.renderFlags
-			}
-		} else {
-			flags = vm.pieceFlags
-		}
-		if piece < len(flags) {
-			flags[piece] = prepare
-		}
-		other := 1 - piece
-		var beforeOther uint8
-		if other >= 0 && other < len(flags) {
-			beforeOther = flags[other]
-		}
-		// Build program with single opcode
-		code := []uint32{opcode, uint32(piece), 0x10065000}
-		prog := &Program{
-			Code:        code,
-			Scripts:     map[string]int{"S": 0},
-			Pieces:      []string{"a", "b"},
-			ScriptsByID: []int{0},
-		}
-		vm2 := vm
-		// Replace program for this one-shot
-		vm2.SetProgram(prog)
-		// Re-bind if it was bound before (SetProgram clears binding)
-		if len(flags) > 0 {
-			// Preserve binding for second iteration: re-attach same storage if it was external
-			// For fallback test, flags is VM-local, so no need.
-		}
-		// For bound test, caller has already installed handler on vm; we need to keep it.
-		// This helper is for fallback only; bound tests below handle separately.
-		_ = mask
-		_ = set
-		_ = beforeOther
-		_ = prepare
-	}
-	_ = runOne
 	// Define cases
 	cases := []struct {
 		name   string

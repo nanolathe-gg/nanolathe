@@ -8,8 +8,8 @@ order the two commands share.
 
 Packages: `internal/clock`, `internal/sim/rng`, `internal/sim/numeric`,
 `internal/pool`, `internal/session` (composition, the tick, publication),
-`internal/frame` (the published side), `internal/version`, `internal/parity`,
-and the boot paths in `cmd/nanolathe` and `cmd/nanolathe-headless`.
+`internal/frame` (the published side), `internal/version`, and the boot paths
+in `cmd/nanolathe` and `cmd/nanolathe-headless`.
 
 Related documents: [ARCHITECTURE.md](ARCHITECTURE.md) for the package map, the
 dependency graph and the citation routing that makes a bare `[Cn]` in
@@ -694,14 +694,9 @@ checks that path publication follows movement, that exactly one publication
 happens per completed sub-tick, and that the committed frame's tick matches the
 sub-tick that produced it.
 
-**Passive evidence capture.** `internal/parity` is the opt-in recorder used
-when a run has to be compared against another run or against a retail
-observation: a stable hash over arbitrary recorded values that sorts map keys
-and preserves float bits, plus trace and image writers. It runs no simulation
-work, samples no clock and owns no random stream, so enabling it cannot move a
-hash. The session's own trace hook is nil and no-op until switched on, and its
-selection is a sorted handle list rather than a map so it cannot perturb
-iteration order.
+**Trace hooks.** The session's optional trace hook is nil and no-op until
+switched on. Its selection is a sorted handle list rather than a map, so
+recording cannot perturb iteration order.
 
 **The floating-point allowlist.** Every `float64` and `float32` in the
 authoritative tree maps to a row of I2 or is presentation-only. Two of those

@@ -68,20 +68,8 @@ func TestCompileRelationships(t *testing.T) {
 	if err := cat.Validate(); err != nil {
 		t.Fatalf("validate: %v", err)
 	}
-	// Every unit's weapon1..3 is empty or resolves; explodeas/selfdestructas too.
+	// Every unit's weapon1 is empty or resolves.
 	for key, u := range cat.Units {
-		for _, link := range []struct {
-			name string
-			def  *WeaponDef
-		}{
-			{"weapon1", u.Weapon1Def}, {"weapon2", u.Weapon2Def}, {"weapon3", u.Weapon3Def},
-			{"explodeas", u.ExplodeAsDef}, {"selfdestructas", u.SelfDestructAsDef},
-		} {
-			if link.def == nil {
-				continue // empty or unresolved; unresolved names checked below
-			}
-			_ = link
-		}
 		if u.Weapon1 != "" {
 			if _, ok := cat.Weapon(u.Weapon1); !ok && u.Weapon1Def == nil {
 				t.Errorf("unit %s: weapon1 %q does not resolve", key, u.Weapon1)

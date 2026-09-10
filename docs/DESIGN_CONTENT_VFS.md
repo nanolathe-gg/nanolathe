@@ -164,7 +164,7 @@ executable's own `[02 R-CAT-01 §5]`:
 | `Provenance` | The content-side view of where a definition's bytes came from: logical path, provider ID, mount order |
 | `CategoryRegistry`, `CategoryMask` | The sorted case-insensitive category token registry and the membership bitsets built from it `[02 R-P0-03]` |
 | `BuildMenuPage`, `DownloadMenuPlacement` | The authored and generated build pages |
-| `PresentationCatalog`, `AssetID`, `AssetSequence`, `FeatureAsset` | The content/presentation boundary: every image asset discovered and decoded before a battle starts, handed to draw code as stable IDs |
+| `AssetID`, `AssetSequence` | Typed presentation asset identities and frame-sequence metadata used by texture playback |
 | `SkirmishManifest`, `SkirmishAsset`, `SkirmishDiagnostic` | The preflight result (§3.5) |
 
 Accessors: `Unit`, `Weapon`, `WeaponByName`, `WeaponByID`, `WeaponLink`,

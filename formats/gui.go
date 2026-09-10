@@ -242,13 +242,6 @@ func isGUIStringByte(value byte) bool {
 	return isGUIStringStart(value) || value >= '0' && value <= '9' || value == ' ' || value == '_' || value == '-' || value == '!' || value == '?' || value == '.'
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // LoadGUIFile reads and decodes a panel definition from the VFS.
 func LoadGUIFile(fs vfs.FSOps, name string) (*GUI, error) {
 	data, err := readVFS(fs, name)

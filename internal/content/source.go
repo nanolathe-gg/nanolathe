@@ -29,17 +29,7 @@ func isArchiveProvider(p vfs.Provenance) bool {
 // discoverArchiveContent enumerates archive-backed winning entries only. A
 // loose winner is never replaced with a shadowed archive entry [02 R-CAT-01 §1].
 func discoverArchiveContent(fs vfs.FSOps, directory, suffix string) ([]archiveContentFile, error) {
-	entries, err := discoverEntries(fs, directory, suffix, true)
-	if err != nil {
-		return nil, err
-	}
-	result := entries[:0]
-	for _, entry := range entries {
-		if entry.archive {
-			result = append(result, entry)
-		}
-	}
-	return result, nil
+	return discoverEntries(fs, directory, suffix, true)
 }
 
 // discoverUnitContent preserves every winning FBI so CompileUnits can parse a

@@ -162,7 +162,6 @@ package implements.
 | `internal/architecture` | Repository guards that inspect source rather than importing it: the platform boundary, random-stream ownership, retail-only content, shrink-only parity ratchets | this document, §6 |
 | `internal/cleanroom` | The clean-room lint and its per-file debt baseline | this document, §6 |
 | `internal/docs` | The citation resolver: every research citation in `docs/` and in Go comments resolves | this document, §6 |
-| `internal/parity` | Opt-in, passive evidence capture for parity investigations (authoritative hashes, traces) | DESIGN_RUNTIME_DETERMINISM |
 | `internal/compat/spec03` | Black-box checks of the published presentation boundary | DESIGN_PRESENTATION_CLIENT |
 | `internal/testsupport`, `internal/testsupport/retailcat` | `RetailRoot()`, the one place an asset-gated test skips; the shared compiled retail catalog | this document, §6 |
 | `probes/` | Authored, data-driven scenarios for questions only a manual retail observation settles; generators under `<probe>/gen/`, shared writers in `probes/kit/author` | `probes/README.md` |
