@@ -241,6 +241,7 @@ func (c *Client) drawCalculatedFlash(table int, frameIndex int32, cx, cy int, co
 	// radius, and the batch grows with s squared. At s = 1 the inner loops run
 	// once and the emitted points are the same points, in the same order.
 	s := c.viewScale()
+	recW, recH := c.recordExtent()
 	off := len(c.pointArena)
 	for row := 0; row < d.Side; row++ {
 		base := row * d.Side
@@ -259,11 +260,11 @@ func (c *Client) drawCalculatedFlash(table int, frameIndex int32, cx, cy int, co
 			px0 := cx + int(s.Project(int32(col-d.Offset)))
 			px1 := cx + int(s.Project(int32(col-d.Offset+1)))
 			for py := py0; py < py1; py++ {
-				if py < 0 || py >= c.height {
+				if py < 0 || py >= recH {
 					continue
 				}
 				for px := px0; px < px1; px++ {
-					if px < 0 || px >= c.width {
+					if px < 0 || px >= recW {
 						continue
 					}
 					if !coverage(px, py) {

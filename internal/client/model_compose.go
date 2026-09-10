@@ -427,7 +427,8 @@ func (c *Client) composeDirectLiveModel(draw *presentationrender.UnitDraw, selec
 	if len(polys) == 0 {
 		return composedModel{}, false
 	}
-	target := c.borrowModelImage(c.width, c.height, 0, 0, 0, 0, false, 1)
+	recW, recH := c.recordExtent()
+	target := c.borrowModelImage(recW, recH, 0, 0, 0, 0, false, 1)
 	for i := range polys {
 		if polys[i].frame != nil {
 			c.blitTexturedPolyTarget(target, &polys[i], polys[i].frame, nil, id)
@@ -448,7 +449,8 @@ func (c *Client) composeDirectDebrisModel(draw *presentationrender.UnitDraw, sel
 		return composedModel{}, false
 	}
 	polys := c.collectDrawPolysLaneProjected(draw, selector, id, modelCursorDebris, presentationrender.PieceLaneAll, true)
-	minX, minY, maxX, maxY, ok := directProjectedBounds(polys, int32(c.width), int32(c.height))
+	recW, recH := c.recordExtent()
+	minX, minY, maxX, maxY, ok := directProjectedBounds(polys, int32(recW), int32(recH))
 	if !ok {
 		return composedModel{}, false
 	}
@@ -468,11 +470,15 @@ func (c *Client) composeDirectDebrisModel(draw *presentationrender.UnitDraw, sel
 }
 
 func (c *Client) directModelOriginVisible(draw *presentationrender.UnitDraw) bool {
-	if c == nil || c.cam == nil || draw == nil || c.width <= 0 || c.height <= 0 {
+	if c == nil || c.cam == nil || draw == nil {
+		return false
+	}
+	recW, recH := c.recordExtent()
+	if recW <= 0 || recH <= 0 {
 		return false
 	}
 	x, y := c.modelAnchor(draw)
-	return x >= 0 && x <= int32(c.width) && y >= 0 && y <= int32(c.height)
+	return x >= 0 && x <= int32(recW) && y >= 0 && y <= int32(recH)
 }
 
 func directProjectedBounds(polys []screenPoly, width, height int32) (minX, minY, maxX, maxY int32, ok bool) {

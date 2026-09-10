@@ -142,7 +142,7 @@ func (r *Renderer) Fog(fg drawlist.Fog) {
 	scale := fogOpsScale(fg.Ops)
 	r.fog.ensureAtlas(fg.Gray, fg.Black, scale)
 
-	w, h := int32(r.w), int32(r.h)
+	w, h := int32(r.clipW()), int32(r.clipH())
 	// The gray remap no longer reads the GRAY TABLE: in the true-colour composite
 	// it is the desaturation the table was built from, the luminance
 	// floor((r+g+b)/3) of the colour already there [03 §4.3.3](§13.2 GRAY row,
@@ -166,8 +166,26 @@ func (r *Renderer) Fog(fg drawlist.Fog) {
 	// unfogged ones with the colour it read there, and always returns an opaque
 	// fragment, so source-over stores the colour unchanged.
 	imgs := [4]*ebiten.Image{1: r.fog.grid, 2: r.fog.atlas, 3: r.tables.atlas}
-	if !r.sched.beginBlended(schedDest,
-		int(region.x0), int(region.y0), int(region.x1), int(region.y1),
+	// The fog composite is the ONE family the generic world transform cannot
+	// carry (docs/DESIGN_GPU_RENDERER.md §16.3 "Fog"). Its pass reads the
+	// pre-fog copy of the composite 1:1 under each fragment, so its source
+	// coordinates have to equal its destination coordinates in SCREEN space,
+	// and its shader recovers a fog cell from the fragment's own position, so
+	// it has to be told which record pixel that position is. The region is
+	// therefore transformed here, the generic transform is held off for the one
+	// command, and the record-per-screen factor rides the colour lane the fog
+	// quad never used.
+	k := r.sched.worldScale
+	if !r.sched.worldOn {
+		k = 1
+	}
+	sx0, sy0, sx1, sy1 := r.sched.txRect(int(region.x0), int(region.y0), int(region.x1), int(region.y1))
+	sx0, sy0 = maxInt(sx0, 0), maxInt(sy0, 0)
+	sx1, sy1 = minInt(sx1, r.w), minInt(sy1, r.h)
+	worldOn := r.sched.worldOn
+	r.sched.worldOn = false
+	defer func() { r.sched.worldOn = worldOn }()
+	if !r.sched.beginBlended(schedDest, sx0, sy0, sx1, sy1,
 		imgs, r.fog.shader, blendComposite, 0) {
 		return
 	}
@@ -177,10 +195,10 @@ func (r *Renderer) Fog(fg drawlist.Fog) {
 	// same values, so the interpolated attribute is constant across the region.
 	// Source coordinates equal destination coordinates, so the read surface is
 	// sampled 1:1 under each fragment.
-	x0, y0 := float32(region.x0), float32(region.y0)
-	x1, y1 := float32(region.x1), float32(region.y1)
+	x0, y0 := float32(sx0), float32(sy0)
+	x1, y1 := float32(sx1), float32(sy1)
 	r.sched.quad(schedDest, x0, y0, x1, y1, x0, y0, x1, y1,
-		[4]float32{},
+		[4]float32{k, 0, 0, 0},
 		[4]float32{float32(region.originX), float32(region.originY),
 			float32(fogParityOps(fg.Ops, scale)), float32(scale.Float())})
 	r.fog.draws++

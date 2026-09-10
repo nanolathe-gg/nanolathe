@@ -153,6 +153,12 @@ func PickSnapshotUnit(f *frame.Frame, sx, sy int32, cam *camera.Camera, viewer u
 	if src == nil {
 		return 0, frame.UnitView{}, false
 	}
+	// The hull corners come from WorldToScreen, which projects at the RECORD
+	// step; the pointer arrives in the PRESENTED picture's own pixels. The two
+	// are the same space at every rest factor and differ only while the modern
+	// executor's free zoom is in flight, which is what ScreenToRecord bridges
+	// (DESIGN_GPU_RENDERER §16.4).
+	sx, sy = cam.ScreenToRecord(sx, sy)
 	best := pool.Handle(0)
 	var bestView frame.UnitView
 	// The reduction seeds its running best above every reachable score and
@@ -192,6 +198,11 @@ func SnapshotUnitHandlesInRect(f *frame.Frame, cam *camera.Camera, rect Rect, vi
 		return nil
 	}
 	out := make([]pool.Handle, 0)
+	// The rectangle arrives in surface pixels of the presented picture and the
+	// unit positions are projected at the record step, so the rectangle converts
+	// first (§16.4). Surface coordinates carry no beam origin, so the bridge is
+	// applied about it and taken off again.
+	rect = recordRect(cam, rect)
 	for i := 0; i < len(f.Units); i++ {
 		v := f.Units[i]
 		if v.Slot == 0 || !SnapshotVisible(f, v, viewer) {
@@ -203,4 +214,19 @@ func SnapshotUnitHandlesInRect(f *frame.Frame, cam *camera.Camera, rect Rect, vi
 		}
 	}
 	return out
+}
+
+// recordRect converts a surface-space rectangle of the presented picture into
+// the record space unit positions are projected in (§16.4). It is the identity
+// at every rest factor.
+func recordRect(cam *camera.Camera, r Rect) Rect {
+	if cam == nil || cam.AtRestStep() {
+		return r
+	}
+	minX, minY := cam.ScreenToRecord(r.MinX+camera.OriginX, r.MinY+camera.OriginY)
+	maxX, maxY := cam.ScreenToRecord(r.MaxX+camera.OriginX, r.MaxY+camera.OriginY)
+	return Rect{
+		MinX: minX - camera.OriginX, MinY: minY - camera.OriginY,
+		MaxX: maxX - camera.OriginX, MaxY: maxY - camera.OriginY,
+	}
 }

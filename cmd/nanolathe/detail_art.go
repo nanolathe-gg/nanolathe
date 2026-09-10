@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/palette"
@@ -135,7 +136,10 @@ func detailArtFor(opts Options, cs *contentSet, terrain *world.Terrain, progress
 // never consulted (§14.1) and synthesizing it would cost seconds for pixels no
 // capture can show.
 func captureDetailArt(opts Options, cs *contentSet, terrain *world.Terrain) *client.DetailArt {
-	if opts.Zoom.Native() {
+	// The detail art is the 2x variant set: a capture at or below 1x cannot
+	// show one of its pixels, so synthesizing it would cost seconds for nothing
+	// (§14.1, §16.8).
+	if opts.Zoom == 0 || opts.Zoom <= camera.ZoomUnit {
 		return nil
 	}
 	return detailArtFor(opts, cs, terrain, nil)

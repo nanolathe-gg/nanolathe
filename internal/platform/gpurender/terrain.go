@@ -265,11 +265,11 @@ func (r *Renderer) Terrain(c drawlist.Terrain) {
 	}
 	dstW := int(c.DstW)
 	dstH := int(c.DstH)
-	if dstW > r.w {
-		dstW = r.w
+	if dstW > r.clipW() {
+		dstW = r.clipW()
 	}
-	if dstH > r.h {
-		dstH = r.h
+	if dstH > r.clipH() {
+		dstH = r.clipH()
 	}
 	if dstW <= 0 || dstH <= 0 {
 		return
@@ -277,6 +277,11 @@ func (r *Renderer) Terrain(c drawlist.Terrain) {
 	originX := int(c.OriginX)
 	originY := int(c.OriginY)
 	tileScreen := atlas.side
+	// TODO(question): below the strategic threshold the 1x tiles are sampled
+	// down by the world transform, nearest, one tile quad at a time
+	// (DESIGN_GPU_RENDERER §16.10). A half-resolution tile set would sample
+	// better and cost a quarter of the atlas; whether the load-time synthesis
+	// is worth it is unmeasured, so this draws the 1x set for now.
 
 	// Visible tile range. Screen column c shows world pixel originX +
 	// Inverse(c), the inverse the camera's ScreenToWorld computes (§14.2), so

@@ -486,13 +486,15 @@ The detailed view is designed in §14: a view scale in half steps (1×, 1.5×,
 2×), 2× terrain and feature art synthesized from the map's own pixels at load
 time and resampled to 1.5× by nearest sampling, and model geometry rasterized
 at output scale, with every world-space layer, picking, fog and the minimap
-sharing the one transform. Continuous zoom between the steps, and the
-strategic view below 1× (detail reduced progressively until units
-become readable dots or icons, rendered into a bounded viewport target rather
-than a whole-map image), remain planned. Strategic markers must show only
-player-known information; marker thresholds, asset selection/fallback, icon
-aggregation and filtering need design and human review before implementation.
-HUD and cursor scale stay independent of the view scale in every case.
+sharing the one transform.
+
+Continuous zoom between the steps, and the strategic view below 1×, are **§16**,
+and they are modern-only: the classic executor keeps §14's three steps exactly.
+Strategic markers show only player-known information — they take the minimap's
+own committed contact records and its own admission gate, so the two cannot
+disagree (§16.11). Icon art, aggregation and filtering are still unbuilt; the
+marker is one team-coloured square per unit. HUD and cursor scale stay
+independent of the view scale in every case.
 
 ### 5.3 Enhanced interpolation
 
@@ -1582,11 +1584,15 @@ and the arithmetic is the named type's: `Project` for a position, `Px` —
 `Inverse` for a picked pixel. The type is distinct from `int32` so that a
 plain multiply against a pixel count does not compile.
 
-Continuous zoom is not lost by this: a future free scale draws the 2× assets
-through the scaled blit family at any factor, which is the §5.2 design item.
-Nothing below depends on it; the 1.5× step exists because a 1080p window is
-too small at 1× and shows too little at 2×, and it is the window's default
-above 800×600 (§14.6).
+Continuous zoom is not lost by this, and §16 has since built it for the modern
+executor: the recorder still emits at an integer step and the executor scales
+the recording by the live factor over that step, so this section's integer
+projection is what the free factor is built ON rather than something it
+replaces. The classic executor keeps these three steps and only these three.
+The 1.5× step exists because a 1080p window is too small at 1× and shows too
+little at 2×, and it is the window's default above 800×600 (§14.6); in the
+modern executor 1.5× is now the 2× step shrunk by three quarters rather than
+the 1.5× variant art set, which is a classic-only path from §16 on.
 
 The simulation never reads the scale [I6]. Movement, orders, physics, the
 tick fingerprint and the save image are identical at 1× and 2× by
@@ -1938,3 +1944,312 @@ so a `--shot` shows the marks the window would.
   seeded Ashap Plateau scene, viewed.
 - 120 TPS modern benchmark at 1× against main on the same machine state:
   Record and Submit within noise.
+
+## 16. Smooth zoom and the strategic view (modern)
+
+### 16.1 Decision
+
+The modern executor's view scale becomes a free factor. §14's three half steps
+stay exactly what they are for the **classic** executor — 1×, 1.5× and 2×,
+switched by F9 and `--zoom`, with the 1.5× variant art set and nothing else —
+and nothing in this section changes a classic pixel. In the modern executor the
+factor is continuous: the mouse wheel over the battle viewport moves it, it
+eases toward its target on the host Update grid, it snaps onto a rest step when
+the wheel goes quiet near one, and below half scale the world becomes the
+**strategic view** — terrain, fog and selection with the units drawn as
+markers.
+
+This is the §5.2 item, and it is a Nanolathe presentation feature under the
+Enhanced umbrella. Retail has one world scale and no wheel zoom; nothing here
+is a retail finding, and the simulation cannot tell what the factor is [I6].
+
+The invariant everything below rests on:
+
+> **The recorder emits at an integer step; the executor scales what it emitted.**
+
+At 1× and 2× the two are the same number, the executor's transform is the
+identity, and the output is byte-for-byte what the build before this section
+composed. That is what keeps the §6 parity gate intact while the view in
+between them is free.
+
+### 16.2 The factor and the step — contract Z1
+
+`camera.Zoom` is the live factor in 1/1024 units: `ZoomUnit` is 1×, `ZoomMax`
+2×. It is the free generalization of `camera.ViewScale`, and at the three rest
+factors (1024, 1536, 2048) its `Project`, `Inverse` and `Px` answer exactly what
+the matching half step's own arithmetic answers — the unit is 1/1024 rather than
+16.16 precisely so those three are exact small integers.
+
+`Camera` now carries both:
+
+* `Scale` is the **record step** the recorder projects at. `WorldToScreen`,
+  the terrain record, the detail-art selection and the fog op builder all read
+  it and are unchanged.
+* `Zoom` is the **live factor** the player sees. `EffectiveView`, `clampInsets`,
+  `BattleView`, `Drag`, `ScreenToWorld` and the minimap's viewport rectangle all
+  read it, because they measure the view in world pixels and the view is what is
+  on screen.
+
+A zero `Zoom` reads as the step's own factor, so a camera that never sets one
+behaves exactly as it did before this section — which is the classic executor's
+permanent state.
+
+The record step follows the factor for the modern executor (`Zoom.Step`): the
+2× step above 1×, the native step at or below it. The 1.5× variant art of §14.3
+is therefore a **classic-only** path from here on: modern's 1.5× is the 2× step
+shrunk by three quarters. `Camera.AtRestStep` reports the identity case.
+
+The classic executor does not derive its step from a factor: a factor handed to
+it is one of the three views and is set through `SetScaleAbout`, which writes
+the step and the factor together (`ViewScaleForZoom` names the step). Deriving
+it instead was a defect caught by the capture gate — it turned a classic 1.5×
+capture into a 2× one.
+
+### 16.3 The transform and the record extent — contract Z2
+
+**The world region.** The recorder brackets its world commands with a
+`drawlist.WorldSpace` marker carrying the factor, the step, the record extent
+and the battle viewport. It reaches an executor through the optional
+`drawlist.WorldSink` interface, exactly as the trail family reaches one, so the
+classic executor and every existing fixture are unaffected. The region opens
+after the clear and closes before the chrome; the strategic marker layer sits
+between them.
+
+**The transform.** Inside the region the modern executor's scheduler scales
+every rectangle it places and every vertex it appends by *factor / step's
+factor*, about the **surface origin**. It is a pure scale with no translation
+term because the recorder projects the world from the framebuffer's own
+top-left — the camera origin is drawn there and the chrome is painted over it —
+so record x = step·(worldX − camX) and screen x = factor·(worldX − camX) differ
+by exactly this ratio, and the world under the viewport's corner therefore stays
+put on its own. The factor is never above the step's, so the transform only ever
+shrinks.
+
+It is applied at the scheduler's intake — `beginBlended`, `beginPoint`, `quad`
+and `quadCorners` — so the overlap tests that decide a command's phase compare
+what actually lands on the composite. At a rest step it is disarmed and every
+device call is the one the build before this section made.
+
+**One screen pixel minimum.** A world quad that would shrink below one screen
+pixel keeps one. The world is full of one-pixel primitives — the selection
+quad's lines, a dotted path's dots, a lit point's row span — and without this
+they fall between two pixel centres and vanish at an arbitrary subset of
+factors. Nothing wider is touched, so the terrain's tiles and every sprite still
+tile the plane exactly and seamlessly.
+
+**The record extent.** Below the step the recorded world has to cover more
+pixels than the framebuffer has: `recordW = Project_step(Inverse_factor(width))`
+plus a two-step pad for the rounding of the two conversions, and the same on the
+other axis. `internal/client` keeps it in `recordW`/`recordH`, refreshed once per
+recorded frame, and **equal to the framebuffer whenever the factor is on the
+step** — which is always, in classic. Every world emission site of §14.2's D1
+inventory clips against it; interface sites keep `c.width`/`c.height`, because
+the chrome is drawn in framebuffer pixels at every factor. The modern executor
+clips world commands against the extent the marker carries (`clipW`/`clipH`) and
+interface commands against the framebuffer.
+
+The classic byte writer for point batches bounds its own store, because a
+`--shot-renderer both` capture replays one list through both executors and the
+list may be recorded past the framebuffer.
+
+**Fog.** The fog composite is the one family the generic transform cannot carry.
+It reads the pre-fog copy of the composite 1:1 under each fragment, so its
+source coordinates have to equal its destination coordinates in screen space,
+and its shader recovers a fog cell from the fragment's own position, so it has
+to be told which record pixel that position is. Its region is therefore
+transformed by hand, the generic transform is held off for that one command, and
+the screen-per-record factor rides the colour lane the fog quad never used. The
+shader's cell lattice and atlas tile stay in record pixels; its dither checker
+stays a test on the destination pixel, and so stays one screen pixel wide, as it
+already did at every view scale.
+
+**Sampling.** Sources are sampled nearest at every factor, which is what the
+scene shader's index-space lookups require: a palette index cannot be
+interpolated. Thin features therefore alias when the transform shrinks them —
+a model's shadow of a gun barrel can survive as a crisp one-pixel line where the
+rows around it were dropped. `TODO(question)`: filtering after the palette
+resolve (sample four texels, resolve each through PAL, blend the colours) would
+soften that at four times the lookups; whether it is worth the cost needs a
+measurement and a human look, not a guess.
+
+### 16.4 Picking — contract Z3
+
+Screen to world is `cameraOrigin + floor((screen − viewportOrigin) / factor)`,
+integer throughout: the exact inverse of the projection at a rest factor and the
+obvious floor in flight. Every pointer conversion already funnels through
+`Camera.ScreenToWorld`, so the terrain cursor, order targets and the minimap
+follow it for nothing.
+
+The two pick tests that cannot be expressed as a world point — the hover hull
+polygon and the drag rectangle's containment test — compare the pointer against
+corners produced by `WorldToScreen`, which projects at the **record step**.
+`Camera.ScreenToRecord` bridges them: it composes the live inverse with the
+record projection, and it is the identity at every rest factor, so nothing about
+picking changes there.
+
+### 16.5 Zoom about a point — contract Z4
+
+`Camera.SetZoomAbout(mx, my, f)` is `SetScaleAbout` generalized: the world point
+under (mx, my) is computed through the old factor, the new origin is that point
+less the same quantity at the new factor, the record step is re-derived, and the
+camera is clamped. The world point under the anchor does not move.
+
+The anchor is in **beam pixels** — the framebuffer point plus the viewport
+offset `(128, 32)` — which is the space `ScreenToWorld` takes, because the
+recorder stores a world point at its beam position less that offset [03 §2.5].
+The battle session's zoom writers (`beamAnchor` in `cmd/nanolathe`) convert the
+pointer, the viewport centre and `--shot-focus` from framebuffer pixels at one
+seam, so the test of the contract is the one that matters to the player: a
+world point drawn at framebuffer pixel P before the zoom is drawn at P after
+it. The first build of this section anchored on the raw framebuffer point,
+which held the world 128/f pixels left of and 32/f above the pointer fixed
+instead, and the map slid under the cursor.
+
+### 16.6 The wheel, the ease and the snap — contract Z5
+
+`camera.ZoomController` is the state machine, driven once per host Update from
+the battle's camera pass. Its clock is host Updates, supplied by the platform
+layer; no simulation tick is read [I6].
+
+* **The wheel** moves a *target*, not the live factor, on a log scale: one wheel
+  unit multiplies the target by `2^ZoomWheelExponent`, so a trackpad's
+  fractional deltas compose the way a notched wheel's whole ones do. Wheel-up
+  zooms in. The gesture is anchored at the pointer, and the anchor is kept for
+  the whole animation.
+* **The ease** closes `ZoomEaseFraction` of the remaining gap per Update, moves
+  at least one unit so an integer factor cannot stall, and settles outright
+  inside `ZoomSettleEpsilon`.
+* **The snap.** After `ZoomIdleUpdates` quiet Updates the target eases onto a
+  rest step if it is within `ZoomSnapBand` of one. `ZoomRestSteps` is
+  {1, 1.25, 1.5, 1.75, 2}. **Nothing below 1× snaps**: the strategic range is
+  continuous and has no preferred stopping point, and snapping there would fight
+  a player pulling out to look at the map.
+
+Every one of those five names is a **feel-tuning knob**, not a derived value,
+and they live together at the top of `internal/camera/zoomfeel.go` so they can
+be tuned by hand.
+
+The wheel binding is Nanolathe's, not retail's. Retail leaves the wheel to the
+active GUI list under the pointer [07 §2][07 §10], and the UI boundary still
+consumes it first: the camera pass sees only a wheel the chrome did not want,
+and takes it only over the battle viewport, only outside TALK, only with no
+modal open and the pointer off the minimap, and only in the executor that can
+present a free factor.
+
+### 16.7 The minimum factor — contract Z6
+
+`Camera.MinZoom` is `max(viewW/mapW, viewH/mapH)` over the battle viewport and
+the playable map, rounded up: the factor at which the view in world pixels
+exactly covers the map in whichever axis runs out first, so the clamp never has
+to letterbox. Targets below it are clamped, both at the controller and at the
+camera. The viewport span is taken in framebuffer pixels — the chrome does not
+move with the zoom, so the span being fitted is a constant of the window.
+
+The step writer deliberately does **not** apply this floor: a step is always at
+least 1×, and clampAxis's view-larger-than-map domain stays exactly where
+[07 §10] left it.
+
+### 16.8 Runtime switches
+
+* **F9** in classic is the unchanged 1× → 1.5× → 2× step cycle about the
+  viewport centre. In modern it is the same three factors as animated zoom
+  targets; a factor the wheel left between them cycles to the first step above
+  it, so the key always lands on a step.
+* **The wheel** is §16.6.
+* **`--zoom`** accepts any factor in the free range for the modern executor and
+  only 1, 1.5 or 2 for classic — the executor's restriction is applied after
+  parsing, because `--renderer` may follow `--zoom` on the command line. A
+  capture follows `--shot-renderer` when one is given. The map-derived floor is
+  applied at battle entry, where the map is known. The resolution default is
+  unchanged: unset opens at 1.5× above 800×600 and natively at or below it, and
+  captures and the benchmark stay native. A restart keeps the factor the player
+  was on. Battle entry, a restart and a capture take the factor outright rather
+  than easing it: there is no motion to smooth.
+* **F10** is unchanged (§14.6).
+
+### 16.9 Gating summary
+
+| Factor | World |
+|---|---|
+| 2× … 1× | everything, recorded at the 2× step |
+| 1× … 0.625× | everything, recorded at the 1× step (2× above 1×) |
+| 0.625× … 0.5× | everything, plus the marker layer fading in |
+| below 0.5× | terrain, fog, selection fills, drag rectangle, dotted paths, markers |
+
+### 16.10 What the strategic view drops — contract Z7
+
+Below `strategicModelCut` (0.5×) the recorder does not emit unit and feature
+models, sprite features, projectiles, effect strips, trails, unit labels or
+health bars. Terrain, fog, the selection quad, the drag rectangle and the dotted
+paths still record: they are the map, and the map is what the strategic view is
+for.
+
+Terrain below 0.5× is the 1× tile set sampled down by the transform.
+`TODO(question)`: a half-resolution tile set would sample better and cost a
+quarter of the atlas; whether the load-time cost is worth it is unmeasured.
+
+The recorder emits many more tiles and fog cells at a low factor. That path is
+allocation-free per frame as the rest of the recorder is — the record extent is
+two integers, the marker batch is a reused arena — but the per-frame tile and
+cell counts do grow with 1/factor², which is the cost of the view.
+
+### 16.11 The marker layer — contract Z8
+
+Below `strategicMarkerOn` (0.625×) each unit becomes one filled square of
+`strategicMarkerSize` (4) **framebuffer** pixels.
+
+* **Its records and its gate are the minimap's own.** The markers come from the
+  committed radar contact list and pass exactly `render.MinimapBlipAdmitted`,
+  the gate the minimap's dots take [03 §3.9][03 R-MM-01 §3]. Visibility is not
+  re-derived: a unit the minimap will not show has no marker either.
+* **Its colour is the minimap's own.** The client is handed the `radlogo` blip
+  art at battle entry and takes each player colour's marker index from that
+  colour's own frame — its most common opaque index, resolved once per colour.
+  Naming a colour instead would be a second table to keep in step with the art.
+* **Selection** adds a one-pixel outline in the selection colour, which fades
+  with the layer rather than appearing at full strength first.
+* **The fade** is linear from alpha 0 at 0.625× to 255 at 0.5×. Models are
+  hard-cut at 0.5×; a model cross-fade needs an alpha lane on the model commit,
+  whose `sceneOpModelCommit` fragment is opaque today, and is a follow-up
+  (`TODO(question)` at `Client.markerAlpha`).
+* **No projectile markers.** A shot is an event, not a thing on the map.
+* Markers are recorded **outside** the world region, already positioned through
+  the live factor, because a fixed-pixel mark must not be scaled by the world
+  transform. They draw through a new destination op (`destOpMarker`) as a
+  premultiplied flat index at the layer's alpha.
+* **Hover** picks the nearest marker within its square: picking runs on the
+  world point under the pointer as always, and at these factors one screen pixel
+  is several world pixels, so a hull test already admits the pointer anywhere
+  over the marker.
+
+### 16.12 Verification
+
+1. **The rest steps are untouched.** Classic captures at 1×, 1.5× and 2× and
+   modern captures at 1× and 2× are byte-identical to the build before this
+   section, on the seeded Ashap Plateau scene at 1024×768.
+2. **The camera.** `internal/camera/zoom_test.go`: the free factor agrees with
+   the half steps at each of them; picking is the exact inverse at rest and the
+   floor in flight; zooming about a point leaves that point fixed; the minimum
+   factor is tight against the map; the step writer keeps the classic camera on
+   its step; `ScreenToRecord` is the identity at rest.
+3. **The state machine.** `internal/camera/zoomfeel_test.go`: the wheel composes
+   on the log scale; the snap waits for the idle delay and fires only inside the
+   band and only at or above 1×; the ease terminates.
+4. **The recorder.** `internal/client/world_zoom_test.go`: the record extent;
+   one world region per frame with the right operands; the strategic drops and
+   the surviving selection fills; the marker count and the alpha ramp at 0.625×,
+   0.5625× and 0.5×; the minimap gate.
+5. **The executor.** `internal/platform/gpurender/world_test.go`: a rest step
+   compiles byte-identical geometry, a non-rest factor places a known sprite at
+   the expected scaled rectangle, and a world primitive never shrinks below one
+   screen pixel.
+6. **Viewed.** Modern captures at 1.3×, 0.7×, 0.45× and 0.3× on the same scene:
+   terrain seamless, HUD unscaled, markers present and models absent below 0.5×.
+
+### 16.13 Owed
+
+A human look at the window itself: the wheel in motion, the snap's feel, F9
+across the executors, and the strategic view on a map with many units — no
+capture route produces motion, and the feel knobs are meant to be tuned against
+it. The two `TODO(question)` items above (filtered sampling and a
+half-resolution tile set) and the model cross-fade are the known follow-ups.

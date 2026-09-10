@@ -143,14 +143,26 @@ func desaturate(c vec3) vec3 {
 
 func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 	// The fragment's screen pixel and the pre-fog colour under it.
-	p := floor(dstPos.xy - imageDstOrigin())
+	sp := floor(dstPos.xy - imageDstOrigin())
 	col := imageSrc0At(srcPos).rgb
+	// The record pixel that screen pixel shows. color.r is the free zoom's
+	// screen-per-record factor (§16.3): one outside the strategic range, and the
+	// only thing that separates the cell lattice from the framebuffer inside it.
+	// The cell arithmetic below is entirely in RECORD pixels, so the atlas tile
+	// and the cell edge keep their recorded sizes at any factor.
+	k := max(color.r, 0.0)
+	p := sp
+	if k > 0.0 {
+		p = floor(sp / k)
+	}
 	// The view scale: the cell edge and the atlas tile are both measured in it.
 	viewScale := max(custom.w, 1.0)
 	cellPix := cellPixels * viewScale
 	tilePix := atlasTile * viewScale
 	// The byte writers' checker phase: write where (x + y + parity) & 1 == 1.
-	checker := mod(p.x+p.y+custom.z, 2.0)
+	// The checker stays a test on the DESTINATION pixel, so it is one screen
+	// pixel wide at any factor, exactly as it is at any view scale.
+	checker := mod(sp.x+sp.y+custom.z, 2.0)
 	// The cell whose unclamped 32·s-pixel rectangle contains this pixel.
 	cell := floor((p - custom.xy) / cellPix)
 	for j := 0; j < 2; j++ {

@@ -104,6 +104,12 @@ const (
 	// footprint, a soft-sided segment for a track (§15). The colour lanes
 	// carry the centre scale split like destOpTable's.
 	destOpTrail = 3
+	// destOpMarker draws one strategic-view unit marker: a palette index at the
+	// layer's fade alpha, composited over what is already there
+	// (docs/DESIGN_GPU_RENDERER.md §16.11). ColorR is the physical index and
+	// ColorG the alpha; the fragment is the premultiplied (PAL[idx]·a, a) and
+	// the source-over blend does the rest.
+	destOpMarker = 4
 )
 
 // The composite's blends (docs/DESIGN_GPU_RENDERER.md §13.3 "Blend classes").
@@ -293,6 +299,11 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 		// part the colour factor can express and the part the alpha factor adds:
 		// the blend forms dst * (min(k,1) + max(k-1,0)) = dst * k (§13.3).
 		return vec4(color.r, color.r, color.r, color.g)
+	}
+	if op == ` + fmt.Sprint(destOpMarker) + ` {
+		// The strategic marker layer: a flat index at the layer's fade alpha.
+		a := clamp(color.g, 0.0, 1.0)
+		return vec4(palAt(floor(color.r+0.5))*a, a)
 	}
 	if op == ` + fmt.Sprint(destOpTrail) + ` {
 		// custom.xy is the mark's local position, −1..1 along and across the

@@ -340,14 +340,24 @@ func (c *Client) drawCommittedFrame(cur *frame.Frame, ok bool) {
 	// first recorded command of the frame, so replaying the list zeroes the
 	// surface before any draw and the whole frame executes once (WU-1.8) [C-G1].
 	c.emitClear()
+	// The record extent this frame's world sites clip against, then the marker
+	// that opens the world region for an executor with free zoom
+	// (DESIGN_GPU_RENDERER §16.3). Both are no-ops at a rest factor, and the
+	// classic executor never sees the marker at all.
+	c.refreshRecordExtent()
+	c.emitWorldBegin()
 	// Terrain/static preparation, radar preparation, and viewport clipping are
 	// unconditional. Radar and clip have no concrete frame input yet.
 	c.drawTerrainPrep()
 	// The Enhanced trail layer lies on the terrain under every strip
 	// (DESIGN_GPU_RENDERER §15). Marks are placed from the committed tick, not
 	// the blended view, so the layer never moves with the blend fraction.
-	c.placeTrails(c.buffer.Current())
-	c.drawTrails()
+	// Below the strategic cut the marks are smaller than a pixel and cost more
+	// than they show, so they are one of the layers §16.10 drops.
+	if !c.strategicView() {
+		c.placeTrails(c.buffer.Current())
+		c.drawTrails()
+	}
 	// Strips 0 and 1 are unconditional but producerless; strip 2 is the first
 	// published effect barrier [03 §1][03 R-STRIP-01 §2].
 	//
@@ -406,6 +416,13 @@ func (c *Client) drawCommittedFrame(cur *frame.Frame, ok bool) {
 	c.drawStripSlot(cur, 9)
 	c.drawFog(cur)
 	c.drawSelectionStage()
+	// The world region ends here: everything after it is chrome, drawn in
+	// framebuffer pixels and never scaled (§16.3). The strategic marker layer
+	// sits between the two — it is world CONTENT at a fixed SCREEN size, so it
+	// is positioned through the live factor and recorded outside the transform
+	// (§16.11).
+	c.emitWorldEnd()
+	c.drawStrategicMarkers(cur)
 	c.drawInterface(cur)
 }
 
@@ -642,6 +659,11 @@ func (c *Client) presentUnit(d worldDrawable) {
 	if u.Flags&hud.SelectionFlag != 0 {
 		c.drawSelectionQuad(u)
 	}
+	// The selection quad is a world FILL and stays at every factor; the model is
+	// what the strategic view replaces with a marker (§16.10, §16.11).
+	if c.strategicView() {
+		return
+	}
 	if isCarried(u) {
 		return
 	}
@@ -696,6 +718,11 @@ func (c *Client) attachedChildren(carrier pool.Handle) []frame.UnitView {
 
 func (c *Client) drawFeature(f *frame.FeatureView) {
 	if c == nil || f == nil {
+		return
+	}
+	// Below the strategic cut this layer is not recorded at all: the marker
+	// layer stands in for it (DESIGN_GPU_RENDERER §16.10).
+	if c.strategicView() {
 		return
 	}
 	sx, sy := c.featureScreenPos(*f)

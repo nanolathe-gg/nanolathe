@@ -361,6 +361,8 @@ const (
 	familyCursor
 	familyExpand
 	familyTrails
+	familyWorld
+	familyMarkers
 )
 
 // tag is one ordering entry: which family, and which element of that family's
@@ -387,6 +389,8 @@ type List struct {
 	trails  []Trails
 	surface []Surface
 	cursor  []Cursor
+	world   []WorldSpace
+	markers []Markers
 
 	classicImages    []*ClassicModelImage
 	classicImageNext int
@@ -505,6 +509,8 @@ func (l *List) Reset() {
 	l.trails = l.trails[:0]
 	l.surface = l.surface[:0]
 	l.cursor = l.cursor[:0]
+	l.world = l.world[:0]
+	l.markers = l.markers[:0]
 }
 
 // Replay visits the recorded commands in exact record order and calls the
@@ -514,6 +520,11 @@ func (l *List) Replay(s Sink) {
 	// The trail family is optional: an executor that cannot present it (the
 	// Original executor) simply lacks the hook.
 	trails, _ := s.(TrailSink)
+	// The world boundary and the strategic marker layer are optional in exactly
+	// the same way: an executor without free zoom needs neither
+	// (docs/DESIGN_GPU_RENDERER.md §16.3).
+	world, _ := s.(WorldSink)
+	markers, _ := s.(MarkerSink)
 	for _, t := range l.order {
 		switch t.fam {
 		case familyClear:
@@ -543,6 +554,14 @@ func (l *List) Replay(s Sink) {
 		case familyTrails:
 			if trails != nil {
 				trails.Trails(l.trails[t.idx])
+			}
+		case familyWorld:
+			if world != nil {
+				world.World(l.world[t.idx])
+			}
+		case familyMarkers:
+			if markers != nil {
+				markers.Markers(l.markers[t.idx])
 			}
 		}
 	}
@@ -604,6 +623,13 @@ func (l *List) Clone() List {
 			Identity: sf.Identity,
 			Revision: sf.Revision,
 		}
+	}
+	// The world boundary markers are plain values.
+	c.world = append([]WorldSpace(nil), l.world...)
+	// Marker batches borrow the client's reusable marker arena; copy each.
+	c.markers = make([]Markers, len(l.markers))
+	for i, mk := range l.markers {
+		c.markers[i] = Markers{Marks: append([]Marker(nil), mk.Marks...)}
 	}
 	// Trail batches borrow the client's reusable mark arena; copy each.
 	c.trails = make([]Trails, len(l.trails))

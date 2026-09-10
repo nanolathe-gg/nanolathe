@@ -72,6 +72,12 @@ type Renderer struct {
 	modelStageOp                  ebiten.DrawImageOptions
 	textureAtlas                  modelTextureAtlas
 	w, h                          int
+	// worldW, worldH are the extent every family clips a world command against
+	// while the recorded world region is open: the RECORD extent, which is wider
+	// than the framebuffer whenever the live zoom factor is below the record
+	// step (docs/DESIGN_GPU_RENDERER.md §16.3). Outside the region they are w
+	// and h, so an interface family clips exactly as it always did.
+	worldW, worldH int
 
 	// tileAtlases caches one tile-index atlas per (tile set identity, detail tile
 	// set identity, view scale), built on first Terrain draw at that scale and
@@ -249,6 +255,7 @@ func (r *Renderer) Execute(list *drawlist.List, w, h int) *ebiten.Image {
 	r.frameDraws = 0
 	r.lastDest = nil
 	r.sched.resetFrame(r.w, r.h)
+	r.worldW, r.worldH = r.w, r.h
 	r.modelPrep.reset()
 	defer r.modelPrep.reset()
 	// Every eligible subject of the frame is rasterized into the slot atlas

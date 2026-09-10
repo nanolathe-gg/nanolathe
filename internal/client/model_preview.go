@@ -166,6 +166,7 @@ func (r *ModelPreviewRenderer) recordModel(opts ModelPreviewOptions, geometryOnl
 		c.geometryOnlyModels = previousGeometryOnly
 	}()
 	c.width, c.height = opts.Width, opts.Height
+	c.recordW, c.recordH = opts.Width, opts.Height
 	if !geometryOnly {
 		c.indexed = make([]uint8, opts.Width*opts.Height)
 		c.rgba = make([]byte, opts.Width*opts.Height*4)

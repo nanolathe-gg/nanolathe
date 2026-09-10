@@ -68,6 +68,12 @@ type battleSession struct {
 	// [07 R-CAM-01 §6].
 	radarOptions uint32
 
+	// zoom is smooth zoom's state machine (DESIGN_GPU_RENDERER §16.6): the
+	// factor the wheel and F9 aim at, and the ease that carries the camera
+	// there on the host Update grid. It is presentation-only [I6] and is idle
+	// in the classic executor, which has no free zoom.
+	zoom camera.ZoomController
+
 	battleUI         *ui.BattleState
 	returnToMenu     func(*client.Client)
 	returnToSkirmish func(*client.Client)
@@ -323,17 +329,18 @@ func restartDirectBattle(opts Options, cs *contentSet, cl *client.Client, curren
 	// the second load of the same map a file read (§14.4 "Cache").
 	next.detail = detailArtFor(opts, cs, sess.World, nil)
 	old := *current
-	scale := camera.ViewScaleNative
+	zoom := camera.ZoomUnit
 	if old.cam != nil {
-		scale = old.cam.EffectiveScale()
+		zoom = old.cam.EffectiveZoom()
 	}
 	old.teardown(cl)
 	*current = next
 	installBattleClient(cl, next)
 	fitDirectBattleViewport(cl, next)
-	// The restarted battle keeps the view scale the player was on.
-	if next.cam != nil && !scale.Native() {
-		setBattleViewScale(next, scale)
+	// The restarted battle keeps the factor the player was on (§16.8).
+	if next.cam != nil && zoom != camera.ZoomUnit {
+		mx, my := battleViewCentre(next.cam)
+		jumpBattleZoom(next, mx, my, zoom, modernRenderer(opts))
 	}
 	if next.hud != nil && next.hud.windowContext != nil {
 		next.hud.windowContext.completeTransition()
@@ -509,6 +516,11 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 	cl.SetCamera(b.cam)
 	cl.SetPalette(b.hud.pal)
 	cl.SetFNT(b.hud.console)
+	// The strategic view's markers take their colours from the same blip art
+	// the minimap's dots are drawn from, and answer the same options word
+	// (DESIGN_GPU_RENDERER §16.11).
+	cl.SetStrategicBlipArt(b.hud.radarBlipGAF)
+	cl.SetRadarOptions(b.radarOptions)
 	s := loadedSettings()
 	gamma := s.Display.Gamma
 	if b.shell != nil {
@@ -1046,10 +1058,34 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 				b.cam.Drag(dx, dy)
 			}
 		}
-		// Wheel belongs to the active GUI list under the pointer. It is not a
-		// battle-camera control [07 §2][07 §10]. The UI boundary consumes it
-		// before this camera pass.
+		// The wheel over the battle viewport is smooth zoom
+		// (DESIGN_GPU_RENDERER §16.6). It is a Nanolathe binding, not a retail
+		// one: retail leaves the wheel to the active GUI list under the pointer
+		// [07 §2][07 §10], and the UI boundary still consumes it first — this
+		// pass only ever sees a wheel the chrome did not want, and takes it only
+		// over the world, only outside TALK, and only in the executor that can
+		// present a free factor.
+		if cl.Enhanced() && !talkActive && !modalActive && !overMinimap &&
+			mouse.Scrolled() && b.overBattleViewport(effX, effY) {
+			b.wheelZoom(effX, effY, float64(mouse.ScrollY))
+		}
+		// One Update of the ease, whatever produced the target. It runs
+		// unconditionally so a target set by F9 or by the wheel of an earlier
+		// frame keeps moving; the controller is idle when nothing is in flight.
+		b.zoom.Step(b.cam)
 		b.battleState().Input.PrevMouseX = mouse.X
 		b.battleState().Input.PrevMouseY = mouse.Y
 	}
+}
+
+// overBattleViewport reports whether a framebuffer point is inside the battle
+// viewport — the world region `(129,32)..(W-1,H-33)` the chrome leaves — which
+// is where the wheel is smooth zoom rather than a chrome control
+// (DESIGN_GPU_RENDERER §16.6)[03 §4.1][07 R-HUD-05].
+func (b *battleSession) overBattleViewport(x, y int32) bool {
+	if b == nil || b.cam == nil {
+		return false
+	}
+	return x > camera.OriginX && x < b.cam.ViewW &&
+		y >= camera.OriginY && y < b.cam.ViewH-camera.OriginY
 }

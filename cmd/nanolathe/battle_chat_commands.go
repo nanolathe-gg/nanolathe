@@ -302,6 +302,10 @@ func (b *battleSession) dispatchLocalCommand(text string) {
 	case "radar":
 		if b.sess != nil && battleSessionKind(b) == 2 {
 			b.radarOptions ^= radarAllContactsOption
+			// The strategic marker layer answers the same gate (§16.11).
+			if b.cl != nil {
+				b.cl.SetRadarOptions(b.radarOptions)
+			}
 		}
 	case "meteor":
 		if b.sess != nil && battleSessionKind(b) == 2 {

@@ -85,6 +85,11 @@ func (c *Client) drawUnitLabels(cur *frame.Frame, ok bool) {
 	if c == nil || !ok || cur == nil || c.cam == nil || len(c.indexed) != c.width*c.height {
 		return
 	}
+	// Below the strategic cut this layer is not recorded at all: the marker
+	// layer stands in for it (DESIGN_GPU_RENDERER §16.10).
+	if c.strategicView() {
+		return
+	}
 	bars := damageBars
 	viewer := cur.ViewingPlayer
 	for i := range cur.Units {

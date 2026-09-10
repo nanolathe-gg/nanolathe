@@ -514,17 +514,30 @@ func (s classicSink) Line(l drawlist.Line) {
 // writers did [03 §4.3.1][03 R-FX-01 §4].
 func (s classicSink) Points(p drawlist.Points) {
 	c := s.c
+	// The batches are clipped to the RECORD extent, which is wider than the
+	// framebuffer whenever the modern executor is zoomed out
+	// (docs/DESIGN_GPU_RENDERER.md §16.3). Classic never records at such a
+	// factor itself, but a `--shot-renderer both` capture replays one list
+	// through both executors, so the byte writer bounds its own store rather
+	// than trusting the recorder's clip.
+	w, h := int32(c.width), int32(c.height)
 	switch p.Kind {
 	case drawlist.PointLit:
 		if c.pal == nil {
 			return
 		}
 		for _, pt := range p.Points {
+			if pt.X < 0 || pt.X >= w || pt.Y < 0 || pt.Y >= h {
+				continue
+			}
 			idx := int(pt.Y)*c.width + int(pt.X)
 			c.indexed[idx] = c.pal.LightLookup(int(pt.Index), c.indexed[idx])
 		}
 	default: // PointPlain
 		for _, pt := range p.Points {
+			if pt.X < 0 || pt.X >= w || pt.Y < 0 || pt.Y >= h {
+				continue
+			}
 			c.indexed[int(pt.Y)*c.width+int(pt.X)] = pt.Index
 		}
 	}

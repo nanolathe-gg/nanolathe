@@ -138,12 +138,13 @@ func TestGPUProfileWindowHasExactlyMeasuredCadenceSamples(t *testing.T) {
 	}
 }
 
-// --zoom is the view scale of DESIGN_GPU_RENDERER §14.6 — 1, 1.5 or 2 —
-// replacing the free fractional --shot-zoom. It is not a capture option: the
-// window path takes it too, so it is validated whatever route the run takes,
-// and left unset it stays zero for the routes to resolve.
-func TestZoomFlagAcceptsTheThreeViews(t *testing.T) {
-	for arg, want := range map[string]camera.ViewScale{"1": camera.ViewScaleNative, "1.5": camera.ViewScaleMid, "2": camera.ViewScaleDetail} {
+// --zoom is the view scale of DESIGN_GPU_RENDERER §14.6 and the free factor of
+// §16.8: the classic executor takes only the three views, the modern one any
+// factor in the free range. It is not a capture option — the window path takes
+// it too — so it is validated whatever route the run takes, and left unset it
+// stays zero for the routes to resolve.
+func TestZoomFlagPerExecutor(t *testing.T) {
+	for arg, want := range map[string]camera.Zoom{"1": camera.ZoomUnit, "1.5": camera.ZoomOf(camera.ViewScaleMid), "2": camera.ZoomMax} {
 		opts, err := parseFlags([]string{"-zoom", arg}, io.Discard)
 		if err != nil {
 			t.Fatalf("--zoom %s rejected: %v", arg, err)
@@ -155,10 +156,27 @@ func TestZoomFlagAcceptsTheThreeViews(t *testing.T) {
 	if opts, err := parseFlags(nil, io.Discard); err != nil || opts.Zoom != 0 {
 		t.Fatalf("unset --zoom = %v, %v; want zero and no error", opts.Zoom, err)
 	}
-	for _, arg := range []string{"0", "3", "-1", "1.25"} {
+	// Classic rejects anything but the three views.
+	for _, arg := range []string{"1.25", "0.7", "0.3"} {
 		_, err := parseFlags([]string{"-zoom", arg}, io.Discard)
 		if err == nil || !strings.Contains(err.Error(), "must be 1 (native), 1.5 or 2 (the detail view)") {
-			t.Fatalf("--zoom %s error = %v, want the repo's rejection", arg, err)
+			t.Fatalf("classic --zoom %s error = %v, want the three-view rejection", arg, err)
+		}
+	}
+	// Modern accepts them.
+	for arg, want := range map[string]camera.Zoom{"1.25": camera.ZoomUnit * 5 / 4, "0.7": 717, "0.3": 307} {
+		opts, err := parseFlags([]string{"-renderer", "modern", "-zoom", arg}, io.Discard)
+		if err != nil {
+			t.Fatalf("modern --zoom %s rejected: %v", arg, err)
+		}
+		if opts.Zoom != want {
+			t.Fatalf("modern --zoom %s parsed as %d, want %d", arg, opts.Zoom, want)
+		}
+	}
+	// Neither executor takes a factor outside the flag's own range.
+	for _, arg := range []string{"0", "3", "-1"} {
+		if _, err := parseFlags([]string{"-renderer", "modern", "-zoom", arg}, io.Discard); err == nil {
+			t.Fatalf("modern --zoom %s was accepted", arg)
 		}
 	}
 	if _, err := parseFlags([]string{"-shot-zoom", "2"}, io.Discard); err == nil {

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/construction"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
@@ -102,8 +103,9 @@ func runBattleBenchmark(opts Options, b *battleSession, c *client.Client) error 
 	// The benchmark scene is native unless `--zoom` asks otherwise: the
 	// window's resolution default (§14.6) would silently change the scene two
 	// runs are compared on, and the scale is part of the scene metadata.
-	if !opts.Zoom.Native() {
-		setBattleViewScale(b, opts.Zoom)
+	if opts.Zoom != 0 && opts.Zoom != camera.ZoomUnit {
+		mx, my := battleViewCentre(b.cam)
+		jumpBattleZoom(b, mx, my, opts.Zoom, modernRenderer(opts))
 	}
 	census := func() any {
 		f := s.Snapshot.Current()
@@ -139,7 +141,7 @@ func runBattleBenchmark(opts Options, b *battleSession, c *client.Client) error 
 		}
 		return map[string]any{"tick": s.Clock.GlobalTick, "units": len(f.Units), "projectiles": len(f.Projectiles), "effects": len(f.Effects), "fragments": len(f.Fragments), "state": s.State.String(), "nanoframes": nanoframes, "nanolathe_events": nano, "factory_production": production, "builds": len(f.Builds), "shake": f.ShakeActive, "camera_x": b.cam.X, "camera_z": b.cam.Z}
 	}
-	err := ebitenapp.BattleBenchmark(c, step, census, ebitenapp.BenchmarkOptions{Directory: opts.BattleBenchmark, Renderer: opts.Renderer, Frames: opts.BenchmarkFrames, TPS: opts.BenchmarkTPS, Metadata: map[string]any{"scene_version": 3, "tps": opts.BenchmarkTPS, "map": opts.Map, "seed": opts.Seed, "factories": opts.BenchmarkFactories, "viewport": []int{1920, 1080}, "zoom": viewScaleOf(b).Float(), "auto_remaster": opts.AutoRemaster, "warmup_draws": 60, "pre_window_ticks": 30, "display": loadedSettings().Display, "root": opts.Root}})
+	err := ebitenapp.BattleBenchmark(c, step, census, ebitenapp.BenchmarkOptions{Directory: opts.BattleBenchmark, Renderer: opts.Renderer, Frames: opts.BenchmarkFrames, TPS: opts.BenchmarkTPS, Metadata: map[string]any{"scene_version": 3, "tps": opts.BenchmarkTPS, "map": opts.Map, "seed": opts.Seed, "factories": opts.BenchmarkFactories, "viewport": []int{1920, 1080}, "zoom": viewZoomOf(b).Float(), "auto_remaster": opts.AutoRemaster, "warmup_draws": 60, "pre_window_ticks": 30, "display": loadedSettings().Display, "root": opts.Root}})
 	if err != nil {
 		return err
 	}

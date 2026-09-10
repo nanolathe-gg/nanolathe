@@ -46,6 +46,11 @@ type StripDrawStats struct {
 // sprite composes over them the way a later object composes over an earlier
 // one within the vector.
 func (c *Client) drawStripSlot(cur *frame.Frame, strip int8) StripDrawStats {
+	// Below the strategic cut the effect strips are not recorded at all: their
+	// art is smaller than a marker and the layer is one of §16.10's drops.
+	if c.strategicView() {
+		return StripDrawStats{}
+	}
 	c.drawEffectStrip(cur, strip)
 	return c.drawStripBarrier(cur, strip)
 }

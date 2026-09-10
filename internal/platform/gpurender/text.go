@@ -222,7 +222,7 @@ func (r *Renderer) Glyphs(g drawlist.Glyphs) {
 	gh := atlas.height
 	// The run's screen rectangle is its total advance by the font height; the
 	// per-glyph clip below decides the covered pixels inside it.
-	clipX0, clipY0, clipX1, clipY1 := glyphClipBounds(g, r.w, r.h)
+	clipX0, clipY0, clipX1, clipY1 := glyphClipBounds(g, r.clipW(), r.clipH())
 	bx0, by0 := maxInt(curX, clipX0), maxInt(top, clipY0)
 	bx1 := minInt(curX+measureText(fnt, text), clipX1)
 	by1 := minInt(top+gh, clipY1)

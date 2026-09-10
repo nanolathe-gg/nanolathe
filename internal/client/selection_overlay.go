@@ -75,7 +75,8 @@ func (c *Client) selectionClip() Rect {
 	if c == nil {
 		return Rect{MinX: 1, MinY: 1, MaxX: 0, MaxY: 0}
 	}
-	return Rect{MinX: 128, MinY: 32, MaxX: int32(c.width) - 1, MaxY: int32(c.height) - 33}
+	recW, recH := c.recordExtent()
+	return Rect{MinX: 128, MinY: 32, MaxX: int32(recW) - 1, MaxY: int32(recH) - 33}
 }
 
 func (c *Client) drawSelectionDrag() {

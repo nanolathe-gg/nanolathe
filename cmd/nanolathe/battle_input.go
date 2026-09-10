@@ -212,7 +212,10 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	// executors. Both are presentation-only — the simulation cannot tell which
 	// scale or which executor is active [I6].
 	if kbd.KeyDown(input.KeyF9) {
-		b.toggleViewScale()
+		// The modern executor cycles the same three factors as animated zoom
+		// targets; the classic one steps the record scale as it always did
+		// (DESIGN_GPU_RENDERER §16.8).
+		b.toggleViewScale(cl.Enhanced())
 	}
 	if kbd.KeyDown(input.KeyF10) {
 		requestRendererToggle(cl)

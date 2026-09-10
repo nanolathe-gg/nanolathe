@@ -53,7 +53,7 @@ func (r *Renderer) drawLit(f *formats.GAFFrame, x, y, row, clipX, clipY, clipW, 
 	}
 	fw, fh := int(f.Width), int(f.Height)
 	minX, minY := maxInt(clipX, 0), maxInt(clipY, 0)
-	maxX, maxY := minInt(clipX+clipW, r.w), minInt(clipY+clipH, r.h)
+	maxX, maxY := minInt(clipX+clipW, r.clipW()), minInt(clipY+clipH, r.clipH())
 	col0, col1 := maxInt(0, minX-x), minInt(fw, maxX-x)
 	row0, row1 := maxInt(0, minY-y), minInt(fh, maxY-y)
 	if col0 >= col1 || row0 >= row1 {
@@ -90,7 +90,7 @@ func (r *Renderer) drawTint(f *formats.GAFFrame, x, y, clipX, clipY, clipW, clip
 	y -= int(f.YOffset)
 	fw, fh := int(f.Width), int(f.Height)
 	minX, minY := maxInt(clipX, 0), maxInt(clipY, 0)
-	maxX, maxY := minInt(clipX+clipW, r.w), minInt(clipY+clipH, r.h)
+	maxX, maxY := minInt(clipX+clipW, r.clipW()), minInt(clipY+clipH, r.clipH())
 	col0, col1 := maxInt(0, minX-x), minInt(fw, maxX-x)
 	row0, row1 := maxInt(0, minY-y), minInt(fh, maxY-y)
 	if col0 >= col1 || row0 >= row1 {
@@ -153,7 +153,7 @@ func (r *Renderer) drawDestRect(x, y, w, h int, k float32) {
 		return
 	}
 	x0, y0 := maxInt(x, 0), maxInt(y, 0)
-	x1, y1 := minInt(x+w, r.w), minInt(y+h, r.h)
+	x1, y1 := minInt(x+w, r.clipW()), minInt(y+h, r.clipH())
 	if x0 >= x1 || y0 >= y1 {
 		return
 	}
@@ -193,7 +193,7 @@ func (r *Renderer) drawLitPoints(points []drawlist.Point) {
 	}
 	for _, pt := range points {
 		x, y := int(pt.X), int(pt.Y)
-		if x < 0 || y < 0 || x >= r.w || y >= r.h {
+		if x < 0 || y < 0 || x >= r.clipW() || y >= r.clipH() {
 			continue
 		}
 		row := clampLHTRow(int(pt.Index))

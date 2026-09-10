@@ -25,7 +25,18 @@ type Camera struct {
 	X, Z         int32
 	ViewW, ViewH int32
 	MapW, MapH   int32
-	Scale        ViewScale // presentation view scale; zero == native [F-P1-008]
+	Scale        ViewScale // presentation RECORD step; zero == native [F-P1-008]
+
+	// Zoom is the LIVE presentation zoom factor of DESIGN_GPU_RENDERER §16, in
+	// 1/ZoomUnit units. Zero reads as Scale's own factor, which is what the
+	// classic executor is always on: classic has no free zoom, so f == s there
+	// and every projection below reduces to the build before §16.
+	//
+	// The invariant the whole design rests on is that Scale is the step the
+	// RECORDER emits at while Zoom is the factor the player sees. The modern
+	// executor scales the recorded world by Zoom/Scale; at Zoom == ZoomOf(Scale)
+	// that scale is one and the recording reaches pixels untouched.
+	Zoom Zoom
 
 	// Follow is the rest of the retail camera block: the desired origin, the
 	// tracked object and the four bookmark slots [07 R-CAM-01 §12]. It is
@@ -139,12 +150,15 @@ func clampAxis(camera, mapSize, viewportSpan, leading int32) int32 { // [07 §10
 // any scale. The division is the scale's own floor inverse, integer at every
 // step (DESIGN_GPU_RENDERER §14.2).
 func (c *Camera) clampInsets() (leadX, trailX, leadZ, trailZ int32) { // [03 §4.1]
-	s := c.scale()
-	if s.Native() {
+	// The LIVE factor, not the record step: the chrome covers the same
+	// framebuffer pixels whatever the recorder emitted at, so the world it hides
+	// is measured through what the player is actually seeing (§16.4).
+	z := c.zoom()
+	if z == ZoomUnit {
 		return OriginX, 0, OriginY, OriginY
 	}
-	insetY := s.Inverse(OriginY)
-	return s.Inverse(OriginX), 0, insetY, insetY
+	insetY := z.Inverse(OriginY)
+	return z.Inverse(OriginX), 0, insetY, insetY
 }
 
 // scale returns the effective view scale, clamped to the three views with
@@ -156,20 +170,45 @@ func (c *Camera) scale() ViewScale {
 	return c.Scale.Norm()
 }
 
-// EffectiveScale returns the clamped presentation view scale [F-P1-008].
-// Presentation-only; sim never reads it [I6].
+// EffectiveScale returns the clamped presentation RECORD step [F-P1-008]. The
+// recorder projects at it; it is not what the player sees once the modern
+// executor's free zoom is off a rest step (§16.2). EffectiveZoom is the live
+// factor.
 func (c *Camera) EffectiveScale() ViewScale { // [F-P1-008]
 	return c.scale()
 }
 
-// EffectiveView returns the view size in world pixels after the view scale.
-// At a magnified scale less world is visible. Clamp uses this.
+// zoom returns the effective live zoom factor, reading a zero field as the
+// record step's own factor so a camera that never sets one behaves exactly as
+// the build before §16 (DESIGN_GPU_RENDERER §16.2).
+func (c *Camera) zoom() Zoom {
+	if c == nil {
+		return ZoomUnit
+	}
+	if c.Zoom <= 0 {
+		return ZoomOf(c.scale())
+	}
+	return c.Zoom.Norm()
+}
+
+// EffectiveZoom returns the clamped live presentation zoom factor [F-P1-008]
+// (DESIGN_GPU_RENDERER §16.2). Presentation-only; sim never reads it [I6].
+func (c *Camera) EffectiveZoom() Zoom { return c.zoom() }
+
+// AtRestStep reports whether the live factor equals the record step's own
+// factor, which is when the modern executor's world transform is the identity
+// and the frame reaches pixels exactly as the build before §16 composed it.
+func (c *Camera) AtRestStep() bool { return c.zoom() == ZoomOf(c.scale()) }
+
+// EffectiveView returns the view size in world pixels after the LIVE zoom
+// factor. At a magnified factor less world is visible, at a reduced one more.
+// Clamp uses this.
 func (c *Camera) EffectiveView() (int32, int32) {
-	s := c.scale()
-	if s.Native() {
+	z := c.zoom()
+	if z == ZoomUnit {
 		return c.ViewW, c.ViewH
 	}
-	return s.Inverse(c.ViewW), s.Inverse(c.ViewH)
+	return z.Inverse(c.ViewW), z.Inverse(c.ViewH)
 }
 
 // BattleView returns the size of the *battle viewport* in map pixels — the
@@ -303,11 +342,11 @@ func (c *Camera) Drag(dx, dy int32) {
 	if c == nil {
 		return
 	}
-	s := int32(c.scale())
-	// screen delta → world delta (inverse of the view scale), truncated toward
-	// zero as the whole-scale divide always was
-	wx := dx * 2 / s
-	wz := dy * 2 / s
+	// screen delta → world delta through the LIVE factor, truncated toward zero
+	// as the whole-scale divide always was (§16.4).
+	z := int64(c.zoom())
+	wx := int32(int64(dx) * int64(ZoomUnit) / z)
+	wz := int32(int64(dy) * int64(ZoomUnit) / z)
 	// Drag direction: moving mouse right should pan world right → camera follows mouse
 	c.Pan(-wx, -wz)
 }
@@ -319,24 +358,58 @@ func (c *Camera) Drag(dx, dy int32) {
 //
 // The arithmetic is the projection's own inverse, so the fixed point is exact:
 // world = cam + Inverse(screen − origin), and the new origin is that world
-// point less the same quantity at the new scale.
+// point less the same quantity at the new scale. (mx, my) are BEAM pixels —
+// the framebuffer point plus (OriginX, OriginY) — exactly what ScreenToWorld
+// takes [03 §2.5]; a caller holding a framebuffer point adds the offsets.
 func (c *Camera) SetScaleAbout(mx, my int32, newS ViewScale) {
 	if c == nil {
 		return
 	}
-	oldS := c.scale()
-	newS = newS.Norm()
-	if newS == oldS {
-		c.Scale = newS
+	// A step change is a zoom to that step's own factor: it sets the record step
+	// and the live factor together, which is the classic executor's only mode
+	// and F9's classic cycle (§16.8). The map-derived floor of MinZoom is NOT
+	// applied here — a step is always at least 1x, and the view-larger-than-map
+	// domain of clampAxis stays exactly where [07 §10] left it.
+	c.setZoomAboutRaw(mx, my, ZoomOf(newS))
+	c.Scale = newS.Norm()
+}
+
+// SetZoomAbout sets the LIVE zoom factor, keeping the world point under screen
+// position (mx, my) where it is, and re-derives the record step from it
+// (DESIGN_GPU_RENDERER §16.5). It is the generalization of SetScaleAbout: the
+// fixed point is world = cam + Inverse_f(screen − origin), and the new origin
+// is that world point less the same quantity at the new factor. (mx, my) are
+// beam pixels, as for SetScaleAbout.
+//
+// The record step follows the factor (Zoom.Step): 2x above 1x, 1x at or below
+// it. Changing the step does not move anything on screen, because the executor
+// scales the recording by f/s and both sides change together.
+func (c *Camera) SetZoomAbout(mx, my int32, newZ Zoom) {
+	if c == nil {
 		return
 	}
-	dx := mx - OriginX
-	dy := my - OriginY
-	wx := c.X + oldS.Inverse(dx)
-	wz := c.Z + oldS.Inverse(dy)
-	c.X = wx - newS.Inverse(dx)
-	c.Z = wz - newS.Inverse(dy)
-	c.Scale = newS
+	newZ = newZ.Norm()
+	if minZ := c.MinZoom(); newZ < minZ {
+		newZ = minZ
+	}
+	c.setZoomAboutRaw(mx, my, newZ)
+}
+
+// setZoomAboutRaw is SetZoomAbout without the map-derived floor, so the step
+// path can keep clampAxis's view-larger-than-map domain untouched.
+func (c *Camera) setZoomAboutRaw(mx, my int32, newZ Zoom) {
+	oldZ := c.zoom()
+	newZ = newZ.Norm()
+	if newZ != oldZ {
+		dx := mx - OriginX
+		dy := my - OriginY
+		wx := c.X + oldZ.Inverse(dx)
+		wz := c.Z + oldZ.Inverse(dy)
+		c.X = wx - newZ.Inverse(dx)
+		c.Z = wz - newZ.Inverse(dy)
+	}
+	c.Zoom = newZ
+	c.Scale = newZ.Step()
 	c.Clamp()
 }
 
@@ -444,14 +517,42 @@ func (c *Camera) WorldToScreen(x, y, z numeric.Fixed) (sx, sy int32) { // [03 §
 // [I3][03 §2.1]. With the floor inverse every screen pixel names exactly one
 // world pixel and the round trip world → screen → world is the identity at
 // every scale, 1.5x included (ViewScale.Inverse; DESIGN_GPU_RENDERER §14.1).
+// Since DESIGN_GPU_RENDERER §16 the inverse goes through the LIVE zoom factor
+// rather than the record step, because the pointer names a pixel of the
+// PRESENTED picture: world = cameraOrigin + floor((screen − viewportOrigin)/f).
+// At a rest factor that is still the exact inverse of WorldToScreen; in flight
+// it is the obvious floor, and ScreenToRecord is the bridge for the pick tests
+// that compare against projected record coordinates (§16.4).
 func (c *Camera) ScreenToWorld(sx, sy int32) (x, z numeric.Fixed) { // [03 §2.5]
-	s := c.scale()
-	if s.Native() {
+	zf := c.zoom()
+	if zf == ZoomUnit {
 		wx := int64(sx-OriginX+c.X) << 16
 		wz := int64(sy-OriginY+c.Z) << 16
 		return numeric.Fixed(wx), numeric.Fixed(wz)
 	}
-	wx := int64(c.X+s.Inverse(sx-OriginX)) << 16
-	wz := int64(c.Z+s.Inverse(sy-OriginY)) << 16
+	wx := int64(c.X+zf.Inverse(sx-OriginX)) << 16
+	wz := int64(c.Z+zf.Inverse(sy-OriginY)) << 16
 	return numeric.Fixed(wx), numeric.Fixed(wz)
+}
+
+// ScreenToRecord maps a presented beam-space pointer to the beam-space
+// coordinate the RECORDER would have projected the world pixel under it to
+// (DESIGN_GPU_RENDERER §16.4).
+//
+// It exists because the picking helpers that cannot be expressed as a world
+// point — the hover hull polygon and the drag rectangle's containment test —
+// compare the pointer against corners produced by WorldToScreen, which is
+// recorded at the step. Composing the live inverse with the record projection
+// puts both sides in one space at any factor, and at a rest factor it is the
+// identity, so nothing about picking changes there.
+func (c *Camera) ScreenToRecord(sx, sy int32) (int32, int32) {
+	if c == nil {
+		return sx, sy
+	}
+	if c.AtRestStep() {
+		return sx, sy
+	}
+	zf := c.zoom()
+	s := c.scale()
+	return s.Project(zf.Inverse(sx-OriginX)) + OriginX, s.Project(zf.Inverse(sy-OriginY)) + OriginY
 }

@@ -29,7 +29,7 @@ func (r *Renderer) Trails(t drawlist.Trails) {
 	quads := make([]corners, 0, len(t.Marks))
 	strengths := make([]uint8, 0, len(t.Marks))
 	shapes := make([]float32, 0, len(t.Marks))
-	minX, minY := float32(r.w), float32(r.h)
+	minX, minY := float32(r.clipW()), float32(r.clipH())
 	maxX, maxY := float32(0), float32(0)
 	for _, m := range t.Marks {
 		if m.Strength == 0 {
@@ -61,7 +61,7 @@ func (r *Renderer) Trails(t drawlist.Trails) {
 		return
 	}
 	x0, y0 := maxInt(int(math.Floor(float64(minX))), 0), maxInt(int(math.Floor(float64(minY))), 0)
-	x1, y1 := minInt(int(math.Ceil(float64(maxX))), r.w), minInt(int(math.Ceil(float64(maxY))), r.h)
+	x1, y1 := minInt(int(math.Ceil(float64(maxX))), r.clipW()), minInt(int(math.Ceil(float64(maxY))), r.clipH())
 	if x0 >= x1 || y0 >= y1 {
 		return
 	}

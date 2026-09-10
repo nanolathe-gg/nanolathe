@@ -1255,36 +1255,53 @@ world scale; this build adds a presentation zoom so a capture or an inspection
 can magnify the composed frame. It changes no authoritative state, is never read
 by a simulation phase, and is not saved [I6].
 
-* **The value.** `Scale` is a `camera.ViewScale`, the scale in half steps:
-  `ViewScaleNative` (2, also the zero value's meaning), `ViewScaleMid` (3,
-  1.5×) and `ViewScaleDetail` (4, 2×); `EffectiveScale` clamps it to the
-  three. It was a fractional `float32` clamped to `[0.25, 4]` until
-  DESIGN_GPU_RENDERER §14 made the scale an integer so the projection and its
-  inverse are exact, and the 1.5× step keeps that: `Project` is
-  `ceil(v·s/2)`, its inverse `floor(2·v/s)`, and `Px` scales an extent with
-  half-away rounding.
-* **What it scales.** `EffectiveView` divides the framebuffer view by the scale,
-  so zooming in shows less world; `clampInsets` divides the viewport insets by
-  it, so the clamp and every recentre stay expressed in world pixels;
-  `WorldToScreen` multiplies the projected delta by it and `ScreenToWorld`
-  divides, so picking and drawing agree at any zoom.
-* **The native fast path is exact.** At scale 1 both conversions take the
+* **The two values.** `Scale` is a `camera.ViewScale`, the RECORD step in half
+  steps: `ViewScaleNative` (2, also the zero value's meaning), `ViewScaleMid`
+  (3, 1.5×) and `ViewScaleDetail` (4, 2×). `Zoom` is a `camera.Zoom`, the LIVE
+  factor in 1/1024 units, free between the map-derived floor and 2×; a zero
+  `Zoom` reads as the step's own factor. Both were once a fractional `float32`
+  clamped to `[0.25, 4]`; DESIGN_GPU_RENDERER §14 made the projection an
+  integer so it and its inverse are exact, and §16 put the free factor back on
+  top of that integer projection rather than in place of it. `Project` is
+  `ceil(v·f)`, its inverse `floor(v/f)`, and `Px` scales an extent with
+  half-away rounding; at the three rest factors the free arithmetic and the
+  step's own agree exactly.
+* **What each one drives.** The step drives the RECORDING: `WorldToScreen`, the
+  terrain record and the art variant selection. The factor drives everything
+  that measures the view in world pixels — `EffectiveView`, `clampInsets`,
+  `BattleView`, `Drag` and `ScreenToWorld` — because those describe what is on
+  screen. `ScreenToRecord` bridges the two for the hover hull and the drag
+  rectangle, which compare a pointer against corners projected at the step.
+* **The native fast path is exact.** At factor 1 both conversions take the
   original integer path unchanged, so nothing composed at native scale differs
-  by a pixel from a build without the feature.
-* **Its writers.** F9 in the battle, which cycles 1× → 1.5× → 2× → 1× about
-  the viewport centre; middle-drag through `Drag`, which converts the screen
-  delta by the inverse of the scale before panning; `--zoom` with
-  `--shot-focus` through `SetScaleAbout`; and, with `--zoom` unset, the
-  window's resolution default at battle entry — 1.5× above 800×600, native
-  at or below it (DESIGN_GPU_RENDERER §14.6). `SetScaleAbout` keeps the world
-  point under a given screen position fixed and then clamps. The wheel is not
-  a camera control: it belongs to the GUI list under the pointer [07 §2]
-  [07 §10].
+  by a pixel from a build without the feature; the same holds at 1.5× and 2×
+  when the factor is on the step.
+* **Its writers.** F9 in the battle, which in classic cycles the step
+  1× → 1.5× → 2× → 1× about the viewport centre and in modern aims the same
+  three factors as animated zoom targets; **the mouse wheel over the battle
+  viewport**, which in the modern executor moves a zoom target on a log scale
+  about the pointer (below); middle-drag through `Drag`, which converts the
+  screen delta by the inverse of the factor before panning; `--zoom` with
+  `--shot-focus`, which takes a free factor for modern and one of the three
+  views for classic; and, with `--zoom` unset, the window's resolution default
+  at battle entry — 1.5× above 800×600, native at or below it
+  (DESIGN_GPU_RENDERER §14.6, §16.8). `SetScaleAbout` and `SetZoomAbout` keep
+  the world point under a given screen position fixed and then clamp.
+* **The wheel binding.** Retail's wheel is not a camera control: it belongs to
+  the GUI list under the pointer [07 §2][07 §10], and that is still where it
+  goes first. What DESIGN_GPU_RENDERER §16.6 adds is a Nanolathe binding on
+  the wheel the chrome did not want: over the battle viewport, outside TALK,
+  with no modal open and the pointer off the minimap, and only while the modern
+  executor presents, one wheel unit multiplies the zoom target by a named
+  constant on a log scale, wheel-up zooming in and the world point under the
+  pointer staying put. The live factor eases toward that target on the host
+  Update grid and snaps onto a rest step when the wheel goes quiet near one.
+  The classic executor takes no wheel zoom at all.
 
 What the scale does to every world-space layer, the 2× art it selects and the
 load-time remaster that produces that art are DESIGN_GPU_RENDERER §14. F10
-toggles the executor at runtime (§14.6). The strategic view below 1× remains
-planned there (§5.2).
+toggles the executor at runtime (§14.6). The free factor, the wheel, the
+snapping and the strategic view below half scale are §16.
 
 **I13 text-list raster correction.** The frontend list painter measures
 stored text before handling a heading prefix, applies the traced 1/4/2

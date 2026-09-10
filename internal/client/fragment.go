@@ -87,7 +87,8 @@ func (c *Client) drawFragment(v frame.FragmentView) bool {
 	if len(polys) == 0 {
 		return false
 	}
-	minX, minY, maxX, maxY, ok := directProjectedBounds(polys, int32(c.width), int32(c.height))
+	recW, recH := c.recordExtent()
+	minX, minY, maxX, maxY, ok := directProjectedBounds(polys, int32(recW), int32(recH))
 	if !ok {
 		return false
 	}

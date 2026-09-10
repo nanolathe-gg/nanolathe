@@ -115,6 +115,11 @@ func (c *Client) drawFixedEffects(cur *frame.Frame) {
 	if c == nil || cur == nil || c.cam == nil {
 		return
 	}
+	// Below the strategic cut this layer is not recorded at all: the marker
+	// layer stands in for it (DESIGN_GPU_RENDERER §16.10).
+	if c.strategicView() {
+		return
+	}
 	// The 100-slot whole-piece table precedes both fixed-effect category walks.
 	// Keep DrawEffectViews intact: it retains all calculated secondaries before
 	// all named primary/model records [04 R-COB-04 §2][03 §1].
@@ -285,9 +290,10 @@ func (c *Client) drawLHTHalo(cx, cy, radius, level int, terrainCoverage func(x, 
 	}
 	off := len(c.pointArena)
 	r2 := radius * radius
+	recW, recH := c.recordExtent()
 	for dy := -radius; dy <= radius; dy++ {
 		py := cy + dy
-		if py < 0 || py >= c.height {
+		if py < 0 || py >= recH {
 			continue
 		}
 		for dx := -radius; dx <= radius; dx++ {
@@ -295,7 +301,7 @@ func (c *Client) drawLHTHalo(cx, cy, radius, level int, terrainCoverage func(x, 
 				continue
 			}
 			px := cx + dx
-			if px < 0 || px >= c.width {
+			if px < 0 || px >= recW {
 				continue
 			}
 			if !terrainCoverage(px, py) {
@@ -328,15 +334,16 @@ func (c *Client) fillStripParticle(x, y int, color uint8) bool {
 	// A fill's extents take the view scale, so the two-by-two mark stays two
 	// world pixels square (DESIGN_GPU_RENDERER §14.2).
 	side := int(c.viewScale().Px(stripParticleSize))
+	recW, recH := c.recordExtent()
 	drew := false
 	for dy := 0; dy < side && !drew; dy++ {
 		py := y + dy
-		if py < 0 || py >= c.height {
+		if py < 0 || py >= recH {
 			continue
 		}
 		for dx := 0; dx < side; dx++ {
 			px := x + dx
-			if px >= 0 && px < c.width {
+			if px >= 0 && px < recW {
 				drew = true
 				break
 			}

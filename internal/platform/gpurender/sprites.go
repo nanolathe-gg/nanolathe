@@ -130,10 +130,10 @@ func (r *Renderer) Sprite(sp drawlist.Sprite) {
 			r.drawTint(sp.Frame,
 				int(sp.X)+int(sp.Frame.XOffset),
 				int(sp.Y)+int(sp.Frame.YOffset),
-				0, 0, r.w, r.h)
+				0, 0, r.clipW(), r.clipH())
 			return
 		}
-		r.drawKeyed(sp.Frame, int(sp.X), int(sp.Y), 0, 0, r.w, r.h)
+		r.drawKeyed(sp.Frame, int(sp.X), int(sp.Y), 0, 0, r.clipW(), r.clipH())
 	case drawlist.BlitLit:
 		// Every opaque source texel is written as LightLookup(row, src),
 		// the source folded through one LHT row. Not destination-reading, so it is
@@ -158,10 +158,10 @@ func (r *Renderer) Sprite(sp drawlist.Sprite) {
 			r.drawTint(sp.Frame,
 				int(sp.X)+int(sp.Frame.XOffset),
 				int(sp.Y)+int(sp.Frame.YOffset),
-				0, 0, r.w, r.h)
+				0, 0, r.clipW(), r.clipH())
 			return
 		}
-		r.drawKeyed(sp.Frame, int(sp.X), int(sp.Y), 0, 0, r.w, r.h)
+		r.drawKeyed(sp.Frame, int(sp.X), int(sp.Y), 0, 0, r.clipW(), r.clipH())
 	}
 }
 
@@ -190,7 +190,7 @@ func (r *Renderer) Surface(sf drawlist.Surface) {
 	// span). Resizing Dst to the clipped extent would shift the minimap pixels.
 	clipX, clipY, clipW, clipH := r.spriteClip(sf.HasClip, sf.Clip)
 	qx0, qy0 := maxInt(maxInt(x, clipX), 0), maxInt(maxInt(y, clipY), 0)
-	qx1, qy1 := minInt(minInt(x+w, clipX+clipW), r.w), minInt(minInt(y+h, clipY+clipH), r.h)
+	qx1, qy1 := minInt(minInt(x+w, clipX+clipW), r.clipW()), minInt(minInt(y+h, clipY+clipH), r.clipH())
 	if qx0 >= qx1 || qy0 >= qy1 {
 		return
 	}
@@ -205,7 +205,7 @@ func (r *Renderer) Cursor(cu drawlist.Cursor) {
 	if r == nil || r.surfaces[0] == nil {
 		return
 	}
-	r.drawKeyed(cu.Frame, int(cu.HotX), int(cu.HotY), 0, 0, r.w, r.h)
+	r.drawKeyed(cu.Frame, int(cu.HotX), int(cu.HotY), 0, 0, r.clipW(), r.clipH())
 }
 
 // spriteClip resolves a recorded Sprite clip into the (x, y, w, h) the byte
@@ -215,7 +215,7 @@ func (r *Renderer) spriteClip(has bool, rect drawlist.Rect) (x, y, w, h int) {
 	if has {
 		return int(rect.X), int(rect.Y), int(rect.W), int(rect.H)
 	}
-	return 0, 0, r.w, r.h
+	return 0, 0, r.clipW(), r.clipH()
 }
 
 // drawKeyed reproduces uiBlitClippedRaw for a 1:1 keyed GAF copy: it computes the
@@ -233,7 +233,7 @@ func (r *Renderer) drawKeyed(f *formats.GAFFrame, x, y, clipX, clipY, clipW, cli
 	}
 	fw, fh := int(f.Width), int(f.Height)
 	minX, minY := maxInt(clipX, 0), maxInt(clipY, 0)
-	maxX, maxY := minInt(clipX+clipW, r.w), minInt(clipY+clipH, r.h)
+	maxX, maxY := minInt(clipX+clipW, r.clipW()), minInt(clipY+clipH, r.clipH())
 	col0, col1 := maxInt(0, minX-x), minInt(fw, maxX-x)
 	row0, row1 := maxInt(0, minY-y), minInt(fh, maxY-y)
 	if col0 >= col1 || row0 >= row1 {
@@ -261,7 +261,7 @@ func (r *Renderer) drawPCX(p *formats.PCX, x, y, clipX, clipY, clipW, clipH int)
 	}
 	pw, ph := int(p.Width), int(p.Height)
 	minX, minY := maxInt(clipX, 0), maxInt(clipY, 0)
-	maxX, maxY := minInt(clipX+clipW, r.w), minInt(clipY+clipH, r.h)
+	maxX, maxY := minInt(clipX+clipW, r.clipW()), minInt(clipY+clipH, r.clipH())
 	col0, col1 := maxInt(0, minX-x), minInt(pw, maxX-x)
 	row0, row1 := maxInt(0, minY-y), minInt(ph, maxY-y)
 	if col0 >= col1 || row0 >= row1 {
@@ -291,7 +291,7 @@ func (r *Renderer) drawScaled(f *formats.GAFFrame, srcX, srcY, srcW, srcH, x, y,
 		return
 	}
 	minX, minY := maxInt(clipX, 0), maxInt(clipY, 0)
-	maxX, maxY := minInt(clipX+clipW, r.w), minInt(clipY+clipH, r.h)
+	maxX, maxY := minInt(clipX+clipW, r.clipW()), minInt(clipY+clipH, r.clipH())
 	qx0, qy0 := maxInt(x, minX), maxInt(y, minY)
 	qx1, qy1 := minInt(x+w, maxX), minInt(y+h, maxY)
 	if qx0 >= qx1 || qy0 >= qy1 {

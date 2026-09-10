@@ -250,7 +250,7 @@ func (r *Renderer) commitModelSlot(page *ebiten.Image, src, dst image.Rectangle)
 		return
 	}
 	x0, y0 := maxInt(dst.Min.X, 0), maxInt(dst.Min.Y, 0)
-	x1, y1 := minInt(dst.Max.X, r.w), minInt(dst.Max.Y, r.h)
+	x1, y1 := minInt(dst.Max.X, r.clipW()), minInt(dst.Max.Y, r.clipH())
 	if x0 >= x1 || y0 >= y1 {
 		return
 	}
@@ -283,7 +283,7 @@ func (r *Renderer) commitModelShadow(sg *drawlist.ModelGeometry, shadow modelSlo
 	}
 	b := modelWorldBounds(sg)
 	x0, y0 := maxInt(b.Min.X, 0), maxInt(b.Min.Y, 0)
-	x1, y1 := minInt(b.Max.X, r.w), minInt(b.Max.Y, r.h)
+	x1, y1 := minInt(b.Max.X, r.clipW()), minInt(b.Max.Y, r.clipH())
 	if x0 >= x1 || y0 >= y1 {
 		r.modelStats.Shadows++
 		return

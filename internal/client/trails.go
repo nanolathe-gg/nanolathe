@@ -295,7 +295,8 @@ func (c *Client) drawTrails() {
 	}
 	st := &c.trails
 	s := c.cam.EffectiveScale()
-	w, h := int32(c.width), int32(c.height)
+	recW, recH := c.recordExtent()
+	w, h := int32(recW), int32(recH)
 	margin := s.Px(32)
 	st.arena = st.arena[:0]
 	for i := range st.marks {

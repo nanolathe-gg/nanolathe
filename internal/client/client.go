@@ -106,8 +106,28 @@ type Client struct {
 	cameraFractionSet bool
 
 	width, height int
-	indexed       []uint8
-	rgba          []byte
+	// recordW, recordH are the RECORD-SPACE extent every world emission site
+	// clips against (DESIGN_GPU_RENDERER §16.3). They equal width/height
+	// whenever the live zoom factor is on its record step — which is always, in
+	// the classic executor — and are larger whenever the modern executor is
+	// zoomed out, because the recorder then covers more world than the
+	// framebuffer has pixels and the executor shrinks it on the way in.
+	// Interface sites keep width/height: the chrome is drawn in framebuffer
+	// pixels at every factor.
+	recordW, recordH int
+	indexed          []uint8
+	rgba             []byte
+
+	// The strategic marker layer of DESIGN_GPU_RENDERER §16.11.
+	// strategicBlip is the minimap blip art the marker colours are taken from
+	// and strategicBlipColors caches one resolved index per player colour;
+	// radarOptions is the battle's radar mode-flags word, whose full-radar bit
+	// the minimap blip gate reads; markerArena is the reusable batch storage, so
+	// a strategic frame allocates nothing after the first.
+	strategicBlip       *formats.GAFEntry
+	strategicBlipColors []strategicBlipColor
+	radarOptions        uint32
+	markerArena         []drawlist.Marker
 
 	// list is the recorded committed-frame draw list, reset and re-recorded
 	// each frame then replayed through classicSink (docs/DESIGN_GPU_RENDERER.md
@@ -420,6 +440,8 @@ func New(opts Options) (*Client, error) {
 		shading:           true,
 		width:             w,
 		height:            h,
+		recordW:           w,
+		recordH:           h,
 		indexed:           make([]uint8, w*h),
 		rgba:              make([]byte, w*h*4),
 		models:            map[string]*unitModel{},
@@ -583,6 +605,7 @@ func (c *Client) Resize(width, height int) {
 		return
 	}
 	c.width, c.height = width, height
+	c.recordW, c.recordH = width, height
 	c.indexed = make([]uint8, width*height)
 	c.rgba = make([]byte, width*height*4)
 }

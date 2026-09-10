@@ -43,7 +43,7 @@ func (r *Renderer) Fill(f drawlist.Fill) {
 		// clipped to the whole framebuffer [R-SEL-02A].
 		r.drawFrameInclusive(
 			int(f.Rect.X), int(f.Rect.Y), int(f.Rect.X+f.Rect.W-1), int(f.Rect.Y+f.Rect.H-1),
-			0, 0, r.w-1, r.h-1, f.Index)
+			0, 0, r.clipW()-1, r.clipH()-1, f.Index)
 	case drawlist.FillFrameInclusive:
 		// drawIndexedFrameInclusive: inclusive frame clipped independently per edge
 		// against the record's Clip [R-SEL-02A].
@@ -90,11 +90,11 @@ func (r *Renderer) fillSolidExclusive(x, y, w, h int, idx uint8) {
 	if y0 < 0 {
 		y0 = 0
 	}
-	if x1 > r.w {
-		x1 = r.w
+	if x1 > r.clipW() {
+		x1 = r.clipW()
 	}
-	if y1 > r.h {
-		y1 = r.h
+	if y1 > r.clipH() {
+		y1 = r.clipH()
 	}
 	if x0 >= x1 || y0 >= y1 {
 		return
@@ -109,7 +109,7 @@ func (r *Renderer) fillSolidExclusive(x, y, w, h int, idx uint8) {
 // the inclusive rectangle lies wholly off the framebuffer, clamp each inclusive
 // edge, re-check non-empty, then fill [left..right]×[top..bottom] [R-P0-19-P].
 func (r *Renderer) fillSolidInclusive(left, top, right, bottom int32, idx uint8) {
-	clipRight, clipBottom := int32(r.w)-1, int32(r.h)-1
+	clipRight, clipBottom := int32(r.clipW())-1, int32(r.clipH())-1
 	if right < 0 || left > clipRight || bottom < 0 || top > clipBottom {
 		return
 	}
@@ -148,13 +148,13 @@ func (r *Renderer) drawFrameInclusive(rMinX, rMinY, rMaxX, rMaxY, clipMinX, clip
 	// per-pixel writes below stay inside it.
 	bx0 := maxInt(maxInt(rMinX, clipMinX), 0)
 	by0 := maxInt(maxInt(rMinY, clipMinY), 0)
-	bx1 := minInt(minInt(rMaxX, clipMaxX)+1, r.w)
-	by1 := minInt(minInt(rMaxY, clipMaxY)+1, r.h)
+	bx1 := minInt(minInt(rMaxX, clipMaxX)+1, r.clipW())
+	by1 := minInt(minInt(rMaxY, clipMaxY)+1, r.clipH())
 	if !r.beginSolid(bx0, by0, bx1, by1) {
 		return
 	}
 	write := func(x, y int) {
-		if x < 0 || y < 0 || x >= r.w || y >= r.h {
+		if x < 0 || y < 0 || x >= r.clipW() || y >= r.clipH() {
 			return
 		}
 		if x < clipMinX || x > clipMaxX || y < clipMinY || y > clipMaxY {
@@ -200,8 +200,8 @@ func (r *Renderer) Line(l drawlist.Line) {
 	}
 	bx0 := maxInt(minInt(int(l.X0), int(l.X1)), 0)
 	by0 := maxInt(minInt(int(l.Y0), int(l.Y1)), 0)
-	bx1 := minInt(maxInt(int(l.X0), int(l.X1))+1, r.w)
-	by1 := minInt(maxInt(int(l.Y0), int(l.Y1))+1, r.h)
+	bx1 := minInt(maxInt(int(l.X0), int(l.X1))+1, r.clipW())
+	by1 := minInt(maxInt(int(l.Y0), int(l.Y1))+1, r.clipH())
 	if !r.beginSolid(bx0, by0, bx1, by1) {
 		return
 	}
@@ -224,7 +224,7 @@ func (r *Renderer) Line(l drawlist.Line) {
 	}
 	err := dx - dy
 	for {
-		if x0 >= 0 && x0 < int32(r.w) && y0 >= 0 && y0 < int32(r.h) {
+		if x0 >= 0 && x0 < int32(r.clipW()) && y0 >= 0 && y0 < int32(r.clipH()) {
 			r.appendSolidQuad(float32(x0), float32(y0), float32(x0+1), float32(y0+1), l.Index)
 		}
 		if x0 == x1 && y0 == y1 {
@@ -266,7 +266,7 @@ func (r *Renderer) Points(p drawlist.Points) {
 	}
 	for _, pt := range p.Points {
 		x, y := int(pt.X), int(pt.Y)
-		if x < 0 || y < 0 || x >= r.w || y >= r.h {
+		if x < 0 || y < 0 || x >= r.clipW() || y >= r.clipH() {
 			continue
 		}
 		r.appendSolidQuad(float32(x), float32(y), float32(x+1), float32(y+1), pt.Index)
@@ -278,7 +278,7 @@ func (r *Renderer) Points(p drawlist.Points) {
 func (r *Renderer) pointBounds(points []drawlist.Point) (x0, y0, x1, y1 int, ok bool) {
 	for _, pt := range points {
 		x, y := int(pt.X), int(pt.Y)
-		if x < 0 || y < 0 || x >= r.w || y >= r.h {
+		if x < 0 || y < 0 || x >= r.clipW() || y >= r.clipH() {
 			continue
 		}
 		if !ok {

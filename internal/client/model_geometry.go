@@ -391,7 +391,8 @@ func (c *Client) directModelGeometry(draw *presentationrender.UnitDraw, selector
 	if len(polys) == 0 {
 		return nil
 	}
-	return c.borrowModelPacket(polys, int32(c.width), int32(c.height), 0, 0, 0, 0, 1, false, drawlist.ModelFallbackNone)
+	recW, recH := c.recordExtent()
+	return c.borrowModelPacket(polys, int32(recW), int32(recH), 0, 0, 0, 0, 1, false, drawlist.ModelFallbackNone)
 }
 
 // directDebrisGeometry applies the detached-piece origin gate independently

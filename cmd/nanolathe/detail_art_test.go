@@ -98,7 +98,7 @@ func TestAutoRemasterOffInstallsNoProviderButCompletesItsBar(t *testing.T) {
 // capture — so a native capture never pays for art it cannot show, and its
 // pixels are identical with the switch on or off.
 func TestCaptureSkipsTheRemasterAtTheNativeScale(t *testing.T) {
-	if art := captureDetailArt(Options{AutoRemaster: true, Zoom: camera.ViewScaleNative}, nil, nil); art != nil {
+	if art := captureDetailArt(Options{AutoRemaster: true, Zoom: camera.ZoomUnit}, nil, nil); art != nil {
 		t.Errorf("a 1x capture built detail art: %+v", art)
 	}
 }

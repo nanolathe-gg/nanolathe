@@ -1,6 +1,10 @@
 package gpurender
 
-import "github.com/hajimehoshi/ebiten/v2"
+import (
+	"math"
+
+	"github.com/hajimehoshi/ebiten/v2"
+)
 
 // The phase scheduler (docs/DESIGN_GPU_RENDERER.md §11.2 "The scheduler" and
 // §11.5 "Render passes, not draws"). The Sink methods no longer draw: each
@@ -359,6 +363,73 @@ type scheduler struct {
 	// in and its class. begin sets it; quad reads it.
 	curPhase int32
 	curClass int
+
+	// world is the free-zoom transform of docs/DESIGN_GPU_RENDERER.md §16.3:
+	// while the recording is inside its world region, every rectangle placed and
+	// every vertex appended is scaled by the live factor over the record step,
+	// about the surface origin. worldOn is false everywhere else — the chrome,
+	// the strategic markers, and every frame of the classic executor and of a
+	// modern one sitting on a rest step — and then nothing below costs more than
+	// one predictable branch.
+	//
+	// The transform is a pure scale about (0,0) because the recorder projects
+	// the world from the FRAMEBUFFER's own top-left: the camera origin is drawn
+	// there and the chrome painted over it, so record x = step·(worldX − camX)
+	// and screen x = factor·(worldX − camX) differ by exactly this factor. That
+	// is also why it needs no translation term to keep the world under the
+	// viewport corner fixed.
+	worldOn    bool
+	worldScale float32
+}
+
+// setWorld arms or disarms the world transform. num/den are the live factor and
+// the record step's factor in the same units; num == den disarms, so a rest
+// step compiles byte-identically to the build before §16.
+func (s *scheduler) setWorld(num, den int32) {
+	if num <= 0 || den <= 0 || num == den {
+		s.worldOn, s.worldScale = false, 1
+		return
+	}
+	s.worldOn, s.worldScale = true, float32(num)/float32(den)
+}
+
+// clearWorld closes the world region.
+func (s *scheduler) clearWorld() { s.worldOn, s.worldScale = false, 1 }
+
+// TODO(question): sources are sampled NEAREST at every factor, because the
+// scene shader reads palette indices and an index cannot be interpolated
+// (DESIGN_GPU_RENDERER §16.3 "Sampling"). Filtering after the palette resolve —
+// four texels, each through PAL, blended in colour — would soften the aliasing
+// of thin features at four times the lookups; whether that is worth the cost
+// needs a measurement and a human look.
+
+// txf maps one record coordinate to its screen coordinate.
+func (s *scheduler) txf(v float32) float32 {
+	if !s.worldOn {
+		return v
+	}
+	return v * s.worldScale
+}
+
+// txRect maps a record-space integer rectangle to the screen pixels it covers:
+// the origin floors and the far edge ceils, so the placed rectangle is a
+// superset of the rasterized one and the overlap tests stay conservative.
+func (s *scheduler) txRect(x0, y0, x1, y1 int) (int, int, int, int) {
+	if !s.worldOn {
+		return x0, y0, x1, y1
+	}
+	k := float64(s.worldScale)
+	return int(math.Floor(float64(x0) * k)), int(math.Floor(float64(y0) * k)),
+		int(math.Ceil(float64(x1) * k)), int(math.Ceil(float64(y1) * k))
+}
+
+// txPoint maps one record-space pixel to the screen pixel it lands in.
+func (s *scheduler) txPoint(x, y int) (int, int) {
+	if !s.worldOn {
+		return x, y
+	}
+	k := float64(s.worldScale)
+	return int(math.Floor(float64(x) * k)), int(math.Floor(float64(y) * k))
 }
 
 // resetFrame drops the compiled segment and re-sizes the cell grid. The backing
@@ -386,6 +457,7 @@ func (s *scheduler) resetFrame(w, h int) {
 		s.pointPhase = make([]uint64, cols*rows<<schedPointCellShift)
 		s.serial = 0
 	}
+	s.clearWorld()
 	s.resetSegment()
 }
 
@@ -668,6 +740,13 @@ func (s *scheduler) beginBlended(class int, x0, y0, x1, y1 int, imgs [4]*ebiten.
 	if x0 >= x1 || y0 >= y1 {
 		return false
 	}
+	// The rectangle reaches the grid in SCREEN pixels, so the overlap tests that
+	// decide a command's phase compare what actually lands on the composite
+	// (§16.3).
+	x0, y0, x1, y1 = s.txRect(x0, y0, x1, y1)
+	if x0 >= x1 || y0 >= y1 {
+		return false
+	}
 	dest := class == schedDest
 	phase := s.place(x0, y0, x1, y1)
 	s.tag(x0, y0, x1, y1, phase, dest)
@@ -684,6 +763,7 @@ func (s *scheduler) beginBlended(class int, x0, y0, x1, y1 int, imgs [4]*ebiten.
 // beginPoint places one lit point of a destination-compositing batch. Its own
 // pixel is what decides it, not its batch's bounding rectangle.
 func (s *scheduler) beginPoint(x, y int, imgs [4]*ebiten.Image) {
+	x, y = s.txPoint(x, y)
 	phase := s.placePoint(x, y)
 	p := s.phaseAt(phase)
 	s.growDest(p, x, y, x+1, y+1)
@@ -722,6 +802,21 @@ func (s *scheduler) quad(class int, dx0, dy0, dx1, dy1, sx0, sy0, sx1, sy1 float
 		imgs, shader, blend, readSlot := run.imgs, run.shader, run.blend, run.readSlot
 		b.openRun(imgs, shader, blend, readSlot)
 		run = &b.runs[len(b.runs)-1]
+	}
+	if s.worldOn {
+		dx0, dy0, dx1, dy1 = s.txf(dx0), s.txf(dy0), s.txf(dx1), s.txf(dy1)
+		// A world quad that shrinks below one screen pixel keeps one: the
+		// one-pixel primitives the world is full of — the selection quad's
+		// lines, a dotted path's dots, a lit point's row span — would otherwise
+		// fall between two pixel centres and vanish at an arbitrary subset of
+		// factors (§16.3). Nothing wider is touched, so the terrain's tiles and
+		// every sprite still tile the plane exactly.
+		if dx1-dx0 < 1 {
+			dx1 = dx0 + 1
+		}
+		if dy1-dy0 < 1 {
+			dy1 = dy0 + 1
+		}
 	}
 	base := uint32(run.vLen)
 	// The four vertices and the six indices are written into the batch's storage
@@ -784,7 +879,7 @@ func (s *scheduler) quadCorners(class int, xs, ys [4]float32, col [4]float32, cu
 	b.verts = b.verts[:nv+quadVertices]
 	v := b.verts[nv : nv+quadVertices : nv+quadVertices]
 	for i := 0; i < quadVertices; i++ {
-		v[i] = ebiten.Vertex{DstX: xs[i], DstY: ys[i],
+		v[i] = ebiten.Vertex{DstX: s.txf(xs[i]), DstY: s.txf(ys[i]),
 			ColorR: col[0], ColorG: col[1], ColorB: col[2], ColorA: col[3],
 			Custom0: custom[i][0], Custom1: custom[i][1], Custom2: custom[i][2], Custom3: custom[i][3]}
 	}

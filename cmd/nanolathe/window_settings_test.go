@@ -99,7 +99,7 @@ func TestDirectBattleViewportMatchesSelectedCanvasBeforeZoom(t *testing.T) {
 		if b.cam.ViewW != 1024 || b.cam.ViewH != 768 {
 			t.Fatal("direct camera retained authored viewport")
 		}
-		applyEntryZoom(Options{Zoom: camera.ViewScaleDetail}, b)
+		applyEntryZoom(Options{Zoom: camera.ZoomMax}, b)
 		if w, h := b.cam.EffectiveView(); w != 512 || h != 384 {
 			t.Fatalf("zoom viewport = %dx%d", w, h)
 		}

@@ -263,6 +263,7 @@ func (c *Client) drawTerrainPrep() {
 	if c == nil || len(c.indexed) != c.width*c.height {
 		return
 	}
+	recW, recH := c.recordExtent()
 	if c.cam != nil && c.terrain != nil {
 		// OriginX/OriginY describe the record from the shell viewport origin 0,0
 		// (a tile at world pixel px lands at px-camX): the classic sink projects
@@ -276,8 +277,8 @@ func (c *Client) drawTerrainPrep() {
 			Cam:     c.cam,
 			OriginX: c.cam.X,
 			OriginY: c.cam.Z,
-			DstW:    int32(c.width),
-			DstH:    int32(c.height),
+			DstW:    int32(recW),
+			DstH:    int32(recH),
 			Scale:   c.viewScale(),
 			Detail:  c.detailTiles(),
 		})
@@ -298,6 +299,12 @@ func (c *Client) drawInterface(cur *frame.Frame) {
 
 func (c *Client) drawProjectiles(cur *frame.Frame) {
 	if c == nil || cur == nil || c.cam == nil || len(cur.Projectiles) == 0 {
+		return
+	}
+	// Below the strategic cut projectiles are not recorded at all, and there is
+	// no projectile marker: a shot is an event, not a thing on the map
+	// (DESIGN_GPU_RENDERER §16.10, §16.11).
+	if c.strategicView() {
 		return
 	}
 	// Missing projectile GAF metadata suppresses that instruction through the
@@ -384,11 +391,13 @@ func (c *Client) fogFillChecker(x0, y0, x1, y1, parity int32) {
 
 func (c *Client) drawFog(cur *frame.Frame) {
 	ok := cur != nil
-	w := c.width
-	h := c.height
-	if len(c.indexed) != w*h {
+	if len(c.indexed) != c.width*c.height {
 		return
 	}
+	// The fog window is the RECORD extent, not the framebuffer: the ops are
+	// built in record space and the modern executor shrinks them on the way in
+	// (DESIGN_GPU_RENDERER §16.3). At a rest factor the two are the same number.
+	w, h := c.recordExtent()
 	// Fog presentation [03 §3.3] C13 — reads snapshot fog cache copied from visibility.Service.Fog() each tick (I6).
 	// The cache is presentation-only and never writes sim state. Fog uses hard 32-pixel tiles [03 §3.3][03 §3.3].
 	if ok && cur != nil && cur.Fog.Valid && c.cam != nil {
