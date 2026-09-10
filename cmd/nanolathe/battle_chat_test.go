@@ -150,6 +150,7 @@ func TestTalkPaintsAboveRetainedUnitInfo(t *testing.T) {
 }
 
 func TestLocalCommandParserAndSessionMasks(t *testing.T) {
+	t.Setenv(settings.EnvPath, filepath.Join(t.TempDir(), "settings.json"))
 	words := tokenizeLocalCommand("  one;two\tthree#ignored four")
 	if strings.Join(words, "|") != "one;two|three" {
 		t.Fatalf("tokenizer = %q, want semicolon content and # termination", words)

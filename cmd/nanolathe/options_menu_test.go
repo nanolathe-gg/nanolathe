@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image/png"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -1103,5 +1104,41 @@ func TestBattlePrefsEscapeReturnsToArmopt(t *testing.T) {
 	b.handleBattleMenuInput(in, cl)
 	if b.battleState().Modal() != ui.BattleModalClosed || b.battleState().Paused() {
 		t.Fatalf("Escape on ARMOPT left modal %v paused %v", b.battleState().Modal(), b.battleState().Paused())
+	}
+}
+
+// The options OK path must carry the selected gamma through the same loader
+// used on the next launch [07 R-FE-01 §6][07 R-FE-01 §11].
+func TestRetailOptionsGammaSurvivesStartup(t *testing.T) {
+	t.Setenv(settings.EnvPath, filepath.Join(t.TempDir(), "settings.json"))
+	shell, _, cl := retailAssetShell(t)
+	previousClient := clPtr
+	t.Cleanup(func() { clPtr = previousClient })
+	clPtr = cl
+	shell.attachSettings()
+	shell.openMenu(modeMenuSingle)
+	for _, value := range []int{6, 12, 18} {
+		shell.activateGadget("Options")
+		shell.activateGadget("VISUALS")
+		slider := shell.retailOptionsSlider("GAMMA")
+		if slider == nil {
+			t.Fatal("visuals has no gamma slider")
+		}
+		shell.moveRetailSlider("GAMMA", slider, retailSliderKnob(value, slider.travel, slider.max))
+		if shell.display.Gamma != value {
+			t.Fatalf("slider gamma = %d, want %d", shell.display.Gamma, value)
+		}
+		before := cl.DisplayPalette()
+		shell.activateGadget("PREV")
+		loaded, err := settings.Load()
+		if err != nil || loaded.Display.Gamma != value {
+			t.Fatalf("saved gamma = %d, want %d: %v", loaded.Display.Gamma, value, err)
+		}
+		shell.display.Gamma = 0
+		applyGammaOption(cl, 0)
+		shell.attachSettings()
+		if shell.display.Gamma != value || cl.DisplayPalette() != before {
+			t.Fatalf("startup did not restore gamma %d and its palette", value)
+		}
 	}
 }
