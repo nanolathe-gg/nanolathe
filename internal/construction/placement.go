@@ -311,6 +311,33 @@ func (s *Service) RegisterBuildingPlacement(u *units.Unit) error {
 	return nil
 }
 
+// RestoreBuildingPlacement reconstructs the derived yard owner from the
+// saved committed cell pair, without snapping the world position again.
+// The saved yard bit controls its stamp and later port-18 transactions;
+// constructor placement is no longer authoritative [08 R-SAVE-02 §6, §11]
+// [04 R-COLL-01 §4].
+func (s *Service) RestoreBuildingPlacement(u *units.Unit) error {
+	if s == nil || u == nil || u.Def == nil || u.Def.BMCode != 0 {
+		return nil
+	}
+	extent, err := world.NewFootprintExtent(int32(u.Def.FootprintX), int32(u.Def.FootprintZ))
+	if err != nil {
+		return err
+	}
+	anchor := world.NewFootprintAnchor(int32(u.CachedOccupancyX), int32(u.CachedOccupancyZ))
+	rect, err := world.NewFootprintRect(anchor, extent)
+	if err != nil {
+		return err
+	}
+	if _, err := buildingYard(u.Def, rect); err != nil {
+		return err
+	}
+	s.ReleasePlacement(u.Handle)
+	s.recordPlacement(u.Handle, u.Def, rect)
+	s.stampBuilding(u.Handle, placementRecord{rect: rect, def: u.Def}, u.YardOpen)
+	return nil
+}
+
 // YardOpenTransaction performs port 18's admission and accepted restamp as
 // one ordered operation. It returns false on silent denial [04 §4.7 port 18]
 // [04 R-COLL-01 §4][04 R-FAC-02 §5].

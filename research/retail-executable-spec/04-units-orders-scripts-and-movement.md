@@ -12592,8 +12592,11 @@ three-phase machine is the one an idle aircraft with nowhere to park runs.
   order), offset the unit's position by `(draw − half)` world units on each
   axis, snap the result to the unit's footprint half-cell anchor, and test it.
   The first landable candidate becomes a plain point marker (gate `0xE0`,
-  result 2). If all twelve fail: when the arrival bits `0xE0` are set, advance
-  the search bearing by `−0x5555` (about `−120` degrees); build a point marker
+  result 2). If all twelve fail: when **any** movement-outcome bit in `0xE0` is
+  delivered, subtract `0x5555` from the 32-bit search scratch with wrap (about
+  `−120` degrees in its low 16-bit bearing). Arrival `0x20` alone qualifies;
+  the test does not require all three bits. Use the low 16 bits to build a
+  point marker
   at the record's cached goal offset by that bearing at radius `0xA0` (160
   world units) with horizontal arrival radius `0x40` (64); gate `|= 0xE0`;
   result 2. The search therefore costs up to **24 simulation random draws per

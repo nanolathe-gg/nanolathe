@@ -316,6 +316,11 @@ pushes its repair record in that same pump visit, or transfers its cargo onto
 the pad `[04 R-AIR-01 §6]`. The shared attachment commit unlinks a previous
 carrier before relinking; only the COB adapter rejects another carrier's cargo
 `[04 R-COB-03 §5]`.
+`VTOL_LandIfCan` also runs directly through the pump. Its phase, search bearing
+and low-bit scratch belong to the order record, so a temporary `Paralyze` head
+preserves the waiting descent. The descent wakes `EndTransport` before installing
+its marker and lowering activation; the search rotates its fallback bearing on
+any delivered movement outcome `[04 R-AIR-01 §6]` `[04 §2.4]`.
 Cruise altitude is `max(sea level, terrain height at the target) + offset`,
 scaled to 16.16 and capped at `0x1FF0000`, with no lower clamp `[04 §10.1]`.
 
@@ -626,11 +631,11 @@ this wiring can be asserted without inventing a public kind on `Goal`.
 
 ### 3.6 Not implemented
 
-* **Ground landing still splits its handler and mover-side machine.**
-  `reportAirMachineOutcome` polls `VTOL_LandIfCan` completion without forwarding
-  the pump's delivered bits. Whether a live waiting instance can receive a
-  non-arrival movement outcome remains **Unknown**; trace a reachable producer
-  before changing the failure arms in `[04 R-AIR-01 §6]`.
+* **Ground-landing failure reachability remains unresolved.** Both landing
+  families now run through the pump and receive its delivered movement bits.
+  Which ordinary producer can deliver a non-arrival movement outcome to a live
+  waiting `VTOL_LandIfCan` remains **Unknown**; its Established failure arms
+  are implemented without a fabricated producer `[04 R-AIR-01 §6]`.
 * **A saved route restores no goal.** The mover save box carries the mover's
   live words; the route, the follower state and the proposal are derived and are
   cleared on restore, so a restored mover re-arms an ordinary request rather

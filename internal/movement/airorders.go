@@ -436,22 +436,15 @@ func (s *System) releaseAirGoal(u *units.Unit) {
 
 // --- the air executors ---
 
-// airOrderState is the movement-side dispatch state for one air order record.
-//
-// Retail keeps the phase byte, the gate word and the scratch words on the order
-// record itself and re-dispatches the executor from the order pump. Nanolathe's
-// pump has no air handlers — a handler-less descriptor stalls its record — so
-// the air executors run from the mover tick instead, and this is where their
-// per-record state lives. The record still receives the gate and satisfied-bit
-// writes the contracts specify, so the pump completes an air move exactly as it
-// completes a ground one.
+// airOrderState retains the state of air executors still driven by the mover
+// tick. Pump-driven legs keep their phase and scratch values on orders.Node,
+// so a temporary primary head cannot reset their progress [04 §3.3].
 type airOrderState struct {
 	order   *orders.Node
 	phase   uint8
 	waiting bool   // a marker with gate 0xE0 is outstanding
 	arrived bool   // the producer reported arrival last tick
 	bearing uint16 // the search/loiter bearing scratch word
-	low     uint8  // the low bit of the drawn bearing, the second scratch word
 	goal    Vec3   // the record's cached goal
 	post    Vec3   // VTOL_Standby's recorded post
 	done    bool   // the executor reported completion
@@ -502,8 +495,6 @@ func (s *System) runAirExecutor(u *units.Unit, head *orders.Node, st *airOrderSt
 	switch orders.DescriptorFor(head.ID).Name {
 	case "VTOL_Move":
 		s.execVTOLMove(u, head, st)
-	case "VTOL_LandIfCan":
-		s.execVTOLLandIfCan(u, head, st)
 	case "VTOL_Standby":
 		// The record's deadline is this executor's own wait, and it must be
 		// honoured here. `VTOL_Standby` phase 2's loaded arm arms
@@ -590,40 +581,45 @@ func (s *System) execVTOLMove(u *units.Unit, head *orders.Node, st *airOrderStat
 	}
 }
 
-// execVTOLLandIfCan is `VTOL_LandIfCan` [04 R-AIR-01 §6], the three-phase
+// legVTOLLandIfCan is `VTOL_LandIfCan` [04 R-AIR-01 §6], the three-phase
 // machine an idle aircraft with nowhere to park runs. It lands on terrain, not
-// on a pad.
-func (s *System) execVTOLLandIfCan(u *units.Unit, head *orders.Node, st *airOrderState) {
+// on a pad. The pump owns phase, scratch and gate, preserving the descent
+// when a temporary Paralyze record takes the head [04 §2.4].
+func (s *System) legVTOLLandIfCan(u *units.Unit, head *orders.Node, satisfied uint32, tick uint32) orders.Code {
+	// TODO(question): which ordinary producer can deliver a non-arrival
+	// movement outcome to this waiting record? The handler arms are Established;
+	// trace the producer through the controller and pump [04 R-AIR-01 §6].
 	// Entry: a satisfied goal-release bit 0x40 completes; the off-map recovery
 	// leg of [04 R-AIR-01 §5] pre-empts everything else.
-	if head.Satisfied&0x40 != 0 {
-		st.done = true
-		return
+	if satisfied&0x40 != 0 {
+		return 5
 	}
-	if s.airOffMapRecovery(u, head, st) {
-		return
+	if s.installOffMapRecoveryMarker(u, head) {
+		return 2
 	}
 	sim := s.simRNG(u)
-	switch st.phase {
+	switch head.Phase {
 	case 0:
 		if handleRow(s.Flights, u.Handle) == nil || u.Def == nil || !u.Def.CanFly {
-			st.done = true
-			return
+			return 7
 		}
 		if head.GoalX == 0 && head.GoalY == 0 && head.GoalZ == 0 {
 			head.GoalX, head.GoalY, head.GoalZ = u.X, u.Y, u.Z
 		}
-		st.goal = Vec3{X: head.GoalX, Y: head.GoalY, Z: head.GoalZ}
 		if sim == nil {
-			return // no stream, no draw: the machine holds rather than inventing one
+			airDeadline(head, tick, 1)
+			return 2 // unbound fixture: hold without inventing a random stream
 		}
 		draw := uint16(sim.Uint32n(0x10000))
-		st.bearing = draw
-		st.low = uint8(draw & 1)
-		st.waiting = s.takeoffPreamble(u, head)
-		st.phase = 1
+		head.Param1 = uint32(draw)
+		head.Param2 = uint32(draw & 1)
+		s.takeoffPreamble(u, head)
+		return 1
 	case 1:
 		if s.landable(u, u.X, u.Z) {
+			if bridge := u.ScriptBridge(); bridge != nil {
+				bridge.DeferredWake("EndTransport", nil, nil)
+			}
 			// The altitude offset is zero on dry land and `terrainHeight −
 			// seaLevel` (a negative quantity) over water, so composed with the
 			// setter's `max(seaLevel, terrainHeight) + offset` both branches
@@ -642,12 +638,11 @@ func (s *System) execVTOLLandIfCan(u *units.Unit, head *orders.Node, st *airOrde
 			// The landing script hook: clearing the state byte's activation bit
 			// raises `Deactivate` and notification 4 [04 R-AIR-01 §6].
 			u.SetActivationEdge(false)
-			st.waiting = true
-			st.phase = 2
-			return
+			return 1
 		}
 		if sim == nil {
-			return
+			airDeadline(head, tick, 1)
+			return 2
 		}
 		// The search: twelve iterations, two draws each in the order X then Z,
 		// each candidate snapped to the unit's footprint half-cell anchor
@@ -665,28 +660,32 @@ func (s *System) execVTOLLandIfCan(u *units.Unit, head *orders.Node, st *airOrde
 			m := s.newPointMarker(u, Vec3{X: cx, Y: u.Y, Z: cz})
 			s.installAirGoal(u, head, m)
 			head.DynamicGate = airLegGate
-			st.waiting = true
-			return
+			return 2
 		}
-		// All twelve failed. When the arrival bits are set, step the search
+		// All twelve failed. Any delivered movement outcome steps the search
 		// bearing by −0x5555 — about −120 degrees — and take a marker at the
 		// cached goal offset by it at radius 0xA0, arrival radius 0x40.
-		if head.Satisfied&airLegGate == airLegGate {
-			st.bearing -= 0x5555
+		if satisfied&airLegGate != 0 {
+			head.Param1 -= 0x5555
 		}
 		// Along the search bearing, so the pair is subtracted [04 R-AIR-01 §6].
-		ox, oz := offsetAtBearing(st.bearing, numeric.Fixed(0xA0<<16))
-		m := s.newPointMarker(u, Vec3{X: st.goal.X - ox, Y: st.goal.Y, Z: st.goal.Z - oz})
+		ox, oz := offsetAtBearing(uint16(head.Param1), numeric.Fixed(0xA0<<16))
+		m := s.newPointMarker(u, Vec3{X: head.GoalX - ox, Y: head.GoalY, Z: head.GoalZ - oz})
 		m.setArrivalRadius(0x40)
 		s.installAirGoal(u, head, m)
 		head.DynamicGate |= airLegGate
-		st.waiting = true
-	default:
+		return 2
+	case 2:
+		if satisfied&0x20 == 0 {
+			return 8
+		}
 		// Phase 2 completes the landing: the mode setter zeroes the velocity and
 		// the scalar speed and levels bank and pitch [04 R-AIR-01 §3], and the
 		// mode write re-stamps the ground plane [04 R-COLL-01 §4].
 		s.SetMoverMode(u, 1)
-		st.done = true
+		return 5
+	default:
+		return 7
 	}
 }
 
@@ -1153,22 +1152,9 @@ func padRepairsLander(lander, pad *units.Unit) bool {
 	return pad.Remaining == 0 // not under construction [05 "Construction target state"]
 }
 
-// airOffMapRecovery is the shared off-map recovery leg six air executors run
-// before their phase switch, returning from it immediately [04 R-AIR-01 §5]:
-// a point marker at unitPos + offset, where offset is the negated sine/cosine
-// pair of bearing(unitPos, mapCentre) at radius 0x3200000 (800 world units),
-// with horizontal arrival radius 0x80 and gate 0xE0.
-func (s *System) airOffMapRecovery(u *units.Unit, head *orders.Node, st *airOrderState) bool {
-	if !s.installOffMapRecoveryMarker(u, head) {
-		return false
-	}
-	st.waiting = true
-	return true
-}
-
-// installOffMapRecoveryMarker is that same leg without the stepAir-driven
-// executor's own bookkeeping, so the pump-driven executors below can run it as
-// their first act too [04 R-AIR-01 §5][04 R-AIR-01 §8] step 4.
+// installOffMapRecoveryMarker is the shared off-map recovery leg run before
+// the executor's phase switch [04 R-AIR-01 §5]: a point marker 800 world units
+// toward the map centre, with horizontal arrival radius 0x80 and gate 0xE0.
 func (s *System) installOffMapRecoveryMarker(u *units.Unit, head *orders.Node) bool {
 	if !s.airOffMap(u) {
 		return false
@@ -1507,10 +1493,9 @@ func airHeadFor(u *units.Unit) *orders.Node {
 // The pump-driven air executors [04 R-AIR-01 §7][04 R-AIR-01 §8][04 R-ORD-02 §3]
 // ---------------------------------------------------------------------------
 //
-// `VTOL_Move`, `VTOL_LandIfCan` and `VTOL_Standby` above run from the mover
-// tick because this engine's pump had no handler for them. The seven executors
-// below are the opposite arrangement and the faithful one: internal/orders has
-// a handler for each, that handler runs the record-side entry sequence, and it
+// `VTOL_Move` and `VTOL_Standby` retain mover-side dispatch. The other
+// air executors, including both landing families, run through the order pump.
+// internal/orders has a handler for each, that handler runs the record-side entry sequence, and it
 // then calls into this package for the leg. The pump therefore stays the sole
 // dispatcher — it clears the record's dynamic gate before every dispatch and
 // applies the leg's own result code afterwards [04 §3.3] — while the legs stay
@@ -1555,10 +1540,9 @@ func (s *System) BindAirOrderLegs() {
 // reads and writes the record's phase, dynamic gate and deadline as its state
 // machine [04 R-AIR-01 §7], so the pump must write none of them.
 //
-// `VTOL_Move` and `VTOL_LandIfCan` run from the same mover tick but are not
-// listed: both carry a descriptor handler that hands off to the air runner and
-// reports the executor's outcome, which is the faithful arrangement the header
-// above describes. The slice is fixed and ordered, never a map (I1).
+// `VTOL_Move` also runs from the mover tick, but its descriptor handler owns
+// its record lifecycle. Both landing families instead run directly through
+// the pump. The slice is fixed and ordered, never a map (I1).
 var airRowsDrivenByMoverTick = []string{"VTOL_Standby"}
 
 // airRowIDsDrivenByMoverTick is the same list resolved once. orders.Lookup is
@@ -1617,7 +1601,7 @@ func (s *System) runAirOrderLeg(u *units.Unit, n *orders.Node, satisfied uint32,
 	case "VTOL_Landing":
 		return s.legVTOLLanding(u, n, satisfied, tick), true
 	case "VTOL_LandIfCan":
-		return s.reportAirMachineOutcome(u, n, tick), true
+		return s.legVTOLLandIfCan(u, n, satisfied, tick), true
 	case "VTOL_Evade":
 		return s.legVTOLEvade(u, n, tick), true
 	case "VTOL_SeekAttack":
@@ -1656,44 +1640,6 @@ func (s *System) runAirOrderLeg(u *units.Unit, n *orders.Node, satisfied uint32,
 		return s.legVTOLUnload(u, n, satisfied, tick), true
 	}
 	return 0, false
-}
-
-// reportAirMachineOutcome publishes the mover-tick ground-landing machine's
-// outcome to the pump. Pad landing runs directly from the pump.
-//
-// `VTOL_LandIfCan` is not driven by the pump: its executor is `execVTOLLandIfCan`
-// below, which the mover tick runs off the head record because the landing
-// machine of [04 R-AIR-01 §6] owns the air marker family. That left the record
-// with no way to finish. The executor set `st.done` on touchdown and nothing
-// read it, so the record sat at the head of the queue for the rest of the
-// unit's life and every later order queued behind it — a `Stop` landed the
-// aircraft and then jammed its queue.
-//
-// This does NOT re-run the executor. It reads the outcome the mover tick
-// already produced and translates it into a result code, which is the whole of
-// what the pump was missing:
-//
-//   - the executor has finished this record -> *complete* (5), and the pump
-//     frees it in the ordinary way;
-//   - the executor is still working, or has not seen this record yet -> the
-//     one-tick deadline hold of [04 R-ORD-01 §1] plus *hold* (2), the same arm
-//     `airHandOff` takes with no runner bound. The record keeps its place at
-//     the head and is re-dispatched next tick.
-//
-// The one-tick hold is what makes the hand-off safe in either dispatch order:
-// when the pump runs before the mover tick, a completion published this tick is
-// read on the next one.
-func (s *System) reportAirMachineOutcome(u *units.Unit, n *orders.Node, tick uint32) orders.Code {
-	// TODO(question): can a live VTOL_LandIfCan receive a non-arrival movement
-	// outcome while its mover-side machine waits? This handoff polls completion
-	// without forwarding the pump's delivered bits. Trace a reachable producer
-	// before changing the failure arms specified by [04 R-AIR-01 §6].
-	st := handleRow(s.airOrders, u.Handle)
-	if st != nil && st.order == n && st.done {
-		return 5 // *complete* [04 R-ORD-01 §1]
-	}
-	airDeadline(n, tick, 1)
-	return 2 // *hold* [04 R-ORD-01 §1]
 }
 
 // --- shared leg vocabulary ---

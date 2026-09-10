@@ -35,6 +35,10 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 	if s.Units == nil || s.Econ == nil {
 		return fmt.Errorf("session: retail restore: incomplete session shell")
 	}
+	// Campaign marks belong to both load routes. They must survive the later
+	// single-mission teardown write and the next save [08 R-SAVE-02 §2]
+	// [08 R-CAMP-01 §8].
+	s.Progress.Thumbs = retailProgressThumbs(image.Summary.Thumbs)
 
 	// Player fields are gated by the successful GameTime decode in D1. Apply
 	// them in account order, preserving the typed economy reader's defaults.
@@ -111,6 +115,17 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 		}
 		if err := units.RetailUnitBase(s.Units.Unit(h), rec.Data); err != nil {
 			return fmt.Errorf("session: retail restore: unit %d base: %w", rec.StableID, err)
+		}
+	}
+	// Strict COB binding registered constructor yards before the saved bodies.
+	// Release all those placements before any restored occupancy is installed:
+	// a later unit's constructor stamp must not affect an earlier unit's
+	// restored overlap decisions [08 R-SAVE-02 §11][04 R-COLL-01 §4].
+	if s.Build != nil {
+		for _, rec := range image.Units.Records {
+			if !rec.Compat {
+				s.Build.ReleasePlacement(stage.StableUnit[rec.StableID])
+			}
 		}
 	}
 	// Resolve carrier containment depth-first even though D1 has reserved all
@@ -312,6 +327,19 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 			}
 			if err := s.Movement.RestoreOccupancy(h, u.CachedOccupancyX, u.CachedOccupancyZ); err != nil {
 				return fmt.Errorf("session: retail restore: unit %d occupancy: %w", rec.StableID, err)
+			}
+		}
+	}
+
+	// Construction retains the same saved anchor for port-18 transactions and
+	// teardown. Unfinished structures have no mover but still own a yard, so
+	// they participate in this reconstruction too [08 R-SAVE-02 §6, §11].
+	if s.Build != nil {
+		for _, rec := range image.Units.Records {
+			if !rec.Compat {
+				if err := s.Build.RestoreBuildingPlacement(s.Units.Unit(stage.StableUnit[rec.StableID])); err != nil {
+					return fmt.Errorf("session: retail restore: unit %d building placement: %w", rec.StableID, err)
+				}
 			}
 		}
 	}

@@ -184,6 +184,12 @@ consults reload, ammunition or cost.
 
 ### 2.4 Aiming
 
+The composed unit-death observer releases combat's pending Aim tracking before
+the pool slot becomes available again. Tracking belongs to the dying unit's
+weapon receivers, not to the numeric handle a later unit may reuse
+`[04 §2.4]` `[P0-16]` `[06 §3.3]`. The session regression parks an Aim callback,
+destroys its unit, reuses the slot, and fires the replacement's ungated weapon.
+
 `aim.go` holds three things and no state. The **drift gate** is the angular
 tolerance a turret must be inside before it may fire; a weapon that authors no
 tolerance falls back to 150 angle units while the shooter's movement tier is

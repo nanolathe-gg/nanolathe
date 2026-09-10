@@ -1908,6 +1908,9 @@ func createAndBindServices(s *Session) error {
 		// Wake and unlink every order observing the removed unit after the
 		// factory has consumed its product reference [04 R-ORD-01 §6].
 		orders.TargetRemoved(s.Units, h)
+		if s.Combat != nil {
+			s.Combat.ForgetUnit(h)
+		}
 	}
 	// Combat emits immutable authoritative events in impact order. The
 	// collector is presentation-only; EventUnitKilled remains a death/corpse

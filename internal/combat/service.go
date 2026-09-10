@@ -162,6 +162,19 @@ func hitDirectionByte(p *Projectile, victim *units.Unit) uint8 {
 	return uint8((uint16(bearing) - victim.Move.Heading) >> 8)
 }
 
+// ForgetUnit releases implementation-side Aim tracking with the unit record
+// [04 §2.4]. The pool handle can immediately name another unit [P0-16]; its
+// weapon receivers must not inherit the dead record's deferred work [06 §3.3].
+func (s *Service) ForgetUnit(h pool.Handle) {
+	if s == nil {
+		return
+	}
+	for idx := 0; idx < NumSlots; idx++ {
+		delete(s.pendingAims, pendingKey{Unit: h, Slot: idx})
+	}
+	delete(s.deathNotified, h)
+}
+
 // StepWeaponsForUnit runs the per-unit weapon pipeline for one unit visit ON-04 [06 §3.3][06 §4][04 §5.3][GAP T15].
 // It is the authoritative per-unit step; the session owns the deterministic
 // pool-order loop and invokes this method directly [06 §1.2] C1 (I1).

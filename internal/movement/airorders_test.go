@@ -490,7 +490,7 @@ func TestVTOLLandIfCanSettlesOnTheTerrain(t *testing.T) {
 		t.Fatal("the fixture's terrain must stand above sea level for this contract to bite")
 	}
 	for tick := uint32(1); tick <= 300; tick++ {
-		runMovementTick(sys, tick, w)
+		runLandingTick(sys, tick, w)
 	}
 	if u.Move.Mode&0x3 != 1 {
 		t.Fatalf("the aircraft never touched down: mover mode %d [04 R-AIR-01 §6]", u.Move.Mode)

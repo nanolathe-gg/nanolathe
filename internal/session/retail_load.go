@@ -149,14 +149,6 @@ func resolveRetailContinuation(fs vfs.FSOps, summary save.Summary) (*RetailCampa
 	if !found {
 		return nil, fmt.Errorf("session: retail continuation mission %q not found in campaign %q", summary.Mission, campaign.OriginalPath)
 	}
-	var thumbs [25]byte
-	if len(summary.Thumbs) == len(thumbs) {
-		copy(thumbs[:], summary.Thumbs)
-	} else {
-		for i := range thumbs {
-			thumbs[i] = 'U'
-		}
-	}
 	return &RetailCampaignContinuation{
 		CampaignPath: campaign.Path,
 		CampaignName: campaign.Name,
@@ -164,6 +156,19 @@ func resolveRetailContinuation(fs vfs.FSOps, summary save.Summary) (*RetailCampa
 		MissionIndex: stub.Index,
 		Difficulty:   int(summary.Difficulty),
 		Side:         int(summary.Side),
-		Thumbs:       thumbs,
+		Thumbs:       retailProgressThumbs(summary.Thumbs),
 	}, nil
+}
+
+// The same bounded mark copy precedes both load routes [08 R-SAVE-02 §2]
+// [08 R-CAMP-01 §8]. Invalid lengths reset the whole array, not just its tail.
+func retailProgressThumbs(saved string) (thumbs [25]byte) {
+	if len(saved) == len(thumbs) {
+		copy(thumbs[:], saved)
+		return thumbs
+	}
+	for i := range thumbs {
+		thumbs[i] = 'U'
+	}
+	return thumbs
 }

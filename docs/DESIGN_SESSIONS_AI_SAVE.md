@@ -234,6 +234,15 @@ checks bounds and the ordinary weapon visit resolves liveness
 into the packed pending-death bit without changing live state, and the reader
 restores that logical latch independently of health and damage cause.
 
+Both load routes restore the 25 campaign marks, including the all-`U` reset
+for an invalid length, so an in-battle load retains earlier mission results
+through teardown and the next save `[08 R-SAVE-02 §2]` `[08 R-CAMP-01 §8]`.
+After base restore, constructor building placements are released together;
+the derived yard owners are rebuilt from each saved committed cell pair and
+yard state. This includes unfinished structures without movers and keeps
+port-18 transactions and teardown on the same footprint as movement
+`[08 R-SAVE-02 §6, §11]` `[04 R-COLL-01 §4]`.
+
 The definition active byte is read through `WeaponDef.ActiveByte`, whose
 fresh value is its catalog slot byte. A restored value overrides that initial
 projection without changing catalog identity. Staging clones the catalog

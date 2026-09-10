@@ -35,7 +35,7 @@ func TestVTOLLandIfCanDescendsAndGrounds(t *testing.T) {
 	pushAirOrder(t, u, "VTOL_Move", u.X, u.Z)
 	groundY := u.Y
 	for tick := uint32(1); tick <= 60; tick++ {
-		runMovementTick(sys, tick, w)
+		runLandingTick(sys, tick, w)
 	}
 	if u.Move.Mode&0x3 != 2 {
 		t.Fatalf("mover mode=%d after the climb, want the airborne 2 [04 R-AIR-01 §6]", u.Move.Mode)
@@ -55,7 +55,7 @@ func TestVTOLLandIfCanDescendsAndGrounds(t *testing.T) {
 	pushAirOrder(t, u, "VTOL_LandIfCan", 0, 0)
 
 	for tick := uint32(61); tick <= 400; tick++ {
-		runMovementTick(sys, tick, w)
+		runLandingTick(sys, tick, w)
 		if u.Move.Mode&0x3 == 1 {
 			break
 		}
@@ -124,7 +124,7 @@ func TestLandSearchTakesANewMoveOrderAtOnce(t *testing.T) {
 	tick := uint32(0)
 	for i := 0; i < 120; i++ {
 		tick++
-		runMovementTick(sys, tick, w)
+		runLandingTick(sys, tick, w)
 	}
 	if u.Move.Mode&0x3 != 2 {
 		t.Fatalf("mode=%d: the aircraft never got airborne, so it is not in the land search", u.Move.Mode)
@@ -158,7 +158,7 @@ func TestLandSearchTakesANewMoveOrderAtOnce(t *testing.T) {
 	// destination marker [04 R-ORD-02 §2].
 	for i := 0; i < 2; i++ {
 		tick++
-		runMovementTick(sys, tick, w)
+		runLandingTick(sys, tick, w)
 		sys.Scheduler.Tick(tick)
 	}
 	if node.Satisfied&goalPendingMask&^0x20 != 0 {
@@ -261,7 +261,7 @@ func flyThenLand(t *testing.T, sys *System, w *units.World, u *units.Unit) bool 
 	tick := uint32(0)
 	for i := 0; i < 60; i++ {
 		tick++
-		runMovementTick(sys, tick, w)
+		runLandingTick(sys, tick, w)
 	}
 	if u.Move.Mode&0x3 != 2 {
 		t.Fatalf("mode=%d after the climb, want the airborne 2", u.Move.Mode&0x3)
@@ -272,7 +272,7 @@ func flyThenLand(t *testing.T, sys *System, w *units.World, u *units.Unit) bool 
 	pushAirOrder(t, u, "VTOL_LandIfCan", 0, 0)
 	for i := 0; i < 900; i++ {
 		tick++
-		runMovementTick(sys, tick, w)
+		runLandingTick(sys, tick, w)
 		if u.Move.Mode&0x3 == 1 {
 			return true
 		}

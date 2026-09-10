@@ -28,7 +28,7 @@ func (s *System) AirExecutorState(h pool.Handle) AirExecutorSnapshot {
 		return AirExecutorSnapshot{}
 	}
 	if u := s.unitFor(h); u != nil {
-		if n := airHeadFor(u); n != nil && n.ID == orders.Lookup("VTOL_Landing") {
+		if n := airHeadFor(u); n != nil && (n.ID == orders.Lookup("VTOL_Landing") || n.ID == orders.Lookup("VTOL_LandIfCan")) {
 			return AirExecutorSnapshot{Bound: true, HasOrder: true, Phase: n.Phase,
 				Waiting: n.DynamicGate != 0, Arrived: n.Satisfied&0x20 != 0,
 				PadPiece: uint16(n.Param1), Bearing: uint16(n.Param1)}
