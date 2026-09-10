@@ -105,6 +105,14 @@ type Client struct {
 	cameraFraction16  int32
 	cameraFractionSet bool
 
+	// The record/submit pipeline of docs/DESIGN_GPU_RENDERER.md §13.10.
+	// presentationEpoch is the host's client-mutation counter and pre owns the
+	// one goroutine that records the next frame while the game goroutine is
+	// blocked in the window layer's flush. A client that never calls
+	// StartPreRecord starts no goroutine and behaves exactly as it did before.
+	presentationEpoch uint64
+	pre               preRecorder
+
 	width, height int
 	// recordW, recordH are the RECORD-SPACE extent every world emission site
 	// clips against (DESIGN_GPU_RENDERER §16.3). They equal width/height

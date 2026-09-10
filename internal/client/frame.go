@@ -154,9 +154,40 @@ func (c *Client) recordFrame() {
 	if c == nil {
 		return
 	}
-	// Audio: drain queue once per rendered frame outside simulation [03 §8.3] C18.
-	// Presentation-only; uses CRT stream [03 §8.3] C19 [I4]; never touches Sim RNG.
-	//
+	c.TickPresentationAudio()
+	c.recordFrameNoAudio()
+}
+
+// TickPresentationAudio is the once-per-presented-frame audio step: the camera
+// viewport update and the queue drain [03 §8.3] C18. It is separated from the
+// recording pass so the record/submit pipeline can keep it on the game
+// goroutine and on its present cadence while the recording itself runs ahead
+// (docs/DESIGN_GPU_RENDERER.md §13.10). Presentation-only; uses the CRT stream
+// [03 §8.3] C19 [I4]; never touches Sim RNG.
+//
+// Reading the presentation frame moved into recordFrameNoAudio with the rest of
+// the recording: neither the viewport update nor the drain consults it — the
+// first reads the camera and the terrain, the second the committed buffer — so
+// the pass composes exactly the frame it composed when the blend was resolved
+// first.
+func (c *Client) TickPresentationAudio() {
+	if c == nil {
+		return
+	}
+	// Keep audio viewport in sync with camera for positional pan/attenuation [03 §8.3].
+	if c.cam != nil {
+		c.UpdateAudioViewportFromCamera()
+	}
+	c.TickAudio()
+}
+
+// recordFrameNoAudio is the recording pass on its own — everything recordFrame
+// does after the audio step. The pipeline's pre-record goroutine runs exactly
+// this (§13.10).
+func (c *Client) recordFrameNoAudio() {
+	if c == nil {
+		return
+	}
 	// The recorder reads the committed frame, or — when the Enhanced path has
 	// enabled interpolation and a previous committed tick exists — the blended
 	// view of the two most recent committed ticks. Classic and `--shot` never
@@ -167,11 +198,6 @@ func (c *Client) recordFrame() {
 	// blending is true when presentationFrame returned the interpolator's view
 	// rather than the committed frame itself.
 	blending := ok && cur != c.buffer.Current()
-	// Keep audio viewport in sync with camera for positional pan/attenuation [03 §8.3].
-	if c.cam != nil {
-		c.UpdateAudioViewportFromCamera()
-	}
-	c.TickAudio()
 
 	// C9: read the committed frame only; intermediate ticks are not drawn
 	// (PLAN_03 C15). A paused simulation simply presents the same frame.
@@ -208,6 +234,19 @@ func (c *Client) RecordFrame() *drawlist.List {
 	if c == nil {
 		return nil
 	}
+	c.TickPresentationAudio()
+	return c.RecordModernFrame()
+}
+
+// RecordModernFrame is RecordFrame without the audio step — the recording pass
+// the record/submit pipeline drives, on the game goroutine when the frame must
+// be recorded synchronously and on the pipeline goroutine when it runs ahead
+// (docs/DESIGN_GPU_RENDERER.md §13.10). A caller that uses it owns the audio
+// cadence itself and must call TickPresentationAudio once per presented frame.
+func (c *Client) RecordModernFrame() *drawlist.List {
+	if c == nil {
+		return nil
+	}
 	wasRecordingGeometry := c.recordModelGeometry
 	wasGeometryOnly := c.geometryOnlyModels
 	wasParallel := c.parallelRecord
@@ -216,7 +255,7 @@ func (c *Client) RecordFrame() *drawlist.List {
 	// The two-stage unit record is the modern recorder's geometry lane only
 	// (docs/DESIGN_GPU_RENDERER.md §13.9). Frame's classic replay leaves it off.
 	c.parallelRecord = true
-	c.recordFrame()
+	c.recordFrameNoAudio()
 	c.recordModelGeometry = wasRecordingGeometry
 	c.geometryOnlyModels = wasGeometryOnly
 	c.parallelRecord = wasParallel

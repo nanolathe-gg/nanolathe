@@ -1778,6 +1778,141 @@ capture byte-identical. Both battle captures are byte-identical at 180 and 720
 frames on every run, and M1–M8 are byte-identical to main on **both** renderers,
 which is the check that matters here because the recorder is shared.
 
+### 13.10 The record/submit pipeline (sixth round)
+
+§13.9 left Record at 2.3 ms and Submit at 4.6 ms over 720 frames, both on the
+game goroutine, one after the other, inside an 8.3 ms period. This round takes
+Record off that critical path entirely rather than making it smaller.
+
+**The idle window.** Ebitengine runs our Update and Draw on the game goroutine
+and encodes to the device on a render thread of its own. `Execute` only
+*enqueues*: the device's vertices are copied at enqueue, so by the time it
+returns the client's draw list and its scratch arenas are nobody's. With VSync
+on — the window and the benchmark both set it — the end-of-frame flush is then
+**synchronous**: after our Draw returns, the game goroutine sits in the flush
+and the swap until the next Update. At the Enhanced rate that idle window is
+the remainder of the period, several milliseconds, every frame.
+
+**The shape.** At the end of a modern Draw, after `Execute` and the screen
+blit, the client records the **next** frame on one persistent goroutine. The
+game goroutine joins that record before it touches client state again — at the
+top of Update, before input, and at the top of the next Draw. Recording is
+therefore never concurrent with anything: it owns the client for exactly the
+span the game goroutine spends in the window layer. The §13.9 worker pool runs
+inside it as before, so the pre-record is itself parallel.
+
+Nothing is double-buffered. The list, the point and surface arenas and the
+model scratch are reused in place, because the frame that used them has already
+been enqueued and copied.
+
+**When the pre-recorded list may be presented.** Only when it is the list a
+synchronous record would have produced at this Draw. That is decided by
+comparing a `PresentationInputs` digest taken at the launch against one taken
+at the Draw that would consume it. The digest is deliberately not a field list
+of everything the recorder reads — that list is most of the client and would
+drift out of date behind it. It is:
+
+- **the host's mutation epoch**, bumped once per window Update and once per
+  benchmark step, which is every point where the host writes client state:
+  input and its selection, hover, command page, minimap viewport, pointer
+  capture and focus; the simulation step and its publication; the camera the
+  scroll pass and the follow glide moved; the executor toggle;
+- **the committed frame**, by pointer identity and tick, as a cross-check on
+  the epoch;
+- **the two blend fractions of §13.5** and whether the camera's is set at all;
+- **the camera origin and its two stepped samples**, the surface size, and the
+  interpolation and Enhanced switches;
+- **the caption ring's producer and display cursors**, because the audio drain
+  is the one thing that runs on the game goroutine between a launch and the
+  Draw that consumes it, and the ring is what it writes that the recorder reads
+  [07 R-HUD-03 §14].
+
+A mismatch discards the list and records synchronously exactly as before.
+
+**What stayed on the game goroutine.** The audio step —
+`UpdateAudioViewportFromCamera` and `TickAudio` — is called from Draw on every
+presented frame whether the list was pre-recorded or not, so its cadence and
+its thread are unchanged [03 §8.3] C18. It moved *ahead* of the recording pass
+rather than into it: `recordFrame` is now the audio step followed by
+`recordFrameNoAudio`, and a pre-recorded list was recorded after the previous
+frame's drain rather than after this one's. That is why the ring cursors are in
+the digest — a drain that wrote a caption discards the pre-record. Resolving
+the blend fraction moved with it, into `ResolveTickFraction`, so the digest and
+the record read one sample of a wall-clock producer rather than two. The cursor
+blit stayed inside the recording pass: it reads the pointer sample, which the
+epoch covers.
+
+**What a discarded record must undo.** A recording pass writes presentation
+state, and a discarded one must not leave it advanced twice. Almost all of it
+is safe already: the list and arenas are reset by the next pass, the blended
+view is rebuilt from scratch, the lazy art caches are memos, and the trail
+layer and the feature animation cursors are both guarded against advancing
+twice within one committed tick. The exception is the presentation CRT the
+segmented projectile pass draws from, which is a stream; the launch snapshots
+it and a discard puts it back [03 §2.4.1][I4].
+
+**Predicting the fractions.** The benchmark knows the next frame exactly: the
+four-draw group's next fraction is `(phase+1)/4`, and the fourth draw of a
+group publishes a tick, so no pre-record is launched across it. Three of every
+four frames hit, the fourth records in place, and the comparison is **exact** —
+zero tolerance — so a measured frame is byte-identical to a synchronous record.
+
+The window predicts from the measured present interval: the camera fraction is
+where the next Draw will sit in the current Update, and the tick fraction is
+extrapolated at the nominal rate. A prediction that reaches the end of either
+declines — an Update rewrites client state, and a published tick is what a
+pre-record may never cross. Here the comparison carries a tolerance of 2048
+quanta, one thirty-second of a tick, and that tolerance is the pipeline's only
+presentation divergence. It is sized by two bounds: it is smaller than the
+producer's own resolution, since the battle's fraction comes from a millisecond
+source and moves in steps of about 1966 quanta at the nominal speed; and a
+subject that moved further than §13.5's snap bound in one tick is snapped
+rather than blended, so a thirty-second of a tick moves a blended subject by
+under a world pixel at any authored speed. The classic executor and `--shot`
+never launch a pre-record at all.
+
+**Measured** (1080p Ashap Plateau seed 7, `--benchmark-tps=120`, modern, six
+interleaved pairs per frame count, medians of the per-run medians; the
+untouched branch is the baseline, rebuilt for this round because unit
+supersampling had landed):
+
+| | 180 frames before | 180 after | 720 before | 720 after |
+|---|---|---|---|---|
+| Record (game goroutine) | 1.30 ms | 0.003 ms | 2.41 ms | 0.25 ms |
+| PreRecord (off the path) | — | 1.32 ms | — | 1.81 ms |
+| Submit | 2.95 ms | 3.00 ms | 4.87 ms | 4.89 ms |
+| Cadence | 8.34 ms | 8.33 ms | 9.92 ms | 9.00 ms |
+| On the 8.3 ms floor | 74% | 73% | 33% | 40% |
+| Pipeline hits | — | 75% | — | 75% |
+| Allocation | 1.1–1.6 MB, 8.0k objects | 1.3–1.6 MB, 8.0k objects | 1.90 MB, 12.6k objects | 1.85 MB, 12.6k objects |
+
+Record is gone from the critical path: on a hit it is the join, and the join is
+three microseconds because the record finished during the previous frame's
+flush. **Where that buys cadence depends on whether there was headroom to buy.**
+At 180 frames the scene is light, the run already sits on the 8.3 ms floor, and
+removing 1.3 ms of CPU changes nothing measurable — the on-floor share moves
+within the baseline's own run-to-run spread, which was 55–76% across six
+baseline runs. At 720 frames the battle is heavy and the cadence median falls
+0.9 ms with the on-floor share up eight points, consistently across all six
+pairs. Submit did not move.
+
+**Window hit rate is much lower than the benchmark's: 20%** over three thousand
+presented frames of a live skirmish. Roughly half the frames decline to launch
+because the predicted Draw would cross an Update, and most of the rest miss on
+the tick fraction, where the producer's millisecond quantisation puts the
+prediction in a neighbouring bucket. The benchmark's rate is the ceiling — it
+knows the next fraction rather than guessing it — and closing the window's gap
+means a finer fraction source, or a prediction that rounds to the producer's
+own quantisation, neither of which this round attempted.
+
+**Verification.** `battle.png` is byte-identical to the untouched branch at 180
+and 720 frames on every run, which is the check that matters: the benchmark's
+tolerance is zero, so any list presented from the pipeline was the list a
+synchronous record would have produced. M1–M8 are byte-identical to the
+baseline on **both** renderers. `go test -race` over the client and window
+packages is clean, and a race-built binary through a 180-frame modern benchmark
+reports no race and the same capture.
+
 ## 14. The detail view: 1.5× and 2× steps and load-time remaster
 
 ### 14.1 Decision

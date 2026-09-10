@@ -13,12 +13,31 @@ for directory in sys.argv[1:]:
     rows = data["rows"]
     print(f"\n{path}: {data['renderer']}; {len(rows)} measured frames")
     print(json.dumps(data["metadata"], sort_keys=True))
-    for key in ("Step", "Record", "CPURender", "Submit", "Cadence"):
+    for key in ("Step", "Record", "PreRecord", "CPURender", "Submit", "Cadence"):
         if key == "CPURender" and data["renderer"] == "modern":
             continue
-        values = sorted(row[key] for row in rows)
+        if key == "PreRecord" and not any(row.get("PreRecord") for row in rows):
+            continue
+        values = sorted(row.get(key, 0.0) for row in rows)
         print(f"{key:12} mean {statistics.mean(values):8.3f}  median {statistics.median(values):8.3f}  "
               f"p95 {values[min(len(values)-1, int(len(values)*.95))]:8.3f}  max {values[-1]:8.3f} ms")
+    # Record/submit pipeline (docs/DESIGN_GPU_RENDERER.md §13.10). A hit
+    # presented a list recorded on the pipeline goroutine during the previous
+    # frame's flush and present; PreRecord above is that record's own wall
+    # time, which is off the game goroutine's critical path. Record is the
+    # critical path: the join wait plus any synchronous re-record.
+    if any("Hit" in row for row in rows):
+        hits = sum(bool(row.get("Hit")) for row in rows)
+        hit_rows = [row for row in rows if row.get("Hit")]
+        miss_rows = [row for row in rows if not row.get("Hit")]
+        print(f"Pipeline: {hits}/{len(rows)} hits ({100*hits/len(rows):.0f}%), {len(miss_rows)} misses")
+        for label, subset in (("hit", hit_rows), ("miss", miss_rows)):
+            if not subset:
+                continue
+            for key in ("Record", "Cadence"):
+                values = sorted(row[key] for row in subset)
+                print(f"  {label:4} {key:9} median {statistics.median(values):8.3f}  p95 "
+                      f"{values[min(len(values)-1, int(len(values)*.95))]:8.3f} ms")
     tps = data.get("tps") or 30
     budget = 1000.0 / tps * 1.05
     on_cadence = sum(row["Cadence"] <= budget for row in rows)

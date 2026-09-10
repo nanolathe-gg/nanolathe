@@ -73,7 +73,23 @@ The seed fixes simulation streams; authored content, settings and code revision
 also matter. Camera origins and shake status are recorded with each census.
 
 - `Step`: host viewer step, including simulation and publication.
-- `Record`: draw preparation/recording; classic also includes CPU raster/replay.
+- `Record`: draw preparation/recording on the **game goroutine**; classic also
+  includes CPU raster/replay. At 120 TPS the modern path runs the record/submit
+  pipeline of docs/DESIGN_GPU_RENDERER.md §13.10, which records the next frame
+  during the previous frame's flush and present, so `Record` there is the wait
+  to join that record plus any synchronous re-record — microseconds on a hit,
+  the whole record on a miss. It is the critical-path figure either way, and
+  the one to compare against a run without the pipeline.
+- `PreRecord`: the wall time the consumed pre-record spent on the pipeline
+  goroutine, overlapped with the previous frame's flush. It is work that
+  happened, not work on the critical path: it is the number to compare against
+  an earlier run's `Record`, and it is absent from a run with no pipeline hits.
+- `Hit`: whether this frame presented a pre-recorded list. The report prints the
+  hit share and splits `Record` and `Cadence` by it. At 120 TPS the ceiling is
+  75% — the fourth draw of each group publishes a tick, which a pre-record may
+  not cross — so a lower share means predictions are missing, and a share of
+  zero means the pipeline is not running (30 and 60 TPS step on every draw, so
+  they never launch one).
 - `CPURender`: classic preparation plus raster/replay, excluding GPU upload.
 - `Submit`: CPU time issuing GPU execution/upload and final draw commands.
   It is not a GPU completion timestamp; do not add it to cadence as GPU work.

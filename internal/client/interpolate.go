@@ -51,6 +51,12 @@ func ClampTickFraction(f float32) float32 {
 	return float32(clampFraction16(f)) / float32(fractionOne)
 }
 
+// ClampTickFraction16 is the same narrowing in the 16.16 domain the pipeline's
+// predicted fractions are carried in, so a producer that knows the next frame's
+// fraction exactly — the benchmark's four-draw group — hands over the same
+// number SetTickFraction would store (§13.10).
+func ClampTickFraction16(f float32) int32 { return clampFraction16(f) }
+
 // SetTickFraction sets the fraction explicitly and makes that value win over
 // the Options.TickFraction producer for the rest of the run. The 120 TPS
 // benchmark is its caller: it drives the four fractions itself (§13.5), and a
@@ -79,10 +85,23 @@ func (c *Client) TickFraction() float32 {
 // is a position *between* two steps: the producer is the battle's own
 // millisecond source, un-floored, and the client only clamps what it returns.
 func (c *Client) sampleTickFraction() int64 {
+	return int64(c.ResolveTickFraction())
+}
+
+// ResolveTickFraction settles this frame's blend fraction from the producer and
+// returns it in the client's 16.16 domain. The record/submit pipeline calls it
+// before it builds a validity digest, so the number the digest compares and the
+// number the recording pass blends with are the same one — a producer read
+// twice would be two different wall-clock samples (§13.10). The recorder itself
+// calls it too, so a client that never uses the pipeline is unchanged.
+func (c *Client) ResolveTickFraction() int32 {
+	if c == nil {
+		return 0
+	}
 	if !c.tickFractionSet && c.opts.TickFraction != nil {
 		c.tickFraction16 = clampFraction16(c.opts.TickFraction())
 	}
-	return int64(c.tickFraction16)
+	return c.tickFraction16
 }
 
 // SetInterpolation selects the Enhanced blended view. Only the modern window

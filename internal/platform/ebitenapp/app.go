@@ -87,6 +87,10 @@ type app struct {
 	// one was presented. See RunOptions.MaxFPS.
 	presentInterval time.Duration
 	presentedAt     time.Time
+	// pipe is the record/submit pipeline's host state
+	// (docs/DESIGN_GPU_RENDERER.md §13.10). It is modern-only: the classic path
+	// never launches a pre-record and never joins one it did not launch.
+	pipe pipeline
 }
 
 // RunOptions are the window's host-side settings, none of which the client or
@@ -112,6 +116,13 @@ type RunOptions struct {
 // input pacing for menus and camera, and the session converts to sim ticks via
 // its own accumulator (wall-clock time never enters the sim, I6).
 func (a *app) Update() error {
+	// The pipeline's barrier. Everything below writes client state — input,
+	// focus, the step and its publication, the pointer mode, the executor swap
+	// — and none of it may run while the pre-record is still reading
+	// (docs/DESIGN_GPU_RENDERER.md §13.10). The bump that follows tells the
+	// pipeline those writes happened, so a record taken before them is stale.
+	a.c.JoinPreRecord()
+	a.c.BumpPresentationEpoch()
 	a.syncWindowSize()
 	sample := readInput(a.scaledInputNow())
 	if a.consumeFullscreenShortcut(&sample) {
@@ -129,6 +140,7 @@ func (a *app) Update() error {
 	if a.c.ExitRequested() {
 		a.c.SetPointerCaptured(false)
 		a.syncPointerCapture()
+		a.reportPipeline()
 		return ebiten.Termination
 	}
 	return nil
@@ -238,11 +250,17 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 	if a.gpu == nil {
 		a.gpu = gpurender.New(a.c.PaletteTables(), width, height)
 	}
+	// The pipeline's second barrier: this Draw is about to settle fractions,
+	// drain audio and either consume or replace the pre-recorded list, and none
+	// of that may overlap the record still running (§13.10).
+	a.c.JoinPreRecord()
+	now := time.Now()
+	period := a.pipe.observeDraw(now, a.presentInterval)
 	// How far this Draw is through the current Update, in updates: the camera's
 	// own fraction (§13.5). Before the first Update there is nothing to measure
 	// and the camera stays where it is.
 	if !a.updatedAt.IsZero() {
-		a.c.SetCameraFraction(float32(time.Since(a.updatedAt).Seconds() * presentationTPS))
+		a.c.SetCameraFraction(float32(now.Sub(a.updatedAt).Seconds() * presentationTPS))
 	}
 	if !a.interpolating {
 		// Enhanced is the one presentation path allowed to read two committed
@@ -252,13 +270,41 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 		a.c.SetEnhanced(true)
 		a.interpolating = true
 	}
-	list := a.c.RecordFrame()
+	// Audio stays here, on the game goroutine and once per presented frame,
+	// whether the list was pre-recorded or not [03 §8.3] C18. The caption ring
+	// it can write is in the pipeline's digest, so a drain that changed what
+	// the recorder reads discards the pre-record rather than presenting a list
+	// recorded before it (§13.10).
+	a.c.TickPresentationAudio()
+	tick16 := a.c.ResolveTickFraction()
+	list, hit := a.c.TakePreRecord(a.c.PresentationDigest(), client.PreRecordFractionTolerance)
+	switch {
+	case hit:
+		a.pipe.hits++
+	case a.pipe.armed:
+		a.pipe.misses++
+	default:
+		a.pipe.synchronous++
+	}
+	a.pipe.armed = false
+	if !hit {
+		list = a.c.RecordModernFrame()
+	}
 	a.gpu.SetDisplayPalette(a.c.DisplayPalette())
 	img := a.gpu.Execute(list, width, height)
 	if img == nil {
 		return
 	}
 	screen.DrawImage(img, &ebiten.DrawImageOptions{})
+	// Execute has enqueued this frame and copied what the device needs, so the
+	// list and the recorder's scratch are free again. Spend the flush and the
+	// swap that follow this Draw recording the next frame (§13.10).
+	a.pipe.observeTick(now, tick16)
+	a.reportPipelinePeriodically()
+	if nextTick16, nextCamera16, ok := a.pipe.predictNext(now, period, a.updatedAt, tick16); ok {
+		a.c.StartPreRecord(nextTick16, nextCamera16, true)
+		a.pipe.armed = true
+	}
 }
 
 // presentDue applies RunOptions.MaxFPS to one modern Draw. The screen is

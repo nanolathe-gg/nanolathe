@@ -14,6 +14,7 @@ import (
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/platform/gpurender"
 )
 
@@ -32,11 +33,20 @@ type BenchmarkOptions struct {
 	Metadata map[string]any
 }
 type benchmarkRow struct {
-	Frame                            int
+	Frame int
+	// Record is the recording's GAME-GOROUTINE cost: the wait to join an
+	// outstanding pre-record plus any synchronous re-record. With the
+	// record/submit pipeline off, or on a frame it declined, that is the whole
+	// record as before (docs/DESIGN_GPU_RENDERER.md §13.10).
 	Step, Record, Submit, Cadence    float64 // milliseconds; Submit is CPU submission, not GPU completion
 	CPUCompose, CPUReplay, CPURender float64
-	Stats                            gpurender.ModelStats
-	Census                           any
+	// PreRecord is the wall time the consumed pre-record spent on the pipeline
+	// goroutine, overlapped with the previous frame's flush and present, and
+	// Hit says this frame presented a pre-recorded list (§13.10).
+	PreRecord float64
+	Hit       bool
+	Stats     gpurender.ModelStats
+	Census    any
 }
 type battleBenchmark struct {
 	c             *client.Client
@@ -127,6 +137,13 @@ func (g *battleBenchmark) Draw(screen *ebiten.Image) {
 		return
 	}
 	g.pending = false
+	// The pipeline's barrier. The step below publishes a new committed frame
+	// and every later client call writes client state, so an outstanding
+	// pre-record is joined first; the wait itself is this frame's recording
+	// cost on the game goroutine (docs/DESIGN_GPU_RENDERER.md §13.10).
+	joinStart := time.Now()
+	g.c.JoinPreRecord()
+	join := benchmarkMS(joinStart)
 	if g.frame == 60 {
 		g.err = g.file("alloc-base.pprof", func(f *os.File) error { return pprof.Lookup("allocs").WriteTo(f, 0) })
 		if g.err != nil {
@@ -150,8 +167,10 @@ func (g *battleBenchmark) Draw(screen *ebiten.Image) {
 	}
 	start := time.Now()
 	step := 0.0
-	if phase, interpolated := g.tickPhase(); !interpolated {
+	phase, interpolated := g.tickPhase()
+	if !interpolated {
 		g.step()
+		g.c.BumpPresentationEpoch()
 		step = benchmarkMS(start)
 	} else {
 		// One authoritative step every fourth draw, then the four presented
@@ -160,6 +179,11 @@ func (g *battleBenchmark) Draw(screen *ebiten.Image) {
 		// does not produce.
 		if phase == 0 {
 			g.step()
+			// The step is the benchmark's whole client mutation: it publishes
+			// the committed frame the recorder reads, and there is no input
+			// here. Every other draw leaves client state exactly as the
+			// pipeline's last pre-record found it (§13.10).
+			g.c.BumpPresentationEpoch()
 			step = benchmarkMS(start)
 		}
 		g.c.SetTickFraction(float32(phase) / float32(benchmarkStepEvery))
@@ -171,11 +195,24 @@ func (g *battleBenchmark) Draw(screen *ebiten.Image) {
 	}
 	g.last = now
 	start = time.Now()
-	var record, compose, replay float64
+	var record, compose, replay, preRecord float64
+	var hit bool
 	var stats gpurender.ModelStats
 	if g.gpu != nil {
-		list := g.c.RecordFrame()
-		record = benchmarkMS(start)
+		// The pipeline consumes the pre-recorded list only when it is exactly
+		// the list this frame's synchronous record would produce: the tolerance
+		// is zero here, so a measured frame is byte-identical to one recorded
+		// in place (§13.10).
+		g.c.TickPresentationAudio()
+		g.c.ResolveTickFraction()
+		var list *drawlist.List
+		list, hit = g.c.TakePreRecord(g.c.PresentationDigest(), 0)
+		if hit {
+			preRecord = float64(g.c.PreRecordNanos()) / 1e6
+		} else {
+			list = g.c.RecordModernFrame()
+		}
+		record = join + benchmarkMS(start)
 		start = time.Now()
 		g.gpu.SetDisplayPalette(g.c.DisplayPalette())
 		g.img = g.gpu.Execute(list, 1920, 1080)
@@ -190,9 +227,17 @@ func (g *battleBenchmark) Draw(screen *ebiten.Image) {
 	screen.DrawImage(g.img, nil)
 	submit := benchmarkMS(start)
 	if g.frame >= 60 {
-		g.rows = append(g.rows, benchmarkRow{Frame: g.frame, Step: step, Record: record, Submit: submit, Cadence: cadence, CPUCompose: compose, CPUReplay: replay, CPURender: compose + replay, Stats: stats, Census: g.census()})
+		g.rows = append(g.rows, benchmarkRow{Frame: g.frame, Step: step, Record: record, Submit: submit, Cadence: cadence, CPUCompose: compose, CPUReplay: replay, CPURender: compose + replay, PreRecord: preRecord, Hit: hit, Stats: stats, Census: g.census()})
 	}
 	g.frame++
+	// Execute has enqueued the frame and the device has its vertices, so the
+	// list and the recorder's scratch are free. Record the next frame while
+	// this Draw's flush, swap and VSync wait run (§13.10). Only the three
+	// non-stepping draws of an interpolated group qualify: the fourth publishes
+	// a new committed tick, which is precisely what a pre-record may not cross.
+	if g.gpu != nil && interpolated && phase+1 < benchmarkStepEvery {
+		g.c.StartPreRecord(client.ClampTickFraction16(float32(phase+1)/float32(benchmarkStepEvery)), 0, false)
+	}
 }
 
 // BattleBenchmark runs one authoritative step per draw. It exercises production
