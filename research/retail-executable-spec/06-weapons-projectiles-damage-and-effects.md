@@ -1354,7 +1354,7 @@ are:
 | `0x400` | a successful non-`commandfire` shot (§4.2) |
 | `0x800` | a successful `commandfire` shot (§4.2) |
 | `0x1000` | **could not fire**: the slot pipeline when the shot-time physical gate of §3.3 fails (reload was zero, so a shot was attempted), and the turret executor when its aim geometry yields no solution (the latter also clears the Aim latch) |
-| `0x2000`, `0x4000` | the damage-reaction site's feedback bits (`[R-WPN-04 §2]`) |
+| `0x2000`, `0x4000` | the direct-impact and area-damage shooter-feedback helper (§9.4), selected from friendly/enemy nominal totals |
 | `0x8000` | the under-construction wait (`[04 R-ORD-01 §0]`) |
 
 **Who clears it.** Three sites, and nothing else:
@@ -4200,22 +4200,38 @@ signedness provided it wraps as a byte.
 
 ### 9.4 Impulse and pushing absence
 
-**Established fact:** No blast path writes a unit impulse or shove field. The
-blast tail calls a shooter-feedback
-helper that sets one of two status bits on the SHOOTER unit —
-`friendlyTotal × 2 < enemyTotal` sets bit 6, otherwise bit 5 — and that status
-byte has no reader anywhere in the bounded corpus. The direct-target shortcut
-calls the same helper with the single amount masked to 16 bits placed in the
-enemy or friendly slot according to the same side comparison. There is no
-impulse or shove field, and no bounded reads turn any blast output into
-movement, mass-weighted pushing, or a separate collision resolver. The
-`impulsefactor` and `impulseboost` keys do not exist in the image at all
-(`[R-WPN-01 §9]`).
+**Established:** No blast path writes a unit impulse or shove field. The
+blast tail instead publishes feedback to the non-null shooter through the
+same 16-bit order-event word the primary order pump consumes
+(`[R-WPN-05 §6]`, `[04 §3.3]`). The earlier claim that this was a separate
+write-only status byte was incorrect: the byte writes update the high half of
+that shared word.
 
-**Supported inference:** A clean-room implementation should not add blast
-displacement or mass-weighted push behavior. The shooter-status byte is
-write-only in the bounded corpus; it may feed presentation or an unrecovered
-consumer.
+**Established — amounts and classification.** After each area recipient's
+damage call, add its returned **signed nominal amount** to the friendly total
+when the projectile's stored side equals the victim's owner, or to the enemy
+total otherwise. These amounts precede packet narrowing and recipient armor
+or veterancy scaling; they are not health actually lost. Both totals begin at
+zero and additions wrap at 32 bits. Features contribute neither total. The
+direct-target shortcut uses the same side comparison but masks its one nominal
+amount to an **unsigned 16-bit** value before placing it in the corresponding
+total; the other total is zero.
+
+**Established — publication.** Double the friendly total with 32-bit wrap,
+then compare both sides as signed 32-bit integers: `enemy > 2 * friendly`
+ORs `0x4000` into the shooter's pending order events; equality and every other
+outcome OR `0x2000`. Thus an empty admitted area impact produces `0x2000` when
+its shooter reference is non-null. The direct shortcut publishes after its
+recipient call; the area path publishes after its recipient traversal and
+nested interceptor impacts. A null shooter produces no feedback. The bits
+remain until the ordinary pump consumes them or a target setter clears them,
+as detailed in `[R-WPN-05 §6]`; attack handlers receive them in their satisfied
+sets (`[04 R-ORD-01 §3]`).
+
+**Established:** This feedback does not add blast displacement or mass-weighted
+pushing. No blast output feeds a separate collision resolver, and the
+`impulsefactor` and `impulseboost` keys do not exist in the image
+(`[R-WPN-01 §9]`).
 
 ## 10. Paralyzer behavior
 

@@ -244,8 +244,8 @@ func TestUnitReclaimCadenceDefersFatalRefund(t *testing.T) {
 	if deaths != 1 || extras != 1 {
 		t.Fatalf("death observers duplicated at finalization primary=%d extra=%d", deaths, extras)
 	}
-	if factory.Pending&InterruptStop == 0 || factoryNode.Target != 0 {
-		t.Fatalf("finalizer target release pending/target=%#x/%d, want stop interrupt and null target", factory.Pending, factoryNode.Target)
+	if factoryNode.Satisfied&InterruptStop == 0 || factory.Pending != 0 || factoryNode.Target != 0 {
+		t.Fatalf("finalizer target release record/unit pending=%#x/%#x target=%d, want record stop interrupt and null target", factoryNode.Satisfied, factory.Pending, factoryNode.Target)
 	}
 }
 

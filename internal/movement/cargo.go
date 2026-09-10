@@ -54,8 +54,8 @@ const attachModeUnchanged = -1
 const attachModeOrdinary = 0
 
 // AttachCargo attaches cargo to carrier on piece [04 §10.2] load phase 4.
-// It updates both sides: cargo.Carrier = carrier, carrier.Cargo appends cargo.
-// Piece -1 is root fallback [04 §5.3][04 §10.2]. Cargo must not already be carried.
+// It updates both sides and unlinks a previous carrier before head insertion.
+// Piece -1 is root fallback [04 §5.3][04 §10.2].
 // Carrier must have live mover and canfly per gate [04 §10.2] but this helper does not re-check gates.
 //
 // This is the ordinary attach, so it carries request mode 0 [04 R-AIR-01 §9];
@@ -82,24 +82,24 @@ func AttachCargoMode(w *units.World, carrierHandle, cargoHandle pool.Handle, pie
 	if carrier == nil || cargo == nil || !carrier.Alive || !cargo.Alive || cargo.Dying {
 		return false
 	}
-	// The shared commit accepts an empty carrier field and the same carrier
-	// only. A carrier that is itself cargo and a cargo that carries another
-	// unit are rejected before the relink event is applied [04 R-COB-03 §5].
-	if carrier.Attachment.Carrier != 0 || len(cargo.Attachment.Cargo) != 0 ||
-		(cargo.Attachment.Carrier != 0 && cargo.Attachment.Carrier != carrierHandle) {
+	// The shared commit permits transfer between carriers. Only the COB
+	// adapter requires an empty or same-carrier reference [04 R-COB-03 §5].
+	if carrier.Attachment.Carrier != 0 || len(cargo.Attachment.Cargo) != 0 {
 		return false
 	}
 
-	// Reattaching to the same carrier is a relink, so remove the existing
-	// entry before the prescribed head insertion. This retains one list entry
-	// and makes its new piece/mode visible at the head [04 R-COB-03 §5].
-	linked := carrier.Attachment.Cargo[:0]
-	for _, h := range carrier.Attachment.Cargo {
-		if h != cargoHandle {
-			linked = append(linked, h)
+	// Unlink from the old carrier before the new head insertion. A loaded
+	// lander uses this same commit to transfer cargo onto a pad, and same-
+	// carrier attachment moves the existing entry to the head [04 R-COB-03 §5].
+	if previous := w.Unit(cargo.Attachment.Carrier); previous != nil {
+		linked := previous.Attachment.Cargo[:0]
+		for _, h := range previous.Attachment.Cargo {
+			if h != cargoHandle {
+				linked = append(linked, h)
+			}
 		}
+		previous.Attachment.Cargo = linked
 	}
-	carrier.Attachment.Cargo = linked
 	cargo.Attachment.Carrier = carrierHandle
 	// The event stores one byte and the carried-side locator sign-extends it
 	// [04 R-FAC-02 §1].
@@ -705,9 +705,16 @@ func IsCarried(w *units.World, h pool.Handle) bool {
 // operands are narrowed by the session before this method is called
 // [04 R-COB-03 §5].
 func (s *System) ScriptAttachCargo(w *units.World, carrierHandle, cargoHandle pool.Handle, piece, mode int) bool {
+	if s == nil || w == nil {
+		return false
+	}
+	cargo := w.Unit(cargoHandle)
+	if cargo == nil || (cargo.Attachment.Carrier != 0 && cargo.Attachment.Carrier != carrierHandle) {
+		return false // the opcode's admission gate, before shared commit [04 R-COB-03 §5]
+	}
 	// Narrow before the shared helper so a script value of -1 cannot name
 	// its host-only unchanged-mode sentinel [04 R-COB-03 §5].
-	return s != nil && AttachCargoMode(w, carrierHandle, cargoHandle, piece, mode&3)
+	return AttachCargoMode(w, carrierHandle, cargoHandle, piece, mode&3)
 }
 
 // ScriptDropCargo applies a COB drop opcode. The release validates the cargo's

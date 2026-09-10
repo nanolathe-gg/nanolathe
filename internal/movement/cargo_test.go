@@ -7,6 +7,31 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
+func TestSharedCargoTransferPreservesScriptAdmission(t *testing.T) {
+	sys, w, carrier := airFixture(t)
+	pad := spawnAirBasePadFor(t, w, sys.Terrain, "transferpad", carrier.Owner, carrier.X, carrier.Z)
+	h, err := w.Create(defForCargo("transfercargo", 1), carrier.Owner, carrier.X, carrier.Y, carrier.Z)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cargo := w.Unit(h)
+	if !AttachCargo(w, carrier.Handle, h, 1) {
+		t.Fatal("initial attachment failed")
+	}
+	if sys.ScriptAttachCargo(w, pad.Handle, h, 2, 0) {
+		t.Fatal("COB adapter must reject cargo on another carrier [04 R-COB-03 §5]")
+	}
+	if cargo.Attachment.Carrier != carrier.Handle || len(carrier.Attachment.Cargo) != 1 {
+		t.Fatal("rejected script attachment changed the previous link")
+	}
+	if !AttachCargo(w, pad.Handle, h, 2) {
+		t.Fatal("shared commit must transfer cargo from its previous carrier [04 R-COB-03 §5]")
+	}
+	if len(carrier.Attachment.Cargo) != 0 || len(pad.Attachment.Cargo) != 1 || pad.Attachment.Cargo[0] != h || cargo.Attachment.Carrier != pad.Handle || cargo.Attachment.AttachPiece != 2 {
+		t.Fatal("transfer did not unlink old carrier and relink at new head [04 R-COB-03 §5]")
+	}
+}
+
 func TestScriptCargoCommitRelinksSameCarrierAndDropsAtCurrentPosition(t *testing.T) {
 	terrain := syntheticFlat(32, 32)
 	grid := NewOccupancyGrid()

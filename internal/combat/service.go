@@ -501,6 +501,14 @@ func (s *Service) firePreparedSlot(u *units.Unit, slot *units.Slot, idx int, pre
 			slot.Ammo--
 		}
 	} else {
+		// The successful executor wakes the order that owns this shot. The
+		// event precedes reload/debit and excludes stockpile launches
+		// [06 §4.2][06 R-WPN-05 §6].
+		if weapon.CommandFire {
+			u.Pending |= 0x800
+		} else {
+			u.Pending |= 0x400
+		}
 		slot.Reload = int32(int16(ComputeStoredReload(u.Health, u.MaxHealth, u.Kills, weapon.ReloadTime)))
 		if econ != nil && (weapon.EnergyPerShot != 0 || weapon.MetalPerShot != 0) {
 			economy.ImmediateDebit(&econ.Players[u.Owner], econ.UnitBuckets(u.Handle), float32(weapon.EnergyPerShot), float32(weapon.MetalPerShot))
@@ -1977,7 +1985,11 @@ func handleProjectileImpact(s *Service, h pool.Handle, p *Projectile, weapon *co
 		}
 	}
 	s.emitEvent(Event{Kind: EventProjectileImpact, Tick: tick, Source: p.Shooter, Target: directUnit, Position: p.Pos})
-	applyProjectileDamage(s, p, weapon, w, terrain, tick, directUnit)
+	feedback := applyProjectileDamage(s, p, weapon, w, terrain, tick, directUnit)
+	directFeedback := directUnit != 0 && weapon.AreaOfEffect <= 16
+	if directFeedback {
+		feedback.publish(w)
+	}
 	// Projectile victims are swept after ordinary area recipients, before tail
 	// compaction, and each takes this same central selector [06 §11.2].
 	if weapon.Interceptor && catalog != nil {
@@ -1997,12 +2009,15 @@ func handleProjectileImpact(s *Service, h pool.Handle, p *Projectile, weapon *co
 			impactProjectile(s, victim, &s.Records[i], vw, w, terrain, featSvc, econ, catalog, tick, wind, simRNG, 0)
 		}
 	}
+	if !directFeedback {
+		feedback.publish(w) // after nested interceptor impacts [06 §9.4]
+	}
 	_ = wind
 }
 
-func applyProjectileDamage(service *Service, p *Projectile, weapon *content.WeaponDef, w *units.World, terrain *world.Terrain, tick uint32, directUnit pool.Handle) {
+func applyProjectileDamage(service *Service, p *Projectile, weapon *content.WeaponDef, w *units.World, terrain *world.Terrain, tick uint32, directUnit pool.Handle) impactFeedback {
 	if w == nil || weapon == nil {
-		return
+		return impactFeedback{}
 	}
 	// Gate 1 of the central impact routine [06 §9.1][06 R-DMG-01 §9]: the
 	// damage gate is a property of the PROJECTILE's own side, not of the
@@ -2014,27 +2029,28 @@ func applyProjectileDamage(service *Service, p *Projectile, weapon *content.Weap
 	// of [06 §9.1] steps 4 and 5 have already been emitted by the caller and
 	// are unaffected.
 	if !service.DamageRoutingAdmitted(p.ShooterSide) {
-		return
+		return impactFeedback{}
 	}
+	feedback := impactFeedback{shooter: p.Shooter}
 	if directUnit != 0 && weapon.AreaOfEffect <= 16 {
 		victim := w.Unit(directUnit)
 		if victim != nil {
-			applyDamageToUnit(service, victim, p, weapon, 1.0, 0, w, tick)
+			feedback.add(int32(uint16(applyDamageToUnit(service, victim, p, weapon, 1.0, 0, w, tick))), p.ShooterSide == victim.Owner)
 		}
-		return
+		return feedback
 	}
 	radius := BlastRadius(weapon.AreaOfEffect)
 	if radius <= 0 {
 		if directUnit != 0 {
 			if victim := w.Unit(directUnit); victim != nil {
-				applyDamageToUnit(service, victim, p, weapon, 1.0, 0, w, tick)
+				feedback.add(int32(uint16(applyDamageToUnit(service, victim, p, weapon, 1.0, 0, w, tick))), p.ShooterSide == victim.Owner)
 			}
 		}
-		return
+		return feedback
 	}
 	// Shared area splash: EnumerateArea→DistanceToBox→Falloff→ApplyDamage [06 §9.3]
 	// Extracted to ExplodeWeaponAt for death DoExplosion reuse [06 §12.1] C22–C25 (I1, I2)
-	service.explodeWeaponAt(w, terrain, weapon, p.Pos, p.Shooter, p.ShooterSide, tick)
+	return service.explodeWeaponAt(w, terrain, weapon, p.Pos, p.Shooter, p.ShooterSide, tick)
 }
 
 // impactCellIsWater uses the contacted plot's neighbourhood maximum byte, the
@@ -2063,6 +2079,35 @@ func emitWaterCrossing(s *Service, h pool.Handle, p *Projectile, weapon *content
 	s.emitEvent(Event{Kind: EventWaterExplosion, Tick: tick, Source: p.Shooter, Target: h, Position: p.Pos, Graphic: graphic, Bank: bank, HasCalculatedFlash: true, CalculatedTable: impactFlashTable, Smoke: weapon.StartSmoke})
 }
 
+// impactFeedback accumulates signed nominal amounts before packet narrowing
+// or recipient scaling. Sums and the doubled friendly total wrap at 32 bits;
+// only the direct-hit caller narrows its amount to uint16 [06 §9.4].
+type impactFeedback struct {
+	shooter         pool.Handle
+	enemy, friendly int32
+}
+
+func (f *impactFeedback) add(amount int32, friendly bool) {
+	if friendly {
+		f.friendly += amount
+	} else {
+		f.enemy += amount
+	}
+}
+
+func (f impactFeedback) publish(w *units.World) {
+	if w == nil || f.shooter == 0 {
+		return
+	}
+	if shooter := w.RawUnitRecord(f.shooter); shooter != nil {
+		if f.enemy > f.friendly*2 {
+			shooter.Pending |= 0x4000
+		} else {
+			shooter.Pending |= 0x2000
+		}
+	}
+}
+
 // ExplodeWeaponAt applies area damage without central-impact presentation.
 // The feature burn-weapon producer uses this entry; pooled and stack impacts
 // reach the same area walk after their effects [05 R-FEAT-01 §11][06 §9.3].
@@ -2073,20 +2118,22 @@ func (s *Service) ExplodeWeaponAt(w *units.World, terrain *world.Terrain, weapon
 	if attacker := w.Unit(shooter); attacker != nil {
 		shooterSide = attacker.Owner
 	}
-	s.explodeWeaponAt(w, terrain, weapon, impact, shooter, shooterSide, tick)
+	feedback := s.explodeWeaponAt(w, terrain, weapon, impact, shooter, shooterSide, tick)
+	feedback.publish(w)
 }
 
 // explodeWeaponAt is the shared area recipient walk. The central impact
 // record carries the shooter-side byte separately from the shooter identity,
 // so a stack death record can route with its dying owner's side while retaining
 // its null shooter provenance [06 §12.2][06 §9.1].
-func (s *Service) explodeWeaponAt(w *units.World, terrain *world.Terrain, weapon *content.WeaponDef, impact Vec3, shooter pool.Handle, shooterSide uint8, tick uint32) {
+func (s *Service) explodeWeaponAt(w *units.World, terrain *world.Terrain, weapon *content.WeaponDef, impact Vec3, shooter pool.Handle, shooterSide uint8, tick uint32) impactFeedback {
 	if w == nil || weapon == nil {
-		return
+		return impactFeedback{}
 	}
+	feedback := impactFeedback{shooter: shooter}
 	radius := BlastRadius(weapon.AreaOfEffect) // [06 §9.3] unsigned area>>1
 	if radius <= 0 {
-		return
+		return feedback
 	}
 	var mapW, mapH int32
 	if terrain != nil {
@@ -2192,7 +2239,7 @@ func (s *Service) explodeWeaponAt(w *units.World, terrain *world.Terrain, weapon
 					falloff = Falloff(float32(dist), float32(radius), float32(weapon.EdgeEffectiveness)) // [06 §9.3] float32
 				}
 				p := &Projectile{Pos: impact, Shooter: shooter, ShooterSide: shooterSide}
-				applyDamageToUnit(s, u, p, weapon, falloff, dist, w, tick)
+				feedback.add(applyDamageToUnit(s, u, p, weapon, falloff, dist, w, tick), shooterSide == u.Owner)
 			}
 		}
 		// Discover the feature after both unit hits have completed, before
@@ -2242,9 +2289,10 @@ func (s *Service) explodeWeaponAt(w *units.World, terrain *world.Terrain, weapon
 				continue
 			}
 			p := &Projectile{Pos: impact, Shooter: shooter, ShooterSide: shooterSide}
-			applyDamageToUnit(s, u, p, weapon, 1, 0, w, tick)
+			feedback.add(applyDamageToUnit(s, u, p, weapon, 1, 0, w, tick), shooterSide == u.Owner)
 		}
 	}
+	return feedback
 }
 
 // ParalyzeTaskPush is the seam a kind-2 packet reaches the victim's primary
@@ -2377,20 +2425,22 @@ func (s *Service) weaponDamageNominal(weapon *content.WeaponDef, victim *units.U
 	return weaponNominal(SelectBaseDamage(weapon, name), falloff, attackerKills, rawAttacker != nil, s != nil && s.doubleShot, s != nil && s.halfShot)
 }
 
-func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weapon *content.WeaponDef, falloff float32, distance int32, w *units.World, tick uint32) {
+func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weapon *content.WeaponDef, falloff float32, distance int32, w *units.World, tick uint32) int32 {
 	if service == nil || victim == nil || p == nil || weapon == nil || w == nil {
-		return
+		return 0
 	}
 	cause := KindOrdinary
 	if weapon.Paralyzer {
 		cause = KindParalyzer
 	}
+	nominal := service.weaponDamageNominal(weapon, victim, w.RawUnitRecord(p.Shooter), falloff)
 	service.AcceptDamage(w, tick, DamageInput{
 		Victim: victim.Handle, Attacker: p.Shooter,
-		Nominal:   service.weaponDamageNominal(weapon, victim, w.RawUnitRecord(p.Shooter), falloff),
+		Nominal:   nominal,
 		Direction: hitDirectionByte(p, victim), Kind: cause,
 	})
 	_ = distance
+	return nominal
 }
 
 // impactArt selects the explosion-art holder one impact draws from

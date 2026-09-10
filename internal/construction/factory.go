@@ -387,6 +387,11 @@ func (s *Service) constructionWakeVisit(builder *units.Unit, node *orders.Node, 
 		}
 		return s.unitReclaimVisit(builder, node, satisfied, tick), true
 	}
+	if isMobileBuild(node.ID) {
+		if code, handled := s.mobileBuildInterrupt(builder, node, satisfied); handled {
+			return code, true
+		}
+	}
 	if isBuildOrderID(node.ID) {
 		if satisfied&InterruptCancel != 0 {
 			s.handleCancelCurrent(builder, node, tick)
@@ -406,6 +411,25 @@ func (s *Service) constructionWakeVisit(builder *units.Unit, node *orders.Node, 
 		return s.mobileBuildWakeVisit(builder, node, satisfied, tick)
 	}
 	return 0, false
+}
+
+// mobileBuildInterrupt keeps the ground and air mobile rows' terminal wakes
+// separate from the factory refund/kill and counted restart bodies
+// [04 R-ORD-01 §5][04 R-ORD-02 §2]. Their abandoned nanoframes remain for GetBuilt.
+func (s *Service) mobileBuildInterrupt(builder *units.Unit, node *orders.Node, satisfied uint32) (orders.Code, bool) {
+	code := orders.Code(5)
+	if satisfied&InterruptCancel == 0 {
+		if satisfied&InterruptStop == 0 {
+			return 0, false
+		}
+		s.raiseStatus(builder, statusCant, "Construction terminated")
+		code = 8
+	}
+	if s.OnRefresh != nil {
+		s.OnRefresh(builder)
+	}
+	delete(s.builderLinks, node.Target)
+	return code, true
 }
 
 // TickContext carries per-tick shared services for unit-local stepping (ON-02).
@@ -950,8 +974,8 @@ func (s *Service) NotifyProductRemoved(product pool.Handle) bool {
 	if node == nil {
 		return false
 	}
-	builder.Pending |= InterruptStop // the notice's event code IS a pending bit [04 R-ORD-01 §6]
-	node.BindTarget(0)               // "then unlinks the reference"
+	node.Satisfied |= InterruptStop // the notice belongs to this observing record [04 R-ORD-01 §6]
+	node.BindTarget(0)              // "then unlinks the reference"
 	return true
 }
 
@@ -1000,6 +1024,10 @@ func (s *Service) DeliverCancelNotice(owner *units.Unit, node *orders.Node, tick
 	}
 	if !isBuildOrderID(node.ID) {
 		return false
+	}
+	if isMobileBuild(node.ID) {
+		_, handled := s.mobileBuildInterrupt(owner, node, InterruptCancel)
+		return handled
 	}
 	s.handleCancelCurrent(owner, node, tick)
 	return true
@@ -1076,6 +1104,14 @@ func (s *Service) Pump(factory *units.Unit, tick uint32) {
 		return
 	}
 	// Interrupt masks tested before state machine with cancel-current first [05].
+	if isMobileBuild(head.ID) && factory.Pending&(InterruptCancel|InterruptStop) != 0 {
+		satisfied := factory.Pending & (InterruptCancel | InterruptStop)
+		factory.Pending &^= satisfied
+		s.mobileBuildInterrupt(factory, head, satisfied)
+		head.DynamicGate = 0
+		s.removeHead(factory, head)
+		return
+	}
 	if factory.Pending&InterruptCancel != 0 {
 		factory.Pending &^= InterruptCancel
 		s.handleCancelCurrent(factory, head, tick)

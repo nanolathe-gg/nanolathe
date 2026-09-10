@@ -95,6 +95,12 @@ func (s *Service) handleState1(factory *units.Unit, node *orders.Node, tick uint
 		s.handleMobileApproach(factory, node, tick)
 		return
 	}
+	// The ordinary order pump clears this gate only after a script event or
+	// cancellation wakes the record. StepUnit must not bypass that wait by
+	// polling its level on every visit [04 §3.3][04 R-COB-06].
+	if node.DynamicGate != 0 {
+		return
+	}
 	// State 1 is deliberately a level test with no timeout [05][R-P0-10].
 	if factory.InBuildStance {
 		node.Phase = uint8(State2)
@@ -107,9 +113,10 @@ func (s *Service) handleState1(factory *units.Unit, node *orders.Node, tick uint
 		s.handleState2(factory, node, tick)
 		return
 	}
-	// Otherwise waits with wake bit 2 [05].
-	node.DynamicGate = WakeBit2
-	node.Deadline = int32(tick + 1)
+	// INBUILDSTANCE with cancel-current as its extra bit, and no deadline
+	// [04 R-ORD-01 §1][04 R-ORD-01 §5].
+	node.DynamicGate = InterruptCancel | units.PendingScriptTouched
+	node.Deadline = -1
 }
 
 // isMobileBuild reports whether id is a mobile build descriptor [P0-I05][04 §3.1].
@@ -400,6 +407,12 @@ func (s *Service) handleMobileState2(builder *units.Unit, node *orders.Node, tic
 	if err != nil {
 		s.logMessage(ErrLimitMessage)
 		s.raiseStatus(builder, statusCant, ErrLimitMessage) // [04 R-ORD-01 §5]
+		// The air row abandons on allocation refusal; only the ground row
+		// holds for 300 ticks [04 R-ORD-02 §2][04 R-ORD-01 §5].
+		if node.ID == vtolMobileBuildRow {
+			s.removeHead(builder, node)
+			return
+		}
 
 		node.DynamicGate = WakeBit2
 		node.Deadline = int32(tick + 300)

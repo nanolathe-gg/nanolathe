@@ -1,6 +1,9 @@
 package movement
 
-import "github.com/nanolathe-gg/nanolathe/internal/pool"
+import (
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
+)
 
 // AirExecutorSnapshot is a read-only copy of the movement-side air executor
 // state for one unit [04 R-AIR-01 §1]. It exists so a diagnostic harness can
@@ -21,8 +24,15 @@ type AirExecutorSnapshot struct {
 // Bound field means the mover tick has never dispatched an air executor for
 // that unit.
 func (s *System) AirExecutorState(h pool.Handle) AirExecutorSnapshot {
-	if s == nil || s.airOrders == nil {
+	if s == nil {
 		return AirExecutorSnapshot{}
+	}
+	if u := s.unitFor(h); u != nil {
+		if n := airHeadFor(u); n != nil && n.ID == orders.Lookup("VTOL_Landing") {
+			return AirExecutorSnapshot{Bound: true, HasOrder: true, Phase: n.Phase,
+				Waiting: n.DynamicGate != 0, Arrived: n.Satisfied&0x20 != 0,
+				PadPiece: uint16(n.Param1), Bearing: uint16(n.Param1)}
+		}
 	}
 	st := handleRow(s.airOrders, h)
 	if st == nil {
@@ -34,7 +44,6 @@ func (s *System) AirExecutorState(h pool.Handle) AirExecutorSnapshot {
 		Waiting:  st.waiting,
 		Arrived:  st.arrived,
 		Done:     st.done,
-		PadPiece: st.padPiece,
 		Bearing:  st.bearing,
 		HasOrder: st.order != nil,
 	}

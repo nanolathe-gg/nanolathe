@@ -331,6 +331,11 @@ func pickFeatureTournament(u *units.Unit, list []FeatureView, metal bool) (Featu
 	return list[best], true
 }
 
+// spawnPatrolRepair is the repair issuer's force-zero entry: both patrol
+// callers use that form, while the researched nonzero-force form refuses
+// outright. Hold position and maneuver insert a return move beneath the
+// assist, roam inserts the assist alone, and stance 3 refuses
+// [04 R-STANCE-01 §4].
 func spawnPatrolRepair(u *units.Unit, target *units.Unit, tick uint32) bool {
 	if u == nil || target == nil {
 		return false
@@ -343,7 +348,25 @@ func spawnPatrolRepair(u *units.Unit, target *units.Unit, tick uint32) bool {
 	if q == nil {
 		return false
 	}
-	q.PushHead(id, NewNodeForOrder(id, target.Handle, target.X, target.Y, target.Z, tick, u.Handle, false))
+	move := u.Flags >> stanceMoveShift & stanceFieldMask
+	if move == 3 {
+		return false
+	}
+	node := NewNodeForOrder(id, target.Handle, target.X, target.Y, target.Z, tick, u.Handle, false)
+	if move < 2 {
+		if moveID := Resolve(2, u, nil, &ResolvePos{X: u.X, Y: u.Y, Z: u.Z}); moveID != 0 {
+			q.PushHead(moveID, NewNodeForOrder(moveID, 0, u.X, u.Y, u.Z, tick, u.Handle, false))
+		}
+		// The two source fields deliberately have different extension rules
+		// before storage in the general parameter [04 R-STANCE-01 §4].
+		if move == 0 {
+			node.Param3 = uint32(int32(int16(u.Def.SightDistance)))
+		} else {
+			node.Param3 = uint32(uint16(u.Def.ManeuverLeashLength))
+		}
+		node.GuardX, node.GuardY = int16(u.X.Raw()>>16), int16(u.Z.Raw()>>16)
+	}
+	q.PushHead(id, node)
 	return true
 }
 

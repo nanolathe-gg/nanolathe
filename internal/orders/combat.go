@@ -917,15 +917,10 @@ func scanRegistryAroundPoint(u *units.Unit, x, z numeric.Fixed, radius int32) []
 // against a target*, not "cached goal valid". §16 also adds the successor gate
 // to step 2, which the earlier text stated unconditionally.
 //
-// Step 2's "the target reference is null" is a target that HAS SINCE GONE:
-// [04 §3.1]'s record constructor clears static bit 9 when the record is built
-// with no target unit at all, so such a record never seeks. This build's record
-// keeps its target handle when the target dies and resolves it per visit, so
-// the two cases separate on the handle rather than on the mask bit: a handle
-// that no longer resolves is §16's null reference, and a record built with no
-// target (handle zero) is the constructor-cleared case that must NOT seek. The
-// handle test is therefore what stands in for the constructor's clear here; it
-// becomes redundant, not wrong, if the record constructor ever applies it.
+// Step 2 distinguishes a lost target from an order issued without one using
+// static bit 9 alone. Removal clears the observer link but retains that bit;
+// a movement-only gate can then reach this fallback on arrival without passing
+// the removal event to step 1 [04 R-MOV-03 §7][04 R-AIR-01 §16].
 //
 // Off-map recovery is owned by the movement runner's marker family [04
 // R-AIR-01 §5]. The queue-side entry performs the shared record checks first;
@@ -944,7 +939,7 @@ func airEntry(u *units.Unit, n *Node, satisfied uint32, interruptMask uint32) (C
 	if tgt == nil {
 		// Step 2: with the target gone, the seek starts from the unit's own
 		// position and carries no target [04 R-AIR-01 §16].
-		if n.Target != 0 && n.StaticGate&staticTargetObserver != 0 && !hasSuccessor(u, n) && u != nil {
+		if n.StaticGate&staticTargetObserver != 0 && !hasSuccessor(u, n) && u != nil {
 			spawnSeekAttack(u, n, 0, u.X, u.Y, u.Z)
 		}
 		return Code(5), true

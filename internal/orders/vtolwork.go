@@ -365,10 +365,12 @@ func vtolRepairUnitHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32
 		if moverMode(target) != 1 {
 			return 8 // abandon
 		}
-		// The "target state bits 2-3 set -> deadline 15, restart" arm is
-		// unreachable for the reason work.go's repairUnitHandler records: this
-		// build mirrors only the low two status bits, as Move.Mode, so bits 2
-		// and 3 have no field. Left unreachable rather than invented.
+		// Unlike ground repair this restart emits no StopBuilding; the air
+		// row never arranged StartBuilding [04 R-ORD-01 §7]. The state pair
+		// is the cached movement tier [04 R-ORD-01 §12].
+		if target.MoveTier != 0 {
+			return deadlineRestart(n, tick, 15)
+		}
 		if health16(target) < uint32(target.Def.MaxDamage) {
 			if _, bound := boundRepair(QueueForUnit(u), u, target, n, tick); !bound {
 				return 7
@@ -440,16 +442,11 @@ func vtolReclaimHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) C
 		if !installWorkGoal(u, n, bx, n.GoalY, bz) {
 			return 7
 		}
-		if inBuildRange(u, bx, bz, def.FootprintX, def.FootprintZ) {
-			// Already within reach: the ground twin's phase 0 records why the
-			// approach gate is left clear in that case (work.go, PT3-05).
-			return 1
-		}
-		// Out of reach: the ground twin's phase 0 records the placeholder and
-		// its decider. The record holds at this phase, re-testing reach, rather
-		// than advancing into a work phase that would reclaim from anywhere.
+		// The marker outcome wakes phase 2. This row has no reach polling
+		// deadline: a failed route must reach phase 2's abandon arm
+		// [04 R-ORD-01 §7].
 		n.DynamicGate = gateMoveOutcomes
-		return deadlineHold(n, tick, 30)
+		return 1
 	case 2:
 		if satisfied&gateNoRoute != 0 {
 			return 8 // abandon

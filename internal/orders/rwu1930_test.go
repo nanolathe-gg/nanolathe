@@ -80,11 +80,8 @@ func TestAirEntryStep1SeekReplacement(t *testing.T) {
 // segment; it carries NO target and the unit's own position
 // [04 R-AIR-01 §16].
 //
-// The "issued against a target" half is read here as the record's own target
-// handle, because this build keeps that handle when the target dies and
-// resolves it per visit: a handle that no longer resolves is §16's null
-// reference, while a record built with no target at all is the case the record
-// constructor clears bit 9 for [04 §3.1] and which must not seek.
+// Constructor admission clears bit 9 for an order issued without a target;
+// target removal clears the reference while retaining that metadata.
 func TestAirEntryStep2SeekReplacement(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -95,7 +92,7 @@ func TestAirEntryStep2SeekReplacement(t *testing.T) {
 	}{
 		{name: "target gone, last record", target: 7, mask: staticTargetObserver, wantSeek: true},
 		{name: "target gone, has a successor", target: 7, mask: staticTargetObserver, successor: true},
-		{name: "never issued against a target", target: 0, mask: staticTargetObserver},
+		{name: "never issued against a target", target: 0, mask: 0},
 		{name: "descriptor does not observe a target", target: 7, mask: 0},
 	} {
 		q, u := gateFixture()

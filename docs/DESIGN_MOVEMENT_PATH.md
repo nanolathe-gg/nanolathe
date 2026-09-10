@@ -290,7 +290,10 @@ velocity, acceleration, brake and turn rate, and the command altitude. The
 integrator reads no order record at all. It reads the **flight command block**,
 which the per-tick controller hook fills from whatever goal payload the active
 air order installed; there is exactly one such supply and the orders differ only
-in which payload they install `[04 R-AIR-01 §1]`. `airMarker` is that payload:
+in which payload they install `[04 R-AIR-01 §1]`. The flight command retains
+the installed payload's owning record independently of the current queue head
+and executor state; arrival, displacement and cleanup use that identity
+`[04 R-ORD-01 §9]`. `airMarker` is that payload:
 a flags word, a horizontal arrival radius, a signed altitude offset, a heading,
 an attach-piece index, a weak target handle, a goal triple and a radial offset
 `[04 R-AIR-01 §4]`. `AirSectorGrid` is the coarse second grid built once with
@@ -305,6 +308,14 @@ executors are the legs `VTOL_Move`, `VTOL_LandIfCan`, `VTOL_Standby`,
 `VTOL_AirBuild` and `VTOL_Landing`, each building markers and reading the phase
 tables of `[04 R-AIR-01 §6]` and `[04 R-AIR-01 §7]`; `QueryLandingPad` is the
 synchronous four-output pad query with its free-pad predicate `[04 §10.2]`.
+`VTOL_Landing` runs directly through the order pump: its record carries the
+phase, reused bearing/pad word, and the descent's 15-tick deadline. Target
+removal reaches the entry guard even during descent; arrival and deadline
+deliver distinct phase-5 arms. Phase 6 either attaches the empty aircraft and
+pushes its repair record in that same pump visit, or transfers its cargo onto
+the pad `[04 R-AIR-01 §6]`. The shared attachment commit unlinks a previous
+carrier before relinking; only the COB adapter rejects another carrier's cargo
+`[04 R-COB-03 §5]`.
 Cruise altitude is `max(sea level, terrain height at the target) + offset`,
 scaled to 16.16 and capped at `0x1FF0000`, with no lower clamp `[04 §10.1]`.
 
@@ -615,6 +626,11 @@ this wiring can be asserted without inventing a public kind on `Goal`.
 
 ### 3.6 Not implemented
 
+* **Ground landing still splits its handler and mover-side machine.**
+  `reportAirMachineOutcome` polls `VTOL_LandIfCan` completion without forwarding
+  the pump's delivered bits. Whether a live waiting instance can receive a
+  non-arrival movement outcome remains **Unknown**; trace a reachable producer
+  before changing the failure arms in `[04 R-AIR-01 §6]`.
 * **A saved route restores no goal.** The mover save box carries the mover's
   live words; the route, the follower state and the proposal are derived and are
   cleared on restore, so a restored mover re-arms an ordinary request rather

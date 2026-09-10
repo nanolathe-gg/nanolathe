@@ -673,6 +673,10 @@ func (s *Service) offerAttackerToSlots(w *units.World, victim, attacker *units.U
 		// the control byte" [04 R-UNIT-06 §5 part 3]. An `armed` OR stood here
 		// with no retail counterpart — the setters write no flag byte at all.
 		slot.Target = units.Target{Kind: units.TargetUnit, Unit: attacker.Handle}
+		// Replacement also clears prior shot feedback from the owner; keeping
+		// an existing target above must leave those events pending
+		// [06 R-WPN-05 §6].
+		victim.Pending &^= units.PendingSlotSetterClear
 	}
 }
 

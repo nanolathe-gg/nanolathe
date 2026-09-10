@@ -1324,7 +1324,7 @@ func TestStateGates(t *testing.T) {
 	if factory3.InBuildStance {
 		t.Fatalf("scriptless factory must not self-set authored stance")
 	}
-	if head3.Phase != uint8(State1) || head3.DynamicGate != WakeBit2 {
+	if head3.Phase != uint8(State1) || head3.DynamicGate != InterruptCancel|units.PendingScriptTouched {
 		t.Fatalf("state1 without authored stance should wait, got phase=%d gate=%d", head3.Phase, head3.DynamicGate)
 	}
 
@@ -1346,10 +1346,13 @@ func TestStateGates(t *testing.T) {
 	if head4.Phase != uint8(State1) {
 		t.Fatalf("state1 with Activate script but no stance should stay")
 	}
-	if head4.DynamicGate != WakeBit2 {
+	if head4.DynamicGate != InterruptCancel|units.PendingScriptTouched {
 		t.Fatalf("state1 wait wake bit2")
 	}
 	factory4.InBuildStance = true
+	factory4.Pending |= units.PendingScriptTouched
+	svc4.RegisterOrderHandlers(q4)
+	q4.Pump(factory4, 11)
 	svc4.Pump(factory4, 11)
 	if head4.Phase != uint8(State2) {
 		t.Fatalf("state1 with in-stance should advance to state2")

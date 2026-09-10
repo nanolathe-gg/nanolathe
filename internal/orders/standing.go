@@ -677,6 +677,9 @@ func standbyMineHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code {
 // family — the two guard handlers' combat join ([04 R-UNIT-06 §1] branch 1) —
 // which is what "the queued-mode attack bypasses the standing-order gates"
 // means in that section. Every other caller passes false.
+// An unforced maneuver engagement inserts the return move first, then the
+// leashed attack, so completing the attack resumes the saved post. Forced
+// guard joins and the other move stances carry no leash [04 R-STANCE-01 §4].
 func autoEngage(u *units.Unit, target *units.Unit, force bool) bool {
 	if u == nil || target == nil || u == target {
 		return false
@@ -698,6 +701,13 @@ func autoEngage(u *units.Unit, target *units.Unit, force bool) bool {
 		return false
 	}
 	node := Node{Owner: u.Handle, Target: target.Handle, GoalX: target.X, GoalY: target.Y, GoalZ: target.Z}
+	if !force && u.Flags>>stanceMoveShift&stanceFieldMask == 1 {
+		if moveID := Resolve(2, u, nil, &ResolvePos{X: u.X, Y: u.Y, Z: u.Z}); moveID != 0 {
+			q.PushHead(moveID, Node{Owner: u.Handle, GoalX: u.X, GoalY: u.Y, GoalZ: u.Z})
+		}
+		node.Param3 = uint32(uint16(u.Def.ManeuverLeashLength))
+		node.GuardX, node.GuardY = int16(u.X.Raw()>>16), int16(u.Z.Raw()>>16)
+	}
 	if isSecondary(id) {
 		q.PushSecondary(id, node)
 		return true

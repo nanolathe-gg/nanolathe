@@ -166,6 +166,17 @@ The activate edge is a real rising edge, because the yard-door handshake is
 entirely script-owned: the engine raises `Activate` and waits, and nothing but
 the script writes the bit phase 1 tests `[05 "Factory production lifecycle"]`
 `[04 R-UNIT-06 §2]`.
+The ordinary order pump must consume the script event before the construction
+step tests that level again; the stance wait has no polling deadline and keeps
+cancel-current enabled `[04 R-COB-06]` `[04 R-ORD-01 §1]`.
+
+Product removal is stored on the observing build record, including when an
+interrupting action is ahead of it. The factory's counted restart and its
+cancellation refund/kill apply only to `BuildingBuild`. Ground and air mobile
+builds abandon on product removal and complete on cancellation, leaving any
+unfinished product to its normal `GetBuilt` lifecycle. Aircraft allocation
+refusal also abandons; ground allocation refusal retains its retry
+`[04 R-ORD-01 §5]` `[04 R-ORD-02 §2]`.
 
 **Exit spots and the placement seam.** `QueryBuildInfo` runs the factory
 script's build-info query synchronously with its output cell pre-initialized to

@@ -67,8 +67,8 @@ func TestTargetRemovedNoticeReachesTheFactoryInterrupt(t *testing.T) {
 	if !svc.NotifyProductRemoved(product.Handle) {
 		t.Fatal("the product's removal delivered no notice to the factory that bound it")
 	}
-	if factory.Pending&InterruptStop == 0 {
-		t.Fatalf("pending word = %#x, want bit 3 (construction stopped) [04 R-ORD-01 §6]", factory.Pending)
+	if node.Satisfied&InterruptStop == 0 || factory.Pending != 0 {
+		t.Fatalf("record/unit pending = %#x/%#x, want record bit 3 only [04 R-ORD-01 §6]", node.Satisfied, factory.Pending)
 	}
 	if node.Target != 0 {
 		t.Fatalf("target reference = %d, want it unlinked after the notice [04 R-ORD-01 §6]", node.Target)
@@ -77,8 +77,9 @@ func TestTargetRemovedNoticeReachesTheFactoryInterrupt(t *testing.T) {
 	// The interrupt is tested before the state machine, so the work loop's
 	// lost-product cancel-all never runs: the count decrements once and the
 	// record survives at state 0 [05 C22].
-	svc.Pump(factory, 100)
-	if factory.Pending&InterruptStop != 0 {
+	svc.RegisterOrderHandlers(orders.QueueForUnit(factory))
+	orders.QueueForUnit(factory).Pump(factory, 100)
+	if node.Satisfied&InterruptStop != 0 {
 		t.Fatal("the pump did not consume the interrupt bit")
 	}
 	stopped := false

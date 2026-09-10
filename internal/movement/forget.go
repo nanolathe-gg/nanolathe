@@ -50,9 +50,10 @@ func (s *System) ForgetUnit(h pool.Handle) {
 	if g := handleRow(s.moveGoals, h); g != nil {
 		s.releaseGoalNode(g.order)
 	}
-	if st := handleRow(s.airOrders, h); st != nil {
-		s.releaseGoalNode(st.order)
+	if n := s.airPayloadOwner(h); n != nil {
+		s.releaseGoalNode(n)
 	}
+	setHandleRow(&s.airOrders, h, nil)
 
 	// Unit finalisation unlinks, so a reused pool slot never inherits a dead
 	// unit's place in a sector bucket [04 R-COLL-01 §11] item 1.

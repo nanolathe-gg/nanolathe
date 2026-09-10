@@ -772,6 +772,11 @@ func helpBuildHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Cod
 	if u == nil || n == nil {
 		return 7
 	}
+	// Cancel-current refreshes the interface and completes before the work
+	// phase can contribute another quantum [04 R-ORD-01 §5].
+	if satisfied&gateCancelCurrent != 0 {
+		return 5
+	}
 	target := lookupTarget(u, n.Target)
 	if n.Target == 0 || target == nil {
 		workStatus(u, statusCant, "Construction terminated")
@@ -994,8 +999,12 @@ func captureHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 		workStatus(u, statusWorking, "") // kind 11 has no default text
 		return 1
 	case 4:
-		// The moving-target arm (target state bits 2-3) is unreachable for the
-		// reason recorded in repairUnitHandler's phase 3.
+		// The cached movement tier is the target state pair this restart
+		// reads [04 R-ORD-01 §5][04 R-ORD-01 §12].
+		if hasMover(target) && target.MoveTier != 0 {
+			emitStopBuilding(u, n)
+			return deadlineRestart(n, tick, 30)
+		}
 		if int32(n.Param1) < int32(n.Param2) {
 			// The completion test precedes the increment, so the number of
 			// qualifying visits is ceil(timer/2) [05 R-WORK-01 §6].

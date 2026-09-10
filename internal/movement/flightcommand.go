@@ -90,6 +90,9 @@ type FlightCommand struct {
 	// makes the producer do nothing at all, so the block keeps its last values
 	// and the aircraft continues on its last command [04 R-AIR-01 §1].
 	Payload GoalPayload
+	// payloadOwner follows the installed object independently of the current
+	// queue head and the mover-side executor state [04 R-ORD-01 §9].
+	payloadOwner *orders.Node
 	// Unit is the block's reference to the unit it commands [04 R-AIR-01 §1].
 	Unit *units.Unit
 	// Pos is the command position, initialized to the unit's spawn X/Y/Z.
@@ -154,11 +157,12 @@ func (s *System) FlightCommandFor(h pool.Handle, u *units.Unit) *FlightCommand {
 // heading into the mover's own command words. Nothing else crosses that
 // boundary.
 //
-// rec is the order record that installed the payload; step 6 raises its
-// satisfied bits. sectors remains a compatibility argument for existing
-// callers; the producer reads only the prior completed stamp retained on the
-// collision record, never a coordinate-derived grid lookup [04 R-AIR-01 §5].
-func (s *System) StepFlightCommand(u *units.Unit, rec *orders.Node, _ *AirSectorGrid) {
+// The installed payload supplies its owning record for step 6, including when
+// a direct takeoff caller passes a different queue head. The record and sector
+// arguments remain only for source compatibility; the producer reads the prior
+// completed stamp, never a coordinate-derived grid lookup [04 R-ORD-01 §9]
+// [04 R-AIR-01 §5].
+func (s *System) StepFlightCommand(u *units.Unit, _ *orders.Node, _ *AirSectorGrid) {
 	if s == nil || u == nil {
 		return
 	}
@@ -180,7 +184,7 @@ func (s *System) StepFlightCommand(u *units.Unit, rec *orders.Node, _ *AirSector
 	}
 	c.Flags = (c.Flags &^ flightCommandModeMask) | (mode << flightCommandModeShift)
 
-	c.produce(u, rec, handleRow(s.Collisions, u.Handle))
+	c.produce(u, c.payloadOwner, handleRow(s.Collisions, u.Handle))
 
 	// The integrator's single input fetch [04 R-AIR-01 §1]. The mover's command
 	// words are FlightState's Target* fields; §10.1 gives the vertical control
@@ -259,6 +263,7 @@ func (c *FlightCommand) produce(u *units.Unit, rec *orders.Node, coll *Collision
 	}
 	c.Payload.Release()
 	c.Payload = nil
+	c.payloadOwner = nil
 	if rec != nil {
 		rec.Satisfied |= airGoalReleasedBit
 	}

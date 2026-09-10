@@ -770,6 +770,14 @@ dispatch on sight — `SelfDestructFG`, which a live mission reaches through the
 
 Notes the table cannot carry:
 
+* Autonomous combat and repair-patrol issuers retain their return move beneath
+  the temporary attack or assistance record. Each issuer applies its own stance
+  admission and leash rules; completion exposes the saved move through the
+  ordinary queue pump `[04 R-STANCE-01 §4]`.
+* Work cancellation is handled before the phase body can contribute another
+  work step. Moving-target restarts and aircraft arrival failures use each
+  row's own result and deadline, rather than inheriting a ground or factory
+  retry `[04 R-ORD-01 §5]` `[04 R-ORD-01 §7]`.
 * `Move_Ground` alone is installed by the move-family installer. It once
   installed that one row's body on all eight names of the family, which is why a
   `Patrol` walked to its first waypoint and completed and a `RepairPatrol`

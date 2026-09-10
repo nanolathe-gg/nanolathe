@@ -20,8 +20,11 @@ func ReleaseWeaponSlot(u *units.Unit, idx int) bool {
 	if s == nil {
 		return false
 	}
+	if !s.IsEnabled() || s.Flags&units.SlotFlagAutonomous == 0 {
+		return true
+	}
 	s.Flags &^= units.SlotFlagAutonomous
-	s.Target = units.Target{Kind: units.TargetNone}
+	clearOrderWeaponTarget(u, s, idx)
 	return true
 }
 
@@ -34,9 +37,25 @@ func InhibitWeaponSlot(u *units.Unit, idx int) bool {
 	if s == nil {
 		return false
 	}
+	if !s.IsEnabled() || s.Flags&units.SlotFlagAutonomous != 0 {
+		return true
+	}
 	s.Flags |= units.SlotFlagAutonomous
-	s.Target = units.Target{Kind: units.TargetNone}
+	clearOrderWeaponTarget(u, s, idx)
 	return true
+}
+
+// The control-byte guard covers the target reset as well as its deferred
+// notification. Repeated air-leg visits must leave a retained target alone
+// [04 R-ORD-01 §7]. Neither operation changes the asynchronous Aim state.
+func clearOrderWeaponTarget(u *units.Unit, s *units.Slot, idx int) {
+	if s.Target.Kind == units.TargetNone {
+		return
+	}
+	s.Target = units.Target{Kind: units.TargetNone}
+	if binding := u.COBBinding(); binding != nil && binding.Callbacks != nil {
+		binding.Callbacks.TargetCleared(int32(idx))
+	}
 }
 
 // SetManualWeaponTarget installs a target on one slot, when target is nonzero,
@@ -57,6 +76,7 @@ func SetManualWeaponTarget(u *units.Unit, idx int, target pool.Handle) bool {
 	}
 	if target != 0 {
 		s.Target = units.Target{Kind: units.TargetUnit, Unit: target}
+		u.Pending &^= units.PendingSlotSetterClear // discard the previous target's outcome [06 R-WPN-05 §6]
 	}
 	return true
 }
@@ -83,6 +103,7 @@ func FireWeaponPoint(u *units.Unit, idx int, x, z numeric.Fixed, _ uint32) bool 
 		wz = -32767
 	}
 	s.Target = units.Target{Kind: units.TargetGround, X: numeric.Fixed(int64(wx) << 16), Z: numeric.Fixed(int64(wz) << 16)}
+	u.Pending &^= units.PendingSlotSetterClear // [06 R-WPN-05 §6]
 	return true
 }
 

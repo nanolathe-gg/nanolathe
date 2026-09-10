@@ -564,7 +564,7 @@ func TestVTOLLandingParksOnThePad(t *testing.T) {
 	head.Target = ph
 
 	for tick := uint32(1); tick <= 900; tick++ {
-		runMovementTick(sys, tick, w)
+		runLandingTick(sys, tick, w)
 		if u.Attachment.Carrier == ph {
 			break
 		}

@@ -17,8 +17,8 @@ const goalPendingMask uint32 = 0x20 | 0x40 | 0x80 | 0x100 | 0x200
 // the raise follows the OBJECT to its owner, which need not be the record being
 // installed for.
 //
-// Both maps model the one slot: moveGoals for the ground route follower,
-// airOrders for the flight block, and each installer clears the other. An
+// The slot is moveGoals for the ground follower and FlightCommand for the
+// air controller; each installer clears the other side. An
 // installer calls this BEFORE its own closing clear of `0x20`-`0x200`, so a
 // record that displaces its own previous object has the self-raise cancelled
 // and a record that displaces another's leaves the bit standing on that other
@@ -48,8 +48,8 @@ func (s *System) raiseEvictedGoalRelease(owner pool.Handle) {
 	if g := handleRow(s.moveGoals, owner); g != nil && g.order != nil {
 		g.order.Satisfied |= goalReleasedPending
 	}
-	if st := handleRow(s.airOrders, owner); st != nil && st.order != nil {
-		st.order.Satisfied |= goalReleasedPending
+	if n := s.airPayloadOwner(owner); n != nil {
+		n.Satisfied |= goalReleasedPending
 	}
 }
 
@@ -61,7 +61,7 @@ func (s *System) releaseGoalNode(n *orders.Node) {
 		n.Satisfied |= 0x80
 		setHandleRow(&s.moveGoals, n.Owner, nil)
 	}
-	if st := handleRow(s.airOrders, n.Owner); st != nil && st.order == n {
+	if s.airPayloadOwner(n.Owner) == n {
 		n.Satisfied |= 0x80
 		s.releaseAirGoalForNode(n.Owner, n)
 	}
@@ -110,8 +110,8 @@ func (s *System) ReleaseGoal(n *orders.Node) bool {
 // is never pumped and never installs. The 37,196 raises measured on 2026-08-31
 // were measured on this reimplementation's pump, not retail's.
 //
-// The moveGoals and airOrders rows together are that single controller slot: a
-// unit is ground or air, and each installer clears the other side.
+// The ground goal row and flight command together are that single controller
+// slot: a unit is ground or air, and each installer clears the other side.
 func (s *System) installGroundPayload(owner pool.Handle, n *orders.Node, goal path.Goal, x, z numeric.Fixed) bool {
 	if s == nil || n == nil {
 		return false
@@ -121,8 +121,8 @@ func (s *System) installGroundPayload(owner pool.Handle, n *orders.Node, goal pa
 	// below cancels it, which is the "never observable from an installer" case.
 	s.raiseEvictedGoalRelease(owner)
 	setHandleRow(&s.moveGoals, owner, nil)
-	if prior := handleRow(s.airOrders, owner); prior != nil {
-		s.releaseAirGoalForNode(owner, prior.order)
+	if prior := s.airPayloadOwner(owner); prior != nil {
+		s.releaseAirGoalForNode(owner, prior)
 	}
 	n.Satisfied &^= goalPendingMask
 	setHandleRow(&s.moveGoals, owner, &moveGoal{order: n, x: x, z: z, goal: goal})
@@ -251,14 +251,12 @@ func (s *System) InstallAirGoal(req orders.AirGoalRequest) bool {
 	if handleRow(s.Flights, req.Owner) == nil {
 		return false
 	}
-	// The slot's current object is displaced, so its OWN record takes the
-	// `0x80` [04 R-ORD-01 §9]. installAirGoal's own raise is the self-raise —
-	// it writes the bit onto the installing record and then clears it — and
-	// cannot reach the other record, because the object it releases is reached
-	// through the flight block, not through a record field.
+	// Release either kind of previous controller payload. The private air
+	// installer also preserves its object's owner for every pump-driven leg
+	// [04 R-ORD-01 §9].
 	s.raiseEvictedGoalRelease(req.Owner)
-	if prior := handleRow(s.airOrders, req.Owner); prior != nil {
-		s.releaseAirGoalForNode(req.Owner, prior.order)
+	if prior := s.airPayloadOwner(req.Owner); prior != nil {
+		s.releaseAirGoalForNode(req.Owner, prior)
 	}
 	setHandleRow(&s.moveGoals, req.Owner, nil)
 	var marker *airMarker
@@ -274,9 +272,18 @@ func (s *System) InstallAirGoal(req orders.AirGoalRequest) bool {
 		marker.setArrivalRadius(uint16(req.Radius))
 	}
 	s.installAirGoal(u, req.Node, marker)
-	st := s.airStateFor(u, req.Node)
-	st.order = req.Node
 	return true
+}
+
+// airPayloadOwner reads the owner attached to the controller slot, never the
+// current queue head [04 R-ORD-01 §9].
+func (s *System) airPayloadOwner(owner pool.Handle) *orders.Node {
+	if s != nil {
+		if fl := handleRow(s.Flights, owner); fl != nil && fl.Command != nil && fl.Command.Payload != nil {
+			return fl.Command.payloadOwner
+		}
+	}
+	return nil
 }
 
 // releaseAirGoalForNode is the identity-aware wrapper around the existing air
@@ -285,11 +292,10 @@ func (s *System) releaseAirGoalForNode(owner pool.Handle, n *orders.Node) {
 	if s == nil || n == nil {
 		return
 	}
-	if st := handleRow(s.airOrders, owner); st == nil || st.order != n {
+	if s.airPayloadOwner(owner) != n {
 		return
 	}
 	s.releaseAirGoal(s.unitFor(owner))
-	setHandleRow(&s.airOrders, owner, nil)
 }
 
 // OW-3-P goal-families wiring [04 §7.2][04 §7.4][04 §3.5].

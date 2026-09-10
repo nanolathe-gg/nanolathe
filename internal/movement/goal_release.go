@@ -72,7 +72,7 @@ func (s *System) ReleaseGoalPayload(n *orders.Node) bool {
 		setHandleRow(&s.moveGoals, owner, nil) // virtual delete; the record's field is cleared
 		released = true
 	}
-	if st := handleRow(s.airOrders, owner); st != nil && st.order == n {
+	if s.airPayloadOwner(owner) == n {
 		n.Satisfied |= goalReleasedPending
 		s.releaseAirGoalForNode(owner, n)
 		released = true

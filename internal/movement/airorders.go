@@ -406,27 +406,13 @@ func (s *System) airSectorHeight(u *units.Unit) (uint8, bool) {
 // installAirGoal installs a payload on the unit's flight command block
 // [04 R-AIR-01 §4]: the installer raises the goal-replaced bit 0x80 on the
 // record whose payload it replaces, then clears the record's satisfied bits
-// 0x20, 0x40, 0x80, 0x100 and 0x200 for the record it installs on. Both are
-// the same record here, so the clear is what survives — which is exactly why
-// [R-UNIT-06 §3] says "every rebind starts with a clean satisfied word".
+// 0x20, 0x40, 0x80, 0x100 and 0x200 for the record it installs on. Replacing
+// another record leaves its release bit standing; replacing this record's own
+// object clears the self-notification [04 R-ORD-01 §9].
 func (s *System) installAirGoal(u *units.Unit, rec *orders.Node, m *airMarker) {
-	if s == nil || u == nil || m == nil {
-		return
+	if m != nil {
+		s.installAirPayload(u, rec, m)
 	}
-	c := s.FlightCommandFor(u.Handle, u)
-	if c == nil {
-		return
-	}
-	if c.Payload != nil {
-		if rec != nil {
-			rec.Satisfied |= airGoalReleasedBit
-		}
-		c.Payload.Release()
-	}
-	if rec != nil {
-		rec.Satisfied &^= airGoalInstallClearMask
-	}
-	c.Payload = m
 }
 
 // releaseAirGoal clears the installed payload without installing another. It is
@@ -440,8 +426,12 @@ func (s *System) releaseAirGoal(u *units.Unit) {
 	if fl == nil || fl.Command == nil || fl.Command.Payload == nil {
 		return
 	}
+	if owner := fl.Command.payloadOwner; owner != nil {
+		owner.Satisfied |= airGoalReleasedBit
+	}
 	fl.Command.Payload.Release()
 	fl.Command.Payload = nil
+	fl.Command.payloadOwner = nil
 }
 
 // --- the air executors ---
@@ -461,20 +451,10 @@ type airOrderState struct {
 	waiting bool   // a marker with gate 0xE0 is outstanding
 	arrived bool   // the producer reported arrival last tick
 	bearing uint16 // the search/loiter bearing scratch word
-	// padPiece is the second use of that same scratch word: `VTOL_Landing`
-	// reuses it for the chosen pad piece index from phase 3 onward
-	// [04 R-AIR-01 §6]. It is a separate field here because Go gains nothing
-	// from the overlay and a reader gains the distinction.
-	padPiece uint16
-	// repairPad is `VTOL_Landing` phase 6's decision, held until the pump asks
-	// for the machine's outcome: the pad handle the spawned `SelfRepair` record
-	// must name as its repairer, or 0 for a touchdown that earns no repair
-	// [04 R-AIR-01 §6][05 R-WORK-01 §3].
-	repairPad pool.Handle
-	low       uint8 // the low bit of the drawn bearing, the second scratch word
-	goal      Vec3  // the record's cached goal
-	post      Vec3  // VTOL_Standby's recorded post
-	done      bool  // the executor reported completion
+	low     uint8  // the low bit of the drawn bearing, the second scratch word
+	goal    Vec3   // the record's cached goal
+	post    Vec3   // VTOL_Standby's recorded post
+	done    bool   // the executor reported completion
 }
 
 // airStateFor returns the executor state for the unit's current head record,
@@ -553,8 +533,6 @@ func (s *System) runAirExecutor(u *units.Unit, head *orders.Node, st *airOrderSt
 			return
 		}
 		s.execVTOLStandby(u, head, st)
-	case "VTOL_Landing":
-		s.execVTOLLanding(u, head, st)
 	case "VTOL_MobileBuild", "VTOL_HelpBuild":
 		s.execVTOLAirBuild(u, head, st)
 	default:
@@ -1040,123 +1018,116 @@ func (s *System) padPieceFree(pad *units.Unit, piece uint16) bool {
 	return true
 }
 
-// execVTOLLanding is `VTOL_Landing` [04 R-AIR-01 §6], the machine that flies an
-// aircraft to a landing pad and parks it there. Its scratch word is reused for
-// two things: the loiter bearing in phases 0–1 and the chosen pad piece from
-// phase 3 onward, which is why one state carries both.
-//
-// The phases that only wait — 4 and the "no work" arms — are folded into their
-// neighbours' returns exactly as the row table gives them; every marker install
-// arms this executor's own wait, which stepAir releases from the payload's
-// arrival test rather than from the record's satisfied word [04 R-AIR-01 §6].
-func (s *System) execVTOLLanding(u *units.Unit, head *orders.Node, st *airOrderState) {
-	pad := s.unitFor(head.Target)
+// legVTOLLanding runs the pad-landing row from the order pump. Its gate,
+// deadline and satisfied set belong to the record, so target removal and the
+// timed pad recheck remain runnable while a marker has not arrived
+// [04 §3.3][04 R-AIR-01 §6].
+func (s *System) legVTOLLanding(u *units.Unit, n *orders.Node, satisfied uint32, tick uint32) orders.Code {
+	pad := s.unitFor(n.Target)
 	if pad == nil || !pad.Alive {
-		// The null-target entry guard: status cue `Landing aborted`, abort.
-		st.done = true
-		return
+		orders.NotifyStatus(u, 7, "Landing aborted")
+		return 8
 	}
-	sim := s.simRNG(u)
-	switch st.phase {
+	switch n.Phase {
 	case 0:
 		if !s.airMoverReady(u) {
-			st.done = true
-			return
+			return 7
 		}
-		st.waiting = s.takeoffPreamble(u, head)
-		if sim != nil {
-			// The single random draw in the whole machine: one full-circle
-			// loiter bearing [04 R-AIR-01 §6].
-			st.bearing = uint16(sim.Uint32n(0x10000))
+		orders.NotifyCaptionClear(u, n, "Landing")
+		s.takeoffPreamble(u, n)
+		if sim := s.simRNG(u); sim != nil {
+			n.Param1 = sim.Uint32n(0x10000)
 		}
-		st.phase = 1
+		return 1
 	case 1:
-		if piece, ok := s.queryLandingPad(pad); ok {
-			st.padPiece = piece
-			st.phase = 2
-			return
+		piece, ok := s.queryLandingPad(pad)
+		if !ok || !s.padPieceFree(pad, piece) {
+			piece, ok = s.queryLandingPad(pad)
 		}
-		// No free pad: loiter about the target at the first weapon slot's
-		// `Range`, arrival radius 0x80, and advance the bearing by a quarter
-		// turn. The leg re-runs every time the loiter marker is reached; there
-		// is no separate delayed retry.
-		r := numeric.Fixed(int64(firstWeaponRange(u)) << 16)
-		ox, oz := offsetAtBearing(st.bearing, r)
+		if ok {
+			n.Phase = 2
+			return 2
+		}
+		ox, oz := offsetAtBearing(uint16(n.Param1), numeric.Fixed(int64(firstWeaponRange(u))<<16))
 		m := s.newPointMarker(u, Vec3{X: pad.X - ox, Y: pad.Y, Z: pad.Z - oz})
 		m.setArrivalRadius(0x80)
-		s.installAirGoal(u, head, m)
-		st.bearing += 0x4000
-		st.waiting = true
+		s.installAirGoal(u, n, m)
+		n.DynamicGate = 0xE8
+		n.Param1 = uint32(uint16(n.Param1) + uint16(0x4000))
+		return 2
 	case 2:
-		m := s.newFollowPieceMarker(u, head.Target, airNoPiece)
+		m := s.newFollowPieceMarker(u, n.Target, airNoPiece)
 		m.setArrivalRadius(0xA0)
-		s.installAirGoal(u, head, m)
-		st.waiting = true
-		st.phase = 3
+		s.installAirGoal(u, n, m)
+		n.DynamicGate = 0xE8
+		return 1
 	case 3:
 		piece, ok := s.queryLandingPad(pad)
 		if !ok {
-			// Status cue `Landing failed`: reset to phase zero, which restarts
-			// the machine from the takeoff preamble.
-			st.phase = 0
-			return
+			orders.NotifyStatus(u, 7, "Landing failed")
+			return 0
 		}
-		st.padPiece = piece
-		m := s.newFollowPieceMarker(u, head.Target, piece)
+		n.Param1 = uint32(piece)
+		m := s.newFollowPieceMarker(u, n.Target, piece)
 		m.setArrivalRadius(0x30)
-		s.installAirGoal(u, head, m)
-		st.waiting = true
-		st.phase = 5 // phase 4 does no work
+		s.installAirGoal(u, n, m)
+		n.DynamicGate = 0xE8
+		return 1
+	case 4:
+		return 1
 	case 5:
-		if !s.padPieceFree(pad, st.padPiece) {
-			// Status cue `Landing aborted: all pads are occupied`.
-			st.phase = 0
-			return
+		if satisfied&0x20 != 0 {
+			return 1
 		}
-		// The touchdown marker: the same follow-piece marker with an explicit
-		// altitude offset — zero for an empty lander — so its arrival also
-		// requires the aircraft to be within one world unit of the pad's own
-		// height [04 R-AIR-01 §4][04 R-AIR-01 §6].
-		m := s.newFollowPieceMarker(u, head.Target, st.padPiece)
-		m.setAltitudeOffset(0)
-		s.installAirGoal(u, head, m)
-		st.waiting = true
-		st.phase = 6
+		piece := uint16(n.Param1)
+		if !s.padPieceFree(pad, piece) {
+			var ok bool
+			piece, ok = s.queryLandingPad(pad)
+			if !ok {
+				orders.NotifyStatus(u, 7, "Landing aborted: all pads are occupied")
+				return 0
+			}
+			n.Param1 = uint32(piece)
+		}
+		m := s.newFollowPieceMarker(u, n.Target, piece)
+		offset := int16(0)
+		if len(u.Attachment.Cargo) != 0 {
+			if cargo := s.unitFor(u.Attachment.Cargo[0]); cargo != nil && cargo.Def != nil {
+				offset = int16(cargo.Def.ModelTopFixed >> 16)
+			}
+		}
+		m.setAltitudeOffset(offset)
+		if bridge := u.ScriptBridge(); bridge != nil {
+			bridge.DeferredWake("EndTransport", nil, nil)
+		}
+		s.installAirGoal(u, n, m)
+		airDeadline(n, tick, 15)
+		n.DynamicGate |= 0xE8
+		return 2
+	case 6:
+		if satisfied&0x40 != 0 {
+			return 8
+		}
+		piece := uint16(n.Param1)
+		if !s.padPieceFree(pad, piece) {
+			orders.NotifyStatus(u, 7, "Landing aborted: no pads available")
+			return 0
+		}
+		if len(u.Attachment.Cargo) == 0 {
+			AttachCargo(s.world, n.Target, u.Handle, int(piece))
+			if padRepairsLander(u, pad) {
+				s.releaseAirGoal(u)
+				airSpawnAtHead(u, "SelfRepair", n.Target, Vec3{X: u.X, Y: u.Y, Z: u.Z}, tick)
+			}
+		} else {
+			if bridge := u.ScriptBridge(); bridge != nil {
+				bridge.Deferred("EndTransport", nil, nil)
+			}
+			AttachCargo(s.world, n.Target, u.Attachment.Cargo[0], int(piece))
+		}
+		return 5
 	default:
-		if !s.padPieceFree(pad, st.padPiece) {
-			// Status cue `Landing aborted: no pads available`.
-			st.phase = 0
-			return
-		}
-		// The touchdown itself: the lander attaches to the pad owner on the pad
-		// piece with request mode 0 — the attached/parked mode, written straight
-		// into the committed mover-mode pair, so the attach never zeroes
-		// velocity, never levels bank and pitch and never raises `Deactivate`
-		// [04 R-AIR-01 §3][04 R-UNIT-06 §3].
-		s.releaseAirGoal(u)
-		AttachCargo(s.world, head.Target, u.Handle, int(st.padPiece))
-		u.Move.Mode = 0
-		if fl := handleRow(s.Flights, u.Handle); fl != nil {
-			fl.Mode = 0
-		}
-		// The empty lander's repair arm, the ONE producer of pad repair: with
-		// the lander below its definition's `MaxDamage`, the pad owner's
-		// definition carrying both `isairbase` and `builder`, and the pad owner
-		// not under construction, the goal payload is cleared (above) and a
-		// `SelfRepair` record is pushed on the lander [04 R-AIR-01 §6] phase 6.
-		//
-		// The record is only *decided* here. Retail's phase 6 is itself the
-		// pump's dispatch, so its head insert and its "complete" both land in
-		// one visit and the landing record is unlinked out from behind the
-		// spawned one. This engine splits the two — the executor runs in the
-		// mover tick and reportAirMachineOutcome answers the pump — so the
-		// insert has to wait for that answer, or the landing record would be
-		// stranded behind a head it never dispatches from and would restart
-		// its whole machine when the repair finished.
-		if padRepairsLander(u, pad) {
-			st.repairPad = head.Target
-		}
-		st.done = true
+		return 7
 	}
 }
 
@@ -1424,7 +1395,7 @@ func (s *System) stepAir(u *units.Unit, tick uint32) StepResult {
 
 	// Call 1 — the controller's per-tick hook: the six-step producer and the
 	// integrator's single input fetch [04 R-AIR-01 §1].
-	s.StepFlightCommand(u, head, s.AirSectors)
+	s.StepFlightCommand(u, nil, s.AirSectors)
 
 	// The executor's gate is released by the payload's own arrival test, which
 	// the producer has just run. Observing it here rather than through the
@@ -1643,7 +1614,9 @@ func (s *System) runAirOrderLeg(u *units.Unit, n *orders.Node, satisfied uint32,
 		return 0, false
 	}
 	switch orders.DescriptorFor(n.ID).Name {
-	case "VTOL_LandIfCan", "VTOL_Landing":
+	case "VTOL_Landing":
+		return s.legVTOLLanding(u, n, satisfied, tick), true
+	case "VTOL_LandIfCan":
 		return s.reportAirMachineOutcome(u, n, tick), true
 	case "VTOL_Evade":
 		return s.legVTOLEvade(u, n, tick), true
@@ -1685,8 +1658,8 @@ func (s *System) runAirOrderLeg(u *units.Unit, n *orders.Node, satisfied uint32,
 	return 0, false
 }
 
-// reportAirMachineOutcome publishes a mover-tick landing machine's outcome to
-// the pump. Both `VTOL_LandIfCan` and `VTOL_Landing` use it.
+// reportAirMachineOutcome publishes the mover-tick ground-landing machine's
+// outcome to the pump. Pad landing runs directly from the pump.
 //
 // `VTOL_LandIfCan` is not driven by the pump: its executor is `execVTOLLandIfCan`
 // below, which the mover tick runs off the head record because the landing
@@ -1711,19 +1684,12 @@ func (s *System) runAirOrderLeg(u *units.Unit, n *orders.Node, satisfied uint32,
 // when the pump runs before the mover tick, a completion published this tick is
 // read on the next one.
 func (s *System) reportAirMachineOutcome(u *units.Unit, n *orders.Node, tick uint32) orders.Code {
+	// TODO(question): can a live VTOL_LandIfCan receive a non-arrival movement
+	// outcome while its mover-side machine waits? This handoff polls completion
+	// without forwarding the pump's delivered bits. Trace a reachable producer
+	// before changing the failure arms specified by [04 R-AIR-01 §6].
 	st := handleRow(s.airOrders, u.Handle)
 	if st != nil && st.order == n && st.done {
-		// `VTOL_Landing` phase 6's repair spawn, deferred to here so it lands in
-		// the same pump visit that unlinks this record [04 R-AIR-01 §6]. The
-		// head insert puts the `SelfRepair` record in front, the code-5 unlink
-		// below takes this record out by identity from behind it, and the walk
-		// reloads the head — retail's single-visit ordering, reassembled across
-		// the mover-tick/pump split.
-		if st.repairPad != 0 {
-			pad := st.repairPad
-			st.repairPad = 0
-			airSpawnAtHead(u, "SelfRepair", pad, Vec3{X: u.X, Y: u.Y, Z: u.Z}, tick)
-		}
 		return 5 // *complete* [04 R-ORD-01 §1]
 	}
 	airDeadline(n, tick, 1)
@@ -2808,8 +2774,8 @@ func (s *System) installAirPayload(u *units.Unit, rec *orders.Node, p GoalPayloa
 		return
 	}
 	if c.Payload != nil {
-		if rec != nil {
-			rec.Satisfied |= airGoalReleasedBit
+		if c.payloadOwner != nil {
+			c.payloadOwner.Satisfied |= airGoalReleasedBit
 		}
 		c.Payload.Release()
 	}
@@ -2817,6 +2783,7 @@ func (s *System) installAirPayload(u *units.Unit, rec *orders.Node, p GoalPayloa
 		rec.Satisfied &^= airGoalInstallClearMask
 	}
 	c.Payload = p
+	c.payloadOwner = rec
 }
 
 // legAirToAir is the dogfight [04 R-AIR-01 §8]. Phase 0 is the takeoff preamble

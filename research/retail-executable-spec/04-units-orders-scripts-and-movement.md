@@ -12400,9 +12400,10 @@ fallback pad selection and failure handling described.
 One helper maintains the carrier/cargo linkage for every caller (transport
 load, unload, carrier-death cascade, save reconstruction, and the factory
 product's builder link): given (child, parent, piece, mode) it validates the
-child (alive, not building-class, no existing carrier) and the parent (alive,
+child (alive, not building-class, carrying no cargo) and the parent (alive,
 not self, uncarried), then — attach — records the piece on the child, links
-the child as the new HEAD of the parent's cargo list (each child's sibling
+the child as the new HEAD of the parent's cargo list after unlinking it from
+its previous carrier (each child's sibling
 link pointing at the previous head, so the list is LIFO and the unload release
 detaches the most recently attached cargo first), and — detach — clears the
 child's parent, sibling, and piece fields. After either half it overwrites the
@@ -12414,6 +12415,14 @@ movement-mode force helper writes the same field directly). It then wakes the
 and whose parent is not an airbase ([R-AIR-01 §9]; the re-arm purges the
 carried unit's queue through the ordinary cleanup),
 and finally deselects the child if it has become ineligible.
+
+**Established — existing-carrier admission belongs to the COB adapter.** The
+shared commit and its apply step permit a child already attached to another
+parent, unlinking the old parent's list before inserting at the new head.
+Only the COB attach adapter requires the child to be uncarried or already
+attached to the executing unit [R-COB-03 §5]. This corrects this section's
+former shared-helper "no existing carrier" clause: a loaded lander's phase-6
+transfer onto a pad uses the shared commit directly [R-AIR-01 §6].
 
 **Established — the status word's transport/attachment bits.** Two bits of
 the unit status word are transport-relevant:
@@ -13936,6 +13945,12 @@ and the decider that would close it.
 
 ### Hover and VTOL
 
+- **Unknown reachability:** which ordinary producer can deliver a failure or
+  release movement wake to a live `VTOL_LandIfCan` while its landing leg is
+  waiting · [R-AIR-01 §6], [R-ORD-01 §0] · trace the producer through the
+  controller payload and dynamic gate into the handler's satisfied argument.
+  The handler's failure arms are Established; their gameplay reachability is
+  the open question.
 - **Unknown:** runtime meaning of the code-3 air-velocity save marker's
   auxiliary and trailing padding words · [08 R-SAVE-02 §8] · trace constructor,
   save and execution readers. Nanolathe preserves the staged words without

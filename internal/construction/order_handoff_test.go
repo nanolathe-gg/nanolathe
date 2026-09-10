@@ -107,3 +107,36 @@ func TestOrdinaryPumpCancelDoesNotLeakACompletionResult(t *testing.T) {
 		t.Fatalf("StepUnit repeated cancellation refund: %v", got)
 	}
 }
+
+// A product notice belongs to its observing record even when an interrupting
+// head also waits on target removal [04 R-ORD-01 §6][04 R-MOV-03 §7].
+func TestProductRemovalStaysWithTheObservingBuildRecord(t *testing.T) {
+	svc, factory, product, node := factoryWithAttachedProduct(t)
+	q := orders.QueueForUnit(factory)
+	svc.RegisterOrderHandlers(q)
+	q.Push(orders.Lookup("Paralyze"), orders.Node{})
+	head := q.Primary()[0]
+	if head == node {
+		t.Fatal("interrupt did not take the queue head")
+	}
+	head.DynamicGate = InterruptStop
+	head.Deadline = -1
+	var headVisits int
+	q.SetOwnedHandler(head.ID, func(*units.Unit, *orders.Node, uint32, uint32) (orders.Code, bool) { headVisits++; return 5, true })
+	if !svc.NotifyProductRemoved(product.Handle) {
+		t.Fatal("no product notice")
+	}
+	orders.TargetRemoved(svc.World, product.Handle)
+	q.Pump(factory, 100)
+	if headVisits != 0 || factory.Pending != 0 || node.Satisfied&InterruptStop == 0 {
+		t.Fatalf("misdirected notice: interrupt visits=%d unit pending=%#x build pending=%#x", headVisits, factory.Pending, node.Satisfied)
+	}
+	if node.Target != 0 || node.Param2 != 3 {
+		t.Fatalf("blocked record target=%d count=%d", node.Target, node.Param2)
+	}
+	head.Satisfied |= InterruptStop
+	q.Pump(factory, 101)
+	if node.Param2 != 2 || node.Phase != uint8(State0) || node.Satisfied&InterruptStop != 0 {
+		t.Fatalf("deferred build notice: count=%d phase=%d pending=%#x", node.Param2, node.Phase, node.Satisfied)
+	}
+}
