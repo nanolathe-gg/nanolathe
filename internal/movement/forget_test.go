@@ -27,11 +27,6 @@ func TestForgetUnitLeavesNoPerHandleState(t *testing.T) {
 	s.pathFailures[h] = PathFailure{}
 	s.activeOrders[h] = &activeMove{}
 	s.arrivalHandles[h] = &arrivalHandle{}
-	if s.tickCarried == nil {
-		s.tickCarried = make(map[pool.Handle]struct{})
-	}
-	s.tickCarried[h] = struct{}{}
-
 	s.ForgetUnit(h)
 
 	for name, present := range map[string]bool{
@@ -45,7 +40,6 @@ func TestForgetUnitLeavesNoPerHandleState(t *testing.T) {
 		"pathFailures":   mapHas(s.pathFailures, h),
 		"activeOrders":   mapHas(s.activeOrders, h),
 		"arrivalHandles": mapHas(s.arrivalHandles, h),
-		"tickCarried":    mapHas(s.tickCarried, h),
 	} {
 		if present {
 			t.Errorf("ForgetUnit left %s state for handle %d", name, h)

@@ -474,7 +474,7 @@ func TestStepUnitAircraftAndTransportRegression(t *testing.T) {
 	for tick := uint32(2); tick < 10; tick++ {
 		system.Scheduler.Tick(tick)
 		system.BeginTick(tick)
-		// Order: air, trans, cargo (cargo will be skipped via tickCarried)
+		// Order: air, trans, cargo; carried motion commits at cargo's own visit.
 		system.StepUnit(hAir, tick)
 		system.StepUnit(hTrans, tick)
 		system.StepUnit(hCargo, tick)

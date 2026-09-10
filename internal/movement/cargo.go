@@ -253,8 +253,9 @@ func CargoCount(w *units.World, carrierHandle pool.Handle) int {
 //   - apply floater deck-height clamp from cargo's waterline and sea level
 //   - bypass ordinary validation, but clear/stamp on a cell or mode change
 //
-// Called after carrier movement so same-tick following is observed without order dependence.
-// Iteration is player 0..9 asc then slot asc [I1].
+// This compatibility surface commits every currently carried unit in player and
+// slot order. The authoritative sweep calls syncCarriedUnit at each cargo's own
+// visit; SyncCarriedMotion remains for existing direct callers outside a sweep.
 func (s *System) SyncCarriedMotion(w *units.World) {
 	if s == nil || w == nil {
 		return
@@ -265,133 +266,143 @@ func (s *System) SyncCarriedMotion(w *units.World) {
 		if cargo == nil || cargo.Attachment.Carrier == 0 {
 			continue
 		}
-		carrier := w.Unit(cargo.Attachment.Carrier)
-		if carrier == nil {
-			// Orphaned attachment: clear
-			cargo.Attachment.Carrier = 0
-			cargo.Attachment.AttachPiece = -1
-			continue
-		}
-		// Factory products and ordinary cargo share this carried-position path.
-		// A negative signed piece byte resolves to the carrier origin
-		// [04 R-FAC-02 §1][04 R-REV-02].
-		hangX, hangY, hangZ := carrier.X, carrier.Y, carrier.Z
-		pieceRoll, pieceHeading, piecePitch := uint16(0), uint16(0), uint16(0)
-		if piece := cargo.Attachment.AttachPiece; piece >= 0 {
-			if binding := carrier.COBBinding(); binding != nil {
-				if origin, ok := binding.ComposePiece(piece, carrier.Move.Heading, carrier.Move.Pitch, carrier.Move.Bank); ok {
-					// ComposePiece returns the locator's world offset
-					// `(x, y, −z)`, so the hang point is a plain addition
-					// [03 R-RAST-01 §8]. The model/world Z mirror
-					// [03 R-RAST-01 §2] is applied once inside the locator; it
-					// used to be applied here. The factory build plate resolves
-					// its exit through the same locator, measured against the
-					// stock yard maps (construction.queryBuildPiecePosition),
-					// and the carried branch rewrites the product's position
-					// from the carrier every tick [04 R-FAC-02 §2] — a hang
-					// point on the wrong side of the carrier would drag every
-					// nanoframe straight back off its pad.
-					hangX = hangX.Add(origin[0])
-					hangY = hangY.Add(origin[1])
-					hangZ = hangZ.Add(origin[2])
-				}
-				if binding.VM != nil && piece < len(binding.VM.Pieces) {
-					state := binding.VM.Pieces[piece]
-					pieceRoll, pieceHeading, piecePitch = state.RotZ, state.RotY, state.RotX
-				}
+		s.syncCarriedUnit(w, cargo)
+	}
+}
+
+// syncCarriedUnit executes the carried branch of one cargo's movement commit.
+// It is called exactly at the cargo's mover visit in the authoritative sweep
+// [04 R-MOV-03 §1][04 R-COLL-01 §1].
+func (s *System) syncCarriedUnit(w *units.World, cargo *units.Unit) {
+	if s == nil || w == nil || cargo == nil || cargo.Attachment.Carrier == 0 {
+		return
+	}
+	carrier := w.Unit(cargo.Attachment.Carrier)
+	if carrier == nil {
+		// Orphaned attachment: clear
+		cargo.Attachment.Carrier = 0
+		cargo.Attachment.AttachPiece = -1
+		return
+	}
+	// Factory products and ordinary cargo share this carried-position path.
+	// A negative signed piece byte resolves to the carrier origin
+	// [04 R-FAC-02 §1][04 R-REV-02].
+	hangX, hangY, hangZ := carrier.X, carrier.Y, carrier.Z
+	pieceRoll, pieceHeading, piecePitch := uint16(0), uint16(0), uint16(0)
+	if piece := cargo.Attachment.AttachPiece; piece >= 0 {
+		if binding := carrier.COBBinding(); binding != nil {
+			if origin, ok := binding.ComposePiece(piece, carrier.Move.Heading, carrier.Move.Pitch, carrier.Move.Bank); ok {
+				// ComposePiece returns the locator's world offset
+				// `(x, y, −z)`, so the hang point is a plain addition
+				// [03 R-RAST-01 §8]. The model/world Z mirror
+				// [03 R-RAST-01 §2] is applied once inside the locator; it
+				// used to be applied here. The factory build plate resolves
+				// its exit through the same locator, measured against the
+				// stock yard maps (construction.queryBuildPiecePosition),
+				// and the carried branch rewrites the product's position
+				// from the carrier every tick [04 R-FAC-02 §2] — a hang
+				// point on the wrong side of the carrier would drag every
+				// nanoframe straight back off its pad.
+				hangX = hangX.Add(origin[0])
+				hangY = hangY.Add(origin[1])
+				hangZ = hangZ.Add(origin[2])
+			}
+			if binding.VM != nil && piece < len(binding.VM.Pieces) {
+				state := binding.VM.Pieces[piece]
+				pieceRoll, pieceHeading, piecePitch = state.RotZ, state.RotY, state.RotX
 			}
 		}
-		cargo.X, cargo.Y, cargo.Z = hangX, hangY, hangZ
-		if cargo.Def != nil && cargo.Def.Floater {
-			if s.Terrain != nil {
-				// max(hang.y, (waterline*65535 + seaLevel)<<16)
-				// [04 R-FAC-02 §2][04 R-AIR-01 §9].
-				floatY := numeric.Fixed((int64(cargo.Def.Waterline)*65535 + int64(s.Terrain.SeaLevel)) << 16)
-				if cargo.Y < floatY {
-					cargo.Y = floatY
-				}
+	}
+	cargo.X, cargo.Y, cargo.Z = hangX, hangY, hangZ
+	if cargo.Def != nil && cargo.Def.Floater {
+		if s.Terrain != nil {
+			// max(hang.y, (waterline*65535 + seaLevel)<<16)
+			// [04 R-FAC-02 §2][04 R-AIR-01 §9].
+			floatY := numeric.Fixed((int64(cargo.Def.Waterline)*65535 + int64(s.Terrain.SeaLevel)) << 16)
+			if cargo.Y < floatY {
+				cargo.Y = floatY
 			}
 		}
-		// Copy heading/pitch and carrier velocity/speed (zeroed if carrier has no mover) [04 §10.2]
-		// Heading/pitch from carrier's piece; velocity/speed from carrier mover.
-		cargo.Move.Heading = carrier.Move.Heading + pieceHeading
-		cargo.Move.Pitch = carrier.Move.Pitch + piecePitch
-		cargo.Move.Bank = carrier.Move.Bank + pieceRoll
-		// The carrier mover's authoritative vector is copied regardless of the
-		// cargo mover representation; no mover means an exact zero vector
-		// [04 R-FAC-02 §2].
-		carrierVX, carrierVY, carrierVZ, carrierSpeed := int32(0), int32(0), int32(0), int32(0)
-		if fl := s.Flights[carrier.Handle]; fl != nil {
-			carrierVX, carrierVY, carrierVZ, carrierSpeed = fl.VX, fl.VY, fl.VZ, fl.Speed
-		} else if coll := s.Collisions[carrier.Handle]; coll != nil {
-			carrierVX, carrierVY, carrierVZ, carrierSpeed = coll.VX, coll.VY, coll.VZ, coll.Speed
-		}
-		cargo.Move.Speed = numeric.Fixed(carrierSpeed)
-		// The mover's VELOCITY TRIPLE follows the same copy as the scalar: the
-		// commit's carried branch "copies the carrier's velocity triple and
-		// scalar speed into this mover (zeroes when the carrier has no mover)"
-		// [04 R-COLL-01 §1][04 R-FAC-02 §2]. The zeroing arm is the initial
-		// value of the three locals above, so a cargo riding a mover-less
-		// carrier publishes an exact zero triple and the pre-fire lead of
-		// [06 §3.3] leads it by nothing.
-		cargo.Move.VelX = numeric.Fixed(int64(carrierVX))
-		cargo.Move.VelY = numeric.Fixed(int64(carrierVY))
-		cargo.Move.VelZ = numeric.Fixed(int64(carrierVZ))
-		// A carried flight state is a mirror of the carrier's committed motion;
-		// its integrator must not advance the cargo independently [04 R-FAC-02 §2].
-		if flCargo, ok := s.Flights[cargo.Handle]; ok {
-			flCargo.X = int32(cargo.X.Raw())
-			flCargo.Y = int32(cargo.Y.Raw())
-			flCargo.Z = int32(cargo.Z.Raw())
-			flCargo.VX = carrierVX
-			flCargo.VY = carrierVY
-			flCargo.VZ = carrierVZ
-			flCargo.Speed = carrierSpeed
-			flCargo.Heading = cargo.Move.Heading
-		}
-		if stCargo, ok := s.Steers[cargo.Handle]; ok {
-			stCargo.X = int32(cargo.X.Raw())
-			stCargo.Z = int32(cargo.Z.Raw())
-			stCargo.Heading = cargo.Move.Heading
-			stCargo.Speed = int32(cargo.Move.Speed.Raw())
-		}
-		if collCargo, ok := s.Collisions[cargo.Handle]; ok {
-			collCargo.X = int32(cargo.X.Raw())
-			collCargo.Z = int32(cargo.Z.Raw())
-			collCargo.Y = int32(cargo.Y.Raw())
-			collCargo.Heading = cargo.Move.Heading
-			collCargo.VX = carrierVX
-			// The collision record is also the mover-save source, so it receives
-			// the full carried triple alongside Unit.Move and FlightState. Omitting
-			// VY loses a climbing carrier's motion at the save boundary
-			// [04 R-FAC-02 §2][08 R-SAVE-02 §8].
-			collCargo.VY = carrierVY
-			collCargo.VZ = carrierVZ
-			collCargo.Speed = carrierSpeed
-			collCargo.Dirty = true
-			newAnchor := collCargo.ProposedAnchor(cargo.Move.Mode)
-			stampedPlane, stamps := planeForMode(cargo.Move.Mode)
-			stampMismatch := collCargo.HasStamp && (!stamps || collCargo.StampedPlane != stampedPlane)
-			if newAnchor != collCargo.OldAnchor || collCargo.Mode != cargo.Move.Mode || stampMismatch {
-				// Carried motion bypasses validation, but the carried-position
-				// setter still clears and stamps on a cell/mode change, in the
-				// plane its mode names: a mode-1 nanoframe holds the ground word
-				// of its pad for the whole build, and an attached mover in mode 0
-				// writes nothing [04 R-FAC-02 §2][04 R-COLL-01 §4].
-				collCargo.OldAnchor = newAnchor
-				collCargo.CachedAnchor = newAnchor
-				collCargo.Mode = cargo.Move.Mode
-				// The setter writes "XYZ, cell pair and MODE" on a change
-				// [04 R-FAC-02 §2], so the cached mode moves with the cached
-				// pair. Keeping it stale is what would let the released
-				// cargo's next commit take the same-cell fast path and skip
-				// the restamp [04 R-COLL-01 §1] — the commit
-				// [04 R-AIR-01 §10] item 2 requires to run.
-				collCargo.CachedMode = cargo.Move.Mode & 0x3
-				s.syncMoverStamp(cargo)
-			}
+	}
+	// Copy heading/pitch and carrier velocity/speed (zeroed if carrier has no mover) [04 §10.2]
+	// Heading/pitch from carrier's piece; velocity/speed from carrier mover.
+	cargo.Move.Heading = carrier.Move.Heading + pieceHeading
+	cargo.Move.Pitch = carrier.Move.Pitch + piecePitch
+	cargo.Move.Bank = carrier.Move.Bank + pieceRoll
+	// The carrier mover's authoritative vector is copied regardless of the
+	// cargo mover representation; no mover means an exact zero vector
+	// [04 R-FAC-02 §2].
+	carrierVX, carrierVY, carrierVZ, carrierSpeed := int32(0), int32(0), int32(0), int32(0)
+	if fl := s.Flights[carrier.Handle]; fl != nil {
+		carrierVX, carrierVY, carrierVZ, carrierSpeed = fl.VX, fl.VY, fl.VZ, fl.Speed
+	} else if coll := s.Collisions[carrier.Handle]; coll != nil {
+		carrierVX, carrierVY, carrierVZ, carrierSpeed = coll.VX, coll.VY, coll.VZ, coll.Speed
+	}
+	cargo.Move.Speed = numeric.Fixed(carrierSpeed)
+	// The mover's VELOCITY TRIPLE follows the same copy as the scalar: the
+	// commit's carried branch "copies the carrier's velocity triple and
+	// scalar speed into this mover (zeroes when the carrier has no mover)"
+	// [04 R-COLL-01 §1][04 R-FAC-02 §2]. The zeroing arm is the initial
+	// value of the three locals above, so a cargo riding a mover-less
+	// carrier publishes an exact zero triple and the pre-fire lead of
+	// [06 §3.3] leads it by nothing.
+	cargo.Move.VelX = numeric.Fixed(int64(carrierVX))
+	cargo.Move.VelY = numeric.Fixed(int64(carrierVY))
+	cargo.Move.VelZ = numeric.Fixed(int64(carrierVZ))
+	// A carried flight state is a mirror of the carrier's committed motion;
+	// its integrator must not advance the cargo independently [04 R-FAC-02 §2].
+	if flCargo, ok := s.Flights[cargo.Handle]; ok {
+		flCargo.X = int32(cargo.X.Raw())
+		flCargo.Y = int32(cargo.Y.Raw())
+		flCargo.Z = int32(cargo.Z.Raw())
+		flCargo.VX = carrierVX
+		flCargo.VY = carrierVY
+		flCargo.VZ = carrierVZ
+		flCargo.Speed = carrierSpeed
+		flCargo.Heading = cargo.Move.Heading
+	}
+	if stCargo, ok := s.Steers[cargo.Handle]; ok {
+		stCargo.X = int32(cargo.X.Raw())
+		stCargo.Z = int32(cargo.Z.Raw())
+		stCargo.Heading = cargo.Move.Heading
+		stCargo.Speed = int32(cargo.Move.Speed.Raw())
+	}
+	if collCargo, ok := s.Collisions[cargo.Handle]; ok {
+		collCargo.X = int32(cargo.X.Raw())
+		collCargo.Z = int32(cargo.Z.Raw())
+		collCargo.Y = int32(cargo.Y.Raw())
+		collCargo.Heading = cargo.Move.Heading
+		collCargo.VX = carrierVX
+		// The collision record is also the mover-save source, so it receives
+		// the full carried triple alongside Unit.Move and FlightState. Omitting
+		// VY loses a climbing carrier's motion at the save boundary
+		// [04 R-FAC-02 §2][08 R-SAVE-02 §8].
+		collCargo.VY = carrierVY
+		collCargo.VZ = carrierVZ
+		collCargo.Speed = carrierSpeed
+		collCargo.Dirty = true
+		newAnchor := collCargo.ProposedAnchor(cargo.Move.Mode)
+		stampedPlane, stamps := planeForMode(cargo.Move.Mode)
+		stampMismatch := collCargo.HasStamp && (!stamps || collCargo.StampedPlane != stampedPlane)
+		if newAnchor != collCargo.OldAnchor || collCargo.Mode != cargo.Move.Mode || stampMismatch {
+			// Carried motion bypasses validation, but the carried-position
+			// setter still clears and stamps on a cell/mode change, in the
+			// plane its mode names: a mode-1 nanoframe holds the ground word
+			// of its pad for the whole build, and an attached mover in mode 0
+			// writes nothing [04 R-FAC-02 §2][04 R-COLL-01 §4].
+			collCargo.OldAnchor = newAnchor
+			collCargo.CachedAnchor = newAnchor
 			collCargo.Mode = cargo.Move.Mode
+			// The setter writes "XYZ, cell pair and MODE" on a change
+			// [04 R-FAC-02 §2], so the cached mode moves with the cached
+			// pair. Keeping it stale is what would let the released
+			// cargo's next commit take the same-cell fast path and skip
+			// the restamp [04 R-COLL-01 §1] — the commit
+			// [04 R-AIR-01 §10] item 2 requires to run.
+			collCargo.CachedMode = cargo.Move.Mode & 0x3
+			s.syncMoverStamp(cargo)
 		}
+		collCargo.Mode = cargo.Move.Mode
 	}
 }
 

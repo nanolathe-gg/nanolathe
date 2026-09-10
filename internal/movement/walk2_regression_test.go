@@ -183,9 +183,8 @@ func TestAnnulusGoalPointUsesBearingAndBandMidpoint(t *testing.T) {
 	}
 	radius := int64(48 << 16)
 	bearing := numeric.AngleFromAtan2(200, 100)
-	tableAngle := bearing + 0x20
-	offsetX := numeric.Fixed((radius*int64(numeric.Sin(tableAngle)) + 0x1000) >> 13)
-	offsetZ := numeric.Fixed((radius*int64(numeric.Cos(tableAngle)) + 0x1000) >> 13)
+	offsetX := numeric.Fixed((radius*int64(numeric.Sin(bearing)) + 0x1000) >> 13)
+	offsetZ := numeric.Fixed((radius*int64(numeric.Cos(bearing)) + 0x1000) >> 13)
 	if goalX != center+offsetX || goalZ != center+offsetZ {
 		t.Fatalf("annulus goal point=(%d,%d) want non-axis ring point (%d,%d)", goalX, goalZ, center+offsetX, center+offsetZ)
 	}

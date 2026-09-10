@@ -227,13 +227,17 @@ slot must not inherit its footprint, profile, tier or occupancy.
 **The composition root** (`integrate.go`). `System` holds the terrain, the
 compiled class table, the occupancy grid, the scheduler, the per-handle route,
 steer, flight and collision maps, the per-handle resolved profile, the class
-layer registry, the air sector grid, the per-tick cargo snapshot and the
-air-base registry. `BeginTick` builds the deterministic per-tick indexing —
-the carried set in player-then-slot order and the throttled air-base rebuild;
-`StepUnit` runs one unit's whole mover tick; `EndTick` slaves cargo to its
-carriers after every carrier has moved. `StepUnit` refuses to run outside that
-transaction rather than reconstructing a snapshot of its own. The per-unit body
-is: the carried early exit, then either the air path or the ground path; on the
+layer registry, the air sector grid and the air-base registry. `BeginTick`
+starts the transaction and rebuilds the throttled air-base registry;
+`StepUnit` runs one unit's whole mover tick; `EndTick` records post-sweep
+diagnostics. `StepUnit` refuses to run outside that transaction. The per-unit
+body first reads the unit's live attachment: a carried unit commits its carried
+pose, velocity and occupancy at its own slot and exits. Thus a cargo before
+its carrier sees the carrier's prior committed pose, while a later cargo sees
+the carrier's same-tick pose; an attachment or release before a cargo's visit
+is effective immediately `[04 R-MOV-03 §1]` `[04 R-COLL-01 §1]`
+`[04 R-FAC-02 §2]`. An uncarried unit then takes either the air path or the
+ground path; on the
 ground path the follower's per-tick service answers arrival first, then the
 route is consulted, then steering, occupancy commit, movement-rate callbacks
 and occupancy-band classification. The post-move Y, pitch and roll correction

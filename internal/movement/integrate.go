@@ -87,15 +87,16 @@ type System struct {
 	// refreshes its revision-pass world [04 §6.1 R-DOC04-B].
 	layerRegistry *ClassLayers
 
-	// per-tick shared indexing built deterministically ONCE in BeginTick [04 §8.2] C22.
-	// StepUnit consumes it; EndTick clears it.
+	// BeginTick/EndTick delimit the unit sweep transaction [04 §8.2] C22.
+	// Attachment is deliberately not cached here: the carried branch belongs to
+	// the cargo's own mover visit and reads its live carrier link [04 R-MOV-03
+	// §1][04 R-COLL-01 §1].
 	tickStarted bool
 	tick        uint32
-	tickCarried map[pool.Handle]struct{}
 
 	// airBases is the per-side target registry's third list — the
 	// damaged-aircraft base candidates of [06 §3.1 "the third list"] and
-	// [04 R-AIR-01 §11]. Unlike tickCarried it is NOT per-tick: it is refilled
+	// [04 R-AIR-01 §11]. It is not per-tick: it is refilled
 	// on the registry's own 30-tick cadence and deliberately read stale in
 	// between, which is the behavior. BeginTick drives the rebuild so the
 	// snapshot is taken at a tick boundary rather than at whichever aircraft
@@ -1016,10 +1017,10 @@ func (b *hoverBob) component(i int32) int32 {
 	// [04 R-MOV-01 §5][04 R-MOV-01 §5c]. The sum wraps in 16 bits, as the
 	// angle does.
 	angle := int16(((b.counter&0x1f + 8*i) << 11) + int32(b.phase))
-	// The shared table biases the angle by 0x20 before selecting one of its 512
-	// entries, and the product rounds to nearest at the table's 8192 scale
+	// Sin selects the shared table entry, including its required angle-index
+	// bias, and MulRound applies the component product rounding
 	// [04 R-MOV-01 §4][04 R-MOV-01 §5].
-	return numeric.MulRound(numeric.Sin(numeric.Angle(uint16(angle))+0x20), b.amp)
+	return numeric.MulRound(numeric.Sin(numeric.Angle(uint16(angle))), b.amp)
 }
 
 // applyGroundConform samples the four vertices of the root selection plate.
@@ -2555,11 +2556,10 @@ func groundGoalPoint(goal path.Goal, u *units.Unit, footX, footZ int32) (numeric
 		dz := int64(u.Z) - int64(centerZ)
 		bearing := numeric.AngleFromAtan2(dx, dz)
 		radius := int64(int32(trace.A+trace.B)/2) << 16
-		// The shared table biases the angle by 0x20 before selecting one of its
-		// 512 entries [04 R-MOV-01 §4].
-		tableAngle := bearing + 0x20
-		offsetX := (radius*int64(numeric.Sin(tableAngle)) + 0x1000) >> 13
-		offsetZ := (radius*int64(numeric.Cos(tableAngle)) + 0x1000) >> 13
+		// Sin and Cos select the shared table entry, including its required
+		// angle-index bias [04 R-MOV-01 §4].
+		offsetX := (radius*int64(numeric.Sin(bearing)) + 0x1000) >> 13
+		offsetZ := (radius*int64(numeric.Cos(bearing)) + 0x1000) >> 13
 		return centerX + numeric.Fixed(offsetX), centerZ + numeric.Fixed(offsetZ), true
 	case 3:
 		midX := int32(trace.Rect.Min.X+trace.Rect.Max.X) / 2
@@ -2823,9 +2823,7 @@ func (s *System) emitMovementCallbacks(u *units.Unit, speed int32) {
 	}
 }
 
-// BeginTick builds per-tick shared indexing deterministically ONCE per tick [04 §8.2] C22.
-// The cargo set (units whose Attachment.Carrier != 0) is captured here so all
-// StepUnit calls in this tick observe the same cargo membership [04 §10.2].
+// BeginTick starts the per-tick transaction [04 §8.2] C22.
 // The occupancy grid itself is synchronous; clear-then-stamp finishes before the
 // next slot [04 §8.2] C22, so later StepUnit calls immediately observe earlier
 // commits without needing a separate grid copy. BeginTick must be called once
@@ -2836,27 +2834,7 @@ func (s *System) BeginTick(tick uint32) {
 	}
 	s.tick = tick
 	s.tickStarted = true
-	// Deterministic cargo indexing [I1][04 §10.2]: player 0..9 asc then slot asc
-	// via IterSliced yields that order [P0-16]. Build once; StepUnit consumes.
-	// The carried set is per-tick, but the map itself is not: clearing keeps
-	// the buckets and spares one allocation every tick. An empty map answers
-	// every read exactly as the nil map the tick used to start from.
-	if s.tickCarried == nil {
-		s.tickCarried = make(map[pool.Handle]struct{}, 8)
-	} else {
-		clear(s.tickCarried)
-	}
 	w := s.world
-	if w != nil {
-		for _, u := range w.IterSliced() {
-			if u == nil || !u.Alive {
-				continue
-			}
-			if u.Attachment.Carrier != 0 {
-				s.tickCarried[u.Handle] = struct{}{}
-			}
-		}
-	}
 	// The target registry's third list, on its own cadence — the call is made
 	// every tick and Rebuild itself applies the 30-tick throttle, so the
 	// snapshot lands on a tick boundary [06 §3.1][04 R-AIR-01 §11].
@@ -2896,9 +2874,7 @@ func (s *System) AirBaseList(allyGroup uint8) []pool.Handle {
 	return s.airBases.List(allyGroup)
 }
 
-// EndTick clears per-tick shared indexing and performs the one piece of
-// post-sweep work that must happen once after all carriers have moved: cargo
-// slaving [04 §10.2]. It must be called after the per-unit StepUnit loop.
+// EndTick finishes the per-tick transaction after the per-unit StepUnit loop.
 //
 // It does no healing. The lane retired here (WU-19-206) swept every grounded
 // `canfly` unit against every `isairbase` definition within 16 world units and
@@ -2916,18 +2892,13 @@ func (s *System) EndTick(tick uint32) {
 	if s == nil {
 		return
 	}
-	if w := s.world; w != nil {
-		s.SyncCarriedMotion(w) // [04 §10.2] cargo slaved to carrier, no occupancy stamp
-	}
 	s.recordCollisionHistory(tick)
-	clear(s.tickCarried)
 	s.tickStarted = false
 }
 
 // StepUnit advances ONLY the unit identified by handle through the phase-2
 // integration path [04 §8.1][04 §8.2][04 §10.1]. The session composes the
-// BeginTick+ascending StepUnit loop+EndTick transaction. Shared per-tick indexing
-// from BeginTick is consumed;
+// BeginTick+ascending StepUnit loop+EndTick transaction;
 // published routes are consumed without duplicate submission; route/goal
 // completion uses goal tolerance (arrival) and is exposed via StepResult.
 // Ground, air, landing, transport states keep working [04 §9.1][04 §10.2].
@@ -2936,9 +2907,8 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	if s == nil {
 		return StepResult{Handle: handle, EmptyRoute: true, LifecycleError: true, DistToGoal: numeric.Fixed(1 << 30)}
 	}
-	// Phase 2 is one explicit transaction. A direct StepUnit call cannot
-	// reconstruct its per-tick cargo snapshot safely, so report the lifecycle
-	// violation and leave gameplay state untouched [01 §4.4][04 §8.2].
+	// Phase 2 is one explicit transaction. A direct StepUnit call reports the
+	// lifecycle violation and leaves gameplay state untouched [01 §4.4][04 §8.2].
 	if !s.tickStarted || s.tick != tick {
 		return StepResult{Handle: handle, EmptyRoute: true, LifecycleError: true, DistToGoal: numeric.Fixed(1 << 30)}
 	}
@@ -2950,15 +2920,17 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	if u == nil || !u.Alive {
 		return StepResult{Handle: handle, EmptyRoute: true, DistToGoal: numeric.Fixed(1 << 30)}
 	}
-	// Cargo membership is read only from the snapshot captured by BeginTick
-	// [04 §10.2]. The active lifecycle check above makes a direct carrier read
-	// unnecessary and prevents StepUnit from becoming a second transaction owner.
-	if _, isCarried := s.tickCarried[handle]; isCarried {
+	// The carried branch is a movement commit at this cargo's physical visit.
+	// The live link makes same-tick attachment and release visible to the
+	// remaining slots; a carrier that has not run yet contributes its previous
+	// committed pose [04 R-MOV-03 §1][04 R-COLL-01 §1][04 R-FAC-02 §2].
+	if u.Attachment.Carrier != 0 {
 		// Transport removes the mover from the ground route scheduler. Keep
 		// the queue record intact for the eventual unload, but clear all
 		// follower state so a carried unit cannot re-arm an old request
 		// [04 §10.2][04 R-PATH-01 §8].
 		s.DeactivateMove(handle)
+		s.syncCarriedUnit(w, u)
 		d := s.distToGoal(u)
 		s.emitMovementCallbacks(u, 0)
 		return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false}
