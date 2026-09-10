@@ -79,11 +79,10 @@ type SensorUnit struct {
 	SonarJam         int32
 	MinCloakDistance int32
 
-	// ModelTop is the candidate's bounding-box top extent in whole world
-	// units. The radar admission test compares the top of that box against the
-	// sea plane, so a submarine whose hull breaks the surface is radar-visible
-	// while a fully submerged one is not [R-VIS-01 §5].
-	ModelTop int32
+	// ModelTopFixed is the candidate's full 16.16 upper Y bound. Radar adds
+	// it to world Y at signed 32-bit width before comparing with the sea plane;
+	// the LOS emitter's byte height is a separate consumer [R-VIS-01 §5].
+	ModelTopFixed int32
 
 	// DecloakDeadline receives tick+90 when this unit is decloaked by proximity [R-VIS-01 §4] pass 4.
 	DecloakDeadline *uint32
@@ -297,7 +296,7 @@ func (s *Service) SensorTick(tick uint32, playerCount int, units []SensorUnit) {
 				if c.Y <= sea && d2 < sonar2 {
 					*c.Status |= SonarBit
 				}
-				if sea <= c.Y+numeric.Fixed(int64(c.ModelTop)<<16) && d2 < radar2 {
+				if int32(sea.Raw()) <= int32(c.Y.Raw())+c.ModelTopFixed && d2 < radar2 {
 					*c.Status |= SeenBit
 				}
 			}
@@ -321,7 +320,7 @@ func (s *Service) SensorTick(tick uint32, playerCount int, units []SensorUnit) {
 				if c.Y <= sea && d2 < sonar2 {
 					*c.Status |= SonarBit
 				}
-				if sea <= c.Y+numeric.Fixed(int64(c.ModelTop)<<16) && d2 < radar2 {
+				if int32(sea.Raw()) <= int32(c.Y.Raw())+c.ModelTopFixed && d2 < radar2 {
 					*c.Status |= SeenBit
 				}
 			}

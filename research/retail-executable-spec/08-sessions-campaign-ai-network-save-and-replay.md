@@ -3953,10 +3953,12 @@ the first-rebuild tick and the exclusion bit's full census are in
 * The semantic name of the order gate-mask bits the construction task tests —
   bit 3 in pass 1 and bit 14 in pass 2 [04 "Order descriptor table"] · doc 04
   owns the mask · static trace over the descriptor table's consumers.
-* Whether the wave's `engaged` latch and the rally task's best point, drift
-  and best score are serialized; no AI account and no task-record item exists
-  in the save inventory ([R-SAVE-02 §11-A]), so the bounded reading is that
-  they are not · "Save-file organization" · static trace.
+
+**Established — planner persistence is closed.** The wave's `engaged` latch
+and the rally task's best point, drift and best score are not serialized.
+The closed account inventory and the battle-entry reconstruction path are
+described in [R-SAVE-02 §11-A]; loading reconstructs these working records
+rather than restoring their former values.
 
 #### The two per-definition passes run the whole fragment, kinds unfiltered — Established [R-AI-01 §18]
 
@@ -7983,10 +7985,6 @@ body and are not restated here.
 - Semantic names of the order gate-mask bits the construction task tests
   (bit 3 in its build pass, bit 14 in its repositioning pass) · [R-AI-01 §3],
   doc 04 "Order descriptor table" · static trace.
-- Whether the attack wave's engaged latch and the rally task's best point,
-  drift and best score are serialized; the account inventory holds no AI
-  item for them · [R-AI-01 §4], [R-AI-01 §7], [R-SAVE-02 §11-A] · static
-  trace of the save writer's task-record coverage.
 
 ### Networking
 

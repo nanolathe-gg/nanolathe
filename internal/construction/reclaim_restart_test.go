@@ -4,10 +4,12 @@ import (
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/cob"
+	"github.com/nanolathe-gg/nanolathe/internal/movement"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // arrangedScripts reports which of the bridge-bound scripts have live threads,
@@ -43,6 +45,9 @@ func TestReclaimOutOfReachRestartEmitsStopThenStart(t *testing.T) {
 	// survives every visit, so the record stays alive across the excursion.
 	s, builder, target, node := reclaimFixture(t, 100, 10)
 	target.Remaining = 0
+	s.Movement = movement.NewSystem(&world.Terrain{CellW: 32, CellH: 32, Plot: make([]world.PlotCell, 1024)}, movement.Profile{FootPrintX: 1, FootPrintZ: 1}, movement.NewOccupancyGrid())
+	s.Movement.BindWorld(s.World)
+	s.Movement.EnsureUnit(builder)
 	orders.QueueForUnit(builder).SetBinding(&orders.QueueBinding{Lookup: func(pool.Handle) *units.Unit { return builder }})
 	vm := bindScriptBridge(t, builder, "StartBuilding", "StopBuilding")
 	step := func(tick uint32) {
@@ -61,15 +66,15 @@ func TestReclaimOutOfReachRestartEmitsStopThenStart(t *testing.T) {
 	// Walk out of reach. The reach test is in whole world units against
 	// `builddistance` (10 here) plus the target's radius [05 R-WORK-01 §2].
 	builder.X = numeric.Fixed(500 << 16)
-	step(1)
+	step(2)
 	if got := arrangedScripts(vm, "StartBuilding", "StopBuilding"); len(got) != 2 || got[1] != "StopBuilding" {
 		t.Fatalf("out-of-reach transition: arrangements %v, want [StartBuilding StopBuilding]", got)
 	}
-	if node.Param1 != 0 || node.Param2 != 0 {
-		t.Fatalf("restart did not clear the accumulators: p1=%d p2=%d", node.Param1, node.Param2)
+	if node.Phase != 0 {
+		t.Fatalf("restart phase=%d, want 0", node.Phase)
 	}
-	if node.Deadline != int32(1+reclaimRestartDelay) {
-		t.Fatalf("restart deadline %d, want %d", node.Deadline, 1+reclaimRestartDelay)
+	if node.Deadline != int32(2+reclaimRestartDelay) {
+		t.Fatalf("restart deadline %d, want %d", node.Deadline, 2+reclaimRestartDelay)
 	}
 
 	// Further out-of-reach polls emit nothing: the mid-life emission is gated
@@ -87,7 +92,12 @@ func TestReclaimOutOfReachRestartEmitsStopThenStart(t *testing.T) {
 	if got := arrangedScripts(vm, "StartBuilding", "StopBuilding"); len(got) != 2 {
 		t.Fatalf("re-entry emitted before the restart deadline: arrangements %v", got)
 	}
-	step(1 + reclaimRestartDelay)
+	step(2 + reclaimRestartDelay)
+	if node.Phase != 1 || node.Param2 != 0 {
+		t.Fatal("restart did not re-arm the approach and reset cadence")
+	}
+	node.Satisfied |= 0x20 // the movement follower's arrival [04 R-PATH-01 §9]
+	step(3 + reclaimRestartDelay)
 	if node.Param1 == 0 {
 		t.Fatal("re-entry did not re-seed the reclaim pulse")
 	}
@@ -97,8 +107,8 @@ func TestReclaimOutOfReachRestartEmitsStopThenStart(t *testing.T) {
 	}
 
 	// And it stays at one: later in-reach work visits do not re-arrange it.
-	step(2 + reclaimRestartDelay)
 	step(4 + reclaimRestartDelay)
+	step(5 + reclaimRestartDelay)
 	if got := arrangedScripts(vm, "StartBuilding", "StopBuilding"); len(got) != 3 {
 		t.Fatalf("in-reach work visits re-emitted StartBuilding: arrangements %v", got)
 	}

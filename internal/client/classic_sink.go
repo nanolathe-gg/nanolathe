@@ -630,8 +630,8 @@ func (s classicSink) Fog(fg drawlist.Fog) {
 			// hi==15 fogged-but-explored: remap existing pixels through the
 			// gray-table LUT; terrain texture is preserved and desaturated
 			// [03 §3.3][03 §4.3.3]. Retail applies the LUT to physical
-			// screen indices; c.indexed holds logical indices and Logical is
-			// identity until animated, so the direct application matches.
+			// screen indices; c.indexed holds physical indices, with semantic
+			// colours already resolved by their command producers.
 			c.fogFillGray(x0, y0, x1, y1)
 		case render.FogKindPatterned:
 			// hi==15 dithered checker uses parity (camX+camZ)&1 [03 §3.3].

@@ -516,6 +516,9 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 	cl.SetCamera(b.cam)
 	cl.SetPalette(b.hud.pal)
 	cl.SetFNT(b.hud.console)
+	// The later message column selects COMIX; group digits retain the side
+	// console face [07 R-HUD-03 §14.4][03 R-FX-01 §6A].
+	cl.SetMessageFNT(b.hud.primaryFont)
 	// The strategic view's markers take their colours from the same blip art
 	// the minimap's dots are drawn from, and answer the same options word
 	// (DESIGN_GPU_RENDERER §16.11).

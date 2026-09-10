@@ -179,6 +179,11 @@ manager construction is a battle-entry step and not a lazy one
 per-player phase once, grants no second helping of resources, and snapshots the
 metal-spot vector `[08 R-ENTRY-01 §8]`.
 
+Extraction sampling is implemented at unit creation, including creation paths
+that bypass a placement helper. Settlement consumes the stored rate; later
+terrain or feature changes do not resample it. The established contract is
+`[05 R-PROD-01 §6]`, owned by DESIGN_ECONOMY_CONSTRUCTION.
+
 **Meteor startup.** Before services start scheduling, battle entry and retail
 restore install the storm from the selected schema, not `[GlobalHeader]`. The
 original weapon name fixes enabled before `METEOR.TDF` may replace the five-field
@@ -906,6 +911,14 @@ rewrites the standing orders: fire-at-will unconditionally, and the manoeuvre
 move order when the definition can capture, otherwise roam
 `[08 R-P0-04 §2]` `[08 R-AI-01 §10]` `[08 R-AI-02 §2]` `[08 "Wave merge"]`.
 
+The resource task's metal-maker branch uses the established single-precision
+stock and net-energy comparisons of `[08 R-AI-01 §2]`: energy at or below
+metal plus metal disables through the ordinary activation service. Above that
+stock threshold, nonpositive net energy leaves activation unchanged; positive
+net energy admits one simulation draw bounded by five, enabling only when the
+draw is nonzero. A zero draw leaves activation unchanged, including an already
+active maker. Callbacks occur only on an activation edge `[04 §5]`.
+
 **C4 — the profile grammar is gated.** `plan` is a gate: weight and limit lines
 before it do not apply, and an unrecognized plan name leaves the gate clear so
 every directive after it is inert. `weight <type> <factor>` multiplies the
@@ -960,21 +973,24 @@ Nonpositive scores draw nothing; bounds below two do not advance the stream.
 This is the repeated running-total reservoir, not one final draw
 `[08 R-AI-01 §8]` `[08 R-P0-05 §4]` [I4].
 
-**C8 — placement.** The search origin steps toward the strategic centre in
-16.16: the builder-to-centre distance is a square root over the loaded
-fixed-point deltas, truncated toward zero; the radius is a count of world
-units grown by 160 per failure, capped at the larger map dimension and reset to
-zero on success; the origin is the centre when the distance is zero or at least
-the scaled radius, and otherwise the builder plus the delta scaled by radius
-over distance through a 64-bit multiply and divide. A candidate whose
+**C8 — placement.** The established origin and growth algorithm is
+`[08 R-AI-03 §2]`: each attempt grows the radius while it is below the larger
+map dimension, with no final clamp; success resets it to zero. The origin
+steps from the builder toward the strategic centre only when the truncated
+three-dimensional distance exceeds the scaled radius. Otherwise, including
+equality and zero distance, the origin is the centre. The fixed-point scale is
+truncated before multiplying each axis delta, preserving the two arithmetic
+stages of that contract. A candidate whose
 extracts-metal word compares equal to floating zero goes to the scatter helper
 with **no draw**; otherwise one draw with bound 255 selects the exhaustive
 metal-spot helper when the mission's uniform surface metal is strictly less
 than the draw, and the scatter helper otherwise — strictly less, so equality
 chooses scatter. The exhaustive helper scans the battle-entry metal-spot vector
-within a circle of four times the radius, filters and sorts by distance,
-validates in sorted order and stops when the next distance exceeds the best by
-a slack of 160; a failure does **not** fall through to scatter. The scatter
+within a circle of four times the radius in cell units, then visits the
+nearest deposits through the specified binary heap. Equidistant deposits
+follow the heap's tie mechanics, not stable vector order. Validation stops
+when a candidate's squared cell distance exceeds the first accepted candidate's
+by the contract's slack; a failure does **not** fall through to scatter. The scatter
 helper attempts up to 30 trials around the origin, drawing up to four values
 per trial, selecting its lattice region by the definition's water-depth sign,
 and comparing the footprint's per-cell metal sum against surface metal ×
@@ -1037,10 +1053,6 @@ transfer shortcut `[04 R-ORD-02 §1]` `[08 R-AI-01 §7]`.
   naval policy is three water-depth tests. Nothing established by
   `[08 R-AI-04 §3]` or `[08 R-AI-04 §4]` is missing, and nothing beyond them is
   invented.
-* **The extraction rate is sampled at the placement call sites, not by the unit
-  creator.** A unit created by a path that bypasses a placement yields none.
-  The contract and its home are DESIGN_ECONOMY_CONSTRUCTION's
-  `[05 R-PROD-01 §6]`.
 
 ## 4. Retail behaviour that is not a bug
 
@@ -1122,11 +1134,12 @@ transfer shortcut `[04 R-ORD-02 §1]` `[08 R-AI-01 §7]`.
   research recommends the clamp, and no stock mission reaches the length.
 * **State names for 0–4 are ours.** No name exists in the image to clone. The
   labels are descriptive and unread by the simulation `[08 R-SESS-01 §8]`.
-* **SC18's save half is superseded.** That entry describes an earlier
-  Nanolathe-specific save codec and an unsupported in-battle restoration. The
-  codec is gone and the restoration is implemented against the retail accounts
-  (§3.1 C10); what remains open in SC18 is the allocator's zero-fill byte
-  count, which belongs to DESIGN_RUNTIME_DETERMINISM.
+* **SC18's allocator policy is closed.** Ordinary retail allocations retain
+  prior heap contents; Go zero-initialization is a host policy. The remaining
+  unknown is the constructor and slot-reuse write set for records whose owning
+  contracts are incomplete, as documented in DESIGN_RUNTIME_DETERMINISM.
+  Retail bank restoration is implemented against its own account contracts
+  (§3.1 C10).
 
 No other entry in [SPEC_CONFLICTS.md](SPEC_CONFLICTS.md) originates in these
 packages. SC21's building-versus-factory identity reaches the computer player's
@@ -1263,9 +1276,13 @@ Markers in these packages, one line each.
   handle, and whether the side panel's non-world-click issues run the same
   duplicate test. Both need a trace of the interface's call into the producer
   and belong to DESIGN_INTERFACE_HUD_INPUT `[07 §9]`.
+* Five `TODO(question)` markers in `internal/mission`'s `InitialMission`
+  integer parsing retain permissive floating-point fallbacks. The integer
+  scanner's prefix handling, overflow and continuation after a failed field
+  remain Unknown; a trace of those scanner branches settles them `[04 §3.6]`.
 
 No `TODO(question)`, `TODO(T23)` or `TODO(T25)` marker remains in
-`internal/mission`, `internal/triggers`, `internal/save`, `internal/headless`
+`internal/triggers`, `internal/save`, `internal/headless`
 or `cmd/nanolathe-headless`.
 
 Open questions carried by the contracts above rather than by a marker, each
@@ -1275,15 +1292,18 @@ with the observation that would settle it:
   zero-versus-nonzero tests and the recovered field identities are established;
   only the design-level name is not. Naming, no behaviour
   `[08 R-P0-05 §5]` `[08 "What remains not established"]`.
-* **Which cells the two placement helpers enumerate.** The metric and the
-  limits are closed; the loop geometry is the residual. A static trace of the
-  two helpers' loops settles it `[08 R-AI-03 §6]` `[08 R-P0-05 §8]`.
-* **Two order gate-mask bit names the construction task tests**, and **which
-  global option bit selects the rally task's two probe-validation forms**. The
-  package consumes the selected predicate rather than inventing a mapping
+* **The exhaustive placement helper's negative-row outcome.** The loop geometry
+  and row test are established; whether an out-of-grid read faults or returns
+  a garbage verdict depends on allocator placement. A retail probe with a
+  top-row deposit or the plot grid's allocation placement would settle that
+  outcome `[08 R-AI-03 §6]` `[08 R-AI-03 §7.1]`.
+* **Other readers of the movement class's `MinWaterDepth` word.** The class
+  routine, classifier and scatter helper's readers are established; a reader
+  census would settle whether more exist `[08 R-AI-03 §6]`.
+* **Two order gate-mask bit names the construction task tests.** The
+  package consumes the established masks rather than inventing their names;
+  a trace over the order descriptor table's consumers settles the names
   `[08 R-AI-01 §17]`.
-* **Whether the attack wave's engagement latch is serialized.** It is kept as
-  manager state and not written to a save box `[08 R-AI-01 §17]`.
 * **The initial-group low-nibble reader**, and **what a unit-created
   notification means** — every shipped condition ignores that slot, so the slot
   is kept and read by nobody `[08 R-TRIG-01 §11]`.
@@ -1293,3 +1313,8 @@ with the observation that would settle it:
 * **Which retail spans inside a save body remain opaque.** Only those the
   corrections section does not name; every account it names is implemented
   `[08 R-SAVE-02 §13]`.
+
+Two formerly open items are established: rally probe validation selects its
+grid using the session's LineOfSight bit `[08 R-AI-01 §7]`; planner state,
+including the wave engagement latch and rally working state, is reconstructed
+on load and is not serialized `[08 R-SAVE-02 §11-A]`.

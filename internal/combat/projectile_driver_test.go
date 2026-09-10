@@ -534,11 +534,15 @@ func TestTickProjectilesSteeringFailureRebuildsAfterImpact(t *testing.T) {
 	if desired := YawFromDelta(p.TargetPos.X, p.TargetPos.Z); absU16(uint16(int16(desired-p.Yaw))) <= 27000 {
 		t.Fatalf("fixture target yaw %d does not take the established burn-blow steering-failure branch", desired)
 	}
+	oldYaw, oldPitch := p.Yaw, p.Pitch
 	oldVelocity := p.Velocity
 	seenVelocity := Vec3{}
 	svc.Events = func(ev Event) {
 		if ev.Kind == EventProjectileImpact {
 			seenVelocity = svc.Records[int(h)-1].Velocity
+			if got := &svc.Records[int(h)-1]; got.Yaw != oldYaw || got.Pitch != oldPitch {
+				t.Errorf("impact observed mutated failing guidance: yaw=%d pitch=%d", got.Yaw, got.Pitch)
+			}
 		}
 	}
 

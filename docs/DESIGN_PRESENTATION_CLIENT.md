@@ -185,6 +185,14 @@ the fog handles, the display option bits, the software cursor, the message
 ring, and the bound audio service. `Options` injects `Step`, the frame
 `Buffer`, the logical size and the title.
 
+Battle adoption binds the primary COMIX FNT with `SetMessageFNT`, preserving
+the side font installed by `SetFNT` for group digits `[03 R-FX-01 §6A]`.
+`SetFNT(nil)` clears both bindings on teardown. The message column's glyph
+commands use that font's height for line spacing and resolve each logical
+foreground through `paletteIndex` before recording. Both executors therefore
+receive physical palette indices; the indexed surface needs no further GUI
+colour lookup `[07 R-HUD-03 §14.4]` `[03 §4.3]`.
+
 `Frame` is one window frame: drain and tick audio, compose the indexed surface,
 draw the cursor over it, expand to RGBA. `ComposeFrame` and
 `ComposeFrameSnapshot` run the same composition without entering the window

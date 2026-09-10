@@ -121,4 +121,22 @@ func TestUnitReclaimOutOfRangeInstallsTheTargetRectangleGoal(t *testing.T) {
 	if !sys.HasGroundGoal(builder.Handle, node) {
 		t.Fatalf("out-of-reach ReclaimUnit installed no ground goal [04 R-ORD-01 §5]")
 	}
+	if node.Phase != 1 || node.Param1 == 0 || node.Param2 != 0 || node.Deadline != 16 {
+		t.Fatal("approach did not seed pulse and arm the fifteen-tick wait")
+	}
+	oldX, oldZ, _ := sys.MoveGoalFor(builder.Handle, node)
+	target.X += numeric.FixedFromInt(64)
+	svc.StepUnit(TickContext{Tick: 15}, builder.Handle)
+	if x, _, _ := sys.MoveGoalFor(builder.Handle, node); x != oldX {
+		t.Fatal("approach moved before its deadline")
+	}
+	svc.StepUnit(TickContext{Tick: 16}, builder.Handle)
+	if x, z, _ := sys.MoveGoalFor(builder.Handle, node); x != oldX+numeric.FixedFromInt(64) || z != oldZ {
+		t.Fatalf("new approach retained the old target rectangle: x/z=%d/%d", x, z)
+	}
+	node.Satisfied |= 0x20
+	svc.StepUnit(TickContext{Tick: 17}, builder.Handle)
+	if node.Phase != 3 || node.Param2 != 0 {
+		t.Fatal("arrival bypassed the script stance wait")
+	}
 }

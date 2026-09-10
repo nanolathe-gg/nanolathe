@@ -5,9 +5,9 @@
 //
 // This file owns the ORDER RECORDS only. `internal/construction` owns the work
 // BODIES for factory build, mobile build and unit reclaim and drives those five
-// records from its own per-unit step, registering each row on the queue as
-// externally driven (Queue.SetExternallyDrivenHandler, queue_handlers.go);
-// nothing here duplicates or touches them.
+// records from its own per-unit step through a per-queue owned handler.
+// GroundUnitReclaimSetup supplies the reclaim callback/stance phases only;
+// construction keeps admission, approach, arithmetic and work timing.
 //
 // Three shared facts govern every body below, all from [04 R-ORD-01 §1]:
 //
@@ -1645,3 +1645,41 @@ func ensureWorkHandlers() {
 }
 
 func init() { ensureWorkHandlers() }
+
+// GroundUnitReclaimSetup supplies the order-owned callback and stance phases
+// for construction's per-queue executor [04 R-ORD-01 §5]. The caller owns
+// admission, approach, pulse arithmetic and the work window.
+func GroundUnitReclaimSetup(u *units.Unit, n *Node, satisfied, tick uint32) Code {
+	switch n.Phase {
+	case 0:
+		captionClearText(u, n, "Reclaiming")
+		releaseSlot(u, slotAll)
+		return 1
+	case 2:
+		if satisfied&gateNoRoute != 0 {
+			return 9
+		}
+		EmitStartBuilding(u, n)
+		return 1
+	case 3:
+		return inBuildStanceWait(u, n, 0x10008, tick)
+	case 4:
+		workStatus(u, statusWorking, "")
+		return 1
+	}
+	return 7
+}
+
+// ContinueUnitReclaim resumes the exact primary work record during the
+// construction window. The earlier ordinary queue visit has already pumped
+// the secondary segment, which must not run again here [04 R-ORD-01 §10].
+// Construction supplies the owned handler; this package keeps the gate and
+// result-code machinery as the single dispatcher [04 §3.3].
+func ContinueUnitReclaim(u *units.Unit, n *Node, tick uint32) {
+	q := QueueForUnit(u)
+	if q == nil || n == nil || q.Head() != n {
+		return
+	}
+	q.lastPumpTick = tick
+	q.pumpPrimary(u, tick)
+}

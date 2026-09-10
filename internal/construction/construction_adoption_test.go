@@ -102,6 +102,7 @@ func TestMobileBuildEmitsStartBuildingThroughOrders(t *testing.T) {
 func TestReclaimEmitsStartBuildingThroughOrders(t *testing.T) {
 	s, builder, target, node := reclaimFixture(t, 1, 10)
 	builder.Def.WorkerTime = 300 // pulse 15, one pulse reclaims fatally
+	node.Param1 = uint32(UnitReclaimPulse(builder, target))
 	// Cleanup resolves the record's owner through the queue binding [R-ORDER-02 §2].
 	orders.QueueForUnit(builder).SetBinding(&orders.QueueBinding{Lookup: func(pool.Handle) *units.Unit { return builder }})
 	vm := bindScriptBridge(t, builder, "StartBuilding", "StopBuilding")
@@ -173,8 +174,9 @@ func TestNoOtherStartBuildingFlagWriterInConstruction(t *testing.T) {
 		}
 	}
 	// states.go is where the factory's nanolathe site lives since CL-5 split
-	// factory.go by concern; the site itself is unchanged.
-	for _, want := range []string{"states.go", "reclaim.go"} {
+	// factory.go by concern; the site itself is unchanged. Reclaim now delegates
+	// its callback/stance phases to orders.GroundUnitReclaimSetup.
+	for _, want := range []string{"states.go"} {
 		if !emitSites[want] {
 			t.Errorf("%s does not adopt orders.EmitStartBuilding for its nanolathe/assist site [R-ORDER-02 §2]", want)
 		}

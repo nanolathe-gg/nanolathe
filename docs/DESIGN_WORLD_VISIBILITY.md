@@ -291,6 +291,12 @@ after settlement gates, using `TickPlayer`'s returned deadline verdict.
 Between due passes, stored sensor status remains unchanged; LOS publication
 still runs on each eligible player entry `[03 R-SENSOR-01]`.
 
+The session supplies `UnitDef.ModelTopFixed` unchanged through
+`SensorUnit.ModelTopFixed` for the radar height test in both candidate walks.
+This retains the full bound and the signed 32-bit addition boundary established
+in `[03 R-VIS-01 §5]`. LOS continues to consume the separately narrowed
+`UnitDef.ModelTop` byte through `heightByteAt` `[03 R-P0-18-A §1]`.
+
 **Ordered sensor broad phase (PERF-REND-03 implementation contract).**
 `Service.SensorTick(tick, playerCount, units)` keeps its public API and owns
 any reusable candidate scratch. Build that scratch from the supplied immutable

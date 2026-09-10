@@ -26,7 +26,7 @@ func (c *Client) MessageRing() *frame.MessageRing {
 // other line — so the highlight cannot leak onto a following line
 // [07 R-CAM-01 §14].
 func (c *Client) drawMessageLines() {
-	if c == nil || c.fnt == nil {
+	if c == nil || c.messageFNT == nil {
 		return
 	}
 	for i, line := range c.MessageLines() {
@@ -36,18 +36,17 @@ func (c *Client) drawMessageLines() {
 			// leave unresolved logo art absent rather than inventing a colour.
 			continue
 		}
-		y := 52 + i*int(c.fnt.Height)
-		// Record then execute inline: the classic sink runs the same FNT
-		// rasterizer with the same pen and max-width 0 (the zero value of
-		// Glyphs.MaxWidth), exactly as the direct DrawText call did, so the
-		// message column lands in per-frame order under the committed-frame list
-		// (docs/DESIGN_GPU_RENDERER.md §2.2)[07 R-HUD-03 §14.4][03 §7.1].
+		y := 52 + i*int(c.messageFNT.Height)
+		// Resolve the semantic colour before recording: both executors consume
+		// physical palette indices [03 §4.3]. The run retains the primary
+		// COMIX font, its line spacing and an unbounded width for deferred replay
+		// (docs/DESIGN_GPU_RENDERER.md §2.2)[07 R-HUD-03 §14.4].
 		c.emitGlyphs(drawlist.Glyphs{
-			Font:  c.fnt,
+			Font:  c.messageFNT,
 			Text:  line.Text,
 			X:     138,
 			Y:     int32(y),
-			Color: line.LogicalColor(),
+			Color: c.paletteIndex(line.LogicalColor()),
 		})
 	}
 }

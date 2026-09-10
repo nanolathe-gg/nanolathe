@@ -233,10 +233,19 @@ from that piece's world position to the product's box `[05 R-P0-06 §1]`
 
 **The other work operations.** `Repair` forms a heal packet that shares combat's
 early-heal path `[05 R-WORK-01 §3]`; unit reclaim is an order-driven worker
-state with its own two-tick cadence, pulse threshold and fifteen-tick restart,
-run through the same per-unit construction window but outside the build state
-machine `[05 R-WORK-01 §4]`; `capture.go` holds the capture timer, its two-tick
-progress and the ownership transfer with its three-test entry gate and death
+state with distinct ground and aircraft phase machines, run through the same
+per-unit construction window but outside the build state machine. The ground
+row arranges `StartBuilding` in phase 2, waits on the script-touched event and
+`INBUILDSTANCE` in phase 3, raises the work cue in phase 4, and starts cadence
+and damage only in phase 5. Losing reach emits `StopBuilding` and restarts
+behind fifteen ticks. The air row uses the air preamble and a target marker,
+checks `builddistance` without the ground target-radius addend, and restarts
+behind thirty ticks. It has no stance wait, `StartBuilding`, or reveal stamp.
+Both test the counter before incrementing, share the two-tick spray cadence,
+and complete the visit tail after a fatal packet `[04 R-ORD-01 §5]`
+`[04 R-ORD-01 §7]` `[04 R-COB-06]` `[05 R-WORK-01 §4]`.
+
+`capture.go` holds the capture timer, its two-tick progress and the ownership transfer with its three-test entry gate and death
 latch `[05 R-WORK-01 §6]` `[05 R-WORK-01 §15]`; `resurrection.go` holds the wait
 delay, the corpse-name truncation and the single simulation draw that is an
 approach-point vertical term, not a placement jitter `[05 R-WORK-01 §7]`;
@@ -515,9 +524,11 @@ later one; the outcome drives the activation/stall transition service, whose
 write is unconditional and whose cue notifications are the only conditional part
 `[05 "Cloak debit"]` `[05 R-ECO-01 §8]` `[05 R-ECO-01 §9]`.
 
-**C14 — extraction and storage.** An extractor stores `Σ(cellMetal + 1) ×
-extractsMetal` sampled over its footprint **once at placement** and never
-resamples; makers and extractors both stall on strictly positive energy carry.
+**C14 — extraction and storage.** The unit creator samples an extractor's
+stamped footprint once, including creation through resurrection, and stores
+its extraction rate using the accumulator width and conversion in
+`[05 R-PROD-01 §6]`. Later movement never resamples it; makers and extractors
+both stall on strictly positive energy carry.
 Storage capacity is rebuilt from scratch every pass from eligible completed
 units plus the start bonus `[05 "Terrain metal extraction"]`
 `[05 R-PROD-01 §6]` `[05 "Storage capacity"]` `[05 "Completed-unit eligibility"]`
@@ -710,10 +721,6 @@ active-list order `[05 R-FEAT-01 §10]` [I1].
   local SHARE screen `MAPINFO` binding `[05 R-SHARE-01 §5–§6]`. The established
   operation copies mapped memory only; it does not transfer LOS or radar.
   These are explicit scope limits, not a claim that all sharing is complete.
-* **The extraction rate is sampled at the placement call sites, not by the unit
-  creator.** Retail samples it in the allocator, so a unit created by a path
-  that does not go through a placement — a resurrection, for one — yields
-  nothing here where retail would yield metal `[05 R-PROD-01 §6]`.
 * **The cloak gate's second status bit is inert.** The gate requires it clear and
   nothing anywhere sets it, so the term is unobservable and is implemented as
   always satisfied `[05 R-ECO-01 §9]`.

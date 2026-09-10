@@ -3670,6 +3670,14 @@ radar: if SeaLevel << 16 <= candidate.worldY + definition.boundingBoxMaxY
            status |= 0x100
 ```
 
+**Established — radar height arithmetic.** The candidate world Y and the
+definition's full 16.16 upper Y bound are added at 32-bit width, retaining the
+low 32 bits of the sum. That result is compared as signed against the sea-level
+byte scaled to 16.16; equality admits radar contact. Neither operand loses its
+fractional bits, and the upper bound does not pass through the LOS emitter
+byte conversion of `[R-P0-18-A §1]`. A sum that overflows the positive signed
+range therefore compares as negative, rather than as a widened positive height.
+
 Both distance comparisons are **strict**. The sonar admission test is on the
 candidate's own 16.16 world Y against the sea plane; the radar admission test
 is on the top of the candidate's bounding box, so a submarine whose hull top

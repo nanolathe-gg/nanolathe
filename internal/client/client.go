@@ -178,6 +178,10 @@ type Client struct {
 	terrain *world.Terrain
 	cam     *camera.Camera
 	fnt     *formats.FNT
+	// messageFNT is the primary COMIX face selected by the later message pass;
+	// the group-digit walk retains the side font in fnt [07 R-HUD-03 §14.4]
+	// [03 R-FX-01 §6A].
+	messageFNT *formats.FNT
 
 	modelFS   *vfs.FS
 	models    map[string]*unitModel
@@ -585,7 +589,13 @@ func (c *Client) PaletteTables() *palette.Tables {
 }
 
 // SetFNT installs the shared software font used by typed UI stages [03 §7.1].
-func (c *Client) SetFNT(fnt *formats.FNT) { c.fnt = fnt }
+// Standalone callers share it with messages; battle adoption then overrides
+// the message face with SetMessageFNT. Clearing it also clears that binding.
+func (c *Client) SetFNT(fnt *formats.FNT) { c.fnt, c.messageFNT = fnt, fnt }
+
+// SetMessageFNT installs the primary font for the message column without
+// changing the side-font group digits [07 R-HUD-03 §14.4][03 R-FX-01 §6A].
+func (c *Client) SetMessageFNT(fnt *formats.FNT) { c.messageFNT = fnt }
 
 // SetSnapshot repoints presentation at another published buffer — used when
 // the shell transitions from front-end menus into a live battle session [I6].

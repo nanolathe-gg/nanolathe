@@ -16,6 +16,7 @@ func reclaimFixture(t *testing.T, targetHealth int32, buildDistance int32) (*Ser
 	t.Helper()
 	builderDef := &content.UnitDef{
 		UnitName:      "armrec",
+		BMCode:        1,
 		CanReclamate:  true,
 		WorkerTime:    30,
 		BuildDistance: buildDistance,
@@ -38,6 +39,8 @@ func reclaimFixture(t *testing.T, targetHealth int32, buildDistance int32) (*Ser
 		t.Fatal(err)
 	}
 	builder, target := w.Unit(bh), w.Unit(th)
+	builder.InBuildStance = true
+	target.Move.Mode = 1
 	target.Health = targetHealth
 	target.MaxHealth = targetDef.MaxDamage
 	id := orders.Lookup("ReclaimUnit")
@@ -50,8 +53,12 @@ func reclaimFixture(t *testing.T, targetHealth int32, buildDistance int32) (*Ser
 	q.Push(id, orders.Node{Owner: builder.Handle, Target: target.Handle, DynamicGate: 0, Deadline: -1})
 	node := q.Head()
 	node.DynamicGate = 0
+	// Pulse-focused fixtures begin after the separately tested approach. The
+	// phase-2 callback/stance/status chain still runs before the first work.
+	node.Phase, node.Param1 = 2, uint32(UnitReclaimPulse(builder, target))
 	svc := NewService(nil, cat, w, &economy.Service{})
 	bindConstructionCombat(svc)
+	svc.RegisterOrderHandlers(q)
 	return svc, builder, target, node
 }
 
@@ -129,11 +136,11 @@ func TestUnitReclaimBlockedRangeMakesNoProgress(t *testing.T) {
 	target.X = numeric.FixedFromInt(2)
 	before := target.Health
 	s.StepUnit(TickContext{Tick: 0, World: s.World, Economy: s.Economy, Catalog: s.Catalog}, builder.Handle)
-	if target.Health != before || node.Param2 != 0 || node.Param1 != 0 {
+	if target.Health != before || node.Param2 != 0 || node.Param1 != uint32(UnitReclaimPulse(builder, target)) {
 		t.Fatalf("out-of-range reclaim mutated target: health %d cadence %d pulse %d", target.Health, node.Param2, node.Param1)
 	}
-	if node.MoveState != orders.MoveEnRoute {
-		t.Fatalf("out-of-range reclaim state=%d want en-route", node.MoveState)
+	if node.Phase != 0 || node.Deadline != 15 {
+		t.Fatalf("out-of-range reclaim phase/deadline=%d/%d", node.Phase, node.Deadline)
 	}
 }
 
@@ -167,6 +174,7 @@ func TestUnitReclaimStampsSharedRevealDeadline(t *testing.T) {
 func TestUnitReclaimCadenceDefersFatalRefund(t *testing.T) {
 	s, builder, target, node := reclaimFixture(t, 1, 10)
 	builder.Def.WorkerTime = 300 // pulse 15, exercising ordinary lethal health clamp
+	node.Param1 = uint32(UnitReclaimPulse(builder, target))
 	target.Remaining = 0.25
 	// The target is also a factory's in-progress product. Reclaim retains that
 	// reference until the phase-2 death finalizer walks it, where the session
@@ -249,6 +257,7 @@ func TestUnitReclaimRefusesACommanderAndAnAircraft(t *testing.T) {
 	t.Run("cancapture target", func(t *testing.T) {
 		s, builder, target, _ := reclaimFixture(t, 100, 10)
 		target.Def.CanCapture = true // a commander
+		orders.QueueForUnit(builder).Head().Phase = 0
 		s.StepUnit(TickContext{Tick: 0, World: s.World, Economy: s.Economy, Catalog: s.Catalog}, builder.Handle)
 		if orders.QueueForUnit(builder).LenPrimary() != 0 {
 			t.Fatalf("a cancapture target was admitted for reclaim")
@@ -260,6 +269,7 @@ func TestUnitReclaimRefusesACommanderAndAnAircraft(t *testing.T) {
 	t.Run("airborne target", func(t *testing.T) {
 		s, builder, target, _ := reclaimFixture(t, 100, 10)
 		target.Move.Mode = 2 // airborne [04 R-MOV-01 §8]
+		orders.QueueForUnit(builder).Head().Phase = 0
 		s.StepUnit(TickContext{Tick: 0, World: s.World, Economy: s.Economy, Catalog: s.Catalog}, builder.Handle)
 		if orders.QueueForUnit(builder).LenPrimary() != 0 {
 			t.Fatalf("an airborne target was admitted for reclaim")

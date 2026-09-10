@@ -802,6 +802,14 @@ readout from the slide strip's own always-on `Game Speed` line below, which
 recomputes from the live clock every frame it is drawn and is not ring-backed
 `[07 R-HUD-04 §4]`.
 
+`installBattleClient` binds the HUD's primary COMIX FNT for this column through
+`SetMessageFNT`; `SetFNT` retains the side console for group digits
+`[03 R-FX-01 §6A]`, and the HUD passes its own font operands explicitly. The
+column advances by the COMIX glyph height. Each line resolves logical colour
+15 (ordinary) or 10 (the F3 destination) through the active palette map before
+recording its glyph command, so classic and modern share the same foreground
+`[07 R-HUD-03 §14.4]` `[07 "Retail palette contract"]` `[03 §4.3]`.
+
 ### 2.8 `cmd/nanolathe` — the battle HUD
 
 `battle_hud.go` builds `retailBattleHUD` from the mounted side data: the anchor

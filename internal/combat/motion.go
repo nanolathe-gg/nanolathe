@@ -850,6 +850,9 @@ func steerToward(p *Projectile, w *content.WeaponDef, point Vec3) bool {
 	desiredYaw := YawFromDelta(point.X.Sub(p.Pos.X), point.Z.Sub(p.Pos.Z))
 	errYaw := int16(desiredYaw - p.Yaw)
 	absYaw := uint32(absU16(uint16(errYaw)))
+	if w.BurnBlow && absYaw > 27000 {
+		return true // steering failure [06 §6.7]
+	}
 	if absYaw < turn {
 		p.Yaw = desiredYaw // snap strictly inside the rate
 	} else if errYaw >= 0 {
@@ -857,22 +860,19 @@ func steerToward(p *Projectile, w *content.WeaponDef, point Vec3) bool {
 	} else {
 		p.Yaw = numeric.Angle(uint16(int32(p.Yaw) - int32(turn)))
 	}
-	if w.BurnBlow && absYaw > 27000 {
-		return true // steering failure [06 §6.7]
-	}
 	// Pitch second; a failure here may follow an applied yaw update.
 	desiredPitch := PitchFromDelta(point.X.Sub(p.Pos.X), point.Y.Sub(p.Pos.Y), point.Z.Sub(p.Pos.Z))
 	errPitch := int16(desiredPitch - p.Pitch)
 	absPitch := uint32(absU16(uint16(errPitch)))
+	if w.BurnBlow && absPitch > 27000 {
+		return true
+	}
 	if absPitch < turn {
 		p.Pitch = desiredPitch
 	} else if errPitch >= 0 {
 		p.Pitch = numeric.Angle(uint16(int32(p.Pitch) + int32(turn)))
 	} else {
 		p.Pitch = numeric.Angle(uint16(int32(p.Pitch) - int32(turn)))
-	}
-	if w.BurnBlow && absPitch > 27000 {
-		return true
 	}
 	return false
 }

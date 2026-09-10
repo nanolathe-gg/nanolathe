@@ -837,25 +837,22 @@ func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service)
 		// The authored makes-metal byte selects the activation branch
 		// [08 "Eco toggle and group-vector population"].
 		if u.Def.MakesMetal != 0 {
-			// Branch 2*metal > energy ?
-			enable := false
-			if 2*metalStock > energyStock && netEnergy >= 1 {
-				// Draw RNG(5) only when branch taken [P0-02 §5] per-session isolated [RS-06][I4].
+			// Established: equality disables; nonpositive net energy and a
+			// zero draw leave activation unchanged [08 R-AI-01 §2].
+			if energyStock <= metalStock+metalStock {
+				u.SetActivated(false)
+			} else if netEnergy > 0 {
+				// Only this surplus branch admits RNG(5) [08 R-AI-01 §2][I4].
 				s := m.simRNG()
 				if s == nil {
 					// The production session always binds the simulation stream;
 					// without it there is no supported activation decision.
 					continue
 				}
-				enable = s.Uint32n(5) != 0
-			} else {
-				enable = false
+				if s.Uint32n(5) != 0 {
+					u.SetActivated(true)
+				}
 			}
-			// Ordinary toggle via the unit activation state. The retail
-			// activation path changes the operational bit; the
-			// units adapter owns that mutable state and economy reads it through
-			// EconomyActive [05 "Unit instance economy state"] [P0-02].
-			u.SetActivated(enable)
 			continue
 		}
 		// Second branch: a building that does not make metal but does carry

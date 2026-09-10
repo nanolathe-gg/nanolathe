@@ -61,6 +61,7 @@ func TestUnitReclaimPulseUsesCommonDamageIntake(t *testing.T) {
 	target.Def.DamageModifier = 32768 // armor halves before veteran reduction
 	target.LastDamageSide = target.Owner
 	target.LastDamageCause = uint8(combat.CauseCargo)
+	node.Phase = 5
 	node.Param1, node.Param2 = 15, 16 // fire on this visit
 
 	var reactionCount int

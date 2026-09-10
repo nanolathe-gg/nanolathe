@@ -35,7 +35,7 @@ func benchmarkSensorTick(b *testing.B, forceExhaustive bool) {
 				deadline := make([]uint32, n)
 				units := make([]SensorUnit, n)
 				for i := range units {
-					units[i] = SensorUnit{ID: uint16(i + 1), Owner: PlayerID(i % 2), Status: &status[i], DecloakDeadline: &deadline[i], X: numeric.Fixed(int64((i%32)*layout.spacing)<<16) + 12345, Z: numeric.Fixed(int64((i/32)*layout.spacing)<<16) + 32767, Alive: true, Active: true, ModelTop: 16, OwnerLocallySimulated: true, PrimaryCandidateOf: uint16(1) << uint(1-i%2)}
+					units[i] = SensorUnit{ID: uint16(i + 1), Owner: PlayerID(i % 2), Status: &status[i], DecloakDeadline: &deadline[i], X: numeric.Fixed(int64((i%32)*layout.spacing)<<16) + 12345, Z: numeric.Fixed(int64((i/32)*layout.spacing)<<16) + 32767, Alive: true, Active: true, ModelTopFixed: 16 << 16, OwnerLocallySimulated: true, PrimaryCandidateOf: uint16(1) << uint(1-i%2)}
 					if i%10 == 0 {
 						units[i].RadarDistance = 600
 						units[i].SonarDistance = 450

@@ -251,7 +251,10 @@ type Service struct {
 	mobileWakeRows        []orders.ID
 	getBuiltRow           orders.ID
 	boundConstructionWake orders.OwnedHandler
-	boundGetBuilt         orders.OwnedHandler
+	// Only StepUnit may execute the reclaim row body; earlier queue visits
+	// preserve their delivered events on the same node until this window.
+	reclaimStepNode *orders.Node
+	boundGetBuilt   orders.OwnedHandler
 }
 
 // ensureRegistrationRows resolves this service's row ids and binds its two
@@ -316,9 +319,9 @@ func (s *Service) queueForUnit(u *units.Unit) *orders.Queue {
 // buildRowsDrivenByStepUnit are the order rows this service advances from its
 // own per-unit step (StepUnit) rather than from the order pump: the factory and
 // mobile-build lifecycle [05 "Factory production lifecycle"][04 R-FAC-02 §4]
-// and the unit-reclaim machine [05 "Unit reclaim"]. This service reads and
-// writes each record's phase, dynamic gate and deadline as its state machine,
-// so the pump must write none of them.
+// and the unit-reclaim machine [05 "Unit reclaim"]. Build records own their
+// continuing phase, gate and deadline. Reclaim uses the ordinary pump epilogue
+// only inside StepUnit's construction window.
 //
 // The slice is fixed and ordered, never a map: registration walks it in source
 // order (I1).
@@ -366,11 +369,23 @@ func (s *Service) RegisterOrderHandlers(q *orders.Queue) {
 // StepUnit can inspect Pending [04 §3.3][04 R-ORD-01 §6][05 C22].
 //
 // The handler does not apply a result code for the continuing arms: StepUnit
-// remains the owner of their phase, gate and deadline. Mobile-build phase 1 is
-// the established exception, retaining its movement-wake body.
+// remains the owner of their phase, gate and deadline. Mobile-build phase 1
+// retains its movement-wake body. Reclaim forwards an early delivery onto its
+// exact record and applies result codes only inside StepUnit's work window.
 func (s *Service) constructionWakeVisit(builder *units.Unit, node *orders.Node, satisfied uint32, tick uint32) (orders.Code, bool) {
 	if s == nil || builder == nil || node == nil {
 		return 0, false
+	}
+	if isReclaimUnitNode(node) {
+		if s.reclaimStepNode != node {
+			// The ordinary pump consumed these bits before calling us. Forward
+			// that exact delivery on this record until StepUnit enters its work
+			// window; no event or deadline is synthesized [04 §3.3].
+			node.Satisfied |= satisfied
+			node.DynamicGate |= satisfied
+			return 0, false
+		}
+		return s.unitReclaimVisit(builder, node, satisfied, tick), true
 	}
 	if isBuildOrderID(node.ID) {
 		if satisfied&InterruptCancel != 0 {

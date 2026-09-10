@@ -10,12 +10,10 @@
 // different work constants, fewer captions. Each divergence is named at its
 // site.
 //
-// The fifth twin of §7, `VTOL_ReclaimUnit`, is deliberately absent: WU-17-14
-// established that internal/construction drives it from its own per-unit step,
-// and internal/construction registers it on the queue as externally driven
-// (Queue.SetExternallyDrivenHandler, queue_handlers.go), so the pump leaves
-// its phase, gate and deadline alone. Registering a descriptor handler for it
-// would write over a live state machine.
+// The fifth twin, `VTOL_ReclaimUnit`, is driven by internal/construction in
+// its per-unit work window. AirUnitReclaimSetup below supplies its preamble
+// and target marker through these same ports, without registering a second
+// descriptor handler or moving its damage into the earlier order pump.
 //
 // Everything work.go's header records applies here unchanged and is not
 // repeated per site: the status emitter, the nanolathe spray and its stamp, and
@@ -626,7 +624,7 @@ func vtolRepairPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint
 // vtolWorkHandlers pairs each descriptor with its handler in a fixed slice, not
 // a map: registration order is source order (I1).
 //
-// `VTOL_ReclaimUnit` is absent by design (see the file header).
+// `VTOL_ReclaimUnit` uses a construction-owned registration (see the header).
 var vtolWorkHandlers = []struct {
 	name    string
 	handler func(*units.Unit, *Node, uint32, uint32) Code
@@ -657,3 +655,34 @@ func ensureVTOLWorkHandlers() {
 }
 
 func init() { ensureVTOLWorkHandlers() }
+
+// AirUnitReclaimSetup supplies the air-specific preamble and target marker
+// for construction's per-queue executor [04 R-ORD-01 §7]. It never arranges
+// StartBuilding and never tests the build stance.
+func AirUnitReclaimSetup(u *units.Unit, n *Node, target *units.Unit) Code {
+	if n.Phase == 0 {
+		return airWorkPreamble(u, n, "Reclaiming")
+	}
+	if n.Phase != 1 || target == nil || u.Def == nil {
+		return 7
+	}
+	// The record goal uses the owner's footprint snap/reverse pair; the air
+	// marker itself is installed at the target's unsnapped position.
+	fx, fz := u.Def.FootprintX, u.Def.FootprintZ
+	if fx < 1 {
+		fx = 1
+	}
+	if fz < 1 {
+		fz = 1
+	}
+	n.GoalX = numeric.Fixed((int64(footprintAnchorCell(target.X, fx))*2 + int64(fx)) << 19)
+	n.GoalY = target.Y
+	n.GoalZ = numeric.Fixed((int64(footprintAnchorCell(target.Z, fz))*2 + int64(fz)) << 19)
+	if !installWorkGoal(u, n, target.X, target.Y, target.Z) {
+		return 7
+	}
+	n.MoveState = MoveEnRoute
+	n.DynamicGate |= 0x100e8
+	workStatus(u, statusWorking, "")
+	return 1
+}

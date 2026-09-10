@@ -1308,10 +1308,8 @@ func (s *Session) RegisterAll() {
 				ctx := s.missionTriggerContext(s.Clock.GlobalTick)
 				triggers.NotifyAll(s.Mission.Victory, s.Mission.Defeat, ctx, triggers.NotifyUnitCreated, u)
 			}
-			// Audio: completed build emits unitcomplete [03 §8.3] slot 8.
-			if s.Audio != nil && u != nil && s.Clock != nil && s.Clock.GlobalTick > 0 {
-				_ = s.Audio.Emit(s.Clock.GlobalTick, audio.SlotUnitComplete, h, "")
-			}
+			// Completion belongs to the builder's terminal order phase, not
+			// product allocation [05 "The build-order caption census"].
 		}
 		s.Units.OnCapture = func(h pool.Handle, oldOwner, newOwner uint8, u *units.Unit) {
 			// Capture/transfer notification is driven here [08 "Evaluation"];

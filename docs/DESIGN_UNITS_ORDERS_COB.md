@@ -227,6 +227,19 @@ whose owner always advances it inside the pump visit; `SetExternallyDrivenHandle
 is the second form's shorthand. An owned record is not a missing handler and is
 not diagnosed as one.
 
+The two unit-reclaim rows use that seam within `construction.StepUnit`:
+an earlier queue visit forwards its accepted event set onto the same node's
+pending and gate fields without executing work. The construction window then
+resumes the primary pump through `ContinueUnitReclaim` with its owned handler
+active, so the ordinary gate consumes the event and applies the phase/result
+code. The secondary segment runs only in the earlier ordinary queue visit. No event is retained on the
+service or transferred to a replacement record. `GroundUnitReclaimSetup` owns
+the ground callback, stance-wait and work-cue phases; `AirUnitReclaimSetup`
+owns the air preamble and marker. The ground work phase follows
+`StartBuilding` → script-touched stance wait → work cue. The air row never
+emits `StartBuilding` or a reveal stamp and has no stance wait
+`[04 R-ORD-01 §5]` `[04 R-ORD-01 §7]` `[04 R-COB-06]`.
+
 **The handler families.** `standing.go` (the trivial, standing, cloak, wait,
 paralyze, teleport and standby rows), `selfdestruct.go`, `work.go` (capture,
 reclaim, resurrect, assist and the repair trio), `vtolwork.go` (the five VTOL

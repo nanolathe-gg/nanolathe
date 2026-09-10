@@ -292,7 +292,7 @@ func (s *Session) stepSensorPhase(tick uint32) {
 		// REQUEST, which this pass must not read (WU-19-92).
 		hidden := u.Hidden
 		stealth := false
-		var rd, sd, rj, sj, mc, modelTop int32
+		var rd, sd, rj, sj, mc, modelTopFixed int32
 		onOffable := false
 		// The proximity pass's definition gate is the DERIVED can-cloak flag,
 		// `cloakcost > 0` — the same derivation `Cloak_On`/`Cloak_Off` gate on
@@ -308,7 +308,7 @@ func (s *Session) stepSensorPhase(tick uint32) {
 			rj = u.Def.RadarDistanceJam
 			sj = u.Def.SonarDistanceJam
 			mc = u.Def.MinCloakDistance
-			modelTop = u.Def.ModelTop
+			modelTopFixed = u.Def.ModelTopFixed
 			canCloak = u.Def.CloakCost > 0
 		}
 		var mask uint16
@@ -333,7 +333,7 @@ func (s *Session) stepSensorPhase(tick uint32) {
 			RadarJam:              rj,
 			SonarJam:              sj,
 			MinCloakDistance:      mc,
-			ModelTop:              modelTop,
+			ModelTopFixed:         modelTopFixed,
 			DecloakDeadline:       dp,
 			CanCloak:              canCloak,
 			OwnerLocallySimulated: s.ownerLocallySimulated(u.Owner),

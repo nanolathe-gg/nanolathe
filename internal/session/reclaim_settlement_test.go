@@ -169,7 +169,7 @@ func TestComposedReclaimProducerDefersRefundUntilVictimVisit(t *testing.T) {
 	s.Econ.Players[1] = economy.Player{Exists: true, ControllerState: combat.ControlByteHuman}
 	q := orders.QueueForUnit(builder)
 	q.PurgeUnprotected()
-	q.Push(orders.Lookup("ReclaimUnit"), orders.Node{Owner: builderHandle, Target: victimHandle, Param1: 15, Param2: 16, Deadline: -1})
+	q.Push(orders.Lookup("ReclaimUnit"), orders.Node{Owner: builderHandle, Target: victimHandle, Phase: 5, Param1: 15, Param2: 16, Deadline: -1})
 	node := q.Head()
 	result := s.Build.StepUnit(construction.TickContext{Tick: 3}, builderHandle)
 	if result.Err != nil {

@@ -12,11 +12,8 @@ import (
 const (
 	reclaimCadenceStep    uint32 = 2  // [05 "Unit reclaim"]
 	reclaimPulseThreshold uint32 = 14 // [05 "Unit reclaim"]
-	// reclaimRestartDelay is the wait the `ReclaimUnit` row arms together with
-	// its mid-life `StopBuilding` when the reach or admission test fails:
-	// "either fails → deadline 15, `StopBuilding`, *restart*" [04 R-ORD-01 §5].
-	// The same fifteen ticks are what retail's phase 1 holds for on the way
-	// back in, so a re-entering reclaimer waits it out once, not twice.
+	// The ground working phase restarts behind this explicit wait. The air
+	// counterpart uses thirty ticks [04 R-ORD-01 §5][04 R-ORD-01 §7].
 	reclaimRestartDelay uint32 = 15
 )
 
@@ -105,7 +102,7 @@ func UnitReclaimPulse(builder, target *units.Unit) int32 {
 // `±(Footprint << 20)/2`, so the two extents are `FootprintX << 20` and
 // `FootprintZ << 20` in 16.16, their sum is divided by three as an integer, and
 // the reach term is the high half of that word — the radius in whole world
-// units. Only unit reclaim uses it; the build, repair and assist reach of
+// units. Only ground unit reclaim uses it; the build, repair and assist reach of
 // [05 R-WORK-01 §12] point 3 has no model radius at all.
 func reclaimTargetRadius(def *content.UnitDef) int32 {
 	if def == nil {
@@ -203,9 +200,9 @@ func isReclaimUnitNode(n *orders.Node) bool {
 // cells at which the reclaimer stands flush against the target and the target's
 // own occupied cells are interior, never enumerated [04 R-PATH-01 §12].
 //
-// Installation is once per record, exactly as the build approach's is: handing
-// the controller a goal evicts whatever it held [04 R-ORD-01 §9], so
-// HasGroundGoal is the "this record already owns the payload" test.
+// Every non-arrived phase-1 visit installs the rectangle afresh, so a moving
+// target updates the approach at the row's fifteen-tick cadence. The movement
+// installer owns eviction and event clearing [04 R-ORD-01 §1].
 //
 // An aircraft installs nothing here. The five VTOL work twins build an air
 // marker in their own phase 0 and never take a ground goal [04 R-ORD-01 §7],
@@ -216,9 +213,6 @@ func (s *Service) installReclaimApproachGoal(builder *units.Unit, node *orders.N
 	}
 	if builder.Def == nil || target.Def == nil || builder.Def.CanFly {
 		return false
-	}
-	if s.Movement.HasGroundGoal(builder.Handle, node) {
-		return true
 	}
 	cellX, cellZ, ok := s.unitFootprintAnchor(target, target.X, target.Z)
 	if !ok {
@@ -235,79 +229,109 @@ func (s *Service) installReclaimApproachGoal(builder *units.Unit, node *orders.N
 	})
 }
 
-// stepUnitReclaim advances one ReclaimUnit state-machine visit. It is called
-// by Service.StepUnit, after order dispatch and before movement. Out-of-range
-// work changes no progress, health, cadence or refund; it installs the row's
-// approach goal and stays pending [05 "Unit reclaim"][04 R-ORD-01 §5].
+// stepUnitReclaim dispatches through the ordinary queue gate and result-code
+// machinery, but only during the construction-owned unit window [04 §3.3].
 func (s *Service) stepUnitReclaim(builder *units.Unit, node *orders.Node, tick uint32) WorkResult {
 	res := WorkResult{Builder: builder.Handle, Owner: builder.Owner, State: State(node.Phase), Product: node.Target}
-	if !reclaimTargetEligible(builder, s.World.Unit(node.Target)) {
-		// A rejected target is a completed/failed command, not a reason to
-		// retain a dead or friendly target forever. Queue cleanup is centralized
-		// through RemoveHead so active-marker/tombstone behavior stays canonical.
-		if q := orders.QueueForUnit(builder); q != nil && q.Head() == node {
-			q.RemoveHead()
-		}
-		res.Product = 0
+	q := orders.QueueForUnit(builder)
+	if q == nil || q.Head() != node {
 		return res
 	}
+	previous := s.reclaimStepNode
+	s.reclaimStepNode = node
+	defer func() { s.reclaimStepNode = previous }()
+	orders.ContinueUnitReclaim(builder, node, tick)
+	res.State = State(node.Phase)
+	if q.Head() != node {
+		res.Product = 0
+	}
+	return res
+}
+
+// unitReclaimVisit keeps the ground and air phase structures distinct while
+// sharing only the pulse visit [04 R-ORD-01 §5][04 R-ORD-01 §7].
+func (s *Service) unitReclaimVisit(builder *units.Unit, node *orders.Node, satisfied, tick uint32) orders.Code {
 	target := s.World.Unit(node.Target)
-	if !reclaimInRange(builder, target) {
-		node.MoveState = orders.MoveEnRoute
-		// SETTLED (WU-19-166), replacing an open-question marker that read "the
-		// session movement bridge must submit the target point-goal with
-		// reclaim's BuildDistance radius. This narrow service leaves the order
-		// pending rather than synthesizing a second movement node". Both halves
-		// were wrong. The goal is not a point goal with a `builddistance`
-		// radius: [04 R-ORD-01 §5]'s `ReclaimUnit` row installs the RECTANGLE
-		// goal on the target's footprint, the same class the build and feature-
-		// reclaim rows install. And nothing has to be synthesized in
-		// internal/session: its activation boundary already activates the mover
-		// for ANY record that owns the mover's installed ground goal, which is
-		// what installing the payload here makes this record. Until it was
-		// installed, a reclaimer ordered onto a unit further away than its
-		// `builddistance` stood still and re-polled forever.
-		//
-		// WU-19-193 — the restart arm. `ReclaimUnit` phase 5 is "either fails →
-		// deadline 15, `StopBuilding`, *restart*" [04 R-ORD-01 §5], and the
-		// restart is exactly what makes the record pass its in-reach phase
-		// again and emit `StartBuilding` a second time on re-entry: the emitter
-		// runs "not per visit, only per restart" [04 R-ORD-01 §5, settling
-		// R-ORDER-02 §2]. This condensed executor has no phase word to rewind,
-		// so the restart is expressed as what a rewind through retail's phase 1
-		// would rewrite — p1 = the work-amount seed and p2 = 0, both re-derived
-		// on the next in-reach visit — and the emitter is the mid-life one,
-		// which is silent for a record that never armed StartBuilding. That
-		// pending-flag gate is what separates the two callers of this branch:
-		// the walk out to a target that was never in reach emits nothing, and
-		// a builder pushed or ordered out of reach mid-bite emits the
-		// counterpart its script is waiting for. Without it a reclaimer that
-		// lost reach left StartBuilding running until the record was removed,
-		// and re-entry never re-armed it.
-		if orders.EmitStopBuilding(builder, node) {
-			node.Param1 = 0
-			node.Param2 = 0
-			node.Deadline = int32(tick + reclaimRestartDelay)
+	if target == nil || satisfied&0x10008 != 0 {
+		return 5
+	}
+	air := orders.DescriptorFor(node.ID).Name == "VTOL_ReclaimUnit"
+	if node.Phase == 0 {
+		if builder.Def == nil || builder.Def.BMCode != 1 || (air && !builder.Def.CanFly) {
+			if !air {
+				orders.NotifyStatus(builder, 7, "Reclamation failed")
+			}
+			return 7
 		}
-		s.installReclaimApproachGoal(builder, node, target)
-		return res
+		if !builder.Def.CanReclamate {
+			orders.NotifyStatus(builder, 7, "Reclamation failed")
+			return 7
+		}
+		if !reclaimTargetEligible(builder, target) {
+			orders.NotifyStatus(builder, 7, "That unit cannot be reclaimed")
+			if !air {
+				orders.NotifyStatus(builder, 7, "Reclamation failed")
+			}
+			return 8
+		}
+	}
+	if air {
+		switch node.Phase {
+		case 0:
+			return orders.AirUnitReclaimSetup(builder, node, target)
+		case 1:
+			node.Param1, node.Param2 = uint32(UnitReclaimPulse(builder, target)), 0
+			return orders.AirUnitReclaimSetup(builder, node, target)
+		case 2:
+			if satisfied&0x40 != 0 {
+				return 9
+			}
+			node.DynamicGate |= 0x10008
+		default:
+			return 7
+		}
+	} else {
+		switch node.Phase {
+		case 0, 2, 3, 4:
+			return orders.GroundUnitReclaimSetup(builder, node, satisfied, tick)
+		case 1:
+			if satisfied&0x20 != 0 {
+				node.MoveState = orders.MoveArrived
+				return 1
+			}
+			if !s.installReclaimApproachGoal(builder, node, target) {
+				return 7
+			}
+			node.MoveState = orders.MoveEnRoute
+			node.Param1, node.Param2 = uint32(UnitReclaimPulse(builder, target)), 0
+			node.DynamicGate |= 0x100e8 | 1
+			node.Deadline = int32(tick + reclaimRestartDelay)
+			return 2
+		case 5:
+		default:
+			return 7
+		}
+	}
+	var inRange bool
+	if air {
+		dx, dz := int64(builder.X)-int64(target.X), int64(builder.Z)-int64(target.Z)
+		r := int64(uint16(builder.Def.BuildDistance))
+		inRange = (dx*dx)>>32+(dz*dz)>>32 <= r*r
+	} else {
+		inRange = reclaimInRange(builder, target)
+	}
+	if !inRange || !reclaimTargetEligible(builder, target) {
+		delay := reclaimRestartDelay
+		if air {
+			delay = 30
+		} else {
+			orders.EmitStopBuilding(builder, node)
+		}
+		node.DynamicGate |= 1
+		node.Deadline = int32(tick + delay)
+		return 0 // restart, retaining the row's explicit wait [04 §3.3]
 	}
 	node.MoveState = orders.MoveArrived
-	if node.Deadline >= 0 && tick < uint32(node.Deadline) {
-		return res
-	}
-	if node.Param1 == 0 {
-		node.Param1 = uint32(UnitReclaimPulse(builder, target))
-		// The Reclaim handler's StartBuilding emission sits on the setup visit
-		// that establishes the pulse — one of the nine nanolathe/assist sites
-		// [R-ORDER-02 §2]. The order-record emitter arranges the name-form
-		// StartBuilding and sets the record's StopBuilding-pending flag, so
-		// cleanup emits the counterpart on every removal path. Per-activation
-		// placement follows the flag's one-counterpart-per-record purpose; the
-		// per-visit frequency residual is an Unknown in [04 "Missing and
-		// unknown"].
-		orders.EmitStartBuilding(builder, node)
-	}
 	// The order's second accumulator is cadence, not a resource fraction. The
 	// visit order is [05 R-WORK-01 §4]'s: the pulse test comes FIRST, on the
 	// counter as the visit found it; a firing visit zeroes the counter; then
@@ -341,7 +365,9 @@ func (s *Service) stepUnitReclaim(builder *units.Unit, node *orders.Node, tick u
 	// outright store to the one shared reveal/cloak deadline field on every
 	// qualifying visit (fired or not), never a maximum [03 R-VIS-01 §6]; its
 	// only reader is the cloak debit gate [05 R-ECO-01 §9].
-	builder.RevealDeadline = tick + 900
+	if !air {
+		builder.RevealDeadline = tick + 900
+	}
 	if s.Presentation != nil {
 		s.emitReclaimNano(tick, builder, target)
 	}
@@ -351,7 +377,8 @@ func (s *Service) stepUnitReclaim(builder *units.Unit, node *orders.Node, tick u
 	// §4][06 §12.1].
 	node.Param2 += reclaimCadenceStep
 	node.Deadline = int32(tick + reclaimCadenceStep)
-	return res
+	node.DynamicGate |= 1
+	return 2
 }
 
 func (s *Service) emitReclaimNano(tick uint32, builder, target *units.Unit) {
