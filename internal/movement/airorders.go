@@ -1041,7 +1041,7 @@ func (s *System) legVTOLLanding(u *units.Unit, n *orders.Node, satisfied uint32,
 	case 1:
 		piece, ok := s.queryLandingPad(pad)
 		if !ok || !s.padPieceFree(pad, piece) {
-			piece, ok = s.queryLandingPad(pad)
+			_, ok = s.queryLandingPad(pad)
 		}
 		if ok {
 			n.Phase = 2

@@ -23,6 +23,9 @@ func (b *battleSession) applyBattleSchedule(intent ui.BattleScheduleIntent) {
 	if intent.PauseSet {
 		paused := b.sess.SetPaused(intent.Pause)
 		b.battleState().SetPauseTruth(paused)
+		if b.cl != nil {
+			b.cl.SetPresentationPaused(paused)
+		}
 	}
 	if intent.SpeedDelta != 0 {
 		b.setGameSpeed(intent.SpeedDelta)

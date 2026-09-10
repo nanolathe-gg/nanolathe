@@ -285,6 +285,10 @@ func (p *modelPage) beginFrame(maxH int) {
 		p.maxH = modelPageMaxRows
 	}
 	p.needPost, p.needClip = false, false
+	// The previous frame (or overflow subject) has already been submitted. Drop
+	// its slices before rewinding: a shorter next frame must not retain older
+	// preparation arena generations through the unused tail (§11.5 "CPU").
+	clear(p.subjects)
 	p.subjects = p.subjects[:0]
 	p.clears = p.clears[:0]
 	p.reused, p.rasterMaxY = 0, 0
@@ -702,6 +706,13 @@ func (r *Renderer) prepareModelSlots(l *drawlist.List) {
 		a.slots = make(map[*drawlist.ModelGeometry]modelSlot)
 	} else {
 		clear(a.slots)
+	}
+	// An overflow page may not be used again after a crowded frame. Retire its
+	// previous subject now rather than keeping old arena generations until the
+	// next overflow happens. All previous-frame submission has finished.
+	for i := range a.overflow {
+		clear(a.overflow[i].subjects)
+		a.overflow[i].subjects = a.overflow[i].subjects[:0]
 	}
 	// modelPageLimit is a test hook: a small limit exhausts the shared page so
 	// the per-subject fallback route runs against real geometry. It is one of the

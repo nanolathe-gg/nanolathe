@@ -128,7 +128,13 @@ func (c *Client) presentationFrame() *frame.Frame {
 	if prev == nil {
 		return cur
 	}
-	blended := c.interp.blend(prev, cur, c.sampleTickFraction())
+	fraction := c.sampleTickFraction()
+	key := pausedBlendInputs{prev, cur, prev.Tick, cur.Tick, fraction}
+	if c.presentationPaused && c.interp.pausedValid && c.interp.pausedInputs == key {
+		return &c.interp.view
+	}
+	blended := c.interp.blend(prev, cur, fraction)
+	c.interp.pausedInputs, c.interp.pausedValid = key, c.presentationPaused
 	// The effect strip buckets are keyed by frame pointer and committed tick,
 	// and they hold copies of the views. The blended frame keeps both across the
 	// several presented frames of one tick, so the classification has to be
@@ -218,15 +224,30 @@ func lerpOrigin(prev, cur int32, f16 int64, viewport int32) int32 {
 	return int32(int64(prev) + (d*f16)/int64(fractionOne))
 }
 
-// interpolator owns the blended view and the retained buffers that hold it.
-// Everything grows to the frame's size and is reused, so a steady-state frame
-// allocates nothing.
+// pausedBlendInputs names the immutable frame pair and the frozen blend.
+type pausedBlendInputs struct {
+	previous, current         *frame.Frame
+	previousTick, currentTick uint32
+	fraction                  int64
+}
+
+// hasCameraBlend keeps the paused raster key on the recorder's exact admission
+// rule. All previous-frame reads stay in this file [I6].
+func (c *Client) hasCameraBlend() bool {
+	return c.interpolation && c.buffer != nil && c.buffer.Previous() != nil &&
+		c.cam != nil && c.camSamples >= 2 && c.cameraFractionSet
+}
+
+// interpolator owns the blended view and retained buffers. Unchanged paused
+// views reuse their blend; running views rebuild it on every presentation.
 type interpolator struct {
-	view        frame.Frame
-	units       []frame.UnitView
-	pieces      [][]frame.PieceView
-	projectiles []frame.ProjectileView
-	effects     []frame.EffectView
+	pausedInputs pausedBlendInputs
+	pausedValid  bool
+	view         frame.Frame
+	units        []frame.UnitView
+	pieces       [][]frame.PieceView
+	projectiles  []frame.ProjectileView
+	effects      []frame.EffectView
 	// unitAt is the previous tick's pool-slot lookup. projAt and effectAt are
 	// presentation-identity lookups, used only on the frame path and never
 	// ranged [I1].

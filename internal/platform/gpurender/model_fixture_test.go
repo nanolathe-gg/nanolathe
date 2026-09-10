@@ -196,6 +196,9 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 		g.err = fmt.Errorf("fixture waterline omission count = %d, want 1", stats.WaterlineOrDiggerOmitted)
 	}
 	if g.err == nil {
+		g.err = checkPausedCompositePixels()
+	}
+	if g.err == nil {
 		g.err = checkConstantShadeRows()
 	}
 	if g.err == nil {

@@ -69,16 +69,17 @@ func resizeScratch[T any](v []T, n int) []T {
 func (s *modelScratch) reset() {
 	s.polyNext, s.imageNext, s.packetNext, s.drawNext, s.stateNext, s.outlineNext = 0, 0, 0, 0, 0, 0
 	s.projectileNext = 0
-	// Rewind, do not erase. Both face and polygon storage is fully rewritten
-	// before it is read again — a borrowed slot resizes and then assigns every
-	// element it hands out — so the only thing a blanket clear achieved was
-	// dropping the one pointer these records carry, a texture frame the loaded
-	// GAF owns for the life of the process. Erasing every used face and polygon
-	// of every subject each frame is real memory traffic bought for nothing
-	// (docs/DESIGN_GPU_RENDERER.md §11.5 "CPU"). The lane and corner arrays that
-	// a partially written packet WOULD expose are still cleared at borrow time.
+	// Preserve warm storage. Face records also address corner arrays: their
+	// obsolete tails are cleared when a slot is refilled, while polygons drop
+	// those references when their lane storage changes. A blanket per-frame
+	// polygon clear would erase data whose backing arrays the slot still owns
+	// [DESIGN_GPU_RENDERER.md §11.5 "CPU"].
 	for _, p := range s.packets {
-		p.g = drawlist.ModelGeometry{Faces: p.g.Faces[:0]}
+		// Preserve the previous face length so refill can clear only the removed
+		// tail. The rest of each packet is frame-local, including the doubled
+		// packet's outline, reveal and shadow references.
+		p.g = drawlist.ModelGeometry{Faces: p.g.Faces}
+		p.supersample = drawlist.ModelGeometry{Faces: p.supersample.Faces}
 	}
 	for _, p := range s.polys {
 		p.polys = p.polys[:0]
@@ -115,6 +116,11 @@ func (c *Client) borrowPolys(faces, corners int) *polyScratch {
 		s.polyNext++
 	} else {
 		p = &polyScratch{}
+	}
+	if cap(p.lanes) < corners*(polyLanes+spanAttrs) || cap(p.odd) < corners {
+		// This slot has not been borrowed yet this frame. Dropping its old lane
+		// references is safe now; a later slot's growth cannot touch these records.
+		clear(p.polys[:cap(p.polys)])
 	}
 	p.polys = resizeScratch(p.polys, faces)[:0]
 	p.lanes = resizeScratch(p.lanes, corners*(polyLanes+spanAttrs))

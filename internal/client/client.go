@@ -50,7 +50,14 @@ type Options struct {
 // keeps retail's 8-bit indexed renderer and presents one RGBA upload per
 // frame. Rendering consumes only the currently committed frame (I6).
 type Client struct {
-	modelScratch modelScratch
+	presentationPaused  bool
+	pausedWorldRevision uint64
+	pausedLayer         pausedRecordLayer
+
+	// debugDeviceCapture is a host-owned, on-demand diagnostics bridge. It is
+	// invoked only after the frame recorder has joined, outside simulation.
+	debugDeviceCapture func(string) error
+	modelScratch       modelScratch
 	// projectileDraws retains the projectile dispatch list across frames; it
 	// is rewound and rewritten by every DrawProjectileViews call.
 	projectileDraws []presentationrender.ProjectileDraw
@@ -528,6 +535,9 @@ func New(opts Options) (*Client, error) {
 // the terrain clears the detail art with it: the tile set it carries belongs to
 // the map that is going away (DESIGN_GPU_RENDERER §14.3).
 func (c *Client) SetTerrain(t *world.Terrain) {
+	if c != nil {
+		c.pausedWorldRevision++
+	}
 	if c != nil && c.terrain != t {
 		c.resetFogCache()
 		c.resetTrails()
@@ -543,6 +553,9 @@ func (c *Client) SetCamera(cam *camera.Camera) { c.cam = cam }
 
 // SetPalette installs real palette tables [03 §4.3] C7.
 func (c *Client) SetPalette(p *palette.Tables) {
+	if c != nil {
+		c.pausedWorldRevision++
+	}
 	c.pal = p
 	if p != nil {
 		c.rebuildDisplayPalette()
@@ -612,6 +625,7 @@ func (c *Client) SetSnapshot(b *frame.Buffer) {
 		// and therefore retains the pair [07 R-HUD-03 §4].
 		c.displayedResources = DisplayedResources{}
 		c.buffer = b
+		c.SetPresentationPaused(false)
 	}
 }
 
@@ -778,6 +792,9 @@ func (c *Client) StepCursorScaledDelta(delta int32) {
 // SetModelFS installs the VFS for lazy 3DO/texture loads and builds the
 // texture-name index. Presentation state only.
 func (c *Client) SetModelFS(fs *vfs.FS) {
+	if c != nil {
+		c.pausedWorldRevision++
+	}
 	c.modelFS = fs
 	// The hover hull reads root-piece vertices from the same presentation model
 	// cache the draw path uses [07 R-REV-01 §1]. PickSnapshotUnit is handed a
@@ -818,6 +835,9 @@ func (c *Client) SetModelFS(fs *vfs.FS) {
 // registry remains battle-owned and is installed as the session phase-7
 // service; replacing this client never changes its cadence [03 R-CRD-005 §1].
 func (c *Client) SetModelTextureRegistry(registry *ModelTextureRegistry) {
+	if c != nil {
+		c.pausedWorldRevision++
+	}
 	if c == nil {
 		return
 	}

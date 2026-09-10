@@ -56,7 +56,7 @@ func fillModelPacket(g *drawlist.ModelGeometry, vertices []drawlist.ModelVertex,
 	*g = drawlist.ModelGeometry{
 		Eligible: fallback == drawlist.ModelFallbackNone,
 		Fallback: fallback,
-		Faces:    resizeScratch(g.Faces, len(polys)),
+		Faces:    resizeModelFaces(g.Faces, len(polys)),
 		Width:    width, Height: height,
 		OriginX: originX, OriginY: originY,
 		AnchorX: anchorX, AnchorY: anchorY,
@@ -189,6 +189,9 @@ func (c *Client) modelOutlineGeometry(draw *presentationrender.UnitDraw, originX
 		}
 	}
 	s.faces, s.verts, s.spans = faces, verts, spans
+	// Faces beyond the new ring count can still point at a replaced vertex
+	// array. The current rings are rebound below after append has finished.
+	clear(faces[len(faces):cap(faces)])
 	if len(faces) == 0 {
 		return nil
 	}
@@ -476,8 +479,18 @@ func (c *Client) borrowRebasedModelGeometry(src *drawlist.ModelGeometry, width, 
 	return &p.g
 }
 
+// resizeModelFaces releases only records that the refill will not overwrite.
+// Keeping the face allocation warm must not keep a previous corner allocation
+// alive through its unused tail [DESIGN_GPU_RENDERER.md §11.5 "CPU"].
+func resizeModelFaces(v []drawlist.ModelFace, n int) []drawlist.ModelFace {
+	if n < len(v) {
+		clear(v[n:])
+	}
+	return resizeScratch(v, n)
+}
+
 func copyModelFaces(dst []drawlist.ModelFace, vertices []drawlist.ModelVertex, src []drawlist.ModelFace, dx, dy int32) ([]drawlist.ModelFace, []drawlist.ModelVertex) {
-	dst = resizeScratch(dst, len(src))
+	dst = resizeModelFaces(dst, len(src))
 	count := 0
 	for i := range src {
 		count += len(src[i].Vertices)

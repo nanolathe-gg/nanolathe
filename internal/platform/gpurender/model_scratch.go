@@ -21,12 +21,9 @@ import (
 // becomes garbage once the last of them is dropped. Growth is geometric, so a
 // steady-state frame never grows and never allocates.
 //
-// reset does not clear. Every caller either fills the whole subslice it took or
-// takes it with a zero length and appends, so nothing reads a stale element.
-// The only references a retained arena holds past a frame are to recorded
-// geometry, GAF frames and atlas images that the recorder and the renderer's own
-// caches keep alive regardless, so clearing would free nothing and cost the
-// memclr the previous scheme paid every frame.
+// reset only rewinds. The preparation owner clears its pointer-bearing records
+// after Execute has consumed them; numeric backing arrays stay warm. Growth must
+// not clear the previous backing array: earlier subjects still read it this frame.
 type frameArena[T any] struct {
 	buf []T
 	off int
@@ -68,6 +65,13 @@ type modelPrepScratch struct {
 }
 
 func (s *modelPrepScratch) reset() {
+	// Execute calls this after submission and before borrowing the next frame.
+	// Prepared records also point into recorder geometry, and strips can point
+	// into an older vertex backing array. Retaining those references is not needed
+	// to reuse capacity [DESIGN_GPU_RENDERER.md §11.5 "CPU"]. Old generations
+	// remain valid until their page subjects are retired by beginFrame.
+	clear(s.strips.buf[:s.strips.off])
+	clear(s.prepared.buf[:s.prepared.off])
 	s.strips.reset()
 	s.crosses.reset()
 	s.vertices.reset()

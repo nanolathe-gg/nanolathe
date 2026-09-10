@@ -334,6 +334,15 @@ func (c *Client) drawCommittedFrame(cur *frame.Frame, ok bool) {
 	if c == nil || len(c.indexed) != c.width*c.height {
 		return
 	}
+	if c.pausedLayer != pausedForegroundLayer {
+		c.drawCommittedWorld(cur, ok)
+	}
+	if c.pausedLayer != pausedWorldLayer {
+		c.drawCommittedForeground(cur)
+	}
+}
+
+func (c *Client) drawCommittedWorld(cur *frame.Frame, ok bool) {
 	// The committed tick drives every presentation animator that reads it
 	// directly (nanoframe pulse, nanolathe particles) [03 §5.2][03 §5.5].
 	if cur != nil {
@@ -430,6 +439,9 @@ func (c *Client) drawCommittedFrame(cur *frame.Frame, ok bool) {
 	// still composes after the fog and before the marker layer and the chrome
 	// [03 §1].
 	c.emitWorldEnd()
+}
+
+func (c *Client) drawCommittedForeground(cur *frame.Frame) {
 	c.drawSelectionStage()
 	// The strategic marker layer is world CONTENT at a fixed SCREEN size, so it
 	// too is positioned through the live factor and recorded outside the

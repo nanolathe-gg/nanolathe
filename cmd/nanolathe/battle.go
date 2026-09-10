@@ -26,6 +26,12 @@ import (
 // the integrated session (all twelve kernel phases) and the interaction state:
 // selection, order latch, and build placement.
 type battleSession struct {
+	// Host diagnostic request/result state; synchronous writes serialize captures.
+	debugCaptureBusy  bool
+	debugCaptureBase  string // empty uses the per-user diagnostics directory
+	debugCapturePath  string
+	debugCaptureError error
+
 	sess  *session.Session
 	cat   *content.Catalog
 	cam   *camera.Camera
@@ -509,6 +515,7 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 	// post-loop diagnostics installed by a caller intact.
 	bindBattleMessageRetirement(b.sess, cl)
 	cl.SetSnapshot(b.sess.Snapshot)
+	cl.SetPresentationPaused(b.sess.Clock != nil && b.sess.Clock.Paused)
 	cl.SetTerrain(b.sess.World)
 	// The detail-art provider is installed with the terrain it belongs to and
 	// cleared by the SetTerrain(nil) of teardown (DESIGN_GPU_RENDERER §14.3).
@@ -807,6 +814,9 @@ func (b *battleSession) noteTickTiming() {
 // viewerStep runs one rendered frame: input → session ticks → camera pan.
 func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	if b == nil || cl == nil {
+		return
+	}
+	if b.handleDebugCapture(cl) {
 		return
 	}
 	if b.shell == nil && cl.IsFocused() && b.sess != nil && b.sess.Audio != nil && b.sess.Audio.Music != nil {

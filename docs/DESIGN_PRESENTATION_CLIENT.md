@@ -1014,3 +1014,42 @@ behaviour is bounded rather than guessed:
 * The player-colour selector of a feature pseudo-unit's `LOGOS` faces. The
   client leaves those faces absent until the pseudo-unit initialization path is
   traced; it does not substitute colour zero `[03 R-RAST-01 §3]`.
+
+## On-demand diagnostic capture
+
+This is a Nanolathe host diagnostic feature, not retail behavior. Ctrl+Shift+F11
+consumes one input edge before gameplay dispatch, joins the background recorder,
+pauses through the session scheduling bridge, and writes a new capture directory
+outside the repository. Success and failure both leave the session paused. The
+capture reads one authoritative boundary and labels the separately committed and
+presented ticks; it never advances a tick to refresh the published pause flag.
+
+The bundle contains a versioned per-file manifest, Go runtime memory statistics
+and sampled profiles, full goroutine stacks, explicit owner-provided unit,
+order/script, session and client state, and device diagnostics when available.
+Large collections are streamed; live object graphs and retail assets are not
+serialized wholesale. Partial failures remain visible in the manifest. No
+forced GC or full raw heap dump occurs by default. Profiling and disk access
+remain outside simulation phases and do not consume authoritative RNG.
+
+The client/window interface is `Client.SetDebugDeviceCapture(func(string) error)`
+and `Client.WriteDebugDeviceCapture(directory string) error`. The callback runs
+synchronously on the window owner after the recorder is joined. It writes
+renderer counters and a readback of the last presented image, without composing
+another frame. An unavailable device writer returns an explicit error, and the
+bundle keeps all other successful files. The runtime capture and each engine
+snapshot carry their own collection time/identity where they cannot describe an
+identical instant. A diagnostic bundle is not itself a restore/save format.
+
+Implemented capture details and the explicit coverage limits live in
+[DEBUG_CAPTURE.md](DEBUG_CAPTURE.md). The host writes synchronously under
+`~/Nanolathe/diagnostics`, with one unique directory per shortcut edge. Initial
+runtime statistics and profiles precede the detached engine snapshots. macOS
+OS memory tools inspect only this process, with independent five-second limits.
+The device owner copies the retained image through one `ReadPixels` call before
+PNG encoding; the PNG encoder never reads pixels individually from the GPU.
+Client counters include each parallel recording worker's private scratch.
+Arena capacities describe retained storage; idle offsets are not frame peaks.
+The adapter marks exact presented tick identity unavailable until an explicit
+presentation stamp exists. The window composition root installs the device callback after constructing
+the Ebitengine app; an absent callback is a partial capture.

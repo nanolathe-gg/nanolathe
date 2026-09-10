@@ -1215,6 +1215,16 @@ nothing in the executor, and the recorder and HUD retain their per-frame
 buffers across frames. The recorded list is the contract and must not change:
 classic output stays byte-identical.
 
+Preparation records also reference recorder geometry and earlier arena
+allocations. The executor clears used pointer-bearing preparation records after
+submission and retires page subject references at the next frame boundary,
+including dormant overflow pages. Numeric arenas retain their capacity and
+contents. Recorder refill clears removed face references; polygon records drop
+lane references only when their backing arrays are replaced. Growth preserves
+every earlier slice still in use within the frame. Warm reuse remains free of
+allocations. This corrects reachability; it does not attribute a measured
+long-match heap footprint to those references.
+
 ## 12. Work units for §11
 
 Each unit is one worktree, one sub-agent, exclusive files; the orchestrator
@@ -2023,6 +2033,63 @@ synchronous record would have produced. M1–M8 are byte-identical to the
 baseline on **both** renderers. `go test -race` over the client and window
 packages is clean, and a race-built binary through a 180-frame modern benchmark
 reports no race and the same capture.
+
+#### Paused world reuse
+
+The modern window retains the completed world through its fog barrier while
+paused. The retained result is one framebuffer-sized GPU colour image; there
+is no retained duplicate draw list or model geometry. A matching world skips
+recording, interpolation rebuild, model-cache pruning, and world GPU replay.
+The ordinary foreground still records and executes every presented frame:
+drag selection, strategic markers, HUD, messages, modal panels, build previews,
+order overlays and the software cursor. Restoring the world image before that
+foreground preserves destination-reading shade/overlay operations and removes
+the previous cursor or gesture. Original and `--shot` keep their full-frame
+paths.
+
+Pause truth comes directly from the scheduling bridge's `SetPaused` result;
+`Frame.Paused` alone is insufficient because a stopped scheduler publishes no
+new tick. Battle attach/restore installs the scheduler's truth after binding
+the snapshot. Replacing the snapshot clears this mirror. Unpause and executor
+switches discard the retained image; resizing replaces its allocation.
+
+`PausedWorldInputs` compares the committed frame identity and tick, frozen tick
+fraction, interpolation and Enhanced switches, actual blended camera origin,
+viewport/map extents, scale and smooth zoom factor, dimensions, world/asset
+binding revision, terrain, detail art, font, palette and display colours, and
+the shadow, shading, antialias, fog and damage-bar options. The actual origin
+uses §13.5's existing integer blend and teleport snap, so a stationary camera
+can reuse across changing camera fractions, while pan/follow/zoom redraw at
+their existing cadence. Unit flags, selection and group labels, fog, features,
+and model-texture animation remain owned by committed publication and the
+stopped phase-7 service. Immutable asset rebinding invalidates the key. The
+host mutation epoch is deliberately absent here: input changes covered by that
+epoch are rendered freshly in the foreground.
+
+The per-present randomized segmented-projectile family is an exception.
+Any published member conservatively disables world reuse, even offscreen;
+full recording preserves its CRT draws and painter position [03 §5.4][I4].
+A renderer trace also disables reuse. No fixed refresh throttle or altered
+animation cadence is introduced. Thus this optimization is not a promise of
+minimal paused CPU for every possible scene.
+
+Entering the split joins and cancels speculative recording with the ordinary
+CRT rollback. Paused Draws never launch another pre-record, including the
+random-projectile fallback. Audio draining and displayed-resource advancement
+still run once per presentation before the split, and every Draw still reaches
+the existing update-ledger tail. On resume the normal pipeline starts again.
+Periodic diagnostics count world recordings and reuses; foregrounds remain in
+the ordinary presented-frame and update-body cadence totals.
+
+Verification: the client regression compares whole and split indexed rasters,
+including a moved/removed gesture and destination-reading UI; key tests cover
+stationary and moving camera fractions, zoom, settings and assets, publication,
+unpause and session replacement, and speculative CRT rollback. The real-device
+fixture compares exact RGBA bytes of whole replay against retained-world replay
+with moving/removable foreground and modal shading over model/shadow content.
+Live pause/pan/zoom/capture/resume and paired battle performance checks remain
+the integration gate; the old paused-process profile is observational evidence,
+not a controlled timing baseline for this newer source.
 
 ### 13.11 Flash quads and same-stream phases (seventh round)
 

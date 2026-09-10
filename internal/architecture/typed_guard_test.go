@@ -445,6 +445,8 @@ func containsFloat64(typ types.Type) bool {
 // mapFunctionHashes binds the whole containing operation, including its sort
 // or other ordering dependency, to the same I1 review.
 var mapRangeExceptions = map[string]string{
+	"internal/cob/debug_capture.go *VM.DebugSnapshot 7d182462d9e252dafb59da673acdcd673414aec86225c680a2c9710ae0bc1fa0":             "host-only read copies script names into detached storage and sorts them before returning; it neither invokes scripts nor changes VM state",
+	"internal/features/debug_capture.go *Service.DebugSnapshot 0de7ab9b2ba8a95d0ba037338b670b09c17a342ce8e777aad0040ba750b1ddb8":   "host-only read gathers private keys and sorts them before copying feature values; it does not refresh the live key cache or change feature state",
 	"internal/cob/binding.go BindStrict 86205b5f7e2c831877392e584559b68dedd881a5fa3fae0d7563637ac5276a20":                          "installs distinct handlers by port key; it does not invoke them",
 	"internal/cob/binding.go BindStrict 4a375074326b6563496b3c5ce6f1f0f10af85196815ffe7d2b50a5eb84ba217c":                          "installs distinct bindings by port key; it does not invoke them",
 	"internal/units/cob_binding.go unitPortHandlers 6f9be44a1a39cdd937708274fffb8e5d4542be70b6a94e0a4562db9d462860b8":              "constructs independent port closures before the VM dispatches any callback",
@@ -485,6 +487,10 @@ var mapRangeExceptions = map[string]string{
 // map range. This makes a sort, callback or other ordering dependency part of
 // the audit rather than allowing it to change behind an unchanged range body.
 var mapFunctionHashes = map[string]string{
+	// On-demand diagnostic projections copy into local storage only. Pin their
+	// sorts and full read operations so future edits require another I1 review.
+	"internal/cob/debug_capture.go *VM.DebugSnapshot":            "9535e63fb096edcf712b2629f9331c45e9ac43d03bf863a9e40aef27502ea483",
+	"internal/features/debug_capture.go *Service.DebugSnapshot":  "b88eeadbf744ab1a8e7d0580cf69be24c9dbbba5c567641de4968dc3aa80a6ad",
 	"internal/ai/manager.go *Manager.EnsureStrategicInitialized": "cba316ea4945f9095fea37a058826bc5f346f0451711b017b426d5ce2eefa660",
 	"internal/ai/profile.go cloneWeightTable":                    "c24030e7c8fcd13b14aeae9ef333f94c571fd0b0b98e59b14a3d7db12c86636e",
 	"internal/ai/profile.go *Profile.Difficulties":               "6ebccbe5fdec25f142139476db16d2e8dc5a6ca6df55bbfbf4a21842b8fc10bd",

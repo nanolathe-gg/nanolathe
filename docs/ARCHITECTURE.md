@@ -143,6 +143,7 @@ package implements.
 | `internal/audio` | The eight-slot cue queue, sample decode and cache, positional attenuation, music, briefing speech | DESIGN_PRESENTATION_CLIENT |
 | `internal/audiobackend` | The desktop PCM device boundary behind `internal/audio` | DESIGN_PRESENTATION_CLIENT |
 | `internal/platform/ebitenapp` | The Ebitengine adapter: window and loop lifecycle, device input polling, framebuffer upload, the classic/modern executor switch | DESIGN_PRESENTATION_CLIENT |
+| `internal/debugcapture` | Host-only on-demand bundle writer: runtime profiles, own-process memory counters, file status manifest; receives detached engine projections from the battle owner | DESIGN_PRESENTATION_CLIENT, DEBUG_CAPTURE |
 | `internal/platform/benchlock` | Host file lock serializing benchmark startup and execution across worktrees | BATTLE_BENCHMARK, SIM_BENCHMARK |
 | `internal/drawlist` | The recorded committed-frame draw list: command families carrying physical palette indices, the `Sink` executor interface, ordered replay and model packet boundary | DESIGN_GPU_RENDERER |
 | `internal/platform/gpurender` | The modern executor: replays a draw list through Ebitengine in palette-index space, table textures, atlases, per-subject GPU model prototypes, expansion to RGB | DESIGN_GPU_RENDERER |

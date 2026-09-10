@@ -48,7 +48,7 @@ type PresentationInputs struct {
 	Tick      uint32
 	// TickFraction16 and CameraFraction16 are §13.5's two blend fractions in
 	// the client's 16.16 domain. They are compared with a tolerance in the
-	// window and exactly everywhere else; see PresentationInputs.matches.
+	// window and exactly everywhere else; see PresentationInputs.missReason.
 	TickFraction16    int32
 	CameraFraction16  int32
 	CameraFractionSet bool
@@ -86,13 +86,6 @@ func fractionsWithin(a, b PresentationInputs, tol int32) bool {
 	}
 	d = a.CameraFraction16 - b.CameraFraction16
 	return d >= -tol && d <= tol
-}
-
-// matches reports whether a list recorded for `a` may be Executed for `b`.
-// Every field but the two fractions must be equal; the fractions are compared
-// through tol.
-func (a PresentationInputs) matches(b PresentationInputs, tol int32) bool {
-	return a.missReason(b, tol) == MissNone
 }
 
 // MissReason names why a pre-recorded list could not be presented. It is
@@ -449,4 +442,16 @@ func (c *Client) PreRecordCounts() (hits, misses, launches int64) {
 		return 0, 0, 0
 	}
 	return c.pre.hits, c.pre.misses, c.pre.launches
+}
+
+// CancelPreRecord joins and discards speculative work before entering the
+// paused synchronous split. Roll back its presentation CRT exactly as on a
+// digest miss; no update or paused foreground can race the worker (§13.10).
+func (c *Client) CancelPreRecord() {
+	if c == nil || !c.pre.pending {
+		return
+	}
+	c.JoinPreRecord()
+	c.pre.pending = false
+	c.dropPreRecord()
 }

@@ -45,8 +45,9 @@ const (
 // The *ebiten.Image lives here, not on the client: it is a device resource,
 // and the client's business is the pixels it hands over.
 type app struct {
-	c   *client.Client
-	img *ebiten.Image
+	paused pausedWorld
+	c      *client.Client
+	img    *ebiten.Image
 	// mode selects the executor Draw presents through. gpu is the modern
 	// executor, built lazily on the first modern Draw so its device textures and
 	// offscreen never exist in a classic run. Both live here, off the client
@@ -284,6 +285,7 @@ func (a *app) Draw(screen *ebiten.Image) {
 		a.drawModern(screen, width, height)
 		return
 	}
+	a.paused.clear()
 	if !a.consumePresentation() {
 		return
 	}
@@ -337,23 +339,25 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 	// display the window is actually running on.
 	// The interval is the one the outstanding prediction was made over, so a
 	// frame that arrived late cannot widen the tolerance by its own lateness.
-	tolerance := fractionTolerance(a.pipe.tolerancePeriod(a.presentInterval, ebiten.ActualFPS()))
-	list, hit := a.c.TakePreRecord(a.c.PresentationDigest(), tolerance)
-	switch {
-	case hit:
-		a.pipe.hits++
-	case a.pipe.armed:
-		a.pipe.misses++
-	default:
-		a.pipe.synchronous++
-	}
-	a.pipe.armed = false
-	if !hit {
-		list = a.c.RecordModernFrame()
-	}
-	a.gpu.SetDisplayPalette(a.c.DisplayPalette())
-	if img := a.gpu.Execute(list, width, height); img != nil {
-		screen.DrawImage(img, &ebiten.DrawImageOptions{})
+	if !a.drawPaused(screen, width, height) {
+		tolerance := fractionTolerance(a.pipe.tolerancePeriod(a.presentInterval, ebiten.ActualFPS()))
+		list, hit := a.c.TakePreRecord(a.c.PresentationDigest(), tolerance)
+		switch {
+		case hit:
+			a.pipe.hits++
+		case a.pipe.armed:
+			a.pipe.misses++
+		default:
+			a.pipe.synchronous++
+		}
+		a.pipe.armed = false
+		if !hit {
+			list = a.c.RecordModernFrame()
+		}
+		a.gpu.SetDisplayPalette(a.c.DisplayPalette())
+		if img := a.gpu.Execute(list, width, height); img != nil {
+			screen.DrawImage(img, &ebiten.DrawImageOptions{})
+		}
 	}
 	// Execute has enqueued this frame and copied what the device needs, so the
 	// list and the recorder's scratch are free again. Spend the flush and the
@@ -376,7 +380,7 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 	// The next Draw sits one present period after this one began; the tick
 	// fraction was sampled at sampledAt, which is later than this Draw's start
 	// when an update body ran in between.
-	if !a.exitPending && period > 0 {
+	if !a.exitPending && !a.c.PresentationPaused() && period > 0 {
 		if nextTick16, nextCamera16, ok := a.pipe.predictNext(now.Add(period), sampledAt, a.updatedAt, tick16); ok {
 			a.c.StartPreRecord(nextTick16, nextCamera16, true)
 			a.pipe.armed = true
@@ -543,6 +547,9 @@ func Run(c *client.Client, mode RendererMode, options RunOptions) error {
 		be.WarmUp()
 	}
 	game := &app{c: c, mode: mode, options: options, fullscreen: options.Fullscreen}
+	game.c.SetDebugDeviceCapture(game.writeDebugDeviceCapture)
+	defer game.c.SetDebugDeviceCapture(nil)
+	defer game.paused.clear()
 	width, height := game.desiredWindowSize()
 	game.windowW, game.windowH = width, height
 	// From here on this process owns a window: every window-API call below, and
