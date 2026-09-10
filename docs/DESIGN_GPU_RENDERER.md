@@ -1529,6 +1529,7 @@ longer go stale across an animation that toggles cache bits.
 | R3a executor CPU (landed) | lit points placed from a cached cell with a stamped pixel table; batch storage pooled by size class and written in place; ring self-intersection tested once per face with triangle and quad fast paths; faces prepared by pointer; slot planes from the recyclable sub-image pool | `internal/platform/gpurender/*` | M1–M8 modern and both battle.png byte-identical; Submit 120 TPS 3.9 → 2.9 ms, 30 TPS 6.6 → 4.9 ms; passes 11 |
 | R3b recorder CPU (landed) | piece chain collapsed to its rotating nodes with a reference-equivalence test, vertices applied in bulk, piece draws and polygons written in place, hidden pieces resolved once, projectile scratch retained | `internal/client/*`, `internal/render/*`, `internal/model/*` | `--shot` and M1–M8 byte-identical on both renderers; Record 120 TPS 2.8 → 2.0 ms; classic 30 Record not worse |
 | R4 the lit point plane (landed, §13.8) | lit point runs placed once instead of once per pixel; a phase group of points committed as one quad over a per-frame plane atlas; the retained cached model lane copied into the body's own arenas | `internal/platform/gpurender/*`, `internal/client/model_cached_live.go` | both battle.png byte-identical at 180 and 720 frames; M1–M8 byte-identical on both renderers; classic Record not worse; Submit 120 TPS 720 frames 12.1 → 4.5 ms |
+| R5 two-stage unit record (landed, §13.9) | per-unit geometry computed on a persistent worker pool into slots indexed by unit, consumed by the unchanged sequential bucket walk; per-worker scratch arenas; orientation and cached-body entries pre-created on the recording goroutine | `internal/client/record_parallel.go` (new), `internal/client/client.go`, `internal/client/frame.go`, `internal/client/model_geometry.go`, `internal/client/world_draw.go` | both battle.png byte-identical at 180 and 720 frames on three runs each; M1–M8 byte-identical to main on **both** renderers; identical list at one and twelve participants; `go test -race` and a race-built 180-frame battle clean; classic Record not worse; Record 120 TPS 720 frames 4.85 → 2.30 ms |
 
 R1 and R2 are independent (R2 never edits `internal/platform/gpurender`) and
 ran in parallel; R3a and R3b followed, also in parallel, once the 120 TPS
@@ -1685,6 +1686,96 @@ which is the lit point volume — and this round removed them, from 52 frames
 above 60 ms to 3. The one that remains, 124 ms at the frame with 963,000 covered
 pixels, is the frame where the plane atlas grows: a new image, a fresh staging
 buffer and an upload of every row it uses.
+
+### 13.9 Two-stage unit recording (fifth round)
+
+§13.8 left Record and Submit about even at 4.8 and 4.5 ms over 720 frames, with
+`unitGeometryPair` the largest single item inside Record and no dominant piece
+within it. That shape is the argument for splitting the work rather than
+shaving it: a unit's piece transforms, projection, material resolution, polygon
+collection and cached-lane rebase read the committed frame and the unit's own
+retained body and touch nothing another unit's does.
+
+**The split.** Recording a frame's units is two stages.
+
+*Stage one* runs after the bucket build, over a persistent pool sized to
+`runtime.NumCPU()` participants — the recording goroutine plus `NumCPU()-1`
+workers parked on a wake channel between frames, because the frame budget is
+8.3 ms and a goroutine per unit per frame would spend a visible part of it on
+the scheduler. Its job list is every unit the two passes will present on their
+own: the pass-A window and mover-mode split of [03 R-RAST-01 §7] and then
+`presentUnit`'s strategic-view, carrier-link and model-name gates, resolved
+once so both passes read one slot array. Each job computes the unit's geometry
+pair into a slot indexed by that unit's position in the committed unit slice.
+Participants take jobs from a shared cursor: per-unit cost varies by an order
+of magnitude, so a shared cursor balances better than a fixed stripe.
+
+*Stage two* is the unchanged sequential walk. It visits the buckets in exactly
+the order [03 R-RAST-01 §7] fixes and appends the Model commands from those
+slots. **Nothing is read from a slot until stage two reaches that unit's place
+in the bucket order**, so completion order cannot reach the recorded list and
+the list is identical whatever the worker count [I1]. A slot carries the
+presentation identity it was computed for and stage two checks it, so a slot
+that does not belong to the subject in hand is rebuilt inline rather than used.
+
+**Shared state.** Each worker records through a shallow copy of the recording
+client that shares every immutable and read-only field with it and owns its own
+model scratch arena, so two workers never receive the same borrowed slot; the
+arena is carried across the per-frame refresh, so a steady-state frame still
+allocates nothing per unit. Writes a worker makes to its own copy are dropped,
+which is safe only because stage one is a pure function of the committed frame
+and of cache entries that already exist: every orientation and cached-body map
+entry a job can reach is created on the recording goroutine **before** stage
+one starts, so workers read those maps and write only through the pointers the
+entries hold. It is the insertion, not the entry, that cannot be concurrent —
+distinct units own distinct entries. An entry with neither geometry nor image
+is indistinguishable from a missing one at every read, so pre-creating one
+changes no decision. The per-worker name memo lives in the arena and is a
+memo of `strings.ToLower`, so a worker that has not seen a name recomputes the
+same string.
+
+Three lanes stay sequential and are named here rather than left to be
+rediscovered. **The classic composer** keeps the whole sequential path: its
+per-unit work rasterizes palette planes through a different set of borrowed
+slots, and the classic benchmark measured no regression from leaving it alone.
+**Attached children** are computed in stage two, because a child's forced key
+plane depends on whether its carrier turned out to have one — which is known
+only after the carrier's own pair exists; a carrier's own pair is the first
+geometry call of its present in both branches, so it is precomputed like any
+other unit. **A standalone model registry** is excluded, because it loads and
+binds models on first use, and that is a write to shared registry maps; a
+battle registry has every model bound before the first frame. A parity trace
+sink is excluded as a diagnostic path.
+
+**Measured** (1080p Ashap Plateau seed 7, `--benchmark-tps=120`, modern, three
+interleaved runs per configuration, medians of the per-run medians):
+
+| | 180 frames before | 180 after | 720 before | 720 after |
+|---|---|---|---|---|
+| Record | 3.07 ms | 1.16 ms | 4.85 ms | 2.30 ms |
+| Submit | 2.65 ms | 2.69 ms | 4.48 ms | 4.60 ms |
+| Cadence | 8.33 ms | 8.33 ms | 13.40 ms | 10.90 ms |
+| On the 8.3 ms floor | 67% | 71% | 22% | 29% |
+| Allocation | 1.5 MB, 8.2k objects | 1.6 MB, 8.2k objects | 1.9 MB, 19.3k objects | 2.1 MB, 19.3k objects |
+
+Record is the whole of the gain: it more than halves, and at 720 frames the
+cadence median falls with it. **Submit did not move.** The interleaved batch
+above put it 0.1–0.3 ms higher in all three pairs, which reads like worker
+threads competing with Ebitengine's render thread for cores; a later run of the
+finished build, taken at a higher host load, put Submit at 4.45 ms against the
+baseline's 4.48. The rise is therefore host-load noise on a shared machine, not
+a cost of the split, and the number to carry forward is "unchanged". The
+competition is real in one measurable way: the process keeps 96% of its sample
+budget busy where the sequential build kept 78%, and stage one costs more
+*total* CPU than the sequential build did (1.2 s → 1.8 s of samples over a
+720-frame run) while costing less wall time on the frame's critical path.
+Allocation per frame is unchanged in object count and about 8% higher in bytes,
+which is the workers' arenas each carrying their own high-water mark.
+
+Classic is unaffected: 10.89 → 11.09 ms Record at 30 TPS, allocation identical,
+capture byte-identical. Both battle captures are byte-identical at 180 and 720
+frames on every run, and M1–M8 are byte-identical to main on **both** renderers,
+which is the check that matters here because the recorder is shared.
 
 ## 14. The detail view: 1.5× and 2× steps and load-time remaster
 

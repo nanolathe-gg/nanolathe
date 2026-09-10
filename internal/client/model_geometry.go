@@ -211,6 +211,17 @@ func (c *Client) prepareModelGeometry(draw *presentationrender.UnitDraw, owner u
 // live lane is rebuilt from this frame's script pose and is rebased into the
 // cached body's current union box [03 R-REN-03A §4].
 func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (*drawlist.ModelGeometry, *drawlist.ModelGeometry) {
+	// Stage one may already have built this pair on a worker's own arena
+	// (docs/DESIGN_GPU_RENDERER.md §13.9). The slot is handed over for exactly
+	// one call — a carrier's own pair is the first unitGeometryPair of its
+	// present in both branches — and its identity is checked, so a slot that
+	// does not belong to this subject falls through and is rebuilt here.
+	if pre := c.pendingPair; pre != nil {
+		c.pendingPair = nil
+		if !forceKeyPlane && pre.id == unitPresentationID(v) {
+			return pre.body, pre.live
+		}
+	}
 	draw, ok := c.unitDrawFor(v)
 	if !ok {
 		return nil, nil

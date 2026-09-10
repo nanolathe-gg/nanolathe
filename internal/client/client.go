@@ -203,10 +203,24 @@ type Client struct {
 	crtBound     bool
 	frameTick    uint32 // committed tick of the frame being composed
 	worldBuckets worldBuckets
-	fogCache     *visibility.FogCache
-	fogVersion   uint64 // last immutable FogView copied into fogCache
-	fogSource    uint64 // source identity paired with fogVersion
-	fogOps       []presentationrender.FogOp
+	// parallelRecord and recordPool are the two-stage unit record of
+	// docs/DESIGN_GPU_RENDERER.md §13.9. The pool is created on the first
+	// modern frame that would use it and parked between frames; the flag is the
+	// recorder's own switch and never a user-facing mode [I11].
+	parallelRecord bool
+	recordPool     *recordPool
+	// unitJobs is this frame's stage-one job list: indices into the committed
+	// frame's unit slice, in bucket order. It keeps its capacity between frames.
+	unitJobs []int32
+	// pendingPair hands the precomputed pair from the bucket walk to the one
+	// unitGeometryPair call that would otherwise recompute it. It is live for
+	// the length of a single presentUnit and is read on the recording goroutine
+	// only.
+	pendingPair *geometryPair
+	fogCache    *visibility.FogCache
+	fogVersion  uint64 // last immutable FogView copied into fogCache
+	fogSource   uint64 // source identity paired with fogVersion
+	fogOps      []presentationrender.FogOp
 	// pointArena is this frame's backing store for every recorded Points batch
 	// (the LHT halo, the calculated flash disc and the minimap
 	// viewport rectangle). Each emitPoints batch is appended here and recorded as

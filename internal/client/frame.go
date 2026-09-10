@@ -210,11 +210,16 @@ func (c *Client) RecordFrame() *drawlist.List {
 	}
 	wasRecordingGeometry := c.recordModelGeometry
 	wasGeometryOnly := c.geometryOnlyModels
+	wasParallel := c.parallelRecord
 	c.recordModelGeometry = true
 	c.geometryOnlyModels = true
+	// The two-stage unit record is the modern recorder's geometry lane only
+	// (docs/DESIGN_GPU_RENDERER.md §13.9). Frame's classic replay leaves it off.
+	c.parallelRecord = true
 	c.recordFrame()
 	c.recordModelGeometry = wasRecordingGeometry
 	c.geometryOnlyModels = wasGeometryOnly
+	c.parallelRecord = wasParallel
 	return &c.list
 }
 

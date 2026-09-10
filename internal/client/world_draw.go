@@ -20,6 +20,10 @@ type worldDrawable struct {
 	feature *frame.FeatureView
 	screenX int32
 	screenY int32
+	// index is the unit's position in the committed frame's unit slice, and is
+	// the stage-one slot this drawable's geometry is precomputed into
+	// (docs/DESIGN_GPU_RENDERER.md §13.9). It is -1 for a feature.
+	index int32
 }
 
 // cellPixels is the side of one plot cell in map pixels [03 §2.1].
@@ -545,7 +549,7 @@ func (c *Client) drawWorldPass(cur *frame.Frame, ok bool) {
 		sx, sy := c.cam.WorldToScreen(u.X, u.Y, u.Z)
 		sx -= camera.OriginX
 		sy -= camera.OriginY
-		b.add(worldDrawable{row: row, unit: u, screenX: sx, screenY: sy})
+		b.add(worldDrawable{row: row, unit: u, screenX: sx, screenY: sy, index: int32(i)})
 	}
 	// The deferred tall features take the same gate as pass 1: the window, and
 	// nothing that reads fog or LOS [03 R-RAST-01 §6].
@@ -561,8 +565,13 @@ func (c *Client) drawWorldPass(cur *frame.Frame, ok bool) {
 			continue
 		}
 		sx, sy := c.featureScreenPos(*f)
-		b.add(worldDrawable{row: featureBucketRow(f.CZ, camZ), feature: f, screenX: sx, screenY: sy})
+		b.add(worldDrawable{row: featureBucketRow(f.CZ, camZ), feature: f, screenX: sx, screenY: sy, index: -1})
 	}
+	// Stage one: both unit passes' per-unit geometry, in parallel, into slots
+	// indexed by unit (docs/DESIGN_GPU_RENDERER.md §13.9). It runs over the
+	// finished bucket order and writes nothing to the list, so the two
+	// sequential walks below are unchanged [03 R-RAST-01 §7][I1].
+	c.recordUnitGeometry(cur, win)
 	for _, d := range b.ordered() {
 		if !win.admitsPassARow(d.row) {
 			continue
@@ -682,7 +691,14 @@ func (c *Client) presentUnit(d worldDrawable) {
 		}
 		return
 	}
-	if c.composeCarrier(u, d.screenX, d.screenY, c.attachedChildren(u.Slot)) {
+	// Stage two consumes this unit's precomputed geometry, or nil when stage one
+	// did not run (docs/DESIGN_GPU_RENDERER.md §13.9). The Model commands below
+	// are appended here, in bucket order, exactly as they were
+	// [03 R-RAST-01 §7].
+	c.pendingPair = c.takeUnitGeometry(d.index, u)
+	drawn := c.composeCarrier(u, d.screenX, d.screenY, c.attachedChildren(u.Slot))
+	c.pendingPair = nil
+	if drawn {
 		c.selectionChrome = append(c.selectionChrome, selectionChrome{view: u, screenX: d.screenX, screenY: d.screenY})
 	}
 }
