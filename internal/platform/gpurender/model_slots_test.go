@@ -38,7 +38,7 @@ func TestModelPreparationReusesFrameScratch(t *testing.T) {
 			f := &g.Faces[i]
 			r.prepareModelFace(&out[i], f, image.Point{}, polygonCrosses(f.Vertices))
 		}
-		r.prepareModelOutline(g)
+		r.prepareModelOutline(g, false)
 	}
 	prepare()
 	if n := testing.AllocsPerRun(20, prepare); n != 0 {
@@ -226,10 +226,11 @@ func checkModelSlotFrames() error {
 }
 
 // modelStageMaxPasses is the contract of the destination-ordered slot stage:
-// the clear of each plane, the key work, the colour work, the reveal ping-pong,
-// the resolves that ride it, the separate live key/colour passes, and final clipping
-// [DESIGN_GPU_RENDERER.md §11.5 "Model slot passes"].
-const modelStageMaxPasses = 10
+// the clear of each plane, the key work, the colour work, the reveal into the
+// scratch, the outline and live keys, the copy back with the outline and live
+// colours, final clipping, and the coverage resolve that closes the stage
+// [DESIGN_GPU_RENDERER.md §11.5 "Model slot passes", §17].
+const modelStageMaxPasses = 8
 
 func moveModelFixture(g *drawlist.ModelGeometry, dx, dy int32) {
 	if g == nil {

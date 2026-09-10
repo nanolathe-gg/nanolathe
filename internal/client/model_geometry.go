@@ -22,9 +22,37 @@ func modelGeometryPacket(polys []screenPoly, target *modelTarget, scale int32, f
 // Modern recording uses it so geometry preparation never creates colour,
 // coverage, or height planes.
 func modelGeometryPacketAt(polys []screenPoly, width, height, originX, originY, anchorX, anchorY, scale int32, keyPlane bool, fallback drawlist.ModelFallbackReason) *drawlist.ModelGeometry {
-	return fillModelPacket(&drawlist.ModelGeometry{}, nil, polys, width, height, originX, originY, anchorX, anchorY, scale, keyPlane, fallback)
+	return fillModelPacket(&drawlist.ModelGeometry{}, nil, polys, width, height, originX, originY, anchorX, anchorY, scale, keyPlane, fallback, nil)
 }
-func fillModelPacket(g *drawlist.ModelGeometry, vertices []drawlist.ModelVertex, polys []screenPoly, width, height, originX, originY, anchorX, anchorY, scale int32, keyPlane bool, fallback drawlist.ModelFallbackReason) *drawlist.ModelGeometry {
+
+// doubledPlacement is the supersample projection applied while a packet is
+// filled from UNPLACED polygons, so the doubled lane costs no copy of the
+// polygon lanes (DESIGN_GPU_RENDERER §17): the corner lands at
+// 2·(x + originX) + hx, 2·(y + originY) − odd + hy, with odd the corner's odd
+// height correction in doubled-raster pixels [03 R-REN-03A §6]. shearX marks
+// the shadow projection, whose quarter shear moves the doubled corner one
+// raster pixel right as well as up when the second bit of the height is set —
+// the doubled quarter shear is 2·(ry>>2) + ((ry>>1)&1) on both axes, exactly as
+// the body's doubled half shear is 2·(ry>>1) + (ry&1) on Y alone [R-REN-03D §2].
+// oddPx is one at the retail view and the view scale's own pixel at a magnified
+// one, because the corner's scaled offset already lost the half the correction
+// restores (scaleModelLocal).
+type doubledPlacement struct {
+	originX, originY, hx, hy, oddPx int32
+	shearX                          bool
+	// exact takes each corner's own doubled coordinates (screenPoly.x2, y2)
+	// instead of doubling the native ones: the direct projection, whose
+	// corners are projected one by one and carry no shared subject offset.
+	exact bool
+}
+
+// doubledPlacement builds the placement for a lane doubled from the local
+// projection at this frame's view scale.
+func (c *Client) doubledPlacement(originX, originY, hx, hy int32, shearX bool) doubledPlacement {
+	return doubledPlacement{originX: originX, originY: originY, hx: hx, hy: hy, oddPx: c.modelScale().Px(1), shearX: shearX}
+}
+
+func fillModelPacket(g *drawlist.ModelGeometry, vertices []drawlist.ModelVertex, polys []screenPoly, width, height, originX, originY, anchorX, anchorY, scale int32, keyPlane bool, fallback drawlist.ModelFallbackReason, place *doubledPlacement) *drawlist.ModelGeometry {
 	*g = drawlist.ModelGeometry{
 		Eligible: fallback == drawlist.ModelFallbackNone,
 		Fallback: fallback,
@@ -48,8 +76,19 @@ func fillModelPacket(g *drawlist.ModelGeometry, vertices []drawlist.ModelVertex,
 		face.Texture, face.Color, face.Shaded = p.frame, p.color, p.useSHD
 		key, u, v, row := p.attr[spanKey], p.attr[spanU], p.attr[spanV], p.attr[spanRow]
 		for j := 0; j < n; j++ {
+			x, y := p.x[j], p.y[j]
+			if place != nil && place.exact {
+				x, y = 2*place.originX+p.x2[j], 2*place.originY+p.y2[j]
+			} else if place != nil {
+				odd := boolToInt32(p.oddHeight[j]) * place.oddPx
+				x = 2*(x+place.originX) + place.hx
+				if place.shearX {
+					x += odd
+				}
+				y = 2*(y+place.originY) - odd + place.hy
+			}
 			face.Vertices[j] = drawlist.ModelVertex{
-				X: p.x[j], Y: p.y[j], Key: key[j],
+				X: x, Y: y, Key: key[j],
 				U: u[j], V: v[j], Shade: uint8(row[j]),
 			}
 		}
@@ -64,7 +103,15 @@ func fillModelPacket(g *drawlist.ModelGeometry, vertices []drawlist.ModelVertex,
 func (c *Client) configureModelGeometry(g *drawlist.ModelGeometry, draw *presentationrender.UnitDraw, owner, kind uint8, reveal *presentationrender.NanoframeReveal, outline uint8) {
 	if reveal != nil {
 		g.Reveal = &drawlist.ModelReveal{Line: reveal.Line, Floor: reveal.Floor, Below: reveal.Below, Band: reveal.Band, Above: reveal.Above}
-		g.Outline = c.modelOutlineGeometry(draw, g.OriginX, g.OriginY, outline)
+		g.Outline = c.modelOutlineGeometry(draw, g.OriginX, g.OriginY, outline, 1, 0, 0)
+		if ss := g.Supersample; ss != nil {
+			// The doubled raster carries the reveal and the outline itself, so
+			// both are resolved with the body rather than drawn over the
+			// resolved pixels (DESIGN_GPU_RENDERER §17).
+			_, _, hx, hy := c.modelAnchorDoubled(draw.WorldPos)
+			ss.Reveal = g.Reveal
+			ss.Outline = c.modelOutlineGeometry(draw, g.OriginX, g.OriginY, outline, 2, hx, hy)
+		}
 	}
 	if g.KeyPlane {
 		if threshold, submerged := waterlineThreshold(c.seaLevel(), draw.WorldPos[1], draw.DiggerClip); submerged {
@@ -90,9 +137,14 @@ func (c *Client) configureModelGeometry(g *drawlist.ModelGeometry, draw *present
 // leave earlier faces addressing the old backing array. A ring that names a
 // corner the piece does not have rewinds the arena and is dropped, exactly as
 // the abandoned face was before.
-func (c *Client) modelOutlineGeometry(draw *presentationrender.UnitDraw, originX, originY int32, color uint8) []drawlist.ModelFace {
+//
+// scale 2 is the supersampled outline: every corner at the doubled raster's
+// coordinates with the subject's half-pixel offset, the same placement the
+// doubled body takes (doubledPlacement).
+func (c *Client) modelOutlineGeometry(draw *presentationrender.UnitDraw, originX, originY int32, color uint8, scale, hx, hy int32) []drawlist.ModelFace {
 	s := c.borrowOutline()
 	faces, verts, spans := s.faces[:0], s.verts[:0], s.spans[:0]
+	oddPx := c.modelScale().Px(1)
 	for pi := len(draw.Pieces) - 1; pi >= 0; pi-- {
 		if pi >= len(draw.Model.Pieces) {
 			continue
@@ -111,9 +163,14 @@ func (c *Client) modelOutlineGeometry(draw *presentationrender.UnitDraw, originX
 					break
 				}
 				v := piece.WorldVertices[vi]
-				x, y, _ := modelLocalVertex(v, draw.WorldPos)
+				x, y, ry := modelLocalVertex(v, draw.WorldPos)
 				x, y = c.scaleModelLocal(x, y)
-				verts = append(verts, drawlist.ModelVertex{X: x + originX, Y: y + originY, Key: modelHeightKey(v[1].Sub(draw.WorldPos[1]), draw.DiggerClip)})
+				if scale == 2 {
+					x, y = 2*(x+originX)+hx, 2*(y+originY)-(ry&1)*oddPx+hy
+				} else {
+					x, y = x+originX, y+originY
+				}
+				verts = append(verts, drawlist.ModelVertex{X: x, Y: y, Key: modelHeightKey(v[1].Sub(draw.WorldPos[1]), draw.DiggerClip)})
 			}
 			if !complete || len(verts)-start < 2 {
 				verts = verts[:start]
@@ -183,9 +240,12 @@ func (c *Client) modelShadowGeometry(draw *presentationrender.UnitDraw) *drawlis
 		return nil
 	}
 	width, height, originX, originY := modelExtent(polys)
-	anchorX, anchorY := c.shadowAnchor(draw)
+	anchorX, anchorY, hx, hy := c.shadowPlacement(draw)
+	supersample := c.modelSupersampleGeometry(polys, true, width, height, c.doubledPlacement(originX, originY, hx, hy, true))
 	placeFaces(polys, originX, originY, 1)
-	return c.borrowModelPacket(polys, int32(width), int32(height), originX, originY, anchorX, anchorY, 1, true, drawlist.ModelFallbackNone)
+	g := c.borrowModelPacket(polys, int32(width), int32(height), originX, originY, anchorX, anchorY, 1, true, drawlist.ModelFallbackNone)
+	g.Supersample = supersample
+	return g
 }
 
 func (c *Client) prepareModelGeometry(draw *presentationrender.UnitDraw, owner uint8, selector teamColor, id uint64, kind uint8, reveal *presentationrender.NanoframeReveal, outline uint8) *drawlist.ModelGeometry {
@@ -193,16 +253,13 @@ func (c *Client) prepareModelGeometry(draw *presentationrender.UnitDraw, owner u
 	if len(polys) == 0 {
 		return nil
 	}
-	anchorX, anchorY := c.modelAnchor(draw)
+	anchorX, anchorY, hx, hy := c.modelPlacement(draw)
 	width, height, originX, originY := modelExtent(polys)
-	supersample := c.modelSupersampleGeometry(polys, draw, width, height, originX, originY)
+	supersample := c.modelSupersampleGeometry(polys, draw.KeyPlane, width, height, c.doubledPlacement(originX, originY, hx, hy, false))
 	placeFaces(polys, originX, originY, 1)
 	g := c.borrowModelPacket(polys, int32(width), int32(height), originX, originY, anchorX, anchorY, 1, draw.KeyPlane, drawlist.ModelFallbackNone)
-	c.configureModelGeometry(g, draw, owner, kind, reveal, outline)
 	g.Supersample = supersample
-	if supersample != nil {
-		supersample.Reveal = g.Reveal
-	}
+	c.configureModelGeometry(g, draw, owner, kind, reveal, outline)
 	return g
 }
 
@@ -259,10 +316,12 @@ func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (*drawli
 		}
 		w, h, ox, oy := modelExtent(all)
 		ax, ay := c.modelAnchor(draw)
-		var supersample *drawlist.ModelGeometry
-		if len(cached) != 0 {
-			supersample = c.modelSupersampleGeometry(cached, draw, w, h, ox, oy)
-		}
+		// The retained doubled lane carries no half-pixel offset: the offset
+		// follows the subject's position frame by frame and is added when the
+		// lane is rebased into this frame's packet. A keyed subject whose pieces
+		// are all live still retains an (empty) doubled lane, so its live faces
+		// have a doubled raster to join.
+		supersample := c.modelSupersampleGeometry(cached, draw.KeyPlane, w, h, c.doubledPlacement(ox, oy, 0, 0, false))
 		placeFaces(cached, ox, oy, 1)
 		base := c.borrowModelPacket(cached, int32(w), int32(h), ox, oy, ax, ay, 1, draw.KeyPlane, drawlist.ModelFallbackNone)
 		base.Supersample = supersample
@@ -281,15 +340,17 @@ func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (*drawli
 		return nil, nil
 	}
 	w, h, ox, oy := retainedModelExtent(body.geometry, all)
-	ax, ay := c.modelAnchor(draw)
-	g := c.borrowRebasedModelGeometry(body.geometry, int32(w), int32(h), ox, oy, ax, ay)
+	ax, ay, hx, hy := c.modelPlacement(draw)
+	g := c.borrowRebasedModelGeometry(body.geometry, int32(w), int32(h), ox, oy, ax, ay, hx, hy)
 	c.configureModelGeometry(g, draw, v.Owner, modelCursorUnit, reveal, outline)
-	if g.Supersample != nil {
-		g.Supersample.Reveal = g.Reveal
-	}
 	if !draw.UnderConstruction {
 		live := c.collectDrawPolysLane(draw, unitTeamColor(v), id, modelCursorUnit, presentationrender.PieceLaneLive)
 		if len(live) != 0 {
+			if ss := g.Supersample; ss != nil {
+				// The live lane joins the doubled raster too, at the same
+				// placement as the cached lane it draws over (§17).
+				ss.LiveFaces = c.borrowModelPacketDoubled(live, w, h, c.doubledPlacement(ox, oy, hx, hy, false), draw.KeyPlane).Faces
+			}
 			placeFaces(live, ox, oy, 1)
 			g.LiveFaces = c.borrowModelPacket(live, int32(w), int32(h), ox, oy, ax, ay, 1, draw.KeyPlane, drawlist.ModelFallbackNone).Faces
 		}
@@ -300,6 +361,9 @@ func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (*drawli
 	// The one-plane branch commits its cached body, then the direct projected
 	// live invocation as a later Model command [03 R-RAST-01 §2].
 	g.LiveFaces = nil
+	if ss := g.Supersample; ss != nil {
+		ss.LiveFaces = nil
+	}
 	return g, c.directUnitGeometry(draw, unitTeamColor(v), id, presentationrender.PieceLaneLive)
 }
 
@@ -342,7 +406,11 @@ func retainedModelExtent(retained *drawlist.ModelGeometry, current []screenPoly)
 // borrowRebasedModelGeometry copies the retained cached lane into this frame's
 // packet arena. The retained entry remains immutable while the output can move
 // into the current union box and acquire its current live lane.
-func (c *Client) borrowRebasedModelGeometry(src *drawlist.ModelGeometry, width, height, originX, originY, anchorX, anchorY int32) *drawlist.ModelGeometry {
+//
+// hx and hy are this frame's half-pixel offset (modelAnchorDoubled); the
+// retained doubled lane carries none, so it is added to the doubled corners
+// here.
+func (c *Client) borrowRebasedModelGeometry(src *drawlist.ModelGeometry, width, height, originX, originY, anchorX, anchorY, hx, hy int32) *drawlist.ModelGeometry {
 	if c == nil || src == nil || !c.modelScratch.active {
 		return nil
 	}
@@ -359,7 +427,7 @@ func (c *Client) borrowRebasedModelGeometry(src *drawlist.ModelGeometry, width, 
 		return &p.g
 	}
 	p.supersample = *src.Supersample
-	p.supersampleFaces, p.supersampleVerts = copyModelFaces(p.supersampleFaces, p.supersampleVerts, src.Supersample.Faces, 2*dx, 2*dy)
+	p.supersampleFaces, p.supersampleVerts = copyModelFaces(p.supersampleFaces, p.supersampleVerts, src.Supersample.Faces, 2*dx+hx, 2*dy+hy)
 	p.supersample.Faces = p.supersampleFaces
 	p.supersample.LiveFaces, p.supersample.Outline, p.supersample.Reveal, p.supersample.Shadow, p.supersample.Children = nil, nil, nil, nil, nil
 	p.supersample.Width, p.supersample.Height = 2*width, 2*height
@@ -396,14 +464,44 @@ func (c *Client) directUnitGeometry(draw *presentationrender.UnitDraw, selector 
 	return c.directModelGeometry(draw, selector, id, modelCursorUnit, lane)
 }
 
-// directModelGeometry records the standalone direct projection.
+// directModelGeometry records the standalone direct projection. Its corners
+// are already framebuffer offsets, so the packet's local space is screen space:
+// the composition box is the corners' own extent with retail's margin, its
+// origin the box pixel of screen (0,0), and its anchor screen (0,0). The box
+// used to be the whole record extent, which reserved a framebuffer-sized slot
+// per direct subject and could not be doubled at all.
 func (c *Client) directModelGeometry(draw *presentationrender.UnitDraw, selector teamColor, id uint64, kind uint8, lane presentationrender.PieceLane) *drawlist.ModelGeometry {
 	polys := c.collectDrawPolysLaneProjected(draw, selector, id, kind, lane, true)
 	if len(polys) == 0 {
 		return nil
 	}
-	recW, recH := c.recordExtent()
-	return c.borrowModelPacket(polys, int32(recW), int32(recH), 0, 0, 0, 0, 1, false, drawlist.ModelFallbackNone)
+	width, height, originX, originY := directModelExtent(polys)
+	// Every corner of the direct projection carries its own exact doubled
+	// position, so the doubled lane takes those rather than a subject offset.
+	supersample := c.modelSupersampleGeometry(polys, false, width, height, doubledPlacement{originX: originX, originY: originY, exact: true})
+	placeFaces(polys, originX, originY, 1)
+	g := c.borrowModelPacket(polys, int32(width), int32(height), originX, originY, 0, 0, 1, false, drawlist.ModelFallbackNone)
+	g.Supersample = supersample
+	return g
+}
+
+// directModelExtent is modelExtent for direct-projected corners: seeded at the
+// first corner rather than at the model origin, because the corners are screen
+// offsets and screen (0,0) has nothing to do with the subject. The exact
+// doubled corners are counted at their whole pixel too, so the box holds the
+// doubled lane whatever the view scale.
+func directModelExtent(polys []screenPoly) (width, height int, originX, originY int32) {
+	minX, minY, maxX, maxY := polys[0].x[0], polys[0].y[0], polys[0].x[0], polys[0].y[0]
+	for i := range polys {
+		xs, ys, xs2, ys2 := polys[i].x, polys[i].y, polys[i].x2, polys[i].y2
+		for k := range xs {
+			minX, maxX = min(minX, xs[k], xs2[k]>>1), max(maxX, xs[k], xs2[k]>>1)
+			minY, maxY = min(minY, ys[k], ys2[k]>>1), max(maxY, ys[k], ys2[k]>>1)
+		}
+	}
+	originX = modelTargetMargin - minX
+	originY = modelTargetMargin - minY
+	return int(maxX - minX + 2*modelTargetMargin), int(maxY - minY + 2*modelTargetMargin), originX, originY
 }
 
 // directDebrisGeometry applies the detached-piece origin gate independently
@@ -415,14 +513,15 @@ func (c *Client) directDebrisGeometry(draw *presentationrender.UnitDraw, selecto
 	return c.directModelGeometry(draw, selector, id, modelCursorDebris, presentationrender.PieceLaneAll)
 }
 
-// The doubled projection shares placeFaces with classic, including its odd
-// height correction. It targets a bounded local GPU image; final placement
-// remains on the outer packet [03 R-REN-03A §6].
-func (c *Client) modelSupersampleGeometry(polys []screenPoly, draw *presentationrender.UnitDraw, width, height int, originX, originY int32) *drawlist.ModelGeometry {
-	if !c.supersampleModel(draw.Structure) {
+// modelSupersampleGeometry is the doubled raster of one lane, placed with the
+// subject's half-pixel offset (DESIGN_GPU_RENDERER §17). It shares retail's
+// doubled projection, including its odd height correction [03 R-REN-03A §6],
+// and targets a bounded local GPU image; final placement remains on the outer
+// packet. It is filled from the UNPLACED polygons, so the caller places them
+// natively afterwards.
+func (c *Client) modelSupersampleGeometry(polys []screenPoly, keyPlane bool, width, height int, place doubledPlacement) *drawlist.ModelGeometry {
+	if !c.supersampleGeometry() {
 		return nil
 	}
-	faces := c.cloneModelPolys(polys)
-	placeFaces(faces, originX, originY, 2)
-	return c.borrowModelPacket(faces, int32(2*width), int32(2*height), 2*originX, 2*originY, 2*originX, 2*originY, 2, draw.KeyPlane, drawlist.ModelFallbackNone)
+	return c.borrowModelPacketDoubled(polys, width, height, place, keyPlane)
 }

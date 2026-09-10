@@ -95,7 +95,7 @@ func runModelShot(opts Options, cs *contentSet) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "nanolathe: shot model route: gpu=%d skipped=%d shadows=%d shadows-omitted=%d reveal-outline-omitted=%d waterline-digger-omitted=%d staging-commands-omitted=%d staged-groups=%d composed-groups=%d structure-resolves=%d no-body=%d unsupported-geometry=%d face=%d missing-texture=%d\n", stats.GPU, stats.Skipped, stats.Shadows, stats.ShadowsOmitted, stats.RevealOrOutlineOmitted, stats.WaterlineOrDiggerOmitted, stats.StagingCommandsOmitted, stats.StagedGroups, stats.ComposedGroups, stats.StructureResolves, stats.NoBody, stats.UnsupportedGeometry, stats.UnsupportedFace, stats.MissingTexture)
+	fmt.Fprintf(os.Stderr, "nanolathe: shot model route: gpu=%d skipped=%d shadows=%d shadows-omitted=%d reveal-outline-omitted=%d waterline-digger-omitted=%d staging-commands-omitted=%d staged-groups=%d composed-groups=%d supersampled=%d no-body=%d unsupported-geometry=%d face=%d missing-texture=%d\n", stats.GPU, stats.Skipped, stats.Shadows, stats.ShadowsOmitted, stats.RevealOrOutlineOmitted, stats.WaterlineOrDiggerOmitted, stats.StagingCommandsOmitted, stats.StagedGroups, stats.ComposedGroups, stats.Supersampled, stats.NoBody, stats.UnsupportedGeometry, stats.UnsupportedFace, stats.MissingTexture)
 	switch shotRenderer {
 	case "modern":
 		return encodeShotPNG(opts.Shot, modern)

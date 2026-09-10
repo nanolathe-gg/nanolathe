@@ -117,7 +117,7 @@ func (c *Client) borrowPolys(faces, corners int) *polyScratch {
 		p = &polyScratch{}
 	}
 	p.polys = resizeScratch(p.polys, faces)[:0]
-	p.lanes = resizeScratch(p.lanes, corners*(2+spanAttrs))
+	p.lanes = resizeScratch(p.lanes, corners*(polyLanes+spanAttrs))
 	p.odd = resizeScratch(p.odd, corners)
 	clear(p.lanes)
 	clear(p.odd)
@@ -135,14 +135,15 @@ func (c *Client) borrowPolys(faces, corners int) *polyScratch {
 func (s *polyScratch) next(n int) *screenPoly {
 	start := s.corner
 	s.corner += n
-	buf := s.lanes[start*(2+spanAttrs) : s.corner*(2+spanAttrs)]
+	buf := s.lanes[start*(polyLanes+spanAttrs) : s.corner*(polyLanes+spanAttrs)]
 	s.polys = s.polys[:len(s.polys)+1]
 	p := &s.polys[len(s.polys)-1]
 	*p = screenPoly{}
 	p.x, p.y = buf[:n:n], buf[n:2*n:2*n]
+	p.x2, p.y2 = buf[2*n:3*n:3*n], buf[3*n:4*n:4*n]
 	p.oddHeight = s.odd[start:s.corner:s.corner]
 	for k := 0; k < spanAttrs; k++ {
-		lo := (2 + k) * n
+		lo := (polyLanes + k) * n
 		p.attr[k] = buf[lo : lo+n : lo+n]
 	}
 	return p
@@ -156,11 +157,13 @@ func (c *Client) cloneModelPolys(in []screenPoly) []screenPoly {
 	for i := range in {
 		p := &in[i]
 		q := s.next(len(p.x))
-		x, y, odd, attr := q.x, q.y, q.oddHeight, q.attr
+		x, y, x2, y2, odd, attr := q.x, q.y, q.x2, q.y2, q.oddHeight, q.attr
 		*q = *p
-		q.x, q.y, q.oddHeight, q.attr = x, y, odd, attr
+		q.x, q.y, q.x2, q.y2, q.oddHeight, q.attr = x, y, x2, y2, odd, attr
 		copy(q.x, p.x)
 		copy(q.y, p.y)
+		copy(q.x2, p.x2)
+		copy(q.y2, p.y2)
 		copy(q.oddHeight, p.oddHeight)
 		for k := range p.attr {
 			copy(q.attr[k], p.attr[k])
@@ -235,7 +238,26 @@ func (c *Client) borrowModelPacket(polys []screenPoly, width, height, ox, oy, ax
 		count += len(f.x)
 	}
 	p.vertices = resizeScratch(p.vertices, count)
-	return fillModelPacket(&p.g, p.vertices, polys, width, height, ox, oy, ax, ay, scale, key, fallback)
+	return fillModelPacket(&p.g, p.vertices, polys, width, height, ox, oy, ax, ay, scale, key, fallback, nil)
+}
+
+// borrowModelPacketDoubled fills a scale-2 packet from unplaced polygons with
+// the supersample placement (doubledPlacement), the doubled counterpart of
+// borrowModelPacket with a native box of width×height at the placement's
+// origin.
+func (c *Client) borrowModelPacketDoubled(polys []screenPoly, width, height int, place doubledPlacement, key bool) *drawlist.ModelGeometry {
+	ox, oy := place.originX, place.originY
+	w, h := int32(2*width), int32(2*height)
+	if !c.modelScratch.active {
+		return fillModelPacket(&drawlist.ModelGeometry{}, nil, polys, w, h, 2*ox, 2*oy, 2*ox, 2*oy, 2, key, drawlist.ModelFallbackNone, &place)
+	}
+	p := c.borrowPacketScratch()
+	count := 0
+	for _, f := range polys {
+		count += len(f.x)
+	}
+	p.vertices = resizeScratch(p.vertices, count)
+	return fillModelPacket(&p.g, p.vertices, polys, w, h, 2*ox, 2*oy, 2*ox, 2*oy, 2, key, drawlist.ModelFallbackNone, &place)
 }
 
 // borrowProjectileScratch hands out one standalone model call's slot for the

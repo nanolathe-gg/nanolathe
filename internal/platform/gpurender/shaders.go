@@ -60,9 +60,12 @@ const (
 	// world transform takes when it is not the identity
 	// (docs/DESIGN_GPU_RENDERER.md §16.3 "Sampling").
 	sceneOpTerrain = 4
-	// sceneOpModelCommit copies an index out of the model slot atlas bound in
-	// source 2, skipping the composition background index 1 — the keyed model
-	// body commit [03 R-REN-03A §5].
+	// sceneOpModelCommit copies a resolved model subject out of the resolved
+	// slot plane bound in source 2: premultiplied colour with the subject's
+	// coverage as alpha, so an uncovered texel is the keyed commit's skip and a
+	// partly covered edge texel blends by its coverage — the keyed model body
+	// commit [03 R-REN-03A §5] with the coverage resolve of §17. It is the one
+	// opaque op whose source is already colour.
 	sceneOpModelCommit = 5
 	// sceneOpScaled reproduces the byte writers' integer source mapping for the
 	// scaled GAF blit and the indexed surface blit [07 R-HUD-03 §11]. ColorR/G
@@ -98,9 +101,11 @@ const (
 	// destOpShadowCommit composites a model silhouette through the same ALP
 	// arithmetic after punching the body's coverage, so overlapping silhouette
 	// faces darken the ground once [03 R-REN-03D §4–§5][03 R-RAST-01 §4].
-	// Custom0/1 is the body-page offset of the shadow texel; Color carries the
-	// body slot's page bounds. The punch reads the body plane, never the
-	// destination, so this run takes no read copy (§13.3).
+	// Both planes are resolved ones (§17): the silhouette's coverage scales the
+	// darkening and only a wholly covered body texel punches. Custom0/1 is the
+	// body-page offset of the shadow texel; Color carries the body slot's page
+	// bounds. The punch reads the body plane, never the destination, so this
+	// run takes no read copy (§13.3).
 	destOpShadowCommit = 2
 	// destOpTrail scales the destination by the trail mark's darkening times
 	// a coverage evaluated from the quad's local coordinates: an oval for a
@@ -263,10 +268,7 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 		idx = floor(imageSrc3AtFromSrc0Pos(p).r*255.0 + 0.5)
 	} else if op == ` + fmt.Sprint(sceneOpModelCommit) + ` {
 		p := imageSrc0Origin() + floor(srcPos-imageSrc0Origin()) + vec2(0.5, 0.5)
-		idx = floor(imageSrc2AtFromSrc0Pos(p).r*255.0 + 0.5)
-		if idx == 1.0 {
-			return vec4(0.0)
-		}
+		return imageSrc2AtFromSrc0Pos(p)
 	} else if op == ` + fmt.Sprint(sceneOpScaled) + ` {
 		// The destination-relative offset rides SrcX/SrcY, so flooring the
 		// interpolated position recovers the byte writer's dx and dy exactly.
@@ -370,19 +372,20 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 		idx = floor(tex.r*255.0 + 0.5)
 	} else {
 		local := floor(srcPos - imageSrc0Origin())
-		shadow := floor(imageSrc3AtFromSrc0Pos(imageSrc0Origin()+local+vec2(0.5, 0.5)).r*255.0+0.5)
+		shadow := imageSrc3AtFromSrc0Pos(imageSrc0Origin() + local + vec2(0.5, 0.5))
 		// The body plane is punched at the body slot's own page coordinates; a
-		// shadow texel outside that slot is uncovered, so it keeps the
-		// composition background value 1.
+		// shadow texel outside that slot is uncovered.
 		bp := local + custom.xy
-		body := 1.0
+		cover := 0.0
 		if bp.x >= floor(color.r+0.5) && bp.y >= floor(color.g+0.5) && bp.x < floor(color.b+0.5) && bp.y < floor(color.a+0.5) {
-			body = floor(imageSrc0At(imageSrc0Origin()+bp+vec2(0.5, 0.5)).r*255.0+0.5)
+			cover = imageSrc0At(imageSrc0Origin() + bp + vec2(0.5, 0.5)).a
 		}
-		if shadow == 1.0 || body != 1.0 {
+		if shadow.a <= 0.0 || cover >= 1.0 {
 			return vec4(0.0)
 		}
-		idx = shadow
+		// The silhouette is already colour at its coverage, so the half-colour
+		// fragment is half of it (§17).
+		return vec4(shadow.rgb*0.5, shadow.a*0.5)
 	}
 	// The ALP families' premultiplied half-colour fragment: source-over adds the
 	// destination's own half, which is floor((src + dst)/2) per channel up to the

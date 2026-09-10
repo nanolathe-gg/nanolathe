@@ -54,8 +54,11 @@ const (
 // modelPage is one slot atlas page. img holds the composed subject planes —
 // index in red, the key stored at that texel in green, body coverage in blue —
 // key holds the maximum-byte-key plane the body pass reads, and post is the
-// scratch the reveal and clipping stages write. Doubled subjects live on the
-// same page as native ones, at even origins [03 R-REN-03A §6].
+// scratch the reveal and clipping stages write and, once the stage has run, the
+// plane holding every subject's RESOLVED native slot: premultiplied colour with
+// the subject's coverage as alpha, which is what the commits sample
+// (DESIGN_GPU_RENDERER §17). Doubled subjects live on the same page as native
+// ones, at even origins [03 R-REN-03A §6].
 type modelPage struct {
 	img, key, post *ebiten.Image
 	w, h           int
@@ -80,9 +83,8 @@ type modelPageSubject struct {
 	reveal  *drawlist.ModelReveal
 
 	keyed bool
-	// doubled marks a subject whose finished plane a resolve reads. Its plane
-	// must reach the post scratch even when it carries no reveal, because the
-	// resolve reads post while it writes the page [03 R-REN-03A §6–§7].
+	// doubled marks a supersampled raster: its outline endpoints are drawn two
+	// raster pixels wide so the resolved line keeps a whole pixel's weight (§17).
 	doubled      bool
 	waterline    drawlist.ModelWaterline
 	waterlineKey uint8
@@ -95,27 +97,43 @@ func (s *modelPageSubject) clips() bool {
 }
 
 // modelSlot locates one reserved subject. box is the page region of the
-// declared composition box — the rectangle a commit samples — while rect is the
-// whole reserved region, which also contains any projected vertex the producer's
-// box does not, so one subject can never write into its neighbour's slot.
+// declared composition box — the rectangle a commit samples from the resolved
+// plane — while rect is the whole reserved region, which also contains any
+// projected vertex the producer's box does not, so one subject can never write
+// into its neighbour's slot. raster is the box of the subject's INDEXED raster
+// on the page's img plane, at scale times the box's size: the doubled raster of
+// a supersampled subject, or the box itself for a native one. A group merge
+// samples the raster; a commit samples the resolved box (§17).
 type modelSlot struct {
 	page     *modelPage
 	rect     image.Rectangle
 	box      image.Rectangle
+	raster   image.Rectangle
+	scale    int
 	overflow bool
 }
 
-// image is the page region a commit or a group merge samples. It comes from the
-// recyclable pool: the box of a slot moves with the frame's packing, so the
-// image's own sub-image cache would gain an entry per subject per frame and pay
-// a full sweep of that cache once a tick
-// (docs/DESIGN_GPU_RENDERER.md §13 "CPU/allocation policy", §11.5 "CPU"). The
-// caller recycles it as soon as the draw that binds it has been issued.
-func (s modelSlot) image() *ebiten.Image {
+// rasterImage is the subject's finished indexed raster, which a group merge
+// reads at the subject's scale [03 R-REN-03A §4]. It comes from the recyclable
+// pool: the box of a slot moves with the frame's packing, so the image's own
+// sub-image cache would gain an entry per subject per frame and pay a full
+// sweep of that cache once a tick (docs/DESIGN_GPU_RENDERER.md §13
+// "CPU/allocation policy", §11.5 "CPU"). The caller recycles it as soon as the
+// draw that binds it has been issued.
+func (s modelSlot) rasterImage() *ebiten.Image {
 	if s.page == nil || s.page.img == nil {
 		return nil
 	}
-	return s.page.img.RecyclableSubImage(s.box)
+	return s.page.img.RecyclableSubImage(s.raster)
+}
+
+// resolved is the page plane holding every resolved slot, the image a commit
+// binds.
+func (s modelSlot) resolved() *ebiten.Image {
+	if s.page == nil {
+		return nil
+	}
+	return s.page.post
 }
 
 // recycleImage returns an image() result to the pool. A nil image is ignored, so
@@ -169,10 +187,12 @@ type modelSlotAtlas struct {
 	quads modelQuadParams
 }
 
-// modelResolveJob is one doubled slot resolving into its native slot.
+// modelResolveJob is one subject's indexed raster resolving into its native
+// slot on the resolved plane: a doubled raster two-to-one with fractional
+// coverage, a native one one-to-one (§17).
 type modelResolveJob struct {
 	src, dst modelSlot
-	keyed    bool
+	scale    int
 }
 
 // modelPass records one slot-stage device call's destination. The Metal driver
@@ -365,25 +385,35 @@ func (r *Renderer) reserveModelSlot(g *drawlist.ModelGeometry) {
 	if !r.modelGeometryConfigSupported(g) {
 		return
 	}
-	crosses, ok := r.modelFacesSupported(g)
-	if !ok {
-		return
-	}
-	var liveCrosses []bool
-	if len(g.LiveFaces) != 0 {
-		livePacket := *g
-		livePacket.Faces = g.LiveFaces
-		if liveCrosses, ok = r.modelFacesSupported(&livePacket); !ok {
+	// Only the raster that draws is admitted: the native faces of a
+	// supersampled subject are never rasterized (§17).
+	var crosses, liveCrosses, ssCrosses, ssLiveCrosses []bool
+	ok := true
+	if g.Supersample == nil {
+		if crosses, ok = r.modelFacesSupported(g); !ok {
 			return
 		}
+		if len(g.LiveFaces) != 0 {
+			livePacket := *g
+			livePacket.Faces = g.LiveFaces
+			if liveCrosses, ok = r.modelFacesSupported(&livePacket); !ok {
+				return
+			}
+		}
 	}
-	var ssCrosses []bool
 	if ss := g.Supersample; ss != nil {
 		if ssCrosses, ok = r.modelFacesSupported(ss); !ok {
 			return
 		}
+		if len(ss.LiveFaces) != 0 {
+			livePacket := *ss
+			livePacket.Faces = ss.LiveFaces
+			if ssLiveCrosses, ok = r.modelFacesSupported(&livePacket); !ok {
+				return
+			}
+		}
 	}
-	slot, ok := r.placeModelSubject(g, crosses, ssCrosses, liveCrosses, &a.page, &a.resolves)
+	slot, ok := r.placeModelSubject(g, crosses, ssCrosses, liveCrosses, ssLiveCrosses, &a.page, &a.resolves)
 	if !ok {
 		// The frame does not fit; this subject takes the per-subject route at
 		// commit time rather than disappearing from the frame.
@@ -394,39 +424,26 @@ func (r *Renderer) reserveModelSlot(g *drawlist.ModelGeometry) {
 	a.slots[g] = slot
 }
 
-// placeModelSubject reserves the native slot and the doubled slot a structure
-// resolve needs, and appends the page subjects that rasterize them. Both land on
-// the same page, so a doubled body costs no pass of its own.
-func (r *Renderer) placeModelSubject(g *drawlist.ModelGeometry, crosses, ssCrosses, liveCrosses []bool, page *modelPage, resolves *[]modelResolveJob) (modelSlot, bool) {
-	local := modelSlotBounds(g)
-	if local.Empty() {
-		return modelSlot{}, false
-	}
-	rect, ok := page.alloc(local.Dx(), local.Dy())
-	if !ok {
-		return modelSlot{}, false
-	}
-	origin := rect.Min.Sub(local.Min)
-	slot := modelSlot{page: page, rect: rect, box: modelLocalBounds(g).Add(origin)}
-	sub := modelPageSubject{
-		origin: origin, rect: rect, keyed: g.KeyPlane,
-	}
-	if len(g.Children) == 0 {
-		sub.waterline, sub.waterlineKey = g.Waterline, g.WaterlineKey
-		sub.digger, sub.diggerKey = g.Digger, g.DiggerKey
-	}
-	sub.outline = r.prepareModelOutline(g)
-	if len(g.LiveFaces) != 0 {
-		livePacket := *g
-		livePacket.Faces = g.LiveFaces
-		sub.live = r.prepareModelFaces(&livePacket, origin, liveCrosses)
-	}
+// placeModelSubject reserves the native slot a subject resolves into and the
+// slot its raster draws in, and appends the page subject that rasterizes it.
+//
+// A supersampled subject rasterizes everything — cached and live faces, reveal,
+// outline, waterline and Digger clipping — into a doubled slot, and the native
+// slot receives only the two-to-one coverage resolve (§17). A native subject
+// rasterizes into its native slot and resolves one-to-one. Both land on the
+// same page, so a doubled body costs no pass of its own.
+func (r *Renderer) placeModelSubject(g *drawlist.ModelGeometry, crosses, ssCrosses, liveCrosses, ssLiveCrosses []bool, page *modelPage, resolves *[]modelResolveJob) (modelSlot, bool) {
+	var slot modelSlot
+	raster, faceCrosses, faceLiveCrosses := g, crosses, liveCrosses
+	var sub modelPageSubject
 	if ss := g.Supersample; ss != nil {
-		// The doubled body and its reveal rasterize into a doubled slot on the
-		// same page; the native slot receives the resolve, then the native
-		// outline and clipping passes [03 R-REN-03A §6–§7].
+		// A supersampled subject reserves only its doubled slot. Its resolved
+		// native box lives in that slot's top-left quadrant on the resolved
+		// plane, which nothing else reads once the raster is finished, so the
+		// page holds no native slot for it at all (§17).
 		ssLocal := modelSlotBounds(ss)
-		if ssLocal.Empty() {
+		native := modelLocalBounds(g)
+		if ssLocal.Empty() || native.Empty() {
 			return modelSlot{}, false
 		}
 		// Rounding the local box down to an even corner keeps the doubled
@@ -440,32 +457,46 @@ func (r *Renderer) placeModelSubject(g *drawlist.ModelGeometry, crosses, ssCross
 			return modelSlot{}, false
 		}
 		ssOrigin := ssRect.Min.Sub(ssLocal.Min)
-		ssSub := modelPageSubject{origin: ssOrigin, rect: ssRect, keyed: ss.KeyPlane, reveal: ss.Reveal, doubled: true}
-		ssSub.faces = r.prepareModelFaces(ss, ssOrigin, ssCrosses)
-		// The resolve reads the doubled plane out of the post scratch while it
-		// writes the page, so every doubled subject reaches post whether or not
-		// it carries a reveal.
-		page.needPost = true
-		page.subjects = append(page.subjects, ssSub)
-		*resolves = append(*resolves, modelResolveJob{
-			src:   modelSlot{page: page, rect: ssRect, box: modelLocalBounds(ss).Add(ssOrigin)},
-			dst:   slot,
-			keyed: g.KeyPlane,
-		})
-		r.modelStats.StructureResolves++
+		box := image.Rect(ssRect.Min.X, ssRect.Min.Y, ssRect.Min.X+native.Dx(), ssRect.Min.Y+native.Dy())
+		slot = modelSlot{page: page, rect: box, box: box, raster: modelLocalBounds(ss).Add(ssOrigin), scale: 2}
+		raster, sub = ss, modelPageSubject{origin: ssOrigin, rect: ssRect, keyed: ss.KeyPlane, doubled: true}
+		faceCrosses, faceLiveCrosses = ssCrosses, ssLiveCrosses
+		r.modelStats.Supersampled++
 		r.modelStats.RasterPixels += ssRect.Dx() * ssRect.Dy()
 	} else {
-		sub.faces = r.prepareModelFaces(g, origin, crosses)
-		sub.reveal = g.Reveal
+		local := modelSlotBounds(g)
+		if local.Empty() {
+			return modelSlot{}, false
+		}
+		rect, ok := page.alloc(local.Dx(), local.Dy())
+		if !ok {
+			return modelSlot{}, false
+		}
+		origin := rect.Min.Sub(local.Min)
+		slot = modelSlot{page: page, rect: rect, box: modelLocalBounds(g).Add(origin), scale: 1}
+		slot.raster = slot.box
+		sub = modelPageSubject{origin: origin, rect: rect, keyed: g.KeyPlane}
+		r.modelStats.RasterPixels += rect.Dx() * rect.Dy()
 	}
-	if sub.reveal != nil {
-		page.needPost = true
+	if len(g.Children) == 0 {
+		sub.waterline, sub.waterlineKey = g.Waterline, g.WaterlineKey
+		sub.digger, sub.diggerKey = g.Digger, g.DiggerKey
 	}
+	sub.faces = r.prepareModelFaces(raster, sub.origin, faceCrosses)
+	sub.reveal = raster.Reveal
+	sub.outline = r.prepareModelOutline(raster, sub.doubled)
+	if len(raster.LiveFaces) != 0 {
+		livePacket := *raster
+		livePacket.Faces = raster.LiveFaces
+		sub.live = r.prepareModelFaces(&livePacket, sub.origin, faceLiveCrosses)
+	}
+	// Every subject resolves into the post plane, so the page always has one.
+	page.needPost = true
 	if sub.clips() {
-		page.needPost, page.needClip = true, true
+		page.needClip = true
 	}
 	page.subjects = append(page.subjects, sub)
-	r.modelStats.RasterPixels += rect.Dx() * rect.Dy()
+	*resolves = append(*resolves, modelResolveJob{src: slot, dst: slot, scale: slot.scale})
 	return slot, true
 }
 
@@ -500,53 +531,53 @@ func (r *Renderer) prepareModelFaces(g *drawlist.ModelGeometry, origin image.Poi
 //	img   the clear
 //	key   the clear, then every subject's key faces
 //	img   every subject's colour faces — reads the key plane the key faces
-//	      wrote, and must not see the outline keys
-//	post  the reveal, and every doubled plane a resolve reads — a fragment
-//	      cannot read the image it writes, so the reveal is a ping-pong, and
-//	      routing the doubled planes through the same scratch is what lets a
-//	      resolve read one plane of the page while it writes another
-//	key   the key-plane resolves, then the outline keys, which max-blend on top
-//	      of the resolved key
-//	img   the revealed regions copied back, the composed resolves, then the
-//	      outline colours — outline colour compares against keys including the
-//	      outline keys [§10], and a resolve must not overwrite the outline
+//	      wrote, and must not see the outline or live keys
+//	post  the nanoframe reveal — a fragment cannot read the image it writes, so
+//	      the reveal is a ping-pong through the scratch
+//	key   the outline keys and then the live keys, which max-blend on top of
+//	      the body keys
+//	img   the revealed regions copied back, then the outline colours, then the
+//	      live colours — outline colour compares against keys including the
+//	      outline keys [§10]; live pieces use the finished cached key and colour
+//	      as their starting plane, and their own equal-key writes are later, so
+//	      an index-1 live texel erases cached colour while retaining the key
+//	      [03 R-REN-03A §4–§5]. The outline and live lanes share these two
+//	      passes because the max-key plane makes their order immaterial: a
+//	      live face over an outline endpoint wins or loses by key whether the
+//	      endpoint's colour was written before its key was raised or after.
 //	post  the waterline/Digger clipping that follows colour [§10], after which
 //	      the two planes swap, so the finished raster is the one img names
+//	post  the resolve of every subject's raster into its native slot: colour
+//	      through PAL with coverage as alpha, two-to-one for a supersampled
+//	      raster and one-to-one for a native one (§17)
 //
 // That is at most eight destination switches for the whole stage whatever the
-// frame holds; a stage the frame does not need is skipped entirely.
+// frame holds; a stage the frame does not need is skipped entirely. Every
+// stage before the resolve is index space (C-G4); the resolve is where colour
+// enters, and the commits sample nothing else.
 func (r *Renderer) flushModelPage(p *modelPage, resolves []modelResolveJob) {
 	if p.usedH == 0 {
 		return
 	}
 	p.ensure()
-	if p.needPost {
-		p.ensurePost()
-	}
-	if p.img == nil {
+	p.ensurePost()
+	if p.img == nil || p.post == nil {
 		return
 	}
 	// The stage's first device call always opens a pass: whatever ran before it
 	// wrote somewhere else.
 	r.modelAtlas.lastDst = nil
 	r.clearModelPage(p)
-	r.buildModelFaceRuns(p, false, false)
+	r.buildModelFaceRuns(p, false)
 	r.drawModelKeyRuns(p)
 	r.drawModelColourRuns(p)
 	r.drawModelReveal(p)
-	r.drawModelResolvePass(resolves, true)
-	r.buildModelFaceRuns(p, true, false)
+	r.buildModelFaceRuns(p, true)
 	r.drawModelKeyRuns(p)
 	r.drawModelRevealCopyBack(p)
-	r.drawModelResolvePass(resolves, false)
-	r.drawModelColourRuns(p)
-	// Live pieces use the resolved cached key and colour as their starting
-	// plane. Their own equal-key writes are later, so an index-1 live texel
-	// erases cached colour while retaining the key [03 R-REN-03A §4–§5].
-	r.buildModelFaceRuns(p, false, true)
-	r.drawModelKeyRuns(p)
 	r.drawModelColourRuns(p)
 	r.drawModelClip(p)
+	r.drawModelResolvePass(p, resolves)
 }
 
 func (r *Renderer) clearModelPage(p *modelPage) {
@@ -577,12 +608,13 @@ func fillModelRegion(img *ebiten.Image, rect image.Rectangle, c color.RGBA) {
 // destination, shader, blend and the texture page a run samples — so the list is
 // built once and read twice (§11.5 "Model slot passes"). Subjects owning a key
 // plane are emitted first, so the key pass is exactly the leading runs instead
-// of a second walk that skips keyless subjects.
+// of a second walk that skips keyless subjects. later selects the second build:
+// each subject's outline endpoints followed by its live faces, in that order.
 //
 // Source face and scanline order is preserved inside each subject, so an
 // equal-key tie still goes to the later face [03 R-REN-03A §3]; subject order
 // within a page is free because slots are disjoint.
-func (r *Renderer) buildModelFaceRuns(p *modelPage, outline, live bool) {
+func (r *Renderer) buildModelFaceRuns(p *modelPage, later bool) {
 	a := &r.modelAtlas
 	a.verts, a.idx, a.runs = a.verts[:0], a.idx[:0], a.runs[:0]
 	run := modelFaceRun{keyed: true}
@@ -663,14 +695,11 @@ func (r *Renderer) buildModelFaceRuns(p *modelPage, outline, live bool) {
 			if s.keyed != keyed {
 				continue
 			}
-			if outline {
+			faces := s.faces
+			if later {
 				for _, o := range s.outline {
 					emit(o.Vertices, modelQuadIndices, modelTextureSlot{}, false, o.Color, false, s.keyed, s.origin, 0)
 				}
-				continue
-			}
-			faces := s.faces
-			if live {
 				faces = s.live
 			}
 			// The texture page is resolved once per source face at preparation
@@ -739,29 +768,12 @@ func (r *Renderer) drawModelRun(dst *ebiten.Image, shader *ebiten.Shader, blend 
 	dst.DrawTrianglesShader32(padModelVertices(a.verts, run.v0, run.vn), a.idx[run.i0:run.iN], shader, &r.modelOpts)
 }
 
-// drawModelReveal applies the nanoframe reveal, and carries every doubled plane
-// a resolve reads, into the page's scratch. A fragment cannot read the image it
-// writes, so the reveal is a ping-pong; routing the doubled planes through the
-// same scratch is what lets a resolve read one plane of the page while it writes
-// another [03 R-COMP-01 §3][03 R-REN-03A §6].
+// drawModelReveal applies the nanoframe reveal into the page's scratch. A
+// fragment cannot read the image it writes, so the reveal is a ping-pong: the
+// revealed regions are written here and copied back by drawModelRevealCopyBack
+// [03 R-COMP-01 §3].
 func (r *Renderer) drawModelReveal(p *modelPage) {
-	if p.post == nil || r.modelCopy == nil {
-		return
-	}
-	// A doubled subject with no reveal only has to reach the scratch unchanged.
-	r.resetModelQuads()
-	for i := range p.subjects {
-		s := &p.subjects[i]
-		if !s.doubled || s.reveal != nil {
-			continue
-		}
-		if !r.modelQuadHasRoom() {
-			r.rasterQuadDraw(p.post, r.modelCopy, ebiten.BlendCopy, p.img, nil)
-		}
-		r.appendModelQuad(s.rect, s.rect, [4]float32{}, [4]float32{})
-	}
-	r.rasterQuadDraw(p.post, r.modelCopy, ebiten.BlendCopy, p.img, nil)
-	if r.modelReveal == nil {
+	if p.post == nil || r.modelReveal == nil {
 		return
 	}
 	r.resetModelQuads()
@@ -781,9 +793,7 @@ func (r *Renderer) drawModelReveal(p *modelPage) {
 	r.rasterQuadDraw(p.post, r.modelReveal, ebiten.BlendCopy, p.img, nil)
 }
 
-// drawModelRevealCopyBack returns each revealed native region to the page. A
-// doubled subject needs no copy: its resolve reads the scratch plane and writes
-// the native slot directly.
+// drawModelRevealCopyBack returns each revealed region to the page.
 func (r *Renderer) drawModelRevealCopyBack(p *modelPage) {
 	if p.post == nil || r.modelCopy == nil {
 		return
@@ -791,7 +801,7 @@ func (r *Renderer) drawModelRevealCopyBack(p *modelPage) {
 	r.resetModelQuads()
 	for i := range p.subjects {
 		s := &p.subjects[i]
-		if s.reveal == nil || s.doubled {
+		if s.reveal == nil {
 			continue
 		}
 		if !r.modelQuadHasRoom() {
@@ -802,38 +812,28 @@ func (r *Renderer) drawModelRevealCopyBack(p *modelPage) {
 	r.rasterQuadDraw(p.img, r.modelCopy, ebiten.BlendCopy, p.post, nil)
 }
 
-// drawModelResolvePass resolves every doubled plane, reading the scratch the
-// reveal stage wrote. key selects the key plane the outline pass reads, which is
-// the top-left sample of each block [03 R-REN-03A §6–§7].
-func (r *Renderer) drawModelResolvePass(jobs []modelResolveJob, key bool) {
-	if len(jobs) == 0 || r.modelResolve == nil || r.tables.alpha == nil {
+// drawModelResolvePass resolves every subject's finished indexed raster into
+// its native slot on the resolved plane, the last stage of the page (§17). It
+// reads img, which holds the finished raster after the clipping swap, and
+// writes post, whose native regions nothing else reads afterwards. The quad
+// maps the native box onto the raster box, so a doubled raster's texel
+// coordinate runs at twice the destination's and the shader reads the
+// two-by-two block under each native pixel; a native raster maps one-to-one.
+func (r *Renderer) drawModelResolvePass(p *modelPage, jobs []modelResolveJob) {
+	if len(jobs) == 0 || r.modelResolve == nil || r.tables.atlas == nil || p.post == nil {
 		return
 	}
-	var page *modelPage
 	r.resetModelQuads()
 	for _, j := range jobs {
-		if key && !j.keyed || j.src.page == nil || j.dst.page == nil || j.dst.page.post == nil {
+		if j.dst.page != p || j.dst.page.post == nil {
 			continue
 		}
-		if page != nil && page != j.dst.page || !r.modelQuadHasRoom() {
-			r.flushModelResolve(page, key)
+		if !r.modelQuadHasRoom() {
+			r.rasterQuadDraw(p.post, r.modelResolve, ebiten.BlendCopy, p.img, r.tables.atlas)
 		}
-		page = j.dst.page
-		r.appendModelQuad(j.dst.box, j.src.box, [4]float32{boolFloat(key), 0, 0, 0}, [4]float32{})
+		r.appendModelQuad(j.dst.box, j.src.raster, [4]float32{float32(j.scale), 0, 0, 0}, [4]float32{})
 	}
-	r.flushModelResolve(page, key)
-}
-
-func (r *Renderer) flushModelResolve(page *modelPage, key bool) {
-	if page == nil {
-		r.resetModelQuads()
-		return
-	}
-	target := page.img
-	if key {
-		target = page.key
-	}
-	r.rasterQuadDraw(target, r.modelResolve, ebiten.BlendCopy, page.post, r.tables.alpha)
+	r.rasterQuadDraw(p.post, r.modelResolve, ebiten.BlendCopy, p.img, r.tables.atlas)
 }
 
 // drawModelClip applies the waterline and Digger clipping that follows colour
@@ -946,7 +946,7 @@ func (r *Renderer) rasterizeModelOverflow(g *drawlist.ModelGeometry, set int) (m
 	a.overflowResolves = a.overflowResolves[:0]
 	// The fallback route re-prepares the subject outside the admission pass, so
 	// its faces recompute their own ring test.
-	slot, ok := r.placeModelSubject(g, nil, nil, nil, page, &a.overflowResolves)
+	slot, ok := r.placeModelSubject(g, nil, nil, nil, nil, page, &a.overflowResolves)
 	if !ok {
 		return modelSlot{}, false
 	}

@@ -34,6 +34,9 @@ type cachedModelBody struct {
 	// cached physical-index raster from crossing a presentation setting or
 	// palette installation; they are not retail's script-driven validity word.
 	shaded, supersampled bool
+	// geometrySupersampled is the geometry lane's own gate (supersampleGeometry),
+	// which is not the classic image's structure-only one.
+	geometrySupersampled bool
 	scale                camera.ViewScale
 	palette              *palette.Tables
 	// store is where geometry points when the retained packet was copied into
@@ -99,6 +102,7 @@ func plainCachedPacket(g *drawlist.ModelGeometry) bool {
 
 type cachedBodyInputs struct {
 	shaded, supersampled bool
+	geometrySupersampled bool
 	scale                camera.ViewScale
 	palette              *palette.Tables
 }
@@ -112,6 +116,7 @@ func (c *Client) cachedBodyInputs(draw *presentationrender.UnitDraw) cachedBodyI
 		input.scale = c.cam.EffectiveScale()
 	}
 	input.supersampled = c.supersampleModel(draw != nil && draw.Structure)
+	input.geometrySupersampled = c.supersampleGeometry()
 	if draw != nil {
 		for _, piece := range draw.Pieces {
 			for _, primitive := range piece.Primitives {
@@ -221,6 +226,7 @@ func (c *Client) replaceCachedGeometry(id uint64, v frame.UnitView, draw *presen
 	body.model, body.cacheRevision, body.validityRevision = draw.Model.Name, v.CacheRevision, v.CacheValidityRevision
 	body.structure, body.construction, body.teamColor = draw.Structure, v.BuildRemaining, unitTeamColor(v)
 	body.shaded, body.supersampled, body.scale, body.palette = inputs.shaded, inputs.supersampled, inputs.scale, inputs.palette
+	body.geometrySupersampled = inputs.geometrySupersampled
 }
 
 func (c *Client) cachedGeometryMustRebuild(body *cachedModelBody, v frame.UnitView, draw *presentationrender.UnitDraw, orient *presentationrender.OrientationCache) bool {
@@ -234,7 +240,7 @@ func (c *Client) cachedGeometryMustRebuild(body *cachedModelBody, v frame.UnitVi
 		return true
 	}
 	inputs := c.cachedBodyInputs(draw)
-	if body.shaded != inputs.shaded || body.supersampled != inputs.supersampled || body.scale != inputs.scale || body.palette != inputs.palette {
+	if body.shaded != inputs.shaded || body.geometrySupersampled != inputs.geometrySupersampled || body.scale != inputs.scale || body.palette != inputs.palette {
 		return true
 	}
 	return orient == nil || orient.Model != draw.Model.Name || orient.NeedsRebuild(v.Heading, v.Pitch, v.Bank)

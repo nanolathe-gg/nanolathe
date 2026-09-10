@@ -37,8 +37,14 @@ import (
 // The merge order inside a group is untouched: pass k merges child k of every
 // group, so each group still sees its children in record order, each over the
 // plane the previous one left [03 R-REN-03A §4]. Groups the atlas cannot serve —
-// a parent or child that overflowed the slot atlas, or a box that does not fit —
-// fall back to the one-group-at-a-time path in models.go, which is unchanged.
+// a parent or child that overflowed the slot atlas, a child at another raster
+// scale than its parent, or a box that does not fit — fall back to the
+// one-group-at-a-time path in models.go, which is unchanged.
+//
+// A group composes at its parent's raster scale, on index planes, exactly as a
+// single subject rasterizes: a supersampled carrier's children merge on its
+// doubled plane, and one coverage resolve at the end turns the composed group
+// into colour on the out plane the commit samples (DESIGN_GPU_RENDERER §17).
 
 // modelStageMaxSide bounds one staging image. A group's box is a subject's
 // composition box unioned with its children's, so a handful of them fit easily;
@@ -59,28 +65,31 @@ type modelStageChild struct {
 // modelStageGroup is one batched group. children indexes the atlas' shared child
 // store, so a steady-state frame allocates no per-group slice.
 type modelStageGroup struct {
-	region       image.Rectangle // the group's area on both staging images
+	region       image.Rectangle // the group's area on both index planes, at scale
+	native       image.Rectangle // the resolved group's area on the out plane
 	bounds       image.Rectangle // the group's world bounds, the commit's destination
 	parent       modelSlot
-	parentOffset image.Point
+	parentOffset image.Point // at scale
+	scale        int
 	childOff     int
 	childCount   int
-	// plane is the staging image holding the finished composition once
+	// plane is the index plane holding the finished composition once
 	// composeModelStage has run: which of the two it is depends on the group's
-	// own child count.
+	// own child count. out is the resolved plane the commit samples.
 	plane        *ebiten.Image
+	out          *ebiten.Image
 	waterline    drawlist.ModelWaterline
 	waterlineKey uint8
 	digger       bool
 	diggerKey    uint8
 }
 
-// modelStageAtlas owns the frame's staging pair and its shelf allocator. Every
+// modelStageAtlas owns the frame's staging planes and its shelf allocator. Every
 // slice and the index map are reused across frames (§11.2 "Allocation policy").
 // The map is keyed by geometry pointer and is only ever looked up, never ranged,
 // so it introduces no ordering [I1].
 type modelStageAtlas struct {
-	a, b        *ebiten.Image
+	a, b, out   *ebiten.Image
 	w, h        int
 	x, y, rowH  int
 	usedW       int
@@ -139,8 +148,9 @@ func (s *modelStageAtlas) ensure() bool {
 	if s.a != nil {
 		s.a.Deallocate()
 		s.b.Deallocate()
+		s.out.Deallocate()
 	}
-	s.a, s.b = ebiten.NewImage(w, h), ebiten.NewImage(w, h)
+	s.a, s.b, s.out = ebiten.NewImage(w, h), ebiten.NewImage(w, h), ebiten.NewImage(w, h)
 	s.w, s.h = w, h
 	return true
 }
@@ -191,7 +201,8 @@ func (r *Renderer) prepareModelGroups(l *drawlist.List) {
 			return
 		}
 		b := modelGroupBounds(g)
-		region, ok := s.alloc(b.Dx(), b.Dy())
+		scale := parent.scale
+		region, ok := s.alloc(scale*b.Dx(), scale*b.Dy())
 		if !ok {
 			return
 		}
@@ -202,16 +213,16 @@ func (r *Renderer) prepareModelGroups(l *drawlist.List) {
 				continue
 			}
 			slot, ok := r.batchedSlot(cg)
-			if !ok {
+			if !ok || slot.scale != scale {
 				// This child would be rasterized through the fallback pages at
-				// commit time, so the whole group keeps the fallback path and its
-				// pixels are decided there.
+				// commit time, or cannot join the parent's plane, so the whole
+				// group keeps the fallback path and its pixels are decided there.
 				s.children = s.children[:off]
 				return
 			}
 			s.children = append(s.children, modelStageChild{
 				slot:     slot,
-				dst:      modelWorldBounds(cg).Sub(b.Min),
+				dst:      scaleRect(modelWorldBounds(cg).Sub(b.Min), scale),
 				keyDelta: child.KeyDelta,
 			})
 		}
@@ -219,9 +230,11 @@ func (r *Renderer) prepareModelGroups(l *drawlist.List) {
 		s.index[g] = len(s.groups)
 		s.groups = append(s.groups, modelStageGroup{
 			region:       region,
+			native:       image.Rect(region.Min.X, region.Min.Y, region.Min.X+b.Dx(), region.Min.Y+b.Dy()),
 			bounds:       b,
 			parent:       parent,
-			parentOffset: modelWorldBounds(g).Min.Sub(b.Min),
+			parentOffset: modelWorldBounds(g).Min.Sub(b.Min).Mul(scale),
+			scale:        scale,
 			childOff:     off,
 			childCount:   n,
 			waterline:    g.Waterline, waterlineKey: g.WaterlineKey,
@@ -245,9 +258,10 @@ func (r *Renderer) batchedSlot(g *drawlist.ModelGeometry) (modelSlot, bool) {
 }
 
 // composeModelStage draws every batched group's composition, ordered by
-// destination: one pass writes every group's background and parent, and pass k
-// after it merges child k of every group. Regions are pairwise disjoint, so
-// batching by child index preserves each group's own record order
+// destination: one pass writes every group's background and parent, pass k
+// after it merges child k of every group, the clips follow, and one last pass
+// resolves every group onto the out plane (§17). Regions are pairwise disjoint,
+// so batching by child index preserves each group's own record order
 // [03 R-REN-03A §4].
 func (r *Renderer) composeModelStage() {
 	s := &r.modelGroups
@@ -273,7 +287,7 @@ func (r *Renderer) composeModelStage() {
 		r.modelStageOp.GeoM.Translate(
 			float64(grp.region.Min.X+grp.parentOffset.X),
 			float64(grp.region.Min.Y+grp.parentOffset.Y))
-		parentImg := grp.parent.image()
+		parentImg := grp.parent.rasterImage()
 		sub.DrawImage(parentImg, &r.modelStageOp)
 		recycleImage(parentImg)
 		sub.Recycle()
@@ -302,9 +316,9 @@ func (r *Renderer) composeModelStage() {
 			r.modelStageOp.GeoM.Translate(float64(grp.region.Min.X), float64(grp.region.Min.Y))
 			dstSub.DrawImage(srcSub, &r.modelStageOp)
 			r.modelStats.Draws++
-			r.appendModelQuad(child.dst.Add(grp.region.Min), child.slot.box,
+			r.appendModelQuad(child.dst.Add(grp.region.Min), child.slot.raster,
 				[4]float32{}, [4]float32{float32(child.keyDelta), 0, 0, 0})
-			childImg := child.slot.image()
+			childImg := child.slot.rasterImage()
 			r.modelDraw(dstSub, r.modelChild, ebiten.BlendCopy, childImg, srcSub, nil, nil)
 			recycleImage(childImg)
 			dstSub.Recycle()
@@ -335,6 +349,24 @@ func (r *Renderer) composeModelStage() {
 		dstSub.Recycle()
 		grp.plane = dst
 	}
+	// The resolve: every group's finished index plane becomes colour on the out
+	// plane, one draw per source plane into one destination (§17).
+	if r.modelResolve == nil || r.tables.atlas == nil {
+		return
+	}
+	r.beginPass(s.out)
+	for _, plane := range [2]*ebiten.Image{s.a, s.b} {
+		r.resetModelQuads()
+		for i := range s.groups {
+			grp := &s.groups[i]
+			if grp.plane != plane {
+				continue
+			}
+			r.appendModelQuad(grp.native, grp.region, [4]float32{float32(grp.scale), 0, 0, 0}, [4]float32{})
+			grp.out = s.out
+		}
+		r.modelDraw(s.out, r.modelResolve, ebiten.BlendCopy, plane, r.tables.atlas, nil, nil)
+	}
 }
 
 // batchedGroup returns the finished staging plane of a group composeModelStage
@@ -345,7 +377,7 @@ func (r *Renderer) batchedGroup(g *drawlist.ModelGeometry) (*modelStageGroup, bo
 		return nil, false
 	}
 	grp := &r.modelGroups.groups[i]
-	if grp.plane == nil {
+	if grp.plane == nil || grp.out == nil {
 		return nil, false
 	}
 	return grp, true

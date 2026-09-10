@@ -1,6 +1,10 @@
 package gpurender
 
-import "github.com/hajimehoshi/ebiten/v2"
+import (
+	"fmt"
+
+	"github.com/hajimehoshi/ebiten/v2"
+)
 
 // The model passes deliberately retain the source key as a varying until the
 // fragment.  Reducing already-wrapped vertex bytes is observably different at
@@ -337,29 +341,50 @@ func newModelChildShader() (*ebiten.Shader, error) {
 	return ebiten.NewShader([]byte(modelChildShaderSource))
 }
 
-// ALP is ordered: left then right within a row, top then bottom between rows.
-// The key comes only from the top-left sample, including under erased pixels
-// [03 R-REN-03A §6–§7]. Background indices participate in all three lookups.
-// Source 0 is the doubled slot page and source 1 is ALP; color.r selects the
-// key-plane output the native key page needs for the outline pass.
-const modelResolveShaderSource = `//kage:unit pixels
+// The coverage resolve of DESIGN_GPU_RENDERER §17: the one stage where a
+// subject's index raster becomes colour. Source 0 is the page's finished
+// indexed plane and source 1 the table atlas; color.r is the raster's scale.
+//
+// A doubled raster resolves two-to-one. Each native pixel reads the two-by-two
+// block under it, resolves every covered sample through PAL, and writes their
+// sum over four as premultiplied colour with the covered count over four as
+// alpha — the fraction of the pixel the subject actually covers. An uncovered
+// sample is the composition transparent index 1, exactly the texel the commit
+// used to skip [03 R-REN-03A §5], and it contributes nothing: no background
+// index is blended in, so there is no fringe. The retail resolve of
+// [03 R-REN-03A §7] blends the background through ALP and keeps that fringe;
+// it lives on in the classic executor, and this is Enhanced's replacement.
+// Colours are averaged after the PAL lookup, never indices (C-G4).
+//
+// A native raster resolves one-to-one: the index through PAL at alpha 1, or a
+// full skip. The same shader serves both so a page of mixed subjects is one
+// pass.
+func modelResolveShaderSource() string {
+	return `//kage:unit pixels
 package main
-func blend(a, b float) float {
-	return floor(imageSrc1AtFromSrc0Pos(imageSrc0Origin()+vec2(b+0.5, a+0.5)).r*255.0+0.5)
+
+const palRow = ` + fmt.Sprint(tableRowPAL) + `.0
+
+func sample(p vec2) vec4 {
+	idx := floor(imageSrc0At(p).r*255.0 + 0.5)
+	if idx == 1.0 {
+		return vec4(0.0)
+	}
+	return vec4(imageSrc1AtFromSrc0Pos(imageSrc0Origin()+vec2(idx+0.5, palRow+0.5)).rgb, 1.0)
 }
+
 func Fragment(dstPos vec4, srcPos vec2, color vec4) vec4 {
-	p := imageSrc0Origin()+2.0*floor((srcPos-imageSrc0Origin())/2.0)+vec2(0.5, 0.5)
-	top := imageSrc0At(p)
-	if color.r > 0.5 { return vec4(top.g, 0.0, 0.0, 1.0) }
-	a := floor(top.r*255.0+0.5)
-	b := floor(imageSrc0At(p+vec2(1.0, 0.0)).r*255.0+0.5)
-	c := floor(imageSrc0At(p+vec2(0.0, 1.0)).r*255.0+0.5)
-	d := floor(imageSrc0At(p+vec2(1.0, 1.0)).r*255.0+0.5)
-	idx := blend(blend(a, b), blend(c, d))
-	return vec4(idx/255.0, top.g, 0.0, 1.0)
+	s := floor(color.r + 0.5)
+	p := imageSrc0Origin() + s*floor((srcPos-imageSrc0Origin())/s) + vec2(0.5, 0.5)
+	if s < 1.5 {
+		return sample(p)
+	}
+	sum := sample(p) + sample(p+vec2(1.0, 0.0)) + sample(p+vec2(0.0, 1.0)) + sample(p+vec2(1.0, 1.0))
+	return sum * 0.25
 }
 `
+}
 
 func newModelResolveShader() (*ebiten.Shader, error) {
-	return ebiten.NewShader([]byte(modelResolveShaderSource))
+	return ebiten.NewShader([]byte(modelResolveShaderSource()))
 }

@@ -37,11 +37,13 @@ type ModelStats struct {
 	FoldedFaces, FoldedStrips                                   int
 	TexturedQuadFaces, TexturedQuadStrips                       int
 	UntriangulatedFaces                                         int
-	StructureResolves                                           int
-	ComposedGroups                                              int
-	RevealOrOutlineOmitted                                      int
-	WaterlineOrDiggerOmitted                                    int
-	StagingCommandsOmitted                                      int
+	// Supersampled is the subjects that rasterized doubled and resolved with
+	// fractional coverage this frame (DESIGN_GPU_RENDERER §17).
+	Supersampled             int
+	ComposedGroups           int
+	RevealOrOutlineOmitted   int
+	WaterlineOrDiggerOmitted int
+	StagingCommandsOmitted   int
 }
 
 func (r *Renderer) ModelStats() ModelStats {
@@ -95,7 +97,7 @@ func (r *Renderer) Model(cmd drawlist.Model) {
 }
 
 func (r *Renderer) modelGeometryConfigSupported(g *drawlist.ModelGeometry) bool {
-	if r == nil || g == nil || g.Scale != 1 || len(g.Faces) == 0 && len(g.LiveFaces) == 0 || r.modelKey == nil || r.modelBody == nil || r.modelCommit == nil || r.modelCopy == nil {
+	if r == nil || g == nil || g.Scale != 1 || len(g.Faces) == 0 && len(g.LiveFaces) == 0 || r.modelKey == nil || r.modelBody == nil || r.modelCommit == nil || r.modelCopy == nil || r.modelResolve == nil || r.tables.atlas == nil {
 		return false
 	}
 	if g.Reveal != nil {
@@ -112,7 +114,7 @@ func (r *Renderer) modelGeometryConfigSupported(g *drawlist.ModelGeometry) bool 
 	if len(g.Children) != 0 && (!g.KeyPlane || r.modelChild == nil) {
 		return false
 	}
-	if ss := g.Supersample; ss != nil && (ss.Scale != 2 || ss.Width <= 0 || ss.Height <= 0 || r.modelResolve == nil || r.tables.alpha == nil) {
+	if ss := g.Supersample; ss != nil && (ss.Scale != 2 || ss.Width <= 0 || ss.Height <= 0 || ss.Reveal != nil && r.modelReveal == nil) {
 		return false
 	}
 	return true
@@ -220,9 +222,7 @@ func (r *Renderer) drawModelGeometry(g *drawlist.ModelGeometry, shadowOnly bool)
 		// so the exemption does not hold and is not claimed.
 		r.composeModelChildren(g, body)
 	} else {
-		if body.page != nil {
-			r.commitModelSlot(body.page.img, body.box, modelWorldBounds(g))
-		}
+		r.commitModelSlot(body.resolved(), body.box, modelWorldBounds(g))
 	}
 	return true
 }
@@ -247,9 +247,10 @@ func (r *Renderer) modelSlotFor(g *drawlist.ModelGeometry, set int) (modelSlot, 
 	return slot, slot.page != nil
 }
 
-// commitModelSlot compiles one finished subject plane into the frame's opaque
-// batch: a keyed quad sampling the plane, skipping the composition background
-// index 1 (docs/DESIGN_GPU_RENDERER.md §11.2)[03 R-REN-03A §5]. src and dst are
+// commitModelSlot compiles one resolved subject plane into the frame's opaque
+// batch: a quad sampling the plane's premultiplied colour and coverage, skipping
+// the uncovered texels and blending the partly covered ones by their coverage
+// (docs/DESIGN_GPU_RENDERER.md §11.2, §17)[03 R-REN-03A §5]. src and dst are
 // the same size, so the framebuffer clip shifts the source by the same amount and
 // covers exactly the pixels the per-subject commit covered.
 func (r *Renderer) commitModelSlot(page *ebiten.Image, src, dst image.Rectangle) {
@@ -275,16 +276,17 @@ func (r *Renderer) commitModelSlot(page *ebiten.Image, src, dst image.Rectangle)
 // builder's arithmetic, punching the body's coverage first so overlapping
 // silhouette faces darken the ground once [03 R-REN-03D §4–§5][03 §4.3.4]. The
 // punch reads the body plane, not the destination, so this commit takes no
-// snapshot: it is an ordinary blend (docs/DESIGN_GPU_RENDERER.md §13.3). The
-// shadow plane rides source slot 3 and the body plane source slot 0; Custom0/1
+// snapshot: it is an ordinary blend (docs/DESIGN_GPU_RENDERER.md §13.3). Both
+// planes are the resolved ones (§17): the silhouette's coverage scales its
+// darkening, and the punch removes only the texels the body covers whole, since
+// the body's own blend restores the shadowed ground under a partly covered edge.
+// The shadow plane rides source slot 3 and the body plane source slot 0; Custom0/1
 // carries the body-page offset of a shadow texel and the colour lanes the body
 // slot's page bounds, so a shadow texel outside the body slot reads as uncovered.
-// It returns the shadow command's scheduler owner, which the paired body commit
-// names as its exemption.
 func (r *Renderer) commitModelShadow(sg *drawlist.ModelGeometry, shadow modelSlot, bg *drawlist.ModelGeometry, body modelSlot) {
 	shadowPage, bodyPage := shadow.page, body.page
 	if r.sceneDest == nil || r.tables.atlas == nil ||
-		shadowPage == nil || shadowPage.img == nil || bodyPage == nil || bodyPage.img == nil {
+		shadowPage == nil || shadowPage.post == nil || bodyPage == nil || bodyPage.post == nil {
 		r.modelStats.ShadowsOmitted++
 		return
 	}
@@ -304,7 +306,7 @@ func (r *Renderer) commitModelShadow(sg *drawlist.ModelGeometry, shadow modelSlo
 	kx := body.box.Min.X - shadow.box.Min.X + d.X
 	ky := body.box.Min.Y - shadow.box.Min.Y + d.Y
 	if !r.sched.begin(schedDest, x0, y0, x1, y1, [4]*ebiten.Image{
-		0: bodyPage.img, 1: r.tables.atlas, 3: shadowPage.img,
+		0: bodyPage.post, 1: r.tables.atlas, 3: shadowPage.post,
 	}) {
 		return
 	}
@@ -339,27 +341,33 @@ func (r *Renderer) composeModelChildren(g *drawlist.ModelGeometry, parent modelS
 			}
 			r.modelStats.GPU++
 		}
-		r.commitModelSlot(grp.plane, grp.region, grp.bounds)
+		r.commitModelSlot(grp.out, grp.native, grp.bounds)
 		r.modelStats.ComposedGroups++
 		return
 	}
+	// The group composes at the parent's raster scale and resolves once at the
+	// end, so a supersampled carrier's children merge on its doubled index
+	// plane and the whole group takes one coverage resolve (§17). A child at
+	// another scale cannot join that plane and is an explicit omission.
 	b := modelGroupBounds(g)
+	scale := parent.scale
 	r.submitSchedule()
-	r.ensureModelStage(b.Dx(), b.Dy())
+	r.ensureModelStage(scale*b.Dx(), scale*b.Dy())
 	if r.modelStage == nil {
 		r.modelStats.Skipped++
 		return
 	}
-	area := image.Rect(0, 0, b.Dx(), b.Dy())
+	area := image.Rect(0, 0, scale*b.Dx(), scale*b.Dy())
+	native := image.Rect(0, 0, b.Dx(), b.Dy())
 	stage, scratch := r.modelStage.SubImage(area).(*ebiten.Image), r.modelStageScratch.SubImage(area).(*ebiten.Image)
 	stageImg, scratchImg := r.modelStage, r.modelStageScratch
 	r.beginPass(stageImg)
 	stage.Fill(color.RGBA{R: 1, A: 255})
-	d := modelWorldBounds(g).Min.Sub(b.Min)
+	d := modelWorldBounds(g).Min.Sub(b.Min).Mul(scale)
 	r.modelStageOp.Blend = ebiten.BlendCopy
 	r.modelStageOp.GeoM.Reset()
 	r.modelStageOp.GeoM.Translate(float64(d.X), float64(d.Y))
-	parentImg := parent.image()
+	parentImg := parent.rasterImage()
 	stage.DrawImage(parentImg, &r.modelStageOp)
 	recycleImage(parentImg)
 	for _, child := range g.Children {
@@ -369,16 +377,16 @@ func (r *Renderer) composeModelChildren(g *drawlist.ModelGeometry, parent modelS
 			continue
 		}
 		slot, ok := r.modelSlotFor(cg, 1)
-		if !ok {
+		if !ok || slot.scale != scale {
 			r.modelStats.Skipped++
 			continue
 		}
 		r.modelStageOp.GeoM.Reset()
 		r.beginPass(scratchImg)
 		scratch.DrawImage(stage, &r.modelStageOp)
-		cb := modelWorldBounds(cg).Sub(b.Min)
-		r.appendModelQuad(cb, slot.box, [4]float32{}, [4]float32{float32(child.KeyDelta), 0, 0, 0})
-		childImg := slot.image()
+		cb := scaleRect(modelWorldBounds(cg).Sub(b.Min), scale)
+		r.appendModelQuad(cb, slot.raster, [4]float32{}, [4]float32{float32(child.KeyDelta), 0, 0, 0})
+		childImg := slot.rasterImage()
 		r.modelDraw(scratch, r.modelChild, ebiten.BlendCopy, childImg, stage, nil, nil)
 		recycleImage(childImg)
 		stage, scratch = scratch, stage
@@ -390,10 +398,19 @@ func (r *Renderer) composeModelChildren(g *drawlist.ModelGeometry, parent modelS
 		r.appendModelQuad(area, area,
 			[4]float32{float32(g.Waterline), float32(g.WaterlineKey), boolFloat(g.Digger), float32(g.DiggerKey)}, [4]float32{})
 		r.modelDraw(scratch, r.modelClip, ebiten.BlendCopy, stage, r.tables.blue, nil, nil)
-		stageImg = scratchImg
+		stage = scratch
 	}
-	r.commitModelSlot(stageImg, area, b)
+	r.beginPass(r.modelStageOut)
+	out := r.modelStageOut.SubImage(native).(*ebiten.Image)
+	r.appendModelQuad(native, area, [4]float32{float32(scale), 0, 0, 0}, [4]float32{})
+	r.modelDraw(out, r.modelResolve, ebiten.BlendCopy, stage, r.tables.atlas, nil, nil)
+	r.commitModelSlot(r.modelStageOut, native, b)
 	r.modelStats.ComposedGroups++
+}
+
+// scaleRect scales a rectangle about the origin by a whole factor.
+func scaleRect(b image.Rectangle, scale int) image.Rectangle {
+	return image.Rect(b.Min.X*scale, b.Min.Y*scale, b.Max.X*scale, b.Max.Y*scale)
 }
 
 func (r *Renderer) ensureModelStage(w, h int) {
@@ -406,8 +423,10 @@ func (r *Renderer) ensureModelStage(w, h int) {
 	if r.modelStage != nil {
 		r.modelStage.Deallocate()
 		r.modelStageScratch.Deallocate()
+		r.modelStageOut.Deallocate()
 	}
 	r.modelStageW, r.modelStageH = maxInt(w, r.modelStageW), maxInt(h, r.modelStageH)
 	r.modelStage = ebiten.NewImage(r.modelStageW, r.modelStageH)
 	r.modelStageScratch = ebiten.NewImage(r.modelStageW, r.modelStageH)
+	r.modelStageOut = ebiten.NewImage(r.modelStageW, r.modelStageH)
 }

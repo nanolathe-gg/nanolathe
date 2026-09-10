@@ -133,7 +133,10 @@ type ModelChild struct {
 // Clone owns independent slices for retained consumers. Origin is the image
 // pixel at model-local (0,0), and Anchor
 // is that point on the framebuffer. The outer packet describes native output;
-// Supersample optionally supplies a doubled local body raster for the resolve.
+// Supersample optionally supplies the subject's doubled raster — its cached and
+// live faces, outline and reveal at twice the scale, placed with the subject's
+// half-pixel offset — which the executor rasterizes instead of the native faces
+// and resolves two-to-one with fractional coverage (DESIGN_GPU_RENDERER §17).
 //
 // Ineligible describes a subject modern mode intentionally omits. It lets a
 // consumer report the reason without consulting a CPU image [03 R-REN-03A
@@ -147,7 +150,8 @@ type ModelGeometry struct {
 	LiveFaces []ModelFace
 	// Shadow is a separately projected silhouette, committed before this body.
 	Shadow *ModelGeometry
-	// Supersample is an optional doubled body raster in local image coordinates.
+	// Supersample is the optional doubled raster in local image coordinates,
+	// carrying its own Faces, LiveFaces, Outline and Reveal (§17).
 	Supersample  *ModelGeometry
 	Reveal       *ModelReveal
 	Outline      []ModelFace

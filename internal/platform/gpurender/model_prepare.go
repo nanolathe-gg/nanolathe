@@ -241,8 +241,16 @@ func (r *Renderer) prepareModelVertices(v []drawlist.ModelVertex) []modelGPUVert
 // prepareModelOutline resolves the two row endpoints of every outline ring into
 // reusable one-pixel quads. The endpoints keep the subject key test; no polygon
 // border primitive replaces the pass [03 R-COMP-01 §3].
-func (r *Renderer) prepareModelOutline(g *drawlist.ModelGeometry) []modelGPUFace {
+//
+// doubled draws each endpoint two raster pixels wide and tall, so the outline
+// of a supersampled subject resolves to a line of one native pixel's weight
+// rather than a quarter of one (§17).
+func (r *Renderer) prepareModelOutline(g *drawlist.ModelGeometry, doubled bool) []modelGPUFace {
 	rows := 0
+	width := float32(1)
+	if doubled {
+		width = 2
+	}
 	for i := range g.Outline {
 		v := g.Outline[i].Vertices
 		if len(v) < 2 {
@@ -288,10 +296,10 @@ func (r *Renderer) prepareModelOutline(g *drawlist.ModelGeometry) []modelGPUFace
 					continue
 				}
 				q, s, t := p, p, p
-				q.X++
-				s.X++
-				s.Y++
-				t.Y++
+				q.X += width
+				s.X += width
+				s.Y += width
+				t.Y += width
 				quad := corners[used : used+4 : used+4]
 				quad[0], quad[1], quad[2], quad[3] = p, q, s, t
 				used += 4

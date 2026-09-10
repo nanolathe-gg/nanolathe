@@ -148,8 +148,11 @@ func TestGeometryOnlyKeylessLiveIsLaterDirectModel(t *testing.T) {
 	if len(models) != 2 || models[0].Geometry.KeyPlane || models[1].Geometry.KeyPlane || len(models[0].Geometry.LiveFaces) != 0 {
 		t.Fatalf("keyless record = %#v, want cached body then direct live", models)
 	}
-	if models[1].Geometry.Width != int32(c.width) || models[1].Geometry.Height != int32(c.height) {
-		t.Fatal("later live command did not use direct framebuffer projection")
+	// A direct packet's local space is screen space: its anchor is screen
+	// (0,0) and its box is the corners' own extent, not the framebuffer's.
+	live := models[1].Geometry
+	if live.AnchorX != 0 || live.AnchorY != 0 || live.Width <= 0 || live.Width >= int32(c.width) {
+		t.Fatalf("later live command did not use direct framebuffer projection: anchor (%d,%d), box %dx%d", live.AnchorX, live.AnchorY, live.Width, live.Height)
 	}
 }
 

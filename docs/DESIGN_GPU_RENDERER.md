@@ -360,11 +360,11 @@ excluded from presentation timing (§6). The diff tool is `tools/framediff`.
 * **C-G6 Structure supersample.** Preserve the cached/all versus live gate,
   pre-shear doubled projection, ordered ALP color resolve, and top-left key
   resolve [03 R-REN-03A §6–§7]. Live pieces draw at native scale afterward.
-  Mobile units are not supersampled in GPU Classic. A full subject-wide MSAA
-  or SSAA replacement belongs to Enhanced and needs a separate design.
-  The GPU recorder retains the cached lane and records current live faces
-  separately. Native execution resolves cached structure faces first, then
-  rasterizes the unshaded live lane at 1x (§10).
+  Mobile units are not supersampled in retail. This is the classic executor's
+  contract. Enhanced replaces it with the subject-wide coverage supersample of
+  §17: every subject doubled, live lane and outline included, resolved with
+  fractional coverage and no fringe. The GPU recorder retains the cached lane
+  and records current live faces separately in both.
 * **C-G7 Fog composition.** The recorded fog ops are converted to a per-tile
   grid texture (kind, variant, frame, pattern parity) and may be applied by a combined
   shader over the world image: solid fills write the dark index, gray fills
@@ -508,14 +508,14 @@ and pause behaviour are specified in §13.5. Original retains committed-tick
 sampling; I6 names Enhanced as the one presentation path allowed to read two
 committed ticks.
 
-### 5.4 Lighting, glow and antialiasing (deferred)
+### 5.4 Lighting and glow (deferred); antialiasing (§17)
 
 Lighting may be palette/tint based or use model geometry/material information;
 no technique is selected. Preserve resolved asset and geometry identity rather
 than inventing material values. Glow's initial intended sources are known lights,
 lasers and missile exhaust. A later design must define masks, visibility,
-occlusion, blur and color behavior. Enhanced MSAA/SSAA likewise needs its own
-resource/performance and compositing design. None blocks the model prototype.
+occlusion, blur and color behavior. Model antialiasing is designed and landed
+in §17: subject-wide supersampling with a coverage resolve, Enhanced only.
 
 ## 6. Verification
 
@@ -1316,8 +1316,9 @@ writes PAL[0].
 the model stage's SHD, ALP resolve, Gray-free paths and BLUE waterline all
 remap a texel before it is written; they keep their integer texel fetches and
 resolve through PAL at the end. The model slot atlas, key plane, reveal,
-outline, waterline, digger and supersample resolve are unchanged; only the
-commit resolves colour.
+outline, waterline and digger are unchanged. As first landed only the commit
+resolved colour; since §17 the model stage ends in a coverage resolve that
+produces colour on the slot page, and the commit copies it.
 
 **Destination-side lookups become blends** with the arithmetic of §13.2:
 
@@ -2610,3 +2611,217 @@ The known follow-ups: a keyed source's filtered sampling (`TODO(question)` in
 strategic cut (`TODO(question)` at `Client.markerAlpha`). The capture route
 cannot arm a build placement — `--shot-select` disarms one — so the ghost's
 position is held by its test rather than by a capture.
+
+## 17. Model antialiasing: subject-wide supersampling with a coverage resolve (Enhanced)
+
+### 17.1 Decision
+
+Every model subject the Enhanced executor draws — mobile unit, structure, the
+live lane, the nanoframe outline, debris, and the shadow silhouette — is
+rasterized at twice the record step's resolution and resolved two-to-one with
+**fractional coverage**: a resolved pixel's colour is the mean of its covered
+samples' palette colours and its alpha the fraction of samples covered. An
+uncovered sample contributes nothing. The result commits over the composite by
+source-over, so an edge pixel blends with whatever is under it in proportion to
+how much of it the subject covers.
+
+This replaces, in Enhanced only, retail's structure supersample of
+[03 R-REN-03A §6–§7], which doubled structures alone, drew the live lane at
+native scale afterwards, and resolved through the ordered ALP table with the
+composition background index blended in — the coloured fringe of §4. The
+classic executor keeps that behaviour exactly (C-G6); the Anti-Alias display
+option keeps its name and gates both: on, Enhanced supersamples everything and
+classic supersamples structures; off, both rasterize at native scale.
+
+The fringe is not preserved. The user's decision is that it was a defect of the
+original rather than a look to keep, and Enhanced is the mode that is allowed to
+diverge (§1, §13). The classic executor remains the retail reference for it.
+
+The subject is also placed at **half-pixel precision**: the doubled raster is
+offset inside its slot by the half pixel the subject's interpolated position
+actually lands on, which the two-to-one resolve turns into a genuine half-pixel
+step on screen. Enhanced presents interpolated positions at the display rate
+(§13.5), and without this every unit still moved in whole pixels.
+
+MSAA was considered and rejected: Ebitengine exposes no multisampled render
+target, its `AntiAlias` draw option is a stencil path for solid vector fills,
+and the model passes are index-space shaders with a key-plane discard that such
+a path cannot express. Supersampling reuses the doubled slot the executor
+already had for structures.
+
+### 17.2 The recorder — contract S1
+
+`Client.supersampleGeometry` is the gate: the Anti-Alias option and a palette,
+nothing about the subject. When it holds, every recorded `ModelGeometry`
+carries a `Supersample` packet at scale 2 holding the subject's own doubled
+raster: its `Faces` (the cached lane, or every lane for a direct subject), its
+`LiveFaces`, its `Outline` and its `Reveal`, all in the doubled packet's local
+image coordinates. The outer packet keeps its native faces, box, origin and
+anchor; the executor rasterizes none of the native faces when a doubled raster
+is present, but the box remains the commit rectangle and the anchor the
+subject's screen position.
+
+The doubled projection is retail's: corner `(x, y)` of the native local
+projection lands at `2·(x + originX) + hx`, `2·(y + originY) − odd + hy`, where
+`odd` is the low bit of the corner's model-relative height, so the doubled
+shear is `2z − y` rather than `2·(z − (y >> 1))` [03 R-REN-03A §6], and
+`(hx, hy)` is the subject's half-pixel offset (§17.3). The shadow's doubled
+quarter shear moves the corner one raster pixel right as well as up when the
+second bit of the height is set, which is the same identity applied to
+`ry >> 2`. At a magnified view scale the correction is the view's own pixel
+(`ViewScale.Px(1)`), because the scaled native offset already lost the half it
+restores. The doubled packet is filled straight from the unplaced polygons, so
+the lane costs no copy of their corner lanes.
+
+The cached lane is retained without the half-pixel offset; the offset is added
+when the retained lane is rebased into the frame's packet, so a subject that
+moves without changing pose keeps its cache. A keyed subject whose pieces are
+all live retains an empty doubled lane so its live faces have a raster to join.
+The geometry cache's identity carries this gate separately from the classic
+image's structure-only one, so toggling the option rebuilds the right lane.
+
+A direct-projected subject's packet used to declare the whole record extent as
+its box; it now declares its corners' own extent with retail's two-pixel
+margin, origin at the box pixel of screen (0,0) and anchor at screen (0,0), so
+its slot is the subject's size and can be doubled.
+
+### 17.3 Half-pixel positioning — contract S2
+
+`Camera.WorldToScreenDoubled` is `WorldToScreen` carried in 16.16 at twice the
+record step: `floor(2·s·(x − cameraX))` and `floor(s·(2z − y − 2·cameraZ))`,
+viewport origin included, with `s` the record step. A supersampled subject is
+anchored on that result's whole pixel (`sx2 >> 1`, `sy2 >> 1`) and its doubled
+raster is offset inside the slot by the half (`sx2 & 1`, `sy2 & 1`), so the
+offset is 0 or 1 on both axes at every view scale and the composition box's
+margin always holds it. The anchor can sit one pixel from `WorldToScreen`'s,
+because retail's shear halves the whole part of the height while the doubled
+projection halves the height itself; that is the subject drawn where it is
+rather than where retail's truncation put it, and the classic executor keeps
+retail's pixel. At 2× the retail anchor was always an even screen pixel, so
+units moved in two-pixel steps; the doubled projection restores the missing
+step. The shadow projects the ground point, which is what its anchor projects
+[03 R-REN-03D §3], with shadowAnchor's five-pixel X offset on the whole pixel.
+
+A direct-projected subject (debris, a keyless live lane) has no shared
+offset: its corners are projected one by one, so each carries its own exact
+doubled position (`screenPoly.x2, y2`) and the doubled lane takes those. Its
+box counts the doubled corners' whole pixels too, so it holds the lane at any
+scale.
+
+### 17.4 The executor — contract S3
+
+One page, one stage, every stage in index space until the last:
+
+```
+img   clear
+key   clear; every subject's key faces
+img   every subject's colour faces
+post  the nanoframe reveal (ping-pong)
+key   the outline keys, then the live keys, max-blended over the body keys
+img   the revealed regions copied back, then the outline colours, then the
+      live colours
+post  waterline/Digger clipping, then the planes swap
+post  THE RESOLVE: every subject's raster → its native box, as colour
+```
+
+The outline and live lanes share two passes: with a max-key plane the order of
+an outline endpoint and a live face is decided by key whether the endpoint's
+colour was written before the live key was raised or after, and the colour
+runs still draw the outline before the live faces so an equal key goes to the
+later one [03 R-REN-03A §3].
+
+A supersampled subject reserves only its doubled slot; its resolved native box
+is that slot's top-left quadrant on the resolved plane, which nothing reads
+once the raster is finished, so the page holds no native slot for it and its
+rows are the doubled rasters alone. A native subject's raster is its native
+slot, and the same resolve pass copies it one-to-one through PAL at alpha 1. A
+page of mixed subjects is one pass, and the stage is at most eight destination
+switches whatever the frame holds. The resolved plane is `post`; the finished
+index plane is `img`. A commit samples the resolved plane. A group merge
+samples the index plane at the parent's scale. Only the raster that draws is
+admitted: a supersampled subject's native faces are never tested or prepared.
+
+The resolve shader reads the block under each native pixel — one sample for a
+native raster, four for a doubled one — and for every sample whose index is not
+the composition transparent index 1 looks the index up through PAL and counts
+it. It writes `(Σ colour / 4, n / 4)`, premultiplied. Colours are averaged
+after the PAL lookup, never indices (C-G4). Index 1 is exactly the texel the
+keyed commit skipped [03 R-REN-03A §5], so a native raster resolves to the same
+skip and colour the commit used to produce.
+
+The outline of a supersampled subject is drawn two raster pixels wide, so the
+resolved line keeps a whole pixel's weight where it aligns with the block and
+splits into two half-weight pixels where it does not, instead of resolving to a
+quarter-weight line.
+
+Slots stay even-aligned with even dimensions (§11.2), so the block a native
+pixel reads is the block its doubled raster wrote.
+
+### 17.5 Commits, shadows and groups — contract S4
+
+* **Body commit.** `sceneOpModelCommit` copies the resolved texel: an
+  uncovered texel is the key skip, a covered one is the colour at its coverage,
+  and the opaque batch's source-over blends it. Ordering is unchanged: within a
+  batch quads draw in record order and source-over honours it, and the
+  scheduler already places an opaque command after any destination command it
+  overlaps.
+* **Shadow commit.** Both planes are resolved ones. The silhouette's fragment
+  is half its premultiplied colour at half its coverage, so a partly covered
+  silhouette edge darkens the ground by its coverage. The punch skips a shadow
+  texel only where the body's coverage is whole: under a partly covered body
+  edge the shadow stays and the body's own blend restores the shadowed ground
+  in proportion, which is the composite the byte writers' opaque punch
+  approximated [03 R-REN-03D §4–§5].
+* **Attached-unit groups.** A group composes at its parent's raster scale, on
+  index planes, with the unchanged child merge and clip shaders
+  [03 R-REN-03A §4], then one resolve pass turns every group into colour on
+  the staging atlas' out plane, which the commit samples. A child whose scale
+  differs from its parent's cannot join the plane and takes the fallback path,
+  where it is an explicit omission. The fallback path does the same for one
+  group on its own three images.
+
+### 17.6 Divergences
+
+* Edge pixels of every subject are blended with the composite by coverage;
+  face boundaries inside a subject are averaged. Neither exists in retail.
+* Structures lose the ALP fringe.
+* The live lane and the outline are supersampled with the body; retail draws
+  both at native scale after the structure resolve.
+* A subject's doubled raster sits at its half-pixel position, so a subject can
+  present half a pixel from where the classic executor puts it, and its
+  resolved silhouette differs by that.
+
+### 17.7 Verification
+
+1. **Device fixture.** `model_fixture_test.go`: the supersampled subject's
+   left pixel resolves the mean of its four covered samples with the live lane
+   having joined the doubled raster; its right pixel resolves three covered
+   samples at three-quarter coverage over the background after the child merge
+   and the carrier's waterline; the one-sample edge subject resolves at a
+   quarter over the background with no fringe. The stage pass bound is eight.
+   The neighbour-independence and fallback-route checks are unchanged and pass.
+2. **CI tier.** `go test ./...` green; the recorder's direct-route tests now
+   assert the tight box and screen anchor.
+3. **Captures.** The M2 commander and the M8 mission units through
+   `--renderer=modern` before and after, magnified: silhouettes smooth, no
+   fringe, shadows intact.
+4. **Benchmark.** The modern battle benchmark, 1080p, 180 frames, main
+   against this branch, run back to back. At 120 TPS: Record 3.0 → 3.3 ms
+   median, Submit 2.6 → 3.0, cadence 8.32 → 8.34, on the 8.3 ms floor 73% →
+   68%; passes 13 both, raster pixels 0.87M → 1.8M, one page band both. The
+   floor share moves by ten points between runs of one binary, so it is read
+   from adjacent runs only. At 30 TPS both sit on the floor. Two rounds of the stage design got there: the first landing cost
+   sixteen passes, a second page band and a 24% floor share, from a separate
+   native slot per subject, four outline/live passes, a doubled admission and a
+   copied polygon lane per subject; each is gone. The 30 TPS main run also
+   showed an older pathology this branch removes: direct-projected subjects
+   (debris, keyless live lanes) declared framebuffer-sized boxes, overflowed
+   the atlas and cost that run 81 passes and 41M raster pixels a frame.
+
+### 17.8 Owed
+
+A human look at motion in the window: the half-pixel step at 120 Hz, and
+whether the two-raster-pixel outline reads right on a rising nanoframe. The
+Anti-Alias option's menu text still describes the retail structure behaviour;
+its Enhanced meaning is wider now and the text is owed a line.
+

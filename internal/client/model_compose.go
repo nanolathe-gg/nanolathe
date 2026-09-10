@@ -290,6 +290,7 @@ func (c *Client) collectDrawPolysLaneProjected(draw *presentationrender.UnitDraw
 				var lx, ly, ry int32
 				if direct {
 					lx, ly = c.modelDirectVertex(v, draw.WorldPos)
+					poly.x2[corner], poly.y2[corner] = c.modelDirectVertexDoubled(v, draw.WorldPos)
 					ry = int32(v[1].Floor())
 				} else {
 					lx, ly, ry = modelLocalVertex(v, draw.WorldPos)
@@ -401,9 +402,73 @@ func boolToInt32(b bool) int32 {
 // anti-aliasing: the Anti_Alias display option on, and the unit's authored
 // class bit saying structure. Mobile units are rasterized at 1x whatever the
 // option says, which is why buildings read smoother than units in retail
-// [R-REN-03A §6].
+// [R-REN-03A §6]. This is the classic composition's gate; recorded geometry
+// takes supersampleGeometry's.
 func (c *Client) supersampleModel(structure bool) bool {
 	return c != nil && c.antiAlias && structure && c.pal != nil
+}
+
+// supersampleGeometry reports whether recorded model geometry carries the
+// doubled raster the Enhanced executor resolves with fractional coverage
+// (DESIGN_GPU_RENDERER §17). Geometry is recorded only for that executor, and
+// under it every subject is supersampled — structure or mobile, cached or live
+// lane, outline and shadow alike — whenever the Anti_Alias display option is
+// on. The option keeps its retail name and its off state: off, the executor
+// rasterizes at native scale as it always has.
+func (c *Client) supersampleGeometry() bool {
+	return c != nil && c.antiAlias && c.pal != nil
+}
+
+// modelAnchorDoubled is a supersampled subject's placement: the whole pixel
+// its doubled projection lands on, which is the packet's anchor, and the half
+// pixel inside it, which offsets the doubled raster (DESIGN_GPU_RENDERER §17
+// "Half-pixel positioning"). pos is the world point that projects: the unit's
+// own position for its body, the ground point for its shadow. The anchor can
+// sit one pixel from modelAnchor's, because retail's shear halves the whole
+// part of the height while the doubled projection halves the height itself;
+// keeping the doubled pixel's whole part keeps the offset at 0 or 1 on both
+// axes, inside the composition box's margin whatever the view scale.
+func (c *Client) modelAnchorDoubled(pos [3]numeric.Fixed) (ax, ay, hx, hy int32) {
+	if c == nil || c.cam == nil {
+		return 0, 0, 0, 0
+	}
+	sx2, sy2 := c.cam.WorldToScreenDoubled(pos[0], pos[1], pos[2])
+	return sx2>>1 - camera.OriginX, sy2>>1 - camera.OriginY, sx2 & 1, sy2 & 1
+}
+
+// modelPlacement is a body's anchor and half-pixel offset for recorded
+// geometry: the doubled placement when the subject is supersampled, retail's
+// anchor with no offset otherwise.
+func (c *Client) modelPlacement(draw *presentationrender.UnitDraw) (ax, ay, hx, hy int32) {
+	if c.supersampleGeometry() {
+		return c.modelAnchorDoubled(draw.WorldPos)
+	}
+	ax, ay = c.modelAnchor(draw)
+	return ax, ay, 0, 0
+}
+
+// shadowPlacement is modelPlacement for the shadow: the ground point projects,
+// and the five-pixel X offset of shadowAnchor applies to the whole pixel
+// [R-REN-03D §3].
+func (c *Client) shadowPlacement(draw *presentationrender.UnitDraw) (ax, ay, hx, hy int32) {
+	if c.supersampleGeometry() {
+		ax, ay, hx, hy = c.modelAnchorDoubled([3]numeric.Fixed{draw.WorldPos[0], draw.GroundY, draw.WorldPos[2]})
+		return ax + c.viewScale().Px(shadowXOffset), ay, hx, hy
+	}
+	ax, ay = c.shadowAnchor(draw)
+	return ax, ay, 0, 0
+}
+
+// modelDirectVertexDoubled is modelDirectVertex at the doubled resolution: the
+// exact half pixel every corner of a direct-projected subject lands on (§17.3).
+func (c *Client) modelDirectVertexDoubled(v [3]numeric.Fixed, world [3]numeric.Fixed) (int32, int32) {
+	if c == nil || c.cam == nil {
+		return 0, 0
+	}
+	localZ := v[2].Sub(world[2])
+	worldZ := world[2].Sub(localZ)
+	sx2, sy2 := c.cam.WorldToScreenDoubled(v[0], v[1], worldZ)
+	return sx2 - 2*camera.OriginX, sy2 - 2*camera.OriginY
 }
 
 // composedModel is one finished composition image and the bookkeeping the
@@ -565,14 +630,12 @@ func (c *Client) composeModelLane(draw *presentationrender.UnitDraw, owner uint8
 		// pixels from the classic composition.
 		native := c.cloneModelPolys(polys)
 		placeFaces(native, originX, originY, 1)
-		geometry = modelGeometryPacketAt(native, int32(width), int32(height), originX, originY, anchorX, anchorY, 1, draw.KeyPlane, drawlist.ModelFallbackNone)
-		c.configureModelGeometry(geometry, draw, owner, kind, reveal, outline)
+		gax, gay, hx, hy := c.modelPlacement(draw)
+		geometry = modelGeometryPacketAt(native, int32(width), int32(height), originX, originY, gax, gay, 1, draw.KeyPlane, drawlist.ModelFallbackNone)
 		if lane != presentationrender.PieceLaneLive {
-			geometry.Supersample = c.modelSupersampleGeometry(polys, draw, width, height, originX, originY)
+			geometry.Supersample = c.modelSupersampleGeometry(polys, draw.KeyPlane, width, height, c.doubledPlacement(originX, originY, hx, hy, false))
 		}
-		if geometry.Supersample != nil {
-			geometry.Supersample.Reveal = geometry.Reveal
-		}
+		c.configureModelGeometry(geometry, draw, owner, kind, reveal, outline)
 	}
 
 	scale := int32(1)

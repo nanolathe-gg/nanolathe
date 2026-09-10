@@ -200,8 +200,10 @@ func TestSchedulerCompileIsAllocationFree(t *testing.T) {
 	// only read their images, exactly as they do after prepareModelSlots.
 	page := ebiten.NewImage(32, 32)
 	shadowPage := ebiten.NewImage(32, 32)
-	body := modelSlot{page: &modelPage{img: page}, rect: image.Rect(0, 0, 8, 8), box: image.Rect(0, 0, 8, 8)}
-	shadow := modelSlot{page: &modelPage{img: shadowPage}, rect: image.Rect(0, 0, 8, 8), box: image.Rect(0, 0, 8, 8)}
+	// The commits sample the resolved plane (post), so the stub pages carry
+	// one beside the raster plane (§17).
+	body := modelSlot{page: &modelPage{img: page, post: page}, rect: image.Rect(0, 0, 8, 8), box: image.Rect(0, 0, 8, 8)}
+	shadow := modelSlot{page: &modelPage{img: shadowPage, post: shadowPage}, rect: image.Rect(0, 0, 8, 8), box: image.Rect(0, 0, 8, 8)}
 	bodyGeom := &drawlist.ModelGeometry{Width: 8, Height: 8, AnchorX: 24, AnchorY: 24}
 	shadowGeom := &drawlist.ModelGeometry{Width: 8, Height: 8, AnchorX: 26, AnchorY: 26}
 	compile := func() {
@@ -242,8 +244,10 @@ func TestSchedulerBodyCommitFollowsItsShadow(t *testing.T) {
 	r.sched.resetFrame(64, 64)
 	page := ebiten.NewImage(32, 32)
 	shadowPage := ebiten.NewImage(32, 32)
-	body := modelSlot{page: &modelPage{img: page}, rect: image.Rect(0, 0, 8, 8), box: image.Rect(0, 0, 8, 8)}
-	shadow := modelSlot{page: &modelPage{img: shadowPage}, rect: image.Rect(0, 0, 8, 8), box: image.Rect(0, 0, 8, 8)}
+	// The commits sample the resolved plane (post), so the stub pages carry
+	// one beside the raster plane (§17).
+	body := modelSlot{page: &modelPage{img: page, post: page}, rect: image.Rect(0, 0, 8, 8), box: image.Rect(0, 0, 8, 8)}
+	shadow := modelSlot{page: &modelPage{img: shadowPage, post: shadowPage}, rect: image.Rect(0, 0, 8, 8), box: image.Rect(0, 0, 8, 8)}
 	bodyGeom := &drawlist.ModelGeometry{Width: 8, Height: 8, AnchorX: 24, AnchorY: 24}
 	shadowGeom := &drawlist.ModelGeometry{Width: 8, Height: 8, AnchorX: 26, AnchorY: 26}
 

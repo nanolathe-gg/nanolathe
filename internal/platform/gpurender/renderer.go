@@ -70,8 +70,11 @@ type Renderer struct {
 	modelStageW, modelStageH      int
 	modelOpts                     ebiten.DrawTrianglesShaderOptions
 	modelStageOp                  ebiten.DrawImageOptions
-	textureAtlas                  modelTextureAtlas
-	w, h                          int
+	// modelStageOut is the fallback group path's resolved plane: the group's
+	// composed index raster becomes colour here before it commits (§17).
+	modelStageOut *ebiten.Image
+	textureAtlas  modelTextureAtlas
+	w, h          int
 	// worldW, worldH are the extent every family clips a world command against
 	// while the recorded world region is open: the RECORD extent, which is wider
 	// than the framebuffer whenever the live zoom factor is below the record

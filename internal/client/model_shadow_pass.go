@@ -142,6 +142,10 @@ func (c *Client) collectShadowPolys(draw *presentationrender.UnitDraw) []screenP
 				sx, sy, ry := shadowLocalVertex(piece.WorldVertices[vi], draw.WorldPos)
 				sx, sy = c.scaleModelLocal(sx, sy)
 				poly.x[corner], poly.y[corner] = sx, sy
+				// The doubled quarter shear's odd part, read by the Enhanced
+				// supersample alone (doubledPlacement); classic never doubles
+				// a shadow [R-REN-03A §6].
+				poly.oddHeight[corner] = (ry>>1)&1 != 0
 				poly.attr[spanKey][corner] = ry + shadowKeyBias
 			}
 		}

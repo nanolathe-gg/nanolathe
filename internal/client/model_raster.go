@@ -74,6 +74,11 @@ type spanEdge struct {
 // all [R-RAST-01 §1] steps 3, 4 and 7.
 type screenPoly struct {
 	x, y []int32
+	// x2, y2 are the corner's exact doubled-resolution screen coordinates,
+	// filled by the direct projection alone for the Enhanced supersample
+	// (doubledPlacement.exact; DESIGN_GPU_RENDERER §17.3). The local
+	// projections leave them zero and double their corners arithmetically.
+	x2, y2 []int32
 	// oddHeight records the low bit of each corner's model-relative whole-unit
 	// height. The supersampled shear is (2*z) - y rather than 2*(z - (y>>1)),
 	// which is one pixel lower exactly when that bit is set [R-REN-03A §6].
@@ -99,18 +104,24 @@ type screenPoly struct {
 // array, so a model with a few hundred primitives costs a few hundred
 // allocations rather than a few thousand.
 func newScreenPoly(n int) screenPoly {
-	buf := make([]int32, n*(2+spanAttrs))
+	buf := make([]int32, n*(polyLanes+spanAttrs))
 	p := screenPoly{
 		x:         buf[0:n:n],
 		y:         buf[n : 2*n : 2*n],
+		x2:        buf[2*n : 3*n : 3*n],
+		y2:        buf[3*n : 4*n : 4*n],
 		oddHeight: make([]bool, n),
 	}
 	for k := 0; k < spanAttrs; k++ {
-		lo := (2 + k) * n
+		lo := (polyLanes + k) * n
 		p.attr[k] = buf[lo : lo+n : lo+n]
 	}
 	return p
 }
+
+// polyLanes is the count of coordinate lanes a corner carries before its
+// attribute lanes: x, y and the doubled x2, y2.
+const polyLanes = 4
 
 // traceFace adapts a face to the per-candidate trace helpers, which read only
 // the face's identity fields and never its corners.

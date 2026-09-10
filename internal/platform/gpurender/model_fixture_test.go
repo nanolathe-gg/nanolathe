@@ -157,9 +157,13 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 	checkBlended("child shadow-only blend", 59, 37, 103)
 	check("child shadow-only punches own body", 61, 37, 7)
 	check("child shadow-only omits body commit", 63, 37, 7)
-	check("structure live lane follows ALP resolve", 68, 37, 47)
-	check("structure resolve takes top-left key", 69, 37, 7)
-	check("structure resolve includes transparent background", 72, 37, 46)
+	// The coverage resolve (§17): the grey ramp makes the mean of the covered
+	// samples' colours a grey the classic expansion of the rounded mean index
+	// is within a unit of, and a partly covered pixel composites over the
+	// background 7 by its coverage.
+	checkBlended("supersampled live lane joins the doubled raster: mean of 47,32,33,34", 68, 37, 36)
+	checkBlended("supersampled child merge then carrier erase: 32,33,34 at 3/4 over 7", 69, 37, 27)
+	checkBlended("supersampled edge: one covered sample at 1/4 over 7, no fringe", 72, 37, 13)
 	check("untriangulated upper lobe", 17, 16, 19)
 	check("untriangulated pinch leaves prior face", 18, 17, 18)
 	check("untriangulated lower lobe", 17, 18, 19)
@@ -167,8 +171,8 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 	if stats.UntriangulatedFaces != 1 && g.err == nil {
 		g.err = fmt.Errorf("untriangulated faces=%d, want 1", stats.UntriangulatedFaces)
 	}
-	if stats.StructureResolves != 2 && g.err == nil {
-		g.err = fmt.Errorf("fixture structure resolves=%d, want 2", stats.StructureResolves)
+	if stats.Supersampled != 3 && g.err == nil {
+		g.err = fmt.Errorf("fixture supersampled subjects=%d, want 3", stats.Supersampled)
 	}
 	if stats.ComposedGroups != 3 && g.err == nil {
 		g.err = fmt.Errorf("fixture composed groups = %d, want 3", stats.ComposedGroups)
@@ -370,10 +374,20 @@ func fixtureModelList() drawlist.List {
 	for _, x := range []int32{0, 2} {
 		ss.Faces = append(ss.Faces, fixtureFace(x, 0, 1, 1, 70, 31), fixtureFace(x+1, 0, 1, 1, 200, 32), fixtureFace(x, 1, 1, 1, 210, 33), fixtureFace(x+1, 1, 1, 1, 220, 34))
 	}
+	// The live lane joins the doubled raster: it wins the first sample of the
+	// left pixel's block by key, so that block resolves to the mean of four
+	// covered samples (47, 32, 33, 34) at full coverage (§17).
+	ss.LiveFaces = []drawlist.ModelFace{fixtureFace(0, 0, 1, 1, 220, 47)}
 	resolved.Supersample = ss
-	resolved.LiveFaces = []drawlist.ModelFace{fixtureFace(0, 0, 1, 1, 220, 47)}
 	resolved.Waterline, resolved.WaterlineKey = drawlist.ModelWaterlineErase, 100
-	resolved.Children = []drawlist.ModelChild{{Geometry: fixtureGeometry(0, true, fixtureFace(69, 37, 1, 1, 100, 44))}}
+	// The child merges on the parent's doubled plane at the parent's scale,
+	// and the carrier's waterline then erases its sample (key 100) again, so the
+	// right pixel's block resolves three covered samples (32, 33, 34) at
+	// three-quarter coverage over the background.
+	child := fixtureGeometry(0, true, fixtureFace(69, 37, 1, 1, 100, 44))
+	child.Supersample = fixtureGeometry(0, true, fixtureFace(0, 0, 2, 2, 100, 44))
+	child.Supersample.Scale, child.Supersample.Width, child.Supersample.Height = 2, 2, 2
+	resolved.Children = []drawlist.ModelChild{{Geometry: child}}
 	list.RecordModel(drawlist.Model{Geometry: resolved})
 	edge := fixtureGeometry(72, true, fixtureFace(0, 0, 1, 1, 50, 31))
 	edge.AnchorY, edge.Width, edge.Height = 37, 1, 1

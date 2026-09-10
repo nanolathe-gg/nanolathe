@@ -505,6 +505,31 @@ func (c *Camera) WorldToScreen(x, y, z numeric.Fixed) (sx, sy int32) { // [03 §
 	return
 }
 
+// WorldToScreenDoubled is WorldToScreen at twice the record step's resolution:
+// the coordinates it returns are in half screen pixels, viewport origin
+// included, so the half pixel a world point actually lands on survives. It is
+// the Enhanced executor's positioning input for a supersampled model subject
+// (DESIGN_GPU_RENDERER §17 "Half-pixel positioning"): the doubled raster is
+// placed at these coordinates and resolved two-to-one, so a unit whose
+// interpolated position is between two pixels is drawn between them instead of
+// snapping to the lower one.
+//
+// The arithmetic is the same projection carried in 16.16 instead of whole
+// world pixels: floor(2·s·(worldX − cameraX)) and floor(s·(2·worldZ − worldY −
+// 2·cameraZ)), with s the record step. Retail's shear takes the whole part of
+// the height first and this does not, so the whole-pixel half of a result can
+// sit one pixel from WorldToScreen's; a supersampled subject is anchored on
+// this whole pixel and offset by the half. Presentation only; it never reaches
+// the simulation.
+func (c *Camera) WorldToScreenDoubled(x, y, z numeric.Fixed) (sx2, sy2 int32) {
+	n := int64(c.scale().Norm()) // the record step as a half-step count: 2, 3 or 4
+	dx := int64(x) - int64(c.X)<<16
+	dz := 2*int64(z) - int64(y) - 2*(int64(c.Z)<<16)
+	sx2 = int32((n*dx)>>16) + 2*OriginX
+	sy2 = int32((n*dz)>>17) + 2*OriginY
+	return
+}
+
 // ScreenToWorld inverts WorldToScreen at ground height (worldY=0) [03 §2.5] at
 // the presentation view scale [F-P1-008].
 // Retail's projection includes a half-height shear on Y; the inverse for

@@ -143,8 +143,10 @@ func TestDirectDebrisProjectionGateAndClassicScale(t *testing.T) {
 	}
 	wantX, wantY := c.modelDirectVertex(draw.Pieces[0].WorldVertices[0], draw.WorldPos)
 	got := geometry.Faces[0].Vertices[0]
-	if got.X != wantX || got.Y != wantY {
-		t.Fatalf("direct debris vertex = (%d,%d), want direct projection (%d,%d)", got.X, got.Y, wantX, wantY)
+	// The packet's local space is screen space offset by its own box origin,
+	// with the anchor at screen (0,0).
+	if geometry.AnchorX != 0 || geometry.AnchorY != 0 || got.X-geometry.OriginX != wantX || got.Y-geometry.OriginY != wantY {
+		t.Fatalf("direct debris vertex = (%d,%d) at origin (%d,%d), want direct projection (%d,%d)", got.X, got.Y, geometry.OriginX, geometry.OriginY, wantX, wantY)
 	}
 	draw.WorldPos[0] = numeric.FixedFromInt(32) // projects to the inclusive right edge at scale 2
 	if g := c.directDebrisGeometry(draw, teamColor{}, 3); g == nil {
