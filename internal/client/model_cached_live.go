@@ -6,13 +6,14 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/model"
 	"github.com/nanolathe-gg/nanolathe/internal/palette"
 	presentationrender "github.com/nanolathe-gg/nanolathe/internal/render"
 )
 
 // modelBodySerials numbers retained body objects for the modern executor's
 // persistent slots (docs/DESIGN_GPU_RENDERER.md §13.12). A slot's identity is
-// the pair (serial, revision), so a body dropped and recreated under the same
+// the triple (serial, lane, revision), so a body dropped and recreated under the same
 // presentation identity — which InvalidateModelImages does to every body at
 // once — can never be mistaken for a raster the executor still holds.
 //
@@ -75,6 +76,16 @@ type cachedModelBody struct {
 	// the ones the executor already rasterized.
 	serial           uint64
 	geometryRevision uint64
+	// The retained shadow lane (§13.12 "Shadows — contract P4"). It is stored
+	// beside the body but gated on its own inputs, because the projection reads
+	// the whole current pose while the body's cached lane is frozen between
+	// orientation rebuilds: the two lanes genuinely do not change together.
+	shadowStore    cachedGeometryStore
+	shadow         *drawlist.ModelGeometry
+	shadowInputs   cachedShadowInputs
+	shadowPose     []model.PieceState
+	shadowRevision uint64
+	shadowValid    bool
 }
 
 // cacheKey is the identity a rebased packet carries for the modern executor's
@@ -84,6 +95,19 @@ func (b *cachedModelBody) cacheKey(halfX, halfY int32) drawlist.ModelCacheKey {
 		return drawlist.ModelCacheKey{}
 	}
 	return drawlist.ModelCacheKey{Body: b.serial, Revision: b.geometryRevision, HalfX: halfX, HalfY: halfY}
+}
+
+// shadowCacheKey is cacheKey for the retained shadow projection. It shares the
+// body's serial and is separated from it by the lane alone, so the two rasters
+// of one subject can never answer to each other's slot.
+func (b *cachedModelBody) shadowCacheKey(halfX, halfY int32) drawlist.ModelCacheKey {
+	if b == nil || b.shadow == nil || b.shadowRevision == 0 {
+		return drawlist.ModelCacheKey{}
+	}
+	return drawlist.ModelCacheKey{
+		Body: b.serial, Revision: b.shadowRevision,
+		HalfX: halfX, HalfY: halfY, Lane: drawlist.ModelCacheLaneShadow,
+	}
 }
 
 // cachedGeometryStore is one subject's retained cached-lane packet and the face
@@ -110,13 +134,19 @@ type cachedGeometryStore struct {
 // anything carrying a shadow, children, an outline, a live lane or a reveal
 // keeps the general deep copy rather than being silently flattened.
 func (b *cachedModelBody) retainGeometry(src *drawlist.ModelGeometry) *drawlist.ModelGeometry {
+	return b.store.retain(src)
+}
+
+// retain copies src into this store's arenas and returns the retained packet.
+// Both retained lanes are plain face packets with an optional supersample of the
+// same shape, so anything else keeps the general deep copy.
+func (s *cachedGeometryStore) retain(src *drawlist.ModelGeometry) *drawlist.ModelGeometry {
 	if src == nil {
 		return nil
 	}
 	if !plainCachedPacket(src) || src.Supersample != nil && !plainCachedPacket(src.Supersample) {
 		return src.Clone()
 	}
-	s := &b.store
 	s.g = *src
 	s.faces, s.vertices = copyModelFaces(s.faces, s.vertices, src.Faces, 0, 0)
 	s.g.Faces = s.faces
@@ -170,6 +200,121 @@ func (c *Client) cachedBodyInputs(draw *presentationrender.UnitDraw) cachedBodyI
 		}
 	}
 	return input
+}
+
+// cachedShadowInputs are the retained shadow projection's inputs other than the
+// pose (docs/DESIGN_GPU_RENDERER.md §13.12 "Shadows — contract P4").
+//
+// Established by reading collectShadowPolys and modelShadowGeometry, not
+// assumed. The projection walks draw.Pieces, whose local corners are the piece
+// transforms applied to the model's authored vertices — WorldVertices carry
+// worldPos and shadowLocalVertex subtracts it back off exactly, so the subject's
+// position is not an input at all — scales each corner by the model scale
+// (scaleModelLocal), and derives its box from those corners. Everything else the
+// packet carries is placement, which the rebase supplies per frame.
+type cachedShadowInputs struct {
+	model string
+	scale camera.ViewScale
+	// casts folds draw.CastsShadow and the palette the projection requires.
+	casts bool
+	// doubled is whether the packet carries the §17 supersample lane. Its
+	// half-pixel offset is not here: the retained lane is projected without one
+	// and the rebase adds this frame's, which the slot key names instead.
+	doubled bool
+}
+
+func (c *Client) cachedShadowInputs(draw *presentationrender.UnitDraw) cachedShadowInputs {
+	in := cachedShadowInputs{scale: camera.ViewScaleNative}
+	if c == nil {
+		return in
+	}
+	in.scale, in.doubled = c.modelScale(), c.supersampleGeometry()
+	if draw != nil {
+		in.casts = draw.CastsShadow && c.pal != nil
+		if draw.Model != nil {
+			in.model = draw.Model.Name
+		}
+	}
+	return in
+}
+
+// samePieceStates reports whether two poses are the same folded piece state. The
+// shadow projection is a pure function of the model, this pose and the model
+// scale, so an equal pose means an equal projection; comparing len(pieces) small
+// structs is what replaces the per-frame walk, transform and winding test.
+func samePieceStates(a, b []model.PieceState) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// retainedShadowGeometry is this frame's shadow packet for a subject that has a
+// retained body. The projection is reused whenever its own inputs are unchanged,
+// and the packet the frame records is the retained one rebased onto this frame's
+// placement, carrying the identity the modern executor keys a persistent shadow
+// slot on (§13.12 "Shadows — contract P4").
+//
+// A subject with no retained body — no presentation identity, no scratch arena,
+// the direct projected route — keeps the per-frame projection and an empty key.
+func (c *Client) retainedShadowGeometry(body *cachedModelBody, draw *presentationrender.UnitDraw) *drawlist.ModelGeometry {
+	if c == nil || body == nil || !c.modelScratch.active || !shadowPoseComplete(draw) {
+		return c.modelShadowGeometry(draw)
+	}
+	if in := c.cachedShadowInputs(draw); !body.shadowValid || body.shadowInputs != in ||
+		!samePieceStates(body.shadowPose, drawPieceStates(draw)) {
+		c.replaceCachedShadow(body, draw, in)
+	}
+	if body.shadow == nil {
+		return nil
+	}
+	src := body.shadow
+	ax, ay, hx, hy := c.shadowPlacement(draw)
+	g := c.borrowRebasedModelGeometry(src, src.Width, src.Height, src.OriginX, src.OriginY, ax, ay, hx, hy)
+	if g == nil {
+		return nil
+	}
+	g.Cache = body.shadowCacheKey(hx, hy)
+	return g
+}
+
+// replaceCachedShadow projects the shadow and retains it. The stored lane
+// carries no placement at all: the anchor follows the subject's ground point
+// frame by frame and the doubled lane's half-pixel offset follows with it, so
+// both are supplied by the rebase, exactly as they are for the retained body.
+func (c *Client) replaceCachedShadow(body *cachedModelBody, draw *presentationrender.UnitDraw, in cachedShadowInputs) {
+	body.shadow = body.shadowStore.retain(c.shadowGeometryAt(draw, 0, 0, 0, 0))
+	body.shadowInputs, body.shadowValid = in, true
+	body.shadowPose = append(body.shadowPose[:0], drawPieceStates(draw)...)
+	// A new projection is a new raster: the executor keys a persistent slot on
+	// this revision and must not keep the one it already holds (§13.12).
+	body.takeSerial()
+	body.shadowRevision++
+}
+
+// shadowPoseComplete reports whether this draw's pose is the one its piece
+// draws were built from. Keying the projection on the pose alone is sound
+// because BuildUnitDrawInto derives every piece's transform, its hidden verdict
+// and therefore its world corners from exactly that slice — the world corners
+// also carry the subject's position, which the projection subtracts back off
+// exactly, so position is not an input. A draw assembled some other way is
+// outside that derivation and keeps the per-frame projection.
+func shadowPoseComplete(draw *presentationrender.UnitDraw) bool {
+	return draw != nil && draw.Model != nil &&
+		len(draw.PieceStates) == len(draw.Model.Pieces) &&
+		len(draw.Pieces) == len(draw.Model.Pieces)
+}
+
+func drawPieceStates(draw *presentationrender.UnitDraw) []model.PieceState {
+	if draw == nil {
+		return nil
+	}
+	return draw.PieceStates
 }
 
 func cloneModelTarget(src *modelTarget) *modelTarget {

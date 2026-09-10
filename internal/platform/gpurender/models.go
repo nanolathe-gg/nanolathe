@@ -39,7 +39,13 @@ type ModelStats struct {
 	// the size of the residency table after it. RasterPixels and SlotPages above
 	// now count only what was rasterized this frame, so they fall with the reuse
 	// rate instead of restating the scene's size.
-	SlotsReused, SlotsRasterized, SlotEvictions, SlotsResident  int
+	SlotsReused, SlotsRasterized, SlotEvictions, SlotsResident int
+	// ShadowSlotsReused and ShadowSlotsRasterized are the shadow lane's share of
+	// the two counters above (§13.12 "Shadows — contract P4"). Shadows are about
+	// two fifths of a battle frame's model subjects and were the whole of its
+	// un-keyed raster work before that section, so reading them apart is what
+	// says whether the shadow lane is resident or paying the cold cost.
+	ShadowSlotsReused, ShadowSlotsRasterized                    int
 	GPU, Skipped, Shadows, ShadowsOmitted, StagedGroups, NoBody int
 	UnsupportedGeometry, MissingTexture, UnsupportedFace        int
 	FoldedFaces, FoldedStrips                                   int

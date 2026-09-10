@@ -48,9 +48,22 @@ for directory in sys.argv[1:]:
         if shares:
             shares.sort()
             print(f"Slot reuse: median {statistics.median(shares):5.1f}%  min {shares[0]:5.1f}%  max {shares[-1]:5.1f}%")
-        for key in ("SlotsReused", "SlotsRasterized", "SlotsResident", "SlotEvictions", "SlotOverflows", "RasterPixels"):
+        # The shadow lane's own share (§13.12 "Shadows — contract P4"). Shadows
+        # are about two fifths of a battle frame's subjects, so a collapse here
+        # is the first thing to check when the overall share falls.
+        if any("ShadowSlotsRasterized" in s for s in stats):
+            shadow_totals = [s.get("ShadowSlotsReused", 0) + s.get("ShadowSlotsRasterized", 0) for s in stats]
+            shadow_shares = sorted(100.0 * s.get("ShadowSlotsReused", 0) / t
+                                   for s, t in zip(stats, shadow_totals) if t)
+            if shadow_shares:
+                print(f"Shadow slot reuse: median {statistics.median(shadow_shares):5.1f}%  "
+                      f"min {shadow_shares[0]:5.1f}%  max {shadow_shares[-1]:5.1f}%")
+        keys = ["SlotsReused", "SlotsRasterized", "SlotsResident", "SlotEvictions", "SlotOverflows", "RasterPixels"]
+        if any("ShadowSlotsRasterized" in s for s in stats):
+            keys[2:2] = ["ShadowSlotsReused", "ShadowSlotsRasterized"]
+        for key in keys:
             values = sorted(s.get(key, 0) for s in stats)
-            print(f"{key:16} median {statistics.median(values):10.0f}  p95 "
+            print(f"{key:21} median {statistics.median(values):10.0f}  p95 "
                   f"{values[min(len(values)-1, int(len(values)*.95))]:10.0f}  max {values[-1]:10.0f}")
 
     tps = data.get("tps") or 30

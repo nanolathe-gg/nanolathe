@@ -61,6 +61,10 @@ docs/DESIGN_GPU_RENDERER.md §13.12 — `SlotsReused`, `SlotsRasterized`,
 `SlotsResident`, `SlotEvictions` and `SlotOverflows` — which the report
 summarizes as a reuse share: how many of the frame's model subjects kept the
 slot an earlier frame rasterized rather than being analysed and drawn again.
+`ShadowSlotsReused` and `ShadowSlotsRasterized` split the shadow lane out of the
+first two (§13.12 "Shadows — contract P4") and the report gives it a share of its
+own: shadows are about two fifths of a battle frame's subjects, so a collapse
+there is the first thing to check when the overall share falls.
 `RasterPixels` and `SlotPages` count only what this frame rasterized, so they
 fall with that share. A reuse share that collapses, or a rising eviction or
 overflow count, means the page is under pressure and the frame is paying the

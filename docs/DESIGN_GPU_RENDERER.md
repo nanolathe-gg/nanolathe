@@ -2198,12 +2198,16 @@ stamps on the packet instead:
   **doubled** corners alone (§17), so the packet's own origin does not imply it.
   There are four of them, so a moving supersampled subject cycles through four
   rasters and residency holds the ones it is using.
+* `Lane` — which of the retained object's rasters this is, body or shadow. The
+  two share the serial and keep separate revisions; see "Shadows — contract P4"
+  below, which added the field.
 
 A zero `Body` means "not reusable", and it is the value of every packet whose
 raster inputs the recorder cannot prove stable: the direct projected lanes,
-shadows, children, and any retained body carrying a reveal, an outline or a
-live lane this frame. The recorder clears the key for those explicitly rather
-than relying on the executor to notice.
+children, a shadow whose subject has no retained body (P4), and any retained
+body carrying a reveal, an outline or a live lane this frame. The recorder
+clears the key for those explicitly rather than relying on the executor to
+notice.
 
 The executor's slot key adds what it reads off the packet itself: `Width`,
 `Height`, `OriginX`, `OriginY` (which fix the rebase delta, and with it every
@@ -2295,7 +2299,102 @@ rasterized), with 27 evictions in a median frame, 255 resident slots and no
 fallback subject over the whole run. The ceiling is about 43%: shadows are 138
 of the ~360 subjects a battle frame reserves and none of them is retained by the
 recorder, so every one is rasterized every frame. Retaining the shadow lane
-beside the body is the obvious next step and is not part of this round.
+beside the body lifts that ceiling and is the next subsection.
+
+#### Shadows — contract P4
+
+A shadow is a subject like any other — its own slot, its own raster, its own
+commit — and it was the one the recorder could not name. `collectShadowPolys`
+walked the model and sheared it again every frame, and the packet carried a zero
+`Cache`, so the executor rasterized every shadow of every frame.
+
+**The shadow's inputs are not the body's.** This is the whole difficulty, and it
+is established by reading rather than assumed. The body's retained lane is the
+*cached* piece lane frozen at its last rebuild: the orientation cache holds the
+root angles until an axis moves more than seven units, and the live lane is
+rebuilt separately. The shadow projects **every** piece from the **current**
+pose. So a subject whose retained body is untouched can have a shadow that
+genuinely moved — a turret slewing, a factory pad opening — and gating the
+shadow on the body's rebuild would freeze a silhouette the body is not freezing.
+The two lanes are retained side by side and gated apart.
+
+What the projection does read is exactly:
+
+* the **model**, by name, as the body's own gate reads it;
+* the **folded piece pose** (`UnitDraw.PieceStates`). `BuildUnitDrawInto` derives
+  every piece's transform, its hidden verdict and therefore its world corners
+  from that slice alone, so an equal pose is an equal projection. Comparing
+  `len(pieces)` small comparable structs is what replaces the walk, the shear and
+  the winding test;
+* the **model scale** (`scaleModelLocal`), and whether the §17 **doubled lane** is
+  present at all;
+* the **shadow gate** — `CastsShadow` with the palette the projection requires.
+
+The subject's **position is not an input**: `PieceDraw.WorldVertices` are the
+transformed corners plus `worldPos` and `shadowLocalVertex` subtracts `worldPos`
+straight back off in fixed point, so the cancellation is exact. Neither is the
+terrain under the unit, the waterline or the Digger clip: those reach the modern
+shadow through its *placement* (`shadowPlacement`, whose Y is sheared by
+`GroundY` [03 R-REN-03D §3]) and through the body packet's own clip fields, never
+through the projected corners. A `DontShadow` piece flag exists in the pose and
+is compared with it, though the projection does not yet consult it — a
+pre-existing gap this section does not close.
+
+So the retained lane is stored with **no placement at all** — anchor zero,
+half-pixel offset zero — and the rebase supplies both, exactly as it does for the
+body: the anchor is written on the packet and the half-pixel offset is added to
+the doubled corners alone. A draw whose pose does not describe every piece of its
+model is outside the derivation above and keeps the per-frame projection.
+
+**Identity.** `drawlist.ModelCacheKey` gains a `Lane`. The shadow shares the
+body's serial — it is the same retained object — and keeps a revision of its own,
+bumped on every reprojection. The lane is what separates the two: without it a
+shadow and a body whose `Width`, `Height`, `Origin`, `Scale` and flags happened
+to agree could answer to each other's slot. The executor needed no other change;
+the lane rides the key it already compares, and `modelSlotKeyFor` now admits a
+shadow on exactly the terms it admits a body. The shadow commit is indifferent to
+either slot's provenance: its body punch reads the body slot's *box* on the page,
+not how that raster came to be there.
+
+A shadow whose subject has no retained body — no presentation identity, no
+scratch arena, the direct projected route — keeps the per-frame projection and a
+zero key, as before.
+
+**Outcome.** Three interleaved 720-frame runs each, 1920×1080, 120 TPS, on a
+loaded host (`uptime` 4.9–6.2):
+
+| | persistent slots | retained shadows |
+|---|---|---|
+| `Submit` median | 2.542 ms | **2.219 ms** |
+| `PreRecord` median | 1.295 ms | 1.248 ms |
+| slot reuse median | 29.3% | **47.8%** |
+| `SlotsReused` median | 104 | 164 |
+| `SlotsRasterized` median | 248 | 208 |
+| `RasterPixels` median | 1,557,314 | 1,327,618 |
+
+Shadow reuse alone is a **47.7% median** (76 of 168 shadow subjects). The
+recorder's saving is real but small — `PreRecord` moves about 0.05 ms, because a
+reprojecting subject now pays the projection *and* a copy into its store — and
+the executor's is the one that matters.
+
+Two costs come with it. The residency table roughly doubles, 247 to 408 resident
+slots, and the page is under more pressure: `SlotOverflows` p95 rises from 1 to 4
+and body reuse falls from 104 to 88 as shadows compete for the same shelf. The
+frame is still well ahead, but the page size is now the binding constraint rather
+than the recorder's identity, which is where the next round should look.
+
+**Verification.** B0 the executor before this section, B1 with it. M1–M8
+`.modern.png` and `.png` **byte-identical**, and the 2× `--shot` byte-identical.
+`battle.png` differs by **1** pixel of 2,073,600 at 180 frames and **8** at 720,
+every one an isolated texel at a model's own silhouette edge — the same
+placement-rounding residual §13.12's verification names, of the same order as the
+3 and 4 recorded there, and for the same reason: a slot that is kept sits where
+an earlier frame put it rather than where this frame would have. Both builds are
+self-deterministic; three 720-frame runs each produce byte-identical `battle.png`
+within a build. `go test -race ./internal/platform/gpurender ./internal/client` is
+clean, and `checkModelSlotShadowResidency` joins the opt-in device fixtures: the
+same list executed twice reuses every shadow slot for the same bytes, and a
+bumped shadow revision rasterizes exactly that shadow.
 
 #### The defect this round exposed, and its fix
 

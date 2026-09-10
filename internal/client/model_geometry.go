@@ -101,6 +101,14 @@ func fillModelPacket(g *drawlist.ModelGeometry, vertices []drawlist.ModelVertex,
 // decisions as the classic composer. These are presentation inputs, not pixels
 // [03 R-COMP-01 §3][03 R-WATER-01 §2].
 func (c *Client) configureModelGeometry(g *drawlist.ModelGeometry, draw *presentationrender.UnitDraw, owner, kind uint8, reveal *presentationrender.NanoframeReveal, outline uint8) {
+	c.configureModelGeometryFor(nil, g, draw, owner, kind, reveal, outline)
+}
+
+// configureModelGeometryFor is configureModelGeometry for a subject whose
+// retained body is at hand, so the shadow lane can be kept beside the body
+// rather than projected again every frame (docs/DESIGN_GPU_RENDERER.md §13.12
+// "Shadows — contract P4"). A nil body keeps the per-frame projection.
+func (c *Client) configureModelGeometryFor(body *cachedModelBody, g *drawlist.ModelGeometry, draw *presentationrender.UnitDraw, owner, kind uint8, reveal *presentationrender.NanoframeReveal, outline uint8) {
 	if reveal != nil {
 		g.Reveal = &drawlist.ModelReveal{Line: reveal.Line, Floor: reveal.Floor, Below: reveal.Below, Band: reveal.Band, Above: reveal.Above}
 		g.Outline = c.modelOutlineGeometry(draw, g.OriginX, g.OriginY, outline, 1, 0, 0)
@@ -122,7 +130,7 @@ func (c *Client) configureModelGeometry(g *drawlist.ModelGeometry, draw *present
 		}
 		g.Digger, g.DiggerKey = draw.DiggerClip, uint8(diggerEraseThreshold)
 	}
-	g.Shadow = c.modelShadowGeometry(draw)
+	g.Shadow = c.retainedShadowGeometry(body, draw)
 }
 
 // modelOutlineGeometry retains all valid rings, including primitives omitted by
@@ -232,6 +240,18 @@ func geometryForCommit(p pendingModelCommit) *drawlist.ModelGeometry {
 // structure-projection approximation; classic uses the separate finished-body
 // silhouette branches at buildModelShadow [03 R-REN-03D §1–§6].
 func (c *Client) modelShadowGeometry(draw *presentationrender.UnitDraw) *drawlist.ModelGeometry {
+	if c == nil || draw == nil {
+		return nil
+	}
+	anchorX, anchorY, hx, hy := c.shadowPlacement(draw)
+	return c.shadowGeometryAt(draw, anchorX, anchorY, hx, hy)
+}
+
+// shadowGeometryAt projects the shadow at one placement. The projection itself —
+// the corners, the box and its origin — depends on nothing the placement carries,
+// which is what lets the retained lane be built once at the zero placement and
+// rebased per frame (§13.12 "Shadows — contract P4").
+func (c *Client) shadowGeometryAt(draw *presentationrender.UnitDraw, anchorX, anchorY, hx, hy int32) *drawlist.ModelGeometry {
 	if c == nil || draw == nil || !draw.CastsShadow || c.pal == nil {
 		return nil
 	}
@@ -240,7 +260,6 @@ func (c *Client) modelShadowGeometry(draw *presentationrender.UnitDraw) *drawlis
 		return nil
 	}
 	width, height, originX, originY := modelExtent(polys)
-	anchorX, anchorY, hx, hy := c.shadowPlacement(draw)
 	supersample := c.modelSupersampleGeometry(polys, true, width, height, c.doubledPlacement(originX, originY, hx, hy, true))
 	placeFaces(polys, originX, originY, 1)
 	g := c.borrowModelPacket(polys, int32(width), int32(height), originX, originY, anchorX, anchorY, 1, true, drawlist.ModelFallbackNone)
@@ -351,7 +370,11 @@ func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (*drawli
 	// lane below are rebuilt every frame into that same slot, so any of them
 	// disqualifies the packet from being kept.
 	g.Cache = body.cacheKey(hx, hy)
-	c.configureModelGeometry(g, draw, v.Owner, modelCursorUnit, reveal, outline)
+	// The shadow is a lane of the same retained object and keeps its own slot
+	// identity: it is projected from the current pose, which the body's frozen
+	// cached lane is not, so a reveal or a live lane here does not disturb it
+	// (§13.12 "Shadows — contract P4").
+	c.configureModelGeometryFor(body, g, draw, v.Owner, modelCursorUnit, reveal, outline)
 	if g.Reveal != nil || len(g.Outline) != 0 {
 		g.Cache = drawlist.ModelCacheKey{}
 	}

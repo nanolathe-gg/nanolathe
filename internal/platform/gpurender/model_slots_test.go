@@ -345,6 +345,11 @@ func TestModelSlotKeyRefusesRebuiltLanes(t *testing.T) {
 		"diggerKey":    func(g *drawlist.ModelGeometry) { g.DiggerKey++ },
 		"revision":     func(g *drawlist.ModelGeometry) { g.Cache.Revision++ },
 		"body":         func(g *drawlist.ModelGeometry) { g.Cache.Body++ },
+		// The shadow lane of one retained object shares its serial and keeps a
+		// revision of its own, so nothing but the lane separates a shadow slot
+		// from a body slot whose geometry fields happen to agree
+		// (§13.12 "Shadows — contract P4").
+		"lane": func(g *drawlist.ModelGeometry) { g.Cache.Lane = drawlist.ModelCacheLaneShadow },
 	} {
 		want, _ := r.modelSlotKeyFor(base())
 		g := base()
@@ -437,6 +442,83 @@ func checkModelSlotResidency() error {
 	}
 	if s := r.ModelStats(); s.SlotsRasterized != 1 || s.SlotsReused != 2 {
 		return fmt.Errorf("bumped revision rasterized %d and reused %d slots, want 1 and 2", s.SlotsRasterized, s.SlotsReused)
+	}
+	return nil
+}
+
+// checkModelSlotShadowResidency holds the retained shadow lane to the same
+// contract as the body (§13.12 "Shadows — contract P4"): a shadow whose
+// projection has not changed keeps its slot and is not drawn again, the finished
+// frame is the one a fresh raster produced, and a new shadow revision rasterizes
+// exactly that shadow. Runs inside the existing opt-in device loop.
+func checkModelSlotShadowResidency() error {
+	pal := fixturePalette()
+	r, err := NewChecked(&pal, 80, 48)
+	if err != nil {
+		return err
+	}
+	build := func(shadowRevision uint64) drawlist.List {
+		var l drawlist.List
+		l.RecordClear()
+		l.RecordFill(drawlist.Fill{Rect: drawlist.Rect{W: 80, H: 48}, Index: 7, Style: drawlist.FillSolid})
+		for i := 0; i < 2; i++ {
+			g := fixtureGeometry(int32(6+34*i), true, fixtureFace(1, 1, 12, 12, 30+int32(i), uint8(40+8*i)))
+			g.Width, g.Height = 16, 16
+			g.Cache = drawlist.ModelCacheKey{Body: uint64(i + 1), Revision: 1}
+			// The silhouette is offset from its body the way the shear places
+			// it, so part of it is punched by the body and part darkens the
+			// fill [03 R-REN-03D §3][03 R-REN-03D §5].
+			shadow := fixtureGeometry(int32(11+34*i), true, fixtureFace(2, 4, 12, 10, 20, 0))
+			shadow.Width, shadow.Height = 20, 20
+			shadow.AnchorY = 6
+			revision := uint64(1)
+			if i == 0 {
+				revision = shadowRevision
+			}
+			shadow.Cache = drawlist.ModelCacheKey{
+				Body: uint64(i + 1), Revision: revision, Lane: drawlist.ModelCacheLaneShadow,
+			}
+			g.Shadow = shadow
+			l.RecordModel(drawlist.Model{Geometry: g})
+		}
+		l.RecordExpand()
+		return l
+	}
+	pixels := func(l *drawlist.List) []byte {
+		out := make([]byte, 80*48*4)
+		r.Execute(l, 80, 48).ReadPixels(out)
+		return out
+	}
+	first := build(1)
+	want := pixels(&first)
+	s := r.ModelStats()
+	if s.Shadows != 2 || s.ShadowsOmitted != 0 {
+		return fmt.Errorf("cold frame committed %d shadows and omitted %d, want 2 and 0", s.Shadows, s.ShadowsOmitted)
+	}
+	if s.SlotsRasterized != 4 || s.ShadowSlotsRasterized != 2 || s.SlotsReused != 0 {
+		return fmt.Errorf("cold frame rasterized %d subjects (%d shadows) and reused %d, want 4, 2 and 0",
+			s.SlotsRasterized, s.ShadowSlotsRasterized, s.SlotsReused)
+	}
+	again := build(1)
+	if got := pixels(&again); !bytes.Equal(want, got) {
+		return fmt.Errorf("a frame of reused shadow slots differs from the frame that rasterized them")
+	}
+	s = r.ModelStats()
+	if s.SlotsReused != 4 || s.ShadowSlotsReused != 2 || s.SlotsRasterized != 0 {
+		return fmt.Errorf("repeated frame reused %d subjects (%d shadows) and rasterized %d, want 4, 2 and 0",
+			s.SlotsReused, s.ShadowSlotsReused, s.SlotsRasterized)
+	}
+	// A new projection for one subject is a new raster of its shadow alone: its
+	// body and the other subject keep their slots, and the fixture stores the
+	// same faces under the new revision, so the frame is unchanged.
+	bumped := build(2)
+	if got := pixels(&bumped); !bytes.Equal(want, got) {
+		return fmt.Errorf("a bumped shadow revision changed the finished frame")
+	}
+	s = r.ModelStats()
+	if s.SlotsRasterized != 1 || s.ShadowSlotsRasterized != 1 || s.SlotsReused != 3 {
+		return fmt.Errorf("bumped shadow rasterized %d subjects (%d shadows) and reused %d, want 1, 1 and 3",
+			s.SlotsRasterized, s.ShadowSlotsRasterized, s.SlotsReused)
 	}
 	return nil
 }

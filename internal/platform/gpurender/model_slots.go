@@ -506,8 +506,10 @@ const (
 func (r *Renderer) modelSlotKeyFor(g *drawlist.ModelGeometry) (modelSlotKey, bool) {
 	// A shadow is not one of the disqualifiers: it is a separately projected
 	// packet with a slot of its own, and nothing of it reaches the body's raster
-	// [03 R-REN-03D §4]. It carries no recorder identity, so it is rasterized
-	// every frame exactly as before.
+	// [03 R-REN-03D §4]. Since §13.12 "Shadows — contract P4" the recorder keeps
+	// that projection too and stamps it with the shadow LANE of the same retained
+	// object, so a shadow becomes resident on exactly the terms a body does and
+	// the lane is what stops the two rasters of one subject from sharing a slot.
 	if !g.Cache.Reusable() || g.Reveal != nil || len(g.Outline) != 0 ||
 		len(g.LiveFaces) != 0 || len(g.Children) != 0 {
 		return modelSlotKey{}, false
@@ -713,16 +715,16 @@ func (r *Renderer) prepareModelSlots(l *drawlist.List) {
 		if g == nil || !g.Eligible {
 			return
 		}
-		r.reserveModelSlot(g)
+		r.reserveModelSlot(g, false)
 		if g.Shadow != nil && r.modelShadowCommit != nil && r.tables.alpha != nil {
-			r.reserveModelSlot(g.Shadow)
+			r.reserveModelSlot(g.Shadow, true)
 		}
 		if m.ShadowOnly {
 			return
 		}
 		for _, child := range g.Children {
 			if cg := child.Geometry; cg != nil && cg.KeyPlane && len(cg.Children) == 0 {
-				r.reserveModelSlot(cg)
+				r.reserveModelSlot(cg, false)
 			}
 		}
 	})
@@ -737,7 +739,11 @@ func (r *Renderer) prepareModelSlots(l *drawlist.List) {
 // reserveModelSlot places one subject on the atlas. An unsupported packet is
 // left out of the slot map entirely, so the commit path reports the same
 // explicit omission it reported before (§9).
-func (r *Renderer) reserveModelSlot(g *drawlist.ModelGeometry) {
+//
+// shadow says the packet is a subject's shadow lane rather than its body, which
+// only the caller knows about an un-keyed packet. It splits the residency
+// counters and reaches no pixel (§13.12 "Shadows — contract P4").
+func (r *Renderer) reserveModelSlot(g *drawlist.ModelGeometry, shadow bool) {
 	a := &r.modelAtlas
 	if g == nil || !g.Eligible {
 		return
@@ -756,6 +762,9 @@ func (r *Renderer) reserveModelSlot(g *drawlist.ModelGeometry) {
 			a.slots[g] = e.slot
 			a.page.reused++
 			r.modelStats.SlotsReused++
+			if shadow {
+				r.modelStats.ShadowSlotsReused++
+			}
 			return
 		}
 	}
@@ -800,6 +809,9 @@ func (r *Renderer) reserveModelSlot(g *drawlist.ModelGeometry) {
 	}
 	a.slots[g] = slot
 	r.modelStats.SlotsRasterized++
+	if shadow {
+		r.modelStats.ShadowSlotsRasterized++
+	}
 	if keyed {
 		a.addResident(key, slot, reserve)
 	} else if a.page.resident && slot.page == &a.page {

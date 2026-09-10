@@ -128,24 +128,42 @@ type ModelChild struct {
 	KeyDelta int32
 }
 
-// ModelCacheKey names the retained cached-lane body a packet was rebased from,
-// so an executor can recognise a subject whose raster inputs have not changed
-// since the last frame and keep the raster it already holds
+// ModelCacheLane names which of one retained object's rasters a packet carries.
+// A body and its shadow are two independently projected rasters of the same
+// retained subject, each with a revision of its own, so the lane is what keeps a
+// shadow from ever answering to a body's slot key
+// (docs/DESIGN_GPU_RENDERER.md §13.12 "Shadows — contract P4").
+type ModelCacheLane uint8
+
+const (
+	// ModelCacheLaneBody is the retained cached-lane composition.
+	ModelCacheLaneBody ModelCacheLane = iota
+	// ModelCacheLaneShadow is the retained quarter-sheared silhouette
+	// projection [03 R-REN-03D §2].
+	ModelCacheLaneShadow
+)
+
+// ModelCacheKey names the retained lane a packet was rebased from, so an
+// executor can recognise a subject whose raster inputs have not changed since
+// the last frame and keep the raster it already holds
 // (docs/DESIGN_GPU_RENDERER.md §13.12).
 //
-// Body is a serial the recorder assigns once per retained body object and
-// Revision changes every time the recorder stores new geometry for that body,
-// so an equal pair means literally the same retained faces. HalfX/HalfY are the
-// frame's half-pixel offset, which the rebase adds to the DOUBLED lane's corners
-// alone (§17) and which the packet's own origin therefore does not imply.
+// Body is a serial the recorder assigns once per retained body object, Lane says
+// which of that object's rasters this packet is, and Revision changes every time
+// the recorder stores new geometry for that lane, so an equal triple means
+// literally the same retained faces. HalfX/HalfY are the frame's half-pixel
+// offset, which the rebase adds to the DOUBLED lane's corners alone (§17) and
+// which the packet's own origin therefore does not imply.
 //
 // A zero Body means "not reusable" and is the value of every packet whose raster
-// inputs the recorder cannot prove stable: the direct lanes, shadows, children,
-// and any retained body carrying a reveal, an outline or a live lane this frame.
+// inputs the recorder cannot prove stable: the direct lanes, children, a shadow
+// whose subject has no retained body, and any retained body carrying a reveal,
+// an outline or a live lane this frame.
 type ModelCacheKey struct {
 	Body         uint64
 	Revision     uint64
 	HalfX, HalfY int32
+	Lane         ModelCacheLane
 }
 
 // Reusable reports whether the key identifies a retained body at all.
