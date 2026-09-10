@@ -58,13 +58,13 @@ func TestStepUnit_Isolation(t *testing.T) {
 		bid = orders.Lookup("MobileBuild")
 	}
 	qA := orders.QueueForUnit(builderA)
-	qA.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: 1, Param2: 1, Phase: uint8(State3), Target: prodAHandle})
+	qA.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: 1, Param2: 1, Phase: uint8(State3)})
 	qA.Primary()[0].Phase = uint8(State3)
-	qA.Primary()[0].Target = prodAHandle
+	qA.Primary()[0].BindTarget(prodAHandle)
 	qB := orders.QueueForUnit(builderB)
-	qB.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: 1, Param2: 1, Phase: uint8(State3), Target: prodBHandle})
+	qB.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: 1, Param2: 1, Phase: uint8(State3)})
 	qB.Primary()[0].Phase = uint8(State3)
-	qB.Primary()[0].Target = prodBHandle
+	qB.Primary()[0].BindTarget(prodBHandle)
 
 	svc := NewService(nil, cat, w, &economy.Service{})
 	bindConstructionCombat(svc)
@@ -280,10 +280,10 @@ func TestStepUnit_ZeroStockWithCarryAdmits(t *testing.T) {
 	if bid == 0 {
 		bid = orders.Lookup("MobileBuild")
 	}
-	q.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: 1, Param2: 1, Phase: uint8(State3), Target: prod.Handle})
+	q.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: 1, Param2: 1, Phase: uint8(State3)})
 	head := q.Primary()[0]
 	head.Phase = uint8(State3)
-	head.Target = prod.Handle
+	head.BindTarget(prod.Handle)
 	before := prod.Remaining
 	res := svc.StepUnit(TickContext{Tick: 10, World: w, Economy: econ, Catalog: cat}, hf)
 	if res.Err != nil {
@@ -326,10 +326,10 @@ func TestStepUnit_SettlementDeniesPausesAndResumes(t *testing.T) {
 	if bid == 0 {
 		bid = orders.Lookup("MobileBuild")
 	}
-	q.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: 1, Param2: 1, Phase: uint8(State3), Target: prod.Handle})
+	q.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: 1, Param2: 1, Phase: uint8(State3)})
 	head := q.Primary()[0]
 	head.Phase = uint8(State3)
-	head.Target = prod.Handle
+	head.BindTarget(prod.Handle)
 	before := prod.Remaining
 	res := svc.StepUnit(TickContext{Tick: 20, World: w, Economy: econ, Catalog: cat}, hf)
 	if res.Err != nil {
@@ -458,10 +458,10 @@ func TestStepUnit_CompletionExactlyOnce(t *testing.T) {
 	if bid == 0 {
 		bid = orders.Lookup("MobileBuild")
 	}
-	q.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: 1, Param2: 1, Phase: uint8(State3), Target: hp})
+	q.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: 1, Param2: 1, Phase: uint8(State3)})
 	head := q.Primary()[0]
 	head.Phase = uint8(State3)
-	head.Target = hp
+	head.BindTarget(hp)
 	res := svc.StepUnit(TickContext{Tick: 30, World: w, Economy: svc.Economy, Catalog: cat}, hf)
 	if res.Err != nil {
 		t.Fatalf("err %v", res.Err)

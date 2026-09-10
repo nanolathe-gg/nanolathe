@@ -210,10 +210,10 @@ func TestRS10_StarveResume(t *testing.T) {
 	if bid == 0 {
 		bid = orders.Lookup("MobileBuild")
 	}
-	q.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: 1, Param2: 1, Phase: uint8(State3), Target: hp})
+	q.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: 1, Param2: 1, Phase: uint8(State3)})
 	head := q.Primary()[0]
 	head.Phase = uint8(State3)
-	head.Target = hp
+	head.BindTarget(hp)
 	before := prod.Remaining
 	svc.Pump(factory, 10)
 	if prod.Remaining != before {
@@ -262,9 +262,9 @@ func TestRS10_MultiBuilderLowestSlot(t *testing.T) {
 		if bid == 0 {
 			bid = orders.Lookup("MobileBuild")
 		}
-		q.Push(bid, orders.Node{BuildDefKey: "armlab", Param1: 1, Param2: 1, Phase: uint8(State3), Target: prod.Handle})
+		q.Push(bid, orders.Node{BuildDefKey: "armlab", Param1: 1, Param2: 1, Phase: uint8(State3)})
 		q.Primary()[0].Phase = uint8(State3)
-		q.Primary()[0].Target = prod.Handle
+		q.Primary()[0].BindTarget(prod.Handle)
 	}
 	for _, b := range []*units.Unit{b1, b2} {
 		svc.StepUnit(TickContext{Tick: 0}, b.Handle)
@@ -375,9 +375,9 @@ func TestRS10_CancelRefundAndLinks(t *testing.T) {
 	if bid == 0 {
 		bid = orders.Lookup("MobileBuild")
 	}
-	q.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: 1, Param2: 2, Phase: uint8(State3), Target: prod.Handle})
+	q.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: 1, Param2: 2, Phase: uint8(State3)})
 	head := q.Primary()[0]
-	head.Target = prod.Handle
+	head.BindTarget(prod.Handle)
 	head.Phase = uint8(State3)
 	svc := NewService(nil, cat, w, econ)
 	svc.OnRefresh = func(u *units.Unit) {}
@@ -470,9 +470,9 @@ func TestRS10_CancelRefundAndLinks(t *testing.T) {
 	svc4 := NewService(nil, cat, w4, &economy.Service{})
 	svc4.SetBuilderLink(prod4.Handle, factory4.Handle)
 	q4 := orders.QueueForUnit(factory4)
-	q4.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: 1, Param2: 1, Phase: uint8(State4), Target: hp4})
+	q4.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: 1, Param2: 1, Phase: uint8(State4)})
 	head4 := q4.Primary()[0]
-	head4.Target = hp4
+	head4.BindTarget(hp4)
 	head4.Phase = uint8(State4)
 	svc4.Pump(factory4, 300)
 	if _, ok := svc4.BuilderLink(hp4); ok {

@@ -210,7 +210,7 @@ func groundUnloadHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) 
 		}
 		// The list is LIFO, so the head is the most recently attached cargo
 		// [04 R-UNIT-06 §3].
-		n.Target = u.Attachment.Cargo[0]
+		n.BindTarget(u.Attachment.Cargo[0])
 		captionClearText(u, n, "Unloading") // the caption clear, with a state text [04 R-ORD-01 §1]
 		if bridge := callbackBridgeFor(u); bridge != nil {
 			// Cell 0 = the cargo's identity, cell 1 = the packed drop point;

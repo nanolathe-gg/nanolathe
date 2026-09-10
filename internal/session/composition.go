@@ -1905,6 +1905,9 @@ func createAndBindServices(s *Session) error {
 			s.Build.NotifyProductRemoved(h)
 			s.Build.ReleasePlacement(h)
 		}
+		// Wake and unlink every order observing the removed unit after the
+		// factory has consumed its product reference [04 R-ORD-01 §6].
+		orders.TargetRemoved(s.Units, h)
 	}
 	// Combat emits immutable authoritative events in impact order. The
 	// collector is presentation-only; EventUnitKilled remains a death/corpse
@@ -2389,7 +2392,7 @@ func (s *Session) resurrectStep(builder *units.Unit, n *orders.Node, lookupFeatu
 		// the grid in the next feature phase, the same route the reclaim
 		// transition's grid-only removal already takes.
 		s.World.BumpStaticObstacleRevision()
-		n.Target = product.Handle
+		n.BindTarget(product.Handle)
 		// A resurrected unit is finished (remaining 0), so it joins the world
 		// the way any completed product does: movement state and a visibility
 		// publish [01 §6.1][03 §3].

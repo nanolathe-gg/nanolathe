@@ -135,10 +135,10 @@ func TestP0I05_ResourceStalls(t *testing.T) {
 	if bid == 0 {
 		bid = orders.Lookup("MobileBuild")
 	}
-	q.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: 1, Param2: 1, Phase: uint8(State3), Target: prod.Handle})
+	q.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: 1, Param2: 1, Phase: uint8(State3)})
 	head := q.Primary()[0]
 	head.Phase = uint8(State3)
-	head.Target = prod.Handle
+	head.BindTarget(prod.Handle)
 	before := prod.Remaining
 	svc.Pump(factory, 10)
 	if prod.Remaining != before {
@@ -182,10 +182,10 @@ func TestP0I05_TwoBuildersSlotOrder(t *testing.T) {
 		if bid == 0 {
 			bid = orders.Lookup("MobileBuild")
 		}
-		q.Push(bid, orders.Node{BuildDefKey: "armllt", Param1: 1, Param2: 1, Phase: uint8(State3), Target: prod.Handle})
+		q.Push(bid, orders.Node{BuildDefKey: "armllt", Param1: 1, Param2: 1, Phase: uint8(State3)})
 		head := q.Primary()[0]
 		head.Phase = uint8(State3)
-		head.Target = prod.Handle
+		head.BindTarget(prod.Handle)
 	}
 	// StepUnit in slot order: lowest slot first
 	svc.StepUnit(TickContext{Tick: 0}, b1.Handle)

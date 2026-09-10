@@ -30,10 +30,9 @@ const observerNotice uint32 = 0x10
 // rows and `BuildingBuild` — none of which ever takes a weapon slot.
 const staticSlotKeeper uint32 = 1 << 16
 
-// staticTargetObserver is static gate-mask bit 9. A record constructed without
-// a target unit has it cleared, and the record constructor unlinks the observer
-// node again when it is clear, so a record whose descriptor does not carry
-// 0x200 never observes its target [04 §3.1][04 R-MOV-03 §7].
+// staticTargetObserver is static gate-mask bit 9. The constructor unlinks its
+// target when this bit is clear. Later handler relinks are independent of the
+// constructor's bit [04 §3.1][04 R-MOV-03 §7].
 const staticTargetObserver uint32 = 0x200
 
 // staticUnderAttackSilent is static gate-mask bit 7. The damage dispatcher's
@@ -51,17 +50,47 @@ const staticUnderAttackSilent uint32 = 0x80
 // pending word — so the whole notice is "every order record observing the
 // victim wakes with pending bit 0x10" [04 R-MOV-03 §7].
 //
-// Nanolathe keeps no per-unit observer list: the record's observed unit is its
-// Target and the pending word is the OWNING unit's (the pump reads
-// `(record.Satisfied | owner.Pending) & record.DynamicGate`, [04 §3.3]), so the
-// same set is reached by walking the world in pool order (I1) and testing each
-// record's target. Records whose descriptor lacks the target-observer bit are
-// skipped, which is the "never observes its target" clause above.
+// Each record receives its own pending bit. The pump may consume one record's
+// notice while another record remains blocked [04 §3.3][04 R-MOV-03 §7].
 func ObserverNotice(w *units.World, victim *units.Unit) {
-	if w == nil || victim == nil || victim.Handle == 0 {
+	if victim != nil {
+		notifyTargetObservers(w, victim.Handle, observerNotice, false)
+	}
+}
+
+// BindTarget relinks the record's observed unit, or unlinks it for zero. The
+// reference itself holds the target: unlinking clears it. The constructor may
+// unlink based on its static mask; later handlers bind independently of that
+// mask, notably Guard_NoMove [04 R-MOV-03 §7][04 R-ORD-01 §3]. Callers supply
+// a live unit's handle, or zero, as the reference helper requires.
+func (n *Node) BindTarget(target pool.Handle) {
+	if n != nil {
+		n.Target = target
+	}
+}
+
+// TargetRemoved delivers the removal event to every record observing target,
+// then unlinks each reference so pool-slot reuse cannot revive it
+// [04 R-ORD-01 §6][04 R-MOV-03 §7].
+func TargetRemoved(w *units.World, target pool.Handle) {
+	notifyTargetObservers(w, target, pendTargetRemoved, true)
+}
+
+// TargetCloaked delivers the cloak rising-edge event without unlinking the
+// reference. The falling edge sends no event [04 R-ORD-01 §6].
+func TargetCloaked(w *units.World, target pool.Handle) {
+	notifyTargetObservers(w, target, pendTargetCloaked, false)
+}
+
+// Nanolathe stores the observed handle on each record rather than maintaining
+// intrusive unit lists. The callbacks only OR pending bits and unlink; the
+// deterministic world/segment walk therefore reaches the same records without
+// dispatching their handlers or consuming random draws [04 R-MOV-03 §7].
+func notifyTargetObservers(w *units.World, target pool.Handle, event uint32, unlink bool) {
+	if w == nil || target == 0 {
 		return
 	}
-	for _, u := range w.Iter() { // pool slot ascending (I1)
+	for _, u := range w.Iter() {
 		if u == nil || !u.Alive {
 			continue
 		}
@@ -69,27 +98,18 @@ func ObserverNotice(w *units.World, victim *units.Unit) {
 		if q == nil {
 			continue
 		}
-		if queueObserves(q.Primary(), victim.Handle) || queueObserves(q.Secondary(), victim.Handle) {
-			u.Pending |= observerNotice
+		for _, segment := range [][]*Node{q.Primary(), q.Secondary()} {
+			for _, n := range segment {
+				if n == nil || n.Target != target {
+					continue
+				}
+				n.Satisfied |= event
+				if unlink {
+					n.BindTarget(0)
+				}
+			}
 		}
 	}
-}
-
-// queueObserves reports whether any record of one segment observes victim.
-func queueObserves(segment []*Node, victim pool.Handle) bool {
-	for _, n := range segment {
-		if n == nil {
-			continue
-		}
-		if n.Target != victim {
-			continue
-		}
-		if n.StaticGate&staticTargetObserver == 0 {
-			continue // the node was never linked onto the target [04 R-MOV-03 §7]
-		}
-		return true
-	}
-	return false
 }
 
 // FrontPrimaryGateMask returns the static gate-mask word of a unit's front

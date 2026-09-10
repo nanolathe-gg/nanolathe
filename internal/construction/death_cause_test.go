@@ -33,7 +33,8 @@ func TestCancelCurrentStampsCauseNine(t *testing.T) {
 	factory, product := w.Unit(fh), w.Unit(ph)
 	product.Remaining, product.MaxHealth, product.Health = 0.5, 100, 30
 	q := orders.QueueForUnit(factory)
-	q.Push(orders.Lookup("BuildingBuild"), orders.Node{BuildDefKey: prodDef.CanonicalKey, Param2: 2, Phase: uint8(State3), Target: ph})
+	q.Push(orders.Lookup("BuildingBuild"), orders.Node{BuildDefKey: prodDef.CanonicalKey, Param2: 2, Phase: uint8(State3)})
+	q.Primary()[0].BindTarget(ph) // stage the runtime product relink [04 R-ORD-01 §6]
 	svc := NewService(nil, cat, w, nil)
 	bindConstructionCombat(svc)
 

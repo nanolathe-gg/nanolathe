@@ -22,16 +22,6 @@ import (
 // variant pick at resolve time, once per pop, on the presentation side
 // [03 §8.3][I4].
 
-// pendingTargetCloaked is order pending bit `0x10000`, "target cloaked". The
-// cloak rising edge raises it on every order record observing the cloaking
-// unit; the falling edge sends no notice [04 R-ORD-01 §6].
-const pendingTargetCloaked uint32 = 0x10000
-
-// staticTargetObserver is static gate-mask bit 9. A record whose descriptor
-// does not carry it never observes its target, so it never receives the notice
-// [04 §3.1][04 R-MOV-03 §7].
-const staticTargetObserver uint32 = 0x200
-
 // bindStatusCueSinks installs the raise seam on every live unit. It runs at
 // RegisterAll and again from the creation hook, so a unit placed before the
 // hooks were bound and a unit produced by a factory reach the same sink
@@ -110,52 +100,13 @@ func (s *Session) raiseStatusCue(u *units.Unit, code uint8) {
 	// for control bytes 1 and 2 is out of scope (no networking).
 }
 
-// noticeTargetCloaked is the observer notice of [04 R-ORD-01 §6]: every order
-// record whose target reference is registered on the cloaking unit receives
-// pending bit `0x10000`.
-//
-// internal/orders owns the walk for the two notices it raises itself (unit
-// removal's `0x8` and the damage-intake `0x10` of ObserverNotice), but neither
-// takes a caller-supplied bit, and this unit does not own that package. This is
-// therefore the minimal read-only repeat of that walk over the exported queue
-// API, with the same shape ObserverNotice documents: Nanolathe keeps no
-// per-unit observer list, so the same set is reached by walking the world in
-// pool order (I1) and testing each record's target, skipping records whose
-// descriptor lacks the target-observer bit — those were never linked onto the
-// target [04 R-MOV-03 §7]. The pending word is the OWNING unit's, which is what
-// the pump reads [04 §3.3].
+// noticeTargetCloaked delivers the rising-edge notice to each observing order,
+// including references bound by a running handler [04 R-ORD-01 §6].
 func (s *Session) noticeTargetCloaked(victim *units.Unit) {
-	if s == nil || s.Units == nil || victim == nil || victim.Handle == 0 {
+	if s == nil || victim == nil {
 		return
 	}
-	for _, u := range s.Units.Iter() { // pool slot ascending (I1)
-		if u == nil || !u.Alive {
-			continue
-		}
-		q := orders.QueueOfUnit(u)
-		if q == nil {
-			continue
-		}
-		if segmentObservesCloaker(q.Primary(), victim.Handle) ||
-			segmentObservesCloaker(q.Secondary(), victim.Handle) {
-			u.Pending |= pendingTargetCloaked
-		}
-	}
-}
-
-// segmentObservesCloaker reports whether any record of one queue segment
-// observes the cloaking unit [04 R-ORD-01 §6][04 R-MOV-03 §7].
-func segmentObservesCloaker(segment []*orders.Node, victim pool.Handle) bool {
-	for _, n := range segment {
-		if n == nil || n.Target != victim {
-			continue
-		}
-		if n.StaticGate&staticTargetObserver == 0 {
-			continue
-		}
-		return true
-	}
-	return false
+	orders.TargetCloaked(s.Units, victim.Handle)
 }
 
 // purgeStatusCues is the unit-teardown purge [03 R-AUD-01 §7]: when a unit is

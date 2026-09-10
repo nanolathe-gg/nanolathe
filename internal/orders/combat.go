@@ -780,9 +780,9 @@ func guardNoMoveHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) C
 		return Code(1) // *advance* [04 R-ORD-01 §3]
 	case 1:
 		tgt := slotTargetUnit(u, 0)
-		n.Target = 0
+		n.BindTarget(0)
 		if tgt != nil {
-			n.Target = tgt.Handle
+			n.BindTarget(tgt.Handle)
 		}
 		// "if it exists and carries bit 28": closed by [04 R-ORD-01 §12]'s
 		// writer census. Bit 28 is the ALIVE bit and nothing else — the unit
@@ -825,7 +825,7 @@ func guardNoMoveHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) C
 			return Code(0) // *restart*
 		}
 		pick := list[int(drawBelow(u, uint32(len(list))))]
-		n.Target = pick.Handle
+		n.BindTarget(pick.Handle)
 		bindSlotToUnit(u, 0, pick.Handle)
 		n.Phase = 1
 		return Code(2) // *hold* with the phase already set [04 R-ORD-01 §3]

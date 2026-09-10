@@ -301,7 +301,7 @@ func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, produc
 	// construction is destroyed [04 R-ORD-01 §6]
 	// [05 "Build request and factory queue behavior"].
 	productHandle := product.Handle
-	node.Target = productHandle
+	node.BindTarget(productHandle)
 
 	// Message "Starting construction" verbatim [05 C18]. `BuildingBuild` phase 2
 	// emits it as status kind 9 (`build`) on the builder once the nanoframe was

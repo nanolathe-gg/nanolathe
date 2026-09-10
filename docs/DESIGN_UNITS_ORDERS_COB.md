@@ -95,9 +95,8 @@ built; every constant in that block names its writer.
 
 **The order-event word.** `Unit.Pending` is the word the pump merges with each
 record's own satisfied bits before intersecting the record's gate
-`[04 §3.3]` `[04 R-ORD-01 §0]`. Its producers are the damage-intake observer
-notice, the weapon layer's fired/could-not-fire bits, the under-construction
-wait, and the script-touched marker `[06 R-WPN-05 §6]` `[04 R-MOV-03 §7]`
+`[04 §3.3]` `[04 R-ORD-01 §0]`. Its producers include the weapon layer's
+fired/could-not-fire bits, the under-construction wait, and the script-touched marker `[06 R-WPN-05 §6]` `[04 R-MOV-03 §7]`
 `[04 R-ORD-01 §11]` `[04 R-COB-06]`. Retail merges it as a zero-extended
 sixteen-bit value, which is why gate bit `0x10000` can only ever be satisfied
 from a record's own word — the standing question of what writes bit 16 into the
@@ -166,6 +165,15 @@ constructor every producer enters through — the HUD, the computer player, the
 mission spawner, COB, rally inheritance and factory completion — so the queue
 modifier, the goal payload and the build product identity are formed in one
 place `[04 §3.4]`.
+
+The target handle is the record's observer link. Constructor admission clears
+it when the issued-target bit is clear; later `BindTarget` calls relink it
+independently of that bit, including the stationary guard's acquired target.
+`TargetRemoved`, `TargetCloaked` and the damage `ObserverNotice` deliver each
+notice to the observing record's `Satisfied` word, so one queue head cannot
+consume another record's event. Removal then clears the link; cloak and damage
+retain it `[04 R-ORD-01 §6]` `[04 R-MOV-03 §7]`. Loading relinks the saved
+unit target without repeating constructor admission `[08 R-SAVE-ORDER-01]`.
 
 **The two segments** (`pump.go`). `Queue` holds a primary and a secondary
 slice, the per-queue binding, the per-queue diagnostics, and the per-row owned

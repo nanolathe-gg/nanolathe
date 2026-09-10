@@ -5975,6 +5975,16 @@ exactly `0x3A` bytes and is named `u%04xm%04x`, where the first number is the
 parent unit's stable slot and the second is the order sequence emitted by the
 writer. [Established; [01 §6.1], [04 §3.1–§3.3]]
 
+**Established — restored target observers.** The order reader initializes an
+empty observer, resolves the saved linked-unit identifier, and relinks that
+unit through the ordinary reference helper before copying the saved phase,
+gates and static-mask word. It does not repeat the constructor's static-bit
+admission or unlink afterward. A nonzero resolved target therefore remains an
+observer even when the saved issued-target bit is clear, including a stationary
+guard that acquired its target after construction ([04 R-MOV-03 §7]). A zero
+identifier leaves the reference empty. No additional saved observer flag is
+needed.
+
 **Main record map.** The first two identifiers are logical pool references;
 they are never native pointers. The twelve words after the two one-byte
 header fields are copied as words, including fields whose high bits are not

@@ -66,7 +66,7 @@ func RetailRestoreOrdersAtTick(u *units.Unit, records []save.OrderRecord, stable
 		staticGate, flags, captionPending := restoreRetailQueueFlags(queueFlags)
 		n := &Node{
 			ID: id, Phase: record.Main[9], DynamicGate: binary.LittleEndian.Uint32(record.Main[0x0A:]),
-			Deadline: int32(binary.LittleEndian.Uint32(record.Main[0x0E:])), Owner: u.Handle, Target: target,
+			Deadline: int32(binary.LittleEndian.Uint32(record.Main[0x0E:])), Owner: u.Handle,
 			GoalX:  numeric.Fixed(int32(binary.LittleEndian.Uint32(record.Main[0x12:]))),
 			GoalY:  numeric.Fixed(int32(binary.LittleEndian.Uint32(record.Main[0x16:]))),
 			GoalZ:  numeric.Fixed(int32(binary.LittleEndian.Uint32(record.Main[0x1A:]))),
@@ -78,6 +78,10 @@ func RetailRestoreOrdersAtTick(u *units.Unit, records []save.OrderRecord, stable
 			RetailSubtypeCode: record.SubtypeCode,
 			RetailSubtype:     append([]byte(nil), record.Subtype...),
 		}
+		// The reader relinks the saved target independently of the restored
+		// issued-target bit; it does not repeat the constructor's unlink
+		// [08 R-SAVE-ORDER-01]. This includes dynamically bound guard targets.
+		n.BindTarget(target)
 		if err := restoreSubtypeWords(n, record.Subtype, stable); err != nil {
 			return err
 		}

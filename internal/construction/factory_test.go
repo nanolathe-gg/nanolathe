@@ -971,9 +971,9 @@ func TestRefundArithmetic(t *testing.T) {
 		if bid == 0 {
 			bid = orders.Lookup("MobileBuild")
 		}
-		q.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 2, Phase: uint8(State3), Target: prod.Handle})
+		q.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 2, Phase: uint8(State3)})
 		head := q.Primary()[0]
-		head.Target = prod.Handle
+		head.BindTarget(prod.Handle)
 		head.Phase = uint8(State3)
 		// Set special state func
 		svcIsSpecial := func(owner uint8) bool { return special }
@@ -1046,9 +1046,9 @@ func TestKind9Kill(t *testing.T) {
 	prod := w.Unit(hp)
 	prod.Def = prodDef
 	prod.Remaining = 0.5
-	q.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 2, Phase: uint8(State3), Target: prod.Handle})
+	q.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 2, Phase: uint8(State3)})
 	head := q.Primary()[0]
-	head.Target = prod.Handle
+	head.BindTarget(prod.Handle)
 	svc := NewService(nil, cat, w, econ)
 	bindConstructionCombat(svc)
 	svc.OnRefresh = func(u *units.Unit) {}

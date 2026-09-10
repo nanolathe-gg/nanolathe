@@ -3754,10 +3754,14 @@ when the target is live (definition index nonzero); otherwise the node stays
 unlinked. The record constructor sets the handler to the record itself,
 clears `0x200` from the static-mask copy when no target was supplied and
 `0x400` when no goal was supplied, and — when `0x200` is clear after that —
-unlinks the node again, so a record whose descriptor does not carry `0x200`
-never observes its target. Relinking to another unit splices the node out of
-the old list and pushes it at the head of the new one; the record cleanup
-splices it out.
+unlinks the node again, clearing its observed-unit reference. This is a
+constructor admission rule, not a continuing restriction: a later handler can
+relink the reference independently of that static bit, as `Guard_NoMove` does
+when it binds an acquired target ([R-ORD-01 §3]). Relinking to another live
+unit splices the node out of the old list and pushes it at the head of the new
+one; unlinking, including record cleanup, clears the observed-unit reference.
+These linkage and clear rules are **Established** by the shared reference
+helper and the constructor's call to it.
 
 The record's own method table has two entries: the first ORs its argument
 into the record's pending word ([R-ORD-01 §6]'s "first method"); the second

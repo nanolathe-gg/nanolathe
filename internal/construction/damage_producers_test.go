@@ -36,7 +36,8 @@ func TestCancelCurrentKindNineVeteranCanSurvive(t *testing.T) {
 	factory, product := w.Unit(fh), w.Unit(ph)
 	product.Remaining, product.MaxHealth, product.Health, product.Kills = 0.5, 29000, 29000, 25
 	q := orders.QueueForUnit(factory)
-	q.Push(orders.Lookup(FactoryBuildOrder), orders.Node{Target: ph, BuildDefKey: productDef.CanonicalKey, Param2: 1, Phase: uint8(State3)})
+	q.Push(orders.Lookup(FactoryBuildOrder), orders.Node{BuildDefKey: productDef.CanonicalKey, Param2: 1, Phase: uint8(State3)})
+	q.Primary()[0].BindTarget(ph) // stage the runtime product relink [04 R-ORD-01 §6]
 	svc := NewService(nil, cat, w, nil)
 	bindConstructionCombat(svc)
 

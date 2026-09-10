@@ -135,8 +135,14 @@ func TestFactoryProductRecordsCarryTheProductAsOwner(t *testing.T) {
 			t.Fatalf("%s creation tick = %d, want the pushing visit's tick in 1..%d [04 §3.2]", name, n.CreationTick, pushTick)
 		}
 	}
-	if n := findOwnedRecord(product, "BeCarried"); n.Target != factory.Handle {
-		t.Fatalf("BeCarried target = %v, want the carrier %v — the factory is the TARGET, not the owner [04 R-FAC-02 §1]", n.Target, factory.Handle)
+	// BeCarried reads the unit's attachment, not an order target. Its
+	// constructor unlinks the supplied target because its descriptor lacks
+	// the issued-target bit [04 R-ORD-01 §2][04 R-MOV-03 §7].
+	if n := findOwnedRecord(product, "BeCarried"); n.Target != 0 {
+		t.Fatalf("BeCarried retained an unregistered order target %v", n.Target)
+	}
+	if n := findOwnedRecord(product, "GetBuilt"); n.Target != factory.Handle {
+		t.Fatalf("GetBuilt target = %v, want factory %v [04 R-FAC-02 §1]", n.Target, factory.Handle)
 	}
 
 	// No rally on the builder: `GetBuilt`'s completion arm inserts `Park`, and

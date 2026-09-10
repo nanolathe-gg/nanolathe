@@ -41,12 +41,12 @@ func mobileBuildCompletionFixture(t *testing.T, count uint32) (*Service, *units.
 		BuildDefKey: productDef.CanonicalKey,
 		Param2:      count,
 		Phase:       uint8(State4),
-		Target:      product.Handle,
 		GoalX:       111,
 		GoalY:       222,
 		GoalZ:       333,
 		Owner:       builder.Handle,
 	})
+	q.Primary()[0].BindTarget(product.Handle) // stage the runtime product relink [04 R-ORD-01 §6]
 	node := q.Primary()[0]
 	orders.EmitStartBuilding(builder, node)
 	if liveThreads(vm) != 1 {

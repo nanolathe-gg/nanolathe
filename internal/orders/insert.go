@@ -100,6 +100,9 @@ func newNode(id ID, n Node) *Node {
 	if nn.Target == 0 {
 		nn.StaticGate &^= staticTargetObserver
 	}
+	if nn.StaticGate&staticTargetObserver == 0 {
+		nn.BindTarget(0) // constructor unlinks the reference [04 R-MOV-03 §7]
+	}
 	// Survivorship is a property of the record's descriptor, not of the queue
 	// modifier that inserted it. This used to be set from the caller's
 	// queued/non-queued flag instead, which had the two halves of [04 §3.3]

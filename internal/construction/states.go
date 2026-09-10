@@ -421,7 +421,7 @@ func (s *Service) successEpilogueMobile(builder *units.Unit, node *orders.Node, 
 	// binds its product here and the removal walk delivers mask 8 through it
 	// [04 R-ORD-01 §6][05 "Build request and factory queue behavior"].
 	productHandle := product.Handle
-	node.Target = productHandle
+	node.BindTarget(productHandle)
 	// `MobileBuild` phase 1's created arm: "status 9 with `Starting
 	// construction`" [04 R-ORD-01 §5].
 	s.logMessage("Starting construction")
@@ -609,7 +609,7 @@ func (s *Service) handleState4(factory *units.Unit, node *orders.Node, tick uint
 		node.Phase = uint8(State0)
 		node.DynamicGate = 0
 		node.Deadline = -1
-		node.Target = 0
+		node.BindTarget(0)
 		if isMobileBuild(node.ID) {
 			// Phase-4 MobileBuild completion is an ordinary completion result:
 			// cleanup and remove the record once, independent of Param2
@@ -625,7 +625,7 @@ func (s *Service) handleState4(factory *units.Unit, node *orders.Node, tick uint
 		node.Phase = uint8(State0)
 		node.DynamicGate = 0
 		node.Deadline = -1
-		node.Target = 0
+		node.BindTarget(0)
 		if isMobileBuild(node.ID) {
 			s.removeHead(factory, node)
 		} else {

@@ -324,7 +324,7 @@ func (s *Service) handleCancelCurrent(factory *units.Unit, node *orders.Node, ti
 	// [04 R-ORDER-02 §2] into this same body: the guard is "the dynamic gate
 	// still holds bit 1 AT REMOVAL", and by then this record is no longer
 	// waiting on it.
-	node.Target = 0
+	node.BindTarget(0)
 	node.DynamicGate = 0
 
 	// Drop node WITHOUT decrementing remaining count [05 C21].

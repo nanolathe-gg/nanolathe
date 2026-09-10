@@ -34,10 +34,10 @@ func TestObserverNoticeRaisesPendingBitOnObservers(t *testing.T) {
 	QueueForUnit(stranger).Push(chase, Node{Owner: strangerH, Target: watcherH})
 
 	ObserverNotice(w, victim)
-	if watcher.Pending&observerNotice == 0 {
-		t.Fatalf("the observer notice left pending=%#x; the record observing the victim must wake with 0x10 [04 R-MOV-03 §7]", watcher.Pending)
+	if QueueForUnit(watcher).Primary()[0].Satisfied&observerNotice == 0 {
+		t.Fatalf("the observer notice left pending=%#x; the record observing the victim must wake with 0x10 [04 R-MOV-03 §7]", QueueForUnit(watcher).Primary()[0].Satisfied)
 	}
-	if stranger.Pending&observerNotice != 0 {
+	if QueueForUnit(stranger).Primary()[0].Satisfied&observerNotice != 0 {
 		t.Fatal("a record observing another unit must not wake [06 R-WPN-04 §2]")
 	}
 
@@ -52,8 +52,8 @@ func TestObserverNoticeRaisesPendingBitOnObservers(t *testing.T) {
 	QueueForUnit(stranger).SetPrimary(nil)
 	QueueForUnit(stranger).Push(wait, Node{Owner: strangerH, Target: victimH})
 	ObserverNotice(w, victim)
-	if stranger.Pending&observerNotice != 0 {
-		t.Fatalf("a record whose static mask lacks 0x200 observed its target: pending=%#x [04 R-MOV-03 §7]", stranger.Pending)
+	if QueueForUnit(stranger).Primary()[0].Satisfied&observerNotice != 0 {
+		t.Fatalf("a record whose static mask lacks 0x200 observed its target: pending=%#x [04 R-MOV-03 §7]", QueueForUnit(stranger).Primary()[0].Satisfied)
 	}
 }
 

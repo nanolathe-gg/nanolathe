@@ -187,7 +187,8 @@ func TestUnitReclaimCadenceDefersFatalRefund(t *testing.T) {
 	}
 	factory := s.World.Unit(factoryHandle)
 	factoryQueue := orders.QueueForUnit(factory)
-	factoryQueue.Push(orders.Lookup(FactoryBuildOrder), orders.Node{Target: target.Handle, Phase: uint8(State3)})
+	factoryQueue.Push(orders.Lookup(FactoryBuildOrder), orders.Node{Phase: uint8(State3)})
+	factoryQueue.Primary()[0].BindTarget(target.Handle) // stage the runtime product relink [04 R-ORD-01 §6]
 	factoryNode := factoryQueue.Primary()[0]
 	s.SetBuilderLink(target.Handle, factory.Handle)
 	var deaths, extras int

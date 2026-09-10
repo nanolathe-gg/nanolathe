@@ -262,8 +262,9 @@ func assistFixture(t *testing.T, factoryWorkerTime int32, assistantQuanta ...int
 	fq := orders.QueueForUnit(factory)
 	fq.SetBinding(binding)
 	fq.Push(orders.Lookup(FactoryBuildOrder), orders.Node{
-		BuildDefKey: productDef.CanonicalKey, Param2: 1, Phase: uint8(State3), Target: ph,
+		BuildDefKey: productDef.CanonicalKey, Param2: 1, Phase: uint8(State3),
 	})
+	fq.Primary()[0].BindTarget(ph) // stage the runtime product relink [04 R-ORD-01 §6]
 
 	assistants := make([]*units.Unit, 0, len(assistDefs))
 	for _, d := range assistDefs {

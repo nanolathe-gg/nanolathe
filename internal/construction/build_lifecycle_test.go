@@ -464,7 +464,8 @@ func TestAcceptedWorkEmitsNanoAndStallDoesNot(t *testing.T) {
 	bindConstructionFixture(factory, trivialModel(1, nil), false)
 	product.Remaining, product.MaxHealth = 0.5, 100
 	q := orders.QueueForUnit(factory)
-	q.Push(orders.Lookup("BuildingBuild"), orders.Node{BuildDefKey: prodDef.CanonicalKey, Param2: 1, Phase: uint8(State3), Target: ph})
+	q.Push(orders.Lookup("BuildingBuild"), orders.Node{BuildDefKey: prodDef.CanonicalKey, Param2: 1, Phase: uint8(State3)})
+	q.Primary()[0].BindTarget(ph) // stage the runtime product relink [04 R-ORD-01 §6]
 	svc := NewService(nil, cat, w, &economy.Service{})
 	svc.ModelForUnit = func(*units.Unit) *model.Model { return trivialModel(1, nil) }
 	collector := frame.NewEventBuffer(frame.Limits{})
@@ -598,7 +599,8 @@ func TestCancelCurrentRunsCompletionPostureBeforeCause9(t *testing.T) {
 	factory.Activated = true
 	factory.BuildingState = true
 	q := orders.QueueForUnit(factory)
-	q.Push(orders.Lookup("BuildingBuild"), orders.Node{BuildDefKey: prodDef.CanonicalKey, Param2: 2, Phase: uint8(State3), Target: ph})
+	q.Push(orders.Lookup("BuildingBuild"), orders.Node{BuildDefKey: prodDef.CanonicalKey, Param2: 2, Phase: uint8(State3)})
+	q.Primary()[0].BindTarget(ph) // stage the runtime product relink [04 R-ORD-01 §6]
 	node := q.Primary()[0]
 	svc := NewService(nil, cat, w, nil)
 	bindConstructionCombat(svc)

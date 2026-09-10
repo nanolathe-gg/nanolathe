@@ -951,7 +951,7 @@ func (s *Service) NotifyProductRemoved(product pool.Handle) bool {
 		return false
 	}
 	builder.Pending |= InterruptStop // the notice's event code IS a pending bit [04 R-ORD-01 §6]
-	node.Target = 0                  // "then unlinks the reference"
+	node.BindTarget(0)               // "then unlinks the reference"
 	return true
 }
 
