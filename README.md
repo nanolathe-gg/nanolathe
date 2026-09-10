@@ -1,12 +1,19 @@
+[![Nanolathe — Open-source 2.5D RTS engine](https://nanolathe.gg/brand/readme-header.png)](https://nanolathe.gg/)
+
 # Nanolathe
 
-Nanolathe is an experimental reimplementation of the Total Annihilation engine
-in Go, targeting single-player skirmish and campaign play. It is under active
-development, with incomplete behavior and compatibility gaps.
+Nanolathe is an independent, open-source **2.5D real-time strategy engine in Go**.
+Its current focus is a clean-room reimplementation of Total Annihilation for
+single-player skirmish and campaign play, with documented game formats and an
+experimental GPU renderer. It is under active development, with incomplete
+behavior and compatibility gaps.
+
+[Official website](https://nanolathe.gg/) · [Get started](https://nanolathe.gg/get-started/) · [Documentation](https://nanolathe.gg/docs/) · [Contributors and AI agents](#contributors-and-ai-agents)
 
 The engine reads content from your own local Total Annihilation installation.
 Nanolathe's original code is [MIT licensed](LICENSE); the license does not grant
-rights to the original game or retail-derived artwork. Retail-derived remaster exports are excluded from this curated copy. See the
+rights to the original game or retail-derived artwork. Retail-derived remaster
+exports are excluded from this curated copy. See the
 [publication review](docs/PUBLICATION.md) for the history policy and remaining
 provenance questions.
 
@@ -43,7 +50,15 @@ control.
 Multiplayer is outside the current scope. For implemented contracts and known
 gaps, read the design document for the relevant engine area.
 
-## Start here
+## Contributors and AI agents
+
+Read [AGENTS.md](AGENTS.md) before making changes; it is the authoritative
+contribution guide for people and coding agents. Work in an isolated worktree,
+preserve concurrent work, and follow its verification and landing rules.
+
+Start with the architecture, invariants, and the design document for the area
+you are changing. Follow their research citations before implementing behavior;
+record unanswered questions explicitly instead of guessing.
 
 The repository keeps each kind of guidance in one place:
 
@@ -87,8 +102,10 @@ The runtime has one Ebitengine window path. `internal/session` owns the
 authoritative tick and publishes bounded unit/order, projectile, effect,
 economy, construction, HUD, and fog state directly into the committed
 `internal/frame.Buffer`; `internal/client` reads that current committed frame
-and never writes simulation state. Presentation samples the committed tick as
-published: there is no interpolation between ticks [03 §2.4] [I6].
+and never writes simulation state. Classic presentation samples the committed
+tick as published, with no interpolation [03 §2.4] [I6]. The experimental modern
+renderer has its own [presentation policy](docs/DESIGN_GPU_RENDERER.md), including
+interpolation that leaves authoritative simulation unchanged.
 
 Save/load uses the retail HAPIBANK account format, including in-battle
 restoration. This is still a compatibility work in progress; the
