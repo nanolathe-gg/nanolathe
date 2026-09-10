@@ -73,7 +73,7 @@ func TestSkirmishCommanderDeathWidgetSaysGameEndsExactlyWhenItDoes(t *testing.T)
 	for _, rule := range []int{0, 1, 2} {
 		g.setup.CommanderDeath = rule
 		g.refreshRetailPanel()
-		status := clampMenuStage(p.StatusOf("CommanderDeath"), len(gad.Labels))
+		status := clampMenuStage(p.StageAt(p.Index("CommanderDeath")), len(gad.Labels))
 		shown := gad.Labels[status]
 		ends := session.CommanderDeathMode(rule) != session.CommanderDeathContinues
 		if (shown == "Game ends") != ends {
@@ -98,14 +98,14 @@ func TestSkirmishCommanderDeathWidgetSaysGameEndsExactlyWhenItDoes(t *testing.T)
 	if g.setup.CommanderDeath != 0 {
 		t.Fatalf("toggle from 1 gave %d, want 0", g.setup.CommanderDeath)
 	}
-	if got := gad.Labels[clampMenuStage(p.StatusOf("CommanderDeath"), len(gad.Labels))]; got != "Continues" {
+	if got := gad.Labels[clampMenuStage(p.StageAt(p.Index("CommanderDeath")), len(gad.Labels))]; got != "Continues" {
 		t.Errorf("after toggling to rule 0 the widget shows %q, want \"Continues\"", got)
 	}
 	g.activateSkirmishGadget("CommanderDeath")
 	if g.setup.CommanderDeath != 1 {
 		t.Fatalf("toggle from 0 gave %d, want 1", g.setup.CommanderDeath)
 	}
-	if got := gad.Labels[clampMenuStage(p.StatusOf("CommanderDeath"), len(gad.Labels))]; got != "Game ends" {
+	if got := gad.Labels[clampMenuStage(p.StageAt(p.Index("CommanderDeath")), len(gad.Labels))]; got != "Game ends" {
 		t.Errorf("after toggling back to rule 1 the widget shows %q, want \"Game ends\"", got)
 	}
 }

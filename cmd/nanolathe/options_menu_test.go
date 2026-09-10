@@ -1142,3 +1142,48 @@ func TestRetailOptionsGammaSurvivesStartup(t *testing.T) {
 		}
 	}
 }
+
+// Rule preferences select the label/art stage, not the transient down word
+// [08 R-SKIR-01 §1][07 R-WGT-01 §3]. Exercise actual pointer service so a
+// refresh cannot leave the button pressed or displaying its previous choice.
+func TestSkirmishRuleStagesFollowPointerAndReload(t *testing.T) {
+	t.Setenv(settings.EnvPath, filepath.Join(t.TempDir(), "settings.json"))
+	g, _, cl := retailAssetShell(t)
+	g.attachSettings()
+	g.openMenu(modeMenuSkirmish)
+	p := g.activePanel()
+	for _, tc := range []struct {
+		name  string
+		value *int
+	}{
+		{"Mapping", &g.setup.Mapping},
+		{"StartLocation", &g.setup.Location},
+		{"CommanderDeath", &g.setup.CommanderDeath},
+	} {
+		i := p.Index(tc.name)
+		for _, want := range []int{0, 1} {
+			r := p.Window.PlacedRect(i)
+			in := cl.Input()
+			in.Mouse.ResetEdges()
+			in.Mouse.SetPosition(float32(r.X+r.W/2), float32(r.Y+r.H/2))
+			in.Mouse.SetButton(input.MouseButtonLeft, true)
+			g.menuInput(cl)
+			in.Mouse.ResetEdges()
+			in.Mouse.SetButton(input.MouseButtonLeft, false)
+			g.menuInput(cl)
+			in.Mouse.ResetEdges()
+			if *tc.value != want || p.StageAt(i) != 1-want || p.DownAt(i) != 0 {
+				t.Fatalf("%s rule/stage/down=%d/%d/%d, want %d/%d/0", tc.name, *tc.value, p.StageAt(i), p.DownAt(i), want, 1-want)
+			}
+			g.saveSettings()
+			g.attachSettings()
+			g.refreshRetailPanel()
+			if *tc.value != want || p.StageAt(i) != 1-want || p.DownAt(i) != 0 {
+				t.Fatalf("%s changed after reload", tc.name)
+			}
+		}
+	}
+	if dir := os.Getenv("NANOLATHE_OPTIONS_SHOT"); dir != "" {
+		writeShellShot(t, cl, filepath.Join(dir, "skirmish-unmapped.png"))
+	}
+}

@@ -399,24 +399,24 @@ func (g *gameShell) refreshSkirmishPanel() {
 	// into the MapName gadget. It does not reopen the map to read a title.
 	p.SetText("MapName", g.setup.MapName)
 	if g.setup.Location == 0 {
-		p.SetStatus("StartLocation", 1)
+		p.SetStageAt(p.Index("StartLocation"), 1)
 		p.SetHelp("StartLocation", "Commanders are randomly placed on the battle field.")
 	} else {
-		p.SetStatus("StartLocation", 0)
+		p.SetStageAt(p.Index("StartLocation"), 0)
 		p.SetHelp("StartLocation", "Commanders are placed at pre-determined locations.")
 	}
 	if g.setup.CommanderDeath == 0 {
-		p.SetStatus("CommanderDeath", 1)
+		p.SetStageAt(p.Index("CommanderDeath"), 1)
 		p.SetHelp("CommanderDeath", "Game continues after Commander is destroyed.")
 	} else {
-		p.SetStatus("CommanderDeath", 0)
+		p.SetStageAt(p.Index("CommanderDeath"), 0)
 		p.SetHelp("CommanderDeath", "Game ends when commander is destroyed.")
 	}
 	if g.setup.Mapping == 0 {
-		p.SetStatus("Mapping", 1)
+		p.SetStageAt(p.Index("Mapping"), 1)
 		p.SetHelp("Mapping", "Terrain is visible.")
 	} else {
-		p.SetStatus("Mapping", 0)
+		p.SetStageAt(p.Index("Mapping"), 0)
 		p.SetHelp("Mapping", "Terrain is blacked out until explored.")
 	}
 	if g.setup.LineOfSight == 0 {
