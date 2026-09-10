@@ -336,15 +336,25 @@ func (b *battleSession) followCommander() {
 // onScreenUnit reports whether a committed unit projects inside the battle
 // viewport — the on-screen list Ctrl+S selects from and the `n` cycle marks
 // visited [07 R-CAM-01 §2][07 §8].
+//
+// The test is on the PRESENTED position — the live factor's projection from
+// the framebuffer origin, which is where the executor draws the unit — against
+// the viewport `(128,32)..(W-1,H-33)` in framebuffer pixels, the rectangle the
+// chrome leaves for the world [03 §4.1] (DESIGN_GPU_RENDERER §16.4). An earlier
+// build compared the record-step projection, rebased to the surface, against
+// the view measured in WORLD pixels from zero: off a rest step the two spaces
+// differ by the factor, and even at 1x the window it tested began under the
+// side rail and ended one rail short of the right edge.
 func (b *battleSession) onScreenUnit(v frame.UnitView) bool {
 	if b == nil || b.cam == nil {
 		return false
 	}
-	sx, sy := b.cam.WorldToScreen(v.X, v.Y, v.Z)
-	w, h := b.cam.BattleView()
-	sx -= camera.OriginX
-	sy -= camera.OriginY
-	return sx >= 0 && sy >= 0 && sx < w && sy < h
+	z := b.cam.EffectiveZoom()
+	wx, wy, wz := int32(v.X>>16), int32(v.Y>>16), int32(v.Z>>16)
+	sx := z.Project(wx - b.cam.X)
+	sy := z.Project(wz - (wy >> 1) - b.cam.Z)
+	return sx >= camera.OriginX && sx < b.cam.ViewW &&
+		sy >= camera.OriginY && sy < b.cam.ViewH-camera.OriginY
 }
 
 // cycleFollowTarget is `t` / `T`: the tracked object becomes the next (or, with

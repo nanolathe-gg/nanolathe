@@ -5,7 +5,9 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // zoomTestBattle is the smallest battle the two view-scale bindings need: a
@@ -138,5 +140,38 @@ func TestEntryZoomAppliesOnlyAtTheDetailScale(t *testing.T) {
 	applyEntryZoom(Options{Zoom: camera.ZoomMax}, detail)
 	if got := detail.cam.EffectiveScale(); got != camera.ViewScaleDetail {
 		t.Errorf("--zoom 2 gave view scale %s, want 2x", got)
+	}
+}
+
+// The on-screen list Ctrl+S selects from is judged on the PRESENTED position
+// against the viewport in framebuffer pixels (DESIGN_GPU_RENDERER §16.4): a
+// unit drawn inside the viewport is on screen at any factor, one drawn under
+// the side rail or past the right edge is not. The earlier test compared a
+// record-step projection against the view in world pixels from zero, which
+// admitted units under the rail and refused the rightmost rail's width.
+func TestOnScreenUnitIsJudgedWhereTheUnitIsDrawn(t *testing.T) {
+	for _, z := range []camera.Zoom{camera.ZoomUnit, camera.ZoomUnit / 2, camera.ZoomUnit * 13 / 10, camera.ZoomMax} {
+		b := zoomTestBattle()
+		b.cam.X, b.cam.Z = 2000, 1500
+		b.cam.Zoom, b.cam.Scale = z, z.Step()
+		unitAt := func(fx, fy int32) frame.UnitView {
+			// The world point drawn at framebuffer (fx, fy): the inverse of the
+			// presented projection, on flat ground.
+			return frame.UnitView{Slot: 1,
+				X: numeric.FixedFromInt(int64(b.cam.X + z.Inverse(fx))),
+				Z: numeric.FixedFromInt(int64(b.cam.Z + z.Inverse(fy)))}
+		}
+		if !b.onScreenUnit(unitAt(camera.OriginX+4, camera.OriginY+4)) {
+			t.Errorf("at %s a unit just inside the viewport corner is not on screen", z)
+		}
+		if !b.onScreenUnit(unitAt(b.cam.ViewW-4, b.cam.ViewH-camera.OriginY-4)) {
+			t.Errorf("at %s a unit just inside the far corner is not on screen", z)
+		}
+		if b.onScreenUnit(unitAt(camera.OriginX-8, 200)) {
+			t.Errorf("at %s a unit under the side rail is on screen", z)
+		}
+		if b.onScreenUnit(unitAt(b.cam.ViewW+8, 200)) {
+			t.Errorf("at %s a unit past the right edge is on screen", z)
+		}
 	}
 }

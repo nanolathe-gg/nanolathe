@@ -160,3 +160,34 @@ func TestPickSnapshotUnitRetainsLowestSlotOnEqualScore(t *testing.T) {
 		t.Fatalf("equal-score winner = %d (ok=%v), want the lowest slot 3", h, ok)
 	}
 }
+
+// Off a rest step the pointer is a surface pixel of the PRESENTED picture while
+// the hull is projected at the record step, and the presented position of a
+// world point is Project_f(w - cam) from the framebuffer origin (§16.4, §16.5).
+// The pick therefore converts the pointer about the beam origin: a click on
+// the unit's presented rectangle must select it, and a click the view origin
+// away must not. The first build passed the surface point to a bridge that
+// expects beam pixels, which is exactly the second case, and selected the wrong
+// unit or nothing at some factors.
+func TestPickSnapshotUnitConvertsThePresentedPointerOffARestStep(t *testing.T) {
+	m := hullTestModel()
+	src := UnitHullModelFunc(func(string) *compiledmodel.Model { return m })
+	f := &frame.Frame{Units: []frame.UnitView{hullTestView()}}
+	for _, z := range []camera.Zoom{camera.ZoomUnit / 2, camera.ZoomUnit * 7 / 10, camera.ZoomUnit * 13 / 10, camera.ZoomUnit * 7 / 4} {
+		cam := &camera.Camera{X: 40, Z: 40, ViewW: 1024, ViewH: 768, MapW: 4096, MapH: 4096}
+		cam.Zoom, cam.Scale = z, z.Step()
+		u := f.Units[0]
+		wx, wy, wz := int32(u.X>>16), int32(u.Y>>16), int32(u.Z>>16)
+		// The unit's centre as presented: the same projection the strategic
+		// markers and the executor's transform agree on.
+		px, py := z.Project(wx-cam.X), z.Project(wz-(wy>>1)-cam.Z)
+		if h, _, ok := PickSnapshotUnit(f, px, py, cam, 0, src); !ok || h != 1 {
+			t.Errorf("at %s a click on the presented centre (%d,%d) did not select: handle=%d ok=%v", z, px, py, h, ok)
+		}
+		// The same click displaced by the view origin, which is where the
+		// beam-pixel bridge put a surface point, is off the hull entirely.
+		if _, _, ok := PickSnapshotUnit(f, px+camera.OriginX, py+camera.OriginY, cam, 0, src); ok {
+			t.Errorf("at %s a click one view origin away from the unit still selected it", z)
+		}
+	}
+}

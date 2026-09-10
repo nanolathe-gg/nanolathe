@@ -2193,29 +2193,36 @@ it. The first build of this section anchored on the raw framebuffer point,
 which held the world 128/f pixels left of and 32/f above the pointer fixed
 instead, and the map slid under the cursor.
 
-### 16.6 The wheel, the ease and the snap — contract Z5
+### 16.6 The wheel, the steps and the ease — contract Z5
 
 `camera.ZoomController` is the state machine, driven once per host Update from
 the battle's camera pass. Its clock is host Updates, supplied by the platform
 layer; no simulation tick is read [I6].
 
-* **The wheel** moves a *target*, not the live factor, on a log scale: one wheel
-  unit multiplies the target by `2^ZoomWheelExponent`, so a trackpad's
-  fractional deltas compose the way a notched wheel's whole ones do. Wheel-up
-  zooms in. The gesture is anchored at the pointer, and the anchor is kept for
-  the whole animation.
+* **The steps.** `ZoomSteps` is the ascending list {0.25, 0.5, 0.75, 1, 1.25,
+  1.5, 1.75, 2}: five detail views at and above 1× and three tactical views
+  below it. The target is always one of them, or the map's floor (§16.7) when
+  the lowest steps fall under it.
+* **The wheel** moves the *target* one step per notch: every `ZoomWheelNotch`
+  of travel (a thousandth-units count, so a notched mouse's whole unit is one
+  step) goes to the next step up for a scroll up and the next step down for a
+  scroll down. A trackpad's fractions bank until they are worth a notch; a
+  reversal discards what is banked, so drift does not step. From a factor
+  between steps — the ease in flight, a free `--zoom` — the wheel goes to the
+  nearest step in its direction of travel, so it always lands on a step. The
+  gesture is anchored at the pointer, and the anchor is kept for the whole
+  animation.
 * **The ease** closes `ZoomEaseFraction` of the remaining gap per Update, moves
   at least one unit so an integer factor cannot stall, and settles outright
-  inside `ZoomSettleEpsilon`.
-* **The snap.** After `ZoomIdleUpdates` quiet Updates the target eases onto a
-  rest step if it is within `ZoomSnapBand` of one. `ZoomRestSteps` is
-  {1, 1.25, 1.5, 1.75, 2}. **Nothing below 1× snaps**: the strategic range is
-  continuous and has no preferred stopping point, and snapping there would fight
-  a player pulling out to look at the map.
+  inside `ZoomSettleEpsilon`. It is what makes a notch a glide rather than a
+  cut, and it is the only time the live factor is off a step.
 
-Every one of those five names is a **feel-tuning knob**, not a derived value,
-and they live together at the top of `internal/camera/zoomfeel.go` so they can
-be tuned by hand.
+The first build of this section had a free log-scale wheel with an idle snap
+onto the detail steps and nothing below 1×. The play test preferred discrete
+steps with the glide between them, on both sides of 1×, and that is what stands.
+Every one of the names above is a **feel-tuning knob**, not a derived value, and
+they live together at the top of `internal/camera/zoomfeel.go` so they can be
+tuned by hand.
 
 The wheel binding is Nanolathe's, not retail's. Retail leaves the wheel to the
 active GUI list under the pointer [07 §2][07 §10], and the UI boundary still
@@ -2261,12 +2268,13 @@ least 1×, and clampAxis's view-larger-than-map domain stays exactly where
 |---|---|
 | 2× … 1× | everything, recorded at the 2× step |
 | 1× … 0.625× | everything, recorded at the 1× step (2× above 1×) |
-| 0.625× … 0.5× | everything, plus the marker layer fading in |
-| below 0.5× | terrain, fog, features and their shadows, selection fills, the build ghost and queue overlay, drag rectangle, dotted paths, markers |
+| 0.625× … 0.5× (exclusive) | everything, plus the marker layer fading in |
+| 0.5× and below | terrain, fog, features and their shadows, selection fills, the build ghost and queue overlay, drag rectangle, dotted paths, markers |
 
 ### 16.10 What the strategic view drops — contract Z7
 
-Below `strategicModelCut` (0.5×) the recorder does not emit unit models,
+At and below `strategicModelCut` (0.5×) — inclusive, so the 0.5× wheel step of
+§16.6 is a marker view — the recorder does not emit unit models,
 projectiles, effect strips, trails, unit labels or health bars. Terrain, fog,
 **the features** — sprite and 3DO alike, with their shadows — the selection
 quad, the build ghost, the order-queue overlay, the drag rectangle and the

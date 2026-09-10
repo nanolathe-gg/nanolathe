@@ -19,9 +19,9 @@ import (
 // Strategic-view thresholds (§16.10, §16.11). Like the feel knobs in
 // internal/camera/zoomfeel.go these are tuning values, not retail findings.
 const (
-	// strategicModelCut is the factor below which unit models, projectiles,
-	// effects, trails and unit labels stop being recorded. At and above it the
-	// world is drawn in full. Features are NOT gated on it: they record at
+	// strategicModelCut is the factor at and below which unit models,
+	// projectiles, effects, trails and unit labels stop being recorded. Above
+	// it the world is drawn in full. Features are NOT gated on it: they record at
 	// every factor (§16.10).
 	strategicModelCut = camera.ZoomUnit / 2 // 0.5x
 	// strategicMarkerOn is the factor at which the marker layer starts to fade
@@ -175,7 +175,10 @@ func (c *Client) liveZoom() camera.Zoom {
 // recorded and the marker layer replaces the units (§16.10). Terrain, fog,
 // features, the selection fills and the drag rectangle are not gated on it.
 func (c *Client) strategicView() bool {
-	return c.liveZoom() < strategicModelCut
+	// Inclusive, so the 0.5x WHEEL STEP (camera.ZoomSteps) is a marker view
+	// and not the one factor at which both the models and the fully faded-in
+	// markers are drawn together.
+	return c.liveZoom() <= strategicModelCut
 }
 
 // markerAlpha is the strategic layer's fade: zero at and above

@@ -154,11 +154,15 @@ func PickSnapshotUnit(f *frame.Frame, sx, sy int32, cam *camera.Camera, viewer u
 		return 0, frame.UnitView{}, false
 	}
 	// The hull corners come from WorldToScreen, which projects at the RECORD
-	// step; the pointer arrives in the PRESENTED picture's own pixels. The two
-	// are the same space at every rest factor and differ only while the modern
-	// executor's free zoom is in flight, which is what ScreenToRecord bridges
-	// (DESIGN_GPU_RENDERER §16.4).
-	sx, sy = cam.ScreenToRecord(sx, sy)
+	// step; the pointer arrives in the PRESENTED picture's own surface pixels.
+	// The two are the same space at every rest factor and differ only while the
+	// modern executor's free zoom is in flight, which is what the bridge is for
+	// (DESIGN_GPU_RENDERER §16.4). Surface pixels carry no beam origin, so the
+	// bridge is taken about it, exactly as recordRect takes it for the drag
+	// rectangle: passing the surface point straight to ScreenToRecord, which
+	// expects beam pixels, shifted the pick by the view origin scaled through
+	// the factor, and a click off a rest step selected the wrong unit.
+	sx, sy = recordPoint(cam, sx, sy)
 	best := pool.Handle(0)
 	var bestView frame.UnitView
 	// The reduction seeds its running best above every reachable score and
@@ -216,17 +220,26 @@ func SnapshotUnitHandlesInRect(f *frame.Frame, cam *camera.Camera, rect Rect, vi
 	return out
 }
 
-// recordRect converts a surface-space rectangle of the presented picture into
-// the record space unit positions are projected in (§16.4). It is the identity
-// at every rest factor.
+// recordPoint converts a surface-space point of the presented picture into the
+// record space unit positions are projected in (§16.4). Surface coordinates
+// carry no beam origin and ScreenToRecord takes beam pixels, so the bridge is
+// applied about the origin and taken off again. It is the identity at every
+// rest factor.
+func recordPoint(cam *camera.Camera, x, y int32) (int32, int32) {
+	if cam == nil || cam.AtRestStep() {
+		return x, y
+	}
+	rx, ry := cam.ScreenToRecord(x+camera.OriginX, y+camera.OriginY)
+	return rx - camera.OriginX, ry - camera.OriginY
+}
+
+// recordRect is recordPoint on both corners of a surface-space rectangle. It
+// is the identity at every rest factor.
 func recordRect(cam *camera.Camera, r Rect) Rect {
 	if cam == nil || cam.AtRestStep() {
 		return r
 	}
-	minX, minY := cam.ScreenToRecord(r.MinX+camera.OriginX, r.MinY+camera.OriginY)
-	maxX, maxY := cam.ScreenToRecord(r.MaxX+camera.OriginX, r.MaxY+camera.OriginY)
-	return Rect{
-		MinX: minX - camera.OriginX, MinY: minY - camera.OriginY,
-		MaxX: maxX - camera.OriginX, MaxY: maxY - camera.OriginY,
-	}
+	minX, minY := recordPoint(cam, r.MinX, r.MinY)
+	maxX, maxY := recordPoint(cam, r.MaxX, r.MaxY)
+	return Rect{MinX: minX, MinY: minY, MaxX: maxX, MaxY: maxY}
 }
