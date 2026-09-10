@@ -425,6 +425,24 @@ func (s *Session) stepHealTimeSelfRepair(u *units.Unit, tick uint32) {
 	s.Build.Repair(u, u, construction.HealQuantum(u.Def.HealTime))
 }
 
+// stepWindGeneratorCallbacks is the wind-generator part of a unit visit's
+// general update. A phase-8 redraw leaves Changed set for the following
+// phase-2 sweep, where every positive-windgenerator definition starts these
+// deferred callbacks before weapons and the visit's one normal COB drain
+// [04 R-MOV-03 §1][05 R-PROD-01 §3][04 R-CB-01 §5].
+func (s *Session) stepWindGeneratorCallbacks(u *units.Unit) {
+	if s == nil || s.Wind == nil || !s.Wind.Changed || u == nil || u.Def == nil || !(u.Def.WindGenerator > 0) {
+		return
+	}
+	// Production binding retains its callback bridge on the unit before the
+	// sweep. Keep that binding as the callback/error boundary; this producer
+	// neither starts a second VM path nor drains it.
+	if bridge := u.ScriptBridge(); bridge != nil {
+		bridge.SetDirection(s.Wind.Heading)
+		bridge.SetSpeed(s.Wind.Strength)
+	}
+}
+
 func (s *Session) stepUnitPhase(tick uint32) {
 	// Begin movement's per-tick occupancy transaction for the phase-2 unit sweep.
 	if s.Movement != nil {
@@ -452,6 +470,10 @@ func (s *Session) stepUnitPhase(tick uint32) {
 			if !visit {
 				return
 			}
+			// Step 2: general unit update. Its wind notification is outside the
+			// controller-1/2 work gate, and queues before weapons and the one
+			// normal COB drain below [04 R-MOV-03 §1][05 R-PROD-01 §3].
+			s.stepWindGeneratorCallbacks(u)
 			// weapon slot/service step per unit [06 §3][06 §4] — stable weapon index once-compiled [ON-04].
 			// Step 3 of [04 R-MOV-03 §1] runs "for an owner of controller 1 or
 			// 2 only"; the COB drain of step 4 is unconditional, so the else

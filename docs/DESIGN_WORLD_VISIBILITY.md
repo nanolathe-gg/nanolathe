@@ -162,7 +162,11 @@ times the rounded fixed-point trig component for the positive strength
 `[05 R-PROD-01 §3]` `[01 §7.3]` `[03 R-WIND-01]` `[01 R-CORE-01 §4.4.1]`.
 Battle entry zeroes the deadline and draws nothing, so the first chain fires on
 the first sub-tick `[01 R-CORE-02]`. The briefing-screen draws are front-end
-display state with no battle-side reader.
+display state with no battle-side reader. The phase-2 general unit update reads
+the prior phase-8 change flag during the next unit sweep and, for each eligible
+wind generator, queues its existing script notifications before weapons and the
+normal drain; neither the wind phase nor settlement calls the script directly
+`[04 R-MOV-03 §1]` `[05 R-PROD-01 §3]`.
 
 **Save boxes** (`retail_save.go`). The detached metal image and the packed
 placer-nibble image are produced and restored here so a retail account round-trip

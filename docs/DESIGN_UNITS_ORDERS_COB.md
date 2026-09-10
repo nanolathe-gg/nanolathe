@@ -525,14 +525,16 @@ with no null test, so retail faults at unit creation instead. Nanolathe rejects
 such a definition at catalog compile with the standard diagnostic shape and never
 creates a scriptless unit `[04 R-COB-04 §8]` `[04 R-COB-01 §3]`.
 
-**C17 — same-tick windows.** In order: unit update (queues the direction and
-speed callbacks) → weapon update (queues target-cleared, the aim and fire
+**C17 — same-tick windows.** In order: unit update (the phase-2 session visit
+calls the wind-generator notifier after the player gate, which queues the
+direction and speed callbacks) → weapon update (queues target-cleared, the aim and fire
 callbacks, the rock callback) → the normal drain (delta 1, eight thread slots
 then one piece pass) → orders and build work → movement integration (the
 immediate move-rate and occupancy callbacks) → slot-end death handling. Deferred
 callbacks produced before the normal pass run in the same visit; an immediate
 wake start performs its own all-slot delta-zero pass, which can run a later one
-earlier `[04 §5.3]` `[04 R-COB-02 §2]` [I7].
+earlier `[04 R-MOV-03 §1]` `[05 R-PROD-01 §3]` `[04 §5.3]`
+`[04 R-COB-02 §2]` [I7].
 
 **C18 — move-rate tiers.** Category 0 when the inhibit bit is set, the unit is
 attached, or both magnitudes are zero; otherwise category 1 at or below the lower
