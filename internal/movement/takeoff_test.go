@@ -205,7 +205,7 @@ func TestRectPerimeterArrivalIsBorderMembership(t *testing.T) {
 		t.Fatal("Park phase 0 installed no rectangle")
 	}
 	sys.ActivateMove(u, head)
-	ah := sys.arrivalHandles[u.Handle]
+	ah := handleRow(sys.arrivalHandles, u.Handle)
 	if ah == nil || ah.border == nil {
 		t.Fatal("a Park record's arrival handle carries no rectangle border [04 §7.2]")
 	}
@@ -227,7 +227,7 @@ func TestRectPerimeterArrivalIsBorderMembership(t *testing.T) {
 	if !onRectBorder(rect, other.X, other.Z) {
 		t.Fatalf("fixture cell (%d,%d) is not on the border %v", other.X, other.Z, rect)
 	}
-	coll := sys.Collisions[u.Handle]
+	coll := handleRow(sys.Collisions, u.Handle)
 	if coll == nil {
 		t.Fatal("no collision state for the product")
 	}

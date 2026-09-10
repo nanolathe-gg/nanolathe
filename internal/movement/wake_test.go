@@ -137,16 +137,16 @@ func TestActivateMoveBindsOnlyThePrimaryHead(t *testing.T) {
 	if !sys.ActivateMove(u, head) {
 		t.Fatal("head failed to activate")
 	}
-	bindingBefore := sys.activeOrders[h]
-	handleBefore := sys.arrivalHandles[h]
+	bindingBefore := handleRow(sys.activeOrders, h)
+	handleBefore := handleRow(sys.arrivalHandles, h)
 	if bindingBefore == nil || handleBefore == nil {
 		t.Fatalf("head bind incomplete binding=%v handle=%v", bindingBefore, handleBefore)
 	}
 	if sys.ActivateMove(u, behind) {
 		t.Fatal("a record behind the head must not take the mover")
 	}
-	if sys.activeOrders[h] != bindingBefore || sys.arrivalHandles[h] != handleBefore {
-		t.Fatalf("refused bind disturbed the head: binding=%v handle=%v", sys.activeOrders[h], sys.arrivalHandles[h])
+	if handleRow(sys.activeOrders, h) != bindingBefore || handleRow(sys.arrivalHandles, h) != handleBefore {
+		t.Fatalf("refused bind disturbed the head: binding=%v handle=%v", handleRow(sys.activeOrders, h), handleRow(sys.arrivalHandles, h))
 	}
 }
 
@@ -216,7 +216,7 @@ func TestHelpBuildInstallsAnnulusAndArrivesBesideTarget(t *testing.T) {
 	if !sys.ActivateMove(builder, head) {
 		t.Fatal("HelpBuild head failed to reach the mover")
 	}
-	ah := sys.arrivalHandles[bh]
+	ah := handleRow(sys.arrivalHandles, bh)
 	if ah == nil || ah.payload == nil {
 		t.Fatalf("HelpBuild bound no annulus payload: %+v", ah)
 	}

@@ -73,7 +73,7 @@ func TestAirToGroundHoverStandoffFacesTheTarget(t *testing.T) {
 		if n.Phase != 3 {
 			continue
 		}
-		fl := sys.Flights[u.Handle]
+		fl := handleRow(sys.Flights, u.Handle)
 		if fl == nil || fl.Command == nil {
 			continue
 		}
@@ -120,7 +120,7 @@ func TestAirToGroundOffMapForcesPhaseTwo(t *testing.T) {
 	// The executor reads the completed stamp's retained sector, not these
 	// coordinates directly. Commit and stamp this authored move before asking
 	// the off-map gate.
-	fl := sys.Flights[u.Handle]
+	fl := handleRow(sys.Flights, u.Handle)
 	fl.X, fl.Y, fl.Z = int32(u.X), int32(u.Y), int32(u.Z)
 	sys.commitFlightState(u, fl)
 	sys.syncMoverStamp(u)
@@ -142,7 +142,7 @@ func TestAirToGroundOffMapForcesPhaseTwo(t *testing.T) {
 	if n.DynamicGate != airLegGateStrike {
 		t.Fatalf("gate %#x, want phase 2's %#x — not the recovery leg's 0xE0 [04 R-AIR-01 §8]", n.DynamicGate, airLegGateStrike)
 	}
-	fl = sys.Flights[u.Handle]
+	fl = handleRow(sys.Flights, u.Handle)
 	if fl == nil || fl.Command == nil {
 		t.Fatal("no flight command block")
 	}

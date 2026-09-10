@@ -204,6 +204,17 @@ func newFilingFixture(slots int) *filingFixture {
 	return &filingFixture{sectorFixture: newSectorFixture(slots), filings: make([]SectorFiling, slots)}
 }
 
+// VisitUnfiledOverlapCandidates yields only the candidates the stamp has not
+// filed yet; the filed ones reach the scan through their sector buckets.
+func (f *filingFixture) VisitUnfiledOverlapCandidates(fn func(id int)) {
+	for _, id := range f.live {
+		if id > 0 && id < len(f.filings) && f.filings[id].Filed {
+			continue
+		}
+		fn(id)
+	}
+}
+
 func (f *filingFixture) OverlapFiling(id int) *SectorFiling {
 	if id <= 0 || id >= len(f.filings) || !f.rect[id].ok {
 		return nil

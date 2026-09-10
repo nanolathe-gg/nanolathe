@@ -55,16 +55,16 @@ func (s *System) PlaceUnit(req orders.PlaceRequest) bool {
 	// on the unit's transform-dirty bit and on the mover record's own flag; the
 	// ground post-move correction reads either [04 R-MOV-01 §5].
 	u.Flags |= unitTransformDirty
-	if fl := s.Flights[req.Unit]; fl != nil {
+	if fl := handleRow(s.Flights, req.Unit); fl != nil {
 		fl.X = int32(u.X.Raw())
 		fl.Y = int32(u.Y.Raw())
 		fl.Z = int32(u.Z.Raw())
 	}
-	if st := s.Steers[req.Unit]; st != nil {
+	if st := handleRow(s.Steers, req.Unit); st != nil {
 		st.X = int32(u.X.Raw())
 		st.Z = int32(u.Z.Raw())
 	}
-	coll := s.Collisions[req.Unit]
+	coll := handleRow(s.Collisions, req.Unit)
 	if coll == nil {
 		// No collision record: the unit holds no occupancy word, so the XYZ
 		// write is the whole commit.

@@ -137,6 +137,15 @@ type Binding struct {
 	// one binding, so a single buffer per binding replaces a per-call
 	// allocation in the movement and construction tick paths.
 	composeScratch []model.PieceState
+	// composeXform and composeChain are the composition's own reusable
+	// storage. ComposePiece reads the world offset out of the transform and
+	// keeps nothing else, so the node chain it composes was allocated fresh
+	// and dropped on every call -- 14% of everything the simulation allocated.
+	// ComposeInto writes into the retained transform's node storage instead,
+	// which is what that entry point exists for; the arithmetic is the same
+	// [03 §2.4] C21.
+	composeXform model.Transform
+	composeChain model.ComposeScratch
 }
 
 // BindStrict resolves, parses, links, and initializes one production COB
@@ -286,7 +295,8 @@ func (b *Binding) ComposePiece(cobPiece int, heading, pitch, bank uint16) ([3]nu
 		}
 	}
 	model.FoldRootAngles(states, b.Model.Root, heading, pitch, bank)
-	return model.Compose(b.Model, states, modelPiece).WorldOffset(), true
+	b.composeXform = model.ComposeInto(b.Model, states, modelPiece, b.composeXform, &b.composeChain)
+	return b.composeXform.WorldOffset(), true
 }
 
 // SetSimulationRNG binds a session-owned stream to the production VM and all

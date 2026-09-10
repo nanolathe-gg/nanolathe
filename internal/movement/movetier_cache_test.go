@@ -32,7 +32,7 @@ func moveTierFixture(t *testing.T) (*System, *units.Unit, *CollisionState) {
 	system.BindWorld(w)
 	u := w.Unit(h)
 	system.EnsureUnit(u)
-	coll := system.Collisions[h]
+	coll := handleRow(system.Collisions, h)
 	if coll == nil {
 		t.Fatal("fixture mover has no collision state")
 	}
@@ -136,8 +136,8 @@ func TestMoveTierCacheHoldsStaleVerdictUntilNextCrossCellProposal(t *testing.T) 
 	queue := orders.QueueForUnit(mover)
 	queue.Push(moveID, orders.Node{GoalX: world.CellToWorld(3), GoalZ: world.CellToWorld(0)})
 	head := queue.Head()
-	system.Routes[moverHandle].PublishAtRevision([]Point{{X: 0, Z: 0}, {X: 48, Z: 0}}, system.staticObstacleRevision())
-	system.activeOrders[moverHandle] = &activeMove{order: head, token: 41}
+	handleRow(system.Routes, moverHandle).PublishAtRevision([]Point{{X: 0, Z: 0}, {X: 48, Z: 0}}, system.staticObstacleRevision())
+	setHandleRow(&system.activeOrders, moverHandle, &activeMove{order: head, token: 41})
 	system.nextActivation = 41
 
 	system.BeginTick(1)
@@ -146,7 +146,7 @@ func TestMoveTierCacheHoldsStaleVerdictUntilNextCrossCellProposal(t *testing.T) 
 	if !res.Blocked {
 		t.Fatalf("cross-cell proposal into the occupant was not rejected: %+v", res)
 	}
-	coll := system.Collisions[moverHandle]
+	coll := handleRow(system.Collisions, moverHandle)
 	if !coll.Blocked {
 		t.Fatal("the verdict did not persist on the mover's blocked flag [04 R-COLL-01 §5]")
 	}

@@ -135,7 +135,7 @@ func TestSameCellCommitLeavesTheWordsAlone(t *testing.T) {
 func TestTakeoffMovesTheStampToTheAirWordAndLandingMovesItBack(t *testing.T) {
 	sys, _, u := takeoffFixture(t)
 	ter := sys.Terrain
-	coll := sys.Collisions[u.Handle]
+	coll := handleRow(sys.Collisions, u.Handle)
 	if coll == nil {
 		t.Fatal("the fixture aircraft has no collision state")
 	}

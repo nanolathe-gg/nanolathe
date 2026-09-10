@@ -333,9 +333,9 @@ func (s *System) syncCarriedUnit(w *units.World, cargo *units.Unit) {
 	// cargo mover representation; no mover means an exact zero vector
 	// [04 R-FAC-02 §2].
 	carrierVX, carrierVY, carrierVZ, carrierSpeed := int32(0), int32(0), int32(0), int32(0)
-	if fl := s.Flights[carrier.Handle]; fl != nil {
+	if fl := handleRow(s.Flights, carrier.Handle); fl != nil {
 		carrierVX, carrierVY, carrierVZ, carrierSpeed = fl.VX, fl.VY, fl.VZ, fl.Speed
-	} else if coll := s.Collisions[carrier.Handle]; coll != nil {
+	} else if coll := handleRow(s.Collisions, carrier.Handle); coll != nil {
 		carrierVX, carrierVY, carrierVZ, carrierSpeed = coll.VX, coll.VY, coll.VZ, coll.Speed
 	}
 	cargo.Move.Speed = numeric.Fixed(carrierSpeed)
@@ -351,7 +351,7 @@ func (s *System) syncCarriedUnit(w *units.World, cargo *units.Unit) {
 	cargo.Move.VelZ = numeric.Fixed(int64(carrierVZ))
 	// A carried flight state is a mirror of the carrier's committed motion;
 	// its integrator must not advance the cargo independently [04 R-FAC-02 §2].
-	if flCargo, ok := s.Flights[cargo.Handle]; ok {
+	if flCargo := handleRow(s.Flights, cargo.Handle); flCargo != nil {
 		flCargo.X = int32(cargo.X.Raw())
 		flCargo.Y = int32(cargo.Y.Raw())
 		flCargo.Z = int32(cargo.Z.Raw())
@@ -361,13 +361,13 @@ func (s *System) syncCarriedUnit(w *units.World, cargo *units.Unit) {
 		flCargo.Speed = carrierSpeed
 		flCargo.Heading = cargo.Move.Heading
 	}
-	if stCargo, ok := s.Steers[cargo.Handle]; ok {
+	if stCargo := handleRow(s.Steers, cargo.Handle); stCargo != nil {
 		stCargo.X = int32(cargo.X.Raw())
 		stCargo.Z = int32(cargo.Z.Raw())
 		stCargo.Heading = cargo.Move.Heading
 		stCargo.Speed = int32(cargo.Move.Speed.Raw())
 	}
-	if collCargo, ok := s.Collisions[cargo.Handle]; ok {
+	if collCargo := handleRow(s.Collisions, cargo.Handle); collCargo != nil {
 		collCargo.X = int32(cargo.X.Raw())
 		collCargo.Z = int32(cargo.Z.Raw())
 		collCargo.Y = int32(cargo.Y.Raw())
@@ -682,10 +682,10 @@ func (s *System) TryUnload(w *units.World, carrierHandle, cargoHandle pool.Handl
 	// [04 §9.1], and the commit reads it as its proposed mode. The MIRROR the
 	// commit rewrites on success is the cached mode, which stays at the carried
 	// value so the next tick cannot take the same-cell fast path.
-	if fl, ok := s.Flights[cargoHandle]; ok {
+	if fl := handleRow(s.Flights, cargoHandle); fl != nil {
 		fl.Mode = cargo.Move.Mode & 0x3
 	}
-	if coll, ok := s.Collisions[cargoHandle]; ok {
+	if coll := handleRow(s.Collisions, cargoHandle); coll != nil {
 		coll.Mode = cargo.Move.Mode & 0x3
 	}
 	return true, ""

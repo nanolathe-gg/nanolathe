@@ -91,10 +91,10 @@ func TestEnsureUnitKeepsAllocatedHeading(t *testing.T) {
 	u.Move.Heading = allocated
 
 	system.EnsureUnit(u)
-	if got := system.Steers[h].Heading; got != allocated {
+	if got := handleRow(system.Steers, h).Heading; got != allocated {
 		t.Fatalf("EnsureUnit seeded SteerState.Heading = %d, want %d [04 §2.3b]", got, allocated)
 	}
-	if got := system.Collisions[h].Heading; got != allocated {
+	if got := handleRow(system.Collisions, h).Heading; got != allocated {
 		t.Fatalf("EnsureUnit seeded CollisionState.Heading = %d, want %d [04 §2.3b]", got, allocated)
 	}
 

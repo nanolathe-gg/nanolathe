@@ -60,11 +60,11 @@ func TestEnsureUnitAdmitsCreatorAndRestoreModes(t *testing.T) {
 			}
 			sys.EnsureUnit(u)
 
-			coll := sys.Collisions[h]
+			coll := handleRow(sys.Collisions, h)
 			if coll == nil || coll.Mode != tt.wantMode || coll.CachedMode != tt.wantMode {
 				t.Fatalf("collision modes = %#v, want %d", coll, tt.wantMode)
 			}
-			flight := sys.Flights[h]
+			flight := handleRow(sys.Flights, h)
 			if flight == nil || flight.Mode != tt.wantMode || flight.ModeMirror != tt.wantMode {
 				t.Fatalf("flight modes = %#v, want %d", flight, tt.wantMode)
 			}

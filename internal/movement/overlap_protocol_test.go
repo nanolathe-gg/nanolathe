@@ -3,7 +3,6 @@ package movement
 import (
 	"testing"
 
-	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
@@ -93,6 +92,12 @@ func (f *overlapFixture) VisitOverlapCandidates(fn func(id int)) {
 	for _, id := range f.live {
 		fn(id)
 	}
+}
+
+// VisitUnfiledOverlapCandidates: this fixture carries no filings at all, so
+// the stamp files nothing and every candidate is unfiled [04 R-COLL-01 §4A].
+func (f *overlapFixture) VisitUnfiledOverlapCandidates(fn func(id int)) {
+	f.VisitOverlapCandidates(fn)
 }
 
 func (f *overlapFixture) RestampFootprint(id int) {
@@ -382,7 +387,9 @@ func TestRestampFootprintReleasesDeselectedBuildingCells(t *testing.T) {
 		ID: 9, FootPrintX: 2, FootPrintZ: 1, Building: true,
 		Yard: yard, YardOpen: false, CachedAnchor: Cell{X: 5, Z: 5}, CachedMode: 1,
 	}
-	s := &System{Grid: g, Collisions: map[pool.Handle]*CollisionState{9: coll}}
+	s := &System{Grid: g}
+	s.growHandleTables(9)
+	setHandleRow(&s.Collisions, 9, coll)
 	f.restamp = s.RestampFootprint
 
 	if !s.stampBuildingGrid(Cell{X: 5, Z: 5}, 2, 1, yard, false, 9) {

@@ -11,11 +11,13 @@ import (
 
 func TestRetailMoverImagePreservesEstablishedState(t *testing.T) {
 	h := pool.Handle(7)
-	s := &System{Collisions: map[pool.Handle]*CollisionState{h: {
+	s := &System{}
+	s.growHandleTables(int(h))
+	setHandleRow(&s.Collisions, h, &CollisionState{
 		VX: 1, VY: -2, VZ: 3, LeanX: 4, LeanY: -5, LeanZ: 6,
 		Speed: 7, TurnResidual: -8, LastStampTick: 9, Mode: 2,
 		Blocked: true, SavedStateByte: 0xa0,
-	}}}
+	})
 	image, err := s.RetailMoverImage(h)
 	if err != nil {
 		t.Fatal(err)

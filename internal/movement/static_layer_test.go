@@ -64,7 +64,7 @@ func TestClassLayerAvoidsStaleMover(t *testing.T) {
 	}
 	// Scheduler tick should publish a successful route even though (5,5) is occupied [04 §8.2]
 	sys.Scheduler.Tick(60)
-	route := sys.Routes[hReq]
+	route := handleRow(sys.Routes, hReq)
 	if route == nil || !route.Active {
 		t.Fatalf("route should be active through transient mover cell [04 §8.2] static layer, got active=%v status=%v", route.Active, route.Status)
 	}
@@ -135,7 +135,7 @@ func TestStaticLayerDeterministicFixture(t *testing.T) {
 		q.Push(id, orders.Node{GoalX: world.CellToWorld(8), GoalZ: world.CellToWorld(8)})
 		sys.ActivateMove(w.Unit(hReq), q.Head())
 		sys.Scheduler.Tick(60)
-		route := sys.Routes[hReq]
+		route := handleRow(sys.Routes, hReq)
 		if route == nil || !route.Active {
 			return nil
 		}
@@ -174,7 +174,7 @@ func TestStaticLayerCommitStillBlocks(t *testing.T) {
 	// Clear and move mover to (1,0) for test
 	grid.Clear(Cell{X: 2, Z: 0}, 1, 1, int(hMover))
 	grid.Stamp(Cell{X: 1, Z: 0}, 1, 1, int(hMover))
-	moverColl := sys.Collisions[hMover]
+	moverColl := handleRow(sys.Collisions, hMover)
 	if moverColl != nil {
 		moverColl.CachedAnchor = Cell{X: 1, Z: 0}
 		moverColl.OldAnchor = Cell{X: 1, Z: 0}
@@ -182,7 +182,7 @@ func TestStaticLayerCommitStillBlocks(t *testing.T) {
 	hReq, _ := w.Create(def, 0, world.CellToWorld(0), 0, world.CellToWorld(0))
 	sys.EnsureUnit(w.Unit(hReq))
 	// Requester wants to step into (1,0) which is occupied
-	reqColl := sys.Collisions[hReq]
+	reqColl := handleRow(sys.Collisions, hReq)
 	reqColl.VX = int32(world.CellToWorld(1).Raw() - world.CellToWorld(0).Raw())
 	reqColl.VZ = 0
 	reqColl.Speed = 80000

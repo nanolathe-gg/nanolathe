@@ -42,8 +42,8 @@ func TestPathRequestSetupReadsTheAdmissionTimeCommittedCell(t *testing.T) {
 	if head.Satisfied&0x40 != 0 {
 		t.Fatalf("reachable goal raised the cannot-get-there bit: satisfied = %#x [04 R-COLL-01 §6]", head.Satisfied)
 	}
-	if route := sys.Routes[req.Unit]; route == nil || route.Count == 0 {
-		t.Fatalf("no route published: %+v", sys.Routes[req.Unit])
+	if route := handleRow(sys.Routes, req.Unit); route == nil || route.Count == 0 {
+		t.Fatalf("no route published: %+v", handleRow(sys.Routes, req.Unit))
 	}
 }
 
@@ -58,20 +58,20 @@ func TestPathWorkingSetSurvivesAMovingMover(t *testing.T) {
 	if work := sys.searchFunc(req, 65536, 0); work.Done {
 		t.Fatalf("admission with no pop budget should leave the search resumable: %+v", work)
 	}
-	admitted := sys.sessions[int(req.Unit)]
+	admitted := handleRow(sys.sessions, int(req.Unit))
 	if admitted == nil || admitted.session == nil {
 		t.Fatal("admission stored no working set")
 	}
 	start := admitted.session.Start()
 
 	// The mover walks a cell while the search is mid-flight.
-	if coll := sys.Collisions[u.Handle]; coll != nil {
+	if coll := handleRow(sys.Collisions, u.Handle); coll != nil {
 		coll.CachedAnchor = Cell{X: 3, Z: 3}
 	}
 	if work := sys.searchFunc(req, 65536, 1); work.Done && work.Status == path.StatusRejected {
 		t.Fatalf("continuation restarted the working set: %+v", work)
 	}
-	resumed := sys.sessions[int(req.Unit)]
+	resumed := handleRow(sys.sessions, int(req.Unit))
 	if resumed != nil && resumed.session != nil && resumed.session.Start() != start {
 		t.Fatalf("continuation re-read the live cell: start %v, want the admitted %v", resumed.session.Start(), start)
 	}

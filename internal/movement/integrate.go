@@ -56,23 +56,36 @@ type System struct {
 	// per-unit identity, not session-wide [04 §6.1] [04 §7.1].
 	Classes map[string]*content.MovementClass
 
-	Grid       *OccupancyGrid
-	Scheduler  *path.Scheduler
-	Routes     map[pool.Handle]*Route
-	Steers     map[pool.Handle]*SteerState
-	Collisions map[pool.Handle]*CollisionState
+	Grid      *OccupancyGrid
+	Scheduler *path.Scheduler
+	// The per-handle tables below are dense rows indexed by pool handle, not
+	// hashed maps [I5]. Handles are pool slots — dense by construction, slot 0
+	// null, reused immediately — so the identity IS the index and a nil (or
+	// zero) entry is "this handle holds none", which is what a map read of an
+	// absent key gave. Every row is sized to the bound world's pool capacity at
+	// BindWorld and grown by its writers otherwise, so a read never has to
+	// bounds-check a handle the pool could hand out. Nothing iterates any of
+	// them; every access is by handle [I1].
+	Routes     []*Route
+	Steers     []*SteerState
+	Collisions []*CollisionState
 	// collisionHistory is allocated only for an opted-in parity capture. It is
 	// appended after the complete movement sweep, never during diagnostic reads.
 	collisionHistory        []collisionHistoryEntry
 	collisionTraceEnabled   bool
 	collisionHistoryLimit   int
 	collisionHistoryDropped bool
-	Flights                 map[pool.Handle]*FlightState
-	profiles                map[pool.Handle]Profile // per-unit resolved movement profile [04 §6.1]
-	profileNames            map[pool.Handle]string  // per-unit canonical class key the profile resolved from [04 §6.1]; lookup-only [I1]
-	sessions                []*pathWorkingSet       // deterministic slice indexed by handle [04 §7.3] C11 C12 budget-honoring sessions
-	prevMoveTier            map[pool.Handle]int     // cached mover tier per unit for MoveRate edge emission [04 §5.2][GAP T15] C18
-	prevSFXBand             map[pool.Handle]int     // cached setSFXoccupy band per unit for edge emission [04 §5.2][GAP T15] C17 C18
+	Flights                 []*FlightState
+	// pendingFilings and pendingFiled are the collision records the sector
+	// bucket index does not know about because no stamp has filed them yet
+	// [04 R-COLL-01 §4A]; VisitUnfiledOverlapCandidates drains them.
+	pendingFilings []pool.Handle
+	pendingFiled   []bool
+	profiles       []*Profile        // per-unit resolved movement profile [04 §6.1]
+	profileNames   []string          // per-unit canonical class key the profile resolved from [04 §6.1]; lookup-only [I1]
+	sessions       []*pathWorkingSet // deterministic slice indexed by handle [04 §7.3] C11 C12 budget-honoring sessions
+	prevMoveTier   []int             // cached mover tier per unit for MoveRate edge emission [04 §5.2][GAP T15] C18
+	prevSFXBand    []int             // cached setSFXoccupy band per unit for edge emission [04 §5.2][GAP T15] C17 C18
 
 	// world is the units world bound via BindWorld for the phase-2 transaction.
 	// StepUnit needs it to fetch the *units.Unit for a handle without passing
@@ -112,7 +125,7 @@ type System struct {
 	// pathFailures is a publication diagnostic only. It never gates, counts, or
 	// schedules recovery; WantsRepath/LastRequestTick on Route own that state
 	// [04 R-MOV-01 §7][04 R-PATH-01 §8].
-	pathFailures map[pool.Handle]PathFailure
+	pathFailures []*PathFailure
 
 	// activeOrders is the single path activation boundary.  A route belongs to
 	// the order node that was active when its request was submitted, not merely
@@ -121,10 +134,10 @@ type System struct {
 	// head after a replace/purge in the same tick.  Direct movement callers do
 	// not bind an order and retain the legacy SubmitMove surface used by the
 	// movement package fixtures.
-	activeOrders   map[pool.Handle]*activeMove
+	activeOrders   []*activeMove
 	nextActivation uint64
-	arrivalHandles map[pool.Handle]*arrivalHandle // per-unit Move_Ground arrival handle [R-P0-01]
-	moveGoals      map[pool.Handle]*moveGoal      // per-unit movement-goal handle [04 §8.3][04 §7.4]
+	arrivalHandles []*arrivalHandle // per-unit Move_Ground arrival handle [R-P0-01]
+	moveGoals      []*moveGoal      // per-unit movement-goal handle [04 §8.3][04 §7.4]
 	pathProvider   *pathProvider
 	// AirSectors is the coarse second grid the map loader builds after the
 	// terrain is decoded: 128-world-unit cells whose smoothed byte is the
@@ -139,7 +152,7 @@ type System struct {
 	// now a goal payload on the flight command block, not a separate altitude
 	// cache [04 R-AIR-01 §1][04 R-AIR-01 §6]. Lookup-only; never ranged over
 	// [I1].
-	airOrders map[pool.Handle]*airOrderState
+	airOrders []*airOrderState
 	// These are session-owned lobby values. Zero keeps path scheduling inert
 	// until the session supplies explicit limits [04 R-PATH-01 §6].
 	PathPlayers   int
@@ -176,6 +189,21 @@ type pathProvider struct {
 	limit    int32
 }
 
+// dropPathSession clears the working set at a handle and hands the scheduler's
+// per-cell table back if that session held it. Every path that drops a session
+// goes through here: a session dropped without releasing leaves the table lent
+// and costs the next search the table, which is a performance loss and not a
+// behaviour one [04 §7.2].
+func (s *System) dropPathSession(idx int) {
+	if s == nil || idx < 0 || idx >= len(s.sessions) {
+		return
+	}
+	if ws := s.sessions[idx]; ws != nil {
+		ws.session.Release()
+	}
+	s.sessions[idx] = nil
+}
+
 // CancelPathRequest withdraws h's outstanding route request and drops any
 // partial search it owned. It reports whether a request was found.
 func (s *System) CancelPathRequest(h pool.Handle) bool {
@@ -184,7 +212,7 @@ func (s *System) CancelPathRequest(h pool.Handle) bool {
 	}
 	canceled := s.Scheduler.Cancel(h)
 	if int(h) < len(s.sessions) {
-		s.sessions[int(h)] = nil
+		s.dropPathSession(int(h))
 	}
 	return canceled
 }
@@ -241,25 +269,25 @@ func (p *pathProvider) Poll(player int) (path.Request, path.PollResult) {
 	// The scheduler reaches definitions, mover records, and movement classes
 	// through the selected physical slot. A defined non-mover consumes the
 	// visit but cannot ask a route follower [04 R-PATH-01 §6].
-	if u.Def == nil || p.system.Steers[h] == nil || p.system.Routes[h] == nil {
+	if u.Def == nil || handleRow(p.system.Steers, h) == nil || handleRow(p.system.Routes, h) == nil {
 		return path.Request{}, path.PollVisited
 	}
-	if _, ok := p.system.profiles[h]; !ok {
+	if handleRow(p.system.profiles, h) == nil {
 		return path.Request{}, path.PollVisited
 	}
-	if collision := p.system.Collisions[h]; collision == nil || collision.Building {
+	if collision := handleRow(p.system.Collisions, h); collision == nil || collision.Building {
 		return path.Request{}, path.PollVisited
 	}
 	r, ok := p.requests[player][h]
 	if !ok {
 		return path.Request{}, path.PollVisited
 	}
-	route := p.system.Routes[h]
+	route := handleRow(p.system.Routes, h)
 	if !route.WantsRepath || route.LastRequestTick+60 > p.tick {
 		return path.Request{}, path.PollVisited
 	}
 	if r.Activation != 0 {
-		binding := p.system.activeOrders[h]
+		binding := handleRow(p.system.activeOrders, h)
 		if binding == nil || binding.token != r.Activation || binding.order == nil {
 			delete(p.requests[player], h)
 			return path.Request{}, path.PollVisited
@@ -474,7 +502,7 @@ func goalCellForWorld(goal numeric.Fixed, foot int32) int32 {
 
 func (s *System) pathFootprint(u *units.Unit) (int32, int32) {
 	if s != nil && u != nil {
-		if coll := s.Collisions[u.Handle]; coll != nil {
+		if coll := handleRow(s.Collisions, u.Handle); coll != nil {
 			return int32(coll.FootPrintX), int32(coll.FootPrintZ)
 		}
 		profile := s.ProfileFor(u.Handle)
@@ -503,7 +531,7 @@ func (s *System) pathFootprint(u *units.Unit) (int32, int32) {
 // [04 R-PATH-01 §4][04 R-COLL-01 §1].
 func (s *System) pathStartCell(u *units.Unit) path.Cell {
 	if s != nil && u != nil {
-		if coll := s.Collisions[u.Handle]; coll != nil {
+		if coll := handleRow(s.Collisions, u.Handle); coll != nil {
 			return path.Cell{X: coll.CachedAnchor.X, Z: coll.CachedAnchor.Z}
 		}
 		fx, fz := s.pathFootprint(u)
@@ -521,7 +549,7 @@ func (s *System) livePathOrder(r path.Request) (*units.Unit, *orders.Node, bool)
 	if s == nil || s.world == nil || r.Activation == 0 {
 		return nil, nil, false
 	}
-	binding := s.activeOrders[r.Unit]
+	binding := handleRow(s.activeOrders, r.Unit)
 	if binding == nil || binding.order == nil || binding.token != r.Activation {
 		return nil, nil, false
 	}
@@ -544,7 +572,7 @@ func (s *System) ArrivalHandleFor(h pool.Handle) (goalX, goalZ int32, threshSq i
 	if s == nil || s.arrivalHandles == nil {
 		return 0, 0, 0, false
 	}
-	ah, ok := s.arrivalHandles[h]
+	ah := handleRow(s.arrivalHandles, h)
 	if !ok || ah == nil {
 		return 0, 0, 0, false
 	}
@@ -576,28 +604,20 @@ type StepResult struct {
 // Route.Publish [04 §7.3] C14.
 func NewSystem(terrain *world.Terrain, fallback Profile, grid *OccupancyGrid) *System {
 	s := &System{
-		Terrain:        terrain,
-		AirSectors:     NewAirSectorGrid(terrain), // built once at map load [04 R-AIR-01 §5]
-		airOrders:      make(map[pool.Handle]*airOrderState),
-		Fallback:       fallback,
-		Grid:           grid,
-		Routes:         make(map[pool.Handle]*Route),
-		Steers:         make(map[pool.Handle]*SteerState),
-		Collisions:     make(map[pool.Handle]*CollisionState),
-		Flights:        make(map[pool.Handle]*FlightState),
-		profiles:       make(map[pool.Handle]Profile),
-		profileNames:   make(map[pool.Handle]string),
-		prevMoveTier:   make(map[pool.Handle]int),
-		prevSFXBand:    make(map[pool.Handle]int),
-		pathFailures:   make(map[pool.Handle]PathFailure),
-		activeOrders:   make(map[pool.Handle]*activeMove),
-		arrivalHandles: make(map[pool.Handle]*arrivalHandle),
-		moveGoals:      make(map[pool.Handle]*moveGoal),
+		Terrain:    terrain,
+		AirSectors: NewAirSectorGrid(terrain), // built once at map load [04 R-AIR-01 §5]
+		Fallback:   fallback,
+		Grid:       grid,
 		// This composition root is a single-player system. A session with a
 		// lobby must overwrite these with its explicit values before ticking.
 		PathPlayers:   1,
 		PathUnitLimit: 1,
 	}
+	// Slot 0 is the null pool slot and holds nothing [I5], but allocating it
+	// here makes every row non-nil from construction, which is what callers
+	// that test a row against nil to ask "is this movement system composed?"
+	// have always read.
+	s.growHandleTables(0)
 	// The terrain owns the mover half of retail's single ground-occupancy word
 	// for the rest of the battle, so every placement check reaches both halves
 	// without its caller electing to pass one [04 R-COLL-01 §2].
@@ -662,6 +682,14 @@ func (s *System) BindWorld(w *units.World) {
 		return
 	}
 	s.world = w
+	// The pool's capacity is fixed for the battle and every handle it can hand
+	// out is below it, so sizing the per-handle tables here is what lets every
+	// read index without a bounds test of its own [I5].
+	if w != nil {
+		// Capacity excludes the null sentinel, so the highest handle the pool
+		// can hand out is that number [I5][01 §6.1].
+		s.growHandleTables(w.Capacity())
+	}
 	if s.pathProvider != nil {
 		changedWorld := s.pathProvider.world != w
 		s.pathProvider.world = w
@@ -927,7 +955,7 @@ func (s *System) applyAirPostMove(u *units.Unit, res StepResult, tick uint32) {
 	if s == nil || u == nil || u.Def == nil {
 		return
 	}
-	fl := s.Flights[u.Handle]
+	fl := handleRow(s.Flights, u.Handle)
 	if fl == nil {
 		return
 	}
@@ -941,7 +969,7 @@ func (s *System) applyAirPostMove(u *units.Unit, res StepResult, tick uint32) {
 		return
 	}
 	var lastProposal uint32
-	coll := s.Collisions[u.Handle]
+	coll := handleRow(s.Collisions, u.Handle)
 	if coll != nil {
 		lastProposal = coll.LastProposalTick
 	}
@@ -1213,7 +1241,7 @@ func (s *System) distSqToGoal(u *units.Unit) (uint64, bool) {
 	if gx, gz, ok := s.moveGoalForUnit(u); ok {
 		return squaredDistanceFixed(int64(gx), int64(gz), int64(u.X), int64(u.Z)), true
 	}
-	route := s.Routes[u.Handle]
+	route := handleRow(s.Routes, u.Handle)
 	if route != nil && route.Active && route.Count > 0 {
 		last := route.Points[route.Count-1]
 		wpX := int64(last.X) * 65536
@@ -1305,12 +1333,12 @@ func (s *System) detachOnArrival(u *units.Unit, ah *arrivalHandle) {
 	}
 	if !s.ReleaseGoalPayload(ah.order) {
 		s.CancelPathRequest(u.Handle)
-		if route := s.Routes[u.Handle]; route != nil {
+		if route := handleRow(s.Routes, u.Handle); route != nil {
 			route.Active = false
 			route.WantsRepath = false
 		}
 	}
-	delete(s.arrivalHandles, u.Handle)
+	setHandleRow(&s.arrivalHandles, u.Handle, nil)
 }
 
 // finalGoalReached raises the ground arrival bit 0x20 from the goal payload's
@@ -1327,8 +1355,8 @@ func (s *System) finalGoalReached(u *units.Unit, hadRoute bool) bool {
 		return false
 	}
 	// Arrival is defined only for an order that has an arrival handle bound [R-P0-01].
-	ah, ok := s.arrivalHandles[u.Handle]
-	if !ok || ah == nil || ah.order == nil {
+	ah := handleRow(s.arrivalHandles, u.Handle)
+	if ah == nil || ah.order == nil {
 		return false
 	}
 	// Verify handle still belongs to the active head; stale handles after a head
@@ -1338,7 +1366,7 @@ func (s *System) finalGoalReached(u *units.Unit, hadRoute bool) bool {
 	}
 	// Cached tile from occupancy commit (CollisionState.CachedAnchor) [R-P0-01][04 §8.2].
 	var tileX, tileZ int32
-	if coll, ok := s.Collisions[u.Handle]; ok && coll != nil {
+	if coll := handleRow(s.Collisions, u.Handle); coll != nil {
 		tileX = coll.CachedAnchor.X
 		tileZ = coll.CachedAnchor.Z
 	} else {
@@ -1472,7 +1500,7 @@ func (s *System) classKeyFor(h pool.Handle) string {
 	if s == nil || s.profileNames == nil {
 		return ""
 	}
-	return s.profileNames[h]
+	return handleRow(s.profileNames, h)
 }
 
 // noteOccupancyCommit records a unit's occupancy-commit tick on every
@@ -1500,8 +1528,10 @@ func (s *System) ProfileFor(h pool.Handle) Profile {
 	if s == nil {
 		return Profile{}
 	}
-	if p, ok := s.profiles[h]; ok {
-		return p
+	if int(h) < len(s.profiles) {
+		if p := handleRow(s.profiles, h); p != nil {
+			return *p
+		}
 	}
 	return s.Fallback
 }
@@ -1510,29 +1540,25 @@ func (s *System) recordPathFailure(h pool.Handle, status path.Status, tick uint3
 	if s == nil {
 		return
 	}
-	if s.pathFailures == nil {
-		s.pathFailures = make(map[pool.Handle]PathFailure)
-	}
-	s.pathFailures[h] = PathFailure{Status: status, Tick: tick}
+	setHandleRow(&s.pathFailures, h, &PathFailure{Status: status, Tick: tick})
 }
 
 // HasPathFailure reports whether a failure record stands for h.
 func (s *System) HasPathFailure(h pool.Handle) bool {
-	if s == nil || s.pathFailures == nil {
+	if s == nil || int(h) >= len(s.pathFailures) {
 		return false
 	}
-	_, ok := s.pathFailures[h]
-	return ok
+	return handleRow(s.pathFailures, h) != nil
 }
 
 // PathFailure returns h's recorded failure status and the tick it was
 // recorded on.
 func (s *System) PathFailure(h pool.Handle) (path.Status, uint32, bool) {
-	if s == nil || s.pathFailures == nil {
+	if s == nil || int(h) >= len(s.pathFailures) {
 		return 0, 0, false
 	}
-	rec, ok := s.pathFailures[h]
-	if !ok {
+	rec := handleRow(s.pathFailures, h)
+	if rec == nil {
 		return 0, 0, false
 	}
 	return rec.Status, rec.Tick, true
@@ -1540,19 +1566,22 @@ func (s *System) PathFailure(h pool.Handle) (path.Status, uint32, bool) {
 
 // PathFailureRecord returns h's failure record whole.
 func (s *System) PathFailureRecord(h pool.Handle) (PathFailure, bool) {
-	if s == nil || s.pathFailures == nil {
+	if s == nil || int(h) >= len(s.pathFailures) {
 		return PathFailure{}, false
 	}
-	rec, ok := s.pathFailures[h]
-	return rec, ok
+	rec := handleRow(s.pathFailures, h)
+	if rec == nil {
+		return PathFailure{}, false
+	}
+	return *rec, true
 }
 
 // ClearPathFailure drops h's failure record.
 func (s *System) ClearPathFailure(h pool.Handle) {
-	if s == nil || s.pathFailures == nil {
+	if s == nil || int(h) >= len(s.pathFailures) {
 		return
 	}
-	delete(s.pathFailures, h)
+	setHandleRow(&s.pathFailures, h, nil)
 }
 
 // IsGoalCellPassable reports whether h's movement profile admits cell as a
@@ -1581,15 +1610,15 @@ func (s *System) EnsureUnit(u *units.Unit) {
 		return
 	}
 	h := u.Handle
-	if _, ok := s.Routes[h]; ok {
+	if handleRow(s.Routes, h) != nil {
 		return
 	}
-	s.Routes[h] = &Route{}
+	setHandleRow(&s.Routes, h, &Route{})
 	// Resolve this unit's own movement profile once; every later passability,
 	// bias, footprint and occupancy decision for it reads this one [04 §6.1].
 	profile := s.resolveProfile(u)
-	s.profiles[h] = profile
-	s.profileNames[h] = s.classKeyOf(u)
+	setHandleRow(&s.profiles, h, &profile)
+	setHandleRow(&s.profileNames, h, s.classKeyOf(u))
 	// SteerState [M2][M3] with pitch accumulator and accel/brake plumbing.
 	//
 	// The mover's records start from the heading the unit already carries, not
@@ -1634,7 +1663,7 @@ func (s *System) EnsureUnit(u *units.Unit) {
 		flags |= 0x80000
 	}
 	steer.DefFlags = flags
-	s.Steers[h] = steer
+	setHandleRow(&s.Steers, h, steer)
 
 	// CollisionState. Building-class units use their authored FBI rectangle and
 	// yard bytes; mobile units retain the resolved movement-class rectangle and
@@ -1705,7 +1734,12 @@ func (s *System) EnsureUnit(u *units.Unit) {
 	coll.CachedAnchor = anchor
 	coll.OldAnchor = anchor
 	coll.CachedMode = initialMode
-	s.Collisions[h] = coll
+	setHandleRow(&s.Collisions, h, coll)
+	// A record no stamp has filed is in no sector bucket, so the clear's
+	// overlap scan has to be told about it separately [04 R-COLL-01 §4A].
+	// The stamp below files most of them immediately; the modes that write no
+	// cell keep the entry until their first commit that stamps.
+	s.noteUnfiledFiling(h)
 	if s.Grid != nil {
 		// Every successful stamp writes the occupant-age clock first, and unit
 		// creation is one of the stamp's writers: the creator stamps the new
@@ -1764,7 +1798,7 @@ func (s *System) EnsureUnit(u *units.Unit) {
 		// acceleration nobody wrote, and no retail source gives those values.
 		// A stationary aircraft is a visible content bug; a fabricated one is
 		// not.
-		s.Flights[h] = flight
+		setHandleRow(&s.Flights, h, flight)
 	}
 	// The retained air-sector link is published only after the initializer's
 	// footprint stamp has completed. FlightState receives its isolated mirror
@@ -1829,7 +1863,7 @@ func (s *System) SetBuildingYardState(h pool.Handle, open bool) {
 	if s == nil {
 		return
 	}
-	if coll := s.Collisions[h]; coll != nil && coll.Building {
+	if coll := handleRow(s.Collisions, h); coll != nil && coll.Building {
 		coll.YardOpen = open
 	}
 }
@@ -1860,7 +1894,7 @@ func (s *System) submitMove(handle pool.Handle, player uint8, start, goal path.C
 	// The legacy direct surface has no order installer to arm the follower.
 	// It still stages only payload; Poll reads this live flag and stamps the
 	// timestamp if and when its physical slot is admitted.
-	if route := s.Routes[handle]; route != nil {
+	if route := handleRow(s.Routes, handle); route != nil {
 		route.WantsRepath = true
 	}
 }
@@ -1962,17 +1996,14 @@ func (s *System) ActivateMove(u *units.Unit, head *orders.Node) bool {
 		// that lives behind its gate never ran [04 R-EGRESS-01].
 		return false
 	}
-	if s.activeOrders == nil {
-		s.activeOrders = make(map[pool.Handle]*activeMove)
-	}
 	// The air executors' phase 0 is the shared takeoff preamble, but it does not
 	// run here: it is the first leg the air executor of [04 R-AIR-01 §6] runs
 	// from the mover tick, where it installs the climb marker as the record's
 	// goal payload [04 R-AIR-01 §1]. Path activation is a ground concern.
-	if old, ok := s.activeOrders[u.Handle]; ok && old.order == head {
+	if old := handleRow(s.activeOrders, u.Handle); old != nil && old.order == head {
 		return false // exactly one submission per active order
 	}
-	_, wasBound := s.activeOrders[u.Handle]
+	wasBound := handleRow(s.activeOrders, u.Handle) != nil
 	if wasBound {
 		s.CancelPathRequest(u.Handle)
 		s.clearPathState(u.Handle)
@@ -1983,8 +2014,8 @@ func (s *System) ActivateMove(u *units.Unit, head *orders.Node) bool {
 	}
 	token := s.nextActivation
 	binding := &activeMove{order: head, token: token}
-	s.activeOrders[u.Handle] = binding
-	if route := s.Routes[u.Handle]; !wasBound && usableActiveRoute(u, route) && !s.HasPathRequest(u.Handle) {
+	setHandleRow(&s.activeOrders, u.Handle, binding)
+	if route := handleRow(s.Routes, u.Handle); !wasBound && usableActiveRoute(u, route) && !s.HasPathRequest(u.Handle) {
 		// The route is persisted but its order/goal binding is derived. Adoption
 		// does not stamp request-poll state; the wants-repath poll is the writer of
 		// LastRequestTick [04 R-MOV-01 §7][04 R-PATH-01 §8].
@@ -1999,7 +2030,7 @@ func (s *System) ActivateMove(u *units.Unit, head *orders.Node) bool {
 	fx, fz := s.pathFootprint(u)
 	goalObj := s.goalForOrderWithFootprint(u, goal, head, fx, fz)
 	s.bindRectSteeringGoal(u, head, goalObj, fx, fz)
-	if route := s.Routes[u.Handle]; route != nil && !selectedPoint {
+	if route := handleRow(s.Routes, u.Handle); route != nil && !selectedPoint {
 		goalPointX, goalPointZ, haveGoalPoint := groundGoalPoint(goalObj, u, fx, fz)
 		installGroundGoal(route, u, goalObj, goalPointX, goalPointZ, haveGoalPoint, allowSyntheticFor(head), s.staticObstacleRevision(), s.tick)
 		route.LastRequestTick = s.tick
@@ -2077,7 +2108,7 @@ func (s *System) ReplanMove(u *units.Unit, head *orders.Node) bool {
 	if s == nil || u == nil || head == nil || s.Scheduler == nil {
 		return false
 	}
-	if s.activeOrders == nil || s.activeOrders[u.Handle] == nil || s.activeOrders[u.Handle].order != head {
+	if s.activeOrders == nil || handleRow(s.activeOrders, u.Handle) == nil || handleRow(s.activeOrders, u.Handle).order != head {
 		return s.ActivateMove(u, head)
 	}
 	s.CancelPathRequest(u.Handle)
@@ -2087,7 +2118,7 @@ func (s *System) ReplanMove(u *units.Unit, head *orders.Node) bool {
 		s.nextActivation++
 	}
 	token := s.nextActivation
-	s.activeOrders[u.Handle].token = token
+	handleRow(s.activeOrders, u.Handle).token = token
 	start, goal, selectedPoint, _ := s.pathCellsForOrder(u, head)
 	// Path search is aimed at the goal handle, so a refresh re-paths to the
 	// same point the mover was already steering at — for a build order that is
@@ -2095,7 +2126,7 @@ func (s *System) ReplanMove(u *units.Unit, head *orders.Node) bool {
 	fx, fz := s.pathFootprint(u)
 	goalObj := s.goalForOrderWithFootprint(u, goal, head, fx, fz)
 	s.bindRectSteeringGoal(u, head, goalObj, fx, fz)
-	if route := s.Routes[u.Handle]; route != nil && !selectedPoint {
+	if route := handleRow(s.Routes, u.Handle); route != nil && !selectedPoint {
 		goalPointX, goalPointZ, haveGoalPoint := groundGoalPoint(goalObj, u, fx, fz)
 		installGroundGoal(route, u, goalObj, goalPointX, goalPointZ, haveGoalPoint, allowSyntheticFor(head), s.staticObstacleRevision(), s.tick)
 		route.LastRequestTick = s.tick
@@ -2116,7 +2147,7 @@ func (s *System) hasControllerGoal(h pool.Handle) bool {
 	if s == nil || s.moveGoals == nil {
 		return false
 	}
-	return s.moveGoals[h] != nil
+	return handleRow(s.moveGoals, h) != nil
 }
 
 // serviceGroundFollower runs the route follower's movement-tick service before
@@ -2167,7 +2198,7 @@ func (s *System) serviceGroundFollower(u *units.Unit, head *orders.Node, route *
 		route.Prune(Point{X: int32(int64(u.X) >> 16), Z: int32(int64(u.Z) >> 16)})
 	}
 	blocked := false
-	if coll := s.Collisions[u.Handle]; coll != nil {
+	if coll := handleRow(s.Collisions, u.Handle); coll != nil {
 		blocked = coll.Blocked
 	}
 	// Step 3 of the per-tick service, with the condition the section opens it
@@ -2196,7 +2227,7 @@ func (s *System) serviceGroundFollower(u *units.Unit, head *orders.Node, route *
 	if !route.WantsRepath || route.LastRequestTick+60 > tick || s.HasPathRequest(u.Handle) {
 		return arrived
 	}
-	binding := s.activeOrders[u.Handle]
+	binding := handleRow(s.activeOrders, u.Handle)
 	if binding == nil || binding.order != head {
 		return arrived
 	}
@@ -2217,7 +2248,7 @@ func (s *System) clearPathState(handle pool.Handle) {
 	if s == nil {
 		return
 	}
-	if route := s.Routes[handle]; route != nil {
+	if route := handleRow(s.Routes, handle); route != nil {
 		route.Active = false
 		route.WantsRepath = false
 		route.LastRequestTick = 0
@@ -2239,19 +2270,16 @@ func (s *System) DeactivateMove(handle pool.Handle) {
 	}
 	s.clearPathState(handle)
 	if s.activeOrders != nil {
-		delete(s.activeOrders, handle)
+		setHandleRow(&s.activeOrders, handle, nil)
 	}
 	if s.arrivalHandles != nil {
-		delete(s.arrivalHandles, handle)
+		setHandleRow(&s.arrivalHandles, handle, nil)
 	}
 }
 
 func (s *System) bindArrivalHandle(u *units.Unit, head *orders.Node) {
 	if s == nil || u == nil || head == nil {
 		return
-	}
-	if s.arrivalHandles == nil {
-		s.arrivalHandles = make(map[pool.Handle]*arrivalHandle)
 	}
 	// The names below are the rows whose arrival this handle serves even when
 	// the record's own goal payload is the implicit one derived from its stored
@@ -2294,7 +2322,7 @@ func (s *System) bindArrivalHandle(u *units.Unit, head *orders.Node) {
 		if !s.HasGroundGoal(u.Handle, head) {
 			// No installed payload: no arrival question to ask, and any handle
 			// left from a previous record must not signal.
-			delete(s.arrivalHandles, u.Handle)
+			setHandleRow(&s.arrivalHandles, u.Handle, nil)
 			return
 		}
 	}
@@ -2380,7 +2408,7 @@ func (s *System) bindArrivalHandle(u *units.Unit, head *orders.Node) {
 	if payload := s.moveGoalPayload(u.Handle, head); payload != nil {
 		ah.payload = payload
 	}
-	s.arrivalHandles[u.Handle] = ah
+	setHandleRow(&s.arrivalHandles, u.Handle, ah)
 	// [R-P0-01] initial gate must be 0 so phase 0 handler can arm 0xE0; otherwise static 0x402 would block.
 	if head.Phase == 0 && head.DynamicGate != 0 {
 		// Only clear initial static gate; preserve armed 0xE0 for re-binds after a replan where Phase already 1
@@ -2390,7 +2418,7 @@ func (s *System) bindArrivalHandle(u *units.Unit, head *orders.Node) {
 }
 
 func (s *System) headingFor(h pool.Handle) uint16 {
-	if steer := s.Steers[h]; steer != nil {
+	if steer := handleRow(s.Steers, h); steer != nil {
 		return steer.Heading
 	}
 	if s.world != nil {
@@ -2421,7 +2449,7 @@ func (s *System) searchFunc(r path.Request, scale int32, budget int) path.WorkRe
 			s.sessions = s.sessions[:need]
 		}
 	}
-	ws := s.sessions[idx]
+	ws := handleRow(s.sessions, idx)
 	needsNew := ws == nil || ws.session == nil || ws.goal != r.Goal || ws.activation != r.Activation
 	var sess *path.Session
 	if !needsNew {
@@ -2531,8 +2559,12 @@ func (s *System) searchFunc(r path.Request, scale int32, budget int) path.WorkRe
 				PassableValue: func(path.Cell) uint8 { return 0 },
 			}
 		}
+		// A replaced session gives the table back before the new one asks for
+		// it, so a goal or activation change does not leave it lent.
+		s.dropPathSession(idx)
+		cfg.Workspace = s.Scheduler.Workspace()
 		sess = path.NewSession(cfg)
-		s.sessions[idx] = &pathWorkingSet{session: sess, goal: r.Goal, activation: r.Activation}
+		setHandleRow(&s.sessions, idx, &pathWorkingSet{session: sess, goal: r.Goal, activation: r.Activation})
 		// Request setup reports its established 0x100/0x200 notification to
 		// the goal object's owning order even when search work continues. These
 		// bits are distinct from the final route diagnostic [04 R-PATH-01
@@ -2551,7 +2583,7 @@ func (s *System) searchFunc(r path.Request, scale int32, budget int) path.WorkRe
 	}
 	pops := sess.Popped() - before
 	if done {
-		s.sessions[idx] = nil
+		s.dropPathSession(idx)
 	}
 	return path.WorkResult{Points: points, Status: status, Done: done, SetupSteps: setup, Pops: pops}
 }
@@ -2716,7 +2748,7 @@ func (s *System) publishFunc(r path.Request, points []path.Point, status path.St
 	// when identity no longer matches; the next active head will submit through
 	// ActivateMove.
 	boundUnit, boundOrder, liveBinding := s.livePathOrder(r)
-	if _, bound := s.activeOrders[r.Unit]; bound && !liveBinding {
+	if bound := int(r.Unit) < len(s.activeOrders) && handleRow(s.activeOrders, r.Unit) != nil; bound && !liveBinding {
 		return
 	}
 	if len(points) == 0 && liveBinding && r.Goal != nil && !r.Goal.StartSatisfied(s.pathStartCell(boundUnit)) {
@@ -2725,10 +2757,10 @@ func (s *System) publishFunc(r path.Request, points []path.Point, status path.St
 		// R-PATH-01 §9][04 R-COLL-01 §6].
 		boundOrder.Satisfied |= 0x40
 	}
-	route := s.Routes[r.Unit]
+	route := handleRow(s.Routes, r.Unit)
 	if route == nil {
 		route = &Route{}
-		s.Routes[r.Unit] = route
+		setHandleRow(&s.Routes, r.Unit, route)
 	}
 	mPoints := make([]Point, len(points))
 	for i, p := range points {
@@ -2763,12 +2795,6 @@ func (s *System) emitMovementCallbacks(u *units.Unit, speed int32) {
 	if s == nil || u == nil {
 		return
 	}
-	if s.prevMoveTier == nil {
-		s.prevMoveTier = make(map[pool.Handle]int)
-	}
-	if s.prevSFXBand == nil {
-		s.prevSFXBand = make(map[pool.Handle]int)
-	}
 	// The tier-0 override's first term is the mover's PERSISTED blocked flag.
 	// [04 §5.2]'s "mover inhibit bit (bit 2 of the mover's state byte)" and
 	// [04 R-COLL-01 §5]'s blocked flag are one and the same bit — the state byte
@@ -2787,7 +2813,7 @@ func (s *System) emitMovementCallbacks(u *units.Unit, speed int32) {
 	// establish which maintained value must reach this classifier. Keep the
 	// existing zero/restored value until that connection is established.
 	turnResidual := int32(0)
-	if coll := s.Collisions[u.Handle]; coll != nil {
+	if coll := handleRow(s.Collisions, u.Handle); coll != nil {
 		blocked = coll.Blocked
 		turnResidual = int32(coll.TurnResidual)
 	}
@@ -2813,7 +2839,7 @@ func (s *System) emitMovementCallbacks(u *units.Unit, speed int32) {
 	if vm == nil {
 		return
 	}
-	prev := s.prevMoveTier[u.Handle]
+	prev := handleRow(s.prevMoveTier, u.Handle)
 	if prev != cat {
 		kinds := cob.MoveRateTransition(prev, cat) // [GAP T15] C18
 		for _, k := range kinds {
@@ -2834,16 +2860,16 @@ func (s *System) emitMovementCallbacks(u *units.Unit, speed int32) {
 			}
 			cob.StartDeferredWake(vm, name, nil) // [04 §5.2][GAP T15] deferred callback wake
 		}
-		s.prevMoveTier[u.Handle] = cat
+		setHandleRow(&s.prevMoveTier, u.Handle, cat)
 	}
 	// setSFXoccupy band 0..4 [04 §9.1] — the classifier starts from this unit's
 	// cached band and the one-argument callback is edge-triggered, emitted only
 	// when the band changes [GAP T15] C17 C18.
-	prevBand := s.prevSFXBand[u.Handle]
+	prevBand := handleRow(s.prevSFXBand, u.Handle)
 	band := MediumBand(s.Terrain, u, prevBand)
 	if band != prevBand {
 		cob.StartDeferredWake(vm, "setSFXoccupy", []int32{int32(band)}) // [04 §9.1][GAP T15] deferred callback wake
-		s.prevSFXBand[u.Handle] = band
+		setHandleRow(&s.prevSFXBand, u.Handle, band)
 	}
 }
 
@@ -3024,8 +3050,8 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	// A building has no mover, so the sweep's mover tick and post-move
 	// correction do not run for it [04 R-MOV-03 §1] step 9. Neither does a unit
 	// movement never admitted, which has no mover record to tick.
-	steer := s.Steers[handle]
-	coll := s.Collisions[handle]
+	steer := handleRow(s.Steers, handle)
+	coll := handleRow(s.Collisions, handle)
 	if steer == nil || coll == nil || coll.Building {
 		d := s.distToGoal(u)
 		s.emitMovementCallbacks(u, 0)
@@ -3040,7 +3066,7 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	// ask; the sites below report it rather than asking again.
 	serviceArrived := false
 	if !orderless {
-		route = s.Routes[handle]
+		route = handleRow(s.Routes, handle)
 		serviceArrived = s.serviceGroundFollower(u, head, route, tick)
 	}
 	// Aircraft returned through the flight commit above; all remaining route

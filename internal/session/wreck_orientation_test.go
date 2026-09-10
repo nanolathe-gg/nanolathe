@@ -185,8 +185,8 @@ func TestWreckKeepsItsOrientationThroughDeathAndResurrection(t *testing.T) {
 	// heading from the unit's own, so a transplant that ran after the
 	// completion hook would leave the two disagreeing and the first movement
 	// step would commit the allocator's facing back over the wreck's.
-	steer, ok := s.Movement.Steers[product.Handle]
-	if !ok || steer == nil {
+	steer := s.Movement.Steers[product.Handle]
+	if steer == nil {
 		t.Fatal("the resurrected unit has no mover record")
 	}
 	if steer.Heading != fellHeading || steer.PendingHeading != fellHeading {

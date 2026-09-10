@@ -263,7 +263,7 @@ func TestAirStrikeFliesItsLegs(t *testing.T) {
 		if n.Phase > maxPhase {
 			maxPhase = n.Phase
 		}
-		if fl := sys.Flights[u.Handle]; fl != nil && fl.Command != nil && fl.Command.Payload != nil {
+		if fl := handleRow(sys.Flights, u.Handle); fl != nil && fl.Command != nil && fl.Command.Payload != nil {
 			payloadSeen = true
 		}
 	}
@@ -305,7 +305,7 @@ func TestVTOLEvadeBreaksTwiceOnTheSameSide(t *testing.T) {
 		t.Fatalf("phase 0 returned %d, want 1", code)
 	}
 	side := n.Param1
-	first := sys.Flights[u.Handle].Command.Payload
+	first := handleRow(sys.Flights, u.Handle).Command.Payload
 	firstMarker, ok := first.(*airMarker)
 	if !ok {
 		t.Fatalf("phase 0 installed %T, want the point marker of [04 R-AIR-01 §4]", first)
@@ -319,7 +319,7 @@ func TestVTOLEvadeBreaksTwiceOnTheSameSide(t *testing.T) {
 	if n.Param1 != side {
 		t.Fatalf("the scratch word changed from %d to %d; phase 1 re-reads it, it does not re-draw [04 R-AIR-01 §8]", side, n.Param1)
 	}
-	secondMarker, ok := sys.Flights[u.Handle].Command.Payload.(*airMarker)
+	secondMarker, ok := handleRow(sys.Flights, u.Handle).Command.Payload.(*airMarker)
 	if !ok {
 		t.Fatal("phase 1 did not install a point marker [04 R-AIR-01 §4]")
 	}
@@ -358,7 +358,7 @@ func airBuildFixture(t *testing.T) (*System, *units.World, *units.Unit, *units.U
 // block, which is the only output the air executors have [04 R-AIR-01 §1].
 func installedMarker(t *testing.T, sys *System, u *units.Unit) *airMarker {
 	t.Helper()
-	fl := sys.Flights[u.Handle]
+	fl := handleRow(sys.Flights, u.Handle)
 	if fl == nil || fl.Command == nil {
 		t.Fatal("the unit has no flight command block [04 R-AIR-01 §1]")
 	}

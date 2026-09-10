@@ -48,7 +48,7 @@ func TestLandedSeaplaneRestsOnTheSeabed(t *testing.T) {
 	// The unit was created on the fixture's own bed; start it on this one so
 	// the climb and the descent both measure against it.
 	u.Y = ter.HeightAt(u.X, u.Z)
-	if fl := sys.Flights[u.Handle]; fl != nil {
+	if fl := handleRow(sys.Flights, u.Handle); fl != nil {
 		fl.Y = int32(u.Y.Raw())
 	}
 	// A root selection plate is what the conform samples; without one the
@@ -88,7 +88,7 @@ func TestLandedSeaplaneRestsOnTheSeabed(t *testing.T) {
 		t.Fatal("pitch is zero on a sloping seabed: the touchdown tick's post-move correction did not run, so the " +
 			"four-corner conform never wrote the resting height and attitude [04 R-MOV-01 §5][04 R-AIR-01 §6 \"Touchdown\"]")
 	}
-	fl := sys.Flights[u.Handle]
+	fl := handleRow(sys.Flights, u.Handle)
 	if fl == nil || fl.Y != int32(u.Y.Raw()) {
 		t.Fatalf("the integrator's Y copy does not follow the resting height")
 	}

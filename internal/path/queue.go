@@ -122,10 +122,28 @@ type Scheduler struct {
 	unitLimit     int32
 	playerCount   int
 	provider      CandidateProvider
-	traceEnabled  bool
-	traces        []Trace
-	traceLimit    int
-	traceDropped  bool
+	// workspace is the search's per-cell table, owned here because the
+	// scheduler is what decides which search is running: it latches one
+	// request at a time [04 R-PATH-01 §6] and keeps it until that search
+	// reports done. Handing the table out from here is what makes a shared
+	// generation-stamped table safe -- a second search cannot be given the
+	// table the first is still using, it is refused and keeps its own map.
+	workspace    Workspace
+	traceEnabled bool
+	traces       []Trace
+	traceLimit   int
+	traceDropped bool
+}
+
+// Workspace returns the scheduler's per-cell search table for a SearchConfig
+// to offer to the session it opens. It is storage and never behaviour: a
+// session that is refused it produces the same visit order and the same route
+// [04 §7.2].
+func (s *Scheduler) Workspace() *Workspace {
+	if s == nil {
+		return nil
+	}
+	return &s.workspace
 }
 
 // Trace is an opt-in copy of a request's scheduler boundary. Points are

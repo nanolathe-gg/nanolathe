@@ -15,31 +15,32 @@ import (
 func TestForgetUnitLeavesNoPerHandleState(t *testing.T) {
 	s := NewSystem(nil, Profile{}, nil)
 	const h pool.Handle = 7
+	s.growHandleTables(int(h))
 
-	// Populate every per-handle map the system owns.
-	s.Routes[h] = &Route{}
-	s.Steers[h] = &SteerState{}
-	s.Collisions[h] = &CollisionState{}
-	s.Flights[h] = &FlightState{}
-	s.profiles[h] = Profile{}
-	s.prevMoveTier[h] = 3
-	s.prevSFXBand[h] = 2
-	s.pathFailures[h] = PathFailure{}
-	s.activeOrders[h] = &activeMove{}
-	s.arrivalHandles[h] = &arrivalHandle{}
+	// Populate every per-handle row the system owns.
+	setHandleRow(&s.Routes, h, &Route{})
+	setHandleRow(&s.Steers, h, &SteerState{})
+	setHandleRow(&s.Collisions, h, &CollisionState{})
+	setHandleRow(&s.Flights, h, &FlightState{})
+	setHandleRow(&s.profiles, h, &Profile{})
+	setHandleRow(&s.prevMoveTier, h, 3)
+	setHandleRow(&s.prevSFXBand, h, 2)
+	setHandleRow(&s.pathFailures, h, &PathFailure{})
+	setHandleRow(&s.activeOrders, h, &activeMove{})
+	setHandleRow(&s.arrivalHandles, h, &arrivalHandle{})
 	s.ForgetUnit(h)
 
 	for name, present := range map[string]bool{
-		"Routes":         mapHas(s.Routes, h),
-		"Steers":         mapHas(s.Steers, h),
-		"Collisions":     mapHas(s.Collisions, h),
-		"Flights":        mapHas(s.Flights, h),
-		"profiles":       mapHas(s.profiles, h),
-		"prevMoveTier":   mapHas(s.prevMoveTier, h),
-		"prevSFXBand":    mapHas(s.prevSFXBand, h),
-		"pathFailures":   mapHas(s.pathFailures, h),
-		"activeOrders":   mapHas(s.activeOrders, h),
-		"arrivalHandles": mapHas(s.arrivalHandles, h),
+		"Routes":         rowHas(s.Routes, h),
+		"Steers":         rowHas(s.Steers, h),
+		"Collisions":     rowHas(s.Collisions, h),
+		"Flights":        rowHas(s.Flights, h),
+		"profiles":       rowHas(s.profiles, h),
+		"prevMoveTier":   handleRow(s.prevMoveTier, h) != 0,
+		"prevSFXBand":    handleRow(s.prevSFXBand, h) != 0,
+		"pathFailures":   rowHas(s.pathFailures, h),
+		"activeOrders":   rowHas(s.activeOrders, h),
+		"arrivalHandles": rowHas(s.arrivalHandles, h),
 	} {
 		if present {
 			t.Errorf("ForgetUnit left %s state for handle %d", name, h)
@@ -47,7 +48,8 @@ func TestForgetUnitLeavesNoPerHandleState(t *testing.T) {
 	}
 }
 
-func mapHas[V any](m map[pool.Handle]V, h pool.Handle) bool {
-	_, ok := m[h]
-	return ok
+// rowHas reports whether a dense per-handle row still holds something for h —
+// the slice twin of the map lookup this test used to make.
+func rowHas[V any](row []*V, h pool.Handle) bool {
+	return int(h) < len(row) && row[h] != nil
 }

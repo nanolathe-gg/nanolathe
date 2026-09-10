@@ -14,7 +14,7 @@ func (s *System) RetailMoverImage(h pool.Handle) ([]byte, error) {
 	if s == nil {
 		return nil, fmt.Errorf("movement: retail save mover: nil system")
 	}
-	c := s.Collisions[h]
+	c := handleRow(s.Collisions, h)
 	if c == nil {
 		return nil, fmt.Errorf("movement: retail save mover: unit %d has no collision state", h)
 	}

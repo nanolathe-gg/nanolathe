@@ -220,6 +220,15 @@ type Service struct {
 	// configuration.
 	targets targetRegistry
 
+	// candidateScratch is the per-attempt candidate snapshot's storage. The
+	// snapshot is attempt-local -- the sampler consumes it inside the same
+	// acquisition call and nothing retains it -- so it is one buffer per
+	// service rather than one allocation per attempt, which was 7% of
+	// everything the simulation allocated. The secondary list reuses it
+	// because it is only materialized when the primary one selected nothing
+	// [06 §3.1].
+	candidateScratch []Candidate
+
 	// Visibility is the per-session LOS predicate [03 §3.2] C8 [RS-P0-018].
 	// Moved from package-global combat.VisibilityHook to per-Service field for session isolation [INVARIANTS I1][I6][RS-P0-018].
 	Visibility func(viewer visibility.PlayerID, target visibility.Target) bool `json:"-"`

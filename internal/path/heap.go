@@ -48,24 +48,22 @@ type Node struct {
 // is the stable identity. Node 0 is invalid, like pool slot 0.
 type NodeStore struct {
 	nodes []Node // index by NodeID; nodes[0] is zero
-	// index is the standalone store's per-cell table. A session store uses
-	// indexRef to bind this same logical table to Session.entries. Keeping the
-	// node ID in that table avoids a second Cell-keyed map for the working set.
-	index map[Cell]entry
-	// indexRef lets Reset replace a session's shared table without leaving the
-	// Session pointing at the old map.
-	indexRef *map[Cell]entry
-	scale    int32 // h scale quantum for F computation (see Scale)
+	// index is the per-cell table. A session store binds the SESSION's table
+	// here rather than keeping one of its own: that table already carries
+	// status, direction and node identity, so a second per-cell table would
+	// duplicate every touched coordinate.
+	index *cellIndex
+	scale int32 // h scale quantum for F computation (see Scale)
 }
 
 // NewNodeStore returns an empty store with the given h scale.
 // Scale is the per-player quantum used as (h*scale)>>16 [04 §7.2] C6.
 // Pass 65536 for unweighted (1.0) when no scheduler is present.
 func NewNodeStore(scale int32) *NodeStore {
-	index := make(map[Cell]entry)
+	index := newMapIndex()
 	return &NodeStore{
 		nodes: make([]Node, 1), // reserve 0
-		index: index,
+		index: &index,
 		scale: scale,
 	}
 }
@@ -73,11 +71,11 @@ func NewNodeStore(scale int32) *NodeStore {
 // newSessionNodeStore binds node lookup to the search's existing per-cell
 // entry table. The table already carries status, direction and node identity,
 // so a second Cell-keyed index would duplicate every touched coordinate.
-func newSessionNodeStore(scale int32, entries *map[Cell]entry) *NodeStore {
+func newSessionNodeStore(scale int32, index *cellIndex) *NodeStore {
 	return &NodeStore{
-		nodes:    make([]Node, 1),
-		indexRef: entries,
-		scale:    scale,
+		nodes: make([]Node, 1),
+		index: index,
+		scale: scale,
 	}
 }
 
@@ -88,66 +86,43 @@ func (ns *NodeStore) Scale() int32 { return ns.scale }
 // keep their already-computed F (h is write-once) [04 §7.2] C7.
 func (ns *NodeStore) SetScale(scale int32) { ns.scale = scale }
 
-// TODO(question): pooling this store across searches did not pay. The
-// scheduler holds one session per unit and replaces it whenever the goal or
-// activation changes, and Alloc's growth was 37% of everything the simulation
-// allocated after the publication boundary was fixed, so reuse looked
-// worthwhile. It was implemented, measured and reverted: allocated bytes and
-// objects per tick did not move at all (0.378 MB / 1475 objects either way) and
-// the median tick was 2% SLOWER across three runs. The reason is that Go's
-// current map implementation releases a large map's storage on clear, so the
-// pooled per-cell table re-grows regardless, and the node array's growth is
+// Pooling this store across searches did not pay and was reverted: allocated
+// bytes and objects per tick did not move, and the median tick was 2% slower.
+// Go's current map implementation releases a large map's storage on clear, so
+// the pooled per-cell table re-grew regardless, and the node array's growth is
 // dominated by searches that expand more nodes than the previous search on the
-// same unit. Reuse only added the clear. What would change the answer: a dense
-// generation-stamped node table indexed by cell instead of the map — which is a
-// different search data structure, not a pooling change, and would have to be
-// proven not to alter visit order or open-set tie-breaking before it could be
-// gated on the fingerprint.
+// same unit. All the reuse added was the clear.
 //
-// That table was designed and not built, and the two things the design turns
-// on are recorded here so the next attempt starts from them rather than from
-// the profile again.
+// The successor that note named — a dense generation-stamped table indexed by
+// cell rather than a map — is built and landed (workspace.go). It answers the
+// two things the design turned on:
 //
-// Ownership. A generation-stamped table is shared: a search takes the next
-// generation and every slot stamped with an older one reads as empty. That is
-// only sound while exactly one search holds live per-cell state. It does hold
-// today, and by a chain that lives in internal/movement rather than here: the
-// scheduler latches one request at a time and keeps it until the search
-// reports done, the caller drops its session on done, a goal or activation
-// change replaces the session before it is resumed, and the one cancel path
-// (System.CancelPathRequest) clears the cached session in the same call that
-// cancels the request. So no suspended session can be resumed after another
-// search has run. Nothing in this package enforces that, and a shared table
-// would make a future change to that cache corrupt a search silently rather
-// than fail — so the table needs an owner that hands it out and takes it back,
-// not a bare generation counter.
+// Ownership. The table is not a bare generation counter shared by whoever
+// asks. The Scheduler owns exactly one, lends it to the search it has admitted
+// and refuses it to every other, so a second search cannot read the first's
+// slots — it keeps its own map and produces the same route. The generation is
+// only what makes the hand-over O(1) instead of O(table).
 //
-// Size against locality. Sized to a full map the table is a few hundred
-// thousand slots, while a search touches a few hundred cells scattered across
-// it. The map's working set is a few kilobytes and stays in cache; the dense
-// table's is one cache line per touched cell spread over megabytes. The
-// hashing this would remove measures about six per cent of the tick, so the
-// win is not large enough to assume the locality trade comes out ahead — it
-// has to be measured on the scene, not argued.
+// Size against locality. Sized to a whole map the table is a few hundred
+// thousand slots while a search touches a few hundred cells scattered across
+// it, so the trade had to be measured rather than argued. Measured on the
+// benchmark scene it comes out ahead on every figure: median tick -3%, p95 -4%,
+// p99 -22%, and allocated bytes per tick -37%.
 //
-// One part of the same idea did pay and is no longer open: the OPEN SET's
-// node-to-slot index, which was a map[NodeID]int and is now a dense row (see
-// Heap). Node identities are dense by construction, so that one needed no
+// One part of the same idea landed earlier and is not open either: the OPEN
+// SET's node-to-slot index, which was a map[NodeID]int and is now a dense row
+// (see Heap). Node identities are dense by construction, so that one needed no
 // generation stamp and no owner.
 
 // Reset clears all nodes but retains the scale.
 func (ns *NodeStore) Reset() {
 	ns.nodes = ns.nodes[:1]
-	// Replacing the index avoids map iteration in a simulation-visible reset
-	// while retaining the stable node identity contract [04 §7.2]. For a
-	// session this is also the status table, so rebinding through indexRef
-	// updates the Session's sole map reference; lookup and status cannot
-	// continue against different maps after a lifecycle reset.
-	if ns.indexRef != nil {
-		*ns.indexRef = make(map[Cell]entry)
-		return
-	}
-	ns.index = make(map[Cell]entry)
+	// Emptying the table rather than iterating it keeps a simulation-visible
+	// reset free of map iteration while retaining the stable node identity
+	// contract [04 §7.2]. For a session this is also the status table, and it
+	// is the SAME table object the Session reads, so lookup and status cannot
+	// continue against different storage after a lifecycle reset.
+	ns.index.reset()
 }
 
 // Len returns the number of allocated nodes (excluding invalid 0).
@@ -155,9 +130,8 @@ func (ns *NodeStore) Len() int { return len(ns.nodes) - 1 }
 
 // Find locates the NodeID for a cell.
 func (ns *NodeStore) Find(cell Cell) (NodeID, bool) {
-	index := ns.lookup()
-	e, ok := index[cell]
-	if !ok || e.node == invalidNodeID {
+	e := ns.index.get(cell)
+	if e.node == invalidNodeID {
 		return invalidNodeID, false
 	}
 	return e.node, true
@@ -181,8 +155,7 @@ func hScaled(h, scale int32) int32 {
 // even if goal now returns a different h — the caller can mutate
 // goal between calls to verify the write-once contract.
 func (ns *NodeStore) Ensure(cell Cell, g int32, parent NodeID, dir uint8, goal Goal) NodeID {
-	index := ns.lookup()
-	if e, ok := index[cell]; ok && e.node != invalidNodeID {
+	if e := ns.index.get(cell); e.node != invalidNodeID {
 		return e.node
 	}
 	var h int32
@@ -201,9 +174,9 @@ func (ns *NodeStore) Ensure(cell Cell, g int32, parent NodeID, dir uint8, goal G
 		Dir:    dir,
 		hSet:   true,
 	})
-	e := index[cell]
+	e := ns.index.get(cell)
 	e.node = id
-	index[cell] = e
+	ns.index.set(cell, e)
 	return id
 }
 
@@ -212,8 +185,7 @@ func (ns *NodeStore) Ensure(cell Cell, g int32, parent NodeID, dir uint8, goal G
 // is returned without modifying H, G, F, or parent. Use TryRelax
 // to update G/F.
 func (ns *NodeStore) Alloc(cell Cell, g, h int32, parent NodeID, dir uint8) NodeID {
-	index := ns.lookup()
-	if e, ok := index[cell]; ok && e.node != invalidNodeID {
+	if e := ns.index.get(cell); e.node != invalidNodeID {
 		return e.node
 	}
 	hs := hScaled(h, ns.scale)
@@ -228,17 +200,10 @@ func (ns *NodeStore) Alloc(cell Cell, g, h int32, parent NodeID, dir uint8) Node
 		Dir:    dir,
 		hSet:   true,
 	})
-	e := index[cell]
+	e := ns.index.get(cell)
 	e.node = id
-	index[cell] = e
+	ns.index.set(cell, e)
 	return id
-}
-
-func (ns *NodeStore) lookup() map[Cell]entry {
-	if ns.indexRef != nil {
-		return *ns.indexRef
-	}
-	return ns.index
 }
 
 // TryRelax attempts to improve the path to id via newG/newParent.

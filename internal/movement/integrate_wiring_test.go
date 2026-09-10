@@ -53,7 +53,7 @@ func TestSearchFuncConfigBindsClassLayer(t *testing.T) {
 	if done {
 		t.Fatalf("one pop must not finish the search (status %d)", status)
 	}
-	ws := sys.sessions[int(h)]
+	ws := handleRow(sys.sessions, int(h))
 	if ws == nil || ws.session == nil {
 		t.Fatalf("session missing after partial search")
 	}
@@ -115,7 +115,7 @@ func TestSystemSearchConsultsLayer(t *testing.T) {
 
 	sys.SubmitMove(h, 0, start, goal)
 	sys.Scheduler.Tick(60)
-	route := sys.Routes[h]
+	route := handleRow(sys.Routes, h)
 	if route == nil || route.Count == 0 || route.Status != 0 {
 		t.Fatalf("flat terrain must publish a route, got %+v", route)
 	}
@@ -161,11 +161,11 @@ func TestConfiguredSchedulerPublishesOwnerOneRequest(t *testing.T) {
 	sys.SubmitMove(h, 1, path.Cell{X: 2, Z: 2}, path.Cell{X: 9, Z: 9})
 	for tick := uint32(60); tick < 70; tick++ {
 		sys.Scheduler.Tick(tick)
-		if route := sys.Routes[h]; route != nil && route.Count > 0 && route.Status == 0 {
+		if route := handleRow(sys.Routes, h); route != nil && route.Count > 0 && route.Status == 0 {
 			return
 		}
 	}
-	t.Fatalf("owner-one request did not publish with two-player session topology: route=%+v", sys.Routes[h])
+	t.Fatalf("owner-one request did not publish with two-player session topology: route=%+v", handleRow(sys.Routes, h))
 }
 
 // TestMobileBuildRequestsStartAtCommittedAnchor locks the request-init source
@@ -224,7 +224,7 @@ func TestMobileBuildRequestsStartAtCommittedAnchor(t *testing.T) {
 	if goals := first.Goal.Enumerate(nil); !reflect.DeepEqual(goals, []path.Cell{selected}) || !first.Goal.StartSatisfied(selected) || first.Goal.StartSatisfied(path.Cell{X: selected.X + 1, Z: selected.Z}) {
 		t.Fatalf("fresh request goal = %v, want selected exact point %v", goals, selected)
 	}
-	binding := sys.activeOrders[h]
+	binding := handleRow(sys.activeOrders, h)
 	if binding == nil || binding.order != head || binding.token == 0 || first.Activation != binding.token {
 		t.Fatalf("fresh activation identity request=%d binding=%+v head=%p", first.Activation, binding, head)
 	}
@@ -239,7 +239,7 @@ func TestMobileBuildRequestsStartAtCommittedAnchor(t *testing.T) {
 	// request is gone, the follower must resubmit once at the inclusive
 	// LastRequestTick+60 boundary, keeping start, goal and activation identity.
 	sys.CancelPathRequest(h)
-	route := sys.Routes[h]
+	route := handleRow(sys.Routes, h)
 	route.Active = false
 	route.Count = 3 // stale backing count is irrelevant while inactive.
 	route.WantsRepath = true
@@ -264,8 +264,8 @@ func TestMobileBuildRequestsStartAtCommittedAnchor(t *testing.T) {
 	if got := sys.Scheduler.TraceState(); !reflect.DeepEqual(got, schedulerBefore) {
 		t.Fatalf("repath staging consumed scheduler budget: before=%+v after=%+v", schedulerBefore, got)
 	}
-	if q.Head() != head || !reflect.DeepEqual(*head, wantNode) || sys.activeOrders[h] != binding {
-		t.Fatalf("repath staging mutated order/binding: head=%p/%p got=%+v want=%+v binding=%p/%p", q.Head(), head, *head, wantNode, sys.activeOrders[h], binding)
+	if q.Head() != head || !reflect.DeepEqual(*head, wantNode) || handleRow(sys.activeOrders, h) != binding {
+		t.Fatalf("repath staging mutated order/binding: head=%p/%p got=%+v want=%+v binding=%p/%p", q.Head(), head, *head, wantNode, handleRow(sys.activeOrders, h), binding)
 	}
 	sys.Scheduler.Tick(160)
 	if route.LastRequestTick != 160 {
@@ -300,7 +300,7 @@ func TestOccupancyCommitNotesRevisionLayers(t *testing.T) {
 	q.Push(id, orders.Node{GoalX: world.CellToWorld(12), GoalZ: world.CellToWorld(2)})
 
 	startPoint := Point{X: int32(w.Unit(h).X.Raw() >> 16), Z: int32(w.Unit(h).Z.Raw() >> 16)}
-	sys.Routes[h].PublishAtRevision([]Point{startPoint, {X: 192, Z: startPoint.Z}}, sys.staticObstacleRevision())
+	handleRow(sys.Routes, h).PublishAtRevision([]Point{startPoint, {X: 192, Z: startPoint.Z}}, sys.staticObstacleRevision())
 	// Drive real ticks along an installed route; the occupancy commit succeeds
 	// on flat, unoccupied terrain.
 	noted := uint32(0)
@@ -356,7 +356,7 @@ func TestEnsureUnitStampFeedsClassLayerRevision(t *testing.T) {
 	sys.BeginTick(stampTick)
 	sys.EnsureUnit(w.Unit(building))
 
-	coll := sys.Collisions[building]
+	coll := handleRow(sys.Collisions, building)
 	if coll == nil {
 		t.Fatal("building collision state missing")
 	}
@@ -372,7 +372,7 @@ func TestEnsureUnitStampFeedsClassLayerRevision(t *testing.T) {
 	if got := sys.Scheduler.TraceState(); !reflect.DeepEqual(got, schedulerBefore) {
 		t.Fatalf("EnsureUnit serviced scheduler: before=%+v after=%+v", schedulerBefore, got)
 	}
-	if got := *sys.Routes[requester]; !reflect.DeepEqual(got, wantRoute) {
+	if got := *handleRow(sys.Routes, requester); !reflect.DeepEqual(got, wantRoute) {
 		t.Fatalf("EnsureUnit mutated requester route: got=%+v want=%+v", got, wantRoute)
 	}
 

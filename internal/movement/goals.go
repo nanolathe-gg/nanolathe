@@ -45,10 +45,10 @@ func (s *System) raiseEvictedGoalRelease(owner pool.Handle) {
 	// Unconditional, as §9 states it: the raise lands on the owner of whatever
 	// object the slot held, whether or not that is the installing record, and
 	// the installer's own closing clear of `0x20`-`0x200` cancels the self case.
-	if g := s.moveGoals[owner]; g != nil && g.order != nil {
+	if g := handleRow(s.moveGoals, owner); g != nil && g.order != nil {
 		g.order.Satisfied |= goalReleasedPending
 	}
-	if st := s.airOrders[owner]; st != nil && st.order != nil {
+	if st := handleRow(s.airOrders, owner); st != nil && st.order != nil {
 		st.order.Satisfied |= goalReleasedPending
 	}
 }
@@ -57,11 +57,11 @@ func (s *System) releaseGoalNode(n *orders.Node) {
 	if s == nil || n == nil {
 		return
 	}
-	if g := s.moveGoals[n.Owner]; g != nil && g.order == n {
+	if g := handleRow(s.moveGoals, n.Owner); g != nil && g.order == n {
 		n.Satisfied |= 0x80
-		delete(s.moveGoals, n.Owner)
+		setHandleRow(&s.moveGoals, n.Owner, nil)
 	}
-	if st := s.airOrders[n.Owner]; st != nil && st.order == n {
+	if st := handleRow(s.airOrders, n.Owner); st != nil && st.order == n {
 		n.Satisfied |= 0x80
 		s.releaseAirGoalForNode(n.Owner, n)
 	}
@@ -110,7 +110,7 @@ func (s *System) ReleaseGoal(n *orders.Node) bool {
 // is never pumped and never installs. The 37,196 raises measured on 2026-08-31
 // were measured on this reimplementation's pump, not retail's.
 //
-// The moveGoals and airOrders maps together are that single controller slot: a
+// The moveGoals and airOrders rows together are that single controller slot: a
 // unit is ground or air, and each installer clears the other side.
 func (s *System) installGroundPayload(owner pool.Handle, n *orders.Node, goal path.Goal, x, z numeric.Fixed) bool {
 	if s == nil || n == nil {
@@ -120,15 +120,12 @@ func (s *System) installGroundPayload(owner pool.Handle, n *orders.Node, goal pa
 	// the slot held [04 R-ORD-01 §9]. When that is n itself the closing clear
 	// below cancels it, which is the "never observable from an installer" case.
 	s.raiseEvictedGoalRelease(owner)
-	delete(s.moveGoals, owner)
-	if prior := s.airOrders[owner]; prior != nil {
+	setHandleRow(&s.moveGoals, owner, nil)
+	if prior := handleRow(s.airOrders, owner); prior != nil {
 		s.releaseAirGoalForNode(owner, prior.order)
 	}
-	if s.moveGoals == nil {
-		s.moveGoals = make(map[pool.Handle]*moveGoal)
-	}
 	n.Satisfied &^= goalPendingMask
-	s.moveGoals[owner] = &moveGoal{order: n, x: x, z: z, goal: goal}
+	setHandleRow(&s.moveGoals, owner, &moveGoal{order: n, x: x, z: z, goal: goal})
 	// An install REPLACES the record's goal, so whatever route the mover is
 	// following is now aimed at the wrong place. Dropping the active-order
 	// binding is what makes the session's mover boundary re-submit against the
@@ -143,7 +140,7 @@ func (s *System) installGroundPayload(owner pool.Handle, n *orders.Node, goal pa
 	// cancels the outstanding request and clears the path state before
 	// submitting, and it does not let the stale route be adopted as if it were
 	// still aimed at this goal.
-	if prior := s.activeOrders[owner]; prior != nil {
+	if prior := handleRow(s.activeOrders, owner); prior != nil {
 		prior.order = nil
 	}
 	return true
@@ -251,7 +248,7 @@ func (s *System) InstallAirGoal(req orders.AirGoalRequest) bool {
 	if u == nil || u.Def == nil || !u.Def.CanFly {
 		return false
 	}
-	if s.Flights[req.Owner] == nil {
+	if handleRow(s.Flights, req.Owner) == nil {
 		return false
 	}
 	// The slot's current object is displaced, so its OWN record takes the
@@ -260,10 +257,10 @@ func (s *System) InstallAirGoal(req orders.AirGoalRequest) bool {
 	// cannot reach the other record, because the object it releases is reached
 	// through the flight block, not through a record field.
 	s.raiseEvictedGoalRelease(req.Owner)
-	if prior := s.airOrders[req.Owner]; prior != nil {
+	if prior := handleRow(s.airOrders, req.Owner); prior != nil {
 		s.releaseAirGoalForNode(req.Owner, prior.order)
 	}
-	delete(s.moveGoals, req.Owner)
+	setHandleRow(&s.moveGoals, req.Owner, nil)
 	var marker *airMarker
 	if req.Target != 0 {
 		marker = s.newFollowUnitMarker(u, req.Target)
@@ -288,11 +285,11 @@ func (s *System) releaseAirGoalForNode(owner pool.Handle, n *orders.Node) {
 	if s == nil || n == nil {
 		return
 	}
-	if st := s.airOrders[owner]; st == nil || st.order != n {
+	if st := handleRow(s.airOrders, owner); st == nil || st.order != n {
 		return
 	}
 	s.releaseAirGoal(s.unitFor(owner))
-	delete(s.airOrders, owner)
+	setHandleRow(&s.airOrders, owner, nil)
 }
 
 // OW-3-P goal-families wiring [04 §7.2][04 §7.4][04 §3.5].

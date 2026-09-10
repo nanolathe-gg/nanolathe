@@ -77,7 +77,7 @@ func TestOrderlessGroundMoverRunsTheMoverTickAndPostMoveCorrection(t *testing.T)
 		t.Fatalf("orderless upright mover Y=%d after one tick, want the terrain height %d [04 R-MOV-01 §5]",
 			u.Y.Raw()>>16, want.Raw()>>16)
 	}
-	coll := sys.Collisions[h]
+	coll := handleRow(sys.Collisions, h)
 	if coll == nil {
 		t.Fatal("no collision record")
 	}
@@ -152,7 +152,7 @@ func TestOrderlessMoverAtRestNeverRevalidates(t *testing.T) {
 	sys.EnsureUnit(u)
 	runMovementTick(sys, 1, w)
 
-	coll := sys.Collisions[h]
+	coll := handleRow(sys.Collisions, h)
 	anchorBefore := coll.CachedAnchor
 	revBefore := sys.Grid.Revision()
 	// A Y the correction would overwrite the moment anything set the dirty bit.

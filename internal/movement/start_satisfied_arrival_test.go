@@ -81,8 +81,8 @@ func TestStartSatisfiedRequestArrivesThroughTheFollower(t *testing.T) {
 	if got := head.Satisfied; got != uint32(path.StatusAlreadySatisfied) {
 		t.Fatalf("after start-satisfied publication satisfied = %#x, want only 0x100 [04 R-PATH-01 §7]", got)
 	}
-	if route := sys.Routes[h]; route == nil || route.Active {
-		t.Fatalf("empty publication left an active route: %+v", sys.Routes[h])
+	if route := handleRow(sys.Routes, h); route == nil || route.Active {
+		t.Fatalf("empty publication left an active route: %+v", handleRow(sys.Routes, h))
 	}
 
 	// The follower's service is the producer. One mover tick with the payload
@@ -126,10 +126,10 @@ func TestArrivalHandleIsNotBoundWithoutAnInstalledPayload(t *testing.T) {
 	if head == nil {
 		t.Fatal("no head record")
 	}
-	sys.arrivalHandles[h] = &arrivalHandle{order: head}
+	setHandleRow(&sys.arrivalHandles, h, &arrivalHandle{order: head})
 
 	sys.bindArrivalHandle(u, head)
-	if _, ok := sys.arrivalHandles[h]; ok {
+	if handleRow(sys.arrivalHandles, h) != nil {
 		t.Fatal("an arrival handle was bound for a record that owns no goal payload [04 R-MOV-03 §1]")
 	}
 }

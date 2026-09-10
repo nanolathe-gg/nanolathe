@@ -31,7 +31,7 @@ func TestPathEligibilityUsesSlotsSeparatelyFromCount(t *testing.T) {
 		for tick := uint32(60); tick < 70 && sys.HasPathRequest(h); tick++ {
 			sys.Scheduler.Tick(tick)
 		}
-		if route := sys.Routes[h]; route == nil || route.Count == 0 || route.Status != 0 {
+		if route := handleRow(sys.Routes, h); route == nil || route.Count == 0 || route.Status != 0 {
 			t.Fatalf("owner %d route = %+v", owner, route)
 		}
 	}

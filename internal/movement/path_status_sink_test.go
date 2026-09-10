@@ -55,7 +55,7 @@ func TestGroundPathStatusSink(t *testing.T) {
 		if got := head.Satisfied; got != uint32(path.StatusAlreadySatisfied) {
 			t.Fatalf("empty-at-goal bits = %#x, want only 0x100", got)
 		}
-		if route := sys.Routes[req.Unit]; route == nil || route.Status != path.StatusAlreadySatisfied {
+		if route := handleRow(sys.Routes, req.Unit); route == nil || route.Status != path.StatusAlreadySatisfied {
 			t.Fatalf("route diagnostic not preserved: %+v", route)
 		}
 	})
@@ -65,7 +65,7 @@ func TestGroundPathStatusSink(t *testing.T) {
 		// Setup reads the mover's CACHED COMMITTED CELL at admission, not the
 		// cell the request was submitted with [04 R-PATH-01 §4] step 1, so the
 		// off-map start of step 8 is staged on the committed anchor.
-		sys.Collisions[u.Handle].CachedAnchor = Cell{X: 25, Z: 25}
+		handleRow(sys.Collisions, u.Handle).CachedAnchor = Cell{X: 25, Z: 25}
 		work := sys.searchFunc(req, 65536, 0)
 		if !work.Done || work.Status != path.StatusRejected || len(work.Points) != 0 {
 			t.Fatalf("out-of-bounds work = %+v", work)
@@ -78,7 +78,7 @@ func TestGroundPathStatusSink(t *testing.T) {
 		if got := head.Satisfied; got != uint32(path.StatusRejected)|0x40 {
 			t.Fatalf("empty-away bits = %#x, want 0x240", got)
 		}
-		route := sys.Routes[req.Unit]
+		route := handleRow(sys.Routes, req.Unit)
 		failure, ok := sys.PathFailureRecord(req.Unit)
 		if route == nil || route.Status != path.StatusRejected || !ok || failure.Status != path.StatusRejected {
 			t.Fatalf("route/path-failure diagnostics route=%+v failure=%+v/%v", route, failure, ok)

@@ -122,7 +122,7 @@ func TestFrameFinishedByAHelperJoinsTheWorld(t *testing.T) {
 	if s.Movement == nil || s.Movement.Routes == nil {
 		t.Fatal("no movement service in the fixture")
 	}
-	if _, ok := s.Movement.Routes[hFrame]; !ok {
+	if s.Movement.Routes[hFrame] == nil {
 		t.Fatal("a frame finished by a helper never reached the session's completion hook, so it has no mover " +
 			"state: it cannot answer a Move and holds no occupancy [05 R-WORK-01 §1][01 §6.1][03 §3]")
 	}

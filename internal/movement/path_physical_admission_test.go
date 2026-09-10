@@ -45,8 +45,8 @@ func TestPathProviderPollsPhysicalSlots(t *testing.T) {
 	// 59 without consuming its staged payload or stamping it.
 	p.SetPathTick(59)
 	_, result := p.Poll(0)
-	if result != path.PollVisited || s.Routes[h1].LastRequestTick != 0 {
-		t.Fatalf("tick-59 first slot = %d timestamp=%d, want visited and unstamped", result, s.Routes[h1].LastRequestTick)
+	if result != path.PollVisited || handleRow(s.Routes, h1).LastRequestTick != 0 {
+		t.Fatalf("tick-59 first slot = %d timestamp=%d, want visited and unstamped", result, handleRow(s.Routes, h1).LastRequestTick)
 	}
 	if _, result = p.Poll(0); result != path.PollVisited {
 		t.Fatalf("tick-59 building slot result = %d, want visited", result)
@@ -59,15 +59,15 @@ func TestPathProviderPollsPhysicalSlots(t *testing.T) {
 	}
 	p.SetPathTick(60)
 	got, result := p.Poll(0)
-	if result != path.PollRequest || got.Unit != h1 || s.Routes[h1].LastRequestTick != 60 {
-		t.Fatalf("first physical visit = %#v/%d, timestamp=%d; want slot %d request at tick 60", got, result, s.Routes[h1].LastRequestTick, h1)
+	if result != path.PollRequest || got.Unit != h1 || handleRow(s.Routes, h1).LastRequestTick != 60 {
+		t.Fatalf("first physical visit = %#v/%d, timestamp=%d; want slot %d request at tick 60", got, result, handleRow(s.Routes, h1).LastRequestTick, h1)
 	}
 	if _, result = p.Poll(0); result != path.PollVisited {
 		t.Fatalf("building slot result = %d, want visited", result)
 	}
 	got, result = p.Poll(0)
-	if result != path.PollRequest || got.Unit != h3 || s.Routes[h3].LastRequestTick != 60 {
-		t.Fatalf("third physical visit = %#v/%d, timestamp=%d; want slot %d request", got, result, s.Routes[h3].LastRequestTick, h3)
+	if result != path.PollRequest || got.Unit != h3 || handleRow(s.Routes, h3).LastRequestTick != 60 {
+		t.Fatalf("third physical visit = %#v/%d, timestamp=%d; want slot %d request", got, result, handleRow(s.Routes, h3).LastRequestTick, h3)
 	}
 	if _, result = p.Poll(0); result != path.PollNoUnit {
 		t.Fatalf("hole result = %d, want no-unit", result)

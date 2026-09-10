@@ -46,7 +46,7 @@ func TestDeadMoverLeavesNoBlockedAnchors(t *testing.T) {
 	}
 	sys.EnsureUnit(w.Unit(requester))
 
-	anchor := sys.Collisions[victim].CachedAnchor
+	anchor := handleRow(sys.Collisions, victim).CachedAnchor
 	layer := sys.ensureLayerRegistry().For("", wiringProfile)
 
 	// A path request 200 ticks later arms the watermark past the victim's

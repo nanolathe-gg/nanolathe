@@ -397,7 +397,7 @@ func (s *System) airSectorHeight(u *units.Unit) (uint8, bool) {
 	if s == nil || u == nil {
 		return 0, false
 	}
-	if coll := s.Collisions[u.Handle]; coll != nil && coll.airSector != nil && !coll.airOffMap {
+	if coll := handleRow(s.Collisions, u.Handle); coll != nil && coll.airSector != nil && !coll.airOffMap {
 		return coll.airSector.Smoothed, true
 	}
 	return 0, false
@@ -436,7 +436,7 @@ func (s *System) releaseAirGoal(u *units.Unit) {
 	if s == nil || u == nil {
 		return
 	}
-	fl := s.Flights[u.Handle]
+	fl := handleRow(s.Flights, u.Handle)
 	if fl == nil || fl.Command == nil || fl.Command.Payload == nil {
 		return
 	}
@@ -480,13 +480,10 @@ type airOrderState struct {
 // airStateFor returns the executor state for the unit's current head record,
 // resetting it when the head changes.
 func (s *System) airStateFor(u *units.Unit, head *orders.Node) *airOrderState {
-	if s.airOrders == nil {
-		s.airOrders = make(map[pool.Handle]*airOrderState)
-	}
-	st := s.airOrders[u.Handle]
+	st := handleRow(s.airOrders, u.Handle)
 	if st == nil || st.order != head {
 		st = &airOrderState{order: head}
-		s.airOrders[u.Handle] = st
+		setHandleRow(&s.airOrders, u.Handle, st)
 	}
 	return st
 }
@@ -590,7 +587,7 @@ func (s *System) runAirExecutor(u *units.Unit, head *orders.Node, st *airOrderSt
 func (s *System) execVTOLMove(u *units.Unit, head *orders.Node, st *airOrderState) {
 	switch st.phase {
 	case 0:
-		if s.Flights[u.Handle] == nil || u.Def == nil || !u.Def.CanFly {
+		if handleRow(s.Flights, u.Handle) == nil || u.Def == nil || !u.Def.CanFly {
 			st.done = true
 			return
 		}
@@ -631,7 +628,7 @@ func (s *System) execVTOLLandIfCan(u *units.Unit, head *orders.Node, st *airOrde
 	sim := s.simRNG(u)
 	switch st.phase {
 	case 0:
-		if s.Flights[u.Handle] == nil || u.Def == nil || !u.Def.CanFly {
+		if handleRow(s.Flights, u.Handle) == nil || u.Def == nil || !u.Def.CanFly {
 			st.done = true
 			return
 		}
@@ -721,7 +718,7 @@ func (s *System) execVTOLStandby(u *units.Unit, head *orders.Node, st *airOrderS
 	sim := s.simRNG(u)
 	switch st.phase {
 	case 0:
-		if s.Flights[u.Handle] == nil || u.Def == nil || !u.Def.CanFly {
+		if handleRow(s.Flights, u.Handle) == nil || u.Def == nil || !u.Def.CanFly {
 			st.done = true
 			return
 		}
@@ -920,7 +917,7 @@ func (s *System) AirBuildSiteLegInstalled(u *units.Unit, rec *orders.Node) bool 
 	if s == nil || u == nil || rec == nil || s.airOrders == nil {
 		return false
 	}
-	st := s.airOrders[u.Handle]
+	st := handleRow(s.airOrders, u.Handle)
 	if st == nil || st.order != rec || st.done {
 		return false
 	}
@@ -1139,7 +1136,7 @@ func (s *System) execVTOLLanding(u *units.Unit, head *orders.Node, st *airOrderS
 		s.releaseAirGoal(u)
 		AttachCargo(s.world, head.Target, u.Handle, int(st.padPiece))
 		u.Move.Mode = 0
-		if fl := s.Flights[u.Handle]; fl != nil {
+		if fl := handleRow(s.Flights, u.Handle); fl != nil {
 			fl.Mode = 0
 		}
 		// The empty lander's repair arm, the ONE producer of pad repair: with
@@ -1244,7 +1241,7 @@ func (s *System) landable(u *units.Unit, x, z numeric.Fixed) bool {
 	if s == nil || u == nil || u.Def == nil || s.Terrain == nil {
 		return false
 	}
-	coll := s.Collisions[u.Handle]
+	coll := handleRow(s.Collisions, u.Handle)
 	if coll == nil {
 		return false
 	}
@@ -1414,7 +1411,7 @@ func (s *System) stepAir(u *units.Unit, tick uint32) StepResult {
 	// of authoritative tick time and half of all bytes allocated
 	// (docs/SIM_BENCHMARK.md).
 	handle := u.Handle
-	fl := s.Flights[handle]
+	fl := handleRow(s.Flights, handle)
 	if fl == nil {
 		d := s.distToGoal(u)
 		s.emitMovementCallbacks(u, 0)
@@ -1481,7 +1478,7 @@ func (s *System) stepAir(u *units.Unit, tick uint32) StepResult {
 	// the marker's horizontal hypot, with the leg's own radius or the default
 	// half world unit [04 R-AIR-01 §4], and running both would give an air move
 	// two disagreeing completion rules [I11].
-	route := s.Routes[handle]
+	route := handleRow(s.Routes, handle)
 	hasRoute := route != nil && route.Active
 	return StepResult{
 		Handle:     handle,
@@ -1505,7 +1502,7 @@ func (s *System) commitFlightState(u *units.Unit, fl *FlightState) {
 	u.Move.Heading = fl.Heading
 	u.Move.Speed = numeric.Fixed(int64(fl.Speed))
 	u.Move.VelX, u.Move.VelY, u.Move.VelZ = numeric.Fixed(int64(fl.VX)), numeric.Fixed(int64(fl.VY)), numeric.Fixed(int64(fl.VZ))
-	if coll := s.Collisions[u.Handle]; coll != nil {
+	if coll := handleRow(s.Collisions, u.Handle); coll != nil {
 		coll.X, coll.Y, coll.Z = fl.X, fl.Y, fl.Z
 		// ProposedAnchor includes the collision velocity. Flight has already
 		// integrated its transform, so cache the committed pair before copying
@@ -1714,7 +1711,7 @@ func (s *System) runAirOrderLeg(u *units.Unit, n *orders.Node, satisfied uint32,
 // when the pump runs before the mover tick, a completion published this tick is
 // read on the next one.
 func (s *System) reportAirMachineOutcome(u *units.Unit, n *orders.Node, tick uint32) orders.Code {
-	st := s.airOrders[u.Handle]
+	st := handleRow(s.airOrders, u.Handle)
 	if st != nil && st.order == n && st.done {
 		// `VTOL_Landing` phase 6's repair spawn, deferred to here so it lands in
 		// the same pump visit that unlinks this record [04 R-AIR-01 §6]. The
@@ -1760,7 +1757,7 @@ const (
 // airMoverReady is the "a live mover and `canfly`" clause every air phase 0
 // opens with [04 R-AIR-01 §7][04 R-ORD-02 §2][04 R-ORD-02 §3].
 func (s *System) airMoverReady(u *units.Unit) bool {
-	return s != nil && u != nil && u.Def != nil && u.Def.CanFly && s.Flights[u.Handle] != nil
+	return s != nil && u != nil && u.Def != nil && u.Def.CanFly && handleRow(s.Flights, u.Handle) != nil
 }
 
 // orderWeapons returns the session-owned weapon port for this aircraft. Air

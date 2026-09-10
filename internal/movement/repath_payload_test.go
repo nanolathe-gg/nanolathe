@@ -66,9 +66,9 @@ func TestFollowerRepathArmNeedsAnInstalledPayload(t *testing.T) {
 					Owner: h, Node: head, X: head.GoalX, Z: head.GoalZ, Radius: radius,
 				})
 			}
-			system.activeOrders[h] = &activeMove{order: head, token: 5}
+			setHandleRow(&system.activeOrders, h, &activeMove{order: head, token: 5})
 
-			route := system.Routes[h]
+			route := handleRow(system.Routes, h)
 			route.Active = true
 			route.Count = 1 // the published prefix is exhausted: fewer than two points
 			route.WantsRepath = false

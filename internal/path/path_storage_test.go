@@ -194,15 +194,15 @@ func TestPathStorageSessionLifecycle(t *testing.T) {
 func TestPathStorageSessionNodeStoreResetRebindsEntries(t *testing.T) {
 	sc := pathStorageScenarios()[0]
 	s := NewSession(storageConfig(sc, sc.pass))
-	if s.ns == nil || len(s.entries) == 0 {
+	if s.ns == nil || s.entries.len() == 0 {
 		t.Fatal("session did not initialize shared node storage")
 	}
 	done, popped := s.IsDone(), s.Popped()
 	// Reset is a lifecycle table-ownership check. A live search also owns heap
 	// and control state, so this test deliberately does not resume afterward.
 	s.ns.Reset()
-	if len(s.entries) != 0 {
-		t.Fatalf("node store reset left stale session entries: %d", len(s.entries))
+	if s.entries.len() != 0 {
+		t.Fatalf("node store reset left stale session entries: %d", s.entries.len())
 	}
 	if s.IsDone() != done || s.Popped() != popped {
 		t.Fatalf("node store reset changed session control state: done %v/%v popped %d/%d", done, s.IsDone(), popped, s.Popped())
@@ -211,7 +211,7 @@ func TestPathStorageSessionNodeStoreResetRebindsEntries(t *testing.T) {
 	if got, ok := s.ns.Find(s.Start()); !ok || got != id {
 		t.Fatalf("reset store lookup mismatch: got %d, want %d", got, id)
 	}
-	if got := s.entries[s.Start()].node; got != id {
+	if got := s.entries.get(s.Start()).node; got != id {
 		t.Fatalf("reset store did not publish through session map: got %d, want %d", got, id)
 	}
 }

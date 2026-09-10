@@ -193,8 +193,8 @@ func TestOpenNodeRevalidatesBeforeExpansion(t *testing.T) {
 		t.Fatal("fixture search completed while revalidating one node")
 	}
 	n := s.ns.Get(id)
-	if !n.Closed || n.Open || s.entries[cell].status&3 != 3 {
-		t.Fatalf("revised open node was expanded instead of closed blocked: node=%+v entry=%+v", *n, s.entries[cell])
+	if !n.Closed || n.Open || s.entries.get(cell).status&3 != 3 {
+		t.Fatalf("revised open node was expanded instead of closed blocked: node=%+v entry=%+v", *n, s.entries.get(cell))
 	}
 }
 
@@ -1022,7 +1022,7 @@ func TestRayVisitedBlockedCellPaysSteepTier(t *testing.T) {
 	if !s.Seeded() {
 		t.Fatal("fixture search must seed")
 	}
-	if s.entries[near].status&8 == 0 {
+	if s.entries.get(near).status&8 == 0 {
 		t.Fatalf("fixture: the pre-search ray must mark %v ray-visited [04 R-PATH-01 §5]", near)
 	}
 	blocked[near] = true

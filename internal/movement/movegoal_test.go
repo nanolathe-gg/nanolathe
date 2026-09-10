@@ -100,13 +100,13 @@ func TestAirGoalUsesExistingFlightPayloadAndReleasesOnce(t *testing.T) {
 	}
 	s := NewSystem(nil, Profile{}, NewOccupancyGrid())
 	s.BindWorld(w)
-	s.Flights[h] = &FlightState{}
+	setHandleRow(&s.Flights, h, &FlightState{})
 	n1 := &orders.Node{Owner: h}
 	n2 := &orders.Node{Owner: h}
 	if !s.InstallAirGoal(orders.AirGoalRequest{Owner: h, Node: n1, X: 1 << 16, Y: 2 << 16, Z: 3 << 16, Radius: 4}) {
 		t.Fatal("air payload was rejected")
 	}
-	if s.Flights[h].Command == nil || s.Flights[h].Command.Payload == nil {
+	if handleRow(s.Flights, h).Command == nil || handleRow(s.Flights, h).Command.Payload == nil {
 		t.Fatal("air payload was not installed")
 	}
 	if !s.InstallAirGoal(orders.AirGoalRequest{Owner: h, Node: n2, X: 4 << 16, Y: 5 << 16, Z: 6 << 16}) {
@@ -117,10 +117,10 @@ func TestAirGoalUsesExistingFlightPayloadAndReleasesOnce(t *testing.T) {
 	if n1.Satisfied&0x80 == 0 {
 		t.Fatal("the displaced record did not receive the rebind bit from the air installer [04 R-ORD-01 §9]")
 	}
-	if !s.ReleaseGoal(n1) || s.Flights[h].Command.Payload == nil {
+	if !s.ReleaseGoal(n1) || handleRow(s.Flights, h).Command.Payload == nil {
 		t.Fatal("stale air release detached successor payload")
 	}
-	if !s.ReleaseGoal(n2) || s.Flights[h].Command.Payload != nil {
+	if !s.ReleaseGoal(n2) || handleRow(s.Flights, h).Command.Payload != nil {
 		t.Fatal("current air payload was not released")
 	}
 }

@@ -84,7 +84,7 @@ func TestSchedulerRouteSteerArrival(t *testing.T) {
 
 	// Tick scheduler once to publish route (search needs 1 tick)
 	system.Scheduler.Tick(60)
-	route := system.Routes[h]
+	route := handleRow(system.Routes, h)
 	if route == nil || !route.Active {
 		t.Fatalf("route not published after scheduler tick: active %v count %d", route.Active, route.Count)
 	}
@@ -107,7 +107,7 @@ func TestSchedulerRouteSteerArrival(t *testing.T) {
 		system.Scheduler.Tick(tick)
 		runMovementTick(system, tick, w)
 		// Check if route became inactive (arrived)
-		if r := system.Routes[h]; r != nil && !r.Active {
+		if r := handleRow(system.Routes, h); r != nil && !r.Active {
 			break
 		}
 		// Also check distance to goal world
@@ -140,7 +140,7 @@ func TestSchedulerRouteSteerArrival(t *testing.T) {
 		t.Fatalf("arrival failed: mover cell %v goal %v dxC %d dzC %d world dx %d dz %d", moverCellFinal, goalCell, dxC, dzC, dx, dz)
 	}
 	// Also check that after arrival, encoded save form still ≤13
-	if r := system.Routes[h]; r != nil {
+	if r := handleRow(system.Routes, h); r != nil {
 		enc2 := EncodeRoute(r)
 		if len(enc2) > 13 {
 			t.Fatalf("final encLen %d >13", len(enc2))
@@ -318,7 +318,7 @@ func TestBigRequestStaysActiveAcrossTicks(t *testing.T) {
 	// Every tick, the route is either untouched or carries the COMPLETE route:
 	// a budget boundary publishes nothing at all [04 §7.3] C12.
 	fullOrEmpty := func(tick uint32) bool {
-		r := system.Routes[h]
+		r := handleRow(system.Routes, h)
 		if r == nil || !r.Active {
 			return false
 		}
@@ -345,7 +345,7 @@ func TestBigRequestStaysActiveAcrossTicks(t *testing.T) {
 		t.Fatalf("a %d-pop search finished on its admission tick with only a 133-step share; the budget boundary is not being honoured [04 R-PATH-01 §6]", oneShot.Popped)
 	}
 	// Determinism: resumed route must equal one-shot route (converted to movement.Point) [04 §7.3] C11.
-	final := system.Routes[h]
+	final := handleRow(system.Routes, h)
 	if final == nil || !final.Active {
 		t.Fatalf("final route inactive")
 	}
@@ -389,7 +389,7 @@ func TestActivateMoveExactlyOnceAndRejectsStalePublication(t *testing.T) {
 	if system.pathProvider.pending(0) != 1 {
 		t.Fatalf("duplicate activation changed pending=%d", system.pathProvider.pending(0))
 	}
-	firstRequest := path.Request{Unit: h, Activation: system.activeOrders[h].token}
+	firstRequest := path.Request{Unit: h, Activation: handleRow(system.activeOrders, h).token}
 
 	q.RemoveHead()
 	q.Push(id, orders.Node{GoalX: world.CellToWorld(6), GoalZ: world.CellToWorld(6)})
@@ -402,7 +402,7 @@ func TestActivateMoveExactlyOnceAndRejectsStalePublication(t *testing.T) {
 	}
 	// Simulate a late callback for the canceled first request.  It must not
 	// overwrite the route belonging to the current head.
-	route := system.Routes[h]
+	route := handleRow(system.Routes, h)
 	if route == nil {
 		t.Fatal("the replacement request installed no route")
 	}
@@ -416,9 +416,9 @@ func TestActivateMoveExactlyOnceAndRejectsStalePublication(t *testing.T) {
 			t.Fatalf("stale publication overwrote fallback point %d: got %v want %v", i, route.Points[i], wantFallback[i])
 		}
 	}
-	currentRequest := path.Request{Unit: h, Activation: system.activeOrders[h].token}
+	currentRequest := path.Request{Unit: h, Activation: handleRow(system.activeOrders, h).token}
 	system.publishFunc(currentRequest, []path.Point{{X: 6, Z: 6}}, 0)
-	if route := system.Routes[h]; route == nil || !route.Active || route.Points[0] != (Point{X: 6, Z: 6}) {
+	if route := handleRow(system.Routes, h); route == nil || !route.Active || route.Points[0] != (Point{X: 6, Z: 6}) {
 		t.Fatalf("current publication was not attached to active head: %+v", route)
 	}
 }

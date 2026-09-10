@@ -39,7 +39,7 @@ func TestRestoreMoverCopiesStateWithoutUnitMirrorOverwrite(t *testing.T) {
 	if err := sys.RestoreMover(h, data); err != nil {
 		t.Fatal(err)
 	}
-	c := sys.Collisions[h]
+	c := handleRow(sys.Collisions, h)
 	if c.VX != 1 || c.VY != -2 || c.VZ != 3 || c.LeanX != 4 || c.LeanY != -5 || c.LeanZ != 6 || c.Speed != 7 || c.TurnResidual != -9 || c.LastStampTick != 1234 || c.Mode != 1 || !c.Blocked || c.SavedStateByte != data[34] {
 		t.Fatalf("mover restore lost state: %#v", c)
 	}
@@ -92,7 +92,7 @@ func TestRestoreOccupancyUsesMoverModeAndAllowsOffMap(t *testing.T) {
 		t.Fatal("mode-3 restore retained previous ground stamp")
 	}
 	restore(1, 20, 20)
-	if c := sys.Collisions[h]; c.HasStamp {
+	if c := handleRow(sys.Collisions, h); c.HasStamp {
 		t.Fatal("off-map restore recorded a non-existent stamp")
 	}
 
@@ -178,7 +178,7 @@ func TestRestoreHeadGoalBindsSavedAirMarkerFields(t *testing.T) {
 	u := w.Unit(h)
 	s := NewSystem(nil, Profile{}, NewOccupancyGrid())
 	s.BindWorld(w)
-	s.Flights[h] = &FlightState{}
+	setHandleRow(&s.Flights, h, &FlightState{})
 
 	head := &orders.Node{
 		Owner: h, RetailSubtypeCode: 2,
@@ -207,7 +207,7 @@ func TestRestoreHeadGoalBindsVelocitySteeringControls(t *testing.T) {
 	u := w.Unit(h)
 	s := NewSystem(nil, Profile{}, NewOccupancyGrid())
 	s.BindWorld(w)
-	s.Flights[h] = &FlightState{}
+	setHandleRow(&s.Flights, h, &FlightState{})
 
 	head := &orders.Node{
 		Owner: h, RetailSubtypeCode: 3,

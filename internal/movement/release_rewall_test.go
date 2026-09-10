@@ -48,7 +48,7 @@ func TestParkedRequesterIsRewalledAtRelease(t *testing.T) {
 
 	reg := sys.ensureLayerRegistry()
 	layer := reg.For("", wiringProfile)
-	anchor := sys.Collisions[parked].CachedAnchor
+	anchor := handleRow(sys.Collisions, parked).CachedAnchor
 
 	// (1) Another unit's request at tick 200 arms the watermark past the parked
 	// mover's creation stamp, so the revision pass restamps its rectangle and
@@ -104,7 +104,7 @@ func TestFreshRequesterIsNotRewalledAtRelease(t *testing.T) {
 
 	reg := sys.ensureLayerRegistry()
 	layer := reg.For("", wiringProfile)
-	anchor := sys.Collisions[mover].CachedAnchor
+	anchor := handleRow(sys.Collisions, mover).CachedAnchor
 
 	reg.ReviseFor("", wiringProfile, mover, 200)
 	// The mover commits this tick, so its stamp tick is ahead of the watermark

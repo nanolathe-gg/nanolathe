@@ -60,7 +60,7 @@ func TestPathFailureRecoveryRearmsEverySixtyTicks(t *testing.T) {
 	system.tick = 0
 	system.CancelPathRequest(h)
 	system.publishFunc(first[0], nil, path.StatusRejected)
-	route := system.Routes[h]
+	route := handleRow(system.Routes, h)
 	if route == nil || route.WantsRepath {
 		t.Fatalf("failed publication wants-repath=%v, want false before follower visit", route != nil && route.WantsRepath)
 	}
@@ -109,7 +109,7 @@ func TestPathFailureRecoveryRearmsEverySixtyTicks(t *testing.T) {
 
 	// Replacing the authoritative head cancels the old request and clears the
 	// old follower state. Calling the old head afterward cannot re-arm it.
-	oldToken := system.activeOrders[h].token
+	oldToken := handleRow(system.activeOrders, h).token
 	system.CancelPathRequest(h)
 	q.RemoveHead()
 	q.Push(moveID, orders.Node{Owner: h, GoalX: world.CellToWorld(9), GoalZ: world.CellToWorld(1)})
@@ -117,8 +117,8 @@ func TestPathFailureRecoveryRearmsEverySixtyTicks(t *testing.T) {
 	if newHead == nil || !system.ActivateMove(u, newHead) {
 		t.Fatal("activate replacement")
 	}
-	if system.activeOrders[h].order != newHead || system.activeOrders[h].token == oldToken {
-		t.Fatalf("replacement binding=%+v, old token=%d", system.activeOrders[h], oldToken)
+	if handleRow(system.activeOrders, h).order != newHead || handleRow(system.activeOrders, h).token == oldToken {
+		t.Fatalf("replacement binding=%+v, old token=%d", handleRow(system.activeOrders, h), oldToken)
 	}
 	if route.Status != 0 || system.HasPathFailure(h) {
 		t.Fatalf("head replacement retained old path status route=%d failure=%v", route.Status, system.HasPathFailure(h))
@@ -141,8 +141,8 @@ func TestPathFailureRecoveryRearmsEverySixtyTicks(t *testing.T) {
 	u.Attachment.Carrier = 99
 	system.BeginTick(201)
 	system.StepUnit(h, 201)
-	if route.Active || route.WantsRepath || route.LastRequestTick != 0 || system.activeOrders[h] != nil {
-		t.Fatalf("transport cleanup left follower state active=%v wants=%v last=%d binding=%+v", route.Active, route.WantsRepath, route.LastRequestTick, system.activeOrders[h])
+	if route.Active || route.WantsRepath || route.LastRequestTick != 0 || handleRow(system.activeOrders, h) != nil {
+		t.Fatalf("transport cleanup left follower state active=%v wants=%v last=%d binding=%+v", route.Active, route.WantsRepath, route.LastRequestTick, handleRow(system.activeOrders, h))
 	}
 	system.EndTick(201)
 }

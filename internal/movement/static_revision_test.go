@@ -130,7 +130,7 @@ func TestStaticRevisionInvalidatesGroundRouteAndPublishesCurrentRevision(t *test
 		t.Fatal("move activation failed")
 	}
 	sys.Scheduler.Tick(1)
-	route := sys.Routes[h]
+	route := handleRow(sys.Routes, h)
 	if route == nil || !route.Active || route.StaticRevision != terrain.StaticObstacleRevision() {
 		t.Fatalf("initial route = %#v, terrain revision %d", route, terrain.StaticObstacleRevision())
 	}
@@ -171,7 +171,7 @@ func TestStaticRevisionInvalidatesGroundRouteAndPublishesCurrentRevision(t *test
 	// later tick [04 R-PATH-01 §6–§7].
 	for tick := uint32(3); tick < 20; tick++ {
 		sys.Scheduler.Tick(tick)
-		route = sys.Routes[h]
+		route = handleRow(sys.Routes, h)
 		if route != nil && route.Active && route.StaticRevision == terrain.StaticObstacleRevision() {
 			break
 		}
@@ -219,7 +219,7 @@ func TestStaticRevisionDoesNotInvalidateAircraftRoute(t *testing.T) {
 	q.Push(moveID, orders.Node{GoalX: world.CellToWorld(4), GoalZ: world.CellToWorld(4)})
 	route := &Route{}
 	route.PublishAtRevision([]Point{{X: 5, Z: 5}, {X: 6, Z: 6}, {X: 7, Z: 7}}, 0)
-	sys.Routes[h] = route
+	setHandleRow(&sys.Routes, h, route)
 	terrain.BumpStaticObstacleRevision()
 	sys.BeginTick(1)
 	result := sys.StepUnit(h, 1)

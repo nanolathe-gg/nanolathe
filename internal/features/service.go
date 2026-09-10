@@ -189,6 +189,14 @@ type Service struct {
 	// which is what keeps the flag honest — see sortedInstanceKeys.
 	instanceKeys      []int
 	instanceKeysStale bool
+	// instanceValues is the key list's parallel value row: instanceValues[i]
+	// is what the map holds for instanceKeys[i]. The two per-tick walks over
+	// the whole table — the publication's AppendInstances and the grid resync
+	// — read it instead of hashing every key, which on a six-thousand-feature
+	// map was six thousand map lookups a tick each. setInstance and
+	// deleteInstance keep it in step for keys the list already carries, so a
+	// walk in progress observes exactly what a map read would have answered.
+	instanceValues []*Instance
 
 	// activeHead is the head of the active list of [05 R-FEAT-01 §2]: LIFO,
 	// the most recently stamped or ignited record first (active.go).
@@ -1232,8 +1240,34 @@ func (s *Service) sortedInstanceKeys() []int {
 		keys = append(keys, k)
 	}
 	sort.Ints(keys)
-	s.instanceKeys, s.instanceKeysStale = keys, false
+	values := make([]*Instance, len(keys))
+	for i, k := range keys {
+		values[i] = s.instances[k]
+	}
+	s.instanceKeys, s.instanceValues, s.instanceKeysStale = keys, values, false
 	return keys
+}
+
+// instanceValuesFor returns the value row parallel to a key list this service
+// handed out. It answers nil when the caller is holding some other list, which
+// sends that caller back to the map.
+func (s *Service) instanceValuesFor(keys []int) []*Instance {
+	if len(s.instanceValues) != len(keys) || (len(keys) > 0 && &s.instanceKeys[0] != &keys[0]) {
+		return nil
+	}
+	return s.instanceValues
+}
+
+// shadowInstance mirrors a map write into the parallel value row when the key
+// list already carries that key. A key the list does not carry needs no mirror:
+// the list is stale and will be rebuilt from the map before it is walked again.
+func (s *Service) shadowInstance(idx int, inst *Instance) {
+	if len(s.instanceValues) != len(s.instanceKeys) {
+		return
+	}
+	if i, ok := sort.Find(len(s.instanceKeys), func(i int) int { return idx - s.instanceKeys[i] }); ok {
+		s.instanceValues[i] = inst
+	}
 }
 
 // setInstance is the only way a feature instance enters the map. A record
@@ -1255,6 +1289,7 @@ func (s *Service) setInstance(idx int, inst *Instance) {
 		s.releaseArena(old)
 	}
 	s.instances[idx] = inst
+	s.shadowInstance(idx, inst)
 	if arenaOccupies(inst) {
 		s.attachEventRecord(inst)
 	}
@@ -1270,6 +1305,7 @@ func (s *Service) deleteInstance(idx int) {
 		s.releaseArena(inst)
 	}
 	delete(s.instances, idx)
+	s.shadowInstance(idx, nil)
 }
 
 // arenaOccupies reports whether an instance holds one of the 2048 live-arena
@@ -1307,7 +1343,7 @@ func (s *Service) arenaOccupants() int {
 // zero-fill of the whole instance pool at battle entry [08 R-SAVE-FEATURE-01].
 func (s *Service) resetInstances() {
 	s.instances = make(map[int]*Instance)
-	s.instanceKeys, s.instanceKeysStale = nil, true
+	s.instanceKeys, s.instanceValues, s.instanceKeysStale = nil, nil, true
 	s.activeHead = nil
 	s.arenaHeld = 0
 }
@@ -1373,7 +1409,16 @@ func (s *Service) InstanceAt(cx, cz int) *Instance {
 // read-only lookup order is separate from the active simulation list
 // [05 "Feature instance and terrain cell"][I1].
 func (s *Service) AppendInstances(dst []*Instance) []*Instance {
-	for _, key := range s.sortedInstanceKeys() {
+	keys := s.sortedInstanceKeys()
+	if values := s.instanceValuesFor(keys); values != nil {
+		for _, inst := range values {
+			if inst != nil {
+				dst = append(dst, inst)
+			}
+		}
+		return dst
+	}
+	for _, key := range keys {
 		if inst := s.instances[key]; inst != nil {
 			dst = append(dst, inst)
 		}
@@ -1717,8 +1762,15 @@ func (s *Service) syncInstancesToGrid() {
 		return
 	}
 	w := int(s.Terrain.CellW)
-	for _, idx := range s.sortedInstanceKeys() {
-		inst := s.instances[idx]
+	keys := s.sortedInstanceKeys()
+	values := s.instanceValuesFor(keys)
+	for i, idx := range keys {
+		var inst *Instance
+		if values != nil {
+			inst = values[i]
+		} else {
+			inst = s.instances[idx]
+		}
 		if inst == nil || inst.Def == nil {
 			s.deleteInstance(idx)
 			continue

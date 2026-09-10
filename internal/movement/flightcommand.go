@@ -134,7 +134,7 @@ func (s *System) FlightCommandFor(h pool.Handle, u *units.Unit) *FlightCommand {
 	if s == nil {
 		return nil
 	}
-	fl := s.Flights[h]
+	fl := handleRow(s.Flights, h)
 	if fl == nil {
 		return nil
 	}
@@ -162,7 +162,7 @@ func (s *System) StepFlightCommand(u *units.Unit, rec *orders.Node, _ *AirSector
 	if s == nil || u == nil {
 		return
 	}
-	fl := s.Flights[u.Handle]
+	fl := handleRow(s.Flights, u.Handle)
 	if fl == nil {
 		return
 	}
@@ -180,7 +180,7 @@ func (s *System) StepFlightCommand(u *units.Unit, rec *orders.Node, _ *AirSector
 	}
 	c.Flags = (c.Flags &^ flightCommandModeMask) | (mode << flightCommandModeShift)
 
-	c.produce(u, rec, s.Collisions[u.Handle])
+	c.produce(u, rec, handleRow(s.Collisions, u.Handle))
 
 	// The integrator's single input fetch [04 R-AIR-01 §1]. The mover's command
 	// words are FlightState's Target* fields; §10.1 gives the vertical control
@@ -467,7 +467,7 @@ func (s *System) syncStampedAirSector(u *units.Unit, coll *CollisionState) {
 	}
 	coll.airSector = s.AirSectors.sectorForStamp(u.X, u.Z, coll.CachedAnchor, coll.FootPrintX, coll.FootPrintZ)
 	coll.airOffMap = coll.airSector == &s.AirSectors.sentinel
-	if fl := s.Flights[u.Handle]; fl != nil {
+	if fl := handleRow(s.Flights, u.Handle); fl != nil {
 		// OffMap remains the integrator's isolated mirror. The canonical link
 		// and sentinel live on CollisionState for all stamped-unit consumers.
 		fl.OffMap = coll.airOffMap
@@ -512,7 +512,7 @@ func (s *System) levelFlightLean(u *units.Unit) {
 	if s == nil || u == nil {
 		return
 	}
-	fl := s.Flights[u.Handle]
+	fl := handleRow(s.Flights, u.Handle)
 	if fl == nil {
 		return
 	}

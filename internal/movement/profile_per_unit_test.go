@@ -82,10 +82,10 @@ func TestTwoMovementClassesInOneWorldKeepTheirOwnProfiles(t *testing.T) {
 
 	// Occupancy is stamped at each unit's own footprint, so the ship really
 	// occupies a 4x4 block.
-	if got := sys.Collisions[ship.Handle].FootPrintX; got != 4 {
+	if got := handleRow(sys.Collisions, ship.Handle).FootPrintX; got != 4 {
 		t.Fatalf("ship collision footprint %d, want 4", got)
 	}
-	if got := sys.Collisions[scout.Handle].FootPrintX; got != 1 {
+	if got := handleRow(sys.Collisions, scout.Handle).FootPrintX; got != 1 {
 		t.Fatalf("scout collision footprint %d, want 1", got)
 	}
 
@@ -122,8 +122,8 @@ func TestMissingMovementClassUsesUnitScratch(t *testing.T) {
 	if got := sys.ProfileFor(second.Handle); got != wantSecond {
 		t.Fatalf("second unresolved profile %+v, want %+v", got, wantSecond)
 	}
-	if sys.profileNames[first.Handle] == sys.profileNames[second.Handle] {
-		t.Fatalf("distinct scratch profiles aliased layer identity %q", sys.profileNames[first.Handle])
+	if handleRow(sys.profileNames, first.Handle) == handleRow(sys.profileNames, second.Handle) {
+		t.Fatalf("distinct scratch profiles aliased layer identity %q", handleRow(sys.profileNames, first.Handle))
 	}
 	// At a 20-deep water cell, the two unresolved units classify differently.
 	terrain.SeaLevel = 120

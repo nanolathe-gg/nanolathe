@@ -128,7 +128,7 @@ func (s *System) RestoreMover(h pool.Handle, data []byte) error {
 		return fmt.Errorf("movement: retail restore mover: unit %d unavailable", h)
 	}
 	s.EnsureUnit(u)
-	c := s.Collisions[h]
+	c := handleRow(s.Collisions, h)
 	if c == nil {
 		return fmt.Errorf("movement: retail restore mover: unit %d has no collision state", h)
 	}
@@ -144,7 +144,7 @@ func (s *System) RestoreMover(h pool.Handle, data []byte) error {
 	c.Mode, c.CachedMode, c.Blocked, c.SavedStateByte = mode, mode, blocked, state
 	// The mover's mode mirror and the packed unit-status mirror are separate
 	// save fields; the mover byte must not overwrite the unit's mirror.
-	if fl := s.Flights[h]; fl != nil {
+	if fl := handleRow(s.Flights, h); fl != nil {
 		fl.Mode = mode
 		fl.VX, fl.VY, fl.VZ = c.VX, c.VY, c.VZ
 		fl.Speed = c.Speed
@@ -159,19 +159,17 @@ func (s *System) RestoreMover(h pool.Handle, data []byte) error {
 		u.Move.VelY = numeric.Fixed(int64(c.VY))
 		u.Move.VelZ = numeric.Fixed(int64(c.VZ))
 	}
-	if st := s.Steers[h]; st != nil {
+	if st := handleRow(s.Steers, h); st != nil {
 		st.Speed = c.Speed
 	}
 	// The saved route/follower/proposal records are not present in a standard
 	// battle save.  Ensure no pre-restore request or stale route survives.
 	s.CancelPathRequest(h)
-	s.Routes[h] = &Route{}
-	if int(h) < len(s.sessions) {
-		s.sessions[int(h)] = nil
-	}
-	delete(s.activeOrders, h)
-	delete(s.moveGoals, h)
-	delete(s.arrivalHandles, h)
+	setHandleRow(&s.Routes, h, &Route{})
+	s.dropPathSession(int(h))
+	setHandleRow(&s.activeOrders, h, nil)
+	setHandleRow(&s.moveGoals, h, nil)
+	setHandleRow(&s.arrivalHandles, h, nil)
 	c.LastProposalTick = 0
 	return nil
 }
@@ -183,7 +181,7 @@ func (s *System) RestoreOccupancy(h pool.Handle, anchorX, anchorZ int16) error {
 	if s == nil || s.Grid == nil {
 		return fmt.Errorf("movement: retail restore occupancy: no grid")
 	}
-	c := s.Collisions[h]
+	c := handleRow(s.Collisions, h)
 	if c == nil {
 		return fmt.Errorf("movement: retail restore occupancy: unit %d has no collision state", h)
 	}

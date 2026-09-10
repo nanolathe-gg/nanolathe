@@ -112,7 +112,7 @@ func (s *System) recordCollisionHistory(tick uint32) {
 		if u == nil || !u.Alive {
 			continue
 		}
-		if c := s.Collisions[u.Handle]; c != nil {
+		if c := handleRow(s.Collisions, u.Handle); c != nil {
 			if s.collisionHistoryLimit <= 0 || len(s.collisionHistory) >= s.collisionHistoryLimit {
 				s.collisionHistoryDropped = true
 				if s.collisionHistoryLimit <= 0 {
@@ -153,12 +153,12 @@ func (s *System) ParitySnapshot(w *units.World, tick uint32) []MovementTrace {
 			continue
 		}
 		m := MovementTrace{Tick: tick, Slot: u.Handle, X: u.X.Raw(), Z: u.Z.Raw(), Heading: u.Move.Heading, Speed: u.Move.Speed.Raw()}
-		if c := s.Collisions[u.Handle]; c != nil {
+		if c := handleRow(s.Collisions, u.Handle); c != nil {
 			m.VelocityX, m.VelocityZ = c.VX, c.VZ
 			copyState := *c
 			m.Collision = &copyState
 		}
-		if r := s.Routes[u.Handle]; r != nil {
+		if r := handleRow(s.Routes, u.Handle); r != nil {
 			m.CurrentActive, m.CurrentDirty, m.CurrentStatus, m.CurrentStaticRevision = r.Active, r.Dirty, r.Status, r.StaticRevision
 			m.CurrentRouteCount = r.Count
 			m.CurrentRouteStorage = r.Points
@@ -178,8 +178,8 @@ func (s *System) ParitySnapshot(w *units.World, tick uint32) []MovementTrace {
 				m.NextRoute = append(m.NextRoute, m.Result.Points...)
 			}
 		}
-		if failure, ok := s.pathFailures[u.Handle]; ok {
-			copyFailure := failure
+		if failure := handleRow(s.pathFailures, u.Handle); failure != nil {
+			copyFailure := *failure
 			m.PathFailure = &copyFailure
 		}
 		m.CollisionHistory = s.CollisionHistory(u.Handle)

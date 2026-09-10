@@ -383,6 +383,9 @@ type Session struct {
 	radarUnitScratch   []*units.Unit
 	// The sensor phase's sliced live-unit walk, players then slots ascending.
 	sensorSlicedScratch []*units.Unit
+	// The publication's retained copy of the visibility service's contact
+	// snapshot, read by the radar index and the per-unit contact lookup.
+	sensorInputScratch []visibility.SensorInput
 
 	// DebugDisplayMode is the world composer's debug display mode byte
 	// [03 §3.12]. Its writers are now traced and there are exactly three: the

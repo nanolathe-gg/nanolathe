@@ -485,17 +485,21 @@ var mapRangeExceptions = map[string]string{
 // map range. This makes a sort, callback or other ordering dependency part of
 // the audit rather than allowing it to change behind an unchanged range body.
 var mapFunctionHashes = map[string]string{
-	"internal/ai/manager.go *Manager.EnsureStrategicInitialized":  "cba316ea4945f9095fea37a058826bc5f346f0451711b017b426d5ce2eefa660",
-	"internal/ai/profile.go cloneWeightTable":                     "c24030e7c8fcd13b14aeae9ef333f94c571fd0b0b98e59b14a3d7db12c86636e",
-	"internal/ai/profile.go *Profile.Difficulties":                "6ebccbe5fdec25f142139476db16d2e8dc5a6ca6df55bbfbf4a21842b8fc10bd",
-	"internal/ai/profile.go LoadProfile":                          "119b5500c827867e150450327bd13e543b91f5a0711b8b9df6f7a4eb7fc4708f",
-	"internal/ai/strategic.go *Strategic.InitClassVectors":        "c29060aff4a8a006af87ba9dfc48e82fab977928d358cafabb2711da03490644",
-	"internal/ai/strategic.go *Strategic.refreshCountsAndCenter":  "27025603520a216e18ea26c811992220b05173da9fe49ce7ec544913f7eb2b40",
-	"internal/ai/strategic.go *Strategic.recomputeClassVectors":   "ece3bb681f8272a5632f68a5280a0d014b168b07d4fa8bf42bc168cbd4a2bf0b",
-	"internal/cob/binding.go BindStrict":                          "833dd320728882053831252fe1cf9315c0a42c67042b3f2ae9d510bb912ef0f4",
-	"internal/construction/placement.go *Service.BuilderLinks":    "ab64326b5234a8e82416673727052e72d47df694047af752dba5b34341f3c0bf",
-	"internal/construction/placement.go *Service.SnapshotLinks":   "c001891b664d5693829dc524e5c7bad19b8a14c4341d396557013d6a5c1b40ca",
-	"internal/features/service.go *Service.sortedInstanceKeys":    "519cd232de7af34798f089755db1a9e54b23664d57ff9986f30690bb5bf5316f",
+	"internal/ai/manager.go *Manager.EnsureStrategicInitialized": "cba316ea4945f9095fea37a058826bc5f346f0451711b017b426d5ce2eefa660",
+	"internal/ai/profile.go cloneWeightTable":                    "c24030e7c8fcd13b14aeae9ef333f94c571fd0b0b98e59b14a3d7db12c86636e",
+	"internal/ai/profile.go *Profile.Difficulties":               "6ebccbe5fdec25f142139476db16d2e8dc5a6ca6df55bbfbf4a21842b8fc10bd",
+	"internal/ai/profile.go LoadProfile":                         "119b5500c827867e150450327bd13e543b91f5a0711b8b9df6f7a4eb7fc4708f",
+	"internal/ai/strategic.go *Strategic.InitClassVectors":       "c29060aff4a8a006af87ba9dfc48e82fab977928d358cafabb2711da03490644",
+	"internal/ai/strategic.go *Strategic.refreshCountsAndCenter": "27025603520a216e18ea26c811992220b05173da9fe49ce7ec544913f7eb2b40",
+	"internal/ai/strategic.go *Strategic.recomputeClassVectors":  "ece3bb681f8272a5632f68a5280a0d014b168b07d4fa8bf42bc168cbd4a2bf0b",
+	"internal/cob/binding.go BindStrict":                         "833dd320728882053831252fe1cf9315c0a42c67042b3f2ae9d510bb912ef0f4",
+	"internal/construction/placement.go *Service.BuilderLinks":   "ab64326b5234a8e82416673727052e72d47df694047af752dba5b34341f3c0bf",
+	"internal/construction/placement.go *Service.SnapshotLinks":  "c001891b664d5693829dc524e5c7bad19b8a14c4341d396557013d6a5c1b40ca",
+	// Re-audited: the rebuild now also fills the parallel value row the two
+	// per-tick walks read, so the map is walked once and hashed once instead
+	// of being hashed again per key at every walk. The range body, the sort
+	// and the order every consumer sees are unchanged (I1).
+	"internal/features/service.go *Service.sortedInstanceKeys":    "039ab36d7a77f4e480107a0613c31452e218f0e58a6ccbfec64b6f5689119730",
 	"internal/save/battle_image.go validateCarrierReferenceGraph": "3dd0048516ffdf5e47c88f0d813e8ea79da1990b598ab004ebc0fd0f6d031da0",
 	"internal/session/ai_entry.go initializeBattleAI":             "dcfe11a8f7d0c19b5c30f5f0342d56c6785414e911fabe66e1d5dc473838890e",
 	"internal/session/mission.go pruneRestrictedBuildMenus":       "83d3b5133ab38d04122d1387192dfc78679578f581c1a7abc6719332765b642e",

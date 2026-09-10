@@ -456,7 +456,7 @@ func TestVerticalSlice_TransportLoadMoveUnload(t *testing.T) {
 	// Cruise altitude should be capped at 0x1FF0000 and be max(sea, terrain)+cruisealt [04 §10.1]
 	expectedAlt := CruiseAltitudeForOffset(ter, targetX, targetZ, transDef.CruiseAlt)
 	// Flight target should be set correctly [04 §10.1]; actual Y may still be climbing due to yLimit speed/4 and route prune.
-	if fl, ok := sys.Flights[th]; ok {
+	if fl := handleRow(sys.Flights, th); fl != nil {
 		if fl.TargetY != int32(expectedAlt.Raw()) {
 			t.Fatalf("transport targetY mismatch: got %d want %d [04 §10.1]", fl.TargetY, expectedAlt.Raw())
 		}
@@ -546,7 +546,7 @@ func TestVerticalSlice_GunshipTakeoffMoveLand(t *testing.T) {
 	sys.EnsureUnit(w.Unit(ph))
 	// Gunship starts landed mode 1 [04 §9.1] 1 parked
 	w.Unit(gh).Move.Mode = 1
-	if fl, ok := sys.Flights[gh]; ok {
+	if fl := handleRow(sys.Flights, gh); fl != nil {
 		fl.Mode = 1
 		fl.Y = int32(gunY.Raw())
 	}
@@ -564,7 +564,7 @@ func TestVerticalSlice_GunshipTakeoffMoveLand(t *testing.T) {
 	if w.Unit(gh).Move.Mode != 2 {
 		t.Fatalf("TakeOff should set mode 2 active locomotion [04 §9.1]")
 	}
-	if fl, ok := sys.Flights[gh]; ok {
+	if fl := handleRow(sys.Flights, gh); fl != nil {
 		if fl.Mode != 2 {
 			t.Fatalf("flight mode 2")
 		}
@@ -608,7 +608,7 @@ func TestVerticalSlice_GunshipTakeoffMoveLand(t *testing.T) {
 	}
 	// Cruise altitude should be full target at waypoint [04 §10.1]
 	expFull := CruiseAltitudeForOffset(ter, targetX, targetZ, gunDef.CruiseAlt)
-	if fl, ok := sys.Flights[gh]; ok {
+	if fl := handleRow(sys.Flights, gh); fl != nil {
 		if fl.TargetY != int32(expFull.Raw()) {
 			t.Fatalf("gunship targetY mismatch: got %d want %d [04 §10.1]", fl.TargetY, expFull.Raw())
 		}
@@ -733,7 +733,7 @@ func TestSchedulerForNaval(t *testing.T) {
 	q := orders.QueueForUnit(w.Unit(sh))
 	q.Push(id, orders.Node{GoalX: world.CellToWorld(28), GoalZ: world.CellToWorld(10)})
 	sys.Scheduler.Tick(60)
-	route := sys.Routes[sh]
+	route := handleRow(sys.Routes, sh)
 	if route == nil || !route.Active {
 		t.Fatalf("ship route not published after scheduler tick")
 	}

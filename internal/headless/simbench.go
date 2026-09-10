@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/platform/benchlock"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
@@ -400,12 +401,23 @@ func ComposeSimBenchBattle(opts SimBenchOptions, fs vfs.FSOps, catalog *content.
 // simBenchStep advances exactly one authoritative tick. One Step call per tick
 // is what the windowed host does, and it keeps the once-per-pump executor tail
 // on the same cadence as the tick it follows [01 §4.4].
+//
+// The drain destination is retained. Handing the drain a nil slice makes it
+// allocate the whole retained queue every tick, and that is the benchmark
+// HOST's allocation showing up in the simulation's own allocation profile --
+// it was 2.4% of the measured window. The windowed host already keeps a
+// buffer; this one now does too.
 func simBenchStep(sess *session.Session) {
 	sess.Step(sess.Clock.ScaledAnchor + 1)
 	if sess.Snapshot != nil {
-		sess.Snapshot.DrainCommittedEvents(nil)
+		simBenchDrained = sess.Snapshot.DrainCommittedEvents(simBenchDrained)
 	}
 }
+
+// simBenchDrained is the host's event sink. The benchmark discards what it
+// drains -- there is no presentation consumer -- and the simulation never
+// reads it, so one buffer for the whole run is the whole of its lifetime [I6].
+var simBenchDrained []frame.EventView
 
 // simBenchPhaseTimer accumulates the wall time between phase boundaries. The
 // callback receives the phases of one tick in registry order [I7], so the slot

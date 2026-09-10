@@ -33,8 +33,8 @@ func TestCarriedCargoReleasesGroundCells(t *testing.T) {
 	w.Unit(th).Remaining = 0
 	w.Unit(ch).Remaining = 0
 
-	cargoID := sys.Collisions[ch].ID
-	pickup := sys.Collisions[ch].CachedAnchor
+	cargoID := handleRow(sys.Collisions, ch).ID
+	pickup := handleRow(sys.Collisions, ch).CachedAnchor
 	if occ, ok := grid.OccupantAt(pickup); !ok || occ != cargoID {
 		t.Fatalf("fixture: cargo must hold its ground cell before pickup, got %d %v", occ, ok)
 	}
@@ -74,10 +74,10 @@ func TestCarriedCargoReleasesGroundCells(t *testing.T) {
 	// Carry it away: the carried-position setter follows the carrier.
 	dx, dz := world.CellToWorld(12), world.CellToWorld(12)
 	w.Unit(th).X, w.Unit(th).Z = dx, dz
-	if fl := sys.Flights[th]; fl != nil {
+	if fl := handleRow(sys.Flights, th); fl != nil {
 		fl.X, fl.Z = int32(dx.Raw()), int32(dz.Raw())
 	}
-	if coll := sys.Collisions[th]; coll != nil {
+	if coll := handleRow(sys.Collisions, th); coll != nil {
 		coll.X, coll.Z = int32(dx.Raw()), int32(dz.Raw())
 	}
 	runMovementTick(sys, 2, w)
@@ -87,7 +87,7 @@ func TestCarriedCargoReleasesGroundCells(t *testing.T) {
 		t.Fatalf("unload refused: %s", msg)
 	}
 	runMovementTick(sys, 3, w)
-	drop := sys.Collisions[ch].CachedAnchor
+	drop := handleRow(sys.Collisions, ch).CachedAnchor
 	occ, held := grid.OccupantAt(drop)
 	if !held || occ != cargoID {
 		t.Errorf("released cargo must stamp its ground cell at %+v, got %d %v [04 R-AIR-01 §10]", drop, occ, held)

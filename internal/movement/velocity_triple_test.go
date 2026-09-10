@@ -44,7 +44,7 @@ func TestGroundCommitPublishesVelocityTriple(t *testing.T) {
 		if u.Move.VelY != 0 {
 			t.Fatalf("tick %d: ground vertical velocity = %d, want a literal zero [04 R-MOV-01 §4]", tick, u.Move.VelY)
 		}
-		if system.Collisions[h].Blocked {
+		if handleRow(system.Collisions, h).Blocked {
 			t.Fatalf("tick %d: the fixture mover was rejected; it must travel freely for this assertion", tick)
 		}
 		if got, want := u.X.Sub(beforeX), u.Move.VelX; got != want {
@@ -86,7 +86,7 @@ func TestCarriedBranchCopiesCarrierVelocityTriple(t *testing.T) {
 		t.Fatal("attach cargo")
 	}
 	// A carrier whose mover carries a horizontal velocity.
-	coll := system.Collisions[carrier]
+	coll := handleRow(system.Collisions, carrier)
 	coll.VX, coll.VZ, coll.Speed = 12345, -6789, 20000
 	system.SyncCarriedMotion(w)
 	cu := w.Unit(cargo)
@@ -96,8 +96,8 @@ func TestCarriedBranchCopiesCarrierVelocityTriple(t *testing.T) {
 	}
 	// The zeroing arm: with no mover record for the carrier the copy is an
 	// exact zero triple, not a retention of what the cargo last held.
-	delete(system.Collisions, carrier)
-	delete(system.Flights, carrier)
+	setHandleRow(&system.Collisions, carrier, nil)
+	setHandleRow(&system.Flights, carrier, nil)
 	system.SyncCarriedMotion(w)
 	if cu.Move.VelX != 0 || cu.Move.VelY != 0 || cu.Move.VelZ != 0 {
 		t.Fatalf("mover-less carrier: cargo triple = (%d,%d,%d), want zeroes [04 R-COLL-01 §1]",

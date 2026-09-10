@@ -6,22 +6,32 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 )
 
-// appendUnitView reuses the destination unit and nested piece/cargo storage
-// left by Frame.Reset. The source value is copied only after the destination
-// buffers have been saved. A frame without reserved capacity still
-// grows (append), so a session published before any Frame.Reserve call works.
-func appendUnitView(dst []frame.UnitView, src frame.UnitView) []frame.UnitView {
-	i := len(dst)
-	if i < cap(dst) {
-		dst = dst[:i+1]
-	} else {
-		dst = append(dst, frame.UnitView{})
+// reserveUnitView extends the destination by one element WITHOUT clearing it,
+// so the caller can save the nested piece and cargo storage Frame.Reset left
+// there and then write the view straight into the element. A frame without
+// reserved capacity still grows (append), so a session published before any
+// Frame.Reserve call works.
+//
+// The publication used to build a UnitView as a value and hand it here to be
+// copied in. The struct is 256 bytes and the loop runs once per live unit per
+// tick, so that copy was one of the largest single costs in the publication;
+// writing through the element removes it. The element's contents are fully
+// overwritten by the caller's struct assignment, exactly as the copy did.
+func reserveUnitView(dst []frame.UnitView) []frame.UnitView {
+	if i := len(dst); i < cap(dst) {
+		return dst[:i+1]
 	}
-	pieces, cargo := dst[i].Pieces, dst[i].Cargo
-	dst[i] = src
-	dst[i].Pieces = pieces[:0]
-	dst[i].Cargo = cargo[:0]
-	return dst
+	return append(dst, frame.UnitView{})
+}
+
+// reserveFeatureView is the same reservation for the feature channel, whose
+// view is 208 bytes and whose loop runs once per live feature per tick -- six
+// thousand of them on the benchmark's map.
+func reserveFeatureView(dst []frame.FeatureView) []frame.FeatureView {
+	if i := len(dst); i < cap(dst) {
+		return dst[:i+1]
+	}
+	return append(dst, frame.FeatureView{})
 }
 
 func appendOrderQueueView(dst []frame.OrderQueueView, src orders.SnapshotQueue, cat *content.Catalog) []frame.OrderQueueView {

@@ -69,16 +69,13 @@ func (s *System) BindMoveGoal(h pool.Handle, head *orders.Node, x, z numeric.Fix
 	if s == nil || head == nil {
 		return
 	}
-	if s.moveGoals == nil {
-		s.moveGoals = make(map[pool.Handle]*moveGoal)
-	}
 	goal := path.Goal(nil)
-	if prior := s.moveGoals[h]; prior != nil && prior.order == head {
+	if prior := handleRow(s.moveGoals, h); prior != nil && prior.order == head {
 		// Rectangle steering refreshes the world point after the shape payload
 		// has been installed. Keep that payload attached to the same node.
 		goal = prior.goal
 	}
-	s.moveGoals[h] = &moveGoal{order: head, x: x, z: z, goal: goal}
+	setHandleRow(&s.moveGoals, h, &moveGoal{order: head, x: x, z: z, goal: goal})
 }
 
 // HasGroundGoal reports whether head currently owns this mover's ground goal
@@ -98,7 +95,7 @@ func (s *System) HasGroundGoal(h pool.Handle, head *orders.Node) bool {
 	if s == nil || s.moveGoals == nil || head == nil {
 		return false
 	}
-	g := s.moveGoals[h]
+	g := handleRow(s.moveGoals, h)
 	return g != nil && g.order == head
 }
 
@@ -106,7 +103,7 @@ func (s *System) moveGoalPayload(h pool.Handle, head *orders.Node) path.Goal {
 	if s == nil || s.moveGoals == nil || head == nil {
 		return nil
 	}
-	if g := s.moveGoals[h]; g != nil && g.order == head {
+	if g := handleRow(s.moveGoals, h); g != nil && g.order == head {
 		return g.goal
 	}
 	return nil
@@ -117,7 +114,7 @@ func (s *System) ClearMoveGoal(h pool.Handle) {
 	if s == nil || s.moveGoals == nil {
 		return
 	}
-	delete(s.moveGoals, h)
+	setHandleRow(&s.moveGoals, h, nil)
 }
 
 // MoveGoalFor reports the world point the mover for handle h steers at while
@@ -139,7 +136,7 @@ func (s *System) moveGoalFor(h pool.Handle, head *orders.Node) (x, z numeric.Fix
 		return 0, 0, false
 	}
 	if s != nil && s.moveGoals != nil {
-		if g := s.moveGoals[h]; g != nil && g.order == head {
+		if g := handleRow(s.moveGoals, h); g != nil && g.order == head {
 			return g.x, g.z, true
 		}
 	}

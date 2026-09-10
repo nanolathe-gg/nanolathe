@@ -86,11 +86,11 @@ func TestParkPhase0InstallsThroughTheRectangleInstaller(t *testing.T) {
 		t.Fatal("Park phase 0 published no rectangle on its parameter words")
 	}
 	sys.ActivateMove(u, head)
-	ah := sys.arrivalHandles[u.Handle]
+	ah := handleRow(sys.arrivalHandles, u.Handle)
 	if ah == nil || ah.payload == nil {
 		t.Fatal("the arrival handle carries no installed payload")
 	}
-	coll := sys.Collisions[u.Handle]
+	coll := handleRow(sys.Collisions, u.Handle)
 	if coll == nil {
 		t.Fatal("no collision state for the product")
 	}

@@ -105,7 +105,7 @@ func TestLocomotionAccelBrakeRamp(t *testing.T) {
 	u := w.Unit(h)
 	sys.BindWorld(w)
 	sys.EnsureUnit(u)
-	steer2 := sys.Steers[h]
+	steer2 := handleRow(sys.Steers, h)
 	// Override accel/brake for deterministic
 	steer2.Acceleration = 1 * 65536
 	steer2.BrakeRate = 2 * 65536

@@ -49,10 +49,10 @@ func carriedVisitFixture(t *testing.T, carrierFirst bool) (*System, *units.World
 func installCarrierRoute(s *System, carrier *units.Unit) {
 	q := orders.QueueForUnit(carrier)
 	q.Push(orders.Lookup("Move_Ground"), orders.Node{GoalX: world.CellToWorld(20), GoalZ: carrier.Z})
-	s.Routes[carrier.Handle] = &Route{Active: true, Count: 2, Points: [20]Point{
+	setHandleRow(&s.Routes, carrier.Handle, &Route{Active: true, Count: 2, Points: [20]Point{
 		{X: int32(carrier.X.Raw() >> 16), Z: int32(carrier.Z.Raw() >> 16)},
 		{X: 320, Z: int32(carrier.Z.Raw() >> 16)},
-	}}
+	}})
 }
 
 func visitMovementTick(s *System, w *units.World, tick uint32, observe func(*units.Unit)) {
@@ -112,8 +112,8 @@ func TestCarriedCommitOccursAtCargoVisit(t *testing.T) {
 				return
 			}
 			observed = cargo.X
-			anchor := s.Collisions[cargo.Handle].CachedAnchor
-			if got, ok := s.Grid.OccupantAtPlane(PlaneAir, anchor); !ok || got != s.Collisions[cargo.Handle].ID {
+			anchor := handleRow(s.Collisions, cargo.Handle).CachedAnchor
+			if got, ok := s.Grid.OccupantAtPlane(PlaneAir, anchor); !ok || got != handleRow(s.Collisions, cargo.Handle).ID {
 				t.Fatalf("later observer sees cargo occupancy %d/%t at %+v", got, ok, anchor)
 			}
 		})
@@ -132,14 +132,14 @@ func TestAttachmentChangesAfterBeginTickUseLiveMembership(t *testing.T) {
 		if _, ok := DetachCargo(w, cargo.Handle); !ok {
 			t.Fatal("prepare unattached cargo")
 		}
-		s.Routes[cargo.Handle] = &Route{Active: true, Count: 2, Points: [20]Point{{X: 32, Z: 32}, {X: 64, Z: 32}}}
+		setHandleRow(&s.Routes, cargo.Handle, &Route{Active: true, Count: 2, Points: [20]Point{{X: 32, Z: 32}, {X: 64, Z: 32}}})
 		s.BeginTick(1)
 		if !AttachCargoMode(w, carrier.Handle, cargo.Handle, -1, 1) {
 			t.Fatal("attach after BeginTick")
 		}
 		w.VisitActiveSlots(func(v units.SlotVisit) { s.StepUnit(v.Handle, 1) })
 		s.EndTick(1)
-		if route := s.Routes[cargo.Handle]; route != nil && route.Active {
+		if route := handleRow(s.Routes, cargo.Handle); route != nil && route.Active {
 			t.Fatal("live attach did not take carried branch")
 		}
 		if cargo.X != carrier.X {
@@ -166,14 +166,14 @@ func TestAttachmentChangesAfterBeginTickUseLiveMembership(t *testing.T) {
 			}
 			q := orders.QueueForUnit(cargo)
 			q.Push(orders.Lookup("Move_Ground"), orders.Node{GoalX: world.CellToWorld(12), GoalZ: world.CellToWorld(2)})
-			s.Routes[cargo.Handle] = &Route{Active: true, Count: 2, Points: [20]Point{{X: 32, Z: 32}, {X: 64, Z: 32}}}
+			setHandleRow(&s.Routes, cargo.Handle, &Route{Active: true, Count: 2, Points: [20]Point{{X: 32, Z: 32}, {X: 64, Z: 32}}})
 			s.BeginTick(1)
 			if !tt.detach(w, cargo) {
 				t.Fatal("detach after BeginTick")
 			}
 			w.VisitActiveSlots(func(v units.SlotVisit) { s.StepUnit(v.Handle, 1) })
 			s.EndTick(1)
-			if route := s.Routes[cargo.Handle]; route == nil || !route.Active {
+			if route := handleRow(s.Routes, cargo.Handle); route == nil || !route.Active {
 				t.Fatal("stale carried state cleared the free mover route")
 			}
 		})

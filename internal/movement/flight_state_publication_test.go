@@ -13,7 +13,7 @@ import (
 func TestFlightCommitPublishesMoverSaveWords(t *testing.T) {
 	sys, _, u := takeoffFixture(t)
 	h := u.Handle
-	fl := sys.Flights[h]
+	fl := handleRow(sys.Flights, h)
 	fl.X, fl.Y, fl.Z = 11, 12, 13
 	fl.VX, fl.VY, fl.VZ = 21, -22, 23
 	fl.LeanX, fl.LeanY, fl.LeanZ = 31, -32, 33
@@ -44,12 +44,12 @@ func TestFlightRestoreRepublishesLiveWordsBeforeCallbacks(t *testing.T) {
 		t.Fatal("airborne mode setup did not change the mover")
 	}
 	h := u.Handle
-	fl := sys.Flights[h]
+	fl := handleRow(sys.Flights, h)
 	fl.VX, fl.VY, fl.VZ = 3, -4, 5
 	fl.LeanX, fl.LeanY, fl.LeanZ = 6, -7, 8
 	fl.Speed, fl.TurnResidual = 9, -10
 	sys.commitFlightState(u, fl)
-	sys.Collisions[h].LastStampTick = 11
+	handleRow(sys.Collisions, h).LastStampTick = 11
 	image, err := sys.RetailMoverImage(h)
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +79,7 @@ func TestLandingModePublishesDecayedWordsBeforeDeactivateCue(t *testing.T) {
 	if !sys.SetMoverMode(u, 2) {
 		t.Fatal("airborne mode setup did not change the mover")
 	}
-	fl := sys.Flights[u.Handle]
+	fl := handleRow(sys.Flights, u.Handle)
 	fl.VX, fl.VY, fl.VZ, fl.Speed = 12, -13, 14, 15
 	fl.LeanX, fl.LeanY, fl.LeanZ, fl.TurnResidual = 1<<20, -(1 << 20), 1<<19, -16
 	sys.commitFlightState(u, fl)
@@ -161,7 +161,7 @@ func TestFlightSaveRestoreMatchesNextNormalTickAfter120Ticks(t *testing.T) {
 func TestAirSectorStampUsesFootprintBoundaryAndPriorLink(t *testing.T) {
 	sys, _, u := takeoffFixture(t)
 	h := u.Handle
-	coll := sys.Collisions[h]
+	coll := handleRow(sys.Collisions, h)
 	if coll.airSector == nil || coll.airOffMap {
 		t.Fatal("in-map creation did not retain an ordinary sector")
 	}
@@ -244,7 +244,7 @@ func TestFollowMarkerReadsGroundTargetStampedSector(t *testing.T) {
 	if dst != (Vec3{X: pad.X, Y: pad.Y, Z: pad.Z}) {
 		t.Fatalf("follow goal = %+v, want grounded pad position %+v", dst, Vec3{X: pad.X, Y: pad.Y, Z: pad.Z})
 	}
-	if coll := sys.Collisions[pad.Handle]; coll == nil || coll.airSector == nil || coll.airSector.Smoothed != want {
+	if coll := handleRow(sys.Collisions, pad.Handle); coll == nil || coll.airSector == nil || coll.airSector.Smoothed != want {
 		t.Fatal("follow marker did not use the pad's stamped sector link")
 	}
 }

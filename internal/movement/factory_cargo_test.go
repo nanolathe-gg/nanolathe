@@ -35,12 +35,12 @@ func TestFactoryCargoFollowsPieceAndKeepsGroundStamp(t *testing.T) {
 	system.BindWorld(w)
 	system.EnsureUnit(factory)
 	system.EnsureUnit(product)
-	system.Collisions[factory.Handle].VX = 1234
-	system.Collisions[factory.Handle].VZ = -5678
-	system.Collisions[factory.Handle].Speed = 9012
-	system.Collisions[product.Handle].VX = 77
-	system.Collisions[product.Handle].VZ = 88
-	oldAnchor := system.Collisions[product.Handle].OldAnchor
+	handleRow(system.Collisions, factory.Handle).VX = 1234
+	handleRow(system.Collisions, factory.Handle).VZ = -5678
+	handleRow(system.Collisions, factory.Handle).Speed = 9012
+	handleRow(system.Collisions, product.Handle).VX = 77
+	handleRow(system.Collisions, product.Handle).VZ = 88
+	oldAnchor := handleRow(system.Collisions, product.Handle).OldAnchor
 	if !AttachCargo(w, factory.Handle, product.Handle, 0) {
 		t.Fatal("factory product attach failed")
 	}
@@ -56,7 +56,7 @@ func TestFactoryCargoFollowsPieceAndKeepsGroundStamp(t *testing.T) {
 	if product.Move.Bank != factory.Move.Bank+11 || product.Move.Heading != factory.Move.Heading+22 || product.Move.Pitch != factory.Move.Pitch+33 {
 		t.Fatalf("carried orientation bank/heading/pitch=%d/%d/%d", product.Move.Bank, product.Move.Heading, product.Move.Pitch)
 	}
-	coll := system.Collisions[product.Handle]
+	coll := handleRow(system.Collisions, product.Handle)
 	if coll.VX != 1234 || coll.VZ != -5678 || coll.Speed != 9012 {
 		t.Fatalf("carried ground velocity=(%d,%d) speed=%d, want carrier mover", coll.VX, coll.VZ, coll.Speed)
 	}
@@ -69,7 +69,7 @@ func TestFactoryCargoFollowsPieceAndKeepsGroundStamp(t *testing.T) {
 	if _, present := grid.OccupantAt(oldAnchor); present {
 		t.Fatal("old footprint remained stamped after carried cross-cell update")
 	}
-	delete(system.Collisions, factory.Handle)
+	setHandleRow(&system.Collisions, factory.Handle, nil)
 	system.SyncCarriedMotion(w)
 	if coll.VX != 0 || coll.VZ != 0 || coll.Speed != 0 || product.Move.Speed != 0 {
 		t.Fatalf("carried stale velocity not zeroed: (%d,%d) speed=%d unit=%d", coll.VX, coll.VZ, coll.Speed, product.Move.Speed.Raw())

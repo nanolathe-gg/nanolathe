@@ -55,8 +55,8 @@ func TestFollowerRequestsContinuationAtSixtyTicks(t *testing.T) {
 	// [04 R-MOV-03 §2 step 3]. The install detaches the active binding, so it
 	// runs before the binding is planted here.
 	system.InstallPointGoal(orders.PointGoalRequest{Owner: head.Owner, Node: head, X: head.GoalX, Z: head.GoalZ, Radius: 4})
-	system.activeOrders[h] = &activeMove{order: head, token: 9}
-	route := system.Routes[h]
+	setHandleRow(&system.activeOrders, h, &activeMove{order: head, token: 9})
+	route := handleRow(system.Routes, h)
 	route.Active = true
 	route.Count = 1 // published prefix exhausted: fewer than two points
 	route.LastRequestTick = 0
@@ -210,7 +210,7 @@ func TestActivateMoveInstallsImmediateSyntheticRoute(t *testing.T) {
 	if !system.ActivateMove(u, q.Head()) {
 		t.Fatal("move did not activate")
 	}
-	route := system.Routes[h]
+	route := handleRow(system.Routes, h)
 	if route == nil || !route.Active || route.Count != 2 || !route.WantsRepath {
 		t.Fatalf("new goal did not install live fallback: %+v", route)
 	}

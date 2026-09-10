@@ -302,6 +302,16 @@ func (f stripFamily) isPuffFamily() bool {
 type stripTable struct {
 	strips [stripCount][]stripObject
 
+	// particleFree is the sub-record storage of destroyed containers, kept for
+	// the next container of any family. A destroyed container's storage was
+	// dropped with the container, so every emitter grew its list from nil
+	// again -- 12% of everything the simulation allocated. Retail's own pool
+	// is fixed slots [03 R-FX-02 §1] and this is the same idea one level down;
+	// it is storage only, and no container ever sees another's records,
+	// because a buffer is recycled exactly once, from the copy of a container
+	// that has already been removed.
+	particleFree [][]stripParticle
+
 	// live is the shared slot pool's occupancy: one count across all ten
 	// strips, capped at stripPoolCapacity [03 R-FX-02 §4]. Retail's pool is a
 	// LIFO free list of fixed slots [03 R-FX-02 §1]; nothing here depends on
@@ -369,11 +379,37 @@ func (t *stripTable) append(strip int, o stripObject) {
 	if len(t.strips[strip]) > stripSteadyCap {
 		// Destroy the oldest object and slide the survivors left; same-strip
 		// order among survivors equals insertion order [R-STRIP-01 §1].
+		t.recycleParticles(t.strips[strip][0].particles)
 		t.strips[strip] = t.strips[strip][1:]
 		t.releaseSlot()
 	}
 	t.strips[strip] = append(t.strips[strip], o)
 	t.live++
+}
+
+// takeParticles hands a destroyed container's sub-record storage to a new one,
+// emptied. A table with none returns nil, which appends exactly as before.
+func (t *stripTable) takeParticles() []stripParticle {
+	if t == nil {
+		return nil
+	}
+	if n := len(t.particleFree); n > 0 {
+		buf := t.particleFree[n-1]
+		t.particleFree = t.particleFree[:n-1]
+		return buf[:0]
+	}
+	return nil
+}
+
+// recycleParticles keeps a destroyed container's storage. The caller must hold
+// the only reference to it: every call site passes the copy it took of a
+// container it is removing. stripParticle carries no pointers, so nothing is
+// retained by keeping the array.
+func (t *stripTable) recycleParticles(buf []stripParticle) {
+	if t == nil || cap(buf) == 0 || len(t.particleFree) >= stripPoolCapacity {
+		return
+	}
+	t.particleFree = append(t.particleFree, buf[:0])
 }
 
 // releaseSlot is the pool's return entry: every path that destroys a strip
@@ -417,6 +453,7 @@ func (t *stripTable) sweepStrip(strip int, tick uint32, crt *rng.CRT, wind *worl
 			// destructor's flag returns the slot to the shared pool
 			// [03 R-FX-02 §4].
 			t.releaseSlot()
+			t.recycleParticles(o.particles)
 			continue
 		}
 		o.update(tick, crt, wind, gravityWord, ter)
@@ -1063,6 +1100,7 @@ func (s *Session) appendStripNanoEmitterBoxes(srcMin, srcMax, dstMin, dstMax [3]
 	dstOrigin, dstExtent := narrowBox(dstMin, dstMax)
 	o := stripObject{
 		family:        stripFamilyNano,
+		particles:     s.strips.takeParticles(),
 		windowEnd:     tick + 1,
 		nextSpawn:     tick + 1,
 		spawnInterval: 1,
@@ -1156,6 +1194,7 @@ func (s *Session) appendStripSmokePuffer(strip int, pos [3]numeric.Fixed, init S
 	}
 	o := stripObject{
 		family:          stripFamilySmoke,
+		particles:       s.strips.takeParticles(),
 		src:             pos,
 		frameDelayParam: hold,
 		frameCountBase:  s.smokeFrameLimit(init),
@@ -1239,6 +1278,7 @@ func (s *Session) appendStripSprinkle(strip int, a, b [3]numeric.Fixed, spacing 
 	}
 	o := stripObject{
 		family:        stripFamilySprinkle,
+		particles:     s.strips.takeParticles(),
 		windowEnd:     tick + 1,
 		nextSpawn:     tick + 1,
 		spawnInterval: 1,
@@ -1303,6 +1343,7 @@ func (s *Session) appendStripGeothermalSteam(pos [3]numeric.Fixed) {
 	}
 	o := stripObject{
 		family:          stripFamilyVentSteam,
+		particles:       s.strips.takeParticles(),
 		src:             pos,
 		frameDelayParam: smokeDefaultFrameDelay,
 		frameCountBase:  s.smokeEntryFrameCountBase(0),

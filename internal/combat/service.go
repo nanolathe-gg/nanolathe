@@ -630,9 +630,11 @@ type targetRegistry struct {
 	// seen is this tick's view of the sensor phase's seen bit, indexed by unit
 	// handle. It is refreshed at most once per tick and only on a tick that
 	// rebuilds at least one side's registry.
-	seen       []bool
-	seenTick   uint32
-	seenPrimed bool
+	seen     []bool
+	seenTick uint32
+	// seenScratch is refreshSeen's retained copy of the sensor snapshot.
+	seenScratch []visibility.SensorInput
+	seenPrimed  bool
 
 	// walkScratch is the destination the rebuild's pool-order walk appends
 	// into, so the walk that runs for every side on the cadence tick reuses one
@@ -684,7 +686,10 @@ func (r *targetRegistry) refreshSeen(tick uint32, vis *visibility.Service) {
 	if vis == nil {
 		return
 	}
-	for _, in := range vis.SensorInputs() { // a slice, in the sensor phase's order (I1)
+	// Retained storage: the snapshot is walked here and nowhere else, and the
+	// refresh runs once a tick.
+	r.seenScratch = vis.AppendSensorInputs(r.seenScratch[:0])
+	for _, in := range r.seenScratch { // a slice, in the sensor phase's order (I1)
 		if in.Status&visibility.SeenBit == 0 {
 			continue
 		}
@@ -1004,7 +1009,7 @@ func (s *Service) materializeCandidatesInRange(u *units.Unit, w *units.World, li
 	if len(list) == 0 {
 		return nil
 	}
-	var out []Candidate
+	out := s.candidateScratch[:0]
 	for _, h := range list {
 		cand := w.Unit(h)
 		if cand == nil || cand.Handle == u.Handle {
@@ -1016,10 +1021,14 @@ func (s *Service) materializeCandidatesInRange(u *units.Unit, w *units.World, li
 		if !WithinRange(u.X, u.Z, cand.X, cand.Z, rangeLimit) {
 			continue
 		}
-		if out == nil {
-			out = make([]Candidate, 0, len(list))
-		}
 		out = append(out, acquisitionCandidate(u, cand, seaLevel, sensorStatus(vis, cand.Handle), catalog))
+	}
+	s.candidateScratch = out
+	if len(out) == 0 {
+		// The empty result stays nil: the caller distinguishes "nothing
+		// selected" by length, and returning the empty buffer would hand the
+		// next call a slice it also owns.
+		return nil
 	}
 	return out
 }

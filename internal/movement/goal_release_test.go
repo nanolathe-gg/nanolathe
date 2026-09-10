@@ -57,7 +57,7 @@ func TestReleaseGoalPayloadHandsTheControllerANullGoal(t *testing.T) {
 	if !sys.HasPathRequest(h) {
 		t.Fatal("fixture did not put a search in flight")
 	}
-	route := sys.Routes[h]
+	route := handleRow(sys.Routes, h)
 	if route == nil {
 		t.Fatal("mover has no route record")
 	}

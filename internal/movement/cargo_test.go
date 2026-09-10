@@ -34,7 +34,7 @@ func TestScriptCargoCommitRelinksSameCarrierAndDropsAtCurrentPosition(t *testing
 		t.Fatal("second cargo attach failed")
 	}
 
-	initial := sys.Collisions[cargo.Handle].CachedAnchor
+	initial := handleRow(sys.Collisions, cargo.Handle).CachedAnchor
 	if _, ok := grid.OccupantAtPlane(PlaneGround, initial); !ok {
 		t.Fatal("fixture cargo did not occupy its initial ground cell")
 	}
@@ -77,7 +77,7 @@ func TestScriptCargoCommitRelinksSameCarrierAndDropsAtCurrentPosition(t *testing
 	// footprint to make that gate observable.
 	carrier.X, carrier.Z = world.CellToWorld(16), world.CellToWorld(16)
 	sys.SyncCarriedMotion(w)
-	carried := sys.Collisions[cargo.Handle].CachedAnchor
+	carried := handleRow(sys.Collisions, cargo.Handle).CachedAnchor
 	if _, ok := grid.OccupantAtPlane(PlaneAir, carried); !ok {
 		t.Fatal("mode-2 carried cargo did not stamp the air plane")
 	}
@@ -91,7 +91,7 @@ func TestScriptCargoCommitRelinksSameCarrierAndDropsAtCurrentPosition(t *testing
 		t.Fatalf("drop mover mode = %d, want grounded mode 1", got)
 	}
 	runMovementTick(sys, 1, w)
-	dropped := sys.Collisions[cargo.Handle].CachedAnchor
+	dropped := handleRow(sys.Collisions, cargo.Handle).CachedAnchor
 	if _, ok := grid.OccupantAtPlane(PlaneAir, carried); ok {
 		t.Fatal("drop retained the carried air stamp")
 	}

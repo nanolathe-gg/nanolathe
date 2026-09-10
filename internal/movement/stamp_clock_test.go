@@ -40,7 +40,7 @@ func TestAirborneRestampAdvancesTheOccupantClock(t *testing.T) {
 	// A purely airborne move: clear the air word at the old pair, stamp it at
 	// the new one. No ground cell is touched.
 	sys.BeginTick(300)
-	coll := sys.Collisions[h]
+	coll := handleRow(sys.Collisions, h)
 	coll.CachedAnchor = Cell{X: coll.CachedAnchor.X + 2, Z: coll.CachedAnchor.Z}
 	sys.syncMoverStamp(u)
 

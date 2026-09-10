@@ -33,8 +33,8 @@ func proposalFixture(t *testing.T, def *content.UnitDef, withRoute bool) (*Syste
 		q.Push(moveID, orders.Node{GoalX: world.CellToWorld(6), GoalZ: world.CellToWorld(0)})
 		head := q.Head()
 		// Route points are whole world units, six cells of sixteen.
-		system.Routes[h].PublishAtRevision([]Point{{X: 0, Z: 0}, {X: 96, Z: 0}}, system.staticObstacleRevision())
-		system.activeOrders[h] = &activeMove{order: head, token: 7}
+		handleRow(system.Routes, h).PublishAtRevision([]Point{{X: 0, Z: 0}, {X: 96, Z: 0}}, system.staticObstacleRevision())
+		setHandleRow(&system.activeOrders, h, &activeMove{order: head, token: 7})
 		system.nextActivation = 7
 	}
 	return system, w, h
@@ -62,11 +62,11 @@ func TestCommitStampsLastProposalTickBeforeValidation(t *testing.T) {
 
 	t.Run("moving proposal stamps", func(t *testing.T) {
 		system, _, h := proposalFixture(t, def, true)
-		if got := system.Collisions[h].LastProposalTick; got != 0 {
+		if got := handleRow(system.Collisions, h).LastProposalTick; got != 0 {
 			t.Fatalf("fresh mover already carries a proposal tick %d", got)
 		}
 		stepOnce(system, h, 41)
-		if got := system.Collisions[h].LastProposalTick; got != 41 {
+		if got := handleRow(system.Collisions, h).LastProposalTick; got != 41 {
 			t.Fatalf("last-proposal tick = %d after a moving commit at tick 41", got)
 		}
 	})
@@ -84,16 +84,16 @@ func TestCommitStampsLastProposalTickBeforeValidation(t *testing.T) {
 		if !res.Blocked {
 			t.Fatalf("proposal into the blocker was not rejected: %+v", res)
 		}
-		if got := system.Collisions[h].LastProposalTick; got != 12 {
+		if got := handleRow(system.Collisions, h).LastProposalTick; got != 12 {
 			t.Fatalf("blocked commit left the last-proposal tick at %d, want the proposal tick 12", got)
 		}
 	})
 
 	t.Run("stationary proposal writes nothing", func(t *testing.T) {
 		system, _, h := proposalFixture(t, def, false)
-		system.Collisions[h].LastProposalTick = 3
+		handleRow(system.Collisions, h).LastProposalTick = 3
 		stepOnce(system, h, 90)
-		if got := system.Collisions[h].LastProposalTick; got != 3 {
+		if got := handleRow(system.Collisions, h).LastProposalTick; got != 3 {
 			t.Fatalf("stationary early return wrote the proposal tick %d; it must write nothing [04 R-COLL-01 §1]", got)
 		}
 	})
@@ -115,7 +115,7 @@ func TestHoverBobKeepsAmplitudeWhileMoving(t *testing.T) {
 	system, w, h := proposalFixture(t, def, true)
 	const tick = 400 // well past the 60-tick fade window
 	stepOnce(system, h, tick)
-	coll := system.Collisions[h]
+	coll := handleRow(system.Collisions, h)
 	if coll.LastProposalTick != tick {
 		t.Fatalf("hovercraft last-proposal tick = %d at tick %d", coll.LastProposalTick, tick)
 	}

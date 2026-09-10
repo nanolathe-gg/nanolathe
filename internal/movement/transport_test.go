@@ -175,7 +175,7 @@ func TestAtlasLoadsCarriesAndUnloadsAPeewee(t *testing.T) {
 	if cargo.Move.Mode&0x3 != 0 {
 		t.Fatalf("cargo mover mode %d after the attach, want the attached mode 0 [04 R-AIR-01 §9]", cargo.Move.Mode)
 	}
-	if coll := sys.Collisions[cargo.Handle]; coll != nil {
+	if coll := handleRow(sys.Collisions, cargo.Handle); coll != nil {
 		if _, present := sys.Grid.OccupantAtPlane(PlaneGround, coll.CachedAnchor); present {
 			t.Fatal("attached cargo still holds a ground occupancy word; mode 0 writes none [04 R-COLL-01 §4]")
 		}
@@ -235,7 +235,7 @@ func TestAtlasLoadsCarriesAndUnloadsAPeewee(t *testing.T) {
 	if cargo.Move.Mode&0x3 != 1 {
 		t.Fatalf("released cargo mover mode %d, want the grounded 1 [04 R-AIR-01 §9]", cargo.Move.Mode)
 	}
-	coll := sys.Collisions[cargo.Handle]
+	coll := handleRow(sys.Collisions, cargo.Handle)
 	if coll == nil {
 		t.Fatal("released cargo has no collision record")
 	}
@@ -305,7 +305,7 @@ func TestUnloadRefusesASiteThePlacementValidatorRejects(t *testing.T) {
 		t.Fatal("fixture attach failed")
 	}
 	carrier.Move.Mode = 2
-	if fl := sys.Flights[carrier.Handle]; fl != nil {
+	if fl := handleRow(sys.Flights, carrier.Handle); fl != nil {
 		fl.Mode = 2
 	}
 
@@ -390,7 +390,7 @@ func TestLoadEntryGatesRejectInOrder(t *testing.T) {
 	// `too large` [04 R-AIR-01 §9].
 	DetachCargoMode(w, other, 1)
 	*kinds = (*kinds)[:0]
-	sys.profiles[cargo.Handle] = Profile{FootPrintX: int16(carrier.Def.TransportSize) + 1, FootPrintZ: 1}
+	setHandleRow(&sys.profiles, cargo.Handle, &Profile{FootPrintX: int16(carrier.Def.TransportSize) + 1, FootPrintZ: 1})
 	if code := sys.legVTOLPickup(carrier, n, 0, 1); code != 8 {
 		t.Fatalf("oversize cargo gave result %d, want 8 [04 §10.2]", code)
 	}
@@ -415,7 +415,7 @@ func TestUnloadGateWordsAndTheCannotGetThereInterrupt(t *testing.T) {
 		t.Fatal("fixture attach failed")
 	}
 	carrier.Move.Mode = 2
-	if fl := sys.Flights[carrier.Handle]; fl != nil {
+	if fl := handleRow(sys.Flights, carrier.Handle); fl != nil {
 		fl.Mode = 2
 	}
 	dropX, dropZ := world.CellToWorld(44), world.CellToWorld(20)
@@ -478,7 +478,7 @@ func TestUnloadGateWordsAndTheCannotGetThereInterrupt(t *testing.T) {
 func TestLoadPhaseFourInstallsNoClimbAway(t *testing.T) {
 	sys, _, carrier, cargo, _, kinds := transportFixture(t)
 	carrier.Move.Mode = 2
-	if fl := sys.Flights[carrier.Handle]; fl != nil {
+	if fl := handleRow(sys.Flights, carrier.Handle); fl != nil {
 		fl.Mode = 2
 	}
 	n := &orders.Node{Owner: carrier.Handle, Target: cargo.Handle, Phase: 3, Deadline: -1}
@@ -617,7 +617,7 @@ func TestMultiCargoUnloadReleasesOneAndEmitsEventThirteen(t *testing.T) {
 				t.Fatalf("fixture put %d units aboard, want %d", got, tc.aboard)
 			}
 			carrier.Move.Mode = 2
-			if fl := sys.Flights[carrier.Handle]; fl != nil {
+			if fl := handleRow(sys.Flights, carrier.Handle); fl != nil {
 				fl.Mode = 2
 			}
 

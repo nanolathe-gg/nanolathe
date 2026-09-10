@@ -110,14 +110,17 @@ removes it. `NodeStore` is the allocated-node table keyed by cell, with node 0
 invalid the way pool slot 0 is `[01 §6.1]`. `H` is write-once per node;
 relaxation adjusts `f` by the `g` delta alone. Capacity is an ordinary Go slice:
 retail's heap-exhaustion policy is not traced `[04 §11]`, and the route caps
-belong to the publisher, not to the heap `[04 R-PATH-01 §1]`.
+belong to the publisher, not to the heap `[04 R-PATH-01 §1]`. The store keeps no per-cell table of its own: it binds the
+session's, which already carries status, direction and node identity.
 
 **The resumable search** (`search.go`). `SearchConfig` carries the start, the
 goal, the heuristic scale, the mover's authored footprint pair for the
 cell-to-world conversion, optional bounds, the passability accessor, the
 request-initialization revision hook and the start direction. `Session` is one
 request's search across budget slices: the touched-entry table with its status
-and direction bytes, the goal-cell set, the write-once arrival tolerance, the
+and direction bytes — a dense generation-stamped table indexed by cell when the
+scheduler has one to lend, and a `map[Cell]entry` otherwise, answering
+identically either way — the goal-cell set, the write-once arrival tolerance, the
 notified status, the node store and the heap. The neighbour fan is a value —
 nine entries on the first expansion, a directed five-entry fan afterwards —
 so expanding a node allocates nothing `[04 §7.1]`. `walkRay` is the pre-search
@@ -125,7 +128,14 @@ greedy forward walk with its alternating two-sided wall follow; its only product
 is the acceptance threshold and the connect flag `[04 R-PATH-01 §5]`
 `[04 R-PATH-01 §15]`.
 
-**The scheduler** (`queue.go`). `Scheduler` holds one active request at a time.
+**The scheduler** (`queue.go`). `Scheduler` holds one active request at a time,
+and it also owns the search's per-cell `Workspace`. That ownership is the point:
+a generation-stamped table is shared storage, and the scheduler is what decides
+which search is running, so it lends the table to the search it has admitted and
+refuses it to every other. A session that is refused one keeps its own map and
+produces the same visit order and the same route; every path that drops a
+session hands the table back, and one that did not would cost the next search
+the table and nothing else.
 `CandidateProvider` is the admission surface the movement system implements:
 player count, unit limit, per-player eligibility and a stable per-player cursor
 poll. The provider advances that cursor through the bound player's fixed unit
@@ -222,10 +232,19 @@ nothing `[04 R-COLL-01 §4]` `[04 R-AIR-01 §3]`. `CollisionState` is one mover'
 committed transform, its cached anchor and mode, the rectangle its stamp
 actually added, the blocked bit, the last-stamp and last-proposal ticks and the
 building/yard split. The sector filing and the overlap scan are the same
-grid's second index: a stamp head-inserts into its sector bucket, so a bucket
-reads back in reverse order of each unit's most recent relink, and the scan
-walks the rectangle's own sectors grown by one on every side
-`[04 R-COLL-01 §4A]` `[04 R-COLL-01 §11]`. `PlaceUnit` is the direct
+grid's second index, and it is a real index rather than a filter: the grid
+keeps one record per eight-cell sector holding the head of a doubly linked list
+of the units filed there, a stamp head-inserts into its record, and the clear's
+scan visits only the records in the rectangle's own sectors grown by one on
+every side, column-major, each read from its head — which is reverse order of
+each unit's most recent relink `[04 R-COLL-01 §4A]` `[04 R-COLL-01 §11]`. The
+back link is Nanolathe's; retail walks from the head to find a predecessor.
+Membership is maintained at the three points the filing is written — the
+stamp's relink, the cargo detach mirror and unit finalisation — so the buckets
+and the filings agree by construction. Retail links a unit at creation and so
+has no unfiled population; here a collision record exists before its first
+stamp, and the modes that write no cell never take one, so the overlap binding
+names those separately and the sweep places them after each record's bucket. `PlaceUnit` is the direct
 position commit — retail's carried-position setter, the commit's success branch
 without the validator — used by the teleport row and by carried motion
 `[04 R-COLL-01 §4]` `[04 R-SPEC-01 §2]`. `ForgetUnit` is the only lifecycle

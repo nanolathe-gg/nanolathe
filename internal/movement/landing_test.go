@@ -167,7 +167,7 @@ func TestLandSearchTakesANewMoveOrderAtOnce(t *testing.T) {
 	if sys.HasPathRequest(u.Handle) {
 		t.Fatal("a ground path request is outstanding for an aircraft [04 R-PATH-01 §8]")
 	}
-	fl := sys.Flights[u.Handle]
+	fl := handleRow(sys.Flights, u.Handle)
 	if fl == nil || fl.Command == nil || fl.Command.Payload == nil {
 		t.Fatal("the air move installed no goal payload, so the aircraft has no command to fly [04 R-AIR-01 §1]")
 	}

@@ -74,7 +74,7 @@ func TestStepUnitMobileBuildStopsOnMoveArrived(t *testing.T) {
 	drive := func(moveState uint8) StepResult {
 		q := orders.QueueForUnit(u)
 		q.Push(mid, orders.Node{GoalX: goalX, GoalZ: goalZ, MoveState: moveState})
-		route := system.Routes[h]
+		route := handleRow(system.Routes, h)
 		route.Active = false
 		if moveState == orders.MoveEnRoute {
 			route.PublishAtRevision([]Point{
@@ -140,7 +140,7 @@ func TestStepUnitGroundArrival(t *testing.T) {
 	system.ActivateMove(u, q.Head())
 	// Scheduler must tick to publish route
 	system.Scheduler.Tick(60)
-	route := system.Routes[h]
+	route := handleRow(system.Routes, h)
 	if route == nil || !route.Active {
 		t.Fatalf("route not published after scheduler tick: %v", route)
 	}
@@ -180,7 +180,7 @@ func TestStepUnitGroundArrival(t *testing.T) {
 	goalCellX := goalCellForWorld(world.CellToWorld(15), 1)
 	goalCellZ := goalCellForWorld(world.CellToWorld(1), 1)
 	var tileX, tileZ int32
-	if coll, ok := system.Collisions[h]; ok && coll != nil {
+	if coll := handleRow(system.Collisions, h); coll != nil {
 		tileX = coll.CachedAnchor.X
 		tileZ = coll.CachedAnchor.Z
 	} else {
@@ -213,7 +213,7 @@ func TestStepUnitEmptyRouteDoesNotArrive(t *testing.T) {
 	system.EnsureUnit(u)
 	// Do NOT submit move; route remains empty/f nil. Also inject explicit empty publication.
 	// Ensure empty route path: force empty via Publish([])
-	r := system.Routes[h]
+	r := handleRow(system.Routes, h)
 	if r == nil {
 		t.Fatalf("route not init")
 	}
@@ -432,7 +432,7 @@ func TestStepUnitAircraftAndTransportRegression(t *testing.T) {
 	system.EnsureUnit(uAir)
 	// Set aircraft mode active
 	uAir.Move.Mode = 2
-	if fl, ok := system.Flights[hAir]; ok {
+	if fl := handleRow(system.Flights, hAir); fl != nil {
 		fl.Mode = 2
 	}
 	idAir := orders.Lookup("VTOL_Move")

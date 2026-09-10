@@ -25,7 +25,7 @@ func TestBMCodeTwoCreatesNeitherMoverNorBuildingOccupancy(t *testing.T) {
 	if u.Flags&units.BuildingClassStatus != 0 {
 		t.Fatal("nonzero byte became building class")
 	}
-	if sys.HasMover(h) || sys.Collisions[h] != nil || sys.Steers[h] != nil || sys.Flights[h] != nil || sys.Routes[h] != nil {
+	if sys.HasMover(h) || handleRow(sys.Collisions, h) != nil || handleRow(sys.Steers, h) != nil || handleRow(sys.Flights, h) != nil || handleRow(sys.Routes, h) != nil {
 		t.Fatal("byte two acquired mover state")
 	}
 	anchor := Cell{X: 8, Z: 8}

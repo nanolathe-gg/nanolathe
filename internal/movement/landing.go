@@ -149,7 +149,7 @@ func (s *System) Land(w *units.World, vtolHandle pool.Handle, pad *units.Unit) b
 	} else {
 		vtol.Y = pad.Y
 	}
-	if fl, ok := s.Flights[vtolHandle]; ok {
+	if fl := handleRow(s.Flights, vtolHandle); fl != nil {
 		fl.X = int32(vtol.X.Raw())
 		fl.Z = int32(vtol.Z.Raw())
 		fl.Y = int32(vtol.Y.Raw())
@@ -158,13 +158,13 @@ func (s *System) Land(w *units.World, vtolHandle pool.Handle, pad *units.Unit) b
 		fl.VZ = 0
 		fl.Speed = 0
 	}
-	if st, ok := s.Steers[vtolHandle]; ok {
+	if st := handleRow(s.Steers, vtolHandle); st != nil {
 		st.X = int32(vtol.X.Raw())
 		st.Z = int32(vtol.Z.Raw())
 	}
 	// The pad footprint is the anchor the ground-plane re-stamp below uses, so
 	// the cached pair has to name the touchdown cell before the mode write.
-	if coll, ok := s.Collisions[vtolHandle]; ok {
+	if coll := handleRow(s.Collisions, vtolHandle); coll != nil {
 		coll.X = int32(vtol.X.Raw())
 		coll.Z = int32(vtol.Z.Raw())
 		coll.Y = int32(vtol.Y.Raw())
@@ -187,7 +187,7 @@ func (s *System) Land(w *units.World, vtolHandle pool.Handle, pad *units.Unit) b
 		// rectangle that was stamped, not at the pad [04 R-COLL-01 §4].
 		s.syncMoverStamp(vtol)
 	}
-	if fl, ok := s.Flights[vtolHandle]; ok {
+	if fl := handleRow(s.Flights, vtolHandle); fl != nil {
 		fl.Mode = 1
 	}
 	return true
@@ -279,10 +279,10 @@ func (s *System) SubmitAirMove(vtolHandle pool.Handle, targetX, targetZ numeric.
 		{X: int32(vtol.X.Raw() >> 16), Z: int32(vtol.Z.Raw() >> 16)},
 		{X: int32(targetX.Raw() >> 16), Z: int32(targetZ.Raw() >> 16)},
 	}
-	route := s.Routes[vtolHandle]
+	route := handleRow(s.Routes, vtolHandle)
 	if route == nil {
 		route = &Route{}
-		s.Routes[vtolHandle] = route
+		setHandleRow(&s.Routes, vtolHandle, route)
 	}
 	route.Publish(pts)
 	// The command block is the only input the flight integrator has, so a direct
@@ -300,7 +300,7 @@ func (s *System) SubmitAirMove(vtolHandle pool.Handle, targetX, targetZ numeric.
 	// direct surface has no order record to hold a climb marker, so it commands
 	// the goal altitude straight away.
 	s.SetMoverMode(vtol, 2)
-	if fl, ok := s.Flights[vtolHandle]; ok {
+	if fl := handleRow(s.Flights, vtolHandle); fl != nil {
 		fl.Mode = 2
 	}
 	s.StepFlightCommand(vtol, head, s.AirSectors)

@@ -385,8 +385,11 @@ func (s *System) HasMover(h pool.Handle) bool {
 	if s == nil {
 		return false
 	}
-	coll, ok := s.Collisions[h]
-	if !ok || coll == nil {
+	if int(h) >= len(s.Collisions) {
+		return false
+	}
+	coll := handleRow(s.Collisions, h)
+	if coll == nil {
 		return false
 	}
 	return !coll.Building
@@ -398,8 +401,11 @@ func (s *System) CommittedFootprint(h pool.Handle) (Cell, int16, int16, bool) {
 	if s == nil {
 		return Cell{}, 0, 0, false
 	}
-	coll, ok := s.Collisions[h]
-	if !ok || coll == nil {
+	if int(h) >= len(s.Collisions) {
+		return Cell{}, 0, 0, false
+	}
+	coll := handleRow(s.Collisions, h)
+	if coll == nil {
 		return Cell{}, 0, 0, false
 	}
 	fx, fz := coll.FootPrintX, coll.FootPrintZ

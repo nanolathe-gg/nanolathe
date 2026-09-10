@@ -179,7 +179,14 @@ func (s *Session) publishSnapshot(tick uint32) {
 			if u == nil || !u.Alive {
 				continue
 			}
-			v := frame.UnitView{
+			// The view is built THROUGH the destination element rather than
+			// as a value the append then copies: UnitView is 256 bytes and
+			// this loop runs for every live unit every tick, which made the
+			// copy alone a measurable share of the publication [I6].
+			views = reserveUnitView(views)
+			vp := &views[len(views)-1]
+			pieces, cargo := vp.Pieces, vp.Cargo
+			*vp = frame.UnitView{
 				InstanceID:     publication.unitIdentity(u),
 				Slot:           u.Handle,
 				Owner:          u.Owner,
@@ -215,20 +222,22 @@ func (s *Session) publishSnapshot(tick uint32) {
 				// whose group number is nonzero [03 R-FX-01 §6][07 §9].
 				Group: u.Group,
 			}
+			vp.Pieces = pieces[:0]
+			vp.Cargo = cargo[:0]
 			// The footer's four rate fields read the archived production and
 			// requested totals of the most recent settlement pass, not the
 			// definition constants [07 R-HUD-03 §2][05 R-ECO-01 §5].
 			if s.Econ != nil {
 				archived := s.Econ.UnitArchived(u.Handle)
-				v.ArchivedMetalMake = archived[economy.Metal].Production
-				v.ArchivedEnergyMake = archived[economy.Energy].Production
-				v.ArchivedMetalUse = archived[economy.Metal].Requested
-				v.ArchivedEnergyUse = archived[economy.Energy].Requested
+				vp.ArchivedMetalMake = archived[economy.Metal].Production
+				vp.ArchivedEnergyMake = archived[economy.Energy].Production
+				vp.ArchivedMetalUse = archived[economy.Metal].Requested
+				vp.ArchivedEnergyUse = archived[economy.Energy].Requested
 			}
 			// The owner logo the footer blits at LOGO2 is the logos frame at the
 			// owner's lobby colour index [07 R-HUD-03 §2]; it is the same
 			// selector the minimap contacts already carry.
-			v.OwnerColor, v.OwnerColorKnown = radarOwnerPalette(s, u.Owner, true)
+			vp.OwnerColor, vp.OwnerColorKnown = radarOwnerPalette(s, u.Owner, true)
 			// The heading published is the unit record's own word and nothing
 			// else. There is exactly one heading word — "the unit's current
 			// heading word", the one the steering step just turned
@@ -245,19 +254,19 @@ func (s *Session) publishSnapshot(tick uint32) {
 			// unambiguous: the ground commit writes the record and both mirrors
 			// together, so no reachable state has them disagreeing.
 			if u.Def != nil {
-				v.DefName = u.Def.CanonicalKey
-				v.Model = u.Def.ObjectName
-				v.FootX = int8(u.Def.FootprintX)
-				v.FootZ = int8(u.Def.FootprintZ)
-				v.BMCode = u.Def.BMCode != 0 // model-shading class gate [R-RND-02A]
-				v.ZBuffer = u.Def.ZBuffer    // composition height plane [R-REN-03A §2]
+				vp.DefName = u.Def.CanonicalKey
+				vp.Model = u.Def.ObjectName
+				vp.FootX = int8(u.Def.FootprintX)
+				vp.FootZ = int8(u.Def.FootprintZ)
+				vp.BMCode = u.Def.BMCode != 0 // model-shading class gate [R-RND-02A]
+				vp.ZBuffer = u.Def.ZBuffer    // composition height plane [R-REN-03A §2]
 				// Model shadow gate and digger clip [R-REN-03D §1][R-REN-03A §8].
-				v.NoShadow = u.Def.NoShadow
-				v.CanHover = u.Def.CanHover
-				v.Floater = u.Def.Floater
-				v.Digger = u.Def.Digger
+				vp.NoShadow = u.Def.NoShadow
+				vp.CanHover = u.Def.CanHover
+				vp.Floater = u.Def.Floater
+				vp.Digger = u.Def.Digger
 				if id := s.Units.DefIDForHandle(u.Handle); id != 0 {
-					v.DefID = id
+					vp.DefID = id
 				}
 				// Fixed vs mobile image-cache selector: retail uses runtime flag
 				// (the unit's build-state bit and construction fraction) [rr-10],
@@ -265,7 +274,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 				// (all 21 factories and labs have 0, mobile have >0) and matches
 				// the 2x building supersample expectation without needing runtime flags.
 				if u.Def.MaxVelocity == 0 {
-					v.IsBuilding = true
+					vp.IsBuilding = true
 				}
 			}
 			// The queued-order range overlay reads the live enabled bit for each
@@ -273,11 +282,9 @@ func (s *Session) publishSnapshot(tick uint32) {
 			// Publish the three value bits rather than exposing a slot or definition
 			// pointer across the presentation boundary [06 R-WPN-05 §3]
 			// [07 R-P0-11 §3][I6].
-			for slot := range v.EnabledWeaponSlots {
-				v.EnabledWeaponSlots[slot] = u.SlotAt(slot).IsEnabled()
+			for slot := range vp.EnabledWeaponSlots {
+				vp.EnabledWeaponSlots[slot] = u.SlotAt(slot).IsEnabled()
 			}
-			views = appendUnitView(views, v)
-			vp := &views[len(views)-1]
 			// Copy the linkage owner's traversal order; it can change without
 			// allocation when a child is detached and reattached [04 R-UNIT-06 §3].
 			vp.Cargo = append(vp.Cargo, u.Attachment.Cargo...)
@@ -495,7 +502,12 @@ func (s *Session) publishSnapshot(tick uint32) {
 			}
 			featureOwner, featureOwnerKnown := featureOwnerSelector(inst)
 			runtime := inst.RuntimeView()
-			fv := frame.FeatureView{
+			// Written through the destination element for the same reason the
+			// unit view above is: the copy of a 208-byte value, six thousand
+			// times a tick, is the cost here rather than the fields [I6].
+			published.Features = reserveFeatureView(published.Features)
+			fv := &published.Features[len(published.Features)-1]
+			*fv = frame.FeatureView{
 				Owner:      featureOwner,
 				OwnerKnown: featureOwnerKnown,
 				CX:         int32(inst.CX),
@@ -548,7 +560,6 @@ func (s *Session) publishSnapshot(tick uint32) {
 				fv.EventSeqNameShad = shadow
 				fv.EventSeqVisit = visit
 			}
-			published.Features = append(published.Features, fv)
 		}
 		// The committed frame owns values; release the borrowed live pointers
 		// while retaining only the scratch capacity for the next publication [I6].
@@ -681,7 +692,11 @@ func (s *Session) publishSnapshot(tick uint32) {
 	published.Radar.MappingLOS = uint8(s.Vis.Mode()) & 3
 	var sensorInputs []visibility.SensorInput
 	if s.Vis != nil {
-		sensorInputs = s.Vis.SensorInputs()
+		// The snapshot is read for this publication only -- the index below
+		// and the per-unit lookup -- so it lands in retained storage rather
+		// than a fresh copy each tick [I6].
+		s.sensorInputScratch = s.Vis.AppendSensorInputs(s.sensorInputScratch[:0])
+		sensorInputs = s.sensorInputScratch
 	}
 	if s.Units != nil {
 		s.buildRadarSensorIndex(sensorInputs)

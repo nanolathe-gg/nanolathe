@@ -85,7 +85,7 @@ func (s *System) CanTransport(carrierHandle, candidateHandle pool.Handle, w *uni
 	// Use profile FotPrintX when available, else def FootprintX.
 	candidateFootX := int16(candidate.Def.FootprintX)
 	if s != nil {
-		if p, ok := s.profiles[candidateHandle]; ok {
+		if p := handleRow(s.profiles, candidateHandle); p != nil {
 			if p.FootPrintX != 0 {
 				candidateFootX = p.FootPrintX
 			}
@@ -107,13 +107,13 @@ func (s *System) CanTransport(carrierHandle, candidateHandle pool.Handle, w *uni
 		return AdmissionResult{Allowed: false, Reason: "no mover"}
 	}
 	// 6) candidate committed mover mode is active locomotion (mode 2) [04 §10.2]
-	if coll, ok := s.Collisions[candidateHandle]; ok && coll.Mode == 2 {
+	if coll := handleRow(s.Collisions, candidateHandle); coll != nil && coll.Mode == 2 {
 		return AdmissionResult{Allowed: false, Reason: "moving"}
 	}
 	if candidate.Move.Mode == 2 {
 		return AdmissionResult{Allowed: false, Reason: "moving"}
 	}
-	if fl, ok := s.Flights[candidateHandle]; ok && fl.Mode&0x3 == 2 {
+	if fl := handleRow(s.Flights, candidateHandle); fl != nil && fl.Mode&0x3 == 2 {
 		// Flight active locomotion also considered moving? Ground admission treats any active mover mode 2 as moving [04 §10.2].
 		// For air cargo, flight active would also be moving? But spec says mode 2 moving is rejected for load.
 		// If flight is active (mode 2), treat as moving.

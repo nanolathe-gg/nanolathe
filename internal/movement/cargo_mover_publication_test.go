@@ -46,17 +46,17 @@ func TestCarriedVerticalVelocityReachesMoverSave(t *testing.T) {
 			sys.EnsureUnit(w.Unit(cargo))
 			if tt.flyingCarrier {
 				sys.SetMoverMode(w.Unit(carrier), 2)
-				fl := sys.Flights[carrier]
+				fl := handleRow(sys.Flights, carrier)
 				fl.VX, fl.VY, fl.VZ = 12345, vertical, -6789
 				sys.commitFlightState(w.Unit(carrier), fl)
 			} else if tt.hasMover {
-				coll := sys.Collisions[carrier]
+				coll := handleRow(sys.Collisions, carrier)
 				coll.VX, coll.VY, coll.VZ, coll.Speed = 12345, vertical, -6789, 32
 			} else {
-				delete(sys.Collisions, carrier)
+				setHandleRow(&sys.Collisions, carrier, nil)
 			}
 			// A stale collision value must not survive the no-mover zeroing arm.
-			sys.Collisions[cargo].VY = -vertical
+			handleRow(sys.Collisions, cargo).VY = -vertical
 			if !AttachCargoMode(w, carrier, cargo, -1, 0) {
 				t.Fatal("attach cargo")
 			}
@@ -121,7 +121,7 @@ func TestCarriedMotionRejectsNestedAttachment(t *testing.T) {
 	sys.EnsureUnit(w.Unit(middle))
 	sys.EnsureUnit(w.Unit(child))
 	const vertical int32 = 1 << 16
-	sys.Collisions[carrier].VY = vertical
+	handleRow(sys.Collisions, carrier).VY = vertical
 	if !AttachCargoMode(w, carrier, middle, -1, 0) {
 		t.Fatal("attach middle")
 	}

@@ -62,17 +62,17 @@ func (s *System) ReleaseGoalPayload(n *orders.Node) bool {
 		return false
 	}
 	released := false
-	if g := s.moveGoals[owner]; g != nil && g.order == n {
+	if g := handleRow(s.moveGoals, owner); g != nil && g.order == n {
 		s.CancelPathRequest(owner)         // step 1
 		n.Satisfied |= goalReleasedPending // step 2
-		if route := s.Routes[owner]; route != nil {
+		if route := handleRow(s.Routes, owner); route != nil {
 			route.Active = false      // step 3: clear has-waypoint, adopt null
 			route.WantsRepath = false // step 4: null goal, so also wants-repath
 		}
-		delete(s.moveGoals, owner) // virtual delete; the record's field is cleared
+		setHandleRow(&s.moveGoals, owner, nil) // virtual delete; the record's field is cleared
 		released = true
 	}
-	if st := s.airOrders[owner]; st != nil && st.order == n {
+	if st := handleRow(s.airOrders, owner); st != nil && st.order == n {
 		n.Satisfied |= goalReleasedPending
 		s.releaseAirGoalForNode(owner, n)
 		released = true

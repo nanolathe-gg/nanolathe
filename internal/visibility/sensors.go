@@ -114,12 +114,24 @@ func (s *Service) SetViewerDefeated(defeated bool) {
 
 // SensorInputs returns the last completed sensor pass's contact inputs.
 func (s *Service) SensorInputs() []SensorInput {
+	return s.AppendSensorInputs(nil)
+}
+
+// AppendSensorInputs copies the same snapshot into the caller's storage. It is
+// what a per-tick consumer should call: the copy exists so a reader cannot
+// observe the next pass mutating the service's own row, not so that each read
+// allocates one, and this pass's snapshot was a tenth of everything the
+// simulation allocated.
+func (s *Service) AppendSensorInputs(dst []SensorInput) []SensorInput {
 	if s == nil || len(s.sensorInputs) == 0 {
-		return nil
+		return dst[:0]
 	}
-	out := make([]SensorInput, len(s.sensorInputs))
-	copy(out, s.sensorInputs)
-	return out
+	if cap(dst) < len(s.sensorInputs) {
+		dst = make([]SensorInput, 0, len(s.sensorInputs))
+	}
+	dst = dst[:len(s.sensorInputs)]
+	copy(dst, s.sensorInputs)
+	return dst
 }
 
 // SensorStatus returns one completed sensor-phase runtime status word by its

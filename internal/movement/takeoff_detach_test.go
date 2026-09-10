@@ -62,8 +62,8 @@ func TestTakeoffPreambleDetachesCarriedAircraftToMode2(t *testing.T) {
 	if got := w.Unit(ch).Move.Mode; got != 1 {
 		t.Fatalf("fixture: cargo aircraft mover mode=%d, want the grounded 1 before attach", got)
 	}
-	cargoID := sys.Collisions[ch].ID
-	pickup := sys.Collisions[ch].CachedAnchor
+	cargoID := handleRow(sys.Collisions, ch).ID
+	pickup := handleRow(sys.Collisions, ch).CachedAnchor
 	if occ, ok := grid.OccupantAt(pickup); !ok || occ != cargoID {
 		t.Fatalf("fixture: cargo aircraft must hold its ground cell before it is parked, got %d %v", occ, ok)
 	}

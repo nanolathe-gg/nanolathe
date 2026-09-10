@@ -46,7 +46,7 @@ func (s *System) SetMoverMode(u *units.Unit, mode uint8) bool {
 		return false // nothing when the low two bits already equal the request
 	}
 	if mode == 1 {
-		if fl := s.Flights[u.Handle]; fl != nil {
+		if fl := handleRow(s.Flights, u.Handle); fl != nil {
 			fl.VX, fl.VY, fl.VZ = 0, 0, 0
 			fl.Speed = 0
 		}
@@ -57,12 +57,12 @@ func (s *System) SetMoverMode(u *units.Unit, mode uint8) bool {
 		// exactly once and recomputes bank and pitch from the decayed
 		// accumulator. They are levelled, not snapped to zero.
 		s.levelFlightLean(u)
-		if fl := s.Flights[u.Handle]; fl != nil {
+		if fl := handleRow(s.Flights, u.Handle); fl != nil {
 			// Deactivate is raised immediately below. Its callback can observe
 			// mover save words before another integrator visit, so publish the
 			// zero triple and this call's decayed lean first. Do not call the
 			// full flight commit here: its transform may be from the prior tick.
-			if coll := s.Collisions[u.Handle]; coll != nil {
+			if coll := handleRow(s.Collisions, u.Handle); coll != nil {
 				coll.VX, coll.VY, coll.VZ, coll.Speed = 0, 0, 0, 0
 				coll.LeanX, coll.LeanY, coll.LeanZ = fl.LeanX, fl.LeanY, fl.LeanZ
 				coll.TurnResidual = fl.TurnResidual
@@ -73,7 +73,7 @@ func (s *System) SetMoverMode(u *units.Unit, mode uint8) bool {
 		u.SetActivationEdge(true)
 	}
 	u.Move.Mode = mode
-	if fl := s.Flights[u.Handle]; fl != nil {
+	if fl := handleRow(s.Flights, u.Handle); fl != nil {
 		fl.Mode = mode
 	}
 	s.applyOccupancyPlane(u, prev, mode)
@@ -88,7 +88,7 @@ func (s *System) applyOccupancyPlane(u *units.Unit, prev, mode uint8) {
 	if s == nil || s.Grid == nil || u == nil {
 		return
 	}
-	coll := s.Collisions[u.Handle]
+	coll := handleRow(s.Collisions, u.Handle)
 	if coll == nil {
 		return
 	}
@@ -123,7 +123,7 @@ func (s *System) syncMoverStamp(u *units.Unit) {
 	if s == nil || u == nil {
 		return
 	}
-	coll := s.Collisions[u.Handle]
+	coll := handleRow(s.Collisions, u.Handle)
 	if coll == nil || coll.Building {
 		return
 	}
@@ -244,7 +244,7 @@ func (s *System) ClimbTargetFor(h pool.Handle) (numeric.Fixed, bool) {
 	if s == nil {
 		return 0, false
 	}
-	fl := s.Flights[h]
+	fl := handleRow(s.Flights, h)
 	if fl == nil || fl.Command == nil {
 		return 0, false
 	}

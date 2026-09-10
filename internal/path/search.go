@@ -274,6 +274,11 @@ type SearchConfig struct {
 	// StartDir supplies the unit heading's quantized sector. Zero is north,
 	// retaining the pre-existing API's zero-value behavior [04 R-PATH-01 §4].
 	StartDir uint8
+	// Workspace is the scheduler's per-cell table, offered to this search. It
+	// is an optimization and never a behaviour: a search that is not given one,
+	// or that is given one another search still holds, keeps its own map and
+	// produces the same visit order and the same route [04 §7.2].
+	Workspace *Workspace
 }
 
 // SearchResult is what one completed search produced: the route points, the
@@ -300,7 +305,7 @@ type entry struct {
 type Session struct {
 	cfg          SearchConfig
 	scale        int32
-	entries      map[Cell]entry
+	entries      cellIndex
 	goalSet      map[Cell]struct{}
 	nearest      Cell
 	nearestDist  int64
@@ -322,12 +327,18 @@ type Session struct {
 // NewSession opens a search for cfg and seeds it. A zero Scale means the
 // unweighted heuristic, 1.0 in 16.16.
 func NewSession(cfg SearchConfig) *Session {
-	s := &Session{cfg: cfg, entries: make(map[Cell]entry), goalSet: make(map[Cell]struct{})}
+	s := &Session{cfg: cfg, entries: newMapIndex(), goalSet: make(map[Cell]struct{})}
 	s.scale = cfg.Scale
 	if s.scale == 0 {
 		s.scale = 65536
 	}
 	s.cfg.Scale = s.scale
+	// The scheduler's table, when it is free and this request is bounded
+	// [04 §7.2]. A search that does not get it keeps the map and answers
+	// identically; Release hands it back.
+	if cfg.Workspace != nil {
+		s.entries.bindWorkspace(cfg.Workspace, cfg.Bounds, cfg.HasBounds)
+	}
 	s.init()
 	return s
 }
@@ -342,7 +353,16 @@ func (s *Session) passValue(c Cell) uint8 {
 	return 0
 }
 
-func (s *Session) touch(c Cell, e entry) { s.entries[c] = e }
+func (s *Session) touch(c Cell, e entry) { s.entries.set(c, e) }
+
+// Release hands the scheduler's per-cell table back. Every path that drops a
+// session owes this call; a session that is dropped without it leaves the
+// table lent, which costs the next search the table and nothing else.
+func (s *Session) Release() {
+	if s != nil {
+		s.entries.release()
+	}
+}
 
 func (s *Session) init() {
 	if s.cfg.Revise != nil {
@@ -375,7 +395,7 @@ func (s *Session) init() {
 	startScaled := ScaledHeuristic(startH, s.scale)
 	if s.haveNearest {
 		r := walkRay(s.cfg.Start, s.nearest, s.passValue, s.cfg.Goal, s.scale, func(c Cell, d uint8, _ bool) bool {
-			e := s.entries[c]
+			e := s.entries.get(c)
 			goal := e.status&4 != 0
 			e.status |= 8
 			e.dir = d
@@ -472,7 +492,7 @@ func (s *Session) Resume(budget int) ([]Point, Status, bool) {
 		// Class-layer revisions can change while this working set spans ticks.
 		// Revalidate an existing open node at expansion time instead of trusting
 		// the value captured when it entered the heap [04 §7.4].
-		e := s.entries[n.Cell]
+		e := s.entries.get(n.Cell)
 		if s.passValue(n.Cell) == 0 && e.status&8 == 0 {
 			n.Open, n.Closed = false, true
 			e.status = (e.status &^ 3) | 3
@@ -490,7 +510,7 @@ func (s *Session) Resume(budget int) ([]Point, Status, bool) {
 		s.expanded = true
 		for i := 0; i < fan.Len; i++ {
 			c, d := fan.Cells[i], fan.Dirs[i]
-			e := s.entries[c]
+			e := s.entries.get(c)
 			value := s.passValue(c)
 			state := e.status & 3
 			// A blocked cell is skipped unless the pre-search ray already

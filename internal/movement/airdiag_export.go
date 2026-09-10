@@ -24,7 +24,7 @@ func (s *System) AirExecutorState(h pool.Handle) AirExecutorSnapshot {
 	if s == nil || s.airOrders == nil {
 		return AirExecutorSnapshot{}
 	}
-	st := s.airOrders[h]
+	st := handleRow(s.airOrders, h)
 	if st == nil {
 		return AirExecutorSnapshot{}
 	}
@@ -46,7 +46,7 @@ func (s *System) AirGoalPayload(h pool.Handle) GoalPayload {
 	if s == nil {
 		return nil
 	}
-	fl := s.Flights[h]
+	fl := handleRow(s.Flights, h)
 	if fl == nil || fl.Command == nil {
 		return nil
 	}

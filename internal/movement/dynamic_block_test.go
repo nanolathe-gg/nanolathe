@@ -53,12 +53,12 @@ func TestStepUnitBlockedCommitKeepsOrderAndRequest(t *testing.T) {
 	// [04 R-MOV-03 §2 step 3], and the install detaches any active binding, so
 	// it runs before the binding is planted below.
 	system.InstallPointGoal(orders.PointGoalRequest{Owner: head.Owner, Node: head, X: head.GoalX, Z: head.GoalZ, Radius: 4})
-	system.Routes[moverHandle].PublishAtRevision([]Point{{X: 0, Z: 0}, {X: 48, Z: 0}}, system.staticObstacleRevision())
-	system.activeOrders[moverHandle] = &activeMove{order: head, token: 41}
+	handleRow(system.Routes, moverHandle).PublishAtRevision([]Point{{X: 0, Z: 0}, {X: 48, Z: 0}}, system.staticObstacleRevision())
+	setHandleRow(&system.activeOrders, moverHandle, &activeMove{order: head, token: 41})
 	system.nextActivation = 41
 	// Seed an already-walking presentation tier. A rejected commit retains a
 	// capped physical speed but must emit the tier-zero transition.
-	system.prevMoveTier[moverHandle] = 1
+	setHandleRow(&system.prevMoveTier, moverHandle, 1)
 	// Keep one pre-existing request so a collision-triggered Cancel/Submit pair
 	// would be observable in its activation and start fields. StepUnit must
 	// leave this scheduler state and the active-order token untouched.
@@ -67,18 +67,18 @@ func TestStepUnitBlockedCommitKeepsOrderAndRequest(t *testing.T) {
 		Goal: path.PointGoal(path.Cell{X: 3, Z: 0}, 0), Activation: 41,
 	})
 	requestsBefore := system.pathProvider.allRequests()
-	activeBefore := *system.activeOrders[moverHandle]
+	activeBefore := *handleRow(system.activeOrders, moverHandle)
 	nextBefore := system.nextActivation
 	system.BeginTick(1)
 	result := system.StepUnit(moverHandle, 1)
 	system.EndTick(1)
 	if !result.Blocked {
-		t.Fatalf("active route proposal into blocker was not rejected: result=%+v mover=%+v blocker=%+v", result, system.Collisions[moverHandle], system.Collisions[blockerHandle])
+		t.Fatalf("active route proposal into blocker was not rejected: result=%+v mover=%+v blocker=%+v", result, handleRow(system.Collisions, moverHandle), handleRow(system.Collisions, blockerHandle))
 	}
 	if requestsAfter := system.pathProvider.allRequests(); !reflect.DeepEqual(requestsAfter, requestsBefore) || !system.HasPathRequest(moverHandle) {
 		t.Fatalf("blocked commit changed scheduler requests: before=%#v after=%#v has=%v", requestsBefore, requestsAfter, system.HasPathRequest(moverHandle))
 	}
-	if got := *system.activeOrders[moverHandle]; !reflect.DeepEqual(got, activeBefore) || system.nextActivation != nextBefore {
+	if got := *handleRow(system.activeOrders, moverHandle); !reflect.DeepEqual(got, activeBefore) || system.nextActivation != nextBefore {
 		t.Fatalf("blocked commit changed active-order token: before=%#v/%d after=%#v/%d", activeBefore, nextBefore, got, system.nextActivation)
 	}
 	if queue.Head() != head {
@@ -87,13 +87,13 @@ func TestStepUnitBlockedCommitKeepsOrderAndRequest(t *testing.T) {
 	if head.Satisfied&arrivalSatisfiedBit != 0 {
 		t.Fatal("blocked commit marked the order satisfied")
 	}
-	if !system.Collisions[moverHandle].Blocked {
+	if !handleRow(system.Collisions, moverHandle).Blocked {
 		t.Fatal("collision state did not retain blocked result")
 	}
-	if got := system.prevMoveTier[moverHandle]; got != 0 {
+	if got := handleRow(system.prevMoveTier, moverHandle); got != 0 {
 		t.Fatalf("blocked mover presentation tier=%d want 0 [04 R-COLL-01 §5]", got)
 	}
-	if got, want := system.Collisions[moverHandle].Speed, int32(worldUnitsPerCell); got != want {
+	if got, want := handleRow(system.Collisions, moverHandle).Speed, int32(worldUnitsPerCell); got != want {
 		t.Fatalf("blocked commit speed=%d want half max velocity %d", got, want)
 	}
 	if got, ok := system.Grid.OccupantAt(Cell{X: 0, Z: 0}); !ok || got != int(moverHandle) {
@@ -106,7 +106,7 @@ func TestStepUnitBlockedCommitKeepsOrderAndRequest(t *testing.T) {
 	// longer pending, the follower exposes the blocked state only at its
 	// inclusive 60-tick poll boundary [04 R-MOV-01 §7].
 	system.pathProvider.Cancel(moverHandle)
-	route := system.Routes[moverHandle]
+	route := handleRow(system.Routes, moverHandle)
 	route.LastRequestTick = 1
 	system.serviceGroundFollower(w.Unit(moverHandle), head, route, 60)
 	if system.HasPathRequest(moverHandle) {
