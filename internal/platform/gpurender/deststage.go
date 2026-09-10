@@ -4,6 +4,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
+	"math"
 )
 
 // The destination-compositing families for the modern executor beyond fog: the
@@ -178,6 +179,23 @@ func (r *Renderer) drawLitPoints(points []drawlist.Point) {
 		return
 	}
 	imgs := [4]*ebiten.Image{1: r.tables.atlas}
+	// Under the world transform the point layer is RESAMPLED here rather than
+	// scaled quad by quad (docs/DESIGN_GPU_RENDERER.md §16.3 "Lit points"). A
+	// lit point reads the destination and brightens it, so it must land on each
+	// screen pixel at most once: with the transform shrinking the record, two or
+	// three record points fall on one screen pixel and the generic path brightened
+	// it two or three times, which drew the explosion halo as a lattice of
+	// over-lit pixels. Each screen pixel is instead lit by exactly the record
+	// point that nearest sampling would choose for its centre — the same rule the
+	// terrain and sprites follow — and the point is placed in screen pixels with
+	// the transform held off. At a rest step the transform is disarmed and every
+	// point takes the path it always took.
+	resample := r.sched.worldOn
+	k := float64(r.sched.worldScale)
+	if resample {
+		r.sched.worldOn = false
+		defer func() { r.sched.worldOn = true }()
+	}
 	active := false
 	spanX0, spanX1, spanY, spanRow := 0, 0, 0, 0
 	var spanPhase int32
@@ -193,7 +211,18 @@ func (r *Renderer) drawLitPoints(points []drawlist.Point) {
 	}
 	for _, pt := range points {
 		x, y := int(pt.X), int(pt.Y)
-		if x < 0 || y < 0 || x >= r.clipW() || y >= r.clipH() {
+		if resample {
+			sx, sy := int(math.Floor(float64(x)*k)), int(math.Floor(float64(y)*k))
+			// The record point nearest sampling chooses for this screen pixel's
+			// centre; every other record point that lands here is dropped.
+			if x != int(math.Floor((float64(sx)+0.5)/k)) || y != int(math.Floor((float64(sy)+0.5)/k)) {
+				continue
+			}
+			if sx < 0 || sy < 0 || sx >= r.w || sy >= r.h {
+				continue
+			}
+			x, y = sx, sy
+		} else if x < 0 || y < 0 || x >= r.clipW() || y >= r.clipH() {
 			continue
 		}
 		row := clampLHTRow(int(pt.Index))

@@ -2083,6 +2083,17 @@ shader's cell lattice and atlas tile stay in record pixels; its dither checker
 stays a test on the destination pixel, and so stays one screen pixel wide, as it
 already did at every view scale.
 
+**Lit points.** The explosion and muzzle-flash halos are point batches that
+READ the destination and brighten it through an `LHT` row, so a screen pixel
+must receive each batch at most once. Scaled quad by quad, a shrinking
+transform lands two or three record points on one screen pixel and brightens it
+two or three times, and the halo drew as a lattice of over-lit pixels at the
+1.5× default. The executor therefore resamples a lit batch under the transform:
+each screen pixel is lit by exactly the record point nearest sampling chooses
+for its centre, the same rule the terrain and sprites follow, and the point is
+placed in screen pixels with the transform held off. At a rest step the batch
+takes the path it always took.
+
 **Sampling — contract Z10.** A palette index cannot be interpolated, so every
 index-space lookup is a nearest texel fetch and stays one (C-G4). Filtering, when
 it happens, happens **after** the palette resolve: four texels, each resolved

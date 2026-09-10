@@ -150,3 +150,64 @@ func quadCorners(r *Renderer) []float32 {
 	}
 	return []float32{verts[0].DstX, verts[0].DstY, verts[3].DstX, verts[3].DstY}
 }
+
+// litCoverage counts, per screen pixel, how many compiled destination quads
+// cover it: a lit point brightens the destination, so covering a pixel twice
+// brightens it twice.
+func litCoverage(r *Renderer, w, h int) map[[2]int]int {
+	verts := r.sched.classVerts(schedDest)
+	cover := map[[2]int]int{}
+	for i := 0; i+4 <= len(verts); i += 4 {
+		x0, y0, x1, y1 := verts[i].DstX, verts[i].DstY, verts[i].DstX, verts[i].DstY
+		for _, v := range verts[i+1 : i+4] {
+			x0, y0 = min(x0, v.DstX), min(y0, v.DstY)
+			x1, y1 = max(x1, v.DstX), max(y1, v.DstY)
+		}
+		for y := int(y0); y < int(y1) && y < h; y++ {
+			for x := int(x0); x < int(x1) && x < w; x++ {
+				cover[[2]int{x, y}]++
+			}
+		}
+	}
+	return cover
+}
+
+// Under the world transform the lit-point layer is resampled to one record
+// point per screen pixel, so the explosion halo brightens each pixel exactly
+// once (§16.3 "Lit points"). Scaling the points quad by quad let two or three
+// record points land on one screen pixel and brighten it two or three times,
+// which drew the halo as a lattice at the 1.5x default.
+func TestLitPointsBrightenEachScreenPixelOnceUnderTheTransform(t *testing.T) {
+	r, _ := schedulerFixture(t)
+	r.sched.resetFrame(64, 64)
+	r.worldW, r.worldH = 64, 64
+	// 1.5x is the 2x step shrunk by 0.75: four record pixels to three screen ones.
+	r.World(worldRegion(camera.ZoomOf(camera.ViewScaleMid), camera.ViewScaleDetail, 64, 64))
+	if !r.sched.worldOn {
+		t.Fatal("the fixture did not arm the transform")
+	}
+	var pts []drawlist.Point
+	for y := 0; y < 16; y++ {
+		for x := 0; x < 16; x++ {
+			pts = append(pts, drawlist.Point{X: int32(x), Y: int32(y), Index: 20})
+		}
+	}
+	r.Points(drawlist.Points{Kind: drawlist.PointLit, Points: pts})
+	if !r.sched.worldOn {
+		t.Fatal("the lit-point path left the transform disarmed")
+	}
+	cover := litCoverage(r, 64, 64)
+	// The 16x16 record block is 12x12 screen pixels, each covered exactly once.
+	for y := 0; y < 12; y++ {
+		for x := 0; x < 12; x++ {
+			if n := cover[[2]int{x, y}]; n != 1 {
+				t.Fatalf("screen pixel (%d,%d) is lit %d times, want once", x, y, n)
+			}
+		}
+	}
+	for p, n := range cover {
+		if (p[0] >= 12 || p[1] >= 12) && n > 0 {
+			t.Fatalf("screen pixel %v outside the shrunk block is lit", p)
+		}
+	}
+}
