@@ -118,13 +118,23 @@ const (
 	// ColorG the alpha; the fragment is the premultiplied (PAL[idx]·a, a) and
 	// the source-over blend does the rest.
 	destOpMarker = 4
-	// destOpPointPlane is a whole group of lit points as one quad over the lit
-	// point plane (points.go, docs/DESIGN_GPU_RENDERER.md §13.8). Source 0 is the
-	// plane atlas: each texel carries the row family's high lane as a 24-bit
+	// destOpLaneAtlas brightens the destination by a per-texel scale read out of
+	// source 0: each texel carries the row family's high lane as a 24-bit
 	// fixed-point triple, and an uncovered texel is zero, which is the identity
 	// scale. The low lane is 1 for every LHT row, so nothing else has to be
-	// carried.
-	destOpPointPlane = 5
+	// carried. Two families use it — a whole group of lit points as one quad over
+	// the per-frame lit point plane (points.go, §13.8), and one explosion disc as
+	// one magnified quad over the persistent disc atlas (flash.go, §13.11) — and
+	// they share it precisely so the brightening per row cannot drift between
+	// them.
+	destOpLaneAtlas = 5
+	// destOpHalo scales the destination by one LHT row inside a radius: the flat
+	// ground halo of [03 §4.3.1] as one quad. The per-corner custom lanes carry
+	// the pixel's offset from the disc centre and the third lane the squared
+	// radius, so the fragment recovers the integer (dx, dy) the byte writer
+	// tested and runs the same comparison; the colour lanes carry the row's scale
+	// split like destOpTable's (§13.11).
+	destOpHalo = 6
 )
 
 // The composite's blends (docs/DESIGN_GPU_RENDERER.md §13.3 "Blend classes").
@@ -309,10 +319,12 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 // fragment and the row families hand it a scale, and the blend does the
 // arithmetic the tables were generated from [03 §4.3.4](§13.2, §13.3).
 //
-// Commands in one batch have pairwise disjoint rectangles by the scheduler's
-// rule, and a batch that must observe an earlier one is a phase later, so the
-// byte writers' record-order chain is preserved
-// (§11.2 "The scheduler")[03 R-COMP-01 §2].
+// Commands in one batch either have disjoint rectangles or share a blend
+// stream, and a command that must observe one of another stream is a phase
+// later, so the byte writers' record-order chain is preserved: a blend is a
+// read-modify-write of the attachment and the device applies one pass's
+// fragments in primitive order, which inside a batch is record order
+// (§11.2 "The scheduler", §13.11)[03 R-COMP-01 §2].
 func sceneDestShaderSource() string {
 	return `//kage:unit pixels
 
@@ -332,15 +344,27 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 		// the blend forms dst * (min(k,1) + max(k-1,0)) = dst * k (§13.3).
 		return vec4(color.r, color.r, color.r, color.g)
 	}
-	if op == ` + fmt.Sprint(destOpPointPlane) + ` {
-		// The lit point plane. The stored triple is an integer below 2^24, so
-		// every term and every partial sum below is exact in binary32 whatever
-		// order the driver associates them in, and the 2^-23 scale is exact
-		// because it is a power of two: the lane reaches the blend bit-for-bit as
-		// the CPU formed it (points.go).
+	if op == ` + fmt.Sprint(destOpLaneAtlas) + ` {
+		// The lit point plane and the explosion disc atlas. The stored triple is
+		// an integer below 2^24, so every term and every partial sum below is
+		// exact in binary32 whatever order the driver associates them in, and the
+		// 2^-23 scale is exact because it is a power of two: the lane reaches the
+		// blend bit-for-bit as the CPU formed it (points.go, flash.go).
 		t := imageSrc0At(srcPos)
 		n := floor(t.r*255.0+0.5)*65536.0 + floor(t.g*255.0+0.5)*256.0 + floor(t.b*255.0+0.5)
 		return vec4(1.0, 1.0, 1.0, n/8388608.0)
+	}
+	if op == ` + fmt.Sprint(destOpHalo) + ` {
+		// The flat ground halo. custom.xy is the fragment's own offset from the
+		// disc centre, interpolated over the quad, so flooring it at the pixel
+		// centre recovers the integer (dx, dy) the byte writer walked; custom.z is
+		// the squared radius it compared against [03 §4.3.1]. Outside the circle
+		// the fragment is the identity scale, so one quad covers the whole square.
+		d := floor(custom.xy)
+		if dot(d, d) > custom.z {
+			return vec4(1.0, 1.0, 1.0, 0.0)
+		}
+		return vec4(color.r, color.r, color.r, color.g)
 	}
 	if op == ` + fmt.Sprint(destOpMarker) + ` {
 		// The strategic marker layer: a flat index at the layer's fade alpha.

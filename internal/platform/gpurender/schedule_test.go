@@ -36,13 +36,15 @@ func (s *scheduler) classVerts(class int) []ebiten.Vertex {
 	return out
 }
 
-// Critical-path placement (docs/DESIGN_GPU_RENDERER.md §11.5): a command lands in
-// the EARLIEST phase its overlaps permit — one phase after every earlier
-// destination read it overlaps, and no earlier than every earlier opaque write it
-// overlaps. A command that overlaps nothing goes back to phase zero however many
-// phases the segment has already opened, which is what the older latest-open-phase
-// rule could not do. Sharing a 32-pixel cell without overlapping constrains
-// nothing, because the cell names its owners and the rectangles are compared.
+// Critical-path placement (docs/DESIGN_GPU_RENDERER.md §11.5) with the
+// same-stream rule of §13.11: a command lands in the EARLIEST phase its overlaps
+// permit — one phase after every earlier destination read of ANOTHER blend
+// stream it overlaps, in the same phase as an earlier one of its own stream, and
+// no earlier than every earlier opaque write it overlaps. A command that
+// overlaps nothing goes back to phase zero however many phases the segment has
+// already opened, which is what the older latest-open-phase rule could not do.
+// Sharing a 32-pixel cell without overlapping constrains nothing, because the
+// cell names its owners and the rectangles are compared.
 func TestSchedulerPlacesCommandsOnTheCriticalPath(t *testing.T) {
 	r, _ := schedulerFixture(t)
 	frame := &formats.GAFFrame{Width: 8, Height: 8, Pixels: make([]byte, 64), Transparent: make([]bool, 64)}
@@ -57,14 +59,15 @@ func TestSchedulerPlacesCommandsOnTheCriticalPath(t *testing.T) {
 	if got := r.sched.curPhase; got != 0 {
 		t.Fatalf("the first tinted sprite landed in phase %d, want 0", got)
 	}
-	// Overlapping the first: it reads that result, so it follows it by a phase.
+	// Overlapping the first in the SAME stream: both are the ALP half-blend, the
+	// batch draws them in record order and the blend reads the attachment, so the
+	// later one still composites over the earlier one's result inside one phase.
 	r.Sprite(drawlist.Sprite{Frame: frame, X: 4, Y: 4, Kind: drawlist.BlitTinted})
-	if got := r.sched.curPhase; got != 1 {
-		t.Fatalf("the overlapping tinted sprite landed in phase %d, want 1", got)
+	if got := r.sched.curPhase; got != 0 {
+		t.Fatalf("the overlapping tinted sprite landed in phase %d, want 0", got)
 	}
 	// Inside the same 32-pixel cell as the first two but disjoint from both: the
-	// exact rectangles decide, and nothing constrains it, so it goes back to
-	// phase zero rather than joining the latest phase.
+	// exact rectangles decide, and nothing constrains it.
 	r.Sprite(drawlist.Sprite{Frame: frame, X: 16, Y: 16, Kind: drawlist.BlitTinted})
 	if got := r.sched.curPhase; got != 0 {
 		t.Fatalf("the same-cell disjoint tinted sprite landed in phase %d, want 0", got)
@@ -74,8 +77,14 @@ func TestSchedulerPlacesCommandsOnTheCriticalPath(t *testing.T) {
 	if got := r.sched.curPhase; got != 0 {
 		t.Fatalf("the disjoint tinted sprite landed in phase %d, want 0", got)
 	}
-	// An opaque write over pixels both the phase-0 and the phase-1 tinted sprite
-	// covered must overwrite the later of them, so it follows phase 1.
+	// A ROW-family command over the same pixels is different arithmetic, so it
+	// keeps the phase the historical rule gave it.
+	r.Fill(drawlist.Fill{Rect: drawlist.Rect{X: 4, Y: 4, W: 4, H: 4}, Style: drawlist.FillLitRect, Level: 6})
+	if got := r.sched.curPhase; got != 1 {
+		t.Fatalf("the overlapping lit rect landed in phase %d, want 1", got)
+	}
+	// An opaque write over pixels the phase-0 tinted sprites and the phase-1 lit
+	// rect covered must overwrite the later of them, so it follows phase 1.
 	r.Fill(drawlist.Fill{Rect: drawlist.Rect{X: 5, Y: 5, W: 1, H: 1}, Index: 9})
 	if got := r.sched.curPhase; got != 2 {
 		t.Fatalf("the overwriting fill landed in phase %d, want 2", got)
@@ -86,13 +95,81 @@ func TestSchedulerPlacesCommandsOnTheCriticalPath(t *testing.T) {
 	// Each phase's destination rectangle is the union of its own destination
 	// batch, which is all the following pass has to copy forward.
 	if p := r.sched.phases[0]; !p.hasDest || p.x0 != 0 || p.y0 != 0 || p.x1 != 48 || p.y1 != 48 {
-		t.Fatalf("phase 0 destination rectangle = %+v, want the union of its three tinted sprites", p)
+		t.Fatalf("phase 0 destination rectangle = %+v, want the union of its four tinted sprites", p)
 	}
-	if p := r.sched.phases[1]; !p.hasDest || p.x0 != 4 || p.y0 != 4 || p.x1 != 12 || p.y1 != 12 {
-		t.Fatalf("phase 1 destination rectangle = %+v, want its one tinted sprite", p)
+	if p := r.sched.phases[1]; !p.hasDest || p.x0 != 4 || p.y0 != 4 || p.x1 != 8 || p.y1 != 8 {
+		t.Fatalf("phase 1 destination rectangle = %+v, want its one lit rect", p)
 	}
 	if !r.sched.phases[2].batch[schedDest].empty() {
 		t.Fatal("phase 2 compiled a destination batch, want only the opaque overwrite")
+	}
+}
+
+// The same-stream rule is a relaxation of the overlap test only; it never
+// reorders a batch. Two overlapping row-family commands share a phase and land
+// in the SAME device run, in record order, so the device applies their scales in
+// the order the byte writers applied their table lookups (§13.11).
+func TestSchedulerSameStreamCommandsKeepRecordOrderInOneRun(t *testing.T) {
+	r, _ := schedulerFixture(t)
+	r.sched.resetFrame(64, 64)
+	r.Fill(drawlist.Fill{Rect: drawlist.Rect{X: 2, Y: 2, W: 10, H: 10}, Style: drawlist.FillLitRect, Level: 4})
+	r.Fill(drawlist.Fill{Rect: drawlist.Rect{X: 6, Y: 6, W: 10, H: 10}, Style: drawlist.FillLitRect, Level: 9})
+	if got := r.sched.nphase; got != 1 {
+		t.Fatalf("two overlapping lit rects compiled %d phases, want 1", got)
+	}
+	b := &r.sched.phases[0].batch[schedDest]
+	if len(b.runs) != 1 {
+		t.Fatalf("compiled %d destination runs, want one shared run", len(b.runs))
+	}
+	if len(b.verts) != 2*quadVertices {
+		t.Fatalf("compiled %d vertices, want two quads", len(b.verts))
+	}
+	if b.verts[0].DstX != 2 || b.verts[quadVertices].DstX != 6 {
+		t.Fatalf("run vertices are not in record order: %v then %v", b.verts[0].DstX, b.verts[quadVertices].DstX)
+	}
+}
+
+// Fog is the one family that still samples the phase's read copy, so it is its
+// own stream and splits from every destination command it overlaps in both
+// directions — otherwise a second command of the phase would read a region the
+// copy no longer describes (§13.11, §13.3 "Fog keeps one read copy").
+func TestSchedulerSnapshotStreamAlwaysSplits(t *testing.T) {
+	var s scheduler
+	s.resetFrame(64, 64)
+	// A row owner, then a snapshot-sampling command over it, then another row
+	// command over both.
+	s.tag(0, 0, 32, 32, 0, true, schedStreamRow)
+	if got := s.place(0, 0, 32, 32, schedStreamSnapshot); got != 1 {
+		t.Fatalf("a snapshot command over a row command placed at %d, want 1", got)
+	}
+	s.tag(0, 0, 32, 32, 1, true, schedStreamSnapshot)
+	if got := s.place(0, 0, 32, 32, schedStreamRow); got != 2 {
+		t.Fatalf("a row command over a snapshot command placed at %d, want 2", got)
+	}
+	if got := s.place(0, 0, 32, 32, schedStreamSnapshot); got != 2 {
+		t.Fatalf("a second snapshot command placed at %d, want 2", got)
+	}
+}
+
+// streamFor derives the stream from what a command binds, which is what keeps
+// the families outside this unit's files on their existing call shape (§13.11).
+func TestStreamForDerivesTheBlendStream(t *testing.T) {
+	cases := []struct {
+		name     string
+		class    int
+		blend    ebiten.Blend
+		readSlot int8
+		want     uint8
+	}{
+		{"opaque", schedOpaque, blendComposite, schedReadNone, schedStreamNone},
+		{"alp", schedDest, blendHalfSource, schedReadNone, schedStreamALP},
+		{"row", schedDest, blendScaleDestination, schedReadNone, schedStreamRow},
+		{"fog", schedDest, blendComposite, 0, schedStreamSnapshot},
+	}
+	for _, c := range cases {
+		if got := streamFor(c.class, c.blend, c.readSlot); got != c.want {
+			t.Fatalf("%s: streamFor = %d, want %d", c.name, got, c.want)
+		}
 	}
 }
 

@@ -27,6 +27,11 @@ type Renderer struct {
 	modelPrep      modelPrepScratch
 	tables         tables
 	displayPalette [256][4]byte
+	// displayPaletteGen counts the display palettes actually installed. The model
+	// slot page holds resolved colour since §17, so a persistent slot's pixels
+	// depend on it and its residency is keyed on this counter
+	// (docs/DESIGN_GPU_RENDERER.md §13.12).
+	displayPaletteGen uint64
 	// scene2D is the one opaque pass and sceneDest the one destination-compositing
 	// pass (§11.2 "One scene shader for the 2D families").
 	scene2D   *ebiten.Shader
@@ -70,6 +75,10 @@ type Renderer struct {
 	modelStageW, modelStageH      int
 	modelOpts                     ebiten.DrawTrianglesShaderOptions
 	modelStageOp                  ebiten.DrawImageOptions
+	// modelFills are the one-texel sources the batched slot-region clears copy
+	// and modelFillOpts their reused options value (model_slots.go, §13.12).
+	modelFills    []modelFillTexel
+	modelFillOpts ebiten.DrawTrianglesOptions
 	// modelStageOut is the fallback group path's resolved plane: the group's
 	// composed index raster becomes colour here before it commits (§17).
 	modelStageOut *ebiten.Image
@@ -188,6 +197,7 @@ func (r *Renderer) SetDisplayPalette(p [256][4]byte) {
 	}
 	r.tables.setDisplayPalette(p)
 	r.displayPalette = p
+	r.displayPaletteGen++
 }
 
 // NewChecked is New but also returns the first shader compilation error. Each

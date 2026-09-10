@@ -60,6 +60,8 @@ func (s *scaleCapture) Points(v drawlist.Points) {
 	s.family = append(s.family, "points")
 	s.points = append(s.points, drawlist.Points{Kind: v.Kind, Points: append([]drawlist.Point(nil), v.Points...)})
 }
+func (s *scaleCapture) Flash(drawlist.Flash) { s.family = append(s.family, "flash") }
+func (s *scaleCapture) Halo(drawlist.Halo)   { s.family = append(s.family, "halo") }
 func (s *scaleCapture) Model(v drawlist.Model) {
 	// Classic model images come from the list's own reused pool for the same
 	// reason; keep the placement values this test reads.

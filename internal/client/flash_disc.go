@@ -33,6 +33,10 @@ const (
 	flashRampTop      = 0x6F
 	flashOpaqueCutoff = 0x22 // (0x20 − v) at or above this is transparent
 	flashRingCutoff   = 0x20 // and at or above this is the ring index
+	// flashRampBase is the ramp's first index: an opaque disc byte selects LHT
+	// row `byte − flashRampBase`, so the ramp 0x4F..0x6E is exactly rows 0..31
+	// and the ring 0x6E is row 31, the brightest [03 §4.3.1][03 R-FX-01 §4].
+	flashRampBase = 0x4F
 )
 
 // flashDisc is one generated frame: an N×N indexed square whose bytes are the
@@ -42,6 +46,12 @@ type flashDisc struct {
 	Side   int
 	Offset int
 	Pixels []uint8
+	// Rows is Pixels resolved to the LHT row each opaque byte selects — the
+	// `src − 0x4F` of drawCalculatedFlash — with drawlist.FlashTransparentRow
+	// where the byte is the transparent key [03 §4.3.1][03 R-FX-01 §4]. It is
+	// built with the frame, because the frames are generated once per battle and
+	// both recording lanes want the row rather than the raw byte.
+	Rows []uint8
 }
 
 // buildFlashDisc generates one frame of side n [06 R-WFX-01 §2], spending one
@@ -65,7 +75,7 @@ type flashDisc struct {
 // stated "the multiplier is ×32 with no division"; that section is corrected.
 func buildFlashDisc(n int, crt *flashRand) flashDisc {
 	h := n / 2
-	d := flashDisc{Side: n, Offset: h, Pixels: make([]uint8, n*n)}
+	d := flashDisc{Side: n, Offset: h, Pixels: make([]uint8, n*n), Rows: make([]uint8, n*n)}
 	if n <= 0 || h <= 0 || crt == nil {
 		return d
 	}
@@ -83,10 +93,13 @@ func buildFlashDisc(n int, crt *flashRand) flashDisc {
 			switch {
 			case c >= flashOpaqueCutoff:
 				d.Pixels[row+x] = flashTransparent
+				d.Rows[row+x] = drawlist.FlashTransparentRow
 			case c >= flashRingCutoff:
 				d.Pixels[row+x] = flashRingIndex
+				d.Rows[row+x] = flashRingIndex - flashRampBase
 			default:
-				d.Pixels[row+x] = c + 0x4F
+				d.Pixels[row+x] = c + flashRampBase
+				d.Rows[row+x] = c
 			}
 		}
 	}
@@ -170,20 +183,23 @@ func (r *flashRand) Rand() int32 {
 // geometry be checked against the published per-table draw census.
 func (r *flashRand) Draws() int { return r.drawn }
 
-// flashFrame returns one frame of one table, or nil when either index is out
-// of range. A cursor past the end clamps, as the art resolver's does: it
-// belongs to a sequence the pool is about to retire.
-func (c *Client) flashFrame(table int, frameIndex int32) *flashDisc {
+// flashFrame returns one frame of one table together with the frame index it
+// resolved to, or nil when either index is out of range. A cursor past the end
+// clamps, as the art resolver's does: it belongs to a sequence the pool is about
+// to retire. The clamped index is returned because it, with the table, is the
+// disc's identity for an executor that caches what it builds from the frame
+// (docs/DESIGN_GPU_RENDERER.md §13.11).
+func (c *Client) flashFrame(table int, frameIndex int32) (*flashDisc, int32) {
 	if c == nil || table < 0 || table >= flashTableCount {
-		return nil
+		return nil, 0
 	}
 	tables := c.ensureFlashTables()
 	if tables == nil {
-		return nil
+		return nil, 0
 	}
 	frames := tables.tables[table]
 	if len(frames) == 0 {
-		return nil
+		return nil, 0
 	}
 	if frameIndex < 0 {
 		frameIndex = 0
@@ -191,7 +207,7 @@ func (c *Client) flashFrame(table int, frameIndex int32) *flashDisc {
 	if int(frameIndex) >= len(frames) {
 		frameIndex = int32(len(frames) - 1)
 	}
-	return &frames[frameIndex]
+	return &frames[frameIndex], frameIndex
 }
 
 // drawCalculatedFlash composites one generated disc frame at a screen point
@@ -225,12 +241,27 @@ func (c *Client) flashFrame(table int, frameIndex int32) *flashDisc {
 // level is the traced `src − 0x4F`. This previously took `discByte − 0x50`
 // from [03 §4.3.1]'s mapping, which put every byte one row low and the ring
 // on row 30; that section is corrected and the halo is one row brighter.
+// The two recording lanes differ only in how the same brightening is carried
+// (docs/DESIGN_GPU_RENDERER.md §13.11). The classic lane emits one lit point per
+// covered screen pixel, which is what the byte writer does. The modern lane
+// emits ONE lit-disc command carrying the frame's identity, its rows, the
+// anchor, the view scale and the gate as a rectangle, and the executor magnifies
+// the disc as a textured quad; a battle frame's two hundred effects then cost
+// two hundred quads instead of a million points. The classic sink expands the
+// command back into exactly these points, so a modern list replayed through it
+// composes the same bytes.
 func (c *Client) drawCalculatedFlash(table int, frameIndex int32, cx, cy int, coverage func(x, y int) bool) bool {
-	if c == nil || c.pal == nil || coverage == nil {
+	if c == nil || c.pal == nil {
 		return false
 	}
-	d := c.flashFrame(table, frameIndex)
+	d, resolved := c.flashFrame(table, frameIndex)
 	if d == nil || d.Side <= 0 {
+		return false
+	}
+	if c.recordModelGeometry {
+		return c.emitFlashDisc(table, resolved, d, cx, cy)
+	}
+	if coverage == nil {
 		return false
 	}
 	// The disc is a lit-point batch whose radius takes the view scale
@@ -280,5 +311,39 @@ func (c *Client) drawCalculatedFlash(table int, frameIndex int32, cx, cy int, co
 	}
 	// The batch is a self-owned arena sub-slice, immutable for the frame (WU-1.8).
 	c.emitPoints(off, drawlist.PointLit)
+	return true
+}
+
+// emitFlashDisc records the modern lane's one lit-disc command and reports
+// whether any screen pixel is left after the gate — the same answer the point
+// lane's "did the batch emit anything" gives for a disc whose covered pixels all
+// fall outside the terrain rectangle or the recording extent
+// (docs/DESIGN_GPU_RENDERER.md §13.11).
+func (c *Client) emitFlashDisc(table int, frameIndex int32, d *flashDisc, cx, cy int) bool {
+	s := c.viewScale()
+	clip := c.litDiscClip()
+	side, offset := int32(d.Side), int32(d.Offset)
+	// The projected extent is the union of the per-source-pixel spans the point
+	// lane walks: source pixel c covers [Project(c-Offset), Project(c-Offset+1)).
+	x0 := int32(cx) + s.Project(-offset)
+	x1 := int32(cx) + s.Project(side-offset)
+	y0 := int32(cy) + s.Project(-offset)
+	y1 := int32(cy) + s.Project(side-offset)
+	if r := intersectUIRects(drawlist.Rect{X: x0, Y: y0, W: x1 - x0, H: y1 - y0}, clip); r.W <= 0 || r.H <= 0 {
+		return false
+	}
+	c.emitFlash(drawlist.Flash{
+		Table:  int32(table),
+		Frame:  frameIndex,
+		Side:   side,
+		Offset: offset,
+		// The rows are the generated frame's own, immutable for the battle, so the
+		// record shares them rather than copying [I6].
+		Rows:  d.Rows,
+		X:     int32(cx),
+		Y:     int32(cy),
+		Scale: s,
+		Clip:  clip,
+	})
 	return true
 }

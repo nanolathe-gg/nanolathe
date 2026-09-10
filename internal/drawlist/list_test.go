@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/render"
 )
 
@@ -22,6 +23,8 @@ func (r *recorder) Glyphs(Glyphs)   { r.tags = append(r.tags, "glyphs") }
 func (r *recorder) Fill(c Fill)     { r.tags = append(r.tags, "fill"); r.lastFill = c }
 func (r *recorder) Line(Line)       { r.tags = append(r.tags, "line") }
 func (r *recorder) Points(Points)   { r.tags = append(r.tags, "points") }
+func (r *recorder) Flash(Flash)     { r.tags = append(r.tags, "flash") }
+func (r *recorder) Halo(Halo)       { r.tags = append(r.tags, "halo") }
 func (r *recorder) Model(Model)     { r.tags = append(r.tags, "model") }
 func (r *recorder) Fog(Fog)         { r.tags = append(r.tags, "fog") }
 func (r *recorder) Surface(Surface) { r.tags = append(r.tags, "surface") }
@@ -181,5 +184,107 @@ func TestFieldFidelity(t *testing.T) {
 	}
 	if r.lastFill != fill {
 		t.Fatalf("fill round-trip mismatch:\n got  %+v\n want %+v", r.lastFill, fill)
+	}
+}
+
+// The lit-disc families take their place in record order like every other
+// family, and Replay hands them to the Sink where they were recorded
+// (docs/DESIGN_GPU_RENDERER.md §13.11).
+func TestReplayVisitsTheLitDiscFamilies(t *testing.T) {
+	var l List
+	l.RecordFill(Fill{})
+	l.RecordFlash(Flash{})
+	l.RecordPoints(Points{})
+	l.RecordHalo(Halo{})
+	l.RecordFlash(Flash{})
+	var r recorder
+	l.Replay(&r)
+	want := []string{"fill", "flash", "points", "halo", "flash"}
+	if len(r.tags) != len(want) {
+		t.Fatalf("replayed %v, want %v", r.tags, want)
+	}
+	for i := range want {
+		if r.tags[i] != want[i] {
+			t.Fatalf("replayed %v, want %v", r.tags, want)
+		}
+	}
+	// Reset drops them with every other family, and a cloned list keeps them.
+	c := l.Clone()
+	l.Reset()
+	var after recorder
+	l.Replay(&after)
+	if len(after.tags) != 0 {
+		t.Fatalf("after Reset the list replayed %v, want nothing", after.tags)
+	}
+	var cloned recorder
+	c.Replay(&cloned)
+	if len(cloned.tags) != len(want) {
+		t.Fatalf("the clone replayed %v, want %v", cloned.tags, want)
+	}
+}
+
+// A Flash expands to the pixels the byte writer covers: every opaque texel of
+// the frame, magnified by the view scale, gated by the recorded rectangle
+// [03 R-FX-01 §4].
+func TestFlashExpandCoversTheMagnifiedFrame(t *testing.T) {
+	f := Flash{
+		Side: 3, Offset: 1,
+		Rows: []uint8{FlashTransparentRow, 4, FlashTransparentRow,
+			5, 6, 7,
+			FlashTransparentRow, 8, FlashTransparentRow},
+		X: 10, Y: 10, Scale: camera.ViewScaleDetail,
+		Clip: Rect{W: 64, H: 64},
+	}
+	var got []Point
+	f.Expand(func(x, y int32, row uint8) { got = append(got, Point{X: x, Y: y, Index: row}) })
+	// Five opaque texels, each two by two at the detail scale.
+	if len(got) != 5*4 {
+		t.Fatalf("the disc expanded to %d pixels, want 20", len(got))
+	}
+	// The centre texel is row 6 and sits at the anchor, two pixels on a side.
+	for _, p := range []Point{{X: 10, Y: 10, Index: 6}, {X: 11, Y: 11, Index: 6}} {
+		found := false
+		for _, q := range got {
+			if q == p {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("the centre texel did not cover %+v; got %v", p, got)
+		}
+	}
+	// The gate removes what falls outside it and nothing else.
+	f.Clip = Rect{X: 11, Y: 11, W: 40, H: 40}
+	var clipped []Point
+	f.Expand(func(x, y int32, row uint8) { clipped = append(clipped, Point{X: x, Y: y, Index: row}) })
+	if len(clipped) >= len(got) || len(clipped) == 0 {
+		t.Fatalf("the gate left %d of %d pixels", len(clipped), len(got))
+	}
+	for _, p := range clipped {
+		if p.X < 11 || p.Y < 11 {
+			t.Fatalf("the gate admitted %+v", p)
+		}
+	}
+}
+
+// A Halo expands to the byte writer's own disc: the inclusive square of
+// 2r+1 pixels, minus the corners the dx*dx + dy*dy <= r*r test rejects
+// [03 §4.3.1].
+func TestHaloExpandMatchesTheRadiusTest(t *testing.T) {
+	h := Halo{X: 20, Y: 20, Radius: 3, Row: 9, Clip: Rect{W: 64, H: 64}}
+	seen := map[[2]int32]bool{}
+	h.Expand(func(x, y int32, row uint8) {
+		if row != 9 {
+			t.Fatalf("pixel (%d,%d) carries row %d, want the halo's 9", x, y, row)
+		}
+		seen[[2]int32{x, y}] = true
+	})
+	for dy := int32(-4); dy <= 4; dy++ {
+		for dx := int32(-4); dx <= 4; dx++ {
+			want := dx*dx+dy*dy <= 9
+			if got := seen[[2]int32{20 + dx, 20 + dy}]; got != want {
+				t.Fatalf("offset (%d,%d): covered %v, want %v", dx, dy, got, want)
+			}
+		}
 	}
 }

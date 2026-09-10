@@ -342,7 +342,19 @@ func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (*drawli
 	w, h, ox, oy := retainedModelExtent(body.geometry, all)
 	ax, ay, hx, hy := c.modelPlacement(draw)
 	g := c.borrowRebasedModelGeometry(body.geometry, int32(w), int32(h), ox, oy, ax, ay, hx, hy)
+	if g == nil {
+		return nil, nil
+	}
+	// The rebased packet is the retained raster placed for this frame, so it
+	// carries the identity a modern executor keys its persistent slot on
+	// (docs/DESIGN_GPU_RENDERER.md §13.12). The reveal, the outline and the live
+	// lane below are rebuilt every frame into that same slot, so any of them
+	// disqualifies the packet from being kept.
+	g.Cache = body.cacheKey(hx, hy)
 	c.configureModelGeometry(g, draw, v.Owner, modelCursorUnit, reveal, outline)
+	if g.Reveal != nil || len(g.Outline) != 0 {
+		g.Cache = drawlist.ModelCacheKey{}
+	}
 	if !draw.UnderConstruction {
 		live := c.collectDrawPolysLane(draw, unitTeamColor(v), id, modelCursorUnit, presentationrender.PieceLaneLive)
 		if len(live) != 0 {
@@ -356,10 +368,14 @@ func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (*drawli
 		}
 	}
 	if g.KeyPlane {
+		if len(g.LiveFaces) != 0 || g.Supersample != nil && len(g.Supersample.LiveFaces) != 0 {
+			g.Cache = drawlist.ModelCacheKey{}
+		}
 		return g, nil
 	}
 	// The one-plane branch commits its cached body, then the direct projected
-	// live invocation as a later Model command [03 R-RAST-01 §2].
+	// live invocation as a later Model command [03 R-RAST-01 §2]. Its slot holds
+	// the cached lane alone, so it stays reusable.
 	g.LiveFaces = nil
 	if ss := g.Supersample; ss != nil {
 		ss.LiveFaces = nil

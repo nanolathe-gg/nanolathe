@@ -62,6 +62,8 @@ func (s *trailCollector) Glyphs(drawlist.Glyphs)   { s.other++ }
 func (s *trailCollector) Fill(drawlist.Fill)       { s.other++ }
 func (s *trailCollector) Line(drawlist.Line)       { s.other++ }
 func (s *trailCollector) Points(drawlist.Points)   { s.other++ }
+func (s *trailCollector) Flash(drawlist.Flash)     {}
+func (s *trailCollector) Halo(drawlist.Halo)       {}
 func (s *trailCollector) Model(drawlist.Model)     { s.other++ }
 func (s *trailCollector) Fog(drawlist.Fog)         { s.other++ }
 func (s *trailCollector) Surface(drawlist.Surface) { s.other++ }

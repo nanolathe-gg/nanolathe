@@ -21,11 +21,14 @@ import (
 // (§13.2, §13.3). The GPU reads the framebuffer for them, so there is no
 // snapshot and no copy.
 //
-// The order they impose is unchanged, and so is the scheduler: a command of this
-// class is still placed one whole phase after every earlier command of the class
-// it overlaps, so an overlapping later command still composites over the earlier
-// command's result, exactly as the byte writers do when they read c.indexed in
-// record order (§11.2 "The scheduler")[03 R-COMP-01 §2].
+// The order they impose is unchanged. A command of this class is placed one
+// whole phase after every earlier command of the class it overlaps in ANOTHER
+// blend stream, and may share a phase with an earlier one of its own stream,
+// because a fixed-function blend reads and writes the attachment in primitive
+// order and a phase's batch is drawn in record order (§13.11). Either way an
+// overlapping later command composites over the earlier command's result,
+// exactly as the byte writers do when they read c.indexed in record order
+// (§11.2 "The scheduler")[03 R-COMP-01 §2].
 
 // clampLHTRow clamps a light level to the LHT's 0..31 row range, matching
 // palette.Tables.LightLookup's own clamp so the GPU row equals the byte writer's
@@ -375,7 +378,7 @@ func (r *Renderer) emitPointPlaneGroup(g *litPointGroup, runs []litPointRun, row
 	s.quad(schedDest,
 		float32(g.x0), float32(g.y0), float32(g.x1), float32(g.y1),
 		float32(rx), float32(ry), float32(rx+w), float32(ry+h),
-		[4]float32{}, [4]float32{0, 0, 0, destOpPointPlane})
+		[4]float32{}, [4]float32{0, 0, 0, destOpLaneAtlas})
 	return true
 }
 

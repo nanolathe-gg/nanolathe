@@ -2024,6 +2024,353 @@ baseline on **both** renderers. `go test -race` over the client and window
 packages is clean, and a race-built binary through a 180-frame modern benchmark
 reports no race and the same capture.
 
+### 13.11 Flash quads and same-stream phases (seventh round)
+
+Measured on the 720-frame modern battle benchmark at 1920×1080 with about 190
+units, Submit is all CPU on the game goroutine and its scaling term is the
+effect layer. At about 200 live effects the executor writes around a million
+lit-point texels per frame; Submit's correlation with the frame's vertex count
+is 0.93, and the phase count reaches 113–121 because overlapping
+destination-reading commands split phases. Two changes follow. The first is
+exact and its captures are byte-identical; the second is an Enhanced-only
+approximation the user approved on 2026-09-10 — the modern executor does not
+have to match retail's lit brightening of flashes and halos exactly, it has to
+look similar. Classic output is byte-identical either way.
+
+**The same-stream rule.** Until this round a destination-reading command opened
+the next phase whenever it overlapped another destination-reading command of the
+current phase (§11.2). That rule was written when a destination read meant
+sampling a per-phase snapshot copy. Since §13.3 it does not: the row families
+(`FillLitRect`, `FillShadeRect`, `PointLit`, the trail marks) and the ALP
+families (`BlitTinted`, the translucent feature body and shadow, the model
+shadow commit, the strategic marker layer) hand the device a fragment and a
+fixed-function blend, and the blend is a read-modify-write of the real
+attachment. A pass applies its fragments in primitive order, and inside a
+phase's destination batch that order **is** record order — runs are appended in
+record order and a run's vertices are its commands in record order. Two
+overlapping commands of the same blend stream therefore leave exactly the
+per-pixel sequence the phase split left.
+
+A destination-reading command now opens the next phase only when
+
+* it overlaps an earlier destination-reading command of a **different** stream,
+  or
+* either command samples the phase's read copy in its shader.
+
+The streams are the ALP half-blend, the row-family scale blend, and the
+read-copy stream. The last has exactly one member: **fog** is the only family
+that still binds a read slot (§13.3 "Fog keeps one read copy"), so it splits
+from every destination command it overlaps in both directions — the copy is
+taken once per phase, and a second command over the same region would read a
+state the copy no longer describes. Cross-stream pairs keep the split rather
+than an argument about commuting two different pieces of arithmetic. Every other
+rule stands: an opaque write over an earlier destination read still opens the
+next phase, a lit point still follows any earlier point at its own pixel by a
+phase, and the cell grid's forgotten-owner floor stays conservative — it is now
+kept per query stream, because what a forgotten owner costs depends on who asks.
+A command's stream is derived from the blend and read slot it already binds, so
+no family outside the scheduler changed.
+
+*Measured*, 1080p Ashap Plateau seed 7, `--benchmark-tps=120`, modern, phases
+per frame: 20 median / 26 max before, 14 / 16 after at 180 frames; 42 / 112
+before, 19 / 64 after at 720 frames. M1–M8 and `battle.png` at 180 and 720
+frames are byte-identical on both renderers.
+
+**The lit discs as quads.** An explosion's calculated disc [06 R-WFX-01 §2] and
+an effect's ground halo [03 §4.3.1] are the same operation the row families
+already express — every covered pixel folded through one LHT row — and the
+recorder was carrying each of them as one lit point per covered SCREEN pixel.
+That is where the million texels a frame came from. Each disc becomes one
+command instead:
+
+* `drawlist.Flash` carries the generated frame's identity (table and clamped
+  frame index), its `Side` and `Offset`, its texels resolved to LHT rows with
+  `FlashTransparentRow` outside the disc, the screen anchor, the view scale and
+  the **gate as a rectangle**. The gate is what `terrainScreenCoverage` already
+  is: two independent half-open range tests against the map, so the admitted set
+  is the map rectangle in screen space and no executor needs a callback.
+* `drawlist.Halo` carries the centre, the radius already taken through the view
+  scale, the LHT row and the same rectangle.
+
+Both are part of the `Sink` contract rather than an optional hook, because
+unlike the trail marks every executor must draw them. The **classic recording
+lane is unchanged**: it still emits the points, so classic output is
+byte-identical by construction. The classic *sink* implements the two commands
+by expanding them back into exactly those points — `Flash.Expand` and
+`Halo.Expand` are the definition, and a test locks their output against the
+points the classic lane records at all three view scales — so a modern-lane list
+replayed through the classic executor composes the same bytes.
+
+In the modern executor a generated frame is packed on first use into one
+persistent RGBA8 intensity atlas (`flash.go`), one page of 1024², which is
+enough for all three tables at once. A texel stores exactly what a lit point
+plane texel stores — the row family's high lane as a 24-bit fixed-point triple,
+from the same `pointLaneBytes` table — so the two paths run the same fragment op
+(`destOpLaneAtlas`) and the brightening per row cannot drift between them; an
+uncovered texel is zero, whose fragment is the identity scale, so the disc's
+transparent ring needs no key test and each frame gets a one-texel identity
+border for the magnified sampler. The flash is then one quad over its projected
+extent, the halo one quad whose fragment recovers the integer `(dx, dy)` from
+its interpolated corner lanes and runs the byte writer's own `dx² + dy² ≤ r²`
+test. Both are row-stream commands, so under the rule above they never split a
+phase among themselves or against the trails and the fills.
+
+**Divergences (Enhanced only).** The user decided on 2026-09-10 that the modern
+executor need not match retail exactly here, only look the same.
+
+* The disc is texture-sampled rather than magnified by a per-source-pixel loop.
+  At the native and detail scales that is the same pixel set — the loop's span
+  for source pixel `c` is `[Project(c−Offset), Project(c−Offset+1))`, which is
+  one and two screen pixels exactly — and both were **measured byte-identical**.
+  At the 1.5× step the loop's alternating one- and two-wide columns become
+  nearest-sample columns, which shifts some ramp columns by a pixel.
+  `battle.png` at 180 frames, `--zoom 1.5`: 11,627 of 2,073,600 pixels differ
+  (0.56%), mean channel difference 14.7 inside them and maximum 184, and every
+  differing pixel lies inside a disc footprint. The maximum is what a pixel
+  gaining or losing the brightest ring costs (`dst × 2` against `dst × 1`), not
+  a lane error; the halo has no texture and stays exact at every scale.
+* Flash and halo pixels that also fall under a later opaque command are still
+  overwritten, exactly as before.
+* The shader's per-fragment lane and the plane's stored lane are the same bytes
+  by construction, not by argument: both read `pointLaneBytes`. The measured
+  zero-pixel difference at 1× and 2× is the check.
+
+*Measured*, 1080p Ashap Plateau seed 7, `--benchmark-tps=120`, modern, medians
+over three interleaved 720-frame runs of each build:
+
+| | before | after |
+|---|---|---|
+| Submit | 4.95 ms | 3.24 ms |
+| PreRecord | 1.80 ms | 1.26 ms |
+| Cadence median | 9.05 ms | 8.34 ms (the 8.3 ms floor) |
+| Worst cadence | 127 ms (329 ms on one run) | 40 ms |
+| Phases per frame | 42 median, 112 max | 10 median, 14 max |
+| Vertices per frame | 22,500 median, 1,186,272 max | 14,362 median, 18,076 max |
+| Lit point pixels | 181,538 median, 963,506 max | 0 |
+| Lit discs (`Flashes`) | — | 49.5 median, 90 max |
+| Allocation per frame | 1.96 MB | 0.75 MB |
+
+Passes (13) and draws (27) are unchanged: this round moved the vertices and the
+phases, not the device calls.
+
+**The lit point plane now serves nothing in the modern lane.** `PointLit` had
+exactly two producers, the flash disc and the halo, and both are lit-disc
+commands now; the benchmark's `PointPixels` is zero on every frame. `points.go`,
+`drawLitPoints` and the `PointLit` path stay in place — they are the classic
+sink's own family, the fallback for any future `PointLit` producer, and the
+definition the disc atlas's lane encoding is checked against — but nothing in
+the modern executor exercises them today, and a later round may retire the
+per-frame plane atlas if none appears.
+
+### 13.12 Persistent model slots (eighth round)
+
+**The problem.** On the 720-frame modern battle benchmark (1920×1080, ~190
+units, 120 TPS) `Submit` sat at a 4.9 ms median, of which `prepareModelSlots`
+was 2.8 ms median and 3.7 ms p95 — and **flat across the scene**: it did not
+move with the effect count, the projectile count or the fire count. The reason
+is that the slot atlas was a per-frame product. Every frame reset the shared
+page and then re-placed, re-analysed (`modelFacesSupported`) and re-prepared
+(`prepareModelFaces`) every subject before rasterizing all of them, although
+most subjects are the same retained body the recorder already caches: a
+structure, an idle unit, a moving unit between orientation changes. About
+1.2 ms of the 2.8 was the page flush — the vertex build and the raster passes —
+and the rest was the `VisitModels` walk.
+
+**The decision.** A slot stays where it is until its raster inputs change. A
+frame analyses and rasterizes only the subjects it could not find already
+resident, and the flat term becomes proportional to what changed.
+
+#### Identity — contract P1
+
+The executor sees a per-frame scratch packet, never the retained body pointer,
+so it cannot key on the pointer. `drawlist.ModelCacheKey` is what the recorder
+stamps on the packet instead:
+
+* `Body` — a serial the recorder gives a retained `cachedModelBody` the first
+  time it stores geometry, unique for the life of the process. It is not the
+  presentation identity: `InvalidateModelImages` drops every body at once and
+  the replacements would otherwise present an identity the executor still holds
+  a raster for.
+* `Revision` — incremented on every `replaceCachedGeometry`, which is the one
+  place the cached lane is stored. An equal `(Body, Revision)` means literally
+  the same retained faces.
+* `HalfX`, `HalfY` — the frame's half-pixel offset. The rebase adds it to the
+  **doubled** corners alone (§17), so the packet's own origin does not imply it.
+  There are four of them, so a moving supersampled subject cycles through four
+  rasters and residency holds the ones it is using.
+
+A zero `Body` means "not reusable", and it is the value of every packet whose
+raster inputs the recorder cannot prove stable: the direct projected lanes,
+shadows, children, and any retained body carrying a reveal, an outline or a
+live lane this frame. The recorder clears the key for those explicitly rather
+than relying on the executor to notice.
+
+The executor's slot key adds what it reads off the packet itself: `Width`,
+`Height`, `OriginX`, `OriginY` (which fix the rebase delta, and with it every
+cached corner's position inside the slot), `Scale`, `KeyPlane`, `Waterline`,
+`WaterlineKey`, `Digger`, `DiggerKey`, and whether a `Supersample` lane is
+present. It refuses a packet outright when a reveal, an outline, a live lane on
+either scale, or a child list is present.
+
+**Established by reading, not assumed.** The team texture is folded in: the
+recorder rebuilds the cached lane when `unitTeamColor` changes
+(`cachedGeometryMustRebuild`), which bumps the revision. An **animated** model
+texture is not: the retained lane keeps the `GAFFrame` it was stored with until
+some other gate rebuilds it, so the recorder is already showing a frozen frame
+there and reuse changes nothing. That is a pre-existing recorder property, not
+one this round introduces.
+
+#### Executor-side inputs — contract P2
+
+The slot page holds resolved **colour** since §17, so the executor's own inputs
+to the raster invalidate residency. They are held in one comparable value and a
+change retires the whole table rather than being compared per slot:
+
+* the **display palette**, counted by a generation the renderer bumps inside
+  `SetDisplayPalette`. The battle benchmark offers a palette every frame;
+  `SetDisplayPalette` ignores a repeat of the one already installed, so an
+  unchanged palette does not disturb residency.
+* the **table atlas** and the shade, blue and alpha tables the raster and
+  resolve stages bind.
+* the **model page limit** test hook, which changes the packing.
+
+The **model texture atlas** is deliberately not one of them: a frame is packed
+once per identity and keeps its page and rectangle for its lifetime
+(`model_atlas.go`), so a face's source texels never move. Neither is the
+framebuffer size: a slot is rasterized in subject-local coordinates and only its
+commit is clipped.
+
+#### Residency — contract P3
+
+The page's shelf and pixels persist. Each frame:
+
+1. Entries no frame has claimed for more than `modelSlotIdleFrames` are retired
+   and their regions returned to the free list, in entry order.
+2. The previous frame's **transient** regions — the subjects that could not be
+   kept — are released. Without this the frontier advances once per shadow per
+   frame and the page reaches its row bound in a second.
+3. A subject whose key is resident keeps its slot: no admission scan, no face
+   preparation, no vertex, no draw.
+4. A new subject takes a region from the free list (smallest that fits, lowest
+   index breaking the tie), then the shelf frontier, then by evicting the least
+   recently used slot no frame has claimed (lowest index breaking the tie). A
+   frame that still cannot place a subject takes the per-subject fallback route
+   and asks the next frame to start from an empty page — which is exactly what a
+   full page did before slots persisted.
+
+Nothing here depends on map order: the residency map is looked up and never
+ranged, and every choice among candidates is resolved by an ordered scan [I1].
+
+The clears follow: only the reservations a frame allocated are cleared, in one
+device draw per plane, and a page with nothing carried over clears its whole
+used extent as before. The resolved plane is **seeded** from the page's own
+finished raster over those same reservations, which is what the clipping
+stage's whole-page copy used to leave there — some commits sample a texel past
+their box (§16.3 "Sampling"), and seeding per region makes what they find a
+property of the region rather than of the page's history.
+
+Two stage changes follow from persistence. The waterline/Digger stage no longer
+exchanges the two page planes: that would move every resident raster to the
+plane the resolved colours live on. It clips each subject's own rectangle into
+the scratch and copies it back, which costs a frame that clips one extra
+destination switch (`modelStageMaxPasses` 8 → 9) and nothing on a frame that
+does not. And a page that grows now carries its pixels forward into the larger
+planes instead of losing every raster it holds.
+
+#### Outcome
+
+Three interleaved 720-frame runs each on a loaded host (`uptime` 4.7–5.6),
+after the same-stream phase work of §13.11:
+
+| | §13.11 executor | persistent slots |
+|---|---|---|
+| `Submit` median | 3.019 ms | **2.335 ms** |
+| `Submit` p95 | 3.58 ms | 2.87 ms |
+| `RasterPixels` median | 2,060,810 | 1,519,184 |
+| model draws median | 27 | 28 |
+| destination switches median | 13 | 13 |
+
+Reuse is a **32% median** of the frame's subjects (99 reused against 235
+rasterized), with 27 evictions in a median frame, 255 resident slots and no
+fallback subject over the whole run. The ceiling is about 43%: shadows are 138
+of the ~360 subjects a battle frame reserves and none of them is retained by the
+recorder, so every one is rasterized every frame. Retaining the shadow lane
+beside the body is the obvious next step and is not part of this round.
+
+#### The defect this round exposed, and its fix
+
+Persistent slots first came out **not** byte-identical to the executor they
+replaced: 1,567 pixels of 2,073,600 differed on a 720-frame battle capture, all
+at model edges, with a one-pixel column along many subjects' right edge. The
+isolating experiments, each with reuse disabled so only the packing changed:
+
+| experiment (reuse disabled throughout) | pixels changed |
+|---|---|
+| the branch's clip and clear restructuring, packing unchanged | 5 |
+| every slot translated 32 px across the page | 1 |
+| slot gutter widened from 2 to 8, then to 16 | 16, then 266 |
+| **only the page's allocated height forced from 768 to 1280 rows** | **67,166** |
+
+The last row is the mechanism, and it is not a packing question at all: with the
+packing, the record and every subject untouched, making the page's planes
+*taller* moved three per cent of the frame. An Ebitengine image is by default a
+**region of a shared texture**, and which region it gets depends on its own size
+and on what else is on that atlas. The model passes address a page by whole page
+pixels — the body pass reads the key stored at its own destination texel, the
+resolve reads the two-by-two block under a native pixel, a commit samples its
+slot's box — and that addressing does not survive the page moving. The first
+hint was a capture whose page planes were read back with `ReadPixels`, which
+takes an image off the atlas: it agreed with the tall page instead of the short
+one.
+
+The fix is one line of allocation policy: the three slot page planes are
+allocated **unmanaged**, so they are their own textures at every size. The same
+height experiment then moves **no** pixel, which is exactly the property
+persistent slots need, because a page whose slots survive is a page that grows.
+It is a defect correction in its own right — the current executor's model pixels
+already depend on how tall its page happens to be — and it is verified below
+against the executor without residency.
+
+Two device fixtures lock the property: `checkModelSlotNeighbourBleed` varies a
+neighbour's colour, shape, texture and scale, and moves the subject's own slot
+with a filler recorded before it; `checkModelSlotPageSizeIndependence` grows the
+page past the atlas threshold with committed-off-screen fillers. Both assert
+that the finished frame does not change. Neither reproduces the defect at
+fixture scale — an eighty-by-forty-eight frame with a handful of subjects does
+not put enough on the atlas — so the failing evidence is the table above, which
+the 180-frame benchmark reproduces in two minutes.
+
+#### Verification structure
+
+Three binaries, all built outside the repository: **B0** the executor before
+this round, **B1** B0 plus the page-plane allocation alone, **B2** the full
+branch.
+
+* **B2 against B1** — M1–M8 `.modern.png` byte-identical, the 2× `--shot`
+  byte-identical, `battle.png` 3 pixels of 2,073,600 at 180 frames and 4 at 720.
+* **B1 against B0** — M1–M8 and the 2× shot byte-identical, `battle.png`
+  identical at 180 frames and 1,077 pixels at 720, all at model edges and all
+  darker in B1: the run has to be long enough for the page to grow past the
+  atlas threshold before the defect can show.
+
+The four remaining pixels are the executor's residual sensitivity to where a
+slot sits, not a residency fault: B1 alone, with every slot moved a thousand
+rows down its page and residency still disabled, differs from B1 by **1** pixel
+over the same 720-frame capture. A subject is rasterized at absolute page
+coordinates, so the device's own interpolation and edge rules are evaluated
+there, and a lane sitting exactly on a rounding boundary can flip when the slot
+moves. It is a few texels per two-megapixel capture, it scales with how far a
+slot moves, and it belongs to the executor's raster passes rather than to
+anything this round changed.
+
+Both builds are **self-deterministic**: repeated 180- and 720-frame runs produce
+byte-identical `battle.png`. `go test -race ./internal/platform/gpurender
+./internal/client` is clean and the opt-in device fixtures pass, including the
+residency case — the same list executed twice reuses every eligible subject and
+produces the same bytes, and a bumped revision rasterizes exactly the changed
+subject.
+
+
 ## 14. The detail view: 1.5× and 2× steps and load-time remaster
 
 ### 14.1 Decision

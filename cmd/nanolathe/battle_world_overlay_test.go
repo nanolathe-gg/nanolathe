@@ -129,6 +129,8 @@ func (s *overlayTrace) Sprite(drawlist.Sprite)   {}
 func (s *overlayTrace) Glyphs(drawlist.Glyphs)   {}
 func (s *overlayTrace) Line(drawlist.Line)       {}
 func (s *overlayTrace) Points(drawlist.Points)   {}
+func (s *overlayTrace) Flash(drawlist.Flash)     {}
+func (s *overlayTrace) Halo(drawlist.Halo)       {}
 func (s *overlayTrace) Model(drawlist.Model)     {}
 func (s *overlayTrace) Fog(drawlist.Fog)         {}
 func (s *overlayTrace) Surface(drawlist.Surface) {}

@@ -1,12 +1,38 @@
 package client
 
 import (
+	"sync/atomic"
+
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/palette"
 	presentationrender "github.com/nanolathe-gg/nanolathe/internal/render"
 )
+
+// modelBodySerials numbers retained body objects for the modern executor's
+// persistent slots (docs/DESIGN_GPU_RENDERER.md §13.12). A slot's identity is
+// the pair (serial, revision), so a body dropped and recreated under the same
+// presentation identity — which InvalidateModelImages does to every body at
+// once — can never be mistaken for a raster the executor still holds.
+//
+// Only equality of the pair is ever read, never its magnitude or its order, so
+// the counter's values reach no output and no comparison between frames;
+// sharing one counter across clients is what keeps it correct without a
+// per-client field, and the atomic covers a body created off the recording
+// goroutine [I1].
+var modelBodySerials atomic.Uint64
+
+// takeSerial gives a body its permanent serial the first time it stores
+// geometry. Bodies are created empty in several places — stage one pre-creates
+// one per job so its workers never insert (record_parallel.go) — and an empty
+// body has no raster to identify, so numbering them at the store is both
+// sufficient and the one point every retained lane passes through.
+func (b *cachedModelBody) takeSerial() {
+	if b.serial == 0 {
+		b.serial = modelBodySerials.Add(1)
+	}
+}
 
 // InvalidateModelImages drops the shared model image products. Retail clears
 // arena owner references and lets ordinary draws rebuild; retained orientation
@@ -42,6 +68,22 @@ type cachedModelBody struct {
 	// store is where geometry points when the retained packet was copied into
 	// this body's own arenas rather than freshly allocated.
 	store cachedGeometryStore
+	// serial and geometryRevision are the modern executor's slot identity
+	// (docs/DESIGN_GPU_RENDERER.md §13.12): serial is unique to this body object
+	// and geometryRevision changes on every store of new cached-lane geometry, so
+	// an unchanged pair means the retained faces this frame rebases are literally
+	// the ones the executor already rasterized.
+	serial           uint64
+	geometryRevision uint64
+}
+
+// cacheKey is the identity a rebased packet carries for the modern executor's
+// persistent slots. A body with no stored geometry has none.
+func (b *cachedModelBody) cacheKey(halfX, halfY int32) drawlist.ModelCacheKey {
+	if b == nil || b.geometry == nil || b.geometryRevision == 0 {
+		return drawlist.ModelCacheKey{}
+	}
+	return drawlist.ModelCacheKey{Body: b.serial, Revision: b.geometryRevision, HalfX: halfX, HalfY: halfY}
 }
 
 // cachedGeometryStore is one subject's retained cached-lane packet and the face
@@ -223,6 +265,10 @@ func (c *Client) replaceCachedGeometry(id uint64, v frame.UnitView, draw *presen
 	// its own physical-index plane.
 	body.image = nil
 	body.geometry = body.retainGeometry(geometry)
+	// New retained faces are a new raster: the modern executor keys a persistent
+	// slot on this pair and must not keep the one it already holds (§13.12).
+	body.takeSerial()
+	body.geometryRevision++
 	body.model, body.cacheRevision, body.validityRevision = draw.Model.Name, v.CacheRevision, v.CacheValidityRevision
 	body.structure, body.construction, body.teamColor = draw.Structure, v.BuildRemaining, unitTeamColor(v)
 	body.shaded, body.supersampled, body.scale, body.palette = inputs.shaded, inputs.supersampled, inputs.scale, inputs.palette

@@ -39,6 +39,8 @@ func (s *eliminationMessageCollector) Fog(drawlist.Fog)         {}
 func (s *eliminationMessageCollector) Surface(drawlist.Surface) {}
 func (s *eliminationMessageCollector) Cursor(drawlist.Cursor)   {}
 func (s *eliminationMessageCollector) Expand()                  {}
+func (s *eliminationMessageCollector) Flash(drawlist.Flash)     {}
+func (s *eliminationMessageCollector) Halo(drawlist.Halo)       {}
 
 // Established: a three-player skirmish keeps playing after one opponent's
 // elimination, and its accepted announcement draws that owner's LOGOS art

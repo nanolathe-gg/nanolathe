@@ -29,6 +29,13 @@ type Sink interface {
 	Line(Line)
 	// Points replays one batch of single-pixel writes.
 	Points(Points)
+	// Flash replays one calculated explosion disc and Halo one flat LHT ground
+	// disc — the two lit-disc families of docs/DESIGN_GPU_RENDERER.md §13.11.
+	// The classic executor expands each back into the per-pixel LHT writes its
+	// own recording lane emits; the modern executor draws one quad
+	// [03 §4.3.1][03 R-FX-01 §4].
+	Flash(Flash)
+	Halo(Halo)
 	// Model replays one composed model subject.
 	Model(Model)
 	// Fog replays one clipped fog op list.

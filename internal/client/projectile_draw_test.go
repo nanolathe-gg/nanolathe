@@ -17,6 +17,8 @@ func (c *projectileLineCollector) Glyphs(drawlist.Glyphs)   {}
 func (c *projectileLineCollector) Fill(drawlist.Fill)       {}
 func (c *projectileLineCollector) Line(v drawlist.Line)     { c.lines = append(c.lines, v) }
 func (c *projectileLineCollector) Points(drawlist.Points)   {}
+func (c *projectileLineCollector) Flash(drawlist.Flash)     {}
+func (c *projectileLineCollector) Halo(drawlist.Halo)       {}
 func (c *projectileLineCollector) Model(drawlist.Model)     {}
 func (c *projectileLineCollector) Fog(drawlist.Fog)         {}
 func (c *projectileLineCollector) Surface(drawlist.Surface) {}

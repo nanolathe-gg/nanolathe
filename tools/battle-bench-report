@@ -38,6 +38,21 @@ for directory in sys.argv[1:]:
                 values = sorted(row[key] for row in subset)
                 print(f"  {label:4} {key:9} median {statistics.median(values):8.3f}  p95 "
                       f"{values[min(len(values)-1, int(len(values)*.95))]:8.3f} ms")
+    # Persistent model slots (docs/DESIGN_GPU_RENDERER.md §13.12). Reuse is the
+    # share of a frame's subjects that kept the slot an earlier frame
+    # rasterized; the rest were placed and drawn by this frame.
+    if any("SlotsRasterized" in row.get("Stats", {}) for row in rows):
+        stats = [row.get("Stats", {}) for row in rows]
+        totals = [s.get("SlotsReused", 0) + s.get("SlotsRasterized", 0) for s in stats]
+        shares = [100.0 * s.get("SlotsReused", 0) / t for s, t in zip(stats, totals) if t]
+        if shares:
+            shares.sort()
+            print(f"Slot reuse: median {statistics.median(shares):5.1f}%  min {shares[0]:5.1f}%  max {shares[-1]:5.1f}%")
+        for key in ("SlotsReused", "SlotsRasterized", "SlotsResident", "SlotEvictions", "SlotOverflows", "RasterPixels"):
+            values = sorted(s.get(key, 0) for s in stats)
+            print(f"{key:16} median {statistics.median(values):10.0f}  p95 "
+                  f"{values[min(len(values)-1, int(len(values)*.95))]:10.0f}  max {values[-1]:10.0f}")
+
     tps = data.get("tps") or 30
     budget = 1000.0 / tps * 1.05
     on_cadence = sum(row["Cadence"] <= budget for row in rows)

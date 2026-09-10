@@ -208,6 +208,15 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 		g.err = checkModelSlotNeighbourIndependence()
 	}
 	if g.err == nil {
+		g.err = checkModelSlotResidency()
+	}
+	if g.err == nil {
+		g.err = checkModelSlotNeighbourBleed()
+	}
+	if g.err == nil {
+		g.err = checkModelSlotPageSizeIndependence()
+	}
+	if g.err == nil {
 		g.err = checkFeatureShadowDevicePixels()
 	}
 	if g.err == nil {

@@ -184,6 +184,18 @@ func (c *Client) emitPoints(off int, kind drawlist.PointKind) {
 	c.list.RecordPoints(drawlist.Points{Kind: kind, Points: rec})
 }
 
+// emitFlash records one calculated explosion disc and emitHalo one flat LHT
+// ground disc — the modern lane's form of the two lit-disc families
+// (docs/DESIGN_GPU_RENDERER.md §13.11). Neither takes the UI clip: both are
+// world commands, as the lit point batches they replace were.
+func (c *Client) emitFlash(f drawlist.Flash) {
+	c.list.RecordFlash(f)
+}
+
+func (c *Client) emitHalo(h drawlist.Halo) {
+	c.list.RecordHalo(h)
+}
+
 // emitGlyphs records one FNT text run (the health-bar walk's control-group
 // digit, WU-1.5).
 func (c *Client) emitGlyphs(g drawlist.Glyphs) {
@@ -540,6 +552,41 @@ func (s classicSink) Points(p drawlist.Points) {
 			}
 			c.indexed[int(pt.Y)*c.width+int(pt.X)] = pt.Index
 		}
+	}
+}
+
+// Flash replays one calculated explosion disc and Halo one flat LHT ground
+// disc. The classic executor has one writer for both: the lit-point write of
+// [03 §4.3.1][03 R-FX-01 §4]. Each command expands into exactly the points the
+// classic recording lane emits for the same disc, in the same order, and each
+// point folds the pixel under it through its own LHT row — so a modern-lane list
+// replayed through this executor composes the byte-for-byte frame the classic
+// lane would have recorded (docs/DESIGN_GPU_RENDERER.md §13.11).
+func (s classicSink) Flash(f drawlist.Flash) {
+	f.Expand(s.litPointWriter())
+}
+
+func (s classicSink) Halo(h drawlist.Halo) {
+	h.Expand(s.litPointWriter())
+}
+
+// litPointWriter is the shared per-pixel body of the lit families: the record's
+// row folded against whatever c.indexed holds, bounded by the framebuffer the
+// way classicSink.Points bounds its own store. It returns a no-op writer when no
+// palette is installed, which is the byte writer's own nil-palette return
+// [03 §4.3.1].
+func (s classicSink) litPointWriter() func(x, y int32, row uint8) {
+	c := s.c
+	if c == nil || c.pal == nil {
+		return func(int32, int32, uint8) {}
+	}
+	w, h := int32(c.width), int32(c.height)
+	return func(x, y int32, row uint8) {
+		if x < 0 || x >= w || y < 0 || y >= h {
+			return
+		}
+		idx := int(y)*c.width + int(x)
+		c.indexed[idx] = c.pal.LightLookup(int(row), c.indexed[idx])
 	}
 }
 

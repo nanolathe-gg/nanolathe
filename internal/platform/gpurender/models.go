@@ -29,9 +29,17 @@ type ModelStats struct {
 	// vertex the scheduler handed the device this frame. Together they say
 	// whether the point layer is paying per pixel or per span, which is what the
 	// executor's remaining CPU tracks [DESIGN_GPU_RENDERER.md §13.7].
-	Phases, Passes                                              int
-	PointPixels, PointQuads, PointPlanes, Vertices              int
-	RasterPixels, SlotPages, SlotOverflows, Draws, RasterDraws  int
+	Phases, Passes                                             int
+	PointPixels, PointQuads, PointPlanes, Vertices             int
+	RasterPixels, SlotPages, SlotOverflows, Draws, RasterDraws int
+	// The persistent slot accounting of docs/DESIGN_GPU_RENDERER.md §13.12.
+	// SlotsReused is the subjects this frame took from a slot an earlier frame
+	// rasterized, SlotsRasterized the subjects it placed and drew itself,
+	// SlotEvictions the resident slots it retired to make room, and SlotsResident
+	// the size of the residency table after it. RasterPixels and SlotPages above
+	// now count only what was rasterized this frame, so they fall with the reuse
+	// rate instead of restating the scene's size.
+	SlotsReused, SlotsRasterized, SlotEvictions, SlotsResident  int
 	GPU, Skipped, Shadows, ShadowsOmitted, StagedGroups, NoBody int
 	UnsupportedGeometry, MissingTexture, UnsupportedFace        int
 	FoldedFaces, FoldedStrips                                   int
@@ -44,6 +52,12 @@ type ModelStats struct {
 	RevealOrOutlineOmitted   int
 	WaterlineOrDiggerOmitted int
 	StagingCommandsOmitted   int
+	// Flashes is the lit-disc quads this frame — explosion ground flashes and
+	// light halos, one quad each, where the point lane spends one lit point per
+	// covered screen pixel (DESIGN_GPU_RENDERER §13.11). Read it beside
+	// PointPixels: together they say how much of the effect layer has left the
+	// point path.
+	Flashes int
 }
 
 func (r *Renderer) ModelStats() ModelStats {

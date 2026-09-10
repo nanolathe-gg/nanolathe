@@ -63,11 +63,34 @@ import (
 //     batch's bounding rectangle, and two points conflict only when they write
 //     the same pixel. The pixel set is kept as one screen-sized pixel→phase
 //     table stamped with the segment serial, so a later point at a written pixel
-//     is placed one phase after the point that wrote it. Any other command
-//     sharing a cell with a point is still pushed past it, because a rectangle
-//     test cannot enumerate the point set.
+//     is placed one phase after the point that wrote it. A command of another
+//     stream sharing a cell with a point is still pushed past it, because a
+//     rectangle test cannot enumerate the point set.
 //
 // That is the one relaxation of the rectangle test.
+//
+// # Streams (docs/DESIGN_GPU_RENDERER.md §13.11)
+//
+// Since §13.3 no destination-reading family reads a snapshot except fog: the ALP
+// families hand the device a premultiplied half-colour fragment and the row
+// families a scale, and the fixed-function blend reads the real framebuffer. A
+// blend is a read-modify-write of the attachment, and the device applies the
+// fragments of one pass in primitive order, which inside a phase's destination
+// batch is record order — runs are appended in record order and each run's
+// vertices are its commands in record order. Two overlapping commands of the
+// SAME blend stream therefore leave exactly the per-pixel sequence the phase
+// split left, so they no longer split a phase.
+//
+// Two commands split when their streams differ — the ALP fragment and the scale
+// fragment are different arithmetic and the executor keeps their historical
+// ordering rather than reasoning about commuting them — and whenever either
+// samples the read copy, because that copy is taken once per phase and a second
+// command of the phase would read a stale region. Fog is the only family that
+// still does (it binds a read slot, deststage.go and fog.go), so it splits from
+// every destination command it overlaps in both directions.
+//
+// An opaque write over an earlier destination read still opens the next phase,
+// whatever the streams: it must overwrite that result, not blend with it.
 //
 // # Barriers
 //
@@ -94,6 +117,49 @@ const (
 	schedDest    = 1
 	schedClasses = 2
 )
+
+// The blend streams of docs/DESIGN_GPU_RENDERER.md §13.11. A stream is the
+// per-pixel arithmetic a destination-reading command hands the device, so two
+// commands of one stream compose associatively in record order inside a single
+// batch and need no phase between them.
+//
+// schedStreamNone is every opaque command; it is also the query stream an opaque
+// placement asks with, and it never matches a destination owner.
+const (
+	schedStreamNone = iota
+	// schedStreamALP is the premultiplied half-colour fragment under source-over:
+	// BlitTinted, the translucent feature body and shadow, the model shadow
+	// commit and the strategic marker layer [03 §4.3.4](§13.3 "Blend classes").
+	schedStreamALP
+	// schedStreamRow is the row families' scale blend: FillLitRect, FillShadeRect,
+	// the lit point batch, the trail marks and the lit discs of §13.11
+	// [03 §4.3.1][03 R-COMP-02 §5].
+	schedStreamRow
+	// schedStreamSnapshot is a command that samples the phase's read copy in its
+	// shader rather than blending against the framebuffer. Fog is the only one
+	// (§13.3 "Fog keeps one read copy"), and a phase can serve exactly one such
+	// command over any given pixel, so it splits from every destination command it
+	// overlaps.
+	schedStreamSnapshot
+	schedStreamCount
+)
+
+// streamFor derives a command's blend stream from what it binds. It is derived
+// rather than passed so the families outside this unit's files keep their call
+// shape: the read slot and the blend already say which arithmetic the device
+// will run (§13.11).
+func streamFor(class int, blend ebiten.Blend, readSlot int8) uint8 {
+	if class != schedDest {
+		return schedStreamNone
+	}
+	if readSlot != schedReadNone {
+		return schedStreamSnapshot
+	}
+	if blend == blendScaleDestination {
+		return schedStreamRow
+	}
+	return schedStreamALP
+}
 
 // schedGridShift is the 32-pixel screen grid of §11.2, as a shift; schedCellMask
 // picks a pixel's offset inside its cell and schedPointCellShift is how far a
@@ -134,17 +200,25 @@ type schedOwner struct {
 	x0, y0, x1, y1 int32
 	phase          int32
 	dest           bool
+	stream         uint8
 }
 
 func (o *schedOwner) overlaps(x0, y0, x1, y1 int) bool {
 	return int32(x0) < o.x1 && int32(x1) > o.x0 && int32(y0) < o.y1 && int32(y1) > o.y0
 }
 
-func (o *schedOwner) contribution() int32 {
-	if o.dest {
-		return o.phase + 1
+// contributionTo is the smallest phase a later overlapping command of stream
+// `stream` may take. An opaque owner constrains nothing beyond its own phase; a
+// destination owner costs a whole phase unless the later command blends in the
+// same stream and neither of them samples the read copy (§13.11).
+func (o *schedOwner) contributionTo(stream uint8) int32 {
+	if !o.dest {
+		return o.phase
 	}
-	return o.phase
+	if stream != schedStreamNone && stream == o.stream && stream != schedStreamSnapshot {
+		return o.phase
+	}
+	return o.phase + 1
 }
 
 // schedRun is one device draw: a contiguous slice of its batch's vertex and
@@ -313,7 +387,9 @@ type scheduler struct {
 	// earlier frame never matches. cells names up to schedCellOwners owners per
 	// cell and cellHead the slot the next owner replaces, so the names in a full
 	// cell are its most recent ones. cellFloor is the largest contribution among
-	// the owners the cell has forgotten, and cellPoint the largest phase of a lit
+	// the owners the cell has forgotten, kept per QUERY stream — a forgotten owner
+	// costs a same-stream command nothing and a foreign one a phase (§13.11), so
+	// one floor could not serve both — and cellPoint the largest phase of a lit
 	// point on it, or -1 for none.
 	tags       []uint32
 	cells      []int32
@@ -380,6 +456,14 @@ type scheduler struct {
 	// viewport corner fixed.
 	worldOn    bool
 	worldScale float32
+
+	// flash is the lit-disc intensity atlas of docs/DESIGN_GPU_RENDERER.md
+	// §13.11 (flash.go): one page holding every generated explosion frame the
+	// battle has drawn, packed on first use and never freed. It rides the
+	// compiled segment because a segment's runs bind it directly as a source
+	// image, and it is flushed to the device with the lit point plane just
+	// before the segment is submitted.
+	flash flashDiscAtlas
 }
 
 // setWorld arms or disarms the world transform. num/den are the live factor and
@@ -444,7 +528,7 @@ func (s *scheduler) resetFrame(w, h int) {
 		s.cells = make([]int32, cols*rows*schedCellOwners)
 		s.cellCount = make([]uint8, cols*rows)
 		s.cellHead = make([]uint8, cols*rows)
-		s.cellFloor = make([]int32, cols*rows)
+		s.cellFloor = make([]int32, cols*rows*schedStreamCount)
 		s.cellPoint = make([]int32, cols*rows)
 		s.serial = 0
 	}
@@ -519,10 +603,11 @@ func (s *scheduler) cellRange(x0, y0, x1, y1 int) (cx0, cy0, cx1, cy1 int, ok bo
 }
 
 // place returns the earliest phase a command covering the rectangle may take:
-// the largest contribution of every earlier command that can reach it. A lit
-// point does not come through here — placePoint resolves its own pixel exactly
-// against the point phase table instead of taking the cell's point term.
-func (s *scheduler) place(x0, y0, x1, y1 int) int32 {
+// the largest contribution of every earlier command that can reach it, as seen
+// by a command of the given blend stream (§13.11). A lit point does not come
+// through here — placePoint resolves its own pixel exactly against the point
+// phase table instead of taking the cell's point term.
+func (s *scheduler) place(x0, y0, x1, y1 int, stream uint8) int32 {
 	cx0, cy0, cx1, cy1, ok := s.cellRange(x0, y0, x1, y1)
 	if !ok {
 		return 0
@@ -535,7 +620,7 @@ func (s *scheduler) place(x0, y0, x1, y1 int) int32 {
 			if s.tags[at] != s.serial {
 				continue
 			}
-			if f := s.cellFloor[at]; f > phase {
+			if f := s.cellFloor[at*schedStreamCount+int(stream)]; f > phase {
 				phase = f
 			}
 			for k, n := 0, int(s.cellCount[at]); k < n; k++ {
@@ -543,14 +628,20 @@ func (s *scheduler) place(x0, y0, x1, y1 int) int32 {
 				if !own.overlaps(x0, y0, x1, y1) {
 					continue
 				}
-				if c := own.contribution(); c > phase {
+				if c := own.contributionTo(stream); c > phase {
 					phase = c
 				}
 			}
 			// A point owner covers single pixels a rectangle test cannot
-			// enumerate, so anything but another point is pushed past it.
-			if p := s.cellPoint[at]; p >= 0 && p+1 > phase {
-				phase = p + 1
+			// enumerate, so a command of another stream is pushed past it; a row
+			// command blends the way the points do and may share their phase.
+			if p := s.cellPoint[at]; p >= 0 {
+				if stream != schedStreamRow {
+					p++
+				}
+				if p > phase {
+					phase = p
+				}
 			}
 		}
 	}
@@ -584,7 +675,7 @@ func (s *scheduler) placePoint(x, y int) int32 {
 		if !own.overlaps(x, y, x+1, y+1) {
 			continue
 		}
-		if c := own.contribution(); c > phase {
+		if c := own.contributionTo(schedStreamRow); c > phase {
 			phase = c
 		}
 	}
@@ -648,7 +739,9 @@ func (s *scheduler) placePointSpan(x0, x1, y int) int32 {
 			if !own.overlaps(px0, y, px1, y+1) {
 				continue
 			}
-			if c := own.contribution(); c > phase {
+			// A lit point is a row-family blend, so an earlier row command it
+			// overlaps costs it no phase (§13.11).
+			if c := own.contributionTo(schedStreamRow); c > phase {
 				phase = c
 			}
 		}
@@ -683,7 +776,7 @@ func (s *scheduler) placePointSpan(x0, x1, y int) int32 {
 func (s *scheduler) loadPointCell(at int) {
 	s.touchCell(at)
 	s.ptCellAt = at
-	s.ptFloor = s.cellFloor[at]
+	s.ptFloor = s.cellFloor[at*schedStreamCount+schedStreamRow]
 	s.ptOwnerN = int(s.cellCount[at])
 	for k := 0; k < s.ptOwnerN; k++ {
 		s.ptOwners[k] = s.owners[s.cells[at*schedCellOwners+k]]
@@ -693,16 +786,15 @@ func (s *scheduler) loadPointCell(at int) {
 // tag records a placed command over the rectangle and marks every cell it covers
 // as owned by it. An opaque command placed in phase zero is not recorded: its
 // contribution is zero, which is already every placement's floor.
-func (s *scheduler) tag(x0, y0, x1, y1 int, phase int32, dest bool) {
+func (s *scheduler) tag(x0, y0, x1, y1 int, phase int32, dest bool, stream uint8) {
 	if !dest && phase == 0 {
 		return
 	}
-	s.owners = append(s.owners, schedOwner{int32(x0), int32(y0), int32(x1), int32(y1), phase, dest})
+	s.owners = append(s.owners, schedOwner{int32(x0), int32(y0), int32(x1), int32(y1), phase, dest, stream})
 	owner := int32(len(s.owners) - 1)
 	// A new owner is the one thing that changes the inputs the lit point batch
 	// caches, so the cached cell is dropped here.
 	s.ptCellAt = -1
-	contribution := s.owners[owner].contribution()
 	cx0, cy0, cx1, cy1, ok := s.cellRange(x0, y0, x1, y1)
 	if !ok {
 		return
@@ -710,7 +802,7 @@ func (s *scheduler) tag(x0, y0, x1, y1 int, phase int32, dest bool) {
 	for cy := cy0; cy <= cy1; cy++ {
 		row := cy * s.cols
 		for cx := cx0; cx <= cx1; cx++ {
-			s.addOwner(row+cx, owner, contribution)
+			s.addOwner(row+cx, owner)
 		}
 	}
 }
@@ -723,14 +815,15 @@ func (s *scheduler) touchCell(at int) {
 	s.tags[at] = s.serial
 	s.cellCount[at] = 0
 	s.cellHead[at] = 0
-	s.cellFloor[at] = 0
+	clear(s.cellFloor[at*schedStreamCount : (at+1)*schedStreamCount])
 	s.cellPoint[at] = -1
 }
 
 // addOwner records owner on one cell. A cell names up to schedCellOwners owners
 // exactly; the next one replaces the oldest of them, whose contribution becomes a
-// floor for every later placement over the cell.
-func (s *scheduler) addOwner(at int, owner, contribution int32) {
+// floor for every later placement over the cell — one floor per query stream,
+// because what a forgotten owner costs depends on the stream that asks (§13.11).
+func (s *scheduler) addOwner(at int, owner int32) {
 	s.touchCell(at)
 	n := s.cellCount[at]
 	if int(n) < schedCellOwners {
@@ -739,8 +832,12 @@ func (s *scheduler) addOwner(at int, owner, contribution int32) {
 		return
 	}
 	head := int(s.cellHead[at])
-	if c := s.owners[s.cells[at*schedCellOwners+head]].contribution(); c > s.cellFloor[at] {
-		s.cellFloor[at] = c
+	forgotten := &s.owners[s.cells[at*schedCellOwners+head]]
+	floor := s.cellFloor[at*schedStreamCount : (at+1)*schedStreamCount : (at+1)*schedStreamCount]
+	for stream := range floor {
+		if c := forgotten.contributionTo(uint8(stream)); c > floor[stream] {
+			floor[stream] = c
+		}
 	}
 	s.cells[at*schedCellOwners+head] = owner
 	s.cellHead[at] = uint8((head + 1) % schedCellOwners)
@@ -820,8 +917,9 @@ func (s *scheduler) beginBlended(class int, x0, y0, x1, y1 int, imgs [4]*ebiten.
 		return false
 	}
 	dest := class == schedDest
-	phase := s.place(x0, y0, x1, y1)
-	s.tag(x0, y0, x1, y1, phase, dest)
+	stream := streamFor(class, blend, readSlot)
+	phase := s.place(x0, y0, x1, y1, stream)
+	s.tag(x0, y0, x1, y1, phase, dest, stream)
 	p := s.phaseAt(phase)
 	if dest {
 		s.growDest(p, x0, y0, x1, y1)
@@ -983,6 +1081,7 @@ func (r *Renderer) submitSchedule() {
 	// sample them; Ebitengine's queue keeps an upload and the draws issued after
 	// it in order (points.go).
 	r.pointPlane.flush()
+	s.flash.flush()
 	r.modelStats.Phases += s.nphase
 	compose := r.surfaces[0]
 	for k := 0; k < s.nphase; k++ {
@@ -1023,9 +1122,11 @@ func (r *Renderer) drawBatch(dst *ebiten.Image, p *schedPhase, class int) {
 			continue
 		}
 		if run.readSlot != schedReadNone {
-			// The one read copy of the frame. The phase's destination rectangles
-			// are pairwise disjoint, so nothing this phase has already drawn lies
-			// under this run, and the copy is the state the run must read.
+			// The one read copy of the frame. A command that samples the copy is
+			// its own stream and splits from every destination command it overlaps
+			// (§13.11), so nothing this phase has already drawn lies under this
+			// run and the copy is the state the run must read. Same-stream
+			// commands of the phase may overlap each other, but never this one.
 			r.copyComposite(r.surfaces[1], dst, int(p.x0), int(p.y0), int(p.x1), int(p.y1))
 		}
 		for j := 0; j < 4; j++ {

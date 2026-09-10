@@ -20,6 +20,8 @@ func (s *runtimeSpriteCollector) Glyphs(drawlist.Glyphs)   {}
 func (s *runtimeSpriteCollector) Fill(drawlist.Fill)       {}
 func (s *runtimeSpriteCollector) Line(drawlist.Line)       {}
 func (s *runtimeSpriteCollector) Points(drawlist.Points)   {}
+func (s *runtimeSpriteCollector) Flash(drawlist.Flash)     {}
+func (s *runtimeSpriteCollector) Halo(drawlist.Halo)       {}
 func (s *runtimeSpriteCollector) Model(drawlist.Model)     {}
 func (s *runtimeSpriteCollector) Fog(drawlist.Fog)         {}
 func (s *runtimeSpriteCollector) Surface(drawlist.Surface) {}

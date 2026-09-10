@@ -128,6 +128,29 @@ type ModelChild struct {
 	KeyDelta int32
 }
 
+// ModelCacheKey names the retained cached-lane body a packet was rebased from,
+// so an executor can recognise a subject whose raster inputs have not changed
+// since the last frame and keep the raster it already holds
+// (docs/DESIGN_GPU_RENDERER.md §13.12).
+//
+// Body is a serial the recorder assigns once per retained body object and
+// Revision changes every time the recorder stores new geometry for that body,
+// so an equal pair means literally the same retained faces. HalfX/HalfY are the
+// frame's half-pixel offset, which the rebase adds to the DOUBLED lane's corners
+// alone (§17) and which the packet's own origin therefore does not imply.
+//
+// A zero Body means "not reusable" and is the value of every packet whose raster
+// inputs the recorder cannot prove stable: the direct lanes, shadows, children,
+// and any retained body carrying a reveal, an outline or a live lane this frame.
+type ModelCacheKey struct {
+	Body         uint64
+	Revision     uint64
+	HalfX, HalfY int32
+}
+
+// Reusable reports whether the key identifies a retained body at all.
+func (k ModelCacheKey) Reusable() bool { return k.Body != 0 }
+
 // ModelGeometry is the immutable, subject-local geometry input for the modern
 // model path. Recorded slices remain valid until the next recording pass;
 // Clone owns independent slices for retained consumers. Origin is the image
@@ -166,6 +189,9 @@ type ModelGeometry struct {
 	AnchorX, AnchorY int32
 	Scale            int32
 	KeyPlane         bool
+	// Cache identifies the retained cached-lane raster this packet carries, or
+	// is zero when the packet is not reusable across frames (§13.12).
+	Cache ModelCacheKey
 }
 
 // Clone returns a packet with independently owned face and vertex slices.

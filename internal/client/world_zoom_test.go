@@ -120,6 +120,8 @@ func (s *regionTrace) Fog(drawlist.Fog)         {}
 func (s *regionTrace) Surface(drawlist.Surface) {}
 func (s *regionTrace) Cursor(drawlist.Cursor)   {}
 func (s *regionTrace) Expand()                  {}
+func (s *regionTrace) Flash(drawlist.Flash)     {}
+func (s *regionTrace) Halo(drawlist.Halo)       {}
 
 // The world region is bracketed by exactly two boundary markers, and the marker
 // carries the factor, the step and the record extent the executor needs
@@ -247,6 +249,8 @@ func (s spriteCounter) Fog(drawlist.Fog)         {}
 func (s spriteCounter) Surface(drawlist.Surface) {}
 func (s spriteCounter) Cursor(drawlist.Cursor)   {}
 func (s spriteCounter) Expand()                  {}
+func (s spriteCounter) Flash(drawlist.Flash)     {}
+func (s spriteCounter) Halo(drawlist.Halo)       {}
 
 // The marker layer replaces the models: one marker per admitted contact, fading
 // in linearly from nothing at 0.625x to full at 0.5x (§16.11).
@@ -372,3 +376,5 @@ func (s lineCounter) Fog(drawlist.Fog)         {}
 func (s lineCounter) Surface(drawlist.Surface) {}
 func (s lineCounter) Cursor(drawlist.Cursor)   {}
 func (s lineCounter) Expand()                  {}
+func (s lineCounter) Flash(drawlist.Flash)     {}
+func (s lineCounter) Halo(drawlist.Halo)       {}

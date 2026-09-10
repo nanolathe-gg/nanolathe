@@ -17,6 +17,8 @@ func (s *gafSpriteCollector) Glyphs(drawlist.Glyphs)    {}
 func (s *gafSpriteCollector) Fill(drawlist.Fill)        {}
 func (s *gafSpriteCollector) Line(drawlist.Line)        {}
 func (s *gafSpriteCollector) Points(drawlist.Points)    {}
+func (s *gafSpriteCollector) Flash(drawlist.Flash)      {}
+func (s *gafSpriteCollector) Halo(drawlist.Halo)        {}
 func (s *gafSpriteCollector) Model(drawlist.Model)      {}
 func (s *gafSpriteCollector) Fog(drawlist.Fog)          {}
 func (s *gafSpriteCollector) Surface(drawlist.Surface)  {}

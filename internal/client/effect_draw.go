@@ -270,15 +270,49 @@ func (c *Client) DrawEffectViews(effects []frame.EffectView, options EffectDrawO
 	return stats
 }
 
+// terrainScreenRect is terrainScreenCoverage as a rectangle: the loaded terrain
+// in the shell's rebased screen coordinates. The predicate admits a pixel
+// exactly when the map coordinate it names lies inside the map, and that test is
+// two independent half-open ranges, so the admitted set is a rectangle and
+// nothing about it needs a callback [03 §4.3.1].
+//
+// The lit-disc families need it in that form: the modern executor draws one
+// clipped quad rather than testing a predicate per pixel
+// (docs/DESIGN_GPU_RENDERER.md §13.11). A test locks the two readings against
+// each other.
+func (c *Client) terrainScreenRect() drawlist.Rect {
+	if c == nil || c.terrain == nil || c.cam == nil || c.terrain.CellW <= 0 || c.terrain.CellH <= 0 {
+		return drawlist.Rect{}
+	}
+	return drawlist.Rect{
+		X: -c.cam.X,
+		Y: -c.cam.Z,
+		W: int32(c.terrain.CellW) * 16,
+		H: int32(c.terrain.CellH) * 16,
+	}
+}
+
+// litDiscClip is the gate both lit-disc families are recorded with: the
+// recording extent intersected with the terrain rectangle, which is what the
+// point lane applies as its own bounds check plus TerrainCoverage
+// (docs/DESIGN_GPU_RENDERER.md §13.11)[03 §4.3.1].
+func (c *Client) litDiscClip() drawlist.Rect {
+	w, h := c.recordExtent()
+	return intersectUIRects(drawlist.Rect{W: int32(w), H: int32(h)}, c.terrainScreenRect())
+}
+
 // drawLHTHalo applies the authored LHT row to the existing indexed terrain
 // inside an explicitly supplied circular mask.  It does not mutate terrain
 // or choose a radius/row; those come from the event/content resolver [03
 // §4.3.1][F-P0-036].
+//
+// The two recording lanes carry the same disc differently, exactly as
+// drawCalculatedFlash's do: the classic lane emits one lit point per covered
+// pixel, the modern lane one lit-disc command the executor draws as a quad whose
+// fragment runs the same inside-the-circle test
+// (docs/DESIGN_GPU_RENDERER.md §13.11).
 func (c *Client) drawLHTHalo(cx, cy, radius, level int, terrainCoverage func(x, y int) bool) {
 	if c == nil || c.pal == nil || radius <= 0 || level < 0 {
-		return
-	}
-	if terrainCoverage == nil {
 		return
 	}
 	// The halo is a single LHT level applied to every covered pixel in the disc.
@@ -287,6 +321,16 @@ func (c *Client) drawLHTHalo(cx, cy, radius, level int, terrainCoverage func(x, 
 	row := level
 	if row > 31 {
 		row = 31
+	}
+	if c.recordModelGeometry {
+		c.emitHalo(drawlist.Halo{
+			X: int32(cx), Y: int32(cy), Radius: int32(radius),
+			Row: uint8(row), Clip: c.litDiscClip(),
+		})
+		return
+	}
+	if terrainCoverage == nil {
+		return
 	}
 	off := len(c.pointArena)
 	r2 := radius * radius

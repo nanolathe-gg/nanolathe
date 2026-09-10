@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/model"
 	"github.com/nanolathe-gg/nanolathe/internal/palette"
 	presentationrender "github.com/nanolathe-gg/nanolathe/internal/render"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
@@ -330,4 +332,42 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// The modern executor keeps a model slot until the retained cached lane behind
+// it changes, and it recognises that lane by the pair the recorder stamps on
+// every rebased packet (docs/DESIGN_GPU_RENDERER.md §13.12). A body that stores
+// new geometry must therefore present a new pair, and a body dropped and
+// recreated under the same presentation identity must never present a pair an
+// earlier body already used.
+func TestRetainedGeometryIdentityChangesOnEveryStore(t *testing.T) {
+	c := newTestClient(t)
+	draw := &presentationrender.UnitDraw{Model: &model.Model{Name: "fixture"}}
+	v := frame.UnitView{InstanceID: 41}
+	store := func() drawlist.ModelCacheKey {
+		g := &drawlist.ModelGeometry{Eligible: true, Scale: 1, Width: 4, Height: 4,
+			Faces: []drawlist.ModelFace{{Vertices: []drawlist.ModelVertex{{}, {X: 4}, {X: 4, Y: 4}}}}}
+		c.replaceCachedGeometry(41, v, draw, g)
+		return c.cachedModelBodies[41].cacheKey(0, 0)
+	}
+	first := store()
+	if !first.Reusable() {
+		t.Fatal("a stored cached lane presented no identity")
+	}
+	second := store()
+	if second == first || second.Body != first.Body || second.Revision == first.Revision {
+		t.Fatalf("storing new geometry gave identity %+v, want the same body at a new revision after %+v", second, first)
+	}
+	// A body with no stored geometry has no raster to identify.
+	empty := (&cachedModelBody{}).cacheKey(0, 0)
+	if empty.Reusable() {
+		t.Fatalf("an empty body presented identity %+v", empty)
+	}
+	// InvalidateModelImages drops every body; the replacement must not inherit
+	// the identity the executor still holds a raster for.
+	c.InvalidateModelImages()
+	c.cachedModelBodies[41] = &cachedModelBody{}
+	if again := store(); again.Body == first.Body {
+		t.Fatalf("a recreated body reused body serial %d", again.Body)
+	}
 }

@@ -56,7 +56,15 @@ frame's lit point batches covered, the device quads they compiled into and the
 lit point plane regions they committed through
 (docs/DESIGN_GPU_RENDERER.md §13.8). The three together say whether the point
 layer is paying per pixel or per plane, which is the first thing to check when
-modern `Submit` moves. `cpu.pprof`,
+modern `Submit` moves. They also carry the persistent model slot counters of
+docs/DESIGN_GPU_RENDERER.md §13.12 — `SlotsReused`, `SlotsRasterized`,
+`SlotsResident`, `SlotEvictions` and `SlotOverflows` — which the report
+summarizes as a reuse share: how many of the frame's model subjects kept the
+slot an earlier frame rasterized rather than being analysed and drawn again.
+`RasterPixels` and `SlotPages` count only what this frame rasterized, so they
+fall with that share. A reuse share that collapses, or a rising eviction or
+overflow count, means the page is under pressure and the frame is paying the
+cold cost again. `cpu.pprof`,
 `alloc-base.pprof` and `alloc.pprof` cover the measurement window; inspect allocation
 deltas with `go tool pprof -base OUTPUT/alloc-base.pprof OUTPUT/alloc.pprof`.
 `battle.png` is captured after timing. `factory-blockers.json` reports foreign

@@ -239,6 +239,130 @@ type Points struct {
 	Points []Point
 }
 
+// FlashTransparentRow marks a generated disc texel that brightens nothing. The
+// generator writes the transparent key outside the disc [06 R-WFX-01 §2], and
+// the ramp inside it is exactly LHT rows 0..31 [03 §4.3.1][03 R-FX-01 §4], so
+// one byte per texel carries both and no row can collide with the sentinel.
+const FlashTransparentRow uint8 = 0xFF
+
+// Flash records one calculated explosion disc as a single lit-disc command
+// (docs/DESIGN_GPU_RENDERER.md §13.11). It is the same brightening the
+// PointLit batch of [03 R-FX-01 §4] carries — every opaque texel folds the
+// pixel under it through its own LHT row — expressed as one command instead of
+// one point per covered screen pixel, so an executor that can magnify a texture
+// need not be handed a hundred thousand points.
+//
+// It is part of the Sink contract every executor satisfies: the classic sink
+// implements it by expanding the command back into the very points the classic
+// recording lane emits (Expand), so a modern-lane list replayed through the
+// classic executor composes the same bytes.
+type Flash struct {
+	// Table and Frame name the generated frame, already clamped by the recorder
+	// [06 R-WFX-01 §2]. The pair is an identity, not a lookup: the frames are
+	// generated once per battle and never change, so an executor may cache
+	// whatever it builds from Rows under it.
+	Table, Frame int32
+	// Side is the generated frame's side in source pixels and Offset the
+	// centring offset the blit subtracts on both axes (both are the frame's own
+	// H) [06 R-WFX-01 §2].
+	Side, Offset int32
+	// Rows is Side*Side source texels row-major: an LHT row 0..31, or
+	// FlashTransparentRow outside the disc. It is immutable after the tables are
+	// generated, so it is shared rather than copied [I6].
+	Rows []uint8
+	// X, Y is the impact point in screen pixels, the anchor Offset centres the
+	// disc on.
+	X, Y int32
+	// Scale is the presentation view scale the disc is magnified by
+	// (DESIGN_GPU_RENDERER §14.2): source pixel c covers the screen span
+	// [Scale.Project(c-Offset), Scale.Project(c-Offset+1)).
+	Scale camera.ViewScale
+	// Clip is the gate the recorder resolved: the recording extent intersected
+	// with the terrain rectangle in screen space, because the halo must never
+	// brighten unit, effect or HUD pixels [03 §4.3.1]. It is a rectangle rather
+	// than a predicate so an executor can clip a quad to it.
+	Clip Rect
+}
+
+// Halo records one flat LHT disc — the light an explosion or muzzle flash puts
+// on the ground around it [03 §4.3.1][F-P0-036] — as a single lit-disc command
+// (docs/DESIGN_GPU_RENDERER.md §13.11), the same relationship Flash has to its
+// PointLit batch.
+type Halo struct {
+	// X, Y is the disc centre in screen pixels.
+	X, Y int32
+	// Radius is the disc radius in screen pixels, already taken through the view
+	// scale by the recorder (DESIGN_GPU_RENDERER §14.2). A pixel at offset
+	// (dx, dy) is inside when dx*dx + dy*dy <= Radius*Radius.
+	Radius int32
+	// Row is the LHT row every covered pixel is folded through, already clamped
+	// to 0..31 as LightLookup clamps it [03 §4.3.1].
+	Row uint8
+	// Clip is the same terrain gate Flash carries.
+	Clip Rect
+}
+
+// Contains reports whether the rectangle covers the pixel. The lit-disc
+// families carry their gate as a rectangle, so both executors and the tests that
+// compare them ask the same question (§13.11).
+func (r Rect) Contains(x, y int32) bool {
+	return x >= r.X && y >= r.Y && x < r.X+r.W && y < r.Y+r.H
+}
+
+// Expand walks the disc's covered screen pixels in the order the recorder's own
+// point loop emits them, calling emit with each pixel's LHT row. It is the
+// definition of the command: the classic sink replays a Flash by running the
+// byte writer over exactly this walk, and a test locks it against the points the
+// classic recording lane emits for the same disc [03 R-FX-01 §4].
+func (f Flash) Expand(emit func(x, y int32, row uint8)) {
+	if f.Side <= 0 || len(f.Rows) < int(f.Side*f.Side) || emit == nil {
+		return
+	}
+	for row := int32(0); row < f.Side; row++ {
+		base := row * f.Side
+		py0 := f.Y + f.Scale.Project(row-f.Offset)
+		py1 := f.Y + f.Scale.Project(row-f.Offset+1)
+		for col := int32(0); col < f.Side; col++ {
+			level := f.Rows[base+col]
+			if level == FlashTransparentRow {
+				continue
+			}
+			px0 := f.X + f.Scale.Project(col-f.Offset)
+			px1 := f.X + f.Scale.Project(col-f.Offset+1)
+			for py := py0; py < py1; py++ {
+				for px := px0; px < px1; px++ {
+					if !f.Clip.Contains(px, py) {
+						continue
+					}
+					emit(px, py, level)
+				}
+			}
+		}
+	}
+}
+
+// Expand walks the halo's covered screen pixels in the recorder's own order,
+// calling emit with the disc's single LHT row [03 §4.3.1].
+func (h Halo) Expand(emit func(x, y int32, row uint8)) {
+	if h.Radius <= 0 || emit == nil {
+		return
+	}
+	r2 := h.Radius * h.Radius
+	for dy := -h.Radius; dy <= h.Radius; dy++ {
+		py := h.Y + dy
+		for dx := -h.Radius; dx <= h.Radius; dx++ {
+			if dx*dx+dy*dy > r2 {
+				continue
+			}
+			px := h.X + dx
+			if !h.Clip.Contains(px, py) {
+				continue
+			}
+			emit(px, py, h.Row)
+		}
+	}
+}
+
 // Model records one model subject — a unit, feature or projectile
 // (docs/DESIGN_GPU_RENDERER.md §2.1). Classic is the classic executor's owned
 // replay operand, and Geometry is modern mode's only body input [I6].
@@ -363,6 +487,8 @@ const (
 	familyTrails
 	familyWorld
 	familyMarkers
+	familyFlash
+	familyHalo
 )
 
 // tag is one ordering entry: which family, and which element of that family's
@@ -391,6 +517,8 @@ type List struct {
 	cursor  []Cursor
 	world   []WorldSpace
 	markers []Markers
+	flash   []Flash
+	halo    []Halo
 
 	classicImages    []*ClassicModelImage
 	classicImageNext int
@@ -469,6 +597,18 @@ func (l *List) VisitModels(visit func(Model)) {
 	}
 }
 
+// RecordFlash appends one calculated explosion disc in record order (§13.11).
+func (l *List) RecordFlash(c Flash) {
+	l.order = append(l.order, tag{familyFlash, len(l.flash)})
+	l.flash = append(l.flash, c)
+}
+
+// RecordHalo appends one flat LHT ground disc in record order (§13.11).
+func (l *List) RecordHalo(c Halo) {
+	l.order = append(l.order, tag{familyHalo, len(l.halo)})
+	l.halo = append(l.halo, c)
+}
+
 // RecordFog appends one fog command in record order.
 func (l *List) RecordFog(c Fog) {
 	l.order = append(l.order, tag{familyFog, len(l.fog)})
@@ -511,6 +651,8 @@ func (l *List) Reset() {
 	l.cursor = l.cursor[:0]
 	l.world = l.world[:0]
 	l.markers = l.markers[:0]
+	l.flash = l.flash[:0]
+	l.halo = l.halo[:0]
 }
 
 // Replay visits the recorded commands in exact record order and calls the
@@ -563,6 +705,10 @@ func (l *List) Replay(s Sink) {
 			if markers != nil {
 				markers.Markers(l.markers[t.idx])
 			}
+		case familyFlash:
+			s.Flash(l.flash[t.idx])
+		case familyHalo:
+			s.Halo(l.halo[t.idx])
 		}
 	}
 }
@@ -631,6 +777,11 @@ func (l *List) Clone() List {
 	for i, mk := range l.markers {
 		c.markers[i] = Markers{Marks: append([]Marker(nil), mk.Marks...)}
 	}
+	// The lit discs are plain values. Their Rows slice is the generated frame's
+	// own texels, immutable after the tables are built, so the clone shares it the
+	// way it shares GAF frames [I6].
+	c.flash = append([]Flash(nil), l.flash...)
+	c.halo = append([]Halo(nil), l.halo...)
 	// Trail batches borrow the client's reusable mark arena; copy each.
 	c.trails = make([]Trails, len(l.trails))
 	for i, tr := range l.trails {

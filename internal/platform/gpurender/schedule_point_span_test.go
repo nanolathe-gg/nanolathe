@@ -30,9 +30,16 @@ func TestPlacePointSpanMatchesPerPixelMaximum(t *testing.T) {
 			x0, y0 := rng.Intn(w), rng.Intn(h)
 			x1, y1 := x0+1+rng.Intn(48), y0+1+rng.Intn(32)
 			dest := rng.Intn(2) == 0
+			// A destination owner belongs to one of the blend streams of
+			// §13.11, and a run's own stream is the row families', so the mix
+			// exercises both the same-stream and the foreign-stream answer.
+			stream := uint8(schedStreamNone)
+			if dest {
+				stream = uint8(schedStreamALP + rng.Intn(schedStreamCount-schedStreamALP))
+			}
 			for _, s := range []*scheduler{&span, &pixel} {
-				p := s.place(x0, y0, x1, y1)
-				s.tag(x0, y0, x1, y1, p, dest)
+				p := s.place(x0, y0, x1, y1, stream)
+				s.tag(x0, y0, x1, y1, p, dest, stream)
 			}
 		case step%211 == 0:
 			span.resetSegment()
@@ -81,9 +88,10 @@ func TestPlacePointSpanNeverPlacesEarlyOverAnOwner(t *testing.T) {
 	const w, h = 128, 64
 	var s scheduler
 	s.resetFrame(w, h)
-	// A destination-reading owner over the right half: any run touching it must
-	// land one phase after it, whichever of its pixels does the touching.
-	s.tag(64, 0, 128, 64, 3, true)
+	// A destination-reading owner of ANOTHER blend stream over the right half:
+	// any run touching it must land one phase after it, whichever of its pixels
+	// does the touching (§13.11).
+	s.tag(64, 0, 128, 64, 3, true, schedStreamALP)
 	if got := s.placePointSpan(60, 70, 10); got != 4 {
 		t.Fatalf("run crossing a phase-3 destination owner placed at %d, want 4", got)
 	}
