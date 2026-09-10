@@ -32,7 +32,8 @@ func (m *Manager) classifyGroups(w *units.World) {
 	if m == nil || w == nil {
 		return
 	}
-	for _, u := range w.IterSliced() {
+	m.classifyWalk = w.AppendLiveSliced(m.classifyWalk[:0]) // players then slots ascending (I1)
+	for _, u := range m.classifyWalk {
 		if u == nil || !u.Alive || u.Owner != m.Player {
 			continue
 		}

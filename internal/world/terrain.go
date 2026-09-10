@@ -51,6 +51,23 @@ type Terrain struct {
 	// terrain-only-fixture case, not a caller's choice.
 	Movers MobileOccupancy
 
+	// ClassRestamp is the movement class layers' half of the feature stamper.
+	// Retail's single stamping service and its footprint teardown helper each
+	// END by restamping every named movement class over the footprint
+	// rectangle, synchronously, inside the feature service and in the calling
+	// phase [03 §5.1.2][03 R-LAYER §2]. This port is how that call crosses the
+	// package boundary: internal/features writes the plot cells and calls
+	// NoteFootprintRestamp; internal/movement binds this field at map load and
+	// runs the rectangle restamp of [04 R-MOV-03 §3] over every layer.
+	//
+	// It lives on the terrain for the same reason the static-obstacle revision
+	// does: the terrain is the one object every feature writer already holds,
+	// and internal/features cannot import internal/movement
+	// (docs/ARCHITECTURE.md). Nil means no class layers exist yet — map load
+	// and terrain-only fixtures — and a layer allocated later stamps the whole
+	// map from the plot as it stands, so nothing is lost.
+	ClassRestamp FootprintRestamp
+
 	// losWords is built once during map load and remains immutable for the
 	// battle, including across terrain deformation [03 §3.5][R-P0-18-B §4].
 	losWords      []uint16
@@ -128,6 +145,33 @@ func (t *Terrain) StaticObstacleRevision() uint64 {
 		return 0
 	}
 	return t.staticObstacleRevision
+}
+
+// FootprintRestamp restamps the movement class layers over one footprint
+// rectangle: the anchor cell and the footprint pair of the definition whose
+// cells just changed [03 R-LAYER §2][04 R-MOV-03 §3].
+type FootprintRestamp func(anchorX, anchorZ int32, footX, footZ int16)
+
+// NoteFootprintRestamp is the tail of retail's stamping service and of its
+// footprint teardown helper: having written the plot cells, restamp every
+// named movement class over the rectangle, synchronously, in the calling
+// phase [03 §5.1.2][03 R-LAYER §2]. Call it AFTER the plot write, because the
+// classifier reads the cells that just changed.
+//
+// It is unconditional, exactly as the two callers in [03 R-LAYER §2] are: a
+// non-blocking feature replacing a blocking one changes the layer just as much
+// as the reverse, and the classifier decides which it was.
+func (t *Terrain) NoteFootprintRestamp(anchorX, anchorZ int32, footX, footZ int16) {
+	if t == nil || t.ClassRestamp == nil {
+		return
+	}
+	if footX <= 0 {
+		footX = 1
+	}
+	if footZ <= 0 {
+		footZ = 1
+	}
+	t.ClassRestamp(anchorX, anchorZ, footX, footZ)
 }
 
 // BumpStaticObstacleRevision advances the shared static revision. Saturating

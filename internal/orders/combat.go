@@ -558,7 +558,7 @@ func attackKamikazeHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32
 // gave the spawned record the wrong pump and blocked every order behind it.
 // `Standby_Mine` reaches this same site, so the routing is shared.
 func spawnImmediateSelfDestruct(u *units.Unit, n *Node) {
-	id := Lookup("SelfDestruct")
+	id := rowSelfDestruct
 	if id == 0 || u == nil || n == nil {
 		return
 	}
@@ -969,7 +969,7 @@ func airEntry(u *units.Unit, n *Node, satisfied uint32, interruptMask uint32) (C
 // kamikaze self-destruct spawn does: nothing in [04 §3.2] gives a spawned
 // record a creation tick of its own.
 func spawnSeekAttack(u *units.Unit, n *Node, target pool.Handle, x, y, z numeric.Fixed) {
-	id := Lookup("VTOL_SeekAttack")
+	id := rowVTOLSeekAttack
 	if id == 0 || u == nil || n == nil {
 		return
 	}

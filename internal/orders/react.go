@@ -196,7 +196,7 @@ func StopCurrentOrder(u *units.Unit, tick uint32) {
 	if u == nil {
 		return
 	}
-	id := Lookup("Stop")
+	id := rowStop
 	if id == 0 {
 		return
 	}

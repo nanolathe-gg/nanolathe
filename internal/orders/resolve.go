@@ -383,12 +383,12 @@ func ensureHandlers() {
 	if len(table) == 0 {
 		return
 	}
-	if id := Lookup("Attack_Chase"); id != 0 && table[int(id)].Handler != nil {
+	if id := rowAttackChase; id != 0 && table[int(id)].Handler != nil {
 		handlersRegistered = true
 		return
 	}
 	registerChaseGuardHandlers()
-	if id := Lookup("Attack_Chase"); id != 0 && table[int(id)].Handler != nil {
+	if id := rowAttackChase; id != 0 && table[int(id)].Handler != nil {
 		handlersRegistered = true
 	}
 }

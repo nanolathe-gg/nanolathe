@@ -787,12 +787,12 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 		if head != nil && head.ID != 0 && head.Target != u.Handle {
 			spawnID := ID(0)
 			switch {
-			case head.ID == Lookup("MobileBuild") || head.ID == Lookup("BuildingBuild"):
+			case head.ID == rowMobileBuild || head.ID == rowBuildingBuild:
 				// The canfly fork is deliberately absent: the handler resolves
 				// the literal name `HelpBuild`, so a VTOL guard joins with the
 				// ground descriptor too [04 R-ORD-01 §13].
 				if head.Target != 0 {
-					spawnID = Lookup("HelpBuild")
+					spawnID = rowHelpBuild
 				}
 			case head.StaticGate&staticTargetObserver != 0 && head.Target != 0,
 				head.StaticGate&staticGoalObserver != 0:
@@ -966,7 +966,7 @@ func vtolFollowHandOff(u *units.Unit, n *Node, satisfied uint32) (Code, bool) {
 	// order must not create one as a side effect. It is also the accessor
 	// hasSuccessor reads, so the two cannot disagree about which queue.
 	if q := QueueOfUnit(u); q != nil && !hasSuccessor(u, n) {
-		if id := Lookup("VTOL_SeekGuard"); id != 0 {
+		if id := rowVTOLSeekGuard; id != 0 {
 			target := n.Target
 			if getLookupForWard(n, u) == nil {
 				target = 0 // "null when the target is gone"
@@ -1119,7 +1119,7 @@ func init() {
 	}
 	registerChaseGuardHandlers()
 	if len(table) != 0 {
-		if id := Lookup("Attack_Chase"); id != 0 && table[int(id)].Handler != nil {
+		if id := rowAttackChase; id != 0 && table[int(id)].Handler != nil {
 			handlersRegistered = true
 		}
 	}
@@ -1129,13 +1129,13 @@ func init() {
 func EnsureHandlers() { ensureHandlers() }
 
 func registerChaseGuardHandlers() {
-	if id := Lookup("Attack_Chase"); id != 0 {
+	if id := rowAttackChase; id != 0 {
 		table[int(id)].Handler = attackChaseHandler
 	}
-	if id := Lookup("Follow_Ground"); id != 0 {
+	if id := rowFollowGround; id != 0 {
 		table[int(id)].Handler = guardHandler
 	}
-	if id := Lookup("VTOL_Follow"); id != 0 {
+	if id := rowVTOLFollow; id != 0 {
 		table[int(id)].Handler = guardHandler
 	}
 	// `Guard_NoMove` used to be assigned guardHandler here. It is a different

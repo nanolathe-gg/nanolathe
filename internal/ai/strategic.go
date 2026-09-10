@@ -90,6 +90,11 @@ type Strategic struct {
 	unitLimit      uint16
 	unitLimitBound bool
 
+	// countsWalk is the destination the 30-tick refresh's live-pool scan
+	// appends into, in pool-slot-ascending order (I1), so the scan reuses one
+	// buffer instead of allocating a live-unit slice per refresh.
+	countsWalk []*units.Unit
+
 	// maxWind is the map's maximum wind word — the session's authored
 	// `maxwindspeed`, with the canonical 2000 fallback a map that authors none
 	// gets [05 R-PROD-01 §3]. The class routine's wind-generator zeroing branch
@@ -504,7 +509,8 @@ func (s *Strategic) refreshCountsAndCenter(player uint8, w *units.World) {
 	var weight, accX, accY, accZ float32
 	if w != nil {
 		// Stable iteration: units.World.Iter is pool asc; we additionally filter by player asc already handled by Iter order (I1).
-		for _, u := range w.Iter() {
+		s.countsWalk = w.AppendLive(s.countsWalk[:0])
+		for _, u := range s.countsWalk {
 			// The walk visits units that are alive and NOT DYING
 			// [08 R-P0-05 §10]; a latched death mark is separate from Alive,
 			// which the phase-2 finalizer clears later [04 §2.3][04 §2.4].

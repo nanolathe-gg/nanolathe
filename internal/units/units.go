@@ -2405,17 +2405,30 @@ func (w *World) Iter() []*Unit {
 	if w == nil {
 		return nil
 	}
-	var out []*Unit
-	if w.iterHint > 0 {
-		out = make([]*Unit, 0, w.iterHint)
+	return w.AppendLive(nil)
+}
+
+// AppendLive is Iter writing into a destination the caller owns: it appends the
+// same units in the same pool-slot-ascending order (I1) and returns the grown
+// slice. A per-tick caller that keeps one scratch buffer and passes
+// `scratch[:0]` allocates once for the run rather than once per call, which is
+// the shape Session.sensorUnitScratch already uses. Passing nil reproduces
+// Iter exactly, capacity hint included.
+func (w *World) AppendLive(dst []*Unit) []*Unit {
+	if w == nil {
+		return dst
 	}
+	if dst == nil && w.iterHint > 0 {
+		dst = make([]*Unit, 0, w.iterHint)
+	}
+	start := len(dst)
 	for i := 1; i < len(w.units); i++ {
 		if u := w.units[i]; u != nil && u.Alive {
-			out = append(out, u)
+			dst = append(dst, u)
 		}
 	}
-	w.iterHint = len(out)
-	return out
+	w.iterHint = len(dst) - start
+	return dst
 }
 
 // DefIDForHandle returns the retail occupancy identity for the unit occupying handle [P0-16] (I13).
@@ -2447,26 +2460,36 @@ func (w *World) IterSliced() []*Unit {
 	if w == nil {
 		return nil
 	}
+	return w.AppendLiveSliced(nil)
+}
+
+// AppendLiveSliced is IterSliced writing into a destination the caller owns,
+// in the same players-ascending, slots-ascending order [P0-16 §3.1] (I1).
+// See AppendLive for why a per-tick caller should keep a scratch buffer.
+func (w *World) AppendLiveSliced(dst []*Unit) []*Unit {
+	if w == nil {
+		return dst
+	}
 	// The sliced walk visits the same live units the plain walk does, so the
 	// previous pass's length is a good capacity hint and spares the append
 	// ladder its regrowth copies.
-	var out []*Unit
-	if w.iterSlicedHint > 0 {
-		out = make([]*Unit, 0, w.iterSlicedHint)
+	if dst == nil && w.iterSlicedHint > 0 {
+		dst = make([]*Unit, 0, w.iterSlicedHint)
 	}
+	start := len(dst)
 	for player := 0; player < 10; player++ {
-		start, end, ok := w.pool.SliceForPlayer(player)
+		lo, hi, ok := w.pool.SliceForPlayer(player)
 		if !ok {
 			continue
 		}
-		for slot := start; slot <= end && slot < len(w.units); slot++ {
+		for slot := lo; slot <= hi && slot < len(w.units); slot++ {
 			if u := w.units[slot]; u != nil && u.Alive {
-				out = append(out, u)
+				dst = append(dst, u)
 			}
 		}
 	}
-	w.iterSlicedHint = len(out)
-	return out
+	w.iterSlicedHint = len(dst) - start
+	return dst
 }
 
 // ForEachPlayerSliceLive visits one fixed player's pool slice from its lowest

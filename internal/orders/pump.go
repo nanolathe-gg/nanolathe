@@ -523,7 +523,7 @@ func moveGroundHandler(u *units.Unit, n *Node, satisfied uint32, _ uint32) Code 
 // written and tested body could never install. The seven rows now live in
 // patrol.go and vtolwork.go.
 func ensureMoveHandlers() {
-	id := Lookup("Move_Ground")
+	id := rowMoveGround
 	if id != 0 && int(id) < len(table) && table[int(id)].Handler == nil {
 		table[int(id)].Handler = moveGroundHandler
 	}

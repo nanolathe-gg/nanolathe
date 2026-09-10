@@ -303,7 +303,63 @@ func buildTable() {
 	}
 	table = all
 	getBuiltID = Lookup("GetBuilt") // the row whose owner registers per queue
+	resolveRows()                   // every row this package names, resolved once
 	installHandlers()               // the table is not finished until its handlers are on it
+}
+
+// The rows this package names by canonical string. Lookup is a fold-compare
+// binary search over 68 names, and the pump, the guard family, the parking
+// helpers, the stop family and the reaction routine each reached for one or
+// more of them per unit per tick; a row identity cannot move once the table is
+// sorted, so each name is resolved once here instead.
+//
+// They are assigned by resolveRows rather than by package-variable
+// initializers because Go runs every package-level initializer BEFORE init,
+// and the table this package searches does not exist until buildTable runs
+// inside init. A var initializer would resolve every one of these against an
+// empty table and silently produce the sentinel row 0.
+//
+// A zero id means the table names no such row, which every call site already
+// spelled as an explicit `!= 0` guard; a zero row can never equal a live
+// node's id, so those guards keep their meaning unchanged.
+var (
+	rowSelfDestruct   ID
+	rowVTOLSeekAttack ID
+	rowMobileBuild    ID
+	rowBuildingBuild  ID
+	rowHelpBuild      ID
+	rowVTOLSeekGuard  ID
+	rowAttackChase    ID
+	rowFollowGround   ID
+	rowVTOLFollow     ID
+	rowVTOLMove       ID
+	rowPark           ID
+	rowMoveGround     ID
+	rowStop           ID
+	rowVTOLLanding    ID
+	rowParalyze       ID
+	rowVTOLLandIfCan  ID
+	rowBuildWeapon    ID
+)
+
+func resolveRows() {
+	rowSelfDestruct = Lookup("SelfDestruct")
+	rowVTOLSeekAttack = Lookup("VTOL_SeekAttack")
+	rowMobileBuild = Lookup("MobileBuild")
+	rowBuildingBuild = Lookup("BuildingBuild")
+	rowHelpBuild = Lookup("HelpBuild")
+	rowVTOLSeekGuard = Lookup("VTOL_SeekGuard")
+	rowAttackChase = Lookup("Attack_Chase")
+	rowFollowGround = Lookup("Follow_Ground")
+	rowVTOLFollow = Lookup("VTOL_Follow")
+	rowVTOLMove = Lookup("VTOL_Move")
+	rowPark = Lookup("Park")
+	rowMoveGround = Lookup("Move_Ground")
+	rowStop = Lookup("Stop")
+	rowVTOLLanding = Lookup("VTOL_Landing")
+	rowParalyze = Lookup("Paralyze")
+	rowVTOLLandIfCan = Lookup("VTOL_LandIfCan")
+	rowBuildWeapon = Lookup("BuildWeapon")
 }
 
 // handlerInstallers is the ordered list of per-family handler installers — the

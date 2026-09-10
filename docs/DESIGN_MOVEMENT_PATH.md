@@ -161,7 +161,15 @@ passability image per movement class over the whole map, stamped once at map
 load by running the classifier chain over every attribute cell; `ClassLayers` is
 the per-class registry. A rectangle restamp re-runs the same chain over a
 rectangle, so a dynamic blocker, a building's occupancy or a feature change
-rewrites the same packing. `Revise` is the request-initialization pass: it
+rewrites the same packing. A feature change reaches the layers where it
+happens: `internal/features` writes the plot cells and calls the terrain's
+`NoteFootprintRestamp`, which `internal/movement` binds to
+`System.NoteFeatureFootprint` at map load, and every named class is restamped
+over the changed rectangle synchronously, in the calling phase
+`[03 §5.1.2]` `[03 R-LAYER §2]` `[04 R-MOV-03 §3]`. That port is the seam
+because `internal/features` cannot import `internal/movement`; the terrain's
+static-obstacle revision word is a separate Nanolathe concern and its only
+reader is route staleness. `Revise` is the request-initialization pass: it
 advances the record's revision watermark to `max(tick, 30) − 30`, re-stamps the
 footprints of recently committed occupants and refreshes the requester's own
 commit tick. Search consumption returns 0 out of bounds, 2 when the requesting
@@ -837,8 +845,8 @@ The contracts also carry these questions, each with its settling observation.
 
 ## Full-layer rebuild storage
 
-A blocking-feature revision still refreshes a stale class synchronously before
-its path request proceeds. Each full rebuild classifies each source cell once
+The whole-layer classifier runs when a class layer is allocated and at no other
+time `[03 R-LAYER §2]`. Each full rebuild classifies each source cell once
 into a reusable byte array, then computes the footprint/ring minimum through
 row and column windows
 [04 R-SLOPE-01 §3]. Each window counts blocked and non-clear cells, updating

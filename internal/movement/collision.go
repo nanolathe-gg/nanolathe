@@ -140,9 +140,35 @@ type Cell struct {
 // search implicitly consumes the bump by re-evaluating static passability on
 // every expansion after a commit-stage occupancy change [04 §7.4].
 type OccupancyGrid struct {
-	cells map[Cell]int // ground plane: cell → occupant ID (pool slot) [04 §8.2] C22 [04 R-COLL-01 §4]
-	air   map[Cell]int // air plane: mode-2 movers only [04 R-COLL-01 §4]
-	rev   uint64       // profile revision [04 §7.4] C18 OW-3-O retained, lazy revalidation via search isPassable
+	// The two planes are dense rows of planeW × planeH slots indexed
+	// z*planeW + x: the ground plane of [04 §8.2] C22 [04 R-COLL-01 §4] and
+	// the air plane mode-2 movers write [04 R-COLL-01 §4]. A slot holds the
+	// occupant identity PLUS ONE so that the zero value is "no occupant" and
+	// every identity stays representable, the null pool slot 0 included [I5];
+	// occupantOf and occupantSlot are the only two places that conversion
+	// happens.
+	//
+	// This is a storage change and nothing else. The semantics are the map's:
+	// a cell is occupied exactly when a stamp filed an identity there and no
+	// clear has released it, and OccupantAt answers for every cell what the
+	// map answered. What it removes is the hash of a Cell key in the
+	// innermost loops of OccupantAt, the class layer's classifier and the
+	// clear's overlap scan.
+	//
+	// A coordinate outside the plane is not addressable, so it reads as free
+	// and a write to it is dropped. With terrain bound that is exactly
+	// RectOnMap's bounds test, which already refuses to write a rectangle that
+	// leaves the map, and a clear or a release of a cell that was never
+	// written has nothing to do. With no terrain bound — fixtures only — the
+	// planes grow to cover the cell being written, up to unboundPlaneLimit per
+	// axis; a negative coordinate is never addressable, in either case.
+	cells     []int32
+	air       []int32
+	planeW    int32
+	planeH    int32
+	cellCount int    // occupied ground slots, so Count stays O(1)
+	airCount  int    // occupied air slots
+	rev       uint64 // profile revision [04 §7.4] C18 OW-3-O retained, lazy revalidation via search isPassable
 	// plot is the terrain whose 13-byte cells carry the same two planes as
 	// their first two words [03 §2.2]. Stamp and clear write it in the same
 	// call as the map [04 R-COLL-01 §4]. Fixtures that never bind terrain
@@ -410,33 +436,165 @@ func planeForMode(mode uint8) (Plane, bool) {
 	}
 }
 
-// NewOccupancyGrid returns an empty occupancy grid.
+// NewOccupancyGrid returns an empty occupancy grid. It has no dimensions yet:
+// AttachPlot takes them from the terrain, and a grid that never binds one
+// takes them from the cells it is asked to write.
 func NewOccupancyGrid() *OccupancyGrid {
-	return &OccupancyGrid{cells: make(map[Cell]int), air: make(map[Cell]int)}
+	return &OccupancyGrid{}
 }
 
 // AttachPlot binds the terrain whose plot cells carry the two occupancy words
 // [03 §2.2]. NewSystem calls it once at map load; a grid with no terrain keeps
-// its maps and writes no words.
+// its planes and writes no words.
+//
+// It also fixes the planes' dimensions, because RectOnMap will refuse every
+// rectangle that leaves the map from here on, so no cell outside the terrain
+// can ever be written. A grid that already holds cells keeps them: the planes
+// are re-indexed into the new width rather than dropped.
 func (g *OccupancyGrid) AttachPlot(t *world.Terrain) {
 	if g == nil {
 		return
 	}
 	g.plot = t
+	if t != nil {
+		g.resizePlanes(t.CellW, t.CellH)
+	}
 }
 
-// planeCells returns the map backing one plane, allocating on demand.
-func (g *OccupancyGrid) planeCells(plane Plane) map[Cell]int {
-	if plane == PlaneAir {
-		if g.air == nil {
-			g.air = make(map[Cell]int)
+// unboundPlaneLimit caps how far a grid with no terrain will grow a plane on
+// each axis. Only fixtures reach it — production binds terrain and takes the
+// map's own dimensions — and every fixture in the tree writes cells two orders
+// of magnitude below it. It is a bounds check on data no retail map could
+// carry, kept so that a stray coordinate fails closed instead of asking for a
+// terabyte of plane (I11's bounds-check exception).
+const unboundPlaneLimit int32 = 1024
+
+// plane returns the dense row backing one plane. It may be nil, which reads as
+// an empty plane.
+func (g *OccupancyGrid) plane(p Plane) []int32 {
+	if p == PlaneAir {
+		return g.air
+	}
+	return g.cells
+}
+
+// slotIndex maps a cell onto its plane slot. Its second result is false for
+// every coordinate the planes do not address, which reads as "no occupant"
+// and drops a write.
+func (g *OccupancyGrid) slotIndex(c Cell) (int, bool) {
+	if c.X < 0 || c.Z < 0 || c.X >= g.planeW || c.Z >= g.planeH {
+		return 0, false
+	}
+	return int(c.Z)*int(g.planeW) + int(c.X), true
+}
+
+// occupantOf reads one plane slot as the map read it: the identity and whether
+// the cell is occupied at all.
+func occupantOf(row []int32, idx int) (int, bool) {
+	v := row[idx]
+	if v == 0 {
+		return 0, false
+	}
+	return int(v) - 1, true
+}
+
+// occupantSlot is the stored form of an identity — see the plane comment on
+// why it is the identity plus one.
+func occupantSlot(id int) int32 { return int32(id) + 1 }
+
+// reserveRect grows both planes so that every cell of the rectangle anchored
+// at anchor is addressable, and reports whether it now is. With terrain bound
+// the planes are already the map's size and the caller has passed RectOnMap,
+// so this is a bounds test and nothing more.
+func (g *OccupancyGrid) reserveRect(anchor Cell, fx, fz int16) bool {
+	if anchor.X < 0 || anchor.Z < 0 {
+		return false
+	}
+	maxX, maxZ := anchor.X+int32(fx)-1, anchor.Z+int32(fz)-1
+	if maxX < g.planeW && maxZ < g.planeH {
+		return true
+	}
+	if g.plot != nil {
+		return false // the map's dimensions are the planes' [04 R-COLL-01 §2]
+	}
+	w, h := g.planeW, g.planeH
+	if maxX >= w {
+		w = maxX + 1
+	}
+	if maxZ >= h {
+		h = maxZ + 1
+	}
+	if w > unboundPlaneLimit || h > unboundPlaneLimit {
+		return false
+	}
+	g.resizePlanes(w, h)
+	return true
+}
+
+// resizePlanes re-indexes both planes into new dimensions, keeping every cell
+// they already hold. Shrinking is not a case that arises — AttachPlot runs at
+// map load and the unbound path only grows — so a cell outside the new
+// dimensions is simply not carried over, and the counts are rebuilt from what
+// was.
+func (g *OccupancyGrid) resizePlanes(w, h int32) {
+	if w <= 0 || h <= 0 || (w == g.planeW && h == g.planeH) {
+		return
+	}
+	g.cells, g.cellCount = reindexPlane(g.cells, g.planeW, g.planeH, w, h)
+	g.air, g.airCount = reindexPlane(g.air, g.planeW, g.planeH, w, h)
+	g.planeW, g.planeH = w, h
+}
+
+// reindexPlane copies one plane's rows into a plane of new dimensions and
+// returns it with its occupied-slot count.
+func reindexPlane(old []int32, oldW, oldH, w, h int32) ([]int32, int) {
+	if old == nil {
+		return nil, 0
+	}
+	next := make([]int32, int(w)*int(h))
+	rows := oldH
+	if h < rows {
+		rows = h
+	}
+	cols := oldW
+	if w < cols {
+		cols = w
+	}
+	count := 0
+	for z := int32(0); z < rows; z++ {
+		src := old[int(z)*int(oldW) : int(z)*int(oldW)+int(cols)]
+		copy(next[int(z)*int(w):], src)
+		for _, v := range src {
+			if v != 0 {
+				count++
+			}
+		}
+	}
+	return next, count
+}
+
+// planeRow returns one plane's dense row, allocating it on demand. Call it
+// only after reserveRect has fixed the dimensions.
+func (g *OccupancyGrid) planeRow(p Plane) []int32 {
+	if p == PlaneAir {
+		if g.air == nil && g.planeW > 0 {
+			g.air = make([]int32, int(g.planeW)*int(g.planeH))
 		}
 		return g.air
 	}
-	if g.cells == nil {
-		g.cells = make(map[Cell]int)
+	if g.cells == nil && g.planeW > 0 {
+		g.cells = make([]int32, int(g.planeW)*int(g.planeH))
 	}
 	return g.cells
+}
+
+// addPlaneCount adjusts the occupied-slot counter for one plane.
+func (g *OccupancyGrid) addPlaneCount(p Plane, delta int) {
+	if p == PlaneAir {
+		g.airCount += delta
+		return
+	}
+	g.cellCount += delta
 }
 
 // plotWord returns the cell's occupancy word for the plane, or (0,false) when
@@ -537,8 +695,11 @@ func (g *OccupancyGrid) IsOccupied(c Cell) bool {
 	if g == nil || g.cells == nil {
 		return false
 	}
-	_, ok := g.cells[c]
-	return ok
+	idx, ok := g.slotIndex(c)
+	if !ok {
+		return false
+	}
+	return g.cells[idx] != 0
 }
 
 // OccupantAt returns the ground-plane occupant ID at cell, if any
@@ -550,8 +711,11 @@ func (g *OccupancyGrid) OccupantAt(c Cell) (int, bool) {
 	if g == nil || g.cells == nil {
 		return 0, false
 	}
-	id, ok := g.cells[c]
-	return id, ok
+	idx, ok := g.slotIndex(c)
+	if !ok {
+		return 0, false
+	}
+	return occupantOf(g.cells, idx)
 }
 
 // OccupantAtPlane returns the occupant ID at cell in one plane
@@ -561,17 +725,15 @@ func (g *OccupancyGrid) OccupantAtPlane(plane Plane, c Cell) (int, bool) {
 	if g == nil {
 		return 0, false
 	}
-	var m map[Cell]int
-	if plane == PlaneAir {
-		m = g.air
-	} else {
-		m = g.cells
-	}
-	if m == nil {
+	row := g.plane(plane)
+	if row == nil {
 		return 0, false
 	}
-	id, ok := m[c]
-	return id, ok
+	idx, ok := g.slotIndex(c)
+	if !ok {
+		return 0, false
+	}
+	return occupantOf(row, idx)
 }
 
 // FootprintOccupied reports whether any cell of the footprint anchored at
@@ -588,10 +750,16 @@ func (g *OccupancyGrid) FootprintOccupied(anchor Cell, fx, fz int16, ignoreID in
 	if fz <= 0 {
 		fz = 1
 	}
+	if g.cells == nil {
+		return false
+	}
 	for dz := int32(0); dz < int32(fz); dz++ {
 		for dx := int32(0); dx < int32(fx); dx++ {
-			c := Cell{X: anchor.X + dx, Z: anchor.Z + dz}
-			if id, ok := g.cells[c]; ok && id != ignoreID {
+			idx, ok := g.slotIndex(Cell{X: anchor.X + dx, Z: anchor.Z + dz})
+			if !ok {
+				continue
+			}
+			if id, occupied := occupantOf(g.cells, idx); occupied && id != ignoreID {
 				return true
 			}
 		}
@@ -649,15 +817,20 @@ func (g *OccupancyGrid) StampPlane(plane Plane, anchor Cell, fx, fz int16, id in
 	if !g.RectOnMap(anchor, fx, fz) {
 		return false // off-map bucket: no cell is written [04 R-COLL-01 §4]
 	}
-	cells := g.planeCells(plane)
+	if !g.reserveRect(anchor, fx, fz) {
+		return false // not addressable: the same "no cell is written" result
+	}
+	cells := g.planeRow(plane)
 	word, wordFits := occupancyWord(id)
+	slot := occupantSlot(id)
 	changed := false
 	held := true
 	for dz := int32(0); dz < int32(fz); dz++ {
 		for dx := int32(0); dx < int32(fx); dx++ {
 			c := Cell{X: anchor.X + dx, Z: anchor.Z + dz}
+			idx, _ := g.slotIndex(c) // reserveRect passed, so the cell is addressable
 			displaced := false
-			if occ, ok := cells[c]; ok && occ != id {
+			if occ, ok := occupantOf(cells, idx); ok && occ != id {
 				// One contested cell, arbitrated as it is visited
 				// [04 R-COLL-01 §4].
 				if !g.ArbitrateOverlap(occ, id) {
@@ -665,10 +838,11 @@ func (g *OccupancyGrid) StampPlane(plane Plane, anchor Cell, fx, fz int16, id in
 					continue
 				}
 				displaced = true
-				cells[c] = id
+				cells[idx] = slot
 				changed = true
 			} else if !ok {
-				cells[c] = id
+				cells[idx] = slot
+				g.addPlaneCount(plane, 1)
 				changed = true
 			}
 			if wordFits {
@@ -742,15 +916,11 @@ func (g *OccupancyGrid) ClearPlane(plane Plane, anchor Cell, fx, fz int16, id in
 	if g == nil {
 		return false
 	}
-	var cells map[Cell]int
-	if plane == PlaneAir {
-		cells = g.air
-	} else {
-		cells = g.cells
-	}
-	if cells == nil {
-		return false
-	}
+	// A plane with no row has nothing to release, but the plot-word arm below
+	// still runs over the rectangle: the word is a superset of the plane, so a
+	// word this identity holds is cleared whether or not the plane was ever
+	// written. That is why this is not an early return.
+	cells := g.plane(plane)
 	if fx <= 0 {
 		fx = 1
 	}
@@ -762,9 +932,15 @@ func (g *OccupancyGrid) ClearPlane(plane Plane, anchor Cell, fx, fz int16, id in
 	for dz := int32(0); dz < int32(fz); dz++ {
 		for dx := int32(0); dx < int32(fx); dx++ {
 			c := Cell{X: anchor.X + dx, Z: anchor.Z + dz}
-			if occ, ok := cells[c]; ok && occ == id {
-				delete(cells, c)
-				changed = true
+			// A cell the planes do not address was never written, so the
+			// clear has nothing to release there; the plot word below is
+			// gated on the terrain's own bounds.
+			if idx, addressable := g.slotIndex(c); addressable && cells != nil {
+				if occ, ok := occupantOf(cells, idx); ok && occ == id {
+					cells[idx] = 0
+					g.addPlaneCount(plane, -1)
+					changed = true
+				}
 			}
 			if wordFits {
 				if cur, ok := g.plotWord(plane, c); ok && cur == word {
@@ -1012,10 +1188,14 @@ func (g *OccupancyGrid) ReleaseCellIfSelf(plane Plane, c Cell, id int) {
 	if g == nil || id <= 0 {
 		return
 	}
-	cells := g.planeCells(plane)
-	if occ, ok := cells[c]; ok && occ == id {
-		delete(cells, c)
-		g.rev++ // [04 §7.4] C18
+	if cells := g.plane(plane); cells != nil {
+		if idx, addressable := g.slotIndex(c); addressable {
+			if occ, ok := occupantOf(cells, idx); ok && occ == id {
+				cells[idx] = 0
+				g.addPlaneCount(plane, -1)
+				g.rev++ // [04 §7.4] C18
+			}
+		}
 	}
 	if word, wordFits := occupancyWord(id); wordFits {
 		if cur, ok := g.plotWord(plane, c); ok && cur == word {
@@ -1040,28 +1220,28 @@ func (g *OccupancyGrid) Unblock(anchor Cell, fx, fz int16, id int) bool {
 // OccupiedCellsSorted returns the occupied cells in deterministic order
 // (X asc then Z asc) [I1][04 §8.2] C22 — deterministic iteration for tests/debug.
 func (g *OccupancyGrid) OccupiedCellsSorted() []Cell {
-	if g == nil || len(g.cells) == 0 {
+	if g == nil || g.cellCount == 0 {
 		return nil
 	}
-	out := make([]Cell, 0, len(g.cells))
-	for c := range g.cells {
-		out = append(out, c)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].X != out[j].X {
-			return out[i].X < out[j].X
+	// X ascending outer, Z ascending inner, which is the order the sort used
+	// to impose on the map's keys — so the walk produces it directly.
+	out := make([]Cell, 0, g.cellCount)
+	for x := int32(0); x < g.planeW; x++ {
+		for z := int32(0); z < g.planeH; z++ {
+			if g.cells[int(z)*int(g.planeW)+int(x)] != 0 {
+				out = append(out, Cell{X: x, Z: z})
+			}
 		}
-		return out[i].Z < out[j].Z
-	})
+	}
 	return out
 }
 
 // Count returns the number of occupied cells.
 func (g *OccupancyGrid) Count() int {
-	if g == nil || g.cells == nil {
+	if g == nil {
 		return 0
 	}
-	return len(g.cells)
+	return g.cellCount
 }
 
 // ValidateFootprint scans the proposed footprint row-major and returns

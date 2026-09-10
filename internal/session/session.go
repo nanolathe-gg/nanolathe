@@ -376,6 +376,13 @@ type Session struct {
 	sensorStatusScratch []uint32 // indexed by unit handle, parallel to the pool
 	sensorHolders       []int32  // handles staged this tick, in pool order (I1)
 	primaryMaskScratch  []uint16 // indexed by unit handle
+	// The publication boundary's two live-unit walks, in pool order (I1). The
+	// unit-view walk and the radar-contact walk run one after the other inside
+	// a single publishSnapshot call, so they cannot share one buffer.
+	publishUnitScratch []*units.Unit
+	radarUnitScratch   []*units.Unit
+	// The sensor phase's sliced live-unit walk, players then slots ascending.
+	sensorSlicedScratch []*units.Unit
 
 	// DebugDisplayMode is the world composer's debug display mode byte
 	// [03 §3.12]. Its writers are now traced and there are exactly three: the

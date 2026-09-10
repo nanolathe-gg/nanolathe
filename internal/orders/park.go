@@ -122,7 +122,7 @@ func parkHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 			// own position [04 R-FAC-02 §4][04 R-AIR-01 §6].
 			n.GoalX, n.GoalY, n.GoalZ = u.X, u.Y, u.Z
 			n.Param1, n.Param2, n.Param3 = 0, 0, 0
-			if id := Lookup("VTOL_Move"); id != 0 {
+			if id := rowVTOLMove; id != 0 {
 				n.ID = id
 				n.StaticGate = DescriptorFor(id).StaticGate
 			}
@@ -183,7 +183,7 @@ func ensureParkHandler() {
 	if len(table) == 0 {
 		return
 	}
-	id := Lookup("Park")
+	id := rowPark
 	if id == 0 || int(id) >= len(table) {
 		return
 	}

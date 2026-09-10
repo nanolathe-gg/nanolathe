@@ -94,8 +94,7 @@ type ClassLayer struct {
 	// first request revision arms it; the map-load stamp therefore never
 	// blocks on occupants — the static layer is terrain and features only
 	// [04 §6.1 R-DOC04-B].
-	watermark      uint32
-	staticRevision uint64 // terrain static-obstacle revision last stamped [04 §7.3]
+	watermark uint32
 
 	// commits records each unit's last occupancy-commit tick, the unit
 	// record's occupancy-commit field [04 §6.1 R-DOC04-B]. Lookup-only [I1];
@@ -129,7 +128,6 @@ func NewClassLayer(p Profile, t *world.Terrain, grid *OccupancyGrid) *ClassLayer
 	// No nil guard on t: the struct literal above reads four of its fields, so
 	// a nil terrain has already panicked by here. A guard that stands after the
 	// dereferences it claims to protect reads as if nil were a supported input.
-	l.staticRevision = t.StaticObstacleRevision()
 	l.stampAll()
 	return l
 }
@@ -247,60 +245,19 @@ func (l *ClassLayer) setValue(x, z int32, v uint8) {
 }
 
 // Value returns the packed terrain value at cell (x,z), 0 out of bounds.
+//
+// It is a plain read. A feature change reaches this layer when it happens, not
+// when the layer is next read: retail's stamping service and its footprint
+// teardown helper each end by restamping every named class over the changed
+// rectangle, synchronously, inside the feature service and in the calling
+// phase [03 §5.1.2][03 R-LAYER §2], which is what System.NoteFeatureFootprint
+// does through the terrain's ClassRestamp port. The whole-layer classifier
+// runs only at map load.
 func (l *ClassLayer) Value(x, z int32) uint8 {
 	if l == nil || x < 0 || z < 0 || x >= l.W || z >= l.H {
 		return LayerBlocked
 	}
-	l.syncStaticRevision()
 	return uint8((l.cells[(z>>4)*l.W+x] >> (uint(z&15) * 2)) & 3)
-}
-
-// StaticRevision returns the terrain revision represented by this layer.
-func (l *ClassLayer) StaticRevision() uint64 {
-	if l == nil {
-		return 0
-	}
-	l.syncStaticRevision()
-	return l.staticRevision
-}
-
-// syncStaticRevision refreshes terrain/profile-derived layer cells after a
-// blocking feature mutation. Owner/building bits are a separate overlay and
-// are deliberately preserved: nothing here is unwired. A building blocks
-// through the occupancy grid's occupant word, where classifyCell's
-// mover-null arm hard-blocks it unconditionally at every watermark and from
-// the first classification that finds it [04 R-PATH-01 §14], and
-// restampOccupantRect restamps the occupant rectangle at commit time —
-// neither route reads staticRevision, so no completed-structure writer
-// needs to bump it [04 §6.1][04 §8.2].
-// TODO(question): does retail's class-record refresh reclassify the WHOLE
-// layer on a blocking-feature change, or only the changed rectangle? It
-// matters for cost, not just tidiness: the full rebuild below re-reads every
-// cell's LIVE occupancy — the grid's occupant word, the mover predicate and
-// the commit tick — not only the terrain that actually changed, and that
-// re-read is load-bearing. A measured probe that kept the rebuild but skipped
-// its occupancy arm moved the partial state fingerprint and both RNG draw
-// totals, so the layer's occupancy view genuinely depends on being refreshed
-// wholesale here.
-//
-// That makes an incremental restamp over a dirty rectangle a BEHAVIOUR change
-// rather than an optimization, and it is the dominant remaining cost: 167
-// rebuilds over a 3000-tick benchmark window land on 162 ticks, every one of
-// them above 15 ms against a 2 ms median, and removing them entirely would
-// roughly halve the window's p95 (docs/SIM_BENCHMARK.md). What would settle
-// it: the owning research contract for the class record's refresh, saying
-// whether the sweep is whole-layer or rectangle-local and what it re-reads.
-// Until then this stays whole-layer.
-func (l *ClassLayer) syncStaticRevision() {
-	if l == nil || l.Terrain == nil {
-		return
-	}
-	revision := l.Terrain.StaticObstacleRevision()
-	if revision == l.staticRevision {
-		return
-	}
-	l.stampAll()
-	l.staticRevision = revision
 }
 
 // RestampRect rewrites each candidate anchor through the footprint classifier
@@ -466,11 +423,6 @@ func (l *ClassLayer) Revise(tick uint32, requester pool.Handle, w *units.World, 
 	if l == nil {
 		return
 	}
-	// A feature mutation refreshes the terrain layer before the request's
-	// temporary self-commit/restamp. Refreshing lazily on the first expansion
-	// would run after the requester commit is restored and can make the unit
-	// block its own start cell.
-	l.syncStaticRevision()
 	oldWatermark := l.watermark
 	newWatermark := revisionWatermark(tick)
 	requesterCommit, requesterHadCommit := l.commits[requester]
@@ -730,6 +682,28 @@ func (s *System) NoteStructureStamp(anchor Cell, footX, footZ int16) {
 	if s == nil || s.layerRegistry == nil {
 		return
 	}
+	s.layerRegistry.forEachLayer(func(l *ClassLayer) {
+		l.restampOccupantRect(anchor, footX, footZ)
+	})
+}
+
+// NoteFeatureFootprint is the movement half of retail's feature stamper. The
+// single stamping service and the footprint teardown helper each END by
+// restamping every NAMED movement class over the changed footprint rectangle,
+// synchronously, inside the feature service and in the calling phase
+// [03 §5.1.2][03 R-LAYER §2]. internal/world's ClassRestamp port carries the
+// call across the package boundary; the geometry is the ring-aware anchor
+// rectangle of [04 R-MOV-03 §3], the same shared restamp the unit and building
+// commit sites already use.
+//
+// Layers are visited in the registry's fixed allocation order [I1]. A class
+// whose layer has never been allocated is skipped, because its first
+// allocation stamps the whole map from the plot as it then stands.
+func (s *System) NoteFeatureFootprint(anchorX, anchorZ int32, footX, footZ int16) {
+	if s == nil || s.layerRegistry == nil {
+		return
+	}
+	anchor := Cell{X: anchorX, Z: anchorZ}
 	s.layerRegistry.forEachLayer(func(l *ClassLayer) {
 		l.restampOccupantRect(anchor, footX, footZ)
 	})

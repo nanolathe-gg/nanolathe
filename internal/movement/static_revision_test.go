@@ -25,23 +25,41 @@ func TestRouteRecordsStaticRevisionButZeroPublicationKeepsMetadata(t *testing.T)
 	}
 }
 
-func TestClassLayerRefreshesAfterBlockingFeatureMutation(t *testing.T) {
+// A feature change reaches the class layer through the stamper's own restamp,
+// over the changed rectangle and nothing more [03 §5.1.2][03 R-LAYER §2]
+// [04 R-MOV-03 §3]. This test locks that behaviour, not a state hash: the
+// layer blocks the stamped cell, the whole-layer classifier does not run
+// again, and a cell far from the rectangle is untouched.
+//
+// It replaced a test that bumped the static-obstacle revision and expected the
+// layer to rebuild itself end to end on the next read. That was this build's
+// invention: retail restamps the rectangle synchronously inside the feature
+// service, and the revision word is Nanolathe route-staleness metadata with no
+// class-layer reader.
+func TestFeatureStampRestampsOnlyItsOwnRectangle(t *testing.T) {
 	terrain := staticRevisionTerrain(8, 8)
 	layer := NewClassLayer(Template(), terrain, nil)
+	terrain.ClassRestamp = func(ax, az int32, fx, fz int16) {
+		layer.restampOccupantRect(Cell{X: ax, Z: az}, fx, fz)
+	}
 	if got := layer.Value(3, 3); got == LayerBlocked {
 		t.Fatalf("empty cell unexpectedly blocked: %d", got)
 	}
+	stampsBefore := layer.fullStamps
 	def := &content.FeatureDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "tree"}, Blocking: true, FootprintX: 1, FootprintZ: 1}
 	terrain.FeatureDefs = []*content.FeatureDef{def}
 	if err := terrain.StampFeatureRect(3, 3, 0, 1, 1); err != nil {
 		t.Fatal(err)
 	}
-	terrain.BumpStaticObstacleRevision()
+	terrain.NoteFootprintRestamp(3, 3, 1, 1)
 	if got := layer.Value(3, 3); got != LayerBlocked {
-		t.Fatalf("stale layer value = %d, want blocked after revision %d", got, terrain.StaticObstacleRevision())
+		t.Fatalf("layer value = %d, want blocked after the stamper's restamp", got)
 	}
-	if layer.StaticRevision() != terrain.StaticObstacleRevision() {
-		t.Fatalf("layer revision %d != terrain revision %d", layer.StaticRevision(), terrain.StaticObstacleRevision())
+	if layer.fullStamps != stampsBefore {
+		t.Fatalf("full stamps %d -> %d: the restamp rebuilt the whole layer", stampsBefore, layer.fullStamps)
+	}
+	if got := layer.Value(0, 0); got == LayerBlocked {
+		t.Fatalf("cell outside the restamped rectangle became blocked: %d", got)
 	}
 }
 

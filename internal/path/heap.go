@@ -103,6 +103,37 @@ func (ns *NodeStore) SetScale(scale int32) { ns.scale = scale }
 // different search data structure, not a pooling change, and would have to be
 // proven not to alter visit order or open-set tie-breaking before it could be
 // gated on the fingerprint.
+//
+// That table was designed and not built, and the two things the design turns
+// on are recorded here so the next attempt starts from them rather than from
+// the profile again.
+//
+// Ownership. A generation-stamped table is shared: a search takes the next
+// generation and every slot stamped with an older one reads as empty. That is
+// only sound while exactly one search holds live per-cell state. It does hold
+// today, and by a chain that lives in internal/movement rather than here: the
+// scheduler latches one request at a time and keeps it until the search
+// reports done, the caller drops its session on done, a goal or activation
+// change replaces the session before it is resumed, and the one cancel path
+// (System.CancelPathRequest) clears the cached session in the same call that
+// cancels the request. So no suspended session can be resumed after another
+// search has run. Nothing in this package enforces that, and a shared table
+// would make a future change to that cache corrupt a search silently rather
+// than fail — so the table needs an owner that hands it out and takes it back,
+// not a bare generation counter.
+//
+// Size against locality. Sized to a full map the table is a few hundred
+// thousand slots, while a search touches a few hundred cells scattered across
+// it. The map's working set is a few kilobytes and stays in cache; the dense
+// table's is one cache line per touched cell spread over megabytes. The
+// hashing this would remove measures about six per cent of the tick, so the
+// win is not large enough to assume the locality trade comes out ahead — it
+// has to be measured on the scene, not argued.
+//
+// One part of the same idea did pay and is no longer open: the OPEN SET's
+// node-to-slot index, which was a map[NodeID]int and is now a dense row (see
+// Heap). Node identities are dense by construction, so that one needed no
+// generation stamp and no owner.
 
 // Reset clears all nodes but retains the scale.
 func (ns *NodeStore) Reset() {
@@ -251,9 +282,57 @@ type heapEntry struct {
 // [04 R-PATH-01 §1]. positions lets a lowering relaxation find and remove a
 // displaced spent root without changing the node store's stable identities.
 type Heap struct {
-	entries   []heapEntry
-	positions map[NodeID]int
+	entries []heapEntry
+	// positions is the open set's node-to-slot index, dense and addressed by
+	// NodeID because the node store hands out identities 1, 2, 3, ... with no
+	// gaps. A slot holds the entry's index in entries, or absent to mean the
+	// node is not in the heap. It replaced a map[NodeID]int, which hashed a
+	// key on every swap, push and removal; nothing about the heap's shape,
+	// its comparisons or its equal-key tie-breaking depends on the index
+	// structure, so the pop order is the same.
+	//
+	// position() returns exactly what a read of that map returned: the index
+	// and whether the node is present, with a zero index for an absent node.
+	// Fix relies on that zero — a spent root that is not in the heap must not
+	// be removed — so the two results are kept together rather than collapsed
+	// into a sentinel comparison at the call sites.
+	positions []int32
 	spent     NodeID
+}
+
+// absentPosition marks a node that is not in the heap.
+const absentPosition int32 = -1
+
+// position is the index lookup, with the absent case reported as the zero
+// index and false, the way the map read it replaced did.
+func (h *Heap) position(id NodeID) (int, bool) {
+	if id < 0 || int(id) >= len(h.positions) {
+		return 0, false
+	}
+	v := h.positions[id]
+	if v == absentPosition {
+		return 0, false
+	}
+	return int(v), true
+}
+
+// setPosition files a node at an index, growing the dense row to reach it.
+func (h *Heap) setPosition(id NodeID, index int) {
+	if id < 0 {
+		return
+	}
+	for int(id) >= len(h.positions) {
+		h.positions = append(h.positions, absentPosition)
+	}
+	h.positions[id] = int32(index)
+}
+
+// clearPosition removes a node from the index.
+func (h *Heap) clearPosition(id NodeID) {
+	if id < 0 || int(id) >= len(h.positions) {
+		return
+	}
+	h.positions[id] = absentPosition
 }
 
 // Len returns the number of entries.
@@ -270,17 +349,16 @@ func (h *Heap) HasCandidate() bool {
 // Clear removes all entries and transaction state.
 func (h *Heap) Clear() {
 	h.entries = h.entries[:0]
-	clear(h.positions)
+	h.positions = h.positions[:0]
 	h.spent = invalidNodeID
 }
 
 // Push inserts a new open node with key f. Every open node has one heap entry;
 // strictly improving paths use Fix rather than a stale duplicate.
 func (h *Heap) Push(id NodeID, f int32) {
-	h.ensurePositions()
 	h.entries = append(h.entries, heapEntry{id: id, f: f})
 	index := len(h.entries) - 1
-	h.positions[id] = index
+	h.setPosition(id, index)
 	h.up(index)
 }
 
@@ -320,10 +398,9 @@ func (h *Heap) Open(id NodeID, f int32) {
 		h.Push(id, f)
 		return
 	}
-	h.ensurePositions()
-	delete(h.positions, h.spent)
+	h.clearPosition(h.spent)
 	h.entries[0] = heapEntry{id: id, f: f}
-	h.positions[id] = 0
+	h.setPosition(id, 0)
 	h.spent = invalidNodeID
 	h.down(0)
 }
@@ -344,13 +421,13 @@ func (h *Heap) Peek() (NodeID, int32, bool) {
 // replacement and sift-down transaction [04 R-PATH-01 §1]. If the id is not
 // open, Fix returns false.
 func (h *Heap) Fix(id NodeID, newF int32) bool {
-	index, ok := h.positions[id]
+	index, ok := h.position(id)
 	if !ok {
 		return false
 	}
 	h.entries[index].f = newF
 	h.up(index)
-	if h.spent != invalidNodeID && h.positions[h.spent] != 0 {
+	if spentIndex, _ := h.position(h.spent); h.spent != invalidNodeID && spentIndex != 0 {
 		h.removeSpent()
 	}
 	return true
@@ -358,7 +435,7 @@ func (h *Heap) Fix(id NodeID, newF int32) bool {
 
 // Contains reports whether id is present in the heap.
 func (h *Heap) Contains(id NodeID) bool {
-	_, ok := h.positions[id]
+	_, ok := h.position(id)
 	return ok
 }
 
@@ -398,22 +475,16 @@ func (h *Heap) down(i int) {
 	}
 }
 
-func (h *Heap) ensurePositions() {
-	if h.positions == nil {
-		h.positions = make(map[NodeID]int)
-	}
-}
-
 func (h *Heap) swap(i, j int) {
 	h.entries[i], h.entries[j] = h.entries[j], h.entries[i]
-	h.positions[h.entries[i].id] = i
-	h.positions[h.entries[j].id] = j
+	h.setPosition(h.entries[i].id, i)
+	h.setPosition(h.entries[j].id, j)
 }
 
 func (h *Heap) removeSpent() {
 	spent := h.spent
 	h.spent = invalidNodeID
-	index, ok := h.positions[spent]
+	index, ok := h.position(spent)
 	if ok {
 		h.removeAtDown(index)
 	}
@@ -425,7 +496,7 @@ func (h *Heap) removeSpent() {
 func (h *Heap) removeAtDown(index int) {
 	last := len(h.entries) - 1
 	removed := h.entries[index]
-	delete(h.positions, removed.id)
+	h.clearPosition(removed.id)
 	if index == last {
 		h.entries = h.entries[:last]
 		return
@@ -433,6 +504,6 @@ func (h *Heap) removeAtDown(index int) {
 	replacement := h.entries[last]
 	h.entries[index] = replacement
 	h.entries = h.entries[:last]
-	h.positions[replacement.id] = index
+	h.setPosition(replacement.id, index)
 	h.down(index)
 }

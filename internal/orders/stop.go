@@ -48,7 +48,7 @@ func stopHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code {
 // machine's outcome as an ordinary result code, *complete* on touchdown, and
 // the pump frees the record the ordinary way [04 §3.3].
 func spawnLandIfCan(u *units.Unit, tick uint32) {
-	id := Lookup("VTOL_LandIfCan")
+	id := rowVTOLLandIfCan
 	if id == 0 {
 		return
 	}
@@ -136,7 +136,7 @@ func ensureStopHandler() {
 	if len(table) == 0 {
 		return
 	}
-	id := Lookup("Stop")
+	id := rowStop
 	if id == 0 || int(id) >= len(table) {
 		return
 	}

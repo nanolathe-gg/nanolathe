@@ -351,7 +351,7 @@ func spawnPatrolLanding(u *units.Unit, pad *units.Unit, tick uint32) bool {
 	if u == nil || pad == nil {
 		return false
 	}
-	id := Lookup("VTOL_Landing")
+	id := rowVTOLLanding
 	if id == 0 {
 		return false
 	}

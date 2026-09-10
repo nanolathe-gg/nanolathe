@@ -520,14 +520,6 @@ func (s *Service) TickWeapons(tick uint32, w *units.World, vis *visibility.Servi
 	if simRNG == nil {
 		// nil means no draw (return 0 without advancing) — production always injects.
 	}
-	var unitList []*units.Unit
-	if w.IsSliced() {
-		unitList = w.IterSliced()
-		_ = unitList
-	} else {
-		unitList = w.Iter()
-		_ = unitList
-	}
 	if w.IsSliced() {
 		for player := 0; player < 10; player++ {
 			start, end, ok := w.SliceForPlayer(player)
@@ -548,7 +540,9 @@ func (s *Service) TickWeapons(tick uint32, w *units.World, vis *visibility.Servi
 		}
 	} else {
 		buckets := make([][]*units.Unit, 10)
-		for _, u := range unitList {
+		// The pool-order walk is only the unsliced fixture path's; the sliced
+		// path above indexes the pool directly and never read this list.
+		for _, u := range w.Iter() {
 			if u == nil || u.Dying {
 				continue
 			}
@@ -639,6 +633,11 @@ type targetRegistry struct {
 	seen       []bool
 	seenTick   uint32
 	seenPrimed bool
+
+	// walkScratch is the destination the rebuild's pool-order walk appends
+	// into, so the walk that runs for every side on the cadence tick reuses one
+	// buffer instead of allocating a live-unit slice per side.
+	walkScratch []*units.Unit
 }
 
 // primaryList returns one side's primary list as the last rebuild left it.
@@ -857,7 +856,8 @@ func (s *Service) rebuildTargetRegistry(tick uint32, owner uint8, w *units.World
 	gate := false
 	pri := r.primary[p][:0] // both lists are cleared at every rebuild [06 §3.1]
 	sec := r.secondary[p][:0]
-	for _, u := range w.Iter() {
+	r.walkScratch = w.AppendLive(r.walkScratch[:0]) // pool slot ascending [06 §3.1] (I1)
+	for _, u := range r.walkScratch {
 		if u == nil || !u.Alive || u.Dying {
 			continue // alive bit set, death latch clear [06 §3.1]
 		}

@@ -174,7 +174,8 @@ func (s *Session) publishSnapshot(tick uint32) {
 	if s.Units != nil {
 		views := published.Units[:0]
 		orderQueues := published.OrderQueues[:0]
-		for _, u := range s.Units.Iter() {
+		s.publishUnitScratch = s.Units.AppendLive(s.publishUnitScratch[:0]) // pool slot ascending (I1)
+		for _, u := range s.publishUnitScratch {
 			if u == nil || !u.Alive {
 				continue
 			}
@@ -684,7 +685,8 @@ func (s *Session) publishSnapshot(tick uint32) {
 	}
 	if s.Units != nil {
 		s.buildRadarSensorIndex(sensorInputs)
-		for _, u := range s.Units.Iter() {
+		s.radarUnitScratch = s.Units.AppendLive(s.radarUnitScratch[:0]) // pool slot ascending (I1)
+		for _, u := range s.radarUnitScratch {
 			if u == nil || !u.Alive {
 				continue
 			}

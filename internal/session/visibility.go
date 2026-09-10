@@ -257,7 +257,8 @@ func (s *Session) stepSensorPhase(tick uint32) {
 	// A slot with no registry contributes no bits, so its units never breach,
 	// which is the fail-closed direction (WU-19-210).
 	primaryOf := s.primaryCandidateMasks()
-	for _, u := range s.Units.IterSliced() {
+	s.sensorSlicedScratch = s.Units.AppendLiveSliced(s.sensorSlicedScratch[:0]) // players then slots ascending (I1)
+	for _, u := range s.sensorSlicedScratch {
 		if u == nil || !u.Alive {
 			continue
 		}

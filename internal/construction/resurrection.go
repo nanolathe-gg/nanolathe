@@ -218,4 +218,8 @@ func (s *Service) removeFeature(cell *world.PlotCell) {
 			clearCell(fringe)
 		}
 	}
+	// The teardown ENDS by restamping every named movement class over the
+	// footprint rectangle, so the cells the resurrected wreck vacated unblock
+	// in the same call [03 §5.1.2][03 R-LAYER §2] call site 2.
+	s.Terrain.NoteFootprintRestamp(ax, az, int16(footX), int16(footZ))
 }

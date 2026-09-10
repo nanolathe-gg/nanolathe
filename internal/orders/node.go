@@ -56,7 +56,7 @@ func NewFactoryBuildNode(cat *content.Catalog, defKey string, count uint32, tick
 	// `BuildingBuild` or nothing: the two build rows are separate descriptors
 	// with separate bodies [04 §3.1][04 R-ORD-01 §5], so substituting the
 	// mobile row would hand a factory product to the site-bound machine.
-	id := Lookup("BuildingBuild")
+	id := rowBuildingBuild
 	n := NewNodeForOrder(id, 0, 0, 0, 0, tick, owner, queued)
 	n.BuildDefKey = ck
 	n.Param1 = idx
@@ -76,7 +76,7 @@ func NewFactoryBuildNode(cat *content.Catalog, defKey string, count uint32, tick
 func NewMobileBuildNode(cat *content.Catalog, defKey string, siteX, siteZ numeric.Fixed, orientation uint16, count uint32, tick uint32, owner pool.Handle, queued bool) Node {
 	ck := content.CanonicalKey(defKey)
 	idx, _ := catalogIndex(cat, ck)
-	id := Lookup("MobileBuild")
+	id := rowMobileBuild
 	// Caller may override ID for VTOL; keep MobileBuild default if not VTOL.
 	n := NewNodeForOrder(id, 0, siteX, 0, siteZ, tick, owner, queued)
 	n.BuildDefKey = ck

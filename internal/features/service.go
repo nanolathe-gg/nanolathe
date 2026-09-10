@@ -891,6 +891,11 @@ func (s *Service) clearFootprintNoRevision(cx, cz int, def *content.FeatureDef) 
 			}
 		}
 	}
+	// The teardown helper ENDS by restamping every named movement class over
+	// the footprint rectangle, so removal unblocks the cells in the same call
+	// [03 §5.1.2][03 R-LAYER §2] call site 2. After the plot writes, because
+	// the classifier reads the cells that just changed.
+	s.Terrain.NoteFootprintRestamp(int32(cx), int32(cz), int16(fx), int16(fz))
 }
 
 // spawnFeatureAt supplies neither optional transform to the common stamp:
@@ -993,6 +998,12 @@ func (s *Service) stampFeature(cx, cz int, def *content.FeatureDef, pos *[3]nume
 	torn := s.coveredAnchors(cx, cz, footX, footZ)
 	stampErr := s.Terrain.StampFeatureRect(int32(cx), int32(cz), featIdx, footX, footZ)
 	tornAway := s.releaseTornInstances(torn)
+	// The stamping service ENDS by restamping every named movement class over
+	// the footprint rectangle [03 §5.1.2][03 R-LAYER §2] call site 1, after the
+	// plot write. The vetoed path takes it too: that stamp tore cells on its
+	// way to the veto and left them torn, which is a change to the same
+	// rectangle.
+	s.Terrain.NoteFootprintRestamp(int32(cx), int32(cz), int16(footX), int16(footZ))
 	if stampErr != nil {
 		if tornAway {
 			// A partial teardown still changed the static layer even though the
@@ -1630,6 +1641,9 @@ func clearFeatureRect(t *world.Terrain, cx, cz int, def *content.FeatureDef) {
 			cell.SetAnchor(0, 0)
 		}
 	}
+	// The teardown helper's restamp, as in clearFootprintNoRevision
+	// [03 §5.1.2][03 R-LAYER §2] call site 2.
+	t.NoteFootprintRestamp(int32(cx), int32(cz), int16(fx), int16(fz))
 }
 
 // stampFeatureDef writes a definition's footprint rectangle at an anchor cell,
@@ -1657,7 +1671,11 @@ func stampFeatureDef(t *world.Terrain, cx, cz int, def *content.FeatureDef, obse
 	if footZ <= 0 {
 		footZ = 1
 	}
-	if err := t.StampFeatureRect(int32(cx), int32(cz), idx, footX, footZ); err != nil {
+	err := t.StampFeatureRect(int32(cx), int32(cz), idx, footX, footZ)
+	// The stamping service's restamp, after the plot write
+	// [03 §5.1.2][03 R-LAYER §2] call site 1.
+	t.NoteFootprintRestamp(int32(cx), int32(cz), int16(footX), int16(footZ))
+	if err != nil {
 		return false
 	}
 	if def.Blocking {

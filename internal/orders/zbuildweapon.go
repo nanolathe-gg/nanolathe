@@ -209,7 +209,7 @@ func init() {
 	if len(Table()) == 0 {
 		return
 	}
-	id := Lookup("BuildWeapon")
+	id := rowBuildWeapon
 	if id == 0 {
 		return
 	}

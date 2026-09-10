@@ -363,7 +363,7 @@ func PushParalyzeCredit(u *units.Unit, credit uint32, tick uint32) {
 	if u == nil {
 		return
 	}
-	id := Lookup("Paralyze")
+	id := rowParalyze
 	if id == 0 {
 		return
 	}

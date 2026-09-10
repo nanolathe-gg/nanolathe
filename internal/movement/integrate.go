@@ -94,6 +94,12 @@ type System struct {
 	tickStarted bool
 	tick        uint32
 
+	// The two live-unit walks the air-base rebuild cadence makes, in pool order
+	// (I1). They are separate buffers because the rebuild's list is still being
+	// read while the alliance-row walk runs.
+	airBaseWalkScratch   []*units.Unit
+	diplomacyWalkScratch []*units.Unit
+
 	// airBases is the per-side target registry's third list — the
 	// damaged-aircraft base candidates of [06 §3.1 "the third list"] and
 	// [04 R-AIR-01 §11]. It is not per-tick: it is refilled
@@ -599,10 +605,15 @@ func NewSystem(terrain *world.Terrain, fallback Profile, grid *OccupancyGrid) *S
 		terrain.Movers = gridOccupancy{grid: grid}
 		// Retail's mobile occupancy IS the plot cell's first two words
 		// [03 §2.2][04 R-COLL-01 §4]; binding them here makes every grid stamp
-		// and clear write the word of the same plane in the same call, so the
-		// grid and the words are one store (the authority note at the head of
-		// collision.go).
+		// and clear write the word of the same plane in the same call. The
+		// word is a SUPERSET of the plane, not a copy of it, and the three
+		// ways they diverge are the authority note at the head of
+		// collision.go. Binding also fixes the planes' dimensions to the map's.
 		grid.AttachPlot(terrain)
+		// The feature stamper's class-layer half [03 §5.1.2][03 R-LAYER §2].
+		// internal/features writes the plot cells and calls the terrain's
+		// NoteFootprintRestamp; this is where that reaches the layers.
+		terrain.ClassRestamp = s.NoteFeatureFootprint
 	}
 	sched := path.NewScheduler(s.searchFunc, s.publishFunc)
 	s.pathProvider = &pathProvider{system: s, players: s.PathPlayers, limit: s.PathUnitLimit, eligible: func(player int) bool { return player == 0 }}
@@ -2852,7 +2863,8 @@ func (s *System) BeginTick(tick uint32) {
 	// every tick and Rebuild itself applies the 30-tick throttle, so the
 	// snapshot lands on a tick boundary [06 §3.1][04 R-AIR-01 §11].
 	if w != nil && s.airBases.RebuildDue(tick) {
-		s.airBases.Rebuild(tick, w.Iter(), s.diplomacyRows())
+		s.airBaseWalkScratch = w.AppendLive(s.airBaseWalkScratch[:0]) // pool slot ascending (I1)
+		s.airBases.Rebuild(tick, s.airBaseWalkScratch, s.diplomacyRows())
 	}
 }
 
@@ -2866,7 +2878,8 @@ func (s *System) diplomacyRows() func(from, toward uint8) bool {
 	if s == nil || s.world == nil {
 		return nil
 	}
-	for _, u := range s.world.Iter() {
+	s.diplomacyWalkScratch = s.world.AppendLive(s.diplomacyWalkScratch[:0]) // pool slot ascending (I1)
+	for _, u := range s.diplomacyWalkScratch {
 		b := airBinding(u)
 		if b == nil || b.World == nil || b.World.DeclaresAlliance == nil {
 			continue

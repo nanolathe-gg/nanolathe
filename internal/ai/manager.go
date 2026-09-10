@@ -163,6 +163,15 @@ type Manager struct {
 	rallyBestScore   int32
 	rallyTargets     []pool.Handle
 
+	// One live-unit walk buffer per call site, players then slots ascending
+	// (I1). They are separate because a broadcast submits orders while its own
+	// walk is still being read, and the handlers it reaches may drive another
+	// of these walks.
+	broadcastWalk []*units.Unit
+	hostileWalk   []*units.Unit
+	rallyWalk     []*units.Unit
+	classifyWalk  []*units.Unit
+
 	// RallyVisible supplies the ordinary visibility predicate used only when a
 	// 30-tick strategic refresh rebuilds the rally score vector. A nil binding
 	// keeps that vector empty rather than granting omniscient target knowledge
@@ -1119,7 +1128,8 @@ func (m *Manager) broadcastGroupOrder(w *units.World, group uint8, intent int, m
 	// radius 4. That is the whole effect of "spacing": no formation, no
 	// per-member offset, so the submitted point stays the supplied
 	// centroid/target for every member.
-	for _, u := range w.IterSliced() {
+	m.broadcastWalk = w.AppendLiveSliced(m.broadcastWalk[:0]) // players then slots ascending (I1)
+	for _, u := range m.broadcastWalk {
 		if u == nil || !u.Alive || u.Owner != m.Player || u.Def == nil || u.Group != group {
 			continue
 		}
@@ -1217,7 +1227,8 @@ func (m *Manager) nearestHostileUnit(w *units.World, econ *economy.Service, x, y
 	_ = y // [08 R-AI-01 §9] the vertical coordinate is passed but never read.
 	bestDistance := int64(1<<31 - 1)
 	var best *units.Unit
-	for _, u := range w.IterSliced() {
+	m.hostileWalk = w.AppendLiveSliced(m.hostileWalk[:0]) // players then slots ascending (I1)
+	for _, u := range m.hostileWalk {
 		if u == nil || !u.Alive || u.Def == nil || !m.hostileOwner(u.Owner, econ) {
 			continue
 		}
@@ -1283,7 +1294,8 @@ func (m *Manager) refreshRallyTargets(w *units.World, econ *economy.Service) {
 	if w == nil || econ == nil || m.RallyVisible == nil {
 		return
 	}
-	for _, u := range w.IterSliced() {
+	m.rallyWalk = w.AppendLiveSliced(m.rallyWalk[:0]) // players then slots ascending (I1)
+	for _, u := range m.rallyWalk {
 		if u == nil || !u.Alive || u.Dying || !m.hostileOwner(u.Owner, econ) || !m.RallyVisible(m.Player, u) {
 			continue
 		}
