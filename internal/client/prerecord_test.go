@@ -78,11 +78,14 @@ func TestPreRecordMissesOnANewCommittedTick(t *testing.T) {
 }
 
 // The benchmark and `--shot` compare with zero tolerance, so a fraction that is
-// one quantum out is a miss; the window's tolerance accepts the same pair. This
-// is the whole of the difference between the two (§13.10).
+// one quantum out is a miss; a window tolerance accepts the same pair, and a
+// drift past that tolerance is a miss again. The tolerance argument is the
+// whole of the difference between the two hosts (§13.10).
 func TestPreRecordFractionToleranceIsTheOnlySlack(t *testing.T) {
 	c, _ := pipelineClient(t)
 	predicted := ClampTickFraction16(0.25)
+	// One present interval at 120 Hz against a 30 Hz update: a quarter tick.
+	const windowTolerance = fractionOne / 4
 	c.StartPreRecord(predicted, 0, false)
 	c.JoinPreRecord()
 	c.SetTickFraction(0.25)
@@ -95,8 +98,16 @@ func TestPreRecordFractionToleranceIsTheOnlySlack(t *testing.T) {
 	c.StartPreRecord(predicted, 0, false)
 	c.JoinPreRecord()
 	c.tickFraction16 = predicted + 1
-	if _, ok := c.TakePreRecord(c.PresentationDigest(), PreRecordFractionTolerance); !ok {
+	if _, ok := c.TakePreRecord(c.PresentationDigest(), windowTolerance); !ok {
 		t.Fatal("a fraction inside the window's tolerance was refused")
+	}
+	// A frame that arrived a whole present interval late is past the cap, and
+	// takes the exact path however the tolerance was sized.
+	c.StartPreRecord(predicted, 0, false)
+	c.JoinPreRecord()
+	c.tickFraction16 = predicted + windowTolerance + 1
+	if _, ok := c.TakePreRecord(c.PresentationDigest(), windowTolerance); ok {
+		t.Fatal("a drift past one present interval was presented instead of re-recorded")
 	}
 }
 

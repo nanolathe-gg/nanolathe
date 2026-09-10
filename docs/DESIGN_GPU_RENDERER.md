@@ -1858,18 +1858,89 @@ four frames hit, the fourth records in place, and the comparison is **exact** �
 zero tolerance — so a measured frame is byte-identical to a synchronous record.
 
 The window predicts from the measured present interval: the camera fraction is
-where the next Draw will sit in the current Update, and the tick fraction is
-extrapolated at the nominal rate. A prediction that reaches the end of either
-declines — an Update rewrites client state, and a published tick is what a
-pre-record may never cross. Here the comparison carries a tolerance of 2048
-quanta, one thirty-second of a tick, and that tolerance is the pipeline's only
-presentation divergence. It is sized by two bounds: it is smaller than the
-producer's own resolution, since the battle's fraction comes from a millisecond
-source and moves in steps of about 1966 quanta at the nominal speed; and a
-subject that moved further than §13.5's snap bound in one tick is snapped
-rather than blended, so a thirty-second of a tick moves a blended subject by
-under a world pixel at any authored speed. The classic executor and `--shot`
+where the next Draw will sit in the current update, and the tick fraction is
+extrapolated over the interval that remains at the rate the last two samples
+measured. Neither prediction declines at the end of its range; both take the
+client's own clamp, because that is where the measured value of the last
+presented frame of a period will be too. The classic executor and `--shot`
 never launch a pre-record at all.
+
+**The window presents at the fraction it predicted.** When a pre-recorded
+list's digest matches on every field but the two fractions, the window presents
+it *at the fractions it was recorded for* rather than re-recording it at the
+measured ones — it accepts the prediction. That is the pipeline's one
+presentation divergence, and it is now stated as what it is: **a pre-recorded
+frame is presented at the instant it was predicted for, and the error is
+bounded by present jitter and capped at one present interval.** The cap is the
+guard rail. The tolerance is computed per Draw as `period × 30 × 65536` quanta,
+the amount both fractions advance across one present, and the period is the one
+the window **nominally** presents at — the `--fps` cap, the display's own rate,
+or the wider of the two, with the last launch's measurement as a last resort.
+It is deliberately not the interval this particular prediction was extrapolated
+over: a frame that hitched measures a long period, and a tolerance computed
+from that period would widen by exactly the lateness it exists to catch. So a
+frame that arrived a whole refresh late is further out than any jitter and
+takes the exact path instead.
+
+Measured over 4,800 presented frames of a live skirmish, the error the window
+actually presents is far inside the guard rail: **mean 1,638 quanta (0.025 of a
+tick, 0.8 ms) and a maximum of 20,658 (0.32 of a tick)** against a cap of
+32,768 at 60 presented frames per second. The typical error is a single step of
+the millisecond producer, which is what the old 2048-quantum tolerance was
+sized against and could not meet.
+
+The first form of this rule was a fixed tolerance of 2048 quanta, one
+thirty-second of a tick, sized to sit *below* the fraction producer's own
+resolution. That could not work. The battle's tick fraction reads a millisecond
+source, so at the nominal speed it moves in steps of about 1966 quanta; a
+tolerance of 2048 is one step of the number being compared, and one millisecond
+of draw jitter — an eighth of a 120 Hz present — puts the measured value in a
+neighbouring bucket. Almost every launched window frame missed on
+`MissTickFraction` for that reason. A tolerance smaller than a producer's
+quantisation cannot be met by a prediction of that producer; the choice is
+between accepting the prediction and never pre-recording at all.
+
+**The update body runs in the Draw's idle window.** A pre-record can only serve
+a frame if every client write that frame reads happened before the launch, and
+the launch is at the end of the *previous* Draw. An Ebitengine Update — input,
+the camera the scroll pass moves, the step and its publication — is exactly
+such a write, so a frame with an Update in front of it used to be a frame no
+pre-record could serve; roughly half of the window's frames never launched for
+that reason.
+
+Ebitengine runs a frame as *(zero or more Updates) → Draw → flush and swap*,
+and takes a fresh input snapshot immediately before each Update it calls; a
+frame with no Update leaves the game-visible input state exactly as the last
+tick saw it. The body of an update therefore moves to **the end of the modern
+Draw that the Update call precedes**, after `Execute` and before the launch. An
+`updateLedger` counts every Update call and guarantees one body per call: the
+call defers when the modern executor's Draw tail is alive and nothing is owed
+already, and otherwise runs every owed body inline, so the simulation can
+neither step twice for one update period nor skip one however the window
+behaves. The classic executor never defers; a Draw skipped by `--fps` runs no
+tail, and the next Update call runs the body itself. An exit request seen from
+a tail cannot return a Termination, so it is recorded and the next Update call
+returns it.
+
+Every frame then launches, and the frame that follows an update is the same
+kind of frame as any other.
+
+*What it costs is one presented frame of input latency, and that is the floor
+rather than an accident of this design.* A list recorded during the previous
+frame's flush cannot contain input that arrived after that flush began, so a
+pre-recorded frame is always one present behind live input; the body's writes
+first reach the screen on the Draw after the one that ran them. Running the
+body *early* instead — before the Update call it belongs to, as the first
+sketch of this round proposed — is strictly worse: Ebitengine refreshes the
+game-visible input snapshot per tick and not per frame, so an early body would
+read the previous tick's snapshot, costing a whole update period rather than a
+present, and would consume one snapshot twice on entering the regime.
+
+The blend absorbs the shift. The frame that used to present the new tick at
+fraction 0 now presents the previous pair at a fraction clamped just under 1,
+and `prev + (cur − prev)·f` at `f` just under one is the same pose as the new
+pair at zero: the sequence of presented positions is unchanged, only its
+labelling.
 
 **Measured** (1080p Ashap Plateau seed 7, `--benchmark-tps=120`, modern, six
 interleaved pairs per frame count, medians of the per-run medians; the
@@ -1895,6 +1966,31 @@ within the baseline's own run-to-run spread, which was 55–76% across six
 baseline runs. At 720 frames the battle is heavy and the cadence median falls
 0.9 ms with the on-floor share up eight points, consistently across all six
 pairs. Submit did not move.
+
+**Window, measured after the two changes above** (live skirmish, Ashap Plateau
+seed 7, modern, 1.5× window at 60 presented frames per second, the readout the
+window prints every 600 presented frames; the baseline is main's own build run
+back to back with it on the same host):
+
+| | before | after |
+|---|---|---|
+| Pre-recorded frames | 24% steady state | **99.8%** |
+| Never launched (the prediction declined) | 47% | 0.1% |
+| Missed on the tick fraction | 22% | 0.02% |
+| Presented drift, mean / max | — | 1,638 / 20,658 quanta (0.025 / 0.32 tick) |
+| Update bodies per second | 30.0 | 30.00 |
+| Committed ticks per second | 30.0 | 30.00 |
+
+The benchmark is unmoved by either change, which is the point of it here: it
+passes tolerance zero and steps inside its own Draw, so its rows and its
+`battle.png` are the regression gate rather than the result. Over three
+interleaved pairs at each frame count its medians are within run-to-run spread
+(180 frames: Record 0.003 ms both, Submit 3.07 → 3.10 ms, cadence 8.33 ms both;
+720 frames: Record 0.14 → 0.23 ms, Submit 5.07 → 5.10 ms, cadence 9.07 →
+9.10 ms), and `battle.png` is byte-identical on every run.
+
+The paragraph this replaces recorded the problem, and is kept because it is the
+measurement that motivated both changes:
 
 **Window hit rate is much lower than the benchmark's: 20%** over three thousand
 presented frames of a live skirmish. Roughly half the frames decline to launch

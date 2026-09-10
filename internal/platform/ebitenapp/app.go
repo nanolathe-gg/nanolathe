@@ -91,6 +91,17 @@ type app struct {
 	// (docs/DESIGN_GPU_RENDERER.md §13.10). It is modern-only: the classic path
 	// never launches a pre-record and never joins one it did not launch.
 	pipe pipeline
+	// ledger decides whether an Update call's body runs there or at the end of
+	// the modern Draw that follows it, and guarantees one body per call either
+	// way (§13.10).
+	ledger updateLedger
+	// exitPending records an exit request seen from a Draw tail, where a
+	// Termination cannot be returned; the next Update call returns it.
+	exitPending bool
+	// bodies counts update bodies run, for the pipeline readout's cadence
+	// sanity line: bodies per second must stay at the update rate however the
+	// deferral moves them.
+	bodies int64
 }
 
 // RunOptions are the window's host-side settings, none of which the client or
@@ -115,13 +126,50 @@ type RunOptions struct {
 // Update runs at presentationTPS. Delta is the fixed 1/TPS period: stable
 // input pacing for menus and camera, and the session converts to sim ticks via
 // its own accumulator (wall-clock time never enters the sim, I6).
+//
+// The body of an update does not always run here. Under the modern executor it
+// is deferred to the end of the Draw this call precedes, so that the pipeline's
+// pre-record for the FOLLOWING frame is taken after the update's writes rather
+// than before them (updateBody, §13.10). Ebitengine takes this call's input
+// snapshot immediately before it, so the deferred body reads that snapshot and
+// each snapshot is still consumed exactly once. What the deferral costs is one
+// presented frame of latency, which is the floor for a pre-recorded frame: a
+// list recorded during the previous frame's flush cannot contain input that
+// arrived after it.
 func (a *app) Update() error {
-	// The pipeline's barrier. Everything below writes client state — input,
-	// focus, the step and its publication, the pointer mode, the executor swap
-	// — and none of it may run while the pre-record is still reading
-	// (docs/DESIGN_GPU_RENDERER.md §13.10). The bump that follows tells the
-	// pipeline those writes happened, so a record taken before them is stale.
+	// The pipeline's barrier. The body below writes client state — input, focus,
+	// the step and its publication, the pointer mode, the executor swap — and
+	// none of it may run while the pre-record is still reading
+	// (docs/DESIGN_GPU_RENDERER.md §13.10). A deferring call writes nothing, so
+	// the record it leaves running is still valid at the Draw that consumes it;
+	// the join costs nothing there because Draw would join immediately after.
 	a.c.JoinPreRecord()
+	if a.exitPending {
+		return a.terminate()
+	}
+	// The ledger decides where this call's body runs. The modern executor with
+	// a live Draw tail defers it; everything else runs it here and now.
+	for range a.ledger.call(a.mode == RendererModern && a.gpu != nil) {
+		if a.exitPending {
+			break
+		}
+		a.updateBody()
+	}
+	if a.exitPending {
+		return a.terminate()
+	}
+	return nil
+}
+
+// updateBody is one update: the whole of what Update used to do inline. It runs
+// either from Update or from the tail of the modern Draw that call precedes,
+// and never from both — the ledger is what keeps that true.
+//
+// An exit request cannot terminate from a Draw, so it is recorded and the next
+// Update call returns the Termination.
+func (a *app) updateBody() {
+	// Tell the pipeline the writes below happened, so a record taken before
+	// them is stale (§13.10).
 	a.c.BumpPresentationEpoch()
 	a.syncWindowSize()
 	sample := readInput(a.scaledInputNow())
@@ -137,13 +185,19 @@ func (a *app) Update() error {
 	a.serviceRendererRequest()
 	a.presentPending = true
 	a.updatedAt = time.Now()
+	a.bodies++
 	if a.c.ExitRequested() {
-		a.c.SetPointerCaptured(false)
-		a.syncPointerCapture()
-		a.reportPipeline()
-		return ebiten.Termination
+		a.exitPending = true
 	}
-	return nil
+}
+
+// terminate ends the run: the pointer goes back to the window system and the
+// pipeline prints its final readout.
+func (a *app) terminate() error {
+	a.c.SetPointerCaptured(false)
+	a.syncPointerCapture()
+	a.reportPipeline()
+	return ebiten.Termination
 }
 
 // serviceRendererRequest applies the client's pending executor swaps — F10 of
@@ -277,7 +331,14 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 	// recorded before it (§13.10).
 	a.c.TickPresentationAudio()
 	tick16 := a.c.ResolveTickFraction()
-	list, hit := a.c.TakePreRecord(a.c.PresentationDigest(), client.PreRecordFractionTolerance)
+	// Present at the fraction the list was predicted for when the prediction
+	// held to within one present interval, and take the exact path when it did
+	// not (§13.10). The interval is measured, so the tolerance follows the
+	// display the window is actually running on.
+	// The interval is the one the outstanding prediction was made over, so a
+	// frame that arrived late cannot widen the tolerance by its own lateness.
+	tolerance := fractionTolerance(a.pipe.tolerancePeriod(a.presentInterval, ebiten.ActualFPS()))
+	list, hit := a.c.TakePreRecord(a.c.PresentationDigest(), tolerance)
 	switch {
 	case hit:
 		a.pipe.hits++
@@ -291,20 +352,38 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 		list = a.c.RecordModernFrame()
 	}
 	a.gpu.SetDisplayPalette(a.c.DisplayPalette())
-	img := a.gpu.Execute(list, width, height)
-	if img == nil {
-		return
+	if img := a.gpu.Execute(list, width, height); img != nil {
+		screen.DrawImage(img, &ebiten.DrawImageOptions{})
 	}
-	screen.DrawImage(img, &ebiten.DrawImageOptions{})
 	// Execute has enqueued this frame and copied what the device needs, so the
 	// list and the recorder's scratch are free again. Spend the flush and the
-	// swap that follow this Draw recording the next frame (§13.10).
-	a.pipe.observeTick(now, tick16)
+	// swap that follow this Draw on the update this frame owes and then on
+	// recording the next frame (§13.10).
 	a.reportPipelinePeriodically()
-	if nextTick16, nextCamera16, ok := a.pipe.predictNext(now, period, a.updatedAt, tick16); ok {
-		a.c.StartPreRecord(nextTick16, nextCamera16, true)
-		a.pipe.armed = true
+	sampledAt := now
+	if a.ledger.tail() {
+		// The update Ebitengine asked for before this Draw. Running it here,
+		// after Execute rather than before the Draw, is what lets the launch
+		// below happen after the last client write of the period instead of
+		// before it: a frame that crosses an update is otherwise the one frame
+		// a pre-record can never serve. The input snapshot it reads is the one
+		// Ebitengine took for that Update call, so no snapshot is consumed
+		// twice and none is dropped.
+		a.updateBody()
+		sampledAt = time.Now()
+		tick16 = a.c.ResolveTickFraction()
 	}
+	// The next Draw sits one present period after this one began; the tick
+	// fraction was sampled at sampledAt, which is later than this Draw's start
+	// when an update body ran in between.
+	if !a.exitPending && period > 0 {
+		if nextTick16, nextCamera16, ok := a.pipe.predictNext(now.Add(period), sampledAt, a.updatedAt, tick16); ok {
+			a.c.StartPreRecord(nextTick16, nextCamera16, true)
+			a.pipe.armed = true
+			a.pipe.launchPeriod = period
+		}
+	}
+	a.pipe.observeTick(sampledAt, tick16)
 }
 
 // presentDue applies RunOptions.MaxFPS to one modern Draw. The screen is

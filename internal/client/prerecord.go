@@ -170,25 +170,39 @@ type preRecorder struct {
 	// diagnosis for the host's readout.
 	missReasons            [len(MissReasonNames)]int64
 	driftTick, driftCamera int32
+	// driftHitTick and driftHitCamera are the same maxima over the predictions
+	// that were actually PRESENTED. Those are the divergence: a presented
+	// frame shows the instant it was predicted for, so this pair is how far
+	// from the measured instant any presented frame has been. The unqualified
+	// maxima above include the predictions the tolerance threw out, which
+	// diagnose the prediction rather than the picture.
+	driftHitTick, driftHitCamera int32
+	// driftHitSum and driftHitCount accumulate the presented tick drift so the
+	// readout can print a mean beside the maximum. The maximum is a hitch — a
+	// present interval that stretched — and the mean is what the picture
+	// actually shows.
+	driftHitSum   int64
+	driftHitCount int64
 }
 
-// PreRecordFractionTolerance is the window's fraction tolerance, in quanta of
-// the 16.16 blend fraction: a pre-record whose predicted fractions land within
-// it is Executed at the predicted fraction rather than re-recorded at the
-// measured one. It is an Enhanced presentation divergence and the only one the
-// pipeline has (§13.10); the benchmark and `--shot` compare with zero, so a
-// measured frame is byte-identical to a synchronous record.
+// The fraction tolerance is the host's, not a constant here. TakePreRecord's
+// tol argument is what decides whether a pre-recorded list may be presented at
+// the fraction it was recorded for instead of being re-recorded at the measured
+// one, and the two hosts answer it differently (§13.10):
 //
-// 2048 quanta is one thirty-second of a tick, and it is sized by the two things
-// it bounds. It is smaller than the tick fraction producer's own resolution:
-// the battle reads a millisecond source, so at the nominal speed the value it
-// can return moves in steps of 30/1000 of a tick — about 1966 quanta — and a
-// prediction inside 2048 is inside the granularity of the number itself. And it
-// is under a world pixel of motion for anything the blend touches: a unit that
-// moved further than the snap bound in one tick is snapped rather than blended
-// (§13.5), so a thirty-second of a tick moves a blended subject by at most two
-// world units and, at any authored speed, by a small fraction of one.
-const PreRecordFractionTolerance = int32(2048)
+//   - The benchmark and `--shot` pass zero. They know the next frame's fraction
+//     exactly, so a measured frame stays byte-identical to a synchronous record.
+//   - The window passes one present interval, computed per Draw from its own
+//     measured present period. It accepts the prediction: the presented frame
+//     is shown at the instant it was predicted for, and the error is present
+//     jitter, capped at one interval so a frame that arrived a whole refresh
+//     late still takes the exact path.
+//
+// A fixed constant could not serve the window. The battle's tick fraction comes
+// from a millisecond source, so at the nominal speed it moves in steps of
+// 30/1000 of a tick — about 1966 quanta — and any tolerance smaller than one of
+// its steps fails on a single millisecond of draw jitter, which is most of what
+// a present interval contains.
 
 // BumpPresentationEpoch records that the host has written client state. The
 // pipeline treats every pre-record taken before the bump as stale. Call it
@@ -301,7 +315,7 @@ func (c *Client) TakePreRecord(want PresentationInputs, tol int32) (*drawlist.Li
 	c.JoinPreRecord()
 	c.pre.pending = false
 	reason := c.pre.recorded.missReason(want, tol)
-	c.pre.observeDrift(want)
+	c.pre.observeDrift(want, reason == MissNone)
 	if reason == MissNone {
 		c.pre.hits++
 		return &c.list, true
@@ -350,16 +364,32 @@ func (c *Client) savePresentationCRT() {
 }
 
 // observeDrift records the largest prediction error the pipeline has seen, in
-// quanta of the 16.16 fraction. It is what says whether a tolerance is the
-// right size for this host's present jitter.
-func (p *preRecorder) observeDrift(want PresentationInputs) {
-	if d := abs32(p.recorded.TickFraction16 - want.TickFraction16); d > p.driftTick {
-		p.driftTick = d
+// quanta of the 16.16 fraction, over every prediction and again over the
+// predictions that were presented. The first says whether the tolerance is the
+// right size for this host's present jitter; the second is the divergence
+// itself, since a presented frame is shown at the instant it was predicted for
+// (§13.10).
+func (p *preRecorder) observeDrift(want PresentationInputs, presented bool) {
+	tick := abs32(p.recorded.TickFraction16 - want.TickFraction16)
+	if tick > p.driftTick {
+		p.driftTick = tick
 	}
-	if p.recorded.CameraFractionSet && want.CameraFractionSet {
-		if d := abs32(p.recorded.CameraFraction16 - want.CameraFraction16); d > p.driftCamera {
-			p.driftCamera = d
+	if presented {
+		if tick > p.driftHitTick {
+			p.driftHitTick = tick
 		}
+		p.driftHitSum += int64(tick)
+		p.driftHitCount++
+	}
+	if !p.recorded.CameraFractionSet || !want.CameraFractionSet {
+		return
+	}
+	camera := abs32(p.recorded.CameraFraction16 - want.CameraFraction16)
+	if camera > p.driftCamera {
+		p.driftCamera = camera
+	}
+	if presented && camera > p.driftHitCamera {
+		p.driftHitCamera = camera
 	}
 }
 
@@ -377,6 +407,21 @@ func (c *Client) PreRecordMisses() (reasons [len(MissReasonNames)]int64, driftTi
 		return reasons, 0, 0
 	}
 	return c.pre.missReasons, c.pre.driftTick, c.pre.driftCamera
+}
+
+// PreRecordPresentedDrift reports the largest tick and camera fraction errors
+// over the predictions that were PRESENTED, in quanta. That pair is the
+// pipeline's presentation divergence measured rather than bounded: how far the
+// instant a presented frame was recorded for has been from the instant it was
+// presented at (§13.10), with the mean tick error beside it.
+func (c *Client) PreRecordPresentedDrift() (driftTick, driftCamera int32, meanTick float64) {
+	if c == nil {
+		return 0, 0, 0
+	}
+	if c.pre.driftHitCount > 0 {
+		meanTick = float64(c.pre.driftHitSum) / float64(c.pre.driftHitCount)
+	}
+	return c.pre.driftHitTick, c.pre.driftHitCamera, meanTick
 }
 
 // PreRecordNanos is the wall time the last completed pre-record spent on the
