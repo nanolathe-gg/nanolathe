@@ -36,6 +36,65 @@ type cachedModelBody struct {
 	shaded, supersampled bool
 	scale                camera.ViewScale
 	palette              *palette.Tables
+	// store is where geometry points when the retained packet was copied into
+	// this body's own arenas rather than freshly allocated.
+	store cachedGeometryStore
+}
+
+// cachedGeometryStore is one subject's retained cached-lane packet and the face
+// and vertex arenas it addresses. The packet the recorder hands over is frame
+// scratch, so it has to be copied out; copying it into arenas the body keeps
+// means a subject that rebuilds every frame — which is every mobile subject
+// under Enhanced interpolation, because its blended pose genuinely moves
+// (docs/DESIGN_GPU_RENDERER.md §13.5) — allocates nothing after its first
+// rebuild. ModelGeometry.Clone allocated a packet, four slices and one vertex
+// slice per face on every one of those rebuilds, which was the largest single
+// item in the recorder's frame.
+type cachedGeometryStore struct {
+	g                drawlist.ModelGeometry
+	faces            []drawlist.ModelFace
+	vertices         []drawlist.ModelVertex
+	supersample      drawlist.ModelGeometry
+	supersampleFaces []drawlist.ModelFace
+	supersampleVerts []drawlist.ModelVertex
+}
+
+// retainGeometry copies src into this body's arenas and returns the retained
+// packet. The cached lane is always a plain face packet with an optional
+// supersample of the same shape — that is what borrowModelPacket produces — so
+// anything carrying a shadow, children, an outline, a live lane or a reveal
+// keeps the general deep copy rather than being silently flattened.
+func (b *cachedModelBody) retainGeometry(src *drawlist.ModelGeometry) *drawlist.ModelGeometry {
+	if src == nil {
+		return nil
+	}
+	if !plainCachedPacket(src) || src.Supersample != nil && !plainCachedPacket(src.Supersample) {
+		return src.Clone()
+	}
+	s := &b.store
+	s.g = *src
+	s.faces, s.vertices = copyModelFaces(s.faces, s.vertices, src.Faces, 0, 0)
+	s.g.Faces = s.faces
+	s.g.LiveFaces, s.g.Outline, s.g.Children = nil, nil, nil
+	s.g.Reveal, s.g.Shadow, s.g.Supersample = nil, nil, nil
+	if src.Supersample == nil {
+		return &s.g
+	}
+	s.supersample = *src.Supersample
+	s.supersampleFaces, s.supersampleVerts =
+		copyModelFaces(s.supersampleFaces, s.supersampleVerts, src.Supersample.Faces, 0, 0)
+	s.supersample.Faces = s.supersampleFaces
+	s.supersample.LiveFaces, s.supersample.Outline, s.supersample.Children = nil, nil, nil
+	s.supersample.Reveal, s.supersample.Shadow, s.supersample.Supersample = nil, nil, nil
+	s.g.Supersample = &s.supersample
+	return &s.g
+}
+
+// plainCachedPacket reports whether a packet is faces and placement only, which
+// is the whole of what the cached lane retains.
+func plainCachedPacket(g *drawlist.ModelGeometry) bool {
+	return g.Shadow == nil && g.Reveal == nil && len(g.Children) == 0 &&
+		len(g.Outline) == 0 && len(g.LiveFaces) == 0
 }
 
 type cachedBodyInputs struct {
@@ -158,7 +217,7 @@ func (c *Client) replaceCachedGeometry(id uint64, v frame.UnitView, draw *presen
 	// identity cannot inherit that tag: the next classic consumer must rebuild
 	// its own physical-index plane.
 	body.image = nil
-	body.geometry = geometry.Clone()
+	body.geometry = body.retainGeometry(geometry)
 	body.model, body.cacheRevision, body.validityRevision = draw.Model.Name, v.CacheRevision, v.CacheValidityRevision
 	body.structure, body.construction, body.teamColor = draw.Structure, v.BuildRemaining, unitTeamColor(v)
 	body.shaded, body.supersampled, body.scale, body.palette = inputs.shaded, inputs.supersampled, inputs.scale, inputs.palette

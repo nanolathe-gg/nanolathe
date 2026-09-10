@@ -1528,6 +1528,7 @@ longer go stale across an animation that toggles cache bits.
 
 | R3a executor CPU (landed) | lit points placed from a cached cell with a stamped pixel table; batch storage pooled by size class and written in place; ring self-intersection tested once per face with triangle and quad fast paths; faces prepared by pointer; slot planes from the recyclable sub-image pool | `internal/platform/gpurender/*` | M1–M8 modern and both battle.png byte-identical; Submit 120 TPS 3.9 → 2.9 ms, 30 TPS 6.6 → 4.9 ms; passes 11 |
 | R3b recorder CPU (landed) | piece chain collapsed to its rotating nodes with a reference-equivalence test, vertices applied in bulk, piece draws and polygons written in place, hidden pieces resolved once, projectile scratch retained | `internal/client/*`, `internal/render/*`, `internal/model/*` | `--shot` and M1–M8 byte-identical on both renderers; Record 120 TPS 2.8 → 2.0 ms; classic 30 Record not worse |
+| R4 the lit point plane (landed, §13.8) | lit point runs placed once instead of once per pixel; a phase group of points committed as one quad over a per-frame plane atlas; the retained cached model lane copied into the body's own arenas | `internal/platform/gpurender/*`, `internal/client/model_cached_live.go` | both battle.png byte-identical at 180 and 720 frames; M1–M8 byte-identical on both renderers; classic Record not worse; Submit 120 TPS 720 frames 12.1 → 4.5 ms |
 
 R1 and R2 are independent (R2 never edits `internal/platform/gpurender`) and
 ran in parallel; R3a and R3b followed, also in parallel, once the 120 TPS
@@ -1553,6 +1554,137 @@ What remains above 2% of a frame is Ebitengine's per-draw vertex conversion
 colour planes) and the lit point volume (one quad per covered pixel of every
 flash disc [03 R-FX-01 §4]); a human motion review at the window is still
 owed, because the agents that built this could not inject input.
+
+### 13.8 The lit point plane (fourth round)
+
+§13.7 left "the lit point volume (one quad per covered pixel of every flash
+disc)" as one of the two items above 2% of a frame. Instrumented, it was not
+one of two items; it was the frame. A 1080p battle at `--benchmark-tps=120`
+covers a **median 179,000 screen pixels per frame** with lit points and a
+maximum of 963,000, and the batch compiled into 150,000 quads — **97% of every
+vertex the executor handed the device**, about thirty megabytes of vertex
+traffic per presented frame, written once by the executor and copied again by
+Ebitengine into its command queue. Over a 720-frame run `drawLitPoints` and the
+`DrawTrianglesShader32` under it were about 40% of the process, against 15% for
+the whole recorder.
+
+The span coalescing already in `drawLitPoints` could not help: the disc's ramp
+is jittered per pixel by a CRT draw [06 R-WFX-01 §2], so the LHT row changes
+almost every pixel and the average span was 1.19 pixels long.
+
+**Placement per run.** A batch arrives as contiguous horizontal runs, because a
+disc is recorded row by row. A run's x values are consecutive and distinct, so
+no pixel of a run can depend on another pixel of the same run, and the phase
+they must all take is the maximum of their individual answers; stamping the
+whole run with that maximum leaves exactly the tag state placing them one at a
+time leaves. `placePointSpan` evaluates the cell floor and the owner rectangles
+once per *cell* the run crosses, scans the run's contiguous slice of the
+cell-major point phase table, and stamps in one pass. Placing a pixel later than
+its own dependency requires is always safe — it can only push a write further
+behind things it already had to follow — so this is a relaxation of the phase
+count, never of the order. `placePoint` survives as the per-pixel definition the
+new placement is checked against in `schedule_point_span_test.go`.
+
+**Geometry as a texture.** The runs of one batch that landed in ONE phase are
+written into a rectangle of a per-frame RGBA8 atlas, one texel per covered
+pixel, and committed as a single quad over their bounding box (`points.go`).
+Four bytes per pixel replace two hundred and sixteen. A group too sparse to pay
+for its box, too small, or larger than the atlas can serve keeps the quad path.
+
+Two properties make that byte-identical rather than close.
+
+*The lane.* The scale blend forms `dst × (src.rgb + src.a)`, and for every LHT
+row `k = 1 + row/30` is at least one, so the low lane is exactly 1 and the whole
+of the per-pixel information is the high lane. That lane is a multiple of 2⁻²³:
+the CPU forms it as `fl(1 + fl(row/30)) − 1`, a sum whose value lies in [1,2) is
+a multiple of 2⁻²³, and the rows the §13.3 clamp caps at 2 leave exactly 1.
+Three bytes therefore hold it exactly. The shader reassembles
+`r·65536 + g·256 + b` — every term and every partial sum an integer below 2²⁴,
+so exact in binary32 in any association order a driver chooses — and scales by
+2⁻²³, exact because it is a power of two. `points_test.go` holds all thirty-two
+rows to that round trip.
+
+*The box.* Placement is unchanged, so two points of one phase group can never be
+the same pixel: a repeat is placed a phase later by construction. The group's
+texels are pairwise distinct and one quad brightens each exactly once. An
+uncovered texel is zero, whose lane is zero, whose fragment is `(1,1,1,0)`: the
+blend forms `dst × 1` and writes the destination back unchanged. That is what
+lets one quad cover a whole box, including pixels other commands of the same
+phase own, and the box is the union rectangle the per-pixel placements already
+grew the phase's destination rectangle to.
+
+The atlas is grouped by phase *number* rather than by scanning a small fixed set
+of groups, because a late battle frame's discs overlap each other and each
+other's earlier phases and one batch spreads over dozens of phases; and its
+regions are shelved by height class, because one shelf shared by every height
+made a shelf of ordinary discs as tall as the one tall region on it and wanted
+about five times the area its regions needed.
+
+**The recorder's cached lane.** `replaceCachedGeometry` copied the frame-scratch
+packet out with `ModelGeometry.Clone` — a fresh packet, four fresh slices and
+one fresh vertex slice per face — on every rebuild, and under Enhanced
+interpolation every mobile subject rebuilds every presented frame because its
+blended pose genuinely moves (§13.5). Each cached body now keeps its own face
+and vertex arenas and the packet is copied into them with the same
+`copyModelFaces` the rebase path uses.
+
+*Measured*, 1080p Ashap Plateau seed 7, `--benchmark-tps=120`, modern, medians
+over three interleaved runs of each build:
+
+| | 180 frames before / after | 720 frames before / after |
+|---|---|---|
+| Record | 3.12 / 3.05 ms | 4.96 / 4.81 ms |
+| Submit | 3.98 / 2.63 ms | 12.11 / 4.48 ms |
+| Cadence median | 9.02 / 8.34 ms | 20.78 / 13.16 ms |
+| On the 8.3 ms floor | 40% / 70% | 11% / 23% |
+| Worst cadence | 41 / 40 ms | 240 / 124 ms |
+| Allocation per frame | 2.24 MB, 10.1k objects / 1.41 MB, 8.2k objects | 4.37 MB, 21.3k objects / 1.90 MB, 19.3k objects |
+| Point quads per frame | — / 127 | 150,185 / 1,649 |
+| Vertices per frame | — / 12,038 | 614,714 / 21,016 |
+
+Draws, phases and passes per frame are unchanged (30/20/13 at 180 frames,
+54/53/45 at 720): this round moved the vertices, not the device calls. Classic
+is unchanged at 11.2 ms Record with byte-identical captures.
+
+**Dropped.** Merging device runs across phase boundaries (§13.3 makes a segment
+one render pass, so consecutive runs of identical state could be one call) was
+dropped: the frame already issues only 30–54 draws and `DrawTrianglesShader32`
+fell to under 5% once the point vertices went, so a per-segment vertex arena
+would risk the byte gate for under 2%.
+
+Deferring the **model overflow barrier** was dropped and is a finding. A subject
+the slot atlas cannot fit rasterizes into a fallback page at commit time, and
+because the page is reused, that has always been a scheduler barrier — one per
+overflowing subject, a median eight per frame. A ring of fallback pages that
+lets a body and a shadow reserve their two pages together, and defers the
+barrier until the ring is exhausted, was implemented and measured. With a ring
+of two — one barrier per subject, the behaviour it replaces — the frame is
+byte-identical, so the ring itself is sound. With a ring of four the phase count
+falls from 53 to 47 and **the composed frame changes**, while Submit gets
+slightly *worse* (4.48 → 4.66 ms median). Merging two segments across a model
+overflow therefore changes composited pixels for a reason the placement rules do
+not explain, in the same family as the unexplained shadow pixels of the
+`TODO(H1)` two-surface alternation (§11.5 status). It is not a performance
+lever, and the barrier stays.
+
+**What remains.** The frame is now about evenly split between Record (4.8 ms)
+and Submit (4.5 ms) at 720 frames. Above 2% of the process: `runtime.madvise`
+at 17%, which is page commits for the 19,000 objects a frame still allocates —
+those are Ebitengine's per-Metal-call boxing and `internal/render`'s
+`reuseDrawSlice`, not the executor, which allocates only its atlas growth;
+`runtime.cgocall` at 11%, the Metal calls themselves on the render thread; and
+`unitGeometryPair` at 12%, now spread thinly over `collectDrawPolys`,
+`unitDrawFor`, `borrowRebasedModelGeometry` and `configureModelGeometry` with no
+single item dominant.
+
+**Cadence spikes.** They are not periodic and not the collector: over a 720-frame
+run the Go collector ran twice for 0.9 ms of total pause before this round and
+once for 0.08 ms after. The spikes track the effect census — the runs of frames
+above 60 ms are consecutive frames at 200–230 live effects and 25–37 fragments,
+which is the lit point volume — and this round removed them, from 52 frames
+above 60 ms to 3. The one that remains, 124 ms at the frame with 963,000 covered
+pixels, is the frame where the plane atlas grows: a new image, a fresh staging
+buffer and an upload of every row it uses.
 
 ## 14. The detail view: 1.5× and 2× steps and load-time remaster
 

@@ -49,7 +49,14 @@ simulation rate; only the modern renderer blends, classic keeps committed-tick
 sampling at every rate. Compare runs at one rate.
 
 `frames.json` records scene version, seed, map, renderer, view scale, display options, runtime
-and build information, per-frame timings and feature census. `cpu.pprof`,
+and build information, per-frame timings and feature census. Modern rows also
+carry the executor's per-frame counters, including `Phases`, `Passes`, `Draws`,
+`Vertices`, and `PointPixels`/`PointQuads`/`PointPlanes` — the screen pixels the
+frame's lit point batches covered, the device quads they compiled into and the
+lit point plane regions they committed through
+(docs/DESIGN_GPU_RENDERER.md §13.8). The three together say whether the point
+layer is paying per pixel or per plane, which is the first thing to check when
+modern `Submit` moves. `cpu.pprof`,
 `alloc-base.pprof` and `alloc.pprof` cover the measurement window; inspect allocation
 deltas with `go tool pprof -base OUTPUT/alloc-base.pprof OUTPUT/alloc.pprof`.
 `battle.png` is captured after timing. `factory-blockers.json` reports foreign

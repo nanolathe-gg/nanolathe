@@ -427,15 +427,6 @@ func (s *scheduler) txRect(x0, y0, x1, y1 int) (int, int, int, int) {
 		int(math.Ceil(float64(x1) * k)), int(math.Ceil(float64(y1) * k))
 }
 
-// txPoint maps one record-space pixel to the screen pixel it lands in.
-func (s *scheduler) txPoint(x, y int) (int, int) {
-	if !s.worldOn {
-		return x, y
-	}
-	k := float64(s.worldScale)
-	return int(math.Floor(float64(x) * k)), int(math.Floor(float64(y) * k))
-}
-
 // resetFrame drops the compiled segment and re-sizes the cell grid. The backing
 // arrays are retained.
 func (s *scheduler) resetFrame(w, h int) {
@@ -568,14 +559,16 @@ func (s *scheduler) place(x0, y0, x1, y1 int) int32 {
 
 // placePoint is place for one pixel of a lit point batch: an earlier point
 // conflicts only when it wrote this very pixel, while a rectangle command is
-// tested exactly, as a one-pixel rectangle. It also records the point, which
-// tagPoint did separately before: both halves read the same cell, and a battle
-// frame runs them tens of thousands of times, so they share one cell lookup
-// (docs/DESIGN_GPU_RENDERER.md §13 "CPU/allocation policy").
+// tested exactly, as a one-pixel rectangle. It also records the point: both
+// halves read the same cell, so they share one cell lookup.
 //
 // The answer is exactly what place plus the point pixel table gave: the cell's
 // floor, the largest contribution of an owner whose rectangle contains the
 // pixel, and one phase past any earlier point of the segment at that pixel.
+//
+// The executor no longer calls it — a batch is placed run by run through
+// placePointSpan — but it remains the DEFINITION that placement is checked
+// against, pixel by pixel, in schedule_point_span_test.go.
 func (s *scheduler) placePoint(x, y int) int32 {
 	cx, cy, _, _, ok := s.cellRange(x, y, x+1, y+1)
 	if !ok {
@@ -607,6 +600,81 @@ func (s *scheduler) placePoint(x, y int) int32 {
 		s.cellPoint[at] = phase
 	}
 	s.pointPhase[pixel] = uint64(s.serial)<<32 | uint64(uint32(phase))
+	return phase
+}
+
+// placePointSpan is placePoint for a RUN of consecutive pixels on one screen row,
+// which is how a lit point batch actually arrives: a flash disc is recorded row by
+// row [03 R-FX-01 §4], so its pixels come in contiguous horizontal runs and a
+// battle frame's hundred thousand points are a few thousand runs.
+//
+// A run cannot repeat a pixel within itself — its x values are consecutive and
+// distinct — so the phase every one of its pixels must take is the MAXIMUM of the
+// per-pixel answers, and stamping the whole run with that maximum leaves exactly
+// the tag state placing them one at a time leaves: a point placed later than its
+// own dependency requires still follows everything it must follow, and every later
+// command reads the phase actually used. The three terms are the same terms
+// placePoint takes, each evaluated once per cell instead of once per pixel:
+//
+//   - the cell's forgotten-owner floor;
+//   - the contribution of every owner whose rectangle meets the run, which is
+//     exactly the maximum over the run's pixels because the run is a contiguous
+//     rectangle, so an owner meets it if and only if it contains one of its pixels;
+//   - one phase past the largest phase any earlier point of this segment left on
+//     one of the run's pixels.
+//
+// The stamp pass then writes that phase to every pixel and raises each covered
+// cell's point phase, which is what placePoint's own record does
+// (docs/DESIGN_GPU_RENDERER.md §11.2 "The scheduler", §13.7).
+func (s *scheduler) placePointSpan(x0, x1, y int) int32 {
+	cx0, cy, cx1, _, ok := s.cellRange(x0, y, x1, y+1)
+	if !ok {
+		return 0
+	}
+	row := cy * s.cols
+	yOff := (y & schedCellMask) << schedGridShift
+	phase := int32(0)
+	for cx := cx0; cx <= cx1; cx++ {
+		at := row + cx
+		if at != s.ptCellAt {
+			s.loadPointCell(at)
+		}
+		px0, px1 := maxInt(x0, cx<<schedGridShift), minInt(x1, (cx+1)<<schedGridShift)
+		if s.ptFloor > phase {
+			phase = s.ptFloor
+		}
+		for k := 0; k < s.ptOwnerN; k++ {
+			own := &s.ptOwners[k]
+			if !own.overlaps(px0, y, px1, y+1) {
+				continue
+			}
+			if c := own.contribution(); c > phase {
+				phase = c
+			}
+		}
+		base := (at << schedPointCellShift) | yOff | (px0 & schedCellMask)
+		for _, v := range s.pointPhase[base : base+(px1-px0)] {
+			if uint32(v>>32) != s.serial {
+				continue
+			}
+			if p := int32(uint32(v)) + 1; p > phase {
+				phase = p
+			}
+		}
+	}
+	stamp := uint64(s.serial)<<32 | uint64(uint32(phase))
+	for cx := cx0; cx <= cx1; cx++ {
+		at := row + cx
+		if phase > s.cellPoint[at] {
+			s.cellPoint[at] = phase
+		}
+		px0, px1 := maxInt(x0, cx<<schedGridShift), minInt(x1, (cx+1)<<schedGridShift)
+		base := (at << schedPointCellShift) | yOff | (px0 & schedCellMask)
+		p := s.pointPhase[base : base+(px1-px0)]
+		for i := range p {
+			p[i] = stamp
+		}
+	}
 	return phase
 }
 
@@ -764,20 +832,6 @@ func (s *scheduler) beginBlended(class int, x0, y0, x1, y1 int, imgs [4]*ebiten.
 	return true
 }
 
-// beginPoint places one lit point of a destination-compositing batch. Its own
-// pixel is what decides it, not its batch's bounding rectangle.
-func (s *scheduler) beginPoint(x, y int, imgs [4]*ebiten.Image) {
-	x, y = s.txPoint(x, y)
-	phase := s.placePoint(x, y)
-	p := s.phaseAt(phase)
-	s.growDest(p, x, y, x+1, y+1)
-	if phase != s.ptRunPhase {
-		p.batch[schedDest].selectRun(imgs, nil, blendScaleDestination, schedReadNone)
-		s.ptRunPhase = phase
-	}
-	s.curPhase, s.curClass = phase, schedDest
-}
-
 // growDest extends the phase's destination rectangle, the union of its
 // destination batch and the only region the following pass has to copy forward.
 func (s *scheduler) growDest(p *schedPhase, x0, y0, x1, y1 int) {
@@ -925,6 +979,10 @@ func (r *Renderer) submitSchedule() {
 		s.resetSegment()
 		return
 	}
+	// The lit point plane's texels have to reach the device before the quads that
+	// sample them; Ebitengine's queue keeps an upload and the draws issued after
+	// it in order (points.go).
+	r.pointPlane.flush()
 	r.modelStats.Phases += s.nphase
 	compose := r.surfaces[0]
 	for k := 0; k < s.nphase; k++ {
@@ -982,6 +1040,7 @@ func (r *Renderer) drawBatch(dst *ebiten.Image, p *schedPhase, class int) {
 		}
 		r.sceneOpts.Blend = run.blend
 		r.beginPass(dst)
+		r.modelStats.Vertices += int(run.vLen)
 		dst.DrawTrianglesShader32(
 			b.verts[run.vOff:run.vOff+run.vLen],
 			b.idx[run.iOff:run.iOff+run.iLen],

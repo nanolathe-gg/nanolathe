@@ -196,18 +196,33 @@ func (r *Renderer) drawLitPoints(points []drawlist.Point) {
 		r.sched.worldOn = false
 		defer func() { r.sched.worldOn = true }()
 	}
+	// The batch arrives as contiguous horizontal runs — a disc is recorded row by
+	// row — and one run is placed ONCE, not once per pixel: its pixels are
+	// distinct, so the phase they must all take is the maximum of their
+	// individual answers and stamping them with it leaves the same tag state
+	// (schedule.go placePointSpan).
+	//
+	// The runs are collected rather than emitted, because what a run's geometry
+	// should be depends on the whole batch: runs that landed in one phase are
+	// pairwise disjoint and become ONE quad over the lit point plane, and only
+	// what the plane cannot serve falls back to a quad per stretch of equal LHT
+	// row (points.go). Placement still happens here, in record order, because the
+	// point phase table is stamped as it goes.
+	runs, rows := r.pointRuns[:0], r.pointRows[:0]
 	active := false
-	spanX0, spanX1, spanY, spanRow := 0, 0, 0, 0
-	var spanPhase int32
+	runX0, runY, runOff := 0, 0, 0
 	flush := func() {
 		if !active {
 			return
 		}
-		phase, class := r.sched.curPhase, r.sched.curClass
-		r.sched.curPhase, r.sched.curClass = spanPhase, schedDest
-		r.appendDestTableQuad(float32(spanX0), float32(spanY), float32(spanX1), float32(spanY+1), lightScale(spanRow))
-		r.sched.curPhase, r.sched.curClass = phase, class
-		active = false
+		runs = append(runs, litPointRun{
+			x0:    int32(runX0),
+			y:     int32(runY),
+			off:   int32(runOff),
+			n:     int32(len(rows) - runOff),
+			phase: r.sched.placePointSpan(runX0, runX0+len(rows)-runOff, runY),
+		})
+		runOff, active = len(rows), false
 	}
 	for _, pt := range points {
 		x, y := int(pt.X), int(pt.Y)
@@ -225,26 +240,172 @@ func (r *Renderer) drawLitPoints(points []drawlist.Point) {
 		} else if x < 0 || y < 0 || x >= r.clipW() || y >= r.clipH() {
 			continue
 		}
-		row := clampLHTRow(int(pt.Index))
-		// Preserve record order without widening a scheduler command: a point
-		// still owns and tags its own pixel. A discontinuity must flush before
-		// the next placement so its geometry remains before that record.
-		if active && (y != spanY || row != spanRow || x != spanX1) {
+		// A discontinuity closes the run before the next placement, so the runs
+		// are placed in record order.
+		if active && (y != runY || x != runX0+len(rows)-runOff) {
 			flush()
 		}
-		r.sched.beginPoint(x, y, imgs)
-		if active && r.sched.curPhase == spanPhase {
-			spanX1++
-			continue
+		if !active {
+			active, runX0, runY = true, x, y
 		}
-		// A repeated point can force a new phase even when its coordinates
-		// happen to be adjacent to the current span. The earlier span remains
-		// in its recorded phase and the new point starts another one.
-		flush()
-		active = true
-		spanX0, spanX1, spanY, spanRow, spanPhase = x, x+1, y, row, r.sched.curPhase
+		rows = append(rows, uint8(clampLHTRow(int(pt.Index))))
 	}
 	flush()
+	r.emitPointRuns(runs, rows, imgs)
+	r.pointRuns, r.pointRows = runs[:0], rows[:0]
+}
+
+// litPointRun is one placed run of a lit point batch: its screen position, the
+// slice of the batch's row arena it covers, and the phase every one of its pixels
+// took.
+type litPointRun struct {
+	x0, y  int32
+	off, n int32
+	phase  int32
+}
+
+// litPointGroup accumulates the runs of one phase: their bounding box and their
+// covered pixel count, which is what decides between the plane and the quads, and
+// whether the plane took it.
+type litPointGroup struct {
+	phase          int32
+	x0, y0, x1, y1 int32
+	pixels         int32
+	planed         bool
+}
+
+// emitPointRuns turns a placed batch into geometry: one quad over the lit point
+// plane for every phase group dense enough to be worth a region, and one quad per
+// stretch of equal LHT row for everything else.
+//
+// A batch is grouped by phase through an index over the phase NUMBER rather than a
+// scan of the groups: a heavy battle frame's discs overlap each other and each
+// other's earlier phases, so one batch of a late frame can spread over dozens of
+// phases and a scan would be the cost the grouping is meant to remove.
+//
+// The groups are emitted before the fallback runs. Order between them is free:
+// every pixel of one phase belongs to exactly one run, and two runs of one phase
+// are disjoint, because a repeated pixel is placed a phase later by construction.
+func (r *Renderer) emitPointRuns(runs []litPointRun, rows []uint8, imgs [4]*ebiten.Image) {
+	if len(runs) == 0 {
+		return
+	}
+	maxPhase := int32(0)
+	for i := range runs {
+		r.modelStats.PointPixels += int(runs[i].n)
+		if runs[i].phase > maxPhase {
+			maxPhase = runs[i].phase
+		}
+	}
+	index := r.pointGroupIdx
+	if cap(index) < int(maxPhase)+1 {
+		index = make([]int32, maxPhase+1)
+	}
+	index = index[:maxPhase+1]
+	for i := range index {
+		index[i] = -1
+	}
+	groups := r.pointGroups[:0]
+	for i := range runs {
+		run := &runs[i]
+		g := index[run.phase]
+		if g < 0 {
+			g = int32(len(groups))
+			index[run.phase] = g
+			groups = append(groups, litPointGroup{phase: run.phase,
+				x0: run.x0, y0: run.y, x1: run.x0 + run.n, y1: run.y + 1})
+		}
+		b := &groups[g]
+		b.x0, b.y0 = min(b.x0, run.x0), min(b.y0, run.y)
+		b.x1, b.y1 = max(b.x1, run.x0+run.n), max(b.y1, run.y+1)
+		b.pixels += run.n
+	}
+	planed := false
+	for k := range groups {
+		if r.emitPointPlaneGroup(&groups[k], runs, rows) {
+			groups[k].planed = true
+			planed = true
+		}
+	}
+	// A plane quad opens a run of its own (its source image is the plane), so the
+	// run cache the quad path keeps cannot be trusted across it.
+	if planed {
+		r.sched.ptRunPhase = -1
+	}
+	for i := range runs {
+		run := &runs[i]
+		if !groups[index[run.phase]].planed {
+			r.emitPointRunQuads(run, rows[run.off:run.off+run.n], imgs)
+		}
+	}
+	r.pointGroups, r.pointGroupIdx = groups[:0], index[:0]
+}
+
+// emitPointPlaneGroup writes one phase group into the lit point plane and commits
+// it as a single quad, or reports false when the group is too sparse, too small or
+// larger than the atlas can serve.
+func (r *Renderer) emitPointPlaneGroup(g *litPointGroup, runs []litPointRun, rows []uint8) bool {
+	w, h := int(g.x1-g.x0), int(g.y1-g.y0)
+	if int(g.pixels) < pointPlaneMinPixels || w <= 0 || h <= 0 {
+		return false
+	}
+	if w*h > int(g.pixels)*pointPlaneDensity {
+		return false
+	}
+	rx, ry, ok := r.pointPlane.alloc(w, h)
+	if !ok {
+		return false
+	}
+	r.pointPlane.clearRegion(rx, ry, w, h)
+	for i := range runs {
+		run := &runs[i]
+		if run.phase != g.phase {
+			continue
+		}
+		r.pointPlane.write(rx, ry, int(run.x0-g.x0), int(run.y-g.y0), rows[run.off:run.off+run.n])
+	}
+	s := &r.sched
+	p := s.phaseAt(g.phase)
+	s.growDest(p, int(g.x0), int(g.y0), int(g.x1), int(g.y1))
+	p.batch[schedDest].selectRun([4]*ebiten.Image{0: r.pointPlane.img, 1: r.tables.atlas},
+		nil, blendScaleDestination, schedReadNone)
+	s.curPhase, s.curClass = g.phase, schedDest
+	r.modelStats.PointQuads++
+	r.modelStats.PointPlanes++
+	s.quad(schedDest,
+		float32(g.x0), float32(g.y0), float32(g.x1), float32(g.y1),
+		float32(rx), float32(ry), float32(rx+w), float32(ry+h),
+		[4]float32{}, [4]float32{0, 0, 0, destOpPointPlane})
+	return true
+}
+
+// emitPointRunQuads is the geometry path for a run the plane did not serve: one
+// quad per maximal stretch of the run that shares an LHT row, all in the run's
+// phase. The pixels of a run are distinct, so a stretch's single quad brightens
+// each of them exactly once, which is what the per-pixel writes did
+// [03 R-FX-01 §4].
+func (r *Renderer) emitPointRunQuads(run *litPointRun, rows []uint8, imgs [4]*ebiten.Image) {
+	if len(rows) == 0 {
+		return
+	}
+	s := &r.sched
+	x0, y := int(run.x0), int(run.y)
+	p := s.phaseAt(run.phase)
+	s.growDest(p, x0, y, x0+len(rows), y+1)
+	if run.phase != s.ptRunPhase {
+		p.batch[schedDest].selectRun(imgs, nil, blendScaleDestination, schedReadNone)
+		s.ptRunPhase = run.phase
+	}
+	s.curPhase, s.curClass = run.phase, schedDest
+	for i := 0; i < len(rows); {
+		j := i + 1
+		for j < len(rows) && rows[j] == rows[i] {
+			j++
+		}
+		r.modelStats.PointQuads++
+		r.appendDestTableQuad(float32(x0+i), float32(y), float32(x0+j), float32(y+1), lightScale(int(rows[i])))
+		i = j
+	}
 }
 
 // appendDestTableQuad appends one axis-aligned quad covering [dx0,dx1)×[dy0,dy1)

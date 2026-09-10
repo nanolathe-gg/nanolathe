@@ -23,7 +23,14 @@ type ModelStats struct {
 	// [DESIGN_GPU_RENDERER.md §11.5]. Passes covers the phase passes and their
 	// read-surface copies, the fog draw inside them, the expansion, the
 	// attached-unit staging draws and the model slot atlas stage.
+	// PointPixels is the screen pixels the frame's lit point batches covered,
+	// PointPlanes the lit point plane regions they committed through, and
+	// PointQuads the device quads those pixels compiled into; Vertices is every
+	// vertex the scheduler handed the device this frame. Together they say
+	// whether the point layer is paying per pixel or per span, which is what the
+	// executor's remaining CPU tracks [DESIGN_GPU_RENDERER.md §13.7].
 	Phases, Passes                                              int
+	PointPixels, PointQuads, PointPlanes, Vertices              int
 	RasterPixels, SlotPages, SlotOverflows, Draws, RasterDraws  int
 	GPU, Skipped, Shadows, ShadowsOmitted, StagedGroups, NoBody int
 	UnsupportedGeometry, MissingTexture, UnsupportedFace        int

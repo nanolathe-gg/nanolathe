@@ -113,6 +113,13 @@ const (
 	// ColorG the alpha; the fragment is the premultiplied (PAL[idx]·a, a) and
 	// the source-over blend does the rest.
 	destOpMarker = 4
+	// destOpPointPlane is a whole group of lit points as one quad over the lit
+	// point plane (points.go, docs/DESIGN_GPU_RENDERER.md §13.8). Source 0 is the
+	// plane atlas: each texel carries the row family's high lane as a 24-bit
+	// fixed-point triple, and an uncovered texel is zero, which is the identity
+	// scale. The low lane is 1 for every LHT row, so nothing else has to be
+	// carried.
+	destOpPointPlane = 5
 )
 
 // The composite's blends (docs/DESIGN_GPU_RENDERER.md §13.3 "Blend classes").
@@ -322,6 +329,16 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 		// part the colour factor can express and the part the alpha factor adds:
 		// the blend forms dst * (min(k,1) + max(k-1,0)) = dst * k (§13.3).
 		return vec4(color.r, color.r, color.r, color.g)
+	}
+	if op == ` + fmt.Sprint(destOpPointPlane) + ` {
+		// The lit point plane. The stored triple is an integer below 2^24, so
+		// every term and every partial sum below is exact in binary32 whatever
+		// order the driver associates them in, and the 2^-23 scale is exact
+		// because it is a power of two: the lane reaches the blend bit-for-bit as
+		// the CPU formed it (points.go).
+		t := imageSrc0At(srcPos)
+		n := floor(t.r*255.0+0.5)*65536.0 + floor(t.g*255.0+0.5)*256.0 + floor(t.b*255.0+0.5)
+		return vec4(1.0, 1.0, 1.0, n/8388608.0)
 	}
 	if op == ` + fmt.Sprint(destOpMarker) + ` {
 		// The strategic marker layer: a flat index at the layer's fade alpha.

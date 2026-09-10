@@ -119,6 +119,19 @@ type Renderer struct {
 	// scratch (schedule.go).
 	sched scheduler
 
+	// pointRows is the LHT row of every pixel of the lit point batch being
+	// compiled and pointRuns its placed runs, both retained across frames so the
+	// point layer allocates nothing (§11.2 "Allocation policy"). pointPlane is the
+	// per-frame atlas a dense group of points commits through instead of one quad
+	// per pixel (points.go, §13.8).
+	pointRows  []uint8
+	pointRuns  []litPointRun
+	pointPlane pointPlane
+	// pointGroups is the batch's runs collected by phase and pointGroupIdx the
+	// index from a phase number to its group, both retained.
+	pointGroups   []litPointGroup
+	pointGroupIdx []int32
+
 	// frameDraws counts device draws issued since the last Execute began, and
 	// lastDest the destination of the most recent device call this package
 	// instruments, which is how ModelStats.Passes counts destination switches.
@@ -255,6 +268,7 @@ func (r *Renderer) Execute(list *drawlist.List, w, h int) *ebiten.Image {
 	r.frameDraws = 0
 	r.lastDest = nil
 	r.sched.resetFrame(r.w, r.h)
+	r.pointPlane.resetFrame()
 	r.worldW, r.worldH = r.w, r.h
 	r.modelPrep.reset()
 	defer r.modelPrep.reset()
