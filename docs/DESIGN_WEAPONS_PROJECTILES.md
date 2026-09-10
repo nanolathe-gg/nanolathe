@@ -129,7 +129,12 @@ rather than retested per candidate `[06 R-WPN-02 §3]` `[06 R-WPN-02 §6]`. The
 autonomous scan carries a persistent per-player round-robin cursor rather than
 starting from slot zero each visit `[06 §3.2]`.
 
-Hostility and direct visibility classify the registry at rebuild. Per-attempt
+Hostility and direct visibility classify the registry at rebuild. Registry
+hostility reads only the registry owner's alliance-row declaration at the
+candidate owner's ally group (the owner slot for a seated single-player row);
+it does not combine either player's declarations. This directional test must
+not be replaced with a generic symmetric alliance predicate
+`[06 §3.1]` `[05 R-SHARE-01 §1]` `[04 R-MOV-03 §11]`. Per-attempt
 materialization checks liveness; the planar query determines whether the
 primary population is empty before secondary fallback. Acquisition samples
 that population in registry order with swap removal, at most fifty picks;

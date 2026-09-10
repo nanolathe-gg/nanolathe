@@ -1,6 +1,7 @@
 package combat
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/content"
@@ -219,6 +220,64 @@ func TestTargetRegistryGateIsOwnerOnly(t *testing.T) {
 	s.rebuildTargetRegistry(30, 1, f.world, f.vis, f.terrain, f.econ)
 	if !s.targetingUpgradeGateFor(1) {
 		t.Fatal("the upgrade's own player gets the gate")
+	}
+}
+
+// Registry hostility reads exactly one row: the registry/scanning owner's
+// declaration toward the candidate owner's ally group, which is the owner slot
+// in a single-player seat [06 §3.1]. It does not combine player declarations
+// [05 R-SHARE-01 §1].
+func TestTargetRegistryUsesScanningOwnerAllianceRow(t *testing.T) {
+	for _, tc := range []struct {
+		name                     string
+		scannerDeclaresCandidate bool
+		candidateDeclaresScanner bool
+		wantMember               bool
+	}{
+		{"neither declares", false, false, true},
+		{"candidate declares", false, true, true},
+		{"scanner declares", true, false, false},
+		{"both declare", true, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newRegistryFixture(t, false)
+			// Keep the projected probe within this fixture's visibility grid.
+			f.enemy.Y = 0
+			second, err := f.world.Create(f.enemy.Def, f.enemy.Owner, f.enemy.X+numeric.FixedFromInt(16), 0, f.enemy.Z)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.econ.Players[f.shooter.Owner].Allies[f.enemy.Owner] = tc.scannerDeclaresCandidate
+			f.econ.Players[f.enemy.Owner].Allies[f.shooter.Owner] = tc.candidateDeclaresScanner
+			f.sensorTick(1)
+			if !directlyVisibleAtRebuild(f.shooter.Owner, f.enemy, f.vis) {
+				t.Fatal("fixture is wrong: enemy must be visible to exercise primary membership")
+			}
+
+			s := &Service{}
+			s.rebuildTargetRegistry(targetRegistryPeriod, f.shooter.Owner, f.world, f.vis, f.terrain, f.econ)
+			var want []pool.Handle
+			if tc.wantMember {
+				want = []pool.Handle{f.enemy.Handle, second}
+			}
+			primary := s.targets.primaryList(f.shooter.Owner)
+			secondary := s.targets.secondaryList(f.shooter.Owner)
+			if !slices.Equal(primary, want) || !slices.Equal(secondary, want) {
+				t.Fatalf("primary/secondary lists=(%v,%v), want slot order %v", primary, secondary, want)
+			}
+		})
+	}
+}
+
+// SlotAcquisitionAdmits is the reaction path's physical gate. Its input is
+// not a registry candidate, so cached list hostility and visibility must not
+// be introduced here [06 §3.1].
+func TestSlotAcquisitionAdmitsOnlyAppliesPhysicalGate(t *testing.T) {
+	f := newRegistryFixture(t, true) // hidden and therefore not directly visible
+	f.shooter.InstallWeapon(0, &content.WeaponDef{Range: 1000, LineOfSight: true})
+	f.econ.Players[f.shooter.Owner].Allies[f.enemy.Owner] = true
+	if !SlotAcquisitionAdmits(f.shooter, 0, f.enemy, f.world, nil, f.terrain, f.econ, nil) {
+		t.Fatal("the physical gate applied registry alliance or visibility membership [06 §3.1]")
 	}
 }
 

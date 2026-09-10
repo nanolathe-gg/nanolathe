@@ -218,8 +218,9 @@ manager tick that runs for every human and computer slot does not.
 order, and classifies each unit whose alive bit is set and death latch is
 clear:
 
-* **hostile** — the candidate's owning player's alliance row, indexed by *this*
-  registry's ally group, reads zero:
+* **hostile** — the registry owner's alliance row, indexed by the candidate
+  owner's ally group, reads zero. This is the registry owner's declaration;
+  the candidate owner's reciprocal declaration is not read:
   * it joins the **primary list** when the direct-visibility predicate below
     accepts it **and** a runtime exclusion status bit is clear — bit 15 of
     the status word, the mission `Immunity` bit, named below;
@@ -560,7 +561,8 @@ consequence is a contract, not a nicety: a human player's units never acquire
 autonomously with a command-fire weapon and a computer player's do.
 
 **Established fact:** The scan first tries to **retain**. The current slot
-target is dropped when its owning player is allied to the scanning player, when
+target is dropped when the scanning player's alliance row, indexed by the
+target owner's ally group, is nonzero (the reciprocal row is not read), when
 its definition index is in the slot's bad-target mask, or when the slot's
 weapon is a paralyzer and the target already carries the stunned bit. A
 surviving target ends the slot's work with no re-acquisition and no draws.

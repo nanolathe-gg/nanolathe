@@ -39,36 +39,19 @@ func badMaskForSlot(def *content.UnitDef, slotIdx int) content.CategoryMask {
 	}
 }
 
-func isAllied(owner, other uint8, econ *economy.Service) bool {
-	if owner == other {
+// registryOwnerDeclaresAllianceWithCandidate reports the row-A declaration
+// read by the target registry and autonomous retention. The scanning player's
+// row is indexed by the candidate owner's ally group; in a single-player seat
+// that group is the candidate's player slot [06 §3.1]. This is deliberately
+// not a symmetric relation [05 R-SHARE-01 §1].
+func registryOwnerDeclaresAllianceWithCandidate(owner, candidateOwner uint8, econ *economy.Service) bool {
+	if owner == candidateOwner {
 		return true
 	}
-	if econ == nil {
+	if econ == nil || int(owner) >= combatPlayerSlots || int(candidateOwner) >= combatPlayerSlots {
 		return false
 	}
-	if int(owner) >= 10 || int(other) >= 10 {
-		return false
-	}
-	if econ.Players[owner].Allies[other] {
-		return true
-	}
-	if econ.Players[other].Allies[owner] {
-		return true
-	}
-	return false
-}
-
-func isHostile(shooter *units.Unit, cand *units.Unit, econ *economy.Service) bool {
-	if shooter == nil || cand == nil {
-		return false
-	}
-	if shooter.Owner == cand.Owner {
-		return false
-	}
-	if isAllied(shooter.Owner, cand.Owner, econ) {
-		return false
-	}
-	return true
+	return econ.Players[owner].Allies[candidateOwner]
 }
 
 // isCloakedUnit supplies Candidate.Cloaked, which is step 2 of the
@@ -884,7 +867,7 @@ func (s *Service) rebuildTargetRegistry(tick uint32, owner uint8, w *units.World
 			}
 			continue // an own unit is never a candidate for its owner's lists
 		}
-		if isAllied(owner, u.Owner, econ) {
+		if registryOwnerDeclaresAllianceWithCandidate(owner, u.Owner, econ) {
 			continue // neither hostile nor own: skipped entirely [06 §3.1]
 		}
 		if u.Flags&units.ImmunityStatus == 0 && directlyVisibleAtRebuild(owner, u, vis) {
@@ -1155,12 +1138,13 @@ func slotAcquisition(u *units.Unit, slot *units.Slot, idx int, w *units.World, v
 // acquisition physical gate for one of a unit's weapon slots — the admission
 // the reaction routine's per-slot offer names [06 R-WPN-04 §2 part 3].
 //
-// It is exported because the damage path does not carry the visibility,
-// terrain, ledger and catalog operands the gate needs; the session binds it
-// into ReactionSeams.SlotAcquisitionAdmits with those in hand. It draws no RNG:
-// the gate is the primary-list hostility and visibility predicates plus the
-// physical admission, never the scoring pass (I4).
-func SlotAcquisitionAdmits(u *units.Unit, idx int, cand *units.Unit, w *units.World, vis *visibility.Service, terrain *world.Terrain, econ *economy.Service, catalog *content.Catalog) bool {
+// It is exported because the damage path does not carry the world, terrain,
+// and catalog operands the gate needs; the session binds it into
+// ReactionSeams.SlotAcquisitionAdmits with those in hand. The legacy
+// visibility and ledger arguments remain on that seam's call shape but are not
+// read here. It draws no RNG: it is the physical gate alone, never registry
+// membership, visibility, alliance, or the scoring pass (I4).
+func SlotAcquisitionAdmits(u *units.Unit, idx int, cand *units.Unit, w *units.World, _ *visibility.Service, terrain *world.Terrain, _ *economy.Service, catalog *content.Catalog) bool {
 	if u == nil || cand == nil || w == nil {
 		return false
 	}
@@ -1171,16 +1155,13 @@ func SlotAcquisitionAdmits(u *units.Unit, idx int, cand *units.Unit, w *units.Wo
 	if cand.Handle == u.Handle || !cand.Alive || cand.Dying {
 		return false
 	}
-	if !isHostile(u, cand, econ) {
-		return false
-	}
 	var seaLevel numeric.Fixed
 	if terrain != nil {
 		seaLevel = terrain.SeaLevelWorld()
 	}
-	c := acquisitionCandidate(u, cand, seaLevel, sensorStatus(vis, cand.Handle), catalog)
-	acq := slotAcquisition(u, slot, idx, w, vis, terrain, nil, catalog, seaLevel, -1)
-	return IsValidAcquisitionCandidate(c, acq)
+	c := acquisitionCandidate(u, cand, seaLevel, 0, catalog)
+	acq := slotAcquisition(u, slot, idx, w, nil, terrain, nil, catalog, seaLevel, -1)
+	return acq.admits(c)
 }
 
 // checkAdmission is the slot pipeline's shot-time gate [06 §3.3]. It is the

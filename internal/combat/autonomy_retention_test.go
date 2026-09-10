@@ -153,10 +153,20 @@ func TestRetentionDropsAlliedAndBadMaskTargets(t *testing.T) {
 	t.Run("an allied owner drops the target", func(t *testing.T) {
 		svc, w, terrain, cat, shooter, _ := setup(t)
 		econ := &economy.Service{}
-		econ.Players[shooter.Owner].Allies[1] = true // the target's owner
+		econ.Players[shooter.Owner].Allies[1] = true // the scanning owner's row
 		svc.StepAutonomousForPlayer(shooter.Owner, w, nil, terrain, econ, cat, nil)
 		if shooter.SlotAt(0).Target.Kind != units.TargetNone {
 			t.Fatal("a target whose owner is now allied must be dropped at retention [06 §3.2]")
+		}
+	})
+
+	t.Run("the target's reciprocal declaration does not drop it", func(t *testing.T) {
+		svc, w, terrain, cat, shooter, target := setup(t)
+		econ := &economy.Service{}
+		econ.Players[target.Owner].Allies[shooter.Owner] = true
+		svc.StepAutonomousForPlayer(shooter.Owner, w, nil, terrain, econ, cat, nil)
+		if got := shooter.SlotAt(0).Target; got.Kind != units.TargetUnit || got.Unit != target.Handle {
+			t.Fatal("retention read the target owner's reciprocal declaration [06 §3.2]")
 		}
 	})
 
