@@ -101,6 +101,14 @@ type ClassLayer struct {
 	// record's occupancy-commit field [04 §6.1 R-DOC04-B]. Lookup-only [I1];
 	// the revision pass walks the unit pool slot-ascending, never this map.
 	commits map[pool.Handle]uint32
+
+	// fullStamps counts how many times this layer has been rebuilt end to end
+	// by stampAll. It is a HOST diagnostic and nothing else: no simulation
+	// branch reads it, it consumes no random draw, and a host samples it
+	// between ticks to attribute its own timing (docs/SIM_BENCHMARK.md). A
+	// full rebuild visits every attribute cell, so a host that sees this move
+	// knows the tick it just measured paid for one.
+	fullStamps uint64
 }
 
 // NewClassLayer allocates the layer for one class over the terrain and stamps
@@ -265,6 +273,24 @@ func (l *ClassLayer) StaticRevision() uint64 {
 // restampOccupantRect restamps the occupant rectangle at commit time —
 // neither route reads staticRevision, so no completed-structure writer
 // needs to bump it [04 §6.1][04 §8.2].
+// TODO(question): does retail's class-record refresh reclassify the WHOLE
+// layer on a blocking-feature change, or only the changed rectangle? It
+// matters for cost, not just tidiness: the full rebuild below re-reads every
+// cell's LIVE occupancy — the grid's occupant word, the mover predicate and
+// the commit tick — not only the terrain that actually changed, and that
+// re-read is load-bearing. A measured probe that kept the rebuild but skipped
+// its occupancy arm moved the partial state fingerprint and both RNG draw
+// totals, so the layer's occupancy view genuinely depends on being refreshed
+// wholesale here.
+//
+// That makes an incremental restamp over a dirty rectangle a BEHAVIOUR change
+// rather than an optimization, and it is the dominant remaining cost: 167
+// rebuilds over a 3000-tick benchmark window land on 162 ticks, every one of
+// them above 15 ms against a 2 ms median, and removing them entirely would
+// roughly halve the window's p95 (docs/SIM_BENCHMARK.md). What would settle
+// it: the owning research contract for the class record's refresh, saying
+// whether the sweep is whole-layer or rectangle-local and what it re-reads.
+// Until then this stays whole-layer.
 func (l *ClassLayer) syncStaticRevision() {
 	if l == nil || l.Terrain == nil {
 		return
@@ -621,6 +647,15 @@ func (c *ClassLayers) forEachLayer(fn func(*ClassLayer)) {
 			fn(l)
 		}
 	}
+}
+
+// FullStampCount is the total number of end-to-end layer rebuilds across every
+// allocated class layer, in allocation order [I1]. Host diagnostic only; it
+// allocates nothing and reads no clock.
+func (c *ClassLayers) FullStampCount() uint64 {
+	var total uint64
+	c.forEachLayer(func(l *ClassLayer) { total += l.fullStamps })
+	return total
 }
 
 // noteFootprintClear is the class-layer half of the footprint clear

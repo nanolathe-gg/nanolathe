@@ -144,9 +144,29 @@ type OccupancyGrid struct {
 	air   map[Cell]int // air plane: mode-2 movers only [04 R-COLL-01 §4]
 	rev   uint64       // profile revision [04 §7.4] C18 OW-3-O retained, lazy revalidation via search isPassable
 	// plot is the terrain whose 13-byte cells carry the same two planes as
-	// their first two words [03 §2.2]. Every stamp and clear writes it in the
-	// same call, so the map and the words are one store [04 R-COLL-01 §4].
-	// Fixtures that never bind terrain leave it nil and keep the maps alone.
+	// their first two words [03 §2.2]. Stamp and clear write it in the same
+	// call as the map [04 R-COLL-01 §4]. Fixtures that never bind terrain
+	// leave it nil and keep the maps alone.
+	//
+	// Correction: this used to add "so the map and the words are one store",
+	// which is not true and must not be relied on. The plot word is a SUPERSET
+	// of the map, and the two diverge in three established ways.
+	//
+	//  1. Construction reserves a placement rectangle by writing the ground
+	//     word alone, for a product that has no unit yet and therefore no
+	//     identity the overlap protocol could arbitrate
+	//     (internal/construction/placement.go's placement reservation).
+	//     StampPlane below deliberately leaves such a word standing.
+	//  2. An identity wider than the 16-bit word (occupancyWord's wordFits) is
+	//     filed in the map and in neither word [I13].
+	//  3. StampPlane takes the word only when it is free, already ours, or the
+	//     cell was displaced; the map entry is written whenever arbitration
+	//     succeeds.
+	//
+	// So the MAP is the occupancy authority the passability predicate reads,
+	// and OccupantAt must keep reading it. A dense read of the plot word would
+	// report a reserved cell as occupied by the reserved product and change
+	// what a mover may traverse.
 	plot *world.Terrain
 
 	// overlap and ownerState are the overlap protocol's two bindings

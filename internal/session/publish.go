@@ -322,7 +322,10 @@ func (s *Session) publishSnapshot(tick uint32) {
 			}
 			if q := orders.QueueOfUnit(u); q != nil && (q.LenPrimary() > 0 || q.LenSecondary() > 0) {
 				activeHead := q.Head()
-				queue := orders.SnapshotQueueOf(q, u.Handle, func(n *orders.Node) []orders.SnapshotRoutePoint {
+				// One staging value serves every unit and every tick: the
+				// snapshot is copied straight into the committed frame's own
+				// reused storage below, so nothing outlives the next call.
+				queue := orders.SnapshotQueueInto(s.orderSnapshotScratch, q, u.Handle, func(n *orders.Node) []orders.SnapshotRoutePoint {
 					// A route is authoritative only for the node that activated it;
 					// movement.Route is keyed by unit for that active binding. Do not
 					// attach a stale route to a queued node [04 §7.3].
@@ -333,14 +336,20 @@ func (s *Session) publishSnapshot(tick uint32) {
 					if r == nil || !r.Active || r.Count == 0 {
 						return nil
 					}
-					points := make([]orders.SnapshotRoutePoint, int(r.Count))
+					points := s.routePointScratch
+					if cap(points) < int(r.Count) {
+						points = make([]orders.SnapshotRoutePoint, int(r.Count))
+					}
+					points = points[:int(r.Count)]
 					for i := range points {
 						p := r.Points[i]
 						points[i] = orders.SnapshotRoutePoint{X: world.CellToWorld(p.X), Z: world.CellToWorld(p.Z)}
 					}
+					s.routePointScratch = points
 					return points
 				})
 				orderQueues = appendOrderQueueView(orderQueues, queue, s.Catalog)
+				s.orderSnapshotScratch = queue
 			}
 		}
 		published.Units = views

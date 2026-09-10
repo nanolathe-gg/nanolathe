@@ -281,3 +281,10 @@ with both `classic` and `modern` renderers when retail assets and a display are
 available. It exercises moving armies and factory construction. Inspect the
 feature census and captures as well as frame times; keep artifacts outside the
 repository. Run benchmarks sequentially and compare matching scene metadata.
+
+For a change to the authoritative tick alone, the displayless
+[simulation-cost benchmark](docs/SIM_BENCHMARK.md) (`tools/sim-bench`) measures
+ticks with no window, renderer or audio device: three 250-unit computer armies
+fighting on one map, with per-phase attribution, a census that proves the
+workload, and CPU and allocation profiles of the measured window. It shares the
+same host lock, so it never runs beside the windowed benchmark.

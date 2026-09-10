@@ -990,13 +990,42 @@ func (s *Service) DeliverCancelNotice(owner *units.Unit, node *orders.Node, tick
 	return true
 }
 
+// The rows the two per-unit predicates below test, resolved once.
+// orders.Lookup is a case-insensitive binary search over the descriptor
+// table's names — the right shape for the interface's spelling-tolerant
+// transmission, the wrong shape for a predicate called once per unit per tick.
+// The table is immutable after package initialization, so each answer is a
+// constant; Go initializes an imported package before the importing package's
+// variables, so these resolve after orders.buildTable has run.
+//
+// The two predicates together were resolving up to eight names per unit per
+// tick and measured 7.3% of authoritative tick time
+// (docs/SIM_BENCHMARK.md).
+var (
+	factoryBuildRow    = orders.Lookup(FactoryBuildOrder)
+	mobileBuildRow     = orders.Lookup(MobileBuildOrder)
+	vtolMobileBuildRow = orders.Lookup(VTOLMobileBuildOrder)
+	getBuiltRowID      = orders.Lookup(GetBuiltOrder)
+	// The standing/auto and rally rows of isStandingOpID, in its own test
+	// order. A zero id means the table names no such row, which the original
+	// spelled as an explicit `!= 0` guard on every arm; a zero row can never
+	// equal a live node's id, so the guard is preserved by construction.
+	standingOpRows = [...]orders.ID{
+		orders.Lookup("BeCarried"),
+		getBuiltRowID,
+		orders.Lookup("Park"),
+		orders.Lookup("QMove"),
+		orders.Lookup("QPatrol"),
+	}
+)
+
 // isBuildOrderID reports whether id is one of the three rows this service
 // drives: the factory row and the two mobile ones [04 §3.1].
 func isBuildOrderID(id orders.ID) bool {
-	if id == orders.Lookup(FactoryBuildOrder) {
+	if id == factoryBuildRow {
 		return true
 	}
-	if id == orders.Lookup(MobileBuildOrder) || id == orders.Lookup(VTOLMobileBuildOrder) {
+	if id == mobileBuildRow || id == vtolMobileBuildRow {
 		return true
 	}
 	// Also treat generic build via BuildingBuild fallback (already FactoryBuildOrder) – no other IDs are construction builds.
@@ -1074,20 +1103,13 @@ func (s *Service) Pump(factory *units.Unit, tick uint32) {
 // nodes are rally points for produced units, not movement orders for the
 // (immobile) factory itself.
 func isStandingOpID(id orders.ID) bool {
-	if bc := orders.Lookup("BeCarried"); bc != 0 && id == bc {
-		return true
+	if id == 0 {
+		return false
 	}
-	if gb := orders.Lookup("GetBuilt"); gb != 0 && id == gb {
-		return true
-	}
-	if pk := orders.Lookup("Park"); pk != 0 && id == pk {
-		return true
-	}
-	if qm := orders.Lookup("QMove"); qm != 0 && id == qm {
-		return true
-	}
-	if qp := orders.Lookup("QPatrol"); qp != 0 && id == qp {
-		return true
+	for _, row := range standingOpRows {
+		if id == row {
+			return true
+		}
 	}
 	return false
 }
@@ -1272,7 +1294,7 @@ func (s *Service) StepUnit(ctx TickContext, handle pool.Handle) WorkResult {
 	// keeps unit-local construction stepping composable without the old
 	// direct per-tick resolver; a preceding BeCarried record still exclusively
 	// controls when the walk can reach GetBuilt [04 R-FAC-02 §4].
-	if len(prim) > 0 && prim[0] != nil && prim[0].ID == orders.Lookup("GetBuilt") {
+	if len(prim) > 0 && prim[0] != nil && prim[0].ID == getBuiltRowID {
 		q.Pump(builder, tick)
 		prim = q.Primary()
 	}
@@ -1297,7 +1319,7 @@ func (s *Service) StepUnit(ctx TickContext, handle pool.Handle) WorkResult {
 		return WorkResult{Builder: handle, Product: head.Target, DefKey: head.BuildDefKey, Owner: builder.Owner, State: State(head.Phase)}
 	}
 	// Distinct descriptor check [P0-I05][04 §3.1]: factory BuildingBuild vs mobile MobileBuild/VTOL_MobileBuild.
-	factoryID := orders.Lookup(FactoryBuildOrder)
+	factoryID := factoryBuildRow
 	mobile := isMobileBuild(head.ID)
 	isMobBuilder := isMobileBuilder(builder)
 	var mismatch error

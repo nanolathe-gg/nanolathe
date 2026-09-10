@@ -126,7 +126,7 @@ package implements.
 | `internal/triggers` | Mission trigger records, parsing, evaluation, save form | DESIGN_SESSIONS_AI_SAVE |
 | `internal/ai` | The skirmish planner: profiles, manager and tasks, strategic refresh, candidate selection, placement, groups | DESIGN_SESSIONS_AI_SAVE |
 | `internal/save` | The retail HAPIBANK bank container and its boxes | DESIGN_SESSIONS_AI_SAVE |
-| `internal/headless` | Composes and advances an authoritative session with no window or device and emits the report | DESIGN_SESSIONS_AI_SAVE |
+| `internal/headless` | Composes and advances an authoritative session with no window or device and emits the report; also hosts the simulation-cost benchmark's fixture, timing and census | DESIGN_SESSIONS_AI_SAVE, SIM_BENCHMARK |
 
 ### Interface and presentation
 
@@ -143,7 +143,7 @@ package implements.
 | `internal/audio` | The eight-slot cue queue, sample decode and cache, positional attenuation, music, briefing speech | DESIGN_PRESENTATION_CLIENT |
 | `internal/audiobackend` | The desktop PCM device boundary behind `internal/audio` | DESIGN_PRESENTATION_CLIENT |
 | `internal/platform/ebitenapp` | The Ebitengine adapter: window and loop lifecycle, device input polling, framebuffer upload, the classic/modern executor switch | DESIGN_PRESENTATION_CLIENT |
-| `internal/platform/benchlock` | Host file lock serializing benchmark startup and execution across worktrees | BATTLE_BENCHMARK |
+| `internal/platform/benchlock` | Host file lock serializing benchmark startup and execution across worktrees | BATTLE_BENCHMARK, SIM_BENCHMARK |
 | `internal/drawlist` | The recorded committed-frame draw list: command families carrying physical palette indices, the `Sink` executor interface, ordered replay and model packet boundary | DESIGN_GPU_RENDERER |
 | `internal/platform/gpurender` | The modern executor: replays a draw list through Ebitengine in palette-index space, table textures, atlases, per-subject GPU model prototypes, expansion to RGB | DESIGN_GPU_RENDERER |
 | `internal/upscale` | Load-time 2× synthesis of terrain tiles and feature sprite banks from the map's own pixels, with the on-disk cache; the `tools/mapupscale` synthesizers are wrappers over it | DESIGN_GPU_RENDERER §14 |

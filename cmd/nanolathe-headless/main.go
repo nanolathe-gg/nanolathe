@@ -20,13 +20,27 @@ import (
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
 func run(args []string, stdout, stderr io.Writer) int {
-	request, reportPath, profiles, err := parse(args, stderr)
+	request, reportPath, profiles, bench, err := parse(args, stderr)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	// The simulation-cost benchmark is a second mode of the same displayless
+	// host: the same composition seam, the same Step loop, a fixture scene and
+	// host-side measurement around it (docs/SIM_BENCHMARK.md).
+	if bench.OutputDir != "" {
+		bench.Root = request.Root
+		bench.Difficulty = request.Difficulty
+		bench.Seed = request.SimulationSeed
+		bench.Log = stderr
+		if _, err := headless.RunSimBenchmark(bench); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
 	}
 	// Profiling wraps the session but never enters it: the sampler is a host
 	// concern and the authoritative run is bit-identical with or without it
@@ -117,12 +131,14 @@ func (p profileOptions) writeHeap() error {
 	return nil
 }
 
-func parse(args []string, output io.Writer) (headless.Request, string, profileOptions, error) {
+func parse(args []string, output io.Writer) (headless.Request, string, profileOptions, headless.SimBenchOptions, error) {
 	var request headless.Request
 	var reportPath string
 	var profiles profileOptions
+	var bench headless.SimBenchOptions
 	var seed int64
 	var ticks int64
+	var warmup, measured int64
 	flags := flag.NewFlagSet("nanolathe-headless", flag.ContinueOnError)
 	flags.SetOutput(output)
 	flags.StringVar(&request.Root, "root", defaultRoot(), "retail install root (or $NANOLATHE_TA_ROOT)")
@@ -134,14 +150,27 @@ func parse(args []string, output io.Writer) (headless.Request, string, profileOp
 	flags.StringVar(&reportPath, "report", "", "JSON report path (default stdout)")
 	flags.StringVar(&profiles.cpuPath, "cpuprofile", "", "write a pprof CPU profile of the authoritative run to this file")
 	flags.StringVar(&profiles.heapPath, "memprofile", "", "write a pprof allocation profile of the authoritative run to this file")
+	flags.StringVar(&bench.OutputDir, "sim-benchmark", "", "run the simulation-cost benchmark and write its artifacts to this NEW directory")
+	flags.StringVar(&bench.Map, "sim-benchmark-map", headless.SimBenchDefaultMap, "map for the simulation-cost benchmark scene")
+	flags.Int64Var(&warmup, "warmup-ticks", int64(headless.SimBenchDefaultWarmupTicks), "unmeasured ticks run before the benchmark window opens")
+	flags.Int64Var(&measured, "benchmark-ticks", int64(headless.SimBenchDefaultMeasureTicks), "measured authoritative ticks in the benchmark window")
+	flags.IntVar(&bench.UnitLimit, "unit-limit", headless.SimBenchDefaultUnitLimit, "configured per-player unit limit for the benchmark scene")
+	flags.IntVar(&bench.CensusCount, "census-samples", headless.SimBenchDefaultCensusCount, "census samples taken across the benchmark window")
+	flags.BoolVar(&bench.PhaseTiming, "phase-timing", true, "attribute measured time to the twelve authoritative phases")
+	flags.BoolVar(&bench.Profiles, "benchmark-profiles", true, "write cpu.pprof and the allocation profile pair for the measured window")
 	if err := flags.Parse(args); err != nil {
-		return request, reportPath, profiles, err
+		return request, reportPath, profiles, bench, err
 	}
 	if ticks < 0 || uint64(ticks) > uint64(^uint32(0)) {
-		return request, reportPath, profiles, fmt.Errorf("nanolathe: tick limit is outside the non-negative 32-bit battle boundary")
+		return request, reportPath, profiles, bench, fmt.Errorf("nanolathe: tick limit is outside the non-negative 32-bit battle boundary")
 	}
+	if warmup < 0 || uint64(warmup) > uint64(^uint32(0)) || measured <= 0 || uint64(measured) > uint64(^uint32(0)) {
+		return request, reportPath, profiles, bench, fmt.Errorf("nanolathe: benchmark window is outside the non-negative 32-bit battle boundary: logical path <command line>, providers searched [none], expected a warm-up of 0 or more ticks and a measured window of 1 or more")
+	}
+	bench.WarmupTicks = uint32(warmup)
+	bench.MeasureTicks = uint32(measured)
 	if request.Difficulty < 0 || request.Difficulty > 2 {
-		return request, reportPath, profiles, fmt.Errorf("nanolathe: difficulty %d is outside the 0..2 battle vocabulary: logical path <command line>, providers searched [none], expected 0 easy, 1 medium, or 2 hard", request.Difficulty)
+		return request, reportPath, profiles, bench, fmt.Errorf("nanolathe: difficulty %d is outside the 0..2 battle vocabulary: logical path <command line>, providers searched [none], expected 0 easy, 1 medium, or 2 hard", request.Difficulty)
 	}
 	if seed < 0 {
 		now := time.Now()
@@ -152,7 +181,7 @@ func parse(args []string, output io.Writer) (headless.Request, string, profileOp
 		request.CRTSeed = uint32(seed)
 	}
 	request.TickLimit = uint32(ticks)
-	return request, reportPath, profiles, nil
+	return request, reportPath, profiles, bench, nil
 }
 
 func defaultRoot() string {

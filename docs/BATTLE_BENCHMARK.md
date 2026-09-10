@@ -1,5 +1,11 @@
 # Live battle benchmark
 
+This benchmark measures simulation **and** presentation together, through a real
+window. To measure the authoritative tick on its own — no window, no renderer,
+no audio device — use the displayless
+[simulation-cost benchmark](SIM_BENCHMARK.md) instead; it takes the same host
+lock, so the two never run at once.
+
 Run from a worktree with the retail installation available. The default scene
 is Ashap Plateau, seed 7, 1920×1080, 80 mobile units and 16 buildings per side,
 plus the normal starting commanders. Labs queue ten Peewees/AKs through normal

@@ -246,9 +246,20 @@ func bindRenderFlags(binding *cob.Binding, modelFlags []uint8) {
 		return
 	}
 	mf, pm := modelFlags, binding.PieceMap
+	// The getter is called several times per unit per tick — every render-flag
+	// read, every cache-validity test, every save or snapshot walk — and used
+	// to allocate a fresh slice on each call: 3.0 million of them over a
+	// 3000-tick benchmark window, the largest single object producer in the
+	// simulation (docs/SIM_BENCHMARK.md). The projection is a pure function of
+	// two slices that outlive the binding, so one buffer serves every call.
+	// Every reader of the result treats it as read-only: the flag WRITER is
+	// the setter below, which goes straight to the model record, and the one
+	// caller that writes through a returned slice (internal/cob's retail
+	// restore) takes that path only when no getter is bound at all.
+	scratch := make([]uint8, len(pm))
 	binding.Callbacks.BindRenderFlags(
 		func() []uint8 {
-			flags := make([]uint8, len(pm))
+			flags := scratch
 			for i, modelPiece := range pm {
 				if modelPiece >= 0 && modelPiece < len(mf) {
 					flags[i] = mf[modelPiece]

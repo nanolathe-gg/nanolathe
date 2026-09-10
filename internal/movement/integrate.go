@@ -713,6 +713,19 @@ func (s *System) ensureLayerRegistry() *ClassLayers {
 	return s.layerRegistry
 }
 
+// ClassLayerFullStamps is the running total of end-to-end class-layer rebuilds
+// this system has performed. A host samples it between ticks to attribute its
+// own wall-clock measurements (docs/SIM_BENCHMARK.md); no simulation branch
+// reads it, it consumes no random draw and it reads no clock [I6]. It returns
+// zero before the registry exists rather than creating one, so a diagnostic
+// read cannot bring a layer into being.
+func (s *System) ClassLayerFullStamps() uint64 {
+	if s == nil || s.layerRegistry == nil {
+		return 0
+	}
+	return s.layerRegistry.FullStampCount()
+}
+
 // World returns the bound units world, if any.
 func (s *System) World() *units.World {
 	if s == nil {
@@ -3032,7 +3045,15 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		d := s.distToGoal(u)
 		return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false}
 	}
-	_ = s.resolveProfile(u) // retained for profile revision side-effects if any; outer profile not needed for pitch path [M2]
+	// The discarded `_ = s.resolveProfile(u)` that stood here is gone. It was
+	// kept "for profile revision side-effects if any"; there are none —
+	// resolveProfile trims a string, reads the class map and returns a value
+	// built by NewProfile or NewScratchProfile, both pure. Its only observable
+	// effect was folding the definition's movement-class name to a canonical
+	// key on every ground mover step, which allocated a string per unit per
+	// tick and was the second-largest object producer in the simulation
+	// (docs/SIM_BENCHMARK.md). The unit's profile is resolved once, in
+	// EnsureUnit, and read from s.profiles thereafter [04 §6.1].
 	var brakingOnly bool
 	if orderless {
 		// No payload, so no arrival test and no goal distance to consult: the

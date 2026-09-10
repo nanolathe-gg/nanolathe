@@ -532,9 +532,29 @@ func (b *CallbackBridge) QueryLandingPad() CallbackResult {
 	return b.Query("QueryLandingPad", QueryLandingPadSeed())
 }
 
+// weaponSlotCallbackNames is the four per-slot script entry-point name triples
+// this bridge asks for, spelled out. They used to be built by concatenating the
+// prefix with the slot's word on every callback, which allocated a string per
+// weapon callback per tick — 590 000 of them over a 3000-tick benchmark window
+// and the third-largest object producer in the simulation
+// (docs/SIM_BENCHMARK.md). The names are a closed set of twelve and the
+// entry points they resolve are the same ones [R-COB-02 §1].
+var weaponSlotCallbackNames = map[string][3]string{
+	"Query":   {"QueryPrimary", "QuerySecondary", "QueryTertiary"},
+	"AimFrom": {"AimFromPrimary", "AimFromSecondary", "AimFromTertiary"},
+	"Aim":     {"AimPrimary", "AimSecondary", "AimTertiary"},
+	"Fire":    {"FirePrimary", "FireSecondary", "FireTertiary"},
+}
+
+// weaponCallbackName resolves one slot's entry point for a prefix. The lookup
+// is keyed, never ranged [I1], and a prefix the table does not name falls back
+// to the concatenation so a new caller cannot silently resolve to nothing.
 func weaponCallbackName(slot WeaponSlot, prefix string) (string, bool) {
 	if slot > WeaponTertiary {
 		return "", false
+	}
+	if names, ok := weaponSlotCallbackNames[prefix]; ok {
+		return names[slot], true
 	}
 	names := [...]string{"Primary", "Secondary", "Tertiary"}
 	return prefix + names[slot], true

@@ -88,6 +88,22 @@ func (ns *NodeStore) Scale() int32 { return ns.scale }
 // keep their already-computed F (h is write-once) [04 §7.2] C7.
 func (ns *NodeStore) SetScale(scale int32) { ns.scale = scale }
 
+// TODO(question): pooling this store across searches did not pay. The
+// scheduler holds one session per unit and replaces it whenever the goal or
+// activation changes, and Alloc's growth was 37% of everything the simulation
+// allocated after the publication boundary was fixed, so reuse looked
+// worthwhile. It was implemented, measured and reverted: allocated bytes and
+// objects per tick did not move at all (0.378 MB / 1475 objects either way) and
+// the median tick was 2% SLOWER across three runs. The reason is that Go's
+// current map implementation releases a large map's storage on clear, so the
+// pooled per-cell table re-grows regardless, and the node array's growth is
+// dominated by searches that expand more nodes than the previous search on the
+// same unit. Reuse only added the clear. What would change the answer: a dense
+// generation-stamped node table indexed by cell instead of the map — which is a
+// different search data structure, not a pooling change, and would have to be
+// proven not to alter visit order or open-set tie-breaking before it could be
+// gated on the fingerprint.
+
 // Reset clears all nodes but retains the scale.
 func (ns *NodeStore) Reset() {
 	ns.nodes = ns.nodes[:1]

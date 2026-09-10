@@ -49,6 +49,11 @@ func snapshotOrderViewsInto(dst []frame.OrderView, src []orders.SnapshotNode, ca
 		i := len(dst)
 		dst = dst[:i+1]
 		route := dst[i].Route
+		// The row's displayed name and state label are a constant function of
+		// its descriptor id, so the snapshot carries the id and this boundary
+		// resolves the two strings. The frame's order view keeps both fields
+		// and both keep their exact previous values [I6].
+		descriptor := orders.DescriptorFor(orders.ID(n.DescriptorID))
 		var footX, footZ int8
 		if cat != nil && n.BuildProduct != "" {
 			if def, ok := cat.Unit(n.BuildProduct); ok && def != nil {
@@ -58,7 +63,7 @@ func snapshotOrderViewsInto(dst []frame.OrderView, src []orders.SnapshotNode, ca
 		dst[i] = frame.OrderView{
 			Unit: n.Owner, Target: n.Target,
 			GoalX: n.GoalX, GoalY: n.GoalY, GoalZ: n.GoalZ,
-			Kind: n.Kind, StateLabel: n.State, MoveState: n.MoveState,
+			Kind: descriptor.Name, StateLabel: descriptor.StateLabel, MoveState: n.MoveState,
 			List: n.List, Index: n.Index, DescriptorID: n.DescriptorID,
 			Phase: n.Phase, CreationTick: n.CreationTick, Flags: n.Flags,
 			DynamicGate: n.DynamicGate, Deadline: n.Deadline,

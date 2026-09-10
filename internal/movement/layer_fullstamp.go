@@ -5,6 +5,9 @@ package movement
 // non-clear cells lets each window advance without reclassifying overlapping
 // cells or changing the strict full-stamp bounds.
 func (l *ClassLayer) stampAll() {
+	// Host diagnostic, counted before the early return so a caller that
+	// clears the layer wholesale is counted as the full rebuild it is.
+	l.fullStamps++
 	fx, fz := l.footprintSize()
 	if fx > l.W || fz > l.H {
 		clear(l.cells)

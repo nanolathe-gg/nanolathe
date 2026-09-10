@@ -1,0 +1,11 @@
+#!/bin/sh
+# Simulation-cost benchmark: authoritative ticks only, no window, no renderer,
+# no audio device. Retail assets required. Output directory must be new.
+# See docs/SIM_BENCHMARK.md.
+set -eu
+cd "$(git rev-parse --show-toplevel)"
+# A binary built inside a git worktree carries no VCS stamp of its own, so the
+# revision is passed for the report's provenance block.
+NANOLATHE_BENCH_REVISION="$(git rev-parse --short HEAD)$(git diff --quiet || echo -dirty)"
+export NANOLATHE_BENCH_REVISION
+exec go run ./cmd/nanolathe-headless --sim-benchmark "$@"

@@ -1402,11 +1402,17 @@ func snapToOwnFootprint(x, z numeric.Fixed, fx, fz int32) (numeric.Fixed, numeri
 // of the reported sideways and backwards flight, because it supplies no command
 // heading at all.
 func (s *System) stepAir(u *units.Unit, tick uint32) StepResult {
-	// The pump-driven air executors below reach the order pump through this
-	// binding; rebinding is a pointer write, so doing it here costs nothing and
-	// needs no state on System (integrate.go owns that type).
-	s.BindAirOrderLegs()
-
+	// The pump-driven air executors below reach the order pump through the
+	// queue binding, and the queue binding is NOT this function's business.
+	// Session composition installs it: internal/session's bindOrderQueue at
+	// creation, bindExistingOrderQueues at battle entry, and
+	// bindExistingOrderQueue immediately before every PumpUnit call in phase 5
+	// — the only place the binding is read. This used to call
+	// BindAirOrderLegs here on the belief that "rebinding is a pointer write,
+	// so doing it here costs nothing". It is not a pointer write: it is a
+	// sweep of the whole unit pool, once per aircraft per tick, and it was 53%
+	// of authoritative tick time and half of all bytes allocated
+	// (docs/SIM_BENCHMARK.md).
 	handle := u.Handle
 	fl := s.Flights[handle]
 	if fl == nil {
@@ -1587,6 +1593,23 @@ func (s *System) BindAirOrderLegs() {
 // above describes. The slice is fixed and ordered, never a map (I1).
 var airRowsDrivenByMoverTick = []string{"VTOL_Standby"}
 
+// airRowIDsDrivenByMoverTick is the same list resolved once. orders.Lookup is
+// a case-insensitive binary search over the descriptor table's names, which is
+// the right shape for the interface's spelling-tolerant transmission and the
+// wrong shape for a per-queue registration: the table is immutable after
+// package initialization, so the answer is a constant. Go initializes an
+// imported package before the importing package's variables, so this resolves
+// after orders.buildTable has run.
+var airRowIDsDrivenByMoverTick = resolveAirRowIDs()
+
+func resolveAirRowIDs() []orders.ID {
+	out := make([]orders.ID, 0, len(airRowsDrivenByMoverTick))
+	for _, name := range airRowsDrivenByMoverTick {
+		out = append(out, orders.Lookup(name))
+	}
+	return out
+}
+
 // RegisterOrderHandlers declares this system's ownership of those rows on q,
 // through the order package's per-queue registration seam. It is the statement
 // that replaced the descriptor table's DriverExternalMachine value: the pump
@@ -1601,8 +1624,8 @@ func (s *System) RegisterOrderHandlers(q *orders.Queue) {
 	if s == nil || q == nil {
 		return
 	}
-	for _, name := range airRowsDrivenByMoverTick {
-		q.SetExternallyDrivenHandler(orders.Lookup(name))
+	for _, id := range airRowIDsDrivenByMoverTick {
+		q.SetExternallyDrivenHandler(id)
 	}
 }
 

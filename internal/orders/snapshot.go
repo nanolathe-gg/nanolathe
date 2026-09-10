@@ -19,11 +19,15 @@ type SnapshotRoutePoint struct {
 // Param1..3 and BuildCount are retained even where a descriptor's meaning is
 // unresolved; presentation must not invent icons or draw masks.
 type SnapshotNode struct {
-	Owner                  pool.Handle
-	Target                 pool.Handle
-	GoalX, GoalY, GoalZ    numeric.Fixed
-	Kind                   string
-	State                  string
+	Owner               pool.Handle
+	Target              pool.Handle
+	GoalX, GoalY, GoalZ numeric.Fixed
+	// DescriptorID names the row. The descriptor's Name and StateLabel used to
+	// be copied in beside it, which put two more pointers in every element of
+	// an array rebuilt for every unit every tick — pointers the collector then
+	// had to scan. They are a constant function of this id: a reader resolves
+	// them with DescriptorFor at the point of use, exactly as the frame's
+	// order view now does.
 	DescriptorID           int32
 	Phase                  uint8
 	MoveState              uint8
@@ -71,18 +75,32 @@ type RouteProvider func(node *Node) []SnapshotRoutePoint
 // The queue itself remains untouched. Truncation is explicit and deterministic
 // when a presentation bound is exceeded.
 func SnapshotQueueOf(q *Queue, unit pool.Handle, route RouteProvider) SnapshotQueue {
-	out := SnapshotQueue{Unit: unit}
+	return SnapshotQueueInto(SnapshotQueue{}, q, unit, route)
+}
+
+// SnapshotQueueInto is SnapshotQueueOf with caller-owned destination storage.
+// The publication boundary calls it once per unit per tick, so allocating both
+// segment arrays and every node's route each time was a third of everything
+// the simulation allocated (docs/SIM_BENCHMARK.md). Pass back the value a
+// previous call returned and its slices are refilled in place.
+//
+// The returned value aliases dst's arrays, so a caller must consume it before
+// the next call — which the publication boundary does: it copies straight into
+// the committed frame's own reused storage.
+func SnapshotQueueInto(dst SnapshotQueue, q *Queue, unit pool.Handle, route RouteProvider) SnapshotQueue {
+	out := SnapshotQueue{Unit: unit, Primary: dst.Primary[:0], Secondary: dst.Secondary[:0]}
 	if q == nil {
 		return out
 	}
-	out.Primary, out.PrimaryTruncated = snapshotList(q.primary, 0, route)
-	out.Secondary, out.SecondaryTruncated = snapshotList(q.secondary, 1, route)
+	out.Primary, out.PrimaryTruncated = snapshotList(out.Primary, q.primary, 0, route)
+	out.Secondary, out.SecondaryTruncated = snapshotList(out.Secondary, q.secondary, 1, route)
 	return out
 }
 
-func snapshotList(src []*Node, list uint8, route RouteProvider) ([]SnapshotNode, bool) {
+func snapshotList(dst []SnapshotNode, src []*Node, list uint8, route RouteProvider) ([]SnapshotNode, bool) {
+	dst = dst[:0]
 	if len(src) == 0 {
-		return nil, false
+		return dst, false
 	}
 	n := len(src)
 	truncated := false
@@ -90,19 +108,24 @@ func snapshotList(src []*Node, list uint8, route RouteProvider) ([]SnapshotNode,
 		n = MaxSnapshotOrdersPerList
 		truncated = true
 	}
-	dst := make([]SnapshotNode, n)
+	if cap(dst) < n {
+		grown := make([]SnapshotNode, n)
+		copy(grown, dst[:cap(dst)])
+		dst = grown
+	}
+	dst = dst[:n]
 	for i := 0; i < n; i++ {
+		// Keep the element's route storage across the rewrite; everything
+		// else is overwritten unconditionally below.
+		reusedRoute := dst[i].Route[:0]
 		node := src[i]
 		if node == nil {
-			dst[i].List = list
-			dst[i].Index = uint16(i)
+			dst[i] = SnapshotNode{List: list, Index: uint16(i), Route: reusedRoute}
 			continue
 		}
-		d := DescriptorFor(node.ID)
 		dst[i] = SnapshotNode{
 			Owner: node.Owner, Target: node.Target,
 			GoalX: node.GoalX, GoalY: node.GoalY, GoalZ: node.GoalZ,
-			Kind: d.Name, State: d.StateLabel,
 			DescriptorID: int32(node.ID), Phase: node.Phase,
 			MoveState: node.MoveState, List: list, Index: uint16(i),
 			CreationTick: node.CreationTick, Flags: node.Flags,
@@ -110,9 +133,10 @@ func snapshotList(src []*Node, list uint8, route RouteProvider) ([]SnapshotNode,
 			Satisfied: node.Satisfied, PathStatus: node.PathStatus,
 			Param1: node.Param1, Param2: node.Param2, Param3: node.Param3,
 			BuildProduct: node.BuildDefKey, BuildCount: node.Param2,
+			Route: reusedRoute,
 		}
 		if route != nil {
-			dst[i].Route = cloneRoute(route(node))
+			dst[i].Route = cloneRouteInto(reusedRoute, route(node))
 			dst[i].RouteTruncated = len(dst[i].Route) > MaxSnapshotRoutePoints
 			if dst[i].RouteTruncated {
 				dst[i].Route = dst[i].Route[:MaxSnapshotRoutePoints]
@@ -122,11 +146,14 @@ func snapshotList(src []*Node, list uint8, route RouteProvider) ([]SnapshotNode,
 	return dst, truncated
 }
 
-func cloneRoute(src []SnapshotRoutePoint) []SnapshotRoutePoint {
-	if len(src) == 0 {
-		return nil
+// cloneRouteInto copies src into dst's storage, growing it when it is too
+// small. An empty source keeps the (emptied) destination rather than returning
+// nil, so the element's buffer survives to the next publication.
+func cloneRouteInto(dst, src []SnapshotRoutePoint) []SnapshotRoutePoint {
+	if cap(dst) < len(src) {
+		dst = make([]SnapshotRoutePoint, len(src))
 	}
-	dst := make([]SnapshotRoutePoint, len(src))
+	dst = dst[:len(src)]
 	copy(dst, src)
 	return dst
 }

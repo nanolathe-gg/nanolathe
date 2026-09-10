@@ -16,6 +16,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/mission"
 	"github.com/nanolathe-gg/nanolathe/internal/movement"
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/path"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/render"
@@ -163,6 +164,16 @@ type Session struct {
 
 	publication *publicationState // staged events and admitted effects at the committed-frame boundary [01 §4.4][03 §1]
 	debris      *render.DebrisPool
+	// orderSnapshotScratch and routePointScratch are the publication
+	// boundary's reusable staging for one unit's order queue. Every value in
+	// them is overwritten or truncated before it is read, and the snapshot is
+	// copied into the committed frame's own storage in the same iteration, so
+	// no tick can observe the tick before it. They exist because the queue
+	// snapshot ran for every unit every tick and was a third of everything the
+	// simulation allocated.
+	orderSnapshotScratch orders.SnapshotQueue
+	routePointScratch    []orders.SnapshotRoutePoint
+
 	// featurePublicationScratch is reused only while copying feature values.
 	// Entries are cleared before publication returns, so retired records are not retained.
 	featurePublicationScratch []*features.Instance
@@ -334,6 +345,18 @@ type Session struct {
 	phaseTrace        []string
 	phaseTraceEnabled bool
 	phaseDrawTrace    []PhaseDrawDelta
+
+	// PhaseObserver is a HOST-side boundary notification, called once as each
+	// of the twelve phases completes, in phase order [01 §4.4][I7]. It exists
+	// so a host can attribute its own wall-clock measurements to phases
+	// without a sim package ever reading a clock [I6]: the session passes the
+	// phase name and the tick label, and the HOST stamps the time. It takes no
+	// part in any simulation decision, draws no random number and writes no
+	// authoritative field, so a run with an observer installed produces the
+	// same tick sequence as one without — the displayless benchmark verifies
+	// that by fingerprint (docs/SIM_BENCHMARK.md). Nil unless a host sets it,
+	// and the nil test is the whole cost when unset.
+	PhaseObserver func(phase string, tick uint32)
 
 	// Visibility sensor state [03 §3.4] P0-11: per-unit status bits (0x100
 	// seen, 0x300 friendly, 0x1000 decloak). The proximity breach's `tick + 90`
@@ -519,7 +542,16 @@ func (s *Session) PhaseDrawDeltas() []PhaseDrawDelta {
 }
 
 func (s *Session) recordPhase(name string, tick uint32) {
-	if s == nil || !s.phaseTraceEnabled {
+	if s == nil {
+		return
+	}
+	// The host boundary notification is independent of the draw trace: a
+	// benchmark wants the phase boundaries without paying for the RNG census,
+	// and a determinism test wants the census without a host callback [I6].
+	if s.PhaseObserver != nil {
+		s.PhaseObserver(name, tick)
+	}
+	if !s.phaseTraceEnabled {
 		return
 	}
 	s.phaseTrace = append(s.phaseTrace, name)

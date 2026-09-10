@@ -13,7 +13,7 @@ import (
 )
 
 func TestParseBuildsExplicitSeedPair(t *testing.T) {
-	request, _, _, err := parse([]string{"-root", "/tmp/assets", "-map", "test", "-seed", "23", "-ticks", "7"}, &bytes.Buffer{})
+	request, _, _, _, err := parse([]string{"-root", "/tmp/assets", "-map", "test", "-seed", "23", "-ticks", "7"}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,13 +28,13 @@ func TestParseBuildsExplicitSeedPair(t *testing.T) {
 // parse with a nanolathe-shaped diagnostic rather than reach the session.
 func TestParseRejectsDifficultyOutsideTheVocabulary(t *testing.T) {
 	for _, difficulty := range []string{"-1", "3"} {
-		if _, _, _, err := parse([]string{"-map", "test", "-difficulty", difficulty}, &bytes.Buffer{}); err == nil {
+		if _, _, _, _, err := parse([]string{"-map", "test", "-difficulty", difficulty}, &bytes.Buffer{}); err == nil {
 			t.Fatalf("parse with -difficulty %s unexpectedly succeeded", difficulty)
 		} else if !strings.HasPrefix(err.Error(), "nanolathe: ") {
 			t.Fatalf("parse with -difficulty %s error = %q, want a nanolathe-shaped diagnostic", difficulty, err)
 		}
 	}
-	if _, _, _, err := parse([]string{"-map", "test", "-difficulty", "2"}, &bytes.Buffer{}); err != nil {
+	if _, _, _, _, err := parse([]string{"-map", "test", "-difficulty", "2"}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("parse with -difficulty 2 = %v, want no error", err)
 	}
 }
