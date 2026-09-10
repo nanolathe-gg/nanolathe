@@ -329,7 +329,7 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 	// it can write is in the pipeline's digest, so a drain that changed what
 	// the recorder reads discards the pre-record rather than presenting a list
 	// recorded before it (§13.10).
-	a.c.TickPresentationAudio()
+	a.c.BeginPresentationFrame()
 	tick16 := a.c.ResolveTickFraction()
 	// Present at the fraction the list was predicted for when the prediction
 	// held to within one present interval, and take the exact path when it did

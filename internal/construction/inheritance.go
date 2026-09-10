@@ -254,58 +254,13 @@ func (s *Service) handleCancelCurrent(factory *units.Unit, node *orders.Node, ti
 	}
 	refund := float32(numeric.TruncateFloat32ToLow32((1 - remaining) * metalCost)) // trunc toward zero [01 §8] I3
 
-	// Normally add to builder's metal bucket UNLESS special second state [05 C21].
-	// Apply via economy mirror bucket Production.
-	if s.Economy != nil {
-		pIdx := int(factory.Owner)
-		if pIdx >= 0 && pIdx < len(s.Economy.Players) {
-			player := &s.Economy.Players[pIdx]
-			isSpecial := false
-			if s.IsSpecialSecondState != nil {
-				isSpecial = s.IsSpecialSecondState(factory.Owner)
-			}
-			if isSpecial {
-				// The computer player's difficulty scaling. This site is one of
-				// the fourteen members of that family, and every one of them
-				// pairs the constants the same way: selector 0 credits a HALF,
-				// selector 1 seven tenths, any other selector the whole amount
-				// [05 R-ECO-01 §3][05 R-ECO-01 §11].
-				//
-				// Correction (PT3-05 follow-up). This arm used to read
-				// `case 0: += refund * -0.7` and `case 1: += refund * -0.5`,
-				// under a comment stating the pairing was inverted relative to
-				// the ledger's negative-`energyuse` site and instructing that it
-				// must not be harmonized. Both halves were wrong, and the
-				// executable settles both: the pairing is uniform across all
-				// fourteen sites, this one included, and the scaled arm is a
-				// REDUCED CREDIT rather than a debit — the site forms
-				// `accumulator - refund * (-0.5)`, which ADDS half the refund.
-				// The old arm subtracted seven tenths of it, so cancelling a
-				// build CHARGED a computer player metal where retail pays it
-				// back at a discount, and charged it the wrong fraction. The
-				// "do not harmonize" instruction is retired with the reading it
-				// defended.
-				//
-				// The fraction is applied to the float32 refund rather than
-				// through internal/economy's single-narrowing helper: retail
-				// forms the product and the subtraction at working precision and
-				// narrows once [05 R-ECO-01 §3], where this rounds the product
-				// first. The refund is an integer-valued float32 (truncated
-				// above), so the two agree at every stock magnitude; the
-				// residual is the same class as the one locked in
-				// internal/economy's reclaim-credit tests, and closing it means
-				// moving this site onto that helper.
-				switch s.ModeSelector {
-				case 0:
-					player.Mirror[economy.Metal].Production += refund * 0.5 // credit one half [05 R-ECO-01 §11]
-				case 1:
-					player.Mirror[economy.Metal].Production += refund * 0.7 // credit seven tenths [05 R-ECO-01 §11]
-				default:
-					player.Mirror[economy.Metal].Production += refund
-				}
-			} else {
-				player.Mirror[economy.Metal].Production += refund
-			}
+	// The refund belongs to the builder's unit account, gathered in slot order
+	// and only while that builder remains live [05 "Cancel-current and stop
+	// interrupts"][05 R-ECO-01 §2]. Owner admission stays at this call site.
+	if s.Economy != nil && int(factory.Owner) < len(s.Economy.Players) {
+		if buckets := s.Economy.UnitBuckets(factory.Handle); buckets != nil {
+			isSpecial := s.IsSpecialSecondState != nil && s.IsSpecialSecondState(factory.Owner)
+			creditConstructionRefund(&buckets[economy.Metal].Production, refund, isSpecial, s.ModeSelector)
 		}
 	}
 

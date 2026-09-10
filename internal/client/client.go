@@ -182,6 +182,9 @@ type Client struct {
 	// the group-digit walk retains the side font in fnt [07 R-HUD-03 §14.4]
 	// [03 R-FX-01 §6A].
 	messageFNT *formats.FNT
+	// messageLogos is the loaded LOGOS bank's player-colour entry, shared
+	// with the battle HUD [07 R-HUD-03 §14.4][07 R-HUD-04 §4].
+	messageLogos *formats.GAFEntry
 
 	modelFS   *vfs.FS
 	models    map[string]*unitModel
@@ -357,7 +360,10 @@ type Client struct {
 
 	// uiStage is the sole UI adapter. World ordering stays in drawCommittedFrame;
 	// cmd-owned authored surfaces run once at its final interface slot [03 §1].
-	uiStage UIStage
+	uiStage            UIStage
+	displayedResources DisplayedResources
+	// recordNextResources selects a pure prediction on the pre-record worker.
+	recordNextResources bool
 
 	in InputState
 
@@ -602,6 +608,9 @@ func (c *Client) SetMessageFNT(fnt *formats.FNT) { c.messageFNT = fnt }
 func (c *Client) SetSnapshot(b *frame.Buffer) {
 	if c != nil && b != nil && c.buffer != b {
 		c.resetFogCache()
+		// Battle entry and restore reset the display; View keeps this buffer
+		// and therefore retains the pair [07 R-HUD-03 §4].
+		c.displayedResources = DisplayedResources{}
 		c.buffer = b
 	}
 }

@@ -6305,7 +6305,8 @@ countdown below is 75..149 feature-phase visits, i.e. 2.5 to 5 seconds.
 5. `remote` is stored in the instance's remote bit (bit 3): a remotely
    commanded ignition never runs the burn event (§10 step 4).
 6. Play the named sound `treeburn` at the tile **corner** `(x·16, z·16)` in
-   16.16 — not the footprint centre.
+   16.16 — not the footprint centre. The call disables sound broadcast; it
+   still uses the ordinary positional audience and placement helper.
 7. If `remote == 0`, broadcast the 6-byte state command `(0x0F, 0xFE, x, z)`
    (only meaningful in a multiplayer session; the send is unconditional).
 
@@ -6315,7 +6316,20 @@ command; the reader then overwrites that fresh countdown with the saved
 countdown's high nibble (low nibble zero — the save keeps only the high
 nibble), and copies the saved accumulator word and cursor frame byte over
 the instance `[R-SAVE-FEATURE-01]`. The draw is therefore consumed but its
-value is discarded. [Established]
+value is discarded. The successful re-ignition also requests `treeburn` through
+step 6. [Established]
+
+**Established — unset sound height.** Ignition supplies the sound's X and Z
+but leaves its height input unset, dependent on transient caller state. The
+positional helper reads that height for the visibility projection and stereo
+placement; disabling broadcast does not disable those height consumers.
+
+**Unknown — stable height at invocation.** The value reaching the helper
+through ordinary damage, spread and save reload has not been established.
+Invocation provenance or manual retail evidence must settle it; neither terrain
+height nor the feature's centre height follows from the ignition path. The
+host uses deterministic zero height as an explicit placeholder, so its audience
+and placement may differ until this input is resolved.
 
 #### The feature phase, in order [R-FEAT-01 §10]
 
@@ -6921,6 +6935,10 @@ body and are not restated here.
   visits and resulting animation/RNG/publication order · [R-FEAT-01 §14] ·
   bounded burn-weapon teardown/reallocation/loop trace or the authored
   two-feature manual probe specified there.
+- The unset height input of the `treeburn` positional sound on damage, spread
+  and save-reload ignition; its effect on audience and stereo placement
+  · [R-FEAT-01 §9] · invocation provenance or manual retail evidence. The host
+  uses deterministic zero height pending that evidence.
 
 - Whether the slot-reuse observables — a land corpse launched upward by a
   stale shadow-cursor pointer, and a 3D wreck replaced by `featurereclamate`

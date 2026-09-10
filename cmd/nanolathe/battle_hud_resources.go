@@ -11,7 +11,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/hud"
 )
 
-func (h *retailBattleHUD) drawResources(c *client.Client, f *frame.Frame) {
+func (h *retailBattleHUD) drawResources(c *client.Client, f *frame.Frame, displayed client.DisplayedResources) {
 	var res *frame.EconomyView
 	for i := range f.Economy {
 		if f.Economy[i].Player == f.ViewingPlayer {
@@ -22,7 +22,7 @@ func (h *retailBattleHUD) drawResources(c *client.Client, f *frame.Frame) {
 	if res == nil {
 		return
 	}
-	// TODO(I10): use the viewing player's saved display deadline when that
+	// TODO(question): use the viewing player's saved display deadline when that
 	// presentation timing has an owner; this existing 30-tick latch stays
 	// intact on View [07 R-HUD-03 §4].
 	if !h.rateSampleOK || f.Tick < h.rateSampleTick || f.Tick-h.rateSampleTick >= 30 {
@@ -41,10 +41,10 @@ func (h *retailBattleHUD) drawResources(c *client.Client, f *frame.Frame) {
 	}
 	energyBar, _ := h.anchors.ByIndex(hud.AnchorEnergyBar)
 	metalBar, _ := h.anchors.ByIndex(hud.AnchorMetalBar)
-	h.drawResourceBar(c, energyBar, hud.ResourceFraction(res.Energy, res.EnergyCapacity), byte(energy))
-	h.drawResourceBar(c, metalBar, hud.ResourceFraction(res.Metal, res.MetalCapacity), byte(metal))
-	h.drawNumber(c, hud.AnchorEnergyNum, float32(res.Energy))
-	h.drawNumber(c, hud.AnchorMetalNum, float32(res.Metal))
+	h.drawResourceBar(c, energyBar, hud.ResourceFraction(displayed.Energy, res.EnergyCapacity), byte(energy))
+	h.drawResourceBar(c, metalBar, hud.ResourceFraction(displayed.Metal, res.MetalCapacity), byte(metal))
+	h.drawNumber(c, hud.AnchorEnergyNum, displayed.Energy)
+	h.drawNumber(c, hud.AnchorMetalNum, displayed.Metal)
 	h.drawNumberRight(c, hud.AnchorEnergyMax, res.EnergyCapacity)
 	h.drawNumberRight(c, hud.AnchorMetalMax, res.MetalCapacity)
 	h.drawTextAt(c, hud.AnchorEnergy0, "0", h.guiColor(15))

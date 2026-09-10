@@ -304,6 +304,7 @@ func TestTickProjectilesMixedBurstUsesCapturedSpanAfterOrdinaryImpact(t *testing
 	pBurst.Pos = anchorPos
 	pBurst.StartPos = anchorPos
 	pBurst.Velocity = Vec3{X: numeric.FixedFromInt(2)}
+	pBurst.Speed = numeric.FixedFromInt(2)
 	pBurst.BurstRemaining = 1
 	pBurst.BurstDeadline = 1
 	pBurst.ExpiryTick = 10

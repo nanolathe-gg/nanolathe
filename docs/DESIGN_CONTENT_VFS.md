@@ -367,12 +367,18 @@ as strings and nothing more: the runtime lookup is a case-insensitive search
 against the target definition's exact unit name, not a category lookup
 `[06 §9.2]`, and DESIGN_WEAPONS_PROJECTILES owns it.
 
-**C5 — parsed but inert weapon fields.** `range` defaults to 32767.
-`accuracy`, `tolerance` and `pitchtolerance` are parsed, stored and left
-unwired; they are not spread inputs `[06 §4.1]`.
+**C5 — compiled weapon fields and their consumers.** `range` defaults to 32767.
+`accuracy` feeds the turret spread; ballistic creation consumes those angles,
+while ordinary creation solves again from the aim point. `tolerance` and
+`pitchtolerance` feed the angular-drift gate. Combat owns these consumers
+`[06 R-WPN-03 §1]` `[06 R-WPN-05 §5]`.
 
-**C6 — movement classes.** Every class record starts from the startup
-template — 255 on `MaxSlope`, `BadSlope`, `MaxWaterSlope` and
+**C6 — movement classes.** Discovery probes exact `CLASS0` through `CLASS31`
+in numeric order, skips gaps, and uses the TDF accessor's first matching
+section. The catalog preserves the first numeric class for each authored name,
+matching FBI resolution's first case-insensitive match
+`[02 "Movement class record"]` `[02 §4]`. Every class record starts from the
+startup template — 255 on `MaxSlope`, `BadSlope`, `MaxWaterSlope` and
 `BadWaterSlope`, 10000 and −10000 on the depth limits — so an omitted key
 parses to the template value. The eight keys are read in order with their
 chained defaults (`badslope` is half the `maxslope` just read; `badwaterslope`

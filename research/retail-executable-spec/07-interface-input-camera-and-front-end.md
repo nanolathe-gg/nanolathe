@@ -4087,6 +4087,13 @@ stock is the eased display value of [05 R-ECO-01 §6] (an eighth of the
 integer gap per host frame, minimum step one, clamped to capacity), and the
 strip is repainted only when its snapshot changes.
 
+**Established — initialization and lifetime.** Battle entry clears both
+displayed stock values to zero before the first frame. Loading a saved battle
+rebuilds the world through the same entry reset, so restored live stocks also
+ease from zero. A viewing-player change retains both displayed values and
+continues easing toward the newly viewed player’s stocks; it does not perform
+this battle-entry reset.
+
 **Established — redraw condition.** The composer keeps a 33-byte snapshot —
 the viewing slot byte, then eight singles: displayed energy, latched energy
 produced, latched energy requested, displayed metal, latched metal produced,
@@ -6109,8 +6116,13 @@ the selected gadget index is the authored `BUTTON` byte plus four. The patch
 clears only the low grey bit, sets `commonattribs` to four, copies the product
 name into the gadget name, and sets the low per-record GAF flag bit. It leaves
 the separate art-name field alone. After all matching product patches, the
-ordinary window builder runs over the resulting records. The odd-GAF prepass
-therefore resolves each product's named gadget resource and retains both hits
+ordinary window builder runs over the resulting records. **Established —
+activation identity:** the battle-panel callback resolves this installed gadget
+name, as in step 5 of its chain above. `BUTTON+4` determines where a generated
+product is installed; it does not turn a click into an index into the builder's
+CANBUILD sequence or the appended download list. An ordinary physical page
+retains its authored gadget names wherever no generated patch replaces them.
+The odd-GAF prepass therefore resolves each product's named gadget resource and retains both hits
 and missing entries before any painter uses the record [R-WGT-01 §3].
 
 

@@ -869,7 +869,7 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	ok := false
 	ok = cur != nil
 	if ok && cur != nil {
-		h.drawResources(c, cur)
+		h.drawResources(c, cur, presented.Resources)
 		h.drawFooter(c, b, cur)
 	}
 	h.drawSidePage(c, b, cur)

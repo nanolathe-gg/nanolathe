@@ -244,6 +244,12 @@ type Service struct {
 	// [06 §13.1]. A nil seam is a fixture: no weapon fires.
 	BurnWeapon func(weapon string, pos [3]numeric.Fixed)
 
+	// BurnSound requests the successful ignition's treeburn cue at the anchor
+	// tile corner [05 R-FEAT-01 §9]. Session applies positional admission and
+	// publishes it through the committed frame; this callback never plays a
+	// backend sample or consumes authoritative RNG.
+	BurnSound func(pos [3]numeric.Fixed)
+
 	// GeothermalSteam is the steam-strip producer of [05 R-ECO-02 §3], reached
 	// from the feature stamp and nowhere else. The stamp calls it once, with the
 	// footprint centre and the sampled terrain height, for every successfully

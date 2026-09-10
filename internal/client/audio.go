@@ -95,12 +95,12 @@ func (c *Client) TickAudio() {
 		if current := c.buffer.Current(); current != nil {
 			committedTick = current.Tick
 		}
-		// Drain even with no audio owner bound: those events have no consumer
-		// either way, and leaving them queued would only grow the retention.
+		// Drain even with no audio owner bound: finished announcements still
+		// reach the ring, while audio-only requests have no playback consumer.
 		c.committedEvents = c.buffer.DrainCommittedEvents(c.committedEvents)
 	}
+	c.enqueueStatusEvents(committedTick, c.committedEvents)
 	if c.audioService != nil {
-		c.enqueueStatusEvents(committedTick, c.committedEvents)
 		// One drain per rendered frame keeps the queue's single pop and the MCI
 		// poll on the presentation cadence [03 §8.3] C18 [03 §8.4]; the
 		// accumulated positional cues are played inside it, in raise order.
@@ -130,17 +130,22 @@ func (c *Client) enqueueStatusEvents(ringTick uint32, events []frame.EventView) 
 		case frame.EventKindStatus:
 			// A unit torn down in its raise tick had its slot zeroed before
 			// publication; Emit refuses slot 0, which is that purge [03 R-AUD-01 §7].
-			_ = c.audioService.Emit(event.Tick, audio.Slot(event.StatusKind), event.Source, event.StatusText)
+			if c.audioService != nil {
+				_ = c.audioService.Emit(event.Tick, audio.Slot(event.StatusKind), event.Source, event.StatusText)
+			}
 		case frame.EventKindAnnounce:
 			// An announcement is a finished line: the session has already
 			// chosen the text, the class and the slot it is attributed to, so
 			// there is no caption composition and no voice request here — it
 			// goes straight into the ring, aged from its own raise tick
-			// [07 R-HUD-03 §14.3][08 R-CAMP-01 §9]. A line attributed to a
-			// real slot rather than to the no-speaker sentinel is stored but
-			// not yet drawn: drawMessageLines skips it because the speaker
-			// logo composition is not connected to the committed roster.
-			c.messages.Append(event.StatusText, event.StatusClass, 0, event.AnnounceSlot, event.Tick)
+			// [07 R-HUD-03 §14.3][08 R-CAMP-01 §9]. Only an accepted
+			// real-speaker line plays the arrival cue [07 R-HUD-03 §14.4].
+			// This retained-event drain runs once per event; recording or
+			// replaying the draw list has no audio side effects [I6].
+			accepted := c.messages.Append(event.StatusText, event.StatusClass, 0, event.AnnounceSlot, event.Tick)
+			if accepted && event.AnnounceSlot < frame.PlayerRowSlots && c.audioService != nil {
+				c.audioService.PlayUICue("MessageArrived")
+			}
 		}
 	}
 	c.messageEventsTick = ringTick

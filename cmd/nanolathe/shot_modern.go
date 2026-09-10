@@ -35,7 +35,9 @@ func captureModernShot(cl *client.Client, w, h int, mapName string, profileFrame
 		return nil, fmt.Errorf("nanolathe: shot: modern capture profile frame count must be nonnegative, got %d", profileFrames)
 	}
 	started := time.Now()
-	live := cl.RecordFrame()
+	// The capture caller already advanced this presentation frame. Repeated
+	// composition, including the both route, must retain its stock pair.
+	live := cl.RecordModernFrame()
 	if live == nil {
 		return nil, fmt.Errorf("nanolathe: shot: modern capture recorded no frame")
 	}

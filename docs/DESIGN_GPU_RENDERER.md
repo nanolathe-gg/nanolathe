@@ -1825,7 +1825,10 @@ drift out of date behind it. It is:
 - **the caption ring's producer and display cursors**, because the audio drain
   is the one thing that runs on the game goroutine between a launch and the
   Draw that consumes it, and the ring is what it writes that the recorder reads
-  [07 R-HUD-03 §14].
+  [07 R-HUD-03 §14];
+- **the displayed resource pair**, predicted purely for the next presentation
+  when launching, compared against the pair advanced by the consuming Draw
+  [05 R-ECO-01 §6][07 R-HUD-03 §4].
 
 A mismatch discards the list and records synchronously exactly as before.
 
@@ -1833,7 +1836,7 @@ A mismatch discards the list and records synchronously exactly as before.
 `UpdateAudioViewportFromCamera` and `TickAudio` — is called from Draw on every
 presented frame whether the list was pre-recorded or not, so its cadence and
 its thread are unchanged [03 §8.3] C18. It moved *ahead* of the recording pass
-rather than into it: `recordFrame` is now the audio step followed by
+rather than into it: `recordFrame` is now the host presentation advance followed by
 `recordFrameNoAudio`, and a pre-recorded list was recorded after the previous
 frame's drain rather than after this one's. That is why the ring cursors are in
 the digest — a drain that wrote a caption discards the pre-record. Resolving
@@ -1841,6 +1844,18 @@ the blend fraction moved with it, into `ResolveTickFraction`, so the digest and
 the record read one sample of a wall-clock producer rather than two. The cursor
 blit stayed inside the recording pass: it reads the pointer sample, which the
 epoch covers.
+
+**Displayed stocks share the host boundary.** `BeginPresentationFrame` steps
+the retained stock pair and drains presentation audio once per presented frame,
+before `TakePreRecord`. `Frame` and `RecordFrame` call that boundary; the modern
+host calls it explicitly. `RecordModernFrame`, `ComposeFrame` and snapshots do
+not advance it. The pre-record worker selects a pure next-step value for
+`UIFrame.Resources`; it never writes the retained pair. Launch records that
+same prediction in the digest. Stock changes therefore continue to hit when
+prediction and presentation agree, including multiple frames on one committed
+tick. Retried or discarded records need no stock rollback, and a changed
+viewer or publication remains covered by the ordinary mutation/frame checks.
+The `--shot` entry advances once before either or both executors compose.
 
 **What a discarded record must undo.** A recording pass writes presentation
 state, and a discarded one must not leave it advanced twice. Almost all of it

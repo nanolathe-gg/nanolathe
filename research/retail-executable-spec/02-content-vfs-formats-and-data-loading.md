@@ -1610,12 +1610,14 @@ no range clamp on the authored value itself.
 | `badslope` default | — | 8-bit | `(maxslope just read & 0xFF) >> 1` — logical shift, 0..127 |
 | `badwaterslope` default | — | 8-bit | `(maxwaterslope just read & 0xFF) >> 1` |
 
-**Record identity and FBI resolution.** Each parsed record's head is the
-interned value of the section's authored `name` key (string accessor, 100
+**Record identity and FBI resolution — Established.** Each parsed record's
+head is the interned value of the section's authored `name` key (string accessor, 100
 bytes, default empty) — not the `CLASS%d` section name. The FBI compiler
 resolves its `movementclass` string by a linear scan of the 32 records with
-the case-insensitive comparison against that interned name value; records with
-a null name slot are skipped; a miss yields the null profile. A
+the case-insensitive comparison against that interned name value. The scan visits
+numeric class slots in ascending order and returns immediately on the first
+equal name; a later class with the same authored name cannot replace that match.
+Records with a null name slot are skipped; a miss yields the null profile. A
 `MovementClass=TANKSH2` reference therefore resolves against the authored
 `Name` value, not against the `CLASS%d` section name, exactly as `[fmt tdf]`
 states.

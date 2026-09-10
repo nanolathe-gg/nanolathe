@@ -193,6 +193,15 @@ foreground through `paletteIndex` before recording. Both executors therefore
 receive physical palette indices; the indexed surface needs no further GUI
 colour lookup `[07 R-HUD-03 §14.4]` `[03 §4.3]`.
 
+Battle adoption also binds the HUD's loaded LOGOS bank with
+`SetMessageLogos`. Real-speaker lines select `32xlogos` by the current committed
+player row's `Logo` byte and record the inclusive scaled square before their
+glyphs. Teardown clears that binding. The accepted-announcement branch of
+`enqueueStatusEvents` plays `MessageArrived` once for a real speaker; rejected
+lines and sentinel lines stay silent. Class filtering belongs only to the
+drawer, and draw-list recording and replay produce no audio effects
+`[07 R-HUD-03 §14.3–§14.4]` `[I6]`.
+
 `Frame` is one window frame: drain and tick audio, compose the indexed surface,
 draw the cursor over it, expand to RGBA. `ComposeFrame` and
 `ComposeFrameSnapshot` run the same composition without entering the window

@@ -555,18 +555,21 @@ func (s *Service) advanceBurstsRange(start, entry int, tick uint32, simRNG *rng.
 		clone := &s.Records[cIdx]
 		*clone = *p // full copy before spray [06 §4.3] C8
 		clone.CreationTick = tick
-		clone.BurstRemaining = 0 // ordinary moving projectile [06 §4.3] C8
-		clone.BurstDeadline = 0
-		clone.Dead = false
-		// The clone "has its creation/expiry state updated" after the copy
-		// [06 §4.3]: shift the parent's expiry by the elapsed root-to-clone
-		// delay so the pellet keeps the parent's remaining lifetime rather
-		// than inheriting time already spent.
-		if clone.ExpiryTick != 0 && tick != p.CreationTick {
-			clone.ExpiryTick += uint32(int64(tick) - int64(p.CreationTick))
+		// Successful copies replay the start sound at the refreshed parent
+		// muzzle before expiry arithmetic and either random draw [06 §4.3]
+		// [06 R-WFX-01 §3]. This uses the existing publication event; no
+		// Fire/RockUnit or start-smoke callback runs for a clone.
+		if wDef != nil && wDef.SoundTrigger && wDef.SoundStart != "" {
+			s.emitEvent(Event{Kind: EventStartSound, Tick: tick, Source: p.Shooter, Position: p.Pos, Sound: wDef.SoundStart})
 		}
-		// Ensure clone's position is parent's refreshed position.
-		// Clone is ordinary moving projectile on next phase [06 §4.3]; captured entry prevents moving this tick [06 §5.1].
+		// Clone lifetime has its own timer-or-distance rule, independent of
+		// the root expiry. Addition, division and the deadline use unsigned
+		// 32-bit words; a zero scalar speed faults after allocation [06 §4.3].
+		if wDef != nil && wDef.WeaponTimer != 0 {
+			clone.ExpiryTick = tick + uint32(wDef.WeaponTimer)
+		} else {
+			clone.ExpiryTick = tick + (uint32(p.StoredPlanarDistance)+uint32(numeric.FixedFromInt(16)))/uint32(p.Speed)
+		}
 
 		// Random decay changes the successful clone's expiry [06 §4.3] C8.
 		if randomDecay != 0 && simRNG != nil {
@@ -578,9 +581,7 @@ func (s *Service) advanceBurstsRange(start, entry int, tick uint32, simRNG *rng.
 			// centred, not one-sided; the marker that recorded both as open is
 			// retired. The draw is taken first, before the spray.
 			d := recentred(simRNG.Uint32n(uint32(randomDecay)), randomDecay)
-			if clone.ExpiryTick != 0 {
-				clone.ExpiryTick = uint32(int64(clone.ExpiryTick) + int64(d))
-			}
+			clone.ExpiryTick += uint32(d)
 		}
 		// Spray. The clone copy happens BEFORE spray is calculated, so spray
 		// changes the parent/template velocity and prepares the velocity the
@@ -617,7 +618,10 @@ func (s *Service) advanceBurstsRange(start, entry int, tick uint32, simRNG *rng.
 			// p.Yaw, p.Pitch, and p.Velocity.Y are NOT written: `a` is
 			// discarded after building the velocity components [06 §4.3].
 		}
-		// Burst clones do not rerun Fire or RockUnit [06 §4.1] C2.
+		// The final clone write follows both random draws [06 §4.3].
+		clone.BurstRemaining = 0
+		clone.BurstDeadline = 0
+		clone.Dead = false
 		clones++
 		if p.BurstRemaining == 0 {
 			// Anchor dies silently at instant pellet N launches [06 §4.3] C8: dead flag set directly with no dispatch.

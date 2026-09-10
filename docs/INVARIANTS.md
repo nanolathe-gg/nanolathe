@@ -41,6 +41,7 @@ Allowed floating point, exhaustively:
 | Wind scalar published to consumers (clamped to 1.0) | `float32` | `[01 §7.3]` |
 | Clock budget product `delta × speed + carry` | `float64` product, `float32` carry | `[01 §4.2]` |
 | Ballistic discriminant, `acos`, `sqrt` | `float64` | `[06 §3.3]` |
+| Ordinary creator muzzle-to-aim planar `hypot`, truncated into its stored 16.16 distance before pitch and later burst expiry | `float64` transient; stored distance is fixed point | `[06 §6.3]`, `[06 §4.3]` |
 | Pre-fire lead distance `D` — the three-dimensional `sqrt` over the raw 16.16 shooter-minus-point deltas, truncated toward zero before the integer flight-time divide | `float64` transient, never stored; `D`, `T` and `T2` are integers | `[06 §3.3]` |
 | Cruise waypoint distance — the same three-dimensional `sqrt` over the raw 16.16 current-minus-stored-target deltas, truncated toward zero before the signed-short threshold compare | `float64` transient, never stored | `[06 §6.8]` |
 | Area-damage range `sqrt` (radial falloff distance, truncated toward zero to `int32`) | `float64` transient, never stored | `[06 §9.3]` |

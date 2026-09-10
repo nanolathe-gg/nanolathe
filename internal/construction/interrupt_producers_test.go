@@ -135,7 +135,7 @@ func TestCancelNoticeOnRemovalWithDynamicGateBitOne(t *testing.T) {
 	// Cancel-current's established body: the refund is trunc((1 - remaining) *
 	// metalBuildCost) = trunc(0.5 * 100), and the product takes the cause-9
 	// kill packet [05 C21].
-	if got := svc.Economy.Players[0].Mirror[economy.Metal].Production; got != 50 {
+	if got := svc.Economy.UnitBuckets(factory.Handle)[economy.Metal].Production; got != 50 {
 		t.Fatalf("refund = %v, want trunc((1-0.5)*100) = 50 [05 C21]", got)
 	}
 	if k := svc.LastKill(); k.Damage != Kind9Damage || !k.NoCorpse {
@@ -167,7 +167,7 @@ func TestCancelNoticeRefusedWithoutDynamicGateBitOne(t *testing.T) {
 	if svc.DeliverCancelNotice(factory, node, 100) {
 		t.Fatal("a record with no gate bit 1 accepted the cancel notification")
 	}
-	if got := svc.Economy.Players[0].Mirror[economy.Metal].Production; got != 0 {
+	if got := svc.Economy.UnitBuckets(factory.Handle)[economy.Metal].Production; got != 0 {
 		t.Fatalf("refund = %v, want none: the guard should have refused", got)
 	}
 }

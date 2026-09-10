@@ -389,8 +389,8 @@ func TestRS10_CancelRefundAndLinks(t *testing.T) {
 	// Cancel
 	factory.Pending = InterruptCancel
 	svc.Pump(factory, 100)
-	if econ.Players[0].Mirror[economy.Metal].Production != 150 {
-		t.Fatalf("refund want 150 got %v", econ.Players[0].Mirror[economy.Metal].Production)
+	if econ.UnitBuckets(factory.Handle)[economy.Metal].Production != 150 {
+		t.Fatalf("refund want 150 got %v", econ.UnitBuckets(factory.Handle)[economy.Metal].Production)
 	}
 	if svc.LastKill().Damage != 30000 || svc.LastKill().Severity != 0 || !svc.LastKill().NoCorpse {
 		t.Fatalf("kill packet wrong %+v", svc.LastKill())

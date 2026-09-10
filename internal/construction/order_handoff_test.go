@@ -90,7 +90,7 @@ func TestOrdinaryPumpCancelDoesNotLeakACompletionResult(t *testing.T) {
 	if q.LenPrimary() != 0 || !product.Dying {
 		t.Fatalf("ordinary cancel queue=%d dying=%v, want removed and dying", q.LenPrimary(), product.Dying)
 	}
-	if got := svc.Economy.Players[0].Mirror[economy.Metal].Production; got != 50 {
+	if got := svc.Economy.UnitBuckets(factory.Handle)[economy.Metal].Production; got != 50 {
 		t.Fatalf("cancel refund=%v, want one 50 refund", got)
 	}
 	if svc.LastKill().Damage != Kind9Damage {
@@ -103,7 +103,7 @@ func TestOrdinaryPumpCancelDoesNotLeakACompletionResult(t *testing.T) {
 	if res.Completed || res.Product != 0 {
 		t.Fatalf("cancelled product reported as completion: %+v", res)
 	}
-	if got := svc.Economy.Players[0].Mirror[economy.Metal].Production; got != 50 {
+	if got := svc.Economy.UnitBuckets(factory.Handle)[economy.Metal].Production; got != 50 {
 		t.Fatalf("StepUnit repeated cancellation refund: %v", got)
 	}
 }

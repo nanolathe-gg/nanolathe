@@ -172,9 +172,9 @@ func MotionFamilyForWeapon(w *content.WeaponDef) MotionFamily {
 //	                  any copy and reads it only within that same pass
 //	                  [06 §5.2]; retention is unobservable.
 //
-// One record field [06 §6.1] enumerates has no Go field to retain: the stored
-// planar muzzle-to-aim distance "written by the ordinary creator only"
-// (fire.go derives the burst clone's expiry without it).
+// StoredPlanarDistance is written by InitOrdinary only [06 §6.1][06 §6.3].
+// Reservation, common initialization, ballistic, vertical, dropped and meteor
+// creation retain it. Whole-record burst copies and compaction preserve it.
 //
 // InitCommon performs that common initializer work per [06 §4.1], [06 §5.1],
 // [06 §6.1]. aim is the OPTIONAL aim point: a nil pointer is retail's null aim
@@ -360,7 +360,10 @@ func InitOrdinary(p *Projectile, w *content.WeaponDef, now uint32, muzzle, targe
 	dy := target.Y.Sub(muzzle.Y)
 	dz := target.Z.Sub(muzzle.Z)
 	yaw := YawFromDelta(dx, dz)
-	pitch := PitchFromDelta(dx, dy, dz)
+	// The ordinary creator stores this distance once, before pitch. Burst
+	// expiry later reads it even after the muzzle or target moves [06 §6.3].
+	p.StoredPlanarDistance = numeric.Fixed(numeric.TruncateFloat64ToLow32(math.Hypot(float64(int32(dx)), float64(int32(dz)))))
+	pitch := numeric.AngleFromAtan2(-int64(int16((-dy.Raw())>>16)), int64(int16(p.StoredPlanarDistance.Raw()>>16)))
 	p.Yaw = yaw
 	p.Pitch = pitch
 	// [06 §6.3] initial scalar speed hierarchy

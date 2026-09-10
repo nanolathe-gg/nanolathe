@@ -810,6 +810,16 @@ column advances by the COMIX glyph height. Each line resolves logical colour
 recording its glyph command, so classic and modern share the same foreground
 `[07 R-HUD-03 §14.4]` `[07 "Retail palette contract"]` `[03 §4.3]`.
 
+The column shares the HUD's loaded `32xlogos` entry through
+`SetMessageLogos`. A real speaker selects the committed roster's `Logo` byte;
+the scaled logo precedes the text using the geometry in `[07 R-HUD-03 §14.4]`.
+The retained announcement drain posts the finished session line and plays
+`MessageArrived` only after the ring accepts a real speaker. This preserves
+the eliminated owner on class-4 announcements, including with `screenchat=0`,
+and leaves sentinel captions, local chat and score lines text-only and silent.
+Repeated composition and draw-list replay cannot repeat the cue. The open
+localized possessive-tail question remains owned by `[08 R-CAMP-01 §9]`.
+
 ### 2.8 `cmd/nanolathe` — the battle HUD
 
 `battle_hud.go` builds `retailBattleHUD` from the mounted side data: the anchor
@@ -833,6 +843,25 @@ battle: the options root (`battle_options_draw.go`) and the save/load dialog,
 with the shell's `MSGBOX` above them `[07 R-FE-01 §6]` `[07 R-FE-01 §8]`.
 `unitinfo.go` is `UNITINFOx.GUI`, a child window that services a release before
 the command page does `[07 R-HUD-03 §8]`.
+
+**Displayed resource stocks.** `Client` owns the two displayed singles and
+passes them by value in `UIFrame.Resources`. `BeginPresentationFrame` advances
+them once per host presented frame using `[05 R-ECO-01 §6]`; both stock bars
+and current numbers consume this pair, while capacities and rates retain their
+existing sources. Multiple presented frames at one committed tick each step
+the pair. Composition and replay do not step it. Only the viewing player's
+committed economy row is admitted; a missing row retains the previous pair.
+Binding a different snapshot buffer at battle installation or save restoration
+resets both values to zero `[07 R-HUD-03 §4]`. `View` publishes into the same
+buffer and retains the pair. The audio-only `TickPresentationAudio` API remains
+an audio drain; the host boundary calls it after advancing displayed stocks.
+
+The modern pre-record worker draws a pure prediction of the next pair and
+includes it in its presentation digest. The real host boundary computes the
+same step before consuming that list; a miss or discarded prediction cannot
+advance or restore the retained pair. See DESIGN_GPU_RENDERER §13.10.
+`--shot` advances one presentation frame before choosing its executor; the
+`both` route composes both images from that same retained pair.
 
 **The slide strip.** The panel offset has exactly one consumer. It is not a side
 rail: it is the strip that slides up from the bottom edge of the *view* when
@@ -986,6 +1015,14 @@ explicitly, and the generated `<unit>N.GUI` pages determine page existence and
 placement. Stock full pages carry six 64×64 product gadgets and the last page
 may be partial, so no runtime path may infer an eight-slot grid `[07 §9]`
 `[07 R-CAM-01 §4]` `[07 R-HUD-03 §6]`.
+
+Build-button activation resolves the installed gadget name to its catalog
+unit definition, the same identity used by artwork and the hover card.
+Generated assembly patches that name at authored `BUTTON+4`; a physical page
+keeps its authored name unless a generated placement replaces it. The published
+`CommandPage.ProductKeys` membership union cannot be indexed by gadget ordinal:
+download entries may be sparse, reordered or replace existing slots. Pointer
+and accelerator activation share this name lookup `[07 §9]` `[07 R-HUD-03 §3]`.
 
 **C11 — the latch is the switch key.** The command latch byte *is* the order
 dispatcher's switch key, and the button parse chain is MOVE → STOP → ATTACK →

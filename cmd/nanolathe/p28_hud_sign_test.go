@@ -30,7 +30,7 @@ func (s p28PanelResourceStage) DrawUI(c *client.Client, _ client.UIFrame) {
 	blitBattlePanel(c, s.hud.panelBottom, 129, 480-32)
 	blitBattlePanel(c, s.hud.panelSide, 0, 0)
 	if s.resources != nil {
-		s.hud.drawResources(c, s.resources)
+		s.hud.drawResources(c, s.resources, client.DisplayedResources{Energy: 50, Metal: 50})
 	}
 }
 

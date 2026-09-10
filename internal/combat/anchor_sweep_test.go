@@ -5,6 +5,7 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 )
 
@@ -141,6 +142,7 @@ func TestAnchorSweepStopsThePendingClones(t *testing.T) {
 		var s Service
 		const shooter pool.Handle = 4
 		seedPool(t, &s, anchorSpec{tag: 77, shooter: shooter, remaining: 4})
+		s.Records[0].Speed = numeric.Fixed(weapon.WeaponVelocity)
 		s.Records[0].BurstDeadline = 0
 
 		if killShooter {

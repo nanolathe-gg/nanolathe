@@ -65,6 +65,11 @@ type Projectile struct {
 	Velocity Vec3
 	Speed    numeric.Fixed
 
+	// StoredPlanarDistance is the ordinary creator's truncated muzzle-to-aim
+	// distance. Other creators and reservation retain it; burst clones use
+	// the copied value for their unsigned lifetime divide [06 §6.1][06 §4.3].
+	StoredPlanarDistance numeric.Fixed
+
 	// Orientation: yaw/pitch are circular 16-bit angles, 65536 per circle (I2) [04 §5.1].
 	Yaw   numeric.Angle // [06 §5.1] [06 §6.1]
 	Pitch numeric.Angle // [06 §5.1] [06 §6.1]

@@ -13,13 +13,14 @@ import (
 
 func weaponForFire(id int32, reload int32, spray int32, burst int32, burstRate int32, stockpile bool, dropped bool, meteor bool, startSmoke bool, soundStart string, energy float64, metal float64) *content.WeaponDef {
 	return &content.WeaponDef{
-		ID:         id,
-		ReloadTime: reload,
-		SprayAngle: spray,
-		Burst:      burst,
-		BurstRate:  burstRate,
-		Stockpile:  stockpile,
-		Dropped:    dropped,
+		WeaponVelocity: int32(numeric.FixedFromInt(1)), // valid scalar speed for burst lifetime [06 §4.3]
+		ID:             id,
+		ReloadTime:     reload,
+		SprayAngle:     spray,
+		Burst:          burst,
+		BurstRate:      burstRate,
+		Stockpile:      stockpile,
+		Dropped:        dropped,
 		// A weapon matching none of the six creation predicates makes no
 		// projectile at all [06 §6.2] C15, so a fixture that sets no family
 		// flag is not an "ordinary" weapon — it is an inert one. Ordinary

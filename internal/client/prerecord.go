@@ -38,8 +38,8 @@ import (
 // the newly published committed frame are all covered by one comparison rather
 // than by a field list that would drift out of date behind them. The remaining
 // fields are the state that changes at Draw time, after that bump: the two
-// blend fractions, the audio drain's caption ring, and the committed frame
-// identity and camera origin as a cross-check on the epoch itself.
+// blend fractions, the audio drain's caption ring, the displayed resource pair,
+// and the committed frame identity and camera origin as an epoch cross-check.
 type PresentationInputs struct {
 	// Epoch is the host's client-mutation counter (BumpPresentationEpoch).
 	Epoch uint64
@@ -68,6 +68,9 @@ type PresentationInputs struct {
 	// that the recorder reads [07 R-HUD-03 §14].
 	MessageProducer uint16
 	MessageDisplay  uint16
+	// Resources is the pair the UI records, predicted for a pre-record and
+	// advanced at the real host boundary before consumption.
+	Resources DisplayedResources
 }
 
 // fractionsWithin reports whether the two digests' blend fractions agree to
@@ -237,6 +240,7 @@ func (c *Client) PresentationDigest() PresentationInputs {
 		Height:            int32(c.height),
 		MessageProducer:   c.messages.Producer,
 		MessageDisplay:    c.messages.Display,
+		Resources:         c.displayedResources,
 	}
 	if c.buffer != nil {
 		if cur := c.buffer.Current(); cur != nil {
@@ -277,6 +281,8 @@ func (c *Client) StartPreRecord(tickFraction16, cameraFraction16 int32, cameraFr
 	c.cameraFractionSet = cameraFractionSet
 	c.savePresentationCRT()
 	c.pre.recorded = c.PresentationDigest()
+	// Prediction is pure: retries and discards leave the retained pair alone.
+	c.pre.recorded.Resources = c.nextDisplayedResources()
 	c.pre.pending = true
 	c.pre.joined = false
 	c.pre.launches++
@@ -286,7 +292,9 @@ func (c *Client) StartPreRecord(tickFraction16, cameraFraction16 int32, cameraFr
 func (c *Client) servePreRecord() {
 	for range c.pre.wake {
 		start := time.Now()
+		c.recordNextResources = true
 		c.RecordModernFrame()
+		c.recordNextResources = false
 		c.pre.nanos = int64(time.Since(start))
 		c.pre.done <- struct{}{}
 	}

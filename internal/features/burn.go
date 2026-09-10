@@ -359,7 +359,14 @@ func (s *Service) igniteAt(cx, cz int, def *content.FeatureDef) bool {
 	s.setInstance(idx, inst)
 	s.attachEventRecord(inst)
 	s.Terrain.Plot[idx].SetOccupied(true) // the anchor's instance-attached bit
-	// Step 6, the `treeburn` sound at the tile corner, is presentation's.
+	if s.BurnSound != nil {
+		// Step 6 uses the anchor tile corner [05 R-FEAT-01 §9].
+		// TODO(question): ignition leaves its sound height unset, depending on
+		// transient caller state. Use deterministic zero as a host placeholder
+		// until invocation provenance or manual retail evidence establishes Y;
+		// terrain height and the feature centre are not established substitutes.
+		s.BurnSound([3]numeric.Fixed{world.CellToWorld(int32(cx)), 0, world.CellToWorld(int32(cz))})
+	}
 	return true
 }
 

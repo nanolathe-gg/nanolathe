@@ -45,6 +45,7 @@ func TestBurstCloneFirstMovesOnTheTickAfterItSpawns(t *testing.T) {
 	anchor.BurstRemaining = 1 // one pellet, then the anchor retires silently [06 §4.3] C8
 	anchor.BurstDeadline = 4  // the attempt falls due on tick 4
 	anchor.ExpiryTick = 1000
+	anchor.Speed = numeric.FixedFromInt(step)
 	anchor.Pos = anchorPos
 	anchor.StartPos = anchorPos
 	anchor.Velocity = Vec3{X: numeric.FixedFromInt(step)}

@@ -174,16 +174,14 @@ func TestPaletteCallbackBuildOrdersAndPager(t *testing.T) {
 	}
 }
 
-// TestPaletteCallbackProductOrdinalsFactoryAndPlacement checks the production
-// indexed callback against the published product sequence. Names on ordinary
-// product slots do not select products: ordinal zero is the factory product;
-// ordinal one is the mobile placement product [07 §9].
-func TestPaletteCallbackProductOrdinalsFactoryAndPlacement(t *testing.T) {
+// Installed product names select both factory and placement definitions [07 §9].
+// The published membership list deliberately has the reverse order.
+func TestPaletteCallbackProductNamesFactoryAndPlacement(t *testing.T) {
 	buttons := []gui.Gadget{
-		{Kind: gui.KindButton, Name: "SLOTZERO", Active: 1, QuickKey: 'a', Rect: gui.Rect{X: 1, Y: 1, W: 20, H: 12}},
-		{Kind: gui.KindButton, Name: "SLOTONE", Active: 1, QuickKey: 's', Rect: gui.Rect{X: 24, Y: 1, W: 20, H: 12}},
+		{Kind: gui.KindButton, Name: "ARMFAV", Active: 1, QuickKey: 'a', Rect: gui.Rect{X: 1, Y: 1, W: 20, H: 12}},
+		{Kind: gui.KindButton, Name: "ARMSOLAR", Active: 1, QuickKey: 's', Rect: gui.Rect{X: 24, Y: 1, W: 20, H: 12}},
 	}
-	b, cl, factory := paletteCallbackFactory(t, buttons, []string{"armfav", "armsolar"}, 0, 2)
+	b, cl, factory := paletteCallbackFactory(t, buttons, []string{"armsolar", "armfav"}, 0, 2)
 	spy := paletteCallbackCues(t, b, cueAddBuild, cueSubBuild)
 
 	paletteCallbackToken(t, b, cl, 'a')
@@ -218,14 +216,27 @@ func TestPaletteCallbackProductOrdinalsFactoryAndPlacement(t *testing.T) {
 
 	paletteCallbackToken(t, b, cl, 's')
 	if got := b.battleState().Input.Latch; got != input.LatchMobileBuild {
-		t.Fatalf("ordinal-one latch=%v, want MOBILEBUILD", got)
+		t.Fatalf("named building latch=%v, want MOBILEBUILD", got)
 	}
 	if got := b.PlacementProduct(); got != content.CanonicalKey("armsolar") {
-		t.Fatalf("ordinal-one placement product=%q, want armsolar", got)
+		t.Fatalf("named building placement product=%q, want armsolar", got)
 	}
 	if got := spy.aliases[len(spy.aliases)-1]; got != cueAddBuild {
 		t.Fatalf("mobile placement cue=%q, want %q", got, cueAddBuild)
 	}
+	// A non-resolving name cannot silently take a product at the same index.
+	b.disarmPlacement()
+	w.Gadgets[2].Name = "UNRESOLVED"
+	ctx, ok := b.hud.paletteContext(b)
+	if !ok {
+		t.Fatal("missing palette context")
+	}
+	before := len(b.sess.PendingHumanCommands())
+	b.hud.activatePaletteGadget(b, ctx, 2, false, false)
+	if b.PlacementProduct() != "" || len(b.sess.PendingHumanCommands()) != before {
+		t.Fatal("unknown gadget name selected an ordinal product")
+	}
+
 }
 
 // Modifier-latch commands share the stream but are not palette callbacks.

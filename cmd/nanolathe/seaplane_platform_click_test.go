@@ -15,25 +15,10 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/testsupport"
 )
 
-// TestSeaplanePlatformBuildClicksAreOrdinalNotGadgetName is the play-test
-// regression this unit was dispatched for: pressing the seaplane platform's
-// (ARMPLAT) build button for what the panel itself labels the construction
-// seaplane did nothing. guis/armplat1.gui's first build gadget is authored
-// `name=ARMCSA` — a stale per-panel editor label the engine never reads for
-// identity — while `sidedata.tdf`'s canbuild1 for ARMPLAT is ARMCA; retail's
-// product-page assembly patches CANBUILD products into build-page slots by
-// ORDINAL position, "entries 1-6 map to page one..." [07 §9 "Product-page
-// assembly is closed"]. The panel's fourth build gadget (authored `ARMSFIG`)
-// is a second, worse case: name-matching it would cross-bind canbuild3
-// instead of the slot's own canbuild4 (ARMHAWK).
-//
-// This test clicks the real armplat1.gui at the pixel positions of build
-// slot 1 and build slot 4 (1-based, matching the CANBUILD/page-slot
-// numbering [07 R-HUD-03 §6]) and asserts the factory queue receives armca
-// and armhawk respectively — never armcsa (unbuildable in retail: absent
-// from every CANBUILD page in the patched reference install) and never
-// armsfig on slot 4.
-func TestSeaplanePlatformBuildClicksAreOrdinalNotGadgetName(t *testing.T) {
+// Physical pages resolve their installed gadget names [07 §9], even when
+// CANBUILD has a different ordering. Both the construction seaplane and
+// fighter button must queue themselves rather than another aircraft.
+func TestSeaplanePlatformBuildClicksUseInstalledNames(t *testing.T) {
 	root := testsupport.RetailRoot(t)
 	opts := Options{Root: root, Map: "ashap plateau", Seed: 1}
 	cs, err := openContent(opts)
@@ -53,14 +38,6 @@ func TestSeaplanePlatformBuildClicksAreOrdinalNotGadgetName(t *testing.T) {
 	platDef, ok := cat.Unit("armplat")
 	if !ok || platDef == nil || !platDef.Builder {
 		t.Fatal("retail catalog has no armplat builder")
-	}
-	buttons := hud.BuildProductsFor(cat, "armplat")
-	if len(buttons) < 4 {
-		t.Fatalf("armplat CANBUILD page has only %d entries, want at least 4: %v", len(buttons), buttons)
-	}
-	wantSlot1, wantSlot4 := buttons[0], buttons[3]
-	if !strings.EqualFold(wantSlot1, "armca") || !strings.EqualFold(wantSlot4, "armhawk") {
-		t.Fatalf("fixture assumption stale: armplat CANBUILD is now %v, want [armca ... armhawk ...] at 1 and 4 — re-derive this test's premise", buttons)
 	}
 
 	var spawnX, spawnZ numeric.Fixed
@@ -133,27 +110,17 @@ func TestSeaplanePlatformBuildClicksAreOrdinalNotGadgetName(t *testing.T) {
 		}
 		t.Fatalf("platform window = %q; want suffix armplat1.gui", w.Name)
 	}
-	// Confirm the fixture is exercising the real defect: the gadget occupying
-	// build slot 1 is authored ARMCSA, not ARMCA.
-	paged := commandPageIsPaged(cur)
-	ordinals := buildProductSlotOrdinals(w, cur, paged)
-	gadgetForSlot := func(slot int) (int, gui.Gadget) {
-		for i, o := range ordinals {
-			if o == slot {
-				return i, w.Gadgets[i]
+	findGadget := func(name string) (int, gui.Gadget) {
+		for i, gad := range w.Gadgets {
+			if strings.EqualFold(gad.Name, name) {
+				return i, gad
 			}
 		}
-		t.Fatalf("no gadget occupies build slot %d in armplat1.gui", slot+1)
+		t.Fatalf("missing gadget %s", name)
 		return -1, gui.Gadget{}
 	}
-	slot1Index, slot1Gadget := gadgetForSlot(0)
-	if !strings.EqualFold(slot1Gadget.Name, "armcsa") {
-		t.Fatalf("fixture assumption stale: armplat1.gui's slot-1 gadget is now %q, not ARMCSA — re-derive this test's premise", slot1Gadget.Name)
-	}
-	slot4Index, slot4Gadget := gadgetForSlot(3)
-	if !strings.EqualFold(slot4Gadget.Name, "armsfig") {
-		t.Fatalf("fixture assumption stale: armplat1.gui's slot-4 gadget is now %q, not ARMSFIG — re-derive this test's premise", slot4Gadget.Name)
-	}
+	constructorIndex, _ := findGadget("ARMCSA")
+	fighterIndex, _ := findGadget("ARMSFIG")
 
 	clickAndExpect := func(name string, gadgetIndex int, want string) {
 		t.Helper()
@@ -173,16 +140,13 @@ func TestSeaplanePlatformBuildClicksAreOrdinalNotGadgetName(t *testing.T) {
 		if q == nil || q.LenPrimary() == 0 {
 			t.Fatalf("%s: factory queue empty after click; pending=%v", name, sess.PendingHumanCommands())
 		}
-		// A second click always appends/coalesces onto the tail, so the last
-		// entry after this click is this click's product regardless of what an
-		// earlier click in this test already queued — armca and armhawk are
-		// distinct keys, so they never coalesce into one entry.
+		// The actual factory order must retain the clicked product identity.
 		tail := q.Primary()[q.LenPrimary()-1]
 		if !strings.EqualFold(tail.BuildDefKey, want) {
 			t.Fatalf("%s: factory queue tail product = %q, want %q", name, tail.BuildDefKey, want)
 		}
 	}
 
-	clickAndExpect("slot 1", slot1Index, "armca")
-	clickAndExpect("slot 4", slot4Index, "armhawk")
+	clickAndExpect("named construction seaplane", constructorIndex, "armcsa")
+	clickAndExpect("named fighter", fighterIndex, "armsfig")
 }

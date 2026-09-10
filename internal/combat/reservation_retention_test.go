@@ -34,20 +34,21 @@ func recycleSlotOne(t *testing.T, s *Service, occupant Projectile) {
 func TestReserveClearsOnlyDeadBitAndRetainedUnitTarget(t *testing.T) {
 	var s Service
 	occupant := Projectile{
-		WeaponID:     77,
-		TargetPos:    Vec3{X: numeric.FixedFromInt(11), Y: numeric.FixedFromInt(22), Z: numeric.FixedFromInt(33)},
-		TargetUnit:   pool.Handle(9),
-		Velocity:     Vec3{X: numeric.FixedFromInt(4)},
-		Speed:        numeric.FixedFromInt(5),
-		Yaw:          numeric.Angle(1234),
-		Pitch:        numeric.Angle(4321),
-		PropellerYaw: numeric.Angle(999),
-		Roll:         numeric.Angle(777),
-		MeteorPitch:  numeric.Angle(888),
-		ExpiryTick:   4242,
-		Shooter:      pool.Handle(6),
-		ShooterSide:  3,
-		Dead:         true,
+		StoredPlanarDistance: numeric.FixedFromInt(100),
+		WeaponID:             77,
+		TargetPos:            Vec3{X: numeric.FixedFromInt(11), Y: numeric.FixedFromInt(22), Z: numeric.FixedFromInt(33)},
+		TargetUnit:           pool.Handle(9),
+		Velocity:             Vec3{X: numeric.FixedFromInt(4)},
+		Speed:                numeric.FixedFromInt(5),
+		Yaw:                  numeric.Angle(1234),
+		Pitch:                numeric.Angle(4321),
+		PropellerYaw:         numeric.Angle(999),
+		Roll:                 numeric.Angle(777),
+		MeteorPitch:          numeric.Angle(888),
+		ExpiryTick:           4242,
+		Shooter:              pool.Handle(6),
+		ShooterSide:          3,
+		Dead:                 true,
 	}
 	recycleSlotOne(t, &s, occupant)
 

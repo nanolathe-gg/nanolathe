@@ -319,6 +319,8 @@ func runShot(opts Options, cs *contentSet) error {
 	// it and a classic capture records the authored art; "both" records once
 	// for the executor under test, the modern one (DESIGN_GPU_RENDERER §14.3).
 	cl.SetEnhanced(shotRenderer != "classic")
+	// One presented state for either executor, including the both capture.
+	cl.BeginPresentationFrame()
 	switch shotRenderer {
 	case "classic":
 		if err := encodeShotPNG(opts.Shot, cl.ComposeFrame()); err != nil {
@@ -426,7 +428,7 @@ func validateShotOptions(opts Options) error {
 func runShotBoth(opts Options, cl *client.Client, shotW, shotH int) error {
 	// Each executor records its own native product from the same frozen
 	// committed frame. ComposeFrame makes the classic index image, while
-	// captureModernShot calls RecordFrame to retain the geometry-only model
+	// captureModernShot calls RecordModernFrame to retain the geometry-only model
 	// packets the GPU consumes. Reusing the classic-inclusive list here would
 	// omit models from the modern replay after cached/live composition.
 	classic := cl.ComposeFrame()

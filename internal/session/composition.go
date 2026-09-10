@@ -2517,6 +2517,11 @@ func (s *Session) bindFeatureStripProducers() {
 	if s == nil || s.Features == nil {
 		return
 	}
+	if s.Features.BurnSound == nil {
+		s.Features.BurnSound = func(pos [3]numeric.Fixed) {
+			s.EmitPositional("treeburn", pos) // [05 R-FEAT-01 §9 step 6][I6]
+		}
+	}
 	if s.Features.BurnSmoke == nil {
 		s.Features.BurnSmoke = func(pos [3]numeric.Fixed) {
 			s.appendStripSmokePuffer(stripBurningFeatureSmoke, pos, SmokePuffTrail)

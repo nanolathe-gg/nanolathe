@@ -519,6 +519,7 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 	// The later message column selects COMIX; group digits retain the side
 	// console face [07 R-HUD-03 §14.4][03 R-FX-01 §6A].
 	cl.SetMessageFNT(b.hud.primaryFont)
+	cl.SetMessageLogos(b.hud.logos)
 	// The strategic view's markers take their colours from the same blip art
 	// the minimap's dots are drawn from, and answer the same options word
 	// (DESIGN_GPU_RENDERER §16.11).
@@ -616,6 +617,7 @@ func (b *battleSession) teardown(cl *client.Client) {
 	}
 	if cl != nil {
 		cl.SetModelTextureRegistry(nil)
+		cl.SetMessageLogos(nil)
 		cl.SetUIStage(nil)
 		cl.SetAudioService(nil)
 		cl.SetTerrain(nil)

@@ -252,7 +252,8 @@ reproduce: Go stores named fields [I13].
 
 A `Projectile` carries the weapon id and owner side, the current point and the
 second tail/start/waypoint point, the stored target point, the retained unit
-target, the optional projectile-to-projectile link, velocity and speed, yaw and
+target, the optional projectile-to-projectile link, velocity and speed, the stored
+planar muzzle-to-aim distance, yaw and
 pitch as 16-bit angle words, the shooter and its side byte, the firing piece
 identity, the creation/expiry/smoke/burst deadlines, the phase and latch flags,
 the collision cache's cell pair, the cached average floor height, and the
@@ -351,7 +352,10 @@ contact, area and `noexplode` predicates. There is no separate simulated
 collision ladder for tests. The contact
 test has **no radius**: the plot cell's occupancy word is the horizontal gate
 and the model top is the vertical band `[06 R-DMG-01 §7]`. The ladder runs the
-projectile's own cell's two unit slots first, then feature resolution — with
+projectile's own cell's two unit slots first. If neither accepts the shot,
+`unitsonly` returns without testing features, terrain, bounce or water; the
+projectile phase honors that continued-flight result `[06 §8.1]`. Otherwise
+feature resolution follows — with
 the cached cell pair consulted only after a feature resolves and its height
 test passes — then terrain, ground bounce and water `[06 §8.1]`
 `[06 R-DMG-01 §13]`.
@@ -676,7 +680,9 @@ sound → the matching `FirePrimary`/`FireSecondary`/`FireTertiary` → `RockUni
 → start smoke. The start sound comes from the common initializer, so it
 precedes the `Fire` callback. The dropped-family inline allocator emits neither
 `Fire` nor `RockUnit`; the direct meteor path runs only the common initializer;
-burst clones rerun none of it `[06 §4.1]`.
+burst clones replay only `soundstart` when `soundtrigger` is authored, at the
+refreshed parent position after the successful copy `[06 §4.1]` `[06 §4.3]`
+`[06 R-WFX-01 §3]`.
 
 **C3 — the muzzle piece is queried once and stored.** A muzzle piece is queried
 synchronously before initialization and its identity is stored on the record so
@@ -715,12 +721,17 @@ The kill division is unsigned. A stockpile launch does not write reload.
 
 **C8 — a burst is N pellets plus one anchor.** While the remaining count is
 above zero the record takes the burst branch instead of the motion branch. The
-muzzle is re-derived when the interval exceeds 4 or is odd; the clone is made
-before the spray and the spray prepares the next; a pool-full clone consumes
+muzzle is re-derived when the interval exceeds 4 or the remaining count is odd;
+the clone is made before the spray and the spray prepares the next; a pool-full clone consumes
 the attempt with no spray and no random draw; the anchor dies silently, with no
 explosion, sound, shake, end smoke or damage. The spray perturbs a scratch
 heading and never rewrites the parent's stored yaw `[06 §4.3]`
-`[06 R-WPN-01 §2]`.
+`[06 R-WPN-01 §2]`. A successful copy emits its authored trigger sound,
+then sets expiry from the weapon timer when nonzero, otherwise from the
+retained planar distance and scalar speed under `[06 §4.3]`; random decay
+adjusts that expiry even when it wrapped to zero. The ordinary creator alone
+writes the stored muzzle-to-aim distance; all other creator families retain
+the previous occupant's value `[06 §6.1]` `[06 §6.3]`.
 
 **C9 — aim-ready is granted only on an explicit nonzero return.** A new dispatch
 first clears readiness; every delivered return replaces it, so zero clears and
@@ -906,19 +917,9 @@ the spawn writes the authoritative reservation link `[06 §11.1]` `[06 §11.2]`
 
 ### 3.6 Not implemented
 
-* **The `unitsonly` early return of the collision ladder's fifth step.** The
-  weapon flag compiles and nothing consults it, so a `unitsonly` shell that
-  misses both unit slots of its cell still falls through to feature, terrain,
-  bounce and water where the ladder would have it return. The gate only became
-  expressible once the unit slots were moved ahead of feature resolution, and
-  wiring it needs a "kept flying" result the projectile phase's own terrain
-  fallback honours `[06 §8.1]`.
 * **The multiplayer reconstruction path's interceptor index-versus-pointer
   anomaly.** Out of scope, and Unknown in the research
   `[06 §11.2]` `[06 R-WPN-05 §10]`.
-* **The allocator's exact zero-fill byte count at reservation.** Records are Go
-  zero values; retail's memset length is untraced and unobservable in effect
-  (SC18) `[01 §6.1]`.
 
 ## 4. Retail behaviour that is not a bug
 
@@ -962,18 +963,19 @@ retail, reproduced deliberately [I11]. Three entries in
   is the reading the stamp-time writer contract settles. Combat consumes that
   resolver and takes no position of its own; the conflict is owned by
   [DESIGN_WORLD_VISIBILITY](DESIGN_WORLD_VISIBILITY.md).
-* **SC18 — the allocator's zero-fill byte count.** Open, with the reservation
-  site named as one of its three placeholders. Records are Go zero values and
-  the observable effect is zeroed; the entry asks for a marker at the
-  reservation site, which the file does not currently carry (§7).
+* **SC18 — constructor initialization and reuse.** Allocator policy is closed.
+  Projectile reservation clears only the dead bit and retained unit target;
+  creator and common writes govern every other field. Actual unanswered
+  constructor fields remain individual research questions, including the
+  non-meteor roll writer `[06 §4.1]` `[06 §6.1]`.
 * **SC23 — `gravity = 0` cancels every `AirStrike` order.** Closed as
   unreachable on stock content and kept as the clone-retail contract for any
   map that does author it (§4).
 
-One further entry is adjacent but content-owned: SC24 records that retail never
-parses a loose `weapons\*.tdf`, while Nanolathe compiles every weapon file the
-overlay enumerates. Nothing in this package reads the archive bit; the
-divergence belongs to [DESIGN_CONTENT_VFS](DESIGN_CONTENT_VFS.md).
+One further entry is adjacent but content-owned: closed SC24 records that retail
+never parses loose `weapons\*.tdf`. Catalog discovery drops the loose VFS
+winner without reopening a shadowed archive copy. Combat consumes that catalog;
+the loading contract belongs to [DESIGN_CONTENT_VFS](DESIGN_CONTENT_VFS.md).
 
 ## 6. Research map
 
@@ -1060,9 +1062,8 @@ state and non-meteor roll writer questions are recorded in [06 "Missing and
 unknown"]. Two comments point at markers that no longer stand — one in
 `slots.go` referring to malformed-state TODOs on the reload computation, and
 one in `damage.go` referring to a TODO on the water-damage eligibility test.
-Both sites now state their behaviour inline. SC18 additionally names the
-reservation site as a place where a `TODO(T23)` for the allocator's zero-fill
-byte count is expected; the file does not carry one.
+Both sites now state their behaviour inline. SC18 settles allocator policy;
+projectile reuse follows the explicit reservation and creator writes.
 
 Open items the contracts above carry:
 
@@ -1085,8 +1086,6 @@ Open items the contracts above carry:
 * **The geometric meaning of the ballistic launch's gravity pre-decrement.**
   Reproduced as written; whether an implementation may simplify it is Unknown
   `[06 §6.4]`.
-* **The `unitsonly` early return of the collision ladder** — see §3.6
-  `[06 §8.1]`.
 * **The interceptor scans cannot distinguish a dead candidate from a live one**
   because neither scan tests the dead bit; only coverage and claim state
   prevent a shot. That is the established behaviour, not a gap

@@ -144,7 +144,7 @@ func (c *Client) Frame() {
 	c.list.Replay(c.classicSink())
 }
 
-// recordFrame runs the audio sync and the whole committed-frame recording pass
+// recordFrame advances presentation and runs the committed-frame recording pass
 // — the shared front half of both executors — leaving c.list holding the frame
 // in record order (Clear, all draws, Cursor, Expand) and c.indexed untouched.
 // It is record-only: no byte is written until a Sink replays the list, so the
@@ -154,7 +154,7 @@ func (c *Client) recordFrame() {
 	if c == nil {
 		return
 	}
-	c.TickPresentationAudio()
+	c.BeginPresentationFrame()
 	c.recordFrameNoAudio()
 }
 
@@ -182,8 +182,8 @@ func (c *Client) TickPresentationAudio() {
 }
 
 // recordFrameNoAudio is the recording pass on its own — everything recordFrame
-// does after the audio step. The pipeline's pre-record goroutine runs exactly
-// this (§13.10).
+// does after the host presentation advance. The pipeline's pre-record worker
+// runs exactly this (§13.10).
 func (c *Client) recordFrameNoAudio() {
 	if c == nil {
 		return
@@ -222,8 +222,8 @@ func (c *Client) recordFrameNoAudio() {
 
 // RecordFrame records one committed frame and returns the frame's draw list for
 // the modern (GPU) executor to replay through its own Sink
-// (docs/DESIGN_GPU_RENDERER.md §2.4, C-G1). It performs the same audio sync and
-// recording as Frame but no classic Replay, so c.indexed is left untouched: the
+// (docs/DESIGN_GPU_RENDERER.md §2.4, C-G1). It advances presentation and records
+// as Frame does, without classic Replay, so c.indexed is left untouched: the
 // modern path never composes bytes, it expands the recorded list on the device.
 //
 // The returned list is same-frame use only. Its backing arrays are reused by the
@@ -234,15 +234,15 @@ func (c *Client) RecordFrame() *drawlist.List {
 	if c == nil {
 		return nil
 	}
-	c.TickPresentationAudio()
+	c.BeginPresentationFrame()
 	return c.RecordModernFrame()
 }
 
-// RecordModernFrame is RecordFrame without the audio step — the recording pass
+// RecordModernFrame omits the presentation advance. It is the recording pass
 // the record/submit pipeline drives, on the game goroutine when the frame must
 // be recorded synchronously and on the pipeline goroutine when it runs ahead
-// (docs/DESIGN_GPU_RENDERER.md §13.10). A caller that uses it owns the audio
-// cadence itself and must call TickPresentationAudio once per presented frame.
+// (docs/DESIGN_GPU_RENDERER.md §13.10). A caller that uses it owns the presentation
+// cadence itself and must call BeginPresentationFrame once per presented frame.
 func (c *Client) RecordModernFrame() *drawlist.List {
 	if c == nil {
 		return nil
@@ -336,7 +336,11 @@ func (c *Client) drawInterface(cur *frame.Frame) {
 		return
 	}
 	if c.uiStage != nil {
-		c.uiStage.DrawUI(c, UIFrame{Committed: cur})
+		resources := c.displayedResources
+		if c.recordNextResources {
+			resources = c.nextDisplayedResources()
+		}
+		c.uiStage.DrawUI(c, UIFrame{Committed: cur, Resources: resources})
 	}
 	c.drawMessageLines()
 }

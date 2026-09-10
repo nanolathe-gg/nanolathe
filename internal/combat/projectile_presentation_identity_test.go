@@ -36,7 +36,7 @@ func TestProjectilePresentationIDsSurviveCompactionAndSplitClones(t *testing.T) 
 	p := &svc.Records[int(root)-1]
 	p.WeaponID, p.BurstRemaining, p.BurstDeadline = 7, 1, 1
 	rootID := svc.PresentationID(root)
-	weapon := &content.WeaponDef{ID: 7}
+	weapon := &content.WeaponDef{ID: 7, WeaponTimer: 10}
 	if clones := svc.AdvanceBursts(1, nil, func(id int32) (*content.WeaponDef, bool) {
 		return weapon, id == weapon.ID
 	}, nil); clones != 1 {

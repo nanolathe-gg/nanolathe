@@ -203,7 +203,7 @@ func (g *battleBenchmark) Draw(screen *ebiten.Image) {
 		// the list this frame's synchronous record would produce: the tolerance
 		// is zero here, so a measured frame is byte-identical to one recorded
 		// in place (§13.10).
-		g.c.TickPresentationAudio()
+		g.c.BeginPresentationFrame()
 		g.c.ResolveTickFraction()
 		var list *drawlist.List
 		list, hit = g.c.TakePreRecord(g.c.PresentationDigest(), 0)

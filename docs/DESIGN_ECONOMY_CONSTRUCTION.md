@@ -398,6 +398,24 @@ the `BurnWeapon` seam, which the session binds to combat's shared splash entry
 with a null shooter: the synthetic projectile-shaped record of `[06 §13.1]`,
 no veterancy and no kill credit `[05 R-FEAT-01 §11]`.
 
+Every successful ignition also calls `BurnSound` with the anchor tile corner;
+session binds it to `EmitPositional("treeburn", position)`, whose admitted event
+crosses the committed frame before audio playback. Refused ignitions produce
+no cue. Damage, spread and saved burn-selector reconstruction share this entry
+`[05 R-FEAT-01 §9]` `[08 R-SAVE-FEATURE-01]`. Because Nanolathe derives visibility
+late, its restore dispatcher temporarily collects these positions in raise order
+until its final visibility rebuild, then runs ordinary positional admission.
+This is a host publication adapter; retail requests sound inside ignition.
+The pending events survive the battle-entry tail and are committed once by
+the usual publication path.
+
+The sound's height is an explicit host placeholder: zero, with a
+`TODO(question)` at ignition. Retail leaves that input unset even though its
+positional helper reads it for audience and stereo placement. Invocation
+provenance or manual evidence must resolve it; the terrain/footprint height
+used by smoke and the burn weapon does not establish the sound height
+`[05 R-FEAT-01 §9]`.
+
 **Reproduction** (`reproduce.go`) and **sinking** (`sink.go`). The reproduction
 walker visits one cell per tick, descending a global cursor from `W×H − 1` with
 a wrap-skip that means the last cell is never scanned; the sink integration is
@@ -591,12 +609,18 @@ restart from phase 0 `[05 "Queue insertion"]` `[05 "Queue subtraction"]`.
 `[05 "Cancel-current and stop interrupts"]`:
 
 1. refund `trunc((1 − remaining) × metalBuildCost)`;
-2. credit it to the builder's metal bucket. When the referenced player object is
-   in the special second state a global mode selector scales it: value 0 credits
+2. credit it to `Economy.UnitBuckets(factory.Handle)[Metal].Production`, so
+   settlement gathers and archives it at the live builder's slot; a builder
+   removed before gathering takes its pending credit out of that pass. When the
+   referenced player object is in the special second state a global mode selector
+   scales it: value 0 credits
    **one half**, value 1 credits **seven tenths**, any other value the whole
    amount. Every one of the discount family's sites forms
    `accumulator − contribution × (−scale)`, so the constants are negative and
-   the operation is a subtraction — the scaled arms **pay**, they do not charge
+   the operation is a subtraction. The multiply and subtraction use working
+   precision with one final `float32` accumulator store. The shared private
+   refund helper also serves reverse work, whose caller retains its target
+   account and admission; cancellation retains its own owner admission
    `[05 R-ECO-01 §3]` `[05 R-ECO-01 §11]`;
 3. run the completion transition;
 4. send the ordinary kill packet — kind-9 damage of exactly 30,000, unscaled by
@@ -693,6 +717,10 @@ CRT draws and its frame-geometry jitter, and the burn cursor's end — the
 authored frames' own lifetime — clearing the cell and stamping `featureburnt`
 `[05 "Feature burning"]` `[05 R-FEAT-01 §9]` `[05 R-FEAT-01 §10]`
 `[05 R-FEAT-01 §11]` `[05 R-FEAT-01 §16]` `[06 §13.1]`.
+Successful ignition, including spread and restored burn selectors, requests
+one positional `treeburn` at the anchor corner through committed audio;
+refusal requests none. Sound height remains the explicit zero host placeholder
+pending the invocation evidence of `[05 R-FEAT-01 §9]`.
 
 **C29 — active-list order.** The feature phase visits the active list from its
 head, most recently stamped or ignited first, capturing each next link before

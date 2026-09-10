@@ -4,7 +4,6 @@ package content
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/vfs"
@@ -127,7 +126,7 @@ func storeByte(v int32) int32 { return int32(uint8(v)) }
 
 // CompileMovement compiles movement classes from gamedata/moveinfo.tdf
 // [02 §5 "Movement class record"]. Discovery path is gamedata/moveinfo.tdf with
-// [CLASS*] sections. It returns a map keyed by CanonicalKey(class Name).
+// exact CLASS0..CLASS31 sections. It returns a map keyed by CanonicalKey(class Name).
 func CompileMovement(fs vfs.FSOps) (map[string]*MovementClass, error) {
 	if fs == nil {
 		return nil, fmt.Errorf("content: nil VFS")
@@ -146,27 +145,24 @@ func CompileMovement(fs vfs.FSOps) (map[string]*MovementClass, error) {
 	if err != nil {
 		return nil, formats.WithTDFContext(fs, err, "gamedata/moveinfo.tdf")
 	}
-	// Sections are in file order; stable iteration is required for
-	// deterministic hash/canonical handling (I1). Sort the output map's
-	// iteration elsewhere; here we just collect.
 	result := make(map[string]*MovementClass)
-	// Keep discovery stable: iterate sections in file order, then sort keys
-	// for any downstream hash.
-	for _, section := range doc.Root.Sections() {
-		// Discovery path is gamedata/moveinfo.tdf with [CLASS*] sections.
-		if !strings.HasPrefix(CanonicalKey(section.Name), "class") {
+	// Retail probes the bounded numeric slots, skipping gaps. Section lookup
+	// chooses the first matching section [02 §4][02 "Movement class record"].
+	for i := 0; i < 32; i++ {
+		section := doc.Root.Section(fmt.Sprintf("CLASS%d", i))
+		if section == nil {
 			continue
 		}
 		name, ok := section.StringValue("Name", "")
 		if !ok || trimTDFSemantic(name) == "" {
 			continue
 		}
-		mc := compileMovementSection(section, name, prov)
 		key := CanonicalKey(name)
-		// Duplicate canonical keys: last wins is file-order deterministic; a
-		// later duplicate overwrites the earlier winner. No map iteration
-		// influences the result (I1).
-		result[key] = mc
+		// FBI name resolution returns the first equal name in numeric slot
+		// order [02 "Movement class record"].
+		if _, found := result[key]; !found {
+			result[key] = compileMovementSection(section, name, prov)
+		}
 	}
 	return result, nil
 }

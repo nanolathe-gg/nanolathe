@@ -934,7 +934,7 @@ func TestRallyInheritanceOrdering(t *testing.T) {
 	}
 }
 
-// TestRefundArithmetic verifies C21 inverted special-mode pairing [05 C21].
+// TestRefundArithmetic verifies C21 refund truncation and difficulty pairing [05 C21].
 func TestRefundArithmetic(t *testing.T) {
 	// direct arithmetic test: refund = trunc((1 - remaining) * metalCost)
 	remaining := float32(0.25)
@@ -983,7 +983,7 @@ func TestRefundArithmetic(t *testing.T) {
 		svc.ModeSelector = mode
 		svc.OnRefresh = func(u *units.Unit) {}
 		svc.handleCancelCurrent(factory, head, 100)
-		return econ.Players[0].Mirror[economy.Metal].Production
+		return econ.UnitBuckets(factory.Handle)[economy.Metal].Production
 	}
 
 	// Normal add

@@ -23,8 +23,6 @@ type paletteActivationContext struct {
 	page     *formats.GAF
 	paged    bool
 	selected *content.UnitDef
-	products []string
-	ordinals []int
 }
 
 func (h *retailBattleHUD) paletteContext(b *battleSession) (paletteActivationContext, bool) {
@@ -47,11 +45,10 @@ func (h *retailBattleHUD) paletteContext(b *battleSession) (paletteActivationCon
 	if f.CommandPage.Builder != 0 && f.CommandPage.PageCount != 0 && b.sess != nil && b.cat != nil {
 		if view, found := snapshotUnitByHandle(f, f.CommandPage.Builder); found && view.Owner == b.sess.LocalOwner {
 			if def, found := b.cat.Unit(view.DefName); found && def != nil && def.Builder {
-				ctx.selected, ctx.products = def, f.CommandPage.ProductKeys
+				ctx.selected = def
 			}
 		}
 	}
-	ctx.ordinals = buildProductSlotOrdinals(w, f, ctx.paged)
 	return ctx, true
 }
 
@@ -233,13 +230,11 @@ func (h *retailBattleHUD) activatePaletteGadget(b *battleSession, ctx paletteAct
 		}
 		return true
 	}
-	if index < len(ctx.ordinals) && ctx.selected != nil && b.cat != nil && ctx.ordinals[index] >= 0 {
-		slot := ctx.ordinals[index]
-		if slot < len(ctx.products) && ctx.products[slot] != "" {
-			product, _ := b.cat.Unit(ctx.products[slot])
-			if product == nil {
-				return true
-			}
+	// The installed name is the product identity [07 §9]. Generated pages
+	// patch that name at BUTTON+4; their published membership union is not
+	// a slot list. Use the same name that supplies the art and hover card.
+	if ctx.selected != nil && b.cat != nil {
+		if product, found := b.cat.Unit(gad.Name); found && product != nil {
 			if !hud.ProductArmsPlacement(product) {
 				delta := factoryBuildDelta(shift, rightClick)
 				b.playUICue(nil, countedBuildCue(delta))

@@ -4,8 +4,6 @@ package main
 // right-click consumers that dispatch a command [07 §9].
 
 import (
-	"strings"
-
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
 	"github.com/nanolathe-gg/nanolathe/internal/hud"
@@ -162,61 +160,6 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 		return true
 	}
 	return false
-}
-
-// buildProductSlotOrdinals returns, for every gadget in window, its ordinal
-// position among the page's build-product slots (-1 for a gadget that is not
-// one) — the resolution consumeClickDelta's build-product branch looks up by
-// the clicked gadget's own index rather than a per-click running counter,
-// because that loop's rect hit test (`guiRectContains`) `continue`s past
-// every gadget except the one struck, so a counter incremented inside the
-// branch would only ever see the single gadget the pointer landed on.
-//
-// The predicate is positional over button gadgets: one that is neither a
-// recognized command button (`commandGadgetVerdict`'s stage/grey table names
-// ORDERS, BUILD, the order buttons, ONOFF, CLOAK, and the two stance
-// gadgets — never a build product or NEXT/PREV [07 R-HUD-03 §6]), nor a
-// NEXT/PREV paging gadget (matched by name substring, since the stage/grey
-// table does not cover them either), nor the MAKENUKE/MAKEANTI stockpile toy
-// (consumed ahead of the build-product branch [06 §11.1]). Ordinal position,
-// not the gadget's own authored name, is what a build-page slot's product
-// identity comes from [07 §9 "Product-page assembly is closed"] — see the
-// build-product branch's own citation for the measured `guis/armplat1.gui`
-// mismatch this replaces.
-func buildProductSlotOrdinals(window *gui.Window, f *frame.Frame, paged bool) []int {
-	ordinals := make([]int, len(window.Gadgets))
-	next := 0
-	for i, gad := range window.Gadgets {
-		// Positional: an inactive or greyed slot still occupies its ordinal,
-		// because retail patches product N into slot N of the authored page
-		// whatever that slot's own state is [07 §9]; the click loop above
-		// refuses the press on such a gadget on its own.
-		if i == 0 || gad.Kind != gui.KindButton {
-			ordinals[i] = -1
-			continue
-		}
-		if _, isCommand := commandGadgetVerdict(gad, f, paged); isCommand {
-			ordinals[i] = -1
-			continue
-		}
-		upperName := strings.ToUpper(gad.Name)
-		upperText := strings.ToUpper(gad.Text)
-		if strings.Contains(upperName, "NEXT") || strings.Contains(upperText, "NEXT") ||
-			strings.Contains(upperName, "PREV") || strings.Contains(upperText, "PREV") {
-			ordinals[i] = -1
-			continue
-		}
-		// The MAKENUKE/MAKEANTI stockpile toy is consumed ahead of the
-		// build-product branch in the loop above and never reaches it
-		// [06 §11.1][07 R-CAM-01 §14 item 3].
-		if StockpileGadget(gad) {
-			ordinals[i] = -1
-			continue
-		}
-		ordinals[i] = next
-		next++
-	}
-	return ordinals
 }
 
 // hitTestFor is the session-aware hit test used by battleSession handleInput [F-P0-003].

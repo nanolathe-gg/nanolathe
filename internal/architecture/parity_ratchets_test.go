@@ -173,14 +173,13 @@ var float64Baseline = map[string]int{
 	"internal/combat/motion.go":    4,
 	"internal/combat/service.go":   2,
 	"internal/combat/stockpile.go": 5,
-	// CL-5 split factory.go by concern. Its float64 sites are the construction
-	// arithmetic of [05 "Construction arithmetic"] and [05 R-WORK-01 §3] and
-	// the cancel-current refund's two halves of [05 R-ECO-01 §11]; they moved
-	// to the files those concerns went to, unchanged and in the same number.
+	// Construction arithmetic follows [05 "Construction arithmetic"] and
+	// [05 R-WORK-01 §3]. The refund sites share the final-store discount in
+	// reverse.go [05 R-ECO-01 §3][05 R-ECO-01 §11].
 	"internal/construction/arithmetic.go":   16,
-	"internal/construction/inheritance.go":  2,
+	"internal/construction/inheritance.go":  0,
 	"internal/construction/resurrection.go": 3,
-	"internal/construction/reverse.go":      2,
+	"internal/construction/reverse.go":      6, // shared refund final-store precision [05 R-ECO-01 §3][05 R-ECO-01 §11]
 	"internal/economy/tick.go":              2,
 	"internal/mission/initial_mission.go":   8,
 	"internal/movement/altitude.go":         6,
