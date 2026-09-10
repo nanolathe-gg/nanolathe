@@ -217,29 +217,46 @@ func (p *modelPage) reset(maxH int) {
 	p.subjects = p.subjects[:0]
 }
 
+// modelSlotGutter is the margin of untouched page left around every slot, for
+// the reason the two atlas borders exist (tileAtlasPad, sceneAtlasPad;
+// docs/DESIGN_GPU_RENDERER.md §16.3 "Sampling"): under the world transform a
+// commit quad's source coordinate can floor one texel past its slot, and
+// without the margin that texel is the next subject's — one unit wearing a
+// column of another unit's colours. The page is cleared to the composition
+// background index 1 over its whole used extent before every frame, and the
+// commit skips index 1, so a read into the gutter is the skip it should be.
+//
+// It is a multiple of modelSlotAlign, so slot origins and sizes stay even and
+// a doubled slot's two-by-two blocks still line up [03 R-REN-03A §7].
+const modelSlotGutter = modelSlotAlign
+
 // alloc reserves one shelf-packed region on an even origin with even
 // dimensions, so a doubled slot's two-by-two blocks line up with the native
-// pixel the resolve produces [03 R-REN-03A §7].
+// pixel the resolve produces [03 R-REN-03A §7]. The reservation is the slot
+// plus its modelSlotGutter margin; the rectangle returned is the slot itself.
 func (p *modelPage) alloc(w, h int) (image.Rectangle, bool) {
 	if w <= 0 || h <= 0 {
 		return image.Rectangle{}, false
 	}
 	w, h = ceilTo(w, modelSlotAlign), ceilTo(h, modelSlotAlign)
-	if w > modelPageWidth || h > p.maxH {
+	rw, rh := w+2*modelSlotGutter, h+2*modelSlotGutter
+	if rw > modelPageWidth || rh > p.maxH {
 		return image.Rectangle{}, false
 	}
-	if p.x+w > modelPageWidth {
+	if p.x+rw > modelPageWidth {
 		p.y, p.x, p.rowH = p.y+p.rowH, 0, 0
 	}
-	if p.y+h > p.maxH {
+	if p.y+rh > p.maxH {
 		return image.Rectangle{}, false
 	}
-	rect := image.Rect(p.x, p.y, p.x+w, p.y+h)
-	p.x += w
-	if h > p.rowH {
-		p.rowH = h
+	rect := image.Rect(p.x+modelSlotGutter, p.y+modelSlotGutter,
+		p.x+modelSlotGutter+w, p.y+modelSlotGutter+h)
+	p.x += rw
+	if rh > p.rowH {
+		p.rowH = rh
 	}
-	p.usedW, p.usedH = maxInt(p.usedW, rect.Max.X), maxInt(p.usedH, rect.Max.Y)
+	p.usedW = maxInt(p.usedW, rect.Max.X+modelSlotGutter)
+	p.usedH = maxInt(p.usedH, rect.Max.Y+modelSlotGutter)
 	return rect, true
 }
 

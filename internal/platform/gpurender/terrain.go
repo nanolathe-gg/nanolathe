@@ -71,22 +71,47 @@ type tileAtlasKey struct {
 // device whose maximum is below the grid gets one page per band of rows, and the
 // draw walks the pages in turn. Tile rectangles are pairwise disjoint, so
 // splitting the pass by page changes no pixel and no order (C-G3).
+//
+// Every cell is surrounded by a one-texel border holding a copy of the tile's
+// own edge, so the cell's stride is side + 2·tileAtlasPad. See tileAtlasPad.
 type tileAtlas struct {
 	pages   []*ebiten.Image
 	side    int // atlas square per tile, the scale's Px(32)
+	stride  int // side + 2*tileAtlasPad, the pitch between cell origins
 	cols    int // tiles per atlas row
 	rowsPer int // tile rows per page
 	perPage int // cols*rowsPer
 	count   int // number of tiles (len(TileSet))
 }
 
+// tileAtlasPad is the border of duplicated edge texels around every cell of the
+// tile atlas (docs/DESIGN_GPU_RENDERER.md §16.3 "Sampling").
+//
+// Without it a tile's cell touches its neighbour's, and a sample one texel past
+// the cell reads a different tile. That happens: under the world transform the
+// quad's source coordinate is interpolated across a destination span shorter
+// than the source span, so the fragment nearest the quad's far edge maps to a
+// source coordinate within a fraction of a texel of the cell's far edge, and the
+// interpolator's own rounding is enough to floor it one texel over. Whether it
+// does depends on where the tile's screen edge falls relative to the pixel
+// centre, so it appears for a periodic subset of tile columns at some factors
+// and none at others — the intermittent tile seams the play test reported. With
+// the border, a read one texel past the cell returns the tile's own edge texel,
+// which is what a clamp would have returned, and the seam cannot form. It is
+// also what makes the filtered sampling below safe to write as four unclamped
+// taps.
+//
+// The cost is (side+2)²/side² of the atlas: 13% at the native tile and 6% at the
+// detail one.
+const tileAtlasPad = 1
+
 // atlasSrc returns the page and the atlas pixel coordinate of intra-tile pixel
 // (sx, sy) of tile id. The caller has already validated id against count.
 func (a *tileAtlas) atlasSrc(id, sx, sy int) (page, ax, ay int) {
 	page = id / a.perPage
 	local := id % a.perPage
-	gx := (local % a.cols) * a.side
-	gy := (local / a.cols) * a.side
+	gx := (local%a.cols)*a.stride + tileAtlasPad
+	gy := (local/a.cols)*a.stride + tileAtlasPad
 	return page, gx + sx, gy + sy
 }
 
@@ -100,9 +125,9 @@ func terrainAtlasMaxSide() int {
 	return terrainAtlasFallbackSide
 }
 
-// terrainAtlasLayout picks the page grid for n tiles of the given side: a near-
-// square grid, narrowed to what one page can hold, and banded into pages when
-// the rows do not fit one page either.
+// terrainAtlasLayout picks the page grid for n tiles of the given cell stride
+// (the tile side plus its two borders): a near-square grid, narrowed to what one
+// page can hold, and banded into pages when the rows do not fit one page either.
 func terrainAtlasLayout(n, side, maxSide int) (cols, rowsPer, pages int) {
 	// Near-square grid: cols = ceil(sqrt(n)). Integer sqrt by search keeps this
 	// free of float rounding at the grid boundary.
@@ -146,16 +171,18 @@ func buildTileAtlas(t *world.Terrain, detail [][drawlist.DetailTilePixels]byte, 
 	}
 	scale = scale.Norm()
 	side := int(scale.Px(terrainTileSize))
-	cols, rowsPer, pageCount := terrainAtlasLayout(n, side, terrainAtlasMaxSide())
+	stride := side + 2*tileAtlasPad
+	cols, rowsPer, pageCount := terrainAtlasLayout(n, stride, terrainAtlasMaxSide())
 	a := &tileAtlas{
 		side:    side,
+		stride:  stride,
 		cols:    cols,
 		rowsPer: rowsPer,
 		perPage: cols * rowsPer,
 		count:   n,
 		pages:   make([]*ebiten.Image, pageCount),
 	}
-	atlasW := cols * side
+	atlasW := cols * stride
 	for page := 0; page < pageCount; page++ {
 		first := page * a.perPage
 		last := first + a.perPage
@@ -163,7 +190,7 @@ func buildTileAtlas(t *world.Terrain, detail [][drawlist.DetailTilePixels]byte, 
 			last = n
 		}
 		rows := (last - first + cols - 1) / cols
-		atlasH := rows * side
+		atlasH := rows * stride
 		buf := make([]byte, atlasW*atlasH*4)
 		for i := first; i < last; i++ {
 			// The blitter's per-tile source choice: the detail tile at a scale
@@ -178,8 +205,8 @@ func buildTileAtlas(t *world.Terrain, detail [][drawlist.DetailTilePixels]byte, 
 				continue
 			}
 			local := i - first
-			gx := (local % cols) * side
-			gy := (local / cols) * side
+			gx := (local%cols)*stride + tileAtlasPad
+			gy := (local/cols)*stride + tileAtlasPad
 			for ty := 0; ty < side; ty++ {
 				sy := ty
 				if !direct {
@@ -203,12 +230,41 @@ func buildTileAtlas(t *world.Terrain, detail [][drawlist.DetailTilePixels]byte, 
 					buf[p+3] = 255
 				}
 			}
+			padTileCell(buf, atlasW, gx, gy, side)
 		}
 		img := ebiten.NewImage(atlasW, atlasH)
 		img.WritePixels(buf)
 		a.pages[page] = img
 	}
 	return a
+}
+
+// padTileCell copies a cell's edge texels into the one-texel border around it,
+// so a sample that lands just outside the cell returns the tile's own edge
+// rather than the neighbouring tile's (tileAtlasPad). (gx, gy) is the cell's
+// first INNER texel and side its edge; the border it fills is the ring
+// immediately outside that square, corners included.
+func padTileCell(buf []byte, atlasW, gx, gy, side int) {
+	at := func(x, y int) int { return (y*atlasW + x) * 4 }
+	copyTexel := func(dx, dy, sx, sy int) {
+		d, s := at(dx, dy), at(sx, sy)
+		if d < 0 || s < 0 || d+4 > len(buf) || s+4 > len(buf) {
+			return
+		}
+		copy(buf[d:d+4], buf[s:s+4])
+	}
+	x0, y0 := gx-tileAtlasPad, gy-tileAtlasPad
+	x1, y1 := gx+side, gy+side // first texel past the cell on each axis
+	for k := 0; k < side; k++ {
+		copyTexel(gx+k, y0, gx+k, gy)        // top row
+		copyTexel(gx+k, y1, gx+k, gy+side-1) // bottom row
+		copyTexel(x0, gy+k, gx, gy+k)        // left column
+		copyTexel(x1, gy+k, gx+side-1, gy+k) // right column
+	}
+	copyTexel(x0, y0, gx, gy) // corners
+	copyTexel(x1, y0, gx+side-1, gy)
+	copyTexel(x0, y1, gx, gy+side-1)
+	copyTexel(x1, y1, gx+side-1, gy+side-1)
 }
 
 // atlasFor returns the cached tile atlas for one (tile set, detail tiles, scale)
@@ -277,6 +333,15 @@ func (r *Renderer) Terrain(c drawlist.Terrain) {
 	originX := int(c.OriginX)
 	originY := int(c.OriginY)
 	tileScreen := atlas.side
+	// Filtered sampling rides a vertex lane rather than a second shader, so the
+	// terrain still merges into the frame's own opaque run
+	// (docs/DESIGN_GPU_RENDERER.md §16.3 "Sampling"). It is armed exactly when
+	// the world transform is: at a rest step the fetch is the nearest one this
+	// pass has always made, so the parity gate is untouched.
+	filter := float32(0)
+	if r.sched.worldOn {
+		filter = 1
+	}
 	// TODO(question): below the strategic threshold the 1x tiles are sampled
 	// down by the world transform, nearest, one tile quad at a time
 	// (DESIGN_GPU_RENDERER §16.10). A half-resolution tile set would sample
@@ -367,7 +432,7 @@ func (r *Renderer) Terrain(c drawlist.Terrain) {
 				r.sched.quad(schedOpaque,
 					float32(dstX0), float32(dstY0), float32(dstX1), float32(dstY1),
 					float32(ax0), float32(ay0), float32(ax0+w), float32(ay0+h),
-					[4]float32{}, [4]float32{0, 0, 0, sceneOpTerrain})
+					[4]float32{}, [4]float32{filter, 0, 0, sceneOpTerrain})
 			}
 		}
 	}

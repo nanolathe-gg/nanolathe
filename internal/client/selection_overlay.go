@@ -71,12 +71,16 @@ func (c *Client) SetSelectionDrag(d SelectionDrag) {
 // edge, and the placeholder here is the one with a traced writer. A retail
 // capture of the descriptor at the selection draw with the rail retracted
 // settles it; nothing else will.
+// The clip is the FRAMEBUFFER's, not the record extent's: the rectangle is
+// drawn from pointer coordinates outside the world region, so both the shape
+// and the rectangle that bounds it are framebuffer pixels at every factor
+// (DESIGN_GPU_RENDERER §16.3). At a rest factor the two extents are the same
+// number, so this changes no composed pixel there.
 func (c *Client) selectionClip() Rect {
 	if c == nil {
 		return Rect{MinX: 1, MinY: 1, MaxX: 0, MaxY: 0}
 	}
-	recW, recH := c.recordExtent()
-	return Rect{MinX: 128, MinY: 32, MaxX: int32(recW) - 1, MaxY: int32(recH) - 33}
+	return Rect{MinX: 128, MinY: 32, MaxX: int32(c.width) - 1, MaxY: int32(c.height) - 33}
 }
 
 func (c *Client) drawSelectionDrag() {

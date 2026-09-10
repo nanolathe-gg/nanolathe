@@ -415,13 +415,21 @@ func (c *Client) drawCommittedFrame(cur *frame.Frame, ok bool) {
 	c.drawUnitLabels(cur, ok)
 	c.drawStripSlot(cur, 9)
 	c.drawFog(cur)
-	c.drawSelectionStage()
-	// The world region ends here: everything after it is chrome, drawn in
-	// framebuffer pixels and never scaled (§16.3). The strategic marker layer
-	// sits between the two — it is world CONTENT at a fixed SCREEN size, so it
-	// is positioned through the live factor and recorded outside the transform
-	// (§16.11).
+	// The world region ends here: everything after it is positioned in
+	// FRAMEBUFFER pixels and is never scaled (§16.3).
+	//
+	// The drag-selection rectangle is the first of them. Its corners are the
+	// POINTER's own coordinates, not a projected world point, so scaling it with
+	// the world put the box at f times the distance from the framebuffer origin
+	// that the pointer was — the rubber band came away from the cursor as soon as
+	// the factor left a rest step. Its position in the sequence is unchanged: it
+	// still composes after the fog and before the marker layer and the chrome
+	// [03 §1].
 	c.emitWorldEnd()
+	c.drawSelectionStage()
+	// The strategic marker layer is world CONTENT at a fixed SCREEN size, so it
+	// too is positioned through the live factor and recorded outside the
+	// transform (§16.11).
 	c.drawStrategicMarkers(cur)
 	c.drawInterface(cur)
 }
@@ -720,11 +728,13 @@ func (c *Client) drawFeature(f *frame.FeatureView) {
 	if c == nil || f == nil {
 		return
 	}
-	// Below the strategic cut this layer is not recorded at all: the marker
-	// layer stands in for it (DESIGN_GPU_RENDERER §16.10).
-	if c.strategicView() {
-		return
-	}
+	// Features record at EVERY factor, sprite and 3DO alike, and so do their
+	// shadows (DESIGN_GPU_RENDERER §16.10). The strategic view used to drop
+	// them with the units: a play test found the result jarring — the rocks,
+	// trees and wrecks are landmarks, and the map losing them at the cut is
+	// what the strategic view is least able to afford. Units keep the cut,
+	// because the marker layer stands in for them; nothing stands in for a
+	// feature.
 	sx, sy := c.featureScreenPos(*f)
 	is3DO := f.Model != "" && f.Filename == "" || (f.Filename == "" && f.SeqName == "")
 	if is3DO && f.Model != "" {

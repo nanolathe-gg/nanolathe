@@ -13,21 +13,27 @@ import (
 )
 
 // IsUnitViewInRect reports whether the projected UnitView falls inside the
-// inclusive drag rectangle [07 §9] C6. Rect is shell (window) coords.
+// inclusive drag rectangle [07 §9] C6. Rect is shell (window) coords — the
+// PRESENTED picture's own pixels — while the projection is at the record step,
+// so the rectangle converts first, exactly as SnapshotUnitHandlesInRect's does
+// (DESIGN_GPU_RENDERER §16.4). recordRect is the identity at every rest factor.
 func IsUnitViewInRect(cam *camera.Camera, v frame.UnitView, rect Rect) bool {
 	if cam == nil || rectEmpty(rect) {
 		return false
 	}
+	rect = recordRect(cam, rect)
 	p := NewViewportTransform(cam, nil, 0, 0).WorldToSurface(v.X, v.Y, v.Z)
 	return rect.Contains(p.X, p.Y)
 }
 
 // IsUnitInRect reports whether the live Unit's projected position is inside
-// the inclusive drag rectangle [07 §9] C6. Rect is shell.
+// the inclusive drag rectangle [07 §9] C6. Rect is shell, and converts the same
+// way IsUnitViewInRect's does (§16.4).
 func IsUnitInRect(cam *camera.Camera, u *units.Unit, rect Rect) bool {
 	if cam == nil || u == nil || rectEmpty(rect) {
 		return false
 	}
+	rect = recordRect(cam, rect)
 	p := NewViewportTransform(cam, nil, 0, 0).WorldToSurface(u.X, u.Y, u.Z)
 	return rect.Contains(p.X, p.Y)
 }

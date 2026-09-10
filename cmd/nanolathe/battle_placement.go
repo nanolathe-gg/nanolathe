@@ -10,6 +10,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/hud"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
@@ -206,6 +207,24 @@ func (b *battleSession) commitBuild(queued bool) bool {
 		return false
 	}
 	return true
+}
+
+// worldOverlayArmed reports whether this frame's UI stage has a world-positioned
+// overlay to draw — the armed build ghost, or the Shift-gated order-queue
+// overlay — and so has to open a world region for it
+// (DESIGN_GPU_RENDERER §16.3). It is a superset of what the two draw: an armed
+// placement whose pointer has left the viewport, or a held Shift with nothing
+// queued, opens a region that stays empty, which costs the executor two schedule
+// submissions and no pixels.
+func (b *battleSession) worldOverlayArmed(cur *frame.Frame) bool {
+	if b == nil {
+		return false
+	}
+	state := b.battleState()
+	if state == nil {
+		return false
+	}
+	return state.Input.BuildDef != "" || (cur != nil && state.Input.ShiftHeld)
 }
 
 // drawBuildGhost draws the armed build site the way retail does [07 §9].

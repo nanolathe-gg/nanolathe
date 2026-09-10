@@ -396,12 +396,16 @@ func (s *scheduler) setWorld(num, den int32) {
 // clearWorld closes the world region.
 func (s *scheduler) clearWorld() { s.worldOn, s.worldScale = false, 1 }
 
-// TODO(question): sources are sampled NEAREST at every factor, because the
-// scene shader reads palette indices and an index cannot be interpolated
-// (DESIGN_GPU_RENDERER §16.3 "Sampling"). Filtering after the palette resolve —
-// four texels, each through PAL, blended in colour — would soften the aliasing
-// of thin features at four times the lookups; whether that is worth the cost
-// needs a measurement and a human look.
+// Sampling is nearest in index space and filtered, when it is filtered, only
+// after the palette resolve (DESIGN_GPU_RENDERER §16.3 "Sampling", C-G4). The
+// terrain takes the four-tap blend whenever this transform is armed; its taps
+// ride the tile atlas's own border, so they need no clamp.
+//
+// TODO(question): a KEYED source cannot be blended the same way — the four taps
+// straddle the colour key, so the blend has to weight by coverage and hand the
+// composite a fractional alpha, which is an antialiased sprite edge and a look
+// to approve rather than a correctness fix. Sprites, model commits and the fog
+// atlas therefore stay nearest.
 
 // txf maps one record coordinate to its screen coordinate.
 func (s *scheduler) txf(v float32) float32 {
@@ -805,12 +809,16 @@ func (s *scheduler) quad(class int, dx0, dy0, dx1, dy1, sx0, sy0, sx1, sy1 float
 	}
 	if s.worldOn {
 		dx0, dy0, dx1, dy1 = s.txf(dx0), s.txf(dy0), s.txf(dx1), s.txf(dy1)
-		// A world quad that shrinks below one screen pixel keeps one: the
-		// one-pixel primitives the world is full of — the selection quad's
-		// lines, a dotted path's dots, a lit point's row span — would otherwise
-		// fall between two pixel centres and vanish at an arbitrary subset of
-		// factors (§16.3). Nothing wider is touched, so the terrain's tiles and
-		// every sprite still tile the plane exactly.
+		// A world quad that shrinks below one screen pixel is given a span of
+		// EXACTLY one: the one-pixel primitives the world is full of — the
+		// selection quad's lines, a dotted path's dots, a lit point's row span —
+		// would otherwise fall between two pixel centres and vanish at an
+		// arbitrary subset of factors, and a span rounded up any further would
+		// cover one centre at some factors and two at others, so a one-pixel line
+		// would flicker in width as the view eased (§16.3). A span of exactly 1.0
+		// contains exactly one pixel centre wherever it starts. Nothing already
+		// wider is touched, so the terrain's tiles and every sprite still tile the
+		// plane exactly.
 		if dx1-dx0 < 1 {
 			dx1 = dx0 + 1
 		}

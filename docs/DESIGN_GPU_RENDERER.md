@@ -2015,6 +2015,33 @@ classic executor and every existing fixture are unaffected. The region opens
 after the clear and closes before the chrome; the strategic marker layer sits
 between them.
 
+**The rule the region encodes.** A draw positioned from WORLD coordinates
+belongs inside a world region; a draw positioned from POINTER or framebuffer
+coordinates belongs outside one. A pick test compares like with like: presented
+pointer against presented positions, or record pointer (`ScreenToRecord`)
+against record positions. The first build of this section broke the rule in
+both directions and a play test found each:
+
+* The **drag-selection rectangle** takes the pointer's own framebuffer corners
+  and was recorded before the close marker, so the executor scaled it and the
+  rubber band came away from the cursor. It now records after the close, and its
+  clip is the framebuffer's rather than the record extent's.
+* The **build ghost** and the **order-queue overlay** are world-positioned but
+  are composed in the UI stage, after the close marker, so they were left at
+  record coordinates while the world under them shrank — at half scale the ghost
+  sat twice as far from the framebuffer origin as its site. The client therefore
+  exposes `BeginWorldOverlay`/`EndWorldOverlay`, a **second** world region the UI
+  stage brackets those two with. The executor already submits its schedule at
+  every boundary, so a second region costs two more submissions on the frames
+  that open one, and the battle opens one only when a placement is armed or
+  Shift is held.
+
+Inside an overlay region the UI helpers that bake a framebuffer bound into the
+recorded command — `UIBlit`'s clip and `UIText`'s default control width — take
+the record extent instead, so a world overlay near the right or bottom edge is
+not clipped away before the executor has shrunk it. At a rest factor the two
+extents are equal, so none of this changes a composed pixel there.
+
 **The transform.** Inside the region the modern executor's scheduler scales
 every rectangle it places and every vertex it appends by *factor / step's
 factor*, about the **surface origin**. It is a pure scale with no translation
@@ -2029,13 +2056,6 @@ It is applied at the scheduler's intake — `beginBlended`, `beginPoint`, `quad`
 and `quadCorners` — so the overlap tests that decide a command's phase compare
 what actually lands on the composite. At a rest step it is disarmed and every
 device call is the one the build before this section made.
-
-**One screen pixel minimum.** A world quad that would shrink below one screen
-pixel keeps one. The world is full of one-pixel primitives — the selection
-quad's lines, a dotted path's dots, a lit point's row span — and without this
-they fall between two pixel centres and vanish at an arbitrary subset of
-factors. Nothing wider is touched, so the terrain's tiles and every sprite still
-tile the plane exactly and seamlessly.
 
 **The record extent.** Below the step the recorded world has to cover more
 pixels than the framebuffer has: `recordW = Project_step(Inverse_factor(width))`
@@ -2063,14 +2083,82 @@ shader's cell lattice and atlas tile stay in record pixels; its dither checker
 stays a test on the destination pixel, and so stays one screen pixel wide, as it
 already did at every view scale.
 
-**Sampling.** Sources are sampled nearest at every factor, which is what the
-scene shader's index-space lookups require: a palette index cannot be
-interpolated. Thin features therefore alias when the transform shrinks them —
-a model's shadow of a gun barrel can survive as a crisp one-pixel line where the
-rows around it were dropped. `TODO(question)`: filtering after the palette
-resolve (sample four texels, resolve each through PAL, blend the colours) would
-soften that at four times the lookups; whether it is worth the cost needs a
-measurement and a human look, not a guess.
+**Sampling — contract Z10.** A palette index cannot be interpolated, so every
+index-space lookup is a nearest texel fetch and stays one (C-G4). Filtering, when
+it happens, happens **after** the palette resolve: four texels, each resolved
+through PAL, blended in colour.
+
+The terrain takes that path whenever the world transform is not the identity.
+One screen pixel then covers more than one tile texel, and a nearest fetch picks
+an arbitrary one of them, so the map's noise crawls as the view eases and
+sparkles between adjacent factors. The four taps ride the tile atlas's own
+border, so they need no clamp of their own, and the choice rides a vertex lane
+(`Custom0` of `sceneOpTerrain`) rather than a second shader, so the terrain still
+merges into the frame's own opaque run. At a rest step the lane is zero and the
+fetch is the nearest one this pass has always made, which is what keeps the §6
+parity gate exact.
+
+Measured on the seeded Ashap Plateau scene at 1024×768 over a 200×150 terrain
+region: the mean absolute difference between captures at 0.70× and 0.71× falls
+from 10.75 to 7.83, and the region's high-frequency energy — each pixel against
+its own 3×3 mean, which is what "sparkle" is — from 7.12 to 4.42, a 38%
+reduction. The cost did not register: submission time is unchanged (1.35 ms
+against 1.37 ms at 0.7×) because the lane is one more float, and the draw cadence
+sits on the display's 16.68 ms floor both ways at 1024×768 **and** at 3840×2160,
+so the extra fragment work has headroom to spare on a Metal host.
+
+Sprites, model commits and the fog atlas stay nearest. `TODO(question)`: a keyed
+source cannot be blended the same way — the four taps straddle the colour key, so
+the blend has to weight by coverage and hand the composite a fractional alpha,
+which is an antialiased sprite edge and a look to approve rather than a
+correctness fix. Whether the Enhanced view wants that is a human call.
+
+**One screen pixel, exactly one.** A world quad that would shrink below one
+screen pixel is given a span of exactly 1.0, not "at least one". The world is
+full of one-pixel primitives — the selection quad's lines, a dotted path's dots,
+a lit point's row span — and without the floor they fall between two pixel
+centres and vanish at an arbitrary subset of factors; with a floor that rounded
+up any further they would cover one centre at some factors and two at others, and
+a one-pixel line would flicker in width as the view eased. A span of exactly 1.0
+contains exactly one pixel centre wherever it starts. Nothing already wider is
+touched, so the terrain's tiles and every sprite still tile the plane exactly and
+seamlessly, and since the transform only ever shrinks, a one-record-pixel
+primitive can never arrive wider than one screen pixel to begin with.
+
+**Every atlas cell carries a border — contract Z9.** Nearest sampling is exact
+only while the source coordinate lands strictly inside the quad's source
+rectangle, and under the transform it does not always. The rectangle's source
+span is longer than its destination span, so the fragment nearest the far edge
+maps to within a fraction of a texel of the source rectangle's far edge, and the
+interpolator's own rounding is enough to floor it one texel over. Whether it does
+depends on where the quad's screen edge falls relative to a pixel centre, which
+is a function of the factor and of the camera modulo the tile — so it happens for
+a periodic subset of tile columns at some factors and for none at others. That is
+the intermittent **tile seam** the play test reported, and the same read at a
+sprite's or a model slot's edge is the stray foreign pixel beside it.
+
+The fix is a border of duplicated edge texels around every packed entry, which is
+the clamp the sampler will not do for us: Ebitengine does not confine a sample to
+a sub-rectangle of a bound image, and a per-quad clamp would need four more
+vertex lanes than the scene shader has. Three atlases carry one:
+
+* the **tile atlas** pads each cell by one texel of the tile's own edge
+  (`tileAtlasPad`), at 13% of the atlas at the native tile and 6% at the detail
+  one;
+* the **scene atlas** reserves and fills the same one-texel border around every
+  packed GAF frame, glyph strip, PCX and surface (`sceneAtlasPad`);
+* the **model slot atlas** leaves a two-texel gutter around every slot
+  (`modelSlotGutter`, a multiple of `modelSlotAlign` so slot origins stay even
+  [03 R-REN-03A §7]). The page is cleared to the composition background over its
+  whole used extent, and the commit skips that index, so a read into the gutter
+  is the skip it should be.
+
+An entry's recorded placement stays its first **inner** texel in all three, so no
+recorded source rectangle changes and a rest step composes exactly what it
+composed before. Measured on the seeded Ashap Plateau scene at 1024×768: the
+borders change nothing at 1× or 2× and nothing at most factors, and they remove
+between three and 2,314 pixels at 0.75×, 0.78×, 0.8×, 0.82×, 0.92×, 1.25× and
+1.75× — every one of them a run along a tile, sprite or slot edge.
 
 ### 16.4 Picking — contract Z3
 
@@ -2174,15 +2262,22 @@ least 1×, and clampAxis's view-larger-than-map domain stays exactly where
 | 2× … 1× | everything, recorded at the 2× step |
 | 1× … 0.625× | everything, recorded at the 1× step (2× above 1×) |
 | 0.625× … 0.5× | everything, plus the marker layer fading in |
-| below 0.5× | terrain, fog, selection fills, drag rectangle, dotted paths, markers |
+| below 0.5× | terrain, fog, features and their shadows, selection fills, the build ghost and queue overlay, drag rectangle, dotted paths, markers |
 
 ### 16.10 What the strategic view drops — contract Z7
 
-Below `strategicModelCut` (0.5×) the recorder does not emit unit and feature
-models, sprite features, projectiles, effect strips, trails, unit labels or
-health bars. Terrain, fog, the selection quad, the drag rectangle and the dotted
-paths still record: they are the map, and the map is what the strategic view is
-for.
+Below `strategicModelCut` (0.5×) the recorder does not emit unit models,
+projectiles, effect strips, trails, unit labels or health bars. Terrain, fog,
+**the features** — sprite and 3DO alike, with their shadows — the selection
+quad, the build ghost, the order-queue overlay, the drag rectangle and the
+dotted paths still record: they are the map, and the map is what the strategic
+view is for.
+
+Features were originally dropped with the units. A play test found that jarring
+and it is: a marker stands in for a unit, and nothing stands in for a rock, a
+tree or a wreck, so the map lost its landmarks at exactly the factor a player
+pulls out to read them by. They cost one sprite quad each and the transform
+shrinks them like everything else, so they stay.
 
 Terrain below 0.5× is the 1× tile set sampled down by the transform.
 `TODO(question)`: a half-resolution tile set would sample better and cost a
@@ -2236,20 +2331,40 @@ Below `strategicMarkerOn` (0.625×) each unit becomes one filled square of
    on the log scale; the snap waits for the idle delay and fires only inside the
    band and only at or above 1×; the ease terminates.
 4. **The recorder.** `internal/client/world_zoom_test.go`: the record extent;
-   one world region per frame with the right operands; the strategic drops and
-   the surviving selection fills; the marker count and the alpha ramp at 0.625×,
+   one world region per frame with the right operands; the strategic drops, the
+   surviving selection fills and the surviving features; the drag rectangle
+   recorded outside every region; the marker count and the alpha ramp at 0.625×,
    0.5625× and 0.5×; the minimap gate.
-5. **The executor.** `internal/platform/gpurender/world_test.go`: a rest step
+5. **The UI stage's own region.** `cmd/nanolathe/battle_world_overlay_test.go`:
+   at 0.5× and at 1.3× an armed placement records two open/close pairs, the
+   ghost's fills lie inside a region, and the recorded rectangle put through
+   factor/step is the presented `f·(site − camera)` to within a pixel.
+6. **The executor.** `internal/platform/gpurender/world_test.go`: a rest step
    compiles byte-identical geometry, a non-rest factor places a known sprite at
-   the expected scaled rectangle, and a world primitive never shrinks below one
-   screen pixel.
-6. **Viewed.** Modern captures at 1.3×, 0.7×, 0.45× and 0.3× on the same scene:
-   terrain seamless, HUD unscaled, markers present and models absent below 0.5×.
+   the expected scaled rectangle, and a sub-pixel world primitive compiles to a
+   span of exactly one screen pixel while a wider one is untouched.
+   `atlas_pad_test.go`: each of the three atlases keeps its border, and the tile
+   border holds the cell's own edge.
+7. **Viewed.** Modern captures at 1.3×, 0.7×, 0.45× and 0.3× on the same scene:
+   terrain seamless, HUD unscaled, features present at every factor, markers
+   present and unit models absent below 0.5×.
+8. **The seam sweep.** Modern captures at 38 factors from 0.45× to 2×, before and
+   after the atlas borders: identical at every rest step and at 31 of the others,
+   and a run of foreign pixels removed at 0.75×, 0.78×, 0.8×, 0.82×, 0.92×, 1.25×
+   and 1.75×.
 
 ### 16.13 Owed
 
 A human look at the window itself: the wheel in motion, the snap's feel, F9
 across the executors, and the strategic view on a map with many units — no
 capture route produces motion, and the feel knobs are meant to be tuned against
-it. The two `TODO(question)` items above (filtered sampling and a
-half-resolution tile set) and the model cross-fade are the known follow-ups.
+it. The filtered terrain is part of that look: it is a taste call as well as a
+measurement, and a player who wants the crunchy nearest-sampled map back should
+be heard before the lane becomes permanent.
+
+The known follow-ups: a keyed source's filtered sampling (`TODO(question)` in
+`gpurender/schedule.go`), the half-resolution tile set for the strategic range
+(`TODO(question)` in `gpurender/terrain.go`), and the model cross-fade at the
+strategic cut (`TODO(question)` at `Client.markerAlpha`). The capture route
+cannot arm a build placement — `--shot-select` disarms one — so the ghost's
+position is held by its test rather than by a capture.

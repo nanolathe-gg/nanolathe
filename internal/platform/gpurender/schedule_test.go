@@ -141,11 +141,16 @@ func TestSchedulerLitPointsSplitOnRepeatedPixel(t *testing.T) {
 func TestSchedulerSplitsRunsWithoutReordering(t *testing.T) {
 	r, frame := schedulerFixture(t)
 	r.sched.resetFrame(64, 64)
-	other := &formats.GAFFrame{Width: 1, Height: 1, Pixels: []byte{9}, Transparent: []bool{false}}
-	// Fill the first page between the two frames so the second lands on a page of
-	// its own and the batch must split at that command, in order.
+	// The second frame is wider than a shared atlas page, so the packer gives it
+	// a page of its own and the batch must split at that command, in order. Its
+	// destination quad is clipped to the fixture surface like any other, so only
+	// the source page differs. Naming a size the shelf packer cannot share is
+	// what keeps this fixture independent of the packer's own arithmetic — the
+	// per-entry border of sceneAtlasPad included.
+	wide := sceneAtlasPageSize + 1
+	other := &formats.GAFFrame{Width: uint16(wide), Height: 1,
+		Pixels: make([]byte, wide), Transparent: make([]bool, wide)}
 	r.sceneFrameFor(frame)
-	r.scene.allocate(sceneAtlasPageSize, sceneAtlasPageSize-1)
 	if e := r.sceneFrameFor(other); e.page == r.sceneFrameFor(frame).page {
 		t.Fatalf("both frames packed onto page %d; the split cannot be exercised", e.page)
 	}

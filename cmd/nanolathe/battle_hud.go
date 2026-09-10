@@ -758,7 +758,25 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	// into the battle view and only then blits the GUI frames over them, so a
 	// marker near the map edge is covered by the chrome instead of drawing on
 	// top of it [07 §9].
+	//
+	// Both are positioned from WORLD coordinates — each projects through the
+	// camera at the RECORD step and subtracts the view origin — so both belong
+	// inside a world region, and the frame's own region closed before this stage
+	// began. Without the bracket the modern executor left them untransformed
+	// while it shrank the world under them: at half scale the ghost sat twice as
+	// far from the framebuffer origin as the site it marked, which is the
+	// play-test report of build placement being "way off" when zoomed out
+	// (DESIGN_GPU_RENDERER §16.3). Anything in this block positioned from the
+	// pointer instead would have to stay outside the bracket; nothing is.
+	//
+	// The region is opened only on a frame that has one of the two to draw, so an
+	// ordinary frame pays neither marker nor the schedule submission each one
+	// costs the modern executor.
 	if b != nil {
+		overlay := b.worldOverlayArmed(cur)
+		if overlay {
+			c.BeginWorldOverlay()
+		}
 		b.drawBuildGhost(c)
 		if frameOK && cur != nil {
 			// The walker's four full-mask sources [R-P0-11 §3]: the follow
@@ -776,6 +794,9 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 			// picker from here — that would breach I6; `footerHoverUnit` is the
 			// composer's own per-frame pointer record.
 			drawQueueOverlay(c, b, cur, cur.Tick, b.battleState().Input.ShiftHeld, cur.Selection.LocalPlayer, b.cam.Tracked(), b.footerHoverUnit)
+		}
+		if overlay {
+			c.EndWorldOverlay()
 		}
 	}
 	// The shell call order is PANELTOP, PANELBOT, PANELSIDE. All three panel

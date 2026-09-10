@@ -55,7 +55,10 @@ const (
 	// opaque PCX frontend background [fmt pcx].
 	sceneOpCopy = 3
 	// sceneOpTerrain copies an index out of the per-map tile atlas bound in
-	// source 3 [03 §2.2][03 §2.5].
+	// source 3 [03 §2.2][03 §2.5]. Custom0 selects filtered sampling: zero is
+	// the nearest fetch every rest step takes, one is the four-tap blend the
+	// world transform takes when it is not the identity
+	// (docs/DESIGN_GPU_RENDERER.md §16.3 "Sampling").
 	sceneOpTerrain = 4
 	// sceneOpModelCommit copies an index out of the model slot atlas bound in
 	// source 2, skipping the composition background index 1 — the keyed model
@@ -229,6 +232,26 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 	} else if op == ` + fmt.Sprint(sceneOpCopy) + ` {
 		idx = floor(imageSrc0At(srcPos).r*255.0 + 0.5)
 	} else if op == ` + fmt.Sprint(sceneOpTerrain) + ` {
+		if custom.x >= 0.5 {
+			// The world transform is shrinking the terrain, so one screen pixel
+			// covers more than one tile texel and a nearest fetch picks an
+			// arbitrary one of them: the noise crawls as the factor eases and
+			// sparkles between adjacent factors. Blend the four texels around the
+			// sample point instead — each resolved through PAL FIRST, because an
+			// index is a name and averaging two names is meaningless (C-G4). The
+			// taps can reach one texel outside the tile's atlas cell, which is
+			// exactly what the cell's border of duplicated edge texels is for
+			// (tileAtlasPad).
+			q := srcPos - imageSrc0Origin() - vec2(0.5, 0.5)
+			b := floor(q)
+			f := q - b
+			o := imageSrc0Origin() + b + vec2(0.5, 0.5)
+			c00 := palAt(floor(imageSrc3AtFromSrc0Pos(o).r*255.0 + 0.5))
+			c10 := palAt(floor(imageSrc3AtFromSrc0Pos(o+vec2(1.0, 0.0)).r*255.0 + 0.5))
+			c01 := palAt(floor(imageSrc3AtFromSrc0Pos(o+vec2(0.0, 1.0)).r*255.0 + 0.5))
+			c11 := palAt(floor(imageSrc3AtFromSrc0Pos(o+vec2(1.0, 1.0)).r*255.0 + 0.5))
+			return vec4(mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y), 1.0)
+		}
 		p := imageSrc0Origin() + floor(srcPos-imageSrc0Origin()) + vec2(0.5, 0.5)
 		idx = floor(imageSrc3AtFromSrc0Pos(p).r*255.0 + 0.5)
 	} else if op == ` + fmt.Sprint(sceneOpModelCommit) + ` {

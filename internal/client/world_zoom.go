@@ -19,9 +19,10 @@ import (
 // Strategic-view thresholds (§16.10, §16.11). Like the feel knobs in
 // internal/camera/zoomfeel.go these are tuning values, not retail findings.
 const (
-	// strategicModelCut is the factor below which models, sprite features,
-	// projectiles, effects, trails and unit labels stop being recorded. At and
-	// above it the world is drawn in full.
+	// strategicModelCut is the factor below which unit models, projectiles,
+	// effects, trails and unit labels stop being recorded. At and above it the
+	// world is drawn in full. Features are NOT gated on it: they record at
+	// every factor (§16.10).
 	strategicModelCut = camera.ZoomUnit / 2 // 0.5x
 	// strategicMarkerOn is the factor at which the marker layer starts to fade
 	// in. Between it and strategicModelCut both layers are recorded, the markers
@@ -113,6 +114,54 @@ func (c *Client) battleViewportRect() drawlist.Rect {
 func (c *Client) emitWorldBegin() { c.list.RecordWorld(c.worldSpace(true)) }
 func (c *Client) emitWorldEnd()   { c.list.RecordWorld(c.worldSpace(false)) }
 
+// BeginWorldOverlay and EndWorldOverlay open and close a SECOND world region,
+// for the UI stage's world-positioned draws (§16.3).
+//
+// The rule the pair exists to enforce is that a draw positioned from WORLD
+// coordinates belongs inside a world region and a draw positioned from POINTER
+// or framebuffer coordinates belongs outside one. The build ghost and the
+// order-queue overlay are world-positioned — both project through the camera at
+// the RECORD step and subtract the view origin — but they are composed in the
+// UI stage, after the frame's own region has closed, so off a rest step they
+// were drawn at record coordinates and received no transform: at half scale the
+// ghost sat twice as far from the framebuffer origin as the site it marked.
+//
+// A frame has at most one overlay region, and the executor treats each boundary
+// as the barrier the frame's own region already is, so the cost is two extra
+// schedule submissions on the frames that open one.
+//
+// While the region is open the UI helpers that bake a framebuffer bound into
+// the recorded command take the record extent instead, so a world overlay near
+// the right or bottom edge is not clipped away before the executor has shrunk
+// it. At a rest factor the two extents are equal and nothing changes.
+func (c *Client) BeginWorldOverlay() {
+	if c == nil {
+		return
+	}
+	c.worldOverlay = true
+	c.emitWorldBegin()
+}
+
+func (c *Client) EndWorldOverlay() {
+	if c == nil {
+		return
+	}
+	c.emitWorldEnd()
+	c.worldOverlay = false
+}
+
+// uiExtent is the bound the UI helpers clip and truncate against: the
+// framebuffer for the chrome, the record extent inside a world overlay.
+func (c *Client) uiExtent() (int, int) {
+	if c == nil {
+		return 0, 0
+	}
+	if c.worldOverlay {
+		return c.recordExtent()
+	}
+	return c.width, c.height
+}
+
 // liveZoom is this frame's live presentation factor.
 func (c *Client) liveZoom() camera.Zoom {
 	if c == nil || c.cam == nil {
@@ -122,9 +171,9 @@ func (c *Client) liveZoom() camera.Zoom {
 }
 
 // strategicView reports whether this frame is below the model cut, which is
-// where units, sprite features, projectiles, effects, trails, unit labels and
-// the build ghost stop being recorded and the marker layer replaces them
-// (§16.10).
+// where unit models, projectiles, effects, trails and unit labels stop being
+// recorded and the marker layer replaces the units (§16.10). Terrain, fog,
+// features, the selection fills and the drag rectangle are not gated on it.
 func (c *Client) strategicView() bool {
 	return c.liveZoom() < strategicModelCut
 }

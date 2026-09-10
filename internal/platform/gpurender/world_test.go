@@ -100,18 +100,45 @@ func TestWorldRegionScalesAWorldQuad(t *testing.T) {
 // A world primitive that shrinks below one screen pixel keeps one, so the
 // selection quad's lines and a dotted path's dots cannot fall between two pixel
 // centres and vanish at an arbitrary subset of factors (§16.3).
-func TestSubPixelWorldPrimitivesKeepOnePixel(t *testing.T) {
+//
+// It keeps EXACTLY one, not at least one. A span of exactly 1.0 contains exactly
+// one pixel centre wherever it starts, so the primitive is one pixel wide at
+// every factor; a span the rule rounded up to more than that would cover one
+// centre at some factors and two at others, and a one-pixel line would flicker
+// between one and two pixels as the view eased. Anything already wider than a
+// screen pixel is left alone, so the terrain's tiles and every sprite still tile
+// the plane exactly.
+func TestSubPixelWorldPrimitivesKeepExactlyOnePixel(t *testing.T) {
 	r, _ := schedulerFixture(t)
+	for _, z := range []camera.Zoom{camera.ZoomUnit / 4, camera.ZoomUnit * 7 / 10,
+		camera.ZoomUnit * 71 / 100, camera.ZoomUnit * 99 / 100} {
+		r.sched.resetFrame(64, 64)
+		r.worldW, r.worldH = 64, 64
+		r.World(worldRegion(z, camera.ViewScaleNative, 1024, 1024))
+		r.Fill(drawlist.Fill{Rect: drawlist.Rect{X: 8, Y: 8, W: 1, H: 1}, Index: 5})
+		got := quadCorners(r)
+		if len(got) != 4 {
+			t.Fatalf("%s: compiled %d corners, want one quad", z, len(got))
+		}
+		if got[2]-got[0] != 1 || got[3]-got[1] != 1 {
+			t.Fatalf("%s: a one-pixel world fill compiled to the span %vx%v, want exactly 1x1",
+				z, got[2]-got[0], got[3]-got[1])
+		}
+	}
+
+	// A primitive already wider than a screen pixel is not touched: the rule is a
+	// floor, not a thickening.
 	r.sched.resetFrame(64, 64)
 	r.worldW, r.worldH = 64, 64
-	r.World(worldRegion(camera.ZoomUnit/4, camera.ViewScaleNative, 256, 256))
-	r.Fill(drawlist.Fill{Rect: drawlist.Rect{X: 8, Y: 8, W: 1, H: 1}, Index: 5})
+	r.World(worldRegion(camera.ZoomUnit*7/10, camera.ViewScaleNative, 1024, 1024))
+	r.Fill(drawlist.Fill{Rect: drawlist.Rect{X: 0, Y: 0, W: 10, H: 10}, Index: 5})
 	got := quadCorners(r)
 	if len(got) != 4 {
 		t.Fatalf("compiled %d corners, want one quad", len(got))
 	}
-	if got[2]-got[0] < 1 || got[3]-got[1] < 1 {
-		t.Fatalf("a one-pixel world fill compiled to %v, thinner than a screen pixel", got)
+	k := float32(camera.ZoomUnit*7/10) / float32(camera.ZoomUnit)
+	if want := 10 * k; got[2] != want || got[3] != want {
+		t.Fatalf("a ten-pixel world fill compiled to %v, want the scaled %v", got, want)
 	}
 }
 

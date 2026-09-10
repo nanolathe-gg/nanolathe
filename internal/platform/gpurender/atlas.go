@@ -32,6 +32,23 @@ import (
 // (docs/DESIGN_GPU_RENDERER.md §11.2). One page is 16 MiB of RGBA8.
 const sceneAtlasPageSize = 2048
 
+// sceneAtlasPad is the border of duplicated edge texels reserved around every
+// packed entry, for the same reason the tile atlas has one (tileAtlasPad,
+// docs/DESIGN_GPU_RENDERER.md §16.3 "Sampling"): under the world transform a
+// quad's source coordinate is interpolated across a destination span shorter
+// than the source span, and the fragment nearest the quad's far edge can floor
+// one texel past it. Without the border that texel belongs to whatever the
+// shelf packer put next door — a different sprite, a glyph strip, a PCX — and
+// the sprite grows a column of somebody else's pixels at an arbitrary subset of
+// factors. With it the read returns the entry's own edge, which is what a clamp
+// would have returned.
+//
+// The border is reserved by allocate and filled by upload; e.x/e.y stay the
+// entry's own first INNER texel, so every sampler and every recorded source
+// rectangle is unchanged and a rest step composes exactly what it composed
+// before.
+const sceneAtlasPad = 1
+
 // sceneEntry is one source's placement on a scene atlas page. x, y, w and h are
 // page pixel coordinates, which are also the coordinates the scene shader
 // samples, because the whole page is bound as the source image.
@@ -64,6 +81,7 @@ type sceneAtlas struct {
 	fonts  map[*formats.FNT]*fntAtlas
 
 	uploadBuf []byte
+	padBuf    []byte
 }
 
 // pageImage returns the texture backing an entry's page, or nil for an entry
@@ -75,40 +93,43 @@ func (a *sceneAtlas) pageImage(e sceneEntry) *ebiten.Image {
 	return a.pages[e.page].img
 }
 
-// allocate reserves a w×h region and returns its placement. A region larger than
-// a shared page gets a dedicated page. A degenerate size has no placement.
+// allocate reserves a w×h region plus its sceneAtlasPad border and returns the
+// placement of the INNER region. A region larger than a shared page gets a
+// dedicated page. A degenerate size has no placement.
 func (a *sceneAtlas) allocate(w, h int) sceneEntry {
 	if w <= 0 || h <= 0 {
 		return sceneEntry{}
 	}
-	if w > sceneAtlasPageSize || h > sceneAtlasPageSize {
-		p := &scenePage{w: w, h: h}
+	const pad = sceneAtlasPad
+	rw, rh := w+2*pad, h+2*pad
+	if rw > sceneAtlasPageSize || rh > sceneAtlasPageSize {
+		p := &scenePage{w: rw, h: rh}
 		a.pages = append(a.pages, p)
-		return sceneEntry{page: int32(len(a.pages) - 1), w: int32(w), h: int32(h), ok: true}
+		return sceneEntry{page: int32(len(a.pages) - 1), x: pad, y: pad, w: int32(w), h: int32(h), ok: true}
 	}
 	for i, p := range a.pages {
 		if !p.shared {
 			continue
 		}
-		if p.shelfX+w > p.w {
+		if p.shelfX+rw > p.w {
 			// Start the next shelf; its top is the tallest entry of this one.
 			p.shelfY += p.shelfH
 			p.shelfX, p.shelfH = 0, 0
 		}
-		if p.shelfY+h > p.h {
+		if p.shelfY+rh > p.h {
 			continue
 		}
-		e := sceneEntry{page: int32(i), x: int32(p.shelfX), y: int32(p.shelfY), w: int32(w), h: int32(h), ok: true}
-		p.shelfX += w
-		if h > p.shelfH {
-			p.shelfH = h
+		e := sceneEntry{page: int32(i), x: int32(p.shelfX + pad), y: int32(p.shelfY + pad), w: int32(w), h: int32(h), ok: true}
+		p.shelfX += rw
+		if rh > p.shelfH {
+			p.shelfH = rh
 		}
 		return e
 	}
 	p := &scenePage{w: sceneAtlasPageSize, h: sceneAtlasPageSize, shared: true}
 	a.pages = append(a.pages, p)
-	p.shelfX, p.shelfH = w, h
-	return sceneEntry{page: int32(len(a.pages) - 1), w: int32(w), h: int32(h), ok: true}
+	p.shelfX, p.shelfH = rw, rh
+	return sceneEntry{page: int32(len(a.pages) - 1), x: pad, y: pad, w: int32(w), h: int32(h), ok: true}
 }
 
 // ensurePage allocates an entry's texture on first upload. Pages are created
@@ -124,16 +145,56 @@ func (a *sceneAtlas) ensurePage(e sceneEntry) *ebiten.Image {
 	return p.img
 }
 
-// upload writes an entry's RGBA bytes into its page region. len(buf) must be
+// upload writes an entry's RGBA bytes into its page region together with the
+// sceneAtlasPad border of duplicated edge texels around it. len(buf) must be
 // 4*w*h. WritePixels works on a sub-image, so the region is replaced in place
-// without disturbing its neighbours.
+// without disturbing its neighbours, and the border was reserved by allocate so
+// it belongs to this entry alone.
 func (a *sceneAtlas) upload(e sceneEntry, buf []byte) {
 	img := a.ensurePage(e)
 	if img == nil {
 		return
 	}
-	r := image.Rect(int(e.x), int(e.y), int(e.x+e.w), int(e.y+e.h))
-	img.SubImage(r).(*ebiten.Image).WritePixels(buf)
+	const pad = sceneAtlasPad
+	w, h := int(e.w), int(e.h)
+	if len(buf) < w*h*4 {
+		return
+	}
+	pw, ph := w+2*pad, h+2*pad
+	dst := a.padScratch(pw * ph * 4)
+	for y := 0; y < ph; y++ {
+		sy := clampInt(y-pad, 0, h-1)
+		row := dst[y*pw*4 : (y+1)*pw*4]
+		src := buf[sy*w*4 : (sy+1)*w*4]
+		// The row's own left and right borders repeat its first and last texel;
+		// the top and bottom borders repeat the whole first and last row, which
+		// the clamp above already selects, so the corners come out right.
+		for x := 0; x < pw; x++ {
+			sx := clampInt(x-pad, 0, w-1)
+			copy(row[x*4:x*4+4], src[sx*4:sx*4+4])
+		}
+	}
+	r := image.Rect(int(e.x)-pad, int(e.y)-pad, int(e.x)+w+pad, int(e.y)+h+pad)
+	img.SubImage(r).(*ebiten.Image).WritePixels(dst)
+}
+
+// padScratch is upload's own reusable buffer, separate from scratch so an
+// entry's source bytes are not overwritten while they are being padded.
+func (a *sceneAtlas) padScratch(n int) []byte {
+	if cap(a.padBuf) < n {
+		a.padBuf = make([]byte, n)
+	}
+	return a.padBuf[:n]
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // scratch returns a reusable byte buffer of at least n bytes, so a frame's

@@ -10,6 +10,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/hud"
 	"github.com/nanolathe-gg/nanolathe/internal/render"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // zoomRecorderClient is a client with a camera large enough that the strategic
@@ -44,11 +45,81 @@ func TestRecordExtentIsTheFramebufferAtRestAndWiderBelowIt(t *testing.T) {
 	if w < 2*c.width || h < 2*c.height {
 		t.Fatalf("at 0.5x the record extent is %dx%d, want at least twice the %dx%d framebuffer", w, h, c.width, c.height)
 	}
-	// A world clip site takes the record extent; an interface site does not.
-	if got := c.selectionClip(); got.MaxX != int32(w)-1 || got.MaxY != int32(h)-33 {
-		t.Fatalf("the world selection clip is %+v, want the record extent %dx%d", got, w, h)
+	// A world clip site takes the record extent; the fog window is one.
+	if fw, fh := c.recordExtent(); fw != w || fh != h {
+		t.Fatalf("the record extent is not stable across reads: %dx%d then %dx%d", w, h, fw, fh)
+	}
+	// The drag rectangle is NOT a world site: it is drawn from pointer
+	// coordinates outside the region, so its clip stays the framebuffer's.
+	if got := c.selectionClip(); got.MaxX != int32(c.width)-1 || got.MaxY != int32(c.height)-33 {
+		t.Fatalf("the drag-rectangle clip is %+v, want the framebuffer %dx%d", got, c.width, c.height)
 	}
 }
+
+// The drag-selection rectangle is drawn from POINTER coordinates, so it must be
+// recorded OUTSIDE the world region: inside it the executor would scale it by
+// the live factor and the rubber band would come away from the cursor
+// (DESIGN_GPU_RENDERER §16.3).
+func TestDragRectangleIsRecordedOutsideTheWorldRegion(t *testing.T) {
+	c := zoomRecorderClient(t)
+	c.cam.Zoom, c.cam.Scale = camera.ZoomUnit/2, camera.ViewScaleNative
+	c.SetSelectionDrag(SelectionDrag{Active: true, StartX: 200, StartY: 120, EndX: 260, EndY: 180})
+	c.drawCommittedFrame(&frame.Frame{}, true)
+
+	trace := &regionTrace{}
+	c.list.Replay(trace)
+	if trace.regions != 2 {
+		t.Fatalf("recorded %d world markers, want one open and one close", trace.regions)
+	}
+	found := false
+	for _, f := range trace.fills {
+		if f.rect.X != 200 || f.rect.Y != 120 {
+			continue
+		}
+		found = true
+		if f.inWorld {
+			t.Fatalf("the drag rectangle %+v was recorded inside a world region", f.rect)
+		}
+	}
+	if !found {
+		t.Fatalf("no drag rectangle at the pointer's own (200,120) in %d fills", len(trace.fills))
+	}
+}
+
+// regionTrace records each Fill together with whether a world region was open
+// when it was replayed.
+type regionTrace struct {
+	open    bool
+	regions int
+	fills   []struct {
+		rect    drawlist.Rect
+		inWorld bool
+	}
+}
+
+func (s *regionTrace) World(w drawlist.WorldSpace) {
+	s.regions++
+	s.open = w.Begin
+}
+
+func (s *regionTrace) Fill(v drawlist.Fill) {
+	s.fills = append(s.fills, struct {
+		rect    drawlist.Rect
+		inWorld bool
+	}{v.Rect, s.open})
+}
+
+func (s *regionTrace) Clear()                   {}
+func (s *regionTrace) Terrain(drawlist.Terrain) {}
+func (s *regionTrace) Sprite(drawlist.Sprite)   {}
+func (s *regionTrace) Glyphs(drawlist.Glyphs)   {}
+func (s *regionTrace) Line(drawlist.Line)       {}
+func (s *regionTrace) Points(drawlist.Points)   {}
+func (s *regionTrace) Model(drawlist.Model)     {}
+func (s *regionTrace) Fog(drawlist.Fog)         {}
+func (s *regionTrace) Surface(drawlist.Surface) {}
+func (s *regionTrace) Cursor(drawlist.Cursor)   {}
+func (s *regionTrace) Expand()                  {}
 
 // The world region is bracketed by exactly two boundary markers, and the marker
 // carries the factor, the step and the record extent the executor needs
@@ -78,9 +149,9 @@ func TestOneWorldRegionPerRecordedFrame(t *testing.T) {
 	}
 }
 
-// Below the strategic cut the recorder emits no model, effect, projectile,
-// sprite-feature or unit-label command; terrain, fog, the selection fills and
-// the drag rectangle still record (§16.10).
+// Below the strategic cut the recorder emits no unit-model, effect, projectile
+// or unit-label command; terrain, fog, the FEATURES, the selection fills and the
+// drag rectangle still record (§16.10).
 func TestStrategicViewDropsTheUnitLayers(t *testing.T) {
 	cur := &frame.Frame{
 		Selection: frame.SelectionView{LocalPlayer: 0},
@@ -88,10 +159,15 @@ func TestStrategicViewDropsTheUnitLayers(t *testing.T) {
 			{Slot: 1, Owner: 0, X: numeric.FixedFromInt(320), Z: numeric.FixedFromInt(240),
 				Model: "zoom_marker", Flags: hud.SelectionFlag, MoverMode: 1},
 		},
+		Features: []frame.FeatureView{{
+			CX: 20, CZ: 15, X: numeric.FixedFromInt(320), Z: numeric.FixedFromInt(240),
+			Filename: "zoom-fixture", SeqName: "body",
+		}},
 		Projectiles: []frame.ProjectileView{{X: numeric.FixedFromInt(300), Z: numeric.FixedFromInt(200)}},
 	}
 
 	full := zoomRecorderClient(t)
+	installZoomFeatureArt(full)
 	full.models["zoom_marker"] = syntheticModel(
 		[]pieceInfo{{name: "root", parent: -1}},
 		[]syntheticTri{makeTriangle(0, "root", [3][3]float64{{0, 0, 0}, {8, 0, 0}, {0, 0, 8}}, 17, 0)},
@@ -102,8 +178,13 @@ func TestStrategicViewDropsTheUnitLayers(t *testing.T) {
 		t.Fatal("the ordinary view recorded no model; the fixture proves nothing")
 	}
 	fullLines := len(recordedLines(&full.list))
+	fullFeatures := len(recordedFeatureSprites(&full.list))
+	if fullFeatures == 0 {
+		t.Fatal("the ordinary view recorded no feature sprite; the fixture proves nothing")
+	}
 
 	strategic := zoomRecorderClient(t)
+	installZoomFeatureArt(strategic)
 	strategic.models["zoom_marker"] = full.models["zoom_marker"]
 	strategic.cam.Zoom, strategic.cam.Scale = strategicModelCut-1, camera.ViewScaleNative
 	strategic.drawCommittedFrame(cur, true)
@@ -118,7 +199,54 @@ func TestStrategicViewDropsTheUnitLayers(t *testing.T) {
 	if got := len(recordedLines(&strategic.list)); got != fullLines {
 		t.Fatalf("the strategic view recorded %d selection lines, want the ordinary view's %d", got, fullLines)
 	}
+	// The features survive too: nothing stands in for a rock or a tree, so
+	// dropping them takes the map's landmarks away at exactly the factor a
+	// player pulls out to read them by (§16.10).
+	if got := len(recordedFeatureSprites(&strategic.list)); got != fullFeatures {
+		t.Fatalf("the strategic view recorded %d feature sprites, want the ordinary view's %d", got, fullFeatures)
+	}
 }
+
+// installZoomFeatureArt gives the client one four-by-three sprite feature entry,
+// the same shape internal/client's other feature fixtures use.
+func installZoomFeatureArt(c *Client) {
+	c.modelFS = vfs.New()
+	sprite := &formats.GAFFrame{
+		Width: 4, Height: 3, XOffset: 2, YOffset: 1,
+		ColorKey: 9, Pixels: make([]byte, 12), Transparent: make([]bool, 12),
+	}
+	sprite.PlainPixels, sprite.PlainTransparent = sprite.Pixels, sprite.Transparent
+	c.featureGAFs["zoom-fixture"] = &formats.GAF{Entries: []formats.GAFEntry{
+		{Name: "body", Frames: []formats.GAFFrameRef{{Frame: sprite}}},
+	}}
+}
+
+// recordedFeatureSprites collects the recorded feature sprite commands, which is
+// how a tree, a rock or a wreck shows up in a list.
+func recordedFeatureSprites(l *drawlist.List) []drawlist.Sprite {
+	var out []drawlist.Sprite
+	l.Replay(spriteCounter{&out})
+	return out
+}
+
+type spriteCounter struct{ out *[]drawlist.Sprite }
+
+func (s spriteCounter) Clear()                   {}
+func (s spriteCounter) Terrain(drawlist.Terrain) {}
+func (s spriteCounter) Sprite(v drawlist.Sprite) {
+	if v.Kind == drawlist.BlitFeatureNormal || v.Kind == drawlist.BlitFeatureShadow {
+		*s.out = append(*s.out, v)
+	}
+}
+func (s spriteCounter) Glyphs(drawlist.Glyphs)   {}
+func (s spriteCounter) Fill(drawlist.Fill)       {}
+func (s spriteCounter) Line(drawlist.Line)       {}
+func (s spriteCounter) Points(drawlist.Points)   {}
+func (s spriteCounter) Model(drawlist.Model)     {}
+func (s spriteCounter) Fog(drawlist.Fog)         {}
+func (s spriteCounter) Surface(drawlist.Surface) {}
+func (s spriteCounter) Cursor(drawlist.Cursor)   {}
+func (s spriteCounter) Expand()                  {}
 
 // The marker layer replaces the models: one marker per admitted contact, fading
 // in linearly from nothing at 0.625x to full at 0.5x (§16.11).

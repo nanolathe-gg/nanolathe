@@ -139,8 +139,12 @@ func (c *Client) UIFrameRect(x, y, w, h int, idx uint8) {
 }
 
 // UIText draws FNT text into the indexed framebuffer when a font is loaded.
+// The default control width runs to the surface's right edge: the framebuffer's
+// for the chrome, the record extent's inside a world overlay, where the text is
+// world-positioned and the executor shrinks it (§16.3).
 func (c *Client) UIText(fnt *formats.FNT, text string, x, y int, color byte) {
-	c.UITextWidth(fnt, text, x, y, c.width-x, color)
+	w, _ := c.uiExtent()
+	c.UITextWidth(fnt, text, x, y, w-x, color)
 }
 
 // UITextWidth draws FNT text with an explicit retail control width. The
@@ -176,7 +180,8 @@ func (c *Client) WorldToScreenPx(x, y, z numeric.Fixed) (int32, int32) {
 // inline, so the blit lands in per-frame order (docs/DESIGN_GPU_RENDERER.md
 // §2.2). Presentation only [I6].
 func (c *Client) UIBlit(f *formats.GAFFrame, x, y int) {
-	c.UIBlitClipped(f, x, y, 0, 0, c.width, c.height)
+	w, h := c.uiExtent()
+	c.UIBlitClipped(f, x, y, 0, 0, w, h)
 }
 
 // UIBlitClipped stamps a decoded GAF frame while confining every write to a

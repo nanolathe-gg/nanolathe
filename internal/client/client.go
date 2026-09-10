@@ -115,8 +115,14 @@ type Client struct {
 	// Interface sites keep width/height: the chrome is drawn in framebuffer
 	// pixels at every factor.
 	recordW, recordH int
-	indexed          []uint8
-	rgba             []byte
+	// worldOverlay is true while the UI stage's own world region is open
+	// (BeginWorldOverlay). Inside it the UI helpers that bake a framebuffer
+	// bound into the recorded command — the plain blit's clip and the default
+	// text width — take the record extent instead, because the commands between
+	// those markers are world-positioned and the executor scales them (§16.3).
+	worldOverlay bool
+	indexed      []uint8
+	rgba         []byte
 
 	// The strategic marker layer of DESIGN_GPU_RENDERER §16.11.
 	// strategicBlip is the minimap blip art the marker colours are taken from
