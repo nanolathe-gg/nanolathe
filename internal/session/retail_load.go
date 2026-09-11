@@ -112,6 +112,11 @@ func LoadRetailSaveWithDeps(bank *save.Bank, deps RetailLoadDeps) (RetailLoadRes
 	if err := finishRestoredBattleEntry(stage.Session); err != nil {
 		return RetailLoadResult{}, err
 	}
+	// A restored world is already a committed state. Publish it before the
+	// client adopts the candidate: the saved scheduler can be paused, so no
+	// completed sub-tick may arrive to populate the presentation buffer
+	// [08 "Load process"][08 "Scheduler and random state in saves"][I6].
+	stage.Session.publishSnapshot(stage.Session.Clock.GlobalTick)
 	return RetailLoadResult{Summary: preflight.Summary, Route: preflight.Route, Battle: stage}, nil
 }
 

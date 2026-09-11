@@ -163,3 +163,52 @@ func TestLoadRetailSaveWithDepsMapsContinuationIdentityAndThumbs(t *testing.T) {
 		t.Fatalf("thumbs = %q, want %q", got.Continuation.Thumbs, thumbs)
 	}
 }
+
+// A paused battle still needs its committed world published when load returns.
+// The bank is authored by this test; only definitions and terrain use retail
+// assets [08 "Load process"][08 "Scheduler and random state in saves"].
+func TestLoadRetailSavePublishesBeforeFirstSubTick(t *testing.T) {
+	fixture := loadRetailFixture(t)
+	source := fixture.session(t)
+	for _, paused := range []bool{false, true} {
+		source.Clock.Paused = paused
+		inputs, err := source.RetailBattleSaveInputs(RetailBattleSummary(source, "initial frame", "1", source.Skirmish.UnitLimit), save.Camera{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		projection, err := source.RetailProjection(inputs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := projection.Bytes()
+		if err != nil {
+			t.Fatal(err)
+		}
+		bank, err := save.OpenBytes(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := LoadRetailSaveWithDeps(bank, RetailLoadDeps{FS: fixture.fs, Catalog: fixture.cat, SimSeed: 1, CRTSeed: 2, UnitLimit: source.Skirmish.UnitLimit})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := loaded.Battle.Session
+		first := s.Snapshot.Current()
+		if first == nil {
+			t.Fatalf("paused=%v: restored world was not published", paused)
+		}
+		if first.Tick != source.Clock.GlobalTick || first.Paused != paused || s.Clock.SaveBox() != loaded.Battle.Image.Scheduler {
+			t.Fatalf("paused=%v: publication changed saved scheduler state", paused)
+		}
+		if len(first.Units) != source.Units.Used() {
+			t.Fatalf("paused=%v: published units do not match saved live units", paused)
+		}
+		// The first ordinary tick must follow the initial publication without
+		// colliding with its tick identity.
+		s.Clock.Paused = false
+		s.Step(s.Clock.ScaledAnchor + 1)
+		if next := s.Snapshot.Current(); next == nil || next.Tick <= first.Tick {
+			t.Fatalf("paused=%v: resumed simulation did not publish its next tick", paused)
+		}
+	}
+}

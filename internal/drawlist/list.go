@@ -637,6 +637,20 @@ func (l *List) RecordCursor(c Cursor) {
 	l.cursor = append(l.cursor, c)
 }
 
+// PositionCursor places recorded software cursors at the latest logical host
+// position while preserving their resolved art and authored hotspot [07 §8].
+// The window calls this after joining its recorder and before replay; it does
+// not alter picking, other commands, or the client's published pointer sample.
+func (l *List) PositionCursor(x, y int) {
+	for i := range l.cursor {
+		cu := &l.cursor[i]
+		if cu.Frame != nil {
+			hx, hy := render.CursorHotspot(cu.Frame, x, y)
+			cu.HotX, cu.HotY = int32(hx), int32(hy)
+		}
+	}
+}
+
 // RecordExpand appends the index-to-RGBA expansion marker in record order.
 // It carries no data; it fixes where the expansion pass runs (C-G8).
 func (l *List) RecordExpand() {

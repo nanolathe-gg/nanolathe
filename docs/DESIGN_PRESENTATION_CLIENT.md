@@ -147,6 +147,22 @@ into a device image recreated only when the logical size changes. `Layout`
 pins the logical resolution, so Ebitengine letterboxes a resized window without
 moving authored HUD coordinates.
 
+Modern presentation follows DESIGN_GPU_RENDERER §13.5 and §13.10: Draw can
+present between Updates and the deferred host step runs after submission.
+Immediately before replay, it places only the recorded cursor at Ebitengine's
+latest logical pointer position, preserving its authored hotspot [07 §8].
+This removes the deferred step's extra frame of positional latency while
+leaving cursor shape, hover, placement, orders and camera on the 30 Hz host
+cadence. Ebitengine's cursor snapshot itself still updates at 30 Hz. The
+capture-release restore point takes precedence over this newer sample, and
+captured cursors remain hidden [07 R-CAM-01 §11]. Original and `--shot` retain
+their existing composition. The submitted image captured by F11 includes the
+late-positioned cursor.
+
+`RunOptions.Stats` (`--stats`) opts into periodic and exit renderer pipeline,
+cadence and paused-cache stderr readouts. Default sessions are quiet; the F11
+bundle keeps these counters regardless of terminal logging.
+
 **Nanolathe host presentation policy (user-authorized).** Windowed presentation
 keeps the selected display dimensions throughout menus, loading, battle and
 results. The logical front-end canvas remains the established 640×480

@@ -43,7 +43,14 @@ func (g *gameShell) drawRetailPanel(c *client.Client) {
 func (g *gameShell) panelMode(panel *ui.Panel) shellMode {
 	if g != nil && g.assets != nil && panel != nil {
 		for mode := modeMenuMain; mode <= modeMenuSkirmish; mode++ {
-			if asset := g.assets.panel[mode]; asset != nil && asset.window == panel.Window {
+			asset := g.assets.panel[mode]
+			if asset == nil || asset.window == nil || panel.Window == nil {
+				continue
+			}
+			// openMenu clones the parsed window before building its controls.
+			// Its logical resource name survives that clone, keeping saved-under
+			// screens bound to their own background and gadget art [07 §4].
+			if asset.window == panel.Window || (panel.Window.Name != "" && asset.window.Name == panel.Window.Name) {
 				return mode
 			}
 		}

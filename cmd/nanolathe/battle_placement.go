@@ -250,15 +250,14 @@ func (b *battleSession) drawBuildGhost(c *client.Client) {
 	if b.battleState().Input.BuildOK {
 		col = c.GUIColor(hud.GhostColorLegal)
 	}
-	// The rectangle itself comes from two projected world corners, so it scales
-	// with the view. The inner outline's inset is authored in screen pixels and
-	// does not, so it takes the view scale: at 2x a one-pixel inset would put
-	// the two outlines against each other and the ghost would read as one
-	// thick line rather than two (DESIGN_GPU_RENDERER §14.2, the ×s rule for
-	// world-space fills). At scale 1 the inset is 1 and nothing changes.
-	inset := int(viewScaleOf(b))
-	c.UIFrameRect(int(l), int(t), int(r-l), int(btm-t), col)
-	c.UIFrameRect(int(l)+inset, int(t)+inset, int(r-l)-2*inset, int(btm-t)-2*inset, col)
+	// Retail's adjacent strokes make one solid two-pixel border [07 §9].
+	// Scale that entire border, not just the separation between its strokes:
+	// ViewScale stores half steps, so casting it to pixels creates a gap even
+	// at native zoom (DESIGN_GPU_RENDERER §14.2).
+	thickness := int(viewScaleOf(b).Px(2))
+	for inset := 0; inset < thickness; inset++ {
+		c.UIFrameRect(int(l)+inset, int(t)+inset, int(r-l)-2*inset, int(btm-t)-2*inset, col)
+	}
 }
 
 func footprintCellsForCatalog(cat *content.Catalog, def *content.UnitDef) (footX, footZ int32) {

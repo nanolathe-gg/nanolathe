@@ -136,3 +136,54 @@ func (s *overlayTrace) Fog(drawlist.Fog)         {}
 func (s *overlayTrace) Surface(drawlist.Surface) {}
 func (s *overlayTrace) Cursor(drawlist.Cursor)   {}
 func (s *overlayTrace) Expand()                  {}
+
+// Adjacent retail strokes must remain a solid border after magnification. This
+// catches treating ViewScale's half-step encoding as an actual pixel inset.
+func TestBuildGhostBorderHasNoGap(t *testing.T) {
+	for _, tc := range []struct {
+		scale camera.ViewScale
+		width int32
+	}{
+		{camera.ViewScaleNative, 2},
+		{camera.ViewScaleMid, 3},
+		{camera.ViewScaleDetail, 4},
+	} {
+		t.Run(tc.scale.String(), func(t *testing.T) {
+			cl, err := client.New(client.Options{Width: 640, Height: 480})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cam := &camera.Camera{X: 96, Z: 64, ViewW: 640, ViewH: 480, MapW: 16384, MapH: 16384, Scale: tc.scale}
+			cl.SetCamera(cam)
+			b := &battleSession{battleUI: ui.NewProductionBattleState(), cam: cam}
+			state := b.battleState()
+			state.ArmPlacement("armed_fixture", 3, 3)
+			state.Input.BuildCellX, state.Input.BuildCellZ = 12, 10
+			state.Input.BuildOK = true
+			state.Input.PointerX, state.Input.PointerY = 300, 200
+			cl.SetUIStage(battleHUDUIStage{hud: &retailBattleHUD{}, battle: b})
+			trace := &overlayTrace{}
+			cl.RecordFrame().Replay(trace)
+			left, top, right, bottom := b.placementRect()
+			// Every inward offset of every edge must be painted, with no
+			// separate inner contour beyond the scaled retail width [07 §9].
+			for depth := int32(0); depth <= tc.width; depth++ {
+				for _, p := range [][2]int32{
+					{(left + right) / 2, top + depth}, {(left + right) / 2, bottom - 1 - depth},
+					{left + depth, (top + bottom) / 2}, {right - 1 - depth, (top + bottom) / 2},
+				} {
+					painted := false
+					for _, f := range trace.fills {
+						r := f.rect
+						if f.inWorld && p[0] >= r.X && p[0] < r.X+r.W && p[1] >= r.Y && p[1] < r.Y+r.H {
+							painted = painted || p[0] == r.X || p[0] == r.X+r.W-1 || p[1] == r.Y || p[1] == r.Y+r.H-1
+						}
+					}
+					if painted != (depth < tc.width) {
+						t.Fatalf("border at %v depth %d painted=%v", p, depth, painted)
+					}
+				}
+			}
+		})
+	}
+}

@@ -1455,6 +1455,18 @@ nearest refresh multiple below it — 60 on a 120 Hz display presents every
 second refresh — which is what makes a 120 Hz display a stand-in for a 60 Hz
 one. Original ignores the cap; it presents once per Update.
 
+**Pointer latency.** Ebitengine's public cursor API reads its most recent
+Update snapshot, so the window still samples pointer motion at 30 Hz. Modern
+positions the recorded software cursor from that snapshot immediately before
+GPU replay, after joining the recorder. This removes the additional presented
+frame of positional delay from deferred input publication; it does not make
+input polling refresh-rate-driven. The cursor's shape and animation, hover,
+orders, placement previews and camera continue using the ordinary host step.
+The GAF hotspot remains authored [07 §8]. Capture keeps the pointer hidden;
+the release frame preserves its saved restore point [07 R-CAM-01 §11].
+Original's retained frame and `--shot` keep their existing path. F11 reads the
+submitted GPU image, including the cursor at its late-positioned location.
+
 **Fraction.** Read at Draw time, when the modern path records. The
 scheduler's time source is the scaled timebase floor(milliseconds × 30 /
 1000) [01 §4.1], so its delta is a whole number of thirtieths and, at the
@@ -1899,8 +1911,11 @@ frame's drain rather than after this one's. That is why the ring cursors are in
 the digest — a drain that wrote a caption discards the pre-record. Resolving
 the blend fraction moved with it, into `ResolveTickFraction`, so the digest and
 the record read one sample of a wall-clock producer rather than two. The cursor
-blit stayed inside the recording pass: it reads the pointer sample, which the
-epoch covers.
+blit resolves its art and visibility inside the recording pass, covered by the
+epoch. The window then replaces only that command's coordinates with the latest
+Ebitengine pointer snapshot before replay (§13.5), without publishing input or
+changing the recorded world and interface. This also applies to the paused
+foreground. No mutation overlaps the pre-record worker.
 
 **Displayed stocks share the host boundary.** `BeginPresentationFrame` steps
 the retained stock pair and drains presentation audio once per presented frame,
@@ -2143,8 +2158,11 @@ CRT rollback. Paused Draws never launch another pre-record, including the
 random-projectile fallback. Audio draining and displayed-resource advancement
 still run once per presentation before the split, and every Draw still reaches
 the existing update-ledger tail. On resume the normal pipeline starts again.
-Periodic diagnostics count world recordings and reuses; foregrounds remain in
-the ordinary presented-frame and update-body cadence totals.
+Opt-in `--stats` diagnostics count world recordings and reuses; foregrounds
+remain in the ordinary presented-frame and update-body cadence totals.
+Periodic and exit pipeline/cadence/cache readouts are disabled by default.
+F11's renderer metadata retains pipeline and paused-world counters regardless
+of the terminal-statistics setting.
 
 Verification: the client regression compares whole and split indexed rasters,
 including a moved/removed gesture and destination-reading UI; key tests cover

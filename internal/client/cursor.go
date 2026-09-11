@@ -161,6 +161,17 @@ func (c *Client) SetCursors(cs *Cursors) {
 // Cursors returns the installed software cursor, or nil.
 func (c *Client) Cursors() *Cursors { return c.cursors }
 
+// PositionPresentationCursor applies a newer host position only to the joined
+// frame's cursor command. Picking and command input keep their host-step sample.
+// Capture release retains the saved restore position until the next step, when
+// the platform has observed its warp [07 R-CAM-01 §11].
+func (c *Client) PositionPresentationCursor(list *drawlist.List, x, y int) {
+	if c == nil || list == nil || c.PointerCaptured() || c.cursorRestorePending {
+		return
+	}
+	list.PositionCursor(x, y)
+}
+
 // drawCursor blits the installed cursor at the pointer position. It runs after
 // the world, the HUD, and any modal overlay have been composed [07 §8].
 //

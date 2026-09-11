@@ -700,7 +700,9 @@ instead of its origin-add branch. The stored audio block, game speed and
 blocks, so one options session can write them whichever arm it took;
 `retail_menu_message.go` the
 `MSGBOX` layer with its word wrap `[07 R-FE-02 §6]` `[07 R-FE-01 §9]`;
-`retail_menu_draw.go` the screen painter; `window_panel.go` shares authored
+`retail_menu_draw.go` the screen painter, resolving each saved-under window's
+resource set by its logical GUI name because `openMenu` clones the parsed
+definition before building runtime controls; `window_panel.go` shares authored
 panel resolution, the clipped nine-frame fill and the art-less bevel with
 battle modals `[07 R-FE-02 §4]` `[07 R-WGT-01 §12]`.
 
@@ -771,7 +773,10 @@ other polarity's order button uses the lens point, and the minimap hover unit
 shares that usable-region classifier with command and cursor consumers
 `[07 R-CAM-01 §11]` `[07 R-CAM-01 §5]` `[07 §8]`.
 `battle_placement.go` owns `cursorWorld` (the SC20 resolver), the build ghost,
-the site check and `commitBuild`. `battle_commands.go` and `battle_dispatch.go`
+the site check and `commitBuild`. The placement marker renders the adjacent
+same-colour strokes of [07 §9] as one solid border. Its full two-pixel width
+uses `ViewScale.Px(2)` so magnification preserves continuity; the half-step
+scale encoding must never be used as a pixel inset. `battle_commands.go` and `battle_dispatch.go`
 are the command boundary of §3.4. `battle_menu.go` drives the modal chain and `battle_options.go` the in-battle
 options window `ARMOPT`'s `PREFS` opens over it;
 `battle_settings.go` the damage-bar and message-line options;

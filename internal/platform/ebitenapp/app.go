@@ -112,6 +112,9 @@ type app struct {
 // RunOptions are the window's host-side settings, none of which the client or
 // the simulation can observe.
 type RunOptions struct {
+	// Stats enables periodic and final host pipeline/cadence diagnostics on
+	// stderr. F11 captures retain their counters independently of this option.
+	Stats bool
 	// MaxFPS caps how often the modern path presents. Zero presents on every
 	// Draw, the display's refresh rate. Draw still arrives on the display's
 	// vsync grid, so the cap lands on the nearest refresh multiple below it: 60
@@ -138,9 +141,10 @@ type RunOptions struct {
 // than before them (updateBody, §13.10). Ebitengine takes this call's input
 // snapshot immediately before it, so the deferred body reads that snapshot and
 // each snapshot is still consumed exactly once. What the deferral costs is one
-// presented frame of latency, which is the floor for a pre-recorded frame: a
-// list recorded during the previous frame's flush cannot contain input that
-// arrived after it.
+// presented frame of latency for host-step-dependent content: a list recorded
+// during the previous frame's flush cannot contain input that arrived after
+// it. Cursor position alone is refreshed from the current platform snapshot
+// immediately before replay, without changing the client's command input.
 func (a *app) Update() error {
 	// The pipeline's barrier. The body below writes client state — input, focus,
 	// the step and its publication, the pointer mode, the executor swap — and
@@ -202,7 +206,7 @@ func (a *app) updateBody() {
 }
 
 // terminate ends the run: the pointer goes back to the window system and the
-// pipeline prints its final readout.
+// pipeline prints its final readout when statistics were requested.
 func (a *app) terminate() error {
 	a.c.SetPointerCaptured(false)
 	a.syncPointerCapture()
@@ -368,6 +372,11 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 		}
 		a.gpu.SetDisplayPalette(a.c.DisplayPalette())
 		a.gpu.SetGlow(a.c.Glow())
+		// Ebitengine has already sampled this Update's pointer even when its
+		// client input publication is deferred to the Draw tail. Place only the
+		// cursor from that newer sample after the recorder joins [07 §8].
+		x, y := ebiten.CursorPosition()
+		a.c.PositionPresentationCursor(list, x, y)
 		if img := a.gpu.Execute(list, width, height); img != nil {
 			a.c.CommitStrategicPresentation()
 			screen.DrawImage(img, &ebiten.DrawImageOptions{})

@@ -265,9 +265,12 @@ func (p *pipeline) observeTick(now time.Time, tick16 int32) {
 const pipelineReportEvery = 600
 
 // reportPipeline prints the window's pipeline counters — periodically while the
-// window runs, and once at exit. It is a prototype readout on the host's own
-// stderr, never a sim-path log (AGENTS.md "Diagnostics").
+// window runs, and once at exit, only with RunOptions.Stats. It is a host-only
+// stderr readout, never a sim-path log (AGENTS.md "Diagnostics").
 func (a *app) reportPipeline() {
+	if !a.options.Stats {
+		return
+	}
 	total := a.pipe.hits + a.pipe.misses + a.pipe.synchronous
 	if total == 0 || total == a.pipe.reported {
 		return
@@ -287,6 +290,9 @@ func (a *app) reportPipeline() {
 		a.pipe.hits, total, 100*float64(a.pipe.hits)/float64(total), a.pipe.misses, a.pipe.synchronous, why.String(),
 		presentedTick, presentedCamera, meanTick, driftTick, driftCamera)
 	a.reportCadence(frames)
+	if a.paused.records+a.paused.reuses > 0 {
+		fmt.Fprintf(os.Stderr, "nanolathe: paused world: %d recordings, %d reuses; foreground remains live\n", a.paused.records, a.paused.reuses)
+	}
 }
 
 // reportCadence prints the sanity line beside the pipeline readout: presented
@@ -315,6 +321,9 @@ func (a *app) reportCadence(frames int64) {
 // reportPipelinePeriodically prints a readout every pipelineReportEvery
 // presented modern frames.
 func (a *app) reportPipelinePeriodically() {
+	if !a.options.Stats {
+		return
+	}
 	if total := a.pipe.hits + a.pipe.misses + a.pipe.synchronous; total-a.pipe.reported >= pipelineReportEvery {
 		a.reportPipeline()
 	}

@@ -362,7 +362,7 @@ func windowRunOptions(opts Options) ebitenapp.RunOptions {
 	if fps < 0 {
 		fps = 0
 	}
-	return ebitenapp.RunOptions{MaxFPS: fps}
+	return ebitenapp.RunOptions{MaxFPS: fps, Stats: opts.Stats}
 }
 
 // composeBattleEntry is the single presentation composition for every

@@ -245,6 +245,13 @@ also projects current `Move.ModeMirror` and cached `MoveTier` into the packed mo
 nibble, and the reader restores both without recomputing the tier
 `[08 R-SAVE-02 §6]` `[04 R-MOV-01 §6]`.
 
+After the restoration and battle-entry tail succeed, the load result publishes
+one initial frame at the restored global tick. This is the host presentation
+boundary for an already committed world: it neither advances the simulation nor
+clears the saved pause gate. A paused save must expose its restored units, HUD
+and visibility before its first subsequent sub-tick `[08 "Load process"]`
+`[08 "Scheduler and random state in saves"]` [I6].
+
 The unit save projection reads `Move.ModeMirror`, the mode last published by a
 position commit, while the mover box retains the live mover mode. Attach and
 detach requests can change the latter after the cargo's visit. Restore retains

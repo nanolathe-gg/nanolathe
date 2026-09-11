@@ -1,9 +1,6 @@
 package ebitenapp
 
 import (
-	"fmt"
-	"os"
-
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 )
@@ -56,13 +53,13 @@ func (a *app) drawPaused(screen *ebiten.Image, width, height int) bool {
 	} else {
 		a.paused.reuses++
 	}
-	if img := a.gpu.ExecuteOver(a.c.RecordPausedForeground(), a.paused.image, width, height); img != nil {
+	foreground := a.c.RecordPausedForeground()
+	x, y := ebiten.CursorPosition()
+	a.c.PositionPresentationCursor(foreground, x, y)
+	if img := a.gpu.ExecuteOver(foreground, a.paused.image, width, height); img != nil {
 		a.c.CommitStrategicPresentation()
 		screen.DrawImage(img, &ebiten.DrawImageOptions{})
 	}
 	a.pipe.synchronous++ // a live foreground was presented without speculation
-	if (a.paused.records+a.paused.reuses)%pipelineReportEvery == 0 {
-		fmt.Fprintf(os.Stderr, "nanolathe: paused world: %d recordings, %d reuses; foreground remains live\n", a.paused.records, a.paused.reuses)
-	}
 	return true
 }

@@ -20,6 +20,7 @@ func (a *app) writeDebugDeviceCapture(directory string) error {
 		"last_presented_at": a.presentedAt,
 		"update_bodies":     a.bodies}
 	metadata["paused_world"] = map[string]any{"valid": a.paused.valid, "recordings": a.paused.records, "reuses": a.paused.reuses}
+	metadata["record_pipeline"] = map[string]any{"hits": a.pipe.hits, "misses": a.pipe.misses, "synchronous": a.pipe.synchronous}
 	if a.paused.image != nil {
 		bounds := a.paused.image.Bounds()
 		metadata["paused_world_rgba_bytes"] = int64(bounds.Dx()) * int64(bounds.Dy()) * 4

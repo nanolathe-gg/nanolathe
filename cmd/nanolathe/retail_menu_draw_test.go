@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/formats"
@@ -11,6 +12,72 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/palette"
 	"github.com/nanolathe-gg/nanolathe/internal/ui"
 )
+
+// The map chooser leaves its parent screen visible outside its own surface
+// [07 §4]. Opening a fresh runtime window must preserve that parent's art.
+func TestMapChooserPreservesParentBackground(t *testing.T) {
+	parent := &gui.Window{Name: "guis/skirmish.gui", Rect: gui.Rect{W: 32, H: 24}}
+	chooser := &gui.Window{Name: "guis/selmap.gui", Rect: gui.Rect{X: 8, Y: 4, W: 16, H: 12}}
+	bitmap := func(index byte) *formats.PCX {
+		pixels := make([]byte, 32*24)
+		for i := range pixels {
+			pixels[i] = index
+		}
+		return &formats.PCX{Width: 32, Height: 24, Pixels: pixels}
+	}
+	shell := &gameShell{frontend: ui.NewFrontend(modeMenuSkirmish), assets: &menuAssets{
+		panel: map[shellMode]*retailPanelAssets{
+			modeMenuSkirmish: {window: parent, background: bitmap(31)},
+			modeMenuMap:      {window: chooser, background: bitmap(47)},
+		},
+	}}
+	cl, err := client.New(client.Options{Buffer: &frame.Buffer{}, Width: 32, Height: 24})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl.SetUIStage(gameShellUIStage{shell: shell})
+	shell.openMenu(modeMenuSkirmish)
+	shell.openMenu(modeMenuMap)
+	if shell.frontend.Panels.SaveUnder().Window == parent {
+		t.Fatal("test requires a cloned runtime parent")
+	}
+	snapshot := cl.ComposeFrameSnapshot()
+	for y := 0; y < snapshot.Height; y++ {
+		for x := 0; x < snapshot.Width; x++ {
+			want := byte(31)
+			if x >= 8 && x < 24 && y >= 4 && y < 16 {
+				want = 47
+			}
+			if got := snapshot.Indexed[y*snapshot.Width+x]; got != want {
+				t.Fatalf("pixel (%d,%d) = %d, want %d", x, y, got, want)
+			}
+		}
+	}
+}
+
+func TestRetailMapChooserPreservesSkirmishScreen(t *testing.T) {
+	shell, _, cl := retailAssetShell(t)
+	shell.openMenu(modeMenuSkirmish)
+	before := cl.ComposeFrameSnapshot()
+	shell.activateGadget("SelectMap")
+	if shell.frontend.Mode != modeMenuMap {
+		t.Fatal("SelectMap did not open the chooser")
+	}
+	r := shell.activePanel().Window.Rect
+	after := cl.ComposeFrameSnapshot()
+	writeShellShot(t, cl, os.Getenv("NANOLATHE_MAP_SELECT_SHOT"))
+	for y := 0; y < after.Height; y++ {
+		for x := 0; x < after.Width; x++ {
+			if int32(x) >= r.X && int32(x) < r.X+r.W && int32(y) >= r.Y && int32(y) < r.Y+r.H {
+				continue
+			}
+			i := y*after.Width + x
+			if after.Indexed[i] != before.Indexed[i] {
+				t.Fatalf("chooser changed parent pixel (%d,%d): %d -> %d", x, y, before.Indexed[i], after.Indexed[i])
+			}
+		}
+	}
+}
 
 // TestRetailTextBoxDrawsFocusedCaret locks the visible kind-3 focus cue: the
 // input text begins three pixels below its authored rectangle and the one-pixel
