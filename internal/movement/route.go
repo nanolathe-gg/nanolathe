@@ -75,9 +75,9 @@ func (r *Route) PublishAtRevision(points []Point, revision uint64) { // [04 §7.
 	r.StaticRevision = revision
 }
 
-// NeedsStaticReplan reports whether an active route was produced against an
-// older static obstacle revision. Mobile occupancy is intentionally absent
-// from this check [04 §8.2][docs/SPEC_CONFLICTS SC22].
+// NeedsStaticReplan reports revision mismatch for inspection only. Despite
+// the retained API name, a mismatch must not invalidate a published route;
+// the follower's blocked/count gates own repathing [04 R-MOV-01 §3].
 func (r *Route) NeedsStaticReplan(current uint64) bool {
 	return r != nil && r.Active && r.Count > 0 && r.StaticRevision != current
 }

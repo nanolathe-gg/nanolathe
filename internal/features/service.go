@@ -419,7 +419,7 @@ func (s *Service) RestoreAt(cx, cz int, def *content.FeatureDef, family int, dat
 		}
 		pos, orient = &p, &o
 	}
-	inst := s.stampFeature(cx, cz, def, pos, orient)
+	inst := s.stampFeature(cx, cz, def, pos, orient, neutralFeaturePlacer)
 	if inst == nil {
 		return nil, fmt.Errorf("features: retail restore: placement rejected at (%d,%d)", cx, cz)
 	}
@@ -571,17 +571,18 @@ func (s *Service) PlaceAtWorld(x, z numeric.Fixed, def *content.FeatureDef) *Ins
 // zeros, and it is the triple the resurrection transplant copies back into the
 // replacement unit [05 R-WORK-01 §7].
 //
+// owner is the dying unit's player slot, including zero [05 R-FEAT-01 §3].
 // fromIsFeature is the dying unit's IsFeature flag; isfeature corpses never
 // descend. Chain depth is already resolved by the caller from the Killed-variant
 // low nibble [04 §5.1][06 §12.1] C23; this helper just stamps the resolved def.
 // Returns the corpse instance or nil.
-func (s *Service) PlaceCorpse(pos [3]numeric.Fixed, orient Orientation, def *content.FeatureDef, fromIsFeature bool) *Instance {
+func (s *Service) PlaceCorpse(pos [3]numeric.Fixed, orient Orientation, def *content.FeatureDef, fromIsFeature bool, owner uint8) *Instance {
 	if def == nil || s.Terrain == nil {
 		return nil
 	}
 	cx := int(world.WorldToCell(pos[0]))
 	cz := int(world.WorldToCell(pos[2]))
-	inst := s.stampFeature(cx, cz, def, &pos, &orient)
+	inst := s.stampFeature(cx, cz, def, &pos, &orient, owner)
 	if inst == nil {
 		return nil
 	}
@@ -813,7 +814,7 @@ func (s *Service) replaceFeatureStamp(cx, cz int, successor *content.FeatureDef,
 	s.clearFootprintNoRevision(cx, cz, def)
 	placed := false
 	if successor != nil {
-		placed = s.stampFeature(cx, cz, successor, pos, orient) != nil
+		placed = s.stampFeature(cx, cz, successor, pos, orient, neutralFeaturePlacer) != nil
 	}
 	// If the old blocking footprint was removed, the transition changes the
 	// static layer even when a successor is absent or cannot be stamped. A
@@ -893,9 +894,9 @@ func (s *Service) clearFootprintNoRevision(cx, cz int, def *content.FeatureDef) 
 			idx := pz*w + px
 			// Return to free sentinel 0xFFFF [GAP T14].
 			s.Terrain.Plot[idx].SetFeature(world.PlotFeatureNone)
-			// Clear occupied and anchor bytes.
-			s.Terrain.Plot[idx].SetFlagByte(0)
-			s.Terrain.Plot[idx].SetAnchor(0, 0)
+			// Teardown preserves control state and accumulated damage; the next
+			// sprite stamp resets damage [05 R-FEAT-01 §4].
+			s.Terrain.Plot[idx].SetOccupied(false)
 			// Release instance if anchor.
 			if px == cx && pz == cz {
 				s.deleteInstance(idx)
@@ -917,7 +918,22 @@ func (s *Service) clearFootprintNoRevision(cx, cz int, def *content.FeatureDef) 
 // footprint centre [05 R-FEAT-01 §3, §10]. General replacement uses the
 // attached predecessor's transform instead [05 R-FEAT-01 §5].
 func (s *Service) spawnFeatureAt(cx, cz int, def *content.FeatureDef) *Instance {
-	return s.stampFeature(cx, cz, def, nil, nil)
+	return s.stampFeature(cx, cz, def, nil, nil, neutralFeaturePlacer)
+}
+
+// neutralFeaturePlacer is the owner selector for every non-corpse stamp
+// [05 R-FEAT-01 §3]. Corpses instead receive the dying unit's player slot.
+const neutralFeaturePlacer uint8 = 10
+
+// initializeStampedAnchor installs only the stamp's own control state. A
+// resting sprite starts with no accumulated damage even when the cell retained
+// an earlier occupant's damage or fringe data [05 R-FEAT-01 §3, §4].
+func initializeStampedAnchor(cell *world.PlotCell, def *content.FeatureDef, placer uint8) {
+	cell.SetOccupied(is3DDef(def))
+	cell.SetFlagByte((cell.FlagByte() &^ 0x78) | ((placer & 0x0f) << 3))
+	if isSpriteDef(def) {
+		cell.SetAnchorWord(0)
+	}
 }
 
 // stampFeature is the one stamp routine of [05 R-FEAT-01 §3], taking the
@@ -927,7 +943,7 @@ func (s *Service) spawnFeatureAt(cx, cz int, def *content.FeatureDef) *Instance 
 // verbatim; a nil one is three zeros. The corpse creator supplies both; the
 // saved-game 3D restore supplies both from the record it read; every other
 // source supplies neither.
-func (s *Service) stampFeature(cx, cz int, def *content.FeatureDef, pos *[3]numeric.Fixed, orient *Orientation) *Instance {
+func (s *Service) stampFeature(cx, cz int, def *content.FeatureDef, pos *[3]numeric.Fixed, orient *Orientation, placer uint8) *Instance {
 	if s == nil {
 		return nil
 	}
@@ -1045,28 +1061,7 @@ func (s *Service) stampFeature(cx, cz int, def *content.FeatureDef, pos *[3]nume
 	if def.Blocking || tornAway || matchesPending {
 		s.Terrain.BumpStaticObstacleRevision()
 	}
-	s.Terrain.Plot[idx].SetFlagByte(0)
-	// The stamp is one of the three writers of the anchor's instance-attached
-	// bit, and it is the arm that fires for a 3D definition: "set by the stamp
-	// for 3D definitions and by ignition and the die/reclaim transitions for
-	// sprite definitions" [05 R-FEAT-01 §15]. A sprite definition therefore
-	// leaves the anchor clear here and acquires the bit only when an animation
-	// instance actually attaches (Ignite and startFeatureAnimation), which is
-	// what makes the payout guard's conjunction mean "a sprite feature that is
-	// burning or already playing its death or reclaim animation" rather than
-	// "any stamped feature". A 3D wreck carries the bit from birth and its
-	// definition bit is clear, so it stays reclaimable throughout.
-	//
-	// "3D definition" is read strictly — an authored `object` and no
-	// `filename` — so that no definition can both take the bit here and answer
-	// the sprite test below. It is also what keeps the write invisible to this
-	// package's other readers of the same bit: the retail save writer selects
-	// its 3D family from `object` before it ever consults the flag byte, and the
-	// fire-spread scans read "has an instance" through cellHasInstance, which
-	// already answers yes for every 3D definition.
-	if is3DDef(def) {
-		s.Terrain.Plot[idx].SetOccupied(true)
-	}
+	initializeStampedAnchor(&s.Terrain.Plot[idx], def, placer)
 	// TODO(question): retained mode and sprite-to-wreck effects need the
 	// authored-observable or complete-writer decider in [05 R-FEAT-01 §14].
 	// Fresh records keep the documented host-zero velocity policy and also
@@ -1111,7 +1106,7 @@ func (s *Service) stampFeature(cx, cz int, def *content.FeatureDef, pos *[3]nume
 			}
 			fIdx := pz*w + px
 			if s.Terrain.Plot[fIdx].IsFringe() {
-				s.Terrain.Plot[fIdx].SetFlagByte(0)
+				s.Terrain.Plot[fIdx].SetOccupied(false)
 			}
 		}
 	}
@@ -1688,8 +1683,7 @@ func clearFeatureRect(t *world.Terrain, cx, cz int, def *content.FeatureDef) {
 				continue
 			}
 			cell.SetFeature(world.PlotFeatureNone) // free sentinel [GAP T14]
-			cell.SetFlagByte(0)
-			cell.SetAnchor(0, 0)
+			cell.SetOccupied(false)                // retained control state and damage [05 R-FEAT-01 §4]
 		}
 	}
 	// The teardown helper's restamp, as in clearFootprintNoRevision
@@ -1729,6 +1723,7 @@ func stampFeatureDef(t *world.Terrain, cx, cz int, def *content.FeatureDef, obse
 	if err != nil {
 		return false
 	}
+	initializeStampedAnchor(t.PlotAt(int32(cx), int32(cz)), def, neutralFeaturePlacer)
 	if def.Blocking {
 		t.BumpStaticObstacleRevision()
 	}

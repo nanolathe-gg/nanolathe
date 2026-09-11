@@ -1090,6 +1090,7 @@ func (r *Renderer) fillModelRegions(dst *ebiten.Image, rects []image.Rectangle, 
 	a.fillVerts, a.fillIdx = v, idx
 	r.modelFillOpts.Blend = ebiten.BlendCopy
 	r.modelFillOpts.ColorScaleMode = ebiten.ColorScaleModePremultipliedAlpha
+	r.recordSubmission(len(v), len(idx))
 	dst.DrawTriangles32(v, idx, src, &r.modelFillOpts)
 	r.modelStats.Draws++
 	r.modelStats.RasterDraws++
@@ -1280,7 +1281,14 @@ func (r *Renderer) drawModelRun(dst *ebiten.Image, shader *ebiten.Shader, blend 
 	r.modelOpts.Blend = blend
 	r.modelOpts.Images[0], r.modelOpts.Images[1] = src0, src1
 	r.modelOpts.Images[2], r.modelOpts.Images[3] = src2, src3
-	dst.DrawTrianglesShader32(padModelVertices(a.verts, run.v0, run.vn), a.idx[run.i0:run.iN], shader, &r.modelOpts)
+	vertices, indices := padModelVertices(a.verts, run.v0, run.vn), a.idx[run.i0:run.iN]
+	r.recordSubmission(len(vertices), len(indices))
+	if shader == r.modelKey {
+		r.modelStats.ModelKeyVertices += len(vertices)
+	} else if shader == r.modelBody {
+		r.modelStats.ModelColourVertices += len(vertices)
+	}
+	dst.DrawTrianglesShader32(vertices, indices, shader, &r.modelOpts)
 }
 
 // drawModelReveal applies the nanoframe reveal into the page's scratch. A
@@ -1443,7 +1451,9 @@ func (r *Renderer) modelDraw(dst *ebiten.Image, shader *ebiten.Shader, blend ebi
 		r.modelOpts.Images[0], r.modelOpts.Images[1] = src0, src1
 		r.modelOpts.Images[2], r.modelOpts.Images[3] = src2, src3
 		a.quadVerts = reserveModelVertices(a.quadVerts)
-		dst.DrawTrianglesShader32(padModelVertices(a.quadVerts, 0, len(a.quadVerts)), a.quadIdx, shader, &r.modelOpts)
+		vertices := padModelVertices(a.quadVerts, 0, len(a.quadVerts))
+		r.recordSubmission(len(vertices), len(a.quadIdx))
+		dst.DrawTrianglesShader32(vertices, a.quadIdx, shader, &r.modelOpts)
 		r.modelStats.Draws++
 	}
 	r.resetModelQuads()

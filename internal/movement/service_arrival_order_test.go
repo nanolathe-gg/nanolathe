@@ -5,6 +5,7 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/path"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
@@ -82,5 +83,43 @@ func TestServiceAsksArrivalBeforeSteering(t *testing.T) {
 	if u.MoveTier != 0 {
 		t.Fatalf("move tier = %d, want 0 — a StartMoving/MoveRateN pair fired for a mover that never "+
 			"displaced [04 §5.2]", u.MoveTier)
+	}
+}
+
+// Arrival removes the waypoint, but the mover still brakes, coasts, publishes
+// velocity and corrects its height [04 R-MOV-01 §3][04 R-MOV-01 §4][04 R-MOV-01 §5].
+func TestArrivalWithoutWaypointBrakesAndIntegrates(t *testing.T) {
+	def := wiringDef()
+	def.BrakeRate = 1 << 16
+	def.Upright = true
+	sys, w, h := releaseFixture(t, def, 5)
+	u := w.Unit(h)
+	q := orders.QueueForUnit(u)
+	q.Push(orders.Lookup("Move_Ground"), orders.Node{Owner: h, GoalX: u.X, GoalZ: u.Z})
+	head := q.Head()
+	sys.InstallPointGoal(orders.PointGoalRequest{Owner: h, Node: head, X: u.X, Y: u.Y, Z: u.Z, Radius: 4})
+	sys.ActivateMove(u, head)
+	steer := handleRow(sys.Steers, h)
+	steer.Speed = 3 << 16
+	steer.Heading, steer.PendingHeading, u.Move.Heading = 0, 0, 0
+	u.Move.Speed = numeric.Fixed(3 << 16)
+	u.Move.VelZ = -u.Move.Speed
+	beforeX, beforeZ := u.X, u.Z
+	result := stepOnce(sys, h, 2)
+	if !result.Arrived || head.Satisfied&arrivalSatisfiedBit == 0 {
+		t.Fatal("arrival was not retained through integration")
+	}
+	if u.Move.Speed != 2<<16 || steer.Speed != 2<<16 || u.Move.VelX != 0 || u.Move.VelY != 0 || u.Move.VelZ != -2<<16 {
+		t.Fatalf("arrival skipped braking/velocity update: %+v", u.Move)
+	}
+	if !result.Moved || result.Blocked || u.X != beforeX || u.Z != beforeZ-2<<16 {
+		t.Fatalf("arrival skipped coasting: %+v position=(%d,%d)", result, u.X, u.Z)
+	}
+	if u.Y != sys.Terrain.HeightAt(u.X, u.Z) {
+		t.Fatalf("arrival skipped post-move height correction: y=%d", u.Y)
+	}
+	coll := handleRow(sys.Collisions, h)
+	if coll.Z != int32(u.Z) || coll.LastProposalTick != 2 {
+		t.Fatalf("arrival skipped collision commit: %+v", coll)
 	}
 }

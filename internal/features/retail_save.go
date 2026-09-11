@@ -50,7 +50,19 @@ func (s *Service) RetailFeatureImage() (RetailFeatureImage, error) {
 	if total < 0 || total > int64(len(t.Plot)) {
 		return RetailFeatureImage{}, fmt.Errorf("features: retail save: terrain plot has %d cells, expected at least %d", len(t.Plot), total)
 	}
-	image := RetailFeatureImage{TypeNames: append([]string(nil), t.FeatureNames...)}
+	// FeatureNames is the map's original TNT table; definitions admitted by
+	// corpse or successor placement extend FeatureDefs alone. The save names
+	// every current definition in ordinal order [08 R-SAVE-FEATURE-01].
+	names := append([]string(nil), t.FeatureNames...)
+	if len(names) < len(t.FeatureDefs) {
+		names = append(names, make([]string, len(t.FeatureDefs)-len(names))...)
+	}
+	for i, def := range t.FeatureDefs {
+		if names[i] == "" && def != nil {
+			names[i] = def.CanonicalKey
+		}
+	}
+	image := RetailFeatureImage{TypeNames: names}
 	for cz := int32(0); cz < t.CellH; cz++ {
 		for cx := int32(0); cx < t.CellW; cx++ {
 			idx := int(cz*t.CellW + cx)
@@ -64,14 +76,8 @@ func (s *Service) RetailFeatureImage() (RetailFeatureImage, error) {
 				return RetailFeatureImage{}, fmt.Errorf("features: retail save: feature (%d,%d) has unbound type %d", cx, cz, feature)
 			}
 			name := ""
-			if int(feature) < len(t.FeatureNames) {
-				name = t.FeatureNames[feature]
-			}
-			if name == "" {
-				// A synthetic terrain may not carry the TNT side table. The
-				// compiled canonical key is the only identity the runtime owns;
-				// do not manufacture a display name [08 R-SAVE-FEATURE-01].
-				name = def.CanonicalKey
+			if int(feature) < len(image.TypeNames) {
+				name = image.TypeNames[feature]
 			}
 			if name == "" {
 				return RetailFeatureImage{}, fmt.Errorf("features: retail save: feature (%d,%d) has no authored type identity", cx, cz)

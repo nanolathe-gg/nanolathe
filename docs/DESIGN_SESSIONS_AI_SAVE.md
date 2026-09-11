@@ -266,6 +266,13 @@ collision record when present, otherwise from construction's retained
 placement. An unfinished structure therefore preserves its committed yard
 anchor even before it owns a movement collision record.
 
+Feature save projection emits names for the complete live terrain definition
+list, including corpse and successor definitions admitted after map loading.
+The original TNT name table remains map metadata; appended definition names
+come from their compiled canonical keys and retain their live ordinal. This
+keeps the saved feature records and name remapping table aligned
+`[08 R-SAVE-FEATURE-01]`.
+
 The windowed `--map` entry retains the same `gameShell` ownership as battles
 started through the front end. Its save/load dialogs and battle replacement
 callbacks therefore use the shared shell lifecycle.
@@ -687,6 +694,13 @@ carrier and `GetBuilt` references have separate lifetimes. This preserves
 construction progress in the first published frame, with no order pump or new
 save field. Target removal remains owned by the ordinary order observer path
 `[08 R-SAVE-02 §11]` `[04 R-ORD-01 §6]`.
+
+The base-record traversal also retains its recursive completion order for AI
+group reconstruction. A unit's carrier and engagement references complete
+before its group append, so this order can differ from pool order. The manager
+consumes the retained unit sequence before the entry prime; it never substitutes
+a pool scan, which would change wave bootstrap and distance tie-breaking
+`[08 R-SAVE-02 §6]` `[08 R-P0-04 §3]`.
 
 **C11 — the container header.** 34 bytes: magic `HAPIBANK` compared
 case-sensitively, the tag's pool offset, the absolute pool offset, the first

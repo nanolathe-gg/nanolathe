@@ -337,7 +337,8 @@ func TestFUPlaytestSaveLoadSequence(t *testing.T) {
 	noteC := fuSaveNote{Label: "combat", Path: pathC, Bytes: sizeC, Tick: sess.Clock.GlobalTick, Summary: summaryC, Census: fuTakeCensus(sess), SavedHash: hashC}
 	f.step(300)
 	if msg, err := f.loadViaDialog("combat"); err != nil || msg != "" {
-		t.Fatalf("load combat: err=%v modal=%q", err, msg)
+		_, restoreErr := session.LoadRetailSavePath(pathC, session.RetailLoadDeps{FS: shell.cs.fs, SimSeed: 7, CRTSeed: 7, UnitLimit: shell.setup.UnitLimit})
+		t.Fatalf("load combat: err=%v modal=%q restore=%v", err, msg, restoreErr)
 	}
 	b4 := shell.battle
 	if b4 == nil || b4 == b3 {

@@ -276,8 +276,8 @@ func TestRadarFeatureContactUsesPlacerOwnerAndExtents(t *testing.T) {
 		t.Fatal("unknown owner-zero feature must not bypass LOS")
 	}
 	inst := &features.Instance{Terrain: terrain, CX: 4, CZ: 4}
-	if owner, known := featureOwnerSelector(inst); known || owner != combat.NeutralSide {
-		t.Fatalf("zero placer selector = (%d, %t), want neutral/unknown", owner, known)
+	if owner, known := featureOwnerSelector(inst); !known || owner != 0 {
+		t.Fatalf("zero placer selector = (%d, %t), want owner zero/known", owner, known)
 	}
 }
 

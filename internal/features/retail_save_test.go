@@ -81,7 +81,7 @@ func TestThreeDRecordRoundTripsAWreckMidDescent(t *testing.T) {
 		world.CellToWorld(3).Add(numeric.Fixed(5 * 65536)),
 		descending,
 		world.CellToWorld(4).Add(numeric.Fixed(7 * 65536)),
-	}, Orientation{Bank: 0x00c8, Heading: 0x8000, Pitch: 0x4001}, wreck, false)
+	}, Orientation{Bank: 0x00c8, Heading: 0x8000, Pitch: 0x4001}, wreck, false, 0)
 	if saved == nil {
 		t.Fatal("corpse refused")
 	}
@@ -164,5 +164,38 @@ func TestRetailFeatureImageSkipsNonFamilyAnimationSequence(t *testing.T) {
 	}
 	if len(image.Animating) != 0 || len(image.Normal) != 0 || len(image.ThreeD) != 0 {
 		t.Fatalf("non-family animation was emitted: %#v", image)
+	}
+}
+
+// The saved ordinal indexes the complete live definition list, including
+// corpse/successor types absent from the map's original TNT name table
+// [08 R-SAVE-FEATURE-01].
+func TestRetailFeatureImageIncludesAdmittedDefinitionNames(t *testing.T) {
+	terrain := newTestTerrainP1(8, 8)
+	tree := defP1("tree", 1, 1, "", "")
+	unused := defP1("unused", 1, 1, "", "")
+	terrain.FeatureNames = []string{"TREE"}
+	terrain.FeatureDefs = []*content.FeatureDef{tree, unused}
+	svc := NewService(terrain, nil, nil, nil)
+	wreck := defP1("wreck", 1, 1, "wreck.3do", "")
+	if svc.PlaceCorpse([3]numeric.Fixed{world.CellToWorld(3), world.CellToWorld(2), world.CellToWorld(4)}, Orientation{}, wreck, false, 0) == nil {
+		t.Fatal("corpse refused")
+	}
+	image, err := svc.RetailFeatureImage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(image.TypeNames) != len(terrain.FeatureDefs) || image.TypeNames[0] != "TREE" || image.TypeNames[1] != unused.CanonicalKey || image.TypeNames[2] != wreck.CanonicalKey {
+		t.Fatalf("saved names %v do not preserve the live definition ordinals", image.TypeNames)
+	}
+	if len(image.ThreeD) != 1 {
+		t.Fatalf("wreck records = %d, want one", len(image.ThreeD))
+	}
+	row := image.ThreeD[0]
+	if row.TypeID != 2 || binary.LittleEndian.Uint16(row.Data[4:]) != row.TypeID || image.TypeNames[row.TypeID] != row.TypeName {
+		t.Fatalf("saved wreck ordinal and name disagree: %+v, names %v", row, image.TypeNames)
+	}
+	if len(terrain.FeatureNames) != 1 {
+		t.Fatal("save projection changed the map's authored name table")
 	}
 }

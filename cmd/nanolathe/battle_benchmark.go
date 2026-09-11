@@ -26,35 +26,37 @@ func runBattleBenchmark(opts Options, b *battleSession, c *client.Client) error 
 	}
 	s := b.sess
 	var factories []*units.Unit
-	n := 80
-	cx, cz := b.cam.MapW/2, b.cam.MapH/2
-	fmt.Printf("map=%dx%d center=%d,%d\n", b.cam.MapW, b.cam.MapH, cx, cz)
-	names := [][]string{{"armflash", "armstump", "armpw", "armrock", "armham", "armflea", "armpeep", "armfig"}, {"corraid", "corlevlr", "corak", "corstorm", "corthud", "corfav", "corfink", "corveng"}}
+	// Scene composition and spacing are fixture choices, not retail rules.
+	n := 160
+	cx, cz, terrainRelief, err := benchmarkBattleCentre(s.World)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("map=%dx%d center=%d,%d terrain_relief=%d\n", b.cam.MapW, b.cam.MapH, cx, cz, terrainRelief)
+	names := [][]string{{"armflash", "armstump", "armpw", "armrock", "armham", "armfav", "armzeus", "armfig", "armthund", "armwar"}, {"corraid", "corlevlr", "corak", "corstorm", "corthud", "corfav", "corpyro", "corveng", "corshad", "correap"}}
 	buildings := [][]string{{"armsolar", "armlab", "armllt", "armrad"}, {"corsolar", "corlab", "corllt", "corrad"}}
 	// Reserve a full largest authored building width plus a cell on either side.
 	// The earlier fixed 80-pixel pitch overlapped ARM solar and lab yards.
 	buildingPitch := int32(80)
-	if opts.BenchmarkFactories {
-		for _, side := range buildings {
-			for _, name := range side {
-				if def, ok := s.Catalog.Unit(name); ok {
-					buildingPitch = max(buildingPitch, int32(def.FootprintX)*16+32)
-				}
+	for _, side := range buildings {
+		for _, name := range side {
+			if def, ok := s.Catalog.Unit(name); ok {
+				buildingPitch = max(buildingPitch, int32(def.FootprintX)*16+32)
 			}
 		}
 	}
 	for side := 0; side < 2; side++ {
 		for i := 0; i < n+16; i++ {
-			name := names[side][i%8]
+			name := names[side][i%len(names[side])]
 			if i >= n {
 				name = buildings[side][(i-n)%4]
 			}
 			def, ok := s.Catalog.Unit(name)
 			if !ok {
-				return fmt.Errorf("missing %s", name)
+				return fmt.Errorf("nanolathe: benchmark unit missing: logical path %s, providers searched [catalog], expected an authored unit definition", name)
 			}
-			x := cx + int32((side*2-1)*260) + int32(i%10)*40 - 180
-			z := cz + int32(i/10)*44 - 200
+			x := cx + int32((side*2-1)*300) + int32(i%8)*48 - 168
+			z := cz + int32(i/8)*48 - 456
 			if i >= n {
 				x = cx + int32((side*2-1)*620) + int32((i-n)%2)*buildingPitch - (buildingPitch - 80)
 				z = cz + int32((i-n)/2)*80 - 250
@@ -83,7 +85,9 @@ func runBattleBenchmark(opts Options, b *battleSession, c *client.Client) error 
 				q, ok := u.Orders.(*orders.Queue)
 				if ok {
 					id := orders.Lookup("Move_Ground")
-					q.Push(id, orders.NewNodeForOrder(id, 0, numeric.Fixed((cx+int32((1-side*2)*250))<<16), fy, fz, s.Clock.GlobalTick, h, false))
+					goalX := numeric.Fixed(cx+int32((1-side*2)*250)) << 16
+					goalY := s.World.HeightAt(goalX, fz)
+					q.Push(id, orders.NewNodeForOrder(id, 0, goalX, goalY, fz, s.Clock.GlobalTick, h, false))
 				}
 			}
 		}
@@ -91,8 +95,12 @@ func runBattleBenchmark(opts Options, b *battleSession, c *client.Client) error 
 	millis := &shotMillisSource{}
 	b.millisSource = millis
 	step := func() { millis.step++; b.viewerStep(1.0/30, c) }
-	for i := 0; i < 30; i++ {
+	b.cam.JumpToBattleViewCenter(cx, cz)
+	for i := 0; i < opts.BenchmarkPreTicks; i++ {
 		step()
+		// Drain each committed tick so the first displayed frame does not replay
+		// the entire lead-in's retained sound and status queue.
+		c.TickPresentationAudio()
 	}
 	b.cam.JumpToBattleViewCenter(cx, cz)
 	// The benchmark scene at the detail view is the same battle drawn from
@@ -109,7 +117,27 @@ func runBattleBenchmark(opts Options, b *battleSession, c *client.Client) error 
 	}
 	census := func() any {
 		f := s.Snapshot.Current()
-		nanoframes, nano := 0, 0
+		nanoframes, nano, damaged := 0, 0, 0
+		moving := benchmarkMovingUnits(f, s.Snapshot.Previous())
+		// In-view counts use projected anchors inside the battle viewport;
+		// they do not claim pixel visibility after fog or sprite occlusion.
+		sprites, burning, visibleSprites, visibleBurning := 0, 0, 0, 0
+		for _, feature := range f.Features {
+			if feature.Filename != "" {
+				sprites++
+				sx, sy := b.cam.WorldToScreen(feature.X, feature.Y, feature.Z)
+				visible := sx >= camera.OriginX && sx < 1920 && sy >= camera.OriginY && sy < 1048
+				if visible {
+					visibleSprites++
+				}
+				if feature.IsBurning {
+					burning++
+					if visible {
+						visibleBurning++
+					}
+				}
+			}
+		}
 		var production [8]benchmarkFactory
 		for i, u := range factories {
 			if u == nil || !u.Alive || u.Def == nil {
@@ -130,6 +158,9 @@ func runBattleBenchmark(opts Options, b *battleSession, c *client.Client) error 
 			production[i] = row
 		}
 		for _, u := range f.Units {
+			if u.Health < u.MaxHealth && u.BuildRemaining == 0 {
+				damaged++
+			}
 			if u.BuildRemaining > 0 {
 				nanoframes++
 			}
@@ -139,9 +170,9 @@ func runBattleBenchmark(opts Options, b *battleSession, c *client.Client) error 
 				nano++
 			}
 		}
-		return map[string]any{"tick": s.Clock.GlobalTick, "units": len(f.Units), "projectiles": len(f.Projectiles), "effects": len(f.Effects), "fragments": len(f.Fragments), "state": s.State.String(), "nanoframes": nanoframes, "nanolathe_events": nano, "factory_production": production, "builds": len(f.Builds), "shake": f.ShakeActive, "camera_x": b.cam.X, "camera_z": b.cam.Z}
+		return map[string]any{"features": len(f.Features), "sprite_features": sprites, "burning_features": burning, "in_view_sprite_features": visibleSprites, "in_view_burning_features": visibleBurning, "damaged_units": damaged, "moving_units": moving, "tick": s.Clock.GlobalTick, "units": len(f.Units), "projectiles": len(f.Projectiles), "effects": len(f.Effects), "fragments": len(f.Fragments), "state": s.State.String(), "nanoframes": nanoframes, "nanolathe_events": nano, "factory_production": production, "builds": len(f.Builds), "shake": f.ShakeActive, "camera_x": b.cam.X, "camera_z": b.cam.Z}
 	}
-	err := ebitenapp.BattleBenchmark(c, step, census, ebitenapp.BenchmarkOptions{Directory: opts.BattleBenchmark, Renderer: opts.Renderer, Frames: opts.BenchmarkFrames, TPS: opts.BenchmarkTPS, Metadata: map[string]any{"scene_version": 3, "tps": opts.BenchmarkTPS, "map": opts.Map, "seed": opts.Seed, "factories": opts.BenchmarkFactories, "viewport": []int{1920, 1080}, "zoom": viewZoomOf(b).Float(), "auto_remaster": opts.AutoRemaster, "warmup_draws": 60, "pre_window_ticks": 30, "display": loadedSettings().Display, "root": opts.Root}})
+	err = ebitenapp.BattleBenchmark(c, step, census, ebitenapp.BenchmarkOptions{Directory: opts.BattleBenchmark, Renderer: opts.Renderer, Frames: opts.BenchmarkFrames, TPS: opts.BenchmarkTPS, Metadata: map[string]any{"scene_version": 4, "tps": opts.BenchmarkTPS, "map": opts.Map, "seed": opts.Seed, "factories": opts.BenchmarkFactories, "viewport": []int{1920, 1080}, "zoom": viewZoomOf(b).Float(), "auto_remaster": opts.AutoRemaster, "warmup_draws": 60, "pre_window_ticks": opts.BenchmarkPreTicks, "mobiles_per_side": n, "mobile_roster": names, "battle_center": []int32{cx, cz}, "terrain_relief": terrainRelief, "display": loadedSettings().Display, "root": opts.Root}})
 	if err != nil {
 		return err
 	}
@@ -187,4 +218,65 @@ type benchmarkFactory struct {
 	Product  string
 	Deadline int32
 	Target   uint32
+}
+
+// benchmarkBattleCentre minimizes terrain relief across the whole fixture:
+// both formations, the crossing lanes, and the rear buildings. These are
+// benchmark placement choices, not retail movement thresholds. A plateau is
+// fine; a hillside or a cliff through the middle of a formation is not.
+// Stable row-major ties keep scene selection independent of either RNG.
+func benchmarkBattleCentre(t *world.Terrain) (int32, int32, int32, error) {
+	const halfX, halfZ = int32(800), int32(520)
+	bestX, bestZ := t.PlayRight/2, t.PlayBottom/2
+	best := int32(1 << 30)
+	for z := halfZ + 32; z <= t.PlayBottom-halfZ-32; z += 32 {
+		for x := halfX + 32; x <= t.PlayRight-halfX-32; x += 32 {
+			low, high := int32(255), int32(0)
+			valid := true
+			for dz := -halfZ; dz <= halfZ && valid; dz += 16 {
+				for dx := -halfX; dx <= halfX; dx += 16 {
+					h := int32(t.HeightAt(numeric.Fixed(x+dx)<<16, numeric.Fixed(z+dz)<<16).Int())
+					if h <= int32(t.SeaLevel) {
+						valid = false
+						break
+					}
+					low, high = min(low, h), max(high, h)
+					if high-low >= best {
+						valid = false
+						break
+					}
+				}
+			}
+			if valid {
+				bestX, bestZ, best = x, z, high-low
+			}
+		}
+	}
+	if best == 1<<30 {
+		return 0, 0, 0, fmt.Errorf("nanolathe: benchmark placement failed: logical path <battle terrain>, providers searched [map], expected a dry area large enough for the formations and buildings")
+	}
+	return bestX, bestZ, best, nil
+}
+
+// Published units are in ascending pool-slot order [I1]. Compare only the same
+// instance in adjacent committed frames: a blocked mover can retain nonzero
+// speed, and a newly created unit is not evidence of displacement.
+func benchmarkMovingUnits(current, previous *frame.Frame) int {
+	if current == nil || previous == nil {
+		return 0
+	}
+	moving, before := 0, 0
+	for _, u := range current.Units {
+		for before < len(previous.Units) && previous.Units[before].Slot < u.Slot {
+			before++
+		}
+		if before == len(previous.Units) {
+			break
+		}
+		p := previous.Units[before]
+		if p.Slot == u.Slot && p.InstanceID == u.InstanceID && (p.X != u.X || p.Y != u.Y || p.Z != u.Z) {
+			moving++
+		}
+	}
+	return moving
 }

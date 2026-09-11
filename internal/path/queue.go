@@ -305,6 +305,16 @@ func (s *Scheduler) HasRequest(unit pool.Handle) bool {
 	return ok && p.HasRequest(unit)
 }
 
+// CurrentRequest returns the admitted search, independently of optional
+// history tracing. A staged provider request has not reached this boundary.
+func (s *Scheduler) CurrentRequest(unit pool.Handle) *Request {
+	if s == nil || s.active == nil || s.active.Unit != unit {
+		return nil
+	}
+	copy := *s.active
+	return &copy
+}
+
 // Cancel removes queued work or releases the single active working set owned
 // by unit [04 R-PATH-01 §8].
 func (s *Scheduler) Cancel(unit pool.Handle) bool {

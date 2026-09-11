@@ -183,6 +183,12 @@ func TestPatrollingSquadDoesNotFreezeWhileWalking(t *testing.T) {
 		stillFor int
 	}
 	last := map[pool.Handle]sample{}
+	starts := map[pool.Handle]sample{}
+	farthest := map[pool.Handle]int64{}
+	for _, h := range squad {
+		u := sess.Units.Unit(h)
+		starts[h] = sample{x: u.X, z: u.Z}
+	}
 	longest, frozenTicks := 0, 0
 	for i := 0; i < 4000; i++ {
 		now++
@@ -191,6 +197,11 @@ func TestPatrollingSquadDoesNotFreezeWhileWalking(t *testing.T) {
 			u := sess.Units.Unit(h)
 			if u == nil || !u.Alive {
 				continue
+			}
+			start := starts[h]
+			distance := abs64(int64(u.X-start.x)>>16) + abs64(int64(u.Z-start.z)>>16)
+			if distance > farthest[h] {
+				farthest[h] = distance
 			}
 			prev := last[h]
 			cur := sample{x: u.X, z: u.Z}
@@ -219,21 +230,22 @@ func TestPatrollingSquadDoesNotFreezeWhileWalking(t *testing.T) {
 	}
 
 	// Sanity: the squad has to have gone somewhere, or the thresholds below
-	// pass for the wrong reason.
+	// pass for the wrong reason. A route can bring a mover back near its start,
+	// so measure its greatest displacement during the run, not its final pose.
 	moved := 0
 	for _, h := range squad {
 		if u := sess.Units.Unit(h); u != nil && u.Alive {
-			if abs64(int64(u.X-mineX)>>16)+abs64(int64(u.Z-mineZ)>>16) > 400 {
+			if farthest[h] > 400 {
 				moved++
 			}
 		}
 	}
 	if moved < len(squad)/2 {
-		t.Fatalf("only %d of %d patrolling kbots travelled past 400 world units; the scenario no longer exercises the follower", moved, len(squad))
+		t.Fatalf("only %d of %d patrolling kbots displaced more than 400 world units from their starts; the scenario no longer exercises the follower", moved, len(squad))
 	}
 
-	t.Logf("%d patrolling kbots over 4000 ticks: longest frozen-while-walking run %d ticks, %d unit-ticks inside stalls of 30+ ticks",
-		len(squad), longest, frozenTicks)
+	t.Logf("%d of %d patrolling kbots displaced more than 400 world units over 4000 ticks: longest frozen-while-walking run %d ticks, %d unit-ticks inside stalls of 30+ ticks",
+		moved, len(squad), longest, frozenTicks)
 	if longest > 600 {
 		t.Fatalf("a patrolling kbot stood still for %d consecutive ticks with a nonzero speed word: it is not jostling, it is stuck. A blocked mover re-arms a request every 60 ticks and jostles for at most a throttle period per stage [04 R-PATH-01 §14][04 R-MOV-01 §7]", longest)
 	}

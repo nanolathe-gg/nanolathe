@@ -10,12 +10,11 @@ import "math"
 // them is derived from anything. They live together here so they can be tuned
 // by hand in one place; changing one changes only how the zoom feels.
 const (
-	// ZoomWheelNotch is how much wheel travel, in thousandths of an Ebitengine
-	// wheel unit, moves the target by one step. A notched mouse wheel reports
-	// whole units, so one click is one step; a trackpad reports fractions, and
-	// they accumulate until a notch's worth has passed. Wheel-up (a positive
-	// Ebitengine wheel Y) zooms in.
-	ZoomWheelNotch int32 = 1000
+	// ZoomScrollThreshold is the travel required for one zoom step, in
+	// thousandths of an Ebitengine wheel unit. Three units require a longer
+	// trackpad gesture than the former one-unit threshold. Mouse wheels share
+	// the same input path and threshold. Positive wheel Y zooms in.
+	ZoomScrollThreshold int32 = 3000
 
 	// ZoomEaseFraction is how much of the remaining gap the live factor closes
 	// per host Update. It is an exponential ease: 0.30 closes about 83% of a gap
@@ -38,7 +37,7 @@ var ZoomSteps = [3]Zoom{
 	ZoomMax,      // 2x
 }
 
-// NextZoomStep is the step one notch away from a factor: the first step
+// NextZoomStep is the next zoom stop in the requested direction: the first step
 // strictly above it when in is set, the first strictly below it otherwise, and
 // false at either end of the list. A factor between two steps — the ease in
 // flight, a clamped floor, a free `--zoom` — goes to the nearest step in the
@@ -76,7 +75,7 @@ type ZoomController struct {
 	// so the world point under it stays put for the whole animation.
 	anchorX, anchorY int32
 	anchored         bool
-	// travel is the wheel movement banked toward the next notch, in
+	// travel is the wheel movement banked toward the next zoom step, in
 	// thousandths of a wheel unit, signed: a trackpad's fractions add up here
 	// until they are worth a step.
 	travel int32
@@ -101,9 +100,9 @@ func (z *ZoomController) Active(cam *Camera) bool {
 }
 
 // Wheel spends one host frame's wheel delta about the screen point (mx, my):
-// every ZoomWheelNotch of travel moves the target one step along ZoomSteps,
+// every ZoomScrollThreshold of travel moves the target one step along ZoomSteps,
 // in for a positive delta (a scroll up) and out for a negative one. Travel
-// short of a notch is banked; travel in the opposite direction discards what
+// short of the threshold is banked; travel in the opposite direction discards what
 // is banked, so a trackpad that drifts back does not step.
 //
 // The float64 is the wheel's own unit and is consumed here; the stored travel
@@ -120,12 +119,12 @@ func (z *ZoomController) Wheel(cam *Camera, mx, my int32, dy float64) {
 		z.travel = 0
 	}
 	z.travel += units
-	for z.travel >= ZoomWheelNotch {
-		z.travel -= ZoomWheelNotch
+	for z.travel >= ZoomScrollThreshold {
+		z.travel -= ZoomScrollThreshold
 		z.stepTarget(cam, mx, my, true)
 	}
-	for z.travel <= -ZoomWheelNotch {
-		z.travel += ZoomWheelNotch
+	for z.travel <= -ZoomScrollThreshold {
+		z.travel += ZoomScrollThreshold
 		z.stepTarget(cam, mx, my, false)
 	}
 }

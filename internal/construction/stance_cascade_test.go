@@ -9,16 +9,16 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
-// TestFreshFactoryProductStanceCascadesFromCommander is the play-test
-// question "why are units created with hold position instead of maneuver?"
-// answered end to end.
+// TestStandingCopyHelperPropagatesCurrentStance exercises the factory copy
+// helper and the subsequent BuildingBuild pipeline. Its first copy is invoked
+// manually, so it does not establish that MobileBuild calls that helper.
 //
 // [04 R-STANCE-01 §6] establishes the mechanism: both fields parse with a
 // default of 2, a definition's own creation seeds them straight from its
 // definition, and a factory PRODUCT's fields are instead overwritten from the
 // builder's current fields at both the state-2 epilogue and the later
 // guarded `GetBuilt` copy [04 §3.8][R-P0-09] — the product's own authored
-// value is never consulted once it has a builder.
+// value is overwritten on that factory-production path.
 //
 // The asset half of the "why" is not yet in that doc's stock census (which
 // aggregates across all 284 files, not per-unit): a direct read of the
@@ -27,21 +27,11 @@ import (
 // factory definitions author `standingmoveorder=1` (maneuver, the stock
 // mobile-definition default the census does report). A commander is not
 // itself a factory product, so its own creation seeds hold position straight
-// from its definition. But the factory IT builds IS a product, so the
-// state-2 epilogue overwrites the factory's own authored maneuver with the
-// commander's hold position; every unit that factory then produces inherits
-// the factory's (inherited) stance the same way. Hold position cascades two
-// hops from the commander to the newest tank, exactly as observed in play.
-// This is retail's documented mechanism operating on retail's own authored
-// data, not a Nanolathe defect: the escape hatch is the same one retail
-// gives the player — click the factory's (or the commander's) stance
-// buttons — not a code fix.
-//
-// TODO(question): whether the commander's authored `standingmoveorder=0` is
-// itself deliberate design or an oversight in Cavedog's own data is
-// unanswerable from the executable; it does not change how Nanolathe must
-// clone it.
-func TestFreshFactoryProductStanceCascadesFromCommander(t *testing.T) {
+// from its definition. The manual copy below models only the helper: retail's
+// ground and aircraft MobileBuild paths do not call it [04 R-STANCE-01 §6].
+// TestMobileBuiltFactoryKeepsAuthoredStandingOrders covers that distinction
+// through placement and completion rather than assuming the call exists.
+func TestStandingCopyHelperPropagatesCurrentStance(t *testing.T) {
 	commanderDef := &content.UnitDef{
 		DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armcom")},
 		UnitName:         "armcom",
@@ -88,15 +78,14 @@ func TestFreshFactoryProductStanceCascadesFromCommander(t *testing.T) {
 		t.Fatalf("factory's own creation (pre-inheritance): move = %d, want 1 (maneuver, its own authored default)", got)
 	}
 
-	// Hop 1: the commander "builds" the factory. copyStandingFlags is the
-	// exact state-2 epilogue merge [04 §3.8][R-P0-09] a real BuildingBuild
-	// success path invokes via successEpilogue.
+	// Synthetic first hop: invoke the factory helper directly. This is not
+	// the mobile placement path [04 R-STANCE-01 §6].
 	copyStandingFlags(commander, factory)
 	if got := (factory.Flags & StandingMoveMask) >> 18; got != 0 {
-		t.Fatalf("factory after commander build: move = %d, want 0 (hold position, inherited from the commander)", got)
+		t.Fatalf("factory after direct helper copy: move = %d, want source value 0", got)
 	}
 	if got := (factory.Flags & StandingFireMask) >> 20; got != 2 {
-		t.Fatalf("factory after commander build: fire = %d, want 2 (fire at will, inherited from the commander)", got)
+		t.Fatalf("factory after direct helper copy: fire = %d, want source value 2", got)
 	}
 
 	// Hop 2: drive the real factory production pipeline so the product's

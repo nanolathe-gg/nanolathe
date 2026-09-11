@@ -41,7 +41,7 @@ func TestRestoredResourceMemberStartsFactoryProduction(t *testing.T) {
 			m := &Manager{Player: 0, Catalog: cat, Profile: &Profile{}, RNG: &r}
 			m.EnsureStrategicInitialized()
 			m.Strategic.ClassVectors["product"] = ClassVector{C0: 100, C1: 100, C2: 100}
-			m.RestoreGroupsFromUnits(w)
+			m.RestoreGroupsFromUnits(w.IterSliced())
 			e := testEcon(0, 800, 1000, 400, 500, 300, 10, 0, 0)
 			e.Players[0].Exists = true
 			attempts := 0

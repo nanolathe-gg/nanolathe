@@ -36,7 +36,7 @@ func TestThreeDRecordsGoDormantAtZeroVelocity(t *testing.T) {
 		world.CellToWorld(3).Add(numeric.Fixed(5 * 65536)),
 		numeric.Fixed(20 * 65536),
 		world.CellToWorld(4).Add(numeric.Fixed(7 * 65536)),
-	}, Orientation{}, wreck, false)
+	}, Orientation{}, wreck, false, 0)
 	if sinking == nil || !sinking.onActive || sinking.Vy == 0 {
 		t.Fatal("the corpse over water is not an active, moving record")
 	}

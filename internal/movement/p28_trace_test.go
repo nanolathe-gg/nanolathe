@@ -1,10 +1,46 @@
 package movement
 
 import (
+	"reflect"
 	"testing"
 
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/path"
 )
+
+// A capture without pre-enabled history must still distinguish a staged
+// request from an absent request and expose the controller's actual binding.
+func TestMovementSnapshotExposesRepathAndBindingWithoutHistory(t *testing.T) {
+	s, w, h := releaseFixture(t, wiringDef(), 2)
+	u := w.Unit(h)
+	q := orders.QueueForUnit(u)
+	q.Push(orders.Lookup("RepairUnit"), orders.Node{Owner: h, Phase: 1, CreationTick: 100})
+	n := q.Head()
+	s.tick = 200
+	s.InstallRectangleGoal(orders.RectangleGoalRequest{Owner: h, Node: n, CellX: 8, CellZ: 8, Width: 4, Depth: 4})
+	s.ActivateMove(u, n)
+	route := handleRow(s.Routes, h)
+	route.LastRequestTick = 190
+	before := *route
+	first := s.ParitySnapshot(w, 200)
+	if len(first) != 1 {
+		t.Fatalf("snapshot rows=%d", len(first))
+	}
+	m := first[0]
+	if !m.CurrentWantsRepath || m.LastRequestTick != 190 || m.Staged == nil || m.Pending != nil || m.GroundGoal == nil || m.GroundGoal.Kind != 3 || !m.GoalMatchesActiveOrder || !m.ActiveOrderIsPrimaryHead {
+		t.Fatalf("missing follower admission/binding state: %+v", m)
+	}
+	if *route != before || s.Scheduler.TraceEnabled() || !reflect.DeepEqual(first, s.ParitySnapshot(w, 200)) {
+		t.Fatal("snapshot advanced state or enabled historical tracing")
+	}
+	m.ActiveOrder.Phase = 99
+	m.GroundGoal.Rect.Min.X = -100
+	m.Staged.Start.X = -100
+	after := s.ParitySnapshot(w, 200)[0]
+	if n.Phase != 1 || after.ActiveOrder.Phase != 1 || after.GroundGoal.Rect.Min.X == -100 || after.Staged.Start.X == -100 {
+		t.Fatal("snapshot aliases live binding or request state")
+	}
+}
 
 func TestP28CollisionHistoryOnlyCommitsWhenEnabled(t *testing.T) {
 	s := NewSystem(nil, Profile{}, nil)

@@ -2,7 +2,7 @@ module github.com/nanolathe-gg/nanolathe
 
 go 1.25.0
 
-require github.com/hajimehoshi/ebiten/v2 v2.10.0-rc.3
+require github.com/hajimehoshi/ebiten/v2 v2.10.1
 
 require (
 	github.com/ebitengine/gomobile v0.0.0-20260820040257-d11f821a26a6 // indirect

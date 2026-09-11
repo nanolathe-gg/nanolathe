@@ -897,6 +897,12 @@ nonzero construction fraction forces variant zero after any query
 `Killed` callback after the synchronous query `[06 §12.1]`
 `[06 R-DMG-01 §3]`.
 
+The death finalizer selects the resolved self-destruct weapon only for cause 3
+and the resolved explode weapon otherwise, without fallback or an active-slot
+gate. Record 0 still enters central impact and produces its calculated flash
+despite having no named art `[06 §12.2]` `[06 R-DMG-01 §5]`
+`[06 R-WFX-01 §2]`.
+
 **C26 — area damage, and the absence of impulse.** Each cell discovers and
 applies its first unit hit, second unit hit, then feature hit before advancing;
 later discovery observes earlier damage and footprint replacement. Each call
@@ -919,6 +925,8 @@ only that impact while the ladder continues; a ground bounce never reaches the
 central impact; an off-map exit retires regardless; ballistic burn-blow expiry
 repeats the full impact; and a linked-proximity plus second same-call impact is
 reachable because the resolver never rechecks the dead bit `[06 §13.2]` [I11].
+Collision rejects off-map points before linked proximity, after any impact
+already required by the motion family `[06 §8.1]` `[06 R-DMG-01 §14]`.
 
 ### 3.5 Stockpile and interceptors — C29
 
@@ -934,6 +942,8 @@ stored **aim point** lies within the separate inclusive axis-aligned coverage
 square; the slot stores that candidate's current position, firing rescans, and
 the spawn writes the authoritative reservation link `[06 §11.1]` `[06 §11.2]`
 `[06 R-WPN-05 §2]` `[06 R-WPN-05 §10]`.
+The projectile blast metric compares signed 32-bit values, including the
+wrapped square of the unhalved unsigned area word `[06 R-WPN-05 §10]`.
 
 ### 3.6 Not implemented
 

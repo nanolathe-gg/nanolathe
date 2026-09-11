@@ -7,6 +7,26 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 )
 
+func TestCurrentRequestAvailableWithoutHistoricalTrace(t *testing.T) {
+	s := newTestScheduler(func(Request, int32, int) WorkResult {
+		return WorkResult{Pops: 100}
+	}, nil)
+	s.SetUnitLimit(1)
+	s.Submit(Request{Unit: 1, Goal: PointGoal(Cell{X: 9}, 0), Activation: 7})
+	s.Tick(100)
+	r := s.CurrentRequest(1)
+	if r == nil || r.Activation != 7 || s.TraceEnabled() || s.CurrentRequest(2) != nil {
+		t.Fatalf("current request without tracing=%+v", r)
+	}
+	r.Start.X = 123
+	if s.CurrentRequest(1).Start.X == 123 {
+		t.Fatal("request copy aliases scheduler record")
+	}
+	if pending, history := s.TraceFor(1); pending != nil || history != nil {
+		t.Fatal("current request enabled history")
+	}
+}
+
 func TestP28TraceIsOptInAndRepeatReadPure(t *testing.T) {
 	search := func(r Request, _ int32, _ int) WorkResult {
 		return WorkResult{Points: []Point{{X: 3, Z: 4}}, Done: true}

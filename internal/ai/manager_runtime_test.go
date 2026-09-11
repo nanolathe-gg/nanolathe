@@ -762,7 +762,7 @@ func TestRestoredRallyGroupUsesKnowledgeBeforeSubmittingOrders(t *testing.T) {
 
 			sim := rng.NewSimulation(seed)
 			m := &Manager{Player: 0, RNG: &sim}
-			m.RestoreGroupsFromUnits(w)
+			m.RestoreGroupsFromUnits(w.IterSliced())
 			if got, want := m.GroupRally, []pool.Handle{first, second}; !sameHandles(got, want) {
 				t.Fatalf("restored rally vector=%v, want pool order %v", got, want)
 			}

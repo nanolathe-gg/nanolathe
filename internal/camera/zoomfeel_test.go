@@ -6,55 +6,63 @@ func feelCamera() *Camera {
 	return &Camera{X: 1200, Z: 900, ViewW: 1024, ViewH: 768, MapW: 16384, MapH: 16384}
 }
 
-// The wheel is a STEPPED control: one notch moves the target to the next of
+// The wheel is a STEPPED control: each threshold moves the target to the next of
 // ZoomSteps, in for a scroll up and out for a scroll down, and a run of
-// notches walks the list end to end without overshooting it (§16.6).
+// steps walks the list end to end without overshooting it (§16.6).
 func TestWheelStepsThroughTheZoomList(t *testing.T) {
 	cam := feelCamera()
 	var z ZoomController
 	z.SetTarget(cam, 500, 300, ZoomUnit)
 	want := []Zoom{ZoomMax, ZoomMax}
 	for i, w := range want {
-		z.Wheel(cam, 500, 300, 1)
+		z.Wheel(cam, 500, 300, 3)
 		if got := z.Target(cam); got != w {
-			t.Fatalf("notch %d in from 1x gave %s, want %s", i+1, got, w)
+			t.Fatalf("step %d in from 1x gave %s, want %s", i+1, got, w)
 		}
 	}
 	want = []Zoom{ZoomUnit, ZoomUnit / 2, ZoomUnit / 2}
 	for i, w := range want {
-		z.Wheel(cam, 500, 300, -1)
+		z.Wheel(cam, 500, 300, -3)
 		if got := z.Target(cam); got != w {
-			t.Fatalf("notch %d out from 2x gave %s, want %s", i+1, got, w)
+			t.Fatalf("step %d out from 2x gave %s, want %s", i+1, got, w)
 		}
 	}
 }
 
-// A trackpad reports fractions of a wheel unit; they bank until a notch's
-// worth has passed and then step once, a reversal discards what is banked, and
-// a delta worth several notches steps several times (§16.6).
-func TestWheelFractionsBankIntoWholeNotches(t *testing.T) {
+// Scroll fractions bank until the three-unit threshold is reached; reversing
+// direction discards the remainder (§16.6). Small gestures must not zoom.
+func TestWheelFractionsBankIntoWholeSteps(t *testing.T) {
 	cam := feelCamera()
 	var z ZoomController
 	z.SetTarget(cam, 500, 300, ZoomUnit)
-	z.Wheel(cam, 500, 300, 0.4)
-	z.Wheel(cam, 500, 300, 0.4)
+	z.Wheel(cam, 500, 300, 1.4)
+	z.Wheel(cam, 500, 300, 1.4)
 	if got := z.Target(cam); got != ZoomUnit {
-		t.Fatalf("0.8 of a notch stepped to %s", got)
+		t.Fatalf("2.8 scroll units stepped to %s", got)
 	}
-	z.Wheel(cam, 500, 300, 0.3)
+	z.Wheel(cam, 500, 300, 0.199)
+	if got := z.Target(cam); got != ZoomUnit {
+		t.Fatalf("scroll just below the threshold stepped to %s", got)
+	}
+	z.Wheel(cam, 500, 300, 0.001)
 	if got := z.Target(cam); got != ZoomMax {
-		t.Fatalf("1.1 notches banked gave %s, want %s", got, ZoomMax)
+		t.Fatalf("three scroll units gave %s, want %s", got, ZoomMax)
 	}
-	// The 0.1 left over is discarded by a reversal, so 0.95 back is short of a
-	// notch and steps nothing; it is banked instead.
-	z.Wheel(cam, 500, 300, -0.95)
+	z.Wheel(cam, 500, 300, 0.1)
+	// Reversal discards the 0.1 remainder. A new 2.95-unit gesture is still
+	// short of a step. The next 0.05 must complete it without the old remainder.
+	z.Wheel(cam, 500, 300, -2.95)
 	if got := z.Target(cam); got != ZoomMax {
-		t.Fatalf("a reversal short of a notch stepped to %s", got)
+		t.Fatalf("a reversal below the threshold stepped to %s", got)
 	}
-	// With 0.95 banked, a further 2.05 is three whole notches out.
-	z.Wheel(cam, 500, 300, -2.05)
+	z.Wheel(cam, 500, 300, -0.05)
+	if got := z.Target(cam); got != ZoomUnit {
+		t.Fatalf("three reversed scroll units gave %s, want %s", got, ZoomUnit)
+	}
+	// One large delta spends multiple steps and stops at the lowest target.
+	z.Wheel(cam, 500, 300, -6)
 	if got := z.Target(cam); got != ZoomUnit/2 {
-		t.Fatalf("three notches out from 2x gave %s, want %s", got, ZoomUnit/2)
+		t.Fatalf("two steps out from 1x gave %s, want %s", got, ZoomUnit/2)
 	}
 }
 
@@ -80,7 +88,7 @@ func TestWheelFromBetweenStepsLandsOnAStep(t *testing.T) {
 }
 
 // Stepping out stops at the map's own floor: the step below it is clamped to
-// the floor, and from the floor a further notch out is refused rather than
+// the floor, and from the floor a further step out is refused rather than
 // aimed below it (§16.7).
 func TestWheelOutStopsAtTheMapFloor(t *testing.T) {
 	cam := &Camera{X: 100, Z: 100, ViewW: 1024, ViewH: 768, MapW: 1280, MapH: 1280}
@@ -90,17 +98,17 @@ func TestWheelOutStopsAtTheMapFloor(t *testing.T) {
 	}
 	var z ZoomController
 	z.SetTarget(cam, 500, 300, ZoomSteps[1])
-	z.Wheel(cam, 500, 300, -1)
+	z.Wheel(cam, 500, 300, -3)
 	if got := z.Target(cam); got != minZ {
-		t.Fatalf("a notch out from 1x on a small map gave %s, want the floor %s", got, minZ)
+		t.Fatalf("a step out from 1x on a small map gave %s, want the floor %s", got, minZ)
 	}
-	z.Wheel(cam, 500, 300, -1)
+	z.Wheel(cam, 500, 300, -3)
 	if got := z.Target(cam); got != minZ {
-		t.Fatalf("a notch out from the floor gave %s, want it to stay", got)
+		t.Fatalf("a step out from the floor gave %s, want it to stay", got)
 	}
-	z.Wheel(cam, 500, 300, 1)
+	z.Wheel(cam, 500, 300, 3)
 	if got := z.Target(cam); got != ZoomSteps[1] {
-		t.Fatalf("a notch in from the floor gave %s, want %s", got, ZoomSteps[1])
+		t.Fatalf("a step in from the floor gave %s, want %s", got, ZoomSteps[1])
 	}
 }
 

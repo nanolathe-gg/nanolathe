@@ -1142,6 +1142,7 @@ func (r *Renderer) drawBatch(dst *ebiten.Image, p *schedPhase, class int) {
 		r.sceneOpts.Blend = run.blend
 		r.beginPass(dst)
 		r.modelStats.Vertices += int(run.vLen)
+		r.recordSubmission(int(run.vLen), int(run.iLen))
 		dst.DrawTrianglesShader32(
 			b.verts[run.vOff:run.vOff+run.vLen],
 			b.idx[run.iOff:run.iOff+run.iLen],
@@ -1175,6 +1176,7 @@ func (r *Renderer) copyComposite(dst, src *ebiten.Image, x0, y0, x1, y1 int) {
 	r.sceneOpts.Images[1], r.sceneOpts.Images[2], r.sceneOpts.Images[3] = fill, fill, fill
 	r.sceneOpts.Blend = blendComposite
 	r.beginPass(dst)
+	r.recordSubmission(len(r.copyVerts), len(r.copyIdx))
 	dst.DrawTrianglesShader32(r.copyVerts[:], r.copyIdx[:], r.scene2D, &r.sceneOpts)
 	r.frameDraws++
 }

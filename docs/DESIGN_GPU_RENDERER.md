@@ -1225,6 +1225,23 @@ every earlier slice still in use within the frame. Warm reuse remains free of
 allocations. This corrects reachability; it does not attribute a measured
 long-match heap footprint to those references.
 
+**Hidden-frame command lifetime.** Ebitengine 2.10.1 is the minimum backend
+version: it completes graphics frames even when the window is hidden or
+occluded, without presenting them. The earlier release candidate still called
+Draw but skipped the queue flush, accumulating ordinary frames' vertex/index
+copies until presentation resumed. This is a backend lifetime correction;
+background simulation and model geometry are unchanged.
+
+Capture diagnostics count the actual vertex and index slice lengths at every
+executor triangle submission, including model padding and overflow passes.
+`ModelKeyVertices` and `ModelColourVertices` separate the expensive model
+lanes; `MaxSubmissionVertices` identifies a single unusually large draw.
+The renderer retains the full statistics and Execute sequence number of the
+frame with the most submitted vertices. These counters exclude image-copy
+draws, adapter draws and dependency-internal work, and describe submissions,
+not retained heap or GPU memory. They require no per-frame allocation and
+never enter authoritative state.
+
 ## 12. Work units for §11
 
 Each unit is one worktree, one sub-agent, exclusive files; the orchestrator
@@ -3203,11 +3220,14 @@ layer; no simulation tick is read [I6].
   closer view than 0.25× while doubling the visible span on each axis. These
   are presentation choices, not retail findings. A target below the map's
   floor is clamped to that floor (§16.7).
-* **The wheel** moves the *target* one step per notch: every `ZoomWheelNotch`
-  of travel (a thousandth-units count, so a notched mouse's whole unit is one
-  step) goes to the next step up for a scroll up and the next step down for a
-  scroll down. A trackpad's fractions bank until they are worth a notch; a
-  reversal discards what is banked, so drift does not step. From a factor
+* **The wheel** moves the *target* one step per `ZoomScrollThreshold` of
+  accumulated travel: 3000 thousandths, or three Ebitengine wheel units.
+  This presentation tuning requires three times the scroll input of the
+  former one-unit threshold to make trackpad zoom less sensitive. Mouse wheels
+  share that threshold; F9 is unaffected. Positive travel goes to the next step
+  up and negative travel to the next step down. Scroll fractions bank until
+  they reach the threshold; a reversal discards what is banked, so drift does
+  not step. From a factor
   between steps — the ease in flight, a free `--zoom` — the wheel goes to the
   nearest step in its direction of travel, so it always lands on a step. The
   gesture is anchored at the pointer, and the anchor is kept for the whole
@@ -3589,4 +3609,3 @@ A human look at motion in the window: the half-pixel step at 120 Hz, and
 whether the two-raster-pixel outline reads right on a rising nanoframe. The
 Anti-Alias option's menu text still describes the retail structure behaviour;
 its Enhanced meaning is wider now and the text is owed a line.
-

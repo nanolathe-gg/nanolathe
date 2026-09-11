@@ -519,7 +519,7 @@ func FindVictimBySignature(svc *Service, sig VictimSig) (pool.Handle, bool) {
 // The Y term is the two projectile records' current heights in the same 16.16
 // domain as X and Z — no terrain sample, no separate scale; the "victim height"
 // is simply the victim record's current Y [06 R-WPN-05 §10]. The comparison is
-// widened to 64 bits so the 16-bit area's square is exact.
+// signed 32-bit, including the wrapped square of the unsigned area word.
 func ProjectileInInterceptorBlast(victimPos, exploderPos Vec3, unhalvedArea int32) bool {
 	dx := exploderPos.X.Raw() - victimPos.X.Raw() // raw 16.16 deltas [06 R-WPN-05 §10]
 	dy := exploderPos.Y.Raw() - victimPos.Y.Raw()
@@ -527,8 +527,8 @@ func ProjectileInInterceptorBlast(victimPos, exploderPos Vec3, unhalvedArea int3
 	// 64-bit signed squares, arithmetic shift right 32, summed as int32
 	// [06 R-WPN-05 §10].
 	sum := int32((dx*dx)>>32) + int32((dy*dy)>>32) + int32((dz*dz)>>32)
-	area := int64(uint16(unhalvedArea)) // unhalved 16-bit areaofeffect [06 R-WPN-05 §10]
-	return int64(sum) < area*area       // strict < [06 §9.3][06 R-WPN-05 §10]
+	area := int32(uint16(unhalvedArea)) // unhalved 16-bit areaofeffect [06 R-WPN-05 §10]
+	return sum < area*area              // signed low-word square, strict < [06 R-WPN-05 §10]
 }
 
 // CollectInterceptorVictims scans live non-self projectile records in pool

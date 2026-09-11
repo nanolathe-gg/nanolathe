@@ -1600,6 +1600,13 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 		// A first two-phase expiry transition has already applied gravity and
 		// position in AdvanceSelfProp; it still falls through to collision and
 		// the common live-record tail [06 §6.6][06 §7.1].
+		// Collision rejects an off-map point before linked proximity can
+		// impact. Motion-triggered impacts above retain their earlier position
+		// in the family visit [06 §8.1][06 R-DMG-01 §14].
+		if projectileOffMap(p, terrain) {
+			s.MarkDead(h)
+			continue
+		}
 		// The linked-projectile test is the first contact-ladder operation.
 		// Its impact may retire records and append effects, so run it before
 		// inspecting the cell contacts that follow [06 §8.1][06 §11.2].
@@ -1654,14 +1661,22 @@ func projectileProximityContact(s *Service, p *Projectile, weapon *content.Weapo
 	return idx >= 0 && idx < len(s.Records) && ProjectileInInterceptorBlast(p.Pos, s.Records[idx].Pos, weapon.AreaOfEffect)
 }
 
+func projectileOffMap(p *Projectile, terrain *world.Terrain) bool {
+	if terrain == nil {
+		return false
+	}
+	cx, cz := world.WorldToCell(p.Pos.X), world.WorldToCell(p.Pos.Z)
+	return cx < 0 || cz < 0 || cx >= terrain.CellW || cz >= terrain.CellH
+}
+
 func checkCollision(p *Projectile, weapon *content.WeaponDef, w *units.World, terrain *world.Terrain, featSvc *features.Service, opaqueLiquid bool) (hitUnit pool.Handle, hitFeature *features.Instance, isWaterTerrain bool, isOffMap bool, terrainContact bool, bounce bool) {
 	if terrain != nil {
-		cx := world.WorldToCell(p.Pos.X)
-		cz := world.WorldToCell(p.Pos.Z)
-		if cx < 0 || cz < 0 || cx >= terrain.CellW || cz >= terrain.CellH {
+		if projectileOffMap(p, terrain) {
 			isOffMap = true
 			return
 		}
+		cx := world.WorldToCell(p.Pos.X)
+		cz := world.WorldToCell(p.Pos.Z)
 		// Step 2 [06 §8.1]: the cached average floor height, written on every
 		// in-map tick before the unit-slot tests and after the in-map test —
 		// an off-map record retires above without sampling a cell

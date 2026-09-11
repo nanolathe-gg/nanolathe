@@ -135,6 +135,9 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 	processing := make(map[uint16]bool, len(image.Units.Records))
 	carrierPath := make(map[uint16]bool, len(image.Units.Records))
 	visited := make(map[uint16]bool, len(image.Units.Records))
+	// Group membership is appended after recursive references, not in pool
+	// order. Retain that order for the derived manager pass [08 R-SAVE-02 §6].
+	restoredUnits := make([]*units.Unit, 0, len(image.Units.Records))
 	var restoreRefs func(uint16) error
 	restoreRefs = func(id uint16) error {
 		if visited[id] {
@@ -195,6 +198,7 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 		if err := units.RetailUnitBase(u, rec.Data); err != nil {
 			return fmt.Errorf("session: retail restore: unit %d base: %w", id, err)
 		}
+		restoredUnits = append(restoredUnits, u)
 		processing[id] = false
 		visited[id] = true
 		return nil
@@ -397,14 +401,7 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 	// pass only stages the saved index. Apply the stored value here, before the
 	// managers rebuild their vectors from it, so a restored unit reports the
 	// group it was saved in rather than the ungrouped record.
-	for _, rec := range image.Units.Records {
-		if rec.Compat {
-			continue
-		}
-		u := s.Units.Unit(stage.StableUnit[rec.StableID])
-		if u == nil {
-			continue
-		}
+	for _, u := range restoredUnits {
 		u.Group = 0
 		if u.RestoredAIGroup >= 1 && u.RestoredAIGroup <= 9 {
 			u.Group = uint8(u.RestoredAIGroup)
@@ -412,7 +409,7 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 	}
 	for _, mgr := range s.AI {
 		if mgr != nil {
-			mgr.RestoreGroupsFromUnits(s.Units)
+			mgr.RestoreGroupsFromUnits(restoredUnits)
 		}
 	}
 	// The shower sits between the units and the trigger records in retail's

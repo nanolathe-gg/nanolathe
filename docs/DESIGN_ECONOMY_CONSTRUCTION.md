@@ -362,7 +362,12 @@ order is its own `[08 R-SAVE-FEATURE-01]`.
 stamp helper, which is the sole owner of terrain and plot writes: the dense-pack
 teardown first, then the anchor's index and the fringe cells' signed deltas,
 then the height snap `[05 R-FEAT-01 §3]` `[05 R-FEAT-01 §3-A]`. `PopulateFromTerrain`
-is the map bootstrap; `RestoreAt` is the save path, which places through the same
+is the map bootstrap. Successful sprite stamps reset accumulated damage; teardown
+preserves the prior word until that initialization. Stamps preserve unrelated
+control flags and install neutral placer 10, except `PlaceCorpse`, which takes
+the dying unit's owner explicitly. Publication accepts player zero as an owner
+`[05 R-FEAT-01 §3]` `[05 R-FEAT-01 §4]` `[03 §5.1.5]`.
+`RestoreAt` is the save path, which places through the same
 helper and then copies only the family state words `[08 R-SAVE-FEATURE-01]`.
 For an animating record the selector re-runs its family — ignition with its
 fresh simulation draw, or the death/reclaim transition — which binds the
@@ -610,10 +615,21 @@ the canonical rally and save relationship. `[05 "Nanoframe allocation"]`
 `[04 §3.8]` `[04 R-FAC-02 §1]` `[04 R-FAC-02 §4]` `[04 R-FAC-02 §6]`
 `[04 R-COLL-01 §4]`.
 
+Both factory and mobile allocation bind the product's construction handlers
+before inserting `GetBuilt`. The session order sweep can visit the new product
+before its first construction step; that first pump must already dispatch the
+normal lifecycle without a missing-handler wait or an extra RNG draw.
+
 **C19 — rally inheritance.** The factory's own queued move and patrol nodes are
 re-enqueued on the product in queue-traversal order; with none, the product
 parks. Standing-order bits copy under the documented gates
 `[05 "Rally inheritance"]`.
+
+The allocation-time standing copy belongs only to factory production.
+`successEpilogueMobile` keeps the product's authored fields, and the
+building-class completion branch skips `GetBuilt` inheritance. A mobile-built
+factory therefore retains its own stance before passing it to its products
+`[04 R-STANCE-01 §6]`.
 
 **C20 — queue insertion.** Insertion goes after the active marker; counted adds
 coalesce **tail-only**; cancellation matches the tail-most node and tombstones

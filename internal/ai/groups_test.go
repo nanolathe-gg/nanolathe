@@ -55,7 +55,7 @@ func TestRestoreGroupsDoNotOverwriteUIGroup(t *testing.T) {
 	u.Group = 7 // UI control group is a separate saved/runtime concept.
 	u.RestoredAIGroup = 3
 	m := &Manager{Player: 0}
-	m.RestoreGroupsFromUnits(w)
+	m.RestoreGroupsFromUnits(w.IterSliced())
 	if u.Group != 7 {
 		t.Fatalf("restore changed UI group to %d", u.Group)
 	}

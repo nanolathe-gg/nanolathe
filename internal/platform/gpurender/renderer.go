@@ -151,7 +151,10 @@ type Renderer struct {
 	frameDraws int
 	lastDest   *ebiten.Image
 
-	modelStats ModelStats
+	modelStats          ModelStats
+	submissionFrame     uint64
+	peakSubmissionFrame uint64
+	peakSubmissionStats ModelStats
 
 	// fog is the fog pass state of docs/DESIGN_GPU_RENDERER.md §11.2, owned by
 	// fog.go so the fog unit and the model unit never edit the same file.
@@ -278,6 +281,13 @@ func (r *Renderer) Execute(list *drawlist.List, w, h int) *ebiten.Image {
 		return nil
 	}
 	r.modelStats = ModelStats{UnsupportedFace: -1}
+	r.submissionFrame++
+	defer func() {
+		if r.modelStats.SubmittedVertices > r.peakSubmissionStats.SubmittedVertices {
+			r.peakSubmissionFrame = r.submissionFrame
+			r.peakSubmissionStats = r.modelStats
+		}
+	}()
 	r.frameDraws = 0
 	r.lastDest = nil
 	r.sched.resetFrame(r.w, r.h)

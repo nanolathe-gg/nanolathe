@@ -7,6 +7,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/features"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/path"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
@@ -34,7 +35,7 @@ func TestRouteRecordsStaticRevisionButZeroPublicationKeepsMetadata(t *testing.T)
 // It replaced a test that bumped the static-obstacle revision and expected the
 // layer to rebuild itself end to end on the next read. That was this build's
 // invention: retail restamps the rectangle synchronously inside the feature
-// service, and the revision word is Nanolathe route-staleness metadata with no
+// service, and the revision word is Nanolathe diagnostic metadata with no
 // class-layer reader.
 func TestFeatureStampRestampsOnlyItsOwnRectangle(t *testing.T) {
 	terrain := staticRevisionTerrain(8, 8)
@@ -90,112 +91,91 @@ func TestStaticRevisionSaturatesAtMaximum(t *testing.T) {
 	}
 }
 
-func TestStaticRevisionInvalidatesGroundRouteAndPublishesCurrentRevision(t *testing.T) {
-	terrain := staticRevisionTerrain(16, 16)
-	profile := Template()
-	profile.MaxWaterDepth = 12
-	profile.MinWaterDepth = -10000
-	profile.MaxSlope = 50
-	profile.BadSlope = 25
-	sys := NewSystem(terrain, profile, NewOccupancyGrid())
-	w := newMovementFixtureWorld(16)
-	sys.BindWorld(w)
-	def := &content.UnitDef{
-		UnitName:     "ground-scout",
-		MaxVelocity:  2 * 65536,
-		Acceleration: 2 * 65536,
-		BrakeRate:    2 * 65536,
-		TurnRate:     500,
-		FootprintX:   1,
-		FootprintZ:   1,
-		MaxDamage:    100,
-		BMCode:       1,
-		CanMove:      true,
+// A distant feature mutation cannot replace a published route, including its
+// detours, or skip integration [04 R-MOV-01 §3][04 §7.4].
+func TestFeatureChangePreservesGroundRoute(t *testing.T) {
+	for _, points := range [][]Point{
+		{{X: 32, Z: 32}, {X: 192, Z: 32}},
+		{{X: 32, Z: 32}, {X: 96, Z: 32}, {X: 96, Z: 96}, {X: 192, Z: 96}},
+	} {
+		def := wiringDef()
+		def.MaxVelocity, def.Acceleration, def.BrakeRate = 2<<16, 2<<16, 2<<16
+		sys, w, h := releaseFixture(t, def, 2)
+		u := w.Unit(h)
+		last := points[len(points)-1]
+		q := orders.QueueForUnit(u)
+		q.Push(orders.Lookup("Move_Ground"), orders.Node{Owner: h, GoalX: numeric.Fixed(last.X) << 16, GoalZ: numeric.Fixed(last.Z) << 16})
+		head := q.Head()
+		sys.InstallPointGoal(orders.PointGoalRequest{Owner: h, Node: head, X: head.GoalX, Z: head.GoalZ, Radius: 4})
+		sys.ActivateMove(u, head)
+		sys.CancelPathRequest(h)
+		route := handleRow(sys.Routes, h)
+		route.PublishAtRevision(points, sys.staticObstacleRevision())
+		route.LastRequestTick = 100
+		beforeRoute, beforeBinding := *route, *handleRow(sys.activeOrders, h)
+		steer := handleRow(sys.Steers, h)
+		steer.Heading, steer.PendingHeading, u.Move.Heading = 49152, 49152, 49152
+		beforeX := u.X
+
+		wreck := &content.FeatureDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "wreck"}, Blocking: true, FootprintX: 1, FootprintZ: 1}
+		sys.Terrain.FeatureDefs = []*content.FeatureDef{wreck}
+		service := features.NewService(sys.Terrain, nil, nil, nil)
+		if service.PlaceAt(14, 1, wreck) == nil {
+			t.Fatal("off-route wreck placement failed")
+		}
+		if sys.staticObstacleRevision() == beforeRoute.StaticRevision {
+			t.Fatal("feature did not change revision")
+		}
+		result := stepOnce(sys, h, 101)
+		if !result.Moved || result.Blocked || u.X != beforeX+2<<16 {
+			t.Fatalf("off-route feature interrupted movement: %+v, x=%d", result, u.X)
+		}
+		if *route != beforeRoute || *handleRow(sys.activeOrders, h) != beforeBinding || sys.HasPathRequest(h) {
+			t.Fatalf("off-route feature replaced route or requested a path: before=%+v after=%+v", beforeRoute, *route)
+		}
 	}
-	setScratchMovement(def, profile)
-	h, err := w.Create(def, 0, world.CellToWorld(1), terrain.HeightAt(world.CellToWorld(1), world.CellToWorld(1)), world.CellToWorld(1))
-	if err != nil {
-		t.Fatal(err)
-	}
+}
+
+// A feature on the proposed footprint blocks at commit; only the follower's
+// later service arms repath, with admission at lastRequestTick+60 inclusive
+// [04 R-COLL-01 §1][04 R-MOV-01 §3][04 R-MOV-01 §7].
+func TestFeatureBlockUsesFollowerRepathPoll(t *testing.T) {
+	def := wiringDef()
+	def.MaxVelocity, def.Acceleration, def.BrakeRate = 32<<16, 32<<16, 32<<16
+	sys, w, h := releaseFixture(t, def, 2)
 	u := w.Unit(h)
-	sys.EnsureUnit(u)
-	moveID := orders.Lookup("Move_Ground")
-	if moveID == 0 {
-		t.Fatal("Move_Ground not found")
-	}
 	q := orders.QueueForUnit(u)
-	q.Push(moveID, orders.Node{GoalX: world.CellToWorld(12), GoalZ: world.CellToWorld(12)})
+	q.Push(orders.Lookup("Move_Ground"), orders.Node{Owner: h, GoalX: 160 << 16, GoalZ: u.Z})
 	head := q.Head()
-	if !sys.ActivateMove(u, head) {
-		t.Fatal("move activation failed")
-	}
-	sys.Scheduler.Tick(1)
+	sys.InstallPointGoal(orders.PointGoalRequest{Owner: h, Node: head, X: head.GoalX, Z: head.GoalZ, Radius: 4})
+	sys.ActivateMove(u, head)
+	sys.CancelPathRequest(h)
 	route := handleRow(sys.Routes, h)
-	if route == nil || !route.Active || route.StaticRevision != terrain.StaticObstacleRevision() {
-		t.Fatalf("initial route = %#v, terrain revision %d", route, terrain.StaticObstacleRevision())
-	}
-	oldCount := route.Count
-	if oldCount < 2 {
-		t.Fatalf("route count %d, want a waypoint beyond the start", oldCount)
-	}
-	// Place a blocking wreck after publication. The feature service is the
-	// semantic mutation boundary, so its revision bump represents the newly
-	// blocking cell rather than a low-level plot write [04 §6.2][04 §8.2].
+	route.PublishAtRevision([]Point{{X: 32, Z: 32}, {X: 160, Z: 32}}, sys.staticObstacleRevision())
+	route.LastRequestTick = 100
+	beforeBinding := *handleRow(sys.activeOrders, h)
+	steer := handleRow(sys.Steers, h)
+	steer.Heading, steer.PendingHeading, u.Move.Heading = 49152, 49152, 49152
 	wreck := &content.FeatureDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "wreck"}, Blocking: true, FootprintX: 1, FootprintZ: 1}
-	terrain.FeatureDefs = []*content.FeatureDef{wreck}
-	featureService := features.NewService(terrain, nil, nil, nil)
-	// Any blocking-feature mutation invalidates the layer revision. Keep this
-	// fixture off the requested line: obstacle avoidance has its own tests and
-	// the direct-ray rejection threshold is not this test's subject.
-	const blockedX, blockedZ = 14, 1
-	if featureService.PlaceAt(blockedX, blockedZ, wreck) == nil {
-		t.Fatalf("wreck placement at off-route cell (%d,%d) failed", blockedX, blockedZ)
+	sys.Terrain.FeatureDefs = []*content.FeatureDef{wreck}
+	if features.NewService(sys.Terrain, nil, nil, nil).PlaceAt(4, 2, wreck) == nil {
+		t.Fatal("on-route wreck placement failed")
 	}
-	if route.StaticRevision == terrain.StaticObstacleRevision() {
-		t.Fatalf("route revision %d did not become stale at terrain revision %d", route.StaticRevision, terrain.StaticObstacleRevision())
+	result := stepOnce(sys, h, 101)
+	if !result.Blocked || !route.Active || sys.HasPathRequest(h) || route.LastRequestTick != 100 {
+		t.Fatalf("feature bypassed ordinary blocked commit: %+v route=%+v", result, route)
 	}
-	sys.BeginTick(2)
-	result := sys.StepUnit(h, 2)
-	sys.EndTick(2)
-	if !result.EmptyRoute || result.Moved || !route.Active || route.StaticRevision != terrain.StaticObstacleRevision() {
-		t.Fatalf("stale route was consumed instead of invalidated: result=%+v route=%+v", result, route)
+	sys.serviceGroundFollower(u, head, route, 159)
+	if !route.WantsRepath || sys.HasPathRequest(h) {
+		t.Fatal("blocked follower did not preserve throttle")
 	}
-	if route.Count != 2 {
-		t.Fatalf("static replan should install the immediate two-point fallback, got route=%+v", route)
+	sys.serviceGroundFollower(u, head, route, 160)
+	if !sys.HasPathRequest(h) || *handleRow(sys.activeOrders, h) != beforeBinding {
+		t.Fatal("eligible follower did not stage its original goal binding")
 	}
-	if !sys.HasPathRequest(h) {
-		t.Fatal("static invalidation did not resubmit the active order")
-	}
-	// The footprint/ring classifier can turn the detour into a multi-slice
-	// search. Budget exhaustion retains the active heap and publishes only on a
-	// later tick [04 R-PATH-01 §6–§7].
-	for tick := uint32(3); tick < 20; tick++ {
-		sys.Scheduler.Tick(tick)
-		route = handleRow(sys.Routes, h)
-		if route != nil && route.Active && route.StaticRevision == terrain.StaticObstacleRevision() {
-			break
-		}
-	}
-	if route == nil || !route.Active || route.StaticRevision != terrain.StaticObstacleRevision() {
-		t.Fatalf("replanned route = %#v, terrain revision %d", route, terrain.StaticObstacleRevision())
-	}
-	if route.NeedsStaticReplan(terrain.StaticObstacleRevision()) {
-		t.Fatal("fresh route still reports static staleness")
-	}
-	// The next movement window may need one steering tick to accelerate; it
-	// must eventually consume the fresh route rather than idle forever.
-	moved := false
-	for tick := uint32(4); tick < 12; tick++ {
-		sys.BeginTick(tick)
-		step := sys.StepUnit(h, tick)
-		sys.EndTick(tick)
-		if step.Moved {
-			moved = true
-			break
-		}
-	}
-	if !moved {
-		t.Fatalf("unit did not move after current-revision route publication; route=%+v", route)
+	sys.Scheduler.Tick(160)
+	if route.LastRequestTick != 160 {
+		t.Fatalf("admitted poll tick=%d, want 160", route.LastRequestTick)
 	}
 }
 

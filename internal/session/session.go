@@ -1244,7 +1244,7 @@ func (s *Session) RegisterAll() {
 						_ = s.Features.PlaceCorpse(
 							[3]numeric.Fixed{u.X, u.Y, u.Z},
 							features.Orientation{Bank: u.Move.Bank, Heading: u.Move.Heading, Pitch: u.Move.Pitch},
-							corpseDef, u.Def.IsFeature)
+							corpseDef, u.Def.IsFeature, u.Owner)
 					}
 				}
 			}

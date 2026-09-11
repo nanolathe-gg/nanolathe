@@ -1,6 +1,7 @@
 package movement
 
 import (
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/path"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
@@ -19,26 +20,52 @@ type CollisionTrace struct {
 // boundary. Current and next routes are distinct: the latter comes from the
 // scheduler's actual request/result trace, never from a guessed route.
 type MovementTrace struct {
-	Tick                  uint32
-	Slot                  pool.Handle
-	X, Z                  int64
-	Heading               uint16
-	Speed                 int64
-	VelocityX, VelocityZ  int32
-	CurrentRoute          []Point
-	CurrentRouteCount     uint8
-	CurrentRouteStorage   [20]Point
-	CurrentActive         bool
-	CurrentDirty          bool
-	CurrentStatus         path.Status
-	CurrentStaticRevision uint64
-	NextRoute             []Point
-	Pending               *path.RequestTrace
-	PendingGoal           path.GoalTrace
-	Result                *path.Trace
-	Collision             *CollisionState
-	CollisionHistory      []CollisionTrace
-	PathFailure           *PathFailure
+	Tick                     uint32
+	Slot                     pool.Handle
+	X, Z                     int64
+	Heading                  uint16
+	Speed                    int64
+	VelocityX, VelocityZ     int32
+	CurrentRoute             []Point
+	CurrentRouteCount        uint8
+	CurrentRouteStorage      [20]Point
+	CurrentActive            bool
+	CurrentDirty             bool
+	CurrentStatus            path.Status
+	CurrentStaticRevision    uint64
+	CurrentWantsRepath       bool
+	LastRequestTick          uint32
+	GroundGoal               *path.GoalTrace
+	GroundGoalOrder          *MovementOrderTrace
+	ActiveOrder              *MovementOrderTrace
+	ActiveActivation         uint64
+	GoalMatchesActiveOrder   bool
+	ActiveOrderIsPrimaryHead bool
+	Staged                   *path.RequestTrace
+	NextRoute                []Point
+	Pending                  *path.RequestTrace
+	PendingGoal              path.GoalTrace
+	Result                   *path.Trace
+	Collision                *CollisionState
+	CollisionHistory         []CollisionTrace
+	PathFailure              *PathFailure
+}
+
+// MovementOrderTrace identifies a controller binding without copying pointers
+// or callback state. The match flags above compare the actual record pointers;
+// equal descriptor/creation fields alone do not establish record identity.
+type MovementOrderTrace struct {
+	Owner, Target pool.Handle
+	ID            orders.ID
+	Phase         uint8
+	CreationTick  uint32
+}
+
+func movementOrderTrace(n *orders.Node) *MovementOrderTrace {
+	if n == nil {
+		return nil
+	}
+	return &MovementOrderTrace{Owner: n.Owner, Target: n.Target, ID: n.ID, Phase: n.Phase, CreationTick: n.CreationTick}
 }
 
 type collisionHistoryEntry struct {
@@ -162,12 +189,31 @@ func (s *System) ParitySnapshot(w *units.World, tick uint32) []MovementTrace {
 			m.CurrentActive, m.CurrentDirty, m.CurrentStatus, m.CurrentStaticRevision = r.Active, r.Dirty, r.Status, r.StaticRevision
 			m.CurrentRouteCount = r.Count
 			m.CurrentRouteStorage = r.Points
+			m.CurrentWantsRepath, m.LastRequestTick = r.WantsRepath, r.LastRequestTick
 			if r.Active {
 				m.CurrentRoute = append(m.CurrentRoute, r.Points[:r.Count]...)
 			}
 		}
+		active := handleRow(s.activeOrders, u.Handle)
+		if active != nil {
+			m.ActiveOrder, m.ActiveActivation = movementOrderTrace(active.order), active.token
+			if q := orders.QueueOfUnit(u); q != nil && active.order != nil {
+				m.ActiveOrderIsPrimaryHead = q.Head() == active.order
+			}
+		}
+		if goal := handleRow(s.moveGoals, u.Handle); goal != nil {
+			description := path.DescribeGoal(goal.goal)
+			m.GroundGoal, m.GroundGoalOrder = &description, movementOrderTrace(goal.order)
+			m.GoalMatchesActiveOrder = active != nil && goal.order != nil && active.order == goal.order
+		}
+		if s.pathProvider != nil && int(u.Owner) < len(s.pathProvider.requests) {
+			if staged, ok := s.pathProvider.requests[u.Owner][u.Handle]; ok {
+				m.Staged = &path.RequestTrace{Unit: staged.Unit, Player: staged.Player, Start: staged.Start, Goal: path.DescribeGoal(staged.Goal), Activation: staged.Activation}
+			}
+		}
 		if s.Scheduler != nil {
-			pending, result := s.Scheduler.TraceFor(u.Handle)
+			pending := s.Scheduler.CurrentRequest(u.Handle)
+			_, result := s.Scheduler.TraceFor(u.Handle)
 			if pending != nil {
 				request := path.RequestTrace{Unit: pending.Unit, Player: pending.Player, Start: pending.Start, Goal: path.DescribeGoal(pending.Goal), Activation: pending.Activation}
 				m.Pending = &request

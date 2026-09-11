@@ -636,6 +636,69 @@ func TestTickProjectilesOffMapNoExplodeRetiresWithoutImpact(t *testing.T) {
 	}
 }
 
+// Bounds admission precedes linked proximity, so an off-map interceptor cannot
+// explode and remove its still-in-map quarry [06 §8.1][06 R-DMG-01 §14].
+func TestTickProjectilesOffMapBeforeLinkedProximity(t *testing.T) {
+	edge := world.CellToWorld(contactCellsPerSide)
+	for _, tc := range []struct {
+		name         string
+		x, z, tx, tz numeric.Fixed
+	}{
+		{"west", -1, cellCentre(1), 0, cellCentre(1)},
+		{"north", cellCentre(1), -1, cellCentre(1), 0},
+		{"east", edge, cellCentre(1), edge - 1, cellCentre(1)},
+		{"south", cellCentre(1), edge, cellCentre(1), edge - 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var svc Service
+			w, terrain := newContactFixture(t)
+			interceptor := driverWeapon(false)
+			interceptor.Interceptor, interceptor.NoExplode = true, true
+			incoming := driverWeapon(false)
+			incoming.ID++
+			cat := &content.Catalog{Weapons: map[string]*content.WeaponDef{"interceptor": interceptor, "incoming": incoming}}
+			cat.RebuildWeaponIndex()
+			h, _ := svc.Reserve()
+			target, _ := svc.Reserve()
+			p, quarry := &svc.Records[int(h)-1], &svc.Records[int(target)-1]
+			p.WeaponID, p.TargetProjectile, p.ExpiryTick = interceptor.ID, target, 10
+			p.Pos = Vec3{X: tc.x, Y: numeric.FixedFromInt(20), Z: tc.z}
+			quarry.WeaponID, quarry.ExpiryTick = incoming.ID, 10
+			quarry.Pos = Vec3{X: tc.tx, Y: p.Pos.Y, Z: tc.tz}
+			var events []Event
+			svc.Events = func(ev Event) { events = append(events, ev) }
+			svc.TickProjectiles(1, w, terrain, nil, nil, nil, nil, cat, nil, nil)
+			if len(events) != 0 || svc.Count() != 1 || svc.Records[0].WeaponID != incoming.ID {
+				t.Fatalf("off-map proximity emitted %v; survivors=%d, want silent retirement and quarry survival [06 §8.1]", events, svc.Count())
+			}
+		})
+	}
+}
+
+// Self-propelled expiry impacts before motion and before collision's bounds
+// admission; leaving the map afterwards must not erase that impact [06 §6.6].
+func TestTickProjectilesExpiryImpactBeforeOffMapRetirement(t *testing.T) {
+	var svc Service
+	w, terrain := newContactFixture(t)
+	weapon := &content.WeaponDef{ID: 91, SelfProp: true, BurnBlow: true}
+	h, _ := svc.Reserve()
+	p := &svc.Records[int(h)-1]
+	p.WeaponID, p.ExpiryTick = weapon.ID, 1
+	p.Pos = Vec3{X: numeric.FixedFromInt(1), Y: numeric.FixedFromInt(20), Z: cellCentre(1)}
+	p.Velocity.X = numeric.FixedFromInt(-2)
+	before := p.Pos
+	var impacts []Vec3
+	svc.Events = func(ev Event) {
+		if ev.Kind == EventProjectileImpact {
+			impacts = append(impacts, ev.Position)
+		}
+	}
+	svc.TickProjectiles(1, w, terrain, nil, nil, nil, nil, driverCatalog(weapon), nil, nil)
+	if len(impacts) != 1 || impacts[0] != before || svc.Count() != 0 {
+		t.Fatalf("impacts=%v survivors=%d, want pre-motion impact then off-map retirement [06 §6.6][06 §8.1]", impacts, svc.Count())
+	}
+}
+
 // The area walk's positive bound is exclusive at centre+span, without an
 // extra row/column. Its centre uses signed whole-word division toward zero,
 // unlike collision's arithmetic cell shift [06 §9.3].

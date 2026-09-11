@@ -18,10 +18,12 @@ import (
 // reader "moves the unit out of whatever group it holds and into this one
 // (group-vector append)" — the single base-record word with a side effect
 // beyond a field copy [08 R-SAVE-02 §6]. This is that append, applied once the
-// whole slice is restored so the vector order is the pool order the retail
-// reader would have produced.
-func (m *Manager) RestoreGroupsFromUnits(w *units.World) {
-	if m == nil || w == nil {
+// recursive pass has supplied its completion order. A forward carrier or
+// engagement reference appends the referenced unit before the referring unit,
+// so a pool scan would change wave bootstrap and distance tie-breaking
+// [08 R-SAVE-02 §6][08 R-P0-04 §3].
+func (m *Manager) RestoreGroupsFromUnits(restored []*units.Unit) {
+	if m == nil {
 		return
 	}
 	for group := uint8(1); group <= 9; group++ {
@@ -29,7 +31,7 @@ func (m *Manager) RestoreGroupsFromUnits(w *units.World) {
 			*v = (*v)[:0]
 		}
 	}
-	for _, u := range w.IterSliced() {
+	for _, u := range restored {
 		if u == nil || !u.Alive || u.Owner != m.Player {
 			continue
 		}

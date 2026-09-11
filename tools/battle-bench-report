@@ -7,12 +7,34 @@ import sys
 
 if len(sys.argv) < 2:
     raise SystemExit("usage: tools/battle-bench-report OUTPUT_DIRECTORY [OUTPUT_DIRECTORY ...]")
+baseline_metadata = None
+baseline_path = None
 for directory in sys.argv[1:]:
     path = pathlib.Path(directory)
     data = json.loads((path / "frames.json").read_text())
     rows = data["rows"]
     print(f"\n{path}: {data['renderer']}; {len(rows)} measured frames")
     print(json.dumps(data["metadata"], sort_keys=True))
+    # Compare every scene setting, including fields added by future fixtures.
+    # Asset installation paths and renderer choice may differ deliberately;
+    # build revisions live outside scene metadata and are expected to differ.
+    metadata = {key: value for key, value in data["metadata"].items()
+                if key not in ("root", "renderer")}
+    if baseline_metadata is None:
+        baseline_metadata, baseline_path = metadata, path
+    else:
+        changed = [key for key in sorted(metadata.keys() | baseline_metadata.keys())
+                   if key not in metadata or key not in baseline_metadata
+                   or metadata[key] != baseline_metadata[key]]
+        if changed:
+            print(f"WARNING: scene metadata differs from {baseline_path}; timings are not a like-for-like comparison:")
+            for key in changed:
+                before = json.dumps(baseline_metadata[key], sort_keys=True) if key in baseline_metadata else "<missing>"
+                after = json.dumps(metadata[key], sort_keys=True) if key in metadata else "<missing>"
+                print(f"  {key}: {before} -> {after}")
+    if not rows:
+        print("WARNING: no measured frames; timings and workload cannot be assessed")
+        continue
     for key in ("Step", "Record", "PreRecord", "CPURender", "Submit", "Cadence"):
         if key == "CPURender" and data["renderer"] == "modern":
             continue
@@ -72,13 +94,28 @@ for directory in sys.argv[1:]:
     print(f"On cadence at {tps} Hz (<= {budget:.1f} ms): {on_cadence}/{len(rows)} frames ({100*on_cadence/len(rows):.0f}%)")
     print(f"Alloc: {data['alloc_bytes']/len(rows)/1e6:.3f} MB/frame, "
           f"{data['mallocs']/len(rows):.1f} objects/frame; GC {data['gc']}")
-    for key in ("units", "projectiles", "effects", "fragments", "builds", "nanoframes", "nanolathe_events", "shake"):
-        if key not in rows[0]["Census"]:
+    census = [row.get("Census", {}) for row in rows]
+    for key in ("units", "moving_units", "damaged_units", "projectiles", "effects", "fragments",
+                "features", "sprite_features", "burning_features", "in_view_sprite_features",
+                "in_view_burning_features", "builds", "nanoframes", "nanolathe_events", "shake"):
+        values = [sample[key] for sample in census if key in sample]
+        if not values:
             continue
-        values = [row["Census"][key] for row in rows]
         print(f"{key}: {min(values)}..{max(values)}; present in {sum(bool(v) for v in values)} frames")
+        if len(values) != len(rows):
+            print(f"  WARNING: {key} recorded in only {len(values)}/{len(rows)} frames")
+
+    # Missing counters in older reports are unknown, rather than zero work.
+    for key in ("projectiles", "effects", "sprite_features", "in_view_burning_features"):
+        values = [sample[key] for sample in census if key in sample]
+        if len(values) == len(rows) and not any(values):
+            print(f"WARNING: measured workload has no {key}")
+    construction_keys = ("builds", "nanoframes", "nanolathe_events")
+    if metadata.get("factories") and all(any(key in sample for key in construction_keys) for sample in census):
+        if not any(sample.get(key, 0) for sample in census for key in construction_keys):
+            print("WARNING: factories requested but no construction observed in measured frames")
 
     for owner in (0, 1):
         active = [sum(f["Owner"] == owner and f["Phase"] == 3 and f["Target"] != 0
-                      for f in row["Census"].get("factory_production", [])) for row in rows]
+                      for f in sample.get("factory_production", [])) for sample in census]
         print(f"owner {owner} active factories: {min(active)}..{max(active)}")

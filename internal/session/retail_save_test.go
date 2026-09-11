@@ -214,10 +214,10 @@ func TestProjectRetailSessionNumbersUnitBoxesAscendingWithPoolIndex(t *testing.T
 		}
 		restoreOrder = append(restoreOrder, handles[i])
 	}
-	// The reader's group append walks the numbered boxes in index order, so the
-	// restored vector must equal that order.
+	// These units have no forward references, so recursive group restoration
+	// completes in numbered-box order [08 R-SAVE-02 §6].
 	mgr := &ai.Manager{Player: 0}
-	mgr.RestoreGroupsFromUnits(w)
+	mgr.RestoreGroupsFromUnits(w.IterSliced())
 	got := mgr.GroupMembers(aiGroup)
 	if len(got) != len(restoreOrder) {
 		t.Fatalf("restored group vector = %v, want %v", got, restoreOrder)

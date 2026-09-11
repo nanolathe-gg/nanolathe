@@ -61,7 +61,9 @@ func wu19107HeadName(u *units.Unit) string {
 // after its first product until the aircraft were moved by hand.
 //
 // The assertion is the observable: every queued product is built, and every
-// one of them leaves the plant's footprint for the rally.
+// one of them leaves the plant's footprint and completes its rally move.
+// Observe arrival when it occurs: an unloaded idle aircraft subsequently
+// seeks a landing site [04 R-AIR-01 §7], which may be near the plant again.
 func TestAirFactoryRallyProductsLeaveThePadRetail(t *testing.T) {
 	sess, step, com := wu19107Battle(t)
 	local := sess.LocalOwner
@@ -111,6 +113,27 @@ func TestAirFactoryRallyProductsLeaveThePadRetail(t *testing.T) {
 		t.Fatalf("set rally: %v", err)
 	}
 
+	// Observe the move handler's Arrived status before its record retires
+	// [04 R-ORD-02 §2]. The later standby/landing position does not describe
+	// whether this rally move succeeded [04 R-AIR-01 §7].
+	margin := plantDef.FootprintX
+	if plantDef.FootprintZ > margin {
+		margin = plantDef.FootprintZ
+	}
+	arrived := map[pool.Handle]bool{}
+	presentation := sess.Build.OrderBinding.Presentation
+	previousStatus := presentation.Status
+	presentation.Status = func(u *units.Unit, kind uint8, text string) bool {
+		if kind == 6 && u.Owner == local && u.Def.CanonicalKey == productKey && wu19107HeadName(u) == "VTOL_Move" {
+			dx := world.WorldToCell(u.X) - plantCX
+			dz := world.WorldToCell(u.Z) - plantCZ
+			arrived[u.Handle] = dx > margin || dx < -margin || dz > margin || dz < -margin
+		}
+		if previousStatus != nil {
+			return previousStatus(u, kind, text)
+		}
+		return false
+	}
 	produced := map[pool.Handle]bool{}
 	for i := 0; i < 12000; i++ {
 		step()
@@ -126,29 +149,10 @@ func TestAirFactoryRallyProductsLeaveThePadRetail(t *testing.T) {
 		t.Fatalf("the plant produced %d of %d queued aircraft; a rally-inherited ground move on a "+
 			"canfly product jams the pad [04 R-FAC-02 §4][04 R-AIR-02]", len(produced), wanted)
 	}
-	// The plant's footprint plus a one-cell margin: nothing may still be
-	// sitting on the pad it was built on.
-	margin := plantDef.FootprintX
-	if plantDef.FootprintZ > margin {
-		margin = plantDef.FootprintZ
-	}
 	for h := range produced {
-		u := sess.Units.Unit(h)
-		if u == nil || !u.Alive {
-			continue
-		}
-		dx := world.WorldToCell(u.X) - plantCX
-		dz := world.WorldToCell(u.Z) - plantCZ
-		if dx < 0 {
-			dx = -dx
-		}
-		if dz < 0 {
-			dz = -dz
-		}
-		if dx <= margin && dz <= margin {
-			t.Fatalf("product %d is still on the plant at cell (%d,%d) with head %q; a rally product "+
-				"must fly to the rally [04 R-FAC-02 §4]", h, world.WorldToCell(u.X), world.WorldToCell(u.Z),
-				wu19107HeadName(u))
+		if !arrived[h] {
+			u := sess.Units.Unit(h)
+			t.Errorf("product %d did not complete its rally move outside the plant; final head %q [04 R-FAC-02 §4]", h, wu19107HeadName(u))
 		}
 	}
 }

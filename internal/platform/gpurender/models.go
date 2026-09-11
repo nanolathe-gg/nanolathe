@@ -29,7 +29,12 @@ type ModelStats struct {
 	// vertex the scheduler handed the device this frame. Together they say
 	// whether the point layer is paying per pixel or per span, which is what the
 	// executor's remaining CPU tracks [DESIGN_GPU_RENDERER.md §13.7].
-	Phases, Passes                                             int
+	Phases, Passes int
+	// SubmittedVertices/Indices count actual triangle submissions, including
+	// padded model runs and overflow passes, rather than only scheduler geometry.
+	// DrawImage copies and Ebitengine's internal draws are excluded.
+	SubmittedVertices, SubmittedIndices, MaxSubmissionVertices int
+	ModelKeyVertices, ModelColourVertices                      int
 	PointPixels, PointQuads, PointPlanes, Vertices             int
 	RasterPixels, SlotPages, SlotOverflows, Draws, RasterDraws int
 	// The persistent slot accounting of docs/DESIGN_GPU_RENDERER.md §13.12.

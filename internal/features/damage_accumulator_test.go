@@ -14,7 +14,7 @@ func placeWreck(t *testing.T, svc *Service, def *content.FeatureDef, cx, cz int)
 	t.Helper()
 	inst := svc.PlaceCorpse([3]numeric.Fixed{
 		world.CellToWorld(int32(cx)), numeric.Fixed(10 * 65536), world.CellToWorld(int32(cz)),
-	}, Orientation{}, def, false)
+	}, Orientation{}, def, false, 0)
 	if inst == nil {
 		t.Fatal("corpse refused")
 	}

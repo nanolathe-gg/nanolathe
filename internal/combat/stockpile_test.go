@@ -821,6 +821,25 @@ func TestStockpileCancelAndReload(t *testing.T) {
 // Interceptor blast metric [06 §11.2] [06 R-WPN-05 §10]
 // ---------------------------------------------------------------------------
 
+// The authored area is unsigned, but its square and the comparison are signed
+// 32-bit. Crossing the square's sign boundary rejects even coincident points
+// [06 R-WPN-05 §10].
+func TestInterceptorBlastAreaSquareWrapsSigned(t *testing.T) {
+	for _, tc := range []struct {
+		area int32
+		want bool
+	}{
+		{0, false},
+		{46340, true},
+		{46341, false},
+		{65535, false},
+	} {
+		if got := ProjectileInInterceptorBlast(Vec3{}, Vec3{}, tc.area); got != tc.want {
+			t.Errorf("area %d admits coincident victim=%v, want %v [06 R-WPN-05 §10]", tc.area, got, tc.want)
+		}
+	}
+}
+
 func TestInterceptorBlastMetricIsTruncatedSquares(t *testing.T) {
 	origin := Vec3{}
 	// The compare is strict, so a victim exactly on the radius survives while

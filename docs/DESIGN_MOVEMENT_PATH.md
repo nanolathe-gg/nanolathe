@@ -34,8 +34,8 @@ These packages answer three questions, and nothing else:
 
 The single most dangerous mistake here is inventing an avoidance behaviour.
 Retail has no push, no yield, no sidestep, no shortcut smoothing and no
-collision-triggered replan. A blocked mover halves its speed, clamps against
-its old footprint boundary and proposes the same move again next tick; what
+immediate replan inside the collision commit. A blocked mover halves its speed,
+clamps against its old footprint boundary and proposes the same move next tick; what
 looks like sidestepping emerges from two independent timers — the follower's
 60-tick repath and the class layer's 30-tick occupant age — and from nothing
 else `[04 R-COLL-01 §7]` `[04 R-MOV-01 §7]`. Every plausible-looking addition
@@ -190,8 +190,10 @@ happens: `internal/features` writes the plot cells and calls the terrain's
 over the changed rectangle synchronously, in the calling phase
 `[03 §5.1.2]` `[03 R-LAYER §2]` `[04 R-MOV-03 §3]`. That port is the seam
 because `internal/features` cannot import `internal/movement`; the terrain's
-static-obstacle revision word is a separate Nanolathe concern and its only
-reader is route staleness. `Revise` is the request-initialization pass: it
+static-obstacle revision word is Nanolathe diagnostic metadata. A mismatch
+never invalidates a published route or interrupts a mover; the follower's
+blocked/count gates and the scheduler's poll own repathing `[04 R-MOV-01 §3]`
+`[04 R-MOV-01 §7]`. `Revise` is the request-initialization pass: it
 advances the record's revision watermark to `max(tick, 30) − 30`, re-stamps the
 footprints of recently committed occupants and refreshes the requester's own
 commit tick. Search consumption returns 0 out of bounds, 2 when the requesting
@@ -492,6 +494,25 @@ actual slot index; the participant count remains only the equal-share divisor.
 Sparse restored slots are never compacted or represented by a count cutoff
 `[04 R-PATH-01 §6]`.
 
+The follower's last-request tick records an admitted scheduler poll. Goal
+installation preserves that tick when at most ten ticks old and clears it when
+older; activation and request staging never replace it with the current tick
+`[04 R-PATH-01 §8]`. The scheduler alone applies the inclusive
+`lastRequestTick + 60 <= tick` admission test and stamps a positive poll
+`[04 R-MOV-01 §7]`. This distinction matters for `RepairUnit`, which refreshes
+its rectangle goal every 30–59 ticks: stamping each refresh as a request would
+continually postpone admission and leave its synthetic route through an
+obstacle. Replacement invalidates the old route binding and failure state while
+preserving the poll timestamp for the goal installer's age test.
+
+Movement diagnostic snapshots expose the follower's wants-repath flag and
+last-request tick, the ground goal and its owning record, the active-order
+binding, and explicit record-identity matches. Staged provider requests are
+separate from admitted scheduler requests. Both current request states are
+available without enabling historical tracing; past search results and
+collision histories still require that opt-in. Reading a snapshot neither
+advances a request nor changes the route or its binding.
+
 **C12 — full or empty.** Requests are full-or-empty. Budget exhaustion leaves
 the heap and the request active and publishes nothing — never a partial prefix.
 Heap exhaustion publishes an empty route, and carries no charge `[04 §7.3]`
@@ -534,6 +555,11 @@ nothing else. Do not implement a shortcut or a collinear-removal step
 `[04 §7.5]` `[04 R-PATH-01 §7]`.
 
 ### 3.3 Ground steering and collision — C20…C25
+
+**No-waypoint service.** Exhaustion and arrival still run the speed update
+with `-BrakeRate`, velocity integration, collision commit and post-movement
+correction. Proximity to the recorded goal never skips that work
+`[04 R-MOV-01 §3]` `[04 R-MOV-01 §4]` `[04 R-MOV-01 §5]`.
 
 **C20 — heading.** Desired heading wraps on the sixteen-bit circle and the
 heading change clamps to the definition's turn rate; the pending heading and the
@@ -773,7 +799,8 @@ this wiring can be asserted without inventing a public kind on `Goal`.
   through while making an older one block its re-stamped cells. Existing heap
   entries are not purged; expansion rechecks passability lazily (C18). The
   scheduler and the expansion receive no blocker identity, velocity or projected
-  destination, and no collision-triggered replan exists. Mover-versus-mover
+  destination, and the collision commit never submits a replan. The follower
+  requests one through its separate 60-tick poll. Mover-versus-mover
   contention is authoritative at commit through the row-major validator, the
   half-speed clamp response and the synchronous clear/commit/stamp sequence.
   Building and yard occupancy stay part of the static inputs

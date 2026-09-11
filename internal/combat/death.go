@@ -179,31 +179,18 @@ func ShouldDispatchReplayKilled(packetSeverity int8) bool {
 }
 
 // SelectDeathExplosionWeapon selects the death-explosion weapon per [06 §12.1][02 "Unit record"].
-// The handler selects one of the unit's two resolved death-weapon definitions:
-// cause 3 (self-destruct) prefers SelfDestructAsDef, otherwise ExplodeAsDef.
-// A link holding the record-0 inactive sentinel (ID 0, stock [noweapon]) is
-// not a weapon [02 §5 R-CONTENT-02]: inactive links fall through like nil, and
-// an all-inactive selection returns nil — the death path then dispatches no
-// explosion. This is the DoExplosion weapon trigger [06 §12.1] C22–C25.
+// Cause 3 selects SelfDestructAsDef; every other cause selects ExplodeAsDef.
+// Record 0 is still delivered to central impact: its calculated flash and
+// dust puff survive the absence of named art [06 §12.2][06 R-DMG-01 §5]
+// [06 R-WFX-01 §2]. Weapon-slot activity is not a death-explosion gate.
 func SelectDeathExplosionWeapon(def *content.UnitDef, cause Cause) *content.WeaponDef {
 	if def == nil {
 		return nil // [02 "Unit record"] no def => no weapon
 	}
-	// [06 §12.1] C22-C25: death-explosion weapon trigger (DoExplosion) of the
-	// unit's deathExplosion weapon. Cause 3 uses SelfDestructAs, others use ExplodeAs.
 	if cause == CauseSelfDestruct {
-		if !content.IsWeaponInactive(def.SelfDestructAsDef) {
-			return def.SelfDestructAsDef // [02 "Unit record"] selfdestructas
-		}
-		if !content.IsWeaponInactive(def.ExplodeAsDef) {
-			return def.ExplodeAsDef // fallback [02 "Unit record"]
-		}
-		return nil // both links inactive [02 §5 R-CONTENT-02]
+		return def.SelfDestructAsDef
 	}
-	if !content.IsWeaponInactive(def.ExplodeAsDef) {
-		return def.ExplodeAsDef // [02 "Unit record"] explodeas [06 §12.1] DoExplosion
-	}
-	return nil // link inactive or unresolved [02 §5 R-CONTENT-02]
+	return def.ExplodeAsDef
 }
 
 // UnassignedKilledVariant is Nanolathe's single bounded substitute for the

@@ -446,10 +446,16 @@ func (s *Service) successEpilogueMobile(builder *units.Unit, node *orders.Node, 
 	s.logMessage("Starting construction")
 	s.raiseStatus(builder, statusBuild, "Starting construction")
 	s.SetBuilderLink(productHandle, builder.Handle)
-	s.copyStandingFlags(builder, product)
+	// Mobile placement keeps the product's authored standing orders. Only
+	// factory production copies them at allocation [04 R-STANCE-01 §6].
 	getBuiltID := orders.Lookup("GetBuilt")
 	if getBuiltID != 0 {
 		pq := orders.BindQueueBinding(product, s.OrderBinding)
+		// The product can reach the order sweep before its construction visit.
+		// Install its lifecycle now, as the factory epilogue does, so that first
+		// dispatch follows GetBuilt rather than the missing-handler fallback.
+		s.registerGetBuilt(pq)
+		s.RegisterOrderHandlers(pq)
 		// Queued, like the factory's [04 R-FAC-02 §1]; the record's bit 5 puts
 		// it at the head of the nanoframe's own queue [04 R-ORD-01 §13].
 		pq.Push(getBuiltID, productRecord(product, tick, orders.Node{Target: builder.Handle, Param2: 0, QueuedIssue: true}))

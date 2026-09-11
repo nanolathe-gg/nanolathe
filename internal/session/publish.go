@@ -351,7 +351,10 @@ func (s *Session) publishSnapshot(tick uint32) {
 					points = points[:int(r.Count)]
 					for i := range points {
 						p := r.Points[i]
-						points[i] = orders.SnapshotRoutePoint{X: world.CellToWorld(p.X), Z: world.CellToWorld(p.Z)}
+						// Route points are already integer world coordinates; only
+						// add the fixed fraction here [04 R-MOV-01 §3]. Treating
+						// them as cells stretches the Shift trail sixteenfold.
+						points[i] = orders.SnapshotRoutePoint{X: numeric.Fixed(p.X) << 16, Z: numeric.Fixed(p.Z) << 16}
 					}
 					s.routePointScratch = points
 					return points
@@ -1136,13 +1139,6 @@ func featureOwnerSelector(inst *features.Instance) (uint8, bool) {
 	}
 	if cell := inst.Terrain.PlotAt(int32(inst.CX), int32(inst.CZ)); cell != nil {
 		selector := cell.PlacerNibble()
-		if selector == 0 {
-			// Map loading stamps selector 10, while the current runtime feature
-			// placement seam leaves zero without an owning-player source. Keep
-			// that ambiguity unknown so local player zero cannot receive an
-			// accidental owner bypass [03 §3.3][03 §3.9].
-			return combat.NeutralSide, false
-		}
 		return selector, true
 	}
 	return combat.NeutralSide, false

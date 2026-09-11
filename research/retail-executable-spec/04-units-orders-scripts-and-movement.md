@@ -1584,12 +1584,21 @@ reader fills from `standingmoveorder` and `standingfireorder`, **each with a
 parsed default of 2** [R-COB-03 §3][fmt fbi]. A definition that authors neither
 key therefore starts its units at **fire at will** and **roam**.
 
-**Established — factory products.** The product's initial state merge and the
-later guarded `GetBuilt` copy are two distinct stages, both owned by §3.8: the
-copy from builder to product is allowed only when both units carry the
-in-game bit 28 and neither carries the auto flag, and it copies
-bits 18–19 and 20–21 together [R-P0-09][05 "Rally inheritance"]. Nothing in
-the standing-order path adds a gate of its own.
+**Established — factory products.** Factory production copies both standing
+fields after successful allocation, before inserting `GetBuilt`. The later
+`GetBuilt` refresh is a distinct stage: it requires a product with a mover,
+a builder reference, both units alive and neither dying. It copies the
+standing-move and standing-fire fields together [R-P0-09][R-FAC-02 §4]
+[05 "Rally inheritance"].
+
+**Established — mobile-built structures.** The ground and aircraft mobile-build
+allocation paths leave the product's standing fields at their authored
+constructor values; neither performs the factory production path's initial
+standing-field copy. At completion, `GetBuilt` performs its rally and standing
+inheritance only for a product with a mover [R-FAC-02 §4]. A mobile-built
+structure therefore retains its own authored standing orders instead of
+inheriting its builder's orders. The structure's own factory production later
+passes its current standing orders to the units it produces.
 
 **Established — save and restore.** Both fields survive save/load. The unit
 save block packs the state word's flag groups into one word in which the

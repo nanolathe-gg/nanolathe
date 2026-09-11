@@ -24,7 +24,7 @@ func TestCorpseAndBarePlacementOrientation(t *testing.T) {
 		world.CellToWorld(2),
 		numeric.Fixed(11 * 65536),
 		world.CellToWorld(3),
-	}, fell, wreck, false)
+	}, fell, wreck, false, 0)
 	if corpse == nil {
 		t.Fatal("corpse refused")
 	}
@@ -57,7 +57,7 @@ func TestReplacementRetainsAttachedTransform(t *testing.T) {
 			wreck.FeatureDeadDef, wreck.FeatureReclamateDef = successor, successor
 			pos := [3]numeric.Fixed{world.CellToWorld(4) + 123, numeric.Fixed(11*65536 + 456), world.CellToWorld(4) + 789}
 			orient := Orientation{Bank: 1, Heading: 2, Pitch: 3}
-			corpse := svc.PlaceCorpse(pos, orient, wreck, true)
+			corpse := svc.PlaceCorpse(pos, orient, wreck, true, 0)
 			if corpse == nil {
 				t.Fatal("corpse refused")
 			}
@@ -72,6 +72,9 @@ func TestReplacementRetainsAttachedTransform(t *testing.T) {
 			heap := svc.InstanceAt(4, 4)
 			if heap == nil || heap.Def != successor {
 				t.Fatalf("successor: %+v", heap)
+			}
+			if terrain.PlotAt(4, 4).PlacerNibble() != neutralFeaturePlacer {
+				t.Fatal("ordinary successor retained corpse ownership [05 R-FEAT-01 §3]")
 			}
 			if got := [3]numeric.Fixed{heap.X, heap.Y, heap.Z}; got != pos || heap.Orientation != orient {
 				t.Fatalf("transform = %v %+v, want %v %+v", got, heap.Orientation, pos, orient)

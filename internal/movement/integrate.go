@@ -383,11 +383,6 @@ type arrivalHandle struct {
 	border *path.Rect
 }
 
-// localSteeringThresholdSquared is only the near-waypoint brake/steering
-// threshold. It is not final Move_Ground completion; that tolerance is recovered
-// in R-P0-01 and lives in the arrival handle (threshold²) below. [04 §3.5][R-P0-01]
-const localSteeringThresholdSquared uint64 = uint64(2*65536) * uint64(2*65536)
-
 // [R-P0-01] Move_Ground arrival handshake constants.
 const (
 	arrivalSatisfiedBit uint32 = 0x20 // ORed into node.satisfied by the arrival-bit setter [R-P0-01]
@@ -1999,7 +1994,7 @@ func (s *System) ActivateMove(u *units.Unit, head *orders.Node) bool {
 	wasBound := handleRow(s.activeOrders, u.Handle) != nil
 	if wasBound {
 		s.CancelPathRequest(u.Handle)
-		s.clearPathState(u.Handle)
+		s.invalidatePathState(u.Handle)
 	}
 	s.nextActivation++
 	if s.nextActivation == 0 { // reserve zero for unbound/direct requests
@@ -2026,7 +2021,6 @@ func (s *System) ActivateMove(u *units.Unit, head *orders.Node) bool {
 	if route := handleRow(s.Routes, u.Handle); route != nil && !selectedPoint {
 		goalPointX, goalPointZ, haveGoalPoint := groundGoalPoint(goalObj, u, fx, fz)
 		installGroundGoal(route, u, goalObj, goalPointX, goalPointZ, haveGoalPoint, allowSyntheticFor(head), s.staticObstacleRevision(), s.tick)
-		route.LastRequestTick = s.tick
 	}
 	s.submitGoalForOrder(u, start, goalObj, token)
 	s.bindArrivalHandle(u, head)
@@ -2105,7 +2099,7 @@ func (s *System) ReplanMove(u *units.Unit, head *orders.Node) bool {
 		return s.ActivateMove(u, head)
 	}
 	s.CancelPathRequest(u.Handle)
-	s.clearPathState(u.Handle)
+	s.invalidatePathState(u.Handle)
 	s.nextActivation++
 	if s.nextActivation == 0 {
 		s.nextActivation++
@@ -2122,7 +2116,6 @@ func (s *System) ReplanMove(u *units.Unit, head *orders.Node) bool {
 	if route := handleRow(s.Routes, u.Handle); route != nil && !selectedPoint {
 		goalPointX, goalPointZ, haveGoalPoint := groundGoalPoint(goalObj, u, fx, fz)
 		installGroundGoal(route, u, goalObj, goalPointX, goalPointZ, haveGoalPoint, allowSyntheticFor(head), s.staticObstacleRevision(), s.tick)
-		route.LastRequestTick = s.tick
 	}
 	s.submitGoalForOrder(u, start, goalObj, token)
 	s.bindArrivalHandle(u, head)
@@ -2241,10 +2234,22 @@ func (s *System) clearPathState(handle pool.Handle) {
 	if s == nil {
 		return
 	}
+	s.invalidatePathState(handle)
+	if route := handleRow(s.Routes, handle); route != nil {
+		route.LastRequestTick = 0
+	}
+}
+
+// Replacing a goal preserves the last admitted poll until the goal installer
+// applies its older-than-ten-ticks reset [04 R-PATH-01 §8]. Staging a request
+// must not stamp the current tick: only the scheduler's positive follower poll
+// does that [04 R-MOV-01 §7]. Otherwise a repair goal refreshed every 30..59
+// ticks continually postpones the 60-tick admission and keeps its synthetic
+// line through an obstruction instead of allowing a search to replace it.
+func (s *System) invalidatePathState(handle pool.Handle) {
 	if route := handleRow(s.Routes, handle); route != nil {
 		route.Active = false
 		route.WantsRepath = false
-		route.LastRequestTick = 0
 		route.Status = 0
 		route.Dirty = true
 	}
@@ -3065,18 +3070,9 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	// Aircraft returned through the flight commit above; all remaining route
 	// handling is the ground follower [04 R-AIR-01 §1][04 R-MOV-01 §3].
 	hadRoute := route != nil && route.Active && route.Count > 1
-	if hadRoute && route.NeedsStaticReplan(s.staticObstacleRevision()) {
-		// A static mutation invalidates the published route before its next
-		// waypoint is consumed. Replanning retains the order identity; with no
-		// bound order the route remains inactive and the caller can resubmit it.
-		route.Active = false
-		route.Dirty = true
-		if head != nil {
-			s.ReplanMove(u, head)
-		}
-		d := s.distToGoal(u)
-		return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false}
-	}
+	// Feature changes restamp the class layer; they do not discard published
+	// routes. The follower's blocked/count gates and request poll own repathing
+	// [04 R-MOV-01 §3][04 R-MOV-01 §7][04 §7.4].
 	// The discarded `_ = s.resolveProfile(u)` that stood here is gone. It was
 	// kept "for profile revision side-effects if any"; there are none —
 	// resolveProfile trims a string, reads the class map and returns a value
@@ -3098,17 +3094,9 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		// service above asks it whether or not a route has published, which is
 		// what [R-P0-01]'s "the predicate may already be satisfied before a
 		// route publishes" needs and what [04 R-MOV-03 §2] step (1) states.
-		d := s.distToGoal(u)
-		d2, hasGoal := s.distSqToGoal(u)
-		if hasGoal && d2 <= localSteeringThresholdSquared {
-			s.emitMovementCallbacks(u, 0)
-			// Route absence is not proof of final order completion via local
-			// threshold; completion is via the arrival handle above [R-P0-01].
-			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false, Arrived: serviceArrived}
-		}
-		// A ground follower with no waypoint brakes without turning. Direct
-		// goal motion comes only from the route-acceptance synthetic route
-		// [04 R-PATH-01 §8][04 R-MOV-01 §3].
+		// No waypoint always selects braking, including arrival at the stored
+		// goal. Speed, velocity, commit and post-move correction still run
+		// [04 R-MOV-01 §3][04 R-MOV-01 §4].
 		brakingOnly = true
 	}
 	// A braking mover has no waypoint delta [04 R-MOV-01 §3].
