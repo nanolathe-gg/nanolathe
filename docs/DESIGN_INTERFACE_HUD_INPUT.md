@@ -1504,6 +1504,76 @@ excluded with multiplayer `[07 R-CAM-01 §6]` `[07 R-FE-02 §12]`.
   label's quickkey letter and the map-entry `colorb` rectangle fill are not
   drawn (every stock label authors `colorb` 0) `[03 R-FONT-01 §6]`.
 
+### 3.10 Modern resource double-click construction
+
+**Established implementation policy (user-requested departure, not retail
+behavior).** With the modern executor active, an idle selected mobile builder
+accepts left double-click on a metal deposit to build its strongest
+available extractor, or on ordinary ground to build a solar collector. Every
+double-click appends, whether Shift is held or not. The typed mobile-build
+command carries explicit `Queued` and `AppendOnly` intent: existing work is
+preserved, including a repeated site, which uses ordinary insertion/coalescing
+instead of the manual Shift-placement removal gesture. The complete authored build
+menu supplies candidates, independent of the currently displayed page. Equal
+extractor strengths and multiple solar candidates retain authored menu order.
+Factories, unit targets, other features, armed commands, HUD and minimap input
+keep their existing paths. Classic does not use this shortcut.
+
+Extractor candidates are non-builder structures with `ExtractsMetal > 0`;
+`MakesMetal` alone is a converter and does not qualify. Solar candidates are
+non-builder structures with positive energy production (`EnergyMake > 0` or
+`EnergyUse < 0`), no wind/tidal generation or extraction, and an explicit
+`SOLAR` token in category or sound category. Token separators are punctuation
+and whitespace. **Established asset observation:** the reference installation's
+ARM/CORE collectors use `ARM_SOLAR`/`CORE_SOLAR` sound categories. Fusion and
+geothermal have distinct sound families. There is no universal solar capability
+field; a custom unit without either explicit token is deliberately unclassified.
+This input policy uses the authored FBI fields [fmt fbi], not unit-name lists,
+output thresholds or a generic ENERGY-category guess.
+
+Deposits are committed feature footprints whose immutable definitions
+have nonzero Metal and Indestructible [05 R-FEAT-01 §7][08 R-AI-03 §1]. Clicking
+in fog still identifies these permanent map deposits, independently of current
+line of sight; a deposit must never fall back to solar, even when the builder
+has no extractor in its menu. Other features retain their usual visibility gate.
+Clicking any cell of the footprint selects its center; the product's own footprint is
+snapped around that center using the ordinary placement arithmetic [07 §9].
+The existing cursor preview validates visibility, terrain and occupancy, and
+its site height and snapped center enter the shared mobile-build dispatch. Refused sites
+play the usual refusal cue and enqueue nothing. This does not replace an
+existing extractor or clear obstacles automatically. Featureless metal maps
+have no deposit feature for this gesture to identify.
+
+The battle input layer recognizes a pair within 400 host milliseconds after
+first release, at most six logical pixels apart on each axis, with no Ctrl/Alt.
+Shift state does not distinguish gestures. The second press must resolve to the same product
+and snapped site. These are modern gesture choices, not native double-click
+identity; the platform's retail event-history gap in §2.2 is unchanged. The
+first qualifying ground click is deferred until expiry: otherwise Type 0
+would enqueue a Move before the queued build, and Type 1 would clear the builder.
+Expiry performs the original single-click action at the captured world point.
+Other pointer presses flush that action in event order; keyboard commands other
+than Shift,
+selection changes, armed modes, leaving the battle input pass, and renderer
+changes cancel the pending gesture. The second press owns its release even on
+refusal, and neither arms persistent placement nor adds a contextual order.
+
+A successful double-click reveals the existing animated order-queue path and
+queued footprint markers for 1.5 host seconds, restarting the interval for each
+successful double-click. This is modern presentation policy. Input updates the
+expiry; drawing remains a read of the committed queue inside the existing world
+overlay transform. It does not set a live or authoritative Shift bit. Focus,
+modal/chat/result ownership, selection changes and switching to classic hide
+the feedback; ordinary held-Shift visibility remains unchanged. Refused builds
+do not start feedback. A normal unshifted order click remains the escape hatch:
+left-click in Type 0, right-click in Type 1, using the usual queue replacement.
+
+Verification: `TestResource*` replays the production input/command seam with an
+injected host clock, checking modern/classic behavior, unconditional queue preservation and feedback,
+single-click expiry, refusal, deposit centering in and outside current LOS,
+builders without extractors, and cancellation. Synthetic
+fixtures define the new input policy; it is not attributed to retail evidence.
+
 ## 4. Retail behaviour that is not a bug
 
 * **The footer shows the *hovered* unit, never the selected one.** It persists
@@ -1563,6 +1633,10 @@ excluded with multiplayer `[07 R-CAM-01 §6]` `[07 R-FE-02 §12]`.
   order icon `[07 R-P0-11 §3]`.
 
 ## 5. Divergences
+
+* **Modern resource construction shortcut** is the user-requested input policy
+  in §3.10. It produces ordinary typed commands, with no alternate simulation
+  or placement rules.
 
 * **SC15 — the cursor index table.** The previously published twenty-entry table
   was off by one from slot 10 up. The reference install's `anims/cursors.gaf`

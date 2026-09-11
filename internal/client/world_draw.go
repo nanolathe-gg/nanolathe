@@ -443,6 +443,15 @@ func (c *Client) drawCommittedWorld(cur *frame.Frame, ok bool) {
 
 func (c *Client) drawCommittedForeground(cur *frame.Frame) {
 	c.drawSelectionStage()
+	if c.TacticalRangesAvailable() {
+		if overlay, ok := c.uiStage.(TacticalOverlayStage); ok {
+			committed := cur
+			if c.buffer != nil && c.buffer.Current() != nil {
+				committed = c.buffer.Current()
+			}
+			overlay.DrawTacticalOverlay(c, committed)
+		}
+	}
 	// The strategic marker layer is world CONTENT at a fixed SCREEN size, so it
 	// too is positioned through the live factor and recorded outside the
 	// transform (§16.11).

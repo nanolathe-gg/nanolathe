@@ -35,6 +35,8 @@ type Options struct {
 	ZoomText           string      // the literal --zoom argument, kept so it can be rejected per executor after --renderer is known (DESIGN_GPU_RENDERER §16.8)
 	AutoRemaster       bool        // synthesize the detail view's 2x art at load time (DESIGN_GPU_RENDERER §14.4)
 	ShotFocus          string      // "x,y" screen point kept fixed while scaling; default the screen centre
+	ShotAlt            bool        // hold Alt/Option for strategic range captures
+	ShotBuild          string      // preview a named product at the capture pointer
 	ShotSelect         bool        // run the Ctrl+A select-all before --shot captures, so the command page is open
 	ShotSize           string      // "WxH" surface size for --shot; empty composes at the authored 640x480
 	ShotModal          string      // battle modal to open before --shot captures: "options", "exit" or "confirm"
@@ -114,6 +116,8 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	})
 	set.BoolVar(&opts.AutoRemaster, "auto-remaster", true, "synthesize the detail view's 2x terrain and feature art at load time; off leaves every asset to nearest doubling")
 	set.StringVar(&opts.ShotFocus, "shot-focus", "", "screen point \"x,y\" kept fixed by --zoom (default the screen centre)")
+	set.BoolVar(&opts.ShotAlt, "shot-alt", false, "hold Alt/Option for tactical range guides in --shot")
+	set.StringVar(&opts.ShotBuild, "shot-build", "", "preview this unit beside the first selection or at viewport centre in --shot (no construction order)")
 	set.BoolVar(&opts.ShotSelect, "shot-select", false, "select the viewing player's units before --shot captures, so the side rail's command page is open")
 	set.StringVar(&opts.BattleBenchmark, "battle-benchmark", "", "run the seeded live battle benchmark into a new output directory")
 	set.BoolVar(&opts.BenchmarkFactories, "benchmark-factories", true, "queue factory production in the battle benchmark")

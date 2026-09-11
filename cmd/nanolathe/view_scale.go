@@ -174,7 +174,7 @@ func viewZoomOf(b *battleSession) camera.Zoom {
 }
 
 // toggleViewScale is F9. In the classic executor it is the unchanged 1x, 1.5x,
-// 2x step cycle about the viewport centre; modern cycles 1x, 2x, 0.5x as
+// 2x step cycle about the viewport centre; modern cycles 1x, 2x, 0.25x as
 // animated zoom targets (§16.8). It is a Nanolathe binding,
 // not a retail one — retail's dispatcher has no case for F9 or F10 (§14.6).
 func (b *battleSession) toggleViewScale(modern bool) {
@@ -192,7 +192,7 @@ func (b *battleSession) toggleViewScale(modern bool) {
 	fmt.Fprintf(os.Stderr, "nanolathe: view scale %s\n", next)
 }
 
-// nextZoomTarget is the modern F9 cycle, 1x -> 2x -> 0.5x -> 1x (§16.8).
+// nextZoomTarget is the modern F9 cycle, 1x -> 2x -> 0.25x -> 1x (§16.8).
 // It shares the wheel's targets; a free factor goes to the first step above
 // it, wrapping to the lowest step when there is none.
 func nextZoomTarget(current camera.Zoom) camera.Zoom {

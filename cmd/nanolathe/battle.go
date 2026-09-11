@@ -77,7 +77,8 @@ type battleSession struct {
 	// factor the wheel and F9 aim at, and the ease that carries the camera
 	// there on the host Update grid. It is presentation-only [I6] and is idle
 	// in the classic executor, which has no free zoom.
-	zoom camera.ZoomController
+	zoom     camera.ZoomController
+	gestures battleGestures
 
 	battleUI         *ui.BattleState
 	returnToMenu     func(*client.Client)
@@ -162,12 +163,16 @@ type battleSession struct {
 	// showRanges is a process-lifetime presentation toggle, retained by the
 	// shell across battles and never written to settings [07 R-CAM-01 §6].
 	showRanges bool
+	// Alt/Option tactical guides are presentation input only (GPU design §20).
+	tacticalRangesHeld bool
 
 	// interfaceType is the persisted LEFTCLICK stage for a direct battle. A
 	// frontend-backed battle reads the shell's live copy instead, so an
 	// in-battle options change reaches the next pointer event without disk I/O
 	// [07 R-CAM-01 §5][07 R-CAM-01 §7].
-	interfaceType int
+	interfaceType         int
+	resourceQueueFeedback *resourceQueueFeedback // transient modern queue overlay; DESIGN_INTERFACE_HUD_INPUT §3.10
+	resourceClick         *resourceClick         // modern-only deferred ground click; DESIGN_INTERFACE_HUD_INPUT §3.10
 	// gammaSetting retains the direct battle's write-all value independently
 	// of the command's immediate display factor [07 R-CAM-01 §6].
 	gammaSetting int
@@ -808,6 +813,27 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	if b == nil || cl == nil {
 		return
 	}
+	// Cancel deferred ground input before any modal or accelerator can consume
+	// its key edges. Returning to battle must not replay an older Move.
+	if !cl.IsFocused() || b.isResultVisible() || b.battleState().Modal() != ui.BattleModalClosed || b.isTalkGUIActive() || unitInfoOpen() {
+		b.resourceClick = nil
+		b.resourceQueueFeedback = nil
+	}
+	resourceInputServiced := false
+	defer func() {
+		if !resourceInputServiced {
+			b.resourceClick = nil
+			b.resourceQueueFeedback = nil
+		}
+	}()
+	// Losing the camera pass (modal, result, consumed input) cancels a pinch.
+	// Its remaining events must not reactivate it when the viewport returns.
+	gesturesServiced := false
+	defer func() {
+		if !gesturesServiced {
+			b.gestures = battleGestures{}
+		}
+	}()
 	if b.handleDebugCapture(cl) {
 		return
 	}
@@ -831,6 +857,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	// return as well as the normal controller path [03 §1][R-SEL-02A].
 	defer b.syncSelectionDrag(cl)
 	in := cl.Input()
+	b.updateTacticalRangeInput(in, cl.IsFocused())
 	producerIn := in
 	// The command palette owns its ordered accelerator peek before the battle
 	// controller converts the host state into a sample. Samples deliberately
@@ -928,6 +955,10 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 			b.palettePointerOwned = true
 		}
 	}
+	if talkOwned || tokenClaimed || unitInfoAtFrameStart || b.palettePointerOwned {
+		b.resourceClick = nil
+		b.resourceQueueFeedback = nil
+	}
 	if tokenClaimed && in.Kbd != nil {
 		// A GUI-claimed token cannot also trigger its physical press edge in the
 		// residual dispatcher. Preserve held modifiers and independent pointer
@@ -978,6 +1009,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 			sample = talkOwnedInput(producerIn, delta)
 		}
 		b.controller.Step(sample, cl)
+		resourceInputServiced = true
 		// The controller receives a value sample, not the client token ring. A
 		// palette/UNITINFO peek that left its prefix unclaimed has now had the
 		// residual battle hotkey pass; battle owns no editor, so it drains the
@@ -1076,6 +1108,10 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 			mouse.ZoomScrollY != 0 && b.overBattleViewport(effX, effY) {
 			b.wheelZoom(effX, effY, float64(mouse.ZoomScrollY))
 		}
+		b.applyTrackpadGestures(mouse, cl.Enhanced() && focused && !talkActive && !talkOwned &&
+			!modalActive && !overMinimap && !b.palettePointerOwned && !unitInfoOpen() &&
+			b.overBattleViewport(mx, my), mx, my)
+		gesturesServiced = true
 		// One Update of the ease, whatever produced the target. It runs
 		// unconditionally so a target set by F9 or by the wheel of an earlier
 		// frame keeps moving; the controller is idle when nothing is in flight.

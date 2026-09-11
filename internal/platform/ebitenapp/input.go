@@ -15,6 +15,8 @@ type sampledInput struct {
 	wheelX     float32
 	wheelY     float32
 	zoomWheelY float32
+	panX, panY float64
+	pinches    []input.PinchEvent
 	keys       [input.KeyCount]bool
 	characters []rune
 	timestamp  uint32
@@ -43,6 +45,7 @@ func readInput(timestamp uint32) sampledInput {
 	scroll := nativeScroll.take(wx, wy)
 	sample.wheelX, sample.wheelY = float32(scroll.x), float32(scroll.y)
 	sample.zoomWheelY = float32(scroll.zoomY)
+	sample.panX, sample.panY, sample.pinches = scroll.panX, scroll.panY, scroll.pinches
 	for key := input.Key(1); key < input.KeyCount; key++ {
 		switch key {
 		case input.KeyShift:
@@ -86,6 +89,8 @@ func applyInput(in *input.State, sample sampledInput) {
 	m.SetPosition(float32(sample.x), float32(sample.y))
 	m.SetWheel(sample.wheelX, sample.wheelY)
 	m.ZoomScrollY = sample.zoomWheelY
+	m.PanX, m.PanY = sample.panX, sample.panY
+	m.Pinches = append([]input.PinchEvent(nil), sample.pinches...)
 	// Middle has no semantic pointer record, but remains an independent held
 	// sample for legacy consumers.
 	m.SetButton(input.MouseButtonMiddle, sample.buttons.Middle)

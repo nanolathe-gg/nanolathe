@@ -60,6 +60,8 @@ type app struct {
 	// has already acted on. Update compares it with the client's own count, so
 	// one F10 press swaps once (docs/DESIGN_GPU_RENDERER.md §14.6).
 	rendererToggles int
+	// scrollPointScale converts native window points to the letterboxed surface.
+	scrollPointScale float64
 	// windowW/windowH are the last selected host size. Logical menu/battle
 	// transitions do not change them (DESIGN_PRESENTATION_CLIENT §2.1).
 	windowW, windowH    int
@@ -176,6 +178,10 @@ func (a *app) updateBody() {
 	a.c.BumpPresentationEpoch()
 	a.syncWindowSize()
 	sample := readInput(a.scaledInputNow())
+	if a.scrollPointScale > 0 {
+		sample.panX *= a.scrollPointScale
+		sample.panY *= a.scrollPointScale
+	}
 	if a.consumeFullscreenShortcut(&sample) {
 		ebiten.SetFullscreen(!ebiten.IsFullscreen())
 	}
@@ -522,7 +528,11 @@ func (a *app) observeFullscreen(fullscreen bool) {
 // Layout keeps the logical resolution fixed; Ebitengine letterboxes if the
 // window is resized.
 func (a *app) Layout(outsideWidth, outsideHeight int) (int, int) {
-	return a.c.Size()
+	w, h := a.c.Size()
+	if outsideWidth > 0 && outsideHeight > 0 {
+		a.scrollPointScale = max(float64(w)/float64(outsideWidth), float64(h)/float64(outsideHeight))
+	}
+	return w, h
 }
 
 // windowOwned records that this process has entered the window layer: Run sets

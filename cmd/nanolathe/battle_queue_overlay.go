@@ -1,7 +1,7 @@
 package main
 
-// Ebitengine battle presentation adapter for the immutable Shift queue
-// overlay.  The geometry and gating live in internal/hud so they can be
+// Ebitengine battle presentation adapter for the immutable queue overlay,
+// shown by Shift or modern resource-build feedback.  The geometry and gating live in internal/hud so they can be
 // tested without opening a window; this file only projects and rasterizes the
 // returned instructions.
 
@@ -102,11 +102,12 @@ func queueIconFrame(entry *formats.GAFEntry, tick uint32) (int32, bool) {
 }
 
 // drawQueueOverlay is the sole battle integration call required by QUEUE-02.
-// It consumes only a published frame and input presentation state.  Releasing
-// Shift returns before constructing instructions and cannot mutate orders or
-// influence an authoritative hash [07 §9][R-P0-11 §4].
-func drawQueueOverlay(c *client.Client, b *battleSession, f *frame.Frame, tick uint32, shiftHeld bool, localOwner uint8, tracked, hovered pool.Handle) {
-	if c == nil || b == nil || f == nil || !shiftHeld {
+// It consumes only a published frame and input presentation state. Hidden
+// overlays return before constructing instructions. Modern resource feedback
+// reuses the same animation without changing Shift [07 §9][R-P0-11 §4]
+// (DESIGN_INTERFACE_HUD_INPUT §3.10).
+func drawQueueOverlay(c *client.Client, b *battleSession, f *frame.Frame, tick uint32, show bool, localOwner uint8, tracked, hovered pool.Handle) {
+	if c == nil || b == nil || f == nil || !show {
 		return
 	}
 	// The composed world surface is viewport-relative: every world drawer
@@ -120,7 +121,7 @@ func drawQueueOverlay(c *client.Client, b *battleSession, f *frame.Frame, tick u
 	}
 	opts := hud.QueueOverlayOptions{
 		Tick:         tick,
-		ShiftHeld:    shiftHeld,
+		ShiftHeld:    show,
 		LocalOwner:   localOwner,
 		TrackedUnit:  tracked,
 		HoveredUnit:  hovered,

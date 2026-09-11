@@ -33,10 +33,10 @@ const (
 
 // ZoomSteps are the modern wheel and F9 targets, ascending (§16.6): a
 // tactical overview, the default native view, and the detail view. The lowest
-// target is clamped to MinZoom when the map cannot fill the viewport at 0.5x.
+// target is clamped to MinZoom when the map cannot fill the viewport at 0.25x.
 // These are presentation feel choices, like the constants above.
 var ZoomSteps = [3]Zoom{
-	ZoomUnit / 2, // 0.5x
+	ZoomUnit / 4, // 0.25x
 	ZoomUnit,     // 1x
 	ZoomMax,      // 2x
 }

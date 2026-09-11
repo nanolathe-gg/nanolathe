@@ -156,3 +156,18 @@ func TestQueuedRepeatClickTakesTheFrontMost(t *testing.T) {
 		t.Fatalf("the repeat click removed the wrong node: head goal %d, want %d", got, b)
 	}
 }
+
+// The modern shortcut requests append-only command intent; an accidental
+// repeated site must not invoke the ordinary Shift-click removal gesture.
+func TestAppendOnlyMobileBuildPreservesRepeatedSite(t *testing.T) {
+	s, hb := repeatClickFixture(t)
+	site := numeric.Fixed(4) * cell
+	queueBuild(s, hb, "solar", site, site, true, 1)
+	s.applyHumanCommand(HumanCommand{Kind: HumanMobileBuild, MobileBuild: HumanMobileBuildCommand{
+		Builder: hb, Product: "solar", WX: site, WZ: site, Queued: true, AppendOnly: true,
+	}}, 2)
+	q := orders.QueueForUnit(s.Units.Unit(hb))
+	if q.LenPrimary() != 1 || q.Head().Param2 != 2 {
+		t.Fatalf("append-only click canceled existing work: %+v", q.Primary())
+	}
+}

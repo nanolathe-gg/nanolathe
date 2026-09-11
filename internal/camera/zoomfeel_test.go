@@ -17,7 +17,7 @@ func TestWheelStepsThroughTheZoomList(t *testing.T) {
 		want Zoom
 	}{
 		{1, ZoomMax}, {1, ZoomMax}, {-1, ZoomUnit},
-		{-1, ZoomUnit / 2}, {-1, ZoomUnit / 2}, {1, ZoomUnit},
+		{-1, ZoomUnit / 4}, {-1, ZoomUnit / 4}, {1, ZoomUnit},
 	} {
 		z.Wheel(cam, 500, 300, tc.dy, now)
 		if got := z.Target(cam); got != tc.want {
@@ -58,7 +58,7 @@ func TestScrollCooldownHoldsNativeAndDiscardsExcess(t *testing.T) {
 	for _, start := range []uint32{0, ^uint32(0) - 200} {
 		for _, dy := range []float64{-20, 20} {
 			cam := feelCamera()
-			from, end := ZoomMax, ZoomUnit/2
+			from, end := ZoomMax, ZoomUnit/4
 			if dy > 0 {
 				from, end = end, from
 			}
@@ -101,8 +101,8 @@ func TestExplicitZoomClearsScrollCooldown(t *testing.T) {
 	cam := feelCamera()
 	var z ZoomController
 	z.Wheel(cam, 500, 300, 1, 0)
-	z.SetTarget(cam, 500, 300, ZoomUnit/2)
-	if z.Target(cam) != ZoomUnit/2 {
+	z.SetTarget(cam, 500, 300, ZoomUnit/4)
+	if z.Target(cam) != ZoomUnit/4 {
 		t.Fatal("explicit target delayed")
 	}
 	z.Wheel(cam, 500, 300, 1, 1)
@@ -127,7 +127,7 @@ func TestWheelFromBetweenStepsLandsOnAStep(t *testing.T) {
 	}{
 		{ZoomUnit * 13 / 10, true, ZoomMax},
 		{ZoomUnit * 13 / 10, false, ZoomUnit},
-		{ZoomUnit * 3 / 5, false, ZoomUnit / 2},
+		{ZoomUnit * 3 / 5, false, ZoomUnit / 4},
 		{ZoomUnit * 3 / 5, true, ZoomUnit},
 	} {
 		got, ok := NextZoomStep(tc.from, tc.in)
@@ -141,24 +141,36 @@ func TestWheelFromBetweenStepsLandsOnAStep(t *testing.T) {
 // the floor, and from the floor a further step out is refused rather than
 // aimed below it (§16.7).
 func TestWheelOutStopsAtTheMapFloor(t *testing.T) {
-	cam := &Camera{X: 100, Z: 100, ViewW: 1024, ViewH: 768, MapW: 1280, MapH: 1280}
-	minZ := cam.MinZoom()
-	if minZ <= ZoomSteps[0] || minZ >= ZoomSteps[1] {
-		t.Fatalf("fixture floor %s is not between the two lowest steps", minZ)
-	}
-	var z ZoomController
-	z.SetTarget(cam, 500, 300, ZoomSteps[1])
-	z.Wheel(cam, 500, 300, -1, 0)
-	if got := z.Target(cam); got != minZ {
-		t.Fatalf("a step out from 1x on a small map gave %s, want the floor %s", got, minZ)
-	}
-	z.Wheel(cam, 500, 300, -1, 500)
-	if got := z.Target(cam); got != minZ {
-		t.Fatalf("a step out from the floor gave %s, want it to stay", got)
-	}
-	z.Wheel(cam, 500, 300, 1, 500)
-	if got := z.Target(cam); got != ZoomSteps[1] {
-		t.Fatalf("a step in from the floor gave %s, want %s", got, ZoomSteps[1])
+	for _, tc := range []struct {
+		mapW, mapH int32
+		want       Zoom
+	}{
+		{1792, 1408, ZoomUnit / 2},      // Small map: exactly twice the viewport span.
+		{2048, 2048, ZoomUnit * 7 / 16}, // The floor need not be a named zoom step.
+		{3584, 2816, ZoomUnit / 4},      // Exactly four times the viewport span.
+		{16384, 16384, ZoomUnit / 4},    // Large map: stop at the tactical target.
+	} {
+		cam := &Camera{X: 100, Z: 100, ViewW: 1024, ViewH: 768, MapW: tc.mapW, MapH: tc.mapH}
+		var z ZoomController
+		z.SetTarget(cam, 500, 300, ZoomUnit)
+		z.Wheel(cam, 500, 300, -1, 0)
+		if got := z.Target(cam); got != tc.want {
+			t.Fatalf("map %dx%d target %s, want %s", tc.mapW, tc.mapH, got, tc.want)
+		}
+		for i := 0; i < 100; i++ {
+			z.Step(cam)
+		}
+		if got := cam.EffectiveZoom(); got != tc.want {
+			t.Fatalf("map %dx%d settled %s, want %s", tc.mapW, tc.mapH, got, tc.want)
+		}
+		z.Wheel(cam, 500, 300, -1, 500)
+		if got := z.Target(cam); got != tc.want {
+			t.Fatalf("further scroll out gave %s, want %s", got, tc.want)
+		}
+		z.Wheel(cam, 500, 300, 1, 500)
+		if got := z.Target(cam); got != ZoomUnit {
+			t.Fatalf("scroll in from tactical view gave %s, want 1x", got)
+		}
 	}
 }
 

@@ -87,6 +87,10 @@ type HumanMobileBuildCommand struct {
 	WX, WZ  numeric.Fixed
 	WY      numeric.Fixed // validated site height in world fixed units [07 §9]
 	Queued  bool
+	// AppendOnly preserves existing orders even at a repeated site. This is
+	// explicit command intent for the modern resource shortcut, not a renderer
+	// dependency or a change to ordinary Shift placement (DESIGN_INTERFACE_HUD_INPUT §3.10).
+	AppendOnly bool
 }
 type HumanFactoryBuildCommand struct {
 	Builder pool.Handle
@@ -865,7 +869,7 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 			// this kind removes that order and issues nothing [07 R-P0-11 §6].
 			// The test runs only in queued mode; a non-queued click purges and
 			// re-issues as before.
-			if removeQueuedWorldOrder(u, mobileBuildKind(u), 0, c.MobileBuild.WX, c.MobileBuild.WZ) {
+			if !c.MobileBuild.AppendOnly && removeQueuedWorldOrder(u, mobileBuildKind(u), 0, c.MobileBuild.WX, c.MobileBuild.WZ) {
 				return
 			}
 		} else {

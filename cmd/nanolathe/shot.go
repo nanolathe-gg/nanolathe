@@ -14,6 +14,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/framediff"
+	"github.com/nanolathe-gg/nanolathe/internal/hud"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
 	"github.com/nanolathe-gg/nanolathe/internal/ui"
 )
@@ -263,6 +264,31 @@ func runShot(opts Options, cs *contentSet) error {
 		// A capture has no motion to smooth, so the factor is taken outright
 		// rather than eased (§16.8).
 		jumpBattleZoom(b, fx, fy, opts.Zoom, modernRenderer(opts))
+	}
+
+	// Capture-only held input and a prospective product let reviewers inspect
+	// the same tactical guides and placement adapter as the window (§20).
+	// No construction order is submitted and no extra tick is needed.
+	b.tacticalRangesHeld = opts.ShotAlt
+	if opts.ShotBuild != "" {
+		def, ok := b.cat.Unit(opts.ShotBuild)
+		if !ok || def == nil {
+			return fmt.Errorf("nanolathe: shot build preview failed: logical path %s, providers searched [compiled catalog], expected unit definition", opts.ShotBuild)
+		}
+		mx, my := int32((shotW+128)/2), int32(shotH/2)
+		if f, ok := b.currentSnapshot(); ok && b.cam != nil {
+			for _, v := range f.Units {
+				if v.Owner == f.ViewingPlayer && v.Flags&hud.SelectionFlag != 0 {
+					mx = b.cam.Zoom.Project(int32(v.X>>16)-b.cam.X) + 48
+					my = b.cam.Zoom.Project(int32(v.Z>>16)-int32(v.Y>>17)-b.cam.Z) + 32
+					mx, my = max(140, min(int32(shotW)-16, mx)), max(40, min(int32(shotH)-48, my))
+					break
+				}
+			}
+		}
+		b.battleState().Input.PointerX, b.battleState().Input.PointerY = mx, my
+		b.armPlacement(def)
+		b.updatePlacement(mx, my)
 	}
 
 	// `--profile-seconds` is the render-side measurement path. It drives the

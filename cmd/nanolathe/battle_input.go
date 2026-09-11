@@ -113,8 +113,13 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	// routes return through gameShell.menuInput before this method is reached.
 	defer in.DiscardTokens(in.PendingTokens())
 	kbd := in.Kbd
+	b.updateTacticalRangeInput(in, cl == nil || cl.IsFocused())
 	mouse, pointerModifiers := publishedPointer(in)
 	mx, my := int32(mouse.X), int32(mouse.Y)
+	b.updateResourceQueueFeedback(cl)
+	if b.serviceResourceClick(in, cl, mouse, pointerModifiers) {
+		return
+	}
 	b.dragScrollStepped = false
 	if !b.palettePointerOwned && b.serviceDragScroll(mx, my, mouse.Held(input.MouseButtonRight), cl) {
 		return
@@ -531,6 +536,9 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 					b.battleState().Input.ShiftLatchSticky = false
 				}
 			} else {
+				if b.deferResourceClick(cl, mx, my, pointerModifiers) {
+					return
+				}
 				// With Type 1 an idle left click remains the selection/drag button;
 				// an empty click deselects. Type 0 retains its contextual left-click
 				// branch [07 R-CAM-01 §5].

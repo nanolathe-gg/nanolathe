@@ -307,3 +307,26 @@ func TestStrategicAttachedIconFollowsCarrierAdmission(t *testing.T) {
 		t.Fatal("unlinked cargo appeared independently")
 	}
 }
+
+// Enhanced icons keep the same framebuffer footprint and hit bounds at every
+// tactical zoom, including the quarter-scale target (DESIGN_GPU_RENDERER §18).
+func TestStrategicIconsRemain24PixelsAcrossTacticalZooms(t *testing.T) {
+	c, f := iconLayoutFixture(t)
+	for _, z := range []camera.Zoom{camera.ZoomUnit / 4, camera.ZoomUnit * 7 / 16, camera.ZoomUnit / 2} {
+		c.cam.Zoom = z
+		c.drawStrategicMarkers(f)
+		if len(c.markerArena) != 1 {
+			t.Fatalf("zoom %s: missing icon", z)
+		}
+		mark := c.markerArena[0]
+		if mark.Size != 24 || mark.IconAtlas == nil {
+			t.Fatalf("zoom %s: icon size %d, want 24", z, mark.Size)
+		}
+		if _, _, hit := c.PickPresentedUnit(f, mark.X+11, mark.Y+11, 0); !hit {
+			t.Fatalf("zoom %s: 24px icon edge not clickable", z)
+		}
+		if _, _, hit := c.PickPresentedUnit(f, mark.X+12, mark.Y+11, 0); hit {
+			t.Fatalf("zoom %s: hit escaped 24px bounds", z)
+		}
+	}
+}

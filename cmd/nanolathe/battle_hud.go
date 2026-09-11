@@ -773,7 +773,8 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	// ordinary frame pays neither marker nor the schedule submission each one
 	// costs the modern executor.
 	if b != nil {
-		overlay := b.worldOverlayArmed(cur)
+		queueFeedback := c.Enhanced() && b.resourceQueueFeedback != nil
+		overlay := b.worldOverlayArmed(cur) || (cur != nil && queueFeedback)
 		if overlay {
 			c.BeginWorldOverlay()
 		}
@@ -793,11 +794,14 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 			// the pointer. Do not consult the live unit pool or run the pointer
 			// picker from here — that would breach I6; `footerHoverUnit` is the
 			// composer's own per-frame pointer record.
-			drawQueueOverlay(c, b, cur, cur.Tick, b.battleState().Input.ShiftHeld, cur.Selection.LocalPlayer, b.cam.Tracked(), b.footerHoverUnit)
+			drawQueueOverlay(c, b, cur, cur.Tick, b.battleState().Input.ShiftHeld || queueFeedback, cur.Selection.LocalPlayer, b.cam.Tracked(), b.footerHoverUnit)
 		}
 		if overlay {
 			c.EndWorldOverlay()
 		}
+	}
+	if b != nil {
+		b.drawTacticalRangeLegend(c, cur)
 	}
 	// The shell call order is PANELTOP, PANELBOT, PANELSIDE. All three panel
 	// entries are static at their authored origins — PANELTOP (129,0),

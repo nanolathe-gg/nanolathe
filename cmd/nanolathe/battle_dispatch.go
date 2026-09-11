@@ -88,6 +88,10 @@ func (b *battleSession) enqueueHumanCommand(c session.HumanCommand) error {
 }
 
 func (b *battleSession) DispatchMobileBuild(product string, wx, wy, wz numeric.Fixed, queued bool) error {
+	return b.dispatchMobileBuild(product, wx, wy, wz, queued, false)
+}
+
+func (b *battleSession) dispatchMobileBuild(product string, wx, wy, wz numeric.Fixed, queued, appendOnly bool) error {
 	f, ok := b.currentSnapshot()
 	if !ok {
 		return fmt.Errorf("nanolathe: mobile build not dispatched: no committed frame")
@@ -100,7 +104,7 @@ func (b *battleSession) DispatchMobileBuild(product string, wx, wy, wz numeric.F
 		return fmt.Errorf("nanolathe: mobile build not dispatched: the committed command page names no builder the local player owns")
 	}
 	return b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanMobileBuild, MobileBuild: session.HumanMobileBuildCommand{
-		Builder: builder, Product: product, WX: wx, WY: wy, WZ: wz, Queued: queued,
+		Builder: builder, Product: product, WX: wx, WY: wy, WZ: wz, Queued: queued, AppendOnly: appendOnly,
 	}})
 }
 

@@ -1,6 +1,9 @@
 package input
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestStateFromSamplePreservesExplicitEdges(t *testing.T) {
 	tests := []struct {
@@ -144,7 +147,7 @@ func TestStatePointerQueueRejectsInvalidBeforeMutation(t *testing.T) {
 		if in.EnqueuePointer(PointerEvent{Kind: kind, X: 90, Y: 91, Buttons: MouseButtons{Right: true}}) {
 			t.Fatal("invalid kind accepted")
 		}
-		if *in.Mouse != beforeMouse || in.pointers != beforeQueue {
+		if !reflect.DeepEqual(*in.Mouse, beforeMouse) || in.pointers != beforeQueue {
 			t.Fatalf("kind %d changed live pointer or queue", kind)
 		}
 	}

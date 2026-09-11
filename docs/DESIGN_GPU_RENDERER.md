@@ -3277,13 +3277,14 @@ instead, and the map slid under the cursor.
 the battle's camera pass. Easing uses host Updates and scroll cooldown uses
 the supplied monotonic host milliseconds; neither reads simulation time [I6].
 
-* **The steps.** `ZoomSteps` is the ascending list {0.5, 1, 2}: a tactical
+* **The steps.** `ZoomSteps` is the ascending list {0.25, 1, 2}: a tactical
   overview, the default native view, and the detail view. Fractional stops
   above 1× were removed after visual feedback on uneven sprite/model scaling
-  and its mismatch with filtered terrain (§16.3). The 0.5× overview keeps a
-  closer view than 0.25× while doubling the visible span on each axis. These
-  are presentation choices, not retail findings. A target below the map's
-  floor is clamped to that floor (§16.7).
+  and its mismatch with filtered terrain (§16.3). The 0.25× overview shows
+  four times the native span on each axis when the map is large enough. Smaller maps clamp
+  to the minimum factor that fills the viewport (§16.7), such as 0.5×; the
+  floor need not be one of the named steps. These are presentation choices,
+  not retail findings.
 * **The wheel** requires `ZoomScrollThreshold` of accumulated travel:
   1000 thousandths, or one Ebitengine wheel unit, restoring one conventional
   mouse click per step. A call can move at most one stop, even for a large
@@ -3291,42 +3292,58 @@ the supplied monotonic host milliseconds; neither reads simulation time [I6].
   further scroll input for 500 host milliseconds. Discarded input neither
   accumulates nor extends the deadline, and the triggering event's excess is
   discarded too. Thus a burst from 2× first targets 1× and cannot queue a
-  second jump to 0.5×. Continuing scroll after the hold can take another step.
+  second jump to 0.25×. Continuing scroll after the hold can take another step.
   This is a presentation feel choice, independent of game speed and pause.
-  The current input stream combines mouse and trackpad scrolling, so both
-  share the cooldown; F9 bypasses it and clears pending scroll state.
-  On macOS, a local AppKit scroll monitor separates events whose
-  `momentumPhase` is nonzero: they remain in GUI scrolling but are excluded
-  from the zoom delta, even after the cooldown expires. This implements the
-  host presentation policy using [Apple's scroll-event semantics](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/EventOverview/HandlingTouchEvents/HandlingTouchEvents.html),
-  not a retail contract. The monitor returns every event unchanged and batches
-  total and non-momentum deltas together, using Ebitengine's precise-scroll
-  conversion so sensitivity is unchanged. The batch survives the input value
-  copy; an empty native poll stays empty rather than replaying Ebiten's copy.
-  Other platforms and VM guests retain the Ebitengine wheel source. No
-  gesture classification is guessed from delta magnitude or event timing.
+  F9 and pinch bypass the cooldown and clear pending wheel state.
   Below-threshold fractions accumulate; reversing direction clears that
   remainder. A step refused at a zoom limit does not start a cooldown.
   From a free factor the wheel takes the nearest stop in its direction of
   travel. Zoom stays anchored at the pointer throughout the animation.
+* **macOS two-finger scrolling** pans both axes in Enhanced. A local AppKit
+  monitor uses `hasPreciseScrollingDeltas` to distinguish point-based touch
+  scrolling from conventional wheel events; Magic Mouse touch scrolling also
+  pans. Raw point deltas follow the user's macOS scrolling direction, convert
+  through the window's letterbox scale into logical pixels, then divide by
+  the live zoom. Fractional world-pixel remainders carry between direct
+  deltas, so slow scrolling still moves at 2×. Panning clears camera follow.
+  `momentumPhase != 0` events never pan or zoom: movement stops on finger
+  lift instead of continuing through the inertial tail. GUI controls retain
+  all scroll events in Ebitengine wheel units (precise points × 0.1).
+* **macOS pinch** accumulates signed magnification deltas until their net
+  magnitude reaches `pinchThreshold` (0.12), then requests one adjacent zoom
+  stop, anchored at the pointer sampled when the gesture began. Even a large,
+  reversed, or long-held pinch cannot step again until a new gesture begins.
+  An attempt at a zoom limit also spends the gesture. End/cancel events retire
+  the gesture; cancellation does not undo an already accepted zoom target.
+  Ordered pinch events survive host batching and the semantic input copy,
+  including complete gestures occurring between two polls. Blocked camera
+  input cancels the active pinch; later change events cannot reactivate it.
 * **The ease** closes `ZoomEaseFraction` of the remaining gap per Update, moves
   at least one unit so an integer factor cannot stall, and settles outright
   inside `ZoomSettleEpsilon`. It is what makes a notch a glide rather than a
   cut, and it is the only time the live factor is off a step.
 
+The native monitor implements these presentation choices using
+[Apple's gesture and scroll-event semantics](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/EventOverview/HandlingTouchEvents/HandlingTouchEvents.html).
+It returns events unchanged. Empty native polls stay empty rather than replaying
+Ebiten's copy. Other platforms and VM guests retain Ebitengine wheel zoom; no
+device classification is guessed from delta magnitude or event timing.
+
 The first build of this section had a free log-scale wheel with an idle snap
 onto the detail steps and nothing below 1×. The play test preferred discrete
 steps with the glide between them, on both sides of 1×, and that is what stands.
 Every one of the names above is a **feel-tuning knob**, not a derived value, and
-they live together at the top of `internal/camera/zoomfeel.go` so they can be
-tuned by hand.
+wheel/ease knobs live at the top of `internal/camera/zoomfeel.go`;
+`pinchThreshold` lives in `cmd/nanolathe/trackpad.go`.
 
 The wheel binding is Nanolathe's, not retail's. Retail leaves the wheel to the
 active GUI list under the pointer [07 §2][07 §10], and the UI boundary still
 consumes it first: the camera pass sees only a wheel the chrome did not want,
 and takes it only over the battle viewport, only outside TALK, only with no
 modal open and the pointer off the minimap, and only in the executor that can
-present a free factor.
+present a free factor. Trackpad controls share these gates and additionally
+require window focus and no command palette or unit-info ownership. Skipping
+the camera pass (including modal and result screens) clears gesture state.
 
 ### 16.7 The minimum factor — contract Z6
 
@@ -3344,9 +3361,9 @@ least 1×, and clampAxis's view-larger-than-map domain stays exactly where
 ### 16.8 Runtime switches
 
 * **F9** in classic is the unchanged 1× → 1.5× → 2× step cycle about the
-  viewport centre. Modern cycles 1× → 2× → 0.5× → 1× as animated targets,
+  viewport centre. Modern cycles 1× → 2× → 0.25× → 1× as animated targets,
   sharing the wheel's step list. A free factor cycles to the first step above
-  it, wrapping to 0.5× at the top; the map floor still applies.
+  it, wrapping to 0.25× at the top; the map floor still applies.
 * **The wheel** is §16.6.
 * **`--zoom`** accepts any factor in the free range for the modern executor and
   only 1, 1.5 or 2 for classic — the executor's restriction is applied after
@@ -3370,7 +3387,7 @@ least 1×, and clampAxis's view-larger-than-map domain stays exactly where
 
 ### 16.10 What the strategic view drops — contract Z7
 
-At and below `strategicModelCut` (0.5×) — inclusive, so the 0.5× wheel step of
+At and below `strategicModelCut` (0.5×) — inclusive, so the 0.25× tactical target of
 §16.6 is a marker view — the recorder does not emit unit models,
 projectiles, effect strips, trails, unit labels or health bars. Terrain, fog,
 **the features** — sprite and 3DO alike, with their shadows — the selection
@@ -3471,9 +3488,8 @@ be heard before the lane becomes permanent.
 The known follow-ups: a keyed source's filtered sampling (`TODO(question)` in
 `gpurender/schedule.go`), the half-resolution tile set for the strategic range
 (`TODO(question)` in `gpurender/terrain.go`), and the model cross-fade at the
-strategic cut (`TODO(question)` at `Client.markerAlpha`). The capture route
-cannot arm a build placement — `--shot-select` disarms one — so the ghost's
-position is held by its test rather than by a capture.
+strategic cut (`TODO(question)` at `Client.markerAlpha`). The capture route now supports a prospective build placement through
+`--shot-build` (§20), after `--shot-select` has published its selection.
 
 ## 17. Model antialiasing: subject-wide supersampling with a coverage resolve (Enhanced)
 
@@ -3726,6 +3742,8 @@ Vocabulary used by the generated review sheet:
 | Halo | Selection / hover | separate from role and ownership; retain contrast over bright and dark terrain |
 
 The accepted size is 24 framebuffer pixels after play-test feedback on 20px.
+It stays 24 pixels at every camera zoom, including the 0.25× tactical target
+and map-clamped intermediate factors; picking uses the same fixed footprint.
 The review sheet retains 16/20/24 comparisons; these are design choices, not
 retail constants. Keep icons upright, centered on the current marker
 projection, clipped to the battle viewport and outside the scaled world region.
@@ -4207,3 +4225,141 @@ material or piece-name signal the model lane does not carry. The two
 magnified adds could be one shader pass sampling both octaves, and the half
 plane could go if Ebitengine's mipmapped shrink proves cheaper than a pass;
 neither was needed at the measured cost.
+
+
+## 20. Alt/Option tactical range guides (Enhanced)
+
+### 20.1 Presentation policy
+
+Holding Alt/Option at any modern-renderer zoom, including 1× and 2×, draws
+ranges for selected own units and the hovered identified unit.
+An armed build product also shows its prospective ranges at the snapped site,
+including an invalid site while the player repositions it. This is an Enhanced
+UI choice, not a retail hotkey or an authoritative coverage calculation. It
+uses the product definition, footprint centre and validated preview height;
+arming or displaying a guide never submits a construction order.
+
+Releasing the key, losing focus, switching to classic, opening a modal/result
+or entering chat hides the guides. Alt's existing command-group handling stays
+intact. A small on-screen legend names only the categories present:
+
+| Guide | Ink | Radius source |
+|---|---|---|
+| Weapon | Orange, solid | Each independently enabled, active weapon slot's `Range` |
+| Radar | Cyan, solid | `RadarDistance` |
+| Sonar | Blue, dashed | `SonarDistance` |
+| Radar jammer | Purple, dashed | `RadarDistanceJam` |
+| Sonar jammer | Pink, dashed | `SonarDistanceJam` |
+| Build | Green, dashed | Builder's `BuildDistance` |
+| Interceptor guide | Yellow, dashed | Interceptor weapon's `Coverage` |
+
+Equal weapon radii on one unit collapse to one ring. Sonar is dashed so radar
+and sonar remain visible when their authored distances coincide. Preview products use all
+active authored slots; live units use the committed independently enabled slot
+bits. Record-zero NOWEAPON links are omitted even if they author a range.
+Stockpiling alone does not select interception coverage. Sensor guides for an
+inactive switchable unit become dashed; they describe its nominal capability.
+
+### 20.2 Data boundary and limits
+
+**Established source contracts:** ordinary `Range` is in whole world units
+[06 §3.3]; definition activity and independent slot bits are [06 R-WPN-05 §3].
+Sensor/jammer readers sign-extend their stored 16-bit fields, while construction
+reach zero-extends its 16-bit field [07 R-P0-11 §3]. No unit-name lookup table or
+invented weapon range is involved.
+
+**Enhanced guide policy:** these are planning circles. Actual firing also tests
+terrain, target restrictions, firing arcs and ballistic feasibility [06 §3.3].
+Actual interceptor acquisition uses an inclusive X/Z square about the incoming
+projectile's stored aim point [06 §11.2]; its explicitly named coverage circle
+is a visual guide. Actual build/repair reach includes footprint terms and differs
+from reclaim reach [05 R-WORK-01 §2]. Sensor coverage also depends on activation,
+terrain, altitude, water and detection/jamming gates [03 §3.4][03 R-VIS-01 §4–5].
+The HUD therefore calls these range guides rather than guaranteed coverage.
+
+At icon zoom the client admits targets through the existing committed strategic
+icon layout. At model zoom it applies the same committed visibility and carrier
+checks directly, using projected world anchors with the same screen margin.
+The latter path does not need an icon catalog or a nonzero marker alpha.
+Hidden units, radar-only contacts, carried passengers excluded by that layout,
+and off-screen unit anchors expose no definition to the overlay. Selected own units
+remain subject to the same friendly visibility policy as §18. Commander-looking
+enemy units are omitted so differences in truthful ranges cannot identify a
+decoy through otherwise identical icon art. This is deliberately conservative
+presentation disclosure, not a simulation change.
+
+### 20.3 Rendering and verification
+
+`TacticalOverlayStage` runs after the committed world, outside its scale region,
+before the icons and HUD. The same live zoom and camera origin as icons project
+the ring. Each terrain endpoint uses the greater of centre height and sampled
+ground height [07 R-P0-11 §3]. One-pixel palette-coloured segments are clipped to
+the battle viewport before recording. Wide integer coordinates avoid long-range
+wrap; only clipping ratios use transient floating point. Screen-adaptive
+32..512 chords per ring bound tessellation, including huge authored ranges.
+These bounds, dash pattern and colors are Enhanced presentation constants.
+The Alt-off path does not resolve colors, visit targets or record range lines.
+
+Focused tests cover inactive placeholder weapons, independent slot admission,
+interceptor versus stockpile data, deduplication, field narrowing, held-key
+release/focus loss, prospective product/site selection, invalid placement,
+classic fallback, all-zoom committed visibility, terrain projection,
+viewport clipping, bounded long-range geometry and pre-icon draw ordering.
+`--shot-alt --shot-select` captures selected ranges; `--shot-build armllt`
+previews a named product beside the first selection (or at the world viewport
+centre without a selection), without an order. The
+capture switches apply after simulation and zoom setup, so matched scenes retain
+the same simulation state. Full checks and visual results are recorded below.
+
+Initial strategic-only validation on the retail install (2026-09-11):
+
+- Full `go build ./...`, `go vet ./...`, `gofmt -l .`, and `go test ./...`
+  passed after integrating current main. Independent review's retained-hover
+  finding was fixed and covered: drag selection clears hover guides while
+  selected own ranges remain.
+- Viewed modern 1280×720, 0.5× Ashap Plateau captures with selected commander,
+  ARM light laser tower preview and ARM radar preview. The weapon ring is
+  centred on the valid snapped footprint; radar's larger cyan guide clips at
+  the viewport. Sonar dashes preserve coincident cyan radar segments. Icons
+  and the selection halo remain above guides; the category legend stays legible.
+- Matched Alt-off strategic, classic and modern native captures are
+  byte-identical to main. Both live battle captures are also byte-identical
+  before/after, with matching scene metadata and per-frame workload census:
+  332..338 units, eight builds and 411..416 visible sprite features.
+- Sequential 180-frame, 120-TPS live battle checks at native 1920×1080:
+  classic median record 12.259 → 12.254 ms and cadence 14.551 → 14.554 ms;
+  modern median submit 5.284 → 5.294 ms and cadence 8.663 → 8.512 ms.
+  These exercise the unchanged normal-view path, not active guide cost.
+- Active-guide frozen-scene timing remains unmeasured: the repeated-frame
+  capture route crashed in the host Metal drawable/texture call on this branch
+  twice and on unchanged main. Single-frame modern capture and both live
+  benchmark executors completed. This does not establish active-overlay cost
+  for a large selection; per-ring tessellation is bounded by the geometry test.
+
+Review artifacts are outside the repository in
+`/private/tmp/nanolathe-tactical-review/`.
+
+## 21. Modern resource construction input
+
+The user-requested modern-only resource double-click shortcut is specified in
+DESIGN_INTERFACE_HUD_INPUT §3.10. The active executor gates input recognition;
+ordinary session build commands and placement validation own all resulting
+construction. This is an explicit input convenience beyond visual differences,
+not alternate economy, construction or simulation behavior.
+
+All-zoom extension validation (2026-09-11): unit admission and placement tests
+now exercise 0.5×, 1×, 1.5× and 2×, with terrain/projection also tested at 0.375×.
+The model-view admission test removes the icon catalog and still admits only
+the committed visible unit, excluding hidden, radar-only and off-screen targets.
+Viewed retail ARM commander and laser-tower placement captures at 1×, 1.5× and
+2×; guides remain centred and clipped, with their one-pixel stroke and HUD
+legend independent of model scale. Alt-off captures at all four zooms are
+byte-identical to the prior implementation.
+
+Sequential native live battle runs (180 frames, target 120 TPS) have matching
+scene metadata and byte-identical before/after captures for both executors.
+The feature census remains 2547..2549 features, 411..416 visible sprite features,
+and eight builds. Classic median record is 11.468 → 11.514 ms; modern median
+submission is 4.973 → 4.940 ms. These are Alt-off regression checks. Full build,
+vet, formatting and test checks pass after integrating current main. Artifacts
+are in `/private/tmp/nanolathe-all-zoom-review/` outside the repository.

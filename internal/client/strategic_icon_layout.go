@@ -11,6 +11,7 @@ import (
 // Strategic icons are an Enhanced presentation policy, not retail behavior
 // (DESIGN_GPU_RENDERER §18). All scratch is rebuilt from this publication and
 // projection; a reused slot can never inherit an old unit's identification.
+// Fixed framebuffer pixels at every camera zoom, including the 0.25× overview.
 const strategicIconSize = 24
 
 type strategicLayoutScratch struct {
@@ -120,23 +121,7 @@ func (c *Client) layoutStrategicMarkers(f *frame.Frame, viewer uint8, dst *strat
 		neutral = c.nearestIndex(255, 255, 255)
 	}
 	if typed {
-		largest := 0
-		for i := range f.Units {
-			if n := int(f.Units[i].Slot); n > largest {
-				largest = n
-			}
-		}
-		if cap(dst.slots) < largest+1 {
-			dst.slots = make([]int, largest+1)
-		} else {
-			dst.slots = dst.slots[:largest+1]
-			clear(dst.slots)
-		}
-		for i := range f.Units {
-			if f.Units[i].Slot != 0 {
-				dst.slots[int(f.Units[i].Slot)] = i + 1
-			}
-		}
+		dst.indexUnits(f)
 	}
 	// Visible world units are independent of the minimap contact latch and its
 	// damage blink. This is Enhanced presentation policy (§18.4); the minimap
@@ -266,4 +251,25 @@ func (c *Client) PickPresentedUnit(f *frame.Frame, x, y int32, viewer uint8) (po
 		return u.Slot, u, true
 	}
 	return 0, frame.UnitView{}, false
+}
+
+// indexUnits shares committed carrier lookup between icons and tactical guides.
+func (dst *strategicLayoutScratch) indexUnits(f *frame.Frame) {
+	largest := 0
+	for i := range f.Units {
+		if n := int(f.Units[i].Slot); n > largest {
+			largest = n
+		}
+	}
+	if cap(dst.slots) < largest+1 {
+		dst.slots = make([]int, largest+1)
+	} else {
+		dst.slots = dst.slots[:largest+1]
+		clear(dst.slots)
+	}
+	for i := range f.Units {
+		if f.Units[i].Slot != 0 {
+			dst.slots[int(f.Units[i].Slot)] = i + 1
+		}
+	}
 }

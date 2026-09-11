@@ -1,19 +1,30 @@
 package input
 
+// PinchEvent retains gesture boundaries in delivery order, including a complete
+// pinch between host polls. Delta is relative magnification (DESIGN_GPU_RENDERER
+// §16.6). These events are presentation input, never simulation commands.
+type PinchEvent struct {
+	Delta                   float64
+	Began, Ended, Cancelled bool
+}
+
 // MouseState and KeyboardState are the platform-neutral host-frame sample.
 // They contain presentation state only; a session sees a copied semantic
 // sample and never polls a device [07 §2][07 §3].
 type MouseState struct {
 	X, Y             float32
 	ScrollX, ScrollY float32
-	// ZoomScrollY excludes native momentum where the host exposes it.
+	// ZoomScrollY excludes precise scrolling and momentum where the host exposes them.
 	// Total scrolling remains available to GUI controls (DESIGN_GPU_RENDERER §16.6).
 	ZoomScrollY float32
-	scrolled    bool
-	edges       [4]bool
-	released    [4]bool
-	buttons     [4]bool
-	moved       bool
+	// PanX/PanY are direct precise-scroll deltas in logical screen pixels.
+	PanX, PanY float64
+	Pinches    []PinchEvent
+	scrolled   bool
+	edges      [4]bool
+	released   [4]bool
+	buttons    [4]bool
+	moved      bool
 }
 
 // Pressed reports the press edge of b in this host frame.
@@ -74,6 +85,8 @@ func (m *MouseState) ResetEdges() {
 	m.scrolled = false
 	m.moved = false
 	m.ScrollX, m.ScrollY, m.ZoomScrollY = 0, 0, 0
+	m.PanX, m.PanY = 0, 0
+	m.Pinches = nil
 }
 
 // ButtonState is Held as the 0/1 word the authored controls compare against.
@@ -282,6 +295,8 @@ type Sample struct {
 	Modifiers                       Modifiers
 	WheelX, WheelY                  float32
 	ZoomWheelY                      float32
+	PanX, PanY                      float64
+	Pinches                         []PinchEvent
 	PressedButtons, ReleasedButtons [4]bool
 	MouseMoved                      bool
 	Elapsed                         float64
@@ -340,6 +355,8 @@ func SampleFromState(in *State, elapsed float64, surfaceW, surfaceH int32) Sampl
 		s.Buttons = MouseButtons{Left: m.Held(MouseButtonLeft), Middle: m.Held(MouseButtonMiddle), Right: m.Held(MouseButtonRight)}
 		s.WheelX, s.WheelY = m.ScrollX, m.ScrollY
 		s.ZoomWheelY = m.ZoomScrollY
+		s.PanX, s.PanY = m.PanX, m.PanY
+		s.Pinches = append([]PinchEvent(nil), m.Pinches...)
 		for i := range s.PressedButtons {
 			s.PressedButtons[i] = m.edges[i]
 			s.ReleasedButtons[i] = m.released[i]
@@ -372,6 +389,8 @@ func StateFromSample(s Sample) *State {
 	in.Mouse.SetButton(MouseButtonRight, s.Buttons.Right)
 	in.Mouse.SetWheel(s.WheelX, s.WheelY)
 	in.Mouse.ZoomScrollY = s.ZoomWheelY
+	in.Mouse.PanX, in.Mouse.PanY = s.PanX, s.PanY
+	in.Mouse.Pinches = append([]PinchEvent(nil), s.Pinches...)
 	in.Mouse.edges = s.PressedButtons
 	in.Mouse.released = s.ReleasedButtons
 	in.Mouse.moved = s.MouseMoved

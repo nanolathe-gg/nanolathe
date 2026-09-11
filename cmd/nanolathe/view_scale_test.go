@@ -17,7 +17,7 @@ func zoomTestBattle() *battleSession {
 }
 
 // F9 keeps the viewport's centre anchored through the renderer's target
-// cycle (DESIGN_GPU_RENDERER §16.8), including the modern wrap to 0.5x.
+// cycle (DESIGN_GPU_RENDERER §16.8), including the modern wrap to 0.25x.
 func TestF9CyclesTheViewScaleAboutTheViewportCentre(t *testing.T) {
 	for _, modern := range []bool{false, true} {
 		b := zoomTestBattle()
@@ -26,7 +26,7 @@ func TestF9CyclesTheViewScaleAboutTheViewportCentre(t *testing.T) {
 		wx, wz := b.cam.X+mx, b.cam.Z+my
 		wants := []camera.Zoom{camera.ZoomOf(camera.ViewScaleMid), camera.ZoomMax, camera.ZoomUnit}
 		if modern {
-			wants = []camera.Zoom{camera.ZoomMax, camera.ZoomUnit / 2, camera.ZoomUnit}
+			wants = []camera.Zoom{camera.ZoomMax, camera.ZoomUnit / 4, camera.ZoomUnit}
 		}
 		for i, want := range wants {
 			b.toggleViewScale(modern)
@@ -65,7 +65,7 @@ func TestWheelZoomKeepsTheWorldUnderThePointer(t *testing.T) {
 			t.Fatalf("wheel %v: the ease never settled", dy)
 		}
 		f := b.cam.EffectiveZoom()
-		want := []camera.Zoom{camera.ZoomMax, camera.ZoomUnit, camera.ZoomUnit / 2}[i]
+		want := []camera.Zoom{camera.ZoomMax, camera.ZoomUnit, camera.ZoomUnit / 4}[i]
 		if f != want {
 			t.Fatalf("wheel %v settled on %s, want %s", dy, f, want)
 		}
