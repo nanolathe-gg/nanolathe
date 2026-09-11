@@ -85,34 +85,3 @@ func TestSceneAtlasEntriesDoNotTouch(t *testing.T) {
 		}
 	}
 }
-
-// The model page leaves a gutter around every slot. The page is cleared to the
-// composition background over its whole used extent, so a commit that reads into
-// the gutter finds index 1 and skips, which is what a clamp would do.
-func TestModelSlotsKeepAGutter(t *testing.T) {
-	p := &modelPage{maxH: 512}
-	var rects []image.Rectangle
-	for _, size := range [][2]int{{16, 16}, {9, 33}, {64, 4}, {16, 16}} {
-		rect, ok := p.alloc(size[0], size[1])
-		if !ok {
-			t.Fatalf("%v was not placed", size)
-		}
-		if rect.Min.X%modelSlotAlign != 0 || rect.Min.Y%modelSlotAlign != 0 {
-			t.Fatalf("%v landed on the odd origin %v", size, rect.Min)
-		}
-		rects = append(rects, rect.Inset(-modelSlotGutter))
-	}
-	for i := range rects {
-		for j := i + 1; j < len(rects); j++ {
-			if rects[i].Overlaps(rects[j]) {
-				t.Fatalf("slot %d %v overlaps slot %d %v with their gutters", i, rects[i], j, rects[j])
-			}
-		}
-	}
-	// The cleared extent covers every gutter, so no slot's margin is stale.
-	for i, r := range rects {
-		if r.Max.X > p.usedW || r.Max.Y > p.usedH {
-			t.Fatalf("slot %d's gutter %v reaches past the cleared extent %dx%d", i, r, p.usedW, p.usedH)
-		}
-	}
-}

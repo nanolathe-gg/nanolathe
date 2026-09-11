@@ -38,6 +38,10 @@ type Camera struct {
 	// that scale is one and the recording reaches pixels untouched.
 	Zoom Zoom
 
+	// Fractional arrow-key motion at the live zoom (DESIGN_INTERFACE_HUD_INPUT §3.8).
+	scrollX, scrollZ int64
+	scrollZoom       Zoom
+
 	// Follow is the rest of the retail camera block: the desired origin, the
 	// tracked object and the four bookmark slots [07 R-CAM-01 §12]. It is
 	// presentation state; no simulation phase reads it back [I6].
@@ -458,10 +462,7 @@ func (c *Camera) Scroll(setting byte, rawDelta int32, dir Direction) { // [07 §
 	if rawDelta == 0 {
 		return
 	}
-	mag := int32(setting) * rawDelta // [07 §10] delta = setting * rawDelta
-	if mag > 128 {
-		mag = 128 // capped at 128 [07 §10]; signed test, negatives pass through
-	}
+	mag := scrollMagnitude(setting, rawDelta)
 	switch dir {
 	case DirectionLeft:
 		c.Pan(-mag, 0)
@@ -580,4 +581,50 @@ func (c *Camera) ScreenToRecord(sx, sy int32) (int32, int32) {
 	zf := c.zoom()
 	s := c.scale()
 	return s.Project(zf.Inverse(sx-OriginX)) + OriginX, s.Project(zf.Inverse(sy-OriginY)) + OriginY
+}
+
+// scrollMagnitude keeps the signed cap before presentation zoom conversion [07 §10].
+func scrollMagnitude(setting byte, rawDelta int32) int32 {
+	mag := int32(setting) * rawDelta
+	if mag > 128 {
+		mag = 128
+	}
+	return mag
+}
+
+// ScrollScreen gives arrow keys the native screen-pixel rate at every zoom.
+// Fractional map pixels carry between calls so slow settings still move when
+// magnified (DESIGN_INTERFACE_HUD_INPUT §3.8). Retail has no zoom counterpart.
+func (c *Camera) ScrollScreen(setting byte, rawDelta int32, dir Direction) {
+	if c == nil || rawDelta == 0 || dir < DirectionLeft || dir > DirectionDown {
+		return
+	}
+	zoom := c.zoom()
+	if c.scrollZoom != zoom {
+		c.scrollX, c.scrollZ, c.scrollZoom = 0, 0, zoom
+	}
+	mag := int64(scrollMagnitude(setting, rawDelta)) * int64(ZoomUnit)
+	xAxis := dir == DirectionLeft || dir == DirectionRight
+	if dir == DirectionLeft || dir == DirectionUp {
+		mag = -mag
+	}
+	remainder := &c.scrollZ
+	if xAxis {
+		remainder = &c.scrollX
+	}
+	mag += *remainder
+	step := int32(mag / int64(zoom))
+	*remainder = mag % int64(zoom)
+	oldX, oldZ := c.X, c.Z
+	if xAxis {
+		c.Pan(step, 0)
+		if c.X != oldX+step {
+			*remainder = 0
+		}
+	} else {
+		c.Pan(0, step)
+		if c.Z != oldZ+step {
+			*remainder = 0
+		}
+	}
 }

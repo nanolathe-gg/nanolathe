@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/audio"
@@ -208,6 +209,12 @@ type Client struct {
 	models    map[string]*unitModel
 	texIndex  map[string]texRef
 	logoIndex map[string]texRef
+	// texRefs is the per-model texture resolution table (model_texrefs.go),
+	// shared by pointer with the record workers; texGen changes whenever the
+	// indices above are replaced, so a table built against old indices is
+	// rebuilt rather than read.
+	texRefs *sync.Map
+	texGen  uint64
 	// modelTextures is supplied by battle composition. Its players are bound
 	// before ticks begin; this client only reads the selected primitive frame.
 	modelTextures *ModelTextureRegistry
@@ -511,6 +518,7 @@ func New(opts Options) (*Client, error) {
 		models:            map[string]*unitModel{},
 		texIndex:          map[string]texRef{},
 		logoIndex:         map[string]texRef{},
+		texRefs:           &sync.Map{},
 		modelPresentation: map[modelTextureKey]*modelTextureCursor{},
 		modelPlayers:      nil,
 		modelOrientation:  map[uint64]*presentationrender.OrientationCache{},
@@ -840,6 +848,7 @@ func (c *Client) SetModelFS(fs *vfs.FS) {
 	c.resetTrails()
 	c.texIndex = map[string]texRef{}
 	c.logoIndex = map[string]texRef{}
+	c.texGen++
 	c.featureGAFs = map[string]*formats.GAF{}
 	c.featureFrames = map[string]*formats.GAFFrame{}
 	c.detailArt = nil
@@ -884,6 +893,7 @@ func (c *Client) SetModelTextureRegistry(registry *ModelTextureRegistry) {
 	c.modelFS = registry.fs
 	c.texIndex = registry.primary
 	c.logoIndex = registry.logos
+	c.texGen++
 	c.models = map[string]*unitModel{}
 }
 

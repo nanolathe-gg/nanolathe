@@ -72,7 +72,7 @@ func captureModernShot(cl *client.Client, w, h int, mapName string, profileFrame
 		return nil, fmt.Errorf("nanolathe: shot: modern capture produced no frame")
 	}
 	ms := game.modelStats
-	fmt.Fprintf(os.Stderr, "nanolathe: modern model route: scene=%q gpu=%d skipped=%d shadows=%d shadows-omitted=%d reveal-outline-omitted=%d waterline-digger-omitted=%d staging-commands-omitted=%d staged-groups=%d composed-groups=%d supersampled=%d no-body=%d unsupported-geometry=%d unsupported-face=%d missing-texture=%d folded-faces=%d folded-strips=%d\n", mapName, ms.GPU, ms.Skipped, ms.Shadows, ms.ShadowsOmitted, ms.RevealOrOutlineOmitted, ms.WaterlineOrDiggerOmitted, ms.StagingCommandsOmitted, ms.StagedGroups, ms.ComposedGroups, ms.Supersampled, ms.NoBody, ms.UnsupportedGeometry, ms.UnsupportedFace, ms.MissingTexture, ms.FoldedFaces, ms.FoldedStrips)
+	fmt.Fprintf(os.Stderr, "nanolathe: modern model route: scene=%q gpu=%d skipped=%d shadows=%d shadows-omitted=%d no-body=%d lane-subjects=%d lane-shadows=%d lane-faces=%d lane-overflow=%d lane-pages=%d lane-rows=%d\n", mapName, ms.GPU, ms.Skipped, ms.Shadows, ms.ShadowsOmitted, ms.NoBody, ms.DirectSubjects, ms.DirectShadows, ms.DirectFaces, ms.DirectOverflow, ms.DirectPages, ms.DirectAtlasRows)
 	if game.profileFrames > 0 {
 		got := 0
 		if game.profileStats != nil {

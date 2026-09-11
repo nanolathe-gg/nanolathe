@@ -132,7 +132,8 @@ type loadResult struct {
 
 // loadingState is the model behind the loading screen. The loader runs on its
 // own goroutine, as retail's does on its own thread, so percent is read by the
-// renderer while the loader writes it; nothing else crosses.
+// renderer while the loader writes it. Remaster status crosses as an immutable
+// snapshot; all elapsed-time bookkeeping belongs to the renderer.
 type loadingState struct {
 	// mapName is empty for a campaign mission, whose loading screen omits the
 	// map line [07 "The loading screen"].
@@ -141,10 +142,13 @@ type loadingState struct {
 	family  map[string]int32
 	done    chan loadResult
 
+	remaster atomic.Pointer[remasterProgress]
+
 	// Renderer-side only.
-	flash   [retailLoadStages]int
-	prev    [retailLoadStages]int
-	repaint float64
+	remasterElapsed float64
+	flash           [retailLoadStages]int
+	prev            [retailLoadStages]int
+	repaint         float64
 }
 
 func newLoadingState(mapName string) *loadingState {
@@ -177,6 +181,9 @@ func (l *loadingState) advanceFlash() {
 // its family belongs to as the mean of that bar's families, which is what
 // lets a bar fed by several small catalogs rise in steps.
 func (l *loadingState) report(family string, percent int) {
+	if l.reportRemaster(family, percent) {
+		return
+	}
 	stage, ok := retailLoadStageOf[family]
 	if !ok {
 		return
@@ -352,6 +359,11 @@ func (g *gameShell) stepLoading(delta float64) {
 		g.openMenu(g.loadingReturn)
 		return
 	}
+	if l.remaster.Load() != nil {
+		l.remasterElapsed += delta
+	} else {
+		l.remasterElapsed = 0
+	}
 	for l.repaint += delta; l.repaint >= retailLoadRepaintSeconds; l.repaint -= retailLoadRepaintSeconds {
 		l.advanceFlash()
 	}
@@ -429,6 +441,7 @@ func (g *gameShell) drawLoadingScreen(c *client.Client) {
 			blitRetailFrame(c, lightbar, retailLoadBarX, row.y)
 		}
 	}
+	g.drawRemasterProgress(c)
 }
 
 // retailLightBarFrame is the common LIGHTBAR entry's frame 0: a 351x21 metal

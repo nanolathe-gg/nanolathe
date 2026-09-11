@@ -81,6 +81,18 @@ const (
 	// (docs/DESIGN_GPU_RENDERER.md §13.3 "Fog keeps one read copy"). It is the
 	// only op whose source is already colour, so it resolves no index.
 	sceneOpCopyColor = 8
+	// sceneOpModelDirect is the PROTOTYPE direct model lane's FALLBACK face
+	// fragment (model_direct.go): the flat index in ColorG, or when Custom0 is
+	// set the nearest texel of the model texture page bound in source 2 at the
+	// interpolated texel position, dropped when it is the composition
+	// transparent index 1, resolved through PAL and scaled by the interpolated
+	// shade factor in ColorR (§13.2 SHD row).
+	sceneOpModelDirect = 9
+	// sceneOpModelDirectCommit commits one model lane subject from the lane's
+	// 2× colour page bound in source 2: the four texels under the pixel are
+	// box-resolved, colour the mean of the covered ones and alpha their share,
+	// which is §17's coverage resolve done in the commit (§22).
+	sceneOpModelDirectCommit = 10
 )
 
 // The destination shader's op selector, carried in Custom3.
@@ -98,15 +110,6 @@ const (
 	// CPU from the LHT/SHD builder arithmetic [03 §4.3.4] and split across ColorR
 	// (min(k,1)) and ColorG (max(k-1,0)) for the scale blend (§13.3).
 	destOpTable = 1
-	// destOpShadowCommit composites a model silhouette through the same ALP
-	// arithmetic after punching the body's coverage, so overlapping silhouette
-	// faces darken the ground once [03 R-REN-03D §4–§5][03 R-RAST-01 §4].
-	// Both planes are resolved ones (§17): the silhouette's coverage scales the
-	// darkening and only a wholly covered body texel punches. Custom0/1 is the
-	// body-page offset of the shadow texel; Color carries the body slot's page
-	// bounds. The punch reads the body plane, never the destination, so this
-	// run takes no read copy (§13.3).
-	destOpShadowCommit = 2
 	// destOpTrail scales the destination by the trail mark's darkening times
 	// a coverage evaluated from the quad's local coordinates: an oval for a
 	// footprint, a soft-sided segment for a track (§15). The colour lanes
@@ -135,6 +138,21 @@ const (
 	// tested and runs the same comparison; the colour lanes carry the row's scale
 	// split like destOpTable's (§13.11).
 	destOpHalo = 6
+	// destOpModelDirectShadow commits one model lane shadow from the lane's
+	// 2× colour pages, the shadow's bound in source 3 and the body's in
+	// source 2: the four silhouette texels under the pixel are resolved by
+	// coverage and composited as the ALP half-colour fragment, skipping a
+	// pixel whose body block (Custom0/1 texels away, inside the body bounds
+	// in Color) is wholly covered — the slot stage's punch on the lane's
+	// planes (§22).
+	destOpModelDirectShadow = 7
+	// destOpModelSilhouetteShadow commits a Digger or mobile shadow from the
+	// body's own pages, the colour in source 3 and, when Custom2 carries a
+	// clip key, the key page in source 2: the
+	// four body texels under the pixel are the silhouette, a texel at or
+	// below the clip key in Custom2 is erased, and the fragment is the ALP
+	// half-colour of index 0 at that coverage [03 R-REN-03D §1, §4] (§22).
+	destOpModelSilhouetteShadow = 8
 )
 
 // The composite's blends (docs/DESIGN_GPU_RENDERER.md §13.3 "Blend classes").
@@ -218,6 +236,7 @@ func scene2DShaderSource() string {
 	return `//kage:unit pixels
 
 package main
+` + modelQuadMapperSource + `
 
 const palRow = ` + fmt.Sprint(tableRowPAL) + `.0
 
@@ -296,6 +315,39 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 			return vec4(0.0)
 		}
 		idx = floor(tex.r*255.0 + 0.5)
+	} else if op == ` + fmt.Sprint(sceneOpModelDirect) + ` {
+		// The direct model lane's fallback (model_direct.go): no key test, no
+		// supersample. Custom0 is 0 flat, 1 textured.
+		idx = floor(color.g + 0.5)
+		if custom.x > 0.5 {
+			t := floor(srcPos-imageSrc0Origin()) + vec2(0.5, 0.5)
+			idx = floor(imageSrc2AtFromSrc0Pos(imageSrc0Origin()+t).r*255.0 + 0.5)
+		}
+		if idx == 1.0 {
+			return vec4(0.0)
+		}
+		return vec4(palAt(idx)*color.r, 1.0)
+	} else if op == ` + fmt.Sprint(sceneOpModelDirectCommit) + ` {
+		// The direct lane's commit: srcPos interpolates the 2× atlas texel of
+		// the pixel, one texel into its block; floor back to the block and
+		// resolve the four texels by coverage (§22).
+		rel := srcPos - imageSrc0Origin()
+		b := floor(rel/2.0) * 2.0
+		sum := vec3(0.0)
+		cover := 0.0
+		for j := 0; j < 2; j++ {
+			for i := 0; i < 2; i++ {
+				c := imageSrc2AtFromSrc0Pos(imageSrc0Origin() + b + vec2(float(i)+0.5, float(j)+0.5))
+				if c.a > 0.5 {
+					sum += c.rgb
+					cover += 1.0
+				}
+			}
+		}
+		if cover == 0.0 {
+			return vec4(0.0)
+		}
+		return vec4(sum/4.0, cover/4.0)
 	} else if op == ` + fmt.Sprint(sceneOpCopyColor) + ` {
 		// The fog run's read copy: the composite is already colour here, so it is
 		// copied through unchanged (§13.3).
@@ -354,6 +406,32 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 		n := floor(t.r*255.0+0.5)*65536.0 + floor(t.g*255.0+0.5)*256.0 + floor(t.b*255.0+0.5)
 		return vec4(1.0, 1.0, 1.0, n/8388608.0)
 	}
+	if op == ` + fmt.Sprint(destOpModelDirectShadow) + ` {
+		rel := srcPos - imageSrc0Origin()
+		b := floor(rel/2.0) * 2.0
+		sum := vec3(0.0)
+		cover := 0.0
+		body := 0.0
+		bb := b + custom.xy
+		inside := bb.x >= color.r && bb.y >= color.g && bb.x < color.b && bb.y < color.a
+		for j := 0; j < 2; j++ {
+			for i := 0; i < 2; i++ {
+				o := vec2(float(i)+0.5, float(j)+0.5)
+				c := imageSrc3AtFromSrc0Pos(imageSrc0Origin() + b + o)
+				if c.a > 0.5 {
+					sum += c.rgb
+					cover += 1.0
+				}
+				if inside && imageSrc2AtFromSrc0Pos(imageSrc0Origin()+bb+o).a > 0.5 {
+					body += 1.0
+				}
+			}
+		}
+		if cover == 0.0 || body >= 4.0 {
+			return vec4(0.0)
+		}
+		return vec4(sum/4.0*0.5, cover/4.0*0.5)
+	}
 	if op == ` + fmt.Sprint(destOpHalo) + ` {
 		// The flat ground halo. custom.xy is the fragment's own offset from the
 		// disc centre, interpolated over the quad, so flooring it at the pixel
@@ -386,6 +464,30 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 		cov := 1.0 - smoothstep(0.6, 1.0, d)
 		k := 1.0 - (1.0-color.r)*cov
 		return vec4(k, k, k, 0.0)
+	}
+	if op == ` + fmt.Sprint(destOpModelSilhouetteShadow) + ` {
+		rel := srcPos - imageSrc0Origin()
+		b := floor(rel/2.0) * 2.0
+		cover := 0.0
+		for j := 0; j < 2; j++ {
+			for i := 0; i < 2; i++ {
+				o := vec2(float(i)+0.5, float(j)+0.5)
+				if imageSrc3AtFromSrc0Pos(imageSrc0Origin()+b+o).a <= 0.5 {
+					continue
+				}
+				if custom.z > 0.5 {
+					key := floor(imageSrc2AtFromSrc0Pos(imageSrc0Origin()+b+o).r*255.0 + 0.5)
+					if key <= custom.z {
+						continue
+					}
+				}
+				cover += 1.0
+			}
+		}
+		if cover == 0.0 {
+			return vec4(0.0)
+		}
+		return vec4(palAt(0.0)*cover/4.0*0.5, cover/4.0*0.5)
 	}
 	idx := 0.0
 	if op == ` + fmt.Sprint(destOpTint) + ` {

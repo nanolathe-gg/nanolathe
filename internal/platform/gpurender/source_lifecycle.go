@@ -52,18 +52,11 @@ func (r *Renderer) resetSources(release func(*ebiten.Image)) {
 		retire(slot.img)
 	}
 	retire(r.textureAtlas.page)
-	for _, p := range []*modelPage{&r.modelAtlas.page, &r.modelAtlas.overflow[0], &r.modelAtlas.overflow[1]} {
-		retire(p.img)
-		retire(p.key)
-		retire(p.post)
+	for _, pg := range r.modelDirect.pages {
+		retire(pg.key)
+		retire(pg.colour)
 	}
-	retire(r.modelAtlas.quads.img)
-	retire(r.modelGroups.a)
-	retire(r.modelGroups.b)
-	retire(r.modelGroups.out)
-	retire(r.modelStage)
-	retire(r.modelStageScratch)
-	retire(r.modelStageOut)
+	retire(r.modelDirect.params.img)
 	retire(r.fog.atlas)
 	retire(r.fog.grid)
 	retire(r.pointPlane.img)
@@ -81,17 +74,13 @@ func (r *Renderer) resetSources(release func(*ebiten.Image)) {
 		fonts:  make(map[*formats.FNT]*fntAtlas),
 	}
 	r.textureAtlas = modelTextureAtlas{}
-	r.modelAtlas = modelSlotAtlas{}
-	r.modelGroups = modelStageAtlas{}
 	r.modelPrep = modelPrepScratch{}
-	r.modelStage, r.modelStageScratch, r.modelStageOut = nil, nil, nil
-	r.modelStageW, r.modelStageH = 0, 0
+	r.modelDirect = modelDirectLane{keyShader: r.modelDirect.keyShader, colourShader: r.modelDirect.colourShader, shaderErr: r.modelDirect.shaderErr}
 	r.fog = fogPass{shader: r.fog.shader, shaderErr: r.fog.shaderErr, compiled: r.fog.compiled}
 	// Retained compiled runs and options also reference source images. Drop
 	// those and frame scratch together; nothing from the old frame is replayable.
 	r.sched = scheduler{}
 	r.sceneOpts = ebiten.DrawTrianglesShaderOptions{}
-	r.modelOpts = ebiten.DrawTrianglesShaderOptions{}
 	r.surfaceDynamic = surfaceUpload{}
 	r.surfaceCache = [4]surfaceUpload{}
 	r.pointPlane = pointPlane{}

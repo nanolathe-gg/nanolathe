@@ -82,7 +82,8 @@ const (
 	DefaultDitheredFog    = 0
 	// DefaultGlow is the Enhanced glow layer switch, a Nanolathe option with no
 	// retail bit: on until the player turns it off (DESIGN_GPU_RENDERER §19).
-	DefaultGlow  = 1
+	DefaultGlow = 1
+
 	DefaultGamma = 12
 	// `VISUALS` `GAMMA` is a kind-4 slider whose maximum is 20; the stored
 	// integer is applied as the palette factor 0.5 + g/24 [07 R-FE-01 §6].

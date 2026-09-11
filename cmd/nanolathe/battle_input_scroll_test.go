@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
@@ -296,5 +298,51 @@ func TestScrollSettingUsesAttachedShellWithoutDisk(t *testing.T) {
 	b := &battleSession{shell: shell}
 	if got := b.scrollSetting(); got != 77 {
 		t.Fatalf("scrollSetting with an attached shell = %d, want the shell's 77", got)
+	}
+}
+
+// Nanolathe's arrow-key zoom policy uses the native screen speed (§3.8),
+// including settings whose per-frame map displacement is less than one pixel.
+func TestHeldArrowsKeepScreenSpeedAcrossZooms(t *testing.T) {
+	for _, zoom := range []camera.Zoom{camera.ZoomUnit / 4, camera.ZoomUnit / 2, camera.ZoomUnit * 3 / 4, camera.ZoomUnit, camera.ZoomUnit * 3 / 2, camera.ZoomMax} {
+		for _, setting := range []byte{1, 32} {
+			for _, direction := range []struct {
+				name string
+				key  input.Key
+				x, z int32
+			}{
+				{"left", input.KeyLeft, -1, 0}, {"right", input.KeyRight, 1, 0},
+				{"up", input.KeyUp, 0, -1}, {"down", input.KeyDown, 0, 1},
+			} {
+				t.Run(fmt.Sprintf("%s/setting%d/%s", zoom, setting, direction.name), func(t *testing.T) {
+					b := newTestBattle(testCatalogON05(), testWorldON05(300, 300))
+					b.scrollSpeedPrimed, b.scrollSpeedByte = true, setting
+					millis := &fakeMillisSource{}
+					b.millisSource = millis
+					cl, err := client.New(client.Options{Buffer: &frame.Buffer{}, Width: 640, Height: 480})
+					if err != nil {
+						t.Fatal(err)
+					}
+					cl.SetCamera(b.cam)
+					cl.Input().Mouse.SetPosition(320, 240)
+					cl.Input().Kbd.SetKey(direction.key, true)
+					b.viewerStep(0, cl)
+					b.cam.X, b.cam.Z = 8192, 8192
+					b.cam.MapW, b.cam.MapH = 32768, 32768
+					b.cam.Zoom = zoom
+					for i := 0; i < 50; i++ {
+						millis.ms += 20
+						b.viewerStep(0.02, cl)
+					}
+					// All chosen factors exactly divide a second's total travel.
+					x := zoom.Project(b.cam.X - 8192)
+					z := zoom.Project(b.cam.Z - 8192)
+					want := int32(setting) * 30
+					if x != direction.x*want || z != direction.z*want {
+						t.Fatalf("one second moved (%d,%d) screen pixels, want (%d,%d)", x, z, direction.x*want, direction.z*want)
+					}
+				})
+			}
+		}
 	}
 }

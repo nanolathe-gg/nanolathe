@@ -60,12 +60,14 @@ func (q *modelQuadParams) reset() {
 // when the face cannot be described and must keep the strip path.
 //
 // dx and dy shift the authored corners onto the subject's slot, so every packed
-// coordinate is the page pixel the fragment shader compares against. The
-// corners are rotated so that index 0 is the corner holding the minimum Y — the
-// first one attaining it, as the extrema pass records — which turns the two
-// chains of [03 R-RAST-01 §1] into two index ranges the shader can walk without
-// searching for the top corner itself.
-func (q *modelQuadParams) add(v []drawlist.ModelVertex, dx, dy int) int {
+// coordinate is the page pixel the fragment shader compares against; keyDelta
+// is a group child's delta, applied to the corner keys as the vertex lane
+// applies it (modelDirectShiftKey). The corners are rotated so that index 0 is
+// the corner holding the minimum Y — the first one attaining it, as the
+// extrema pass records — which turns the two chains of [03 R-RAST-01 §1] into
+// two index ranges the shader can walk without searching for the top corner
+// itself.
+func (q *modelQuadParams) add(v []drawlist.ModelVertex, dx, dy int, keyDelta int32) int {
 	if len(v) != 4 {
 		return 0
 	}
@@ -88,7 +90,7 @@ func (q *modelQuadParams) add(v []drawlist.ModelVertex, dx, dy int) int {
 	for j := 0; j < 4; j++ {
 		c := v[(top+j)%4]
 		x, y := int(c.X)+dx, int(c.Y)+dy
-		key := int(c.Key) + modelQuadKeyBias
+		key := int(modelDirectShiftKey(c.Key, keyDelta)) + modelQuadKeyBias
 		if !fitsQuadLane(x) || !fitsQuadLane(y) || !fitsQuadLane(int(c.U)) || !fitsQuadLane(int(c.V)) || !fitsQuadLane(key) {
 			return 0
 		}
@@ -152,3 +154,6 @@ func (q *modelQuadParams) upload() {
 	sub.Recycle()
 	q.uploaded = q.count
 }
+
+// ceilTo rounds v up to a multiple of a.
+func ceilTo(v, a int) int { return (v + a - 1) / a * a }

@@ -1,10 +1,5 @@
 package gpurender
 
-import (
-	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
-)
-
 // frameArena is the per-type preparation store of one frame. Execute owns it
 // until all preparation and replay have finished, and every slice it hands out
 // stays valid and distinct for the whole frame, so prepared faces survive while
@@ -54,93 +49,16 @@ func (s *frameArena[T]) reset() { s.off = 0 }
 
 // modelPrepScratch retains every frame's preparation buffers, so a steady-state
 // frame prepares faces, strips and outline endpoints without allocating
-// [DESIGN_GPU_RENDERER.md §11.2 "Allocation policy"].
+// modelPrepScratch retains the outline walk's buffers, so a steady-state frame
+// prepares its endpoints without allocating [DESIGN_GPU_RENDERER.md §11.2
+// "Allocation policy"].
 type modelPrepScratch struct {
 	strips   frameArena[modelGPUFace]
-	crosses  frameArena[bool]
 	vertices frameArena[modelGPUVertex]
-	prepared frameArena[preparedModelFace]
-	ears     frameArena[int]
-	indices  frameArena[uint16]
 }
 
 func (s *modelPrepScratch) reset() {
-	// Execute calls this after submission and before borrowing the next frame.
-	// Prepared records also point into recorder geometry, and strips can point
-	// into an older vertex backing array. Retaining those references is not needed
-	// to reuse capacity [DESIGN_GPU_RENDERER.md §11.5 "CPU"]. Old generations
-	// remain valid until their page subjects are retired by beginFrame.
 	clear(s.strips.buf[:s.strips.off])
-	clear(s.prepared.buf[:s.prepared.off])
 	s.strips.reset()
-	s.crosses.reset()
 	s.vertices.reset()
-	s.prepared.reset()
-	s.ears.reset()
-	s.indices.reset()
-}
-
-func (r *Renderer) prepareSpanStrips(f *drawlist.ModelFace) []modelGPUFace {
-	rows := 0
-	if len(f.Vertices) > 0 {
-		lo, hi := f.Vertices[0].Y, f.Vertices[0].Y
-		for _, v := range f.Vertices {
-			lo = min(lo, v.Y)
-			hi = max(hi, v.Y)
-		}
-		rows = int(hi - lo)
-	}
-	return modelSpanStripsInto(f, r.modelPrep.strips.take(rows), r.modelPrep.vertices.take(rows*4))
-}
-
-// Ebitengine keeps one temporary vertex buffer per destination image and grows
-// it whenever a draw passes more vertices than it has ever held. A model stage
-// whose vertex count drifts upward frame by frame therefore reallocates that
-// buffer almost every frame [DESIGN_GPU_RENDERER.md §11.5 "CPU"]. Rounding the
-// submitted length up to a coarse quantum turns that into a handful of growths
-// over a run: padding vertices are never indexed, so they cost only their
-// conversion, and the arenas keep the spare capacity the rounding addresses.
-const (
-	modelVertexPadMin   = 16
-	modelVertexPadBlock = 4096
-	// modelVertexPadSlack is the largest overshoot padModelVertices can ask for
-	// past the end of a list, so an arena that reserves it can always serve the
-	// padded slice.
-	modelVertexPadSlack = modelVertexPadBlock
-)
-
-// modelPadCount rounds a run's vertex count up to the next power of two while it
-// is small, then to whole blocks: at most twice the conversion work for a small
-// draw, and at most one block of waste for a large one.
-func modelPadCount(n int) int {
-	if n >= modelVertexPadBlock {
-		return ceilTo(n, modelVertexPadBlock)
-	}
-	p := modelVertexPadMin
-	for p < n {
-		p *= 2
-	}
-	return p
-}
-
-// reserveModelVertices keeps modelVertexPadSlack spare vertices past the end of
-// a built list, so padModelVertices can extend any run's slice without
-// reallocating and without disturbing the vertices already written.
-func reserveModelVertices(v []ebiten.Vertex) []ebiten.Vertex {
-	if cap(v)-len(v) >= modelVertexPadSlack {
-		return v
-	}
-	grown := make([]ebiten.Vertex, len(v), 2*len(v)+modelVertexPadSlack)
-	copy(grown, v)
-	return grown
-}
-
-// padModelVertices returns the run's vertices extended to a padded length. The
-// extra vertices hold whatever the arena already held; no index addresses them.
-func padModelVertices(v []ebiten.Vertex, first, n int) []ebiten.Vertex {
-	end := first + modelPadCount(n)
-	if end > cap(v) {
-		end = first + n
-	}
-	return v[first:end]
 }

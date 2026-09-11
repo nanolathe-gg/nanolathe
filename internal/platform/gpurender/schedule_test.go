@@ -1,7 +1,6 @@
 package gpurender
 
 import (
-	"image"
 	"testing"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -273,16 +272,6 @@ func TestSchedulerCompileIsAllocationFree(t *testing.T) {
 	}
 	// One repeated pixel, so the batch has to open a phase mid-run.
 	repeat := append(append([]drawlist.Point{}, pts...), pts[7])
-	// The model slot pages exist before the frame compiles; the commits below
-	// only read their images, exactly as they do after prepareModelSlots.
-	page := ebiten.NewImage(32, 32)
-	shadowPage := ebiten.NewImage(32, 32)
-	// The commits sample the resolved plane (post), so the stub pages carry
-	// one beside the raster plane (§17).
-	body := modelSlot{page: &modelPage{img: page, post: page}, rect: image.Rect(0, 0, 8, 8), box: image.Rect(0, 0, 8, 8)}
-	shadow := modelSlot{page: &modelPage{img: shadowPage, post: shadowPage}, rect: image.Rect(0, 0, 8, 8), box: image.Rect(0, 0, 8, 8)}
-	bodyGeom := &drawlist.ModelGeometry{Width: 8, Height: 8, AnchorX: 24, AnchorY: 24}
-	shadowGeom := &drawlist.ModelGeometry{Width: 8, Height: 8, AnchorX: 26, AnchorY: 26}
 	compile := func() {
 		r.sched.resetFrame(64, 64)
 		r.Fill(drawlist.Fill{Rect: drawlist.Rect{W: 64, H: 64}, Index: 3})
@@ -294,51 +283,13 @@ func TestSchedulerCompileIsAllocationFree(t *testing.T) {
 		r.Points(drawlist.Points{Kind: drawlist.PointLit, Points: repeat})
 		r.Glyphs(drawlist.Glyphs{Font: fnt, Text: "nanolathe", X: 2, Y: 30, Color: 12})
 		r.Fill(drawlist.Fill{Rect: drawlist.Rect{X: 0, Y: 40, W: 20, H: 8}, Style: drawlist.FillShadeRect, Level: -4})
-		r.commitModelShadow(shadowGeom, shadow, bodyGeom, body)
-		r.commitModelSlot(page, body.box, modelWorldBounds(bodyGeom))
 	}
 	compile()
 	if got := r.sched.nphase; got < 3 {
 		t.Fatalf("compiled %d phases, want the overlapping commands to have opened several", got)
 	}
-	if r.modelStats.Shadows == 0 {
-		t.Fatal("the model shadow commit compiled nothing, so the case is not covered")
-	}
 	if got := testing.AllocsPerRun(8, compile); got != 0 {
 		t.Fatalf("compile allocated %v objects per frame, want none", got)
-	}
-}
-
-// A subject's body commit follows its own shadow commit by a phase, like every
-// other opaque write over a destination read. The scheduler used to exempt the
-// pair from that rule on the argument that the shadow writes only pixels the
-// body's plane leaves uncovered; measured against the battle capture the two
-// sets are not exactly complementary at the body's edge, and drawing the body
-// first drops the shadow there, so the exemption is gone
-// [03 R-REN-03D §4–§5].
-func TestSchedulerBodyCommitFollowsItsShadow(t *testing.T) {
-	r, _ := schedulerFixture(t)
-	r.sched.resetFrame(64, 64)
-	page := ebiten.NewImage(32, 32)
-	shadowPage := ebiten.NewImage(32, 32)
-	// The commits sample the resolved plane (post), so the stub pages carry
-	// one beside the raster plane (§17).
-	body := modelSlot{page: &modelPage{img: page, post: page}, rect: image.Rect(0, 0, 8, 8), box: image.Rect(0, 0, 8, 8)}
-	shadow := modelSlot{page: &modelPage{img: shadowPage, post: shadowPage}, rect: image.Rect(0, 0, 8, 8), box: image.Rect(0, 0, 8, 8)}
-	bodyGeom := &drawlist.ModelGeometry{Width: 8, Height: 8, AnchorX: 24, AnchorY: 24}
-	shadowGeom := &drawlist.ModelGeometry{Width: 8, Height: 8, AnchorX: 26, AnchorY: 26}
-
-	r.commitModelShadow(shadowGeom, shadow, bodyGeom, body)
-	if r.modelStats.Shadows == 0 {
-		t.Fatal("the shadow commit compiled nothing, so the pair is not exercised")
-	}
-	shadowPhase := r.sched.curPhase
-	if shadowPhase != 0 {
-		t.Fatalf("an unconstrained shadow commit landed in phase %d, want 0", shadowPhase)
-	}
-	r.commitModelSlot(page, body.box, modelWorldBounds(bodyGeom))
-	if got := r.sched.curPhase; got != shadowPhase+1 {
-		t.Fatalf("the body commit landed in phase %d, want the phase after its shadow's %d", got, shadowPhase)
 	}
 }
 

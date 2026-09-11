@@ -1082,6 +1082,7 @@ func (r *Renderer) submitSchedule() {
 	// it in order (points.go).
 	r.pointPlane.flush()
 	s.flash.flush()
+
 	r.modelStats.Phases += s.nphase
 	compose := r.surfaces[0]
 	for k := 0; k < s.nphase; k++ {
@@ -1203,4 +1204,47 @@ func (r *Renderer) placeholderImage() *ebiten.Image {
 		r.placeholder = ebiten.NewImage(1, 1)
 	}
 	return r.placeholder
+}
+
+// tris appends pre-built triangles to the open run of the phase the last begin
+// placed: the direct model lane's faces (model_direct.go). Destination
+// positions receive the world transform here, like every other vertex the
+// scheduler appends; indices are relative to verts and rebased onto the run.
+// A batch that would overflow the run's vertex limit opens a new run first.
+func (s *scheduler) tris(class int, verts []ebiten.Vertex, idx []uint32) {
+	if s.curPhase < 0 || class != s.curClass || len(verts) == 0 || len(idx) == 0 {
+		return
+	}
+	b := &s.phases[s.curPhase].batch[class]
+	if len(b.runs) == 0 {
+		return
+	}
+	run := &b.runs[len(b.runs)-1]
+	if int(run.vLen)+len(verts) > schedRunVertexLimit {
+		imgs, shader, blend, readSlot := run.imgs, run.shader, run.blend, run.readSlot
+		b.openRun(imgs, shader, blend, readSlot)
+		run = &b.runs[len(b.runs)-1]
+	}
+	base := uint32(run.vLen)
+	nv := len(b.verts)
+	if nv+len(verts) > cap(b.verts) {
+		b.verts = s.growVerts(b.verts, maxInt(nv+len(verts), int(b.vHint)))
+	}
+	b.verts = b.verts[:nv+len(verts)]
+	v := b.verts[nv : nv+len(verts) : nv+len(verts)]
+	for i := range verts {
+		v[i] = verts[i]
+		v[i].DstX, v[i].DstY = s.txf(verts[i].DstX), s.txf(verts[i].DstY)
+	}
+	ni := len(b.idx)
+	if ni+len(idx) > cap(b.idx) {
+		b.idx = s.growIdx(b.idx, maxInt(ni+len(idx), int(b.iHint)))
+	}
+	b.idx = b.idx[:ni+len(idx)]
+	out := b.idx[ni : ni+len(idx) : ni+len(idx)]
+	for i := range idx {
+		out[i] = idx[i] + base
+	}
+	run.vLen += int32(len(verts))
+	run.iLen += int32(len(idx))
 }

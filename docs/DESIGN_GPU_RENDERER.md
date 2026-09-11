@@ -378,8 +378,8 @@ excluded from presentation timing (§6). The diff tool is `tools/framediff`.
   resolve [03 R-REN-03A §6–§7]. Live pieces draw at native scale afterward.
   Mobile units are not supersampled in retail. This is the classic executor's
   contract. Enhanced replaces it with the subject-wide coverage supersample of
-  §17: every subject doubled, live lane and outline included, resolved with
-  fractional coverage and no fringe. The GPU recorder retains the cached lane
+  §17: every subject doubled, live lane included, outline endpoints whole
+  pixels, resolved with fractional coverage and no fringe (§22). The GPU recorder retains the cached lane
   and records current live faces separately in both.
 * **C-G7 Fog composition.** The recorded fog ops are converted to a per-tile
   grid texture (kind, variant, frame, pattern parity) and may be applied by a combined
@@ -808,12 +808,15 @@ through `ALP[src*256+dst]`. The destination is snapshotted before that commit;
 multiple faces of the same silhouette must not repeatedly darken the ground.
 The body commits afterward. Clones own both packets independently.
 
-Modern shadows still use structure rerasterization for mobile and Digger
-subjects. Classic now copies the finished body silhouette for those subjects,
-clears transparent color-key coverage, flattens to index 0 and applies the
-inclusive underwater/buried cutoff. The modern approximation remains explicit;
-this does not claim identical shadows between executors. The
-producer now applies the corrected master/vehicle/Digger gates, independently
+Modern shadows for mobile and Digger subjects are the body's own silhouette,
+as retail's are: the recorder emits a faceless shadow packet carrying the body's
+box, the shadow anchor and the buried or submerged clip key, and the model lane
+reads the body's finished raster at that placement (§22). Classic copies the
+finished body image for those subjects, clears transparent colour-key coverage,
+flattens to index 0 and applies the inclusive underwater/buried cutoff; the two
+executors now agree on the shape. Only a structure projects a separate,
+quarter-sheared, punched shadow. The
+producer applies the corrected master/vehicle/Digger gates, independently
 of the structure-body `Shading` preference [03 R-REN-03D §1, §4].
 Actual GPU shadows and omitted shadows are reported separately. The device
 fixture verifies the blend, body punch and overlapping-face behavior; paired
@@ -927,6 +930,12 @@ ring checks both positive lobes and its empty pinch on the device; this is a
 geometry path, not a CPU image fallback. [03 R-RAST-01 §1]
 
 ## 11. Compiled execution (current performance contract)
+
+> **Retired in part (2026-09-11).** The model slot stage this section and
+> §11.5 "Model slot passes" designed — the per-subject slot atlas, its key,
+> body, reveal, clip and resolve passes and the residency table of §13.12 —
+> is gone; the model lane of §22 is the modern executor's only model path.
+> The 2D families, the scheduler and the allocation policy below stand.
 
 Implementation policy, not retail behavior. This section replaces the earlier
 per-body image cache and page packer (retained only in git history) and the
@@ -2287,6 +2296,10 @@ per-frame plane atlas if none appears.
 
 ### 13.12 Persistent model slots (eighth round)
 
+> **Retired (2026-09-11).** Persistent slots went with the slot stage; the
+> model lane of §22 rasterizes every subject each frame into a per-frame
+> atlas and needs no residency. Kept as the record of what was measured.
+
 **The problem.** On the 720-frame modern battle benchmark (1920×1080, ~190
 units, 120 TPS) `Submit` sat at a 4.9 ms median, of which `prepareModelSlots`
 was 2.8 ms median and 3.7 ms p95 — and **flat across the scene**: it did not
@@ -2543,6 +2556,13 @@ within a build. `go test -race ./internal/platform/gpurender ./internal/client` 
 clean, and `checkModelSlotShadowResidency` joins the opt-in device fixtures: the
 same list executed twice reuses every shadow slot for the same bytes, and a
 bumped shadow revision rasterizes exactly that shadow.
+
+**Since the model lane's silhouette shadows.** Only a structure's shadow is
+projected and retained as above. A Digger or mobile subject's shadow is a
+faceless packet (`ModelGeometry.Silhouette`) with the body's box, the shadow
+anchor and a clip key, and the executor reads the body's own raster at that
+placement (§22): nothing is projected, retained or keyed for it. The pose gate,
+the shadow store and the lane in the cache key remain the structure path's.
 
 #### The defect this round exposed, and its fix
 
@@ -2812,8 +2832,22 @@ section records only the engine contract.
   costs seconds (the READMEs' numbers: 2–5 s for terrain on twelve workers,
   0.2–1 s per bank plus 10–20 ms per frame); a cached load costs a file read.
   Progress is reported through the loading screen's progress callback under
-  its own family so the bar moves. A synthesis failure is reported on stderr
-  and the client falls back to nearest doubling; it never fails the load.
+  its own family so the Terrain bar moves. A synthesis failure is reported on
+  stderr and the client falls back to nearest doubling; it never fails the load.
+* **Remaster status popup (Nanolathe presentation).** After 350 ms of remaster
+  work on the loading screen, a centered, non-interactive popup uses the
+  installed MSGBOX panel art, frontend font, and unscaled LIGHTBAR grille.
+  It labels preparation, map tiles, and sprites separately. Its extra bar
+  reports completed unique tiles during terrain synthesis, then frame progress
+  across the sorted sprite banks with equal weight per bank. This measures work,
+  not estimated time; the phase change may reset the percentage. Animated dots
+  and elapsed seconds continue during example preparation and cache I/O.
+  Each part reports its boundary even on a cache hit or fallback, and the
+  overall family's completion removes the popup. Quick cached loads finish
+  before the delay, and disabled remastering never opens it. The worker
+  publishes immutable phase/percentage snapshots; elapsed time and painting
+  remain on the render thread. This extends the existing loading screen only;
+  inline save restoration and capture paths retain their existing behavior.
 * **Switches.** `--auto-remaster` (default on) enables it; `--remaster <dir>`
   is unchanged — hand-authored 1× overrides mounted above retail are what
   the synthesizer then sees, and are remastered like retail art.
@@ -3493,6 +3527,11 @@ strategic cut (`TODO(question)` at `Client.markerAlpha`). The capture route now 
 
 ## 17. Model antialiasing: subject-wide supersampling with a coverage resolve (Enhanced)
 
+> **Superseded (2026-09-11).** The recorder's doubled lane and half-pixel
+> positioning (§17.2, §17.3) stand and feed the model lane of §22, which
+> resolves coverage in its commit fragment; the executor stages of §17.4–§17.5
+> went with the slot stage.
+
 ### 17.1 Decision
 
 Every model subject the Enhanced executor draws — mobile unit, structure, the
@@ -3534,8 +3573,9 @@ already had for structures.
 nothing about the subject. When it holds, every recorded `ModelGeometry`
 carries a `Supersample` packet at scale 2 holding the subject's own doubled
 raster: its `Faces` (the cached lane, or every lane for a direct subject), its
-`LiveFaces`, its `Outline` and its `Reveal`, all in the doubled packet's local
-image coordinates. The outer packet keeps its native faces, box, origin and
+`LiveFaces` and its `Reveal`, all in the doubled packet's local image
+coordinates; the outline endpoints stay on the native packet, which the model
+lane draws as whole pixel blocks (§22). The outer packet keeps its native faces, box, origin and
 anchor; the executor rasterizes none of the native faces when a doubled raster
 is present, but the box remains the commit rectangle and the anchor the
 subject's screen position.
@@ -4226,7 +4266,6 @@ magnified adds could be one shader pass sampling both octaves, and the half
 plane could go if Ebitengine's mipmapped shrink proves cheaper than a pass;
 neither was needed at the measured cost.
 
-
 ## 20. Alt/Option tactical range guides (Enhanced)
 
 ### 20.1 Presentation policy
@@ -4363,3 +4402,251 @@ and eight builds. Classic median record is 11.468 → 11.514 ms; modern median
 submission is 4.973 → 4.940 ms. These are Alt-off regression checks. Full build,
 vet, formatting and test checks pass after integrating current main. Artifacts
 are in `/private/tmp/nanolathe-all-zoom-review/` outside the repository.
+## 22. The model lane
+
+### 22.1 What it is
+
+The modern executor's one model path. Its predecessor, the slot-atlas stage
+of §11.2, §13.12 and §17, reproduced retail's per-unit composition image
+exactly through a key pass, a body pass, reveal, outline, clipping, a
+coverage resolve and a residency table, and was the executor's largest CPU
+term. The lane keeps what retail's picture needs and drops the rest.
+`internal/platform/gpurender/model_direct.go` is the whole of it, plus three
+ops in the scene and destination shaders, `scheduler.tris`, the outline row
+walk (`model_prepare.go`), the parameter packing (`model_quads.go`) and
+the texture page (`model_atlas.go`).
+
+Before Replay, every subject of the frame and its shadow are given a region
+of a per-frame 2× atlas page — 4096 × 4096 texels, two planes, shelf-packed
+tallest first, no residency — and their faces are fan-triangulated straight
+from the packet's projected corners. A 1080p battle frame uses about 1,300
+rows of the first page and the 2× detail view about 4,000; a second page
+opens when the first is full (128 MiB of device memory a page, allocated
+on demand and retained), and only a frame that fills both takes the
+fallback. The doubled lane is the recorder's own packet when it carries
+one, half-pixel offset included (§17.3); a packet without one has its
+native corners doubled here. An attached-unit group composes in one region
+over the union of its bounds: the carrier's faces, then each mergeable
+child's with its signed height delta added to the keys, saturating at the
+byte's range where retail would wrap [03 R-REN-03A §4]. Two passes over ONE
+vertex batch draw the whole frame's subjects at once:
+
+1. **Key.** Each face's height key, narrowed to a byte as the span writers
+   narrow it, into a key plane under a MAX blend, so a texel holds the
+   highest key drawn there. A four-corner face, flat or textured, takes its
+   key from the span writer's two-chain mapping of its corners, evaluated
+   per fragment from the parameter image; any other ring interpolates its
+   lanes linearly. The key shader reads positions, the key lane and the
+   parameter image, so the batch is the colour pass's own.
+2. **Colour.** Each face's texel where its own key is not below the stored
+   one — retail's `stored ≤ incoming` admission [03 R-REN-03A §2] — into a
+   colour plane, faces in RECORDED order so a tie goes to the later-drawn
+   face as retail's does. That tie is what puts a solar collector's base rim
+   over its open panels, which lie at its height; a painter's sort by mean
+   key lost it. A mapped face's key is the same mapping the key pass wrote,
+   so the passes never disagree about a texel. Shadow silhouettes draw in
+   their index with no key test. The nanoframe reveal, the waterline tint
+   and the Digger erase are verdicts on the height key
+   [03 §5.2][03 R-WATER-01 §2][03 R-REN-03A §8]; the fragment evaluates
+   them on the PIXEL's key — the stored key at the block's top-left texel,
+   which is the key retail's 1× image holds after the 2:1 resolve samples
+   it [03 R-REN-03A §6] — so all four texels under a pixel take one verdict
+   and a band one key wide resolves to whole pixels. A replaced reveal
+   index is written flat, as retail rewrites its plane after shading. A
+   carried child's own verdicts read its own key (the entry carries the
+   delta, taken back off at the fragment) and the carrier's waterline and
+   Digger then clip the child on the shifted key, which is what the
+   staging image's passes do [03 R-REN-03A §4]; the classic composer runs
+   the child's own pass and then the carrier's, and the lane follows it.
+   The subject's verdicts ride the parameter image beside the mapped
+   faces, eight texels of a twelve-texel entry. Outline endpoints come
+   from the span writer's own row walk over the NATIVE packet
+   (`prepareModelOutline`) and draw as one pixel block each, key-tested
+   once against the pixel's key, between the cached and live lanes in
+   retail's order [03 R-COMP-01 §3][03 R-REN-03A §4]; the doubled lane's
+   own rows would put an endpoint at a doubled column, straddling two
+   pixels, so the recorder no longer builds them.
+
+Replay then compiles, per subject and in record order through the scheduler,
+a shadow commit and a body commit. A structure's shadow commit
+(`destOpModelDirectShadow`) resolves the four silhouette texels under a
+pixel from the shadow's page, punches a pixel whose body block — read from
+the body's page, which may be the other one — is wholly covered, and
+composites the ALP half-colour fragment [03 R-REN-03D §4–§5]. A Digger's or
+a mobile's shadow is retail's copy of the finished body: the recorder emits
+a faceless packet (`Silhouette`) with the body's box, the shadow anchor and
+the buried or submerged clip key, and its commit
+(`destOpModelSilhouetteShadow`) resolves the body's own colour texels at the
+shadow's placement — cached lane, live lane and staged children, as the
+classic copy holds them — erasing a texel at or below the clip key read from
+the key page, and composites the half-colour of index 0 [03 R-REN-03D §1].
+It spends no region, no faces and no projection; it binds the colour page in
+the projected shadow's slots so the two kinds share a run. The body
+commit (`sceneOpModelDirectCommit`) box-resolves the four texels under a
+pixel: colour the mean of the covered ones, alpha their share — §17's
+coverage resolve done in the commit, for models only; sprites and terrain
+are untouched, as terrain is authored to be drawn as is.
+
+| retail | model lane |
+|---|---|
+| per-pixel height key, `stored ≤ incoming` | the same test against a max-blended key plane; ties by recorded order |
+| back faces culled by ring winding | same rule, same sign |
+| SHD row lookup per texel | `0.06875 × row` interpolated across the face (§13.2); the table's nearest-index rounding is the visible difference |
+| textured quad by two-chain span mapping | the same mapping, evaluated per fragment from the parameter image (§11.2 "Textured quads without strips"); flat quads mapped the same way for their key and shade |
+| inclusive span fill | corners on the far side of the face centroid pushed one 2× texel (the span's inclusive right and bottom ends); a linear textured face clamps its texel to its authored bounds |
+| composition transparent index 1 | dropped at the fragment |
+| reveal, waterline, Digger over the 1× image after the resolve | the same verdicts per texel on the pixel's nearest-sampled key |
+| outline endpoints written at 1× after the resolve, key-tested once | native rows drawn as pixel blocks, key-tested once against the pixel's key |
+| structure supersample (§17), ALP downscale blending with index 1 | every subject at 2×, resolved in the commit fragment by coverage: an edge or a thin feature is a coverage alpha over what is beneath, never the red/purple fringe [03 R-REN-03A §7]; a mobile subject is supersampled too, where retail draws it at 1× |
+| structure shadow punched by body coverage | same punch, both planes resolved from the pages |
+| Digger and mobile shadow: the finished body image copied, flattened, clipped, blitted at the ground point five pixels right | the body's own raster read at that placement in the commit fragment; a mobile is never punched, as retail's is not |
+| child composed alone, its erased pixels transparent, then `prior > key + delta` keeps prior, wrapped store | child faces in the group region under the same admission with the shifted key; the sum saturates instead of wrapping; a child texel its own reveal or clip erases stays a hole where retail shows the carrier through it |
+
+A subject no page can hold falls back to painter-order native triangles
+straight on the composite (no key, no supersample, no reveal, no children)
+and its shadow is omitted; the benchmark never overflows at either view.
+The parameter image grows to what a frame uses up to 2,048 rows (174k
+entries); a frame past it draws its remaining faces linearly. The commit
+quads bind only the colour plane, so they share a run with the sprites
+around them.
+
+The recorder feeds the lane once per display frame. Two of its per-unit costs
+went in the same round as the silhouette shadow: every cached unit projected
+all of its faces again each frame only to measure its composition box, which
+is now the retained lane's envelope unioned with the live pieces' extent
+(`retainedModelExtent`), and every face resolved its texture through a
+name-key map, a lowercase scan and two index lookups, which is now a
+per-model table (`modelTexRefs`) keyed on the compiled model and rebuilt when
+the client installs new indices — units and features only, because a
+projectile or debris draw is one piece copied into a scratch model every such
+draw reuses.
+
+The isolated model preview exercises the lane's verdicts without a session:
+`--shot-model-build-remaining` poses a nanoframe; `--shot-model-world-height`
+sets the world height, and as the preview has no map its sea level is zero,
+so a negative height submerges the model and runs the waterline erase;
+`--shot-model-underwater-exempt` sets the sonar-contact bit that turns the
+erase into the blue tint; a Digger definition (`armamb`, `cortoast`,
+`corvipe`) brings its own clip. The preview's list opens with its clear and
+background fill, so both executors compose over the same background, and
+`--shot-renderer=both` keeps the classic structure supersample: the
+Enhanced classic image is the like-for-like reference.
+
+### 22.2 Measured (battle benchmark, 1080p, 120 TPS, 180 frames, one binary, back to back)
+
+The last pair before the slot stage was removed, host load 3–4:
+
+| median | slot stage | model lane |
+|---|---|---|
+| Submit | 5.25 ms (p95 6.70, max 7.27) | 4.39 ms (p95 4.68, max 4.89) |
+| Cadence | 8.71 ms (p95 21.0, max 22.8) | 8.45 ms (p95 12.0, max 12.9) |
+| OutsideDraw | 3.08 ms (p95 9.8) | 2.35 ms (p95 3.0) |
+| on the 8.8 ms floor | 52% | 75% |
+| alloc / objects per frame | 1.34 MB / 29.5k | 0.81 MB / 11.2k |
+| device draws / passes | ~250 / 24 | 102 / 14 |
+
+Pixel diff against the slot stage: 4.0%, all on model bodies and shadows;
+isolated tank models differ on 0.2–0.4% of pixels, a solar collector on 2%,
+all of it shade rounding. At 4× the silhouettes are as smooth, texture rows
+are straight, the solar collector's base rim cuts through its open panels,
+shadows fall where retail puts them, and a nanoframe's fill, outline and
+band match. The capture after the removal is byte-identical to the last
+prototype run's.
+
+Stages measured on the way, each a back-to-back pair: bodies only on a keyed
+atlas (load 12) Submit 5.65 → 4.89 ms; shadows on the lane 5.26 → 4.63;
+reveal and clipping 5.41 → 4.53; native painter's triangles on the composite
+(no key, no supersample) 4.84 → 4.23. Ebitengine's triangle `AntiAlias`
+option was tried and rejected: cadence 43 ms, OutsideDraw 37 ms.
+
+The follow-up round (pages, mapped keys in both passes for every quad,
+block-key verdicts, native-row endpoints, the group clip; host load 3.3):
+
+| median | before | after |
+|---|---|---|
+| Submit | 4.37 ms (p95 4.67, max 4.85) | 4.14 ms (p95 4.54, max 4.76) |
+| Cadence | 8.56 ms (p95 11.6) | 8.58 ms (p95 11.7) |
+| OutsideDraw | 2.30 ms (p95 3.0) | 2.35 ms (p95 3.1) |
+| on the 8.8 ms floor | 72% | 70% |
+| alloc / objects per frame | 0.81 MB / 11.0k | 0.78 MB / 10.4k |
+| device draws / lane faces / vertices | 101 / 24.7k / 222k | 85 / 22.3k / 203k |
+
+Evaluating the two-chain mapping in the key pass as well, and for flat
+quads, shows in none of the cadence figures; the native-row endpoints halve
+the outline quads, and the endpoint run now binds the texture page and
+merges with the faces' runs, which is the draw count. The 2× detail view
+peaks at 4,040 rows of the first page on the benchmark scene, so the second
+page is exercised by the fixture, not the benchmark.
+
+The recorder round, two pairs each against the binary before it (host load
+3–4). The box measurement and the per-model texture table:
+
+| median | before | after |
+|---|---|---|
+| PreRecord | 3.15 ms (p95 3.90) | 2.72 ms (p95 3.51) |
+| miss Record | p95 3.42 | p95 3.18 |
+| Cadence | 8.46 ms (p95 12.1) | 8.46 ms (p95 11.6) |
+| alloc per frame | 0.81 MB | 0.79 MB |
+
+The silhouette shadow (Digger and mobile shadows from the body's raster):
+
+| median | before | after |
+|---|---|---|
+| Submit | 4.09 ms (p95 4.47, max 4.69) | 3.01 ms (p95 3.26, max 3.45) |
+| PreRecord | 2.66 ms (p95 3.28) | 1.97 ms (p95 2.52) |
+| Cadence | 8.46 ms (p95 10.9, max 12.8) | 8.40 ms (p95 9.2, max 9.8) |
+| OutsideDraw | 2.13 ms | 1.64 ms |
+| alloc per frame | 0.79 MB | 0.72 MB |
+| device draws / lane faces / vertices / atlas rows | 86 / 22.3k / 203k / 1,160 | 86 / 13.3k / 131k / 736 |
+
+The capture changes on 1.9% of pixels, all shadows of mobiles, and moves
+closer to the classic capture of the same frame (pixels differing from it
+by more than 40 levels: 39.8k → 38.4k); run to run it is byte-identical. The
+first cut bound the key page in the shadow commit's slot 2 and the second in
+slot 0, which split the destination runs (108 and 238 draws); the commit
+binds the colour page in the projected shadow's slots and takes the key page
+only for a clipped silhouette. The first cut also overwrote its scratch
+packet wholesale, dropping the face arena a live-lane packet retained in the
+same slot, which regrew every frame (+0.26 MB per frame).
+
+### 22.3 Verification
+
+`model_direct_test.go`: a device fixture (in the hidden loop) locks the key
+test against draw order, the tie rule, the reveal verdicts written flat, the
+waterline erase and the blue tint at and below their key, the Digger erase,
+a carried child's reveal on its own key under its carrier's clip on the
+shifted key, an outline endpoint drawn whole against the pixel's key (and
+rejected under a higher body key), the shadow half-blend beside its body and
+the half-covered far edge, and a body whose shadow is its own silhouette
+placed beside it with a clip key (the low half casts nothing, the high half
+the half-blend of index 0, no region spent) — run once plainly and once behind a page-wide
+filler so every subject draws and commits from the second page; a unit test
+locks the shelf packer and its page turn. `model_quads_test.go` locks the
+parameter packing. The classic executor remains the byte-exact reference for
+retail's composition; the lane's departures are the table above.
+
+Isolated previews against classic, `--shot-renderer=both`: a submerged
+submarine (`armsub` at world height −6) erased and, with the exemption bit,
+blue-tinted; a submerged solar collector; and the pop-up `armamb` erased at
+and below its origin — inside each model the two images agree, and every
+difference of more than a few levels sits on an edge or a thin feature,
+where the lane's coverage alpha stands against classic's fringe blend (a
+structure) or its 1× raster (a mobile). The ARMLAB nanoframe's "two missing
+band pixels" of the first landing were of that kind: half-covered texels of
+the doubled geometry at the reveal notch, which classic without the
+supersample leaves empty and classic with it blends with index 1.
+
+### 22.4 Owed
+
+1. Lighting: with colour-space faces the shade factor can become a real
+   per-vertex Lambert plus the glow layer's sources as point lights.
+2. A carried child texel that the child's own reveal or clip erases stays a
+   hole where retail shows the carrier through it, because the child's key
+   reached the group's key plane; reproducing that needs the child composed
+   in its own region and merged under the staging admission. Only a
+   transport's cargo is carried in this build and it is a finished unit, so
+   no stock scene reaches it.
+3. The recorder still builds the doubled packet's faces. A packet with a
+   doubled lane has its native faces read only by the fallback and the
+   bounds; the doubled corners of a direct projection are exact rather than
+   native × 2 plus an offset, so the offset alone cannot replace them.

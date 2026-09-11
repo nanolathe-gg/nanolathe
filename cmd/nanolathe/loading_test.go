@@ -70,3 +70,36 @@ func TestRetailLoadBarGeometry(t *testing.T) {
 		t.Errorf("full bar width = %d, want 351", w)
 	}
 }
+
+// A phase may finish before the whole remaster does (including cache hits).
+// Only overall completion dismisses the popup; phase reports must not dilute
+// the six existing bars (DESIGN_GPU_RENDERER §14.4, Nanolathe presentation).
+func TestRemasterProgressLifetime(t *testing.T) {
+	l := newLoadingState("Canal Crossing")
+	l.report(familyDetailArt, 0)
+	l.report(familyDetailTiles, 100)
+	l.report(familyDetailArt, 50)
+	if p := l.remaster.Load(); p == nil || p.label != "Remastering map tiles" || p.percent != 100 {
+		t.Fatalf("completed terrain phase lost its status: %+v", p)
+	}
+	l.report(familyDetailSprites, 25)
+	if p := l.remaster.Load(); p == nil || p.label != "Remastering sprites" || p.percent != 25 {
+		t.Fatalf("sprite phase inherited terrain progress: %+v", p)
+	}
+	if got := l.percent[1].Load(); got != 16 {
+		t.Fatalf("phase progress changed Terrain attribution: %d", got)
+	}
+	l.report(familyDetailArt, 100)
+	if l.remaster.Load() != nil {
+		t.Fatal("completed remaster left the popup active")
+	}
+	for _, enabled := range []bool{false, true} {
+		l := newLoadingState("")
+		// Missing inputs take the synthesis fallback; disabled remastering
+		// takes the other early return. Neither may leave an active popup.
+		detailArtFor(Options{AutoRemaster: enabled}, nil, nil, l.report)
+		if l.remaster.Load() != nil {
+			t.Fatalf("early return left popup active (enabled=%v)", enabled)
+		}
+	}
+}

@@ -177,6 +177,13 @@ func (c *Client) collectDrawPolysLaneProjected(draw *presentationrender.UnitDraw
 		}
 	}
 	scratch := c.borrowPolys(faces, corners)
+	// Units and features draw from their loaded compiled model, which the
+	// table is keyed on; a projectile or debris draw is one piece copied into
+	// a scratch model that every such draw reuses, so it resolves per face.
+	var refs *modelTexRefs
+	if kind == modelCursorUnit || kind == modelCursorFeature {
+		refs = c.modelTexRefs(draw.Model)
+	}
 
 	// Retail walks the piece list last-to-first. Because the height-key test
 	// admits equal keys, draw order is the tie-break, so this direction is what
@@ -200,7 +207,7 @@ func (c *Client) collectDrawPolysLaneProjected(draw *presentationrender.UnitDraw
 			if n < 3 {
 				continue
 			}
-			ref, textured := c.resolveModelTexture(pr.TextureName)
+			ref, textured := c.texRefAt(refs, piece.SourceIndex, pri, pr.TextureName)
 			mode := modelPrimitiveDispatch(pr, textured)
 			if mode == modelPrimitiveSkip {
 				continue

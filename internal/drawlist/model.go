@@ -201,6 +201,14 @@ type ModelGeometry struct {
 	Digger       bool
 	DiggerKey    uint8
 	Children     []ModelChild
+	// Silhouette marks a shadow packet that is the finished body's own
+	// silhouette rather than a projection of its own, which is retail's
+	// Digger and mobile shadow [03 R-REN-03D §1]: the executor reads the body's
+	// raster at this packet's placement, so the packet carries no faces, only
+	// the body's box and the shadow anchor. SilhouetteClip erases the
+	// silhouette at and below that height key; zero is no clip.
+	Silhouette     bool
+	SilhouetteClip uint8
 
 	Width, Height    int32
 	OriginX, OriginY int32

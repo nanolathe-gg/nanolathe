@@ -30,7 +30,11 @@ import (
 // familyDetailArt is the load family the remaster reports progress under. The
 // six loading bars are retail's; which loaders feed them is ours (see
 // retailLoadStageOf), and the remaster is map art, so it feeds the Terrain bar.
-const familyDetailArt = "detailart"
+const (
+	familyDetailArt     = "detailart"
+	familyDetailTiles   = "detailtiles"
+	familyDetailSprites = "detailsprites"
+)
 
 // detailArtExclusions are the sprite tool's shipped example exclusions: fire,
 // explosion, smoke and reclaim art whose colours never occur in idle art and
@@ -54,11 +58,22 @@ var detailArtExclusions = []string{"burn", "boom", "fire", "smoke", "rec"}
 func buildDetailArt(cs *contentSet, terrain *world.Terrain, progress content.Progress) *client.DetailArt {
 	report := func(percent int) {
 		if progress != nil {
-			progress(familyDetailArt, percent)
+			// Keep the popup alive through final assembly and cache writes;
+			// completed synthesis callbacks do not mean the job has returned.
+			progress(familyDetailArt, min(percent, 99))
+		}
+	}
+	reportStage := func(family string, percent int) {
+		if progress != nil {
+			progress(family, percent)
 		}
 	}
 	report(0)
-	defer report(100)
+	defer func() {
+		if progress != nil {
+			progress(familyDetailArt, 100)
+		}
+	}()
 	if cs == nil || cs.fs == nil || terrain == nil {
 		return nil
 	}
@@ -87,24 +102,30 @@ func buildDetailArt(cs *contentSet, terrain *world.Terrain, progress content.Pro
 	// order so it advances even though the parts cost wildly different time.
 	parts := 1 + len(banks)
 	art := &client.DetailArt{Banks: map[string]*formats.GAF{}}
+	reportStage(familyDetailTiles, 0)
 	art.Tiles = buildDetailTiles(cache, terrain, pal, alp, func(done, total int) {
 		if total > 0 {
+			reportStage(familyDetailTiles, done*100/total)
 			report(done * 100 / total / parts)
 		}
 	})
+	reportStage(familyDetailTiles, 100)
+	report(100 / parts)
 	names := make([]string, 0, len(banks))
 	for name := range banks { // load-time only; no simulation order [I1]
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	for index, name := range names {
-		base := (index + 1) * 100 / parts
-		span := 100 / parts
+		reportStage(familyDetailSprites, index*100/len(names))
 		bank := buildDetailBank(cache, cs.fs, name, banks[name], pal, alp, func(done, total int) {
 			if total > 0 {
-				report(base + done*span/total)
+				reportStage(familyDetailSprites, (index*100+done*100/total)/len(names))
+				report(((index+1)*100 + done*100/total) / parts)
 			}
 		})
+		reportStage(familyDetailSprites, (index+1)*100/len(names))
+		report((index + 2) * 100 / parts)
 		if bank != nil {
 			art.Banks[name] = bank
 		}

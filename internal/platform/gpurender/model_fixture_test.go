@@ -1,7 +1,6 @@
 package gpurender
 
 import (
-	"fmt"
 	"os"
 	"testing"
 
@@ -49,7 +48,7 @@ func TestMain(m *testing.M) {
 // TestModelDeviceFixtures is opt-in because ordinary tests must not require a
 // graphics device. It runs all ownership cases in one hidden Ebitengine loop,
 // so the assertions inspect expanded/index pixels from the real backend.
-func TestModelDeviceFixtures(t *testing.T) {
+func TestDeviceFixtureLoop(t *testing.T) {
 	if os.Getenv("NANOLATHE_GPU_DEVICE_TEST") != "1" {
 		t.Skip("set NANOLATHE_GPU_DEVICE_TEST=1 for real-device model fixtures")
 	}
@@ -75,181 +74,27 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 		return
 	}
 	defer func() { g.done = true }()
-	pal := fixturePalette()
-	r, err := NewChecked(&pal, 80, 48)
-	if err != nil {
-		g.err = fmt.Errorf("compile fixture shaders: %w", err)
-		return
-	}
-	list := fixtureModelList()
-	img := r.Execute(&list, 80, 48)
-	if img == nil {
-		g.err = fmt.Errorf("fixture renderer returned no image")
-		return
-	}
-	var pixels = make([]byte, 80*48*4)
-	img.ReadPixels(pixels)
-	// The composite is colour now, so a check names the classic index and the
-	// helper expands it through PAL (§13.4). An opaque family must land on it
-	// exactly; the ALP-blended shadow commits are inside the §13.2 bound.
-	check := func(name string, x, y int, want byte) {
-		if err := checkExactIndex(fmt.Sprintf("%s at (%d,%d)", name, x, y),
-			pixels, (y*80+x)*4, &pal, want); err != nil && g.err == nil {
-			g.err = err
+	// The loop hosts every device fixture of the package: each check builds
+	// its own renderer, draws its own list and reads the composite back. The
+	// model lane's are in model_direct_test.go.
+	for _, check := range []func() error{
+		checkStrategicIconDevicePixels,
+		checkMixedStrategicIconBatch,
+		checkPausedCompositePixels,
+		checkFeatureShadowDevicePixels,
+		checkMinimapSurfaceDevicePixels,
+		checkFogDevicePixels,
+		checkRowScaleDevicePixels,
+		checkTerrainDevicePixels,
+		checkTrailDevicePixels,
+		checkGlowDevicePixels,
+		checkModelDirectDevicePixels,
+		checkSourceLifecycleDevicePixels,
+	} {
+		if g.err = check(); g.err != nil {
+			return
 		}
 	}
-	checkBlended := func(name string, x, y int, want byte) {
-		if err := checkBlendedIndex(fmt.Sprintf("%s at (%d,%d) [ALP floor]", name, x, y),
-			pixels, (y*80+x)*4, &pal, want); err != nil && g.err == nil {
-			g.err = err
-		}
-	}
-	check("equal key later face", 1, 2, 4)
-	check("equal key later live face", 9, 2, 9)
-	check("live transparent index erases cached color", 11, 2, 7)
-	check("keyed live-only body", 41, 2, 27)
-	check("transparent texture leaves background", 6, 2, 7)
-	check("wrapped gradient wins", 13, 2, 5)
-	check("wrapped gradient loses", 16, 2, 2)
-	check("keyless painter order", 22, 2, 9)
-	check("folded positive span", 31, 3, 6)
-	check("folded negative lobe", 27, 1, 7)
-	check("keyed sprite transparent skip", 36, 0, 7)
-	textured := false
-	for y := 0; y < 12; y++ {
-		for x := 0; x < 16; x++ {
-			left, right := pixels[(y*80+44+x)*4], pixels[(y*80+64+x)*4]
-			if left >= 32 && left <= 95 {
-				textured = true
-			}
-			if left != right && g.err == nil {
-				g.err = fmt.Errorf("cyclic textured quad at (%d,%d): index %d, rotated index %d", x, y, left, right)
-			}
-		}
-	}
-	if !textured && g.err == nil {
-		g.err = fmt.Errorf("cyclic textured quad did not draw an authored gradient texel")
-	}
-	// One blend of the silhouette over the background: floor((200 + 7)/2) = 103.
-	// Two blends would give 151, far outside the bound [03 R-REN-03D §4–§5].
-	checkBlended("shadow ALP blend", 1, 16, 103)
-	checkBlended("overlapping shadow faces blend once", 3, 16, 103)
-	check("body punches shadow", 5, 16, 13)
-	check("shadow bounds", 10, 16, 7)
-	check("reveal keeps lower body", 1, 27, 15)
-	check("reveal erases previous lower face", 5, 27, 7)
-	check("outline left endpoint", 4, 27, 21)
-	check("outline right endpoint beyond body span", 12, 27, 21)
-	check("outline does not draw horizontal polygon border", 5, 26, 7)
-	check("reveal band color", 15, 27, 18)
-	check("waterline blue inclusive threshold", 23, 27, 17)
-	check("waterline leaves higher key", 27, 27, 15)
-	check("waterline erases inclusive threshold", 33, 27, 7)
-	check("waterline erase leaves higher key", 37, 27, 15)
-	check("digger erases inclusive threshold", 43, 27, 7)
-	check("digger leaves higher key", 47, 27, 15)
-	check("keyless subject skips clipping", 53, 27, 15)
-	check("staging later child sees wrapped stored key", 1, 37, 25)
-	check("staging compares before wrapping", 3, 37, 24)
-	check("negative shifted child loses", 5, 37, 23)
-	check("equal shifted child wins", 7, 37, 26)
-	check("erased carrier retains key ownership", 13, 37, 7)
-	checkBlended("child shadow-only blend", 59, 37, 103)
-	check("child shadow-only punches own body", 61, 37, 7)
-	check("child shadow-only omits body commit", 63, 37, 7)
-	// The coverage resolve (§17): the grey ramp makes the mean of the covered
-	// samples' colours a grey the classic expansion of the rounded mean index
-	// is within a unit of, and a partly covered pixel composites over the
-	// background 7 by its coverage.
-	checkBlended("supersampled live lane joins the doubled raster: mean of 47,32,33,34", 68, 37, 36)
-	checkBlended("supersampled child merge then carrier erase: 32,33,34 at 3/4 over 7", 69, 37, 27)
-	checkBlended("supersampled edge: one covered sample at 1/4 over 7, no fringe", 72, 37, 13)
-	check("untriangulated upper lobe", 17, 16, 19)
-	check("untriangulated pinch leaves prior face", 18, 17, 18)
-	check("untriangulated lower lobe", 17, 18, 19)
-	stats := r.ModelStats()
-	if stats.UntriangulatedFaces != 1 && g.err == nil {
-		g.err = fmt.Errorf("untriangulated faces=%d, want 1", stats.UntriangulatedFaces)
-	}
-	if stats.Supersampled != 3 && g.err == nil {
-		g.err = fmt.Errorf("fixture supersampled subjects=%d, want 3", stats.Supersampled)
-	}
-	if stats.ComposedGroups != 3 && g.err == nil {
-		g.err = fmt.Errorf("fixture composed groups = %d, want 3", stats.ComposedGroups)
-	}
-	if stats.Shadows != 2 && g.err == nil {
-		g.err = fmt.Errorf("fixture GPU shadow count = %d, want 2", stats.Shadows)
-	}
-	if stats.GPU != 26 && g.err == nil {
-		g.err = fmt.Errorf("fixture GPU count = %d, want 26", stats.GPU)
-	}
-	if stats.Skipped != 1 && g.err == nil {
-		g.err = fmt.Errorf("fixture omitted count = %d, want 1", stats.Skipped)
-	}
-	if stats.ShadowsOmitted != 2 && g.err == nil {
-		g.err = fmt.Errorf("fixture shadow omission count = %d, want 2", stats.ShadowsOmitted)
-	}
-	if stats.StagedGroups != 1 && g.err == nil {
-		g.err = fmt.Errorf("fixture staged group count = %d, want 1", stats.StagedGroups)
-	}
-	if stats.WaterlineOrDiggerOmitted != 1 && g.err == nil {
-		g.err = fmt.Errorf("fixture waterline omission count = %d, want 1", stats.WaterlineOrDiggerOmitted)
-	}
-	if g.err == nil {
-		g.err = checkStrategicIconDevicePixels()
-	}
-	if g.err == nil {
-		g.err = checkPausedCompositePixels()
-	}
-	if g.err == nil {
-		g.err = checkConstantShadeRows()
-	}
-	if g.err == nil {
-		g.err = checkTexturedQuadInteriorMatchesStrips()
-	}
-	if g.err == nil {
-		g.err = checkModelSlotFrames()
-	}
-	if g.err == nil {
-		g.err = checkModelSlotNeighbourIndependence()
-	}
-	if g.err == nil {
-		g.err = checkModelSlotResidency()
-	}
-	if g.err == nil {
-		g.err = checkModelSlotShadowResidency()
-	}
-	if g.err == nil {
-		g.err = checkModelSlotNeighbourBleed()
-	}
-	if g.err == nil {
-		g.err = checkModelSlotPageSizeIndependence()
-	}
-	if g.err == nil {
-		g.err = checkFeatureShadowDevicePixels()
-	}
-	if g.err == nil {
-		g.err = checkMinimapSurfaceDevicePixels()
-	}
-	if g.err == nil {
-		g.err = checkFogDevicePixels()
-	}
-	if g.err == nil {
-		g.err = checkRowScaleDevicePixels()
-	}
-	if g.err == nil {
-		g.err = checkTerrainDevicePixels()
-	}
-	if g.err == nil {
-		g.err = checkTrailDevicePixels()
-	}
-	if g.err == nil {
-		g.err = checkGlowDevicePixels()
-	}
-	if g.err == nil {
-		g.err = checkSourceLifecycleDevicePixels()
-	}
-	screen.DrawImage(img, &ebiten.DrawImageOptions{})
 }
 
 func (g *modelFixtureGame) Layout(int, int) (int, int) { return 80, 48 }
@@ -444,45 +289,15 @@ func fixtureFace(x, y, w, h, key int32, color uint8) drawlist.ModelFace {
 
 // A flat shade row must stay constant across a slanted primitive; interpolator
 // residue at an integer boundary must not select an adjacent SHD row.
-func checkConstantShadeRows() error {
-	p := fixturePalette()
-	for row := range p.Shade {
-		p.Shade[row][100] = uint8(100 + row)
+
+// fixturePinchedRing is an authored touching ring: two lobes meeting at a
+// pinch, which the fan triangulation keeps as two triangles.
+func fixturePinchedRing(x, y int32) drawlist.ModelFace {
+	v := []drawlist.ModelVertex{{X: 0, Y: 0}, {X: 4, Y: 0}, {X: 2, Y: 2}, {X: 4, Y: 4}, {X: 0, Y: 4}, {X: 2, Y: 2}}
+	for i := range v {
+		v[i].X += x
+		v[i].Y += y
+		v[i].Key = 30
 	}
-	r, err := NewChecked(&p, 80, 48)
-	if err != nil {
-		return err
-	}
-	var l drawlist.List
-	l.RecordClear()
-	l.RecordFill(drawlist.Fill{Rect: drawlist.Rect{W: 80, H: 48}, Index: 7, Style: drawlist.FillSolid})
-	for row := int32(0); row < 32; row++ {
-		x, y := (row%8)*10, (row/8)*12
-		f := drawlist.ModelFace{Color: 100, Shaded: true, Vertices: []drawlist.ModelVertex{{X: x + 1, Y: y + 1, Shade: uint8(row), Key: 50}, {X: x + 9, Y: y + 3, Shade: uint8(row), Key: 50}, {X: x + 5, Y: y + 10, Shade: uint8(row), Key: 50}}}
-		l.RecordModel(drawlist.Model{Geometry: fixtureGeometry(0, true, f)})
-	}
-	l.RecordExpand()
-	out := r.Execute(&l, 80, 48)
-	pixels := make([]byte, 80*48*4)
-	out.ReadPixels(pixels)
-	var seen [32]bool
-	for y := 0; y < 48; y++ {
-		for x := 0; x < 80; x++ {
-			idx := pixels[(y*80+x)*4]
-			if idx == 7 {
-				continue
-			}
-			row := y/12*8 + x/10
-			seen[row] = true
-			if idx != byte(100+row) {
-				return fmt.Errorf("constant shade row %d at (%d,%d): index %d, want %d", row, x, y, idx, 100+row)
-			}
-		}
-	}
-	for row, ok := range seen {
-		if !ok {
-			return fmt.Errorf("constant shade row %d painted nothing", row)
-		}
-	}
-	return nil
+	return drawlist.ModelFace{Vertices: v, Color: 19}
 }

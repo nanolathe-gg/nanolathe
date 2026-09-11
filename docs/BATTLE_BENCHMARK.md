@@ -90,8 +90,14 @@ frame's lit point batches covered, the device quads they compiled into and the
 lit point plane regions they committed through
 (docs/DESIGN_GPU_RENDERER.md §13.8). The three together say whether the point
 layer is paying per pixel or per plane, which is the first thing to check when
-modern `Submit` moves. They also carry the persistent model slot counters of
-docs/DESIGN_GPU_RENDERER.md §13.12 — `SlotsReused`, `SlotsRasterized`,
+modern `Submit` moves. They also carry the model lane counters of
+docs/DESIGN_GPU_RENDERER.md §22 — `DirectSubjects`, `DirectShadows`,
+`DirectOverflow`, `DirectAtlasRows` (over every page), `DirectPages` (a
+second page opening is the first sign a detail-view scene has outgrown one)
+and `Silhouettes` (shadows committed from their body's own raster, within
+`Shadows`; `DirectShadows` is then the structures' projected shadows alone)
+— and, from older runs, the retired slot
+stage's `SlotsReused`, `SlotsRasterized`,
 `SlotsResident`, `SlotEvictions` and `SlotOverflows` — which the report
 summarizes as a reuse share: how many of the frame's model subjects kept the
 slot an earlier frame rasterized rather than being analysed and drawn again.

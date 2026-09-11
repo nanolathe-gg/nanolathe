@@ -700,6 +700,7 @@ func (c *Client) buildTextureIndex() {
 	}
 	r := newModelTextureRegistry(c.modelFS, true)
 	c.texIndex, c.logoIndex = r.primary, r.logos
+	c.texGen++
 }
 
 func (r *ModelTextureRegistry) buildTextureIndex() {

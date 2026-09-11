@@ -1059,35 +1059,39 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		modalActive := state.Modal() != ui.BattleModalClosed
 		// Every scroll-pass write is a jump by delta, and a jump by the scroll
 		// pass cancels the follow triple [07 R-CAM-01 §12].
-		scroll := func(dir camera.Direction) {
-			b.cam.Scroll(scrollSetting, rawDelta, dir)
+		scroll := func(dir camera.Direction, keyboard bool) {
+			if keyboard {
+				b.cam.ScrollScreen(scrollSetting, rawDelta, dir)
+			} else {
+				b.cam.Scroll(scrollSetting, rawDelta, dir)
+			}
 			b.cam.ClearFollow()
 			b.pendingFollowInput = nil
 		}
 		// Held-arrow branches gated on TALK absence [07 §10]; edge branches gated on focus, modal, and minimap.
 		// Left: (Left held && !talk) OR (x==0 && y<H) [07 §10]
 		if kbd.KeyHeld(input.KeyLeft) && !talkActive {
-			scroll(camera.DirLeft)
+			scroll(camera.DirLeft, true)
 		} else if focused && !modalActive && !overMinimap && effX == 0 && effY < hi {
-			scroll(camera.DirLeft)
+			scroll(camera.DirLeft, false)
 		}
 		// Right: (Right held && !talk) OR x==W-1 [07 §10]
 		if kbd.KeyHeld(input.KeyRight) && !talkActive {
-			scroll(camera.DirRight)
+			scroll(camera.DirRight, true)
 		} else if focused && !modalActive && !overMinimap && effX == wi-1 {
-			scroll(camera.DirRight)
+			scroll(camera.DirRight, false)
 		}
 		// Up: (Up held && !talk) OR (y==0 && x<W) [07 §10]
 		if kbd.KeyHeld(input.KeyUp) && !talkActive {
-			scroll(camera.DirUp)
+			scroll(camera.DirUp, true)
 		} else if focused && !modalActive && !overMinimap && effY == 0 && effX < wi {
-			scroll(camera.DirUp)
+			scroll(camera.DirUp, false)
 		}
 		// Down: (Down held && !talk) OR y==H-1 [07 §10]
 		if kbd.KeyHeld(input.KeyDown) && !talkActive {
-			scroll(camera.DirDown)
+			scroll(camera.DirDown, true)
 		} else if focused && !modalActive && !overMinimap && effY == hi-1 {
-			scroll(camera.DirDown)
+			scroll(camera.DirDown, false)
 		}
 		// Middle-drag camera pan [F-P1-008]: presentation-only, uses mouse delta / scale.
 		if !talkActive && mouse.Held(input.MouseButtonMiddle) && mouse.Moved() {

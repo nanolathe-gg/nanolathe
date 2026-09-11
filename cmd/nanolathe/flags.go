@@ -64,6 +64,16 @@ type Options struct {
 	ShotModelPose    string
 	ShotModelHeading uint
 	ShotModelScale   float64
+	// ShotModelBuildRemaining poses the isolated model as a nanoframe with this
+	// construction fraction remaining (0 = complete).
+	ShotModelBuildRemaining float64
+	// ShotModelWorldHeight is the isolated model's world height. The preview
+	// has no map, so its sea level is zero and a negative height submerges the
+	// model by that much, which is what exercises the waterline pass.
+	ShotModelWorldHeight int
+	// ShotModelUnderwaterExempt sets the committed sonar-contact/exemption bit,
+	// which turns the waterline pass from an erase into the blue tint.
+	ShotModelUnderwaterExempt bool
 
 	// Host-side profiling. None of these reach the session: a profiled run
 	// draws the same numbers in the same order as an unprofiled one, so the
@@ -140,6 +150,10 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.StringVar(&opts.ShotModelPose, "shot-model-pose", "", "isolated model pose: \"open\" synthetic ARMSOLAR, \"activated\" production COB pose")
 	set.UintVar(&opts.ShotModelHeading, "shot-model-heading", 0, "isolated model preview heading (0..65535)")
 	set.Float64Var(&opts.ShotModelScale, "shot-model-scale", 2, "isolated model preview scale: 1 or 2")
+
+	set.Float64Var(&opts.ShotModelBuildRemaining, "shot-model-build-remaining", 0, "isolated model preview construction fraction remaining, 0..1; above 0 poses a nanoframe with its reveal and outline")
+	set.IntVar(&opts.ShotModelWorldHeight, "shot-model-world-height", 0, "isolated model preview world height; the preview's sea level is 0, so a negative value submerges the model and runs the waterline pass")
+	set.BoolVar(&opts.ShotModelUnderwaterExempt, "shot-model-underwater-exempt", false, "isolated model preview sonar-contact/underwater-exemption bit: a submerged model is blue-tinted instead of erased below the waterline")
 	set.Usage = func() {
 		fmt.Fprintf(out, "nanolathe — a reimplementation of the Total Annihilation engine\n\n")
 		fmt.Fprintf(out, "usage: nanolathe [flags]\n\nflags:\n")

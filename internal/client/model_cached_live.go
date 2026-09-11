@@ -283,6 +283,46 @@ func (c *Client) retainedShadowGeometry(body *cachedModelBody, draw *presentatio
 	return g
 }
 
+// silhouetteShadowGeometry is the Digger and mobile shadow: retail copies the
+// finished body image, flattens it to index 0 and erases it at and below the
+// buried or submerged key, then blits it at the shadow's placement
+// [03 R-REN-03D §1]. The packet carries the body's box and the shadow anchor
+// and no faces; the executor reads the body's own raster (cached lane, live
+// lane and staged children, as the classic copy of the finished image holds
+// them) at that placement (docs/DESIGN_GPU_RENDERER.md §22). Nothing here is
+// projected or retained, so an animated mobile's shadow costs the recorder a
+// packet header.
+func (c *Client) silhouetteShadowGeometry(body *drawlist.ModelGeometry, draw *presentationrender.UnitDraw) *drawlist.ModelGeometry {
+	if c == nil || body == nil || draw == nil || !draw.CastsShadow || c.pal == nil {
+		return nil
+	}
+	ax, ay, _, _ := c.shadowPlacement(draw)
+	var g *drawlist.ModelGeometry
+	if c.modelScratch.active {
+		g = &c.borrowPacketScratch().g
+	} else {
+		g = &drawlist.ModelGeometry{}
+	}
+	// The slot's face arena stays with the slot: a packet filled here next
+	// frame would otherwise grow it again from nothing.
+	faces := g.Faces[:0]
+	*g = drawlist.ModelGeometry{
+		Eligible: true, KeyPlane: true, Silhouette: true,
+		Width: body.Width, Height: body.Height, OriginX: body.OriginX, OriginY: body.OriginY,
+		AnchorX: ax, AnchorY: ay, Scale: body.Scale,
+	}
+	g.Faces = faces
+	if draw.DiggerClip {
+		// The buried half casts no shadow: the Digger key bias puts the model
+		// origin at 125 and the comparison is inclusive [R-REN-03D §1].
+		g.SilhouetteClip = uint8(diggerEraseThreshold)
+	} else if threshold, submerged := waterlineThreshold(c.seaLevel(), draw.WorldPos[1], false); submerged {
+		// Only the above-water part of a submerged mobile casts its silhouette.
+		g.SilhouetteClip = threshold
+	}
+	return g
+}
+
 // replaceCachedShadow projects the shadow and retains it. The stored lane
 // carries no placement at all: the anchor follows the subject's ground point
 // frame by frame and the doubled lane's half-pixel offset follows with it, so

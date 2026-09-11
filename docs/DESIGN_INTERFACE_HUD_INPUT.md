@@ -1325,6 +1325,13 @@ by a simulation phase, and is not saved [I6].
   `BattleView`, `Drag` and `ScreenToWorld` — because those describe what is on
   screen. `ScreenToRecord` bridges the two for the hover hull and the drag
   rectangle, which compare a pointer against corners projected at the step.
+* **Arrow-key scroll speed.** Arrow keys apply the existing setting, host-time
+  delta and signed cap in screen pixels, then divide by the live zoom before
+  moving the camera. Fractional map pixels carry per axis while zoom is steady;
+  a zoom change or a clamped move clears the corresponding carry. This keeps
+  the standard 1× screen speed at every zoom, including slow settings at 2×.
+  This is a Nanolathe presentation choice; edge scrolling retains its retail
+  map-pixel rate.
 * **The native fast path is exact.** At factor 1 both conversions take the
   original integer path unchanged, so nothing composed at native scale differs
   by a pixel from a build without the feature; the same holds at 1.5× and 2×

@@ -42,7 +42,7 @@ func (r *Renderer) DebugSnapshot() map[string]any {
 	if r == nil {
 		return nil
 	}
-	storage := []debugStorage{debugArena("strips", &r.modelPrep.strips), debugArena("vertices", &r.modelPrep.vertices), debugArena("prepared", &r.modelPrep.prepared), debugArena("crosses", &r.modelPrep.crosses), debugArena("ears", &r.modelPrep.ears), debugArena("indices", &r.modelPrep.indices), debugSlice("scheduler_phases", r.sched.phases), debugSlice("scheduler_owners", r.sched.owners), debugSlice("scheduler_cells", r.sched.cells), debugSlice("scheduler_point_phase", r.sched.pointPhase), debugSlice("model_vertices", r.modelAtlas.verts), debugSlice("model_resident", r.modelAtlas.resident), debugSlice("model_resolves", r.modelAtlas.resolves), debugSlice("scene_upload", r.scene.uploadBuf), debugSlice("scene_padding", r.scene.padBuf)}
+	storage := []debugStorage{debugArena("strips", &r.modelPrep.strips), debugArena("vertices", &r.modelPrep.vertices), debugSlice("model_lane_vertices", r.modelDirect.verts), debugSlice("model_lane_indices", r.modelDirect.idx), debugSlice("model_lane_runs", r.modelDirect.runs), debugSlice("scheduler_phases", r.sched.phases), debugSlice("scheduler_owners", r.sched.owners), debugSlice("scheduler_cells", r.sched.cells), debugSlice("scheduler_point_phase", r.sched.pointPhase), debugSlice("scene_upload", r.scene.uploadBuf), debugSlice("scene_padding", r.scene.padBuf)}
 	for _, bucket := range r.sched.vertPool {
 		for _, v := range bucket {
 			storage = append(storage, debugSlice("scheduler_pooled_vertices", v))
@@ -65,15 +65,10 @@ func (r *Renderer) DebugSnapshot() map[string]any {
 			add("scene_page", p.w, p.h)
 		}
 	}
-	for _, p := range []*modelPage{&r.modelAtlas.page, &r.modelAtlas.overflow[0], &r.modelAtlas.overflow[1]} {
-		if p.img != nil {
-			add("model_color_page", p.w, p.h)
-		}
-		if p.key != nil {
-			add("model_key_page", p.w, p.h)
-		}
-		if p.post != nil {
-			add("model_post_page", p.w, p.h)
+	for _, pg := range r.modelDirect.pages {
+		if pg.key != nil {
+			add("model_key_plane", modelDirectAtlasW, modelDirectAtlasH)
+			add("model_colour_plane", modelDirectAtlasW, modelDirectAtlasH)
 		}
 	}
 	for _, img := range r.surfaces {
@@ -84,7 +79,6 @@ func (r *Renderer) DebugSnapshot() map[string]any {
 	}
 	return map[string]any{"width": r.w,
 		"height":                r.h,
-		"model_frame_counter":   r.modelAtlas.frame,
 		"frame_device_draws":    r.frameDraws,
 		"model_stats":           r.ModelStats(),
 		"submission_frame":      r.submissionFrame,
@@ -96,7 +90,7 @@ func (r *Renderer) DebugSnapshot() map[string]any {
 		"terrain_atlas_count":   len(r.tileAtlases),
 		"scene_frame_count":     len(r.scene.frames),
 		"scene_page_count":      len(r.scene.pages),
-		"model_slots":           len(r.modelAtlas.slots),
+		"model_lane_regions":    len(r.modelDirect.regions),
 		"note":                  "Arena idle offsets are reset after Execute and can rewind on growth; they are not last-frame peaks. RGBA estimates cover listed logical images only, exclude Ebitengine backing textures/driver overhead and unlisted texture caches. Outline raw-versus-clipped spans and obsolete reference retention are unavailable without new instrumentation."}
 }
 

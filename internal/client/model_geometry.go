@@ -113,12 +113,11 @@ func (c *Client) configureModelGeometryFor(body *cachedModelBody, g *drawlist.Mo
 		g.Reveal = &drawlist.ModelReveal{Line: reveal.Line, Floor: reveal.Floor, Below: reveal.Below, Band: reveal.Band, Above: reveal.Above}
 		g.Outline = c.modelOutlineGeometry(draw, g.OriginX, g.OriginY, outline, 1, 0, 0)
 		if ss := g.Supersample; ss != nil {
-			// The doubled raster carries the reveal and the outline itself, so
-			// both are resolved with the body rather than drawn over the
-			// resolved pixels (DESIGN_GPU_RENDERER §17).
-			_, _, hx, hy := c.modelAnchorDoubled(draw.WorldPos)
+			// The doubled raster carries the reveal, which is resolved with
+			// the body; the outline endpoints are one native pixel each and
+			// the executor draws them from the native rows above, so the
+			// doubled lane carries none (DESIGN_GPU_RENDERER §22).
 			ss.Reveal = g.Reveal
-			ss.Outline = c.modelOutlineGeometry(draw, g.OriginX, g.OriginY, outline, 2, hx, hy)
 		}
 	}
 	if g.KeyPlane {
@@ -130,7 +129,11 @@ func (c *Client) configureModelGeometryFor(body *cachedModelBody, g *drawlist.Mo
 		}
 		g.Digger, g.DiggerKey = draw.DiggerClip, uint8(diggerEraseThreshold)
 	}
-	g.Shadow = c.retainedShadowGeometry(body, draw)
+	if draw.DiggerClip || !draw.Structure {
+		g.Shadow = c.silhouetteShadowGeometry(g, draw)
+	} else {
+		g.Shadow = c.retainedShadowGeometry(body, draw)
+	}
 }
 
 // modelOutlineGeometry retains all valid rings, including primitives omitted by
@@ -357,11 +360,19 @@ func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (*drawli
 	if missing || body == nil || body.geometry == nil {
 		return c.directUnitGeometry(draw, unitTeamColor(v), id, presentationrender.PieceLaneAll), nil
 	}
-	all := c.collectDrawPolys(draw, unitTeamColor(v), id, modelCursorUnit)
-	if len(all) == 0 {
+	if !drawHasFaces(draw) {
 		return nil, nil
 	}
-	w, h, ox, oy := retainedModelExtent(body.geometry, all)
+	// The box is the commit rectangle: the retained lane's envelope, which
+	// already holds every cached face this packet rebases, plus whatever the
+	// live pieces reach this frame. Measuring the current pose of the cached
+	// pieces too would project every face again for a box the retained
+	// raster cannot fill.
+	var live []screenPoly
+	if !draw.UnderConstruction {
+		live = c.collectDrawPolysLane(draw, unitTeamColor(v), id, modelCursorUnit, presentationrender.PieceLaneLive)
+	}
+	w, h, ox, oy := retainedModelExtent(body.geometry, live)
 	ax, ay, hx, hy := c.modelPlacement(draw)
 	g := c.borrowRebasedModelGeometry(body.geometry, int32(w), int32(h), ox, oy, ax, ay, hx, hy)
 	if g == nil {
@@ -381,17 +392,14 @@ func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (*drawli
 	if g.Reveal != nil || len(g.Outline) != 0 {
 		g.Cache = drawlist.ModelCacheKey{}
 	}
-	if !draw.UnderConstruction {
-		live := c.collectDrawPolysLane(draw, unitTeamColor(v), id, modelCursorUnit, presentationrender.PieceLaneLive)
-		if len(live) != 0 {
-			if ss := g.Supersample; ss != nil {
-				// The live lane joins the doubled raster too, at the same
-				// placement as the cached lane it draws over (§17).
-				ss.LiveFaces = c.borrowModelPacketDoubled(live, w, h, c.doubledPlacement(ox, oy, hx, hy, false), draw.KeyPlane).Faces
-			}
-			placeFaces(live, ox, oy, 1)
-			g.LiveFaces = c.borrowModelPacket(live, int32(w), int32(h), ox, oy, ax, ay, 1, draw.KeyPlane, drawlist.ModelFallbackNone).Faces
+	if len(live) != 0 {
+		if ss := g.Supersample; ss != nil {
+			// The live lane joins the doubled raster too, at the same
+			// placement as the cached lane it draws over (§17).
+			ss.LiveFaces = c.borrowModelPacketDoubled(live, w, h, c.doubledPlacement(ox, oy, hx, hy, false), draw.KeyPlane).Faces
 		}
+		placeFaces(live, ox, oy, 1)
+		g.LiveFaces = c.borrowModelPacket(live, int32(w), int32(h), ox, oy, ax, ay, 1, draw.KeyPlane, drawlist.ModelFallbackNone).Faces
 	}
 	if g.KeyPlane {
 		if len(g.LiveFaces) != 0 || g.Supersample != nil && len(g.Supersample.LiveFaces) != 0 {
@@ -409,9 +417,20 @@ func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (*drawli
 	return g, c.directUnitGeometry(draw, unitTeamColor(v), id, presentationrender.PieceLaneLive)
 }
 
-// retainedModelExtent keeps the cached composition envelope when current live
-// geometry contracts. A packet's declared box is its commit rectangle, so
-// rebasing cached corners into only the current all-piece box would crop them.
+// drawHasFaces reports whether any visible piece carries a primitive: a
+// hidden piece keeps its index and drops its primitives.
+func drawHasFaces(draw *presentationrender.UnitDraw) bool {
+	for i := range draw.Pieces {
+		if len(draw.Pieces[i].Primitives) != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// retainedModelExtent is the retained cached envelope unioned with the
+// current live pieces' box. A packet's declared box is its commit rectangle,
+// so rebasing cached corners into only the live box would crop them.
 func retainedModelExtent(retained *drawlist.ModelGeometry, current []screenPoly) (width, height int, originX, originY int32) {
 	width, height, originX, originY = modelExtent(current)
 	if retained == nil {

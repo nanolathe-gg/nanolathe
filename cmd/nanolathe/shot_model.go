@@ -10,7 +10,6 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
-	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	model3d "github.com/nanolathe-gg/nanolathe/internal/model"
 	"github.com/nanolathe-gg/nanolathe/internal/platform/gpurender"
@@ -48,16 +47,15 @@ func runModelShot(opts Options, cs *contentSet) error {
 		Model: definition.ObjectName, Width: w, Height: h,
 		Heading: uint16(opts.ShotModelHeading), Scale: float32(opts.ShotModelScale),
 		KeyPlane: definition.ZBuffer, Structure: definition.Structure, Digger: definition.Definition.Digger,
+		BuildRemaining: float32(opts.ShotModelBuildRemaining),
+		WorldHeight:    int32(opts.ShotModelWorldHeight), UnderwaterExempt: opts.ShotModelUnderwaterExempt,
 	}
 	shotRenderer := effectiveShotRenderer(opts)
-	if definition.Structure && shotRenderer == "both" {
-		// The explicit comparison normalizes the classic reference to native
-		// scale so the output isolates device geometry and texture mapping. A
-		// modern-only capture leaves this false: RecordGeometry must prove that
-		// Anti_Alias never routes a structure through CPU pixels.
-		preview.DisableAntiAlias = true
-		fmt.Fprintln(os.Stderr, "nanolathe: shot model comparison: classic structure resolve disabled for native-scale geometry comparison")
-	}
+	// The comparison keeps the classic structure supersample: the model lane
+	// resolves every subject at 2× (docs/DESIGN_GPU_RENDERER.md §22), so the
+	// Enhanced classic image is the like-for-like reference; the departures
+	// left are the ALP table's palette-space rounding at edges and the lane's
+	// supersample of mobile subjects, which classic never anti-aliases.
 	if opts.ShotModelPose == "open" {
 		if !strings.EqualFold(definition.ObjectName, "armsolar") {
 			return fmt.Errorf("nanolathe: shot model: synthetic open pose is only defined for armsolar")
@@ -95,7 +93,7 @@ func runModelShot(opts Options, cs *contentSet) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "nanolathe: shot model route: gpu=%d skipped=%d shadows=%d shadows-omitted=%d reveal-outline-omitted=%d waterline-digger-omitted=%d staging-commands-omitted=%d staged-groups=%d composed-groups=%d supersampled=%d no-body=%d unsupported-geometry=%d face=%d missing-texture=%d\n", stats.GPU, stats.Skipped, stats.Shadows, stats.ShadowsOmitted, stats.RevealOrOutlineOmitted, stats.WaterlineOrDiggerOmitted, stats.StagingCommandsOmitted, stats.StagedGroups, stats.ComposedGroups, stats.Supersampled, stats.NoBody, stats.UnsupportedGeometry, stats.UnsupportedFace, stats.MissingTexture)
+	fmt.Fprintf(os.Stderr, "nanolathe: shot model route: gpu=%d skipped=%d shadows=%d shadows-omitted=%d no-body=%d lane-subjects=%d lane-shadows=%d lane-faces=%d lane-overflow=%d lane-pages=%d lane-rows=%d\n", stats.GPU, stats.Skipped, stats.Shadows, stats.ShadowsOmitted, stats.NoBody, stats.DirectSubjects, stats.DirectShadows, stats.DirectFaces, stats.DirectOverflow, stats.DirectPages, stats.DirectAtlasRows)
 	switch shotRenderer {
 	case "modern":
 		return encodeShotPNG(opts.Shot, modern)
@@ -235,8 +233,8 @@ func (g *modelShotGame) Draw(screen *ebiten.Image) {
 			return
 		}
 	}
-	g.gpu.Clear()
-	g.gpu.Fill(drawlist.Fill{Rect: drawlist.Rect{W: int32(g.w), H: int32(g.h)}, Index: g.record.Background, Style: drawlist.FillSolid})
+	// The record's list carries its own clear and background fill ahead of
+	// the model, so the capture replays exactly what the classic route does.
 	img := g.gpu.Execute(&g.record.List, g.w, g.h)
 	if img == nil {
 		g.err = fmt.Errorf("nanolathe: shot model: GPU executor returned no surface")

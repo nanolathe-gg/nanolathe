@@ -1,8 +1,6 @@
 package gpurender
 
 import (
-	"image/color"
-
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
@@ -27,11 +25,6 @@ type Renderer struct {
 	modelPrep      modelPrepScratch
 	tables         tables
 	displayPalette [256][4]byte
-	// displayPaletteGen counts the display palettes actually installed. The model
-	// slot page holds resolved colour since §17, so a persistent slot's pixels
-	// depend on it and its residency is keyed on this counter
-	// (docs/DESIGN_GPU_RENDERER.md §13.12).
-	displayPaletteGen uint64
 	// scene2D is the one opaque pass and sceneDest the one destination-compositing
 	// pass (§11.2 "One scene shader for the 2D families").
 	scene2D                   *ebiten.Shader
@@ -39,19 +32,6 @@ type Renderer struct {
 	markerShader              *ebiten.Shader
 	markerAtlases             [4]markerAtlasUpload
 	markerClock, markerWrites uint64 // resource reuse diagnostics only
-	// The model slot atlas rasterization passes. modelCommit and
-	// modelShadowCommit are compiled because the slot allocator gates a
-	// subject's shadow and body on them; the commits themselves ride the scene
-	// and destination shaders above.
-	modelKey          *ebiten.Shader
-	modelBody         *ebiten.Shader
-	modelCommit       *ebiten.Shader
-	modelShadowCommit *ebiten.Shader
-	modelClip         *ebiten.Shader
-	modelReveal       *ebiten.Shader
-	modelCopy         *ebiten.Shader
-	modelChild        *ebiten.Shader
-	modelResolve      *ebiten.Shader
 
 	// surfaces[0] is the true-colour composite the whole frame is drawn into and
 	// the image Execute returns: every source index is resolved through PAL as it
@@ -63,30 +43,10 @@ type Renderer struct {
 	// placeholder backs an image slot no op in a run requested, for the case
 	// where no palette (and so no table atlas) has been installed.
 	placeholder *ebiten.Image
-	// modelAtlas is the per-frame slot atlas every model subject rasterizes
-	// into before any of them commits (docs/DESIGN_GPU_RENDERER.md §11.2).
-	// modelGroups is the attached-unit staging atlas the frame's groups compose
-	// over together (model_stage.go); modelStage/modelStageScratch are the
-	// fallback pair a group the atlas could not serve composes over one at a
-	// time, grown to the largest such group seen and reused. modelOpts and
-	// modelStageOp are reused draw options, so a steady-state frame's model draws
-	// allocate no options value and no uniform map.
-	modelGroups                   modelStageAtlas
-	modelAtlas                    modelSlotAtlas
-	modelPageLimit                int
-	modelStage, modelStageScratch *ebiten.Image
-	modelStageW, modelStageH      int
-	modelOpts                     ebiten.DrawTrianglesShaderOptions
-	modelStageOp                  ebiten.DrawImageOptions
-	// modelFills are the one-texel sources the batched slot-region clears copy
-	// and modelFillOpts their reused options value (model_slots.go, §13.12).
-	modelFills    []modelFillTexel
-	modelFillOpts ebiten.DrawTrianglesOptions
-	// modelStageOut is the fallback group path's resolved plane: the group's
-	// composed index raster becomes colour here before it commits (§17).
-	modelStageOut *ebiten.Image
-	textureAtlas  modelTextureAtlas
-	w, h          int
+	// textureAtlas packs every resolved 3DO texture frame the model lane samples
+	// (model_atlas.go).
+	textureAtlas modelTextureAtlas
+	w, h         int
 	// worldW, worldH are the extent every family clips a world command against
 	// while the recorded world region is open: the RECORD extent, which is wider
 	// than the framebuffer whenever the live zoom factor is below the record
@@ -166,6 +126,10 @@ type Renderer struct {
 	// glow is the Enhanced glow layer of docs/DESIGN_GPU_RENDERER.md §19: the
 	// emissive batch, its planes and passes (glow.go).
 	glow glowLayer
+
+	// modelDirect is the PROTOTYPE direct model lane (model_direct.go): faces
+	// drawn straight onto the composite instead of through the slot stage.
+	modelDirect modelDirectLane
 }
 
 // surfaceUpload is one indexed-surface upload slot: the scene atlas region its
@@ -207,7 +171,6 @@ func (r *Renderer) SetDisplayPalette(p [256][4]byte) {
 	}
 	r.tables.setDisplayPalette(p)
 	r.displayPalette = p
-	r.displayPaletteGen++
 }
 
 // NewChecked is New but also returns the first shader compilation error. Each
@@ -241,15 +204,9 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 	compile(&r.scene2D, newScene2DShader)
 	compile(&r.sceneDest, newSceneDestShader)
 	compile(&r.markerShader, newMarkerShader)
-	compile(&r.modelKey, newModelKeyShader)
-	compile(&r.modelBody, newModelBodyShader)
-	compile(&r.modelCommit, newModelCommitShader)
-	compile(&r.modelShadowCommit, newModelShadowCommitShader)
-	compile(&r.modelClip, newModelClipShader)
-	compile(&r.modelReveal, newModelRevealShader)
-	compile(&r.modelCopy, newModelCopyShader)
-	compile(&r.modelChild, newModelChildShader)
-	compile(&r.modelResolve, newModelResolveShader)
+	if err := r.initModelDirect(); err != nil && firstErr == nil {
+		firstErr = err
+	}
 
 	if w > 0 && h > 0 {
 		r.ensureSize(w, h)
@@ -288,7 +245,7 @@ func (r *Renderer) Execute(list *drawlist.List, w, h int) *ebiten.Image {
 	if r.surfaces[0] == nil {
 		return nil
 	}
-	r.modelStats = ModelStats{UnsupportedFace: -1}
+	r.modelStats = ModelStats{}
 	r.submissionFrame++
 	defer func() {
 		if r.modelStats.SubmittedVertices > r.peakSubmissionStats.SubmittedVertices {
@@ -310,12 +267,11 @@ func (r *Renderer) Execute(list *drawlist.List, w, h int) *ebiten.Image {
 	// attached-unit groups then compose over the shared staging atlas, ordered by
 	// destination, so their cost is a fixed handful of passes rather than three
 	// per group (model_stage.go).
-	r.prepareModelSlots(list)
-	r.prepareModelGroups(list)
-	r.composeModelStage()
+	r.prepareModelDirect(list)
 	list.Replay(r)
 	// A list without an Expand marker still leaves no compiled work behind.
 	r.submitSchedule()
+	r.modelStats.DeviceDraws = r.frameDraws
 	return r.surfaces[0]
 }
 
@@ -327,11 +283,6 @@ func (r *Renderer) DeviceDraws() int {
 	}
 	return r.frameDraws
 }
-
-// index0Color is the model slot atlas key plane's cleared value: index 0 in the
-// red channel with opaque alpha, so premultiplied sampling recovers red exactly.
-// The model stage stays in index space (C-G4); only its commit resolves colour.
-var index0Color = color.RGBA{R: 0, G: 0, B: 0, A: 255}
 
 // Clear fills the composite with palette index 0 resolved through PAL — the
 // first command of every committed frame (C-G1). It rides the scene shader's

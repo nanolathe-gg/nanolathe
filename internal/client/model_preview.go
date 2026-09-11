@@ -172,17 +172,14 @@ func (r *ModelPreviewRenderer) recordModel(opts ModelPreviewOptions, geometryOnl
 		c.rgba = make([]byte, opts.Width*opts.Height*4)
 	}
 	// The preview records the model into c.list and replays it once, the same
-	// record-then-replay the committed frame uses (WU-1.8). Reset the list, point
-	// arena first, then paint the background directly: the
-	// model command carries no clear, so the replay composes the model over the
-	// background exactly as the former inline drawUnitModel did.
+	// record-then-replay the committed frame uses (WU-1.8). The list opens
+	// with a clear and the background fill, so either executor composes the
+	// model over the same background: a device capture that painted the
+	// background outside the list lost it to Execute's own frame reset.
 	c.list.Reset()
 	c.pointArena = c.pointArena[:0]
-	if !geometryOnly {
-		for i := range c.indexed {
-			c.indexed[i] = opts.Background
-		}
-	}
+	c.list.RecordClear()
+	c.list.RecordFill(drawlist.Fill{Rect: drawlist.Rect{W: int32(opts.Width), H: int32(opts.Height)}, Index: opts.Background, Style: drawlist.FillSolid})
 	// World position is chosen so modelAnchor lands on the image centre. Scale
 	// magnifies the ordinary orthographic game-camera projection without
 	// changing its angle or shear [03 §2.5][R-REN-03A §1].
