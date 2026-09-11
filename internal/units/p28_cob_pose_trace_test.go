@@ -37,7 +37,14 @@ func TestP28COB01RARMCKStrictBindingTrace(t *testing.T) {
 	}
 	u := &Unit{Def: def}
 	sim := rng.NewSimulation(1)
-	binding, err := BindCOBWithPortsAndVisibilityForUnit(fs, u, mdl, &sim, nil, nil)
+	var lifecycle []string
+	binding, err := BindCOBWithPortsAndVisibilityAndContextForUnit(fs, u, mdl, &sim, nil, nil, func(binding *cob.Binding) error {
+		// Observe completion before Create starts. A late sink can lose its
+		// return receipt when stock child work reuses the slot in one drain
+		// [R-P28-COB-01R]; that is not abnormal script termination.
+		binding.Callbacks.SetLifecycleSink(func(e cob.LifecycleEvent) { lifecycle = append(lifecycle, e.Name+":"+e.Phase) })
+		return nil
+	})
 	if err != nil {
 		t.Fatalf("strict bind ARMCK: %v", err)
 	}
@@ -81,39 +88,25 @@ func TestP28COB01RARMCKStrictBindingTrace(t *testing.T) {
 	if u.InBuildStance || u.Busy {
 		t.Fatalf("ARMCK post-delta-zero ports: stance=%t busy=%t", u.InBuildStance, u.Busy)
 	}
-	// The exact retail first committed pose remains Unknown. This diagnostic
-	// proves only that the current delta-zero route leaves Create work whose
+	// TODO(question): the exact retail first committed pose remains Unknown;
+	// the paired scenario/factory publication probe in [R-P28-COB-01R] would
+	// settle it. This diagnostic proves only that the current delta-zero
+	// route leaves Create work whose
 	// finish is observed by the next ordinary drain; an implementation must not
 	// force a piece pose to conceal that boundary [R-P28-COB-01R].
-	var lifecycle []string
-	binding.Callbacks.SetLifecycleSink(func(e cob.LifecycleEvent) { lifecycle = append(lifecycle, e.Name+":"+e.Phase) })
+	createIdentity := binding.VM.ThreadIdentity(0)
 	binding.Callbacks.Drain(1)
+	if binding.VM.ThreadIdentity(0) == createIdentity {
+		t.Fatal("stock child work did not reuse the completed Create slot")
+	}
 	binding.Callbacks.StartBuildingHeading(1234)
 	binding.Callbacks.Drain(1)
 	binding.Callbacks.StopBuilding()
 	binding.Callbacks.Drain(1)
-	wantLifecycle := []string{"Create:finish", "StartBuilding:start", "StartBuilding:finish", "StopBuilding:start", "StopBuilding:finish"}
-	// TODO(question): the four StartBuilding/StopBuilding phases match, but
-	// ARMCK's Create is observed as `Create:finish-abnormal` rather than
-	// `Create:finish`. The bridge's sweep of ended callbacks reports the
-	// abnormal phase for a slot that ended without the VM recording a RETURN
-	// for that identity — signalled, killed by an invalid opcode, or displaced
-	// by a slot reuse [04 §4.2][04 §4.3][04 §5.3]. Which of those the strict
-	// binder's D+wake barrier actually produces for a stock Create, and whether
-	// this expectation or the route is the wrong one, is untraced.
-	//
-	// It is untraced because until CL-4 this test never ran: it gated on
-	// $NANOLATHE_TA_ROOT alone, which neither tools/check (which clears both
-	// variables) nor tools/check-retail (which exports only
-	// $NANOLATHE_RETAIL_ASSETS) ever sets. Everything above this point now runs
-	// in the retail tier and passes — the strict piece map, the twelve ARMCK
-	// piece names and their model indices, the one-drain Create barrier, the
-	// post-delta-zero piece state and the two build-stance ports.
-	//
-	// What would settle it: a trace of the retail Create thread's termination
-	// for a stock builder, against [R-P28-COB-01R]. CL-4 is a test cleanup and
-	// does not get to guess which side is wrong.
+	// The early observer also sees the optional reload callback, absent from
+	// this stock script, that creation attempts after binding [04 R-CB-01 §4].
+	wantLifecycle := []string{"Create:start", "SetMaxReloadTime:start-failed", "Create:finish", "StartBuilding:start", "StartBuilding:finish", "StopBuilding:start", "StopBuilding:finish"}
 	if got := strings.Join(lifecycle, " "); got != strings.Join(wantLifecycle, " ") {
-		t.Skipf("TODO(question) [R-P28-COB-01R]: ARMCK lifecycle=%v want=%v; see the marker above", lifecycle, wantLifecycle)
+		t.Fatalf("ARMCK lifecycle=%v want=%v", lifecycle, wantLifecycle)
 	}
 }

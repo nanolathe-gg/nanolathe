@@ -183,11 +183,13 @@ func ApplyDragSelection(units []*SelectUnit, rect DragRect, additive bool, dirty
 		}
 		if next != old {
 			changed = true
-			if next {
-				u.Flags |= SelectionFlag
-			} else {
-				u.Flags &^= SelectionFlag
-			}
+		}
+		// Replacement pre-clears membership even when it remains selected.
+		// Restore the truth-table result unconditionally [07 §9].
+		if next {
+			u.Flags |= SelectionFlag
+		} else {
+			u.Flags &^= SelectionFlag
 		}
 		if u.Flags&SelectionFlag != 0 {
 			selectedCount++
@@ -232,11 +234,12 @@ func ApplyDragSelectionFlags(flags []uint32, xs, ys []int32, rect DragRect, addi
 		}
 		if next != old {
 			changed = true
-			if next {
-				flags[i] |= SelectionFlag
-			} else {
-				flags[i] &^= SelectionFlag
-			}
+		}
+		// The pre-clear cannot discard an inside unit that was already selected.
+		if next {
+			flags[i] |= SelectionFlag
+		} else {
+			flags[i] &^= SelectionFlag
 		}
 		if flags[i]&SelectionFlag != 0 {
 			selectedCount++

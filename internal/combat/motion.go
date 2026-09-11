@@ -52,8 +52,8 @@ const (
 	AdvancePhaseTransition
 )
 
-// CreationFamilyForWeapon returns the creation family for a weapon per
-// [06 §6.2] meteor → ballistic → vertical launch → LOS/self-propelled → dropped (C15).
+// CreationFamilyForWeapon is the projectile-event reconstruction ladder
+// [06 §6.2]. Live unit fire uses liveCreationFamilyForWeapon instead.
 func CreationFamilyForWeapon(w *content.WeaponDef) CreationFamily {
 	if w == nil {
 		return CreationNone
@@ -554,13 +554,21 @@ func InitMeteor(p *Projectile, w *content.WeaponDef, now uint32, pos, vel Vec3) 
 	// `Speed = 0` writes that stood here were writes retail does not make.
 }
 
-// InitProjectile dispatches creation and initializes p per [06 §6.2] C15.
+// InitProjectile reconstructs a projectile event using the event creator
+// ladder [06 §6.2] C15. Live unit fire carries its executor-selected family.
 // Returns the creation family used; nil weapon returns CreationNone.
 // slotDistance and gravity are the ballistic creator's two extra operands, and
 // dropperHeading/dropperSpeed are the dropped creator's two; each pair is
 // ignored by every other family [06 §6.4].
 func InitProjectile(p *Projectile, w *content.WeaponDef, now uint32, muzzle, target Vec3, targetUnit pool.Handle, yaw, pitch numeric.Angle, meteorVel *Vec3, slotDistance int32, gravity numeric.Fixed, dropperHeading numeric.Angle, dropperSpeed numeric.Fixed) CreationFamily {
 	fam := CreationFamilyForWeapon(w)
+	initProjectileFamily(fam, p, w, now, muzzle, target, targetUnit, yaw, pitch, meteorVel, slotDistance, gravity, dropperHeading, dropperSpeed)
+	return fam
+}
+
+// Carry the selected creator through initialization without reapplying the
+// reconstruction flag ladder to a live-fire selection [06 §6.2].
+func initProjectileFamily(fam CreationFamily, p *Projectile, w *content.WeaponDef, now uint32, muzzle, target Vec3, targetUnit pool.Handle, yaw, pitch numeric.Angle, meteorVel *Vec3, slotDistance int32, gravity numeric.Fixed, dropperHeading numeric.Angle, dropperSpeed numeric.Fixed) {
 	switch fam {
 	case CreationMeteor:
 		if meteorVel != nil {
@@ -578,7 +586,6 @@ func InitProjectile(p *Projectile, w *content.WeaponDef, now uint32, muzzle, tar
 		InitDropped(p, w, now, muzzle, target, targetUnit, dropperHeading, dropperSpeed)
 	default:
 	}
-	return fam
 }
 
 // AdvanceDirect advances a direct projectile one tick per [06 §6.3] [06 §7.2] [06 §7.3] C16.

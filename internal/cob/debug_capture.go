@@ -78,6 +78,9 @@ type DebugCallbacks struct {
 	Pending         [8]DebugPendingCallback
 }
 type DebugPendingCallback struct {
+	// Recorded preserves historical bridge bookkeeping; Active additionally
+	// requires the same allocation to still be live in the VM [04 §4.2].
+	Recorded bool
 	Active   bool
 	Name     string
 	Mode     CallbackMode
@@ -90,7 +93,12 @@ func (b *CallbackBridge) DebugSnapshot() *DebugCallbacks {
 	}
 	d := &DebugCallbacks{CreateInvoked: b.createInvoked, LifecycleTick: b.lifecycleTick, LifecycleSource: b.lifecycleSrc}
 	for i, p := range b.lifecyclePending {
-		d.Pending[i] = DebugPendingCallback{p.active, p.name, p.mode, p.identity}
+		// Ordinary session drains use the VM directly, so a receiver-less
+		// callback can leave stale bridge bookkeeping after it returns. Inspect
+		// allocation liveness without collecting returns or emitting events.
+		d.Pending[i] = DebugPendingCallback{Recorded: p.active,
+			Active: p.active && b.VM.ThreadAliveAs(i, p.identity),
+			Name:   p.name, Mode: p.mode, Identity: p.identity}
 	}
 	return d
 }

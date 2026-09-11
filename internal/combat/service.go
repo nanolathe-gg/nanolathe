@@ -108,12 +108,10 @@ type UnitStepSummary struct {
 }
 
 type slotPrep struct {
-	needLatch    bool
-	needResult   bool
-	weapon       *content.WeaponDef
-	tgtPos       Vec3
-	desiredYaw   uint16
-	desiredPitch uint16
+	needLatch  bool
+	needResult bool
+	weapon     *content.WeaponDef
+	tgtPos     Vec3
 }
 
 // retailYawFromGo converts this build's absolute yaw into retail's.
@@ -239,7 +237,6 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		if slot == nil || !slot.IsPopulated() || !slot.IsEnabled() {
 			continue
 		}
-		var pre *slotPrep
 		// The slot visit's first step: decrement a nonzero signed-16 reload countdown.
 		// It happens for every populated slot, before the target is resolved
 		// and before any later gate can skip the visit, so a weapon that is
@@ -297,132 +294,62 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		} else {
 			tgtPos = Vec3{X: slot.Target.X, Y: PointTargetHeight(terrain, slot.Target.X, slot.Target.Z), Z: slot.Target.Z}
 		}
-		// Executor selection is a ladder, not a combination of family flags.
-		// A vertical launcher has no aim-time geometry: it dispatches zero
-		// arguments, and a stockpile launcher requires a nonzero ammunition
-		// byte before it starts that callback [06 §3.3]. Turret wins when both
-		// flags are authored.
-		if !weapon.Turret && weapon.VLaunch {
-			pre = &slotPrep{weapon: weapon, tgtPos: tgtPos, needResult: true}
-			if !slot.Aim.IssueBit && (!weapon.Stockpile || slot.Ammo != 0) {
-				s.dispatchSlotAim(u, slot, idx, tick, bridge, 0, 0, &sum)
-			}
-			s.firePreparedSlot(u, slot, idx, pre, tick, terrain, econ, simRNG, w, catalog, &sum)
+		// Executor selection follows the live slot ladder, independently of
+		// event reconstruction and active projectile motion [06 §3.3][06 §6.2].
+		if !hasLiveWeaponExecutor(weapon) {
 			continue
 		}
-		// The AIM ORIGIN: the `AimFrom[k]` query seeded −1, falling back to
-		// `Query[k]` seeded 0 only on the −1 sentinel [06 §3.4][R-P0-07]. It
-		// is the point the yaw and pitch are solved FROM [06 §3.3], and it is
-		// not the muzzle: the fire-time executors spawn the projectile from
-		// the forced `Query[k]` piece alone [06 §4.1], which tryFireForSlot
-		// queries afresh, so the result here stays local and never lands in
-		// the slot's MuzzlePiece word. Storing it there — which this site
-		// used to do — made every weapon spawn at its aim-origin piece (a
-		// Peewee's shoulder, a tank's turret) instead of its barrel flare.
-		//
-		// The seed distinction is load-bearing [R-P0-07]: with a script but
-		// neither entry the piece is 0, the root, and the locator answers
-		// the root's composed offset. Only a unit with no script at all
-		// takes the bare-position path.
-		aimPiece := int32(-1)
-		if bridge != nil {
-			aimPiece = bridge.AimPiece(cob.WeaponSlot(idx)).QueryValue()
-		}
-		muzzlePos, muzzleOK := muzzleWorldPosResolved(u, aimPiece)
-		if !muzzleOK {
-			continue // no binding to compose through; a synthetic fixture
-		}
-		dx := tgtPos.X.Sub(muzzlePos.X)
-		dy := tgtPos.Y.Sub(muzzlePos.Y)
-		dz := tgtPos.Z.Sub(muzzlePos.Z)
-		var desiredYaw uint16
-		var desiredPitch uint16
-		if weapon.Ballistic {
-			var grav numeric.Fixed
-			if terrain != nil {
-				grav = terrain.Gravity
-			}
-			vel := numeric.Fixed(int64(weapon.WeaponVelocity))
-			pitch, ok := BallisticSolve(dx, dy, dz, vel, grav, weapon.MinBarrelAngle)
-			if !ok {
-				slot.DesiredYaw = aimYawForScript(uint16(YawFromDelta(dx, dz)), u.Move.Heading)
-				slot.DesiredPitch = 0x8000
-				if weapon.Turret {
+		needLatch, needResult := aimRequirement(weapon)
+		pre := &slotPrep{weapon: weapon, tgtPos: tgtPos, needLatch: needLatch, needResult: needResult}
+		switch {
+		case weapon.Turret:
+			if !slot.Aim.IssueBit && (weapon.Ballistic || weapon.LineOfSight) {
+				yaw, pitch, ok := turretAimGeometry(u, weapon, idx, bridge, tgtPos, terrain)
+				if !ok {
+					slot.DesiredYaw, slot.DesiredPitch = yaw, 0x8000
 					u.Pending |= units.PendingCouldNotFire
 					slot.Aim.IssueBit = false
 					slot.Flags &^= units.SlotFlagAimLatch
+					continue
 				}
-				continue
+				slot.DesiredYaw, slot.DesiredPitch = yaw, pitch
+				s.dispatchSlotAim(u, slot, idx, tick, bridge, yaw, pitch, &sum)
 			}
-			// The aim-time solve runs from the AimFrom/Query muzzle piece
-			// [06 §3.3]; the shot-time gate's own ballistic clause re-solves
-			// from the SHOOTER's position [06 R-WPN-05 §9] clause 3, so its
-			// result is not cached here.
-			desiredPitch = pitch
-			desiredYaw = uint16(YawFromDelta(dx, dz))
-		} else {
-			desiredYaw = uint16(YawFromDelta(dx, dz))
-			desiredPitch = uint16(PitchFromDelta(dx, dy, dz))
+		case weapon.VLaunch:
+			if !slot.Aim.IssueBit && (!weapon.Stockpile || slot.Ammo != 0) {
+				s.dispatchSlotAim(u, slot, idx, tick, bridge, 0, 0, &sum)
+			}
 		}
-		// The convention marker that used to stand here is retired by
-		// [06 R-WPN-05 §4], which settles both halves it could not reconcile.
-		// Retail's bearing IS atan2q(muzzle - target), and retail's yaw
-		// denotes the direction (-sin a, -cos a), so the two negations cancel
-		// and the bearing points from the muzzle toward the target — the same
-		// direction our target-minus-muzzle solve produces. What differs is
-		// only the numbering: this build builds velocity from +sin/+cos, so
-		// its absolute yaw is exactly half a turn from retail's
-		// (atan2(-x, -z) = atan2(x, z) + 0x8000). Projectiles fly correctly
-		// because both sign flips cancel; every value shared with a
-		// retail-authored script, or compared against a unit heading (which
-		// this build already carries in retail's convention, -sin/-cos
-		// [04 R-MOV-01 §4]), must carry the shift. See retailYawFromGo and
-		// aimYawForScript below.
-		needLatch, needResult := aimRequirement(weapon)
-		suppress := weapon.Ballistic && desiredPitch == 0x8000
-		if suppress && weapon.Turret {
-			// The turret executor's aim geometry yielded no solution: raise
-			// "could not fire" and clear the Aim latch [06 R-WPN-05 §6].
-			// Nothing here reads the bit back — it is the attack handlers'
-			// disengage trigger.
-			u.Pending |= units.PendingCouldNotFire
-			slot.Aim.IssueBit = false
-			slot.Flags &^= units.SlotFlagAimLatch
-		}
-		// The turret executor writes the solved angles into the slot only when
-		// it dispatches Aim, i.e. only while the Aim-request latch is clear
-		// [06 §3.3]. Those stored angles are what the drift gate later measures
-		// the freshly re-solved pair against, so it reads how far the target
-		// has moved in angle since the Aim request went out [06 R-WPN-03 §2] —
-		// rewriting them every visit would make the gate compare a value with
-		// itself and pass unconditionally. Every other executor writes the
-		// absolute angles at fire time instead, which the per-visit write here
-		// reproduces.
-		//
-		// What is stored is the RELATIVE yaw — the same value handed to Aim* —
-		// and the ABSOLUTE pitch, which is what the save persists
-		// [06 R-WPN-05 §4] [08 R-SAVE-WEAPON-01]. Both halves of the drift
-		// comparison are then relative, so its error carries however far the
-		// hull turned while the Aim was outstanding; storing the absolute
-		// bearing and comparing absolute against absolute loses that term.
-		// Slots retain retail-numbered yaw. Projectile creation crosses to this
-		// implementation's convention at its input boundary [06 R-WPN-05 §11].
-		storedYaw := retailYawFromGo(desiredYaw)
-		if weapon.Turret {
-			storedYaw = aimYawForScript(desiredYaw, u.Move.Heading)
-		}
-		canDispatch := weapon.Ballistic || weapon.LineOfSight
-		if !weapon.Turret || (!slot.Aim.IssueBit && canDispatch) {
-			slot.DesiredYaw = storedYaw
-			slot.DesiredPitch = desiredPitch
-		}
-		pre = &slotPrep{weapon: weapon, tgtPos: tgtPos, desiredYaw: desiredYaw, desiredPitch: desiredPitch, needLatch: needLatch, needResult: needResult}
-		if needResult && canDispatch && !suppress && !slot.Aim.IssueBit {
-			s.dispatchSlotAim(u, slot, idx, tick, bridge, storedYaw, desiredPitch, &sum)
-		}
+		// Fixed and dropped executors have no aim-time piece query. The forced
+		// muzzle query belongs inside their admitted fire attempt [06 R-P0-07].
 		s.firePreparedSlot(u, slot, idx, pre, tick, terrain, econ, simRNG, w, catalog, &sum)
 	}
 	return sum
+}
+
+// turretAimGeometry queries the aim origin only at a fresh Aim dispatch or
+// inside an admitted, ready turret executor [06 R-P0-07]. Its yaw is relative
+// to the live hull heading on both sides of the drift comparison [06 R-WPN-05 §4].
+func turretAimGeometry(u *units.Unit, weapon *content.WeaponDef, idx int, bridge *cob.CallbackBridge, target Vec3, terrain *world.Terrain) (yaw, pitch uint16, ok bool) {
+	piece := int32(-1)
+	if bridge != nil {
+		piece = bridge.AimPiece(cob.WeaponSlot(idx)).QueryValue()
+	}
+	origin, resolved := muzzleWorldPosResolved(u, piece)
+	if !resolved {
+		return 0, 0x8000, false
+	}
+	dx, dy, dz := target.X.Sub(origin.X), target.Y.Sub(origin.Y), target.Z.Sub(origin.Z)
+	yaw = aimYawForScript(uint16(YawFromDelta(dx, dz)), u.Move.Heading)
+	if weapon.Ballistic {
+		var gravity numeric.Fixed
+		if terrain != nil {
+			gravity = terrain.Gravity
+		}
+		pitch, ok = BallisticSolve(dx, dy, dz, numeric.Fixed(weapon.WeaponVelocity), gravity, weapon.MinBarrelAngle)
+		return yaw, pitch, ok
+	}
+	return yaw, uint16(PitchFromDelta(dx, dy, dz)), true
 }
 
 // dispatchSlotAim installs a fresh receiver without advancing the VM [06 §3.3].
@@ -464,7 +391,7 @@ func (s *Service) firePreparedSlot(u *units.Unit, slot *units.Slot, idx int, pre
 		return
 	}
 	key := pendingKey{Unit: u.Handle, Slot: idx}
-	if _, ok := s.pendingAims[key]; ok || (pre.needLatch && !slot.Aim.IssueBit) || (pre.needResult && !slot.Aim.Ready) || slot.Reload != 0 {
+	if slot.Reload != 0 {
 		return
 	}
 	weapon := pre.weapon
@@ -483,21 +410,21 @@ func (s *Service) firePreparedSlot(u *units.Unit, slot *units.Slot, idx int, pre
 			return
 		}
 	}
-	switch {
-	case weapon.Turret:
-		want := aimYawForScript(pre.desiredYaw, u.Move.Heading)
-		if !DriftGatePass(weapon, unitStationary(u), slot.DesiredYaw, want, slot.DesiredPitch, pre.desiredPitch) {
+	// Physical admission and cost/ammunition checks precede the executor's
+	// readiness test, so a pending Aim cannot suppress failed-shot feedback
+	// from the outer gate [06 R-P0-07][06 R-WPN-05 §6].
+	if (pre.needLatch && !slot.Aim.IssueBit) || (pre.needResult && !slot.Aim.Ready) {
+		return
+	}
+	if weapon.Turret {
+		yaw, pitch, ok := turretAimGeometry(u, weapon, idx, s.callbackBridgeForUnit(u), pre.tgtPos, terrain)
+		if !ok || !DriftGatePass(weapon, unitStationary(u), slot.DesiredYaw, yaw, slot.DesiredPitch, pitch) {
+			if !ok {
+				u.Pending |= units.PendingCouldNotFire
+			}
 			slot.Aim.IssueBit = false
 			slot.Flags &^= units.SlotFlagAimLatch
-			if s.pendingAims != nil {
-				delete(s.pendingAims, key)
-			}
-			return
-		}
-	case weapon.VLaunch:
-		// Vertical launch has no drift gate, even with lower-precedence flags.
-	case weapon.LineOfSight || weapon.SelfProp:
-		if !DriftGatePass(weapon, unitStationary(u), slot.DesiredYaw, u.Move.Heading, pre.desiredPitch, u.Move.Pitch) {
+			delete(s.pendingAims, key)
 			return
 		}
 	}

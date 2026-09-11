@@ -183,8 +183,12 @@ type Client struct {
 	// World / camera for Gate 1 terrain viewer [PLAN_04A]. When set, Frame
 	// draws real TNT terrain instead of the placeholder gradient.
 	terrain *world.Terrain
-	cam     *camera.Camera
-	fnt     *formats.FNT
+	// terrainGeneration lets the host retire source caches after a battle
+	// transition without keeping the old world alive through a cache key
+	// (DESIGN_GPU_RENDERER §14.3). It is presentation bookkeeping only.
+	terrainGeneration uint64
+	cam               *camera.Camera
+	fnt               *formats.FNT
 	// messageFNT is the primary COMIX face selected by the later message pass;
 	// the group-digit walk retains the side font in fnt [07 R-HUD-03 §14.4]
 	// [03 R-FX-01 §6A].
@@ -539,6 +543,7 @@ func (c *Client) SetTerrain(t *world.Terrain) {
 		c.pausedWorldRevision++
 	}
 	if c != nil && c.terrain != t {
+		c.terrainGeneration++
 		c.resetFogCache()
 		c.resetTrails()
 		c.terrain = t
@@ -546,6 +551,16 @@ func (c *Client) SetTerrain(t *world.Terrain) {
 			c.SetDetailArt(nil)
 		}
 	}
+}
+
+// TerrainGeneration changes when SetTerrain replaces or clears the world.
+// The host reads it after joining the recording worker, before reusing any
+// source caches; repeated installation of the same world leaves it unchanged.
+func (c *Client) TerrainGeneration() uint64 {
+	if c == nil {
+		return 0
+	}
+	return c.terrainGeneration
 }
 
 // SetCamera sets the camera for Gate 1 pan [07 §10].

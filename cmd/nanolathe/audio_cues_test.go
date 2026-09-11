@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/audio"
@@ -204,10 +203,7 @@ func TestUnitCompleteStatusReachesBackend(t *testing.T) {
 	}
 	cl.SetTerrain(b.sess.World)
 	cl.SetCamera(b.cam)
-	attachBattleAudio(cl, b.sess, nil)
-	if _, err := b.sess.Audio.Cache.Put("unitcomplete1", bytes.Repeat([]byte{0x80}, 64)); err != nil {
-		t.Fatalf("authoring the unitcomplete1 sample: %v", err)
-	}
+	attachBattleAudio(cl, b.sess, authoredVoiceFS(t, "unitcomplete1"))
 
 	// Clear the opening thirty-frame window on an empty queue [03 §8.3].
 	for i := int32(1); i <= drainWindowFrames+1; i++ {

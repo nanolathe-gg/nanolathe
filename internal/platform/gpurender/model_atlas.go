@@ -7,7 +7,8 @@ import (
 
 // modelTextureAtlas packs every resolved 3DO texture frame into shared pages, so
 // one batched body pass can carry faces of many subjects and many textures
-// (C-G9). Frames are packed once per identity and reused for their lifetime.
+// (C-G9). Frames are packed once per identity and reused until ResetSources
+// retires the terrain generation.
 type modelTextureSlot struct {
 	img        *ebiten.Image
 	x, y, w, h int

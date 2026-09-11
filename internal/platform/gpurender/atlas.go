@@ -23,8 +23,8 @@ import (
 // Placement is a shelf packer: entries are laid left to right on a row whose
 // height is the tallest entry so far, and a row that cannot take the next entry
 // starts a new one. Entries are never freed — an entry is keyed by the immutable
-// source's pointer identity and lives for the renderer's lifetime — so the packer
-// needs no free list. An entry too large for a shared page gets a page of its
+// source's pointer identity and lives until ResetSources retires the terrain
+// generation — so the packer needs no within-generation free list. An entry too large for a shared page gets a page of its
 // own; the scene batch then splits at that command, which is the same rule a
 // second shared page follows.
 

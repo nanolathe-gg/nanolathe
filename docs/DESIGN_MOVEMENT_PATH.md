@@ -544,9 +544,11 @@ X/Z pairs. This is the explicit-layout exception [I13] `[04 §7.3]`.
 for excess indices and reads adjacent fields at a zero count. Callers gate on
 the active bit themselves `[04 §7.3]`.
 
-**C18 — lazy revalidation.** A dynamic blocker bumps a revision counter. Heap
-entries are **not** purged eagerly; passability is rechecked lazily when each
-entry is opened at expansion `[04 §7.4]`.
+**C18 — first-open layer admission.** Untouched neighbors probe the current
+class layer. Opening preserves the ray and terminal flags; already-open nodes
+relax with their stored terrain term. Popping tests the terminal flag before
+writing the closed state, and never probes passability again. Layer changes
+do not remove existing heap entries `[04 R-PATH-01 §1]` `[04 §7.4]`.
 
 **C19 — there is no smoothing pass.** The earlier contract described collinear
 removal and a two-directional shortcut ray. It is withdrawn: reconstruction
@@ -797,8 +799,8 @@ this wiring can be asserted without inventing a public kind on `Goal`.
   watermark is armed at `max(tick, 30) − 30`, recently committed mobile
   footprints are re-stamped, and the occupant-age gate lets a recent occupant
   through while making an older one block its re-stamped cells. Existing heap
-  entries are not purged; expansion rechecks passability lazily (C18). The
-  scheduler and the expansion receive no blocker identity, velocity or projected
+  entries retain their admission; expansion probes untouched neighbors against
+  the current layer on first opening (C18). The scheduler and the expansion receive no blocker identity, velocity or projected
   destination, and the collision commit never submits a replan. The follower
   requests one through its separate 60-tick poll. Mover-versus-mover
   contention is authoritative at commit through the row-major validator, the
@@ -878,23 +880,15 @@ waterline of zero `[04 R-MOV-01 §5b]` `[04 R-MOV-01 §5c]` `[04 §9.1]` [I2].
 
 ## 7. Not implemented and open
 
-The code retains the following `TODO(question)` markers. Each names the
-current behavior and the evidence needed before changing it:
+The three implementation questions previously listed here are closed by
+static trace. Search preserves flags on open and performs no pop-time
+passability recheck (C18). Ground steering now publishes its signed heading
+step to the collision record before callback classification and save; flight
+already uses that publication boundary `[04 R-MOV-01 §6]`. The code-3
+velocity marker's auxiliary and trailing words remain opaque save state with
+no movement consumer in the traced methods `[04 R-AIR-01 §14.5]`.
 
-* `internal/path/search.go`: opening a cell replaces its status byte and drops
-  the ray-visited bit. Trace the open write and the pop-time blocked re-test to
-  decide whether that bit must survive `[04 R-PATH-01 §1]`.
-* `internal/movement/retail_restore.go`: the code-3 air-velocity marker retains
-  its auxiliary and padding words without assigning new runtime meanings.
-  Trace their constructor, save and execution readers before interpreting them
-  `[08 R-SAVE-02 §8]` [04 "Missing and unknown"].
-* `internal/movement/integrate.go`: callback classification reads the collision
-  record's turn residual, which currently has no live steering update. Trace
-  the ground and flight writers through the callback boundary before choosing
-  the correct maintained residual; the current zero/restored value remains an
-  implementation gap `[04 §5.2]` `[04 R-MOV-01 §6]`.
-
-The contracts also carry these questions, each with its settling observation.
+The contracts retain these questions, each with its settling observation.
 
 * Which order types can produce an out-of-bounds goal. The search's own
   behaviour is established — an out-of-bounds start is a `0x200` reject and an

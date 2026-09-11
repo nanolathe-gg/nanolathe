@@ -124,12 +124,16 @@ func TestUnitReclaimApproachEventOutcomes(t *testing.T) {
 func TestUnitReclaimDoesNotRepeatSecondaryPump(t *testing.T) {
 	s, b, _, _ := reclaimFixture(t, 100, 10)
 	q := orders.QueueForUnit(b)
-	q.PushSecondary(orders.Lookup("Wait"), orders.Node{Owner: b.Handle, Param1: 0, Deadline: -1})
+	q.PushSecondary(orders.Lookup("SelfDestruct"), orders.Node{Owner: b.Handle, Deadline: -1})
 	q.Pump(b, 0)
 	if q.LenSecondary() != 1 || q.Secondary()[0].Phase != 1 {
-		t.Fatal("secondary wait did not advance once")
+		t.Fatal("secondary countdown did not arm its first wait")
 	}
-	s.StepUnit(TickContext{Tick: 0}, b.Handle)
+	// Make the existing countdown due so its gate cannot conceal an extra
+	// rear-segment walk. Construction owns only the primary work window
+	// [04 R-ORD-01 §10]; SelfDestruct's next visit is due after thirty ticks
+	// [04 R-SPEC-01 §13].
+	s.StepUnit(TickContext{Tick: 30}, b.Handle)
 	if q.LenSecondary() != 1 || q.Secondary()[0].Phase != 1 {
 		t.Fatal("construction repeated the secondary pump")
 	}

@@ -30,6 +30,39 @@ func categoryFixture() *Category {
 	return c
 }
 
+func TestBattleResetDropsUnitReferencesAndPreservesPreferencesAndHooks(t *testing.T) {
+	q := NewQueue()
+	q.Register(1, &Category{}, "previous unit", true)
+	q.SetResolver(func(pool.Handle) (*Category, string, bool) {
+		t.Fatal("previous battle resolver survived reset")
+		return nil, "", false
+	})
+	q.Configure(50, 50, true, true)
+	q.ConfigureBackendGates(0, 0x47, true)
+	var plays, captions int
+	q.OnPlay(func(string, Slot, pool.Handle) { plays++ })
+	q.OnCaption(func(string, Slot, pool.Handle) { captions++ })
+	q.resetBattle()
+	if q.resolver != nil || len(q.categories) != 0 || len(q.unitNames) != 0 || len(q.alive) != 0 || len(q.chatEnabled) != 0 {
+		t.Fatal("battle reset retained old unit references")
+	}
+	cat := &Category{}
+	cat.Rows[SlotUnderAttack].Variants = []string{"attack"}
+	q.Register(1, cat, "new unit", true)
+	q.InsertAt(30, SlotUnderAttack, 1, "")
+	q.Drain(30)
+	if plays != 0 || captions != 1 {
+		t.Fatalf("reset lost mute preference or caption hook: plays=%d captions=%d", plays, captions)
+	}
+	q.ConfigureBackendGates(1, 0x47, true)
+	// Under-attack rearms at 30 + 20*30, including when muted [03 §8.3].
+	q.InsertAt(630, SlotUnderAttack, 1, "")
+	q.Drain(630)
+	if plays != 1 || captions != 2 {
+		t.Fatalf("reset lost playback hook: plays=%d captions=%d", plays, captions)
+	}
+}
+
 func TestSlotTableStatic(t *testing.T) {
 	want := [24]slotInfo{
 		0:  {"", "", 0, 0},

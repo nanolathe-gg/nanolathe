@@ -54,6 +54,23 @@ That gives the boundary its shape, and the shape is a one-way valve.
   session's features and strips exist and immutable thereafter; the client keeps
   only its pixel cache, walking the identical `max(delay, 1)` cadence so the
   frame the simulation timed a record from is the frame painted for it.
+
+  Battle installation prewarms event pixels through
+  `Client.WarmBattleFeatureSequences`. Its roots are the composed terrain's
+  entire feature-definition table, including mission and restored admissions,
+  plus every catalog unit's corpse. A growing walk follows dead, reclaimed and
+  burnt successors, including definitions with no art and cycles. This covers
+  later corpse placement, transitions and reproduction (which retains its
+  parent's definition); it never depends on the camera, current unit census or
+  build restrictions. This is a Nanolathe presentation loading policy: the
+  full authoritative `content.SimArt` table and feature admission order remain
+  unchanged. Event body/shadow hits and misses are ready before drawing. Banks
+  named by reachable rest/shadow art are also loaded before drawing: an
+  unrelated event may previously have loaded one incidentally, and narrowing
+  must not move that decode into Draw. A requested bank still materializes all
+  its entries. Any new runtime producer that can introduce an
+  unrelated feature definition must extend the setup roots before using this
+  warm policy.
 * **Nothing here touches the simulation RNG.** Presentation randomness — the
   segmented-projectile jitter of render type 7, the audio variant pick and the
   music chooser — draws from private CRT copies taken when their owners bind.
@@ -164,6 +181,12 @@ activate a menu default or submit chat. Observed fullscreen changes, including
 native window controls, update only the saved fullscreen preference; they do
 not save pending options edits. While fullscreen the
 adapter continues tracking the selected window size for restoration on exit.
+The native green fullscreen button is enabled on macOS with fullscreen-only
+resizing. Windows/Linux enable window resizing to expose native maximize;
+maximizing fills the desktop work area, while Alt+Enter enters fullscreen.
+Manual resizing scales the selected logical canvas with aspect preserved and
+does not change the saved resolution. The adapter only reapplies host size
+when the selected resolution changes.
 On macOS, fullscreen entered through the native green window button must be
 exited through the native control; Ebitengine cannot toggle that mode itself.
 
@@ -751,6 +774,10 @@ document carries them.
   There is **no eviction at all** — one decoded blob per alias, retained for the
   life of the session; the 255-alias cap is the registry's, not a cache size
   `[03 §8.2]` `[02 "Sound aliases"]` `[fmt wav]`.
+  Registered aliases and mode-1 voice filenames have separate caches: the
+  same name may designate different files in those two paths. Mode-2 stream
+  opens read the exact resource path anew and never use an alias-cache hit
+  `[03 R-AUD-01 §1]` `[03 R-AUD-02 §1]`.
   `RegisteredOutput` is an optional presentation extension of `Output` for
   those mode-0 registered aliases: `PlayRegisteredSample(*Sample, volume,
   pan)` may reuse sample-owned, canonical stereo float32 PCM at its output
@@ -855,6 +882,19 @@ the published offset to the camera.
   likewise stays in its front-end lifetime and never supplies a battle seed.
   DESIGN_RUNTIME_DETERMINISM §5 owns the complete approved divergence from
   retail's shared main-thread history [I4] [I6].
+* **Battle cue state has a session lifetime.** The shell keeps one audio
+  service across briefing, battles and save adoption. `Session.InitAudio`
+  resets that service's pending category cues, unit references, drain base,
+  per-slot deadlines and committed-event deduplication on a new service
+  binding, then binds the new resolver and private CRT copies. Repeating
+  initialization for the same session/service preserves its queue, cooldowns
+  and random history. Fresh and restored battles have new session objects;
+  assigning the shell service to a detached candidate does not reset it.
+  The successful presentation adoption performs the binding. Sample caches,
+  aliases, preferences, music and playback hooks retain their service lifetime.
+  This is Nanolathe host ownership policy for independent session tick domains,
+  not a claim about retail teardown. The queue still starts at base zero and
+  uses the unchanged 30-tick drain window and slot cooldowns `[03 §8.3]`.
 * **A missing art bank is not fatal.** Retail treats an unresolvable animation
   bank as fatal: a modal message box naming the constructed path, then exit. A
   presentation client cannot do that to a running battle, so an unresolvable

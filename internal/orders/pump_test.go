@@ -619,6 +619,7 @@ func TestSecondarySkipsNotDue(t *testing.T) {
 	called := 0
 	restore := setHandler(buildID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 		called++
+		n.DynamicGate = 1 // the reload skips the newly armed hold [04 R-ORD-01 §10]
 		return Code(2)
 	})
 	defer restore()
@@ -679,6 +680,7 @@ func TestBlockedFrontDoesNotSkipSecondary(t *testing.T) {
 	secondaryCalled := false
 	restore2 := setHandler(buildID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 		secondaryCalled = true
+		n.DynamicGate = 1 // an armed hold is skipped on the rear-head reload [04 R-ORD-01 §10]
 		return Code(2)
 	})
 	defer restore2()
@@ -1132,6 +1134,10 @@ func TestSecondaryPumpDeliversEmptySatisfiedSet(t *testing.T) {
 	var got []uint32
 	restore := setHandler(buildID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 		got = append(got, s)
+		if n.DynamicGate != 0 {
+			t.Fatal("gate must clear before dispatch")
+		}
+		n.DynamicGate = 1 // re-arm after observing dispatch [04 R-ORD-01 §10]
 		return 2
 	})
 	defer restore()
@@ -1153,8 +1159,8 @@ func TestSecondaryPumpDeliversEmptySatisfiedSet(t *testing.T) {
 	if due.Satisfied != 0x1 {
 		t.Fatalf("record satisfied word read/cleared to %x, want untouched", due.Satisfied)
 	}
-	if due.Deadline != -1 || due.DynamicGate != 0 {
-		t.Fatalf("deadline %d gate %x, want deadline cleared and gate cleared", due.Deadline, due.DynamicGate)
+	if due.Deadline != -1 || due.DynamicGate != 1 {
+		t.Fatalf("deadline %d gate %x, want deadline cleared and handler gate retained", due.Deadline, due.DynamicGate)
 	}
 
 	// The -1 sentinel reads not-due under the unsigned compare. SelfDestruct
@@ -1166,6 +1172,10 @@ func TestSecondaryPumpDeliversEmptySatisfiedSet(t *testing.T) {
 	}
 	restoreSelf := setHandler(selfID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
 		got = append(got, s)
+		if n.DynamicGate != 0 {
+			t.Fatal("gate must clear before dispatch")
+		}
+		n.DynamicGate = 1 // re-arm after observing dispatch [04 R-ORD-01 §10]
 		return 2
 	})
 	defer restoreSelf()

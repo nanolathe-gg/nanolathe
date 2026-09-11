@@ -3,6 +3,7 @@ package ebitenapp
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"sync/atomic"
 	"time"
 
@@ -52,8 +53,9 @@ type app struct {
 	// executor, built lazily on the first modern Draw so its device textures and
 	// offscreen never exist in a classic run. Both live here, off the client
 	// (docs/DESIGN_GPU_RENDERER.md §2.4).
-	mode RendererMode
-	gpu  *gpurender.Renderer
+	mode             RendererMode
+	gpu              *gpurender.Renderer
+	sourceGeneration uint64
 	// rendererToggles is the client's executor-swap request count this adapter
 	// has already acted on. Update compares it with the client's own count, so
 	// one F10 press swaps once (docs/DESIGN_GPU_RENDERER.md §14.6).
@@ -181,6 +183,7 @@ func (a *app) updateBody() {
 	applyInput(a.c.Input(), sample)
 	a.c.SetFocused(ebiten.IsFocused())
 	a.stepClient()
+	a.syncRendererSources()
 	a.syncWindowSize()
 	a.syncPointerCapture()
 	a.serviceRendererRequest()
@@ -217,6 +220,8 @@ func (a *app) serviceRendererRequest() {
 		return
 	}
 	a.rendererToggles = requested
+	a.c.CancelPreRecord()
+	a.pipe.armed = false
 	if a.mode == RendererModern {
 		a.mode = RendererClassic
 		a.c.SetInterpolation(false)
@@ -274,6 +279,7 @@ func (a *app) scaledInputNow() uint32 {
 // Draw presents one composed frame. The image is recreated only when the
 // logical size changes; WritePixels replaces its contents wholesale.
 func (a *app) Draw(screen *ebiten.Image) {
+	a.beginDraw()
 	width, height := a.c.Size()
 	// Enhanced presents on every Draw — that is the whole of the refresh-rate
 	// cadence — so it does not consume the update's pending flag; the blended
@@ -380,14 +386,50 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 	// The next Draw sits one present period after this one began; the tick
 	// fraction was sampled at sampledAt, which is later than this Draw's start
 	// when an update body ran in between.
-	if !a.exitPending && !a.c.PresentationPaused() && period > 0 {
+	a.launchPreRecord(now, sampledAt, period, tick16)
+	a.pipe.observeTick(sampledAt, tick16)
+}
+
+// beginDraw is shared by both executors: an F10 transition can happen in the
+// preceding modern Draw tail, before the next Update has a chance to join.
+func (a *app) beginDraw() {
+	a.c.JoinPreRecord()
+	a.syncRendererSources()
+	if a.mode == RendererClassic {
+		// Joining alone leaves a speculative CRT snapshot pending; discard before
+		// classic advances presentation so a later modern miss cannot rewind it.
+		a.c.CancelPreRecord()
+		a.pipe.armed = false
+	}
+}
+
+// syncRendererSources follows terrain bindings, including returning to menus.
+// It runs only after the recorder has joined and the client has finished a step.
+func (a *app) syncRendererSources() {
+	generation := a.c.TerrainGeneration()
+	if generation == a.sourceGeneration {
+		return
+	}
+	a.c.CancelPreRecord()
+	a.pipe.armed = false
+	a.paused.clear()
+	a.paused.inputs = client.PausedWorldInputs{}
+	if a.gpu != nil {
+		a.gpu.ResetSources()
+	}
+	a.sourceGeneration = generation
+}
+
+// launchPreRecord rechecks the executor after the deferred Update: that body
+// can process F10, so entering this Draw as modern is not sufficient.
+func (a *app) launchPreRecord(now, sampledAt time.Time, period time.Duration, tick16 int32) {
+	if a.mode == RendererModern && !a.exitPending && !a.c.PresentationPaused() && period > 0 {
 		if nextTick16, nextCamera16, ok := a.pipe.predictNext(now.Add(period), sampledAt, a.updatedAt, tick16); ok {
 			a.c.StartPreRecord(nextTick16, nextCamera16, true)
 			a.pipe.armed = true
 			a.pipe.launchPeriod = period
 		}
 	}
-	a.pipe.observeTick(sampledAt, tick16)
 }
 
 // presentDue applies RunOptions.MaxFPS to one modern Draw. The screen is
@@ -556,6 +598,14 @@ func Run(c *client.Client, mode RendererMode, options RunOptions) error {
 	// everything the game loop reaches through app.Update, runs on this thread
 	// with the window layer brought up. Arm the seam before the first of them.
 	windowOwned.Store(true)
+	// Native title-bar controls are host policy (DESIGN_PRESENTATION_CLIENT
+	// §2.1). macOS supports fullscreen without drag resizing; other desktops
+	// require a resizable window to expose their maximize button.
+	if runtime.GOOS == "darwin" {
+		ebiten.SetWindowResizingMode(ebiten.WindowResizingModeOnlyFullscreenEnabled)
+	} else {
+		ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
+	}
 	ebiten.SetWindowSize(width, height)
 	ebiten.SetFullscreen(options.Fullscreen)
 	if title := c.Title(); title != "" {
@@ -572,5 +622,10 @@ func Run(c *client.Client, mode RendererMode, options RunOptions) error {
 	if options.MaxFPS > 0 {
 		game.presentInterval = time.Second / time.Duration(options.MaxFPS)
 	}
+	stopScrollMonitor, err := startNativeScrollMonitor()
+	if err != nil {
+		return err
+	}
+	defer stopScrollMonitor()
 	return ebiten.RunGame(game)
 }

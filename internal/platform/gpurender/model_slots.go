@@ -1,6 +1,7 @@
 package gpurender
 
 import (
+	"cmp"
 	"image"
 	"image/color"
 	"slices"
@@ -178,6 +179,7 @@ type modelSlotAtlas struct {
 	slots            map[*drawlist.ModelGeometry]modelSlot
 	resolves         []modelResolveJob
 	overflowResolves []modelResolveJob
+	toReserve        []modelReservation
 	// The residency table of docs/DESIGN_GPU_RENDERER.md §13.12. resident holds
 	// one entry per slot that survives across frames, residentAt indexes it by
 	// slot key — looked up only, never ranged, so it introduces no ordering [I1]
@@ -222,6 +224,18 @@ type modelSlotAtlas struct {
 	// colour passes as source 3 (docs/DESIGN_GPU_RENDERER.md §11.2 "Textured
 	// quads without strips").
 	quads modelQuadParams
+}
+
+type modelReservation struct {
+	geometry *drawlist.ModelGeometry
+	shadow   bool
+}
+
+func (s modelReservation) height() int32 {
+	if ss := s.geometry.Supersample; ss != nil {
+		return ss.Height
+	}
+	return s.geometry.Height
 }
 
 // modelResolveJob is one subject's indexed raster resolving into its native
@@ -567,7 +581,9 @@ func (r *Renderer) beginModelResidency() {
 	a.frame++
 	// Last frame's un-keepable subjects release their regions now that nothing
 	// reads them any more.
-	a.freeRects = append(a.freeRects, a.transient...)
+	for _, rect := range a.transient {
+		a.releaseRegion(rect)
+	}
 	a.transient = a.transient[:0]
 	// Retire what no recent frame claimed, in entry order, before this frame
 	// asks for anything. Without it the shelf frontier grows once per raster the
@@ -595,8 +611,8 @@ func (r *Renderer) beginModelResidency() {
 // takeFreeRegion serves one reservation from an evicted slot's released region.
 // The smallest region that fits wins, and the lowest index breaks a tie, so the
 // choice is a function of the request and never of map order [I1]. The whole
-// released region is taken rather than split: it is cleared before it is drawn,
-// so nothing of the evicted slot survives inside it.
+// requested region is split off; both remaining rectangles retain their free
+// status. Every reservation includes its own gutter and is cleared before use.
 func (a *modelSlotAtlas) takeFreeRegion(rw, rh int) (image.Rectangle, bool) {
 	best, bestArea := -1, 0
 	for i, rect := range a.freeRects {
@@ -612,14 +628,42 @@ func (a *modelSlotAtlas) takeFreeRegion(rw, rh int) (image.Rectangle, bool) {
 	}
 	rect := a.freeRects[best]
 	a.freeRects = slices.Delete(a.freeRects, best, best+1)
-	return rect, true
+	used := image.Rect(rect.Min.X, rect.Min.Y, rect.Min.X+rw, rect.Min.Y+rh)
+	if used.Max.X < rect.Max.X {
+		a.freeRects = append(a.freeRects, image.Rect(used.Max.X, rect.Min.Y, rect.Max.X, used.Max.Y))
+	}
+	if used.Max.Y < rect.Max.Y {
+		a.freeRects = append(a.freeRects, image.Rect(rect.Min.X, used.Max.Y, rect.Max.X, rect.Max.Y))
+	}
+	return used, true
+}
+
+// releaseRegion joins adjacent free rectangles only when their union is itself
+// a rectangle. This recovers a large reservation after smaller occupants leave,
+// without moving or clearing any resident pixels (§13.12 P3).
+func (a *modelSlotAtlas) releaseRegion(rect image.Rectangle) {
+	for i := 0; i < len(a.freeRects); {
+		other := a.freeRects[i]
+		horizontal := rect.Min.Y == other.Min.Y && rect.Max.Y == other.Max.Y &&
+			(rect.Max.X == other.Min.X || other.Max.X == rect.Min.X)
+		vertical := rect.Min.X == other.Min.X && rect.Max.X == other.Max.X &&
+			(rect.Max.Y == other.Min.Y || other.Max.Y == rect.Min.Y)
+		if horizontal || vertical {
+			rect = rect.Union(other)
+			a.freeRects = slices.Delete(a.freeRects, i, i+1)
+			i = 0 // the larger rectangle may now meet an earlier neighbor
+		} else {
+			i++
+		}
+	}
+	a.freeRects = append(a.freeRects, rect)
 }
 
 // retireResident drops one entry and returns its region to the free list.
 func (a *modelSlotAtlas) retireResident(i int) {
 	e := &a.resident[i]
 	delete(a.residentAt, e.key)
-	a.freeRects = append(a.freeRects, e.reserve)
+	a.releaseRegion(e.reserve)
 	a.freeEntries = append(a.freeEntries, int32(i))
 	*e = modelResident{}
 }
@@ -696,8 +740,9 @@ func (r *Renderer) allocModelRegion(p *modelPage, w, h int) (image.Rectangle, im
 }
 
 // prepareModelSlots reserves one slot per eligible subject of the frame and
-// rasterizes the page before Replay commits any of them. Preparation visits the
-// same subjects the commit path consumes, in record order. A subject already
+// rasterizes the page before Replay commits any of them. Preparation gathers
+// the subjects in record order, protects resident hits, then reserves in stable
+// descending-height order; Replay keeps its painter order. A subject already
 // resident is neither analysed nor drawn: only slots this frame allocated reach
 // the page's raster stages (§13.12).
 func (r *Renderer) prepareModelSlots(l *drawlist.List) {
@@ -721,30 +766,56 @@ func (r *Renderer) prepareModelSlots(l *drawlist.List) {
 	a.resolves = a.resolves[:0]
 	a.passes, a.lastDst = 0, nil
 	a.quads.reset()
-	l.VisitModels(func(m drawlist.Model) {
-		g := m.Geometry
-		if g == nil || !g.Eligible {
-			return
-		}
-		r.reserveModelSlot(g, false)
-		if g.Shadow != nil && r.modelShadowCommit != nil && r.tables.alpha != nil {
-			r.reserveModelSlot(g.Shadow, true)
-		}
-		if m.ShadowOnly {
-			return
-		}
-		for _, child := range g.Children {
-			if cg := child.Geometry; cg != nil && cg.KeyPlane && len(cg.Children) == 0 {
-				r.reserveModelSlot(cg, false)
+	clear(a.toReserve)
+	a.toReserve = a.toReserve[:0]
+	// Protect every resident subject the list will use before allocating any
+	// new subject. Record order must not let an early miss evict a later hit
+	// (DESIGN_GPU_RENDERER §13.12 P3).
+	r.visitModelSubjects(l, func(g *drawlist.ModelGeometry, shadow bool) {
+		a.toReserve = append(a.toReserve, modelReservation{g, shadow})
+		if key, ok := r.modelSlotKeyFor(g); ok {
+			if i, found := a.residentAt[key]; found {
+				a.resident[i].live = true
 			}
 		}
 	})
+	// Height ordering reduces shelf waste. Raster slots are disjoint; Replay
+	// still commits subjects in the recorded painter order (§13.12 P3).
+	slices.SortStableFunc(a.toReserve, func(a, b modelReservation) int {
+		return cmp.Compare(b.height(), a.height())
+	})
+	for _, subject := range a.toReserve {
+		r.reserveModelSlot(subject.geometry, subject.shadow)
+	}
 	r.flushModelPage(&a.page, a.resolves)
 	// SlotPages counts what this frame RASTERIZED, not what the page holds: the
 	// page-height bands the newly allocated slots reached. A frame that reused
 	// every slot rasterized nothing and reports none (§13.12).
 	r.modelStats.SlotPages += ceilTo(a.page.rasterMaxY, modelPageMaxHeight) / modelPageMaxHeight
 	r.modelStats.SlotsResident = len(a.residentAt)
+}
+
+// visitModelSubjects uses the same admission and order for reservation and the
+// preceding residency protection pass, before packing reorders reservations.
+func (r *Renderer) visitModelSubjects(l *drawlist.List, visit func(*drawlist.ModelGeometry, bool)) {
+	l.VisitModels(func(m drawlist.Model) {
+		g := m.Geometry
+		if g == nil || !g.Eligible {
+			return
+		}
+		visit(g, false)
+		if g.Shadow != nil && r.modelShadowCommit != nil && r.tables.alpha != nil {
+			visit(g.Shadow, true)
+		}
+		if m.ShadowOnly {
+			return
+		}
+		for _, child := range g.Children {
+			if cg := child.Geometry; cg != nil && cg.KeyPlane && len(cg.Children) == 0 {
+				visit(cg, false)
+			}
+		}
+	})
 }
 
 // reserveModelSlot places one subject on the atlas. An unsupported packet is

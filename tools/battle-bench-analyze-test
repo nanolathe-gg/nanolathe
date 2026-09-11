@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+"""Lightweight authored fixtures; optionally verify copies of saved profile runs."""
+import copy
+import importlib.machinery
+import importlib.util
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+
+sys.dont_write_bytecode = True
+
+SCRIPT = Path(__file__).with_name("battle-bench-analyze")
+loader = importlib.machinery.SourceFileLoader("analyzer", str(SCRIPT))
+spec = importlib.util.spec_from_loader(loader.name, loader)
+analyzer = importlib.util.module_from_spec(spec)
+loader.exec_module(analyzer)
+
+
+def write(root, name, data, lines=False):
+    path = root / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(json.dumps(row) for row in data) if lines else json.dumps(data))
+
+
+def unit(identity, slot, x=0, health=100):
+    return {"PublishedIdentity": identity,
+            "Unit": {"Slot": slot, "Owner": 0, "DefinitionKey": "authored", "Alive": True,
+                     "Dying": False, "X": x, "Y": 0, "Z": 0, "Health": health, "MaxHealth": 100, "Remaining": 0},
+            "Orders": {"Queue": {"Primary": [{"DescriptorID": 1, "Phase": 3, "MoveState": 0}],
+                                  "Secondary": [], "PrimaryTruncated": False, "SecondaryTruncated": False}}}
+
+
+def expect_error(root):
+    try:
+        analyzer.analyze(root)
+    except (ValueError, TypeError):
+        return
+    raise AssertionError("corrupt artifact accepted")
+
+
+def deterministic(root):
+    subprocess.run([str(SCRIPT), str(root)], check=True, stdout=subprocess.DEVNULL)
+    files = ("analysis.json", "analysis.md")
+    before = [(root / name).read_bytes() for name in files]
+    subprocess.run([str(SCRIPT), str(root)], check=True, stdout=subprocess.DEVNULL)
+    assert before == [(root / name).read_bytes() for name in files]
+    assert str(root).encode() not in before[0] and str(root).encode() not in before[1]
+    return json.loads(before[0])
+
+
+with tempfile.TemporaryDirectory(prefix="nanolathe-analyzer-test-") as temporary:
+    base = Path(temporary)
+    fixture = base / "authored"
+    fixture.mkdir()
+    # Two identities reuse the same slot; only publication identity establishes survival.
+    start = [unit(10, 1), unit(20, 2), unit(30, 3), unit(0, 4)]
+    end = [unit(10, 1, 65536, 90), unit(21, 2), unit(30, 3), unit(0, 4)]
+    for name, rows in (("state-start", start), ("state-end", end)):
+        write(fixture, name + "/units.jsonl", rows, lines=True)
+        write(fixture, name + "/session.json", {"committed_tick": 10})
+        for artifact in ("movement", "features", "projectiles", "construction"):
+            write(fixture, name + "/" + artifact + ".json", [])
+    write(fixture, "phases.json", {"measured_ticks": 2, "phases": [
+        {"phase": "z", "total_ns": 20, "mean_ns_per_tick": 10, "max_ns_per_tick": 11, "calls": 2},
+        {"phase": "a", "total_ns": 20, "mean_ns_per_tick": 10, "max_ns_per_tick": 12, "calls": 2}]})
+    stats = {key: 0 for key in ("Alloc", "TotalAlloc", "Sys", "Mallocs", "Frees", "HeapAlloc", "HeapSys",
+                                "HeapIdle", "HeapInuse", "HeapReleased", "HeapObjects", "StackInuse",
+                                "StackSys", "MSpanInuse", "MCacheInuse", "GCSys", "OtherSys", "NextGC",
+                                "PauseTotalNs", "NumGC", "NumForcedGC", "GCCPUFraction")}
+    after = dict(stats, TotalAlloc=1200, Mallocs=12, Frees=5, HeapAlloc=700, HeapObjects=7)
+    memory = {"before": stats, "after": after, "after_gc": after, "gpu_image_bytes_before": 4000,
+              "gpu_image_bytes_after": 8000, "graphics_library": "authored"}
+    write(fixture, "memory.json", memory)
+    frame_fixture = {"renderer": "modern", "metadata": {"benchmark_version": 2}, "rows": [
+        {"Step": 2, "SimulationStep": True, "Cadence": 0, "CadenceValid": False,
+         "DrawWork": 4, "PaceWait": 0, "OutsideDraw": 0},
+        {"Step": 0, "SimulationStep": False, "Cadence": 16, "CadenceValid": True,
+         "DrawWork": 3, "PaceWait": 5, "OutsideDraw": 8},
+        {"Step": 4, "SimulationStep": True, "Cadence": 20, "CadenceValid": True,
+         "DrawWork": 8, "PaceWait": 6, "OutsideDraw": 6}]}
+    write(fixture, "frames.json", frame_fixture)
+    result = deterministic(fixture)
+    timing = result["frames"]["timings"]
+    assert timing["Step"]["samples"] == timing["Cadence"]["samples"] == timing["OutsideDraw"]["samples"] == 2
+    assert timing["Step"]["mean_ms"] == 3 and timing["Cadence"]["mean_ms"] == 18
+    assert timing["OutsideDraw"]["mean_ms"] == 7
+    assert timing["DrawWork"]["samples"] == timing["PaceWait"]["samples"] == 3
+    # Legacy runs without validity/step flags preserve all recorded samples.
+    legacy = copy.deepcopy(frame_fixture)
+    legacy["metadata"] = {}
+    for row in legacy["rows"]:
+        del row["CadenceValid"], row["SimulationStep"]
+    timing = analyzer.frame_summary(legacy)["timings"]
+    assert timing["Step"]["samples"] == timing["Cadence"]["samples"] == 3
+    assert timing["Step"]["mean_ms"] == 2
+    assert result["memory"]["exact_window_deltas"]["TotalAlloc"] == 1200
+    assert result["memory"]["exact_window_deltas"]["Frees"] == 5
+    assert result["memory"]["gpu_image_bytes_after"] == 8000
+    changes = result["unit_changes"]
+    assert [row["identity"] for row in changes["born"]] == [21]
+    assert [row["identity"] for row in changes["dead"]] == [20]
+    assert changes["surviving_count"] == 2
+    assert changes["same_position_count"] == 1
+    assert changes["changed_position_count"] == changes["changed_health_count"] == 1
+    assert result["state_start"]["units.jsonl"]["unpublished"] == 1
+    assert [row["phase"] for row in result["phases"]["phases_registry_order"]] == ["z", "a"]
+    assert [row["phase"] for row in result["phases"]["phases_cost_order"]] == ["a", "z"]
+    assert result["profiles"]["cpu"] is None and result["warnings"]
+    assert analyzer.package_name("example.org/a/b.(*T).Method") == "example.org/a/b"
+    assert analyzer.package_name("slices.Grow[go.shape.[]example.org/a.T]") == "slices"
+    write(fixture, "state-start/movement.json", None)
+    absent_service = analyzer.analyze(fixture)
+    assert absent_service["state_start"]["movement.json"] is None
+    assert absent_service["state_end"]["movement.json"] == {"count": 0, "CurrentActive": 0, "CurrentDirty": 0, "CurrentWantsRepath": 0, "Staged": 0, "Pending": 0, "PathFailure": 0}
+    # Corrupt present JSON and reused publication identities must fail.
+    (fixture / "memory.json").write_text('{"before":')
+    expect_error(fixture)
+    (fixture / "memory.json").unlink()
+    write(fixture, "state-start/units.jsonl", start + [copy.deepcopy(start[0])], lines=True)
+    expect_error(fixture)
+    write(fixture, "state-start/units.jsonl", start, lines=True)
+    (fixture / "cpu.pprof").write_bytes(b"invalid profile")
+    expect_error(fixture)
+    (fixture / "cpu.pprof").unlink()
+    for i, saved in enumerate(sys.argv[1:]):
+        target = base / f"saved-{i}"
+        shutil.copytree(saved, target, ignore=shutil.ignore_patterns("*.png", "analysis.*"))
+        report = deterministic(target)
+        assert report["profiles"]["cpu"]["sampled_total"] > 0
+        # Profile subtraction of identical bytes must produce empty zero totals.
+        shutil.copyfile(target / "alloc.pprof", target / "alloc-base.pprof")
+        zero = analyzer.profile(target, "alloc.pprof", "alloc_space", "B", "alloc-base.pprof")
+        assert zero["sampled_total"] == zero["flat_sum"] == 0
+print("battle-bench-analyze: authored fixtures and saved-profile checks passed")

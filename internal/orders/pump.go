@@ -836,6 +836,11 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 		n.Satisfied &^= satisfied
 		u.Pending &^= satisfied
 		n.DynamicGate = 0
+		if satisfied&pendTargetCloaked != 0 {
+			// The interrupt clears every target before dispatch without changing
+			// slot posture [04 R-ORD-01 §10][04 R-ORDER-02 §3].
+			clearWeaponTargetsUnconditional(u)
+		}
 		handler := desc.Handler
 		owned := q.OwnedHandlerFor(n.ID)
 		if handler == nil && owned == nil {
@@ -1042,13 +1047,9 @@ func (q *Queue) unlinkPrimary(n *Node) {
 // segment tail, code 7 is the exclusive whole-queue cancel, code 9's
 // last-record arm re-arms with RNG(30) [R-P0-01].
 //
-// Returns false when the walk stops for this pump. §3.3 names exactly one stop
-// — step 3's gate test, applied to the head the loop reloads
-// ([04 R-ORD-01 §10]) — and the codes below that return false do so because
-// the section's consequence list says the pass ends there: code 7 and the
-// above-9 helper return outright, and code 9's last-record arm and code 3 arm a
-// wait on the head, which the reload's gate test then refuses. Returning false
-// on those two is the reload written out.
+// Returns false only for a returning result. Re-arming n does not establish
+// that the current head is blocked: the handler may have inserted another
+// record ahead of n. The caller reloads the head [04 R-ORD-01 §10].
 func (q *Queue) applyPrimaryResultCode(n *Node, code Code, tick uint32) bool {
 	switch code {
 	case 0:
@@ -1060,15 +1061,6 @@ func (q *Queue) applyPrimaryResultCode(n *Node, code Code, tick uint32) bool {
 	case 3:
 		n.DynamicGate = 1                               // [04 §3.3] lowest gate bit
 		n.Deadline = int32(tick + 30 + q.randBelow15()) // [04 §3.3][I4] wait 30..44; the only arm drawing RNG(15)
-		// Closed (WU-19-73) by [04 R-ORD-01 §10], which settles the question
-		// this arm carried as a TODO: the loop reloads the FRONT HEAD after
-		// every non-returning code and applies the gate test to it. This arm
-		// just armed the head's own gate with a deadline 30 or more ticks out,
-		// so the reload finds it blocked and the pass ends. `return false` is
-		// therefore not merely outcome-preserving — it is the rule, and the
-		// pump reaches it one step earlier than retail does (retail reloads and
-		// re-gates; we return, which is the same observable pass).
-		return false
 	case 5, 8:
 		q.unlinkPrimary(n) // [04 §3.3][05 "Queue subtraction"]
 	case 6:
@@ -1110,7 +1102,7 @@ func (q *Queue) applyPrimaryResultCode(n *Node, code Code, tick uint32) bool {
 			n.Phase = 0
 			n.DynamicGate = 1
 			n.Deadline = int32(tick + 30 + q.randBelow30())
-			return false
+			return true
 		}
 		q.unlinkPrimary(n) // [04 §3.3] otherwise unlink and free
 	default:
@@ -1176,19 +1168,19 @@ func (q *Queue) pumpSecondary(u *units.Unit, tick uint32) {
 			// unrunnable rear-segment record does not hide the records behind
 			// it [04 §3.3].
 			q.recordDiagnostic(fmt.Sprintf("orders: nil handler for secondary %s, parked for 30..44 ticks", DescriptorFor(n.ID).Name))
-			advance, walking := q.applySecondaryResultCode(n, 3, tick)
+			walking := q.applySecondaryResultCode(n, 3, tick)
 			if !walking {
 				return
 			}
-			idx += advance
+			idx = 0 // handled records reload the rear head [04 R-ORD-01 §10]
 			continue
 		}
 		code := handler(u, n, 0, tick)
-		advance, walking := q.applySecondaryResultCode(n, code, tick)
+		walking := q.applySecondaryResultCode(n, code, tick)
 		if !walking {
 			return // codes 6 and 7: remove the single record and return [04 §3.3] C8
 		}
-		idx += advance
+		idx = 0 // handled records reload the rear head [04 R-ORD-01 §10]
 	}
 }
 
@@ -1200,46 +1192,45 @@ func (q *Queue) pumpSecondary(u *units.Unit, tick uint32) {
 // plainly unlinks and frees with NO re-arm and NO draw, regardless of whether
 // the record is last or first [04 §3.3] "Audit note — completion-wait
 // ranges"; the above-9 expiry delegate never draws either.
-// Returns the index advance (0 when the record was removed) and whether the
-// walk continues.
-func (q *Queue) applySecondaryResultCode(n *Node, code Code, tick uint32) (advance int, walking bool) {
+// Returns whether the walk reloads the rear head [04 R-ORD-01 §10].
+func (q *Queue) applySecondaryResultCode(n *Node, code Code, tick uint32) bool {
 	switch code {
 	case 0:
 		n.Phase = 0 // [04 §3.3]
-		return 1, true
+		return true
 	case 1:
 		n.Phase++ // [04 §3.3]
-		return 1, true
+		return true
 	case 2, 4:
-		return 1, true // [04 §3.3] continue unchanged
+		return true // [04 §3.3] continue unchanged
 	case 3:
 		n.DynamicGate = 1                               // [04 §3.3] lowest gate bit
 		n.Deadline = int32(tick + 30 + q.randBelow15()) // [04 §3.3][I4] wait 30..44; the only arm drawing RNG(15)
-		return 1, true
+		return true
 	case 5, 8:
 		q.removeSecondaryRecord(n) // [04 §3.3] C8 plain unlink+free, walk continues
-		return 0, true
+		return true
 	case 6:
 		q.removeSecondaryRecord(n) // [04 §3.3] C8 remove the single record and return; no tail-yield
-		return 0, false
+		return false
 	case 7:
 		q.removeSecondaryRecord(n) // [04 §3.3] C8 remove the single record and return; no cancel-all
-		return 0, false
+		return false
 	case 9:
 		n.Flags |= FlagRetryMark // [04 §3.3][R-ORDER-02 §2] completion flag; its reader is the goal installer of [04 R-PATH-01 §8] step 5.3
 		// [04 §3.3] plain unlink+free — no re-arm, no draw, regardless of
 		// last/first position (the primary-only last-record re-arm [R-P0-01]
 		// does not apply to the secondary pump).
 		q.removeSecondaryRecord(n)
-		return 0, true
+		return true
 	default:
 		if code > 9 {
 			// [04 §3.3] C8 expiry delegate: plain unlink+free, no draw, and
 			// the walk continues like the other plain removals.
 			q.removeSecondaryRecord(n)
-			return 0, true
+			return true
 		}
-		return 0, false
+		return false
 	}
 }
 

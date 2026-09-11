@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/content"
@@ -9,6 +11,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/audio"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 type compositionAudioSpy struct {
@@ -26,6 +29,25 @@ func (s *compositionAudioSpy) PlaySample(sample *audio.Sample, _ float64, _ floa
 // [03 §8.3] C18. It is duplicated here rather than exported so the contract
 // stays owned by the audio package.
 const drainWindowFrames = 30
+
+// Mode-1 voices resolve filenames through VFS rather than registered aliases
+// [03 R-AUD-01 §1]. These authored bytes are raw 8-bit mono PCM [fmt wav].
+func authoredVoiceFS(t *testing.T, name string) *vfs.FS {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "sounds"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "sounds", name+".wav"), bytes.Repeat([]byte{0x80}, 64), 0644); err != nil {
+		t.Fatal(err)
+	}
+	fs := vfs.New()
+	if err := fs.MountDirectory(root, 1); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fs.Close() })
+	return fs
+}
 
 // TestAttachBattleAudio_CueReachesBackend proves the production composition
 // step joins the session's audio state to the client, using a presentation
@@ -57,20 +79,13 @@ func TestAttachBattleAudio_CueReachesBackend(t *testing.T) {
 	cl.SetTerrain(b.sess.World)
 	cl.SetCamera(b.cam)
 
-	attachBattleAudio(cl, b.sess, nil)
+	attachBattleAudio(cl, b.sess, authoredVoiceFS(t, "ok1"))
 
 	if b.sess.Audio == nil || b.sess.Audio.Queue == nil || b.sess.Audio.Cache == nil || b.sess.Audio.Music == nil {
 		t.Fatalf("session audio service was not initialized")
 	}
 	if audio.GlobalOutput() != rec {
 		t.Fatalf("composition replaced the presentation output")
-	}
-	// The play sink resolves the drawn alias through the registry's sample
-	// cache and is silent when no sample exists [03 §8.2]. The fixture has no
-	// VFS, so author the sample directly: a byte string with no container
-	// marker is a raw 8-bit mono sample [fmt wav].
-	if _, err := b.sess.Audio.Cache.Put("ok1", bytes.Repeat([]byte{0x80}, 64)); err != nil {
-		t.Fatalf("authoring the ok1 sample: %v", err)
 	}
 
 	// At most one voice is audible per 30 ticks [03 §8.3] C18, so advance the

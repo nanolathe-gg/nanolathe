@@ -84,17 +84,24 @@ func (s *Session) VisitDebugUnits(visit func(DebugUnit) error) error {
 			continue
 		}
 		d := DebugUnit{Selected: u.Flags&units.SelectedStatus != 0, Callbacks: u.ScriptBridge().DebugSnapshot(), Unit: s.parityUnit(u), Orders: orders.QueueOfUnit(u).DebugSnapshot(u.Handle), Script: u.GetScript().DebugSnapshot()}
-		if p := s.publication; p != nil && int(u.Handle) < len(p.unitIdentities) {
-			id := p.unitIdentities[int(u.Handle)]
-			if id.unit == u {
-				d.PublishedIdentity = id.id
-			}
-		}
+		d.PublishedIdentity = s.debugUnitIdentity(u)
 		if err := visit(d); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// debugUnitIdentity observes only an existing publication identity. Diagnostic
+// histories must resolve this when recording, before the pool slot can be reused.
+func (s *Session) debugUnitIdentity(u *units.Unit) uint64 {
+	if s != nil && u != nil && s.publication != nil && int(u.Handle) < len(s.publication.unitIdentities) {
+		id := s.publication.unitIdentities[int(u.Handle)]
+		if id.unit == u {
+			return id.id
+		}
+	}
+	return 0
 }
 
 // DebugClock is a detached exported clock projection for callers without a full capture.

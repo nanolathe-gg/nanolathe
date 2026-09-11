@@ -121,7 +121,8 @@ reads these formats.
 
 `Document`/`Section` deliberately preserve source order and duplicate records.
 A section builds its resolved lookup vector once and binary-searches it;
-`FirstValue`, `LastValue` and the typed accessors sit on top, so a caller
+`FirstValue`, `LastValue`, `ResolvedAssignments` and the typed accessors sit
+on top, so a caller
 picks a duplicate policy explicitly instead of inheriting one.
 
 ### 2.3 `internal/content` — compiled catalogs
@@ -268,7 +269,9 @@ byte is recovered as position XOR key XOR complement of the stored byte
 **C7 — directory entries.** Entries are 9 bytes and are scanned so that the
 last duplicate wins; names split on backslash only, with no `.` or `..`
 handling `[02 §2]` `[fmt hpi]`. The overlay above accepts both slash styles
-for host ergonomics (§5), but archive-internal indexing keeps retail's rule.
+for host ergonomics (§5), but archive-internal indexing keeps retail's rule. Component selection applies to
+entire duplicate directories: a replaced subtree contributes no lookup or
+wildcard result. The raw audit index still retains its authored entries.
 
 **C8 — compressed records.** A compressed record is a `u32` chunk-size table
 followed by that many chunks, each with the 19-byte `SQSH` header, and every
@@ -346,8 +349,10 @@ and `name` is a separate display string. A later section with the same ID
 replaces the ordinary parser-owned fields — including fields whose keys the
 later section omits — and its section name becomes the surviving catalog name.
 The existing damage-override table is the documented exception: a same-ID
-parse contributes to that table `[06 R-DMG-01 §1]`. The
-superseded name then matches no record `[02 R-CONTENT-02]`. Sections without
+parse contributes to that table. The compiler retains both the per-spelling
+values and their lookup order, so a later case variant precedes earlier
+fold-equal entries; cloning copies that order alongside the map
+`[06 R-DMG-01 §1]`. The superseded name then matches no record `[02 R-CONTENT-02]`. Sections without
 an ID share one scratch slot the runtime name scan never reaches, so they are
 inert. Duplicates are retained as `WeaponDuplicate` diagnostics in discovery
 order, winner last.

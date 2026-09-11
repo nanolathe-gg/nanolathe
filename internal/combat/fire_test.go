@@ -113,20 +113,13 @@ func TestFireCallbackOrder(t *testing.T) {
 			}
 		}
 	})
-	t.Run("meteor", func(t *testing.T) {
+	t.Run("meteorHasNoLiveExecutor", func(t *testing.T) {
 		var svc Service
 		w := weaponForFire(5, 10, 0, 0, 0, false, false, true, true, "s.wav", 0, 0)
-		slot := &Slot{Weapon: w}
 		spy := &FireSpy{}
-		r := rng.NewSimulation(1)
-		_, ok := TryFire(&svc, slot, 0, Target{Kind: TargetPoint}, 0, FirePorts{RNG: &r, Spy: spy})
-		if !ok {
-			t.Fatalf("meteor fire failed")
-		}
-		// Meteor runs only common initializer [06 §4.1] C2
-		want := []string{"alloc", "startSound"}
-		if len(spy.Events) != len(want) {
-			t.Fatalf("meteor events %v want %v", spy.Events, want)
+		_, ok := TryFire(&svc, &Slot{Weapon: w}, 0, Target{Kind: TargetPoint}, 0, FirePorts{Spy: spy})
+		if ok || svc.Count() != 0 || len(spy.Events) != 0 {
+			t.Fatalf("meteor-only live fire: success=%v count=%d events=%v [06 §6.2]", ok, svc.Count(), spy.Events)
 		}
 	})
 	t.Run("burstRootHasNoBurstCloneCallbacks", func(t *testing.T) {

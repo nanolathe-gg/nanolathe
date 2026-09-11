@@ -262,6 +262,18 @@ func (s *Section) Assignments() []Item {
 	return result
 }
 
+// ResolvedAssignments returns the lookup vector in its case-insensitive key
+// order, retaining case variants [02 §4]. Catalog parsers enumerate this
+// vector before applying their own insertion rules [06 R-DMG-01 §1].
+func (s *Section) ResolvedAssignments() []Item {
+	s.ensureResolved()
+	items := make([]Item, len(s.resolved))
+	for i := range items {
+		items[i] = s.resolvedItem(i)
+	}
+	return items
+}
+
 // Values returns the values of every distinct key spelling matching key, in
 // resolved order (case-insensitive fold, then original bytes). Identical
 // duplicate spellings collapsed to their last value per [02 §4].

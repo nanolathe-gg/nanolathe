@@ -6,11 +6,14 @@ package input
 type MouseState struct {
 	X, Y             float32
 	ScrollX, ScrollY float32
-	scrolled         bool
-	edges            [4]bool
-	released         [4]bool
-	buttons          [4]bool
-	moved            bool
+	// ZoomScrollY excludes native momentum where the host exposes it.
+	// Total scrolling remains available to GUI controls (DESIGN_GPU_RENDERER §16.6).
+	ZoomScrollY float32
+	scrolled    bool
+	edges       [4]bool
+	released    [4]bool
+	buttons     [4]bool
+	moved       bool
 }
 
 // Pressed reports the press edge of b in this host frame.
@@ -57,6 +60,7 @@ func (m *MouseState) SetWheel(dx, dy float32) {
 	}
 	m.scrolled = dx != 0 || dy != 0
 	m.ScrollX, m.ScrollY = dx, dy
+	m.ZoomScrollY = dy
 }
 
 // ResetEdges clears the per-host-frame edges: press, release, wheel and
@@ -69,7 +73,7 @@ func (m *MouseState) ResetEdges() {
 	m.released = [4]bool{}
 	m.scrolled = false
 	m.moved = false
-	m.ScrollX, m.ScrollY = 0, 0
+	m.ScrollX, m.ScrollY, m.ZoomScrollY = 0, 0, 0
 }
 
 // ButtonState is Held as the 0/1 word the authored controls compare against.
@@ -277,6 +281,7 @@ type Sample struct {
 	Buttons                         MouseButtons
 	Modifiers                       Modifiers
 	WheelX, WheelY                  float32
+	ZoomWheelY                      float32
 	PressedButtons, ReleasedButtons [4]bool
 	MouseMoved                      bool
 	Elapsed                         float64
@@ -334,6 +339,7 @@ func SampleFromState(in *State, elapsed float64, surfaceW, surfaceH int32) Sampl
 		s.MouseX, s.MouseY = logical(m.X, surfaceW), logical(m.Y, surfaceH)
 		s.Buttons = MouseButtons{Left: m.Held(MouseButtonLeft), Middle: m.Held(MouseButtonMiddle), Right: m.Held(MouseButtonRight)}
 		s.WheelX, s.WheelY = m.ScrollX, m.ScrollY
+		s.ZoomWheelY = m.ZoomScrollY
 		for i := range s.PressedButtons {
 			s.PressedButtons[i] = m.edges[i]
 			s.ReleasedButtons[i] = m.released[i]
@@ -365,6 +371,7 @@ func StateFromSample(s Sample) *State {
 	in.Mouse.SetButton(MouseButtonMiddle, s.Buttons.Middle)
 	in.Mouse.SetButton(MouseButtonRight, s.Buttons.Right)
 	in.Mouse.SetWheel(s.WheelX, s.WheelY)
+	in.Mouse.ZoomScrollY = s.ZoomWheelY
 	in.Mouse.edges = s.PressedButtons
 	in.Mouse.released = s.ReleasedButtons
 	in.Mouse.moved = s.MouseMoved

@@ -3,7 +3,7 @@ package path
 // The search's per-cell table [04 §7.2].
 //
 // A search touches a few hundred cells and asks about each of them many times:
-// the ray, the pop-time revalidation, every neighbour of every expansion, and
+// the ray, the popped cell, every neighbour of every expansion, and
 // the node store's own identity lookup all read or write the same row. That row
 // was a map[Cell]entry per session, and hashing a two-int32 key in those inner
 // loops was the largest remaining map traffic in the authoritative tick, with

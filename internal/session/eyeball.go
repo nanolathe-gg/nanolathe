@@ -39,8 +39,8 @@ type eyeballRecord struct {
 	expiry        uint32
 
 	// Stored footprint. published is the nanolathe form of "a raster was
-	// written for this tile pair": an out-of-bounds origin stores the tile
-	// pair with nothing published [03 R-VIS-01 §2].
+	// written for this tile pair": only terrain-ray rejects an off-map center;
+	// Circular publishes the clipped mask overlap [03 R-VIS-01 §2].
 	cx, cz    int32
 	emitter   uint8 // stored coverage byte as the terrain-ray branch defines it
 	published bool
@@ -97,7 +97,7 @@ func (s *Session) appendDeathEyeball(u *units.Unit) {
 	rec.emitter = heightByteAt(u, seaLevelFor(s))
 	rec.cx, rec.cz = observerCell(s, u, rec.emitter)
 	w, h := s.Vis.GridDimensions()
-	if uint32(rec.cx) < uint32(w) && uint32(rec.cz) < uint32(h) {
+	if !mode.TerrainRay() || (uint32(rec.cx) < uint32(w) && uint32(rec.cz) < uint32(h)) {
 		s.Vis.Publish(rec.owner, rec.cx, rec.cz, rec.emitter, int32(rec.sightDistance))
 		rec.published = true
 	}
@@ -122,8 +122,8 @@ func (l *eyeballList) expire(vis *visibility.Service, tick uint32) {
 		if rec.expiry < tick {
 			// The removal call is the same decrement the unit stamp uses, with
 			// the record's own stored tile pair and coverage byte and no
-			// coverage-byte guard [03 R-COMP-02 §2]. A record whose origin was
-			// out of bounds stored nothing and has nothing to decrement.
+			// coverage-byte guard [03 R-COMP-02 §2]. Circular retirement clips
+			// the same mask even when its center is outside the grid.
 			if vis != nil && rec.published {
 				vis.Unpublish(rec.owner, rec.cx, rec.cz, rec.emitter, int32(rec.sightDistance))
 			}

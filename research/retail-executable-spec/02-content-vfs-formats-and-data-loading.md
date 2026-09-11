@@ -281,6 +281,13 @@ subdirectory flag set or the lookup fails. There is no special treatment of `.`
 or `..`: they are matched as literal names and normally fail, so
 archive-relative traversal is not a retail behavior.
 
+**Established consequence — duplicate subtrees.** If two sibling entries name
+one directory, only the later directory's children are reachable through that
+component. Children unique to the earlier directory do not merge into it. A
+later file of the same name also blocks traversal into the earlier directory.
+The wildcard enumerator locates its requested directory through this same
+component walk before scanning entries forward [R-CAT-01 §1].
+
 **Payload obfuscation.** When the archive key is nonzero, file bytes are
 transformed on read using the byte's absolute offset within the archive:
 

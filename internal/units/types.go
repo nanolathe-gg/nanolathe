@@ -85,7 +85,11 @@ type Slot struct {
 	// `Flags` held doc 06's "tracking flag". Reading every access to the byte
 	// settles that these are ONE byte, so the pair modelled one retail byte as
 	// two — equivalent only for as long as nothing wrote one without the other.
-	Flags          uint8
+	Flags uint8
+	// TODO(question): do newly allocated or reused slots expose commanded
+	// yaw/pitch before an aim or restore writer? The common unit and weapon
+	// initializer bodies do not write them; a first-reader census would settle
+	// it [04 R-UNIT-06 §7]. Fresh Go zeroes remain host policy (SC18).
 	DesiredYaw     uint16 // commanded yaw [06 §1.2] [P0-10]
 	DesiredPitch   uint16 // commanded pitch [06 §1.2] [P0-10]
 	Ammo           int32  // remaining stockpile [06 §1.2] [P0-10]

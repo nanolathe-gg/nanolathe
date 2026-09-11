@@ -554,11 +554,12 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 	// installs them, so a headless battle and this one are the same simulation.
 	// The shell binds presentation and nothing else.
 	//
-	// The warm pass below still belongs here: it compiles the catalog's event
-	// sequences into the client's PIXEL cache off the draw path, so the first
-	// frame of a feature's death animation never waits on a load.
+	// The warm pass below prepares every battle-reachable event sequence in
+	// the client's PIXEL cache off the draw path. The terrain table already
+	// includes mission and restored features; the client closes it over all
+	// catalog unit corpses and feature successors before any draw can use it.
 	if b.sess.Catalog != nil {
-		cl.WarmFeatureSequences(b.sess.Catalog.Features)
+		cl.WarmBattleFeatureSequences(b.sess.Catalog, b.sess.World.FeatureDefs)
 	}
 	attachBattleAudio(cl, b.sess, b.fs)
 }
@@ -1065,8 +1066,8 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		// over the world, only outside TALK, and only in the executor that can
 		// present a free factor.
 		if cl.Enhanced() && !talkActive && !modalActive && !overMinimap &&
-			mouse.Scrolled() && b.overBattleViewport(effX, effY) {
-			b.wheelZoom(effX, effY, float64(mouse.ScrollY))
+			mouse.ZoomScrollY != 0 && b.overBattleViewport(effX, effY) {
+			b.wheelZoom(effX, effY, float64(mouse.ZoomScrollY))
 		}
 		// One Update of the ease, whatever produced the target. It runs
 		// unconditionally so a target set by F9 or by the wheel of an earlier

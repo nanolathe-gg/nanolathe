@@ -114,8 +114,10 @@ func (b *battleSession) writeDebugCapture(cl *client.Client, pausedBefore bool) 
 	}
 	if b.sess.Build != nil {
 		capture.JSON("construction.json", b.sess.Build.SnapshotLinks())
+		capture.JSON("construction-admissions.json", b.sess.Build.DebugAdmissionSnapshot())
 	} else {
 		capture.Unavailable("construction.json", "construction service absent")
+		capture.Unavailable("construction-admissions.json", "construction service absent")
 	}
 	aiStates := make([]any, len(b.sess.AI))
 	for i, m := range b.sess.AI {
@@ -129,7 +131,7 @@ func (b *battleSession) writeDebugCapture(cl *client.Client, pausedBefore bool) 
 		"Diagnostic projection is not a restartable save. No save projection is attempted: callbacks and transient runtime state have no complete faithful restore contract.",
 		"Private scheduler pending/slew/flags, mission trigger state, visibility grids and path-search internal heaps are not captured.",
 		"Orders retain primary/secondary queues and scalar payloads; route geometry is in movement.json. Existing snapshot bounds/truncation flags apply. Callback closures are represented only by presence, never serialized.",
-		"Feature snapshot omits animation cursors and active-event order. Combat snapshot omits pending aim registry and target registries. Construction contains current links only; AI omits per-definition strategic vectors and profiles.",
+		"Feature snapshot omits animation cursors and active-event order. Combat snapshot omits pending aim registry and target registries. Construction admission history is bounded; historical occupancy grids and AI selection/placement decisions are not retained. AI omits per-definition strategic vectors and profiles.",
 		"Renderer captures the last retained offscreen composition. Exact presented tick and historical storage peaks are unavailable. GPU image bytes are logical estimates, not total driver memory.")
 	return capture.Directory, capture.Finish()
 }

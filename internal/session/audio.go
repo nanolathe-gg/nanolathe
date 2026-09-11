@@ -30,8 +30,8 @@ func (s *Session) PresentationCRT() *rng.CRT {
 // [03 §8.3][03 §8.4] C16 C18 C20. It is presentation-only and uses the CRT
 // stream for variant draws [03 §8.3] C19 [I4]; it never touches the simulation
 // RNG. Missing optional sample aliases resolve to silence [03 §8.2], while
-// the queue remains available for event production. Call once after
-// Catalog/Vis are bound.
+// the queue remains available for event production. Call after Catalog/Vis
+// are bound. Repeating the call for the same service preserves cue state.
 func (s *Session) InitAudio(fs vfs.FSOps) {
 	if s == nil {
 		return
@@ -41,8 +41,15 @@ func (s *Session) InitAudio(fs vfs.FSOps) {
 	} else {
 		s.Audio.Init(fs)
 	}
+	if s.boundAudio != s.Audio {
+		// The shell may reuse its service for a new or restored battle, whose
+		// tick starts independently of the old deadlines. Detached candidates
+		// bind the shell service only at successful presentation adoption.
+		s.Audio.ResetBattleCues()
+		s.Audio.BindCRT(s.sharedAudioCRT())
+		s.boundAudio = s.Audio
+	}
 	s.Audio.BindCatalog(s.Catalog, s.audioResolver)
-	s.Audio.BindCRT(s.sharedAudioCRT())
 	// Music probing and briefing preload are presentation setup owned by the
 	// audio service; Session only supplies mission metadata.
 	hasBrief := false

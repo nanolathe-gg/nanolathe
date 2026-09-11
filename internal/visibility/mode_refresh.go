@@ -102,10 +102,8 @@ func (s *Service) refreshModeSprite(id ObserverID, ob Observer) {
 		quantized: quantized, storedCX: storedCX, storedCZ: storedCZ,
 		storedByte: uint8(quantized),
 	}
-	if uint32(ob.CX) >= uint32(s.W) || uint32(ob.CZ) >= uint32(s.H) {
-		s.footprints[id] = next
-		return
-	}
+	// Circular publication clips the mask itself, including off-map centers
+	// [03 R-VIS-01 §2]. Retirement must visit that same clipped footprint.
 	next.live = true
 	s.footprints[id] = next
 	s.Publish(ob.Owner, ob.CX, ob.CZ, ob.HeightByte, ob.Radius)

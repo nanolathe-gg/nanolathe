@@ -67,7 +67,10 @@ func (b *battleSession) wheelZoom(x, y int32, dy float64) {
 		return
 	}
 	mx, my := beamAnchor(x, y)
-	b.zoom.Wheel(b.cam, mx, my, dy)
+	if b.millisSource == nil {
+		b.millisSource = newMonotonicMillisSource()
+	}
+	b.zoom.Wheel(b.cam, mx, my, dy, b.millisSource.Millis32())
 }
 
 // setBattleZoom aims the battle at a free factor about the viewport centre,

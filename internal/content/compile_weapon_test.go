@@ -112,8 +112,8 @@ reloadtime=143165577;
 // TestWeaponSameIDWholeRecordReplacement locks the same-ID merge contract
 // [02 §5 R-CONTENT-02]: a later section with an already-seen ID REPLACES the
 // record — every parser-owned field stored authored-or-default, catalog name
-// included. There is no sparse merge: keys the later section omits revert to
-// their defaults, and values the earlier section authored do not survive.
+// included. Omitted scalars revert to their defaults; the damage override
+// table is the separate append exception [06 R-DMG-01 §1].
 //
 // The stock corpus never exercises this (the parsed family's IDs are all
 // unique [02 §5 R-CONTENT-02]); the fixture locks the merge rule for mission
@@ -161,7 +161,7 @@ func TestWeaponSameIDWholeRecordReplacement(t *testing.T) {
 		t.Fatalf("surviving def id=%d name=%q, want 36/Mine", merged.ID, merged.Name)
 	}
 	// Keys the later section omitted revert to defaults — authored-or-default
-	// stores replace the whole record, including the earlier DAMAGE table.
+	// stores replace the scalar fields, including the earlier DAMAGE default.
 	if merged.Range != 32767 {
 		t.Fatalf("omitted range = %d, want default 32767", merged.Range)
 	}
@@ -538,5 +538,93 @@ func TestWeaponDurationKeysWrapTo16Bits(t *testing.T) {
 	}
 	if wa.ReloadTime != -32536 {
 		t.Fatalf("reloadtime(1100) = %d, want -32536 (sign-extended) [06 §4.2]", wa.ReloadTime)
+	}
+}
+
+// A later same-ID record replaces scalars while retaining the override table
+// [02 R-CONTENT-02][06 R-DMG-01 §1].
+func TestWeaponSameIDRetainsDamageOverrides(t *testing.T) {
+	for _, later := range []string{"", "[DAMAGE]{default=9; ARMCOM=30; CORCOM=40;}"} {
+		t.Run(later, func(t *testing.T) {
+			fs := newFixtureFS(t, fixtureFile{path: "weapons/duplicates.tdf", data: "[old]{ID=7; range=9; [DAMAGE]{default=8; ARMCOM=20; ARMCK=25;}}" +
+				"[new]{ID=7;" + later + "}"})
+			weapons, _, err := CompileWeaponsWithDuplicates(fs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			w := weapons["new"]
+			if w.Damage["ARMCK"] != 25 {
+				t.Fatalf("retained ARMCK override = %d, want 25", w.Damage["ARMCK"])
+			}
+			if w.Range != 32767 {
+				t.Fatalf("range = %d, want default 32767", w.Range)
+			}
+			if later == "" {
+				if w.DamageDefault != 0 || w.Damage["ARMCOM"] != 20 {
+					t.Fatalf("absent DAMAGE: default=%d overrides=%v", w.DamageDefault, w.Damage)
+				}
+			} else if w.DamageDefault != 9 || w.Damage["ARMCOM"] != 30 || w.Damage["CORCOM"] != 40 {
+				t.Fatalf("appended DAMAGE: default=%d overrides=%v", w.DamageDefault, w.Damage)
+			}
+		})
+	}
+}
+
+// A later case-variant override must precede retained fold-equal entries for
+// the runtime lower-bound lookup [06 R-DMG-01 §1]. A lexical case tie-break
+// would return an earlier uppercase key when the later key is lowercase.
+func TestWeaponSameIDDamageCaseVariantWins(t *testing.T) {
+	for _, keys := range [][2]string{{"ARMCOM", "armcom"}, {"armcom", "ARMCOM"}} {
+		t.Run(keys[1], func(t *testing.T) {
+			fs := newFixtureFS(t, fixtureFile{path: "weapons/duplicates.tdf", data: fmt.Sprintf("[old]{ID=7;[DAMAGE]{%s=20;}}[new]{ID=7;[DAMAGE]{%s=30;}}[last]{ID=7;}", keys[0], keys[1])})
+			weapons, _, err := CompileWeaponsWithDuplicates(fs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			w := weapons["last"]
+			order := w.DamageKeysSorted()
+			if len(order) != 2 || order[0] != keys[1] || w.Damage[order[0]] != 30 || w.Damage[keys[0]] != 20 {
+				t.Fatalf("override order=%v values=%v, want later spelling first with value 30", order, w.Damage)
+			}
+			clone := cloneWeapon(w)
+			clone.damageOrder[0] = "changed"
+			if w.DamageKeysSorted()[0] != keys[1] {
+				t.Fatal("clone shares damage lookup order")
+			}
+		})
+	}
+}
+
+func TestWeaponSameIDRetainedDamageContributesToHash(t *testing.T) {
+	var hashes [2]string
+	for i := range hashes {
+		fs := newFixtureFS(t, fixtureFile{path: "weapons/duplicates.tdf", data: fmt.Sprintf("[old]{ID=7;[DAMAGE]{ARMCOM=%d;}}[new]{ID=7;}", 20+i)})
+		weapons, _, err := CompileWeaponsWithDuplicates(fs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hashes[i] = weapons["new"].Hash
+	}
+	if hashes[0] == hashes[1] {
+		t.Fatal("retained damage changes must change the surviving definition hash")
+	}
+}
+
+func TestWeaponDamageLookupOrderContributesToHash(t *testing.T) {
+	var hashes [2]string
+	for i, blocks := range [][2]string{{"ARMCOM=20;", "armcom=30;"}, {"armcom=30;", "ARMCOM=20;"}} {
+		fs := newFixtureFS(t, fixtureFile{path: "weapons/duplicates.tdf", data: "[old]{ID=7;[DAMAGE]{" + blocks[0] + "}}[new]{ID=7;[DAMAGE]{" + blocks[1] + "}}"})
+		weapons, _, err := CompileWeaponsWithDuplicates(fs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w := weapons["new"]
+		if w.Damage["ARMCOM"] != 20 || w.Damage["armcom"] != 30 {
+			t.Fatalf("case-order fixture changed values: %v", w.Damage)
+		}
+		hashes[i] = w.Hash
+	}
+	if hashes[0] == hashes[1] {
+		t.Fatal("different lower-bound damage winners must change the definition hash")
 	}
 }

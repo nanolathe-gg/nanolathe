@@ -79,3 +79,22 @@ func TestGlideStepsAtPhaseTenRate(t *testing.T) {
 		t.Fatalf("ClearFollow left the glide running")
 	}
 }
+
+// Established: n/F3 change only the desired origin; they do not cancel the
+// tracked object [07 R-CAM-01 §12].
+func TestGlidePreservesTrackedObject(t *testing.T) {
+	c := testCamera()
+	c.JumpTo(100, 200)
+	c.SetTracked(7)
+	c.LatchTracked()
+	c.GlideTo(800, 900)
+	if c.Tracked() != 7 || c.LatchedTracked() != 7 {
+		t.Fatalf("glide cancelled tracking: current=%d latched=%d", c.Tracked(), c.LatchedTracked())
+	}
+	if c.X != 100 || c.Z != 200 || c.Follow.Desired != (Origin{800, 900}) {
+		t.Fatalf("glide changed more than desired origin: current=(%d,%d) desired=%+v", c.X, c.Z, c.Follow.Desired)
+	}
+	if c.LatchTracked() != 7 {
+		t.Fatal("next host batch lost the tracked object")
+	}
+}

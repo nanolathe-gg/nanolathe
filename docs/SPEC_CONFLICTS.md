@@ -430,6 +430,17 @@ these with a per-field writer/reader census and allocation/reuse call-path
 trace in the owning category. Record an actual unanswered field question at
 its code site, rather than a generic unknown allocator fill count.
 
+The bounded unit audit establishes the pool bookkeeping and the common
+unit/weapon initializer's named writes [04 R-UNIT-06 §7]. Every weapon slot
+starts with zero reload/stockpile and autonomy set, even for inactive links
+[06 R-WPN-05 §3]. The remaining concrete unit question is whether commanded
+yaw/pitch can be consumed before later aim or restore writers; those words
+are not assigned by the traced initializer bodies. The former ARMCK abnormal
+completion report was a late diagnostic observer missing a return before
+thread-slot reuse, now corrected without changing script execution
+[04 R-P28-COB-01R]. It is not an allocator residual; the first committed retail
+pose remains a separate publication question.
+
 The save boundary is retail HAPIBANK account parsing and staged battle
 restoration `[08 "Save-file organization"]`. Save truncation is not an
 allocator residual.
@@ -583,8 +594,9 @@ the request's movement-class layer. At request initialization that layer's
 watermark is armed at `max(tick, 30) − 30`, recently committed mobile
 footprints are re-stamped, and the occupant-age gate lets a recent occupant
 through while making an older one block its re-stamped cells. Existing heap
-entries are not purged; expansion rechecks passability lazily as each entry
-opens. The scheduler and the expansion receive no blocker identity, velocity or
+entries retain their admission; only untouched neighbors probe the current
+class layer before opening. Opening preserves terminal and ray flags, and pop
+does not recheck passability [04 R-PATH-01 §1]. The scheduler and the expansion receive no blocker identity, velocity or
 projected destination, and no collision-triggered replan exists — there is no
 lower-slot priority, no avoidance cadence and no replan submission after a
 rejected commit. Mover-versus-mover contention stays authoritative at commit
@@ -596,7 +608,9 @@ after 30 ticks, and its own repath — re-armed when a route is installed and th
 mover is blocked or has fewer than two points, throttled to one request per 60
 ticks with no retry ceiling — routes around. The separate occupancy revision
 counter is diagnostic and must not be conflated with the class-layer watermark.
-Outer yield/replan and ordinary open-group liveness remain **Unknown**.
+The emergent head-on corridor timing remains **Supported inference**: its first
+divergent-route timing requires manual retail observation before it can be used
+as a contract [04 R-COLL-01 §7].
 
 **Contract:** `[04 §8.2]`, `[04 §6.1 R-DOC04-B]`, `[04 R-MOV-02A]`,
 `[04 R-COLL-01 §7]`, `[04 R-MOV-01 §7]`; DESIGN_MOVEMENT_PATH §5.

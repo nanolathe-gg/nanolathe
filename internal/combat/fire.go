@@ -63,8 +63,9 @@ type FirePorts struct {
 	// the whole spawner had returned (after the start sound and the
 	// Fire/RockUnit callbacks) and the deadline was never stamped at all.
 	//
-	// nil is the shooterless path (the meteor creator, [06 §6.5]): no
-	// reference, no stamp.
+	// Live session fire binds this unit, including its hull drift gate. A nil
+	// unit supports direct creator callers without a reference or reveal stamp;
+	// meteor showers enter InitMeteor separately [06 §6.5].
 	Shooter *units.Unit
 
 	// InterceptorRescan is the fire-time interceptor rescan a vertical-launch
@@ -145,6 +146,34 @@ type FirePorts struct {
 	Spy *FireSpy
 }
 
+// The live slot executor is distinct from event reconstruction. A meteor-only
+// or ballistic-only definition has no unit-fire executor [06 §3.3][06 §6.2].
+func hasLiveWeaponExecutor(w *content.WeaponDef) bool {
+	return w != nil && (w.Turret || w.VLaunch || w.LineOfSight || w.SelfProp || w.Dropped)
+}
+
+func liveCreationFamilyForWeapon(w *content.WeaponDef) CreationFamily {
+	if w == nil {
+		return CreationNone
+	}
+	switch {
+	case w.Turret:
+		if w.LineOfSight || w.SelfProp {
+			return CreationOrdinary
+		}
+		if w.Ballistic {
+			return CreationBallistic
+		}
+	case w.VLaunch:
+		return CreationVertical
+	case w.LineOfSight || w.SelfProp:
+		return CreationOrdinary
+	case w.Dropped:
+		return CreationDropped
+	}
+	return CreationNone
+}
+
 // TryFire is the family spawner: it validates, allocates a projectile record,
 // initializes it through the creation family, and runs the fire callbacks.
 //
@@ -168,6 +197,9 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 		return 0, false
 	}
 	w := slot.Weapon
+	if !hasLiveWeaponExecutor(w) {
+		return 0, false
+	}
 
 	// --- retained pre-allocation work [06 §4.4] C5 ---
 
@@ -220,6 +252,17 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 		slot.DesiredYaw = retailYawFromGo(uint16(YawFromDelta(dx, dz)))
 		slot.DesiredPitch = uint16(PitchFromDelta(dx, dy, dz))
 	}
+	if !w.Turret && !w.VLaunch && (w.LineOfSight || w.SelfProp) {
+		// Fixed weapons solve from the forced Query muzzle and then compare
+		// against the hull, with no AimFrom query [06 R-P0-07]. Keep the
+		// stored pair even when drift or allocation refuses the attempt.
+		dx, dy, dz := target.X.Sub(muzzle.X), target.Y.Sub(muzzle.Y), target.Z.Sub(muzzle.Z)
+		slot.DesiredYaw = retailYawFromGo(uint16(YawFromDelta(dx, dz)))
+		slot.DesiredPitch = uint16(PitchFromDelta(dx, dy, dz))
+		if shooter := ports.Shooter; shooter != nil && !DriftGatePass(w, unitStationary(shooter), slot.DesiredYaw, shooter.Move.Heading, slot.DesiredPitch, shooter.Move.Pitch) {
+			return 0, false
+		}
+	}
 
 	// The accuracy spread. It lives in the **turret** executor and only there
 	// [06 §4.4] [06 R-WPN-03 §4]: a weapon without `turret` reaches the same
@@ -257,10 +300,9 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 		}
 	}
 
-	// The creation family decides whether a record is created at all: a weapon
-	// matching none of the six creation predicates makes no projectile
-	// [06 §6.2] C15. Deciding before reservation keeps the pool untouched.
-	fam := CreationFamilyForWeapon(w)
+	// The executor selects its creator after the retained muzzle and spread
+	// work. Reconstruction uses a different ladder [06 §6.2].
+	fam := liveCreationFamilyForWeapon(w)
 	if fam == CreationNone {
 		return 0, false
 	}
@@ -371,7 +413,7 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 
 	// Family dispatch [06 §6.2] C15: this is what gives the record its
 	// position, yaw, pitch, scalar speed, velocity and family expiry.
-	InitProjectile(p, w, tick, muzzle, target, tgt.Unit, solvedYaw, solvedPitch, nil, slot.DistanceWord, ports.Gravity, dropperHeading, dropperSpeed)
+	initProjectileFamily(fam, p, w, tick, muzzle, target, tgt.Unit, solvedYaw, solvedPitch, nil, slot.DistanceWord, ports.Gravity, dropperHeading, dropperSpeed)
 
 	// The matched-projectile link is stored AFTER the family dispatch, because
 	// the common initializer clears it first [06 §4.1]; the vertical creator

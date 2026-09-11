@@ -95,9 +95,11 @@ lets an order handler release, inhibit, retarget or stop a slot without
 reaching into slot internals.
 
 `PipelineStep` names the fixed per-slot order, and `TickSlot` runs it:
-decrement a nonzero reload → validate or resolve the target → dispatch `Aim*`
-and wait on readiness → the shot-admission gate → the family spawner → store
-reload and ammunition → debit `[06 §4.1]` `[06 §4.2]`. A gate that fails
+decrement a nonzero reload → validate or resolve the target → executor aim-time
+work → reload-zero shot admission → applicable resource/ammunition precheck →
+executor readiness and fire-time work → store reload and ammunition → debit
+`[06 R-P0-07]` `[06 §4.2]`. Readiness never suppresses failed physical-admission
+feedback to the order handler. A gate that fails
 short-circuits the later steps and reorders none of the earlier ones; the
 reload decrement happens whether or not anything downstream succeeds. Admission
 tests the decremented signed-16 word. Starts 0, 1, and 2 become 0, 0, and 1
@@ -197,6 +199,14 @@ Outstanding Aim callbacks share the slot's receiver. A fresh dispatch clears
 readiness; each later nonzero return grants it, while a zero return leaves its
 current value unchanged `[04 R-CB-01 §6]`. Retargeting can overlap those
 callbacks, so the completion adapter cannot assign readiness from every return.
+
+Aim-origin queries belong only to a turret's fresh Aim dispatch and its admitted,
+ready fire attempt. A held turret blocked by reload, physical admission, costs,
+or readiness performs no aim-origin query. Fixed LOS/self-propelled weapons
+solve and drift-test from their forced `Query*` muzzle inside the admitted fire
+attempt; vertical and dropped executors perform no aim-time piece query
+`[06 R-P0-07]`. Pending callback tracking never adds a gate beyond the slot's
+stored readiness and applicable request latch.
 
 Unit save/load connects the saved request latch, readiness word and distance
 word to the live slot. `AimSlot` retains a restored readiness word verbatim
@@ -322,12 +332,15 @@ anchor outlives its shooter.
 
 ### 2.7 Motion families
 
-Creation dispatch and active-motion dispatch are two different orders, and both
-are reproduced: creation is meteor → ballistic → vertical launch →
-line-of-sight/self-propelled → dropped, and active motion is self-propelled →
-line-of-sight → ballistic → dropped → meteor `[06 §6.2]`. `motion.go` carries
-one `Init*` per creation family and one `Advance*` per motion family, plus the
-shared common initializer.
+Live unit fire selects turret → vertical launch → LOS/self-propelled → dropped,
+otherwise no executor. The turret selects the ordinary creator for LOS/self-propelled,
+otherwise ballistic for ballistic, otherwise no creator. `TryFire` carries this
+selection through allocation and initialization. `InitProjectile` retains the
+separate event-reconstruction order: meteor → ballistic → vertical launch →
+LOS/self-propelled → dropped. Active motion independently selects self-propelled →
+LOS → ballistic → dropped → meteor `[06 §6.2]`. `motion.go` carries one `Init*`
+per creation family and one `Advance*` per motion family, plus the shared common
+initializer.
 
 Ballistic and dropped records take the map's three global wind words as raw
 16.16 increments added straight to position — the published X word is
@@ -807,10 +820,12 @@ integer divided by −1 raises; a wrapped deadline makes the unsigned expiry tes
 fire immediately; and `burnblow` with `noexplode` repeats the full expiry
 impact on every visit `[06 §6.4]` `[06 §7.3]` `[06 §13.2]` [I11].
 
-**C15 — two dispatch orders, not one.** Creation dispatch is meteor →
-ballistic → vertical launch → line-of-sight/self-propelled → dropped; active
-motion dispatch is self-propelled → line-of-sight → ballistic → dropped →
-meteor `[06 §6.2]`.
+**C15 — live creation, reconstruction and motion.** Live executor selection
+is turret → vertical launch → LOS/self-propelled → dropped → none; the turret
+selects ordinary for LOS/self-propelled, else ballistic for ballistic, else no
+creator. Event reconstruction is meteor → ballistic → vertical launch →
+LOS/self-propelled → dropped; active motion is self-propelled → LOS → ballistic →
+dropped → meteor. Carry the live selection through initialization `[06 §6.2]`.
 
 **C16 — expiry differs per family.** Direct retires at expiry; ballistic uses
 its own timer; dropped has no expiry; self-propelled expiry advances a phase.

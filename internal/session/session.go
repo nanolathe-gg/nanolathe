@@ -379,6 +379,9 @@ type Session struct {
 	// only produces authoritative cues and supplies world-owned resolver data
 	// [03 §8.2–§8.4] [I6].
 	Audio *audio.Service
+	// boundAudio distinguishes a genuine service binding from repeated
+	// presentation initialization within this battle's tick domain.
+	boundAudio *audio.Service
 
 	// pendingHuman is the session-owned immutable input queue. Presentation
 	// enqueues value commands; authoritativeTick drains it at the network/input

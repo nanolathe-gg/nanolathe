@@ -145,6 +145,23 @@ func NewQueue() *Queue {
 	return q
 }
 
+// resetBattle discards references and deadlines from the previous battle's
+// tick domain. This is host lifetime policy (DESIGN_PRESENTATION_CLIENT §5),
+// not a change to the within-battle arbitration of [03 §8.3].
+func (q *Queue) resetBattle() {
+	if q == nil {
+		return
+	}
+	q.Entries = [8]Entry{}
+	q.Count, q.BaseTime, q.now = 0, 0, 0
+	q.nextAllowed = [24]uint32{}
+	q.resolver = nil
+	clear(q.categories)
+	clear(q.unitNames)
+	clear(q.alive)
+	clear(q.chatEnabled)
+}
+
 func (q *Queue) ensureInit() {
 	if q == nil {
 		return

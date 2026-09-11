@@ -10,6 +10,39 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 )
 
+// Taking a small slot from an evicted large one must leave the rest available
+// without overlapping reservations or losing alignment (§13.12 P3).
+func TestModelSlotFreeRegionPreservesRemainder(t *testing.T) {
+	a := modelSlotAtlas{freeRects: []image.Rectangle{image.Rect(0, 0, 100, 80)}}
+	var used []image.Rectangle
+	for _, size := range []image.Point{{40, 20}, {60, 20}, {100, 60}} {
+		r, ok := a.takeFreeRegion(size.X, size.Y)
+		if !ok || r.Size() != size {
+			t.Fatalf("reservation %v: got %v, available=%v", size, r, a.freeRects)
+		}
+		for _, prior := range used {
+			if r.Overlaps(prior) {
+				t.Fatalf("reservations overlap: %v and %v", r, prior)
+			}
+		}
+		used = append(used, r)
+	}
+	if len(a.freeRects) != 0 {
+		t.Fatalf("full original area was consumed, but free regions remain: %v", a.freeRects)
+	}
+	// Return the bottom and top-right occupants first. They form an L, whose
+	// bounding box must not free the still-owned top-left reservation.
+	a.releaseRegion(used[2])
+	a.releaseRegion(used[1])
+	if _, ok := a.takeFreeRegion(100, 80); ok {
+		t.Fatal("joined an L-shaped free region across a live reservation")
+	}
+	a.releaseRegion(used[0])
+	if r, ok := a.takeFreeRegion(100, 80); !ok || r != image.Rect(0, 0, 100, 80) {
+		t.Fatalf("released occupants did not restore their original region: %v, %v", r, ok)
+	}
+}
+
 // Preparation runs for every subject of every frame, so it must reuse its
 // scratch rather than allocate per face, strip or outline endpoint
 // [DESIGN_GPU_RENDERER.md §11.2 "Allocation policy"]. This needs no device:
@@ -442,6 +475,39 @@ func checkModelSlotResidency() error {
 	}
 	if s := r.ModelStats(); s.SlotsRasterized != 1 || s.SlotsReused != 2 {
 		return fmt.Errorf("bumped revision rasterized %d and reused %d slots, want 1 and 2", s.SlotsRasterized, s.SlotsReused)
+	}
+	// A new subject at the front cannot evict subjects later in this list.
+	// This page holds exactly two of the wide reservations. The third must
+	// use overflow while both existing subjects keep their pixels (§13.12 P3).
+	r.modelPageLimit = 20
+	wide := func(extra bool) drawlist.List {
+		var l drawlist.List
+		l.RecordClear()
+		add := func(id uint64, x int32) {
+			g := fixtureGeometry(x, true, fixtureFace(1, 1, 12, 12, 30, uint8(40+id)))
+			g.Width, g.Height = 1000, 16
+			g.Cache = drawlist.ModelCacheKey{Body: id, Revision: 1}
+			l.RecordModel(drawlist.Model{Geometry: g})
+		}
+		if extra {
+			add(3, 48)
+		}
+		add(1, 4)
+		add(2, 26)
+		l.RecordExpand()
+		return l
+	}
+	cold := wide(false)
+	pixels(&cold)
+	crowded := wide(true)
+	got := pixels(&crowded)
+	if s := r.ModelStats(); s.SlotsReused != 2 || s.SlotOverflows != 1 {
+		return fmt.Errorf("early miss evicted a later hit: reused %d, overflow %d", s.SlotsReused, s.SlotOverflows)
+	}
+	// Rebuild the same list cold: residency must not change its visible pixels.
+	r.modelAtlas.rebuild = true
+	if want := pixels(&crowded); !bytes.Equal(got, want) {
+		return fmt.Errorf("protecting later resident subjects changed crowded-frame pixels")
 	}
 	return nil
 }

@@ -195,7 +195,7 @@ func TestZeroVelocity(t *testing.T) {
 		t.Fatalf("zero velocity should be no solution via solver")
 	}
 	var svc Service
-	w := &content.WeaponDef{ID: 999, Ballistic: true, WeaponVelocity: 0, WeaponTimer: 30}
+	w := &content.WeaponDef{ID: 999, Turret: true, Ballistic: true, WeaponVelocity: 0, WeaponTimer: 30}
 	slot := &Slot{Weapon: w}
 	defer func() {
 		if r := recover(); r == nil {
@@ -206,7 +206,7 @@ func TestZeroVelocity(t *testing.T) {
 			}
 		}
 	}()
-	_, _ = TryFire(&svc, slot, 0, Target{Kind: TargetPoint, X: fixRaw(6553600)}, 0, FirePorts{})
+	_, _ = TryFire(&svc, slot, 0, Target{Kind: TargetPoint, X: fixRaw(6553600)}, 0, FirePorts{ShooterHealth: 100, ShooterMaxHealth: 100})
 }
 
 // TestMinBarrelEdge verifies exact gate: angle must be > minBarrel and <= pi/4.

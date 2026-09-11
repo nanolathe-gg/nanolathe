@@ -71,8 +71,10 @@ func (s *Service) StepAutonomousForPlayer(player uint8, w *units.World, vis *vis
 			// successful replacement's Aim latch or spend a separate visit [06 §3.2].
 			if slot.Weapon.Interceptor {
 				if _, position, found := interceptorScanCandidate(s, u, slot, catalog); found {
-					slot.Target = units.Target{Kind: units.TargetGround, X: position.X, Z: position.Z}
-					u.Pending &^= units.PendingSlotSetterClear
+					// Acquisition uses the common point setter: the current projectile
+					// position narrows to whole-world words before aiming or saving
+					// [06 §11.2][04 R-ORD-01 §1][08 R-SAVE-WEAPON-01].
+					FireWeaponPoint(u, idx, position.X, position.Z, 0)
 					continue
 				}
 			} else if u.Flags>>units.StandingFireShift&units.StandingFieldMask == stanceFireAtWill {

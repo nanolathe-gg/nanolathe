@@ -489,30 +489,31 @@ func (s *Session) Resume(budget int) ([]Point, Status, bool) {
 		if n.Closed || !n.Open || f != n.F {
 			continue
 		}
-		// Class-layer revisions can change while this working set spans ticks.
-		// Revalidate an existing open node at expansion time instead of trusting
-		// the value captured when it entered the heap [04 §7.4].
+		// Terminal flags are consumed before closing; pop never probes the
+		// class layer again [04 R-PATH-01 §1].
 		e := s.entries.get(n.Cell)
-		if s.passValue(n.Cell) == 0 && e.status&8 == 0 {
-			n.Open, n.Closed = false, true
-			e.status = (e.status &^ 3) | 3
-			s.touch(n.Cell, e)
-			continue
-		}
-		n.Open, n.Closed = false, true
-		e.status = (e.status &^ 3) | 2
-		s.touch(n.Cell, e)
-		if e.status&4 != 0 || s.isGoal(n.Cell) {
+		if e.status&4 != 0 {
 			s.finish(reconstructRoute(s.cfg.Start, n.Cell, s.ns, routeFootPrint(s.cfg)))
 			return s.resultPoints, s.resultStatus, true
 		}
+		n.Open, n.Closed = false, true
+		e.status = 2
+		s.touch(n.Cell, e)
 		fan := NeighborsForDir(n.Cell, n.Dir, !s.expanded)
 		s.expanded = true
 		for i := 0; i < fan.Len; i++ {
 			c, d := fan.Cells[i], fan.Dirs[i]
 			e := s.entries.get(c)
-			value := s.passValue(c)
 			state := e.status & 3
+			if state != 0 && state != 1 {
+				continue
+			}
+			// Only untouched neighbors probe the live layer. An open node
+			// keeps its stored terrain term on relaxation [04 R-PATH-01 §1].
+			value := uint8(3)
+			if state == 0 {
+				value = s.passValue(c)
+			}
 			// A blocked cell is skipped unless the pre-search ray already
 			// stepped onto it. One that carries the ray-visited bit is costed
 			// like any other neighbour, keeping its probe value of 0: the
@@ -522,9 +523,6 @@ func (s *Session) Resume(budget int) ([]Point, Status, bool) {
 			if value == 0 && e.status&8 == 0 {
 				e.status = (e.status &^ 3) | 3
 				s.touch(c, e)
-				continue
-			}
-			if state != 0 && state != 1 {
 				continue
 			}
 			turn, step := TurnPenalty(n.Dir, d), StepCost(d)
@@ -565,19 +563,9 @@ func (s *Session) Resume(budget int) ([]Point, Status, bool) {
 			node := s.ns.Get(nid)
 			node.Run, node.TerrainTerm, node.Open = run, uint16(terrain), true
 			s.heap.Open(nid, node.F)
-			// TODO(question): opening a cell writes the whole status byte, so
-			// the ray-visited bit does not survive into the node's own pop.
-			// [04 R-PATH-01 §1] states that the *pop* writes the whole byte 2
-			// "which also clears bits 2 and 3", and names bit 3's one consumer
-			// as the expansion's blocked-cell arm; it does not say whether the
-			// open is likewise a whole-byte write or an OR. Today the
-			// difference is visible: a blocked-but-ray-visited cell is opened
-			// and costed here, but the revised-layer re-test at its own pop
-			// then closes it as blocked, so no route ever ends on or passes
-			// through one. Settled by reading what the expansion writes into
-			// the status byte when it opens a cell, and whether the pop-time
-			// re-test consults bit 3 at all.
-			e = entry{status: 1, dir: d, node: nid}
+			// Opening ORs the state into the existing flags, preserving both
+			// ray visitation and enumerated terminals [04 R-PATH-01 §1].
+			e = entry{status: e.status | 1, dir: d, node: nid}
 			hs := ScaledHeuristic(node.H, s.scale)
 			if s.hasTolerance && hs <= s.tolerance {
 				e.status |= 4

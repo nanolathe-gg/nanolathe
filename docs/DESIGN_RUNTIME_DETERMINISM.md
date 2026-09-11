@@ -712,6 +712,9 @@ initialization, whose authoritative entries are integers `[04 §5.1]`.
   retail fill operation. Unknown: constructor and slot-reuse writes versus
   reads before initialization for incompletely traced records; the decider is
   a writer/reader census in the owning unit, projectile, order or COB contract.
+  The bounded unit audit isolates commanded weapon yaw/pitch before later
+  aim/restore writes `[04 R-UNIT-06 §7]`; pool bookkeeping and the weapon
+  reload/stockpile/control writes are established, not allocator gaps.
 * **The dual-stream `--seed` override.** Retail has no way to fix both streams.
   Coupling them behind one flag is a debug affordance, not a runtime mode: the
   unseeded path uses separate sources (B4, C10).
@@ -809,7 +812,9 @@ Open questions carried by the contracts above rather than by a marker:
 
 * **Constructor initialization and reuse** (SC18): which fields are read before
   a constructor or later writer initializes them, and which survive slot reuse.
-  A complete per-record writer/reader census would settle those residuals; the
+  The bounded unit audit leaves commanded weapon yaw/pitch first-read ordering
+  open `[04 R-UNIT-06 §7]`; the pool's own bookkeeping is settled. A complete
+  per-record writer/reader census would settle further residuals; the
   allocator's no-fill default and fatal failure path are established
   `[01 R-PLAT-01 §5]`.
 * **The singleton semaphore's release point** is not named by the traced

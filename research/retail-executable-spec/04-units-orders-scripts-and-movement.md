@@ -281,6 +281,23 @@ limit-enable bit plus its limit field). The mission `maxunits` field is NOT
 read by the allocator — it does not bound allocation (bounded-negative,
 2641-TU census) — and save restore verifies the forced slot [P0-16].
 
+### Constructor initialization boundary [R-UNIT-06 §7]
+
+**Established (direct static trace):** Ordinary allocation, in-place rebuilding
+and forced-slot reconstruction all run the same common unit initializer,
+script/model binding, and weapon-slot initializer; this chain performs
+field-specific writes, not a whole-record clear. The common initializer clears
+each weapon target before running its autonomy-return verb and clears the
+pending-order word. The weapon initializer clears reload and stockpile for
+every slot and sets autonomy even when the linked weapon definition is
+inactive; only enabled depends on that active state [06 R-WPN-05 §3]. Its
+commanded yaw and pitch are not written by these initializer bodies.
+
+**Unknown:** whether a freshly allocated or reused slot's commanded yaw or
+pitch reaches a consumer before later aim/save restoration writes. Settle by a
+first-reader census along allocation, reuse, aiming and save publication
+paths; do not infer zero values from allocator policy [01 R-PLAT-01 §5].
+
 ### 2.3a Player-slice order at battle entry [R-P0-16-A]
 
 **Established fact:** The pool initializer first forms a ten-element list in
@@ -8006,6 +8023,18 @@ model/COB/piece map and the same post-Create values in a distinct VM; it does
 not alias or copy the factory's VM, stance, busy flag, or building edge. Only
 the factory receives the production `StartBuilding` edge.
 
+**Established — lifecycle observer timing.** A return-time observer installed
+before the strict binder starts `Create` records its normal completion during
+the next ordinary drain. Later stock child work reuses that thread slot in the
+same drain. The former probe installed its observer after `Create` started;
+without an observer armed on that allocation, the deferred bridge sweep lost
+the explicit-return receipt when the slot was reused and labelled the ended
+callback `finish-abnormal`. That label was a Nanolathe diagnostic artifact,
+not evidence of a signalled or invalid stock script. Installing the observer
+through the existing pre-Create context hook changes no script execution or
+publication timing. The normal `StartBuilding`/`StopBuilding` pairs and the
+separate first committed retail pose question remain.
+
 **Unknown — exact retail first committed visual pose and delta-zero
 sufficiency.** The facts above close the Nanolathe route and eliminate wrong
 asset resolution, loose piece linking, repeated `Create`, product/factory VM
@@ -8149,8 +8178,8 @@ observed by the next. Combined with the classifier's occupant-age gate (step 2 a
 effect is: units that committed occupancy within the last 30 ticks do not block the layer
 (their footprints are re-stamped and pass the gate), while a mobile occupant whose commit
 tick predates the watermark blocks any cell it occupies that is re-stamped afterwards. This
-is the dynamic-blocker channel of §7.4 ("passability is rechecked lazily") — existing heap
-entries are re-tested against the revised layer on expansion.
+is the dynamic-blocker channel of §7.4: untouched neighbors read the revised layer
+when first considered for opening. Existing open nodes are neither re-probed nor purged.
 
 ### The height byte's path into the movement slope test, and the footprint rule [R-SLOPE-01]
 
@@ -8809,7 +8838,7 @@ attribute cell, indexed `mapWidth · z + x`. The four bytes are:
 Status byte bits:
 
 * bits 0–1 are a state: **0 untouched**, **1 open**, **2 closed** (written as
-  the whole byte `2` when the cell is popped, which also clears bits 2 and 3),
+  the whole byte `2` when a nonterminal cell is popped, clearing bits 2 and 3),
   **3 rejected** (the cell was probed and read impassable). Expansion accepts
   only states 0 and 1; 2 and 3 are dead ends.
 * bit 2 (`4`) — **acceptable terminal**. Set by goal enumeration (which writes
@@ -8824,6 +8853,21 @@ Status byte bits:
   class layer is restamped between the ray and the expansion — which happens
   whenever a search spans ticks, since the layer is shared with every other
   request of the same movement class ([R-DOC04-B]).
+
+**Established — opening and popping preserve different information.** A
+neighbor's low two state bits are tested before any passability call. An
+untouched neighbor is probed against the current class layer; an impassable
+one without the ray-visited bit is rejected by ORing `3` into its status.
+Otherwise opening ORs `1`, or `5` when the scaled heuristic meets the
+acceptance threshold, into the existing byte. Both an enumerated terminal bit
+and a ray-visited bit survive opening. An already-open neighbor is relaxed
+using its stored terrain term, without another passability probe; closed and
+rejected neighbors are skipped without probing. On pop, the terminal bit is
+tested first and publishes immediately when set. A nonterminal pop writes the
+whole status byte `2` and expands neighbors. There is no pop-time passability
+re-test, so a cell admitted before a layer change stays eligible to expand or
+finish a route. This corrects the earlier claim that a layer change could
+reject an existing heap entry when it was popped.
 
 **Established — the two-level touched bitmap.** Alongside the entry array the
 constructor allocates one 32-bit word per **256 cells** (`ceil(cells/256)`
@@ -10050,7 +10094,14 @@ east/south, in anchor-cell terms — so a builder resting its anchor on the
 border sits flush against the product footprint; the builder's approach
 check is the centre-minus-pads reach test of [05 R-WORK-01 §2].
 
-**Established fact:** Dynamic blockers update a profile revision. Existing heap entries are not eagerly purged; passability is rechecked lazily when a node is expanded. This can turn a previously open node into a blocked one without rebuilding the whole heap. Because the class record and its layer are shared by every request of that movement class and a search spans ticks, this also means a cell the pre-search ray marked can become impassable before the expansion reaches it — the ray-visited bit of [R-PATH-01 §1] is what lets the expansion open it anyway.
+**Established fact:** Dynamic blockers can revise the shared class layer.
+Existing heap entries are not purged or re-probed. Each untouched neighbor
+reads the current layer when expansion first considers opening it; later
+relaxations reuse its stored terrain term. A cell the pre-search ray marked
+can become impassable before this first opening, and the ray-visited bit lets
+it open anyway. Opening preserves that bit, and popping does not re-test
+passability [R-PATH-01 §1]. Final movement commit still validates current
+occupancy independently.
 
 **Established — out-of-bounds goal cells.** Enumerated cells outside the map are
 not marked and cannot be reached, but they still take part in the
@@ -10241,6 +10292,19 @@ the transform-dirty bit and without writing the heading — the same asymmetry
 section 10.1 records for the flight integrator, because it is the same rule.
 The clamp is a pure saturation: equality at either bound produces the same
 value either way.
+
+**Established — a coincident waypoint still receives steering.** The bearing
+helper maps an exact zero integer offset to `angleOf(0, 0) = 0`; its two zero
+inputs have positive signs, and the two-argument arctangent returns positive
+zero for that pair (the zero case is also specified in the
+[Intel instruction reference](https://cdrdv2-public.intel.com/671110/325383-sdm-vol-2abcd.pdf)).
+The ground mover has no early return for a waypoint at the unit's exact
+position. With a waypoint still present, it applies the ordinary heading clamp
+against that zero desired heading, then runs speed update, position commit and
+callbacks. The strict cornering-distance test fails at zero distance, selecting
+braking. A duplicate point can expose this case because the follower consumes
+only one reached waypoint per tick (§3). The previous tick's turn residual
+must not survive merely because the current waypoint is coincident.
 
 ### The route follower, lookahead, and waypoint pruning [R-MOV-01 §3]
 
@@ -10772,6 +10836,16 @@ scalar speed and turn residual, and forces tier 0 when the blocked flag is set,
 when the unit is attached to a carrier, or when speed and turn residual are both
 zero.
 
+**Established — the steering-to-callback connection.** Ground steering and
+flight steering write the same mover turn residual that this classifier reads.
+It is the signed, saturated heading change applied on the current tick, not
+the remaining error after turning. Ground's no-waypoint branch and either
+steering branch's zero-error case write zero; non-airborne flight also writes
+zero. Position commit between steering and classification does not change this
+residual. A zero-speed unit that turned this tick therefore enters a nonzero
+movement tier unless the blocked or carrier override applies. Save projection
+reads this same maintained value [08 R-SAVE-02 §8].
+
 ### 8.2 Static and mobile collision
 
 **Established fact:** Static collision uses an axis-aligned footprint rectangle. Path search and movement commit use the same footprint/profile family but at different points: path search uses pre-stamped static cells, while movement commit checks the current rectangle.
@@ -10841,13 +10915,14 @@ order/path status handling, not to a mobile collision.
 request's initializer revises the shared movement-class layer and re-stamps
 recently committed mobile footprints. The occupant-age gate can make an older
 occupant block a re-stamped search cell while a recent occupant remains
-nonblocking there; existing heap entries are rechecked lazily when expanded.
+nonblocking there; untouched neighbors read that layer when first opened,
+while existing heap entries retain their admission [R-PATH-01 §1].
 The scheduler and A* expansion themselves read no mobile-unit identity or
 velocity and do not project a blocker's destination. The rule is that
 mobile occupancy is not a permanent map-load A* wall, but a request may
-temporarily observe re-stamped older occupants through the age gate and lazy
-per-node recheck. The final occupancy validator remains authoritative and may
-reject a route that was legal during search. A path no-route status and its
+temporarily observe re-stamped older occupants through the age gate when
+first probing an untouched neighbor. The final occupancy validator remains
+authoritative and may reject a route that was legal during search. A path no-route status and its
 order-layer response are distinct from a successful route later blocked at
 commit.
 
@@ -13589,6 +13664,19 @@ requirement in the arrival test — are dead in play: the goal advances by its
 velocity unrotated, and arrival is the 48-world-unit test alone. Leaving the
 flag clear on both legs is the retail state.
 
+**Established (bounded to the marker's constructors, method table, explicit
+setters, and stream methods) — the saved auxiliary words are opaque
+persistence state.** The ordinary velocity-marker constructor zeroes its
+auxiliary word but leaves the trailing word uninitialized. Save and restore
+copy both words. Goal update, arrival, heading query, persistence checks and
+network serialization do not consume either; the heading setter changes only
+the commanded heading and steer flag, and the compiled-out setter does
+nothing. Neither word supplies a movement parameter. Restoring arbitrary saved
+values must therefore preserve them for the next save without assigning them
+movement behavior. This closes the runtime-meaning question for the traced
+single-player marker; the trailing word's fresh allocation contents are not a
+defined movement value [08 R-SAVE-02 §8].
+
 *Established for the arm.* With the arrival bits clear, the counter below
 `0x5A` and the range to the target **at or below** `0xA0` world units, the leg
 installs **no** new payload — whatever is bound stays bound — sets the
@@ -13869,6 +13957,10 @@ and the decider that would close it.
 
 ### Simulation and identity
 
+- **Unknown:** whether initial or reused weapon-slot commanded yaw/pitch is
+  read before later aim or restore writes · [R-UNIT-06 §7] · first-reader
+  census through allocation, reuse, aiming and save publication.
+
 - Out-of-map and mode behavior of the placement validator outside the
   production path · §6.4 · static trace.
 - Allocator and slot-reuse cleanup when a dead factory slot is reused · §3.8 ·
@@ -13944,12 +14036,6 @@ and the decider that would close it.
 
 ### COB
 
-- **Unknown:** why the stock ARMCK lifecycle diagnostic reports
-  `Create:finish-abnormal` after the deferred-start wake/drain boundary rather
-  than a normal return · [R-P28-COB-01R], §4.2, §4.3, §5.3 · trace the callback
-  identity through signal, interpreter termination and slot reuse, then compare
-  the diagnostic's expectation. The current test retains `TODO(question)`
-  after checking the known pose and StartBuilding/StopBuilding phases.
 - The first committed retail ARMCK pose, and whether its authored waiting
   `Create` work advances before that publication · [R-P28-COB-01R] · manual
   retail observation (the paired settling probe).
@@ -13992,11 +14078,6 @@ and the decider that would close it.
 
 ### Terrain and pathfinding
 
-- **Unknown:** whether opening a ray-visited blocked cell preserves its status
-  bit 3, and whether the pop-time blocked re-test consults that bit ·
-  [R-PATH-01 §1] · trace both the open write and pop re-test. Nanolathe currently
-  replaces the status byte on open, so that bit is lost; `search.go` retains
-  `TODO(question)` instead of treating this choice as a traced contract.
 - Full static feature and yard-map interaction with the class layer's feature
   gate · §7.1 [R-DOC04-B] · static trace.
 - Which of the two last-row anchor counts retail's own class layer holds on
@@ -14018,12 +14099,6 @@ and the decider that would close it.
 
 ### Ground movement
 
-- **Unknown implementation connection:** which maintained ground/flight turn
-  residual reaches callback classification at the commit boundary · §5.2,
-  [R-MOV-01 §6] · trace each steering writer through the classifier read.
-  Nanolathe currently reads the collision record's zero/restored value while
-  flight maintains a separate residual; `integrate.go` marks this gap with
-  `TODO(question)`.
 - The emergent head-on deadlock timing — first divergent route between 30
   and 60 ticks after the block — is a Supported inference from two
   Established mechanisms · §8.2 [R-COLL-01 §7] · manual retail observation
@@ -14031,10 +14106,6 @@ and the decider that would close it.
 
 ### Hover and VTOL
 
-- **Unknown:** runtime meaning of the code-3 air-velocity save marker's
-  auxiliary and trailing padding words · [08 R-SAVE-02 §8] · trace constructor,
-  save and execution readers. Nanolathe preserves the staged words without
-  inventing live fields; `retail_restore.go` retains `TODO(question)`.
 - Ordinary gameplay producer of mover mode `3` · §9.1 [R-AIR-01 §3] · static
   trace of the save/network stream writer that supplies the reduced flight
   controller's 2-bit mode field. Modes `0` (attached/parked), `1` (grounded)

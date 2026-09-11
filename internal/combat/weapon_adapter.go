@@ -97,8 +97,8 @@ func FireWeaponPoint(u *units.Unit, idx int, x, z numeric.Fixed, _ uint32) bool 
 	if s == nil || s.Weapon == nil {
 		return false
 	}
-	wx := int32(x.Raw() >> 16)
-	wz := int32(z.Raw() >> 16)
+	wx := int16(x.Raw() >> 16)
+	wz := int16(z.Raw() >> 16)
 	if wz == -32768 {
 		wz = -32767
 	}

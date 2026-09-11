@@ -2805,11 +2805,8 @@ func (s *System) emitMovementCallbacks(u *units.Unit, speed int32) {
 	blocked := false
 	// The adjacent word tested with the scalar speed is the signed 16-bit turn
 	// residual, not a second speed component [04 §5.2][04 R-MOV-01 §6].
-	// TODO(question): this collision-record value has no live steering writer;
-	// it stays zero or at its restored value, while flight maintains a separate
-	// residual. Trace both steering writers through the callback boundary to
-	// establish which maintained value must reach this classifier. Keep the
-	// existing zero/restored value until that connection is established.
+	// Ground steering and flight publication supply the current heading
+	// step before this callback boundary [04 R-MOV-01 §6].
 	turnResidual := int32(0)
 	if coll := handleRow(s.Collisions, u.Handle); coll != nil {
 		blocked = coll.Blocked
@@ -3106,11 +3103,9 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		dx = int64(numeric.Fixed(t1x)) - int64(u.X)
 		dz = int64(numeric.Fixed(t1z)) - int64(u.Z)
 	}
-	if !brakingOnly && dx == 0 && dz == 0 {
-		d := s.distToGoal(u)
-		s.emitMovementCallbacks(u, 0) // no delta => tier 0 [04 §5.2][GAP T15] C18
-		return StepResult{Handle: handle, DistToGoal: d, HasRoute: true, EmptyRoute: false, Moved: false, Arrived: serviceArrived}
-	}
+	// A waypoint coincident with the unit still runs heading and speed
+	// integration. Only the has-waypoint gate selects braking-only; there
+	// is no zero-distance early return [04 R-MOV-01 §2, §3, §4].
 	desired := u.Move.Heading
 	if !brakingOnly {
 		// The mover's desired heading uses the self-minus-target vector; the
@@ -3146,6 +3141,9 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		steer.BrakeRate = int32(u.Def.BrakeRate)
 	}
 	steer.UpdateHeading(desired) // [04 §8.1] C20
+	// The callback/save residual is the saturated heading step, including
+	// zero when the follower has no waypoint [04 R-MOV-01 §2, §3, §6].
+	coll.TurnResidual = int16(steer.PendingHeading - steer.Heading)
 	// Speed capping consumes the authoritative unit pitch word [04 R-MOV-01 §4].
 	cap := steer.SpeedCapForPitch(int16(u.Move.Pitch))
 	// The follower selects acceleration only when both strict cornering and

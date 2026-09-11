@@ -285,6 +285,22 @@ the next phase (§11.2).
 Two overlapping smoke puffs therefore blend one after the other, exactly as
 the byte writers do `[03 R-COMP-01 §2]` `[03 R-FX-02 §3]`.
 
+**Source lifetime (host ownership).** The window compares the client's terrain
+binding generation after a joined update and before either executor draws. A
+changed binding, including teardown to no terrain and reloading the same map,
+discards speculative recording and the paused-world image and identity, then
+calls `Renderer.ResetSources`. This retires terrain pages, GAF/PCX/FNT source
+atlases, model texture and composition pages, fog sources and their dependent
+compiled runs, upload identities and frame scratch. Shared images are released
+once. Shader programs, palette tables, output surfaces, and renderer settings
+survive. Stable bindings, zoom changes and ordinary frames retain their caches.
+
+This is a host resource-lifetime correction, not a retail rendering claim.
+Previously the one process-lived renderer retained each newly loaded terrain
+and immutable source identity forever. Same-map restarts also loaded new
+identities, so memory grew with the number of battles. The terrain reference
+also retains its movement-service binding.
+
 ### 2.4 `internal/platform/ebitenapp` — the switch
 
 The adapter owns one `client.Client` and, lazily, one `gpurender.Renderer`.
@@ -1823,9 +1839,13 @@ the remainder of the period, several milliseconds, every frame.
 **The shape.** At the end of a modern Draw, after `Execute` and the screen
 blit, the client records the **next** frame on one persistent goroutine. The
 game goroutine joins that record before it touches client state again — at the
-top of Update, before input, and at the top of the next Draw. Recording is
-therefore never concurrent with anything: it owns the client for exactly the
-span the game goroutine spends in the window layer. The §13.9 worker pool runs
+top of Update, before input, and at the common entry to the next Draw, for
+both executors. An executor switch cancels the pending speculative record,
+including its saved presentation-CRT state, before classic can advance
+presentation. The modern Draw tail rechecks the executor after its deferred
+Update before launching another record: an F10 handled there may have selected
+classic. Recording therefore owns the client for exactly the span the game
+goroutine spends in the window layer. The §13.9 worker pool runs
 inside it as before, so the pre-record is itself parallel.
 
 Nothing is double-buffered. The list, the point and surface arenas and the
@@ -1893,10 +1913,28 @@ twice within one committed tick. The exception is the presentation CRT the
 segmented projectile pass draws from, which is a stream; the launch snapshots
 it and a discard puts it back [03 §2.4.1][I4].
 
+**Benchmark pacing and measurement.** Harness version 2 runs every Draw callback
+with Ebitengine updates synchronized to drawing and one explicit host deadline.
+If a draw arrives late, the next deadline is based on its arrival; the harness
+never catches up with a burst of unpaced draws. A fixed draw-to-tick ratio keeps
+30 authoritative ticks per target second at every supported presentation rate;
+falling below the target slows wall-clock battle progression without changing
+the measured tick sequence [I6]. Renderer warmup covers two simulated seconds.
+
+The cadence timestamp is taken before simulation, after the intentional pacing
+wait. The first measured interval is invalid because profiling setup separates
+it from warmup. Reports distinguish complete host callback work, explicit pacing
+sleep, and time outside the previous callback (including deferred driver work,
+queue/display waits and scheduling). The public Ebitengine API exposes neither
+GPU completion nor actual presentation timestamps; both are recorded as
+unavailable. A low Submit timer plus a long cadence cannot establish GPU
+saturation. See BATTLE_BENCHMARK.md for the field meanings and compatibility.
+
 **Predicting the fractions.** The benchmark knows the next frame exactly: the
-four-draw group's next fraction is `(phase+1)/4`, and the fourth draw of a
-group publishes a tick, so no pre-record is launched across it. Three of every
-four frames hit, the fourth records in place, and the comparison is **exact** —
+group's next fraction is `(phase+1)/drawsPerTick`, with one authoritative
+tick per `FPS/30` draws. At 60 FPS one of two draws can hit; at 120 FPS three
+of four can hit. A draw that publishes a tick records in place, so no pre-record
+is launched across it. The comparison is **exact** —
 zero tolerance — so a measured frame is byte-identical to a synchronous record.
 
 The window predicts from the measured present interval: the camera fraction is
@@ -2339,15 +2377,40 @@ The page's shelf and pixels persist. Each frame:
    frame and the page reaches its row bound in a second.
 3. A subject whose key is resident keeps its slot: no admission scan, no face
    preparation, no vertex, no draw.
-4. A new subject takes a region from the free list (smallest that fits, lowest
+4. Before allocating, protect every resident key the complete frame will use.
+   A new subject early in record order cannot evict a hit appearing later.
+   Reserve subjects in descending raster height, with stable record-order ties,
+   to reduce wasted shelf height. Replay still commits the original painter
+   order; the disjoint raster reservations carry no inter-subject ordering.
+5. A new subject takes a region from the free list (smallest that fits, lowest
    index breaking the tie), then the shelf frontier, then by evicting the least
-   recently used slot no frame has claimed (lowest index breaking the tie). A
+   recently used slot this frame does not use (lowest index breaking the tie).
+   Split a larger free rectangle into the requested reservation and at most two
+   disjoint remainders. On release, join adjacent free regions only when their
+   union is rectangular; never span a still-owned slot. A
    frame that still cannot place a subject takes the per-subject fallback route
    and asks the next frame to start from an empty page — which is exactly what a
    full page did before slots persisted.
 
 Nothing here depends on map order: the residency map is looked up and never
 ranged, and every choice among candidates is resolved by an ordered scan [I1].
+
+**Measured packing follow-up (2026-09-11).** In the Great Divide scene-4
+benchmark at 30 Hz, 1080p, seed 7, the preceding allocator overflowed in 90 of
+180 measured frames and discarded all residency on the following frame. The
+policy above reduced overflow frames to 45 and raised median slot reuse from
+3.3% to 21.9%; median raster pixels fell from 3,188,520 to 2,293,608 and total
+allocation from 1.746 to 1.647 MB/frame. Median Submit stayed near 5.6 ms and
+98% of frames stayed on cadence. Metadata and every measured simulation census
+matched. Device fixtures check reuse under pressure against a cold raster;
+the battle captures were inspected and differed in 50 of 2,073,600 pixels,
+within the reviewed placement-sensitive raster policy below. This is a packing
+and allocation improvement, not evidence of a higher frame-rate ceiling.
+
+Overflow still requests a rebuild. Keeping fragmented residency indefinitely
+was measured separately and rejected: it increased overflow fallback work,
+allocations and frame time despite a higher hit count. Page size, pixel inputs,
+cache invalidation and simulation behavior are unchanged by this follow-up.
 
 The clears follow: only the reservations a frame allocated are cleared, in one
 device draw per plane, and a page with nothing carried over clears its whole
@@ -3210,8 +3273,8 @@ instead, and the map slid under the cursor.
 ### 16.6 The wheel, the steps and the ease — contract Z5
 
 `camera.ZoomController` is the state machine, driven once per host Update from
-the battle's camera pass. Its clock is host Updates, supplied by the platform
-layer; no simulation tick is read [I6].
+the battle's camera pass. Easing uses host Updates and scroll cooldown uses
+the supplied monotonic host milliseconds; neither reads simulation time [I6].
 
 * **The steps.** `ZoomSteps` is the ascending list {0.5, 1, 2}: a tactical
   overview, the default native view, and the detail view. Fractional stops
@@ -3220,18 +3283,31 @@ layer; no simulation tick is read [I6].
   closer view than 0.25× while doubling the visible span on each axis. These
   are presentation choices, not retail findings. A target below the map's
   floor is clamped to that floor (§16.7).
-* **The wheel** moves the *target* one step per `ZoomScrollThreshold` of
-  accumulated travel: 3000 thousandths, or three Ebitengine wheel units.
-  This presentation tuning requires three times the scroll input of the
-  former one-unit threshold to make trackpad zoom less sensitive. Mouse wheels
-  share that threshold; F9 is unaffected. Positive travel goes to the next step
-  up and negative travel to the next step down. Scroll fractions bank until
-  they reach the threshold; a reversal discards what is banked, so drift does
-  not step. From a factor
-  between steps — the ease in flight, a free `--zoom` — the wheel goes to the
-  nearest step in its direction of travel, so it always lands on a step. The
-  gesture is anchored at the pointer, and the anchor is kept for the whole
-  animation.
+* **The wheel** requires `ZoomScrollThreshold` of accumulated travel:
+  1000 thousandths, or one Ebitengine wheel unit, restoring one conventional
+  mouse click per step. A call can move at most one stop, even for a large
+  scroll delta. After an accepted step, `ZoomScrollCooldownMillis` discards
+  further scroll input for 500 host milliseconds. Discarded input neither
+  accumulates nor extends the deadline, and the triggering event's excess is
+  discarded too. Thus a burst from 2× first targets 1× and cannot queue a
+  second jump to 0.5×. Continuing scroll after the hold can take another step.
+  This is a presentation feel choice, independent of game speed and pause.
+  The current input stream combines mouse and trackpad scrolling, so both
+  share the cooldown; F9 bypasses it and clears pending scroll state.
+  On macOS, a local AppKit scroll monitor separates events whose
+  `momentumPhase` is nonzero: they remain in GUI scrolling but are excluded
+  from the zoom delta, even after the cooldown expires. This implements the
+  host presentation policy using [Apple's scroll-event semantics](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/EventOverview/HandlingTouchEvents/HandlingTouchEvents.html),
+  not a retail contract. The monitor returns every event unchanged and batches
+  total and non-momentum deltas together, using Ebitengine's precise-scroll
+  conversion so sensitivity is unchanged. The batch survives the input value
+  copy; an empty native poll stays empty rather than replaying Ebiten's copy.
+  Other platforms and VM guests retain the Ebitengine wheel source. No
+  gesture classification is guessed from delta magnitude or event timing.
+  Below-threshold fractions accumulate; reversing direction clears that
+  remainder. A step refused at a zoom limit does not start a cooldown.
+  From a free factor the wheel takes the nearest stop in its direction of
+  travel. Zoom stays anchored at the pointer throughout the animation.
 * **The ease** closes `ZoomEaseFraction` of the remaining gap per Update, moves
   at least one unit so an integer factor cannot stall, and settles outright
   inside `ZoomSettleEpsilon`. It is what makes a notch a glide rather than a

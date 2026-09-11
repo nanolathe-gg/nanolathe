@@ -28,6 +28,7 @@ func TestShotStampsShooterRevealDeadlineOutright(t *testing.T) {
 		Range:          1200,
 	}
 	shooter := &units.Unit{Handle: 3, Owner: 2}
+	shooter.Move.Heading = 0xc000   // fixed muzzle faces the target on +X
 	shooter.RevealDeadline = 999999 // a prior, larger value must not survive.
 
 	r := rng.NewSimulation(1)

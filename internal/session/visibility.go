@@ -130,8 +130,10 @@ func observerCellForMode(s *Session, u *units.Unit, emitter uint8, mode visibili
 }
 
 func radiusFor(u *units.Unit) int32 {
-	if u != nil && u.Def != nil && u.Def.SightDistance > 0 {
-		return int32(u.Def.SightDistance)
+	if u != nil && u.Def != nil {
+		// The observer record consumes the signed word, including zero and
+		// negative values [03 R-VIS-01 §2].
+		return int32(int16(u.Def.SightDistance))
 	}
 	return 32
 }

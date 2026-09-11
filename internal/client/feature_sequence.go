@@ -22,8 +22,8 @@ import (
 // the frame painted for it are always the same one.
 //
 // Every answer is memoised per "filename|sequence", including the failures, so
-// a draw is a map lookup and never a load; WarmFeatureSequences compiles the
-// whole catalog up front so even the first frame finds its entry ready.
+// a draw is a map lookup and never a load; WarmBattleFeatureSequences compiles
+// every battle-reachable event sequence before the first frame.
 
 // featureSequenceFrame is one frame's contribution: the geometry pass 3a
 // scales by, and the delay that decides how many visits it holds for.
@@ -122,14 +122,21 @@ func (c *Client) WarmFeatureSequences(defs map[string]*content.FeatureDef) {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	ordered := make([]*content.FeatureDef, 0, len(keys))
 	for _, key := range keys {
-		def := defs[key]
+		ordered = append(ordered, defs[key])
+	}
+	c.warmFeatureSequences(ordered)
+}
+
+func (c *Client) warmFeatureSequences(defs []*content.FeatureDef) {
+	for _, def := range defs {
 		if def == nil || def.Filename == "" {
 			continue
 		}
 		// Event bodies and their shadow twins are drawn from an attached
-		// runtime record. Rest art stays on the draw path's own lazy load,
-		// which keeps this pass off every GAF that holds nothing but idle art.
+		// runtime record. Rest art needs no event cursor; the battle warm
+		// wrapper prepares its banks separately.
 		for _, seq := range [...]string{
 			def.SeqNameBurn, def.SeqNameDie, def.SeqNameReclamate,
 			def.SeqNameBurnShad, def.SeqNameDieShad, def.SeqNameReclamateShad,

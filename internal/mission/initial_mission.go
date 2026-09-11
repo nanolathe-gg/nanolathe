@@ -352,12 +352,15 @@ func splitArgs(s string) []string {
 }
 
 func floatToFixed(f float64) numeric.Fixed {
-	// Coordinates parse as floats scaled by 65536; times scale by 30 [04 §3.6] C10.
+	// Callers parse into single precision before promoting for this exact
+	// product. Coordinates scale by 65536 [08 R-ENTRY-01 §6] [04 §3.6] C10.
 	// Truncate and sign-extend the stored low word [01 R-DET-01 §1].
 	return numeric.Fixed(numeric.TruncateFloat64ToLow32(f * 65536)) // [04 §3.6] scaled by 65536 [I3] trunc toward zero
 }
 
 func timeToTicks(secs float64) int32 {
+	// The parsed single-precision seconds are promoted before scaling; no
+	// second single-precision rounding intervenes [08 R-ENTRY-01 §6].
 	return numeric.TruncateFloat64ToLow32(secs * 30) // [04 §3.6] times scale by 30, trunc toward zero [I3]
 }
 
@@ -412,7 +415,7 @@ func actingUnitIsBuilding(ctx *interpCtx) bool {
 	if ctx == nil || ctx.unit == nil || ctx.unit.Def == nil {
 		return false
 	}
-	return ctx.unit.Def.BMCode == 0
+	return ctx.unit.Def.BMCode != 1
 }
 
 func (ctx *interpCtx) lookupIdentOrUnitName(name string) int {
@@ -445,12 +448,12 @@ func handleM(token string, ctx *interpCtx) {
 	fields := splitArgs(rest)
 	var fx, fy float64
 	if len(fields) >= 1 {
-		if v, err := strconv.ParseFloat(fields[0], 64); err == nil {
+		if v, err := strconv.ParseFloat(fields[0], 32); err == nil {
 			fx = v
 		}
 	}
 	if len(fields) >= 2 {
-		if v, err := strconv.ParseFloat(fields[1], 64); err == nil {
+		if v, err := strconv.ParseFloat(fields[1], 32); err == nil {
 			fy = v
 		}
 	}
@@ -465,7 +468,7 @@ func handleM(token string, ctx *interpCtx) {
 	node := orders.Node{
 		GoalX: floatToFixed(fx), // [04 §3.6] coordinates×65536 [C10]
 		GoalZ: floatToFixed(fy),
-		GoalY: ctx.unit.Y,
+		GoalY: 0, // [08 R-ENTRY-01 §6] the authored position has no altitude
 	}
 	ctx.push(id, node)
 }
@@ -482,8 +485,8 @@ func handleA(token string, ctx *interpCtx) {
 	// Try numeric detection: two floats -> numeric attack ground position [04 §3.6] C10.
 	isNumeric := false
 	if len(fields) >= 2 {
-		_, err1 := strconv.ParseFloat(fields[0], 64)
-		_, err2 := strconv.ParseFloat(fields[1], 64)
+		_, err1 := strconv.ParseFloat(fields[0], 32)
+		_, err2 := strconv.ParseFloat(fields[1], 32)
 		if err1 == nil && err2 == nil {
 			isNumeric = true
 		}
@@ -491,8 +494,8 @@ func handleA(token string, ctx *interpCtx) {
 	if isNumeric {
 		// Numeric form: a x,y attack ground position suppresses tail [04 §3.6] C12.
 		var fx, fy float64
-		fx, _ = strconv.ParseFloat(fields[0], 64)
-		fy, _ = strconv.ParseFloat(fields[1], 64)
+		fx, _ = strconv.ParseFloat(fields[0], 32)
+		fy, _ = strconv.ParseFloat(fields[1], 32)
 		// A rejected positional attack remains rejected; inventing a chase
 		// descriptor here bypasses the resolver's weapon and capability gates
 		// [04 §3.6][04 R-ORD-02 §1].
@@ -503,7 +506,7 @@ func handleA(token string, ctx *interpCtx) {
 		node := orders.Node{
 			GoalX: floatToFixed(fx), // [04 §3.6] coordinates×65536
 			GoalZ: floatToFixed(fy),
-			GoalY: ctx.unit.Y,
+			GoalY: 0, // [08 R-ENTRY-01 §6] the authored position has no altitude
 		}
 		ctx.push(id, node)
 		ctx.suppressTail = true // numeric-form a suppresses [04 §3.6] C12
@@ -572,16 +575,17 @@ func handleB(token string, ctx *interpCtx) {
 		}
 	}
 	if len(fields) >= 3 {
-		fx, _ = strconv.ParseFloat(fields[2], 64)
+		fx, _ = strconv.ParseFloat(fields[2], 32)
 	}
 	if len(fields) >= 4 {
-		fy, _ = strconv.ParseFloat(fields[3], 64)
+		fy, _ = strconv.ParseFloat(fields[3], 32)
 	}
 	// BuildingBuild when the acting unit has no mover (a structure), MobileBuild
 	// at x,y when it has one [04 §3.6 correction 2026-09-02] C10. The presence
 	// of coordinates plays no part in the choice.
 	var id orders.ID
-	if actingUnitIsBuilding(ctx) {
+	building := actingUnitIsBuilding(ctx)
+	if building {
 		id = orders.Lookup("BuildingBuild")
 	} else {
 		id = orders.Lookup("MobileBuild")
@@ -594,9 +598,12 @@ func handleB(token string, ctx *interpCtx) {
 		BuildDefKey: ck,        // canonical product identity construction resolves first [02 §5]
 		Param1:      idx,       // catalog index fallback [04 §3.2]
 		Param2:      uint32(n), // count n [04 §3.6]
-		GoalX:       floatToFixed(fx),
-		GoalZ:       floatToFixed(fy),
-		GoalY:       ctx.unit.Y,
+	}
+	// BuildingBuild supplies no position, so its entire goal stays zero;
+	// only MobileBuild receives the authored X/Z [08 R-ENTRY-01 §6].
+	if !building {
+		node.GoalX = floatToFixed(fx)
+		node.GoalZ = floatToFixed(fy)
 	}
 	ctx.push(id, node)
 }
@@ -782,13 +789,13 @@ func handleP(token string, ctx *interpCtx) {
 	fields := splitArgs(rest)
 	var fx, fy, ft float64
 	if len(fields) >= 1 {
-		fx, _ = strconv.ParseFloat(fields[0], 64) // [04 §3.6] don't test conversion counts
+		fx, _ = strconv.ParseFloat(fields[0], 32) // [04 §3.6] don't test conversion counts
 	}
 	if len(fields) >= 2 {
-		fy, _ = strconv.ParseFloat(fields[1], 64)
+		fy, _ = strconv.ParseFloat(fields[1], 32)
 	}
 	if len(fields) >= 3 {
-		ft, _ = strconv.ParseFloat(fields[2], 64)
+		ft, _ = strconv.ParseFloat(fields[2], 32)
 	}
 	ticks := timeToTicks(ft) // [04 §3.6] times×30 [C10]
 	// Preserve the canonical command admission and variant [04 §3.6].
@@ -799,7 +806,7 @@ func handleP(token string, ctx *interpCtx) {
 	node := orders.Node{
 		GoalX:  floatToFixed(fx), // [04 §3.6] coordinates×65536
 		GoalZ:  floatToFixed(fy),
-		GoalY:  ctx.unit.Y,
+		GoalY:  0,             // [08 R-ENTRY-01 §6] the authored position has no altitude
 		Param1: uint32(ticks), // timeout ticks [04 §3.6] C10
 	}
 	ctx.push(id, node)
@@ -825,10 +832,10 @@ func handleU(token string, ctx *interpCtx) {
 	fields := splitArgs(rest)
 	var fx, fy float64
 	if len(fields) >= 1 {
-		fx, _ = strconv.ParseFloat(fields[0], 64)
+		fx, _ = strconv.ParseFloat(fields[0], 32)
 	}
 	if len(fields) >= 2 {
-		fy, _ = strconv.ParseFloat(fields[1], 64)
+		fy, _ = strconv.ParseFloat(fields[1], 32)
 	}
 	// Preserve the canonical command admission and variant [04 §3.6].
 	id := orders.Resolve(5, ctx.unit, nil, nil)
@@ -838,7 +845,7 @@ func handleU(token string, ctx *interpCtx) {
 	node := orders.Node{
 		GoalX: floatToFixed(fx), // [04 §3.6] coordinates×65536
 		GoalZ: floatToFixed(fy),
-		GoalY: ctx.unit.Y,
+		GoalY: 0, // [08 R-ENTRY-01 §6] the authored position has no altitude
 	}
 	ctx.push(id, node)
 }
@@ -853,7 +860,7 @@ func handleW(token string, ctx *interpCtx) {
 	var secs float64
 	var trailing int64
 	if len(fields) >= 1 {
-		if v, err := strconv.ParseFloat(fields[0], 64); err == nil {
+		if v, err := strconv.ParseFloat(fields[0], 32); err == nil {
 			secs = v
 		} else {
 			secs = 0 // [04 §3.6] don't test conversion counts

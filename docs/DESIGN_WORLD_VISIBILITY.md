@@ -479,8 +479,10 @@ player bits; the byte grid is one `uint8` refcount per player per cell of the
 same dimensions `[03 §3.1]`.
 
 **C2** The mode bit selects the raster shape only; **both** paths write the same
-word mask and the same byte refcount. Both start from `q = floor(radius/32)` by
-signed floor division. Sprite-mask forms `idx = clamp(q − 5, 0, 9)` into the ten
+word mask and the same byte refcount. The session narrows authored sight
+distance to the observer's signed 16-bit word, preserving zero and negative
+values for both live units and temporary death sight `[03 R-VIS-01 §2]`. Both
+start from `q = floor(radius/32)` by signed floor division. Sprite-mask forms `idx = clamp(q − 5, 0, 9)` into the ten
 authored visibility-mask frames; terrain-ray forms `g = clamp(q, 0,
 numtables − 1)` into the **declared** table count and then walks `TABLE g − 1`,
 so a sight distance in `[32(k+1), 32(k+2))` walks `TABLE k`, the highest
@@ -514,8 +516,11 @@ Y changed or the observer height byte moved by more than five; sprite-mask
 substitutes a changed quantized shape index for the height test. On a refresh
 the old footprint is removed first — current coverage must be enabled, and in
 the ray branch the stored height byte must have been nonzero, a guard the sprite
-branch does not carry — an out-of-bounds new origin stores an empty footprint
-and returns, and only then does the new raster publish `[03 §3.2]`
+branch does not carry. Terrain-ray rejects an out-of-bounds observer cell;
+Circular always reaches the clipped mask walk, including when an off-map center
+still has an in-map footprint. Ordinary refresh, mode commands and temporary
+death sight use that same branch distinction, and retirement removes the same
+clipped contribution `[03 §3.2]`
 `[03 R-VIS-01 §2]`.
 
 **C7** Full rebuild: with history disabled the word grid fills all ten bits set,

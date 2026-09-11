@@ -56,18 +56,34 @@ the load-time remaster's. Both are recorded in `frames.json` as `zoom` and
 the detail view is a different amount of pixel work, not a different scene. The
 first `--zoom 2` run of a map pays the remaster (seconds, before the window
 opens and outside every measurement); later runs read its cache.
-The visible window runs with VSync at `--benchmark-tps` draws per second (30, the
-retail cadence, by default; 60 an intermediate rate; 120 the Enhanced
-presentation target) and continues when unfocused. At 30 and 60 one simulation
-step runs per draw, so a 60 TPS run advances the battle twice as fast in wall
-time. At 120 one authoritative step runs every fourth draw and the four frames
-are presented at tick fractions 0, 1/4, 1/2 and 3/4, so the report measures the
-interpolated presentation of docs/DESIGN_GPU_RENDERER.md §13.5 at the retail
-simulation rate; only the modern renderer blends, classic keeps committed-tick
-sampling at every rate. Compare runs at one rate.
 
-`frames.json` records scene version, seed, map, renderer, view scale, display options, runtime
-and build information, per-frame timings and feature census. Modern rows also
+Benchmark version 2 uses `--benchmark-tps` as the target draw rate: 30 by default,
+or 60 or 120. The simulation rate is fixed at 30 ticks per simulated second,
+with one authoritative step per 1, 2 or 4 draws respectively. Modern interpolates
+at 60 and 120 draws/s, using tick fractions 0 and 1/2, or 0, 1/4, 1/2 and 3/4;
+classic holds the committed tick on the intervening draws. Both run the same
+authoritative tick sequence. If drawing falls behind the target, simulation
+advances more slowly in wall time.
+
+The visible window keeps VSync enabled and continues when unfocused. Ebitengine
+runs with `SetTPS(SyncWithFPS)`; `Update` only checks completion and errors,
+and every `Draw` callback executes benchmark work. An explicit host deadline
+pacer waits before that work and rebases after an overrun, avoiding catch-up
+bursts. The target rate is a host work cadence, not a guarantee of display
+scanout timing. Compare runs at the same target rate.
+
+This changes the earlier 60 TPS benchmark, which advanced one simulation tick
+per draw and therefore ran the battle twice as fast as a 30 TPS run. Earlier
+runs also gated measured draws through Ebitengine's update scheduler. Version 2
+separates that scheduler from the benchmark's pacing; its timings are not
+directly comparable with version 1, even when `scene_version` remains 4.
+
+`frames.json` records benchmark and scene versions, seed, map, renderer, view
+scale, display options, runtime and build information, per-frame timings and
+feature census. Version 2 metadata includes `benchmark_version=2`,
+`simulation_tps=30`, `draws_per_tick=TPS/30`, `warmup_draws=TPS*2`,
+`pacing="draw-deadline"`, `gpu_timing_available=false` and
+`present_timing_available=false`. Modern rows also
 carry the executor's per-frame counters, including `Phases`, `Passes`, `Draws`,
 `Vertices`, and `PointPixels`/`PointQuads`/`PointPlanes` — the screen pixels the
 frame's lit point batches covered, the device quads they compiled into and the
@@ -95,16 +111,77 @@ queue phase, stance and target are included in each census. Compare the same sce
 factory production changes RNG consumption and battle evolution, so old captures
 and exact stall tick numbers are not the new scene's baseline.
 
-There are 300 pre-window simulation steps and 60 renderer warm-up draws by
-default. The pre-window steps run without drawing or wall-clock pacing; sound
-and status events are drained each step to avoid replaying the whole lead-in on
+The saved diagnostics support offline investigation of the measured workload:
+
+- `cpu.pprof` samples CPU execution during the window. Flat function costs
+  attribute samples to that function; cumulative costs include callees. Summing
+  cumulative costs across callers and callees double-counts the same samples.
+- `alloc-base.pprof` and `alloc.pprof` are cumulative allocation profiles at the
+  window boundaries. Subtract the baseline to inspect allocation space and
+  object counts attributable to the window. A GC outside each boundary flushes
+  Go's delayed profile data, including runs with no GC during measurement.
+  These sampled deltas also include profile setup/teardown allocations;
+  `memory.json` and `frames.json` retain the exact measured counter deltas.
+  Neither gives exact allocation accounting per unit or effect.
+- `heap.pprof` samples the live Go heap after measurement and a forced GC.
+  That collection is outside timing. The profile describes retained memory at
+  this later point, not all allocations made during the measured window.
+- `memory.json` records `runtime.MemStats` before and after measurement and an
+  `after_gc` snapshot. GPU image memory before and after the window is reported
+  separately from Go memory; it is not GPU execution timing. Window counters
+  are captured before final dump/profile-output allocations. The post-GC
+  snapshot precedes final profile and JSON writes.
+- `goroutine.txt` is an end snapshot of goroutine stacks. It can show what was
+  waiting at that instant, but does not measure CPU time or wait duration.
+- `state-start/` and `state-end/` contain `session.json`, `units.jsonl` and the
+  existing session debug snapshots. The start snapshot follows renderer warmup
+  and precedes the memory/profiling baseline; the end snapshot follows
+  measurement. Unit records come from `Session.VisitDebugUnits`, including
+  orders, COB and movement state. These are endpoints, not a complete history
+  of intervening transitions: an unchanged order or position alone does not
+  prove that a unit stalled throughout the window.
+- `phases.json` records measured simulation tick count and per-phase total,
+  mean and maximum elapsed time. The observer runs only during measurement;
+  its clock reads at phase boundaries add overhead. `phase_timing=true` in
+  metadata identifies that instrumentation, and comparisons must use matching
+  instrumentation settings.
+
+Run the offline analyzer against saved directories without launching a battle:
+
+```
+tools/battle-bench-analyze /tmp/battle-classic /tmp/battle-modern
+```
+
+It writes `analysis.json` and `analysis.md` for each input directory, combining
+timing/workload summaries, CPU flat and cumulative function costs, allocation
+space/object deltas via `pprof -base`, heap in-use data, and phase/state
+summaries. For direct profile inspection:
+
+```
+go tool pprof -top OUTPUT/cpu.pprof
+go tool pprof -top -cum OUTPUT/cpu.pprof
+go tool pprof -top -sample_index=alloc_space -base OUTPUT/alloc-base.pprof OUTPUT/alloc.pprof
+go tool pprof -top -sample_index=alloc_objects -base OUTPUT/alloc-base.pprof OUTPUT/alloc.pprof
+go tool pprof -top -sample_index=inuse_space OUTPUT/heap.pprof
+```
+
+Analysis values repeat exactly for the same saved inputs. This makes a saved
+run reproducible to inspect; timings and sampled profiles naturally vary
+between new measurements. Endpoint comparisons and profile samples remain
+diagnostic evidence, not exact per-entity cost attribution or proof of a stall.
+
+There are 300 pre-window simulation steps by default, followed by two simulated
+seconds of renderer warmup: 60, 120 or 240 draws at the selected target rate,
+always advancing 60 authoritative ticks. The pre-window steps run without
+drawing or wall-clock pacing; sound and status events are drained each step to
+avoid replaying the whole lead-in on
 the first displayed frame. Renderer warmup remains necessary to populate draw
 caches before profiling. Use `--benchmark-pre-ticks=0` to inspect the opening;
 keep the lead-in fixed when comparing revisions rather than waiting for a
-variable combat trigger. At 30 and 60 TPS
-exactly one simulation step runs per draw; at 120 one runs every fourth draw.
-This isolates comparable tick sequences but does
-not exercise the ordinary interactive catch-up scheduler or live user input.
+variable combat trigger. Version 2 steps on phase zero of each draw group and
+records `SimulationStep` and `TickPhase` in every row. This isolates comparable
+tick sequences but does not exercise the ordinary interactive catch-up scheduler
+or live user input.
 The seed fixes simulation streams; authored content, settings and code revision
 also matter. Camera origins and shake status are recorded with each census.
 
@@ -121,10 +198,12 @@ the previous simulation tick and `damaged_units` counts
 complete units below maximum health. Missing counters in older reports are
 unknown, not zero.
 
-- `Step`: host viewer step, including simulation and publication.
+- `Step`: host viewer step, including simulation and publication. In version 2
+  this is zero on nonstep draws; the report computes its statistics only from
+  rows with `SimulationStep=true`.
 - `Record`: draw preparation/recording on the **game goroutine**; classic also
-  includes CPU raster/replay. At 120 TPS the modern path runs the record/submit
-  pipeline of docs/DESIGN_GPU_RENDERER.md §13.10, which records the next frame
+  includes CPU raster/replay. At 60 and 120 draws/s the modern path runs the
+  record/submit pipeline of docs/DESIGN_GPU_RENDERER.md §13.10, which records the next frame
   during the previous frame's flush and present, so `Record` there is the wait
   to join that record plus any synchronous re-record — microseconds on a hit,
   the whole record on a miss. It is the critical-path figure either way, and
@@ -134,27 +213,43 @@ unknown, not zero.
   happened, not work on the critical path: it is the number to compare against
   an earlier run's `Record`, and it is absent from a run with no pipeline hits.
 - `Hit`: whether this frame presented a pre-recorded list. The report prints the
-  hit share and splits `Record` and `Cadence` by it. At 120 TPS the ceiling is
-  75% — the fourth draw of each group publishes a tick, which a pre-record may
-  not cross — so a lower share means predictions are missing, and a share of
-  zero means the pipeline is not running (30 and 60 TPS step on every draw, so
-  they never launch one).
+  hit share and splits `Record` and valid `Cadence` intervals by it. The potential
+  hit share is 50% at 60 draws/s and 75% at 120: phase zero publishes a tick,
+  which a pre-record may not cross. Actual hits depend on prediction validity
+  and completion. At 30 draws/s every draw steps, so there are no pipeline hits.
 - `CPURender`: classic preparation plus raster/replay, excluding GPU upload.
-- `Submit`: CPU time issuing GPU execution/upload and final draw commands.
-  It is not a GPU completion timestamp; do not add it to cadence as GPU work.
-- `Cadence`: intervals measured after each simulation step, including pacing.
-  With VSync the cadence quantizes to whole display refreshes, so a run whose
-  CPU and GPU work fit the period sits at the floor (33.3 ms at 30, 16.7 ms at
-  60, 8.3 ms at 120) and one that does not alternates between one and two
-  refreshes. The
-  report's "on cadence" share is the fraction of frames at the floor; it is the
-  first figure to compare when the medians are at the floor already.
-- Modern is GPU-bound before it is CPU-bound: a 60 TPS run whose `Submit` is
-  well under the period and whose cadence still leaves the floor is waiting on
-  the device, and the executor's pass count (destination switches) is the cost
-  to cut, not fragment work.
-- Readback, PNG encoding and profile finalization are outside measured frame work.
-  Profile/counter setup can affect the first measured cadence sample.
+- `Submit`: host CPU time enqueueing rendering/upload and final draw commands.
+  Ebitengine can defer driver encoding and submission until after this callback;
+  this does not measure GPU execution or completion.
+- `DrawWork`: the callback's complete host work after pacing, including census
+  collection and pre-record launch as well as the step, record and submit work.
+- `PaceWait`: intentional host pacing sleep before this draw's work.
+- `OutsideDraw`: elapsed time from the previous callback's return to this
+  callback's entry. It includes deferred driver work, queue and display waits,
+  and host scheduling. It is not GPU duration.
+- `Cadence`: version 2 intervals between consecutive starts of work, after
+  pacing and before simulation. Approximately,
+  `Cadence[i] = DrawWork[i-1] + OutsideDraw[i] + PaceWait[i]`.
+  The first measured row has `CadenceValid=false`: its interval crosses the
+  profiling setup boundary and is excluded from both `Cadence` and
+  `OutsideDraw` statistics, including the pipeline splits. Its other timings
+  and census remain included. No artificial zero interval is used. Older
+  reports without this flag retain all their original interval samples; their
+  cadence timestamps were taken after simulation.
+
+The report's target share counts valid intervals no longer than 105% of the
+target period (33.3, 16.7 or 8.3 ms before that tolerance). Host cadence
+throughput is the valid interval count divided by their total duration. Neither
+quantity measures actual display scanout. With only one measured row, version 2
+has no valid cadence interval and reports those statistics as unavailable.
+
+GPU execution and actual presentation timestamps are unavailable through the
+public Ebitengine API used here; the report states that explicitly. Small
+`Submit` values plus long cadence intervals do not establish a GPU bottleneck:
+deferred CPU driver work, scheduling and display pacing can also occupy that
+time. Separating these causes requires a driver/presentation timeline and GPU
+timestamps from external instrumentation. Readback, PNG encoding and profile
+finalization remain outside measured draw work.
 
 For changes to simulation, movement, construction, model/effect presentation,
 or renderer storage/batching, run both renderers and review timings and captures.
@@ -163,10 +258,13 @@ moving/damaged units, projectiles, effects, nanoframes,
 nanolathe events and shake. The factories can be blocked or starved according
 to ordinary gameplay; no animation or nanoframe is synthesized for the benchmark.
 For performance decisions, repeat matching runs and compare their spread;
-one six-second measurement is a diagnostic sample. Keep 30/60/120 TPS and
-zoom comparisons separate: they cover different presentation work and tick
-windows. A longer `--benchmark-frames` run is useful for cache pressure and
-burnout, but verify the battle has not become quiet by its end.
+one short measurement is a diagnostic sample. Keep benchmark versions,
+30/60/120 draw targets and zoom comparisons separate. With the default 180
+measured draws, version 2 covers 180, 90 or 45 authoritative ticks respectively;
+the nominal measured durations are six, three or 1.5 seconds. Matching tick
+windows across rates requires proportionally more draws, but the presentation
+work still differs. A longer `--benchmark-frames` run is useful for cache
+pressure and burnout, but verify the battle has not become quiet by its end.
 This is an opt-in development/regression probe, not a timing threshold in CI.
 Keep baseline outputs outside the repository and report median, p95 and maxima
 alongside the exact workload. Pixel equality across CPU/GPU is not required;

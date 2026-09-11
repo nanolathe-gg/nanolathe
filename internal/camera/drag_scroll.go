@@ -18,9 +18,10 @@ func (d *DragScroll) Begin(c *Camera) {
 	d.anchorX, d.anchorZ = x/16, z/16
 	c.ClearFollow()
 	// Pointer dispatch precedes phase 10, unlike keyboard hotkeys. The host
-	// already sampled a pending tracked target before dispatch; invalidate that
-	// sample too so this same frame cannot follow after capture [07 R-CAM-01 §1].
-	c.Follow.latched = 0
+	// already sampled tracking and glide state before dispatch; refresh both
+	// after cancellation so this same frame cannot follow after capture
+	// [07 R-CAM-01 §1].
+	c.LatchTracked()
 }
 
 // Step spends this frame's displacement from the recentered cursor. Signed

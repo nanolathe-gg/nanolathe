@@ -35,12 +35,31 @@ for directory in sys.argv[1:]:
     if not rows:
         print("WARNING: no measured frames; timings and workload cannot be assessed")
         continue
-    for key in ("Step", "Record", "PreRecord", "CPURender", "Submit", "Cadence"):
+    version2 = metadata.get("benchmark_version", 1) >= 2
+    cadence_rows = [row for row in rows if row.get("CadenceValid", True)]
+    print("GPU execution timing: unavailable; display presentation timing: unavailable")
+    print(f"Cadence: {len(cadence_rows)}/{len(rows)} valid intervals")
+    timing_keys = ["Step", "Record", "PreRecord", "CPURender", "Submit", "Cadence"]
+    if version2:
+        step_rows = [row for row in rows if row.get("SimulationStep")]
+        print(f"Step statistics: {len(step_rows)} simulation-step draws; nonstep zeros excluded")
+        print("DrawWork: complete host work after pacing; PaceWait: intentional host pacing sleep")
+        print("OutsideDraw: between callbacks, including deferred driver/queue/display waits; not GPU time")
+        timing_keys += ["DrawWork", "PaceWait", "OutsideDraw"]
+    for key in timing_keys:
         if key == "CPURender" and data["renderer"] == "modern":
             continue
         if key == "PreRecord" and not any(row.get("PreRecord") for row in rows):
             continue
-        values = sorted(row.get(key, 0.0) for row in rows)
+        subset = rows
+        if key in ("Cadence", "OutsideDraw"):
+            subset = cadence_rows
+        elif key == "Step" and version2:
+            subset = step_rows
+        values = sorted(row[key] for row in subset if key in row)
+        if not values:
+            print(f"{key:12} unavailable (no samples)")
+            continue
         print(f"{key:12} mean {statistics.mean(values):8.3f}  median {statistics.median(values):8.3f}  "
               f"p95 {values[min(len(values)-1, int(len(values)*.95))]:8.3f}  max {values[-1]:8.3f} ms")
     # Record/submit pipeline (docs/DESIGN_GPU_RENDERER.md §13.10). A hit
@@ -57,7 +76,10 @@ for directory in sys.argv[1:]:
             if not subset:
                 continue
             for key in ("Record", "Cadence"):
-                values = sorted(row[key] for row in subset)
+                values = sorted(row[key] for row in subset
+                                if key in row and (key != "Cadence" or row.get("CadenceValid", True)))
+                if not values:
+                    continue
                 print(f"  {label:4} {key:9} median {statistics.median(values):8.3f}  p95 "
                       f"{values[min(len(values)-1, int(len(values)*.95))]:8.3f} ms")
     # Persistent model slots (docs/DESIGN_GPU_RENDERER.md §13.12). Reuse is the
@@ -90,8 +112,18 @@ for directory in sys.argv[1:]:
 
     tps = data.get("tps") or 30
     budget = 1000.0 / tps * 1.05
-    on_cadence = sum(row["Cadence"] <= budget for row in rows)
-    print(f"On cadence at {tps} Hz (<= {budget:.1f} ms): {on_cadence}/{len(rows)} frames ({100*on_cadence/len(rows):.0f}%)")
+    if cadence_rows:
+        on_cadence = sum(row["Cadence"] <= budget for row in cadence_rows)
+        print(f"Within target interval at {tps} draws/s (<= {budget:.1f} ms): "
+              f"{on_cadence}/{len(cadence_rows)} valid intervals ({100*on_cadence/len(cadence_rows):.0f}%)")
+        elapsed = sum(row["Cadence"] for row in cadence_rows)
+        if elapsed > 0:
+            print(f"Host cadence throughput: {1000*len(cadence_rows)/elapsed:.2f} intervals/s (not display scanout)")
+        else:
+            print("Host cadence throughput: unavailable (no positive elapsed interval)")
+    else:
+        print(f"Within target interval at {tps} draws/s: unavailable (no valid intervals)")
+        print("Host cadence throughput: unavailable (no valid intervals)")
     print(f"Alloc: {data['alloc_bytes']/len(rows)/1e6:.3f} MB/frame, "
           f"{data['mallocs']/len(rows):.1f} objects/frame; GC {data['gc']}")
     census = [row.get("Census", {}) for row in rows]

@@ -185,3 +185,59 @@ func TestMoveTierCacheHoldsStaleVerdictUntilNextCrossCellProposal(t *testing.T) 
 		t.Fatalf("cached tier=%d want nonzero once the verdict is replaced (speed=%d) [04 §5.2]", mover.MoveTier, coll.Speed)
 	}
 }
+
+// A stopped mover's turn on this tick drives callbacks, while the next
+// no-waypoint tick clears the same persisted residual [04 R-MOV-01 §6].
+func TestGroundTurnPublishesResidualBeforeCallbacks(t *testing.T) {
+	system, u, coll := moveTierFixture(t)
+	u.Def.Acceleration = 0
+	u.Def.TurnRate = 475
+	u.Move.Heading, coll.Heading = 0, 0
+	handleRow(system.Steers, u.Handle).Heading = 0
+	queue := orders.QueueForUnit(u)
+	queue.Push(orders.Lookup("Move_Ground"), orders.Node{GoalX: world.CellToWorld(3)})
+	head := queue.Head()
+	handleRow(system.Routes, u.Handle).Publish([]Point{{X: 0, Z: 0}, {X: 48, Z: 0}})
+	setHandleRow(&system.activeOrders, u.Handle, &activeMove{order: head, token: 41})
+	system.nextActivation = 41
+	system.BeginTick(1)
+	system.StepUnit(u.Handle, 1)
+	system.EndTick(1)
+	if coll.Speed != 0 || coll.TurnResidual != -475 || u.MoveTier != 1 {
+		t.Fatalf("turn-only mover: speed=%d residual=%d tier=%d, want 0,-475,1", coll.Speed, coll.TurnResidual, u.MoveTier)
+	}
+	handleRow(system.Routes, u.Handle).Publish(nil)
+	system.BeginTick(2)
+	system.StepUnit(u.Handle, 2)
+	system.EndTick(2)
+	if coll.TurnResidual != 0 || u.MoveTier != 0 {
+		t.Fatalf("no-waypoint mover retained turn: residual=%d tier=%d", coll.TurnResidual, u.MoveTier)
+	}
+}
+
+// Pruning consumes one point per visit. A second coincident waypoint must
+// still execute steering and braking rather than reuse last tick's residual
+// or stop before the speed update [04 R-MOV-01 §2, §3, §4, §6].
+func TestCoincidentWaypointUpdatesTurnAndSpeedBeforeCallbacks(t *testing.T) {
+	system, u, coll := moveTierFixture(t)
+	u.Move.Heading, coll.Heading = 0, 0
+	steer := handleRow(system.Steers, u.Handle)
+	steer.Heading, steer.Speed = 0, 1
+	coll.Speed, coll.TurnResidual = 1, -475
+	queue := orders.QueueForUnit(u)
+	queue.Push(orders.Lookup("Move_Ground"), orders.Node{GoalX: world.CellToWorld(3)})
+	head := queue.Head()
+	route := handleRow(system.Routes, u.Handle)
+	route.Publish([]Point{{}, {}, {}, {X: 48}})
+	setHandleRow(&system.activeOrders, u.Handle, &activeMove{order: head, token: 41})
+	system.nextActivation = 41
+	system.BeginTick(1)
+	system.StepUnit(u.Handle, 1)
+	system.EndTick(1)
+	if route.Count != 3 {
+		t.Fatalf("pruning consumed more than one waypoint: count=%d", route.Count)
+	}
+	if coll.TurnResidual != 0 || coll.Speed != 0 || u.MoveTier != 0 {
+		t.Fatalf("coincident waypoint retained motion: residual=%d speed=%d tier=%d", coll.TurnResidual, coll.Speed, u.MoveTier)
+	}
+}

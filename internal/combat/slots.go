@@ -241,7 +241,7 @@ type PipelineStep int
 const (
 	StepDecrement      PipelineStep = iota // decrement nonzero reload [06 §4.1] P0-10
 	StepTargetValidate                     // target validation / resolve [06 §3.1] [06 §3.2][06 R-WPN-04 §1] P0-10
-	StepAimDispatch                        // Aim* dispatch / readiness wait [GAP T15] C9 [06 §3.3] P0-10; latch is set immediately after dispatch
+	StepAimDispatch                        // Aim* dispatch [GAP T15] C9 [06 §3.3] P0-10; latch is set immediately after dispatch
 	StepAdmission                          // the range/medium/ballistic shot-admission gate [06 §3.3][06 R-WPN-05 §1] P0-10
 	StepSpawner                            // family spawner (allocation, Fire*/RockUnit per [06 §4.1] C2) P0-10; pool-count increment precedes the divide that can fault [GAP T5]
 	StepStoreReload                        // store reload and ammo per [06 §4.2] C7/C6 (int trunc order [06 §4.2])
@@ -354,43 +354,24 @@ func TickSlot(slot *Slot, idx int, tick uint32, spy *PipelineSpy, env PipelineEn
 		return false
 	}
 
-	// --- Step: optional Aim* dispatch [GAP T15] C9/C16 [06 §3.3] P0-10 ---
-	// Family readiness is a spawner-side decision, but the DISPATCH belongs
-	// here: a family that needs an aim result which is not yet ready issues
-	// its Aim* (once — the issue bit latches) and the slot waits for the
-	// asynchronous completion this visit. The latch is set immediately after
-	// dispatch. The ballistic no-solution sentinel suppresses Aim dispatch P0-10.
+	// Aim dispatch is independent of reload, but only a clear issue latch
+	// requests a new callback. Readiness gates the executor after admission
+	// and costs, never the outer slot path [06 R-P0-07].
 	needLatch, needResult := aimRequirement(slot.Weapon)
-	if needResult && !slot.Aim.Ready {
+	if needResult && !slot.Aim.IssueBit && (slot.Weapon.Turret || !slot.Weapon.Stockpile || slot.Ammo != 0) {
 		if spy != nil {
 			spy.Record(StepAimDispatch)
 		}
-		if !slot.Aim.IssueBit {
-			dispatched := true
-			if env.DispatchAim != nil {
-				dispatched = env.DispatchAim(idx, slot)
-			}
-			if dispatched {
-				// OR 0x01 immediately after dispatch [06 §3.3] P0-10
-				slot.Aim.StartAim()
-				slot.Flags |= FlagAimLatch
-			} else {
-				// Ballistic sentinel 0x8000 suppressed Aim [06 §3.3] P0-10 - don't set latch, fall through to admission which will fail via ballistic gate.
-				// Return false waiting? Actually without latch, turret will also fail needLatch gate below. But to avoid infinite wait, we fall through.
-				// For turret ballistic with no solution, we should not wait for Ready that will never come; we go to admission which will reject.
-				// So don't return here; continue to admission which will reject.
-				goto admission
-			}
+		dispatched := true
+		if env.DispatchAim != nil {
+			dispatched = env.DispatchAim(idx, slot)
 		}
-		return false // fire waits for the asynchronous nonzero return, no timeout P0-10
-	}
-	if needLatch && !slot.Aim.IssueBit {
-		// A turret whose issue latch was cleared (e.g. by TargetCleared)
-		// cannot fire even with a stale ready result [06 §3.3] P0-10.
-		return false
+		if dispatched {
+			slot.Aim.StartAim()
+			slot.Flags |= FlagAimLatch
+		}
 	}
 
-admission:
 	// --- Step: range/medium/ballistic admission [06 §3.3] P0-10 ---
 	// Shot-time physical admission tests squared planar range first; water vs non-water diverges; ballistic requires solution [06 §3.3].
 	// Coverage vs engagement distinction is established: coverage drives overlay only, not ordinary fire radius [06 §3.3].
@@ -422,6 +403,10 @@ admission:
 				return false
 			}
 		}
+	}
+
+	if (needLatch && !slot.Aim.IssueBit) || (needResult && !slot.Aim.Ready) {
+		return false
 	}
 
 	// --- Step: family spawner (allocation, sounds, Fire*/RockUnit) [06 §4.1] C2 P0-10 ---

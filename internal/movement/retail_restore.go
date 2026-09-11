@@ -80,10 +80,9 @@ func (s *System) restoreRecordGoal(u *units.Unit, head *orders.Node, bind bool) 
 			steer:     head.RetailSubtypeWords16[0]&1 != 0,
 			commanded: head.RetailSubtypeWords16[2],
 		}
-		// TODO(question): code-3 retains a zeroed auxiliary u16 and a trailing
-		// padding word after the saved steer flag and commanded heading. Their
-		// runtime meaning is unknown; retain them on this object for saving
-		// without assigning behavior to either word.
+		// The auxiliary and trailing words are copied by save/restore but
+		// have no movement consumer in this marker's traced methods. Keep
+		// both unchanged across saves [04 R-AIR-01 §14.5].
 		savedSatisfied := head.Satisfied
 		if bind {
 			s.installAirPayload(u, head, m)

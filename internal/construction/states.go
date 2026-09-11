@@ -241,7 +241,7 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 	// every allocator call site), so the per-cell depth/slope gates apply at the
 	// exit exactly as at a chosen site [04 R-FAC-02 §4][04 §6.4].
 	if _, err := s.validatePlacement(factory.Handle, factoryPlacement.Rect(), def, yard, false); err != nil {
-		s.recordAdmission(tick, factory.Handle, def.UnitName, AdmissionBlockedTransiently, err)
+		s.recordAdmission(tick, factory, def.UnitName, factoryPlacement.Rect(), AdmissionBlockedTransiently, err)
 		// Silent blocked revalidation: retry in exactly 15 ticks, stays — no
 		// message/sound/allocation; repeats every 15 while obstructed; NO
 		// timeout [05 C17]. Wake mask is bits {1,2}: schedule(node,15) sets
@@ -261,7 +261,7 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 		// keyed on that flag.
 		return
 	}
-	s.recordAdmission(tick, factory.Handle, def.UnitName, AdmissionAdmitted, nil)
+	s.recordAdmission(tick, factory, def.UnitName, factoryPlacement.Rect(), AdmissionAdmitted, nil)
 
 	// On validation success, allocator creates unit AT exit spot [05 C18].
 	product, err := s.allocateNanoframe(factory, def, factoryPlacement.Rect(), factoryPlacement.ModelPosition())

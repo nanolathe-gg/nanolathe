@@ -2470,6 +2470,13 @@ stated in the body, not here.
 
 ### Memory and queues
 
+- **Unknown:** first-read ordering for commanded weapon yaw/pitch after unit
+  allocation or slot reuse. The bounded common-unit/weapon initializer audit
+  leaves these fields unwritten; allocator no-fill does not imply a defined
+  value. The constructor writes already established include pending-order and
+  target clearing, plus weapon reload/stockpile/control initialization
+  · doc 04 [R-UNIT-06 §7], doc 06 [R-WPN-05 §3] · first-reader census across
+  construction, reuse, aiming and save publication.
 - The runtime's small-block threshold value (the size at or below which the
   C-runtime `malloc` serves from its small-block heap rather than
   `HeapAlloc`); it changes nothing observable because neither path fills

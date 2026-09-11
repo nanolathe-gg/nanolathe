@@ -130,12 +130,20 @@ func TestDragSelectionMembershipAndDirty(t *testing.T) {
 	getPosA := func(u *SelectUnit) (int32, int32) { return 5, 5 } // inside, already selected, clear modifier would keep selected
 	rectA := NormalizeDragRect(0, 0, 10, 10)
 	var dNo uint32
-	chNo, _ := ApplyDragSelection(unitsA, rectA, false, &dNo, getPosA, nil)
+	chNo, countNo := ApplyDragSelection(unitsA, rectA, false, &dNo, getPosA, nil)
 	if chNo {
 		t.Fatalf("no-change should not report changed")
 	}
 	if dNo != 0 {
 		t.Fatalf("dirty set without change")
+	}
+	if !IsSelected(uA.Flags) || countNo != 1 {
+		t.Fatal("replacement must retain an already-selected inside unit [07 §9]")
+	}
+	retained := []uint32{SelectionFlag | 0xc0}
+	changedRetained, countRetained := ApplyDragSelectionFlags(retained, []int32{5}, []int32{5}, rectA, false, nil, &dNo)
+	if retained[0] != SelectionFlag || changedRetained || countRetained != 1 || dNo != 0 {
+		t.Fatalf("replacement pre-clear lost membership: flags=%x changed=%v count=%d dirty=%x", retained[0], changedRetained, countRetained, dNo)
 	}
 	// Ineligible units preserve regardless of rect/modifier.
 	uInelig := &SelectUnit{Flags: SelectionFlag, DefID: 6}

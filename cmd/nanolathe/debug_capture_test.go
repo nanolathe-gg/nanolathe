@@ -1,12 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/clock"
+	"github.com/nanolathe-gg/nanolathe/internal/construction"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
@@ -61,7 +63,7 @@ func TestDebugCapturePausesBeforeTickAndConsumesInput(t *testing.T) {
 }
 
 func TestDebugCaptureWritesBundleWithFailedDevice(t *testing.T) {
-	s := &session.Session{Clock: &clock.State{GlobalTick: 11, Paused: true}, Snapshot: frame.NewBuffer()}
+	s := &session.Session{Clock: &clock.State{GlobalTick: 11, Paused: true}, Snapshot: frame.NewBuffer(), Build: &construction.Service{}}
 	c, err := client.New(client.Options{Buffer: s.Snapshot, Width: 16, Height: 16})
 	if err != nil {
 		t.Fatal(err)
@@ -71,10 +73,18 @@ func TestDebugCaptureWritesBundleWithFailedDevice(t *testing.T) {
 	if err == nil {
 		t.Fatal("missing device and services must mark partial bundle")
 	}
-	for _, name := range []string{"manifest.json", "session.json", "units.jsonl", "client.json", "runtime.json", "process.json", "heap.pprof", "allocs.pprof", "goroutine.pprof", "goroutines.txt", "threadcreate.pprof"} {
+	for _, name := range []string{"manifest.json", "session.json", "units.jsonl", "client.json", "runtime.json", "process.json", "heap.pprof", "allocs.pprof", "goroutine.pprof", "goroutines.txt", "threadcreate.pprof", "construction-admissions.json"} {
 		if _, e := os.Stat(filepath.Join(directory, name)); e != nil {
 			t.Fatalf("missing %s: %v", name, e)
 		}
+	}
+	data, e := os.ReadFile(filepath.Join(directory, "construction-admissions.json"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	var admissions construction.DebugAdmissionState
+	if e = json.Unmarshal(data, &admissions); e != nil || admissions.Capacity == 0 || admissions.Total != 0 {
+		t.Fatalf("admission history missing or invalid: %+v, %v", admissions, e)
 	}
 	if !s.Clock.Paused || s.Clock.GlobalTick != 11 {
 		t.Fatal("capture changed stopped boundary")

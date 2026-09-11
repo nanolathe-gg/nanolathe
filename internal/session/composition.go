@@ -1427,6 +1427,7 @@ func (s *Session) bindOrderQueue(u *units.Unit) {
 	}
 	s.Build.Combat = s.Combat
 	s.Build.World = s.Units
+	s.Build.DebugBuilderIdentity = s.debugUnitIdentity
 	if s.Build.OrderBinding == nil {
 		s.Build.OrderBinding = s.newOrderBinding()
 	}
@@ -1861,6 +1862,7 @@ func createAndBindServices(s *Session) error {
 		s.Build = construction.NewService(s.World, s.Catalog, s.Units, s.Econ)
 	}
 	s.Build.OrderBinding = queueBinding
+	s.Build.DebugBuilderIdentity = s.debugUnitIdentity
 	// Construction queries the immutable model retained by each strict COB
 	// binding. This keeps factory exit placement and mobile QueryNanoPiece on
 	// the authored model identity, including future products.

@@ -873,8 +873,10 @@ registers with no tick dispatcher `[04 §3.6]`
 
 **C10 — the verb table.** A 23-entry dispatch over the first character,
 tokenized by scanning for commas and copying each span into a fixed frame,
-splitting on every comma. Coordinates parse as floats scaled by 65,536 and
-truncated toward zero; times scale by 30 with the same truncation `[04 §3.6]`.
+splitting on every comma. Coordinates and times first parse into single
+precision, then promote before scaling by 65,536 or 30 and truncating toward
+zero; positional triples carry literal zero Y. The build verb selects mobile
+build only for `bmcode == 1` `[04 §3.6]` `[08 R-ENTRY-01 §6]`.
 
 **C11 — the uppercase-`W` quirk is a contract.** An uppercase-led `W…` token
 enters the build block, whose second character selects the weapon form, so an

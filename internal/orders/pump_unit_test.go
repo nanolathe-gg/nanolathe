@@ -138,7 +138,11 @@ func TestPumpUnit_SecondarySkipNotDue(t *testing.T) {
 		{ID: buildID, DynamicGate: 0, Deadline: -1},
 	})
 	called := 0
-	restore := setHandler(buildID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code { called++; return Code(2) })
+	restore := setHandler(buildID, func(u *units.Unit, n *Node, s uint32, tick uint32) Code {
+		called++
+		n.DynamicGate = 1 // the rear-head reload skips this armed hold [04 R-ORD-01 §10]
+		return Code(2)
+	})
 	defer restore()
 	pump := &Pump{World: w}
 	// Primary empty => secondary can be pumped; first not due should be skipped, second dispatched.

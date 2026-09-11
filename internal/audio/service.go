@@ -37,6 +37,7 @@ type Service struct {
 	streamVolume      int
 	streamDeadlines   []uint32
 	streamPlaying     bool
+	voiceCache        *SampleCache
 }
 
 // NewService constructs the queue, registry/cache, and music controller with
@@ -81,7 +82,24 @@ func (a *Service) Init(fs vfs.FSOps) {
 	if a.Music == nil {
 		a.Music = NewMusicController()
 	}
+	if a.voiceCache == nil {
+		a.voiceCache = NewCache(a.fs)
+	} else if a.fs != nil {
+		a.voiceCache.SetFS(a.fs)
+	}
 	a.installPlayback()
+}
+
+// ResetBattleCues starts a new battle's cue lifetime while retaining media,
+// settings and playback hooks. Call only at a new session binding, before
+// installing its resolver and private random stream; Init remains idempotent.
+// The host policy is documented in DESIGN_PRESENTATION_CLIENT §5.
+func (a *Service) ResetBattleCues() {
+	if a == nil {
+		return
+	}
+	a.Queue.resetBattle()
+	a.frame, a.lastEventTick, a.hasEventTick = 0, 0, false
 }
 
 func (a *Service) installPlayback() {
@@ -125,10 +143,13 @@ func (a *Service) loadVoiceLine(alias string) *Sample {
 		return nil
 	}
 	a.Init(nil)
-	if a.Cache == nil {
+	if a.voiceCache == nil {
 		return nil
 	}
-	sample, err := a.Cache.Load(alias)
+	// Mode-0 alias names may map to a different authored path with the same
+	// spelling. The mode-1 filename cache must preserve its own identity
+	// [03 R-AUD-01 §1].
+	sample, err := a.voiceCache.Load(alias)
 	if err != nil {
 		return nil
 	}

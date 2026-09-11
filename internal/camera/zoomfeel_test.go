@@ -6,63 +6,113 @@ func feelCamera() *Camera {
 	return &Camera{X: 1200, Z: 900, ViewW: 1024, ViewH: 768, MapW: 16384, MapH: 16384}
 }
 
-// The wheel is a STEPPED control: each threshold moves the target to the next of
-// ZoomSteps, in for a scroll up and out for a scroll down, and a run of
-// steps walks the list end to end without overshooting it (§16.6).
+// One conventional wheel click advances one stop when the cooldown is ready
+// (DESIGN_GPU_RENDERER §16.6), including the full journey through native zoom.
 func TestWheelStepsThroughTheZoomList(t *testing.T) {
 	cam := feelCamera()
 	var z ZoomController
-	z.SetTarget(cam, 500, 300, ZoomUnit)
-	want := []Zoom{ZoomMax, ZoomMax}
-	for i, w := range want {
-		z.Wheel(cam, 500, 300, 3)
-		if got := z.Target(cam); got != w {
-			t.Fatalf("step %d in from 1x gave %s, want %s", i+1, got, w)
+	now := uint32(0)
+	for _, tc := range []struct {
+		dy   float64
+		want Zoom
+	}{
+		{1, ZoomMax}, {1, ZoomMax}, {-1, ZoomUnit},
+		{-1, ZoomUnit / 2}, {-1, ZoomUnit / 2}, {1, ZoomUnit},
+	} {
+		z.Wheel(cam, 500, 300, tc.dy, now)
+		if got := z.Target(cam); got != tc.want {
+			t.Fatalf("scroll %v at %d: %s, want %s", tc.dy, now, got, tc.want)
 		}
+		now += 500
 	}
-	want = []Zoom{ZoomUnit, ZoomUnit / 2, ZoomUnit / 2}
-	for i, w := range want {
-		z.Wheel(cam, 500, 300, -3)
-		if got := z.Target(cam); got != w {
-			t.Fatalf("step %d out from 2x gave %s, want %s", i+1, got, w)
+}
+
+// Fractional scroll input accumulates up to one unit and reversals discard
+// the old direction's remainder (§16.6).
+func TestWheelFractionsBankIntoWholeSteps(t *testing.T) {
+	cam := feelCamera()
+	var z ZoomController
+	z.Wheel(cam, 500, 300, 0.4, 0)
+	z.Wheel(cam, 500, 300, 0.599, 10)
+	if got := z.Target(cam); got != ZoomUnit {
+		t.Fatalf("scroll below threshold stepped to %s", got)
+	}
+	z.Wheel(cam, 500, 300, 0.001, 20)
+	if got := z.Target(cam); got != ZoomMax {
+		t.Fatalf("one scroll unit gave %s, want %s", got, ZoomMax)
+	}
+	z.Wheel(cam, 500, 300, 0.1, 520)
+	z.Wheel(cam, 500, 300, -0.95, 530)
+	if got := z.Target(cam); got != ZoomMax {
+		t.Fatalf("reversal below threshold stepped to %s", got)
+	}
+	z.Wheel(cam, 500, 300, -0.05, 540)
+	if got := z.Target(cam); got != ZoomUnit {
+		t.Fatalf("one reversed scroll unit gave %s, want %s", got, ZoomUnit)
+	}
+}
+
+// A large gesture cannot skip 1x; events during the 500ms hold neither queue
+// travel nor extend the deadline. Host time also works across counter wrap.
+func TestScrollCooldownHoldsNativeAndDiscardsExcess(t *testing.T) {
+	for _, start := range []uint32{0, ^uint32(0) - 200} {
+		for _, dy := range []float64{-20, 20} {
+			cam := feelCamera()
+			from, end := ZoomMax, ZoomUnit/2
+			if dy > 0 {
+				from, end = end, from
+			}
+			cam.Zoom, cam.Scale = from, from.Step()
+			var z ZoomController
+			z.Wheel(cam, 500, 300, dy, start)
+			if z.Target(cam) != ZoomUnit {
+				t.Fatal("large gesture skipped native")
+			}
+			for _, elapsed := range []uint32{1, 200, 499} {
+				z.Wheel(cam, 500, 300, dy, start+elapsed)
+				if z.Target(cam) != ZoomUnit {
+					t.Fatal("cooldown let another step through")
+				}
+			}
+			// Easing/idle cannot spend the ignored events after the hold ends.
+			for i := 0; i < 100; i++ {
+				z.Step(cam)
+			}
+			z.Wheel(cam, 500, 300, 0, start+500)
+			if cam.EffectiveZoom() != ZoomUnit || z.Target(cam) != ZoomUnit {
+				t.Fatal("ignored scroll was queued")
+			}
+			// At the deadline, start a fresh fractional gesture. Excess from
+			// the original burst and the cooldown must not finish it early.
+			z.Wheel(cam, 500, 300, dy/40, start+500)
+			if z.Target(cam) != ZoomUnit {
+				t.Fatal("old travel leaked into next gesture")
+			}
+			z.Wheel(cam, 500, 300, dy/40, start+500)
+			if z.Target(cam) != end {
+				t.Fatalf("deadline scroll gave %s, want %s", z.Target(cam), end)
+			}
 		}
 	}
 }
 
-// Scroll fractions bank until the three-unit threshold is reached; reversing
-// direction discards the remainder (§16.6). Small gestures must not zoom.
-func TestWheelFractionsBankIntoWholeSteps(t *testing.T) {
+// F9 and reset are explicit controls; neither waits for a scroll cooldown.
+func TestExplicitZoomClearsScrollCooldown(t *testing.T) {
 	cam := feelCamera()
 	var z ZoomController
-	z.SetTarget(cam, 500, 300, ZoomUnit)
-	z.Wheel(cam, 500, 300, 1.4)
-	z.Wheel(cam, 500, 300, 1.4)
-	if got := z.Target(cam); got != ZoomUnit {
-		t.Fatalf("2.8 scroll units stepped to %s", got)
+	z.Wheel(cam, 500, 300, 1, 0)
+	z.SetTarget(cam, 500, 300, ZoomUnit/2)
+	if z.Target(cam) != ZoomUnit/2 {
+		t.Fatal("explicit target delayed")
 	}
-	z.Wheel(cam, 500, 300, 0.199)
-	if got := z.Target(cam); got != ZoomUnit {
-		t.Fatalf("scroll just below the threshold stepped to %s", got)
+	z.Wheel(cam, 500, 300, 1, 1)
+	if z.Target(cam) != ZoomUnit {
+		t.Fatal("explicit target retained cooldown")
 	}
-	z.Wheel(cam, 500, 300, 0.001)
-	if got := z.Target(cam); got != ZoomMax {
-		t.Fatalf("three scroll units gave %s, want %s", got, ZoomMax)
-	}
-	z.Wheel(cam, 500, 300, 0.1)
-	// Reversal discards the 0.1 remainder. A new 2.95-unit gesture is still
-	// short of a step. The next 0.05 must complete it without the old remainder.
-	z.Wheel(cam, 500, 300, -2.95)
-	if got := z.Target(cam); got != ZoomMax {
-		t.Fatalf("a reversal below the threshold stepped to %s", got)
-	}
-	z.Wheel(cam, 500, 300, -0.05)
-	if got := z.Target(cam); got != ZoomUnit {
-		t.Fatalf("three reversed scroll units gave %s, want %s", got, ZoomUnit)
-	}
-	// One large delta spends multiple steps and stops at the lowest target.
-	z.Wheel(cam, 500, 300, -6)
-	if got := z.Target(cam); got != ZoomUnit/2 {
-		t.Fatalf("two steps out from 1x gave %s, want %s", got, ZoomUnit/2)
+	z.Reset()
+	z.Wheel(cam, 500, 300, 1, 2)
+	if z.Target(cam) != ZoomMax {
+		t.Fatal("reset retained cooldown")
 	}
 }
 
@@ -98,15 +148,15 @@ func TestWheelOutStopsAtTheMapFloor(t *testing.T) {
 	}
 	var z ZoomController
 	z.SetTarget(cam, 500, 300, ZoomSteps[1])
-	z.Wheel(cam, 500, 300, -3)
+	z.Wheel(cam, 500, 300, -1, 0)
 	if got := z.Target(cam); got != minZ {
 		t.Fatalf("a step out from 1x on a small map gave %s, want the floor %s", got, minZ)
 	}
-	z.Wheel(cam, 500, 300, -3)
+	z.Wheel(cam, 500, 300, -1, 500)
 	if got := z.Target(cam); got != minZ {
 		t.Fatalf("a step out from the floor gave %s, want it to stay", got)
 	}
-	z.Wheel(cam, 500, 300, 3)
+	z.Wheel(cam, 500, 300, 1, 500)
 	if got := z.Target(cam); got != ZoomSteps[1] {
 		t.Fatalf("a step in from the floor gave %s, want %s", got, ZoomSteps[1])
 	}

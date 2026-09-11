@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -22,18 +23,26 @@ import (
 type BenchmarkOptions struct {
 	Directory, Renderer string
 	Frames              int
-	// TPS is the draw rate. At 30 and 60 one simulation step runs per draw; 30
-	// is the retail cadence and 60 an intermediate presentation target (a
-	// cadence at 60 is only reachable when CPU and GPU both finish inside
-	// 16.7 ms). At 120 the benchmark runs one authoritative step every fourth
-	// draw and presents the four frames at fractions 0, ¼, ½ and ¾, so the
-	// report measures the interpolated presentation
-	// (docs/DESIGN_GPU_RENDERER.md §13.5).
+	// TPS is the target presentation rate: 30, 60 or 120 draws per second.
+	// One authoritative tick spans TPS/30 draws. Modern presents fractions
+	// 0..(TPS/30-1)/(TPS/30); classic keeps committed-tick sampling [I6].
 	TPS      int
 	Metadata map[string]any
+	// Diagnostic snapshots run outside the measured profile/counter window.
+	BeforeMeasure, AfterMeasure func() error
 }
 type benchmarkRow struct {
 	Frame int
+	// Cadence is start-of-work to start-of-work, before simulation. The first
+	// measured interval is invalid because profile setup separates it from warmup.
+	CadenceValid bool
+	// These are host wall times, not GPU timestamps. OutsideDraw includes
+	// Ebitengine's deferred flush, queue/display waits and callback scheduling.
+	// PaceWait is our intentional deadline sleep; DrawWork is the complete host
+	// callback work after it, including the census and pre-record launch.
+	PaceWait, OutsideDraw, DrawWork float64
+	SimulationStep                  bool
+	TickPhase                       int
 	// Record is the recording's GAME-GOROUTINE cost: the wait to join an
 	// outstanding pre-record plus any synchronous re-record. With the
 	// record/submit pipeline off, or on a frame it declined, that is the whole
@@ -49,37 +58,51 @@ type benchmarkRow struct {
 	Census    any
 }
 type battleBenchmark struct {
-	c             *client.Client
-	step          func()
-	census        func() any
-	options       BenchmarkOptions
-	gpu           *gpurender.Renderer
-	img           *ebiten.Image
-	rows          []benchmarkRow
-	frame         int
-	pending, done bool
-	err           error
-	last          time.Time
-	cpu           *os.File
-	mem           runtime.MemStats
+	c               *client.Client
+	step            func()
+	census          func() any
+	options         BenchmarkOptions
+	gpu             *gpurender.Renderer
+	img             *ebiten.Image
+	rows            []benchmarkRow
+	frame           int
+	done            bool
+	pacer           benchmarkPacer
+	lastEnd         time.Time
+	err             error
+	last            time.Time
+	cpu             *os.File
+	mem             runtime.MemStats
+	gpuMemoryBefore int64
 }
 
-// benchmarkInterpolatedTPS is the draw rate at which the benchmark measures the
-// interpolated presentation, and benchmarkStepEvery is how many draws share one
-// authoritative step there (§13.5).
-const (
-	benchmarkInterpolatedTPS = 120
-	benchmarkStepEvery       = benchmarkInterpolatedTPS / 30
-)
+// benchmarkSimulationTPS is the fixed authoritative cadence. Wall time never
+// chooses how many ticks a fixture runs; it only paces its deterministic draws.
+const benchmarkSimulationTPS = 30
 
-// tickPhase reports this draw's position in the four-draw group and whether the
-// run is the interpolated one. At 30 and 60 every draw steps, as before.
-func (g *battleBenchmark) tickPhase() (int, bool) {
-	if g.options.TPS != benchmarkInterpolatedTPS {
-		return 0, false
+// benchmarkPacer keeps one host deadline per draw. Arriving after a deadline
+// rebases the following deadline rather than producing catch-up draw bursts.
+// It is separate from Ebitengine's update clock, which is synchronized to Draw.
+type benchmarkPacer struct {
+	period time.Duration
+	next   time.Time
+}
+
+func (p *benchmarkPacer) delay(now time.Time) time.Duration {
+	target := p.next
+	if target.IsZero() || !now.Before(target) {
+		target = now
 	}
-	return g.frame % benchmarkStepEvery, true
+	p.next = target.Add(p.period)
+	return target.Sub(now)
 }
+
+func (g *battleBenchmark) tickPhase() (phase, drawsPerTick int) {
+	drawsPerTick = g.options.TPS / benchmarkSimulationTPS
+	return g.frame % drawsPerTick, drawsPerTick
+}
+
+func (g *battleBenchmark) warmupDraws() int { return 2 * g.options.TPS }
 
 func benchmarkMS(start time.Time) float64             { return float64(time.Since(start)) / 1e6 }
 func (g *battleBenchmark) Layout(int, int) (int, int) { return 1920, 1080 }
@@ -90,7 +113,6 @@ func (g *battleBenchmark) Update() error {
 	if g.done {
 		return ebiten.Termination
 	}
-	g.pending = true
 	return nil
 }
 func benchmarkFile(path string, write func(*os.File) error) error {
@@ -116,35 +138,79 @@ func (g *battleBenchmark) stopProfile() {
 	}
 }
 func (g *battleBenchmark) finish() error {
-	g.stopProfile()
+	// Freeze exact counter deltas before profiler shutdown or any dump/encoding
+	// allocates. The last Draw's deferred submission has returned by this point.
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
+	var gpuInfo ebiten.DebugInfo
+	ebiten.ReadDebugInfo(&gpuInfo)
+	g.stopProfile()
+	// A live-heap snapshot is distinct from allocations during the window. GC
+	// also flushes Go's delayed allocation profile; without it a short run with
+	// no GC can incorrectly produce an empty allocation delta. It runs only
+	// after measurement, so it cannot improve measured frame times.
+	runtime.GC()
+	var afterGC runtime.MemStats
+	runtime.ReadMemStats(&afterGC)
+	// Save both profiles before JSON/state/screenshot allocations. Sampled
+	// deltas include profile setup/teardown; MemStats above is the exact window.
+	if err := g.file("alloc.pprof", func(f *os.File) error { return pprof.Lookup("allocs").WriteTo(f, 0) }); err != nil {
+		return err
+	}
+	if err := g.file("heap.pprof", func(f *os.File) error { return pprof.Lookup("heap").WriteTo(f, 0) }); err != nil {
+		return err
+	}
+	if err := g.file("goroutine.txt", func(f *os.File) error { return pprof.Lookup("goroutine").WriteTo(f, 2) }); err != nil {
+		return err
+	}
+	memory := map[string]any{"before": g.mem, "after": mem, "after_gc": afterGC, "gpu_image_bytes_before": g.gpuMemoryBefore, "gpu_image_bytes_after": gpuInfo.TotalGPUImageMemoryUsageInBytes, "graphics_library": gpuInfo.GraphicsLibrary.String()}
+	if err := g.file("memory.json", func(f *os.File) error { return json.NewEncoder(f).Encode(memory) }); err != nil {
+		return err
+	}
 	info, _ := debug.ReadBuildInfo()
 	report := map[string]any{"tps": g.options.TPS, "metadata": g.options.Metadata, "renderer": g.options.Renderer, "go_version": runtime.Version(), "os": runtime.GOOS, "arch": runtime.GOARCH, "gomaxprocs": runtime.GOMAXPROCS(0), "build": info, "rows": g.rows, "alloc_bytes": mem.TotalAlloc - g.mem.TotalAlloc, "mallocs": mem.Mallocs - g.mem.Mallocs, "gc": mem.NumGC - g.mem.NumGC, "gc_pause_ns": mem.PauseTotalNs - g.mem.PauseTotalNs}
 	if err := g.file("frames.json", func(f *os.File) error { return json.NewEncoder(f).Encode(report) }); err != nil {
 		return err
 	}
-	if err := g.file("alloc.pprof", func(f *os.File) error { return pprof.Lookup("allocs").WriteTo(f, 0) }); err != nil {
-		return err
+	if g.options.AfterMeasure != nil {
+		if err := g.options.AfterMeasure(); err != nil {
+			return err
+		}
 	}
 	// Screenshots and encoding deliberately follow all measured work.
 	pic := image.NewRGBA(image.Rect(0, 0, 1920, 1080))
 	g.img.ReadPixels(pic.Pix)
 	return g.file("battle.png", func(f *os.File) error { return png.Encode(f, pic) })
 }
+
 func (g *battleBenchmark) Draw(screen *ebiten.Image) {
-	if !g.pending || g.err != nil || g.done {
+	if g.err != nil || g.done {
 		return
 	}
-	g.pending = false
-	// The pipeline's barrier. The step below publishes a new committed frame
-	// and every later client call writes client state, so an outstanding
-	// pre-record is joined first; the wait itself is this frame's recording
-	// cost on the game goroutine (docs/DESIGN_GPU_RENDERER.md §13.10).
-	joinStart := time.Now()
-	g.c.JoinPreRecord()
-	join := benchmarkMS(joinStart)
-	if g.frame == 60 {
+	entry := time.Now()
+	if g.frame == g.warmupDraws()+g.options.Frames {
+		g.c.JoinPreRecord()
+		g.err = g.finish()
+		g.done = true
+		return
+	}
+	outside := 0.0
+	if !g.lastEnd.IsZero() {
+		outside = float64(entry.Sub(g.lastEnd)) / 1e6
+	}
+
+	if g.frame == g.warmupDraws() {
+		g.c.JoinPreRecord()
+		if g.options.BeforeMeasure != nil {
+			if g.err = g.options.BeforeMeasure(); g.err != nil {
+				return
+			}
+		}
+		// Collect warmup and snapshot scratch before starting the measured window.
+		runtime.GC()
+		var gpuInfo ebiten.DebugInfo
+		ebiten.ReadDebugInfo(&gpuInfo)
+		g.gpuMemoryBefore = gpuInfo.TotalGPUImageMemoryUsageInBytes
 		g.err = g.file("alloc-base.pprof", func(f *os.File) error { return pprof.Lookup("allocs").WriteTo(f, 0) })
 		if g.err != nil {
 			return
@@ -159,41 +225,38 @@ func (g *battleBenchmark) Draw(screen *ebiten.Image) {
 			return
 		}
 		runtime.ReadMemStats(&g.mem)
+		// Start a fresh interval sequence after the one-time profiling work.
+		g.last = time.Time{}
+		outside = 0
+		entry = time.Now()
+		g.pacer.next = time.Time{}
 	}
-	if g.frame == 60+g.options.Frames {
-		g.err = g.finish()
-		g.done = true
-		return
+	waitStart := time.Now()
+	if delay := g.pacer.delay(entry); delay > 0 {
+		time.Sleep(delay)
 	}
 	start := time.Now()
+	paceWait := float64(start.Sub(waitStart)) / 1e6
+	drawStart := start
+	cadence, cadenceValid := 0.0, !g.last.IsZero()
+	if cadenceValid {
+		cadence = float64(drawStart.Sub(g.last)) / 1e6
+	}
+	g.last = drawStart
+	// Join before any client mutation or tick publication [DESIGN_GPU_RENDERER
+	// §13.10]. Its wait belongs to Record and to this callback's DrawWork.
+	g.c.JoinPreRecord()
+	join := benchmarkMS(start)
+	start = time.Now()
+	phase, drawsPerTick := g.tickPhase()
+	stepped := phase == 0
 	step := 0.0
-	phase, interpolated := g.tickPhase()
-	if !interpolated {
+	if stepped {
 		g.step()
 		g.c.BumpPresentationEpoch()
 		step = benchmarkMS(start)
-	} else {
-		// One authoritative step every fourth draw, then the four presented
-		// frames at fractions 0, ¼, ½ and ¾ (§13.5). The fraction stands in for
-		// the clock's carry, which the benchmark's stepped millisecond source
-		// does not produce.
-		if phase == 0 {
-			g.step()
-			// The step is the benchmark's whole client mutation: it publishes
-			// the committed frame the recorder reads, and there is no input
-			// here. Every other draw leaves client state exactly as the
-			// pipeline's last pre-record found it (§13.10).
-			g.c.BumpPresentationEpoch()
-			step = benchmarkMS(start)
-		}
-		g.c.SetTickFraction(float32(phase) / float32(benchmarkStepEvery))
 	}
-	now := time.Now()
-	cadence := 0.0
-	if !g.last.IsZero() {
-		cadence = float64(now.Sub(g.last)) / 1e6
-	}
-	g.last = now
+	g.c.SetTickFraction(float32(phase) / float32(drawsPerTick))
 	start = time.Now()
 	var record, compose, replay, preRecord float64
 	var hit bool
@@ -220,36 +283,67 @@ func (g *battleBenchmark) Draw(screen *ebiten.Image) {
 	} else {
 		pixels, a, b := g.c.BenchmarkFrame()
 		compose, replay = a, b
-		record = benchmarkMS(start)
+		record = join + benchmarkMS(start)
 		start = time.Now()
 		g.img.WritePixels(pixels)
 	}
 	screen.DrawImage(g.img, nil)
 	submit := benchmarkMS(start)
-	if g.frame >= 60 {
-		g.rows = append(g.rows, benchmarkRow{Frame: g.frame, Step: step, Record: record, Submit: submit, Cadence: cadence, CPUCompose: compose, CPUReplay: replay, CPURender: compose + replay, PreRecord: preRecord, Hit: hit, Stats: stats, Census: g.census()})
+	measured := g.frame >= g.warmupDraws()
+	var census any
+	if measured {
+		census = g.census()
 	}
+	frameNumber := g.frame
 	g.frame++
-	// Execute has enqueued the frame and the device has its vertices, so the
-	// list and the recorder's scratch are free. Record the next frame while
-	// this Draw's flush, swap and VSync wait run (§13.10). Only the three
-	// non-stepping draws of an interpolated group qualify: the fourth publishes
-	// a new committed tick, which is precisely what a pre-record may not cross.
-	if g.gpu != nil && interpolated && phase+1 < benchmarkStepEvery {
-		g.c.StartPreRecord(client.ClampTickFraction16(float32(phase+1)/float32(benchmarkStepEvery)), 0, false)
+	// A following draw on the same committed tick can be recorded while the
+	// host flushes and paces. At 60 Hz one of two draws qualifies; at 120 three
+	// of four do. Do not record an unused list after the final measured draw.
+	if g.gpu != nil && phase+1 < drawsPerTick && g.frame < g.warmupDraws()+g.options.Frames {
+		g.c.StartPreRecord(client.ClampTickFraction16(float32(phase+1)/float32(drawsPerTick)), 0, false)
 	}
+	if measured {
+		g.rows = append(g.rows, benchmarkRow{Frame: frameNumber, Step: step, Record: record, Submit: submit, Cadence: cadence, CadenceValid: cadenceValid, PaceWait: paceWait, OutsideDraw: outside, SimulationStep: stepped, TickPhase: phase, CPUCompose: compose, CPUReplay: replay, CPURender: compose + replay, PreRecord: preRecord, Hit: hit, Stats: stats, Census: census})
+	}
+	g.lastEnd = time.Now()
+	if measured {
+		g.rows[len(g.rows)-1].DrawWork = float64(g.lastEnd.Sub(drawStart)) / 1e6
+	}
+
 }
 
-// BattleBenchmark runs one authoritative step per draw. It exercises production
-// simulation and renderers, but does not model the interactive catch-up scheduler.
+// BattleBenchmark paces every Draw and runs a fixed number of draws per tick.
+// It exercises production simulation/rendering, not the interactive catch-up scheduler.
 func BattleBenchmark(c *client.Client, step func(), census func() any, options BenchmarkOptions) error {
-	g := &battleBenchmark{c: c, step: step, census: census, options: options, rows: make([]benchmarkRow, 0, options.Frames)}
+	if options.TPS <= 0 {
+		options.TPS = 30
+	}
+	if options.TPS != 30 && options.TPS != 60 && options.TPS != 120 {
+		return fmt.Errorf("nanolathe: benchmark presentation rate must be 30, 60 or 120")
+	}
+	if options.Frames < 1 {
+		return fmt.Errorf("nanolathe: benchmark needs at least one measured frame")
+	}
+	options.Metadata = maps.Clone(options.Metadata)
+	if options.Metadata == nil {
+		options.Metadata = make(map[string]any)
+	}
+	options.Metadata["benchmark_version"] = 2
+	options.Metadata["simulation_tps"] = benchmarkSimulationTPS
+	options.Metadata["draws_per_tick"] = options.TPS / benchmarkSimulationTPS
+	options.Metadata["warmup_draws"] = options.TPS * 2
+	options.Metadata["pacing"] = "draw-deadline"
+	// The public Ebitengine API exposes neither device execution nor present
+	// timestamps. OutsideDraw must never be interpreted as either one.
+	options.Metadata["gpu_timing_available"] = false
+	options.Metadata["present_timing_available"] = false
+	g := &battleBenchmark{pacer: benchmarkPacer{period: time.Second / time.Duration(options.TPS)}, c: c, step: step, census: census, options: options, rows: make([]benchmarkRow, 0, options.Frames)}
 	if options.Renderer == "modern" {
 		g.gpu = gpurender.New(c.PaletteTables(), 1920, 1080)
 		c.SetEnhanced(true)
 		// Only the Enhanced executor blends; the classic rows keep
 		// committed-tick sampling at every draw rate (§13.5) [I6].
-		if options.TPS == benchmarkInterpolatedTPS {
+		if options.TPS > benchmarkSimulationTPS {
 			c.SetInterpolation(true)
 		}
 	} else {
@@ -260,11 +354,10 @@ func BattleBenchmark(c *client.Client, step func(), census func() any, options B
 	ebiten.SetRunnableOnUnfocused(true)
 	ebiten.SetWindowSize(1920, 1080)
 	ebiten.SetVsyncEnabled(true)
-	tps := options.TPS
-	if tps <= 0 {
-		tps = 30
-	}
-	ebiten.SetTPS(tps)
+	// A separate fixed Update clock caused zero-update callbacks to skip Draw,
+	// producing a beat pattern against the host's presentation loop. Every
+	// callback now renders; the single deadline above limits the target rate.
+	ebiten.SetTPS(ebiten.SyncWithFPS)
 	ebiten.SetScreenClearedEveryFrame(false)
 	if err := ebiten.RunGame(g); err != nil {
 		return err

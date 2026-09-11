@@ -416,7 +416,9 @@ lowest satisfied bit `[04 R-ORD-01 §0]`. Satisfied is `(record.satisfied |
 unit.pending) & record.gate`; a **nonzero gate with nothing satisfied stops the
 walk for this tick**, stalling everything behind it in its own segment; the
 rear segment's walk follows regardless `[04 R-ORD-01 §10]`. Otherwise the delivered bits are consumed from both
-words, the dynamic gate is cleared, and the handler runs `[04 §3.3]`.
+words and the dynamic gate is cleared. A satisfied interruption clears every
+weapon target without changing slot posture before the handler runs
+`[04 R-ORD-01 §10]` `[04 R-ORDER-02 §3]`.
 
 The record constructor does **not** seed the dynamic gate from the descriptor's
 static mask. They are different fields with different meanings, and conflating
@@ -440,15 +442,21 @@ above 9 is the single-node expiry helper, with no draw and no whole-queue cancel
 
 "Last" means having no record after it, which is not the same as being the only
 record: a handler that head-inserted a spawned record is behind that record and
-can still be the tail `[04 R-ORD-01 §1]`.
+can still be the tail `[04 R-ORD-01 §1]`. Both wait and last-record retry
+reload the actual head after re-arming the dispatched record, so a head-inserted
+order runs in the same pass `[04 R-ORD-01 §10]`.
 
 **C8 — the secondary segment and its table.** The rear segment holds only
 `BuildWeapon` (gate `0xc0140`) and `SelfDestruct` (gate `0x40040`); factory
-products live in the **primary** segment. It is walked front to back, skipping
-records whose gate is non-empty and whose deadline has not arrived — the compare
+products live in the **primary** segment. The walk reloads the rear head after
+each non-returning dispatch, and advances only past records whose gate is
+non-empty and whose deadline has not arrived — the compare
 is unsigned, so the −1 sentinel reads as not due — and the handler is invoked
 with an **empty** satisfied set: no expiry bit, no capability-word read
-`[04 R-ORDER-02 §1]`. Codes 6 and 7 both remove the single record and return,
+`[04 R-ORDER-02 §1]` `[04 R-ORD-01 §10]`. A zero final self-destruct delay
+therefore executes its damage arm in the same pass; positive delays still wait
+for their deadline `[04 R-SPEC-01 §13]`. Codes 6 and 7 both remove the single
+record and return,
 with no tail-yield and no cancel-all; 5, 8, 9 and above 9 are plain
 unlink-and-free removals that continue the walk, and secondary code 9 never
 re-arms and never draws `[04 §3.3]` `[05 "Queue pumping and result codes"]`.
@@ -835,11 +843,12 @@ lock the scan ordering, gates and pad-selection boundaries.
   shared setting and its writers are established `[07 R-CAM-01 §5]`; connecting
   settings load/save and the options control to both command and cursor
   consumers closes this implementation gap.
-* **The stock ARMCK lifecycle diagnostic has an unresolved `Create` exit.**
-  `internal/units/p28_cob_pose_trace_test.go` checks the known pose and later
-  callbacks, then records `TODO(question)` for `finish-abnormal` versus normal
-  completion. Trace the callback identity through the wake/drain boundary
-  before changing the expectation `[04 R-P28-COB-01R]` [04 "Missing and unknown"].
+* **The stock ARMCK lifecycle diagnostic observes normal `Create` completion.**
+  `internal/units/p28_cob_pose_trace_test.go` installs its observer before
+  `Create` starts, so a child reusing the completed thread's slot cannot erase
+  the observed exit. The remaining Unknown is the first committed retail pose;
+  the lifecycle observation alone does not establish its timing
+  `[04 R-P28-COB-01R]` [04 "Missing and unknown"].
 * **`canstop` has no simulation reader, and `teleporter` is inert.** The
   `Teleport` order is ungated and free, and the interface latch that would arm it
   has no writer anywhere in retail — it is consumer-only `[04 R-SPEC-01 §2]`
@@ -881,9 +890,9 @@ lock the scan ordering, gates and pad-selection boundaries.
   through the continuing result codes: every handler returning 2 or 4 has first
   armed a gate or changed the segment head, or the walk does not terminate
   `[04 §4.3]` `[04 R-ORD-01 §10]`.
-* **One blocked record stalls everything behind it, including the rear
-  segment.** A nonzero gate with nothing satisfied ends the pass; the secondary
-  walk does not run behind a blocked primary head `[04 §3.3]`.
+* **A blocked primary record stalls only its own segment.** The secondary
+  walk runs after the primary returns, skips gated rear records, and reloads
+  its head after dispatch `[04 R-ORD-01 §10]`.
 * **A build angle of 4096 scatters every freshly built unit's heading by about
   20° around down-screen.** That is the authored field, applied as authored
   `[04 §2.3b]` `[04 R-P28-ANG-01R §2]`.
@@ -931,12 +940,14 @@ lock the scan ordering, gates and pad-selection boundaries.
   bit is set from the authored `BMcode` at creation, and the interface's
   placement-versus-queue branch keys on the **product's** `BMcode` `[04 §6.2]`
   `[07 §9]`.
-* **SC18 — the allocator's zero-fill length and the COB abort path are open.**
-  Retail's exact fill length for the order record and the unit record is not
-  traced, and retail may abort through its allocator where a clean implementation
-  terminates the affected script. Go zero-initializes both records, so the fill
-  length is unobservable here; the COB loader bounds-checks its header offsets and
-  reports a diagnostic where retail does not [I11].
+* **SC18 — deterministic initialization.** The default allocator does not fill
+  and allocation failure terminates the process `[01 R-PLAT-01 §5]`. Go zeroes
+  are host policy. Unit creation implements the common initializer's named
+  writes and the weapon initializer's reload, stockpile and control-bit writes
+  `[04 R-UNIT-06 §7]` `[06 R-WPN-05 §3]`; there is no generic fill length to
+  recover. Whether commanded weapon yaw/pitch can be read before a later writer
+  initializes them remains a concrete first-reader question. The COB loader's
+  malformed-input checks are a separate I11 boundary `[04 §4.1]`.
 * **The interpreter bounds-checks the authored stack.** Pushes, pops and local
   indices are checked against the 32-word physical thread window instead of
   writing outside it the way retail's unchecked frame arithmetic does. A Go slice
@@ -1059,6 +1070,10 @@ would settle it:
 * The two uninitialized per-piece words the script save writer emits. Their value
   is not a function of game state, so there is nothing to clone; what goes there
   is a save-format policy the caller owns `[08 R-SAVE-02 §9]`.
-* The exact fill length retail's allocator uses for the order and unit records,
-  and whether its COB abort path is observable (SC18). Both are unobservable in
-  this build.
+* Whether newly allocated or reused weapon slots expose commanded yaw/pitch
+  before an aim or restore writer. The initializer bodies do not write those
+  fields; their first-reader census remains open (SC18) `[04 R-UNIT-06 §7]`.
+* The exact first committed retail ARMCK pose. The lifecycle diagnostic now
+  observes `Create` before it starts, so its normal return survives same-drain
+  thread-slot reuse; this closes the former abnormal-finish question without
+  settling publication timing `[04 R-P28-COB-01R]`.

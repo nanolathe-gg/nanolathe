@@ -164,7 +164,9 @@ func TestSteepCostEveryNeighborExpansion(t *testing.T) {
 	}
 }
 
-func TestOpenNodeRevalidatesBeforeExpansion(t *testing.T) {
+// An admitted node keeps its route eligibility after a class-layer change;
+// neither relaxation nor pop repeats its probe [04 R-PATH-01 §1].
+func TestOpenNodeRetainsAdmissionAcrossLayerChange(t *testing.T) {
 	blocked := map[Cell]bool{}
 	cfg := SearchConfig{
 		Start: Cell{5, 5},
@@ -190,11 +192,11 @@ func TestOpenNodeRevalidatesBeforeExpansion(t *testing.T) {
 	cell := s.ns.Get(id).Cell
 	blocked[cell] = true
 	if _, _, done := s.Resume(1); done {
-		t.Fatal("fixture search completed while revalidating one node")
+		t.Fatal("fixture search completed while expanding one node")
 	}
 	n := s.ns.Get(id)
-	if !n.Closed || n.Open || s.entries.get(cell).status&3 != 3 {
-		t.Fatalf("revised open node was expanded instead of closed blocked: node=%+v entry=%+v", *n, s.entries.get(cell))
+	if !n.Closed || n.Open || s.entries.get(cell).status != 2 {
+		t.Fatalf("revised open node must expand and clear its flags: node=%+v entry=%+v", *n, s.entries.get(cell))
 	}
 }
 
@@ -1061,9 +1063,7 @@ func TestRayVisitedBlockedCellPaysSteepTier(t *testing.T) {
 		t.Errorf("steep tier must order the near branch (%d) behind the far branch (%d) [04 R-PATH-01 §3]",
 			s.ns.Get(nearID).F, s.ns.Get(farID).F)
 	}
-	// The published route ends at the far goal either way today, because the
-	// open-time status write clears the ray-visited bit — see the
-	// TODO(question) in search.go's neighbour loop.
+	// The steep terrain term alone makes the farther goal cheaper.
 	if got, want := points[len(points)-1], worldPoint(far, routeFootPrint(cfg)); got != want {
 		t.Errorf("fixture route must end at the far goal %v got %v", want, got)
 	}
@@ -1108,5 +1108,39 @@ func TestSeededStartRunCounter(t *testing.T) {
 	}
 	if got, want := s.ns.Get(id).G, TurnPenalty(DirN, DirE)+CardinalCost; got != want {
 		t.Fatalf("turning first step G want %d got %d — the seeded run must suppress the short-run %d [04 R-PATH-01 §4] step 11", want, got, ShortRunPenalty)
+	}
+}
+
+// The ray exemption survives opening, and an admitted terminal remains a
+// terminal even when the layer changes before its pop [04 R-PATH-01 §1].
+func TestRayVisitedTerminalSurvivesLayerChange(t *testing.T) {
+	goal := Cell{5, 5}
+	blocked := false
+	var s *Session
+	cfg := SearchConfig{
+		Start: Cell{5, 4}, Goal: PointGoal(goal, 0), Scale: 65536,
+		HasBounds: true, Bounds: Rect{Min: Cell{}, Max: Cell{12, 12}},
+		PassableValue: func(c Cell) uint8 {
+			if s != nil && s.entries.get(c).status&3 != 0 {
+				t.Fatalf("re-probed an admitted/rejected cell %v [04 R-PATH-01 §1]", c)
+			}
+			if blocked && c == goal {
+				return 0
+			}
+			return 3
+		},
+	}
+	s = NewSession(cfg)
+	if s.entries.get(goal).status&12 != 12 {
+		t.Fatal("fixture needs an enumerated, ray-visited goal")
+	}
+	blocked = true
+	s.Resume(1)
+	if got := s.entries.get(goal).status; got != 13 {
+		t.Fatalf("opened goal status = %d, want open + terminal + ray flags", got)
+	}
+	points, status, done := s.Resume(1000)
+	if !done || status != 0 || len(points) == 0 || points[len(points)-1] != worldPoint(goal, routeFootPrint(cfg)) {
+		t.Fatalf("ray-visited terminal lost eligibility: done=%v status=%v route=%v", done, status, points)
 	}
 }

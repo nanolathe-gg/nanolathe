@@ -125,6 +125,10 @@ func (c *Client) enqueueStatusEvents(ringTick uint32, events []frame.EventView) 
 	if c == nil {
 		return
 	}
+	// Insert may synchronously resolve an overflowing queue's tail. Its
+	// caption needs the current ageing origin before that callback runs
+	// [03 §8.3][07 R-HUD-03 §14.3].
+	c.messageEventsTick = ringTick
 	for _, event := range events {
 		switch event.Kind {
 		case frame.EventKindStatus:
@@ -148,7 +152,6 @@ func (c *Client) enqueueStatusEvents(ringTick uint32, events []frame.EventView) 
 			}
 		}
 	}
-	c.messageEventsTick = ringTick
 }
 
 // ConfigureMessageLines installs the authored ring controls. textlines is the

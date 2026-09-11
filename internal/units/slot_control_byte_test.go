@@ -15,8 +15,14 @@ import (
 func TestSlotInitializerWritesTheWholeControlByte(t *testing.T) {
 	armed := &content.WeaponDef{ID: 1}
 	u := &Unit{}
+	for i := range u.Slots {
+		u.Slots[i].Flags = 0xff
+		u.Slots[i].Reload = 17
+		u.Slots[i].Ammo = 23
+		u.Slots[i].Weapon = armed
+	}
 	// Slot 1 is deliberately left unlinked: an unlinked slot still carries its
-	// own index, but neither enabled nor autonomy.
+	// own index and autonomy, with only enabled left clear.
 	installWeapons(u, &content.UnitDef{Weapon1Def: armed, Weapon3Def: &content.WeaponDef{ID: 3}})
 
 	for idx, wantEnabled := range [NumSlots]bool{true, false, true} {
@@ -27,8 +33,11 @@ func TestSlotInitializerWritesTheWholeControlByte(t *testing.T) {
 		if s.IsEnabled() != wantEnabled {
 			t.Fatalf("slot %d: enabled %v, want %v", idx, s.IsEnabled(), wantEnabled)
 		}
-		if s.IsAutonomous() != wantEnabled {
-			t.Fatalf("slot %d: autonomy %v, want %v — the initializer sets it so every linked slot starts autonomous", idx, s.IsAutonomous(), wantEnabled)
+		if !s.IsAutonomous() {
+			t.Fatalf("slot %d: initializer must set autonomy even for inactive links", idx)
+		}
+		if s.IsPopulated() != wantEnabled || s.Reload != 0 || s.Ammo != 0 {
+			t.Fatalf("slot %d: populated=%v reload=%d ammo=%d after initialization", idx, s.IsPopulated(), s.Reload, s.Ammo)
 		}
 		if s.Flags&SlotFlagAimLatch != 0 {
 			t.Fatalf("slot %d: the initializer leaves the Aim latch clear", idx)

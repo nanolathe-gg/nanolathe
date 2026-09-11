@@ -1132,6 +1132,7 @@ func cloneWeapon(w *WeaponDef) *WeaponDef {
 		return nil
 	}
 	out := *w
+	out.damageOrder = append([]string(nil), w.damageOrder...)
 	if w.Damage != nil {
 		out.Damage = make(map[string]int32, len(w.Damage))
 		for k, v := range w.Damage {

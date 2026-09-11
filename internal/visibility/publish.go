@@ -229,8 +229,8 @@ func (s *Service) walkTerrainRay(cx, cz int32, heightByte uint8, radius int32, v
 // On a refresh the old footprint is removed first — current coverage must be
 // enabled, and, ray branch only, the old height byte must have been nonzero;
 // the sprite branch carries no such guard [03 R-VIS-01 §2] — the new origin is
-// stored, an out-of-bounds new origin stores an empty footprint and returns,
-// and only then does the new raster publish.
+// stored, and the new raster publishes. Only terrain-ray rejects an out-of-bounds
+// observer cell; sprite masks clip their footprint even when the center is off-map.
 //
 // Publish and Unpublish remain the unconditional primitives underneath; this is
 // the state machine that decides whether to call them.
@@ -277,8 +277,9 @@ func (s *Service) Refresh(id ObserverID, ob Observer) {
 		radius: ob.Radius, quantized: quantized,
 		storedCX: storedCX, storedCZ: storedCZ, storedByte: storedByte,
 	}
-	// An out-of-bounds origin stores an empty footprint and returns [C6].
-	if uint32(ob.CX) >= uint32(s.W) || uint32(ob.CZ) >= uint32(s.H) {
+	// Only the ray branch rejects an off-map observer cell. Circular masks
+	// still publish their clipped overlap [03 R-VIS-01 §2].
+	if ray && (uint32(ob.CX) >= uint32(s.W) || uint32(ob.CZ) >= uint32(s.H)) {
 		s.footprints[id] = next
 		return
 	}

@@ -79,10 +79,10 @@ func TestPipelineOrderSpySequence(t *testing.T) {
 func poolHandle(v int) pool.Handle { return pool.Handle(v) }
 
 // Use real pool.Handle import for variant test below
-func TestPipelineOrderShortCircuitOnAimReady(t *testing.T) {
+func TestPipelineAdmissionPrecedesAimReady(t *testing.T) {
 	// Turret weapon requires aim-ready [06 §3.3] [GAP T15] C9; zero return never fires.
 	// Target resolution now precedes the Aim step; the slot dispatches Aim*
-	// (issue latch) and waits — admission and fire never run.
+	// (issue latch), then runs admission before waiting at the executor.
 	var slot Slot
 	slot.Weapon = weaponForTest(0, true, false) // turret requires aim
 	slot.Reload = 0
@@ -90,7 +90,7 @@ func TestPipelineOrderShortCircuitOnAimReady(t *testing.T) {
 	spy := &PipelineSpy{}
 	env := PipelineEnv{
 		CheckAdmission: func(idx int, s *Slot) bool {
-			t.Fatalf("should not reach admission when aim-ready fails")
+			// Physical admission must still run before the executor waits.
 			return true
 		},
 		TryFire: func(idx int, s *Slot) bool {
@@ -105,9 +105,9 @@ func TestPipelineOrderShortCircuitOnAimReady(t *testing.T) {
 	if !slot.Aim.IssueBit {
 		t.Fatalf("Aim dispatch should have set the issue latch [04 §5.3]")
 	}
-	// Decrement, target validate, then the Aim dispatch/wait step.
-	if len(spy.Steps) != 3 || spy.Steps[0] != StepDecrement || spy.Steps[1] != StepTargetValidate || spy.Steps[2] != StepAimDispatch {
-		t.Fatalf("steps on short-circuit %v, want [Decrement Target AimDispatch]", spy.Steps)
+	// Admission remains observable when the executor awaits Aim.
+	if len(spy.Steps) != 4 || spy.Steps[0] != StepDecrement || spy.Steps[1] != StepTargetValidate || spy.Steps[2] != StepAimDispatch || spy.Steps[3] != StepAdmission {
+		t.Fatalf("steps on short-circuit %v, want [Decrement Target AimDispatch Admission]", spy.Steps)
 	}
 }
 

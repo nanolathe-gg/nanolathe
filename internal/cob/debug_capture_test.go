@@ -1,6 +1,46 @@
 package cob
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
+
+func TestDebugCallbackLivenessAfterDirectDrainAndSlotReuse(t *testing.T) {
+	v := NewVM(buildTraceProg(t))
+	b := NewCallbackBridge(v)
+	started := b.Deferred("Sleeper0", nil, nil)
+	if !started.Started {
+		t.Fatal("callback did not start")
+	}
+	i := started.Thread
+	v.Drain(1)
+	live := b.DebugSnapshot().Pending[i]
+	if !live.Recorded || !live.Active || v.Threads[i].Status != ThreadSleeping {
+		t.Fatalf("sleeping callback was not reported live: %+v", live)
+	}
+	v.Drain(1) // Session uses a direct VM drain, without bridge collection.
+	if !b.lifecyclePending[i].active || v.ThreadAliveAs(i, live.Identity) {
+		t.Fatal("fixture did not retain a completed callback record")
+	}
+	before := v.DebugSnapshot()
+	pending := b.lifecyclePending
+	got := b.DebugSnapshot().Pending[i]
+	if !got.Recorded || got.Active || got.Identity != live.Identity {
+		t.Fatalf("completed callback reported pending: %+v", got)
+	}
+	if !reflect.DeepEqual(before, v.DebugSnapshot()) || pending != b.lifecyclePending {
+		t.Fatal("capture changed VM or bridge bookkeeping")
+	}
+	if !v.StartByName("Sleeper0", nil) || v.LastStartedThread() != i {
+		t.Fatal("fixture did not reuse the callback's slot")
+	}
+	if b.DebugSnapshot().Pending[i].Active {
+		t.Fatal("replacement execution inherited old callback liveness")
+	}
+	if !live.Active {
+		t.Fatal("detached earlier snapshot changed")
+	}
+}
 
 func TestDebugCaptureDetachedSleepingScript(t *testing.T) {
 	v := NewVM(&Program{Statics: 1, Pieces: []string{"base"}, Scripts: map[string]int{"Sleep": 0}, Code: []uint32{1}})

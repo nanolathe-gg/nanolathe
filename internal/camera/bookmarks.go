@@ -74,7 +74,9 @@ func (c *Camera) ClearFollow() {
 
 // GlideTo writes only the desired origin, clamped, leaving the current origin
 // to the follow step — retail's "glide" [07 R-CAM-01 §12]. The point is a
-// camera origin, not a world point; callers recentre first.
+// camera origin, not a world point; callers recentre first. The n/F3 writers
+// preserve tracking, so a tracked object can replace this desired origin on
+// the next phase-10 pass [07 R-CAM-01 §12].
 func (c *Camera) GlideTo(x, z int32) {
 	if c == nil {
 		return
@@ -86,7 +88,6 @@ func (c *Camera) GlideTo(x, z int32) {
 		Z: clampAxis(z, c.MapH, spanH, leadZ),
 	}
 	c.Follow.Gliding = true
-	c.Follow.Tracked = 0
 }
 
 // StepGlide advances a glide that no tracked object owns. It applies the same

@@ -41,3 +41,28 @@ func TestDragScrollReanchorsAfterClamp(t *testing.T) {
 		t.Fatalf("reanchored beam origin = %d,%d, want 480,576", x, z)
 	}
 }
+
+// Established: pointer drag entry cancels following before the sub-tick
+// phase-10 writer [07 R-CAM-01 §1][07 R-CAM-01 §11]. A host snapshot must
+// not revive the glide that the pointer handler just cancelled.
+func TestDragEntryCancelsPendingGlide(t *testing.T) {
+	c := testCamera()
+	c.JumpTo(100, 200)
+	c.GlideTo(800, 900)
+	c.LatchTracked()
+	var drag DragScroll
+	drag.Begin(c)
+	for tick := 0; tick < 2; tick++ {
+		c.StepLatchedGlide()
+	}
+	if c.X != 100 || c.Z != 200 || c.Follow.Gliding {
+		t.Fatalf("cancelled glide moved during capture: current=(%d,%d) gliding=%v", c.X, c.Z, c.Follow.Gliding)
+	}
+	// Entry cancellation does not suppress a later glide.
+	c.GlideTo(800, 900)
+	c.LatchTracked()
+	c.StepLatchedGlide()
+	if c.X == 100 && c.Z == 200 {
+		t.Fatal("later glide did not run")
+	}
+}

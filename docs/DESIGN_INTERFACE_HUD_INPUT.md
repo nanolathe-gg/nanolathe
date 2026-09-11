@@ -237,7 +237,9 @@ input or draw.
 tracked follow and its pending host sample once, because pointer dispatch
 precedes phase 10. `Step(*Camera, dx, dy)` writes each origin as
 `(trunc(delta / 4) + anchor) × 16`, clamps it, copies current into desired, and
-updates the anchor; it does not clear follow during later steps. Its battle
+updates the anchor; it does not clear follow during later steps. Entry also
+refreshes the pending host sample so neither a tracked target nor an earlier
+glide can resume after capture in the same sub-tick batch. Its battle
 adapter supplies successive pointer deltas. The camera primitive quantizes the
 retail beam origin through `BattleViewOrigin`, never framebuffer `X`/`Z`,
 because the two coordinate frames differ by the viewport inset `[07 R-CAM-01 §11]` `[03 §4.1]`.
@@ -260,7 +262,9 @@ and four bookmark slots. `DesiredOrigin` and `FollowTo` step the origin toward
 the target; `GlideTo`/`StepGlide` are the message-source and next-unit glides;
 `SetTracked`/`ClearFollow` are the tracked-object writers, each named by the
 jump family's table; `StoreBookmark`/`RecallBookmark` are Ctrl+F5..F8 and
-F5..F8 `[07 R-CAM-01 §12]` `[07 R-CAM-01 §14]`.
+F5..F8 `[07 R-CAM-01 §12]` `[07 R-CAM-01 §14]`. The `n` and F3 glide
+writers preserve the tracked object; its next follow pass can replace the
+desired origin written by the glide `[07 R-CAM-01 §12]`.
 
 **The minimap** (`minimap.go`). `LayoutMinimap` is the letterbox: the longer map
 dimension occupies `MinimapLongSide = 126` pixels, the other is scaled by
@@ -934,7 +938,11 @@ record `[07 §2]` `[01 R-PLAT-01 §6]`.
 **C6 — selection modifiers.** With the modifier clear, units inside the
 rectangle are set and those outside cleared; with it set, units inside toggle
 and those outside are preserved. Owner slots are visited in stable ascending
-order `[07 §9]` [I1].
+order `[07 §9]` [I1]. Replacement must restore an inside unit after the bulk
+pre-clear even when it was already selected; reporting unchanged membership
+must agree with the resulting flags and selected count. The two HUD drag
+helpers currently have test consumers only; live selection is applied at the
+session command boundary.
 
 ### 3.2 The GUI file and window model (C1…C7)
 

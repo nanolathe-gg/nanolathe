@@ -81,6 +81,21 @@ func TestServiceDrainEventsDefersPositionalPlaybackUntilPresentation(t *testing.
 	if len(spy.plays) != 1 {
 		t.Fatalf("committed event replayed on second rendered frame: %d", len(spy.plays))
 	}
+	// A different battle may publish that same tick. Its first committed
+	// event must survive the old battle's deduplication marker.
+	cache, registry, music := s.Cache, s.Registry, s.Music
+	s.ResetBattleCues()
+	if s.Cache != cache || s.Registry != registry || s.Music != music {
+		t.Fatal("battle cue reset replaced retained media owners")
+	}
+	s.DrainEvents(7, ev)
+	if len(spy.plays) != 2 {
+		t.Fatalf("new battle's same-numbered tick was suppressed: %d", len(spy.plays))
+	}
+	s.DrainEvents(7, ev)
+	if len(spy.plays) != 2 {
+		t.Fatal("new battle's event replayed on a repeated drain")
+	}
 }
 
 func TestServicePositionalSoundModeSelectsMonoOrPlanarRolloff(t *testing.T) {

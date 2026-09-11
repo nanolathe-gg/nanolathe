@@ -156,6 +156,7 @@ func TestBurstSoundTriggerPublicationOrder(t *testing.T) {
 				}
 			}
 			shooter := &units.Unit{Handle: 7}
+			shooter.Move.Heading = 0xc000 // fixed muzzle faces the target on +X
 			_, ok := TryFire(&s, &Slot{Weapon: w}, 0, Target{Kind: TargetPoint, X: numeric.FixedFromInt(130)}, 0, FirePorts{RNG: &r, Spy: spy, Shooter: shooter, Events: &combatFireEvents{svc: &s, shooter: 7, pos: muzzle}})
 			if !ok {
 				t.Fatal("root failed")

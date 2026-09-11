@@ -240,6 +240,9 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 	if g.err == nil {
 		g.err = checkTrailDevicePixels()
 	}
+	if g.err == nil {
+		g.err = checkSourceLifecycleDevicePixels()
+	}
 	screen.DrawImage(img, &ebiten.DrawImageOptions{})
 }
 

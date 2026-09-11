@@ -34,6 +34,7 @@ files were written successfully; it does not erase the documented omissions.
 | `movement.json` | Routes, wants-repath/last-request timing, controller and order bindings, staged provider requests, admitted searches and available historical results |
 | `features.json`, `projectiles.json` | Explicit runtime projections, excluding definition/assets and terrain data |
 | `construction.json`, `ai.json` | Builder/product links and AI scheduling/group/rally projections |
+| `construction-admissions.json` | Bounded recent factory admission outcomes, rejection reasons, attempted footprints, existing builder identities, total and evicted counts |
 | `client.json`, `battle.json` | Camera/zoom, viewport/input/modal state, interpolation, recorder counters, cache sizes, main and individual worker model scratch, cached body/shadow storage |
 | `renderer.json`, `last-frame.png` | Device counters, actual triangle submission totals and peak Execute, paused-world reuse counts and retained image size, and one readback of the retained last composition; no additional render pass |
 
@@ -42,10 +43,29 @@ publication identity of zero means this exact unit occupant has not been
 published. Pool slots can be reused; their stale relationships are preserved,
 not repaired by the capture. COB data includes thread status, PC, complete
 32-word physical argument/local/expression window, sleep/wait/signal state,
-execution identities, return values, pending callback records, completion-receiver presence, statics,
+execution identities, return values, callback records, completion-receiver presence, statics,
 piece pose/animation and program names/checksum; it excludes bytecode and
 callback closures. Existing order snapshot bounds and truncation flags apply;
 route geometry is separately in `movement.json`.
+
+Callback `Recorded` means the bridge retains bookkeeping for that execution;
+`Active` additionally requires that exact execution identity to remain live in
+the VM. A recorded but inactive callback is historical, even if its slot now
+contains another script. Capture does not collect callbacks, deliver results,
+or change the VM to refresh those fields.
+
+Construction admission history retains the most recent 256 recorded outcomes
+in chronological order. `Total` includes evicted outcomes; `Dropped` counts
+evictions. Repeated transient rejections count separately, while the service's
+existing permanent-error deduplication remains in effect. An admitted outcome
+means placement passed; allocation is attempted afterward and may still fail.
+`BuilderIdentity` is
+the existing publication identity at the event, or zero if unavailable; it is
+never resolved from a later occupant of the same slot. A known `Footprint` is
+a half-open rectangle of terrain cells. Reasons and footprints describe the
+attempt, not a retained historical terrain/occupancy grid. The history is
+available without enabling tracing; its bound is a diagnostic storage policy,
+not a gameplay limit.
 
 Movement timing and current requests are available even when history tracing
 was not enabled. `Staged` means a provider request awaits admission; `Pending`
@@ -66,7 +86,7 @@ a large frame from multiple ordinary frames accumulated by the backend.
 Important limits are also repeated in the manifest. Private clock bits,
 mission/visibility internals, path search heaps,
 feature animation cursors/event ordering, combat target/pending-aim registries,
-construction work beyond links and AI per-definition vectors are omitted.
+construction work beyond links/admissions and AI per-definition vectors are omitted.
 Historical callback events exist only if tracing was already enabled. No save
 projection is attempted because transient state and callbacks do not have a
 complete faithful restore contract.

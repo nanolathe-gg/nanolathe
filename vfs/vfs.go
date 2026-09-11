@@ -79,6 +79,7 @@ type provider interface {
 	lookup(string) (*providerEntry, bool)
 	children(string) []*providerEntry
 	auditEntries() []EntryInfo
+	retailEntries() []EntryInfo
 	close() error
 }
 
@@ -745,7 +746,7 @@ func (f *FS) RetailReadDir(name string) ([]EntryInfo, error) {
 	seen := make(map[string]bool)
 	var result []EntryInfo
 	for _, mount := range f.orderedMounts() {
-		for _, info := range mount.provider.auditEntries() {
+		for _, info := range mount.provider.retailEntries() {
 			if info.Path == "" || !strings.HasPrefix(info.Path, prefix) {
 				continue
 			}
@@ -935,6 +936,8 @@ func (p *looseProvider) children(parent string) []*providerEntry {
 }
 
 func (p *looseProvider) close() error { return nil }
+
+func (p *looseProvider) retailEntries() []EntryInfo { return p.auditEntries() }
 
 func (p *looseProvider) auditEntries() []EntryInfo {
 	return append([]EntryInfo(nil), p.indexedEntries...)

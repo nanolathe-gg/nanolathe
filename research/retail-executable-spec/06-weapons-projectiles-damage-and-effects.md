@@ -4548,7 +4548,12 @@ Two different positions play two different roles and must not be conflated:
 the threat was aimed when created, so interceptors defend the aimed-at ground
 point — while **the slot store** written at acquisition packs the candidate's
 *current position* into the interceptor unit's fixed target words. The
-interceptor spawner rescans immediately before firing; the final candidate's
+acquisition uses the common point-target setter [04 R-ORD-01 §1]: take each
+current 16.16 coordinate's whole-world component by arithmetic right shift,
+retain it as a signed 16-bit word, and change a resulting Z word of −32768 to
+−32767 so it cannot select unit-target mode. The setter clears the pending
+slot-setter event subset and leaves Aim/control state intact. **Established.**
+The interceptor spawner rescans immediately before firing; the final candidate's
 record pointer stored in the new interceptor's reservation-link field at
 spawn time is the authoritative reservation, and that store is what later
 scans test when rejecting candidates already claimed by any pool record.

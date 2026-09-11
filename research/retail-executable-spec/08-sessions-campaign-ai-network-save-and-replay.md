@@ -1223,6 +1223,28 @@ InitialMission timing").**
    ([R-TRIG-01 §6]).
 5. `created[]` freed.
 
+#### InitialMission numeric argument installation
+
+**Established — conversion order and position triples.** The positional
+`m`, numeric `a`, mobile `b`, `p` and `u` forms first store each successfully
+parsed coordinate as a single-precision value. Each stored value is promoted,
+multiplied by 65536, and truncated toward zero into its signed coordinate word;
+there is no additional single-precision store after the product. Every such
+position triple sets Y to literal zero, independent of the acting unit's
+height. The `p` timeout and `w` duration follow the same initial
+single-precision store, then promotion, multiplication by 30 and truncation.
+For example, authored `2048.0001` rounds to 2048 before coordinate scaling,
+and `0.7` seconds rounds slightly below seven tenths and becomes 20 ticks.
+Neither direct double-precision parsing nor single-precision rounding of the
+scaled time reproduces that order.
+
+**Established — build selection.** The `b` verb tests the acting unit's mover
+presence. Only definition `bmcode == 1` has a mover; every other value selects
+`BuildingBuild`, and 1 selects `MobileBuild` [04 §3.6]. The product name and
+the mere nonzero value of `bmcode` do not select the mobile branch. The
+building branch supplies no position to the order constructor, which installs
+a zero X/Y/Z triple; only the mobile branch passes the authored coordinates.
+
 #### Campaign camera
 
 The first *start position* special with stored number 0 (`StartPos1`)

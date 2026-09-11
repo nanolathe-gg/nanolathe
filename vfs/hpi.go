@@ -65,6 +65,8 @@ type Archive struct {
 	key            uint32
 	entries        map[string]*providerEntry
 	indexedEntries []EntryInfo
+	// Enumeration retains source order, but only beneath reachable directories.
+	retailEntryIndices []int
 }
 
 type hpiRecord struct {
@@ -231,7 +233,7 @@ func (a *Archive) index() error {
 	root := EntryInfo{Path: "", Name: "", IsDir: true, OriginalPath: "", Source: Provenance{ProviderType: "hpi", SourcePath: a.name, MountOrder: 0}}
 	a.entries[""] = &providerEntry{info: root}
 	stack := make(map[uint64]bool)
-	if err := view.walkDirectory(rootOffset, "", "", stack); err != nil {
+	if err := view.walkDirectory(rootOffset, "", "", stack, true); err != nil {
 		return err
 	}
 	return nil
@@ -277,7 +279,7 @@ func (v hpiDirectoryView) cstring(pos uint64) (string, error) {
 	return string(v.bytes[index : index+end]), nil
 }
 
-func (v hpiDirectoryView) walkDirectory(nodeOffset uint64, parent, originalParent string, stack map[uint64]bool) error {
+func (v hpiDirectoryView) walkDirectory(nodeOffset uint64, parent, originalParent string, stack map[uint64]bool, visible bool) error {
 	if stack[nodeOffset] {
 		return fmt.Errorf("%w: directory cycle at 0x%x", ErrMalformedArchive, nodeOffset)
 	}
@@ -293,6 +295,21 @@ func (v hpiDirectoryView) walkDirectory(nodeOffset uint64, parent, originalParen
 	}
 	if uint64(listOffset) < v.start || uint64(listOffset) > v.end || count > uint32((v.end-uint64(listOffset))/hpiEntrySize) {
 		return fmt.Errorf("%w: entry list overflows directory", ErrMalformedArchive)
+	}
+	// Lookup chooses each component from the directory's last matching entry;
+	// earlier duplicate directories contribute no reachable descendants [02 §2].
+	// Still validate every subtree and retain every authored entry for diagnostics.
+	lastEntry := make(map[string]uint32)
+	for i := uint32(0); i < count; i++ {
+		nameOffset, err := v.u32(uint64(listOffset) + uint64(i)*hpiEntrySize)
+		if err != nil {
+			return err
+		}
+		name, err := v.cstring(uint64(nameOffset))
+		if err != nil {
+			return err
+		}
+		lastEntry[foldLogicalName(name)] = i
 	}
 	for i := uint32(0); i < count; i++ {
 		entryOffset := uint64(listOffset) + uint64(i)*hpiEntrySize
@@ -317,12 +334,15 @@ func (v hpiDirectoryView) walkDirectory(nodeOffset uint64, parent, originalParen
 			return fmt.Errorf("%w: entry %q: %v", ErrMalformedArchive, name, err)
 		}
 		original := originalJoin(originalParent, name)
+		lookupVisible := visible && lastEntry[foldLogicalName(name)] == i
 		if v.bytes[flagIndex] == 1 {
 			info := EntryInfo{Path: logical, Name: name, IsDir: true, OriginalPath: original,
 				Source: Provenance{LogicalPath: logical, OriginalPath: original, ProviderType: "hpi", SourcePath: v.archive.name}}
-			v.archive.entries[logical] = &providerEntry{info: info}
-			v.archive.indexedEntries = append(v.archive.indexedEntries, info)
-			if err := v.walkDirectory(uint64(dataOffset), logical, original, stack); err != nil {
+			if lookupVisible {
+				v.archive.entries[logical] = &providerEntry{info: info}
+			}
+			v.archive.appendIndexedEntry(info, visible)
+			if err := v.walkDirectory(uint64(dataOffset), logical, original, stack, lookupVisible); err != nil {
 				return err
 			}
 			continue
@@ -361,12 +381,30 @@ func (v hpiDirectoryView) walkDirectory(nodeOffset uint64, parent, originalParen
 		entry.readRange = func(offset int64, length int) ([]byte, error) {
 			return v.archive.readRecordRange(record, offset, length)
 		}
-		// Retail data does not define duplicate-path behavior within one archive.
-		// Keep the last directory entry, matching the deterministic overlay rule.
-		v.archive.entries[logical] = entry
-		v.archive.indexedEntries = append(v.archive.indexedEntries, info)
+		if lookupVisible {
+			v.archive.entries[logical] = entry
+		}
+		v.archive.appendIndexedEntry(info, visible)
 	}
 	return nil
+}
+
+func (a *Archive) appendIndexedEntry(info EntryInfo, visible bool) {
+	if visible {
+		a.retailEntryIndices = append(a.retailEntryIndices, len(a.indexedEntries))
+	}
+	a.indexedEntries = append(a.indexedEntries, info)
+}
+
+// retailEntries follows forward entry order inside the directory selected by
+// the backward component lookup [02 R-CAT-01 §1]. auditEntries keeps shadowed
+// subtrees available to diagnostics without making them enumerable content.
+func (a *Archive) retailEntries() []EntryInfo {
+	entries := make([]EntryInfo, len(a.retailEntryIndices))
+	for i, index := range a.retailEntryIndices {
+		entries[i] = a.indexedEntries[index]
+	}
+	return entries
 }
 
 func (a *Archive) auditEntries() []EntryInfo {

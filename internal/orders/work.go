@@ -1382,9 +1382,9 @@ func finishFeatureReclaim(u *units.Unit, cx, cz int) {
 // Resurrect [04 R-ORD-01 §5][05 R-WORK-01 §7]
 // ---------------------------------------------------------------------------
 
-// ResurrectionDelay is `trunc(0.3 · buildtime / (workertime / 30))` with the
-// inner division integer [04 R-ORD-01 §5][05 R-WORK-01 §7]. The 0.3 belongs to
-// this state alone. A builder whose `workertime` is below thirty makes the
+// ResurrectionDelay is `trunc(0.3 · buildtime / (uint16(workertime) / 30))`
+// with the inner division integer [04 R-ORD-01 §5][05 R-WORK-01 §7]. The 0.3
+// belongs to this state alone. A stored worker word below thirty makes the
 // inner quotient zero; retail's conversion of the resulting infinity yields a
 // zero low word, which is the only word the caller consumes, so the delay is
 // zero and the resurrection completes immediately with no spray [01 §7].
@@ -1398,7 +1398,7 @@ func ResurrectionDelay(buildTime, workerTime int32) int32 {
 }
 
 func resurrectionDelay(buildTime, workerTime int32) int32 {
-	q := workerTime / 30
+	q := uint16(workerTime) / 30 // narrow the authored value before division [05 R-WORK-01 §7]
 	if q == 0 {
 		return 0 // the out-of-range conversion's zero low word [05 R-WORK-01 §7]
 	}

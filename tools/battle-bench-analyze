@@ -1,0 +1,458 @@
+#!/usr/bin/env python3
+"""Offline, deterministic analysis of saved battle benchmark artifacts."""
+import argparse
+from collections import Counter
+from decimal import Decimal
+import json
+import math
+import os
+from pathlib import Path
+import re
+import statistics
+import subprocess
+import sys
+
+TOP = 30
+LIMITS = [
+    "CPU samples sum work across goroutines and may exceed elapsed wall time. They do not measure GPU completion or per-entity CPU cost.",
+    "Profile values are sampled estimates. Allocation profiles subtract alloc-base.pprof from alloc.pprof; GC-relative reporting and sampling can differ from exact-window runtime allocation counters.",
+    "Live heap profiles are sampled and GC-relative, not an exact object census. The benchmark collects heap.pprof after a forced GC outside timing; it can include retained diagnostic storage.",
+    "Package totals sum flat function costs only. Cumulative function costs overlap and must never be added together.",
+    "Endpoint state captures are partial observations. Born/dead labels mean identities appeared/disappeared between captures, not observed birth/death events; identities present at neither endpoint are invisible.",
+    "An unchanged endpoint position does not establish a stalled unit. Positions use raw signed 16.16 units; health/build changes do not identify their causes. State snapshots do not attribute CPU costs to entities.",
+    "DrawWork measures host draw work; PaceWait measures intentional pacing. OutsideDraw includes deferred driver/queue/display waits, not GPU execution time. Invalid cadence intervals and v2 nonstep Step zeros are excluded.",
+    "GPU image memory is reported separately from Go heap memory and does not measure all driver/device allocations.",
+]
+
+
+def require(ok, message):
+    if not ok:
+        raise ValueError(message)
+
+
+def number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def object_value(value, label):
+    require(isinstance(value, dict), f"{label}: expected object")
+    return value
+
+
+def array(value, label):
+    # Go encodes nil slices as null.
+    require(value is None or isinstance(value, list), f"{label}: expected array or null")
+    return value or []
+
+
+def fields(value, names, kind, label):
+    object_value(value, label)
+    for name in names:
+        require(name in value and kind(value[name]), f"{label}.{name}: missing or invalid")
+
+
+def strict_object(pairs):
+    result = {}
+    for key, value in pairs:
+        require(key not in result, f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def decode(text):
+    return json.loads(text, object_pairs_hook=strict_object,
+                      parse_constant=lambda value: (_ for _ in ()).throw(ValueError(f"invalid JSON number: {value}")))
+
+
+class Inputs:
+    def __init__(self, root):
+        self.root = root
+        self.warnings = []
+        self.artifacts = {}
+
+    def present(self, name):
+        present = (self.root / name).is_file()
+        self.artifacts[name] = "available" if present else "unavailable"
+        if not present:
+            self.warnings.append(f"{name}: unavailable (artifact missing)")
+        return present
+
+    def read(self, name, lines=False):
+        if not self.present(name):
+            return None
+        try:
+            text = (self.root / name).read_text(encoding="utf-8")
+            if lines:
+                return [decode(line) for line in text.splitlines() if line.strip()]
+            return decode(text)
+        except (ValueError, UnicodeError) as exc:
+            raise ValueError(f"{name}: {exc}") from exc
+
+
+def package_name(name):
+    # Find the package separator before the receiver/generic arguments. Slashes
+    # inside generic type arguments belong to the function name, not its package.
+    stem = name.split("[", 1)[0].split("(", 1)[0]
+    slash = stem.rfind("/")
+    dot = stem.find(".", slash + 1)
+    return stem[:dot] if dot >= 0 else "<unqualified>"
+
+
+def profile(root, filename, sample, unit, base=None):
+    command = ["go", "tool", "pprof", "-top", "-functions", "-symbolize=none",
+               "-nodecount=0", "-nodefraction=0", "-edgefraction=0",
+               f"-sample_index={sample}", f"-unit={unit}"]
+    if base:
+        command += ["-base", str(root / base)]
+    command.append(str(root / filename))
+    env = dict(os.environ, LC_ALL="C", LANG="C", GOTOOLCHAIN="local", GOPROXY="off")
+    run = subprocess.run(command, capture_output=True, text=True, env=env, timeout=120)
+    require(run.returncode == 0, f"{filename}: go tool pprof failed: {run.stderr.strip()}")
+    value_pattern = r"(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)(?:ns|B)?"
+    row_pattern = re.compile(r"^\s*" + value_pattern + r"\s+\S+%\s+\S+%\s+" + value_pattern + r"\s+\S+%\s+(.+)$")
+    total_pattern = re.compile(r"of " + value_pattern + r" total")
+    total = None
+    rows = []
+    table = False
+    for line in run.stdout.splitlines():
+        if line.startswith("Showing nodes accounting for"):
+            match = total_pattern.search(line)
+            require(match is not None, f"{filename}: unsupported pprof total line")
+            total = int(Decimal(match[1]))
+        if line.split() == ["flat", "flat%", "sum%", "cum", "cum%"]:
+            table = True
+            continue
+        if table and line.strip():
+            match = row_pattern.match(line)
+            require(match is not None, f"{filename}: unsupported pprof function row")
+            name = match[3].removesuffix(" (inline)")
+            rows.append({"function": name, "flat": int(Decimal(match[1])), "cumulative": int(Decimal(match[2]))})
+    # Empty profiles still contain the table header and a zero total.
+    require(table and total is not None, f"{filename}: unsupported or incomplete pprof output")
+    by_name = {}
+    for row in rows:
+        name = row["function"]
+        require(name not in by_name, f"{filename}: duplicate pprof function {name}")
+        by_name[name] = row
+    packages = Counter()
+    for row in rows:
+        packages[package_name(row["function"])] += row["flat"]
+    flat = sorted(rows, key=lambda row: (-row["flat"], row["function"]))
+    cumulative = sorted(rows, key=lambda row: (-row["cumulative"], row["function"]))
+    result = {"sample": sample, "unit": unit, "sampled_total": total,
+              "flat_sum": sum(row["flat"] for row in rows), "function_count": len(rows),
+              "top_flat": flat[:TOP], "top_cumulative": cumulative[:TOP],
+              "packages_flat": [{"package": name, "flat": value} for name, value in sorted(packages.items(), key=lambda row: (-row[1], row[0])) if value]}
+    if sample == "cpu":
+        match = re.search(r"Duration: ([\d.]+)([a-zµ]+),", run.stdout)
+        if match:
+            scales = {"ns": 1, "us": 1000, "µs": 1000, "ms": 1000000, "s": 1000000000, "m": 60000000000, "hrs": 3600000000000}
+            require(match[2] in scales, "unsupported CPU duration unit")
+            result["profile_duration_ns_rounded"] = int(Decimal(match[1]) * scales[match[2]])
+    return result
+
+
+def distribution(rows, keys):
+    counts = Counter(tuple(row[key] for key in keys) for row in rows)
+    return [dict(zip(keys, group), count=count) for group, count in sorted(counts.items())]
+
+
+def units_summary(rows, label):
+    rows = array(rows, label)
+    identities = set()
+    groups, heads, orders = [], [], []
+    unpublished = unknown_queues = truncated = 0
+    for debug in rows:
+        fields(debug, ["PublishedIdentity"], lambda x: type(x) is int and x >= 0, label)
+        unit = object_value(debug.get("Unit"), label + ".Unit")
+        fields(unit, ["Slot", "Owner", "X", "Y", "Z", "Health", "MaxHealth"], lambda x: type(x) is int, label + ".Unit")
+        fields(unit, ["DefinitionKey"], lambda x: isinstance(x, str), label + ".Unit")
+        fields(unit, ["Alive", "Dying"], lambda x: isinstance(x, bool), label + ".Unit")
+        fields(unit, ["Remaining"], number, label + ".Unit")
+        identity = debug["PublishedIdentity"]
+        require(not identity or identity not in identities, f"{label}: duplicate published identity {identity}")
+        identities.add(identity)
+        unpublished += identity == 0
+        common = {"owner": unit["Owner"], "definition": unit["DefinitionKey"]}
+        groups.append(dict(common, alive=unit["Alive"], dying=unit["Dying"], incomplete=unit["Remaining"] > 0))
+        if debug.get("Orders") is None:
+            unknown_queues += 1
+            continue
+        queue = object_value(debug["Orders"].get("Queue"), label + ".Orders.Queue")
+        for segment in ("Primary", "Secondary"):
+            fields(queue, [segment + "Truncated"], lambda x: isinstance(x, bool), label + ".Orders.Queue")
+            require(segment in queue, f"{label}: missing queue segment {segment}")
+            chain = array(queue[segment], label + "." + segment)
+            truncated += queue[segment + "Truncated"]
+            for i, order in enumerate(chain):
+                fields(order, ["DescriptorID", "Phase", "MoveState"], lambda x: type(x) is int, label + ".order")
+                item = dict(common, segment=segment, descriptor=order["DescriptorID"], phase=order["Phase"], move_state=order["MoveState"])
+                orders.append(item)
+                if i == 0:
+                    heads.append(item)
+    return {"count": len(rows), "unpublished": unpublished, "queues_unavailable": unknown_queues,
+            "truncated_queue_segments": truncated,
+            "units_by_owner_definition_state": distribution(groups, ["owner", "definition", "alive", "dying", "incomplete"]),
+            "queue_heads_by_order_phase": distribution(heads, ["owner", "definition", "segment", "descriptor", "phase", "move_state"]),
+            "queued_orders_by_order_phase": distribution(orders, ["owner", "definition", "segment", "descriptor", "phase", "move_state"])}
+
+
+def unit_identity(debug):
+    unit = debug["Unit"]
+    return {"identity": debug["PublishedIdentity"], "slot": unit["Slot"], "owner": unit["Owner"], "definition": unit["DefinitionKey"]}
+
+
+def unit_changes(start, end):
+    before = {row["PublishedIdentity"]: row for row in start if row["PublishedIdentity"]}
+    after = {row["PublishedIdentity"]: row for row in end if row["PublishedIdentity"]}
+    surviving = sorted(before.keys() & after.keys())
+    changes = []
+    for identity in surviving:
+        a, b = before[identity]["Unit"], after[identity]["Unit"]
+        record = unit_identity(after[identity])
+        record.update(position_delta_raw=[b[key] - a[key] for key in ("X", "Y", "Z")],
+                      health_delta=b["Health"] - a["Health"], remaining_delta=b["Remaining"] - a["Remaining"],
+                      alive_start=a["Alive"], alive_end=b["Alive"], dying_start=a["Dying"], dying_end=b["Dying"])
+        changes.append(record)
+    born = [unit_identity(after[i]) for i in sorted(after.keys() - before.keys())]
+    dead = [unit_identity(before[i]) for i in sorted(before.keys() - after.keys())]
+    return {"born": born, "dead": dead, "surviving": changes,
+            "born_count": len(born), "dead_count": len(dead), "surviving_count": len(changes),
+            "changed_position_count": sum(any(row["position_delta_raw"]) for row in changes),
+            "same_position_count": sum(not any(row["position_delta_raw"]) for row in changes),
+            "changed_health_count": sum(row["health_delta"] != 0 for row in changes),
+            "born_by_owner_definition": distribution(born, ["owner", "definition"]),
+            "dead_by_owner_definition": distribution(dead, ["owner", "definition"])}
+
+
+def phase_summary(data):
+    fields(data, ["measured_ticks"], lambda x: type(x) is int and x >= 0, "phases.json")
+    require("phases" in data, "phases.json: missing phases")
+    phases = array(data["phases"], "phases.json.phases")
+    seen = set()
+    for row in phases:
+        fields(row, ["phase"], lambda x: isinstance(x, str), "phase")
+        fields(row, ["total_ns", "mean_ns_per_tick", "max_ns_per_tick", "calls"], lambda x: number(x) and x >= 0, "phase")
+        require(row["phase"] not in seen, "phases.json: duplicate phase")
+        seen.add(row["phase"])
+    total = sum(row["total_ns"] for row in phases)
+    return {"measured_ticks": data["measured_ticks"], "total_phase_ns": total,
+            "phases_registry_order": [dict(row, share_percent=100 * row["total_ns"] / total if total else None) for row in phases],
+            "phases_cost_order": sorted(phases, key=lambda row: (-row["total_ns"], row["phase"]))}
+
+
+def frame_summary(data):
+    object_value(data, "frames.json")
+    require(isinstance(data.get("rows"), list), "frames.json.rows: expected array")
+    rows = data["rows"]
+    require(all(isinstance(row, dict) for row in rows), "frames.json.rows: expected object records")
+    metadata = object_value(data.get("metadata"), "frames.json.metadata")
+    version2 = metadata.get("benchmark_version", 1) >= 2
+    timing = {}
+    keys = ["Step", "Record", "PreRecord", "CPURender", "Submit", "Cadence"]
+    if version2:
+        keys += ["DrawWork", "PaceWait", "OutsideDraw"]
+    for key in keys:
+        subset = rows
+        if key in ("Cadence", "OutsideDraw"):
+            subset = [row for row in rows if row.get("CadenceValid", True)]
+        elif key == "Step" and version2:
+            subset = [row for row in rows if row.get("SimulationStep")]
+        values = [row[key] for row in subset if key in row]
+        require(all(number(value) and value >= 0 for value in values), f"frames.json.{key}: invalid timing")
+        if values:
+            values.sort()
+            timing[key] = {"samples": len(values), "mean_ms": statistics.mean(values), "median_ms": statistics.median(values), "p95_ms": values[min(len(values) - 1, int(len(values) * .95))], "max_ms": values[-1]}
+        else:
+            timing[key] = None
+    exact = {}
+    for key in ("alloc_bytes", "mallocs", "gc", "gc_pause_ns"):
+        if key in data:
+            require(number(data[key]) and data[key] >= 0, f"frames.json.{key}: invalid counter")
+        exact[key] = data.get(key)
+    return {"renderer": data.get("renderer"), "measured_frames": len(rows), "tps": data.get("tps"),
+            "metadata": {key: value for key, value in metadata.items() if key != "root"},
+            "timings": timing, "exact_window_counters": exact}
+
+
+def memory_summary(data):
+    object_value(data, "memory.json")
+    keys = ("Alloc", "TotalAlloc", "Sys", "Mallocs", "Frees", "HeapAlloc", "HeapSys",
+            "HeapIdle", "HeapInuse", "HeapReleased", "HeapObjects", "StackInuse",
+            "StackSys", "MSpanInuse", "MCacheInuse", "GCSys", "OtherSys", "NextGC",
+            "PauseTotalNs", "NumGC", "NumForcedGC", "GCCPUFraction")
+    snapshots = {}
+    for stage in ("before", "after", "after_gc"):
+        stats = object_value(data.get(stage), "memory.json." + stage)
+        fields(stats, keys, lambda value: number(value) and value >= 0, "memory.json." + stage)
+        snapshots[stage] = {key: stats[key] for key in keys}
+    fields(data, ["gpu_image_bytes_before", "gpu_image_bytes_after"], lambda value: type(value) is int, "memory.json")
+    fields(data, ["graphics_library"], lambda value: isinstance(value, str), "memory.json")
+    counters = ("TotalAlloc", "Mallocs", "Frees", "NumGC", "PauseTotalNs")
+    delta = {key: snapshots["after"][key] - snapshots["before"][key] for key in counters}
+    require(all(value >= 0 for value in delta.values()), "memory.json: cumulative counters decreased")
+    return {"go_memory": snapshots, "exact_window_deltas": delta,
+            "gpu_image_bytes_before": data["gpu_image_bytes_before"],
+            "gpu_image_bytes_after": data["gpu_image_bytes_after"],
+            "graphics_library": data["graphics_library"]}
+
+
+def state_summary(inputs, endpoint):
+    result = {}
+    units = None
+    for name in ("session.json", "units.jsonl", "movement.json", "features.json", "projectiles.json", "construction.json"):
+        label = endpoint + "/" + name
+        data = inputs.read(label, lines=name.endswith("jsonl"))
+        if inputs.artifacts[label] == "unavailable":
+            result[name] = None
+        elif name == "units.jsonl":
+            units = data
+            result[name] = units_summary(data, label)
+        elif name == "session.json":
+            object_value(data, label)
+            result[name] = {key: data[key] for key in ("committed_tick", "state", "rng_sim_state", "rng_crt_state") if key in data}
+        elif data is None:
+            # The producer uses null for an absent optional service, distinct
+            # from an available service with an empty record list.
+            result[name] = None
+        else:
+            rows = array(data, label)
+            require(all(isinstance(row, dict) for row in rows), label + ": expected object records")
+            summary = {"count": len(rows)}
+            if name == "movement.json":
+                for row in rows:
+                    fields(row, ["Slot"], lambda value: type(value) is int, label)
+                for key in ("CurrentActive", "CurrentDirty", "CurrentWantsRepath"):
+                    summary[key] = sum(row[key] for row in rows) if all(type(row.get(key)) is bool for row in rows) else None
+                for key in ("Staged", "Pending", "PathFailure"):
+                    summary[key] = sum(row[key] is not None for row in rows) if all(key in row for row in rows) else None
+            if name == "features.json":
+                for row in rows:
+                    fields(row, ["CellIndex"], lambda value: type(value) is int, label)
+                for key in ("Burning", "Animating", "Sinking"):
+                    summary[key] = sum(row[key] for row in rows) if all(type(row.get(key)) is bool for row in rows) else None
+            if name == "projectiles.json":
+                for row in rows:
+                    fields(row, ["Slot", "PublishedIdentity"], lambda value: type(value) is int, label)
+                    object_value(row.get("State"), label + ".State")
+            if name == "construction.json":
+                for row in rows:
+                    fields(row, ["Builder", "Product"], lambda value: type(value) is int, label)
+            result[name] = summary
+    return result, units
+
+
+def analyze(root):
+    require(root.is_dir(), "output directory does not exist")
+    inputs = Inputs(root)
+    result = {"schema_version": 1, "limits": LIMITS, "profiles": {}}
+    for name, key, fn in (("frames.json", "frames", frame_summary), ("memory.json", "memory", memory_summary), ("phases.json", "phases", phase_summary)):
+        data = inputs.read(name)
+        result[key] = fn(data) if inputs.artifacts[name] == "available" else None
+    present = {name: inputs.present(name) for name in ("cpu.pprof", "alloc-base.pprof", "alloc.pprof", "heap.pprof")}
+    for key, filename, sample, unit, base in (
+            ("cpu", "cpu.pprof", "cpu", "ns", None),
+            ("allocation_bytes", "alloc.pprof", "alloc_space", "B", "alloc-base.pprof"),
+            ("allocation_objects", "alloc.pprof", "alloc_objects", "count", "alloc-base.pprof"),
+            ("live_heap_bytes", "heap.pprof", "inuse_space", "B", None),
+            ("live_heap_objects", "heap.pprof", "inuse_objects", "count", None)):
+        result["profiles"][key] = profile(root, filename, sample, unit, base) if present[filename] and (base is None or present[base]) else None
+    # Even an orphan profile must be validated; a corrupt present artifact is an error.
+    if present["alloc.pprof"] != present["alloc-base.pprof"]:
+        filename = "alloc.pprof" if present["alloc.pprof"] else "alloc-base.pprof"
+        profile(root, filename, "alloc_space", "B")
+    start, before = state_summary(inputs, "state-start")
+    end, after = state_summary(inputs, "state-end")
+    result["state_start"], result["state_end"] = start, end
+    result["unit_changes"] = unit_changes(before, after) if before is not None and after is not None else None
+    if inputs.present("goroutine.txt"):
+        text = (root / "goroutine.txt").read_text(encoding="utf-8")
+        count = len(re.findall(r"^goroutine \d+ \[", text, re.M))
+        require(count > 0, "goroutine.txt: no goroutine stack headers")
+        result["goroutines"] = {"stack_headers": count}
+    else:
+        result["goroutines"] = None
+    result["artifacts"] = inputs.artifacts
+    result["warnings"] = sorted(inputs.warnings)
+    return result
+
+
+def markdown(data):
+    out = ["# Battle benchmark analysis", "", "Deterministic offline summary; `analysis.json` contains complete groups and endpoint identity changes.", ""]
+    if data["frames"]:
+        frames = data["frames"]
+        out += [f"Renderer: {frames['renderer']}; measured frames: {frames['measured_frames']}; rate: {frames['tps']}.", "", "## Frame timings", "", "| Stage | Mean ms | Median ms | p95 ms | Max ms | Samples |", "| --- | ---: | ---: | ---: | ---: | ---: |"]
+        for key, value in frames["timings"].items():
+            if value:
+                out.append(f"| {key} | {value['mean_ms']:.3f} | {value['median_ms']:.3f} | {value['p95_ms']:.3f} | {value['max_ms']:.3f} | {value['samples']} |")
+        out += ["", "Exact-window runtime counters: `" + json.dumps(frames["exact_window_counters"], sort_keys=True) + "`.", ""]
+    for key, value in data["profiles"].items():
+        out += ["## " + key.replace("_", " ").title(), ""]
+        if value is None:
+            out += ["Unavailable.", ""]
+            continue
+        out += [f"Sampled total: {value['sampled_total']} {value['unit']}; {value['function_count']} functions. Values below use {value['unit']}.", ""]
+        for heading, field in (("Top flat functions", "top_flat"), ("Top cumulative functions (overlap)", "top_cumulative")):
+            out += ["### " + heading, "", "| Function | Flat | Cumulative |", "| --- | ---: | ---: |"]
+            for row in value[field]:
+                out.append(f"| `{row['function'].replace('|', '&#124;')}` | {row['flat']} | {row['cumulative']} |")
+            out.append("")
+        out += ["### Package flat totals", "", "| Package | Flat |", "| --- | ---: |"]
+        out += [f"| `{row['package']}` | {row['flat']} |" for row in value["packages_flat"]]
+        out.append("")
+    out += ["## Simulation phases", ""]
+    if data["phases"] is None:
+        out += ["Unavailable.", ""]
+    else:
+        out += [f"Measured ticks: {data['phases']['measured_ticks']}. Phase timings retain registry order; the final row includes publication and the viewer/host tail.", "", "| Phase | Total ms | Mean ms/tick | Max ms/tick | Calls |", "| --- | ---: | ---: | ---: | ---: |"]
+        for row in data["phases"]["phases_registry_order"]:
+            out.append(f"| {row['phase']} | {row['total_ns']/1e6:.3f} | {row['mean_ns_per_tick']/1e6:.3f} | {row['max_ns_per_tick']/1e6:.3f} | {row['calls']} |")
+        out.append("")
+    out += ["## Endpoint unit and order state", ""]
+    for key in ("state_start", "state_end"):
+        value = data[key]["units.jsonl"]
+        if value is None:
+            out += [f"{key}: unavailable.", ""]
+            continue
+        out += [f"{key}: {value['count']} units; {value['unpublished']} unpublished identities; {value['queues_unavailable']} unavailable queues; {value['truncated_queue_segments']} truncated segments.", "", "| Owner | Definition | Segment | Descriptor | Phase | Move state | Heads |", "| --- | --- | --- | ---: | ---: | ---: | ---: |"]
+        for row in value["queue_heads_by_order_phase"]:
+            out.append(f"| {row['owner']} | {row['definition']} | {row['segment']} | {row['descriptor']} | {row['phase']} | {row['move_state']} | {row['count']} |")
+        out.append("")
+    out += ["| Endpoint | Movement records | Features | Projectiles | Construction links |", "| --- | ---: | ---: | ---: | ---: |"]
+    for key in ("state_start", "state_end"):
+        values = [data[key][name] for name in ("movement.json", "features.json", "projectiles.json", "construction.json")]
+        counts = [str(value["count"]) if value is not None else "unavailable" for value in values]
+        out.append("| " + key + " | " + " | ".join(counts) + " |")
+    out.append("")
+    changes = data["unit_changes"]
+    if changes:
+        out += [f"Published identity differences: {changes['born_count']} appeared (born), {changes['dead_count']} disappeared (dead), {changes['surviving_count']} survive. Survivors: {changes['changed_position_count']} changed position, {changes['same_position_count']} have the same endpoint position, {changes['changed_health_count']} changed health.", ""]
+    out += ["## Memory counters", "", "Unavailable." if data["memory"] is None else "```json\n" + json.dumps(data["memory"], indent=2, sort_keys=True) + "\n```", "", "## Interpretation limits", ""]
+    out += ["- " + limit for limit in data["limits"]]
+    out += ["", "## Missing artifacts", ""]
+    out += ["- " + warning for warning in data["warnings"]] or ["None."]
+    return "\n".join(out) + "\n"
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("directories", metavar="OUTPUT_DIRECTORY", nargs="+")
+    args = parser.parse_args()
+    failed = False
+    for directory in args.directories:
+        root = Path(directory).resolve()
+        try:
+            result = analyze(root)
+            encoded = json.dumps(result, indent=2, sort_keys=True, allow_nan=False) + "\n"
+            rendered = markdown(result)
+            (root / "analysis.json").write_text(encoded, encoding="utf-8")
+            (root / "analysis.md").write_text(rendered, encoding="utf-8")
+            print(f"{directory}: wrote analysis.json and analysis.md ({len(result['warnings'])} unavailable artifacts)")
+        except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as exc:
+            print(f"nanolathe: benchmark analysis failed: logical path {directory}, providers searched [saved artifacts], expected valid benchmark inputs: {exc}", file=sys.stderr)
+            failed = True
+    return int(failed)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

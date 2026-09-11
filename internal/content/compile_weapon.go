@@ -128,17 +128,25 @@ type WeaponDef struct {
 	// Note [06 §9.2] lookup is case-insensitive binary search against UnitName — store strings; phase 9 owns lookup.
 	DamageDefault int32            // DAMAGE.default integer default 0 [02 "Weapon record"]
 	Damage        map[string]int32 // every other DAMAGE key => armor name -> damage, sorted map [02 "Weapon record"]
+	// The override map retains spellings; this vector keeps the lower-bound
+	// winner ahead of case variants across same-ID parses [06 R-DMG-01 §1].
+	damageOrder []string
 
 	// Unknown retains inert parsed keys so a later phase can consume them without re-parsing [02 §5] C14.
 	// Keys are OriginalKey preserved case; e.g., aimrate, startfire, ovradjust etc have no reader.
 	Unknown map[string]string
 }
 
-// DamageKeysSorted returns the DAMAGE armor keys sorted case-insensitively for deterministic iteration (I1).
-// The map itself is unordered; this helper provides the sorted view for hashing and tests [02 "Weapon record"].
+// DamageKeysSorted returns the DAMAGE unit-name keys sorted case-insensitively for deterministic iteration (I1).
+// Compiled records preserve insertion order within a fold-equal run, which is
+// observable to the runtime lower-bound lookup [06 R-DMG-01 §1]. Authored Go
+// fixtures without that vector retain the deterministic lexical fallback.
 func (w *WeaponDef) DamageKeysSorted() []string {
 	if w.Damage == nil {
 		return nil
+	}
+	if w.damageOrder != nil {
+		return append([]string(nil), w.damageOrder...)
 	}
 	keys := make([]string, 0, len(w.Damage))
 	for k := range w.Damage {
@@ -192,12 +200,16 @@ var knownWeaponKeys = map[string]struct{}{
 // It reads ID first with default -1 to select the record [02 "Weapon record"] C2, then
 // applies conversions exactly as tabulated each truncated after multiply [02 "Weapon record"] C3.
 //
-// The result is always a complete record: every field is stored
-// unconditionally, the authored value when the key is present and the
-// accessor default when it is not — there is no conditionally skipped field.
-// A same-ID section therefore REPLACES the whole prior record, catalog name
-// included, rather than sparse-merging into it [02 §5 R-CONTENT-02].
+// This entry starts a fresh record. Re-parsing an existing ID uses
+// compileWeaponSectionWithPrior so its damage overrides survive while scalar
+// fields and the catalog name are replaced [02 R-CONTENT-02].
 func compileWeaponSection(section *formats.Section, sectionName string, prov Provenance) *WeaponDef {
+	return compileWeaponSectionWithPrior(section, sectionName, prov, nil)
+}
+
+// Scalar fields replace authored-or-default on every parse, while DAMAGE
+// overrides append to the existing table [02 R-CONTENT-02][06 R-DMG-01 §1].
+func compileWeaponSectionWithPrior(section *formats.Section, sectionName string, prov Provenance, prior *WeaponDef) *WeaponDef {
 	// C2 weapon identity: read ID first, default -1, use to select record; section name is catalog key; name is display string [02 "Weapon record"]
 	id := section.IntValue("ID", -1)
 	displayName, _ := section.StringValue("name", "")
@@ -327,23 +339,40 @@ func compileWeaponSection(section *formats.Section, sectionName string, prov Pro
 
 	// Damage table [02 "Weapon record"] C4
 	// Its default key is read with integer accessor default 0 and becomes fallback.
-	// Every other key enumerated: key is armor-class name (case preserved) and value is damage,
+	// Every other key names a unit definition (case preserved) and its damage,
 	// interned into per-weapon sorted map. No DAMAGE section => fallback 0.
 	damageDefault := int32(0)
 	damageMap := make(map[string]int32)
+	var damageOrder []string
+	if prior != nil {
+		damageOrder = prior.DamageKeysSorted()
+		for _, key := range damageOrder {
+			damageMap[key] = prior.Damage[key]
+		}
+	}
 	if dmgSection := section.Section("DAMAGE"); dmgSection != nil {
 		damageDefault = dmgSection.IntValue("default", 0)
-		for _, item := range dmgSection.Items {
-			if item.Kind != formats.Assignment {
-				continue
-			}
+		for _, item := range dmgSection.ResolvedAssignments() {
 			if CanonicalKey(item.Key) == "default" {
 				continue
 			}
 			// Use typed accessor for integer conversion [02 §4]; enumeration preserves case.
 			val := dmgSection.IntValue(item.Key, 0)
-			// Case preserved, sorted later [02 "Weapon record"] C4
-			damageMap[item.OriginalKey] = val
+			// Insertion is at the case-insensitive lower bound. A repeated
+			// spelling needs only its newest entry in this map projection; the
+			// retained order reproduces the first matching lookup [06 R-DMG-01 §1].
+			key := item.OriginalKey
+			for i, old := range damageOrder {
+				if old == key {
+					damageOrder = append(damageOrder[:i], damageOrder[i+1:]...)
+					break
+				}
+			}
+			lo := sort.Search(len(damageOrder), func(i int) bool { return CanonicalKey(damageOrder[i]) >= CanonicalKey(key) })
+			damageOrder = append(damageOrder, "")
+			copy(damageOrder[lo+1:], damageOrder[lo:])
+			damageOrder[lo] = key
+			damageMap[key] = val
 		}
 	}
 
@@ -449,6 +478,7 @@ func compileWeaponSection(section *formats.Section, sectionName string, prov Pro
 		SoundWater:         soundWater,
 		DamageDefault:      damageDefault,
 		Damage:             damageMap,
+		damageOrder:        damageOrder,
 		Unknown:            unknown,
 	}
 
@@ -517,7 +547,8 @@ func CompileWeaponsWithDuplicates(fs vfs.FSOps) (map[string]*WeaponDef, []Weapon
 	if fs == nil {
 		return nil, nil, fmt.Errorf("content: nil VFS")
 	}
-	// Record table substitute: slot (ID) -> record, whole-record replacement.
+	// Record table substitute: slot (ID) -> record, replacing scalars while
+	// preserving each slot's accumulated damage overrides [02 R-CONTENT-02].
 	slots := make(map[int32]*WeaponDef)
 	// keysPerID preserves discovery order per ID for the collision diagnostics.
 	keysPerID := make(map[int32][]string)
@@ -535,11 +566,11 @@ func CompileWeaponsWithDuplicates(fs vfs.FSOps) (map[string]*WeaponDef, []Weapon
 			if name == "" {
 				continue
 			}
-			wd := compileWeaponSection(section, name, prov)
+			wd := compileWeaponSectionWithPrior(section, name, prov, slots[section.IntValue("ID", -1)])
 			if wd.ID >= 0 {
 				keysPerID[wd.ID] = append(keysPerID[wd.ID], wd.CanonicalKey)
-				// Whole-record replacement: the later section owns the slot,
-				// catalog name included [02 §5 R-CONTENT-02].
+				// The later section owns the scalar fields and catalog name;
+				// its DAMAGE table includes retained overrides [02 R-CONTENT-02].
 				slots[wd.ID] = wd
 			} else {
 				scratchKeys = append(scratchKeys, wd.CanonicalKey)

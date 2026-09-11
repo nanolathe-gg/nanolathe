@@ -11,10 +11,14 @@ import "math"
 // by hand in one place; changing one changes only how the zoom feels.
 const (
 	// ZoomScrollThreshold is the travel required for one zoom step, in
-	// thousandths of an Ebitengine wheel unit. Three units require a longer
-	// trackpad gesture than the former one-unit threshold. Mouse wheels share
-	// the same input path and threshold. Positive wheel Y zooms in.
-	ZoomScrollThreshold int32 = 3000
+	// thousandths of an Ebitengine wheel unit: one conventional wheel click.
+	// Trackpad fractions accumulate toward the same threshold (§16.6).
+	ZoomScrollThreshold int32 = 1000
+
+	// ZoomScrollCooldownMillis holds each scroll target for half a second so
+	// a continuous gesture can stop at 1x. Excess input is discarded, never
+	// queued. This is host time, independent of game speed or pause (§16.6).
+	ZoomScrollCooldownMillis uint32 = 500
 
 	// ZoomEaseFraction is how much of the remaining gap the live factor closes
 	// per host Update. It is an exponential ease: 0.30 closes about 83% of a gap
@@ -64,7 +68,8 @@ func NextZoomStep(current Zoom, in bool) (Zoom, bool) {
 // factor that eases toward it on the host Update grid.
 //
 // It is presentation state and is driven from the platform layer's Update, so
-// its clock is host Updates and never simulation time [I6]. It holds no camera:
+// easing uses host Updates and scroll cooldown uses host milliseconds [I6].
+// It holds no camera:
 // each call takes the one it drives, which keeps the battle session the single
 // owner of the camera.
 type ZoomController struct {
@@ -79,6 +84,10 @@ type ZoomController struct {
 	// thousandths of a wheel unit, signed: a trackpad's fractions add up here
 	// until they are worth a step.
 	travel int32
+	// Last accepted scroll step, in the caller's wrapping host milliseconds.
+	// A separate flag allows the first step at timestamp zero.
+	scrollAt      uint32
+	scrollCooling bool
 }
 
 // Target reports the factor the controller is easing toward, falling back to
@@ -99,16 +108,16 @@ func (z *ZoomController) Active(cam *Camera) bool {
 	return z.target != cam.EffectiveZoom()
 }
 
-// Wheel spends one host frame's wheel delta about the screen point (mx, my):
-// every ZoomScrollThreshold of travel moves the target one step along ZoomSteps,
-// in for a positive delta (a scroll up) and out for a negative one. Travel
-// short of the threshold is banked; travel in the opposite direction discards what
-// is banked, so a trackpad that drifts back does not step.
-//
-// The float64 is the wheel's own unit and is consumed here; the stored travel
-// is an integer, so nothing holds a floating-point factor [I2].
-func (z *ZoomController) Wheel(cam *Camera, mx, my int32, dy float64) {
+// Wheel spends a host frame's scroll delta about (mx, my), at most one step
+// per call and per cooldown (§16.6). now is the wrapping host millisecond
+// reading, not a simulation clock. Travel below the threshold accumulates;
+// a reversal discards it. Excess travel and all input during cooldown are
+// discarded so a gesture cannot queue a jump through the native view.
+func (z *ZoomController) Wheel(cam *Camera, mx, my int32, dy float64, now uint32) {
 	if z == nil || cam == nil || dy == 0 {
+		return
+	}
+	if z.scrollCooling && now-z.scrollAt < ZoomScrollCooldownMillis {
 		return
 	}
 	units := int32(math.Round(dy * 1000))
@@ -119,13 +128,13 @@ func (z *ZoomController) Wheel(cam *Camera, mx, my int32, dy float64) {
 		z.travel = 0
 	}
 	z.travel += units
-	for z.travel >= ZoomScrollThreshold {
-		z.travel -= ZoomScrollThreshold
-		z.stepTarget(cam, mx, my, true)
+	if z.travel < ZoomScrollThreshold && z.travel > -ZoomScrollThreshold {
+		return
 	}
-	for z.travel <= -ZoomScrollThreshold {
-		z.travel += ZoomScrollThreshold
-		z.stepTarget(cam, mx, my, false)
+	in := z.travel > 0
+	z.travel = 0
+	if z.stepTarget(cam, mx, my, in) {
+		z.scrollAt, z.scrollCooling = now, true
 	}
 }
 
@@ -133,16 +142,17 @@ func (z *ZoomController) Wheel(cam *Camera, mx, my int32, dy float64) {
 // one. Stepping out below the map's floor lands on the floor (setTarget
 // clamps); from the floor a further step out is refused, because every step
 // that remains is below it.
-func (z *ZoomController) stepTarget(cam *Camera, mx, my int32, in bool) {
+func (z *ZoomController) stepTarget(cam *Camera, mx, my int32, in bool) bool {
 	current := z.Target(cam)
 	next, ok := NextZoomStep(current, in)
 	if !ok {
-		return
+		return false
 	}
 	if !in && current <= cam.MinZoom() {
-		return
+		return false
 	}
 	z.setTarget(cam, mx, my, next)
+	return z.Target(cam) != current
 }
 
 // SetTarget aims the zoom at a factor about (mx, my) without a wheel gesture —
@@ -153,6 +163,7 @@ func (z *ZoomController) SetTarget(cam *Camera, mx, my int32, want Zoom) {
 	}
 	z.setTarget(cam, mx, my, want)
 	z.travel = 0
+	z.scrollCooling = false
 }
 
 // setTarget clamps a requested factor into the camera's usable range and

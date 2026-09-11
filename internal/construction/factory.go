@@ -58,11 +58,13 @@ func (s AdmissionStatus) String() string {
 // AdmissionDiagnostic is a deterministic construction trace entry. It is
 // diagnostic state only and does not participate in simulation hashes.
 type AdmissionDiagnostic struct {
-	Tick    uint32
-	Builder pool.Handle
-	Product string
-	Status  AdmissionStatus
-	Reason  string
+	Tick            uint32
+	Builder         pool.Handle
+	BuilderIdentity uint64 // existing publication identity at the attempt; zero means unavailable
+	Product         string
+	Status          AdmissionStatus
+	Reason          string
+	Footprint       AdmissionFootprint
 }
 
 // CommandDiagnostic retains a rejected command at the authoritative boundary
@@ -220,14 +222,20 @@ type Service struct {
 	// does carry for this service is the order record itself (phase, count,
 	// target), which internal/orders owns. There is no alternate Nanolathe save
 	// codec [I13]; do not invent a factory-only format.
-	placements    map[pool.Handle]placementRecord // product -> occupancy footprint and immutable definition
-	productIndex  map[uint32]string               // product id -> catalog key, built once
-	messages      []string                        // verbatim diagnostics [05 C18][05 C21][05 C22]
-	admissions    []AdmissionDiagnostic           // state-2 outcomes, diagnostic only
-	commands      []CommandDiagnostic             // command-boundary rejections
-	lastPermanent AdmissionDiagnostic             // bounded malformed-node dedupe key
-	hasPermanent  bool
-	lastKill      KillInfo // most recent kind-9 kill packet [05 C21]
+	placements      map[pool.Handle]placementRecord // product -> occupancy footprint and immutable definition
+	productIndex    map[uint32]string               // product id -> catalog key, built once
+	messages        []string                        // verbatim diagnostics [05 C18][05 C21][05 C22]
+	admissions      []AdmissionDiagnostic           // bounded ring of state-2 outcomes, diagnostic only
+	admissionsStart int
+	admissionsTotal uint64
+	// DebugBuilderIdentity may read the session's existing publication identity
+	// for this exact occupant. It must not mint identities or mutate simulation
+	// state, consume RNG, or query time. Nil records an unavailable identity.
+	DebugBuilderIdentity func(*units.Unit) uint64
+	commands             []CommandDiagnostic // command-boundary rejections
+	lastPermanent        AdmissionDiagnostic // bounded malformed-node dedupe key
+	hasPermanent         bool
+	lastKill             KillInfo // most recent kind-9 kill packet [05 C21]
 	// completedInPump is the product the completion transition ran on during the
 	// pump StepUnit is currently driving, or 0. It exists because the factory
 	// state machine "restarts at state 0 within the same pump pass, so coalesced
@@ -764,14 +772,17 @@ func (s *Service) ClearMessages() { s.messages = nil }
 
 func (s *Service) logMessage(msg string) { s.messages = append(s.messages, msg) }
 
-// AdmissionDiagnostics returns state-2 outcomes in visit order. The trace is
-// deliberately separate from Messages so callers can assert status classes
+// AdmissionDiagnostics returns bounded recent state-2 outcomes in visit order.
+// The trace is separate from Messages so callers can assert status classes
 // without parsing presentation text [04 §6.4].
 func (s *Service) AdmissionDiagnostics() []AdmissionDiagnostic {
-	if s == nil {
+	if s == nil || len(s.admissions) == 0 {
 		return nil
 	}
-	return append([]AdmissionDiagnostic(nil), s.admissions...)
+	recent := make([]AdmissionDiagnostic, len(s.admissions))
+	n := copy(recent, s.admissions[s.admissionsStart:])
+	copy(recent[n:], s.admissions[:s.admissionsStart])
+	return recent
 }
 
 // CommandDiagnostics returns rejected factory commands in input order.
@@ -794,7 +805,7 @@ func (s *Service) RecordCommandRejection(tick uint32, builder pool.Handle, produ
 	})
 }
 
-func (s *Service) recordAdmission(tick uint32, builder pool.Handle, product string, status AdmissionStatus, err error) {
+func (s *Service) recordAdmission(tick uint32, builder *units.Unit, product string, footprint world.FootprintRect, status AdmissionStatus, err error) {
 	if s == nil {
 		return
 	}
@@ -802,8 +813,10 @@ func (s *Service) recordAdmission(tick uint32, builder pool.Handle, product stri
 	if err != nil {
 		reason = err.Error()
 	}
-	s.admissions = append(s.admissions, AdmissionDiagnostic{
-		Tick: tick, Builder: builder, Product: content.CanonicalKey(product), Status: status, Reason: reason,
+	s.appendAdmission(AdmissionDiagnostic{
+		Tick: tick, Builder: builder.Handle, BuilderIdentity: s.debugBuilderIdentity(builder),
+		Product: content.CanonicalKey(product), Status: status, Reason: reason,
+		Footprint: AdmissionFootprint{Known: true, MinX: footprint.MinX(), MinZ: footprint.MinZ(), MaxX: footprint.MaxX(), MaxZ: footprint.MaxZ()},
 	})
 }
 
@@ -826,7 +839,7 @@ func (s *Service) rejectPermanent(factory *units.Unit, node *orders.Node, tick u
 		reason = err.Error()
 	}
 	diagnostic := AdmissionDiagnostic{
-		Tick: tick, Builder: builder, Product: content.CanonicalKey(product),
+		Tick: tick, Builder: builder, BuilderIdentity: s.debugBuilderIdentity(factory), Product: content.CanonicalKey(product),
 		Status: AdmissionRejectedPermanentDefinition, Reason: reason,
 	}
 	// A malformed node may remain in an internal fixture indefinitely. Keep
@@ -839,7 +852,7 @@ func (s *Service) rejectPermanent(factory *units.Unit, node *orders.Node, tick u
 	}
 	s.lastPermanent = diagnostic
 	s.hasPermanent = true
-	s.admissions = append(s.admissions, diagnostic)
+	s.appendAdmission(diagnostic)
 	// Retain a diagnostic and nothing else: do not invent a cancellation or
 	// retry transition [04 §6.4].
 	//

@@ -53,7 +53,10 @@ func TestWheelZoomKeepsTheWorldUnderThePointer(t *testing.T) {
 	b.cam.X, b.cam.Z = 2000, 1500
 	px, py := int32(400), int32(250)
 	wx, wz := b.cam.X+px, b.cam.Z+py
-	for _, dy := range []float64{3, -8} {
+	host := &fakeMillisSource{}
+	b.millisSource = host
+	for i, dy := range []float64{1, -1, -1} {
+		host.ms = uint32(i) * 500
 		b.wheelZoom(px, py, dy)
 		for i := 0; i < 400 && b.zoom.Active(b.cam); i++ {
 			b.zoom.Step(b.cam)
@@ -62,8 +65,9 @@ func TestWheelZoomKeepsTheWorldUnderThePointer(t *testing.T) {
 			t.Fatalf("wheel %v: the ease never settled", dy)
 		}
 		f := b.cam.EffectiveZoom()
-		if (dy > 0) != (f > camera.ZoomUnit) {
-			t.Fatalf("wheel %v settled on %s", dy, f)
+		want := []camera.Zoom{camera.ZoomMax, camera.ZoomUnit, camera.ZoomUnit / 2}[i]
+		if f != want {
+			t.Fatalf("wheel %v settled on %s, want %s", dy, f, want)
 		}
 		// The ease re-anchors every Update through floor and the projection
 		// ceils, so the drawn pixel may sit up to two pixels inside the pointer.

@@ -1843,16 +1843,19 @@ func installWeapons(u *Unit, def *content.UnitDef) {
 	defs := [NumSlots]*content.WeaponDef{def.Weapon1Def, def.Weapon2Def, def.Weapon3Def}
 	for i := 0; i < NumSlots; i++ {
 		s := &u.Slots[i]
+		s.Reload = 0
+		s.Ammo = 0
+		s.Weapon = nil
 		// Bits 2-3 are the slot's own index and go on whether or not the link
 		// resolved: the record is self-describing [06 R-WPN-05 §3]. Bits 5-7
 		// keep whatever the record held; the initializer preserves them.
 		s.Flags = (s.Flags &^ (SlotFlagAimLatch | SlotFlagEnabled | SlotFlagIndexMask | SlotFlagAutonomous)) |
-			(uint8(i)<<SlotFlagIndexShift)&SlotFlagIndexMask
+			(uint8(i)<<SlotFlagIndexShift)&SlotFlagIndexMask | SlotFlagAutonomous
 		if content.IsWeaponInactive(defs[i]) {
 			continue
 		}
 		s.Weapon = defs[i]
-		s.Flags |= SlotFlagEnabled | SlotFlagAutonomous
+		s.Flags |= SlotFlagEnabled
 	}
 }
 

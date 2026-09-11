@@ -201,6 +201,23 @@ stamped cells in lockstep with its current door state, which is what makes a
 factory exit legal — the producer no longer holds the cells its open yard
 released `[04 R-COLL-01 §3]`.
 
+**Admission diagnostics** (`debug_capture.go`). This is Nanolathe diagnostic
+policy: a 256-entry ring retains recent factory placement outcomes, in visit
+order, with total recorded (including evicted) and evicted counts. Permanent
+duplicate suppression remains in place, and suppressed duplicates do not
+increment the total.
+`AdmissionDiagnostics` and `DebugAdmissionSnapshot` return detached copies;
+observation does not drain history. Records preserve tick, builder slot,
+canonical product name, status and reason, plus the half-open cell rectangle
+actually tested. A definition failure before validation has an unknown
+footprint. `AdmissionAdmitted` denotes placement acceptance before the allocator
+runs; it does not claim that a product was created. The optional
+`DebugBuilderIdentity` hook reads the session's existing publication identity
+for the exact builder occupant at the attempt, or returns zero if unavailable;
+it must not mint an identity or change simulation state. Identity is retained
+with the attempt so later slot reuse cannot relabel history. The diagnostic
+bound changes no C17 retry gate, deadline, allocation, or RNG behavior.
+
 **The approach** (`approach.go`). A mobile builder out of nanolathe reach of its
 site reads the product's footprint pair, snaps the record's X and Z to that
 footprint's centre, zeroes the leash word, installs the rectangle goal of
@@ -266,6 +283,11 @@ delay, the corpse-name truncation and the single simulation draw that is an
 approach-point vertical term, not a placement jitter `[05 R-WORK-01 §7]`;
 `reverse.go` holds only the refund selector ladder that `sharedStep`'s reverse
 arm calls.
+
+The live resurrection row calls `orders.ResurrectionDelay` through the session
+work adapter. It narrows the compiled worker time to the unsigned worker word
+before selecting the integer quantum; values that wrap below thirty retain
+the immediate-completion edge `[05 R-WORK-01 §7 "the delay"]`.
 
 **The resurrection transplant.** Phase 5 copies the live feature record's
 ORIENTATION triple — bank, heading and pitch — into the replacement unit's own

@@ -2,8 +2,8 @@ package orders
 
 // Exhaustive result-code table test for BOTH pump segments [04 §3.3],
 // plan C6/C7/C8: the primary pump (head-blocking, restart-from-head after
-// each dispatch) and the secondary pump (front-to-back, skip not-due) share
-// the code values but NOT the effects, so every code is exercised in both
+// each dispatch) and the secondary pump (reload after dispatch, skip not-due)
+// share the code values but NOT the effects, so every code is exercised in both
 // segments (ORD-03). Each case asserts the resulting queue shape (which
 // records remain, their order, tombstones), the deadline and its delta from
 // the tick where the code sets one, gate/bit transitions, and the simulation
@@ -430,9 +430,8 @@ func TestPumpResultCodeTables(t *testing.T) {
 	})
 
 	t.Run("secondary", func(t *testing.T) {
-		// Secondary walk: front-to-back, skipping records that are not due
-		// [04 §3.3] C8; primary is kept empty so the front-blocker rule never
-		// suppresses the segment under test.
+		// Secondary walk: reload the head after dispatch and skip records
+		// that are not due [04 R-ORD-01 §10].
 		newQ := func(sim *rng.Simulation, nodes ...*Node) (*Queue, *units.Unit) {
 			q := &Queue{binding: &QueueBinding{SimRNG: sim}}
 			q.secondary = nodes
@@ -445,7 +444,7 @@ func TestPumpResultCodeTables(t *testing.T) {
 			return n
 		}
 
-		t.Run("code0 resets phase and advances", func(t *testing.T) {
+		t.Run("code0 resets phase and reloads head", func(t *testing.T) {
 			sim := injectTestSim(t)
 			q, u := newQ(sim, secNode(buildID, 1, 4))
 			p := newProbe()
@@ -457,6 +456,9 @@ func TestPumpResultCodeTables(t *testing.T) {
 			}
 			if q.secondary[0].Flags&FlagTombstone != 0 {
 				t.Fatalf("code0 secondary: record must not be tombstoned")
+			}
+			if p.callsFor(1) != 2 {
+				t.Fatal("code0 must reload the head before the probe gates it")
 			}
 			if d := sim.Draws() - before; d != 0 {
 				t.Fatalf("code0 secondary: draw delta %d, want 0", d)
@@ -472,11 +474,14 @@ func TestPumpResultCodeTables(t *testing.T) {
 			if len(q.secondary) != 1 || q.secondary[0].Phase != 8 {
 				t.Fatalf("code1 secondary: len %d phase %d, want 8", len(q.secondary), q.secondary[0].Phase)
 			}
+			if p.callsFor(1) != 2 {
+				t.Fatal("code1 must reload the head before the probe gates it")
+			}
 			if d := sim.Draws() - before; d != 0 {
 				t.Fatalf("code1 secondary: draw delta %d, want 0", d)
 			}
 		})
-		t.Run("code2 continues to next record", func(t *testing.T) {
+		t.Run("code2 reloads then skips gated records", func(t *testing.T) {
 			sim := injectTestSim(t)
 			q, u := newQ(sim, secNode(buildID, 1, 7), secNode(buildID, 2, 3))
 			p := newProbe()
@@ -489,8 +494,8 @@ func TestPumpResultCodeTables(t *testing.T) {
 			if q.secondary[0].Phase != 7 || q.secondary[1].Phase != 3 {
 				t.Fatalf("code2 secondary: phases %d %d, want unchanged", q.secondary[0].Phase, q.secondary[1].Phase)
 			}
-			if p.callsFor(1) != 1 || p.callsFor(2) != 1 {
-				t.Fatalf("code2 secondary: calls %d/%d, want front-to-back walk reached both", p.callsFor(1), p.callsFor(2))
+			if p.callsFor(1) != 2 || p.callsFor(2) != 2 {
+				t.Fatalf("code2 secondary: calls %d/%d, want both revisited before their gates were skipped", p.callsFor(1), p.callsFor(2))
 			}
 			if d := sim.Draws() - before; d != 0 {
 				t.Fatalf("code2 secondary: draw delta %d, want 0", d)
@@ -528,15 +533,15 @@ func TestPumpResultCodeTables(t *testing.T) {
 				t.Fatalf("code3 secondary: draw delta %d, want exactly 1", d)
 			}
 		})
-		t.Run("code4 continues to next record", func(t *testing.T) {
+		t.Run("code4 reloads then skips gated records", func(t *testing.T) {
 			sim := injectTestSim(t)
 			q, u := newQ(sim, secNode(buildID, 1, 7), secNode(buildID, 2, 3))
 			p := newProbe()
 			p.install(t, buildID, func(n *Node) Code { return 4 }) // [04 §3.3] continue walking unchanged
 			before := sim.Draws()
 			q.Pump(u, probeTick)
-			if len(q.secondary) != 2 || p.callsFor(1) != 1 || p.callsFor(2) != 1 {
-				t.Fatalf("code4 secondary: len %d calls %d/%d, want both walked, unchanged", len(q.secondary), p.callsFor(1), p.callsFor(2))
+			if len(q.secondary) != 2 || p.callsFor(1) != 2 || p.callsFor(2) != 2 {
+				t.Fatalf("code4 secondary: len %d calls %d/%d, want both revisited, phases unchanged", len(q.secondary), p.callsFor(1), p.callsFor(2))
 			}
 			if d := sim.Draws() - before; d != 0 {
 				t.Fatalf("code4 secondary: draw delta %d, want 0", d)
