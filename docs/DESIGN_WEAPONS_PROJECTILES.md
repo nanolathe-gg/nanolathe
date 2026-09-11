@@ -124,8 +124,10 @@ clock `[06 §3.1]` `[08 R-AI-01 §16]`. A side whose strategic state exists
 rebuilds even when it owns nothing, and which sides rebuild does not depend on
 which units exist.
 
-The secondary list is the sensor phase's **seen set**, sampled at rebuild time
-rather than retested per candidate `[06 R-WPN-02 §3]` `[06 R-WPN-02 §6]`. The
+The secondary list samples the **seen bit** in each live unit's status word
+at that player's rebuild. A viewing-player sensor pass between player visits
+is visible to later rebuilds; there is no separate per-tick seen cache.
+Previously built lists keep their cadence rather than being retested per candidate `[06 R-WPN-02 §3]` `[06 R-WPN-02 §6]`. The
 autonomous scan carries a persistent per-player round-robin cursor rather than
 starting from slot zero each visit `[06 §3.2]`.
 
@@ -153,7 +155,8 @@ one allocation remains for a nonempty selected population. Capacity follows
 the selected registry list, with no inferred unit cap `[06 §3.1]`
 `[06 §3.2]`.
 
-Direct visibility consumes the completed sensor phase's runtime status word:
+Direct visibility consumes the current candidate unit's runtime status word,
+including its constructor seed or restored sensor bits before the next pass:
 the sonar bit permits a below-surface hull probe, while an alliance row cannot
 stand in for that contact. Its four probes begin at the candidate definition's
 min-X/max-Y/min-Z box corner and carry its spans through the shared visibility
@@ -189,6 +192,17 @@ the pool slot becomes available again. Tracking belongs to the dying unit's
 weapon receivers, not to the numeric handle a later unit may reuse
 `[04 §2.4]` `[P0-16]` `[06 §3.3]`. The session regression parks an Aim callback,
 destroys its unit, reuses the slot, and fires the replacement's ungated weapon.
+
+Outstanding Aim callbacks share the slot's receiver. A fresh dispatch clears
+readiness; each later nonzero return grants it, while a zero return leaves its
+current value unchanged `[04 R-CB-01 §6]`. Retargeting can overlap those
+callbacks, so the completion adapter cannot assign readiness from every return.
+
+Unit save/load connects the saved request latch, readiness word and distance
+word to the live slot. `AimSlot` retains a restored readiness word verbatim
+until a producer changes it; gameplay uses its zero/nonzero projection. Script
+restoration clears completion receivers, so pending requests are preserved
+without reconnecting callbacks or adding a timeout `[08 R-SAVE-WEAPON-01]`.
 
 `aim.go` holds three things and no state. The **drift gate** is the angular
 tolerance a turret must be inside before it may fire; a weapon that authors no
@@ -740,8 +754,8 @@ writes the stored muzzle-to-aim distance; all other creator families retain
 the previous occupant's value `[06 §6.1]` `[06 §6.3]`.
 
 **C9 — aim-ready is granted only on an explicit nonzero return.** A new dispatch
-first clears readiness; every delivered return replaces it, so zero clears and
-an explicit nonzero grants. Revisiting a held request does not reset its receiver
+first clears readiness; a delivered zero leaves it unchanged and an explicit
+nonzero grants it. Revisiting a held request does not reset its receiver
 or synthesize a delivery; its deferred completion still may arrive. The request
 latch is set immediately after dispatch and a zero delivery does not clear it;
 there is no timeout, and a missing script or an exhausted thread pool never authorizes fire

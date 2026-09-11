@@ -784,7 +784,7 @@ OR these bits into that record's pending word [R-PATH-01 §9]:
 |---:|---|---|
 | `0x20` | the follower observes the unit has reached the goal | route follower |
 | `0x40` | an empty route is published while the unit is **not** at the goal — the "cannot get there" signal | route publisher |
-| `0x80` | a previous goal object is released | payload installers |
+| `0x80` | the controller releases its previous goal binding | payload rebinds, explicit releases, and non-persistent arrival |
 | `0x100` | the request's start is already satisfied, or the pre-search ray connected | path search |
 | `0x200` | the request's start is out of bounds, or the ray did not connect | path search |
 
@@ -801,11 +801,12 @@ its slot — whichever record that is — and replaces the slot
 ([R-ORD-01 §9]). When a record installs while the controller holds that
 record's own previous object, the raise lands on the installing record and
 the installers' closing clear of `0x20`–`0x200` (paragraph above) cancels
-it, so `0x80` is never observable from a record's own install; it becomes
-visible only through a displacement from outside the record — queue
-teardown, head replacement, cancel, or another record's install displacing
-this record's object. Two records on one mover may each hold a payload
-object, but only the controller's is bound and drives the mover
+it, so `0x80` is never observable from a record's own install. It is
+observable after another record displaces the binding, after explicit release,
+or together with `0x20` when a non-persistent goal arrives
+([R-AIR-01 §1]). Record destruction unbinds only its own currently bound
+object; it cannot release a different record's binding ([R-ORD-01 §9]). Two
+records on one mover may each hold a payload object, but only the controller's is bound and drives the mover
 ([R-ORD-01 §9]); the pump stops at a gated record with nothing satisfied
 (§3.3 step 3), so the record behind a stalled leg is never pumped and never
 installs.
@@ -3205,8 +3206,10 @@ store it. The helper clears *before* it adopts; that is observationally the
 "finish by clearing" of the paragraph above because the adopt raises nothing
 on a record whose previous payload was just released. The release form
 (no new object) is step (1) alone, which is why it leaves `0x80` visible. The
-arrival release of [R-MOV-03 §2] and the queue teardown of [R-MOV-03 §9] reach
-the same helper through the record.
+arrival service unbinds through the controller without destroying the record's
+object. Queue teardown uses the record destructor, which checks binding
+identity before unbinding; it is not this explicit release helper
+([R-ORD-01 §9]).
 
 **The footprint snap.** A unit's committed footprint cell for an axis is
 `(pos − foot·2^19 + 2^19) >> 20` (arithmetic shift) where `foot` is the
@@ -4070,6 +4073,21 @@ reimplementation rule is the retail one: a single controller slot, and an
 install that displaces another record's object **must raise `0x80` on that
 record**, with the pump stopping at a gated unsatisfied record as §3.3 step 3
 says.
+
+**Established — unbinding is not object destruction, and cleanup is not
+explicit release.** Non-persistent arrival raises `0x20`, then unbinds the
+controller and raises `0x80`; the record still owns the object. The controller
+also leaves an object's record ownership intact when another object replaces
+its binding. The record-level explicit install/release helper described above
+unbinds the controller whenever its own object exists, even if a different
+record now owns the binding. Record **destruction** has an additional identity
+check: it unbinds only when its object is the controller's currently bound
+object, then destroys its own object whether it was bound or displaced.
+Consequently, destroying a displaced record does not interrupt the current
+owner; explicitly releasing a displaced record's retained object does.
+A fresh record owns no object, so its explicit release is a no-op against the
+controller. In particular, prepending a fresh `Paralyze` record does not release
+an interrupted landing record's marker.
 
 **The Patrol phase-2 arm is the standing-fire scan, not a successor test.**
 `Patrol`'s phase-2 arm ([R-ORD-01 §4]) reads no record chain. It runs the
@@ -12148,6 +12166,17 @@ serialization. The payload installer clears the record's satisfied bits
 `0x20`, `0x40`, `0x80`, `0x100` and `0x200` whenever it installs a non-null
 payload, and raises `0x80` on the record whose payload it replaces.
 
+**Established — target reference lifetime.** Each air path marker links its
+target through the shared unit-reference helper, with no notification receiver.
+Final target removal unlinks and clears every such reference, including markers
+retained by displaced order records and markers reconstructed from saves. This
+does not destroy the marker, change its cached goal or control words, or raise
+an order-pending bit through the marker. The order's own target observer remains
+separate. Controller displacement preserves the marker's target registration;
+marker destruction removes it. Later reuse of the target's pool slot cannot
+revive the cleared link. The marker save writer emits a zero target identifier
+when this link is null.
+
 A marker carries: a 16-bit **flags** word; a horizontal **arrival radius** word;
 a signed 16-bit **altitude offset**; a 16-bit **heading**; a 16-bit **attach
 piece index**; the owning unit; a weak **target handle**; a 16.16 **goal**
@@ -12540,7 +12569,7 @@ cue slot 7 `Landing aborted` and returns 8.
 | 3 | `QueryLandingPad` once, same scan. Store the winner in the record's scratch word. If none: status cue slot 7 `Landing failed`, return 0 (reset the phase to zero). Otherwise build a follow-unit-**piece** marker on the target's chosen pad piece with horizontal arrival radius `0x30` (48); install; gate `0xE8`. | 1 |
 | 4 | No work. | 1 |
 | 5 | If the satisfied set contains the movement-arrival bit `0x20` — the approach marker has been reached — return 1, which advances to phase 6 and does nothing else this visit. Otherwise revalidate the stored pad and, if it is stale, re-query and rescan; if still none, status cue slot 7 `Landing aborted: all pads are occupied`, return 0. Otherwise build the follow-piece marker again with altitude offset `0` when the lander carries nothing, or the **integer part of the cargo definition's model total-height dword** when it does; start the deferred `EndTransport` with the wake flag set; install; set the record's deadline to the current tick plus 15; gate `\|= 0xE8`. | 2 |
-| 6 | If the satisfied set contains the goal-release bit `0x40`, return 8. Revalidate the stored pad once; if it is not free, status cue slot 7 `Landing aborted: no pads available`, return 0. Otherwise: **empty lander** — attach the lander itself to the target on the pad piece with request mode `0`, and, when the lander's health is below its definition's `MaxDamage` **and** the pad owner's definition has both `isairbase` and `builder` set **and** the pad owner is not under construction, clear the goal payload and push a `SELFREPAIR` order record on the lander. **Loaded lander** — issue the deferred `EndTransport` (no wake) and attach the **cargo** to the target on the pad piece with request mode `0`. | 5 |
+| 6 | If the satisfied set contains the route-failure bit `0x40`, return 8. Revalidate the stored pad once; if it is not free, status cue slot 7 `Landing aborted: no pads available`, return 0. Otherwise: **empty lander** — attach the lander itself to the target on the pad piece with request mode `0`, and, when the lander's health is below its definition's `MaxDamage` **and** the pad owner's definition has both `isairbase` and `builder` set **and** the pad owner is not under construction, clear the goal payload and push a `SELFREPAIR` order record on the lander. **Loaded lander** — issue the deferred `EndTransport` (no wake) and attach the **cargo** to the target on the pad piece with request mode `0`. | 5 |
 | other | — | 7 |
 
 A pad piece counts as **free** exactly when the pad owner is not itself being
@@ -12562,8 +12591,11 @@ one-word `Landing aborted` message belongs to the null-target entry guard only.
 **Established — `VTOL_LandIfCan` lands on terrain, not on a pad.** Its
 three-phase machine is the one an idle aircraft with nowhere to park runs.
 
-* Entry: a satisfied goal-release bit `0x40` returns 5; the off-map recovery leg of
-  [R-AIR-01 §5] pre-empts everything else.
+* Entry: if this record has a successor, return 5 before any outcome or
+  recovery test. Otherwise a satisfied route-failure bit `0x40` returns 5;
+  then the off-map recovery leg of [R-AIR-01 §5] pre-empts the phase body.
+  This is a handler entry check: appending a successor does not itself bypass
+  the pump's unsatisfied dynamic gate.
 * Phase 0: require a live mover and `canfly`. If the record's cached goal is
   exactly `(0,0,0)`, copy the unit's current position into it. Draw one
   simulation random value below `0x10000`; store it as the search bearing and
@@ -12604,6 +12636,48 @@ three-phase machine is the one an idle aircraft with nowhere to park runs.
 * Phase 2: if the satisfied set does not contain the movement-arrival bit `0x20`, return 8; otherwise
   call the mover-mode setter with mode `1`, which zeroes the velocity and the
   scalar speed and levels bank and pitch ([R-AIR-01 §3]), and return 5.
+
+**Established — ordinary landing arrival delivers two movement bits.** All
+terrain-landing legs install point markers, whose persistence test is false.
+Their flight producer raises arrival `0x20`, unbinds the marker, and raises
+release `0x80` on the same record in the same service visit. With the landing
+record's gate `0xE0`, the pump delivers `0xA0` on its next admitted visit.
+With no successor, phase 2 therefore takes the arrival arm and grounds the
+unit; the release bit does not turn this successful arrival into failure.
+With a successor, the entry check completes the record without the touchdown
+mode write. `0x40` means empty-route failure, not payload release; the latter
+is `0x80` throughout [R-ORD-01 §0].
+
+**Established bounded negative — no route-failure producer on the ordinary flight path.**
+The recovered goal-notification callers supply `0x40` only from the ground
+controller's empty-route publication when its goal is not satisfied. The
+ordinary flight controller is selected at mover construction and does not run
+that publisher ([R-AIR-01 §1]). Its point-marker service supplies arrival and
+release, not route failure. Thus the recovered ordinary terrain-landing
+producer chain does not deliver `0x40` to this handler.
+
+**Established bounded negative — the recovered ordinary producers do not deliver
+release alone to a surviving terrain-landing record.** The generic mechanism
+exists: another record can displace its binding by installing an object or
+explicitly releasing an object it retained ([R-ORD-01 §9]). The relevant
+ordinary local-play producer families, however, do not compose that sequence
+while `VTOL_LandIfCan` remains a waiting live record:
+
+| Producer family | Why it does not deliver a standalone release to the waiting landing record |
+|---|---|
+| Damage retaliation | Auto-engage requires no front record or a standby-interruptible front record. Only `Standby`, `Standby_Mine` and `VTOL_Standby` have that descriptor bit; terrain landing does not. The fallback assigns weapon targets without installing a movement object [R-STANCE-01 §3]. |
+| Opportunity acquisition and guard combat/assistance | These calls run inside other primary-order handlers. A waiting landing head blocks them; a record behind terrain landing makes the landing entry complete before that successor can run. Ordinary aircraft guard resolution selects `VTOL_Follow`, not the static-head `Guard_NoMove` descriptor [R-STANCE-01 §3], [R-ORD-02 §1], [R-ORD-01 §10]. |
+| Normal front commands and queued movement/work | Non-queued purge removes terrain landing, whose descriptor lacks the purge-survivor bit. Queued moving records use after-marker insertion and cannot install while landing blocks the primary pump; when landing is next admitted, its successor check completes it first [R-ORD-01 §13], [R-ORD-01 §16]. |
+| Temporary static-head records | Activation, cloak and standing-order records install no movement objects. A newly prepended `Paralyze` owns no payload, so its explicit release leaves the landing binding untouched. `GetBuilt` is produced on newly allocated construction products, not as an interruption of an existing landing [R-ORD-01 §2], [R-ORD-01 §16], [R-FAC-02 §5]. |
+| Transport and cargo attachment | The `BeCarried` re-arm purges terrain landing before prepending its wait record. The airbase attachment exception does not re-arm and does not rebind the movement controller. Carrier pickup/unload legs install goals on the carrier's own records, not the cargo's [R-AIR-01 §9], [R-AIR-01 §10]. |
+| Independent rear queue | Only `BuildWeapon` and `SelfDestruct` select that segment. Neither installs or explicitly releases movement objects; self-destruction ends the unit instead of resuming a landing §3.8, [R-ORD-01 §2], [R-ORD-01 §5]. |
+| Record removal and saved-goal binding | Destruction of a displaced record preserves another record's bound object. Removing landing itself cannot deliver a later wake to that freed record. Saved-head binding runs on the reconstructed controller, not as an in-battle preemption of an existing landing [R-ORD-01 §9], [08 R-SAVE-02 §11]. |
+
+This closes the ordinary-producer question within that recovered producer
+set. It is not a claim that arbitrary reconstructed pending words or direct
+injection of internal records cannot exercise the handler's non-arrival arm.
+The Established `0x40` entry and phase-2 non-arrival branches remain part of the
+contract; no additional gameplay failure producer or timeout is implied.
 
 **Touchdown: where a landed aircraft rests — Established.** The resting Y is
 written once, on the touchdown tick, by the post-move correction of
@@ -13948,12 +14022,6 @@ and the decider that would close it.
 
 ### Hover and VTOL
 
-- **Unknown reachability:** which ordinary producer can deliver a failure or
-  release movement wake to a live `VTOL_LandIfCan` while its landing leg is
-  waiting · [R-AIR-01 §6], [R-ORD-01 §0] · trace the producer through the
-  controller payload and dynamic gate into the handler's satisfied argument.
-  The handler's failure arms are Established; their gameplay reachability is
-  the open question.
 - **Unknown:** runtime meaning of the code-3 air-velocity save marker's
   auxiliary and trailing padding words · [08 R-SAVE-02 §8] · trace constructor,
   save and execution readers. Nanolathe preserves the staged words without

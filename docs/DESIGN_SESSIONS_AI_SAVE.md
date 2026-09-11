@@ -98,6 +98,11 @@ until close; the summary painter indexes that copy by the saved side ordinal
 [08 R-SAVE-02 §3]. Load preparation retains the dialog, selection and buffers
 through refusal; the invalid-save message covers the same load screen. Only a
 successful route commit releases that dialog [08 R-SAVE-02 §2].
+The dialog mirrors the widget's initial row-zero selection after list fill,
+so the highlighted first save is immediately loadable and its summary and
+name match the selected file [07 R-FE-02 §5] [08 R-SAVE-02 §1].
+A battle routes message-box input ahead of its options controls, including
+the empty-list refusal that opens without a save/load panel.
 
 ### 2.1 `internal/session` — states, entry, results, saves
 
@@ -232,7 +237,21 @@ slot identity, including a slot freed later in the same tick; restoration
 checks bounds and the ordinary weapon visit resolves liveness
 `[08 R-SAVE-02 §6]` `[08 R-SAVE-WEAPON-01]`. The writer projects `Dying`
 into the packed pending-death bit without changing live state, and the reader
-restores that logical latch independently of health and damage cause.
+restores that logical latch independently of health and damage cause. Reference
+reconstruction attaches cargo before replaying each unit's scalar/status body,
+so a live pending-death passenger remains loadable. Attachment takes its saved
+unit-side mode explicitly; ordinary live admission remains unchanged. The writer
+also projects current `Move.ModeMirror` and cached `MoveTier` into the packed movement
+nibble, and the reader restores both without recomputing the tier
+`[08 R-SAVE-02 §6]` `[04 R-MOV-01 §6]`.
+
+The unit save projection reads `Move.ModeMirror`, the mode last published by a
+position commit, while the mover box retains the live mover mode. Attach and
+detach requests can change the latter after the cargo's visit. Restore retains
+that disagreement in both the unit mirror and collision cache until the next
+commit, rather than turning a late release into a completed occupancy update
+`[04 R-AIR-01 §10]` `[08 R-SAVE-02 §6]` `[08 R-SAVE-02 §8]`.
+
 
 Both load routes restore the 25 campaign marks, including the all-`U` reset
 for an invalid length, so an in-battle load retains earlier mission results
@@ -242,6 +261,14 @@ the derived yard owners are rebuilt from each saved committed cell pair and
 yard state. This includes unfinished structures without movers and keeps
 port-18 transactions and teardown on the same footprint as movement
 `[08 R-SAVE-02 §6, §11]` `[04 R-COLL-01 §4]`.
+The save projection copies that cell pair and footprint from the movement
+collision record when present, otherwise from construction's retained
+placement. An unfinished structure therefore preserves its committed yard
+anchor even before it owns a movement collision record.
+
+The windowed `--map` entry retains the same `gameShell` ownership as battles
+started through the front end. Its save/load dialogs and battle replacement
+callbacks therefore use the shared shell lifecycle.
 
 The definition active byte is read through `WeaponDef.ActiveByte`, whose
 fresh value is its catalog slot byte. A restored value overrides that initial
@@ -646,6 +673,20 @@ no-mover structure separately rebuilds its yard/footprint collision support at
 the saved anchor; an unfinished no-mover frame stays under construction
 placement ownership. `[08 R-SAVE-02 §6]` `[08 R-SAVE-02 §8]`
 `[08 R-SAVE-02 §11]`.
+
+Order save projection obtains subtype data from movement's live record objects,
+not the order's restore staging bytes. This includes displaced records in both
+queue segments. Restore reconstructs all objects before binding the primary
+head, preserving saved satisfied bits; no handler is run to repair a missing
+movement wake. Released objects remain absent on subsequent saves
+`[08 R-SAVE-02 §10, §11]`.
+
+Once all saved queues exist, construction rebuilds its local progress index
+from live producer order targets. The index is derived host bookkeeping;
+carrier and `GetBuilt` references have separate lifetimes. This preserves
+construction progress in the first published frame, with no order pump or new
+save field. Target removal remains owned by the ordinary order observer path
+`[08 R-SAVE-02 §11]` `[04 R-ORD-01 §6]`.
 
 **C11 — the container header.** 34 bytes: magic `HAPIBANK` compared
 case-sensitively, the tag's pool offset, the absolute pool offset, the first

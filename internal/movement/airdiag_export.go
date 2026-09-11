@@ -1,12 +1,11 @@
 package movement
 
 import (
-	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 )
 
 // AirExecutorSnapshot is a read-only copy of the movement-side air executor
-// state for one unit [04 R-AIR-01 §1]. It exists so a diagnostic harness can
+// order state for one unit [04 R-AIR-01 §1]. It exists so a diagnostic harness can
 // observe the executor's phase and its gate/arrival latches without this
 // package exporting its mutable state. Nothing in the simulation reads it.
 type AirExecutorSnapshot struct {
@@ -21,32 +20,19 @@ type AirExecutorSnapshot struct {
 }
 
 // AirExecutorState returns the air executor snapshot for a handle. A false
-// Bound field means the mover tick has never dispatched an air executor for
-// that unit.
+// Bound field means the unit has no current order record.
 func (s *System) AirExecutorState(h pool.Handle) AirExecutorSnapshot {
 	if s == nil {
 		return AirExecutorSnapshot{}
 	}
 	if u := s.unitFor(h); u != nil {
-		if n := airHeadFor(u); n != nil && (n.ID == orders.Lookup("VTOL_Landing") || n.ID == orders.Lookup("VTOL_LandIfCan")) {
+		if n := airHeadFor(u); n != nil {
 			return AirExecutorSnapshot{Bound: true, HasOrder: true, Phase: n.Phase,
 				Waiting: n.DynamicGate != 0, Arrived: n.Satisfied&0x20 != 0,
 				PadPiece: uint16(n.Param1), Bearing: uint16(n.Param1)}
 		}
 	}
-	st := handleRow(s.airOrders, h)
-	if st == nil {
-		return AirExecutorSnapshot{}
-	}
-	return AirExecutorSnapshot{
-		Bound:    true,
-		Phase:    st.phase,
-		Waiting:  st.waiting,
-		Arrived:  st.arrived,
-		Done:     st.done,
-		Bearing:  st.bearing,
-		HasOrder: st.order != nil,
-	}
+	return AirExecutorSnapshot{}
 }
 
 // AirGoalPayload returns the goal payload currently installed on a unit's

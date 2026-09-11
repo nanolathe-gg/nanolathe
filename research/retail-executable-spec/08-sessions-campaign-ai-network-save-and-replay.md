@@ -5812,9 +5812,9 @@ wire map, not a prescription for Nanolathe's in-memory layout. [Established;
 | Record bytes | Wire form | Runtime meaning and restore rule |
 |---|---|---|
 | `0x00..0x03` | `u32` pair of `s16` words | Low word is the target-unit pool index in unit mode, or ground X in point mode. High word is the target-mode/ground-Z word: `0x8000` is the unit-target sentinel; any other signed value selects a ground point and is its ground-Z component. The writer and reader copy the full pair, so the target kind is not inferred from zero/nonzero. A nonzero unit index retains pool-slot identity even when that slot is free; the reader does not recursively reconstruct or validate the target record. [Established; [06 §3.1]] |
-| `0x04..0x07` | `u32` | Copy of a slot target/aim payload word. It is restored byte-for-byte into the corresponding slot word. Its exact axis and packing are not established by the save census; do not name it X, Y, or Z. [Established wire copy; Unknown semantic name] |
+| `0x04..0x07` | `u32` | The Aim-readiness word. The callback receiver writes exactly `1` for any nonzero return and leaves this word unchanged for a zero return. Save and restore copy the complete word; firing tests it for nonzero independently of the request latch. [Established; [04 R-CB-01 §6], [06 §3.3]] |
 | `0x08..0x0B` | zero-extended `u8` | The resolved weapon definition's active/inactive byte, not a weapon catalog ID. Nonzero is the definition-side active gate; zero is the inactive case. The weapon identity comes from the unit definition's ordered `weapon1..3` links and the catalog, with record 0 (`noweapon`, ID 0) as the inactive sentinel when that family is present. The reader writes this byte back to the resolved definition's active field, but it cannot select a different weapon definition. [Established; [02 §5], [06 §1.2]] |
-| `0x0C..0x0F` | `u32` | Copy of a second slot payload word. It is restored into the matching runtime word. The bounded target census does not establish a public target axis or identity for it; retain it as an opaque staged value. [Established wire copy; Unknown semantic name] |
+| `0x0C..0x0F` | `u32` | The slot distance word computed at initialization. Save and restore copy all 32 bits. Initialization stores a signed result; the ballistic creator interprets those bits as unsigned for its division by weapon velocity. [Established; [06 R-WPN-05 §3], [06 §6.4]] |
 | `0x10..0x11` | `s16` | Signed reload countdown in ticks. Restore the low 16 bits exactly, including zero and negative bit patterns; the firing gate consumes the signed slot word. [Established; [06 §1.2], [06 §4.4]] |
 | `0x12..0x13` | `s16` | Desired yaw/heading for the slot's aim request. Restore exactly on the circular 16-bit angle representation. [Established; [06 §3.3]] |
 | `0x14..0x15` | `s16` | Desired pitch for the slot's aim request. Restore exactly; it is not a unit orientation field. [Established; [06 §3.3]] |
@@ -5840,8 +5840,8 @@ The target encoding is complete in the first four bytes of each record. The
 runtime target pair uses `-0x8000` as the unit-latch sentinel and any other
 high word as a ground point's Z component; the low word is respectively a
 unit pool index or ground X. The pair is copied as one `u32`, preserving both
-words. The two later payload words remain unnamed; at least one is cleared as
-part of Aim setup, so neither is a second target-kind discriminator.
+words. The later readiness and distance words are independent weapon state,
+not additional target-kind discriminators.
 Consequently:
 
 - a unit-mode pair must resolve its low-word logical stable ID against the
@@ -5855,15 +5855,23 @@ This preserves the established logical-reference rule (pool indices are
 16-bit, slot zero is null, and there are no generations) with the exact
 sentinel discriminator. [Established; [01 §6.1], [04 §3.5], [06 §3.1]]
 
-The record also does not serialize the COB Aim completion, callback/thread
-identity, or the synchronous muzzle-piece query result. The low flag bit is a
-saved latch bit, but it is not proof that a pending asynchronous callback can
-be resumed. Aim/COB restoration must therefore restore script state and
-re-establish callbacks in the script pass; it must not synthesize a completion
-or a ready result from this byte alone. The muzzle/piece used for projectile
-initialization is queried from the live unit/COB state when needed and is
-recomputed after restore. [Established omission; [04 §5.3], [06 §3.3], [06
-§4.1]]
+**Established — restored Aim state.** The unit reader restores both the
+request latch and the readiness word after the script pass, independently.
+The readiness word is the same word written by the completion receiver;
+it is not an opaque coordinate. A saved ready request remains ready, and a
+saved pending request remains pending. Restoring the latch alone must neither
+grant readiness nor cause another Aim dispatch. The script reader deliberately
+clears completion receivers [R-SAVE-02 §9]; it does not reconnect a saved
+pending callback. Its later return therefore does not deliver to the weapon.
+Only ordinary weapon/order transitions can subsequently re-arm the request.
+No recovery timeout is added [06 §3.3].
+
+Callback/thread identity and the synchronous muzzle-piece query result are
+not serialized in this record. Projectile initialization queries the live
+unit/COB muzzle again [06 §4.1]. The previous description conflated these
+omissions with the readiness value, and called the distance word opaque;
+tracing the receiver, initializer, creator and both save directions establishes
+the two semantic names above.
 
 **Validation and fix-up.** A transactional reader accepts exactly three
 records within the enclosing `0xB8` unit form and rejects an overrun or any
@@ -5894,17 +5902,16 @@ bounds rejection are host validation policy.
 - compare a unit target and a ground target while holding the low word equal,
   proving that `0x8000` in the high word selects unit mode and every other
   value selects point mode;
-- vary the Aim callback from pending to completed and vary the queried muzzle
-  piece while holding the slot record constant, proving these transient values
-  are not restored from the 24-byte record;
+- round-trip pending and ready Aim requests independently of the latch,
+  preserving the readiness word and the next firing decision; vary the queried
+  muzzle piece separately, since that transient result is not in this record;
 - feed exact `0xB6`, `0xB8`, short, and long enclosing unit records, asserting
   that only the enclosing compatibility rule accepts `0xB6` and that a partial
   weapon record never crosses into the next slot.
 
-The remaining Unknowns are limited to the semantic names of the two copied
-payload words and the exact reader-side policy when a saved active byte
-disagrees with the unit definition. Neither permits treating the active byte
-as identity or restoring a muzzle piece from the record. [Unknown]
+The exact reader-side policy when a saved active byte disagrees with the
+unit definition remains Unknown. This does not permit treating the active
+byte as identity or restoring a muzzle piece from the record. [Unknown]
 
 **Validation and compatibility-length rules.** A valid unit image requires
 Units version `0x11`, a nonpositive unit count to produce no units, exact
@@ -5960,11 +5967,10 @@ opaque:
 - feed exact `0xB6`, `0xB8`, short, and long boxes under version `0x11`, plus
   version `0x10`, to assert the compatibility/null and whole-account gates.
 
-The remaining Unknowns of the unit record are the semantic names of the
-two weapon-slot payload words (see R-SAVE-WEAPON-01) and the value of word
-bits 17..19 of the packed status word, which the writer never sets. Neither
-blocks fixed-slot allocation or the minimally live base fields above; an
-implementation carries the raw bytes through the staged image. [Unknown]
+The value of bits 17..19 of the packed status word, which the writer never
+sets, remains Unknown. It does not block fixed-slot allocation or the minimally
+live base fields above; an implementation carries the raw bytes through the
+staged image. [Unknown]
 
 #### Per-unit order records and subtype payloads [R-SAVE-ORDER-01]
 
@@ -6920,6 +6926,16 @@ words [R-PATH-01 §9] defines. The name side channel is the string item
 parameter 1 names a definition index below the loaded count and only when
 that key is not already present. [Established]
 
+**Established — record-owned object persistence.** Each primary and secondary
+order record serializes its own retained object's current fields, even after
+controller displacement or arrival. An absent or explicitly released object
+writes subtype zero. Reconstruction retains every saved object; only the
+primary front head is bound to the follower after queue restoration
+[R-SAVE-02 §11]. Saved goal thresholds remain independent fields, rather than
+being recalculated from their radius parameters. The code-3 auxiliary and
+trailing words stay with that reconstructed object; replacing it does not
+inherit the destroyed object's words.
+
 ### The code-3 order sub-object has one runtime constructor: the `AirToAir` handler — Established [R-SESS-01 §6]
 
 The code-3 payload (the two-vector work record of [R-SAVE-02 §10]) is
@@ -6964,6 +6980,25 @@ and store the new one; their network service remains outside single-player
 scope. The saved payload's subtype selects its goal or marker implementation
 (§10), not an order-execution callback. No generic queue pump belongs at this
 restore boundary.
+
+**Established — construction references after load.** The order reader binds
+each saved target through the same observer registration used during ordinary
+play, independently of its saved phase and gate. A restored producer record
+therefore receives the ordinary target-removed notification without running
+its allocation phase [04 R-ORD-01 §6][R-SAVE-ORDER-01]. The product's saved
+`GetBuilt` target and its carrier relation are restored independently. The
+factory success operation previously called an auxiliary builder link in
+doc 05 is the ordinary carrier attachment, not another saved relationship
+[05 "Build request and factory queue behavior"]. No separate builder-index
+reconstruction appears in the reviewed unit reader, order reader, attachment
+dispatcher or factory lifecycle (**Established, bounded negative**).
+
+*Implementation note (not an additional retail field).* Nanolathe's progress
+index is derived from live `BuildingBuild`, `MobileBuild` and
+`VTOL_MobileBuild` order targets after queue restoration. It must not infer a
+producer from a carrier, an assist/repair target or a surviving `GetBuilt`
+record: those relations have different lifetimes. Rebuilding this index
+publishes resumed progress without pumping an order or inventing a save box.
 
 **Established — derived state Nanolathe must rebuild, because retail does.**
 The following is absent from every account and is regenerated by the
@@ -8050,10 +8085,9 @@ a single-player implementation.
 ### Save and replay
 
 - Remaining semantic mappings inside the bulk binary boxes: the code-3
-  record's auxiliary and final trailing `u16` words, the two weapon-slot
-  payload words, and the
+  record's auxiliary and final trailing `u16` words and the
   per-word layout of the `u%04xacc` resource account (doc 05) ·
-  [R-SAVE-02 §6], [R-SAVE-02 §7], [R-SAVE-02 §10], [R-SAVE-WEAPON-01] ·
+  [R-SAVE-02 §6], [R-SAVE-02 §7], [R-SAVE-02 §10] ·
   static trace (field-isolation of each reader). Everything else in the unit,
   mover, script, order, feature and player records is named.
 - The *value* of the script writer's two residue dwords (24 and 25 of each

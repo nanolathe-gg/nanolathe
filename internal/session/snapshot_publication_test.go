@@ -180,9 +180,10 @@ func TestRadarStepLeavesStatusWithSingleActivePlayer(t *testing.T) {
 	vis := visibility.New(&world.Terrain{CellW: 64, CellH: 64}, visibility.ModeHistoryEnabled|visibility.ModeCurrentEnabled)
 	econ := &economy.Service{}
 	econ.Players[0].Exists = true
-	s := &Session{Units: w, Vis: vis, Econ: econ, visStatus: map[int]uint32{int(h): visibility.SeenBit}}
+	w.Unit(h).Flags |= visibility.SeenBit
+	s := &Session{Units: w, Vis: vis, Econ: econ}
 	s.stepSensorPhase(8)
-	if got := s.visStatus[int(h)]; got&visibility.SeenBit == 0 {
+	if got := w.Unit(h).Flags; got&visibility.SeenBit == 0 {
 		t.Fatalf("single-player SeenBit = %#x, want the pre-existing bit untouched [R-VIS-01 §4]", got)
 	}
 }

@@ -211,8 +211,9 @@ func (s *System) legVTOLPickup(u *units.Unit, n *orders.Node, satisfied uint32, 
 		// [04 R-AIR-01 §9][04 R-AIR-01 §3]. Mode 0 writes no occupancy word
 		// [04 R-COLL-01 §4], which is what makes the cargo vanish from the
 		// ground plane for the whole carry.
-		AttachCargoMode(s.world, u.Handle, n.Target, int(int32(n.Param1)), 0)
-		s.armBeCarried(target, u.Handle)
+		if AttachCargoMode(s.world, u.Handle, n.Target, int(int32(n.Param1)), 0) {
+			s.armBeCarried(target, u.Handle)
+		}
 		orders.NotifyStatus(u, TransportEventAttach, "")
 		// No climb-away is installed here. [04 R-AIR-01 §10] item 3 corrects
 		// §10.2's phase-4 row: the phase allocates the climb-away marker, sets
@@ -385,7 +386,7 @@ func (s *System) legVTOLUnload(u *units.Unit, n *orders.Node, satisfied uint32, 
 	// drop point anywhere else — every phase re-derives what it needs from the
 	// raw goal.
 	dropX, dropZ := n.GoalX, n.GoalZ
-	cargoHandle := s.transportCargoHead(u, n)
+	cargoHandle := u.Attachment.Cargo[0]
 	cargo := s.unitFor(cargoHandle)
 	switch n.Phase {
 	case 0:
@@ -393,7 +394,7 @@ func (s *System) legVTOLUnload(u *units.Unit, n *orders.Node, satisfied uint32, 
 			return 7 // *cancel-all* [04 §10.2]
 		}
 		orders.NotifyCaptionClear(u, n, "Unloading") // the one-shot caption clear [04 R-ORD-01 §1]
-		n.Param1 = uint32(cargoHandle)
+		n.BindTarget(cargoHandle)
 		// Phase 0 copies ALL THREE goal values into the point marker; the
 		// marker's altitude setter then recomputes the goal Y from the terrain
 		// under goal X/Z, so the record's own Y never reaches the flight
@@ -405,7 +406,7 @@ func (s *System) legVTOLUnload(u *units.Unit, n *orders.Node, satisfied uint32, 
 		n.DynamicGate = transportUnloadApproachGate
 		return 1
 	case 1:
-		if cargo == nil || !s.ValidateUnloadSite(s.world, cargoHandle, dropX, dropZ, s.Terrain) {
+		if cargo == nil || !s.ValidateUnloadSite(s.world, n.Target, dropX, dropZ, s.Terrain) {
 			orders.NotifyStatus(u, transportStatusCant, UnableUnloadMessage)
 			return 9 // *retry* [04 §10.2]
 		}
@@ -429,14 +430,11 @@ func (s *System) legVTOLUnload(u *units.Unit, n *orders.Node, satisfied uint32, 
 		if satisfied&transportUnloadInterruptMask != 0 {
 			return 9 // BEFORE the second validation [04 §10.2]
 		}
-		if cargo == nil || !s.ValidateUnloadSite(s.world, cargoHandle, dropX, dropZ, s.Terrain) {
+		if cargo == nil || !s.ValidateUnloadSite(s.world, n.Target, dropX, dropZ, s.Terrain) {
 			orders.NotifyStatus(u, transportStatusCant, UnableUnloadMessage)
 			return 9 // *retry* [04 §10.2]
 		}
-		if ok, _ := s.TryUnload(s.world, u.Handle, cargoHandle, dropX, dropZ); !ok {
-			orders.NotifyStatus(u, transportStatusCant, UnableUnloadMessage)
-			return 9
-		}
+		s.releaseUnloadCargo(s.world, u, cargo)
 		// The climb-away is a point marker on the CARRIER's own current X/Y/Z —
 		// not the goal, which phase 2 does not use at all — with altitude
 		// offset the carrier definition's `cruisealt` as the full signed 16-bit
@@ -456,72 +454,10 @@ func (s *System) legVTOLUnload(u *units.Unit, n *orders.Node, satisfied uint32, 
 	}
 }
 
-// armBeCarried is the "becarried re-arm" the attachment half wakes for a child
-// whose player slot state byte is 1 or 2 and whose parent's definition does not
-// carry `isairbase` [04 R-AIR-01 §9]'s correction to [04 R-UNIT-06 §3]. The
-// carried unit's own order is the two-phase carried wait of [04 R-ORD-01 §2],
-// which completes on its next expiry once the carrier link goes null — so the
-// release needs no counterpart here.
-//
-// It is armed at this call site rather than inside the attachment helper
-// because the factory's product link, the helper's fourth caller, already
-// pushes its own `BeCarried` ahead of `GetBuilt` [04 R-FAC-02 §1]; centralising
-// the re-arm would give that product two. Moving it is an upstream change this
-// unit does not own.
-//
-// [04 R-AIR-01 §10] item 6 closes what "purges the carried unit's queue through
-// the ordinary cleanup" meant. The re-arm walks the cargo's FRONT chain only
-// and, for every record whose static-mask copy lacks bit `0x4` — the
-// purge-survivor bit of [04 R-MOV-03 §6] — unlinks it, tombstones it unless it
-// is the front head, runs the ordinary record cleanup of [04 §3.3] and frees
-// it. That is the same keep-survivors purge a non-queued issue performs, so the
-// survivors are the same set: `BeCarried`, `GetBuilt`, `Wait`, `WaitForAttack`,
-// `MakeSelectable`, `AttackUType`, `Paralyze`, `SelfRepair` and `BuildingBuild`
-// outlive the lift; a `Move`, `Patrol`, guard or attack the cargo was executing
-// dies with its cancel notification. The rear chain is not touched. Only then
-// does it head-insert a fresh `BeCarried`, copying the displaced head's
-// auto-operation flag onto it — which is what `PushHead` already does
-// [04 R-ORD-01 §1]. The previous "head-insert without purging" placeholder kept
-// orders retail discards.
-//
-// The predicate [04 R-AIR-01 §9] gives is the child's player slot state byte
-// being 1 or 2 AND the parent's definition lacking `isairbase`. The state half
-// holds by construction here: those are the two states whose units are pumped
-// at all, and this call site is reached only from a pumped executor. The
-// `isairbase` half is tested, because that is what lets a landed aircraft keep
-// its orders on a pad.
+// armBeCarried shares the attachment-side queue transition with COB pickup.
+// Factory allocation owns its separately ordered BeCarried/GetBuilt insertion
+// [04 R-FAC-02 §1]; the live transport callers enter this helper only after a
+// successful attach [04 R-AIR-01 §9][04 R-AIR-01 §10 item 6].
 func (s *System) armBeCarried(cargo *units.Unit, carrier pool.Handle) {
-	if cargo == nil {
-		return
-	}
-	if parent := s.unitFor(carrier); parent != nil && parent.Def != nil && parent.Def.IsAirBase {
-		return
-	}
-	q := orders.QueueForUnit(cargo)
-	if q == nil {
-		return
-	}
-	id := orders.Lookup("BeCarried")
-	if id == 0 {
-		return
-	}
-	q.PurgeUnprotected()
-	q.PushHead(id, orders.Node{Owner: cargo.Handle, Target: carrier, Deadline: -1})
-}
-
-// transportCargoHead resolves the cargo the unload executor is releasing:
-// phase 0 "records the cargo reference" on the record, and the later phases
-// read it back. The list is LIFO — the attachment helper links each child as
-// the new head of the parent's cargo list, so the release detaches the most
-// recently attached cargo first [04 R-UNIT-06 §3].
-func (s *System) transportCargoHead(u *units.Unit, n *orders.Node) pool.Handle {
-	if h := pool.Handle(n.Param1); h != 0 {
-		if cargo := s.unitFor(h); cargo != nil && cargo.Attachment.Carrier == u.Handle {
-			return h
-		}
-	}
-	if len(u.Attachment.Cargo) == 0 {
-		return 0
-	}
-	return u.Attachment.Cargo[0]
+	orders.RearmBeCarried(cargo, s.unitFor(carrier))
 }

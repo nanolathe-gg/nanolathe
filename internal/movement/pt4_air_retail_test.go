@@ -405,7 +405,11 @@ func TestRetailFighterOnPatrolEngagesAGroundUnit(t *testing.T) {
 	if fig.Def.Weapon1Def == nil || fig.Def.Weapon1Def.ToAirWeapon {
 		t.Skipf("authored %s weapon is air-only; a ground engagement is not retail", pt4FIG)
 	}
-	vx, vz := f.levelPoint(t, fig.X, fig.Z, 30, 16)
+	// Start close enough for the normal visibility and opportunity scans to
+	// acquire while the approach is still shallow. The fixed launcher must
+	// pass both angular gates [06 §3.3]; the thirty-cell fixture acquired too
+	// late to satisfy both gates during any of its fly-throughs.
+	vx, vz := f.levelPoint(t, fig.X, fig.Z, 20, 16)
 	ak := f.place(t, pt4AK, 1, vx, vz)
 	ak.Flags &^= units.StandingFieldMask << units.StandingFireShift
 	fx, fz := fig.X.Add((vx-fig.X)*2), fig.Z.Add((vz-fig.Z)*2)

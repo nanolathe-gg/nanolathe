@@ -11,20 +11,34 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
-// RestoreHeadGoal installs a saved payload already held by the primary queue
-// head. It is deliberately a follower operation: loading must not run an
-// order handler, progress a queue, draw randomness, or invoke scripts [08
-// R-SAVE-02 §10, §11]. A head without one of the five saved payload classes
-// leaves the freshly-built follower unchanged.
+// RestoreHeadGoal reconstructs every saved record object and binds only the
+// primary queue head. Loading must not run an order handler, progress a queue,
+// draw randomness, or invoke scripts [08 R-SAVE-02 §10, §11]. A head without
+// one of the five saved payload classes leaves the new follower unchanged.
 func (s *System) RestoreHeadGoal(u *units.Unit) error {
 	if s == nil || u == nil {
 		return nil
 	}
 	q := orders.QueueOfUnit(u)
-	if q == nil || q.LenPrimary() == 0 {
+	if q == nil {
 		return nil
 	}
-	head := q.Primary()[0]
+	// Every saved record owns its object even when only the front head binds
+	// the controller. Preserve displaced objects for later release and saves.
+	for _, segment := range [][]*orders.Node{q.Primary(), q.Secondary()} {
+		for _, node := range segment {
+			if node == q.Head() {
+				continue
+			}
+			if err := s.restoreRecordGoal(u, node, false); err != nil {
+				return err
+			}
+		}
+	}
+	return s.restoreRecordGoal(u, q.Head(), true)
+}
+
+func (s *System) restoreRecordGoal(u *units.Unit, head *orders.Node, bind bool) error {
 	if head == nil || head.RetailSubtypeCode == 0 {
 		return nil
 	}
@@ -45,12 +59,14 @@ func (s *System) RestoreHeadGoal(u *units.Unit) error {
 			radial:      numeric.Fixed(int64(int32(word(3)))),
 		}
 		savedSatisfied := head.Satisfied
-		s.installAirGoal(u, head, m)
+		if bind {
+			s.installAirGoal(u, head, m)
+		} else {
+			s.storeRecordGoal(u.Handle, recordGoal{node: head, air: m})
+		}
 		head.Satisfied = savedSatisfied
-		st := s.airStateFor(u, head)
-		st.order = head
-		if c := s.FlightCommandFor(u.Handle, u); c != nil {
-			c.Flags |= flightCommandDirty
+		if c := handleRow(s.Flights, u.Handle); bind && c != nil && c.Command != nil {
+			c.Command.Flags |= flightCommandDirty
 		}
 	case 3:
 		if len(head.RetailSubtypeWords16) != 4 || len(head.RetailSubtypeWords32) != 6 {
@@ -58,20 +74,25 @@ func (s *System) RestoreHeadGoal(u *units.Unit) error {
 		}
 		m := &airVelocityMarker{
 			sys: s, unit: u,
-			pos:       Vec3{X: numeric.Fixed(int64(int32(word(0)))), Y: numeric.Fixed(int64(int32(word(1)))), Z: numeric.Fixed(int64(int32(word(2))))},
-			vel:       Vec3{X: numeric.Fixed(int64(int32(word(3)))), Y: numeric.Fixed(int64(int32(word(4)))), Z: numeric.Fixed(int64(int32(word(5))))},
+			pos:        Vec3{X: numeric.Fixed(int64(int32(word(0)))), Y: numeric.Fixed(int64(int32(word(1)))), Z: numeric.Fixed(int64(int32(word(2))))},
+			vel:        Vec3{X: numeric.Fixed(int64(int32(word(3)))), Y: numeric.Fixed(int64(int32(word(4)))), Z: numeric.Fixed(int64(int32(word(5))))},
+			savedFlags: head.RetailSubtypeWords16[0], savedAux: head.RetailSubtypeWords16[1], savedTrailing: head.RetailSubtypeWords16[3],
 			steer:     head.RetailSubtypeWords16[0]&1 != 0,
 			commanded: head.RetailSubtypeWords16[2],
 		}
 		// TODO(question): code-3 retains a zeroed auxiliary u16 and a trailing
 		// padding word after the saved steer flag and commanded heading. Their
-		// runtime meaning is unknown; preserving the staged words avoids
-		// assigning either a marker field without a reader.
+		// runtime meaning is unknown; retain them on this object for saving
+		// without assigning behavior to either word.
 		savedSatisfied := head.Satisfied
-		s.installAirPayload(u, head, m)
+		if bind {
+			s.installAirPayload(u, head, m)
+		} else {
+			s.storeRecordGoal(u.Handle, recordGoal{node: head, air: m})
+		}
 		head.Satisfied = savedSatisfied
-		if c := s.FlightCommandFor(u.Handle, u); c != nil {
-			c.Flags |= flightCommandDirty
+		if c := handleRow(s.Flights, u.Handle); bind && c != nil && c.Command != nil {
+			c.Command.Flags |= flightCommandDirty
 		}
 	case 4:
 		if len(head.RetailSubtypeWords32) != 3 {
@@ -79,7 +100,7 @@ func (s *System) RestoreHeadGoal(u *units.Unit) error {
 		}
 		x, z := cell(word(0))
 		savedSatisfied := head.Satisfied
-		if !s.installGroundPayload(u.Handle, head, path.PointGoalRestored(path.Cell{X: x, Z: z}, int32(word(1)), int32(word(2))), worldCellCenter(x), worldCellCenter(z)) {
+		if !s.restoreGroundRecord(u.Handle, head, bind, path.PointGoalRestored(path.Cell{X: x, Z: z}, int32(word(1)), int32(word(2))), worldCellCenter(x), worldCellCenter(z)) {
 			return fmt.Errorf("movement: retail restore head: point goal rejected")
 		}
 		head.Satisfied = savedSatisfied
@@ -92,7 +113,7 @@ func (s *System) RestoreHeadGoal(u *units.Unit) error {
 		// order. The path family takes the inward bound first [08 R-SAVE-02
 		// §10][04 R-PATH-01 §9].
 		savedSatisfied := head.Satisfied
-		if !s.installGroundPayload(u.Handle, head, path.AnnulusGoalRestored(path.Cell{X: x, Z: z}, int32(word(1)), int32(word(2)), int32(word(3)), int32(word(4))), worldCellCenter(x), worldCellCenter(z)) {
+		if !s.restoreGroundRecord(u.Handle, head, bind, path.AnnulusGoalRestored(path.Cell{X: x, Z: z}, int32(word(1)), int32(word(2)), int32(word(3)), int32(word(4))), worldCellCenter(x), worldCellCenter(z)) {
 			return fmt.Errorf("movement: retail restore head: annulus goal rejected")
 		}
 		head.Satisfied = savedSatisfied
@@ -102,7 +123,7 @@ func (s *System) RestoreHeadGoal(u *units.Unit) error {
 		}
 		x1, x2, z1, z2 := int32(word(0)), int32(word(1)), int32(word(2)), int32(word(3))
 		savedSatisfied := head.Satisfied
-		if !s.installGroundPayload(u.Handle, head, path.RectPerimeterGoal(path.Rect{Min: path.Cell{X: x1, Z: z1}, Max: path.Cell{X: x2, Z: z2}}), worldCellCenter((x1+x2)/2), worldCellCenter(z2)) {
+		if !s.restoreGroundRecord(u.Handle, head, bind, path.RectPerimeterGoal(path.Rect{Min: path.Cell{X: x1, Z: z1}, Max: path.Cell{X: x2, Z: z2}}), worldCellCenter((x1+x2)/2), worldCellCenter(z2)) {
 			return fmt.Errorf("movement: retail restore head: rectangle goal rejected")
 		}
 		head.Satisfied = savedSatisfied
@@ -110,6 +131,14 @@ func (s *System) RestoreHeadGoal(u *units.Unit) error {
 		return fmt.Errorf("movement: retail restore head: unsupported subtype %d", head.RetailSubtypeCode)
 	}
 	return nil
+}
+
+func (s *System) restoreGroundRecord(h pool.Handle, n *orders.Node, bind bool, goal path.Goal, x, z numeric.Fixed) bool {
+	if bind {
+		return s.installGroundPayload(h, n, goal, x, z)
+	}
+	s.storeRecordGoal(h, recordGoal{node: n, ground: &moveGoal{order: n, x: x, z: z, goal: goal}})
+	return true
 }
 
 // RestoreMover applies the fixed mover extension from a saved unit.  The
@@ -141,11 +170,13 @@ func (s *System) RestoreMover(h pool.Handle, data []byte) error {
 	state := data[34]
 	mode := state & 3
 	blocked := state&4 != 0
-	c.Mode, c.CachedMode, c.Blocked, c.SavedStateByte = mode, mode, blocked, state
+	c.Mode, c.CachedMode, c.Blocked, c.SavedStateByte = mode, u.Move.ModeMirror&3, blocked, state
+	u.Move.Mode = mode
 	// The mover's mode mirror and the packed unit-status mirror are separate
 	// save fields; the mover byte must not overwrite the unit's mirror.
 	if fl := handleRow(s.Flights, h); fl != nil {
 		fl.Mode = mode
+		fl.ModeMirror = u.Move.ModeMirror & 3
 		fl.VX, fl.VY, fl.VZ = c.VX, c.VY, c.VZ
 		fl.Speed = c.Speed
 		fl.TurnResidual = c.TurnResidual
@@ -202,7 +233,6 @@ func (s *System) RestoreOccupancy(h pool.Handle, anchorX, anchorZ int16) error {
 		}
 	}
 	c.CachedAnchor, c.OldAnchor = anchor, anchor
-	c.CachedMode = c.Mode & 0x3
 	c.Dirty = false
 	s.noteOccupancyCommit(h, c.LastStampTick)
 	if s.world != nil {

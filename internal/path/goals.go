@@ -381,3 +381,18 @@ func IsRectGoal(g Goal) (r Rect, ok bool) {
 	}
 	return Rect{}, false
 }
+
+// RetailGoalWords exposes the stored goal parameters in saved order. Radius
+// squares are independent live fields and must not be recomputed [08 R-SAVE-02 §10].
+func RetailGoalWords(goal Goal) (uint32, []uint32, bool) {
+	pack := func(c Cell) uint32 { return uint32(uint16(c.X)) | uint32(uint16(c.Z))<<16 }
+	switch g := goal.(type) {
+	case *pointGoal:
+		return 4, []uint32{pack(g.center), uint32(g.radius), uint32(g.radiusSq)}, true
+	case *annulusGoal:
+		return 5, []uint32{pack(g.center), uint32(g.inner), uint32(g.outer), uint32(g.innerSq), uint32(g.outerSq)}, true
+	case *rectGoal:
+		return 6, []uint32{uint32(g.rect.Min.X), uint32(g.rect.Max.X), uint32(g.rect.Min.Z), uint32(g.rect.Max.Z)}, true
+	}
+	return 0, nil, false
+}

@@ -96,7 +96,6 @@ type registryFixture struct {
 	terrain *world.Terrain
 	vis     *visibility.Service
 	econ    *economy.Service
-	status  map[pool.Handle]*uint32
 
 	shooter *units.Unit
 	enemy   *units.Unit
@@ -118,7 +117,7 @@ func newRegistryFixture(t *testing.T, enemyHidden bool) *registryFixture {
 	sh, _ := w.Create(defShooter, 0, numeric.FixedFromInt(10), numeric.FixedFromInt(100), numeric.FixedFromInt(10))
 	en, _ := w.Create(defEnemy, 2, numeric.FixedFromInt(30), numeric.FixedFromInt(100), numeric.FixedFromInt(10))
 
-	f := &registryFixture{world: w, terrain: terrain, vis: vis, econ: &economy.Service{}, status: map[pool.Handle]*uint32{}}
+	f := &registryFixture{world: w, terrain: terrain, vis: vis, econ: &economy.Service{}}
 	for i := 0; i < 10; i++ {
 		f.econ.Players[i].Allies[i] = true
 	}
@@ -134,11 +133,7 @@ func newRegistryFixture(t *testing.T, enemyHidden bool) *registryFixture {
 func (f *registryFixture) sensorTick(tick uint32) {
 	var sensorUnits []visibility.SensorUnit
 	for _, u := range f.world.Iter() {
-		sp, ok := f.status[u.Handle]
-		if !ok {
-			sp = new(uint32)
-			f.status[u.Handle] = sp
-		}
+		sp := &u.Flags
 		var rd, sd int32
 		if u.Def != nil {
 			rd = u.Def.RadarDistance
@@ -301,7 +296,7 @@ func TestSecondaryListAcquiresCloakedRadarContactOnlyBehindTheGate(t *testing.T)
 
 		s := &Service{}
 		s.rebuildTargetRegistry(30, 0, f.world, f.vis, f.terrain, f.econ)
-		if !s.targets.seenBit(f.enemy.Handle) {
+		if f.enemy.Flags&visibility.SeenBit == 0 {
 			t.Fatal("fixture is wrong: the radar pass must set the hostile's seen bit")
 		}
 		return s.acquireTargetForSlot(f.shooter, f.shooter.SlotAt(0), 0, f.world, f.vis, f.terrain, nil, f.econ)
@@ -421,7 +416,7 @@ func TestRegistryUsesSensorSonarAndModelHull(t *testing.T) {
 			f.shooter.Def.SonarDistance = 500
 		}
 		f.sensorTick(1)
-		status = *f.status[f.enemy.Handle]
+		status = f.enemy.Flags
 		s := &Service{}
 		rebuildEverySlot(s, targetRegistryPeriod, f.world, f.vis, f.terrain, f.econ)
 		for _, h := range s.targets.primaryList(0) {
@@ -611,11 +606,7 @@ func TestCloakProximityFollowsTheRegistryCadence(t *testing.T) {
 		}
 		var sensorUnits []visibility.SensorUnit
 		for _, u := range f.world.Iter() {
-			sp, ok := f.status[u.Handle]
-			if !ok {
-				sp = new(uint32)
-				f.status[u.Handle] = sp
-			}
+			sp := &u.Flags
 			su := visibility.SensorUnit{
 				ID: uint16(u.Handle), Owner: visibility.PlayerID(u.Owner), Status: sp,
 				X: u.X, Y: u.Y, Z: u.Z, Alive: u.Alive, Dying: u.Dying, Hidden: u.Hidden,

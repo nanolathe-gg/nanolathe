@@ -470,10 +470,12 @@ func TestStepUnitAircraftAndTransportRegression(t *testing.T) {
 	system.Scheduler.Tick(60)
 	startAirX := uAir.X
 	startCargoX := w.Unit(hCargo).X
+	system.BindAirOrderLegs()
 	// Step several ticks using per-unit API
 	for tick := uint32(2); tick < 10; tick++ {
 		system.Scheduler.Tick(tick)
 		system.BeginTick(tick)
+		qAir.Pump(uAir, tick)
 		// Order: air, trans, cargo; carried motion commits at cargo's own visit.
 		system.StepUnit(hAir, tick)
 		system.StepUnit(hTrans, tick)

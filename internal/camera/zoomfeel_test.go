@@ -13,14 +13,14 @@ func TestWheelStepsThroughTheZoomList(t *testing.T) {
 	cam := feelCamera()
 	var z ZoomController
 	z.SetTarget(cam, 500, 300, ZoomUnit)
-	want := []Zoom{ZoomSteps[4], ZoomSteps[5], ZoomSteps[6], ZoomSteps[7], ZoomSteps[7]}
+	want := []Zoom{ZoomMax, ZoomMax}
 	for i, w := range want {
 		z.Wheel(cam, 500, 300, 1)
 		if got := z.Target(cam); got != w {
 			t.Fatalf("notch %d in from 1x gave %s, want %s", i+1, got, w)
 		}
 	}
-	want = []Zoom{ZoomSteps[6], ZoomSteps[5], ZoomSteps[4], ZoomSteps[3], ZoomSteps[2], ZoomSteps[1], ZoomSteps[0], ZoomSteps[0]}
+	want = []Zoom{ZoomUnit, ZoomUnit / 2, ZoomUnit / 2}
 	for i, w := range want {
 		z.Wheel(cam, 500, 300, -1)
 		if got := z.Target(cam); got != w {
@@ -42,19 +42,19 @@ func TestWheelFractionsBankIntoWholeNotches(t *testing.T) {
 		t.Fatalf("0.8 of a notch stepped to %s", got)
 	}
 	z.Wheel(cam, 500, 300, 0.3)
-	if got := z.Target(cam); got != ZoomSteps[4] {
-		t.Fatalf("1.1 notches banked gave %s, want %s", got, ZoomSteps[4])
+	if got := z.Target(cam); got != ZoomMax {
+		t.Fatalf("1.1 notches banked gave %s, want %s", got, ZoomMax)
 	}
 	// The 0.1 left over is discarded by a reversal, so 0.95 back is short of a
 	// notch and steps nothing; it is banked instead.
 	z.Wheel(cam, 500, 300, -0.95)
-	if got := z.Target(cam); got != ZoomSteps[4] {
+	if got := z.Target(cam); got != ZoomMax {
 		t.Fatalf("a reversal short of a notch stepped to %s", got)
 	}
 	// With 0.95 banked, a further 2.05 is three whole notches out.
 	z.Wheel(cam, 500, 300, -2.05)
-	if got := z.Target(cam); got != ZoomSteps[1] {
-		t.Fatalf("three notches out from 1.25x gave %s, want %s", got, ZoomSteps[1])
+	if got := z.Target(cam); got != ZoomUnit/2 {
+		t.Fatalf("three notches out from 2x gave %s, want %s", got, ZoomUnit/2)
 	}
 }
 
@@ -67,10 +67,10 @@ func TestWheelFromBetweenStepsLandsOnAStep(t *testing.T) {
 		in   bool
 		want Zoom
 	}{
-		{ZoomUnit * 13 / 10, true, ZoomSteps[5]},
-		{ZoomUnit * 13 / 10, false, ZoomSteps[4]},
-		{ZoomUnit * 3 / 5, false, ZoomSteps[1]},
-		{ZoomUnit * 3 / 5, true, ZoomSteps[2]},
+		{ZoomUnit * 13 / 10, true, ZoomMax},
+		{ZoomUnit * 13 / 10, false, ZoomUnit},
+		{ZoomUnit * 3 / 5, false, ZoomUnit / 2},
+		{ZoomUnit * 3 / 5, true, ZoomUnit},
 	} {
 		got, ok := NextZoomStep(tc.from, tc.in)
 		if !ok || got != tc.want {
@@ -83,7 +83,7 @@ func TestWheelFromBetweenStepsLandsOnAStep(t *testing.T) {
 // the floor, and from the floor a further notch out is refused rather than
 // aimed below it (§16.7).
 func TestWheelOutStopsAtTheMapFloor(t *testing.T) {
-	cam := &Camera{X: 100, Z: 100, ViewW: 1024, ViewH: 768, MapW: 2560, MapH: 2560}
+	cam := &Camera{X: 100, Z: 100, ViewW: 1024, ViewH: 768, MapW: 1280, MapH: 1280}
 	minZ := cam.MinZoom()
 	if minZ <= ZoomSteps[0] || minZ >= ZoomSteps[1] {
 		t.Fatalf("fixture floor %s is not between the two lowest steps", minZ)
@@ -92,7 +92,7 @@ func TestWheelOutStopsAtTheMapFloor(t *testing.T) {
 	z.SetTarget(cam, 500, 300, ZoomSteps[1])
 	z.Wheel(cam, 500, 300, -1)
 	if got := z.Target(cam); got != minZ {
-		t.Fatalf("a notch out from 0.5x on a small map gave %s, want the floor %s", got, minZ)
+		t.Fatalf("a notch out from 1x on a small map gave %s, want the floor %s", got, minZ)
 	}
 	z.Wheel(cam, 500, 300, -1)
 	if got := z.Target(cam); got != minZ {

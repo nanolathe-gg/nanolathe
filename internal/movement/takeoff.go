@@ -94,6 +94,7 @@ func (s *System) applyOccupancyPlane(u *units.Unit, prev, mode uint8) {
 	}
 	coll.Mode = mode
 	coll.CachedMode = mode
+	u.Move.ModeMirror = mode
 	s.syncMoverStamp(u)
 }
 

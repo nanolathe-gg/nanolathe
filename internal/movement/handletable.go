@@ -45,7 +45,6 @@ func (s *System) growHandleTables(idx int) {
 	s.activeOrders = growHandleRow(s.activeOrders, idx)
 	s.arrivalHandles = growHandleRow(s.arrivalHandles, idx)
 	s.moveGoals = growHandleRow(s.moveGoals, idx)
-	s.airOrders = growHandleRow(s.airOrders, idx)
 }
 
 // handleRow reads one dense per-handle row. A handle the row does not address

@@ -2,80 +2,134 @@ package movement
 
 import (
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
-// goalReleasedPending is pending bit `0x80`, "a previous goal object is
-// released", of the five movement bits census [04 R-ORD-01 §0].
+// goalReleasedPending is the controller's payload-release notification
+// [04 R-ORD-01 §0]. It does not imply destruction of the record's object.
 const goalReleasedPending uint32 = 0x80
 
-// ReleaseGoalPayload is the release form of the record-level install/release
-// helper that sits behind all four goal installers of [04 R-ORD-01 §1].
-//
-// The helper "runs entirely through the owner's mover: a unit without a mover
-// (a building) is a no-op — nothing is released, nothing installed". A
-// definition whose `bmcode` is 0 is the building class and never owns a mover —
-// the allocator constructs one only for `bmcode 1` [04 R-FAC-02 §5] — and the
-// same authored byte raises status-word bit 29 at creation [04 §3.4], which is
-// the runtime mirror this package reads.
-//
-// With a mover, and only when the record actually holds a payload, the release
-// is steps 1 through 4 of the ground follower's route-acceptance rule
-// [04 R-PATH-01 §8] run with a null goal:
-//
-//  1. cancel any in-flight search belonging to this follower;
-//  2. OR `0x80` into the pending word of the record that owned the previous
-//     payload — which is this record, because the payload is a field OF the
-//     record and an installer never reaches another record's field
-//     [04 R-ORD-01 §0];
-//  3. clear has-waypoint and adopt the goal (null here);
-//  4. the new object being null, also clear wants-repath and STOP — step 5's
-//     acceptance gates and step 6's last-request reset are the install path's,
-//     not the release's.
-//
-// Then the payload object is virtually deleted and the record's payload field
-// cleared. For a flight block the release is "the `0x80` raise and the null
-// store" alone [04 R-ORD-01 §1] — no search to cancel and no route to clear,
-// because aircraft never enter the ground scheduler [04 R-PATH-01 §8].
-//
-// The release form deliberately does NOT clear pending `0x20`–`0x200`. That
-// clear belongs to step (2) of the helper, which runs only when a new object is
-// given; "the release form (no new object) is step (1) alone, which is why it
-// leaves `0x80` visible" [04 R-ORD-01 §1]. The arrival release of
-// [04 R-MOV-03 §2] and the queue teardown of [04 R-MOV-03 §9] reach this same
-// helper through the record.
-//
-// The identity test on every arm is what keeps a late teardown from detaching a
-// successor's payload: a record that no longer owns the mover's payload
-// releases nothing and raises nothing. The returned bool reports whether a
-// payload was actually released.
+// recordGoal is our representation of a record's independently owned object
+// [04 R-ORD-01 §9]. The per-unit slice preserves installation order for final
+// cleanup and needs no allocation on lookup. Only one family is populated.
+type recordGoal struct {
+	node   *orders.Node
+	ground *moveGoal
+	air    GoalPayload
+}
+
+func (s *System) storeRecordGoal(h pool.Handle, owned recordGoal) {
+	rows := handleRow(s.recordGoals, h)
+	for i := range rows {
+		if rows[i].node == owned.node {
+			rows[i] = owned
+			return
+		}
+	}
+	setHandleRow(&s.recordGoals, h, append(rows, owned))
+}
+
+// detachControllerGoal gives the controller a null goal. Notification follows
+// the currently bound object, which can belong to another record entirely.
+// No retained record object is destroyed [04 R-ORD-01 §9].
+func (s *System) detachControllerGoal(h pool.Handle) {
+	s.CancelPathRequest(h)
+	s.displaceControllerGoal(h)
+	if route := handleRow(s.Routes, h); route != nil {
+		route.Active = false
+		route.WantsRepath = false
+	}
+}
+
+// displaceControllerGoal replaces only the payload binding. Ground installers
+// leave route acceptance to activation, including adoption of a restored route
+// whose record binding is absent [04 R-PATH-01 §8]. An explicit null-goal
+// release additionally clears the route through detachControllerGoal above.
+func (s *System) displaceControllerGoal(h pool.Handle) {
+	s.raiseEvictedGoalRelease(h)
+	setHandleRow(&s.moveGoals, h, nil)
+	if fl := handleRow(s.Flights, h); fl != nil && fl.Command != nil {
+		c := fl.Command
+		if c.Payload != nil && c.payloadOwner == nil {
+			c.Payload.Release()
+		}
+		c.Payload = nil
+		c.payloadOwner = nil
+	}
+}
+
+// releaseRecordGoal is the record helper's release arm: if this record owns
+// an object, unbind the controller, then destroy only this record's object.
+// An empty record leaves another record's binding alone [04 R-ORD-01 §9].
+func (s *System) releaseRecordGoal(n *orders.Node) bool {
+	return s.deleteRecordGoal(n, true)
+}
+
+// The destructor checks binding identity; explicit handler release does not.
+// Both destroy the record's object [04 R-ORD-01 §9].
+func (s *System) deleteRecordGoal(n *orders.Node, explicit bool) bool {
+	if s == nil || n == nil {
+		return false
+	}
+	rows := handleRow(s.recordGoals, n.Owner)
+	for i, owned := range rows {
+		if owned.node != n {
+			continue
+		}
+		if explicit || s.airPayloadOwner(n.Owner) == n || handleRow(s.moveGoals, n.Owner) == owned.ground && owned.ground != nil {
+			s.detachControllerGoal(n.Owner)
+		}
+		if owned.air != nil {
+			owned.air.Release()
+		}
+		copy(rows[i:], rows[i+1:])
+		rows[len(rows)-1] = recordGoal{}
+		setHandleRow(&s.recordGoals, n.Owner, rows[:len(rows)-1])
+		return true
+	}
+	return false
+}
+
+// forgetRecordGoals destroys all retained objects in stable installation order
+// after detaching the controller. It also clears the row before slot reuse.
+func (s *System) forgetRecordGoals(h pool.Handle) {
+	s.detachControllerGoal(h)
+	for _, owned := range handleRow(s.recordGoals, h) {
+		if owned.air != nil {
+			owned.air.Release()
+		}
+	}
+	setHandleRow(&s.recordGoals, h, nil)
+}
+
+// ReleaseGoalPayload implements the record-level release helper. A moverless
+// unit is a no-op; a record with an object unbinds the controller regardless of
+// which record owns the current binding, then destroys its own object. This
+// release form leaves all pending movement bits intact [04 R-ORD-01 §1, §9].
 func (s *System) ReleaseGoalPayload(n *orders.Node) bool {
 	if s == nil || n == nil {
 		return false
 	}
-	owner := n.Owner
-	// The mover-less no-op. A unit the world can no longer resolve (a death or
-	// transport teardown that runs after the record) is not evidence of a
-	// building, and refusing to release there would strand the payload, so the
-	// no-op is taken only on a unit positively known to be building class.
-	if u := s.unitFor(owner); u != nil && u.Flags&units.BuildingClassStatus != 0 {
+	if u := s.unitFor(n.Owner); u != nil && u.Flags&units.BuildingClassStatus != 0 {
 		return false
 	}
-	released := false
-	if g := handleRow(s.moveGoals, owner); g != nil && g.order == n {
-		s.CancelPathRequest(owner)         // step 1
-		n.Satisfied |= goalReleasedPending // step 2
-		if route := handleRow(s.Routes, owner); route != nil {
-			route.Active = false      // step 3: clear has-waypoint, adopt null
-			route.WantsRepath = false // step 4: null goal, so also wants-repath
+	return s.releaseRecordGoal(n)
+}
+
+// TargetRemoved clears the non-notifying weak link in every retained air
+// marker, including displaced records. It preserves cached goal/control state
+// and emits no order event [04 R-AIR-01 §4]. Final removal must call this before
+// the target slot can be reused.
+func (s *System) TargetRemoved(target pool.Handle) {
+	if s == nil || target == 0 {
+		return
+	}
+	for _, row := range s.recordGoals {
+		for _, owned := range row {
+			if m, ok := owned.air.(*airMarker); ok && m.target == target {
+				m.target = 0
+			}
 		}
-		setHandleRow(&s.moveGoals, owner, nil) // virtual delete; the record's field is cleared
-		released = true
 	}
-	if s.airPayloadOwner(owner) == n {
-		n.Satisfied |= goalReleasedPending
-		s.releaseAirGoalForNode(owner, n)
-		released = true
-	}
-	return released
 }

@@ -321,6 +321,23 @@ func releaseGoal(u *units.Unit, n *Node) {
 	b.Movement.Release(n)
 }
 
+// RearmBeCarried applies the attachment-side queue transition for locally
+// controlled cargo outside an airbase. The owner control byte belongs to the
+// child; a locally executing carrier can also pick up a remote child
+// [04 R-UNIT-06 §3][04 R-AIR-01 §9][04 R-AIR-01 §10 item 6].
+func RearmBeCarried(cargo, carrier *units.Unit) {
+	if cargo == nil || carrier == nil || carrier.Def == nil || carrier.Def.IsAirBase {
+		return
+	}
+	q := QueueForUnit(cargo)
+	state := q.controllerStateOf(cargo)
+	if state != 1 && state != 2 {
+		return
+	}
+	q.PurgeUnprotected()
+	q.PushHead(Lookup("BeCarried"), Node{Owner: cargo.Handle, Target: carrier.Handle, Deadline: -1})
+}
+
 // ---------------------------------------------------------------------------
 // BeCarried [04 R-ORD-01 §2]
 // ---------------------------------------------------------------------------
@@ -344,11 +361,7 @@ func beCarriedHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Cod
 	}
 	switch n.Phase {
 	case 0:
-		for i := 0; i < units.NumSlots; i++ {
-			if slot := u.SlotAt(i); slot != nil {
-				slot.Target = units.Target{Kind: units.TargetNone}
-			}
-		}
+		releaseSlot(u, slotAll) // guarded release, including the inhibit latch [04 R-ORD-01 §7]
 		return 1
 	case 1:
 		n.DynamicGate = gateDeadline

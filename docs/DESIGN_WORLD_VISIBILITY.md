@@ -289,7 +289,13 @@ rasterizes nothing, consults no alliance row, and draws no random numbers
 The session schedules this call in the viewing player's due settlement block,
 after settlement gates, using `TickPlayer`'s returned deadline verdict.
 Between due passes, stored sensor status remains unchanged; LOS publication
-still runs on each eligible player entry `[03 R-SENSOR-01]`.
+still runs on each eligible player entry `[03 R-SENSOR-01]`. The status word is
+`Unit.Flags`, shared by sensor callbacks, combat, publication, and save/restore.
+Allocation seeds the viewing owner's sonar bit before COB Create; restore then
+installs the saved contact bits. Detached sensor snapshots are diagnostic
+outputs and never supply the state of a reused unit slot `[03 R-VIS-01 §4]`
+`[08 R-SAVE-02 §6]`. Radar circles sample live activation and cloak inputs at
+publication independently of the sensor deadline `[03 §3.9]`.
 
 The session supplies `UnitDef.ModelTopFixed` unchanged through
 `SensorUnit.ModelTopFixed` for the radar height test in both candidate walks.
@@ -352,7 +358,7 @@ propagation".
 **Publication of the mask.** At the end of each sub-tick the session copies the
 mode-selected coverage into the committed frame: the word grid always, the local
 player's byte grid only when current coverage is enabled, plus the fog channels
-and the sensor snapshot. Presentation samples that committed copy and nothing
+and contacts sampled from live units. Presentation samples that committed copy and nothing
 else `[03 §2.4]` `[03 R-VIS-01 §8]` [I6].
 
 **Presentation revisions (PERF-REND-04).** `Service.MappingVersion` names the

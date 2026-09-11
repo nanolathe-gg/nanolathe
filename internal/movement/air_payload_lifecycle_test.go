@@ -15,7 +15,6 @@ func TestPrivateAirInstallNotifiesDisplacedOwner(t *testing.T) {
 		old := &orders.Node{Owner: u.Handle}
 		next := &orders.Node{Owner: u.Handle, Satisfied: 0x3E0}
 		sys.installAirGoal(u, old, sys.newPointMarker(u, Vec3{X: u.X, Y: u.Y, Z: u.Z}))
-		sys.airStateFor(u, next)
 		if velocity {
 			sys.installAirPayload(u, next, &airVelocityMarker{unit: u})
 		} else {
@@ -24,8 +23,10 @@ func TestPrivateAirInstallNotifiesDisplacedOwner(t *testing.T) {
 		if old.Satisfied != 0x80 || next.Satisfied != 0 {
 			t.Fatalf("velocity=%v displaced=%#x installer=%#x; want release only on displaced owner [04 R-ORD-01 §9]", velocity, old.Satisfied, next.Satisfied)
 		}
-		if sys.ReleaseGoalPayload(old) {
-			t.Fatal("old owner released the successor's payload")
+		// The old record still owns an object. Its explicit release unbinds the
+		// successor, but does not destroy that successor's retained object.
+		if !sys.ReleaseGoalPayload(old) || sys.AirGoalPayload(u.Handle) != nil || next.Satisfied != 0x80 {
+			t.Fatal("old record's explicit release did not unbind the successor [04 R-ORD-01 §9]")
 		}
 		if !sys.ReleaseGoalPayload(next) || next.Satisfied != 0x80 {
 			t.Fatal("bound owner did not receive payload release")
@@ -42,7 +43,6 @@ func TestAirArrivalAndCleanupFollowPayloadAcrossHeadChange(t *testing.T) {
 		sys.installAirGoal(u, owner, sys.newPointMarker(u, Vec3{X: u.X, Y: u.Y, Z: u.Z}))
 		q.PushHead(orders.Lookup("Wait"), orders.Node{Owner: u.Handle})
 		next := q.Head()
-		sys.airStateFor(u, next)
 		if release {
 			if !sys.ReleaseGoalPayload(owner) || owner.Satisfied != 0x80 {
 				t.Fatal("cleanup lost the payload owner when the queue head changed [04 R-ORD-01 §9]")

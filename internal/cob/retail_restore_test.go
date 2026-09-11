@@ -58,7 +58,7 @@ func TestRetailScriptRestoreSignatureAtomicAndFullState(t *testing.T) {
 	if got := vm.Pieces[0].Trans[0]; got != 0x00020000 {
 		t.Fatalf("piece translation=%v", got)
 	}
-	if !vm.anims[0].axes[0].spinActive || vm.anims[0].axes[0].spinSpeed != 0 || !vm.ScriptDirty() || !vm.pieceBusy[0] {
+	if !vm.anims[0].axes[0].spinActive || vm.anims[0].axes[0].turnSpeed != 0 || !vm.ScriptDirty() || !vm.pieceBusy[0] {
 		t.Fatalf("spin marker/dirty not restored: %+v dirty=%v pieceBusy=%v", vm.anims[0].axes[0], vm.ScriptDirty(), vm.pieceBusy[0])
 	}
 	before := vm.Threads[0]

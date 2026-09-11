@@ -56,6 +56,7 @@ func TestEnsureUnitAdmitsCreatorAndRestoreModes(t *testing.T) {
 			u := w.Unit(h)
 			if tt.restored {
 				u.Move.Mode = tt.wantMode
+				u.Move.ModeMirror = tt.wantMode
 				u.RestoredMoveMode = true
 			}
 			sys.EnsureUnit(u)

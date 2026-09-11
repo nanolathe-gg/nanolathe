@@ -69,13 +69,15 @@ func (s *System) BindMoveGoal(h pool.Handle, head *orders.Node, x, z numeric.Fix
 	if s == nil || head == nil {
 		return
 	}
-	goal := path.Goal(nil)
 	if prior := handleRow(s.moveGoals, h); prior != nil && prior.order == head {
-		// Rectangle steering refreshes the world point after the shape payload
-		// has been installed. Keep that payload attached to the same node.
-		goal = prior.goal
+		prior.x, prior.z = x, z
+		return
 	}
-	setHandleRow(&s.moveGoals, h, &moveGoal{order: head, x: x, z: z, goal: goal})
+	s.releaseRecordGoal(head)
+	s.displaceControllerGoal(h)
+	g := &moveGoal{order: head, x: x, z: z}
+	s.storeRecordGoal(h, recordGoal{node: head, ground: g})
+	setHandleRow(&s.moveGoals, h, g)
 }
 
 // HasGroundGoal reports whether head currently owns this mover's ground goal

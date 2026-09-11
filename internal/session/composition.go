@@ -1575,6 +1575,7 @@ func createAndBindServices(s *Session) error {
 	// "Unit instance economy state"].
 	if cobFS != nil {
 		s.Units.SetCOBBinder(func(u *units.Unit) error {
+			s.initializeSensorStatus(u) // constructor seed precedes COB Create [03 R-VIS-01 §4 Gate]
 			if u == nil || !s.Econ.InitializeUnitEconomy(u.Handle) {
 				return fmt.Errorf("session: initialize unit economy account")
 			}
@@ -1640,7 +1641,7 @@ func createAndBindServices(s *Session) error {
 		if u == nil || !u.IsCloaked {
 			return false
 		}
-		if s.visStatus[int(u.Handle)]&visibility.DecloakBit != 0 {
+		if u.Flags&visibility.DecloakBit != 0 {
 			return false
 		}
 		tick := uint32(0)
@@ -1708,9 +1709,6 @@ func createAndBindServices(s *Session) error {
 	// Sensor callbacks remain an internal visibility snapshot. Presentation
 	// consumes Frame.Radar after commit and does not bind a mutable surface sink
 	// to the authoritative session [03 §3.4][I6].
-	if s.visStatus == nil {
-		s.visStatus = make(map[int]uint32)
-	}
 	// Canonical visibility predicate for combat [03 §3.2] C8 P0-11 — single gameplay gate.
 	// Per-session isolated: was package-global combat.VisibilityHook, now Service.Visibility [RS-P0-018][INVARIANTS I1][I6].
 	if s.Combat != nil {
@@ -1908,6 +1906,9 @@ func createAndBindServices(s *Session) error {
 		// Wake and unlink every order observing the removed unit after the
 		// factory has consumed its product reference [04 R-ORD-01 §6].
 		orders.TargetRemoved(s.Units, h)
+		if s.Movement != nil {
+			s.Movement.TargetRemoved(h)
+		}
 		if s.Combat != nil {
 			s.Combat.ForgetUnit(h)
 		}
@@ -2371,6 +2372,9 @@ func (s *Session) resurrectStep(builder *units.Unit, n *orders.Node, lookupFeatu
 		if err != nil || product == nil {
 			return false
 		}
+		if s.Features != nil {
+			s.Features.ReleaseRemovedAt(int(view.CX), int(view.CZ))
+		}
 		// The transplant itself: bank and heading (retail's one 32-bit copy)
 		// and pitch (a 16-bit copy) overwrite whatever the allocator seeded; no
 		// position is copied, the unit having been allocated at the feature's
@@ -2391,9 +2395,8 @@ func (s *Session) resurrectStep(builder *units.Unit, n *orders.Node, lookupFeatu
 		// pathfinder's cached static obstacles are stale until the revision
 		// moves; the reclaim transition bumps it for the same reason
 		// [05 "Removal and successor replacement"].
-		// The feature service reconciles its own animation instances against
-		// the grid in the next feature phase, the same route the reclaim
-		// transition's grid-only removal already takes.
+		// Runtime teardown above already returned the arena slot before any
+		// later unit visit or projectile phase can allocate a feature.
 		s.World.BumpStaticObstacleRevision()
 		n.BindTarget(product.Handle)
 		// A resurrected unit is finished (remaining 0), so it joins the world

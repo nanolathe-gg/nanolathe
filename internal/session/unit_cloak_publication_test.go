@@ -29,7 +29,7 @@ func TestUnitViewPublishesTheTwoCloakInputs(t *testing.T) {
 	u.Flags |= 1 << 2
 
 	s := &Session{Snapshot: frame.NewBuffer(), Units: unitsPool, LocalOwner: 0}
-	s.visStatus = map[int]uint32{int(h): visibility.DecloakBit}
+	u.Flags |= visibility.DecloakBit
 	s.publishSnapshot(1)
 
 	got := s.Snapshot.Current()
@@ -46,7 +46,7 @@ func TestUnitViewPublishesTheTwoCloakInputs(t *testing.T) {
 
 	// With the timer cleared the same unit publishes as cloaked and not
 	// decloaking, which is what makes the gate hide it.
-	s.visStatus = map[int]uint32{}
+	u.Flags &^= visibility.DecloakBit
 	s.publishSnapshot(2)
 	if v := s.Snapshot.Current().Units[0]; !v.Cloaked || v.Decloaking {
 		t.Fatalf("cloaked/decloaking = %v/%v, want true/false", v.Cloaked, v.Decloaking)

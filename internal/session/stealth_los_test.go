@@ -98,7 +98,7 @@ func TestStealthSuppressesRadarButNotLineOfSight(t *testing.T) {
 	// And the instance cloaked bit — the predicate's only cloak input — still
 	// hides it [03 R-VIS-01 §6].
 	s.Units.Unit(losH).Hidden = true
-	s.visStatus[int(losH)] = 0
+	s.Units.Unit(losH).Flags &^= visibility.FriendlyMask | visibility.JammedBit | visibility.DecloakBit
 	if s.IsUnitVisible(1, s.Units.Unit(losH)) {
 		t.Fatal("the instance cloaked bit no longer hides a unit from the direct-visibility predicate [03 §3.2] step 2")
 	}

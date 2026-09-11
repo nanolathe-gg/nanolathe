@@ -195,16 +195,6 @@ type Session struct {
 	radarBlinkCountdown int16
 	radarBlinkPhase     uint16
 
-	// radarSensorIndex/radarSensorIndexGen resolve a live unit's committed
-	// sensor input by pool handle in O(1) rather than scanning the whole
-	// sensor input slice per live unit [03 §3.9] (review finding R05). Sized
-	// to the unit pool's capacity and grown, never shrunk, across ticks; a
-	// generation stamp (radarSensorIndexAt) lets each publication overwrite
-	// only the handles it visits instead of clearing the whole index.
-	radarSensorIndex    []int32
-	radarSensorIndexGen []uint32
-	radarSensorIndexAt  uint32
-
 	// strips is the ten effect-strip object family swept at phase 11. It is
 	// allocated at battle entry (createAndBindServices) and destroyed with
 	// every object at battle exit [R-CORE-01 §4.4.1]; producers append by
@@ -358,24 +348,10 @@ type Session struct {
 	// and the nil test is the whole cost when unset.
 	PhaseObserver func(phase string, tick uint32)
 
-	// Visibility sensor state [03 §3.4] P0-11: per-unit status bits (0x100
-	// seen, 0x300 friendly, 0x1000 decloak). The proximity breach's `tick + 90`
-	// is NOT here: it goes into units.Unit.RevealDeadline, the one shared
-	// reveal/cloak-suppression word [03 R-VIS-01 §6] (WU-19-92). Radar callback
-	// results are retained by visibility.Service and published through
-	// Frame.Radar.
-	visStatus map[int]uint32
-
-	// Per-tick scratch for the sensor pass. These
-	// are reused buffers, never state: every one is truncated or overwritten
-	// before it is read, so the tick that follows cannot observe the tick
-	// before it. They exist because the phases that use them run every tick
-	// over the whole pool, and rebuilding their buffers was several kilobytes
-	// of garbage per tick each.
-	sensorUnitScratch   []visibility.SensorUnit
-	sensorStatusScratch []uint32 // indexed by unit handle, parallel to the pool
-	sensorHolders       []int32  // handles staged this tick, in pool order (I1)
-	primaryMaskScratch  []uint16 // indexed by unit handle
+	// Reused sensor-pass inputs and primary-list membership, overwritten before
+	// each due pass. The units themselves own the resulting runtime status.
+	sensorUnitScratch  []visibility.SensorUnit
+	primaryMaskScratch []uint16 // indexed by unit handle
 	// The publication boundary's two live-unit walks, in pool order (I1). The
 	// unit-view walk and the radar-contact walk run one after the other inside
 	// a single publishSnapshot call, so they cannot share one buffer.
@@ -383,9 +359,6 @@ type Session struct {
 	radarUnitScratch   []*units.Unit
 	// The sensor phase's sliced live-unit walk, players then slots ascending.
 	sensorSlicedScratch []*units.Unit
-	// The publication's retained copy of the visibility service's contact
-	// snapshot, read by the radar index and the per-unit contact lookup.
-	sensorInputScratch []visibility.SensorInput
 
 	// DebugDisplayMode is the world composer's debug display mode byte
 	// [03 §3.12]. Its writers are now traced and there are exactly three: the
@@ -811,11 +784,7 @@ func (s *Session) IsUnitVisible(viewer int, target *units.Unit) bool {
 		return false
 	}
 	vid := visibility.PlayerID(viewer)
-	tid := int(target.Handle)
-	var status uint32
-	if s.visStatus != nil {
-		status = s.visStatus[tid]
-	}
+	status := target.Flags
 	// The predicate's cloak input is the INSTANCE cloaked bit and nothing else.
 	//
 	// `init_cloaked` used to be ORed in here; it is consumed exactly once, by
@@ -1290,6 +1259,11 @@ func (s *Session) RegisterAll() {
 			// already excludes, and did nothing.
 		}
 		s.Units.OnCreate = func(h pool.Handle, u *units.Unit) {
+			// Production seeds before COB Create in the allocation binder.
+			// Source-free fixture worlds still use the same constructor seed.
+			if !s.Units.HasCOBBinder() {
+				s.initializeSensorStatus(u)
+			}
 			// The status-cue seam, installed at the one creation funnel so a
 			// factory product's activation edge reaches the same sink as a
 			// placed unit's [03 R-AUD-01 §7].

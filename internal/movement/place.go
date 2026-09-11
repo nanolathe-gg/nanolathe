@@ -100,6 +100,7 @@ func (s *System) PlaceUnit(req orders.PlaceRequest) bool {
 	// the restamp [04 R-COLL-01 §1][04 R-FAC-02 §2].
 	coll.CachedAnchor, coll.OldAnchor = anchor, anchor
 	coll.Mode, coll.CachedMode = mode, mode
+	u.Move.ModeMirror = mode
 	s.syncMoverStamp(u)
 	return true
 }

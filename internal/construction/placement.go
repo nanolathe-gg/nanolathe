@@ -18,13 +18,13 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
-// BuilderLink returns the builder registered on a product, if any [05 C18].
+// BuilderLink returns the producer indexed for a product, if any.
 func (s *Service) BuilderLink(product pool.Handle) (pool.Handle, bool) {
 	b, ok := s.builderLinks[product]
 	return b, ok
 }
 
-// SetBuilderLink registers the builder link on a product [05 C18].
+// SetBuilderLink indexes a producer's order target for progress publication.
 func (s *Service) SetBuilderLink(product, builder pool.Handle) {
 	if s.builderLinks == nil {
 		s.builderLinks = make(map[pool.Handle]pool.Handle)
@@ -511,14 +511,14 @@ func (s *Service) BuilderLinks() map[pool.Handle]pool.Handle {
 	return out
 }
 
-// LinkRecord is one builder-product link, product handle owns builder handle [05 C18][RS-10].
+// LinkRecord is one derived producer-product progress relation.
 type LinkRecord struct {
 	Builder pool.Handle
 	Product pool.Handle
 }
 
-// SnapshotLinks returns a deterministic sorted copy of builder-product links [RS-10][I1].
-// Sorted by Product ascending, then Builder ascending, for canonical save ordering.
+// SnapshotLinks returns a deterministic sorted copy of builder-product links [I1].
+// Sorted by Product ascending, then Builder ascending, for frame publication.
 func (s *Service) SnapshotLinks() []LinkRecord {
 	if s == nil || len(s.builderLinks) == 0 {
 		return nil

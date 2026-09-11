@@ -162,13 +162,15 @@ func TestInitialMissionVerbs(t *testing.T) {
 	// a numeric
 	{
 		w1 := newMissionFixtureWorld(5, nil)
-		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
+		def := testDef("ARMCOM")
+		def.Weapon1Def = &content.WeaponDef{ID: 1}
+		h, _ := w1.Create(def, 0, 0, 0, 0)
 		u := atPlacement(w1.Unit(h), 0)
 		u.Flags |= 1 << 5
 		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "a 300 400"}}}
 		RunInitialMissionsWithCatalog(m1, w1, testInitialCatalog)
 		// Should queue attack (numeric) and suppress tail
-		hasAttack := hasOrder(u, "Attack_Chase") || hasOrder(u, "AttackUType") || hasOrder(u, "Attack_NoMove")
+		hasAttack := hasOrder(u, "Suppress")
 		if !hasAttack {
 			t.Fatalf("a numeric should queue attack order")
 		}
@@ -598,7 +600,9 @@ func TestPostludeMakeSelectableSuppression(t *testing.T) {
 	// numeric a suppresses
 	{
 		w1 := newMissionFixtureWorld(5, nil)
-		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
+		def := testDef("ARMCOM")
+		def.Weapon1Def = &content.WeaponDef{ID: 1}
+		h, _ := w1.Create(def, 0, 0, 0, 0)
 		u := atPlacement(w1.Unit(h), 0)
 		u.Flags |= 1 << 5
 		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "a 10 20"}}}

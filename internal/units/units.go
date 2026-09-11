@@ -1745,7 +1745,7 @@ func (w *World) create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed,
 		Z:            z,
 		Alive:        true,
 		Flags:        initialStatusFlags(def),
-		Move:         MoveState{Mode: CreatedMoverMode},
+		Move:         MoveState{Mode: CreatedMoverMode, ModeMirror: CreatedMoverMode},
 		Remaining:    remaining,
 		MaxHealth:    int32(def.MaxDamage),
 		Health:       health,
@@ -1770,6 +1770,7 @@ func (w *World) create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed,
 	// replaced unit's mode through that argument [05 R-WORK-01 §15]. Mark a
 	// non-default result as authoritative for the deferred movement bootstrap.
 	u.Move.Mode = moverMode & 3
+	u.Move.ModeMirror = u.Move.Mode
 	u.RestoredMoveMode = u.Move.Mode != CreatedMoverMode
 	// Site 1 of `activatewhenbuilt` [04 R-SPEC-01 §12]: "the unit creation
 	// service, WHEN CALLED WITH ITS ALREADY BUILT ARGUMENT ... activatewhenbuilt
@@ -2001,7 +2002,7 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 		Z:            z,
 		Alive:        true,
 		Flags:        initialStatusFlags(def),
-		Move:         MoveState{Mode: CreatedMoverMode},
+		Move:         MoveState{Mode: CreatedMoverMode, ModeMirror: CreatedMoverMode},
 		Remaining:    0,
 		MaxHealth:    int32(def.MaxDamage),
 		Health:       int32(def.MaxDamage),

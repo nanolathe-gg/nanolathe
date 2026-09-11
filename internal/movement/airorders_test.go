@@ -64,7 +64,7 @@ func TestVTOLMoveClimbsCruisesAndBanks(t *testing.T) {
 	maxBank := uint16(0)
 	climbed := false
 	for tick := uint32(1); tick <= 120; tick++ {
-		runMovementTick(sys, tick, w)
+		runLandingTick(sys, tick, w)
 		if u.Move.Mode&0x3 != 2 {
 			t.Fatalf("tick %d: mover mode=%d, want the airborne 2 [04 R-AIR-01 §6]", tick, u.Move.Mode)
 		}
@@ -390,7 +390,7 @@ func TestAirConstructionOrbitRecurrence(t *testing.T) {
 	for station := 0; station < 8; station++ {
 		sys.tick = uint32(station+1) * airOrbitPeriod
 		expect := bearing(u.X, u.Z, target.X, target.Z) + airOrbitStep
-		sys.airBuildOrbitStation(u, head)
+		sys.VisitAirBuildWork(u, head, sys.tick)
 		m := installedMarker(t, sys, u)
 
 		// The station's distance from the target is the authored build reach.
@@ -436,10 +436,9 @@ func TestAirConstructionOrbitRecurrence(t *testing.T) {
 	}
 }
 
-// TestAirBuildTakesOffAndOrbits is the same contract through the whole mover
-// tick rather than through the executor alone: a grounded construction aircraft
-// given an air build order leaves the ground, closes on the target, and then
-// keeps being handed fresh stations around it instead of sitting still.
+// TestAirBuildTakesOffAndOrbits joins the construction-owned approach visits
+// to the mover tick. The authored target stands in for the construction
+// allocation at phase 2; only its approach and orbit are under test.
 func TestAirBuildTakesOffAndOrbits(t *testing.T) {
 	sys, w, u, target := airBuildFixture(t)
 	head := pushAirOrder(t, u, "VTOL_MobileBuild", target.X, target.Z)
@@ -447,6 +446,21 @@ func TestAirBuildTakesOffAndOrbits(t *testing.T) {
 
 	var stations []Vec3
 	for tick := uint32(1); tick <= 700; tick++ {
+		if head.Phase < 2 && (head.DynamicGate == 0 || head.Satisfied&airLegGate != 0) {
+			satisfied := head.Satisfied & head.DynamicGate
+			head.Satisfied &^= satisfied
+			head.DynamicGate = 0
+			if code := sys.VisitAirBuildApproach(u, head, satisfied, tick); code != 1 {
+				t.Fatalf("approach result %d, want advance", code)
+			}
+			head.Phase++
+		}
+		if head.Phase == 2 && head.Satisfied&airLegGate != 0 {
+			head.Phase = 3
+		}
+		if head.Phase == 3 {
+			sys.VisitAirBuildWork(u, head, tick)
+		}
 		runMovementTick(sys, tick, w)
 		if tick%airOrbitPeriod != 0 || tick < airOrbitPeriod*2 {
 			continue
@@ -625,9 +639,10 @@ func TestVTOLMobileBuildSnapsToProductFootprint(t *testing.T) {
 		return footX, footZ, true
 	}
 
-	st := sys.airStateFor(u, head)
-	st.phase = 1
-	sys.execVTOLAirBuild(u, head, st)
+	head.Phase = 1
+	if code := sys.VisitAirBuildApproach(u, head, 0, 1); code != 1 {
+		t.Fatalf("site leg result %d, want advance", code)
+	}
 
 	if gotIndex != head.Param1 {
 		t.Fatalf("resolver received catalog index %d, want the record's Param1 %d", gotIndex, head.Param1)
@@ -655,9 +670,10 @@ func TestVTOLMobileBuildKeepsGoalWhenResolverUnbound(t *testing.T) {
 	if sys.ProductFootprint != nil {
 		t.Fatal("fixture unexpectedly bound a resolver")
 	}
-	st := sys.airStateFor(u, head)
-	st.phase = 1
-	sys.execVTOLAirBuild(u, head, st)
+	head.Phase = 1
+	if code := sys.VisitAirBuildApproach(u, head, 0, 1); code != 1 {
+		t.Fatalf("site leg result %d, want advance", code)
+	}
 
 	m := installedMarker(t, sys, u)
 	if m.goal.X != goalX || m.goal.Z != goalZ {

@@ -23,7 +23,8 @@ func TestRetailUnitImageRoundTripEstablishedFieldsAndStableIDs(t *testing.T) {
 		Attachment: AttachmentState{Carrier: 42, AttachPiece: 7}, EngagementTarget: 43,
 	}
 	u.Move.Bank, u.Move.Heading, u.Move.Pitch = 11, 12, 13
-	u.Slots[0] = Slot{Target: Target{Kind: TargetUnit, Unit: 44}, Reload: -1, DesiredYaw: 14, DesiredPitch: 15, Ammo: 9, Flags: 0xff, Weapon: &content.WeaponDef{ID: 1}, SavedPayloadWord0: 0x11223344, SavedPayloadWord1: 0x55667788}
+	u.Slots[0] = Slot{Target: Target{Kind: TargetUnit, Unit: 44}, Reload: -1, DesiredYaw: 14, DesiredPitch: 15, Ammo: 9, Flags: 0xff, Weapon: &content.WeaponDef{ID: 1}, DistanceWord: -0x11223344}
+	u.Slots[0].Aim.RestoreReadyWord(0x11223344)
 	u.Slots[1] = Slot{Target: Target{Kind: TargetGround, X: numeric.Fixed(-2 << 16), Z: numeric.Fixed(3 << 16)}}
 	ids := map[pool.Handle]uint16{41: 9, 42: 10, 43: 11, 44: 12}
 	resolve := func(h pool.Handle) (uint16, bool) { id, ok := ids[h]; return id, ok }
@@ -40,6 +41,9 @@ func TestRetailUnitImageRoundTripEstablishedFieldsAndStableIDs(t *testing.T) {
 	v := &Unit{Handle: 90, Alive: true, Flags: u.Flags & (1<<12 | 0xfc000000)}
 	if err := RetailUnitBase(v, image); err != nil {
 		t.Fatal(err)
+	}
+	if v.Slots[0].Aim.ReadyWord() != 0x11223344 || !v.Slots[0].Aim.IssueBit || v.Slots[0].DistanceWord != u.Slots[0].DistanceWord {
+		t.Fatal("saved readiness, request latch or ballistic distance was not restored")
 	}
 	if err := RetailUnitWeaponTargets(v, retailTargetSlotMap(map[uint16]pool.Handle{12: 94})); err != nil {
 		t.Fatal(err)

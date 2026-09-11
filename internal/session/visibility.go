@@ -172,9 +172,6 @@ func unpublishOne(s *Session, u *units.Unit) {
 		return
 	}
 	s.Vis.RetireObserver(visibility.ObserverID(u.Handle))
-	if s.visStatus != nil {
-		delete(s.visStatus, int(u.Handle))
-	}
 	if s.visStamps != nil {
 		delete(s.visStamps, int(u.Handle))
 	}
@@ -223,6 +220,19 @@ func stampPlayerSlice(s *Session, player int) {
 	}
 }
 
+// initializeSensorStatus seeds the constructor's contact bits, including in
+// one-player sessions where the sensor phase never runs [03 R-VIS-01 §4].
+// Restore installs its persisted status after allocation [08 R-SAVE-02 §6].
+func (s *Session) initializeSensorStatus(u *units.Unit) {
+	if s == nil || u == nil {
+		return
+	}
+	u.Flags &^= visibility.FriendlyMask | visibility.JammedBit
+	if u.Owner == s.ViewingOwner {
+		u.Flags |= visibility.SonarBit
+	}
+}
+
 // stepSensorPhase runs the sensor status and cloak deadline walks inside the
 // viewing player's due settlement block, after the settlement gates. The
 // service additionally requires more than one active player; skipped passes
@@ -231,23 +241,15 @@ func (s *Session) stepSensorPhase(tick uint32) {
 	if s.Vis == nil || s.Units == nil {
 		return
 	}
-	if s.visStatus == nil {
-		s.visStatus = make(map[int]uint32)
-	}
 	// SensorTick owns the active-player gate and drops its prior callback
 	// snapshot when that gate skips [R-VIS-01 §4] — so this pass calls it
 	// unconditionally.
 	active := s.activePlayerCount()
-	// Scratch, not state: the status row is written before it is read for
-	// every handle staged below, and both staging slices are truncated here.
-	// The status row is sized to the whole pool up front so the pointers
-	// handed to the sensor service stay valid for the length of the pass.
+	// Sensor callbacks write the unit's runtime status word directly. The
+	// same word survives skipped passes, supplies save projection, and is
+	// replaced by allocation when a pool slot is reused [03 R-VIS-01 §4]
+	// [08 R-SAVE-02 §6]. The staged slice contains only this pass's inputs.
 	records := s.Units.TotalRecords()
-	if cap(s.sensorStatusScratch) < records {
-		s.sensorStatusScratch = make([]uint32, records)
-	}
-	s.sensorStatusScratch = s.sensorStatusScratch[:records]
-	s.sensorHolders = s.sensorHolders[:0]
 	sensorUnits := s.sensorUnitScratch[:0]
 	// Pass 4's candidate set: the per-side PRIMARY candidate lists of [06 §3.1],
 	// folded into one membership bit per player slot so the sensor pass can read
@@ -266,8 +268,6 @@ func (s *Session) stepSensorPhase(tick uint32) {
 		if h < 0 || h >= records {
 			continue
 		}
-		s.sensorStatusScratch[h] = s.visStatus[h]
-		sp := &s.sensorStatusScratch[h]
 		// The proximity breach's `tick + 90` goes into THE shared
 		// reveal/cloak-suppression word, the one the work handlers and the
 		// projectile fill also write and the cloak debit gate alone reads
@@ -275,7 +275,6 @@ func (s *Session) stepSensorPhase(tick uint32) {
 		// land in a session-side map that nothing read, so the breach's
 		// durable half never reached the gate (WU-19-92).
 		dp := &u.RevealDeadline
-		s.sensorHolders = append(s.sensorHolders, int32(h))
 		// Hidden is the INSTANCE cloak bit — the seen probe's only gate besides
 		// the seen bit itself [R-VIS-01 §4] pass 5, [R-VIS-01 §6]. It used to
 		// OR in the definition's init_cloaked flag as well; that flag is
@@ -318,7 +317,7 @@ func (s *Session) stepSensorPhase(tick uint32) {
 		sensorUnits = append(sensorUnits, visibility.SensorUnit{
 			ID:                    uint16(u.Handle),
 			Owner:                 visibility.PlayerID(u.Owner),
-			Status:                sp,
+			Status:                &u.Flags,
 			X:                     u.X,
 			Z:                     u.Z,
 			Y:                     u.Y,
@@ -361,9 +360,6 @@ func (s *Session) stepSensorPhase(tick uint32) {
 	}
 	s.Vis.SetViewerDefeated(defeated)
 	s.Vis.SensorTick(tick, active, sensorUnits)
-	for _, h := range s.sensorHolders {
-		s.visStatus[int(h)] = s.sensorStatusScratch[h]
-	}
 	s.sensorUnitScratch = sensorUnits[:0]
 }
 

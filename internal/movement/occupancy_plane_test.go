@@ -178,7 +178,7 @@ func TestAirborneStampFollowsTheAircraft(t *testing.T) {
 
 	pushAirOrder(t, u, "VTOL_Move", world.CellToWorld(24), world.CellToWorld(8))
 	for tick := uint32(1); tick <= 240; tick++ {
-		runMovementTick(sys, tick, w)
+		runLandingTick(sys, tick, w)
 	}
 	if u.Move.Mode&0x3 != 2 {
 		t.Fatalf("mover mode=%d, want the airborne 2 [04 R-AIR-01 §6]", u.Move.Mode)

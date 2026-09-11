@@ -105,7 +105,7 @@ func jumpBattleZoom(b *battleSession, mx, my int32, z camera.Zoom, modern bool) 
 	b.zoom.Reset()
 }
 
-// The window's default view scale is decided by its resolution (§14.6): the
+// The classic window's default view scale follows its resolution (§14.6): the
 // retail 640x480 and 800x600 modes keep the native picture, and anything
 // larger opens at 1.5x, where a 1080p window shows about the world a 1280x720
 // native one would.
@@ -124,12 +124,12 @@ func defaultViewScale(viewW, viewH int32) camera.ViewScale {
 }
 
 // entryZoom resolves the window's start-up factor: `--zoom` when given, else
-// the resolution default for the battle's viewport (§16.8).
+// 1x in modern or the resolution default in classic (§16.8).
 func entryZoom(opts Options, cam *camera.Camera) camera.Zoom {
 	if opts.Zoom != 0 {
 		return opts.Zoom
 	}
-	if cam == nil {
+	if modernRenderer(opts) || cam == nil {
 		return camera.ZoomUnit
 	}
 	return camera.ZoomOf(defaultViewScale(cam.ViewW, cam.ViewH))
@@ -171,8 +171,8 @@ func viewZoomOf(b *battleSession) camera.Zoom {
 }
 
 // toggleViewScale is F9. In the classic executor it is the unchanged 1x, 1.5x,
-// 2x step cycle about the viewport centre; in the modern one it is the same
-// three factors as animated zoom targets (§16.8). It is a Nanolathe binding,
+// 2x step cycle about the viewport centre; modern cycles 1x, 2x, 0.5x as
+// animated zoom targets (§16.8). It is a Nanolathe binding,
 // not a retail one — retail's dispatcher has no case for F9 or F10 (§14.6).
 func (b *battleSession) toggleViewScale(modern bool) {
 	if b == nil || b.cam == nil {
@@ -189,18 +189,14 @@ func (b *battleSession) toggleViewScale(modern bool) {
 	fmt.Fprintf(os.Stderr, "nanolathe: view scale %s\n", next)
 }
 
-// nextZoomTarget is the modern F9 cycle, 1x -> 1.5x -> 2x -> 1x. A factor that
-// is not one of the three — anywhere in the free range the wheel reaches —
-// cycles to the first step above it, and to 1x when there is none, so the key
-// always lands on a step from wherever the wheel left the view.
+// nextZoomTarget is the modern F9 cycle, 1x -> 2x -> 0.5x -> 1x (§16.8).
+// It shares the wheel's targets; a free factor goes to the first step above
+// it, wrapping to the lowest step when there is none.
 func nextZoomTarget(current camera.Zoom) camera.Zoom {
-	steps := [3]camera.Zoom{camera.ZoomUnit, camera.ZoomUnit + camera.ZoomUnit/2, camera.ZoomMax}
-	for _, s := range steps {
-		if current < s {
-			return s
-		}
+	if next, ok := camera.NextZoomStep(current, true); ok {
+		return next
 	}
-	return camera.ZoomUnit
+	return camera.ZoomSteps[0]
 }
 
 // requestRendererToggle is F10: ask the window adapter to swap executors. The

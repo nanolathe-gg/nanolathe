@@ -168,3 +168,25 @@ func TestArenaRefusalIsTestedAfterTheTeardown(t *testing.T) {
 		t.Fatal("a refused stamp left its ordinal on the grid; retail writes the anchor inside step 4, after the pop")
 	}
 }
+
+// A successful stamp tears down its predecessor even when both definitions
+// match, so that predecessor funds the new slot at capacity
+// [05 R-FEAT-01 §3 steps 3–4][05 R-FEAT-01 §4 step 4].
+func TestSameDefinitionRestampReleasesSlotBeforeArenaCheck(t *testing.T) {
+	svc, terrain := newDensePackService(t, 64, FeatureAnimSlots/64)
+	wreck := defP1("wreck", 1, 1, "wreck.3do", "")
+	for i := 0; i < FeatureAnimSlots; i++ {
+		if svc.PlaceAt(i%64, i/64, wreck) == nil {
+			t.Fatalf("fixture wreck %d refused", i)
+		}
+	}
+	if svc.PlaceAt(0, 0, wreck) == nil {
+		t.Fatal("same-definition replacement refused despite freeing its predecessor's slot")
+	}
+	if got := svc.arenaOccupants(); got != FeatureAnimSlots {
+		t.Fatalf("replacement changed arena occupancy to %d, want %d", got, FeatureAnimSlots)
+	}
+	if def, ok := terrain.FeatureDefAt(terrain.PlotAt(0, 0).Feature()); !ok || def != wreck {
+		t.Fatal("replacement wreck missing from the grid")
+	}
+}

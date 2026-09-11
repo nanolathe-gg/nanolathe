@@ -16,26 +16,30 @@ func zoomTestBattle() *battleSession {
 	return &battleSession{cam: &camera.Camera{X: 400, Z: 300, ViewW: 640, ViewH: 480, MapW: 8192, MapH: 8192}}
 }
 
-// F9 is a Nanolathe binding, not retail's (DESIGN_GPU_RENDERER §14.6). It
-// cycles the view scale 1x, 1.5x, 2x and back, and keeps the world point at
-// the battle viewport's centre where it is, so the player is looking at the
-// same thing after each press as before it.
+// F9 keeps the viewport's centre anchored through the renderer's target
+// cycle (DESIGN_GPU_RENDERER §16.8), including the modern wrap to 0.5x.
 func TestF9CyclesTheViewScaleAboutTheViewportCentre(t *testing.T) {
-	b := zoomTestBattle()
-	b.cam.X, b.cam.Z = 2000, 1500
-	// The world point drawn at the viewport centre at 1x: the recorder draws
-	// world w at framebuffer Project_f(w − cam) (DESIGN_GPU_RENDERER §16.5).
-	mx, my := battleViewCentre(b.cam)
-	wx, wz := b.cam.X+mx, b.cam.Z+my
-
-	for i, want := range []camera.ViewScale{camera.ViewScaleMid, camera.ViewScaleDetail, camera.ViewScaleNative} {
-		pressKeys(b, input.KeyF9)
-		if got := b.cam.EffectiveScale(); got != want {
-			t.Fatalf("view scale after %d F9 = %s, want %s", i+1, got, want)
+	for _, modern := range []bool{false, true} {
+		b := zoomTestBattle()
+		b.cam.X, b.cam.Z = 2000, 1500
+		mx, my := battleViewCentre(b.cam)
+		wx, wz := b.cam.X+mx, b.cam.Z+my
+		wants := []camera.Zoom{camera.ZoomOf(camera.ViewScaleMid), camera.ZoomMax, camera.ZoomUnit}
+		if modern {
+			wants = []camera.Zoom{camera.ZoomMax, camera.ZoomUnit / 2, camera.ZoomUnit}
 		}
-		f := b.cam.EffectiveZoom()
-		if gx, gy := f.Project(wx-b.cam.X), f.Project(wz-b.cam.Z); gx < mx-1 || gx > mx || gy < my-1 || gy > my {
-			t.Errorf("after %d F9 the world point at the centre (%d,%d) is drawn at (%d,%d)", i+1, mx, my, gx, gy)
+		for i, want := range wants {
+			b.toggleViewScale(modern)
+			for j := 0; j < 400 && b.zoom.Active(b.cam); j++ {
+				b.zoom.Step(b.cam)
+			}
+			if got := b.cam.EffectiveZoom(); got != want {
+				t.Fatalf("modern=%v: zoom after %d F9 = %s, want %s", modern, i+1, got, want)
+			}
+			// The animated path re-anchors through integer rounding each Update.
+			if gx, gy := want.Project(wx-b.cam.X), want.Project(wz-b.cam.Z); gx < mx-2 || gx > mx || gy < my-2 || gy > my {
+				t.Errorf("modern=%v: after %d F9 the centre (%d,%d) is drawn at (%d,%d)", modern, i+1, mx, my, gx, gy)
+			}
 		}
 	}
 }
@@ -69,9 +73,8 @@ func TestWheelZoomKeepsTheWorldUnderThePointer(t *testing.T) {
 	}
 }
 
-// The window opens at 1.5x above the retail 800x600 mode and natively at or
-// below it, unless `--zoom` says otherwise (§14.6). A capture never takes
-// the default: its scale is `--zoom` or native.
+// Modern opens at 1x at every resolution; classic keeps its resolution
+// default. An explicit --zoom overrides either (§16.8).
 func TestEntryZoomDefaultsByResolution(t *testing.T) {
 	for _, tc := range []struct {
 		w, h int32
@@ -88,11 +91,17 @@ func TestEntryZoomDefaultsByResolution(t *testing.T) {
 		// (DESIGN_GPU_RENDERER §16.8).
 		{1024, 768, camera.ZoomUnit * 7 / 10, camera.ZoomUnit * 7 / 10},
 	} {
-		b := zoomTestBattle()
-		b.cam.ViewW, b.cam.ViewH = tc.w, tc.h
-		applyEntryZoom(Options{Zoom: tc.zoom}, b)
-		if got := b.cam.EffectiveZoom(); got != tc.want {
-			t.Errorf("%dx%d with --zoom %v opened at %s, want %s", tc.w, tc.h, tc.zoom, got, tc.want)
+		for _, renderer := range []string{"classic", "modern"} {
+			b := zoomTestBattle()
+			b.cam.ViewW, b.cam.ViewH = tc.w, tc.h
+			want := tc.want
+			if renderer == "modern" && tc.zoom == 0 {
+				want = camera.ZoomUnit
+			}
+			applyEntryZoom(Options{Zoom: tc.zoom, Renderer: renderer}, b)
+			if got := b.cam.EffectiveZoom(); got != want {
+				t.Errorf("%s %dx%d with --zoom %v opened at %s, want %s", renderer, tc.w, tc.h, tc.zoom, got, want)
+			}
 		}
 	}
 }

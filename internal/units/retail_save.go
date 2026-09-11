@@ -147,7 +147,11 @@ func RetailUnitImage(u *Unit, orderCount uint32, stableID, targetSlot RetailStab
 	// packing [05 R-ECO-01 §9]. A unit restored and re-saved untouched packs
 	// exactly what it loaded. Pending death is also bool-owned: project Dying
 	// independently of health or the last damage kind [08 R-SAVE-02 §6].
-	statusFlags := u.Flags &^ (CloakRequestedStatus | DeathPendingStatus)
+	// The unit mode mirror and cached movement-rate tier have named runtime
+	// owners; pack their current values rather than an earlier loaded copy
+	// left in Flags [08 R-SAVE-02 §6][04 R-MOV-01 §6].
+	statusFlags := u.Flags &^ (CloakRequestedStatus | DeathPendingStatus | 0xf)
+	statusFlags |= uint32(u.Move.ModeMirror&3) | uint32(u.MoveTier&3)<<2
 	if u.Dying {
 		statusFlags |= DeathPendingStatus
 	}
@@ -197,9 +201,9 @@ func writeRetailWeaponSlot(data []byte, s *Slot, definition *content.WeaponDef, 
 	}
 	binary.LittleEndian.PutUint16(data, low)
 	binary.LittleEndian.PutUint16(data[2:], high)
-	binary.LittleEndian.PutUint32(data[4:], s.SavedPayloadWord0)
+	binary.LittleEndian.PutUint32(data[4:], s.Aim.ReadyWord())
 	data[8] = definition.ActiveByte()
-	binary.LittleEndian.PutUint32(data[0x0c:], s.SavedPayloadWord1)
+	binary.LittleEndian.PutUint32(data[0x0c:], uint32(s.DistanceWord))
 	if s.Reload < math.MinInt16 || s.Reload > math.MaxInt16 {
 		return fmt.Errorf("units: reload %d is outside signed 16-bit", s.Reload)
 	}

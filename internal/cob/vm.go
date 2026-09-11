@@ -186,9 +186,8 @@ type axisAnim struct {
 	moveSpeed  int32
 	moveBusy   bool
 	turnTarget uint16
-	turnSpeed  int32
+	turnSpeed  int32 // current rotation speed, shared by positional turns and spins [04 §4.6]
 	turnBusy   bool
-	spinSpeed  int32
 	spinTarget int32
 	spinAccel  int32
 	spinActive bool
@@ -1125,21 +1124,15 @@ func (v *VM) signalMask(mask int32) {
 }
 
 // isTurnBusy reports whether turn/spin is busy for this piece axis [04 §4.6].
-// A wait-for-turn polls the axis's turn-speed word (or, while a spin marker
-// is active, the spin-speed word) and wakes as soon as its per-tick speed
-// truncates to zero [04 §4.6].
+// A wait-for-turn polls the axis's shared rotation speed and wakes as soon
+// as that speed reads zero, in either rotation mode [04 §4.6].
 func (v *VM) isTurnBusy(piece, axis int) bool {
 	if piece < 0 || piece >= len(v.anims) || axis < 0 || axis >= 3 {
 		return false
 	}
 	anim := &v.anims[piece].axes[axis]
-	// While a spin marker is active, busy tracks the spin's current speed
-	// rather than the ordinary turn-speed word [04 §4.6].
-	// A zero per-tick speed means not busy, so a wait wakes immediately [04 §4.6].
-	if anim.spinActive {
-		return anim.spinSpeed != 0
-	}
-	return anim.turnBusy
+	// Both rotation modes share the speed polled by wait-for-turn [04 §4.6].
+	return anim.turnSpeed != 0
 }
 
 // isMoveBusy reports whether move is busy for this piece axis [04 §4.6].
@@ -1227,28 +1220,29 @@ func (v *VM) interpolate(delta int) {
 			// Acceleration-ramp block, second of the three, then rotation/spin
 			// third [04 §4.6], with inclusive clamping on reaching or crossing
 			// the target.
-			if anim.spinActive {
-				// The signed acceleration is added directly. Its sign selects the
-				// inclusive clamp direction; it is not an approach magnitude [04 §4.6].
-				if anim.spinAccel != 0 {
-					// Ramp adds one signed stored-word acceleration per pass. The
-					// word narrows before its signed inclusive clamp [04 §4.6].
-					next := anim.spinSpeed + anim.spinAccel
-					if (anim.spinAccel < 0 && next <= anim.spinTarget) || (anim.spinAccel > 0 && next >= anim.spinTarget) {
-						anim.spinSpeed = anim.spinTarget
-						anim.spinAccel = 0
-					} else {
-						anim.spinSpeed = next
-					}
+			// The signed acceleration is added directly. Its sign selects the
+			// inclusive clamp direction; it is not an approach magnitude [04 §4.6].
+			if anim.spinAccel != 0 {
+				// Ramp adds one signed stored-word acceleration per pass. The
+				// word narrows before its signed inclusive clamp [04 §4.6].
+				next := anim.turnSpeed + anim.spinAccel
+				if (anim.spinAccel < 0 && next <= anim.spinTarget) || (anim.spinAccel > 0 && next >= anim.spinTarget) {
+					anim.turnSpeed = anim.spinTarget
+					anim.spinAccel = 0
+				} else {
+					anim.turnSpeed = next
 				}
+			}
+			anim.turnBusy = !anim.spinActive && anim.turnSpeed != 0
+			if anim.spinActive {
 				// The angle increment is already perTick * delta [04 §4.6]; a per-tick speed truncating to zero still leaves the piece dirty for one tick, and a wait wakes immediately [04 §4.6].
-				if anim.spinSpeed != 0 {
-					step := int64(anim.spinSpeed) * int64(delta) // already trunc(speed/30) [04 §4.6]
+				if anim.turnSpeed != 0 {
+					step := int64(anim.turnSpeed) * int64(delta) // already trunc(speed/30) [04 §4.6]
 					if step != 0 {
 						v.setPieceAngle(p, axis, v.Pieces[p].GetAngle(axis)+uint16(step)) // wraps [03 §2.4] C22 (I2)
 					}
 				}
-				// spinActive stays set until stop-spin clears it, even at zero speed: a spin at rest is still a spin as far as turn lane is concerned [03 §2.4] C22.
+				// The spin marker survives stop-spin; only turn or turn-now replaces it [04 §4.6].
 				// A zero-speed spin has no motion, and the per-piece reduction clears dirty next tick; a wait wakes immediately once the polled word reads zero [04 §4.6].
 			} else if anim.turnBusy {
 				// Turn uses the already-divided per-tick speed [04 §4.6]; a shortest-arc tie at exactly the half-circle boundary keeps the script's sign rather than flipping it [04 §4.6].
@@ -1291,7 +1285,7 @@ func (v *VM) interpolate(delta int) {
 		if p < len(v.pieceBusy) {
 			for axis := 0; axis < 3; axis++ {
 				anim := &v.anims[p].axes[axis]
-				if anim.moveBusy || anim.turnBusy || (anim.spinActive && (anim.spinSpeed != 0 || anim.spinAccel != 0)) {
+				if anim.moveBusy || anim.turnSpeed != 0 || anim.spinAccel != 0 {
 					v.pieceBusy[p] = true
 					v.dirty = true
 					break
@@ -1428,10 +1422,10 @@ func (v *VM) runThread(idx int) {
 			// The spin sentinel is conceptual here; the spinActive bool distinguishes spin state from an ordinary turn [04 §4.6].
 			anim.spinTarget = perTickSpeed // the axis's spin-target word [04 §4.6]
 			anim.spinAccel = perTickAccel  // the axis's spin-acceleration word [04 §4.6]
+			// With acceleration, preserve the current rotation speed even when
+			// switching from a positional turn [04 §4.6].
 			if perTickAccel == 0 {
-				anim.spinSpeed = perTickSpeed // fast path: a zero per-tick acceleration snaps straight to the target speed [04 §4.6]
-			} else if anim.spinSpeed == 0 && perTickSpeed != 0 && perTickAccel != 0 {
-				// Keep current spinSpeed as is; the interpolator's acceleration-ramp block clamps it inclusively on reaching or crossing the target [04 §4.6].
+				anim.turnSpeed = perTickSpeed // fast path: a zero per-tick acceleration snaps straight to the target speed [04 §4.6]
 			}
 			anim.spinActive = true
 			anim.turnBusy = false
@@ -1458,16 +1452,11 @@ func (v *VM) runThread(idx int) {
 			perTickDecel := int32(int64(dec) / int64(v.tickDenom)) // trunc toward zero, latched denominator [04 §4.6]
 			anim.spinAccel = -perTickDecel                         // -(decel/30) [04 §4.6]
 			if anim.spinAccel == 0 {
-				// Sub-tick deceleration becomes an immediate stop [04 §4.6]; |decel|<30 => 0.
-				anim.spinSpeed = 0 // immediate stop [04 §4.6]
-				anim.spinActive = false
+				anim.turnSpeed = 0 // immediate stop, shared by both rotation modes [04 §4.6]
 				anim.turnBusy = false
-			} else {
-				// spinActive remains true until speed reaches zero via the interpolator's inclusive clamp [04 §4.6]; this opcode does not set the per-piece or global dirty flags.
-				if anim.spinSpeed == 0 {
-					anim.spinActive = false
-				}
 			}
+			// Stop-spin does not replace the turn target or continuous-spin
+			// marker. Its ramp runs before either rotation mode [04 §4.6].
 			t.PC += 3
 		case 0x10005000: // show [04 §4.3] B — set bit 0 draw via unit record when bound [04 §"Piece flag polarity"]
 			if t.PC+1 >= len(v.prog.Code) {
@@ -1573,11 +1562,8 @@ func (v *VM) runThread(idx int) {
 			if piece < len(v.anims) {
 				anim := &v.anims[piece].axes[axis]
 				anim.turnTarget = uint16(target) // masked &0xffff [04 §4.6]
-				// Zeroes the move-speed, turn-speed and spin-acceleration
-				// busy words and commits immediately via the model
-				// adapter's set-angle; does NOT set dirty [04 §4.6].
-				anim.moveBusy = false
-				anim.moveSpeed = 0
+				// The immediate angle commit clears rotation speed and acceleration,
+				// preserving same-axis translation and its wait [04 §4.6].
 				anim.turnBusy = false
 				anim.turnSpeed = 0
 				anim.spinAccel = 0

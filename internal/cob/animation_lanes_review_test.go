@@ -103,7 +103,7 @@ func TestMoveNowKeepsSameAxisAcceleratingSpin(t *testing.T) {
 	}
 	vm.Drain(1)
 	axis := vm.anims[0].axes[0]
-	if axis.spinSpeed != 1 || axis.spinAccel != 1 || vm.Pieces[0].GetAngle(0) != 1 {
+	if axis.turnSpeed != 1 || axis.spinAccel != 1 || vm.Pieces[0].GetAngle(0) != 1 {
 		t.Fatalf("move-now cancelled accelerating spin: %+v angle=%d [04 §4.6]", axis, vm.Pieces[0].GetAngle(0))
 	}
 }
@@ -177,7 +177,7 @@ func TestSpinRampUsesStoredSignedAcceleration(t *testing.T) {
 		t.Fatal("start")
 	}
 	vm.Drain(1)
-	if got := vm.anims[0].axes[0].spinSpeed; got != -10 {
+	if got := vm.anims[0].axes[0].turnSpeed; got != -10 {
 		t.Fatalf("signed ramp speed = %d, want -10 [04 §4.6]", got)
 	}
 	if got := vm.Pieces[0].GetAngle(0); got != 0xfff6 {
@@ -189,13 +189,13 @@ func TestSpinRampClampsAfterCrossingTarget(t *testing.T) {
 	vm := newTestVM(synthProg(nil, []string{"base"}, 0, nil))
 	axis := &vm.anims[0].axes[0]
 	axis.spinActive = true
-	axis.spinSpeed = 9
+	axis.turnSpeed = 9
 	axis.spinTarget = 10
 	axis.spinAccel = 2
 	vm.dirty = true
 	vm.interpolate(1)
-	if axis.spinSpeed != 10 || axis.spinAccel != 0 {
-		t.Fatalf("post-add positive clamp = speed %d accel %d, want 10/0 [04 §4.6]", axis.spinSpeed, axis.spinAccel)
+	if axis.turnSpeed != 10 || axis.spinAccel != 0 {
+		t.Fatalf("post-add positive clamp = speed %d accel %d, want 10/0 [04 §4.6]", axis.turnSpeed, axis.spinAccel)
 	}
 }
 
@@ -203,22 +203,22 @@ func TestSpinRampUsesStoredWordAndRunsAtEqualTarget(t *testing.T) {
 	vm := newTestVM(synthProg(nil, []string{"base"}, 0, nil))
 	axis := &vm.anims[0].axes[0]
 	axis.spinActive = true
-	axis.spinSpeed = 10
+	axis.turnSpeed = 10
 	axis.spinTarget = 10
 	axis.spinAccel = 1
 	vm.dirty = true
 	vm.interpolate(2)
-	if axis.spinSpeed != 10 || axis.spinAccel != 0 {
-		t.Fatalf("equal-target ramp = speed %d accel %d, want 10/0 [04 §4.6]", axis.spinSpeed, axis.spinAccel)
+	if axis.turnSpeed != 10 || axis.spinAccel != 0 {
+		t.Fatalf("equal-target ramp = speed %d accel %d, want 10/0 [04 §4.6]", axis.turnSpeed, axis.spinAccel)
 	}
 
-	axis.spinSpeed = 0x7fffffff
+	axis.turnSpeed = 0x7fffffff
 	axis.spinTarget = 0x7fffffff
 	axis.spinAccel = 1
 	vm.dirty = true
 	vm.interpolate(1)
-	if axis.spinSpeed != -0x80000000 || axis.spinAccel != 1 {
-		t.Fatalf("ramp stored-word wrap = speed %d accel %d, want -2147483648/1 [04 §4.6]", axis.spinSpeed, axis.spinAccel)
+	if axis.turnSpeed != -0x80000000 || axis.spinAccel != 1 {
+		t.Fatalf("ramp stored-word wrap = speed %d accel %d, want -2147483648/1 [04 §4.6]", axis.turnSpeed, axis.spinAccel)
 	}
 }
 

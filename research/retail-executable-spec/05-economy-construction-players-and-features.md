@@ -3139,8 +3139,10 @@ initializer and consumes its normal draw sequence before the saved heading is
 copied back. Mission placement has the analogous allocator-then-authored-angle
 overwrite described in [04 §2.3b].
 
-**Success epilogue.** Message "Starting construction"; register the builder
-link on the product; copy standing-order bits 18-19 (standing move) and 20-21
+**Success epilogue — Established.** Message "Starting construction"; attach the
+product to the factory through the ordinary carrier operation, using the queried
+build piece and grounded mover mode [04 R-FAC-02 §1]; copy standing-order bits
+18-19 (standing move) and 20-21
 (standing fire) from the factory's class/state word onto the product's;
 resolve the get-built operation and insert a get-built node onto the
 **product's own primary queue** (queued mode, zero count); raise the
@@ -3273,13 +3275,21 @@ factory-product collision exemption after allocation. The supported
 occupancy-layer inference and its limits are recorded in [04 §6.4
 R-P0-08-A §1]; it must not be expanded into a global collision bypass.
 
-**Link lifetime — split contract.** The factory production record's product
-pointer is cleared on normal completion and the record is freed when its count
-is exhausted (**Established**). The product-side auxiliary builder link has no
-separate unlink in the bounded factory call graph; product teardown and
-factory death/capture cleanup beyond the paths already described remain
-**Unknown**. In particular, the death/capture path does not establish
-transfer of a pending product or queue to a replacement factory.
+**Link lifetime — Established.** Three ordinary references carry this
+relationship: the producer order targets its product, the product's `GetBuilt`
+order targets its producer, and a factory product is attached through the
+carrier relation [04 R-FAC-02 §1–§3]. The production record releases its target
+on completion or cancellation and is freed when its count is exhausted.
+Its target binding also registers for ordinary removal notifications
+[04 R-ORD-01 §6]. The operation previously described here as a separate
+"product-side auxiliary builder link" is the carrier attachment itself; the
+reviewed creation, completion, cancellation and save-reader paths contain no
+additional builder relation (**Established, bounded negative**). Carrier and
+order references are independently saved and restored [08 R-SAVE-02 §6, §11].
+The `GetBuilt` producer reference can outlive the producer's construction
+record; it must not by itself be interpreted as ongoing production. No
+transfer of a pending product or queue to a replacement factory follows from
+these references.
 
 **Blocked lane — split contract.** A blocked snapped exit is retried silently
 every 15 ticks before allocation, without a timeout or force-placement. An

@@ -212,7 +212,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 				// request: a unit whose owner could not pay this pass is drawn
 				// [05 R-ECO-01 §9] (WU-19-92).
 				Cloaked:    u.Hidden,
-				Decloaking: s.visStatus != nil && s.visStatus[int(u.Handle)]&visibility.DecloakBit != 0,
+				Decloaking: u.Flags&visibility.DecloakBit != 0,
 				// The carrier link the unit painter's per-unit present needs:
 				// a carried child is drawn with its carrier, not only as its
 				// own bucket entry [03 R-RAST-01 §7][04 R-UNIT-06 §3].
@@ -290,7 +290,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 			vp.Cargo = append(vp.Cargo, u.Attachment.Cargo...)
 			// The hull extents and the underwater-exemption bit of the
 			// four-point visibility gate [03 §3.2] steps 3 and 5.
-			publishHullGateInputs(vp, u, s)
+			publishHullGateInputs(vp, u)
 			if vm := u.GetScript(); vm != nil {
 				// CacheRevision is copied at the publication boundary; consuming or
 				// clearing it here would make presentation cadence authoritative.
@@ -690,27 +690,15 @@ func (s *Session) publishSnapshot(tick uint32) {
 	// "MarkerMode" name predates the trace that identified the byte.
 	published.Radar.MarkerMode = s.DebugDisplayMode
 	published.Radar.MappingLOS = uint8(s.Vis.Mode()) & 3
-	var sensorInputs []visibility.SensorInput
-	if s.Vis != nil {
-		// The snapshot is read for this publication only -- the index below
-		// and the per-unit lookup -- so it lands in retained storage rather
-		// than a fresh copy each tick [I6].
-		s.sensorInputScratch = s.Vis.AppendSensorInputs(s.sensorInputScratch[:0])
-		sensorInputs = s.sensorInputScratch
-	}
 	if s.Units != nil {
-		s.buildRadarSensorIndex(sensorInputs)
 		s.radarUnitScratch = s.Units.AppendLive(s.radarUnitScratch[:0]) // pool slot ascending (I1)
 		for _, u := range s.radarUnitScratch {
 			if u == nil || !u.Alive {
 				continue
 			}
-			status := uint32(0)
+			status := u.Flags
 			active := u.Activated
 			onOffable := false
-			if s.visStatus != nil {
-				status = s.visStatus[int(u.Handle)]
-			}
 			// The contact's cloak input is the INSTANCE cloaked bit and
 			// nothing else. `init_cloaked` is consumed once, by the
 			// constructor, and no longer feeds this predicate
@@ -727,18 +715,10 @@ func (s *Session) publishSnapshot(tick uint32) {
 				stealth = u.Def.Stealth
 				onOffable = u.Def.OnOffable
 			}
-			// The production sensor pass is the only producer of sensor inputs
-			// [visibility.Service.SensorInputs] and always stamps a nonzero ID
-			// with the pool handle, so the ID-bearing lookup is the sole path;
-			// the ordinal fallback for hypothetical zero-ID producers has been
-			// retired (R05).
-			if si := s.radarSensorInputFor(sensorInputs, uint16(u.Handle)); si != nil {
-				status = si.Status
-				hidden = si.Hidden
-				stealth = si.Stealth
-				active = si.Active
-				onOffable = si.OnOffable
-			}
+			// Sensor status remains latched between due passes, but activation,
+			// cloak and definition inputs are current unit state at publication
+			// [03 R-VIS-01 §4][03 §3.9]. A detached sensor snapshot may still
+			// describe a prior occupant of this pool slot.
 			selected := u.Owner == s.LocalOwner && u.Flags&0x10 != 0
 			ownerKnown := u.Owner < 10
 			palette, paletteKnown := radarOwnerPalette(s, u.Owner, ownerKnown)
@@ -1216,57 +1196,6 @@ func radarFeatureVisible(s *Session, f frame.FeatureView) bool {
 	return s.Vis != nil && s.Vis.VisiblePoint(visibility.PlayerID(s.ViewingOwner), f.X, f.Y, f.Z)
 }
 
-// buildRadarSensorIndex (re)builds the session-retained index that resolves a
-// live unit's sensor input by pool handle in O(1), replacing the whole-slice
-// scan this used to do once per live unit per tick [03 §3.9] (review finding
-// R05). The single production sensor pass (visibility.Service.SensorInputs,
-// fed by the sweep at internal/visibility sensors.go) always stamps a
-// nonzero ID with the live unit's pool handle, so a handle-keyed index is a
-// complete replacement.
-//
-// The index itself (radarSensorIndex/radarSensorIndexGen) is never cleared;
-// each call bumps the generation stamp radarSensorIndexAt and only the
-// entries this call actually writes compare equal to it, so a stale handle
-// from a unit that died since the index last held its slot reads back as
-// "not found" without a per-tick clear pass. Use radarSensorInputFor to read
-// it back; this is a plain method (not a closure-returning one) so building
-// the index allocates nothing beyond the one-time slice growth.
-func (s *Session) buildRadarSensorIndex(inputs []visibility.SensorInput) {
-	if s == nil || s.Units == nil {
-		return
-	}
-	// Handle 0 is the pool's null sentinel [01 §6.1]; live handles run
-	// 1..Capacity(), so the index needs Capacity()+1 slots.
-	need := s.Units.Capacity() + 1
-	if cap(s.radarSensorIndex) < need {
-		s.radarSensorIndex = make([]int32, need)
-		s.radarSensorIndexGen = make([]uint32, need)
-	} else {
-		s.radarSensorIndex = s.radarSensorIndex[:need]
-		s.radarSensorIndexGen = s.radarSensorIndexGen[:need]
-	}
-	s.radarSensorIndexAt++
-	gen := s.radarSensorIndexAt
-	idx := s.radarSensorIndex
-	stamps := s.radarSensorIndexGen
-	for i := range inputs {
-		id := inputs[i].ID
-		if int(id) < len(idx) {
-			idx[id] = int32(i)
-			stamps[id] = gen
-		}
-	}
-}
-
-// radarSensorInputFor reads back the index buildRadarSensorIndex built for
-// this same publication, keyed by pool handle [03 §3.9] (R05).
-func (s *Session) radarSensorInputFor(inputs []visibility.SensorInput, id uint16) *visibility.SensorInput {
-	if int(id) >= len(s.radarSensorIndex) || s.radarSensorIndexGen[id] != s.radarSensorIndexAt {
-		return nil
-	}
-	return &inputs[s.radarSensorIndex[id]]
-}
-
 // publishVisibilityView copies the viewing player's visibility masks into the
 // immutable presentation frame. Radar has no authoritative mask source in the
 // visibility service.
@@ -1384,7 +1313,7 @@ func (s *Session) SetEffectTimingResolver(resolver render.TimingResolver) {
 // Presentation cannot derive the vertical word: it comes from the 3DO, not
 // from the FBI record, and reading either from the far side of the frame
 // boundary is what [I6] forbids.
-func publishHullGateInputs(vp *frame.UnitView, u *units.Unit, s *Session) {
+func publishHullGateInputs(vp *frame.UnitView, u *units.Unit) {
 	if vp == nil || u == nil {
 		return
 	}
@@ -1393,9 +1322,7 @@ func publishHullGateInputs(vp *frame.UnitView, u *units.Unit, s *Session) {
 		vp.HullZExtent = numeric.Fixed(int64(u.Def.FootprintZ) << 20)
 		vp.HullYExtent = numeric.Fixed(u.Def.ModelTopFixed)
 	}
-	if s != nil && s.visStatus != nil {
-		vp.UnderwaterExempt = s.visStatus[int(u.Handle)]&visibility.SonarBit != 0
-	}
+	vp.UnderwaterExempt = u.Flags&visibility.SonarBit != 0
 }
 
 // publishedSeaLevel is the map header's sea-level byte in 16.16 world units,

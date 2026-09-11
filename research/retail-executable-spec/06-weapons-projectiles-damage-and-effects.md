@@ -758,9 +758,11 @@ callback: an explicit script return delivers its value, and the dispatcher
 delivers zero when the script name is absent, the script identity is invalid,
 or all eight COB thread slots are occupied; signal termination and abnormal
 termination do not call the receiver. Before a new receiver-bearing dispatch,
-the receiver is zeroed. A zero delivery — explicit return or dispatcher — keeps
-that new request without permission; an explicit nonzero delivery grants
-permission. A zero delivery does not clear the Aim-request latch. Revisiting a
+the receiver is zeroed. A zero delivery — explicit return or dispatcher —
+leaves its current value unchanged; an explicit nonzero delivery writes `1`
+and grants permission. All outstanding callbacks share the slot receiver, so
+a zero delivery cannot erase another callback's grant [04 R-CB-01 §6]. A zero
+delivery does not clear the Aim-request latch. Revisiting a
 held request does not reset its receiver or synthesize a delivery; its actual
 deferred completion may still arrive. No timeout is present, the absence of a
 timeout writer being established by a bounded search over the weapon-slot code.
@@ -1106,11 +1108,11 @@ positions (the unit position cancels; only the rotated piece offsets
 differ), scaled by the double constant 1.25 and truncated toward zero. It is
 not a length, not a square, and involves neither X nor height. When the script
 answers neither query the two points coincide and the stored value is zero.
-The word has **no other writer** in the decompiled set (bounded over every
-slot-relative access in the weapon region; the fire-time turret executor and
-the ballistic solver do not store it; save load restores the record
-wholesale), so this creation-time value is what the ballistic creator divides
-for the whole life of the unit (§6.4).
+Save restoration copies the saved distance word back verbatim
+([08 R-SAVE-WEAPON-01]). The word has **no aim-time or fire-time writer**
+(bounded over every slot-relative access in the weapon region; the fire-time
+turret executor and the ballistic solver do not store it). The ballistic
+creator divides the initialized or restored value (§6.4).
 
 **Established (direct-static) — the frame, the order, and the sign.** The delta
 is taken at the spawn heading, not at heading zero. The three unit creators are
@@ -1128,8 +1130,8 @@ back, in this order:
 
 So the piece model exists and the spawn heading is already in force when the
 two piece queries run: **the delta is taken at the spawn heading**, never at
-heading zero. Nothing rewrites the word afterwards — the initializer has
-exactly three call sites, all of them step 3 of that sequence, and no
+heading zero. Apart from save restoration, the word is not rewritten: the
+initializer has exactly three call sites, all of them step 3 of that sequence, and no
 heading-change, build-completion or weapon-reinstall path re-enters it (the
 scaling constant 1.25 has exactly one reference in the image, and it is this
 routine).
@@ -2353,15 +2355,16 @@ velocityZ = -cos(yaw, H)
 where `gravity` is the map's per-tick gravity global in 16.16.
 
 **Established fact:** `slotDistance` is not a flight time to the current
-target. The slot's distance word is written **once**, by the slot initializer
+target. The slot initializer writes the distance word
 at unit construction, as `trunc(1.25 × (queryPoint.z − aimFromPoint.z))` — the
 Z-axis difference of the slot's `Query*` and `AimFrom*` world points at that
 moment ([R-WPN-05 §3]) — and no aim-time or fire-time path rewrites it
 (bounded: no other writer of the word exists among the slot-relative accesses
 in the weapon region; the turret executor solves into locals and the solver is
-pure). `T0` is therefore a per-unit constant,
-`(uint32)initialValue / weaponvelocity`, and because the divide is unsigned a
-negative initial value (muzzle behind the aim-from piece along world Z at
+pure). Save restoration replaces it with the saved word
+([08 R-SAVE-WEAPON-01]); ordinary aiming and firing leave that value intact.
+`T0` is therefore `(uint32)slotDistance / weaponvelocity`. Because the divide
+is unsigned, a negative initial value (muzzle behind the aim-from piece along world Z at
 initialization) yields a very large `T0`.
 
 **Established (direct-static):** stock units do not reach the negative case.

@@ -51,7 +51,6 @@ func TestVTOLLandIfCanDescendsAndGrounds(t *testing.T) {
 	// Clear the move record and hand the unit a landing order at the head.
 	q := orderQueueOf(t, u)
 	q.SetPrimary(nil)
-	sys.airOrders = nil
 	pushAirOrder(t, u, "VTOL_LandIfCan", 0, 0)
 
 	for tick := uint32(61); tick <= 400; tick++ {
@@ -268,7 +267,6 @@ func flyThenLand(t *testing.T, sys *System, w *units.World, u *units.Unit) bool 
 	}
 	q := orderQueueOf(t, u)
 	q.SetPrimary(nil)
-	sys.airOrders = nil
 	pushAirOrder(t, u, "VTOL_LandIfCan", 0, 0)
 	for i := 0; i < 900; i++ {
 		tick++

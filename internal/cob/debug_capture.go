@@ -30,11 +30,13 @@ type DebugState struct {
 	Dirty                           bool
 }
 type DebugAxis struct {
-	MoveTarget, MoveSpeed                   int32
-	MoveBusy                                bool
-	TurnTarget                              uint16
-	TurnSpeed                               int32
-	TurnBusy                                bool
+	MoveTarget, MoveSpeed int32
+	MoveBusy              bool
+	TurnTarget            uint16
+	TurnSpeed             int32
+	TurnBusy              bool
+	// SpinSpeed is the same current rotation speed as TurnSpeed; SpinActive
+	// distinguishes the mode. Keep both debug labels for existing trace readers.
 	SpinSpeed, SpinTarget, SpinAcceleration int32
 	SpinActive                              bool
 }
@@ -60,7 +62,7 @@ func (v *VM) DebugSnapshot() *DebugState {
 	for _, p := range v.anims {
 		var a [3]DebugAxis
 		for i, x := range p.axes {
-			a[i] = DebugAxis{x.moveTarget, x.moveSpeed, x.moveBusy, x.turnTarget, x.turnSpeed, x.turnBusy, x.spinSpeed, x.spinTarget, x.spinAccel, x.spinActive}
+			a[i] = DebugAxis{x.moveTarget, x.moveSpeed, x.moveBusy, x.turnTarget, x.turnSpeed, x.turnBusy, x.turnSpeed, x.spinTarget, x.spinAccel, x.spinActive}
 		}
 		d.Animations = append(d.Animations, a)
 	}

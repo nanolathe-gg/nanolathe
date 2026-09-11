@@ -304,7 +304,7 @@ func TestSensorPassUsesFreshLocalCoverage(t *testing.T) {
 	s.Units.Unit(observer).Z = cell(384)
 	s.stepAuthoritativePhases(1)
 
-	if got := s.visStatus[int(enemy)]; got&visibility.SeenBit == 0 {
+	if got := s.Units.Unit(enemy).Flags; got&visibility.SeenBit == 0 {
 		t.Fatalf("enemy SeenBit = %#x after the step, want set: the sensor pass must run after the local player's stamp sweep within the same tick [R-SENSOR-01]", got)
 	}
 }

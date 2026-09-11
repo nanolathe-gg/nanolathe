@@ -61,7 +61,7 @@ func (b *battleSession) closeBattleMenu() {
 // handleBattleMenuInput routes each open battle modal to its input owner.
 // Preferences uses the shared attribute-driven widget service [07 R-WGT-01 §3].
 func (b *battleSession) handleBattleMenuInput(in *input.State, cl *client.Client) {
-	if b != nil && b.shell != nil && b.shell.saveLoadPanelActive() {
+	if b != nil && b.shell != nil && (b.shell.saveLoadPanelActive() || b.shell.frontend.Panels.Modal() != nil) {
 		// The dialog is a child window of the frontend panel stack, so the
 		// frontend's own pump owns it while it is up [07 R-FE-01 §8].
 		b.shell.menuInput(cl)
@@ -158,11 +158,6 @@ func (b *battleSession) activateBattleMenuButton(name string, cl *client.Client)
 
 // openBattleSaveLoadScreen opens the one LOADGAME.GUI surface over the battle,
 // in the direction the ARMOPT button selected [07 R-FE-01 §7] [07 R-FE-01 §8].
-//
-// Presentation note: the shell paints frontend panels only while it is not in
-// a battle, so this dialog is currently driven but not painted over the battle
-// surface. The two lines that paint it belong in cmd/nanolathe/battle_hud.go's
-// drawBattleMenu, which this unit does not own.
 func (b *battleSession) openBattleSaveLoadScreen(mode saveLoadMode) {
 	if b == nil || b.shell == nil {
 		return

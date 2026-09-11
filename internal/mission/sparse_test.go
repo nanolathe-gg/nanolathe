@@ -19,7 +19,7 @@ func TestSparseVsDenseDivergence(t *testing.T) {
 	// Instead simulate via limiting world capacity 2 and 3 placements.
 	cat := &content.Catalog{
 		Units: map[string]*content.UnitDef{
-			"armcom": {UnitName: "armcom", MaxDamage: 100, CanMove: true, CanAttack: true},
+			"armcom": {UnitName: "armcom", MaxDamage: 100, CanMove: true, CanAttack: true, CanGuard: true},
 			"armck":  {UnitName: "armck", MaxDamage: 100},
 		},
 	}

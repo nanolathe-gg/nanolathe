@@ -100,7 +100,7 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.StringVar(&opts.Shot, "shot", "", "compose one battle frame to this PNG and exit, opening no window")
 	set.IntVar(&opts.ShotTicks, "shot-ticks", 90, "authoritative ticks to advance before --shot captures the frame")
 	set.StringVar(&opts.Remaster, "remaster", "", "remastered-art override: a loose directory or .hpi mounted above every retail archive")
-	set.Func("zoom", "presentation view scale: any factor in 0.0625..2 with --renderer=modern, or 1, 1.5 or 2 with classic; the window defaults to 1.5 above 800x600 and 1 otherwise, captures and the benchmark to 1", func(text string) error {
+	set.Func("zoom", "presentation view scale: any factor in 0.0625..2 with --renderer=modern, or 1, 1.5 or 2 with classic; modern defaults to 1; classic windows default to 1.5 above 800x600 and 1 otherwise; captures and the benchmark default to 1", func(text string) error {
 		// The free range is parsed here and the executor's own restriction is
 		// applied after Parse, because --renderer may follow --zoom on the
 		// command line (DESIGN_GPU_RENDERER §16.8).

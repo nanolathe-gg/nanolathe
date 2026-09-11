@@ -56,7 +56,19 @@ The boundary runs at five places:
   marker of `[04 R-AIR-01 §4]` — and the pending bits an install or release
   raises on the record that owned the previous payload `[04 R-ORD-01 §0]`
   `[04 R-ORD-01 §1]`. It does not own the queue, the descriptor table or the
-  pump's result codes. The queue selects the steering target; it never gates the
+  pump's result codes. `System.recordGoals` retains each record's object in a
+  per-unit slice independently of the controller binding. Arrival and rebind
+  drop only the binding; explicit record release unbinds the controller before
+  destroying its own object, while record destruction unbinds only if its
+  object is currently bound. `ForgetUnit` destroys all retained objects in
+  insertion order. Mover-only restore preserves live record ownership; full
+  session restore builds a new system, reconstructs all saved record objects,
+  and binds only the primary head. Save projection reads these retained objects
+  through `RetailOrderPayload`, including displaced objects; a steering-only
+  binding does not manufacture a saved goal. Final target removal clears weak
+  links on every retained air marker without adding an order event
+  `[04 R-ORD-01 §9]` `[04 R-AIR-01 §4]` `[08 R-SAVE-02 §8, §10, §11]`.
+  The queue selects the steering target; it never gates the
   mover tick, which runs for every live unit that has a mover, under the owner's
   control byte alone `[04 R-MOV-03 §1]`.
 * **Terrain and the plot cell belong to `internal/world`.** Classification reads
@@ -305,9 +317,17 @@ bypass and the goal update's refusal to follow a target linked to it
 `[04 R-AIR-01 §5]`. `SetMoverMode` is the one committed-mode setter, and the
 mode is the occupancy plane rather than a moving flag `[04 R-AIR-01 §3]`. The
 executors are the legs `VTOL_Move`, `VTOL_LandIfCan`, `VTOL_Standby`,
-`VTOL_AirBuild` and `VTOL_Landing`, each building markers and reading the phase
+`VTOL_MobileBuild`, `VTOL_HelpBuild` and `VTOL_Landing`, each building markers and reading the phase
 tables of `[04 R-AIR-01 §6]` and `[04 R-AIR-01 §7]`; `QueryLandingPad` is the
 synchronous four-output pad query with its free-pad predicate `[04 §10.2]`.
+All air executors retain their phase on the order record. Move and standby
+run through the ordinary pump; standby also keeps its integer post there.
+Construction calls `VisitAirBuildApproach` from its work window and applies the
+returned pump result to the same record. Both air build bodies call
+`VisitAirBuildWork` before their work quantum, including a finishing visit.
+Movement holds no parallel order phase, so restoring a save or exposing a
+suspended record preserves its marker and progress `[08 R-SAVE-ORDER-01]`
+`[04 R-ORD-02 §2]` `[04 §10.3]`.
 `VTOL_Landing` runs directly through the order pump: its record carries the
 phase, reused bearing/pad word, and the descent's 15-tick deadline. Target
 removal reaches the entry guard even during descent; arrival and deadline
@@ -320,7 +340,15 @@ carrier before relinking; only the COB adapter rejects another carrier's cargo
 and low-bit scratch belong to the order record, so a temporary `Paralyze` head
 preserves the waiting descent. The descent wakes `EndTransport` before installing
 its marker and lowering activation; the search rotates its fallback bearing on
-any delivered movement outcome `[04 R-AIR-01 §6]` `[04 §2.4]`.
+any delivered movement outcome `[04 R-AIR-01 §6]` `[04 §2.4]`. Point-marker
+arrival delivers arrival and release together through the pump. A successor
+ends terrain landing at the next admitted handler visit before touchdown or
+recovery, so queued work does not inherit an unnecessary grounded-mode write. The
+ordinary-producer census closes standalone failure/release reachability as a
+bounded negative: ground route failure has no flight producer, and recovered
+preemption paths either preserve the landing binding or remove the landing
+record before another movement record installs. The handler's Established
+non-arrival branches remain implemented `[04 R-AIR-01 §6]`.
 Cruise altitude is `max(sea level, terrain height at the target) + offset`,
 scaled to 16.16 and capped at `0x1FF0000`, with no lower clamp `[04 §10.1]`.
 
@@ -610,7 +638,7 @@ evicted the mover's single goal slot `[04 §7.2]` `[04 §7.4]` `[04 §3.5]`.
 | `RepairUnit` phase 1, `Capture` phase 0 | rectangle perimeter from the target's committed anchor cell and footprint | grown by the mover's own footprint `[04 R-PATH-01 §12]` |
 | `Reclaim` phase 0, `Resurrect` phase 0 | rectangle perimeter from the **feature's** origin cell and size | the anchor already is the origin: a feature's stamp writes its index on the anchor and the fringe sentinel across the rest `[04 R-ORD-01 §5]` `[05 R-ECO-02 §2]` `[05 R-FEAT-01 §3]` |
 | `MobileBuild` approach | rectangle perimeter at the product's anchor cell and footprint | no candidate generator, no range filter and no sort: the candidate set is the search's own border enumeration and the selection is the border cell it closes first `[04 R-PATH-01 §12]` `[04 R-PATH-01 §13]` `[04 R-MOV-03 §9]` |
-| `VTOL_MobileBuild` approach (the air executor's phase 1) | air point marker at the goal snapped onto the product's footprint | horizontal arrival radius `builddistance`, strict; the executor sets the record's gate to `0xE0` with the install, and the construction service's approach phase advances into placement on that marker's outcome — not on the takeoff preamble's climb marker, which the same gate also delivers `[04 R-ORD-02 §2]` `[04 R-AIR-01 §6]` |
+| `VTOL_MobileBuild` approach (the air executor's phase 1) | air point marker at the goal snapped onto the product's footprint | horizontal arrival radius `builddistance`, strict; construction dispatches the movement leg from record phase 1, which installs the marker and gate `0xE0`; phase 2 consumes its outcome before placement `[04 R-ORD-02 §2]` `[04 R-AIR-01 §6]` |
 | `Park` (a no-rally product's terminal record) | rectangle perimeter on the rectangle the handler installed, centred on the product's own committed cell | `[04 R-FAC-02 §4]` `[04 §7.2]` |
 
 Two surfaces are deliberately **unwired**, and each is unwired because no
@@ -631,11 +659,6 @@ this wiring can be asserted without inventing a public kind on `Goal`.
 
 ### 3.6 Not implemented
 
-* **Ground-landing failure reachability remains unresolved.** Both landing
-  families now run through the pump and receive its delivered movement bits.
-  Which ordinary producer can deliver a non-arrival movement outcome to a live
-  waiting `VTOL_LandIfCan` remains **Unknown**; its Established failure arms
-  are implemented without a fabricated producer `[04 R-AIR-01 §6]`.
 * **A saved route restores no goal.** The mover save box carries the mover's
   live words; the route, the follower state and the proposal are derived and are
   cleared on restore, so a restored mover re-arms an ordinary request rather

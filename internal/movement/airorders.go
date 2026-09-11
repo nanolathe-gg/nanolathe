@@ -422,163 +422,22 @@ func (s *System) releaseAirGoal(u *units.Unit) {
 	if s == nil || u == nil {
 		return
 	}
-	fl := handleRow(s.Flights, u.Handle)
-	if fl == nil || fl.Command == nil || fl.Command.Payload == nil {
+	if owner := s.airPayloadOwner(u.Handle); owner != nil {
+		s.ReleaseGoalPayload(owner)
 		return
 	}
-	if owner := fl.Command.payloadOwner; owner != nil {
-		owner.Satisfied |= airGoalReleasedBit
-	}
-	fl.Command.Payload.Release()
-	fl.Command.Payload = nil
-	fl.Command.payloadOwner = nil
+	s.detachControllerGoal(u.Handle)
 }
 
 // --- the air executors ---
 
-// airOrderState retains the state of air executors still driven by the mover
-// tick. Pump-driven legs keep their phase and scratch values on orders.Node,
-// so a temporary primary head cannot reset their progress [04 §3.3].
-type airOrderState struct {
-	order   *orders.Node
-	phase   uint8
-	waiting bool   // a marker with gate 0xE0 is outstanding
-	arrived bool   // the producer reported arrival last tick
-	bearing uint16 // the search/loiter bearing scratch word
-	goal    Vec3   // the record's cached goal
-	post    Vec3   // VTOL_Standby's recorded post
-	done    bool   // the executor reported completion
-}
-
-// airStateFor returns the executor state for the unit's current head record,
-// resetting it when the head changes.
-func (s *System) airStateFor(u *units.Unit, head *orders.Node) *airOrderState {
-	st := handleRow(s.airOrders, u.Handle)
-	if st == nil || st.order != head {
-		st = &airOrderState{order: head}
-		setHandleRow(&s.airOrders, u.Handle, st)
-	}
-	return st
-}
-
-// simRNG is the simulation stream the air executors draw from. It is the
-// stream the unit's own order queue was bound with, so a session that seeds one
-// stream per battle draws in one deterministic order [I4].
+// simRNG returns the session stream bound to the owning order queue [I4].
 func (s *System) simRNG(u *units.Unit) *rng.Simulation {
 	q := orders.QueueForUnit(u)
-	if q == nil {
+	if q == nil || q.Binding() == nil {
 		return nil
 	}
-	b := q.Binding()
-	if b == nil {
-		return nil
-	}
-	return b.SimRNG
-}
-
-// runAirExecutor dispatches the head record's air executor. It runs before the
-// per-tick command producer, which is the position [04 R-AIR-01 §1] gives the
-// order layer's work relative to the mover tick.
-func (s *System) runAirExecutor(u *units.Unit, head *orders.Node, st *airOrderState) {
-	if head == nil || st.done {
-		return
-	}
-	// A leg that armed gate 0xE0 holds the record until its marker reports
-	// arrival; that is the gate, not a poll [04 R-AIR-01 §6].
-	if st.waiting {
-		if !st.arrived {
-			return
-		}
-		st.waiting = false
-		st.arrived = false
-	}
-	switch orders.DescriptorFor(head.ID).Name {
-	case "VTOL_Move":
-		s.execVTOLMove(u, head, st)
-	case "VTOL_Standby":
-		// The record's deadline is this executor's own wait, and it must be
-		// honoured here. `VTOL_Standby` phase 2's loaded arm arms
-		// `tick + 30 + random below 15` and retail does not revisit the record
-		// before it: its idle circle is "a fresh uniformly random bearing and
-		// an 8-to-39 world-unit radius about a fixed post, redrawn every 30 to
-		// 44 ticks" [04 R-AIR-01 §7]. Every other row reaches its executor
-		// through the order pump, which applies that gate before it dispatches;
-		// this row is registered as externally driven (airRowsDrivenByMoverTick
-		// below), so the pump writes none of its words and the mover tick is the
-		// only place the wait can be applied.
-		//
-		// Without it phase 1 (acquire, which fails) and phase 2 (three draws, a
-		// fresh point marker) ran on alternate ticks forever: a loaded transport
-		// was yanked to a new random bearing every SECOND tick, which swings the
-		// command heading, rocks the bank word and — the loiter point moves, so
-		// the cruise altitude is sampled over different terrain — sawtooths the
-		// committed height by a whole world unit per tick. That was the play-test
-		// report of a hovering Atlas jiggling. It also drew three simulation
-		// randoms every two ticks instead of every 30 to 44 [01 §8].
-		//
-		// `VTOL_Standby` is the only mover-tick-driven row that writes a
-		// deadline, so the gate is stated on its case rather than at the top of
-		// this dispatch, where it would silently cover rows whose wait is the
-		// arrival gate above instead.
-		if head.Deadline != -1 && s.tick < uint32(head.Deadline) {
-			return
-		}
-		s.execVTOLStandby(u, head, st)
-	case "VTOL_MobileBuild", "VTOL_HelpBuild":
-		s.execVTOLAirBuild(u, head, st)
-	default:
-		// Every other head leaves the command block alone. With a null payload
-		// the producer does nothing at all and the aircraft continues on its
-		// last command [04 R-AIR-01 §1].
-		//
-		// The marker retired here said the two `VTOL_LandIfCan` producers were
-		// unreachable, because both are order-record insertions in a package
-		// this file does not own and `Stop` "currently has no handler at all".
-		// Both halves are false. `Stop`'s row is implemented in internal/orders
-		// — its handler spawns `VTOL_LandIfCan` at the head with no target, the
-		// unit's own position and zeroed parameters, for an airborne `canfly`
-		// unit [04 R-ORD-01 §2] — and `VTOL_Standby` phase 2's idle unloaded
-		// arm spawns the same record from this file through airSpawnAtHead
-		// [04 R-AIR-01 §7]. Both producers reach the executors above.
-	}
-}
-
-// execVTOLMove is `VTOL_Move` [04 R-ORD-02 §2], the executor a factory-built
-// aircraft also reaches, because `Park` re-identifies itself as `VTOL_Move`
-// with a restart for a `canfly` product [04 R-FAC-02 §4][04 R-AIR-02].
-//
-// Phase 0: a live mover and `canfly`; the takeoff preamble; advance. Phase 1:
-// snap the record's goal X and Z onto the unit's own footprint and build a
-// point marker there with no altitude or radius setter — arrival is the default
-// hypot <= 0.5 world units at the terrain-derived Y; install; gate 0xE0;
-// advance. Phase 2: the arrival completes the order; the pump's move handler
-// sees the producer's 0x20 and unlinks the record.
-func (s *System) execVTOLMove(u *units.Unit, head *orders.Node, st *airOrderState) {
-	switch st.phase {
-	case 0:
-		if handleRow(s.Flights, u.Handle) == nil || u.Def == nil || !u.Def.CanFly {
-			st.done = true
-			return
-		}
-		st.waiting = s.takeoffPreamble(u, head)
-		st.phase = 1
-	case 1:
-		goalX, goalZ := head.GoalX, head.GoalZ
-		if gx, gz, ok := s.moveGoalFor(u.Handle, head); ok {
-			goalX, goalZ = gx, gz
-		}
-		fx, fz := s.pathFootprint(u)
-		goalX, goalZ = snapToOwnFootprint(goalX, goalZ, fx, fz)
-		m := s.newPointMarker(u, Vec3{X: goalX, Y: head.GoalY, Z: goalZ})
-		s.installAirGoal(u, head, m)
-		head.DynamicGate = airLegGate
-		st.waiting = true
-		st.phase = 2
-	default:
-		// Arrival is the record's business: the producer has already raised the
-		// satisfied bit, and the move handler completes on it.
-		st.done = true
-	}
+	return q.Binding().SimRNG
 }
 
 // legVTOLLandIfCan is `VTOL_LandIfCan` [04 R-AIR-01 §6], the three-phase
@@ -586,10 +445,19 @@ func (s *System) execVTOLMove(u *units.Unit, head *orders.Node, st *airOrderStat
 // on a pad. The pump owns phase, scratch and gate, preserving the descent
 // when a temporary Paralyze record takes the head [04 §2.4].
 func (s *System) legVTOLLandIfCan(u *units.Unit, head *orders.Node, satisfied uint32, tick uint32) orders.Code {
-	// TODO(question): which ordinary producer can deliver a non-arrival
-	// movement outcome to this waiting record? The handler arms are Established;
-	// trace the producer through the controller and pump [04 R-AIR-01 §6].
-	// Entry: a satisfied goal-release bit 0x40 completes; the off-map recovery
+	// A successor ends landing before either outcomes or recovery are handled
+	// [04 R-AIR-01 §6]. The pump must first admit this visit through its gate.
+	if q := orders.QueueOfUnit(u); q != nil {
+		chain := q.Primary()
+		for i, n := range chain {
+			if n == head && i+1 < len(chain) {
+				return 5
+			}
+		}
+	}
+	// The recovered ordinary producers supply arrival plus release together;
+	// the non-arrival arms remain the handler's contract [04 R-AIR-01 §6].
+	// Entry: a satisfied route-failure bit 0x40 completes; the off-map recovery
 	// leg of [04 R-AIR-01 §5] pre-empts everything else.
 	if satisfied&0x40 != 0 {
 		return 5
@@ -689,92 +557,64 @@ func (s *System) legVTOLLandIfCan(u *units.Unit, head *orders.Node, satisfied ui
 	}
 }
 
-// execVTOLStandby is `VTOL_Standby` [04 R-AIR-01 §7], the decision between
-// parking and circling.
-func (s *System) execVTOLStandby(u *units.Unit, head *orders.Node, st *airOrderState) {
-	sim := s.simRNG(u)
-	switch st.phase {
+// legVTOLStandby keeps its phase and integer post on the order record, so
+// both survive load and temporary primary-head replacement [04 R-AIR-01 §7]
+// [08 R-SAVE-ORDER-01]. The pump owns advance, wait and completion; no private
+// executor phase or cached post is needed.
+func (s *System) legVTOLStandby(u *units.Unit, n *orders.Node, tick uint32) orders.Code {
+	switch n.Phase {
 	case 0:
-		if handleRow(s.Flights, u.Handle) == nil || u.Def == nil || !u.Def.CanFly {
-			st.done = true
-			return
+		if !s.airMoverReady(u) {
+			return 7
 		}
-		// Releasing the manual-target latch on all three weapon slots is the
-		// weapon layer's, not this package's; the record's own writes follow.
-		head.DynamicGate |= 0x10000
-		head.Deadline = int32(s.tick + 1)
-		st.post = Vec3{X: u.X, Y: u.Y, Z: u.Z}
-		st.phase = 1
+		if weapons := orderWeapons(u); weapons != nil && weapons.ReleaseSlot != nil {
+			for slot := 0; slot < units.NumSlots; slot++ {
+				weapons.ReleaseSlot(u, slot)
+			}
+		}
+		n.DynamicGate |= 0x10000
+		airDeadline(n, tick, 1)
+		n.GuardX, n.GuardY = int16(u.X>>16), int16(u.Z>>16)
+		return 1
 	case 1:
-		// Phase 1 "asks the ordinary autonomous acquisition for a target and,
-		// if one is found and accepted, clears the gate word, resets the phase
-		// to zero and returns 3 (the pump's `30 + random below 15` wait)"
-		// [04 R-AIR-01 §7].
-		//
-		// This stood as a placeholder that always took the no-target arm,
-		// because the acquisition pair lives in internal/orders and had no
-		// exported seam. The cost was total: every stock aircraft authors
-		// `defaultmissiontype = VTOL_Standby`, so no aircraft in the game could
-		// ever engage anything on its own. An idle fighter or gunship fell
-		// through to phase 2, which for an unloaded aircraft spawns
-		// `VTOL_LandIfCan` — so a plane parked itself next to an enemy and sat
-		// there. `orders.AutonomousAcquire` is that seam; its own stance gates
-		// still refuse a hold-fire or hold-position definition.
-		//
-		// The wait draw is taken here rather than in the pump for the same
-		// reason phase 2's three draws are: this record's queue registration
-		// reports `(0, false)` (orders.OwnedHandler, queue_handlers.go), so no
-		// pump result code is ever applied to it and the executor arms its own
-		// deadline [04 R-AIR-01 §1].
 		if orders.AutonomousAcquire(u) {
-			head.DynamicGate = 0
-			if sim != nil {
-				head.Deadline = int32(s.tick + 30 + sim.Uint32n(15))
-			}
-			st.phase = 0
-			return
+			n.DynamicGate = 0
+			n.Phase = 0
+			return 3
 		}
-		st.phase = 2
+		return 1
 	case 2:
-		if u.Def == nil || !u.Def.CanFly || u.Move.Mode&0x3 != 2 {
-			head.DynamicGate |= 0x10000
-			if sim != nil {
-				head.Deadline = int32(s.tick + 30 + sim.Uint32n(30))
+		sim := s.simRNG(u)
+		if u.Def == nil || !u.Def.CanFly || u.Move.Mode&3 != 2 {
+			if sim == nil {
+				return airLegUnbound(n, tick)
 			}
-			st.phase = 1
-			return
+			n.DynamicGate |= 0x10000
+			airDeadline(n, tick, 30+sim.Uint32n(30))
+			n.Phase = 1
+			return 2
 		}
 		if len(u.Attachment.Cargo) > 0 {
 			if sim == nil {
-				return
+				return airLegUnbound(n, tick)
 			}
-			// Three simulation draws per visit, in the order bearing, radius,
-			// delay. This is the whole of retail's aircraft "circling": a fresh
-			// uniformly random bearing and an 8-to-39 world-unit radius about a
-			// fixed post, redrawn every 30 to 44 ticks [04 R-AIR-01 §7].
+			// The three draws are bearing, radius, delay. The signed integer
+			// post is widened before subtracting the fixed-point displacement
+			// [04 R-AIR-01 §7][08 R-SAVE-ORDER-01].
 			b := uint16(sim.Uint32n(0x10000))
 			radius := numeric.Fixed(int64(8+sim.Uint32n(0x20)) << 16)
-			delay := sim.Uint32n(15)
-			// Along the drawn bearing, so the pair is subtracted
-			// [04 R-AIR-01 §7].
 			ox, oz := offsetAtBearing(b, radius)
-			m := s.newPointMarker(u, Vec3{X: st.post.X - ox, Y: st.post.Y, Z: st.post.Z - oz})
-			if u.Def != nil {
-				m.setAltitudeOffset(int16(u.Def.CruiseAlt))
-			}
-			s.installAirGoal(u, head, m)
-			head.Deadline = int32(s.tick + 30 + delay)
-			st.phase = 1
-			return
+			m := s.newPointMarker(u, Vec3{X: numeric.Fixed(int64(n.GuardX)<<16) - ox, Z: numeric.Fixed(int64(n.GuardY)<<16) - oz})
+			m.setAltitudeOffset(int16(u.Def.CruiseAlt))
+			s.installAirGoal(u, n, m)
+			airDeadline(n, tick, 30+sim.Uint32n(15))
+			n.Phase = 1
+			return 2
 		}
-		// The no-cargo arm allocates a `VTOL_LandIfCan` record carrying this
-		// record's cached goal and pushes it on the unit, then completes: an
-		// idle unloaded aircraft always tries to land, and only a loaded one
-		// loiters [04 R-AIR-01 §7].
-		airSpawnAtHead(u, "VTOL_LandIfCan", 0, st.goal, s.tick)
-		st.done = true
+		airSpawnAtHead(u, "VTOL_LandIfCan", 0, Vec3{X: n.GoalX, Y: n.GoalY, Z: n.GoalZ}, tick)
+		return 5
 	default:
-		st.done = true
+		return 7
 	}
 }
 
@@ -794,111 +634,41 @@ const (
 	airOrbitStep = uint16(0xDB6E)
 )
 
-// execVTOLAirBuild is the movement half of the two air build orders,
-// `VTOL_MobileBuild` [04 R-ORD-02 §2] and `VTOL_HelpBuild` [04 R-ORD-01 §7].
-//
-// The record itself belongs to another driver: internal/construction runs the
-// mobile-build lifecycle from its own per-unit step and owns this record's
-// phase byte and deadline, registering the row on the queue as externally
-// driven (orders.Queue.SetExternallyDrivenHandler, queue_handlers.go). This
-// executor therefore keeps its own phase in the movement-side state and never
-// writes the record's phase or deadline. Its outputs are the goal payloads on
-// the flight command block — and, for `VTOL_MobileBuild`, the record's dynamic
-// gate: retail's phase 1 installs the site marker and sets the gate to `0xE0`
-// in one body, so the marker's arrival is delivered to the record as the
-// ordinary movement outcome and dispatches the placement phase
-// [04 R-ORD-02 §2]. Arrival is also read back from the payload's own test,
-// which is how stepAir observes every air leg [04 R-AIR-01 §1].
-//
-//	Phase 0: a live mover and `canfly`; the shared takeoff preamble; advance.
-//	Phase 1: a point marker at the site with horizontal arrival radius
-//	         `builddistance` and no altitude setter; install; for the mobile
-//	         build, gate = 0xE0; advance.
-//	Phase 2+: the work body's orbit — on every tick with `tick mod 150 == 0`,
-//	         rebuild the station marker of [04 §10.3].
-//
-// The two record-side wakes this executor produces are told apart by its own
-// phase: the takeoff preamble's climb marker arrives while the executor is
-// still at phase 1 (the site marker is installed on the visit AFTER the climb
-// arrival), and only a wake raised at phase 2 is the site marker's. That is
-// what AirBuildSiteLegInstalled reports to the construction service, whose
-// approach phase must advance on the second wake and not the first.
-func (s *System) execVTOLAirBuild(u *units.Unit, head *orders.Node, st *airOrderState) {
-	switch st.phase {
+// VisitAirBuildApproach runs the two movement legs of VTOL_MobileBuild from
+// the construction owner's order visit [04 R-ORD-02 §2]. The caller applies
+// the returned pump result: 1 advances the same persisted Node.Phase, while 7
+// cancels the invalid order. No parallel movement phase survives the visit.
+func (s *System) VisitAirBuildApproach(u *units.Unit, n *orders.Node, _ uint32, _ uint32) orders.Code {
+	if s == nil || u == nil || n == nil {
+		return 7
+	}
+	switch n.Phase {
 	case 0:
 		if !s.airMoverReady(u) {
-			st.done = true
-			return
+			return 7
 		}
-		st.waiting = s.takeoffPreamble(u, head)
-		st.phase = 1
+		orders.NotifyCaptionClear(u, n, "Building")
+		s.takeoffPreamble(u, n)
+		return 1
 	case 1:
-		// The record's own goal, not the movement goal handle: a ground builder's
-		// bound goal is a build-site perimeter candidate chosen for a walker,
-		// and the air leg's marker is the site itself.
-		goalX, goalY, goalZ := head.GoalX, head.GoalY, head.GoalZ
-		if t := s.unitFor(head.Target); t != nil && t.Alive {
-			// `VTOL_HelpBuild` phase 1 takes the target's own position
-			// [04 R-ORD-01 §7].
-			goalX, goalY, goalZ = t.X, t.Y, t.Z
-		} else if s.ProductFootprint != nil {
-			// `VTOL_MobileBuild` phase 1 snaps that goal onto the PRODUCT's
-			// footprint — anchor cell from the recorded position, then the
-			// reverse `(foot + 2·cell)·2^19` centre [04 R-ORD-02 §2]
-			// [04 R-PATH-01 §13]. snapToOwnFootprint is that arithmetic;
-			// ProductFootprint supplies the missing PRODUCT pair from the
-			// stable catalog index the record carries in Param1, the same
-			// quantity construction.Service's siteAnchorCell/siteCentre
-			// compute for the ground twin from the catalog it holds.
-			if fx, fz, ok := s.ProductFootprint(head.Param1); ok {
+		n.Param3 = 0
+		goalX, goalZ := n.GoalX, n.GoalZ
+		// The marker is centered on the PRODUCT's footprint. The retained
+		// order goal remains the authored request [04 R-ORD-02 §2]
+		// [04 R-PATH-01 §13]. An unbound resolver preserves that request.
+		if s.ProductFootprint != nil {
+			if fx, fz, ok := s.ProductFootprint(n.Param1); ok {
 				goalX, goalZ = snapToOwnFootprint(goalX, goalZ, fx, fz)
 			}
-			// An unresolved index leaves the record's stored goal as
-			// installed — no invented fallback.
 		}
-		// A nil resolver (unbound seam) leaves every case above on the
-		// record's stored goal, exactly as before this seam existed — no
-		// invented fallback.
-		m := s.newPointMarker(u, Vec3{X: goalX, Y: goalY, Z: goalZ})
+		m := s.newPointMarker(u, Vec3{X: goalX, Y: n.GoalY, Z: goalZ})
 		m.setArrivalRadius(airBuildDistance(u))
-		s.installAirGoal(u, head, m)
-		if orders.DescriptorFor(head.ID).Name == "VTOL_MobileBuild" {
-			// `VTOL_MobileBuild` phase 1: "install; gate = 0xE0; advance"
-			// [04 R-ORD-02 §2]. The pump then holds the record until the
-			// marker reports arrival and hands that outcome to the
-			// construction service's phase-1 body [05 R-WORK-01 §13].
-			// `VTOL_HelpBuild` arms its own gate from its orders-side handler,
-			// which deliberately leaves it clear when the target is already in
-			// reach, so the gate is not written for it here.
-			head.DynamicGate = airLegGate
-		}
-		st.waiting = true
-		st.phase = 2
+		s.installAirGoal(u, n, m)
+		n.DynamicGate = airLegGate
+		return 1
 	default:
-		// The work body runs every visit; only the 150-tick edge rebuilds the
-		// station. `waiting` stays clear so the executor is dispatched on every
-		// tick, which is what "on every tick with tick mod 150 == 0" requires.
-		st.waiting = false
-		s.airBuildOrbitStation(u, head)
+		return 7
 	}
-}
-
-// AirBuildSiteLegInstalled reports whether the air build executor for record
-// rec on unit u has installed its site marker — its phase 1 of
-// [04 R-ORD-02 §2] — so that a movement outcome delivered on the record's
-// `0xE0` gate is the site marker's arrival and not the takeoff preamble's
-// climb. The construction service's approach phase asks this before it
-// advances an aircraft's record into placement; a record the executor has not
-// reached, or whose executor is still at its climb, answers false.
-func (s *System) AirBuildSiteLegInstalled(u *units.Unit, rec *orders.Node) bool {
-	if s == nil || u == nil || rec == nil || s.airOrders == nil {
-		return false
-	}
-	st := handleRow(s.airOrders, u.Handle)
-	if st == nil || st.order != rec || st.done {
-		return false
-	}
-	return st.phase >= 2
 }
 
 // airBuildDistance is the builder's authored `builddistance` as the 16-bit
@@ -911,9 +681,9 @@ func airBuildDistance(u *units.Unit) uint16 {
 	return uint16(u.Def.BuildDistance)
 }
 
-// airBuildOrbitStation is the orbit recurrence of [04 §10.3][04 §10.3],
-// rebuilt on every
-// tick whose number is an exact multiple of 150.
+// VisitAirBuildWork installs the work body's due orbit station before its
+// work quantum, including a visit that completes the product [04 §10.3].
+// The owning order handler calls it only from its established work phases.
 //
 // The station is `builddistance` world units from the work target, at the
 // builder's own angular position about that target advanced by `airOrbitStep`,
@@ -925,11 +695,11 @@ func airBuildDistance(u *units.Unit) uint16 {
 // of crossing over it. There is no arrival radius and no altitude setter: the
 // marker's own goal update keeps its Y at the cruise altitude over the sector
 // the aircraft is in, every tick [04 R-AIR-01 §4].
-func (s *System) airBuildOrbitStation(u *units.Unit, head *orders.Node) {
+func (s *System) VisitAirBuildWork(u *units.Unit, head *orders.Node, tick uint32) {
 	if s == nil || u == nil || head == nil {
 		return
 	}
-	if s.tick%airOrbitPeriod != 0 {
+	if tick%airOrbitPeriod != 0 {
 		return
 	}
 	targetX, targetY, targetZ := head.GoalX, head.GoalY, head.GoalZ
@@ -1115,7 +885,7 @@ func (s *System) legVTOLLanding(u *units.Unit, n *orders.Node, satisfied uint32,
 		if len(u.Attachment.Cargo) == 0 {
 			AttachCargo(s.world, n.Target, u.Handle, int(piece))
 			if padRepairsLander(u, pad) {
-				s.releaseAirGoal(u)
+				s.ReleaseGoalPayload(n)
 				airSpawnAtHead(u, "SelfRepair", n.Target, Vec3{X: u.X, Y: u.Y, Z: u.Z}, tick)
 			}
 		} else {
@@ -1346,10 +1116,9 @@ func snapToOwnFootprint(x, z numeric.Fixed, fx, fz int32) (numeric.Fixed, numeri
 	return world.PlacementCenter(cellX, cellZ, fx, fz)
 }
 
-// stepAir is the aircraft's whole mover tick [04 R-AIR-01 §1]: the air
-// executor's leg for the head record, then the controller's per-tick hook (the
-// command producer and the integrator's single input fetch), then the flight
-// integrator, then the position commit and the movement-rate cache.
+// stepAir follows the order-pump visit with the controller's per-tick hook,
+// flight integration, position commit and movement-rate cache. Order phases
+// and work markers are already committed by their owning visit [04 R-AIR-01 §1].
 //
 // The ground route follower is not on this path. It never was retail's — the
 // flight integrator reads only the flight command block — and it was the source
@@ -1375,25 +1144,15 @@ func (s *System) stepAir(u *units.Unit, tick uint32) StepResult {
 		return StepResult{Handle: handle, DistToGoal: d, EmptyRoute: true}
 	}
 
-	head := airHeadFor(u)
-	st := s.airStateFor(u, head)
-	s.runAirExecutor(u, head, st)
-
 	// Call 1 — the controller's per-tick hook: the six-step producer and the
 	// integrator's single input fetch [04 R-AIR-01 §1].
 	s.StepFlightCommand(u, nil, s.AirSectors)
 
-	// The executor's gate is released by the payload's own arrival test, which
-	// the producer has just run. Observing it here rather than through the
-	// record's satisfied word keeps the leg sequence intact even though this
-	// engine's order pump has no air handler to re-dispatch [04 R-AIR-01 §6].
+	// Arrival belongs to the record's payload. This returned diagnostic is a
+	// same-visit sample, never a second latch that can restart an executor.
+	arrived := false
 	if c := fl.Command; c != nil {
-		// Recomputed, never latched: a leg that installed a fresh marker this
-		// tick is answered about that marker, and a stale arrival from the
-		// payload a previous record left behind cannot release the next gate.
-		st.arrived = c.Payload == nil || c.Payload.Arrived(u)
-	} else {
-		st.arrived = false
+		arrived = c.Payload == nil || c.Payload.Arrived(u)
 	}
 
 	// Call 2 — the flight integrator. Its arithmetic is [04 §10.1] and is not
@@ -1443,7 +1202,7 @@ func (s *System) stepAir(u *units.Unit, tick uint32) StepResult {
 		HasRoute:   hasRoute,
 		EmptyRoute: !hasRoute,
 		Moved:      int64(u.X) != oldX || int64(u.Z) != oldZ,
-		Arrived:    st.arrived,
+		Arrived:    arrived,
 	}
 }
 
@@ -1493,8 +1252,9 @@ func airHeadFor(u *units.Unit) *orders.Node {
 // The pump-driven air executors [04 R-AIR-01 §7][04 R-AIR-01 §8][04 R-ORD-02 §3]
 // ---------------------------------------------------------------------------
 //
-// `VTOL_Move` and `VTOL_Standby` retain mover-side dispatch. The other
-// air executors, including both landing families, run through the order pump.
+// Air executors, including move, standby and both landing families, run
+// through the order pump. Construction calls its approach legs from the
+// same persisted order-phase owner.
 // internal/orders has a handler for each, that handler runs the record-side entry sequence, and it
 // then calls into this package for the leg. The pump therefore stays the sole
 // dispatcher — it clears the record's dynamic gate before every dispatch and
@@ -1534,51 +1294,18 @@ func (s *System) BindAirOrderLegs() {
 	}
 }
 
-// airRowsDrivenByMoverTick are the order rows this system advances from its own
-// per-unit step — runAirExecutor, inside the mover tick — rather than from the
-// order pump. `VTOL_Standby` is the survivor of that arrangement: its executor
-// reads and writes the record's phase, dynamic gate and deadline as its state
-// machine [04 R-AIR-01 §7], so the pump must write none of them.
-//
-// `VTOL_Move` also runs from the mover tick, but its descriptor handler owns
-// its record lifecycle. Both landing families instead run directly through
-// the pump. The slice is fixed and ordered, never a map (I1).
-var airRowsDrivenByMoverTick = []string{"VTOL_Standby"}
+// Standby's body belongs to movement because it constructs air markers, but
+// its record lifecycle belongs to the ordinary queue pump [04 R-AIR-01 §7]
+// [04 §3.3]. Resolve its immutable descriptor once for queue registration.
+var airStandbyRowID = orders.Lookup("VTOL_Standby")
 
-// airRowIDsDrivenByMoverTick is the same list resolved once. orders.Lookup is
-// a case-insensitive binary search over the descriptor table's names, which is
-// the right shape for the interface's spelling-tolerant transmission and the
-// wrong shape for a per-queue registration: the table is immutable after
-// package initialization, so the answer is a constant. Go initializes an
-// imported package before the importing package's variables, so this resolves
-// after orders.buildTable has run.
-var airRowIDsDrivenByMoverTick = resolveAirRowIDs()
-
-func resolveAirRowIDs() []orders.ID {
-	out := make([]orders.ID, 0, len(airRowsDrivenByMoverTick))
-	for _, name := range airRowsDrivenByMoverTick {
-		out = append(out, orders.Lookup(name))
-	}
-	return out
-}
-
-// RegisterOrderHandlers declares this system's ownership of those rows on q,
-// through the order package's per-queue registration seam. It is the statement
-// that replaced the descriptor table's DriverExternalMachine value: the pump
-// stays the sole dispatcher and learns from the owner, not from a table lookup,
-// that it must not write a result code over a live state machine [04 §3.3].
-//
-// It is called wherever this system binds a queue, and the session composition
-// calls it for queues that reach the pump without passing through here — an
-// idle aircraft's `VTOL_Standby` record is created by the pump's own refill
-// [04 §3.3], so the registration cannot wait for a producer to install one.
+// RegisterOrderHandlers binds movement-owned record bodies before each queue
+// can be pumped, including a standby newly created by the idle refill.
 func (s *System) RegisterOrderHandlers(q *orders.Queue) {
 	if s == nil || q == nil {
 		return
 	}
-	for _, id := range airRowIDsDrivenByMoverTick {
-		q.SetExternallyDrivenHandler(id)
-	}
+	q.SetOwnedHandler(airStandbyRowID, s.runAirOrderLeg)
 }
 
 // AirLegRunner returns this system's executor for installation on a
@@ -1598,6 +1325,32 @@ func (s *System) runAirOrderLeg(u *units.Unit, n *orders.Node, satisfied uint32,
 		return 0, false
 	}
 	switch orders.DescriptorFor(n.ID).Name {
+	case "VTOL_Move":
+		// The order handler owns captions, slot inhibition and completion;
+		// these two phase-local movement writes share its persisted phase
+		// [04 R-ORD-02 §2][08 R-SAVE-ORDER-01].
+		switch n.Phase {
+		case 0:
+			if !s.airMoverReady(u) {
+				return 7, true
+			}
+			s.takeoffPreamble(u, n)
+			return 1, true
+		case 1:
+			fx, fz := s.pathFootprint(u)
+			x, z := snapToOwnFootprint(n.GoalX, n.GoalZ, fx, fz)
+			s.installAirGoal(u, n, s.newPointMarker(u, Vec3{X: x, Y: n.GoalY, Z: z}))
+			n.DynamicGate = airLegGate
+			return 1, true
+		}
+		return 0, false
+	case "VTOL_HelpBuild":
+		if n.Phase == 3 {
+			s.VisitAirBuildWork(u, n, tick)
+		}
+		return 0, false // the order handler continues with its work quantum
+	case "VTOL_Standby":
+		return s.legVTOLStandby(u, n, tick), true
 	case "VTOL_Landing":
 		return s.legVTOLLanding(u, n, satisfied, tick), true
 	case "VTOL_LandIfCan":
@@ -2149,7 +1902,7 @@ func (s *System) legVTOLSeekGuard(u *units.Unit, n *orders.Node, satisfied uint3
 		// resolve code 7 against the FIRST listed unit and spawn the result at
 		// the head whatever it is, gate = 0, wait [04 R-ORD-02 §3].
 		if cand := s.airGuardCandidate(u); cand != nil {
-			s.releaseAirGoal(u)
+			s.ReleaseGoalPayload(n)
 			if id := orders.Resolve(7, u, cand, nil); id != 0 {
 				airSpawnIDAtHead(u, id, cand.Handle, Vec3{X: cand.X, Y: cand.Y, Z: cand.Z}, tick)
 			}
@@ -2613,12 +2366,15 @@ const airVelocityArrival = 48
 // Its heading supply is [04 R-ORD-02 §4]'s: it "writes `bearing(unitPos →
 // markerGoal)` and returns 1 unconditionally".
 type airVelocityMarker struct {
-	sys       *System
-	unit      *units.Unit
-	pos       Vec3
-	vel       Vec3
-	commanded uint16
-	steer     bool
+	// Saved uninterpreted words remain attached to this object, not a later
+	// replacement marker [08 R-SAVE-02 §10].
+	savedFlags, savedAux, savedTrailing uint16
+	sys                                 *System
+	unit                                *units.Unit
+	pos                                 Vec3
+	vel                                 Vec3
+	commanded                           uint16
+	steer                               bool
 }
 
 // UpdateGoal advances the marker's own position by its own velocity, then
@@ -2719,14 +2475,11 @@ func (s *System) installAirPayload(u *units.Unit, rec *orders.Node, p GoalPayloa
 	if c == nil {
 		return
 	}
-	if c.Payload != nil {
-		if c.payloadOwner != nil {
-			c.payloadOwner.Satisfied |= airGoalReleasedBit
-		}
-		c.Payload.Release()
-	}
+	s.releaseRecordGoal(rec)
+	s.detachControllerGoal(u.Handle)
 	if rec != nil {
 		rec.Satisfied &^= airGoalInstallClearMask
+		s.storeRecordGoal(u.Handle, recordGoal{node: rec, air: p})
 	}
 	c.Payload = p
 	c.payloadOwner = rec
@@ -2850,7 +2603,7 @@ func (s *System) legAirToAir(u *units.Unit, n *orders.Node, satisfied uint32, ti
 			n.DynamicGate |= airLegGateStrike
 			return 2
 		}
-		s.releaseAirGoal(u)
+		s.ReleaseGoalPayload(n)
 		airSpawnAtHead(u, "VTOL_Evade", n.Target, Vec3{X: n.GoalX, Y: n.GoalY, Z: n.GoalZ}, tick)
 		n.Param1 = 0
 		n.DynamicGate = 0

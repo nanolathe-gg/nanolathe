@@ -182,9 +182,13 @@ func projectUnitImage(w *units.World, econ *economy.Service, movement *movement.
 		if !ok {
 			return save.UnitImage{}, fmt.Errorf("nanolathe: retail save projection: missing unit packed scratch: logical path save/Units/u%04x, providers searched [caller], expected RetailUnitWriterScratch", h)
 		}
-		ordersImage, err := orders.RetailOrderImages(u, resolve, func(target pool.Handle) bool {
+		var payloadSource orders.RetailPayloadSource
+		if movement != nil {
+			payloadSource = movement.RetailOrderPayload
+		}
+		ordersImage, err := orders.RetailOrderImagesWithPayload(u, resolve, func(target pool.Handle) bool {
 			return w.Unit(target) != nil
-		})
+		}, payloadSource)
 		if err != nil {
 			return save.UnitImage{}, fmt.Errorf("nanolathe: retail save projection: unit %04x orders: %w", h, err)
 		}
@@ -475,8 +479,9 @@ func (s *Session) RetailBattleSaveInputs(summary save.Summary, camera save.Camer
 // Retail keeps all four on the unit itself — the occupancy stamp refreshes the
 // cell pair every time the unit moves [08 R-TRIG-01 §4 "boundary coordinate"].
 // This build keeps the first three on the movement system's collision record
-// and the fourth on the unit's live group field, while the four Unit words the
-// writer reads are written only by the save RESTORE. Left alone they are all
+// or construction's retained placement, and the fourth on the unit's live
+// group field, while the four Unit words the writer reads are written only
+// by the save RESTORE. Left alone they are all
 // zero in a live session, and the consequences are not cosmetic: no unit would
 // ever emit a `u%04xmob` box, so every restored mover would lose its velocity,
 // speed, lean and mode; every unit would save the cell (0,0), which this
@@ -509,11 +514,15 @@ func refreshRetailUnitMirrors(s *Session) {
 		}
 		anchor, footX, footZ, ok := s.Movement.OverlapRect(slot)
 		if !ok {
-			// A unit still under construction holds its cells through the
-			// construction service's placement reservation and has no collision
-			// record at all in this build, so there is no committed anchor to
-			// mirror. The restore treats it the same way; see the occupancy pass
-			// in RestoreRetailBattleCore.
+			// An unfinished structure can own a construction placement without
+			// a movement collision record. Its retained rectangle supplies the
+			// same committed cell pair the loader uses to rebuild its yard;
+			// resnapping its position would lose that saved ownership
+			// [08 R-SAVE-02 §6, §11][04 R-COLL-01 §4].
+			if rect, held := s.Build.PlacementForProduct(h); held {
+				u.CachedOccupancyX, u.CachedOccupancyZ = int16(rect.MinX()), int16(rect.MinZ())
+				u.FootprintSizeX, u.FootprintSizeZ = int16(rect.Width()), int16(rect.Depth())
+			}
 			continue
 		}
 		u.CachedOccupancyX, u.CachedOccupancyZ = int16(anchor.X), int16(anchor.Z)

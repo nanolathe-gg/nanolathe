@@ -3,6 +3,8 @@ package movement
 import (
 	"testing"
 
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
+
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 )
 
@@ -11,21 +13,9 @@ import (
 // post "redrawn every 30 to 44 ticks" [04 R-AIR-01 §7], not one redrawn every
 // time the mover ticks.
 //
-// The record's deadline is the executor's own wait — phase 2's loaded arm arms
-// `tick + 30 + random below 15` and returns to phase 1 — and `VTOL_Standby` is
-// registered as externally driven, so the order pump never dispatches it and
-// never applies the deadline gate on its behalf. The mover tick's dispatch is
-// the only place that wait can be honoured.
-//
-// It was not, and that was the play-test report of a hovering Atlas jiggling:
-// phase 1 (acquire, failing) and phase 2 (three draws, a new marker) ran on
-// alternate ticks, so the command bearing was replaced every second tick.
-//
-// The assertion is the interval between two loiter visits, not a census of
-// them: each visit rewrites the deadline, so the gaps between deadline writes
-// are the cadence. A gap is 31 to 45 mover ticks — the drawn 30..44 wait, plus
-// the one tick phase 1 spends failing its acquisition before phase 2 runs
-// again.
+// The ordinary pump applies the deadline and advances phase 1 into the
+// phase-2 loiter in the same visit [04 §3.3][04 R-AIR-01 §7]. Compare successive
+// loiter visits rather than a fixed census of random outcomes.
 func TestVTOLStandbyLoiterHoldsItsDeadline(t *testing.T) {
 	sys, _, u := airFixture(t)
 	// The loaded, airborne arm of phase 2: `canfly`, committed mover mode 2,
@@ -35,13 +25,12 @@ func TestVTOLStandbyLoiterHoldsItsDeadline(t *testing.T) {
 	u.Attachment.Cargo = []pool.Handle{pool.Handle(u.Handle + 1)}
 
 	head := pushAirOrder(t, u, "VTOL_Standby", u.X, u.Z)
-	st := sys.airStateFor(u, head)
+	sys.BindAirOrderLegs()
 
 	var visits []uint32
 	last := head.Deadline
 	for tick := uint32(1); tick <= 200; tick++ {
-		sys.tick = tick
-		sys.runAirExecutor(u, head, st)
+		orders.QueueForUnit(u).Pump(u, tick)
 		if head.Deadline != last {
 			last = head.Deadline
 			visits = append(visits, tick)
@@ -54,8 +43,8 @@ func TestVTOLStandbyLoiterHoldsItsDeadline(t *testing.T) {
 	}
 	for i := 2; i < len(visits); i++ {
 		gap := visits[i] - visits[i-1]
-		if gap < 31 || gap > 45 {
-			t.Fatalf("loiter points redrawn %d ticks apart (visits %v); [04 R-AIR-01 §7] redraws every 30 to 44 ticks, one tick later here because phase 1 fails its acquisition first", gap, visits)
+		if gap < 30 || gap > 44 {
+			t.Fatalf("loiter points redrawn %d ticks apart (visits %v); [04 R-AIR-01 §7] redraws every 30 to 44 ticks", gap, visits)
 		}
 	}
 }

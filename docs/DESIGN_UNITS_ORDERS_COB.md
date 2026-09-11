@@ -765,11 +765,22 @@ dispatch on sight — `SelfDestructFG`, which a live mission reaches through the
 | the stockpile file | `BuildWeapon` |
 | `internal/construction`, per queue, inside the pump visit | `GetBuilt` |
 | `internal/construction`, per queue, from its own per-unit step | `BuildingBuild`, `MobileBuild`, `VTOL_MobileBuild`, `ReclaimUnit`, `VTOL_ReclaimUnit` |
-| `internal/movement`, per queue, from its own per-unit step | `VTOL_Standby` |
+| `internal/movement`, per queue, inside the ordinary pump visit | `VTOL_Standby` |
 | none — the reject sentinel | the empty name |
 
 Notes the table cannot carry:
 
+* Scripted attachment and the air pickup completion share `RearmBeCarried`.
+  It replaces eligible local cargo's unprotected front orders while preserving
+  protected and rear records; airbase attachment leaves orders alone
+  `[04 R-UNIT-06 §3]` `[04 R-AIR-01 §9]`. `BeCarried` releases slots through
+  the guarded release helper. Air unload keeps its observed order target
+  separate from the live cargo-list head used for lowering and release
+  `[04 R-ORD-01 §7]` `[04 R-AIR-01 §10]`.
+* `ContinuePrimaryWork` resumes construction's admitted primary visit without
+  repeating secondary effects. Air mobile build applies pump result codes in
+  that window, keeping the record as its only phase owner
+  `[04 R-ORD-02 §2]` `[08 R-SAVE-ORDER-01]`.
 * Autonomous combat and repair-patrol issuers retain their return move beneath
   the temporary attack or assistance record. Each issuer applies its own stance
   admission and leash rules; completion exposes the saved move through the

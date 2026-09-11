@@ -828,6 +828,12 @@ func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service)
 		if u == nil || !u.Alive || u.Owner != m.Player {
 			continue
 		}
+		// Saved and explicitly assigned groups need not match classifier
+		// destinations. The resource body itself requires a building before
+		// either activation or factory selection [08 R-AI-01 §2].
+		if u.Flags&classifierBuilding == 0 {
+			continue
+		}
 		if u.Def == nil {
 			continue
 		}
@@ -868,9 +874,10 @@ func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service)
 		if !m.hasBuildOptionsForDef(u.Def) {
 			continue
 		}
-		// A factory with anything already on its primary queue is skipped, so
-		// products are queued one at a time as the queue drains.
-		if q := orders.QueueOfUnit(u); q == nil || len(q.Primary()) > 0 {
+		// Only a nonempty primary queue blocks selection. A newly completed
+		// or restored factory may not have allocated its first queue yet; the
+		// ordinary build producer creates it after selection [08 R-AI-01 §2].
+		if q := orders.QueueOfUnit(u); q != nil && q.LenPrimary() > 0 {
 			continue
 		}
 		cand, ok := Select(m, u, econ)

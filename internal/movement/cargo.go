@@ -17,6 +17,7 @@ package movement
 import (
 	"github.com/nanolathe-gg/nanolathe/internal/combat"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
@@ -384,7 +385,7 @@ func (s *System) syncCarriedUnit(w *units.World, cargo *units.Unit) {
 		newAnchor := collCargo.ProposedAnchor(cargo.Move.Mode)
 		stampedPlane, stamps := planeForMode(cargo.Move.Mode)
 		stampMismatch := collCargo.HasStamp && (!stamps || collCargo.StampedPlane != stampedPlane)
-		if newAnchor != collCargo.OldAnchor || collCargo.Mode != cargo.Move.Mode || stampMismatch {
+		if newAnchor != collCargo.OldAnchor || collCargo.CachedMode != cargo.Move.Mode || stampMismatch {
 			// Carried motion bypasses validation, but the carried-position
 			// setter still clears and stamps on a cell/mode change, in the
 			// plane its mode names: a mode-1 nanoframe holds the ground word
@@ -400,6 +401,7 @@ func (s *System) syncCarriedUnit(w *units.World, cargo *units.Unit) {
 			// the restamp [04 R-COLL-01 §1] — the commit
 			// [04 R-AIR-01 §10] item 2 requires to run.
 			collCargo.CachedMode = cargo.Move.Mode & 0x3
+			cargo.Move.ModeMirror = collCargo.CachedMode
 			s.syncMoverStamp(cargo)
 		}
 		collCargo.Mode = cargo.Move.Mode
@@ -635,6 +637,16 @@ func (s *System) TryUnload(w *units.World, carrierHandle, cargoHandle pool.Handl
 	if !s.ValidateUnloadSite(w, cargoHandle, dropX, dropZ, s.Terrain) {
 		return false, UnableUnloadMessage // verbatim [04 §10.2]
 	}
+	s.releaseUnloadCargo(w, carrier, cargo)
+	return true, ""
+}
+
+// releaseUnloadCargo follows an accepted unload-site test. The executor's
+// retained target owns that test, while the current list head is released;
+// revalidating the head here would change that distinction after a reattach
+// [04 R-AIR-01 §10 item 4].
+func (s *System) releaseUnloadCargo(w *units.World, carrier, cargo *units.Unit) {
+	cargoHandle := cargo.Handle
 	// Step 1 of the release order: the deferred zero-argument `EndTransport`,
 	// on the CARRIER's script, BEFORE the detach [04 §10.2][04 R-UNIT-06 §3].
 	if bridge := carrier.ScriptBridge(); bridge != nil {
@@ -688,7 +700,6 @@ func (s *System) TryUnload(w *units.World, carrierHandle, cargoHandle pool.Handl
 	if coll := handleRow(s.Collisions, cargoHandle); coll != nil {
 		coll.Mode = cargo.Move.Mode & 0x3
 	}
-	return true, ""
 }
 
 // IsCarried reports whether unit is currently carried [04 §10.2].
@@ -714,7 +725,11 @@ func (s *System) ScriptAttachCargo(w *units.World, carrierHandle, cargoHandle po
 	}
 	// Narrow before the shared helper so a script value of -1 cannot name
 	// its host-only unchanged-mode sentinel [04 R-COB-03 §5].
-	return AttachCargoMode(w, carrierHandle, cargoHandle, piece, mode&3)
+	if !AttachCargoMode(w, carrierHandle, cargoHandle, piece, mode&3) {
+		return false
+	}
+	orders.RearmBeCarried(cargo, w.Unit(carrierHandle))
+	return true
 }
 
 // ScriptDropCargo applies a COB drop opcode. The release validates the cargo's

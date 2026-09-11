@@ -2757,6 +2757,9 @@ fragment, which is a follow-up, not part of this section.
 
 ### 14.6 Runtime switches
 
+These are the original detail-view controls, retained by classic. Modern
+uses the defaults and controls in §16.8.
+
 * **F9** cycles the view scale 1× → 1.5× → 2× → 1× about the viewport centre
   (`ViewScale.Next`).
 * **F10** toggles the executor between classic and modern. The client
@@ -3193,10 +3196,13 @@ instead, and the map slid under the cursor.
 the battle's camera pass. Its clock is host Updates, supplied by the platform
 layer; no simulation tick is read [I6].
 
-* **The steps.** `ZoomSteps` is the ascending list {0.25, 0.5, 0.75, 1, 1.25,
-  1.5, 1.75, 2}: five detail views at and above 1× and three tactical views
-  below it. The target is always one of them, or the map's floor (§16.7) when
-  the lowest steps fall under it.
+* **The steps.** `ZoomSteps` is the ascending list {0.5, 1, 2}: a tactical
+  overview, the default native view, and the detail view. Fractional stops
+  above 1× were removed after visual feedback on uneven sprite/model scaling
+  and its mismatch with filtered terrain (§16.3). The 0.5× overview keeps a
+  closer view than 0.25× while doubling the visible span on each axis. These
+  are presentation choices, not retail findings. A target below the map's
+  floor is clamped to that floor (§16.7).
 * **The wheel** moves the *target* one step per notch: every `ZoomWheelNotch`
   of travel (a thousandth-units count, so a notched mouse's whole unit is one
   step) goes to the next step up for a scroll up and the next step down for a
@@ -3241,18 +3247,18 @@ least 1×, and clampAxis's view-larger-than-map domain stays exactly where
 ### 16.8 Runtime switches
 
 * **F9** in classic is the unchanged 1× → 1.5× → 2× step cycle about the
-  viewport centre. In modern it is the same three factors as animated zoom
-  targets; a factor the wheel left between them cycles to the first step above
-  it, so the key always lands on a step.
+  viewport centre. Modern cycles 1× → 2× → 0.5× → 1× as animated targets,
+  sharing the wheel's step list. A free factor cycles to the first step above
+  it, wrapping to 0.5× at the top; the map floor still applies.
 * **The wheel** is §16.6.
 * **`--zoom`** accepts any factor in the free range for the modern executor and
   only 1, 1.5 or 2 for classic — the executor's restriction is applied after
   parsing, because `--renderer` may follow `--zoom` on the command line. A
   capture follows `--shot-renderer` when one is given. The map-derived floor is
-  applied at battle entry, where the map is known. The resolution default is
-  unchanged: unset opens at 1.5× above 800×600 and natively at or below it, and
-  captures and the benchmark stay native. A restart keeps the factor the player
-  was on. Battle entry, a restart and a capture take the factor outright rather
+  applied at battle entry, where the map is known. Modern defaults to 1× at
+  every resolution. Classic keeps its resolution default: 1.5× above 800×600
+  and native at or below it. Captures and the benchmark stay native. A restart
+  keeps the factor the player was on. Battle entry, a restart and a capture take the factor outright rather
   than easing it: there is no motion to smooth.
 * **F10** is unchanged (§14.6).
 

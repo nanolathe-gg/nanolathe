@@ -72,6 +72,8 @@ func RetailUnitBase(u *Unit, data []byte) error {
 	const serializedFlags = 0x03ffeFFF // bits 0..11, 13, and 14..25; bit 12 is allocator-owned
 	u.Flags = (u.Flags &^ serializedFlags) | flags
 	u.Move.Mode = uint8(flags & 3)
+	u.Move.ModeMirror = u.Move.Mode
+	u.MoveTier = uint8(flags>>2) & 3 // cached classifier, not recomputed [04 R-MOV-01 §6]
 	u.RestoredMoveMode = true
 	u.InBuildStance = packed&1 != 0
 	u.Busy = packed&2 != 0
@@ -103,14 +105,15 @@ func RetailUnitBase(u *Unit, data []byte) error {
 		// that can change the enabled bit after construction. Bits 5-7 are
 		// inert and the reader discards them, as the writer does.
 		s.Flags = (s.Flags &^ SlotFlagPersisted) | (data[off+0x17] & SlotFlagPersisted)
+		s.Aim.IssueBit = s.Flags&SlotFlagAimLatch != 0
 		// The scratch pair exists only to hand the on-disk words from this
 		// scalar pass to RetailUnitWeaponTargets, which runs once every forced
 		// slot exists. The save writer never reads it — the live Target is the
 		// authority there.
 		s.SavedTargetLow = binary.LittleEndian.Uint16(data[off:])
 		s.SavedTargetHigh = binary.LittleEndian.Uint16(data[off+2:])
-		s.SavedPayloadWord0 = binary.LittleEndian.Uint32(data[off+0x04:])
-		s.SavedPayloadWord1 = binary.LittleEndian.Uint32(data[off+0x0C:])
+		s.Aim.RestoreReadyWord(binary.LittleEndian.Uint32(data[off+0x04:]))
+		s.DistanceWord = int32(binary.LittleEndian.Uint32(data[off+0x0C:]))
 		// Target identity is fixed up from the saved pair only after every
 		// forced slot exists; do not treat the serialized low word as a live
 		// pool handle in this scalar pass [08 R-SAVE-WEAPON-01].

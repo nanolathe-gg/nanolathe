@@ -293,6 +293,17 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 // Mobile payload carries site in Node.GoalX/Z (world coords) via QueueMobileBuild [P0-I05].
 // Validation uses the product's yard at the snapped site, not the factory exit spot.
 func (s *Service) handleMobileState2(builder *units.Unit, node *orders.Node, tick uint32) {
+	switch s.mobilePlacementVisit(builder, node, tick) {
+	case 1:
+		node.Phase = uint8(State3)
+	case 8:
+		s.removeHead(builder, node)
+	}
+}
+
+// mobilePlacementVisit shares the ground and air placement effects while
+// leaving advancement/removal to the owning dispatcher [04 R-ORD-02 §2].
+func (s *Service) mobilePlacementVisit(builder *units.Unit, node *orders.Node, tick uint32) orders.Code {
 	// Armed waits are visit boundaries: while the record's deadline is in the
 	// future the handler is not visited, and on arrival the wait is consumed
 	// (the pump's deadline rule — deadline arrived clears it and re-dispatches
@@ -300,7 +311,7 @@ func (s *Service) handleMobileState2(builder *units.Unit, node *orders.Node, tic
 	// are EXACTLY 30 ticks [R-ORDER-02 §1].
 	if node.Deadline >= 0 {
 		if tick < uint32(node.Deadline) {
-			return
+			return 2
 		}
 		node.DynamicGate = 0
 		node.Deadline = -1
@@ -339,17 +350,17 @@ func (s *Service) handleMobileState2(builder *units.Unit, node *orders.Node, tic
 	extent, err := world.NewFootprintExtent(int32(footX), int32(footZ))
 	if err != nil {
 		node.DynamicGate, node.Deadline = WakeBit2, int32(tick+15)
-		return
+		return 2
 	}
 	anchor, err := world.SnapFootprintAnchor(node.GoalX, node.GoalZ, extent)
 	if err != nil {
 		node.DynamicGate, node.Deadline = WakeBit1|WakeBit2, int32(tick+15)
-		return
+		return 2
 	}
 	rect, err := world.NewFootprintRect(anchor, extent)
 	if err != nil {
 		node.DynamicGate, node.Deadline = WakeBit1|WakeBit2, int32(tick+15)
-		return
+		return 2
 	}
 	cell := anchor.Cell()
 	// Do not overwrite Goal: keep original clicked site for determinism and tests that assert Goal equals clicked site [P0-I05].
@@ -357,7 +368,7 @@ func (s *Service) handleMobileState2(builder *units.Unit, node *orders.Node, tic
 	if def == nil {
 		node.DynamicGate = WakeBit2
 		node.Deadline = int32(tick + 15)
-		return
+		return 2
 	}
 	var yard []world.YardCell
 	if def.YardMap != "" {
@@ -387,12 +398,7 @@ func (s *Service) handleMobileState2(builder *units.Unit, node *orders.Node, tic
 		// already applies §5's correction that only the first blocked attempt and
 		// the over-limit one produce text, so an empty text is a silent attempt.
 		s.raiseStatus(builder, statusCant, text)
-		if code != 2 {
-			// Abandon goes through the queue's canonical removal so cleanup
-			// (StopBuilding counterpart included) runs [04 §3.3][R-ORDER-02 §2].
-			s.removeHead(builder, node)
-		}
-		return
+		return code
 	}
 	siteY := builder.Y
 	if s.Terrain != nil {
@@ -401,7 +407,7 @@ func (s *Service) handleMobileState2(builder *units.Unit, node *orders.Node, tic
 	mobilePlacement, err := world.SnapMobilePlacement(node.GoalX, siteY, node.GoalZ, extent)
 	if err != nil {
 		node.DynamicGate, node.Deadline = WakeBit1|WakeBit2, int32(tick+15)
-		return
+		return 2
 	}
 	product, err := s.allocateNanoframe(builder, def, mobilePlacement.Rect(), mobilePlacement.ModelPosition())
 	if err != nil {
@@ -410,19 +416,19 @@ func (s *Service) handleMobileState2(builder *units.Unit, node *orders.Node, tic
 		// The air row abandons on allocation refusal; only the ground row
 		// holds for 300 ticks [04 R-ORD-02 §2][04 R-ORD-01 §5].
 		if node.ID == vtolMobileBuildRow {
-			s.removeHead(builder, node)
-			return
+			return 8
 		}
 
 		node.DynamicGate = WakeBit2
 		node.Deadline = int32(tick + 300)
-		return
+		return 2
 	}
 	// For mobile, success epilogue reuses factory helper but with builder as factory and cell as site cell.
 	// It stores cell origin as Goal? We preserve original Goal for site authoritative test, so store snapshot separately?
 	// Keep Goal as site, but successEpilogue will overwrite Goal with cell origin. Preserve site in a separate snapshot?
 	// Instead call mobile-specific epilogue that keeps Goal as site and uses cell for product creation.
 	s.successEpilogueMobile(builder, node, product, cell, tick)
+	return 1
 }
 
 // successEpilogueMobile is like successEpilogue but preserves the authoritative site Goal [P0-I05].
@@ -468,9 +474,61 @@ func (s *Service) successEpilogueMobile(builder *units.Unit, node *orders.Node, 
 	if s != nil && s.OnRefresh != nil {
 		s.OnRefresh(builder)
 	}
-	node.Phase = uint8(State3)
 	// Keep cell for product creation already done; no need to store again.
 	_ = cell
+}
+
+// vtolBuildVisit keeps the aircraft's six retail phases on the saved order
+// record. In particular phase 1 consumes the climb outcome by installing the
+// site marker; phase 2 alone consumes that marker's arrival before placement
+// [04 R-ORD-02 §2][08 R-SAVE-ORDER-01]. The primary pump owns all advances.
+func (s *Service) vtolBuildVisit(builder *units.Unit, node *orders.Node, satisfied, tick uint32) (orders.Code, bool) {
+	switch node.Phase {
+	case 0, 1:
+		if s.Movement == nil {
+			return 7, true
+		}
+		return s.Movement.VisitAirBuildApproach(builder, node, satisfied, tick), true
+	case 2:
+		if satisfied&approachWakeNoRoute != 0 {
+			return 8, true
+		}
+		return s.mobilePlacementVisit(builder, node, tick), true
+	case 3, 4:
+		if node.Phase == 3 && !builder.InBuildStance {
+			// The air row discards the stance helper's result, retaining only
+			// its gate write; work still runs on this visit [04 R-ORD-02 §2].
+			node.DynamicGate = 0xE
+		}
+		product := s.World.Unit(node.Target)
+		if product == nil || builder.Def == nil {
+			return 7, true
+		}
+		if s.Movement != nil {
+			s.Movement.VisitAirBuildWork(builder, node, tick)
+		}
+		if s.applyWorkStep(builder, product, tick) {
+			s.emitAcceptedNano(tick, builder, product)
+		}
+		// Air work has no reveal-deadline stamp. The same zero test applies
+		// after accepted, refused and already-complete work [05 R-WORK-01 §1].
+		if product.Remaining == 0 {
+			s.applyCompletionPosture(product)
+			return 1, true
+		}
+		node.Deadline = int32(tick + 1)
+		node.DynamicGate |= 0xB // deadline setter's bit 0, plus cancel/removed
+		return 2, true
+	case 5:
+		s.raiseStatus(builder, statusComplete, "Building complete")
+		delete(s.builderLinks, node.Target)
+		if s.OnRefresh != nil {
+			s.OnRefresh(builder)
+		}
+		return 5, true
+	default:
+		return 7, true
+	}
 }
 
 // handleState3 is the work loop [05].

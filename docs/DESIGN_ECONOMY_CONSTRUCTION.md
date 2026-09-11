@@ -151,16 +151,26 @@ the tail-most node and tombstone it `[05 "Queue insertion"]`
 `[05 "Queue subtraction"]`. Validation is a preflight on the definition, not a
 reservation — nothing is reserved until allocation.
 
-**The state machine** (`factory.go`). One handler drives five phases, and the
+**The state machine** (`factory.go`). Factory and ground mobile handlers drive five phases, and the
 phase byte is order-record state, so it survives a save `[08 R-SAVE-ORDER-01]`:
 
-| Phase | Factory (`BuildingBuild`) | Mobile (`MobileBuild`, `VTOL_MobileBuild`) |
+| Phase | Factory (`BuildingBuild`) | Ground mobile (`MobileBuild`) |
 |---|---|---|
 | 0 | building-class gate, then raise the activate edge on a positive count and advance in the same pass | skip the door handshake, zero the blocked-area counter, advance |
 | 1 | wait, as a level test with no timeout, for the script to set the in-build-stance bit | the approach: install the rectangle goal at the site and walk |
 | 2 | resolve the exit spot, validate it, allocate the nanoframe | validate the chosen site, allocate the nanoframe |
 | 3 | the work visit: one shared construction step per visit, retrying a tick later | the same |
 | 4 | lower the building edge, repeat the completion transition idempotently, restart a counted successor in the same pass | the same |
+
+Aircraft use the separate `vtolBuildVisit` body and the ordinary primary pump
+inside the construction work window. Its six phases follow `[04 R-ORD-02 §2]`:
+takeoff, site approach, placement, stance-helper-plus-work, work, completion.
+The stance helper's gate write survives even though its return is discarded.
+All progress remains on the order record; the service's transient owner pointer
+only identifies the current call window. Earlier pump deliveries are forwarded
+onto that record, and `ContinuePrimaryWork` resumes it without pumping the
+secondary queue again. Both work phases invoke movement's due orbit update
+before applying work `[04 §10.3]` `[08 R-SAVE-ORDER-01]`.
 
 The activate edge is a real rising edge, because the yard-door handshake is
 entirely script-owned: the engine raises `Activate` and waits, and nothing but
@@ -203,19 +213,13 @@ footprint by the mover's own footprint, a builder that arrives is standing clear
 of the site it is about to stamp; `mustClearSite` keeps the walk installed until
 it is.
 
-A construction aircraft has the same phase with a different goal and no reach
-expression. `VTOL_MobileBuild` phase 1 snaps the goal onto the product's
-footprint, installs an air point marker there with horizontal arrival radius
-`builddistance` and sets the gate to `0xE0`; the placement phase is dispatched
-by that marker's outcome and abandons on `0x40` with no caption
-`[04 R-ORD-02 §2]`. The marker and the gate belong to the air executor in
-`internal/movement` (it owns the marker family), so this service's phase 1
-installs nothing for an aircraft and only holds the record open; its phase-1
-body advances on a wake the executor confirms is the site marker's — the
-takeoff preamble's climb marker reports on the same gate first
-`[04 R-AIR-01 §6]` — and a ground rectangle goal is never submitted for an
-aircraft. Once the nanoframe exists the aircraft builds from wherever the
-150-tick orbit of `[04 §10.3]` leaves it; there is no reach test after arrival.
+A construction aircraft has a separate approach leg. Construction dispatches
+movement's `VisitAirBuildApproach` from the order record's phase 0 and phase 1.
+The saved phase distinguishes the takeoff outcome from the site outcome;
+phase 2 alone admits placement. Movement owns marker construction, and a ground
+rectangle goal is never submitted for an aircraft `[04 R-ORD-02 §2]`.
+Once the nanoframe exists the aircraft builds from wherever the orbit leaves
+it; there is no reach test after arrival `[04 §10.3]`.
 
 **The carried product.** A product is cargo. It is attached to its producer at
 allocation, sits where the nanoframe sits for every tick of its construction,
@@ -819,8 +823,10 @@ active-list order `[05 R-FEAT-01 §10]` [I1].
 
 **Grid reconciliation cost (P01).** `TickMotion` still scans sorted lookup
 instances. Live resurrection removes plot words through
-`construction.Service.removeFeature`; session integration then bumps the
-static-obstacle revision. Ordinary session reclaim uses `Features.ReclaimAt`,
+`construction.Service.removeFeature`; session integration synchronously calls
+`Features.ReleaseRemovedAt` to return the runtime slot before another allocation,
+then bumps the static-obstacle revision. Failed unit allocation preserves both
+plot and runtime state [05 R-WORK-01 §7][05 R-FEAT-01 §4]. Ordinary session reclaim uses `Features.ReclaimAt`,
 but the terrain-only `ReclaimTransition` remains callable and can replace
 nonblocking definitions without changing that revision. World stamp/teardown
 APIs and exposed plot cells also have no feature-identity revision. Therefore

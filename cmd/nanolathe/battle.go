@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
@@ -233,82 +232,67 @@ var clPtr *client.Client
 
 // runBattleView launches the windowed battle view over the real session.
 func runBattleView(opts Options, cs *contentSet) error {
-	request, err := directMapBattleRequest(opts, cs, newBattleSeedSource(opts))
+	shell, cl, err := newDirectBattleView(opts, cs)
 	if err != nil {
 		return err
+	}
+	shell.settingsWritable = true
+	defer shell.teardownBattle(cl)
+	return ebitenapp.Run(cl, rendererMode(opts), shell.windowOptions())
+}
+
+// newDirectBattleView skips menu navigation, but retains the same shell owner
+// for dialogs and battle replacement as menu entry. Both the update callback
+// and interpolation producer follow the current battle after loading a save.
+func newDirectBattleView(opts Options, cs *contentSet) (*gameShell, *client.Client, error) {
+	request, err := directMapBattleRequest(opts, cs, newBattleSeedSource(opts))
+	if err != nil {
+		return nil, nil, err
 	}
 	authoritative, err := composeAuthoritativeBattle(request)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-	sess, cat := authoritative.Session, authoritative.Session.Catalog
-	var (
-		b  *battleSession
-		cl *client.Client
-	)
-	preferences := loadedSettings()
+	shell, err := newGameShell(opts, cs)
+	if err != nil {
+		return nil, nil, err
+	}
+	shell.applySettings(loadedSettings())
+	// Direct entry retains its own skirmish setup, including the pool limit
+	// the save Summary writes, rather than the last menu game's preferences.
+	shell.setup = authoritative.Session.Skirmish
+	var cl *client.Client
 	cl, err = client.New(client.Options{
-		Buffer: sess.Snapshot,
-		Width:  preferences.Display.Width,
-		Height: preferences.Display.Height,
+		Buffer: authoritative.Session.Snapshot,
+		Width:  shell.display.Width,
+		Height: shell.display.Height,
 		Title:  "Nanolathe — " + opts.Map,
-		Step: func(delta float64) {
-			b.viewerStep(delta, cl)
+		Step:   func(delta float64) { shell.step(delta, cl) },
+		TickFraction: func() float32 {
+			if shell.battle == nil {
+				return 0
+			}
+			return shell.battle.tickFraction()
 		},
-		// Read at Draw time by the Enhanced path only; the classic executor and
-		// `--shot` never ask for it (docs/DESIGN_GPU_RENDERER.md §13.5).
-		TickFraction: func() float32 { return b.tickFraction() },
 	})
 	if err != nil {
-		return fmt.Errorf("nanolathe: client: %w", err)
+		return nil, nil, fmt.Errorf("nanolathe: client: %w", err)
 	}
 	cl.SetModelFS(cs.fs)
-	// The --map route has no loading screen to report against, so the remaster
-	// runs here, before the battle is adopted, and prints its own timing lines
-	// (DESIGN_GPU_RENDERER §14.4 "When").
-	b, err = composeBattleEntryWithDetail(sess, cat, cs, cl, nil, detailArtFor(opts, cs, sess.World, nil))
+	cursors, err := client.LoadCursors(cs.fs)
 	if err != nil {
-		return err
-	}
-	fitDirectBattleViewport(cl, b)
-	// The window's view scale is applied once at battle entry, after the
-	// camera has been squared with the surface, so the detail view starts on
-	// the same world point the native view would have shown (§14.6).
-	applyEntryZoom(opts, b)
-	clPtr = cl
-	exitBattle := func(cl *client.Client) {
-		// The battle view has no menu shell callback; mark it ended and exit.
-		b.ended = true
-		if cl != nil {
-			cl.RequestExit()
-		}
-	}
-	var restart func(*client.Client, battleRestartRequest)
-	restart = func(active *client.Client, request battleRestartRequest) {
-		if active == nil {
-			active = cl
-		}
-		if err := restartDirectBattle(opts, cs, active, &b, request); err != nil {
-			fmt.Fprintf(os.Stderr, "nanolathe: restart battle: %v\n", err)
-			return
-		}
-		b.returnToMenu = exitBattle
-		b.restartBattle = restart
-	}
-	b.returnToMenu = exitBattle
-	b.restartBattle = restart
-	defer func() {
-		b.teardown(cl)
-	}()
-	// Software cursor [07 §8]. The cursor GAF is mandatory for a windowed
-	// battle, and installation happens before entering Ebitengine's loop.
-	cursors, cerr := client.LoadCursors(cs.fs)
-	if cerr != nil {
-		return cerr
+		return nil, nil, err
 	}
 	cl.SetCursors(cursors)
-	fmt.Fprintln(os.Stderr, "nanolathe: battle view — drag=select left-click=action right-click=deselect/cancel M=move A=attack P=patrol R=repair E=reclaim C=capture G=guard D=blast B=build X=cancel O=on/off N=stockpile Esc=cancel 1..9/Alt+1..9=pages/groups (SwitchAlt swaps) Shift=queue")
-	return ebitenapp.Run(cl, rendererMode(opts), directWindowOptions(opts, preferences))
+	clPtr = cl
+	// There is no loading screen on direct entry. Prepare the same optional
+	// detail art before the shell adopts the completed battle.
+	sess := authoritative.Session
+	shell.pendingDetail = detailArtFor(opts, cs, sess.World, nil)
+	if err := shell.enterBattle(sess, sess.Catalog); err != nil {
+		return nil, nil, err
+	}
+	return shell, cl, nil
 }
 
 // restartDirectBattle is the --map lifecycle's fresh skirmish entry. The
@@ -894,7 +878,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		// suppressed for as long as one is open and the modal dispatcher
 		// routes the frame to it instead [07 R-WGT-01 §1][07 R-FE-01 §6].
 		if (keyDown(input.KeyTab) || keyDown(input.KeyF2)) && state.Modal() == ui.BattleModalOptions &&
-			!b.battlePrefsActive() && !(b.shell != nil && b.shell.saveLoadPanelActive()) {
+			!b.battlePrefsActive() && !(b.shell != nil && (b.shell.saveLoadPanelActive() || b.shell.frontend.Panels.Modal() != nil)) {
 			b.closeBattleMenu()
 		} else {
 			b.handleBattleMenuInput(in, cl)

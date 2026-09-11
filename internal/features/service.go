@@ -1011,7 +1011,7 @@ func (s *Service) stampFeature(cx, cz int, def *content.FeatureDef, pos *[3]nume
 	// normally.
 	torn := s.coveredAnchors(cx, cz, footX, footZ)
 	stampErr := s.Terrain.StampFeatureRect(int32(cx), int32(cz), featIdx, footX, footZ)
-	tornAway := s.releaseTornInstances(torn)
+	tornAway := s.releaseTornInstances(torn, stampErr == nil)
 	// The stamping service ENDS by restamping every named movement class over
 	// the footprint rectangle [03 §5.1.2][03 R-LAYER §2] call site 1, after the
 	// plot write. The vetoed path takes it too: that stamp tore cells on its
@@ -1172,17 +1172,17 @@ func (s *Service) coveredAnchors(cx, cz int, footX, footZ int32) []int {
 }
 
 // releaseTornInstances is the animation-side half of the dense-pack teardown.
-// The grid is authoritative for what stands on a cell [05 R-FEAT-01 §3, §5], so
-// an instance whose anchor no longer carries its own definition is the record
-// of a feature the teardown just removed: its slot goes back to the free list
-// [05 R-FEAT-01 §4 step 4] and its Instance goes away, synchronously, before
-// the stamp pops a slot of its own.
+// A completed stamp tore down every covered anchor [05 R-FEAT-01 §3 step 3],
+// including one whose replacement has the same definition. Release those
+// records before the arena check [05 R-FEAT-01 §4 step 4]. A vetoed stamp may
+// have torn only part of the footprint; compare those anchors with the grid
+// to preserve records the teardown never reached or refused to remove.
 //
 // It reports whether anything was released, which is what tells the caller the
 // static obstacle layer moved. Running it after a VETOED stamp is the point of
 // the "leaving already-torn cells torn" rule: the cells that were torn before
 // the veto stay torn on both sides.
-func (s *Service) releaseTornInstances(anchors []int) bool {
+func (s *Service) releaseTornInstances(anchors []int, stampCompleted bool) bool {
 	if s == nil || len(anchors) == 0 || s.Terrain == nil {
 		return false
 	}
@@ -1194,7 +1194,7 @@ func (s *Service) releaseTornInstances(anchors []int) bool {
 			continue
 		}
 		cell := s.Terrain.PlotAt(int32(idx%w), int32(idx/w))
-		if cell != nil && cell.IsRealFeature() {
+		if !stampCompleted && cell != nil && cell.IsRealFeature() {
 			if def, bound := s.Terrain.FeatureDefAt(cell.Feature()); bound && def != nil {
 				if def == inst.Def || (inst.Def != nil && def.CanonicalKey == inst.Def.CanonicalKey) {
 					continue // still standing: this anchor was not torn down

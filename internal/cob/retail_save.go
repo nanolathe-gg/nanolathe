@@ -104,7 +104,7 @@ func writeRetailPieceRecords(v *VM, scratch RetailScriptWriterScratch, dst []byt
 			// speed. The reader discriminates on the marker [04 §4.6].
 			turnMarker, turnSpeed := int32(anim.turnTarget), anim.turnSpeed
 			if anim.spinActive {
-				turnMarker, turnSpeed = -1, anim.spinSpeed
+				turnMarker = -1
 			}
 			putCOBI32(dst[off+(0+axis)*4:], anim.moveTarget)
 			putCOBI32(dst[off+(3+axis)*4:], anim.moveSpeed)

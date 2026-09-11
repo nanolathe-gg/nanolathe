@@ -32,10 +32,27 @@ type RetailOrderImage struct {
 	BuildTypeName  string
 }
 
+// RetailOrderPayload is a detached image of the owning subsystem's live object.
+// Logical unit references are converted by the ordinary order writer.
+type RetailOrderPayload struct {
+	Code         uint32
+	Data         []byte
+	UnitA, UnitB pool.Handle
+}
+
+// RetailPayloadSource projects retained objects without mutating live orders.
+type RetailPayloadSource func(*Node) (RetailOrderPayload, error)
+
 // RetailOrderImages walks the primary segment then the secondary segment,
 // preserving traversal order and continuing sequence numbers across both
 // [08 R-SAVE-02 §6; R-SAVE-ORDER-01].
 func RetailOrderImages(u *units.Unit, stableID RetailStableID, targetLive ...RetailTargetLive) ([]RetailOrderImage, error) {
+	return RetailOrderImagesWithPayload(u, stableID, firstRetailTargetLive(targetLive), nil)
+}
+
+// RetailOrderImagesWithPayload uses live object state when a source is supplied;
+// the detached writer otherwise preserves its staged input [08 R-SAVE-02 §10].
+func RetailOrderImagesWithPayload(u *units.Unit, stableID RetailStableID, targetLive RetailTargetLive, source RetailPayloadSource) ([]RetailOrderImage, error) {
 	if u == nil {
 		return nil, fmt.Errorf("orders: retail save: nil owner")
 	}
@@ -57,7 +74,16 @@ func RetailOrderImages(u *units.Unit, stableID RetailStableID, targetLive ...Ret
 			if len(out) == int(^uint32(0)) {
 				return fmt.Errorf("orders: retail save: owner %d queue exceeds sequence range", ownerID)
 			}
-			image, err := retailOrderImage(n, ownerID, uint32(len(out)), rear, stableID, firstRetailTargetLive(targetLive))
+			snapshot := *n
+			if source != nil {
+				payload, err := source(n)
+				if err != nil {
+					return err
+				}
+				snapshot.RetailSubtypeCode, snapshot.RetailSubtype = payload.Code, payload.Data
+				snapshot.RetailSubtypeUnitA, snapshot.RetailSubtypeUnitB = payload.UnitA, payload.UnitB
+			}
+			image, err := retailOrderImage(&snapshot, ownerID, uint32(len(out)), rear, stableID, targetLive)
 			if err != nil {
 				return err
 			}

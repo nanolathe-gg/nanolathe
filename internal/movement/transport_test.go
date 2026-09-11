@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/economy"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
@@ -77,9 +78,12 @@ func transportFixture(t *testing.T) (*System, *units.World, *units.Unit, *units.
 
 	sim := rng.NewSimulation(0x12345677)
 	kinds := &[]uint8{}
+	econ := &economy.Service{}
+	econ.Players[0].ControllerState = 1
 	binding := &orders.QueueBinding{
-		SimRNG: &sim,
-		Lookup: w.Unit,
+		Economy: econ,
+		SimRNG:  &sim,
+		Lookup:  w.Unit,
 		Presentation: &orders.PresentationAdapter{
 			Ready: func() bool { return true },
 			Status: func(_ *units.Unit, kind uint8, _ string) bool {
@@ -622,6 +626,7 @@ func TestMultiCargoUnloadReleasesOneAndEmitsEventThirteen(t *testing.T) {
 			}
 
 			n := &orders.Node{Owner: carrier.Handle, Phase: 2, GoalX: dropX, GoalY: carrier.Y, GoalZ: dropZ, Deadline: -1}
+			n.BindTarget(carrier.Attachment.Cargo[0]) // the phase-0 observer retained into release
 			*kinds = (*kinds)[:0]
 			if code := sys.legVTOLUnload(carrier, n, 0, 1); code != 1 {
 				t.Fatalf("phase 2 gave result %d, want 1 (release then advance) [04 §10.2]", code)

@@ -44,8 +44,8 @@ type GoalPayload interface {
 	// a follow marker with a live target, false for a point marker
 	// [04 R-AIR-01 §4].
 	Persistent() bool
-	// Release drops the payload's own references. The producer calls it on a
-	// non-persistent payload that has arrived [04 R-AIR-01 §1].
+	// Release destroys the record's object. Arrival only unbinds it; record
+	// cleanup or replacement destroys it [04 R-ORD-01 §9].
 	Release()
 }
 
@@ -261,7 +261,11 @@ func (c *FlightCommand) produce(u *units.Unit, rec *orders.Node, coll *Collision
 	if c.Payload.Persistent() {
 		return
 	}
-	c.Payload.Release()
+	// The controller releases its binding, not the owning record's object.
+	// An unowned fixture payload has no record lifetime to retain.
+	if c.payloadOwner == nil {
+		c.Payload.Release()
+	}
 	c.Payload = nil
 	c.payloadOwner = nil
 	if rec != nil {

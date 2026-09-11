@@ -31,7 +31,7 @@ func TestRetailScriptImagePieceRecordsRoundTrip(t *testing.T) {
 	prog := &Program{Pieces: []string{"base", "turret"}, SourceChecksum: 0xabcd1234}
 	vm := NewVM(prog)
 	vm.anims[0].axes[1] = axisAnim{moveTarget: 0x30000, moveSpeed: 0x1000, moveBusy: true, turnTarget: 0x4000, turnSpeed: 0x200, turnBusy: true}
-	vm.anims[1].axes[2] = axisAnim{spinActive: true, spinSpeed: 0x700, spinTarget: 0x800, spinAccel: 0x900}
+	vm.anims[1].axes[2] = axisAnim{spinActive: true, turnSpeed: 0x700, spinTarget: 0x800, spinAccel: 0x900}
 	vm.Pieces[1].SetTrans(1, fixedFromRaw(-0x24000))
 	vm.Pieces[1].SetAngle(2, 0xbeef)
 	vm.pieceFlags[0] = 0x07
@@ -51,7 +51,7 @@ func TestRetailScriptImagePieceRecordsRoundTrip(t *testing.T) {
 	if got := copyVM.anims[0].axes[1]; got.moveTarget != 0x30000 || got.moveSpeed != 0x1000 || !got.moveBusy || got.turnTarget != 0x4000 || got.turnSpeed != 0x200 || !got.turnBusy || got.spinActive {
 		t.Fatalf("piece 0 axis 1 animation mismatch: %#v", got)
 	}
-	if got := copyVM.anims[1].axes[2]; !got.spinActive || got.spinSpeed != 0x700 || got.spinTarget != 0x800 || got.spinAccel != 0x900 {
+	if got := copyVM.anims[1].axes[2]; !got.spinActive || got.turnSpeed != 0x700 || got.spinTarget != 0x800 || got.spinAccel != 0x900 {
 		t.Fatalf("piece 1 axis 2 spin mismatch: %#v", got)
 	}
 	if got := copyVM.Pieces[1].GetTrans(1); int64(got.Raw()) != -0x24000 {

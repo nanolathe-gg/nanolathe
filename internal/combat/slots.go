@@ -83,9 +83,8 @@ type Slot struct {
 	// MuzzlePiece is the muzzle piece identity queried synchronously before initialization so burst clones can re-query [06 §4.1] C3 (I13).
 	MuzzlePiece int32 // [06 §4.1] (I13)
 
-	// DistanceWord is the slot's distance word, written once by the slot
-	// initializer at unit construction (units.WriteSlotDistanceWords) and never
-	// again. The ballistic creator divides it by the weapon velocity to form
+	// DistanceWord is initialized at unit construction and restored from saves
+	// [08 R-SAVE-WEAPON-01]. The ballistic creator divides it by weapon velocity to form
 	// `T0` [06 §6.4] (RWU-19-39); it is a per-unit constant, not a flight
 	// distance to the current target.
 	DistanceWord int32 // [06 §6.4] [06 R-WPN-05 §3]

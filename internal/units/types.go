@@ -92,11 +92,11 @@ type Slot struct {
 	MuzzlePiece    int32  // Query* result retained as the weapon muzzle identity [06 §4.1] C3
 	AimOriginPiece int32  // AimFrom*/second-Query result retained for the later aim-origin consumer [R-CB-01 §4]
 	// DistanceWord is the slot's distance word — the divisor the ballistic
-	// creator's `T0` reads [06 §6.4]. It is written ONCE, by the slot
-	// initializer at unit construction, as
+	// creator's `T0` reads [06 §6.4]. The slot initializer computes it as
 	// `trunc(1.25 × (queryPoint.z − aimFromPoint.z))` over the two composed
-	// piece points in 16.16 world units, and it has no other writer
-	// [06 R-WPN-05 §3] (RWU-19-39). It is NOT a per-shot flight distance:
+	// piece points in 16.16 world units. Save restoration replaces it with the
+	// saved word [08 R-SAVE-WEAPON-01]; aiming and firing do not recompute it
+	// [06 R-WPN-05 §3]. It is NOT a per-shot flight distance:
 	// every ballistic shot the unit ever fires divides by this one word.
 	DistanceWord int32
 
@@ -111,9 +111,6 @@ type Slot struct {
 	// after all forced unit slots exist [08 R-SAVE-WEAPON-01].
 	SavedTargetLow  uint16
 	SavedTargetHigh uint16
-	// Payload words remain intentionally unnamed [08 R-SAVE-WEAPON-01].
-	SavedPayloadWord0 uint32
-	SavedPayloadWord1 uint32
 }
 
 // The slot control byte, bit by bit [06 R-WPN-05 §3]. One byte, five live
@@ -222,11 +219,15 @@ const NumSlots = 3 // [06 §1.2] primary, secondary, tertiary
 // 65536, with angles unsigned 16-bit at 65536 per circle [04 §8.1]
 // [04 R-MOV-01 §4] (I2).
 type MoveState struct {
-	Mode    uint8         // low two bits of the flags-word mode mirror: 1 grounded/surface (every structure too), 2 airborne, 0 attached/parked, 3 save-installed [04 R-MOV-01 §8]; seeded to 1 at creation. The older "0 none, 1 stopped/parked, 2 active locomotion" reading is retracted [03 R-RAST-01 §7].
-	Heading uint16        // 0..65535 per circle [04 §5.1] C25 (I2) [03 §2.4] C24 bank→Z heading→Y pitch→X
-	Pitch   uint16        // authoritative ground-conform or flight-lean pitch [03 §2.4] C24 [04 R-MOV-01 §5a][04 R-AIR-01 §2]
-	Bank    uint16        // authoritative ground-conform or flight-lean bank [03 §2.4] C24 [04 R-MOV-01 §5a][04 R-AIR-01 §2]
-	Speed   numeric.Fixed // current scalar speed, 16.16 [04 §8.1]
+	Mode uint8 // live mover mode: 1 grounded, 2 airborne, 0 attached/parked [04 R-MOV-01 §8].
+	// ModeMirror is the unit-side mode last published by a position commit.
+	// Direct attach/detach requests leave it unchanged [04 R-AIR-01 §10]
+	// [08 R-SAVE-02 §6, §8].
+	ModeMirror uint8
+	Heading    uint16        // 0..65535 per circle [04 §5.1] C25 (I2) [03 §2.4] C24 bank→Z heading→Y pitch→X
+	Pitch      uint16        // authoritative ground-conform or flight-lean pitch [03 §2.4] C24 [04 R-MOV-01 §5a][04 R-AIR-01 §2]
+	Bank       uint16        // authoritative ground-conform or flight-lean bank [03 §2.4] C24 [04 R-MOV-01 §5a][04 R-AIR-01 §2]
+	Speed      numeric.Fixed // current scalar speed, 16.16 [04 §8.1]
 	// VelX, VelY and VelZ are the mover's VELOCITY TRIPLE, one 16.16 word per
 	// axis [04 R-MOV-01 §1]. It is a different quantity from the scalar speed
 	// word above it: the scalar is a magnitude, the triple is the signed

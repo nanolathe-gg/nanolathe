@@ -9,6 +9,7 @@ package orders
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
@@ -162,15 +163,27 @@ func (q *Queue) recordDiagnostic(msg string) {
 // secondary record are tombstoned, which is what suppresses their
 // weapon-target-clear notification [05 "Queue subtraction"].
 func (q *Queue) cancelAll() {
-	for i, n := range q.primary {
+	// Cancellation can remove a construction record from inside its cleanup.
+	// Snapshot the traversal so that splice cannot skip the following record
+	// or visit a shifted tail twice [04 R-MOV-03 §6][04 R-ORDER-02 §2].
+	primary := slices.Clone(q.primary)
+	for i, n := range primary {
+		if !slices.Contains(q.primary, n) {
+			continue // an earlier cancel notice already removed and cleaned it
+		}
 		if i != 0 {
 			n.Flags |= FlagTombstone
 		}
 		q.cleanupNode(n)
+		q.spliceOutPrimary(n)
 	}
-	for _, n := range q.secondary {
+	for _, n := range slices.Clone(q.secondary) {
+		if !slices.Contains(q.secondary, n) {
+			continue
+		}
 		n.Flags |= FlagTombstone
 		q.cleanupNode(n)
+		q.spliceOutSecondary(n)
 	}
 	q.primary = nil
 	q.secondary = nil // via the pair-removal helper [05]

@@ -52,8 +52,8 @@ func TestSensorAdapterKeepsFullModelTop(t *testing.T) {
 			if tc.seen {
 				want = visibility.SeenBit
 			}
-			if got, ok := vis.SensorStatus(uint16(targetID)); !ok || got != want {
-				t.Fatalf("sensor status = %#x, %v, want radar-only %#x", got, ok, want)
+			if got := u.Flags & (visibility.FriendlyMask | visibility.JammedBit); got != want {
+				t.Fatalf("sensor status = %#x, want radar-only %#x", got, want)
 			}
 			if got := heightByteAt(u, 100); got != tc.losHeight {
 				t.Fatalf("LOS emitter height = %d, want %d", got, tc.losHeight)

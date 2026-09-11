@@ -103,8 +103,9 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 	// column is forced to 1 on the way in, and a slot whose account carried no
 	// box keeps the row battle entry built.
 
-	// Every standard body has already been forced-allocated by D1. Restore
-	// bodies in image order, never deriving live identity from enumeration.
+	// Every standard body has already been forced-allocated by D1. Validate
+	// reservation before reference reconstruction; saved status is applied only
+	// after each record's attachment and engagement links [08 R-SAVE-02 §6].
 	for _, rec := range image.Units.Records {
 		if rec.Compat {
 			continue // 0xB6 is a null compatibility record [08 R-SAVE-02 §6]
@@ -113,8 +114,8 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 		if !ok || h == 0 {
 			return fmt.Errorf("session: retail restore: stable unit %d was not reserved", rec.StableID)
 		}
-		if err := units.RetailUnitBase(s.Units.Unit(h), rec.Data); err != nil {
-			return fmt.Errorf("session: retail restore: unit %d base: %w", rec.StableID, err)
+		if len(rec.Data) != save.UnitBoxSize {
+			return fmt.Errorf("session: retail restore: unit %d base: invalid image size %d", rec.StableID, len(rec.Data))
 		}
 	}
 	// Strict COB binding registered constructor yards before the saved bodies.
@@ -174,9 +175,12 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 		if carrier != 0 {
 			// The restore reader applies the same head-inserting attachment
 			// operation as a live attach, with the saved mode and piece. The
-			// unit-side mode mirror is the source here; the mover-side byte is
-			// restored later and remains a separate saved word [08 R-SAVE-02 §6].
-			if !movement.AttachCargoMode(s.Units, stage.StableUnit[carrier], h, int(rec.Data[0x8D]), int(u.Move.Mode)) {
+			// saved unit-side mode mirror is the source here; the mover-side byte
+			// is restored later and remains a separate saved word. The packed
+			// status itself must follow attachment so a pending-death passenger
+			// can be reattached before its latch is replayed [08 R-SAVE-02 §6].
+			mode := int((binary.LittleEndian.Uint32(rec.Data[0xB4:]) >> 4) & 3)
+			if !movement.AttachCargoMode(s.Units, stage.StableUnit[carrier], h, int(rec.Data[0x8D]), mode) {
 				return fmt.Errorf("session: retail restore: attach unit %d to carrier %d", id, carrier)
 			}
 		}
@@ -187,6 +191,9 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 			if err := restoreRefs(engagement); err != nil {
 				return err
 			}
+		}
+		if err := units.RetailUnitBase(u, rec.Data); err != nil {
+			return fmt.Errorf("session: retail restore: unit %d base: %w", id, err)
 		}
 		processing[id] = false
 		visited[id] = true
@@ -307,6 +314,9 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 		}); err != nil {
 			return fmt.Errorf("session: retail restore: unit %d weapon targets: %w", rec.StableID, err)
 		}
+	}
+	if s.Build != nil {
+		s.Build.RestoreBuilderLinks()
 	}
 	// Occupancy registration is a derived pass after all per-unit live words;
 	// every cell mutation still goes through movement's ordinary stamp path
@@ -441,7 +451,6 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 			return err
 		}
 		s.visStamps = make(map[int]visStamp)
-		s.visStatus = make(map[int]uint32)
 		publishVisibilityForAll(s)
 	}
 	for _, pos := range burnSounds {

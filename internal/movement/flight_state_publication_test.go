@@ -118,8 +118,8 @@ func TestFlightSaveRestoreMatchesNextNormalTickAfter120Ticks(t *testing.T) {
 	pushAirOrder(t, baselineUnit, "VTOL_Move", goalX, goalZ)
 	pushAirOrder(t, restoredUnit, "VTOL_Move", goalX, goalZ)
 	for tick := uint32(1); tick <= 120; tick++ {
-		runMovementTick(baseline, tick, baselineWorld)
-		runMovementTick(restored, tick, restoredWorld)
+		runLandingTick(baseline, tick, baselineWorld)
+		runLandingTick(restored, tick, restoredWorld)
 	}
 	if baselineUnit.X == world.CellToWorld(8) || baselineUnit.Y == 0 {
 		t.Fatal("120-tick flight fixture did not complete ordinary takeoff and travel")
@@ -132,8 +132,8 @@ func TestFlightSaveRestoreMatchesNextNormalTickAfter120Ticks(t *testing.T) {
 		t.Fatal(err)
 	}
 	const nextTick = uint32(121)
-	runMovementTick(baseline, nextTick, baselineWorld)
-	runMovementTick(restored, nextTick, restoredWorld)
+	runLandingTick(baseline, nextTick, baselineWorld)
+	runLandingTick(restored, nextTick, restoredWorld)
 	if got, want := [9]int64{
 		int64(restoredUnit.X), int64(restoredUnit.Y), int64(restoredUnit.Z),
 		int64(restoredUnit.Move.VelX), int64(restoredUnit.Move.VelY), int64(restoredUnit.Move.VelZ),

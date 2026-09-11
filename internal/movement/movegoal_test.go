@@ -84,8 +84,8 @@ func TestBoundGoalShapesReplaceAndReleaseByNode(t *testing.T) {
 	if n1.Satisfied&0x80 == 0 {
 		t.Fatal("the displaced record did not receive the rebind bit [04 R-ORD-01 §9]")
 	}
-	if s.ReleaseGoal(n1) != true || s.moveGoalPayload(1, n2) == nil {
-		t.Fatal("stale release detached successor payload")
+	if !s.ReleaseGoal(n1) || s.moveGoalPayload(1, n2) == nil || n2.Satisfied&0x80 != 0 {
+		t.Fatal("record destructor detached another record's binding [04 R-ORD-01 §9]")
 	}
 	if !s.ReleaseGoal(n2) || s.moveGoalPayload(1, n2) != nil {
 		t.Fatal("current payload was not released")
@@ -117,8 +117,8 @@ func TestAirGoalUsesExistingFlightPayloadAndReleasesOnce(t *testing.T) {
 	if n1.Satisfied&0x80 == 0 {
 		t.Fatal("the displaced record did not receive the rebind bit from the air installer [04 R-ORD-01 §9]")
 	}
-	if !s.ReleaseGoal(n1) || handleRow(s.Flights, h).Command.Payload == nil {
-		t.Fatal("stale air release detached successor payload")
+	if !s.ReleaseGoal(n1) || handleRow(s.Flights, h).Command.Payload == nil || n2.Satisfied&0x80 != 0 {
+		t.Fatal("air record destructor detached another record's binding [04 R-ORD-01 §9]")
 	}
 	if !s.ReleaseGoal(n2) || handleRow(s.Flights, h).Command.Payload != nil {
 		t.Fatal("current air payload was not released")

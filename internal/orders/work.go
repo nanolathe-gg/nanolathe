@@ -1679,16 +1679,22 @@ func GroundUnitReclaimSetup(u *units.Unit, n *Node, satisfied, tick uint32) Code
 	return 7
 }
 
-// ContinueUnitReclaim resumes the exact primary work record during the
+// ContinuePrimaryWork resumes the exact primary work record during the
 // construction window. The earlier ordinary queue visit has already pumped
 // the secondary segment, which must not run again here [04 R-ORD-01 §10].
 // Construction supplies the owned handler; this package keeps the gate and
 // result-code machinery as the single dispatcher [04 §3.3].
-func ContinueUnitReclaim(u *units.Unit, n *Node, tick uint32) {
+func ContinuePrimaryWork(u *units.Unit, n *Node, tick uint32) {
 	q := QueueForUnit(u)
 	if q == nil || n == nil || q.Head() != n {
 		return
 	}
 	q.lastPumpTick = tick
 	q.pumpPrimary(u, tick)
+}
+
+// ContinueUnitReclaim keeps the reclaim entry on the shared primary-only work
+// dispatcher [04 R-ORD-01 §10].
+func ContinueUnitReclaim(u *units.Unit, n *Node, tick uint32) {
+	ContinuePrimaryWork(u, n, tick)
 }

@@ -43,8 +43,8 @@ func TestRestoreMoverCopiesStateWithoutUnitMirrorOverwrite(t *testing.T) {
 	if c.VX != 1 || c.VY != -2 || c.VZ != 3 || c.LeanX != 4 || c.LeanY != -5 || c.LeanZ != 6 || c.Speed != 7 || c.TurnResidual != -9 || c.LastStampTick != 1234 || c.Mode != 1 || !c.Blocked || c.SavedStateByte != data[34] {
 		t.Fatalf("mover restore lost state: %#v", c)
 	}
-	if w.Unit(h).Move.Mode != 2 {
-		t.Fatalf("mover byte overwrote packed unit mirror: %d", w.Unit(h).Move.Mode)
+	if w.Unit(h).Move.ModeMirror != 2 || w.Unit(h).Move.Mode != 1 || c.CachedMode != 2 {
+		t.Fatalf("mover byte overwrote packed unit mirror: %d", w.Unit(h).Move.ModeMirror)
 	}
 }
 

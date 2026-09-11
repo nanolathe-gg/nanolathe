@@ -138,6 +138,7 @@ type System struct {
 	nextActivation uint64
 	arrivalHandles []*arrivalHandle // per-unit Move_Ground arrival handle [R-P0-01]
 	moveGoals      []*moveGoal      // per-unit movement-goal handle [04 §8.3][04 §7.4]
+	recordGoals    [][]recordGoal   // retained record objects, independent of controller binding [04 R-ORD-01 §9]
 	pathProvider   *pathProvider
 	// AirSectors is the coarse second grid the map loader builds after the
 	// terrain is decoded: 128-world-unit cells whose smoothed byte is the
@@ -147,12 +148,6 @@ type System struct {
 	// query — and the sentinel test the off-map recovery legs run. It is built
 	// once, with the terrain, and never rebuilt.
 	AirSectors *AirSectorGrid
-	// airOrders is the movement-side dispatch state of each aircraft's current
-	// air order record. It replaces the takeoffClimb map: the initial climb is
-	// now a goal payload on the flight command block, not a separate altitude
-	// cache [04 R-AIR-01 §1][04 R-AIR-01 §6]. Lookup-only; never ranged over
-	// [I1].
-	airOrders []*airOrderState
 	// These are session-owned lobby values. Zero keeps path scheduling inert
 	// until the session supplies explicit limits [04 R-PATH-01 §6].
 	PathPlayers   int
@@ -965,6 +960,7 @@ func (s *System) applyAirPostMove(u *units.Unit, res StepResult, tick uint32) {
 	// dirty bit is the same flag [04 §10.1].
 	dirty := u.Flags&unitTransformDirty != 0 || fl.Dirty || res.Moved || mode != fl.ModeMirror
 	fl.ModeMirror = mode
+	u.Move.ModeMirror = mode
 	if !dirty && !u.Def.CanHover {
 		return
 	}
@@ -1305,7 +1301,7 @@ func (s *System) raiseArrival(u *units.Unit, ah *arrivalHandle) {
 
 // detachOnArrival is the detach half of the step above.
 //
-// The release is the release form of the record-level install/release helper:
+// The release unbinds the controller while retaining the record's object:
 // cancel the in-flight search, OR `0x80` into the pending word of the record
 // that owns the object in the controller's slot, clear has-waypoint and
 // wants-repath, and drop the slot [04 R-ORD-01 §1][04 R-ORD-01 §9]. That
@@ -1331,13 +1327,7 @@ func (s *System) detachOnArrival(u *units.Unit, ah *arrivalHandle) {
 	if u.Def != nil && u.Def.CanFly {
 		return // the flight block owns its own arrival, persistence and release
 	}
-	if !s.ReleaseGoalPayload(ah.order) {
-		s.CancelPathRequest(u.Handle)
-		if route := handleRow(s.Routes, u.Handle); route != nil {
-			route.Active = false
-			route.WantsRepath = false
-		}
-	}
+	s.detachControllerGoal(u.Handle)
 	setHandleRow(&s.arrivalHandles, u.Handle, nil)
 }
 
@@ -1654,6 +1644,9 @@ func (s *System) EnsureUnit(u *units.Unit) {
 		initialMode = u.Move.Mode & 3
 	}
 	u.Move.Mode = initialMode
+	if !u.RestoredMoveMode {
+		u.Move.ModeMirror = initialMode
+	}
 	// Derive flags from unit def
 	var flags uint32
 	if u.Def.CanHover {
@@ -1733,7 +1726,7 @@ func (s *System) EnsureUnit(u *units.Unit) {
 	// ProposedAnchor adds VX,VZ (0) then quantizes, so it's current cell
 	coll.CachedAnchor = anchor
 	coll.OldAnchor = anchor
-	coll.CachedMode = initialMode
+	coll.CachedMode = u.Move.ModeMirror & 3
 	setHandleRow(&s.Collisions, h, coll)
 	// A record no stamp has filed is in no sector bucket, so the clear's
 	// overlap scan has to be told about it separately [04 R-COLL-01 §4A].
@@ -1790,7 +1783,7 @@ func (s *System) EnsureUnit(u *units.Unit) {
 			Dirty:         false,
 			// The allocator hands every unit its initial mode and the mirror
 			// starts equal to it [04 R-FAC-02 §5][04 R-MOV-01 §8].
-			ModeMirror: u.Move.Mode & 0x3,
+			ModeMirror: u.Move.ModeMirror & 0x3,
 		}
 		// Authored zeros stay zero. The previous 65536/16384/65536 substitutes
 		// were invented constants on an authoritative path (I6): a unit whose
@@ -3111,7 +3104,7 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 			s.emitMovementCallbacks(u, 0)
 			// Route absence is not proof of final order completion via local
 			// threshold; completion is via the arrival handle above [R-P0-01].
-			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false, Arrived: false}
+			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false, Arrived: serviceArrived}
 		}
 		// A ground follower with no waypoint brakes without turning. Direct
 		// goal motion comes only from the route-acceptance synthetic route
@@ -3256,6 +3249,7 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		s.noteOccupancyCommit(handle, tick)
 	}
 	coll.BlockerID = blockerID
+	u.Move.ModeMirror = coll.CachedMode & 3
 	u.X = numeric.Fixed(int64(coll.X))
 	u.Z = numeric.Fixed(int64(coll.Z))
 	groundDirty := u.Flags&unitTransformDirty != 0 || steer.Dirty || coll.Dirty || (u.Def != nil && u.Def.CanHover)

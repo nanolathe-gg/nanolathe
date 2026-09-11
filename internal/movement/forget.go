@@ -45,15 +45,9 @@ func (s *System) ForgetUnit(h pool.Handle) {
 	if s.Scheduler != nil {
 		s.CancelPathRequest(h)
 	}
-	// Death/transport teardown may run after the unit is no longer resolvable;
-	// release the node-bound payload while its identity is still available.
-	if g := handleRow(s.moveGoals, h); g != nil {
-		s.releaseGoalNode(g.order)
-	}
-	if n := s.airPayloadOwner(h); n != nil {
-		s.releaseGoalNode(n)
-	}
-	setHandleRow(&s.airOrders, h, nil)
+	// Release retained objects even when their controller binding has already
+	// arrived or been displaced [04 R-ORD-01 §9].
+	s.forgetRecordGoals(h)
 
 	// Unit finalisation unlinks, so a reused pool slot never inherits a dead
 	// unit's place in a sector bucket [04 R-COLL-01 §11] item 1.

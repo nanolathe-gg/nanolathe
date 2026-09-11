@@ -127,12 +127,12 @@ func TestSessionVisibility(t *testing.T) {
 	// Cloaked enemy should be rejected even inside LOS.
 	u1.Hidden = true
 	// Need to ensure sensor status does not have decloak.
-	s.visStatus[int(u1.Handle)] = 0
+	u1.Flags &^= visibility.FriendlyMask | visibility.JammedBit | visibility.DecloakBit
 	if s.IsUnitVisible(0, u1) {
 		t.Fatalf("cloaked enemy should be rejected even inside LOS")
 	}
 	// The decloak timer does not bypass the direct cloak gate.
-	s.visStatus[int(u1.Handle)] = visibility.DecloakBit
+	u1.Flags |= visibility.DecloakBit
 	if s.IsUnitVisible(0, u1) {
 		t.Fatalf("hidden enemy with decloak timer should still be rejected")
 	}
@@ -144,14 +144,14 @@ func TestSessionVisibility(t *testing.T) {
 	// stealth unit invisible to the eye as well as to the dish.
 	u1.Hidden = false
 	u1.Def.Stealth = true
-	s.visStatus[int(u1.Handle)] = 0
+	u1.Flags &^= visibility.FriendlyMask | visibility.JammedBit | visibility.DecloakBit
 	if !s.IsUnitVisible(0, u1) {
 		t.Fatalf("stealth enemy inside LOS should be visible: stealth suppresses radar and sonar, never line of sight [03 R-VIS-01 §5]")
 	}
 	u1.Def.Stealth = false
 	// Underwater enemy without exempt should be rejected.
 	u1.Hidden = false
-	s.visStatus[int(u1.Handle)] = 0
+	u1.Flags &^= visibility.FriendlyMask | visibility.JammedBit | visibility.DecloakBit
 	terrain.SeaLevel = 20
 	u1.Y = numeric.Fixed(10 * 65536) // below sea 20
 	// The unit has not moved, so the observer stays where line 117 refreshed
@@ -162,7 +162,7 @@ func TestSessionVisibility(t *testing.T) {
 	// With 0x200 exempt (friendly), but enemy is not friendly; sensor would not set it. So still rejected.
 	// Simulate friendly underwater: own unit underwater with friendly mask should be visible.
 	u0.Y = numeric.Fixed(10 * 65536)
-	s.visStatus[int(u0.Handle)] = visibility.FriendlyMask // includes 0x200
+	u0.Flags |= visibility.FriendlyMask // includes 0x200
 	if !s.IsUnitVisible(0, u0) {
 		t.Fatalf("own underwater with friendly mask should be exempt")
 	}

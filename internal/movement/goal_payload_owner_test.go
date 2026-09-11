@@ -84,8 +84,8 @@ func TestInstallRaisesTheReleaseBitOnTheEvictedRecord(t *testing.T) {
 	if behind.Satisfied&0x80 == 0 {
 		t.Fatalf("released record's pending word = %#x, want 0x80 from the detach", behind.Satisfied)
 	}
-	// The identity check keeps that detach off a record that no longer owns the
-	// payload.
+	// The earlier record still owns its displaced object, but the controller
+	// is already null. Deleting that object cannot raise a new release bit.
 	ahead.Satisfied = 0
 	if !sys.ReleaseGoal(ahead) {
 		t.Fatal("release of the non-owning record was refused")

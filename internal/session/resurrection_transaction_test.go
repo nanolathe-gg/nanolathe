@@ -3,6 +3,8 @@ package session
 import (
 	"testing"
 
+	"github.com/nanolathe-gg/nanolathe/formats"
+
 	"github.com/nanolathe-gg/nanolathe/internal/features"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
@@ -108,5 +110,45 @@ func TestResurrectionPoolRefusalRetainsCorpseForRetry(t *testing.T) {
 	}
 	if cell.Feature() != world.PlotFeatureNone {
 		t.Fatalf("successful retry retained corpse feature %#x", cell.Feature())
+	}
+}
+
+// Successful resurrection must release its feature record before a later
+// same-tick stamp, without waiting for the feature phase [05 R-WORK-01 §7]
+// [05 R-FEAT-01 §4].
+func TestResurrectionImmediatelyReturnsFeatureCapacity(t *testing.T) {
+	attrs := make([]formats.TNTAttribute, 64*64)
+	for i := range attrs {
+		attrs[i] = formats.TNTAttribute{Height: 10, Feature: world.PlotFeatureNone}
+	}
+	terrain := minimalTerrain()
+	terrain.CellW, terrain.CellH = 64, 64
+	terrain.Plot = world.ExpandPlot(attrs, 64, 64)
+	s := wreckOrientationSession(t, terrain)
+	def := s.Catalog.Features["wreckvictim_dead"]
+	for i := 0; i < features.FeatureAnimSlots; i++ {
+		if s.Features.PlaceAt(i%64, i/64, def) == nil {
+			t.Fatalf("fill arena at %d", i)
+		}
+	}
+	h, err := s.Units.Create(s.Catalog.Units["wreckcon"], 0, world.CellToWorld(60), 0, world.CellToWorld(60))
+	if err != nil {
+		t.Fatal(err)
+	}
+	builder := s.Units.Unit(h)
+	builder.InBuildStance = true
+	q := orders.QueueForUnit(builder)
+	s.bindExistingOrderQueue(builder)
+	q.Push(orders.Lookup("Resurrect"), orders.Node{Owner: h, Phase: 5, GoalX: world.CellToWorld(12), GoalZ: world.CellToWorld(12)})
+	q.Pump(builder, 100)
+	if !terrain.PlotAt(12, 12).IsEmpty() {
+		t.Fatal("resurrection did not consume corpse")
+	}
+	// A later death or ignition can allocate before TickMotion runs.
+	if s.Features.PlaceAt(50, 50, def) == nil {
+		t.Fatal("resurrection retained feature capacity until a later phase")
+	}
+	if s.Features.InstanceAt(12, 12) != nil {
+		t.Fatal("removed corpse retained its runtime record")
 	}
 }

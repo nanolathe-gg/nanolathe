@@ -268,24 +268,9 @@ func (s *Service) needsApproach(builder *units.Unit, node *orders.Node) bool {
 // at all — the precondition for parking the record on `0xE0` and, for the
 // ground twin, for consulting the reach expression [05 R-WORK-01 §13].
 //
-// A construction aircraft has an approach too, with its own goal and no reach
-// expression. `VTOL_MobileBuild` phase 1 snaps the goal onto the product's
-// footprint, installs a POINT marker there with horizontal arrival radius
-// `builddistance` (strict `<`) and sets the gate to `0xE0`; phase 2 — the
-// placement validator and the nanoframe creator — is dispatched by that
-// marker's outcome, and abandons on `0x40` [04 R-ORD-02 §2]. The marker and
-// the gate are written by the air executor in internal/movement, which owns
-// the marker family; this service's phase 1 waits for the wake. The row ends
-// "there is no nanolathe-active stamp and no reach test after arrival: an
-// aircraft that reached its builddistance marker builds from wherever the
-// 150-tick orbit leaves it", which is why outOfReach below still answers no
-// for an aircraft — the reach expression of [05 R-WORK-01 §2] belongs to the
-// ground twin's `0x40` arm alone.
-//
-// Before the air approach was wired, an aircraft advanced straight into
-// placement on its first visit, so a constructor aircraft ordered to build
-// across the map stamped the nanoframe where it stood and only then flew to
-// it (play-test PT4).
+// Aircraft instead use the separate phase-0/phase-1 movement legs dispatched
+// by vtolBuildVisit, with the saved phase distinguishing climb and site waits
+// [04 R-ORD-02 §2][08 R-SAVE-ORDER-01].
 func (s *Service) approachArmed(builder *units.Unit, node *orders.Node) bool {
 	if s == nil || s.Movement == nil || builder == nil || node == nil {
 		return false
@@ -313,12 +298,6 @@ func isAirBuilder(builder *units.Unit) bool {
 // A builder with no approach term (a definition with no `builddistance`)
 // advances into the placement phase in this same visit, which is the timing
 // the machine had when State0 wired straight to State2.
-//
-// An aircraft's approach installs nothing here: the site marker and the
-// `0xE0` gate are the air executor's phase 1 [04 R-ORD-02 §2], run from the
-// mover tick after the takeoff preamble's climb has completed. This phase only
-// holds the record open, with no deadline, until the pump delivers the
-// marker's outcome to mobileBuildWakeVisit.
 //
 // What the gate replaces is worth naming, because it is the one observable
 // change WU-19-225 makes to a running game: the approach used to arm this
@@ -388,26 +367,6 @@ func (s *Service) mobileBuildWakeVisit(builder *units.Unit, node *orders.Node, s
 	}
 	wake := satisfied & orders.ApproachWakeGate
 	if wake == 0 {
-		return 0, false
-	}
-	if isAirBuilder(builder) {
-		// `VTOL_MobileBuild` phase 2: "satisfied `0x40` → abandon" — no reach
-		// expression and no caption; the placement validator and the creator
-		// follow for any other outcome [04 R-ORD-02 §2].
-		if wake&approachWakeNoRoute != 0 {
-			return 8, true
-		}
-		// The executor produces two wakes on this gate: the takeoff
-		// preamble's climb marker and then the site marker. Retail's phase 1
-		// consumes the first by installing the site marker; here that install
-		// is the executor's, so the wake that precedes it is not the arrival
-		// this phase waits for.
-		if !s.Movement.AirBuildSiteLegInstalled(builder, node) {
-			return 0, false
-		}
-		node.Phase = uint8(State2)
-		node.DynamicGate = 0
-		node.Deadline = -1
 		return 0, false
 	}
 	if wake&approachWakeNoRoute != 0 {

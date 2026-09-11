@@ -23,8 +23,6 @@ func TestLandingPadRemovalInterruptsDescent(t *testing.T) {
 	m := sys.newFollowPieceMarker(u, pad.Handle, airNoPiece)
 	m.setAltitudeOffset(0)
 	sys.installAirGoal(u, n, m)
-	st := sys.airStateFor(u, n)
-	st.phase, st.waiting = 6, true
 	n.Phase = 5
 	n.DynamicGate = 0xE9
 	n.Deadline = 15

@@ -36,10 +36,9 @@
 // Air marker installation is routed through the session-owned movement
 // adapter. The movement package retains ownership of marker construction and
 // release; this package supplies only the node identity and scalar goal data
-// [04 R-AIR-01 §4][P0-00 B]. That package also owns the air-leg executors that
-// run alongside these rows — the takeoff preamble, the approach leg and the
-// 150-tick construction orbit of [04 §10.3] — so a leg named in a row below
-// and absent from its body is there, one layer down, not missing.
+// [04 R-AIR-01 §4][P0-00 B]. Movement builds the orbit marker when called from
+// the work phase, before the work quantum [04 §10.3]. Order progress stays on
+// the record, including across restore and temporary head replacement.
 
 package orders
 
@@ -272,15 +271,13 @@ func vtolHelpBuildHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32)
 		emitStartBuildingAbsolute(u, n, target)
 		return 1
 	case 3:
-		// The 150-tick orbit-marker rebuild of [04 §10.3] is neither missing
-		// nor this file's to make. Markers belong to internal/movement, and
-		// its air-leg executor already runs the recurrence for this very
-		// descriptor: the station is the target's position PLUS the un-negated
-		// component pair at `bearing(me, target) + 0xDB6E`, radius
-		// `builddistance`, that angle stored as the marker's explicit heading,
-		// no arrival-radius and no altitude setter. Both air build orders share
-		// that body — [04 §10.3]'s "the identical code appears in both bodies".
-		//
+		// Movement constructs the due orbit marker before this visit's work,
+		// including its finishing quantum [04 §10.3].
+		if q := QueueForUnit(u); q != nil && q.Binding() != nil {
+			if movement := q.Binding().Movement; movement != nil && movement.RunAir != nil {
+				movement.RunAir(u, n, satisfied, tick)
+			}
+		}
 		// The work step, quantum `workertime/30` [05 R-WORK-01 §1]. Corrected
 		// with the ground twin (PT3-04): this arm used to admit no work at all,
 		// which made an air builder's assistance a no-op.

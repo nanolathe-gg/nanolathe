@@ -5,19 +5,15 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/visibility"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
-// TestPublishSnapshotRadarSensorLookupSurvivesASkippedUnit locks review
-// finding R05's O(1) replacement for the whole-slice sensor input scan: the
-// lookup must still resolve each live unit's OWN sensor record by pool
-// handle, not by its ordinal position in the sensor pass's output, once a
-// unit between two others in that output has died and no longer appears in
-// s.Units.Iter(). A position-keyed (rather than handle-keyed) lookup would
-// hand the wrong record to the unit that now sits at the freed unit's old
-// ordinal [03 §3.9].
-func TestPublishSnapshotRadarSensorLookupSurvivesASkippedUnit(t *testing.T) {
+// Publication follows live units even when a diagnostic sensor snapshot still
+// includes a removed slot. Current activation and cloak must not be replaced
+// with that pass's older inputs [03 R-VIS-01 §4][03 §3.9].
+func TestPublishSnapshotRadarUsesLiveUnitsAfterSkippedSlot(t *testing.T) {
 	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "contact"}, MaxDamage: 1}
 	w := newSessionFixtureWorld(4, nil)
 	hA, err := w.Create(def, 0, 0, 0, 0)
@@ -36,25 +32,21 @@ func TestPublishSnapshotRadarSensorLookupSurvivesASkippedUnit(t *testing.T) {
 	vis := visibility.New(&world.Terrain{CellW: 64, CellH: 64}, visibility.ModeHistoryEnabled|visibility.ModeCurrentEnabled)
 	vis.SetLocal(0)
 
-	var statusA, statusB, statusC uint32
 	units := []visibility.SensorUnit{
-		{ID: uint16(hA), Owner: 0, Status: &statusA, Alive: true, Hidden: false, Active: true, OnOffable: false},
-		{ID: uint16(hB), Owner: 0, Status: &statusB, Alive: true, Hidden: true, Active: false, OnOffable: true},
-		{ID: uint16(hC), Owner: 1, Status: &statusC, Alive: true, Hidden: false, Active: false, OnOffable: true},
+		{ID: uint16(hA), Owner: 0, Status: &w.Unit(hA).Flags, Alive: true, Hidden: false, Active: true, OnOffable: false},
+		{ID: uint16(hB), Owner: 0, Status: &w.Unit(hB).Flags, Alive: true, Hidden: true, Active: false, OnOffable: true},
+		{ID: uint16(hC), Owner: 1, Status: &w.Unit(hC).Flags, Alive: true, Hidden: false, Active: false, OnOffable: true},
 	}
 	// SensorTick's gate requires at least two players; the pass output is
-	// what publishSnapshot's lookup must match by ID [R-VIS-01 §4] "Gate".
+	// retained diagnostic snapshot left behind [R-VIS-01 §4] "Gate".
 	vis.SensorTick(0, 2, units)
 	inputs := vis.SensorInputs()
 	if len(inputs) != 3 {
 		t.Fatalf("sensor pass output = %d records, want 3", len(inputs))
 	}
-	// Capture the pass's own output as ground truth, keyed by handle, so the
-	// assertions below do not depend on guessing the friendly-pass arithmetic.
-	want := map[uint16]visibility.SensorInput{}
-	for _, in := range inputs {
-		want[in.ID] = in
-	}
+	// These operational values differ from the captured sensor inputs.
+	w.Unit(hA).Hidden = true
+	w.Unit(hC).Activated = true
 
 	// B dies after the sensor pass ran but before publication. Its record
 	// stays in the middle of the captured sensor output, so C's live-unit
@@ -84,9 +76,9 @@ func TestPublishSnapshotRadarSensorLookupSurvivesASkippedUnit(t *testing.T) {
 		if !ok {
 			t.Fatalf("no published contact for handle %d", h)
 		}
-		wantRecord := want[h]
-		if contact.Status != wantRecord.Status || contact.Hidden != wantRecord.Hidden || contact.Active != wantRecord.Active || contact.OnOffable != wantRecord.OnOffable {
-			t.Fatalf("contact for handle %d = %+v, want it to carry sensor record %+v", h, contact, wantRecord)
+		u := w.Unit(pool.Handle(h))
+		if contact.Status != u.Flags&^0x10 || contact.Hidden != u.Hidden || contact.Active != u.Activated || contact.OnOffable != u.Def.OnOffable {
+			t.Fatalf("contact for handle %d = %+v, differs from current unit state", h, contact)
 		}
 	}
 }

@@ -78,16 +78,14 @@ func RetailScriptRestore(v *VM, image []byte) error {
 			turnMarker := d(6 + axis)
 			anim := axisAnim{
 				moveTarget: d(axis), moveSpeed: d(3 + axis), moveBusy: d(3+axis) != 0,
-				spinTarget: d(12 + axis), spinAccel: d(15 + axis),
+				turnSpeed: d(9 + axis), spinTarget: d(12 + axis), spinAccel: d(15 + axis),
 			}
 			if turnMarker == -1 {
 				// 0xffffffff is the continuous-spin marker. The saved turn-speed
 				// word is the current spin speed; it is not a uint16 target [04 §4.6].
 				anim.spinActive = true
-				anim.spinSpeed = d(9 + axis)
 			} else {
 				anim.turnTarget = uint16(turnMarker)
-				anim.turnSpeed = d(9 + axis)
 				anim.turnBusy = anim.turnSpeed != 0
 			}
 			pieces[p].anim.axes[axis] = anim

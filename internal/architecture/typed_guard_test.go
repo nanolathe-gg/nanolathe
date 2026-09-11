@@ -489,7 +489,7 @@ var mapRangeExceptions = map[string]string{
 var mapFunctionHashes = map[string]string{
 	// On-demand diagnostic projections copy into local storage only. Pin their
 	// sorts and full read operations so future edits require another I1 review.
-	"internal/cob/debug_capture.go *VM.DebugSnapshot":            "9535e63fb096edcf712b2629f9331c45e9ac43d03bf863a9e40aef27502ea483",
+	"internal/cob/debug_capture.go *VM.DebugSnapshot":            "f19b940e78dceab1d9c60fabb131113f547a21ce600853d5626368935c55d2f1",
 	"internal/features/debug_capture.go *Service.DebugSnapshot":  "b88eeadbf744ab1a8e7d0580cf69be24c9dbbba5c567641de4968dc3aa80a6ad",
 	"internal/ai/manager.go *Manager.EnsureStrategicInitialized": "cba316ea4945f9095fea37a058826bc5f346f0451711b017b426d5ce2eefa660",
 	"internal/ai/profile.go cloneWeightTable":                    "c24030e7c8fcd13b14aeae9ef333f94c571fd0b0b98e59b14a3d7db12c86636e",

@@ -29,7 +29,14 @@ func (s *System) RetailMoverImage(h pool.Handle) ([]byte, error) {
 	// fresh movers have deterministic zero scratch while named mode/blocked
 	// state always comes from the live fields [08 R-SAVE-02 §8].
 	state := c.SavedStateByte &^ 7
-	state |= c.Mode & 3
+	mode := c.Mode
+	if u := s.unitFor(h); u != nil {
+		// Attach/detach requests can occur after this mover's visit. Their
+		// live mode is authoritative before the collision copy catches up
+		// [04 R-AIR-01 §9, §10][08 R-SAVE-02 §8].
+		mode = u.Move.Mode
+	}
+	state |= mode & 3
 	if c.Blocked {
 		state |= 4
 	}

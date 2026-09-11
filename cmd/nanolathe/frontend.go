@@ -801,6 +801,10 @@ func (g *gameShell) commitBattleCandidate(battle *battleSession) {
 	// Save restoration reaches this point only after both detached candidates
 	// are ready. Keep frontend cues alive on preflight failure, then stop the
 	// ordinary table at this successful commitment [03 R-AUD-01 §1].
+	// Direct entry can reach battle before the initial menu has had a frame
+	// to start its music. Retire that pending cue with the successful menu
+	// transition, so the next shell step cannot start it over the battle.
+	g.menuBGMPending = false
 	g.stopOrdinaryAudio()
 	if g.battle != nil {
 		g.battle.teardown(clPtr)

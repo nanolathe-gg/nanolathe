@@ -112,8 +112,8 @@ func TestRetailUnitWeaponTargetAndPayloadFixup(t *testing.T) {
 	if err := RetailUnitBase(u, data); err != nil {
 		t.Fatal(err)
 	}
-	if u.Slots[0].SavedPayloadWord0 != 0x11223344 || u.Slots[0].SavedPayloadWord1 != 0x55667788 || u.Slots[0].Target.Kind != TargetNone {
-		t.Fatalf("base pass interpreted target/payload early: %#v", u.Slots[0])
+	if u.Slots[0].Aim.ReadyWord() != 0x11223344 || !u.Slots[0].Aim.Ready || !u.Slots[0].Aim.IssueBit || u.Slots[0].DistanceWord != 0x55667788 || u.Slots[0].Target.Kind != TargetNone {
+		t.Fatalf("base pass lost weapon words or resolved the target early: %#v", u.Slots[0])
 	}
 	if err := RetailUnitWeaponTargets(u, retailTargetSlotMap(map[uint16]pool.Handle{7: 11})); err != nil {
 		t.Fatal(err)

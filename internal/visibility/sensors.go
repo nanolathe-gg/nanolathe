@@ -88,16 +88,16 @@ type SensorUnit struct {
 	DecloakDeadline *uint32
 }
 
-// SensorInput is an immutable per-tick contact snapshot for presentation.
-// SensorInputs returns copies so the renderer cannot mutate authoritative
-// sensor state [03 §3.4].
+// SensorInput is a diagnostic snapshot of one completed sensor pass.
+// Gameplay and publication read the live unit status word instead: these
+// inputs may describe a removed occupant of a reused slot [03 R-VIS-01 §4].
 type SensorInput struct {
 	ID        uint16
 	Owner     PlayerID
 	X, Y, Z   numeric.Fixed
 	Status    uint32
 	Hidden    bool
-	Stealth   bool // retained separately for the presentation blink gate
+	Stealth   bool
 	Active    bool
 	OnOffable bool
 }
@@ -116,11 +116,8 @@ func (s *Service) SensorInputs() []SensorInput {
 	return s.AppendSensorInputs(nil)
 }
 
-// AppendSensorInputs copies the same snapshot into the caller's storage. It is
-// what a per-tick consumer should call: the copy exists so a reader cannot
-// observe the next pass mutating the service's own row, not so that each read
-// allocates one, and this pass's snapshot was a tenth of everything the
-// simulation allocated.
+// AppendSensorInputs copies the diagnostic snapshot into retained caller
+// storage without exposing the service's mutable backing array.
 func (s *Service) AppendSensorInputs(dst []SensorInput) []SensorInput {
 	if s == nil || len(s.sensorInputs) == 0 {
 		return dst[:0]
@@ -133,10 +130,9 @@ func (s *Service) AppendSensorInputs(dst []SensorInput) []SensorInput {
 	return dst
 }
 
-// SensorStatus returns one completed sensor-phase runtime status word by its
-// unit-pool ID. It is the simulation reader for consumers such as target
-// admission; SensorInputs remains the copied presentation snapshot
-// [R-VIS-01 §4][R-VIS-01 §5].
+// SensorStatus returns a diagnostic word from the last completed sensor pass.
+// It is not the current state of a unit-pool slot; gameplay must read the
+// live unit, whose constructor or restore may have run since [R-VIS-01 §4].
 func (s *Service) SensorStatus(id uint16) (uint32, bool) {
 	if s == nil || int(id) >= len(s.sensorStatusByID) {
 		return 0, false

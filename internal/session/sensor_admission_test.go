@@ -222,21 +222,21 @@ func TestRadarEmissionRequiresTheActivationBit(t *testing.T) {
 
 	// Inactive: no contact query, so no detection.
 	s.stepAuthoritativePhases(1)
-	if got := s.visStatus[int(enemyH)]; got&visibility.SeenBit != 0 {
+	if got := s.Units.Unit(enemyH).Flags; got&visibility.SeenBit != 0 {
 		t.Fatalf("an INACTIVE radar emitter detected an enemy: status %#x [03 §3.4]", got)
 	}
 
 	// The completion edge raises the bit through the one writer retail has.
 	tower.SetActivationEdge(true)
 	s.stepAuthoritativePhases(30)
-	if got := s.visStatus[int(enemyH)]; got&visibility.SeenBit == 0 {
+	if got := s.Units.Unit(enemyH).Flags; got&visibility.SeenBit == 0 {
 		t.Fatalf("an ACTIVE radar emitter did not detect an enemy inside its range: status %#x [R-VIS-01 §5]", got)
 	}
 
 	// Lowering the edge again withdraws detection.
 	tower.SetActivationEdge(false)
 	s.stepAuthoritativePhases(60)
-	if got := s.visStatus[int(enemyH)]; got&visibility.SeenBit != 0 {
+	if got := s.Units.Unit(enemyH).Flags; got&visibility.SeenBit != 0 {
 		t.Fatalf("a DEACTIVATED radar emitter kept detecting an enemy: status %#x", got)
 	}
 }

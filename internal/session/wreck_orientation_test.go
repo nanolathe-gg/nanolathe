@@ -17,7 +17,7 @@ import (
 // mobile victim whose corpse is a 3D wreck, named so the corpse's key truncated
 // at its first underscore resolves the victim's own definition
 // [05 R-WORK-01 §7 phase 3].
-func wreckOrientationSession(t *testing.T) *Session {
+func wreckOrientationSession(t *testing.T, terrains ...*world.Terrain) *Session {
 	t.Helper()
 	cat := minimalCatalogForStrict()
 	mk := func(name string, f func(*content.UnitDef)) *content.UnitDef {
@@ -52,6 +52,9 @@ func wreckOrientationSession(t *testing.T) *Session {
 	s := &Session{
 		Catalog: cat, World: minimalTerrain(), Mission: syntheticMission(),
 		LocalOwner: 0, Snapshot: &frame.Buffer{},
+	}
+	if len(terrains) != 0 {
+		s.World = terrains[0]
 	}
 	w, err := newSlicedWorld(cat)
 	if err != nil {

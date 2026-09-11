@@ -455,19 +455,12 @@ func handleM(token string, ctx *interpCtx) {
 		}
 	}
 	// Do not test conversion counts [04 §3.6] C13: still queue even if parse failed (we use 0).
-	id := orders.Lookup("Move_Ground")
-	if ctx.unit.Def != nil && ctx.unit.Def.CanFly {
-		if vid := orders.Lookup("VTOL_Move"); vid != 0 {
-			id = vid
-		}
-	}
-	// Fallback via resolver for exact variant [04 §3.4] via orders.Resolve? Use Lookup result.
+	// Positional mission verbs classify through the same resolver as live
+	// commands, including capability gates and factory rally descriptors
+	// [04 §3.6][04 R-ORD-02 §1].
+	id := orders.Resolve(2, ctx.unit, nil, nil)
 	if id == 0 {
-		// Try resolver path: move gate can-move [04 §3.4] code 2.
-		id = orders.Resolve(2, ctx.unit, nil, nil)
-		if id == 0 {
-			return
-		}
+		return
 	}
 	node := orders.Node{
 		GoalX: floatToFixed(fx), // [04 §3.6] coordinates×65536 [C10]
@@ -500,17 +493,10 @@ func handleA(token string, ctx *interpCtx) {
 		var fx, fy float64
 		fx, _ = strconv.ParseFloat(fields[0], 64)
 		fy, _ = strconv.ParseFloat(fields[1], 64)
-		// Resolve attack ground position. Spec: positional verbs classify via resolver [04 §3.4].
-		// Use generic attack order: Attack_Chase or Attack_NoMove etc via resolver.
-		// For ground position attack, we queue an attack order with goal.
-		// Choose descriptor via resolver code 3 fallback; if resolver fails (needs target), fallback to Attack_Chase.
+		// A rejected positional attack remains rejected; inventing a chase
+		// descriptor here bypasses the resolver's weapon and capability gates
+		// [04 §3.6][04 R-ORD-02 §1].
 		id := orders.Resolve(3, ctx.unit, nil, nil)
-		if id == 0 {
-			id = orders.Lookup("Attack_Chase")
-			if id == 0 {
-				id = orders.Lookup("AttackUType")
-			}
-		}
 		if id == 0 {
 			return
 		}
@@ -701,24 +687,10 @@ func handleG(token string, ctx *interpCtx) {
 	if target == nil {
 		return
 	}
-	var id orders.ID
-	if ctx.unit.Def != nil && ctx.unit.Def.CanFly {
-		id = orders.Lookup("VTOL_Follow")
-		if id == 0 {
-			id = orders.Lookup("Follow_Ground")
-		}
-	} else {
-		id = orders.Lookup("Follow_Ground")
-		if id == 0 {
-			id = orders.Lookup("VTOL_Follow")
-		}
-	}
+	// Preserve the canonical command admission and variant [04 §3.6].
+	id := orders.Resolve(7, ctx.unit, target, nil)
 	if id == 0 {
-		// Fallback via resolver code 7.
-		id = orders.Resolve(7, ctx.unit, target, nil)
-		if id == 0 {
-			return
-		}
+		return
 	}
 	node := orders.Node{
 		Target: target.Handle,
@@ -819,23 +791,10 @@ func handleP(token string, ctx *interpCtx) {
 		ft, _ = strconv.ParseFloat(fields[2], 64)
 	}
 	ticks := timeToTicks(ft) // [04 §3.6] times×30 [C10]
-	var id orders.ID
-	if ctx.unit.Def != nil && ctx.unit.Def.CanFly {
-		id = orders.Lookup("VTOL_Patrol")
-		if id == 0 {
-			id = orders.Lookup("Patrol")
-		}
-	} else {
-		id = orders.Lookup("Patrol")
-		if id == 0 {
-			id = orders.Lookup("VTOL_Patrol")
-		}
-	}
+	// Preserve the canonical command admission and variant [04 §3.6].
+	id := orders.Resolve(9, ctx.unit, nil, nil)
 	if id == 0 {
-		id = orders.Resolve(9, ctx.unit, nil, nil)
-		if id == 0 {
-			return
-		}
+		return
 	}
 	node := orders.Node{
 		GoalX:  floatToFixed(fx), // [04 §3.6] coordinates×65536
@@ -871,23 +830,10 @@ func handleU(token string, ctx *interpCtx) {
 	if len(fields) >= 2 {
 		fy, _ = strconv.ParseFloat(fields[1], 64)
 	}
-	var id orders.ID
-	if ctx.unit.Def != nil && ctx.unit.Def.CanFly {
-		id = orders.Lookup("VTOL_Unload")
-		if id == 0 {
-			id = orders.Lookup("Ground_Unload")
-		}
-	} else {
-		id = orders.Lookup("Ground_Unload")
-		if id == 0 {
-			id = orders.Lookup("VTOL_Unload")
-		}
-	}
+	// Preserve the canonical command admission and variant [04 §3.6].
+	id := orders.Resolve(5, ctx.unit, nil, nil)
 	if id == 0 {
-		id = orders.Resolve(5, ctx.unit, nil, nil)
-		if id == 0 {
-			return
-		}
+		return
 	}
 	node := orders.Node{
 		GoalX: floatToFixed(fx), // [04 §3.6] coordinates×65536

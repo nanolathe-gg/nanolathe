@@ -435,7 +435,10 @@ func (s *Service) dispatchSlotAim(u *units.Unit, slot *units.Slot, idx int, tick
 		result := bridge.Aim(cob.WeaponSlot(idx), yaw, pitch, func(ret cob.CallbackReturn) {
 			delete(s.pendingAims, key)
 			returned, value = true, ret.Value
-			slot.Aim.Ready = ret.Explicit && ret.Value != 0
+			// Every outstanding callback addresses this slot's receiver. A
+			// zero delivery cannot revoke a different callback's grant
+			// [04 R-CB-01 §6]; only a fresh dispatch clears the receiver.
+			slot.Aim.CompleteAim(ret.Value)
 		})
 		if returned {
 			sum.ReturnSeen, sum.ReturnValue = true, value
@@ -648,15 +651,6 @@ type targetRegistry struct {
 	primary     [combatPlayerSlots][]pool.Handle
 	secondary   [combatPlayerSlots][]pool.Handle
 
-	// seen is this tick's view of the sensor phase's seen bit, indexed by unit
-	// handle. It is refreshed at most once per tick and only on a tick that
-	// rebuilds at least one side's registry.
-	seen     []bool
-	seenTick uint32
-	// seenScratch is refreshSeen's retained copy of the sensor snapshot.
-	seenScratch []visibility.SensorInput
-	seenPrimed  bool
-
 	// walkScratch is the destination the rebuild's pool-order walk appends
 	// into, so the walk that runs for every side on the cadence tick reuses one
 	// buffer instead of allocating a live-unit slice per side.
@@ -681,58 +675,6 @@ func (r *targetRegistry) secondaryList(owner uint8) []pool.Handle {
 		return nil
 	}
 	return r.secondary[owner]
-}
-
-// refreshSeen rebuilds the per-handle seen-bit view from the sensor phase's
-// last completed pass [03 §3.4][R-VIS-01 §4].
-//
-// The bit is recomputed every tick from the LOCAL player's point of view only,
-// so every side's secondary list is built from the local observer's sensors —
-// "in single player that is the human's view, and a computer opponent's
-// fallback acquisition therefore inherits it" [06 §3.1]. Reading it here rather
-// than recomputing it keeps the four producers (own/allied, radar, sonar, line
-// of sight) and the two jam clears in the one phase that owns them.
-func (r *targetRegistry) refreshSeen(tick uint32, vis *visibility.Service) {
-	if r == nil {
-		return
-	}
-	if r.seenPrimed && r.seenTick == tick {
-		return
-	}
-	r.seenPrimed = true
-	r.seenTick = tick
-	for i := range r.seen {
-		r.seen[i] = false
-	}
-	if vis == nil {
-		return
-	}
-	// Retained storage: the snapshot is walked here and nowhere else, and the
-	// refresh runs once a tick.
-	r.seenScratch = vis.AppendSensorInputs(r.seenScratch[:0])
-	for _, in := range r.seenScratch { // a slice, in the sensor phase's order (I1)
-		if in.Status&visibility.SeenBit == 0 {
-			continue
-		}
-		h := int(in.ID)
-		if h < 0 {
-			continue
-		}
-		if h >= len(r.seen) {
-			grown := make([]bool, h+1)
-			copy(grown, r.seen)
-			r.seen = grown
-		}
-		r.seen[h] = true
-	}
-}
-
-// seenBit reports the last sensor pass's seen bit for one unit handle.
-func (r *targetRegistry) seenBit(h pool.Handle) bool {
-	if r == nil || int(h) < 0 || int(h) >= len(r.seen) {
-		return false
-	}
-	return r.seen[h]
 }
 
 // targetingUpgradeGateFor reads one side's secondary-list gate as the last
@@ -878,7 +820,6 @@ func (s *Service) rebuildTargetRegistry(tick uint32, owner uint8, w *units.World
 		return // `lastRebuild + 30 <= currentTick` [06 §3.1]
 	}
 	r.lastRebuild[p] = tick
-	r.refreshSeen(tick, vis)
 	gate := false
 	pri := r.primary[p][:0] // both lists are cleared at every rebuild [06 §3.1]
 	sec := r.secondary[p][:0]
@@ -899,7 +840,7 @@ func (s *Service) rebuildTargetRegistry(tick uint32, owner uint8, w *units.World
 		if u.Flags&units.ImmunityStatus == 0 && directlyVisibleAtRebuild(owner, u, vis) {
 			pri = append(pri, u.Handle) // unit-array order [06 §3.1] (I1)
 		}
-		if r.seenBit(u.Handle) {
+		if u.Flags&visibility.SeenBit != 0 {
 			sec = append(sec, u.Handle) // the same order, independent test
 		}
 	}
@@ -924,21 +865,7 @@ func directlyVisibleAtRebuild(owner uint8, cand *units.Unit, vis *visibility.Ser
 	if cand == nil || vis == nil {
 		return false // hostile list entry is visibility-gated [06 §3.1]
 	}
-	return vis.IsVisible(visibility.PlayerID(owner), visibilityTarget(cand, sensorStatus(vis, cand.Handle)))
-}
-
-// sensorStatus reads the completed sensor phase's runtime word for this pool
-// handle. The sonar bit is authored by that phase and can be cleared by its
-// sonar-jam callback; alliance membership is not a substitute [06 §3.1]
-// [03 R-VIS-01 §4][03 R-VIS-01 §5].
-func sensorStatus(vis *visibility.Service, h pool.Handle) uint32 {
-	if vis == nil {
-		return 0
-	}
-	if status, ok := vis.SensorStatus(uint16(h)); ok {
-		return status
-	}
-	return 0
+	return vis.IsVisible(visibility.PlayerID(owner), visibilityTarget(cand, cand.Flags))
 }
 
 // visibilityTarget forms the direct-visibility probe from the definition's
@@ -1042,7 +969,7 @@ func (s *Service) materializeCandidatesInRange(u *units.Unit, w *units.World, li
 		if !WithinRange(u.X, u.Z, cand.X, cand.Z, rangeLimit) {
 			continue
 		}
-		out = append(out, acquisitionCandidate(u, cand, seaLevel, sensorStatus(vis, cand.Handle), catalog))
+		out = append(out, acquisitionCandidate(u, cand, seaLevel, cand.Flags, catalog))
 	}
 	s.candidateScratch = out
 	if len(out) == 0 {
@@ -1133,7 +1060,7 @@ func slotAcquisition(u *units.Unit, slot *units.Slot, idx int, w *units.World, v
 			if candUnit == nil {
 				return false
 			}
-			return vis.IsVisible(visibility.PlayerID(u.Owner), visibilityTarget(candUnit, sensorStatus(vis, candUnit.Handle)))
+			return vis.IsVisible(visibility.PlayerID(u.Owner), visibilityTarget(candUnit, candUnit.Flags))
 		}
 	}
 	if weapon.Ballistic {
@@ -1398,8 +1325,8 @@ func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terra
 		Ammo:         slot.Ammo,
 		MuzzlePiece:  slot.MuzzlePiece,
 		// The `T0` divisor the ballistic creator reads. It is copied, never
-		// written back: the word has exactly one writer, the slot initializer
-		// at unit construction [06 R-WPN-05 §3][06 §6.4].
+		// written back: aiming/firing preserve the initialized or restored word
+		// [06 R-WPN-05 §3][06 §6.4][08 R-SAVE-WEAPON-01].
 		DistanceWord: slot.DistanceWord,
 		Aim:          slot.Aim,
 		Target:       tgt,

@@ -164,6 +164,12 @@ func (g *gameShell) refreshSaveLoadPanel() {
 		panel.SetText("TITLE", "Save Game")
 	}
 	g.setListItems("GAMES", saveLoadUI.Descriptions(), saveLoadUI.Selected())
+	// Filling a nonempty list selects row zero [07 R-FE-02 §5]. Keep the
+	// dialog's file selection aligned with that widget selection: clicking
+	// the already-highlighted first row emits no change callback.
+	if list := panel.ListAt(panel.Index("GAMES")); list != nil && len(saveLoadUI.Entries()) != 0 && saveLoadUI.Selected() != list.Selected() {
+		saveLoadUI.Select(list.Selected())
+	}
 	panel.SetText("GAMENAME", saveLoadUI.Name())
 	summary, ok := save.Summary{}, false
 	if entry, has := saveLoadUI.SelectedEntry(); has {

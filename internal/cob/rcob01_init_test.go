@@ -197,7 +197,7 @@ func TestBindZeroFillsPieceState(t *testing.T) {
 	for i := range vm.anims {
 		for axis := 0; axis < 3; axis++ {
 			a := vm.anims[i].axes[axis]
-			if a.moveTarget != 0 || a.moveSpeed != 0 || a.turnSpeed != 0 || a.spinSpeed != 0 || a.spinAccel != 0 {
+			if a.moveTarget != 0 || a.moveSpeed != 0 || a.turnSpeed != 0 || a.spinAccel != 0 {
 				t.Fatalf("piece %d axis %d animation words not zero-filled [R-COB-01 §1]", i, axis)
 			}
 		}

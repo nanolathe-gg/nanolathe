@@ -3,6 +3,7 @@ package orders
 import (
 	"testing"
 
+	"github.com/nanolathe-gg/nanolathe/internal/cob"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
@@ -138,5 +139,100 @@ func TestCancelFrontMostAndPurgeSurviveAReentrantCleanup(t *testing.T) {
 	}
 	if len(q2.Primary()) != 1 || q2.Primary()[0] != survivor {
 		t.Fatalf("purge left %d records, want only the purge survivor", len(q2.Primary()))
+	}
+}
+
+// Established: the full purge frees both segments in order, with removal
+// callbacks on every record [04 §3.3][04 R-MOV-03 §6][04 R-ORDER-02 §2].
+// Construction's cancel notice can unlink its own record during that walk.
+func TestCancelAllCleansEveryRecordAfterReentrantRemoval(t *testing.T) {
+	for _, throughPump := range []bool{false, true} {
+		name := "direct"
+		if throughPump {
+			name = "primary-result"
+		}
+		t.Run(name, func(t *testing.T) {
+			q, u, notices := reentrantCancelQueue(t)
+			bound, _ := cbUnit(cbProgram("StopBuilding"))
+			u.ScriptState = bound.ScriptState
+			q.Push(Lookup("MobileBuild"), Node{Owner: u.Handle, DynamicGate: 2, Param2: 1})
+			build := q.Head()
+			q.Push(Lookup("Move_Ground"), Node{Owner: u.Handle, Param1: 11})
+			middle := q.Primary()[1]
+			q.Push(Lookup("Move_Ground"), Node{Owner: u.Handle, Param1: 12})
+			tail := q.Primary()[2]
+			q.Push(Lookup("BuildWeapon"), Node{Owner: u.Handle, Param1: 13})
+			rear := q.Secondary()[0]
+			for _, n := range []*Node{middle, tail, rear} {
+				n.Flags |= FlagStopBuildingPending
+			}
+			var released []*Node
+			q.binding.Movement = &MovementGoalAdapter{Release: func(n *Node) bool {
+				if n != build {
+					released = append(released, n)
+				}
+				return true
+			}}
+			stops := 0
+			callbackBridgeFor(u).SetLifecycleSink(func(e cob.LifecycleEvent) {
+				if e.Name == "StopBuilding" && e.Phase == "start" {
+					stops++
+				}
+			})
+			want := []*Node{middle, tail, rear}
+			if throughPump {
+				// A ground move rejected while carried returns cancel-all through
+				// its real descriptor handler [04 R-ORD-01 §4].
+				u.Attachment.Carrier = 2
+				trigger := q.PushHead(Lookup("Move_Ground"), Node{Owner: u.Handle})
+				want = append([]*Node{trigger}, want...)
+				q.Pump(u, 100)
+			} else {
+				q.CancelAll()
+			}
+			if *notices != 1 {
+				t.Errorf("cancel notices = %d, want one", *notices)
+			}
+			if stops != 3 {
+				t.Errorf("StopBuilding starts = %d, want one per pending record", stops)
+			}
+			if len(released) != len(want) {
+				t.Fatalf("released %d records, want %d", len(released), len(want))
+			}
+			for i, n := range want {
+				if released[i] != n {
+					t.Errorf("release %d = %p, want %p", i, released[i], n)
+				}
+			}
+			if len(q.Primary()) != 0 || len(q.Secondary()) != 0 {
+				t.Fatal("cancel-all left queued records")
+			}
+		})
+	}
+}
+
+func TestCancelAllDoesNotRecleanARecordRemovedByAnEarlierNotice(t *testing.T) {
+	q, u, _ := reentrantCancelQueue(t)
+	q.Push(Lookup("MobileBuild"), Node{Owner: u.Handle, DynamicGate: 2, Param2: 1})
+	q.Push(Lookup("Move_Ground"), Node{Owner: u.Handle, Param1: 7})
+	removed := q.Primary()[1]
+	q.Push(Lookup("Move_Ground"), Node{Owner: u.Handle, Param1: 8})
+	tail := q.Primary()[2]
+	var released []*Node
+	q.binding.Movement = &MovementGoalAdapter{Release: func(n *Node) bool {
+		if n == removed || n == tail {
+			released = append(released, n)
+		}
+		return true
+	}}
+	q.binding.Work.CancelNotice = func(_ *units.Unit, n *Node, _ uint32) bool {
+		n.DynamicGate &^= 2
+		q.RemovePrimaryNode(removed, false)
+		q.RemovePrimaryNode(n, false)
+		return true
+	}
+	q.CancelAll()
+	if len(released) != 2 || released[0] != removed || released[1] != tail {
+		t.Fatalf("release order = %v, want removed sibling then tail, once each", released)
 	}
 }

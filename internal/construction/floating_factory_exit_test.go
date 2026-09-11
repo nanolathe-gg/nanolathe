@@ -66,6 +66,9 @@ func TestFloatingFactoryAircraftProductClearsDeepWaterExit(t *testing.T) {
 	sys.SetClasses(cat.Movement)
 	sys.BindWorld(w)
 	svc.Movement = sys
+	// Session composition binds the runner before a product's first order visit.
+	svc.OrderBinding = &orders.QueueBinding{Lookup: w.Unit, Movement: &orders.MovementGoalAdapter{RunAir: sys.AirLegRunner()}}
+
 	for i := range svc.Economy.Players {
 		svc.Economy.Players[i].Stock[0] = 1e9
 		svc.Economy.Players[i].Stock[1] = 1e9

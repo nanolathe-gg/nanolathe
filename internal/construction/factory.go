@@ -202,11 +202,10 @@ type Service struct {
 	// already be within nanolathe range.
 	Movement *movement.System
 
-	// Per-session state. None of this may live in a package-level var: it is
-	// authoritative (BuilderLinks is C18's "register the builder link on the
-	// product"), it has to survive save/load through one owner, and two worlds
-	// in one process must not share it.
-	builderLinks map[pool.Handle]pool.Handle // product -> builder [05 C18]
+	// Per-session derived index for progress publication and the construction
+	// removal helper. Saved producer order targets rebuild it; retail's carrier
+	// attachment is a separate relation [08 R-SAVE-02 §11].
+	builderLinks map[pool.Handle]pool.Handle // product -> builder
 	// SETTLED (WU-19-166), retiring an open-question marker that read "if an
 	// in-battle restore boundary is introduced, persist placements together
 	// with the production node phase/count/target ...". Placements must NOT be
@@ -254,7 +253,10 @@ type Service struct {
 	// Only StepUnit may execute the reclaim row body; earlier queue visits
 	// preserve their delivered events on the same node until this window.
 	reclaimStepNode *orders.Node
-	boundGetBuilt   orders.OwnedHandler
+	// Air builds use the ordinary primary pump inside the construction visit.
+	// This is only the current call's owner; all progress lives on the node.
+	vtolBuildStepOwner *units.Unit
+	boundGetBuilt      orders.OwnedHandler
 }
 
 // ensureRegistrationRows resolves this service's row ids and binds its two
@@ -391,6 +393,16 @@ func (s *Service) constructionWakeVisit(builder *units.Unit, node *orders.Node, 
 		if code, handled := s.mobileBuildInterrupt(builder, node, satisfied); handled {
 			return code, true
 		}
+	}
+	if node.ID == vtolMobileBuildRow {
+		if s.vtolBuildStepOwner != builder {
+			// Preserve the actual earlier delivery until the unit's construction
+			// window, without inventing a second phase or movement wake.
+			node.Satisfied |= satisfied
+			node.DynamicGate |= satisfied
+			return 0, false
+		}
+		return s.vtolBuildVisit(builder, node, satisfied, tick)
 	}
 	if isBuildOrderID(node.ID) {
 		if satisfied&InterruptCancel != 0 {
@@ -950,12 +962,10 @@ func (s *Service) getProductDefForNode(node *orders.Node) *content.UnitDef {
 // "Construction stopped", one count decrement, an interface refresh, and the
 // node surviving at state 0 [05 C22].
 //
-// The reference this reads is `builderLinks`, the product→builder registration
-// [05 C18] made in the same epilogue that writes `node.Target`. Its lifetime is
-// the reference's lifetime: completion, cancel-current and the never-existed
-// unwind all delete the entry before the product's death can reach here, which
-// is the "releases the reference at completion or cancel" half of the contract
-// and is what keeps those three paths silent.
+// This helper uses the derived product→producer index to find the actual
+// order reference. Completion, cancel-current and the never-existed unwind
+// remove the index entry. The session also delivers the generic order-removal
+// walk, so notification does not depend on this index [04 R-ORD-01 §6].
 //
 // It reports whether a notice was delivered.
 func (s *Service) NotifyProductRemoved(product pool.Handle) bool {
@@ -1101,6 +1111,13 @@ func (s *Service) Pump(factory *units.Unit, tick uint32) {
 	}
 	// Non-build orders (e.g., Move_Ground) are not construction work; ignore without mutating queue [05][P0-I05].
 	if !isBuildOrderID(head.ID) {
+		return
+	}
+	if head.ID == vtolMobileBuildRow {
+		previous := s.vtolBuildStepOwner
+		s.vtolBuildStepOwner = factory
+		defer func() { s.vtolBuildStepOwner = previous }()
+		orders.ContinuePrimaryWork(factory, head, tick)
 		return
 	}
 	// Interrupt masks tested before state machine with cancel-current first [05].

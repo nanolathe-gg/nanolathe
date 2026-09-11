@@ -309,6 +309,25 @@ func QueryLandingPadSeed() [4]int32 { return [4]int32{-1, -1, -1, -1} } // [GAP 
 type AimSlot struct {
 	IssueBit bool // weapon flags byte bit 0: set immediately after an Aim* start, AND-cleared on target-acquisition failure, gates re-issue [04 §5.3]
 	Ready    bool // the aim-state word: granted only by a nonzero delivered cell [04 §5.3] [06 §3.3]
+	// Preserve a restored noncanonical word until a producer overwrites it.
+	// Gameplay reads its zero/nonzero projection [08 R-SAVE-WEAPON-01].
+	readyWord uint32
+}
+
+// RestoreReadyWord restores the saved result independently of the request latch.
+func (s *AimSlot) RestoreReadyWord(word uint32) {
+	s.readyWord, s.Ready = word, word != 0
+}
+
+// ReadyWord preserves the saved bits while ready, or the producer's zero/one.
+func (s *AimSlot) ReadyWord() uint32 {
+	if !s.Ready {
+		return 0
+	}
+	if s.readyWord != 0 {
+		return s.readyWord
+	}
+	return 1
 }
 
 // StartAim arms the issue bit for an Aim* start [04 §5.3]. The caller performs
@@ -333,6 +352,7 @@ func (s *AimSlot) StartAim() {
 func (s *AimSlot) CompleteAim(returnValue int32) bool {
 	if returnValue != 0 {
 		s.Ready = true
+		s.readyWord = 1
 	}
 	// Zero: no effect [04 §5.3] [06 §3.3] — no grant, no revoke.
 	return s.Ready

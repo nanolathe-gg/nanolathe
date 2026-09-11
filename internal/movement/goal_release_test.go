@@ -89,8 +89,8 @@ func TestReleaseGoalPayloadHandsTheControllerANullGoal(t *testing.T) {
 		t.Errorf("pending word = %#x, want 0x40 untouched: the release form does not clear 0x20-0x200", n.Satisfied)
 	}
 
-	// A record that no longer owns the payload releases nothing and raises
-	// nothing — the identity test that keeps a late teardown off a successor.
+	// A fresh record has no retained object, so its release leaves the
+	// controller alone [04 R-ORD-01 §9].
 	other := &orders.Node{ID: n.ID, Owner: h}
 	if sys.ReleaseGoalPayload(other) {
 		t.Error("release for a record holding no payload reported a release")

@@ -53,27 +53,13 @@ func (s *System) raiseEvictedGoalRelease(owner pool.Handle) {
 	}
 }
 
-func (s *System) releaseGoalNode(n *orders.Node) {
-	if s == nil || n == nil {
-		return
-	}
-	if g := handleRow(s.moveGoals, n.Owner); g != nil && g.order == n {
-		n.Satisfied |= 0x80
-		setHandleRow(&s.moveGoals, n.Owner, nil)
-	}
-	if s.airPayloadOwner(n.Owner) == n {
-		n.Satisfied |= 0x80
-		s.releaseAirGoalForNode(n.Owner, n)
-	}
-}
-
-// ReleaseGoal releases the payload owned by n. The node identity check keeps
-// replacement/cancel cleanup from detaching a successor's payload.
+// ReleaseGoal is the queue cleanup seam for a record's retained payload
+// [04 R-ORD-01 §9]. A record with no object has nothing to release.
 func (s *System) ReleaseGoal(n *orders.Node) bool {
 	if s == nil || n == nil {
 		return false
 	}
-	s.releaseGoalNode(n)
+	s.deleteRecordGoal(n, false)
 	return true
 }
 
@@ -119,13 +105,12 @@ func (s *System) installGroundPayload(owner pool.Handle, n *orders.Node, goal pa
 	// Handing the controller a goal raises `0x80` on the record that owns what
 	// the slot held [04 R-ORD-01 §9]. When that is n itself the closing clear
 	// below cancels it, which is the "never observable from an installer" case.
-	s.raiseEvictedGoalRelease(owner)
-	setHandleRow(&s.moveGoals, owner, nil)
-	if prior := s.airPayloadOwner(owner); prior != nil {
-		s.releaseAirGoalForNode(owner, prior)
-	}
+	s.releaseRecordGoal(n)
+	s.displaceControllerGoal(owner)
 	n.Satisfied &^= goalPendingMask
-	setHandleRow(&s.moveGoals, owner, &moveGoal{order: n, x: x, z: z, goal: goal})
+	g := &moveGoal{order: n, x: x, z: z, goal: goal}
+	s.storeRecordGoal(owner, recordGoal{node: n, ground: g})
+	setHandleRow(&s.moveGoals, owner, g)
 	// An install REPLACES the record's goal, so whatever route the mover is
 	// following is now aimed at the wrong place. Dropping the active-order
 	// binding is what makes the session's mover boundary re-submit against the
@@ -251,14 +236,6 @@ func (s *System) InstallAirGoal(req orders.AirGoalRequest) bool {
 	if handleRow(s.Flights, req.Owner) == nil {
 		return false
 	}
-	// Release either kind of previous controller payload. The private air
-	// installer also preserves its object's owner for every pump-driven leg
-	// [04 R-ORD-01 §9].
-	s.raiseEvictedGoalRelease(req.Owner)
-	if prior := s.airPayloadOwner(req.Owner); prior != nil {
-		s.releaseAirGoalForNode(req.Owner, prior)
-	}
-	setHandleRow(&s.moveGoals, req.Owner, nil)
 	var marker *airMarker
 	if req.Target != 0 {
 		marker = s.newFollowUnitMarker(u, req.Target)
@@ -284,18 +261,6 @@ func (s *System) airPayloadOwner(owner pool.Handle) *orders.Node {
 		}
 	}
 	return nil
-}
-
-// releaseAirGoalForNode is the identity-aware wrapper around the existing air
-// command release helper.
-func (s *System) releaseAirGoalForNode(owner pool.Handle, n *orders.Node) {
-	if s == nil || n == nil {
-		return
-	}
-	if s.airPayloadOwner(owner) != n {
-		return
-	}
-	s.releaseAirGoal(s.unitFor(owner))
 }
 
 // OW-3-P goal-families wiring [04 §7.2][04 §7.4][04 §3.5].

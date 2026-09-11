@@ -55,14 +55,14 @@ func TestCloakGateReadsTheRequestBitAndTheSensorBreach(t *testing.T) {
 	}
 
 	// The retained breach latch blocks the debit while it remains set.
-	s.visStatus[int(h)] = visibility.DecloakBit
+	u.Flags |= visibility.DecloakBit
 	if s.Econ.CloakDue(u) {
 		t.Fatal("the decloak-forced bit did not block the cloak debit [03 R-VIS-01 §6] term 2")
 	}
 	// The latch is cleared at the next due sensor pass, but
 	// the deadline it wrote on the same visit keeps the unit uncloaked for the
 	// remaining ticks [03 R-VIS-01 §6].
-	s.visStatus[int(h)] = 0
+	u.Flags &^= visibility.DecloakBit
 	u.RevealDeadline = uint32(visibility.DecloakDeadlineAdd)
 	if s.Econ.CloakDue(u) {
 		t.Fatal("the breach deadline did not block the cloak debit [05 R-ECO-01 §9] term 3")
