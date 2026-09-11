@@ -82,6 +82,7 @@ func (b *battleSession) saveDirectChatSetting(change func(*settings.Settings)) {
 		s.Display.VehicleShadows = boolInt(vehicle)
 		s.Display.FeatureShadows = boolInt(b.cl.FeatureShadows())
 		s.Display.Shading = boolInt(shading)
+		s.Display.Glow = boolInt(b.cl.Glow())
 		s.Display.DitheredFog = boolInt(b.cl.DitheredFog())
 	}
 	s.Display.Gamma = b.gammaSetting
@@ -373,6 +374,21 @@ func (b *battleSession) dispatchLocalCommand(text string) {
 			b.shell.saveSettings()
 		} else {
 			b.saveDirectChatSetting(func(s *settings.Settings) { s.Display.AntiAlias = boolInt(value) })
+		}
+	case "glow":
+		// The Enhanced glow layer toggle, a Nanolathe command with no retail
+		// counterpart (docs/DESIGN_GPU_RENDERER.md §19). Persisted like the
+		// retail display bits so the choice survives the session.
+		if b.cl == nil {
+			return
+		}
+		value := !b.cl.Glow()
+		b.cl.SetGlow(value)
+		if b.shell != nil {
+			b.shell.display.Glow = boolInt(value)
+			b.shell.saveSettings()
+		} else {
+			b.saveDirectChatSetting(func(s *settings.Settings) { s.Display.Glow = boolInt(value) })
 		}
 	case "dither":
 		if b.cl == nil {

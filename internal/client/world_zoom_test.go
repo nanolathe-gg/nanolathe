@@ -207,6 +207,32 @@ func TestStrategicViewDropsTheUnitLayers(t *testing.T) {
 	if got := len(recordedFeatureSprites(&strategic.list)); got != fullFeatures {
 		t.Fatalf("the strategic view recorded %d feature sprites, want the ordinary view's %d", got, fullFeatures)
 	}
+	// Enhanced icons replace the selected ground quad at the inclusive cut;
+	// their own halo remains selected. The fade and classic retain the quad.
+	strategic.SetEnhanced(true)
+	strategic.SetStrategicIconCatalog(NewStrategicIconCatalog(nil))
+	strategic.cam.Zoom = strategicModelCut
+	strategic.list.Reset()
+	strategic.drawCommittedFrame(cur, true)
+	if got := len(recordedLines(&strategic.list)); got != 0 {
+		t.Fatalf("full-icon view retained %d ground selection lines", got)
+	}
+	if len(strategic.markerArena) != 1 || !strategic.markerArena[0].Selected {
+		t.Fatal("selected unit lost its icon outline")
+	}
+	strategic.cam.Zoom = strategicModelCut + 1
+	strategic.list.Reset()
+	strategic.drawCommittedFrame(cur, true)
+	if got := len(recordedLines(&strategic.list)); got != fullLines {
+		t.Fatalf("fade lost ground selection: lines=%d want %d", got, fullLines)
+	}
+	strategic.SetEnhanced(false)
+	strategic.cam.Zoom = strategicModelCut
+	strategic.list.Reset()
+	strategic.drawCommittedFrame(cur, true)
+	if got := len(recordedLines(&strategic.list)); got != fullLines {
+		t.Fatalf("classic lost ground selection: lines=%d want %d", got, fullLines)
+	}
 }
 
 // installZoomFeatureArt gives the client one four-by-three sprite feature entry,

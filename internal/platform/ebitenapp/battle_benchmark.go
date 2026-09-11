@@ -278,7 +278,11 @@ func (g *battleBenchmark) Draw(screen *ebiten.Image) {
 		record = join + benchmarkMS(start)
 		start = time.Now()
 		g.gpu.SetDisplayPalette(g.c.DisplayPalette())
+		g.gpu.SetGlow(g.c.Glow())
 		g.img = g.gpu.Execute(list, 1920, 1080)
+		if g.img != nil {
+			g.c.CommitStrategicPresentation()
+		}
 		stats = g.gpu.ModelStats()
 	} else {
 		pixels, a, b := g.c.BenchmarkFrame()

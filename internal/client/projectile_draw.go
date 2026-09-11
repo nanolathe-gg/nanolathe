@@ -109,7 +109,7 @@ func (c *Client) DrawProjectileViews(current []frame.ProjectileView, now uint32,
 			// The remaster covers feature banks only, so a projectile frame takes
 			// its nearest-doubled variant in the detail view
 			// (DESIGN_GPU_RENDERER §14.2, §14.3).
-			c.emitSprite(drawlist.Sprite{Frame: c.viewFrame(d.FrameAsset), X: x - 128, Y: y - 32, Kind: drawlist.BlitKeyed, Anchored: true})
+			c.emitSprite(drawlist.Sprite{Frame: c.viewFrame(d.FrameAsset), X: x - 128, Y: y - 32, Kind: drawlist.BlitKeyed, Anchored: true, Emissive: true})
 			stats.Sprites++
 		}
 	}
@@ -170,7 +170,7 @@ func (c *Client) drawProjectileBeam(d render.ProjectileDraw, v frame.ProjectileV
 	for _, stroke := range strokes {
 		// Each beam stroke is one indexed line; the sink runs the raw Bresenham
 		// primitive [03 §5.4].
-		c.emitLine(drawlist.Line{X0: stroke.X0, Y0: stroke.Y0, X1: stroke.X1, Y1: stroke.Y1, Index: indexedColor(stroke.Color)})
+		c.emitLine(drawlist.Line{X0: stroke.X0, Y0: stroke.Y0, X1: stroke.X1, Y1: stroke.Y1, Index: indexedColor(stroke.Color), Emissive: true})
 	}
 	return len(strokes)
 }
@@ -182,7 +182,7 @@ func (c *Client) drawProjectileSegments(d render.ProjectileDraw) int {
 		b := d.Segments[i]
 		ax, ay := c.cam.WorldToScreen(a.X, a.Y, a.Z)
 		bx, by := c.cam.WorldToScreen(b.X, b.Y, b.Z)
-		c.emitLine(drawlist.Line{X0: ax - 128, Y0: ay - 32, X1: bx - 128, Y1: by - 32, Index: indexedColor(d.Color)})
+		c.emitLine(drawlist.Line{X0: ax - 128, Y0: ay - 32, X1: bx - 128, Y1: by - 32, Index: indexedColor(d.Color), Emissive: true})
 		count++
 	}
 	return count
@@ -195,7 +195,7 @@ func (c *Client) drawProjectileSegmentsSecond(d render.ProjectileDraw) int {
 		b := d.Segments2[i]
 		ax, ay := c.cam.WorldToScreen(a.X, a.Y, a.Z)
 		bx, by := c.cam.WorldToScreen(b.X, b.Y, b.Z)
-		c.emitLine(drawlist.Line{X0: ax - 128, Y0: ay - 32, X1: bx - 128, Y1: by - 32, Index: indexedColor(d.Color)})
+		c.emitLine(drawlist.Line{X0: ax - 128, Y0: ay - 32, X1: bx - 128, Y1: by - 32, Index: indexedColor(d.Color), Emissive: true})
 		count++
 	}
 	return count

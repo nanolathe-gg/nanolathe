@@ -107,6 +107,12 @@ func (r *Renderer) Sprite(sp drawlist.Sprite) {
 			clipX, clipY, clipW, clipH := r.spriteClip(sp.HasClip, sp.Clip)
 			r.drawKeyed(sp.Frame, int(sp.X)-int(sp.Frame.XOffset), int(sp.Y)-int(sp.Frame.YOffset),
 				clipX, clipY, clipW, clipH)
+			if sp.Emissive {
+				// Effect and projectile art is a light source for the glow layer
+				// (§19); the sprite itself is drawn exactly as before.
+				r.glowSprite(sp.Frame, int(sp.X)-int(sp.Frame.XOffset), int(sp.Y)-int(sp.Frame.YOffset),
+					clipX, clipY, clipW, clipH, 1)
+			}
 		} else {
 			// UIBlit: the rectangle is the contract, no offset [07 §4].
 			clipX, clipY, clipW, clipH := r.spriteClip(sp.HasClip, sp.Clip)
@@ -146,6 +152,12 @@ func (r *Renderer) Sprite(sp drawlist.Sprite) {
 		// ALP[src*256 + dst]; anchored and destination-reading [03 R-COMP-01 §2].
 		clipX, clipY, clipW, clipH := r.spriteClip(sp.HasClip, sp.Clip)
 		r.drawTint(sp.Frame, int(sp.X), int(sp.Y), clipX, clipY, clipW, clipH)
+		if sp.Emissive && sp.Frame != nil {
+			// Strip art (fire, explosion animation) is a light source for the glow
+			// layer at the half strength it is composited at (§19).
+			r.glowSprite(sp.Frame, int(sp.X)-int(sp.Frame.XOffset), int(sp.Y)-int(sp.Frame.YOffset),
+				clipX, clipY, clipW, clipH, 0.5)
+		}
 	case drawlist.BlitFeatureShadow:
 		// Feature shadows select the ordinary keyed or ALP-tinted frame primitive.
 		// The record carries top-left placement while drawTint accepts the frame

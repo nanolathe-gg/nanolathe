@@ -511,10 +511,14 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 	// console face [07 R-HUD-03 §14.4][03 R-FX-01 §6A].
 	cl.SetMessageFNT(b.hud.primaryFont)
 	cl.SetMessageLogos(b.hud.logos)
-	// The strategic view's markers take their colours from the same blip art
-	// the minimap's dots are drawn from, and answer the same options word
-	// (DESIGN_GPU_RENDERER §16.11).
+	// Strategic icons use the HUD team logos; generic contacts retain the radar
+	// art/options bindings (DESIGN_GPU_RENDERER §18.4).
+	cl.SetStrategicIconCatalog(client.NewStrategicIconCatalog(b.cat))
 	cl.SetStrategicBlipArt(b.hud.radarBlipGAF)
+	if b.hud.logos != nil {
+		teamArt, _ := b.hud.logos.Find(sideLogoEntry)
+		cl.SetStrategicTeamArt(teamArt)
+	}
 	cl.SetRadarOptions(b.radarOptions)
 	s := loadedSettings()
 	gamma := s.Display.Gamma
@@ -608,6 +612,9 @@ func (b *battleSession) teardown(cl *client.Client) {
 		b.battleUI.ResetInteraction()
 	}
 	if cl != nil {
+		cl.SetStrategicIconCatalog(nil)
+		cl.SetStrategicBlipArt(nil)
+		cl.SetStrategicTeamArt(nil)
 		cl.SetModelTextureRegistry(nil)
 		cl.SetMessageLogos(nil)
 		cl.SetUIStage(nil)

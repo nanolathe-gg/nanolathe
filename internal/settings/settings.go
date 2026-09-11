@@ -80,7 +80,10 @@ const (
 	DefaultVehicleShadows = 1
 	DefaultShading        = 1
 	DefaultDitheredFog    = 0
-	DefaultGamma          = 12
+	// DefaultGlow is the Enhanced glow layer switch, a Nanolathe option with no
+	// retail bit: on until the player turns it off (DESIGN_GPU_RENDERER §19).
+	DefaultGlow  = 1
+	DefaultGamma = 12
 	// `VISUALS` `GAMMA` is a kind-4 slider whose maximum is 20; the stored
 	// integer is applied as the palette factor 0.5 + g/24 [07 R-FE-01 §6].
 	MaxGamma = 20
@@ -418,6 +421,11 @@ type Display struct {
 	// DitheredFog is bit 6. Its only options-page writer is front-end
 	// RESTORE; the Dither command toggles it in battle.
 	DitheredFog int `json:"ditheredFog"`
+	// Glow is the Enhanced glow layer (bloom) of docs/DESIGN_GPU_RENDERER.md
+	// §19: a Nanolathe option the modern executor alone reads. It has no
+	// retail bit and is persisted only here; a file that omits it keeps the
+	// default, because the loader decodes over the defaults.
+	Glow int `json:"glow"`
 	// Gamma retains the signed command integer; the slider writes 0..20.
 	// Load alone maps 10 to 12 [07 R-FE-01 §11][07 R-CAM-01 §6].
 	Gamma int `json:"gamma"`
@@ -435,6 +443,7 @@ func DefaultDisplay() Display {
 		VehicleShadows: DefaultVehicleShadows,
 		Shading:        DefaultShading,
 		DitheredFog:    DefaultDitheredFog,
+		Glow:           DefaultGlow,
 		Gamma:          DefaultGamma,
 	}
 }
@@ -458,6 +467,9 @@ func (d *Display) Normalize() {
 		}
 	}
 	d.DitheredFog &= 1
+	if d.Glow < 0 {
+		d.Glow = DefaultGlow
+	}
 	d.Gamma = int(int32(d.Gamma)) // retain the signed DWORD [07 R-FE-01 §11]
 }
 

@@ -233,6 +233,9 @@ func (r *Renderer) Flash(f drawlist.Flash) {
 		float32(cx0), float32(cy0), float32(cx1), float32(cy1),
 		sx0, sy0, sx1, sy1,
 		[4]float32{}, [4]float32{0, 0, 0, destOpLaneAtlas})
+	// The disc is also a light source for the glow layer: it emits the
+	// brightening it applied to what is under it (§19).
+	r.glowFlash(cx0, cy0, cx1, cy1, sx0, sy0, sx1, sy1)
 	r.modelStats.Flashes++
 }
 
@@ -273,6 +276,7 @@ func (r *Renderer) Halo(h drawlist.Halo) {
 			{lx0, ly1, r2, destOpHalo},
 			{lx1, ly1, r2, destOpHalo},
 		})
+	r.glowHalo(cx0, cy0, cx1, cy1, high, lx0, ly0, lx1, ly1, r2)
 	r.modelStats.Flashes++
 }
 

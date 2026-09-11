@@ -106,7 +106,9 @@ func TestBattleBenchmarkDiagnosticsObserveOnlyAdvancingTicks(t *testing.T) {
 		t.Fatalf("incomplete attribution: calls=%d report=%+v", calls, report)
 	}
 	for _, row := range report.Phases {
-		if row.Calls != report.MeasuredTicks || row.TotalNS < row.MaxNSPerTick || row.MeanNSPerTick <= 0 {
+		// Empty phases can begin and end within one host clock quantum. Their
+		// zero duration is valid; attribution is proved by the call count.
+		if row.Calls != report.MeasuredTicks || row.MaxNSPerTick < 0 || row.TotalNS < row.MaxNSPerTick || row.MeanNSPerTick < 0 {
 			t.Fatalf("invalid phase row: %+v", row)
 		}
 	}

@@ -145,10 +145,17 @@ type Client struct {
 	// radarOptions is the battle's radar mode-flags word, whose full-radar bit
 	// the minimap blip gate reads; markerArena is the reusable batch storage, so
 	// a strategic frame allocates nothing after the first.
-	strategicBlip       *formats.GAFEntry
-	strategicBlipColors []strategicBlipColor
-	radarOptions        uint32
-	markerArena         []drawlist.Marker
+	strategicTeam                         *formats.GAFEntry
+	strategicTeamColors                   []strategicBlipColor
+	strategicBlip                         *formats.GAFEntry
+	strategicBlipColors                   []strategicBlipColor
+	radarOptions                          uint32
+	markerArena                           []drawlist.Marker
+	strategicIcons                        *StrategicIconCatalog
+	strategicDraw                         strategicLayoutScratch
+	strategicPick                         strategicLayoutScratch
+	strategicHover                        uint64
+	strategicRecorded, strategicPresented strategicProjection
 
 	// list is the recorded committed-frame draw list, reset and re-recorded
 	// each frame then replayed through classicSink (docs/DESIGN_GPU_RENDERER.md
@@ -356,6 +363,11 @@ type Client struct {
 	// composition supersample and, with it, retail's red/purple building
 	// fringe [R-REN-03A §6][R-REN-03A §7].
 	antiAlias bool
+	// glow is the Enhanced glow layer switch: bloom from beams, projectile and
+	// effect art and explosion light, drawn by the modern executor only
+	// (docs/DESIGN_GPU_RENDERER.md §19). It is a Nanolathe display option with
+	// no retail bit; the settings file persists it as display.glow.
+	glow bool
 	// shadows is options word bit2 0x04, the master model-shadow gate;
 	// vehicleShadows is bit3 0x08, featureShadows is bit4 0x10, and shading is
 	// bit5 0x20. Feature sprites read bit4 directly; it remains independent of
@@ -480,6 +492,9 @@ func New(opts Options) (*Client, error) {
 		// miss it sets the bit and writes the default back, so anti-aliasing
 		// is on by default. Established (direct-static) [R-RAST-01 §4].
 		antiAlias: true,
+		// The glow layer is on until the player turns it off; it costs nothing
+		// under the classic executor, which never sees it (§19).
+		glow: true,
 		// Restore-defaults sets the Shading bit, so shading is on unless the
 		// player turns it off [R-RND-02A]; the bulk shadow key sets its three
 		// bits together [03 §5.3].
@@ -883,6 +898,14 @@ func (c *Client) SetAntiAlias(v bool) { c.antiAlias = v }
 
 // AntiAlias returns the current Anti_Alias bit.
 func (c *Client) AntiAlias() bool { return c.antiAlias }
+
+// SetGlow selects the Enhanced glow layer: bloom from emissive world art under
+// the modern executor (docs/DESIGN_GPU_RENDERER.md §19). The recording is the
+// same either way; the executor reads this switch through Glow.
+func (c *Client) SetGlow(v bool) { c.glow = v }
+
+// Glow returns the Enhanced glow layer switch.
+func (c *Client) Glow() bool { return c != nil && c.glow }
 
 // SetShadowOptions selects the master shadow, vehicle-shadow and shading bits
 // [03 §5.3][R-REN-03D §1].

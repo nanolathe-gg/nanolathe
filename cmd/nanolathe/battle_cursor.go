@@ -127,12 +127,19 @@ func (b *battleSession) updateFooterHover(mx, my int32) {
 	if !ok {
 		return
 	}
+	var iconHover uint64
 	switch {
 	case b.classifyPointer(mx, my) == battlePointerMinimap:
 		b.footerHoverUnit = b.minimapHoverUnit(f, mx, my)
 	case b.overWorld(mx, my) && !b.battleState().Input.DragActive:
-		handle, _, _ := client.PickSnapshotUnit(f, mx, my, b.cam, f.ViewingPlayer)
+		handle, view, hit := b.pickPresentedUnit(f, mx, my, f.ViewingPlayer)
 		b.footerHoverUnit = handle
+		if hit {
+			iconHover = view.InstanceID
+		}
+	}
+	if b.cl != nil {
+		b.cl.SetStrategicHover(iconHover)
 	}
 	b.footerHoverFeature = ""
 	if def := b.hoverFeature(mx, my); def != nil {

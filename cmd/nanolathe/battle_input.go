@@ -547,7 +547,7 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 				// same logical framebuffer, so do not subtract the HUD viewport origin
 				// a second time [03 §2.5][07 §8].
 				shellX, shellY := mx, my
-				bh, bu, hit = client.PickSnapshotUnit(f, shellX, shellY, b.cam, uint8(viewer))
+				bh, bu, hit = b.pickPresentedUnit(f, shellX, shellY, uint8(viewer))
 				// Branch 2 of the world-click handler is cursor kind `0x0F`,
 				// "the resolver's select answer: latch idle and the hovered unit
 				// is an own SELECTABLE unit (own slot, selectable bit,

@@ -524,14 +524,15 @@ and pause behaviour are specified in §13.5. Original retains committed-tick
 sampling; I6 names Enhanced as the one presentation path allowed to read two
 committed ticks.
 
-### 5.4 Lighting and glow (deferred); antialiasing (§17)
+### 5.4 Lighting (deferred); glow (§19); antialiasing (§17)
 
 Lighting may be palette/tint based or use model geometry/material information;
 no technique is selected. Preserve resolved asset and geometry identity rather
-than inventing material values. Glow's initial intended sources are known lights,
-lasers and missile exhaust. A later design must define masks, visibility,
-occlusion, blur and color behavior. Model antialiasing is designed and landed
-in §17: subject-wide supersampling with a coverage resolve, Enhanced only.
+than inventing material values. Glow is designed and landed in §19: an
+Enhanced-only bloom from beams, lightning, effect and projectile art and the
+explosion light, resolved under the fog. Model antialiasing is designed and
+landed in §17: subject-wide supersampling with a coverage resolve, Enhanced
+only.
 
 ## 6. Verification
 
@@ -3394,7 +3395,8 @@ cell counts do grow with 1/factor², which is the cost of the view.
 
 ### 16.11 The marker layer — contract Z8
 
-Below `strategicMarkerOn` (0.625×) each unit becomes one filled square of
+This original generic-marker contract is superseded by §18 for generated
+icons and Enhanced team color. Below `strategicMarkerOn` (0.625×) each unit becomes one filled square of
 `strategicMarkerSize` (4) **framebuffer** pixels.
 
 * **Its records and its gate are the minimap's own.** The markers come from the
@@ -3685,3 +3687,523 @@ A human look at motion in the window: the half-pixel step at 120 Hz, and
 whether the two-raster-pixel outline reads right on a rising nanoframe. The
 Anti-Alias option's menu text still describes the retail structure behaviour;
 its Enhanced meaning is wider now and the text is owed a line.
+
+## 18. Generated strategic icons (modern)
+
+### 18.1 Scope and visual direction
+
+**Implemented.** Extend §16.11's four-pixel contact squares with a small,
+consistently generated symbol vocabulary for identified units in the modern
+strategic view.
+This is an Enhanced presentation feature under I6/I11, not recovered retail
+behavior. This section supersedes §16.11 for identified units; unidentified
+contacts retain its generic square.
+Classic, simulation, unit definitions and their authoritative identities retain
+their existing behavior.
+
+The reference is BAR's public [Strategic Icons guide](https://www.beyondallreason.info/guide/strategic-icons)
+(accessed 2026-09-11): it combines family shapes, role symbols and level marks.
+Adopt that general visual organization with independently authored geometry;
+BAR's implementation, artwork, balance roles and tier meanings are not inputs.
+
+Generate icons deterministically from simple vector geometry, rasterized into
+one shared atlas at load time. A role icon should remain legible when the unit
+model would be only a few pixels wide. Model thumbnails and per-unit generated
+paintings are poor first choices for that purpose. No network generation,
+randomness or image generation occurs during play. Units with the same verified
+family and role may share an icon; a unique symbol for every definition is not
+a first-release requirement. Exact identity remains available through the
+existing permitted hover information.
+
+Vocabulary used by the generated review sheet:
+
+| Component | Meaning | Starting design |
+|---|---|---|
+| Outer contour | Family | circle for kbot, diamond for vehicle, triangle for aircraft, trapezoid for hovercraft, hull for ship, capsule for submarine, square for structure |
+| Inner symbol | Primary purpose | construction tool, factory, extractor, energy, storage, sensor, jammer, transport, weapon or generic support |
+| Small secondary mark | Useful supported distinction | manufactured family on a factory; weapon subtype where verified |
+| Color | Owner | dominant opaque shade of the published lobby color's `32xlogos` frame |
+| Halo | Selection / hover | separate from role and ownership; retain contrast over bright and dark terrain |
+
+The accepted size is 24 framebuffer pixels after play-test feedback on 20px.
+The review sheet retains 16/20/24 comparisons; these are design choices, not
+retail constants. Keep icons upright, centered on the current marker
+projection, clipped to the battle viewport and outside the scaled world region.
+Keep the existing 0.625× fade-in / 0.5× full-icon transition for the first pass;
+retuning zoom thresholds and model crossfade are separate decisions.
+
+Do not reinterpret category levels as universal tech tiers. The reviewed
+construction-only LEVEL1/LEVEL2 distinction (§18.2) uses a single/crossed tool
+glyph; other level tokens remain audit metadata.
+
+### 18.2 What the installed data establishes
+
+**Established — implementation and asset observations.** On 2026-09-11, a
+read-only audit at main `f0673b3` used `vfs.MountGameDirectory` and
+`content.Compile` on `~/TotalAnnihilation`, then walked `SortedUnitKeys`,
+compiled weapon links, build menus and retained inert FBI keys. It found 278
+loaded definitions, 139 per side. This is an observation of this mount, not a
+required count, a test fixture or a statement about all installs. Raw audit
+output stays outside the repository. Reproduce via the same catalog path;
+reading loose FBI files or scanning archives independently would bypass the
+winning-provider and admission rules [02 R-CAT-01 §4][SC24].
+
+Available inputs: `BMCode`, `Category`, capabilities and economy fields,
+resolved movement data, `Weapon1Def..Weapon3Def`, and final build-menu products.
+`TEDClass` is retained in `UnitDef.Unknown`; it is inert in retail gameplay
+[fmt fbi]. Reading it as authored editor metadata for this new presentation
+feature does not give it simulation behavior. The current trail implementation
+already reads it, but its movement-name and model-piece heuristics are not
+proof of an icon family.
+
+| Observed examples | Implication for classification |
+|---|---|
+| `ARMPW`: `KBOT`; `ARMFLASH`: `TANK` in Category and TEDClass | Strong explicit evidence for their family contours |
+| `ARMCK`: `KBOT CONSTR`; `ARMCV`: `TANK CONSTR`, TEDClass `CNSTR`; `ARMCA`: `VTOL CONSTR`; `ARMCS`: `SHIP CONSTR` | Construction is a role independent of mobility family; TEDClass alone loses the vehicle constructor's family |
+| `ARMVP`, `ARMLAB`, `ARMAP`, `ARMSY`, `ARMHP`: structure BMCode, Builder and CanMove set, nonempty product menus | Do not classify buildings with `!CanMove`. Use structure identity, then the build products [SC21] |
+| `ARMASP`, `CORASP`: structure builders, empty product menus, TEDClass `SPECIAL` | Builder alone does not establish a factory; preserve repair/support distinctions |
+| `ARMSOLAR`: EnergyMake zero, EnergyUse negative; `ARMWIN`: WindGenerator; `ARMTIDE`: TidalGenerator | Energy sources require the actual authored economy vocabulary, not a positive EnergyMake test |
+| Constructors and factories carry incidental resource production/storage; `ARMRAD` has EnergyMake | A positive resource field is insufficient to assign an economy role |
+| `ARMMOHO`: ExtractsMetal; `ARMMAKR` and `ARMMMKR`: MakesMetal; `ARMESTOR`: STORAGE and EnergyStorage | Separate extraction, conversion and storage; do not confuse incidental storage with dedicated storage |
+| `ARMFIG` and `ARMJETH` linked missiles have ToAirWeapon false | That flag alone cannot identify fighter / anti-air roles. Weapon family and targeting preferences need a bounded evidence review |
+| `ARMPT` has laser and missile slots; `ARMLATNK` has two weapon slots | Do not choose the first weapon as the unit's entire role |
+| `CORNECRO`: CanResurrect, Builder, category WEAPON, inactive weapon slots | Capability and resolved active weapon links must qualify broad category tags |
+| `ARMSUB`: UNDERWATER; `ARMATL`: structure, TORP and WaterWeapon; `ARMTIDE`: TEDClass WATER | Water-related metadata does not establish a mobile submarine |
+| `ARMAMPH`: KBOT and CanHover; `CORSCORP`: Category TANK, TEDClass SPECIAL | A single mobility flag or editor class is not an exhaustive physical-family taxonomy |
+| `ARMCOM` / `CORCOM`: Commander true, LEVEL10; decoy commanders: TEDClass COMMANDER, Commander false | True-command capability and visual disguise are separate; enemy art must not expose the difference |
+| `ARMMOHO`, `ARMBRTHA`, `ARMAMD`: LEVEL3; `CORSSUB`: bare LEVEL; six definitions have no level token | No BAR T1/T2/T3 reinterpretation, inferred cost tiers, or guessed missing levels |
+| `ARMDRAG`: IsFeature, category METAL, TEDClass FORT | It is not a metal producer; after conversion its feature stays in the existing feature layer |
+
+The audit also found five mobile definitions without any of the usual explicit
+family tokens: the two decoy commanders, `ARMSCAB`, `CORMABM`, and `ARMSCORP`.
+TEDClass narrows some of these, but a rule must report its fallback rather than
+silently treating SPECIAL as a tank. Case-insensitive whole-token comparison
+is required; `NOTAIR` is not an aircraft token and `NOTSUB` is not a submarine
+token [02 "Unit record"][fmt fbi].
+
+**Established — constructor asset audit.** The 20 ordinary constructors in the
+reference mount each author CONSTR and one LEVEL1/LEVEL2 token, corroborated by
+their authored basic/advanced descriptions. ARM/CORE CV/ACV, CK/ACK and CA/ACA
+pairs cover vehicles, kbots and aircraft. CSA seaplanes, CH hovercraft and CS
+ships use LEVEL1; ACSUB submarines use LEVEL2. ARMMLV's LEVEL2 and CORMLV's
+LEVEL1 do not make minelayers ordinary constructors: neither authors CONSTR.
+ARMFARK's CONSTR LEVEL2 and empty product menu retain the assist classification.
+The icon policy applies basic/advanced only to a construction-role definition
+with CONSTR and a single reviewed level token. Missing, conflicting or other
+levels retain the unqualified tool and an audit unknown; no costs or localized
+names participate in classification.
+
+### 18.3 Classification contract
+
+**Implementation policy.** Build a presentation-only descriptor table from the final
+compiled catalog, indexed by canonical definition identity within that catalog.
+Each descriptor stores its family, role, optional subtype and evidence:
+source logical path/provider, relevant authored fields, rule identifier, and
+whether the result is established input, a reviewed presentation mapping, or
+unresolved. Icon geometry and classification rules have their own revision;
+neither changes the authoritative definition hash.
+
+1. Establish structure versus mobile from the existing compiled BMCode
+   convention. Partition capabilities from role rather than collapsing both
+   into one enum. Use explicit category family tokens where available,
+   compatible TEDClass metadata next; contradictory or absent evidence keeps a
+   generic family until reviewed. Do not infer legs from a TANK movement name.
+2. Resolve specific purpose before incidental stats: feature conversion,
+   commander appearance, resurrection/construction, manufacturing/repair,
+   dedicated economy and sensors, then combat/general support. A classifier
+   must retain all supported capabilities even when the icon displays one.
+   Confirm precedence against the full audit rather than baking this list into
+   a gameplay rule.
+3. Derive factory product badges from resolved final build-menu products,
+   including downloads. Mixed or unresolved product families receive a generic
+   factory symbol. Never infer products from a unit-name prefix.
+4. Use explicit economy/sensor category tags plus capability fields to
+   distinguish dedicated functions. Energy generation must include negative
+   EnergyUse, wind and tide as documented inputs [02 "Unit record"]. A
+   constructor's production, a plant's storage or a gun's radar does not
+   replace its primary role.
+5. Use only active resolved weapon slots, never ExplodeAs or SelfDestructAs,
+   to describe armament. Interceptor, dropped, water-weapon and paralyzer flags
+   are evidence for capabilities; interpreting them as a primary unit role
+   still requires a reviewed mapping. Do not infer scout/artillery/heavy/AA
+   from arbitrary speed, range, cost, damage, or weapon-name thresholds.
+6. Audit unresolved cases using authored descriptions, build relationships,
+   weapon data and original model/build art. Runtime classification never
+   parses localized display names. A small explicit presentation mapping is
+   acceptable only with recorded evidence and applicability to the relevant
+   definition content; an unknown/modded definition gets a generic fallback,
+   never the role of an unrelated stock unit with the same name.
+
+**Unknown / design follow-ups.** The complete AA/fighter/artillery distinction,
+ambiguous physical families, exact-unit differentiation, and constructor classes
+with missing/conflicting/unreviewed level tokens remain audit unknowns. Existing retail facts
+need no new executable analysis; any new claim about targeting or disguise
+behavior must first be established and recorded in its owning research category.
+Missing evidence is shown in the audit and becomes `TODO(question)` at the
+classifier site. A generic symbol is a complete supported fallback.
+
+### 18.4 Visibility and interaction contract
+
+**Established — implementation inputs.** Committed UnitViews carry model
+visibility, owner color and selection. RadarContactViews also contain concealed
+definition metadata; contact presence, Visible, Graphic and Commander are not
+identification proofs. The painter gates enemies by explored fog at the anchor
+and the committed hull visibility predicate [03 §3.2][03 §3.3]. Attached models
+inherit the admission of their carrier through its published Cargo list;
+piece-less cargo is omitted [03 R-RAST-01 §7].
+
+**Implementation policy.** Visible-unit icons use that world-painter admission,
+independently of minimap contact status and damage blinking. Iterate the committed
+units even when a radar record is absent. Own visible icons remain steady during
+combat. A same-publication slot lookup suppresses duplicate radar marks and
+resolves attachment links; missing links and nested cargo cannot reveal attached units.
+Sensor-only contacts retain MinimapBlipAdmitted, blink included, and never expose
+definition art or a UnitView hit. Identities are not remembered across visibility
+loss; retained hover identity uses InstanceID rather than a reusable pool slot.
+
+Team ink comes from the most frequent opaque index in the published lobby
+selector's authored `textures/logos.gaf` `32xlogos` frame. The retail `radlogo`
+contains eight gray border pixels and four team-color interior pixels, so its
+majority index is gray even for blue/red teams. Colors are resolved once per
+art/selector binding; no owner-slot-to-color assumption or alternate RGB team
+table is introduced. Enhanced sensor dots use the same logo tint when available.
+Missing team art/color gives visible-unit icons neutral ink, never invisibility;
+generic contact admission still requires its published radar art/selector.
+
+Disguise is an additional information boundary even for visible units. Until
+its retail disclosure contract is verified, use a shared commander-looking
+symbol for visible non-owned commanders and decoy commanders, with no truthful
+commander/decoy badge. This is a conservative new presentation policy, not a
+claim that retail icons existed. Restrict any exact-role embellishment or
+new tooltip information accordingly. Disguise protection covers the complete
+descriptor: contour, role, secondary badges, size and newly exposed hover
+metadata. Unresolved commander-looking definitions keep that shared appearance
+until reviewed. Visibility loss and changes of viewer, camera, viewport or
+mode must invalidate presented icon/hit-test lists immediately; never reuse a
+prior projection or frame's typed list just because its texture remains cached.
+
+**Established — implementation discrepancy.** §16.11 says marker hover picks
+the nearest square; `PickSnapshotUnit` actually tests model hulls and scores by
+size. Enlarging icons without a new hit test would make the displayed target
+and clickable target disagree.
+
+**Implementation policy.** At/below the existing 0.5× model cutoff, visible typed icons
+use the same screen bounds for drawing and picking. Keep normal hull picking
+above that cutoff during the fade. At/below the cutoff, selection uses the icon's
+contour halo alone: suppress the world-space ground footprint quad to avoid a
+second, offset selection cue. Keep the ground quad during the fade, at normal
+zoom, and for presentation without generated icons. Selection membership,
+orders and drag-selection behavior do not change.
+Resolve overlaps by drawing ordinary icons
+with sensor contacts before visible units in stable publication order, selected icons last, and hit-testing in reverse draw
+order; a hover halo does not itself reorder icons. Share this decision across
+cursor, click selection, tooltips and command targeting. Generic contacts retain
+existing command/knowledge restrictions; a hit must not hand hidden UnitView
+metadata to a tooltip or enable a new target action. Keep drag selection's
+existing visible projected-center policy. No aggregation, displacement or
+cluster counts in the first release; inspect dense overlap before designing any.
+
+### 18.5 Implementation boundaries
+
+Implementation contract:
+
+- A client-owned `StrategicIconCatalog` compiles immutable descriptors from
+  `content.Catalog`; returns descriptor plus evidence and a generic fallback.
+  No sim package imports it; no change to `content.UnitDef` is needed.
+- Client layout takes the committed frame, viewer, live camera, viewport,
+  catalog, radar option flags, bound logo/radlogo/palette resources and reusable
+  storage. Together with the frame mapping/blink fields, those explicit
+  presentation inputs preserve current admission and color resolution, including
+  the current missing-art and unknown-palette behavior. It
+  returns admitted icon instances and the corresponding restricted hit targets
+  for the same presented frame.
+- Drawlist icon records carry immutable atlas identity/UV bounds, screen
+  bounds, tint, alpha, selection and clip. They own or safely retain referenced
+  data through `List.Clone`, replay and asynchronous record/submit buffering.
+- The modern executor uploads the generated atlas once and batches lightweight
+  quads. Do not allocate an image, scan definitions, rasterize geometry or
+  upload a texture per unit per frame. Outline/foreground masks can share the
+  atlas; any extra passes must be counted and measured.
+
+Classification, geometry, layout and evidence live in
+`internal/client/strategic_icon_{catalog,art,layout}.go`. The existing
+`strategic_markers.go` records the shared layout. `internal/drawlist/world.go`
+and `list.go` own records and lifetime; `internal/platform/gpurender/world.go`
+and `strategic_icons.go` execute them. Battle setup, cursor, selection and input
+bind the catalog and share presented picking. The app's successful submission
+hooks preserve the exact accepted camera projection for input.
+
+### 18.6 Stages and acceptance gates
+
+1. **Catalog audit and design sheet.** First produce an independently generated,
+   labeled sheet of every loaded definition, grouped by family/role,
+   plus an evidence table and unresolved/collision list. Include both factions,
+   expansion/download units, factories, nanoframes, decoys and support units.
+   Show multiple sizes over bright/dark terrain. Human review chooses the
+   visual vocabulary and resolves or explicitly accepts every generic fallback.
+   The current planning audit establishes inputs and pitfalls; it does not
+   claim all 278 definitions already have reviewed icons.
+2. **Atlas and recorder integration.** Implement the accepted catalog and art,
+   generic-contact boundary and fixed-screen layer with the existing zoom
+   transition. Keep model omission, feature persistence, build ghosts, queue
+   overlays and unscaled HUD from §16. Defer icon picking until stage 3 is ready
+   to land with it; do not ship enlarged icons with the old hull-only picker.
+3. **Interaction and verification.** Land shared draw/pick bounds, selection
+   and overlap rules, then inspect motion and dense scenes. Small authored
+   fixtures lock radar-only fallback, cloak/visibility loss, decoy appearance,
+   immediate slot reuse, classification traps, clip/zoom boundaries, retained
+   list replay and draw/pick agreement. Retail tests skip without assets and
+   assert relationships rather than a fixed catalog census.
+4. **Review and performance.** Run `go build ./...`, `go vet ./...`,
+   `gofmt -l .`, `go test ./...` and the applicable GPU device fixtures.
+   View captures at 1×, 0.625×, inside the fade, 0.5× and a lower allowed zoom;
+   include buildings under construction, aircraft/submarines, selected dense
+   armies, radar-only contacts and fog boundaries. Run the live battle benchmark
+   sequentially for classic and modern per BATTLE_BENCHMARK.md, plus matching
+   modern before/after runs at 0.5×. Compare identical scene metadata, inspect
+   feature census and captures, and report CPU time, allocations, atlas uploads,
+   quad/pass counts and frame times. Re-run checks after integration with main.
+
+Generated review sheets, local audit output and captures stay outside the repo;
+committed assets are our authored geometry/rules and light synthetic fixtures.
+The implementation outcome and accepted fallbacks are recorded below.
+
+
+### 18.7 Implementation outcome and accepted fallbacks
+
+The current release uses 24 framebuffer pixels with a 32-pixel supersampled
+source tile, an upright family contour, white role glyph, authored team-color
+ink, dark backing and a selection/hover halo. These are Enhanced design choices,
+not retail constants. The reviewed sheet shows 16/20/24 alternatives; aircraft
+interiors are tight at 16. `go run ./tools/strategic-icon-sheet -root <install>
+-out <external-directory>` emits `index.html`, `catalog.png`, `vocabulary.png` and
+`audit.json` and a constructor-only `constructors.png` comparison from the loaded catalog and the same masks the GPU uses.
+
+The current reference mount yields 81 semantic symbols across 278 definitions
+after adding crossed tools for advanced constructors (single tool for basic).
+These are audit observations, not test expectations. Ten primary-role fallbacks
+are accepted: ARMPEEP, CORFINK, ARMBEAC, CORBEAC, ARMDEV1, CORDEV1, ARMUWES,
+ARMUWMS, CORBUILD and CORTRUCK. ARMSCORP and CORTHOVR retain a generic physical
+family. Seven mixed/unresolved factory menus use an unqualified factory badge.
+Combat symbols describe the flags of every active weapon slot; AA, fighter,
+artillery and heavy-role interpretations remain explicitly unresolved. The
+fallbacks are visible in the audit; no runtime name/description guessing or
+stock-name override table was added. Teleporters use the literal Teleporter
+capability. Commander-looking definitions share their complete art, including
+true commanders and decoys; icon audit evidence is never new hover information.
+
+`StrategicIconCatalog` lives in the client and is bound once at battle entry.
+The renderer uploads the immutable mask atlas once per resource identity and
+uses a bounded four-entry cache, retired on source reset. R/G/B/A hold disjoint
+team/white/selected-halo/black coverage, not a premultiplied RGBA image. Bilinear
+filtering clamps samples inside each tile; the fragment combines coverage with
+the live display palette and applies the layer fade to both color and opacity.
+List clones retain the immutable atlas while owning their marker slices.
+
+Layout rebuilds world-unit and sensor-contact admission plus a same-publication
+slot lookup on every
+record/pick, in reusable storage. Input uses the projection of the last
+successfully submitted list when frame, tick, viewer, zoom, viewport, catalog
+and camera samples still match. The record/submit pipeline can accept a predicted
+camera fraction within its tolerance; retaining its actual submitted origin
+prevents a subsequently measured fraction from moving the clickable rectangle.
+Speculative records cannot replace this origin. Changed publication or projection
+invalidates it, and visibility/identity are always rechecked. Icon hover and
+art are foreground state and do not invalidate the paused terrain/fog cache.
+Normal zoom keeps the existing battle-camera hull picker; at/below 0.5× icons
+and clicks share bounds with selected-last, reverse-hit ordering.
+
+Initial 20px validation on the reference install passed build, vet, formatting, the full
+Go test suite, `tools/check-retail` (including staticcheck, deadcode and tagged
+retail tests), and real Metal device fixtures. Native 1× classic and modern
+before/after captures were byte-identical. Selected commander captures at
+0.625×, 0.5625×, 0.5× and 0.3× verified the transition and fixed-size icon.
+Dense live-battle captures covered aircraft, factories, nanoframes, mixed typed
+and radar-only contacts, and fog boundaries. The generated sheet covers the
+naval families; synthetic layout/device fixtures cover overlap priority,
+visibility loss, clipping, selected halos and camera/publication changes.
+
+Sequential classic and modern live benchmarks completed. Matching Comet Catcher
+modern runs at 0.5× (seed 7, 180 measured draws, target 30 Hz) had identical
+scene metadata and every frame's census: the final frame contained 316 units,
+198 moving units, eight nanoframes and 92 features. Median record time was
+0.928 → 1.007 ms, submission 1.495 → 1.653 ms, and total draw work
+6.189 → 6.588 ms; cadence stayed 33.333 ms. These are host measurements from
+one pair, not GPU timings or a general performance guarantee. Measured
+allocation bytes were 105,061,368 → 105,111,152 (about +0.05%), with
+726,738 → 728,801 allocation calls. Median executor counters remained seven
+passes, three phases, six draws and 31,868 vertices.
+
+An initial implementation fragmented batches when typed icons alternated with
+generic contacts. The final path binds the shared icon atlas for both and uses
+a flat-palette shader branch for generic squares, retaining their existing base
+and four outline primitives. A 100-contact device fixture proves one scheduled
+run, byte-identical output against singleton legacy-dot batches, and one atlas
+upload across replay. Palette changes do not upload the masks. This removed
+the initial excess graphics-driver allocations without reordering contacts.
+### 18.8 Play-test feedback correction
+
+The 24px revision corrects three related visibility/color defects: world icons
+no longer depend on the minimap's stale contact latch or its damage-blink term,
+and their team ink comes from HUD logo art instead of radlogo's gray border.
+Visibility tests cover enemies with LOS but no admitted/published radar contact,
+both damage-blink phases, owner selection, radar-only fallback, unexplored fog,
+24px hit edges, missing team color, direct attached models and hidden/nested
+cargo. The constructors sheet verifies basic/advanced glyphs across both
+factions and physical families against the authored categories.
+
+Sequential Comet Catcher live benchmarks (seed 7, modern 0.5×, 180 measured
+draws at 30 Hz) retain identical scene metadata and every frame's simulation
+census. Median record time was 0.983 → 1.075 ms, submission 1.522 → 1.510 ms,
+total draw work 6.021 → 6.255 ms, cadence 33.335 → 33.334 ms. Measured allocation
+bytes were 105,112,192 → 107,592,640; allocation calls 728,826 → 732,206.
+The corrected view draws more visible units: median vertices 31,868 → 32,230,
+with six draws, seven passes and three phases unchanged. These are one pair's
+host measurements, not GPU timings. Classic also completed the live benchmark;
+its capture and the before/after modern captures were visually inspected.
+Build, vet, formatting, full tests, real GPU device fixtures and
+`tools/check-retail` passed on the integrated revision. Selected-unit captures
+at 0.625×, 0.5625×, 0.5× and 0.3× were inspected; native 1× classic and modern
+before/after captures were byte-identical.
+
+## 19. Glow: Enhanced bloom from the world's light sources
+
+### 19.1 Decision
+
+Retail's composite has no light. A laser is a one-pixel Bresenham line in a
+palette colour, an explosion is animated art with a brightening of the
+pixels under it, and nothing spills past its own pixels. The glow layer gives
+the world's light sources a halo: an Enhanced presentation feature under the
+umbrella of §14.3, on by default while the modern executor presents, absent
+from Original, and never a simulation input [I6]. The classic executor is
+unchanged and stays the byte-exact reference; with the layer switched off the
+modern executor's output is byte-identical to the executor without it
+(§19.5).
+
+The user's brief relaxed the requirement that Enhanced match retail's
+software composite, so the layer is designed for the look rather than for a
+retail-derived arithmetic. Two things are still not invented: which pixels
+are a light, which the recording already knows, and what colour a light adds,
+which is either the palette colour retail draws or the brightening retail
+applies.
+
+### 19.2 The sources — contract L1
+
+The recording marks its light sources and nothing else changes in it.
+`drawlist.Line` and `drawlist.Sprite` carry an `Emissive` flag; the recorder
+sets it on:
+
+- the beam and segment strokes of the projectile renderer (lasers and
+  lightning) [06 R-WFX-01 §4], never on the selection quad or a path;
+- the effect, projectile (plasma shells, flares) and strip (fire, explosion
+  animation, smoke) sprites, never on unit, feature, chrome or shadow art.
+
+The flag is metadata: every executor draws the flagged command exactly as it
+did, and the classic sink and every parity fixture ignore it. The explosion
+flash disc and the ground halo (§13.11) need no flag — they are modern-only
+commands and always light sources.
+
+What each source emits into the glow plane, `internal/platform/gpurender/glow.go`:
+
+| source | emission | notes |
+|---|---|---|
+| stroke | `PAL[index] × glowGain` over a quad `glowLineWidth` screen px wide (scaled by the world transform), extended by its half-width at both ends | a one-pixel line has too little energy to survive the blur; the quad gives it some |
+| sprite | the texel's `PAL` colour × `smoothstep(glowThreshold, 1, max channel)` × `glowSpriteGain`; a tinted strip sprite at half that | fire and flares emit, smoke and debris do not; only the sprite's keyed texels |
+| flash disc | the composite colour under the fragment × the disc atlas lane `max(k−1, 0)` × `glowLightGain` | the brightening the disc applied, read from the same atlas texel the disc used (§13.11), so the glow's colour is the lit ground's |
+| halo | the composite colour under the fragment × the row's high lane × `glowLightGain`, inside the same disc test `destOpHalo` runs | as above |
+
+The composite is bound as a source image while the glow plane is the
+destination, so reading it there is legal and reads the frame as replayed so
+far. The emission fragment's alpha is its largest channel, so the plane stays
+a valid premultiplied image through the linear-filtered shrinks.
+
+### 19.3 The resolve — contract L2
+
+The batch is additive and order-free, so it rides no phase: sources append
+quads (with the world transform of §16.3 applied to their vertices exactly
+as the scheduler applies it) to runs keyed by image bindings, and the
+resolve runs at most once per frame, at the first of:
+
+1. the fog command, before it compiles — so the grey composite dims the
+   glow and the black one hides it, exactly as they treat the light sources
+   themselves;
+2. the close of the world region — so a frame recorded without a fog
+   composite still resolves before the chrome is painted over the world.
+
+A frame with neither (a front-end frame) has no emissive commands and drops
+nothing. The resolve submits the scheduler first, so it is a barrier costing
+one segment, then:
+
+1. clears the full-frame emission plane and draws the runs into it under
+   `BlendLighter`;
+2. shrinks it to a half and a quarter of the frame with linear filtering,
+   blurs the quarter plane with a separable nine-tap Gaussian (σ = 2 texels,
+   ping-pong), shrinks that to an eighth and blurs again;
+3. adds the quarter plane (×4, weight `glowNearWeight`) and the eighth plane
+   (×8, weight `glowFarWeight`) onto the composite with linear magnification
+   under a **screen** blend, `out = src + dst × (1 − src)`. Screen rather
+   than additive is what keeps a fireball's own art: an already-white core
+   stays white instead of clipping, and the halo shows where the ground is
+   darker.
+
+That is nine device passes per frame with something glowing and about 2.4
+frames of fill, most of it the two magnified adds; a frame with nothing
+emissive costs nothing. The planes are allocated once per frame size; the
+emission plane is unmanaged so its texels never depend on an atlas placement
+(§13.12 "The defect this round exposed"). Steady-state frames allocate no
+options, no uniform map and no geometry here.
+
+The knobs (`glowLineWidth` 4, `glowGain` 1, `glowThreshold` 0.65,
+`glowSpriteGain` 0.6, `glowLightGain` 0.35, `glowNearWeight` 0.65,
+`glowFarWeight` 0.5, σ 2 over four taps) are presentation choices tuned by
+eye on the battle benchmark capture; the first pass at 0.8/0.5 with an
+additive composite and no sprite gain blew every fireball to a white blob,
+which is the case the screen blend and the sprite threshold exist for.
+
+### 19.4 The switch
+
+`settings.Display.Glow` (`display.glow`, default 1) is a Nanolathe option with
+no retail bit. The shell and the capture route apply it with the other
+display bits (`applyVisualOptions` → `Client.SetGlow`), the `+glow` chat
+command toggles and persists it beside `+antialias` and `+dither`, and every
+modern executor site copies the client's switch to the renderer
+(`Renderer.SetGlow`) before `Execute`, next to the display palette. A settings
+file that omits the key keeps the default because the loader decodes over the
+defaults [02 "Settings"]. Off, no source appends and the resolve is a no-op.
+
+### 19.5 Verification
+
+1. **Device fixture.** `glow_test.go` (`NANOLATHE_GPU_DEVICE_TEST=1`): a flat
+   field with one emissive stroke inside a rest-factor world region. Off, the
+   frame is the exact classic expansion and the counters are zero. On, the
+   stroke's own pixels are unchanged (screen leaves white white), the field
+   beside it is clearly brighter, the brightening falls off with distance, and
+   the far corner is the field to within the blur's last tap.
+2. **CI tier.** Unit tests lock the normalized kernel, run-relative indices
+   and run splitting of the batch, the stroke quad's geometry, and the
+   recorder's emissive marks on beam and segment strokes; `tools/check` green.
+3. **Byte-identical off.** The modern battle benchmark (1080p, 120 TPS, 180
+   frames) with `display.glow` 0 on this branch against main:
+   `battle.png` identical; the M-matrix captures of quiet frames identical
+   with the switch on (nothing emissive in frame).
+4. **Look.** The benchmark capture with the switch on beside the same frame
+   off, cropped at 1:1 around an explosion cluster and around a laser: the
+   fireballs keep their texture with a soft warm halo, the Leveler's green
+   beam glows, burning trees glow, smoke does not, and the fogged half of the
+   map shows the glow greyed.
+5. **Cost.** Same benchmark, glow off → on, adjacent runs on a host at load
+   ~5: Submit 5.21 → 5.33 ms median, cadence 8.53 → 8.61 ms, OutsideDraw 2.76
+   → 2.94 ms, on the 8.8 ms floor 58% → 53%, passes 13 → 22 median, ~570
+   emissive quads and 2.2k more Ebitengine objects per frame. GPU time is not
+   observable through Ebitengine (docs/BATTLE_BENCHMARK.md), so the outside-
+   draw delta is the upper bound on what the nine passes cost the device.
+
+### 19.6 Owed
+
+A human look at the window in motion, where the glow is interpolated with
+the sources. The nanolathe spray (plain points) and unit-mounted lights are
+not sources yet; the first needs a flag on the point batch, the second a
+material or piece-name signal the model lane does not carry. The two
+magnified adds could be one shader pass sampling both octaves, and the half
+plane could go if Ebitengine's mipmapped shrink proves cheaper than a pass;
+neither was needed at the measured cost.

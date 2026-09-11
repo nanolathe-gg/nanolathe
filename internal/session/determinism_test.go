@@ -165,22 +165,23 @@ func TestRS06_GlobalInventory(t *testing.T) {
 func TestRS06_FloatAudit(t *testing.T) {
 	root := findRepoRoot(t)
 	allowlist := map[string]bool{
-		"internal/combat/aim.go":            true, // ballistic discriminant [I2]
-		"internal/combat/motion.go":         true, // projectile motion wide calc [I2][06 §6.5] transient
-		"internal/combat/impact.go":         true, // area damage distance [I2][06 §9.3] transient
-		"internal/combat/stockpile.go":      true, // var _ import keep, not authoritative
-		"internal/movement/flight.go":       true, // flight brake hypot [I2][04 §10.1]
-		"internal/movement/airorders.go":    true, // AirStrike release lead sqrt, narrowed by truncation [I2][04 R-AIR-01 §8]
-		"internal/movement/integrate.go":    true, // ground movement distance, truncated toward zero [I2][04 R-MOV-01 §3][04 R-PATH-01 §8]
-		"internal/movement/altitude.go":     true, // air-arrival explicit radius [I2][04 §10.1]
-		"internal/client/model.go":          true, // model draw trig [I2][03 §2.4]
-		"internal/cob/ports.go":             true, // cob distance hypot [I2][04 §4.4]
-		"internal/sim/numeric/trig.go":      true, // trig table [I2][04 §5.1]
-		"internal/session/strips.go":        true, // nano particle travel distance sqrt, truncated to the tick count, never stored [I2][03 §5.5]
-		"internal/content/compile_unit.go":  true, // compile-time
-		"internal/ai/placement.go":          true, // placement sqrt [P0-03 §4][I2] transient
-		"internal/upscale/sprite.go":        true, // load-time 2x art synthesis, presentation-only, never on a sim path [I2][DESIGN_GPU_RENDERER §14.4]
-		"internal/upscale/terrain_basis.go": true, // the terrain synthesizer's PCA basis norm, presentation-only, never on a sim path [I2][DESIGN_GPU_RENDERER §14.4]
+		"internal/combat/aim.go":              true, // ballistic discriminant [I2]
+		"internal/combat/motion.go":           true, // projectile motion wide calc [I2][06 §6.5] transient
+		"internal/combat/impact.go":           true, // area damage distance [I2][06 §9.3] transient
+		"internal/combat/stockpile.go":        true, // var _ import keep, not authoritative
+		"internal/movement/flight.go":         true, // flight brake hypot [I2][04 §10.1]
+		"internal/movement/airorders.go":      true, // AirStrike release lead sqrt, narrowed by truncation [I2][04 R-AIR-01 §8]
+		"internal/movement/integrate.go":      true, // ground movement distance, truncated toward zero [I2][04 R-MOV-01 §3][04 R-PATH-01 §8]
+		"internal/movement/altitude.go":       true, // air-arrival explicit radius [I2][04 §10.1]
+		"internal/client/model.go":            true, // model draw trig [I2][03 §2.4]
+		"internal/cob/ports.go":               true, // cob distance hypot [I2][04 §4.4]
+		"internal/sim/numeric/trig.go":        true, // trig table [I2][04 §5.1]
+		"internal/session/strips.go":          true, // nano particle travel distance sqrt, truncated to the tick count, never stored [I2][03 §5.5]
+		"internal/content/compile_unit.go":    true, // compile-time
+		"internal/ai/placement.go":            true, // placement sqrt [P0-03 §4][I2] transient
+		"internal/upscale/sprite.go":          true, // load-time 2x art synthesis, presentation-only, never on a sim path [I2][DESIGN_GPU_RENDERER §14.4]
+		"internal/upscale/terrain_basis.go":   true, // the terrain synthesizer's PCA basis norm, presentation-only, never on a sim path [I2][DESIGN_GPU_RENDERER §14.4]
+		"internal/platform/gpurender/glow.go": true, // the glow stroke's length, presentation-only on the device path, never on a sim path [I2][DESIGN_GPU_RENDERER §19]
 	}
 	re := regexp.MustCompile(`math\.(Hypot|Sqrt|Acos)`)
 	err := walkGoFiles(root+"/internal", func(path string, content string) {

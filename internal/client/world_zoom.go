@@ -173,7 +173,8 @@ func (c *Client) liveZoom() camera.Zoom {
 // strategicView reports whether this frame is below the model cut, which is
 // where unit models, projectiles, effects, trails and unit labels stop being
 // recorded and the marker layer replaces the units (§16.10). Terrain, fog,
-// features, the selection fills and the drag rectangle are not gated on it.
+// features and the drag rectangle are not gated on it. Generated icons replace
+// ground selection quads when StrategicIconsActive (§18.4).
 func (c *Client) strategicView() bool {
 	// Inclusive, so the 0.5x WHEEL STEP (camera.ZoomSteps) is a marker view
 	// and not the one factor at which both the models and the fully faded-in

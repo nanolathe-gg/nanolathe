@@ -52,6 +52,16 @@ func (w WorldSpace) Identity() bool {
 	return w.Zoom <= 0 || w.Zoom == camera.ZoomOf(w.Step)
 }
 
+// MarkerAtlas holds immutable generated icon coverage (GPU design §18).
+// Each pixel has four independent disjoint coverage weights: red = team ink,
+// green = white role ink, blue = selected halo, alpha = dark backing.
+// Their sum is at most 255. This is data, not a premultiplied color image.
+// Lists and their clones retain the atlas for their whole lifetime.
+type MarkerAtlas struct {
+	Width, Height int
+	Pixels        []byte
+}
+
 // Marker records one strategic-view unit marker: a fixed-size filled square at
 // a screen position, in the team palette entry the minimap's own dot uses
 // (docs/DESIGN_GPU_RENDERER.md §16.11).
@@ -61,6 +71,11 @@ func (w WorldSpace) Identity() bool {
 // their size is a fixed number of SCREEN pixels: scaling them with the world
 // would defeat the point of drawing them at all.
 type Marker struct {
+	// IconAtlas and IconRect select immutable generated mask art. A nil atlas
+	// preserves the generic square contact. Size remains the screen extent.
+	IconAtlas *MarkerAtlas
+	IconRect  Rect
+
 	// X, Y is the marker's centre in framebuffer pixels.
 	X, Y int32
 	// Size is the square's side in framebuffer pixels.

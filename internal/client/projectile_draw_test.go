@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/render"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
@@ -55,6 +56,35 @@ func TestSegmentedProjectilePassesUsePrimaryPaletteColor(t *testing.T) {
 	for i, line := range collector.lines {
 		if got := line.Index; got != 37 {
 			t.Fatalf("pass %d palette index = %d, want primary color 37 [06 R-WFX-01 §4]", i, got)
+		}
+	}
+}
+
+// Beam and segment strokes are the light sources of the Enhanced glow layer,
+// so their records carry the emissive mark; the classic executor ignores it
+// and the modern one reads it (docs/DESIGN_GPU_RENDERER.md §19).
+func TestProjectileStrokesAreRecordedEmissive(t *testing.T) {
+	c := newTestClient(t)
+	c.resetListForTest()
+	d := render.ProjectileDraw{
+		Color:     37,
+		Color2:    201,
+		Segments:  []render.ProjectilePoint{{}, {X: numeric.FixedFromInt(10)}},
+		Segments2: []render.ProjectilePoint{{}, {Z: numeric.FixedFromInt(10)}},
+	}
+	c.drawProjectileSegments(d)
+	c.drawProjectileSegmentsSecond(d)
+	if got := c.drawProjectileBeam(d, frame.ProjectileView{TailX: numeric.FixedFromInt(16)}); got != 2 {
+		t.Fatalf("beam strokes = %d, want 2 (color2 stroke under color)", got)
+	}
+	collector := &projectileLineCollector{}
+	c.list.Replay(collector)
+	if len(collector.lines) != 4 {
+		t.Fatalf("recorded lines = %d, want 4", len(collector.lines))
+	}
+	for i, line := range collector.lines {
+		if !line.Emissive {
+			t.Fatalf("line %d is not marked emissive: %+v", i, line)
 		}
 	}
 }

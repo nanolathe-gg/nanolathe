@@ -68,6 +68,10 @@ func (r *Renderer) resetSources(release func(*ebiten.Image)) {
 	retire(r.fog.grid)
 	retire(r.pointPlane.img)
 	retire(r.sched.flash.img)
+	for _, atlas := range r.markerAtlases {
+		retire(atlas.image)
+	}
+	r.markerAtlases = [4]markerAtlasUpload{}
 
 	r.tileAtlases = make(map[tileAtlasKey]*tileAtlas)
 	r.gafImages = make(map[*formats.GAFFrame]*ebiten.Image)

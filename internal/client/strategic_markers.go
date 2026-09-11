@@ -4,21 +4,33 @@ import (
 	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
-	"github.com/nanolathe-gg/nanolathe/internal/render"
 )
 
 // The strategic view's marker layer (docs/DESIGN_GPU_RENDERER.md §16.11).
 //
-// Below strategicMarkerOn each unit the local player may see becomes one filled
-// square of a fixed SCREEN size, in the team colour its minimap dot is drawn
-// in. The layer is recorded after the world region closes, positioned through
+// Below strategicMarkerOn admitted contacts become fixed-screen markers.
+// Visible units use generated role art (§18); sensor-only contacts keep a
+// generic square. The layer is recorded after the world region closes, positioned through
 // the LIVE zoom factor, because a fixed-pixel mark must not be scaled by the
 // executor's world transform.
 //
-// The visibility rule is not re-derived here. The markers come from the
-// committed radar contact list and pass exactly render.MinimapBlipAdmitted —
-// the same records and the same gate the minimap's own dots take — so a unit
-// the minimap will not show cannot appear as a marker either.
+// Visible unit icons use the committed world-visibility predicate independently
+// of minimap blink/status. Radar-only dots retain the minimap admission gate.
+
+// SetStrategicTeamArt binds the same lobby-colour logo frames used by the HUD.
+// Their dominant opaque shade supplies Enhanced icon ink (§18.4). The radar
+// blip's dominant shade is its gray border, so it is unsuitable for team ink.
+func (c *Client) SetStrategicTeamArt(entry *formats.GAFEntry) {
+	if c == nil {
+		return
+	}
+	c.strategicTeam = entry
+	c.strategicTeamColors = c.strategicTeamColors[:0]
+}
+
+func (c *Client) strategicTeamColor(selector uint8) (uint8, bool) {
+	return strategicArtColor(c.strategicTeam, &c.strategicTeamColors, selector)
+}
 
 // SetStrategicBlipArt installs the minimap blip art the marker colours are
 // taken from: the `radlogo` GAF entry, one frame per player colour. The HUD
@@ -52,21 +64,28 @@ func (c *Client) SetRadarOptions(options uint32) {
 // dominant pixel rather than naming a colour is what makes the marker the same
 // colour as the dot without a second table to keep in step.
 func (c *Client) strategicBlipColor(selector uint8) (uint8, bool) {
-	if c == nil || c.strategicBlip == nil {
+	if c == nil {
 		return 0, false
 	}
-	if int(selector) >= len(c.strategicBlip.Frames) {
+	return strategicArtColor(c.strategicBlip, &c.strategicBlipColors, selector)
+}
+
+func strategicArtColor(entry *formats.GAFEntry, colors *[]strategicBlipColor, selector uint8) (uint8, bool) {
+	if entry == nil {
 		return 0, false
 	}
-	for len(c.strategicBlipColors) <= int(selector) {
-		c.strategicBlipColors = append(c.strategicBlipColors, strategicBlipColor{})
+	if int(selector) >= len(entry.Frames) {
+		return 0, false
 	}
-	slot := &c.strategicBlipColors[selector]
+	for len(*colors) <= int(selector) {
+		*colors = append(*colors, strategicBlipColor{})
+	}
+	slot := &(*colors)[selector]
 	if slot.resolved {
 		return slot.index, slot.ok
 	}
 	slot.resolved = true
-	f := c.strategicBlip.Frames[selector].Frame
+	f := entry.Frames[selector].Frame
 	if f != nil {
 		var counts [256]int32
 		best, bestCount := uint8(0), int32(0)
@@ -100,69 +119,22 @@ type strategicBlipColor struct {
 // strategicMarkerOn, which is every ordinary frame, so the whole of the
 // strategic view costs one comparison at a normal zoom.
 func (c *Client) drawStrategicMarkers(cur *frame.Frame) {
-	if c == nil || cur == nil || c.cam == nil {
+	if c == nil {
 		return
 	}
-	alpha := c.markerAlpha()
-	if alpha == 0 {
-		return
+	// Identification must use committed visibility, even when the world models
+	// are interpolated. Radar contact coordinates themselves are not blended.
+	committed := cur
+	if c.buffer != nil && c.buffer.Current() != nil {
+		committed = c.buffer.Current()
 	}
-	viewport := c.battleViewportRect()
-	if viewport.W <= 0 || viewport.H <= 0 {
-		return
+	viewer := uint8(0)
+	if committed != nil {
+		viewer = committed.ViewingPlayer
 	}
-	z := c.liveZoom()
-	camX, camZ := c.cam.X, c.cam.Z
-	blink := render.BlinkState{Phase: cur.Radar.BlinkPhase}
-	outline := c.paletteIndex(selectionQuadLogicalColor)
-	half := int32(strategicMarkerSize) / 2
-	marks := c.markerArena[:0]
-	for i := range cur.Radar.Contacts {
-		published := &cur.Radar.Contacts[i]
-		if published.Kind != frame.RadarContactUnit || !published.PaletteKnown {
-			continue
-		}
-		// The minimap's own admission, on the minimap's own records: a contact
-		// that fails it draws no dot, and so has no marker either [03 §3.9].
-		contact := render.MinimapContact{
-			Owner:         published.Owner,
-			Status:        published.Status,
-			BlinkSuppress: published.BlinkSuppress,
-			Visible:       published.Visible,
-			LocalPlayer:   cur.ViewingPlayer,
-			Options:       c.radarOptions,
-			MinimapMode:   cur.Radar.MappingLOS,
-		}
-		if !render.MinimapBlipAdmitted(contact, blink) {
-			continue
-		}
-		index, ok := c.strategicBlipColor(published.Palette)
-		if !ok {
-			continue
-		}
-		// The live factor, not the record step: a marker is a fixed number of
-		// framebuffer pixels and is recorded outside the world transform.
-		wx := int32(int64(published.X) >> 16)
-		wy := int32(int64(published.Y) >> 16)
-		wz := int32(int64(published.Z) >> 16)
-		// The recorder's world origin is the FRAMEBUFFER's own top-left — the
-		// camera origin is drawn there and the chrome is painted over it — so a
-		// marker's framebuffer position carries no beam offset [03 §2.5].
-		sx := z.Project(wx - camX)
-		sy := z.Project(wz - (wy >> 1) - camZ)
-		if sx+half < viewport.X || sx-half >= viewport.X+viewport.W ||
-			sy+half < viewport.Y || sy-half >= viewport.Y+viewport.H {
-			continue
-		}
-		marks = append(marks, drawlist.Marker{
-			X: sx, Y: sy, Size: strategicMarkerSize,
-			Index: index, Outline: outline, Selected: published.Selected,
-			Alpha: alpha, Clip: viewport, HasClip: true,
-		})
+	c.layoutStrategicMarkers(committed, viewer, &c.strategicDraw, false)
+	c.markerArena = c.strategicDraw.marks
+	if len(c.markerArena) != 0 {
+		c.list.RecordMarkers(drawlist.Markers{Marks: c.markerArena})
 	}
-	c.markerArena = marks
-	if len(marks) == 0 {
-		return
-	}
-	c.list.RecordMarkers(drawlist.Markers{Marks: marks})
 }

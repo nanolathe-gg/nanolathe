@@ -361,7 +361,9 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 			list = a.c.RecordModernFrame()
 		}
 		a.gpu.SetDisplayPalette(a.c.DisplayPalette())
+		a.gpu.SetGlow(a.c.Glow())
 		if img := a.gpu.Execute(list, width, height); img != nil {
+			a.c.CommitStrategicPresentation()
 			screen.DrawImage(img, &ebiten.DrawImageOptions{})
 		}
 	}

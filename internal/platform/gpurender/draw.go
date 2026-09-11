@@ -198,6 +198,10 @@ func (r *Renderer) Line(l drawlist.Line) {
 	if r == nil || r.surfaces[0] == nil {
 		return
 	}
+	if l.Emissive {
+		// A beam or lightning stroke is a light source for the glow layer (§19).
+		r.glowLine(l)
+	}
 	bx0 := maxInt(minInt(int(l.X0), int(l.X1)), 0)
 	by0 := maxInt(minInt(int(l.Y0), int(l.Y1)), 0)
 	bx1 := minInt(maxInt(int(l.X0), int(l.X1))+1, r.clipW())

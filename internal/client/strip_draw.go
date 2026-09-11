@@ -189,6 +189,9 @@ func (c *Client) blitStripFrame(v frame.StripView) bool {
 		X:     sx - camera.OriginX,
 		Y:     sy - camera.OriginY,
 		Kind:  drawlist.BlitTinted,
+		// Strip art is fire, smoke and explosion animation: a light source for the
+		// Enhanced glow layer, which keeps only its bright texels (§19).
+		Emissive: true,
 	})
 	return c.pal != nil && len(c.indexed) != 0
 }

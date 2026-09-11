@@ -264,7 +264,7 @@ func (c *Client) DrawEffectViews(effects []frame.EffectView, options EffectDrawO
 		// The load-time remaster covers feature banks only, so an effect frame
 		// resolves to its nearest-doubled variant in the detail view; at the
 		// native scale viewFrame is the identity (DESIGN_GPU_RENDERER §14.3).
-		c.emitSprite(drawlist.Sprite{Frame: c.viewFrame(frame), X: x - 128, Y: y - 32, Kind: drawlist.BlitKeyed, Anchored: true})
+		c.emitSprite(drawlist.Sprite{Frame: c.viewFrame(frame), X: x - 128, Y: y - 32, Kind: drawlist.BlitKeyed, Anchored: true, Emissive: true})
 		stats.Sprites++
 	}
 	return stats

@@ -1223,6 +1223,7 @@ func applyVisualOptions(cl *client.Client, d settings.Display) {
 	cl.SetFeatureShadows(d.FeatureShadows != 0)
 	cl.SetShadowOptions(d.Shadows != 0, d.VehicleShadows != 0, d.Shading != 0)
 	cl.SetDitheredFog(d.DitheredFogEnabled())
+	cl.SetGlow(d.Glow != 0)
 }
 
 // setRetailShadowBits is the `BSHADOWS` write: bit 4 takes the stage, bit 3

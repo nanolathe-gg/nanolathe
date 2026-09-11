@@ -39,6 +39,7 @@ func (a *app) drawPaused(screen *ebiten.Image, width, height int) bool {
 	a.c.CancelPreRecord()
 	a.pipe.armed = false
 	a.gpu.SetDisplayPalette(a.c.DisplayPalette())
+	a.gpu.SetGlow(a.c.Glow())
 	if !a.paused.valid || a.paused.inputs != inputs {
 		world := a.gpu.Execute(a.c.RecordPausedWorld(), width, height)
 		if world == nil {
@@ -56,6 +57,7 @@ func (a *app) drawPaused(screen *ebiten.Image, width, height int) bool {
 		a.paused.reuses++
 	}
 	if img := a.gpu.ExecuteOver(a.c.RecordPausedForeground(), a.paused.image, width, height); img != nil {
+		a.c.CommitStrategicPresentation()
 		screen.DrawImage(img, &ebiten.DrawImageOptions{})
 	}
 	a.pipe.synchronous++ // a live foreground was presented without speculation

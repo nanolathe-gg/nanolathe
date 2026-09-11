@@ -90,6 +90,11 @@ type Sprite struct {
 	// ALP-tinted rather than opaque keyed primitive [03 R-RAST-01 §6]
 	// [03 §5.3.1][R-REN-03D §4].
 	Trans bool
+	// Emissive marks a sprite whose bright texels are a light source for the
+	// Enhanced glow layer: effect, projectile and strip art
+	// (docs/DESIGN_GPU_RENDERER.md §19). It changes nothing about how the sprite
+	// itself is written; the classic executor and every parity fixture ignore it.
+	Emissive bool
 	// Pal is the palette a BlitLit sprite resolves its LHT row against; nil for
 	// every other kind (WU-1.8). Carrying it on the record makes the lit glyph
 	// blit self-contained under deferred replay: the classic sink reads Pal here
@@ -199,6 +204,11 @@ type Fill struct {
 type Line struct {
 	X0, Y0, X1, Y1 int32
 	Index          uint8
+	// Emissive marks a line that is a light source for the Enhanced glow layer:
+	// the beam and segment strokes of the projectile renderer, never the
+	// selection quad or a path (docs/DESIGN_GPU_RENDERER.md §19). The classic
+	// executor ignores it.
+	Emissive bool
 }
 
 // Point is one packed (x, y, operand) triple. The Index field is a physical
@@ -773,6 +783,8 @@ func (l *List) Clone() List {
 	// The world boundary markers are plain values.
 	c.world = append([]WorldSpace(nil), l.world...)
 	// Marker batches borrow the client's reusable marker arena; copy each.
+	// Their immutable icon atlases remain shared across frames and retained lists
+	// so replay preserves resource identity without copying art (GPU design §18.5).
 	c.markers = make([]Markers, len(l.markers))
 	for i, mk := range l.markers {
 		c.markers[i] = Markers{Marks: append([]Marker(nil), mk.Marks...)}

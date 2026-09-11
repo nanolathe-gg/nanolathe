@@ -685,11 +685,12 @@ func (c *Client) presentUnit(d worldDrawable) {
 	// precedes its model present, so the model draws over it; both passes run
 	// before the fog composite, so the quad is never fog-clipped
 	// [03 R-WATER-01 §1].
-	if u.Flags&hud.SelectionFlag != 0 {
+	if u.Flags&hud.SelectionFlag != 0 && !c.StrategicIconsActive() {
 		c.drawSelectionQuad(u)
 	}
-	// The selection quad is a world FILL and stays at every factor; the model is
-	// what the strategic view replaces with a marker (§16.10, §16.11).
+	// Generated icons carry their own selection outline. At the full-icon cut
+	// they replace both the model and its ground quad; the fade and classic
+	// presentation keep the ground selection cue (GPU design §18.4).
 	if c.strategicView() {
 		return
 	}

@@ -34,8 +34,11 @@ type Renderer struct {
 	displayPaletteGen uint64
 	// scene2D is the one opaque pass and sceneDest the one destination-compositing
 	// pass (§11.2 "One scene shader for the 2D families").
-	scene2D   *ebiten.Shader
-	sceneDest *ebiten.Shader
+	scene2D                   *ebiten.Shader
+	sceneDest                 *ebiten.Shader
+	markerShader              *ebiten.Shader
+	markerAtlases             [4]markerAtlasUpload
+	markerClock, markerWrites uint64 // resource reuse diagnostics only
 	// The model slot atlas rasterization passes. modelCommit and
 	// modelShadowCommit are compiled because the slot allocator gates a
 	// subject's shadow and body on them; the commits themselves ride the scene
@@ -159,6 +162,10 @@ type Renderer struct {
 	// fog is the fog pass state of docs/DESIGN_GPU_RENDERER.md §11.2, owned by
 	// fog.go so the fog unit and the model unit never edit the same file.
 	fog fogPass
+
+	// glow is the Enhanced glow layer of docs/DESIGN_GPU_RENDERER.md §19: the
+	// emissive batch, its planes and passes (glow.go).
+	glow glowLayer
 }
 
 // surfaceUpload is one indexed-surface upload slot: the scene atlas region its
@@ -233,6 +240,7 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 	}
 	compile(&r.scene2D, newScene2DShader)
 	compile(&r.sceneDest, newSceneDestShader)
+	compile(&r.markerShader, newMarkerShader)
 	compile(&r.modelKey, newModelKeyShader)
 	compile(&r.modelBody, newModelBodyShader)
 	compile(&r.modelCommit, newModelCommitShader)
@@ -292,6 +300,7 @@ func (r *Renderer) Execute(list *drawlist.List, w, h int) *ebiten.Image {
 	r.lastDest = nil
 	r.sched.resetFrame(r.w, r.h)
 	r.pointPlane.resetFrame()
+	r.glow.resetFrame()
 	r.worldW, r.worldH = r.w, r.h
 	r.modelPrep.reset()
 	defer r.modelPrep.reset()

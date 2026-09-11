@@ -50,7 +50,11 @@ type ModelStats struct {
 	// two fifths of a battle frame's model subjects and were the whole of its
 	// un-keyed raster work before that section, so reading them apart is what
 	// says whether the shadow lane is resident or paying the cold cost.
-	ShadowSlotsReused, ShadowSlotsRasterized                    int
+	ShadowSlotsReused, ShadowSlotsRasterized int
+	// GlowQuads is the emissive quads the Enhanced glow layer batched this
+	// frame and GlowPasses the device passes its resolve spent, zero when the
+	// layer is off or nothing glowed (docs/DESIGN_GPU_RENDERER.md §19).
+	GlowQuads, GlowPasses                                       int
 	GPU, Skipped, Shadows, ShadowsOmitted, StagedGroups, NoBody int
 	UnsupportedGeometry, MissingTexture, UnsupportedFace        int
 	FoldedFaces, FoldedStrips                                   int
