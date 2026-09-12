@@ -1549,8 +1549,8 @@ accepts left double-click on a metal deposit to build its strongest
 available extractor, or on ordinary ground to build a solar collector. Every
 double-click appends, whether Shift is held or not. The typed mobile-build
 command carries explicit `Queued` and `AppendOnly` intent: existing work is
-preserved, including a repeated site, which uses ordinary insertion/coalescing
-instead of the manual Shift-placement removal gesture. The complete authored build
+preserved; a repeated site is moved clear of queued footprints instead of
+using the manual Shift-placement removal gesture. The complete authored build
 menu supplies candidates, independent of the currently displayed page. Equal
 extractor strengths and multiple solar candidates retain authored menu order.
 Factories, unit targets, other features, armed commands, HUD and minimap input
@@ -1581,6 +1581,30 @@ play the usual refusal cue and enqueue nothing. This does not replace an
 existing extractor or clear obstacles automatically. Featureless metal maps
 have no deposit feature for this gesture to identify.
 
+**Queued footprint spacing (modern input policy).** On the second click,
+collect building footprints from both published order lists of every local
+builder, including unselected builders, and from copied mobile-build input
+commands awaiting their authoritative tick. Pending cancellations may leave a
+conservative reservation until the next publication. Foreign queues do not
+affect the gesture. An incomplete published queue refuses the shortcut because
+it cannot establish that a site is clear.
+
+An overlapping site moves to the nearest legal cell-aligned outside edge of
+the connected group of queued footprints. Expand obstacles by the new
+footprint to obtain forbidden anchors, collect every integer anchor along the
+group's boundary edges, and consider them by squared distance from the original
+anchor, breaking ties by increasing Z then X. Check each against all reserved
+footprints and the normal placement validator. Half-open rectangles permit
+touching edges without a gap, including mixed footprint sizes. A site already
+clear of queues keeps its original position and validation behavior. This is
+an input-time search, with no new per-frame or per-tick work.
+
+An offset extractor must still cover at least one cell of the same deposit;
+partial coverage is allowed and can reduce extraction. If no legal edge
+retains deposit coverage, refuse rather than place off metal. Earlier queued
+sites are never moved. The final adjusted position and height enter the
+ordinary queued build command and therefore the existing queue animation.
+
 The battle input layer recognizes a pair within 400 host milliseconds after
 first release, at most six logical pixels apart on each axis, with no Ctrl/Alt.
 Shift state does not distinguish gestures. The second press must resolve to the same product
@@ -1608,7 +1632,8 @@ left-click in Type 0, right-click in Type 1, using the usual queue replacement.
 Verification: `TestResource*` replays the production input/command seam with an
 injected host clock, checking modern/classic behavior, unconditional queue preservation and feedback,
 single-click expiry, refusal, deposit centering in and outside current LOS,
-builders without extractors, and cancellation. Synthetic
+builders without extractors, repeated/rapid queued spacing, unselected local
+builders, mixed footprints, illegal edges, deposit coverage, and cancellation. Synthetic
 fixtures define the new input policy; it is not attributed to retail evidence.
 
 ## 4. Retail behaviour that is not a bug

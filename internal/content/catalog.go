@@ -73,7 +73,8 @@ type WeaponDuplicate struct {
 // Definitions carry DefinitionHeader with canonical key/provenance/hash.
 // The catalog is read-only after Compile; sim packages take *Catalog and never mutate.
 type Catalog struct {
-	Units map[string]*UnitDef // key = CanonicalKey(unitname) [02 §5]
+	Units       map[string]*UnitDef // first equal name, including empty [02 R-CAT-01 §5]
+	unitRecords []*UnitDef          // all retained non-sentinel records in immutable ID order
 	// Categories is the sorted case-insensitive unit-membership registry
 	// compiled from all UnitDef category and target fields [R-P0-03].
 	Categories *CategoryRegistry
@@ -175,8 +176,9 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 		return nil, err
 	}
 	units := unitResult.units
+	records := unitResult.records
 	report.Report(FamilyUnits, 100)
-	categories, err := CompileCategories(units)
+	categories, err := compileCategoryRecords(records, units)
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +196,7 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 	report.Report(FamilyMovement, 100)
 	// Link movement footprints before any unit definition is exposed to
 	// placement, build menus, or model consumers [07 §9] "The site".
-	ApplyMovementFootprints(units, movement)
+	applyMovementFootprintRecords(records, movement)
 	sides, err := CompileSides(fs)
 	if err != nil {
 		// SIDEDATA missing is fatal [02 §6] C8; missing font fatal [GAP T14].
@@ -254,7 +256,7 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 
 	// Stage 2: link cross-references so enumeration order cannot leak into identity [02 §5] C1.
 	// weapon1..3 on a unit resolve only after all weapons compile.
-	LinkUnitWeapons(units, weapons)
+	linkUnitWeaponRecords(records, weapons)
 	// Feature successors already linked inside CompileFeatures via LinkFeatureSuccessors [GAP T14] C9.
 	// Build menus [02 "Build-menu catalog keys"]: the pages live in
 	// gamedata/sidedata.tdf next to the sides. They must exist before the
@@ -265,22 +267,23 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 	if err != nil {
 		return nil, err
 	}
-	warnings := catalogUnitWarnings(unitResult.incompatibilityWarning, units, buildMenus)
+	warnings := catalogUnitWarnings(unitResult.incompatibilityWarning, units, nil)
+	warnings = append(warnings, enforceDownloadableRecords(records, MenuButtonNames(buildMenus))...)
 	// Model sorting C13: sort model catalog case-insensitively before caching per-unit-type pointer [03 §2.4].
 	report.Report(FamilyBuildMenus, 100)
-	sortedModels, modelIndex := buildModelCatalog(units)
-	if err := validateRequiredModels(fs, units, weapons, features); err != nil {
+	sortedModels, modelIndex := buildModelRecordCatalog(records)
+	if err := validateRequiredRecordModels(fs, records, weapons, features); err != nil {
 		return nil, err
 	}
 	// The page-count byte is a per-record probe of the authored page windows,
 	// step 5 of the compiler's own order [02 R-CAT-01 §5].
-	fillBuildPages(fs, units)
+	fillUnitRecordBuildPages(fs, records)
 	downloadPlacements, err := CompileDownloadMenus(fs, units)
 	if err != nil {
 		return nil, err
 	}
-	warnings = append(warnings, ApplyDownloadMenus(units, buildMenus, downloadPlacements)...)
-	if err := fillUnitScripts(fs, units); err != nil {
+	warnings = append(warnings, applyDownloadRecordMenus(records, units, buildMenus, downloadPlacements)...)
+	if err := fillUnitRecordScripts(fs, records); err != nil {
 		return nil, err
 	}
 	report.Report(FamilyModels, 100)
@@ -290,6 +293,7 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 
 	c := &Catalog{
 		Units:              units,
+		unitRecords:        records,
 		Categories:         categories,
 		Weapons:            weapons,
 		Features:           features,
@@ -406,7 +410,11 @@ func buildWeaponIndex(weapons map[string]*WeaponDef, duplicates []WeaponDuplicat
 // them case-insensitively before caching a per-unit-type pointer [03 §2.4] C13.
 // The sort makes piece/type identity independent of provider order.
 func buildModelCatalog(units map[string]*UnitDef) ([]string, map[string]int) {
-	if len(units) == 0 {
+	return buildModelRecordCatalog(unitMapRecords(units))
+}
+
+func buildModelRecordCatalog(records []*UnitDef) ([]string, map[string]int) {
+	if len(records) == 0 {
 		return nil, nil
 	}
 	// Deduplicate by canonical key so "arm_3do" and "ARM_3DO" are one entry.
@@ -415,13 +423,8 @@ func buildModelCatalog(units map[string]*UnitDef) ([]string, map[string]int) {
 	// among fold-equal spellings, so provider order and Go map randomization
 	// cannot choose the representative (I1).
 	canonToOriginal := make(map[string]string)
-	unitKeys := make([]string, 0, len(units))
-	for k := range units {
-		unitKeys = append(unitKeys, k)
-	}
-	sort.Strings(unitKeys)
-	for _, k := range unitKeys {
-		name := trimTDFSemantic(units[k].ObjectName)
+	for _, u := range records {
+		name := trimTDFSemantic(u.ObjectName)
 		if name == "" {
 			continue
 		}
@@ -496,26 +499,21 @@ func (c *Catalog) ModelForUnit(unitKey string) (string, int, bool) {
 
 // UnitDefIndex returns the stable catalog index for a unit definition
 // keyed by CanonicalKey (case-insensitive) [02 §5][05 "Build request and factory queue behavior"].
-// Indices are 1-based (0 is null sentinel) and ordered by sorted canonical keys (I1),
-// so they are deterministic across runs and independent of map iteration.
+// Indices are 1-based (0 is null sentinel). Equal names select the first
+// retained record in the retail sort order [02 R-CAT-01 §5].
 // This replaces the invented FNV-1a product hashing (N04) with a collision-free
 // stable index [P0-I05].
 func (c *Catalog) UnitDefIndex(key string) (uint32, bool) {
-	if c == nil || c.Units == nil {
+	u, ok := c.Unit(key)
+	if !ok {
 		return 0, false
 	}
-	ck := CanonicalKey(key)
-	if ck == "" {
-		return 0, false
+	if c.unitRecords != nil {
+		return u.UnitDefID, true
 	}
-	keys := make([]string, 0, len(c.Units))
-	for k := range c.Units {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for i, k := range keys {
-		if k == ck {
-			return uint32(i + 1), true // 1-based, 0 sentinel
+	for i, candidate := range c.unitRecordView() {
+		if candidate == u {
+			return uint32(i + 1), true
 		}
 	}
 	return 0, false
@@ -531,7 +529,7 @@ func (c *Catalog) Finalized() bool {
 }
 
 // UnitIndexOf returns a unit definition's stable catalog index and whether
-// that definition is this catalog's own record for its canonical key
+// that definition is one of this catalog's own retained records
 // [CNT-05][02 §5][R-P0-03]. It is the definition-identity accessor mirroring
 // ModelIndex above: the index is the 1-based UnitDefID stamped once at
 // category-link time (0 remains the null sentinel), so identity is derived
@@ -540,40 +538,33 @@ func (c *Catalog) Finalized() bool {
 // The key falls back to the canonical UnitName for definitions whose header
 // key was never stamped (hand-built fixture catalogs).
 func (c *Catalog) UnitIndexOf(def *UnitDef) (uint32, bool) {
-	if c == nil || def == nil || len(c.Units) == 0 {
+	if c == nil || def == nil {
 		return 0, false
 	}
-	ck := def.CanonicalKey
-	if ck == "" {
-		ck = CanonicalKey(def.UnitName)
+	if c.unitRecords != nil {
+		id := def.UnitDefID
+		return id, id > 0 && uint64(id) <= uint64(len(c.unitRecords)) && c.unitRecords[id-1] == def
 	}
-	if ck == "" {
-		return 0, false
+	for _, own := range c.unitRecordView() {
+		if own == def {
+			return def.UnitDefID, true
+		}
 	}
-	own, ok := c.Units[ck]
-	if !ok || own != def {
-		return 0, false
-	}
-	return def.UnitDefID, true
+	return 0, false
 }
 
-// UnitDefByIndex returns the unit definition for a catalog index [02 §5][05].
-// Index 0 is invalid (null sentinel).
+// UnitDefByIndex returns a retained record by its 1-based catalog position;
+// zero is the null sentinel [02 R-CAT-01 §5].
 func (c *Catalog) UnitDefByIndex(idx uint32) (*UnitDef, bool) {
-	if c == nil || c.Units == nil || idx == 0 {
+	if c == nil || idx == 0 {
 		return nil, false
 	}
-	keys := make([]string, 0, len(c.Units))
-	for k := range c.Units {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	if int(idx) > len(keys) {
+	records := c.unitRecordView()
+	if uint64(idx) > uint64(len(records)) {
 		return nil, false
 	}
-	k := keys[idx-1]
-	u, ok := c.Units[k]
-	return u, ok
+	u := records[idx-1]
+	return u, u != nil
 }
 
 // Category returns a value copy of a named registry membership set.
@@ -617,10 +608,8 @@ func (c *Catalog) ResolveCategoryMask(name string) (CategoryMask, bool) {
 // definition has no unit index, no build-menu button and cannot be spawned by
 // name [05 R-SHARE-01 §8 "Consequence"].
 //
-// The map is keyed by canonical unit name, so retail's "first record whose
-// `unitname` matches" is exact rather than approximated: one record can carry
-// a given name. Names that match no definition are ignored, as they are in
-// retail, where a `[name]` section with no matching record sets nothing.
+// A listed name keeps only the first matching record. Duplicate names do
+// not keep later definitions [05 R-SHARE-01 §8].
 //
 // The restriction lasts one battle: retail rebuilds the table from the FBI
 // files before every battle, so callers apply this to a clone and never to a
@@ -629,25 +618,22 @@ func (c *Catalog) RestrictToCreatable(names []string) error {
 	if c == nil || c.Units == nil {
 		return nil
 	}
-	keep := make(map[string]struct{}, len(names))
-	for _, n := range names {
-		ck := CanonicalKey(n)
-		if ck == "" {
-			continue
-		}
-		if _, ok := c.Units[ck]; ok {
-			keep[ck] = struct{}{}
+	keep := make(map[*UnitDef]bool, len(names))
+	for _, name := range names {
+		if u, ok := c.Unit(name); ok {
+			keep[u] = true
 		}
 	}
-	for _, k := range c.SortedUnitKeys() { // deterministic removal order (I1)
-		if _, ok := keep[k]; !ok {
-			delete(c.Units, k)
+	records := make([]*UnitDef, 0, len(keep))
+	for _, u := range c.unitRecordView() {
+		if keep[u] {
+			records = append(records, u)
 		}
 	}
-	// Re-sort and renumber: CompileCategories restamps every survivor's
-	// 1-based UnitDefID from the sorted canonical keys and rebuilds the
-	// membership masks and per-definition digests over the compacted table.
-	reg, err := CompileCategories(c.Units)
+	sortUnitRecords(records)
+	c.unitRecords = records
+	c.Units = firstUnitNames(records)
+	reg, err := compileCategoryRecords(records, c.Units)
 	if err != nil {
 		return err
 	}
@@ -657,7 +643,8 @@ func (c *Catalog) RestrictToCreatable(names []string) error {
 	return nil
 }
 
-// SortedUnitKeys returns the unit catalog keys sorted ascending (I1) [02 §5].
+// SortedUnitKeys returns unique name-index keys sorted ascending (I1).
+// Use UnitRecords when every retained definition is required [02 R-CAT-01 §5].
 // The slice is a copy; mutations do not affect the catalog.
 func (c *Catalog) SortedUnitKeys() []string {
 	if c == nil || c.Units == nil {
@@ -724,26 +711,29 @@ func (c *Catalog) Clone() *Catalog {
 			out.Weapons[k] = cloneWeapon(v)
 		}
 	}
-	// Units deep copy without weapon pointers (rewired after weapons cloned)
-	if c.Units != nil {
+	// Clone every retained record, then rebuild the first-match name index;
+	// later equal-name records must retain their own masks and weapon links.
+	if c.unitRecords != nil {
+		out.unitRecords = make([]*UnitDef, len(c.unitRecords))
+		for i, u := range c.unitRecords {
+			out.unitRecords[i] = cloneUnit(u)
+		}
+		out.Units = firstUnitNames(out.unitRecords)
+	} else if c.Units != nil {
 		out.Units = make(map[string]*UnitDef, len(c.Units))
-		for k, v := range c.Units {
-			out.Units[k] = cloneUnit(v)
+		for k, u := range c.Units {
+			out.Units[k] = cloneUnit(u)
 		}
-		// Rewire weapon links deterministically (sorted keys I1) [02 §5] C1
-		keys := make([]string, 0, len(out.Units))
-		for k := range out.Units {
-			keys = append(keys, k)
+	}
+	for _, u := range out.unitRecordView() {
+		if u == nil {
+			continue
 		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			u := out.Units[k]
-			out.rewireWeaponLink(u.Weapon1, &u.Weapon1Def)
-			out.rewireWeaponLink(u.Weapon2, &u.Weapon2Def)
-			out.rewireWeaponLink(u.Weapon3, &u.Weapon3Def)
-			out.rewireWeaponLink(u.ExplodeAs, &u.ExplodeAsDef)
-			out.rewireWeaponLink(u.SelfDestructAs, &u.SelfDestructAsDef)
-		}
+		out.rewireWeaponLink(u.Weapon1, &u.Weapon1Def)
+		out.rewireWeaponLink(u.Weapon2, &u.Weapon2Def)
+		out.rewireWeaponLink(u.Weapon3, &u.Weapon3Def)
+		out.rewireWeaponLink(u.ExplodeAs, &u.ExplodeAsDef)
+		out.rewireWeaponLink(u.SelfDestructAs, &u.SelfDestructAsDef)
 	}
 	// Features deep copy without successors then rewire
 	if c.Features != nil {
@@ -1313,7 +1303,11 @@ func manifestHashFor(fs vfs.FSOps) (string, error) {
 // Feature animation sequences are deliberately absent here; their GAF lookup
 // has a separate silent-null recovery [02 R-MALF-01 §5].
 func validateRequiredModels(fs vfs.FSOps, units map[string]*UnitDef, weapons map[string]*WeaponDef, features map[string]*FeatureDef) error {
-	models := requiredModelPaths(units, weapons, features)
+	return validateRequiredRecordModels(fs, unitMapRecords(units), weapons, features)
+}
+
+func validateRequiredRecordModels(fs vfs.FSOps, records []*UnitDef, weapons map[string]*WeaponDef, features map[string]*FeatureDef) error {
+	models := requiredRecordModelPaths(records, weapons, features)
 	if len(models) == 0 {
 		return nil
 	}
@@ -1343,7 +1337,7 @@ func validateRequiredModels(fs vfs.FSOps, units map[string]*UnitDef, weapons map
 
 	// Do not publish a partly updated set of unit heights: all required model
 	// reads, parses and compilation checks complete before one definition changes [02 §5].
-	for _, u := range units {
+	for _, u := range records {
 		if u == nil {
 			continue
 		}
@@ -1363,8 +1357,12 @@ func validateRequiredModels(fs vfs.FSOps, units map[string]*UnitDef, weapons map
 // families. The sort chooses one deterministic first failure and the map
 // makes each parsed geometry result shared by every reference to its path.
 func requiredModelPaths(units map[string]*UnitDef, weapons map[string]*WeaponDef, features map[string]*FeatureDef) []string {
+	return requiredRecordModelPaths(unitMapRecords(units), weapons, features)
+}
+
+func requiredRecordModelPaths(records []*UnitDef, weapons map[string]*WeaponDef, features map[string]*FeatureDef) []string {
 	paths := make(map[string]struct{})
-	for _, u := range units {
+	for _, u := range records {
 		if u == nil {
 			continue
 		}
@@ -1412,16 +1410,14 @@ func requiredModelPath(name string) string {
 // catalog rejects missing, unreadable, malformed, nil, and empty programs
 // before publishing any definition [04 R-COB-04 §8].
 func fillUnitScripts(fs vfs.FSOps, units map[string]*UnitDef) error {
-	if fs == nil || len(units) == 0 {
+	return fillUnitRecordScripts(fs, unitMapRecords(units))
+}
+
+func fillUnitRecordScripts(fs vfs.FSOps, records []*UnitDef) error {
+	if fs == nil || len(records) == 0 {
 		return nil
 	}
-	keys := make([]string, 0, len(units))
-	for key := range units {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		u := units[key]
+	for _, u := range records {
 		if u == nil {
 			continue
 		}
@@ -1455,18 +1451,19 @@ func fillUnitScripts(fs vfs.FSOps, units map[string]*UnitDef) error {
 // The probe is by existence and non-zero size, and it stops at the first gap:
 // `guis/<n>1.GUI` and `guis/<n>3.GUI` with no `<n>2` is a count of 2, not 4.
 func fillBuildPages(fs vfs.FSOps, units map[string]*UnitDef) {
-	if fs == nil || len(units) == 0 {
+	fillUnitRecordBuildPages(fs, unitMapRecords(units))
+}
+
+func fillUnitRecordBuildPages(fs vfs.FSOps, records []*UnitDef) {
+	if fs == nil || len(records) == 0 {
 		return
 	}
 	exists := func(name string) bool {
 		info, err := fs.Stat("guis/" + name + ".gui")
 		return err == nil && info.Size > 0
 	}
-	for _, u := range units {
+	for _, u := range records {
 		name := CanonicalKey(u.UnitName)
-		if name == "" {
-			continue
-		}
 		u.HasPageZeroGUI = exists(name + "0")
 		numbered := 0
 		// The page number lives in three status-word bits, so page 7 is the

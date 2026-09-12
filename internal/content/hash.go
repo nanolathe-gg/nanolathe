@@ -21,20 +21,10 @@ func catalogHash(c *Catalog) string {
 	}
 	h := sha256.New()
 
-	// Units — sorted canonical keys (I1) [02 §5] C12.
-	if len(c.Units) > 0 {
-		keys := make([]string, 0, len(c.Units))
-		for k := range c.Units {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			u := c.Units[k]
-			// Per-definition Hash already is sha256 over canonical bytes including defaults [02 §5] C12.
-			// Including the canonical key and per-def hash preserves that while keeping catalog hash cheap.
-			// Use non-map-order representation.
-			fmt.Fprintf(h, "unit %s %s\n", k, u.Hash)
-		}
+	// Every record contributes in immutable ID order, including duplicate names.
+	// Unique-name catalogs retain their existing byte stream [02 §5] C12.
+	for _, u := range c.unitRecordView() {
+		fmt.Fprintf(h, "unit %s %s\n", u.CanonicalKey, u.Hash)
 	}
 	// Categories — sorted registry names and fixed-width membership values
 	// [R-P0-03]. ALL is included as an ordinary category token.
@@ -194,7 +184,7 @@ func catalogHash(c *Catalog) string {
 		categoryCount = len(c.Categories.entries)
 	}
 	fmt.Fprintf(h, "counts u=%d w=%d f=%d m=%d sides=%d s=%d maps=%d ai=%d aliases=%d menus=%d downloads=%d models=%d categories=%d los=%d meteor=%d\n",
-		len(c.Units), len(c.Weapons), len(c.Features), len(c.Movement), len(c.Sides), len(c.Sounds), len(c.Maps), len(c.AIProfiles), len(c.Aliases), len(c.BuildMenus), len(c.DownloadPlacements), len(c.sortedModels), categoryCount, lenTables(c.LOS), hasMeteor(c.Meteor))
+		len(c.unitRecordView()), len(c.Weapons), len(c.Features), len(c.Movement), len(c.Sides), len(c.Sounds), len(c.Maps), len(c.AIProfiles), len(c.Aliases), len(c.BuildMenus), len(c.DownloadPlacements), len(c.sortedModels), categoryCount, lenTables(c.LOS), hasMeteor(c.Meteor))
 
 	sum := h.Sum(nil)
 	return hex.EncodeToString(sum)

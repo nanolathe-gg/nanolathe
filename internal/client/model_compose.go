@@ -254,6 +254,16 @@ func (c *Client) collectDrawPolysLaneProjected(draw *presentationrender.UnitDraw
 					continue
 				}
 			}
+			sourceFrame := texFrame // Keep authored animation identity across storage views.
+			if kind == modelCursorProjectile && texFrame != nil {
+				var ok bool
+				texFrame, ok = texFrame.DirectRaster()
+				if !ok {
+					// Host safety rejection: this span reads storage directly;
+					// composite relocation bytes are not portable [02 R-MALF-01 §6].
+					continue
+				}
+			}
 			// modelPrimitiveDispatch has already rejected any textured face
 			// that is not a quad: retail's quad mapper is hard-wired to four
 			// corners and there is no textured n-gon path [R-REN-03A §5].
@@ -281,7 +291,7 @@ func (c *Client) collectDrawPolysLaneProjected(draw *presentationrender.UnitDraw
 					poly.frameIndex = 0
 				} else if ref.entry != nil {
 					for fi := range ref.entry.Frames {
-						if ref.entry.Frames[fi].Frame == texFrame {
+						if ref.entry.Frames[fi].Frame == sourceFrame {
 							poly.frameIndex = fi
 							break
 						}

@@ -3,11 +3,13 @@ package formats
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 )
 
 // SCTLimits bounds allocations and validated views while decoding editor
 // sections. SCT sections are source material for map editors rather than the
-// runtime .TNT map format, so unknown metadata is retained as an opaque slice.
+// runtime .TNT map format. MaxGridCells bounds the tile grid; the height grid
+// has four times as many cells [fmt tnt "SCT sections"].
 type SCTLimits struct {
 	MaxWidth, MaxHeight uint32
 	MaxGridCells        uint64
@@ -25,9 +27,9 @@ func DefaultSCTLimits() SCTLimits {
 
 // SCT is the validated source-level representation of a TA editor section.
 // The seven-word header is shared by the observed version 2 and version 3
-// retail sections. Tile graphics and tile indices are fully decoded; the
-// version-specific section metadata between them is preserved but not
-// assigned invented gameplay semantics.
+// retail sections. Heights is the row-major 2*Width by 2*Height fine grid.
+// AttributeData preserves complete version-specific height records, including
+// bytes the editor ignores [fmt tnt]. Raw retains padding and unassigned data.
 type SCT struct {
 	Raw                  []byte
 	Version              uint32
@@ -40,6 +42,7 @@ type SCT struct {
 
 	TileIndices    []uint16
 	TileGraphics   []byte
+	Heights        []byte
 	AttributeData  []byte
 	SectionPreview []byte
 }
@@ -86,6 +89,21 @@ func LoadSCTWithLimits(data []byte, limits SCTLimits) (*SCT, error) {
 	if result.TileCount == 0 || result.TileCount > limits.MaxTiles {
 		return nil, fmt.Errorf("sct: tile count %d exceeds limits", result.TileCount)
 	}
+	// Each tile contributes four fine-grid cells. Check the version-specific
+	// record span before allocation, including explicitly enlarged host limits.
+	heightStride := uint64(4)
+	if result.Version == 2 {
+		heightStride = 8
+	}
+	if gridCells > uint64(math.MaxInt)/4 || gridCells > math.MaxUint64/(4*heightStride) {
+		return nil, fmt.Errorf("sct: height grid exceeds addressable storage")
+	}
+	heightCount := gridCells * 4
+	heightStart := uint64(result.TileIndexOffset) + gridCells*2
+	heightBytes := heightCount * heightStride
+	if heightStart > uint64(len(data)) || heightBytes > uint64(len(data))-heightStart {
+		return nil, fmt.Errorf("sct: height records are outside file")
+	}
 	section := func(name string, offset uint32, size uint64) ([]byte, error) {
 		if offset < headerSize {
 			return nil, fmt.Errorf("sct: %s starts inside header", name)
@@ -109,6 +127,7 @@ func LoadSCTWithLimits(data []byte, limits SCTLimits) (*SCT, error) {
 	}{
 		{name: "tile graphics", start: uint64(result.TileGraphicsOffset), end: uint64(result.TileGraphicsOffset) + tileBytes},
 		{name: "tile index grid", start: uint64(result.TileIndexOffset), end: uint64(result.TileIndexOffset) + gridCells*2},
+		{name: "height records", start: heightStart, end: heightStart + heightBytes},
 		{name: "section preview", start: uint64(result.SectionPreviewOffset), end: uint64(result.SectionPreviewOffset) + previewPixels},
 	}
 	for n := range spans {
@@ -143,13 +162,10 @@ func LoadSCTWithLimits(data []byte, limits SCTLimits) (*SCT, error) {
 		return nil, err
 	}
 	result.SectionPreview = preview
-	metadataStart := uint64(result.TileIndexOffset) + gridCells*2
-	metadataEnd := uint64(result.SectionPreviewOffset)
-	if result.Version == 3 && uint64(result.TileGraphicsOffset) > metadataStart {
-		metadataEnd = uint64(result.TileGraphicsOffset)
-	}
-	if metadataEnd >= metadataStart && metadataEnd <= uint64(len(data)) {
-		result.AttributeData = data[int(metadataStart):int(metadataEnd)]
+	result.AttributeData = data[int(heightStart):int(heightStart+heightBytes)]
+	result.Heights = make([]byte, int(heightCount))
+	for index := range result.Heights {
+		result.Heights[index] = result.AttributeData[uint64(index)*heightStride]
 	}
 	return result, nil
 }

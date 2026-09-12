@@ -218,7 +218,40 @@ Tokenization scans the string for the comma character, copies each span into a 2
 
 #### Argument parsing
 
-Argument parsing uses the retail scan-format family with formats for two floats, three floats, integer pairs, and name scansets that accept alphanumerics, underscore, and dot — with one exception: the wait-for-attack scanset is `" %[a-zA-Z0-9.]"` and excludes the underscore (attack-by-type and guard do include it). Only the numeric attack form tests that two floats were converted and only the wait-for-attack form tests that a name was converted; every other verb ignores the conversion count and still queues an order with whatever values the scan left in the frame, which for malformed numbers means zero-valued or stale stack values but still a queued order. Names for guard, immediate attach, and the name form of attack are resolved by scanning the sparse created array in placement order from zero upward, testing Ident case-insensitively first and then Unitname, returning the first occurrence and skipping null gaps left by failed allocations; duplicate names therefore resolve to the lowest placement index. A failed type lookup for attack or build produces no queue, while a failed unit lookup for guard produces no queue and for wait-for-attack falls back to self. The order queues and position scaling use truncate toward zero of floats multiplied by 65536 for coordinates and by 30 for timeouts, matching the retail helper's truncation; the flag verb writes bits without queuing and the immediate attach verb posts an internal attach without queuing. [P0-06]
+**Established — prefix scanning.** Each format advances through one argument
+string. Integers accept an optional sign and decimal digit prefix, with
+wrapping 32-bit accumulation and negation; they do not saturate or retry as
+floats. `2.5` supplies integer two and leaves `.5` for a following field.
+The first conversion failure stops the scan and preserves that destination
+and every later one. Successful fields need no whitespace boundary.
+
+Floats accept a signed decimal mantissa and optional `e/E` exponent. A valid
+mantissa with an incomplete exponent remains a successful conversion, with
+the exponent suffix consumed and mantissa value retained. The destination
+narrows to binary32; overflow can supply signed infinity. NaN and infinity
+spellings are not accepted. Names consume letters, digits, underscore and
+dot, except wait-for-attack, which omits underscore. The first excluded byte
+ends the name and stays available to the next conversion.
+
+**Established — caller gates and seeds.** Numeric attack requires two
+successful floats and otherwise tries its by-type form; wait-for-attack
+requires one name and otherwise selects self. Other handlers mostly ignore
+conversion counts. Build/stockpile counts start at one; wait duration and
+selector, and patrol timeout, start at zero; standing operands start from
+current unit state. Uninitialized coordinate temporaries can instead retain
+run-specific contents after failure, so those results are not defined by OTA
+text alone. Nanolathe implements these sequential scan and seed rules; zero
+for untouched uninitialized coordinates remains host policy. **Unknown:**
+exact adversarial-decimal rounding through the retail intermediate converter;
+Nanolathe uses Go binary32 conversion pending that arithmetic trace [04 §3.6],
+`[fmt ota]`.
+
+Guard and immediate attach resolve a spawned unit by the existing Ident /
+Unitname lookup; attack-by-type and build resolve catalog types. Failed type
+lookup queues nothing, guard misses queue nothing, and wait-for-attack misses
+select self. Coordinates multiply the parsed binary32 value by 65,536 and
+timeouts by 30 before truncation. Standing-order writes and immediate attach
+do not queue an ordinary order. [P0-06]
 
 A postlude runs after the string is exhausted: when at least one order was queued it clears bit 5 of the unit's class word, and unless the string contained a numeric attack, patrol, self-destruct, or make-selectable, it queues a final make-selectable with zero auxiliaries. The census over the shipped mission corpus shows every verb shape is exercised in stock assets, with illustrative counts such as selectable near two thousand, guard above two thousand, flag-bit writes near one thousand, wait and move each above one thousand, and build, stockpile, wait-for-attack, and unload each in the hundreds; malformed-argument paths beyond the two tested verbs are not present in stock assets but still queue silently. [P0-06]
 
@@ -1540,6 +1573,15 @@ at poll time when they find an empty queue, so a queue is never empty when it
 is polled [R-TRIG-01 §6]. Which sessions poll at all is decided by the
 session kind word alone: no kind-2 or kind-3 session ever polls a trigger
 queue [R-TRIG-01 §1].
+
+**Established — authored corpus versus injected defaults.** The current
+reference-install survey finds 275 winning OTA paths, 163 authoring
+`AllUnitsKilled`. Of the 175 distinct maps referenced by the 13 winning
+campaign TDFs, 145 author it. The 176 maps containing difficulty schemas
+include one non-campaign example map; 146 of that set author the key. The old
+176-of-176 claim confused these populations. `[fmt ota "Mission end
+conditions"]` records the winning-path census; default injection is not an
+authored key occurrence.
 
 ### Evaluation
 
@@ -3808,6 +3850,12 @@ any later per-definition text, while `weight LEVEL1 2.0` scales every member of
 the `LEVEL1` category and locks none of them. Weight and limit keep **separate**
 lock vectors.
 
+**Implementation boundary:** Nanolathe's profile tables and locks preserve
+all retained record IDs, while name accessors select the first equal record.
+Its strategic counts, class vectors and candidate identity still use names;
+those producers need indexed storage before later equal-name types can be
+selected independently. This does not change the established per-type contract.
+
 **The per-definition profile text.** The two per-player passes walk the
 definition catalog in ascending type order, skipping the zero sentinel, and for
 every definition that carries the authored `downloadable` flag and whose
@@ -4930,6 +4978,33 @@ valid types run from `0x00` through `0x2D`:
 
 Session initialization also allocates an 8,192-byte packet/reassembly buffer.
 
+### Unit-data negotiation and catalog retention
+
+**Established — compatibility identity.** The unit-data exchange uses a key
+computed from the original FBI bytes, optionally replaced by the authored
+compatibility override. It is not the later sorted unit-definition index.
+Subtype 2 pairs that key with a content checksum. Subtype 3 carries separate
+selected and compatible bytes plus a unit-limit word; the receiver widens the
+two states separately and sign-extends the limit. The sender transmits the
+low byte of each state. `[fmt tad]` owns their byte positions.
+
+**Established — retention.** Finalization traverses local non-null definitions
+and matches each compatibility key to negotiation state. A missing key clears
+retention. A present key retains the definition only when both selected and
+compatible states are nonzero and installs its negotiated limit. Catalog
+compilation subsequently compacts retained definitions, sorts by
+case-insensitive `unitname`, and assigns contiguous indices after null row
+zero. The synchronization width is the bit length of that final row count,
+including the sentinel [02 R-CAT-01 §§4–5]. Neither packet count nor per-player
+unit capacity establishes this width.
+
+**Unknown — recording catalog reconstruction.** A saved exchange does not
+itself recover the original mounted FBI definitions and compatibility
+overrides. Matching enabled keys and checksums to those assets, with the same
+retained name sort, is required before definition indices can select semantic
+controller layouts. `[fmt tad]` distinguishes the recorder's deduplicated
+subset and conditional corpus width estimate from this retail contract.
+
 ### Unit-sync ownership and body structure
 
 **Established — slot arithmetic.** Unit ID zero is reserved. For configured
@@ -4938,7 +5013,11 @@ at `(b+1)*N`, inclusive. Thus a nonzero ID's block base is
 `((ID-1)/N)*N`, using integer division. Its zero-based local slot is
 `(ID-1) mod N`. An exact multiple of `N` belongs to the preceding block, not
 the following one. Block assignment follows the allocator's participant
-ordering; do not substitute capture-sender order.
+ordering; do not substitute capture-sender order. **Established:** multiplayer
+allocation orders unsigned transport identities ascending, including watcher
+participants; other session kinds use player-record order. The recorder
+number/status-identity join and its nine-file validation are specified in
+`[fmt tad]`. Do not compact the original blocks when a participant departs.
 
 **Established — unit-sync outer structure.** The `0x2c` producer writes its
 type, reserves the two-byte total length, and writes the simulation tick. It
@@ -4970,8 +5049,10 @@ supply a valid universal selector fallback.
 the definition identity, and stops when that identity is zero. For a nonempty
 slot it sends health, construction remaining, status flags, unit state and
 attachment state. An attached unit carries attachment identity/piece instead
-of position/orientation. An unattached unit includes a final movement scalar
-only when it actually owns movement state. Ordinary creation makes that state
+of position/orientation. An unattached unit sends heading, pitch and bank in
+that order, then includes scalar speed only when it actually owns movement
+state. This speed is the fixed-point scalar accelerated by the movement
+integrator, not another position component. Ordinary creation makes that state
 for `BMcode==1`; a universal lifetime invariant is still **Unknown**.
 
 Construction fraction `r` encodes as zero when `r==0`; otherwise the byte is
@@ -4982,12 +5063,22 @@ of 255 and conditionally stores the result as single precision. This is
 remaining work, not completed work. Flag application reuses the ordinary
 Activate/Deactivate and StartBuilding/StopBuilding transitions. [04 §5.3]
 
-**Unknown:** complete semantic names of the air form's additional scalar and
-flags, the status unit-state value, two orientation components and final
-movement scalar; recording-specific catalog identity; and wider patched-wire
-variants. Widths and conditional lengths are established independently of
-those names. Trace the corresponding semantic consumers or catalog/lifecycle
-paths before using an unresolved field as authoritative state.
+**Established — air semantics.** The optional signed radius is a horizontal
+arrival radius in world units; its explicit test is strict distance less than
+radius. The marker flags select target following, radial goals, heading-match
+arrival, altitude offset, explicit radius, terrain-derived point, heading
+supply and frozen goal refresh [04 R-AIR-01 §4]. Both two-bit fields use the
+same occupancy mode: zero attached/parked, one grounded, two airborne. Mode
+three is preserved by readers but lacks an established ordinary producer.
+
+**Unknown:** the air radial-follow distance is consumed but neither sent nor
+assigned by the traced network reconstruction. Its initialization or a proof
+of unreachable use is required. Exhaustive mover lifetime also remains open:
+ordinary constructors gate on `BMcode==1`, but an unconditional helper has no
+recovered direct caller, and indirect/restoration/removal paths need closure.
+Recording-specific catalog identity and wider patched-wire variants remain
+separate provenance gaps. Byte widths and conditional grammar do not settle
+these lifecycle questions `[fmt tad]`.
 
 ### Declared packet types
 
@@ -5032,7 +5123,7 @@ the table alone as a complete framing grammar.
 | `0x1d` | 9 | 0 | **Dead type.** Its admission mask is zero so it is rejected in every state, and its handler is a three-byte stub. |
 | `0x1e` | 2 | 6 | `+1` u8. |
 | `0x1f` | 5 | 6 | `+1` i32 peer identity, mapped to a slot index whose per-player marker is then set. |
-| `0x20` | 186 | 7 | Bulk player-info state. Retail writers copy 185 metadata bytes after the type and emit 186 bytes. The available TAD recordings contain 192-byte forms; their additional bytes require a recorder/version trace. [fmt tad] |
+| `0x20` | 186 | 7 | Bulk player-info state. Retail writers copy 185 metadata bytes after the type and emit 186 bytes. The available TAD recordings contain 192-byte forms, which the inspected recorder already consumes at that size; the version-matched producing executable or preceding transformation remains unknown. [fmt tad] |
 | `0x21` | 10 | 1 | Lobby-side. `+1` u8, `+2` i32, `+6` i32. |
 | `0x22` | 6 | 1 | Lobby-side. `+1` i32, `+5` u8. |
 | `0x23` | 14 | 7 | `+1` i32, `+5` i32, `+9` u8, `+10` i32. |
@@ -5041,7 +5132,7 @@ the table alone as a complete framing grammar.
 | `0x26` | 41 | 7 | Forwarded whole; roster semantics observed on the receive side: an empty roster decodes to zero participants and a special class value expands to all slots. |
 | `0x27` | 17 | 7 | **Integrity breach.** `+1` i32 peer identity; formats the translated "has modified his executable" text into the chat region. The twelve trailing bytes are opaque; their producer algorithm is unresolved. |
 | `0x28` | 58 | 7 | **Participant snapshot.** Echo flag; four signed score counters; current metal/energy and their capacities as f32; energy produced/requested/wasted then metal produced/requested/wasted as f32, narrowed from running doubles. See “Economy and integrity checks — overwrite-sync, not compare”. |
-| `0x29` | 3 | 7 | `+1` u8, `+2` u8. |
+| `0x29` | 3 | 7 | Snapshot acknowledgement and reciprocal-acknowledgement-seen bytes. A zero first byte ignores both; see "Economy and integrity checks — overwrite-sync, not compare". |
 | `0x2a` | 2 | 7 | `+1` u8 stored into a per-peer field. The local producer emits it as the mean of six per-peer bytes (loading progress). |
 | `0x2c` | 3 (header) | 4 | **Unit movement/state synchronization.** Type, u16 total byte length, u32 tick, then variable bitstream. The receiver can create a unit when received definition identity differs; creation is not the record's overall purpose. |
 
@@ -5260,10 +5351,31 @@ wire layout is in [fmt tad].
 local participant's fields and supplies that participant's transport identity
 as source. The receiver resolves the source participant before applying the
 snapshot. The four leading counters are not an owner ID or unit references.
-A synchronization gate can suppress the copy, but no comparison of resource
-values, threshold, or integrity abort occurs. A nonzero echo/request flag can
-produce a three-byte control reply and an answering participant's own snapshot;
-it does not imply that every returned snapshot belongs to the original sender.
+No comparison of resource values, threshold, or integrity abort occurs.
+A source must resolve and not be marked inactive. Before copying, the receiver
+checks every occupied locally controlled participant: any receipt latch already
+set for this source suppresses all field copies. A flag-zero update never sets
+that latch; a flagged request is processed even when copying was suppressed.
+
+**Established — acknowledgement exchange.** For each occupied, noninactive
+local participant, a flagged snapshot sets the requested-snapshot receipt
+latch and emits `0x29, 1, seen`, where `seen` reports whether the peer already
+acknowledged this local participant's snapshot. While the session outcome is
+false and that acknowledgement is absent, it also emits its own snapshot with
+request flag one. The reply receiver ignores both bytes when the first is
+zero; otherwise it sets acknowledgement of its own snapshot, and a nonzero
+second byte also sets reciprocal-acknowledgement-seen. These are three separate
+per-peer latches, all cleared by participant initialization.
+
+**Established — results barrier.** The multiplayer transition into results
+polls this exchange. Each eligible local participant requires a requested
+snapshot from every occupied remote peer; human peers additionally must have
+acknowledged the local snapshot and reported seeing the reciprocal
+acknowledgement. Missing conditions cause another flagged local snapshot and
+keep the poll incomplete. **Unknown:** the full writer/lifetime of an
+additional local-participant eligibility gate; do not assign it a readiness
+or connection meaning without that trace. The exchange synchronizes final
+snapshots, not checksums or rollback state.
 
 A dedicated scanner sleeps 250 ms between passes across eligible local/remote
 participant pairs. This is independent of the simulation tick and does not
@@ -5281,12 +5393,10 @@ The executable also contains a code-checksum routine that returns zero
 unconditionally in retail 3.1, leaving its guarded "Code segment checksum
 error found when switching FE states." diagnostic branch dead. Self-checks run
 only when switching front-end states, never per tick. Residual: the producer
-algorithm of packet `0x27`'s twelve opaque trailing bytes is unresolved; the
-three-byte control reply in the `0x28` receiver is type `0x29`, a set
-first flag and a second flag reflecting the responding participant's existing
-per-peer synchronization state. The complete handshake lifecycle remains
-unrecovered. The `.zrb` files are the five Smacker cinematics; their
-sequencer is the front-end movie player ([R-OOS-01 §4]) and has no
+algorithm of packet `0x27`'s twelve opaque trailing bytes is unresolved. The
+`0x28`/`0x29` handshake above has a remaining eligibility-gate lifecycle
+question, not an unresolved byte layout. The `.zrb` files are the five Smacker
+cinematics; their sequencer is the front-end movie player ([R-OOS-01 §4]) and has no
 relationship to the checksum path.
 
 The four-accumulator checksum primitive and the map/terrain checksum state are
@@ -8155,8 +8265,9 @@ a single-player implementation.
   fixed lengths and the variable-length unit-sync exception are established
   · "Declared packet types" · static trace.
 - Recording-specific definition catalogs, exhaustive dynamic movement-state
-  lifetime and unsupported air-controller reachability; remaining unit-sync
-  scalar/flag semantics; recorder-versus-retail fixed-length discrepancies
+  lifetime, unsupported air-controller reachability and the untransmitted
+  radial-follow distance; snapshot-completion eligibility; recorder-versus-
+  retail fixed-length discrepancies
   · "Unit-sync ownership and body structure" · static trace and [fmt tad].
 - The lobby receiver's switch, which owns the types whose admission mask
   excludes the battle-loading and live-battle states · "Declared packet types" ·

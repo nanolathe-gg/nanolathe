@@ -116,6 +116,10 @@ func CompileDownloadMenus(fs vfs.FSOps, units map[string]*UnitDef) ([]DownloadMe
 // safely retains that possible 31st logical entry without reproducing the
 // adjacent-memory overwrite of retail's 60-byte allocation.
 func ApplyDownloadMenus(units map[string]*UnitDef, menus map[string]*BuildMenuPage, placements []DownloadMenuPlacement) []string {
+	return applyDownloadRecordMenus(unitMapRecords(units), units, menus, placements)
+}
+
+func applyDownloadRecordMenus(records []*UnitDef, units map[string]*UnitDef, menus map[string]*BuildMenuPage, placements []DownloadMenuPlacement) []string {
 	if len(units) == 0 {
 		return nil
 	}
@@ -134,6 +138,8 @@ func ApplyDownloadMenus(units map[string]*UnitDef, menus map[string]*BuildMenuPa
 		if builder == nil {
 			continue
 		}
+		// UNITMENU resolves once to the first matching catalog index; later
+		// equal-name records do not receive this page raise [02 R-CAT-01 §8].
 		if int32(placement.Menu) > builder.BuildPageCount {
 			builder.BuildPageCount = int32(placement.Menu)
 		}
@@ -148,7 +154,7 @@ func ApplyDownloadMenus(units map[string]*UnitDef, menus map[string]*BuildMenuPa
 			hashBuildMenu(menus[key])
 		}
 	}
-	return EnforceDownloadable(units, firstProducts)
+	return enforceDownloadableRecords(records, firstProducts)
 }
 
 func ensureBuilderMenus(units map[string]*UnitDef, menus map[string]*BuildMenuPage) {

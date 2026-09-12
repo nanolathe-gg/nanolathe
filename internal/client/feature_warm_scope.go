@@ -46,8 +46,8 @@ func battleFeatureDefinitions(cat *content.Catalog, admitted []*content.FeatureD
 		add(def)
 	}
 	if cat != nil {
-		for _, key := range cat.SortedUnitKeys() {
-			if unit := cat.Units[key]; unit != nil {
+		for _, unit := range cat.UnitRecords() {
+			if unit != nil {
 				add(byName(unit.Corpse))
 			}
 		}

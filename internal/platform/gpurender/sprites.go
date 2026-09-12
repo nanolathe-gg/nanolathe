@@ -141,12 +141,15 @@ func (r *Renderer) Sprite(sp drawlist.Sprite) {
 		}
 		r.drawKeyed(sp.Frame, int(sp.X), int(sp.Y), 0, 0, r.clipW(), r.clipH())
 	case drawlist.BlitLit:
-		// Every opaque source texel is written as LightLookup(row, src),
-		// the source folded through one LHT row. Not destination-reading, so it is
-		// a keyed blit with a source remap; the row is clamped to LHT's 0..31 range
-		// exactly as LightLookup does [03 §4.3.1].
+		if sp.Pal == nil || sp.Frame == nil {
+			return
+		}
 		clipX, clipY, clipW, clipH := r.spriteClip(sp.HasClip, sp.Clip)
-		r.drawLit(sp.Frame, int(sp.X), int(sp.Y), clampLHTRow(int(sp.LightRow)), clipX, clipY, clipW, clipH)
+		if sp.Frame.Compressed == 0 {
+			r.drawRawGlyph(sp.Frame, int(sp.X), int(sp.Y), sp.LightRow, clipX, clipY, clipW, clipH)
+		} else {
+			r.drawLit(sp.Frame, int(sp.X), int(sp.Y), clampLHTRow(int(sp.LightRow)), clipX, clipY, clipW, clipH)
+		}
 	case drawlist.BlitTinted:
 		// tintedBlitAnchor: each opaque source texel resolves the destination to
 		// ALP[src*256 + dst]; anchored and destination-reading [03 R-COMP-01 §2].

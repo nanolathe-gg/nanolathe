@@ -593,22 +593,9 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 		unknown = nil
 	}
 
-	// Canonical key is the lowercased unitname per retail case-insensitive catalog [02 §5].
-	// TODO(question): establish empty-name catalog finalization and secondary
-	// file lookup [02 §5]. Retain the existing filename-stem compatibility
-	// fallback until that path is traced; the retail string store itself is empty.
+	// The stored UnitName is the identity even when empty; retail does not
+	// recover it from the discovered filename [02 R-CAT-01 §5][fmt fbi].
 	canonical := CanonicalKey(unitName)
-	if canonical == "" {
-		base := logicalPath
-		if idx := strings.LastIndex(base, "/"); idx >= 0 {
-			base = base[idx+1:]
-		}
-		if dot := strings.LastIndex(base, "."); dot >= 0 {
-			base = base[:dot]
-		}
-		canonical = CanonicalKey(base)
-		unitName = base
-	}
 
 	u := &UnitDef{
 		DefinitionHeader: DefinitionHeader{
@@ -797,7 +784,8 @@ func writeUnitCanonical(u *UnitDef) []byte {
 
 // CompileUnits compiles units from the VFS. Discovery is units/*.fbi (278) — filter .fbi only
 // (directory also holds .bat/.pl/.txt/.xls junk) [PLAN 02 Discovery].
-// It returns a map keyed by CanonicalKey(unitname) [02 §5]. The helper uses only typed accessors
+// It returns the first-equal name index; Compile retains all records for
+// Catalog.UnitRecords [02 R-CAT-01 §5]. The helper uses only typed accessors
 // from formats/tdf_typed.go [02 §4].
 // Language-prefixed name fallback is applied via LanguageString (<Language>name then name) with
 // Translate.tdf identity fallback (byte-exact) when the file is missing [02 §3] C7.
@@ -818,6 +806,7 @@ func CompileUnitsWithLanguage(fs vfs.FSOps, language string) (map[string]*UnitDe
 
 type unitCompileResult struct {
 	units                  map[string]*UnitDef
+	records                []*UnitDef
 	incompatibilityWarning bool
 }
 
@@ -837,9 +826,10 @@ func compileUnitsWithLanguage(fs vfs.FSOps, language string) (unitCompileResult,
 		return unitCompileResult{}, fmt.Errorf("content: units: %w", err)
 	}
 	// ReadDir already sorts by Path [vfs.ReadDir], so iteration is stable (I1).
-	result := make(map[string]*UnitDef)
+	records := make([]*UnitDef, len(entries))
+	completed := true
 	versionDropped, suppressWarning := false, false
-	for _, entry := range entries {
+	for i, entry := range entries {
 		e := entry.info
 		data, err := readContentEntry(fs, entry)
 		if err != nil {
@@ -858,6 +848,7 @@ func compileUnitsWithLanguage(fs vfs.FSOps, language string) (unitCompileResult,
 		// corpus has no such file.
 		unitSection := doc.Root.Section("UNITINFO")
 		if unitSection == nil {
+			completed = false
 			break
 		}
 		versionOK := compatibleUnitVersion(unitSection.FloatValue("version", 0))
@@ -872,13 +863,32 @@ func compileUnitsWithLanguage(fs vfs.FSOps, language string) (unitCompileResult,
 		if !versionOK || !copyrightOK || !entry.archive {
 			continue
 		}
-		u := compileUnitSection(unitSection, e.Path, language, prov)
-		// Catalog construction is case-insensitive for names [02 §5].
-		key := u.CanonicalKey
-		// Duplicate canonical keys — last wins deterministic since we iterate sorted ReadDir (I1).
-		result[key] = u
+		// TODO(question): implement the post-sort FBI re-open by stored UnitName;
+		// establish the second parser's selective overwrite set before replacing
+		// this one-pass compile [02 R-CAT-01 §5][DESIGN_CONTENT_VFS §7].
+		records[i] = compileUnitSection(unitSection, e.Path, language, prov)
 	}
-	return unitCompileResult{units: result, incompatibilityWarning: versionDropped && !suppressWarning}, nil
+	// Completed discovery removes a dropped record by moving the last survivor
+	// into its place. An early missing-UNITINFO return skips that epilogue;
+	// only the compiler's stable compaction then runs [02 R-CAT-01 §§4–5].
+	if completed {
+		for i := len(records) - 1; i >= 0; i-- {
+			if records[i] == nil {
+				records[i] = records[len(records)-1]
+				records = records[:len(records)-1]
+			}
+		}
+	} else {
+		kept := records[:0]
+		for _, u := range records {
+			if u != nil {
+				kept = append(kept, u)
+			}
+		}
+		records = kept
+	}
+	sortUnitRecords(records)
+	return unitCompileResult{units: firstUnitNames(records), records: records, incompatibilityWarning: versionDropped && !suppressWarning}, nil
 }
 
 const incompatibleUnitsWarning = "Incompatible units found.  They will be ignored.  Please download the latest version of the game."
@@ -929,21 +939,19 @@ func compatibleUnitCopyright(value string) bool {
 // Established. An unarmed definition's weapon links resolve to record 0 like
 // any other miss, never to nil, for a family that carries the sentinel.
 func LinkUnitWeapons(units map[string]*UnitDef, weapons map[string]*WeaponDef) {
-	if units == nil || weapons == nil {
+	linkUnitWeaponRecords(unitMapRecords(units), weapons)
+}
+
+func linkUnitWeaponRecords(records []*UnitDef, weapons map[string]*WeaponDef) {
+	if records == nil || weapons == nil {
 		return
 	}
-	// Deterministic iteration: sorted unit keys (I1).
-	keys := make([]string, 0, len(units))
-	for k := range units {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	// Deterministic iteration follows retained record order (I1).
 	// The miss policy lives in one place, Catalog.WeaponLink [02 §5
 	// R-CONTENT-02]; a read-only view over the map is enough — the method
 	// derives its slot-order scan and the record-0 lookup from Weapons alone.
 	view := &Catalog{Weapons: weapons}
-	for _, k := range keys {
-		u := units[k]
+	for _, u := range records {
 		u.Weapon1Def, _ = view.WeaponLink(u.Weapon1)
 		u.Weapon2Def, _ = view.WeaponLink(u.Weapon2)
 		u.Weapon3Def, _ = view.WeaponLink(u.Weapon3)
@@ -958,13 +966,11 @@ func LinkUnitWeapons(units map[string]*UnitDef, weapons map[string]*WeaponDef) {
 // scratch record compiled above. A resolved class replaces every linked field,
 // including zero-valued footprint extents.
 func ApplyMovementFootprints(units map[string]*UnitDef, movement map[string]*MovementClass) {
-	keys := make([]string, 0, len(units))
-	for key := range units {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		u := units[key]
+	applyMovementFootprintRecords(unitMapRecords(units), movement)
+}
+
+func applyMovementFootprintRecords(records []*UnitDef, movement map[string]*MovementClass) {
+	for _, u := range records {
 		if u == nil || u.MovementClass == "" || movement == nil {
 			continue
 		}
@@ -997,7 +1003,11 @@ func ApplyMovementFootprints(units map[string]*UnitDef, movement map[string]*Mov
 // Each fixed unit is re-hashed through writeUnitCanonical; the catalog-level
 // hash is recomputed by the caller afterwards.
 func EnforceDownloadable(units map[string]*UnitDef, buildMenuNames []string) []string {
-	if units == nil || len(buildMenuNames) == 0 {
+	return enforceDownloadableRecords(unitMapRecords(units), buildMenuNames)
+}
+
+func enforceDownloadableRecords(records []*UnitDef, buildMenuNames []string) []string {
+	if records == nil || len(buildMenuNames) == 0 {
 		return nil
 	}
 	// Canonicalize build menu names for case-insensitive comparison [02 "Unit record"].
@@ -1005,15 +1015,9 @@ func EnforceDownloadable(units map[string]*UnitDef, buildMenuNames []string) []s
 	for _, n := range buildMenuNames {
 		menuSet[CanonicalKey(n)] = struct{}{}
 	}
-	// Deterministic iteration: sorted unit keys (I1).
-	keys := make([]string, 0, len(units))
-	for k := range units {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	// Deterministic iteration follows retained record order (I1).
 	var warnings []string
-	for _, k := range keys {
-		u := units[k]
+	for _, u := range records {
 		if u.Downloadable {
 			continue
 		}

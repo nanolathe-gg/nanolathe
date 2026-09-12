@@ -333,7 +333,8 @@ func (y YardCell) Selects(open bool) bool {
 func (y YardCell) TestsOccupancy() bool { return y&0x06 != 0 }
 
 // ParseYardMap fills a footX*footZ row-major yard buffer from an authored
-// YardMap string, exactly as retail's definition compiler does [04 §6.2] C10.
+// YardMap string using the retail character rules and a bounded exhausted-
+// input policy [04 §6.2] C10 [fmt fbi].
 //
 // The retail loop walks the footprint cell by cell and the string character by
 // character, and the two walks are not required to keep step:
@@ -341,8 +342,8 @@ func (y YardCell) TestsOccupancy() bool { return y&0x06 != 0 }
 //   - A character outside the ten-entry table advances the string without
 //     consuming a cell. That is how the spaces stock authors use to lay a yard
 //     map out in rows disappear, and it also silently drops typos.
-//   - The string pointer advances only when the *next* character is not the
-//     terminator, so once the string runs out the final character repeats for
+//   - After a recognized character, the string pointer advances only when
+//     the *next* character is not the terminator, so that character repeats for
 //     every cell still unfilled. `YardMap=o` over a 4x4 footprint is sixteen
 //     `o` cells, and ARMSILO's nine characters over 5x5 fill the remaining
 //     sixteen with its last character.
@@ -351,8 +352,8 @@ func (y YardCell) TestsOccupancy() bool { return y&0x06 != 0 }
 //
 // Forty-six of the 126 stock yard maps disagree with their own footprint, so
 // rejecting a length mismatch — as this parser used to — makes those buildings
-// unplaceable. There is no error case left but a degenerate footprint: an empty
-// string uses the established all-`o` building default [fmt fbi].
+// unplaceable. Empty or exhausted unrecognized input receives an all-`o`
+// remainder as host policy; retail walks beyond the terminator [fmt fbi].
 //
 // Non-building classes carry no yard map at all: retail parses this only when
 // the definition's BMcode is zero [04 §6.2].
@@ -368,10 +369,9 @@ func ParseYardMap(s string, footX, footZ int) ([]YardCell, error) {
 		var b YardCell
 		for {
 			if at >= len(src) {
-				// A structure without an authored yard map uses the one-cell
-				// `o` default for every packed cell [fmt fbi]. This also keeps
-				// an unusable empty source from inventing an unoccupied building
-				// footprint.
+				// TODO(question): retail reads beyond the terminator here;
+				// those adjacent bytes are not determined by authored text.
+				// Keep an occupied `o` remainder as bounded host policy [fmt fbi].
 				b = 0x2f
 				break
 			}

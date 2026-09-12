@@ -1,6 +1,7 @@
 package formats
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 
@@ -94,13 +95,13 @@ func (s *Section) BoolValue(key string, def bool) bool {
 }
 
 // parseTDFFloat mirrors the CRT decimal floating conversion: leading
-// whitespace, optional sign, digits with an optional fraction and exponent,
-// trailing junk ignored, zero for unparsable text.
-// TODO(question): compare retail CRT overflow and unusual exponent text with
-// this host parser; retain the existing zero-on-error policy until traced
-// [02 "Missing and unknown"].
+// whitespace, optional sign, digits with an optional fraction and e/E/d/D
+// exponent, trailing junk ignored, zero for unparsable text [fmt tdf].
+// TODO(question): establish exact retail long-mantissa rounding and extreme
+// exponent cancellation, plus alternate CRT locale selection; retain host
+// binary64 conversion and the initial decimal point until traced [fmt tdf].
 func parseTDFFloat(value string) float64 {
-	trimmed := strings.TrimLeft(value, " \t\r\n")
+	trimmed := strings.TrimLeft(value, " \t\r\n\v\f")
 	end := 0
 	seenDigit, seenDot, seenExp := false, false, false
 	for end < len(trimmed) {
@@ -108,10 +109,10 @@ func parseTDFFloat(value string) float64 {
 		switch {
 		case c >= '0' && c <= '9':
 			seenDigit = true
-		case (c == '+' || c == '-') && (end == 0 || (trimmed[end-1] == 'e' || trimmed[end-1] == 'E')):
+		case (c == '+' || c == '-') && (end == 0 || (trimmed[end-1] == 'e' || trimmed[end-1] == 'E' || trimmed[end-1] == 'd' || trimmed[end-1] == 'D')):
 		case c == '.' && !seenDot && !seenExp:
 			seenDot = true
-		case (c == 'e' || c == 'E') && seenDigit && !seenExp:
+		case (c == 'e' || c == 'E' || c == 'd' || c == 'D') && seenDigit && !seenExp:
 			seenExp = true
 		default:
 			goto done
@@ -122,8 +123,14 @@ done:
 	if !seenDigit {
 		return 0
 	}
-	parsed, err := strconv.ParseFloat(strings.TrimRight(trimmed[:end], "eE+-"), 64)
-	if err != nil {
+	// An unfinished exponent leaves the mantissa in effect. The linked CRT
+	// also accepts d/D for the same decimal exponent [fmt tdf].
+	prefix := strings.TrimRight(trimmed[:end], "eEdD+-")
+	prefix = strings.ReplaceAll(strings.ReplaceAll(prefix, "d", "e"), "D", "e")
+	parsed, err := strconv.ParseFloat(prefix, 64)
+	// Range overflow produces signed infinity, not failed-text zero. The
+	// accessor returns the binary64 result without checking status [fmt tdf].
+	if err != nil && !errors.Is(err, strconv.ErrRange) {
 		return 0
 	}
 	return parsed

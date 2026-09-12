@@ -349,6 +349,15 @@ mission's sparse created array in placement order, testing the placement
 identifier case-insensitively and then the unit name, and skips the null gaps a
 failed allocation leaves.
 
+The local argument scanner consumes one byte string sequentially for every
+numeric and name handler. It preserves seeded destinations after the first
+failed conversion, accepts adjacent prefixes, and applies the verb-specific
+name scanset `[04 §3.6]` `[08 "Argument parsing"]`. It uses the existing
+binary32 argument boundary before scaling. Untouched uninitialized coordinate
+temporaries use an explicit zero host policy; they do not model retail's
+run-specific temporary contents. Exact rounding for adversarial decimal
+inputs remains open in `[fmt ota]`.
+
 `DecodeTriggers` probes `[GlobalHeader]` for the eighteen condition keys in
 fixed vocabulary order and splits them into the victory and defeat queues; a
 duplicate spelling collapses to its last value and produces at most one record
@@ -393,7 +402,13 @@ decide profile-versus-per-definition precedence — needs the definition catalog
 that a bare parse does not have. `ApplyUnitDefinitions` replays the stream
 against a catalog and then folds each definition's authored weight fragment
 into the types the file did not lock `[08 R-AI-01 §12]` `[08 R-AI-01 §18]`
-`[08 R-AI-01 §20]`.
+`[08 R-AI-01 §20]`. Derived weights, limits and locks use retained catalog
+record IDs. Exact names select the first equal record; category and fragment
+passes visit every record. Name accessors are first-match projections. Catalog
+or difficulty rebinding rebuilds the derived tables from authored input.
+The strategic planner's counts, class vectors and candidate names still need
+record-indexed storage before it can select later equal-name definitions;
+this is an implementation limitation, recorded at the selection boundary.
 
 `Manager` is the per-player planner: the player index, the embedded `Strategic`
 state, the ten task deadlines, the profile, the nine group vectors, the
@@ -905,11 +920,13 @@ with zero auxiliary arguments `[04 §3.6]`.
 are ignored with scanning resuming past the comma; a failed type lookup for
 attack or build produces no queue; a failed unit lookup for guard produces no
 queue and for wait-for-attack falls back to self; move, patrol, unload, wait
-and flag-bit tokens do not test their conversion counts and queue zero-valued
-orders when parsing fails. Only the numeric attack form tests for two floats
-and only wait-for-attack tests for one name. A comma-free run past the frame
-length is clamped rather than overflowed — the one divergence this area
-introduces, and the one the research itself recommends `[04 §3.6]`.
+and flag-bit tokens do not test their conversion counts. Each failed field
+stops the scan and retains its seed and every later seed: build/stockpile
+counts start at one, wait operands and patrol timeout at zero, and standing
+operands at current state. Uninitialized coordinates retain Nanolathe's
+explicit zero host policy. Only the numeric attack form tests for two floats
+and only wait-for-attack tests for one name. Tokens past the frame length are
+clamped rather than overflowed, as the research recommends `[04 §3.6]`.
 
 **C14 — trigger argument shapes.** Two formats, `<name>,<int>` and
 `<name>,<int>,<int>,<int>`, with `ANYTYPE` accepted wherever a type is expected
@@ -1355,10 +1372,15 @@ Markers in these packages, one line each.
   handle, and whether the side panel's non-world-click issues run the same
   duplicate test. Both need a trace of the interface's call into the producer
   and belong to DESIGN_INTERFACE_HUD_INPUT `[07 §9]`.
-* Five `TODO(question)` markers in `internal/mission`'s `InitialMission`
-  integer parsing retain permissive floating-point fallbacks. The integer
-  scanner's prefix handling, overflow and continuation after a failed field
-  remain Unknown; a trace of those scanner branches settles them `[04 §3.6]`.
+* Two `TODO(question)` markers in `internal/mission`'s local `InitialMission`
+  scanner identify the remaining boundaries: run-specific uninitialized
+  coordinate contents, for which zero remains explicit host policy, and
+  adversarial decimal rounding through the retail intermediate converter,
+  for which Go's binary32 rounding remains the host implementation. The
+  former needs execution-state evidence for an individual run; the latter
+  needs an arithmetic trace of the decimal converter. Prefix handling,
+  integer wrap, scansets, continuation and caller seeds are established and
+  implemented `[04 §3.6]` `[fmt ota]`.
 
 No `TODO(question)`, `TODO(T23)` or `TODO(T25)` marker remains in
 `internal/triggers`, `internal/save`, `internal/headless`

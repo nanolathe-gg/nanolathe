@@ -1376,6 +1376,21 @@ func (c *Client) blitFogGAF(frame *formats.GAFFrame, dstX, dstY int, mode fogBli
 	if mode == fogBlitGray && c.pal == nil {
 		return
 	}
+	// Gray and dither reject compressed parents before traversal and retain
+	// that gate at each child [03 R-COMP-01 §2]. Black uses ordinary composition.
+	if mode != fogBlitBlack && frame.Compressed != 0 {
+		return
+	}
+	if len(frame.Subframes) != 0 {
+		for _, child := range frame.Subframes {
+			if mode == fogBlitBlack && child != nil && child.AlternateBlitter != 0 {
+				c.tintedBlitAnchor(child, dstX, dstY)
+			} else {
+				c.blitFogGAF(child, dstX, dstY, mode)
+			}
+		}
+		return
+	}
 	dstX -= int(frame.XOffset) // retail anchor: dest = cell origin - frame offset
 	dstY -= int(frame.YOffset)
 	w := c.width

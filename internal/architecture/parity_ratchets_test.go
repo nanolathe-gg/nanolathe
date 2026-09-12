@@ -181,7 +181,7 @@ var float64Baseline = map[string]int{
 	"internal/construction/resurrection.go": 3,
 	"internal/construction/reverse.go":      6, // shared refund final-store precision [05 R-ECO-01 §3][05 R-ECO-01 §11]
 	"internal/economy/tick.go":              2,
-	"internal/mission/initial_mission.go":   8,
+	"internal/mission/initial_mission.go":   2,
 	"internal/movement/altitude.go":         6,
 	"internal/world/terrain.go":             2, // two single-precision tidal defaults [03 R-TERR-01 §6]
 	"internal/world/wind.go":                2,

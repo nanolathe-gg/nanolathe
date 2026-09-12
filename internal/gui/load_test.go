@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -564,4 +565,55 @@ func TestRealGUIsAssetGuarded(t *testing.T) {
 		t.Fatalf("no .gui files parsed")
 	}
 	t.Logf("parsed %d guis from %s", parsed, root)
+}
+
+func TestLoadScrollbarThickSignExtendsWord(t *testing.T) {
+	// The numeric read-out receives a signed word widened to 32 bits,
+	// unlike a direct 32-bit field store [07 R-WGT-01 §11].
+	for _, tc := range []struct {
+		authored string
+		want     int32
+	}{
+		{"32767", 32767}, {"32768", -32768}, {"65535", -1},
+		{"65536", 0}, {"-32769", 32767},
+	} {
+		t.Run(tc.authored, func(t *testing.T) {
+			panel := fmt.Sprintf(`[HEADER] { [COMMON] { id=0; width=640; height=480; } }
+[BAR] { [COMMON] { id=4; } thick=%s; }`, tc.authored)
+			window, err := Load(guiRecordStoreFS(t, panel), "panel.gui")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := window.Gadgets[1].Thick; got != tc.want {
+				t.Fatalf("thick %s = %d, want %d", tc.authored, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadQuickKeyLetterOrDecimalPrefix(t *testing.T) {
+	// The parser chooses the letter branch before decimal conversion;
+	// punctuation and decimal zero must not fall back to their first byte.
+	// The builder has not assigned caption accelerators yet [07 R-WGT-01 §11].
+	for _, tc := range []struct {
+		authored string
+		want     byte
+	}{
+		{"S", 'S'}, {"lower", 'l'}, {"83tail", 'S'}, {"+83", 'S'},
+		{"-1", 255}, {"339", 'S'}, {"0", 0}, {"00", 0},
+		{"0x53", 0}, {"+", 0}, {"!", 0}, {"", 0},
+		{"00000000000000000083", 0},
+	} {
+		t.Run(tc.authored, func(t *testing.T) {
+			panel := fmt.Sprintf(`[HEADER] { [COMMON] { id=0; width=640; height=480; } }
+[BUTTON] { [COMMON] { id=1; } quickkey=%s; }`, tc.authored)
+			window, err := Load(guiRecordStoreFS(t, panel), "panel.gui")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := window.Gadgets[1].QuickKey; got != tc.want {
+				t.Fatalf("quickkey %q = %d, want %d", tc.authored, got, tc.want)
+			}
+		})
+	}
 }

@@ -1,7 +1,6 @@
 package mission
 
 import (
-	"strconv"
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/internal/content"
@@ -344,24 +343,17 @@ func dispatchToken(token string, ctx *interpCtx) {
 
 // Helpers.
 
-func splitArgs(s string) []string {
-	// Replace commas with spaces, then fields. This handles both comma and whitespace separators.
-	replaced := strings.ReplaceAll(s, ",", " ")
-	fields := strings.Fields(replaced)
-	return fields
-}
-
-func floatToFixed(f float64) numeric.Fixed {
+func floatToFixed(f float32) numeric.Fixed {
 	// Callers parse into single precision before promoting for this exact
 	// product. Coordinates scale by 65536 [08 R-ENTRY-01 §6] [04 §3.6] C10.
 	// Truncate and sign-extend the stored low word [01 R-DET-01 §1].
-	return numeric.Fixed(numeric.TruncateFloat64ToLow32(f * 65536)) // [04 §3.6] scaled by 65536 [I3] trunc toward zero
+	return numeric.Fixed(numeric.TruncateFloat64ToLow32(float64(f) * 65536)) // [04 §3.6] scaled by 65536 [I3] trunc toward zero
 }
 
-func timeToTicks(secs float64) int32 {
+func timeToTicks(secs float32) int32 {
 	// The parsed single-precision seconds are promoted before scaling; no
 	// second single-precision rounding intervenes [08 R-ENTRY-01 §6].
-	return numeric.TruncateFloat64ToLow32(secs * 30) // [04 §3.6] times scale by 30, trunc toward zero [I3]
+	return numeric.TruncateFloat64ToLow32(float64(secs) * 30) // [04 §3.6] times scale by 30, trunc toward zero [I3]
 }
 
 // productIdentity resolves an authored unit name to the product identity that
@@ -441,23 +433,10 @@ func (ctx *interpCtx) sparseUnit(placementIdx int) *units.Unit {
 // Handlers.
 
 func handleM(token string, ctx *interpCtx) {
-	rest := ""
-	if len(token) >= 1 {
-		rest = token[1:]
-	}
-	fields := splitArgs(rest)
-	var fx, fy float64
-	if len(fields) >= 1 {
-		if v, err := strconv.ParseFloat(fields[0], 32); err == nil {
-			fx = v
-		}
-	}
-	if len(fields) >= 2 {
-		if v, err := strconv.ParseFloat(fields[1], 32); err == nil {
-			fy = v
-		}
-	}
-	// Do not test conversion counts [04 §3.6] C13: still queue even if parse failed (we use 0).
+	scan := missionArgScanner{text: token[1:]}
+	fx, fy := missionCoordinateSeeds()
+	scan.float(&fx)
+	scan.float(&fy)
 	// Positional mission verbs classify through the same resolver as live
 	// commands, including capability gates and factory rally descriptors
 	// [04 §3.6][04 R-ORD-02 §1].
@@ -474,28 +453,11 @@ func handleM(token string, ctx *interpCtx) {
 }
 
 func handleA(token string, ctx *interpCtx) {
-	rest := ""
-	if len(token) >= 1 {
-		rest = token[1:]
-	}
-	fields := splitArgs(rest)
-	if len(fields) == 0 {
-		return
-	}
-	// Try numeric detection: two floats -> numeric attack ground position [04 §3.6] C10.
-	isNumeric := false
-	if len(fields) >= 2 {
-		_, err1 := strconv.ParseFloat(fields[0], 32)
-		_, err2 := strconv.ParseFloat(fields[1], 32)
-		if err1 == nil && err2 == nil {
-			isNumeric = true
-		}
-	}
-	if isNumeric {
-		// Numeric form: a x,y attack ground position suppresses tail [04 §3.6] C12.
-		var fx, fy float64
-		fx, _ = strconv.ParseFloat(fields[0], 32)
-		fy, _ = strconv.ParseFloat(fields[1], 32)
+	args := token[1:]
+	scan := missionArgScanner{text: args}
+	var fx, fy float32
+	// Numeric attack alone requires both coordinates [04 §3.6].
+	if scan.float(&fx) && scan.float(&fy) {
 		// A rejected positional attack remains rejected; inventing a chase
 		// descriptor here bypasses the resolver's weapon and capability gates
 		// [04 §3.6][04 R-ORD-02 §1].
@@ -513,7 +475,9 @@ func handleA(token string, ctx *interpCtx) {
 		return
 	}
 	// By-type form: a name attack-by-unit-type [04 §3.6] C10.
-	name := fields[0]
+	scan = missionArgScanner{text: args} // Name retry starts at the original argument.
+	var name string
+	scan.name(&name, true)
 	if !typeExists(ctx, name) {
 		// Unknown types queue nothing [04 §3.6] C10.
 		return
@@ -546,40 +510,17 @@ func handleA(token string, ctx *interpCtx) {
 }
 
 func handleB(token string, ctx *interpCtx) {
-	var rest string
-	if len(token) >= 1 {
-		if token[0] == 'W' {
-			rest = token[1:]
-		} else {
-			rest = token[1:]
-		}
-	}
-	rest = strings.TrimSpace(rest)
-	fields := splitArgs(rest)
-	if len(fields) == 0 {
-		return
-	}
-	name := fields[0]
+	scan := missionArgScanner{text: token[1:]}
+	var name string
+	scan.name(&name, true)
 	if !typeExists(ctx, name) {
-		return // unknown types queue nothing (silent) [04 §3.6] C13
+		return // Unknown types queue nothing [04 §3.6].
 	}
-	var n int64 = 1
-	var fx, fy float64
-	if len(fields) >= 2 {
-		if v, err := strconv.ParseInt(fields[1], 10, 32); err == nil {
-			n = v
-		} else if fv, err2 := strconv.ParseFloat(fields[1], 64); err2 == nil {
-			// TODO(question): retain the existing permissive fallback until the retail
-			// integer scanner's prefix, overflow and failed-field continuation are traced [04 §3.6].
-			n = int64(fv)
-		}
-	}
-	if len(fields) >= 3 {
-		fx, _ = strconv.ParseFloat(fields[2], 32)
-	}
-	if len(fields) >= 4 {
-		fy, _ = strconv.ParseFloat(fields[3], 32)
-	}
+	n := int32(1)
+	fx, fy := missionCoordinateSeeds()
+	scan.integer(&n)
+	scan.float(&fx)
+	scan.float(&fy)
 	// BuildingBuild when the acting unit has no mover (a structure), MobileBuild
 	// at x,y when it has one [04 §3.6 correction 2026-09-02] C10. The presence
 	// of coordinates plays no part in the choice.
@@ -609,33 +550,9 @@ func handleB(token string, ctx *interpCtx) {
 }
 
 func handleBW(token string, ctx *interpCtx) {
-	var rest string
-	if len(token) >= 2 {
-		// token starts with "bw", "BW", "Ww", "Ww" etc.
-		if token[0] == 'W' && (token[1] == 'w' || token[1] == 'W') {
-			rest = token[2:]
-		} else if (token[0] == 'b' || token[0] == 'B') && (token[1] == 'w' || token[1] == 'W') {
-			rest = token[2:]
-		} else {
-			rest = token[1:]
-		}
-	} else if len(token) >= 1 {
-		rest = token[1:]
-	}
-	rest = strings.TrimSpace(rest)
-	fields := splitArgs(rest)
-	var n int64
-	if len(fields) >= 1 {
-		if v, err := strconv.ParseInt(fields[0], 10, 32); err == nil {
-			n = v
-		} else if fv, err2 := strconv.ParseFloat(fields[0], 64); err2 == nil {
-			// TODO(question): retain the existing permissive fallback until the retail
-			// integer scanner's prefix, overflow and failed-field continuation are traced [04 §3.6].
-			n = int64(fv)
-		}
-	} else {
-		n = 1 // default?
-	}
+	scan := missionArgScanner{text: token[2:]}
+	n := int32(1) // Failed conversion retains the caller seed [04 §3.6].
+	scan.integer(&n)
 	id := orders.Lookup("BuildWeapon") // [04 §3.1] rear segment [C10]
 	if id == 0 {
 		return
@@ -676,16 +593,11 @@ func handleD(token string, ctx *interpCtx) {
 }
 
 func handleG(token string, ctx *interpCtx) {
-	rest := ""
-	if len(token) >= 1 {
-		rest = token[1:]
-	}
-	rest = strings.TrimSpace(rest)
-	fields := splitArgs(rest)
-	if len(fields) == 0 {
+	scan := missionArgScanner{text: token[1:]}
+	var name string
+	if !scan.name(&name, true) {
 		return
 	}
-	name := fields[0]
 	idx := ctx.lookupIdentOrUnitName(name)
 	if idx < 0 {
 		return // unresolved names queue nothing [P0-06] C10, uses sparse first-occurrence
@@ -706,16 +618,11 @@ func handleG(token string, ctx *interpCtx) {
 }
 
 func handleI(token string, ctx *interpCtx) {
-	rest := ""
-	if len(token) >= 1 {
-		rest = token[1:]
-	}
-	rest = strings.TrimSpace(rest)
-	fields := splitArgs(rest)
-	if len(fields) == 0 {
+	scan := missionArgScanner{text: token[1:]}
+	var name string
+	if !scan.name(&name, true) {
 		return
 	}
-	name := fields[0]
 	idx := ctx.lookupIdentOrUnitName(name)
 	if idx < 0 {
 		return
@@ -737,37 +644,14 @@ func handleI(token string, ctx *interpCtx) {
 }
 
 func handleO(token string, ctx *interpCtx) {
-	rest := ""
-	if len(token) >= 1 {
-		rest = token[1:]
-	}
-	rest = strings.TrimSpace(rest)
-	fields := splitArgs(rest)
-	// Retail seeds the scan's two destination cells with the fields' current
-	// values before the `%d,%d` scan, so a missing or malformed operand keeps
-	// the field it had [04 §3.6 correction 2026-09-02]; the verb never tests
-	// its conversion count.
-	const fieldMask = int64(units.StandingFieldMask)
-	d1 := int64(ctx.unit.Flags>>units.StandingMoveShift) & fieldMask
-	d2 := int64(ctx.unit.Flags>>units.StandingFireShift) & fieldMask
-	if len(fields) >= 1 {
-		if v, err := strconv.ParseInt(fields[0], 10, 32); err == nil {
-			d1 = v
-		} else if fv, err2 := strconv.ParseFloat(fields[0], 64); err2 == nil {
-			// TODO(question): retain the existing permissive fallback until the retail
-			// integer scanner's prefix, overflow and failed-field continuation are traced [04 §3.6].
-			d1 = int64(fv)
-		}
-	}
-	if len(fields) >= 2 {
-		if v, err := strconv.ParseInt(fields[1], 10, 32); err == nil {
-			d2 = v
-		} else if fv, err2 := strconv.ParseFloat(fields[1], 64); err2 == nil {
-			// TODO(question): retain the existing permissive fallback until the retail
-			// integer scanner's prefix, overflow and failed-field continuation are traced [04 §3.6].
-			d2 = int64(fv)
-		}
-	}
+	scan := missionArgScanner{text: token[1:]}
+	// Failed fields retain current standing state; the first failure also
+	// prevents later assignment [04 §3.6].
+	const fieldMask = int32(units.StandingFieldMask)
+	d1 := int32(ctx.unit.Flags>>units.StandingMoveShift) & fieldMask
+	d2 := int32(ctx.unit.Flags>>units.StandingFireShift) & fieldMask
+	scan.integer(&d1)
+	scan.integer(&d2)
 	// Writes the two standing-order fields of the unit state word: the standing
 	// move field (bits 18-19) takes d1&3 and the standing fire field (bits
 	// 20-21) takes d2&3 [04 §3.6 correction 2026-09-02][P0-06] — the same bits
@@ -781,22 +665,12 @@ func handleO(token string, ctx *interpCtx) {
 }
 
 func handleP(token string, ctx *interpCtx) {
-	rest := ""
-	if len(token) >= 1 {
-		rest = token[1:]
-	}
-	rest = strings.TrimSpace(rest)
-	fields := splitArgs(rest)
-	var fx, fy, ft float64
-	if len(fields) >= 1 {
-		fx, _ = strconv.ParseFloat(fields[0], 32) // [04 §3.6] don't test conversion counts
-	}
-	if len(fields) >= 2 {
-		fy, _ = strconv.ParseFloat(fields[1], 32)
-	}
-	if len(fields) >= 3 {
-		ft, _ = strconv.ParseFloat(fields[2], 32)
-	}
+	scan := missionArgScanner{text: token[1:]}
+	fx, fy := missionCoordinateSeeds()
+	var ft float32 // Patrol timeout is initialized to zero [04 §3.6].
+	scan.float(&fx)
+	scan.float(&fy)
+	scan.float(&ft)
 	ticks := timeToTicks(ft) // [04 §3.6] times×30 [C10]
 	// Preserve the canonical command admission and variant [04 §3.6].
 	id := orders.Resolve(9, ctx.unit, nil, nil)
@@ -824,19 +698,10 @@ func handleS(token string, ctx *interpCtx) {
 }
 
 func handleU(token string, ctx *interpCtx) {
-	rest := ""
-	if len(token) >= 1 {
-		rest = token[1:]
-	}
-	rest = strings.TrimSpace(rest)
-	fields := splitArgs(rest)
-	var fx, fy float64
-	if len(fields) >= 1 {
-		fx, _ = strconv.ParseFloat(fields[0], 32)
-	}
-	if len(fields) >= 2 {
-		fy, _ = strconv.ParseFloat(fields[1], 32)
-	}
+	scan := missionArgScanner{text: token[1:]}
+	fx, fy := missionCoordinateSeeds()
+	scan.float(&fx)
+	scan.float(&fy)
 	// Preserve the canonical command admission and variant [04 §3.6].
 	id := orders.Resolve(5, ctx.unit, nil, nil)
 	if id == 0 {
@@ -851,30 +716,11 @@ func handleU(token string, ctx *interpCtx) {
 }
 
 func handleW(token string, ctx *interpCtx) {
-	rest := ""
-	if len(token) >= 1 {
-		rest = token[1:]
-	}
-	rest = strings.TrimSpace(rest)
-	fields := splitArgs(rest)
-	var secs float64
-	var trailing int64
-	if len(fields) >= 1 {
-		if v, err := strconv.ParseFloat(fields[0], 32); err == nil {
-			secs = v
-		} else {
-			secs = 0 // [04 §3.6] don't test conversion counts
-		}
-	}
-	if len(fields) >= 2 {
-		if v, err := strconv.ParseInt(fields[1], 10, 32); err == nil {
-			trailing = v
-		} else if fv, err2 := strconv.ParseFloat(fields[1], 64); err2 == nil {
-			// TODO(question): retain the existing permissive fallback until the retail
-			// integer scanner's prefix, overflow and failed-field continuation are traced [04 §3.6].
-			trailing = int64(fv)
-		}
-	}
+	scan := missionArgScanner{text: token[1:]}
+	var secs float32
+	var trailing int32 // Both wait operands start at zero [04 §3.6].
+	scan.float(&secs)
+	scan.integer(&trailing)
 	ticks := timeToTicks(secs)  // [04 §3.6] times×30
 	id := orders.Lookup("Wait") // [04 §3.1]
 	if id == 0 {
@@ -888,25 +734,12 @@ func handleW(token string, ctx *interpCtx) {
 }
 
 func handleWA(token string, ctx *interpCtx) {
-	var rest string
-	if len(token) >= 2 {
-		rest = token[2:]
-	} else {
-		rest = ""
-	}
-	rest = strings.TrimSpace(rest)
-	// P0-06: only wa tests sscanf ==1 (name form). Retail scanset " %[a-zA-Z0-9.]"
-	// (no underscore) [P0-06 §2]. We mimic by checking first field existence and
-	// treating missing/empty as sscanf 0 → fallback to self.
-	fields := splitArgs(rest)
+	scan := missionArgScanner{text: token[2:]}
+	var name string
 	var targetHandle int
 	found := false
-	if len(fields) >= 1 {
-		name := fields[0]
-		// sscanf for wa would be one name; test ==1 else self. Our fields length
-		// check mirrors that: presence of name token counts as ==1, but we also
-		// verify lookup succeeds. Retail would fallback to self if lookup fails
-		// as well [P0-06].
+	// The wait-for-attack scanset omits underscore [08 "Argument parsing"].
+	if scan.name(&name, false) {
 		if idx := ctx.lookupIdentOrUnitName(name); idx >= 0 {
 			if u := ctx.sparseUnit(idx); u != nil {
 				targetHandle = int(u.Handle)

@@ -230,3 +230,24 @@ func TestStrategicIconFactoryMixedProductsAndNameIndependence(t *testing.T) {
 		t.Fatal("missing final product fabricated a factory family")
 	}
 }
+
+func TestStrategicIconDuplicateNamesKeepRecordDescriptors(t *testing.T) {
+	first := iconUnit("same", "TANK", 1)
+	second := iconUnit("same", "KBOT", 2)
+	// The map-only fixture supplies two ordered records, as a compiled catalog's
+	// retained table does for duplicate authored names [02 R-CAT-01 §5].
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{"a": first, "b": second}}
+	icons := NewStrategicIconCatalog(cat)
+	a, ok := icons.Lookup("same", 1)
+	if !ok {
+		t.Fatal("first record missing")
+	}
+	b, ok := icons.Lookup("same", 2)
+	if !ok || a.Family == b.Family {
+		t.Fatal("later duplicate lost its own descriptor")
+	}
+	byName, ok := icons.Lookup("same", 0)
+	if !ok || byName.Family != a.Family {
+		t.Fatal("name lookup did not select first equal record")
+	}
+}

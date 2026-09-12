@@ -75,6 +75,36 @@ func (r *Renderer) drawLit(f *formats.GAFFrame, x, y, row, clipX, clipY, clipW, 
 		[4]float32{0, 0, 0, sceneOpLit})
 }
 
+// drawRawGlyph uses the existing destination-light stream: source selects the
+// LHT row and mode replaces the authored frame key [03 R-FONT-01 §6]. The
+// modern executor uses its established true-colour LHT approximation, as it
+// does for calculated flashes (DESIGN_GPU_RENDERER §13.3).
+func (r *Renderer) drawRawGlyph(f *formats.GAFFrame, x, y int, mode byte, clipX, clipY, clipW, clipH int) {
+	var points [256]drawlist.Point
+	n := 0
+	minX, minY := maxInt(clipX, 0), maxInt(clipY, 0)
+	maxX, maxY := minInt(clipX+clipW, r.clipW()), minInt(clipY+clipH, r.clipH())
+	for row := maxInt(0, minY-y); row < minInt(int(f.Height), maxY-y); row++ {
+		for col := maxInt(0, minX-x); col < minInt(int(f.Width), maxX-x); col++ {
+			i := row*int(f.Width) + col
+			if i >= len(f.Pixels) {
+				continue
+			}
+			b := f.Pixels[i]
+			if b == mode || b >= 32 {
+				continue // host safety: unsafe source rows are suppressed, never clamped
+			}
+			points[n] = drawlist.Point{X: int32(x + col), Y: int32(y + row), Index: b}
+			n++
+			if n == len(points) {
+				r.drawLitPoints(points[:n])
+				n = 0
+			}
+		}
+	}
+	r.drawLitPoints(points[:n])
+}
+
 // drawTint reproduces tintedBlitAnchor: it subtracts the frame's authored anchor
 // offsets, clips to the framebuffer, and for every opaque source texel composites
 // the ALP builder's floor((src + dst)/2) over the destination

@@ -385,11 +385,26 @@ func TestLoadMissingNUL(t *testing.T) {
 	}
 }
 
-func TestLoadDuplicateScriptName(t *testing.T) {
-	code := []uint32{0x10065000, 0x10065000}
-	data := makeCOB(code, []string{"Create", "Create"}, []uint32{0, 1}, []string{"base"})
-	if _, err := Load(data); err == nil || !strings.Contains(err.Error(), "duplicate") {
-		t.Fatalf("want duplicate error, got %v", err)
+func TestLoadDuplicateScriptNameKeepsFirstExactMatch(t *testing.T) {
+	// Name starts take the first case-sensitive match; index starts retain
+	// every authored entry, including duplicates [04 R-COB-01 §1].
+	code := []uint32{0x10065000, 0x10065000, 0x10065000}
+	data := makeCOB(code, []string{"Create", "Create", "create"}, []uint32{2, 0, 1}, []string{"base"})
+	prog, err := Load(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := prog.Scripts["Create"]; !ok || got != 2 {
+		t.Fatalf("first exact name = %d, present %v; want 2", got, ok)
+	}
+	if got, ok := prog.Scripts["create"]; !ok || got != 1 {
+		t.Fatalf("case-distinct name = %d, present %v; want 1", got, ok)
+	}
+	if _, ok := prog.Scripts["CREATE"]; ok {
+		t.Fatal("lookup folded script-name case")
+	}
+	if len(prog.ScriptsByID) != 3 || prog.ScriptsByID[0] != 2 || prog.ScriptsByID[1] != 0 || prog.ScriptsByID[2] != 1 {
+		t.Fatalf("authored script indexes = %v; want [2 0 1]", prog.ScriptsByID)
 	}
 }
 

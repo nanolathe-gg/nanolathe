@@ -5004,7 +5004,12 @@ the factor — for row `y` and column `x` of an `n`-sided frame with `H = n/2`,
 vertically, and the `/H` is what makes every frame of every table span the same
 number of ramp steps regardless of its side. Measured against a rendered
 impact: the brightened region is 49×43 pixels, a ratio of 1.140 against
-`sqrt(1.33) = 1.153`. The multi-tick fading envelope remains presentation tuning; the 32-row/256-column layout, the near-identity row 0, the +51.51 bright end, and the exclusive flash binding are direct. The two brightening ramps overlap: `LHT` row 3 and `SHD` row 16
+`sqrt(1.33) = 1.153`. **Established:** the generated shrinking frames and their whole-tick
+countdown provide the complete explosion-flash envelope. Allocation binds the
+secondary cursor, ticking advances it, and drawing submits its current frame
+directly to LHT; no additional age-based opacity or intensity factor is applied.
+Completion clears the cursor, and the pool retains the record only while a
+cursor or debris piece is live [R-FX-01 §4]. Thus the 32-row/256-column layout, the near-identity row 0, the +51.51 bright end, and the exclusive flash binding are direct. The two brightening ramps overlap: `LHT` row 3 and `SHD` row 16
 both lift mean luminance by +6.83, `LHT` row 5 and `SHD` row 17 both by +12.60,
 but the files are distinct and neither is synthesized from the other.
 
@@ -5259,8 +5264,9 @@ every other candidate use is bounded-negative over the whole export.
 
 #### The frame blitter family and the raster primitives [R-COMP-01 §2]
 
-Every GAF frame, tile, panel, fog cloud, cursor and scratch image on screen
-goes through one blitter shell and a handful of primitives. This section is
+GAF sprite, panel, fog, cursor and scratch-image composition uses the blitter
+shell and primitives below. Direct model-texture and visibility-mask raster
+readers have separate contracts [02 R-MALF-01 §6]. This section is
 the implementer's contract for that layer; byte offsets inside the frame
 header are `[fmt gaf]`'s. **Established (direct-static)** unless marked.
 
@@ -5286,10 +5292,15 @@ if dst.left > dst.right or dst.top > dst.bottom or src empty : draw nothing
 A null target means *the screen*: the screen surface is locked for the call
 and unlocked afterwards. A frame with a nonzero sub-frame count draws no
 pixels of its own: each sub-frame is drawn in table order with the same pen,
-through the same blitter — except that a sub-frame whose alternate-blitter
-flag is set is composited through the **tinted** blitter ([R-REN-03D §4])
-instead. Which stock frames set that flag is **Unknown** (decider: an asset
-census over every sub-frame header).
+through the selected consumer. **Ordinary keyed composition** sends a child
+whose alternate-blitter flag is set through the **tinted** blitter
+([R-REN-03D §4]); tinted composition propagates tint to every child. Gray and
+dithered fog instead recurse through every child using their own operation and
+raw-frame gate, without testing that selector. Nonzero-mode glyph composition
+sends all children through tint ([R-FONT-01 §6]); flash preserves LHT
+([R-FX-01 §4]). **Established corpus observation:** no alternate child was
+found in the 958-GAF survey `[fmt gaf]`; that sample does not forbid authored
+alternate children.
 
 **The five span writers.** After the shell:
 
@@ -8033,8 +8044,13 @@ for a compressed frame remaps every source byte through row `mode` of the
 light-level remapper of doc 07 §4 uses — so `mode` is a light-table row
 index, not a palette index. The GUI label painter passes the label's
 authored foreground field as `mode`; the button painter always passes 0.
-The keyed blitter's uncompressed-frame path receives the same byte and
-table; whether it applies the same row is Unknown (below).
+**Established — raw and composite modes differ.** A raw leaf treats `mode`
+as its transparency key and writes `LHT[source × 256 + destination]` for
+each other byte; it does not offset the table by `mode`. No source-row clamp
+is applied, so authored indices beyond the table's rows are unsafe input.
+A composite sends every child through ALP tint, independently of the child
+selector, after the parent light-table gate; the child alpha capability gate
+also applies. A single flattened raster cannot express these distinct paths.
 
 **Word wrap (Established, direct-static).** `gafWrap(dst, s, x, y, maxW,
 maxH, mode)` returns the pen Y after the last line. It splits on the space
@@ -8266,8 +8282,16 @@ PCM adapter use explicit errors at their loading boundary; the optional audio
 caller suppresses playback on failure. Rejecting unsupported codecs, invalid
 PCM widths/rates and unsafe allocations is a host-safety policy, not retail
 format-tag validation `[fmt wav "Nanolathe parser and playback policy"]`.
-The zero-length device-buffer result remains **Unknown** and is tracked at
-`[02 R-MALF-01 §10]`; Nanolathe rejects empty input pending that trace.
+**Established — wrapper boundary.** Static/transient creation passes the
+selected length directly to DirectSound, including zero for empty raw input,
+without a local rejection or repair. Failed creation, lock, short read or
+unlock yields null. Streaming capacity is derived from two seconds of PCM,
+independently of payload length; empty raw input uses ordinary capacity and
+EOF silence fill if the device request succeeds. **Unknown:** the target
+DirectSound implementation's acceptance of zero-byte static buffers and
+unusual PCM parameters. A backend inspection or manual observation is needed;
+another wrapper trace will not settle it `[02 R-MALF-01 §10]`. Nanolathe
+retains its explicit empty-input rejection.
 
 **Allocation modes.** Each decoded sample is dispatched by a mode chosen by
 the *caller*, never by an authored field ([R-AUD-01 §1]): mode 0 creates the
@@ -9688,9 +9712,6 @@ body — most under `R-<id>` headings — and are not restated here.
   census, or manual retail observation. Marked `TODO(CRD-006)` at two sites.
 - Any shell path that uses GDI text directly · §7.1 [R-FONT-01] · import
   and reference census of `TextOut`/`DrawText` callers.
-- The keyed GAF blitter's uncompressed-frame path — whether the `mode` byte
-  selects a light-table row as the compressed path does · §7.1
-  [R-FONT-01 §6] · static trace of the raw keyed writer.
 - Malformed `hattfont` with no frame at the `I` index (undefined by
   construction) — whether any installed asset triggers it · §7.1
   [R-FONT-01 §6] · asset census over GAF fonts.

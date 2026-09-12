@@ -102,6 +102,10 @@ func CompileSightShapes(fs vfs.FSOps) (*SightShapes, error) {
 		if fr == nil || fr.Width == 0 || fr.Height == 0 {
 			return nil, requiredContentError(fs, name, "the retail visibility-mask GAF entry vismask with valid frames", fmt.Errorf("GAF frame %d has zero dimensions", i))
 		}
+		raster, ok := fr.DirectRaster()
+		if !ok {
+			return nil, requiredContentError(fs, name, "a visibility-mask frame with bounded direct raster storage", fmt.Errorf("GAF frame %d cannot supply portable direct raster bytes", i))
+		}
 		shape := SightShape{
 			W:       int32(fr.Width),
 			H:       int32(fr.Height),
@@ -110,11 +114,9 @@ func CompileSightShapes(fs vfs.FSOps) (*SightShapes, error) {
 			Opaque:  make([]bool, int(fr.Width)*int(fr.Height)),
 		}
 		for pixel := range shape.Opaque {
-			// Transparent is parallel to Pixels and already accounts for
-			// the frame's transparent palette index [fmt gaf].
-			if pixel < len(fr.Transparent) {
-				shape.Opaque[pixel] = !fr.Transparent[pixel]
-			}
+			// The mask walker reads storage directly and compares its key; it
+			// never decodes RLE or composites [02 R-MALF-01 §6].
+			shape.Opaque[pixel] = raster.Pixels[pixel] != fr.ColorKey
 		}
 		out.Shapes = append(out.Shapes, shape)
 	}

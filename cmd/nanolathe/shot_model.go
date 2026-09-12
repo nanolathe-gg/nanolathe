@@ -190,9 +190,8 @@ func resolveModelPreviewDefinition(catalog *content.Catalog, requested string) (
 	}
 	var resolved modelPreviewDefinition
 	found := false
-	for _, key := range catalog.SortedUnitKeys() {
-		def, ok := catalog.Unit(key)
-		if !ok || !strings.EqualFold(strings.TrimSpace(def.ObjectName), base) {
+	for _, def := range catalog.UnitRecords() {
+		if def == nil || !strings.EqualFold(strings.TrimSpace(def.ObjectName), base) {
 			continue
 		}
 		candidate := modelPreviewDefinition{ObjectName: strings.TrimSpace(def.ObjectName), Structure: def.BMCode == 0, ZBuffer: def.ZBuffer, Definition: def}

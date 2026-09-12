@@ -208,6 +208,12 @@ func (c *Client) tintedBlitAnchor(f *formats.GAFFrame, x, y int) bool {
 	if c == nil || f == nil || c.pal == nil || len(c.indexed) == 0 {
 		return false
 	}
+	if len(f.Subframes) != 0 {
+		for _, child := range f.Subframes {
+			c.tintedBlitAnchor(child, x, y)
+		}
+		return true
+	}
 	x -= int(f.XOffset)
 	y -= int(f.YOffset)
 	for row := 0; row < int(f.Height); row++ {

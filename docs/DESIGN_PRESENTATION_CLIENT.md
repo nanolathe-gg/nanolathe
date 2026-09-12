@@ -721,6 +721,29 @@ document carries them.
   entry in every retail file carries 1 in its loop word, and the weapon parser
   **clears** it for explosion art, which is what makes an impact play once
   instead of flashing forever `[03 §4.4]` `[06 R-WFX-01 §1]` `[fmt gaf]` [I13].
+* **C9 Consumer-specific GAF dispatch.** The ordinary compositor expands ordered
+  children and applies each alternate selector; tinted and nonzero-mode glyph
+  composites expand every child through ALP. Glyph leaves retain the authored
+  raw/RLE distinction and their own mode/key rule `[03 R-FONT-01 §6]`.
+  Classic gray/dither walks all children in order with the raw gate before each
+  recursion, without clipping to the parent canvas `[03 R-COMP-01 §2]`.
+  Presentation resampling preserves that dispatch selector. The modern raw
+  glyph uses the existing destination-light stream and its approved LHT colour
+  approximation; compressed glyphs retain the source-remap stream. Unsafe raw
+  glyph source rows are suppressed as host safety policy, not clamped.
+  The modern fog atlas cannot encode repeated gray or child ALP applications:
+  composite fog frames return `FogContentError`, which the app and benchmark
+  report as a failure, pending an ordered fog command path. Compressed gray/dither frames are gated
+  before atlas construction; ordinary black RLE remains drawable.
+  Projectile model spans select `GAFFrame.DirectRaster` before either classic
+  rasterization or modern geometry recording. The visibility-mask compiler
+  selects the same view and compares each storage byte to the authored key.
+  RLE input therefore supplies encoded storage bytes to these direct consumers,
+  never decoded coverage. Composites and file spans too short for the raster
+  are rejected at this boundary `[02 R-MALF-01 §6]` `[fmt gaf]`.
+  Remaining feature-mask and structure-texture consumers retain their marked
+  compatibility raster pending traces. Calculated flashes currently have only
+  generated leaf frames; their existing LHT path needs no composite dispatch.
 * **C10 Palette, SHD and LHT.** Palette indices convert to RGBA at present time
   only. Model lighting selects an `SHD` row: a cleared shade bit (`DONT_SHADE`)
   pins the near-identity row **15**; otherwise
@@ -1078,8 +1101,6 @@ Marked in the source:
 Open on doc 03's side, with no marker in these packages because the implemented
 behaviour is bounded rather than guessed:
 
-* Which stock GAF sub-frames set the alternate-blitter flag that routes a
-  sub-frame through the tinted blitter `[03 R-COMP-01 §2]`.
 * The purpose of the nanolathe particle word set at spawn and read by neither
   the advance nor the draw `[03 §5.5]`.
 * Whether the fog cache's `1 = NW` corner-to-bit assignment holds; supported
@@ -1091,8 +1112,12 @@ behaviour is bounded rather than guessed:
   blit site `[03 §3.7]` `[03 §3.9]`.
 * The identical-model six-variant shading matrix predicted by `[03 R-RND-02A]`
   has not been run.
-* Whether the keyed GAF blitter's uncompressed path selects a light-table row
-  the way the compressed path does `[03 R-FONT-01 §6]`.
+* Portable direct-raster treatment of a composite's runtime-relocated child
+  storage. File bytes cannot determine it, so visibility masks reject such a
+  frame and projectile model faces omit it `[02 R-MALF-01 §6]`.
+* Remaining feature-mask and structure-texture GAF readers need individual
+  traces; their ordinary-only compatibility raster is not a retail contract
+  `[02 R-MALF-01 §6]`.
 * The exact PCM conversion for legacy WAV variants beyond the DIGI and raw rules
   `[03 §8.2]`.
 * The player-colour selector of a feature pseudo-unit's `LOGOS` faces. The

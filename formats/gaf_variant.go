@@ -9,9 +9,9 @@ package formats
 // authored anchor offsets XOffset/YOffset are multiplied by two, so a frame
 // placed by the anchor blit lands on exactly the pixels the 1x frame covered,
 // each covering a 2x2 block. ColorKey is carried across unchanged because the
-// key is a palette index, not a size, and the result is a PLAIN frame:
-// Compressed is zero because the pixels are already decoded, and the caller
-// reads them the same way for a raw or an RLE source.
+// key is a palette index, not a size. Compressed retains the source dispatch:
+// gray/dither reject RLE and nonzero glyph modes distinguish raw from RLE even
+// though both pixel planes are already decoded [03 R-COMP-01 §2].
 //
 // Pixels and Transparent are doubled together, and PlainPixels/PlainTransparent
 // keep whatever aliasing the decoder gave them: the decoder points Pixels at
@@ -57,7 +57,7 @@ func (f *GAFFrame) Resampled(num, den int) *GAFFrame {
 		XOffset:          resampleOffset(f.XOffset, num, den),
 		YOffset:          resampleOffset(f.YOffset, num, den),
 		ColorKey:         f.ColorKey,
-		Compressed:       0,
+		Compressed:       f.Compressed,
 		Unknown2:         f.Unknown2,
 		Unknown3:         f.Unknown3,
 		SubframeCount:    f.SubframeCount,

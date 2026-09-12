@@ -1079,7 +1079,10 @@ func TestMissionCoordinateAndTimeStoreWidths(t *testing.T) {
 	if got := floatToFixed(65536).Raw(); got != 0 {
 		t.Fatalf("coordinate wrap = %d", got)
 	}
-	if got := timeToTicks(2147483648.0 / 30); got != -2147483648 {
+	// Use exactly representable binary32 seconds: the argument store occurs
+	// before multiplication, so an arbitrary quotient cannot target a chosen
+	// tick integer without first rounding [08 R-ENTRY-01 §6].
+	if got := timeToTicks(1 << 27); got != -268435456 {
 		t.Fatalf("time = %d", got)
 	}
 }

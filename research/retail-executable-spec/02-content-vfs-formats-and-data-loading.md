@@ -245,7 +245,10 @@ the working key from the stored key byte:
 * otherwise the working key is `~((k >> 6) | (k << 2))` in eight-bit
   arithmetic, and it replaces the stored byte in memory.
 
-Every byte of the blob from offset 20 onward is then transformed in place:
+**Established:** the transform is enabled only when the derived working byte
+is nonzero. Stored low byte `255` derives zero and disables it, just as stored
+zero does; upper key bytes are ignored. For a nonzero working byte, every byte
+of the blob from offset 20 onward is transformed in place:
 
 ```
 plain[0x14 + i] = ((i + 0x14) & 0xFF) XOR key XOR (NOT cipher[0x14 + i])
@@ -269,8 +272,9 @@ bytes**:
 | 8 | 1 | Flags; bit 0 set means this entry is a subdirectory |
 
 Both offsets in every entry are biased by the blob base, and every subdirectory
-is processed recursively at load time. Names live in a contiguous pool that the
-name offsets point into.
+is processed recursively at load time. **Established:** each authored pointer
+is followed independently; neither a root immediately after the header nor
+a contiguous name pool or adjacent records is required.
 
 **Lookup.** A requested path is split on **backslash only**; a forward slash is
 an ordinary name character and never separates components. Each component is
@@ -315,7 +319,7 @@ returns (`[R-MALF-01 §1]`).
 | Offset | Size | Meaning |
 |---:|---:|---|
 | 0 | 4 | `SQSH` tag |
-| 4 | 1 | unknown/version byte, copied but not validated |
+| 4 | 1 | linked writer stores 2; decoder ignores it; original authoring meaning remains unknown |
 | 5 | 1 | method: 1 = LZ77, 2 = zlib (4 or greater is rejected) |
 | 6 | 1 | payload encoding flag |
 | 7 | 4 | compressed payload length |
@@ -810,7 +814,7 @@ scan. A key whose stored value pointer is absent is treated as missing.
 | Accessor | Absent key | Present key |
 |---|---|---|
 | Integer | returns the caller's default | CRT decimal integer conversion: optional sign, leading whitespace, decimal digits, trailing junk ignored, zero for unparsable text; no hexadecimal syntax |
-| Floating | returns the caller's default | CRT decimal floating conversion, returned in x87 extended precision, so any caller scaling happens before the narrowing store |
+| Floating | returns the caller's default | CRT decimal conversion constructs binary64, then returns it at working precision; caller scaling starts from that already-converted value |
 | **Fixed-point** | stores the caller's default **verbatim** | floating conversion, multiplied by 65,536, truncated toward zero — the caller's default is therefore already in 16.16 units |
 | String | copies the caller's default **without applying the length limit**, and reports "defaulted" | bounded copy to the caller's limit with forced termination, and reports "found" |
 | Raw | reports absent | returns the stored text pointer, which is how a caller distinguishes an authored key from a missing one |
@@ -821,6 +825,17 @@ the caller default, while an authored zero returns zero, even with a nonzero
 default. Numeric accessors do not separately report whether a key was found;
 the string/raw accessors do. The fixed-point accessor's default is already in
 stored units, so a default of 65,536 means an authored value of 1.0.
+
+**Established — floating scanner and result.** The linked conversion skips
+ASCII whitespace including vertical tab and form feed, then accepts a sign,
+decimal mantissa and optional `e/E/d/D` exponent. An exponent without digits
+is ignored. The initial decimal point is `.`; hexadecimal, infinity and NaN
+spellings are not recognized. Failed mantissas produce positive zero. Range
+status is ignored: the binary64 result retains signed infinity, subnormals or
+signed zero; an all-zero mantissa retains its sign even with a huge exponent.
+`[fmt tdf "Floating conversion"]` specifies authored examples and the remaining
+long-decimal rounding and locale limits. Caller fixed-point scaling/truncation
+follows this conversion and retains its existing contract.
 
 Other typed behavior:
 
@@ -1180,7 +1195,12 @@ battle entry (§8). **Established** throughout unless marked.
 4. **Sort.** Records 1 .. count−1 are sorted by `unitname` with the
    case-insensitive comparison; record 0 (`None`) stays first. The sort is
    the C++ library's unstable sort (insertion sort below 17 elements,
-   median-of-three partitioning above it), so two records with the same
+   median-of-three partitioning above it). For a range larger than 16, take
+   the median key from its first, middle (`floor(length/2)`) and last records.
+   Scan inward using strict-less comparisons, swapping even equal keys
+   until the scans cross; recurse on the smaller partition and continue
+   with the larger. Finish with insertion that shifts only strictly greater
+   predecessors. Thus two records with the same
    `unitname` land in an order that depends on the algorithm's partition
    choices, not on file order — stock content has no such pair. Every record
    then receives its **unit index** = its position in this order (0 for the
@@ -1235,6 +1255,24 @@ stored; **no match → the C-runtime decimal conversion of the authored text**
 is stored as the index, unbounded — `soundcategory=7;` selects the eighth
 category, and any non-numeric unknown name selects category 0. There is no
 muted placeholder.
+
+**Established — empty and duplicate names.** An absent or empty `unitname`
+remains empty through compaction, sorting and secondary-file selection. If
+`units/.FBI` exists and has nonzero size, the ordinary second parser can reread
+its fields; otherwise that identity remains empty. The compiler builds resource paths from the stored name, never the discovered
+filename: empty names probe `units/.FBI`, `scripts/.COB` and GUI pages beginning
+with `guis/0.GUI`. Only absent `objectname` copies `unitname`; an explicit
+model name still selects that model, while an empty one probes
+`objects3d/.3DO` and follows the ordinary fatal missing-model path.
+
+Compatible duplicate names remain separate sorted records, including empty
+names. Name lookup returns the first equal record in the sorted non-sentinel
+range; equality does not establish a stable order among the duplicates.
+Nanolathe retains the full record table and exposes the first equal record
+through its name index. Index-based construction, resource linking and cloning
+must preserve later equal records `[fmt fbi]`. Its compiler still needs the
+post-sort secondary FBI reopen and selective overwrite pass; preserving the
+record table does not establish that loader parity.
 
 **`YardMap` compilation (Established; complements `[05 R-ECO-01]`).** For a
 unit whose `bmcode` is 0 (a structure), a `FootprintX × FootprintZ` byte map
@@ -2688,7 +2726,7 @@ with default 0 unless noted.
 | `active` | integer | 0 | stored as a byte |
 | `commonattribs` | integer | 0 | stored as a byte |
 | `help` | string | empty | |
-| `gaffile` | integer | 0 | stored as 16-bit |
+| `gaffile` | integer | 0 | low bit installed in the gadget flags; selects external gadget art and bypasses the ordinary button/quickkey builder [07 R-WGT-01 §3] |
 
 **Panel header keys, read on the header gadget:** `totalgadgets` (integer,
 default 0, stored as 16-bit), and `panel`, `crdefault`, `escdefault`, and
@@ -2699,7 +2737,8 @@ parser** — a missing `[VERSION]` is skipped silently and the three bytes stay
 zero — even though every one of the 368 retail GUIs authors it.
 
 **Button keys:** `status` (integer, 16-bit), `text` (string), `quickkey`
-(string, stored as a byte), `grayedout` (integer, 16-bit), `stages` (integer,
+(string, at most 18 bytes before alphabetic/decimal-prefix conversion; result
+stored as a byte [07 R-WGT-01 §11]), `grayedout` (integer, 16-bit), `stages` (integer,
 byte).
 
 **Scrollbar keys:** `range`, `knobpos`, `knobsize` (integers, 16-bit),
@@ -3461,8 +3500,8 @@ loader leaves untouched.
 
 **Frame header, 24 bytes.** Width and height as 16-bit values, signed 16-bit
 x and y offsets, a color-key byte (constant 9 across the whole retail corpus;
-it is the transparent palette index of the raw-pixel path — the blitter skips
-every source pixel equal to it), a compression flag byte (0 = raw pixels,
+it is the transparent palette index of the ordinary raw keyed path — that
+blitter skips every source pixel equal to it), a compression flag byte (0 = raw pixels,
 1 = per-row RLE), a 16-bit subframe-count field of which **only the low
 byte is read** (`[R-MALF-01 §6]`; the high byte selects the table-remapped
 composition path for a subframe), a 4-byte zero field, a 32-bit data
@@ -3471,8 +3510,9 @@ file base. `[fmt gaf]` carries the byte-level layout.
 
 **Raw frame payload.** When the compression flag is clear, the data offset
 points directly at `width × height` bytes, row-major, one palette index per
-pixel. Raw frames carry no skip runs: their only transparency is the frame's
-own color key, so palette index 0 is opaque on this path. 6,068 of the
+pixel. Raw frames carry no skip runs. Ordinary keyed rendering uses the
+frame's own color key, so palette index 0 is opaque on that path. Special
+consumers need their own transparency contract [R-MALF-01 §6]. 6,068 of the
 48,519 retail frames are raw.
 
 **Compressed frame payload.** When the compression flag is set, the data
@@ -3521,6 +3561,12 @@ Archive roots are loaded for cursors, interface chrome, effects,
 fog/visibility masks, title overlays, unit and build sprites, and animation
 sequences. Named entries are cached per root and reused by interface, HUD,
 feature, and weapon paths.
+
+**Established — entry-name comparison.** Lookup scans entry order and returns
+the first matching name. The inspected executable uses the default comparison
+mode: ASCII uppercase bytes fold to lowercase, and all other bytes remain
+unchanged. The locale selector is zero-initialized and has no writer in the
+bounded reference census; Unicode folding is not part of this contract.
 
 ### Model archive (3DO)
 
@@ -3673,9 +3719,10 @@ words; a **record count** for the trailing table; then five offsets:
 | code array | the 32-bit opcode words | the pointer is biased |
 | trailing record table | *record count* records of 8 bytes | the pointer is biased, and the second word of each record is biased |
 
-One header word is overwritten at load with the file's content checksum, so
-its authored value is not used. The loaded object is cached by file, and the
-stamped checksum is the signature that save/load validation compares.
+**Established:** loading computes the original file's content checksum and
+stores it alongside the loaded file in the script cache. This does not
+overwrite an authored COB header word. Save/load validation compares that
+cached content signature.
 
 The opcode encoding carried in the code array is specified in document 04.
 
@@ -3772,10 +3819,9 @@ to the end of the file** (`size − 40`; the `SDAT` size field is never read);
 the sample is treated as 8-bit mono thereafter. Raw samples default to
 11,025 Hz mono 8-bit.
 
-Decoding serves three allocation modes: a plain memory blob (raw fallback
-fixed at 11,025 Hz mono 8-bit), a preloaded DirectSound buffer, and a
-DirectSound streaming path that returns a streaming-handle sentinel rather
-than sample data.
+**Established:** callers choose static, transient load-and-play, or streaming
+DirectSound loading. These are runtime modes, not authored format fields
+[03 R-AUD-01 §1], [03 R-AUD-02 §1].
 
 ## 8. Failure, caching, and lifetime rules
 
@@ -3892,7 +3938,7 @@ the exact comparisons are in the numbered sections that follow.
 | **PCX** (§9) | *skip* when the 128-byte header does not read completely; otherwise *accept-with-garbage*: a short read leaves the previous byte in place, so the decoder re-runs the last byte as every further command and value (a stale `0xC0` never advances the row — **hang**) | row runs are clamped to the remaining row width; dimensions come from the header only | *skip*: manufacturer byte ≠ `0x0A` or version ≠ 5 → 0 to the caller, no message; the caller decides (unit pictures blank) | n/a | n/a | *skip* (header read fails) | `width × height` from two 16-bit extents is an allocation (out-of-memory fault); a file shorter than 768 bytes seeks to a negative palette offset, the seek fails and the 768 palette bytes are read from wherever the position was (*garbage*) |
 | **PAL** (§9) | *accept-with-garbage*: the whole block is what the file held, the consumer reads 1,024 bytes | n/a | none | n/a | a `.PAL` that is missing **or zero-length** is rebuilt from `palettes\<name>.PCX`, written back to `palettes\<name>.PAL` on the host, and `palettes\PALETTE.ALP`, `.LHT`, `.SHD` are deleted; the PCX missing too → **fatal** (path of the PCX) | see previous cell | n/a |
 | **FNT** (§9) | *garbage or fault*: no validation of any kind; glyph offsets are used as read (`[03 R-FONT-01 §1]`) | same | none | n/a | a font file missing → **fatal** (path) for the two startup fonts and every side font (§6) | *skip* → fatal as missing | none (offsets are 16-bit) |
-| **WAV** (§10) | *skip*, silent: a RIFF whose `data` size exceeds what can be read → the buffer is released and the sample is null; a RIFF cut before `fmt ` or `data` → null | same | *accept-with-garbage*: anything that is neither `DIGI`+`HSHD`+`SDAT` nor `RIFF`+`WAVE` is played as **raw 8-bit mono 11,025 Hz** from byte 0, header included | first `fmt `/`data` chunk wins | a sample file missing → null; the alias plays nothing, silently | *Unknown* — a zero-length file classifies as raw with length 0; whether the DirectSound buffer creation fails or plays nothing · static trace of the buffer-create wrapper's zero-size path, or manual observation | chunk sizes are compared signed: `fmt ` below 16 bytes or a `data` size ≤ 0 → null; the RIFF walk stops when the next chunk offset ≥ the RIFF size + 8 |
+| **WAV** (§10) | *skip*, silent: a RIFF whose `data` size exceeds what can be read → the buffer is released and the sample is null; a RIFF cut before `fmt ` or `data` → null | same | *accept-with-garbage*: anything that is neither `DIGI`+`HSHD`+`SDAT` nor `RIFF`+`WAVE` is played as **raw 8-bit mono 11,025 Hz** from byte 0, header included | first `fmt `/`data` chunk wins | a sample file missing → null; the alias plays nothing, silently | *Unknown (external backend)* — empty raw reaches a zero-byte static buffer request unchanged; streaming instead requests its regular two-second capacity and fills EOF with silence · inspect or manually observe the target DirectSound backend | chunk sizes are compared signed: `fmt ` below 16 bytes or a `data` size ≤ 0 → null; the RIFF walk stops when the next chunk offset ≥ the RIFF size + 8 |
 | **Save (HAPIBANK)** (§11, layout `[08 R-SAVE-02]`) | *garbage or fault*: item tables are trusted | same | tag ≠ `HAPIBANK` or bank version ≠ 1 → the load-game screen's modal `Invalid savegame file`, back to the screen; a compressed directory or account that fails to decode → **fatal** `[HapiBank::OpenBank] Decompression Error: %s` / `[HapiBank::LoadAccount] Decompression Error: %s` + `File: %s` | doc 08 | `Mission` missing or naming no mission, `Gametype` outside 1..2 → `Invalid savegame file`; save `Version` ≠ 0x11 → units skipped (`[08 R-SAVE-02]`) | *skip* (bank open fails) | doc 08 |
 | **TAD demo** | not a retail input — the executable neither reads nor writes `.tad`; `[fmt tad]` documents a third-party recorder | — | — | — | — | — | — |
 
@@ -4074,14 +4120,22 @@ over the 958 GAFs of the reference install (123,294 frames including
 subframes) finds a maximum subframe count of 12 and no nonzero high byte.
 `[fmt gaf]` carries the byte-level statement.
 
-**Unknown — special consumers and nested relocation.** The ordinary loader
-relocates direct child tables, while general drawing recursively composes
-children. Which authored nested layouts survive that loader requires a
-complete caller/layout trace. Alternate children in consumers that directly
-read a raster (scaled images, light-table glyphs, feature/fog masks and model
-textures) also require their own call-site trace. Nanolathe's temporary plain
-compatibility raster includes only ordinary children and leaves alternate-only
-coverage transparent; that fallback is not an established retail result.
+**Established — consumer-specific composition.** Gray and dithered fog
+compositors recurse through every child with their own operation and raw-frame
+gate, ignoring the alternate selector. Nonzero-mode glyph composition sends
+every child through ALP tint; flash composition preserves its LHT operation.
+Precomputed visibility masks and projectile-model texture spans instead read
+the selected frame data directly as raster storage, without decoding children.
+The frame-to-surface adapter also wraps the data directly. A dormant scaled
+keyed compositor dispatches alternate children to scaled ALP, but no live
+caller was found; it does not establish a general scaled-image rule.
+
+**Unknown — remaining consumers and nested relocation.** Ordinary loading
+relocates direct children only, while drawing can recurse. Which authored
+nested layouts survive requires a caller/layout trace. Feature-mask and
+structure-texture paths outside the bounded census remain open. Nanolathe's
+ordinary-only compatibility raster is a host fallback, not a universal retail
+composition; callers must follow their particular contracts `[fmt gaf]`.
 
 The RLE blitter decodes each row until it has produced `width` pixels: a
 skip, repeat or literal run that would overshoot is **clamped to the
@@ -4185,6 +4239,16 @@ is silent everywhere: the alias plays nothing and no message is raised. The
 raw path (no recognized header) plays the whole file, header bytes included,
 as 8-bit mono 11,025 Hz.
 
+**Established — device boundary.** Static and transient loading pass the
+selected PCM parameters and payload length directly to DirectSound buffer
+creation, with no special zero-length rejection. Creation, lock, short-read
+or unlock failure releases the buffer and returns null. Streaming derives
+capacity from two seconds of PCM rather than file length; empty raw input
+therefore receives normal capacity and EOF silence fill if creation succeeds.
+**Unknown:** the external backend's acceptance of zero-byte static requests
+or unusual PCM parameters; the wrapper trace cannot determine that result
+`[fmt wav]`, [03 §8.2].
+
 #### Save file [R-MALF-01 §11]
 
 `[08 R-SAVE-02]` owns the bank layout and the version-0x11 gate. The failure
@@ -4205,33 +4269,26 @@ Open items only. Each bullet states what is unknown, the section that owns it,
 and the decider that would close it.
 
 Fixed-point overflow is closed by [01 R-DET-01 §1] and [R-MALF-01 §4].
-Floating text conversion still needs a bounded comparison of the retail CRT
-and host parser for overflow and unusual exponent spellings; the decider is
-a trace of those conversion cases, not ordinary stock-value tests. The
-fixed-point conversion after parsing remains settled.
+Floating text conversion still needs a bounded comparison for long-mantissa
+rounding, intermediate scaling and extreme exponent cancellation, plus a
+trace of alternate numeric-locale selection. Scanner spelling, malformed
+exponents and range-result selection are established in "Typed accessors";
+ordinary stock-value tests do not settle the remaining arithmetic. Fixed-point
+conversion after parsing remains settled.
 Unit-limit admission is established by [05 R-SHARE-01 §§7–10]; loader-side
 questions do not supersede those consumer contracts.
 
-* Empty `unitname` finalization · §5 "Unit record" · trace catalog sorting,
-  name lookup and secondary file loading for an empty parsed name. The string
-  store itself is Established and defaults to empty. Nanolathe currently
-  substitutes the filename stem in `compileUnitSection`; that compatibility
-  fallback is not established retail behavior.
 
 * Optional 3DO auxiliary-reference targets and COB trailing-record meanings ·
   §7 "Model archive (3DO)" / "Compiled script archive (COB)" · find authored
   nonzero references with identifiable target data or a traced consuming
   reader. Relocation alone establishes offsets, not the target schema.
-* Non-ASCII GAF entry-name comparison · §7 "GAF animation archive" · trace
-  the retail comparison and locale setup; Nanolathe currently folds ASCII
-  only and preserves other bytes.
-* F1 unit-picture PCX trailer-palette installation · [07 R-HUD-03 §8] · trace
-  the picture consumer's palette-installation calls. The current client uses
-  active-palette indices; the frontend background contract does not alone
-  establish this battle-window behavior.
-* GAF nested child layouts supported by ordinary relocation, and alternate
-  child behavior in scaled/light-table/feature/fog/model raster consumers ·
-  [R-MALF-01 §6] · static trace of each consuming blitter and loader.
+* GAF nested child layouts supported by ordinary relocation, and remaining
+  alternate-child behavior in feature-mask and structure-texture consumers ·
+  [R-MALF-01 §6] · trace each selected frame through its actual pixel reader.
+  Fog, glyph, flash, precomputed visibility-mask and projectile-model paths
+  have bounded contracts there; implementation reconciliation is separate
+  from recovering the remaining consumers.
 * Data contract of `ONLLoadConfigFile` · §1 · not decidable from the retail
   executable — the function is defined by `online.dll`. The executable side
   (directory resolution, `ONLGetVersion()==3` gate, 336-byte block, zeroed
@@ -4253,10 +4310,10 @@ questions do not supersede those consumer contracts.
   "Sound aliases" · a reader/lifetime trace beyond that census. DirectSound
   sample and streaming descriptors are established in [03 R-AUD-01 §1] and
   [03 R-AUD-02 §1]; those flags are not an open loader question.
-* Zero-length WAV sample: the classifier reports raw with length 0; whether
-  the DirectSound buffer creation fails (null sample) or an empty buffer
-  plays nothing · §7 `[R-MALF-01 §10]` · static trace of the buffer-create
-  wrapper's zero-size handling, or manual retail observation.
+* External DirectSound acceptance of zero-byte static WAV buffers or unusual
+  PCM parameter combinations · `[R-MALF-01 §10]`, [03 §8.2] · inspect or
+  manually observe the target backend. The wrapper passes these requests
+  without a local repair; streaming capacity is independent of payload size.
 * Exact GUI gadget capacity of the fixed window record (about 199 by the
   allocation size and record stride; the loader checks no count) · §6
   `[R-MALF-01 §5]` · static trace of the gadget array's base offset in the

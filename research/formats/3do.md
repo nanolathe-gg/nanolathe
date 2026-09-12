@@ -365,6 +365,14 @@ that most looks like it wants a model bottom — the `setSFXoccupy` band-3
   object and primitive records. Their relocation is established; an authored
   nonzero reference with identifiable target data, or a traced runtime reader,
   would settle their content. Nanolathe preserves only the raw offset words.
+  **Established (bounded sources):** a fresh per-archive enumeration of
+  `totala1.hpi`, `rev31.gp3`, `ccdata.ccx` and `btdata.ccx` finds all such
+  words zero across 761 model copies (376, 73, 211 and 101 respectively).
+  The inspected 3DOBuilder writer also emits zero for both auxiliary words;
+  its loader does not consume their targets. Neither observation establishes
+  that a nonzero reference is inert in every runtime path. This residual
+  gates custom-file interpretation and relocation during re-encoding, not
+  the surveyed stock models.
 - Stock models contain noncanonical `IsColored` values and out-of-range
   `ColorIndex` values beside texture names. A lossless parser must preserve
   both raw fields; their runtime precedence and shading behavior are owned by
@@ -386,3 +394,5 @@ that most looks like it wants a model bottom — the `setSFXoccupy` band-3
 - Verified against `objects3d/bomb1.3do` and `objects3d/armflash.3do` from
   `totala1.hpi` and a structural survey of all 761 retail models (base game,
   rev31, Core Contingency, Battle Tactics).
+- Kinboat's TA tools source archive, 3DOBuilder `class3do.cls` header and
+  primitive writers: evidence for this editor's zero auxiliary fields only.

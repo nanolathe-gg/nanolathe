@@ -38,16 +38,16 @@ rendering glyphs (they produce correct letterforms).
 | Offset | Size | Type | Description |
 | ---: | ---: | --- | --- |
 | 0x00 | 1 | u8 | glyph height in pixels (all glyphs share it) |
-| 0x01 | 1 | u8 | never read by the retail executable; 0 in every retail font |
+| 0x01 | 1 | u8 | not read by the traced retail font consumers; 0 in every surveyed retail font |
 | 0x02 | 1 | i8 | **vertical offset**: the executable places the glyph's first row at `penY − y_offset` (it reads the byte as signed). 1–3 across the retail fonts (height ≤ 12 → mostly 1; height 13–17 → 2 or 3) |
 | 0x03 | 1 | u8 | **first character code**: the offset table is indexed by `code − first_code`; 0 in every retail font |
 | 0x04 | 2 × (256 − first_code) | u16[] | absolute file offset of each character's glyph record, indexed by `code − first_code`; `0` = character not present. The executable applies no upper bound to the index, so a font must carry an entry for every code from `first_code` to 255 |
 
 The header is four *single* bytes, not the two 16-bit words (`u16 height` at
 0x00, `u16 unknown` at 0x02) that older community notes describe: the
-executable reads the height from byte 0 alone, never reads byte 1, reads byte
+font consumers read the height from byte 0 alone, skip byte 1, read byte
 2 as the signed vertical offset the rasterizer subtracts from the pen Y, and
-reads byte 3 as the first character code that biases the offset table. The
+read byte 3 as the first character code that biases the offset table. The
 u16 reading appears to work only because bytes 1 and 3 are zero in every
 retail font. See [03 §7.1] (`R-FONT-01 §1`, `§4`) for the rasterizer
 contract.
@@ -103,8 +103,11 @@ a nonzero first code and a negative vertical offset.
 
 ## Unknowns and caveats
 
-- Byte 0x01 is never read; its authored meaning, if any, is unknown (it is
-  0 in every retail font). Decider: a font-authoring tool of the period.
+- **Established (traced consumers):** byte 0x01 is not read by the height
+  accessors, text-width walker, string drawer or glyph rasterizer
+  [03 R-FONT-01 §1]. **Unknown:** its authored meaning, if any. Decider: a
+  font-authoring tool of the period. This is an authoring-history gap, not
+  a missing input to these runtime consumers; the parser preserves the byte.
 - **No validation at all.** The file is read whole
   and used in place; a missing or zero-length font is fatal (path as the
   message) for the two startup fonts and every side font; a truncated font's
@@ -127,3 +130,8 @@ a nonzero first code and a negative vertical offset.
   survey (this repository, 2026). [03 R-FONT-01 §1] records a later survey
   of 25 unique fonts; these are bounded corpus observations, not a fixed
   format-level font count.
+- A fresh per-archive census of `totala1.hpi`, `rev31.gp3`, `ccdata.ccx` and
+  `btdata.ccx` finds 39 font copies (24, 5, 5 and 5), representing 25 distinct
+  logical paths and 21 distinct file-content hashes. Byte 0x01 is zero in
+  every copy. Counts distinguish archive copies, names and content rather
+  than assuming those populations coincide.

@@ -23,7 +23,7 @@ func decodeMP3(source io.ReadSeeker, sampleRate int) (io.ReadCloser, error) {
 	}
 	// Derive duration from decoded EOF: the MP3 frame index can include frames
 	// that produce no PCM, so its declared length can add trailing silence.
-	stream := audio.ResampleF32(decoded, 0, decoded.SampleRate(), sampleRate)
+	stream := audio.ResampleReaderF32(decoded, 0, decoded.SampleRate(), sampleRate)
 	return &mp3Reader{stream: stream}, nil
 }
 

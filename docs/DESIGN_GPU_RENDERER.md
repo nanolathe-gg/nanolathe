@@ -2760,6 +2760,16 @@ op builder in `internal/render/fog.go`. A site that draws in HUD space is left
 alone. The build before this section scaled only terrain and model geometry,
 which is why a 2× capture showed fog, sprites and bars at 1× positions.
 
+Fog edge clipping correction (2026-09-11): both executors keep the projected
+cell origin for GAF placement and clip destination writes only after the
+frame offset is applied [03 §3.3][R-RR16-A §3]. Previously the classic sink
+clamped the origin before calling its blitter, and the GPU shader duplicated
+that clamp. A partially offscreen top or left cell therefore pinned its art
+to the screen edge; at 2× it could displace the cloud by nearly 64 pixels.
+Fill rectangles remain clipped. Regression fixtures pan black, gray and
+dithered gray masks past both edges at 1×, 1.5× and 2× and compare the result
+with a crop of the unpanned image, including actual GPU readback.
+
 ### 14.3 Detail art — contract D2
 
 The client takes one detail-art provider, installed by the command layer at

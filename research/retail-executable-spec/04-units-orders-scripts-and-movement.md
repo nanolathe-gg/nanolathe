@@ -2317,10 +2317,9 @@ creator allocates only for a definition whose `bmcode` is exactly 1
 ([R-COLL-01 §1] "a building has no mover") — and queues `BuildingBuild` for
 a mover-less unit (a factory or other structure) and `MobileBuild` at `x,y`
 for a unit that has one. The choice is a property of the acting unit's
-`bmcode`, never of the product's name field (the catalog is keyed by that
-name, so a resolved product always has a non-empty one, and the FBI
-compiler's base-name fallback for an unauthored `unitname` is irrelevant to
-this verb).
+`bmcode`, never of the product's name field. An empty stored `unitname` is
+not replaced by a filename during catalog compilation [02 R-CAT-01 §5];
+name lookup and the acting unit's mover test remain separate operations.
 
 **Established fact:** Postlude: when at least one order was queued, bit 5 of
 the unit's class/state word clears; and unless the script contained
@@ -2335,6 +2334,26 @@ malformed numbers convert whatever the destination cells already held —
 deterministic per stack state, undefined per language spec. A comma-free run
 longer than 255 characters overflows the 256-byte tokenizer frame buffer;
 retail accepts the risk and a clean implementation should clamp.
+
+**Established — formatted-scan continuation.** Arguments are scanned from one
+byte string. Signed decimal integer conversion consumes a digit prefix with
+wrapping 32-bit accumulation/negation; it neither saturates nor retries as a
+float. Thus an integer `2.5` consumes `2`, leaving `.5` for the next field.
+The first failed field stops later conversion and preserves every untouched
+destination. Floating conversion stores binary32, and range overflow remains
+a successful conversion to signed infinity. Names stop at the first excluded
+byte; the allowed scansets are in [08 "Argument parsing"] and `[fmt ota]`.
+
+Build/stockpile counts begin at one; wait duration/selector and patrol timeout
+begin at zero; standing operands begin at their current state. Failed scans
+retain those seeds. Coordinate temporaries lacking initialization instead
+carry run-specific prior contents, which OTA text cannot determine.
+**Implementation boundary:** Nanolathe uses a sequential prefix scanner with
+binary32 destinations and retains the specified caller seeds. Untouched
+uninitialized coordinates use an explicit zero host policy. **Unknown:** exact
+rounding of adversarial decimal inputs through the retail intermediate
+converter; the host uses Go binary32 conversion pending that arithmetic trace
+`[fmt ota]`.
 
 ### 3.7 Selection, picking, command latches, and build-command UI semantics
 
@@ -12252,6 +12271,13 @@ serialization. The payload installer clears the record's satisfied bits
 `0x20`, `0x40`, `0x80`, `0x100` and `0x200` whenever it installs a non-null
 payload, and raises `0x80` on the record whose payload it replaces.
 
+**Unknown — network radial-goal initialization.** The radial-follow goal
+consumer uses a retained distance, but the audited network serializer does not
+transmit it and its reconstruction path does not assign it. A complete
+initialization or reachability trace is needed before treating that field as
+zero or adding a wire field [08 "Unit-sync ownership and body structure"],
+`[fmt tad]`. The ordinary authored-marker consumer rules below remain settled.
+
 **Established — target reference lifetime.** Each air path marker links its
 target through the shared unit-reference helper, with no notification receiver.
 Final target removal unlinks and clears every such reference, including markers
@@ -13991,13 +14017,12 @@ and the decider that would close it.
 
 ### Orders and queues
 
-- **Unknown implementation boundary:** initial-mission integer operands use
-  retail formatted scans [§3.6], but the runtime library's integer-prefix,
-  overflow and failed-field continuation behavior has not been translated
-  into the implementation contract. Trace the scanner and these callers with
-  malformed, fractional and out-of-range operands. Nanolathe retains its
-  permissive integer/float fallback as an explicit placeholder; that fallback
-  is not retail evidence and is not covered by the float-to-low-word audit.
+- **Unknown:** run-specific uninitialized coordinate values consumed after
+  failed InitialMission scans, and consequences of token-buffer overflow
+  [§3.6]. The deterministic scanner grammar is established and implemented.
+  Exact adversarial-decimal rounding through
+  the intermediate converter remains untraced `[fmt ota]`. No further scan
+  trace can derive untouched temporary contents from authored text alone.
 
 - Which front-end setting or mission key writes the session option bit that
   admits every candidate in the shared target search regardless of `shootme`

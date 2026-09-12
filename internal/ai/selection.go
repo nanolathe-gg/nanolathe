@@ -317,7 +317,14 @@ func SelectWithCandidates(m Selector, builder *units.Unit, econ *economy.Service
 			continue
 		}
 		// C5: profile limit (count < limit or -1) [08] [PLAN 11 C5]
+		def := strat.lookupDef(ck)
 		limit := profile.LimitForControl(controlByte, ck)
+		if def != nil {
+			limit = profile.LimitForDefinition(controlByte, def)
+		}
+		// TODO(question): strategic Counts/ClassVectors and Candidate.DefKey
+		// still use names. Carry catalog indices through their producers before
+		// selecting later equal-name records [02 R-CAT-01 §5][08 R-AI-01 §8].
 		var count int32
 		if strat != nil && strat.Counts != nil {
 			count = strat.Counts[ck]
@@ -344,6 +351,9 @@ func SelectWithCandidates(m Selector, builder *units.Unit, econ *economy.Service
 			return Candidate{}, false
 		}
 		weight := profile.WeightFor(ck)
+		if def != nil {
+			weight = profile.WeightForDefinition(def)
+		}
 		score := ComputeScore(in, cv, weight)
 		if score <= 0 {
 			continue

@@ -211,22 +211,13 @@ func (a *Archive) index() error {
 	if err := readAtFull(a.reader, 0, blob); err != nil {
 		return fmt.Errorf("%w: directory: %v", ErrMalformedArchive, err)
 	}
-	// Key derivation uses only the low byte (02:132-135). Stored 0 means plain.
-	if headerKeyWord != 0 {
-		keyByte := byte(headerKeyWord & 0xFF)
-		derived := byte((keyByte >> 6) | (keyByte << 2))
-		workingKeyByte := ^derived
-		workingKey := uint32(workingKeyByte)
-		// Transform every byte from offset 0x14 onward: plain = ((pos)&FF) XOR key XOR NOT cipher (02:140).
-		if len(blob) > hpiHeaderSize {
-			decrypt(blob[hpiHeaderSize:], hpiHeaderSize, workingKey)
-		}
-		a.key = workingKey
-		// Keep header key byte in blob consistent with retail (overwrites stored byte).
-		blob[12] = byte(workingKey)
-		blob[13] = 0
-		blob[14] = 0
-		blob[15] = 0
+	// Only the low stored byte participates. Stored 0 and 255 both select
+	// plain data: the latter derives a zero working key [02 §2].
+	if keyByte := byte(headerKeyWord); keyByte != 0 {
+		a.key = uint32(^(keyByte>>6 | keyByte<<2))
+	}
+	if a.key != 0 {
+		decrypt(blob[hpiHeaderSize:], hpiHeaderSize, a.key)
 	}
 
 	view := hpiDirectoryView{archive: a, bytes: blob, start: 0, end: blobSize}
@@ -335,7 +326,7 @@ func (v hpiDirectoryView) walkDirectory(nodeOffset uint64, parent, originalParen
 		}
 		original := originalJoin(originalParent, name)
 		lookupVisible := visible && lastEntry[foldLogicalName(name)] == i
-		if v.bytes[flagIndex] == 1 {
+		if v.bytes[flagIndex]&1 != 0 {
 			info := EntryInfo{Path: logical, Name: name, IsDir: true, OriginalPath: original,
 				Source: Provenance{LogicalPath: logical, OriginalPath: original, ProviderType: "hpi", SourcePath: v.archive.name}}
 			if lookupVisible {
@@ -346,9 +337,6 @@ func (v hpiDirectoryView) walkDirectory(nodeOffset uint64, parent, originalParen
 				return err
 			}
 			continue
-		}
-		if v.bytes[flagIndex] != 0 {
-			return fmt.Errorf("%w: entry %q has invalid flag %d", ErrMalformedArchive, name, v.bytes[flagIndex])
 		}
 		recordOffset := uint64(dataOffset)
 		data, err := v.u32(recordOffset)
@@ -716,12 +704,14 @@ func decodeLZ77(source io.ByteReader, expected uint64) ([]byte, error) {
 	output := make([]byte, 0, int(expected))
 	var window [4096]byte
 	write := 1
-	for uint64(len(output)) < expected {
+	// Retail terminates on a zero match position, then checks the output
+	// size. Reaching the declared size alone is not a terminator [02 §2].
+	for {
 		tag, err := source.ReadByte()
 		if err != nil {
 			return nil, errors.New("LZ77 tag is truncated")
 		}
-		for bit := 0; bit < 8 && uint64(len(output)) < expected; bit++ {
+		for bit := 0; bit < 8; bit++ {
 			if tag&(1<<bit) == 0 {
 				value, err := source.ReadByte()
 				if err != nil {
@@ -757,7 +747,6 @@ func decodeLZ77(source io.ByteReader, expected uint64) ([]byte, error) {
 			}
 		}
 	}
-	return output, nil
 }
 
 func lzAppend(output *[]byte, window *[4096]byte, write *int, value byte, expected uint64) error {

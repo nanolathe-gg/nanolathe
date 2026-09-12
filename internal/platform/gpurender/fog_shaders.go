@@ -105,11 +105,9 @@ const (
 // transforms the colour the previous one produced, so the chain is the sequential
 // byte writers' chain.
 //
-// The anchor arithmetic reproduces one further detail of the composer: it
-// clamps a cell's rectangle to the framebuffer BEFORE handing the origin to the
-// fog GAF blit, so a cell that hangs off the left or top edge draws its frame
-// from the clamped origin. `anchor` is that clamped origin; `raw` is the
-// unclamped one the 32·s-pixel fills are measured from.
+// GAF offsets are baked into the atlas relative to the unclipped cell origin
+// [R-RR16-A §3]. Clipping limits destination writes; it must not move that
+// origin to the screen edge when a camera pan takes the cell offscreen.
 var fogPassShaderSource = fmt.Sprintf(`//kage:unit pixels
 
 package main
@@ -175,8 +173,7 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 				continue
 			}
 			raw := custom.xy + c*cellPix
-			anchor := max(raw, vec2(0.0, 0.0))
-			d := p - anchor
+			d := p - raw
 			inCell := p.x >= raw.x && p.x < raw.x+cellPix && p.y >= raw.y && p.y < raw.y+cellPix
 			inTile := d.x >= 0.0 && d.x < tilePix && d.y >= 0.0 && d.y < tilePix
 			// Channel one renders before channel zero.

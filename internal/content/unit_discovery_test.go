@@ -20,3 +20,22 @@ func TestUnitUnknownKeyOrderPreservesDistinctHighBytes(t *testing.T) {
 		t.Fatalf("high-byte authored keys collapsed: %q", keys)
 	}
 }
+
+func TestUnitEmptyNameDoesNotUseDiscoveredFilename(t *testing.T) {
+	// Absent and authored-empty identities remain empty; only an absent
+	// Objectname defaults to that stored identity [02 R-CAT-01 §5].
+	for _, text := range []string{
+		"[UNITINFO]{}", "[UNITINFO]{unitname=;}",
+		"[UNITINFO]{unitname=; objectname=explicit;}",
+	} {
+		section := mustParseTDF(t, text).Root.Sections()[0]
+		u := compileUnitSection(section, "units/discovered.fbi", "", Provenance{})
+		if u.UnitName != "" || u.CanonicalKey != "" {
+			t.Fatalf("%s: identity = %q / %q, want empty", text, u.UnitName, u.CanonicalKey)
+		}
+		wantModel, _ := section.StringValue("objectname", "")
+		if u.ObjectName != wantModel {
+			t.Fatalf("%s: model = %q, want %q", text, u.ObjectName, wantModel)
+		}
+	}
+}

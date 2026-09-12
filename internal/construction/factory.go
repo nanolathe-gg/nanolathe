@@ -223,7 +223,6 @@ type Service struct {
 	// target), which internal/orders owns. There is no alternate Nanolathe save
 	// codec [I13]; do not invent a factory-only format.
 	placements      map[pool.Handle]placementRecord // product -> occupancy footprint and immutable definition
-	productIndex    map[uint32]string               // product id -> catalog key, built once
 	messages        []string                        // verbatim diagnostics [05 C18][05 C21][05 C22]
 	admissions      []AdmissionDiagnostic           // bounded ring of state-2 outcomes, diagnostic only
 	admissionsStart int
@@ -743,25 +742,7 @@ func NewService(terrain *world.Terrain, catalog *content.Catalog, w *units.World
 	s := &Service{Terrain: terrain, Catalog: catalog, World: w, Economy: econ}
 	s.builderLinks = make(map[pool.Handle]pool.Handle)
 	s.placements = make(map[pool.Handle]placementRecord)
-	s.buildProductIndex()
 	return s
-}
-
-// buildProductIndex materializes the product-id to catalog-key reverse map once
-// [05 C16][P0-I05]. Product IDs are stable catalog indices (1-based, 0 sentinel)
-// via Catalog.UnitDefIndex, never FNV-1a hash (N04). Sorting ensures determinism (I1).
-func (s *Service) buildProductIndex() {
-	s.productIndex = make(map[uint32]string)
-	if s.Catalog == nil || s.Catalog.Units == nil {
-		return
-	}
-	keys := s.Catalog.SortedUnitKeys()
-	for i, k := range keys {
-		id := uint32(i + 1) // 1-based index matches Catalog.UnitDefIndex [P0-I05][02 §5]
-		if _, seen := s.productIndex[id]; !seen {
-			s.productIndex[id] = k
-		}
-	}
 }
 
 // Messages returns the verbatim diagnostics emitted so far [05 C18][05 C21][05 C22].
@@ -921,29 +902,13 @@ func (s *Service) raiseStatus(u *units.Unit, kind uint8, text string) {
 // LastKill returns the most recent kind-9 termination packet [05 C21].
 func (s *Service) LastKill() KillInfo { return s.lastKill }
 
-// productDef resolves an order payload's product id to its definition through
-// the reverse index built at Service construction [05 C16][P0-I05].
-// IDs are stable catalog indices (1-based), never FNV hash [P0-I05].
+// productDef resolves the stable record ID directly. A name round trip would
+// collapse duplicate FBI definitions to their first equal record [02 §5].
 func (s *Service) productDef(pid uint32) *content.UnitDef {
 	if s == nil || s.Catalog == nil || pid == 0 {
 		return nil
 	}
-	key, ok := s.productIndex[pid]
-	if !ok {
-		// Fallback: try direct catalog lookup via index [P0-I05]
-		if def, ok2 := s.Catalog.UnitDefByIndex(pid); ok2 {
-			return def
-		}
-		return nil
-	}
-	def, ok := s.Catalog.Unit(key)
-	if !ok {
-		// Fallback to index-based lookup if key missing (catalog changed)
-		if def2, ok2 := s.Catalog.UnitDefByIndex(pid); ok2 {
-			return def2
-		}
-		return nil
-	}
+	def, _ := s.Catalog.UnitDefByIndex(pid)
 	return def
 }
 

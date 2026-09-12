@@ -280,6 +280,10 @@ func (g *battleBenchmark) Draw(screen *ebiten.Image) {
 		g.gpu.SetDisplayPalette(g.c.DisplayPalette())
 		g.gpu.SetGlow(g.c.Glow())
 		g.img = g.gpu.Execute(list, 1920, 1080)
+		if err := g.gpu.FogContentError(); err != nil {
+			g.err = err
+			return
+		}
 		if g.img != nil {
 			g.c.CommitStrategicPresentation()
 		}

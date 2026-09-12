@@ -1,9 +1,12 @@
 package client
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/palette"
 	"github.com/nanolathe-gg/nanolathe/internal/render"
 )
@@ -138,5 +141,53 @@ func TestFogGrayRemapKind(t *testing.T) {
 	}
 	if c.indexed[31*64+32] != 3 {
 		t.Fatalf("gray remap must stay inside the 32x32 cell, got %d outside", c.indexed[31*64+32])
+	}
+}
+
+// Scrolling past a screen edge must crop the world-anchored art, retaining
+// its signed frame offset [03 §3.3][R-RR16-A §3]. Exercise the complete sink:
+// the blitter alone already clips correctly.
+func TestFogScrollClipsWithoutMovingArt(t *testing.T) {
+	for _, scale := range []camera.ViewScale{camera.ViewScaleNative, camera.ViewScaleMid, camera.ViewScaleDetail} {
+		for _, kind := range []render.FogKind{render.FogKindGAFCh0, render.FogKindGAFCh1} {
+			for _, patterned := range []bool{false, true} {
+				t.Run(fmt.Sprintf("scale%d/kind%d/patterned%t", scale, kind, patterned), func(t *testing.T) {
+					c, err := New(Options{Width: 128, Height: 128})
+					if err != nil {
+						t.Fatal(err)
+					}
+					tables := &palette.Tables{}
+					tables.Gray[200] = 100
+					c.SetPalette(tables)
+					frame := fogMaskFrame(16, 16, -16, -16)
+					entry := &formats.GAFEntry{Frames: []formats.GAFFrameRef{{Frame: frame}}}
+					c.fogGAF = &formats.GAF{}
+					c.fogGray[0], c.fogBlack[0] = entry, entry
+					var baseline []byte
+					// Multiples of four keep the checker phase identical at all three scales.
+					for _, pan := range [][2]int32{{0, 0}, {0, 4}, {0, 16}, {0, 28}, {4, 0}, {16, 0}, {28, 0}, {12, 12}} {
+						cam := &camera.Camera{X: 16 + pan[0], Z: 16 + pan[1], Scale: scale}
+						c.SetCamera(cam)
+						for i := range c.indexed {
+							c.indexed[i] = 200
+						}
+						x0, y0, x1, y1 := render.FogScreenRect(cam, 0, 0)
+						classicSink{c: c}.Fog(drawlist.Fog{Ops: []render.FogOp{{ScreenX0: x0, ScreenY0: y0, ScreenX1: x1, ScreenY1: y1, Kind: kind, Variant: 0, Frame: 0, Patterned: patterned, Scale: scale}}})
+						if baseline == nil {
+							baseline = append([]byte(nil), c.indexed...)
+							continue
+						}
+						dx, dy := int(scale.Project(pan[0])), int(scale.Project(pan[1]))
+						for y := 0; y < 128-dy; y++ {
+							for x := 0; x < 128-dx; x++ {
+								if got, want := c.indexed[y*128+x], baseline[(y+dy)*128+x+dx]; got != want {
+									t.Fatalf("pan %v pixel (%d,%d) = %d, want cropped world pixel %d", pan, x, y, got, want)
+								}
+							}
+						}
+					}
+				})
+			}
+		}
 	}
 }

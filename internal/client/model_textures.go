@@ -163,8 +163,7 @@ func NewModelTextureRegistry(fs *vfs.FS, cat *content.Catalog, terrain *world.Te
 }
 
 func (r *ModelTextureRegistry) bindUnitModels(cat *content.Catalog) error {
-	for _, key := range cat.SortedUnitKeys() {
-		def := cat.Units[key]
+	for _, def := range cat.UnitRecords() {
 		if def == nil {
 			continue
 		}
@@ -176,7 +175,7 @@ func (r *ModelTextureRegistry) bindUnitModels(cat *content.Catalog) error {
 		load := modelTextureLoadKey{kind: modelLoadUnit, id: strconv.FormatUint(uint64(def.UnitDefID), 10)}
 		m, err := r.bindLoad(load, def.ObjectName)
 		if err != nil {
-			return fmt.Errorf("unit %q: %w", key, err)
+			return fmt.Errorf("unit %q: %w", def.UnitName, err)
 		}
 		// Picking needs only immutable authored geometry. Keep its name lookup
 		// separate from the per-definition animation identity [07 R-REV-01 §1].
@@ -184,7 +183,13 @@ func (r *ModelTextureRegistry) bindUnitModels(cat *content.Catalog) error {
 		if m != nil && r.hullByName[name] == nil {
 			r.hullByName[name] = m.compiled
 		}
-		r.unitByName[ckey(key)] = load
+		key := def.CanonicalKey
+		if key == "" {
+			key = ckey(def.UnitName)
+		}
+		if _, exists := r.unitByName[key]; !exists {
+			r.unitByName[key] = load
+		}
 		r.unitByID[uint16(def.UnitDefID)] = load
 		if r.trailDefs == nil {
 			r.trailDefs = map[modelTextureLoadKey]trailDefInfo{}

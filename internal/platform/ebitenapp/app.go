@@ -160,6 +160,9 @@ func (a *app) Update() error {
 	// the record it leaves running is still valid at the Draw that consumes it;
 	// the join costs nothing there because Draw would join immediately after.
 	a.c.JoinPreRecord()
+	if err := a.gpu.FogContentError(); err != nil {
+		return err
+	}
 	if a.exitPending {
 		return a.terminate()
 	}

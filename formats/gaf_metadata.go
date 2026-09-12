@@ -352,10 +352,10 @@ func materializeGAFFrame(data []byte, meta *GAFMetadataFrame, cache map[*GAFMeta
 		// TODO(question): retail's ordinary loader relocates direct children;
 		// establish whether authored nested child tables are supported before
 		// treating recursive host materialization as a retail layout contract.
-		// TODO(question): establish alternate-child semantics for raw-pixel
-		// callers (scaled, LHT, feature, fog, and model texture paths). They
-		// receive this ordinary compatibility raster, with ALP-only children
-		// absent rather than incorrectly precomposed.
+		// TODO(question): trace remaining feature-mask and structure-texture
+		// consumers before replacing their ordinary-only compatibility raster.
+		// The established fog, glyph and direct readers use their own paths
+		// [02 R-MALF-01 §6].
 		for i := range frame.Transparent {
 			frame.Transparent[i] = true
 		}
@@ -381,6 +381,16 @@ func materializeGAFFrame(data []byte, meta *GAFMetadataFrame, cache map[*GAFMeta
 			}
 		}
 		return frame, nil
+	}
+	// A direct consumer sees the encoded bytes, even on an RLE frame. Preserve
+	// at most one raster under the existing per-frame geometry budget. A short
+	// file span is rejected by DirectRaster, without rejecting ordinary decode.
+	if end := uint64(meta.DataOffset) + uint64(pixelCount); end <= uint64(len(data)) {
+		view := *frame
+		view.Compressed = 0
+		view.Pixels = append([]byte(nil), data[meta.DataOffset:end]...)
+		view.Transparent, view.PlainPixels, view.PlainTransparent = nil, nil, nil
+		frame.directRaster = &view
 	}
 	decodeGAFRLEPixels(data, meta, frame)
 	return frame, nil

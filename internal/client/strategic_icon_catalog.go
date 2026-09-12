@@ -37,6 +37,7 @@ type StrategicIconAuditEntry struct {
 type StrategicIconCatalog struct {
 	byName   map[string]StrategicIconDescriptor
 	byID     map[uint16]string
+	byRecord map[uint16]StrategicIconDescriptor
 	entries  []StrategicIconAuditEntry
 	fallback StrategicIconDescriptor
 }
@@ -44,16 +45,18 @@ type StrategicIconCatalog struct {
 // NewStrategicIconCatalog consumes the final linked catalog, including download
 // build menus [02 R-CAT-01 §8]. All geometry is shared and compiled once.
 func NewStrategicIconCatalog(cat *content.Catalog) *StrategicIconCatalog {
-	c := &StrategicIconCatalog{byName: make(map[string]StrategicIconDescriptor), byID: make(map[uint16]string)}
+	c := &StrategicIconCatalog{byName: make(map[string]StrategicIconDescriptor), byID: make(map[uint16]string), byRecord: make(map[uint16]StrategicIconDescriptor)}
 	c.fallback = StrategicIconDescriptor{Family: "generic", Role: "support", Unresolved: []string{"definition absent from this catalog"}}
 	if cat != nil {
-		for _, key := range cat.SortedUnitKeys() {
-			u, ok := cat.Unit(key)
-			if !ok || u == nil {
+		for _, u := range cat.UnitRecords() {
+			if u == nil {
 				continue
 			}
+			key := u.CanonicalKey
+			if key == "" {
+				key = content.CanonicalKey(u.UnitName)
+			}
 			d := classifyStrategicIcon(cat, u)
-			c.byName[key] = d
 			if u.UnitDefID > 0 && u.UnitDefID <= 65535 {
 				c.byID[uint16(u.UnitDefID)] = key
 			}
@@ -70,7 +73,13 @@ func NewStrategicIconCatalog(cat *content.Catalog) *StrategicIconCatalog {
 		d := c.entries[i].Descriptor
 		d.Atlas, d.Rect = atlas, rects[strategicArtKey(d)]
 		c.entries[i].Descriptor = d
-		c.byName[c.entries[i].Definition] = d
+		entry := c.entries[i]
+		if _, exists := c.byName[entry.Definition]; !exists {
+			c.byName[entry.Definition] = d
+		}
+		if entry.DefinitionID > 0 && entry.DefinitionID <= 65535 {
+			c.byRecord[uint16(entry.DefinitionID)] = d
+		}
 	}
 	return c
 }
@@ -86,7 +95,11 @@ func (c *StrategicIconCatalog) Lookup(defName string, defID uint16) (StrategicIc
 		key = c.byID[defID]
 	}
 	d, ok := c.byName[key]
-	if !ok || (defID != 0 && c.byID[defID] != key) {
+	if defID != 0 {
+		d, ok = c.byRecord[defID]
+		ok = ok && c.byID[defID] == key
+	}
+	if !ok {
 		return c.fallback, false
 	}
 	return d, true

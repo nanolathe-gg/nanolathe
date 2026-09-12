@@ -1,6 +1,7 @@
 package gpurender
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"testing"
@@ -122,12 +123,9 @@ func TestFogRegionLatticeFromOps(t *testing.T) {
 	}
 }
 
-// A cell that hangs off the left or top edge is the one case where the classic
-// composer's clamp is visible: it clamps the cell rectangle to the framebuffer
-// and hands the CLAMPED origin to the fog GAF blit, so the frame is anchored at
-// the screen edge rather than at the cell origin. The grid keeps the unclamped
-// origin, because that is what the 32-pixel fills are measured from.
-func TestFogOpRectClampsAnchorButKeepsLattice(t *testing.T) {
+// A cell that hangs off the left or top edge has different clipped fill bounds
+// and raw GAF anchor: clipping must not change its world placement [R-RR16-A §3].
+func TestFogOpRectClipsFillButKeepsAnchor(t *testing.T) {
 	// Camera residue 5 puts the first visible column's origin at -5.
 	op := fogOpAt(0, 0, 21, 21, render.FogKindSolidDark)
 	rawX, rawY, x0, y0, x1, y1, ok := fogOpRect(&op, 640, 480)
@@ -138,7 +136,7 @@ func TestFogOpRectClampsAnchorButKeepsLattice(t *testing.T) {
 		t.Fatalf("unclamped origin = (%d,%d), want (-5,-5)", rawX, rawY)
 	}
 	if x0 != 0 || y0 != 0 {
-		t.Fatalf("clamped anchor = (%d,%d), want (0,0)", x0, y0)
+		t.Fatalf("clipped fill origin = (%d,%d), want (0,0)", x0, y0)
 	}
 	if x1 != 27 || y1 != 27 {
 		t.Fatalf("clamped far edge = (%d,%d), want (27,27)", x1, y1)
@@ -355,6 +353,9 @@ func checkFogDevicePixels() error {
 	// rectangle and the frame the cell draws scale together, and the checker
 	// does not.
 	for _, scale := range []camera.ViewScale{camera.ViewScaleNative, camera.ViewScaleMid, camera.ViewScaleDetail} {
+		if err := checkFogScrollDevicePixelsAt(scale); err != nil {
+			return err
+		}
 		if err := checkFogDevicePixelsAt(scale); err != nil {
 			return err
 		}
@@ -486,4 +487,51 @@ func TestFogDeviceFixture(t *testing.T) {
 	if deviceFixtureResult != nil {
 		t.Fatalf("device fixture loop: %v", deviceFixtureResult)
 	}
+}
+
+// The same world-anchored fog must survive a pan as a crop of the previous
+// image, even when its cell starts offscreen [03 §3.3][R-RR16-A §3].
+func checkFogScrollDevicePixelsAt(scale camera.ViewScale) error {
+	const w, h = 128, 128
+	pal := fixturePalette()
+	pal.Base[100] = [4]byte{30, 60, 90, 255}
+	r, err := NewChecked(&pal, w, h)
+	if err != nil {
+		return err
+	}
+	frame := &formats.GAFFrame{Width: 16, Height: 16, XOffset: -16, YOffset: -16, Pixels: make([]byte, 256), Transparent: make([]bool, 256)}
+	for y := 0; y < 16; y++ {
+		for x := 8; x < 16; x++ {
+			frame.Transparent[y*16+x] = true
+		}
+	}
+	entry := &formats.GAFEntry{Frames: []formats.GAFFrameRef{{Frame: frame}}}
+	for _, kind := range []render.FogKind{render.FogKindGAFCh0, render.FogKindGAFCh1} {
+		for _, patterned := range []bool{false, true} {
+			var baseline []byte
+			for _, pan := range [][2]int32{{0, 0}, {0, 4}, {0, 16}, {0, 28}, {4, 0}, {16, 0}, {28, 0}, {12, 12}} {
+				op := fogOpAtScale(0, 0, 16+pan[0], 16+pan[1], scale, kind)
+				op.Variant, op.Frame, op.Patterned = 0, 0, patterned
+				var list drawlist.List
+				list.RecordClear()
+				list.RecordFill(drawlist.Fill{Rect: drawlist.Rect{W: w, H: h}, Index: 100, Style: drawlist.FillSolid})
+				list.RecordFog(drawlist.Fog{Ops: []render.FogOp{op}, Gray: [4]*formats.GAFEntry{entry}, Black: [4]*formats.GAFEntry{entry}})
+				list.RecordExpand()
+				pixels := make([]byte, w*h*4)
+				r.Execute(&list, w, h).ReadPixels(pixels)
+				if baseline == nil {
+					baseline = pixels
+					continue
+				}
+				dx, dy := int(scale.Project(pan[0])), int(scale.Project(pan[1]))
+				for y := 0; y < h-dy; y++ {
+					got, want := pixels[y*w*4:(y*w+w-dx)*4], baseline[((y+dy)*w+dx)*4:((y+dy)*w+w)*4]
+					if !bytes.Equal(got, want) {
+						return fmt.Errorf("fog scroll scale %d kind %d patterned %t pan %v row %d differs from cropped world image", scale, kind, patterned, pan, y)
+					}
+				}
+			}
+		}
+	}
+	return nil
 }

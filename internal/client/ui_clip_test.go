@@ -50,7 +50,7 @@ func TestPushUIClipConfinesRecordedUIPrimitives(t *testing.T) {
 		assertRectPixels(t, c, 3, 3, 2, 2, 7)
 
 		lit := &palette.Tables{}
-		lit.Light[1*256+7] = 9
+		lit.Light[7*256] = 9
 		c = &Client{width: 8, height: 8, indexed: make([]byte, 64)}
 		restore := c.PushUIClip(3, 3, 2, 2)
 		c.UIBlitLit(frame, 2, 2, lit, 1)

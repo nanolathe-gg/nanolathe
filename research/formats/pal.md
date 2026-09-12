@@ -46,7 +46,7 @@ order:
 | +0 | red, 0–255 |
 | +1 | green, 0–255 |
 | +2 | blue, 0–255 |
-| +3 | observed `0` in every entry of every retail palette; presumably a flags/padding byte (the layout matches a Windows `PALETTEENTRY`) |
+| +3 | observed `0` in every inspected retail palette; retained in the loaded source, but the palette installer generates a zero fourth byte for the display palette (Established) |
 
 Channels are full 8-bit values (0–255), **not** 6-bit VGA values —
 `PALETTE.PAL` entry 255 is `(255, 255, 255, 0)`. Community-authored
@@ -246,12 +246,22 @@ tables are built individually.
 
 ## Unknowns and caveats
 
-- The fourth PAL byte's intended meaning (flags?) is unknown; it is zero in
-  all retail data.
-- **Unknown:** any separate multi-tick fading envelope beyond the documented
-  calculated-frame playback [03 §4.3.1]. A complete producer-to-blitter
-  lifecycle trace would settle it. The `discByte → LHT level` arithmetic is
-  already Established; this is not an unknown table-layout field.
+- **Established (bounded palette-install and table-builder trace):** the
+  fourth PAL byte is copied with the source entry but does not provide alpha
+  or display flags. Display installation derives RGB and sets the outgoing
+  fourth byte to zero; derived-table color searches use RGB only.
+  **Unknown:** the original authoring convention for that byte. A period
+  palette-authoring specification or producer would settle its intended name,
+  but no such evidence was inspected and that name is not needed for playback.
+- **Established (calculated-flash lifecycle):** the generated shrinking
+  frames and their whole-tick countdown are the entire envelope in the
+  explosion-pool path. Allocation binds the secondary cursor, each tick
+  advances it, and drawing submits its current frame directly to the LHT
+  blitter. Neither advancement nor blitting applies an additional age-based
+  intensity, opacity, or fade factor. Frame completion clears the cursor; the
+  pool retains the record only while either cursor or its debris piece is
+  still live. This closes the former separate-fade question for that path
+  [03 §4.3.1], [03 R-FX-01 §4], [06 R-WFX-01 §2].
 - The engine never consults 768-byte, three-byte-entry palettes: a `.PAL` is
   loaded whole with no size check and read as 256 four-byte entries, so a
   768-byte file is misread (entries wrong by one byte each, the last 64 taken

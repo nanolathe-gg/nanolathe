@@ -103,6 +103,38 @@ weapon flags keep `value & 1`; authored 2 clears them. Use the per-family
 accessor/default/width table `[02 R-KEYS-01 §5]` rather than treating every
 nonzero number as true.
 
+### Floating conversion
+
+**Established — linked-runtime scanner, initial numeric locale.** Floating
+reads skip space, tab, newline, vertical tab, form feed and carriage return,
+then accept an optional sign, decimal digits with an optional decimal point,
+and an optional exponent introduced by `e`, `E`, `d` or `D`. The exponent may
+have one sign and must contain digits to take effect: `12e`, `12d-` and
+`12E+oops` all produce 12. A sign without an exponent marker ends the number,
+so `12-3` also produces 12. Trailing bytes are ignored. A mantissa without
+any digits produces positive zero; `Inf` and `NaN` are not special tokens,
+and hexadecimal notation is not recognized (`0x1p2` produces zero). The
+initial decimal-point character is `.`; a comma ends the prefix [02 §4].
+
+**Established — result boundary and range.** The linked conversion first
+constructs a binary64 result, which the accessor returns at working precision.
+Caller arithmetic can retain that wider working precision, but it starts from
+the already-converted binary64 value. The accessor ignores conversion status:
+overflow produces signed infinity; underflow can produce a subnormal or signed
+zero. An all-zero mantissa remains signed zero even with a huge positive
+exponent. Failed-text zero is positive, so `-junk` and `-0` differ in sign
+[02 §4].
+
+**Unknown — exact decimal rounding and locale lifetime.** The conversion uses
+bounded significant-digit accumulation and intermediate decimal scaling before
+binary64 finalization. Equivalence with Nanolathe's host converter for long
+mantissas, rounding boundaries, or extreme exponents offset by very long
+mantissas remains unverified. A bounded trace of those arithmetic helpers with
+authored edge cases would settle it. The initial numeric locale is established;
+whether retail ever selects an alternate decimal separator or extended-byte
+classification needs a trace of locale selection. Nanolathe retains host
+binary64 rounding and `.` as explicit placeholders for those residuals.
+
 ## Schema families
 
 ### `gamedata/` — global tables
@@ -551,11 +583,11 @@ Owned by `[02 §4]` and `[02 R-MALF-01 §4]`; the byte-level facts:
 - **Established:** `LOS.TDF` declares `numtables=9` while containing 12 table
   sections; only the declared range is selected `[03 R-VIS-01 §3]`.
 
-- **Unknown:** complete acceptance equivalence for malformed numeric text
-  between the retail CRT and Nanolathe's host conversion, especially floating
-  overflow and unusual exponent spellings. Resolving it requires a bounded
-  CRT conversion trace and matching authored cases; ordinary parser tests are
-  not a proof of every numeric edge.
+- **Unknown:** exact long-mantissa floating rounding, extreme exponent
+  cancellation and alternate numeric-locale selection remain open under
+  "Floating conversion" above. Exponent spelling, ordinary malformed-prefix
+  handling, overflow result selection and signed-zero behavior are established;
+  ordinary host tests do not prove the remaining arithmetic edges.
 - **Established — evidence limit:** a literal-string census alone cannot
   prove a key unreadable. Language-prefixed keys and numbered keys are built
   dynamically, and a minimum-length string export can omit short keys such
@@ -568,8 +600,9 @@ items and builds a separate resolved key view; it implements comment blanking,
 trimming, multiline values, first-match sibling lookup and the duplicate-key
 rule. It additionally accepts an adjacent semicolon after `}`; that host
 extension is not part of the traced retail grammar. `formats/tdf_typed.go`
-applies absent-only defaults. Its `BoolValue`
-helper tests nonzero, so packed catalog flags instead use their field-specific
+applies absent-only defaults and the established floating-prefix/range rules;
+`formats/tdf_typed_test.go` locks alternate exponents, incomplete exponents,
+ASCII whitespace, overflow and signed zero. Its `BoolValue` helper tests nonzero, so packed catalog flags instead use their field-specific
 low-bit stores. Parse size/depth limits and returned Go errors are host safety
 policy; retail's malformed-input path is fatal. Source-item preservation does
 not mean byte-for-byte preservation of comments and outer whitespace.

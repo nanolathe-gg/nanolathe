@@ -111,7 +111,7 @@ but readers must not assume pixel extents are uniquely owned.
 | +10 | 2 | u16 | subframe_count | if nonzero, this frame is composed of subframes (see below). Composition is common: roughly half of retail frames are composed. **The executable reads only the low byte** (loader and compositor alike), so the effective count is `subframe_count & 0xFF`; on a *subframe* header a nonzero **high byte** (offset +11) makes the compositor draw that subframe through the tinted ALP blit path, requiring the window's alpha-blend capability, enabled independently of Shading (`[02 R-MALF-01 §6]`, `[03 R-REN-03D §4]`). Retail data: maximum count 12, high byte always 0 (census of all 958 GAFs, 123,294 frames). |
 | +12 | 4 | u32 | unknown2 | `0` in all retail frames |
 | +16 | 4 | u32 | data_offset | → pixel data, or subframe pointer table when `subframe_count > 0` |
-| +20 | 4 | u32 | unknown3 | Historically called "timing" — specifically, the 1998–2001 `GAFBuilder` tool names this exact offset `FPS` and exposes it as a user-editable, save-round-tripped field — but ~27% of retail frames carry nonzero garbage here (in `ARMALAB.GAF`: mostly 0, one frame `480`, one `7025344`). Ignore; the plausible timing value lives in the frame *reference* record instead. |
+| +20 | 4 | u32 | unknown3 | Historically called "timing" — specifically, the 1998–2001 `GAFBuilder` tool names this exact offset `FPS` and exposes it as a user-editable, save-round-tripped field — but ~27% of retail frames carry nonzero garbage here (in `ARMALAB.GAF`: mostly 0, one frame `480`, one `7025344`). The bounded retail loader/cursor/blitter traces do not read it; animation hold lives in the frame *reference* record instead (Established). |
 
 Real example — frame @ 0x510 of `ARMALAB.GAF`:
 
@@ -137,9 +137,10 @@ parent-sized host raster necessarily clips those extensions (see below).
 ### Raw pixels (`compressed = 0`)
 
 `data_offset` points at `width × height` bytes, row-major, one palette
-index per pixel. Raw frames carry no skip runs: their only transparency is the
-frame's own `color_key` (header byte +8), which the blitter compares per
-pixel.
+index per pixel. Raw frames carry no skip runs. The ordinary keyed blitter
+compares each pixel against the frame's `color_key` (header byte +8). Other
+consumers can use a different key or sample storage directly; their contracts
+are listed under "Unknowns and caveats" and [03 R-FONT-01 §6].
 
 ### RLE pixels (`compressed = 1`)
 
@@ -227,6 +228,26 @@ simulation-only success. The pixel-geometry budget remains an acceptance bound
 for the metadata reader even though it has no pixel allocation, keeping the
 two readers on one corrupt-content policy.
 
+## Nanolathe direct-raster view
+
+**Established (Nanolathe host-boundary policy).** `GAFFrame.DirectRaster`
+returns a checked immutable view for consumers that read storage directly
+`[02 R-MALF-01 §6]`. Raw leaves reuse their decoded bytes, which preserve the
+key byte. For RLE leaves the pixel reader preserves a separate, at-most
+`width × height` copy starting at the authored data location; this is encoded
+storage, including row counts and commands, not the expanded image. This
+adds at most one byte per accepted decoded pixel to pixel-reader storage;
+the metadata reader remains pixel-free. A file span too short for this view
+leaves ordinary RLE decode available but rejects the direct consumer.
+
+**Unknown:** a portable result for direct reading of composite child-table
+storage after runtime relocation. File offsets are not relocated pointers and
+host pointer bytes must never substitute for retail bytes. The direct view
+therefore rejects composites, including those whose child table would fit the
+requested raster. The visibility-mask compiler reports this with resource
+provenance; the projectile model adapter omits the unsupported textured face.
+This is a host safety policy, not a claim that retail silently skips it.
+
 ## How the engine loads it
 
 `[02 §6]` and `[02 R-MALF-01 §6]` own the behaviour. Byte-level facts: the
@@ -237,27 +258,60 @@ frame-header offset, frame data offset, subframe pointer and subframe data
 offset by the block address and **writes them back**, with no bound — a
 truncated or corrupt GAF faults during load. Entry lookup by name is a
 linear case-insensitive scan, first match wins; a name that is absent is a
-null sequence with no message.
+null sequence with no message. **Established (inspected executable):** the
+comparison folds `A..Z` to `a..z` and leaves all other bytes, including
+`128..255`, unchanged. The comparison helper has a locale-dependent branch,
+but its locale selector starts zero and the inspected executable reference
+census contains reads only, with no writer or address-taking reference to
+that selector. The default byte comparison therefore supplies the contract;
+it does not apply Unicode case folding.
 
 ## Unknowns and caveats
 
-- **Unknown:** case comparison for non-ASCII entry-name bytes. Nanolathe
-  folds ASCII letters only and otherwise compares bytes unchanged; a trace of
-  retail's locale-dependent comparison would settle this (`formats/gaf.go`
-  carries the matching `TODO(question)`).
-- **Unknown:** alternate-child behavior in raw-raster consumers such as
-  scaled images, light-table glyphs, feature/fog masks and model textures.
-  Nanolathe's compatibility raster includes ordinary children only, clipped
-  to the parent canvas; alternate-only coverage stays transparent. This is a
-  temporary host fallback, not a retail result. The individual consumer traces
-  named in [02 R-MALF-01 §6] would settle it; matching `TODO(question)` markers
-  remain in `formats/gaf_metadata.go`.
-- Frame header byte +8 is the raw path's color key (see the frame-header
-  table); the trailing u32 (garbage) has no confirmed semantics. The
-  frame-reference u32 is the per-frame display duration in whole simulation
-  ticks (established; see above). Preserve all three, interpret cautiously.
-- Because the key is constant `9`, index 9 is effectively transparent in every
-  raw retail frame. Across the 958 GAFs in the reference install only 274 of
+- **Established (bounded consumer traces):** the alternate-child byte is a
+  dispatch choice of a particular consumer, not a universal property of a
+  flattened image. The ordinary compositor selects ALP tint for alternate
+  children; the tinted compositor propagates tint to all descendants.
+  Gray and dithered fog compositors recurse into every child in table order
+  without testing the alternate byte, preserving their own grayscale or
+  dither operation and their raw-frame gate. A nonzero-mode GAF glyph
+  compositor sends **every** child through the ALP compositor, independently
+  of its alternate byte. The calculated-flash compositor likewise recurses
+  with its own LHT operation. See [02 R-MALF-01 §6],
+  [03 R-COMP-01 §2], [03 R-FONT-01 §6] and [03 R-FX-01 §4].
+- **Established (bounded raw-consumer traces):** the precomputed visibility
+  mask walkers and the projectile-model texture span read the selected
+  frame's data directly as a row-major raster. They do not expand composite
+  children or test the alternate byte. Supplying a composite to those paths
+  makes the child-table storage become raster input, not an ordinary-child
+  composition. The frame-to-surface adapter also wraps the data directly.
+  The dormant scaled keyed compositor does dispatch alternate children to
+  its scaled ALP partner; the inspected caller census finds no live caller
+  for either scaled helper. These findings do not establish a general scaled
+  image or model-texture flattening rule.
+- **Unknown:** alternate-child handling in remaining feature-mask and
+  structure-texture consumers not included in the bounded traces above.
+  Trace each selected frame from its caller through its actual pixel reader
+  before assigning one of these operations. Nanolathe's compatibility raster
+  still includes ordinary children only, clipped to the parent canvas, and
+  leaves alternate-only coverage transparent. That host fallback is not the
+  retail result for the closed consumers above. The matching
+  `TODO(question)` in `formats/gaf_metadata.go` remains for feature-mask and
+  structure-texture traces. Fog and glyph compositors now traverse their own
+  child graphs; direct masks and projectile textures use `DirectRaster`.
+  The modern fog atlas rejects composite frames with an error reported by
+  the app and benchmark until it can represent repeated destination operations;
+  this implementation limitation
+  does not reopen the established consumer contract.
+- **Established (bounded loader, cursor and blitter traces):** frame header
+  byte +8 is the raw path's color key; the trailing frame-header word is not
+  read by those consumers. Animation hold comes from the frame-reference
+  record, not that trailing word. **Unknown:** original author intent for the
+  trailing word and other preserved unused fields. A third-party editor
+  labeling the field `FPS` does not establish a retail reader. Preserve the
+  bytes without deriving timing from them.
+- In ordinary keyed rendering, the surveyed frames' constant key `9` makes
+  index 9 transparent. This is not a universal raster-consumer rule. Across the 958 GAFs in the reference install only 274 of
   6,068 raw frames contain it at all, and three of them account for 99.9% of
   those pixels: `anims/fog.gaf` (30%), `anims/fogtiles.gaf` (40%) and
   `anims/vismasks.gaf` (23%). Those three are mask families drawn entirely

@@ -125,17 +125,19 @@ func (r *CategoryRegistry) CategoryNames() []string {
 // compilation for deterministic fixture tests and later catalog extensions.
 func CompileCategories(units map[string]*UnitDef) (*CategoryRegistry, error) {
 	units = canonicalUnitMap(units)
+	return compileCategoryRecords(unitMapRecords(units), units)
+}
+
+func compileCategoryRecords(records []*UnitDef, units map[string]*UnitDef) (*CategoryRegistry, error) {
 	r := &CategoryRegistry{byName: make(map[string]int)}
-	keys := sortedUnitKeys(units)
 	// UnitDefIndex is 1-based (zero is its null sentinel). Therefore ID 511 is
 	// the last usable definition ID in the 512-bit category domain [02 §5]; an
 	// attempted ID 512 must be diagnosed rather than aliased/truncated [R-P0-03].
-	if len(keys) >= CategoryMaskWords*32 {
-		return nil, fmt.Errorf("category: %d unit definitions exceed 511 usable IDs in 512-bit domain", len(keys))
+	if len(records) >= CategoryMaskWords*32 {
+		return nil, fmt.Errorf("category: %d unit definitions exceed 511 usable IDs in 512-bit domain", len(records))
 	}
 
-	for i, key := range keys {
-		u := units[key]
+	for i, u := range records {
 		if u == nil {
 			continue
 		}
@@ -162,8 +164,7 @@ func CompileCategories(units map[string]*UnitDef) (*CategoryRegistry, error) {
 
 	// Unknown target names are retained as empty registry rows, and can be
 	// populated by a later unit in the same link pass [R-P0-03].
-	for _, key := range keys {
-		u := units[key]
+	for _, u := range records {
 		if u == nil {
 			continue
 		}
@@ -174,8 +175,7 @@ func CompileCategories(units map[string]*UnitDef) (*CategoryRegistry, error) {
 		}
 	}
 
-	for _, key := range keys {
-		u := units[key]
+	for _, u := range records {
 		if u == nil {
 			continue
 		}

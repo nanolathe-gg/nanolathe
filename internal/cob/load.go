@@ -37,7 +37,8 @@ func ValidateProgram(prog *Program) error {
 
 // Program is an immutable compiled script definition [PLAN_06 cob] [fmt cob].
 // Code is the opcode word array. Scripts maps script name to word index into
-// Code (word index relative to start of code section, not byte offset).
+// Code (word index relative to start of code section, not byte offset). Exact
+// duplicate names resolve to the first table entry [04 R-COB-01 §1].
 // Pieces is the ordered piece name table. Statics is the count of static
 // variables the unit needs [fmt cob] "NumberOfStatics", carried on the
 // immutable Program to avoid reparse in the VM. Nanolathe initializes them
@@ -265,10 +266,12 @@ func Load(data []byte) (*Program, error) {
 		if name == "" {
 			return nil, fmt.Errorf("cob: script %d has empty name", i)
 		}
-		if _, exists := scripts[name]; exists {
-			return nil, fmt.Errorf("cob: duplicate script name %q", name)
+		// Retail scans names case-sensitively in table order and returns the
+		// first match. Later duplicates remain callable by their script index
+		// through ScriptsByID [04 R-COB-01 §1].
+		if _, exists := scripts[name]; !exists {
+			scripts[name] = int(scriptIndexes[i])
 		}
-		scripts[name] = int(scriptIndexes[i])
 	}
 
 	pieces := make([]string, numPieces)

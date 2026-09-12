@@ -1667,7 +1667,7 @@ keys, with the stored width and cap:
 | Kind | Keys read after `[COMMON]` |
 |---:|---|
 | 0 | `totalgadgets` (16-bit, later overwritten by the section count), `panel`, `crdefault`, `escdefault`, `defaultfocus` (16 bytes each); then, when a `[VERSION]` subsection exists, `major`, `minor`, `revision` (one byte each) |
-| 1 | `status` (16-bit down-state word), `text` (128 bytes, localized), `quickkey` (an alphabetic first character verbatim, otherwise the decimal value of the string), `grayedout` (bit 0 of the grey word, §13), `stages` (byte) |
+| 1 | `status` (16-bit down-state word), `text` (128 bytes, localized), `quickkey` (at most 18 authored bytes, then an alphabetic first byte verbatim or the low byte of the decimal-prefix value), `grayedout` (bit 0 of the grey word, §13), `stages` (byte) |
 | 2 | `itemheight` (16-bit); the list's change-callback word and its per-row flag pointer are zeroed here |
 | 3 | `maxchars` (16-bit, capped at 128 here; the builder caps it again at 127, §12), then `text` (128 bytes, localized) |
 | 4 | `range` (16-bit `travel`), `thick` (16-bit, widened to the 32-bit read-out range), `knobpos`, `knobsize` (16-bit each); the change-callback word zeroed; then `text` (128 bytes, localized) |
@@ -1682,6 +1682,14 @@ The declared count is then replaced by the number of top-level sections
 minus one, as [02 R-MALF-01 §5] states. Nothing in the parser rejects an
 unknown kind; the record keeps its `[COMMON]` fields and the builder (§12)
 decides whether any build work follows.
+
+**Established — quickkey reader boundary.** Its text copy retains at most
+18 bytes before classification and conversion. ASCII letters take the verbatim
+branch; other ASCII input uses the decimal scanner, including zero for no
+digits. **Unknown:** the platform alphabetic classification of extended first
+bytes and its host locale; this is separate from the builder's established
+ASCII-only collision comparison. `[fmt gui]` records the deterministic host
+placeholder for that residual.
 
 ### The window builder's kind switch, exactly [R-WGT-01 §12]
 
@@ -4310,6 +4318,12 @@ the first two products narrow to single after the `2^-16` scale and are then
 widened; the unit words `m/s`, `m/s/s`, `deg/s` are localized. The `0.4`
 factor is retail's world-unit-to-metre convention for this screen only; no
 other reader uses it.
+
+**Established — portrait palette.** The opener requests an image without a
+palette result. The PCX loader copies decoded indices into a surface and
+releases the decoded trailer palette; the portrait painter copies those
+indices into the window without palette installation or remapping. The active
+display palette therefore supplies the portrait colors `[fmt pcx]`.
 
 ### `SHARE.GUI`'s `METAL#` / `ENERGY#` [R-HUD-03 §9]
 
@@ -7903,10 +7917,9 @@ and the decider that would close it.
   objective text has its own path · §6 [R-HUD-03 §14.4], doc 08 · static
   trace of the mission-event text producers.
 
-- Whether the in-battle F1 unit-picture consumer installs an embedded PCX
-  palette or only copies indexed pixels into the active palette surface ·
-  §6 [R-HUD-03 §8], [fmt pcx] · trace its palette installation calls; the
-  frontend background contract does not settle this separate consumer.
+- Extended-byte alphabetic classification in authored `quickkey` values ·
+  [R-WGT-01 §11] · establish the platform classification and locale used by
+  that parser call. ASCII parsing and the later collision fold are settled.
 
 ### Picking, selection, and orders
 

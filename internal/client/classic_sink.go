@@ -120,6 +120,13 @@ func (c *Client) emitSprite(sp drawlist.Sprite) {
 	sp.HasClip, sp.Clip = c.clipUISprite(sp.HasClip, sp.Clip)
 	if sp.Frame != nil && len(sp.Frame.Subframes) != 0 {
 		switch sp.Kind {
+		case drawlist.BlitLit:
+			if sp.Pal != nil {
+				// The parent light gate precedes ALP composition of every child,
+				// regardless of its selector [03 R-FONT-01 §6].
+				c.emitGeneralGAFLeaves(sp, sp.Frame, sp.X+int32(sp.Frame.XOffset), sp.Y+int32(sp.Frame.YOffset), true)
+			}
+			return
 		case drawlist.BlitKeyed, drawlist.BlitTinted:
 			penX, penY := sp.X, sp.Y
 			if sp.Kind == drawlist.BlitKeyed && !sp.Anchored {
@@ -367,10 +374,8 @@ func (s classicSink) Sprite(sp drawlist.Sprite) {
 			c.tintedBlitAnchor(sp.Frame, int(sp.X), int(sp.Y))
 		}
 	case drawlist.BlitLit:
-		// The shaded glyph blit: every opaque pixel is remapped through one LHT
-		// row selected by LightRow. The palette rides the record (sp.Pal), so the
-		// deferred replay resolves against exactly the palette the caller installed
-		// [03 §4.3.1].
+		// Raw and RLE glyph leaves have distinct mode/key and lookup rules;
+		// composites were expanded before recording [03 R-FONT-01 §6].
 		clipX, clipY, clipW, clipH := s.clip(sp.HasClip, sp.Clip)
 		c.uiBlitLitClippedRaw(sp.Frame, int(sp.X), int(sp.Y), sp.Pal, int(sp.LightRow), clipX, clipY, clipW, clipH)
 	case drawlist.BlitScaled:
@@ -654,6 +659,9 @@ func (s classicSink) Fog(fg drawlist.Fog) {
 		// pixel wide for the reason the section gives. The variant's authored
 		// offsets are doubled with it, so the anchor arithmetic below is
 		// unchanged.
+		// Keep the cell anchor before clipping the fill rectangle. The GAF
+		// offset is applied before clipping by blitFogGAF [R-RR16-A §3].
+		rawX, rawY := x0, y0
 		if x0 < 0 {
 			x0 = 0
 		}
@@ -702,7 +710,7 @@ func (s classicSink) Fog(fg drawlist.Fog) {
 					}
 					// Plain Gray family is a masked GRAY TABLE remap of the
 					// destination, not a copy of the source art [R-RR16-A §1].
-					c.blitFogGAF(c.viewFrame(frame), int(x0), int(y0), mode)
+					c.blitFogGAF(c.viewFrame(frame), int(rawX), int(rawY), mode)
 					continue
 				}
 			}
@@ -715,7 +723,7 @@ func (s classicSink) Fog(fg drawlist.Fog) {
 				entry := c.fogBlack[op.Variant]
 				if entry != nil && op.Frame < len(entry.Frames) && entry.Frames[op.Frame].Frame != nil {
 					frame := entry.Frames[op.Frame].Frame
-					c.blitFogGAF(c.viewFrame(frame), int(x0), int(y0), fogBlitBlack)
+					c.blitFogGAF(c.viewFrame(frame), int(rawX), int(rawY), fogBlitBlack)
 					continue
 				}
 			}

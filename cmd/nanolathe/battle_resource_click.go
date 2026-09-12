@@ -42,6 +42,7 @@ type resourceClick struct {
 type resourceBuildSite struct {
 	product *content.UnitDef
 	x, z    int32
+	deposit resourceRect
 }
 
 func resourceToken(value, token string) bool {
@@ -102,6 +103,7 @@ func (b *battleSession) resourceSite(mx, my int32) (resourceBuildSite, bool) {
 	}
 	extractor, solar := b.resourceProducts(v.DefName)
 	product := solar
+	var deposit resourceRect
 	wx, wz := pos.X, pos.Z
 	cx, cz := world.WorldToCell(wx), world.WorldToCell(wz)
 	for _, feature := range f.Features {
@@ -122,6 +124,7 @@ func (b *battleSession) resourceSite(mx, my int32) (resourceBuildSite, bool) {
 		// fog must not turn an extractor gesture into solar construction.
 		// Placement keeps its known-site check (DESIGN_INTERFACE_HUD_INPUT §3.10).
 		product = extractor
+		deposit = resourceRect{feature.CX, feature.CZ, fx, fz}
 		wx, wz = world.PlacementCenter(feature.CX, feature.CZ, fx, fz)
 		break
 	}
@@ -130,7 +133,7 @@ func (b *battleSession) resourceSite(mx, my int32) (resourceBuildSite, bool) {
 	}
 	fx, fz := footprintCellsForCatalog(b.cat, product)
 	x, z := world.PlacementAnchor(wx, wz, fx, fz)
-	return resourceBuildSite{product: product, x: x, z: z}, true
+	return resourceBuildSite{product: product, x: x, z: z, deposit: deposit}, true
 }
 
 func (b *battleSession) resourceClickNow() uint32 {
@@ -217,13 +220,13 @@ func (b *battleSession) serviceResourceClick(in *input.State, cl *client.Client,
 	b.resourceClick = nil
 	state.DragActive = false
 	state.PlaceCaptured = true
-	fx, fz := footprintCellsForCatalog(b.cat, site.product)
-	result, err := b.checkProductPlacement(site.x, site.z, site.product, fx, fz, uint16(pending.builder))
-	if err == nil {
+	site, result, buildOK := b.spaceResourceBuild(site, pending.builder)
+	if buildOK {
+		fx, fz := footprintCellsForCatalog(b.cat, site.product)
 		wx, wz := world.PlacementCenter(site.x, site.z, fx, fz)
-		err = b.dispatchMobileBuild(site.product.CanonicalKey, wx, numeric.FixedFromInt(int64(result.SiteHeight)), wz, true, true)
+		buildOK = b.dispatchMobileBuild(site.product.CanonicalKey, wx, numeric.FixedFromInt(int64(result.SiteHeight)), wz, true, true) == nil
 	}
-	if err != nil {
+	if !buildOK {
 		b.playUICue(cl, "notoktobuild")
 	} else {
 		b.resourceQueueFeedback = &resourceQueueFeedback{started: b.resourceClickNow(), builder: pending.builder, selection: pending.selection}

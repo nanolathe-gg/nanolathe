@@ -665,7 +665,7 @@ func newSlicedWorld(cat *content.Catalog) (*units.World, error) {
 	if cat == nil {
 		return nil, fmt.Errorf("session: nil catalog for unit pool")
 	}
-	n := len(cat.Units)
+	n := len(cat.UnitRecords())
 	if n <= 0 {
 		return nil, fmt.Errorf("session: catalog has no unit definitions [02 §5]")
 	}

@@ -249,28 +249,12 @@ func LoadWithTranslation(fs vfs.FSOps, name string, captions CaptionTranslator) 
 		// Keep the authored key until the runtime builder processes this
 		// window record. Its collision fold changes ASCII A..Z only; extended
 		// bytes compare with themselves [07 R-WGT-01 §3].
-		// quickkey string stored as byte [02 §6]
-		if v, ok := fg.Fields["quickkey"]; ok && v != "" {
-			// In retail files quickkey is often numeric string like "83" or a bare symbol.
-			// Try numeric parse first; if numeric, use low byte; else first byte of string.
-			iv := formats.ParseTDFInteger(v)
-			if iv != 0 || v == "0" {
-				// Numeric: check if original string was numeric prefix (digits with optional sign)
-				trim := strings.TrimSpace(v)
-				isNumeric := len(trim) > 0 && (trim[0] >= '0' && trim[0] <= '9' || trim[0] == '-' || trim[0] == '+')
-				if isNumeric {
-					g.QuickKey = byte(iv & 0xFF)
-				} else {
-					g.QuickKey = v[0]
-				}
-			} else {
-				g.QuickKey = v[0]
-			}
-		}
+		g.QuickKey = parseQuickKey(fg.Fields["quickkey"])
 		g.Range = int16(fieldInt(fg.Fields, "range", 0))
 		g.KnobPos = int16(fieldInt(fg.Fields, "knobpos", 0))
 		g.KnobSize = int16(fieldInt(fg.Fields, "knobsize", 0))
-		g.Thick = int32(fieldInt(fg.Fields, "thick", 0))
+		// The read-out range sign-extends the narrowed word [07 R-WGT-01 §11].
+		g.Thick = int32(int16(fieldInt(fg.Fields, "thick", 0)))
 		g.Link = fieldString(fg.Fields, "link", "")
 		g.FileName = fieldString(fg.Fields, "filename", "")
 		g.HotOrNot = int32(fieldInt(fg.Fields, "hotornot", 0))
@@ -545,6 +529,28 @@ func BuildSlider(bar Gadget, art *SliderArt) (Gadget, []Gadget) {
 		bar.Rect.Y += art.ArrowExtent
 	}
 	return bar, arrows
+}
+
+// parseQuickKey retains a letter verbatim or the low byte of the decimal
+// prefix, after the reader's 18-byte text bound [07 R-WGT-01 §11][fmt gui].
+func parseQuickKey(value string) byte {
+	if len(value) > 18 {
+		value = value[:18]
+	}
+	if len(value) == 0 {
+		return 0
+	}
+	first := value[0]
+	if first >= 'A' && first <= 'Z' || first >= 'a' && first <= 'z' {
+		return first
+	}
+	if first >= 0x80 {
+		// TODO(question): establish the platform alphabetic classification for
+		// extended authored bytes and its locale; retain the existing first-byte
+		// placeholder until that environment is established [fmt gui].
+		return first
+	}
+	return byte(formats.ParseTDFInteger(value))
 }
 
 func fieldInt(m map[string]string, key string, def int) int {

@@ -75,15 +75,41 @@ rejecting empty input, and the 16 MiB direct-decode allocation limit are
 **Nanolathe host-safety policies**. They do not establish retail validation of
 fields it never reads. The parser retains any partial final frame bytes even
 though playback excludes that incomplete frame. Zero-length device-buffer
-creation remains **Unknown** `[02 R-MALF-01 §10]`; trace the backend's zero-size
-creation result before changing the empty-input policy.
+creation remains a **backend-dependent Unknown** `[02 R-MALF-01 §10]`;
+the retail wrapper boundary is now established below, but its zero-size
+device result was not observed.
+
+## Device-buffer boundary
+
+**Established (static/transient sample paths):** the wrapper constructs PCM
+parameters from the selected channel count, rate and width, derives block
+alignment and byte rate, and passes the sample length directly to
+DirectSound buffer creation. It has no separate zero-length rejection,
+codec decoder, or parameter-normalization fallback. Creation failure returns
+a null sample. After successful creation it locks the requested extent,
+reads the locked byte count and unlocks; lock, short-read or unlock failure
+releases the buffer and returns null. The transient path uses this same
+creator before starting playback. Thus an empty raw file reaches a zero-byte
+device request; it is not rejected by RIFF's positive-data-size check.
+
+**Established (streaming path):** buffer capacity is derived from two seconds
+of the selected PCM parameters, independently of payload length. An empty
+raw stream therefore requests the ordinary nonzero capacity at 11,025 Hz,
+8-bit mono. When the initial refill reaches EOF, it fills the remainder with
+unsigned-8-bit silence and records the endpoint. This differs from the
+static/transient zero-size request [03 R-AUD-02 §1]. It does not prove that a
+particular device successfully creates or plays the buffer.
 
 ## Unknowns and caveats
 
-- **Unknown:** backend acceptance/conversion for legacy parameter combinations
-  outside the established raw/DIGI rules and inspected PCM profiles. Trace the
-  device-buffer setup and conversion for the particular combination before
-  claiming audible output; [03 §8.2] owns that boundary.
+- **Unknown:** the external DirectSound implementation's result for a
+  zero-byte static buffer or unusual channel/rate/width combinations. The
+  executable passes these requests across the device boundary without a
+  local repair; that boundary has been traced, so another wrapper trace
+  cannot settle acceptance. Inspection of the actual target backend or a
+  manual observation of that backend's creation result would settle it. No
+  such backend execution was performed in this audit; [03 §8.2] owns the
+  playback boundary.
 - The engine never reads the format tag, so formats beyond the table above
   are neither rejected nor decoded: any `fmt ` chunk is taken as PCM of its
   declared channel count, rate and bit depth. Compressed payload bytes are

@@ -253,12 +253,37 @@ u32 height                  # tile-grid rows
 u32 tile_index_offset      # width × height little-endian u16 tile indices
 ```
 
-The inherited editor-section survey covers versions 2 and 3. The bytes between
-the tile-index grid and the next known block are retained as opaque
-version-specific metadata; no gameplay or height semantics are assigned to
-them. Sections are consumed by map editors (Annihilator, TAE), not by the
-game, and do not carry the runtime TNT map's sea-level, feature-table, or
-minimap structures.
+**Established (Annihilator source):** immediately after the tile-index grid,
+at `tile_index_offset + 2*width*height`, the editor reads a height grid of
+`2*width` columns by `2*height` rows. Records are row-major. Version 2 uses
+eight bytes per height record; version 3 uses four. In both versions the
+first byte is an unsigned height, copied directly into the editor's height
+grid. The inspected section loader ignores the other bytes of each record;
+its section-copy and map-fill paths preserve the two-to-one grid dimensions.
+
+| Version | Record count | Record size | Established field |
+| --- | ---: | ---: | --- |
+| 2 | `4*width*height` | 8 bytes | byte +0: height; bytes +1…+7 ignored by this editor loader |
+| 3 | `4*width*height` | 4 bytes | byte +0: height; bytes +1…+3 ignored by this editor loader |
+
+The inspected standalone SCT writer emits version 3 records containing a
+height byte, signed 16-bit `-1`, then a zero byte. Its HPI export path instead
+emits `+1` in that middle word. These are writer-specific defaults, not proof
+of a universal feature or occupancy meaning.
+
+**Established (bounded asset census):** `worlds.hpi` contains 689 sections:
+459 version 2 and 230 version 3. All of their height-record spans fit the
+files. Version 2 places the preview immediately after these records;
+version 3 places the tile graphics there, followed by the preview. Every
+observed version-2 record has trailing bytes `01 FF 00 00 00 00 00`; every
+version-3 record has `FF FF 00`. These constants do not settle their authored
+meaning. Header pointers remain authoritative for the separately located
+blocks; the inspected standalone writer uses a different packing order.
+
+Sections are consumed by map editors (Annihilator, TAE), not by the game,
+and do not carry the runtime TNT map's sea-level, feature-table, or minimap
+structures. The editor evidence establishes stored heights without assigning
+the unused bytes runtime TNT semantics.
 
 ## Retail corpus notes
 
@@ -277,11 +302,18 @@ above. Legacy empty codes are normalized to the canonical empty word. With
 an absent-minimap flag, the parser does not dereference the minimap pointer.
 These are checked decoding and representation choices, not retail malformed-
 input guarantees. `formats.LoadSCTWithLimits` additionally rejects overlapping
-known blocks and preserves opaque metadata; `AttributeData` is a field name,
-not proof that the bytes are a height map.
+known blocks, including the complete version-specific height-record span.
+`SCT.Heights` exposes the unsigned heights in row-major order over a
+`2*Width` by `2*Height` grid. `AttributeData` preserves exactly those records,
+including ignored bytes; `Raw` retains the complete file and any intervening
+padding. Authored tests cover both versions, nonsquare grids, independent
+graphics/preview placement and rejected incomplete or overlapping records.
+This decoder does not assign meanings to ignored record bytes.
 
-- **Unknown:** SCT metadata and any version beyond the observed 2/3 pair;
-  version-matched editor files and their consumer would settle the layouts.
+- **Unknown:** the authored meanings of the SCT record bytes ignored by the
+  inspected editor, and any version beyond the observed 2/3 pair. A writer
+  or consumer that assigns those bytes a role, or version-matched source and
+  files for another version, would settle these editor-only residuals.
 - Header words 0x30–0x3C (always `0` in canonical files) are not read by
   the engine on the canonical path; attribute byte +3 is not read either.
 - `0xFFFC` "void" is stored by the engine as `0xFFFC` and treated exactly
@@ -319,6 +351,10 @@ not proof that the bytes are a height map.
   <https://units.tauniverse.com/tutorials/tadesign/tadesign/tntdesc.htm>,
   <https://units.tauniverse.com/tutorials/tadesign/tadesign/mapdsgn.htm>
 - Verified against `maps/The Pass.tnt` from `totala2.hpi`.
+- Kinboat's TA tools source archive, Annihilator `classSection.cls`
+  section loader, section-copy/map-fill paths, and standalone/HPI writers;
+  `modSections.bas` header definitions. Cross-checked against all 689 SCT
+  files independently enumerated from the installed `worlds.hpi`.
 - Nanolathe readers and authored tests: `formats/tnt.go`, `formats/sct.go`,
   `formats/tnt_test.go`, `formats/sct_test.go`, `formats/source_test.go`;
   footprint reconstruction: `internal/world/feature_stamp_test.go`.

@@ -71,3 +71,44 @@ func TestFixedFromAuthoredRetainsSigned64LowWord(t *testing.T) {
 		}
 	}
 }
+
+func TestTDFFloatDecimalScannerEdges(t *testing.T) {
+	// Established linked-CRT prefix rules, including its alternate exponent
+	// letter; these cases avoid unresolved long-mantissa rounding [fmt tdf].
+	for _, tc := range []struct {
+		text string
+		want float64
+	}{
+		{"\v\f -1.25tail", -1.25}, {"1.25D2", 125}, {"5d-1", 0.5},
+		{".5E+1junk", 5}, {"12e", 12}, {"12d-", 12}, {"12E+oops", 12},
+		{"12e+-3", 12}, {"12-3", 12}, {"-junk", 0}, {"+.", 0},
+		{"Inf", 0}, {"NaN", 0}, {"0x1p2", 0}, {"1.#INF", 1},
+		{"1,5", 1},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			if got := parseTDFFloat(tc.text); math.Float64bits(got) != math.Float64bits(tc.want) {
+				t.Fatalf("parseTDFFloat(%q) = %v, want %v", tc.text, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTDFFloatRetainsRangeResultAndZeroSign(t *testing.T) {
+	// Overflow remains infinity, nonzero underflow retains its sign, and
+	// all-zero mantissas remain zero even with a huge exponent [fmt tdf].
+	for _, tc := range []struct {
+		text string
+		want float64
+	}{
+		{"1e400", math.Inf(1)}, {"-1D400", math.Inf(-1)},
+		{"1e99999", math.Inf(1)}, {"-1e99999", math.Inf(-1)},
+		{"1e-400", 0}, {"-1e-99999", math.Copysign(0, -1)},
+		{"-0", math.Copysign(0, -1)}, {"-0e99999", math.Copysign(0, -1)},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			if got := parseTDFFloat(tc.text); math.Float64bits(got) != math.Float64bits(tc.want) {
+				t.Fatalf("parseTDFFloat(%q) = %v, want %v with matching sign", tc.text, got, tc.want)
+			}
+		})
+	}
+}

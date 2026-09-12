@@ -69,6 +69,9 @@ type GAFFrame struct {
 	// It keeps the host composition-depth budget valid when a shared frame is
 	// returned from the decode cache.
 	compositeDepth uint32
+	// directRaster is an immutable view of authored storage for consumers that
+	// bypass RLE decoding. Raw leaves use Pixels directly [02 R-MALF-01 §6].
+	directRaster *GAFFrame
 }
 
 const maxGAFFramePixels = 16 << 20
@@ -111,8 +114,8 @@ func LoadGAFFile(fs vfs.FSOps, name string) (*GAF, error) {
 }
 
 // Find returns the first matching entry in authored table order. ASCII letter
-// folding is established; high bytes are preserved as a host fallback.
-// TODO(question): establish the locale comparison used for high bytes.
+// folding and unchanged high bytes match the inspected retail comparison
+// [02 "Animation archive (GAF)"][fmt gaf].
 func (g *GAF) Find(name string) (*GAFEntry, bool) {
 	if g == nil {
 		return nil, false
@@ -155,4 +158,23 @@ func (f *GAFFrame) At(x, y int) (byte, bool) {
 		return 0, false
 	}
 	return f.Pixels[index], !f.Transparent[index]
+}
+
+// DirectRaster returns the selected frame's row-major storage without expanding
+// RLE or composing children [02 R-MALF-01 §6]. The returned view is immutable.
+// A false result is a host safety rejection, not a transparent retail image.
+func (f *GAFFrame) DirectRaster() (*GAFFrame, bool) {
+	if f == nil || f.SubframeCount != 0 || len(f.Subframes) != 0 {
+		// TODO(question): composite direct readers sample runtime-relocated child
+		// storage. Authored file bytes cannot determine those bytes; establish
+		// a portable contract before admitting such a frame to a direct reader.
+		return nil, false
+	}
+	if f.Compressed != 0 {
+		return f.directRaster, f.directRaster != nil
+	}
+	if len(f.Pixels) < int(f.Width)*int(f.Height) {
+		return nil, false
+	}
+	return f, true
 }

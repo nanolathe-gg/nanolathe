@@ -67,11 +67,11 @@ gadget is one element of it.
 | `width`, `height` | int | Authored size in pixels. Type-specific builders can replace dimensions from resolved art; scrollbar orientation follows the long axis [07 R-WGT-01 §§3–5, §12]. |
 | `attribs` | int | Type-dependent bit field. Scrollbars need `1` = horizontal, `2` = vertical. The executable's bit meanings for buttons (radio `0x10`, toggle `0x40`, cycle `0x100`, auto-repeat `0x2000`, keep-authored-quickkey `0x10000`), listboxes (text list `0x10`, fire-on-click `0x40`, heading-reject `0x200`) and the alignment bits are in the executable spec [07 R-WGT-01 §§3–5]. |
 | `colorf`, `colorb` | int | Stored as 16-bit values. Meaning depends on the painter: semantic GUI colors, direct FNT palette colors and GAF light-table rows are distinct. The builder clears `colorf` for buttons, labels and pictures; later service uses it as flash state. See [03 R-FONT-01 §6], [07 R-WGT-01 §12]. |
-| `texturenumber` | int | No observed effect |
+| `texturenumber` | int | Stored as a byte; consumer behavior remains Unknown. |
 | `fontnumber` | int | Stored as a byte and read signed; selects the zero-based kind-7 font in file order. A negative value or missing indexed font selects the common font. Labels can use the selected FNT directly; button/list/input painters still use the GAF text path when present [07 R-WGT-02 §4], [03 R-FONT-01 §5]. |
 | `active` | int | Stored as a byte; zero hidden, nonzero serviced [07 R-WGT-01 §1]. |
 | `commonattribs` | int | Stored as a byte. Battle count labels test bit `0x04` for build-product counts, then bit `0x08` for stockpile counts [07 R-P0-11 §2]. |
-| `gaffile` | int | Stored as 16-bit; parsed even though absent from the historical authored-key survey [02 §6 "COMMON"]. |
+| `gaffile` | int | Only the low bit is installed in the gadget flag word. A set bit selects `anims/<name>_gadget.GAF` and bypasses the ordinary button-art and quickkey build path, even when the resource is absent [07 R-WGT-01 §3]. |
 | `help` | string | Hover help text; the window-build pass copies it into the `HELPTEXT` label [07 R-WGT-01 §1] |
 
 **Established.** Common integer keys default to zero and strings to empty
@@ -111,7 +111,7 @@ record bytes.
 | --- | --- |
 | `status` | Stored 16-bit down-state word, not a general GAF frame index; stage and frame selection are [07 R-WGT-01 §3]. |
 | `text` | Label text. Multi-stage buttons separate per-stage text with a vertical bar (e.g. `text=On\|Off;`) |
-| `quickkey` | Keyboard accelerator as an ASCII code (`83` = `S`); a bare symbol also occurs in data. The authored value is normally discarded: the executable overwrites it at window open with the first free letter of the label unless `attribs` bit `0x10000` is set — see [07 R-WGT-01 §3] |
+| `quickkey` | The reader retains at most 18 bytes: if the first byte is alphabetic it becomes the key verbatim; otherwise decimal-prefix conversion supplies the low byte (`83` = `S`, `!` and `00` = zero). Later assignment can replace it [07 R-WGT-01 §§3, 11]. |
 | `grayedout` | `1` = visible but disabled. Stored as bit 0 of the button's own grey word — **not** an `attribs` bit — and tested by the button handler at press time, so a greyed button still shows hover help [07 R-WGT-01 §13] |
 | `stages` | Number of stages for cycle buttons (0 = plain). `stages=1`, or a label of exactly `Off\|On`, is promoted to 2 stages with the `stagebuttn1` art [07 R-WGT-01 §3] |
 
@@ -231,17 +231,21 @@ dominate (4,421 of 5,840 gadgets).
 
 ## Unknowns and caveats
 
-- **Unknown:** behavior for `texturenumber` and uncited `gaffile` consumers;
-  a bounded consumer trace would settle it. Storing a key does not prove it
-  affects rendering.
+- **Unknown:** behavior for `texturenumber`; a bounded consumer trace would
+  settle it. Its byte store does not prove it affects rendering.
+- **Unknown:** the platform alphabetic classification of extended first bytes
+  in `quickkey` depends on the retail host locale, which has not been
+  established. Nanolathe preserves those bytes as a deterministic placeholder;
+  the ASCII letter and decimal-prefix branches are established.
 - **Unknown:** any screen event bindings or attribute bits not covered in
   doc 07; compare the screen dispatcher with the authored controls to close
   a specific gap. A GUI-file census alone cannot enumerate engine-only names.
-- **Established — implementation mismatch:** `internal/gui.Load` currently
-  reads `thick` directly into a 32-bit value, whereas [07 R-WGT-01 §11]
-  specifies a 16-bit store before widening. Its nonnumeric `quickkey`
-  fallback also accepts any first byte, whereas retail distinguishes letters
-  from decimal conversion. These are code follow-ups, not format variants.
+- **Established — parser conversion boundaries:** `thick` narrows to signed
+  16-bit before widening to 32-bit. The quickkey string reader copies at most
+  18 authored bytes and terminates before classification or decimal conversion;
+  the latter skips leading ASCII whitespace, accepts one sign, consumes the
+  decimal prefix and returns zero without digits. The result's low byte is
+  retained. `internal/gui/load_test.go` locks these boundaries [07 R-WGT-01 §11].
 
 ## Sources
 

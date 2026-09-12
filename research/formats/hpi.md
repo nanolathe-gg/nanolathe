@@ -68,7 +68,7 @@ archive offsets**.
 | 0x00 | 4 | char[4] | marker | `HAPI` (`48 41 50 49`) |
 | 0x04 | 4 | u32 | version | `0x00010000` for these archives. The `BANK` bytes in saved games identify a separate container, not this header layout. |
 | 0x08 | 4 | u32 | directory_end | Directory-blob byte count measured from archive offset zero, including the 20-byte header; equivalently the absolute end of that blob. The bytes after the header occupy `directory_end - 20`, not `directory_end`. |
-| 0x0C | 4 | u32 | header_key | Obfuscation key seed; only its low byte participates in the retail transform. A zero stored key byte disables it. |
+| 0x0C | 4 | u32 | header_key | Obfuscation key seed; only its low byte participates in the retail transform. Stored low bytes `0` and `255` both disable it. |
 | 0x10 | 4 | u32 | directory_start | Absolute offset of the directory root node. `0x14` in all observed retail archives, but should be honored, not assumed. |
 
 Real example — the first 20 bytes of `totala1.hpi`:
@@ -89,12 +89,14 @@ chunk tables and chunk bytes; the header and copyright trailer stay plain.
 For the stored key's low byte `k`, derive:
 
 ```
-key = ~((k >> 6) | (k << 2)) & 0xff
+key = 0 if k == 0 else (~((k >> 6) | (k << 2)) & 0xff)
+// Apply only when key != 0:
 plain = ((pos & 0xff) ^ key ^ (~cipher & 0xff)) & 0xff
 ```
 
-For `k = 0xBF`, the working byte is `0x01`. If the stored key byte is zero,
-no transform is applied. `pos` is the absolute archive position, not an
+For `k = 0xBF`, the working byte is `0x01`. Stored `0x00` and `0xFF`
+both produce a zero working byte, so neither enables the transform. Upper
+header-key bytes never participate. `pos` is the absolute archive position, not an
 index relative to the directory or payload. Everything below assumes
 decrypted bytes. `[02 §2]` owns the loader contract.
 
@@ -152,7 +154,8 @@ case-insensitive. **Established:** lookup searches each directory's entries
 backwards, selecting the last matching component. Earlier duplicate directories
 do not contribute children to the selected directory. Retail also uses bit 1
 as mutable enumeration visibility; other flag bits are not semantic types
-`[02 §2]`. Nanolathe currently accepts only persisted flag bytes 0 and 1.
+`[02 §2]`. Nanolathe likewise classifies by bit 0 and does not reject
+other persisted bits.
 
 ### Stored files (compression 0)
 
@@ -181,7 +184,7 @@ Each chunk starts with a 19-byte **SQSH header**:
 | Offset | Size | Type | Name | Description |
 | ---: | ---: | --- | --- | --- |
 | +0 | 4 | char[4] | marker | `SQSH` (`53 51 53 48`) |
-| +4 | 1 | u8 | unknown | Always `0x02` in observed data. Possibly a version. Not validated by known tools. |
+| +4 | 1 | u8 | writer constant | **Established:** the linked chunk writer stores `2`; the retail decoder ignores it. Its authoring meaning is unknown. |
 | +5 | 1 | u8 | comp_method | `1` = LZ77, `2` = zlib. The chunk byte selects the decoder; equality with the file-level byte is not required by retail [02 §2]. |
 | +6 | 1 | u8 | encoded | Nonzero = payload has the extra chunk obfuscation applied (see below), `0` = not |
 | +7 | 4 | u32 | compressed_size | Payload length in bytes. `stored_chunk_size = compressed_size + 19`. |
@@ -227,7 +230,10 @@ matches:
 - After 8 items, read the next tag byte.
 
 The window starts zero-filled and its write cursor starts at position **1**, not 0 (position 0 is
-reserved as the terminator). Retail chunks include one padding byte after
+reserved as the terminator). **Established:** reaching the declared output
+length does not terminate decoding; a zero-position match is still required.
+The produced length is checked after that terminator. A safe implementation
+also rejects an item that would exceed the declared length. Retail chunks include one padding byte after
 the two-byte terminator, so up to one trailing byte after the terminator is
 normal.
 
@@ -318,24 +324,24 @@ LZ77 and zlib reads, archive and chunk transforms, checksums, and the header /
 footer checks. It adds bounded metadata reads, directory-cycle detection and
 allocation limits. These are host safety policies, not retail rejection rules.
 
-Two acceptance differences matter when using it as a validator: LZ77 decoding
-stops once the declared output length is reached, without requiring the retail
-terminator; directory flags are restricted to 0/1. Its initial cipher-enable
-test examines the full header word rather than only the stored key byte. These
-synthetic-input differences must not be promoted as format requirements.
+The reader requires the LZ77 terminator as well as the declared output
+length, classifies directory entries by flag bit 0, and enables the archive
+transform only for a nonzero derived working byte. Authored contract fixtures
+cover the zero-derived-key and additional-flag-bit cases.
 `AllowBank` does not implement the retail save-bank layout; that is
 `internal/save`'s separate reader.
 
 ## Unknowns and caveats
 
 - **Unknown:** the intended meaning of SQSH byte +4 (`0x02` in the sample).
-  An original writer contract or a consumer using this byte would settle it;
-  the traced retail decoder does not validate it.
-- **Unknown:** authoring conventions outside the sampled archives, including
-  roots other than 0x14 and non-contiguous directories. The pointer layout
-  permits describing them, but the sample does not establish retail acceptance
-  of every such arrangement. A bounded loader trace or independently authored
-  fixture with a manual retail observation would settle the relevant case.
+  The linked writer establishes the constant and the decoder ignores it; an
+  original authored definition or a consumer assigning meaning would settle
+  whether it was intended as a version. This does not gate decoding.
+- **Established:** the retail loader follows the authored root, entry-array,
+  name and record offsets independently. It requires neither a root at 0x14
+  nor adjacent records or a contiguous name pool. The sample establishes a
+  writer convention, not a placement restriction; malformed pointers remain
+  unchecked retail input as described above.
 - **Established:** same-tier archive precedence depends on host enumeration;
   Nanolathe's deterministic mount policy is documented in
   `docs/SPEC_CONFLICTS.md` SC3. It is not an HPI byte-layout rule.

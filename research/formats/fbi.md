@@ -128,7 +128,7 @@ what it doesn't know.
 
 | Key | Meaning |
 | --- | --- |
-| `UnitName` | Short name; canonical ID and filename stem. Case-insensitive. |
+| `UnitName` | Short name used as the canonical catalog identity and secondary resource basename, compared case-insensitively. Absent or empty stays empty; the discovered FBI filename is not a fallback (Established; see below). |
 | `UnitNumber` | Numeric unit ID, documented as needing to be unique. The engine has no string for this key, so it is not how units are identified at runtime; the recording analyzer still uses the authored value as a candidate join for 0x09 unit type IDs and preserves duplicates or gaps as ambiguity. |
 | `Version` | Always `1` in retail files. **Read by the catalog loader** (floating accessor, default 0): `major = low32(trunc64(floor(v)))`, `minor = low32(trunc64(floor((v − float64(major)) × 10)))`; the unit is kept when `major < 3`, or `major = 3` and `minor ≤ 1` (the executable's own version is 3.1); otherwise it is compacted out of the catalog. Unless another silent rejection suppresses the warning, the non-fatal `Error` box `Incompatible units found.  They will be ignored.  Please download the latest version of the game.` is shown once (`[02 R-MALF-01 §5]`). |
 | `Side` | `ARM` or `CORE` |
@@ -161,8 +161,9 @@ what it doesn't know.
 sampler — not a random yaw span around the requested build facing, the reading
 community notes give it. The runtime heading arithmetic and lifecycle belong to
 [04 §2.3b]; this format entry records only the field's authored type and
-interpretation. `Ovradjust` remains **Unknown**; no overlap, heading, or
-geometry behavior is assigned to it.
+interpretation. **Established (bounded unit-parser and allocator trace):**
+`Ovradjust` has no recovered runtime reader. Its original authoring purpose
+remains **Unknown**; it supplies no overlap, heading, or geometry behavior.
 
 #### YardMap
 
@@ -184,10 +185,22 @@ until the footprint is full; excess characters after the final cell are
 ignored. Thus `YardMap=o;` fills a larger footprint, and `ARMLAB`'s spaced
 6×6 source has the same cells as its unspaced form.
 
-There is no established all-`o` absent-key default. Empty text, or text ending
-in an unlisted character while cells remain, can drive retail past the string
-terminator into uninitialized bytes. A safe parser must state its own handling
-of that malformed case. Cell-bit consumers, including uppercase `G`'s vent
+**Established (malformed-source boundary):** there is no all-`o` absent-key
+retail default. Empty text, or text ending in an unlisted character while
+cells remain, makes the skip branch advance through the string terminator;
+that branch neither consumes a cell nor checks the source end. A recognized
+final character is different: its next-byte terminator check parks the
+source and repeats that character. The output footprint bounds the number
+of accepted cells, not how far an unsuccessful source scan can read.
+
+**Established (Nanolathe host policy):** when the bounded source is exhausted,
+`ParseYardMap` fills remaining cells with `o` and rejects nonpositive host
+footprints. That preserves a blocking building footprint without reading
+unowned memory; it is not a retail absent-key rule. **Unknown:** the bytes
+beyond retail's exhausted source and the resulting cells or fault in a
+particular run. They depend on temporary storage, not solely on FBI bytes,
+so no file-format default can settle them. Cell-bit consumers, including
+uppercase `G`'s vent
 requirement and open-yard occupancy, belong to [05 "Geothermal requirement"]
 and [04 §6.4]; the character names alone do not define those rules.
 
@@ -333,6 +346,14 @@ consumer; the documented retail consumers are in the multiplayer restriction
 UI, outside the current single-player scope. Unknown source-field retention
 must not imply that the engine acts on those values.
 
+The catalog retains every compatible record in retail sort order, including
+duplicate and empty names, and uses a first-equal name index. Construction,
+model resources, cloning and category/profile linking retain record IDs.
+Remaining implementation limits are the post-sort secondary FBI reopen and
+selective overwrite pass, empty-name model/script resource handling, and the
+AI strategic planner's name-based candidate/count tables. They are separate
+from the established duplicate-retention contract [02 R-CAT-01 §5].
+
 **Established — catalog admission:** loose FBI winners are silently skipped
 before unit compilation `[02 R-CAT-01 §4]` / `docs/SPEC_CONFLICTS.md` SC24.
 Archive-backed definitions also pass the version/copyright checks. The
@@ -341,14 +362,34 @@ rejection; it is not guaranteed for every rejected unit `[02 R-MALF-01 §5]`.
 
 ## Unknowns and caveats
 
-- **Unknown:** empty `UnitName` finalization and secondary resource loading.
-  Nanolathe currently substitutes the filename stem; that fallback is not
-  established retail behavior. Trace catalog sorting, lookup and resource
-  paths for an empty name to settle it [02 "Missing and unknown"].
-- **Unknown:** `Ovradjust`'s intended meaning. The bounded reader census finds
-  no consumer; an actual reader/writer chain or original authoring contract
-  would settle its purpose. Preserve the text and assign no geometry effect
-  `[02 R-P28-ANG-01R §1]`.
+- **Established (catalog identity and resource trace):** absent and empty
+  `UnitName` both remain empty through discovery, compatible-record compaction,
+  case-insensitive sorting and secondary FBI selection. The resource helper
+  consequently probes `units/.FBI`. If that file exists and is nonempty, the
+  ordinary second parser can reread its fields; otherwise the empty identity
+  is retained and the later script path is
+  `scripts/.COB`; it does not recover the discovered FBI filename. An absent
+  `Objectname` copies the stored `UnitName`, so it yields `objects3d/.3DO` in
+  this case. An explicitly empty `Objectname` stays empty even with a
+  nonempty unit name; an explicitly nonempty model name remains usable.
+  A missing model follows the ordinary fatal resource path. GUI probes use
+  the stored name plus page number, beginning with `guis/0.GUI` for an empty
+  name [02 R-CAT-01 §4], [02 R-CAT-01 §5]. Nanolathe likewise preserves the
+  empty identity rather than synthesizing a filename stem.
+- **Established (bounded duplicate-name behavior):** retail keeps compatible
+  definitions as records and its name lookup selects the first equal record
+  in the sorted range, excluding the sentinel. Empty is not a special
+  lookup rejection. The bounded static trace also establishes the unstable
+  partition/insertion sort and its equal-name swaps [02 R-CAT-01 §5]. An
+  insertion-only range preserves equal records; a partitioned range can
+  exchange them. Consumers must retain record identity instead of collapsing
+  names or imposing a discovery-order winner.
+- **Established (bounded negative):** neither unit parsing nor allocation
+  reads `Ovradjust`; a case-insensitive executable string census also finds
+  no spelling of that key. This closes the runtime-reader question for the
+  inspected unit path. **Unknown:** the original producer's intended meaning;
+  no period producer or authoring contract was inspected. Preserve its text
+  without assigning behavior [02 R-P28-ANG-01R §1].
 - **Established:** `BMcode`, `BankScale`, `PitchScale`, `BuildAngle`,
   `BuildTime`, `WorkerTime` and `DamageModifier` have traced contracts. They
   must not be listed as unresolved community guesses. `sortbias`,
@@ -357,10 +398,9 @@ rejection; it is not guaranteed for every rejected unit `[02 R-MALF-01 §5]`.
 - **Established:** `ShootMe=0` does not universally forbid autonomous
   targeting; computer-shooter and session-option alternatives remain in the
   admission predicate [04 R-SPEC-01 §5].
-- **Unknown:** deterministic results for malformed yard text that makes retail
-  read beyond its terminator. Those bytes are not supplied by the FBI file;
-  a format reader cannot invent them. The traced malformed edge is known,
-  while Nanolathe must keep its bounded host policy explicit.
+- **Unknown:** run-specific output after a malformed yard source is exhausted.
+  The unchecked scan and the separate bounded host policy are established in
+  "YardMap" above; further source scanning cannot define the adjacent bytes.
 - **Established:** no key names the COB script; `UnitName` selects
   `scripts/<name>.cob` through the catalog loader [02 R-CAT-01 §5].
 

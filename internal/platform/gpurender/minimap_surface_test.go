@@ -22,7 +22,7 @@ func checkMinimapSurfaceDevicePixels() error {
 	list.RecordSurface(drawlist.Surface{Pixels: []byte{9, 10, 11, 12}, SrcW: 2, SrcH: 2, Dst: drawlist.Rect{X: 5, Y: 2, W: 2, H: 2}, Identity: 2, Revision: 1})
 	list.RecordFill(drawlist.Fill{Rect: drawlist.Rect{X: 2, Y: 1, W: 1, H: 1}, Index: 77})
 	list.RecordSurface(drawlist.Surface{Pixels: []byte{7, 8, 9}, SrcW: 3, SrcH: 1, Dst: drawlist.Rect{Y: 5, W: 6, H: 1}, HasClip: true, Clip: drawlist.Rect{X: 2, Y: 5, W: 2, H: 1}})
-	list.RecordSprite(drawlist.Sprite{Frame: &formats.GAFFrame{Width: 3, Height: 1, Pixels: []byte{13, 17, 23}, Transparent: make([]bool, 3)}, X: 4, Kind: drawlist.BlitLit, LightRow: 1, Pal: &pal, HasClip: true, Clip: drawlist.Rect{X: 5, W: 1, H: 1}})
+	list.RecordSprite(drawlist.Sprite{Frame: &formats.GAFFrame{Width: 3, Height: 1, Compressed: 1, Pixels: []byte{13, 17, 23}, Transparent: make([]bool, 3)}, X: 4, Kind: drawlist.BlitLit, LightRow: 1, Pal: &pal, HasClip: true, Clip: drawlist.Rect{X: 5, W: 1, H: 1}})
 	list.RecordExpand()
 	img := r.Execute(&list, 8, 6)
 	if img == nil {

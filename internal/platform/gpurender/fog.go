@@ -71,6 +71,7 @@ type fogPass struct {
 	// is a reported skip, never a silent clip.
 	oversized     int
 	oversizedNote string
+	contentErr    error // first unsupported consumer operation in the current bank
 
 	// grid holds one texel per fog cell of the visible cell range: red is the
 	// channel-one operation, green the channel-zero operation. gridBuf is the
@@ -105,6 +106,15 @@ type fogRegion struct {
 	// classic writers touch for these ops.
 	x0, y0, x1, y1 int32
 	ok             bool
+}
+
+// FogContentError reports the first unsupported fog-frame operation in the
+// currently bound bank. Such frames are suppressed rather than flattened.
+func (r *Renderer) FogContentError() error {
+	if r == nil {
+		return nil
+	}
+	return r.fog.contentErr
 }
 
 // Fog replays one clipped fog op list into the indexed offscreen (C-G7). It runs
@@ -212,8 +222,8 @@ func (r *Renderer) Fog(fg drawlist.Fog) {
 // classicSink.Fog computes it: rebased from the retail viewport origin (128,32)
 // to the full-window shell origin (0,0), then clamped to the framebuffer
 // [03 §2.5][03 §3.3]. rawX and rawY are the UNCLAMPED rebased origin the
-// 32-pixel fill is measured from; x0 and y0 are the clamped origin the fog GAF
-// blit is anchored at. ok is false for the degenerate rectangles classicSink.Fog
+// fog GAF is anchored at; x0 and y0 are the clipped fill bounds.
+// ok is false for the degenerate rectangles classicSink.Fog
 // skips.
 //
 // The modern executor always rebases: the op list is only ever recorded with a
@@ -256,8 +266,9 @@ func fogOpRect(op *render.FogOp, w, h int32) (rawX, rawY, x0, y0, x1, y1 int32, 
 // The covered region is the union of [clamped origin, clamped origin +
 // fogAtlasTile(s)) over the surviving ops, clipped to the framebuffer. That is a
 // superset of every pixel the byte writers touch: a fill stays inside the cell's
-// own 32·s pixels, and a fog GAF frame is anchored at the clamped origin and
-// fits inside a fogAtlasTile(s) square by construction of the atlas.
+// own 32·s pixels, and a fog GAF frame is anchored at the raw origin and
+// fits inside a fogAtlasTile(s) square by construction of the atlas. Using the
+// clamped origin for the bounds conservatively includes its visible portion.
 func fogRegionFor(ops []render.FogOp, w, h int32, scale camera.ViewScale) fogRegion {
 	cell := scale.Px(fogCellPixels)
 	tile := int32(fogAtlasTile(scale))
@@ -472,7 +483,7 @@ func (f *fogPass) ensureAtlas(gray, black [4]*formats.GAFEntry, scale camera.Vie
 	}
 	f.atlasReady = true
 	f.atlasGray, f.atlasBlack, f.atlasScale = gray, black, scale
-	f.oversized, f.oversizedNote = 0, ""
+	f.oversized, f.oversizedNote, f.contentErr = 0, "", nil
 	for i := range f.slotPresent {
 		f.slotPresent[i] = false
 	}
@@ -494,6 +505,19 @@ func (f *fogPass) ensureAtlas(gray, black [4]*formats.GAFEntry, scale camera.Vie
 			for frame := 0; frame < fogAtlasCols && frame < len(entry.Frames); frame++ {
 				fr := fogViewFrame(entry.Frames[frame].Frame, scale)
 				if fr == nil {
+					continue
+				}
+				if family == 0 && fr.Compressed != 0 {
+					continue // gray/dither raw gate precedes composition [03 R-COMP-01 §2]
+				}
+				if len(fr.Subframes) != 0 || fr.SubframeCount != 0 {
+					// TODO(question): the current atlas holds one operation per
+					// pixel. Implement ordered child applications before admitting
+					// composite fog; a flattened mask loses repeated gray and ALP
+					// reads [03 R-COMP-01 §2]. Suppression is a host limitation.
+					if f.contentErr == nil {
+						f.contentErr = fmt.Errorf("nanolathe: unsupported composite fog frame: logical path anims/fog.gaf, providers searched [], expected ordered %s%d frame %d child composition", names[family], variant+1, frame)
+					}
 					continue
 				}
 				ox, oy, ok := fogFrameTilePlacement(fr, tile)

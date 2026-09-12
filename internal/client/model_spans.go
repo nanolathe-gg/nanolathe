@@ -152,7 +152,10 @@ func (c *Client) blitTexturedPolyTarget(target *modelTarget, p *screenPoly, gafF
 			}
 			event := -1
 			if target.trace != nil {
-				_, keyed := gafFrame.At(tx, ty)
+				keyed := inTexture && b != gafFrame.ColorKey
+				if len(gafFrame.Transparent) != 0 {
+					_, keyed = gafFrame.At(tx, ty)
+				}
 				// The trace still records that the sampled texel carried the
 				// GAF key, because a parity capture wants to see it; the writer
 				// no longer acts on it [R-REN-03A §5].

@@ -345,9 +345,8 @@ func (h *retailBattleHUD) drawUnitInfoPicture(c *client.Client, screen *unitInfo
 	}
 	if i := screen.window.GadgetIndex("HOTR"); i >= 0 {
 		r := screen.window.PlacedRect(i)
-		// TODO(question): trace whether the retail F1 picture consumer installs
-		// its PCX trailer palette; keep active-palette indices until established
-		// [02 "Missing and unknown"][fmt pcx].
+		// The F1 loader discards the PCX trailer palette; the picture is copied
+		// as indices into the active display palette [07 R-HUD-03 §8][fmt pcx].
 		c.UIBlitPCXClipped(screen.pic, int(r.X), int(r.Y), int(r.X), int(r.Y), int(r.W), int(r.H))
 	}
 }

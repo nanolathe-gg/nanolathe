@@ -38,7 +38,8 @@ func isValidDifficulty(d Difficulty) bool {
 //
 // Weight is clamped [0,100]; default 100 [PLAN 11 C4] [08 "Established AI-facing data and rooted planner"].
 // Limit default -1 = unlimited [PLAN 11 C4].
-// Plan is the active difficulty gate; Weight/Limit are the active plan's maps.
+// Plan is the active difficulty gate; Weight/Limit are first-match name views
+// of the active per-definition tables.
 // The underlying per-plan tables are retained for per-difficulty lookup (needed
 // because a single ai/*.txt file carries easy/medium/hard sections and the
 // global difficulty selects among them [08 "Established AI-facing data and rooted planner"]).
@@ -64,6 +65,13 @@ type Profile struct {
 	// appliedCatalog prevents applying immutable authored unit directives more
 	// than once when a manager is rebound to the same catalog.
 	appliedCatalog *content.Catalog
+	weightsByID    map[uint32]int32
+	limitsByID     map[uint32]int32
+	recordIDs      map[*content.UnitDef]uint32
+	// Fixture inputs are captured before deriving per-record state so rebinding
+	// a cloned catalog or changing difficulty cannot multiply prior results.
+	fixtureWeights map[string]int32
+	fixtureLimits  map[string]int32
 }
 
 // controlByteComputer is the player slot control byte of a computer player
@@ -106,34 +114,58 @@ func (p *Profile) ApplyUnitDefinitions(catalog *content.Catalog) {
 // as 1; these tables are only ever read where a computer player exists, and a
 // fixture that never filled its player rows is one manager, not none.
 func (p *Profile) ApplyUnitDefinitionsForPlayers(catalog *content.Catalog, computerPlayers int) {
-	if p == nil || catalog == nil || p.appliedCatalog == catalog {
+	if p == nil || catalog == nil {
 		return
 	}
 	if computerPlayers < 1 {
 		computerPlayers = 1
 	}
-	p.appliedCatalog = catalog
+	if p.appliedCatalog == catalog {
+		return
+	}
 	state := &profileApply{
 		catalog: catalog,
-		// The catalog's canonical key order is its authored `unitname` sort
-		// key, which is what the matcher binary-searches [08 R-AI-01 §12] (I1).
-		keys:       catalog.SortedUnitKeys(),
+		// Keep every retained definition in ascending ID order, including
+		// equal names [02 R-CAT-01 §5][08 R-AI-01 §12].
+		records:    catalog.UnitRecords(),
 		difficulty: p.Plan,
-		weightLock: make(map[string]bool),
-		limitLock:  make(map[string]bool),
+		weightLock: make(map[uint32]bool),
+		limitLock:  make(map[uint32]bool),
+	}
+	state.ids = make(map[*content.UnitDef]uint32, len(state.records))
+	for i, def := range state.records {
+		if def != nil {
+			state.ids[def] = uint32(i + 1)
+		}
 	}
 	if p.textLoaded {
 		// Every per-type weight starts at the default 100 and every limit at
 		// -1; absent map entries are those defaults, so the replay starts from
 		// empty tables [08 R-AI-01 §12].
-		state.weights = make(map[string]int32, len(state.keys))
-		state.limits = make(map[string]int32, len(state.keys))
+		state.weights = make(map[uint32]int32, len(state.records))
+		state.limits = make(map[uint32]int32, len(state.records))
 		state.run(p.directives, false)
 	} else {
 		// A hand-built fixture profile has no directive stream; its authored
 		// tables stand and only the per-definition passes run over them.
-		state.weights = cloneWeightTable(p.Weight)
-		state.limits = cloneWeightTable(p.Limit)
+		if p.fixtureWeights == nil {
+			p.fixtureWeights = cloneWeightTable(p.Weight)
+			p.fixtureLimits = cloneWeightTable(p.Limit)
+		}
+		state.weights = make(map[uint32]int32)
+		state.limits = make(map[uint32]int32)
+		for _, key := range catalog.SortedUnitKeys() {
+			id := state.ids[catalog.Units[key]]
+			if id == 0 {
+				continue
+			}
+			if v, ok := p.fixtureWeights[key]; ok {
+				state.weights[id] = v
+			}
+			if v, ok := p.fixtureLimits[key]; ok {
+				state.limits[id] = v
+			}
+		}
 	}
 	// The profile TEXT is parsed once and applied once; the two per-definition
 	// passes are the part that runs per computer player [08 R-AI-01 §18].
@@ -141,8 +173,21 @@ func (p *Profile) ApplyUnitDefinitionsForPlayers(catalog *content.Catalog, compu
 		state.perDefinitionPass(passWeightLock)
 		state.perDefinitionPass(passLimitLock)
 	}
-	p.Weight = state.weights
-	p.Limit = state.limits
+	p.weightsByID, p.limitsByID, p.recordIDs = state.weights, state.limits, state.ids
+	p.appliedCatalog = catalog
+	p.Weight, p.Limit = make(map[string]int32), make(map[string]int32)
+	for _, key := range catalog.SortedUnitKeys() {
+		id := state.ids[catalog.Units[key]]
+		if id == 0 {
+			continue
+		}
+		if value, ok := state.weights[id]; ok {
+			p.Weight[key] = value
+		}
+		if value, ok := state.limits[id]; ok {
+			p.Limit[key] = value
+		}
+	}
 }
 
 // cloneWeightTable copies a per-type table without ranging the source map (I1).
@@ -178,12 +223,13 @@ const (
 // per-type tables and the two separate lock vectors [08 R-AI-01 §12].
 type profileApply struct {
 	catalog    *content.Catalog
-	keys       []string // catalog canonical keys ascending — the `unitname` sort key
+	records    []*content.UnitDef // all retained records in ascending ID order
+	ids        map[*content.UnitDef]uint32
 	difficulty Difficulty
-	weights    map[string]int32
-	limits     map[string]int32
-	weightLock map[string]bool
-	limitLock  map[string]bool
+	weights    map[uint32]int32
+	limits     map[uint32]int32
+	weightLock map[uint32]bool
+	limitLock  map[uint32]bool
 }
 
 // planGateOpen evaluates a `plan` directive against the active difficulty
@@ -216,28 +262,23 @@ func planGateOpen(args []string, active Difficulty) bool {
 // naming; a miss instead expands to the whole category bitset registered for
 // that name and is not exact, so it locks nothing. A name that is neither a
 // definition nor a registered category expands to nothing.
-func (a *profileApply) match(name string) ([]string, bool) {
-	ck := content.CanonicalKey(name)
-	if ck == "" || a.catalog == nil {
+func (a *profileApply) match(name string) ([]uint32, bool) {
+	if a.catalog == nil {
 		return nil, false
 	}
-	if i := sort.SearchStrings(a.keys, ck); i < len(a.keys) && a.keys[i] == ck {
-		return a.keys[i : i+1], true
+	if def, ok := a.catalog.Unit(name); ok && def != nil {
+		if id := a.ids[def]; id != 0 {
+			return []uint32{id}, true
+		}
 	}
 	mask, ok := a.catalog.Category(name)
 	if !ok || mask.IsZero() {
 		return nil, false
 	}
-	// Walk the sort key, not the membership words, so the expansion order is
-	// the catalog's own ascending order (I1).
-	out := make([]string, 0, 8)
-	for _, key := range a.keys {
-		def := a.catalog.Units[key]
-		if def == nil || def.UnitDefID == 0 {
-			continue
-		}
-		if mask.Contains(def.UnitDefID) {
-			out = append(out, key)
+	out := make([]uint32, 0, 8)
+	for i, def := range a.records {
+		if def != nil && mask.Contains(def.UnitDefID) {
+			out = append(out, uint32(i+1))
 		}
 	}
 	return out, false
@@ -359,8 +400,8 @@ func (a *profileApply) applyLimit(args []string) {
 // and read by nothing, which is the retail defect [08 R-AI-01 §12] names.
 func (a *profileApply) perDefinitionPass(lock perDefinitionLock) {
 	gate := true // opened once, at the start of the pass [08 R-AI-01 §18]
-	for _, ck := range a.keys {
-		def := a.catalog.Units[ck]
+	for i, def := range a.records {
+		ck := uint32(i + 1)
 		if def == nil || !def.Downloadable {
 			continue
 		}
@@ -393,6 +434,55 @@ func (p *Profile) WeightFor(typeName string) int32 {
 		}
 	}
 	return 100
+}
+
+// WeightForIndex returns the applied per-definition weight. Index zero and
+// absent entries have the default 100 [08 R-AI-01 §12]. Name views expose only
+// the first equal record; this accessor also reaches later equal records.
+func (p *Profile) WeightForIndex(id uint32) int32 {
+	if p != nil {
+		if value, ok := p.weightsByID[id]; ok {
+			return value
+		}
+	}
+	return 100
+}
+
+// LimitForIndex returns the applied per-definition limit for a computer slot.
+func (p *Profile) LimitForIndex(id uint32) int32 {
+	if p != nil {
+		if value, ok := p.limitsByID[id]; ok {
+			return value
+		}
+	}
+	return -1
+}
+
+// WeightForDefinition reads an applied catalog record without reducing it to
+// its name. Unbound hand-built fixtures keep the existing name-table fallback.
+func (p *Profile) WeightForDefinition(def *content.UnitDef) int32 {
+	if def == nil {
+		return 100
+	}
+	if p != nil && p.appliedCatalog != nil {
+		if id := p.recordIDs[def]; id != 0 {
+			return p.WeightForIndex(id)
+		}
+	}
+	return p.WeightFor(def.UnitName)
+}
+
+// LimitForDefinition keeps the control-byte gate while preserving record ID.
+func (p *Profile) LimitForDefinition(controlByte uint8, def *content.UnitDef) int32 {
+	if controlByte != controlByteComputer || def == nil {
+		return -1
+	}
+	if p != nil && p.appliedCatalog != nil {
+		if id := p.recordIDs[def]; id != 0 {
+			return p.LimitForIndex(id)
+		}
+	}
+	return p.LimitFor(def.UnitName)
 }
 
 // LimitForControl returns the per-type limit a slot with the given control byte
@@ -530,6 +620,12 @@ func (p *Profile) SetDifficulty(d Difficulty) {
 	}
 	p.Plan = d
 	p.appliedCatalog = nil
+	p.weightsByID, p.limitsByID, p.recordIDs = nil, nil, nil
+	if p.textLoaded {
+		p.Weight, p.Limit = cloneWeightTable(p.allWeights[d]), cloneWeightTable(p.allLimits[d])
+	} else if p.fixtureWeights != nil {
+		p.Weight, p.Limit = cloneWeightTable(p.fixtureWeights), cloneWeightTable(p.fixtureLimits)
+	}
 }
 
 // Name returns the profile basename (without extension) as loaded.

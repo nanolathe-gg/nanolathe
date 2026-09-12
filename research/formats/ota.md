@@ -183,12 +183,20 @@ these records for a skirmish too, but only campaign sessions poll them [08 R-TRI
 key watches: `CommanderKilled` and `AllUnitsKilled` are about the **player's**
 units, not the enemy's.
 
-**Unknown — survey reconciliation.** The inherited trigger table counts
-163 `AllUnitsKilled` occurrences, while its campaign summary claimed 176
-of 176. Neither count proves a universal authored key. Re-enumerating the
-same providers and campaign reachability would settle that discrepancy;
-retail also injects a default defeat condition when none is authored
-`[08 R-TRIG-01 §6]`.
+**Established (reference-install survey, 2026-09-12):** the ordinary retail
+mount plan yields 277 physical OTA entries but 275 winning logical OTA
+paths. Counting the winning bytes once per path gives 163 authored
+`AllUnitsKilled` keys, all with value `1`. Of 176 winning maps containing
+an `Easy`, `Medium` or `Hard` schema, 146 author the key and 30 omit it.
+The 13 winning campaign TDFs contain 175 sequential mission references to
+175 distinct maps; 145 of those maps author the key. The additional
+difficulty-schema map is `maps/example.ota`, which no campaign references.
+Thus the inherited 163 count describes the whole winning map set, while
+176 counts difficulty-schema maps; the former claim that all 176 authored
+the key is withdrawn. Neither physical-entry totals nor difficulty-schema
+classification establish campaign reachability. Retail's injection of a
+default defeat condition when none is authored is a separate behavior
+[08 R-TRIG-01 §6].
 
 A mission with no `Player=2` unit at all, whose only victory key is the
 injected or authored `DestroyAllUnits`, is won at the first 30-tick poll,
@@ -308,6 +316,46 @@ into single precision, then promote before multiplication by 65,536 or 30
 and truncation toward zero. Positional orders carry literal zero Y. For
 example `w 0.7` installs 20 ticks, not 21 `[08 R-ENTRY-01 §6]`.
 
+**Established (scanner and caller trace) — prefixes and failed fields.**
+Each command's argument scan advances through one byte string. Leading
+whitespace is skipped; a successful conversion consumes its numeric or name
+prefix rather than requiring a whole whitespace-delimited token. The first
+conversion that cannot match stops the scan, and its destination and all
+later destinations retain their previous contents. A later valid-looking
+word cannot bypass that failure.
+
+- Integer fields use signed decimal scanning: optional sign, then a decimal
+  digit run. Accumulation and negation wrap to 32 bits; they do not saturate
+  or retry as floating point. For example, `2.5` converts the integer prefix
+  `2` and leaves `.5` for the next conversion; `2x` leaves `x`, which makes
+  a following numeric conversion fail. `0x10` supplies decimal zero, not
+  hexadecimal sixteen. Missing digits fail without assigning the field.
+- Floating fields accept decimal digits with an optional sign, decimal point
+  and `e/E` exponent (`d/D` is not an exponent here). At least one mantissa
+  digit is required; `nan` and `inf` are not accepted spellings. The scanner
+  can consume an exponent marker and sign without exponent digits after a
+  valid mantissa; the converter
+  then retains the mantissa value. Conversion stores binary32 and does not
+  turn a binary32 overflow into a failed scan: signed infinity can reach the
+  ordinary subsequent numeric conversion. This is not a saturation rule.
+- Names consume the allowed prefix: letters, digits, underscore and dot,
+  except `wa`, whose scanset omits underscore. A hyphen or other excluded
+  byte ends the name and remains at the current scan position. Empty name
+  conversion leaves its destination untouched. The numeric-attack caller
+  requires two successful floats, otherwise it tries the name form; `wa`
+  requires one successful name, otherwise it selects self.
+
+**Established — caller initialization matters.** Build and stockpile counts
+start at 1; wait duration and wait selector start at zero; patrol timeout
+starts at zero; standing move/fire operands start from the unit's current
+values. Failed fields retain these initial values where supplied. Move,
+unload, patrol and mobile-build coordinate temporaries are not all
+initialized before scanning, and most callers ignore the conversion count.
+Their failed-coordinate results therefore cannot be reconstructed from OTA
+text alone. A checked host must identify its chosen handling as policy,
+rather than inventing a universal zero default [04 §3.6],
+[08 "Argument parsing"], [08 R-ENTRY-01 §6].
+
 **Established — selection postlude.** Queuing at least one order clears the
 unit's selectable state. Unless the string contains numeric attack, patrol,
 self-destruct or make-selectable, the interpreter appends a final
@@ -360,10 +408,21 @@ file!`, `Old TED format no longer supported!`, and `Hey, joker!  Mission file
   to the unit/model contract, not an additional OTA transform.
 - No environment key is read at both levels: each is read from exactly one
   section, see "Which keys the engine reads" above.
-- **Unknown:** malformed numeric/name scanner prefix, overflow and failed-field
-  continuation beyond the documented cases; settle with the corresponding
-  scanner and consumer trace. `internal/mission/initial_mission.go` retains
-  explicit TODOs and permissive fallbacks for those gaps.
+- **Unknown:** run-specific coordinate values consumed after failed,
+  unchecked argument conversions, and outcomes of overlong commands that
+  overwrite temporary token storage. The scanner's prefix, integer wrap,
+  name termination and stop-on-failure rules are established above; another
+  scanner trace cannot supply untouched temporary values. Nanolathe's
+  local sequential scanner now implements those rules, with zero as explicit
+  host policy for untouched uninitialized coordinates and a bounded token
+  length. These policies are documented in DESIGN_SESSIONS_AI_SAVE C13.
+- **Unknown:** exact rounding for adversarial decimal inputs through retail's
+  intermediate floating converter has not been established. Its grammar,
+  binary32 store and signed-infinity overflow result are established above;
+  a trace of the converter's digit reduction and rounding arithmetic would
+  settle remaining last-bit differences. Nanolathe currently uses Go's
+  binary32 decimal conversion at that boundary, marked as host implementation
+  rather than a claim of proven equality for every decimal string.
 - Malformed-input outcomes for an OTA (syntax error fatal, missing
   `GlobalHeader`, unknown unit name skipped, bad `Player` fatal, unknown
   feature name fatal, missing TNT fatal) are tabulated in
@@ -375,9 +434,11 @@ file!`, `Old TED format no longer supported!`, and `Hey, joker!  Mission file
 ## Sources
 
 - Historical key/command surveys cite 272 and 275 OTA files, and 176
-  campaign missions. These are different inherited survey bounds, not a
-  current whole-install count; `docs/SPEC_CONFLICTS.md` SC17 records a
-  later 275-map/175-mission scope. Counts do not override loader evidence.
+  campaign missions. The winning-path survey in "Mission end conditions"
+  reconciles the current 275-map/175-campaign-map scope with the 176 maps
+  containing difficulty schemas; it does not retrospectively establish the
+  provider set of the older 272-file survey. Counts do not override loader
+  evidence or turn physical entries into winning paths.
 - *OTA File Content Description*, TA Design Guide — variable catalog,
   schema and InitialMission documentation with retail excerpts:
   <https://units.tauniverse.com/tutorials/tadesign/tadesign/otadesc.htm>

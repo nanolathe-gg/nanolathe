@@ -109,7 +109,8 @@ allocating presentation geometry or sorting a second time.
 | `LoadFNT`, `FNT`, `FNTGlyph` | The bitmap font: byte height, ignored byte, signed baseline, first code, per-glyph rasters | `[fmt fnt]` `[02 §7]` |
 | `LoadPCX`, `PCX` | The run-length image used by the front end | `[fmt pcx]` `[02 §7]` |
 | `LoadWAV`, `LoadAudio`, `WAV` | PCM metadata for canonical RIFF/WAVE and the legacy container, sample bytes left in the VFS | `[fmt wav]` `[02 §7]` |
-| `LoadSCT`, `LoadBMP` | The editor section file and the uncompressed BMP variants the install carries | `[02 §6]` |
+| `LoadSCT` | The editor section file: validated `2W × 2H` `Heights`, exact v2/v3 `AttributeData`, and preserved `Raw` bytes | `[02 §6]` |
+| `LoadBMP` | The uncompressed BMP variants the install carries | `[02 §6]` |
 
 The compiled script archive is decoded by `internal/cob`, not here; its byte
 layout is `[fmt cob]` and its behaviour belongs to DESIGN_UNITS_ORDERS_COB.
@@ -132,8 +133,8 @@ picks a duplicate policy explicitly instead of inheriting one.
 screen, and a nil observer makes it exactly `Compile` `[07 §4]`.
 
 The compile is two-stage `[02 §5]`. Stage 1 discovers and parses each family
-into typed records; stage 2 links cross-references, so enumeration order can
-never leak into identity. The order of work inside the compile follows the
+into typed records; stage 2 links cross-references. FBI records retain the
+retail sort permutation, including its deterministic equal-name ordering. The order of work inside the compile follows the
 executable's own `[02 R-CAT-01 §5]`:
 
 1. weapons (`weapons/*.tdf`), retaining the same-ID duplicate diagnostics;
@@ -169,10 +170,25 @@ executable's own `[02 R-CAT-01 §5]`:
 | `SkirmishManifest`, `SkirmishAsset`, `SkirmishDiagnostic` | The preflight result (§3.5) |
 
 Accessors: `Unit`, `Weapon`, `WeaponByName`, `WeaponByID`, `WeaponLink`,
-`WeaponRecordsByID`, `Category`, `ResolveCategoryMask`, `SortedUnitKeys`,
+`WeaponRecordsByID`, `Category`, `ResolveCategoryMask`, `SortedUnitKeys`, `UnitRecords`,
 `UnitDefIndex`, `UnitDefByIndex`, `UnitIndexOf`, `SortedModels`, `ModelIndex`,
 `ModelForUnit`, `DownloadPlacementsForPage`. Lifecycle: `Validate`, `Clone`,
 `RestrictToCreatable`, `Finalized`.
+
+`Catalog.UnitRecords()` returns a copied slice of all retained FBI definitions
+in 1-based ID order, including duplicate and empty names; sentinel zero is
+implicit. `Units` and `SortedUnitKeys` expose the first-match name index and
+its unique keys. `UnitDefByIndex` and `UnitIndexOf` preserve each record's
+identity; `UnitDefIndex` selects the first equal name. Compiled IDs stay fixed
+until a battle-local restriction compacts and renumbers the clone. Map-only
+fixture catalogs retain their existing sorted-key fallback.
+
+Discovery preserves record slots through the retail compatibility gates and
+compaction, then uses the retail partition/insertion sort [02 R-CAT-01 §§4–5].
+All category, weapon, movement, model, script, page and downloadable passes
+consume retained records. Download builder indices and restriction names
+still resolve only to the first matching record. Clone and hash include every
+record; stock unique-name catalogs preserve their prior IDs and hash stream.
 
 `CanonicalKey` is the one key rule: trim, fold to lower case. Every catalog
 map, every cross-reference and every hash input goes through it, so a lookup
@@ -633,9 +649,15 @@ Open questions are maintained at their code sites and in the owning research
 category's "Missing and unknown" list. A package-wide absence of markers is
 not a completion claim. Current examples include high-byte locale comparison
 in the VFS, TDF/GAF readers and content lookup, GAF nested/alternate raster
-consumers, and empty unit-name finalization. These are distinct from the
+consumers, and the secondary FBI re-open described below. These are distinct from the
 established contracts above.
 
+* **Secondary FBI re-open** remains an implementation gap. Retail reopens
+  `units/<stored UnitName>.FBI` after sorting when that resource has nonzero
+  size [02 R-CAT-01 §5]. The current compiler reads the complete discovered
+  section once; record preservation does not implement the second parse or
+  its selective field replacement. The exact merge into the discovery record
+  must be represented before this path can claim parity.
 * **Host-specific enumeration order** remains an explicit deterministic
   substitute (SC3). The manifest identifies the winning provider.
 * **Excluded platform/session work** includes the CD-ROM discovery tier and

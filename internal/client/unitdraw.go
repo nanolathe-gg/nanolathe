@@ -267,25 +267,23 @@ func (c *Client) uiBlitClippedRaw(f *formats.GAFFrame, x, y, clipX, clipY, clipW
 	}
 }
 
-// UIBlitLit stamps a GAF frame with every opaque pixel remapped through one
-// row of the PALETTE.LHT brightening table. This is retail's shaded glyph
-// blitter, which indexes the same PALETTE.LHT table as the light-level
-// remapper for a non-negative level; the loading screen draws a stage's label
-// through it so the label flashes as the stage completes. Level 0 is UIBlit
-// [03 §4.3.1]. Presentation only [I6].
+// UIBlitLit draws the nonzero GAF-font mode: raw leaves use mode as key and
+// source as the LHT row; RLE leaves remap source through the mode row; composites
+// send every child through ALP [03 R-FONT-01 §6]. Mode zero is ordinary UIBlit.
 func (c *Client) UIBlitLit(f *formats.GAFFrame, x, y int, pal *palette.Tables, level int) {
 	if f == nil {
 		return
 	}
-	if pal == nil || level <= 0 {
-		// Level 0 (and the no-palette case) is exactly UIBlit, so it emits the
+	if level <= 0 {
+		// Level 0 is exactly UIBlit, so it emits the
 		// plain keyed record [03 §4.3.1].
 		c.UIBlit(f, x, y)
 		return
 	}
-	// The palette rides the record (Sprite.Pal), so the deferred replay resolves
-	// the lit blit against exactly this palette (WU-1.8). The LHT level is an
-	// LHT-table row (LightLookup clamps to 0..31); it rides LightRow.
+	if pal == nil {
+		return // the light-table capability gates nonzero modes, including composites
+	}
+	// Preserve the caller's palette through deferred replay.
 	c.emitSprite(drawlist.Sprite{
 		Frame:    f,
 		X:        int32(x),
@@ -312,11 +310,22 @@ func (c *Client) uiBlitLitClippedRaw(f *formats.GAFFrame, x, y int, pal *palette
 			if px < minX || px >= maxX {
 				continue
 			}
-			b, ok := f.At(col, row)
-			if !ok {
+			i := row*int(f.Width) + col
+			if i >= len(f.Pixels) {
 				continue
 			}
-			c.indexed[py*c.width+px] = pal.LightLookup(level, b)
+			b := f.Pixels[i]
+			dst := py*c.width + px
+			if f.Compressed == 0 {
+				// Raw mode replaces the frame's key, including pixels the
+				// ordinary decoder marked transparent [03 R-FONT-01 §6].
+				if b == byte(level) || int(b) >= len(pal.Light)/256 {
+					continue // host safety: unsafe source rows are suppressed, never clamped
+				}
+				c.indexed[dst] = pal.Light[int(b)*256+int(c.indexed[dst])]
+			} else if _, ok := f.At(col, row); ok {
+				c.indexed[dst] = pal.LightLookup(level, b)
+			}
 		}
 	}
 }

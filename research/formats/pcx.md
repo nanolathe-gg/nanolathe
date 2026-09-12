@@ -61,8 +61,9 @@ without checking the marker [02 R-MALF-01 §9]. These embedded palette bytes
 belong to the decoded asset; their presence does not establish that a consumer
 installs them as the active display palette. Frontend PCX backgrounds retain
 their indexed pixels and display through `PALETTE.PAL`, with GUI semantic-color
-mapping handled separately [07 §5 "Retail palette contract"]. The F1 consumer's
-palette-installation behavior remains Unknown below.
+mapping handled separately [07 §5 "Retail palette contract"]. The F1 portrait
+also uses the active display palette: its loader discards the decoded trailer
+and its painter copies the indexed image unchanged [07 R-HUD-03 §8].
 
 Real example — `unitpics/ARMFLASH.PCX` from `totala1.hpi`:
 
@@ -106,19 +107,19 @@ are host-safety policies. Retail does not provide these malformed-input
 guarantees. `formats/pcx_test.go` locks the visible-width rule, marker-free
 palette read, run clamping and checked truncated-value failure.
 
-The F1 picture path in `cmd/nanolathe/unitinfo.go` uses the client's indexed
-PCX blit and therefore the active display palette. That implementation choice
-does not settle the retail F1 palette question below.
+**Established — F1 consumer.** The unit-information opener requests the PCX
+image without requesting a palette result. The image loader copies the decoded
+indices into its image surface, releases the decoded palette, and returns the
+surface. The portrait painter copies those indices into the window surface;
+no portrait palette is installed or applied. The existing F1 picture path in
+`cmd/nanolathe/unitinfo.go`, which uses the client's indexed PCX blit and active
+display palette, matches that behavior [07 R-HUD-03 §8].
 
 ## Unknowns and caveats
 
 - The engine never reads `bytes_per_line`: each row is decoded as exactly
   `width` pixels, so a padded file shears (each row starts in the previous
   row's padding) without any error.
-- **Unknown:** whether the F1 unit-picture consumer installs its PCX trailer
-  palette. A trace of that consumer's palette installation calls would settle
-  it [07 R-HUD-03 §8]. Do not generalize from the established frontend
-  background path or treat a decoded trailer as proof of display selection.
 
 ## Sources
 

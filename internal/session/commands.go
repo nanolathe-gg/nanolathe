@@ -252,7 +252,8 @@ func (s *Session) EnqueueHumanCommand(c HumanCommand) error {
 	return nil
 }
 
-// PendingHumanCommands returns immutable command copies for diagnostics/tests.
+// PendingHumanCommands returns immutable command copies for diagnostics/tests
+// and presentation of input intent awaiting the next authoritative tick.
 func (s *Session) PendingHumanCommands() []HumanCommand {
 	if s == nil {
 		return nil

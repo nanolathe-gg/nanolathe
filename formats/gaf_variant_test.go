@@ -25,8 +25,8 @@ func TestDoubledPlainFrame(t *testing.T) {
 	if got.ColorKey != 9 {
 		t.Fatalf("colour key %d, want 9", got.ColorKey)
 	}
-	if got.Compressed != 0 {
-		t.Fatalf("doubled frame must be plain, Compressed=%d", got.Compressed)
+	if got.Compressed != src.Compressed {
+		t.Fatalf("doubled frame must retain source dispatch, Compressed=%d", got.Compressed)
 	}
 	want := []byte{
 		1, 1, 2, 2,

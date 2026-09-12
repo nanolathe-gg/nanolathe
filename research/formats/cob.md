@@ -84,17 +84,18 @@ or restore accepts an externally supplied program. This is a host-safety
 policy, not a retail limit; it prevents a small header from requesting an
 unbounded allocation. **Established implementation behavior:** `internal/cob.Load`
 also requires version 4, aligned nonempty code/name/index tables, in-range
-entry words and terminated nonempty names, and rejects duplicate script names.
-Retail ignores the version and resolves script names by a case-sensitive
-first-match scan [02 R-MALF-01 §8] [04 R-COB-01 §1]. Duplicate-name rejection
-is therefore an implementation divergence, not a format constraint. The
+entry words and terminated nonempty names. The version-4 restriction is an
+explicit host compatibility policy; retail ignores that word
+[02 R-MALF-01 §8]. Duplicate script names are accepted: name lookup retains
+the first exact, case-sensitive match, while indexed calls retain every
+declared entry [04 R-COB-01 §1]. The
 loader does not predecode opcodes or validate instruction boundaries.
 
 ### The trailing record table
 
 **Established.** Header words `0x14` and `0x28` are a *count/pointer pair* for
 a fifth table, not a reserved word and a redundant string-pool offset. The loader reads the file
-whole, stamps it with the content checksum, and then relocates exactly five
+whole, records its content checksum in the script cache, and then relocates exactly five
 table pointers — script entry points (pointer only; the entries are word
 indexes into the code array and are *not* relocated), script names (pointer plus
 every entry), piece names (pointer plus every entry), the code array (pointer
@@ -106,6 +107,11 @@ from the loader side; this entry is what fixes the two words to the two slots.
 In the recorded 835-file census the count is zero and the table offset equals
 the first script-name string offset. A zero count does not require that
 coincidence; both fields retain their table roles.
+
+**Established (bounded compiler source):** the inspected Scriptor v1 (RC1)
+writer emits a zero trailing-record count for both its TA and Kingdoms
+outputs. It places the zero-count pointer at the start of the string pool.
+This writer therefore supplies no example of the nonempty record layout.
 
 **Unknown.** What an 8-byte record *means*. Its second dword is a file offset
 (it is relocated); the first is not. The surveyed scripts carry none, and the recorded reader search found no
@@ -140,7 +146,7 @@ by [04 §4.1–§4.6], [04 R-COB-01 §1], and [04 R-COB-04 §7].
 
 **Established — sampled scale relationships:** the recorded comparison of
 `ARMFLASH.BOS` with `ARMFLASH.COB` supports the scales below. Exact compiler
-quantization at fractional and halfway boundaries remains Unknown.
+quantization used to produce these shipped constants remains Unknown.
 
 | BOS source | Meaning | Compiled constant |
 | --- | --- | --- |
@@ -148,10 +154,22 @@ quantization at fractional and halfway boundaries remains Unknown.
 | `<v>` (angle brackets) | angle or angular speed | `v * 65536 / 360`, quantized to an integer — full circle = 65536. `<90>` → `16384`, `<50>` → `9102`. |
 | bare number | raw integer | as written (`sleep 150` → `150`) |
 
-**Unknown:** the compiler's rounding rule at values where rounding and
-truncation differ. The displayed samples do not settle it; inspect the
-compiler numeric conversion or compare deliberately authored boundary values.
-This is a BOS compiler question, not a runtime COB-decoding ambiguity.
+**Established (bounded compiler source):** Scriptor v1 (RC1)'s numeric
+converter scales a parsed number using configurable floating-point linear
+or angular factors, then converts the result to a signed integer. For
+representable results that conversion truncates toward zero; it does not
+round to nearest. The settings store both factors as single-precision
+values. The application's default linear factor is `163840.0`, but its
+default angular factor is `182.0`, not the exact ratio `65536/360`.
+Consequently this release's default settings do not reproduce every angle
+in the sampled table.
+
+**Unknown:** which compiler release, factor settings and intermediate
+precision produced each shipped COB's fractional constants. The RC1 source
+settles that converter's final integer conversion, not the provenance of
+retail bytecode. A matched compiler build/settings record or a reproduced
+boundary-value compilation would settle the remainder. This is a BOS
+authoring question, not a runtime COB-decoding ambiguity.
 
 The table states compiler constant encoding only. Runtime callback argument
 units and coordinate transforms are owned by [04 R-CB-01 §2] and [04 §4.4].
@@ -492,8 +510,25 @@ or Scriptor vocabulary does not make them fixed retail callbacks.
 files from `totala1.hpi`, `rev31.gp3`, `CCDATA.CCX` and `btdata.ccx` reports
 the following. The separate transport-read census above counts 841 copies;
 **Unknown:** the exact enumeration difference between these two recorded
-totals. Repeating both enumerations with archive/copy provenance would settle
-it. Neither total is a universal format limit.
+totals. Repeating the 841-copy enumeration with archive/copy provenance would
+settle it. Neither total is a universal format limit.
+
+**Established (repeatable header census):** a fresh independent enumeration
+of each installed archive, without overlay deduplication, reproduces 835
+copies: `totala1.hpi` 157, `rev31.gp3` 200, `ccdata.ccx` 265 and
+`btdata.ccx` 213. These represent 272 distinct logical paths and 258 distinct
+file-content hashes. Every copy has version 4, zero trailing records, and no
+exact duplicate script names. This recount checks headers and names; it does
+not repeat the historical instruction decode below. Duplicate-name handling
+and nonempty trailing tables therefore concern custom inputs, not a missing
+path through these stock scripts.
+
+Including the installed `AFark.ufo`, `AFlea.ufo`, `AScarab.ufo`,
+`CorNecro.ufo`, `Cormabm.ufo` and `corplas.ufo` adds one COB copy apiece,
+reproducing a total of 841 under that explicit scope. Each added script also
+has version 4, zero trailing records and no duplicate names. This explains
+how the two totals can arise from different archive sets without asserting
+that the unrecorded historical enumeration used exactly that set.
 
 - Version signature is always 4; the trailing-record count at `0x14` is always
   0 (see "The trailing record table" — the word is a count, not a reserved
@@ -590,6 +625,10 @@ it. Neither total is a universal format limit.
   against a second, independent community opcode table (`commands.txt` from
   a VB6 "COBBuilder" tool in Kinboat's 1998 TA-formats source archive),
   which agrees on every opcode it lists.
+- The same RC1 release's `BosCmdParse.cpp` numeric converter and output
+  writer, plus `Scriptor.cpp` settings defaults, establish the bounded
+  conversion and zero-trailing-table observations above. Configurable
+  defaults are not evidence of the settings used for shipped assets.
 - Scaling constants verified against the retail
   `ARMFLASH.BOS`/`ARMFLASH.COB` pair from `totala1.hpi`; container examples
   from `CORTRUCK.COB`; corpus statistics from decoding all 835 retail COBs.
