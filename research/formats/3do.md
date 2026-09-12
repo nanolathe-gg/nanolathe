@@ -4,9 +4,16 @@
 
 `.3do` files hold Total Annihilation's 3D models: units, unit corpses, 3D map
 features, and projectile models (bombs, missiles). They live in the
-`objects3d/` directory. A unit's model is `<unitname>.3do` and its corpse is
-`<unitname>_dead.3do` (referenced indirectly through a feature definition,
-see [tdf.md](tdf.md)).
+`objects3d/` directory. **Established:** a unit's `ObjectName` selects its
+model; its corpse reference selects a feature definition whose `object` names
+the wreck model [02 "Model archive (3DO)"] [fmt fbi] [fmt tdf].
+`<unitname>.3do` and `<unitname>_dead.3do` are naming conventions, not path
+rules.
+
+**Evidence scope.** Byte layouts and relocation below are established by
+[02 "Model archive (3DO)"] and [02 R-MALF-01 §8]. Numerical censuses describe
+the listed local base/expansion corpus only; they do not constrain other
+authored files. Host decoder/encoder policies are identified separately.
 
 A model is a tree of **objects** ("pieces"). Each piece has its own vertex
 and primitive (face) arrays and a translation relative to its parent. Pieces
@@ -15,8 +22,9 @@ piece names from the 3DO. Pieces with one vertex and no primitives are
 common; they serve as attachment/emit points (muzzle flares, smoke, nano
 spray, build pads).
 
-There is **no animation data** in a 3DO — all motion comes from the COB
-script ([cob.md](cob.md)). There are also **no UV coordinates** — texture
+There is **no animation data** in a 3DO. Script animation comes from COB
+([cob.md](cob.md)); unit and projectile transforms are runtime state, too.
+There are also **no UV coordinates** — texture
 mapping is implied by vertex order (see "Texturing" below).
 
 ## Format at a glance
@@ -33,7 +41,8 @@ offset 0: root Object record (52 bytes)
 ```
 
 Children of one parent form a linked list through their sibling pointers.
-All offsets are absolute file offsets; there is no file header — the root
+All integer fields are little-endian. All offsets are absolute file offsets;
+there is no separate file header — the root
 object simply starts at offset 0.
 
 A real tree (`objects3d/armflash.3do`, the ARM Flash tank):
@@ -50,22 +59,22 @@ base            @ 0x0000  36 verts, 20 prims
 
 ## Reference
 
-### Object record (52 bytes, 13 × i32)
+### Object record (52 bytes, 13 × 32-bit words)
 
 | Offset | Type | Name | Description |
 | ---: | --- | --- | --- |
 | 0x00 | i32 | VersionSignature | Always `1` in retail data. **The executable never reads it** (`[02 R-MALF-01 §8]`); a reader may still require it, knowing that retail would accept any value. |
 | 0x04 | i32 | NumberOfVertexes | Vertex count for this piece (may be 0) |
 | 0x08 | i32 | NumberOfPrimitives | Primitive count for this piece (may be 0) |
-| 0x0C | i32 | OffsetToSelectionPrimitive | Root piece only: reference to the primitive drawn as the ground/selection plate. `-1` = none. Child and sibling pieces always store `-1` (stock data also uses `0` as a no-selection value on non-roots). See "Selection primitive" below. |
+| 0x0C | i32 | OffsetToSelectionPrimitive | Historical name: this is a primitive **index**, not an offset. `-1` = none; zero selects primitive zero when the piece has primitives. Retail normalizes this field on every piece [02 "Model archive (3DO)"]. See "Selection primitive" below. |
 | 0x10 | i32 | XFromParent | Piece origin relative to parent origin, signed 16.16 fixed point |
 | 0x14 | i32 | YFromParent | ditto (Y is up) |
-| 0x18 | i32 | ZFromParent | ditto (**−Z** is the model's front — see "Unknowns and caveats") |
+| 0x18 | i32 | ZFromParent | ditto (the common −Z-forward authoring convention is discussed under "Unknowns and caveats") |
 | 0x1C | i32 | OffsetToObjectName | → NUL-terminated piece name |
-| 0x20 | i32 | Always_0 | Zero in all observed files |
+| 0x20 | u32 | OptionalAuxiliaryOffset | Relocated when nonzero; zero in the surveyed corpus. Historically called `Always_0`. The target data's meaning is Unknown [02 "Model archive (3DO)"]. |
 | 0x24 | i32 | OffsetToVertexArray | → `NumberOfVertexes` × Vertex |
 | 0x28 | i32 | OffsetToPrimitiveArray | → `NumberOfPrimitives` × Primitive |
-| 0x2C | i32 | OffsetToSiblingObject | → next Object sharing this piece's parent; `0` terminates the sibling list. The root has no siblings. |
+| 0x2C | i32 | OffsetToSiblingObject | → next Object sharing this piece's parent; `0` terminates the sibling list. The decoder also accepts a root sibling chain; the layout does not prohibit it. |
 | 0x30 | i32 | OffsetToChildObject | → first child Object; `0` = leaf |
 
 Real example — the root object of `objects3d/bomb1.3do` (a projectile,
@@ -94,13 +103,13 @@ wide and a big tank ~50; one world unit is on the order of one map pixel.
 Vertices are shared within a piece via the primitives' index arrays; they
 are never shared across pieces.
 
-### Primitive record (32 bytes, 8 × i32)
+### Primitive record (32 bytes, 8 × 32-bit words)
 
 | Offset | Type | Name | Description |
 | ---: | --- | --- | --- |
 | +0x00 | u32 | ColorIndex | Authored palette-index field. In the retail corpus untextured primitives keep it in range, while 868 textured primitives carry values above 255 consistent with editor residue. Runtime use is owned by [03 §2.4.1] and [R-RAST-01 §1]. |
 | +0x04 | i32 | NumberOfVertexIndexes | Number of entries in the referenced index array. Across all 761 retail models: 94% are 4, 4% are 3, there are 315 values of 2, no values of 1, and about 950 values from 5 through 16. This distribution is a stored-asset fact, not triangulation advice; retail dispatch is owned by [03 §2.4.1]. |
-| +0x08 | i32 | Always_0 | Zero in observed unit models |
+| +0x08 | u32 | OptionalAuxiliaryOffset | Relocated when nonzero; zero in observed unit models. Historically called `Always_0`. The target data's meaning is Unknown [02 "Model archive (3DO)"]. |
 | +0x0C | i32 | OffsetToVertexIndexArray | → `NumberOfVertexIndexes` × u16, each an index into **this piece's** vertex array |
 | +0x10 | i32 | OffsetToTextureName | → NUL-terminated texture name (a GAF entry name, no extension); `0` = no texture |
 | +0x14 | i32 | Unknown_1 | Editor-only fields per the original note. **Not usually zero:** 631 of the 761 retail models contain at least one primitive with nonzero values here. Ignore; never validate as zero. |
@@ -123,7 +132,7 @@ ColorIndex=69, 3 indexes @ 0x58 = `[8, 3, 1]`, no texture, IsColored≠0.
 ### Strings and file layout
 
 Object names and texture names are NUL-terminated strings anywhere in the
-file. Cavedog's exporter always emits a texture-name pool at offset 0x34
+file. Observed exporter layouts place a texture-name pool at offset 0x34
 (immediately after the root object), then vertex index arrays, vertices,
 primitives, then further objects — e.g. in `armflash.3do` the name block at
 0x34 begins `Tredside2\0descamo3\0camoflage\0Tredside1\0...`. Rely on the
@@ -131,18 +140,18 @@ pointers, not on this layout.
 
 ### Hierarchy semantics
 
-- Piece positions are pure translations. There is no rotation or scale in
-  the file; orientation comes entirely from script animation at runtime.
-- A piece's world position = sum of `[XYZ]FromParent` up its ancestor chain.
-- Traversal must guard against cycles and shared nodes: nothing in the
-  format prevents a malicious file from pointing two links at one object.
-  Retail files are strict trees.
+- **Established:** piece origins are stored as translations, with no authored
+  rotation or scale fields. The sum of `[XYZ]FromParent` up an ancestor chain
+  gives an origin in the file's bind-pose coordinates, not a world position.
+  Runtime import and composition are [03 §2.4].
+- **Host policy:** Nanolathe rejects cycles and shared nodes. The retail
+  relocator has no visited set [02 R-MALF-01 §8]; the surveyed assets are trees.
 
 ### Selection primitive ("ground plate")
 
-The root's `OffsetToSelectionPrimitive` designates one primitive of the root
-piece drawn as the unit's selection rectangle/footprint. A survey of all
-761 retail models shows exactly three encodings on roots:
+**Established:** `OffsetToSelectionPrimitive` designates a primitive of its
+own piece; draw and picking consumers are specified in [03 §2.4.1].
+A bounded survey of 761 retail models shows three values on roots:
 
 - a **direct primitive index** into the root's primitive array
   (361 models, values 1 and up);
@@ -178,23 +187,21 @@ quadrilateral usable as a base/ground plate:
 
 The selected plate cannot be identified reliably from texture or
 `IsColored` flags. Some valid designated plates are textured, and many carry
-nonzero editor/color fields. Geometry plus the root selection value is the
-reliable retail-unit signal: four unique vertices, one constant Y plane, and
-nonzero X/Z extent. Small coordinate asymmetries occur, so collision users
-should derive conservative X/Z bounds rather than require a mathematically
-perfect axis-aligned rectangle.
+nonzero editor/color fields. Geometry plus the root selection value identifies
+the designated plates in this census: four unique vertices, one constant Y plane, and nonzero X/Z
+extent. This observation does not define collision bounds or a fallback for
+an absent selection primitive; those are runtime contracts.
 
 In shipped unit assets, selection value `0` consistently designates primitive
 0. The two `-1` cases still carry base-plate geometry at primitive 0. Whether a
 runtime derives bounds from that otherwise-undesignated geometry is behavior
 or implementation policy, not a stored-format rule.
 
-The selection primitive is a quad lying in the ground plane. Historical
+The designated plates in this unit census are flat X/Z quads. Historical
 notes commonly describe it as untextured/invisible, but the retail unit
 census above shows that texture and color/editor flags are not consistent
-identifiers. Community lore: if a vehicle's ground plate winding is inverted
-the unit flips out on slopes, so the plate's facing matters to the engine's
-terrain alignment.
+identifiers. Terrain alignment and selection consumers must be taken from
+the behavioral specification, not inferred from this geometry census.
 
 ### Texturing
 
@@ -228,9 +235,8 @@ by [03 §2.4.1], [R-RND-02A], and [R-RAST-01 §5].
 
 ### Piece naming conventions
 
-COB scripts and the engine's default helpers assume conventional piece
-names. From a survey of all 761 retail models (counts = models containing
-the name):
+Authored COB scripts use conventional piece names. From a survey of 761
+retail models (counts = models containing the name):
 
 - `base` (509) — the root piece of nearly every unit.
 - `turret` (102), `sleeve(s)`, `barrel`/`barrel1`/`barrel2`, `gun`/`gun1`/
@@ -247,9 +253,10 @@ the name):
 - Corpse models (`*_dead.3do`) conventionally contain `ground`, `wreck`,
   and/or `gp` pieces (65/64/32 models).
 
-None of this is enforced by the format — the linkage is by name between the
-3DO and its COB — but tooling and reimplementations should expect these
-names, and `SweetSpot`/`SMOKEPIECE` defaults target `base`.
+None of this is enforced by the format: the linkage is by name between the
+3DO and its COB. `SMOKEPIECE` is an authored helper convention. The engine's
+`SweetSpot` query seeds piece index zero, which need not be named `base`
+[04 §5.3].
 
 ### Model statistics (retail corpus)
 
@@ -271,6 +278,15 @@ reaches signed division by zero. A checked decoder may reject these malformed
 inputs rather than reproduce unsafe memory access. These are implementation
 limits, not recovered retail behavior or file-format restrictions.
 
+**Established implementation behavior.** `formats.LoadThreeDO` requires
+version 1, preserves authored primitive order and raw fields, and keeps the
+original bytes. It stores both optional auxiliary offsets under the legacy
+name `AlwaysZero` without resolving their targets. `EncodeThreeDO` copies
+those words while rebuilding file offsets, so it does not support relocating
+nonzero auxiliary references. It also restricts textured output to quads;
+the decoder does not impose that restriction. These are decoder/encoder
+policies and limitations, not retail format rules.
+
 ## How the engine loads it
 
 The file is read whole (missing or zero-length → **fatal**, the box shows
@@ -290,30 +306,25 @@ selection field; the runtime model compiler creates the ordered view.
 
 ### The one bound measured from the geometry: the model-top walk
 
-Exactly one number is derived from a loaded model's vertices, and it is a
-maximum. Immediately after the model is loaded, relocated and texture-bound,
-the engine walks the hierarchy once and takes
+**Established.** The definition's upper Y bound is measured by a recursive
+sibling-chain walk [02 R-CAT-01 §7] [07 R-REV-01 §7]. In file-native signed
+16.16 units, each invocation does the following:
 
-```
-modelTop = max over every piece P, every vertex V of P:
-               V.y + sum of P.y-translation and those of P's ancestors
-```
+1. Start `top = 0`.
+2. For each piece in the sibling chain, compare every
+   `vertex.y + piece.translation.y` against `top` and keep the greater value.
+3. If that piece has a child chain, recurse with a fresh zero accumulator,
+   add the piece's own Y translation to the returned child maximum, and
+   compare that sum against `top` as well.
+4. Return `top` after the sibling chain ends.
 
-starting from an accumulator of **0** at the root, with the accumulator never
-lowered. Concretely, one recursive pass over a piece's sibling chain: for each
-piece, the maximum of `vertex.y + piece.translation.y` over its own vertex
-array, and, when it has a child chain, the maximum against
-`walk(firstChild) + piece.translation.y`. The result is in the file's native
-16.16 world units, like every other coordinate here.
-
-Three consequences of the zero seed, all load-bearing:
-
-- a model whose vertices all sit below its origin measures **0**, not a
-  negative;
-- a subtree hanging entirely below its parent contributes 0 rather than
-  lowering the answer; and
-- the walk applies **no** minimum-vertex-count gate and reads no orientation —
-  it runs once, on the authored bind pose.
+Additions wrap to signed 32 bits and comparisons are signed. Zero is a floor
+at **each recursive level**, not just at the root. Consequently this is not
+in general a single maximum over accumulated vertex positions: an empty or
+entirely negative child chain returns zero, and a positive parent translation
+can then contribute even when no vertex reaches that height. The walk reads
+no script orientation and applies no minimum-vertex-count gate. Runtime
+load sequencing and consumers belong to the cited behavioral sections.
 
 **There is no min-Y counterpart.** No inverted walk exists: the definition's
 minimum-Y bound is zeroed by the loader just before this walk runs and is never
@@ -327,38 +338,33 @@ that most looks like it wants a model bottom — the `setSFXoccupy` band-3
 
 ## Unknowns and caveats
 
-- `Unknown_1`/`Unknown_2` are editor leftovers and are nonzero somewhere in
+- **Established (bounded census):** `Unknown_1`/`Unknown_2` are nonzero somewhere in
   ~83% of retail models (garbage also appears in `IsColored`/`ColorIndex`
   positions — `bomb1.3do` stores `IsColored = 0x782911`). Parsers must not
-  require zeros; a strict mode that does will reject most retail content.
-- Exact classic UV corner assignment and winding are re-derived by
-  observation, not documented by the original note. **Winding was measured,
-  not inferred**: summing each piece's signed volume over the local install
-  (exact for a closed piece, and independent of any handedness convention)
-  gives 2029 pieces whose authored vertex order has an outward right-handed
-  normal against 90 inward, across 608 models — 600 models to 2. So the
-  authored order is counter-clockwise seen from outside, and the 90 are the
-  "Invert Face" authoring bug the modeling notes describe. The census
-  establishes authored winding only; runtime culling is owned by
-  [R-RAST-01 §1].
-- **Model facing is −Z, not +Z.** The TA Design Guide under "Sources"
-  describes the modeling convention as +Z-forward, but retail data disagrees:
-  muzzle locators (`flare*`) sit at negative Z from the barrel they are
-  mounted on 135 times against 13. The engine heading convention runs the same
-  way: the position step is `vx = -(sin[h]·speed …)`, `vz = -(cos[h]·speed …)`,
-  so heading 0 travels toward **−Z** and increasing heading runs
-  −Z → −X → +Z → +X ([04 R-MOV-01 §4], Established). A −Z-facing model ends up
-  nose-first along the travel direction because the projection negates the
-  model-relative Z as well ([R-RAST-01 §2]); do not negate the folded heading
-  in the renderer to compensate.
-  Convert source Z with `z = -z` before piece rotations/translations and
-  then apply the engine heading directly. An added half turn makes the nose
-  face the right direction only by rotating unconverted data; an asymmetric
-  commander comparison shows that this leaves source X visibly mirrored. The
-  reflection reverses polygon winding, so submission must swap the final two
-  triangle indices. Apply the same source-Z conversion to piece translations
-  and simulation query/muzzle points. The persistent import transform and the
-  separate screen shear are specified in [03 §2.4] and [R-RAST-01 §2].
+  require zeros; a strict mode that does will reject most surveyed content.
+  Their description as editor leftovers is historical attribution, not a
+  recovered meaning for every value.
+- **Established (bounded asset observation):** the recorded signed-volume
+  census of 608 base models finds 2,029 pieces with outward right-handed
+  winding and 90 with inward winding. Signed volume establishes orientation
+  for closed pieces; it does not by itself prove that an open piece is an
+  authoring defect. Exact runtime UV assignment and culling are established
+  in [03 §2.4.1] and [03 R-RAST-01 §1], rather than inferred from this census.
+- **Established runtime transform:** retail persistently negates authored X
+  and Z for both vertices and parent translations, a half-turn about Y.
+  It composes in that model space, then maps a composed offset `(x,y,z)` to
+  world offset `(x,y,−z)`. These are separate operations [03 §2.4]
+  [03 R-RAST-01 §8]. A source-Z-only reflection is not the recovered import
+  operation. A lossless format decoder retains authored coordinates.
+  **Supported inference (asset facing):** the recorded locator census finds
+  `flare*` translations at negative local Z 135 times and positive Z 13 times,
+  supporting a common −Z-forward authoring convention, not a format rule.
+  An authored asymmetric model with child locators observed at four cardinal
+  headings would settle its orientation independently of naming conventions.
+- **Unknown:** the targets and meanings of the optional auxiliary offsets in
+  object and primitive records. Their relocation is established; an authored
+  nonzero reference with identifiable target data, or a traced runtime reader,
+  would settle their content. Nanolathe preserves only the raw offset words.
 - Stock models contain noncanonical `IsColored` values and out-of-range
   `ColorIndex` values beside texture names. A lossless parser must preserve
   both raw fields; their runtime precedence and shading behavior are owned by

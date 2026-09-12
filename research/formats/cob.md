@@ -17,6 +17,10 @@ runtime contract owned by document 04.
 
 This document covers the COB container, bytecode encoding and stack shapes,
 compiler value scaling, BOS authored vocabulary, and retail asset census.
+**Evidence scope:** container relocation is established in
+[02 "Compiled script archive (COB)"]; interpreter-supported encodings in
+[04 §4.3]. Compiler vocabulary and bounded asset censuses do not exhaust the
+retail interpreter's accepted words. Host policies are labeled separately.
 
 ## Format at a glance
 
@@ -34,6 +38,10 @@ compiler value scaling, BOS authored vocabulary, and retail asset census.
 +--------------------------------+
 ```
 
+The diagram illustrates one packing order; header offsets locate the tables
+and code, so their physical order is not prescribed. The optional trailing
+record table is described below.
+
 Every field, table entry, and instruction word is a little-endian u32. All
 offsets are absolute file offsets. Code addresses (jump targets, entry
 points) are **word indexes relative to the start of the code section**, not
@@ -50,12 +58,12 @@ byte offsets.
 | 0x08 | NumberOfPieces | Count of piece names |
 | 0x0C | CodeLength | Length of the code section **in u32 words** (historically labelled "Unknown_0" — it is the code word count) |
 | 0x10 | NumberOfStatics | Count of static-variable slots the program declares (historically "Unknown_1"). There is no static-data section in the file. Runtime initialization is owned by [04 R-COB-04 §7]. |
-| 0x14 | TrailingRecordCount | Number of records in the trailing 8-byte record table at `0x28`. Zero in all 835 shipped scripts, which is how the field acquired its community names "Always_0" / "Unknown_2"; see "The trailing record table" below |
+| 0x14 | TrailingRecordCount | Number of records in the trailing 8-byte record table at `0x28`. Zero in the recorded 835-script corpus, which is how the field acquired its community names "Always_0" / "Unknown_2"; see "The trailing record table" below |
 | 0x18 | OffsetToScriptCodeIndexArray | → u32[NumberOfScripts]: per-script entry point, as a word index into the code section |
 | 0x1C | OffsetToScriptNameOffsetArray | → u32[NumberOfScripts]: file offsets of NUL-terminated script names |
 | 0x20 | OffsetToPieceNameOffsetArray | → u32[NumberOfPieces]: file offsets of NUL-terminated piece names |
 | 0x24 | OffsetToScriptCode | → code section (u32 words) |
-| 0x28 | OffsetToTrailingRecords | → `TrailingRecordCount` records of 8 bytes. With a count of zero in every shipped file the pointer lands on `ScriptNameOffsetArray[0]`, i.e. the start of the string pool, which is how it acquired its community names "OffsetToFirstScriptName" / "Unknown_3"; see "The trailing record table" below |
+| 0x28 | OffsetToTrailingRecords | → `TrailingRecordCount` records of 8 bytes. In the recorded 835-file census, the zero-count table offset equals the **value stored in** `ScriptNameOffsetArray[0]`, i.e. the first script-name string offset, which is how it acquired its community names "OffsetToFirstScriptName" / "Unknown_3"; see "The trailing record table" below |
 
 Real example — `scripts/CORTRUCK.COB` from `totala1.hpi` (this is the same
 unit the original format note documented; the retail file matches it
@@ -74,7 +82,13 @@ on-disk static-data span. Nanolathe therefore applies an explicit per-VM
 static-storage budget before parsing publishes a program and again before a VM
 or restore accepts an externally supplied program. This is a host-safety
 policy, not a retail limit; it prevents a small header from requesting an
-unbounded allocation.
+unbounded allocation. **Established implementation behavior:** `internal/cob.Load`
+also requires version 4, aligned nonempty code/name/index tables, in-range
+entry words and terminated nonempty names, and rejects duplicate script names.
+Retail ignores the version and resolves script names by a case-sensitive
+first-match scan [02 R-MALF-01 §8] [04 R-COB-01 §1]. Duplicate-name rejection
+is therefore an implementation divergence, not a format constraint. The
+loader does not predecode opcodes or validate instruction boundaries.
 
 ### The trailing record table
 
@@ -89,16 +103,18 @@ only) and this trailing table (pointer, plus **the second dword of each of its
 archive (COB)" and `[02 R-MALF-01 §8]` describe the same five-table relocation
 from the loader side; this entry is what fixes the two words to the two slots.
 
-Because the count is zero in all 835 shipped scripts, the pointer coincides with
-`ScriptNameOffsetArray[0]` and the count with a plausible "always zero" — which
-is why both community names read as confirmed for twenty years. Neither is.
+In the recorded 835-file census the count is zero and the table offset equals
+the first script-name string offset. A zero count does not require that
+coincidence; both fields retain their table roles.
 
 **Unknown.** What an 8-byte record *means*. Its second dword is a file offset
-(it is relocated); the first is not. No retail script carries one, and nothing
-in the recovered image reads a record back after relocation, so no retail
-behavior depends on the answer. Decider: a modded or Kingdoms-era COB that
+(it is relocated); the first is not. The surveyed scripts carry none, and the recorded reader search found no
+consumer after relocation. That is a bounded negative observation, not proof
+that every authored use is inert. Decider: a modded or Kingdoms-era COB that
 authors a non-zero count, or a reader of the relocated table elsewhere in the
-image. Nanolathe validates the table's bounds and does not parse the records.
+image. Nanolathe validates the table's span but neither interprets the records
+nor validates the target of each second-word offset; `Program` does not retain
+this table. That is an implementation limitation for nonempty tables.
 
 ### Names and indexes
 
@@ -122,13 +138,20 @@ by [04 §4.1–§4.6], [04 R-COB-01 §1], and [04 R-COB-04 §7].
 
 ### Value scaling conventions
 
-Verified by comparing `ARMFLASH.BOS` with its compiled `ARMFLASH.COB`:
+**Established — sampled scale relationships:** the recorded comparison of
+`ARMFLASH.BOS` with `ARMFLASH.COB` supports the scales below. Exact compiler
+quantization at fractional and halfway boundaries remains Unknown.
 
 | BOS source | Meaning | Compiled constant |
 | --- | --- | --- |
-| `[v]` (square brackets) | linear distance/speed | `round(v * 163840)` — i.e. 16.16 fixed point of `v * 2.5` model units. `[-1.4]` → `-229376`, `[300]` → `49152000`, `[3.0]` → `491520`. One BOS linear unit ("meter") is 2.5 3DO/world units. |
-| `<v>` (angle brackets) | angle or angular speed | `round(v * 65536 / 360)` — full circle = 65536. `<90>` → `16384`, `<50>` → `9102`. |
+| `[v]` (square brackets) | linear distance/speed | `v * 163840`, quantized to an integer — i.e. 16.16 fixed point of `v * 2.5` model units. `[-1.4]` → `-229376`, `[300]` → `49152000`, `[3.0]` → `491520`. One BOS linear unit ("meter") is 2.5 3DO/world units. |
+| `<v>` (angle brackets) | angle or angular speed | `v * 65536 / 360`, quantized to an integer — full circle = 65536. `<90>` → `16384`, `<50>` → `9102`. |
 | bare number | raw integer | as written (`sleep 150` → `150`) |
+
+**Unknown:** the compiler's rounding rule at values where rounding and
+truncation differ. The displayed samples do not settle it; inspect the
+compiler numeric conversion or compare deliberately authored boundary values.
+This is a BOS compiler question, not a runtime COB-decoding ambiguity.
 
 The table states compiler constant encoding only. Runtime callback argument
 units and coordinate transforms are owned by [04 R-CB-01 §2] and [04 §4.4].
@@ -154,9 +177,11 @@ the right.
 | `0x10012000` | wait-for-move | piece, axis | `( -- )` | Block until move completes |
 | `0x10005000` | show | piece | `( -- )` | |
 | `0x10006000` | hide | piece | `( -- )` | |
-| `0x10007000` | cache | piece | `( -- )` | Re-enable texture caching (disables texture animation) |
-| `0x10008000` | dont-cache | piece | `( -- )` | Enable animated textures on piece |
+| `0x10007000` | cache | piece | `( -- )` | Set the render-piece cache flag [04 §4.3] |
+| `0x10008000` | dont-cache | piece | `( -- )` | Clear the render-piece cache flag [04 §4.3] |
 | `0x1000A000` | dont-shadow | piece | `( -- )` | |
+| `0x1000D000` | shade | piece | `( -- )` | Set the render-piece shading flag [04 §4.3] |
+| `0x10009000` | legacy effect (conventional name) | piece | `( a b -- )` | Empty unit adapter: consumes both values without a unit effect [04 §4.3] |
 | `0x1000E000` | dont-shade | piece | `( -- )` | |
 | `0x1000F000` | emit-sfx | piece | `( sfxtype -- )` | Emit effect (smoke, wake, flame...) from piece; see SFX types below |
 | `0x10071000` | explode | piece | `( flags -- )` | Blow the piece off using explosion flags below |
@@ -171,21 +196,22 @@ commit behavior are the runtime contract in [04 §4.6].
 | --- | --- | --- | --- |
 | `0x10064000` | jump | target word index | `( -- )` |
 | `0x10066000` | jump-if-false | target word index | `( cond -- )` — jumps when cond == 0 |
-| `0x10062000` | call-script | script index, argument count | `( args... -- )` synchronous call, callee return value discarded |
-| `0x10061000` | start-script | script index, argument count | `( args... -- )` spawn thread |
+| `0x10062000` | call-script | script index, argument count | `( args... -- )` on successful start; caller waits for child thread, return value discarded |
+| `0x10061000` | start-script | script index, argument count | `( args... -- )` on successful start; spawn thread |
 | `0x10065000` | return | — | `( value -- )` return from function/thread |
 | `0x10013000` | sleep | — | `( milliseconds -- )` |
 | `0x10067000` | signal | — | `( mask -- )` release every thread whose mask intersects the popped mask, **the signalling thread included** |
 | `0x10068000` | set-signal-mask | — | `( mask -- )` replace the current thread's mask |
 
 Every engine-started root thread begins with signal mask **`1`**, and
-`start-script` gives the child the parent's current mask; a thread's mask is
-`1` until a `set-signal-mask` changes it — the community report of a zero
-starting mask is wrong `[04 R-P0-10]`. Signal termination delivers nothing to
+`start-script` and `call-script` give the child the parent's current mask.
+The community report of a zero root starting mask is wrong `[04 R-P0-10]`. Signal termination delivers nothing to
 a completion receiver `[04 §4.2]`.
 
-Jump targets are word indexes **relative to the code section start** and
-must land on an instruction boundary.
+Jump targets are word indexes **relative to the code section start**.
+Compiler-generated control flow targets instruction boundaries; the retail
+interpreter has no separate boundary table. Failed starts leave arguments on
+the caller's stack, and a failed `call-script` still blocks [04 §4.3].
 
 ### Values and variables
 
@@ -196,6 +222,7 @@ must land on an instruction boundary.
 | `0x10023002` | pop-local | local index | `( value -- )` |
 | `0x10021004` | push-static | static index | `( -- value )` |
 | `0x10023004` | pop-static | static index | `( value -- )` |
+| `0x10024000` | discard | — | `( value -- )`; implemented by the TA interpreter [04 §4.3] |
 | `0x10022000` | alloc-local | — | `( -- )` add one local slot (parameters/`var`) |
 | `0x10041000` | rand | — | `( low high -- random )` inclusive |
 | `0x10042000` | get-unit-value | — | `( sysvar_id -- value )` read engine port, no arguments |
@@ -246,13 +273,16 @@ operator their compiler can emit. Cross-checked against those files:
 | `0x10039000`, `0x1003A000`, `0x1003B000` | Present in the compiler operator table only as placeholder tokens `"??"`, `"???"`, `"????"`, priority 5. This establishes compiler placeholders, not runtime semantics. |
 | `0x10059000` | **Established compiler limitation:** absent from Scriptor's opcode definitions and both configuration tables. Retail implements word exclusive-or, not a normalized boolean XOR [04 §4.3]. |
 
-`0x10063000`, historically claimed as `call-script`'s opcode by the 1998
-community note, is in fact `CMD_FAKE_JUMP` — an internal marker the
-*decompiler* substitutes in memory for an already-consumed `jump` instruction
-while reconstructing `if`/`while`/`break`/`continue`. It never appears in
-on-disk bytecode; the note's author most likely misread decompiler output.
-Real `call-script` is `0x10062000` (`start-script` is `0x10061000`), matching
-retail bytecode.
+**Established runtime:** `0x10063000` is a dispatched TA opcode. It has
+two inline words: an ignored first operand and a signed count. It discards
+that many stack values (none for a nonpositive count), then advances by three
+words. Its bounds and malformed-input outcomes are [04 R-COB-04 §6]. No
+instance occurs in the recorded shipped-script census.
+
+Scriptor also reuses this number as an internal decompiler jump marker. That
+tool convention does not remove the retail interpreter's reserved pop-N arm.
+The historical note's `call-script` assignment is wrong: real `call-script`
+is `0x10062000`, and `start-script` is `0x10061000`.
 
 ### TAK-only opcodes (not used by TA)
 
@@ -264,8 +294,10 @@ Documented here only so the numbers aren't mistaken for unknown TA opcodes:
 | Opcode | Name | Notes |
 | --- | --- | --- |
 | `0x10072000` | play-sound | `play-sound("name", priority)` — plays a sound directly from a script. Its BOS keyword returns a value that callers usually discard. |
-| `0x10024000` | (discard) | Pops and discards a value, used after a `play-sound` call whose result isn't consumed as an expression. Even Scriptor's own decompiler wasn't fully sure of its purpose (comment: `"stop-sound?0"`). |
 | `0x10073000` | Mission-Command | `Mission-Command("name", args...)` — single-player mission-scripting hook. |
+
+The discard word `0x10024000` can follow a TAK `play-sound` expression, but
+is also implemented by TA and is listed under "Values and variables" above.
 
 TAK also extends the header: past the 11 TA words it appends
 `OffsetToSoundNameArray: u32` and `NumberOfSounds: u32` (a 52-byte, 13-word
@@ -286,8 +318,8 @@ confidence.
 
 ## The BOS language
 
-BOS is compiled, not shipped — but retail data includes sources, and all
-community units are written in it. Summary of the language, composited from
+BOS is compiler input rather than the runtime-loaded format; some retail
+archives also ship sources. Summary of the language, composited from
 stock scripts (`scripts/ARMFLASH.BOS` and the BOS guide's excerpts of
 `armbats`, `armsilo`, `armcarry`):
 
@@ -297,10 +329,10 @@ stock scripts (`scripts/ARMFLASH.BOS` and the BOS guide's excerpts of
 edition. The surrounding format description retains its stated evidence and
 confidence.
 
-The `piece` list order defines the piece indexes used when a script assigns
-a piece *by number* (e.g. `piecenum = 1;` in `QueryLandingPad` refers to the
-first declared piece — note this collides with piece-name assignment;
-stock scripts use both styles).
+**Established:** the `piece` list order defines zero-based bytecode indexes.
+Index `0` denotes the first declared piece; index `1` denotes the second.
+A piece-name expression compiles to the same index domain as an explicitly
+authored numeric piece index.
 
 Standard headers shipped with Scriptor — **and, importantly, shipped inside
 `totala1.hpi` itself** (`scripts/EXPTYPE.H`, `SFXTYPE.H`, `SMOKEUNIT.H`,
@@ -319,20 +351,16 @@ source for both the constants and idiomatic BOS.
 edition. The surrounding format description retains its stated evidence and
 confidence.
 
-Axis keywords: `x-axis`, `y-axis`, `z-axis`. For a piece, −Z is its facing
-(see [3do.md](3do.md) — the modeling notes say +Z, retail data says −Z);
-turns around Y are headings, around X are pitches. `0` position/angle means
+Axis keywords: `x-axis`, `y-axis`, `z-axis`. The common −Z-forward asset
+convention is discussed in [3do.md](3do.md); it is not a bytecode restriction.
+Turns around Y are headings, around X are pitches. `0` position/angle means
 the piece's authored rest pose.
 
-**Rotational sense.** A `turn ... to y-axis` word turns a piece the same way
-a heading word turns a hull: increasing from +Z toward +X. A renderer that
-negates it draws turret traverse, radar dishes and every other yaw-driven
-animation backwards, and shows a barrel pointing somewhere other than where
-the shot actually leaves from. The synchronized retail ARMSOLAR completion
-pose establishes the remaining axes after canonical source-Z reflection: X
-uses the opposite of the old source-space sign and Z retains it. Applying the
-old negation to both axes opens only two of its four +/-90-degree panels. This
-is separate from `move`, whose X axis runs opposite the 3DO model X.
+**Runtime coordinate boundary.** Angle words are composed with the unit's
+heading, pitch and bank in [03 §2.4]'s model space after the persistent
+half-turn of authored X and Z. The subsequent world-offset mapping is
+[03 R-RAST-01 §8]. Axis signs must follow those contracts; an observation of a
+single animation does not establish a different file import transform.
 
 Two quirks visible throughout the stock sources: Scriptor has no unary
 minus in expressions — negation is written `0 - x` (`turn sleeves to x-axis
@@ -460,20 +488,24 @@ or Scriptor vocabulary does not make them fixed retail callbacks.
 
 ## Retail corpus notes
 
-A full decode of every COB in the retail archives (835 scripts across
-`totala1.hpi`, `rev31.gp3`, `CCDATA.CCX`, `btdata.ccx`) confirms:
+**Established (bounded asset observation).** The recorded decode of 835 COB
+files from `totala1.hpi`, `rev31.gp3`, `CCDATA.CCX` and `btdata.ccx` reports
+the following. The separate transport-read census above counts 841 copies;
+**Unknown:** the exact enumeration difference between these two recorded
+totals. Repeating both enumerations with archive/copy provenance would settle
+it. Neither total is a universal format limit.
 
 - Version signature is always 4; the trailing-record count at `0x14` is always
   0 (see "The trailing record table" — the word is a count, not a reserved
-  word); the instruction table above decodes **every** retail script with no
+  word); the recorded instruction decode covers this corpus with no
   unknown opcodes and no misaligned instruction stream.
 - Static-variable counts are small (0–7 covers nearly everything).
-- Nine opcodes never occur in retail bytecode: `dont-shadow`
-  (`0x1000A000`), bitwise AND/XOR/NOT (`0x10035000/7000/8000`), logical
+- The recorded census reports no occurrences of these nine opcodes: `dont-shadow`
+  (`0x1000A000`), bitwise AND/XOR/NOT (`0x10035000/7000/8000`), word
   XOR (`0x10059000`), `greater`/`greater-or-equal` (`0x10053000`,
   `0x10054000`), and the two transport reads `0x10044000` / `0x10045000`
-  documented under "Values and variables". Notably these include every
-  historically contested slot — retail data cannot arbitrate them.
+  documented under "Values and variables". Their absence from this corpus
+  cannot establish whether the interpreter implements them; [04 §4.3] provides that evidence.
   (`greater`=`0x10053000`, `greater-or-equal`=`0x10054000` per Scriptor's own
   `Compiler.cfg` operator table; community tables often swap the two.)
 - Common helper-script conventions (script names that are not engine
@@ -491,16 +523,11 @@ A full decode of every COB in the retail archives (835 scripts across
 
 ## Unknowns and caveats
 
-- **Opcode disagreements among the community notes — resolved against
-  Cavedog's own tools.** The 1998 command note assigns `call-script` to
-  `0x10063000`; that value is actually `CMD_FAKE_JUMP`, a decompiler-internal
-  marker, never a real bytecode opcode (see "Compiler emission and reserved slots" above). Real
-  `call-script` is `0x10062000` (`0x10061000` = start-script), confirmed by
-  both retail bytecode and Scriptor's own `Defs.h`. The note also labels
-  `0x1005A000` "bitwise NOT"; Scriptor's compiler config confirms it is the
-  *logical* NOT (`!`/`NOT`, unary prefix, highest priority) — stock control
-  flow (busy-wait on `!ready`) only works under that reading. `0x10038000`
-  is the separate bitwise-NOT opcode [04 §4.3].
+- **Established opcode distinctions:** `0x10063000` has both a Scriptor
+  internal-marker use and a real retail reserved pop-N arm. `call-script` is
+  `0x10062000`. `0x1005A000` is logical NOT and `0x10038000` is bitwise NOT
+  [04 §4.3] [04 R-COB-04 §6]. Compiler emission and retail dispatch are
+  separate evidence sources.
 - **Established runtime, limited compiler emission.** AND, both word-XOR
   slots and bitwise NOT are traced interpreter operations [04 §4.3]. Their
   absence or placeholder spelling in Scriptor does not make their runtime

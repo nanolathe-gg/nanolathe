@@ -12,8 +12,8 @@ import (
 // cannot accidentally mix, say, floating and fixed-point semantics for one
 // field. Two consequences the catalog compilers depend on:
 //
-//   - an integer or floating field cannot distinguish an authored zero from an
-//     absent key, because both yield the caller's default;
+//   - only an absent key returns the caller's default; an authored zero or
+//     unparsable integer text returns zero even with a nonzero default;
 //   - the fixed-point accessor's default is stored VERBATIM, so it is already
 //     in 16.16 units: a default of 65536 means an authored 1.0.
 
@@ -82,8 +82,9 @@ func (s *Section) LanguageString(language, key, def string) (string, bool) {
 // which is how a caller distinguishes an authored key from a missing one.
 func (s *Section) RawValue(key string) (string, bool) { return s.FirstValue(key) }
 
-// BoolValue: there is no boolean parser in retail. Boolean fields are numeric
-// and nonzero means true.
+// BoolValue provides a nonzero integer truth test. Retail has no universal
+// boolean parser; packed catalog flags instead retain the integer low bit
+// [02 R-KEYS-01 §5].
 func (s *Section) BoolValue(key string, def bool) bool {
 	raw, ok := s.FirstValue(key)
 	if !ok {
@@ -95,6 +96,9 @@ func (s *Section) BoolValue(key string, def bool) bool {
 // parseTDFFloat mirrors the CRT decimal floating conversion: leading
 // whitespace, optional sign, digits with an optional fraction and exponent,
 // trailing junk ignored, zero for unparsable text.
+// TODO(question): compare retail CRT overflow and unusual exponent text with
+// this host parser; retain the existing zero-on-error policy until traced
+// [02 "Missing and unknown"].
 func parseTDFFloat(value string) float64 {
 	trimmed := strings.TrimLeft(value, " \t\r\n")
 	end := 0

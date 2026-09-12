@@ -50,6 +50,12 @@ the desktop without changing the monitor resolution. On macOS, fullscreen
 entered through the green window button must be exited through that native
 control.
 
+For music, copy the GOG installation's `music` folder into the same retail
+root. Nanolathe plays its MP3 soundtrack on Windows, Linux and macOS; no
+conversion is needed. Music starts when a battle begins. Options → Music
+controls volume, playback mode and track selection. The main menu retains its
+retail ambient loop.
+
 Multiplayer is outside the current scope. For implemented contracts and known
 gaps, read the design document for the relevant engine area.
 

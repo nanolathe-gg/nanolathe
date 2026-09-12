@@ -1111,12 +1111,10 @@ Not persisted: the networking identity fields, which are retail values this
 engine has no owner for and are deliberately absent rather than written as
 invented defaults.
 
-Two persisted values are stored and re-shown but not yet consumed, each with
-its consumer named at the write site: `Sound Mode`'s `Mono`-versus-`3D`
-distinction (the output device's 3-D flag — this build pans positionally either
-way), and the per-track music category array (retail persists it in the
-`CDLISTS` ring keyed by the drive's volume serial, which this build has no
-analogue for). `Interface Type` is consumed by the battle pointer and cursor
+Music category edits and undo snapshots update the audio service's live list;
+there is still no cross-launch equivalent of retail's per-disc `CDLISTS` ring.
+Sound Mode's Mono-versus-3D choice is applied to the audio device (see
+DESIGN_PRESENTATION_CLIENT §2.6). `Interface Type` is consumed by the battle pointer and cursor
 paths: a shell battle reads its live in-memory stage, and a direct battle copies
 the loaded stage at entry, with no per-frame preferences read `[07 R-CAM-01
 §5]`. `gamespeed` is consumed only from the in-battle arm: the

@@ -18,14 +18,22 @@ load precedence:
 | `.ufo` | Third-party / downloaded units | |
 | `.hpi` | Base game data (`totala1.hpi` … `totala4.hpi`) | lowest |
 
-The engine mounts every archive in the install directory and overlays them
-into one virtual file system. Loose files in real directories next to the
-executable override all archives. Within the same extension tier the retail
-engine's winner among duplicate paths was not well defined; community notes
-also report that the retail engine only loaded the specifically named
-`rev31.gp3` and could fail with more than roughly ten `.hpi` archives.
-Saved games use the same container with a `BANK` marker (see below) and extra
-encryption; they are not covered by this document.
+**Established — provider behavior:** loose-file opens precede archive lookup;
+archives are searched in mount order, first match wins. Within an extension
+tier, retail preserves host enumeration order without sorting. The ten-HPI
+budget applies to newly mounted archives in one invocation, not to the total
+mounted set. Revision selection, repeated mounting and content-family rules
+(including the rejection of loose FBI definitions) belong to `[02 §2]` and
+`[02 R-CAT-01 §4]`; they are not properties of the container bytes.
+
+Saved games begin with `HAPIBANK` but use a different header and account/item
+container. Do not parse them as ordinary HPI archives with a substituted
+version word; see `[08 "Save-file organization"]`.
+
+**Evidence scope:** the layouts and decoder below combine the cited original
+format documentation, the sampled archives and the established retail loader
+contract `[02 §2]` / `[02 R-MALF-01 §3]`. Corpus observations are bounded to
+the named sample; Nanolathe's defensive acceptance rules are stated separately.
 
 ## Format at a glance
 
@@ -58,9 +66,9 @@ archive offsets**.
 | Offset | Size | Type | Name | Description |
 | ---: | ---: | --- | --- | --- |
 | 0x00 | 4 | char[4] | marker | `HAPI` (`48 41 50 49`) |
-| 0x04 | 4 | u32 | version | `0x00010000` for normal archives. Saved games store `BANK` (`0x4B4E4142`) here instead. |
-| 0x08 | 4 | u32 | directory_end | Absolute offset of the first byte **after** the directory region (historically documented as "directory size"; because the directory starts right after the 20-byte header the two readings agree, but pointer validation shows it is the end offset). |
-| 0x0C | 4 | u32 | header_key | Obfuscation key seed. `0` means the archive is not encrypted. |
+| 0x04 | 4 | u32 | version | `0x00010000` for these archives. The `BANK` bytes in saved games identify a separate container, not this header layout. |
+| 0x08 | 4 | u32 | directory_end | Directory-blob byte count measured from archive offset zero, including the 20-byte header; equivalently the absolute end of that blob. The bytes after the header occupy `directory_end - 20`, not `directory_end`. |
+| 0x0C | 4 | u32 | header_key | Obfuscation key seed; only its low byte participates in the retail transform. A zero stored key byte disables it. |
 | 0x10 | 4 | u32 | directory_start | Absolute offset of the directory root node. `0x14` in all observed retail archives, but should be honored, not assumed. |
 
 Real example — the first 20 bytes of `totala1.hpi`:
@@ -74,26 +82,21 @@ header_key=`0xBF`, directory_start=`0x14`.
 
 ### Encryption
 
-Everything from `directory_start` to the end of the file data (directory,
-stored files, chunk tables, and chunk bytes — but not the plaintext header)
-is obfuscated with a position-dependent XOR cipher. Derive the working key
-from the header key:
+**Established:** the directory blob is read from archive offset zero. Its
+cipher span starts at offset **20**, independently of the root-directory
+offset. The same position-dependent transform is used for stored file bytes,
+chunk tables and chunk bytes; the header and copyright trailer stay plain.
+For the stored key's low byte `k`, derive:
 
 ```
-key = ~((header_key * 4) | (header_key >> 6))        // 32-bit arithmetic
+key = ~((k >> 6) | (k << 2)) & 0xff
+plain = ((pos & 0xff) ^ key ^ (~cipher & 0xff)) & 0xff
 ```
 
-For `header_key = 0xBF` (totala1.hpi): `key = 0xFFFFFD01`.
-
-To decrypt a byte read from absolute archive offset `pos`:
-
-```
-plain = (pos ^ key) ^ ~cipher        // per byte, all masked to 8 bits
-```
-
-Only the low byte of `pos` and of `key` matter, since the operation is
-byte-wise. If `header_key` is `0`, no decryption is applied anywhere.
-Everything below assumes decrypted bytes.
+For `k = 0xBF`, the working byte is `0x01`. If the stored key byte is zero,
+no transform is applied. `pos` is the absolute archive position, not an
+index relative to the directory or payload. Everything below assumes
+decrypted bytes. `[02 §2]` owns the loader contract.
 
 ### Directory tree
 
@@ -111,7 +114,7 @@ there is no alignment padding anywhere in the directory):
 | ---: | ---: | --- | --- |
 | +0 | 4 | u32 | offset of the NUL-terminated entry name |
 | +4 | 4 | u32 | offset of the entry's data record |
-| +8 | 1 | u8 | flag: `1` = subdirectory, `0` = file |
+| +8 | 1 | u8 | Persisted stock values: `1` = subdirectory, `0` = file. Retail classifies by bit 0; see below. |
 
 For a subdirectory, the data record at `+4` is another 8-byte directory
 node — the structure recurses. For a file, it is a 9-byte **file-data
@@ -145,12 +148,16 @@ the directory.
 Directory entry names are single path components; the full path is built by
 joining parents with a separator (the game is DOS-heritage, so archives were
 authored with `\`; any modern reimplementation can use `/`). Name matching is
-case-insensitive.
+case-insensitive. **Established:** lookup searches each directory's entries
+backwards, selecting the last matching component. Earlier duplicate directories
+do not contribute children to the selected directory. Retail also uses bit 1
+as mutable enumeration visibility; other flag bits are not semantic types
+`[02 §2]`. Nanolathe currently accepts only persisted flag bytes 0 and 1.
 
 ### Stored files (compression 0)
 
 The file-data offset points at `size` raw bytes (encrypted with the archive
-cipher like everything else). Used rarely in retail data; third-party tools
+cipher like everything else). Absent from the retail sample described below; third-party tools
 (e.g. unit viewers) commonly wrote stored archives with `header_key = 0`.
 Joe D's own reference HPI writer (`HPIUtil.c`, the primary source for this
 doc) defaults to `header_key = 0x7D` when writing an LZ77-compressed archive
@@ -175,8 +182,8 @@ Each chunk starts with a 19-byte **SQSH header**:
 | ---: | ---: | --- | --- | --- |
 | +0 | 4 | char[4] | marker | `SQSH` (`53 51 53 48`) |
 | +4 | 1 | u8 | unknown | Always `0x02` in observed data. Possibly a version. Not validated by known tools. |
-| +5 | 1 | u8 | comp_method | `1` = LZ77, `2` = zlib. Matches the file-level compression byte in all retail data. |
-| +6 | 1 | u8 | encoded | `1` = payload has the extra chunk obfuscation applied (see below), `0` = not |
+| +5 | 1 | u8 | comp_method | `1` = LZ77, `2` = zlib. The chunk byte selects the decoder; equality with the file-level byte is not required by retail [02 §2]. |
+| +6 | 1 | u8 | encoded | Nonzero = payload has the extra chunk obfuscation applied (see below), `0` = not |
 | +7 | 4 | u32 | compressed_size | Payload length in bytes. `stored_chunk_size = compressed_size + 19`. |
 | +11 | 4 | u32 | decompressed_size | Output length (65536 except for the final chunk) |
 | +15 | 4 | u32 | checksum | Sum of all payload bytes as unsigned values, 32-bit wrapping. Computed over the payload **before** undoing the chunk obfuscation. |
@@ -193,7 +200,7 @@ marker=`SQSH`, unknown=2, method=1 (LZ77), encoded=1, compressed=1908
 (1908 + 19 = 1927, the table entry), decompressed=2100 (the file size),
 checksum=0x39676.
 
-#### Chunk obfuscation (`encoded = 1`)
+#### Chunk obfuscation (`encoded != 0`)
 
 Applied to the payload after compression. To undo, for each payload byte at
 payload-relative index `x`:
@@ -219,7 +226,7 @@ matches:
   write cursor, which is how runs are encoded).
 - After 8 items, read the next tag byte.
 
-The window write cursor starts at position **1**, not 0 (position 0 is
+The window starts zero-filled and its write cursor starts at position **1**, not 0 (position 0 is
 reserved as the terminator). Retail chunks include one padding byte after
 the two-byte terminator, so up to one trailing byte after the terminator is
 normal.
@@ -243,7 +250,7 @@ it.
 
 ## Retail corpus notes
 
-Every retail archive uses `directory_start = 0x14`. Beyond that they split
+The original ten-archive sample uses `directory_start = 0x14`. It splits
 cleanly into two generations:
 
 | Archives | header_key | Compression |
@@ -251,13 +258,13 @@ cleanly into two generations:
 | `totala1/2/4.hpi` (1997 base game) | `0xBF` | LZ77 (method 1) throughout |
 | `totala3.hpi`, `rev31.gp3`, `CCDATA/CCMAPS/CCMISS.CCX`, `btdata/btmaps.ccx` | `0` (unencrypted) | zlib (method 2) throughout |
 
-No retail archive contains stored (method 0) entries — that mode appears
+No archive in that sample contains stored (method 0) entries — that mode appears
 only in third-party tools' output. `totala3.hpi` is not game data at all:
 it is the CD-2 installer carrier, containing `install/SETUP.EXE`,
 `install/Totala.exe`, the network provider DLLs, installer art — and a
 complete **nested archive** `install/totala1.hpi` (the real 32 MB game
-data), demonstrating that archive nesting is a first-class scenario for
-readers.
+data). This is an archive stored as an ordinary payload; it does not establish
+automatic recursive mounting by the game.
 
 ## Writing archives
 
@@ -304,20 +311,36 @@ byte-level checklist a reader needs to accept exactly what retail accepts.
   the heap before the size check runs. A safe reader must bound output at
   65,536 per chunk.
 
+## Implementation coverage
+
+**Established — implementation inspection:** `vfs/hpi.go` implements stored,
+LZ77 and zlib reads, archive and chunk transforms, checksums, and the header /
+footer checks. It adds bounded metadata reads, directory-cycle detection and
+allocation limits. These are host safety policies, not retail rejection rules.
+
+Two acceptance differences matter when using it as a validator: LZ77 decoding
+stops once the declared output length is reached, without requiring the retail
+terminator; directory flags are restricted to 0/1. Its initial cipher-enable
+test examines the full header word rather than only the stored key byte. These
+synthetic-input differences must not be promoted as format requirements.
+`AllowBank` does not implement the retail save-bank layout; that is
+`internal/save`'s separate reader.
+
 ## Unknowns and caveats
 
-- The SQSH header byte at +4 (`0x02`) has no confirmed meaning.
-- Saved-game (`HAPIBANK`) containers are a different container with their
-  own header; the layout and the account/item grammar are in
-  `[08 R-SAVE-02]`, the failure edges in `[02 R-MALF-01 §11]`.
-- Duplicate-path precedence between two archives of the same extension tier
-  is not defined by the retail engine (community observation). OpenTA defines
-  its own deterministic rule (case-insensitive lexical archive filename
-  order, later wins) — that is an OpenTA policy, not a format fact.
-- The checksum is a plain byte sum; it detects corruption only. It covers the
-  still-obfuscated payload bytes.
-- `directory_start` values other than 0x14 and non-contiguous directory
-  layouts are legal per the pointer structure but unobserved in retail data.
+- **Unknown:** the intended meaning of SQSH byte +4 (`0x02` in the sample).
+  An original writer contract or a consumer using this byte would settle it;
+  the traced retail decoder does not validate it.
+- **Unknown:** authoring conventions outside the sampled archives, including
+  roots other than 0x14 and non-contiguous directories. The pointer layout
+  permits describing them, but the sample does not establish retail acceptance
+  of every such arrangement. A bounded loader trace or independently authored
+  fixture with a manual retail observation would settle the relevant case.
+- **Established:** same-tier archive precedence depends on host enumeration;
+  Nanolathe's deterministic mount policy is documented in
+  `docs/SPEC_CONFLICTS.md` SC3. It is not an HPI byte-layout rule.
+- **Established:** the checksum covers still-obfuscated payload bytes and is a
+  wrapping byte sum, not an authenticity check.
 
 ## Sources
 
@@ -330,6 +353,9 @@ byte-level checklist a reader needs to accept exactly what retail accepts.
   <https://units.tauniverse.com/tutorials/tadesign/tadesign/ta-files.htm>
 - UnitUniverse help page (Gnome, 2006) — extension load order and retail
   loader limits: <https://www.units.tauniverse.com/?p=help>
-- Verified against all ten retail archives (base, patch, Core Contingency,
-  Battle Tactics) and OpenTA's reader
-  (`vfs/hpi.go`).
+- Original validation sample: ten archives spanning base, patch, Core
+  Contingency and Battle Tactics. This is not a census of every installed
+  provider or edition.
+- Retail loader and malformed-input analysis: `[02 §2]`, `[02 R-MALF-01 §3]`.
+- Nanolathe conformance consumer: `vfs/hpi.go`; its source is implementation
+  evidence only.

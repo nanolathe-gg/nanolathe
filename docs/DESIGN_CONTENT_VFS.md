@@ -106,7 +106,7 @@ allocating presentation geometry or sorting a second time.
 | `LoadGUI`, `GUI`, `Gadget`, `CommonGadget` | Interface panel files, text and binary form | `[fmt gui]` `[02 §6]` |
 | `LoadOTA`, `OTA`, `OTASchema` | Map metadata over a TDF document: the global header, the schema probe, the language-prefixed strings | `[fmt ota]` `[02 §6]` |
 | `LoadPAL`, `LoadPaletteTable`, `Palette`, `PaletteTable` | The 768/1024-byte palette and the rectangular lookup tables built on it | `[fmt pal]` `[02 §7]` |
-| `LoadFNT`, `FNT`, `FNTGlyph` | The bitmap font: height, the second header word, per-glyph rasters | `[fmt fnt]` `[02 §7]` |
+| `LoadFNT`, `FNT`, `FNTGlyph` | The bitmap font: byte height, ignored byte, signed baseline, first code, per-glyph rasters | `[fmt fnt]` `[02 §7]` |
 | `LoadPCX`, `PCX` | The run-length image used by the front end | `[fmt pcx]` `[02 §7]` |
 | `LoadWAV`, `LoadAudio`, `WAV` | PCM metadata for canonical RIFF/WAVE and the legacy container, sample bytes left in the VFS | `[fmt wav]` `[02 §7]` |
 | `LoadSCT`, `LoadBMP` | The editor section file and the uncompressed BMP variants the install carries | `[02 §6]` |
@@ -441,7 +441,7 @@ pointer is cached, which is what makes piece identity independent of provider
 order `[03 §2.4]`. Geometry loading belongs to `internal/model`.
 
 **C14 — inert keys are retained.** Keys the compilers parse but nothing
-consumes (`noautofire`, `ovradjust`, `steeringmode`, `wacky`, `ai_limit`, …)
+consumes (`noautofire`, `ovradjust`, `steeringmode`, `ai_limit`, …)
 are kept in the definition's `Unknown` map so a later consumer can be wired
 without re-parsing, and they affect no behaviour and no identity `[02 §5]`
 `[02 R-KEYS-01 §1]` `[02 R-KEYS-01 §2]`.

@@ -31,7 +31,9 @@ bytes; it does not reject by the depth, planes or encoding fields
 
 ## Reference
 
-Header fields TA cares about (full header is 128 bytes):
+**Established:** the authored header is 128 bytes. The table distinguishes
+stock field values from fields retail actually reads [02 R-MALF-01 §9];
+encoding, depth and planes describe the stock profile, not validation gates.
 
 | Offset | Size | Type | Description |
 | ---: | ---: | --- | --- |
@@ -93,6 +95,21 @@ further command and value (a stale `0xC0` never advances and hangs the
 loader). A file shorter than 768 bytes seeks to a negative palette offset;
 the seek fails and the palette bytes are read from the current position.
 
+## Nanolathe parser and display policy
+
+**Established (implementation):** `formats.LoadPCX` retains the inclusive
+extents and authored `bytes_per_line`, decodes visible-width rows with run
+clamping, and reads the final 768 bytes as RGB without requiring the marker.
+Its minimum header/trailer length, dimension and allocation bounds, rejection
+of zero-length runs, and rejection of image reads into the palette trailer
+are host-safety policies. Retail does not provide these malformed-input
+guarantees. `formats/pcx_test.go` locks the visible-width rule, marker-free
+palette read, run clamping and checked truncated-value failure.
+
+The F1 picture path in `cmd/nanolathe/unitinfo.go` uses the client's indexed
+PCX blit and therefore the active display palette. That implementation choice
+does not settle the retail F1 palette question below.
+
 ## Unknowns and caveats
 
 - The engine never reads `bytes_per_line`: each row is decoded as exactly
@@ -109,6 +126,7 @@ the seek fails and the palette bytes are read from the current position.
 - *PCX*, TA Design Guide — TA usage conventions:
   <https://units.tauniverse.com/tutorials/tadesign/tadesign/pcxdesc.htm>
 - Verified against `unitpics/ARMFLASH.PCX` from `totala1.hpi`.
-- OpenTA parser: `formats/pcx.go`.
+- Nanolathe parser: `formats/pcx.go`; checked against [02 R-MALF-01 §9]
+  and the frontend palette contract [07 §5].
 
 **Writer.** Retail's screenshot writer emits PCX with 63-byte RLE runs and literal bytes below `0xC0` — see `[01 R-PLAT-02 §6]`.

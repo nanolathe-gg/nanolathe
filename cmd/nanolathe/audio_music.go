@@ -1,8 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"github.com/nanolathe-gg/nanolathe/internal/audio"
 	"github.com/nanolathe-gg/nanolathe/internal/clock"
+	"os"
 )
 
 // Music timers belong to the presentation busy pump. Each callback samples
@@ -17,4 +19,11 @@ func bindMusicClock(s *audio.Service) {
 	s.Music.SetPresentationClock(func() uint32 {
 		return uint32(clock.ScaledNow(millis.Millis32()))
 	})
+}
+
+// Media errors are drained by presentation, never logged in a simulation tick.
+func serviceMusic(s *audio.Service) {
+	if err := s.ServiceMusic(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+	}
 }

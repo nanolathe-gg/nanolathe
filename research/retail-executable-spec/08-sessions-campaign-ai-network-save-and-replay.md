@@ -4874,11 +4874,20 @@ packet dispatcher:
    transport sequence (independent of simulation tick), optionally compressed,
    checksummed, XOR-transformed, and sent as one DirectPlay message.
 
-Custom envelope, when used, is:
+**Established — custom envelope.** When used, it is:
 `+0 flag u8` (`3` raw, `4` compressed), `+1 checksum u16le` (sum of XORed bytes
-`3..W-4`), `+3 payload`; bytes `W-3..W-1` are neither XORed nor checksummed;
-payload itself begins with `i32` sequence `(-2,-3,...INT_MIN,-2)` then
-concatenated game records. Valid record types satisfy `2 <= type < 0x2D`;
+`3..W-4`), `+3 payload`, where `W` is the full wire message length.
+Bytes `W-3..W-1` are neither XORed nor checksummed.
+At each zero-based full-wire byte index `i` in `3 <= i < W-3`, the
+transformation XORs the byte with `i mod 256`; the checksum sums the resulting
+transformed bytes modulo 65536. The last three bytes remain payload, even
+though the transformation skips them. After reversing the XOR, flag `4`
+decompresses the complete payload after the three-byte header; flag `3` uses
+it directly. The decoded payload begins with a four-byte transport value then
+concatenated game records. The sender uses a descending sequence
+`(-2,-3,...INT_MIN,-2)` in one mode and the sentinel `-1` in the other;
+neither is the unit-sync simulation tick. Valid record types satisfy
+`2 <= type < 0x2D`;
 `0x2C` is variable length (`type u8 + length u16le` then bitstream, base size
 `3`). DirectPlay message length supplies wire length; compression is attempted
 only for payload >=13 bytes and only if `compressed+3 < original` and not
@@ -4907,18 +4916,78 @@ valid types run from `0x00` through `0x2D`:
 1. **Handler.** Session initialization installs a reject-with-failure stub for
    every declared type; the concrete handlers are installed later by whichever
    subsystem owns the type.
-2. **Length.** A 16-bit **fixed byte length for that packet type**. The receive
-   path uses it to walk a datagram — it subtracts the length from the bytes
-   remaining and advances the cursor by the same amount. **A datagram is
-   therefore a concatenation of fixed-length, self-delimiting packets, and no
-   packet carries a length field on the wire.** A type with no declared length
-   cannot be walked past and ends parsing.
+2. **Length.** A 16-bit fixed byte length for ordinary game-record types.
+   **Established exception:** the custom record walker reads the total length
+   of `0x2c` from its own two-byte length field following the type; the table's
+   value `3` describes its header, not the whole record. After skipping the
+   four-byte transport value, the walker subtracts each selected record length
+   from the remaining bytes and advances by that amount. A record that extends
+   past the remaining bytes stops the walk.
 3. **Admission mask,** three bits wide, keyed to the session state: bit 1
    gates state 5 (battle loading/setup), bit 2 gates state 6 (live battle),
    and bit 0 admits a packet in every other state. A packet failing its gate
    is discarded before its handler runs.
 
 Session initialization also allocates an 8,192-byte packet/reassembly buffer.
+
+### Unit-sync ownership and body structure
+
+**Established — slot arithmetic.** Unit ID zero is reserved. For configured
+per-player capacity `N`, allocation block `b` starts at ID `b*N+1` and ends
+at `(b+1)*N`, inclusive. Thus a nonzero ID's block base is
+`((ID-1)/N)*N`, using integer division. Its zero-based local slot is
+`(ID-1) mod N`. An exact multiple of `N` belongs to the preceding block, not
+the following one. Block assignment follows the allocator's participant
+ordering; do not substitute capture-sender order.
+
+**Established — unit-sync outer structure.** The `0x2c` producer writes its
+type, reserves the two-byte total length, and writes the simulation tick. It
+then scans eligible units and may append multiple movement entries. Each
+entry begins with the unit ID minus its owner's first ID, followed by
+unit-specific bits. A 16-bit all-ones marker terminates the movement list;
+the writer then appends the scheduled status for local slot `tick mod N`.
+It finally fills the reserved length with the total byte count, rounding
+partial bytes upward. The marker and subsequent fields are part of a
+bitstream, so later entries need not start at byte boundaries.
+
+**Established — catalog context and serializers.** Definition indices occupy
+the bit length of the retained definition-table count, including its reserved
+null row. This is the number of right shifts needed to reduce the count to
+zero, not the bit length of count minus one; per-player slot capacity does not
+control it. Every movement entry includes that definition identity, which
+selects ground or air serialization through `canfly`. Fields are packed
+least-significant bit first without entry alignment.
+
+The ground serializer sends blocked state and up to the first three retained
+path points; an inactive path sends no points. The consumer expands signed
+integer X/Z values to fixed point. The air serializer has separate optional
+attachment/position and position/velocity forms, followed by movement state.
+The exact conditional bit grammar is in [fmt tad]. Unsupported subordinate
+air-controller reachability remains **Unknown**; its sender branch does not
+supply a valid universal selector fallback.
+
+**Established — scheduled status.** The writer sets a presence bit, writes
+the definition identity, and stops when that identity is zero. For a nonempty
+slot it sends health, construction remaining, status flags, unit state and
+attachment state. An attached unit carries attachment identity/piece instead
+of position/orientation. An unattached unit includes a final movement scalar
+only when it actually owns movement state. Ordinary creation makes that state
+for `BMcode==1`; a universal lifetime invariant is still **Unknown**.
+
+Construction fraction `r` encodes as zero when `r==0`; otherwise the byte is
+`low8(1-trunc(r * -254.0))`. The multiplication uses the stored single-precision
+fraction and single-precision constant at working precision, then truncates.
+The receiver multiplies the unsigned byte by the single-precision reciprocal
+of 255 and conditionally stores the result as single precision. This is
+remaining work, not completed work. Flag application reuses the ordinary
+Activate/Deactivate and StartBuilding/StopBuilding transitions. [04 §5.3]
+
+**Unknown:** complete semantic names of the air form's additional scalar and
+flags, the status unit-state value, two orientation components and final
+movement scalar; recording-specific catalog identity; and wider patched-wire
+variants. Widths and conditional lengths are established independently of
+those names. Trace the corresponding semantic consumers or catalog/lifecycle
+paths before using an unresolved field as authoritative state.
 
 ### Declared packet types
 
@@ -4927,8 +4996,10 @@ inline or forwards the whole packet to a subsystem. The roles below come from
 that dispatch: a role is stated where the handler is independently identified,
 and left descriptive where it is not.
 
-**Every decoded payload's fields fit its declared length exactly**, with no
-slack and no padding, which independently validates the length table.
+The lengths below describe ordinary fixed-size records. **Established:** the
+`0x2c` table entry is only a three-byte header; its producer writes a tick and a
+variable bitstream, then fills in the final total byte length. Do not treat
+the table alone as a complete framing grammar.
 
 | Type | Len | Mask | Role and payload |
 |---:|---:|---:|---|
@@ -4940,15 +5011,15 @@ slack and no padding, which independently validates the length table.
 | `0x08` | 1 | 7 | Sets a session flag. No payload. |
 | `0x09` | 23 | 4 | **Unit creation.** Forwarded whole to the spawn path. |
 | `0x0a` | 7 | 4 | Unit occupancy/placement change. Forwarded whole. |
-| `0x0b` | 9 | 4 | **Damage packet.** Forwarded whole to the central damage intake. |
-| `0x0c` | 11 | 4 | **Unit death.** Forwarded whole to the central death handler in replay mode. |
-| `0x0d` | 36 | 4 | **Projectile creation**, the packet-velocity path. Forwarded whole. |
-| `0x0e` | 14 | 4 | **Projectile impact.** Forwarded to the impact and removal root. |
+| `0x0b` | 9 | 4 | **Damage.** Victim and attacker IDs, low-word amount, high byte of impact direction and kind. Kind 2 is paralyze; kind 6 is cargo-cascade damage. [06 §9.1] |
+| `0x0c` | 11 | 4 | **Unit death.** Victim ID, attacker-side transport identity, attacker unit ID, signed severity and packed death-cause/corpse variant. [06 §12.1] |
+| `0x0d` | 36 | 4 | **Projectile creation.** Position and target/velocity triples, weapon ID; unit-shot tail carries interceptor bit, slot angles, target ID then shooter ID, and weapon slot. Meteor bypasses that tail. [06 §6.2] |
+| `0x0e` | 14 | 4 | **Projectile impact/removal.** Stored target triple plus weapon ID select the first matching projectile in pool order. [06 §11.2] |
 | `0x0f` | 6 | 4 | **Feature ignition or damage.** `+1` a one-byte sub-case, `+2` and `+4` two 16-bit tile coordinates. |
-| `0x10` | 22 | 4 | **Run a script on a unit.** `+1` u16 unit, `+3` u16 script, `+5` u8, then four 32-bit arguments at `+6`, `+10`, `+14`, `+18`. |
+| `0x10` | 22 | 4 | **Run a script on a unit.** Unit u16, authored script i16, argument-count u8, four complete 32-bit argument words. Receiver starts deferred. [04 §5.3] |
 | `0x11` | 4 | 4 | **Unit state transition.** `+1` u16 unit, `+3` u8 state. The handler applies the value once and its complement once, driving the Activate, Deactivate, StartBuilding, and StopBuilding edges. |
 | `0x12` | 5 | 4 | Build-related command. `+1` u16, `+3` u16. |
-| `0x13` | 18 | 7 | **Play a sound.** `+1` u8 selector, `+2` i32 sound identity, and when the selector is zero a three-component world position at `+6`. A nonzero selector plays without a position. |
+| `0x13` | 18 | 7 | **Play a sound.** Selector u8, sound identity i32, three-component world position. Receiver uses position only for selector zero; both audited emitters set selector one. Recorder taxonomy reports 19 bytes, unverified in the available corpus. |
 | `0x14` | 24 | 4 | **Ownership transfer**, the capture path. `+1` u16, `+3` i32, remainder read by the handler. |
 | `0x15` | 1 | 6 | Sets a per-player flag, gated on a global bit. No payload; the sender comes from the transport. |
 | `0x16` | 17 | 4 | **Resource and sensor sharing.** `+1` u8 subtype (1/2/3), `+2` 3-byte reserved, `+5` u32 source DPID, `+9` u32 dest DPID, `+13` f32 value. Subtype 3 copies visibility bits; float is zero in traced subtype-3 producer. |
@@ -4961,7 +5032,7 @@ slack and no padding, which independently validates the length table.
 | `0x1d` | 9 | 0 | **Dead type.** Its admission mask is zero so it is rejected in every state, and its handler is a three-byte stub. |
 | `0x1e` | 2 | 6 | `+1` u8. |
 | `0x1f` | 5 | 6 | `+1` i32 peer identity, mapped to a slot index whose per-player marker is then set. |
-| `0x20` | 186 | 7 | Bulk state block; the largest packet. Only two fields are touched inline: the map-content compatibility value inside the metadata block and a destination-selecting DPID near the end. |
+| `0x20` | 186 | 7 | Bulk player-info state. Retail writers copy 185 metadata bytes after the type and emit 186 bytes. The available TAD recordings contain 192-byte forms; their additional bytes require a recorder/version trace. [fmt tad] |
 | `0x21` | 10 | 1 | Lobby-side. `+1` u8, `+2` i32, `+6` i32. |
 | `0x22` | 6 | 1 | Lobby-side. `+1` i32, `+5` u8. |
 | `0x23` | 14 | 7 | `+1` i32, `+5` i32, `+9` u8, `+10` i32. |
@@ -4969,10 +5040,10 @@ slack and no padding, which independently validates the length table.
 | `0x25` | 5 | 1 | **No case in the in-game switch.** Its mask admits it only outside the battle-loading/live-battle states, so it is handled by the lobby receiver instead. |
 | `0x26` | 41 | 7 | Forwarded whole; roster semantics observed on the receive side: an empty roster decodes to zero participants and a special class value expands to all slots. |
 | `0x27` | 17 | 7 | **Integrity breach.** `+1` i32 peer identity; formats the translated "has modified his executable" text into the chat region. The twelve trailing bytes are opaque; their producer algorithm is unresolved. |
-| `0x28` | 58 | 7 | **Participant state message** (economy/player record). `+1` u8 flag, `+2` i32 sign-extended i16, `+6` i32 sign-extended i16, `+10` i32 sign-extended i16, `+14` i32 sign-extended i16, `+18` u32, `+22` u32, `+26` u32, `+30` u32, `+34` f32, `+38` f32, `+42` f32, `+46` f32, `+50` f32, `+54` f32. Consumer widens floats to doubles and copies every field into participant state unconditionally — no comparison, threshold, or abort; it can answer with a three-byte control plus optional re-send on nonzero flag. |
+| `0x28` | 58 | 7 | **Participant snapshot.** Echo flag; four signed score counters; current metal/energy and their capacities as f32; energy produced/requested/wasted then metal produced/requested/wasted as f32, narrowed from running doubles. See “Economy and integrity checks — overwrite-sync, not compare”. |
 | `0x29` | 3 | 7 | `+1` u8, `+2` u8. |
 | `0x2a` | 2 | 7 | `+1` u8 stored into a per-peer field. The local producer emits it as the mean of six per-peer bytes (loading progress). |
-| `0x2c` | 3 | 4 | **Build completion**; routes into the unit-creation path. |
+| `0x2c` | 3 (header) | 4 | **Unit movement/state synchronization.** Type, u16 total byte length, u32 tick, then variable bitstream. The receiver can create a unit when received definition identity differs; creation is not the record's overall purpose. |
 
 The types whose admission mask is 1 are absent from this switch, which is
 consistent: mask 1 admits a type only outside the battle-loading/live-battle
@@ -5172,16 +5243,33 @@ closed.
 
 ### Economy and integrity checks — overwrite-sync, not compare
 
-No packet family establishes a fixed resource/economy hash comparison.
-Packet `0x28` is a 58-byte participant state message produced by a dedicated scanner thread polling
-every 250 ms across locally-owned × remote participant pairs, plus an
-immediate echo path that re-emits the packet toward its originator when the
-inbound echo flag is set. It is not per-tick and is tied to no tick modulo.
-The receiver copies every field into local participant state (shorts and ints
-sign-extended back, floats widened back to doubles) with **no comparison, no
-threshold, and no abort** — overwrite, not compare-and-react. The
-sole gate is an anti-spam check that skips the copy while an echo-flood marker
-is set.
+**Established — snapshot semantics.** No packet family establishes a fixed
+resource/economy hash comparison. Packet `0x28` carries an echo/request flag,
+kills, losses, commander kills and commander losses; then current metal,
+current energy, metal capacity and energy capacity; then the six running totals
+in this order: energy produced, energy requested, energy wasted, metal produced,
+metal requested, metal wasted. The score counters are signed 16-bit state
+sign-extended to 32-bit wire words; the receiver keeps their low 16 bits.
+Stock/capacity values remain single precision. The six cumulative doubles
+narrow to single precision for sending and widen back on receipt. Save keys
+name the requested counters `TotalEnergyConsumed` and `TotalMetalConsumed`,
+but their settlement meaning is requested work [05 R-ECO-01 §6]. The precise
+wire layout is in [fmt tad].
+
+**Established — ownership and overwrite.** The producer takes the sending
+local participant's fields and supplies that participant's transport identity
+as source. The receiver resolves the source participant before applying the
+snapshot. The four leading counters are not an owner ID or unit references.
+A synchronization gate can suppress the copy, but no comparison of resource
+values, threshold, or integrity abort occurs. A nonzero echo/request flag can
+produce a three-byte control reply and an answering participant's own snapshot;
+it does not imply that every returned snapshot belongs to the original sender.
+
+A dedicated scanner sleeps 250 ms between passes across eligible local/remote
+participant pairs. This is independent of the simulation tick and does not
+establish a fixed packet-arrival interval in recordings. Echo and other callers
+also emit snapshots. Recording sender numbers require their own session mapping
+to join this transport identity to a unit ownership block.
 
 Peer divergence therefore surfaces only indirectly through the kick/chat
 flows: the executable-integrity notice posts its translated breach text into
@@ -5194,8 +5282,10 @@ unconditionally in retail 3.1, leaving its guarded "Code segment checksum
 error found when switching FE states." diagnostic branch dead. Self-checks run
 only when switching front-end states, never per tick. Residual: the producer
 algorithm of packet `0x27`'s twelve opaque trailing bytes is unresolved; the
-exact three-byte throttle-acknowledgement format in the `0x28` receiver is
-not fully recovered. The `.zrb` files are the five Smacker cinematics; their
+three-byte control reply in the `0x28` receiver is type `0x29`, a set
+first flag and a second flag reflecting the responding participant's existing
+per-peer synchronization state. The complete handshake lifecycle remains
+unrecovered. The `.zrb` files are the five Smacker cinematics; their
 sequencer is the front-end movie player ([R-OOS-01 §4]) and has no
 relationship to the checksum path.
 
@@ -8060,10 +8150,14 @@ a single-player implementation.
   setup, addressing, password, and teardown, and any provider-specific
   transitions outside the reviewed callbacks · "Peer transport state" ·
   static trace.
-- Payloads of the packet types the in-game receiver forwards whole to a
-  subsystem; the type byte, per-type fixed length, admission mask, dispatch
-  roles, and inline-decoded field layouts are established · "Declared packet
-  types" · static trace.
+- Remaining payload semantics beyond the damage/death/projectile/script and
+  participant-snapshot traces above, and the ownership-transfer tail; ordinary
+  fixed lengths and the variable-length unit-sync exception are established
+  · "Declared packet types" · static trace.
+- Recording-specific definition catalogs, exhaustive dynamic movement-state
+  lifetime and unsupported air-controller reachability; remaining unit-sync
+  scalar/flag semantics; recorder-versus-retail fixed-length discrepancies
+  · "Unit-sync ownership and body structure" · static trace and [fmt tad].
 - The lobby receiver's switch, which owns the types whose admission mask
   excludes the battle-loading and live-battle states · "Declared packet types" ·
   static trace.
@@ -8088,8 +8182,8 @@ a single-player implementation.
   static trace.
 - Map, resource, economy, and other hash contents, cadence, payloads, and
   mismatch handling; packet `0x27`'s
-  trailing-integrity-data producer algorithm; and the throttle-acknowledgement
-  format in the participant-state receiver · "Synchronization and integrity checks" · static trace.
+  trailing-integrity-data producer algorithm; and the complete synchronization
+  handshake beyond the established participant-state control reply · "Synchronization and integrity checks" · static trace.
 - Reconnect, late join, spectator join, and temporary transport-loss behavior,
   or a bounded absence for each · "Peer transport state" · static trace.
 - Whether all peers can reach the save callback in a multiplayer session

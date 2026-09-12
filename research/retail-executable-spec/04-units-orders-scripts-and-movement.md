@@ -2267,27 +2267,29 @@ the order-facing behavior.
 **Established fact:** The string is a comma-separated token list processed
 left to right by a dispatch table keyed on the leading letter, effectively
 case-insensitive. Each queuing verb resolves its order through the descriptor
-registry canonical-name lookup and appends one record in queued mode;
-positional verbs first classify through the command resolver of section 3.4
+registry canonical-name lookup and appends one record in queued mode.
+Arguments inside a token are whitespace-separated; every comma ends the
+token, including a comma placed between numeric operands. Positional verbs
+first classify through the command resolver of section 3.4
 (move, attack, unload, follow/guard, patrol), which picks ground or VTOL
 variants from capabilities. Numeric coordinates parse as floats scaled by
 `65536` into 16.16 world units; times scale by `30` into ticks.
 
 | Verb | Effect |
 |---|---|
-| `m x,y` | move to x,y |
-| `a x,y` | attack ground position (numeric form; suppresses the tail MakeSelectable) |
+| `m x y` | move to x,y |
+| `a x y` | attack ground position (numeric form; suppresses the tail MakeSelectable) |
 | `a name` | attack-by-unit-type against the named catalog type; unknown types queue nothing |
-| `b name n x,y` | building build when the **acting unit has no mover** (its definition's `bmcode` is not 1 — a building), mobile build at x,y when it has one; count n; the product type must resolve in the catalog or nothing queues (see below) |
+| `b name n x y` | building build when the **acting unit has no mover** (its definition's `bmcode` is not 1 — a building), mobile build at x,y when it has one; count n; the product type must resolve in the catalog or nothing queues (see below) |
 | `bw n` | BuildWeapon stockpile count n |
 | `d` | self-destruct via the `SelfDestructFG` front-gate descriptor |
 | `g name` | guard the named spawned unit (Ident match first, then Unitname, case-insensitive); unresolved names queue nothing |
 | `i name` | board/attach self into the named carrier via the immediate internal attach message — not a queued order |
-| `o d1,d2` | writes the two standing-order fields of the unit state word: bits 18–19 (standing move) ← `d1 & 3`, bits 20–21 (standing fire) ← `d2 & 3`; both operands are pre-seeded from the fields' current values before the scan, so a missing or malformed operand keeps the field it had; no order queued and no issued marker (see below) |
-| `p x,y,t` | patrol to x,y with t scaled by 30 as timeout ticks (suppresses the tail) |
+| `o d1 d2` | writes the two standing-order fields of the unit state word: bits 18–19 (standing move) ← `d1 & 3`, bits 20–21 (standing fire) ← `d2 & 3`; both operands are pre-seeded from the fields' current values before the scan, so a missing or malformed operand keeps the field it had; no order queued and no issued marker (see below) |
+| `p x y t` | patrol to x,y with t scaled by 30 as timeout ticks (suppresses the tail) |
 | `s` | MakeSelectable (suppresses the tail) |
-| `u x,y` | unload/transport-drop at x,y |
-| `w secs[,n]` | Wait for secs×30 ticks carrying trailing integer n — the trailing integer is a wait-for-unit selector: the handler scans for a matching unit around the acting unit each visit and completes immediately on a match, otherwise it drains the timeout budget in chunks of 150 plus a random value below 30 and waits that long |
+| `u x y` | unload/transport-drop at x,y |
+| `w secs [n]` | Wait for secs×30 ticks carrying trailing integer n — the trailing integer is a wait-for-unit selector: the handler scans for a matching unit around the acting unit each visit and completes immediately on a match, otherwise it drains the timeout budget in chunks of 150 plus a random value below 30 and waits that long |
 | `wa name` | WaitForAttack targeting the named unit, falling back to self when unresolved |
 
 One dispatch quirk is part of the contract: an uppercase-led `W…` token
@@ -2302,7 +2304,7 @@ and 20–21 — the same word and the same bits the COB ports 2 and 3 read
 (§4.4 port table), §3.4a, the factory's copy onto a product (§3.8) and the
 AI classifier's rewrite ([08 R-AI-01 §10]) all use. The scan's two
 destination cells are seeded with the fields' current values before the
-`%d,%d` scan runs, so `o 1` alone rewrites the move field and leaves the fire
+`%d %d` scan runs, so `o 1` alone rewrites the move field and leaves the fire
 field untouched (the "malformed numbers convert whatever the destination
 cells already held" sentence below applies with those seeds); and the write
 is to the *state* word that carries the standing fields, not to a separate
@@ -5370,7 +5372,7 @@ field that save restoration clears rather than reconstructs
 
 **Established fact:** The unit phase drains each unit's eight script threads. The interpreter runs before per-piece interpolation in that unit's script drain. A move or turn issued by a script therefore affects the same tick's interpolation; a wait that becomes satisfied during interpolation is observed by the next drain.
 
-**Established fact:** The engine reaches scripts through four adapter roots: the zero-argument name-form start, the argument-carrying name-form start, the argument-carrying slot-form start, and the name-form synchronous four-cell query (direct-static: the name-form roots resolve through the shared name-lookup helper and the slot-form roots through the shared slot-lookup helper). The zero-argument name-form start is a name-based zero-argument start (15 direct call sites); the argument-carrying name-form start is name-based, taking up to four arguments, resolving the name, then forwarding to the argument-carrying slot-form start (21 direct call sites); the argument-carrying slot-form start is slot-based, writing four physical cells then setting the logical top to `arity−1` (5 direct call sites: four producers outside the adapter roots plus the argument-carrying name-form forwarding); and the name-form synchronous query forwards to the query interpreter (14 direct call sites). A bounded call census over the code sections counts 55 direct calls to those four roots; one is the internal argument-carrying name-form→slot-form forwarding, so 54 are producer call sites outside the four roots. The adjacent slot-based zero-argument helper has no direct caller in the bounded census (negative-bounded). The fixed-name producer census yields 40 distinct case-sensitive callback names; the packet path `0x0E` (section 5.3) can additionally start an authored slot by index and is not limited to those 40 names.
+**Established fact:** The engine reaches scripts through four adapter roots: the zero-argument name-form start, the argument-carrying name-form start, the argument-carrying slot-form start, and the name-form synchronous four-cell query (direct-static: the name-form roots resolve through the shared name-lookup helper and the slot-form roots through the shared slot-lookup helper). The zero-argument name-form start is a name-based zero-argument start (15 direct call sites); the argument-carrying name-form start is name-based, taking up to four arguments, resolving the name, then forwarding to the argument-carrying slot-form start (21 direct call sites); the argument-carrying slot-form start is slot-based, writing four physical cells then setting the logical top to `arity−1` (5 direct call sites: four producers outside the adapter roots plus the argument-carrying name-form forwarding); and the name-form synchronous query forwards to the query interpreter (14 direct call sites). A bounded call census over the code sections counts 55 direct calls to those four roots; one is the internal argument-carrying name-form→slot-form forwarding, so 54 are producer call sites outside the four roots. The adjacent slot-based zero-argument helper has no direct caller in the bounded census (negative-bounded). The fixed-name producer census yields 40 distinct case-sensitive callback names; the packet path `0x10` (section 5.3) can additionally start an authored slot by index and is not limited to those 40 names.
 
 **Established fact:** Each VM has eight thread slots of `0xA4` bytes. Allocation takes the first inactive slot in ascending order. A new root thread begins runnable at the selected function entry with logical stack top `−1`, no completion receiver, and signal mask `1`; child script starts inherit their parent's current mask. A thread record contains 32 physical window words; authored stack/local operations use this complete window. There is no name-level or producer-level duplicate suppression in the adapters — repeated successful starts occupy independent slots, and any repeat suppression lives in the producers' own state caches. Invalid identity (name lookup `−1` or slot out of range) and a full eight-slot pool are the same allocation failure to the adapters: the zero-argument name-form start and the slot-based zero-argument helper return false without notifying a supplied receiver, while the argument-carrying slot-form start and the argument-carrying name-form start return false and, if a receiver is supplied, invoke it with `0`. `HitByWeapon` and `TakeDamage` are independent argument-carrying name-form starts and can fail separately; `Aim*` failures also deliver `0` via that path and therefore leave aim-ready clear (section 5.3).
 
@@ -7282,8 +7284,8 @@ carrier first, then the transported unit.
 
 **Established fact:** The aim-ready handshake: the producer clears the slot's aim-state word to `0`, stores heading/pitch in the slot's commanded heading and commanded pitch words, and starts `Aim*` deferred (mode D) with the embedded completion receiver (the slot's completion-receiver word); immediately after it sets the weapon flags byte bit 0 (the issue bit) and emits the type `0x10` network packet (see above). The issue bit clears when target acquisition fails (an AND-clearing of the flags byte bit 0) and gates re-issue (a new `Aim*` starts only while bit 0 is clear). The argument-carrying slot-form adapter stores the receiver in the thread's receiver slot; on pool exhaustion or invalid identity it invokes the non-null receiver's closure with value `0`, while an explicit script `return` (`0x10065000`) pops the top value and invokes the receiver's closure with that value — the receiver object is re-read at return time. Signal termination (`0x10067000`) and abnormal termination (invalid opcode kill) never invoke a receiver. A zero delivery has no effect while any NONZERO delivery marks the weapon aim-ready — so name absence, thread-pool exhaustion (both deliver `0` via the argument-carrying slot-form adapter), or an authored zero return each leave the weapon unable to fire. The fire path entered with the issue bit set additionally consults a per-weapon permission function referenced by the weapon-slot record before firing; the issue bit alone authorizes nothing.
 
-**Established fact:** The run-script network dispatch (incoming packet case
-`0xE`) resolves the `u16` unit identifier at packet offset +1 through the unit
+**Established fact:** The run-script network dispatch (incoming wire type
+`0x10`) resolves the `u16` unit identifier at packet offset +1 through the unit
 table (requiring the active bit), then starts an authored function with:
 identity = SIGNED 16-bit script slot from packet +3 (negative or out-of-range
 rejected); receiver = none; deferred mode; arity = unsigned byte from packet

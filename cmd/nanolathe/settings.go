@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/nanolathe-gg/nanolathe/internal/audio"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
 )
@@ -61,6 +62,12 @@ func (g *gameShell) applySettings(s settings.Settings) {
 	// exists and applies it again when the platform installs one, so startup
 	// ordering cannot discard a saved 3-D selection [03 R-AUD-01 §2][I6].
 	applyRetailAudioOptions(g.audioPrefs)
+	if g.audioOwner != nil && g.audioOwner.Music != nil {
+		music := g.audioOwner.Music
+		music.SetVolume(g.audioPrefs.MusicVol)
+		music.SetEnabled(g.audioPrefs.MusicMode != 0)
+		music.Configure(audio.PlayMode(g.audioPrefs.CDMode), music.DesiredCategory())
+	}
 	g.gameSpeed = s.GameSpeed
 	g.interfaceType = s.InterfaceType
 	g.switchAlt = s.SwitchAltEnabled()

@@ -2,6 +2,7 @@
 
 ## Overview
 
+**Established** `[02 R-MAP-01 §§6–8]`, `[03 R-TERR-01]`.
 The `.tnt` file is the binary half of a map (paired with an `.ota`,
 [ota.md](ota.md)). It contains the terrain image as a grid of 32×32-pixel
 indexed-color tiles, a finer per-16-pixel-cell grid of heights and feature
@@ -9,15 +10,16 @@ placements, the embedded feature name list, the sea level, and a
 pre-rendered minimap. Pixels are indexes into the shared palette
 ([pal.md](pal.md)).
 
-`.sct` files ("sections") used by map editors are near-identical small
-terrain fragments without map-level fields; they are noted at the end.
+`.sct` files ("sections") are editor resources with a different header and
+grid dimensions. Their independently described layout is at the end; do not
+read them as a short TNT.
 
 Two grid resolutions matter (both little-endian, like everything):
 
 - The **attribute grid**: 1 cell = 16×16 pixels. Holds height and feature
   data. Dimensions: `Width × Height` from the header.
 - The **tile grid**: 1 cell = 32×32 pixels. Holds tile indexes. Dimensions:
-  `Width/2 × Height/2` (header dimensions are always even).
+  `Width/2 × Height/2` (even in the observed corpus; the Nanolathe reader requires even dimensions).
 
 ## Format at a glance
 
@@ -43,8 +45,8 @@ each section.
 | Offset | Type | Name | Description |
 | ---: | --- | --- | --- |
 | 0x00 | u32 | IDVersion | `0x2000` |
-| 0x04 | u32 | Width | Map width in 16-pixel units (always even) |
-| 0x08 | u32 | Height | Map height in 16-pixel units (always even) |
+| 0x04 | u32 | Width | Map width in 16-pixel units (even in observed files) |
+| 0x08 | u32 | Height | Map height in 16-pixel units (even in observed files) |
 | 0x0C | u32 | PtrMapData | → tile index map |
 | 0x10 | u32 | PtrMapAttr | → attribute map |
 | 0x14 | u32 | PtrTileGfx | → tile graphics |
@@ -53,19 +55,13 @@ each section.
 | 0x20 | u32 | PtrTileAnims | → feature records |
 | 0x24 | u32 | SeaLevel | Water level in height units; cells with height below this are underwater ("waterheight") |
 | 0x28 | u32 | PtrMiniMap | → minimap |
-| 0x2C | u32 | MinimapPresent | bit 0 set = an embedded minimap follows at PtrMiniMap; `1` in every observed retail map. (Engine reading Established, `[R-TERR-01 §1]`; community notes call the word "unknown1".) |
+| 0x2C | u32 | MinimapPresent | bit 0 set = an embedded minimap follows at PtrMiniMap; `1` in every observed retail map. (Engine reading Established, `[03 R-TERR-01 §1]`; community notes call the word "unknown1".) |
 | 0x30–0x3C | u32×4 | unknown/pad | `0` in observed retail maps |
 
-Real example — `maps/The Pass.tnt` from `totala2.hpi`:
-
-**Publication omission:** The retail-derived example is omitted from this
-edition. The surrounding format description retains its stated evidence and
-confidence.
-
-version 0x2000; 224×102 attribute cells (= 3584×1632 pixels, the OTA says
-`size=7 x 4` 512-pixel squares); tile map @ 0x40; attributes @ 0x2CE0;
-tile gfx @ 0x191E0; 2373 tiles; 7 features @ 0x26A5E0; sea level 0;
-minimap @ 0x26A97C; unknown1 = 1.
+**Established — corpus example.** `maps/The Pass.tnt` uses version
+`0x2000`, 224×102 attribute cells (3584×1632 pixels), 2373 tiles, seven
+feature records and sea level zero. Its embedded minimap is 252×252. These
+values describe that file, not format limits.
 
 ### Legacy header (version `0x1020`)
 
@@ -88,7 +84,7 @@ feature index (`0x00..0xFB` live; `0xFC..0xFF` empty — there is no void
 code in this encoding), byte 6 per-cell metal; bytes 1, 3, 4, 5 and 7 are
 not read. The legacy version never overrides wind or gravity from the OTA
 and the engine does not place OTA `[Features]` on it. Behavior is in
-`[R-TERR-01 §1]`.
+`[03 R-TERR-01 §1]`.
 
 ### Tile index map
 
@@ -103,7 +99,7 @@ repeat heavily; The Pass's first row starts `1 2 3 4 1 2 3 4 ...`.
 | Byte | Type | Meaning |
 | ---: | --- | --- |
 | +0 | u8 | height (0–255). The height *of the cell's corner*; the engine interpolates terrain from these values. Water lies where height < SeaLevel. |
-| +1 | u16 | feature reference (unaligned — bytes 1..2 of the cell): `0xFFFF` = none, `0xFFFC` = "void" (unpassable hole, used at map borders), `0xFFFE` = cell covered by a multi-cell feature anchored in another cell (see below), otherwise an index into the feature records |
+| +1 | u16 | Feature reference (unaligned, bytes 1..2): values `< 0xFFFB` are feature-table indices; `0xFFFC` authors void. `0xFFFE` marks authored footprint fringe and `0xFFFF` empty in the observed corpus. The other reserved words `0xFFFB` and `0xFFFD` are not feature indices. See the reconstruction rule below. |
 | +3 | u8 | unknown; `0` in **all** cells of all 171 retail maps |
 
 First cells of The Pass: `(height=1, feature=0xFFFF, unk=0) ...`.
@@ -121,9 +117,16 @@ ffff   fffe        fffe   fffe   ffff
 ffff   fffe        fffe   fffe   ffff
 ```
 
-`0xFFFE` is common — about 50,000 cells across the retail corpus (every
-map with multi-cell features). Pathfinding/occupancy must treat these cells
-as feature-covered even though they carry no index.
+**Established — source words are not runtime occupancy.** The loader starts
+with empty feature cells, stamps all authored `0xFFFC` voids first, then
+stamps live indices in row-major order through the feature placement service.
+That service creates each footprint fringe and its anchor relation from the
+feature definition; it does not copy an authored `0xFFFE` into occupancy.
+An uncovered `0xFFFE` therefore becomes empty, and covered `0xFFFF` becomes
+fringe. Authored `0xFFFB` and `0xFFFD` likewise stamp nothing; the runtime
+edge/lava sweep separately creates its own void code. Save restoration skips
+the live-feature pass because saved feature state supplies it
+`[03 R-TERR-01 §1]`, `[05 R-FEAT-01 §17]`.
 
 ### Tile graphics
 
@@ -142,8 +145,9 @@ historical "TileAnims" field name.
 | +4 | 128 | char[128] | NUL-terminated feature name, matched case-insensitively against feature TDF sections |
 
 The Pass's records: `0 RockMetal3`, `1 Tree1`, `2 Tree2`, `3 Tree3`, …
-Attribute cells reference these records by index; the engine then places
-the named feature at that cell.
+Attribute cells index table order; every record name is compiled in that
+order before placement `[02 R-MAP-01 §8]`. Nanolathe retains the leading
+record word for inspection and resolves by table order.
 
 ### Minimap
 
@@ -157,19 +161,18 @@ At `PtrMiniMap`:
 
 The Pass's minimap is 252×252 even though the map is wide (3584×1632):
 the terrain is scaled to fit and the unused bottom rows are filled with a
-padding color (index `0x64`, verified against retail files). A 1998
-community format note (Saruman & Bobban / DFR Engineering) claims the pad
-byte is `0xDD` instead — a direct conflict with our verified value. Since
-`0x64` was checked against actual retail minimap bytes and `0xDD` was not
-re-verified here, treat `0x64` as authoritative, but this is worth a second
-look if a padded minimap ever renders with an unexpected color. Nearly all
+padding color (index `0x64`, verified against retail files). The inherited community note gives `0xDD`; that is not the padding
+observed in these retail samples. **Unknown:** whether another editor or
+content corpus uses that value; byte inspection of such a file would settle
+it. Readers should use the stored dimensions and documented crop geometry,
+not search for a universal padding-color sentinel. Nearly all
 retail minimaps are
 252×252 regardless of aspect; at least one (`AC08.TNT`, a tall 192×328-unit
 campaign map) stores 252×**256**. Don't hard-code the dimensions — read
 them. The minimap is a pre-scaled snapshot of the terrain, not regenerated
 by the engine.
 
-**How the used sub-rectangle is sized — Established.**
+**How the used sub-rectangle is sized — Established for the samples below.**
 The stored `width x height` from the header above is the *allocated* bitmap,
 not necessarily the real image's extent: on a non-square map only a top-left
 sub-rectangle holds terrain, and the rest of the short axis is the `0x64`
@@ -227,8 +230,9 @@ The load pipeline is `[02 R-MAP-01 §6–§8]`; the per-cell semantics are
   index below the void threshold is used as a catalog index **without a
   comparison against the compiled table's count**. A zero-length file reads
   its version word from an empty allocation (fatal `Unknown TNT version`
-  in practice). `Width × Height × 13`, `tiles × 1024` and the minimap are
-  plain allocations, so absurd values end in the out-of-memory abort.
+  in practice). The plot grid, tile storage and minimap
+  use declared counts for allocation, so absurd values can reach the
+  out-of-memory abort.
 - The map identity hash used by the lobby is computed over the 64-byte
   header, the raw attribute map and the raw feature records
   `[02 R-MAP-01 §3]`.
@@ -236,19 +240,20 @@ The load pipeline is `[02 R-MAP-01 §6–§8]`; the per-cell semantics are
 ## SCT sections
 
 `.sct` editor sections use the same tile/height concepts at small scale
-with a reduced seven-word little-endian header:
+with a seven-word little-endian header. **Established — bounded editor-file
+observation**, reflected in `formats/sct.go` (not a retail runtime loader):
 
 ```text
 u32 version                 # observed 2 or 3
 u32 section_preview_offset  # 128×128 palette-indexed preview
 u32 tile_count
 u32 tile_graphics_offset   # tile_count × 1024 bytes, 32×32 palette indices
-u32 width
-u32 height
+u32 width                   # tile-grid columns, NOT TNT attribute cells
+u32 height                  # tile-grid rows
 u32 tile_index_offset      # width × height little-endian u16 tile indices
 ```
 
-Retail v2 and v3 sections validate against this layout. The bytes between
+The inherited editor-section survey covers versions 2 and 3. The bytes between
 the tile-index grid and the next known block are retained as opaque
 version-specific metadata; no gameplay or height semantics are assigned to
 them. Sections are consumed by map editors (Annihilator, TAE), not by the
@@ -257,19 +262,32 @@ minimap structures.
 
 ## Retail corpus notes
 
-All 171 retail maps (base, campaign, Core Contingency, Battle Tactics)
-agree on: version `0x2000`, header word 0x2C = `1`, words 0x30–0x3C = `0`,
+**Established — historical sample.** A 171-map survey (base, campaign,
+Core Contingency, Battle Tactics) recorded: version `0x2000`, header word 0x2C = `1`, words 0x30–0x3C = `0`,
 attribute byte +3 = `0`. Sea levels range 0 (dry/lava maps) to ~75; the
 most common retail value is 75.
 
-## Unknowns and caveats
+## Reader policy and unknowns
 
+**Established — Nanolathe policy.** `formats.LoadTNTWithLimits` validates
+section spans, nonzero/even dimensions, allocation budgets, tile indices and
+live feature indices. It retains reserved source feature words and the
+canonical fourth attribute byte; `internal/world` performs the reconstruction
+above. Legacy empty codes are normalized to the canonical empty word. With
+an absent-minimap flag, the parser does not dereference the minimap pointer.
+These are checked decoding and representation choices, not retail malformed-
+input guarantees. `formats.LoadSCTWithLimits` additionally rejects overlapping
+known blocks and preserves opaque metadata; `AttributeData` is a field name,
+not proof that the bytes are a height map.
+
+- **Unknown:** SCT metadata and any version beyond the observed 2/3 pair;
+  version-matched editor files and their consumer would settle the layouts.
 - Header words 0x30–0x3C (always `0` in canonical files) are not read by
   the engine on the canonical path; attribute byte +3 is not read either.
 - `0xFFFC` "void" is stored by the engine as `0xFFFC` and treated exactly
   like the engine's own edge-strip void `0xFFFD`: blocked to placement and
   movement, invisible to rendering (the hole look is the tile art). See
-  `[R-TERR-01 §1]`, `[R-TERR-01 §2]`.
+  `[03 R-TERR-01 §1]`, `[03 R-TERR-01 §2]`.
 - The exact orientation convention (which array axis is which map axis)
   matters: data is row-major with rows advancing southward; this matches
   the minimap and the OTA start positions but heights/features should be
@@ -301,4 +319,6 @@ most common retail value is 75.
   <https://units.tauniverse.com/tutorials/tadesign/tadesign/tntdesc.htm>,
   <https://units.tauniverse.com/tutorials/tadesign/tadesign/mapdsgn.htm>
 - Verified against `maps/The Pass.tnt` from `totala2.hpi`.
-- OpenTA parser: `formats/tnt.go`.
+- Nanolathe readers and authored tests: `formats/tnt.go`, `formats/sct.go`,
+  `formats/tnt_test.go`, `formats/sct_test.go`, `formats/source_test.go`;
+  footprint reconstruction: `internal/world/feature_stamp_test.go`.

@@ -32,8 +32,8 @@ func TestTypedAccessors(t *testing.T) {
 	if got := section.FixedValue("missing", 65536); got != 65536 {
 		t.Fatalf("absent FixedValue = %d, want the verbatim default 65536", got)
 	}
-	// A string field distinguishes authored-empty from missing; a numeric one
-	// cannot distinguish authored-zero from missing.
+	// A string field reports authored-empty versus missing independently of
+	// its returned text; numeric accessors return only the converted value.
 	if value, found := section.StringValue("empty", "fallback"); !found || value != "" {
 		t.Fatalf("StringValue(empty) = %q, found=%v; want authored empty", value, found)
 	}

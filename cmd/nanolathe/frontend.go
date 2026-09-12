@@ -720,7 +720,7 @@ func (g *gameShell) panelWindowNeedsUnder(mode shellMode) bool {
 func (g *gameShell) step(delta float64, cl *client.Client) {
 	pumpAudio(time.Now())
 	if cl != nil && cl.IsFocused() && g.audioOwner != nil && g.audioOwner.Music != nil {
-		g.audioOwner.Music.ServiceTimers()
+		serviceMusic(g.audioOwner)
 	}
 	g.playPendingMenuBGM()
 	switch g.frontend.Mode {

@@ -5,8 +5,9 @@
 `.tad` files are match recordings produced by the community **TA Demo
 Recorder** (TADR, by Fnordia/SJ/Yeha, distributed as a replacement
 `dplayx.dll`). The recorder intercepts Total Annihilation's multiplayer
-session traffic and writes a timed log of every TA packet exchanged between
-peers, plus lobby metadata. Because TA multiplayer is an *asynchronous*
+session traffic and writes a timed log of intercepted TA traffic plus lobby
+metadata. Recorder options can filter traffic; a file is not necessarily a
+complete packet log. Because TA multiplayer is an *asynchronous*
 peer-to-peer model — each client simulates its own units and broadcasts
 resulting unit state — a recording is primarily **state telemetry** (unit
 sync, resource status, combat events) rather than a player-input log.
@@ -18,21 +19,27 @@ behavior. They are not an authoritative engine state format.
 
 **Not a retail input.** The retail executable neither reads nor writes
 `.tad` files; the malformed-input matrix of `[02 R-MALF-01 §2]` lists the
-format only to say so. Everything below is a contract with third-party
-recorders, not with the engine.
+format only to say so. The file wrapper and Smartpak transforms are contracts
+with third-party recorders. Underlying retail wire behavior is identified
+separately and cited to doc 08.
 
 **Scope:** single-player saves use the retail save-bank contract in doc 08,
 not this format. Nanolathe contains no TAD parser, recorder or replay engine.
-References below to a corpus analyzer (including its Rust implementation) and
-private recording measurements describe inherited external analysis; they are
-not repository packages, commands or checks available in this Go engine.
+References below to a corpus analyzer (including its Rust implementation)
+describe external tooling, not repository packages or checks in this Go engine.
+The nine-file private corpus was located; framing, encrypted status records
+and match-body subpacket streams were independently checked. Retail writers
+and readers establish the field corrections below. Historical statistical
+interpretations remain separate from those traces and are retained only where
+they do not depend on a disproved field assignment.
 Corpus observations can support an inference about retail behavior; they do
 not establish a simulation contract. Undecoded fields remain **Unknown**.
 
 This inherited third-party format description covers the file envelope, the TA wire-packet encodings
 (XOR/checksum, LZ77 compression), the recorder's "smartpak" re-encoding of
-unit-sync packets, and the subpacket taxonomy. It is the byte-level contract
-for compatible third-party tooling.
+unit-sync packets, and the subpacket taxonomy. It is an inherited description
+for third-party tooling; catalog- and recorder-dependent gaps below must be resolved before claiming
+a universal compatible reader.
 
 Two related identifiers appear inside recordings and must not be confused:
 
@@ -73,7 +80,8 @@ subpacket stream := TA subpackets (fixed sizes per id, table below) with
 
 The entire file, from byte zero to EOF, is a sequence of records introduced
 by a `u16le` **total length that includes the two length bytes themselves**.
-All five corpus files tile exactly from byte 0 to EOF with zero gaps
+The historical analyzer reported that all five corpus files tile exactly
+from byte 0 to EOF with zero gaps
 (7,247 / 33,145 / 55,987 / 32,631 / 108,307 records).
 
 ### 2. Header record
@@ -84,7 +92,7 @@ char  magic[8]      "TA Demo\0"
 u16   version       3 = TADR 0.80b, 4 = 0.81a, 5 = 0.90b and ALL later
                     recorders through at least 2020 (corpus range)
 u8    numPlayers
-u16   maxUnits      per-player unit-slot count (500 in all corpus files);
+u16   maxUnits      per-player unit-slot count (500, 785 or 1500 observed);
                     ABSENT in version < 5 header (no maxUnits field)
 char  mapName[]     NUL-terminated
 ```
@@ -96,9 +104,12 @@ Worked example (corpus, Gods of War 2005):
 len   T A   D e  m o \0  v=5  2  500
 ```
 
-Readers must reject `version > 5` (unknown) and treat `version < 5` as a
-separate stratum (different header size, and the body packets carry four
-extra bytes — see §7).
+**Unknown:** versions beyond 5 are outside this description; a reader
+implementing only this contract should report them as unsupported. Treat
+versions 3 and 4 separately because their headers omit `maxUnits`; the four
+extra packet bytes described in §7 are attributed specifically to version 3,
+not to every version below 5. The listed corpus contains only version 5, so
+older layouts require source- or file-based validation before use.
 
 ### 3. Extra sectors (version 5)
 
@@ -116,37 +127,63 @@ records `{ i32 sectorType, bytes data }`:
 
 ### 4. Player and status records
 
-Per player, in order:
+The file sequence above groups all player records before all status records;
+the two record shapes are:
 
 ```
 player     { u8 color, u8 side (0=ARM 1=CORE 2=watcher), u8 number, char name[] }
-statusMsg  { u8 number?, TA packet }   -- a full ENCRYPTED TA packet (see §5)
-                                          containing a 0x20 PLAYER_INFO subpacket
+statusMsg  { u8 number?, TA packet }   -- a full ENCRYPTED custom envelope (§5)
+                                          containing a transport sequence then
+                                          a 0x20 PLAYER_INFO subpacket
 ```
 
 The 0x20 PLAYER_INFO subpacket (192 bytes raw) carries map name, map hash,
 map size (u16 width/height), maxUnits, TA version major/minor, clicked-in
 state, watcher/cheats/permanent-LOS flags, side, color/slot, and an **is-AI
-flag** — the authoritative per-player game-setup source. Offsets (0-based
+flag** — a recorded per-player setup message; it does not turn the recording into
+authoritative engine state. Offsets (0-based
 within the raw subpacket, from ta-forever's parser): width @140, height
 @142, player1Id @145, clicked @156, maxUnits @166, versionMajor @168,
 versionMinor @169, player2Id @187.
 
 ### 5. TA packet encryption and compression
 
-On the wire, every TA packet is:
+**Established — retail transport has both a direct game-record path and a
+custom envelope path** [08 "Custom and direct wire paths"]. The encrypted
+status records observed here use the custom envelope; do not apply this header
+to every possible DirectPlay message.
 
 ```
-u8   flag        0x03 plain, 0x04 compressed (0x06 pad/lobby variants exist)
-u16  checksum    sum of the encrypted payload bytes
-u8   payload[]   XOR-masked: byte at 0-based offset i (i >= 3) is
-                 XORed with (i - 1)  [1-based Pascal: data[i] xor (i-1), i from 4]
+u8   flag        0x03 plain, 0x04 compressed
+u16  checksum    sum of the transformed bytes in the range below, modulo 65536
+u8   payload[]   optionally compressed, then partly XOR-masked
 ```
 
-**In `.tad` bodies the recorder stores packets DECRYPTED and with the
-checksum removed**: the stored form is `flag + payload` where payload is the
-(possibly compressed) subpacket stream. Only the per-player status records
-(§4) store a still-encrypted packet.
+**Established — custom wire transformation.** Let `W` be the complete wire
+message length and `i` a zero-based byte index from its flag. For each
+`3 <= i < W - 3`, XOR byte `i` with `i mod 256`. The checksum is the sum of
+those transformed bytes, reduced to 16 bits. The final three wire bytes are
+neither XORed nor included in that sum; they remain part of the payload, not
+an extra trailer to discard. Decryption uses the same index and range. For
+flag `0x04`, decompress the entire decrypted payload after the three-byte
+header. The resulting payload starts with a four-byte transport sequence,
+followed by game records. This sequence is distinct from the unit-sync tick.
+[08 "Custom and direct wire paths"]
+
+**Established as a corpus observation.** All 22 status messages in the nine-file
+follow-up pass the checksum rule above. Ten are plain and twelve compressed;
+each decodes to sequence `-1` followed by exactly one 192-byte `0x20` record.
+The decoded major/minor bytes are `3, 1` and each status `maxUnits` matches its
+file header, including the 785-slot file. These bytes do not identify a precise
+patch build. The alternative XOR mask `i - 1` fails the expected decoded
+shape in every status. This closes the earlier index-phase ambiguity.
+
+**Stored match packets differ.** The inherited recorder description says the
+body form is `flag + subpacket stream` (compressed for flag `0x04`), with the
+wire checksum, masking and transport sequence removed; it additionally
+replaces unit-sync records with Smartpak forms (§7). Only the status-message
+records above retain the encrypted custom envelope. The later match-body rerun is described under Corpus validation; it checks
+framing and selected field relationships, not every historical analysis.
 
 Compression (`flag 0x04`) is LZ77 with control bytes, applied to the
 subpacket stream:
@@ -161,15 +198,26 @@ subpacket stream:
 
 Encoded match lengths are 2..17 bytes; the compressor chooses matches of at
 least 3 bytes. The 12-bit field is an absolute 1-based index into the first
-4095 output bytes, not a backward distance. The compressor never compresses
-the first two payload bytes and (in TADR's implementation) gives up beyond
-input offset 2000.
+4095 output bytes, not a backward distance. The inherited recorder-source
+description says its compressor gives up
+beyond input offset 2000. This is an encoder policy, not a decoder offset: the
+compressed status payload begins immediately after the wire header, with no
+two-byte uncompressed prefix.
 
 ### 6. Subpacket taxonomy
 
 After decompression the payload is a concatenation of subpackets. Sizes
-include the 1-byte id. Names follow ta-forever's `tapacket` library; ids
-match TADR's tables and were re-validated against the corpus.
+include the one-byte ID. The table retains the inherited recorder-reader
+lengths; audited retail meanings are identified in §6.1–§6.5. **Unknown —
+length strata:** the inspected retail executable declares lengths 3, 18 and
+186 for types `0x03`, `0x13` and `0x20`, respectively, whereas the inherited
+recorder taxonomy gives 7, 19 and 192. The nine-file corpus contains 22
+192-byte initial status messages and 63 further 192-byte `0x20` records,
+but no `0x03` or `0x13` match records. Do not silently replace observed lengths
+with the retail table or assume the larger forms are universal retail layouts.
+A version-matched recorder transformation or executable writer must explain
+these differences. Major/minor bytes `3,1` do not identify that writer.
+[08 "Declared packet types"]
 
 | id | size | name / meaning |
 | --- | --- | --- |
@@ -182,15 +230,15 @@ match TADR's tables and were re-validated against the corpus.
 | 0x08 | 1 | loading started |
 | 0x09 | 23 | **unit build started**: u16 unitTypeId @1, u16 netId @3, u32 x @7, u32 y @11, u32 z @15 — TA convention (x east, y up/height, z south); values are consistent with map-pixel units. Corpus shows the packet can be sent twice for the same netId (dedupe on netId + tick window). |
 | 0x0a | 7 | unknown (netId + ff 01 pattern) |
-| 0x0b | 9 | **unit take damage**: u16 victim netId @1, u16 attacker netId @3, u16 damage @5, u8 damage_modifier @7 (97 distinct values in corpus), u8 damage_type @8 (2 distinct: 1 = normal damage, 6 = paralyzer damage). Field analysis against the corpus. |
-| 0x0c | 11 | **unit killed**: u16 victim netId @1, u32 undecoded @3 (4 bytes, low entropy), u16 killer netId @7, u8 weapon/cause @9, u8 param @10. Killer-netId=0 means unattributed death. Field analysis on five recordings. |
-| 0x0d | 36 | **weapon fired**: u32 origin x @1, u32 origin y @5, u32 origin z @9, u32 aim x @13, u32 aim y @17, u32 aim z @21 — all 16.16 fixed-point world units, TA convention (x east, y up/height, z south); origin is the muzzle position at launch, aim is the target point including lead. u8 weapon TDF `ID` @25 (joins `weapons/*.tdf` authored `ID=` — confirmed by per-(ID, shooter) fire-gap cadence matching `reloadtime × 30` sender ticks across nine recordings and four recorder eras, e.g. EMG 16 → 12 ticks, ARMRL_MISSILE 106 → 60, ARMTRUCK_ROCKET 124 → 360; 100.0% of corpus shots satisfy horizontal origin→aim distance ≤ weapon `range`). u8 flag @26 (2-state: 0x00 or 0xfe; semantics unknown — air-launched weapons skew 0xfe). i16 launch heading @27 (TA angle units, 65536 = full turn; equals `atan2(dx,dz) + 32768`, circular fit R=0.956, median residual 2.9°). i16 launch pitch @29 (same units; equals `atan2(dy, horiz)` for line-of-sight weapons, median residual 1.4°; ballistic weapons deviate). u16 shooter netId @31, u16 target netId @33 (same id space as 0x0b victim/attacker: unit id = playerIndex × maxUnits + slot + 1; the playerIndex is the lobby/block index, which does NOT equal sender order — in 5 of 9 corpus recordings the capture peer owns a non-zero block, so block bases must be reconciled per session). u8 firing weapon slot @35 (0-based Weapon1/2/3 index; proven by ARMAAS_WEAPON1/2/3 → 0/1/2 etc.). A "firing-unit netId @1" reading of the first field is spurious — those are the fractional bytes of origin x. Decoded against all five recordings, 73,180 events. |
-| 0x0e | 14 | area of effect |
-| 0x0f | 6 | feature action: u8 reference/category @1 (5 distinct), u16 param @2 (48 distinct), u8 action @4 (35 distinct), u8 zero @5 (constant). Field analysis against the corpus. |
-| 0x10 | 22 | **unit start COB script**: u16 unit netId @1, u8 script-index @3 (13 distinct), u8 zero @4 (constant), u8 mode/flags @5 (3 distinct), u16 arg0 @6, u8 undecoded @8 (3 distinct), u8 zero @9 (constant), u16 arg1 @10, 10 bytes zero-padding @12..21 (constant). Field analysis against the corpus. |
+| 0x0b | 9 | **Damage:** victim ID, attacker ID, amount, hit direction and damage kind; established retail fields in §6.1. |
+| 0x0c | 11 | **Death:** victim ID, attacker-player transport identity, attacker-unit ID, severity and packed cause/variant; §6.2. |
+| 0x0d | 36 | **Projectile creation:** position, target/velocity triple, weapon identity and class-dependent tail; §6.3. |
+| 0x0e | 14 | **Projectile impact/removal:** stored target triple and weapon ID; §6.3. |
+| 0x0f | 6 | **Feature transition/damage:** code plus two tile-coordinate words; §6.4. |
+| 0x10 | 22 | **Run authored script:** unit ID, signed script index, argument count and four complete argument words; §6.5. |
 | 0x11 | 4 | unit state: u16 netId @1, u8 state @3. State values: 0=off, 1=on, 2+=other. Field analysis against the corpus. |
 | 0x12 | 5 | **unit build finished**: u16 built netId @1, u16 builder netId @3 |
-| 0x13 | 19 | play sound |
+| 0x13 | 19 (recorder taxonomy; retail 18) | Play sound. Retail has selector u8 at 1, sound identity i32 at 2, XYZ i32 at 6/10/14. Position is consumed only for selector zero; both audited emitters send selector one. Recorder extension remains unverified. |
 | 0x14 | 24 | give unit (also appears in unit-data contexts) |
 | 0x15 | 1 | start |
 | 0x16 | 17 | share resources: u8 kind?, u32 fromDpId, u32 toDpId, f32 amount |
@@ -201,14 +249,14 @@ match TADR's tables and were re-validated against the corpus.
 | 0x1b | 6 | reject (u32 dpId) |
 | 0x1e | 2 | start |
 | 0x1f | 5 | unknown |
-| 0x20 | 192 | player info (see §4) |
+| 0x20 | 192 (observed recordings; retail 186) | Player info; §4. Do not transfer the recording offsets to the shorter retail layout without a version/recorder mapping. |
 | 0x21 | 10 | unknown |
 | 0x22 | 6 | ident3 (u32 dpId, u8 number) |
 | 0x23 | 14 | ally: u32 fromDpId @1, u32 toDpId @5, u8 alliedFromWithTo @9, u32 alliedToWithFrom @10 |
 | 0x24 | 6 | team (u32 dpId, u8 team) |
 | 0x26 | 41 | ident2 (10 × u32 dpIds) |
 | 0x28 | 58 | **player resource info** (see §8) |
-| 0x29 | 3 | unknown |
+| 0x29 | 3 | Synchronization control/reply: flag at 1, responding participant's per-peer state flag at 2. The `0x28` reply sets the first flag; complete handshake lifecycle remains Unknown. [08 "Economy and integrity checks — overwrite-sync, not compare"] |
 | 0x2a | 2 | loading progress percent |
 | 0x2c | u16le @1 | **unit stat and move** (see §7) |
 | 0x2e | 9 | unknown |
@@ -222,10 +270,93 @@ match TADR's tables and were re-validated against the corpus.
 | 0xfe | 5 | smartpak: set tick counter (u32le @1) |
 | 0xff | 1 | smartpak: idle 0x2c (§7) |
 
-Ids ≥ 0xf6 never appear on the real TA wire; they are recorder constructs.
+**Supported inference from the cited recorder taxonomy:** ids ≥ `0xf6`
+are recorder constructs; do not infer retail wire behavior from those ids.
 `0xfc` map-position packets and all chat ids are presentation/session data
 and must never feed gameplay-state analysis; chat additionally must be
 excluded from committed artifacts.
+
+### 6.1 Damage record
+
+**Established — retail fields, zero-based packet offsets:**
+
+| Offset | Type | Meaning |
+| ---: | --- | --- |
+| 1 | u16 | Victim unit ID; zero is rejected by the receiver. |
+| 3 | u16 | Attacker unit ID; zero means no attacker. |
+| 5 | 16 bits | Low word of scaled amount: signed for ordinary health subtraction, unsigned for paralyze and heal. |
+| 7 | u8 | High byte of impact-relative direction; ordinary weapon damage expands it by shifting left eight for `HitByWeapon`. |
+| 8 | u8 | Damage kind: 1 ordinary weapon damage, 2 paralyze, 6 default cargo-cascade damage, 10 healing. Other kinds follow the damage contract. |
+
+The direction byte is not a damage multiplier, and kind 6 is not paralyze.
+Scaling, signedness, reaction order and kind-specific branches belong to
+[06 §9.1] and [06 §12.1]. **Established corpus observation:** the rerun sees
+kinds 1, 3, 5 and 6 across nine recordings and no kind 2. The earlier claim
+that this corpus contained only kinds 1 and 6 was incomplete.
+
+### 6.2 Death record
+
+**Established — retail fields:** offset 1 is victim ID u16; offset 3 is the
+attacker player's transport identity u32; offset 7 is attacker unit ID u16;
+offset 9 is signed severity i8; offset 10 packs death cause in the high nibble
+and corpse-depth/variant output in the low nibble. The transport identity comes
+from the damage-time attacker-side snapshot; absent or invalid attribution is
+all-one bits. It is separate from the attacker unit ID, which may be zero.
+The receiver resolves these two identities independently. Neither offset 9 nor
+the packed byte is a weapon ID or wreck probability. Death credit, script
+severity and corpse interpretation follow [06 §12.1].
+
+### 6.3 Projectile creation and impact
+
+**Established — ordinary unit-shot `0x0d` layout:**
+
+| Offset | Type | Meaning |
+| ---: | --- | --- |
+| 1, 5, 9 | i32 each | Signed 16.16 origin X, Y, Z. |
+| 13, 17, 21 | i32 each | Signed 16.16 target point X, Y, Z in unit-shot paths. |
+| 25 | u8 | Authored weapon ID. |
+| 26 | u8 | Bit 0 is the interceptor flag; the upper seven bits are ignored by the receiver. |
+| 27, 29 | 16 bits each | Stored weapon-slot yaw and pitch. |
+| 31 | u16 | Target unit ID. |
+| 33 | u16 | Shooter unit ID. |
+| 35 | u8 | Zero-based weapon-slot index. |
+
+The unit-shot writers replace only bit 0 of the flags byte and do not initialize
+its other bits. Thus observed bytes `0x00` and `0xfe` both mean interceptor
+clear; they do not form an air-launch enumeration. Origin is producer-specific:
+one free-shot path sends the unit's position even though its local projectile
+creator received a muzzle point. The old universal muzzle claim and reversed
+shooter/target labels were incorrect. Historical cadence/angle fits based on
+those labels are withdrawn pending a corrected analysis.
+
+**Established — meteor exception:** the weapon definition selects the meteor
+path. Its second triple carries velocity, not a target point; the receiver
+bypasses the unit/angle tail. The meteor producer initializes the two triples
+and weapon ID without defining the unused tail. This packet cannot be decoded
+semantically from length alone. [06 §6.5]
+
+**Established — `0x0e`:** three signed 16.16 stored target coordinates begin at
+1, 5 and 9, followed by weapon ID at 13. The receiver finds the first projectile
+in pool order matching that stored triple and weapon ID, then invokes its
+impact/removal path. It does not encode an area radius. [06 §11.2]
+
+### 6.4 Feature record
+
+**Established:** offset 1 is a code u8, offset 2 anchor tile X u16, and offset
+4 anchor tile Z u16. Codes `0xfd`, `0xfe` and `0xff` request death transition,
+ignition and reclaim transition, respectively; other code values select a
+weapon definition for feature damage. Byte 4 is part of Z, not an independent
+action byte, and byte 5 is not padding. [05 R-FEAT-01 §8] [05 R-FEAT-01 §9]
+
+### 6.5 Script record
+
+**Established:** offset 1 is unit ID u16; offset 3 is authored script index
+i16; offset 5 is argument count u8; offsets 6, 10, 14 and 18 are four complete
+32-bit argument words. The receiver starts the script deferred, writes all four
+physical argument cells and sets the logical top from the argument count.
+Offset 8 is part of the first argument, not an independent unknown field;
+zero-valued argument bytes are not protocol padding. The count is not an
+execution mode. [04 R-COB-01 §1] [04 §5.3]
 
 ### 7. Unit sync — 0x2c and the smartpak re-encoding
 
@@ -236,39 +367,108 @@ u8   0x2c
 u16  length        total, including these 3 bytes and the tick
 u32  tick          sender's game tick; tick mod maxUnits is the scheduled
                    status-scan slot
-u16  marker        0xffff = status update; otherwise the zero-based local
-                   slot of the moved unit
-u8   body[]        BIT-PACKED state (see below)
+bits body[]        zero or more movement entries, an all-ones 16-bit
+                   movement-list terminator, then scheduled status
 ```
 
-Key facts:
+**Established — retail bit convention and context.** Fields are packed
+least-significant bit first with no alignment between entries. Signed fields
+use two's-complement bits. Let `C` be the retained unit-definition row count,
+including reserved row zero; the definition-index width `W` is its bit length
+(the number of right shifts until zero). At an exact power of two, this is one
+more than `log2(C)`. `maxUnits` does not determine `W`. Matching catalog identity
+is needed both for index meanings and movement-family selection.
+[08 "Unit-sync ownership and body structure"]
 
-- Each player owns a contiguous netId block: `startId = netId − (netId mod
-  maxUnits)` (blocks assigned in lobby-determined order, `maxUnits` apart;
-  netIds observed are 1-based within block: the commander of the player
-  with block base 500 is netId 501).
-- The tick increments once per sender sim frame (~30 Hz nominal). Status
-  updates cycle round-robin by `tick mod maxUnits`: with maxUnits = 500, a
-  given status slot is synced every ~16.7 s. Movement updates are event-driven
-  and identify their unit with the non-`0xffff` marker instead.
-- An **idle/empty slot** produces the 11-byte form: length = 0x000b, body =
-  `ff ff 01 00` after the tick. Replay tools treat a slot's idle sync as
-  "no unit alive in this slot".
-- In the 0xffff status form, the known bit-packed fields (1-based byte
-  indexing into the full reconstructed 0x2c, bits within the 4 bytes at
-  offsets 11..14): **health = 16 bits starting at bit 2 of byte 11**,
-  **buildDone = next 8 bits (0 = complete)**. TADR uses exactly these for
-  its kill/health tracking.
-- In the common non-`0xffff` movement form, the marker is the zero-based local
-  slot (`netId = sender block base + marker + 1`). The confirmed common form
-  has leading discriminator 0x24, 0x29, or 0xa9; its exact meaning remains open.
-  A shape nibble at bits 8..11 selects two (8/A) or three (C/E) unaligned `u16`
-  X/Z world-coordinate pairs beginning at bit 12. The first pair is current
-  position; later pairs are a coherent forward path whose precise prediction/
-  interpolation role remains open. The simple form ends with 17 one bits and
-  11 zero bits, appearing as roughly `f0 ff 1f 00` due to nibble alignment.
-  Optional trailing fields remain undecoded, so total body length is not a
-  field-layout key.
+**Established — identity and repetition.** Unit ID zero is reserved; block `b`
+owns IDs `b*maxUnits+1` through `(b+1)*maxUnits`, inclusive. For nonzero IDs,
+`blockBase=((ID-1)/maxUnits)*maxUnits` and `localSlot=(ID-1) mod maxUnits`.
+Read a local-slot u16 after the tick and after every movement payload. All-one
+bits end the list; otherwise a `W`-bit definition index follows. The referenced
+definition's `canfly` selects the ground or air grammar below. A definition
+mismatch is repaired before the receiver invokes the corresponding movement
+reader. Block assignment is separate from recording sender order.
+
+#### Ground movement entry
+
+**Established:** after local slot and definition index, read blocked flag 1 bit,
+point count 2 bits, then that many pairs of signed X16/Z16. Count is 0..3. The
+writer takes up to the first three retained path points when its path-active
+flag is set and otherwise sends zero points. The receiver expands the integer
+coordinates to 16.16 by shifting left 16. These points are an ordered path
+prefix; the format does not require the first pair to be the current position.
+Total entry length is `16+W+3+32*pointCount` bits. The next local-slot marker
+follows immediately, including after a zero-point blocked-state update.
+
+#### Air movement entry
+
+**Established:** after local slot and definition index, read a 2-bit selector.
+Each form ends with a 2-bit movement-state value after its selected payload:
+
+| Selector | Payload, in wire order |
+| ---: | --- |
+| 0 | No subordinate-controller payload. |
+| 1 | Flags u8, followed by conditional fields in the order below. |
+| 2 | Turn-enabled 1 bit; position XYZ signed fixed32; velocity XYZ signed fixed32; target heading u16 only when turn-enabled is set. |
+
+Selector 1 conditional fields, in this exact order:
+
+| Flag bit | Additional fields |
+| ---: | --- |
+| 0 | Signed attachment piece i16, then target unit ID u16 (zero is null). |
+| 4 | Signed scalar i16; precise meaning Unknown. |
+| 3 | Signed vertical offset i16. |
+| 6 | Signed relative heading i16. |
+| 5 | Position XYZ signed fixed32. |
+
+The other flag bits add no fields in the audited pair of routines. Their full
+meaning remains **Unknown**. The receiver treats selector 3 as no subordinate
+payload, but the audited sender does not deliberately emit it. Unsupported
+controller kinds can omit the selector entirely; proving those states
+unreachable requires a separate lifecycle trace. Do not invent a selector-3
+encoding for that sender branch.
+
+#### Scheduled status
+
+**Established:** after the movement-list terminator, read presence 1 bit. The
+audited writer always sets it; the receiver reads no status when it is clear.
+The scheduled local slot is `tick mod maxUnits`. When present, read definition
+index in `W` bits. Zero ends the status and identifies an empty slot. Otherwise:
+
+| Field | Width |
+| --- | ---: |
+| Health (signed word) | 16 bits |
+| Construction remaining byte | 8 bits |
+| Activation/status flags | 8 bits |
+| Unit-state value | 2 bits |
+| Attached flag | 1 bit |
+
+For construction remaining fraction `r`, the sender writes zero when `r==0`;
+otherwise it writes `low8(1-trunc(r * -254.0))`, multiplying the stored binary32
+fraction by binary32 `-254.0` at working precision before truncation. For valid
+`0<r<=1`, the result is 1..255; 255 means entirely unbuilt. The receiver
+multiplies the unsigned byte by the binary32 reciprocal-of-255 constant and
+stores the result as binary32 when changed. This is a remaining fraction, not
+a completed percentage. Status flags use the ordinary transition helper;
+bit 0 drives Activate/Deactivate and bit 3 StartBuilding/StopBuilding.
+
+If attached is set, read attached-to unit ID in 15 bits and signed attachment
+piece in 8 bits; that ends the status. Otherwise read position XYZ as three
+signed fixed32 values, then three angle16 values (heading followed by two
+orientation components). Finally, read one fixed32 movement scalar **only if
+that unit has movement state**. Ordinary creation allocates it for `BMcode==1`,
+but actual lifecycle state is the precise condition; there is no wire presence
+bit for this final word. A reader lacking that context must report ambiguity.
+The other orientation-axis names and movement scalar's full semantics remain
+**Unknown** in this bounded packet trace.
+
+Without movement entries, health begins at absolute bit `73+W` from the full
+reconstructed packet. An empty status occupies `ceil((73+W)/8)` bytes. The
+historical eleven-byte idle shape and fixed byte/bit health offset therefore
+depend on catalog width. The sender rounds the full record to bytes. Its
+movement scan can stop after a completed entry takes the rounded byte count
+above 511, but still appends terminator and scheduled status; 512 is not a
+universal final-size cap. [08 "Unit-sync ownership and body structure"]
 
 The recorder shrinks the dominant 0x2c traffic ("smartpak"):
 
@@ -276,7 +476,8 @@ The recorder shrinks the dominant 0x2c traffic ("smartpak"):
 - every 0x2c is rewritten as `0xfd + u16 length + body` with the 4 tick
   bytes removed; the length field keeps the ORIGINAL 0x2c length, so the
   chunk occupies `length − 4` bytes and the body is `length − 7` bytes;
-- an idle 0x2c (length 0x000b) becomes the single byte `0xff`;
+- the recorder's eleven-byte idle `0x2c` form becomes the single byte `0xff`;
+  compatibility with a different catalog-width idle length remains unverified;
 - each reconstructed 0x2c consumes one tick: `tick = counter++`.
 
 Reconstruction: `2c <origLen u16> <tick u32> <body>`.
@@ -288,56 +489,57 @@ assumed.
 **Version 3 files** (TADR 0.80b): each stored packet has four extra bytes
 between the flag and the subpacket stream (skipped by all later readers).
 
-### 8. Player resource info — 0x28
+### 8. Participant resource and score snapshot — 0x28
 
-58 bytes. Bytes 1..17 (after the id) are near-zero in corpus observations
-(identity/flags TBD); then ten `f32le` fields at 0-based offsets:
+**Established — retail producer and receiver:** this is a 58-byte participant
+snapshot, with fields below at zero-based packet offsets. The four leading
+counters are sign-extended from signed 16-bit state to signed 32-bit wire
+values; the receiver keeps their low 16 bits. The next four fields preserve
+binary32 bits. The final six narrow binary64 running totals to binary32 and
+are widened back by the receiver. [08 "Economy and integrity checks — overwrite-sync, not compare"]
 
-| offset | field (behavior-identified, names TBD) |
-| --- | --- |
-| 18 | current metal stock |
-| 22 | current energy stock |
-| 26 | metal storage capacity |
-| 30 | energy storage capacity |
-| 34 | cumulative metal produced |
-| 38 | cumulative energy produced |
-| 42 | cumulative counter (excess/wasted/shared family) |
-| 46 | cumulative counter (same family) |
-| 50 | cumulative counter (same family) |
-| 54 | slow stepwise rate (income-like; steps as economy grows) |
+| Offset | Type | Field |
+| ---: | --- | --- |
+| 1 | u8 | Echo/request flag. |
+| 2 | i32 | Kills. |
+| 6 | i32 | Losses. |
+| 10 | i32 | Commander kills. |
+| 14 | i32 | Commander losses. |
+| 18 | f32 | Current metal stock. |
+| 22 | f32 | Current energy stock. |
+| 26 | f32 | Metal storage capacity. |
+| 30 | f32 | Energy storage capacity. |
+| 34 | f32 | Cumulative energy produced. |
+| 38 | f32 | Cumulative energy requested. |
+| 42 | f32 | Cumulative energy wasted. |
+| 46 | f32 | Cumulative metal produced. |
+| 50 | f32 | Cumulative metal requested. |
+| 54 | f32 | Cumulative metal wasted. |
 
-ta-forever's notes name the groups "lastsharedm/e, sharedm/e, incomem/e,
-lasttotalm/e"; the exact assignment of offsets 42/46/50/54 is not yet
-pinned. Cadence in the corpus: roughly one 0x28 per ~4 s per sender.
-Because offsets 34/38 are cumulative, their differences can constrain counter
-increments without stock-level sampling aliasing. However, the packet sender
-is not yet proven to identify the resource ledger. The analyzer retains
-successive packets only as a sender-scoped transport stream, never exposes the
-still-opaque prefix bytes, and does not call the resulting wall-time
-differences engine income. Comparisons also must not cross recorder coverage,
-Smartpak clock, or speed boundaries.
+The requested totals use save keys `TotalEnergyConsumed` and
+`TotalMetalConsumed`, but represent requested work rather than successfully
+paid work [05 R-ECO-01 §6]. The final field is not an income rate. The old
+metal/energy labels on offsets 34 and 38 and the unknown-family labels on the
+remaining totals were wrong; numerical trend alone did not establish them.
 
-The bounded analyzer observes 14,506 valid 0x28 packets across the five-file
-OTA corpus, with zero malformed or non-finite values. A corpus-wide aggregate
-field lab strongly supports the 17-byte prefix's syntactic shape as one byte
-followed by four little-endian `u32` words. The first two candidate words are
-high-cardinality (1,023 and 1,082 distinct); the last two are low-cardinality
-(3 and 2 distinct) and zero in 13,536 and 13,304 packets. Little-endian word
-comparisons produce 2,086/2,121/552/274 matches against observed lifecycle raw
-net IDs, while equivalent big-endian comparisons produce none. These are
-candidate net-ID-like references, not promoted semantic fields.
+**Established — retail ownership:** the writer sends the local participant's
+snapshot with that participant's transport identity as source. The receiver
+resolves that source participant and overwrites its fields, subject to the
+existing synchronization gate; it does not search the prefix for an owner ID.
+A nonzero flag can cause a control reply and a snapshot from the answering
+participant. The first 17 bytes therefore encode a flag and four score
+counters, not unit references or a ledger identifier. Joining a recording's
+sender number to that retail participant or a unit-ID block still needs the
+recorder/session mapping; packet bytes do not supply that join by themselves.
 
-The whole prefix is not a stable owner or ledger ID: there are 3,393 distinct
-prefixes and 3,560 prefix changes among 14,492 consecutive same-sender packet
-transitions. Splitting by full prefix discards continuity without improving a
-counter invariant: sender-scoped cumulative metal and energy have zero
-regressions in every individual recording before prefix splitting, while
-full-prefix grouping reduces positive-wall candidate pairs from 11,234 to
-7,736. Therefore the packet sender may be retained as a **transport-scoped
-cumulative-counter stream**, but is not yet a proven economic player/owner.
-Any sender-scoped delta per recorder wall second is direct transport-sequence
-telemetry only; it is not engine income per simulation second or evidence for
-player conservation, wind/tidal attribution, sharing, or starvation.
+**Established corpus observation:** the independent rerun finds 14,506
+snapshots in the original five files and 19,117 across all nine. All ten float
+fields are finite; all four signed counter words equal sign-extension of their
+low 16 bits. Each of the six corrected cumulative fields is nondecreasing in
+same-file, same-sender capture order. The earlier prefix-cardinality/net-ID
+interpretations are superseded by the retail counter writers. Recorded wall
+intervals remain capture timing, not exact simulation intervals, and no
+per-second income or conservation rule follows from these checks.
 
 ### 9. Time model
 
@@ -371,8 +573,15 @@ peer rather than authoritative simulation time.
 
 ## Corpus validation
 
-A throwaway Python reference implementation of this contract was run against
-all five private corpus recordings:
+**Established — follow-up envelope validation.** The private
+`tada-ota-3.1` corpus contains nine files; all nine byte lengths and SHA-256
+hashes match its manifest. Independent length-prefix scanning tiles each file
+exactly to EOF. The five original record counts and their header fields in the
+table below reproduce exactly. The later independent match-body scan
+reproduces the five known checksum
+markers and finds no other splitting failures. Historical field interpretations
+are superseded where the retail trace above contradicts them; unrelated timing
+fits remain inherited, not rerun.
 
 | map | header | recorder | players | maxUnits | records | subpacket errors |
 | --- | --- | --- | --- | --- | ---: | --- |
@@ -382,14 +591,45 @@ all five private corpus recordings:
 | lava mania | v5 | 3.9.2.0 | 2 | 1500 | 32,631 | 0 |
 | red triangle | v5 | 3.9.2.0 | 3 | 1500 | 108,307 | 0 |
 
-Cross-checks that passed:
+The four additional files extend the directly checked envelope sample:
 
-- **Tick reconstruction is exact.** Predicting the tick counter by counting
+| map / recording date | header | recorder string | players | maxUnits | records |
+| --- | --- | --- | ---: | ---: | ---: |
+| Gods of War / 2001-02-09 | v5 | 0.97ß | 2 | 785 | 30,276 |
+| Sail Away / 2003-06-24 | v5 | 0.99ß2 | 2 | 500 | 26,809 |
+| Hundred Isles / 2003-07-13 | v5 | 0.99ß2 | 2 | 500 | 8,553 |
+| Painted Desert / 2010-03-22 | v5 | 1.0.0.545 | 2 | 500 | 31,757 |
+
+Dates identify manifest entries; recorder strings above come from their type-3
+sectors. The manifest normalizes some strings (for example `0.99ß2` to `0.99`),
+so use the stored sector when distinguishing recorder builds. The 785-slot
+observation rules out treating the two original slot sizes as an enumeration.
+The sample still contains no format-version 3 or 4 file.
+
+The independent status-message check covers all 22 participants; §5 gives its
+checksums, compression split and decoded header relationships. It emits no
+player names, lobby addresses, chat, or raw packet dumps.
+
+**Established — independent match-body rerun.** A bounded decoder using the
+recording length strata above splits 3,185,002 subpackets across nine files,
+including Smartpak records. It excludes exactly the five known checksum-error
+records below. The original five files yield 73,180 `0x0d` records; all nine
+contain 148,141. There are no `0x03`, `0x0e`, `0x13` or `0x14` records in this
+sample. The resource-field checks are in §8. Successful framing establishes
+these sample observations, not all malformed-input behavior or historical
+combat-fit conclusions.
+
+Historical packet-level cross-checks (the following timing/lifecycle fits were
+not rerun by this follow-up):
+
+- **Tick reconstruction largely reconciles in the historical sample.**
+  Predicting the tick counter by counting
   0xfd/0xff chunks re-synchronizes with the next explicit 0xfe value in
   >99.9% of ~219,000 checks across the corpus; the residual deltas are +6
   (one missing bundle) with a handful of larger jumps. Since Painted Desert
-  is 62% compressed records, this also proves the LZ77 decoder byte-exact
-  in practice.
+  is 62% compressed records, this supports that decoder on the observed
+  compressed streams; it does not prove every LZ77 edge case or account for
+  the remaining discontinuities.
 - **Sides and slots decode.** Player records give side 0/1/2 (the Painted
   Desert third participant is side 2 = watcher, matching archive metadata).
 - **Commander types match side detection.** The first 0x09 per player is
@@ -419,39 +659,57 @@ than treating either as a subpacket stream.
 
 ## Unknowns and caveats
 
-- **The remaining 0x2c body bit-packing is a crown-jewel unknown.** Health,
-  buildDone, movement identity, and the common two/three-point X/Z prefix are
-now decoded by corpus observation. Heading, velocity/vertical state,
-  the later point role, alternate movement shapes, and optional trailing
-  fields remain undecoded. The external implementations inspected replay the
-  body opaquely or read only the tick.
-- The unknown-purpose subpackets: 0x03, 0x07, 0x0a, 0x17, 0x1f, 0x21, 0x29,
-  0x2e, 0xf6; and the exact layouts of 0x0e, 0x0a, 0x13, 0x14, 0x42; plus
-  the undecoded 4-byte field at 0x0c offsets 3-6, the undecoded byte at
-  0x10 offset 8, and the 2-state flag byte at 0x0d offset 26.
-  - 0x0b damage_modifier and damage_type are decoded (damage_type: 1 =
-    normal, 6 = paralyzer). The damage_modifier semantics (97 distinct values)
-    are not yet mapped to damage-modifier formulas.
-  - 0x0e (area-of-effect), 0x13 (play-sound), and 0x14 (give-unit) have 0
-    corpus occurrences across all five recordings; layouts remain speculative.
-- The 0x28 leading 17 bytes and the exact naming of its last four floats.
-- 0x42 "Thaldren extended" packets appear only in later-patch strata; their
-  content is unknown and they must be surfaced per-stratum.
-- Recorder-version strata differ in behavior (e.g. compression usage:
-  one corpus file contains zero compressed records; the `onlyunits` option
-  changes coverage). Never pool strata without checking coverage first.
-- The header `maxUnits` is per-player slot-block size; nothing here
-  guarantees all clients agree on unit *type* rows beyond the 0x1a
-  unit-data CRC exchange.
-- Chat (0x05, 0xf9, sector 2) and lobby address sectors are
-  privacy-sensitive: parsers must never copy them into committed artifacts
-  or reports.
+- **Unknown:** recording-specific definition-table identity and width, complete
+  dynamic movement-state lifetime, unsupported air-controller reachability,
+  selector-1 scalar/flag semantics, the status unit-state value, two orientation
+  component names and the final movement scalar's complete meaning. The audited
+  grammar in §7 establishes widths and branches; these remaining questions need
+  the corresponding catalog/lifecycle or semantic consumer trace.
+- **Unknown:** why recorder player-info records contain 192 bytes while this
+  retail writer emits 186; and whether the inherited 7-byte `0x03` and 19-byte
+  sound forms belong to other writers. Source or executable-version evidence
+  must reconcile these strata. Empty-sync Smartpak handling outside the
+  observed catalog width is also unverified.
+- **Unknown:** remaining untraced control/lobby records (`0x03`, `0x07`,
+  `0x0a`, `0x17`, `0x1f`, `0x21`), the full ownership-transfer
+  `0x14` layout, and later recorder/patch records (`0x2e`, `0xf6`, `0x42`).
+  The complete `0x28`/`0x29` synchronization handshake also remains open.
+  Existing category-08 roles are the starting point for each consumer trace;
+  an inherited unknown label is not evidence that retail ignores a record.
+- **Unknown:** an exact recording-sender-to-retail-participant/block mapping
+  for each session; the resource prefix is now established score data, not a
+  candidate owner ID. Cadence, conservation and weapon-fit analyses must use
+  corrected field identities and must not cross capture or clock gaps.
+- Recorder strata differ in compression, filtering and extensions. The header
+  `maxUnits` is per-player capacity, not definition count. The `0x1a` exchange
+  concerns unit-data compatibility but does not by itself provide all catalog
+  context required by a stand-alone semantic decoder.
+- Chat (`0x05`, `0xf9`, sector 2) and lobby-address sectors are private metadata;
+  do not copy them into committed artifacts or analysis reports.
 
 ## Sources
 
-- Direct byte analysis of five private corpus recordings, which remains the
-  ground truth for every claim above; structural results were derived
-  independently before source inspection and then reconciled.
+- Inherited private-recording analyses (five-file envelope survey and later
+  expanded packet-field surveys). Corpus relationships are **Supported
+  inference** for semantics, even where the old wording says "confirmed" or
+  "proven"; counts establish only observations in those samples. The recordings
+  and the external Rust analyzer were subsequently located in
+  the neighboring analysis project. The follow-up independently rechecked
+  framing, headers, checksums, status decoding and match-body subpacket streams.
+  Corrected resource relationships were checked; historical weapon-cadence,
+  angle-fit, movement-fit and timing analyses were not rerun.
+- **Established provenance:** the private `tada-ota-3.1` manifest (schema
+  `openta.private-ta-recorder-corpus`, version 1) identifies nine files by
+  SHA-256. Independent follow-up checks use those bytes as observations;
+  neither recordings nor decoded private metadata are distributed here.
+- Retail custom-envelope producer, variable unit-sync writer and ownership
+  allocator, translated
+  into [08 "Custom and direct wire paths"], [08 "Framing"] and
+  [08 "Unit-sync ownership and body structure"]. These settle the underlying
+  wire transformation, variable-length framing and block arithmetic separately
+  from third-party recorder transformations. Further retail traces of movement
+  serializers, scheduled status, damage/death/projectile/script records and
+  participant snapshots establish the specific field corrections in §§6–8.
 - TA Demo Recorder 0.99b2 source (Fnordia/SJ/Yeha, released 2003-11-05,
   clan-sy.com; local copy inspected with project-owner authorization):
   `packet.pas` (encrypt/compress/split tables),

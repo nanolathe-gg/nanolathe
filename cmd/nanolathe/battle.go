@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/audio"
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/clock"
@@ -574,6 +575,19 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 		cl.WarmBattleFeatureSequences(b.sess.Catalog, b.sess.World.FeatureDefs)
 	}
 	attachBattleAudio(cl, b.sess, b.fs)
+	prefs := s.Audio
+	if b.shell != nil {
+		prefs = b.shell.audioPrefs
+	}
+	music := b.sess.Audio.Music
+	music.SetVolume(prefs.MusicVol)
+	music.SetEnabled(prefs.MusicMode != 0)
+	music.Configure(audio.PlayMode(prefs.CDMode), 0)
+	// Battle entry requests Building music [03 R-AUD-01 §5]. Device
+	// creation can follow installation, so playback starts on the host pump.
+	// TODO(T23): connect the established damage/death intensity producer
+	// [03 R-AUD-01 §5]; until then, retain Building or explicit user selection.
+	b.sess.Audio.StartMusic()
 }
 
 // applyBattleAudioOptions supplies the presentation output configuration at
@@ -841,7 +855,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		return
 	}
 	if b.shell == nil && cl.IsFocused() && b.sess != nil && b.sess.Audio != nil && b.sess.Audio.Music != nil {
-		b.sess.Audio.Music.ServiceTimers()
+		serviceMusic(b.sess.Audio)
 	}
 	b.dragScrollStepped = false
 	if b.dragScrollActive && (!cl.IsFocused() || b.isResultVisible() || b.battleState().Modal() != ui.BattleModalClosed) {

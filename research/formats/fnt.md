@@ -52,7 +52,10 @@ u16 reading appears to work only because bytes 1 and 3 are zero in every
 retail font. See [03 §7.1] (`R-FONT-01 §1`, `§4`) for the rasterizer
 contract.
 
-Since offsets are u16, an FNT file cannot exceed 64 KiB. Retail fonts are a
+**Established (layout consequence):** a nonzero glyph-record start is
+addressable only at offsets 1 through 65,535. This does not impose a 64 KiB
+file-size limit: a bitmap can extend beyond its starting offset, and trailing
+bytes need not be referenced. Retail fonts are a
 few KiB (`SMLFONT.FNT` is 2713 bytes in the installed `totala1.hpi`, height
 11, offset 1, 223 glyphs present covering 0x20 through the Windows-1252 high
 range; most retail fonts carry only the 94 printable ASCII glyphs).
@@ -87,6 +90,17 @@ The space glyph (code 32, offset 524) is width 7 with an all-zero bitmap —
 spacing is encoded as ordinary blank glyphs; there is no separate metrics
 table, kerning, or baseline data beyond the header's vertical offset.
 
+## Nanolathe parser policy
+
+**Established (implementation):** `formats.LoadFNT` preserves the four
+header bytes separately, indexes the shortened table from `first_code`, and
+copies each referenced packed bitmap. It rejects zero height, a short header
+or table, and any out-of-file glyph record or bitmap. These bounds are host
+safety checks; retail uses the file in place without validation. Codes below
+`first_code` and zero table entries remain absent. Authored fixtures in
+`formats/fnt_test.go` exercise continuous cross-row packing, missing glyphs,
+a nonzero first code and a negative vertical offset.
+
 ## Unknowns and caveats
 
 - Byte 0x01 is never read; its authored meaning, if any, is unknown (it is
@@ -109,5 +123,7 @@ table, kerning, or baseline data beyond the header's vertical offset.
 - *FNT*, TA Design Guide — role only (one paragraph; no layout):
   <https://units.tauniverse.com/tutorials/tadesign/tadesign/fntdesc.htm>
 - Layout reverse-engineered and render-verified against
-  `fonts/SMLFONT.FNT`, then validated arithmetically against all 24 retail
-  fonts (this repository, 2026).
+  `fonts/SMLFONT.FNT`, then validated arithmetically against an earlier 24-font
+  survey (this repository, 2026). [03 R-FONT-01 §1] records a later survey
+  of 25 unique fonts; these are bounded corpus observations, not a fixed
+  format-level font count.

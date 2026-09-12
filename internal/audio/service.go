@@ -31,6 +31,8 @@ type Service struct {
 	playbackInstalled bool
 	musicConfigured   bool
 	musicFSBound      bool
+	musicTracks       []string
+	musicStartPending bool
 	lastEventTick     uint32
 	hasEventTick      bool
 	streamPath        string
@@ -361,11 +363,24 @@ func (a *Service) ConfigureMusic(hasBriefing bool) {
 	if a.fs == nil {
 		return
 	}
-	n := ProbeMusicTracks(a.fs)
+	a.musicTracks = MusicTracks(a.fs)
+	a.Music.openTrack = a.openMusicTrack
+	n := len(a.musicTracks)
 	a.Music.Configure(SelectMusicMode(n, hasBriefing), 0)
 	a.Music.SetNumTracks(n)
 	if n > 0 {
 		_ = a.Music.Open(n)
+		if packagedMusicTracks(a.musicTracks) {
+			// Default categories for the retail disc's audio layout
+			// [03 R-AUD-01 §4 "Packaged MP3 media"].
+			for track := 1; track <= n; track++ {
+				category := uint8(0)
+				if track <= 7 {
+					category = 1
+				}
+				a.Music.trackCategory[track] = category
+			}
+		}
 	}
 	a.musicConfigured = true
 	a.musicFSBound = true
@@ -499,6 +514,7 @@ func (a *Service) Close() {
 		return
 	}
 	a.StopStream()
+	a.musicStartPending = false
 	if a.Music == nil {
 		return
 	}

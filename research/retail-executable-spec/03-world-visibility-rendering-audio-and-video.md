@@ -4938,9 +4938,10 @@ no channel arithmetic and no interpolation between rows.
   exceptions are isolated duplicates near palette gaps. Mean luminance delta
   is effectively ±0.0 at row 0 and rises monotonically to +51.51 at row 31.
   White (255) maps to white and black (0) maps to black at every level.
-* Brightening is monotonic and nearest-color: each row remaps every source
-  index to the palette entry whose RGB is nearest the brightened color, not
-  to `src + level*step`. The top rows therefore collapse many sources onto the
+* The mean-luminance trend increases, but the nearest-color remap does not
+  guarantee nondecreasing luminance for every source index. Each row remaps
+  the brightened RGB target through the palette search rather than adding
+  `level*step` to the source index. The top rows collapse many sources onto the
   same bright band (row 31 maps sources 1–6 onto 249–254, the bright
   orange/yellow band).
 
@@ -4986,7 +4987,13 @@ clamp because the ramp `0x4F..0x6E` is exactly rows `0..31`. The effect
 remains presentation-only, not authoritative, not hashed, and not
 save/loaded.
 
-`LHT` never darkens; darkening is through `SHD` rows 0–14. The `discByte→level` mapping is established (direct-static for the byte thresholds): the disc canvas is filled per pixel with one CRT draw each, `R = trunc(CRT*10/0x8000)` in `0..9`, radial distance `sqrt(dx*dx + 1.33*dy*dy)`, `q = trunc(((R + sqrt) / H) * 32.0)`, then the stored byte is `0x6F − q` while `(0x20 − q) mod 256 < 0x20`, `0x6E` while that byte-compare lies in `0x20..0x21`, and `0xFF` from `0x22` up — the 0xFF band is what makes the disc's outer area transparent, the visible region being the band where `q mod 256` lies in `0..31`. The halo level is `discByte − 0x4F = 32 − q` (`31` for the ring byte) bright centre to rim, and the disc is drawn to screen as radial spokes from angle `0x800` through `0x10000` in steps of `0x800` through the sin/cos helper pair (the same angular step as the minimap circle rasterizers).
+**Established (bounded asset measurement):** `LHT` serves the brightening
+family; it is not a per-cell luminance guarantee. In the installed
+`totala1.hpi` tables, 16 of 8,192 cells have a negative delta under
+`0.299R + 0.587G + 0.114B`; for example `LHT[3][161] = 66` gives
+−10.764. This measures that weighted RGB metric, not perceived brightness,
+and does not constrain modded tables. `SHD` rows 0–14 provide the darkening
+ramp. The `discByte→level` mapping is established (direct-static for the byte thresholds): the disc canvas is filled per pixel with one CRT draw each, `R = trunc(CRT*10/0x8000)` in `0..9`, radial distance `sqrt(dx*dx + 1.33*dy*dy)`, `q = trunc(((R + sqrt) / H) * 32.0)`, then the stored byte is `0x6F − q` while `(0x20 − q) mod 256 < 0x20`, `0x6E` while that byte-compare lies in `0x20..0x21`, and `0xFF` from `0x22` up — the 0xFF band is what makes the disc's outer area transparent, the visible region being the band where `q mod 256` lies in `0..31`. The halo level is `discByte − 0x4F = 32 − q` (`31` for the ring byte) bright centre to rim, and the disc is drawn to screen as radial spokes from angle `0x800` through `0x10000` in steps of `0x800` through the sin/cos helper pair (the same angular step as the minimap circle rasterizers).
 
 **The ellipticity axis and the division.** The generator's own arithmetic
 ([06 R-WFX-01 §2]): the **row** term carries
@@ -8900,6 +8907,45 @@ current list (the `(i mod 4) + 1` cycle at first run, or the previous
 disc's). `TRACKTYPE` edits write the object's list; the ring is refreshed
 from the object at eject/shutdown.
 
+**Packaged MP3 media.** **Established:** the reference GOG Commander Pack
+installation supplies `music/0.mp3` through `music/17.mp3`, and the executable
+routes MCI string commands through the packaged `win32.dll` audio adapter.
+For a play command naming physical track *p*, that adapter opens
+`music/<p>.mp3`: the filename uses the physical track number directly, with
+no subtraction or renumbering. The packaged executable also has an added
+track-count path that supplies the decimal count 17 before the ordinary
+first-track-type adjustment. This added path is outside the original count
+query behavior described above; MP3 directory length is not the CD count.
+
+**Established:** combining that filename rule with the retail disc shape
+(one data track followed by sixteen audio tracks) gives this media contract:
+logical audio tracks `1..16` map to `music/2.mp3` through `music/17.mp3`,
+respectively, by `filename number = logical track + 1`. The logical count is
+16 and the data-track offset is 1 for this disc shape. The corresponding
+fresh-disc default category list is seven `Battle` tracks followed by nine
+`Building` tracks, under the category-list miss conditions above. In file
+terms, that means `2.mp3..8.mp3` for Battle and `9.mp3..17.mp3` for Building.
+Full-file comparison of the reference installation establishes that `0.mp3`
+is identical to `9.mp3`, and `1.mp3` is identical to `10.mp3`; the sixteen
+files `2.mp3..17.mp3` are distinct. The two lower-numbered duplicates do not
+add logical audio tracks to that disc-shaped mapping. The development
+installation's numbered files match the packaged files byte for byte.
+
+**Established limitation / Unknown:** the packaged adapter's status-command
+path reports success without filling the caller's reply buffer, including
+first-track type and playback-mode requests. Consequently static evidence
+does not establish a platform-independent first-track reply or a reliable
+live device status for a GOG launch. The count 17 becomes sixteen audio
+tracks only when the ordinary first-track probe does not return exactly
+`audio`; an exact `audio` reply would retain seventeen and offset zero.
+Likewise, a persisted `CDLISTS` hit replaces the fresh-disc defaults. A
+missing CD-ROM serial remains zero and can match a zero-initialized list
+entry, so seven Battle followed by nine Building must not be described as
+an unconditional observed GOG startup state. The mapping above defines the
+retail disc-shaped media, independently of those adapter response defects.
+A manual retail observation with the response buffers and category-list
+provenance identified would settle the packaged launch's actual state.
+
 **Established fact — the MUSIC screen (`MUSIC.GUI` / `MUSICRT.GUI`).**
 Gadgets and effects: `NOTRAK` (`Off|On`) toggles `musicmode` and calls
 enable/disable (disable = stop and reset); `TRACKMODE` (`Play All|Random|
@@ -9667,6 +9713,12 @@ body — most under `R-<id>` headings — and are not restated here.
   06 owns the homing contract).
 
 ### Audio and music
+
+* **Unknown:** the packaged GOG adapter's actual first-track reply and initial
+  category list on a given platform, because its status path leaves the
+  reply buffer untouched and disc serial/list state can override defaults ·
+  [R-AUD-01 §4 "Packaged MP3 media"] · manual retail observation identifying
+  the response buffer and category-list provenance.
 
 - The speech-*text* threshold writer among the sound-options gadgets (the
   audio threshold's writer is established) · §8.3, [R-AUD-01 §2] · static

@@ -1,6 +1,6 @@
 # Total Annihilation File Formats
 
-This directory is a standalone, self-contained reference for every file format
+This directory is a standalone reference for the documented content formats
 used by Total Annihilation (Cavedog Entertainment, 1997) and its expansions.
 It exists so that Nanolathe development does not depend on external web pages,
 which have a habit of disappearing. Evidence and validation scope are stated
@@ -14,8 +14,8 @@ Each of the fourteen documents follows the same template:
 
 1. **Overview** — what the format is, what it stores, where it is used.
 2. **Format at a glance** — a high-level diagram of the layout.
-3. **Reference** — exhaustive byte-level documentation with worked examples
-   taken from real retail data. Some documents split this across
+3. **Reference** — the established byte layout or text schema, with evidence
+   scope and examples where available. Some documents split this across
    named sections (`Syntax` and `Schema families` in [tdf.md](tdf.md), the
    container/VM/instruction-set split in [cob.md](cob.md)), and a few add a
    "How the engine loads it" section for loader-visible edges.
@@ -63,8 +63,9 @@ those readings, not as this directory's own history.
 
 Unless a document says otherwise, all of the following hold everywhere:
 
-- **Endianness.** Every multi-byte integer in every binary format is
-  **little-endian**. No TA format mixes byte orders.
+- **Endianness.** The main game-data layouts use **little-endian** integers.
+  Follow each field table for exceptions: legacy audio containers include
+  IFF tags and lengths alongside independently decoded metadata.
 - **Integer types.** Documents use `u8`/`u16`/`u32` for unsigned and
   `i8`/`i16`/`i32` for signed integers of the given bit width. The original
   1990s notes call 32-bit fields `long` and 16-bit fields `short`.
@@ -88,8 +89,10 @@ Unless a document says otherwise, all of the following hold everywhere:
   positions and weapon ranges) corresponds to one texel of the map tile
   graphics; the height/attribute grid is 16 pixels per cell and the tile grid
   is 32 pixels per cell.
-- **Indexed color.** All game art is 8-bit indexed into the single shared
-  256-entry palette ([pal.md](pal.md)). No format stores RGB pixels.
+- **Indexed color.** The documented terrain, GAF and model-texture art uses
+  8-bit palette indices. PCX includes an RGB palette trailer; game and GUI
+  palettes have separate roles ([pal.md](pal.md)). This convention does not
+  describe every image format the engine can open.
 
 ## Where files live
 
@@ -132,14 +135,40 @@ alone — nothing in them requires the originals. Retail byte dumps and stock-sc
 public edition. Omission markers do not imply replacement evidence; file-format
 layouts and named constants remain documented separately.
 
-One further source appears in [fbi.md](fbi.md), [tdf.md](tdf.md) and
-[ota.md](ota.md): a whole-string census of the retail executable's data
-segment. TDF-family lookup is by key pointer, so a key that has no literal
-string anywhere in the image cannot be read by the original engine, however
-often the shipped content authors it or however confidently the community
-documented it. Several long-standing keys turn out to be inert that way —
-`TEDClass`, `SteeringMode`, `NoAutoFire`, unprefixed `BadTargetCategory`,
-`hitdensity`, `aimrate`, `SolarStrength`, `MohoMetal` — and a couple of keys
-turn out to exist that no shipped file uses, such as the unit key
-`armoredstate`. This is evidence about the data segment only. It settles which
-keys can matter; it never settles what the engine does with the ones that can.
+**Established — evidence limits:** literal-string inventories help locate
+candidate keys, but cannot prove by themselves that an absent literal is
+unreadable. Localized and numbered keys are built dynamically, and string
+exports can omit short keys such as `ID`. Parsed fields may also have no
+consumer (`armoredstate` is a definition-level example). The relevant parser
+and reader census, with its stated bounds, decides each claim; implementation
+agreement alone is not retail evidence.
+
+## Implementation entry points and coverage
+
+**Established — repository inspection:** this map identifies the consumers to
+check alongside each document. It is not a claim of complete retail conformance.
+Each document's caveats distinguish unresolved evidence from deliberate host
+bounds and known implementation differences.
+
+| Format | Parser / principal consumer |
+| --- | --- |
+| HPI | `vfs/hpi.go` |
+| 3DO | `formats/three_do.go`, `internal/model` |
+| COB | `internal/cob` |
+| GAF | `formats/gaf.go`, `formats/gaf_metadata.go`, render consumers |
+| GUI | `formats/gui.go`, `internal/gui` |
+| PAL / ALP / LHT / SHD | `formats/pal.go`, `internal/palette` |
+| TDF | `formats/tdf.go`, `formats/tdf_typed.go`, `internal/content` |
+| FBI | TDF parser, `internal/content/compile_unit.go` |
+| OTA | `formats/ota.go`, `internal/mission`, `internal/triggers` |
+| TNT / SCT | `formats/tnt.go`, `formats/sct.go`, `internal/world` |
+| FNT | `formats/fnt.go`, GUI text rendering |
+| PCX | `formats/pcx.go`, client picture loading |
+| WAV | `formats/wav.go`, `internal/audio` |
+| TAD | Community recording tools identified in [tad.md](tad.md) |
+
+Coverage is deliberately explicit: retail save banks live in
+`[08 "Save-file organization"]` and `internal/save`; BMP decoding is in
+`formats/bmp.go` with retail loader evidence in `[02 §7]`; the strategic-AI
+text grammar belongs to `[08 R-AI-01 §12]` and is not TDF. These do not yet
+have standalone documents in this directory.

@@ -9,9 +9,9 @@ import (
 // [fmt 3do]: 52-byte object records, 32-byte primitive records, 12-byte
 // vertices, NUL-terminated strings, all offsets absolute. Object i is written
 // at i*52, so Objects[0] must be the root and child/sibling links are the
-// parsed indexes. Load-time primitive reordering (selection swap and mean-Y
-// sort) is not undone: the loader applies it again on read and it is a
-// fixed point for already-ordered data.
+// parsed indexes. The format decoder preserves authored primitive order and
+// selection; the runtime model compiler derives the selection swap and mean-Y
+// order separately [02 "Model archive (3DO)"].
 //
 // Textured primitives must be quads; retail's quad mapper has no textured
 // n-gon path and the renderer skips such a face [R-REN-03A §5].
@@ -89,6 +89,10 @@ func EncodeThreeDO(model *ThreeDO) ([]byte, error) {
 			for p, primitive := range obj.Primitives {
 				data = binary.LittleEndian.AppendUint32(data, primitive.ColorIndex)
 				data = binary.LittleEndian.AppendUint32(data, uint32(len(primitive.VertexIndices)))
+				// TODO(question): the optional auxiliary target's layout is unknown.
+				// A nonzero authored reference or traced reader must establish what
+				// data to preserve and relocate; copying its raw word cannot relocate
+				// it when this writer repacks the file [fmt 3do].
 				data = binary.LittleEndian.AppendUint32(data, uint32(primitive.AlwaysZero))
 				data = binary.LittleEndian.AppendUint32(data, indexOffset[i][p])
 				data = binary.LittleEndian.AppendUint32(data, textureName[i][p])
@@ -115,6 +119,10 @@ func EncodeThreeDO(model *ThreeDO) ([]byte, error) {
 		put(i, 20, uint32(obj.Translation[1]))
 		put(i, 24, uint32(obj.Translation[2]))
 		put(i, 28, objectName[i])
+		// TODO(question): the optional auxiliary target's layout is unknown.
+		// A nonzero authored reference or traced reader must establish what data
+		// to preserve and relocate; the raw word copied here retains its old
+		// file offset despite repacking [fmt 3do].
 		put(i, 32, uint32(obj.AlwaysZero))
 		put(i, 36, vertexOffset[i])
 		put(i, 40, primitiveOffset[i])

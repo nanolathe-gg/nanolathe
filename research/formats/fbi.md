@@ -59,20 +59,20 @@ Real example — the start of `units/ARMFLASH.FBI` (`totala1.hpi`):
 
 ## Which keys the engine actually reads
 
-TDF parsing in the original engine is key-string driven: the parser is handed a
-pointer to a literal key and returns the authored value or a default. So a
-whole-string search of `TotalA.exe` settles, without any disassembly, which FBI
-keys can possibly do anything. Match whole strings — `hover` is not read merely
-because `canhover` exists.
+**Established:** key support comes from the unit parser and its consumers,
+not merely a search for literal strings. The accessor/default/width table is
+`[02 R-KEYS-01 §5]`; field effects belong to its cited behavioral sections.
+A string census can miss dynamically constructed localized keys and short
+strings. Presence establishes neither a consumer nor an effect.
 
-The executable's FBI key strings form one bounded table, with footprint and
-slope keys shared with movement-class loading. Every key in the tables below
-that is not listed here as inert appears in that census.
+The tables distinguish established parsed fields from bounded-negative reader
+findings and retained unknown source fields. Counts describe the cited retail
+sample, not all editions or mods.
 
-### Authored by retail units, but not readable by the engine
+### Authored by retail units, with no recovered runtime reader
 
-These occur in the shipped FBIs and have no matching string anywhere in the
-executable, so nothing can consume them. Preserve them when round-tripping; do
+The bounded unit-parser census finds no reader for these authored keys
+`[02 §5]`. Preserve them when round-tripping; do
 not give them behavior.
 
 The language-prefixed `Name` and `Description` keys do not belong in this
@@ -89,7 +89,7 @@ the Identity table below. That covers the retail joke keys too —
 | `UnitNumber` | 278 | The engine does not key units by this number. |
 | `Designation` | 274 | Cosmetic text that nothing displays. |
 | `NoAutoFire` | 272 | Auto-fire comes from the standing fire order instead. |
-| `Ovradjust` | 173 | — |
+| `Ovradjust` | 173 | Retained source field; intended meaning remains **Unknown** [02 R-P28-ANG-01R §1]. |
 | `SteeringMode` | 152 | No engine steering distinction is selected by it. |
 | `BadTargetCategory` (unprefixed) | 99 | Only `wpri_`, `wsec_` and `wspe_` prefixed spellings are read. `NoChaseCategory` *is* read unprefixed. |
 | `Scale` | 28 | — |
@@ -104,18 +104,23 @@ them and no string for them exists in the executable either.
 
 | Key | Notes |
 | --- | --- |
-| `armoredstate` | An authored starting value for the armored flag that `DamageModifier` scales. No shipped unit sets it, so on retail content that flag is script-driven only. Its existence is independent support for reading `DamageModifier` as the armored-state damage scale. |
-| `wacky` | Read with the restriction and weapon-slot fields. Purpose unresolved. |
+| `armoredstate` | Parsed and stored, but the definition flag has no recovered reader. It does **not** initialize runtime armor; runtime armor starts clear and is controlled by COB `ARMORED` [06 R-DMG-01 §2]. |
+| `wacky` | Parsed flag, default 0. The multiplayer restriction UI uses it for zero-valued restriction defaults/reset; no single-player gameplay effect is established [05 R-SHARE-01 §9][08 R-SKIR-01 §10]. |
 
 ### Exactly three weapon slots
 
 `weapon1`, `weapon2`, and `weapon3` occur in the bounded key census. There is
-no `weapon4` string anywhere in the executable, so three is the hard slot
-count, not a convention.
+no fourth slot in the traced unit compiler and weapon-slot runtime. Three is
+the established slot count [02 R-KEYS-01 §5][06 §4.2].
 
 ## Field reference
 
-Booleans are `0`/`1`. Decimals are written plainly (`0.5`, `.4`). Unknown
+**Established:** packed Boolean flags retain the integer accessor result
+modulo 2: author `0`/`1`, because `2` clears a one-bit flag. Byte/word scalar
+fields have their own narrowing; do not apply this rule to `BMcode` or other
+whole-byte fields. Decimals use the accessor named for the key, so a decimal
+in an integer field loses its fractional suffix. Defaults and narrowing are
+listed in `[02 R-KEYS-01 §5]`. Unknown
 or third-party keys should be preserved, not rejected — the engine ignores
 what it doesn't know.
 
@@ -125,7 +130,7 @@ what it doesn't know.
 | --- | --- |
 | `UnitName` | Short name; canonical ID and filename stem. Case-insensitive. |
 | `UnitNumber` | Numeric unit ID, documented as needing to be unique. The engine has no string for this key, so it is not how units are identified at runtime; the recording analyzer still uses the authored value as a candidate join for 0x09 unit type IDs and preserves duplicates or gaps as ambiguity. |
-| `Version` | Always `1` in retail files. **Read by the catalog loader** (floating accessor, default 0): `major = trunc(v)`, `minor = trunc((v − major) × 10)`; the unit is kept when `major < 3`, or `major = 3` and `minor ≤ 1` (the executable's own version is 3.1); otherwise it is compacted out of the catalog and the non-fatal `Error` box `Incompatible units found.  They will be ignored.  Please download the latest version of the game.` is shown once (`[02 R-MALF-01 §5]`). |
+| `Version` | Always `1` in retail files. **Read by the catalog loader** (floating accessor, default 0): `major = low32(trunc64(floor(v)))`, `minor = low32(trunc64(floor((v − float64(major)) × 10)))`; the unit is kept when `major < 3`, or `major = 3` and `minor ≤ 1` (the executable's own version is 3.1); otherwise it is compacted out of the catalog. Unless another silent rejection suppresses the warning, the non-fatal `Error` box `Incompatible units found.  They will be ignored.  Please download the latest version of the game.` is shown once (`[02 R-MALF-01 §5]`). |
 | `Side` | `ARM` or `CORE` |
 | `Objectname` | 3DO model name in `objects3d/` (no extension) |
 | `Designation` | Free-form designation string. Cosmetic, and the engine cannot read it. |
@@ -135,20 +140,20 @@ what it doesn't know.
 | `GermanName`, `FrenchDescription`, `SpanishName`, `ItalianDescription`, `JapaneseName`, `PigLatinName`, … | Localized `Name`/`Description` variants — the pattern is the language name directly followed by `Name` or `Description`. **The engine honors them** via the language-prefixed accessor, which builds the key from the configured language name (see the note above the inert-key table). |
 | `TEDClass` | Editor classification: `TANK`, `KBOT`, `PLANT`, `VTOL`, `WATER`, `SPECIAL`, `FORT`, `METAL`, `ENERGY`, `COMMANDER`, `CNSTR` … The engine cannot read it, so it drives the map editor only, never AI or gameplay. |
 | `Category` | Space-separated tag list (e.g. `ARM TANK LEVEL1 WEAPON NOTAIR NOTSUB`). Tags are matched by the per-slot `wpri_`/`wsec_`/`wspe_BadTargetCategory`, by `NoChaseCategory`, and by AI text files; tags need no central declaration. |
-| `Downloadable` | Appears on add-on units. The engine reads it and carries the diagnostic `Hey!  Somebody forgot to set downloadable=1 for %s`, so it gates whether an add-on unit is accepted. |
+| `Downloadable` | Parsed flag, default 0. After menu compilation, a matching first-item product in a download file forces this flag on. That site formats `Hey!  Somebody forgot to set downloadable=1 for %s` without displaying it; it does not reject the unit for omitting the flag [02 R-CAT-01 §8]. |
 
 ### Construction (being built)
 
 | Key | Meaning |
 | --- | --- |
-| `BuildCostEnergy`, `BuildCostMetal` | Total resource cost |
-| `BuildTime` | Total build effort (divided by the builder's `WorkerTime` rate) |
+| `BuildCostEnergy`, `BuildCostMetal` | Total resource cost: integer accessor, default 0, narrowed to binary32 storage [02 R-KEYS-01 §5]. |
+| `BuildTime` | Integer build-effort scale, default 0, retained as 32 bits. Work scheduling and division are established in [05 "Construction arithmetic"] and [05 R-WORK-01]. |
 | `FootprintX`, `FootprintZ` | Occupied size in 16-pixel grid cells. Read by the **movement-class record reader** applied to the unit's own `[UNITINFO]` section — the same eight-key parser that reads `gamedata/MOVEINFO.TDF` classes — which runs for every unit whose `MovementClass` does not resolve; a unit with a resolved class takes its footprint from the class, not from these keys [02 §5 "Movement class record"]. |
 | `YardMap` | Per-cell footprint map (see below) |
 | `BuildAngle` | Authored integer read as a low-16-bit unsigned bound by the unit initializer; heading arithmetic and lifecycle are defined in [04 §2.3b] |
 | `MaxDamage` | Hit points |
-| `DamageModifier` | Scale applied to incoming damage while the unit's script has put it in the armored state (COB `ARMORED`). See the note below. |
-| `HealTime` | Self-heal interval (commanders) |
+| `DamageModifier` | Fixed-point accessor, default 65,536 (1.0), retained as signed 16.16. Armored damage scaling and its amount gate are established in [06 R-DMG-01 §2]. |
+| `HealTime` | Integer self-repair work parameter, default 0, low 16 bits. It is not an interval; cadence and work conversion are established in [05 R-WORK-01 §3]. |
 | `ActivateWhenBuilt` | Unit starts activated |
 | `norestrict` | Excluded from the multiplayer unit-restriction list |
 
@@ -161,26 +166,30 @@ geometry behavior is assigned to it.
 
 #### YardMap
 
-`YardMap` refines a building's footprint cell-by-cell, `FootprintX` values
-per row, `FootprintZ` rows, whitespace-separated groups (whitespace is
-ignored — it's one flat cell list). Characters:
+**Established:** the unit compiler reads at most 1,023 authored bytes and
+allocates `FootprintX × FootprintZ` output cells only when `BMcode` is zero.
+The exact character table is case-sensitive `[02 R-CAT-01 §5]`:
 
-| Char | Meaning |
-| --- | --- |
-| `o` | occupied ground (default for all cells when no YardMap) |
-| `O` | occupied only while the yard is open (documented as never used) |
-| `c` | buildable "hole" — open when yard opens (factory exits), land |
-| `C` | as `c` for water buildings |
-| `w` | shipyard cells above water |
-| `f` | occupied by a feature (dragon's teeth) |
-| `g` / `G` | can sit over a geothermal vent (otherwise like `o`/`O`) |
-| `y` | never occupied (land) — rounds off square footprints |
-| `Y` | never occupied (water) |
+| Character | Cell byte | Character | Cell byte |
+| --- | ---: | --- | ---: |
+| `.` | 0x00 | `c` | 0x2D |
+| `C` | 0x35 | `f` | 0x6F |
+| `G` | 0x8F | `o` | 0x2F |
+| `O` | 0x2B | `w` | 0x37 |
+| `Y` | 0x31 | `y` | 0x29 |
 
-Example (ARM Kbot Lab, 6×6): `YardMap=yoccoy ooccoo ooccoo ooccoo ooccoo
-yoccoy;` — corners always open, center opens/closes with the unit's
-`OpenYard()`/`CloseYard()` script. Buildings without yard scripts can just
-use a single character (`YardMap=o;`).
+Only listed characters consume cells. Spaces, newlines, lowercase `g`, and
+all other unlisted characters are skipped. A final listed character repeats
+until the footprint is full; excess characters after the final cell are
+ignored. Thus `YardMap=o;` fills a larger footprint, and `ARMLAB`'s spaced
+6×6 source has the same cells as its unspaced form.
+
+There is no established all-`o` absent-key default. Empty text, or text ending
+in an unlisted character while cells remain, can drive retail past the string
+terminator into uninitialized bytes. A safe parser must state its own handling
+of that malformed case. Cell-bit consumers, including uppercase `G`'s vent
+requirement and open-yard occupancy, belong to [05 "Geothermal requirement"]
+and [04 §6.4]; the character names alone do not define those rules.
 
 ### Building others
 
@@ -188,13 +197,13 @@ use a single character (`YardMap=o;`).
 | --- | --- |
 | `Builder` | Can construct (`1` for factories, construction units, commander) |
 | `BMcode` | `0` for structures, `1` for mobile units. Perfectly correlated with `YardMap` across the stock corpus: all 126 definitions with a yard map author `0`, all 152 without author `1` (see `docs/SPEC_CONFLICTS.md` SC21). It is not a factory marker — stock factories author `1` for `CanMove`. The engine copies "`BMcode` is zero" into the instance's structure-class bit at creation and reads it back for yard-map allocation, build-order placement, and the model shading gate |
-| `WorkerTime` | Nanolathe rate (build effort contributed per unit time) |
+| `WorkerTime` | Integer work parameter, default 0, low 16 bits. Work quantum and cadence are established in [05 "Construction arithmetic"] and [05 R-WORK-01]. |
 | `Builddistance` | Build/repair reach in pixels (mobile builders) |
 | `MetalMake` | Metal produced while active (also used by builders) |
 | `CanCapture`, `CanReclamate` | Capture / reclaim abilities. `CanReclamate` is stored in capability bit 10, and the parser also writes capability bit 9 as a **copy of bit 10** while storing `CanResurrect` — no FBI key maps to bit 9 [02 R-KEYS-01 §1]. |
 | `IsAirBase` | Repair-pad/carrier flag |
-| `TransMaxUnits` / `transportmaxunits` / `transportcapacity`, `transportsize`, `cantbetransported`, `canload` | Transport capacity and eligibility (`transportmaxunits` is a retail spelling variant; `canload` marks a unit able to load/carry other units, i.e. is itself a transport) |
-| `teleporter` | Galactic gate flag |
+| `transportcapacity`, `transportsize`, `cantbetransported`, `canload` | Transport capacity and eligibility [04 R-AIR-01 §9]. `TransMaxUnits` and `TransportMaxUnits` have no recovered parser read; they are not aliases. |
+| `teleporter` | Parsed flag with no recovered consumer; it does not establish a teleport ability [04 R-SPEC-01 §2]. |
 
 ### Resources
 
@@ -223,7 +232,7 @@ use a single character (`YardMap=o;`).
 | `MaxWaterDepth`, `MinWaterDepth` | Water depth limits (ships set Min, subs/amphibians set Max high); read via the movement-class record reader as above. |
 | `amphibious` | Can traverse underwater and land |
 | `Floater` | Floats on water |
-| `WaterLine` | Non-negative decimal draft describing how deep the model sits in water (ships); retail data includes values such as `0.3` |
+| `WaterLine` | **Integer** accessor, default 0, low 8 bits. Authored `0.3` converts to zero; no decimal draft is retained. Water-position consumers are [04 R-MOV-01 §9] and [04 §9.2]. |
 | `Upright` | Keep model vertical on slopes (Kbots) |
 | `maneuverleashlength` | How far it strays from orders when distracted |
 | `MoveRate1`, `MoveRate2` | The two thresholds of the movement-tier classifier that raises the `MoveRate1/2/3` script callbacks — **not** plane-specific. Fixed-point accessor, so 16.16 world units per tick, each **defaulting to `MaxVelocity` shifted left one** (twice top speed). Tier 1 is `speed <= MoveRate1`, tier 2 is `MoveRate1 < speed <= MoveRate2`, tier 3 is above; since committed speed never exceeds `MaxVelocity`, a unit that authors neither key is always tier 1 [04 §5.2][04 §8.1 R-MOV-01 §6] |
@@ -231,7 +240,7 @@ use a single character (`YardMap=o;`).
 | `canhover` | Hovercraft flag |
 | `cruisealt` | Flight altitude |
 | `altfromsealevel` | Nominally "altitude measured from sea level". The engine has no string for it; `cruisealt` is the only altitude key it reads. |
-| `BankScale`, `PitchScale` | Flight-model tilt factors; both are read by the engine. |
+| `BankScale`, `PitchScale` | Fixed-point tilt factors, defaults 65,536 (1.0) and 0 respectively. Flight lean arithmetic is established in [04 R-AIR-01 §2]. |
 | `Scale` | Model scale. The engine has no string for it, so it is inert. |
 | `HoverAttack` | Aircraft hovers in place to attack (gunships) |
 | `attackrunlength` | Bombing run length before release |
@@ -270,7 +279,7 @@ removes its shading entirely. See
 | `wpri_badTargetCategory`, `wsec_badTargetCategory`, `wspe_badTargetCategory` | Per-slot bad-target categories. All three spellings exist in the executable; retail content authors the first two (107 and 22 units). |
 | `NoChaseCategory` | Never-chase categories, read unprefixed. |
 | `BadTargetCategory` (unprefixed) | Authored on 99 retail units and **inert** — the executable has only the three prefixed spellings. |
-| `antiweapons` | Shoots at projectiles (anti-nuke) |
+| `antiweapons` | Enables coverage-ring presentation for interceptor slots; interception itself uses the weapon's `interceptor` flag [02 R-KEYS-01 §1]. |
 | `CanDgun` | Has a D-gun |
 | `kamikaze`, `kamikazedistance` | Self-destruct attack |
 | `SelfDestructAs`, `ExplodeAs` | Weapon names for self-destruct and death explosions |
@@ -282,14 +291,14 @@ removes its shading entirely. See
 
 | Key | Meaning |
 | --- | --- |
-| `SightDistance` | Fog-of-war reveal radius in pixels (practical max ~400) |
+| `SightDistance` | Integer sight radius, default 0, low 16 bits; LOS sampling and truncation are owned by [03 §3.2]. No universal 400-pixel format limit is established. |
 | `RadarDistance`, `SonarDistance` | Radar/sonar radii |
 | `RadarDistanceJam`, `SonarDistanceJam` | Jamming radii |
 | `Stealth` | Invisible to radar/sonar |
 | `CloakCost`, `CloakCostMoving`, `mincloakdistance`, `init_cloaked` | Cloaking energy costs, decloak radius, initial state |
 | `istargetingupgrade` | Radar-targeting upgrade flag |
 | `HideDamage` | Hide health bar from enemies (commanders) |
-| `ShowPlayerName` | Show owner name as description (commanders) |
+| `ShowPlayerName` | Parsed flag with no recovered reader [04 R-SPEC-01 §14]. |
 
 ### Miscellaneous
 
@@ -306,53 +315,54 @@ removes its shading entirely. See
 | `ai_limit`, `ai_weight` | AI directives stored as raw text. The two keys differ: `ai_weight` IS consumed — the strategic-AI pass parses its text with the profile grammar; `weight` directives reach the live per-unit-type weight array (default 100, clamped to 0..100) that scales build-candidate scores, and embedded `limit` directives are registered too. `ai_limit` has NO runtime reader — the live per-type limit array is populated only by the `ai/` profile parser's `limit` token, never by this key; do not treat `ai_limit` as the source of the retail candidate limit. |
 | `Ovradjust` | Authored as `1` on 173 retail units. No runtime reader was found in the bounded census, so its semantics remain **Unknown**; the field is retained as authored data and no overlap, heading, or geometry behavior is assigned. |
 | `sortbias` | Parsed into a signed 16-bit field and **never read** — reader census: none [04 R-SPEC-01 §7]. The census settles it as inert. |
-| `armoredstate` | Read by the engine and authored by no shipped unit: the starting value of the armored flag that `DamageModifier` scales. |
-| `wacky` | Read by the engine and authored by no shipped unit. Purpose unresolved. |
+| `armoredstate` | Parsed but unconsumed definition flag; never seeds runtime armor [06 R-DMG-01 §2]. |
+| `wacky` | Parsed flag used by multiplayer restriction defaults/reset [05 R-SHARE-01 §9][08 R-SKIR-01 §10]; no single-player effect is established. |
+
+## Implementation coverage
+
+**Established — implementation inspection:** `internal/content/compile_unit.go`
+applies typed reads, low-bit/byte/word narrowing, movement-class fallback and
+source-field retention; `formats/tdf.go` owns the syntax. Known defaults are
+listed in `[02 R-KEYS-01 §5]`, including `StandingFireOrder=2`,
+`StandingMoveOrder=2`, `ShootMe=0` and `DamageModifier=1.0`. Authored zero does
+not select an absent-key default.
+
+The compiler retains `armoredstate` without seeding runtime armor, matching
+`[06 R-DMG-01 §2]`. The implementation's `Wacky` field is retained without a
+consumer; the documented retail consumers are in the multiplayer restriction
+UI, outside the current single-player scope. Unknown source-field retention
+must not imply that the engine acts on those values.
+
+**Established — catalog admission:** loose FBI winners are silently skipped
+before unit compilation `[02 R-CAT-01 §4]` / `docs/SPEC_CONFLICTS.md` SC24.
+Archive-backed definitions also pass the version/copyright checks. The
+version warning is suppressed when the same pass encounters a silent
+rejection; it is not guaranteed for every rejected unit `[02 R-MALF-01 §5]`.
 
 ## Unknowns and caveats
 
-- Default values when a key is absent are engine-internal and undocumented;
-  do not assume 0 for everything, and do not assume the value stock files
-  author. `ShootMe`, for example, is read with a default of **0**, so a
-  definition that omits it is never picked by a human player's autonomous
-  target search ([04 R-SPEC-01 §5]); stock definitions all author `ShootMe=1`
-  explicitly, which is why the absent case is easy to miss.
-- **Movement key units and scales — settled by the accessors, not by
-  observation.** `MaxVelocity`, `Acceleration`, `BrakeRate`, `MoveRate1` and
-  `MoveRate2` all take the fixed-point accessor and are consumed verbatim as
-  16.16 world units per tick (or per tick squared) with no runtime rescaling,
-  and `TurnRate` takes the integer accessor on the 65,536-per-circle scale —
-  see the Movement rows above and [04 §8.1 R-MOV-01 §1]. `BuildTime` and
-  `WorkerTime` are not settled that way and remain open (doc 05).
-- Several flags above carry community-guessed semantics (`BMcode`,
-  `PitchScale`, `Ovradjust`); `sortbias` does not — it is inert by reader
-  census [04 R-SPEC-01 §7]. The complete key → consumer table for every FBI
-  key the executable reads is `[02 R-KEYS-01 §5]`. `MoveRate1`/`MoveRate2`
-  are not guesses either: their accessor, defaults and classifier are
-  established in the Movement table above. `BuildAngle`
-  has an established unsigned-bound sampler, signed conversion, heading range,
-  and lifecycle contract [04 §2.3b]. `Scale` is known to be inert: the engine
-  has no string for it. `Ovradjust` has no recovered runtime reader in the
-  bounded census, so its semantics remain **Unknown** and no behavior is
-  assigned.
-- `DamageModifier`'s armored-state reading gained independent support: the
-  executable reads an `armoredstate` FBI key that no shipped unit
-  authors, which is what a script-toggled armored flag with an authored initial
-  value looks like.
-- `DamageModifier` is not the self-heal rate factor community notes call it.
-  That reading does not survive the data: all 16 retail units that author it
-  are structures with a script-toggled armored state (both solar collectors
-  at `0.33333`, Annihilator and Doomsday at `0.5`, both targeting facilities
-  at `0.7`, Viper at `0.125`), self-heal is already expressed by `HealTime`,
-  and the clean-room specification separately calls for a script-controlled
-  armored damage modifier with no authored source. This is the best available
-  reading, not a primary source: no shipped file documents the key. Runtime
-  fallback and damage behavior belong to the numbered behavior specification.
-- The `Copyright` requirement is not community lore: it is verified by static
-  trace — see the `Version` and `Copyright` rows above and
-  `[02 R-MALF-01 §5]`.
-- No key names the COB script — the `UnitName` → `scripts/<name>.cob`
-  convention is engine behavior.
+- **Unknown:** empty `UnitName` finalization and secondary resource loading.
+  Nanolathe currently substitutes the filename stem; that fallback is not
+  established retail behavior. Trace catalog sorting, lookup and resource
+  paths for an empty name to settle it [02 "Missing and unknown"].
+- **Unknown:** `Ovradjust`'s intended meaning. The bounded reader census finds
+  no consumer; an actual reader/writer chain or original authoring contract
+  would settle its purpose. Preserve the text and assign no geometry effect
+  `[02 R-P28-ANG-01R §1]`.
+- **Established:** `BMcode`, `BankScale`, `PitchScale`, `BuildAngle`,
+  `BuildTime`, `WorkerTime` and `DamageModifier` have traced contracts. They
+  must not be listed as unresolved community guesses. `sortbias`,
+  `teleporter`, `ShowPlayerName`, the definition `armoredstate`, and
+  `ai_limit` are parsed without the effects their names suggest.
+- **Established:** `ShootMe=0` does not universally forbid autonomous
+  targeting; computer-shooter and session-option alternatives remain in the
+  admission predicate [04 R-SPEC-01 §5].
+- **Unknown:** deterministic results for malformed yard text that makes retail
+  read beyond its terminator. Those bytes are not supplied by the FBI file;
+  a format reader cannot invent them. The traced malformed edge is known,
+  while Nanolathe must keep its bounded host policy explicit.
+- **Established:** no key names the COB script; `UnitName` selects
+  `scripts/<name>.cob` through the catalog loader [02 R-CAT-01 §5].
 
 ## Sources
 
@@ -367,3 +377,7 @@ removes its shading entirely. See
   `TotalA.exe` (GOG build, MD5 `8e74a1dffa1f5988624c52048f5b20cd`). It reports
   the presence or absence of literal key strings only, which is a fact about
   the data segment rather than about any code.
+
+- Retail unit accessor/consumer audit: `[02 R-KEYS-01 §5]`, with runtime
+  contracts in the cited categories. Literal-string presence is not the
+  deciding evidence for field semantics.

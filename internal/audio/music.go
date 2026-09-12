@@ -85,6 +85,9 @@ type Controller struct {
 	clock         func() uint32
 	lastService   uint32
 	playbackPoll  func() bool
+	openTrack     func(int) (MusicPlayer, error)
+	player        MusicPlayer
+	mediaError    error
 }
 
 // NewMusicController starts without a CD device: the raw queried volume is
@@ -137,6 +140,9 @@ func (c *Controller) Configure(mode PlayMode, desiredCat int) {
 func (c *Controller) SetEnabled(v bool) {
 	if c != nil {
 		c.musicEnabled = v
+		if !v {
+			c.Stop()
+		}
 	}
 }
 
@@ -160,6 +166,7 @@ func (c *Controller) SetNumTracks(n int) {
 		c.nextTrack = n
 	}
 	if c.curTrack > n {
+		c.stopMedia()
 		c.curTrack = 0
 		c.status = StatusIdle
 	}
@@ -261,6 +268,9 @@ func (c *Controller) SetPresentationClock(now func() uint32) {
 func (c *Controller) SetPlaybackPoll(poll func() bool) { c.playbackPoll = poll }
 
 func (c *Controller) pollPlaying() bool {
+	if c.player != nil {
+		return c.player.IsPlaying()
+	}
 	if c.playbackPoll != nil {
 		return c.playbackPoll()
 	}
@@ -419,6 +429,7 @@ func (c *Controller) Open(numTracks int) bool {
 	if c == nil {
 		return false
 	}
+	c.stopMedia()
 	c.initialized = true
 	c.fadeStep = 0
 	c.cancelMusicTimers()
@@ -438,6 +449,7 @@ func (c *Controller) Close() {
 	if c == nil {
 		return
 	}
+	c.Stop()
 	c.status = StatusIdle
 	c.curTrack = 0
 	c.nextTrack = 0
@@ -449,6 +461,7 @@ func (c *Controller) Stop() {
 	if c == nil {
 		return
 	}
+	c.stopMedia()
 	c.fadeStep = 0
 	c.cancelMusicTimers()
 	c.status = StatusIdle
@@ -469,11 +482,17 @@ func (c *Controller) Pause(paused bool) {
 	}
 	if paused {
 		if c.status == StatusPlaying {
+			if c.player != nil {
+				c.player.Pause()
+			}
 			c.status = StatusPaused
 		}
 	} else {
 		if c.status == StatusPaused {
 			c.applyVolume()
+			if c.player != nil {
+				c.player.Play()
+			}
 			c.status = StatusPlaying
 		}
 	}
@@ -540,8 +559,9 @@ func (c *Controller) setRawVolume(level int32, forced bool) {
 	}
 	c.outputVolume = level
 	c.volumeApplied++
-	// TODO(T23): apply this requested level to an actual CD auxiliary-volume
-	// backend when one is installed; recording it is not audible playback.
+	if c.player != nil {
+		c.player.SetVolume(float64(level) / 65535)
+	}
 }
 
 func (c *Controller) applyVolume() { c.setRawVolume(c.baseVolume, true) }
@@ -574,15 +594,27 @@ func (c *Controller) Play(track int) bool {
 	if track > c.numTracks {
 		track = c.numTracks
 	}
-	if c.status == StatusPlaying && track == c.curTrack {
+	if c.status == StatusPlaying && track == c.curTrack && c.pollPlaying() {
 		return true // dedup
 	}
-	// A backend adapter may translate this state into its media command.
+	c.stopMedia()
+	if c.openTrack != nil {
+		player, err := c.openTrack(track)
+		if err != nil {
+			c.mediaError = err
+			c.status = StatusIdle
+			return false
+		}
+		c.player = player
+	}
 	c.curTrack = track
 	c.nextTrack = track
 	c.status = StatusPlaying
 	c.position = 0
 	c.applyVolume()
+	if c.player != nil {
+		c.player.Play()
+	}
 	return true
 }
 
@@ -624,7 +656,7 @@ func (c *Controller) playSingle() {
 	if req > c.numTracks {
 		req = c.numTracks
 	}
-	if c.curTrack != req || c.status != StatusPlaying {
+	if c.curTrack != req || c.status != StatusPlaying || !c.pollPlaying() {
 		c.Play(req)
 	}
 }
@@ -750,3 +782,30 @@ func (c *Controller) NotifyTrackEnd() {
 		// keep curTrack for sequential increment logic; next already advanced in sequential case
 	}
 }
+
+func (c *Controller) stopMedia() {
+	if c.player != nil {
+		if err := c.player.Err(); err != nil && c.mediaError == nil {
+			c.mediaError = err
+		}
+		_ = c.player.Close()
+		c.player = nil
+	}
+}
+
+// TrackCategory and SetTrackCategory expose the shared per-disc list to the
+// music options screen [03 R-AUD-01 §4]. UI tracks are one-based.
+func (c *Controller) TrackCategory(track int) int {
+	if c == nil || track < 1 || track >= len(c.trackCategory) {
+		return 0
+	}
+	return int(c.trackCategory[track])
+}
+
+func (c *Controller) SetTrackCategory(track, category int) {
+	if c != nil && track >= 1 && track < len(c.trackCategory) && category >= 0 && category <= 4 {
+		c.trackCategory[track] = uint8(category)
+	}
+}
+
+func (c *Controller) DesiredCategory() int { return c.desiredCat }

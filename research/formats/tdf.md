@@ -5,11 +5,11 @@
 TDF is Total Annihilation's universal text data syntax: bracketed sections
 containing `key=value;` assignments, optionally nested. The same syntax
 underlies `.tdf` files everywhere (gamedata tables, weapons, features,
-download menus, AI profiles), plus the role-specific formats documented
+download menus), plus the role-specific formats documented
 separately: unit definitions ([fbi.md](fbi.md)), map/mission metadata
 ([ota.md](ota.md)), and menu layouts ([gui.md](gui.md)).
 
-This document covers the syntax itself and every `.tdf` schema family:
+This document covers the syntax itself and the following `.tdf` schema families:
 `gamedata/`, `features/`, `weapons/`, `download/`, and `camps/useonly/`.
 
 ## Syntax
@@ -27,23 +27,26 @@ This document covers the syntax itself and every `.tdf` schema family:
     }
 ```
 
-Rules established by the retail corpus and community documentation:
+**Established — parser rules:** `[02 §4]`, `[02 R-CAT-01 §3]` and
+`[02 R-MALF-01 §4]` own the following syntax. Encoding and line-ending
+observations are limited to the sampled retail files.
 
 - Whitespace (spaces, tabs, newlines) between tokens is insignificant;
   multiple assignments may share a line.
 - Section and key lookup is ASCII case-insensitive. Retail data mixes cases
   freely (`[UNITINFO]`, `[GlobalHeader]`, `canbuild1=`).
-- Values are raw byte strings up to the `;` — there is no quoting or escape
-  mechanism. Values cannot contain `;` or a newline. Leading/trailing
-  spaces inside values are preserved in the file; consumers trim.
+- Values run to the next `;`, including any intervening newlines. There is
+  no quoting or escape mechanism. The parser trims space, tab, CR and LF
+  from both ends of keys, values and section names; interior whitespace
+  remains. A missing semicolon can therefore swallow later assignments.
 - `/* ... */` block comments also appear in retail data
   (`weapons/WEAPONS.TDF`: `rendertype=4;	/* 2D bitmap */`), including
   inline after assignments; `//` comments may follow values on a line.
 - Duplicate keys are governed by "Duplicate keys" below. Duplicate sibling
   section names are kept as separate nodes; a first-match section accessor
   returns the first.
-- Files are ASCII/Windows-1252; localized strings carry high-byte
-  characters (`GermanDescription=Überschwerer...`). No BOM, no NULs.
+- The sampled files use ASCII/Windows-1252; localized strings carry high-byte
+  characters (`GermanDescription=Überschwerer...`). No BOM or embedded NUL was observed; those are corpus facts, not validation checks.
 - Line endings are CRLF in retail data; accept any.
 
 ### Duplicate keys
@@ -53,7 +56,8 @@ order, and the parser builds it by **insertion in source order**, not by
 sorting. Per assignment:
 
 1. take the case-insensitive **lower bound** of the key over the vector — the
-   first entry at or after the whole run of entries that fold-compare equal;
+   first entry whose folded key is not less than the new key — the head of
+   an equal-key run, when present;
 2. compare the new spelling **byte for byte against the entry at that position
    only** — the head of the fold-equal run, never the rest of it;
 3. equal spelling: the value is **replaced in place**, so the entry keeps the
@@ -72,27 +76,32 @@ consequences follow from step 2's narrow comparison:
   spelling is inserted rather than folded — **one spelling can hold two
   entries**.
 
-**Stock content depends on this, and the earlier reading inverted it.** This
-section previously said accessors return "the first variant in case-insensitive
-sort order … deterministic, not last-wins", added that the mechanism still
-needed black-box confirmation, and concluded "retail data avoids duplicates, so
-these rules matter only for third-party content". All three claims were wrong.
-Twelve stock unit records author two spellings of one movement key inside a
-single `[UNITINFO]` — `MaxWaterDepth=0` early and `maxwaterdepth=255` at the
-end: `ARMFIG`, `ARMLANCE`, `ARMSEAP`, `ARMSEHAK`, `ARMSFIG`, `Armcsa`,
-`CORHUNT`, `CORSEAP`, `CORSFIG`, `CORTITAN`, `CORVENG`, `Corcsa`. They are the
-only key runs anywhere in a 438-file sweep of `units/`, `weapons/`, `features/`,
-`gamedata/` and `guis/` that carry two spellings with different values, so this
-rule's entire observable effect in stock data is those twelve aircraft. Retail
-reads **255** for them. A byte-ordered reading picks the capital spelling
-(`M` sorts below `m`) and yields 0, which would make
-`[04 R-AIR-01 §6a]`'s aircraft water rule — "if the water floor is below sea
-level **and** the definition is `canfly` and not `amphibious`, raise the floor
-to sea level" — unreachable for every aircraft in the game, since a floor
-computed from a maximum depth of 0 already is sea level. Under the correct
-reading the rule is exactly what separates the eight `amphibious` seaplanes,
-which keep a floor 255 below sea level and may set down on water, from every
-other aircraft, which may not.
+**Established — corpus example:** twelve unit records in the cited 438-file
+sweep author `MaxWaterDepth=0` followed by `maxwaterdepth=255`; the accessor
+reads **255**. The aircraft water-floor consequence belongs to
+`[04 R-AIR-01 §6a]`. This is a stock-content rule, not merely a third-party
+compatibility edge.
+
+### Typed values and defaults
+
+**Established:** a default applies only when the key is absent. Present
+`0`, empty text, or unparsable integer text produces zero rather than the
+caller's nonzero default. For example, with integer default 7, absent `x`
+returns 7 while `x=0;` and `x=junk;` return 0. Numeric accessors do not return
+a separate found flag; string/raw accessors do. `[02 §4]`
+
+Integer conversion accepts leading whitespace, an optional sign and decimal
+digits, ignores trailing junk, and wraps to 32 bits. Fixed-point conversion
+multiplies the floating value by 65,536 before truncation; its absent-key
+default is already in stored units. A string destination of size N keeps at
+most N−1 authored bytes plus a terminator. Localization first looks up
+`<language><key>`, then the plain key `[02 §3]`.
+
+There is no universal Boolean conversion: the accessor returns an integer and
+the field's store decides its interpretation. In particular, packed unit and
+weapon flags keep `value & 1`; authored 2 clears them. Use the per-family
+accessor/default/width table `[02 R-KEYS-01 §5]` rather than treating every
+nonzero number as true.
 
 ## Schema families
 
@@ -131,9 +140,9 @@ sections; the `[CANBUILD]` section lists what each stock unit can build.
 	}
 ```
 
-(Excerpt from the retail `gamedata/SIDEDATA.TDF`.) Note: retail
-observations suggest a unit does **not** need a CANBUILD entry to be
-buildable — download-menu entries also add build buttons; see below.
+(Excerpt from the retail `gamedata/SIDEDATA.TDF`.) **Established:** the
+resolved download-menu items append after the side `CANBUILD` list under
+the documented count gate `[02 R-CAT-01 §5]` / `[02 R-CAT-01 §8]`.
 
 **MOVEINFO.TDF** — movement classes referenced by FBI `MovementClass=`:
 
@@ -353,12 +362,11 @@ comment): ballistic (`ballistic=1`, arcing under gravity), line-of-sight
 #### Which weapon keys the engine reads
 
 A whole-string census of the retail executable finds one contiguous weapon-key
-table alongside the `DAMAGE` subsection name and `default`. Every key in the
-table below appears in that census except three:
+table alongside the `DAMAGE` subsection name and `default`. The following entries need special care:
 
 | Key | Authored in | Status |
 | --- | ---: | --- |
-| `ID` | 71 files, 180 records | **Read, and it selects the record slot.** The weapon parser reads `ID` with the integer accessor and a default of −1 *first*; the authored value chooses which weapon record the parser fills, and the section name is then copied into that record as its catalog name (`name` is a separate 64-byte display string). `ID` is not inert, whatever the whole-string census suggests: that census misses very short strings (the same artifact that hid the textual `HAPI` magic), and the executable's weapon-key table does carry `ID`. An implementation that resolves weapons by section name only mis-assigns records whenever authored `ID` values differ from file order. The "255 IDs" content convention still holds as an authoring bound (weapons in retail data use `ID` 0–255, and `ID` −1 selects the slot before the table). |
+| `ID` | 71 files, 180 records | **Read, and it selects the record slot.** The weapon parser reads `ID` with the integer accessor and a default of −1 *first*; the authored value chooses which weapon record the parser fills, and the section name is then copied into that record as its catalog name (`name` is a separate 64-byte display string). `ID` is not inert, whatever the whole-string census suggests: that census misses very short strings (the same artifact that hid the textual `HAPI` magic), and the executable's weapon-key table does carry `ID`. An implementation that resolves weapons by section name only mis-assigns records whenever authored `ID` values differ from file order. There are 256 nominal slots, IDs 0–255, plus the shared unreachable scratch record selected by default ID −1. Other out-of-range values are unchecked malformed selections [02 R-MALF-01 §5]. |
 | `aimrate` | 3 files | **Inert**, despite being documented in `gamedata/WEAPONS.TDF` itself. Nothing in the executable can read it. |
 | `startfire` | 1 file | **Inert.** |
 
@@ -366,32 +374,16 @@ table below appears in that census except three:
 `movingaccuracy` or `noselfdamage`, both of which circulate in third-party
 documentation.
 
-Two keys are read but never authored by retail weapons: `shellweapon`, the flag
-between `ballistic` and `beamweapon` in the same bitfield, and the
-`metal`/`energy` short spellings of the per-shot costs.
+**Established:** `shellweapon` is read even though the cited stock sample
+never authors it. Per-shot costs use `energypershot` and `metalpershot`;
+the historical comment's bare `energy` and `metal` are not established
+weapon-cost aliases `[02 §5]`.
 
-The projectile behavior flags all live in one bitfield, and the executable's
-own string addresses fix the bit assignment:
-
-| bit | key | bit | key | bit | key |
-|---:|---|---:|---|---:|---|
-| 0 | `lineofsight` | 11 | `soundtrigger` | 21 | `propeller` |
-| 1 | `ballistic` | 12 | `guidance` | 22 | `noexplode` |
-| 2 | `shellweapon` | 13 | `tracks` | 23 | `burnblow` |
-| 3 | `beamweapon` | 14 | `unitsonly` | 24 | `twophase` |
-| 4 | `vlaunch` | 15 | `groundbounce` | 25 | `cruise` |
-| 5 | `meteor` | 16 | `waterweapon` | 26 | `commandfire` |
-| 6 | `noradar` | 17 | `toairweapon` | 28 | `stockpile` |
-| 7 | `paralyzer` | 18 | `smoketrail` | 29 | `targetable` |
-| 8 | `dropped` | 19 | `turret` | 30 | `interceptor` |
-| 9 | `startsmoke` | 20 | `selfprop` | | |
-| 10 | `endsmoke` | | | | |
-
-Bit 27 is `noautorange`. Its key string sits apart from the main table,
-but bit 27 is the only unassigned bit, `noautorange` the only unassigned key,
-and bit 27 is tested at both projectile spawn sites — where it makes the
-projectile take its `weapontimer` lifetime instead of one derived from range
-and velocity.
+Behavior flags use the integer accessor, default zero, with only the low bit
+retained. Their consumers and the stored field widths belong to
+`[02 R-KEYS-01 §5]`; the packed runtime representation is not an on-disk TDF
+layout. `noautorange` is an established parsed flag, with lifetime behavior
+owned by `[06 §7.3]`.
 
 | Key | Meaning |
 | --- | --- |
@@ -403,14 +395,15 @@ and velocity.
 | `range` | Range in map pixels |
 | `reloadtime` | Seconds between shots/bursts (decimal) |
 | `burst`, `burstrate` | Shots per burst and intra-burst delay |
-| `weaponvelocity`, `startvelocity`, `weaponacceleration` | Projectile speed in pixels/sec (and startup accel) |
+| `weaponvelocity`, `startvelocity` | Authored world units/second; floating accessor, default 0, scaled by 65,536/30 before truncation to stored 16.16 units/tick [02 §5]. |
+| `weaponacceleration` | Authored world units/second squared; floating accessor, default 0, scaled by 65,536/900 before truncation [02 §5]. |
 | `weapontimer` | Projectile lifetime in seconds (0 = computed for ballistic) |
 | `duration` | Beam length/time for beam weapons |
 | `beamweapon` | `1` = laser-style beam |
 | `ballistic` / `lineofsight` / `dropped` | Category flags |
 | `guidance`, `tracks`, `turnrate` | Homing behavior; `turnrate` in angular units (65536 = circle)/sec |
 | `cruise`, `vlaunch`, `twophase`, `flighttime` | Vertical-launch / two-phase missiles (nukes, starbursts). `weapontype2` circulates in third-party docs and is not a retail key. |
-| `accuracy`, `aimrate`, `tolerance`, `pitchtolerance` | Aiming: `tolerance` is how far off-aim firing is allowed (angular units) |
+| `accuracy`, `tolerance`, `pitchtolerance` | Aiming: `tolerance` is how far off-aim firing is allowed (angular units) |
 | `sprayangle` | Random spread (angular units) for burst weapons |
 | `areaofeffect` | Splash diameter in pixels |
 | `edgeeffectiveness` | Damage fraction at splash edge (0–1) |
@@ -433,7 +426,7 @@ and velocity.
 | `soundstart`, `soundhit`, `soundwater`, `soundtrigger` | WAV basenames; `soundtrigger=1` plays per burst shot |
 | `explosiongaf`/`explosionart` (+ `water…`, `lava…` variants) | Impact animation: GAF file basename + entry name |
 | `shakemagnitude`, `shakeduration` | Screen shake |
-| `randomdecay` | Random lifetime variation (flamethrowers) |
+| `randomdecay` | Floating seconds, default 0, multiplied by 30 and truncated into a 16-bit tick value. The centered burst-clone expiry jitter is established in [06 §4.3]. |
 | `meteor` | Marks the meteor weapon |
 | `[DAMAGE]` | Subsection: `default=` damage per hit, plus per-unit-name overrides (`corkrog=2460;`) |
 
@@ -467,8 +460,11 @@ with `download/<unit>.tdf`. Real example — `download/ARMAMB.TDF` from
 	}
 ```
 
-Sections are `[MENUENTRY1]`, `[MENUENTRY2]`, … one per builder/menu/button
-placement. The first visible build page is `MENU=2` (page numbering is
+**Established:** sections are visited in file order; their names are not
+parsed as ordinals. Stock authors `[MENUENTRY1]`, `[MENUENTRY2]`, … one per
+builder/menu/button placement. `MENU` and `BUTTON` use the integer accessor
+and retain the low byte; `UNITMENU` and `UNITNAME` use 32-byte string reads
+`[02 R-CAT-01 §8]`. The first visible build page is `MENU=2` (page numbering is
 off-by-one); two units claiming the same builder/page/button conflict —
 only one appears.
 
@@ -487,7 +483,9 @@ sections:
 	}
 ```
 
-Units not listed are grayed out in build menus during that mission.
+**Established:** mission restriction loading clears eligibility and re-enables
+the listed unit names before the battle-entry catalog compaction. This changes
+the available definitions, not merely button color `[08 R-ENTRY-01 §2]`.
 
 ### Other TDF-syntax files
 
@@ -529,25 +527,14 @@ Owned by `[02 §4]` and `[02 R-MALF-01 §4]`; the byte-level facts:
 
 ## Unknowns and caveats
 
-- No formal grammar exists; the rules above are inferred from the retail
-  corpus. Retail files may terminate a nested section as `};`; readers should
-  treat that semicolon as part of the section terminator. The edge cases that
-  look undefined (duplicate keys, `;` in values, comments opened inside
-  values) are defined by the executable: duplicate
-  sections are all retained (first-match accessor), duplicate keys follow
-  "Duplicate keys" above (identical spelling replaces in place, a case variant
-  is inserted ahead of the run so the last variant parsed is the one read),
-  comments are blanked to spaces before parsing wherever they
-  appear (so a `//` inside a value blanks the rest of the line, and a value
-  containing `;` ends at its first `;`); and a syntax error is **fatal** —
-  see "How the engine parses it" below and `[02 R-MALF-01 §4]`.
-- Several weapon/feature fields have community-guessed semantics
-  (`randomdecay` direction, `thick`); guesses are marked in the tables. Note
-  that `gamedata/WEAPONS.TDF`'s own commentary settles several keys the
-  community only guessed at — check there before treating a weapon key as
-  undocumented, and note that being documented there does not make a key live:
-  `aimrate` is documented in that header and has no string in the executable.
-  `hitdensity` is a settled case in the other direction: it is inert.
+- **Established:** the grammar is traced, not merely inferred from corpus
+  style. `}` closes a section; it does not consume a following `;`. Do not
+  prescribe `};` as an optional terminator. Comments are blanked before parsing
+  even inside would-be values. Duplicate sections remain in source order;
+  duplicate-key lookup follows the insertion rule above.
+- **Established:** `randomdecay` and the scalar conversions are documented in
+  `[02 §5]` / `[06 §4.3]`. Historical weapon commentary is authoring context,
+  not proof a key is live or its prose matches the traced consumer.
 - `MOVEINFO.TDF`'s `BadSlope`/`BadWaterSlope` pair is authored only by the
   two hover classes; both keys are read by the engine along with
   `MaxWaterSlope`, as the clear-vs-steep boundary of the movement classifier
@@ -564,17 +551,35 @@ Owned by `[02 §4]` and `[02 R-MALF-01 §4]`; the byte-level facts:
 - **Established:** `LOS.TDF` declares `numtables=9` while containing 12 table
   sections; only the declared range is selected `[03 R-VIS-01 §3]`.
 
-- The "which keys the engine reads" tables in this document are a whole-string
-  census of `TotalA.exe` (GOG build, MD5 `8e74a1dffa1f5988624c52048f5b20cd`).
-  A key that has no literal string in the image cannot be read, since TDF
-  lookup is by key pointer. That is a fact about the data segment; it says
-  nothing about what the code does with the keys that are present.
+- **Unknown:** complete acceptance equivalence for malformed numeric text
+  between the retail CRT and Nanolathe's host conversion, especially floating
+  overflow and unusual exponent spellings. Resolving it requires a bounded
+  CRT conversion trace and matching authored cases; ordinary parser tests are
+  not a proof of every numeric edge.
+- **Established — evidence limit:** a literal-string census alone cannot
+  prove a key unreadable. Language-prefixed keys and numbered keys are built
+  dynamically, and a minimum-length string export can omit short keys such
+  as `ID`. Negative key claims require the relevant parser/caller census.
+
+## Implementation coverage
+
+**Established — implementation inspection:** `formats/tdf.go` preserves source
+items and builds a separate resolved key view; it implements comment blanking,
+trimming, multiline values, first-match sibling lookup and the duplicate-key
+rule. It additionally accepts an adjacent semicolon after `}`; that host
+extension is not part of the traced retail grammar. `formats/tdf_typed.go`
+applies absent-only defaults. Its `BoolValue`
+helper tests nonzero, so packed catalog flags instead use their field-specific
+low-bit stores. Parse size/depth limits and returned Go errors are host safety
+policy; retail's malformed-input path is fatal. Source-item preservation does
+not mean byte-for-byte preservation of comments and outer whitespace.
 
 ## Sources
 
 - **`gamedata/WEAPONS.TDF` (from `totala1.hpi`)** — Cavedog's own comment
-  header is the primary source for the weapon schema; it defines every key in
-  the weapon table above, including several the community only guessed at.
+  header supplies historical authoring descriptions. Executable-owned
+  contracts `[02 §5]` / `[02 R-KEYS-01 §5]` determine live keys, defaults and
+  conversions when that commentary disagrees.
 - TA Design Guide pages, at
   `https://units.tauniverse.com/tutorials/tadesign/tadesign/<page>`
   (also mirrored under

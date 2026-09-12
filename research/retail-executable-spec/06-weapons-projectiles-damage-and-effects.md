@@ -2239,14 +2239,27 @@ is fired.
 The **projectile-event reconstruction** path chooses a root creator with a
 different ordered predicate list:
 
-1. meteor creates directly from packet velocity and does not require a live unit
-   target;
-2. other event paths require a non-null live unit target;
+1. meteor creates directly from packet velocity and does not require a live
+   shooter;
+2. other event paths require a non-null live shooter; target identity is
+   resolved separately and may be null;
 3. ballistic selects the ballistic creator;
 4. otherwise vertical-launch selects the vertical creator;
 5. otherwise line-of-sight or self-propelled selects the ordinary creator;
 6. otherwise dropped selects its small inline creator;
 7. otherwise no projectile is created.
+
+**Established — projectile-event fields.** Ordinary unit-shot events carry
+origin and target-point triples, authored weapon identity, slot yaw/pitch,
+target unit identity followed by shooter unit identity, and weapon-slot index.
+The receiver uses the shooter to select the slot and resolves target separately.
+The interceptor flag occupies bit 0 of its byte; ordinary emitters replace only
+that bit, leaving the other bits without defined content, and the receiver
+ignores them. A free-shot producer publishes the unit's position even though
+its local creator received a muzzle point. Meteor uses the second triple as
+velocity and bypasses the unit/angle tail; its producer does not define that
+unused tail. The full wire layout is [fmt tad]; these field identities replace
+inferences based only on packet-value correlations.
 
 Beam, guidance, cruise, propeller, burn-blow, no-explode, render type, and
 firestarter do not independently select a creator. Guidance alone is not a
@@ -3534,9 +3547,9 @@ payment entirely; a nonzero id naming an empty slot is not rejected.
 
 **Established fact:** The dispatcher's order is exact:
 
-1. resolve victim and attacker from their ids by slot arithmetic; the victim
-   pointer is dereferenced with no null test, so a packet carrying victim id 0
-   faults;
+1. resolve victim and attacker from their ids by slot arithmetic; reject a
+   zero victim ID before dereferencing the victim. A zero attacker ID means
+   no attacker;
 2. reject unless the victim's alive bit is set and its death latch is clear;
 3. **kind 10 (heal)** takes an early exit:
    `h = (int32)(int16)health + (uint16)amount; if ((uint32)maxHealth <= (uint32)h) h = maxHealth;`
@@ -4699,6 +4712,15 @@ does, in order:
 5. call the central death handler in **local** mode;
 6. for a commander death with the commander-death rule word nonzero and a
    locally simulated owner, enter the game-over path `[08 "Evaluation"]`.
+
+**Established — death record attribution.** The death record carries victim
+unit identity, the attacker's damage-time player snapshot converted to transport
+identity, attacker unit identity, signed severity, and a byte packing death
+cause in its high nibble and corpse-chain variant in its low nibble. Absent or
+invalid player attribution becomes the all-ones transport identity; a null
+attacker unit becomes ID zero. The receiver resolves the player identity and
+unit identity independently. Neither severity nor the packed byte identifies a
+weapon or a wreck probability. [fmt tad]
 
 **Established fact:** Severity is integer arithmetic on the already-negative
 health:

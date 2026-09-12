@@ -898,8 +898,8 @@ written lowercase `[04 §3.6]`.
 
 **C12 — the postlude.** When at least one order was queued, the unit's
 class/state bit clears; and unless the script contained a numeric-form attack,
-patrol, defend or stop, a final make-selectable order queues with zero
-auxiliary arguments `[04 §3.6]`.
+patrol, self-destruct or make-selectable, a final make-selectable order queues
+with zero auxiliary arguments `[04 §3.6]`.
 
 **C13 — malformed input is silent.** Unknown letters, digits and punctuation
 are ignored with scanning resuming past the comma; a failed type lookup for

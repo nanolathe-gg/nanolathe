@@ -37,7 +37,11 @@ Three conventional uses:
                                                       or subframe ptr table
 ```
 
-All offsets are absolute file offsets. All integers little-endian.
+**Established:** all offsets are absolute file offsets and all integers are
+little-endian [02 R-MALF-01 §6]. Asset examples and surveys below describe
+the named reference content, not limits on other GAF files. The earlier
+950-file survey and later 958-file survey have different scopes; frame totals
+that include subframes must not be compared with top-level frame totals.
 
 ## Reference
 
@@ -45,7 +49,7 @@ All offsets are absolute file offsets. All integers little-endian.
 
 | Offset | Size | Type | Name | Description |
 | ---: | ---: | --- | --- | --- |
-| 0x00 | 4 | u32 | version | `0x00010100` in 945 of 950 retail GAFs. The exceptions are `anims/TERRAIN.GAF` and `anims/VISMASKS.GAF` (engine-internal mask data), which store `0` here but keep the same container structure — readers that hard-require the version will reject them. |
+| 0x00 | 4 | u32 | version | **Established (reference-asset observation):** ordinary art uses `0x00010100`; `anims/TERRAIN.GAF` and `anims/VISMASKS.GAF` use `0` with the same container layout. Retail ignores this field [02 R-MALF-01 §6]; readers that require the usual version reject those masks. |
 | 0x04 | 4 | u32 | entry_count | number of entries. **The executable reads the low 16 bits as a signed value** (`[02 R-MALF-01 §6]`): a count with bit 15 set loads no entries. |
 | 0x08 | 4 | u32 | unknown | `0` in all retail files |
 
@@ -91,7 +95,7 @@ confidence.
 value 10 }. Note that pixel data is deduplicated: in `ARMALAB.GAF` the
 entries `ARMACONM`, `ARMFROG`, and `ARMZEUS` have distinct frame headers
 that all point at the same pixel `data_offset` (identical placeholder art).
-Retail files never share the frame *headers* themselves across entries,
+The earlier survey found no shared frame *headers* across entries,
 but readers must not assume pixel extents are uniquely owned.
 
 ### Frame header (24 bytes)
@@ -126,7 +130,9 @@ anchor. This lets frames of one animation differ in size while staying
 registered (explosions grow around their center). Two caveats from retail
 data: GUI gadget art can carry offsets unrelated to the menu using it (the
 engine places gadgets by GUI coordinates instead), and composed subframes
-may extend slightly outside the parent canvas (clip when compositing).
+may extend outside the parent canvas. **Established:** the ordinary retail
+compositor clips to the destination, not the parent dimensions; only a
+parent-sized host raster necessarily clips those extensions (see below).
 
 ### Raw pixels (`compressed = 0`)
 
@@ -164,11 +170,14 @@ Real example — first row of the 80×40 `Credits` frame in
 edition. The surrounding format description retains its stated evidence and
 confidence.
 
-If a row's commands would exceed `width` pixels, or the payload runs out
-early, the file is malformed. After producing `width` pixels the payload
-must be fully consumed. What the executable does with such a row
+**Nanolathe validation policy:** every nonempty row must produce exactly
+`width` pixels and consume its payload exactly; overflowing runs, truncated
+commands, unused payload and zero-length skip commands are rejected by both
+metadata and pixel readers. These checks are stricter than retail.
+**Established:** what the executable does with such a row
 (`[02 R-MALF-01 §6]`): a run that would overshoot is clamped to the
-remaining width (excess discarded); a payload that runs out is **not
+remaining width (excess discarded, but a literal command advances its source
+by the full authored count); a payload that runs out is **not
 detected** — decoding continues into the following bytes (the next row's
 count and payload) until `width` pixels exist, and the next row still
 starts at `row + 2 + payload_count`; a payload count of 0 leaves the row
@@ -176,8 +185,8 @@ untouched (transparent).
 
 ### Composed frames (`subframe_count > 0`)
 
-When `subframe_count` is nonzero, `data_offset` points at
-`subframe_count` × u32 — absolute offsets of further frame headers.
+When the low byte of `subframe_count` is nonzero, `data_offset` points at
+`(subframe_count & 0xFF)` × u32 — absolute offsets of further frame headers.
 **Established:** the general blitter draws these children in table order at
 the same pen position. Each leaf's destination origin is
 `(pen_x - leaf.x_offset, pen_y - leaf.y_offset)`. A parent-sized host canvas
@@ -232,6 +241,17 @@ null sequence with no message.
 
 ## Unknowns and caveats
 
+- **Unknown:** case comparison for non-ASCII entry-name bytes. Nanolathe
+  folds ASCII letters only and otherwise compares bytes unchanged; a trace of
+  retail's locale-dependent comparison would settle this (`formats/gaf.go`
+  carries the matching `TODO(question)`).
+- **Unknown:** alternate-child behavior in raw-raster consumers such as
+  scaled images, light-table glyphs, feature/fog masks and model textures.
+  Nanolathe's compatibility raster includes ordinary children only, clipped
+  to the parent canvas; alternate-only coverage stays transparent. This is a
+  temporary host fallback, not a retail result. The individual consumer traces
+  named in [02 R-MALF-01 §6] would settle it; matching `TODO(question)` markers
+  remain in `formats/gaf_metadata.go`.
 - Frame header byte +8 is the raw path's color key (see the frame-header
   table); the trailing u32 (garbage) has no confirmed semantics. The
   frame-reference u32 is the per-frame display duration in whole simulation
@@ -299,4 +319,6 @@ null sequence with no message.
   <https://units.tauniverse.com/tutorials/tadesign/tadesign/gafdesc.htm>
 - Verified against `anims/ARMALAB.GAF` and `anims/MAINMENU.GAF` from
   `totala1.hpi`, a field survey of all 950 retail GAFs (48,519 frames), and
-  OpenTA's decoder (`formats/gaf.go`).
+  Nanolathe's metadata/pixel readers (`formats/gaf_metadata.go`,
+  `formats/gaf.go`) and authored GAF fixtures. The later subframe census is
+  bounded explicitly by [02 R-MALF-01 §6].

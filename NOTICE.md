@@ -18,6 +18,7 @@ cached license files. They are downloaded by Go, not vendored into this tree.
 | github.com/ebitengine/hideconsole | v1.0.0 | Apache-2.0 |
 | github.com/ebitengine/oto/v3 | v3.5.0 | Apache-2.0 |
 | github.com/ebitengine/purego | v0.11.0 | Apache-2.0 |
+| github.com/hajimehoshi/go-mp3 | v0.3.4 | Apache-2.0 |
 | github.com/jfreymuth/pulse | v0.1.3 | MIT |
 | golang.org/x/sync | v0.22.0 | BSD-3-Clause |
 | golang.org/x/sys | v0.47.0 | BSD-3-Clause |

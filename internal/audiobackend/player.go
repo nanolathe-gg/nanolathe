@@ -29,6 +29,7 @@ type Backend struct {
 	// admission count and stop-all table [03 R-AUD-01 §1 step 7].
 	untracked []voice
 	streams   []voice
+	music     []*musicPlayer
 	// statics retains the four reusable device instances for each registered
 	// sample identity. It is presentation-only session ownership [03 R-AUD-01 §1].
 	statics      []staticSample
@@ -660,7 +661,7 @@ func (b *Backend) PlayStream(sample *retailaudio.Sample, volume float64) error {
 	return nil
 }
 
-// StopStream releases every streaming player, ending music and speech.
+// StopStream releases narration players; CD music has its own lifetime.
 func (b *Backend) StopStream() {
 	if b == nil {
 		return
@@ -741,4 +742,8 @@ func (b *Backend) Close() {
 	b.untracked = nil
 	b.transients = nil
 	b.statics = nil
+	for _, player := range b.music {
+		_ = player.Close()
+	}
+	b.music = nil
 }

@@ -147,6 +147,10 @@ func (g *gameShell) ensureFrontendAudio() *audio.Service {
 	if g.audioOwner == nil {
 		g.audioOwner = audio.NewService(g.cs.fs)
 		bindMusicClock(g.audioOwner)
+		g.audioOwner.ConfigureMusic(false)
+		g.audioOwner.Music.Configure(audio.PlayMode(g.audioPrefs.CDMode), 4)
+		g.audioOwner.Music.SetVolume(g.audioPrefs.MusicVol)
+		g.audioOwner.Music.SetEnabled(g.audioPrefs.MusicMode != 0)
 	}
 	if !g.frontendAliasesBound && g.audioOwner.Registry != nil {
 		// Interface cue names are mode-0 alias registrations, so they resolve

@@ -355,8 +355,34 @@ without a media device the existing controller models playback internally.
 Only actual successful completion signals call `NotifySuccessfulCompletion`.
 `DrainEvents` does not advance ordinary CD transitions. Explicit `Tick` calls
 remain allowed during fades and delays [03 R-AUD-01 §4][01 R-PLAT-02 §4].
-The missing CD device/volume output and absent host timer binding are T23
-platform residuals, not simulated completion or a simulation-clock timer.
+File-backed CD audio is supplied through `MusicOutput.NewMusicPlayer` on the
+process output. The controller owns one player; stop, disable, replacement and
+teardown close it and its VFS source. Music gain is the clamped raw CD level
+divided by 65535, independent of wave effects gain, MODE Off and narration.
+The host pump services timers and only dispatches successful completion after
+both decoded EOF and device drain; pause and decode/device errors do not
+advance tracks. Errors retain logical path/provider provenance and are drained
+by the presentation host once.
+
+The copied GOG soundtrack is recognized by `2.mp3..17.mp3`: logical tracks
+1..16 use those files in physical order, with seven Battle then nine Building
+categories. Duplicate extras `0.mp3` and `1.mp3` are excluded
+`[03 R-AUD-01 §4 "Packaged MP3 media"]`. Nanolathe uses the fresh retail-disc
+category layout; it does not reproduce the GOG adapter's undefined status
+replies or import a Windows registry CDLISTS entry. For other file sets, numeric
+basename order followed by lexical order is a Nanolathe directory policy.
+Search priority remains `music`, `sounds/music`, then `cdaudio`; supported media
+are MP3 and PCM WAV. No optional folder means silence.
+
+Ebitengine's portable MP3 decoder (`go-mp3`, Apache-2.0) streams stereo float32
+PCM on Windows, Linux and macOS. Decoding and resampling retain bounded PCM
+buffers instead of caching whole decoded songs. WAV uses the existing sample
+conversion with a 16 MiB encoded-file host limit. The per-track file and decoder
+live only for playback; no soundtrack data is shipped in the repository.
+Battle entry applies retained music preferences and arms Building playback
+until the desktop output is installed. Front-end creation configures media
+without starting it. Headless session construction never opens the device.
+Native CD-drive access and registry history remain T23 platform residuals.
 The private CD table does not model retail slot competition and callback
 ordering with delayed stream opening, which shares the retail timer table
 [01 R-PLAT-02 §4][03 R-AUD-02 §1]. This remains a T23 platform residual.
@@ -830,10 +856,12 @@ the published offset to the camera.
   structure branch's rasterize/punch/tint technique exists; it stands in for the
   other two, with the vehicle-shadow gate still applied to them
   `[03 R-REN-03D §1]` `[03 R-REN-03D §6]`.
-* **Music and CD/MCI.** There is no MCI `cdaudio` device and no registry to
-  hold the per-disc history, so the controller models the five playback modes
-  and the battle-intensity chooser but plays nothing `[03 §8.4]`
-  `[03 R-AUD-01 §4]` `[03 R-AUD-01 §5]`.
+* **Music and CD/MCI.** File-backed music plays through the portable desktop
+  audio backend (§2.6). Native CD drives and per-disc registry history remain
+  unavailable `[03 §8.4]` `[03 R-AUD-01 §4]`. The five playback modes and
+  category fades are implemented; the damage/death-driven battle-intensity
+  producer is still unwired, so battle entry selects Building until another
+  explicit category request `[03 R-AUD-01 §5]`.
 * **Empty established slots.** The key-controlled overlay before the unit
   labels, the auxiliary unit traversal at the end of strip 7, and the two
   optional overlays after strip 9 have no published draw record; they are left

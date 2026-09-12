@@ -18,7 +18,11 @@ PALETTE.LHT   8192 bytes =  32 rows × 256   lighting table
 PALETTE.SHD   8192 bytes =  32 rows × 256   shading table
 ```
 
-None of these files has a header — they are raw tables identified by size.
+**Established:** none of these files has a header. Their roles come from
+the logical filename and consumer; size describes the expected shape and
+cannot distinguish `LHT` from `SHD`, which are both 8,192 bytes [03 §4.3].
+Measurements below are bounded observations of the named reference assets,
+not requirements on authored replacement tables.
 
 The renderer holds five table slots, not four: the three above plus two
 256-entry tables that are **not** shipped as `palettes/` files — a gray table
@@ -61,10 +65,11 @@ confidence.
 index 0 = black, 1 = maroon, 2 = green, 3 = olive, 4 = navy, 5 = purple,
 6 = teal, 7 = gray … index 255 = white.
 
-Transparency is **not** a palette property: GAF/TNT data encode
-transparency structurally (RLE skip commands, feature cells), and index 0
-is an ordinary opaque black. (In practice index 0 doubles as the "empty"
-value in many places, but a literal stored 0 pixel is drawn black.)
+**Established:** transparency is a consumer operation, not a PAL alpha
+channel. Ordinary GAF drawing skips raw pixels matching the frame's color
+key and RLE skip runs; a literal RLE index 0 remains opaque black. Terrain
+tile bytes are ordinary indexed pixels, and model texture spans do not
+apply GAF transparency tests. See [fmt gaf] and [03 R-REN-03A §5].
 
 ### ALP — blend table (256 × 256)
 
@@ -73,9 +78,10 @@ blend of colors `a` and `b`. It is a precomputed nearest-color table, not
 exact math, so it is not required to be symmetric — feed the operands in the
 order the consumer uses them.
 
-**The diagonal is exact.** Measured against the retail `PALETTE.ALP`, all 256
-entries of `ALP[i][i]` map to `i`. This **corrects** the previous sentence
-"`ALP[i][i] = i` does not hold exactly". The distinction matters: the model
+**Established (reference-table observation):** all 256 entries of the
+shipped `ALP[i][i]` map to `i`. The retail recovery builder explicitly
+preserves each diagonal index, including duplicate RGB colors [03 §4.3.4].
+The distinction matters: the model
 anti-alias downscale relies on it, since a 2x2 block wholly outside the model
 is four copies of the background index and must resolve back to that index or
 every building would acquire an opaque box around it.
@@ -88,7 +94,7 @@ retail's red/purple building fringe, because it blends silhouette-straddling
 blocks against palette index 1, `(128,0,0)`. See
 `research/retail-executable-spec/03` `[R-REN-03A §6]` and `[R-REN-03A §7]`.
 
-### LHT — lighting table (32 × 256, brighten-only)
+### LHT — lighting table (32 × 256, brightening)
 
 ```
 result = LHT[level * 256 + index]          level 0 .. 31, index 0 .. 255
@@ -115,45 +121,38 @@ Row structure measured directly against the retail `PALETTE.LHT` mounted from
   exceptions are isolated duplicates near palette gaps (for example source 7
   maps to 248, sources 10–15 map to 0, source 208 maps to 251). Mean luminance
   delta is effectively +0.0 at row 0.
-* Brightening is monotonic across levels. Mean delta rises from +0.00 (row 0)
+* Mean brightening increases across levels. Mean delta rises from +0.00 (row 0)
   through +0.24 (row 1), +1.94 (row 2), +6.83 (row 3), +10.22 (row 4), and so on
   to +51.51 at row 31. White (255) maps to white and black (0) maps to black
   at every level; mid grays and terrain tones brighten smoothly and then
   collapse — the top rows map many distinct sources onto the same bright
   entries (row 31 maps sources 1–6 onto 249–254, the bright orange/yellow
   band).
-* The table never darkens. Darkening is the province of `SHD` rows 0–14; `LHT`
-  is brighten-only.
+* **Established (reference-table observation):** this is a brightening
+  table, but nearest-color quantization does not guarantee nondecreasing
+  luminance for each cell. Under the weighting above, `LHT[3][161] = 66`
+  lowers luminance by 10.764 in the installed `totala1.hpi` tables. The
+  monotonic mean trend is not a per-pixel guarantee.
 
-Retail usage in the original engine: `LHT` drives the lit-ground halo drawn
-around an explosion and around muzzle flashes. The engine precomputes a small
-square flash texture (side `N`, stored as `N*N + 24` bytes with a tiny header)
-whose bytes encode intensity — the inner core varies around palette index
-`0x6F` minus a jittered radial distance, a thin ring is exactly `0x6E`, and
-everything outside the disc is `0xFF` transparent — then for each screen pixel
-where that texture is opaque the underlying indexed pixel `src` is replaced by
-`LHT[level * 256 + src]` at a level derived from the disc intensity. Level
-selection, compositing order (after the flat tile pass, before shadows, units,
-and fog), and the whole-tick countdown cadence that drives the animation are
-presentation-only; the effect draws from the CRT presentation random stream,
-not the simulation random stream, and has no authoritative or network-visible
-state. The flash therefore never darkens ground and never blends two palette
-indices — it is a single-source brighten through the table. Nothing in the
-weapon corpus selects an `LHT` row directly; the engine derives the level from
-flash geometry. See the presentation contract `[03 §4.3]` and the dedicated
-brightening note in `research/retail-executable-spec/03` for the lifecycle
-and ordering details.
+**Established:** the explosion flash blitter replaces the existing destination
+index through `LHT[(discByte − 0x4F) * 256 + destination]`. The calculated
+frame's visible bytes `0x4F..0x6E` select rows `0..31`, while transparent
+pixels leave the destination alone. Raw and RLE paths use the same mapping.
+The explosion pool draws this secondary flash after the projectile pass and
+before its primary art; that is after the unit passes, not before them.
+There is no separate muzzle-time halo producer. The generation, animation,
+capability gate and composition order are behavioral contracts owned by
+[03 §4.3.1], [03 R-FX-01 §4] and [06 R-WFX-01 §2], not tunable PAL fields.
 
 ### SHD — shading table (32 × 256)
 
-Same layout as LHT, but a full brightness ramp rather than a darkening-only
-one. Identity sits in the middle: row 15 maps 232 of 256 entries to
+Same layout as LHT, but a ramp spanning darkening and brightening. Identity sits in the middle: row 15 maps 232 of 256 entries to
 themselves (row 14 maps 216). Rows below it darken, reaching near-black at
 row 0, which maps only index 0 to itself and drops mean luminance by about
 97. Rows above it *brighten* past identity, up to about +54 mean luminance at
-row 31 — the top rows do not approach identity, they overshoot it. Used for
-shadows, terrain shading, and structure model face lighting; `dont-shade` COB
-pieces select the identity row directly.
+row 31 — the top rows do not approach identity, they overshoot it. **Established:** shaded structure model faces use this table; `dont-shade`
+COB pieces select row 15 directly. Model shadows use the ALP tint path, not
+a shadow-specific SHD row [03 §4.3.2], [03 R-REN-03D §4].
 
 **Which models reach this table.** Retail applies model face shading only to
 units whose FBI authors `BMcode=0` — the structure class — and only while the
@@ -171,17 +170,13 @@ brightening range as SHD rows 15–31 at twice the resolution (LHT row 3 and
 SHD row 16 both lift mean luminance by 6.8; LHT row 5 and SHD row 17 both by
 12.6).
 
-The exact engine semantics of which row is selected when for general
-lighting beyond the explosion flash halo remain undocumented; the
-row/column layout, the ramp structure above, and the exclusive flash
-binding of `LHT` are confirmed directly against the retail tables. The
-`level` to flash-intensity mapping and any fading envelope across ticks
-are presentation tuning not captured by the file format. Darkening and
-full-range lighting use `SHD`, not `LHT` — see that section for the
-identity row and the structure-only reach of model face lighting.
+**Established:** consumer-specific row selection is specified in [03 §4.3.1]
+for the explosion flash and [03 §4.3.2] for model shading. The table layout
+alone does not select a row, animation envelope or render pass.
 
-The following mean-luminance deltas for `LHT` rows are useful as generation
-oracles or as test fixtures; they were measured against the retail palette
+The following mean-luminance deltas for `LHT` rows are descriptive asset
+measurements, not acceptance criteria for modded tables or substitutes for the
+recovery algorithm [03 §4.3.4]. They were measured against the retail palette
 with the weighting above:
 
 | Row | Mean Δ | Identity |
@@ -208,9 +203,11 @@ above — the row selection is established: the row is computed per vertex from 
 `trunc(dot(N, L) * 5.0) mod 32`, with the shipped default light direction
 `L = (-0.8, 1.0, 0.25)` (user-settable through three settings written via a
 dedicated setter that rebuilds the shadow caches). COB `dont-shade` pieces
-pin row 15. The row interpolates across the face with the corners, and only
-textured faces route through SHD — flat-colored faces keep their resolved
-palette color at every orientation. See [3do.md](3do.md) "Face shading".
+pin row 15. The shaded renderer interpolates the row across both textured
+and flat-colored faces, selecting `SHD[row*256 + texel]` or
+`SHD[row*256 + color]` respectively. The unshaded renderer bypasses SHD for
+both. [03 §4.3.2] and [03 R-REN-03A §5] own this dispatch; see also
+[3do.md](3do.md) "Face shading".
 
 ## Usage notes
 
@@ -224,7 +221,8 @@ palette color at every orientation. See [3do.md](3do.md) "Face shading".
 - Team colors occupy palette regions, and `energycolor`/`metalcolor` UI
   values in `gamedata/SIDEDATA.TDF` refer to those shared-palette indexes.
   Model textures use the source-authored player frames in `LOGOS.GAF`, not a
-  global palette substitution: select the entry's player frame, apply SHD,
+  global palette substitution: select the entry's player frame, apply SHD
+  only in the shaded renderer,
   then resolve the resulting index through this palette ([gaf.md](gaf.md)).
 - Weapon definitions reference beam colors by palette index
   (`color=165;` in [tdf.md](tdf.md)).
@@ -250,9 +248,10 @@ tables are built individually.
 
 - The fourth PAL byte's intended meaning (flags?) is unknown; it is zero in
   all retail data.
-- The exact `discByte → LHT level` mapping for the explosion flash and any
-  multi-tick fading envelope are presentation tuning; the disc shape and the
-  single-consumer binding are established, the level arithmetic is not.
+- **Unknown:** any separate multi-tick fading envelope beyond the documented
+  calculated-frame playback [03 §4.3.1]. A complete producer-to-blitter
+  lifecycle trace would settle it. The `discByte → LHT level` arithmetic is
+  already Established; this is not an unknown table-layout field.
 - The engine never consults 768-byte, three-byte-entry palettes: a `.PAL` is
   loaded whole with no size check and read as 256 four-byte entries, so a
   768-byte file is misread (entries wrong by one byte each, the last 64 taken

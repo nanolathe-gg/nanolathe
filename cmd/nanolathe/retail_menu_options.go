@@ -180,12 +180,8 @@ type retailOptionsState struct {
 	// 4) + 1` cycle the CD object builds at first run and edited by
 	// `TRACKTYPE` [03 R-AUD-01 §4].
 	//
-	// Not consumed: the category branch of the music tick is the reader, and
-	// this build's music controller keeps its own copy of the same array with
-	// no accessor, so an edit here changes what the page shows and nothing
-	// else. There is also no store for it — retail persists the array in the
-	// 20-entry `CDLISTS` ring keyed by the drive's volume serial, and this
-	// build has neither a drive nor a serial.
+	// Edits and undo snapshots mirror the service controller's category list.
+	// Persistence across process launches still needs a CDLISTS equivalent.
 	categories [retailMusicCategoryCount]int
 }
 
@@ -434,6 +430,11 @@ func (g *gameShell) openRetailOptionsScreen(inBattle bool) error {
 			g.gameSpeed = int(b.sess.Clock.Requested)
 		}
 	}
+	if c := g.retailMusicController(); c != nil {
+		for i := range optionsState.categories {
+			optionsState.categories[i] = c.TrackCategory(i + 1)
+		}
+	}
 	optionsState.snapshot = g.retailOptionsSnapshot()
 	optionsState.tracks = g.retailMusicTrackCount()
 	if optionsState.tracks > 0 {
@@ -566,7 +567,9 @@ func (g *gameShell) restoreRetailOptionsSnapshot(s retailOptionsSnapshot) {
 	g.interfaceType = s.interfaceType
 	if optionsState != nil {
 		optionsState.categories = s.categories
+		g.applyRetailMusicMode()
 	}
+	g.setRetailMusicEnabled(g.audioPrefs.MusicMode != 0)
 	g.applyRetailVisualOptions(clPtr)
 	applyGammaOption(clPtr, g.display.Gamma)
 	g.applyRetailAudioOptions()
@@ -961,8 +964,7 @@ func (g *gameShell) retailMusicController() *audio.Controller {
 // retailMusicTrackCount is the audio-track count the options root reads when it
 // opens, the analogue of retail's `status cdaudio number of tracks`
 // [03 R-AUD-01 §4]. This build's tracks are the authored music files the VFS
-// carries, so a stock install — whose music lived on the CD — reports zero and
-// the page shows `NO DISC`.
+// carries. Missing optional media reports zero and the page shows `NO DISC`.
 func (g *gameShell) retailMusicTrackCount() int {
 	if g == nil || g.cs == nil || g.cs.fs == nil {
 		return 0
@@ -1063,7 +1065,10 @@ func (g *gameShell) applyRetailMusicMode() {
 	if c == nil {
 		return
 	}
-	c.Configure(audio.PlayMode(g.audioPrefs.CDMode), retailTrackCategory(optionsState.track))
+	c.Configure(audio.PlayMode(g.audioPrefs.CDMode), c.DesiredCategory())
+	for i, category := range optionsState.categories {
+		c.SetTrackCategory(i+1, category)
+	}
 	if g.audioPrefs.CDMode == 3 && optionsState.track > 0 {
 		c.Play(optionsState.track)
 	}
@@ -1387,6 +1392,9 @@ func (g *gameShell) activateRetailOptionsGadget(name string) bool {
 	case "TRACKTYPE":
 		if optionsState.track >= 1 && optionsState.track <= retailMusicCategoryCount {
 			optionsState.categories[optionsState.track-1] = g.retailOptionsStage("TRACKTYPE", 5, retailTrackCategory(optionsState.track))
+			if c := g.retailMusicController(); c != nil {
+				c.SetTrackCategory(optionsState.track, optionsState.categories[optionsState.track-1])
+			}
 		}
 		g.syncRetailMusicPage()
 		return true

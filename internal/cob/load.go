@@ -174,13 +174,15 @@ func Load(data []byte) (*Program, error) {
 			return nil, fmt.Errorf("cob: code offset %#x beyond file size %#x", offScriptCode, fileLen)
 		}
 	}
-	// The trailing record table: bounds only. Retail relocates its records but
-	// nothing in the recovered image reads one, and the count is zero in every
-	// shipped script, so Nanolathe carries no representation of them
-	// [02 "Compiled script archive (COB)"]. A non-zero count is accepted (retail
-	// accepts it); the records are simply not parsed. What an 8-byte record
-	// means is an Unknown recorded in [fmt cob], not a code marker, because no
-	// retail data reaches it.
+	// The trailing record table: span bounds only. Retail relocates the second
+	// word of each record; the surveyed scripts carry none, and the recorded
+	// reader search found no consumer [02 "Compiled script archive (COB)"].
+	// TODO(question): what do nonempty trailing records and their offset targets
+	// represent? An authored nonzero table with identifiable target data or a
+	// traced consumer would settle this. Until then, accept an in-bounds span
+	// without interpreting or retaining records or checking each target; this
+	// is an implementation limitation, not proof that the records are inert
+	// [fmt cob "The trailing record table"].
 	if offTrailingRecords != 0 && offTrailingRecords > fileLen {
 		return nil, fmt.Errorf("cob: trailing record table offset %#x beyond file size %#x", offTrailingRecords, fileLen)
 	}

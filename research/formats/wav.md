@@ -15,13 +15,14 @@ so implementations know what they must support.
 
 ## Reference
 
-Most retail files are canonical RIFF: `RIFF` chunk, `WAVE` form type, `fmt `
+**Established (reference-corpus observation):** most inspected files are
+canonical RIFF: `RIFF` chunk, `WAVE` form type, `fmt `
 chunk (PCM, format tag 1), `data` chunk. A survey of the retail WAV corpus
-gives the canonical profile an implementation must accept:
+records these profiles. The counts describe that survey, not format limits:
 
 | Format | Count | Used for |
 | --- | ---: | --- |
-| PCM mono 11025 Hz 8-bit | 482 | all in-game sound effects and unit voices |
+| PCM mono 11025 Hz 8-bit | 482 | ordinary in-game sound effects and unit voices |
 | PCM mono 22050 Hz 16-bit | 74 | mission briefing narration (`camps/briefs/`) |
 | PCM stereo 44100 Hz 16-bit | 4 | Core Contingency victory music (`Exp1armvict.wav` etc.) |
 | PCM mono 22254 Hz 8-bit | 1 | `sounds/CDOGGY.WAV` (22254 Hz is the classic Macintosh sample rate — an authoring leftover) |
@@ -31,7 +32,7 @@ The currently inspected installation also contains these legacy containers:
 | Container | Count | Layout |
 | --- | ---: | --- |
 | Raw PCM | 1 | unsigned 8-bit mono at 11025 Hz; `sounds/HONK.WAV` has no header |
-| `DIGI` | 1 | big-endian `HSHD` metadata followed by an `SDAT` PCM chunk; `sounds/SING.WAV` is unsigned 8-bit mono at 11025 Hz |
+| `DIGI` | 1 | fixed `HSHD` and `SDAT` signatures; the sample-rate word read by retail is little-endian, independently of unused container-size fields; `sounds/SING.WAV` is unsigned 8-bit mono at 11025 Hz |
 
 Real example — `sounds/BUTTON12.WAV` from `totala1.hpi`:
 
@@ -43,13 +44,14 @@ PCM, 1 channel, 11025 Hz, 8-bit → a 471-sample button click.
 
 ## How the engine reads it
 
-Owned by `[02 §7]` and `[02 R-MALF-01 §10]`. Detection reads four bytes at
-0: `DIGI` with `HSHD` at 8 and `SDAT` at 32 → legacy; else `RIFF` with
-`WAVE` at 8 → RIFF; else raw. Legacy: the 32-bit rate at byte 22 (11,000
-→ 11,025), the sample is bytes 40 … end of file (`size − 40`; the `SDAT`
+**Established**, owned by `[02 §7]` and `[02 R-MALF-01 §10]`. Detection
+reads four bytes at 0: `DIGI` with `HSHD` at 8 and `SDAT` at 32 → legacy; else `RIFF` with
+`WAVE` at 8 → RIFF; else raw. Legacy: the little-endian 32-bit rate at
+byte 22 (11,000 → 11,025), the sample is bytes 40 … end of file (`size − 40`; the `SDAT`
 size field is not read), 8-bit mono. RIFF: chunks are walked from 12 with
-stride `size + 8` and **no odd padding**; the walk stops when the next
-offset reaches `RIFF size + 8`; the first `fmt ` must be ≥ 16 bytes and
+stride `size + 8` and **no odd padding**. The first `fmt ` and first `data`
+are selected independently from the beginning of the chunk list, so `data`
+may precede `fmt `. The walk stops when the next offset reaches `RIFF size + 8`; the first `fmt ` must be ≥ 16 bytes and
 only channels (+2), rate (+4) and bits (+14) are read; the first `data`
 must have a size above 0; the declared `data` size must then read back in
 full or the sample is null. Raw: the whole file, header included, as 8-bit
@@ -78,10 +80,16 @@ creation result before changing the empty-input policy.
 
 ## Unknowns and caveats
 
+- **Unknown:** backend acceptance/conversion for legacy parameter combinations
+  outside the established raw/DIGI rules and inspected PCM profiles. Trace the
+  device-buffer setup and conversion for the particular combination before
+  claiming audible output; [03 §8.2] owns that boundary.
 - The engine never reads the format tag, so formats beyond the table above
   are neither rejected nor decoded: any `fmt ` chunk is taken as PCM of its
-  declared channel count, rate and bit depth, and a compressed file is played
-  as noise. Any rate is accepted as authored. See "How the engine reads it".
+  declared channel count, rate and bit depth. Compressed payload bytes are
+  handed to the PCM backend without codec decoding. Channels, rate and width can still fail at device-buffer creation;
+  successful playback as noise is not guaranteed. See [03 §8.2] and "How the
+  engine reads it".
 - Volume/attenuation and 3D positioning are engine behavior, not stored in
   the files.
 

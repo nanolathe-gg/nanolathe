@@ -522,8 +522,9 @@ func (p *tdfParser) parseSection(parent *Section) (*Section, error) {
 		return nil, err
 	}
 	p.depth--
-	// Retail TDF files commonly terminate nested sections as `};`.
-	// The semicolon belongs to the section terminator, not an assignment.
+	// Host compatibility extension: consume an adjacent semicolon after a
+	// section. Retail resumes immediately after the brace and has no separate
+	// semicolon-terminator rule [02 R-MALF-01 §4][fmt tdf].
 	if p.pos < len(p.data) && p.data[p.pos] == ';' {
 		p.advance()
 	}

@@ -2,7 +2,8 @@
 
 ## Overview
 
-`.gui` files in the `guis/` directory define every menu and in-game panel:
+**Established** `[02 §6 "Interface panel files"]`, `[07 R-WGT-01]`.
+Ordinary `.gui` files in the `guis/` directory define menu and in-game panels:
 the main menu, battle rooms, dialogs, and the side command bars used during
 play. A normal GUI file is a text file in the general TDF syntax
 ([tdf.md](tdf.md)) describing a list of **gadgets** — buttons, listboxes,
@@ -13,13 +14,17 @@ Graphics come from a GAF file with the same base name as the GUI
 (`MAINMENU.GUI` ↔ `anims/MAINMENU.GAF`) plus the shared
 `anims/commongui.GAF`; fonts come from `fonts/*.fnt`. Behavior is largely
 hard-coded: a gadget's `name` is matched against engine-known event names
-per menu (e.g. `SINGLE`, `MULTI`, `EXIT` in the main menu). Names with no
-hard-coded event render but do nothing.
+per menu (e.g. `SINGLE`, `MULTI`, `EXIT` in the main menu). Generic widget
+behavior (selection, scrolling, linked labels and radio groups)
+still applies without a screen-specific event binding `[07 R-WGT-01 §§3–7]`.
 
-The retail corpus also contains a binary `ENDGAME.GUI` resource and a
-truncated text `SCORE.GUI`. The binary resource is not the ordinary TDF
-gadget format; tools may expose its extracted labels as a fallback. The
-truncated file can be recovered by closing its final gadget section.
+**Established — implementation policy.** The installed corpus includes a
+binary `ENDGAME.GUI` and truncated text `SCORE.GUI`. `formats.LoadGUI`
+extracts fallback labels from the recognized binary signature and repairs one
+missing final brace when an unterminated text section ends in a semicolon.
+These are Nanolathe recoveries, tested in `formats/source_test.go`; they do
+not establish that retail accepts either file through its ordinary panel
+loader. That reader uses the fatal TDF syntax path `[02 R-MALF-01 §5]`.
 
 ## Format at a glance
 
@@ -41,8 +46,8 @@ truncated file can be recovered by closing its final gadget section.
     }
 ```
 
-(This is the real start of `guis/MAINMENU.GUI` from `totala1.hpi`,
-whitespace preserved.)
+(Abbreviated illustration based on `guis/MAINMENU.GUI`; ellipses and
+annotations are explanatory, not literal file contents.)
 
 The numeric suffix in `[GADGETn]` is cosmetic — the engine accepts `[]` or
 any bracketed name; order in the file is what matters. The first gadget
@@ -59,18 +64,22 @@ gadget is one element of it.
 | `assoc` | int | Association key linking gadgets, and most gadget kinds do use it. A listbox and scrollbar sharing `assoc` are wired together (listbox drives knob size, scrollbar scrolls list); buttons with the radio attribute use it as their group; a slider's synthesised arrow buttons carry it; a listbox copies its selection to same-`assoc` listboxes and (attribute 8) to a same-`assoc` textbox. See the executable spec [07 R-WGT-01 §3, §5]. |
 | `name` | string | Dual purpose: (a) graphic lookup — the name of a GAF entry in `<menu>.GAF` or `commongui.gaf`, falling back to default art for the type/size; (b) event binding — hard-coded per-menu event names attach behavior. `HELPTEXT` is a universal name: a label so named shows hover help text. |
 | `xpos`, `ypos` | int | Position in pixels (640×480 space). The first gadget is clamped so the interface stays on-screen. |
-| `width`, `height` | int | Size in pixels. Ignored by types whose art dictates size (buttons, labels, picture boxes). Scrollbar orientation follows the long axis. |
+| `width`, `height` | int | Authored size in pixels. Type-specific builders can replace dimensions from resolved art; scrollbar orientation follows the long axis [07 R-WGT-01 §§3–5, §12]. |
 | `attribs` | int | Type-dependent bit field. Scrollbars need `1` = horizontal, `2` = vertical. The executable's bit meanings for buttons (radio `0x10`, toggle `0x40`, cycle `0x100`, auto-repeat `0x2000`, keep-authored-quickkey `0x10000`), listboxes (text list `0x10`, fire-on-click `0x40`, heading-reject `0x200`) and the alignment bits are in the executable spec [07 R-WGT-01 §§3–5]. |
-| `colorf`, `colorb` | int | GUI semantic foreground/background palette fields; retail resolves them through the GUIPAL→PALETTE nearest-RGB map before primitive/FNT writes |
+| `colorf`, `colorb` | int | Stored as 16-bit values. Meaning depends on the painter: semantic GUI colors, direct FNT palette colors and GAF light-table rows are distinct. The builder clears `colorf` for buttons, labels and pictures; later service uses it as flash state. See [03 R-FONT-01 §6], [07 R-WGT-01 §12]. |
 | `texturenumber` | int | No observed effect |
-| `fontnumber` | int | Partially understood: nonzero reverts labels to the default font when a custom font gadget is present |
-| `active` | int | `1` visible, `0` hidden |
-| `commonattribs` | int | No observed effect |
+| `fontnumber` | int | Stored as a byte and read signed; selects the zero-based kind-7 font in file order. A negative value or missing indexed font selects the common font. Labels can use the selected FNT directly; button/list/input painters still use the GAF text path when present [07 R-WGT-02 §4], [03 R-FONT-01 §5]. |
+| `active` | int | Stored as a byte; zero hidden, nonzero serviced [07 R-WGT-01 §1]. |
+| `commonattribs` | int | Stored as a byte. Battle count labels test bit `0x04` for build-product counts, then bit `0x08` for stockpile counts [07 R-P0-11 §2]. |
+| `gaffile` | int | Stored as 16-bit; parsed even though absent from the historical authored-key survey [02 §6 "COMMON"]. |
 | `help` | string | Hover help text; the window-build pass copies it into the `HELPTEXT` label [07 R-WGT-01 §1] |
 
-Cavedog files fill unused fields with the sentinel `-51` (and `52685` =
-0xCDCD, both uninitialized-memory patterns from their editor) — treat any
-out-of-range value as "unset".
+**Established.** Common integer keys default to zero and strings to empty
+when the subsection exists `[02 §6 "COMMON"]`. Values such as `-51` and
+`52685` occur in authored data, but there is no general "unset" conversion.
+Retail narrows to the destination byte/word; positions are signed 16-bit and
+have their own centering/edge rules. Preserve the authored value until that
+boundary. `internal/gui/load_record_store_test.go` locks these stores.
 
 ### Missing `[COMMON]` subsection
 
@@ -94,13 +103,13 @@ record bytes.
 | `crdefault` | Button triggered by Return (name). The window-open routine resolves the name by a forward scan and, when the key is empty, binds Return to the first button whose name begins `OK` or `NEXT` (case-insensitive prefix), and likewise an empty `escdefault` to the first button beginning `PREV` or `Cancel` — see the executable spec [07 R-FE-01 §12] |
 | `escdefault` | Button triggered by Escape (name) |
 | `defaultfocus` | Gadget name that starts focused |
-| `[VERSION] { major=; minor=; revision=; }` | Required in all 368 retail GUIs, but **optional in the parser**: the executable's panel-header loader seeks the subsection and skips it silently when absent, leaving the three byte fields zero (see the executable spec doc 02 §6). Values are arbitrary in retail files. |
+| `[VERSION] { major=; minor=; revision=; }` | Present in the historical 368-file text-GUI survey, but **optional in the parser**: the executable's panel-header loader seeks the subsection and skips it silently when absent, leaving the three byte fields zero (see the executable spec doc 02 §6). Values are arbitrary in retail files. |
 
 ### Button (`id=1`)
 
 | Field | Meaning |
 | --- | --- |
-| `status` | Starting frame within the button's GAF entry (multi-stage buttons must use 0) |
+| `status` | Stored 16-bit down-state word, not a general GAF frame index; stage and frame selection are [07 R-WGT-01 §3]. |
 | `text` | Label text. Multi-stage buttons separate per-stage text with a vertical bar (e.g. `text=On\|Off;`) |
 | `quickkey` | Keyboard accelerator as an ASCII code (`83` = `S`); a bare symbol also occurs in data. The authored value is normally discarded: the executable overwrites it at window open with the first free letter of the label unless `attribs` bit `0x10000` is set — see [07 R-WGT-01 §3] |
 | `grayedout` | `1` = visible but disabled. Stored as bit 0 of the button's own grey word — **not** an `attribs` bit — and tested by the button handler at press time, so a greyed button still shows hover help [07 R-WGT-01 §13] |
@@ -122,7 +131,8 @@ scrollbar via `assoc`.
 
 | Field | Meaning |
 | --- | --- |
-| `maxchars` | Maximum text length |
+| `maxchars` | Maximum text length; 128 parser cap, then 127 builder cap [07 R-WGT-01 §§11–12]. |
+| `text` | Localized caption read by the parser; the builder clears the text-input buffer [07 R-WGT-01 §§11–12]. |
 
 No border art — backgrounds provide the visual frame.
 
@@ -131,9 +141,10 @@ No border art — backgrounds provide the visual frame.
 | Field | Meaning |
 | --- | --- |
 | `range` | Knob travel in pixels (`knobpos` runs `0..range−1`), not an item count; the engine overwrites it for assoc-driven bars and for horizontal bars with `SLIDERS` art [07 R-WGT-01 §5]. |
-| `thick` | Numeric range of the value label a scrollbar with `attribs` bit 4 draws beside itself (`trunc(knobpos × thick / (width − knobsize))`) — see [07 R-WGT-01 §5] |
+| `thick` | Integer narrowed to signed 16-bit then widened to 32-bit. Numeric range of the value label a scrollbar with `attribs` bit 4 draws beside itself (`trunc(knobpos × thick / (width − knobsize))`) — see [07 R-WGT-01 §5] |
 | `knobpos` | Knob position within range (engine-driven) |
 | `knobsize` | Knob size (engine-driven when assoc'd) |
+| `text` | Localized text, read after the numeric scrollbar fields [07 R-WGT-01 §11]. |
 
 Requires `attribs=1` (horizontal) or `2` (vertical) matching its shape.
 
@@ -160,7 +171,8 @@ screenshots) when its `name` matches the menu's expected event name
 | --- | --- |
 | `filename` | Font resource name without extension (`filename=SMLFONT;` → `fonts/SMLFONT.FNT`) |
 
-Sets the label font for the whole interface. The loader reads `filename`
+Supplies one indexed font for gadgets selecting it with `fontnumber`.
+The loader reads `filename`
 into a 32-byte field and the window builder opens
 `fonts\<filename>.FNT` (directory prefix and extension added by the engine)
 [07 R-WGT-01 §12].
@@ -175,7 +187,7 @@ into a 32-byte field and the window builder opens
 
 | Field | Meaning |
 | --- | --- |
-| `nuttin` | Integer, stored as a 32-bit word in the text field; an instruction-level trace of the painter confirms no reader — it never dereferences this offset. The line itself is drawn from `attribs`: `1` horizontal (`(x,y)–(x+w−1,y)`), `2` vertical (`(x,y)–(x,y+h−1)`), `4` a single diagonal line across the gadget's rectangle (`(x,y)–(x+w−1,y+h−1)`, not a four-sided rectangle outline — "outlined" is the bit's name, not the shape it draws), in the gadget colour (`colorf` as a window colour-table row) [07 R-WGT-01 §8]. |
+| `nuttin` | Integer, stored as a 32-bit word in the text field; the painter does not consume it. The line itself is drawn from `attribs`: `1` horizontal (`(x,y)–(x+w−1,y)`), `2` vertical (`(x,y)–(x,y+h−1)`), `4` a single diagonal line across the gadget's rectangle (`(x,y)–(x+w−1,y+h−1)`, not a four-sided rectangle outline — "outlined" is the bit's name, not the shape it draws), in the gadget colour (`colorf` as a window colour-table row) [07 R-WGT-01 §8]. |
 
 ### Picture box (`id=12`)
 
@@ -202,37 +214,42 @@ fields.
   other `id` reads only `[COMMON]`; a text box's `maxchars` is capped at
   128 by the parser and at 127 again by the window builder (the effective
   cap). The complete per-kind key table with every width is
-  [07 R-WGT-01 §11]. Gadget records are 347 bytes in a fixed 69,463-byte window record
-  with no count check (about 199 gadgets fit; more overrun the record). A
+  [07 R-WGT-01 §11]. Retail does not check the gadget count against its
+  fixed window capacity; an excessive count can overrun that storage. A
   syntax error is fatal like any TDF; a missing panel file returns failure
   to the screen.
 
 ## Retail corpus notes
 
-A key survey of every retail `.gui` (base + patch + expansions, 368
-interfaces, 5,840 gadgets) confirms the type-ID set is exactly
+**Established — bounded corpus observation.** A historical survey of 368
+text interfaces (5,840 gadgets, base + patch + expansions) found the type-ID set
 {0, 1, 2, 3, 4, 5, 6, 7, 12} — no other IDs occur — and the field lists
-above are complete except for the rare `itemheight` (listboxes) and five
+describe the observed keys, including rare `itemheight` (listboxes) and five
 occurrences of `crtdefault`, which is a retail typo for `crdefault`
 (parsers should tolerate unknown keys for exactly this reason). Buttons
 dominate (4,421 of 5,840 gadgets).
 
 ## Unknowns and caveats
 
-- The complete per-menu hard-coded event-name tables are engine-internal;
-  the only way to enumerate them is inspection of the stock GUI files.
-- `texturenumber` and `commonattribs` have no confirmed behavior.
-  `colorf`/`colorb` are confirmed semantic GUI palette fields, but their
-  per-gadget defaults and every primitive consumer remain context-dependent.
-- Exact numeric semantics of `attribs` beyond the values cited above are
-  unknown.
-- Listbox behavior: rows, selection, scrolling and headings are in the
-  executable spec [07 R-WGT-01 §4].
+- **Unknown:** behavior for `texturenumber` and uncited `gaffile` consumers;
+  a bounded consumer trace would settle it. Storing a key does not prove it
+  affects rendering.
+- **Unknown:** any screen event bindings or attribute bits not covered in
+  doc 07; compare the screen dispatcher with the authored controls to close
+  a specific gap. A GUI-file census alone cannot enumerate engine-only names.
+- **Established — implementation mismatch:** `internal/gui.Load` currently
+  reads `thick` directly into a 32-bit value, whereas [07 R-WGT-01 §11]
+  specifies a 16-bit store before widening. Its nonnumeric `quickkey`
+  fallback also accepts any first byte, whereas retail distinguishes letters
+  from decimal conversion. These are code follow-ups, not format variants.
 
 ## Sources
 
-- *GUI File Format* v1.0 by Dark Rain, TA Design Guide — the primary
-  description, from trial-and-error experiments:
+- *GUI File Format* v1.0 by Dark Rain, TA Design Guide — historical
+  community description from trial-and-error experiments:
   <https://units.tauniverse.com/tutorials/tadesign/tadesign/guidesc.htm>
-- Verified against `guis/MAINMENU.GUI` from `totala1.hpi`; OpenTA parser:
-  `formats/gui.go`.
+- Retail behavior: `[02 §6 "Interface panel files"]`, `[02 R-MALF-01 §5]`,
+  `[07 R-WGT-01]`, `[07 R-WGT-02 §4]`, `[03 R-FONT-01 §§5–6]`.
+- Nanolathe implementation and authored tests: `formats/gui.go`,
+  `formats/gui_test.go`, `formats/source_test.go`, `internal/gui/load.go`,
+  `internal/gui/load_record_store_test.go`, `internal/gui/font_test.go`.

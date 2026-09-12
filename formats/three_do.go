@@ -27,6 +27,10 @@ type ThreeDOVertex struct{ X, Y, Z int32 }
 
 // ThreeDOPrimitive is one face: its vertex indices, its texture name and the
 // per-face words the file carries [fmt 3do].
+// TODO(question): AlwaysZero is an optional auxiliary file offset whose target
+// layout and meaning remain unknown. Preserve its raw word until a nonzero
+// authored reference or a traced consumer establishes what to decode
+// [02 "Model archive (3DO)"] [fmt 3do "Unknowns and caveats"].
 type ThreeDOPrimitive struct {
 	ColorIndex         uint32
 	VertexIndices      []uint16
@@ -39,6 +43,10 @@ type ThreeDOPrimitive struct {
 
 // ThreeDOObject is the lossless source-level piece record plus resolved
 // topology indexes. Child and sibling indexes point into Objects; -1 is nil.
+// TODO(question): AlwaysZero is an optional auxiliary file offset whose target
+// layout and meaning remain unknown. Preserve its raw word until a nonzero
+// authored reference or a traced consumer establishes what to decode
+// [02 "Model archive (3DO)"] [fmt 3do "Unknowns and caveats"].
 type ThreeDOObject struct {
 	SourceOffset uint32
 	Version      int32

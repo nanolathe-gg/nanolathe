@@ -5519,11 +5519,12 @@ the loaded feature TDF set (a linear scan of every loaded file, first match
 wins), grows the catalog by one fixed-size record, and returns the new
 record's ordinal. The catalog is a reallocated array — there is no fixed
 catalog cap; "catalog exhaustion" is not a retail failure mode. If the name is
-in no loaded file the parser prints `Record "%s" missing from feature files`
-through the diagnostic sink and then continues into the field reads with a
-null section handle; the record is still appended. What the field reads do
-with a null section is **Unknown** (decider: static trace of the TDF getter's
-null-handle path). Nanolathe should treat it as a fault.
+in no loaded file, the parser sends `Record "%s" missing from feature files`
+to the modal fatal channel, which displays the message and exits with status
+1. **Established by tracing the diagnostic call through process termination:**
+this path never appends a record or reaches the field readers with a null
+section. The apparent continuation is unreachable `[02 R-MALF-01 §§1, 5]`,
+`[02 R-MAP-01 §8]`.
 
 The parser reads exactly these keys, in this order, with these widths and
 defaults. Numeric keys go through the integer getter (default shown) unless
@@ -6918,13 +6919,6 @@ body and are not restated here.
   authoritative totals versus presentation-only cached values · doc 07 ·
   static trace. The live-stock and pass-counter HUD readers are partially
   enumerated.
-- What the feature parser's field reads do with a null section handle after
-  `Record "%s" missing from feature files` — the record is appended and the
-  parser continues; a fault is the likely outcome but is not traced
-  · "Catalog construction", [R-FEAT-01 §1] · static trace of the TDF getters'
-  null-handle path. Reached by a bad `featuredead`/`featurereclamate`/
-  `featureburnt` name, a bad FBI `corpse` name, or a bad mission-file feature
-  name.
 - What the GAF bank lookup returns for a `seqname*` value naming an entry
   absent from the bank (zero, which the code treats as "no sequence", or a
   fault) · "Catalog construction", [R-FEAT-01 §1] · static trace of the

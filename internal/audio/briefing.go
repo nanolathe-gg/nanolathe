@@ -1,7 +1,10 @@
 package audio
 
 import (
+	"fmt"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/vfs"
@@ -31,43 +34,68 @@ func BriefingAlias(glamourSound, brief, narration, missionHint string) string {
 	return ""
 }
 
-// ProbeMusicTracks counts music tracks for the CD/MCI controller's fallback
-// [03 §8.4]. It scans VFS logical paths in order: "music", "sounds/music",
-// and any "*.wav" under "music" recursively via ReadDir. It returns the
-// count capped at 99 [03 §8.4] and is presentation-only [I4][I6].
-// Zero means no CD / missing media → silence but not fatal [03 §8.4].
-func ProbeMusicTracks(fs vfs.FSOps) int {
+// MusicTracks returns file-backed CD tracks in logical order. The packaged
+// soundtrack uses physical files 2..17 for logical tracks 1..16; files 0 and 1
+// are duplicate extras [03 R-AUD-01 §4 "Packaged MP3 media"].
+func MusicTracks(fs vfs.FSOps) []string {
 	if fs == nil {
-		return 0
+		return nil
 	}
-	candidates := []string{"music", "sounds/music", "cdaudio"}
-	total := 0
-	for _, dir := range candidates {
+	for _, dir := range []string{"music", "sounds/music", "cdaudio"} {
 		entries, err := fs.ReadDir(dir)
 		if err != nil {
 			continue
 		}
+		var paths []string
 		for _, e := range entries {
 			if e.IsDir {
 				continue
 			}
 			ext := strings.ToLower(filepath.Ext(e.Path))
-			if ext == ".wav" || ext == ".mp3" || ext == ".ogg" {
-				total++
-				if total >= 99 {
-					return 99
+			if ext == ".mp3" || ext == ".wav" {
+				paths = append(paths, e.Path)
+			}
+		}
+		// Recognize the shipped media set before applying the portable
+		// directory policy. Never renumber its duplicate extras as CD tracks.
+		var packaged []string
+		for physical := 2; physical <= 17; physical++ {
+			want := fmt.Sprintf("%s/%d.mp3", dir, physical)
+			for _, path := range paths {
+				if strings.EqualFold(path, want) {
+					packaged = append(packaged, path)
+					break
 				}
 			}
 		}
-		if total > 0 {
-			break
+		if len(packaged) == 16 {
+			return packaged
+		}
+		// Nanolathe's host policy for other file sets is numeric basename
+		// order, then lexical order. It is not a retail CD format contract.
+		sort.Slice(paths, func(i, j int) bool {
+			a, ae := strconv.Atoi(strings.TrimSuffix(filepath.Base(paths[i]), filepath.Ext(paths[i])))
+			b, be := strconv.Atoi(strings.TrimSuffix(filepath.Base(paths[j]), filepath.Ext(paths[j])))
+			if ae == nil && be == nil && a != b {
+				return a < b
+			}
+			if (ae == nil) != (be == nil) {
+				return ae == nil
+			}
+			return paths[i] < paths[j]
+		})
+		if len(paths) > 99 {
+			paths = paths[:99]
+		}
+		if len(paths) > 0 {
+			return paths
 		}
 	}
-	if total > 99 {
-		total = 99
-	}
-	return total
+	return nil
 }
+
+// ProbeMusicTracks shares the controller's logical track mapping with the UI.
+func ProbeMusicTracks(fs vfs.FSOps) int { return len(MusicTracks(fs)) }
 
 // SelectMusicMode chooses the controller play mode for a mission. It uses
 // a sequential default suitable for briefing/music/CD fallback; random and
@@ -81,4 +109,16 @@ func SelectMusicMode(numTracks int, hasBriefing bool) PlayMode {
 		return ModeSingle
 	}
 	return ModeSequential
+}
+
+func packagedMusicTracks(paths []string) bool {
+	if len(paths) != 16 {
+		return false
+	}
+	for i, path := range paths {
+		if !strings.EqualFold(filepath.Base(path), fmt.Sprintf("%d.mp3", i+2)) {
+			return false
+		}
+	}
+	return true
 }

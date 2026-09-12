@@ -725,17 +725,22 @@ The retail grammar is:
 
 * A section begins with a bracketed name and a brace-delimited body.
 * A field is a key, equals sign, value, and semicolon.
+* A closing brace returns to the parent immediately after that byte; there
+  is no optional trailing-semicolon rule for sections. Nanolathe currently
+  accepts an adjacent `;` as a host compatibility extension.
 * Comments may use line or block form.
 * Spaces, tabs, carriage returns, and line feeds are whitespace.
 * There is no quoted-string or escape syntax in the observed grammar.
 
 Before parsing, comments are blanked: `//`-to-end-of-line and `/* ... */`
 spans are overwritten with ASCII spaces **preserving every character offset**,
-so all downstream offsets see text of unchanged length. Comments cannot
-appear inside a value, and inline trailing comments after the `;` are blanked
-too. An unterminated `/*` blanks everything through end of file. Sections and
-keys are stored in sorted vectors using case-insensitive comparison.
-Original source order is not a semantic property of the retail tree.
+so all downstream offsets see text of unchanged length. Comment delimiters
+are recognized even inside would-be values; they are not quoted literal text.
+Inline trailing comments after the `;` are blanked too. An unterminated `/*`
+blanks everything through end of file. Sibling sections retain source order;
+key vectors are maintained by the
+insertion rule below. Both key lookup and first-match section lookup use
+case-insensitive comparison.
 
 Repeated sections remain separate nodes. A first-match section accessor is
 common — it linear-scans and returns the first matching sibling, duplicates
@@ -811,18 +816,19 @@ scan. A key whose stored value pointer is absent is treated as missing.
 | Raw | reports absent | returns the stored text pointer, which is how a caller distinguishes an authored key from a missing one |
 | Language-prefixed string | falls through to the plain key, then to the string-accessor rules above | as the string accessor, after trying `<language><key>` first |
 
-Consequences a reimplementation must preserve: an integer or floating field
-cannot distinguish an authored zero from an absent key, because both yield the
-caller default; a string field can, because the accessor reports which path it
-took; and the fixed-point accessor's default is not in the authored unit
-system, so a default of 65,536 means an authored value of 1.0.
+Consequences a reimplementation must preserve: an absent numeric key returns
+the caller default, while an authored zero returns zero, even with a nonzero
+default. Numeric accessors do not separately report whether a key was found;
+the string/raw accessors do. The fixed-point accessor's default is already in
+stored units, so a default of 65,536 means an authored value of 1.0.
 
 Other typed behavior:
 
 * An explicitly present empty string differs from a missing key in the raw
   tree.
-* There is no boolean parser. Boolean fields are numeric and nonzero means
-  true.
+* There is no boolean parser. Callers interpret the numeric result; packed
+  unit and weapon flags keep only its low bit [R-KEYS-01 §5]. A universal
+  nonzero truth test would incorrectly turn authored 2 into a set flag.
 * Unknown fields are retained by the parser but ignored by a caller that does
   not request them.
 
@@ -981,22 +987,19 @@ not derived from runtime cloak or hidden state. The unit parser has no
 `noradar` accessor; `noradar` is a weapon-record key. The radar-circle use of
 this definition bit is specified in [03 §3.9].
 
-`wacky` is parsed by the catalog loader into bit 16 of the same packed
-definition flag word that carries `norestrict` (bit 15). No reader of that
-bit was found anywhere in the reviewed executable corpus: the key is parsed,
-stored, and preserved across record moves but semantically inert as far as
-static analysis reached.
+**Established — `wacky`.** The catalog parses and retains this flag. The
+multiplayer restriction tree uses it for zero-valued initial limits, and the
+restriction screen's reset operation uses it for zero-valued rows
+[05 R-SHARE-01 §9][08 R-SKIR-01 §10]. Those consumers do not establish a
+single-player gameplay effect; a blanket no-reader claim is incorrect.
 
-**Downloadable enforcement.** After build-menu pages compile, the loader
-walks every unit definition and compares its name case-insensitively against
-every build-menu button name. A match whose `downloadable` bit is clear
-raises the exact warning `Hey!  Somebody forgot to set downloadable=1 for %s`
-(two spaces after `Hey!`, verbatim) — the string exists at two push sites in
-the executable, one in the catalog region and one in the downloader region,
-so the "raised once" reading is per-site, not a counted global — silently
-forces the bit on, and re-sorts and re-finalizes the catalog.
-A unit reachable from any build menu therefore behaves as downloadable for
-the rest of the session.
+**Established — downloadable enforcement.** After build-menu compilation,
+only the first item's product name in each download record participates in
+this pass. A matching definition with `downloadable` clear has it set. The
+site formats `Hey!  Somebody forgot to set downloadable=1 for %s` without
+displaying it and does not sort or re-finalize the catalog. The complete
+algorithm and the separately unresolved diagnostic site are recorded under
+[R-CAT-01 §8] and "Missing and unknown".
 
 `selfdestructcountdown` is read with the raw accessor, so the record can tell
 an authored value from an absent key.
@@ -2255,7 +2258,7 @@ change the accepted bit.
 | `side` | string · 30 bytes | empty | `[02 §5]` (AI build-pick roulette filter) | Established |
 | `ai_weight` | string · 64 bytes | empty | `[08 R-AI-01]` | Established |
 | `ai_limit` | string · 64 bytes | empty | inert (reader census: none) — `[02 §5]` | Established |
-| `wacky` | integer · flag bit 16 | 0 | inert (reader census: none) — `[02 §5]` | Established |
+| `wacky` | integer · flag bit 16 | 0 | multiplayer restriction defaults/reset `[05 R-SHARE-01 §9]`, `[08 R-SKIR-01 §10]` | Established |
 
 **weapon (`Weapons\*.tdf` section)**
 
@@ -2700,13 +2703,15 @@ zero — even though every one of the 368 retail GUIs authors it.
 byte).
 
 **Scrollbar keys:** `range`, `knobpos`, `knobsize` (integers, 16-bit),
-`thick` (integer, 32-bit), `text` (string). Semantics ([07 R-WGT-01 §5]):
+`thick` (integer, narrowed to signed 16-bit then widened to 32-bit),
+`text` (string). Semantics ([07 R-WGT-01 §5]):
 `range` is the knob travel in pixels (`knobpos` runs `0..range−1`), which the
 engine overwrites for assoc-driven bars and horizontal `SLIDERS`-art bars;
 `thick` is the read-out range of the attribute-4 value label.
 
 **List, text-entry, and compound control keys:** `itemheight`, `maxchars`,
-`range`, `knobpos`, `knobsize` (integers, 16-bit), `thick` (integer, 32-bit),
+`range`, `knobpos`, `knobsize` (integers, 16-bit), `thick` (integer, narrowed
+to signed 16-bit then widened to 32-bit),
 `text`, `link`, `filename` (strings), `hotornot` and `nuttin` (integers).
 
 Position sentinels are negative: an authored -1 centres the gadget on the
@@ -3603,18 +3608,16 @@ to document 03.
 
 ### The unit model's height word and the catalog-time texture bind [R-CAT-01 §7]
 
-**Established fact — height word.** After a unit's model is loaded,
-relocated and mirrored (in that order — mirroring runs before the height is
-measured), the catalog compiler computes one 32-bit **height** for the
-definition: the maximum, over every object in the hierarchy, of
-`vertexY + objectY`, where `objectY` is the object's own second-coordinate
-translation plus the accumulated translations of its ancestors. The walk
-starts at the root with an accumulated translation of 0, visits an object's
-vertices, then recurses into its child chain with the object's translation
-added, then continues along the sibling chain at the same level. Vertices are
-signed 32-bit and the maximum starts at 0, so a model whose every vertex sits
-below the origin reports height 0, never a negative. The value is stored as
-the definition's **upper Y bound**; the lower Y bound is zeroed just before,
+**Established fact — height word.** After loading, relocation and mirroring,
+the compiler measures the upper Y bound with a recursive sibling-chain walk.
+Each invocation starts a signed 32-bit maximum at zero. For each piece,
+compare every vertex Y plus that piece's own Y translation with the maximum.
+For a child chain, recurse with a fresh zero maximum, add the current piece's
+Y translation to the returned child maximum, and compare that result too.
+Continue with the next sibling. Additions wrap to 32 bits; comparisons are
+signed. This differs from a global maximum of accumulated vertex positions:
+a zero child result still contributes a positive parent translation.
+The value is stored as the definition's **upper Y bound**; the lower Y bound is zeroed just before,
 so the definition's Y extent (upper − lower) is the same number. The X and Z
 bounds of the same bounding record come from the footprint, not the model:
 `±(FootprintX << 20) / 2` and `±(FootprintZ << 20) / 2` in 16.16, with the
@@ -4202,6 +4205,10 @@ Open items only. Each bullet states what is unknown, the section that owns it,
 and the decider that would close it.
 
 Fixed-point overflow is closed by [01 R-DET-01 §1] and [R-MALF-01 §4].
+Floating text conversion still needs a bounded comparison of the retail CRT
+and host parser for overflow and unusual exponent spellings; the decider is
+a trace of those conversion cases, not ordinary stock-value tests. The
+fixed-point conversion after parsing remains settled.
 Unit-limit admission is established by [05 R-SHARE-01 §§7–10]; loader-side
 questions do not supersede those consumer contracts.
 
@@ -4211,6 +4218,17 @@ questions do not supersede those consumer contracts.
   substitutes the filename stem in `compileUnitSection`; that compatibility
   fallback is not established retail behavior.
 
+* Optional 3DO auxiliary-reference targets and COB trailing-record meanings ·
+  §7 "Model archive (3DO)" / "Compiled script archive (COB)" · find authored
+  nonzero references with identifiable target data or a traced consuming
+  reader. Relocation alone establishes offsets, not the target schema.
+* Non-ASCII GAF entry-name comparison · §7 "GAF animation archive" · trace
+  the retail comparison and locale setup; Nanolathe currently folds ASCII
+  only and preserves other bytes.
+* F1 unit-picture PCX trailer-palette installation · [07 R-HUD-03 §8] · trace
+  the picture consumer's palette-installation calls. The current client uses
+  active-palette indices; the frontend background contract does not alone
+  establish this battle-window behavior.
 * GAF nested child layouts supported by ordinary relocation, and alternate
   child behavior in scaled/light-table/feature/fog/model raster consumers ·
   [R-MALF-01 §6] · static trace of each consuming blitter and loader.
