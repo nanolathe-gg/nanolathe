@@ -1169,6 +1169,33 @@ A page write in battle reaches the running session as well as the stored block:
 straight to the backend and the client. `CANCEL` re-applies all of them from the
 entry snapshot, the same way it re-applies gamma and the volumes.
 
+#### 3.4.1 Nanolathe presentation options
+
+This is a Nanolathe extension authorized by the user, not a retail finding.
+The fifth options category, **Nanolathe**, sits one authored category spacing
+below Visuals in both STARTOPT and PREFS. The engine adds its gadget and builds
+a page from the VISUALS canvas, label style and control dimensions. The front
+end uses the original options background; battle uses the game's tiled window background.
+BUTTONS0 and stagebuttn2/3 from the game assets supply the buttons and controls.
+No retail asset is copied into the repository or changed on disk.
+
+The page contains Renderer (Classic / Modern) and FPS cap (30 / 60 / 120).
+Defaults are Modern and 60 FPS. These are presentation choices; simulation
+remains 30 Hz. The cap bounds modern presentation on the display's refresh grid;
+classic still presents at 30 Hz. Higher or refresh-following values remain
+available through `--fps`; a value outside the presets is displayed as stored.
+
+Edits preview immediately. OK saves the presentation block with the existing
+settings transaction; Cancel restores the entry values, Undo restores this
+page, and Restore Defaults chooses Modern / 60. F10 updates the shell and saves
+only the renderer field, preserving other pending preferences. The adapter polls
+the live shell preference and shares executor-swap cleanup with F10. A saved
+renderer also controls subsequent battle loading and detail-art preparation.
+Explicit `--renderer` / `--fps` override saved values at window startup;
+captures and benchmarks retain deterministic command-line defaults without
+reading preferences. Older settings files acquire Modern / 60 through decoding
+over defaults, with no schema version bump.
+
 ### 3.5 The pointer and latch state machine
 
 One press/release pair is routed through exactly one path, and the path is

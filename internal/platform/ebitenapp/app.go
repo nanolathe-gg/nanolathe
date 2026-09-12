@@ -31,7 +31,7 @@ type RendererMode int
 
 const (
 	// RendererClassic uploads the client's software-composed RGBA framebuffer, the
-	// default and the reference executor (C-G11).
+	// reference executor (C-G11).
 	RendererClassic RendererMode = iota
 	// RendererModern replays the recorded draw list through gpurender on the GPU
 	// (docs/DESIGN_GPU_RENDERER.md §2.3).
@@ -122,6 +122,13 @@ type RunOptions struct {
 	// cannot divide into (90 on 120 Hz) rounds down the same way. Classic is
 	// untouched: it presents once per 30 Hz update whatever the cap says.
 	MaxFPS int
+	// PresentationSettings supplies committed live executor and FPS preferences
+	// (DESIGN_GPU_RENDERER §13.5, §14.6). Nil keeps the Run mode and MaxFPS.
+	PresentationSettings func() (RendererMode, int)
+	// RendererChanged reports an F10 executor swap synchronously. The owner must
+	// update PresentationSettings before the next poll so it preserves the swap.
+	// Applying an external preference does not invoke this callback.
+	RendererChanged func(RendererMode)
 	// WindowSize supplies the selected host window size independently of the
 	// logical menu/battle canvas. Nil follows the client's logical size.
 	WindowSize func() (int, int)
@@ -196,6 +203,7 @@ func (a *app) updateBody() {
 	a.syncRendererSources()
 	a.syncWindowSize()
 	a.syncPointerCapture()
+	a.syncPresentationSettings()
 	a.serviceRendererRequest()
 	a.presentPending = true
 	a.updatedAt = time.Now()
@@ -230,21 +238,51 @@ func (a *app) serviceRendererRequest() {
 		return
 	}
 	a.rendererToggles = requested
+	mode := RendererModern
+	if a.mode == RendererModern {
+		mode = RendererClassic
+	}
+	a.setRenderer(mode)
+	if a.options.RendererChanged != nil {
+		a.options.RendererChanged(a.mode)
+	}
+	fmt.Fprintf(os.Stderr, "nanolathe: renderer %s\n", rendererName(a.mode))
+}
+
+// syncPresentationSettings runs after the host step commits options and before
+// F10 is serviced, so the shortcut remains the last selection of this update.
+func (a *app) syncPresentationSettings() {
+	maxFPS := a.options.MaxFPS
+	if a.options.PresentationSettings != nil {
+		mode, fps := a.options.PresentationSettings()
+		a.setRenderer(mode)
+		maxFPS = fps
+	}
+	a.presentInterval = 0
+	if maxFPS > 0 {
+		a.presentInterval = time.Second / time.Duration(maxFPS)
+	}
+}
+
+// setRenderer shares the pipeline and interpolation cleanup for F10 and live
+// preferences (DESIGN_GPU_RENDERER §13.10, §14.6).
+func (a *app) setRenderer(mode RendererMode) {
+	if mode == a.mode {
+		return
+	}
 	a.c.CancelPreRecord()
 	a.pipe.armed = false
-	if a.mode == RendererModern {
-		a.mode = RendererClassic
+	a.mode = mode
+	if mode != RendererModern {
 		a.c.SetInterpolation(false)
 		// Original draws the authored art: the synthesized 2x tiles and
 		// sprites are an Enhanced feature (DESIGN_GPU_RENDERER §14.3).
 		a.c.SetEnhanced(false)
 		a.interpolating = false
 	} else {
-		a.mode = RendererModern
 		a.c.SetEnhanced(true)
 	}
 	a.presentPending = true
-	fmt.Fprintf(os.Stderr, "nanolathe: renderer %s\n", rendererName(a.mode))
 }
 
 func rendererName(mode RendererMode) string {
@@ -640,9 +678,7 @@ func Run(c *client.Client, mode RendererMode, options RunOptions) error {
 	// clearing the last presented frame.
 	ebiten.SetScreenClearedEveryFrame(false)
 	ebiten.SetTPS(presentationTPS)
-	if options.MaxFPS > 0 {
-		game.presentInterval = time.Second / time.Duration(options.MaxFPS)
-	}
+	game.syncPresentationSettings()
 	stopScrollMonitor, err := startNativeScrollMonitor()
 	if err != nil {
 		return err

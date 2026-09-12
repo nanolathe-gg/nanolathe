@@ -253,7 +253,8 @@ must be noted in the plan's Divergences.
 
 The renderer is the sanctioned presentation switch of
 [DESIGN_GPU_RENDERER.md](DESIGN_GPU_RENDERER.md): currently classic or modern,
-with all GPU prototypes behind `--renderer=modern` and classic the default.
+with modern the default and a 60 FPS presentation cap. Both are persisted
+Nanolathe options (DESIGN_INTERFACE_HUD_INPUT §3.4.1).
 The planned labels are Original, GPU Classic and Enhanced, sharing two executors.
 GPU Classic permits visually reviewed raster approximations; Enhanced may add
 separately designed zoom, lighting, glow, antialiasing and optional interpolation.

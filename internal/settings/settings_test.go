@@ -9,6 +9,49 @@ import (
 	"testing"
 )
 
+// Nanolathe preferences migrate independently of the retail display block
+// (DESIGN_GPU_RENDERER §13.5, §14.6).
+func TestPresentationPreferencesLoadAndRoundTrip(t *testing.T) {
+	if got := Defaults().Presentation; got != (Presentation{Renderer: "modern", FPS: 60}) {
+		t.Fatalf("default presentation = %+v", got)
+	}
+	for _, tc := range []struct {
+		name string
+		body string
+		want Presentation
+	}{
+		{"older file", `{"version":1}`, Presentation{"modern", 60}},
+		{"missing fps", `{"version":1,"presentation":{"renderer":"classic"}}`, Presentation{"classic", 60}},
+		{"display refresh", `{"version":1,"presentation":{"renderer":"modern","fps":0}}`, Presentation{"modern", 0}},
+		{"arbitrary CLI cap", `{"version":1,"presentation":{"renderer":"classic","fps":90}}`, Presentation{"classic", 90}},
+		{"invalid preferences", `{"version":1,"presentation":{"renderer":"unknown","fps":-1}}`, Presentation{"modern", 60}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "settings.json")
+			if err := os.WriteFile(path, []byte(tc.body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			s, err := LoadFrom(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if s.Presentation != tc.want {
+				t.Fatalf("loaded presentation = %+v, want %+v", s.Presentation, tc.want)
+			}
+			if err := s.SaveTo(path); err != nil {
+				t.Fatal(err)
+			}
+			s, err = LoadFrom(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if s.Presentation != tc.want {
+				t.Fatalf("round-trip presentation = %+v, want %+v", s.Presentation, tc.want)
+			}
+		})
+	}
+}
+
 // TestDefaultsMatchRetail locks the missing-value block the startup reader
 // installs [02 "Settings"][07 §10].
 func TestDefaultsMatchRetail(t *testing.T) {

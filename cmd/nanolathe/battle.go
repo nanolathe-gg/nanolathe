@@ -243,7 +243,7 @@ func runBattleView(opts Options, cs *contentSet) error {
 	}
 	shell.settingsWritable = true
 	defer shell.teardownBattle(cl)
-	return ebitenapp.Run(cl, rendererMode(opts), shell.windowOptions())
+	return ebitenapp.Run(cl, rendererMode(shell.opts), shell.windowOptions())
 }
 
 // newDirectBattleView skips menu navigation, but retains the same shell owner
@@ -263,6 +263,9 @@ func newDirectBattleView(opts Options, cs *contentSet) (*gameShell, *client.Clie
 		return nil, nil, err
 	}
 	shell.applySettings(loadedSettings())
+	if err := validatePresentationZoom(shell.opts); err != nil {
+		return nil, nil, err
+	}
 	// Direct entry retains its own skirmish setup, including the pool limit
 	// the save Summary writes, rather than the last menu game's preferences.
 	shell.setup = authoritative.Session.Skirmish
@@ -293,7 +296,7 @@ func newDirectBattleView(opts Options, cs *contentSet) (*gameShell, *client.Clie
 	// There is no loading screen on direct entry. Prepare the same optional
 	// detail art before the shell adopts the completed battle.
 	sess := authoritative.Session
-	shell.pendingDetail = detailArtFor(opts, cs, sess.World, nil)
+	shell.pendingDetail = detailArtFor(shell.opts, cs, sess.World, nil)
 	if err := shell.enterBattle(sess, sess.Catalog); err != nil {
 		return nil, nil, err
 	}
@@ -345,7 +348,7 @@ func restartDirectBattle(opts Options, cs *contentSet, cl *client.Client, curren
 
 // rendererMode maps the --renderer flag to the platform executor selection. Any
 // value other than "modern" — including the empty string and any typo — selects
-// the classic executor, the safe default (docs/DESIGN_GPU_RENDERER.md §2.4,
+// the classic executor (docs/DESIGN_GPU_RENDERER.md §2.4,
 // §2.5).
 func rendererMode(opts Options) ebitenapp.RendererMode {
 	if opts.Renderer == "modern" {

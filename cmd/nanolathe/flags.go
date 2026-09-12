@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
+	"github.com/nanolathe-gg/nanolathe/internal/settings"
 	"io"
 	"math"
 	"os"
@@ -41,7 +42,9 @@ type Options struct {
 	ShotSize           string      // "WxH" surface size for --shot; empty composes at the authored 640x480
 	ShotModal          string      // battle modal to open before --shot captures: "options", "exit" or "confirm"
 	ShotSpace          bool        // hold Space for --shot captures, so the bottom slide strip is fully raised
-	Renderer           string      // start-up presentation executor: "classic" (default) or "modern"
+	RendererSet        bool        // explicit command-line override
+	FPSSet             bool        // explicit command-line override
+	Renderer           string      // start-up presentation executor: "classic" or "modern" (default)
 	Fullscreen         bool        // host desktop fullscreen override
 	FullscreenSet      bool        // distinguishes an omitted flag from --fullscreen=false
 	Stats              bool        // opt-in terminal presentation statistics
@@ -141,10 +144,10 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.StringVar(&opts.CPUProfile, "cpuprofile", "", "write a pprof CPU profile of the --shot compose path to this file")
 	set.StringVar(&opts.MemProfile, "memprofile", "", "write a pprof allocation profile of the --shot compose path to this file")
 	set.IntVar(&opts.ProfileSeconds, "profile-seconds", 0, "with classic --shot, run the CPU viewer loop headlessly for this many seconds of battle time and report ms per frame")
-	set.StringVar(&opts.Renderer, "renderer", "classic", "start-up presentation renderer: \"classic\" (software) or \"modern\" (GPU); any other value is classic")
+	set.StringVar(&opts.Renderer, "renderer", settings.DefaultPresentation().Renderer, "start-up presentation renderer (omitted uses saved preference): \"classic\" (software) or \"modern\" (GPU); any other value is classic")
 	set.BoolVar(&opts.Fullscreen, "fullscreen", false, "desktop fullscreen (Alt+Enter toggles); omitted uses saved preference")
 	set.BoolVar(&opts.Stats, "stats", false, "print periodic presentation statistics to the terminal")
-	set.IntVar(&opts.FPS, "fps", 0, "cap presented frames per second for --renderer=modern, rounded down to a multiple of the display's refresh (0 = the display's refresh rate)")
+	set.IntVar(&opts.FPS, "fps", settings.DefaultPresentation().FPS, "cap presented frames per second for modern (omitted uses saved preference), rounded down to a multiple of the display's refresh (0 = the display's refresh rate)")
 	set.StringVar(&opts.ShotRenderer, "shot-renderer", "", "which executor --shot captures through: \"classic\", \"modern\", or \"both\"; omitted follows --renderer")
 	set.IntVar(&opts.ShotRendererMax, "shot-renderer-max", math.MaxInt32, "with --shot-renderer both, exit non-zero when the diff exceeds this many pixels (default effectively unbounded)")
 	set.IntVar(&opts.ShotGPUProfileFrames, "shot-gpu-profile-frames", 0, "with --shot-renderer modern or both, time this many frozen-scene GPU frames after warm-up")
@@ -168,8 +171,13 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 		return opts, err
 	}
 	set.Visit(func(f *flag.Flag) {
-		if f.Name == "fullscreen" {
+		switch f.Name {
+		case "fullscreen":
 			opts.FullscreenSet = true
+		case "renderer":
+			opts.RendererSet = true
+		case "fps":
+			opts.FPSSet = true
 		}
 	})
 	// The classic executor has no free zoom: its factor is always its record

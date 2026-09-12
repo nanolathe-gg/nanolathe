@@ -313,6 +313,9 @@ type Settings struct {
 	// Fullscreen is Nanolathe's desktop presentation preference, independent of
 	// retail display options. Absent in older settings files means windowed.
 	Fullscreen bool `json:"fullscreen"`
+	// Presentation selects Nanolathe's executor and presentation cap, separate
+	// from the retail display options (DESIGN_GPU_RENDERER §13.5, §14.6).
+	Presentation Presentation `json:"presentation"`
 	// Difficulty is retail's top-level "Difficulty" value, the campaign and
 	// mission setting. It is separate from Skirmish.Difficulty, which retail
 	// keeps as its own "SkirmishDifficulty" value.
@@ -398,6 +401,30 @@ func (m *Messages) Normalize() {
 	}
 	if m.UnitChatText < 0 {
 		m.UnitChatText = DefaultUnitChatText
+	}
+}
+
+// Presentation holds Nanolathe's host presentation preferences
+// (DESIGN_GPU_RENDERER §13.5, §14.6). FPS zero follows the display refresh;
+// positive values cap modern presentation without changing the simulation.
+type Presentation struct {
+	Renderer string `json:"renderer"`
+	FPS      int    `json:"fps"`
+}
+
+// DefaultPresentation selects the modern executor with a 60 FPS cap.
+func DefaultPresentation() Presentation {
+	return Presentation{Renderer: "modern", FPS: 60}
+}
+
+// Normalize repairs unsupported values while preserving the CLI's display
+// refresh choice (zero) and arbitrary positive presentation caps.
+func (p *Presentation) Normalize() {
+	if p.Renderer != "classic" && p.Renderer != "modern" {
+		p.Renderer = DefaultPresentation().Renderer
+	}
+	if p.FPS < 0 {
+		p.FPS = DefaultPresentation().FPS
 	}
 }
 
@@ -525,6 +552,7 @@ func Defaults() Settings {
 	s := Settings{Version: FileVersion, Difficulty: DefaultDifficulty, ScrollSpeed: DefaultScrollSpeed, DamageBars: DefaultDamageBars, UnitLimit: DefaultUnitLimit,
 		GameSpeed: DefaultGameSpeed, InterfaceType: DefaultInterfaceType, SwitchAlt: DefaultSwitchAlt, Clock: DefaultClock}
 	s.Display = DefaultDisplay()
+	s.Presentation = DefaultPresentation()
 	s.Audio = DefaultAudio()
 	s.Messages = DefaultMessages()
 	s.Skirmish = Skirmish{
@@ -623,6 +651,7 @@ func (s *Settings) Normalize() {
 	// [07 R-CAM-01 §6].
 	s.Clock &= 1
 	s.Display.Normalize()
+	s.Presentation.Normalize()
 	s.Audio.Normalize()
 	s.Messages.Normalize()
 	s.Skirmish.Normalize()

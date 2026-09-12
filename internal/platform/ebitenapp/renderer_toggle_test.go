@@ -2,6 +2,7 @@ package ebitenapp
 
 import (
 	"testing"
+	"time"
 
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 )
@@ -53,5 +54,73 @@ func TestRendererRequestSwapsExecutorsOncePerRequest(t *testing.T) {
 	}
 	if a.interpolating {
 		t.Error("modern armed the blended view before its first Draw")
+	}
+}
+
+func TestLivePresentationPreferencesAndF10Persistence(t *testing.T) {
+	c, err := client.New(client.Options{Width: 64, Height: 64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mode, fps := RendererModern, 60
+	changes := 0
+	a := &app{c: c, mode: RendererModern, interpolating: true}
+	a.options.PresentationSettings = func() (RendererMode, int) { return mode, fps }
+	a.options.RendererChanged = func(changed RendererMode) {
+		if a.mode != changed {
+			t.Error("renderer callback ran before applying the swap")
+		}
+		mode = changed
+		changes++
+	}
+	c.SetInterpolation(true)
+	c.SetEnhanced(true)
+	a.pipe.armed = true
+	mode, fps = RendererClassic, 30
+	a.syncPresentationSettings()
+	if a.mode != RendererClassic || a.interpolating || c.Enhanced() || a.pipe.armed || !a.presentPending {
+		t.Fatalf("live classic selection left stale presentation: mode=%v interpolation=%t enhanced=%t pipeline=%t pending=%t",
+			a.mode, a.interpolating, c.Enhanced(), a.pipe.armed, a.presentPending)
+	}
+	if changes != 0 || a.presentInterval != time.Second/30 {
+		t.Fatalf("external selection notified %d times, interval=%v", changes, a.presentInterval)
+	}
+
+	// A shortcut applied after polling updates the owner before the next poll.
+	c.RequestRendererToggle()
+	a.serviceRendererRequest()
+	a.syncPresentationSettings()
+	a.serviceRendererRequest()
+	if a.mode != RendererModern || mode != RendererModern || changes != 1 || !c.Enhanced() {
+		t.Fatalf("F10 was lost or repeated: adapter=%v owner=%v changes=%d enhanced=%t", a.mode, mode, changes, c.Enhanced())
+	}
+	// A cap-only edit leaves the active renderer and interpolation intact.
+	a.interpolating = true
+	a.pipe.armed = true
+	a.presentPending = false
+	for _, next := range []int{60, 120, 0} {
+		fps = next
+		a.syncPresentationSettings()
+		want := time.Duration(0)
+		if fps > 0 {
+			want = time.Second / time.Duration(fps)
+		}
+		if a.presentInterval != want || !a.interpolating || !a.pipe.armed || a.presentPending || changes != 1 {
+			t.Fatalf("cap %d changed renderer state or interval: interval=%v interpolation=%t pipeline=%t pending=%t callbacks=%d",
+				fps, a.presentInterval, a.interpolating, a.pipe.armed, a.presentPending, changes)
+		}
+	}
+}
+
+func TestPresentationPreferencesWithoutCallbackKeepRunOptions(t *testing.T) {
+	a := &app{mode: RendererClassic, options: RunOptions{MaxFPS: 90}}
+	a.syncPresentationSettings()
+	if a.mode != RendererClassic || a.presentInterval != time.Second/90 {
+		t.Fatalf("fallback changed: mode=%v interval=%v", a.mode, a.presentInterval)
+	}
+	a.options.MaxFPS = 0
+	a.syncPresentationSettings()
+	if a.presentInterval != 0 {
+		t.Fatalf("display refresh interval = %v", a.presentInterval)
 	}
 }

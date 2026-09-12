@@ -31,7 +31,10 @@ go build -o nanolathe ./cmd/nanolathe
 ./nanolathe --root "$HOME/TotalAnnihilation"
 ```
 
-The default launches the classic front end. Use `./nanolathe --help` for map,
+The default launches the front end with the modern GPU renderer and a 60 FPS
+cap. Options → Nanolathe selects Classic / Modern and 30 / 60 / 120 FPS; OK saves
+the choices for future runs. F10 switches renderers during a match and saves
+that choice. Classic retains its 30 FPS presentation cadence. Use `./nanolathe --help` for map,
 rendering, and diagnostic options. The separate `cmd/nanolathe-headless`
 command supports displayless simulation runs; see
 [architecture and verification](docs/ARCHITECTURE.md).

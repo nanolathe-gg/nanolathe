@@ -63,7 +63,7 @@ func TestParsedShotRendererDefaultsToPresentationRenderer(t *testing.T) {
 	if modern.ShotRenderer != "" || effectiveShotRenderer(modern) != "modern" {
 		t.Fatalf("modern omitted shot renderer = %q, effective %q; want omitted and modern", modern.ShotRenderer, effectiveShotRenderer(modern))
 	}
-	classic, err := parseFlags([]string{"--shot", "frame.png"}, new(strings.Builder))
+	classic, err := parseFlags([]string{"--shot", "frame.png", "--renderer", "classic"}, new(strings.Builder))
 	if err != nil {
 		t.Fatalf("parse classic shot flags: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestZoomFlagPerExecutor(t *testing.T) {
 	}
 	// Classic rejects anything but the three views.
 	for _, arg := range []string{"1.25", "0.7", "0.3"} {
-		_, err := parseFlags([]string{"-zoom", arg}, io.Discard)
+		_, err := parseFlags([]string{"-renderer", "classic", "-zoom", arg}, io.Discard)
 		if err == nil || !strings.Contains(err.Error(), "must be 1 (native), 1.5 or 2 (the detail view)") {
 			t.Fatalf("classic --zoom %s error = %v, want the three-view rejection", arg, err)
 		}

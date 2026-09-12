@@ -137,7 +137,8 @@ type gameShell struct {
 	// page's option values. The load transition reads the pair for the logical
 	// battle canvas [07 R-FE-01 §6][07 R-FE-01 §11]; windowOptions also uses it
 	// for Nanolathe's stable host window (DESIGN_PRESENTATION_CLIENT §2.1).
-	display settings.Display
+	display      settings.Display
+	presentation settings.Presentation
 	// messages is the message-column ring configuration (`textlines`,
 	// `textscroll`, `screenchat`, `unitchattext`). The options family's
 	// interface page writes `textscroll`, `textlines` and `unitchattext`;
@@ -288,8 +289,9 @@ func newGameShell(opts Options, cs *contentSet) (*gameShell, error) {
 	shell.setup = newSkirmishMenuConfig(mapName)
 	shell.missionDifficultyValue = session.SkirmishDefaultDifficulty
 	shell.scrollSpeed = settings.DefaultScrollSpeed // [02 "Settings"] [07 §10]
-	shell.display = settings.DefaultDisplay()       // [02 R-KEYS-01 §5]
-	shell.messages = settings.DefaultMessages()     // [02 §3]
+	shell.presentation = startupPresentation(opts, settings.DefaultPresentation())
+	shell.display = settings.DefaultDisplay()   // [02 R-KEYS-01 §5]
+	shell.messages = settings.DefaultMessages() // [02 §3]
 	// The audio block, the game-speed word and the `Interface Type` word are
 	// the options family's remaining stores [03 R-AUD-01 §2][07 R-CAM-01 §7]
 	// [07 R-CAM-01 §5].
@@ -339,6 +341,9 @@ func runGameShell(opts Options, cs *contentSet) error {
 	// panel is drawn, the way retail reads its registry block during startup
 	// [07 §4].
 	shell.attachSettings()
+	if err := validatePresentationZoom(shell.opts); err != nil {
+		return err
+	}
 	maps := shell.maps
 
 	const winW, winH = 640, 480
@@ -398,7 +403,7 @@ func runGameShell(opts Options, cs *contentSet) error {
 		}
 	}
 	fmt.Fprintf(os.Stderr, "nanolathe: retail frontend: %d skirmish maps\n", len(maps))
-	return ebitenapp.Run(cl, rendererMode(opts), shell.windowOptions())
+	return ebitenapp.Run(cl, rendererMode(shell.opts), shell.windowOptions())
 }
 
 func loadMenuAssets(cs *contentSet) *menuAssets {

@@ -43,8 +43,8 @@ rejection and the renderer presentation policies of DESIGN_GPU_RENDERER are the
 sanctioned departures under [INVARIANTS.md](INVARIANTS.md) I11. Original preserves
 the retail raster reference; GPU Classic permits visually reviewed raster
 approximations, and Enhanced has separately designed visual features. These
-presentation choices never select alternate simulation behavior. Current
-prototypes remain behind `--renderer=modern`. That mode uses GPU drawing only:
+presentation choices never select alternate simulation behavior. Modern is the default executor with a 60 FPS cap, configurable on the
+Nanolathe options page (DESIGN_INTERFACE_HUD_INPUT §3.4.1). It uses GPU drawing only:
 software model bodies/shadows are not a fallback, and unimplemented GPU stages
 remain explicitly omitted (DESIGN_GPU_RENDERER §9).
 

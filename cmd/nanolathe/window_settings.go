@@ -22,6 +22,8 @@ func (g *gameShell) windowOptions() ebitenapp.RunOptions {
 	options := windowRunOptions(g.opts)
 	g.fullscreen = startupFullscreen(g.opts, g.fullscreen)
 	options.Fullscreen = g.fullscreen
+	options.PresentationSettings = func() (ebitenapp.RendererMode, int) { return rendererMode(g.opts), g.presentation.FPS }
+	options.RendererChanged = g.rendererChanged
 	g.commitWindowSize()
 	options.WindowSize = func() (int, int) { return g.windowSize.W, g.windowSize.H }
 	options.FullscreenChanged = func(value bool) {

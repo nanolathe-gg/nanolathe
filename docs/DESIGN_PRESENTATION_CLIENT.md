@@ -16,9 +16,9 @@ where the reference install disproves the written contract are in
 The CPU/Original contracts below remain the retail reference. GPU Classic may
 use visually reviewed raster approximations; Enhanced is planned to add strategic
 zoom and optional interpolation under [DESIGN_GPU_RENDERER.md](DESIGN_GPU_RENDERER.md)
-§5. All prototypes remain behind `--renderer=modern`; this milestone changes
-neither the default CPU path nor cadence. A future 60 fps presentation target is
-separate from the authoritative 30 Hz tick.
+§5. Modern is the default executor with a 60 FPS cap. The Nanolathe options
+page persists executor and cap choices (DESIGN_INTERFACE_HUD_INPUT §3.4.1);
+classic retains 30 Hz presentation and the authoritative tick remains 30 Hz.
 
 ## 1. Purpose and boundary
 

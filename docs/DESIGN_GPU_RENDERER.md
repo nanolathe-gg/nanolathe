@@ -7,9 +7,9 @@ a byte surface. The **modern** executor replays through Ebitengine in palette
 index space, with conventional GPU model rasterization permitted by the visual
 acceptance policy below. Original, GPU Classic, and Enhanced are the intended
 three user-facing modes, backed by one CPU and one shared GPU implementation.
-For this experimental milestone the only public choices remain
-`--renderer=classic|modern`, default classic. All new rendering is behind
-`--renderer=modern`; no Enhanced flag or runtime options entry is added yet.
+The public choices are `--renderer=classic|modern`, default modern, also
+selectable on the Nanolathe options page. The default presentation cap is 60 FPS;
+both choices persist between windowed runs (DESIGN_INTERFACE_HUD_INPUT §3.4.1).
 The simulation cannot tell which executor is selected. The current GPU-only
 execution contract is §9–§12; it supersedes the historical P1–P3 CPU model bridge
 and fallback requirements below.
@@ -695,8 +695,7 @@ unit. Graphics device recovery and backend replacement are deferred.
 **P3b status.** The core raster path now preserves fractional folded-row
 attributes through device preparation, validates folded materials, and treats
 empty folded rings as correctly culled input. `--shot-renderer=modern` and
-`--shot-renderer=both` require `--renderer=modern`; the classic default remains
-unchanged. Isolated model preview resolves the selected unit's ObjectName,
+`--shot-renderer=both` require the modern executor, now the default. Isolated model preview resolves the selected unit's ObjectName,
 BMCode structure class, and ZBuffer from the compiled catalog, rejecting an
 arbitrary unclassified 3DO. The open ARMSOLAR command route remains a named
 synthetic PieceView pose; `--shot-model-pose=activated` separately loads the
@@ -1454,6 +1453,12 @@ frame. Draw still sits on the display's vsync grid, so the cap lands on the
 nearest refresh multiple below it — 60 on a 120 Hz display presents every
 second refresh — which is what makes a 120 Hz display a stand-in for a 60 Hz
 one. Original ignores the cap; it presents once per Update.
+
+The default cap is 60 FPS. The Nanolathe options page offers 30 / 60 / 120
+and previews changes immediately; OK persists them, Cancel restores the entry
+value. Explicit `--fps` overrides the saved preference at window startup, with
+zero retaining display-refresh presentation. Captures and benchmarks use their
+command-line settings independently of saved window preferences.
 
 **Pointer latency.** Ebitengine's public cursor API reads its most recent
 Update snapshot, so the window still samples pointer motion at 30 Hz. Modern
@@ -2899,7 +2904,9 @@ uses the defaults and controls in §16.8.
   publishes the requested executor; the adapter switches at the next Update,
   turning interpolation and the synthesized art off when classic takes over
   (§14.3), and the retained screen bridges the swap. Neither key is a retail binding; retail's dispatcher does
-  not read them.
+  not read them. F10 also updates the shell preference and persists only the
+  renderer field. The Nanolathe options page uses the same swap cleanup for
+  live previews and Cancel restoration (DESIGN_INTERFACE_HUD_INPUT §3.4.1).
 * `--zoom 1|1.5|2` sets the scale at battle entry and applies to captures
   too; it replaces `--shot-zoom`, whose free fractional values are gone.
   Left unset, the window opens at 1.5× when its framebuffer exceeds 800×600

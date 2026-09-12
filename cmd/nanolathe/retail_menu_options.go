@@ -69,10 +69,11 @@ type retailOptionsPage struct {
 // button opens `SOUNDS`, not the unopened `SOUND.GUI` beside it, and the
 // `SPEEDS` button is the one the file captions `INTERFACE` [07 R-FE-01 §6].
 var retailOptionsPages = map[string]retailOptionsPage{
-	"sound":   {gui: "guis/sounds.gui", battle: "guis/soundsrt.gui", backdrop: "bitmaps/optsound4x.pcx"},
-	"music":   {gui: "guis/music.gui", battle: "guis/musicrt.gui", backdrop: "bitmaps/optmusic4x.pcx"},
-	"speeds":  {gui: "guis/speeds.gui", battle: "guis/speedsrt.gui", backdrop: "bitmaps/optinterface4x.pcx"},
-	"visuals": {gui: "guis/visuals.gui", battle: "guis/visualrt.gui", backdrop: "bitmaps/optvisual4x.pcx"},
+	"nanolathe": {gui: "guis/visuals.gui", battle: "guis/visualrt.gui", backdrop: retailOptionsBackdrop},
+	"sound":     {gui: "guis/sounds.gui", battle: "guis/soundsrt.gui", backdrop: "bitmaps/optsound4x.pcx"},
+	"music":     {gui: "guis/music.gui", battle: "guis/musicrt.gui", backdrop: "bitmaps/optmusic4x.pcx"},
+	"speeds":    {gui: "guis/speeds.gui", battle: "guis/speedsrt.gui", backdrop: "bitmaps/optinterface4x.pcx"},
+	"visuals":   {gui: "guis/visuals.gui", battle: "guis/visualrt.gui", backdrop: "bitmaps/optvisual4x.pcx"},
 }
 
 // source is the `.GUI` the named button merges: the front-end page, or the
@@ -129,6 +130,7 @@ var (
 // one is found, copying them here would be two dead fields.
 type retailOptionsSnapshot struct {
 	display       settings.Display
+	presentation  settings.Presentation
 	audio         settings.Audio
 	messages      settings.Messages
 	scrollSpeed   int
@@ -409,6 +411,7 @@ func (g *gameShell) openRetailOptionsScreen(inBattle bool) error {
 	if inBattle {
 		widenRetailBattleOptionsRoot(window)
 	}
+	addNanolatheOptionsCategory(window)
 	desktopW, desktopH := ebitenapp.DesktopSize()
 	optionsAssets = &retailPanelAssets{window: window, background: background}
 	optionsState = &retailOptionsState{
@@ -536,6 +539,7 @@ func hideRetailBattleOptionsGadgets(window *gui.Window) {
 func (g *gameShell) retailOptionsSnapshot() retailOptionsSnapshot {
 	s := retailOptionsSnapshot{
 		display:       g.display,
+		presentation:  g.presentation,
 		audio:         g.audioPrefs,
 		messages:      g.messages,
 		scrollSpeed:   g.scrollSpeed,
@@ -554,6 +558,7 @@ func (g *gameShell) retailOptionsSnapshot() retailOptionsSnapshot {
 // the volumes before it leaves [07 R-FE-01 §6].
 func (g *gameShell) restoreRetailOptionsSnapshot(s retailOptionsSnapshot) {
 	g.display = s.display
+	g.setPresentation(s.presentation)
 	g.audioPrefs = s.audio
 	g.messages = s.messages
 	g.scrollSpeed = s.scrollSpeed
@@ -665,6 +670,12 @@ func (g *gameShell) openRetailOptionsPage(page string) {
 		}
 	}
 
+	if page == "nanolathe" {
+		if err := nanolatheOptionsPage(pageWindow); err != nil {
+			reportRetailMessageError(g.showRetailMessage(retailFrontendAssetError(g.cs, "Nanolathe options template unavailable", pageGUI, "a visual options button and label", err).Error()))
+			return
+		}
+	}
 	root := optionsAssets.window
 	panelRect, panelIndex, centred := retailOptionsPanelRect(root)
 	dx, dy := pageWindow.OriginX, pageWindow.OriginY
@@ -801,6 +812,8 @@ func (g *gameShell) refreshRetailOptionsPage() {
 		order = append(order, i)
 	}
 	switch optionsState.page {
+	case "nanolathe":
+		g.syncNanolatheOptions()
 	case "visuals":
 		// Two-stage buttons: stage 1 is the "On" label of the authored `Off|On`
 		// pair. `ANTI`, `BSHADOWS` and `SHADING` are bits 1, 4 and 5 of the
@@ -1102,6 +1115,8 @@ func (g *gameShell) activateRetailMusicTransport(key string) {
 // [07 R-FE-01 §6][03 R-AUD-01 §2][03 R-AUD-01 §4][07 R-CAM-01 §7].
 func (g *gameShell) restoreRetailOptionsDefaults() {
 	switch optionsState.page {
+	case "nanolathe":
+		g.setPresentation(settings.DefaultPresentation())
 	case "visuals":
 		// Bits 1-5 set, gamma 12 and — front end only — 640x480 with
 		// `DitheredFog` cleared [07 R-FE-01 §6]. The size pair is the front
@@ -1160,6 +1175,8 @@ func (g *gameShell) restoreRetailOptionsDefaults() {
 func (g *gameShell) undoRetailOptionsPage() {
 	s := optionsState.snapshot
 	switch optionsState.page {
+	case "nanolathe":
+		g.setPresentation(s.presentation)
 	case "visuals":
 		// Bits 1-6, gamma and — front end only — the display size
 		// [07 R-FE-01 §6].
@@ -1257,7 +1274,7 @@ func (g *gameShell) setRetailShadowBits(on bool) {
 // handler that consumes the fired result [07 R-WGT-01 §3].
 func retailOptionsCue(key string) string {
 	switch key {
-	case "sound", "music", "speeds", "visuals", "prev",
+	case "nanolathe", "nrender", "nfps", "sound", "music", "speeds", "visuals", "prev",
 		"restore", "undo",
 		"anti", "shading", "bshadows",
 		"mode", "speech",
@@ -1283,7 +1300,9 @@ func (g *gameShell) activateRetailOptionsGadget(name string) bool {
 	// precedes them all, as it does on the screens frontendCue serves.
 	g.playMenuCue(retailOptionsCue(retailOptionsCueKey(name)))
 	switch name {
-	case "SOUND", "MUSIC", "SPEEDS", "VISUALS":
+	case "NRENDER", "NFPS":
+		return g.activateNanolatheOption(name)
+	case "NANOLATHE", "SOUND", "MUSIC", "SPEEDS", "VISUALS":
 		page, _ := retailOptionsPageKey(name)
 		g.openRetailOptionsPage(page)
 		return true
@@ -1619,6 +1638,8 @@ func (g *gameShell) adjustRetailSlider(index int, delta int) bool {
 
 func retailOptionsPageKey(name string) (string, bool) {
 	switch name {
+	case "NANOLATHE":
+		return "nanolathe", true
 	case "SOUND":
 		return "sound", true
 	case "MUSIC":
@@ -1633,6 +1654,12 @@ func retailOptionsPageKey(name string) (string, bool) {
 
 func retailOptionsCueKey(name string) string {
 	switch name {
+	case "NANOLATHE":
+		return "nanolathe"
+	case "NRENDER":
+		return "nrender"
+	case "NFPS":
+		return "nfps"
 	case "SOUND":
 		return "sound"
 	case "MUSIC":
