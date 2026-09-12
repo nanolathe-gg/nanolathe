@@ -309,19 +309,21 @@ func Load(data []byte) (*Program, error) {
 
 // LoadFromFS loads a compiled script for unitName via VFS [fmt cob] [04 §4.1].
 // It tries logical paths scripts/<unitName>.cob case-insensitively (VFS cleanPath is case-folded).
-// Returns (nil, false, nil) when no COB exists for the unit, so callers can create an empty fallback VM without error.
+// Returns (nil, false, nil) when no COB exists; the catalog rejects null programs
+// before creation [04 R-COB-04 §8]. An empty name still probes scripts/.cob
+// [02 R-CAT-01 §5].
 // An existing file that fails to parse returns (nil, true, error).
 func LoadFromFS(fs vfs.FSOps, unitName string) (*Program, bool, error) {
-	if fs == nil || strings.TrimSpace(unitName) == "" {
+	if fs == nil {
 		return nil, false, nil
 	}
 	// VFS is case-insensitive via cleanPath lowercasing; use lowercased logical path [vfs/path.go].
 	name := strings.TrimSpace(unitName)
 	// Try canonical lower form; VFS will fold again, but keep deterministic.
 	candidates := []string{
-		"scripts/" + strings.ToLower(name) + ".cob",
-		"scripts/" + name + ".cob",
-		"scripts/" + strings.ToUpper(name) + ".cob",
+		vfs.ResourcePath("scripts", strings.ToLower(name), "cob"),
+		vfs.ResourcePath("scripts", name, "cob"),
+		vfs.ResourcePath("scripts", strings.ToUpper(name), "cob"),
 	}
 	for _, p := range candidates {
 		data, err := fs.ReadFileLimit(p, 4<<20) // 4 MiB limit [fmt cob] COB size bounded

@@ -32,6 +32,9 @@ import (
 // shader reproduces by carrying a running index through the 2×2 block of cells
 // that can reach a pixel, in the op list's own row-major order.
 //
+// Composite and out-of-atlas frames take the ordered leaf path in
+// fog_ordered.go; this atlas path remains the stock-frame fast path.
+//
 // Every operation reproduces its classic byte writer's rebase, clip and
 // per-pixel value from internal/client (classicSink.Fog, fogFillSolid,
 // fogFillGray, fogFillChecker, blitFogGAF) exactly
@@ -71,7 +74,8 @@ type fogPass struct {
 	// is a reported skip, never a silent clip.
 	oversized     int
 	oversizedNote string
-	contentErr    error // first unsupported consumer operation in the current bank
+	contentErr    error // shader compilation failure for the current command
+	orderedShader *ebiten.Shader
 
 	// grid holds one texel per fog cell of the visible cell range: red is the
 	// channel-one operation, green the channel-zero operation. gridBuf is the
@@ -108,8 +112,8 @@ type fogRegion struct {
 	ok             bool
 }
 
-// FogContentError reports the first unsupported fog-frame operation in the
-// currently bound bank. Such frames are suppressed rather than flattened.
+// FogContentError reports a shader compilation failure for the current fog
+// command. Composite frames use ordered destination operations.
 func (r *Renderer) FogContentError() error {
 	if r == nil {
 		return nil
@@ -130,10 +134,21 @@ func (r *Renderer) Fog(fg drawlist.Fog) {
 	// fog command resolves when the world region closes instead.
 	r.resolveGlow()
 	r.fog.draws = 0
+	r.fog.contentErr = nil
 	if r.surfaces[0] == nil {
 		return
 	}
 	if len(fg.Ops) == 0 {
+		return
+	}
+	// Every fog operation resolves colour through the installed palette.
+	if r.tables.atlas == nil {
+		return
+	}
+	// All ops were recorded at the same view scale (§14.2).
+	scale := fogOpsScale(fg.Ops)
+	if fogNeedsOrdered(fg, scale) {
+		r.fogOrdered(fg, scale)
 		return
 	}
 	if !r.fog.compiled {
@@ -141,19 +156,11 @@ func (r *Renderer) Fog(fg drawlist.Fog) {
 		r.fog.shader, r.fog.shaderErr = newFogPassShader()
 	}
 	if r.fog.shader == nil {
+		r.fog.contentErr = r.fog.shaderErr
 		// Without a compiled pass there is nothing to draw; leave the composed
 		// surface as it is rather than guessing a fog colour (I9).
 		return
 	}
-	if r.tables.atlas == nil {
-		// The fog dark fills and the black-family frames resolve their colour
-		// through PAL; with no palette installed there is nothing to draw and
-		// nothing to guess (I9).
-		return
-	}
-	// The view scale the ops were projected at (§14.2). Every op of one frame is
-	// built from one camera, so the first op names the whole list's scale.
-	scale := fogOpsScale(fg.Ops)
 	r.fog.ensureAtlas(fg.Gray, fg.Black, scale)
 
 	w, h := int32(r.clipW()), int32(r.clipH())
@@ -511,13 +518,8 @@ func (f *fogPass) ensureAtlas(gray, black [4]*formats.GAFEntry, scale camera.Vie
 					continue // gray/dither raw gate precedes composition [03 R-COMP-01 §2]
 				}
 				if len(fr.Subframes) != 0 || fr.SubframeCount != 0 {
-					// TODO(question): the current atlas holds one operation per
-					// pixel. Implement ordered child applications before admitting
-					// composite fog; a flattened mask loses repeated gray and ALP
-					// reads [03 R-COMP-01 §2]. Suppression is a host limitation.
-					if f.contentErr == nil {
-						f.contentErr = fmt.Errorf("nanolathe: unsupported composite fog frame: logical path anims/fog.gaf, providers searched [], expected ordered %s%d frame %d child composition", names[family], variant+1, frame)
-					}
+					// Selected composites use fogOrdered, preserving every child
+					// operation instead of flattening [03 R-COMP-01 §2].
 					continue
 				}
 				ox, oy, ok := fogFrameTilePlacement(fr, tile)

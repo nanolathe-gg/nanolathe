@@ -100,3 +100,17 @@ func TestFillUnitScriptsStoresProgram(t *testing.T) {
 		t.Fatalf("script provenance logical path = %q", got)
 	}
 }
+
+func TestFillUnitScriptKeepsEmptyBasename(t *testing.T) {
+	fs := newFixtureFS(t, fixtureFile{path: "scripts/.cob", data: string(contentTestCOB([]uint32{0}))})
+	u := &UnitDef{}
+	if err := fillUnitRecordScripts(fs, []*UnitDef{u}); err != nil {
+		t.Fatal(err)
+	}
+	if u.Script == nil || u.ScriptProvenance.LogicalPath != "scripts/.cob" {
+		t.Fatal("empty name lost script or provenance")
+	}
+	if err := fillUnitRecordScripts(newFixtureFS(t), []*UnitDef{{}}); err == nil || !strings.Contains(err.Error(), "scripts/.cob") {
+		t.Fatalf("empty script diagnostic = %v", err)
+	}
+}

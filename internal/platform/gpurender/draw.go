@@ -31,6 +31,9 @@ func (r *Renderer) Fill(f drawlist.Fill) {
 	}
 	switch f.Style {
 	case drawlist.FillSolid:
+		if f.Nano {
+			r.glowNano(f)
+		}
 		// fillIndexedRect: exclusive extent, clamped to the framebuffer.
 		r.fillSolidExclusive(int(f.Rect.X), int(f.Rect.Y), int(f.Rect.W), int(f.Rect.H), f.Index)
 	case drawlist.FillSolidInclusive:

@@ -88,6 +88,8 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 		checkTerrainDevicePixels,
 		checkTrailDevicePixels,
 		checkGlowDevicePixels,
+		checkBattleLightingDevicePixels,
+		checkNanoDevicePixels,
 		checkModelDirectDevicePixels,
 		checkSourceLifecycleDevicePixels,
 	} {

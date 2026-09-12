@@ -261,3 +261,53 @@ func modelTextureBindingFixture(t *testing.T) (*vfs.FS, *content.Catalog, *world
 		Features: map[string]*content.FeatureDef{"root": root, "stamped": stamped, "corpse": corpse, "wreck": wreck, "wreck2": wreck2, "ash": ash},
 	}, terrain, wreck, filepath.Join(dir, "objects3d/shared.3do")
 }
+
+func TestModelTextureRegistryKeepsDuplicateAndEmptyUnitIdentity(t *testing.T) {
+	fs, cat, terrain, _, source := modelTextureBindingFixture(t)
+	cat.Units["beta"].CanonicalKey = "alpha"
+	cat.Units["beta"].UnitName = "alpha"
+	cat.Units["alpha"].MovementClass = "first"
+	cat.Units["beta"].MovementClass = "later"
+	r, err := NewModelTextureRegistry(fs, cat, terrain, len(terrain.FeatureDefs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := r.unitModel("alpha", 1, "shared")
+	later := r.unitModel("alpha", 2, "shared")
+	if first == nil || later == nil || first == later {
+		t.Fatal("duplicate name replaced the later record model")
+	}
+	if r.unitModel("alpha", 0, "shared") != first {
+		t.Fatal("name fallback lost first record")
+	}
+	if got := r.trailInfo("alpha", 2).move; got != "later" {
+		t.Fatalf("duplicate trail classification = %q, want later record", got)
+	}
+	preview := newModelTextureRegistry(fs, true)
+	if preview.unitModel("", 0, "objects3d/shared.3do") == nil {
+		t.Fatal("standalone preview lost explicit model path")
+	}
+	data, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(source), ".3do"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Directory providers snapshot names at mount time; include the new resource.
+	withEmpty := vfs.New()
+	if err := withEmpty.MountDirectory(filepath.Dir(filepath.Dir(source)), 1); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { withEmpty.Close() })
+	cat.Units["alpha"].ObjectName = ""
+	r, err = NewModelTextureRegistry(withEmpty, cat, terrain, len(terrain.FeatureDefs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl := &Client{modelTextures: r}
+	v := frame.UnitView{DefName: "alpha", DefID: 1}
+	if cl.modelForUnit(v) == nil || cl.HullModel("") == nil {
+		t.Fatal("empty basename lost model or picking geometry")
+	}
+}

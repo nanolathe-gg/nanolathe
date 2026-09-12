@@ -170,9 +170,9 @@ func PickSnapshotUnit(f *frame.Frame, sx, sy int32, cam *camera.Camera, viewer u
 	bestScore := int32(0x7fff0000)
 	for i := 0; i < len(f.Units); i++ {
 		v := f.Units[i]
-		// Test 1: a candidate without a model reference never reaches the hull
-		// helper [07 R-REV-01 §5].
-		if v.Slot == 0 || v.Model == "" {
+		// Slot zero is not a candidate. The geometry lookup below tests the
+		// model reference, including an empty resource basename [07 R-REV-01 §5].
+		if v.Slot == 0 {
 			continue
 		}
 		// Test 3: ownership, or the mode-selected committed coverage cell.

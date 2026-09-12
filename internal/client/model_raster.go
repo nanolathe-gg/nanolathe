@@ -74,6 +74,10 @@ type spanEdge struct {
 // all [R-RAST-01 §1] steps 3, 4 and 7.
 type screenPoly struct {
 	x, y []int32
+	// Enhanced lighting metadata stays in recording pixels even when a raster
+	// is doubled. It never feeds the retail span attributes (§22.4).
+	heights []float32
+	normal  [3]float32
 	// x2, y2 are the corner's exact doubled-resolution screen coordinates,
 	// filled by the direct projection alone for the Enhanced supersample
 	// (doubledPlacement.exact; DESIGN_GPU_RENDERER §17.3). The local
@@ -111,6 +115,7 @@ func newScreenPoly(n int) screenPoly {
 		x2:        buf[2*n : 3*n : 3*n],
 		y2:        buf[3*n : 4*n : 4*n],
 		oddHeight: make([]bool, n),
+		heights:   make([]float32, n),
 	}
 	for k := 0; k < spanAttrs; k++ {
 		lo := (polyLanes + k) * n

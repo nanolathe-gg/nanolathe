@@ -89,8 +89,7 @@ func (f unreadableModelFS) ReadFileLimit(name string, max int64) ([]byte, error)
 func TestRequiredModelsShareGeometryAndKeepZeroAsValidTop(t *testing.T) {
 	fs := &countingModelFS{fixtureFS: newFixtureFS(t, fixtureFile{path: "objects3d/shared.3do", data: authoredRequiredModel3DO(t, -1<<16)})}
 	units := map[string]*UnitDef{
-		"late":  {ObjectName: "shared"},
-		"empty": {ObjectName: ""},
+		"late": {ObjectName: "shared"},
 	}
 	weapons := map[string]*WeaponDef{
 		"weapon": {Model: "shared"},
@@ -180,5 +179,24 @@ func TestRequiredModelsCheckCompilationBeforePublication(t *testing.T) {
 				t.Fatal("failed admission published partial heights")
 			}
 		})
+	}
+}
+
+func TestRequiredUnitModelKeepsEmptyBasename(t *testing.T) {
+	u := &UnitDef{}
+	if err := validateRequiredModels(newFixtureFS(t), map[string]*UnitDef{"": u}, nil, nil); err == nil || !strings.Contains(err.Error(), "objects3d/.3do") {
+		t.Fatalf("empty unit model diagnostic = %v", err)
+	}
+	fs := newFixtureFS(t, fixtureFile{path: "objects3d/.3do", data: authoredRequiredModel3DO(t, 3<<16)})
+	if err := validateRequiredModels(fs, map[string]*UnitDef{"": u}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if u.ModelTopFixed != 3<<16 {
+		t.Fatalf("empty basename lost model height: %d", u.ModelTopFixed)
+	}
+	_, index := buildModelRecordCatalog([]*UnitDef{u})
+	cat := &Catalog{Units: map[string]*UnitDef{"": u}, modelIndex: index}
+	if name, _, ok := cat.ModelForUnit(""); !ok || name != "" {
+		t.Fatal("empty basename lost catalog model binding")
 	}
 }

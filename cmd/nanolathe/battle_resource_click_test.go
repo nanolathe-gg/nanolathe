@@ -299,7 +299,7 @@ func TestResourceClassificationAvoidsOtherProducers(t *testing.T) {
 	u.SoundCategory = "METAL"
 	b.cat.Units[u.CanonicalKey] = &u
 	b.cat.BuildMenus["armcons"].Buttons = []string{"fabricator"}
-	mex, sun := b.resourceProducts("armcons")
+	mex, sun, _ := b.resourceProducts("armcons")
 	if mex != nil || sun != nil {
 		t.Fatal("fabricator accepted")
 	}
@@ -314,11 +314,11 @@ func TestResourceRetailBuildMenuClassification(t *testing.T) {
 		{"armcom", "armsolar", "armmex", "armack", "armmoho"},
 		{"corcom", "corsolar", "cormex", "corack", "cormoho"},
 	} {
-		mex, solar := b.resourceProducts(side.builder)
+		mex, solar, _ := b.resourceProducts(side.builder)
 		if mex == nil || solar == nil || mex.CanonicalKey != side.mex || solar.CanonicalKey != side.solar {
 			t.Fatalf("%s: extractor=%v solar=%v", side.builder, mex, solar)
 		}
-		mex, _ = b.resourceProducts(side.advanced)
+		mex, _, _ = b.resourceProducts(side.advanced)
 		if mex == nil || mex.CanonicalKey != side.moho {
 			t.Fatalf("%s did not select %s", side.advanced, side.moho)
 		}

@@ -706,7 +706,7 @@ func (c *Client) presentUnit(d worldDrawable) {
 	if isCarried(u) {
 		return
 	}
-	if u.Model == "" {
+	if u.Model == "" && c.modelForUnit(u) == nil {
 		// A carrier with no model of its own still presents its children.
 		for _, child := range c.attachedChildren(u.Slot) {
 			c.drawChildModel(child)
@@ -754,7 +754,7 @@ func (c *Client) attachedChildren(carrier pool.Handle) []frame.UnitView {
 			break
 		}
 		child := b.units[i]
-		if child.Model == "" {
+		if child.Model == "" && c.modelForUnit(child) == nil {
 			continue
 		}
 		out = append(out, child)

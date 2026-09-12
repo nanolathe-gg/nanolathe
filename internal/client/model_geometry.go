@@ -74,6 +74,7 @@ func fillModelPacket(g *drawlist.ModelGeometry, vertices []drawlist.ModelVertex,
 		face := &g.Faces[i]
 		face.Vertices = vertices[offset : offset+n : offset+n]
 		face.Texture, face.Color, face.Shaded = p.frame, p.color, p.useSHD
+		face.Normal = p.normal
 		key, u, v, row := p.attr[spanKey], p.attr[spanU], p.attr[spanV], p.attr[spanRow]
 		for j := 0; j < n; j++ {
 			x, y := p.x[j], p.y[j]
@@ -90,6 +91,9 @@ func fillModelPacket(g *drawlist.ModelGeometry, vertices []drawlist.ModelVertex,
 			face.Vertices[j] = drawlist.ModelVertex{
 				X: x, Y: y, Key: key[j],
 				U: u[j], V: v[j], Shade: uint8(row[j]),
+			}
+			if j < len(p.heights) {
+				face.Vertices[j].Height = p.heights[j]
 			}
 		}
 		offset += n
@@ -109,6 +113,7 @@ func (c *Client) configureModelGeometry(g *drawlist.ModelGeometry, draw *present
 // rather than projected again every frame (docs/DESIGN_GPU_RENDERER.md §13.12
 // "Shadows — contract P4"). A nil body keeps the per-frame projection.
 func (c *Client) configureModelGeometryFor(body *cachedModelBody, g *drawlist.ModelGeometry, draw *presentationrender.UnitDraw, owner, kind uint8, reveal *presentationrender.NanoframeReveal, outline uint8) {
+	c.setModelLightingHeight(g, draw)
 	if reveal != nil {
 		g.Reveal = &drawlist.ModelReveal{Line: reveal.Line, Floor: reveal.Floor, Below: reveal.Below, Band: reveal.Band, Above: reveal.Above}
 		g.Outline = c.modelOutlineGeometry(draw, g.OriginX, g.OriginY, outline, 1, 0, 0)
@@ -133,6 +138,18 @@ func (c *Client) configureModelGeometryFor(body *cachedModelBody, g *drawlist.Mo
 		g.Shadow = c.silhouetteShadowGeometry(g, draw)
 	} else {
 		g.Shadow = c.retainedShadowGeometry(body, draw)
+	}
+}
+
+// setModelLightingHeight refreshes placement metadata without rebuilding the
+// retained faces. Doubled geometry carries the same physical height (§22.4).
+func (c *Client) setModelLightingHeight(g *drawlist.ModelGeometry, draw *presentationrender.UnitDraw) {
+	if g == nil || draw == nil {
+		return
+	}
+	g.WorldHeight = float32(draw.WorldPos[1].Raw()) / 65536 * float32(c.modelScale().Float())
+	if g.Supersample != nil {
+		g.Supersample.WorldHeight = g.WorldHeight
 	}
 }
 
@@ -270,6 +287,7 @@ func (c *Client) shadowGeometryAt(draw *presentationrender.UnitDraw, anchorX, an
 	placeFaces(polys, originX, originY, 1)
 	g := c.borrowModelPacket(polys, int32(width), int32(height), originX, originY, anchorX, anchorY, 1, true, drawlist.ModelFallbackNone)
 	g.Supersample = supersample
+	c.setModelLightingHeight(g, draw)
 	return g
 }
 
@@ -553,6 +571,7 @@ func (c *Client) directModelGeometry(draw *presentationrender.UnitDraw, selector
 	placeFaces(polys, originX, originY, 1)
 	g := c.borrowModelPacket(polys, int32(width), int32(height), originX, originY, 0, 0, 1, false, drawlist.ModelFallbackNone)
 	g.Supersample = supersample
+	c.setModelLightingHeight(g, draw)
 	return g
 }
 

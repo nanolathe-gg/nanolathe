@@ -299,10 +299,9 @@ it does not apply Unicode case folding.
   `TODO(question)` in `formats/gaf_metadata.go` remains for feature-mask and
   structure-texture traces. Fog and glyph compositors now traverse their own
   child graphs; direct masks and projectile textures use `DirectRaster`.
-  The modern fog atlas rejects composite frames with an error reported by
-  the app and benchmark until it can represent repeated destination operations;
-  this implementation limitation
-  does not reopen the established consumer contract.
+  Modern fog uses ordered child operations when a selected frame cannot use
+  its ordinary atlas path, preserving repeated destination reads and alternate
+  black-child tinting without a parent-sized intermediate raster.
 - **Established (bounded loader, cursor and blitter traces):** frame header
   byte +8 is the raw path's color key; the trailing frame-header word is not
   read by those consumers. Animation hold comes from the frame-reference

@@ -148,7 +148,9 @@ type modelDirectLane struct {
 
 	order []modelDirectFace
 	// keyDelta is the group child delta added to the keys being appended.
-	keyDelta int32
+	keyDelta                                int32
+	lightSources                            subjectLights
+	lightX, lightY, lightScale, lightHeight float32
 
 	// pending collects the frame's packets before placement, so they can be
 	// packed tallest first; record order is the commits' business.
@@ -539,6 +541,13 @@ func (r *Renderer) appendPacket(g *drawlist.ModelGeometry, region modelDirectReg
 		mode = modelDirectShadow
 	}
 	d.keyDelta = keyDelta
+	d.lightSources = subjectLights{}
+	if !shadow {
+		d.lightSources = r.lighting.near(float32(wb.Min.X+wb.Max.X)*0.5, float32(wb.Min.Y+wb.Max.Y)*0.5, float32(wb.Dx()+wb.Dy())*0.5)
+		d.lightX = float32(region.bounds.Min.X) + (ox-float32(region.x))*0.5
+		d.lightY = float32(region.bounds.Min.Y) + (oy-float32(region.y))*0.5
+		d.lightScale, d.lightHeight = scale*0.5, g.WorldHeight
+	}
 	r.appendDirectLane(raster.Faces, raster, ox, oy, scale, mode, entry)
 	if !shadow && len(g.Outline) != 0 {
 		// The outline endpoints are one native pixel each, from the native
@@ -708,6 +717,17 @@ func (r *Renderer) appendDirectFace(f *drawlist.ModelFace, slot modelTextureSlot
 		colorA = float32((int32(slot.x)+u0)*4096 + int32(slot.y) + v0)
 		colorB = float32((int32(slot.x)+u1)*4096 + int32(slot.y) + v1)
 	}
+	lighting := float32(0)
+	if !shadow {
+		lighting = r.modelFaceLight(f)
+	}
+	if lighting > 0 {
+		r.modelStats.LitModelFaces++
+	}
+	custom2, custom3 := float32(entry), lighting
+	if run == nil {
+		custom2, custom3 = lighting, sceneOpModelDirect
+	}
 	for _, v := range f.Vertices {
 		k := float32(1)
 		if f.Shaded && !shadow {
@@ -721,7 +741,7 @@ func (r *Renderer) appendDirectFace(f *drawlist.ModelFace, slot modelTextureSlot
 			SrcX: float32(slot.x + int(v.U)), SrcY: float32(slot.y + int(v.V)),
 			ColorR: k, ColorG: float32(f.Color), ColorB: colorB,
 			ColorA:  colorA,
-			Custom0: float32(mode), Custom1: d.laneKey(v.Key), Custom2: float32(entry), Custom3: sceneOpModelDirect,
+			Custom0: float32(mode), Custom1: d.laneKey(v.Key), Custom2: custom2, Custom3: custom3,
 		})
 	}
 	for i := 1; i+1 < n; i++ {
@@ -749,7 +769,7 @@ func (r *Renderer) appendDirectGPUFace(f modelGPUFace, ox, oy, s float32, entry 
 		d.verts = append(d.verts, ebiten.Vertex{
 			DstX: ox + v.X*s, DstY: oy + v.Y*s,
 			ColorR: 1, ColorG: float32(f.Color),
-			Custom0: modelDirectOutline | modelDirectLive, Custom1: d.laneKey(int32(v.Key)), Custom2: float32(entry), Custom3: sceneOpModelDirect,
+			Custom0: modelDirectOutline | modelDirectLive, Custom1: d.laneKey(int32(v.Key)), Custom2: float32(entry), Custom3: 0,
 		})
 	}
 	for i := 1; i+1 < n; i++ {
@@ -928,6 +948,8 @@ func (r *Renderer) drawModelDirectFallback(g *drawlist.ModelGeometry) {
 	collect(g.LiveFaces, true)
 	slices.SortStableFunc(d.order, func(a, b modelDirectFace) int { return cmp.Compare(a.key, b.key) })
 	ox, oy := float32(g.AnchorX-g.OriginX), float32(g.AnchorY-g.OriginY)
+	d.lightSources = r.lighting.near(float32(b.Min.X+b.Max.X)*0.5, float32(b.Min.Y+b.Max.Y)*0.5, float32(b.Dx()+b.Dy())*0.5)
+	d.lightX, d.lightY, d.lightScale, d.lightHeight = ox, oy, 1, g.WorldHeight
 	page := r.texturePage()
 	d.verts, d.idx = d.verts[:0], d.idx[:0]
 	d.standalone = d.standalone[:0]
@@ -1018,7 +1040,7 @@ package main
 
 const palRow = ` + fmt.Sprint(tableRowPAL) + `.0
 const blueRow = ` + fmt.Sprint(tableRowBlue) + `.0
-` + modelQuadMapperSource + modelDirectMappedSource() + `
+` + modelQuadMapperSource + modelDirectMappedSource() + battleLightShaderSource + `
 func palAt(idx float) vec3 {
 	return imageSrc1AtFromSrc0Pos(imageSrc0Origin()+vec2(idx+0.5, palRow+0.5)).rgb
 }
@@ -1141,7 +1163,7 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 	if idx == 1.0 {
 		return vec4(0.0)
 	}
-	return vec4(palAt(idx)*k, 1.0)
+	return vec4(battleLit(palAt(idx), k, custom.w), 1.0)
 }
 `
 }

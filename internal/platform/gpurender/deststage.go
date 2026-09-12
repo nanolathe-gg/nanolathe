@@ -113,6 +113,12 @@ func (r *Renderer) drawRawGlyph(f *formats.GAFFrame, x, y int, mode byte, clipX,
 // palette it draws nothing, exactly as tintedBlitAnchor returns on a nil palette
 // [03 R-COMP-01 §2].
 func (r *Renderer) drawTint(f *formats.GAFFrame, x, y, clipX, clipY, clipW, clipH int) {
+	r.drawTintLight(f, x, y, clipX, clipY, clipW, clipH, nil, 0)
+}
+
+// drawTintLight preserves the strip blend and ordering while modulating only
+// explicitly classified smoke with nearby visible explosion light (§23).
+func (r *Renderer) drawTintLight(f *formats.GAFFrame, x, y, clipX, clipY, clipW, clipH int, lights *subjectLights, height float32) {
 	if f == nil || r.sceneDest == nil || r.tables.atlas == nil {
 		return
 	}
@@ -136,10 +142,28 @@ func (r *Renderer) drawTint(f *formats.GAFFrame, x, y, clipX, clipY, clipW, clip
 	if !r.sched.begin(schedDest, dx0, dy0, dx1, dy1, imgs) {
 		return
 	}
+	batch := &r.sched.phases[r.sched.curPhase].batch[schedDest]
+	before := len(batch.verts)
 	r.sched.quad(schedDest,
 		float32(dx0), float32(dy0), float32(dx1), float32(dy1),
 		float32(int(e.x)+col0), float32(int(e.y)+row0), float32(int(e.x)+col1), float32(int(e.y)+row1),
 		[4]float32{}, [4]float32{0, 0, 0, destOpTint})
+	if lights != nil && lights.count > 0 {
+		// quad transforms destination coordinates, so evaluate the four RECORD
+		// corners explicitly instead of reading back the transformed vertices.
+		xs := [4]float32{float32(dx0), float32(dx1), float32(dx0), float32(dx1)}
+		ys := [4]float32{float32(dy0), float32(dy0), float32(dy1), float32(dy1)}
+		lit := false
+		for i := range 4 {
+			rgb := lights.irradiance(xs[i], ys[i], height, [3]float32{}, true)
+			v := &batch.verts[before+i]
+			v.ColorR, v.ColorG, v.ColorB, v.Custom0 = rgb[0], rgb[1], rgb[2], 1
+			lit = lit || rgb != [3]float32{}
+		}
+		if lit {
+			r.modelStats.LitSmokeSprites++
+		}
+	}
 }
 
 // drawLitRect reproduces uiLightRectRaw: every pixel of the framebuffer-clipped

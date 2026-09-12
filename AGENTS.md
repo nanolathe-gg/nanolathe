@@ -105,13 +105,36 @@ Create one before editing:
 git worktree add ../nanolathe-wt-<task-slug> -b <task-slug> main
 ```
 
-Commit as you go. Before landing, run `go build ./...`, `go vet`, and
-`go test ./...`; merge `main` into the branch, reconcile both sides of conflicts
-or stop and report, then re-run checks. Repeat if `main` moves. A top-level
-maintainer may merge reviewed work; a sub-agent commits, reports, and stops.
+Within the requested scope, create the worktree, implement, run local checks,
+fix failures caused by the change, and commit without asking for permission at
+each step. Complete the applicable verification and review below before handing
+work back. Report any remaining gap and what would settle it; do not describe
+blocked behavior as implemented. A blocker report names the exact instruction
+or missing evidence and the affected work. Continue independent work.
+
+Commit as you go. Before landing, merge `main` into the branch and reconcile
+both sides of conflicts; if that cannot be done without discarding another
+agent's work or inventing behavior, report the conflict. Verify the integrated
+branch as described below. If `main` moves, integrate it and re-run the gates.
+A top-level maintainer may merge reviewed work; a sub-agent commits, reports,
+and stops. Re-run the required gates after landing.
 
 After landing, remove only your worktree and branch, then prune. Never bulk-remove
 worktrees; an unmerged one may be live.
+
+### Verification
+
+- During iteration, run checks for the affected contracts and packages. For
+  documentation edits, check the diff and links; run `go test ./internal/docs`
+  when changing citations that its resolver checks. Broaden or repeat checks
+  only for new changes, failures, unresolved concerns, or the landing gates.
+- Before landing, run `tools/check` and `tools/check-retail`, the fast and
+  integration gates defined in `docs/ARCHITECTURE.md` §6, plus the applicable
+  design gate. Use these scripts instead of duplicating their commands; they
+  control asset selection, tracked-file formatting, and test concurrency.
+  Missing retail assets block the integration gate; report it as unrun.
+- Include visual inspection and the performance checks below when applicable.
+  Reviewers run the required checks themselves in the assigned worktree.
 
 ---
 
@@ -154,8 +177,8 @@ Worktree: .claude/worktrees/wu-07-3 on branch wu-07-3, branched from main.
 Files you own (create/modify only these): internal/path/search.go, internal/path/search_test.go
 Files you may read but must not modify: internal/world/*, internal/movement/profile.go
 Public API you must satisfy: the Search block in the design document's package section.
-Done when: contracts C4-C9 hold, `go test ./internal/path` passes, `go vet ./...` clean.
-Unknowns: if research does not answer a question, stop and report it — do not invent a constant.
+Done when: contracts C4-C9 hold, `go test ./internal/path` passes, and the applicable Verification gates pass.
+Unknowns: follow "When research does not answer" below within your file ownership; report investigation needs outside it and continue independent work.
 ```
 
 Do **not** paste research documents into a dispatch—cite sections and let the
@@ -166,10 +189,8 @@ cross-package refactors** (report upstream needs), and **one unit, one commit**.
 **Review before merge.** Sub-agent summaries are not evidence; the orchestrator
 is accountable for the diff it lands:
 
-1. Read the diff, not the summary (`git diff main...HEAD`), and verify it builds.
-2. Run the checks yourself: `go build ./... && go vet ./... && gofmt -l . &&
-   go test ./...`, plus the design document's gate command. Re-run the gate **after**
-   merging, not only in the worktree.
+1. Read the diff, not the summary (`git diff main...HEAD`).
+2. Follow Verification above, including the required checks after landing.
 3. Verify two of the most arithmetic-heavy contracts against their cited
    research section — constants, order of operations, comparison strictness.
    This is where wrong constants get caught.
@@ -189,7 +210,8 @@ is accountable for the diff it lands:
 what changed and why. Never revert/reset/rebase/amend on `main`. If the whole
 unit needs to come out, stop and escalate rather than deciding that yourself.
 
-**Test policy.** Keep tests light and fast; skip when retail assets are absent.
+**Test policy.** Keep tests light and fast; asset-dependent tests skip when
+retail assets are absent in the fast tier. The integration gate requires them.
 A test exists to lock a retail contract that is easy to regress silently — an
 ordering, a truncation, a comparison strictness — not for coverage. A test
 that encodes an **inference** must say so. Assert relationships and hashes,
@@ -210,9 +232,12 @@ sink the presentation layer drains.
 first. If it is a T23/T25 item, write `TODO(T23)` / `TODO(T25)` with the chosen
 placeholder behavior and a one-line justification, and keep going. If it is a
 genuine gap, analyze the executable in `$HOME/ta-decompile`, then write the
-finding up clean-room in the owning doc — the translation step is part of the
-work, not a formatting chore. Otherwise stop and report. Inventing a constant
-is the one unrecoverable failure mode.
+finding up clean-room in the owning doc before implementing dependent behavior.
+Sub-agents investigate and edit only within their assigned ownership; report
+upstream research or API needs to the orchestrator. If the gap cannot be settled,
+record it under rule 1 and report the missing evidence. The gap blocks behavior
+that depends on it; continue independent work. Inventing a constant is the one
+unrecoverable failure mode.
 
 ---
 
@@ -262,16 +287,16 @@ client     — Ebitengine window loop presents a software framebuffer from the c
 
 ## Workflow
 
-- Work from `docs/ARCHITECTURE.md` (package map, dependency graph, what runs
-  today) and the owning `docs/DESIGN_*.md`.
-- Reference `research/retail-executable-spec/README.md` for the reading order.
+- Read `docs/ARCHITECTURE.md` for package boundaries and dependencies. For
+  behavior changes, read the owning `docs/DESIGN_*.md`, relevant invariants,
+  and cited research sections; use `research/retail-executable-spec/README.md`
+  to locate the evidence. Read benchmark docs for the performance checks below.
+  A wording-only correction needs the affected text and its context.
 - There is **no Oracle** in this repo. For retail validation use
   `~/TotalAnnihilation` assets and a manual retail install if needed, but do
   not automate the retail executable. Future probes live under `probes/` as
   independently authored, data-driven scenarios.
-- Verify visually when the change is visual. A screenshot from `--shot` beats
-  an assertion that it should look right.
-- Use `go vet` / `go test ./...` lightly. Do not add heavy test harnesses.
+- Follow Verification above. Do not add heavy test harnesses.
 
 ## Live battle performance regression check
 

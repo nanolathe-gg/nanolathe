@@ -169,11 +169,8 @@ func (r *ModelTextureRegistry) bindUnitModels(cat *content.Catalog) error {
 		}
 		// Unit parsing admits its corpse feature before loading that unit model.
 		r.admitFeatureName(cat, def.Corpse)
-		if def.ObjectName == "" {
-			continue
-		}
 		load := modelTextureLoadKey{kind: modelLoadUnit, id: strconv.FormatUint(uint64(def.UnitDefID), 10)}
-		m, err := r.bindLoad(load, def.ObjectName)
+		m, err := r.bindLoad(load, vfs.ResourcePath("objects3d", def.ObjectName, "3do"))
 		if err != nil {
 			return fmt.Errorf("unit %q: %w", def.UnitName, err)
 		}
@@ -187,7 +184,7 @@ func (r *ModelTextureRegistry) bindUnitModels(cat *content.Catalog) error {
 		if key == "" {
 			key = ckey(def.UnitName)
 		}
-		if _, exists := r.unitByName[key]; !exists {
+		if selected, ok := cat.Unit(key); ok && selected == def {
 			r.unitByName[key] = load
 		}
 		r.unitByID[uint16(def.UnitDefID)] = load
@@ -203,18 +200,18 @@ func (r *ModelTextureRegistry) bindUnitModels(cat *content.Catalog) error {
 }
 
 // trailInfo is the trail classifier's view of a unit definition, by the same
-// name-then-id lookup unitModel uses (DESIGN_GPU_RENDERER §15).
+// ID-before-name lookup unitModel uses (DESIGN_GPU_RENDERER §15).
 func (r *ModelTextureRegistry) trailInfo(defName string, defID uint16) trailDefInfo {
 	if r == nil {
 		return trailDefInfo{}
 	}
-	if defName != "" {
-		if load, ok := r.unitByName[ckey(defName)]; ok {
+	if defID != 0 {
+		if load, ok := r.unitByID[defID]; ok {
 			return r.trailDefs[load]
 		}
 	}
-	if defID != 0 {
-		if load, ok := r.unitByID[defID]; ok {
+	if defName != "" {
+		if load, ok := r.unitByName[ckey(defName)]; ok {
 			return r.trailDefs[load]
 		}
 	}
@@ -385,13 +382,14 @@ func (r *ModelTextureRegistry) unitModel(defName string, defID uint16, name stri
 	if r == nil {
 		return nil
 	}
-	if defName != "" {
-		if load, ok := r.unitByName[ckey(defName)]; ok {
+	if defID != 0 {
+		if load, ok := r.unitByID[defID]; ok {
 			return r.loads[load]
 		}
 	}
-	if defID != 0 {
-		if load, ok := r.unitByID[defID]; ok {
+	// A retained definition ID has priority over a duplicate name [02 R-CAT-01 §5].
+	if defName != "" {
+		if load, ok := r.unitByName[ckey(defName)]; ok {
 			return r.loads[load]
 		}
 	}
@@ -429,7 +427,7 @@ func (r *ModelTextureRegistry) modelFor(kind modelTextureLoadKind, id, name stri
 }
 
 func (r *ModelTextureRegistry) bindLoad(key modelTextureLoadKey, name string) (*unitModel, error) {
-	if r == nil || name == "" {
+	if r == nil || name == "" && key.kind != modelLoadUnit {
 		return nil, nil
 	}
 	if m, ok := r.loads[key]; ok {

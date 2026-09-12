@@ -129,13 +129,18 @@ func (c *Client) drawStripBarrier(cur *frame.Frame, strip int8) StripDrawStats {
 			// A fill's extents take the view scale, so the two-by-two mark stays
 			// two world pixels square (DESIGN_GPU_RENDERER §14.2).
 			side := c.viewScale().Px(stripParticleSize)
+			rw, rh := c.recordExtent()
 			c.emitFill(drawlist.Fill{
 				Rect: drawlist.Rect{
 					X: sx - camera.OriginX, Y: sy - camera.OriginY,
 					W: side, H: side,
 				},
-				Index: v.Fill,
-				Style: drawlist.FillSolid,
+				Index:         v.Fill,
+				Style:         drawlist.FillSolid,
+				Nano:          v.Family == frame.StripFamilyNano,
+				WorldHeight:   float32(v.Y.Raw()) / 65536 * float32(c.viewScale().Float()),
+				LightingScale: float32(c.viewScale().Float()),
+				Clip:          drawlist.Rect{W: int32(rw), H: int32(rh)},
 			})
 			stats.Filled++
 		default:
@@ -176,6 +181,11 @@ func (c *Client) blitStripFrame(v frame.StripView) bool {
 		return false
 	}
 	sx, sy := c.cam.WorldToScreen(v.X, v.Y, v.Z)
+	lightingKind := drawlist.SpriteLightingNone
+	if v.Family == frame.StripFamilySmokePuff || v.Family == frame.StripFamilyVentSteam {
+		lightingKind = drawlist.SpriteLightingSmoke
+	}
+	scale := float32(c.viewScale().Float())
 	// Emit the translucent frame blit; the sink runs the raw tintedBlitAnchor, so
 	// this is the blit's only execution [03 R-COMP-01 §2][03 R-FX-02 §2]. The
 	// returned bool mirrors tintedBlitAnchor's own gate (ALP table and surface
@@ -191,7 +201,10 @@ func (c *Client) blitStripFrame(v frame.StripView) bool {
 		Kind:  drawlist.BlitTinted,
 		// Strip art is fire, smoke and explosion animation: a light source for the
 		// Enhanced glow layer, which keeps only its bright texels (§19).
-		Emissive: true,
+		Emissive:      true,
+		LightingKind:  lightingKind,
+		WorldHeight:   float32(v.Y.Raw()) / 65536 * scale,
+		LightingScale: scale,
 	})
 	return c.pal != nil && len(c.indexed) != 0
 }

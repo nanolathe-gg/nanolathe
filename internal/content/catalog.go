@@ -406,13 +406,9 @@ func buildWeaponIndex(weapons map[string]*WeaponDef, duplicates []WeaponDuplicat
 	return byID, duplicates
 }
 
-// buildModelCatalog collects distinct ObjectName values from units and sorts
+// buildModelRecordCatalog collects distinct ObjectName values from units and sorts
 // them case-insensitively before caching a per-unit-type pointer [03 §2.4] C13.
 // The sort makes piece/type identity independent of provider order.
-func buildModelCatalog(units map[string]*UnitDef) ([]string, map[string]int) {
-	return buildModelRecordCatalog(unitMapRecords(units))
-}
-
 func buildModelRecordCatalog(records []*UnitDef) ([]string, map[string]int) {
 	if len(records) == 0 {
 		return nil, nil
@@ -425,9 +421,6 @@ func buildModelRecordCatalog(records []*UnitDef) ([]string, map[string]int) {
 	canonToOriginal := make(map[string]string)
 	for _, u := range records {
 		name := trimTDFSemantic(u.ObjectName)
-		if name == "" {
-			continue
-		}
 		ck := CanonicalKey(name)
 		if existing, exists := canonToOriginal[ck]; !exists || name < existing {
 			canonToOriginal[ck] = name
@@ -487,9 +480,6 @@ func (c *Catalog) ModelForUnit(unitKey string) (string, int, bool) {
 		return "", 0, false
 	}
 	name := trimTDFSemantic(u.ObjectName)
-	if name == "" {
-		return "", 0, false
-	}
 	idx, ok := c.ModelIndex(name)
 	if !ok {
 		return "", 0, false
@@ -525,7 +515,7 @@ func (c *Catalog) UnitDefIndex(key string) (uint32, bool) {
 // whose definition identities are authoritative — from a fixture catalog
 // that carries no finalized identity.
 func (c *Catalog) Finalized() bool {
-	return c != nil && c.Hash != "" && len(c.Units) > 0
+	return c != nil && c.Hash != "" && (len(c.unitRecords) > 0 || len(c.Units) > 0)
 }
 
 // UnitIndexOf returns a unit definition's stable catalog index and whether
@@ -1341,10 +1331,7 @@ func validateRequiredRecordModels(fs vfs.FSOps, records []*UnitDef, weapons map[
 		if u == nil {
 			continue
 		}
-		logical := requiredModelPath(u.ObjectName)
-		if logical == "" {
-			continue
-		}
+		logical := requiredUnitModelPath(u.ObjectName)
 		raw := loaded[logical].ModelTop() // 16.16, floored at zero [fmt 3do]
 		u.ModelTopFixed = raw
 		// Preserve retail's whole-word masking rather than a signed conversion.
@@ -1353,22 +1340,16 @@ func validateRequiredRecordModels(fs vfs.FSOps, records []*UnitDef, weapons map[
 	return nil
 }
 
-// requiredModelPaths collects the union across all model-owning definition
+// requiredRecordModelPaths collects the union across all model-owning definition
 // families. The sort chooses one deterministic first failure and the map
 // makes each parsed geometry result shared by every reference to its path.
-func requiredModelPaths(units map[string]*UnitDef, weapons map[string]*WeaponDef, features map[string]*FeatureDef) []string {
-	return requiredRecordModelPaths(unitMapRecords(units), weapons, features)
-}
-
 func requiredRecordModelPaths(records []*UnitDef, weapons map[string]*WeaponDef, features map[string]*FeatureDef) []string {
 	paths := make(map[string]struct{})
 	for _, u := range records {
 		if u == nil {
 			continue
 		}
-		if logical := requiredModelPath(u.ObjectName); logical != "" {
-			paths[logical] = struct{}{}
-		}
+		paths[requiredUnitModelPath(u.ObjectName)] = struct{}{}
 	}
 	for _, w := range weapons {
 		if w == nil {
@@ -1397,6 +1378,12 @@ func requiredRecordModelPaths(records []*UnitDef, weapons map[string]*WeaponDef,
 	return logical
 }
 
+// Unit models are required even with an empty authored basename [02 R-CAT-01 §5].
+// Weapon and feature model fields keep their separate optional-presence gates.
+func requiredUnitModelPath(name string) string {
+	return vfs.ResourcePath("objects3d", CanonicalKey(name), "3do")
+}
+
 func requiredModelPath(name string) string {
 	name = CanonicalKey(name)
 	if name == "" {
@@ -1421,7 +1408,7 @@ func fillUnitRecordScripts(fs vfs.FSOps, records []*UnitDef) error {
 		if u == nil {
 			continue
 		}
-		logical := "scripts/" + CanonicalKey(u.UnitName) + ".cob"
+		logical := vfs.ResourcePath("scripts", CanonicalKey(u.UnitName), "cob")
 		info, statErr := fs.Stat(logical)
 		if statErr != nil || info.IsDir {
 			return unitScriptMissingError(fs, logical)
@@ -1440,7 +1427,7 @@ func fillUnitRecordScripts(fs vfs.FSOps, records []*UnitDef) error {
 	return nil
 }
 
-// fillBuildPages compiles every definition's build-menu page-count byte from
+// fillUnitRecordBuildPages compiles every definition's build-menu page-count byte from
 // the authored page windows, which is step 5 of the catalog compiler's per-
 // record work [02 R-CAT-01 §5]: with `<n>` the unit name, `guis/<n>0.GUI`
 // existing sets the page-zero bit, then `guis/<n>1.GUI`, `guis/<n>2.GUI`, …
@@ -1450,10 +1437,6 @@ func fillUnitRecordScripts(fs vfs.FSOps, records []*UnitDef) error {
 //
 // The probe is by existence and non-zero size, and it stops at the first gap:
 // `guis/<n>1.GUI` and `guis/<n>3.GUI` with no `<n>2` is a count of 2, not 4.
-func fillBuildPages(fs vfs.FSOps, units map[string]*UnitDef) {
-	fillUnitRecordBuildPages(fs, unitMapRecords(units))
-}
-
 func fillUnitRecordBuildPages(fs vfs.FSOps, records []*UnitDef) {
 	if fs == nil || len(records) == 0 {
 		return

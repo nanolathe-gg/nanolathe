@@ -73,10 +73,17 @@ func TestUnitRecordsLinkCloneHashAndRestriction(t *testing.T) {
 		fixtureFile{path: "objects3d/empty.3do", data: authoredRequiredModel3DO(t, 3<<16)},
 		fixtureFile{path: "objects3d/empty2.3do", data: authoredRequiredModel3DO(t, 4<<16)},
 	)
-	result, err := compileUnitsWithLanguage(fs, "")
-	if err != nil {
-		t.Fatal(err)
+	// Exercise record linking and cloning with authored compiled definitions.
+	// The discovery/secondary resource contract is covered separately: a
+	// missing name-based FBI does not compile these gameplay fields.
+	var records []*UnitDef
+	for _, logicalPath := range []string{"units/a.fbi", "units/b.fbi", "units/c.fbi", "units/d.fbi"} {
+		u := compileUnitSection(mustParseTDF(t, fs.files[logicalPath]).Root.Section("UNITINFO"), logicalPath, "", Provenance{LogicalPath: logicalPath})
+		records = append(records, u)
 	}
+	sortUnitRecords(records)
+	result := unitCompileResult{records: records, units: firstUnitNames(records)}
+	var err error
 	c := &Catalog{Units: result.units, unitRecords: result.records, Weapons: map[string]*WeaponDef{"laser": {DefinitionHeader: DefinitionHeader{CanonicalKey: "laser"}, ID: 1, Name: "laser"}}}
 	c.Categories, err = compileCategoryRecords(result.records, result.units)
 	if err != nil {

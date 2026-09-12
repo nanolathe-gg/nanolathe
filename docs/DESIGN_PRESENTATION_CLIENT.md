@@ -731,10 +731,13 @@ document carries them.
   glyph uses the existing destination-light stream and its approved LHT colour
   approximation; compressed glyphs retain the source-remap stream. Unsafe raw
   glyph source rows are suppressed as host safety policy, not clamped.
-  The modern fog atlas cannot encode repeated gray or child ALP applications:
-  composite fog frames return `FogContentError`, which the app and benchmark
-  report as a failure, pending an ordered fog command path. Compressed gray/dither frames are gated
-  before atlas construction; ordinary black RLE remains drawable.
+  Modern fog retains the atlas for ordinary stock frames. A selected composite
+  or frame extending outside its atlas tile sends the whole fog command through
+  ordered child operations: repeated gray applications use separate destination
+  snapshots, and black children retain ordinary/ALP dispatch. The shader uses
+  the already approved modern desaturation and ALP colour approximations.
+  Compressed gray/dither frames are gated before each recursion; ordinary black
+  RLE remains drawable. `FogContentError` reports shader compilation failures.
   Projectile model spans select `GAFFrame.DirectRaster` before either classic
   rasterization or modern geometry recording. The visibility-mask compiler
   selects the same view and compares each storage byte to the authored key.

@@ -360,7 +360,7 @@ func checkFogDevicePixels() error {
 			return err
 		}
 	}
-	return nil
+	return checkFogOrderedDevicePixels()
 }
 
 func checkFogDevicePixelsAt(scale camera.ViewScale) error {
@@ -492,6 +492,15 @@ func TestFogDeviceFixture(t *testing.T) {
 // The same world-anchored fog must survive a pan as a crop of the previous
 // image, even when its cell starts offscreen [03 §3.3][R-RR16-A §3].
 func checkFogScrollDevicePixelsAt(scale camera.ViewScale) error {
+	for _, composite := range []bool{false, true} {
+		if err := checkFogScrollDeviceFrameAt(scale, composite); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func checkFogScrollDeviceFrameAt(scale camera.ViewScale, composite bool) error {
 	const w, h = 128, 128
 	pal := fixturePalette()
 	pal.Base[100] = [4]byte{30, 60, 90, 255}
@@ -504,6 +513,9 @@ func checkFogScrollDevicePixelsAt(scale camera.ViewScale) error {
 		for x := 8; x < 16; x++ {
 			frame.Transparent[y*16+x] = true
 		}
+	}
+	if composite {
+		frame = fogTestComposite(frame)
 	}
 	entry := &formats.GAFEntry{Frames: []formats.GAFFrameRef{{Frame: frame}}}
 	for _, kind := range []render.FogKind{render.FogKindGAFCh0, render.FogKindGAFCh1} {

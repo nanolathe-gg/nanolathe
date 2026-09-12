@@ -45,6 +45,13 @@ func (d MobilityDomain) String() string {
 // DefinitionHeader must be the first field per catalog convention [02 §5].
 type UnitDef struct {
 	DefinitionHeader
+	// DiscoveryProvenance identifies the source of admission and the fields
+	// retained across secondary parsing; Provenance identifies the active FBI
+	// source for runtime fields [02 R-CAT-01 §§4–5].
+	DiscoveryProvenance Provenance
+	// DiscoveryOnly records have not received the secondary gameplay parse;
+	// category and weapon linking must preserve allocation zeros [02 R-CAT-01 §5].
+	DiscoveryOnly bool
 	// UnitDefID is the stable 1-based catalog ID (zero is the null sentinel)
 	// used by category membership masks [02 §5] [R-P0-03].
 	UnitDefID uint32
@@ -566,32 +573,7 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 	selfDestructCountdown, selfDestructCountdownPresent := section.RawValue("selfdestructcountdown")
 	mobilityDomain := deriveMobilityDomain(bmcode != 0, canFly, movementClass)
 
-	// Unknown inert keys retained [02 §5] C14.
-	unknown := make(map[string]string)
-	for _, item := range section.Items {
-		if item.Kind != formats.Assignment {
-			continue
-		}
-		fold := asciiFoldContent(item.Key)
-		if _, ok := knownUnitKeys[fold]; ok {
-			continue
-		}
-		// Language-prefixed variants for current language are already consumed via LanguageString — not unknown.
-		if language != "" {
-			lfold := asciiFoldContent(language + "name")
-			if fold == lfold {
-				continue
-			}
-			lfold = asciiFoldContent(language + "description")
-			if fold == lfold {
-				continue
-			}
-		}
-		unknown[item.OriginalKey] = item.Value
-	}
-	if len(unknown) == 0 {
-		unknown = nil
-	}
+	unknown := unitSourceUnknown(section, language)
 
 	// The stored UnitName is the identity even when empty; retail does not
 	// recover it from the discovered filename [02 R-CAT-01 §5][fmt fbi].
@@ -737,12 +719,47 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 	return u
 }
 
+// unitSourceUnknown retains untyped source fields for diagnostics [02 §5] C14.
+func unitSourceUnknown(section *formats.Section, language string) map[string]string {
+	// Unknown inert keys retained [02 §5] C14.
+	unknown := make(map[string]string)
+	for _, item := range section.Items {
+		if item.Kind != formats.Assignment {
+			continue
+		}
+		fold := asciiFoldContent(item.Key)
+		if _, ok := knownUnitKeys[fold]; ok {
+			continue
+		}
+		// Language-prefixed variants for current language are already consumed via LanguageString — not unknown.
+		if language != "" {
+			lfold := asciiFoldContent(language + "name")
+			if fold == lfold {
+				continue
+			}
+			lfold = asciiFoldContent(language + "description")
+			if fold == lfold {
+				continue
+			}
+		}
+		unknown[item.OriginalKey] = item.Value
+	}
+	if len(unknown) == 0 {
+		unknown = nil
+	}
+
+	return unknown
+}
+
 // writeUnitCanonical renders a UnitDef's canonical byte form: fixed order,
 // never ranging a map directly (I1) [02 §5] C12. Both the compile-time hash
 // and the downloadable enforcement's re-hash use it so the two can never
 // drift.
 func writeUnitCanonical(u *UnitDef) []byte {
 	var b strings.Builder
+	if u.DiscoveryOnly {
+		b.WriteString("discovery-only|")
+	}
 	fmt.Fprintf(&b, "%s|%d|%s|%s|%s|%s|%s|%s|%s|", u.CanonicalKey, u.UnitDefID, u.UnitName, u.Name, u.Description, u.Side, u.ObjectName, u.Category, u.SoundCategory)
 	fmt.Fprintf(&b, "%s|", u.Corpse)
 	fmt.Fprintf(&b, "%s|%d|%s|%s|%s|%s|%s|%s|", u.MovementClass, u.MobilityDomain, u.Weapon1, u.Weapon2, u.Weapon3, u.ExplodeAs, u.SelfDestructAs, u.YardMap)
@@ -863,10 +880,9 @@ func compileUnitsWithLanguage(fs vfs.FSOps, language string) (unitCompileResult,
 		if !versionOK || !copyrightOK || !entry.archive {
 			continue
 		}
-		// TODO(question): implement the post-sort FBI re-open by stored UnitName;
-		// establish the second parser's selective overwrite set before replacing
-		// this one-pass compile [02 R-CAT-01 §5][DESIGN_CONTENT_VFS §7].
-		records[i] = compileUnitSection(unitSection, e.Path, language, prov)
+		// Discovery initializes only the admission/display subset. Gameplay
+		// defaults belong to the successful secondary parse [02 R-CAT-01 §§4–5].
+		records[i] = compileUnitDiscovery(unitSection, language, prov)
 	}
 	// Completed discovery removes a dropped record by moving the last survivor
 	// into its place. An early missing-UNITINFO return skips that epilogue;
@@ -888,6 +904,13 @@ func compileUnitsWithLanguage(fs vfs.FSOps, language string) (unitCompileResult,
 		records = kept
 	}
 	sortUnitRecords(records)
+	for i, u := range records {
+		u.UnitDefID = uint32(i + 1)
+		if err := compileUnitSecondary(fs, u, language); err != nil {
+			return unitCompileResult{}, err
+		}
+		u.Hash = HashDefinition(writeUnitCanonical(u))
+	}
 	return unitCompileResult{units: firstUnitNames(records), records: records, incompatibilityWarning: versionDropped && !suppressWarning}, nil
 }
 
@@ -952,6 +975,9 @@ func linkUnitWeaponRecords(records []*UnitDef, weapons map[string]*WeaponDef) {
 	// derives its slot-order scan and the record-0 lookup from Weapons alone.
 	view := &Catalog{Weapons: weapons}
 	for _, u := range records {
+		if u.DiscoveryOnly {
+			continue
+		}
 		u.Weapon1Def, _ = view.WeaponLink(u.Weapon1)
 		u.Weapon2Def, _ = view.WeaponLink(u.Weapon2)
 		u.Weapon3Def, _ = view.WeaponLink(u.Weapon3)

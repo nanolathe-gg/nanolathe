@@ -22,7 +22,7 @@ func TestRawGlyphUsesDestinationLightStreamWithModeKeyAndClip(t *testing.T) {
 	}
 }
 
-func TestFogAtlasRejectsCompositeAndGatesCompressedGray(t *testing.T) {
+func TestFogAtlasLeavesCompositeToOrderedPathAndGatesCompressedGray(t *testing.T) {
 	skipAfterDeviceLoop(t)
 	leaf := &formats.GAFFrame{Width: 1, Height: 1, Pixels: []byte{7}, Transparent: []bool{false}}
 	composite := &formats.GAFFrame{Width: 1, Height: 1, Subframes: []*formats.GAFFrame{leaf}}
@@ -38,7 +38,7 @@ func TestFogAtlasRejectsCompositeAndGatesCompressedGray(t *testing.T) {
 	if !r.fog.slotPresent[fogSlots] {
 		t.Fatal("ordinary black family wrongly rejected RLE")
 	}
-	if r.FogContentError() == nil {
-		t.Fatal("composite suppression has no diagnostic")
+	if r.FogContentError() != nil {
+		t.Fatal("composite fallback reported an unsupported operation")
 	}
 }

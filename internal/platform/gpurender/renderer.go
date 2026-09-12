@@ -125,7 +125,8 @@ type Renderer struct {
 
 	// glow is the Enhanced glow layer of docs/DESIGN_GPU_RENDERER.md §19: the
 	// emissive batch, its planes and passes (glow.go).
-	glow glowLayer
+	glow     glowLayer
+	lighting battleLighting
 
 	// modelDirect is the PROTOTYPE direct model lane (model_direct.go): faces
 	// drawn straight onto the composite instead of through the slot stage.
@@ -171,6 +172,7 @@ func (r *Renderer) SetDisplayPalette(p [256][4]byte) {
 	}
 	r.tables.setDisplayPalette(p)
 	r.displayPalette = p
+	clear(r.lighting.colors)
 }
 
 // NewChecked is New but also returns the first shader compilation error. Each
@@ -267,6 +269,7 @@ func (r *Renderer) Execute(list *drawlist.List, w, h int) *ebiten.Image {
 	// attached-unit groups then compose over the shared staging atlas, ordered by
 	// destination, so their cost is a fixed handful of passes rather than three
 	// per group (model_stage.go).
+	r.prepareBattleLighting(list)
 	r.prepareModelDirect(list)
 	list.Replay(r)
 	// A list without an Expand marker still leaves no compiled work behind.

@@ -1546,13 +1546,14 @@ excluded with multiplayer `[07 R-CAM-01 §6]` `[07 R-FE-02 §12]`.
 **Established implementation policy (user-requested departure, not retail
 behavior).** With the modern executor active, an idle selected mobile builder
 accepts left double-click on a metal deposit to build its strongest
-available extractor, or on ordinary ground to build a solar collector. Every
+available extractor, near a geothermal vent to build an available geothermal
+plant, or on ordinary ground to build a solar collector. Every
 double-click appends, whether Shift is held or not. The typed mobile-build
 command carries explicit `Queued` and `AppendOnly` intent: existing work is
 preserved; a repeated site is moved clear of queued footprints instead of
 using the manual Shift-placement removal gesture. The complete authored build
 menu supplies candidates, independent of the currently displayed page. Equal
-extractor strengths and multiple solar candidates retain authored menu order.
+extractor strengths and multiple solar or geothermal candidates retain authored menu order.
 Factories, unit targets, other features, armed commands, HUD and minimap input
 keep their existing paths. Classic does not use this shortcut.
 
@@ -1567,6 +1568,24 @@ geothermal have distinct sound families. There is no universal solar capability
 field; a custom unit without either explicit token is deliberately unclassified.
 This input policy uses the authored FBI fields [fmt fbi], not unit-name lists,
 output thresholds or a generic ENERGY-category guess.
+
+Geothermal candidates are non-builder structures whose parsed yard map has
+the geothermal requirement bit (`G`); parsing uses the ordinary footprint-sized
+yard parser, so an unused trailing `G` does not classify a building. These
+products cannot also become solar or extractor ground shortcuts. Vents are
+committed features with `Geothermal` in their immutable definitions
+[05 "Geothermal requirement"][fmt fbi]. A direct vent click without a matching
+build-menu product does not fall back to solar.
+
+For this modern input policy, "near" means that the available plant's snapped
+footprint around the clicked ground point overlaps a vent. Exact metal-deposit
+clicks retain extractor precedence. When several vents qualify, choose the
+nearest vent center in fixed-point world coordinates, retaining publication order on ties.
+Center the plant on that vent, adjusting to the nearest cell-aligned anchor
+where an actual `G` cell covers it; increasing Z then X breaks alignment ties.
+This also handles custom yards whose `G` region is not central. Permanent vent
+identity survives fog, while the normal placement checks still decide whether
+the build is admitted.
 
 Deposits are committed feature footprints whose immutable definitions
 have nonzero Metal and Indestructible [05 R-FEAT-01 §7][08 R-AI-03 §1]. Clicking
@@ -1604,6 +1623,9 @@ partial coverage is allowed and can reduce extraction. If no legal edge
 retains deposit coverage, refuse rather than place off metal. Earlier queued
 sites are never moved. The final adjusted position and height enter the
 ordinary queued build command and therefore the existing queue animation.
+Geothermal spacing additionally keeps a `G` cell over the same selected vent;
+overlap with a different yard cell or another vent does not qualify. An already
+reserved vent therefore refuses another overlapping plant.
 
 The battle input layer recognizes a pair within 400 host milliseconds after
 first release, at most six logical pixels apart on each axis, with no Ctrl/Alt.
@@ -1633,7 +1655,8 @@ Verification: `TestResource*` replays the production input/command seam with an
 injected host clock, checking modern/classic behavior, unconditional queue preservation and feedback,
 single-click expiry, refusal, deposit centering in and outside current LOS,
 builders without extractors, repeated/rapid queued spacing, unselected local
-builders, mixed footprints, illegal edges, deposit coverage, and cancellation. Synthetic
+builders, mixed footprints, illegal edges, deposit coverage, geothermal menu
+detection and yard alignment, nearby/fogged vents, and cancellation. Synthetic
 fixtures define the new input policy; it is not attributed to retail evidence.
 
 ## 4. Retail behaviour that is not a bug

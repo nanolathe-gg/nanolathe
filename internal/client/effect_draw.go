@@ -15,8 +15,11 @@ import (
 // or halo geometry is represented by a false return; the adapter does not
 // invent durations, radii, or palette rows [I9].
 type EffectDrawOptions struct {
-	ResolveFrame func(frame.EffectView, int32) (*formats.GAFFrame, bool)
-	LHTGeometry  func(frame.EffectView) (radius, level int, ok bool)
+	// LightingFrame supplies current-view visibility for Enhanced emitters.
+	// Nil fails closed for lighting metadata without changing the art's draw.
+	LightingFrame *frame.Frame
+	ResolveFrame  func(frame.EffectView, int32) (*formats.GAFFrame, bool)
+	LHTGeometry   func(frame.EffectView) (radius, level int, ok bool)
 	// TerrainCoverage admits only indexed pixels belonging to the already
 	// composed terrain. A nil predicate leaves a light effect unresolved; the
 	// halo must never brighten units, effects, or HUD pixels [03 §4.3.1].
@@ -105,7 +108,9 @@ func (c *Client) drawEffectStrip(cur *frame.Frame, strip int8) {
 	if len(effects) == 0 {
 		return
 	}
-	c.DrawEffectViews(effects, c.effectDrawOptions())
+	options := c.effectDrawOptions()
+	options.LightingFrame = cur
+	c.DrawEffectViews(effects, options)
 }
 
 // drawFixedEffects consumes the unstripped fixed-effect pool at its one
@@ -132,6 +137,7 @@ func (c *Client) drawFixedEffects(cur *frame.Frame) {
 	}
 	options := c.effectDrawOptions()
 	options.Fragments = cur.Fragments
+	options.LightingFrame = cur
 	c.DrawEffectViews(effects, options)
 }
 
@@ -264,10 +270,35 @@ func (c *Client) DrawEffectViews(effects []frame.EffectView, options EffectDrawO
 		// The load-time remaster covers feature banks only, so an effect frame
 		// resolves to its nearest-doubled variant in the detail view; at the
 		// native scale viewFrame is the identity (DESIGN_GPU_RENDERER §14.3).
-		c.emitSprite(drawlist.Sprite{Frame: c.viewFrame(frame), X: x - 128, Y: y - 32, Kind: drawlist.BlitKeyed, Anchored: true, Emissive: true})
+		lightingKind := drawlist.SpriteLightingNone
+		if visibleExplosionSource(view, options.LightingFrame) {
+			lightingKind = drawlist.SpriteLightingExplosion
+		}
+		scale := float32(c.viewScale().Float())
+		c.emitSprite(drawlist.Sprite{Frame: c.viewFrame(frame), X: x - 128, Y: y - 32, Kind: drawlist.BlitKeyed, Anchored: true, Emissive: true,
+			LightingKind: lightingKind, WorldHeight: float32(d.Y.Raw()) / 65536 * scale, LightingScale: scale})
 		stats.Sprites++
 	}
 	return stats
+}
+
+// visibleExplosionSource is Enhanced admission only: named explosion/impact
+// art remains on its existing draw path, while a hidden source cannot light
+// another visible subject across a fog edge (DESIGN_GPU_RENDERER §22.4).
+func visibleExplosionSource(v frame.EffectView, cur *frame.Frame) bool {
+	if cur == nil || !v.ActiveA {
+		return false
+	}
+	switch v.Kind {
+	case frame.KindExplosion.String(), frame.KindImpact.String(), frame.KindWaterImpact.String():
+	default:
+		return false
+	}
+	mode := uint8(0)
+	if cur.Visibility.CoverageBytes {
+		mode = ProjectileVisibilityModeBytes
+	}
+	return PointVisible(cur.Visibility, v.X, v.Y, v.Z, mode, cur.ViewingPlayer)
 }
 
 // terrainScreenRect is terrainScreenCoverage as a rectangle: the loaded terrain

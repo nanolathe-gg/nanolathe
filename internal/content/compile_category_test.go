@@ -21,13 +21,13 @@ func TestCompileCategoriesRegistryAndMasks(t *testing.T) {
 		"bravo": categoryUnit("bravo", "unknown later"),
 	}
 	units["zulu"].NoChaseCategory = "Later"
-	units["alpha"].BadTargetCategoryWPRI = "zulu" // direct unit target wins over registry lookup
+	units["alpha"].BadTargetCategoryWPRI = "zulu" // FBI fields use the category even when a unit has this name
 	units["alpha"].BadTargetCategoryWSEC = "later"
 	r, err := CompileCategories(units)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantNames := []string{"all", "arm", "later", "none", "tank", "unknown"}
+	wantNames := []string{"all", "arm", "later", "none", "tank", "unknown", "zulu"}
 	gotNames := r.CategoryNames()
 	if len(gotNames) != len(wantNames) {
 		t.Fatalf("names = %v, want %v", gotNames, wantNames)
@@ -60,8 +60,8 @@ func TestCompileCategoriesRegistryAndMasks(t *testing.T) {
 	if !none.IsZero() {
 		t.Fatalf("none is an ordinary empty token in this fixture, got %#v", none.Words)
 	}
-	if !units["alpha"].BadTargetCategoryWPRIMask.Contains(3) || units["alpha"].BadTargetCategoryWPRIMask.Contains(1) {
-		t.Fatalf("direct target mask = %#v", units["alpha"].BadTargetCategoryWPRIMask.Words)
+	if !units["alpha"].BadTargetCategoryWPRIMask.IsZero() {
+		t.Fatalf("unit name gained category membership = %#v", units["alpha"].BadTargetCategoryWPRIMask.Words)
 	}
 	if !units["alpha"].BadTargetCategoryWSECMask.Contains(2) {
 		t.Fatalf("category target mask = %#v", units["alpha"].BadTargetCategoryWSECMask.Words)
@@ -122,5 +122,42 @@ func TestCatalogCategoryCloneAndDigest(t *testing.T) {
 	}
 	if clone.Hash != c.Hash || clone.Categories.SentinelMembership() != c.Categories.SentinelMembership() || clone.Units["unit"].DefinitionMask() != c.Units["unit"].DefinitionMask() {
 		t.Fatal("clone changed immutable category digest")
+	}
+}
+
+func TestFBITargetCategoryDoesNotPreferUnitName(t *testing.T) {
+	units := map[string]*UnitDef{
+		"":      categoryUnit("", ""),
+		"alpha": categoryUnit("alpha", "zulu"),
+		"zulu":  categoryUnit("zulu", "other"),
+	}
+	u := units["alpha"]
+	u.BadTargetCategoryWPRI = "Zulu"
+	u.BadTargetCategoryWSEC = "Zulu"
+	u.BadTargetCategoryWSPE = "Zulu"
+	u.NoChaseCategory = "Zulu"
+	r, err := CompileCategories(units)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mask := range []CategoryMask{u.BadTargetCategoryWPRIMask, u.BadTargetCategoryWSECMask, u.BadTargetCategoryWSPEMask, u.NoChaseCategoryMask} {
+		if !mask.Contains(u.UnitDefID) || mask.Contains(units["zulu"].UnitDefID) {
+			t.Fatal("FBI target field preferred a unit name over registry membership")
+		}
+	}
+	c := &Catalog{Units: units, Categories: r}
+	direct, ok := c.ResolveCategoryMask("zulu")
+	if !ok || !direct.Contains(units["zulu"].UnitDefID) || direct.Contains(u.UnitDefID) {
+		t.Fatal("general mask API lost its separate direct-unit precedence")
+	}
+
+	u.NoChaseCategory = ""
+	r, err = CompileCategories(units)
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty, exists := r.Lookup("")
+	if !exists || !empty.IsZero() || !u.NoChaseCategoryMask.IsZero() {
+		t.Fatal("empty FBI target did not retain the empty-name category entry")
 	}
 }

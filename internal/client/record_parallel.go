@@ -186,7 +186,7 @@ func (c *Client) recordUnitGeometry(cur *frame.Frame, win worldWindow) {
 				continue
 			}
 		}
-		if isCarried(*d.unit) || d.unit.Model == "" {
+		if isCarried(*d.unit) || (d.unit.Model == "" && c.modelForUnit(*d.unit) == nil) {
 			continue
 		}
 		jobs = append(jobs, d.index)

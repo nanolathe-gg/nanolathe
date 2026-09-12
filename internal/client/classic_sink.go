@@ -119,6 +119,10 @@ func (c *Client) emitFog(fg drawlist.Fog) {
 func (c *Client) emitSprite(sp drawlist.Sprite) {
 	sp.HasClip, sp.Clip = c.clipUISprite(sp.HasClip, sp.Clip)
 	if sp.Frame != nil && len(sp.Frame.Subframes) != 0 {
+		if sp.LightingKind == drawlist.SpriteLightingExplosion {
+			c.list.RecordLightSource(sp)
+			sp.LightingKind = drawlist.SpriteLightingNone
+		}
 		switch sp.Kind {
 		case drawlist.BlitLit:
 			if sp.Pal != nil {

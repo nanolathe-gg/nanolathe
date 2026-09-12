@@ -46,10 +46,11 @@ type imageScratch struct {
 }
 
 type polyScratch struct {
-	polys  []screenPoly
-	lanes  []int32
-	odd    []bool
-	corner int
+	polys   []screenPoly
+	lanes   []int32
+	odd     []bool
+	heights []float32
+	corner  int
 }
 
 // resizeScratch rewinds a borrowed slot's storage to exactly n elements,
@@ -125,8 +126,10 @@ func (c *Client) borrowPolys(faces, corners int) *polyScratch {
 	p.polys = resizeScratch(p.polys, faces)[:0]
 	p.lanes = resizeScratch(p.lanes, corners*(polyLanes+spanAttrs))
 	p.odd = resizeScratch(p.odd, corners)
+	p.heights = resizeScratch(p.heights, corners)
 	clear(p.lanes)
 	clear(p.odd)
+	clear(p.heights)
 	p.corner = 0
 	return p
 }
@@ -148,6 +151,7 @@ func (s *polyScratch) next(n int) *screenPoly {
 	p.x, p.y = buf[:n:n], buf[n:2*n:2*n]
 	p.x2, p.y2 = buf[2*n:3*n:3*n], buf[3*n:4*n:4*n]
 	p.oddHeight = s.odd[start:s.corner:s.corner]
+	p.heights = s.heights[start:s.corner:s.corner]
 	for k := 0; k < spanAttrs; k++ {
 		lo := (polyLanes + k) * n
 		p.attr[k] = buf[lo : lo+n : lo+n]
@@ -164,8 +168,11 @@ func (c *Client) cloneModelPolys(in []screenPoly) []screenPoly {
 		p := &in[i]
 		q := s.next(len(p.x))
 		x, y, x2, y2, odd, attr := q.x, q.y, q.x2, q.y2, q.oddHeight, q.attr
+		heights := q.heights
 		*q = *p
 		q.x, q.y, q.x2, q.y2, q.oddHeight, q.attr = x, y, x2, y2, odd, attr
+		q.heights = heights
+		copy(q.heights, p.heights)
 		copy(q.x, p.x)
 		copy(q.y, p.y)
 		copy(q.x2, p.x2)

@@ -40,9 +40,10 @@ type resourceClick struct {
 }
 
 type resourceBuildSite struct {
-	product *content.UnitDef
-	x, z    int32
-	deposit resourceRect
+	product    *content.UnitDef
+	x, z       int32
+	deposit    resourceRect
+	geothermal bool
 }
 
 func resourceToken(value, token string) bool {
@@ -64,15 +65,21 @@ func resourceSolar(u *content.UnitDef) bool {
 
 // Walk the complete authored menu, not just its currently displayed page.
 // Equal extraction rates retain menu order; fabricators are not extractors.
-func (b *battleSession) resourceProducts(builder string) (extractor, solar *content.UnitDef) {
+func (b *battleSession) resourceProducts(builder string) (extractor, solar, geothermal *content.UnitDef) {
 	menu := b.cat.BuildMenus[content.CanonicalKey(builder)]
 	if menu == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	for _, key := range menu.Buttons {
 		u, ok := b.cat.Unit(key)
 		if !ok || u == nil {
 			continue
+		}
+		if len(resourceGeoYard(u)) != 0 {
+			if geothermal == nil {
+				geothermal = u
+			}
+			continue // a vent-dependent product cannot be a ground shortcut
 		}
 		if u.BMCode == 0 && !u.Builder && u.ExtractsMetal > 0 && (extractor == nil || u.ExtractsMetal > extractor.ExtractsMetal) {
 			extractor = u
@@ -81,7 +88,7 @@ func (b *battleSession) resourceProducts(builder string) (extractor, solar *cont
 			solar = u
 		}
 	}
-	return extractor, solar
+	return extractor, solar, geothermal
 }
 
 func (b *battleSession) resourceSite(mx, my int32) (resourceBuildSite, bool) {
@@ -101,7 +108,7 @@ func (b *battleSession) resourceSite(mx, my int32) (resourceBuildSite, bool) {
 	if handle != 0 || pos == nil {
 		return resourceBuildSite{}, false
 	}
-	extractor, solar := b.resourceProducts(v.DefName)
+	extractor, solar, geothermal := b.resourceProducts(v.DefName)
 	product := solar
 	var deposit resourceRect
 	wx, wz := pos.X, pos.Z
@@ -112,6 +119,9 @@ func (b *battleSession) resourceSite(mx, my int32) (resourceBuildSite, bool) {
 			continue
 		}
 		fd := b.cat.Features[content.CanonicalKey(feature.DefName)]
+		if fd != nil && fd.Geothermal {
+			return resourceVentSite(geothermal, resourceRect{feature.CX, feature.CZ, fx, fz})
+		}
 		// Indestructible metal features seed the deposit field; reclaimable
 		// wreck metal does not [05 R-FEAT-01 §7][08 R-AI-03 §1].
 		if fd == nil || !fd.Indestructible || fd.Metal == 0 {
@@ -127,6 +137,11 @@ func (b *battleSession) resourceSite(mx, my int32) (resourceBuildSite, bool) {
 		deposit = resourceRect{feature.CX, feature.CZ, fx, fz}
 		wx, wz = world.PlacementCenter(feature.CX, feature.CZ, fx, fz)
 		break
+	}
+	if deposit.w == 0 && geothermal != nil {
+		if site, found := b.nearbyResourceVent(f, geothermal, wx, wz); found {
+			return site, true
+		}
 	}
 	if product == nil {
 		return resourceBuildSite{}, false

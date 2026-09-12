@@ -154,7 +154,12 @@ func (r *Renderer) Sprite(sp drawlist.Sprite) {
 		// tintedBlitAnchor: each opaque source texel resolves the destination to
 		// ALP[src*256 + dst]; anchored and destination-reading [03 R-COMP-01 §2].
 		clipX, clipY, clipW, clipH := r.spriteClip(sp.HasClip, sp.Clip)
-		r.drawTint(sp.Frame, int(sp.X), int(sp.Y), clipX, clipY, clipW, clipH)
+		if sp.LightingKind == drawlist.SpriteLightingSmoke && sp.Frame != nil && len(r.lighting.lights) > 0 {
+			near := r.lighting.near(float32(sp.X), float32(sp.Y), float32(max(sp.Frame.Width, sp.Frame.Height)))
+			r.drawTintLight(sp.Frame, int(sp.X), int(sp.Y), clipX, clipY, clipW, clipH, &near, sp.WorldHeight)
+		} else {
+			r.drawTint(sp.Frame, int(sp.X), int(sp.Y), clipX, clipY, clipW, clipH)
+		}
 		if sp.Emissive && sp.Frame != nil {
 			// Strip art (fire, explosion animation) is a light source for the glow
 			// layer at the half strength it is composited at (§19).

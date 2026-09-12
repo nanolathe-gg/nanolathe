@@ -75,6 +75,7 @@ func (r *Renderer) resetSources(release func(*ebiten.Image)) {
 	}
 	r.textureAtlas = modelTextureAtlas{}
 	r.modelPrep = modelPrepScratch{}
+	r.lighting = battleLighting{disabled: r.lighting.disabled}
 	r.modelDirect = modelDirectLane{keyShader: r.modelDirect.keyShader, colourShader: r.modelDirect.colourShader, shaderErr: r.modelDirect.shaderErr}
 	r.fog = fogPass{shader: r.fog.shader, shaderErr: r.fog.shaderErr, compiled: r.fog.compiled}
 	// Retained compiled runs and options also reference source images. Drop

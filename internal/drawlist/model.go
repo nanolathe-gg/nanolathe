@@ -20,6 +20,9 @@ type ModelVertex struct {
 	Key   int32
 	U, V  int32
 	Shade uint8
+	// Height is model-relative height in recording view-scale pixels. It is
+	// independent of Key and is unchanged by the doubled raster (§22.4).
+	Height float32
 }
 
 // ModelFace is one resolved model primitive. Texture is immutable after asset
@@ -30,6 +33,9 @@ type ModelFace struct {
 	Texture  *formats.GAFFrame
 	Color    uint8
 	Shaded   bool
+	// Normal is the outward unit normal in world X, world Z, height axes,
+	// used only by Enhanced surface lighting (DESIGN_GPU_RENDERER §22.4).
+	Normal [3]float32
 }
 
 // ModelFallbackReason says why modern mode omits a model subject. It is
@@ -215,6 +221,10 @@ type ModelGeometry struct {
 	AnchorX, AnchorY int32
 	Scale            int32
 	KeyPlane         bool
+	// WorldHeight is this packet's current absolute origin height in recording
+	// view-scale pixels. Retained corners carry relative heights; placement
+	// refreshes this value, including when the retained body does not rebuild.
+	WorldHeight float32
 	// Cache identifies the retained cached-lane raster this packet carries, or
 	// is zero when the packet is not reusable across frames (§13.12).
 	Cache ModelCacheKey

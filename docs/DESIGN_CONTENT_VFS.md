@@ -177,14 +177,26 @@ Accessors: `Unit`, `Weapon`, `WeaponByName`, `WeaponByID`, `WeaponLink`,
 
 `Catalog.UnitRecords()` returns a copied slice of all retained FBI definitions
 in 1-based ID order, including duplicate and empty names; sentinel zero is
-implicit. `Units` and `SortedUnitKeys` expose the first-match name index and
-its unique keys. `UnitDefByIndex` and `UnitIndexOf` preserve each record's
-identity; `UnitDefIndex` selects the first equal name. Compiled IDs stay fixed
+implicit. `Units` and `SortedUnitKeys` expose the runtime name lookup and
+its reachable unique keys. `UnitDefByIndex` and `UnitIndexOf` preserve each
+record's identity; `UnitDefIndex` follows the retained order's lower-bound
+lookup, selecting the first equal name when the final names remain sorted.
+Compiled IDs stay fixed
 until a battle-local restriction compacts and renumbers the clone. Map-only
 fixture catalogs retain their existing sorted-key fallback.
 
 Discovery preserves record slots through the retail compatibility gates and
 compaction, then uses the retail partition/insertion sort [02 R-CAT-01 §§4–5].
+`compileUnitDiscovery` fills only the first pass's fields. After sorting,
+`compileUnitSecondary` reads the resource selected by stored `UnitName` and
+uses the established selective overwrite contract. Missing secondary data
+leaves `DiscoveryOnly` state, which prevents category and weapon linking from
+initializing gameplay links while retaining its ID. Runtime names can change
+without a second sort; `firstUnitNames` projects the retail lower-bound lookup rather than repairing
+the final order. `DiscoveryProvenance` retains the admission source;
+`Provenance` and untyped source text follow a successful secondary read,
+except for discovery-only `ai_limit`. Empty resource identities remain valid
+path inputs, selecting `objects3d/.3do` and `scripts/.cob`.
 All category, weapon, movement, model, script, page and downloadable passes
 consume retained records. Download builder indices and restriction names
 still resolve only to the first matching record. Clone and hash include every
@@ -595,12 +607,11 @@ Host limits and compatibility boundaries are recorded under [I11]:
   retail would crash on — the sanctioned exception to [I11] — and must not
   reject anything in a stock install, which the whole-install format walk is
   there to prove.
-* **Text terminators and empty unit names.** The parser scans forward to the
-  next semicolon across newlines; reaching EOF without one is a fatal syntax
-  error `[02 R-MALF-01 §4]`. The compiler currently substitutes the filename
-  stem for an empty `unitname`. This is a recorded compatibility gap, not an
-  established retail fallback: the string accessor stores an empty name, and
-  the downstream empty-identity policy remains Unknown in doc 02 §5.
+* **Text terminators.** The parser scans forward to the next semicolon across
+  newlines; reaching EOF without one is a fatal syntax error
+  `[02 R-MALF-01 §4]`. Empty unit identity is preserved through discovery and
+  secondary resource selection as established in [02 R-CAT-01 §5]; there is
+  no filename-stem substitution.
 
 ## 6. Research map
 
@@ -649,15 +660,8 @@ Open questions are maintained at their code sites and in the owning research
 category's "Missing and unknown" list. A package-wide absence of markers is
 not a completion claim. Current examples include high-byte locale comparison
 in the VFS, TDF/GAF readers and content lookup, GAF nested/alternate raster
-consumers, and the secondary FBI re-open described below. These are distinct from the
-established contracts above.
+consumers. These are distinct from the established contracts above.
 
-* **Secondary FBI re-open** remains an implementation gap. Retail reopens
-  `units/<stored UnitName>.FBI` after sorting when that resource has nonzero
-  size [02 R-CAT-01 §5]. The current compiler reads the complete discovered
-  section once; record preservation does not implement the second parse or
-  its selective field replacement. The exact merge into the discovery record
-  must be represented before this path can claim parity.
 * **Host-specific enumeration order** remains an explicit deterministic
   substitute (SC3). The manifest identifies the winning provider.
 * **Excluded platform/session work** includes the CD-ROM discovery tier and

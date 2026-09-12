@@ -128,7 +128,7 @@ func CompileCategories(units map[string]*UnitDef) (*CategoryRegistry, error) {
 	return compileCategoryRecords(unitMapRecords(units), units)
 }
 
-func compileCategoryRecords(records []*UnitDef, units map[string]*UnitDef) (*CategoryRegistry, error) {
+func compileCategoryRecords(records []*UnitDef, _ map[string]*UnitDef) (*CategoryRegistry, error) {
 	r := &CategoryRegistry{byName: make(map[string]int)}
 	// UnitDefIndex is 1-based (zero is its null sentinel). Therefore ID 511 is
 	// the last usable definition ID in the 512-bit category domain [02 §5]; an
@@ -143,6 +143,12 @@ func compileCategoryRecords(records []*UnitDef, units map[string]*UnitDef) (*Cat
 		}
 		id := uint32(i + 1)
 		u.UnitDefID = id
+		// These links are written only by successful secondary parsing; an
+		// unparsed record still owns its index [02 R-CAT-01 §5].
+		if u.DiscoveryOnly {
+			u.Hash = HashDefinition(writeUnitCanonical(u))
+			continue
+		}
 		var ownMask CategoryMask
 		if err := ownMask.set(id); err != nil {
 			return nil, err
@@ -162,27 +168,26 @@ func compileCategoryRecords(records []*UnitDef, units map[string]*UnitDef) (*Cat
 		}
 	}
 
-	// Unknown target names are retained as empty registry rows, and can be
-	// populated by a later unit in the same link pass [R-P0-03].
+	// FBI target fields select registry entries directly, including empty
+	// names and names that also identify units. Later membership writes reach
+	// the shared retail bitsets [02 R-P0-03 §5].
 	for _, u := range records {
-		if u == nil {
+		if u == nil || u.DiscoveryOnly {
 			continue
 		}
 		for _, target := range []string{u.BadTargetCategoryWPRI, u.BadTargetCategoryWSEC, u.BadTargetCategoryWSPE, u.NoChaseCategory} {
-			if trimTDFSemantic(target) != "" && !hasUnit(units, target) {
-				r.ensure(target)
-			}
+			r.ensure(target)
 		}
 	}
 
 	for _, u := range records {
-		if u == nil {
+		if u == nil || u.DiscoveryOnly {
 			continue
 		}
-		u.BadTargetCategoryWPRIMask = r.resolveTarget(units, u.BadTargetCategoryWPRI)
-		u.BadTargetCategoryWSECMask = r.resolveTarget(units, u.BadTargetCategoryWSEC)
-		u.BadTargetCategoryWSPEMask = r.resolveTarget(units, u.BadTargetCategoryWSPE)
-		u.NoChaseCategoryMask = r.resolveTarget(units, u.NoChaseCategory)
+		u.BadTargetCategoryWPRIMask, _ = r.Lookup(u.BadTargetCategoryWPRI)
+		u.BadTargetCategoryWSECMask, _ = r.Lookup(u.BadTargetCategoryWSEC)
+		u.BadTargetCategoryWSPEMask, _ = r.Lookup(u.BadTargetCategoryWSPE)
+		u.NoChaseCategoryMask, _ = r.Lookup(u.NoChaseCategory)
 		// Linked fields are part of definition identity; refresh the per-unit
 		// digest after the masks and stable ID are known [02 §5] C12.
 		u.Hash = HashDefinition(writeUnitCanonical(u))
@@ -204,30 +209,6 @@ func (r *CategoryRegistry) ensure(name string) int {
 		r.byName[r.entries[i].Name] = i
 	}
 	return r.byName[ck]
-}
-
-func (r *CategoryRegistry) resolveTarget(units map[string]*UnitDef, name string) CategoryMask {
-	if u, ok := units[CanonicalKey(name)]; ok && u != nil {
-		var m CategoryMask
-		_ = m.set(u.UnitDefID)
-		return m
-	}
-	m, _ := r.Lookup(name)
-	return m
-}
-
-func hasUnit(units map[string]*UnitDef, name string) bool {
-	_, ok := units[CanonicalKey(name)]
-	return ok
-}
-
-func sortedUnitKeys(units map[string]*UnitDef) []string {
-	keys := make([]string, 0, len(units))
-	for k := range units {
-		keys = append(keys, CanonicalKey(k))
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 // canonicalUnitMap tolerates fixture maps whose keys differ in case from the

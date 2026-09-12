@@ -1,6 +1,7 @@
 package client
 
 import (
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
@@ -124,4 +125,25 @@ func TestNanolatheSprayPaintsOverTheUnitBeingBuilt(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Enhanced emission is admitted by the same coverage gate as the particle.
+func TestNanoLightingMetadataRequiresVisibleParticle(t *testing.T) {
+	c := &Client{width: 64, height: 64, indexed: make([]uint8, 64*64), cam: &camera.Camera{ViewW: 64, ViewH: 64}}
+	cur := &frame.Frame{Visibility: fullVisibility(), Strips: []frame.StripView{{Strip: 6, Family: frame.StripFamilyNano, Fill: 0xa3, X: px(20), Y: px(12), Z: px(20)}}}
+	c.drawStripBarrier(cur, 6)
+	count := 0
+	c.list.VisitNanoSources(func(f drawlist.Fill) {
+		count++
+		if f.WorldHeight != 12 || f.LightingScale != 1 {
+			t.Fatalf("particle height/scale lost: %+v", f)
+		}
+	})
+	if count != 1 {
+		t.Fatal("visible particle missing emission metadata")
+	}
+	c.list.Reset()
+	cur.Visibility = frame.VisibilityView{}
+	c.drawStripBarrier(cur, 6)
+	c.list.VisitNanoSources(func(drawlist.Fill) { t.Fatal("missing visibility emitted light") })
 }

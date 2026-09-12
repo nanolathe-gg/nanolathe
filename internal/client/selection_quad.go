@@ -119,7 +119,7 @@ func (c *Client) selectionQuadScreen(m *compiledmodel.Model, v frame.UnitView) (
 // resolved once [03 R-WATER-01 §1] rule 4. The caller places it immediately
 // before the unit's model present in the same depth slot (rule 5).
 func (c *Client) drawSelectionQuad(v frame.UnitView) {
-	if c == nil || v.Model == "" {
+	if c == nil {
 		return
 	}
 	m := c.modelForUnit(v)

@@ -386,7 +386,9 @@ excluded from presentation timing (§6). The diff tool is `tools/framediff`.
   shader over the world image: solid fills write the dark index, gray fills
   write `Gray[dst]`, patterned fills test the same `(x + y + parity) & 1` the
   byte writer tests, and fog GAF frames sample their frame `[03 §3.3]`
-  `[03 §4.3.3 R-RR16-A §1]`. The visible result per pixel is the byte writer's.
+  `[03 §4.3.3 R-RR16-A §1]`. The visible result per pixel is the byte writer's,
+  subject to Enhanced's approved colour arithmetic (§13). Composite fog uses
+  the ordered child path in §13.3 rather than a flattened atlas mask.
 * **C-G8 Expansion last, PAL only.** The final pass maps index to colour
   through `PALETTE.PAL` alone, forcing alpha opaque as the software expansion
   does. Nothing after it in the retail composite exists. Enhanced (§13) has no
@@ -1391,7 +1393,26 @@ produces colour on the slot page, and the commit copies it.
   fixed-function blend expresses, so the fog command stays a shader run over a
   copy of its region: luminance `floor((r+g+b)/3)` for the gray fills and gray
   GAF, PAL[dark] for the solid and checker fills, keyed copies for the black
-  family. That is one copy pass per frame, not one per phase.
+  family. Ordinary stock frames keep one copy pass per frame. If a selected
+  frame is composite, extends outside its atlas tile, or lies beyond the atlas's
+  frame range, the entire fog command uses an ordered fallback. It walks ops
+  and children in their original order and clips each leaf only to the target
+  [03 R-COMP-01 §2]. Gray/checker recursion applies the raw gate before each
+  parent or child and ignores alternate selectors. Black recursion selects ALP
+  for an alternate child and propagates tint through its descendants. Keyed and
+  tinted leaves use the existing sprite streams; gray/checker leaves use a
+  masked fog shader in the scheduler's snapshot stream. Overlapping gray leaves
+  therefore receive separate read copies even though modern desaturation is
+  idempotent. The fallback changes ordering representation, retaining this
+  section's approved colour arithmetic. Child anchors can reach before the cell
+  origin or outside the parent's dimensions without atlas clipping.
+
+  Authored tests lock repeated gray snapshot phases, nested black-child ALP
+  order, parent/child raw gates, transparent holes, and child extensions. The
+  existing opt-in fog device fixture checks actual pixels and ordinary versus
+  composite scroll crops at all three view scales. Setting
+  `NANOLATHE_FOG_COMPOSITE_CAPTURE` to an output PNG path saves its authored
+  composite scene for visual review.
 
 **The scheduler keeps its placement and loses its snapshots.** Critical-path
 placement (§11.5) still decides order among overlapping commands — the blends
@@ -4294,9 +4315,9 @@ defaults [02 "Settings"]. Off, no source appends and the resolve is a no-op.
 ### 19.6 Owed
 
 A human look at the window in motion, where the glow is interpolated with
-the sources. The nanolathe spray (plain points) and unit-mounted lights are
-not sources yet; the first needs a flag on the point batch, the second a
-material or piece-name signal the model lane does not carry. The two
+the sources. Nanolathe spray glow and local illumination are prototyped in
+§23.5. Unit-mounted lights still need a material or piece-name signal the
+model lane does not carry. The two
 magnified adds could be one shader pass sampling both octaves, and the half
 plane could go if Ebitengine's mipmapped shrink proves cheaper than a pass;
 neither was needed at the measured cost.
@@ -4673,8 +4694,8 @@ supersample leaves empty and classic with it blends with index 1.
 
 ### 22.4 Owed
 
-1. Lighting: with colour-space faces the shade factor can become a real
-   per-vertex Lambert plus the glow layer's sources as point lights.
+1. The first explosion/model/smoke lighting prototype is specified in §23.
+   Richer material response and per-pixel lighting remain future work.
 2. A carried child texel that the child's own reveal or clip erases stays a
    hole where retail shows the carrier through it, because the child's key
    reached the group's key plane; reproducing that needs the child composed
@@ -4685,3 +4706,224 @@ supersample leaves empty and classic with it blends with index 1.
    doubled lane has its native faces read only by the fallback and the
    bounds; the doubled corners of a direct projection are exact rather than
    native × 2 plus an offset, so the offset alone cannot replace them.
+
+## 23. Battle lighting prototype (Enhanced)
+
+### 23.1 Scope and inputs
+
+This is a user-authorized presentation design, not retail evidence. The first
+prototype adds coloured diffuse light to model faces and soft illumination to
+smoke around visible explosions and weapon impacts. It keeps the projection,
+existing shade, silhouette, composition key, fog, effect lifetime and simulation
+unchanged. Shadows from point lights, terrain relighting, material masks and
+reflections are later work. The local brainstorm is intentionally uncommitted.
+
+**Contract BL1 — sources.** Named art for explicit explosion, impact and water
+impact events contributes only while the primary animation is active and its
+frame resolves. Source metadata additionally requires PointVisible at the event
+position for the current viewing player; absent visibility fails closed. This
+extra gate changes light emission alone, not the original art draw. The
+calculated secondary flash and generic glow flag are not additional sources:
+counting both layers would double an explosion and the glow flag also marks
+smoke. Smoke-puff and vent-steam strip families are receivers; art colour does
+not identify their producer. Existing effect and strip composition remains
+[03 R-FX-01], [03 R-FX-02], with light applied beneath the existing fog boundary.
+
+**Contract BL2 — physical coordinates.** Model faces carry outward normals in
+world X, world Z, height axes. The producer computes the standard cross product
+from transformed vertices, then mirrors model Z to match the visual projection
+[03 §2.5]. Corners carry model-relative height in recording-scale pixels,
+independent of the wrapping composition key. Every packet refreshes its current
+absolute origin height, including retained, direct and attached subjects.
+Supersampling doubles raster coordinates only: physical height and normals stay
+unchanged. Adding half the absolute height to projected Y recovers unsheared Y
+for receiver-minus-source distances. The same final world transform applies to
+the lit subject and source, so lighting is evaluated in record coordinates.
+
+### 23.2 Bounded lighting and composition
+
+**Contract BL3 — artistic response.** Before model preparation, the executor
+borrows source metadata recorded once before composite art is decomposed into
+leaf blits. It caches each immutable art frame's emission colour:
+covered texels above maximum-channel brightness 0.45 receive squared weights
+((brightness − 0.45) / 0.55)². Their weighted mean RGB is scaled by the square
+root of mean weight across all covered texels. Thus dark trailing animation
+frames lose energy, and colour comes from the displayed palette. Palette changes
+clear the cache; source reset releases it. Frames below 0.015 peak emission are
+ignored. Composite frames are measured on a bounded 32×32 sampling grid,
+compositing their ordered leaves over black with the authored keyed/half-alpha
+selection. Overwritten bright leaves do not emit, and one composite consumes
+one light budget slot. This is an approximate intrinsic emission measurement,
+independent of the ground behind a translucent effect. These thresholds are presentation choices, not authored material data.
+
+The source radius is 1.4 times the larger frame dimension, clamped to 48–192
+world pixels at record scale, then extended by 50% (72–288 world pixels).
+This extends both model and smoke illumination without changing their gains
+or the light budgets. The point is lifted one quarter of the frame
+height above the event, with its ground position fixed, to represent the bright
+volume above an impact. At most 64 sources survive per frame, retaining the
+strongest with stable ties. Each subject chooses at most eight nearby sources
+using a conservative projected bound and distance-weighted source strength.
+Each face evaluates those sources at its physical centroid, with outward
+Lambert response and squared radial falloff (1 − distance² / radius²)², gain
+3.25 (30% stronger than the initial prototype). Back-facing faces receive zero;
+distance at or beyond the radius receives zero. Contributions sum and are
+capped at two per channel before storage.
+
+**Contract BL4 — existing passes.** A constant numeric RGB code carries the
+face's contribution through the otherwise unused fourth custom vertex lane in
+the atlas colour pass. This is three base-128 digits for [0,2] channel values,
+not a float bitcast. Its 21-bit maximum leaves device-float rounding
+headroom at channel carry boundaries. The native overflow fallback carries the
+same code in its unused third custom lane. The shader adds albedo times incident
+light to existing shaded colour and clamps to one. Zero contribution uses the
+previous colour expression exactly. Outline endpoints and shadow silhouettes
+receive no light; key, reveal and waterline processing retain their order.
+No new model pass, texture or per-frame uniform map is needed.
+
+Smoke retains gain 2.5 and uses the same nearby sources and radial falloff with
+a soft response of 0.8 independent of facing. Its four clipped corners carry RGB contributions
+through the existing tinted-sprite vertices; interpolation supplies the interior.
+The fragment adds (0.2 + 0.8 × source colour) times light to the smoke colour,
+clamps it, and preserves the original one-half premultiplied alpha. The source
+transparency mask, blend order and fog are unchanged. Smoke is never promoted to
+a light source. This approximates scattering without volumetric geometry.
+
+### 23.3 Verification and limits
+
+`SetBattleLighting` is an executor-level comparison control; Enhanced enables
+the prototype by default. It adds no simulation mode or saved setting.
+`BattleLights`, `LitModelFaces`, and `LitSmokeSprites` are frame diagnostics.
+
+The 50% radius extension was visually checked against the preceding 3.25-gain
+build in the matching 2× Great Divide battle (60 FPS, nearest-doubled art).
+Median submission time was 3.592 → 3.689 ms, p95 3.931 → 4.138 ms; median
+cadence was 16.694 → 16.775 ms. Median lit model faces rose from 1,089.5 to
+2,038.5. Scene metadata and all frame censuses matched. Classic's matching
+native capture remained pixel-identical. These are one pair of host timings,
+not GPU timing or a guarantee for every battle. Build, renderer vet and the
+existing GPU device fixtures passed. Captures and timing data are under
+`/private/tmp/nanolathe-lighting-{radius-before-modern,radius50-modern,radius50-classic}`.
+
+The synthetic tier verifies outward roof winding, record-scale heights across
+retention and supersampling, explicit source/family classification, missing or
+hidden visibility exclusion, directional falloff, common translation/scale,
+owned list replay and shader compilation. The existing opt-in real-device loop
+also checks lit versus back-facing model surfaces, lit versus untagged smoke,
+unchanged output after disabling the prototype, and can write comparison PNGs
+through `NANOLATHE_LIGHTING_SHOTS`. Run `tools/check`, `tools/check-retail`, and
+`NANOLATHE_GPU_DEVICE_TEST=1 go test ./internal/platform/gpurender` before landing.
+Use sequential matching classic/modern live battle benchmarks and inspect their
+census, captures and host timings; GPU duration is unavailable through this API.
+
+The face-centroid response is intentionally coarse and has no light occlusion
+between visible objects. Smoke uses flat sprite depth. Material-specific
+reflectance, per-pixel normals and additional emitter families remain outside
+this prototype. The source visibility gate prevents hidden events from lighting
+visible receivers; ordinary final fog still controls receiver presentation.
+
+### 23.4 Prototype outcome
+
+Reviewed on Apple M3 Pro / darwin-arm64 using the scene-version-4 Great Divide
+battle, seed 7, 1920×1080, factories enabled, 300 pre-ticks, 60 target draws/s,
+120 warmup draws and 180 measured draws, automatic detail art disabled. Baseline
+is `bca5042`; final executable is `9d79216`. Metadata and every frame's simulation
+census match within each pair, including feature/fire, movement, construction
+and camera state. The classic capture is byte-identical. Modern changes 57,818
+pixels at native zoom and 87,923 at 2×; both before/after views were inspected.
+
+| View | Submit median / p95 / max, ms (before → after) | Cadence median, ms | Allocation MB/frame |
+|---|---|---|---|
+| Modern native | 3.319 / 3.752 / 4.309 → 3.692 / 4.161 / 4.585 | 16.681 → 16.786 | 0.817 → 0.868 |
+| Classic native | 0.461 / 0.639 / 0.767 → 0.461 / 0.644 / 0.730 | 17.156 → 17.189 | 1.163 → 1.166 |
+| Modern 2× | 3.163 / 3.384 / 3.677 → 3.528 / 3.809 / 4.153 | 16.673 → 16.696 | 0.996 → 1.005 |
+
+Modern native Record p95 is 2.946 → 3.122 ms (max 3.181 → 6.931); classic
+Record median/p95/max is 12.144/16.244/23.400 → 12.624/15.952/18.412 ms.
+These short samples show bounded added submission work, not GPU execution time
+or a performance improvement. Native frames contain 63–64 selected sources,
+723–1,316 illuminated model faces and 173–250 illuminated smoke sprites;
+the 2× view contains 704–1,317 illuminated faces and 87–176 illuminated smoke
+sprites. Artifacts are outside the repository in
+`/private/tmp/nanolathe-lighting-{before-modern,final-modern,before-classic,final-classic,detail-before,detail-after}`.
+
+`tools/check`, full retail-tagged vet/tests with installed assets, and the
+complete real-device fixture loop pass. `tools/check-retail` stops at its lint
+stage on four existing unused content helpers (`buildModelCatalog`,
+`requiredModelPaths`, `fillBuildPages`, `sortedUnitKeys`); `tools/lint` on
+unchanged main reproduces the same failures. Retail tests were therefore run
+separately and passed. The lighting code introduces no new lint finding.
+
+### 23.5 Nanolathe glow and local illumination prototype
+
+User-authorized Enhanced presentation design; these are artistic choices, not
+retail evidence. The source remains the committed strip-6 particles of
+[03 §5.5], with their established two-pixel marks, palette ramp, motion,
+coverage gate and draw order. The nanolathe event itself adds no synthetic
+beam or additional particle lifetime.
+
+**NL1 — source admission.** Only fills explicitly tagged by the nano strip
+family emit. The tag is attached after the existing PointVisible gate and
+carries absolute particle height, recording scale and recording viewport.
+Ordinary fills and impact sprinkles never emit, even with the same palette
+colour. A particle whose core misses the recorded viewport contributes neither
+bloom nor lighting. The viewport travels with the fill because source gathering
+precedes world-region replay; fractional zoom can record beyond the device's
+pixel extent. Fill ownership, clone and reset retain or release the metadata
+with its pixels.
+
+**NL2 — spray glow.** The existing glow source pass receives a palette-coloured
+quad extending two world pixels beyond each side of the particle core, at gain
+0.45. The existing two blur octaves resolve it beneath fog and interface.
+The live world transform applies once, just as for the particle. No shader,
+render target or extra blur pass is added. The existing glow switch controls it.
+
+**NL3 — local lighting.** Before model preparation, visible particles join the
+nearest existing cluster within 24 world pixels in unsheared physical space.
+Clusters follow the arithmetic mean of their particles' positions, with no
+screen-grid snapping. Each particle adds 0.06 times its displayed palette RGB;
+the completed cluster is uniformly scaled down if its peak exceeds 0.7.
+Its radius is 80 world pixels. These parameters are presentation tuning.
+At most 64 clusters occupy fixed scratch storage; later particles may join an
+existing cluster but cannot open a 65th one. Clusters then compete with
+explosions for the existing 64-light budget by peak energy and stable ties.
+Subject selection, outward face response, smoke scattering and radial falloff
+are the existing BL3–BL4 path. Dense overlapping clusters may add together;
+there is no per-builder brightness normalization. All source state is rebuilt
+from the current recorded particles, so energy varies with the looping palette
+shimmer and disappears when those particles expire. The battle-lighting comparison
+switch disables both explosion and nano lighting; glow remains independent.
+
+The same limitations as §23.3 apply: face-centroid lighting, no occlusion
+between models and no terrain relighting. Particle grouping is bounded and
+record-order dependent, so overloaded scenes may drop distant construction
+sources. No new simulation behavior, RNG calls, asset requirements or saved
+settings are introduced.
+
+### 23.6 Nanolathe prototype verification
+
+The synthetic and real-device fixtures check visibility admission, palette
+classification, physical height and scale, clustering, recorded-viewport
+clipping, clone/reset, green illumination on a facing model surface, an unlit
+back face, a halo beside the particle cores, and restoration when the effects
+are disabled. Independent read-only review found no implementation issues;
+the description was corrected to call the looping particle ramp a shimmer.
+
+Matching scene-version-4 Great Divide runs used seed 7, 1920×1080, native zoom,
+60 target draws/s, 300 pre-ticks, 120 warmup draws and 180 measured draws,
+with factories enabled and auto-remaster disabled. Every frame's census and
+all scene metadata matched within each before/after renderer pair. Features,
+fire and active factory construction were present; both captures were visually
+inspected. The classic capture is byte-identical. Modern adds green light to
+the factory bays and nearby surfaces while keeping the existing particle cores.
+
+| Executor | Submit median / p95, ms (before → after) | Cadence median / p95, ms (before → after) |
+|---|---|---|
+| Modern | 3.744 / 4.073 → 3.508 / 3.808 | 16.664 / 17.017 → 16.661 / 17.549 |
+| Classic | 0.458 / 0.643 → 0.475 / 0.591 | 17.204 / 19.669 → 17.210 / 20.917 |
+
+This single pair shows no measurable submission regression; the lower modern
+submission time is host variation, not an optimization claim. Device GPU time
+is unavailable. The source budget stays at 64 total; the final modern frame
+adds 254 glow quads and lights 2,169 model faces versus 1,929 before.
+Artifacts are in `/private/tmp/nanolathe-nano-{before,after}-{modern,classic}`.

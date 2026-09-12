@@ -5,6 +5,8 @@ package client
 // [03 R-REN-03A].
 
 import (
+	"math"
+
 	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
@@ -280,6 +282,9 @@ func (c *Client) collectDrawPolysLaneProjected(draw *presentationrender.UnitDraw
 			}
 			poly := scratch.next(n)
 			poly.color, poly.frame = color, texFrame
+			if c.recordModelGeometry {
+				poly.normal = modelLightingNormal(piece.WorldVertices, pr.VertexIndices)
+			}
 			// The live-piece invocation is the separate unshaded renderer entry.
 			// A BMcode=0 body may have prepared SHD rows for its cached half, but
 			// its DontCache pieces still bypass SHD here [R-RND-02A][03 R-REN-03A §4].
@@ -300,6 +305,9 @@ func (c *Client) collectDrawPolysLaneProjected(draw *presentationrender.UnitDraw
 			}
 			for corner, vi := range pr.VertexIndices {
 				v := piece.WorldVertices[vi]
+				if c.recordModelGeometry {
+					poly.heights[corner] = float32(v[1].Sub(draw.WorldPos[1]).Raw()) / 65536 * float32(c.modelScale().Float())
+				}
 				// Local cached projection floors model-relative coordinates before
 				// placement. Direct live projection adds the world offset first;
 				// the two differ by a pixel for fractional coordinates
@@ -340,6 +348,28 @@ func (c *Client) collectDrawPolysLaneProjected(draw *presentationrender.UnitDraw
 		}
 	}
 	return scratch.polys
+}
+
+// modelLightingNormal supplies an outward geometric normal for Enhanced
+// lighting, independently of retail's SHD row normal convention. Model Z is
+// mirrored at projection [03 §2.5][03 R-RAST-01 §2]; the returned axes are
+// world X, world Z, height. Degenerate rings receive no directional light.
+func modelLightingNormal(vertices [][3]numeric.Fixed, indices []uint16) [3]float32 {
+	if len(indices) < 3 {
+		return [3]float32{}
+	}
+	a := vertices[indices[0]]
+	for i := 1; i+1 < len(indices); i++ {
+		b, c := vertices[indices[i]], vertices[indices[i+1]]
+		ax, ay, az := float64(b[0]-a[0]), float64(b[1]-a[1]), float64(b[2]-a[2])
+		bx, by, bz := float64(c[0]-a[0]), float64(c[1]-a[1]), float64(c[2]-a[2])
+		nx, ny, nz := ay*bz-az*by, az*bx-ax*bz, ax*by-ay*bx
+		length := math.Sqrt(nx*nx + ny*ny + nz*nz)
+		if length != 0 {
+			return [3]float32{float32(nx / length), float32(-nz / length), float32(ny / length)}
+		}
+	}
+	return [3]float32{}
 }
 
 // modelDirectVertex projects a live piece straight into the framebuffer. The

@@ -33,6 +33,9 @@ func unitMapRecords(units map[string]*UnitDef) []*UnitDef {
 	return records
 }
 
+// firstUnitNames projects retail's runtime lookup onto the final names. A
+// secondary parse may rename a record after sorting, so a present name can be
+// unreachable by the unchanged lower-bound search [02 R-CAT-01 §5].
 func firstUnitNames(records []*UnitDef) map[string]*UnitDef {
 	units := make(map[string]*UnitDef, len(records))
 	for _, u := range records {
@@ -40,8 +43,19 @@ func firstUnitNames(records []*UnitDef) map[string]*UnitDef {
 			continue
 		}
 		key := CanonicalKey(u.UnitName)
-		if _, exists := units[key]; !exists {
-			units[key] = u
+		start, count := 0, len(records)
+		for count > 0 {
+			half := count / 2
+			mid := start + half
+			if asciiFoldContent(records[mid].UnitName) < asciiFoldContent(u.UnitName) {
+				start = mid + 1
+				count -= half + 1
+			} else {
+				count = half
+			}
+		}
+		if start < len(records) && asciiFoldContent(records[start].UnitName) == asciiFoldContent(u.UnitName) {
+			units[key] = records[start]
 		}
 	}
 	return units

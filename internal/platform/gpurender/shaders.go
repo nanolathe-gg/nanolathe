@@ -236,7 +236,7 @@ func scene2DShaderSource() string {
 	return `//kage:unit pixels
 
 package main
-` + modelQuadMapperSource + `
+` + modelQuadMapperSource + battleLightShaderSource + `
 
 const palRow = ` + fmt.Sprint(tableRowPAL) + `.0
 
@@ -326,7 +326,7 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 		if idx == 1.0 {
 			return vec4(0.0)
 		}
-		return vec4(palAt(idx)*color.r, 1.0)
+		return vec4(battleLit(palAt(idx), color.r, custom.z), 1.0)
 	} else if op == ` + fmt.Sprint(sceneOpModelDirectCommit) + ` {
 		// The direct lane's commit: srcPos interpolates the 2× atlas texel of
 		// the pixel, one texel into its block; floor back to the block and
@@ -516,7 +516,12 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 	// The ALP families' premultiplied half-colour fragment: source-over adds the
 	// destination's own half, which is floor((src + dst)/2) per channel up to the
 	// device's rounding [03 §4.3.4](§13.2 ALP row).
-	return vec4(palAt(idx)*0.5, 0.5)
+	rgb := palAt(idx)
+ if custom.x > 0.5 {
+  // Smoke receives soft light at unchanged coverage, never additive opacity.
+  rgb = min(rgb + (vec3(0.2)+rgb*0.8)*color.rgb, vec3(1.0))
+ }
+ return vec4(rgb*0.5, 0.5)
 }
 `
 }

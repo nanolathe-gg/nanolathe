@@ -423,11 +423,7 @@ func (p *skirmishPreflight) unit(kind string, u *UnitDef, required bool) {
 	if u == nil {
 		return
 	}
-	if u.ObjectName == "" {
-		p.fatal(kind+".3do", "", u.CanonicalKey, "unit has no objectname")
-	} else {
-		p.modelAsset(kind+".3do", u.ObjectName, required)
-	}
+	p.modelAsset(kind+".3do", requiredUnitModelPath(u.ObjectName), required)
 	if u.MovementClass != "" {
 		if _, ok := p.catalog.Movement[CanonicalKey(u.MovementClass)]; !ok {
 			p.diag(SkirmishDiagnostic{Code: "missing-definition", Fatal: required, Kind: kind + ".movement", Entry: u.MovementClass, Message: fmt.Sprintf("movement class is unavailable: catalog key %s", CanonicalKey(u.MovementClass))})
@@ -489,7 +485,7 @@ func (p *skirmishPreflight) modelAsset(kind, name string, required bool) {
 }
 
 func (p *skirmishPreflight) script(kind string, u *UnitDef, required bool) {
-	path := "scripts/" + CanonicalKey(u.UnitName) + ".cob"
+	path := vfs.ResourcePath("scripts", CanonicalKey(u.UnitName), "cob")
 	program, found, err := cob.LoadFromFS(p.fs, u.UnitName)
 	if err != nil {
 		p.diag(SkirmishDiagnostic{Code: "malformed-cob", Fatal: required, Kind: kind + ".cob", Logical: path, Message: fmt.Sprintf("cannot parse COB: %v", err)})

@@ -143,6 +143,10 @@ func (b *battleSession) spaceResourceBuild(site resourceBuildSite, builder pool.
 		return site, world.PlacementResult{}, false
 	}
 	fx, fz := footprintCellsForCatalog(b.cat, site.product)
+	var geoYard []world.YardCell
+	if site.geothermal {
+		geoYard = resourceGeoYard(site.product)
+	}
 	origin := resourceRect{site.x, site.z, fx, fz}
 	clear := func(r resourceRect) bool {
 		for _, q := range reserved {
@@ -159,6 +163,9 @@ func (b *battleSession) spaceResourceBuild(site resourceBuildSite, builder pool.
 	for _, p := range candidates {
 		r := resourceRect{p.x, p.z, fx, fz}
 		if !clear(r) || (site.deposit.w > 0 && !r.overlaps(site.deposit)) {
+			continue
+		}
+		if site.geothermal && !resourceCoversVent(r, site.deposit, geoYard) {
 			continue
 		}
 		result, err := b.checkProductPlacement(p.x, p.z, site.product, fx, fz, uint16(builder))

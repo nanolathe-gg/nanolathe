@@ -26,6 +26,8 @@ type ModelStats struct {
 	// GlowQuads is the emissive quads the Enhanced glow layer batched this
 	// frame and GlowPasses the device passes its resolve spent (§19).
 	GlowQuads, GlowPasses int
+	// BattleLights and LitModelFaces describe the bounded Enhanced prototype.
+	BattleLights, LitModelFaces, LitSmokeSprites int
 	// The model lane's accounting (§22): subjects and shadows placed on the
 	// atlas, faces appended and rings culled, packets the atlas could not hold
 	// (which took the fallback), the atlas passes (two a page), the atlas

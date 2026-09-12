@@ -46,6 +46,16 @@ const (
 	BlitFeatureShadow
 )
 
+// SpriteLightingKind identifies actual effect producers for Enhanced surface
+// lighting. It does not alter the sprite's existing blit or glow (§19, §22.4).
+type SpriteLightingKind uint8
+
+const (
+	SpriteLightingNone SpriteLightingKind = iota
+	SpriteLightingExplosion
+	SpriteLightingSmoke
+)
+
 // Sprite records one GAF-frame blit (docs/DESIGN_GPU_RENDERER.md §2.1). The
 // frame reference is immutable after load; every carried byte is physical
 // [C-G2].
@@ -94,7 +104,12 @@ type Sprite struct {
 	// Enhanced glow layer: effect, projectile and strip art
 	// (docs/DESIGN_GPU_RENDERER.md §19). It changes nothing about how the sprite
 	// itself is written; the classic executor and every parity fixture ignore it.
-	Emissive bool
+	Emissive     bool
+	LightingKind SpriteLightingKind
+	// WorldHeight is absolute height in recording view-scale pixels;
+	// LightingScale is recording pixels per world pixel. Neither includes
+	// supersampling or a subsequent executor world transform.
+	WorldHeight, LightingScale float32
 	// Pal is the palette a BlitLit sprite resolves its LHT row against; nil for
 	// every other kind (WU-1.8). Carrying it on the record makes the lit glyph
 	// blit self-contained under deferred replay: the classic sink reads Pal here
@@ -167,6 +182,11 @@ const (
 // Fill records one indexed rectangle (docs/DESIGN_GPU_RENDERER.md §2.1). Index
 // is a physical palette byte [C-G2].
 type Fill struct {
+	// Nano marks a visibility-admitted construction particle for Enhanced glow
+	// and local lighting (GPU design §23.5). Classic ignores this metadata.
+	Nano bool
+	// WorldHeight and LightingScale use record pixels, as on Sprite.
+	WorldHeight, LightingScale float32
 	// Rect is the destination rectangle in screen pixels.
 	Rect Rect
 	// Index is the physical fill/edge palette byte [C-G2].
@@ -182,7 +202,8 @@ type Fill struct {
 	// level the executor resolves to a table row exactly as the byte writer did
 	// [03 §4.3.1][03 R-COMP-02 §5]. Other styles ignore it (its zero value).
 	Level int32
-	// Clip is the inclusive clip rectangle used only when Style is
+	// Clip also carries the recorded viewport for Nano lighting preparation.
+	// Otherwise it is the inclusive clip rectangle used only when Style is
 	// FillFrameInclusive: drawIndexedFrameInclusive clips each edge against it
 	// independently [R-SEL-02A]. Like Rect it is carried in extent form, so the
 	// inclusive clip bounds are recovered as [X, X+W-1] x [Y, Y+H-1]. Other
@@ -513,22 +534,23 @@ type tag struct {
 // commands across families in exact record order (C-G3) while Reset reuses
 // backing arrays. Capacity grows when the recorded workload grows.
 type List struct {
-	order   []tag
-	terrain []Terrain
-	sprite  []Sprite
-	glyphs  []Glyphs
-	fill    []Fill
-	line    []Line
-	points  []Points
-	model   []Model
-	fog     []Fog
-	trails  []Trails
-	surface []Surface
-	cursor  []Cursor
-	world   []WorldSpace
-	markers []Markers
-	flash   []Flash
-	halo    []Halo
+	order        []tag
+	terrain      []Terrain
+	sprite       []Sprite
+	lightSources []Sprite
+	glyphs       []Glyphs
+	fill         []Fill
+	line         []Line
+	points       []Points
+	model        []Model
+	fog          []Fog
+	trails       []Trails
+	surface      []Surface
+	cursor       []Cursor
+	world        []WorldSpace
+	markers      []Markers
+	flash        []Flash
+	halo         []Halo
 
 	classicImages    []*ClassicModelImage
 	classicImageNext int
@@ -551,6 +573,9 @@ func (l *List) RecordTerrain(c Terrain) {
 
 // RecordSprite appends one sprite command in record order.
 func (l *List) RecordSprite(c Sprite) {
+	if c.LightingKind == SpriteLightingExplosion {
+		l.RecordLightSource(c)
+	}
 	l.order = append(l.order, tag{familySprite, len(l.sprite)})
 	l.sprite = append(l.sprite, c)
 }
@@ -565,6 +590,16 @@ func (l *List) RecordGlyphs(c Glyphs) {
 func (l *List) RecordFill(c Fill) {
 	l.order = append(l.order, tag{familyFill, len(l.fill)})
 	l.fill = append(l.fill, c)
+}
+
+// VisitNanoSources borrows the admitted particle fills before model preparation.
+// Metadata travels with the fill through list cloning and reset.
+func (l *List) VisitNanoSources(visit func(Fill)) {
+	for _, f := range l.fill {
+		if f.Nano && f.Style == FillSolid {
+			visit(f)
+		}
+	}
 }
 
 // RecordLine appends one line command in record order.
@@ -604,6 +639,25 @@ func (l *List) ModelCommands() []Model {
 func (l *List) VisitModels(visit func(Model)) {
 	for _, m := range l.model {
 		visit(m)
+	}
+}
+
+// RecordLightSource retains one named-art emitter before composite leaves are
+// expanded. It is metadata only, ignored by every replay sink (GPU design §23).
+func (l *List) RecordLightSource(s Sprite) { l.lightSources = append(l.lightSources, s) }
+
+// VisitLightSources borrows complete emitter art, once per recorded event.
+func (l *List) VisitLightSources(visit func(Sprite)) {
+	for _, s := range l.lightSources {
+		visit(s)
+	}
+}
+
+// VisitSprites borrows commands for synchronous read-only preparation. The
+// visitor must not mutate frames or retain them beyond the list's lifetime.
+func (l *List) VisitSprites(visit func(Sprite)) {
+	for _, s := range l.sprite {
+		visit(s)
 	}
 }
 
@@ -664,6 +718,7 @@ func (l *List) Reset() {
 	l.order = l.order[:0]
 	l.terrain = l.terrain[:0]
 	l.sprite = l.sprite[:0]
+	l.lightSources = l.lightSources[:0]
 	l.glyphs = l.glyphs[:0]
 	l.fill = l.fill[:0]
 	l.line = l.line[:0]
@@ -757,6 +812,7 @@ func (l *List) Clone() List {
 		}
 	}
 	c.sprite = append([]Sprite(nil), l.sprite...)
+	c.lightSources = append([]Sprite(nil), l.lightSources...)
 	c.glyphs = append([]Glyphs(nil), l.glyphs...)
 	c.fill = append([]Fill(nil), l.fill...)
 	c.line = append([]Line(nil), l.line...)

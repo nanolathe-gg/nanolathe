@@ -300,6 +300,14 @@ removes its shading entirely. See
 | `ShootMe` | `1` = the definition may be picked by another player's autonomous target search (dragon's teeth author 0). Parsed into word A bit 15 with a default of **0**, and read only by the shared target search, where it is one of three disjuncts — a computer-controlled shooter or a session option bit admits a candidate without it [04 R-SPEC-01 §5]. |
 | `ImmuneToParalyzer` | EMP immunity |
 
+**Established — category references:** the three prefixed bad-target fields
+and `NoChaseCategory` resolve an ordinary category-registry name. A matching
+unit name does not substitute that unit's identity mask; only authored category
+membership populates the mask. Missing fields select `none`, while explicit
+empty values select the ordinary empty-name registry entry. Later definitions
+can contribute membership to an earlier field's selected category
+[02 R-P0-03 §5].
+
 ### Sensors and stealth
 
 | Key | Meaning |
@@ -347,12 +355,21 @@ UI, outside the current single-player scope. Unknown source-field retention
 must not imply that the engine acts on those values.
 
 The catalog retains every compatible record in retail sort order, including
-duplicate and empty names, and uses a first-equal name index. Construction,
+duplicate and empty names, and preserves the runtime name lookup. Construction,
 model resources, cloning and category/profile linking retain record IDs.
-Remaining implementation limits are the post-sort secondary FBI reopen and
-selective overwrite pass, empty-name model/script resource handling, and the
-AI strategic planner's name-based candidate/count tables. They are separate
-from the established duplicate-retention contract [02 R-CAT-01 §5].
+The post-sort secondary FBI pass uses the stored name, preserving only the
+established discovery-only fields (`side`, `ai_weight`, `ai_limit`, `wacky`
+and catalog state). A missing, empty, unreadable or sectionless second file
+keeps discovery-only values; it does not initialize gameplay defaults. A
+successful second parse replaces other runtime fields even when keys are
+absent. A changed `UnitName` does not trigger another sort; the name index
+projects the unchanged lower-bound lookup, including its misses if the final
+names no longer sort [02 R-CAT-01 §5]. Empty model/script identities use
+`objects3d/.3do` and `scripts/.cob`. FBI, model and script resources replace
+the last-period suffix of the assembled path before appending the requested
+extension; the suffix scan does not stop at a directory separator. The AI
+strategic planner's name-based candidate/count tables remain separate from
+this loader and record-identity contract.
 
 **Established — catalog admission:** loose FBI winners are silently skipped
 before unit compilation `[02 R-CAT-01 §4]` / `docs/SPEC_CONFLICTS.md` SC24.

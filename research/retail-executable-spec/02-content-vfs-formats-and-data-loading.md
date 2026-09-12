@@ -1268,11 +1268,63 @@ model name still selects that model, while an empty one probes
 Compatible duplicate names remain separate sorted records, including empty
 names. Name lookup returns the first equal record in the sorted non-sentinel
 range; equality does not establish a stable order among the duplicates.
-Nanolathe retains the full record table and exposes the first equal record
-through its name index. Index-based construction, resource linking and cloning
-must preserve later equal records `[fmt fbi]`. Its compiler still needs the
-post-sort secondary FBI reopen and selective overwrite pass; preserving the
-record table does not establish that loader parity.
+Nanolathe retains the full record table and projects the runtime lookup
+(described below) into its name index. Index-based construction, resource
+linking and cloning preserve later equal records `[fmt fbi]`.
+
+**Established — secondary parse write set and failures.** Discovery fills
+only the fields listed in [R-CAT-01 §4], leaving gameplay fields at their
+allocation zeros. After compaction and sorting, each retained record receives
+its index and selects one FBI resource using its stored `unitname`: assemble
+`units/<name>`, strip the suffix beginning with the last period, if any, and
+append `.FBI`. The suffix scan crosses directory separators: a stored name
+`folder.old/unit` selects `units/folder.FBI`, while `unit.old` selects
+`units/unit.FBI`. Empty names select `units/.FBI`. This never falls back to
+the discovery filename and never follows a renamed identity with another
+FBI read during that pass. The same helper selects model and script files:
+use `objects3d` plus the newly stored `objectname` (at most 31 bytes), or
+`scripts` plus the newly stored `unitname`, strip the last-period suffix from
+the assembled path, then append `.3DO` or `.COB`, respectively.
+
+A successful secondary `UNITINFO` parse writes the ordinary "Unit record"
+fields, with this precise division:
+
+| Fields | Secondary action |
+|---|---|
+| `unitname`, language-selected `name`, `objectname`, `buildcostenergy`, `buildcostmetal`, `norestrict` | Overwrite discovery values with second-source reads and normal absent-key defaults. Missing `unitname` or `name` clears it; absent `objectname` copies the newly read `unitname`, while explicit empty remains empty. The language trial uses empty defaults; a present empty localized name suppresses the base-name fallback. |
+| `side`, `ai_weight`, `ai_limit`, `wacky` | Retain the discovery values. The second parser does not read these keys. In particular, retaining `wacky` does not imply retaining `norestrict`. |
+| Description; mission and category strings; movement, geometry, economy, construction, combat, sensor and other capability/posture fields; weapon, corpse, sound and movement links | Read from the secondary section with the existing "Unit record" conversions and defaults. Missing keys do not inherit discovery-file text. Chained defaults use values just read from this secondary section. |
+| Admission state, file/weapon checksums and assigned unit index | Preserve discovery/catalog state; no version, copyright or archive-provider admission gate is repeated. |
+
+A missing or zero-sized resource skips the second parser. Failure to open or
+a failed read also returns without changing the record. A nonempty parsed
+file without `UNITINFO` likewise performs no writes. Thus these cases retain
+**discovery-only state**, rather than a full unit compiled with absent-key
+defaults: for example standing orders, bank scale, damage modifier, health
+and footprint remain zero. Category membership (including `ALL`) and the
+weapon links are also written only on a successful secondary parse; an
+unparsed retained record still owns its assigned index but has no such
+links. A malformed TDF syntax still follows the generic
+fatal parser path. **Unknown:** bytes seen after a nonnegative short read
+that leaves part of the allocated input buffer unwritten; that run-specific
+storage cannot be reconstructed from the file bytes. Nanolathe parses only
+bytes actually returned by its bounded reader and does not synthesize the
+unwritten tail.
+
+**Established — name lookup after secondary renaming.** The secondary
+parser can change `unitname`, but the compiler neither sorts again nor
+changes the assigned indices. The runtime name lookup still executes its
+lower-bound search over this final order: start at the first non-sentinel
+record with a count covering the whole non-sentinel range; while count is
+positive take `half = floor(count / 2)` and inspect `start + half`. When
+that stored name compares strictly less than the query, move start just past
+it and subtract `half + 1` from count; otherwise replace count with half.
+At termination return the record's index only if start has not reached the
+end and its stored name equals the query; otherwise return sentinel zero.
+Comparisons are case-insensitive. With unchanged sorted names this selects
+the first equal record. With final order `z, b, c`, it cannot find either
+`z` or `b`, although those records remain accessible by index. Nanolathe's
+name index preserves those misses and never silently repairs the ordering.
 
 **`YardMap` compilation (Established; complements `[05 R-ECO-01]`).** For a
 unit whose `bmcode` is 0 (a structure), a `FootprintX × FootprintZ` byte map
@@ -1967,11 +2019,28 @@ first pass.
 
 #### Related mask lookup [R-P0-03 §5]
 
-The mask helper first resolves a name against the unit-name index. If the name
-is a unit name, it sets that one unit ID bit; otherwise it ORs the whole
-category bitset into the output mask. This preserves the distinction between a
-direct unit target and a category target and further rules out a
-token-to-single-bit model [06 §3.1].
+**Established — separate lookup consumers.** The general mask helper first
+resolves a name against the unit-name index. If the name is a unit name, it
+sets that one unit ID bit; otherwise it ORs the whole category bitset into
+the output mask. This preserves the distinction between a direct unit target
+and a category target [06 §3.1].
+
+The FBI parser does **not** use that general helper for
+`wpri_badTargetCategory`, `wsec_badTargetCategory`, `wspe_badTargetCategory`
+or `noChaseCategory`. Each field directly looks up or creates one registry
+entry and retains its shared membership bitset. A matching unit name has no
+special precedence. For example, a `zulu` unit without category `zulu` does
+not belong to an FBI target mask named `zulu`; a different unit authoring
+category `zulu` does. An explicitly empty target also selects an ordinary
+empty-name registry entry, rather than an empty-name unit definition.
+
+The FBI target pointers are installed during each successful secondary parse,
+before that record contributes its category membership. Later records can
+populate the same shared bitsets, and every earlier pointer sees those added
+bits. Copying the completed registry membership after all secondary parses
+therefore preserves the result: unit renaming cannot alter these category-only
+lookups. The general helper's direct-unit precedence does not apply to these
+four FBI fields.
 
 #### Algorithm and ordering contract [R-P0-03 §6]
 
@@ -4279,6 +4348,9 @@ Unit-limit admission is established by [05 R-SHARE-01 §§7–10]; loader-side
 questions do not supersede those consumer contracts.
 
 
+* Bytes consumed after a successful short secondary-FBI read leaves temporary
+  input storage unwritten · [R-CAT-01 §5] · run-specific storage, not a
+  portable authored default; Nanolathe parses the returned bounded bytes.
 * Optional 3DO auxiliary-reference targets and COB trailing-record meanings ·
   §7 "Model archive (3DO)" / "Compiled script archive (COB)" · find authored
   nonzero references with identifiable target data or a traced consuming
