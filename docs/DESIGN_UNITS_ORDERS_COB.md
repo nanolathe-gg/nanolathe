@@ -342,10 +342,10 @@ classify a missing program, a piece-count mismatch or a failed `Create` start
 without parsing text.
 
 **Save boxes** (`retail_save.go`, `retail_restore.go`). The per-piece image and
-the thread windows. Two of the writer's per-piece words are uninitialized frame
-residue in retail — a value that is not a function of game state and therefore
-has nothing to clone — so they are a caller-owned scratch argument
-`[08 R-SAVE-02 §9]`.
+the thread windows. The writer persists each piece's current draw, cache and
+shade flags alongside its animation state, position and angles. The reader
+restores those flags with positive polarity; serialization has no caller-owned
+scratch argument or replacement flag defaults `[08 R-SAVE-02 §9]`.
 
 ### 2.4 `internal/model`
 
@@ -1067,9 +1067,6 @@ would settle it:
   remaining bits have no located reader in the census; the raw mask is stored
   verbatim and never interpreted. Adding a reader needs a new finding, not a
   guess `[04 §3.1]` `[04 R-DOC04-C]`.
-* The two uninitialized per-piece words the script save writer emits. Their value
-  is not a function of game state, so there is nothing to clone; what goes there
-  is a save-format policy the caller owns `[08 R-SAVE-02 §9]`.
 * Whether newly allocated or reused weapon slots expose commanded yaw/pitch
   before an aim or restore writer. The initializer bodies do not write those
   fields; their first-reader census remains open (SC18) `[04 R-UNIT-06 §7]`.

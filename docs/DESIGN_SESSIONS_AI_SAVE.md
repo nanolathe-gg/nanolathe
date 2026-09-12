@@ -245,6 +245,12 @@ also projects current `Move.ModeMirror` and cached `MoveTier` into the packed mo
 nibble, and the reader restores both without recomputing the tier
 `[08 R-SAVE-02 §6]` `[04 R-MOV-01 §6]`.
 
+The script image preserves draw, cache and shade flags per COB piece through
+its binding to model pieces [08 R-SAVE-02 §9]. Earlier Nanolathe saves wrote
+all draw/cache flags as set and lost that state; a loader cannot recover the
+original flags from those files. It restores the values present without
+replaying initialization or inferring visibility from piece names.
+
 After the restoration and battle-entry tail succeed, the load result publishes
 one initial frame at the restored global tick. This is the host presentation
 boundary for an already committed world: it neither advances the simulation nor

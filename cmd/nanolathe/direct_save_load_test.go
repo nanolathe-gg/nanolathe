@@ -110,12 +110,25 @@ func TestDirectBattleSaveLoadThroughWindowInput(t *testing.T) {
 	for i := 0; i < 30; i++ {
 		step()
 	}
+	b.cam.JumpTo(400, 380)
+	captureSaveLoadUI(t, cl, "battle-before-save")
 	openOptions()
 	tick := b.sess.Clock.GlobalTick
 	positions := make([][3]numeric.Fixed, len(handles))
+	pieceFlags := make([][]uint8, len(handles))
+	hiddenPieces := 0
 	for i, h := range handles {
 		u := b.sess.Units.Unit(h)
 		positions[i] = [3]numeric.Fixed{u.X, u.Y, u.Z}
+		pieceFlags[i] = append([]uint8(nil), u.RenderPieceFlags...)
+		for _, flags := range u.RenderPieceFlags {
+			if flags&1 == 0 {
+				hiddenPieces++
+			}
+		}
+	}
+	if hiddenPieces == 0 {
+		t.Fatal("scene has no hidden pieces to exercise save/load")
 	}
 	click(b.hud.optionsWin, "SAVEGAME")
 	if !shell.saveLoadPanelActive() {
@@ -156,10 +169,22 @@ func TestDirectBattleSaveLoadThroughWindowInput(t *testing.T) {
 	if restored == b || restored == nil || restored.sess.Clock.GlobalTick != tick {
 		t.Fatal("load did not replace the battle at its saved tick")
 	}
+	captureSaveLoadUI(t, cl, "battle-after-load")
 	for i, h := range handles {
 		u := restored.sess.Units.Unit(h)
 		if u == nil || !u.Alive || [3]numeric.Fixed{u.X, u.Y, u.Z} != positions[i] {
 			t.Fatalf("unit %d did not retain its saved position", h)
+		}
+		// The real gun script hides its flare during Create. A save must
+		// retain each piece's flags instead of showing every piece on load
+		// [08 R-SAVE-02 §9].
+		if len(u.RenderPieceFlags) != len(pieceFlags[i]) {
+			t.Fatalf("unit %d piece count changed", h)
+		}
+		for p, flags := range u.RenderPieceFlags {
+			if flags&0x07 != pieceFlags[i][p]&0x07 {
+				t.Fatalf("unit %d piece %d flags %#x, want %#x", h, p, flags&0x07, pieceFlags[i][p]&0x07)
+			}
 		}
 	}
 	// The scheduler account retains the options-menu pause. Resume through

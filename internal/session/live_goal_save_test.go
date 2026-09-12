@@ -34,7 +34,7 @@ func TestRetailProjectionIncludesLiveMovementGoal(t *testing.T) {
 	econ := &economy.Service{}
 	econ.UnitBuckets(h)
 	s := &Session{Clock: &clock.State{GlobalTick: 9}, Units: w, Econ: econ, Movement: m}
-	in := RetailSaveInputs{Summary: save.Summary{Gametype: 1}, Mapping: []byte{1}, StableIDs: map[pool.Handle]uint16{h: 1}, UnitWriterScratch: map[pool.Handle]units.RetailUnitWriterScratch{h: {}}, ScriptWriterScratch: map[pool.Handle]cob.RetailScriptWriterScratch{h: {}}}
+	in := RetailSaveInputs{Summary: save.Summary{Gametype: 1}, Mapping: []byte{1}, StableIDs: map[pool.Handle]uint16{h: 1}, UnitWriterScratch: map[pool.Handle]units.RetailUnitWriterScratch{h: {}}}
 	p, err := ProjectRetailSession(s, in)
 	if err != nil {
 		t.Fatal(err)

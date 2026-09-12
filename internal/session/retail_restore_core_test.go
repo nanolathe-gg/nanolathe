@@ -422,9 +422,6 @@ func TestDamageExchangeWritesAndRestoresMutualEngagementLinks(t *testing.T) {
 		UnitWriterScratch: map[pool.Handle]units.RetailUnitWriterScratch{
 			first.handle: {}, second.handle: {},
 		},
-		ScriptWriterScratch: map[pool.Handle]cob.RetailScriptWriterScratch{
-			first.handle: {}, second.handle: {},
-		},
 	}
 	unitsImage, err := projectUnitImage(src.Units, src.Econ, nil, inputs)
 	if err != nil {

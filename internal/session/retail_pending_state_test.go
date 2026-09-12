@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/nanolathe-gg/nanolathe/internal/cob"
 	"github.com/nanolathe-gg/nanolathe/internal/combat"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
@@ -14,12 +13,11 @@ import (
 
 func pendingStateImage(t *testing.T, s *Session) save.UnitImage {
 	t.Helper()
-	in := RetailSaveInputs{StableIDs: map[pool.Handle]uint16{}, UnitWriterScratch: map[pool.Handle]units.RetailUnitWriterScratch{}, ScriptWriterScratch: map[pool.Handle]cob.RetailScriptWriterScratch{}}
+	in := RetailSaveInputs{StableIDs: map[pool.Handle]uint16{}, UnitWriterScratch: map[pool.Handle]units.RetailUnitWriterScratch{}}
 	for n := 1; n < s.Units.TotalRecords(); n++ {
 		h := pool.Handle(n)
 		in.StableIDs[h] = uint16(h)
 		in.UnitWriterScratch[h] = units.RetailUnitWriterScratch{}
-		in.ScriptWriterScratch[h] = cob.RetailScriptWriterScratch{}
 	}
 	image, err := projectUnitImage(s.Units, s.Econ, nil, in)
 	if err != nil {

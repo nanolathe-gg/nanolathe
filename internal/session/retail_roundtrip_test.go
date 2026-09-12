@@ -212,24 +212,22 @@ func TestRetailBattleSaveLoadRoundTripOnRealContent(t *testing.T) {
 		}
 	}
 
-	// Every restored unit must be drawable. A zero residue pair in the piece
-	// records is a legal image that clears the draw bit of every piece, which
-	// the presentation reads as hidden [08 R-SAVE-02 §9] [04 §"Piece flag
-	// polarity"]; the shell's policy is what keeps a reloaded battle visible.
+	// Save/load preserves each model piece's draw/cache/shade state, including
+	// hidden flare geometry. Shadow and cache-validity bits are not saved
+	// [08 R-SAVE-02 §9].
 	for id := range dstUnits {
 		u := dst.Units.Unit(result.Battle.StableUnit[id])
-		if u == nil || len(u.RenderPieceFlags) == 0 {
+		original := src.Units.Unit(pool.Handle(id))
+		if u == nil || original == nil {
 			continue
 		}
-		drawn := false
-		for _, flags := range u.RenderPieceFlags {
-			if flags&0x01 != 0 {
-				drawn = true
-				break
-			}
+		if len(u.RenderPieceFlags) != len(original.RenderPieceFlags) {
+			t.Fatalf("unit %d piece count changed", id)
 		}
-		if !drawn {
-			t.Fatalf("restored unit %d has no drawn piece: flags %v", id, u.RenderPieceFlags)
+		for p, flags := range u.RenderPieceFlags {
+			if flags&0x07 != original.RenderPieceFlags[p]&0x07 {
+				t.Fatalf("unit %d piece %d flags = %#x, want %#x", id, p, flags&0x07, original.RenderPieceFlags[p]&0x07)
+			}
 		}
 	}
 }

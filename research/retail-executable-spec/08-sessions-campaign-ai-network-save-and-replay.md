@@ -5571,7 +5571,8 @@ index is its stable identifier. The per-unit record is 184 bytes (hex B8) with
 the field table described under subsystem writers; the per-order record is 58
 bytes (hex 3A) with subtype boxes that carry leaked prefix bytes that are
 discarded on load. Script state is a 0x528-byte snapshot plus a stack words
-area plus a per-piece 0x6C-byte table where two slots leak old stack values.
+area plus a per-piece 0x6C-byte table that preserves animation state,
+position, angles, and the draw, cache and shade flags [R-SAVE-02 §9].
 Terrain metal is a byte per cell covering world width times height; player
 features are packed nibbles covering half that; mapping is raw bytes for half
 the cells; the radar image is 8 bytes of width and height plus width times
@@ -6882,34 +6883,25 @@ the loader validates raw status/top values and restores the complete
 32-word window while deliberately leaving the receiver unbound.
 [Established; [04 §4.1], [04 §4.2], [04 §4.6], [R-COB-01 §1]]
 
-The writer's decompilation stores only one of its three piece-level getter
-results inside dwords 24..26 (the other two land in a stack slot the axis
-loop overwrites), which is the origin of the standing "two slots leak old
-stack values" sentence: dwords 24 and 25 carry stack residue and the reader
-installs that residue through the show/hide and cache setters. [Established
-layout and sizes.]
+**Established — all three piece flags persist.** For each piece, the writer
+reads its current draw, cache and shade flags and writes each as a separate
+normalized `0` or `1` in piece-level words 24, 25 and 26, respectively. The
+per-axis writes fill only the preceding 24 words; they overwrite none of the
+three flags. Every piece supplies its own values, which may differ from those
+of another piece in the same unit.
 
-**Which getter is lost, and how.** The frame arithmetic is exact. The
-writer builds one 27-dword stack buffer per piece and calls the three
-piece-level getters **before** the axis loop. The first two calls store into the
-**same** frame slot — dword 23 — so the second overwrites the first; the axis
-loop then writes dwords `0+a, 3+a, 6+a, 9+a, 12+a, 15+a, 18+a, 21+a` for
-`a = 0..2`, i.e. dwords 0..23, so its final get-angle write clobbers dword 23 a
-third time. Only the **third** getter is stored somewhere the loop does not
-reach: dword 26. Dwords 24 and 25 are never written by the writer at all — they
-are uninitialized frame residue, and because the buffer is reused across the
-piece loop without being cleared, every piece of one call carries the *same* two
-residue words. Pairing this with the reader's mapping (24 → show/hide, 25 →
-cache, 26 → shade) settles the identity: **the two lost getters are the
-show/hide and cache ones; the shade getter is the survivor.** The residue's
-*value* stays **Unknown** and is not knowable from the image — it is whatever
-the preceding call left in that stack region, not a function of game state — so
-a reimplementation has no retail value to reproduce there and must treat those
-two dwords as a local policy choice rather than a contract. [Established
-mechanism; residue value Unknown by construction.] Script persistence is
-therefore closed: the box persists every thread word, every static and every
-per-axis animation word, and nothing else (callbacks are the receiver word
-inside each thread record; there is no separate callback table).
+The reader passes those three words to the matching setters. Each setter
+installs the supplied low bit: `1` means drawn, cached or shaded, respectively,
+and `0` clears that property [04 "Piece flag polarity"] [04 R-MOV-03 §4].
+A hidden muzzle-flare piece therefore remains hidden across a successful
+script restore; preserving that state does not require another `Create` call
+or a rule based on the piece's name. The restored flags replace the fresh
+binding's flags, just as saved threads replace its initial thread state.
+
+Script persistence preserves every thread word except the deliberately
+cleared completion receiver, every static, every per-axis animation word,
+each piece's position and angles, and all three piece flags. There are no
+uninitialized draw/cache words and no caller-selected flag policy.
 
 ### The order subtype families, named [R-SAVE-02 §10]
 
@@ -8112,11 +8104,6 @@ a single-player implementation.
   [R-SAVE-02 §6], [R-SAVE-02 §7], [R-SAVE-02 §10] ·
   static trace (field-isolation of each reader). Everything else in the unit,
   mover, script, order, feature and player records is named.
-- The *value* of the script writer's two residue dwords (24 and 25 of each
-  piece record): stack leftover, not derived from game state, so Unknown
-  **by construction** — no further trace can settle it, and a
-  reimplementation must choose a policy rather than reproduce a value ·
-  [R-SAVE-02 §9] · none.
 - The `GAMENAME` edit gadget's admitted character set and length, and the
   code page of the file name · [R-SAVE-02 §1], doc 07 · static trace of the
   GUI edit-control key filter.

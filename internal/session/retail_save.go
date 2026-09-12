@@ -35,13 +35,6 @@ type RetailSaveInputs struct {
 	// UnitWriterScratch supplies the three packed status bits whose values are
 	// transient writer state rather than retained Unit fields [08 R-SAVE-02 §6].
 	UnitWriterScratch map[pool.Handle]units.RetailUnitWriterScratch
-	// ScriptWriterScratch supplies the two per-piece dwords the retail script
-	// writer leaves as frame residue [08 R-SAVE-02 §9]. Like the unit scratch
-	// above, a missing entry is a projection failure rather than a silent zero:
-	// the zero pair is a legal image with a visible consequence — every piece of
-	// the restored unit comes back undrawn — so the choice belongs to the caller
-	// and has to be made deliberately.
-	ScriptWriterScratch map[pool.Handle]cob.RetailScriptWriterScratch
 
 	// Mapping is required for a live save and copied as supplied [08
 	// R-SAVE-02 §12]. RetailMappingImage below is the runtime source; a caller
@@ -196,11 +189,7 @@ func projectUnitImage(w *units.World, econ *economy.Service, movement *movement.
 		if vm == nil {
 			return save.UnitImage{}, fmt.Errorf("nanolathe: retail save projection: unit %04x has no COB runtime: logical path save/Units/Script, providers searched [Session.Units], expected live VM", h)
 		}
-		scriptScratch, ok := in.ScriptWriterScratch[h]
-		if !ok {
-			return save.UnitImage{}, fmt.Errorf("nanolathe: retail save projection: missing script piece scratch: logical path save/Units/Script, providers searched [caller], expected RetailScriptWriterScratch")
-		}
-		script, err := cob.RetailScriptImage(vm, scriptScratch)
+		script, err := cob.RetailScriptImage(vm)
 		if err != nil {
 			return save.UnitImage{}, fmt.Errorf("nanolathe: retail save projection: unit %04x Script%d: %w", h, len(image.Records), err)
 		}
@@ -422,22 +411,8 @@ func RetailMappingImage(s *Session) ([]byte, error) {
 // [08 R-SAVE-02 §6 "the packed status word"]. Nanolathe has no such residue,
 // so the honest value is zero rather than an invented pattern.
 //
-// ScriptWriterScratch is the same kind of hole with the opposite consequence,
-// which is why it is not zero. Dwords 24 and 25 of every piece record are
-// likewise never written by the retail writer, but the reader DOES consume
-// them: it installs them through the piece draw and cache setters
-// [08 R-SAVE-02 §9]. The residue's value is Unknown by construction, so there
-// is no retail value to reproduce and no constant is being invented here —
-// only a policy is being chosen, and the two candidates are not equivalent.
-// The zero pair clears the draw bit of every piece of every restored unit, and
-// a cleared draw bit is what the presentation reads as hidden
-// [04 §"Piece flag polarity"], so a battle saved and reloaded would render no
-// unit at all. The nonzero pair reproduces the render-piece record's own
-// creation fill, which sets the cache bit unconditionally and the draw bit for
-// every piece with real geometry; it additionally marks bare attachment points
-// drawn, which draws nothing because they carry no triangles. A retail
-// Script%i box cannot carry per-piece show/hide or cache state in either
-// direction — that loss is a property of the file format, not of this choice.
+// Script piece state is read directly from each bound VM by the projection;
+// draw/cache/shade flags are ordinary persisted values [08 R-SAVE-02 §9].
 func (s *Session) RetailBattleSaveInputs(summary save.Summary, camera save.Camera) (RetailSaveInputs, error) {
 	if s == nil || s.Units == nil {
 		return RetailSaveInputs{}, fmt.Errorf("nanolathe: retail save inputs: no live battle: logical path session/save, providers searched [Session], expected a composed battle")
@@ -447,13 +422,12 @@ func (s *Session) RetailBattleSaveInputs(summary save.Summary, camera save.Camer
 		return RetailSaveInputs{}, err
 	}
 	in := RetailSaveInputs{
-		Summary:             summary,
-		Camera:              camera,
-		StableIDs:           make(map[pool.Handle]uint16),
-		UnitWriterScratch:   make(map[pool.Handle]units.RetailUnitWriterScratch),
-		ScriptWriterScratch: make(map[pool.Handle]cob.RetailScriptWriterScratch),
-		Mapping:             mapping,
-		Meteor:              retailMeteorScalars(s.Meteor),
+		Summary:           summary,
+		Camera:            camera,
+		StableIDs:         make(map[pool.Handle]uint16),
+		UnitWriterScratch: make(map[pool.Handle]units.RetailUnitWriterScratch),
+		Mapping:           mapping,
+		Meteor:            retailMeteorScalars(s.Meteor),
 	}
 	for slot := 1; slot < s.Units.TotalRecords(); slot++ {
 		h := pool.Handle(slot)
@@ -465,7 +439,6 @@ func (s *Session) RetailBattleSaveInputs(summary save.Summary, camera save.Camer
 			continue
 		}
 		in.UnitWriterScratch[h] = units.RetailUnitWriterScratch{}
-		in.ScriptWriterScratch[h] = retailBattleScriptScratch
 	}
 	refreshRetailUnitMirrors(s)
 	return in, nil
@@ -529,12 +502,6 @@ func refreshRetailUnitMirrors(s *Session) {
 		u.FootprintSizeX, u.FootprintSizeZ = footX, footZ
 	}
 }
-
-// retailBattleScriptScratch is this shell's residue policy for the two piece
-// dwords retail never writes; the reasoning is on RetailBattleSaveInputs above
-// [08 R-SAVE-02 §9]. The reader tests each dword for nonzero and nothing else,
-// so 1 is simply the boolean "set" for the draw and cache bits it installs.
-var retailBattleScriptScratch = cob.RetailScriptWriterScratch{PieceDword24: 1, PieceDword25: 1}
 
 // retailMeteorScalars projects the live shower into the nine integer items of
 // the Meteor account. The first five globals round-trip whole; the four

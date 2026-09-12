@@ -126,9 +126,10 @@ func RetailScriptRestore(v *VM, image []byte) error {
 		v.Pieces[p].SetAngle(model.AxisX, pieces[p].state.RotX)
 		v.Pieces[p].SetAngle(model.AxisY, pieces[p].state.RotY)
 		v.Pieces[p].SetAngle(model.AxisZ, pieces[p].state.RotZ)
-		setRetailPieceFlag(v, p, 0x01, pieces[p].flags[0] != 0)
-		setRetailPieceFlag(v, p, 0x02, pieces[p].flags[1] != 0)
-		setRetailPieceFlag(v, p, 0x04, pieces[p].flags[2] != 0)
+		// The adapter setters consume the low bit, not a nonzero test [08 R-SAVE-02 §9].
+		setRetailPieceFlag(v, p, 0x01, pieces[p].flags[0]&1 != 0)
+		setRetailPieceFlag(v, p, 0x02, pieces[p].flags[1]&1 != 0)
+		setRetailPieceFlag(v, p, 0x04, pieces[p].flags[2]&1 != 0)
 	}
 	// The image reference is not serialized. A successful restore gives the
 	// presentation cache fresh state to rebuild without treating this Go

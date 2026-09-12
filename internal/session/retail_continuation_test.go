@@ -178,16 +178,7 @@ func TestInBattleSaveRoundTripsThroughTheLoadPath(t *testing.T) {
 
 	path := RetailSavePath(t.TempDir(), "battle slot")
 	if err := s.WriteRetailSave(path, in); err != nil {
-		// The `Script%i` box is blocked by an honest gap in the COB writer:
-		// two of the three per-piece flag getter results are writer stack
-		// residue the VM does not retain, and emitting a value would invent
-		// retail bytes [08 R-SAVE-02 §9]. Everything the battle save owns up
-		// to that box is asserted above; when the COB trace lands, this skip
-		// disappears and the load assertions below start running.
-		if !strings.Contains(err.Error(), "piece record writer scratch") {
-			t.Fatalf("write battle save: %v", err)
-		}
-		t.Skipf("in-battle save is blocked at the Script%%i box: %v", err)
+		t.Fatalf("write battle save: %v", err)
 	}
 	loaded, err := LoadRetailSavePath(path, RetailLoadDeps{FS: f.fs, SimSeed: 1, CRTSeed: 1})
 	if err != nil {

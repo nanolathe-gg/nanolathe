@@ -55,7 +55,7 @@ func TestAcceleratedSpinContinuesCurrentRotationSpeed(t *testing.T) {
 				t.Fatal("start setup")
 			}
 			vm.Drain(0)
-			image, err := RetailScriptImage(vm, RetailScriptWriterScratch{})
+			image, err := RetailScriptImage(vm)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -111,7 +111,7 @@ func TestStoppedSpinRetainsMarkerAcrossRestore(t *testing.T) {
 		t.Fatal("start")
 	}
 	vm.Drain(1)
-	image, err := RetailScriptImage(vm, RetailScriptWriterScratch{})
+	image, err := RetailScriptImage(vm)
 	if err != nil {
 		t.Fatal(err)
 	}

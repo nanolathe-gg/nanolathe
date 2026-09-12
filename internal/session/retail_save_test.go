@@ -74,11 +74,10 @@ func TestProjectRetailSessionAssemblesRuntimeUnit(t *testing.T) {
 	econ.UnitBuckets(h)
 	s := &Session{Clock: &clock.State{GlobalTick: 9}, Units: w, Econ: econ}
 	p, err := ProjectRetailSession(s, RetailSaveInputs{
-		Summary:             save.Summary{Gametype: 1},
-		Mapping:             []byte{0xaa},
-		StableIDs:           map[pool.Handle]uint16{h: 0x73},
-		UnitWriterScratch:   map[pool.Handle]units.RetailUnitWriterScratch{h: {}},
-		ScriptWriterScratch: map[pool.Handle]cob.RetailScriptWriterScratch{h: {}},
+		Summary:           save.Summary{Gametype: 1},
+		Mapping:           []byte{0xaa},
+		StableIDs:         map[pool.Handle]uint16{h: 0x73},
+		UnitWriterScratch: map[pool.Handle]units.RetailUnitWriterScratch{h: {}},
 	})
 	if err != nil {
 		t.Fatalf("runtime projection: %v", err)
@@ -112,11 +111,10 @@ func TestProjectRetailSessionWritesNullForDeadMainOrderTarget(t *testing.T) {
 	econ := &economy.Service{}
 	econ.UnitBuckets(owner)
 	p, err := ProjectRetailSession(&Session{Clock: &clock.State{}, Units: w, Econ: econ}, RetailSaveInputs{
-		Summary:             save.Summary{Gametype: 1},
-		Mapping:             []byte{0},
-		StableIDs:           map[pool.Handle]uint16{owner: 9},
-		UnitWriterScratch:   map[pool.Handle]units.RetailUnitWriterScratch{owner: {}},
-		ScriptWriterScratch: map[pool.Handle]cob.RetailScriptWriterScratch{owner: {}},
+		Summary:           save.Summary{Gametype: 1},
+		Mapping:           []byte{0},
+		StableIDs:         map[pool.Handle]uint16{owner: 9},
+		UnitWriterScratch: map[pool.Handle]units.RetailUnitWriterScratch{owner: {}},
 	})
 	if err != nil {
 		t.Fatalf("projection with dead main target: %v", err)
@@ -144,11 +142,10 @@ func TestProjectRetailSessionRejectsLiveMainTargetWithoutStableID(t *testing.T) 
 	econ := &economy.Service{}
 	econ.UnitBuckets(owner)
 	_, err = ProjectRetailSession(&Session{Clock: &clock.State{}, Units: w, Econ: econ}, RetailSaveInputs{
-		Summary:             save.Summary{Gametype: 1},
-		Mapping:             []byte{0},
-		StableIDs:           map[pool.Handle]uint16{owner: 9},
-		UnitWriterScratch:   map[pool.Handle]units.RetailUnitWriterScratch{owner: {}},
-		ScriptWriterScratch: map[pool.Handle]cob.RetailScriptWriterScratch{owner: {}},
+		Summary:           save.Summary{Gametype: 1},
+		Mapping:           []byte{0},
+		StableIDs:         map[pool.Handle]uint16{owner: 9},
+		UnitWriterScratch: map[pool.Handle]units.RetailUnitWriterScratch{owner: {}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "unresolved node target") {
 		t.Fatalf("live target without a stable ID error=%v, want unresolved node target", err)
@@ -169,7 +166,6 @@ func TestProjectRetailSessionNumbersUnitBoxesAscendingWithPoolIndex(t *testing.T
 	const aiGroup = 3
 	stableIDs := map[pool.Handle]uint16{}
 	scratch := map[pool.Handle]units.RetailUnitWriterScratch{}
-	scriptScratch := map[pool.Handle]cob.RetailScriptWriterScratch{}
 	var handles []pool.Handle
 	for i := 0; i < 3; i++ {
 		h, err := w.Create(def, 0, 0, 0, 0)
@@ -181,17 +177,15 @@ func TestProjectRetailSessionNumbersUnitBoxesAscendingWithPoolIndex(t *testing.T
 		handles = append(handles, h)
 		stableIDs[h] = uint16(0x40 + i)
 		scratch[h] = units.RetailUnitWriterScratch{}
-		scriptScratch[h] = cob.RetailScriptWriterScratch{}
 	}
 	if !(handles[0] < handles[1] && handles[1] < handles[2]) {
 		t.Fatalf("fixture handles are not ascending: %v", handles)
 	}
 	p, err := ProjectRetailSession(&Session{Clock: &clock.State{}, Units: w, Econ: econ}, RetailSaveInputs{
-		Summary:             save.Summary{Gametype: 1},
-		Mapping:             []byte{1},
-		StableIDs:           stableIDs,
-		UnitWriterScratch:   scratch,
-		ScriptWriterScratch: scriptScratch,
+		Summary:           save.Summary{Gametype: 1},
+		Mapping:           []byte{1},
+		StableIDs:         stableIDs,
+		UnitWriterScratch: scratch,
 	})
 	if err != nil {
 		t.Fatalf("projection: %v", err)
@@ -232,8 +226,8 @@ func TestProjectRetailSessionNumbersUnitBoxesAscendingWithPoolIndex(t *testing.T
 // TestProjectRetailSessionPieceBearingScriptProjects is the WU-19-161 defect:
 // every real COB names pieces, so a projection that refused a piece-bearing
 // program refused every real unit and the in-battle Save produced an error box
-// instead of a bank. The piece tail is now written from the VM plus the
-// caller's residue scratch [08 R-SAVE-02 §9].
+// instead of a bank. The piece tail is written from the bound VM
+// [08 R-SAVE-02 §9].
 func TestProjectRetailSessionPieceBearingScriptProjects(t *testing.T) {
 	def := &content.UnitDef{UnitName: "pieceful", MaxDamage: 100, Script: &cob.Program{Code: []uint32{0x10065000}, Pieces: []string{"base", "turret"}, Scripts: map[string]int{}}}
 	w := units.NewSliced(1, nil)
@@ -244,11 +238,10 @@ func TestProjectRetailSessionPieceBearingScriptProjects(t *testing.T) {
 	econ := &economy.Service{}
 	econ.UnitBuckets(h)
 	p, err := ProjectRetailSession(&Session{Clock: &clock.State{}, Units: w, Econ: econ}, RetailSaveInputs{
-		Summary:             save.Summary{Gametype: 1},
-		Mapping:             []byte{1},
-		StableIDs:           map[pool.Handle]uint16{h: 9},
-		UnitWriterScratch:   map[pool.Handle]units.RetailUnitWriterScratch{h: {}},
-		ScriptWriterScratch: map[pool.Handle]cob.RetailScriptWriterScratch{h: {PieceDword24: 1, PieceDword25: 1}},
+		Summary:           save.Summary{Gametype: 1},
+		Mapping:           []byte{1},
+		StableIDs:         map[pool.Handle]uint16{h: 9},
+		UnitWriterScratch: map[pool.Handle]units.RetailUnitWriterScratch{h: {}},
 	})
 	if err != nil {
 		t.Fatalf("piece-bearing projection: %v", err)
@@ -257,41 +250,6 @@ func TestProjectRetailSessionPieceBearingScriptProjects(t *testing.T) {
 	if len(p.Units.Scripts) != 1 || len(p.Units.Scripts[0].Data) != want {
 		t.Fatalf("script projection = %d bytes, want %d", len(p.Units.Scripts[0].Data), want)
 	}
-}
-
-// TestProjectRetailSessionMissingScriptScratchFails keeps the seam explicit:
-// the residue pair is a caller policy with a visible consequence, so an
-// omitted entry fails rather than silently taking the zero pair.
-func TestProjectRetailSessionMissingScriptScratchFails(t *testing.T) {
-	def := &content.UnitDef{UnitName: "pieceful", MaxDamage: 100, Script: &cob.Program{Code: []uint32{0x10065000}, Pieces: []string{"base"}, Scripts: map[string]int{}}}
-	w := units.NewSliced(1, nil)
-	h, err := w.Create(def, 0, 0, 0, 0)
-	if err != nil {
-		t.Fatalf("create piece-bearing unit: %v", err)
-	}
-	econ := &economy.Service{}
-	econ.UnitBuckets(h)
-	_, err = ProjectRetailSession(&Session{Clock: &clock.State{}, Units: w, Econ: econ}, RetailSaveInputs{
-		Summary:           save.Summary{Gametype: 1},
-		Mapping:           []byte{1},
-		StableIDs:         map[pool.Handle]uint16{h: 9},
-		UnitWriterScratch: map[pool.Handle]units.RetailUnitWriterScratch{h: {}},
-	})
-	if err == nil {
-		t.Fatal("projection accepted a unit with no script writer scratch")
-	}
-	if got := err.Error(); !containsAny(got, "script piece scratch") {
-		t.Fatalf("error = %q, want the explicit script scratch blocker", got)
-	}
-}
-
-func containsAny(s string, values ...string) bool {
-	for _, value := range values {
-		if strings.Contains(s, value) {
-			return true
-		}
-	}
-	return false
 }
 
 // TestRetailBattleSummaryRecordsTheConfiguredUnitLimit locks the producer of
