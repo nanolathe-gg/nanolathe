@@ -46,9 +46,11 @@ const (
 // The *ebiten.Image lives here, not on the client: it is a device resource,
 // and the client's business is the pixels it hands over.
 type app struct {
-	paused pausedWorld
-	c      *client.Client
-	img    *ebiten.Image
+	glintInputCaptured bool
+	glint              metalGlintControl
+	paused             pausedWorld
+	c                  *client.Client
+	img                *ebiten.Image
 	// mode selects the executor Draw presents through. gpu is the modern
 	// executor, built lazily on the first modern Draw so its device textures and
 	// offscreen never exist in a classic run. Both live here, off the client
@@ -192,6 +194,7 @@ func (a *app) updateBody() {
 	a.c.BumpPresentationEpoch()
 	a.syncWindowSize()
 	sample := readInput(a.scaledInputNow())
+	a.consumeMetalGlintShortcut(&sample)
 	if a.scrollPointScale > 0 {
 		sample.panX *= a.scrollPointScale
 		sample.panY *= a.scrollPointScale
@@ -396,6 +399,9 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 	// display the window is actually running on.
 	// The interval is the one the outstanding prediction was made over, so a
 	// frame that arrived late cannot widen the tolerance by its own lateness.
+	if a.glint.update(a.gpu) {
+		a.paused.clear()
+	}
 	if !a.drawPaused(screen, width, height) {
 		tolerance := fractionTolerance(a.pipe.tolerancePeriod(a.presentInterval, ebiten.ActualFPS()))
 		list, hit := a.c.TakePreRecord(a.c.PresentationDigest(), tolerance)

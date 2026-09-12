@@ -133,6 +133,7 @@ func (r *Renderer) Fog(fg drawlist.Fog) {
 	// the black one hides it (§19). It is a barrier of its own; a frame with no
 	// fog command resolves when the world region closes instead.
 	r.resolveGlow()
+	r.resolveDistortion()
 	r.fog.draws = 0
 	r.fog.contentErr = nil
 	if r.surfaces[0] == nil {

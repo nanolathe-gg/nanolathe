@@ -114,6 +114,9 @@ type UnitView struct {
 	NoShadow bool
 	CanHover bool
 	Floater  bool
+	// Waterline is the authored surface draft in whole world units
+	// [04 R-MOV-01 §9]; presentation never reads a live definition [I6].
+	Waterline int32
 	// Digger raises the height key by 75 and clips the buried half of the
 	// model away [R-REN-03A §8].
 	Digger     bool
@@ -190,7 +193,9 @@ type UnitView struct {
 	// extent nor half the unit's height.  Their writers are traced in
 	// [07 R-REV-01 §7] — the unit-record compiler writes the horizontal pair
 	// from the authored footprint keys and the catalog loader rewrites the
-	// vertical one as the model's total height once the 3DO is loaded.
+	// vertical one as the model's maximum Y above its origin, floored at
+	// zero, once the 3DO is loaded. HullYExtent is ModelTopFixed: it also
+	// supplies the top in Y + modelTop for surface exposure [04 R-UNIT-06 §3].
 	//
 	// They are published because presentation may not read a live definition
 	// [I6], and because the gate is not reproducible from FootX/FootZ alone:
@@ -943,6 +948,13 @@ type FogView struct {
 	Source uint64
 }
 
+// WindView is the committed wind used by presentation [01 §7.3][I6].
+// Strength retains the current integer speed; rendering owns its visual scale.
+type WindView struct {
+	Heading  uint16
+	Strength int32
+}
+
 // Frame is one committed tick-end presentation payload.  It owns all slices;
 // after Publish succeeds the writer must treat the frame as immutable until
 // the next permitted BeginWrite reuse.
@@ -951,6 +963,7 @@ type Frame struct {
 	BigBrotherCycle, BigBrotherResetVisited, BigBrotherCancelFollow bool
 
 	Tick uint32
+	Wind WindView
 	// ViewingPlayer is the observer for this committed frame; selection keeps
 	// its separate true-local owner [03 R-VIS-01 §4].
 	ViewingPlayer uint8
@@ -1119,6 +1132,7 @@ func (f *Frame) Reset() {
 	f.Builds = f.Builds[:0]
 	f.Events = f.Events[:0]
 	f.Tick = 0
+	f.Wind = WindView{}
 	f.Paused = false
 	f.BigBrotherCycle, f.BigBrotherResetVisited, f.BigBrotherCancelFollow = false, false, false
 	f.ShakeOffsetX = 0

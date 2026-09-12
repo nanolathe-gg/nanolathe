@@ -236,7 +236,7 @@ func scene2DShaderSource() string {
 	return `//kage:unit pixels
 
 package main
-` + modelQuadMapperSource + battleLightShaderSource + `
+` + modelQuadMapperSource + battleLightShaderSource + metalGlintShaderSource + `
 
 const palRow = ` + fmt.Sprint(tableRowPAL) + `.0
 
@@ -318,7 +318,9 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 	} else if op == ` + fmt.Sprint(sceneOpModelDirect) + ` {
 		// The direct model lane's fallback (model_direct.go): no key test, no
 		// supersample. Custom0 is 0 flat, 1 textured.
-		idx = floor(color.g + 0.5)
+		encoded := floor(color.g + 0.5)
+		glint := floor(encoded/256.0)
+		idx = mod(encoded, 256.0)
 		if custom.x > 0.5 {
 			t := floor(srcPos-imageSrc0Origin()) + vec2(0.5, 0.5)
 			idx = floor(imageSrc2AtFromSrc0Pos(imageSrc0Origin()+t).r*255.0 + 0.5)
@@ -326,7 +328,8 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 		if idx == 1.0 {
 			return vec4(0.0)
 		}
-		return vec4(battleLit(palAt(idx), color.r, custom.z), 1.0)
+		albedo := palAt(idx)
+		return vec4(metalGlint(albedo, battleLit(albedo, color.r, custom.z), glint), 1.0)
 	} else if op == ` + fmt.Sprint(sceneOpModelDirectCommit) + ` {
 		// The direct lane's commit: srcPos interpolates the 2× atlas texel of
 		// the pixel, one texel into its block; floor back to the block and

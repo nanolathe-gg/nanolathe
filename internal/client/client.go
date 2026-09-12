@@ -319,6 +319,10 @@ type Client struct {
 	// trails is the Enhanced trail layer's retained state (DESIGN_GPU_RENDERER
 	// §15): presentation only, reset with the model registry and the terrain.
 	trails trailState
+	// wakes retains Enhanced land hover particles (GPU design §26).
+	wakes       surfaceWakeState
+	waterMotion waterMotionState
+	waterFoam   []drawlist.SurfaceWake
 	// featureSeqs memoises the compiled animation sequences the SIMULATION
 	// reads through Client.FeatureSequence — the burn frame geometry and the
 	// die/reclaim/burn lifetimes of [05 R-FEAT-01 §10]. A nil value is a
@@ -355,6 +359,7 @@ type Client struct {
 	// with a modal message box and exit; a presentation client draws nothing
 	// instead and lets the rest of the frame compose [I6].
 	effectBanks map[string]*formats.GAF
+	blastSizes  map[*formats.GAFEntry]float32
 
 	// flash holds the generated calculated-explosion tables [06 R-WFX-01 §2].
 	flash flashTables
@@ -659,6 +664,7 @@ func (c *Client) SetMessageFNT(fnt *formats.FNT) { c.messageFNT = fnt }
 func (c *Client) SetSnapshot(b *frame.Buffer) {
 	if c != nil && b != nil && c.buffer != b {
 		c.resetFogCache()
+		c.resetTrails()
 		// Battle entry and restore reset the display; View keeps this buffer
 		// and therefore retains the pair [07 R-HUD-03 §4].
 		c.displayedResources = DisplayedResources{}
@@ -859,6 +865,7 @@ func (c *Client) SetModelFS(fs *vfs.FS) {
 	c.projectileGAFErr = nil
 	c.projectileGAFLoaded = false
 	c.effectBanks = nil
+	c.blastSizes = nil
 	c.flash = flashTables{}
 	c.fogGAF = nil
 	c.fogLoaded = false

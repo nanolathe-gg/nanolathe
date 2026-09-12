@@ -362,6 +362,11 @@ func (c *Client) drawCommittedWorld(cur *frame.Frame, ok bool) {
 	// Terrain/static preparation, radar preparation, and viewport clipping are
 	// unconditional. Radar and clip have no concrete frame input yet.
 	c.drawTerrainPrep()
+	if !c.strategicView() {
+		c.placeSurfaceWakes(c.buffer.Current())
+		c.drawSurfaceWakes()
+		c.drawBuildingFoam(c.buffer.Current())
+	}
 	// The Enhanced trail layer lies on the terrain under every strip
 	// (DESIGN_GPU_RENDERER §15). Marks are placed from the committed tick, not
 	// the blended view, so the layer never moves with the blend fraction.
@@ -815,7 +820,24 @@ func (c *Client) drawFeature(f *frame.FeatureView) {
 		// animtrans selector applies only to the static definition cursor
 		// [03 R-RAST-01 §6].
 		normalTrans := f.AnimTrans && !f.RuntimeLive
+		// Modern presentation experiment (GPU design §27). The additional LOS
+		// gate prevents an unseen burning feature from refracting visible ground.
+		heat := false
+		var heatTime float32
+		if c.enhanced && f.IsBurning && c.buffer != nil {
+			cur := c.buffer.Current()
+			heat = cur != nil && SnapshotPointVisible(cur.Visibility, f.X, f.Y, f.Z, cur.ViewingPlayer)
+			if heat {
+				heatTime = float32(c.frameTick % 3600)
+				if c.interpolation {
+					heatTime += c.TickFraction()
+				}
+				// Cell phase decorrelates adjacent plumes without an RNG stream.
+				heatTime += float32((f.CX*13 + f.CZ*7) & 255)
+			}
+		}
 		c.emitSprite(drawlist.Sprite{
+			HeatSource: heat, HeatTime: heatTime, LightingScale: float32(c.viewScale().Float()),
 			Frame: normalFrame,
 			X:     sx - int32(normalFrame.XOffset),
 			Y:     sy - int32(normalFrame.YOffset),

@@ -5,6 +5,7 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/clock"
+	committedframe "github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 )
@@ -90,7 +91,14 @@ func (c *BattleController) Step(frame BattleInputFrame, cl *client.Client) {
 	c.battle.stepFollowCamera()
 	state := input.StateFromSample(frame)
 	if c.battle.sess != nil {
-		c.battle.sess.SetPublicationObserver(c.battle.applyPublishedCamera)
+		c.battle.sess.SetPublicationObserver(func(cur *committedframe.Frame) {
+			c.battle.applyPublishedCamera(cur)
+			// Observe every committed position before a catch-up tick replaces it.
+			// Recording alone skips history at high speed or after a slow frame,
+			// suppressing hover dust (DESIGN_GPU_RENDERER §26). Repeated capture
+			// and draw observations are idempotent; this consumes only frames [I6].
+			cl.ObserveCommittedTick()
+		})
 		shift := state.Kbd.HasShift()
 		if cl != nil && cl.Input() != nil {
 			shift = cl.Input().Kbd.HasShift()

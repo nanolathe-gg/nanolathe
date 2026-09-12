@@ -19,7 +19,10 @@ type EffectDrawOptions struct {
 	// Nil fails closed for lighting metadata without changing the art's draw.
 	LightingFrame *frame.Frame
 	ResolveFrame  func(frame.EffectView, int32) (*formats.GAFFrame, bool)
-	LHTGeometry   func(frame.EffectView) (radius, level int, ok bool)
+	// BlastSize resolves the maximum authored animation extent for modern refraction.
+	// Nil suppresses the optional wave.
+	BlastSize   func(frame.EffectView) float32
+	LHTGeometry func(frame.EffectView) (radius, level int, ok bool)
 	// TerrainCoverage admits only indexed pixels belonging to the already
 	// composed terrain. A nil predicate leaves a light effect unresolved; the
 	// halo must never brighten units, effects, or HUD pixels [03 §4.3.1].
@@ -274,8 +277,17 @@ func (c *Client) DrawEffectViews(effects []frame.EffectView, options EffectDrawO
 		if visibleExplosionSource(view, options.LightingFrame) {
 			lightingKind = drawlist.SpriteLightingExplosion
 		}
+		var blastAge, blastSize float32
+		if c.enhanced && lightingKind == drawlist.SpriteLightingExplosion && options.BlastSize != nil {
+			blastSize = options.BlastSize(view)
+			blastAge = float32(options.LightingFrame.Tick - view.StartTick)
+			if c.interpolation {
+				blastAge += c.TickFraction()
+			}
+		}
 		scale := float32(c.viewScale().Float())
 		c.emitSprite(drawlist.Sprite{Frame: c.viewFrame(frame), X: x - 128, Y: y - 32, Kind: drawlist.BlitKeyed, Anchored: true, Emissive: true,
+			BlastAge: blastAge, BlastSize: blastSize,
 			LightingKind: lightingKind, WorldHeight: float32(d.Y.Raw()) / 65536 * scale, LightingScale: scale})
 		stats.Sprites++
 	}

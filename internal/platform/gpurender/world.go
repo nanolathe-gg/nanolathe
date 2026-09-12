@@ -34,6 +34,7 @@ func (r *Renderer) World(w drawlist.WorldSpace) {
 		// A frame whose recording carried no fog composite still resolves its
 		// glow before the chrome is drawn over the world (§19).
 		r.resolveGlow()
+		r.resolveDistortion()
 	}
 	r.submitSchedule()
 	if !w.Begin {

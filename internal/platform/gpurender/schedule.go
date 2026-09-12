@@ -71,7 +71,7 @@ import (
 //
 // # Streams (docs/DESIGN_GPU_RENDERER.md §13.11)
 //
-// Since §13.3 no destination-reading family reads a snapshot except fog: the ALP
+// Fog and Enhanced water read a snapshot; since §13.3 the ALP
 // families hand the device a premultiplied half-colour fragment and the row
 // families a scale, and the fixed-function blend reads the real framebuffer. A
 // blend is a read-modify-write of the attachment, and the device applies the
@@ -1068,8 +1068,8 @@ func (s *scheduler) quadCorners(class int, xs, ys [4]float32, col [4]float32, cu
 // dependencies require (§13.3 "The scheduler keeps its placement and loses its
 // snapshots").
 //
-// The one exception is a run that declares a read slot: the fog composite still
-// reads the pixels it rewrites, so drawBatch copies the phase's destination
+// The exception is a run that declares a read slot: fog and Enhanced water
+// read the pixels they rewrite, so drawBatch copies the phase's destination
 // rectangle into the read surface just before that run draws.
 func (r *Renderer) submitSchedule() {
 	s := &r.sched

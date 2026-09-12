@@ -28,6 +28,10 @@ type ModelStats struct {
 	GlowQuads, GlowPasses int
 	// BattleLights and LitModelFaces describe the bounded Enhanced prototype.
 	BattleLights, LitModelFaces, LitSmokeSprites int
+	// ReflectionVertices is the bounded coastal reflection source geometry.
+	ReflectionVertices int
+	BlastWaves         int
+	HeatPlumes         int
 	// The model lane's accounting (§22): subjects and shadows placed on the
 	// atlas, faces appended and rings culled, packets the atlas could not hold
 	// (which took the fallback), the atlas passes (two a page), the atlas

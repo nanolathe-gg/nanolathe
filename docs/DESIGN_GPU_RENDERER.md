@@ -4927,3 +4927,574 @@ submission time is host variation, not an optimization claim. Device GPU time
 is unavailable. The source budget stays at 64 total; the final modern frame
 adds 254 glow quads and lights 2,169 model faces versus 1,929 before.
 Artifacts are in `/private/tmp/nanolathe-nano-{before,after}-{modern,classic}`.
+
+### 23.7 Metallic glint (Enhanced)
+
+This user-requested prototype is an Enhanced presentation choice, not retail
+material evidence. It adds a small directional highlight using the existing
+outward face normals. Classic and authoritative data are unaffected. No
+material identity is inferred as fact from an asset's colour.
+
+One fixed unit half-vector, (-0.35, -0.15, 0.9246621) in world X/Z/height axes,
+defines an artistic overhead key. The clamped normal dot product is squared
+five times (power 32), once per rendered face. There is no camera-position,
+clock, RNG, per-pixel normal, point-light loop or additional geometry. Rotating
+panels change their response; a stationary panel keeps its highlight.
+
+The face-constant ColorG attribute holds the original palette byte plus 256
+times the rounded 0–255 highlight weight. Both the atlas body shader and the
+native overflow shader decode those sixteen numeric bits; the existing packed
+RGB battle light retains its original precision. Shadows and outline endpoints
+carry zero highlight. Construction bands that replace material colour suppress
+it. Palette lookup, waterline, transparency and composition ownership retain
+order, with the highlight applied to surviving model colour under final fog.
+
+The shader masks dark seams with a brightness smoothstep from 0.12 to 0.35,
+and saturated paint with one minus a saturation smoothstep from 0.2 to 0.65.
+Its highlight tint is 35% white plus 65% albedo, with peak gain 0.48; RGB clamps
+to one and keeps the original coverage. These are tunable artistic choices,
+not authored metalness or roughness. Neutral painted panels can consequently
+look metallic too. There is no shadow occlusion or map-specific sun direction.
+No passes, textures, uniforms, normal buffers or per-frame allocations are added.
+
+The effect starts enabled in the modern renderer. `NANOLATHE_METAL_GLINT=0` selects the
+original appearance for comparisons. Ctrl+Shift+G toggles it during modern
+window play and benchmark viewing; the terminal reports the state. Paused-world
+reuse is invalidated immediately. The setting is temporary and is never saved.
+`tools/try-metal-glint` opens the game; `tools/try-metal-glint battle` watches a
+20-second seeded benchmark battle with the same toggle. Additional arguments
+pass through (for example `--zoom=2`). Benchmark metadata records initial state
+and rows record the actual state, so manually toggled runs remain identifiable.
+
+Validation: synthetic facing and byte-packing checks; a real-device neutral,
+saturated, dark and transparent material fixture; exact off/on/off restoration;
+matching classic and modern Great Divide battle captures at native and 2× zoom.
+The open and closed synthetic ARMSOLAR captures both exercised the GPU lane
+(one subject, no skipped or overflow subjects); the open base remains visible
+between the panels. An injected-input hidden window run confirmed one toggle
+per held chord. A host input test also checks that releasing modifiers first
+cannot leak the still-held G to game/chat input. A second reviewer inspected
+the diff and reran renderer/host/docs tests and the real-device fixtures.
+
+Measured on Apple M3 Pro, Metal, darwin-arm64, using scene-version-4 Great
+Divide, seed 7, 1920×1080, 300 pre-ticks, 60 target draws/s, 120 warmup draws,
+180 measured draws and nearest-doubled detail art. Repeated runs are sequential.
+
+| View | Submit median / p95 / max, ms (off → on) | Cadence median, ms (off → on) |
+|---|---|---|
+| Native pair 1 | 3.767 / 3.971 / 4.123 → 3.803 / 4.044 / 9.514 | 16.666 → 16.695 |
+| Native pair 2 | 3.712 / 4.015 / 4.468 → 3.755 / 3.953 / 4.051 | 16.667 → 16.688 |
+| Detail 2× | 3.658 / 3.838 / 3.951 → 3.622 / 3.868 / 5.273 | 16.661 → 16.634 |
+
+Every frame's census and renderer counters match within each off/on pair:
+no extra draw calls, passes, atlas pages or geometry. The native disabled
+capture is pixel-identical to unchanged main; the final classic capture is
+also pixel-identical to main with matching censuses. Comparing main and the
+final enabled native build gives 3.813 → 3.797 ms median submission and
+16.761 → 16.685 ms cadence. These are short host measurements, not GPU time
+or evidence of a speedup; the few-hundredths-of-a-millisecond median changes
+are within run variation. The isolated 9.514 ms submission maximum in the
+first on-run did not recur in the second or final native runs. Per-frame
+allocation measurements overlap (0.843–0.885 MB native); no effect-specific
+per-frame allocation is introduced by the implementation.
+
+The visual result is a modest facet highlight, more legible at detail zoom.
+It is worth human evaluation as inexpensive polish, but is not a physical
+material model: texture neutrality is an aesthetic proxy and a static roof
+can keep a fixed sheen. `tools/check`, `tools/check-retail`, and the real-device
+gate passed. The final shortcut adjustment passed the host package tests.
+The separate frozen-list timing gate is blocked on this host: the supported
+battle capture route (`--map="ashap plateau" --shot-ticks=60 --shot-select
+--shot-size=1920x1080 --shot-gpu-profile-frames=180 --renderer=modern --zoom=2`)
+crashes while acquiring the Metal drawable texture, both with the prototype
+disabled and in the unchanged-main binary. Its logs are
+`/private/tmp/glint-frozen-{off,main}.log`. The isolated model capture route
+explicitly rejects profiling, so no frozen-list timings are claimed. Resolving
+the existing capture-driver failure would settle that remaining gate; live
+battle runs and unprofiled model captures completed normally.
+Local evidence is in `/private/tmp/glint-{off,on}-native-{1,2}`,
+`/private/tmp/glint-{off,on}-detail`, `/private/tmp/glint-main-{native,classic}`,
+and `/private/tmp/glint-final-{native,classic}`; screenshots remain uncommitted.
+Landing verification also integrated the subsequent vegetation-wind removal.
+Fast, retail and real-device gates passed on that combined tree. Sequential
+matching native Great Divide runs retain equal frame censuses and renderer
+counters; classic and disabled modern captures remain pixel-identical to the
+updated main baseline. Modern submission median/p95/max was
+3.550/4.011/5.930 ms disabled and 3.767/3.999/4.174 ms enabled in this pair;
+both renderer captures were inspected. Evidence is local in
+`/private/tmp/glint-land2-{base-modern,base-classic,off-modern,on-modern,on-classic}`.
+
+The user visually approved this appearance and authorized its inclusion in main.
+The comparison controls remain available; classic rendering is unchanged.
+
+## 24. Wind in vegetation (removed prototype)
+
+Removed at the user's request after live review. The initial filtered sprite
+bend blurred the foliage; replacing it with integer row shifts preserved colors
+but looked glitchy in motion. Vegetation now uses the ordinary static sprite
+path. The prototype's name heuristic, presentation filter, sprite displacement,
+GPU operation and dedicated wind snapshot payload were removed with that
+prototype. The coastal treatment in §26 separately publishes the existing wind
+for water motion. The simulation's wind behavior remains unchanged.
+
+The abandoned implementations and their visual/performance checks remain in
+Git history. Future vegetation animation would need a separate art decision;
+this section does not prescribe a replacement effect.
+
+Removal checks include the normal GPU device fixtures and matching native
+Great Divide battle runs: seed 7, 1920×1080, 60 draws/s, 300 pre-ticks,
+120 warmup draws and 180 measured draws, factories and auto-remaster enabled.
+Metadata, every frame's census and final session diagnostics match within both
+renderer pairs; classic captures are byte-identical. Both restored captures
+were inspected. Modern submit median was 3.674 → 4.043 ms; a reverse-order
+repeat was 6.534 → 3.746 ms. These short pairs are too variable for a performance
+conclusion. Artifacts are outside the repository at
+`/private/tmp/wind-removed-{before,after}-{modern,classic}` and
+`/private/tmp/wind-removed-repeat-{before,after}-modern`.
+
+## 25. Explosion distortion prototype
+
+This is a user-authorized modern presentation experiment, not retail evidence.
+It uses §23's resolved, player-visible primary explosion/impact art sources.
+The recorder adds elapsed ticks since the published StartTick (plus the existing
+presentation fraction when interpolation is enabled) and the maximum authored
+animation extent in world pixels, cached once per immutable entry. Classic ignores this metadata.
+No persistent emitter history, wall clock, simulation mutation or RNG is used;
+replaying a list, pausing, changing cameras and restarting cannot restart a wave.
+A finished or newly hidden primary animation stops contributing immediately.
+
+Art at least 64 world pixels across produces a ring lasting 15 simulation ticks
+(half a second at normal speed). Its radius grows linearly from 12 pixels to
+2.5 times the art extent, clamped to 120–320 pixels. Band half-width is
+10 + 0.12 times art extent. Displacement strength is min(age, 1) times
+(1 − age/15)² times min(extent/16, 7). All lengths take recording scale and the
+same final zoom transform as the source. These are artistic tuning choices.
+The bipolar radial profile has zero displacement at either band edge; bilinear
+sampling lets fractional displacement fade smoothly instead of snapping off.
+
+The executor retains at most 32 strongest rings with stable source-order ties.
+It flushes the existing glow/world work, copies the world once into the existing
+fog scratch surface and draws clipped ring quads in one batch before fog and
+chrome. Tree heat shares that copy and batch, appended after every ring (§27.2). Shader discards leave every pixel outside a ring untouched. Sampling is
+clamped to the source's world clip. Overlapping bands read the same snapshot;
+the last submitted band wins where they overlap, without recursive refraction.
+There is no extra copy or draw in frames without either visible active rings
+or tree heat, and no new full-frame image. BlastWaves reports the submitted ring count.
+SetBlastDistortion is an executor-level comparison switch, enabled by default.
+
+Verification: source admission/age/scale and bounded lifetime checks, shader
+compilation, and the existing opt-in GPU device loop exercise the ring against
+a patterned background, including clipping, replay, disabling and expiration.
+Run tools/check, tools/check-retail, the GPU device loop and sequential matching
+classic/modern battle benchmarks; inspect captures and source counts as well as
+host timings. GPU execution timing is unavailable through Ebitengine's API.
+
+### 25.1 Prototype verification
+
+Implemented on the blast-distortion branch, with main's nanolathe lighting
+integrated. The source-size scan uses the entire animation because the installed
+large fireballs open at only 4–22 pixels and grow to 66–126 pixels; measuring
+only frame zero excluded them. Source gathering carries scalar metadata into
+the owned draw list. Budget selection happens after final viewport clipping,
+so offscreen explosions cannot suppress visible rings; removing the latest
+weakest source preserves earlier ties and survivor composition order.
+
+The fast gate, full retail gate (including lint), and real-GPU fixture loop
+passed on the integrated implementation. Independent review checked the source
+cache lifetime, timing and scaling, shader coordinates, fog ordering and budget
+selection. Synthetic GPU captures show the full attack/expansion/fade, unchanged
+pixels beyond the clip and HUD, identical repeated replay and exact expiration.
+Native and 2× battle captures were visually inspected.
+
+The final comparison used main dbf410c and integrated code 992171f: scene
+version 4, Great Divide, seed 7, 1920×1080, factories enabled, 300 pre-ticks,
+60 target draws/s, 120 warmup draws and 180 measured draws, auto-remaster off.
+All scene metadata and every frame's census matched within each renderer pair.
+Both retained sprite features, fire, movement, damage, projectiles, effects,
+construction and nanolathe activity. Classic pixels are identical. The modern
+2× capture changes 55,591 pixels and the measured frames contain 0–8 waves;
+the earlier native comparison contained 0–11 waves.
+
+| Executor | Submit median / p95 / max, ms (before → after) | Cadence median / p95 / max, ms (before → after) |
+|---|---|---|
+| Modern 2× | 3.571 / 4.061 / 8.687 → 3.622 / 3.912 / 4.016 | 16.664 / 17.113 / 17.606 → 16.658 / 17.062 / 17.641 |
+| Classic native | 0.457 / 0.530 / 0.690 → 0.458 / 0.498 / 0.706 | 17.152 / 19.113 / 21.972 → 17.182 / 20.246 / 33.248 |
+
+These are short host measurements, not GPU timings or a performance guarantee.
+Earlier runs varied substantially, including frames with no active wave; the
+final runs were repeated after verification workloads finished. The prototype
+adds one world copy and one clipped wave batch only when needed. Captures and
+profiles are under `/private/tmp/distortion-integrated-{before,after}-{modern,classic}`;
+the comparison crop is `/private/tmp/distortion-final-comparison.png` and the
+synthetic motion preview is `/private/tmp/distortion-wave.gif`.
+
+## 26. Coastal water prototype (Enhanced)
+
+This is an authored Nanolathe presentation experiment, not a retail behavioral
+claim. Original water is painted terrain plus script-emitted strip-2 sprinkles
+[03 R-WATER-01 §1]. Simulation, script sprinkles, collision, LOS and RNG remain
+unchanged. The prototype adds quiet drifting water, soft shoreline/building foam,
+and land hovercraft particles that lightly brighten the ground. Original
+blue/white script particles remain the water wakes; the added white movement
+strokes were removed after visual review. Above-water model pieces and admitted projectiles also receive faint, rippled
+reflections.
+
+### 26.1 Public API and ownership
+
+`frame.WindView { Heading uint16; Strength int32 }` and `Frame.Wind` copy the
+existing session wind at publication [01 §7.3][I6]. Reset clears the value.
+The renderer never reads the live wind service.
+
+`drawlist.WaterSurface { Enabled bool; Tick uint32; Fraction16 int32;
+WindHeading uint16; WindStrength int32; DriftX, DriftZ, Energy float32 }` is the
+value field `Terrain.Water`.
+The terrain recorder enables it only for Enhanced non-strategic world drawing,
+using committed tick/wind and the presentation tick fraction. Paused captures
+must retain their phase. Classic ignores the metadata.
+
+`drawlist.SurfaceWake { X, Y, AxisX, AxisY, CrossX, CrossY, Age, Alpha float32;
+Dust, Foam bool }` describes a rotated quad: centre and half-vectors in recording
+pixels, age in [0,1], opacity in [0,1]. It is immutable until the next list
+reset. `SurfaceWakes { Marks []SurfaceWake }`, `List.RecordSurfaceWakes` and
+optional `SurfaceWakeSink.SurfaceWakes(SurfaceWakes)` carry batches after
+terrain and before objects. Clone owns its marks; Reset releases their live
+length. World transforms apply exactly once in the executor.
+
+Client wake ownership: `water_wakes.go`, its tests, the new `Client.wakes`
+state, hooks in `world_draw.go` and `trails.go`. The hooks observe every committed
+tick through the session publication observer (including catch-up ticks),
+reset with trails at battle/source/renderer changes,
+and record the batch immediately after terrain. The producer uses authored
+`CanHover`, footprint and committed movement. Hidden, carried, airborne,
+unfinished and teleported units
+must not bridge wake history. Every emitted mark starts at a player-visible
+position; existing fog composites cover the batch. A bounded ring holds the
+recent path; zero movement emits nothing. Hovercraft emit discrete skirt-side
+particles on dry terrain, with each particle retaining its birth height and
+direction. Grounded mode admits hovercraft without comparing model Y to the
+centre terrain height: the four-corner conform can differ from that sample
+[04 R-MOV-01 §5]. Hot or
+damaging liquid receives no water foam in this first experiment. Geometry
+and lifetimes are artistic presentation constants.
+
+GPU ownership: `water.go`, its shader/fixtures, renderer lifecycle and the
+terrain hook. Cache a conservative water/shore mask in painted map coordinates
+using the terrain inverse projection [07 §8][03 §2.5]. Never treat a negative
+height sentinel as water. Preserve painted colours. Draw the water treatment
+before objects and fog; clip wake fragments to the matching wet/dry mask.
+No postprocess may displace units, HUD or fog. Cache resources are released on
+map replacement and disposal. Visible-region work and history are bounded;
+benchmark classic and modern sequentially with matching metadata.
+
+### 26.2 Validation gate
+
+Build/vet/test with `tools/check`; targeted real-device renderer fixtures with
+`NANOLATHE_GPU_DEVICE_TEST=1 go test ./internal/platform/gpurender -count=1`.
+Inspect actual coastal captures at multiple ticks, native and fractional zoom;
+check clone/replay, fog, shoreline clipping, pause and classic identity.
+Use the existing battle benchmark for regression. Verify movement after loading
+a real save and issuing normal orders; staged placement is a presentation
+diagnostic and cannot establish that the gameplay producer works. The opt-in
+`TestCoastalSavedGameParticles` accepts `NANOLATHE_COASTAL_SAVE` and retail assets
+to exercise normal and two-tick catch-up cadence without writing the save.
+
+### 26.3 Surface treatment and cost bounds
+
+The GPU builds an RGBA mask once per terrain identity. Red identifies ordinary
+water, green encodes inward shore distance, and blue independently identifies
+valid dry ground; excluded liquid and invalid terrain belong to neither medium.
+The mask starts at one painted map pixel per texel and doubles that step until
+its largest side is at most 2,048 texels (at most 16 MiB of GPU pixels). Two
+integer chamfer sweeps approximate distance up to 32 world pixels. A separable
+nine-tap blur smooths the distance channel without changing wet/dry labels.
+Its sample spacing is at least two world pixels to round height-grid corners
+even on the finest mask level.
+Bilinear sampling softens the mask while conservative coverage clips both foam
+and dust. Source reset releases the mask. A future height-editing path must
+invalidate this cache as well as the painted terrain sources.
+
+A 128-pixel block index skips the water pass when no water intersects the view.
+Otherwise the scheduler copies the terrain composite and applies a viewport
+water shader before objects. Two layers of smooth value noise with different
+scales and drift perturb the terrain by up to 2.8 world pixels per axis. Moving
+brightness and blue highlights make that motion readable against fine painted
+texture. Bilinear terrain sampling prevents displacement from snapping between
+original pixels. Shore fronts travel toward the coast along the blurred distance
+field on an approximately four-second cycle, with spatially varying phase and
+opacity. Broad crests fade across the last seven world pixels before the
+wet/dry boundary to avoid outlining its grid. Surface brightness variation is
+bounded to ±9.6 percent and the blue highlight blend to eight percent at full
+wind strength. These subdued lighting coefficients preserve readable refraction;
+wave timing, displacement and wind drift are independent of highlight strength.
+
+`water_motion.go` observes committed wind, using its negative sine/cosine
+components [R-WIND-01]. Strength is normalized against 5,000 and clamped to [0,1].
+The target drift speed is 0.4–2 world pixels per second; velocity and visual
+strength approach the target by 1/90 of the remaining difference each tick.
+The surface shader scales that integrated drift by six for visible movement.
+Integrating the velocity preserves pattern position when wind changes, including
+heading wrap and reversals. The field is never rotated about the map origin.
+Recording interpolates the previous/current visual values with the permitted
+presentation fraction. Repeated ticks do nothing; source/renderer changes reset
+the state, as do tick rewinds and observation gaps exceeding 300 ticks.
+These coefficients
+describe this experiment, not retail arithmetic. The snapshot and water draw
+add two render passes; cost depends primarily on viewport pixels, not map area.
+
+Particle history is bounded to 8,192 marks and 4,096 tracked unit identities.
+Land particles emit every six travelled world pixels, alternate around the
+rear skirt, starting near its outer edge, and live for 45 ticks. Their initial
+opacity is 0.45. They spread and drift sideways with quadratic
+opacity decay. The soft lobed profile composites white at low opacity, so it
+can brighten terrain without darkening it or requiring another snapshot.
+The additional
+work scales with visible marks and their overdraw. Renderer changes clear
+history; no simulation service or gameplay RNG is consulted. `water_buildings.go`
+records broken elliptical ripples beneath visible, completed floating
+buildings, bounded to 1,024 visible rings. Admission uses wet terrain, a model
+top reaching the surface, and committed base height equal to sea minus authored
+waterline [05 "Geothermal requirement"]. It does not require the FBI `Floater`
+flag: stock water-yard buildings such as tidal generators do not set it.
+Two staggered rings expand and dissolve inside each quad, avoiding a squared
+footprint outline. This approximates displacement around the base, not the
+model's exact waterline intersection; the shared mask clips it to water.
+
+Validation includes real-device native and fractional zoom fixtures for phase
+replay, animation, dry/wet clipping, opaque object preservation and source
+reset, plus publication and history lifecycle tests. Actual saved-game testing
+found that observing only during recording lost history whenever two simulation
+ticks preceded a draw. Per-publication observation fixes that while retaining
+the reset on genuinely missing history; loading itself preserves the needed
+unit metadata. A staged Coast to Coast
+diagnostic uses actual ARMPT, CORPT, ARMSH and ARMTIDE models with prescribed trajectories
+and a deliberate wind reversal; it demonstrates the effects but does not measure naval gameplay.
+The matching land-battle benchmark showed no measurable modern regression and
+an identical classic capture. It does not establish the cost of a large naval
+battle's active water/particle cost.
+
+
+### 26.4 Above-water screen-space reflections
+
+This is an Enhanced presentation approximation. `ModelGeometry.ReflectWater`
+admits a visible body whose origin is over valid ordinary water;
+`ReflectionSea` is absolute sea height in recording-scale pixels, alongside
+`WorldHeight`.
+Vertex `Height` remains physical relative height, including in
+supersampled geometry. `Sprite.ReflectWater/ReflectionHeight` and
+`Line.ReflectWater/ReflectionHeight0/ReflectionHeight1` carry signed above-sea
+height for admitted projectile bodies and endpoints. Ground-shadow sprites do
+not opt in. Classic ignores these value fields; cloned lists retain them.
+
+The direct model lane captures front-facing faces while preparing its normal
+atlas. Each reflected vertex samples that existing resolved colour at its
+original atlas position. The original key plane and quad mapper reject source
+pixels belonging to an obscuring piece. Physical height, independent of the
+retail comparison key, clips fragments at and below sea. Reflect only physical
+height, preserving the hull's ground footprint: the camera subtracts half height
+[03 §2.5], so reflected screen Y is source screen Y plus its above-water height.
+Equal-height points retain their screen-space direction at every heading. Low
+hulls can obscure much of their own reflection; do not move or flip the whole
+image to force it into view. No extra model atlas or alternative scene camera
+is built.
+The atlas already applies materials, construction reveal and waterline tint.
+Models omitted from that atlas do not receive fallback reflections.
+
+Projectile model pieces share this path. GAF projectiles are reflected
+billboards about their anchor's water-plane projection; their art has no
+per-pixel physical depth. Beam/segment endpoints use committed heights and
+interpolate the waterline clip across each stroke. No effect, UI glyph or
+projectile ground shadow is inferred to be reflective from its brightness.
+
+A retained viewport RGBA plane receives the reflection source, capped at 32,768
+vertices per frame, reserving 4,096 for projectile sprites and strokes. A water-only resolve introduces two irregular horizontal
+ripple frequencies, a three-sample softening, a cool tint and 25 percent opacity.
+Sources fade between 64 and 160 world pixels above sea. Wave phase uses the same
+committed time/fraction as the water and freezes on pause. World zoom applies
+once, to destination coordinates; source atlas positions remain unchanged.
+The resolve is after painted water and before objects, wakes and fog. Thus
+reflections cannot paint over foreground units, shore or UI, and black fog
+covers the result. Only bodies already admitted by presentation can reflect.
+This does not reconstruct offscreen or hidden surfaces, trace rays, or solve
+inter-unit reflected depth ordering; overlapping reflected subjects remain an
+approximation. The source plane is allocated only when needed and released on
+source reset; draw work is skipped without visible water or admitted geometry.
+`SetWaterReflections` is a capture-only comparison switch. Shore foam's opacity
+is additionally reduced by one quarter; its shape and timing are unchanged.
+
+
+At 1920×1080, the reflection source has 7.9 MiB of logical RGBA pixels. The
+current Ebitengine Metal backend rounds each texture dimension up to a power of
+two, allocating a 2048×2048 texture (16 MiB), plus the bounded vertex/index
+buffers. This corrects a logical-pixel-only estimate of device storage.
+
+An isolated M3 Pro probe at 1080p alternated reflections on/off on the same
+committed frame, warmed both paths, and forced completion with an identical
+full-frame readback after every Execute. Two runs of 120 pairs measured median
+paired overhead of 0.2–0.6 ms for three water bodies, a dry hovercraft and a
+projectile stroke, and about 0.8 ms for a dense 64-body water scene plus a stroke.
+CPU submission overhead was about 0.03 ms and 0.32 ms respectively; total device
+draws increased by two in both scenes. These are renderer/completion deltas,
+not isolated GPU timestamps or full-game FPS estimates. Scene overlap, visible
+water area, device and resolution affect cost. Raising opacity from 20 to 25
+percent changes a shader coefficient without adding geometry, passes or storage.
+
+### 26.5 Integration verification
+
+The user approved the final water, foam, hover dust and physical-height
+reflections, including 25 percent reflection opacity, for main. Integration
+retains metallic glints, nanolathe illumination and explosion distortion;
+vegetation remains static. Independent read-only review found no implementation
+issues. The fast, retail and real-device gates passed, as did the saved-game
+hover movement check at ordinary and two-tick catch-up cadence. Coastal captures
+at native and 2× recording scale, before and after a staged wind change, were
+inspected; the device fixtures also exercise fractional zoom and replay.
+
+Sequential Great Divide baseline/integrated runs used scene version 4, seed 7,
+1920×1080, 60 draws/s, 300 pre-ticks, 120 warmup draws and 180 measured draws,
+with factories enabled and auto-remaster disabled. Modern used 2× zoom; classic
+used native. Within each renderer pair all scene metadata and frame censuses
+match, and final RGB captures are identical. Both captures contain fire,
+moving units, projectiles and active factory construction and were inspected.
+
+| Executor | DrawWork median / p95 / maximum, ms (baseline → integrated) |
+|---|---|
+| Modern 2× | 5.500 / 8.501 / 9.985 → 5.562 / 8.439 / 10.187 |
+| Classic native | 13.989 / 17.874 / 26.168 → 13.766 / 17.788 / 20.340 |
+
+These short host samples show no clear regression. The dry battle is a
+regression control, not a measurement of active water or reflection GPU cost;
+§26.4 records the separate active-water completion probe. Artifacts remain
+outside the repository in `/private/tmp/coastal-land-{base,after}-{modern,classic}`
+and `/private/tmp/coastal-land-multiframe`; gate logs use the same
+`/private/tmp/coastal-land-` prefix.
+
+
+## 27. Burning vegetation heat shimmer prototype
+
+This is a user-requested modern GPU presentation experiment, not a retail
+behavior claim. The user visually approved it and authorized landing with the
+shared distortion pass and tree-heat overlap priority described in §27.2.
+The recorder tags the resolved body art of burning sprite features using the
+committed IsBurning flag, with an additional anchor LOS check. No new fire,
+simulation state, RNG calls or asset edits are introduced. Classic ignores the
+metadata. Missing art, hidden anchors and finished burning emit no shimmer.
+
+Time comes from the committed tick modulo 3600, plus the existing presentation
+fraction when enabled, with a stable cell-derived phase offset. The shader's
+frequencies wrap at that tick period. Replaying a list and pausing freeze it.
+
+The plume starts 45% down the resolved body's art and extends upward. Its
+half-width is 55% of the art width clamped to 14–38 world pixels; height is 125%
+of the art height clamped to 56–112 pixels. Two upward-travelling waves, a small
+sideways drift and a squared soft envelope create up to about 2.4 world pixels
+of horizontal refraction. These numbers are artistic tuning, not retail facts.
+Recording scale and final smooth zoom apply to all lengths together.
+
+The executor culls against the world viewport before admitting at most 128
+plumes in source order. It shares one world copy and one distortion batch with
+explosion rings, appending the heat quads last before fog/chrome (§27.2). Bilinear sampling is clamped to the source clip. Outside the soft
+plume envelope pixels are untouched. Overlaps read the same snapshot; the last
+plume wins rather than recursively amplifying displacement. Tree heat also
+wins wherever it overlaps an explosion ring. With neither visible plumes nor
+explosion rings, the shared pass performs no copy or draw. HeatPlumes counts the submitted plumes.
+SetTreeHeat is an executor-only comparison control.
+
+Verification uses shader compilation and the existing real-device fixture loop
+for motion, frozen replay, clipping and source removal, followed by sequential
+live battle captures and timing checks. The prototype does not claim physical
+refraction or exact occlusion against foreground units within the plume.
+
+
+### 27.1 Prototype verification
+
+The affected client/draw-list/GPU/doc packages, tools/check and the real-device
+fixture loop passed. The source test covers modern/classic, visible/hidden,
+burning/reclaiming and missing art. The device check covers frozen replay,
+changed time, clip boundaries and source removal. These initial prototype
+checks preceded the full pre-landing retail gate.
+
+Sequential Great Divide scene-v4 runs used seed 7, native 1920×1080, 300
+pre-ticks, 30 draws/s and 180 measured frames, with factory production enabled.
+The measured modern frames submitted 7–11 visible plumes. The endpoint contained
+15 burning features, 13 with in-view anchors, 160 moving units, 61 projectiles,
+300 effects, 8 nanoframes and 4 nanolathe events. Before/after censuses matched.
+The classic endpoint PNGs were byte-identical. Modern captures were inspected.
+
+| Renderer | Revision | Host draw work median / p95 / max (ms) | Host submission median / p95 / max (ms) |
+|---|---|---|---|
+| Modern | Before | 9.083 / 10.239 / 15.855 | 4.238 / 4.803 / 7.771 |
+| Modern | Prototype | 9.585 / 10.575 / 11.847 | 4.670 / 5.116 / 5.444 |
+| Classic | Before | 15.650 / 19.216 / 28.068 | 0.469 / 0.543 / 0.704 |
+| Classic | Prototype | 15.522 / 19.374 / 22.092 | 0.460 / 0.512 / 0.663 |
+
+Median host cadence remained approximately 33.33 ms. These are single short
+host samples, not GPU timings or a performance guarantee. Comparison outputs
+are in /private/tmp/tree-heat-{before,after}-{modern,classic}. A separate live
+capture used temporary readback instrumentation; its timings are excluded and
+the instrumentation is absent from the prototype. The resulting motion preview
+is /private/tmp/nanolathe-tree-heat-preview.mp4.
+
+
+### 27.2 Shared explosion and tree-heat pass
+
+The user explicitly chose tree heat to overwrite explosion distortion wherever
+both occur, accepting the small overlap change. The two families now append to
+one retained vertex/index batch and use one shader, one immutable world copy
+and one draw. All explosion quads precede all heat quads regardless of source
+recording order. A heat fragment outside its plume discards, preserving the
+blast beneath; a covered heat fragment replaces it with a heat-only sample of
+the original world. Heat does not refract an already distorted explosion image.
+
+The source-coordinate Y offset selects the shader formula: negative for a
+blast, positive recording-to-output scale for heat. X carries blast strength
+or heat time. Each quad has one selector throughout, and both formulas retain
+their previous arithmetic, clipping, bilinear sampler and independent budgets.
+The existing per-family comparison controls remain independent. A GPU fixture
+checks overlap priority, unaffected blast pixels outside the plume, frozen
+replay, and exactly two extra submissions (copy plus draw) with either or both
+families, compared with neither. No extra render target is allocated.
+
+Shared-pass verification: tools/check and the real-GPU fixture loop passed.
+The same scene/settings as §27.1 were run twice for modern in the order
+separate, shared, shared, separate, followed by shared/classic and
+separate/classic. All frame censuses matched. Of 180 modern frames, 167 had
+both sources active: each saved exactly two device submissions; the other 13
+saved none. Classic captures remained byte-identical. The shared modern capture
+was inspected; the intentional overlap change preserves heat priority.
+
+| Modern pass layout / run | Host draw work median / p95 / max (ms) | Host submission median / p95 / max (ms) |
+|---|---|---|
+| Separate / 1 | 10.059 / 10.689 / 23.863 | 4.693 / 5.077 / 9.369 |
+| Shared / 1 | 10.089 / 10.717 / 12.615 | 4.725 / 5.108 / 5.409 |
+| Shared / 2 | 9.993 / 10.619 / 12.268 | 4.716 / 5.079 / 5.337 |
+| Separate / 2 | 10.026 / 10.743 / 12.716 | 4.769 / 5.106 / 5.368 |
+
+The repeated host medians are effectively unchanged; these measurements do not
+establish a CPU speedup. Median cadence stayed near 33.33 ms. The eliminated
+copy/draw is confirmed by device-submission counts; GPU duration and bandwidth
+were not measured. Classic host draw work was 15.384 / 18.404 / 20.861 ms
+separate and 15.579 / 18.609 / 20.853 ms shared (median / p95 / max).
+Artifacts are /private/tmp/tree-heat-shared-{before,after}-{modern,classic}-{1,2}
+(the classic pair has run 1 only). The original launchers now use the shared-pass
+build. These measurements preceded the full pre-landing retail checks.
+
+
+### 27.3 Landing review
+
+The independent landing review found that retained heat-source sprites could
+keep decoded art alive across a map reset. Preparation now copies only scalar
+geometry, clip, time and scale into its scratch buffer; no GAF-frame reference
+escapes the borrowed list. Source reset clears that buffer and preserves the
+comparison toggle, covered by the existing lifecycle test. This changes resource
+ownership only; plume geometry and the shared shader remain the approved design.
+
+
+Landing integrates the approved coastal water/reflection implementation while
+retaining both renderer states, shader families, counters and reset paths. Heat
+uses §27 so the coastal §26 anchors remain unchanged. The frozen battle capture
+route was retried on the heat candidate and unchanged pre-coastal main; both
+failed while acquiring a Metal drawable texture, reproducing the existing §23.7
+host limitation. No frozen-list timing or paired-capture success is claimed for
+that route. Logs are /private/tmp/tree-heat-land-frozen-{candidate,main}.log;
+real-device fixtures and live battle comparisons are the available visual and
+performance evidence.

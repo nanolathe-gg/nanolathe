@@ -5,6 +5,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/palette"
+	"os"
 )
 
 // Renderer is the modern (GPU) executor (docs/DESIGN_GPU_RENDERER.md §2.3,
@@ -22,6 +23,7 @@ import (
 // (C-G3). The fog composite is not one of them: it compiles as an ordinary
 // destination command over the visible fog region.
 type Renderer struct {
+	metalGlint     bool
 	modelPrep      modelPrepScratch
 	tables         tables
 	displayPalette [256][4]byte
@@ -36,9 +38,8 @@ type Renderer struct {
 	// surfaces[0] is the true-colour composite the whole frame is drawn into and
 	// the image Execute returns: every source index is resolved through PAL as it
 	// is written, so there is no expansion pass (C-G8 as amended, §13.3).
-	// surfaces[1] survives only as the fog run's read copy — the fog composite is
-	// the one family that still reads the pixels it rewrites, and its region is
-	// copied here just before it draws.
+	// surfaces[1] holds the read copy for fog, Enhanced water and blast distortion. Each run's
+	// destination region is copied here just before the run reads it.
 	surfaces [2]*ebiten.Image
 	// placeholder backs an image slot no op in a run requested, for the case
 	// where no palette (and so no table atlas) has been installed.
@@ -125,8 +126,12 @@ type Renderer struct {
 
 	// glow is the Enhanced glow layer of docs/DESIGN_GPU_RENDERER.md §19: the
 	// emissive batch, its planes and passes (glow.go).
-	glow     glowLayer
-	lighting battleLighting
+	glow        glowLayer
+	lighting    battleLighting
+	water       waterLayer
+	reflections waterReflections
+	distortion  worldDistortion
+	heat        treeHeat
 
 	// modelDirect is the PROTOTYPE direct model lane (model_direct.go): faces
 	// drawn straight onto the composite instead of through the slot stage.
@@ -180,6 +185,7 @@ func (r *Renderer) SetDisplayPalette(p [256][4]byte) {
 // error before attempting a frame.
 func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 	r := &Renderer{
+		metalGlint:  os.Getenv("NANOLATHE_METAL_GLINT") != "0",
 		tables:      uploadTables(pal),
 		tileAtlases: make(map[tileAtlasKey]*tileAtlas),
 		gafImages:   make(map[*formats.GAFFrame]*ebiten.Image),
@@ -206,6 +212,11 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 	compile(&r.scene2D, newScene2DShader)
 	compile(&r.sceneDest, newSceneDestShader)
 	compile(&r.markerShader, newMarkerShader)
+	compile(&r.water.shader, newWaterShader)
+	compile(&r.water.wakeShader, newSurfaceWakeShader)
+	compile(&r.reflections.sourceShader, newReflectionSourceShader)
+	compile(&r.reflections.resolveShader, newReflectionResolveShader)
+	compile(&r.distortion.shader, newDistortionShader)
 	if err := r.initModelDirect(); err != nil && firstErr == nil {
 		firstErr = err
 	}
@@ -270,7 +281,11 @@ func (r *Renderer) Execute(list *drawlist.List, w, h int) *ebiten.Image {
 	// destination, so their cost is a fixed handful of passes rather than three
 	// per group (model_stage.go).
 	r.prepareBattleLighting(list)
+	r.reflections.resetFrame()
+	r.prepareBlastDistortion(list)
+	r.prepareTreeHeat(list)
 	r.prepareModelDirect(list)
+	r.prepareProjectileReflections(list)
 	list.Replay(r)
 	// A list without an Expand marker still leaves no compiled work behind.
 	r.submitSchedule()

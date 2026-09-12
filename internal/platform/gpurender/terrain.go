@@ -301,6 +301,7 @@ func (r *Renderer) Terrain(c drawlist.Terrain) {
 	if r == nil || r.surfaces[0] == nil || r.scene2D == nil {
 		return
 	}
+	r.prepareWater(c)
 	t := c.Terrain
 	// Zero is the native scale: a recorder that never set the field draws the
 	// native view (drawlist.Terrain.Scale).
@@ -436,6 +437,8 @@ func (r *Renderer) Terrain(c drawlist.Terrain) {
 			}
 		}
 	}
+	r.drawWater(c)
+	r.drawWaterReflections(c)
 }
 
 // floorDivInt is floor division for int, correct for negative numerators

@@ -110,6 +110,18 @@ type Sprite struct {
 	// LightingScale is recording pixels per world pixel. Neither includes
 	// supersampling or a subsequent executor world transform.
 	WorldHeight, LightingScale float32
+	// ReflectionHeight is the projectile body anchor above sea in recording
+	// pixels. Ground shadows never ReflectWater (GPU design §26).
+	ReflectWater     bool
+	ReflectionHeight float32
+	// BlastAge is elapsed simulation ticks plus presentation fraction; BlastSize
+	// is the maximum authored animation extent in world pixels (GPU design §25).
+	// Zero size disables refraction; classic ignores both.
+	BlastAge, BlastSize float32
+	// HeatSource and HeatTime drive the modern burning-feature shimmer (GPU design §27).
+	// Time is committed ticks plus presentation fraction; classic ignores both.
+	HeatSource bool
+	HeatTime   float32
 	// Pal is the palette a BlitLit sprite resolves its LHT row against; nil for
 	// every other kind (WU-1.8). Carrying it on the record makes the lit glyph
 	// blit self-contained under deferred replay: the classic sink reads Pal here
@@ -230,6 +242,10 @@ type Line struct {
 	// selection quad or a path (docs/DESIGN_GPU_RENDERER.md §19). The classic
 	// executor ignores it.
 	Emissive bool
+	// Reflection heights follow the recorded endpoints, in pixels above sea.
+	// Enhanced clips interpolation below the plane (GPU design §26).
+	ReflectWater                         bool
+	ReflectionHeight0, ReflectionHeight1 float32
 }
 
 // Point is one packed (x, y, operand) triple. The Index field is a physical
@@ -462,6 +478,7 @@ type Surface struct {
 // A tile at world pixel (px, pz) lands at (px-OriginX, pz-OriginY); OriginX and
 // OriginY fold the camera scroll and the orthographic beam offset [03 §2.5].
 type Terrain struct {
+	Water            WaterSurface
 	Terrain          *world.Terrain
 	OriginX, OriginY int32
 	DstW, DstH       int32
@@ -520,6 +537,7 @@ const (
 	familyMarkers
 	familyFlash
 	familyHalo
+	familySurfaceWakes
 )
 
 // tag is one ordering entry: which family, and which element of that family's
@@ -551,6 +569,7 @@ type List struct {
 	markers      []Markers
 	flash        []Flash
 	halo         []Halo
+	surfaceWakes []SurfaceWakes
 
 	classicImages    []*ClassicModelImage
 	classicImageNext int
@@ -661,6 +680,13 @@ func (l *List) VisitSprites(visit func(Sprite)) {
 	}
 }
 
+// VisitLines borrows commands for synchronous read-only preparation.
+func (l *List) VisitLines(visit func(Line)) {
+	for _, line := range l.line {
+		visit(line)
+	}
+}
+
 // RecordFlash appends one calculated explosion disc in record order (§13.11).
 func (l *List) RecordFlash(c Flash) {
 	l.order = append(l.order, tag{familyFlash, len(l.flash)})
@@ -732,6 +758,8 @@ func (l *List) Reset() {
 	l.markers = l.markers[:0]
 	l.flash = l.flash[:0]
 	l.halo = l.halo[:0]
+	clear(l.surfaceWakes)
+	l.surfaceWakes = l.surfaceWakes[:0]
 }
 
 // Replay visits the recorded commands in exact record order and calls the
@@ -741,6 +769,7 @@ func (l *List) Replay(s Sink) {
 	// The trail family is optional: an executor that cannot present it (the
 	// Original executor) simply lacks the hook.
 	trails, _ := s.(TrailSink)
+	wakes, _ := s.(SurfaceWakeSink)
 	// The world boundary and the strategic marker layer are optional in exactly
 	// the same way: an executor without free zoom needs neither
 	// (docs/DESIGN_GPU_RENDERER.md §16.3).
@@ -775,6 +804,10 @@ func (l *List) Replay(s Sink) {
 		case familyTrails:
 			if trails != nil {
 				trails.Trails(l.trails[t.idx])
+			}
+		case familySurfaceWakes:
+			if wakes != nil {
+				wakes.SurfaceWakes(l.surfaceWakes[t.idx])
 			}
 		case familyWorld:
 			if world != nil {
@@ -864,6 +897,10 @@ func (l *List) Clone() List {
 	// way it shares GAF frames [I6].
 	c.flash = append([]Flash(nil), l.flash...)
 	c.halo = append([]Halo(nil), l.halo...)
+	c.surfaceWakes = make([]SurfaceWakes, len(l.surfaceWakes))
+	for i, wakes := range l.surfaceWakes {
+		c.surfaceWakes[i] = SurfaceWakes{Marks: append([]SurfaceWake(nil), wakes.Marks...)}
+	}
 	// Trail batches borrow the client's reusable mark arena; copy each.
 	c.trails = make([]Trails, len(l.trails))
 	for i, tr := range l.trails {

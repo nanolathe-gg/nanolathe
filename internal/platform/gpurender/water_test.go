@@ -1,0 +1,164 @@
+package gpurender
+
+import (
+	"bytes"
+	"fmt"
+	"testing"
+
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
+)
+
+// A synthetic coast: flat water west of a raised bank. No retail bytes.
+func waterFixtureTerrain() *world.Terrain {
+	const cells = 16
+	attrs := make([]formats.TNTAttribute, cells*cells)
+	for y := 0; y < cells; y++ {
+		for x := 0; x < cells; x++ {
+			h := byte(4)
+			if x >= 8 {
+				h = 28
+			}
+			attrs[y*cells+x].Height = h
+		}
+	}
+	t := &world.Terrain{CellW: cells, CellH: cells, SeaLevel: 16, Plot: world.ExpandPlot(attrs, cells, cells), TileIndices: make([]uint16, cells*cells/4), TileSet: make([][1024]byte, 1)}
+	for i := range t.TileSet[0] {
+		t.TileSet[0][i] = byte(70 + (i%32)/4)
+	}
+	return t
+}
+
+func TestWaterMaskProjectionAndLiquidGate(t *testing.T) {
+	ter := waterFixtureTerrain()
+	p, w, h, step, _, _, _ := waterMaskPixels(ter)
+	if w == 0 || h == 0 {
+		t.Fatal("empty coastal mask")
+	}
+	at := func(x, y int) byte { return p[((y/step)*w+x/step)*4] }
+	dry := func(x, y int) byte { return p[((y/step)*w+x/step)*4+2] }
+	if at(48, 80) != 255 || at(180, 80) != 0 {
+		t.Fatal("mask lost wet/dry coast")
+	}
+	// The last world row returns the raw height sentinel, not more ocean.
+	if at(48, 252) != 0 {
+		t.Fatal("invalid ground treated as water")
+	}
+	for _, hot := range []bool{false, true} {
+		if hot {
+			ter.LavaWorld = true
+		} else {
+			ter.WaterDoesDamage, ter.WaterDamage = 1, 1
+		}
+		p, _, _, _, _, _, _ = waterMaskPixels(ter)
+		if dry(48, 80) != 0 || dry(48, 252) != 0 || dry(180, 80) != 255 {
+			t.Fatal("excluded liquid or invalid terrain classified as dry")
+		}
+		for i := 0; i < len(p); i += 4 {
+			if p[i] != 0 {
+				t.Fatal("hot/damaging liquid got ocean foam")
+			}
+		}
+	}
+}
+
+func checkWaterDevicePixels() error {
+	pal := fixturePalette()
+	ter := waterFixtureTerrain()
+	const w, h = 160, 120
+	r, err := NewChecked(&pal, w, h)
+	if err != nil {
+		return err
+	}
+	read := func(tick uint32, zoom float32, enabled bool, wakes int) []byte {
+		var l drawlist.List
+		l.RecordClear()
+		if zoom != 1 {
+			l.RecordWorld(drawlist.WorldSpace{Begin: true, Zoom: camera.ZoomUnit * 3 / 4, Step: camera.ViewScaleNative, RecordW: w*4/3 + 1, RecordH: h*4/3 + 1})
+		}
+		rw, rh := int32(w), int32(h)
+		if zoom != 1 {
+			rw, rh = w*4/3+1, h*4/3+1
+		}
+		l.RecordTerrain(drawlist.Terrain{Terrain: ter, OriginX: 16, OriginY: 16, DstW: rw, DstH: rh, Scale: camera.ViewScaleNative, Water: drawlist.WaterSurface{Enabled: enabled, Tick: tick, WindStrength: 3500, WindHeading: 12000, Energy: .7, DriftX: float32(tick) / 30}})
+		if wakes != 0 {
+			l.RecordSurfaceWakes(drawlist.SurfaceWakes{Marks: []drawlist.SurfaceWake{{X: 100, Y: 50, AxisX: 38, AxisY: 0, CrossY: 12, Alpha: .5, Age: .3, Dust: wakes == 2, Foam: wakes == 1}}})
+		}
+		l.RecordFill(drawlist.Fill{Rect: drawlist.Rect{X: 20, Y: 20, W: 12, H: 12}, Index: 211})
+		if zoom != 1 {
+			l.RecordWorld(drawlist.WorldSpace{})
+		}
+		l.RecordExpand()
+		out := r.Execute(&l, w, h)
+		p := make([]byte, w*h*4)
+		out.ReadPixels(p)
+		return p
+	}
+	for _, zoom := range []float32{1, .75} {
+		off, on, later := read(30, zoom, false, 0), read(30, zoom, true, 0), read(42, zoom, true, 0)
+		if bytes.Equal(off, on) || bytes.Equal(on, later) {
+			return fmt.Errorf("water animation absent at zoom %v", zoom)
+		}
+		if !bytes.Equal(on, read(30, zoom, true, 0)) {
+			return fmt.Errorf("water same-phase replay differs")
+		}
+		// Surface motion must reach both deep water and the shore. A single
+		// whole-image comparison allowed an animated centre to hide a static beach.
+		for _, band := range []struct {
+			name   string
+			x0, x1 float32
+		}{{"open water", 35, 65}, {"shore", 85, 105}} {
+			changed := false
+			for y := int(50 * zoom); y < int(80*zoom); y++ {
+				for x := int(band.x0 * zoom); x < int(band.x1*zoom); x++ {
+					i := (y*w + x) * 4
+					changed = changed || !bytes.Equal(on[i:i+4], later[i:i+4])
+				}
+			}
+			if !changed {
+				return fmt.Errorf("%s animation absent at zoom %v", band.name, zoom)
+			}
+		}
+		withWake := read(30, zoom, true, 1)
+		if bytes.Equal(withWake, on) {
+			return fmt.Errorf("building foam absent")
+		}
+		if !bytes.Equal(on, read(30, zoom, true, 3)) {
+			return fmt.Errorf("removed white wake still draws")
+		}
+		withDust := read(30, zoom, true, 2)
+		if bytes.Equal(withDust, on) {
+			return fmt.Errorf("hover dust absent")
+		}
+		// A land region and an opaque object drawn after water must remain exact.
+		for y := 0; y < h; y++ {
+			for x := 0; x < w; x++ {
+				dry := float32(x)/zoom+16 > 148
+				wet := float32(x)/zoom+16 < 100
+				i := (y*w + x) * 4
+				if (wet && !bytes.Equal(withDust[i:i+4], on[i:i+4])) || (dry && !bytes.Equal(withWake[i:i+4], on[i:i+4])) {
+					return fmt.Errorf("wake/dust crossed shore at %d,%d zoom %v", x, y, zoom)
+				}
+				for ch := 0; ch < 3; ch++ {
+					if withDust[i+ch] < on[i+ch] {
+						return fmt.Errorf("hover particle darkened terrain")
+					}
+				}
+				object := x >= int(20*zoom) && x < int(32*zoom) && y >= int(20*zoom) && y < int(32*zoom)
+				if dry || object {
+					i := (y*w + x) * 4
+					if !bytes.Equal(off[i:i+4], on[i:i+4]) {
+						return fmt.Errorf("water touched land/object at %d,%d zoom %v", x, y, zoom)
+					}
+				}
+			}
+		}
+	}
+	r.ResetSources()
+	if r.water.mask != nil || r.water.source != nil {
+		return fmt.Errorf("coastal mask survived source reset")
+	}
+	return nil
+}

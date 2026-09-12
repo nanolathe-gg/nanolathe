@@ -331,6 +331,7 @@ func (c *Client) effectDrawOptions() EffectDrawOptions {
 	return EffectDrawOptions{
 		TerrainCoverage: c.terrainScreenCoverage,
 		ResolveFrame:    c.resolveEffectFrame,
+		BlastSize:       c.resolveBlastSize,
 	}
 }
 
@@ -390,4 +391,27 @@ func (c *Client) EffectEntryFrameCount(bank, entry string) (int, bool) {
 		return 0, false
 	}
 	return len(e.Frames), true
+}
+
+// resolveBlastSize measures immutable authored art, not the tiny opening frame
+// of a growing fireball. This modern-only size cache is retired with the bank.
+func (c *Client) resolveBlastSize(view frame.EffectView) float32 {
+	entry, ok := c.effectEntry(view.AssetID, view.Graphic)
+	if !ok {
+		return 0
+	}
+	if size, ok := c.blastSizes[entry]; ok {
+		return size
+	}
+	var size uint16
+	for _, ref := range entry.Frames {
+		if f := ref.Frame; f != nil {
+			size = max(size, f.Width, f.Height)
+		}
+	}
+	if c.blastSizes == nil {
+		c.blastSizes = make(map[*formats.GAFEntry]float32)
+	}
+	c.blastSizes[entry] = float32(size)
+	return float32(size)
 }

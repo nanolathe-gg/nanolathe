@@ -19,6 +19,7 @@ func TestLifecycleResetSourcesReleasesBattleResources(t *testing.T) {
 		tileAtlases:  map[tileAtlasKey]*tileAtlas{{terrain: &world.Terrain{}}: {pages: []*ebiten.Image{tile}}},
 		gafImages:    map[*formats.GAFFrame]*ebiten.Image{frame: shared},
 		scene:        sceneAtlas{pages: []*scenePage{{img: shared}}, frames: map[*formats.GAFFrame]sceneEntry{frame: {}}, pcx: map[*formats.PCX]sceneEntry{{}: {}}, fonts: map[*formats.FNT]*fntAtlas{{}: {}}},
+		heat:         treeHeat{sources: []treeHeatSource{{width: 32}}, disabled: true},
 		textureAtlas: modelTextureAtlas{slots: map[*formats.GAFFrame]modelTextureSlot{frame: {img: shared}}, page: shared},
 		fog:          fogPass{shader: shader, compiled: true, atlas: shared, atlasGray: [4]*formats.GAFEntry{{}}},
 		scene2D:      shader, surfaces: [2]*ebiten.Image{output}, w: 640, h: 480,
@@ -38,6 +39,9 @@ func TestLifecycleResetSourcesReleasesBattleResources(t *testing.T) {
 	}
 	if r.fog.atlas != nil || r.fog.atlasGray[0] != nil || r.sceneOpts.Images[0] != nil || r.surfaceCache[0].identity != 0 {
 		t.Fatal("compiled or paused-source dependencies retained")
+	}
+	if r.heat.sources != nil || !r.heat.disabled {
+		t.Fatal("source reset retained heat sources or lost its comparison control")
 	}
 	if r.scene2D != shader || r.fog.shader != shader || !r.fog.compiled || r.tables.atlas != table || r.surfaces[0] != output || r.w != 640 || r.h != 480 {
 		t.Fatal("source reset changed renderer configuration")

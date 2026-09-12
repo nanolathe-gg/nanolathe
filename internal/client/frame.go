@@ -321,6 +321,7 @@ func (c *Client) drawTerrainPrep() {
 		// an executor that cannot reach client state builds the same picture
 		// (DESIGN_GPU_RENDERER §14.2, §14.3).
 		c.emitTerrain(drawlist.Terrain{
+			Water:   c.waterSurfaceMetadata(),
 			Terrain: c.terrain,
 			Cam:     c.cam,
 			OriginX: c.cam.X,
@@ -333,6 +334,38 @@ func (c *Client) drawTerrainPrep() {
 	}
 	// A frontend without terrain remains the cleared indexed surface. Retail
 	// does not define a synthetic gradient fallback [I9].
+}
+
+// waterSurfaceMetadata records the authored Enhanced water phase (GPU design
+// §26.1). Raw wind remains committed; only its visual response is filtered [I6].
+func (c *Client) waterSurfaceMetadata() drawlist.WaterSurface {
+	if c == nil || !c.enhanced || c.strategicView() || c.buffer == nil {
+		return drawlist.WaterSurface{}
+	}
+	cur := c.buffer.Current()
+	if cur == nil {
+		return drawlist.WaterSurface{}
+	}
+	c.observeWaterMotion(cur)
+	water := drawlist.WaterSurface{
+		Enabled: true, Tick: cur.Tick,
+		WindHeading: cur.Wind.Heading, WindStrength: cur.Wind.Strength,
+	}
+	if c.interpolation {
+		// Reuse the recording's resolved fraction. Sampling again could move
+		// the phase within one record; the host holds this fraction on pause.
+		// Non-interpolated captures retain their exact committed tick [I6].
+		water.Fraction16 = c.tickFraction16
+	}
+	st := &c.waterMotion
+	water.DriftX, water.DriftZ, water.Energy = st.x, st.z, st.energy
+	if c.interpolation {
+		f := float32(water.Fraction16) / 65536
+		water.DriftX = st.prevX + (st.x-st.prevX)*f
+		water.DriftZ = st.prevZ + (st.z-st.prevZ)*f
+		water.Energy = st.prevEnergy + (st.energy-st.prevEnergy)*f
+	}
+	return water
 }
 
 func (c *Client) drawInterface(cur *frame.Frame) {

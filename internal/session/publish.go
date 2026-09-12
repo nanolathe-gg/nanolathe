@@ -148,6 +148,9 @@ func (s *Session) publishSnapshot(tick uint32) {
 		return
 	}
 	published.Tick = tick
+	if s.Wind != nil {
+		published.Wind = frame.WindView{Heading: s.Wind.Heading, Strength: s.Wind.Strength}
+	}
 	published.ViewingPlayer = s.ViewingOwner
 	publication := s.ensurePublicationState()
 	publication.beginUnitIdentities()
@@ -264,6 +267,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 				vp.NoShadow = u.Def.NoShadow
 				vp.CanHover = u.Def.CanHover
 				vp.Floater = u.Def.Floater
+				vp.Waterline = u.Def.Waterline
 				vp.Digger = u.Def.Digger
 				if id := s.Units.DefIDForHandle(u.Handle); id != 0 {
 					vp.DefID = id

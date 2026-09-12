@@ -548,6 +548,9 @@ func (r *Renderer) appendPacket(g *drawlist.ModelGeometry, region modelDirectReg
 		d.lightY = float32(region.bounds.Min.Y) + (oy-float32(region.y))*0.5
 		d.lightScale, d.lightHeight = scale*0.5, g.WorldHeight
 	}
+	if !shadow {
+		r.reflections.active, r.reflections.region = g, region
+	}
 	r.appendDirectLane(raster.Faces, raster, ox, oy, scale, mode, entry)
 	if !shadow && len(g.Outline) != 0 {
 		// The outline endpoints are one native pixel each, from the native
@@ -562,6 +565,7 @@ func (r *Renderer) appendPacket(g *drawlist.ModelGeometry, region modelDirectReg
 	}
 	r.appendDirectLane(raster.LiveFaces, raster, ox, oy, scale, mode|modelDirectLive, entry)
 	d.keyDelta = 0
+	r.reflections.active = nil
 }
 
 // modelDirectShiftKey is a face corner's key lane: the packet's key plus the
@@ -693,6 +697,9 @@ func (r *Renderer) appendDirectFace(f *drawlist.ModelFace, slot modelTextureSlot
 	if run == nil {
 		fat = 0.5
 	}
+	if run != nil && !shadow {
+		r.reflectModelFace(f, ox, oy, s, cx, cy, fat, quad, run.page)
+	}
 	// The face's texel bounds, for the linear textured path to clamp to: a
 	// fattened corner's interpolated texel can reach one texel past the
 	// authored ring, into a neighbouring texture on the page.
@@ -725,6 +732,10 @@ func (r *Renderer) appendDirectFace(f *drawlist.ModelFace, slot modelTextureSlot
 		r.modelStats.LitModelFaces++
 	}
 	custom2, custom3 := float32(entry), lighting
+	colorG := float32(f.Color)
+	if r.metalGlint && !shadow {
+		colorG = metalGlintColor(f.Color, metalFaceGlint(f.Normal))
+	}
 	if run == nil {
 		custom2, custom3 = lighting, sceneOpModelDirect
 	}
@@ -739,7 +750,7 @@ func (r *Renderer) appendDirectFace(f *drawlist.ModelFace, slot modelTextureSlot
 		d.verts = append(d.verts, ebiten.Vertex{
 			DstX: ox + fattenBy(float32(v.X), cx, s, fat), DstY: oy + fattenBy(float32(v.Y), cy, s, fat),
 			SrcX: float32(slot.x + int(v.U)), SrcY: float32(slot.y + int(v.V)),
-			ColorR: k, ColorG: float32(f.Color), ColorB: colorB,
+			ColorR: k, ColorG: colorG, ColorB: colorB,
 			ColorA:  colorA,
 			Custom0: float32(mode), Custom1: d.laneKey(v.Key), Custom2: custom2, Custom3: custom3,
 		})
@@ -1040,7 +1051,7 @@ package main
 
 const palRow = ` + fmt.Sprint(tableRowPAL) + `.0
 const blueRow = ` + fmt.Sprint(tableRowBlue) + `.0
-` + modelQuadMapperSource + modelDirectMappedSource() + battleLightShaderSource + `
+` + modelQuadMapperSource + modelDirectMappedSource() + battleLightShaderSource + metalGlintShaderSource + `
 func palAt(idx float) vec3 {
 	return imageSrc1AtFromSrc0Pos(imageSrc0Origin()+vec2(idx+0.5, palRow+0.5)).rgb
 }
@@ -1096,7 +1107,9 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 			return vec4(0.0)
 		}
 	}
-	idx := floor(color.g + 0.5)
+	encoded := floor(color.g + 0.5)
+	glint := floor(encoded/256.0)
+	idx := mod(encoded, 256.0)
 	k := color.r
 	if mode == ` + fmt.Sprint(modelDirectShadow) + ` {
 		// A shadow silhouette: its index, no key test, no verdicts.
@@ -1149,6 +1162,7 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 				// slot stage rewrote the plane after shading (§11.5).
 				idx = verdict
 				k = 1.0
+				glint = 0.0
 			}
 		}
 		idx = clipIndex(idx, own, modelQuadU16(c.b, c.a), modelQuadU16(e.r, e.g), modelQuadU16(e.b, e.a), modelQuadU16(f.r, f.g))
@@ -1163,7 +1177,8 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 	if idx == 1.0 {
 		return vec4(0.0)
 	}
-	return vec4(battleLit(palAt(idx), k, custom.w), 1.0)
+	albedo := palAt(idx)
+	return vec4(metalGlint(albedo, battleLit(albedo, k, custom.w), glint), 1.0)
 }
 `
 }

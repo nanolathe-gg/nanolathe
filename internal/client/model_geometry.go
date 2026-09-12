@@ -147,9 +147,14 @@ func (c *Client) setModelLightingHeight(g *drawlist.ModelGeometry, draw *present
 	if g == nil || draw == nil {
 		return
 	}
-	g.WorldHeight = float32(draw.WorldPos[1].Raw()) / 65536 * float32(c.modelScale().Float())
+	scale := float32(c.modelScale().Float())
+	g.WorldHeight = float32(draw.WorldPos[1].Raw()) / 65536 * scale
+	g.ReflectWater = c.reflectionWaterAt(draw.WorldPos[0], draw.WorldPos[2])
+	g.ReflectionSea = float32(c.seaLevel().Raw()) / 65536 * scale
 	if g.Supersample != nil {
 		g.Supersample.WorldHeight = g.WorldHeight
+		g.Supersample.ReflectWater = g.ReflectWater
+		g.Supersample.ReflectionSea = g.ReflectionSea
 	}
 }
 

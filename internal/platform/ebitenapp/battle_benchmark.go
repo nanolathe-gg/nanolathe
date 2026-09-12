@@ -32,7 +32,8 @@ type BenchmarkOptions struct {
 	BeforeMeasure, AfterMeasure func() error
 }
 type benchmarkRow struct {
-	Frame int
+	MetalGlint bool
+	Frame      int
 	// Cadence is start-of-work to start-of-work, before simulation. The first
 	// measured interval is invalid because profile setup separates it from warmup.
 	CadenceValid bool
@@ -58,6 +59,7 @@ type benchmarkRow struct {
 	Census    any
 }
 type battleBenchmark struct {
+	glint           metalGlintControl
 	c               *client.Client
 	step            func()
 	census          func() any
@@ -279,6 +281,7 @@ func (g *battleBenchmark) Draw(screen *ebiten.Image) {
 		start = time.Now()
 		g.gpu.SetDisplayPalette(g.c.DisplayPalette())
 		g.gpu.SetGlow(g.c.Glow())
+		g.glint.update(g.gpu)
 		g.img = g.gpu.Execute(list, 1920, 1080)
 		if err := g.gpu.FogContentError(); err != nil {
 			g.err = err
@@ -311,7 +314,7 @@ func (g *battleBenchmark) Draw(screen *ebiten.Image) {
 		g.c.StartPreRecord(client.ClampTickFraction16(float32(phase+1)/float32(drawsPerTick)), 0, false)
 	}
 	if measured {
-		g.rows = append(g.rows, benchmarkRow{Frame: frameNumber, Step: step, Record: record, Submit: submit, Cadence: cadence, CadenceValid: cadenceValid, PaceWait: paceWait, OutsideDraw: outside, SimulationStep: stepped, TickPhase: phase, CPUCompose: compose, CPUReplay: replay, CPURender: compose + replay, PreRecord: preRecord, Hit: hit, Stats: stats, Census: census})
+		g.rows = append(g.rows, benchmarkRow{MetalGlint: g.gpu != nil && g.gpu.MetalGlint(), Frame: frameNumber, Step: step, Record: record, Submit: submit, Cadence: cadence, CadenceValid: cadenceValid, PaceWait: paceWait, OutsideDraw: outside, SimulationStep: stepped, TickPhase: phase, CPUCompose: compose, CPUReplay: replay, CPURender: compose + replay, PreRecord: preRecord, Hit: hit, Stats: stats, Census: census})
 	}
 	g.lastEnd = time.Now()
 	if measured {
@@ -337,6 +340,7 @@ func BattleBenchmark(c *client.Client, step func(), census func() any, options B
 		options.Metadata = make(map[string]any)
 	}
 	options.Metadata["benchmark_version"] = 2
+	options.Metadata["metal_glint"] = os.Getenv("NANOLATHE_METAL_GLINT") != "0" && options.Renderer == "modern"
 	options.Metadata["simulation_tps"] = benchmarkSimulationTPS
 	options.Metadata["draws_per_tick"] = options.TPS / benchmarkSimulationTPS
 	options.Metadata["warmup_draws"] = options.TPS * 2

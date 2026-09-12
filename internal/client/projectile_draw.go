@@ -109,7 +109,10 @@ func (c *Client) DrawProjectileViews(current []frame.ProjectileView, now uint32,
 			// The remaster covers feature banks only, so a projectile frame takes
 			// its nearest-doubled variant in the detail view
 			// (DESIGN_GPU_RENDERER §14.2, §14.3).
-			c.emitSprite(drawlist.Sprite{Frame: c.viewFrame(d.FrameAsset), X: x - 128, Y: y - 32, Kind: drawlist.BlitKeyed, Anchored: true, Emissive: true})
+			sprite := drawlist.Sprite{Frame: c.viewFrame(d.FrameAsset), X: x - 128, Y: y - 32, Kind: drawlist.BlitKeyed, Anchored: true, Emissive: true}
+			sprite.ReflectWater = c.reflectionWaterAt(view.X, view.Z)
+			sprite.ReflectionHeight = c.reflectionHeight(view.Y)
+			c.emitSprite(sprite)
 			stats.Sprites++
 		}
 	}
@@ -167,10 +170,16 @@ func (c *Client) drawProjectileBeam(d render.ProjectileDraw, v frame.ProjectileV
 	hx, hy := c.cam.WorldToScreen(v.X, v.Y, v.Z)
 	tx, ty := c.cam.WorldToScreen(v.TailX, v.TailY, v.TailZ)
 	strokes := render.BeamStrokes([2]int32{hx - 128, hy - 32}, [2]int32{tx - 128, ty - 32}, d.Color, d.Color2)
-	for _, stroke := range strokes {
+	for i, stroke := range strokes {
 		// Each beam stroke is one indexed line; the sink runs the raw Bresenham
 		// primitive [03 §5.4].
-		c.emitLine(drawlist.Line{X0: stroke.X0, Y0: stroke.Y0, X1: stroke.X1, Y1: stroke.Y1, Index: indexedColor(stroke.Color), Emissive: true})
+		line := drawlist.Line{X0: stroke.X0, Y0: stroke.Y0, X1: stroke.X1, Y1: stroke.Y1, Index: indexedColor(stroke.Color), Emissive: true}
+		c.setLineReflection(&line, render.ProjectilePoint{X: v.X, Y: v.Y, Z: v.Z}, render.ProjectilePoint{X: v.TailX, Y: v.TailY, Z: v.TailZ})
+		if d.Color2 != 0 && i == 0 {
+			// The secondary stroke swaps head and tail [03 §5.4].
+			line.ReflectionHeight0, line.ReflectionHeight1 = line.ReflectionHeight1, line.ReflectionHeight0
+		}
+		c.emitLine(line)
 	}
 	return len(strokes)
 }
@@ -182,7 +191,9 @@ func (c *Client) drawProjectileSegments(d render.ProjectileDraw) int {
 		b := d.Segments[i]
 		ax, ay := c.cam.WorldToScreen(a.X, a.Y, a.Z)
 		bx, by := c.cam.WorldToScreen(b.X, b.Y, b.Z)
-		c.emitLine(drawlist.Line{X0: ax - 128, Y0: ay - 32, X1: bx - 128, Y1: by - 32, Index: indexedColor(d.Color), Emissive: true})
+		line := drawlist.Line{X0: ax - 128, Y0: ay - 32, X1: bx - 128, Y1: by - 32, Index: indexedColor(d.Color), Emissive: true}
+		c.setLineReflection(&line, a, b)
+		c.emitLine(line)
 		count++
 	}
 	return count
@@ -195,7 +206,9 @@ func (c *Client) drawProjectileSegmentsSecond(d render.ProjectileDraw) int {
 		b := d.Segments2[i]
 		ax, ay := c.cam.WorldToScreen(a.X, a.Y, a.Z)
 		bx, by := c.cam.WorldToScreen(b.X, b.Y, b.Z)
-		c.emitLine(drawlist.Line{X0: ax - 128, Y0: ay - 32, X1: bx - 128, Y1: by - 32, Index: indexedColor(d.Color), Emissive: true})
+		line := drawlist.Line{X0: ax - 128, Y0: ay - 32, X1: bx - 128, Y1: by - 32, Index: indexedColor(d.Color), Emissive: true}
+		c.setLineReflection(&line, a, b)
+		c.emitLine(line)
 		count++
 	}
 	return count

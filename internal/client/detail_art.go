@@ -65,6 +65,9 @@ func (c *Client) SetEnhanced(enhanced bool) {
 	if c == nil {
 		return
 	}
+	if c.enhanced != enhanced {
+		c.resetTrails()
+	}
 	c.enhanced = enhanced
 }
 

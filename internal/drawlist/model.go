@@ -225,6 +225,11 @@ type ModelGeometry struct {
 	// view-scale pixels. Retained corners carry relative heights; placement
 	// refreshes this value, including when the retained body does not rebuild.
 	WorldHeight float32
+	// ReflectWater admits this body over ordinary water. ReflectionSea is the
+	// absolute sea plane in recording-scale pixels; individual corners are
+	// clipped against it by the Enhanced executor (GPU design §26).
+	ReflectWater  bool
+	ReflectionSea float32
 	// Cache identifies the retained cached-lane raster this packet carries, or
 	// is zero when the packet is not reusable across frames (§13.12).
 	Cache ModelCacheKey

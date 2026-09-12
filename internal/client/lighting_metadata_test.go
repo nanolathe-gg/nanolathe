@@ -154,3 +154,33 @@ func TestCompositeExplosionRecordsOneRootSource(t *testing.T) {
 		t.Fatalf("sources %d sprites %d", sources, sprites)
 	}
 }
+
+// The prototype clock and size travel with the list, independent of replay and
+// the current animation frame's changing bounds (GPU design §25).
+func TestBlastMetadataUsesAdmissionAgeAndAuthoredSize(t *testing.T) {
+	c := stripTestClient(t)
+	c.enhanced, c.interpolation = true, true
+	c.SetTickFraction(0.5)
+	c.cam.Scale = camera.ViewScaleDetail
+	options := c.effectDrawOptions()
+	options.LightingFrame = stripTestFrame(true)
+	options.LightingFrame.Tick = 105
+	c.effectBanks = map[string]*formats.GAF{"fx": {Entries: []formats.GAFEntry{{Name: "blast", Frames: []formats.GAFFrameRef{
+		{Frame: &formats.GAFFrame{Width: 4, Height: 3}},
+		{Frame: &formats.GAFFrame{Width: 80, Height: 60}},
+		{Frame: &formats.GAFFrame{Width: 16, Height: 16, Pixels: make([]byte, 256)}},
+	}}}}}
+
+	v := frame.EffectView{Kind: frame.KindExplosion.String(), Graphic: "blast", ActiveA: true, StartTick: 100, SeqA: 2, X: numeric.FixedFromInt(20), Z: numeric.FixedFromInt(20)}
+	c.DrawEffectViews([]frame.EffectView{v}, options)
+	count := 0
+	c.list.VisitLightSources(func(sp drawlist.Sprite) {
+		count++
+		if sp.BlastAge != 5.5 || sp.BlastSize != 80 || sp.LightingScale != 2 {
+			t.Fatalf("blast age/size/scale = %v/%v/%v", sp.BlastAge, sp.BlastSize, sp.LightingScale)
+		}
+	})
+	if count != 1 {
+		t.Fatalf("sources = %d", count)
+	}
+}
