@@ -75,6 +75,7 @@ func fillModelPacket(g *drawlist.ModelGeometry, vertices []drawlist.ModelVertex,
 		face.Vertices = vertices[offset : offset+n : offset+n]
 		face.Texture, face.Color, face.Shaded = p.frame, p.color, p.useSHD
 		face.Normal = p.normal
+		face.Material = p.material
 		key, u, v, row := p.attr[spanKey], p.attr[spanU], p.attr[spanV], p.attr[spanRow]
 		for j := 0; j < n; j++ {
 			x, y := p.x[j], p.y[j]

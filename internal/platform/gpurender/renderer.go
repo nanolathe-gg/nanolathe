@@ -23,10 +23,13 @@ import (
 // (C-G3). The fog composite is not one of them: it compiles as an ordinary
 // destination command over the visible fog region.
 type Renderer struct {
-	metalGlint     bool
-	modelPrep      modelPrepScratch
-	tables         tables
-	displayPalette [256][4]byte
+	materialsEnabled bool
+	scorchEnabled    bool
+	scorchShader     *ebiten.Shader
+	metalGlint       bool
+	modelPrep        modelPrepScratch
+	tables           tables
+	displayPalette   [256][4]byte
 	// scene2D is the one opaque pass and sceneDest the one destination-compositing
 	// pass (§11.2 "One scene shader for the 2D families").
 	scene2D                   *ebiten.Shader
@@ -185,11 +188,13 @@ func (r *Renderer) SetDisplayPalette(p [256][4]byte) {
 // error before attempting a frame.
 func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 	r := &Renderer{
-		metalGlint:  os.Getenv("NANOLATHE_METAL_GLINT") != "0",
-		tables:      uploadTables(pal),
-		tileAtlases: make(map[tileAtlasKey]*tileAtlas),
-		gafImages:   make(map[*formats.GAFFrame]*ebiten.Image),
-		copyIdx:     [6]uint32{0, 1, 2, 1, 2, 3},
+		materialsEnabled: os.Getenv("NANOLATHE_MODEL_MATERIALS") != "0",
+		scorchEnabled:    os.Getenv("NANOLATHE_SCORCH") != "0",
+		metalGlint:       os.Getenv("NANOLATHE_METAL_GLINT") != "0",
+		tables:           uploadTables(pal),
+		tileAtlases:      make(map[tileAtlasKey]*tileAtlas),
+		gafImages:        make(map[*formats.GAFFrame]*ebiten.Image),
+		copyIdx:          [6]uint32{0, 1, 2, 1, 2, 3},
 	}
 	if pal != nil {
 		r.displayPalette = pal.Base
@@ -212,6 +217,7 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 	compile(&r.scene2D, newScene2DShader)
 	compile(&r.sceneDest, newSceneDestShader)
 	compile(&r.markerShader, newMarkerShader)
+	compile(&r.scorchShader, newScorchShader)
 	compile(&r.water.shader, newWaterShader)
 	compile(&r.water.wakeShader, newSurfaceWakeShader)
 	compile(&r.reflections.sourceShader, newReflectionSourceShader)

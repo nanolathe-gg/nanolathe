@@ -115,7 +115,7 @@ func (r *Renderer) appendBlastWaves() {
 			continue
 		}
 		// Clip limits occupy colour lanes; the radial profile uses custom lanes.
-		// Negative source-Y offset selects blasts; heat carries a positive scale.
+		// Negative source-Y offset selects blasts; heat carries one plus scaled amplitude.
 		base := uint32(len(d.verts))
 		for _, p := range [4][2]float32{{x0, y0}, {x1, y0}, {x0, y1}, {x1, y1}} {
 			d.verts = append(d.verts, ebiten.Vertex{DstX: p[0], DstY: p[1], SrcX: p[0], SrcY: p[1] - 1,
@@ -153,7 +153,7 @@ func Fragment(dst vec4, src vec2, clip vec4, wave vec4) vec4 {
  p := dst.xy-imageDstOrigin()
  scale := src.y-imageSrc0Origin().y-p.y
  if scale > 0.0 {
-  heat := treeHeatOffset(p, src, wave, scale)
+  heat := treeHeatOffset(p, src, wave, max(scale-1.0, 0.0))
   if heat.z == 0.0 { discard() }
   return distortionSample(p+heat.xy, clip.xy, clip.zw)
  }

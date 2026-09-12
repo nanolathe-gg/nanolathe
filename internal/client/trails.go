@@ -199,6 +199,7 @@ func (c *Client) ObserveCommittedTick() {
 	c.placeTrails(c.buffer.Current())
 	c.placeSurfaceWakes(c.buffer.Current())
 	c.observeWaterMotion(c.buffer.Current())
+	c.observeScorchMarks(c.buffer.Current())
 }
 
 func (c *Client) resetTrails() {
@@ -206,6 +207,7 @@ func (c *Client) resetTrails() {
 		c.trails = trailState{}
 		c.wakes = surfaceWakeState{}
 		c.waterMotion = waterMotionState{}
+		c.scorch = scorchState{}
 	}
 }
 

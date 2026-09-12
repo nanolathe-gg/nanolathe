@@ -10,6 +10,7 @@ import (
 // lane and its scheduler (docs/DESIGN_GPU_RENDERER.md §22). It is diagnostic
 // only and never reaches simulation state.
 type ModelStats struct {
+	MaterialFaces, ScorchQuads int
 	// Phases is the phases this frame submitted and Passes the device
 	// destination switches the executor issued: a switch is counted whenever
 	// the destination image of a device call differs from the previous call's,
@@ -31,7 +32,9 @@ type ModelStats struct {
 	// ReflectionVertices is the bounded coastal reflection source geometry.
 	ReflectionVertices int
 	BlastWaves         int
-	HeatPlumes         int
+	// HeatPlumes is all heat; WreckHeatPlumes is its wreck subset.
+	HeatPlumes      int
+	WreckHeatPlumes int
 	// The model lane's accounting (§22): subjects and shadows placed on the
 	// atlas, faces appended and rings culled, packets the atlas could not hold
 	// (which took the fallback), the atlas passes (two a page), the atlas

@@ -538,6 +538,7 @@ const (
 	familyFlash
 	familyHalo
 	familySurfaceWakes
+	familyScorchMarks
 )
 
 // tag is one ordering entry: which family, and which element of that family's
@@ -570,6 +571,7 @@ type List struct {
 	flash        []Flash
 	halo         []Halo
 	surfaceWakes []SurfaceWakes
+	scorchMarks  []ScorchMarks
 
 	classicImages    []*ClassicModelImage
 	classicImageNext int
@@ -760,6 +762,8 @@ func (l *List) Reset() {
 	l.halo = l.halo[:0]
 	clear(l.surfaceWakes)
 	l.surfaceWakes = l.surfaceWakes[:0]
+	clear(l.scorchMarks)
+	l.scorchMarks = l.scorchMarks[:0]
 }
 
 // Replay visits the recorded commands in exact record order and calls the
@@ -770,6 +774,7 @@ func (l *List) Replay(s Sink) {
 	// Original executor) simply lacks the hook.
 	trails, _ := s.(TrailSink)
 	wakes, _ := s.(SurfaceWakeSink)
+	scorch, _ := s.(ScorchSink)
 	// The world boundary and the strategic marker layer are optional in exactly
 	// the same way: an executor without free zoom needs neither
 	// (docs/DESIGN_GPU_RENDERER.md §16.3).
@@ -804,6 +809,10 @@ func (l *List) Replay(s Sink) {
 		case familyTrails:
 			if trails != nil {
 				trails.Trails(l.trails[t.idx])
+			}
+		case familyScorchMarks:
+			if scorch != nil {
+				scorch.ScorchMarks(l.scorchMarks[t.idx])
 			}
 		case familySurfaceWakes:
 			if wakes != nil {
@@ -900,6 +909,10 @@ func (l *List) Clone() List {
 	c.surfaceWakes = make([]SurfaceWakes, len(l.surfaceWakes))
 	for i, wakes := range l.surfaceWakes {
 		c.surfaceWakes[i] = SurfaceWakes{Marks: append([]SurfaceWake(nil), wakes.Marks...)}
+	}
+	c.scorchMarks = make([]ScorchMarks, len(l.scorchMarks))
+	for i, batch := range l.scorchMarks {
+		c.scorchMarks[i] = ScorchMarks{Marks: append([]ScorchMark(nil), batch.Marks...)}
 	}
 	// Trail batches borrow the client's reusable mark arena; copy each.
 	c.trails = make([]Trails, len(l.trails))

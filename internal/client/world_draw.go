@@ -362,6 +362,7 @@ func (c *Client) drawCommittedWorld(cur *frame.Frame, ok bool) {
 	// Terrain/static preparation, radar preparation, and viewport clipping are
 	// unconditional. Radar and clip have no concrete frame input yet.
 	c.drawTerrainPrep()
+	c.drawScorchMarks(c.buffer.Current())
 	if !c.strategicView() {
 		c.placeSurfaceWakes(c.buffer.Current())
 		c.drawSurfaceWakes()

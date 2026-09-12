@@ -13,6 +13,8 @@ const treeHeatLimit = 128
 // not survive a map reset through this preparation buffer (GPU design §2.3).
 type treeHeatSource struct {
 	x, y, width, height, time, scale float32
+	strength                         float32
+	wreck                            bool
 	clip                             drawlist.Rect
 	hasClip                          bool
 }
@@ -31,11 +33,23 @@ func (r *Renderer) prepareTreeHeat(list *drawlist.List) {
 	if d.disabled {
 		return
 	}
+	// Wrecks precede trees in the shared draw, preserving tree priority.
+	list.VisitModels(func(cmd drawlist.Model) {
+		g := cmd.Geometry
+		if cmd.ShadowOnly || g == nil || !g.Eligible || g.Fallback != drawlist.ModelFallbackNone || g.WreckHeatStrength <= 0 || g.WreckHeatScale <= 0 {
+			return
+		}
+		b := modelWorldBounds(g)
+		d.sources = append(d.sources, treeHeatSource{
+			x: float32(b.Min.X), y: float32(b.Min.Y), width: float32(b.Dx()), height: float32(b.Dy()),
+			time: g.WreckHeatTime, scale: g.WreckHeatScale, strength: g.WreckHeatStrength, wreck: true,
+		})
+	})
 	list.VisitSprites(func(sp drawlist.Sprite) {
 		if sp.HeatSource && sp.Frame != nil && sp.LightingScale > 0 {
 			d.sources = append(d.sources, treeHeatSource{
 				x: float32(sp.X), y: float32(sp.Y), width: float32(sp.Frame.Width), height: float32(sp.Frame.Height),
-				time: sp.HeatTime, scale: sp.LightingScale, clip: sp.Clip, hasClip: sp.HasClip,
+				time: sp.HeatTime, scale: sp.LightingScale, strength: 1, clip: sp.Clip, hasClip: sp.HasClip,
 			})
 		}
 	})
@@ -48,12 +62,22 @@ func (r *Renderer) appendTreeHeat() {
 	}
 	d := &r.distortion
 	k := r.sched.txf(1)
+	trees, wrecks := 0, 0
 	for _, sp := range r.heat.sources {
+		if sp.wreck && wrecks >= 32 || !sp.wreck && trees >= treeHeatLimit {
+			continue
+		}
 		scale := sp.scale * k
 		width := min(max(sp.width*0.55*k, 14*scale), 38*scale)
 		height := min(max(sp.height*1.25*k, 56*scale), 112*scale)
 		x := (sp.x + sp.width*0.5) * k
 		bottom := (sp.y + sp.height*0.45) * k
+		if sp.wreck {
+			// Lower, broader rising air over the wreck's metal body.
+			width = min(max(sp.width*0.55*k, 12*scale), 40*scale)
+			height = min(max(sp.height*0.85*k, 32*scale), 64*scale)
+			bottom = (sp.y + sp.height*0.65) * k
+		}
 		loX, loY, hiX, hiY := float32(0), float32(0), float32(r.w), float32(r.h)
 		if sp.hasClip {
 			loX, loY = max(loX, float32(sp.clip.X)*k), max(loY, float32(sp.clip.Y)*k)
@@ -66,14 +90,17 @@ func (r *Renderer) appendTreeHeat() {
 		base := uint32(len(d.verts))
 		for _, p := range [4][2]float32{{x0, y0}, {x1, y0}, {x0, y1}, {x1, y1}} {
 			d.verts = append(d.verts, ebiten.Vertex{DstX: p[0], DstY: p[1],
-				SrcX: p[0] + sp.time, SrcY: p[1] + scale,
+				SrcX: p[0] + sp.time, SrcY: p[1] + 1 + scale*sp.strength,
 				ColorR: loX, ColorG: loY, ColorB: hiX, ColorA: hiY,
 				Custom0: x, Custom1: bottom, Custom2: width, Custom3: height})
 		}
 		d.indices = append(d.indices, base, base+1, base+2, base+1, base+2, base+3)
 		r.modelStats.HeatPlumes++
-		if r.modelStats.HeatPlumes == treeHeatLimit {
-			break
+		if sp.wreck {
+			wrecks++
+			r.modelStats.WreckHeatPlumes++
+		} else {
+			trees++
 		}
 	}
 }

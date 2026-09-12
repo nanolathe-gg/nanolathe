@@ -65,6 +65,7 @@ type publicationState struct {
 	unitIdentities   []publishedUnitIdentity
 	nextUnitIdentity uint64
 	fragments        []render.FragmentMetadata
+	wrecks           wreckPresentation
 }
 
 // Phase7Service is the narrow presentation-owned callback at the phase-7
@@ -483,6 +484,9 @@ func (s *Session) SeedSessionRNG(simSeed, crtSeed uint32) {
 	// also used by save re-entry, whose RNG state is never restored [R-CORE-02].
 	if s.Clock != nil {
 		s.Clock.GlobalTick = 0
+	}
+	if s.publication != nil {
+		s.publication.wrecks = wreckPresentation{}
 	}
 	s.rngSim = rng.NewSimulation(simSeed)
 	s.rngCrt = rng.NewCRT(crtSeed)
@@ -1244,10 +1248,15 @@ func (s *Session) RegisterAll() {
 						// lie the way its unit fell, and it is what the
 						// resurrection transplant copies back into the
 						// replacement unit [05 R-WORK-01 §7].
-						_ = s.Features.PlaceCorpse(
+						corpse := s.Features.PlaceCorpse(
 							[3]numeric.Fixed{u.X, u.Y, u.Z},
 							features.Orientation{Bank: u.Move.Bank, Heading: u.Move.Heading, Pitch: u.Move.Pitch},
 							corpseDef, u.Def.IsFeature, u.Owner)
+						// Enhanced wreck cooling is presentation metadata. A
+						// completed isfeature conversion is not a heated death.
+						if c != combat.CauseFeatureConversion {
+							s.noteWreckBirth(corpse)
+						}
 					}
 				}
 			}

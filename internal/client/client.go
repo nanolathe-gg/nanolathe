@@ -321,6 +321,7 @@ type Client struct {
 	trails trailState
 	// wakes retains Enhanced land hover particles (GPU design §26).
 	wakes       surfaceWakeState
+	scorch      scorchState
 	waterMotion waterMotionState
 	waterFoam   []drawlist.SurfaceWake
 	// featureSeqs memoises the compiled animation sequences the SIMULATION

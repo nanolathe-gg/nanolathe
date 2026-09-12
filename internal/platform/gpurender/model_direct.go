@@ -736,6 +736,9 @@ func (r *Renderer) appendDirectFace(f *drawlist.ModelFace, slot modelTextureSlot
 	if r.metalGlint && !shadow {
 		colorG = metalGlintColor(f.Color, metalFaceGlint(f.Normal))
 	}
+	if !shadow {
+		colorG = r.modelFinishColor(f, colorG)
+	}
 	if run == nil {
 		custom2, custom3 = lighting, sceneOpModelDirect
 	}
@@ -832,7 +835,7 @@ func (r *Renderer) commitModelDirect(g *drawlist.ModelGeometry) {
 	r.sched.quad(schedOpaque,
 		float32(x0), float32(y0), float32(x1), float32(y1),
 		sx0, sy0, sx0+2*float32(x1-x0), sy0+2*float32(y1-y0),
-		[4]float32{}, [4]float32{0, 0, 0, sceneOpModelDirectCommit})
+		[4]float32{g.WreckEmission[0], g.WreckEmission[1], g.WreckEmission[2], 0}, [4]float32{0, 0, 0, sceneOpModelDirectCommit})
 }
 
 // commitModelDirectShadow compiles one subject's shadow commit: a
@@ -1051,7 +1054,7 @@ package main
 
 const palRow = ` + fmt.Sprint(tableRowPAL) + `.0
 const blueRow = ` + fmt.Sprint(tableRowBlue) + `.0
-` + modelQuadMapperSource + modelDirectMappedSource() + battleLightShaderSource + metalGlintShaderSource + `
+` + modelQuadMapperSource + modelDirectMappedSource() + battleLightShaderSource + metalGlintShaderSource + modelFinishShaderSource + `
 func palAt(idx float) vec3 {
 	return imageSrc1AtFromSrc0Pos(imageSrc0Origin()+vec2(idx+0.5, palRow+0.5)).rgb
 }
@@ -1108,7 +1111,8 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 		}
 	}
 	encoded := floor(color.g + 0.5)
-	glint := floor(encoded/256.0)
+	glint := mod(floor(encoded/256.0), 256.0)
+	finish := floor(encoded/65536.0)
 	idx := mod(encoded, 256.0)
 	k := color.r
 	if mode == ` + fmt.Sprint(modelDirectShadow) + ` {
@@ -1163,6 +1167,7 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 				idx = verdict
 				k = 1.0
 				glint = 0.0
+				finish = 0.0
 			}
 		}
 		idx = clipIndex(idx, own, modelQuadU16(c.b, c.a), modelQuadU16(e.r, e.g), modelQuadU16(e.b, e.a), modelQuadU16(f.r, f.g))
@@ -1178,7 +1183,7 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 		return vec4(0.0)
 	}
 	albedo := palAt(idx)
-	return vec4(metalGlint(albedo, battleLit(albedo, k, custom.w), glint), 1.0)
+	return vec4(modelFinish(albedo, metalGlint(albedo, battleLit(albedo, k, custom.w), glint), finish), 1.0)
 }
 `
 }

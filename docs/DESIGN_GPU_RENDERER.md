@@ -5446,7 +5446,7 @@ blast beneath; a covered heat fragment replaces it with a heat-only sample of
 the original world. Heat does not refract an already distorted explosion image.
 
 The source-coordinate Y offset selects the shader formula: negative for a
-blast, positive recording-to-output scale for heat. X carries blast strength
+blast, one plus scaled heat amplitude for heat (§28). X carries blast strength
 or heat time. Each quad has one selector throughout, and both formulas retain
 their previous arithmetic, clipping, bilinear sampler and independent budgets.
 The existing per-family comparison controls remain independent. A GPU fixture
@@ -5498,3 +5498,167 @@ host limitation. No frozen-list timing or paired-capture success is claimed for
 that route. Logs are /private/tmp/tree-heat-land-frozen-{candidate,main}.log;
 real-device fixtures and live battle comparisons are the available visual and
 performance evidence.
+
+## 28. Fresh wreck cooling prototype
+
+User-requested Enhanced presentation experiment, extending §27's shared heat
+pass. This is artistic tuning, not a claim about retail temperature or damage.
+A successful violent unit-death corpse placement records the returned feature
+instance's birth tick in session publication state. Only that exact live
+instance publishes a known birth; map features, restored features, nonviolent
+feature conversions and newly discovered features do not acquire heat. The
+metadata is presentation-only and is neither simulation input nor saved state.
+
+The modern 3DO feature recorder samples committed age and the existing optional
+tick fraction. Replaying a list cannot advance age. Anchor LOS is required;
+underwater origins suppress both effects. Removal/reclamation removes the
+source with the feature. A birth tick of zero is valid; an unknown birth is
+explicit. Packet operands are cleared before each visibility/age decision.
+
+The material begins pale orange for six ticks, loses its pale component, then
+cools through orange/red to its original texture by 180 ticks. A weaker shimmer
+fades quadratically over 300 ticks. These durations and colours are prototype
+choices. The emission is computed once per wreck on the CPU and carried in
+unused vertex RGB lanes of its existing body composite. A screen blend preserves
+texture variation and premultiplied model coverage. There is no extra material
+draw, render target, texture lookup, bloom blur, or dynamic light. The atlas
+capacity fallback currently omits emission; normal atlas bodies carry it.
+
+Wreck plumes use the recorded model bounds, capped to 40 scaled pixels in half
+width and 64 in height, with a 32-visible-plume budget applied after clipping.
+They append after explosion rings and before tree plumes to the same distortion
+mesh; trees still win overlapping pixels. The tree budget remains 128. All
+three families share the existing world copy and single distortion draw; a
+frame containing only wreck shimmer still needs that copy/draw pair. Distortion
+amplitude is encoded with a positive bias so a nearly cold source cannot round
+into the explosion selector. No GPU readback or extra full-screen pass is added.
+
+### 28.1 Prototype verification
+
+Fast and retail gates passed, as did the real-device fixture loop and an
+independent read-only review with fresh affected-package tests. Device checks
+cover glow with unchanged submission/pass counts, transparent model holes,
+removal/cooling, vanishing amplitude, the 32-plume cap, and the existing shared
+blast/tree ordering. Publication checks cover tick zero, successful versus
+rejected death placement, conversion, replacement/reclaim/restore, expiry and
+reset, unchanged saved feature bytes, and unchanged RNG consumption.
+
+Sequential live-battle comparisons against the integrated tree-heat build
+`9e61946` used Great Divide, seed 7, 1920×1080, native zoom, 300 preticks and
+180 measured draws at 30 Hz. Every matching census agreed. The classic final
+capture was byte-identical. Modern showed 6–12 visible wreck plumes, and every
+measured frame had exactly the baseline draw count; added plume geometry was
+four vertices and six indices per wreck. Two stable repeat pairs measured
+median CPU DrawWork 9.768→9.838 ms and 9.702→9.664 ms; CPU Submit was
+4.587→4.611 ms and 4.764→4.503 ms. Median cadence stayed 33.33 ms. An earlier
+pair was inconsistent across all CPU phases (DrawWork 7.038→9.865 ms,
+simulation Step 1.304→2.111 ms), prompting those reverse-order and forward-order
+repeats. These are host timings, not GPU timestamps; the repeats show no
+resolved CPU frame-cost increase and cannot establish GPU execution time.
+
+Artifacts are outside the repository under `/private/tmp/wreck-heat-*`.
+Live footage covers 180 draws with 1–6 wreck plumes after 120 preticks; its
+PNG readbacks were diagnostic instrumentation, removed after building a
+separate capture binary and excluded from all timing comparisons. The material
+contact sheet uses the real `armstump_dead` model with supplied ages
+0/6/30/90/180/300 ticks, drawn on the actual GPU. The existing frozen `--shot`
+Metal tooling failure is recorded in §27.3; the real-device fixture and live
+capture paths remain the visual evidence for this prototype.
+
+## 29. Metal/paint finishes and fading scorch marks
+
+The user selected material polish and cooling/scorch from the four experiments.
+Unit emission/halo and brief dust/spark/water impact accents are rejected and
+are not part of this implementation. Existing glow, blast art, coastal wakes
+and the independent fresh-wreck treatment of §28 keep their own contracts.
+All new coefficients and texture annotations are authored presentation choices,
+not retail material/temperature evidence.
+
+### 29.1 Materials
+
+A curated texture-name table annotates textured unit faces as default, metal or
+paint. It does not classify feature or wreck faces. Metal receives a broad cool
+response beneath the existing glint; paint receives a weaker rough highlight.
+The coefficients preserve authored dark seams and panel hue. Untagged faces
+retain their existing shading.
+
+`ModelFace.Material` carries the annotation. The color vertex lane retains its
+low 16 bits for palette index and glint, followed by two material bits and three
+quantized normal-response bits: at most 21 bits, exactly representable as a
+float32 integer. Shadow geometry carries no finish. The existing color shader
+applies the finish after palette lighting, sharing its key, reveal and waterline
+verdicts; reveal replacements clear the finish. There is no additional model
+pass, emission atlas or render target. The independent wreck composite of §28
+is unchanged.
+
+### 29.2 Cooling and fading scorch
+
+The client observes every committed publication, including ticks between draws.
+A nonzero effect ID paired with its event sequence deduplicates primary impact
+art at birth; unresolved, hidden and pre-existing effects cannot later create a
+mark. Both the event and its ground anchor must be visible. Valid dry terrain
+within 12 world-height pixels of the impact admits a mark, sized to 0.55 times
+the resolved art extent and clamped to 8–64 world pixels. These thresholds and
+the procedural appearance are artistic presentation choices.
+
+A FIFO retains at most 256 world-space marks. A separate 512-identity budget
+bounds work within one publication. Marks reset on source/load, viewer change
+or tick rewind; they are not saved. Camera projection produces screen-space
+`ScorchMark` records with radius, committed age plus the optional draw fraction,
+and a stable variant. Drawlist cloning owns a copy of the batch.
+
+The warm center cools through 90 ticks. Whole-mark opacity then smoothly fades
+from tick 90 to 450: fading starts at three simulated seconds and the mark is
+gone at fifteen. Shared drawlist constants define these ages and the cap.
+At expiry the CPU removes the mark and the GPU rejects it without submission.
+The GPU also caps externally supplied batches to 256 marks per frame.
+
+A smooth uneven procedural quad draws immediately above terrain, below objects
+and fog. It reuses the coastal mask's dry channel, including when water animation
+is disabled, and has no persistent GPU history or additional render target.
+No dust, spark or water-splash accent is included.
+
+Both effects default enabled. Diagnostic `SetMaterials`/`SetScorch` controls and
+`NANOLATHE_MODEL_MATERIALS=0` / `NANOLATHE_SCORCH=0` disable them independently.
+`ModelStats.MaterialFaces` and `ScorchQuads` report the submitted workload.
+
+### 29.3 Verification
+
+The fast and retail gates and real Metal device fixture loop passed. Independent
+review covered both implementations and their integration. Device readbacks
+verify material key/reveal/waterline behavior, unchanged model submissions and
+image allocation, and compatibility with the independent wreck composite.
+Scorch checks cover monotonic fading, exact disabled-output equality at expiry,
+zero expired submissions, object/HUD and wet masking, cloned replay, view scale,
+reset and bounded public batches.
+
+Stock-model captures confirm restrained metal/paint response. Staged impacts on
+Comet Catcher were observed through 511 ticks: early warm centers become dark
+marks, fade, and leave images byte-identical to the disabled output after every
+mark expires. Artifacts remain outside the repository under
+`/private/tmp/selected-material-capture`, `/private/tmp/selected-scorch-fade` and
+`/private/tmp/selected-scorch-fixtures`.
+
+Sequential live battles compared against main `774f79c` on Metal, using Great
+Divide, seed 7, 1920×1080, 2× detail, 300 preticks, 60 warmup draws and 180
+measured draws at 30 Hz. Two modern pairs ran in opposite order. They submitted
+2,439–3,387 annotated faces and 39–143 scorch quads per draw, with 3–6 existing
+wreck plumes and no model overflow. Every matching census agreed, and the
+classic final captures were byte-identical. GPU image storage was unchanged
+at 526,532,608 bytes for modern and 66,732,032 bytes for classic.
+
+Host DrawWork timing in milliseconds (median / p95 / maximum):
+
+| Run | Baseline | Selected |
+|---|---|---|
+| Modern pair 1 | 6.901 / 8.312 / 19.126 | 7.092 / 7.849 / 9.827 |
+| Modern pair 2 | 9.656 / 10.314 / 11.162 | 9.793 / 10.634 / 11.543 |
+| Classic | 22.559 / 33.811 / 42.436 | 22.159 / 31.286 / 40.617 |
+
+Modern median Submit changed 3.549→3.657 ms and 4.799→4.825 ms. Median cadence
+remained 33.33 ms. The combined effects added about 0.14–0.19 ms to median host
+DrawWork in these pairs. Absolute host speed varied between pairs; these CPU
+measurements do not establish GPU execution cost. The small observed host cost,
+unchanged image storage and inspected captures support keeping both effects.
+Profiles, full percentile/maxima data, census and captures are under
+`/private/tmp/selected-materials-scorch-battles`.

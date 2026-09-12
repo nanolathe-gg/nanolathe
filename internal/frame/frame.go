@@ -290,6 +290,12 @@ type ProjectileView struct {
 // instance and terrain cell"].
 type FeatureView struct {
 	InstanceID uint64
+	// WreckBornTick is publication-only Enhanced cooling metadata, never a
+	// saved or authoritative feature property. WreckHeatKnown distinguishes
+	// a witnessed death at tick zero from map placement, restore, or expired
+	// history. First visibility does not imply a recent death [I6].
+	WreckBornTick  uint32
+	WreckHeatKnown bool
 	// Owner is the plot's placer selector. Map-authored features use the
 	// non-player selector 10; corpse/runtime features carry their owner's
 	// player slot [03 §3.3][03 §3.9].

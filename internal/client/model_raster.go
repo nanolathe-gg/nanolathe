@@ -76,8 +76,9 @@ type screenPoly struct {
 	x, y []int32
 	// Enhanced lighting metadata stays in recording pixels even when a raster
 	// is doubled. It never feeds the retail span attributes (§22.4).
-	heights []float32
-	normal  [3]float32
+	heights  []float32
+	normal   [3]float32
+	material uint8
 	// x2, y2 are the corner's exact doubled-resolution screen coordinates,
 	// filled by the direct projection alone for the Enhanced supersample
 	// (doubledPlacement.exact; DESIGN_GPU_RENDERER §17.3). The local

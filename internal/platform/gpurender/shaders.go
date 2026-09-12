@@ -236,7 +236,7 @@ func scene2DShaderSource() string {
 	return `//kage:unit pixels
 
 package main
-` + modelQuadMapperSource + battleLightShaderSource + metalGlintShaderSource + `
+` + modelQuadMapperSource + battleLightShaderSource + metalGlintShaderSource + modelFinishShaderSource + `
 
 const palRow = ` + fmt.Sprint(tableRowPAL) + `.0
 
@@ -319,7 +319,8 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 		// The direct model lane's fallback (model_direct.go): no key test, no
 		// supersample. Custom0 is 0 flat, 1 textured.
 		encoded := floor(color.g + 0.5)
-		glint := floor(encoded/256.0)
+		glint := mod(floor(encoded/256.0), 256.0)
+		finish := floor(encoded/65536.0)
 		idx = mod(encoded, 256.0)
 		if custom.x > 0.5 {
 			t := floor(srcPos-imageSrc0Origin()) + vec2(0.5, 0.5)
@@ -329,7 +330,7 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 			return vec4(0.0)
 		}
 		albedo := palAt(idx)
-		return vec4(metalGlint(albedo, battleLit(albedo, color.r, custom.z), glint), 1.0)
+		return vec4(modelFinish(albedo, metalGlint(albedo, battleLit(albedo, color.r, custom.z), glint), finish), 1.0)
 	} else if op == ` + fmt.Sprint(sceneOpModelDirectCommit) + ` {
 		// The direct lane's commit: srcPos interpolates the 2× atlas texel of
 		// the pixel, one texel into its block; floor back to the block and
@@ -350,6 +351,9 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 		if cover == 0.0 {
 			return vec4(0.0)
 		}
+		// Cooling rides the existing body composite: no extra samples or pass.
+		// Screen blend preserves texture contrast and premultiplied coverage.
+		sum += (vec3(cover)-sum)*color.rgb
 		return vec4(sum/4.0, cover/4.0)
 	} else if op == ` + fmt.Sprint(sceneOpCopyColor) + ` {
 		// The fog run's read copy: the composite is already colour here, so it is

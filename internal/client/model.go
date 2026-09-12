@@ -306,6 +306,15 @@ func (c *Client) drawFeatureModel(f frame.FeatureView) bool {
 	// used for LOGOS faces. The observed construction supplies model, position
 	// and orientation but not a published selector, so a feature team face stays
 	// absent rather than borrowing player colour zero [03 R-RAST-01 §3].
+	if c.geometryOnlyModels {
+		g := c.prepareModelGeometry(draw, 0, teamColor{}, featurePresentationID(f), modelCursorFeature, nil, 0)
+		if g == nil {
+			return false
+		}
+		c.applyWreckHeat(g, f)
+		c.list.RecordModel(drawlist.Model{Geometry: g})
+		return true
+	}
 	return c.drawModel(draw, 0, teamColor{}, featurePresentationID(f), modelCursorFeature, nil, 0)
 }
 

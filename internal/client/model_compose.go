@@ -284,6 +284,9 @@ func (c *Client) collectDrawPolysLaneProjected(draw *presentationrender.UnitDraw
 			poly.color, poly.frame = color, texFrame
 			if c.recordModelGeometry {
 				poly.normal = modelLightingNormal(piece.WorldVertices, pr.VertexIndices)
+				if kind == modelCursorUnit && texFrame != nil {
+					poly.material = modelTextureMaterial(pr.TextureName)
+				}
 			}
 			// The live-piece invocation is the separate unshaded renderer entry.
 			// A BMcode=0 body may have prepared SHD rows for its cached half, but

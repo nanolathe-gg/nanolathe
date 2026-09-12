@@ -140,6 +140,9 @@ func (s *Session) previewPlacement(cx, cz int32, def *content.UnitDef, footX, fo
 
 // publishSnapshot publishes one immutable frame after every completed sub-tick [PLAN_03 C15].
 func (s *Session) publishSnapshot(tick uint32) {
+	if s.publication != nil {
+		s.publication.wrecks.prune(s.Features, tick)
+	}
 	if s.Snapshot == nil {
 		return
 	}
@@ -552,6 +555,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 				RuntimeLive:     runtime.Live,
 				ShadowEnabled:   runtime.ShadowEnabled,
 			}
+			fv.WreckBornTick, fv.WreckHeatKnown = publication.wrecks.births[inst]
 			if fv.Model == "" {
 				fv.Model = inst.Def.Filename
 			}

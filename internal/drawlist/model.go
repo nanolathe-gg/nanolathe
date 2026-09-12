@@ -36,7 +36,17 @@ type ModelFace struct {
 	// Normal is the outward unit normal in world X, world Z, height axes,
 	// used only by Enhanced surface lighting (DESIGN_GPU_RENDERER §22.4).
 	Normal [3]float32
+	// Material is a curated Enhanced art annotation (GPU design §29).
+	// Zero leaves the existing lighting unchanged.
+	Material uint8
 }
+
+// Authored presentation finishes, not retail material metadata (GPU design §29).
+const (
+	ModelMaterialDefault uint8 = iota
+	ModelMaterialMetal
+	ModelMaterialPaint
+)
 
 // ModelFallbackReason says why modern mode omits a model subject. It is
 // diagnostic data, never permission to substitute a CPU-composed image.
@@ -189,6 +199,12 @@ func (k ModelCacheKey) Reusable() bool { return k.Body != 0 }
 // consumer report the reason without consulting a CPU image [03 R-REN-03A
 // §4, §6–§8].
 type ModelGeometry struct {
+	// WreckHeat carries modern-only cooling operands refreshed at recording.
+	// Emission is preweighted RGB; strength affects only distortion amplitude.
+	// These are presentation design choices (GPU design §28), never sim inputs.
+	WreckEmission                                    [3]float32
+	WreckHeatStrength, WreckHeatTime, WreckHeatScale float32
+
 	Eligible bool
 	Fallback ModelFallbackReason
 	Faces    []ModelFace

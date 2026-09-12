@@ -138,7 +138,8 @@ func waterMaskPixels(t *world.Terrain) (pixels []byte, w, h, step int, blocks []
 func (r *Renderer) prepareWater(c drawlist.Terrain) {
 	st := &r.water
 	st.record = c
-	if !c.Water.Enabled || st.disabled || c.Terrain == nil {
+	// Scorch shares the dry channel even when water animation is disabled (§29).
+	if c.Terrain == nil || ((!c.Water.Enabled || st.disabled) && !r.scorchEnabled) {
 		return
 	}
 	if st.source == c.Terrain {
