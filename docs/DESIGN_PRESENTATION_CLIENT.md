@@ -991,7 +991,13 @@ the published offset to the camera.
   touch. Actual cargo stays first in its published order; yard occupants follow
   in committed unit order. A unit overlapping multiple factories joins the
   first admitted factory in that order. Existing visibility and pass-A window
-  admission apply independently to both subjects. A grouped occupant has one
+  admission apply independently to both subjects. Independent occupants join
+  only factories with the same current cloak state: the combined image has
+  just the carrier's final blend `[03 R-RAST-01 §7]`. Differing cloak states
+  retain ordinary independent row painting, including its factory occlusion
+  limits, so grouping cannot make a cloaked occupant opaque or tint an opaque
+  one. This admission is recomputed each frame; actual attached cargo retains
+  its established carrier composition. A grouped occupant has one
   body present, through the factory; geometry preparation skips its standalone
   packet. Neither positions, attachment links nor height keys change. The
   existing per-pixel height test keeps the factory walls able to occlude the

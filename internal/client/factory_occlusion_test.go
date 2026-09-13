@@ -234,17 +234,21 @@ func TestFactoryOccupantGeometryAndRelease(t *testing.T) {
 		{Slot: 1, InstanceID: 1, Model: "yard", IsFactory: true, ZBuffer: true, FootX: 4, FootZ: 4, MoverMode: moverModeGrounded, X: 100 << 16, Z: 100 << 16},
 		{Slot: 2, InstanceID: 2, Model: "yard", BMCode: true, ZBuffer: true, FootX: 2, FootZ: 2, MoverMode: moverModeGrounded, X: 100 << 16, Y: 3 << 16, Z: 90 << 16},
 	}
-	for _, offset := range []int64{0, 48} {
-		views[1].X = numeric.Fixed((100 + offset) << 16)
+	for _, pose := range []struct {
+		offset int64
+		cloak  bool
+	}{{0, false}, {0, true}, {0, false}, {48, false}, {48, true}} {
+		views[1].X = numeric.Fixed((100 + pose.offset) << 16)
+		views[1].Cloaked = pose.cloak
 		f := frame.Frame{Units: views}
 		c.resetListForTest()
 		c.drawWorldPass(&f, true)
 		c.drawWorldPassB(&f, true)
 		commands := c.list.ModelCommands()
 		if len(commands) != 2 {
-			t.Fatalf("offset %d: %d model commands, want exactly two", offset, len(commands))
+			t.Fatalf("pose %+v: %d model commands, want exactly two", pose, len(commands))
 		}
-		if offset == 0 {
+		if pose.offset == 0 && !pose.cloak {
 			if !commands[0].ShadowOnly || len(commands[1].Geometry.Children) != 1 {
 				t.Fatal("overlapping completed product must have one shadow and one factory-group body")
 			}
@@ -252,14 +256,59 @@ func TestFactoryOccupantGeometryAndRelease(t *testing.T) {
 				t.Fatal("factory grouping changed the published world-height delta")
 			}
 		} else {
+			cloakedBodies := 0
 			for _, cmd := range commands {
 				if cmd.ShadowOnly || len(cmd.Geometry.Children) != 0 {
-					t.Fatal("touching footprint edges must restore independent bodies")
+					t.Fatal("cleared yard or different cloak states must retain independent bodies")
 				}
+				if cmd.Geometry.Cloaked {
+					cloakedBodies++
+				}
+			}
+			wantCloaked := 0
+			if pose.cloak {
+				wantCloaked = 1
+			}
+			if cloakedBodies != wantCloaked {
+				t.Fatalf("pose %+v: %d cloaked bodies, want only the occupant's current cloak", pose, cloakedBodies)
 			}
 		}
 		if views[1].Carrier != 0 || len(views[0].Cargo) != 0 {
 			t.Fatal("presentation changed committed attachment state")
+		}
+	}
+}
+
+// An independent yard occupant keeps its own image-blit cloak state
+// [03 R-RAST-01 §7], even when its footprint overlaps a keyed factory image.
+func TestFactoryOccupantKeepsIndependentCloak(t *testing.T) {
+	c, factory := cachedLiveRegressionSubject(t)
+	c.pal = &palette.Tables{}
+	for i := range c.pal.Alpha {
+		c.pal.Alpha[i] = 42
+	}
+	factory.IsFactory, factory.FootX, factory.FootZ, factory.MoverMode = true, 4, 4, moverModeGrounded
+	occupant := factory
+	occupant.Slot, occupant.InstanceID, occupant.IsFactory, occupant.BMCode = 2, 72, false, true
+	occupant.X += 24 << 16
+	occupant.FootX, occupant.FootZ = 2, 2
+	base := &frame.Frame{}
+	opaque := c.composeUnits(t, base, []frame.UnitView{factory, occupant})
+	for _, cloak := range []bool{true, false, true} {
+		occupant.Cloaked = cloak
+		got := c.composeUnits(t, base, []frame.UnitView{factory, occupant})
+		if cloak {
+			independent := factory
+			independent.IsFactory = false
+			want := c.composeUnits(t, base, []frame.UnitView{independent, occupant})
+			if bytes.Equal(want, opaque) {
+				t.Fatal("fixture must expose the occupant's cloak blend")
+			}
+			if !bytes.Equal(got, want) {
+				t.Fatal("factory grouping changed the independent occupant's cloak blend")
+			}
+		} else if !bytes.Equal(got, opaque) {
+			t.Fatal("decloaking did not restore the opaque factory composition")
 		}
 	}
 }

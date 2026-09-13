@@ -294,6 +294,12 @@ func (b *worldBuckets) indexFactoryOccupants(win worldWindow) {
 				!factoryFootprintsOverlap(*factory, *u) {
 				continue
 			}
+			// A staged image has one cloak blend, owned by its carrier
+			// [03 R-RAST-01 §7]. Independent yard occupants with a different
+			// cloak state need their own image commit (presentation design §5).
+			if u.Cloaked != factory.Cloaked {
+				continue
+			}
 			idx := int(candidate.index)
 			b.factoryParent[idx] = factory.Slot
 			if tail < 0 {
