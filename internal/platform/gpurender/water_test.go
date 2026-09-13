@@ -3,8 +3,12 @@ package gpurender
 import (
 	"bytes"
 	"fmt"
+	"image"
+	"image/color"
+	"strings"
 	"testing"
 
+	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
@@ -193,9 +197,186 @@ func checkWaterDevicePixels() error {
 	if aged*2 < fresh {
 		return fmt.Errorf("water pattern degraded after a long elapsed time: detail %d, was %d", aged, fresh)
 	}
+	if err := checkWaterSurfaceAdditions(); err != nil {
+		return err
+	}
 	r.ResetSources()
 	if r.water.mask != nil || r.water.source != nil {
 		return fmt.Errorf("coastal mask survived source reset")
+	}
+	return nil
+}
+
+// Authored surface fixture for the three §32 additions. A flat grey terrain and
+// a straight authored coast isolate each term: the painted colour contributes
+// no variation of its own, so any difference from the term-free variant of the
+// same shader source is that term. No retail bytes are involved.
+const (
+	surfaceFixtureSize  = 128
+	surfaceFixtureStep  = 2
+	surfaceFixtureCoast = 64
+)
+
+func waterSurfaceFixtureImages() (terrain, mask *ebiten.Image) {
+	flat := image.NewRGBA(image.Rect(0, 0, surfaceFixtureSize, surfaceFixtureSize))
+	for i := range flat.Pix {
+		flat.Pix[i] = 128
+		if i%4 == 3 {
+			flat.Pix[i] = 255
+		}
+	}
+	const texels = surfaceFixtureSize / surfaceFixtureStep
+	const shore = surfaceFixtureCoast / surfaceFixtureStep
+	m := image.NewRGBA(image.Rect(0, 0, texels, texels))
+	for y := 0; y < texels; y++ {
+		for x := 0; x < texels; x++ {
+			if x >= shore {
+				m.SetRGBA(x, y, color.RGBA{0, 0, 255, 255})
+				continue
+			}
+			// Shore distance grows inward from the last wet texel, so the
+			// fixture carries both a shallow band and genuinely deep water.
+			m.SetRGBA(x, y, color.RGBA{255, byte(min((shore-x)*20, 255)), 0, 255})
+		}
+	}
+	return ebiten.NewImageFromImage(flat), ebiten.NewImageFromImage(m)
+}
+
+func checkWaterSurfaceAdditions() error {
+	terrain, mask := waterSurfaceFixtureImages()
+	defer terrain.Deallocate()
+	defer mask.Deallocate()
+	target := ebiten.NewImage(surfaceFixtureSize, surfaceFixtureSize)
+	defer target.Deallocate()
+	// Each variant removes exactly one added term from the shipped source.
+	variant := func(old, new string) (*ebiten.Shader, error) {
+		if !strings.Contains(waterShaderSource, old) {
+			return nil, fmt.Errorf("water shader no longer contains %q", old)
+		}
+		return ebiten.NewShader([]byte(strings.Replace(waterShaderSource, old, new, 1)))
+	}
+	full, err := newWaterShader()
+	if err != nil {
+		return err
+	}
+	defer full.Deallocate()
+	noGust, err := variant("smoothstep(0.30,0.80,noise((world-drift*22.0)*0.0055+vec2(3.0,7.0)))", "0.0*noise(world)")
+	if err != nil {
+		return err
+	}
+	defer noGust.Deallocate()
+	noDamp, err := variant("0.12*damp*(0.5+0.5*lapDry)", "0.0*damp*lapDry")
+	if err != nil {
+		return err
+	}
+	defer noDamp.Deallocate()
+	noTint, err := variant("0.08*(1.0-smoothstep(0.0,0.35,mask.y))", "0.0*mask.y")
+	if err != nil {
+		return err
+	}
+	defer noTint.Deallocate()
+	draw := func(shader *ebiten.Shader, t float32) []byte {
+		const s = surfaceFixtureSize
+		vertices := []ebiten.Vertex{{DstX: 0, DstY: 0, SrcX: 0, SrcY: 0}, {DstX: s, DstY: 0, SrcX: s, SrcY: 0}, {DstX: s, DstY: s, SrcX: s, SrcY: s}, {DstX: 0, DstY: s, SrcX: 0, SrcY: s}}
+		for i := range vertices {
+			// Committed water time, no drift, full wind energy, mask step and
+			// native effective scale — the uniforms drawWater supplies.
+			vertices[i].ColorR, vertices[i].ColorG, vertices[i].ColorB, vertices[i].ColorA = t, 0, 0, 1
+			vertices[i].Custom0, vertices[i].Custom1 = surfaceFixtureStep, 1
+		}
+		target.Clear()
+		target.DrawTrianglesShader(vertices, []uint16{0, 1, 2, 0, 2, 3}, shader, &ebiten.DrawTrianglesShaderOptions{Images: [4]*ebiten.Image{terrain, mask}})
+		p := make([]byte, surfaceFixtureSize*surfaceFixtureSize*4)
+		target.ReadPixels(p)
+		return p
+	}
+	at := func(p []byte, x, y int) []byte { return p[(y*surfaceFixtureSize+x)*4 : (y*surfaceFixtureSize+x)*4+4] }
+	on, plainGust := draw(full, 3), draw(noGust, 3)
+	// A held phase is a paused frame: the surface must compose the same bytes.
+	if !bytes.Equal(on, draw(full, 3)) {
+		return fmt.Errorf("water surface additions are not deterministic on replay")
+	}
+	drifted := draw(full, 9)
+	if bytes.Equal(on, drifted) {
+		return fmt.Errorf("water surface additions did not advance with the field")
+	}
+	// Gust patches roughen and darken the water they cross, and nothing else:
+	// the term sits after the dry early-out, so no dry texel may move. No
+	// census is pinned — the patch scale is far coarser than this fixture, so
+	// how much of it a gust covers is an accident of the authored extent.
+	gusted := 0
+	for y := 0; y < surfaceFixtureSize; y++ {
+		for x := 0; x < surfaceFixtureSize; x++ {
+			same := bytes.Equal(at(on, x, y), at(plainGust, x, y))
+			if x >= surfaceFixtureCoast {
+				if !same {
+					return fmt.Errorf("gust patch reached dry ground at %d,%d", x, y)
+				}
+				continue
+			}
+			if !same {
+				gusted++
+			}
+		}
+	}
+	if gusted == 0 {
+		return fmt.Errorf("gust patches absent")
+	}
+	// The churn is the domain warp, not the gust: with the gust held flat the
+	// surface must still change between two phases of the same wind.
+	if bytes.Equal(plainGust, draw(noGust, 9)) {
+		return fmt.Errorf("water surface stopped moving without the gust term")
+	}
+	plainDamp := draw(noDamp, 3)
+	band := 0
+	for y := 0; y < surfaceFixtureSize; y++ {
+		for x := 0; x < surfaceFixtureSize; x++ {
+			lit, unlit := at(on, x, y), at(plainDamp, x, y)
+			// The band belongs to every texel the painted water does not cover,
+			// which the bilinear mask carries a few world pixels seaward of the
+			// authored boundary; covered water must stay untouched.
+			switch {
+			case x < surfaceFixtureCoast-8:
+				if !bytes.Equal(lit, unlit) {
+					return fmt.Errorf("damp band altered water at %d,%d", x, y)
+				}
+			case x >= surfaceFixtureCoast+12:
+				if !bytes.Equal(lit, unlit) {
+					return fmt.Errorf("damp band reached %d world pixels inland at %d,%d", x-surfaceFixtureCoast, x, y)
+				}
+			default:
+				for ch := 0; ch < 3; ch++ {
+					if lit[ch] > unlit[ch] {
+						return fmt.Errorf("damp band brightened the shore at %d,%d", x, y)
+					}
+				}
+				if !bytes.Equal(lit, unlit) {
+					band++
+				}
+			}
+		}
+	}
+	if band == 0 {
+		return fmt.Errorf("damp shoreline band absent")
+	}
+	plainTint := draw(noTint, 3)
+	tinted := 0
+	for y := 0; y < surfaceFixtureSize; y++ {
+		for x := 0; x < surfaceFixtureSize; x++ {
+			lit, unlit := at(on, x, y), at(plainTint, x, y)
+			// The mask ramps 20 per texel of two world pixels, so 0.35 of full
+			// scale is about 9 texels — 18 world pixels — from the coast.
+			shallow := x >= surfaceFixtureCoast-18 && x < surfaceFixtureCoast
+			if !shallow && !bytes.Equal(lit, unlit) {
+				return fmt.Errorf("shallow tint left the near-shore band at %d,%d", x, y)
+			}
+			if shallow && !bytes.Equal(lit, unlit) {
+				tinted++
+			}
+		}
+	}
+	if tinted == 0 {
+		return fmt.Errorf("shallow water tint absent")
 	}
 	return nil
 }

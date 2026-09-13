@@ -121,7 +121,12 @@ func (r *Renderer) prepareProjectileReflections(l *drawlist.List) {
 		return
 	}
 	l.VisitSprites(func(sp drawlist.Sprite) {
-		if !sp.ReflectWater || sp.ReflectionHeight <= 0 || sp.Frame == nil || sp.Kind != drawlist.BlitKeyed || len(s.verts)+4 > reflectionVertexLimit {
+		// Height zero is admitted, unlike a model face's waterline clip: an
+		// explosion or impact standing on the surface has its anchor at sea
+		// level, and mirroring about that anchor is what puts the upper half of
+		// the fireball into the water (§32). A projectile billboard resting
+		// exactly at the surface reflects on the same terms.
+		if !sp.ReflectWater || sp.ReflectionHeight < 0 || sp.Frame == nil || sp.Kind != drawlist.BlitKeyed || len(s.verts)+4 > reflectionVertexLimit {
 			return
 		}
 		f := sp.Frame
@@ -339,7 +344,13 @@ var RecordScale float
 var Surface vec4
 ` + modelQuadMapperSource + `
 func Fragment(dst vec4, src vec2, color vec4, custom vec4) vec4 {
- if custom.x<=0 { return vec4(0) }
+ // Model faces and beam strokes carry per-fragment physical height, so the
+ // waterline clip drops everything at or below sea. A billboard's height is
+ // one constant for the whole quad and its admission already happened on the
+ // recording side, so a surface impact at exactly sea level survives (§32).
+ clip := custom.x<=0.0
+ if custom.w>0.5 && custom.w<1.5 { clip = custom.x<0.0 }
+ if clip { return vec4(0) }
  var c vec4
  if custom.w<0.5 {
   p:=floor(src-imageSrc0Origin())

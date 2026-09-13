@@ -182,8 +182,18 @@ func (c *Client) blitStripFrame(v frame.StripView) bool {
 	}
 	sx, sy := c.cam.WorldToScreen(v.X, v.Y, v.Z)
 	lightingKind := drawlist.SpriteLightingNone
-	if v.Family == frame.StripFamilySmokePuff || v.Family == frame.StripFamilyVentSteam {
+	var lightingTime float32
+	switch v.Family {
+	case frame.StripFamilySmokePuff, frame.StripFamilyVentSteam:
 		lightingKind = drawlist.SpriteLightingSmoke
+	case frame.StripFamilyFlame, frame.StripFamilyFlameTrail:
+		// The flame families are the burning world's own light: a feature on
+		// fire, a flame-stream segment and its trail. They reach here only
+		// through the one-point coverage gate above, so an unseen fire never
+		// lights a visible receiver (§31). Emission flickers, so the record
+		// carries the committed time the executor phases it by.
+		lightingKind = drawlist.SpriteLightingFire
+		lightingTime = c.lightingTime()
 	}
 	scale := float32(c.viewScale().Float())
 	// Emit the translucent frame blit; the sink runs the raw tintedBlitAnchor, so
@@ -203,10 +213,23 @@ func (c *Client) blitStripFrame(v frame.StripView) bool {
 		// Enhanced glow layer, which keeps only its bright texels (§19).
 		Emissive:      true,
 		LightingKind:  lightingKind,
+		LightingTime:  lightingTime,
 		WorldHeight:   float32(v.Y.Raw()) / 65536 * scale,
 		LightingScale: scale,
 	})
 	return c.pal != nil && len(c.indexed) != 0
+}
+
+// lightingTime is the committed tick plus the presentation fraction, wrapped to
+// a bounded window so the value stays small and exact in a float32. It is the
+// only clock any Enhanced light source reads: replay and pausing reproduce it,
+// and no wall clock reaches presentation [I6].
+func (c *Client) lightingTime() float32 {
+	t := float32(c.frameTick % 3600)
+	if c.interpolation {
+		t += c.TickFraction()
+	}
+	return t
 }
 
 // tintedBlitAnchor is retail's translucent frame blit at a frame anchor: every

@@ -95,7 +95,9 @@ func TestLightingSmokeIdentityComesFromStripFamily(t *testing.T) {
 			t.Fatal("strip physical height/scale was lost")
 		}
 	})
-	if len(kinds) != 3 || kinds[0] != drawlist.SpriteLightingSmoke || kinds[1] != drawlist.SpriteLightingSmoke || kinds[2] != drawlist.SpriteLightingNone {
+	// The two puff families are receivers and the flame family is an emitter,
+	// from the producer family alone — the art is identical (§23.1, §31).
+	if len(kinds) != 3 || kinds[0] != drawlist.SpriteLightingSmoke || kinds[1] != drawlist.SpriteLightingSmoke || kinds[2] != drawlist.SpriteLightingFire {
 		t.Fatalf("strip identities = %v", kinds)
 	}
 }

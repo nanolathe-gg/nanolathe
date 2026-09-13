@@ -119,7 +119,10 @@ func (c *Client) emitFog(fg drawlist.Fog) {
 func (c *Client) emitSprite(sp drawlist.Sprite) {
 	sp.HasClip, sp.Clip = c.clipUISprite(sp.HasClip, sp.Clip)
 	if sp.Frame != nil && len(sp.Frame.Subframes) != 0 {
-		if sp.LightingKind == drawlist.SpriteLightingExplosion {
+		if sp.LightingKind.Emitter() {
+			// An emitter is measured as the WHOLE composite, once, before its
+			// ordered leaves are expanded; the leaves themselves carry no kind, so
+			// one composite consumes one budget slot (§23.2, §31).
 			c.list.RecordLightSource(sp)
 			sp.LightingKind = drawlist.SpriteLightingNone
 		}

@@ -7,89 +7,368 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 )
 
-// Enhanced presentation choices, not retail arithmetic (GPU design §23).
+// Enhanced presentation choices, not retail arithmetic (GPU design §23, §31).
 // The light budget bounds CPU work without adding model passes or textures.
 const battleLightLimit = 64
 const subjectLightLimit = 8
+
+// lightKind is the emitter family a selected source came from. It exists for
+// the budget and the diagnostics only: every kind reaches the receivers through
+// the same falloff (§31 "Budget").
+type lightKind uint8
+
+const (
+	lightExplosion lightKind = iota
+	lightNano
+	lightFire
+	lightProjectile
+	lightWreck
+	lightKindCount
+)
+
+// lightKindCap is the most sources one kind may hold, and lightKindReserve the
+// slots it is guaranteed when the shared budget is full. The reserves sum to
+// the budget, so no kind can be evicted below its reserve by another, and the
+// caps stop a field of fires or a volley of plasma from filling the budget on
+// their own (§31 "Budget"). Explosions and nanolathe clusters keep the
+// pre-existing behaviour of competing for the whole budget.
+var lightKindCap = [lightKindCount]int{
+	lightExplosion: battleLightLimit, lightNano: battleLightLimit,
+	lightFire: 24, lightProjectile: 24, lightWreck: 16,
+}
+
+var lightKindReserve = [lightKindCount]int{
+	lightExplosion: 24, lightNano: 12, lightFire: 12, lightProjectile: 12, lightWreck: 4,
+}
+
+// The reserves are a partition of the budget; this fails to compile otherwise.
+const _ = uint(battleLightLimit - (24 + 12 + 12 + 12 + 4))
+
+// Artistic constants for the added emitter families (§31). Radii are world
+// pixels at record scale; the record scale multiplies them at gather time.
+const (
+	fireRadiusMin    = 128
+	fireRadiusMax    = 160
+	fireFlickerTicks = 15 // about half a second at the 30 Hz tick
+	fireDimPeak      = 0.25
+	// fireEnergy lifts the measured flame emission into the range the rest of
+	// the prototype was tuned for. Burning art measures 0.39-0.51 peak on the
+	// reference install, well under an explosion's, so without this a fire's
+	// light is technically present and visually unreadable (§31.1).
+	fireEnergy         = 1.6
+	projRadiusMin      = 56
+	projRadiusMax      = 96
+	strokeRadiusMin    = 48
+	strokeRadiusMax    = 160
+	strokeEnergy       = 0.8
+	wreckRadius        = 80
+	wreckEmissionScale = 0.6
+)
+
+// fireWarmFallback is the hue a flame source takes when the installed art
+// measures too dim to carry one. Its ENERGY still comes from the measurement,
+// so a dying fire still fades (§31).
+var fireWarmFallback = [3]float32{0.95, 0.55, 0.18}
 
 type battleLight struct {
 	position [3]float32 // recorded screen X, unsheared screen Y, scaled height
 	color    [3]float32
 	radius   float32
+	kind     lightKind
 }
 
 type battleLighting struct {
 	disabled  bool
 	lights    []battleLight
+	counts    [lightKindCount]int
 	colors    map[*formats.GAFFrame][3]float32
 	nano      [battleLightLimit]nanoLightCluster
 	nanoCount int
+	// recordW, recordH are the record-space viewport sources are culled
+	// against. Gathering precedes replay, so the framebuffer size is not the
+	// record extent below a rest zoom factor (§16.3).
+	recordW, recordH float32
 }
 
 // SetBattleLighting controls the prototype for capture comparisons. It changes
 // only this executor's presentation; normal Enhanced rendering enables it.
 func (r *Renderer) SetBattleLighting(on bool) { r.lighting.disabled = !on }
 
-// prepareBattleLighting gathers explicitly classified, visible named explosion
-// art before any model is rasterized. Smoke and generic bloom flags are never
+// prepareBattleLighting gathers explicitly classified, visible emitter art
+// before any model is rasterized. Smoke and generic bloom flags are never
 // sources. Coordinates stay in RECORD space until the ordinary world commit.
+//
+// Five families reach the budget: named explosion art, nanolathe clusters
+// (§23.5), burning flame strips, emissive projectile bodies and emissive
+// strokes, and cooling fresh wrecks (§31). Every one of them is already
+// visibility-admitted by its producer, and the player's Lighting switch gates
+// the whole gather.
 func (r *Renderer) prepareBattleLighting(list *drawlist.List) {
 	l := &r.lighting
 	l.lights = l.lights[:0]
+	l.counts = [lightKindCount]int{}
+	r.modelStats.BattleLights = 0
+	r.modelStats.BattleLightKinds = [lightKindCount]int{}
 	if l.disabled {
 		return
 	}
 	if l.colors == nil {
 		l.colors = make(map[*formats.GAFFrame][3]float32)
 	}
-	list.VisitLightSources(func(sp drawlist.Sprite) {
-		if sp.LightingKind != drawlist.SpriteLightingExplosion || sp.Frame == nil {
+	w, h := list.RecordedWorldExtent()
+	l.recordW, l.recordH = float32(w), float32(h)
+	if w <= 0 || h <= 0 {
+		l.recordW, l.recordH = float32(r.clipW()), float32(r.clipH())
+	}
+	list.VisitLightSources(func(sp drawlist.Sprite) { r.addSpriteLight(sp) })
+	r.prepareStrokeLighting(list)
+	r.prepareWreckLighting(list)
+	r.prepareNanoLighting(list)
+	r.modelStats.BattleLights = len(l.lights)
+	r.modelStats.BattleLightKinds = l.counts
+}
+
+// addSpriteLight admits one classified emitter sprite. Explosions keep their
+// original radius and colour exactly; the two added families differ only in
+// their radius clamp and, for fire, a flicker on emitted strength (§31).
+func (r *Renderer) addSpriteLight(sp drawlist.Sprite) {
+	l := &r.lighting
+	var kind lightKind
+	switch sp.LightingKind {
+	case drawlist.SpriteLightingExplosion:
+		kind = lightExplosion
+	case drawlist.SpriteLightingFire:
+		kind = lightFire
+	case drawlist.SpriteLightingProjectile:
+		kind = lightProjectile
+	default:
+		return
+	}
+	if sp.Frame == nil {
+		return
+	}
+	color, ok := l.colors[sp.Frame]
+	if !ok {
+		color = explosionColor(sp.Frame, &r.displayPalette)
+		l.colors[sp.Frame] = color
+	}
+	peak := max(color[0], color[1], color[2])
+	if peak < 0.015 {
+		return
+	}
+	scale := sp.LightingScale
+	if scale <= 0 {
+		scale = 1
+	}
+	// The recorded placement differs by family: effect, projectile and strip art
+	// carry the frame ANCHOR, while feature art carries the top-left the blitter
+	// writes from [03 §5.3.1]. Normalising to the anchor keeps one position and
+	// one clip test for every emitter.
+	ax, ay := float32(sp.X), float32(sp.Y)
+	if sp.Kind == drawlist.BlitFeatureNormal {
+		ax += float32(sp.Frame.XOffset)
+		ay += float32(sp.Frame.YOffset)
+	}
+	art := float32(max(sp.Frame.Width, sp.Frame.Height))
+	var radius float32
+	switch kind {
+	case lightFire:
+		// Flame art is small but the fire it stands for lights a wide patch of
+		// ground, so its clamp floor is well above the art's own size.
+		radius = min(max(art*1.4, fireRadiusMin*scale), fireRadiusMax*scale)
+		// A measured hue below the warm threshold is the installed art being too
+		// dark to carry one; keep its energy and take the authored warm hue.
+		if peak < fireDimPeak {
+			color = [3]float32{fireWarmFallback[0] * peak, fireWarmFallback[1] * peak, fireWarmFallback[2] * peak}
+		}
+		strength := fireEnergy * fireFlicker(sp.LightingTime, ax, ay)
+		for j := range color {
+			color[j] *= strength
+		}
+	case lightProjectile:
+		radius = min(max(art*1.4, projRadiusMin*scale), projRadiusMax*scale)
+	default:
+		radius = min(max(art*1.4, 48*scale), 192*scale) * 1.5
+	}
+	// The producer has already checked local visibility. Only art intersecting
+	// the recorded clip contributes; offscreen glow is outside this prototype.
+	x, y := int32(ax)-int32(sp.Frame.XOffset), int32(ay)-int32(sp.Frame.YOffset)
+	if sp.HasClip && (x+int32(sp.Frame.Width) <= sp.Clip.X || y+int32(sp.Frame.Height) <= sp.Clip.Y || x >= sp.Clip.X+sp.Clip.W || y >= sp.Clip.Y+sp.Clip.H) {
+		return
+	}
+	if !l.inRecordView(ax, ay, radius) {
+		return
+	}
+	l.add(battleLight{
+		position: [3]float32{ax, ay + sp.WorldHeight*0.5, sp.WorldHeight + float32(sp.Frame.Height)*0.25},
+		color:    color, radius: radius, kind: kind,
+	})
+}
+
+// prepareStrokeLighting admits the emissive beam and lightning strokes. A
+// stroke has no art to measure: its colour is the palette colour the executor
+// actually draws it in, at a fixed fraction of full energy, and its physical
+// height comes from the committed endpoints the recorder carried (§31).
+func (r *Renderer) prepareStrokeLighting(list *drawlist.List) {
+	l := &r.lighting
+	list.VisitLines(func(line drawlist.Line) {
+		if !line.Emissive {
 			return
 		}
-		color, ok := l.colors[sp.Frame]
-		if !ok {
-			color = explosionColor(sp.Frame, &r.displayPalette)
-			l.colors[sp.Frame] = color
+		c := r.displayPalette[line.Index]
+		color := [3]float32{
+			float32(c[0]) / 255 * strokeEnergy,
+			float32(c[1]) / 255 * strokeEnergy,
+			float32(c[2]) / 255 * strokeEnergy,
 		}
 		if max(color[0], color[1], color[2]) < 0.015 {
 			return
 		}
-		scale := sp.LightingScale
+		scale := line.LightingScale
 		if scale <= 0 {
 			scale = 1
 		}
-		radius := min(max(float32(max(sp.Frame.Width, sp.Frame.Height))*1.4, 48*scale), 192*scale) * 1.5
-		light := battleLight{
-			position: [3]float32{float32(sp.X), float32(sp.Y) + sp.WorldHeight*0.5, sp.WorldHeight + float32(sp.Frame.Height)*0.25},
-			color:    color, radius: radius,
-		}
-		// The producer has already checked local visibility. Only art intersecting
-		// the recorded clip contributes; offscreen glow is outside this prototype.
-		x, y := sp.X-int32(sp.Frame.XOffset), sp.Y-int32(sp.Frame.YOffset)
-		if sp.HasClip && (x+int32(sp.Frame.Width) <= sp.Clip.X || y+int32(sp.Frame.Height) <= sp.Clip.Y || x >= sp.Clip.X+sp.Clip.W || y >= sp.Clip.Y+sp.Clip.H) {
+		dx := float32(line.X1 - line.X0)
+		dy := float32(line.Y1 - line.Y0)
+		length := float32(math.Sqrt(float64(dx*dx + dy*dy)))
+		radius := min(max(0.6*length, strokeRadiusMin*scale), strokeRadiusMax*scale)
+		midX := float32(line.X0+line.X1) * 0.5
+		midY := float32(line.Y0+line.Y1) * 0.5
+		height := (line.WorldHeight0 + line.WorldHeight1) * 0.5
+		if !l.inRecordView(midX, midY, radius) {
 			return
 		}
-		l.add(light)
+		l.add(battleLight{
+			position: [3]float32{midX, midY + height*0.5, height},
+			color:    color, radius: radius, kind: lightProjectile,
+		})
 	})
-	r.prepareNanoLighting(list)
-	r.modelStats.BattleLights = len(l.lights)
+}
+
+// prepareWreckLighting admits a fresh wreck's own cooling emission as light.
+// The emission and its cooling curve belong to the wreck prototype (§28); this
+// only borrows the colour, so a wreck that has cooled emits nothing and no new
+// clock is read (§31).
+func (r *Renderer) prepareWreckLighting(list *drawlist.List) {
+	l := &r.lighting
+	list.VisitModels(func(cmd drawlist.Model) {
+		g := cmd.Geometry
+		if cmd.ShadowOnly || g == nil {
+			return
+		}
+		peak := max(g.WreckEmission[0], g.WreckEmission[1], g.WreckEmission[2])
+		if peak*wreckEmissionScale < 0.015 {
+			return
+		}
+		scale := g.WreckHeatScale
+		if scale <= 0 {
+			scale = 1
+		}
+		b := modelWorldBounds(g)
+		x := float32(b.Min.X+b.Max.X) * 0.5
+		y := float32(b.Min.Y+b.Max.Y) * 0.5
+		radius := wreckRadius * scale
+		if !l.inRecordView(x, y, radius) {
+			return
+		}
+		l.add(battleLight{
+			position: [3]float32{x, y + g.WorldHeight*0.5, g.WorldHeight},
+			color: [3]float32{
+				g.WreckEmission[0] * wreckEmissionScale,
+				g.WreckEmission[1] * wreckEmissionScale,
+				g.WreckEmission[2] * wreckEmissionScale,
+			},
+			radius: radius, kind: lightWreck,
+		})
+	})
+}
+
+// inRecordView rejects a source whose reach misses the recorded viewport, so an
+// offscreen battle cannot consume budget a visible one needs.
+func (l *battleLighting) inRecordView(x, y, radius float32) bool {
+	if l.recordW <= 0 || l.recordH <= 0 {
+		return true
+	}
+	return x+radius > 0 && y+radius > 0 && x-radius < l.recordW && y-radius < l.recordH
+}
+
+// fireFlicker is the bounded [0.75, 1] multiplier a flame source's emission
+// takes. The argument is committed ticks plus the presentation fraction, so a
+// replayed or paused frame reproduces it exactly; the per-source phase is a
+// hash of the recorded position, so neighbouring fires do not pulse together
+// and no RNG stream is touched (§31).
+func fireFlicker(t, x, y float32) float32 {
+	phase := lightPhase(x, y)
+	wave := 0.5 + 0.5*float32(math.Sin(float64(t*(2*math.Pi/fireFlickerTicks)+phase)))
+	return 0.75 + 0.25*wave
+}
+
+// lightPhase maps a recorded position to a fixed phase in [0, 2pi). It is a
+// plain integer mix, deterministic and independent of any simulation stream.
+func lightPhase(x, y float32) float32 {
+	h := uint32(int32(x))*73856093 ^ uint32(int32(y))*19349663
+	h ^= h >> 13
+	h *= 2654435761
+	return float32(h>>22) * (2 * math.Pi / 1024)
 }
 
 // add keeps the strongest sources within the shared budget, with stable ties.
+// A kind at its cap competes only with itself. When the budget is full the slot
+// is taken from the kind furthest ABOVE its reserve, so no family can be pushed
+// below its guaranteed share by another (§31 "Budget").
 func (l *battleLighting) add(light battleLight) {
-	if len(l.lights) < battleLightLimit {
-		l.lights = append(l.lights, light)
+	k := light.kind
+	if k >= lightKindCount {
 		return
 	}
-	weakest := 0
-	for i := 1; i < len(l.lights); i++ {
-		if lightPower(l.lights[i]) < lightPower(l.lights[weakest]) {
-			weakest = i
+	if l.counts[k] >= lightKindCap[k] {
+		if at := l.weakestOf(k); at >= 0 && lightPower(light) > lightPower(l.lights[at]) {
+			l.lights[at] = light
+		}
+		return
+	}
+	if len(l.lights) < battleLightLimit {
+		l.lights = append(l.lights, light)
+		l.counts[k]++
+		return
+	}
+	victim, over := -1, 0
+	for i := lightKind(0); i < lightKindCount; i++ {
+		if d := l.counts[i] - lightKindReserve[i]; d > over {
+			if at := l.weakestOf(i); at >= 0 {
+				victim, over = at, d
+			}
 		}
 	}
-	if lightPower(light) > lightPower(l.lights[weakest]) {
-		l.lights[weakest] = light
+	if victim < 0 {
+		victim = l.weakestOf(k)
 	}
+	if victim < 0 {
+		return
+	}
+	// Taking a slot from an over-share kind is the point of the reserve; within
+	// one kind the stronger source still wins, with stable ties.
+	if l.lights[victim].kind == k && lightPower(light) <= lightPower(l.lights[victim]) {
+		return
+	}
+	l.counts[l.lights[victim].kind]--
+	l.lights[victim] = light
+	l.counts[k]++
+}
+
+// weakestOf is the index of the dimmest light of one kind, or -1 when the kind
+// holds none. Ties keep the earliest, so selection is record-order stable.
+func (l *battleLighting) weakestOf(k lightKind) int {
+	at := -1
+	for i := range l.lights {
+		if l.lights[i].kind != k {
+			continue
+		}
+		if at < 0 || lightPower(l.lights[i]) < lightPower(l.lights[at]) {
+			at = i
+		}
+	}
+	return at
 }
 
 func lightPower(l battleLight) float32 { return max(l.color[0], l.color[1], l.color[2]) }

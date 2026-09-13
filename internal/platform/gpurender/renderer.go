@@ -134,8 +134,11 @@ type Renderer struct {
 
 	// glow is the Enhanced glow layer of docs/DESIGN_GPU_RENDERER.md §19: the
 	// emissive batch, its planes and passes (glow.go).
-	glow        glowLayer
-	lighting    battleLighting
+	glow     glowLayer
+	lighting battleLighting
+	// ground is the Enhanced terrain illumination pass of §31: one clipped
+	// disc per battle light, drawn at the end of the terrain pass.
+	ground      groundLighting
 	water       waterLayer
 	reflections waterReflections
 	distortion  worldDistortion
@@ -239,6 +242,7 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 	compile(&r.reflections.resolveShader, newReflectionResolveShader)
 	compile(&r.reflections.softResolveShader, newSoftReflectionResolveShader)
 	compile(&r.distortion.shader, newDistortionShader)
+	compile(&r.ground.shader, newGroundLightShader)
 	if err := r.initModelDirect(); err != nil && firstErr == nil {
 		firstErr = err
 	}

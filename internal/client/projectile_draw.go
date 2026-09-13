@@ -110,6 +110,14 @@ func (c *Client) DrawProjectileViews(current []frame.ProjectileView, now uint32,
 			// its nearest-doubled variant in the detail view
 			// (DESIGN_GPU_RENDERER §14.2, §14.3).
 			sprite := drawlist.Sprite{Frame: c.viewFrame(d.FrameAsset), X: x - 128, Y: y - 32, Kind: drawlist.BlitKeyed, Anchored: true, Emissive: true}
+			// The projectile BODY is a light source: plasma shells and flares
+			// carry their own bright art. The ground shadow above is not, and
+			// muzzle-flash art is an effect record the explosion path already
+			// counts, so nothing is doubled (§31).
+			scale := float32(c.viewScale().Float())
+			sprite.LightingKind = drawlist.SpriteLightingProjectile
+			sprite.WorldHeight = float32(view.Y.Raw()) / 65536 * scale
+			sprite.LightingScale = scale
 			sprite.ReflectWater = c.reflectionWaterAt(view.X, view.Z)
 			sprite.ReflectionHeight = c.reflectionHeight(view.Y)
 			c.emitSprite(sprite)
@@ -174,6 +182,7 @@ func (c *Client) drawProjectileBeam(d render.ProjectileDraw, v frame.ProjectileV
 		// Each beam stroke is one indexed line; the sink runs the raw Bresenham
 		// primitive [03 §5.4].
 		line := drawlist.Line{X0: stroke.X0, Y0: stroke.Y0, X1: stroke.X1, Y1: stroke.Y1, Index: indexedColor(stroke.Color), Emissive: true}
+		c.setLineHeights(&line, v.Y, v.TailY)
 		c.setLineReflection(&line, render.ProjectilePoint{X: v.X, Y: v.Y, Z: v.Z}, render.ProjectilePoint{X: v.TailX, Y: v.TailY, Z: v.TailZ})
 		if d.Color2 != 0 && i == 0 {
 			// The secondary stroke swaps head and tail [03 §5.4].
@@ -192,11 +201,22 @@ func (c *Client) drawProjectileSegments(d render.ProjectileDraw) int {
 		ax, ay := c.cam.WorldToScreen(a.X, a.Y, a.Z)
 		bx, by := c.cam.WorldToScreen(b.X, b.Y, b.Z)
 		line := drawlist.Line{X0: ax - 128, Y0: ay - 32, X1: bx - 128, Y1: by - 32, Index: indexedColor(d.Color), Emissive: true}
+		c.setLineHeights(&line, a.Y, b.Y)
 		c.setLineReflection(&line, a, b)
 		c.emitLine(line)
 		count++
 	}
 	return count
+}
+
+// setLineHeights carries the committed endpoint heights, in recording view-scale
+// pixels, as Sprite.WorldHeight does. The reflection heights beside them are
+// relative to sea and cannot stand in for a physical height (§31).
+func (c *Client) setLineHeights(line *drawlist.Line, y0, y1 numeric.Fixed) {
+	scale := float32(c.viewScale().Float())
+	line.WorldHeight0 = float32(y0.Raw()) / 65536 * scale
+	line.WorldHeight1 = float32(y1.Raw()) / 65536 * scale
+	line.LightingScale = scale
 }
 
 func (c *Client) drawProjectileSegmentsSecond(d render.ProjectileDraw) int {
@@ -207,6 +227,7 @@ func (c *Client) drawProjectileSegmentsSecond(d render.ProjectileDraw) int {
 		ax, ay := c.cam.WorldToScreen(a.X, a.Y, a.Z)
 		bx, by := c.cam.WorldToScreen(b.X, b.Y, b.Z)
 		line := drawlist.Line{X0: ax - 128, Y0: ay - 32, X1: bx - 128, Y1: by - 32, Index: indexedColor(d.Color), Emissive: true}
+		c.setLineHeights(&line, a.Y, b.Y)
 		c.setLineReflection(&line, a, b)
 		c.emitLine(line)
 		count++

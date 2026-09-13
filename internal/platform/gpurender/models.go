@@ -29,6 +29,13 @@ type ModelStats struct {
 	GlowQuads, GlowPasses int
 	// BattleLights and LitModelFaces describe the bounded Enhanced prototype.
 	BattleLights, LitModelFaces, LitSmokeSprites int
+	// BattleLightKinds counts the selected sources by family, indexed by the
+	// executor's light kind in declaration order: explosion, nanolathe, fire,
+	// projectile, wreck (§31).
+	BattleLightKinds [lightKindCount]int
+	// GroundLights is the clipped light discs the terrain illumination pass
+	// batched this frame; zero means the pass drew and copied nothing (§31).
+	GroundLights int
 	// ReflectionVertices is the bounded coastal reflection source geometry.
 	ReflectionVertices int
 	BlastWaves         int

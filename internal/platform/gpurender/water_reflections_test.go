@@ -12,6 +12,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // Authored geometry separates physical height from depth key: a high-key
@@ -184,9 +185,72 @@ func checkWaterReflectionDevicePixels() error {
 	if !bytes.Equal(read(nil, true, 30, false, false, false), read(nil, false, 30, false, false, false)) {
 		return fmt.Errorf("old reflection persisted without source")
 	}
+	if err := checkSurfaceImpactReflection(r, ter); err != nil {
+		return err
+	}
 	r.ResetSources()
 	if r.reflections.source != nil || r.reflections.height != nil || len(r.reflections.verts) != 0 {
 		return fmt.Errorf("reflection storage survived source reset")
+	}
+	return nil
+}
+
+// A surface impact sits at sea level, so its reflection mirrors about its own
+// anchor: the opaque upper half of the art lands below the anchor, where the
+// art itself is keyed out, and the water mask still holds it off dry ground
+// (GPU design §32). Height zero is the case the model waterline clip rejects.
+func checkSurfaceImpactReflection(r *Renderer, ter *world.Terrain) error {
+	const w, h = 160, 240
+	const anchorX, anchorY, side = 40, 120, 16
+	f := &formats.GAFFrame{Width: side, Height: side, XOffset: side / 2, YOffset: side / 2,
+		Pixels: make([]byte, side*side), Transparent: make([]bool, side*side)}
+	for i := range f.Pixels {
+		f.Pixels[i] = 240
+		// Only the half above the anchor carries fire; the lower half is keyed
+		// out, which is where the mirrored upper half becomes visible.
+		f.Transparent[i] = i/side >= side/2
+	}
+	read := func(on bool, dry bool) []byte {
+		var l drawlist.List
+		l.RecordClear()
+		l.RecordTerrain(drawlist.Terrain{Terrain: ter, DstW: 214, DstH: 320, Scale: camera.ViewScaleNative, Water: drawlist.WaterSurface{Enabled: true, Tick: 30, Energy: .7}})
+		x := int32(anchorX)
+		if dry {
+			x = 150
+		}
+		l.RecordSprite(drawlist.Sprite{Frame: f, X: x, Y: anchorY, Kind: drawlist.BlitKeyed, Anchored: true, ReflectWater: !dry, ReflectionHeight: 0})
+		l.RecordExpand()
+		r.SetWaterReflections(on)
+		img := r.Execute(&l, w, h)
+		p := make([]byte, w*h*4)
+		img.ReadPixels(p)
+		return p
+	}
+	off, on := read(false, false), read(true, false)
+	changed := 0
+	for y := anchorY + 1; y < anchorY+side/2; y++ {
+		for x := anchorX - side/2; x < anchorX+side/2; x++ {
+			i := (y*w + x) * 4
+			if !bytes.Equal(off[i:i+4], on[i:i+4]) {
+				changed++
+			}
+		}
+	}
+	if changed == 0 {
+		return fmt.Errorf("surface impact cast no reflection below its anchor")
+	}
+	for y := 0; y < h; y++ {
+		for x := 140; x < w; x++ {
+			i := (y*w + x) * 4
+			if !bytes.Equal(off[i:i+4], on[i:i+4]) {
+				return fmt.Errorf("surface impact reflection crossed onto land at %d,%d", x, y)
+			}
+		}
+	}
+	// An impact standing on dry ground is never admitted, so the switch cannot
+	// change a single byte of that frame.
+	if !bytes.Equal(read(false, true), read(true, true)) {
+		return fmt.Errorf("dry-ground impact was admitted as a reflection source")
 	}
 	return nil
 }

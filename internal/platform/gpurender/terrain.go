@@ -439,6 +439,9 @@ func (r *Renderer) Terrain(c drawlist.Terrain) {
 	}
 	r.drawWater(c)
 	r.drawWaterReflections(c)
+	// The battle lights reach the ground last in the terrain pass, so the copy
+	// they read carries the resolved water surface too (§31).
+	r.drawGroundLighting()
 }
 
 // floorDivInt is floor division for int, correct for negative numerators

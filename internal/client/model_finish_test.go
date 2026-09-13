@@ -11,7 +11,7 @@ import (
 )
 
 func TestModelMaterialExplicitArtAndPacket(t *testing.T) {
-	for _, name := range []string{"unknown", "colorslt", "32xlogos", "glow", "energy1", "armbld1"} {
+	for _, name := range []string{"unknown", "32xlogos", "glow", "energy1", "armbld1"} {
 		if modelTextureMaterial(name) != drawlist.ModelMaterialDefault {
 			t.Fatalf("unannotated art %q has a material", name)
 		}
@@ -19,7 +19,7 @@ func TestModelMaterialExplicitArtAndPacket(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		want uint8
-	}{{"MeTaL3c", drawlist.ModelMaterialMetal}, {"corsea6d", drawlist.ModelMaterialMetal}, {"CAMOB3", drawlist.ModelMaterialPaint}, {"bluenoise4", drawlist.ModelMaterialPaint}} {
+	}{{"CoLoRsLt", drawlist.ModelMaterialMetal}, {"colorsmd", drawlist.ModelMaterialMetal}, {"colorsdk", drawlist.ModelMaterialMetal}, {"colordk2", drawlist.ModelMaterialMetal}, {"MeTaL3c", drawlist.ModelMaterialMetal}, {"corsea6d", drawlist.ModelMaterialMetal}, {"CAMOB3", drawlist.ModelMaterialPaint}, {"bluenoise4", drawlist.ModelMaterialPaint}} {
 		if got := modelTextureMaterial(tc.name); got != tc.want {
 			t.Fatalf("%s material = %d, want %d", tc.name, got, tc.want)
 		}
@@ -52,7 +52,7 @@ func TestEmbeddedMaterialTableCoversTheAuthoredClassification(t *testing.T) {
 	if err != nil {
 		t.Fatalf("embedded material annotation does not parse: %v", err)
 	}
-	metal := []string{"metal3a", "metal3b", "metal3c", "metal3d", "graynoise1", "graynoise2", "graynoise3", "graynoise4", "graynoise5", "arm01b", "arm01c", "arm01d", "corsea5a", "corsea5b", "corsea5c", "corsea5d", "corsea6a", "corsea6b", "corsea6c", "corsea6d"}
+	metal := []string{"colorslt", "colorsmd", "colorsdk", "colordk2", "metal3a", "metal3b", "metal3c", "metal3d", "graynoise1", "graynoise2", "graynoise3", "graynoise4", "graynoise5", "arm01b", "arm01c", "arm01d", "corsea5a", "corsea5b", "corsea5c", "corsea5d", "corsea6a", "corsea6b", "corsea6c", "corsea6d"}
 	paint := []string{"camob2", "camob3", "camob4", "camob5", "camob6", "camoflage", "descamo2", "descamo3", "descamo4", "corcam4b", "corcam4c", "corcam4d", "corcam5c", "corcam5d", "corcam6c", "corcam6d", "camod01", "camod02", "camoe01", "camoe02", "armcam2a", "bluenoise1", "bluenoise2", "bluenoise3", "bluenoise4"}
 	for _, name := range metal {
 		if table[name] != drawlist.ModelMaterialMetal {

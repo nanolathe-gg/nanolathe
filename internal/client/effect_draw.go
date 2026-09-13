@@ -289,8 +289,13 @@ func (c *Client) DrawEffectViews(effects []frame.EffectView, options EffectDrawO
 			}
 		}
 		scale := float32(c.viewScale().Float())
+		// Enhanced water reflection for effect art (§32): a fireball over water
+		// mirrors about its own anchor's water-plane projection, so a surface
+		// impact throws its upper half back into the sea. reflectionWaterAt
+		// already returns false when the player's Water switch is off (§30).
 		c.emitSprite(drawlist.Sprite{Frame: c.viewFrame(frame), X: x - 128, Y: y - 32, Kind: drawlist.BlitKeyed, Anchored: true, Emissive: true,
 			BlastAge: blastAge, BlastSize: blastSize,
+			ReflectWater: c.reflectionWaterAt(d.X, d.Z), ReflectionHeight: c.reflectionHeight(d.Y),
 			LightingKind: lightingKind, WorldHeight: float32(d.Y.Raw()) / 65536 * scale, LightingScale: scale})
 		stats.Sprites++
 	}

@@ -5215,23 +5215,63 @@ invalidate this cache as well as the painted terrain sources.
 
 A 128-pixel block index skips the water pass when no water intersects the view.
 Otherwise the scheduler copies the terrain composite and applies a viewport
-water shader before objects. Two layers of smooth value noise with different
-scales and drift perturb the terrain by up to 2.8 world pixels per axis. Moving
-brightness and blue highlights make that motion readable against fine painted
-texture. Bilinear terrain sampling prevents displacement from snapping between
-original pixels. Shore fronts travel toward the coast along the blurred distance
-field on an approximately four-second cycle, with spatially varying phase and
-opacity. Broad crests fade across the last seven world pixels before the
-wet/dry boundary to avoid outlining its grid. Surface brightness variation is
-bounded to ±9.6 percent and the blue highlight blend to eight percent at full
-wind strength. These subdued lighting coefficients preserve readable refraction;
-wave timing, displacement and wind drift are independent of highlight strength.
+water shader before objects. Every constant in that shader is an authored
+Nanolathe presentation choice, not a retail behavioural claim.
+
+Three layers of smooth value noise perturb the terrain by up to 3.4 world pixels
+per axis, and none of them scrolls on a velocity of its own: each travels only
+on the integrated wind drift, the broad ripple at six times that drift, the fine
+ripple at eleven and a coarse gust layer at twenty-two. The earlier treatment
+added a fixed scroll on top of the drift, and in calm wind that scroll — about
+2.6 world pixels per second — matched the drift itself, so the whole surface slid
+as one sheet in a direction unrelated to the wind. With the fixed scroll gone the
+direction of travel is always the wind, and the three multiples give the surface
+parallax rather than a single sliding sheet.
+
+Translation alone still reads as a moving tile, so the ripple is deformed as well
+as moved. A slow domain warp — two more noise evaluations on a lattice about four
+times coarser than the broad ripple, advancing roughly 0.08 of a cell per second
+— offsets the broad lattice by up to 0.8 of its cells and the fine lattice by up
+to 0.45 of its own. The warp lattice is the only term that advances on time
+alone, and because it is a deformation rather than a translation, ripple cells
+stretch, split and merge in place instead of marching past. The fine lattice is
+additionally rotated 37 degrees about the map origin — one fixed rotation applied
+once, not a wind-following one — so its cell rows never coincide with the broad
+lattice's and the pair stops reading as a grid.
+
+The coarse layer is a gust patch, a cat's paw: it glides downwind fastest, and
+where it passes it both roughens the ripple, by up to a fifth more amplitude and
+displacement, and darkens the water by up to five percent at full wind energy. In
+a dead calm the darkening vanishes and only the mild roughening remains.
+
+The field is translated by the wind and never oriented by it. Retail re-rolls the
+wind heading to a fresh random value every 150 to 420 ticks
+[05 "The wind phase, its draws, and the generator notification"], so crests
+aligned to the heading would swing through a new angle every few seconds; and any
+rotation about a fixed point sweeps distant pixels across the screen at a speed
+proportional to their distance from it. Translation has neither defect.
+
+Moving brightness and blue highlights make that motion readable against fine
+painted texture. Bilinear terrain sampling prevents displacement from snapping
+between original pixels. Shore fronts travel toward the coast along the blurred
+distance field on an approximately four-second cycle, with spatially varying
+phase and opacity. Broad crests fade across the last seven world pixels before
+the wet/dry boundary to avoid outlining its grid. Surface brightness now varies
+between −16.5 and +11.5 percent of the painted colour at full wind strength
+inside a gust, and between −6.7 and +6.7 percent in a dead calm; the blue
+highlight blend is still bounded to eight percent at full wind strength. These
+subdued lighting coefficients preserve readable refraction; wave timing,
+displacement and wind drift are independent of highlight strength. A wet pixel
+costs six value-noise evaluations — gust, two warp, broad, fine and the shore
+patch — against seven while the surface carried the sun glitter of §32.1, and
+three before §32 added anything. No new pass, texture, uniform or allocation.
 
 `water_motion.go` observes committed wind, using its negative sine/cosine
 components [R-WIND-01]. Strength is normalized against 5,000 and clamped to [0,1].
 The target drift speed is 0.4–2 world pixels per second; velocity and visual
 strength approach the target by 1/90 of the remaining difference each tick.
-The surface shader scales that integrated drift by six for visible movement.
+The surface shader scales that integrated drift by six, eleven and twenty-two,
+one multiple per layer, for visible movement.
 Integrating the velocity preserves pattern position when wind changes, including
 heading wrap and reversals. The field is never rotated about the map origin.
 Recording interpolates the previous/current visual values with the permitted
@@ -5319,6 +5359,9 @@ billboards about their anchor's water-plane projection; their art has no
 per-pixel physical depth. Beam/segment endpoints use committed heights and
 interpolate the waterline clip across each stroke. No effect, UI glyph or
 projectile ground shadow is inferred to be reflective from its brightness.
+§32 lifts that for named explosion and impact art alone, which the recorder now
+admits explicitly over water; UI glyphs and ground shadows still never reflect,
+and nothing is inferred from brightness.
 
 A retained viewport RGBA plane receives the reflection source, capped at 32,768
 vertices per frame, reserving 4,096 for projectile sprites and strokes. A water-only resolve introduces two irregular horizontal
@@ -5771,7 +5814,10 @@ A curated texture-name table annotates textured unit faces as default, metal or
 paint. It does not classify feature or wreck faces. Metal receives a broad cool
 response beneath the existing glint; paint receives a weaker rough highlight.
 The coefficients preserve authored dark seams and panel hue. Untagged faces
-retain their existing shading.
+retain their existing shading. The team-colour panel textures `colorslt`,
+`colorsmd`, `colorsdk` and `colordk2` use the metal finish for every player
+frame, preserving the selected team hue. This is an authored presentation
+choice; team logos retain their existing classification.
 
 The table is authored data, not Go source. `internal/client/materials/
 materials.tdf` is a TDF file with one `[materials]` section whose keys are 3DO
@@ -5918,3 +5964,321 @@ the benchmark keeps every effect on so two runs measure the same work. A
 switches. The options page rows and the `+water`, `+lights`, `+finish`, `+heat`
 and `+marks` chat commands are described in
 [DESIGN_INTERFACE_HUD_INPUT.md](DESIGN_INTERFACE_HUD_INPUT.md) §3.4.1.
+
+## 31. Fire, projectile and ground lighting (Enhanced)
+
+Two extensions of the battle lighting prototype of §23, both user-authorized
+Enhanced presentation design rather than retail evidence: more of the world's
+light sources emit, and the light they emit now reaches the ground. Classic
+composes the same pixels whatever this section says, nothing here is visible to
+the simulation or to a committed frame [I6], and the player's Lighting switch
+(§30) gates every source and the ground pass with it.
+
+### 31.1 The added sources — contract BL5
+
+The five families that now feed the budget are the two of §23 plus three more.
+Every one of them is already admitted by its producer's own visibility gate, so
+an unseen event never lights a visible receiver (BL1); the kind is recorded
+whatever the switches say and the executor gates emission.
+
+| Source | Recorder | Colour | Radius (world px at record scale) |
+|---|---|---|---|
+| burning feature | the feature's own burning art, tagged where the §27 heat tag is taken, behind the same extra LOS gate | measured from the art like an explosion (§23.2) × 1.6, with a warm fallback hue below measured peak 0.25 | `1.4 × art`, clamped 128–160 |
+| flame stream | the flame and flame-trail strip families, after their one-point coverage gate [03 R-FX-02 §2] | as above | as above |
+| projectile body | the keyed projectile sprite, never its ground shadow | measured from the art | `1.4 × art`, clamped 56–96 |
+| beam / lightning | an `Emissive` stroke of the projectile renderer [06 R-WFX-01 §4] | `PAL[index] × 0.8` — a stroke has no art to measure, so its colour is the colour it is drawn in | `0.6 × length`, clamped 48–160 |
+| fresh wreck | a model packet whose §28 cooling emission is non-zero | that emission × 0.6, so it fades on the wreck's own cooling curve | 80 |
+
+Muzzle-flash art is an effect record the explosion path already counts, so
+nothing is doubled. Smoke stays a receiver and is never promoted (§23.1).
+
+A burning feature's light is placed at its frame ANCHOR: feature art records the
+top-left the blitter writes from [03 §5.3.1] while effect, projectile and strip
+art record the anchor, so the executor recovers one placement from the authored
+offsets and every emitter then shares one position and one clip test. A stroke
+carries the committed ABSOLUTE height of each endpoint in record-scale pixels,
+in fields of its own: the reflection heights beside them are relative to sea
+(§26) and cannot stand in for a physical height. Its light sits at the stroke's
+midpoint at the mean of the two heights.
+
+**Flicker.** A fire's emitted strength is multiplied by
+`0.75 + 0.25 × (0.5 + 0.5 sin(2π t / 15 + phase))`, a bounded [0.75, 1] wave of
+about half a second, where `t` is the committed tick plus the presentation
+fraction and `phase` is an integer hash of the recorded position. No wall clock
+and no RNG stream is read, so a replayed or paused frame reproduces the frame
+exactly, and neighbouring fires do not pulse together. Sources that do not
+flicker keep their measured or authored strength.
+
+**Fire energy.** Measured on the reference install's burning-tree art, a fire
+frame's peak emission is 0.39–0.51 — well above the 0.25 fallback threshold, so
+the installed art carries its own hue, but well below an explosion's, which is
+what the rest of the prototype was tuned against. A fire's measured colour is
+therefore multiplied by 1.6 before the flicker. Without it a fire's light is
+technically present and visually unreadable: the first build's pools showed
+only under an 8× amplified difference.
+
+**The warm fallback.** The fallback `(0.95, 0.55, 0.18)` did not engage in the
+reviewed scene. It exists for art too dark to carry a hue at all, and it scales
+by the measured peak, so a dying fire still fades rather than jumping to
+orange.
+
+### 31.2 Budget — contract BL6
+
+The budget stays 64 sources. Each kind now has a **cap**, the most it may hold,
+and a **reserve**, the slots it cannot be evicted below:
+
+| kind | cap | reserve |
+|---|---|---|
+| explosion | 64 | 24 |
+| nanolathe | 64 | 12 |
+| fire | 24 | 12 |
+| projectile | 24 | 12 |
+| wreck | 16 | 4 |
+
+The reserves partition the budget exactly (a compile-time check holds them to
+it). A kind at its cap competes only with itself, keeping its own strongest.
+When the budget is full the slot is taken from the kind furthest ABOVE its
+reserve, and within one kind the stronger source wins with stable, record-order
+ties. So a field of burning trees cannot starve explosions, and a volley of
+explosions cannot push the fires already selected below their reserve. A source
+whose reach misses the recorded viewport never reaches the budget at all; the
+extent comes from the world record rather than the framebuffer, because
+gathering precedes replay and the record extent is wider than the framebuffer
+below a rest factor (§16.3).
+
+`ModelStats.BattleLightKinds` counts the selection by family in that order, and
+a `--shot` capture prints it beside `GroundLights`.
+
+### 31.3 Ground illumination — contract BL7
+
+Terrain received no coloured light before this: an explosion over open ground
+left the ground exactly as the map painted it. The terrain pass now ends, after
+`drawWater` and `drawWaterReflections`, with one pass over the visible lights:
+
+1. if no light is selected, or the Lighting switch is off, nothing happens at
+   all — no copy, no batch, no cost;
+2. otherwise the scheduler is submitted (one barrier), the composite is copied
+   into the existing scratch surface the refraction batch uses, and one clipped
+   quad per light is drawn in ONE additive batch.
+
+The fragment is **base × light**, not a flat wash: it samples the copied
+composite under the pixel — the ground albedo already carrying the map's painted
+lighting — and outputs `min(base × colour × falloff × 0.9, 1 − base)` with alpha
+zero. Multiplying by the albedo keeps every painted detail (a dark rock stays
+darker than the sand beside it); the per-channel clamp against `1 − base` is
+what stops a bright source from flattening the ground to white; the additive
+blend makes overlapping pools sum as `base × (1 + Σ L)`. The gain 2.0 stays well
+below the model-face gain of §23.2 — terrain already carries the map's own
+lighting — but it has to be far enough above zero for the pool to read without
+amplification, which the first 0.9 was not.
+
+The falloff is the radial law of §23.2 **with the square dropped**, and
+`distance² = dx² + dy² + h²`. A model face is a small target and wants a tight
+core; a ground pool is read as a shape and wants a body. Squared, the pool was a
+bright point inside a wide invisible skirt; linear in `d²/r²` it carries light
+out to most of its radius and still reaches zero at the edge. As for the faces:
+the ground point beneath a light is its UNSHEARED position, because terrain is
+drawn with a zero shear term, so a ground pixel's screen row IS its world row
+[03 §2.5]. `h` is the light's height above that row. The quad covers the light's
+full radius rather than the smaller disc a lifted light actually reaches: the
+shader's own distance test discards the difference, so the cover is conservative
+and needs no square root [I2]. The world transform of §16.3 applies exactly
+once, here, as it does for the refraction batch.
+
+Placement is deliberate. The copy is taken AFTER the water and reflection
+resolve, so the pools brighten the water surface too; and the pass runs BEFORE
+objects, wakes and scorch, so units are drawn over it and the ordinary fog
+composite covers it (§26.3).
+
+### 31.4 Cost and verification
+
+Cost is two extra submissions — the barrier's copy and the batch — in a frame
+with a light in view, and nothing in a frame without one. Measured on Apple M3
+Pro / darwin-arm64 with the scene-version-4 Great Divide live battle benchmark,
+seed 7, 1920×1080, `--zoom 2`, 300 pre-ticks, 180 measured draws, factories on.
+
+Against the executor without the pass: modern `Submit` median/p95 4.798/5.100 →
+4.875/5.282 ms, `DrawWork` median 10.130 → 10.157 ms, `Cadence` median unchanged
+at 33.333 ms, device passes per frame 16 → 18 and phases 16 → 17 with the same
+vertex count.
+
+Against the first, too-faint build of this section, the tuning above is free:
+`Submit` median 4.893 → 4.890 ms, `DrawWork` median 10.207 → 10.304 ms,
+`Cadence` median 33.333 ms both, passes 18 and phases 17 both. It is worth
+what it costs visually: over the whole frame the mean per-channel difference
+rises from 0.43/255 to 2.12/255, and in a 500×280 crop at 2× the mean is
+5.2/255 around a burning tree, 6.1/255 around an explosion on open ground and
+10.6/255 over a smoky volley, with a maximum of 73. The first build's pools
+were legible only under an 8× amplified difference; these read in the raw crop.
+
+Every frame's census and all scene metadata match within each pair (338 → 315
+units, 74 → 61 projectiles, 2,546 features, 15 burning, ticks 361 → 540). The
+classic pair's `battle.png` is byte-identical and its timings are unchanged.
+These are single host pairs, not GPU execution time. The final tuned modern
+frame selected 45 explosion, 7 fire, 8 projectile and 4 wreck sources and
+batched 24 ground discs. Artifacts are outside the repository in
+`/private/tmp/d-bench-*` and `/private/tmp/d2-bench-*`.
+
+The synthetic tier checks admission and rejection per kind, the radius clamps,
+the flicker's bounds, determinism, period and per-source phase, the warm
+fallback's hue and energy, the stroke midpoint/height/colour, the wreck's
+emission and its shadow packet, the anchor recovery for feature art, viewport
+culling of sources, the per-kind caps and reserves in both arrival orders, the
+ground quads' clipping to the viewport and the empty-batch cases. The opt-in
+real-device fixture checks that a stroke brightens the terrain beneath it while
+terrain beyond its reach is untouched, that a flame sprite lights a facing model
+face but not a back-facing one, and that disabling Lighting restores the
+composite exactly.
+
+### 31.5 Known limits
+
+There is no occlusion: a fire lights the ground on the far side of a wall, and
+a unit standing between a light and the ground casts no shadow into the pool.
+Terrain has no normals here, so a hillside takes the same light as flat ground —
+the pool is a screen-space disc, not a projection onto relief. The ground pass
+reads one copy of the composite, so a light is applied to whatever the terrain
+pass has already drawn, including the water surface, and never to the objects
+drawn over it. A fresh wreck's light borrows the §28 cooling emission, which the
+Distortion switch owns: with Distortion off a wreck emits no light even when
+Lighting is on. The flicker's phase hash is a position hash, so two fires at the
+same recorded position pulse together, and a fire that moves changes phase.
+
+## 32. Reflected explosions, shoreline band, and the removed sun glitter (Enhanced)
+
+Three user-requested additions to the coastal water of §26, one of which
+(§32.1) was later removed on review and is kept here only as a record. They are
+authored Nanolathe presentation choices, not retail behavioral claims: every
+constant below is artistic, the classic executor composes identical pixels, and
+the player's Water switch (§30) gates the surviving two — with it off the
+recorder marks no water surface and admits no reflection site, and the composed
+frame is byte-identical to the same build without them.
+
+### 32.1 Sun glitter
+
+**Removed.** The surface shader briefly added a narrow specular lobe on wave
+tops, driven by a pseudo-normal differenced from the drifting height field. It
+landed at a peak of 0.35, was cut to 0.08 on the first review as too strong for a
+surface that must stay subtle, and was removed entirely on the second: the user
+judged it was not earning its keep — "I don't think it's doing much" — and asked
+for motion that reads as living water instead of a tiled sheet sliding across the
+screen. The lobe, the half-vector it met, and the shared two-layer height
+function it needed are all gone; the four value-noise evaluations they cost went
+with them.
+
+The replacement is in §26.3: no fixed scroll, three downwind speeds, a slow
+domain warp so the ripple field churns in place, a rotated fine lattice, and
+coarse gust patches that darken and roughen the water they cross. Nothing else in
+§32 changed, and the Water switch still gates the whole treatment.
+
+### 32.2 Reflected explosions and impacts
+
+Named explosion and impact art now records `ReflectWater` and
+`ReflectionHeight` like a projectile billboard does, from the same
+`reflectionWaterAt`/`reflectionHeight` pair, so the Water switch already
+governs admission. The reflection preparation admits a billboard at height
+zero, where it previously required a strictly positive height, and the source
+shader's waterline clip makes the same distinction: a model face or beam stroke
+carries per-fragment physical height and is still cut at and below sea, while a
+billboard's height is one constant for the whole quad and its admission has
+already happened on the recording side.
+
+Height zero is the case that matters. A surface impact's anchor sits at sea
+level, so mirroring about that anchor sends the opaque upper half of the
+fireball below the anchor, where the art itself is keyed out — which is where
+the reflection becomes visible. Reflected fire is drawn before objects, so the
+explosion composites over its own reflection afterwards; that ordering is
+intended. The resolve keeps its cool tint and 25 percent opacity for fire as
+well: the reflection reads as water rather than as a second fireball, and
+nothing about bright art is treated as a special case.
+
+A projectile billboard resting exactly at the surface is admitted on the same
+terms. Nothing else changes: the 4,096-vertex sprite/stroke reservation, the
+32,768-vertex frame cap, the source plane, the passes and the mask-clipped
+resolve are all as §26.4 and §26.6 left them.
+
+### 32.3 Damp shoreline band and shallow tint
+
+Dry ground the water has just washed keeps a darker tone. The mask cannot carry
+a dry-side distance field — its alpha is opaque everywhere and Ebitengine
+images are premultiplied, and a dry-side green would corrupt the wet-side
+`deep` and `shore` terms wherever bilinear filtering crossed the boundary — so
+the shader measures nearness by sampling instead. Eight taps on a ring of eight
+world pixels, at the mask step, give a maximum and a mean. The maximum is
+converted with a 0.2-to-1.0 smoothstep as the band's admission; the mean shapes
+its falloff through a 0.10-to-0.45 smoothstep, because the red channel is
+binary and the maximum alone would end the band on a whole texel. Both taps are
+bilinear, which is what makes the band resolution-independent: the mask step
+grows with map size, and on a large map, where one texel is eight world pixels,
+the ring spans a single texel and only the filtered reading still resolves the
+band's width.
+
+The result multiplies a dry gate — a 0.05-to-0.5 smoothstep on the mask's blue
+channel, times one minus water coverage. The gate is deliberately low: its only
+job is to exclude terrain that is neither medium, since invalid ground and
+excluded liquid carry no dry flag at all, and a higher threshold would suppress
+the band exactly at the waterline, where it belongs. The band darkens the
+painted colour by up to twelve percent, half of that steady and half pulsing on
+the lap phase the shore foam carries at the boundary, so the ground darkens as
+a wave front arrives. All of this runs before the shader's dry early-out,
+because the band lives on dry texels; a pixel with no water on its ring returns
+the painted colour unchanged, and the added taps cost nothing on wet pixels.
+
+On the water side, the result mixes eight percent toward a pale cyan
+(0.62, 0.80, 0.84), scaled by one minus a 0.0-to-0.35 smoothstep of the shore
+distance, so water lightens as the bottom rises. Deep water is untouched.
+
+Because the band lies beside the water rather than on it, the 128-pixel block
+index now queries one block of slack on each side of the viewport, so a coast
+just past the viewport edge still runs the pass and the band reaches the
+visible strip.
+
+### 32.4 Verification
+
+Real-device fixtures (`NANOLATHE_GPU_DEVICE_TEST=1`) cover the surviving
+additions. The surface fixture uses an authored flat-grey terrain and a straight
+authored coast, drawn through the shipped shader source and through variants that
+replace exactly one term with a constant, so any difference is that term: the
+composed surface is byte-identical on a held phase and different as the field
+advances; a gust patch changes water texels and no dry texel, and with the gust
+held flat the surface still differs between two phases, so the churn comes from
+the domain warp and not from the gust alone; the damp band darkens only dry
+texels, never brightens, leaves covered water untouched and leaves ground beyond
+the ring byte-identical; the shallow tint changes near-shore wet texels only. No
+census is pinned for the gust — its lattice is far coarser than the fixture, so
+how much of the fixture one patch covers is an accident of the authored extent.
+The reflection fixture adds a surface impact at height zero whose upper half
+alone is opaque, and checks that it casts a reflection below its anchor, that the
+mask holds it off dry ground, and that the same art standing on dry ground is
+never admitted.
+
+`tools/check` and `tools/check-retail` pass. Modern captures at 1280x960 native
+and at 2x zoom were taken from main and from this branch on Brain Coral, which
+opens on open sea, and Ring Atoll, which opens on a beach. Open water now carries
+broad light and dark patches a few hundred world pixels across, drifting over a
+finer diagonal ripple; the same water on main is an even speckle with no
+structure above the ripple scale. At 2x the ripple reads as irregular swirls
+rather than aligned rows. The beach still shows a continuous darker strip along
+the waterline and a paler band of water inside it.
+
+Motion was measured rather than asserted. Thirty consecutive captures two ticks
+apart, cropped to a 400x300 window of open water, differ from their predecessor
+by a mean of 1.51 levels of 255 per channel — minimum 1.49, maximum 1.53 — so
+every frame moves and no frame jumps; main's figure on the same window is 1.21.
+The churn alone was measured on the drift-free device fixture, where nothing but
+the domain warp can move: the surface decorrelates by about 0.4 levels per second
+and about 1.3 over four seconds, against roughly 3 at full decorrelation. Four
+times slower warp speeds left the field visually static over the same interval
+and eight times faster began to shimmer, so the landed speeds are the middle of
+that bracket.
+
+**Gap.** No human has watched the surface in a live window; the evidence above is
+captures and frame arithmetic. Whether the churn reads as "alive" rather than as
+a slow wobble, and whether the gust patches read as wind, are judgements only a
+live viewing can settle. The eight-times bracket above was also judged from a
+numeric decorrelation rate, not from watching it.
+
+**Gap.** No live capture of an explosion over water was obtained: `--shot` runs
+a skirmish with no opponent, so nothing fires, and the battle benchmark places
+its armies on dry ground. The device fixture is the only evidence for the
+reflected effect; an AI opponent reachable from a capture flag, or a staged
+coastal diagnostic like the one §26.3 describes, would settle it.

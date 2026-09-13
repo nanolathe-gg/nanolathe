@@ -826,25 +826,38 @@ func (c *Client) drawFeature(f *frame.FeatureView) {
 		// animtrans selector applies only to the static definition cursor
 		// [03 R-RAST-01 §6].
 		normalTrans := f.AnimTrans && !f.RuntimeLive
-		// Modern presentation experiment (GPU design §27), under the player's
-		// Distortion switch (§30). The additional LOS gate prevents an unseen
-		// burning feature from refracting visible ground.
-		heat := false
-		var heatTime float32
-		if c.enhanced && c.effects.Distortion && f.IsBurning && c.buffer != nil {
+		// A burning feature is both a refraction source (GPU design §27, under
+		// the player's Distortion switch) and a light source (§31, under the
+		// Lighting switch). Both need the same extra LOS gate, which prevents an
+		// unseen fire from refracting or lighting visible ground, so it is taken
+		// once here. The lighting kind is recorded whatever the switches say;
+		// the executor gates the lighting pass itself (§30).
+		burning := false
+		if c.enhanced && f.IsBurning && c.buffer != nil {
 			cur := c.buffer.Current()
-			heat = cur != nil && SnapshotPointVisible(cur.Visibility, f.X, f.Y, f.Z, cur.ViewingPlayer)
-			if heat {
-				heatTime = float32(c.frameTick % 3600)
-				if c.interpolation {
-					heatTime += c.TickFraction()
-				}
-				// Cell phase decorrelates adjacent plumes without an RNG stream.
-				heatTime += float32((f.CX*13 + f.CZ*7) & 255)
+			burning = cur != nil && SnapshotPointVisible(cur.Visibility, f.X, f.Y, f.Z, cur.ViewingPlayer)
+		}
+		heat := burning && c.effects.Distortion
+		var heatTime float32
+		if heat {
+			heatTime = float32(c.frameTick % 3600)
+			if c.interpolation {
+				heatTime += c.TickFraction()
 			}
+			// Cell phase decorrelates adjacent plumes without an RNG stream.
+			heatTime += float32((f.CX*13 + f.CZ*7) & 255)
+		}
+		scale := float32(c.viewScale().Float())
+		lightingKind := drawlist.SpriteLightingNone
+		var lightingTime, lightingHeight float32
+		if burning {
+			lightingKind = drawlist.SpriteLightingFire
+			lightingTime = c.lightingTime()
+			lightingHeight = float32(f.Y.Raw()) / 65536 * scale
 		}
 		c.emitSprite(drawlist.Sprite{
-			HeatSource: heat, HeatTime: heatTime, LightingScale: float32(c.viewScale().Float()),
+			HeatSource: heat, HeatTime: heatTime, LightingScale: scale,
+			LightingKind: lightingKind, LightingTime: lightingTime, WorldHeight: lightingHeight,
 			Frame: normalFrame,
 			X:     sx - int32(normalFrame.XOffset),
 			Y:     sy - int32(normalFrame.YOffset),

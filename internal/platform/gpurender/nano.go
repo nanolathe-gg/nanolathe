@@ -65,7 +65,7 @@ func (r *Renderer) prepareNanoLighting(list *drawlist.List) {
 			}
 			at = l.nanoCount
 			l.nanoCount++
-			l.nano[at] = nanoLightCluster{light: battleLight{radius: nanoLightRadius * scale}}
+			l.nano[at] = nanoLightCluster{light: battleLight{radius: nanoLightRadius * scale, kind: lightNano}}
 		}
 		group := &l.nano[at]
 		group.count++

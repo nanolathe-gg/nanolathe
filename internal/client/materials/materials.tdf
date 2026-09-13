@@ -21,6 +21,12 @@
 
 [materials]
 	{
+	// Team-colour panels share the metal finish across all player frames.
+	colorslt=metal;
+	colorsmd=metal;
+	colorsdk=metal;
+	colordk2=metal;
+
 	// Neutral plate: bare metal sheet and grey noise panelling.
 	metal3a=metal;
 	metal3b=metal;

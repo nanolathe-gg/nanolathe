@@ -163,11 +163,14 @@ func (st *waterLayer) visibleWater(c drawlist.Terrain) bool {
 	if st.blockW == 0 || st.blockH == 0 {
 		return false
 	}
+	// One block of slack on each side: the damp shoreline band of §32 lies on
+	// dry ground beside the water, so a coast just past the viewport edge still
+	// has to run the pass for the band to reach the visible strip.
 	scale := c.Scale.Norm()
-	x0 := max(floorDivInt(int(c.OriginX), waterBlockSize), 0)
-	y0 := max(floorDivInt(int(c.OriginY), waterBlockSize), 0)
-	x1 := min(floorDivInt(int(c.OriginX+scale.Inverse(c.DstW)), waterBlockSize), st.blockW-1)
-	y1 := min(floorDivInt(int(c.OriginY+scale.Inverse(c.DstH)), waterBlockSize), st.blockH-1)
+	x0 := max(floorDivInt(int(c.OriginX), waterBlockSize)-1, 0)
+	y0 := max(floorDivInt(int(c.OriginY), waterBlockSize)-1, 0)
+	x1 := min(floorDivInt(int(c.OriginX+scale.Inverse(c.DstW)), waterBlockSize)+1, st.blockW-1)
+	y1 := min(floorDivInt(int(c.OriginY+scale.Inverse(c.DstH)), waterBlockSize)+1, st.blockH-1)
 	for y := y0; y <= y1; y++ {
 		for x := x0; x <= x1; x++ {
 			if st.blocks[y*st.blockW+x] {
@@ -249,8 +252,9 @@ func noise(p vec2) float {
  // unbounded argument loses all float precision over a long game and the
  // pattern degrades. Wrapping every corner on one period keeps the lattice
  // continuous instead of jumping — the field simply repeats every 289 cells,
- // which at the scales used here (0.07, 0.166 and 0.025 cells per world
- // pixel) is thousands of world pixels, far wider than any viewport
+ // which at the scales used here (0.0055 gust, 0.0161 warp, 0.07 broad,
+ // 0.166 fine and 0.025 shore cells per world pixel) is about 1,700 world
+ // pixels for the finest layer and tens of thousands for the coarse ones
  // (GPU design §26.3).
  a := floor(p)
  a = a-floor(a/289.0)*289.0
@@ -269,14 +273,41 @@ func terrainLinear(p vec2) vec4 {
  return mix(mix(imageSrc0At(o+a),imageSrc0At(o+a+vec2(1,0)),f.x),mix(imageSrc0At(o+a+vec2(0,1)),imageSrc0At(o+a+vec2(1,1)),f.x),f.y)
 }
 
-func wetMask(p vec2) vec2 {
+func wetMask(p vec2) vec3 {
  // Coordinates are map pixels divided by the cached mask step, in source-0
  // space for source 1 even though the two images have different atlas origins.
+ // Blue is the independent dry-ground channel; it is only ever read as a gate,
+ // so bilinear mixing across the boundary cannot corrupt the wet-side terms.
  q := p-vec2(0.5)
  a := floor(q)
  f := fract(q)
  o := imageSrc0Origin()
- return mix(mix(imageSrc1AtFromSrc0Pos(o+a).rg,imageSrc1AtFromSrc0Pos(o+a+vec2(1,0)).rg,f.x),mix(imageSrc1AtFromSrc0Pos(o+a+vec2(0,1)).rg,imageSrc1AtFromSrc0Pos(o+a+vec2(1,1)).rg,f.x),f.y)
+ return mix(mix(imageSrc1AtFromSrc0Pos(o+a).rgb,imageSrc1AtFromSrc0Pos(o+a+vec2(1,0)).rgb,f.x),mix(imageSrc1AtFromSrc0Pos(o+a+vec2(0,1)).rgb,imageSrc1AtFromSrc0Pos(o+a+vec2(1,1)).rgb,f.x),f.y)
+}
+
+func maskWater(p vec2) float {
+ q := p-vec2(0.5)
+ a := floor(q)
+ f := fract(q)
+ o := imageSrc0Origin()
+ return mix(mix(imageSrc1AtFromSrc0Pos(o+a).r,imageSrc1AtFromSrc0Pos(o+a+vec2(1,0)).r,f.x),mix(imageSrc1AtFromSrc0Pos(o+a+vec2(0,1)).r,imageSrc1AtFromSrc0Pos(o+a+vec2(1,1)).r,f.x),f.y)
+}
+
+// waterRing reports how much ordinary water surrounds a dry map pixel: x is the
+// largest water reading on a ring of eight taps, y the ring's mean. The mask
+// carries no dry-side distance field — its alpha is opaque and a dry-side green
+// would corrupt the wet-side shore terms under bilinear filtering — so the dry
+// band measures nearness by sampling instead. Both numbers are needed, and both
+// taps are bilinear, because the mask step varies with map size: the maximum
+// alone would end the band on a whole texel, and on a large map, where the step
+// is eight world pixels, the ring spans a single texel and only the filtered
+// reading still resolves the band's width (§32).
+func waterRing(p vec2, r float) vec2 {
+ d := r*0.70710678
+ s := vec4(maskWater(p+vec2(r,0.0)),maskWater(p-vec2(r,0.0)),maskWater(p+vec2(0.0,r)),maskWater(p-vec2(0.0,r)))
+ u := vec4(maskWater(p+vec2(d,d)),maskWater(p-vec2(d,d)),maskWater(p+vec2(d,-d)),maskWater(p-vec2(d,-d)))
+ m := max(max(max(s.x,s.y),max(s.z,s.w)),max(max(u.x,u.y),max(u.z,u.w)))
+ return vec2(m,(s.x+s.y+s.z+s.w+u.x+u.y+u.z+u.w)*0.125)
 }
 
 func Fragment(dst vec4, src vec2, color vec4, custom vec4) vec4 {
@@ -286,22 +317,61 @@ func Fragment(dst vec4, src vec2, color vec4, custom vec4) vec4 {
  world := src-origin
  mask := wetMask(world/custom.x)
  coverage := smoothstep(0.8,1.0,mask.x)
- if coverage<=0 { return base }
  t := color.r
  drift := color.gb
  strength := color.a
- // Irregular patches drift continuously in world space. Wind changes velocity
- // on the recording side; it never rotates or resets this pattern.
+ // Damp shoreline band (§32). Ground the water has just washed keeps a darker
+ // tone, so dry pixels within about eight world pixels of water lose up to
+ // twelve percent of their brightness, pulsing on the phase the shore foam
+ // carries at the boundary. This runs before the dry early-out because the
+ // band lives on dry texels; a pixel with no water on its ring returns the
+ // painted colour unchanged.
+ // The blue gate only has to exclude terrain that is neither medium — invalid
+ // ground and excluded liquid carry no dry flag at all — so it stays well below
+ // the boundary's own bilinear ramp, which is where the band belongs.
+ dry := smoothstep(0.05,0.5,mask.z)*(1.0-coverage)
+ if dry>0.0 {
+  ring := waterRing(world/custom.x,8.0/custom.x)
+  damp := smoothstep(0.2,1.0,ring.x)*smoothstep(0.10,0.45,ring.y)*dry
+  if damp>0.0 {
+   lapDry := pow(max(0.0,sin(t*1.6+noise(world*0.025)*3.0)),2.0)
+   base = vec4(base.rgb*(1.0-0.12*damp*(0.5+0.5*lapDry)),base.a)
+  }
+ }
+ if coverage<=0 { return base }
+ // Every layer travels only on the integrated wind drift, each at its own
+ // multiple, so the direction of travel is always the wind and the differing
+ // speeds give the surface parallax. Nothing scrolls on a fixed velocity: in
+ // calm wind a fixed scroll dominates the drift and the whole sea slides in a
+ // direction unrelated to the wind (§26.3). The field is never rotated by the
+ // wind either — the retail heading re-rolls to a fresh random value every
+ // 150 to 420 ticks
+ // [05 "The wind phase, its draws, and the generator notification"], so an
+ // oriented field would swing through a new angle on every re-roll.
+ //
+ // Gust patches ("cat's paws"): a very coarse layer gliding downwind fastest,
+ // darkening and roughening the water it crosses.
+ gust := smoothstep(0.30,0.80,noise((world-drift*22.0)*0.0055+vec2(3.0,7.0)))
+ // A slow domain warp makes the broad ripple churn in place rather than only
+ // translate: the warp lattice is the one thing that moves on time alone, and
+ // it deforms the layers beneath it, so cells stretch, split and merge.
  p := (world-drift*6.0)*0.07
- broad := noise(p+vec2(t*0.18,-t*0.12))
- fine := noise(p*2.37+vec2(17.0-t*0.23,29.0+t*0.19))
+ warp := vec2(noise(p*0.23+vec2(t*0.076,5.0-t*0.052)),noise(p*0.23+vec2(9.0-t*0.064,t*0.084)))
+ p += (warp-vec2(0.5))*1.6
+ broad := noise(p)
+ // The fine lattice is rotated 37 degrees about the map origin — a fixed
+ // rotation, applied once, not a wind-following one — so its cell rows never
+ // line up with the broad lattice and the pair stops reading as a grid.
+ q := (world-drift*11.0)*0.166
+ q = vec2(q.x*0.7986-q.y*0.6018,q.x*0.6018+q.y*0.7986)+(warp-vec2(0.5))*0.9
+ fine := noise(q)
  ripple := broad*0.65+fine*0.35-0.5
  deep := smoothstep(0.05,0.55,mask.y)
- offset := vec2(broad-0.5,fine-0.5)*custom.y*(3.2+strength*2.4)*deep*coverage
+ offset := vec2(broad-0.5,fine-0.5)*custom.y*(3.2+strength*2.4)*(0.7+0.5*gust)*deep*coverage
  sample := clamp(screen+offset,vec2(0.5),imageSrc0Size()-vec2(0.5))
  // Subpixel filtering prevents nearest-neighbour displacement from snapping.
  warped := terrainLinear(sample)
- shade := 1.0+ripple*(0.112+strength*0.08)*deep
+ shade := 1.0+ripple*(0.112+strength*0.08)*(0.7+0.5*gust)*deep-0.05*strength*gust*deep
  // Moving highlights make the surface readable even when the painted detail
  // is too fine to reveal displacement. Their broken shape follows both fields.
  crest := smoothstep(0.10,0.32,ripple)
@@ -313,6 +383,8 @@ func Fragment(dst vec4, src vec2, color vec4, custom vec4) vec4 {
  lap := pow(max(0.0,sin(mask.y*10.0+t*1.6+shorePatch*3.0)),2.0)
  foam := shore*lap*(0.09+strength*0.105)*(0.50+0.50*shorePatch)*coverage
  result = mix(result,vec3(0.72,0.84,0.87),foam)
+ // Shallow tint (§32): water lightens toward a pale cyan as the bottom rises.
+ result = mix(result,vec3(0.62,0.80,0.84),0.08*(1.0-smoothstep(0.0,0.35,mask.y)))
  return vec4(mix(base.rgb,min(result,vec3(base.a)),coverage),base.a)
 }
 `

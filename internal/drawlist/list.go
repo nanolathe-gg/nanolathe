@@ -54,7 +54,21 @@ const (
 	SpriteLightingNone SpriteLightingKind = iota
 	SpriteLightingExplosion
 	SpriteLightingSmoke
+	// SpriteLightingFire is a burning feature's flame strip art: the flame and
+	// flame-trail families, which the producer has already admitted through the
+	// one-point coverage gate (§31).
+	SpriteLightingFire
+	// SpriteLightingProjectile is a bright projectile body sprite — a plasma
+	// shell or flare — never its ground shadow and never muzzle-flash effect
+	// art, which the explosion path already carries (§31).
+	SpriteLightingProjectile
 )
+
+// Emitter reports whether the kind is a light SOURCE rather than a receiver.
+// Smoke is a receiver and is never promoted (§23.1 BL1, §31).
+func (k SpriteLightingKind) Emitter() bool {
+	return k == SpriteLightingExplosion || k == SpriteLightingFire || k == SpriteLightingProjectile
+}
 
 // Sprite records one GAF-frame blit (docs/DESIGN_GPU_RENDERER.md §2.1). The
 // frame reference is immutable after load; every carried byte is physical
@@ -110,6 +124,10 @@ type Sprite struct {
 	// LightingScale is recording pixels per world pixel. Neither includes
 	// supersampling or a subsequent executor world transform.
 	WorldHeight, LightingScale float32
+	// LightingTime is committed ticks plus the presentation fraction, wrapped
+	// to a bounded window, for a source whose emission flickers (§31). It is
+	// zero for every other sprite and classic ignores it.
+	LightingTime float32
 	// ReflectionHeight is the projectile body anchor above sea in recording
 	// pixels. Ground shadows never ReflectWater (GPU design §26).
 	ReflectWater     bool
@@ -246,6 +264,12 @@ type Line struct {
 	// Enhanced clips interpolation below the plane (GPU design §26).
 	ReflectWater                         bool
 	ReflectionHeight0, ReflectionHeight1 float32
+	// WorldHeight0/WorldHeight1 are the endpoints' ABSOLUTE heights in recording
+	// view-scale pixels, as Sprite.WorldHeight is — not the above-sea values the
+	// reflection fields carry. An emissive stroke needs a physical height to
+	// light from (§31); classic ignores both. LightingScale is recording pixels
+	// per world pixel, as on Sprite.
+	WorldHeight0, WorldHeight1, LightingScale float32
 }
 
 // Point is one packed (x, y, operand) triple. The Index field is a physical
@@ -594,7 +618,7 @@ func (l *List) RecordTerrain(c Terrain) {
 
 // RecordSprite appends one sprite command in record order.
 func (l *List) RecordSprite(c Sprite) {
-	if c.LightingKind == SpriteLightingExplosion {
+	if c.LightingKind.Emitter() {
 		l.RecordLightSource(c)
 	}
 	l.order = append(l.order, tag{familySprite, len(l.sprite)})
@@ -666,6 +690,20 @@ func (l *List) VisitModels(visit func(Model)) {
 // RecordLightSource retains one named-art emitter before composite leaves are
 // expanded. It is metadata only, ignored by every replay sink (GPU design §23).
 func (l *List) RecordLightSource(s Sprite) { l.lightSources = append(l.lightSources, s) }
+
+// RecordedWorldExtent is the record-space extent the world region was clipped
+// to, or (0, 0) when the list carries no world region. Source gathering runs
+// before replay, so a preparation pass that has to cull against the recorded
+// viewport reads it here rather than from the executor's framebuffer size,
+// which is smaller than the record extent below a rest factor (§16.3).
+func (l *List) RecordedWorldExtent() (int32, int32) {
+	for _, w := range l.world {
+		if w.Begin {
+			return w.RecordW, w.RecordH
+		}
+	}
+	return 0, 0
+}
 
 // VisitLightSources borrows complete emitter art, once per recorded event.
 func (l *List) VisitLightSources(visit func(Sprite)) {
