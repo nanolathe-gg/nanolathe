@@ -222,6 +222,7 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 	compile(&r.water.wakeShader, newSurfaceWakeShader)
 	compile(&r.reflections.sourceShader, newReflectionSourceShader)
 	compile(&r.reflections.resolveShader, newReflectionResolveShader)
+	compile(&r.reflections.softResolveShader, newSoftReflectionResolveShader)
 	compile(&r.distortion.shader, newDistortionShader)
 	if err := r.initModelDirect(); err != nil && firstErr == nil {
 		firstErr = err

@@ -61,6 +61,7 @@ func (r *Renderer) resetSources(release func(*ebiten.Image)) {
 	retire(r.fog.grid)
 	retire(r.water.mask)
 	retire(r.reflections.source)
+	retire(r.reflections.height)
 	retire(r.pointPlane.img)
 	retire(r.sched.flash.img)
 	for _, atlas := range r.markerAtlases {
@@ -80,7 +81,7 @@ func (r *Renderer) resetSources(release func(*ebiten.Image)) {
 	r.lighting = battleLighting{disabled: r.lighting.disabled}
 	r.heat = treeHeat{disabled: r.heat.disabled}
 	r.water = waterLayer{disabled: r.water.disabled, shader: r.water.shader, wakeShader: r.water.wakeShader}
-	r.reflections = waterReflections{disabled: r.reflections.disabled, sourceShader: r.reflections.sourceShader, resolveShader: r.reflections.resolveShader}
+	r.reflections = waterReflections{disabled: r.reflections.disabled, sourceShader: r.reflections.sourceShader, resolveShader: r.reflections.resolveShader, softResolveShader: r.reflections.softResolveShader}
 	r.modelDirect = modelDirectLane{keyShader: r.modelDirect.keyShader, colourShader: r.modelDirect.colourShader, shaderErr: r.modelDirect.shaderErr}
 	r.fog = fogPass{shader: r.fog.shader, shaderErr: r.fog.shaderErr, compiled: r.fog.compiled}
 	// Retained compiled runs and options also reference source images. Drop

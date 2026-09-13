@@ -26,12 +26,14 @@ func TestLifecycleResetSourcesReleasesBattleResources(t *testing.T) {
 	}
 	flash := &ebiten.Image{}
 	r.sched.flash.img = flash
+	reflectionHeight := &ebiten.Image{}
+	r.reflections.height = reflectionHeight
 	r.tables.atlas = table
 	r.sceneOpts.Images[0] = shared
 	r.surfaceCache[0] = surfaceUpload{identity: 8, entry: sceneEntry{ok: true}}
 	released := map[*ebiten.Image]int{}
 	r.resetSources(func(img *ebiten.Image) { released[img]++ })
-	if released[tile] != 1 || released[shared] != 1 || released[flash] != 1 || len(released) != 3 {
+	if released[tile] != 1 || released[shared] != 1 || released[flash] != 1 || released[reflectionHeight] != 1 || len(released) != 4 {
 		t.Fatalf("shared source release counts=%v", released)
 	}
 	if len(r.tileAtlases) != 0 || len(r.gafImages) != 0 || len(r.scene.pages) != 0 || len(r.scene.frames) != 0 || len(r.scene.pcx) != 0 || len(r.scene.fonts) != 0 || len(r.textureAtlas.slots) != 0 {

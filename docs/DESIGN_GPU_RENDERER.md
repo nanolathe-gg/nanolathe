@@ -5369,6 +5369,172 @@ and `/private/tmp/coastal-land-multiframe`; gate logs use the same
 `/private/tmp/coastal-land-` prefix.
 
 
+### 26.6 Aircraft and boat water reflections
+
+The user approved landing this Enhanced treatment after blue-water skirmish
+review. It combines height-dependent aircraft fading and softening with gentle
+boat reflection wobble.
+It is an implementation choice, not a retail behavioral claim. Model sources
+now fade smoothly between 64 and 320 world pixels above sea, instead of ending
+at 160. This lets aircraft at flight altitude leave a faint reflected image.
+The distance applies to all model sources, including tall model pieces and model
+projectiles; sprite and beam sources keep their 64–160 fade. The 25 percent
+resolve opacity, ripple, tint, water mask, fog order and physical-height
+projection of §26.4 are retained. Values are artistic choices for this prototype.
+
+The second visual iteration weakens and breaks up high model reflections. A
+smooth 64–160-world-pixel height ramp multiplies model opacity by 1 down to 0.7;
+world-anchored horizontal transmission bands multiply it by another 1 down to
+0.7 at full ramp strength. Averaged over the bands, a fighter at height 110 is
+about 20 percent fainter than the first prototype and a bomber at 200 about
+40 percent fainter. These are relative artistic opacity changes, not measured
+luminance or retail behavior.
+
+The same ramp introduces a horizontal displacement of the already recorded
+reflection vertices: two world-anchored sine waves, amplitudes 3 and 1.05 world
+pixels. Their original atlas coordinates are retained, so this does not sample
+neighboring model slots or require another camera. Shared corners follow the
+same continuous displacement. The distortion uses committed water time/fraction,
+freezes on pause, and scales once with zoom. The third iteration extends this
+wobble to boats: the displacement ramp has a minimum strength of 0.35, giving
+low model corners wave amplitudes of 1.05 and 0.3675 world pixels. The stronger
+height-dependent displacement still applies above that floor. The floor is
+applied after clamping the normalized height to 0–1, so submerged corners do not
+produce an unbounded displacement. This is an authored water treatment, not a
+retail behavioral claim.
+
+Boat opacity stays unchanged: the distance fade and transmission-band ramp
+still depend only on physical height, so boat-height corners do not inherit
+aircraft dimming. Existing water-only resolve ripples continue to soften the
+whole reflection. Sprites and beams keep their previous treatment. Tall
+non-aircraft models follow the same height rule; no classification is added.
+
+Through the third iteration, geometry admission, vertex budget, source texture
+allocation, render passes and texture sample count are unchanged. That increment
+is vertex arithmetic and model-fragment arithmetic in the existing source pass. No underside,
+offscreen body or reflected depth is reconstructed. Top-surface reuse remains
+an intentional approximation for human review.
+
+The fourth iteration makes the same 64–160 height ramp reduce model opacity
+from 1 to 0.35 instead of 0.7. Relative to iteration three, a height-110 model
+is about 20 percent fainter and heights at or above 160 are 50 percent fainter,
+before filtering. The 64–320 terminal fade and transmission bands remain.
+
+Blur strength uses a separate smooth height ramp from 64 to 200. Each source
+texel blends its old horizontal filter (centre 0.5, sides 0.25) with a filled
+cross kernel: centre 0.25; horizontal pairs at distances one, two, three and
+four weigh 0.12, 0.09, 0.06 and 0.03 each; vertical pairs at distances one and
+two weigh 0.06 and 0.015 each. Both kernels sum to one. The wide kernel uses
+nearest texels on a fixed one-screen-pixel grid: four screen pixels horizontally
+and two vertically. This keeps even one-pixel details connected at every zoom;
+the existing narrow contribution remains bilinear and scales with zoom. The
+wide contribution can advance by whole pixels with water motion, an intentional
+sampling approximation to keep this faint screen-space treatment inexpensive.
+
+The source shader also writes a viewport-sized RGBA8 height buffer using the
+same admitted reflection geometry, atlas samples and hidden-piece checks.
+Red stores blur strength times source alpha; alpha stores source coverage after
+fading. Normal premultiplied composition preserves a weighted strength when
+reflections overlap. The resolve recovers strength as red/alpha and weights
+each source texel before interpolation or summation. Adjacent boats cannot inherit
+an aircraft's blur strength; exact overlap has the combined source strength.
+Final water masking and foreground/fog composition retain their existing order.
+
+The executor marks a coarse grid of 64×64 recording pixels from elevated triangle bounds,
+expanded by the full filter reach, water displacement and sampling margin. Only
+marked cells run the heavier filter; unmarked cells retain the old three samples.
+Screen bounds and margins are converted back to recording coordinates before
+marking, so fractional zoom does not transform the grid twice. Adjacent same-kind
+cells share horizontal quads. Cheap and soft cells use separate compile-time
+shader variants in two non-overlapping groups; ordinary water avoids the larger
+shader's register cost as well as its samples.
+Triangles entirely below 64 or above 320, and bounds outside the viewport, mark
+nothing. Height-range intersection is conservative: a face spanning below 64
+to above 320 still has eligible interior fragments. A frame without marked cells
+skips the metadata render and retains the old single resolve quad.
+The buffer allocates lazily, is reused, is resized when next needed and is
+retired on source reset. Its logical storage is 4.69 MiB at 1280×960 or 7.91 MiB
+at 1920×1080, excluding backend padding. Active frames add one geometry
+submission per existing reflection run. The resolve has a fixed maximum of
+three bilinear positions for the narrow contribution and 13 nearest positions
+for the wide contribution (25 colour texel reads) within marked cells, with one
+metadata read for each nonempty colour texel, versus 12 colour reads before. The larger sample count
+requires measurement: this is a bounded prototype, not a claim of free blur.
+There is no new scene camera, model rasterization or simulation work.
+
+First-iteration validation passed `tools/check` and the Metal device fixtures, including
+an above-water model at height 180 at native and fractional zoom. Before/after
+Great Divide battle runs (seed 7, 1920×1080, 180 measured draws at 30 FPS) have
+identical captures and per-tick censuses in each renderer. This dry battle is a
+regression control, not an active-reflection cost measurement.
+
+A frozen staged Seven Islands scene with a fighter at height 160, a bomber at
+200 and a dry hovercraft was replayed at 1280×960, 2× zoom, on an M3 Pro/Metal.
+Two baseline and two prototype runs each used 60 warmup and 180 measured draws,
+VSync on, with no readback in the timed window. Baseline median CPU submission
+was 0.31–0.42 ms; prototype was 0.35 ms. Median draw cadence remained 8.31–8.32 ms.
+All four reported 252 reflection vertices, seven passes and eleven device draws.
+This small scene showed no measurable median regression; it does not establish
+isolated GPU cost or dense-fleet performance. An initial VSync-off scratch
+harness failed in baseline Metal presentation and supplied no timing result.
+
+Second-iteration checks passed the fast gate and Metal device fixtures, including
+frozen replay of the high reflection at native and fractional zoom. Actual
+saved-skirmish captures and a 2× staged capture were visually inspected. The
+boat control is byte-identical at native and 2× zoom. Matching classic and modern
+battle captures and per-tick censuses remain byte/value-identical to the first
+prototype. Two paired frozen-aircraft runs with the settings above measured
+median CPU submission 0.240–0.243 ms before and 0.268–0.276 ms after, roughly
+0.03 ms more in this small scene. Median cadence stayed 8.31–8.33 ms and counts
+remained 252 reflection vertices, seven passes and eleven device draws. This is
+CPU submission and paced cadence, not an isolated GPU-time measurement. Exact
+second-iteration artifacts are in the `revision2` subdirectory.
+
+Third-iteration checks passed the fast gate and Metal device fixtures. Native
+and 2× blue-water captures were visually inspected; a Ring Atoll save contains
+eight aircraft and four boats, verified moving before and after production save
+reload. Classic and modern battle metadata, per-tick censuses and captures
+match the second iteration. Two paired frozen boat runs (same display settings
+and measurement window above) measured median CPU submission 0.207–0.298 ms
+before and 0.224–0.321 ms after. Paired differences were 0.017 and 0.023 ms;
+run-to-run variation is larger, so this is only a small-scene indication.
+Median cadence stayed 8.31–8.33 ms. All runs retained 548 reflection vertices,
+seven passes and ten device draws. Third-iteration artifacts are in `revision3`.
+
+Fourth-iteration validation passed the fast gate and Metal fixtures. Authored
+one- and four-pixel stripes at 0.75×, 1× and 2× retain connected footprints,
+increase their horizontal second moment with height, do not increase peak
+opacity, and stay within the energy tolerance. A nearby high reflection does
+not alter a low reflection's colour contribution. Height fading, frozen replay,
+water/foreground clipping, stale metadata, resource retirement, ramp-crossing
+bounds and off-origin fractional culling are covered. Saved Ring Atoll captures
+at native and 2× zoom were visually inspected; independent code review passed.
+
+Final classic and modern Great Divide live-battle checks match iteration three
+in scene metadata, every per-tick census and exact PNG bytes. They retain active
+movement/combat, burning sprite features and factory nanoframes. Median
+record/submit/cadence in milliseconds is 13.843/0.454/33.333 for classic and
+3.133/4.997/33.334 for modern. These dry controls do not measure water cost.
+The paced active-water pair records median CPU submission 0.209 ms before and
+0.278 ms after, with median cadence 8.337 and 8.325 ms respectively.
+
+The final frozen active-water comparison uses the same M3 Pro/Metal, 1280×960,
+2× zoom, 60 warmup and 180 measured frames as above. Four alternating runs with
+a synchronous one-pixel readback after Execute measured median completion
+latency 5.757 and 5.981 ms before, 6.294 and 6.645 ms after. Paired increments
+are 0.537 and 0.664 ms; median cadence remains 8.33 ms. Completion includes
+CPU submission, driver synchronization and readback, not isolated GPU timestamps.
+The scene retains 252 admitted reflection vertices; pass count rises from seven
+to eight and device draws from eleven to thirteen. This small scene does not
+establish dense-fleet cost. The first fully bilinear whole-viewport attempt
+added approximately 1.4–1.6 ms; the final filter reduces that cost with fewer
+samples and bounded shader regions. Final artifacts use the `final-` prefix in
+`revision4`; earlier intermediate results remain there for reproducibility.
+
+Local captures, exact diagnostic source, logs and playtest artifacts are under
+`/private/tmp/nanolathe-air-reflection-review`. The four prototype iterations
+above record the visual tuning and cost measurements behind the approved result.
+
 ## 27. Burning vegetation heat shimmer prototype
 
 This is a user-requested modern GPU presentation experiment, not a retail
