@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
 	"github.com/nanolathe-gg/nanolathe/vfs"
@@ -94,6 +95,15 @@ func openContent(opts Options) (*contentSet, error) {
 		return nil, fmt.Errorf("nanolathe: loading default GUI translation table: %w", err)
 	}
 	set.translations = translations
+
+	// The modern renderer's material annotation is authored presentation data
+	// (docs/DESIGN_GPU_RENDERER.md §29.1). An install may replace the embedded
+	// table by supplying client.MaterialTablePath; a broken override is
+	// reported and ignored, because presentation art must never fail a load.
+	if err := client.LoadMaterialTable(fileSystem); err != nil {
+		set.notes = append(set.notes, err.Error())
+		fmt.Fprintln(os.Stderr, err)
+	}
 	return set, nil
 }
 

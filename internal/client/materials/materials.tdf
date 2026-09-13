@@ -1,0 +1,72 @@
+// Nanolathe modern-renderer material annotations.
+//
+// Presentation data, not retail material evidence: the retail executable has
+// no material classification for model textures. This table is an authored art
+// annotation used only by the Enhanced finish pass (docs/DESIGN_GPU_RENDERER.md
+// §29.1). It never reaches authoritative state.
+//
+// Shape: one [materials] section whose keys are 3DO texture names and whose
+// values name the finish class. This is the shape the TDF parser resolves most
+// directly -- one section, one assignment per texture, last-write-wins on a
+// repeated spelling [fmt tdf "Duplicate keys"].
+//
+// Values: metal | paint. Any other value, and any texture absent from this
+// file, keeps the default shading.
+//
+// Names are matched case-insensitively, like every TDF key.
+//
+// An installed override replaces this whole table: a remaster pack or loose
+// gamedata directory supplying the logical path nanolathe/materials.tdf is
+// used instead of the embedded copy.
+
+[materials]
+	{
+	// Neutral plate: bare metal sheet and grey noise panelling.
+	metal3a=metal;
+	metal3b=metal;
+	metal3c=metal;
+	metal3d=metal;
+	graynoise1=metal;
+	graynoise2=metal;
+	graynoise3=metal;
+	graynoise4=metal;
+	graynoise5=metal;
+	arm01b=metal;
+	arm01c=metal;
+	arm01d=metal;
+	corsea5a=metal;
+	corsea5b=metal;
+	corsea5c=metal;
+	corsea5d=metal;
+	corsea6a=metal;
+	corsea6b=metal;
+	corsea6c=metal;
+	corsea6d=metal;
+
+	// Painted camouflage.
+	camob2=paint;
+	camob3=paint;
+	camob4=paint;
+	camob5=paint;
+	camob6=paint;
+	camoflage=paint;
+	descamo2=paint;
+	descamo3=paint;
+	descamo4=paint;
+	corcam4b=paint;
+	corcam4c=paint;
+	corcam4d=paint;
+	corcam5c=paint;
+	corcam5d=paint;
+	corcam6c=paint;
+	corcam6d=paint;
+	camod01=paint;
+	camod02=paint;
+	camoe01=paint;
+	camoe02=paint;
+	armcam2a=paint;
+	bluenoise1=paint;
+	bluenoise2=paint;
+	bluenoise3=paint;
+	bluenoise4=paint;
+	}

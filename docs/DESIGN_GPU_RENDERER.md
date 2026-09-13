@@ -5748,6 +5748,20 @@ response beneath the existing glint; paint receives a weaker rough highlight.
 The coefficients preserve authored dark seams and panel hue. Untagged faces
 retain their existing shading.
 
+The table is authored data, not Go source. `internal/client/materials/
+materials.tdf` is a TDF file with one `[materials]` section whose keys are 3DO
+texture names and whose values are `metal` or `paint`; it is embedded in the
+binary and parsed once into a lowercase map, and an unrecognised value annotates
+nothing. A mounted install may replace it wholesale by supplying the logical
+path `nanolathe/materials.tdf` — a remaster pack or a loose gamedata directory —
+which the command layer installs after mounting. A missing override is the
+ordinary case; one that cannot be read is reported in the standard diagnostic
+shape and leaves the embedded table in force, because presentation art never
+fails a load. Both the embedded file and any override are authored presentation
+choices, not retail material evidence: the retail executable carries no material
+classification for model textures, and nothing here reaches authoritative
+state.
+
 `ModelFace.Material` carries the annotation. The color vertex lane retains its
 low 16 bits for palette index and glint, followed by two material bits and three
 quantized normal-response bits: at most 21 bits, exactly representable as a
