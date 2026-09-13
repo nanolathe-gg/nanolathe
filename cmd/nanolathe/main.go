@@ -109,6 +109,7 @@ func run(opts Options, out *os.File) error {
 		return err
 	}
 	defer content.Close()
+	opts.Root, opts.Roots = content.root, content.roots
 
 	if opts.Shot != "" {
 		return runShot(opts, content)

@@ -3,12 +3,12 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
+	"github.com/nanolathe-gg/nanolathe/internal/install"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
@@ -16,6 +16,7 @@ import (
 type contentSet struct {
 	fs           *vfs.FS
 	root         string
+	roots        []string
 	notes        []string
 	translations *content.TranslationTable
 }
@@ -50,26 +51,37 @@ func (e *missingProductError) Error() string {
 // the loose gamedata directory on a real install is empty, so never probe for
 // it on disk (PLAN_00 C6).
 func openContent(opts Options) (*contentSet, error) {
-	info, err := os.Stat(opts.Root)
-	if err != nil || !info.IsDir() {
-		return nil, &missingProductError{
-			what:     "install root is not readable",
-			logical:  opts.Root,
-			expected: "a Total Annihilation install directory (set --root or $NANOLATHE_TA_ROOT)",
+	explicit := opts.Roots
+	if len(explicit) == 0 && opts.Root != "" {
+		explicit = []string{opts.Root}
+	}
+	roots, err := install.Resolve(explicit)
+	if err != nil {
+		return nil, err
+	}
+	for _, root := range roots {
+		info, err := os.Stat(root)
+		if err != nil || !info.IsDir() {
+			return nil, &missingProductError{
+				what: "install root is not readable", logical: root,
+				providers: roots,
+				expected:  "a Total Annihilation content directory (set --root or $NANOLATHE_TA_ROOT)",
+			}
 		}
 	}
-
 	fileSystem := vfs.New()
-	if err := fileSystem.MountGameDirectory(opts.Root); err != nil {
-		return nil, fmt.Errorf("nanolathe: mounting %s: %w", opts.Root, err)
+	if err := fileSystem.MountGameDirectories(roots); err != nil {
+		fileSystem.Close()
+		return nil, &missingProductError{what: "mounting content failed: " + err.Error(), logical: "<content roots>", providers: roots, expected: "readable content directories and archives"}
 	}
+
 	if opts.Remaster != "" {
 		if err := mountRemaster(fileSystem, opts.Remaster); err != nil {
 			fileSystem.Close()
 			return nil, err
 		}
 	}
-	set := &contentSet{fs: fileSystem, root: opts.Root, notes: fileSystem.Notes()}
+	set := &contentSet{fs: fileSystem, root: roots[0], roots: append([]string(nil), roots...), notes: fileSystem.Notes()}
 
 	// One required product proves the mount produced game data rather than an
 	// empty directory. MOVEINFO.TDF and SIDEDATA.TDF are the hard requirements
@@ -121,30 +133,33 @@ func providerNames(fileSystem *vfs.FS) []string {
 	providers := fileSystem.Providers()
 	names := make([]string, 0, len(providers))
 	for _, provider := range providers {
-		names = append(names, filepath.Base(provider.ID))
+		names = append(names, provider.ID)
 	}
 	return names
 }
 
-// remasterPriority places the remaster override above every retail tier,
-// loose files included, so its 3DO and GAF products shadow the stock art
-// while everything else still resolves from the install.
+// remasterPriority is the legacy minimum override priority. mountRemaster
+// raises it above the highest root when the root list spans more tiers.
 const remasterPriority = 1000
 
 // mountRemaster mounts a user-supplied loose art override or packed archive.
 // Art-only overrides leave the retail unit definitions unchanged.
 func mountRemaster(fileSystem *vfs.FS, path string) error {
+	priority := remasterPriority
+	for _, provider := range fileSystem.Providers() {
+		priority = max(priority, provider.Priority+1)
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return &missingProductError{what: "remaster override is not readable", logical: path, expected: "a loose art directory or .hpi archive"}
 	}
 	if info.IsDir() {
-		if err := fileSystem.MountDirectory(path, remasterPriority); err != nil {
+		if err := fileSystem.MountDirectory(path, priority); err != nil {
 			return fmt.Errorf("nanolathe: mounting remaster directory %s: %w", path, err)
 		}
 		return nil
 	}
-	if _, err := fileSystem.MountArchive(path, remasterPriority); err != nil {
+	if _, err := fileSystem.MountArchive(path, priority); err != nil {
 		return fmt.Errorf("nanolathe: mounting remaster archive %s: %w", path, err)
 	}
 	return nil

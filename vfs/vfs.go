@@ -399,6 +399,22 @@ func (f *FS) MountGameDirectory(root string) error {
 	return f.MountGameDirectoryWithPlan(root, DefaultRetailMountPlan())
 }
 
+// MountGameDirectories adds complete roots in load order: every provider in a
+// later root outranks every provider in an earlier root. Within each root the
+// existing retail tier policy applies. This host extension is deliberate only
+// for multiple roots (docs/DESIGN_CONTENT_VFS.md §5). Repeated paths retain
+// the existing first-mount deduplication policy [02 §2].
+func (f *FS) MountGameDirectories(roots []string) error {
+	plan := DefaultRetailMountPlan()
+	span := int(max(plan.HPI, plan.UFO, plan.CCX, plan.GP3, plan.Loose)) * 10
+	for i, root := range roots {
+		if err := f.mountGameDirectory(root, plan, i*span); err != nil {
+			return fmt.Errorf("mounting root %q: %w", root, err)
+		}
+	}
+	return nil
+}
+
 // canonicalMountKey folds a provider path the way retail's mount dedup does:
 // full path, compared case-insensitively [02 §2].
 func canonicalMountKey(name string) string {
@@ -427,6 +443,10 @@ func (f *FS) alreadyMounted(name string) bool {
 // MountGameDirectoryWithPlan mounts an installation directory under an
 // explicit tier policy. MountGameDirectory is this with the default plan.
 func (f *FS) MountGameDirectoryWithPlan(root string, plan MountPlan) error {
+	return f.mountGameDirectory(root, plan, 0)
+}
+
+func (f *FS) mountGameDirectory(root string, plan MountPlan, basePriority int) error {
 	if err := plan.Validate(); err != nil {
 		return err
 	}
@@ -483,11 +503,11 @@ func (f *FS) MountGameDirectoryWithPlan(root string, plan MountPlan) error {
 			tier = plan.UFO
 		}
 		full := filepath.Join(root, entry.Name())
-		if _, err := f.MountArchive(full, int(tier)*10); err != nil {
+		if _, err := f.MountArchive(full, basePriority+int(tier)*10); err != nil {
 			return err
 		}
 	}
-	return f.MountDirectory(root, int(plan.Loose)*10)
+	return f.MountDirectory(root, basePriority+int(plan.Loose)*10)
 }
 
 // insertMount places one mount in final lookup order and takes the next order

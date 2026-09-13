@@ -39,7 +39,8 @@ GUI and HUD, camera and minimap, audio, effects, and save/load of a
 single-player battle.
 
 Authoritative behavior follows retail, including documented faults. Bounds
-rejection and the renderer presentation policies of DESIGN_GPU_RENDERER are the
+rejection, ordered startup roots (DESIGN_CONTENT_VFS §5), and the renderer
+presentation policies of DESIGN_GPU_RENDERER are the
 sanctioned departures under [INVARIANTS.md](INVARIANTS.md) I11. Original preserves
 the retail raster reference; GPU Classic permits visually reviewed raster
 approximations, and Enhanced has separately designed visual features. These
@@ -78,6 +79,7 @@ package implements.
 
 | Package | Responsibility | Design document |
 |---|---|---|
+| `internal/install` | Host installation discovery and explicit/environment root selection before mounting | DESIGN_CONTENT_VFS |
 | `vfs` | The logical content namespace: an overlay of loose directories and HPI-family archives (HAPI, cipher, SQSH) with mount order, shadowing and a provenance manifest | DESIGN_CONTENT_VFS |
 | `formats` | Lossless readers and writers for the authored formats — TDF (comments blanked with byte offsets preserved), GAF, TNT, 3DO, OTA, PAL, PCX, FNT, WAV, GUI, SCT, BMP | DESIGN_CONTENT_VFS |
 | `formats/zrb` | Stateful Smacker 2 movie decoder: indexed frames, palette deltas, PCM soundtrack and authored cadence | DESIGN_CONTENT_VFS |
@@ -301,7 +303,9 @@ per circle; narrowing truncates toward zero except where retail floors
 
 ## 5. What runs today
 
-The desktop binary `nanolathe --root <install>` opens the retail front end at
+The desktop binary `nanolathe` discovers installed game content, or accepts
+repeated `--root <directory>` arguments in load order (later roots win), then
+opens the retail front end at
 `MAINMENU`. From `SKIRMISH` it composes a battle on a chosen map against
 computer players, runs it to the skirmish end rules `[08 R-SKIR-01 §3]`, shows
 the post-battle report and returns to the menu. From `SINGLE → NEWGAME` it

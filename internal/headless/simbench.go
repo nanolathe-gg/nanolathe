@@ -51,6 +51,7 @@ const (
 // SimBenchOptions is the whole benchmark request.
 type SimBenchOptions struct {
 	Root         string
+	Roots        []string
 	OutputDir    string
 	Map          string
 	Seed         uint32
@@ -249,14 +250,12 @@ func RunSimBenchmark(opts SimBenchOptions) (SimBenchReport, error) {
 		}
 	}
 
-	if err := validateRoot(opts.Root); err != nil {
+	fs, err := mountContentRoots(opts.Root, opts.Roots)
+	if err != nil {
 		return SimBenchReport{}, err
 	}
-	fs := vfs.New()
-	if err := fs.MountGameDirectory(opts.Root); err != nil {
-		return SimBenchReport{}, diagnostic("mounting install failed: "+err.Error(), opts.Root, nil, "a readable Total Annihilation install")
-	}
 	defer fs.Close()
+
 	catalog, err := content.Compile(fs)
 	if err != nil {
 		return SimBenchReport{}, diagnostic("catalog compile failed: "+err.Error(), opts.Map, providerNames(fs), "a complete compiled catalog")

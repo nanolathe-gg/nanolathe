@@ -238,8 +238,8 @@ func (g *gameShell) prepareBattleRestartContent() bool {
 		return false
 	}
 	// g.opts.Root may have been redirected to SAVEGAME storage. Archive
-	// remount uses the original content root retained by the mounted set.
-	fresh, err := openContent(Options{Root: g.cs.root, Remaster: g.opts.Remaster})
+	// remount uses the original content roots retained by the mounted set.
+	fresh, err := openContent(Options{Root: g.cs.root, Roots: g.cs.roots, Remaster: g.opts.Remaster})
 	if err != nil {
 		reportRetailMessageError(g.showRetailMessage(err.Error()))
 		return false

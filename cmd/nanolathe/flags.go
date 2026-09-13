@@ -8,7 +8,6 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
 	"io"
 	"math"
-	"os"
 	"path/filepath"
 )
 
@@ -20,7 +19,8 @@ type Options struct {
 	BenchmarkFrames    int
 	BenchmarkTPS       int
 	BenchmarkPreTicks  int
-	Root               string      // retail install root
+	Root               string      // first root; also the save directory for programmatic callers
+	Roots              []string    // ordered content roots; empty enables host discovery
 	Map                string      // map name without extension, e.g. "ashap plateau"
 	Seed               int64       // battle RNG seed for both streams; <0 = derive pair from clock
 	Headless           bool        // run the session without opening a window
@@ -90,22 +90,20 @@ type Options struct {
 // ErrHelp reports that usage was requested and printed.
 var ErrHelp = errors.New("help requested")
 
-func defaultRoot() string {
-	if root := os.Getenv("NANOLATHE_TA_ROOT"); root != "" {
-		return root
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "TotalAnnihilation"
-	}
-	return filepath.Join(home, "TotalAnnihilation")
-}
-
 func parseFlags(args []string, out io.Writer) (Options, error) {
 	var opts Options
 	set := flag.NewFlagSet("nanolathe", flag.ContinueOnError)
 	set.SetOutput(out)
-	set.StringVar(&opts.Root, "root", defaultRoot(), "retail install root (or $NANOLATHE_TA_ROOT)")
+	set.Func("root", "content root; repeat in load order (later roots win); omitted uses $NANOLATHE_TA_ROOT or installation discovery", func(root string) error {
+		if root == "" {
+			return fmt.Errorf("content root must not be empty")
+		}
+		opts.Roots = append(opts.Roots, root)
+		if len(opts.Roots) == 1 {
+			opts.Root = root
+		}
+		return nil
+	})
 	set.StringVar(&opts.Map, "map", "", "map name without extension, e.g. \"ashap plateau\"")
 	set.Int64Var(&opts.Seed, "seed", -1, "battle RNG seed for both streams; negative derives a pair from the clock")
 	set.BoolVar(&opts.Headless, "headless", false, "run a skirmish or mission without opening a window")

@@ -35,7 +35,7 @@ The boundary out of this area is `*content.Catalog` plus the `vfs.FSOps` read
 surface. A simulation package takes a compiled catalog and never re-opens a
 TDF, never re-applies a conversion, and never mutates a definition; art and
 audio resolution happens through the same catalog before a battle starts, not
-inside a frame. The boundary in is a filesystem root and a mount plan.
+inside a frame. The boundary in is an ordered list of filesystem roots and a mount plan.
 
 What this area does **not** own: the COB opcode interpreter and the piece
 hierarchy built from a 3DO (DESIGN_UNITS_ORDERS_COB), the palette and SHD
@@ -53,7 +53,9 @@ definitions from `content` and go on from there.
 install with `DefaultRetailMountPlan`, and `MountGameDirectoryWithPlan` takes
 an explicit plan. Mounting indexes names and metadata only. Archive payloads
 stay on disk until a file is opened, so startup cost is independent of the
-size of the install.
+size of the install. `FS.MountGameDirectories(roots)` adds an outer root
+priority: every later root wins over every earlier root. A one-root list
+retains the existing priorities and manifest identity.
 
 | Type | What it is |
 |---|---|
@@ -604,6 +606,46 @@ behaviour.
   would mute those voices on a working install. The loader reads the bare key,
   discards the result and gathers the numbered keys unconditionally — which
   the executable itself does, so this is retail rather than a divergence.
+
+**Ordered roots and host discovery (Nanolathe policy).** The user-requested
+startup extension accepts repeated `--root` in both commands. Command-line
+order is load order: root priority is compared before archive/loose tier and
+within-tier order. A later root's HPI can therefore shadow an earlier root's
+GP3, CCX, or loose file. This precedence divergence applies only when more
+than one root is selected; the single-root policy and retail catalog admission
+rules are unchanged. An explicit mod root need not contain a base install.
+Equal full provider paths still keep the first mount (C3). `--remaster` wins
+above all roots, even with many roots. The content context retains the entire
+list for battle restarts; the first root remains the save directory.
+
+`internal/install.Resolve` owns host discovery, outside simulation and retail
+evidence. Explicit flags win, then a nonempty `NANOLATHE_TA_ROOT` selects one
+root. Otherwise bounded searches find likely installed copies, require a
+case-insensitive `totala1.hpi` file, deduplicate physical locations, and return
+all matches in deterministic order. Missing candidates are skipped; an empty
+result reports searched paths and requests `--root`. Detection is a candidate
+check: normal VFS mounting and required-product checks still validate the data.
+No whole-disk recursive scan is performed, and arbitrary custom directories
+remain selectable through `--root`. Windows-style custom Steam library paths
+inside Wine metadata also require explicit roots; discovery reads native host
+paths from Steam metadata.
+
+Discovery checks Windows registry hints and standard/platform installation
+locations first, including Steam libraries, GOG game collections, and known
+Wine prefixes. It then checks the launch and executable directories (including
+nearby named game folders), and finally `~/TotalAnnihilation`, which remains a
+convenient place for macOS and Linux users to put their data. Directory children
+are visited lexically; Steam libraries follow their metadata order. All detected
+roots participate, and later matches override earlier ones. Use explicit roots
+to select one installation or control the order yourself.
+
+| Host | Additional locations searched |
+|---|---|
+| Windows | Conventional game, Cavedog, GOG and Steam folders on fixed drives; Program Files variants; registered Steam and game installation paths |
+| Linux | Steam defaults, XDG and Flatpak Steam directories, configured Steam libraries, Proton prefixes, Lutris and Bottles locations, CrossOver bottles |
+| macOS | Steam and configured libraries, system/user Applications folders, CrossOver and Whisky bottles |
+| Wine hosts | `WINEPREFIX`, `~/.wine`, prefixes under home Games directories and `CX_BOTTLE_PATH`; conventional Windows game folders within each prefix |
+
 
 Host limits and compatibility boundaries are recorded under [I11]:
 

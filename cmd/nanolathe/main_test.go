@@ -27,8 +27,8 @@ func TestParseFlagsDefaults(t *testing.T) {
 	if opts.Seed >= 0 {
 		t.Fatalf("default seed = %d, want a negative sentinel", opts.Seed)
 	}
-	if opts.Root == "" {
-		t.Fatal("default root is empty")
+	if opts.Root != "" || len(opts.Roots) != 0 {
+		t.Fatal("omitted roots must defer discovery until startup")
 	}
 	if opts.LoadSave != "" {
 		t.Fatalf("default LoadSave = %q, want empty", opts.LoadSave)

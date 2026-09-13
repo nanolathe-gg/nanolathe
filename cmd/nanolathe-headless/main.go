@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"runtime"
 	"runtime/pprof"
 	"time"
@@ -33,6 +32,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// host-side measurement around it (docs/SIM_BENCHMARK.md).
 	if bench.OutputDir != "" {
 		bench.Root = request.Root
+		bench.Roots = request.Roots
 		bench.Difficulty = request.Difficulty
 		bench.Seed = request.SimulationSeed
 		bench.Log = stderr
@@ -141,7 +141,16 @@ func parse(args []string, output io.Writer) (headless.Request, string, profileOp
 	var warmup, measured int64
 	flags := flag.NewFlagSet("nanolathe-headless", flag.ContinueOnError)
 	flags.SetOutput(output)
-	flags.StringVar(&request.Root, "root", defaultRoot(), "retail install root (or $NANOLATHE_TA_ROOT)")
+	flags.Func("root", "content root; repeat in load order (later roots win); omitted uses $NANOLATHE_TA_ROOT or installation discovery", func(root string) error {
+		if root == "" {
+			return fmt.Errorf("content root must not be empty")
+		}
+		request.Roots = append(request.Roots, root)
+		if len(request.Roots) == 1 {
+			request.Root = root
+		}
+		return nil
+	})
 	flags.StringVar(&request.Map, "map", "", "map name without extension")
 	flags.StringVar(&request.Mission, "mission", "", "campaign selector, e.g. camps/Arm Campaign.tdf:MISSION0")
 	flags.IntVar(&request.Difficulty, "difficulty", 1, "battle difficulty: 0 easy, 1 medium, 2 hard (skirmish and campaign)")
@@ -182,17 +191,6 @@ func parse(args []string, output io.Writer) (headless.Request, string, profileOp
 	}
 	request.TickLimit = uint32(ticks)
 	return request, reportPath, profiles, bench, nil
-}
-
-func defaultRoot() string {
-	if root := os.Getenv("NANOLATHE_TA_ROOT"); root != "" {
-		return root
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "TotalAnnihilation"
-	}
-	return filepath.Join(home, "TotalAnnihilation")
 }
 
 func writeReport(path string, stdout io.Writer, report headless.Report) error {

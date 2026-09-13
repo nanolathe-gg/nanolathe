@@ -28,8 +28,39 @@ packages used by CI on Ubuntu.
 git clone https://github.com/nanolathe-gg/nanolathe.git
 cd nanolathe
 go build -o nanolathe ./cmd/nanolathe
-./nanolathe --root "$HOME/TotalAnnihilation"
+./nanolathe
 ```
+
+With no `--root`, Nanolathe searches registered and standard installation
+locations first, including GOG, Steam libraries, and Wine installations. It also
+checks nearby game folders and finally `~/TotalAnnihilation` (a convenient
+location for manually placed data on macOS and Linux).
+It mounts all detected installations in a deterministic order. A custom
+installation can be selected explicitly:
+
+```sh
+./nanolathe --root "/path/to/Total Annihilation"
+```
+
+Mods can live in separate directories. Repeat `--root` in load order:
+
+```sh
+./nanolathe --root "$HOME/TotalAnnihilation" --root "$HOME/TA-Mods/MyMod"
+```
+
+Every later root overrides earlier roots, even when a later `totala1.hpi`
+provides a file already supplied by an earlier `.ccx`, `.gp3`, or loose file.
+Within each root, the existing loose-file and archive precedence is unchanged.
+This extra precedence layer is a deliberate departure from retail **only when
+multiple roots are used**. A mod root may contain only its overrides; it does
+not need its own base archives. Retail's content rules still apply, including
+packing unit and weapon definitions into archives.
+
+Explicit roots replace automatic discovery. With no `--root`,
+`NANOLATHE_TA_ROOT` selects one root instead of discovery. Saves use the first
+root; `--remaster` overrides the entire root list. Both desktop and headless
+commands support these rules. See [startup root policy](docs/DESIGN_CONTENT_VFS.md#5-divergences)
+for discovery details and limits.
 
 The default launches the front end with the modern GPU renderer and a 60 FPS
 cap. Options → Nanolathe selects Classic / Modern and 30 / 60 / 120 FPS; OK saves

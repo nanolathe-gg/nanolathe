@@ -2,13 +2,12 @@ package main
 
 import (
 	"bytes"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/headless"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
+	"github.com/nanolathe-gg/nanolathe/internal/testsupport"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
@@ -46,10 +45,7 @@ func TestParseRejectsDifficultyOutsideTheVocabulary(t *testing.T) {
 // [05 R-SHARE-01 §7][08 R-SKIR-01 §6] — and not from the catalog's definition
 // count. Skipped when the retail install is absent.
 func TestHeadlessSkirmishTakesTheDefaultUnitLimit(t *testing.T) {
-	root := defaultRoot()
-	if _, err := os.Stat(filepath.Join(root, "totala1.hpi")); err != nil {
-		t.Skip("retail assets not present")
-	}
+	root := testsupport.RetailRoot(t)
 	fs := vfs.New()
 	if err := fs.MountGameDirectory(root); err != nil {
 		t.Skipf("mount retail install: %v", err)
@@ -73,5 +69,19 @@ func TestHeadlessSkirmishTakesTheDefaultUnitLimit(t *testing.T) {
 	start, end, ok := battle.Session.Units.SliceForPlayer(1)
 	if !ok || start != limit+1 || end != 2*limit {
 		t.Fatalf("player 1 slice = %d..%d (ok=%v), want %d..%d", start, end, ok, limit+1, 2*limit)
+	}
+}
+
+func TestRepeatedRootFlags(t *testing.T) {
+	t.Setenv("NANOLATHE_TA_ROOT", "/ignored")
+	request, _, _, _, err := parse([]string{"--root", "base", "--root=mod"}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Root != "base" || len(request.Roots) != 2 || request.Roots[0] != "base" || request.Roots[1] != "mod" {
+		t.Fatalf("request roots = %q / %v", request.Root, request.Roots)
+	}
+	if _, _, _, _, err := parse([]string{"--root="}, &bytes.Buffer{}); err == nil {
+		t.Fatal("empty root accepted")
 	}
 }

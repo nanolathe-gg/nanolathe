@@ -253,6 +253,11 @@ stale pointer after compaction), reproduce it and cite it; do not defend against
 it. Bounds checks that reject data retail would accept are the one exception and
 must be noted in the plan's Divergences.
 
+The user-requested startup root list is a sanctioned host extension
+(DESIGN_CONTENT_VFS §5). Only multiple roots add directory precedence above
+existing provider tiers; one root retains its existing resolution. Installation
+discovery is host policy and supplies explicit roots before content loading.
+
 The renderer is the sanctioned presentation switch of
 [DESIGN_GPU_RENDERER.md](DESIGN_GPU_RENDERER.md): currently classic or modern,
 with modern the default and a 60 FPS presentation cap. Both are persisted

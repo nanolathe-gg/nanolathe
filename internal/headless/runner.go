@@ -4,12 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/internal/ai"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/install"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
@@ -87,7 +87,8 @@ type FreshBattle struct {
 // Request is the displayless battle boundary. Seeds and the tick limit are
 // explicit so equal requests can be compared without consulting host time.
 type Request struct {
-	Root           string
+	Root           string   // fallback for callers supplying one root
+	Roots          []string // load order; omitted roots enable installation discovery
 	Map            string
 	Mission        string
 	Difficulty     int
@@ -99,14 +100,12 @@ type Request struct {
 // Run mounts a retail install and enters the ordinary session composition and
 // Step path. The returned report is populated even when ErrTickLimit is returned.
 func Run(request Request) (Report, error) {
-	if err := validateRoot(request.Root); err != nil {
+	fs, err := mountContentRoots(request.Root, request.Roots)
+	if err != nil {
 		return Report{}, err
 	}
-	fs := vfs.New()
-	if err := fs.MountGameDirectory(request.Root); err != nil {
-		return Report{}, diagnostic("mounting install failed: "+err.Error(), request.Root, nil, "a readable Total Annihilation install")
-	}
 	defer fs.Close()
+
 	for _, required := range []string{"gamedata/moveinfo.tdf", "gamedata/sidedata.tdf"} {
 		if _, err := fs.Stat(required); err != nil {
 			return Report{}, diagnostic("required content is missing", required, providerNames(fs), "a mounted archive or loose file supplying it")
@@ -282,6 +281,28 @@ func RunSession(request Request, sess *session.Session) (Report, error) {
 	return report, nil
 }
 
+// mountContentRoots is the common host mount boundary for runs and benchmarks.
+func mountContentRoots(root string, roots []string) (*vfs.FS, error) {
+	if len(roots) == 0 && root != "" {
+		roots = []string{root}
+	}
+	roots, err := install.Resolve(roots)
+	if err != nil {
+		return nil, err
+	}
+	for _, root := range roots {
+		if err := validateRoot(root); err != nil {
+			return nil, err
+		}
+	}
+	fs := vfs.New()
+	if err := fs.MountGameDirectories(roots); err != nil {
+		fs.Close()
+		return nil, diagnostic("mounting install failed: "+err.Error(), "<content roots>", roots, "readable Total Annihilation content directories")
+	}
+	return fs, nil
+}
+
 func validateRoot(root string) error {
 	info, err := os.Stat(root)
 	if err != nil || !info.IsDir() {
@@ -336,7 +357,7 @@ func providerNames(fs *vfs.FS) []string {
 	providers := fs.Providers()
 	names := make([]string, 0, len(providers))
 	for _, provider := range providers {
-		names = append(names, filepath.Base(provider.ID))
+		names = append(names, provider.ID)
 	}
 	return names
 }
