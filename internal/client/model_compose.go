@@ -526,6 +526,7 @@ func (c *Client) modelDirectVertexDoubled(v [3]numeric.Fixed, world [3]numeric.F
 // doubled scratch while anti-aliasing, which is what the outline and the trace
 // read) and the draw record itself.
 type composedModel struct {
+	cloaked    bool
 	image      *modelTarget
 	raster     *modelTarget
 	draw       *presentationrender.UnitDraw

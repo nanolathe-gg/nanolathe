@@ -752,7 +752,11 @@ performs no per-launch debit.
 `storedReload = floor(healthFactor × veteranReload / 100)`.
 The kill division is unsigned. A stockpile launch does not write reload.
 
-**C8 — a burst is N pellets plus one anchor.** While the remaining count is
+**C8 — a burst is N pellets plus one anchor.** Only the ordinary, ballistic
+and vertical creators copy the authored burst count. The dropped and meteor
+creators retain zero, so each dropped release produces one moving bomb rather
+than a scheduler; an already released bomb survives its shooter's death
+`[06 §4.3]` `[06 §12.1]`. While the remaining count is
 above zero the record takes the burst branch instead of the motion branch. The
 muzzle is re-derived when the interval exceeds 4 or the remaining count is odd;
 the clone is made before the spray and the spray prepares the next; a pool-full clone consumes

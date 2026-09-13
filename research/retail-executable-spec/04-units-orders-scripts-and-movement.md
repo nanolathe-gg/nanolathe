@@ -13083,8 +13083,18 @@ horizontal arrival radius in **world units**, added to a physically derived
 lead; it is not itself a time or a speed. The `30.0` factor converts the
 free-fall time from seconds to ticks against a per-tick speed, so the whole
 expression is `speed_per_tick · 30 · sqrt(2·cruisealt/gravity)` world units.
-`gravity` is the runtime word the map loader fills from the OTA `gravity` key,
-defaulting to `0x1FDB` when neither the OTA nor the TNT header supplies one.
+**Established — the release lead reads the raw OTA gravity integer.** The
+mission header starts this word at −1; parsing a `GlobalHeader` writes the
+`gravity` integer directly, with zero for an omitted key. The release leg reads
+that word on both terrain versions, before any terrain gravity selection or
+conversion. Negative authored values remain negative here. Only an exact zero
+cancels the order; for positive cruise altitude, a negative gravity produces
+an invalid square root whose shared truncating conversion retains zero
+`[01 R-DET-01 §1]`. The terrain's TNT fallback and converted projectile
+acceleration are separate state and never replace this operand. Reconstructing
+it from truncated projectile acceleration loses precision even on stock maps:
+authored 112 converts to 8155 raw acceleration units, whose inverse conversion
+truncates to 111 rather than 112 `[03 §2.2]`.
 
 **Established — `AirToGround`: the strafing run.** Six phases.
 

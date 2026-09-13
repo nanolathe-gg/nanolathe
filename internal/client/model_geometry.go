@@ -338,7 +338,11 @@ func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (*drawli
 	id := unitPresentationID(v)
 	reveal, outline := c.unitNanoframeReveal(v)
 	if id == 0 || !c.modelScratch.active {
-		return c.prepareModelGeometry(draw, v.Owner, unitTeamColor(v), id, modelCursorUnit, reveal, outline), nil
+		g := c.prepareModelGeometry(draw, v.Owner, unitTeamColor(v), id, modelCursorUnit, reveal, outline)
+		if g != nil {
+			g.Cloaked = v.Cloaked
+		}
+		return g, nil
 	}
 	orient := c.orientationCache(id)
 	body := c.cachedBody(id)
@@ -408,6 +412,9 @@ func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (*drawli
 	// lane below are rebuilt every frame into that same slot, so any of them
 	// disqualifies the packet from being kept.
 	g.Cache = body.cacheKey(hx, hy)
+	// Cloak changes the final image blit, not the retained raster or its key
+	// [03 R-RAST-01 §7]. Direct live packets below keep their opaque fill.
+	g.Cloaked = v.Cloaked
 	// The shadow is a lane of the same retained object and keeps its own slot
 	// identity: it is projected from the current pose, which the body's frozen
 	// cached lane is not, so a reveal or a live lane here does not disturb it

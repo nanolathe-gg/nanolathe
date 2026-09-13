@@ -119,8 +119,10 @@ func (i *ClassicModelImage) Clone() *ClassicModelImage {
 // diagnostics-only state: it never affects pixels and is permitted to retain
 // its own immutable recording-time evidence.
 type ClassicModel struct {
-	Shadow *ClassicModelImage
-	Body   *ClassicModelImage
+	// Cloaked selects the body ALP blit after visibility admission [03 R-RAST-01 §7].
+	Cloaked bool
+	Shadow  *ClassicModelImage
+	Body    *ClassicModelImage
 	// Trace is the observer-only raster plane. It is separate from Body when a
 	// supersampled raster was resolved before the body blit.
 	Trace    *ClassicModelImage
@@ -133,7 +135,7 @@ func (m *ClassicModel) Clone() *ClassicModel {
 	if m == nil {
 		return nil
 	}
-	return &ClassicModel{Shadow: m.Shadow.Clone(), Body: m.Body.Clone(), Trace: m.Trace.Clone(), Observer: m.Observer}
+	return &ClassicModel{Cloaked: m.Cloaked, Shadow: m.Shadow.Clone(), Body: m.Body.Clone(), Trace: m.Trace.Clone(), Observer: m.Observer}
 }
 
 // ModelChild is a separately composed subject in the carrier's key space.
@@ -199,6 +201,9 @@ func (k ModelCacheKey) Reusable() bool { return k.Body != 0 }
 // consumer report the reason without consulting a CPU image [03 R-REN-03A
 // §4, §6–§8].
 type ModelGeometry struct {
+	// Cloaked selects the final body blend, never a retained-raster input
+	// [03 R-RAST-01 §7]. A staged carrier owns its combined body blend.
+	Cloaked bool
 	// WreckHeat carries modern-only cooling operands refreshed at recording.
 	// Emission is preweighted RGB; strength affects only distortion amplitude.
 	// These are presentation design choices (GPU design §28), never sim inputs.

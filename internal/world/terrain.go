@@ -78,6 +78,10 @@ type Terrain struct {
 	// word itself — its sub-records rise by `word << 4` of raw 16.16 Y every
 	// tick [03 R-FX-01 §3] — so the two consumers need the two forms.
 	AuthoredGravity int32
+	// OTAGravity retains the mission header's gravity independently of terrain
+	// selection: AirStrike reads this raw integer, including zero/negative
+	// values and the unparsed-header value −1 [04 R-AIR-01 §8].
+	OTAGravity int32
 	// LavaWorld is the map's authored `lavaworld` flag. Besides the void flood
 	// below, it selects which of a weapon's two authored explosion-art pairs
 	// fills its single water-or-lava holder [06 R-WFX-01 §1].
@@ -699,6 +703,10 @@ func Load(fs vfs.FSOps, cat *content.Catalog, mapKey string) (*Terrain, error) {
 		}
 	}
 
+	otaGravity := int32(-1) // mission header initializer [04 R-AIR-01 §8]
+	if g := canonicalGlobals(mh); g != nil {
+		otaGravity = g.Gravity
+	}
 	t := &Terrain{
 		CellW:           cellW,
 		CellH:           cellH,
@@ -709,6 +717,7 @@ func Load(fs vfs.FSOps, cat *content.Catalog, mapKey string) (*Terrain, error) {
 		SeaLevel:        sea,
 		Gravity:         gravity,
 		AuthoredGravity: authoredGravity,
+		OTAGravity:      otaGravity,
 		LavaWorld:       mh != nil && mh.LavaWorld != 0,
 		// The two acid-water words come from the same compiled globals, with
 		// the parser's own integer default 0 for an omitted key [fmt ota].

@@ -201,7 +201,10 @@ func (c *Client) composeUnitModel(v frame.UnitView) (composedModel, bool) {
 
 // A child forces a two-plane image; a carrier defers its water/digger pass
 // until attached children have joined it [03 R-REN-03A §4].
-func (c *Client) composeUnitModelState(v frame.UnitView, child, finalPasses bool) (composedModel, bool) {
+func (c *Client) composeUnitModelState(v frame.UnitView, child, finalPasses bool) (result composedModel, valid bool) {
+	// Retail tints the cached/staged image blit; direct polygons remain their
+	// ordinary lane [03 R-RAST-01 §7]. Do not put cloak into retained pixels.
+	defer func() { result.cloaked = v.Cloaked && !result.direct }()
 	draw, ok := c.unitDrawFor(v)
 	if !ok {
 		return composedModel{}, false

@@ -124,6 +124,10 @@ type Sprite struct {
 	// LightingScale is recording pixels per world pixel. Neither includes
 	// supersampling or a subsequent executor world transform.
 	WorldHeight, LightingScale float32
+	// LightingSize is an explosion sequence's maximum authored extent in native
+	// world pixels, independent of the current animation frame or Distortion.
+	// Zero retains frame-sized fallback for sources without sequence metadata.
+	LightingSize float32
 	// LightingTime is committed ticks plus the presentation fraction, wrapped
 	// to a bounded window, for a source whose emission flickers (§31). It is
 	// zero for every other sprite and classic ignores it.

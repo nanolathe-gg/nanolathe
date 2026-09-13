@@ -19,7 +19,7 @@ type EffectDrawOptions struct {
 	// Nil fails closed for lighting metadata without changing the art's draw.
 	LightingFrame *frame.Frame
 	ResolveFrame  func(frame.EffectView, int32) (*formats.GAFFrame, bool)
-	// BlastSize resolves the maximum authored animation extent for modern refraction.
+	// BlastSize resolves the maximum authored animation extent for modern lighting and refraction.
 	// Nil suppresses the optional wave.
 	BlastSize   func(frame.EffectView) float32
 	LHTGeometry func(frame.EffectView) (radius, level int, ok bool)
@@ -280,12 +280,17 @@ func (c *Client) DrawEffectViews(effects []frame.EffectView, options EffectDrawO
 		// The blast ring metadata is the player's Distortion switch (§25, §30);
 		// zero extent admits no ring. The lighting kind is recorded either way
 		// — the executor gates the lighting pass itself.
-		var blastAge, blastSize float32
-		if c.enhanced && c.effects.Distortion && lightingKind == drawlist.SpriteLightingExplosion && options.BlastSize != nil {
-			blastSize = options.BlastSize(view)
-			blastAge = float32(options.LightingFrame.Tick - view.StartTick)
-			if c.interpolation {
-				blastAge += c.TickFraction()
+		var blastAge, blastSize, lightingSize float32
+		if c.enhanced && lightingKind == drawlist.SpriteLightingExplosion && options.BlastSize != nil {
+			// The tiny opening frame must illuminate the same region as the
+			// rest of its flash; frame bounds grow after the brightest phase.
+			lightingSize = options.BlastSize(view)
+			if c.effects.Distortion {
+				blastSize = lightingSize
+				blastAge = float32(options.LightingFrame.Tick - view.StartTick)
+				if c.interpolation {
+					blastAge += c.TickFraction()
+				}
 			}
 		}
 		scale := float32(c.viewScale().Float())
@@ -296,7 +301,7 @@ func (c *Client) DrawEffectViews(effects []frame.EffectView, options EffectDrawO
 		c.emitSprite(drawlist.Sprite{Frame: c.viewFrame(frame), X: x - 128, Y: y - 32, Kind: drawlist.BlitKeyed, Anchored: true, Emissive: true,
 			BlastAge: blastAge, BlastSize: blastSize,
 			ReflectWater: c.reflectionWaterAt(d.X, d.Z), ReflectionHeight: c.reflectionHeight(d.Y),
-			LightingKind: lightingKind, WorldHeight: float32(d.Y.Raw()) / 65536 * scale, LightingScale: scale})
+			LightingKind: lightingKind, LightingSize: lightingSize, WorldHeight: float32(d.Y.Raw()) / 65536 * scale, LightingScale: scale})
 		stats.Sprites++
 	}
 	return stats

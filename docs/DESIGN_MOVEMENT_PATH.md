@@ -746,9 +746,13 @@ this wiring can be asserted without inventing a public kind on `Goal`.
   "bugger off" broadcast has no engine reader at all `[04 R-FAC-02 §6]`
   `[04 R-COB-05]`.
 * **A map authoring `gravity = 0` cancels every `AirStrike` order.** The release
-  leg reads the map's gravity word before dividing and returns the cancel-all
+  leg reads `Terrain.OTAGravity`, the unconverted mission-header integer, before
+  dividing and returns the cancel-all
   code on zero, emptying the bomber's whole queue. Bombers idle there in retail
-  too (SC23) `[04 R-AIR-01 §8]`.
+  too (SC23). The terrain-selected gravity and its projectile acceleration
+  remain separate: neither supplies a fallback for this reader, and reversing
+  the acceleration conversion would change even a stock value of 112 into 111
+  `[04 R-AIR-01 §8]`.
 * **A definition authoring `MaxVelocity = 0` terminates.** The flight decay
   divides by it with no guard; the fault is reproduced (C27) `[04 §10.1]` [I11].
 * **A carried unit is not a mover.** Transport removes it from the follower and

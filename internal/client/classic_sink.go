@@ -290,12 +290,19 @@ func (c *Client) classicModelForCommit(p pendingModelCommit) *drawlist.ClassicMo
 	if c == nil {
 		return nil
 	}
-	classic := &drawlist.ClassicModel{}
+	classic := &drawlist.ClassicModel{Cloaked: p.m.cloaked}
 	if p.shadow {
 		classic.Shadow = c.classicModelImage(c.buildModelShadow(p.m.draw, p.m.image))
 	}
 	if p.body {
 		classic.Body = c.classicModelImage(p.blit)
+		if classic.Cloaked && classic.Body != nil {
+			// The body blit keys on color, not auxiliary raster coverage
+			// [03 R-REN-03D §4]. The copied planes belong to this command.
+			for i, color := range classic.Body.Color {
+				classic.Body.Coverage[i] = color != classic.Body.Transparent
+			}
+		}
 	}
 	if p.trace && p.m.raster != nil && p.m.raster.trace != nil {
 		trace := p.m.raster.trace
@@ -626,7 +633,11 @@ func (s classicSink) Model(m drawlist.Model) {
 		classicModelTarget(m.Classic.Shadow).tintedCommit(c.indexed, c.width, c.height, &c.pal.Alpha)
 	}
 	if m.Classic.Body != nil {
-		classicModelTarget(m.Classic.Body).commit(c.indexed, c.width, c.height)
+		if m.Classic.Cloaked && c.pal != nil {
+			classicModelTarget(m.Classic.Body).tintedCommit(c.indexed, c.width, c.height, &c.pal.Alpha)
+		} else {
+			classicModelTarget(m.Classic.Body).commit(c.indexed, c.width, c.height)
+		}
 	}
 	if m.Classic.Observer != nil {
 		// The observer receives a snapshot, never the writable framebuffer. This

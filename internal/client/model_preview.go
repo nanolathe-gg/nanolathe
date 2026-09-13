@@ -43,6 +43,7 @@ type ModelPreviewOptions struct {
 	KeyPlane   bool
 	// These supplied committed presentation lanes allow isolated construction
 	// and submerged/digger review. They do not advance a simulation or COB.
+	Cloaked          bool
 	BuildRemaining   float32
 	WorldHeight      int32
 	UnderwaterExempt bool
@@ -159,11 +160,16 @@ func (r *ModelPreviewRenderer) recordModel(opts ModelPreviewOptions, geometryOnl
 	c := r.client
 	previousAntiAlias := c.antiAlias
 	previousGeometryOnly := c.geometryOnlyModels
+	previousEnhanced := c.enhanced
 	c.antiAlias = !opts.DisableAntiAlias
 	c.geometryOnlyModels = geometryOnly
+	// Modern detail records magnified geometry; classic scales its final blit.
+	// Scope the executor mode to this preview, just like geometry-only storage.
+	c.enhanced = geometryOnly
 	defer func() {
 		c.antiAlias = previousAntiAlias
 		c.geometryOnlyModels = previousGeometryOnly
+		c.enhanced = previousEnhanced
 	}()
 	c.width, c.height = opts.Width, opts.Height
 	c.recordW, c.recordH = opts.Width, opts.Height
@@ -208,6 +214,7 @@ func (r *ModelPreviewRenderer) recordModel(opts ModelPreviewOptions, geometryOnl
 		BMCode:           !opts.Structure,
 		ZBuffer:          opts.KeyPlane,
 		NoShadow:         true,
+		Cloaked:          opts.Cloaked,
 		BuildRemaining:   opts.BuildRemaining,
 		Y:                numeric.Fixed(int64(opts.WorldHeight) << 16),
 		UnderwaterExempt: opts.UnderwaterExempt,

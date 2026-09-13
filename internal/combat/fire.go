@@ -428,12 +428,17 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 	// read it. Ordinary creators re-solve from muzzle to target and therefore
 	// retain the draw only for RockUnit [06 R-WPN-05 §5].
 
-	// Burst state copied from the weapon into the root [06 §4.3] C8.
-	p.BurstRemaining = w.Burst
-	if w.Burst > 0 {
-		p.BurstDeadline = tick + uint32(w.BurstRate) // interval added to next deadline [06 §4.3]
-	} else {
-		p.BurstDeadline = 0
+	// Only the ordinary, ballistic and vertical creators copy the authored
+	// burst count [06 §4.3] C8. Dropped and meteor retain the common zero:
+	// each dropped release is already a moving bomb, never a burst scheduler.
+	switch fam {
+	case CreationOrdinary, CreationBallistic, CreationVertical:
+		p.BurstRemaining = w.Burst
+		if w.Burst > 0 {
+			p.BurstDeadline = tick + uint32(w.BurstRate) // interval added to next deadline [06 §4.3]
+		} else {
+			p.BurstDeadline = 0
+		}
 	}
 
 	// C2 fixed callback order [06 §4.1]: root allocation → start sound →

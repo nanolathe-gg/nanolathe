@@ -354,7 +354,13 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 		// Cooling rides the existing body composite: no extra samples or pass.
 		// Screen blend preserves texture contrast and premultiplied coverage.
 		sum += (vec3(cover)-sum)*color.rgb
-		return vec4(sum/4.0, cover/4.0)
+		// Enhanced uses the ALP half-colour formula before source-over,
+		// scaling RGB and coverage together [03 R-REN-03D §4].
+		opacity := 1.0
+		if custom.x > 0.5 {
+			opacity = 0.5
+		}
+		return vec4(sum/4.0, cover/4.0)*opacity
 	} else if op == ` + fmt.Sprint(sceneOpCopyColor) + ` {
 		// The fog run's read copy: the composite is already colour here, so it is
 		// copied through unchanged (§13.3).

@@ -832,10 +832,14 @@ func (r *Renderer) commitModelDirect(g *drawlist.ModelGeometry) {
 	// centre lands one texel into its 2×2 block and the fragment floors back.
 	sx0 := float32(region.x) + 2*float32(x0-b.Min.X)
 	sy0 := float32(region.y) + 2*float32(y0-b.Min.Y)
+	cloak := float32(0)
+	if g.Cloaked {
+		cloak = 1
+	}
 	r.sched.quad(schedOpaque,
 		float32(x0), float32(y0), float32(x1), float32(y1),
 		sx0, sy0, sx0+2*float32(x1-x0), sy0+2*float32(y1-y0),
-		[4]float32{g.WreckEmission[0], g.WreckEmission[1], g.WreckEmission[2], 0}, [4]float32{0, 0, 0, sceneOpModelDirectCommit})
+		[4]float32{g.WreckEmission[0], g.WreckEmission[1], g.WreckEmission[2], 0}, [4]float32{cloak, 0, 0, sceneOpModelDirectCommit})
 }
 
 // commitModelDirectShadow compiles one subject's shadow commit: a

@@ -168,7 +168,7 @@ func TestBlastMetadataUsesAdmissionAgeAndAuthoredSize(t *testing.T) {
 	options.LightingFrame = stripTestFrame(true)
 	options.LightingFrame.Tick = 105
 	c.effectBanks = map[string]*formats.GAF{"fx": {Entries: []formats.GAFEntry{{Name: "blast", Frames: []formats.GAFFrameRef{
-		{Frame: &formats.GAFFrame{Width: 4, Height: 3}},
+		{Frame: &formats.GAFFrame{Width: 4, Height: 3, Pixels: make([]byte, 12)}},
 		{Frame: &formats.GAFFrame{Width: 80, Height: 60}},
 		{Frame: &formats.GAFFrame{Width: 16, Height: 16, Pixels: make([]byte, 256)}},
 	}}}}}
@@ -178,11 +178,32 @@ func TestBlastMetadataUsesAdmissionAgeAndAuthoredSize(t *testing.T) {
 	count := 0
 	c.list.VisitLightSources(func(sp drawlist.Sprite) {
 		count++
-		if sp.BlastAge != 5.5 || sp.BlastSize != 80 || sp.LightingScale != 2 {
+		if sp.BlastAge != 5.5 || sp.BlastSize != 80 || sp.LightingSize != 80 || sp.LightingScale != 2 {
 			t.Fatalf("blast age/size/scale = %v/%v/%v", sp.BlastAge, sp.BlastSize, sp.LightingScale)
 		}
 	})
 	if count != 1 {
 		t.Fatalf("sources = %d", count)
+	}
+	// Disabling refraction must not defer illumination to the larger late
+	// frames. The source extent stays in native units at either record scale.
+	c.effects.Distortion = false
+	for _, scale := range []camera.ViewScale{camera.ViewScaleNative, camera.ViewScaleDetail} {
+		c.cam.Scale = scale
+		for _, seq := range []int32{0, 2} {
+			c.list.Reset()
+			v.SeqA = seq
+			c.DrawEffectViews([]frame.EffectView{v}, options)
+			count = 0
+			c.list.VisitLightSources(func(sp drawlist.Sprite) {
+				count++
+				if sp.LightingSize != 80 || sp.BlastSize != 0 || sp.BlastAge != 0 {
+					t.Fatalf("Distortion off changed lighting extent: %+v", sp)
+				}
+			})
+			if count != 1 {
+				t.Fatalf("scale %v frame %d lost explosion source", scale, seq)
+			}
+		}
 	}
 }

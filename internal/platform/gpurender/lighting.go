@@ -128,9 +128,10 @@ func (r *Renderer) prepareBattleLighting(list *drawlist.List) {
 	r.modelStats.BattleLightKinds = l.counts
 }
 
-// addSpriteLight admits one classified emitter sprite. Explosions keep their
-// original radius and colour exactly; the two added families differ only in
-// their radius clamp and, for fire, a flicker on emitted strength (§31).
+// addSpriteLight admits one classified emitter sprite. Explosions use their
+// sequence extent for reach and current frame for colour, so an expanding
+// animation cannot postpone its flash (§23.2). Fire and projectiles keep their
+// per-frame radius clamp, and fire flickers on emitted strength (§31).
 func (r *Renderer) addSpriteLight(sp drawlist.Sprite) {
 	l := &r.lighting
 	var kind lightKind
@@ -188,6 +189,12 @@ func (r *Renderer) addSpriteLight(sp drawlist.Sprite) {
 	case lightProjectile:
 		radius = min(max(art*1.4, projRadiusMin*scale), projRadiusMax*scale)
 	default:
+		// The first flash can be much smaller than the following dim art. A
+		// radius that grows with that art delays illumination at receivers near
+		// its reach, especially above elevated ground (§23.2, §31.3).
+		if sp.LightingSize > 0 {
+			art = sp.LightingSize * scale
+		}
 		radius = min(max(art*1.4, 48*scale), 192*scale) * 1.5
 	}
 	// The producer has already checked local visibility. Only art intersecting

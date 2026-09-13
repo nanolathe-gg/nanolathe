@@ -199,9 +199,10 @@ func wideAirFixture(t *testing.T) (*System, *units.World, *units.Unit) {
 	sys.EnsureUnit(u)
 	sim := rng.NewSimulation(0x12345677)
 	orders.QueueForUnit(u).SetBinding(&orders.QueueBinding{SimRNG: &sim, Lookup: w.Unit})
-	// The OTA gravity default, in the authored form the map loader converts
-	// [03 §2.2][fmt ota]; AirStrike phase 4 refuses a zero one.
-	ter.Gravity = 0x1FDB * 65536 / 900
+	// Retain the mission word separately from projectile acceleration, as the
+	// map loader does [03 §2.2][04 R-AIR-01 §8].
+	ter.Gravity = 112 * 65536 / 900
+	ter.OTAGravity = 112
 	return sys, w, u
 }
 

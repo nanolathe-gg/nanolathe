@@ -4756,9 +4756,15 @@ selection. Overwritten bright leaves do not emit, and one composite consumes
 one light budget slot. This is an approximate intrinsic emission measurement,
 independent of the ground behind a translucent effect. These thresholds are presentation choices, not authored material data.
 
-The source radius is 1.4 times the larger frame dimension, clamped to 48–192
-world pixels at record scale, then extended by 50% (72–288 world pixels).
-This extends both model and smoke illumination without changing their gains
+The explosion source radius is 1.4 times the largest width or height across
+its own resolved animation entry, clamped to 48–192 world pixels and extended
+by 50% (72–288 world pixels), then multiplied by the record scale. The recorder
+carries this immutable native-art extent as `LightingSize`, independently of
+the Distortion switch; legacy callers without the extent use the current frame.
+Colour still comes from the current frame. This Enhanced policy makes the
+reach available during the initial flash instead of growing into nearby
+receivers as the fireball dims. It adds no age curve or lingering source.
+The 50% extension reaches both model and smoke receivers without changing their gains
 or the light budgets. The point is lifted one quarter of the frame
 height above the event, with its ground position fixed, to represent the bright
 volume above an impact. At most 64 sources survive per frame, retaining the
@@ -6117,6 +6123,27 @@ resolve, so the pools brighten the water surface too; and the pass runs BEFORE
 objects, wakes and scorch, so units are drawn over it and the ordinary fog
 composite covers it (§26.3).
 
+The per-animation explosion reach in §23.2 also fixes a temporal consequence
+of the retained height attenuation. In the installed `fx/Explosion` sequence
+at event height 79, the old per-frame radius admitted no ground light for
+frames 0–7: the bright opening art was too small for its reach to exceed the
+source height. Ground illumination peaked at frame 15, long after art emission
+peaked at frame 2. Fixed entry reach lights the opening flash and lets the
+measured art colour govern its decay. The current frame continues to determine the quarter-frame lift, and the projected placement
+above remains unchanged. This addresses radius-induced delay; the absolute
+height approximation can still suppress an entire small explosion on high
+ground. It does not supply missing terrain receiver height.
+
+The installed-art regression compares bright frame 2 against trailing frame
+16 at native and doubled record scales, revisits the cached bright frame, and
+checks retirement. It fails the former radius calculation. The GPU device
+fixture renders all frames in order with the installed palette and checks an
+outside-art ground pixel: the opening flash must exceed the tail. Optional
+`NANOLATHE_EXPLOSION_SHOTS` captures frames 0, 2, 7, 12, 16, 20 and 22, with
+stable reach above the former per-frame reach. Native and detail sheets were
+visually inspected: light is present with the bright opening art and fades
+with its tail, without the former late pool onset.
+
 ### 31.4 Cost and verification
 
 Cost is two extra submissions — the barrier's copy and the batch — in a frame
@@ -6314,3 +6341,24 @@ a skirmish with no opponent, so nothing fires, and the battle benchmark places
 its armies on dry ground. The device fixture is the only evidence for the
 reflected effect; an AI opponent reachable from a capture flag, or a staged
 coastal diagnostic like the one §26.3 describes, would settle it.
+
+## 33. Cloaked model image commits
+
+`ModelGeometry.Cloaked` is refreshed from the admitted committed unit on each
+cached or staged image packet. It is not part of `ModelCacheKey`, retained face
+colors, or the atlas raster. The final atlas resolve scales both premultiplied
+RGB and coverage by the ALP half-colour formula already used by Enhanced
+(§13.2), so background details remain visible through the body. This adds no
+pass or texture read. It preserves the ordinary shadow immediately before the
+body [03 R-RAST-01 §7][03 R-REN-03D §4].
+
+A keyed carrier blends its complete staged image once, including children;
+keyless direct live polygons keep their ordinary writer. The classic packet
+uses the loaded ALP lookup instead of RGB approximation. Cloak toggles therefore
+need no raster rebuild, and one instance cannot recolor another's model.
+`ModelPreviewOptions.Cloaked` supplies this same committed lane for static
+visual review. Focused tests exercise source-major ALP, native/detail placement,
+retained opaque/cloaked/decloaked transitions, direct live lanes, and real-device
+pixels. Existing visibility regressions retain owner bypass and foreign cloak
+rejection. The existing atlas-overflow direct-polygon fallback remains a
+presentation approximation with no staged image blend.

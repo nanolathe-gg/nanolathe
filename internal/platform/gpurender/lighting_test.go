@@ -76,6 +76,9 @@ func TestBattleLightingShadersCompile(t *testing.T) {
 // checks the real backend, atlas placement, premultiplied smoke, and no-light
 // identity rather than only repeating the host lighting arithmetic.
 func checkBattleLightingDevicePixels() error {
+	if err := checkExplosionTemporalDevicePixels(); err != nil {
+		return err
+	}
 	if err := checkProjectedGroundLightDevicePixels(); err != nil {
 		return err
 	}

@@ -1186,3 +1186,13 @@ Arena capacities describe retained storage; idle offsets are not frame peaks.
 The adapter marks exact presented tick identity unavailable until an explicit
 presentation stamp exists. The window composition root installs the device callback after constructing
 the Ebitengine app; an absent callback is a partial capture.
+
+## Cloaked body composition
+
+The admitted unit's current `Cloaked` state selects the image commit in
+`ClassicModel`; its copied body pixels remain ordinary palette indices.
+Classic applies the loaded ALP table in source-major order after the shadow
+[03 R-RAST-01 §7][03 R-REN-03D §4]. Visibility admission remains upstream;
+foreign hidden units produce no silhouette. Decloaking changes the next commit
+without invalidating the cached body. Keyed cargo joins the carrier before the
+carrier's single blend; direct live polygons retain their ordinary fill.

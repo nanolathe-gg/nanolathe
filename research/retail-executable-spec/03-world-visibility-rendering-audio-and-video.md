@@ -6300,6 +6300,17 @@ fog or LOS at this point: exclusion from the list is the only visibility
 effect, and the fog overlay is applied later to the whole surface
 ([R-SEL-02A]).
 
+**Established (direct-static): cloak is selected at the image commit.** In the
+keyed branch, attached children first join the carrier staging image by the
+ordinary key comparison. The carrier's cloak state then chooses the one final
+staging-image blit; a child's cloak state does not change that keyed copy. In
+the keyless branch, the cached image uses the same cloak-dependent blit, then
+live pieces and attached children draw through the ordinary direct polygon
+writer. Those later polygons do not inherit the cached-image tint. Shadow
+selection and blending are unchanged by cloak. A change of cloak state needs
+no cached-image rebuild: the present reads the current instance state on each
+image commit.
+
 **RNG.** No draw from either stream anywhere in the bucket build, the two
 passes, the present, or the fillers ([R-RAST-01 §1]).
 

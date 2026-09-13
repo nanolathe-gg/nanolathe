@@ -1934,18 +1934,14 @@ func (s *System) legVTOLSeekGuard(u *units.Unit, n *orders.Node, satisfied uint3
 // word the marker stores [04 R-AIR-01 §4].
 func airRadiusWord(v int64) uint16 { return uint16(int16(v)) }
 
-// airGravityWord recovers the runtime gravity word `AirStrike` phase 4 reads:
-// "the runtime word the map loader fills from the OTA `gravity` key, defaulting
-// to `0x1FDB` when neither the OTA nor the TNT header supplies one"
-// [04 R-AIR-01 §8]. This build stores that word already converted to a per-tick
-// 16.16 acceleration by `authored × 65536 / 900` [03 §2.2][fmt ota], so the
-// authored word is recovered by the inverse; the conversion round-trips for
-// every authored value a map can carry.
+// airGravityWord reads the original OTA integer [04 R-AIR-01 §8]. Reversing
+// the terrain acceleration's truncated conversion loses precision, and the
+// terrain's legacy/negative fallback does not apply to this separate reader.
 func (s *System) airGravityWord() int64 {
 	if s == nil || s.Terrain == nil {
 		return 0
 	}
-	return int64(s.Terrain.Gravity) * 900 / 65536
+	return int64(s.Terrain.OTAGravity)
 }
 
 // airReleaseLead is the bombing run's ballistic release lead
