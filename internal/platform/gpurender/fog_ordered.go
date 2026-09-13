@@ -25,8 +25,14 @@ func fogNeedsOrdered(fg drawlist.Fog, scale camera.ViewScale) bool {
 		if len(fr.Subframes) != 0 || fr.SubframeCount != 0 || op.Frame >= fogAtlasCols {
 			return true
 		}
-		fr = fogViewFrame(fr, scale)
-		if _, _, ok := fogFrameTilePlacement(fr, fogAtlasTile(scale)); !ok && fr.Width > 0 && fr.Height > 0 {
+		// Admission only needs geometry. Match Resampled's ceil extents and
+		// signed half-away-from-zero anchors, including their stored narrowing,
+		// without allocating any pixel planes (DESIGN_GPU_RENDERER §14.3).
+		geometry := formats.GAFFrame{
+			Width: uint16(scale.Project(int32(fr.Width))), Height: uint16(scale.Project(int32(fr.Height))),
+			XOffset: int16(scale.Px(int32(fr.XOffset))), YOffset: int16(scale.Px(int32(fr.YOffset))),
+		}
+		if _, _, ok := fogFrameTilePlacement(&geometry, fogAtlasTile(scale)); !ok && geometry.Width > 0 && geometry.Height > 0 {
 			return true
 		}
 	}
@@ -117,7 +123,7 @@ func (r *Renderer) fogOrdered(fg drawlist.Fog, scale camera.ViewScale) {
 			} else if op.Patterned {
 				mode = fogLeafChecker
 			}
-			fr := fogViewFrame(fogSelectedFrame(fg, op), scale)
+			fr := r.fog.viewFrame(fogSelectedFrame(fg, op), scale)
 			walkFogLeaves(fr, mode, func(leaf *formats.GAFFrame, mode fogLeafMode) {
 				x, y := int(rawX)-int(leaf.XOffset), int(rawY)-int(leaf.YOffset)
 				switch mode {

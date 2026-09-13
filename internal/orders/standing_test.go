@@ -27,7 +27,7 @@ func standingFixture(def *content.UnitDef) (*Queue, *units.Unit) {
 		Health:    3000,
 		MaxHealth: 3000,
 	}
-	q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
+	q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim, World: &WorldQueryAdapter{SeaLevel: func() uint8 { return 0 }}}}
 	BindQueue(u, q)
 	return q, u
 }

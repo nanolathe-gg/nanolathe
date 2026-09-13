@@ -98,7 +98,7 @@ func notifyTargetObservers(w *units.World, target pool.Handle, event uint32, unl
 		if q == nil {
 			continue
 		}
-		for _, segment := range [][]*Node{q.Primary(), q.Secondary()} {
+		for _, segment := range [][]*Node{q.primary, q.secondary} {
 			for _, n := range segment {
 				if n == nil || n.Target != target {
 					continue
@@ -121,7 +121,7 @@ func FrontPrimaryGateMask(u *units.Unit) uint32 {
 	if q == nil {
 		return 0
 	}
-	primary := q.Primary()
+	primary := q.primary
 	if len(primary) == 0 || primary[0] == nil {
 		return 0
 	}
@@ -173,7 +173,7 @@ func RetaliationOrder(victim, attacker *units.Unit) bool {
 	if q == nil {
 		return false
 	}
-	if primary := q.Primary(); len(primary) != 0 {
+	if primary := q.primary; len(primary) != 0 {
 		// The head order must be a standby to be interrupted [04 §3.1]; a
 		// unit moving, patrolling, building or attacking is only ever
 		// offered the attacker slot by slot.

@@ -206,6 +206,13 @@ when the selected resolution changes.
 On macOS, fullscreen entered through the native green window button must be
 exited through the native control; Ebitengine cannot toggle that mode itself.
 
+Settings persistence also follows a host recovery policy: startup may use
+in-memory defaults after a corrupt or unsupported settings file is reported,
+but every save refuses to replace that unreadable file. The original bytes
+remain available for recovery. A live toggle still changes the active session;
+its persistence error is reported instead of erasing unrelated preferences.
+Missing files and readable current-version files retain ordinary atomic saves.
+
 These are host presentation choices, not additional retail behavioral claims.
 Validate selected-size stability across logical canvas transitions, shortcut
 consumption and settings preservation, plus live menu/battle input and both
@@ -997,7 +1004,14 @@ the published offset to the camera.
   a half-authored pair leaves retail's holder null and draws nothing too. An
   entry published with no bank comes from the engine's own fixed effect-slot
   table, which is bound from `fx`. A missing effect therefore shows up as a
-  `Skipped` count and no pixels, never as an error `[06 R-WFX-01 §1]`.
+  `Skipped` count and no pixels `[06 R-WFX-01 §1]`. F11 client diagnostics
+  expose effect and strip counters for the latest recording pass, explicitly
+  including a joined speculative pass. Each recording resets the counters.
+  Bank failures retain their load error and remain negatively cached; missing
+  or empty entries retain their authored identity. The serial resolver keeps
+  at most 64 distinct failures per source installation, with a truncation flag;
+  repeated recordings neither append duplicates nor log from workers. The
+  snapshot copies this data and also exposes the shared projectile-bank error.
 * **`Backend.WarmUp` has no retail counterpart.** Ebitengine's audio context
   only becomes ready once the host device finishes an asynchronous open, which
   measured from tens of milliseconds to low seconds on a cold process. Without a

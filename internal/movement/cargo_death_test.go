@@ -17,7 +17,7 @@ func newCarrierWithCargo(t *testing.T) (*units.World, *System, *units.Unit, *uni
 	terrain := syntheticTerrainFlat()
 	system := NewSystem(terrain, Profile{FootPrintX: 1, FootPrintZ: 1}, NewOccupancyGrid())
 	w := newMovementFixtureWorld(8)
-	def := &content.UnitDef{UnitName: "cargofixture", FootprintX: 1, FootprintZ: 1, MaxDamage: 100, Limit: -1}
+	def := &content.UnitDef{UnitName: "cargofixture", BMCode: 1, FootprintX: 1, FootprintZ: 1, MaxDamage: 100, Limit: -1}
 	at := func(owner uint8, cx, cz int32) *units.Unit {
 		h, err := w.Create(def, owner, world.CellToWorld(cx), numeric.FixedFromInt(10), world.CellToWorld(cz))
 		if err != nil {

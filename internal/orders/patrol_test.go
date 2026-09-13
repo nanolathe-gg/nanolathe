@@ -338,7 +338,7 @@ func TestPatrolPhaseTwoArmIsTheStandingFireScan(t *testing.T) {
 			u.Flags = (u.Flags &^ (stanceFieldMask << stanceFireShift)) | (tc.fireField << stanceFireShift)
 
 			enemy := &units.Unit{
-				Handle: 2, Def: &content.UnitDef{BMCode: 1, MaxDamage: 100}, Alive: true,
+				Handle: 2, Owner: 1, Def: &content.UnitDef{BMCode: 1, MaxDamage: 100}, Alive: true,
 				X: numeric.Fixed(120 << 16), Z: numeric.Fixed(90 << 16), Health: 100, MaxHealth: 100,
 			}
 			q.binding.Lookup = func(h pool.Handle) *units.Unit {

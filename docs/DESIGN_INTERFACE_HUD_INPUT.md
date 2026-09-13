@@ -1231,6 +1231,15 @@ over defaults, with no schema version bump.
 
 ### 3.5 The pointer and latch state machine
 
+`BattleState.PlacementArmed` requires both MOBILEBUILD and a selected product.
+Changing to another latch clears placement state. The same gate controls the
+ghost, cursor and build dispatch. Page input projects pending commands for the
+same builder through `Session.PendingBuildPage`, so multiple keys before a
+tick preserve page order and cue only actual changes. Palette painting and
+activation share hidden/grey product and arrow decisions, and hit rectangles
+end at the authored last pixel. Feature commands read mapping memory at the
+projected pointer, independently of current feature visibility.
+
 One press/release pair is routed through exactly one path, and the path is
 chosen on the **press** edge. In order:
 
@@ -1265,16 +1274,22 @@ chosen on the **press** edge. In order:
    then either disarms or — under Shift — stays armed so the next click places
    another copy, dropping back to idle as soon as Shift is released. A rejected
    command is a failed commit, not an armed state `[07 §9]` `[07 R-P0-11 §4]`.
-5. **Otherwise the world drag.** A held left starts the rubber band and tracks
-   it; the release classifies by size. A rectangle smaller than three pixels on
-   both axes is a click: with a latch armed it dispatches that latch's code and
-   then returns to idle unless Shift keeps it; with the idle latch it selects
-   when the picked unit passes the shared eligibility predicate, issues the
-   contextual code 1 when a selection exists, and otherwise clears the selection
-   unless Shift is held. With `Interface Type 1`, the same idle left click only
-   selects an eligible unit or clears the selection; its contextual code 1 is
-   the right-down path in step 2. A larger rectangle is a drag selection, replacing or
-   toggling by the modifier `[07 §9]` `[07 R-CAM-01 §14]`.
+5. **Armed world press.** An armed latch enters the world-click handler on
+   left press; it does not wait for idle drag classification. The handler
+   dispatches the latch and returns to idle unless Shift keeps it
+   `[07 R-CAM-01 §14]`.
+6. **Otherwise the idle world drag.** Save the live scaled clock and both
+   ground-resolved whole-world endpoints on press. Held passes update the moving
+   endpoint; release classifies the stored endpoints without refreshing them.
+   A click requires each X/Z displacement strictly below 32 and the current live
+   clock strictly below the wrapped press-plus-25 deadline under signed 32-bit
+   comparison. Use the clock's wrapped multiply-before-divide arithmetic, not
+   event timestamps or simulation ticks. A successful click acts at the current
+   release position: select an eligible unit, issue contextual code 1 when a
+   selection exists, or clear selection unless Shift is held. Type 1's idle
+   left click only selects or clears; its contextual order uses right-down.
+   Failed classification performs box selection, replacing or toggling according
+   to the modifier `[07 R-CAM-01 §14]`.
 
 Two rules cut across the machine. A latch held by Shift retires on the live
 Shift-up whatever the order family `[07 R-P0-11 §4]`. Escape returns an armed
@@ -1435,13 +1450,22 @@ stored text before handling a heading prefix, applies the traced 1/4/2
 alignment precedence and inclusive row bounds, and performs heading shading
 as four successive table operations instead of selection brightening. Flagged
 headings keep their stored ampersand. Tall rows use the closed list wrapper
-and list-owned scroll limit. The unaligned authored case retains the previous
+and list-owned scroll limit. Admission caches the entry font metric before
+the gadget selects its FNT; the first row draws before the remaining-height
+test, and equality admits the next row. The unaligned authored case retains the previous
 host inset with `TODO(T25)` because retail leaves that pen scratch unset.
 Frontend windows and MSGBOX now establish one scoped child-surface clip.
 Images, scaled map previews, text, shades and original outline edges retain
 that clip in both executors; nested scopes restore their parent. Record-list
 payload and variable geometry remain an explicit code/research Unknown
 `[07 R-WGT-01 §4]`; no record layout is invented.
+
+ENDMSN delegates its populated mission list and scrollbar to these same
+frontend painters, preserving mark bytes, selection and scroll state. Initial
+selection uses the fill-time scroll limit. Its outcome title reuses the loaded
+`igvictory`/`igdefeat` frames at `(W/2, 28)` with ordinary authored offsets
+`[08 R-CAMP-01 §8]`. Selected Core briefings use the installed `mbriefcor`
+background key `[08 R-CAMP-01 §2]`.
 
 ### 3.9 Partial I10 and exclusions
 

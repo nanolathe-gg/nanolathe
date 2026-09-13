@@ -148,15 +148,15 @@ func (h *retailBattleHUD) drawResultOverlay(c *client.Client, b *battleSession, 
 		h.drawGUIWindow(c, h.resultWin, h.resultGAF, "")
 	}
 
-	// ENDMSN's outcome copies are authored with center-anchor offsets. Missing
+	// ENDMSN uses the in-game title bank at the frontend title anchor. Missing
 	// optional art remains a diagnostic from HUD loading and does not acquire a
-	// synthetic text substitute [07 §11][fmt gaf].
+	// synthetic text substitute [08 R-CAMP-01 §8][fmt gaf].
 	title := h.resultTitleFrame(view)
 	if title == nil {
 		return
 	}
-	w, height := c.Size()
-	c.UIBlitAnchor(title, w/2, height/2)
+	w, _ := c.Size()
+	c.UIBlitAnchor(title, w/2, 28)
 	h.drawResultStats(c, b, view)
 }
 
@@ -169,9 +169,9 @@ func (h *retailBattleHUD) resultTitleFrame(view frame.ResultView) *formats.GAFFr
 	}
 	switch strings.ToLower(view.Kind) {
 	case "victory":
-		return h.resultVictoryFrame
+		return h.victoryFrame
 	case "defeat":
-		return h.resultDefeatFrame
+		return h.defeatFrame
 	default:
 		return nil
 	}
@@ -221,7 +221,64 @@ func (b *battleSession) prepareResultPanel() {
 	if b.postBattle != nil {
 		_, route := b.postBattle.NextMission()
 		configureResultControls(h.resultPanel, route)
+		if route {
+			b.populateResultMissions()
+		}
 	}
+}
+
+// populateResultMissions binds mark glyph bytes to the authored mission list
+// once; later input passes preserve its chosen row [08 R-CAMP-01 §8].
+func (b *battleSession) populateResultMissions() {
+	if b == nil || b.hud == nil || b.hud.resultPanel == nil || b.postBattle == nil || b.sess == nil || b.sess.Mission == nil {
+		return
+	}
+	panel := b.hud.resultPanel
+	panel.SetStageAt(panel.Index("Difficulty"), b.postBattle.Summary().Difficulty)
+	list := panel.ListAt(panel.Index("Missions"))
+	if list != nil && list.Len() > 0 {
+		return
+	}
+	campaign, err := mission.DiscoverCampaign(b.fs, b.sess.Mission.CampaignPath)
+	if err != nil || campaign == nil {
+		return
+	}
+	items := make([]string, len(campaign.Missions))
+	selected, _ := b.postBattle.NextMission()
+	row := 0
+	for i, stub := range campaign.Missions {
+		mark := byte(0xfd)
+		if stub.Index >= 0 && stub.Index < len(b.sess.Progress.Thumbs) {
+			switch b.sess.Progress.Thumbs[stub.Index] {
+			case 'L':
+				mark = 0xff
+			case 'W':
+				mark = 0xfe
+			}
+		}
+		items[i] = string([]byte{mark, ' '}) + stub.Name
+		if stub.Index == selected {
+			row = i
+		}
+	}
+	metric := 0
+	if b.shell != nil {
+		metric = b.shell.retailTextHeight()
+	}
+	index := panel.Index("Missions")
+	panel.FillTextListAt(index, items, nil, metric)
+	// Screen-owned selection uses scroll-to and the fill's retained limit,
+	// including a zero limit when every row fits [07 R-WGT-01 §4].
+	if list := panel.ListAt(index); list != nil {
+		list.SetSelected(row)
+		rows := (int(panel.Window.PlacedRect(index).H) - 2) / (metric + 1)
+		top := list.Top()
+		if row < top || row >= top+rows {
+			top = row
+		}
+		panel.SetListTopAt(index, top, panel.ListMaxTopAt(index))
+	}
+	panel.SetFocus(index)
 }
 
 func configureResultPanel(fs vfs.FSOps, sess *session.Session, panel *ui.Panel) {

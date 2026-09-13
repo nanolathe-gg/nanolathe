@@ -359,8 +359,12 @@ type Client struct {
 	// load is memoised as a nil entry — retail treats that as a fatal fault
 	// with a modal message box and exit; a presentation client draws nothing
 	// instead and lets the rest of the frame compose [I6].
-	effectBanks map[string]*formats.GAF
-	blastSizes  map[*formats.GAFEntry]float32
+	effectBanks             map[string]*formats.GAF
+	artDiagnostics          []ArtDiagnostic
+	artDiagnosticsTruncated bool
+	effectStats             EffectDrawStats
+	stripStats              StripDrawStats
+	blastSizes              map[*formats.GAFEntry]float32
 
 	// flash holds the generated calculated-explosion tables [06 R-WFX-01 §2].
 	flash flashTables
@@ -873,6 +877,8 @@ func (c *Client) SetModelFS(fs *vfs.FS) {
 	c.projectileGAFErr = nil
 	c.projectileGAFLoaded = false
 	c.effectBanks = nil
+	c.artDiagnostics = nil
+	c.artDiagnosticsTruncated = false
 	c.blastSizes = nil
 	c.flash = flashTables{}
 	c.fogGAF = nil

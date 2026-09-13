@@ -8,6 +8,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/mission"
 	"github.com/nanolathe-gg/nanolathe/internal/save"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 )
@@ -248,6 +249,18 @@ func (g *gameShell) loadRetailSavePath(path string) error {
 		return fmt.Errorf("nanolathe: retail save load returned no battle candidate")
 	}
 	sess := loaded.Battle.Session
+	var campaign *campaignSelection
+	if sess.Mission != nil && sess.Mission.Type == mission.TypeCampaign {
+		side, known := sess.SideForOwner(int(sess.LocalOwner))
+		if !known {
+			return fmt.Errorf("nanolathe: restored campaign has no local player side")
+		}
+		selection, err := g.resolveCampaignSelection(sess.Mission.CampaignPath, sess.Mission.CampaignIndex, side, sess.Mission.Difficulty)
+		if err != nil {
+			return err
+		}
+		campaign = &selection
+	}
 	if g.audioOwner != nil {
 		sess.Audio = g.audioOwner
 	}
@@ -278,6 +291,10 @@ func (g *gameShell) loadRetailSavePath(path string) error {
 	g.applyDisplayMode(clPtr)
 	// The only mutation of the active battle/frontend/client state occurs here,
 	// after both authoritative and presentation candidates are complete.
+	if campaign != nil {
+		g.installCampaignSelection(*campaign)
+	}
+	g.importedRetailBattle = true
 	g.commitBattleCandidate(battle)
 	return nil
 }
@@ -310,6 +327,7 @@ func (g *gameShell) applyRestoredUnitLimit(image *save.BattleImage) {
 }
 
 func (g *gameShell) beginFreshBattleLoad(mapName string, back shellMode, request freshBattleRequest, after func(*session.Session)) {
+	g.importedRetailBattle = false
 	// A fresh loading transition stops ordinary frontend voices immediately.
 	// Save restoration defers the matching stop until its committed candidate.
 	g.stopOrdinaryAudio()

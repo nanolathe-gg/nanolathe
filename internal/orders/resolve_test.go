@@ -62,6 +62,7 @@ func mkUnit(handle pool.Handle, owner uint8, side string, health, max int32, ali
 	if def.CanAttack {
 		u.Flags |= units.ArmedStatus
 	}
+	setTestSeaLevel(u, 0) // explicit authored fixture map [04 R-ORD-02 §1]
 	return u
 }
 
@@ -205,8 +206,8 @@ func TestResolveFullTable(t *testing.T) {
 	}
 	posFeature := &ResolvePos{HasFeature: true, IsWreck: false}
 	id = Resolve(1, actorCanResurrect, nil, posFeature)
-	if got := DescriptorFor(id).Name; got != "Reclaim" {
-		t.Fatalf("code1 feature reclaim want Reclaim got %q", got)
+	if got := DescriptorFor(id).Name; got != "Resurrect" {
+		t.Fatalf("code1 reclaimable feature want Resurrect got %q", got)
 	}
 	actorMove := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
 		d.CanMove = true
@@ -582,8 +583,8 @@ func TestResolveFullTable(t *testing.T) {
 	}
 	posFeatureOnly := &ResolvePos{HasFeature: true, IsWreck: false}
 	id = Resolve(12, actorReclaim, nil, posFeatureOnly)
-	if got := DescriptorFor(id).Name; got != "Reclaim" {
-		t.Fatalf("code12 feature reclaim want Reclaim got %q", got)
+	if got := DescriptorFor(id).Name; got != "Resurrect" {
+		t.Fatalf("code12 reclaimable feature want Resurrect got %q", got)
 	}
 	actorReclaimVTOL := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.CanReclamate = true; d.CanFly = true }))
 	id = Resolve(12, actorReclaimVTOL, nil, posFeatureOnly)
@@ -1116,15 +1117,11 @@ func TestResolvePositionOnlyAttackUsesCanonicalCodeThreeArm(t *testing.T) {
 }
 
 // TestContextualDefaultVariantRows walks the `Interface Type = 0` variant's six
-// steps in order [04 R-ORD-02 §1] code 1. This is retail's default and the only
-// value this build runs (see interfaceType); the rows it locks are the ones the
+// steps in order [04 R-ORD-02 §1] code 1. This is retail's default;
+// the rows it locks are the ones the
 // `1` variant would answer differently, so a silent slip back to that variant
 // fails here.
 func TestContextualDefaultVariantRows(t *testing.T) {
-	if InterfaceType() != InterfaceTypeLeftClick {
-		t.Fatalf("interface type = %d, want the registry default %d [07 R-CAM-01 §5]",
-			InterfaceType(), InterfaceTypeLeftClick)
-	}
 	newActor := func(handle pool.Handle) *units.Unit {
 		a := mkUnit(handle, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
 			d.CanAttack = true

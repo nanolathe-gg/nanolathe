@@ -28,7 +28,7 @@ func (b *battleSession) updateCursor(cl *client.Client) {
 	b.updateFooterHover(mx, my)
 	hover := hud.CursorHover{
 		OverWorld:      region != battlePointerChrome,
-		Placing:        b.battleState().Input.BuildDef != "",
+		Placing:        b.battleState().PlacementArmed(),
 		PlacementValid: b.battleState().Input.BuildOK,
 	}
 	if hover.OverWorld && !hover.Placing {
@@ -91,7 +91,7 @@ func (b *battleSession) hoverFeature(sx, sy int32) *content.FeatureDef {
 	if b.cam == nil {
 		return nil
 	}
-	wx, _, wz := b.cursorWorld(sx, sy)
+	wx, wy, wz := b.cursorWorld(sx, sy)
 	cx, cz := world.WorldToCell(wx), world.WorldToCell(wz)
 	f, ok := b.currentSnapshot()
 	if !ok {
@@ -105,7 +105,7 @@ func (b *battleSession) hoverFeature(sx, sy int32) *content.FeatureDef {
 		if footZ <= 0 {
 			footZ = 1
 		}
-		if cx < v.CX || cx >= v.CX+footX || cz < v.CZ || cz >= v.CZ+footZ || !snapshotFeatureVisible(f, v, f.ViewingPlayer) {
+		if cx < v.CX || cx >= v.CX+footX || cz < v.CZ || cz >= v.CZ+footZ || !snapshotFeatureMappedAt(f, wx, wy, wz, f.ViewingPlayer) {
 			continue
 		}
 		return &content.FeatureDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: v.DefName}, FootprintX: int32(v.FootX), FootprintZ: int32(v.FootZ), Height: v.Height, Reclaimable: v.Reclaimable, Geothermal: v.Geothermal, Blocking: v.Blocking}

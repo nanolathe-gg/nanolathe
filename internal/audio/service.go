@@ -225,11 +225,16 @@ func (a *Service) DrainEvents(committedTick uint32, events []framepkg.EventView)
 	a.Queue.Drain(committedTick)
 	if events != nil && (!a.hasEventTick || committedTick != a.lastEventTick) {
 		for _, ev := range events {
-			if ev.Kind != framepkg.EventKindAudio || !ev.AudioPositional || ev.Sound == "" {
+			if ev.Kind != framepkg.EventKindAudio || ev.Sound == "" {
 				continue
 			}
 			if ev.AudioAudible {
-				a.playAdmittedPositional(ev.Sound, [3]numeric.Fixed{ev.X, ev.Y, ev.Z})
+				if ev.AudioPositional {
+					a.playAdmittedPositional(ev.Sound, [3]numeric.Fixed{ev.X, ev.Y, ev.Z})
+				} else {
+					// Trigger celebration is a published by-name cue [08 R-TRIG-01 §8].
+					a.PlayUICue(ev.Sound)
+				}
 			}
 		}
 		a.lastEventTick = committedTick

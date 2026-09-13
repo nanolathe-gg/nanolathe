@@ -77,6 +77,9 @@ func NewBattleController(b *battleSession, sources ...clock.MillisSource) *Battl
 	if source == nil {
 		source = newMonotonicMillisSource()
 	}
+	if b != nil {
+		b.millisSource = source
+	}
 	return &BattleController{battle: b, millis: source}
 }
 

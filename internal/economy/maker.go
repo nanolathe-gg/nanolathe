@@ -56,7 +56,7 @@ func (s *Service) TidalScalar() float32 {
 	return s.Terrain.Tidal
 }
 
-// addContribution applies the retail positive-production discount. The two
+// addContribution applies the retail signed-contribution discount. The two
 // difficulty factors are double constants; the contribution arrives at the
 // working precision of [R-ECO-01 §1] and the accumulator store is the ONLY
 // narrowing [R-ECO-01 §3][R-ECO-01 §11].
@@ -79,7 +79,7 @@ func addContribution(s *Service, p *Player, b *Bucket, contribution float64) {
 	if b == nil {
 		return
 	}
-	if p == nil || !p.Exists || p.ControllerState != 2 || contribution <= 0 {
+	if p == nil || !p.Exists || p.ControllerState != 2 {
 		b.Production = float32(float64(b.Production) + contribution)
 		return
 	}

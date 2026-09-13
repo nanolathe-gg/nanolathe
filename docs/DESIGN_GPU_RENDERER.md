@@ -961,6 +961,13 @@ cadence against classic's 15 ms of CPU and 33 ms cadence.
 
 ### 11.2 Design
 
+Fog admission examines scaled geometry without allocating rasters. The executor
+retains one immutable variant per source frame and magnified scale, sharing
+child identities across parents and across atlas/ordered paths. Source reset
+retires these variants with scene atlas entries. Warmed fog compilation and
+repeated device replay fixtures require stable allocations, source entries,
+pages and pixels.
+
 The recorded `drawlist.List` is unchanged and remains the contract with the
 recorder and the classic sink. The modern executor still implements
 `drawlist.Sink`, but its Sink methods **compile** the command into a small number

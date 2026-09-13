@@ -29,13 +29,13 @@ func (s resultOverlayStage) DrawUI(c *client.Client, presented client.UIFrame) {
 
 func TestResultTitleFrameUsesExplicitAuthoredOutcome(t *testing.T) {
 	h := &retailBattleHUD{
-		resultVictoryFrame: &formats.GAFFrame{},
-		resultDefeatFrame:  &formats.GAFFrame{},
+		victoryFrame: &formats.GAFFrame{},
+		defeatFrame:  &formats.GAFFrame{},
 	}
-	if got := h.resultTitleFrame(frame.ResultView{Kind: "victory"}); got != h.resultVictoryFrame {
+	if got := h.resultTitleFrame(frame.ResultView{Kind: "victory"}); got != h.victoryFrame {
 		t.Fatal("victory did not select authored victory title")
 	}
-	if got := h.resultTitleFrame(frame.ResultView{Kind: "defeat"}); got != h.resultDefeatFrame {
+	if got := h.resultTitleFrame(frame.ResultView{Kind: "defeat"}); got != h.defeatFrame {
 		t.Fatal("defeat did not select authored defeat title")
 	}
 	if got := h.resultTitleFrame(frame.ResultView{Draw: true, Kind: "victory"}); got != nil {
@@ -121,23 +121,24 @@ func TestResultOverlayHonorsCanonicalDismissalState(t *testing.T) {
 	if err := buf.Publish(1); err != nil {
 		t.Fatal(err)
 	}
-	h := &retailBattleHUD{resultVictoryFrame: &formats.GAFFrame{
-		Width: 1, Height: 1, Pixels: []byte{7}, Transparent: []bool{false},
+	h := &retailBattleHUD{victoryFrame: &formats.GAFFrame{
+		Width: 1, Height: 1, XOffset: 2, YOffset: 3, Pixels: []byte{7}, Transparent: []bool{false},
 	}}
 	b := &battleSession{}
-	c, err := client.New(client.Options{Buffer: buf, Width: 8, Height: 8})
+	c, err := client.New(client.Options{Buffer: buf, Width: 16, Height: 40})
 	if err != nil {
 		t.Fatal(err)
 	}
 	c.SetUIStage(resultOverlayStage{hud: h, battle: b})
 	img := c.ComposeFrame()
-	if got := img.RGBAAt(4, 4); got != (color.RGBA{R: 7, G: 7, B: 7, A: 255}) {
+	// Frontend anchor (width/2,28), less both authored offsets [08 R-CAMP-01 §8].
+	if got := img.RGBAAt(6, 25); got != (color.RGBA{R: 7, G: 7, B: 7, A: 255}) {
 		t.Fatalf("visible terminal result pixel = %#v, want authored title pixel", got)
 	}
 
 	b.battleState().Input.ResultDismissed = true
 	img = c.ComposeFrame()
-	if got := img.RGBAAt(4, 4); got != (color.RGBA{A: 255}) {
+	if got := img.RGBAAt(6, 25); got != (color.RGBA{A: 255}) {
 		t.Fatalf("dismissed terminal result pixel = %#v, stale ENDMSN/title art still rendered", got)
 	}
 }

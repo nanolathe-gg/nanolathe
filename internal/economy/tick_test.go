@@ -609,3 +609,19 @@ func TestTickWithNilWorld(t *testing.T) {
 		t.Fatalf("nil world settlement must consume/archive pending ledger state: mirror=%+v pass=(%v,%v)", svc.Players[0].Mirror[Metal], svc.Players[0].PassProduced[Metal], svc.Players[0].PassConsumed[Metal])
 	}
 }
+
+// Signed manual Give reaches the recipient's ordinary discount ladder
+// [05 R-SHARE-01 §2], including a negative amount.
+func TestNegativeGiveUsesRecipientDifficulty(t *testing.T) {
+	for selector, want := range []float32{-5, -7, -10} {
+		var svc Service
+		activePlayer(&svc.Players[0])
+		activePlayer(&svc.Players[1])
+		svc.Players[1].ControllerState = 2
+		svc.SetEconomySelector(selector)
+		svc.Transfer(0, 1, Metal, -10)
+		if svc.Players[1].Mirror[Metal].Production != want || svc.Players[0].Stock[Metal] != 10 {
+			t.Fatalf("selector %d: recipient=%v source=%v", selector, svc.Players[1].Mirror[Metal].Production, svc.Players[0].Stock[Metal])
+		}
+	}
+}

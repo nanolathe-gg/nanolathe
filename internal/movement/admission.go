@@ -106,17 +106,9 @@ func (s *System) CanTransport(carrierHandle, candidateHandle pool.Handle, w *uni
 	if candidate.Def.BMCode != 1 || !s.HasMover(candidateHandle) {
 		return AdmissionResult{Allowed: false, Reason: "no mover"}
 	}
-	// 6) candidate committed mover mode is active locomotion (mode 2) [04 §10.2]
-	if coll := handleRow(s.Collisions, candidateHandle); coll != nil && coll.Mode == 2 {
-		return AdmissionResult{Allowed: false, Reason: "moving"}
-	}
-	if candidate.Move.Mode == 2 {
-		return AdmissionResult{Allowed: false, Reason: "moving"}
-	}
-	if fl := handleRow(s.Flights, candidateHandle); fl != nil && fl.Mode&0x3 == 2 {
-		// Flight active locomotion also considered moving? Ground admission treats any active mover mode 2 as moving [04 §10.2].
-		// For air cargo, flight active would also be moving? But spec says mode 2 moving is rejected for load.
-		// If flight is active (mode 2), treat as moving.
+	// 6) Admission reads the committed unit mirror, which can differ from a
+	// pending takeoff, touchdown or detach request [04 R-AIR-01 §12].
+	if candidate.Move.ModeMirror&3 == 2 {
 		return AdmissionResult{Allowed: false, Reason: "moving"}
 	}
 	// 7) ground carrier (canfly clear) with candidate MinWaterDepth >= 0 [04 §10.2]

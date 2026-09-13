@@ -264,8 +264,11 @@ func (c *Client) EffectBank(name string) *formats.GAF {
 	}
 	var bank *formats.GAF
 	if c.modelFS != nil {
-		if loaded, err := formats.LoadGAFFile(c.modelFS, "anims/"+key+".gaf"); err == nil {
+		path := "anims/" + key + ".gaf"
+		if loaded, err := formats.LoadGAFFile(c.modelFS, path); err == nil {
 			bank = loaded
+		} else {
+			c.recordArtDiagnostic(path, "", err.Error())
 		}
 	}
 	c.effectBanks[key] = bank
@@ -315,6 +318,11 @@ func (c *Client) effectEntry(bankName, entryName string) (*formats.GAFEntry, boo
 	}
 	entry, ok := bank.Find(entryName)
 	if !ok || entry == nil || len(entry.Frames) == 0 {
+		key := strings.ToLower(strings.TrimSpace(bankName))
+		if key == "" {
+			key = defaultEffectBank
+		}
+		c.recordArtDiagnostic("anims/"+key+".gaf", strings.ToLower(entryName), "missing or empty animation entry")
 		return nil, false
 	}
 	return entry, true

@@ -266,3 +266,28 @@ func TestServiceVoiceLinesDoNotConsumeAliasRegistry(t *testing.T) {
 		t.Fatalf("voice playback registered %d alias identities, want none", got-before)
 	}
 }
+
+func TestDrainPublishedVictoryCueWithPositionalEvents(t *testing.T) {
+	s := NewService(testAudioFS(t, "victory"))
+	s.Registry.RegisterPath("Victory Condition", "sounds/victory.wav")
+	old := GlobalOutput()
+	spy := &outputSpy{}
+	SetGlobalOutput(spy)
+	t.Cleanup(func() { SetGlobalOutput(old) })
+	// The first event has the real trigger adapter's published shape
+	// [08 R-TRIG-01 §8]. Silent events remain silent in both routes.
+	events := []frame.EventView{
+		{Kind: frame.EventKindAudio, AudioAudible: true, Sound: "Victory Condition"},
+		{Kind: frame.EventKindAudio, AudioPositional: true, AudioAudible: true, Sound: "victory"},
+		{Kind: frame.EventKindAudio, Sound: "Victory Condition"},
+		{Kind: frame.EventKindAudio, AudioPositional: true, Sound: "victory"},
+	}
+	s.DrainEvents(60, events)
+	if len(spy.plays) != 2 || spy.plays[0].pan != 0 || spy.plays[0].volume != VolumeFromCentibel(VolInView) {
+		t.Fatalf("published cues = %+v, want centered victory then positional sound", spy.plays)
+	}
+	s.DrainEvents(60, events)
+	if len(spy.plays) != 2 {
+		t.Fatal("retained victory cue replayed on repeated presentation")
+	}
+}

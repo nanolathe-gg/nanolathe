@@ -399,10 +399,18 @@ func TestFeaturePickingOverlap(t *testing.T) {
 	// The production picker consumes the committed frame, so publish the
 	// feature and overlapping unit before checking priority [I6].
 	applyPendingBattleCommands(b)
-	// Pick at feature cell – unit should win
+	// Both picked words survive; code 12 gives the feature precedence
+	// while ordinary targeting still receives the overlapping unit.
 	h, _, pos := b.pickTarget(sx, sy)
 	if h == 0 {
 		t.Fatalf("unit>feature: want unit handle, got 0 (feature only) pos %+v", pos)
+	}
+	if !pos.HasFeature {
+		t.Fatal("overlapping unit hid mapped reclaimable feature")
+	}
+	actor := &units.Unit{Def: &content.UnitDef{CanReclamate: true}, Alive: true}
+	if id := orders.Resolve(12, actor, u, pos); id != orders.Lookup("Reclaim") {
+		t.Fatalf("overlap code 12 = %d, want feature reclaim", id)
 	}
 	// Move unit away, feature should be found via HasFeature
 	u.X = numeric.Fixed(int64(2*16) << 16)

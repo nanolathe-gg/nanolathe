@@ -85,8 +85,8 @@ func (b *battleSession) ensurePostBattleController() {
 		}
 		cfg.Progress = &b.sess.Progress
 		cfg.ProgressCommitted = true
+		cfg.LocalSide, _ = b.sess.SideForOwner(int(b.sess.LocalOwner))
 		if b.shell != nil {
-			cfg.LocalSide = b.shell.missionSide
 			cfg.DifficultyOut = &b.shell.missionDifficultyValue
 		}
 		if b.fs != nil && cfg.CampaignPath != "" && cfg.MissionIndex >= 0 {
@@ -138,7 +138,7 @@ func (b *battleSession) stepPostBattle(delta float64, in *input.State, cl *clien
 	if b == nil || b.postBattle == nil {
 		return
 	}
-	if b.shell != nil && b.shell.saveLoadPanelActive() {
+	if b.shell != nil && (b.shell.saveLoadPanelActive() || (b.shell.frontend != nil && b.shell.frontend.Panels.Modal() != nil)) {
 		// The save/load dialog owns input while it is up [07 R-FE-01 §8].
 		b.shell.menuInput(cl)
 		return
@@ -174,6 +174,18 @@ func (b *battleSession) stepPostBattle(delta float64, in *input.State, cl *clien
 		return
 	}
 	switch gui.CallbackName(name) {
+	case "Difficulty":
+		if b.postBattle.Handle(session.PostBattleControlDifficulty, uint32(now)) {
+			if b.shell != nil {
+				b.shell.setup.Difficulty = b.postBattle.Summary().Difficulty
+				b.shell.playMenuCue("SKirmish")
+			}
+			b.prepareResultPanel()
+		}
+	case "Start", "Missions":
+		if b.prepareResultMissionSelection() {
+			b.doResultAction(ui.ResultActionContinue, cl)
+		}
 	case "SaveGame":
 		// ENDMSN's SaveGame opens the save dialog, and a save taken there is
 		// the between-missions bank that carries campaign progress across
@@ -190,6 +202,33 @@ func (b *battleSession) stepPostBattle(delta float64, in *input.State, cl *clien
 			b.doResultAction(action, cl)
 		}
 	}
+}
+
+// prepareResultMissionSelection validates the selected authored mission before
+// the controller marks Start routed. A failed load leaves ENDMSN usable
+// [08 R-CAMP-01 §8].
+func (b *battleSession) prepareResultMissionSelection() bool {
+	if b == nil || b.shell == nil || b.sess == nil || b.sess.Mission == nil || b.hud == nil || b.hud.resultPanel == nil {
+		return false
+	}
+	list := b.hud.resultPanel.ListAt(b.hud.resultPanel.Index("Missions"))
+	campaign, err := mission.DiscoverCampaign(b.fs, b.sess.Mission.CampaignPath)
+	if err != nil || campaign == nil || list == nil || list.Selected() < 0 || list.Selected() >= len(campaign.Missions) {
+		return false
+	}
+	index := campaign.Missions[list.Selected()].Index
+	if _, err := mission.LoadCampaignWithSink(b.fs, campaign.Path, index, b.postBattle.Summary().Difficulty, 0, nil); err != nil {
+		reportRetailMessageError(b.shell.showRetailMessage(err.Error()))
+		return false
+	}
+	if b.shell.loadBriefingPanel(BriefingPlanet{}) == nil {
+		err := b.shell.briefingUnavailableError()
+		if messageErr := b.shell.showRetailMessage(err.Error()); messageErr != nil {
+			reportRetailMessageError(err)
+		}
+		return false
+	}
+	return b.postBattle.SelectMission(index)
 }
 
 func (b *battleSession) consumePostBattleEffects(now uint32, cl *client.Client) {
@@ -331,11 +370,16 @@ func (b *battleSession) routePostBattleStart(cl *client.Client) {
 	shell := b.shell
 	shell.campaignProgress = b.sess.Progress
 	shell.campaignProgressSet = true
-	uiIndex, ok := campaignMissionUIIndex(shell.campaignOptions, shell.campaignIdx, index)
-	if !ok {
+	side, known := b.sess.SideForOwner(int(b.sess.LocalOwner))
+	if !known {
 		return
 	}
-	shell.missionIdx = uiIndex
+	selection, err := shell.resolveCampaignSelection(b.sess.Mission.CampaignPath, index, side, shell.missionDifficulty())
+	if err != nil {
+		reportRetailMessageError(shell.showRetailMessage(err.Error()))
+		return
+	}
+	shell.installCampaignSelection(selection)
 	shell.teardownBattle(cl)
 	// `ENDMSN`'s `Start`/`Missions` leaves host mode 7 for the shell
 	// controller, whose next pass opens `MSNBRIEF` under host mode 2

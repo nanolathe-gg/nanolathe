@@ -803,17 +803,11 @@ func visibilityTarget(cand *units.Unit, status uint32) visibility.Target {
 		return visibility.Target{}
 	}
 	min, max := cand.Def.BoundingExtents()
-	return visibility.Target{
-		Owner:   visibility.PlayerID(cand.Owner),
-		X:       cand.X.Add(numeric.Fixed(min[0])),
-		Y:       cand.Y.Add(numeric.Fixed(max[1])),
-		Z:       cand.Z.Add(numeric.Fixed(min[2])),
-		XExtent: numeric.Fixed(max[0] - min[0]),
-		YExtent: numeric.Fixed(max[1] - min[1]),
-		ZExtent: numeric.Fixed(max[2] - min[2]),
-		Hidden:  isCloakedUnit(cand),
-		Status:  status,
-	}
+	return visibility.TargetFromBounds(visibility.Target{
+		Owner: visibility.PlayerID(cand.Owner),
+		X:     cand.X, Y: cand.Y, Z: cand.Z,
+		Hidden: isCloakedUnit(cand), Status: status,
+	}, min, max)
 }
 
 func (s *Service) acquireTargetForSlot(u *units.Unit, slot *units.Slot, idx int, w *units.World, vis *visibility.Service, terrain *world.Terrain, simRNG *rng.Simulation, econ *economy.Service, catalogs ...*content.Catalog) (pool.Handle, bool) {

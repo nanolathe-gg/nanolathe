@@ -7633,8 +7633,9 @@ precise presentation sequencing of the overlay transitions inside the
 front-end router.
 
 The results surface is the authored `ENDMSN.GUI`/`endmsn.gaf` family, not a
-message box. Its outcome
-copy is selected from the authored `victory` or `defeat` frame and its
+message box. **Established:** its outcome title is frame 0 of `igvictory`
+or `igdefeat` from `anims/igtitles.gaf`; the similarly named endmsn-bank
+copies are not this composer’s title source. Its
 available route is the authored `Start` control when campaign progression has
 a next mission, otherwise `MainMenu` [07 §11] [08 "Progression"].
 
@@ -7869,9 +7870,10 @@ plus one on a win, the same index on a loss**, offered as the pre-selected row
 — nothing in the record advances by itself. The `Difficulty` label is
 refreshed from the difficulty word.
 
-The victory/defeat glyph: frame 0 of the front-end *victory* sequence when
-won and the local slot is not a watcher, else of the *defeat* sequence,
-blitted at (width/2, 28). When the session was launched from an external
+**Established:** the victory/defeat glyph uses frame 0 of `igvictory` from
+`anims/igtitles.gaf` when won and the local slot is not a watcher, otherwise
+frame 0 of `igdefeat` from that bank. The draw anchor is `(width/2, 28)`;
+the ordinary frame blitter subtracts the frame’s authored X/Y offsets. When the session was launched from an external
 lobby (multiplayer, out of scope) the `MainMenu` control is relabelled `OK`.
 
 **Control set.** With `route`: `Start`, `LoadGame`, `SaveGame`, `KNOB`,

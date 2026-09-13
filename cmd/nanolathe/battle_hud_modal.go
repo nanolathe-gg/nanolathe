@@ -159,6 +159,20 @@ func (h *retailBattleHUD) drawGUIWindowState(c *client.Client, window *gui.Windo
 			continue
 		}
 		r := h.modalGadgetRect(window, i, page)
+		// ENDMSN owns the same text-list records as the frontend. Its generic
+		// modal text path has no list rows or scroll thumb; use the shared
+		// painters with this panel's authored geometry and retained state
+		// [07 R-WGT-01 §4][07 R-WGT-01 §5][08 R-CAMP-01 §8].
+		if window == h.resultWin && panel != nil && h.shell != nil {
+			switch gad.Kind {
+			case gui.KindListBox:
+				h.shell.drawRetailList(c, panel, i, gad, r)
+				continue
+			case gui.KindScrollBar:
+				h.shell.drawRetailScrollbar(c, panel, i, gad, r)
+				continue
+			}
+		}
 		down, stage := int(gad.Status), 0
 		if panel != nil {
 			down = panel.DownAt(i)

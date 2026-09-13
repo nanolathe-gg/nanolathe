@@ -537,6 +537,13 @@ Removed units do not republish. `LOSType` and `LOS` preserve word-grid history,
 while `Mapping` and `NowISee` refill it from the new mapping bit before
 publication `[03 R-VIS-01 §1]` `[07 R-CAM-01 §6]`.
 
+`TargetFromBounds` forms the common unit hull for session and combat queries.
+`Target.IsVisible` owns the ordered gate for both live and committed readers.
+Publication copies `HullOffsetX/Y/Z` separately from draw coordinates, alongside
+the full spans; presentation therefore does not reconstruct asymmetric bounds
+from footprint halves. The committed radar channel also carries the completed
+subtick blink phase, including catch-up publication.
+
 **C8** The predicate evaluates in this order `[03 §3.2]`:
 1. owner identity bypass — the queried player record equals the unit's owner ⇒
    visible, ahead of the cloak test, so a player always sees its own cloaked

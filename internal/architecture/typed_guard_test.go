@@ -568,6 +568,21 @@ type float64Allowance struct {
 // named struct declarations. The key retains the declaration and authored type syntax,
 // so grouped fields and named or aliased float types cannot hide new state.
 var float64FieldAllowances = map[string]string{
+	// Audited model rotation coefficients: cached draw/admission transform trig,
+	// never new simulation state; geometry narrows after each rotation [I2].
+	"internal/model/model.go type xformNode.cx float64": "I2 model piece rotation trig cache [03 §2.4]",
+	"internal/model/model.go type xformNode.sx float64": "I2 model piece rotation trig cache [03 §2.4]",
+	"internal/model/model.go type xformNode.cy float64": "I2 model piece rotation trig cache [03 §2.4]",
+	"internal/model/model.go type xformNode.sy float64": "I2 model piece rotation trig cache [03 §2.4]",
+	"internal/model/model.go type xformNode.cz float64": "I2 model piece rotation trig cache [03 §2.4]",
+	"internal/model/model.go type xformNode.sz float64": "I2 model piece rotation trig cache [03 §2.4]",
+	"internal/model/model.go type trigNode.cx float64":  "I2 model piece rotation trig cache [03 §2.4]",
+	"internal/model/model.go type trigNode.sx float64":  "I2 model piece rotation trig cache [03 §2.4]",
+	"internal/model/model.go type trigNode.cy float64":  "I2 model piece rotation trig cache [03 §2.4]",
+	"internal/model/model.go type trigNode.sy float64":  "I2 model piece rotation trig cache [03 §2.4]",
+	"internal/model/model.go type trigNode.cz float64":  "I2 model piece rotation trig cache [03 §2.4]",
+	"internal/model/model.go type trigNode.sz float64":  "I2 model piece rotation trig cache [03 §2.4]",
+
 	"internal/economy/ledger.go type Player.Waste [2]float64":                        "I2 cumulative waste counters [05 \"Stocks, counters, and waste\"]",
 	"internal/economy/ledger.go type Player.TotalProduced [2]float64":                "I2 cumulative totals [05 \"Stocks, counters, and waste\"]",
 	"internal/economy/ledger.go type Player.TotalConsumed [2]float64":                "I2 cumulative totals [05 \"Stocks, counters, and waste\"]",
@@ -591,6 +606,9 @@ var float64FieldAllowances = map[string]string{
 // names the precise retail operation that needs binary64; all other float64
 // occurrences still use the shrink-only per-file baseline.
 var float64ScopeAllowances = map[string]float64Allowance{
+	"internal/model/model.go func ComposeInto": {3, "I2 per-axis model rotation trigonometry [03 §2.4]"},
+	"internal/model/model.go func applyChain":  {6, "I2 model vertex working precision; round after each axis then narrow geometry [03 §2.4]"},
+
 	"internal/combat/meteor.go func MeteorDelay":               {2, "I2 meteor source float32, working quotient and signed64/low32 conversion [06 §6.5][01 R-DET-01 §1]"},
 	"internal/combat/meteor.go func MeteorDurationTicks":       {2, "I2 meteor source float32, working product and signed64/low32 conversion [06 §6.5][01 R-DET-01 §1]"},
 	"internal/combat/meteor.go func MeteorIntervalTicks":       {2, "I2 meteor source float32, working product and signed64/low32 conversion [06 §6.5][01 R-DET-01 §1]"},

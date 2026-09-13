@@ -127,12 +127,12 @@ type UnitView struct {
 	// Activated is the committed on/off state used by UI command dispatch.
 	// Presentation must not rehydrate a selected unit from the live pool [I6].
 	Activated bool
-	// Cloaked and Decloaking are step 2 of the visibility gate [03 §3.2],
+	// Cloaked supplies step 2 of the visibility gate [03 §3.2],
 	// published so presentation can evaluate it without reconstructing cloak
 	// state from the instance flag word.  Cloaked is the INSTANCE cloak bit
 	// [R-VIS-01 §4]; Decloaking is runtime status bit 12, the decloak timer of
-	// [03 §3.4].  A cloaked unit is hidden from a non-owner unless the timer is
-	// running.
+	// [03 §3.4]. A cloaked unit is hidden from a non-owner regardless of the
+	// timer [06 §3.1].
 	//
 	// Definition `stealth` is deliberately NOT folded in: it is the contact
 	// callback's third reject, so it suppresses radar and sonar detection but
@@ -189,20 +189,17 @@ type UnitView struct {
 	ArchivedEnergyMake float32
 	ArchivedMetalUse   float32
 	ArchivedEnergyUse  float32
-	// HullXExtent, HullYExtent and HullZExtent are the compiled definition's
-	// three extent words in 16.16 world units — the sample offsets of the
-	// gameplay visibility gate's four-point hull [03 §3.2] step 5.  They are
-	// three separate definition words: the height decrement is neither the Z
-	// extent nor half the unit's height.  Their writers are traced in
-	// [07 R-REV-01 §7] — the unit-record compiler writes the horizontal pair
-	// from the authored footprint keys and the catalog loader rewrites the
-	// vertical one as the model's maximum Y above its origin, floored at
-	// zero, once the 3DO is loaded. HullYExtent is ModelTopFixed: it also
-	// supplies the top in Y + modelTop for surface exposure [04 R-UNIT-06 §3].
-	//
-	// They are published because presentation may not read a live definition
-	// [I6], and because the gate is not reproducible from FootX/FootZ alone:
-	// the vertical word comes from the model, not from the FBI record.
+	// HullOffsetX/Y/Z locate the first visibility probe relative to draw X/Y/Z:
+	// minimum X, maximum Y, minimum Z of the definition bounds [06 §3.1].
+	// Publish these explicitly: half of a span cannot recover asymmetric bounds.
+	HullOffsetX numeric.Fixed
+	HullOffsetY numeric.Fixed
+	HullOffsetZ numeric.Fixed
+	// HullXExtent/YExtent/ZExtent are the full signed definition bounding spans
+	// consumed by the cumulative visibility walk [06 §3.1][03 §3.2]. The current
+	// definition loader fixes minimum Y at zero, so HullYExtent also supplies
+	// the model top for surface exposure [04 R-UNIT-06 §3].
+	// These copies keep presentation independent of live definitions [I6].
 	HullXExtent numeric.Fixed
 	HullYExtent numeric.Fixed
 	HullZExtent numeric.Fixed
@@ -659,7 +656,7 @@ type VisibilityView struct {
 	MappingSource uint64
 	// SeaLevel is the map header's sea-level byte scaled to 16.16 world units,
 	// which is the value the gameplay visibility gate's step 3 compares a
-	// unit's base height against — the comparison is against that scaled byte
+	// unit's first hull probe height against — the comparison uses that scaled byte
 	// and never against zero [03 §3.2][03 §2.2].  It rides the visibility
 	// channel because it is only ever read beside the masks; presentation must
 	// not reach into the mutable terrain for it [I6].

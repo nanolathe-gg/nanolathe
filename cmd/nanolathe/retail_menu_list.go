@@ -37,20 +37,20 @@ func (g *gameShell) drawRetailList(c *client.Client, p *ui.Panel, index int, gad
 	if !ok || len(items) == 0 || !g.hasRetailTextFont() {
 		return
 	}
-	// The list painter selects the FNT the gadget's `fontnumber` picks from
-	// the window's kind-7 records (the common font when none matches) and
-	// then draws every row through the GAF pen, so the selected FNT is only
-	// reached on the pen's null-slot fallback [03 R-FONT-01 §5][03 R-FONT-01 §6].
-	rowFont := g.windowGadgetFont(p, gad)
-	measure, metric := g.retailTextMetrics(rowFont)
+	// Admission caches the current metric before the gadget selects an FNT.
+	// The later text/wrap metric may differ in an FNT-only context; selecting
+	// an FNT never replaces an installed GAF font [07 R-WGT-01 §4].
+	metric := g.retailTextHeight()
 	rowHeight := int(gad.ItemHeight)
 	if rowHeight == 0 {
 		rowHeight = metric + 1
 	}
-	// Painting reserves a full font metric below each admitted row. Its
-	// boundary differs from click/scroll geometry. Fill has already normalized
-	// the stored row height [07 R-WGT-01 §4].
-	for row := 0; int(r.H)-(row+1)*rowHeight >= metric; row++ {
+	rowFont := g.windowGadgetFont(p, gad)
+	measure, textMetric := g.retailTextMetrics(rowFont)
+	// The first row is unconditional. Each later row requires one font metric
+	// in the height left after prior rows; fill owns the separate scrolling
+	// bound [07 R-WGT-01 §4].
+	for row := 0; row == 0 || int(r.H)-row*rowHeight >= metric; row++ {
 		idx := top + row
 		if idx >= len(items) {
 			break
@@ -66,15 +66,15 @@ func (g *gameShell) drawRetailList(c *client.Client, p *ui.Panel, index int, gad
 			text = text[2:]
 		}
 		color := g.guiColor(byte(gad.ColorF & 0xff))
-		if rowHeight > metric+6 {
+		if rowHeight > textMetric+6 {
 			remaining := int(r.H) - 1
 			for line, run := range retailListWrapLines(text, measure, width) {
 				if remaining < 1 {
 					break
 				}
-				lineY := y + line*(metric+2)
+				lineY := y + line*(textMetric+2)
 				g.drawRetailStringSelected(c, run, x, lineY, width, color, 0, rowFont)
-				remaining -= metric + 2
+				remaining -= textMetric + 2
 			}
 		} else {
 			g.drawRetailStringSelected(c, text, x, y, width, color, 0, rowFont)

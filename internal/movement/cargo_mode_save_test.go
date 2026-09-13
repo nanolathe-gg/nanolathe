@@ -14,6 +14,7 @@ import (
 func TestReleasedCargoSaveKeepsPendingModeCommit(t *testing.T) {
 	s, w, carrier, cargo, _, _ := transportFixture(t)
 	s.SetMoverMode(carrier, 2)
+	modeCommitVisit(s, carrier, 0)
 	if !AttachCargo(w, carrier.Handle, cargo.Handle, 0) {
 		t.Fatal("attach")
 	}
@@ -61,6 +62,7 @@ func TestReleasedCargoSaveKeepsPendingModeCommit(t *testing.T) {
 func TestAttachedCargoSaveKeepsPendingModeCommit(t *testing.T) {
 	s, w, carrier, cargo, _, _ := transportFixture(t)
 	s.SetMoverMode(carrier, 2)
+	modeCommitVisit(s, carrier, 0)
 	s.BeginTick(1)
 	s.StepUnit(cargo.Handle, 1)
 	carrier.X, carrier.Z = cargo.X, cargo.Z

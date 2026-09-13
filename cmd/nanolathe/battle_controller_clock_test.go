@@ -69,9 +69,13 @@ func TestBattleReplayIgnoresHostProcessUptime(t *testing.T) {
 	c := newReplayController(b)
 	sx, sy := screenPos(b.cam, commander)
 	frame := BattleInputFrame{MouseX: sx, MouseY: sy, Buttons: BattleMouseButtons{Left: true}}
+	frame.PressedButtons[input.MouseButtonLeft] = true
 	c.Step(frame, nil)
+	frame.PressedButtons[input.MouseButtonLeft] = false
 	c.Step(frame, nil)
+	frame.PressedButtons[input.MouseButtonLeft] = false
 	frame.Buttons.Left = false
+	frame.ReleasedButtons[input.MouseButtonLeft] = true
 	c.Step(frame, nil)
 
 	if got := b.sess.Clock.ScaledAnchor; got != 0 {

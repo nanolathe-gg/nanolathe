@@ -178,6 +178,7 @@ type gameShell struct {
 	// substate distinction needs it.
 	missionAny             bool
 	missionSide            int
+	importedRetailBattle   bool
 	missionDifficultyValue int
 	// briefing owns the explicit campaign presentation state between mission
 	// selection and the shared battle loading request [08 R-CAMP-01 §2].
@@ -429,10 +430,9 @@ func loadMenuAssets(cs *contentSet) *menuAssets {
 	a.font = f
 
 	// These windows and their bitmap backgrounds are the implemented
-	// single-player frontend. The bitmap path is established fatal; the GUI
-	// opener's caller-level outcome for a missing or malformed window remains
-	// unknown, so loadRetailPanelStrict records that panel as explicitly
-	// unavailable instead of treating it as a valid empty layout [07 §5
+	// single-player frontend. The bitmap path is fatal; the GUI opener has no
+	// recovery branch. Nanolathe reports a failed initial screen at startup and
+	// retains unavailable children for refusal at their open boundary [07 §5
 	// "Frontend asset failure boundaries"].
 	panels := []struct {
 		mode     shellMode
@@ -450,11 +450,10 @@ func loadMenuAssets(cs *contentSet) *menuAssets {
 	for _, spec := range panels {
 		panel, loadErr := loadRetailPanelStrict(cs, spec.guiName, spec.pcxName, spec.gafName, spec.expected)
 		if loadErr != nil {
-			// The common GUI opener does not establish the process-level outcome
-			// for a missing/malformed GUI. Keep that panel explicitly unavailable;
-			// never retain a partially loaded panel or synthesize a replacement
-			// window [07 §5 "Frontend asset failure boundaries"].
-			if panel != nil && panel.unavailable != nil {
+			// MAINMENU is needed before any usable parent exists. A missing child
+			// can be refused when selected, retaining that parent [07 §5
+			// "Frontend asset failure boundaries"].
+			if spec.mode != modeMenuMain && panel != nil && panel.unavailable != nil {
 				a.panel[spec.mode] = panel
 				continue
 			}
@@ -575,6 +574,26 @@ func retailFrontendAssetError(cs *contentSet, what, logical, expected string, ca
 func (g *gameShell) openMenu(mode shellMode) {
 	if g == nil {
 		return
+	}
+	// Refuse an unavailable child before changing the parent or its gesture
+	// state. MSGBOX may also be absent, so preserve the original diagnostic
+	// through the host error channel [07 §5 "Frontend asset failure boundaries"].
+	if g.assets != nil && mode <= modeMenuSkirmish {
+		p := g.assets.panel[mode]
+		if p == nil || p.window == nil {
+			err := fmt.Errorf("nanolathe: frontend screen unavailable: logical path screen/%d, providers searched [vfs], expected authored GUI", mode)
+			if p != nil && p.unavailable != nil {
+				err = p.unavailable
+			}
+			if g.frontend != nil {
+				if messageErr := g.showRetailMessage(err.Error()); messageErr != nil {
+					reportRetailMessageError(errors.Join(err, messageErr))
+				}
+			} else {
+				reportRetailMessageError(err)
+			}
+			return
+		}
 	}
 	if g.frontend == nil {
 		g.frontend = ui.NewFrontend(mode)

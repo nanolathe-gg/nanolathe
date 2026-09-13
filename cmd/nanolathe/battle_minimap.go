@@ -216,7 +216,7 @@ func (b *battleSession) minimapClickOrder(cl *client.Client, mx, my int32, addit
 	// building at the minimap-resolved world point when that verdict was OK,
 	// and plays `notoktobuild` when it was not. Dropping the click, as this
 	// path used to, is the one thing retail does not do [07 R-CAM-01 §14].
-	if b.battleState().Input.BuildDef != "" {
+	if b.battleState().PlacementArmed() {
 		if !b.battleState().Input.BuildOK {
 			b.playUICue(cl, "notoktobuild")
 			return

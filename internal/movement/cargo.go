@@ -80,7 +80,7 @@ func AttachCargoMode(w *units.World, carrierHandle, cargoHandle pool.Handle, pie
 	}
 	carrier := w.Unit(carrierHandle)
 	cargo := w.Unit(cargoHandle)
-	if carrier == nil || cargo == nil || !carrier.Alive || !cargo.Alive || cargo.Dying {
+	if carrier == nil || cargo == nil || !carrier.Alive || !cargo.Alive || cargo.Dying || cargo.Flags&units.BuildingClassStatus != 0 {
 		return false
 	}
 	// The shared commit permits transfer between carriers. Only the COB

@@ -129,7 +129,7 @@ func TestSameCellCommitLeavesTheWordsAlone(t *testing.T) {
 }
 
 // TestTakeoffMovesTheStampToTheAirWordAndLandingMovesItBack locks the mode
-// rule of [04 R-COLL-01 §4] through the one mover-mode setter: mode 2 writes
+// rule of [04 R-COLL-01 §4] through a mode request and mover commit: mode 2 writes
 // the air word and releases the ground word, mode 1 the reverse, and mode 0
 // (attached) writes neither.
 func TestTakeoffMovesTheStampToTheAirWordAndLandingMovesItBack(t *testing.T) {
@@ -147,6 +147,8 @@ func TestTakeoffMovesTheStampToTheAirWordAndLandingMovesItBack(t *testing.T) {
 	if !sys.SetMoverMode(u, 2) {
 		t.Fatal("the mode write to airborne was refused")
 	}
+	assertRectangle(t, ter, anchor, 1, 1, PlaneGround, id)
+	modeCommitVisit(sys, u, 1)
 	assertRectangle(t, ter, anchor, 1, 1, PlaneAir, id)
 	if ground, _ := plotWords(t, ter, anchor); ground != 0 {
 		t.Fatalf("an airborne mover still holds the ground word (%d) [04 R-COLL-01 §4]", ground)
@@ -156,6 +158,7 @@ func TestTakeoffMovesTheStampToTheAirWordAndLandingMovesItBack(t *testing.T) {
 	if !sys.SetMoverMode(u, 0) {
 		t.Fatal("the mode write to attached was refused")
 	}
+	modeCommitVisit(sys, u, 2)
 	if ground, air := plotWords(t, ter, anchor); ground != 0 || air != 0 {
 		t.Fatalf("an attached mover holds (%d,%d); modes 0 and 3 write nothing [04 R-COLL-01 §4]", ground, air)
 	}
@@ -163,6 +166,7 @@ func TestTakeoffMovesTheStampToTheAirWordAndLandingMovesItBack(t *testing.T) {
 	if !sys.SetMoverMode(u, 1) {
 		t.Fatal("the mode write back to grounded was refused")
 	}
+	modeCommitVisit(sys, u, 3)
 	assertRectangle(t, ter, anchor, 1, 1, PlaneGround, id)
 }
 

@@ -175,6 +175,11 @@ Accessors: `Unit`, `Weapon`, `WeaponByName`, `WeaponByID`, `WeaponLink`,
 `ModelForUnit`, `DownloadPlacementsForPage`. Lifecycle: `Validate`, `Clone`,
 `RestrictToCreatable`, `Finalized`.
 
+Weapon name lookup scans an immutable slot-ordered view built during compilation
+and index rebuilding. Public `WeaponRecordsByID` still returns its own slice;
+cloning rebuilds the retained view against cloned definitions. Runtime lookups
+therefore preserve first-slot precedence without allocating a sorted slice.
+
 `Catalog.UnitRecords()` returns a copied slice of all retained FBI definitions
 in 1-based ID order, including duplicate and empty names; sentinel zero is
 implicit. `Units` and `SortedUnitKeys` expose the runtime name lookup and

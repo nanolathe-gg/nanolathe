@@ -108,6 +108,7 @@ func TestRetaliationOrderSpawnsTheResolvedAttackRecord(t *testing.T) {
 	victim.Flags |= 2<<units.StandingMoveShift | 2<<units.StandingFireShift
 	// The session's seam binds the queue before calling in; do the same here.
 	QueueForUnit(victim)
+	setTestSeaLevel(victim, 0)
 
 	if !RetaliationOrder(victim, attacker) {
 		t.Fatal("an idle armed victim did not receive the retaliation record [08 R-AI-01 §11]")
@@ -163,6 +164,7 @@ func TestRetaliationOrderRespectsNoChaseAndBadTarget(t *testing.T) {
 	victim.Flags |= units.ArmedStatus | units.BuildingClassStatus
 	victim.Flags |= 2<<units.StandingMoveShift | 2<<units.StandingFireShift
 	QueueForUnit(victim)
+	setTestSeaLevel(victim, 0)
 
 	if RetaliationOrder(victim, attacker) {
 		t.Fatal("a no-chase attacker must not draw a counter-order [08 R-AI-01 §11]")
@@ -200,5 +202,29 @@ func TestStopCurrentOrderIssuesTheOrdinaryStop(t *testing.T) {
 	}
 	if primary[0].CreationTick != 11 {
 		t.Fatalf("stop record creation tick = %d, want 11 [04 §3.2]", primary[0].CreationTick)
+	}
+}
+
+// The ordered primary/rear walk mutates the original records and does not
+// allocate a queue copy per observer [04 R-MOV-03 §7].
+func TestObserverWalkRetainsBothSegmentsWithoutCopies(t *testing.T) {
+	w := newOrdersFixtureWorld(20, &content.Catalog{})
+	def := &content.UnitDef{UnitName: "observer", MaxDamage: 100}
+	target, _ := w.Create(def, 0, 0, 0, 0)
+	watcher, _ := w.Create(def, 1, 0, 0, 0)
+	q := QueueForUnit(w.Unit(watcher))
+	front := &Node{Target: target}
+	rear := &Node{Target: target}
+	other := &Node{Target: watcher}
+	q.SetPrimary([]*Node{front, other})
+	q.SetSecondary([]*Node{rear})
+	noticeAllocs := testing.AllocsPerRun(10, func() { notifyTargetObservers(w, target, observerNotice, false) })
+	iterAllocs := testing.AllocsPerRun(10, func() { _ = w.Iter() })
+	if noticeAllocs > iterAllocs {
+		t.Fatalf("queue traversal allocates copies: notice=%v world iteration=%v", noticeAllocs, iterAllocs)
+	}
+	TargetRemoved(w, target)
+	if front.Target != 0 || rear.Target != 0 || other.Target != watcher || front.Satisfied&pendTargetRemoved == 0 || rear.Satisfied&pendTargetRemoved == 0 {
+		t.Fatal("observer removal lost segment membership")
 	}
 }

@@ -21,7 +21,7 @@ const (
 // [07 §11].
 func ResultActionForControl(name string) ResultAction {
 	switch gui.CallbackName(name) {
-	case "Start":
+	case "Start", "Missions":
 		return ResultActionContinue
 	case "MainMenu":
 		return ResultActionMainMenu

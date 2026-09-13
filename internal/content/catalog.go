@@ -130,6 +130,7 @@ type Catalog struct {
 	// One record per slot: a same-ID section replaced the earlier record whole,
 	// and ID-less sections are inert (scratch slot before record 0, never
 	// enters the map). Duplicates are exposed for diagnostics.
+	weaponRecords    []*WeaponDef         // immutable slot-order view for allocation-free runtime lookup
 	weaponByID       map[int32]*WeaponDef // ID -> the record occupying that slot (I1)
 	weaponDuplicates []WeaponDuplicate    // duplicate ID diagnostics, sorted by ID
 }
@@ -316,6 +317,7 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 	}
 	// Stable weapon index: one record per slot [02 §5 R-CONTENT-02].
 	c.weaponByID, c.weaponDuplicates = buildWeaponIndex(weapons, weaponDuplicates)
+	c.weaponRecords = c.uncachedWeaponRecordsByID()
 	// C12 Catalog.Hash computed over canonical bytes including defaults,
 	// independent of map iteration, identical across two runs (I1) [02 §5] C12.
 	c.Hash = catalogHash(c)
@@ -871,9 +873,11 @@ func (c *Catalog) Clone() *Catalog {
 	// Stable weapon index: rebuild for cloned defs so pointers refer to cloned entries (I1) [02 "Weapon record"]
 	if out.Weapons != nil {
 		out.weaponByID, out.weaponDuplicates = buildWeaponIndex(out.Weapons, nil)
+		out.weaponRecords = out.uncachedWeaponRecordsByID()
 	} else if c.weaponByID != nil {
 		// No weapons but index exists (empty) — copy duplicates diagnostics
 		out.weaponByID = nil
+		out.weaponRecords = nil
 		if len(c.weaponDuplicates) > 0 {
 			out.weaponDuplicates = append([]WeaponDuplicate(nil), c.weaponDuplicates...)
 			for i := range out.weaponDuplicates {
@@ -910,6 +914,13 @@ func (c *Catalog) Weapon(key string) (*WeaponDef, bool) {
 // scratch slot before record 0 and never entered the catalog. The slice is a
 // copy; mutations do not affect the catalog.
 func (c *Catalog) WeaponRecordsByID() []*WeaponDef {
+	if c != nil && c.weaponRecords != nil {
+		return append([]*WeaponDef(nil), c.weaponRecords...)
+	}
+	return c.uncachedWeaponRecordsByID()
+}
+
+func (c *Catalog) uncachedWeaponRecordsByID() []*WeaponDef {
 	if c == nil || len(c.Weapons) == 0 {
 		return nil
 	}
@@ -938,10 +949,16 @@ func (c *Catalog) WeaponRecordsByID() []*WeaponDef {
 // canonical keys.
 func (c *Catalog) WeaponByName(name string) (*WeaponDef, bool) {
 	ck := CanonicalKey(name)
-	if ck == "" {
+	if c == nil || ck == "" {
 		return nil, false
 	}
-	for _, w := range c.WeaponRecordsByID() {
+	records := c.weaponRecords
+	if records == nil {
+		// Hand-built fixtures can omit compilation; never mutate the catalog
+		// lazily from a simulation lookup [I6].
+		records = c.uncachedWeaponRecordsByID()
+	}
+	for _, w := range records {
 		if w.CanonicalKey == ck {
 			return w, true
 		}
@@ -1048,6 +1065,7 @@ func (c *Catalog) RebuildWeaponIndex() {
 		return
 	}
 	c.weaponByID, c.weaponDuplicates = buildWeaponIndex(c.Weapons, nil)
+	c.weaponRecords = c.uncachedWeaponRecordsByID()
 }
 
 // rewireWeaponLink rewires one cloned unit weapon link onto the cloned weapon

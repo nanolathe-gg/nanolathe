@@ -141,6 +141,12 @@ halves, energy before metal `[08 R-SAVE-02 §7]`.
 
 ### 2.2 `internal/construction`
 
+Session composition creates construction services through one binding helper.
+Fresh and restored battles supply the economy service, its difficulty selector,
+and the live computer-controller predicate before construction callbacks run.
+This makes cancellation and unattended decay use the same researched refund
+ladder as reverse work; tests exercise the callbacks through session composition.
+
 **The request** (`queue.go`). `QueueFactoryBuild` and `QueueMobileBuild` are the
 two entry points; both push a typed payload onto the primary segment of the
 builder's existing queue. `FactoryPayload` carries the canonical definition key,

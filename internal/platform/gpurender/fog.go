@@ -77,6 +77,12 @@ type fogPass struct {
 	contentErr    error // shader compilation failure for the current command
 	orderedShader *ebiten.Shader
 
+	// variants owns immutable resamples for this source generation. Native art
+	// keeps its source identity; magnified parents and shared children reuse one
+	// identity per scale, including when the ordered path packs them into scene
+	// pages. ResetSources retires both caches together (§2.3, §11.2).
+	variants map[fogVariantKey]*formats.GAFFrame
+
 	// grid holds one texel per fog cell of the visible cell range: red is the
 	// channel-one operation, green the channel-zero operation. gridBuf is the
 	// reused upload buffer; the image grows but never shrinks.
@@ -511,7 +517,7 @@ func (f *fogPass) ensureAtlas(gray, black [4]*formats.GAFEntry, scale camera.Vie
 				continue
 			}
 			for frame := 0; frame < fogAtlasCols && frame < len(entry.Frames); frame++ {
-				fr := fogViewFrame(entry.Frames[frame].Frame, scale)
+				fr := f.viewFrame(entry.Frames[frame].Frame, scale)
 				if fr == nil {
 					continue
 				}
@@ -546,16 +552,43 @@ func (f *fogPass) ensureAtlas(gray, black [4]*formats.GAFEntry, scale camera.Vie
 	f.atlas.WritePixels(buf)
 }
 
-// fogViewFrame is the frame the classic sink draws for one fog cell at this view
+type fogVariantKey struct {
+	frame *formats.GAFFrame
+	scale camera.ViewScale
+}
+
+// viewFrame is the frame the classic sink draws for one fog cell at this view
 // scale: the frame itself at the native scale, and its nearest-resampled
 // variant at a magnified one — doubled at 2x, 3/2 at 1.5x — which is what the
 // client's viewFrame resolves for art no remaster covers (§14.3).
 // anims/fog.gaf is not a feature bank, so it is never covered.
-func fogViewFrame(fr *formats.GAFFrame, scale camera.ViewScale) *formats.GAFFrame {
+func (f *fogPass) viewFrame(fr *formats.GAFFrame, scale camera.ViewScale) *formats.GAFFrame {
+	scale = scale.Norm()
 	if fr == nil || scale.Native() {
 		return fr
 	}
-	return fr.Resampled(int(scale.Norm()), 2)
+	key := fogVariantKey{frame: fr, scale: scale}
+	if variant := f.variants[key]; variant != nil {
+		return variant
+	}
+	if f.variants == nil {
+		f.variants = make(map[fogVariantKey]*formats.GAFFrame)
+	}
+	// Resample each source's raster once, then resolve its children through the
+	// same cache. A shared child must not acquire a fresh atlas identity when
+	// another parent references it. Keep authored order and blitter selectors
+	// unchanged [03 R-COMP-01 §2].
+	raster := *fr
+	raster.Subframes = nil
+	variant := raster.Resampled(int(scale), 2)
+	f.variants[key] = variant
+	if len(fr.Subframes) != 0 {
+		variant.Subframes = make([]*formats.GAFFrame, len(fr.Subframes))
+		for i, child := range fr.Subframes {
+			variant.Subframes[i] = f.viewFrame(child, scale)
+		}
+	}
+	return variant
 }
 
 // fogAtlasTile is the square the atlas reserves for one fog GAF frame at one

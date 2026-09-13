@@ -12,6 +12,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
@@ -84,8 +85,37 @@ func (b *battleSession) catalogDefID(u *units.Unit) uint16 {
 func (b *battleSession) pickTarget(sx, sy int32) (pool.Handle, *units.Unit, *orders.ResolvePos) {
 	wx, wy, wz := b.cursorWorld(sx, sy)
 	pos := &orders.ResolvePos{X: wx, Y: wy, Z: wz}
+	if b.interfaceTypeRightClick() {
+		pos.InterfaceType = orders.InterfaceTypeRightClick
+	}
 	if b.sess == nil || b.cam == nil {
 		return 0, nil, pos
+	}
+	// Unit and feature words coexist at a picked point. Resolve the feature
+	// once before either unit path can return: code 12 tests it first
+	// [04 R-ORD-02 §1][I6].
+	if f, ok := b.currentSnapshot(); ok {
+		cx := world.WorldToCell(wx)
+		cz := world.WorldToCell(wz)
+		for _, fv := range f.Features {
+			footX, footZ := int32(fv.FootX), int32(fv.FootZ)
+			if footX <= 0 {
+				footX = 1
+			}
+			if footZ <= 0 {
+				footZ = 1
+			}
+			if cx < fv.CX || cx >= fv.CX+footX || cz < fv.CZ || cz >= fv.CZ+footZ {
+				continue
+			}
+			if !snapshotFeatureMappedAt(f, wx, wy, wz, f.ViewingPlayer) {
+				continue
+			}
+			pos.HasFeature = fv.Reclaimable
+			pos.IsWreck = b.isCorpseName(fv.DefName)
+			pos.FeatureResurrectable = pos.IsWreck && fv.Reclaimable
+			break
+		}
 	}
 	// Presentation picking reads only the immutable committed frame. The
 	// returned unit is a short-lived copy for cursor semantics, never a live
@@ -128,32 +158,22 @@ func (b *battleSession) pickTarget(sx, sy int32) (pool.Handle, *units.Unit, *ord
 			return bh, copy, pos
 		}
 	}
-	// Feature picking also consumes only the committed frame. Features are
-	// admitted by their published visibility cell and footprint metadata [I6].
-	if f, ok := b.currentSnapshot(); ok {
-		cx := world.WorldToCell(wx)
-		cz := world.WorldToCell(wz)
-		for _, fv := range f.Features {
-			footX, footZ := int32(fv.FootX), int32(fv.FootZ)
-			if footX <= 0 {
-				footX = 1
-			}
-			if footZ <= 0 {
-				footZ = 1
-			}
-			if cx < fv.CX || cx >= fv.CX+footX || cz < fv.CZ || cz >= fv.CZ+footZ {
-				continue
-			}
-			if !snapshotFeatureVisible(f, fv, f.ViewingPlayer) {
-				continue
-			}
-			pos.HasFeature = true
-			pos.IsWreck = b.isCorpseName(fv.DefName)
-			pos.FeatureResurrectable = pos.IsWreck && fv.Reclaimable
-			break
-		}
-	}
+
 	return 0, nil, pos
+}
+
+// The order feature probe reads mapping memory at the picked position, not
+// current feature visibility or footprint corners [04 R-ORD-02 §1].
+func snapshotFeatureMappedAt(f *frame.Frame, x, y, z numeric.Fixed, viewer uint8) bool {
+	if f == nil {
+		return false
+	}
+	m := f.Visibility
+	// The common projection narrows each 16.16 coordinate's signed whole
+	// word before the half-height shear [03 §3.2]. This resolver always reads
+	// mapping memory, independent of the display's current-coverage mode.
+	m.CoverageBytes = false
+	return client.PointVisible(m, x, y, z, 0, viewer)
 }
 
 func snapshotFeatureVisible(f *frame.Frame, v frame.FeatureView, viewer uint8) bool {

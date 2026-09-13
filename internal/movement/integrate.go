@@ -936,11 +936,8 @@ func applyGroundPostMove(t *world.Terrain, u *units.Unit, dirty bool, mode uint8
 // later tick has a zero velocity and an equal mirror, so nothing writes Y
 // again until the next takeoff.
 //
-// The commit's blocked arm — the validator refusing the touchdown cells, which
-// leaves the mirror airborne and skips the branch — is not modelled: the
-// landing-legality test of [04 R-AIR-01 §6a] has already refused any cell
-// another unit occupies, and this engine's mode setter stamps the ground plane
-// without a second validation [04 R-COLL-01 §4].
+// A refused touchdown keeps the airborne mirror, so post-move correction
+// leaves its height unchanged [04 R-COLL-01 §1][04 R-AIR-01 §6 "Touchdown"].
 func (s *System) applyAirPostMove(u *units.Unit, res StepResult, tick uint32) {
 	if s == nil || u == nil || u.Def == nil {
 		return
@@ -949,13 +946,11 @@ func (s *System) applyAirPostMove(u *units.Unit, res StepResult, tick uint32) {
 	if fl == nil {
 		return
 	}
-	mode := u.Move.Mode & 0x3
+	mode := u.Move.ModeMirror & 0x3
 	// The commit's entry condition, then its dirty bit: any position delta or
 	// a mode/mirror mismatch [04 R-MOV-01 §8]; the heading integration's own
 	// dirty bit is the same flag [04 §10.1].
-	dirty := u.Flags&unitTransformDirty != 0 || fl.Dirty || res.Moved || mode != fl.ModeMirror
-	fl.ModeMirror = mode
-	u.Move.ModeMirror = mode
+	dirty := u.Flags&unitTransformDirty != 0 || fl.Dirty || res.Moved
 	if !dirty && !u.Def.CanHover {
 		return
 	}
@@ -973,6 +968,7 @@ func (s *System) applyAirPostMove(u *units.Unit, res StepResult, tick uint32) {
 	fl.Y = int32(u.Y.Raw())
 	if coll != nil {
 		coll.Y = fl.Y
+		coll.Dirty = false
 	}
 }
 
@@ -2990,12 +2986,12 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	// a released payload continues on its last command.
 	if u.Def != nil && u.Def.CanFly {
 		res := s.stepAir(u, tick)
-		// The flight commit writes the new cached cell pair; the stamp follows
-		// it, so an airborne mover holds the air word of the rectangle it is
-		// actually over and a landed one holds the ground word
-		// [04 R-COLL-01 §1] step (4) [04 R-COLL-01 §4]. A rectangle that left
-		// the map writes no cell.
-		s.syncMoverStamp(u)
+		// The ordinary commit has already stamped any accepted cell/mode
+		// change. Refresh the air-sector mirror without attempting another
+		// stamp, including for off-map or refused proposals [04 R-COLL-01 §1].
+		if coll := handleRow(s.Collisions, u.Handle); coll != nil {
+			s.syncStampedAirSector(u, coll)
+		}
 		// The sweep runs the post-move correction after the mover tick for
 		// every mover, aircraft included [04 R-MOV-03 §1] step 9.
 		s.applyAirPostMove(u, res, tick)
@@ -3022,11 +3018,7 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	}
 	var head *orders.Node
 	if !orderless {
-		if q.LenPrimary() > 0 {
-			head = q.Primary()[0]
-		} else {
-			head = q.Head()
-		}
+		head = q.Head()
 		if head == nil {
 			orderless = true
 		}
@@ -3166,6 +3158,7 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	coll.VX = int32(newX - oldX)
 	coll.VZ = int32(newZ - oldZ)
 	coll.Speed = steer.Speed
+	coll.Mode = u.Move.Mode & 3
 	coll.Heading = steer.Heading
 	if u.Def != nil {
 		coll.MaxVelocity = int32(u.Def.MaxVelocity)
@@ -3177,7 +3170,10 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	blockerID := -1
 	perCell := func(c Cell) bool {
 		if !inBounds {
-			return false
+			return coll.Mode == 2
+		}
+		if coll.Mode != 1 {
+			return true
 		}
 		if s.Terrain != nil && !moverProfile.IsPassableCommitCell(s.Terrain, c.X, c.Z) {
 			return false
@@ -3263,7 +3259,7 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	s.emitMovementCallbacks(u, coll.Speed)
 	// This follows the complete mover tick, including its callbacks, and is
 	// the only ordinary ground pose writer [04 R-MOV-01 §5a].
-	applyGroundPostMove(s.Terrain, u, groundDirty, coll.Mode, newHoverBob(u, coll.Speed, s.tick, coll.LastProposalTick))
+	applyGroundPostMove(s.Terrain, u, groundDirty, coll.CachedMode, newHoverBob(u, coll.Speed, s.tick, coll.LastProposalTick))
 	if groundDirty {
 		u.Flags &^= unitTransformDirty
 		steer.Dirty = false

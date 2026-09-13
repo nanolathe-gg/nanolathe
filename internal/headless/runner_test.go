@@ -10,6 +10,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/testsupport"
+	"github.com/nanolathe-gg/nanolathe/internal/testsupport/retailcat"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
@@ -287,4 +288,47 @@ func TestCoastToCoastSurvivesTheCancelledMobileBuild(t *testing.T) {
 	if report.Tick != 5000 || report.Status != "tick_limit" {
 		t.Fatalf("tick/status = %d/%q, want 5000/tick_limit", report.Tick, report.Status)
 	}
+}
+
+// ALL is an admission filter. Explicit Arm zero must survive the value-only
+// request and reach player records before the entry prime [08 R-CAMP-01 §3].
+func TestFreshCampaignRequestCarriesSelectedSideBeforePrime(t *testing.T) {
+	cat, base := retailcat.Shared(t)
+	fs := campaignSelectionFS{FSOps: base, campaign: []byte("[HEADER]{campaignside=ALL;}[MISSION0]{missionname=Entry;missionfile=AC01.ota;}")}
+	for _, tc := range []struct {
+		set  bool
+		side int
+	}{{false, 0}, {true, 0}, {true, 1}} {
+		battle, err := ComposeFreshBattle(FreshBattleRequest{Kind: ScenarioCampaign, Mission: "camps/selection.tdf:MISSION0", Difficulty: 0, FS: fs, Catalog: cat, SelectedSide: tc.side, SelectedSideSet: tc.set, SimulationSeed: 7, CRTSeed: 7})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := battle.Session
+		side, known := s.SideForOwner(0)
+		if known != tc.set || (known && side != tc.side) {
+			t.Fatalf("request side %d/%v yielded %d/%v", tc.side, tc.set, side, known)
+		}
+		if known && int(s.Econ.Players[0].Side) != side {
+			t.Fatal("runtime player record lost selected side")
+		}
+		if s.Econ.Players[0].UpdateTime != 30 {
+			t.Fatalf("entry deadline %d", s.Econ.Players[0].UpdateTime)
+		}
+		s.Advance()
+		if s.Econ.Players[0].UpdateTime != 30 || s.State != session.StateLoading || s.EnemyOwner != 1 {
+			t.Fatalf("post-prime handoff changed: deadline=%d state=%v enemy=%d", s.Econ.Players[0].UpdateTime, s.State, s.EnemyOwner)
+		}
+	}
+}
+
+type campaignSelectionFS struct {
+	vfs.FSOps
+	campaign []byte
+}
+
+func (f campaignSelectionFS) ReadFileLimit(name string, limit int64) ([]byte, error) {
+	if strings.EqualFold(name, "camps/selection.tdf") {
+		return append([]byte(nil), f.campaign...), nil
+	}
+	return f.FSOps.ReadFileLimit(name, limit)
 }

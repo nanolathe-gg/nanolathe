@@ -835,17 +835,19 @@ arms `[04 R-ORD-01 §4]` `[04 R-ORD-02 §2]` [I4]. The implementations live in
 `TestOpportunityScanIsFireAtWillOnly` and `TestVTOLPatrolSeeksAPadOnlyWhenHurt`
 lock the scan ordering, gates and pad-selection boundaries.
 
+The command-owned `ResolvePos.InterfaceType` captures the issuing session’s
+live option, also read by cursor dispatch. This avoids a process-global
+resolver setting while retaining both contextual ladders. Code 3 uses runtime
+weapon slots, the committed mover mode, and the queue binding’s sea level for
+target-class admission. AI group broadcasts bind fresh units before resolving
+their first order [04 R-ORD-02 §1] [07 R-CAM-01 §5].
+
 ### 3.6 Scope and remaining work
 
 * **The empty-name descriptor's handler is the reject sentinel, and nothing
   else.** Retail's row 0 has a handler; its body is not a behavior any producer
   can reach, because `Lookup` returns 0 exactly on a miss `[04 §3.1]`
   `[04 R-ORD-01 §12]`.
-* **The interface-polarity setting is not bound.** `internal/orders/resolve.go`
-  retains `TODO(T23)` and the registry default, left-click orders. Retail's
-  shared setting and its writers are established `[07 R-CAM-01 §5]`; connecting
-  settings load/save and the options control to both command and cursor
-  consumers closes this implementation gap.
 * **The stock ARMCK lifecycle diagnostic observes normal `Create` completion.**
   `internal/units/p28_cob_pose_trace_test.go` installs its observer before
   `Create` starts, so a child reusing the completed thread's slot cannot erase
@@ -1037,15 +1039,6 @@ lock the scan ordering, gates and pad-selection boundaries.
 One `TODO` marker stands in these four packages, and two more stand at the
 producer that drives this package's queued-order toggle.
 
-* `TODO(T23)` in `internal/orders/resolve.go`: the contextual-click resolver has
-  two traced variants selected by the `Interface Type` option, and this build can
-  only reach the default. The option is a settable single-player preference —
-  the options page's two-stage button, the chat command and the persisted
-  registry value all write one word, and the same word gates both the click
-  dispatch and the cursor resolver — but `internal/settings` carries no field for
-  it, so nothing can produce the other value. Binding it to the options page is
-  what closes this; it must not become a build flag or a per-call parameter
-  `[04 R-ORD-02 §1]` `[07 R-CAM-01 §5]` `[07 §8]`.
 * `TODO(question)` at the queued-order duplicate toggle's producer
   (`internal/session/commands.go`, calling `Queue.CancelFrontMost`): whether the
   world-click producer receives a goal point alongside a target handle. The match

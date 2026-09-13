@@ -549,7 +549,8 @@ func (s *System) legVTOLLandIfCan(u *units.Unit, head *orders.Node, satisfied ui
 		}
 		// Phase 2 completes the landing: the mode setter zeroes the velocity and
 		// the scalar speed and levels bank and pitch [04 R-AIR-01 §3], and the
-		// mode write re-stamps the ground plane [04 R-COLL-01 §4].
+		// pending mode write reaches ordinary validation on the mover visit
+		// [04 R-COLL-01 §1][04 R-AIR-01 §6 "Touchdown"].
 		s.SetMoverMode(u, 1)
 		return 5
 	default:
@@ -1171,10 +1172,13 @@ func (s *System) stepAir(u *units.Unit, tick uint32) StepResult {
 	oldX, oldZ := int64(u.X), int64(u.Z)
 	IntegrateFlight(fl) // [04 §10.1] C26–C30
 
-	// Call 3 — publish the flight commit. StepUnit reconciles this mover's
-	// current occupancy plane immediately after stepAir returns; the mode setter
-	// also reconciles it at a mode transition [04 R-COLL-01 §1][04 R-COLL-01 §4].
+	// Call 3 — the ordinary position/mode commit validates the integrated
+	// proposal before publishing the mirror and occupancy [04 R-COLL-01 §1].
 	s.commitFlightState(u, fl)
+	blocked := false
+	if coll := handleRow(s.Collisions, handle); coll != nil {
+		blocked = coll.Blocked
+	}
 	// The mover's VELOCITY TRIPLE [04 R-MOV-01 §1]. The flight integrator owns
 	// all three components on this path — the decay, the brake shaping, the
 	// vertical clamp and the horizontal acceleration each write them — and it
@@ -1203,6 +1207,7 @@ func (s *System) stepAir(u *units.Unit, tick uint32) StepResult {
 		EmptyRoute: !hasRoute,
 		Moved:      int64(u.X) != oldX || int64(u.Z) != oldZ,
 		Arrived:    arrived,
+		Blocked:    blocked,
 	}
 }
 
@@ -1214,24 +1219,63 @@ func (s *System) commitFlightState(u *units.Unit, fl *FlightState) {
 	if s == nil || u == nil || fl == nil {
 		return
 	}
+	if coll := handleRow(s.Collisions, u.Handle); coll != nil {
+		// Flight has already integrated XYZ. Reconstruct the old horizontal
+		// position so CommitOne consumes that proposal exactly once; its Y
+		// input is the proposed Y, retained even on refusal [04 R-COLL-01 §1].
+		coll.X, coll.Y, coll.Z = fl.X-fl.VX, fl.Y, fl.Z-fl.VZ
+		coll.VX, coll.VY, coll.VZ = fl.VX, fl.VY, fl.VZ
+		coll.Speed, coll.Heading = fl.Speed, fl.Heading
+		coll.Mode = u.Move.Mode & 3
+		coll.MaxVelocity = fl.MaxVelocity
+		coll.LeanX, coll.LeanY, coll.LeanZ = fl.LeanX, fl.LeanY, fl.LeanZ
+		coll.TurnResidual = fl.TurnResidual
+		if fl.VX != 0 || fl.VY != 0 || fl.VZ != 0 || coll.Mode != coll.CachedMode {
+			coll.LastProposalTick = s.tick
+			anchor := coll.ProposedAnchor(coll.Mode)
+			inBounds := commitRectInBounds(s.Terrain, anchor, coll.FootPrintX, coll.FootPrintZ)
+			profile := s.ProfileFor(u.Handle)
+			blockerID := -1
+			perCell := func(c Cell) bool {
+				// Bounds precede the mode dispatch. Only airborne proposals
+				// pass off map; on map only mode 1 scans [04 R-COLL-01 §2].
+				if !inBounds {
+					return coll.Mode == 2
+				}
+				if coll.Mode != 1 {
+					return true
+				}
+				if s.Terrain != nil && !profile.IsPassableCommitCell(s.Terrain, c.X, c.Z) {
+					return false
+				}
+				if s.Grid != nil {
+					if occ, ok := s.Grid.OccupantAt(c); ok && occ != coll.ID {
+						blockerID = occ
+						return false
+					}
+				}
+				return true
+			}
+			clearedAnchor, clearedMode := coll.CachedAnchor, coll.CachedMode
+			fast, blocked := coll.CommitOne(s.Grid, coll.Mode, perCell, nil)
+			coll.BlockerID = blockerID
+			if !fast && !blocked {
+				if clearedMode == 1 {
+					s.noteFootprintClear(u.Handle, clearedAnchor, coll.FootPrintX, coll.FootPrintZ, true)
+				}
+				s.noteOccupancyCommit(u.Handle, s.tick)
+			}
+		}
+		fl.X, fl.Y, fl.Z = coll.X, coll.Y, coll.Z
+		fl.VX, fl.VY, fl.VZ, fl.Speed = coll.VX, coll.VY, coll.VZ, coll.Speed
+		fl.ModeMirror = coll.CachedMode
+		fl.Dirty = fl.Dirty || coll.Dirty
+		u.Move.ModeMirror = coll.CachedMode
+	}
 	u.X, u.Y, u.Z = numeric.Fixed(int64(fl.X)), numeric.Fixed(int64(fl.Y)), numeric.Fixed(int64(fl.Z))
 	u.Move.Heading = fl.Heading
 	u.Move.Speed = numeric.Fixed(int64(fl.Speed))
 	u.Move.VelX, u.Move.VelY, u.Move.VelZ = numeric.Fixed(int64(fl.VX)), numeric.Fixed(int64(fl.VY)), numeric.Fixed(int64(fl.VZ))
-	if coll := handleRow(s.Collisions, u.Handle); coll != nil {
-		coll.X, coll.Y, coll.Z = fl.X, fl.Y, fl.Z
-		// ProposedAnchor includes the collision velocity. Flight has already
-		// integrated its transform, so cache the committed pair before copying
-		// the newly published triple; otherwise an airborne stamp jumps a
-		// second velocity ahead.
-		coll.VX, coll.VZ = 0, 0
-		anchor := coll.ProposedAnchor(u.Move.Mode & 0x3)
-		coll.CachedAnchor, coll.OldAnchor = anchor, anchor
-		coll.VX, coll.VY, coll.VZ = fl.VX, fl.VY, fl.VZ
-		coll.Speed, coll.Heading = fl.Speed, fl.Heading
-		coll.LeanX, coll.LeanY, coll.LeanZ = fl.LeanX, fl.LeanY, fl.LeanZ
-		coll.TurnResidual = fl.TurnResidual
-	}
 }
 
 // airHeadFor is the record the air executor dispatches on: the unit's active

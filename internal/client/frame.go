@@ -276,6 +276,8 @@ func (c *Client) composeIndexed(cur *frame.Frame, ok bool) {
 	// guard so a degenerate surface, which skips drawCommittedFrame, leaves an
 	// empty list rather than replaying the previous frame's commands.
 	c.list.Reset()
+	c.effectStats = EffectDrawStats{}
+	c.stripStats = StripDrawStats{}
 	c.modelScratch.reset()
 	c.modelScratch.active = true
 	defer func() { c.modelScratch.active = false }()

@@ -367,7 +367,8 @@ func canResurrect(u *units.Unit) bool {
 // ResolvePos holds optional ground position and feature probe for codes 1 and 12 [04 §3.4].
 type ResolvePos struct {
 	X, Y, Z              numeric.Fixed
-	HasFeature           bool
+	HasFeature           bool // mapped and reclaimable [04 R-ORD-02 §1]
+	InterfaceType        int  // session option, also used by cursor [07 R-CAM-01 §5]
 	IsWreck              bool // wreck feature
 	FeatureResurrectable bool // wreck that can resurrect when actor canResurrect
 	IsLandingPad         bool // feature is landing pad (rare)
@@ -528,11 +529,11 @@ func resolveName(code int, actor *units.Unit, target *units.Unit, pos *ResolvePo
 	case 11:
 		return "Teleport"
 	case 12:
-		if !canReclaim(actor) {
+		if actor.Def == nil || !actor.Def.CanReclamate {
 			return ""
 		}
 		if pos != nil && pos.HasFeature {
-			if pos.IsWreck && canResurrect(actor) && pos.FeatureResurrectable {
+			if canResurrect(actor) {
 				return "Resurrect"
 			}
 			if actor.Def != nil && actor.Def.CanFly {
@@ -546,10 +547,7 @@ func resolveName(code int, actor *units.Unit, target *units.Unit, pos *ResolvePo
 			}
 			return "ReclaimUnit"
 		}
-		if actor.Def != nil && actor.Def.CanFly {
-			return "VTOL_Reclaim"
-		}
-		return "Reclaim"
+		return ""
 	case 13:
 		// "Code 13 — capture. `cancapture`, a target, and the target's owner
 		// differing from mine → `Capture`. **Correction to §3.4's row 13:** it
@@ -600,25 +598,10 @@ const (
 	InterfaceTypeRightClick = 1
 )
 
-// interfaceType is the live value of that option. It starts at the registry
-// default and nothing in this build writes it yet: `internal/settings` carries
-// no `Interface Type` field, so the option page cannot produce the other value.
-//
-// TODO(T23): bind the settings load/save and interface options control to
-// this shared word; until then retain the researched registry default. The
-// source is the registry word named above — it must not become a
-// build flag or a per-call parameter, because retail reads one word for both
-// the click dispatch and the cursor resolver [07 R-CAM-01 §5].
-var interfaceType = InterfaceTypeLeftClick
-
-// InterfaceType reports the current value of the option [07 R-CAM-01 §5].
-func InterfaceType() int { return interfaceType }
-
-// resolveContextual is command code 1. It has two traced variants selected by
-// the `Interface Type` option [04 R-ORD-02 §1][07 R-CAM-01 §5]; retail's
-// default, and this build's only reachable value, is `0`.
+// resolveContextual uses the issuing session's option [04 R-ORD-02 §1].
+// A missing position retains the default left-click variant.
 func resolveContextual(actor *units.Unit, target *units.Unit, pos *ResolvePos) string {
-	if interfaceType == InterfaceTypeRightClick {
+	if pos != nil && pos.InterfaceType == InterfaceTypeRightClick {
 		return resolveContextualRightClick(actor, target, pos)
 	}
 	return resolveContextualLeftClick(actor, target, pos)
@@ -643,17 +626,13 @@ func resolveContextual(actor *units.Unit, target *units.Unit, pos *ResolvePos) s
 // and move tests" [04 R-ORD-02 §7].
 func resolveContextualLeftClick(actor *units.Unit, target *units.Unit, pos *ResolvePos) string {
 	if target != nil && isHostile(actor, target) && canAttack(actor) {
-		if name := resolveAttackAt(actor, target, pos); name != "" {
-			return name
-		}
+		return resolveAttackAt(actor, target, pos) // delegated rejection is final [04 R-ORD-02 §1]
 	}
 	// Step 2 resolves the WHOLE of code 12, not a bare `ReclaimUnit`: "resolve
 	// as **code 12** (so the feature tests below run first and a hostile unit is
 	// reclaimed only when no feature is at the position)" [04 R-ORD-02 §1].
-	if target != nil && isHostile(actor, target) && canReclaim(actor) {
-		if name := resolveName(12, actor, target, pos); name != "" {
-			return name
-		}
+	if target != nil && isHostile(actor, target) && (actor.Def != nil && actor.Def.CanReclamate) {
+		return resolveName(12, actor, target, pos)
 	}
 	if target != nil {
 		// Step 3's first half is code 8 restricted to the unfinished target:
@@ -664,9 +643,7 @@ func resolveContextualLeftClick(actor *units.Unit, target *units.Unit, pos *Reso
 		// target has already been consumed by step 2 before this line is
 		// reached.
 		if nanoReach(actor, target) && isUnfinished(target) {
-			if name := resolveName(8, actor, target, pos); name != "" {
-				return name
-			}
+			return resolveName(8, actor, target, pos)
 		}
 		if rejectsOwnSelectableTarget(actor, target) {
 			return ""
@@ -676,10 +653,10 @@ func resolveContextualLeftClick(actor *units.Unit, target *units.Unit, pos *Reso
 	// variants ([04 R-ORD-02 §1] code 1 steps 5 and 8); it was missing here, so
 	// a unit with no nanolathe at all answered a click on a tree with `Reclaim`.
 	if pos != nil && pos.HasFeature {
-		if pos.IsWreck && canResurrect(actor) && pos.FeatureResurrectable {
+		if canResurrect(actor) {
 			return "Resurrect"
 		}
-		if canReclaim(actor) {
+		if actor.Def != nil && actor.Def.CanReclamate {
 			if actor.Def != nil && actor.Def.CanFly {
 				return "VTOL_Reclaim"
 			}
@@ -767,22 +744,17 @@ func contextualMoveArm(actor *units.Unit) string {
 }
 
 // resolveContextualRightClick is the `Interface Type = 1` variant
-// [04 R-ORD-02 §1] code 1. It is unreachable until the interface options page
-// can write the option (see interfaceType), but it is a traced retail path a
-// single-player session can select, so it is kept rather than deleted.
+// [04 R-ORD-02 §1] code 1, selected by the issuing session option.
 func resolveContextualRightClick(actor *units.Unit, target *units.Unit, pos *ResolvePos) string {
 	// Hostile and able to attack becomes an attack order [04 §3.4] code 1
 	if target != nil && isHostile(actor, target) && canAttack(actor) {
-		name := resolveAttackAt(actor, target, pos)
-		if name != "" {
-			return name
-		}
+		return resolveAttackAt(actor, target, pos) // delegated rejection is final [04 R-ORD-02 §1]
 	}
 	// "`canreclamate` and hostile → `ReclaimUnit` or air twin" — step 2 of this
 	// variant is the unit reclaim itself, not a re-entry into code 12: the
 	// feature tests come after, which is the whole difference the default
 	// variant's "resolve as code 12" note points at [04 R-ORD-02 §1].
-	if target != nil && isHostile(actor, target) && canReclaim(actor) {
+	if target != nil && isHostile(actor, target) && (actor.Def != nil && actor.Def.CanReclamate) {
 		if actor.Def != nil && actor.Def.CanFly {
 			return "VTOL_ReclaimUnit"
 		}
@@ -833,10 +805,10 @@ func resolveContextualRightClick(actor *units.Unit, target *units.Unit, pos *Res
 	}
 	// Steps 7 and 8, each carrying its own capability gate [04 R-ORD-02 §1].
 	if pos != nil && pos.HasFeature {
-		if pos.IsWreck && canResurrect(actor) && pos.FeatureResurrectable {
+		if canResurrect(actor) {
 			return "Resurrect"
 		}
-		if canReclaim(actor) {
+		if actor.Def != nil && actor.Def.CanReclamate {
 			if actor.Def != nil && actor.Def.CanFly {
 				return "VTOL_Reclaim"
 			}
@@ -860,7 +832,7 @@ func resolveMove(actor *units.Unit, target *units.Unit) string {
 		return "QMove"
 	}
 	if target != nil {
-		if isHostile(actor, target) && (canCapture(actor) || canReclaim(actor)) {
+		if isHostile(actor, target) && (canCapture(actor) || (actor.Def != nil && actor.Def.CanReclamate)) {
 			if canCapture(actor) {
 				return "Capture"
 			}
@@ -923,11 +895,6 @@ func resolveAttack(actor *units.Unit, target *units.Unit) string {
 // definition" [04 R-ORD-02 §1], read for its `toairweapon` flag. The runtime
 // slot is what the resolver reads, not the definition's authored `weapon1`, so
 // a slot whose weapon link never resolved has no flag to offer.
-//
-// Only the not-hostile arm's reject uses it. The hostile arm's own target-class
-// rejects (the airborne/`toairweapon` pair, the submerged `waterweapon` tests
-// and the hovercraft clauses of [04 R-ORD-02 §1]) have no implementation in
-// this build; that gap predates this unit and is not narrowed here.
 func slotZeroIsAntiAir(u *units.Unit) bool {
 	if u == nil {
 		return false
@@ -945,7 +912,7 @@ func resolveAttackAt(actor *units.Unit, target *units.Unit, pos *ResolvePos) str
 	if !canAttack(actor) {
 		return ""
 	}
-	if target == nil {
+	if target == nil || !isHostile(actor, target) {
 		// The not-hostile arm of code 3, whose condition [04 R-ORD-02 §1] gives
 		// as "friendly OR NO TARGET": "*w0* has `toairweapon` → reject; I am not
 		// `canfly` → `Suppress`; else *W1* has `dropped` → `AirStrike`, else
@@ -993,6 +960,31 @@ func resolveAttackAt(actor *units.Unit, target *units.Unit, pos *ResolvePos) str
 		if actor.Def != nil && actor.Def.Kamikaze {
 			return "Attack_Kamikaze"
 		}
+		return ""
+	}
+	// Target-class rejects precede every hostile variant [04 R-ORD-02 §1].
+	if target.Move.ModeMirror&3 != 2 && slotZeroIsAntiAir(actor) {
+		return ""
+	}
+	b := bindingOfUnit(actor)
+	if b == nil || b.World == nil || b.World.SeaLevel == nil || target.Def == nil {
+		// No map means no water-class answer; an unbound tool must provide
+		// the same sea-level input as a composed session.
+		return ""
+	}
+	water := false
+	if s := actor.SlotAt(0); s != nil && s.Weapon != nil {
+		water = s.Weapon.WaterWeapon
+	}
+	if s := actor.SlotAt(1); s.IsEnabled() && s.Weapon != nil && s.Weapon.WaterWeapon {
+		water = true
+	}
+	top := int32(int16(target.Y.Floor())) + int32(int16(target.Def.ModelTopFixed>>16))
+	if top < int32(b.World.SeaLevel()) {
+		if !water {
+			return ""
+		}
+	} else if actor.Def.CanHover && water {
 		return ""
 	}
 	// The four air variants, exactly as [04 R-ORD-02 §1] gives them for code 3:

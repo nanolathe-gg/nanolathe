@@ -784,8 +784,8 @@ func (s *Session) IsVisible(viewer visibility.PlayerID, t visibility.Target) boo
 }
 
 // IsUnitVisible reports whether target unit is visible to viewer via the canonical predicate [03 §3.2] C8.
-// It builds a Target from the target unit's authoritative position, hull extents (zero for now),
-// and sensor status (friendly/underwater/decloak bits).
+// It builds the same definition-bounds hull as combat and frame publication
+// [06 §3.1], retaining the instance hidden state and runtime sensor status.
 func (s *Session) IsUnitVisible(viewer int, target *units.Unit) bool {
 	if s == nil || s.Vis == nil || target == nil {
 		return false
@@ -825,7 +825,8 @@ func (s *Session) IsUnitVisible(viewer int, target *units.Unit) bool {
 		Hidden: hidden,
 		Status: status,
 	}
-	return s.Vis.IsVisible(vid, t)
+	min, max := target.Def.BoundingExtents()
+	return s.Vis.IsVisible(vid, visibility.TargetFromBounds(t, min, max))
 }
 
 // handleTeardownA implements state 0 cleanup variant A, then state 2 [08 "Session states"].
@@ -896,7 +897,9 @@ func handleLocalPreload(s *Session) {
 	if s == nil {
 		return
 	}
-	if s.Econ != nil {
+	// A production constructor has already registered players and primed their
+	// deadlines. State dispatch must preserve that handoff [08 R-ENTRY-01 §9].
+	if s.Econ != nil && !s.battleEntryTailDone {
 		for i := 0; i < 2 && i < 10; i++ {
 			p := &s.Econ.Players[i]
 			p.Exists = true

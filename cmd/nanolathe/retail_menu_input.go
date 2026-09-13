@@ -312,7 +312,7 @@ func (g *gameShell) activateGadget(name string) {
 		}
 	case modeMenuMission:
 		switch name {
-		case "Start":
+		case "Start", "Missions":
 			// Campaign Start first opens MSNBRIEF. Its Start action later
 			// emits the same shared battle request used by every entry path
 			// [08 R-CAMP-01 §2].
@@ -322,12 +322,12 @@ func (g *gameShell) activateGadget(name string) {
 			if p := g.activePanel(); p != nil {
 				p.SetStageAt(p.Index("Difficulty"), g.missionDifficultyValue)
 			}
-		case "Side0":
+		case "Side0", "Arm":
 			g.missionSide = 0
 			g.campaignIdx = 0
 			g.missionIdx = 0
 			g.refreshRetailPanel()
-		case "Side1":
+		case "Side1", "Core":
 			g.missionSide = 1
 			g.campaignIdx = 0
 			g.missionIdx = 0
@@ -337,7 +337,7 @@ func (g *gameShell) activateGadget(name string) {
 		switch name {
 		case "PrevMenu":
 			g.openMenu(g.mapReturn)
-		case "LOAD":
+		case "LOAD", "MAPNAMES":
 			if len(g.maps) != 0 && g.mapIdx >= 0 && g.mapIdx < len(g.maps) {
 				g.setup.MapName = g.maps[g.mapIdx]
 				g.saveSettings()
@@ -549,13 +549,13 @@ func frontendCallbackKey(name string) string {
 		return "prevmenu"
 	case "LoadGame":
 		return "loadgame"
-	case "Start":
+	case "Start", "Missions":
 		return "start"
 	case "Difficulty":
 		return "difficulty"
-	case "Side0":
+	case "Side0", "Arm":
 		return "side0"
-	case "Side1":
+	case "Side1", "Core":
 		return "side1"
 	}
 	return ""

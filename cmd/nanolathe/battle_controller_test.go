@@ -64,11 +64,14 @@ func TestStrictSkirmish_ProductionInputReplayG10A(t *testing.T) {
 
 	sx, sy := screenPos(b.cam, commander)
 	frame := BattleInputFrame{MouseX: sx, MouseY: sy, Buttons: BattleMouseButtons{Left: true}}
+	frame.PressedButtons[input.MouseButtonLeft] = true
 	if got := replayBattleFrame(c, cl, frame); got == nil || got.Bounds() != image.Rect(0, 0, 640, 480) {
 		t.Fatalf("select press did not render logical 640x480 framebuffer")
 	}
 	replayBattleFrame(c, cl, frame)
+	frame.PressedButtons[input.MouseButtonLeft] = false
 	frame.Buttons.Left = false
+	frame.ReleasedButtons[input.MouseButtonLeft] = true
 	if got := replayBattleFrame(c, cl, frame); got == nil {
 		t.Fatal("select release did not render a frame")
 	}
@@ -81,9 +84,13 @@ func TestStrictSkirmish_ProductionInputReplayG10A(t *testing.T) {
 	// the logical viewport and away from the commander.
 	moveX, moveY := int32(300), int32(300)
 	frame.MouseX, frame.MouseY = moveX, moveY
+	frame.ReleasedButtons[input.MouseButtonLeft] = false
 	frame.Buttons.Left = true
+	frame.PressedButtons[input.MouseButtonLeft] = true
 	replayBattleFrame(c, cl, frame)
+	frame.PressedButtons[input.MouseButtonLeft] = false
 	frame.Buttons.Left = false
+	frame.ReleasedButtons[input.MouseButtonLeft] = true
 	replayBattleFrame(c, cl, frame)
 	pending := b.sess.PendingHumanCommands()
 	if len(pending) == 0 || pending[len(pending)-1].Kind != session.HumanOrder || pending[len(pending)-1].Order.Code != 1 {

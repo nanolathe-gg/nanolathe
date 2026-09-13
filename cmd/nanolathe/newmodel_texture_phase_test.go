@@ -21,8 +21,10 @@ func TestBattleControllerKeepsInstalledPhase7ServiceAcrossClientChanges(t *testi
 	b.sess.State = session.StateBattle
 	probe := &battlePhase7Counter{}
 	b.sess.SetPhase7Service(probe)
-	controller := NewBattleController(b, &scriptedMillisSource{samples: []uint32{0, 1000, 2000}})
+	source := &fakeMillisSource{}
+	controller := NewBattleController(b, source)
 	controller.Step(BattleInputFrame{}, nil) // establish the clock anchor
+	source.ms = 1000
 	controller.Step(BattleInputFrame{}, nil) // five runnable sub-ticks after clamp
 	if got := probe.calls; got != 5 {
 		t.Fatalf("phase-7 calls without client = %d, want 5", got)
@@ -31,6 +33,7 @@ func TestBattleControllerKeepsInstalledPhase7ServiceAcrossClientChanges(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
+	source.ms = 2000
 	controller.Step(BattleInputFrame{}, cl)
 	if got := probe.calls; got != 10 {
 		t.Fatalf("phase-7 calls after client replacement = %d, want 10", got)

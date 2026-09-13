@@ -54,8 +54,8 @@ func listRowsFixture(t *testing.T, height int32, itemHeight int16, locked bool, 
 	return c
 }
 
-// The actual painter must distinguish its font-margin boundary from the
-// click-row quotient, including authored rows shorter than the font metric
+// The first row draws unconditionally; later rows use the remaining-height
+// boundary, including authored rows shorter than the font metric
 // [07 R-WGT-01 §4].
 func TestTextListPaintRowsUseMetricBoundary(t *testing.T) {
 	for _, tc := range []struct {
@@ -64,15 +64,17 @@ func TestTextListPaintRowsUseMetricBoundary(t *testing.T) {
 		itemHeight int16
 		wantY      []int
 	}{
-		{"first row one pixel short", 8, 0, nil},
-		{"first row equality", 9, 0, []int{5}},
-		{"second row one pixel short", 13, 0, []int{5}},
-		{"second row equality", 14, 0, []int{5, 10}},
-		{"authored tall rows", 20, 8, []int{5, 13}},
-		{"authored short rows", 8, 2, []int{5, 7}},
+		{"first row below metric", 1, 0, []int{5}},
+		{"second row one pixel short", 8, 0, []int{5}},
+		{"second row equality", 9, 0, []int{5, 10}},
+		{"third row one pixel short", 13, 0, []int{5, 10}},
+		{"third row equality", 14, 0, []int{5, 10, 15}},
+		{"fourth row equality", 19, 0, []int{5, 10, 15, 20}},
+		{"authored tall rows", 20, 8, []int{5, 13, 21}},
+		{"authored short rows", 8, 2, []int{5, 7, 9}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			shot := listRowsFixture(t, tc.height, tc.itemHeight, false, 3).ComposeFrameSnapshot()
+			shot := listRowsFixture(t, tc.height, tc.itemHeight, true, 3).ComposeFrameSnapshot()
 			for y := 0; y < 32; y++ {
 				want := byte(0)
 				for _, penY := range tc.wantY {

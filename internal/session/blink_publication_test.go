@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/visibility"
 )
@@ -58,5 +59,34 @@ func TestBlinkByteReachesTheCommittedContact(t *testing.T) {
 	s.Units.Unit(h).BlinkSuppress = 0
 	if got := publishedByte(4); got != 0 {
 		t.Fatalf("a spent blink publishes %d, want 0 [03 §3.9]", got)
+	}
+}
+
+// Every completed catch-up sub-tick publishes its phase; an idle host call
+// publishes nothing and cannot advance the countdown [01 R-CORE-03][I6].
+func TestBlinkPhasePublishedAtCompletedSubticks(t *testing.T) {
+	s := visibilityFixture(t, true)
+	s.State = StateBattle
+	s.resetRadarBlink()
+	var ticks []uint32
+	s.SetPublicationObserver(func(f *frame.Frame) {
+		ticks = append(ticks, f.Tick)
+		want := uint8((f.Tick / 8) & 1)
+		if f.Radar.BlinkPhase != want || f.Radar.BlinkPhase != s.RadarBlinkPhase() {
+			t.Fatalf("tick %d published phase=%d, want %d", f.Tick, f.Radar.BlinkPhase, want)
+		}
+	})
+	// Four host calls each consume four sub-ticks, crossing both toggle edges.
+	for now := int32(4); now <= 16; now += 4 {
+		s.Step(now)
+	}
+	if len(ticks) != 16 || ticks[7] != 8 || ticks[15] != 16 {
+		t.Fatalf("published ticks=%v", ticks)
+	}
+	before := s.Snapshot.Current()
+	countdown := s.radarBlinkCountdown
+	s.Step(16)
+	if len(ticks) != 16 || s.Snapshot.Current() != before || s.radarBlinkCountdown != countdown {
+		t.Fatal("idle host call advanced or republished blink")
 	}
 }

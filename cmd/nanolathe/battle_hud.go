@@ -82,24 +82,22 @@ type retailBattleHUD struct {
 	// stripArt is the cached second frame (index 1) of the common GUI GAF's
 	// `LIGHTBAR` entry with its hotspot zeroed: the band the Space-held slide
 	// strip is blitted from [07 R-HUD-04 §4].
-	stripArt           *formats.GAFFrame
-	pausedFrame        *formats.GAFFrame
-	victoryFrame       *formats.GAFFrame  // [07 §11] igvictory from anims/igtitles.gaf via intgaf/gui machinery
-	defeatFrame        *formats.GAFFrame  // [07 §11] igdefeat from anims/igtitles.gaf
-	resultWin          *gui.Window        // [07 §11] authored ENDMSN.GUI result surface
-	shell              *gameShell         // the front-end shell that owns ENDMSN's installed background bitmap [08 R-CAMP-01 §8]
-	resultGAF          *formats.GAF       // [07 §11] authored endmsn.gaf outcome controls
-	resultVictoryFrame *formats.GAFFrame  // [07 §11] authored endmsn.gaf victory copy
-	resultDefeatFrame  *formats.GAFFrame  // [07 §11] authored endmsn.gaf defeat copy
-	resultPanel        *ui.Panel          // shared authored gesture state [07 §3]
-	resultState        resultPresentation // ENDMSN dynamic bars/reveal state [08 R-CAMP-01 §7]
-	windowContext      *battleWindowContext
-	optionsRelabel     bool
-	optionsBuilt       bool
-	exitBuilt          bool
-	confirmBuilt       bool
-	restartBuilt       bool
-	resultBuilt        bool
+	stripArt       *formats.GAFFrame
+	pausedFrame    *formats.GAFFrame
+	victoryFrame   *formats.GAFFrame  // [07 §11] igvictory from anims/igtitles.gaf via intgaf/gui machinery
+	defeatFrame    *formats.GAFFrame  // [07 §11] igdefeat from anims/igtitles.gaf
+	resultWin      *gui.Window        // [07 §11] authored ENDMSN.GUI result surface
+	shell          *gameShell         // the front-end shell that owns ENDMSN's installed background bitmap [08 R-CAMP-01 §8]
+	resultGAF      *formats.GAF       // [07 §11] authored endmsn.gaf outcome controls
+	resultPanel    *ui.Panel          // shared authored gesture state [07 §3]
+	resultState    resultPresentation // ENDMSN dynamic bars/reveal state [08 R-CAMP-01 §7]
+	windowContext  *battleWindowContext
+	optionsRelabel bool
+	optionsBuilt   bool
+	exitBuilt      bool
+	confirmBuilt   bool
+	restartBuilt   bool
+	resultBuilt    bool
 
 	fs    vfs.FSOps
 	pages map[string]*formats.GAF
@@ -352,19 +350,6 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 	// replacement layout [07 §11][08 "Session end and reporting"].
 	resultWin := loadGUIOptional(fs, "guis/endmsn.gui", "endmsn.gui [07 §11]", captions)
 	resultGAF := loadGAFOptional(fs, "anims/endmsn.gaf", "endmsn.gaf [07 §11]")
-	var resultVictoryFrame, resultDefeatFrame *formats.GAFFrame
-	if resultGAF != nil {
-		if entry, ok := resultGAF.Find("victory"); ok && len(entry.Frames) != 0 {
-			resultVictoryFrame = entry.Frames[0].Frame
-		} else {
-			hudAssetWarning(fs, "anims/endmsn.gaf", "endmsn.gaf missing victory copy [07 §11]", fmt.Errorf("missing authored entry"))
-		}
-		if entry, ok := resultGAF.Find("defeat"); ok && len(entry.Frames) != 0 {
-			resultDefeatFrame = entry.Frames[0].Frame
-		} else {
-			hudAssetWarning(fs, "anims/endmsn.gaf", "endmsn.gaf missing defeat copy [07 §11]", fmt.Errorf("missing authored entry"))
-		}
-	}
 	var resultPanel *ui.Panel
 	h := &retailBattleHUD{
 		shell: shell, windowContext: windowContext, optionsRelabel: optionsRelabel,
@@ -374,7 +359,7 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 		optionsGAF: optionsGAF, optionsWin: optionsWin, talkWin: talkWin, exitWin: exitWin, confirmWin: confirmWin, restartWin: restartWin,
 		modalFont: modalFont, modalFontSmall: modalFontSmall, stripArt: stripArt,
 		pausedFrame: pausedFrame, victoryFrame: victoryFrame, defeatFrame: defeatFrame,
-		resultWin: resultWin, resultGAF: resultGAF, resultVictoryFrame: resultVictoryFrame, resultDefeatFrame: resultDefeatFrame, resultPanel: resultPanel,
+		resultWin: resultWin, resultGAF: resultGAF, resultPanel: resultPanel,
 		fs:                fs,
 		pages:             make(map[string]*formats.GAF),
 		windows:           make(map[string]*gui.Window),

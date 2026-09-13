@@ -454,6 +454,7 @@ func TestAttackUTypeAcquiresTheAuthoredType(t *testing.T) {
 		return nil
 	}
 	q.binding.World = &WorldQueryAdapter{
+		SeaLevel: func() uint8 { return 0 },
 		ForEachUnit: func(visit func(pool.Handle, *units.Unit) bool) {
 			for _, candidate := range livePool {
 				if visit(candidate.Handle, candidate) {

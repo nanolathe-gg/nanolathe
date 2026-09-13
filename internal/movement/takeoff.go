@@ -22,7 +22,9 @@ import (
 // components and the scalar speed and clears the unit state byte's activation
 // bit — raising `Deactivate` and notification 4 on the falling edge; for any
 // other requested mode it sets that bit, raising `Activate` and notification 3.
-// Then it writes the request's low two bits into the committed mode.
+// Then it writes the request's low two bits into the mover's own mode byte.
+// The unit-side accepted mode mirror changes only at the ordinary commit
+// [04 R-COLL-01 §1][04 R-AIR-01 §6 "Touchdown"].
 //
 // The 16-bit turn residual is deliberately NOT zeroed here: only the
 // integrator's own inactive-mode branch zeroes it [04 R-AIR-01 §3].
@@ -76,26 +78,13 @@ func (s *System) SetMoverMode(u *units.Unit, mode uint8) bool {
 	if fl := handleRow(s.Flights, u.Handle); fl != nil {
 		fl.Mode = mode
 	}
-	s.applyOccupancyPlane(u, prev, mode)
+	// The mode setter changes the request only. The ordinary commit validates
+	// it before changing the unit mirror or occupancy [04 R-COLL-01 §1]
+	// [04 R-AIR-01 §6 "Touchdown"].
+	if coll := handleRow(s.Collisions, u.Handle); coll != nil {
+		coll.Mode = mode
+	}
 	return true
-}
-
-// applyOccupancyPlane moves a mover between the two occupancy planes on a mode
-// change, per the mode rule of [04 R-COLL-01 §4]: mode 1 the ground word, mode 2
-// the air word, modes 0 and 3 neither. A building-class unit is selected by its
-// class, not by its mode, and is never touched here.
-func (s *System) applyOccupancyPlane(u *units.Unit, prev, mode uint8) {
-	if s == nil || s.Grid == nil || u == nil {
-		return
-	}
-	coll := handleRow(s.Collisions, u.Handle)
-	if coll == nil {
-		return
-	}
-	coll.Mode = mode
-	coll.CachedMode = mode
-	u.Move.ModeMirror = mode
-	s.syncMoverStamp(u)
 }
 
 // syncMoverStamp reconciles a mover's occupancy with its committed cached pair
@@ -132,7 +121,7 @@ func (s *System) syncMoverStamp(u *units.Unit) {
 		s.syncStampedAirSector(u, coll)
 		return
 	}
-	plane, stamps := planeForMode(u.Move.Mode)
+	plane, stamps := planeForMode(coll.CachedMode)
 	stamped := false
 	clearedGround := false
 	clearedAnchor := coll.StampedAnchor

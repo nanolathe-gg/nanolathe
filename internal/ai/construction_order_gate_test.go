@@ -155,3 +155,21 @@ func TestConstructionMobileBuildMaskSuppressesSelection(t *testing.T) {
 		t.Fatalf("MobileBuild current order did not suppress pass 1: state=%d/%d draws=%d/%d radius=%d/%d submissions=%d", sim.State, beforeState, sim.Draws(), beforeDraws, m.Strategic.Radius, beforeRadius, *submissions)
 	}
 }
+
+// Completion is not a pass-one admission gate [08 R-AI-01 §3]. The ordinary
+// GetBuilt order does not supply the static bit that would block selection.
+func TestConstructionUnfinishedClassifiedBuilderReachesSelection(t *testing.T) {
+	m, w, builder, econ, sim, submissions := constructionOrderGateFixture(t)
+	builder.Remaining = 0.5
+	m.GroupConstruction = nil
+	builder.Group = 0
+	orders.QueueForUnit(builder).Push(orders.Lookup("GetBuilt"), orders.Node{})
+	m.classifyGroups(w)
+	if builder.Group != 4 || len(m.GroupConstruction) != 1 {
+		t.Fatal("unfinished mobile builder was not classified into construction")
+	}
+	m.constructionPlacePass(90, w, econ, m.Strategic.CenterX, m.Strategic.CenterZ, 0)
+	if sim.Draws() == 0 || *submissions != 1 {
+		t.Fatalf("unfinished builder skipped selection: draws=%d submissions=%d", sim.Draws(), *submissions)
+	}
+}

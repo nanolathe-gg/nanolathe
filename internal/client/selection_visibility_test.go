@@ -60,7 +60,7 @@ func TestCommittedUnitVisibilityRejectsInvalidViewerAndMasks(t *testing.T) {
 }
 
 // TestCommittedUnitVisibilityHonorsForeignCloakAndDecloak locks step 2 of the
-// gate [03 §3.2][03 §3.4] against the committed cloak inputs.
+// gate [03 §3.2][06 §3.1] against the committed hidden-instance input.
 //
 // Corrected. This test used to set `Flags: 0x4` for "cloaked" and OR in
 // `0x1000` for "decloaking", because that is what the gate read. Neither bit
@@ -68,8 +68,8 @@ func TestCommittedUnitVisibilityRejectsInvalidViewerAndMasks(t *testing.T) {
 // layer's start-building edge and 0x1000 is the order pump's active-record
 // marker. So the test passed while asserting the opposite of the contract — a
 // genuinely cloaked unit was never hidden, and every enemy builder that raised
-// the start-building edge disappeared. The gate now reads the two published
-// inputs, and the final case is the defect the play test found.
+// the start-building edge disappeared. The gate now reads the published hidden
+// input; the timer does not bypass it [06 §3.1].
 func TestCommittedUnitVisibilityHonorsForeignCloakAndDecloak(t *testing.T) {
 	f := &frame.Frame{Visibility: frame.VisibilityView{Valid: true, W: 1, H: 1, CoverageBytes: true, Visible: []uint8{1}}}
 	cloaked := frame.UnitView{Slot: 1, Owner: 1, Cloaked: true, X: 0, Z: 0}
@@ -78,8 +78,8 @@ func TestCommittedUnitVisibilityHonorsForeignCloakAndDecloak(t *testing.T) {
 	}
 	decloaked := cloaked
 	decloaked.Decloaking = true
-	if !SnapshotVisible(f, decloaked, 0) {
-		t.Fatal("foreign decloaked unit was rejected despite published visible coverage")
+	if SnapshotVisible(f, decloaked, 0) {
+		t.Fatal("decloak timer bypassed the published hidden-instance bit [06 §3.1]")
 	}
 	// The play-test defect: a foreign factory that has begun building carries
 	// the start-building edge, which is instance flag bit 2. It is not a cloak

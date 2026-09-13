@@ -139,7 +139,7 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	if !b.palettePointerOwned && b.serviceMinimapCameraLatch(mx, my, &mouse) {
 		return
 	}
-	if !b.palettePointerOwned && b.classifyPointer(mx, my) == battlePointerMinimap {
+	if !b.palettePointerOwned && !b.battleState().Input.DragActive && b.classifyPointer(mx, my) == battlePointerMinimap {
 		state := b.battleState().Input
 		// An armed order, including placement, always fires on left. Type 1
 		// therefore cannot let its idle left-button minimap camera latch steal
@@ -159,7 +159,7 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 			}
 		}
 	}
-	if !b.palettePointerOwned && b.isOverMinimap(mx, my) && mouse.Held(input.MouseButtonLeft) {
+	if !b.palettePointerOwned && !b.battleState().Input.DragActive && b.isOverMinimap(mx, my) && mouse.Held(input.MouseButtonLeft) {
 		// The whole canvas suppresses a viewport drag; only its fitted radar
 		// rectangle admits lens input [07 R-CAM-01 §11].
 		return
@@ -360,7 +360,7 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	// deselects everything [07 R-CAM-01 §2]. viewerStep intercepts the same
 	// edge ahead of this dispatcher, so both copies apply the one arm.
 	if kbd.KeyDown(input.KeyEscape) {
-		if b.battleState().Input.Latch == input.LatchNormal && b.battleState().Input.BuildDef == "" {
+		if b.battleState().Input.Latch == input.LatchNormal && !b.battleState().PlacementArmed() {
 			_ = b.enqueueSelectionCommand(session.HumanCommand{Kind: session.HumanSelectionClear})
 		}
 		b.disarmPlacement()
@@ -392,7 +392,7 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 			}
 			return
 		}
-		if b.battleState().Input.BuildDef != "" {
+		if b.battleState().PlacementArmed() {
 			// Cancel armed placement before affecting selection [R-P0-03][F-P0-003][07 §9].
 			b.disarmPlacement()
 			b.battleState().Input.HUDCaptured = false
@@ -458,7 +458,7 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 		if !mouse.Held(input.MouseButtonLeft) {
 			b.battleState().Input.PlaceCaptured = false
 		}
-		if b.battleState().Input.BuildDef != "" {
+		if b.battleState().PlacementArmed() {
 			b.updatePlacement(mx, my)
 		}
 		return
@@ -476,7 +476,7 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	if b.battleState().Input.BuildSticky && !kbd.HasShift() {
 		b.disarmPlacement()
 	}
-	if b.battleState().Input.BuildDef != "" {
+	if b.battleState().PlacementArmed() {
 		b.updatePlacement(mx, my)
 		if mouse.Pressed(input.MouseButtonLeft) {
 			// The press belongs to placement whatever it decides below —
@@ -505,94 +505,105 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 		return
 	}
 
+	if mouse.Pressed(input.MouseButtonLeft) && b.battleState().Input.Latch != input.LatchNormal {
+		code := hud.LatchToCode(b.battleState().Input.Latch)
+		if code != 0 {
+			b.orderSelected(code, mx, my, pointerModifiers.Shift)
+		}
+		// Return latch to Normal after dispatch unless shift-queuing keeps it [07 §9][P0-I14].
+		if pointerModifiers.Shift {
+			b.battleState().Input.ShiftLatchSticky = true
+		} else {
+			b.resetOrderLatch()
+		}
+		b.battleState().Input.PlaceCaptured = true
+		return
+	}
 	leftHeld := mouse.Held(input.MouseButtonLeft)
 	additive := pointerModifiers.Shift
-	if leftHeld && !b.battleState().Input.DragActive {
+	if mouse.Pressed(input.MouseButtonLeft) && !b.battleState().Input.DragActive {
+		state := &b.battleState().Input
+		state.DragPressClock = b.inputScaledClock()
+		wx, _, wz := b.cursorWorld(mx, my)
+		state.DragStartWorldX, state.DragStartWorldZ = int32(int16(wx.Floor())), int32(int16(wz.Floor()))
+		state.DragEndWorldX, state.DragEndWorldZ = state.DragStartWorldX, state.DragStartWorldZ
 		b.battleState().Input.DragActive = true
 		b.battleState().Input.DragStartX, b.battleState().Input.DragStartY = mx, my
 		b.battleState().Input.DragEndX, b.battleState().Input.DragEndY = mx, my
 	} else if leftHeld && b.battleState().Input.DragActive {
+		wx, _, wz := b.cursorWorld(mx, my)
+		b.battleState().Input.DragEndWorldX, b.battleState().Input.DragEndWorldZ = int32(int16(wx.Floor())), int32(int16(wz.Floor()))
 		b.battleState().Input.DragEndX, b.battleState().Input.DragEndY = mx, my
 	} else if !leftHeld && b.battleState().Input.DragActive {
-		b.battleState().Input.DragActive = false
+		// The release point was resolved while the drag still selected the
+		// viewport branch. Preserve that region through the click adapter
+		// before retiring the presentation capture [07 R-CAM-01 §11][07 R-CAM-01 §14].
+		defer func() { b.battleState().Input.DragActive = false }()
 		rect := client.NormalizeRect(b.battleState().Input.DragStartX, b.battleState().Input.DragStartY, b.battleState().Input.DragEndX, b.battleState().Input.DragEndY)
-		w, h := rect.MaxX-rect.MinX, rect.MaxY-rect.MinY
-		if w < 3 && h < 3 {
-			// Small click precedence [07 §8][07 §9][RS-P0-003]: armed latch dispatches on left-click; idle latch left-click selects or issues contextual order; right-click never issues an order [04 §3.4][07 §9].
+		if idleDragIsClick(b.battleState().Input, b.inputScaledClock()) {
+			// Idle viewport release classification [07 R-CAM-01 §14].
 			// Uses the immutable committed-frame picker so fog, radius, strict tie,
 			// and viewer rules are shared by selection and targeting [07 §9][03 §3.2].
-			if b.battleState().Input.Latch != input.LatchNormal {
-				code := hud.LatchToCode(b.battleState().Input.Latch)
-				if code != 0 {
-					b.orderSelected(code, mx, my, additive)
-				}
-				// Return latch to Normal after dispatch unless shift-queuing keeps it [07 §9][P0-I14].
+
+			if b.deferResourceClick(cl, mx, my, pointerModifiers) {
+				return
+			}
+			// With Type 1 an idle left click remains the selection/drag button;
+			// an empty click deselects. Type 0 retains its contextual left-click
+			// branch [07 R-CAM-01 §5].
+			f, ok := b.currentSnapshot()
+			if !ok {
+				return
+			}
+			viewer := visibility.PlayerID(f.ViewingPlayer)
+			var bh pool.Handle
+			var bu frame.UnitView
+			var hit bool
+			// The framebuffer composer already rebases the projected world point
+			// from the beam origin before drawing it. Mouse coordinates are in that
+			// same logical framebuffer, so do not subtract the HUD viewport origin
+			// a second time [03 §2.5][07 §8].
+			shellX, shellY := mx, my
+			bh, bu, hit = b.pickPresentedUnit(f, shellX, shellY, uint8(viewer))
+			// Branch 2 of the world-click handler is cursor kind `0x0F`,
+			// "the resolver's select answer: latch idle and the hovered unit
+			// is an own SELECTABLE unit (own slot, selectable bit,
+			// remaining-build fraction `0.0`, post-capture grace zero,
+			// carrier null or itself a visible carrier)"
+			// [07 R-CAM-01 §14 step 2]. That list is the shared eligibility
+			// predicate `E(u)` of [07 R-WGT-01 §9][07 R-WGT-01 §10], and
+			// ownSelectableUnit is this build's one copy of it.
+			//
+			// The test used to be ownership alone, so a click on an own
+			// nanoframe selected it — and, because the select branch runs
+			// before the order branch, ate the click a builder meant as an
+			// assist. Failing `E(u)` here is what lets the click reach
+			// branch 3, where the contextual code resolves "nano-reach
+			// passes and the target is unfinished → code 8" into HelpBuild
+			// [07 R-CAM-01 §14 step 3][04 R-ORD-02 §1].
+			hitOwn := hit && bh != 0 && b.ownSelectableUnit(f, bu)
+			if hitOwn {
 				if additive {
-					b.battleState().Input.ShiftLatchSticky = true
+					_ = b.enqueueSelectionCommand(session.HumanCommand{Kind: session.HumanSelectionToggle, Selection: session.HumanSelectionCommand{Handles: []pool.Handle{bh}}})
 				} else {
-					b.resetOrderLatch()
+					_ = b.enqueueSelectionCommand(session.HumanCommand{Kind: session.HumanSelectionReplace, Selection: session.HumanSelectionCommand{Handles: []pool.Handle{bh}}})
 				}
+				playSelectionCue(b.sess, []pool.Handle{bh}) // [07 §9]
+			} else if b.interfaceTypeRightClick() {
+				// Type 1's idle empty-left branch deselects regardless of
+				// Shift. Shift only modifies an eligible select or a drag
+				// rectangle; it does not preserve this branch [07 R-CAM-01
+				// §14 step 4].
+				_ = b.enqueueSelectionCommand(session.HumanCommand{Kind: session.HumanSelectionClear})
 			} else {
-				if b.deferResourceClick(cl, mx, my, pointerModifiers) {
-					return
-				}
-				// With Type 1 an idle left click remains the selection/drag button;
-				// an empty click deselects. Type 0 retains its contextual left-click
-				// branch [07 R-CAM-01 §5].
-				f, ok := b.currentSnapshot()
-				if !ok {
-					return
-				}
-				viewer := visibility.PlayerID(f.ViewingPlayer)
-				var bh pool.Handle
-				var bu frame.UnitView
-				var hit bool
-				// The framebuffer composer already rebases the projected world point
-				// from the beam origin before drawing it. Mouse coordinates are in that
-				// same logical framebuffer, so do not subtract the HUD viewport origin
-				// a second time [03 §2.5][07 §8].
-				shellX, shellY := mx, my
-				bh, bu, hit = b.pickPresentedUnit(f, shellX, shellY, uint8(viewer))
-				// Branch 2 of the world-click handler is cursor kind `0x0F`,
-				// "the resolver's select answer: latch idle and the hovered unit
-				// is an own SELECTABLE unit (own slot, selectable bit,
-				// remaining-build fraction `0.0`, post-capture grace zero,
-				// carrier null or itself a visible carrier)"
-				// [07 R-CAM-01 §14 step 2]. That list is the shared eligibility
-				// predicate `E(u)` of [07 R-WGT-01 §9][07 R-WGT-01 §10], and
-				// ownSelectableUnit is this build's one copy of it.
-				//
-				// The test used to be ownership alone, so a click on an own
-				// nanoframe selected it — and, because the select branch runs
-				// before the order branch, ate the click a builder meant as an
-				// assist. Failing `E(u)` here is what lets the click reach
-				// branch 3, where the contextual code resolves "nano-reach
-				// passes and the target is unfinished → code 8" into HelpBuild
-				// [07 R-CAM-01 §14 step 3][04 R-ORD-02 §1].
-				hitOwn := hit && bh != 0 && b.ownSelectableUnit(f, bu)
-				if hitOwn {
-					if additive {
-						_ = b.enqueueSelectionCommand(session.HumanCommand{Kind: session.HumanSelectionToggle, Selection: session.HumanSelectionCommand{Handles: []pool.Handle{bh}}})
-					} else {
-						_ = b.enqueueSelectionCommand(session.HumanCommand{Kind: session.HumanSelectionReplace, Selection: session.HumanSelectionCommand{Handles: []pool.Handle{bh}}})
-					}
-					playSelectionCue(b.sess, []pool.Handle{bh}) // [07 §9]
-				} else if b.interfaceTypeRightClick() {
-					// Type 1's idle empty-left branch deselects regardless of
-					// Shift. Shift only modifies an eligible select or a drag
-					// rectangle; it does not preserve this branch [07 R-CAM-01
-					// §14 step 4].
-					_ = b.enqueueSelectionCommand(session.HumanCommand{Kind: session.HumanSelectionClear})
+				if b.hasSelection() {
+					// Type-0 left-click contextual order when a selection exists
+					// and the click is not on an own unit [04 §3.4][07 §9].
+					b.orderSelected(1, mx, my, additive)
 				} else {
-					if b.hasSelection() {
-						// Type-0 left-click contextual order when a selection exists
-						// and the click is not on an own unit [04 §3.4][07 §9].
-						b.orderSelected(1, mx, my, additive)
-					} else {
-						// No selection and click not on own unit: clear if not additive, else preserve [07 §9] C6.
-						if !additive {
-							_ = b.enqueueSelectionCommand(session.HumanCommand{Kind: session.HumanSelectionClear})
-						}
+					// No selection and click not on own unit: clear if not additive, else preserve [07 §9] C6.
+					if !additive {
+						_ = b.enqueueSelectionCommand(session.HumanCommand{Kind: session.HumanSelectionClear})
 					}
 				}
 			}
@@ -727,4 +738,21 @@ var ctrlCategoryLetters = []struct {
 	{input.KeyQ, 'Q'}, {input.KeyR, 'R'},
 	{input.KeyT, 'T'}, {input.KeyU, 'U'}, {input.KeyV, 'V'}, {input.KeyW, 'W'},
 	{input.KeyX, 'X'}, {input.KeyY, 'Y'},
+}
+
+// The live scaled wall clock wraps the multiplication before division;
+// queued input timestamps do not participate [07 R-CAM-01 §14].
+func (b *battleSession) inputScaledClock() uint32 {
+	if b.millisSource == nil {
+		b.millisSource = newMonotonicMillisSource()
+	}
+	return (b.millisSource.Millis32() * uint32(30)) / 1000
+}
+
+func idleDragIsClick(s ui.BattleInputState, now uint32) bool {
+	dx := int64(s.DragEndWorldX) - int64(s.DragStartWorldX)
+	dz := int64(s.DragEndWorldZ) - int64(s.DragStartWorldZ)
+	// Stored whole-world endpoints, strict signed deadline and dimensions
+	// [07 R-CAM-01 §14]. The release pointer is used only after admission.
+	return int32(now) < int32(s.DragPressClock+25) && dx > -32 && dx < 32 && dz > -32 && dz < 32
 }

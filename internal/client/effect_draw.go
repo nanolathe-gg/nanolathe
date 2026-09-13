@@ -113,7 +113,7 @@ func (c *Client) drawEffectStrip(cur *frame.Frame, strip int8) {
 	}
 	options := c.effectDrawOptions()
 	options.LightingFrame = cur
-	c.DrawEffectViews(effects, options)
+	c.addEffectStats(c.DrawEffectViews(effects, options))
 }
 
 // drawFixedEffects consumes the unstripped fixed-effect pool at its one
@@ -141,7 +141,7 @@ func (c *Client) drawFixedEffects(cur *frame.Frame) {
 	options := c.effectDrawOptions()
 	options.Fragments = cur.Fragments
 	options.LightingFrame = cur
-	c.DrawEffectViews(effects, options)
+	c.addEffectStats(c.DrawEffectViews(effects, options))
 }
 
 // DrawEffectViews draws snapshot effects in stable producer admission order.

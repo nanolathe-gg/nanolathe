@@ -313,7 +313,8 @@ func TestWaveGatherEngageHysteresisAndNearestStableTie(t *testing.T) {
 	e.Players[2].Exists, e.Players[2].ControllerState = true, 1
 	m := &Manager{
 		Player: 0, GroupWaveA: append([]pool.Handle(nil), wave...), GroupNull: []pool.Handle{base},
-		IsAlliance: func(uint8, uint8) bool { return false },
+		OrderBinding: &orders.QueueBinding{World: &orders.WorldQueryAdapter{SeaLevel: func() uint8 { return 0 }}},
+		IsAlliance:   func(uint8, uint8) bool { return false },
 	}
 
 	if got := m.nearestHostileUnit(w, e, numeric.FixedFromInt(64), 0, numeric.FixedFromInt(64)); got == nil || got.Handle != first {
@@ -324,6 +325,11 @@ func TestWaveGatherEngageHysteresisAndNearestStableTie(t *testing.T) {
 		t.Fatalf("nil alliance binding exposed hostile target %v", got)
 	}
 	m.IsAlliance = func(uint8, uint8) bool { return false }
+	for _, h := range wave {
+		if orders.QueueOfUnit(w.Unit(h)) != nil {
+			t.Fatal("wave fixture must exercise a fresh unbound unit")
+		}
+	}
 	m.doWave(10, w, e, waveAThreshold, waveMin, waveMax)
 	if !m.waveAEngaged {
 		t.Fatal("six-member wave did not enter engaged state")
@@ -1042,4 +1048,30 @@ func seamLiteralValues(arg ast.Expr, literals map[string][]int64) []int64 {
 func isSeamNilIdent(arg ast.Expr) bool {
 	ident, ok := arg.(*ast.Ident)
 	return ok && ident.Name == "nil"
+}
+
+// An empty explore vector takes the ordinary n<5 centre arm, including draws
+// before the empty broadcast [08 R-AI-01 §6]. Deadline rescheduling precedes it.
+func TestEmptyExploreConsumesCentreDrawsAfterDeadline(t *testing.T) {
+	for _, seed := range []uint32{7, 73} {
+		terrain := &world.Terrain{CellW: 31, CellH: 25}
+		w := newAIFixtureWorld(4, &content.Catalog{})
+		r, expected := rng.NewSimulation(seed), rng.NewSimulation(seed)
+		deadline := 50 + expected.Uint32n(900)
+		legs := 2 + expected.Uint32n(2)
+		for i := uint32(0); i < legs; i++ {
+			expected.Uint32n(uint32(terrain.CellW * 16 >> 3))
+			expected.Uint32n(uint32(terrain.CellH * 16 >> 3))
+		}
+		m := &Manager{Player: 0, RNG: &r, Terrain: terrain}
+		m.Strategic.CenterX = numeric.FixedFromInt(120)
+		for k := TaskKind(0); k < TaskKindCount; k++ {
+			m.Deadlines[k] = 1000
+		}
+		m.Deadlines[TaskExplore] = 20
+		m.runDueTasks(20, w, nil)
+		if m.Deadlines[TaskExplore] != deadline || r.State != expected.State || r.Draws() != expected.Draws() {
+			t.Fatalf("seed %d: empty explore changed draw ledger: deadline=%d/%d state=%d/%d draws=%d/%d", seed, m.Deadlines[TaskExplore], deadline, r.State, expected.State, r.Draws(), expected.Draws())
+		}
+	}
 }

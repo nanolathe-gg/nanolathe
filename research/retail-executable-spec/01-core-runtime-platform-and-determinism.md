@@ -613,8 +613,12 @@ helper converts `GetTickCount()` milliseconds to an integer scaled time by
 computing:
 
 ```
-scaledNow = floor(GetTickCountMilliseconds * 30 / 1000)
+scaledNow = floor(((GetTickCountMilliseconds * 30) modulo 2^32) / 1000)
 ```
+
+**Established:** the unsigned multiplication wraps before division. The idle
+viewport click consumer independently establishes this arithmetic and the
+absolute deadline comparison it applies [07 R-CAM-01 §14].
 
 `QueryPerformanceCounter` is not the tick driver. Its established startup use
 is to seed the simulation random stream. `GetTickCount` is the wall-clock input

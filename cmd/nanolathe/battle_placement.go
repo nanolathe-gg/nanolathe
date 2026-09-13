@@ -92,6 +92,9 @@ func (b *battleSession) disarmPlacement() {
 // updatePlacement tracks the ghost under the cursor and validates it against
 // the world [04 §6.2][PLAN_08 C17].
 func (b *battleSession) updatePlacement(mx, my int32) {
+	if !b.battleState().PlacementArmed() {
+		return
+	}
 	b.battleState().Input.BuildMX, b.battleState().Input.BuildMY = mx, my
 	wx, _, wz := b.cursorWorld(mx, my)
 	b.battleState().Input.BuildCellX, b.battleState().Input.BuildCellZ = world.PlacementAnchor(wx, wz, b.battleState().Input.BuildFootX, b.battleState().Input.BuildFootZ)
@@ -169,6 +172,9 @@ func (b *battleSession) siteRectToScreen(l, t, r, btm, h int32) (left, top, righ
 // Every producer goes through one canonical payload constructor [P0-I03]: orders.NewMobileBuildNode / QueueMobileBuild.
 // It is data-driven: product must be in builder's BuildMenus list; illegal placement queues nothing [R-P0-03].
 func (b *battleSession) commitBuild(queued bool) bool {
+	if !b.battleState().PlacementArmed() {
+		return false
+	}
 	frame, ok := b.currentSnapshot()
 	if !ok || frame.CommandPage.Builder == 0 {
 		return false
@@ -224,7 +230,7 @@ func (b *battleSession) worldOverlayArmed(cur *frame.Frame) bool {
 	if state == nil {
 		return false
 	}
-	return state.Input.BuildDef != "" || (cur != nil && state.Input.ShiftHeld)
+	return state.PlacementArmed() || (cur != nil && state.Input.ShiftHeld)
 }
 
 // drawBuildGhost draws the armed build site the way retail does [07 §9].
@@ -239,7 +245,7 @@ func (b *battleSession) worldOverlayArmed(cur *frame.Frame) bool {
 // Retail suppresses the ghost whenever the pointer leaves the world viewport,
 // so it never appears over the side panel or the minimap.
 func (b *battleSession) drawBuildGhost(c *client.Client) {
-	if b.battleState().Input.BuildDef == "" || b.cam == nil {
+	if !b.battleState().PlacementArmed() || b.cam == nil {
 		return
 	}
 	if !b.overWorld(b.battleState().Input.PointerX, b.battleState().Input.PointerY) {

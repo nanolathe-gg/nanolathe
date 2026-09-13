@@ -32,10 +32,12 @@ type battleRestartState struct {
 type battleRestartRequest struct {
 	Campaign bool
 
-	Difficulty    int
-	CampaignPath  string
-	CampaignIndex int
-	Skirmish      session.SkirmishConfig
+	Difficulty     int
+	CampaignPath   string
+	CampaignIndex  int
+	Skirmish       session.SkirmishConfig
+	Controllers    [session.SkirmishMaxPlayers]int
+	ControllersSet bool
 }
 
 // restartDifficulty bounds a value to RESTART.GUI's three authored stages.
@@ -198,6 +200,10 @@ func (b *battleSession) battleRestartRequest() (battleRestartRequest, bool) {
 		return battleRestartRequest{}, false
 	}
 	request.Skirmish = b.sess.Skirmish
+	if b.shell != nil && b.shell.retailControllersSet && !b.shell.importedRetailBattle {
+		request.Skirmish = b.shell.setup
+		request.Controllers, request.ControllersSet = b.shell.retailControllers, true
+	}
 	request.Skirmish.Difficulty = request.Difficulty
 	if request.Skirmish.MapName == "" || request.Skirmish.NumPlayers <= 0 {
 		return battleRestartRequest{}, false
@@ -333,6 +339,9 @@ func (g *gameShell) restartSkirmishEntry(request battleRestartRequest) {
 		}
 	}
 	g.retailControllersSet = true
+	if request.ControllersSet {
+		g.retailControllers = request.Controllers
+	}
 	cfg := g.skirmishConfigForStart(request.Skirmish.MapName)
 	fresh, err := skirmishBattleRequest(g.opts, g.cs, cfg, headlessScenarioSkirmish, nil, newBattleSeedSource(g.opts))
 	if err != nil {

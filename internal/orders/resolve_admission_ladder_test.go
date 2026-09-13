@@ -143,9 +143,13 @@ func TestCarriableLadderIsTheNineRejectsInOrder(t *testing.T) {
 			candidate.Def.MovementClass = "ship3x3"
 			candidate.Def.BMCode = 1
 			sys.EnsureUnit(candidate)
-			candidate.Move.Mode = 2 // reject 6 next
+			candidate.Move.Mode = 2
+			candidate.Move.ModeMirror = 2 // reject 6 next
 		}},
-		{6, "moving", func() { candidate.Move.Mode = 1 }},
+		{6, "moving", func() {
+			candidate.Move.Mode = 1
+			candidate.Move.ModeMirror = 1
+		}},
 		{7, "ground carrier cannot load ship", func() { carrier.Def.CanFly = true }},
 		{8, "submerged", func() { candidate.Y = numeric.Fixed(int64(20) << 16) }},
 		{9, "under construction", func() { candidate.Remaining = 0 }},

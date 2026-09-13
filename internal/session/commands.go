@@ -346,6 +346,24 @@ func (s *Session) selectedHumanBuilder(h pool.Handle) *units.Unit {
 	return selected
 }
 
+// PendingBuildPage projects accepted page commands over the committed page for
+// the same builder, so repeated host input before a tick preserves enqueue
+// order without copying the command queue [07 R-HUD-03 §6][I6].
+func (s *Session) PendingBuildPage(builder pool.Handle, page int) int {
+	if s == nil {
+		return page
+	}
+	s.humanMu.Lock()
+	defer s.humanMu.Unlock()
+	for i := range s.pendingHuman {
+		c := &s.pendingHuman[i]
+		if c.Kind == HumanBuildPage && c.BuildPage.Builder == builder {
+			page = c.BuildPage.Page
+		}
+	}
+	return page
+}
+
 func (s *Session) applyHumanBuildPage(c HumanBuildPageCommand) {
 	u := s.selectedHumanBuilder(c.Builder)
 	if u == nil || s.Catalog == nil {

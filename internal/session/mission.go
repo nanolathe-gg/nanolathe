@@ -50,6 +50,23 @@ func NewMissionWithProgress(fs vfs.FSOps, cat *content.Catalog, path string, dif
 // the composition layer. The pair is installed before wind, placement, COB,
 // or AI setup can draw from either stream [01 §7.1][01 §7.2][R-CORE-02].
 func NewMissionWithProgressSeeds(fs vfs.FSOps, cat *content.Catalog, path string, difficulty int, simSeed, crtSeed uint32, report content.Progress) (*Session, error) {
+	return NewMissionWithEntryOptions(fs, cat, path, difficulty, simSeed, crtSeed, MissionEntryOptions{}, report)
+}
+
+// MissionEntryOptions carries the frontend selection independently of its value:
+// zero is an explicitly selected Arm side [08 R-CAMP-01 §3].
+type MissionEntryOptions struct {
+	SelectedSide    int
+	SelectedSideSet bool
+}
+
+// NewMissionWithEntryOptions installs the selected player sides before any
+// battle-entry consumer or the tick-zero prime [08 R-ENTRY-01 §8]. Without a
+// selection, named campaign admission can resolve the side; ALL remains unknown.
+func NewMissionWithEntryOptions(fs vfs.FSOps, cat *content.Catalog, path string, difficulty int, simSeed, crtSeed uint32, options MissionEntryOptions, report content.Progress) (*Session, error) {
+	if options.SelectedSideSet && options.SelectedSide != 0 && options.SelectedSide != 1 {
+		return nil, fmt.Errorf("session: campaign selected side %d is outside the two frontend sides", options.SelectedSide)
+	}
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return nil, fmt.Errorf("session: empty mission path")
@@ -140,7 +157,7 @@ func NewMissionWithProgressSeeds(fs vfs.FSOps, cat *content.Catalog, path string
 		Econ:         &economy.Service{},
 		Latch:        NewEndLatch(),
 		CampaignSlot: m.CampaignIndex,
-		LocalOwner:   0, ViewingOwner: 0,
+		LocalOwner:   0, ViewingOwner: 0, EnemyOwner: 1,
 	}
 	// Correct controller states: human local 1, computer enemy 2 [08 "Established AI-facing data and rooted planner"]
 	for i := 0; i < 2 && i < 10; i++ {
@@ -166,7 +183,11 @@ func NewMissionWithProgressSeeds(fs vfs.FSOps, cat *content.Catalog, path string
 	}
 	// The two campaign player rows exist now, so the panel's side bytes can be
 	// stamped onto them before any trigger consumer runs.
-	applyCampaignPlayerTableSides(s, fs, m)
+	if options.SelectedSideSet {
+		stampCampaignPlayerSides(s, options.SelectedSide)
+	} else {
+		applyCampaignPlayerTableSides(s, fs, m)
+	}
 	// UpdateTime/WinLoseTime/DisplayTimer seeded to GlobalTick per [05] C5.
 	// UpdateTime is the one deadline the end-condition poll rides; WinLoseTime
 	// is seeded here and persisted, and no gameplay site reads or advances it
@@ -238,26 +259,6 @@ func NewMissionWithProgressSeeds(fs vfs.FSOps, cat *content.Catalog, path string
 	return s, nil
 }
 
-// applyCampaignPlayerTableSides stamps the campaign player table's per-slot
-// side ordinal. That ordinal is the whole of the commander identity every
-// commander-driven trigger resolves through: a unit is a commander when its
-// definition name equals, case-insensitively, the commander name of the
-// *unit's own owner's* side in the side-data table — not the local side's and
-// not the definition's own flag [08 R-TRIG-01 §3].
-//
-// The writer is the single-player new-game panel. Choosing Arm sets the local
-// side index to 0 and the two campaign player slots' side bytes to (0, 1);
-// choosing Core sets 1 and (1, 0) [08 R-CAMP-01 §3]. Those two rows are the
-// whole table: every trigger owner test compares against slot 0 or slot 1 and
-// no other slot is visible to one [08 R-TRIG-01 §3].
-//
-// Which of the two rows a battle runs under is settled before the campaign
-// list is ever filtered, and a campaign whose `[HEADER] campaignside` names a
-// side is offered to that side alone — so for a named side that name is the
-// side the mission is played as [08 R-CAMP-01 §1 "campaignside filters, it
-// does not assign"]. The same section records that the literal `ALL` is
-// admitted to both lists and settles nothing, so it stays unknown here and the
-// identity fails closed rather than defaulting.
 // applyUseOnlyRestriction is battle entry's unit-restriction loader for kind 1
 // [08 R-ENTRY-01 §2 step 4]. It returns the catalog the battle runs on: the
 // input unchanged when no restriction file is present, or a restricted clone
@@ -370,9 +371,8 @@ func applyCampaignPlayerTableSides(s *Session, fs vfs.FSOps, m *mission.Mission)
 	}
 	if m.Type != mission.TypeCampaign || m.CampaignPath == "" {
 		// A type-1 mission reached by a bare OTA path carries no campaign file
-		// and therefore no authored side name. The front end's local-side value
-		// is the only other source [08 R-CAMP-01 §1] and no constructor seam
-		// carries it, so the identity stays unknown.
+		// and therefore no authored side name. This caller supplied no frontend
+		// selection either, so identity stays unknown [08 R-CAMP-01 §1].
 		return
 	}
 	campaign, err := mission.DiscoverCampaign(fs, m.CampaignPath)
@@ -388,17 +388,9 @@ func applyCampaignPlayerTableSides(s *Session, fs vfs.FSOps, m *mission.Mission)
 	name, ok := header.StringValue("campaignside", "")
 	name = strings.TrimSpace(name)
 	if !ok || name == "" || strings.EqualFold(name, "ALL") {
-		// This is not an open research question: [08 R-CAMP-01 §1] establishes
-		// that `campaignside` only filters which campaigns the new-game panel
-		// offers, and that `ALL` is admitted to both lists and settles
-		// nothing — "a real gap, not a defaulting opportunity". The side is
-		// actually decided earlier, by the front-end local-side value written
-		// when the new-game panel opens, and no constructor seam here carries
-		// that value into the session. So for `ALL` (and for the absent/empty
-		// name case, which authors no side at all) this function leaves the
-		// identity unknown: campaignPlayerSideKnown stays false and every
-		// commander/trigger owner test that depends on it fails closed rather
-		// than guessing a side.
+		// ALL admits either selected side. A caller that supplied no explicit
+		// selection cannot infer commander identity from that admission rule
+		// [08 R-CAMP-01 §1].
 		return
 	}
 	// The admission test compares `campaignside` case-insensitively against the
@@ -411,18 +403,23 @@ func applyCampaignPlayerTableSides(s *Session, fs vfs.FSOps, m *mission.Mission)
 			break
 		}
 	}
-	switch local {
-	case 0:
-		s.campaignPlayerSide[0], s.campaignPlayerSide[1] = 0, 1
-	case 1:
-		s.campaignPlayerSide[0], s.campaignPlayerSide[1] = 1, 0
-	default:
-		// The panel writes exactly the two pairs above; an unresolved name, or
-		// one resolving to a further side-table ordinal, has no authored row
-		// [08 R-CAMP-01 §3].
+	stampCampaignPlayerSides(s, local)
+}
+
+// stampCampaignPlayerSides writes both the runtime record persisted by saves
+// and the known identity mirror used by commander triggers [08 "Player records"]
+// [08 R-CAMP-01 §3].
+func stampCampaignPlayerSides(s *Session, local int) {
+	if s == nil || (local != 0 && local != 1) {
 		return
 	}
-	s.campaignPlayerSideKnown[0], s.campaignPlayerSideKnown[1] = true, true
+	for owner, side := range [2]int{local, 1 - local} {
+		s.campaignPlayerSide[owner] = int8(side)
+		s.campaignPlayerSideKnown[owner] = true
+		if s.Econ != nil {
+			s.Econ.Players[owner].Side = uint8(side)
+		}
+	}
 }
 
 // parseCampaignMissionSelector accepts only the explicit composition identity

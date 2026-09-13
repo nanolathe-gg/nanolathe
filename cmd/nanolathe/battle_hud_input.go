@@ -51,7 +51,7 @@ func (h *retailBattleHUD) updateHoveredGadget(b *battleSession, f *frame.Frame, 
 		// [07 R-WGT-01 §1]. A greyed one is not: the hovered-gadget writer has
 		// no grey test, so a greyed button still fills the footer's first
 		// source [07 R-HUD-03 §1].
-		if command, isCommand := commandGadgetVerdict(gad, f, paged); isCommand && command.hidden {
+		if command, isCommand := paletteGadgetVerdict(gad, f, paged, b.cat); isCommand && command.hidden {
 			continue
 		}
 		// The rail's gadget rectangles are fixed in authored coordinates and
@@ -142,7 +142,7 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 		if i == 0 || gad.Active == 0 || gad.GrayedOut&1 != 0 || gad.Kind != gui.KindButton {
 			continue
 		}
-		command, isCommand := commandGadgetVerdict(gad, f, ctx.paged)
+		command, isCommand := paletteGadgetVerdict(gad, f, ctx.paged, b.cat)
 		if isCommand && command.hidden {
 			continue
 		}
@@ -193,7 +193,7 @@ func (h *retailBattleHUD) hitTestFor(b *battleSession, x, y int32) bool {
 		// Neither a greyed nor a hidden command button is an activation target
 		// [07 R-WGT-01 §3][07 R-HUD-03 §6], so neither reports a hit here — the
 		// same reading the authored-grey test above already applies.
-		if command, isCommand := commandGadgetVerdict(gad, f, paged); isCommand && (command.grey || command.hidden) {
+		if command, isCommand := paletteGadgetVerdict(gad, f, paged, b.cat); isCommand && (command.grey || command.hidden) {
 			continue
 		}
 		// Fixed in authored coordinates: the §6 slide moves no rail gadget
@@ -231,7 +231,7 @@ func (h *retailBattleHUD) buttonAt(b *battleSession, x, y int32) int {
 		// A greyed button takes no capture and a hidden one is skipped before
 		// the hit test [07 R-WGT-01 §3][07 R-WGT-01 §1], so neither can be the
 		// gadget a press and its release identify.
-		if command, isCommand := commandGadgetVerdict(gad, f, paged); isCommand && (command.grey || command.hidden) {
+		if command, isCommand := paletteGadgetVerdict(gad, f, paged, b.cat); isCommand && (command.grey || command.hidden) {
 			continue
 		}
 		// Fixed in authored coordinates: the §6 slide moves no rail gadget
@@ -257,7 +257,7 @@ func (h *retailBattleHUD) sameButton(b *battleSession, x0, y0, x1, y1 int32) boo
 }
 
 func guiRectContains(r gui.Rect, x, y int32) bool {
-	left, top, right, bottom := r.X, r.Y, r.X+r.W, r.Y+r.H
+	left, top, right, bottom := r.X, r.Y, r.X+r.W-1, r.Y+r.H-1
 	return x >= left && x <= right && y >= top && y <= bottom
 }
 

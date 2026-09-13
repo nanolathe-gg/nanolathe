@@ -144,7 +144,7 @@ func TestPaletteCallbackBuildOrdersAndPager(t *testing.T) {
 	if len(pending) != 3 {
 		t.Fatalf("callback commands=%v, want orders, build, next", pending)
 	}
-	for i, want := range []int{0, 1, 1} {
+	for i, want := range []int{0, 1, 2} {
 		if got := pending[i]; got.Kind != session.HumanBuildPage || got.BuildPage.Builder != factory || got.BuildPage.Page != want {
 			t.Fatalf("callback %d=%+v, want page %d for factory %v", i, got, want, factory)
 		}
@@ -153,15 +153,14 @@ func TestPaletteCallbackBuildOrdersAndPager(t *testing.T) {
 		t.Fatalf("BUILD/ORDERS/NEXT cues=%v, want %v", got, want)
 	}
 
-	// PREV from the orders page wraps to the last build page; it never selects
-	// the orders page [07 R-HUD-03 §6].
+	// PREV follows the pending NEXT page before any publication [07 R-HUD-03 §6].
 	paletteCallbackToken(t, b, cl, 'p')
 	pending = b.sess.PendingHumanCommands()
-	if got := pending[len(pending)-1]; got.Kind != session.HumanBuildPage || got.BuildPage.Page != 3 {
-		t.Fatalf("PREV callback=%+v, want wrapped page 3", got)
+	if got := pending[len(pending)-1]; got.Kind != session.HumanBuildPage || got.BuildPage.Page != 1 {
+		t.Fatalf("PREV callback=%+v, want pending previous page 1", got)
 	}
 
-	// A one-page count admits the visual gadget but cannot dispatch or play a
+	// A one-page count hides the gadget and cannot dispatch or play a
 	// page cue [07 R-HUD-03 §6].
 	paletteCallbackFrame(t, b, func(f *frame.Frame) { f.CommandPage.PageCount = 1 })
 	beforeCommands, beforeCues := len(b.sess.PendingHumanCommands()), len(spy.aliases)

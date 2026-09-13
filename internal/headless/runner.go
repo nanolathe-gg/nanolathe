@@ -44,6 +44,8 @@ const (
 // camera and HUD from the completed authoritative session [08 R-ENTRY-01
 // §2–§8][I6].
 type FreshBattleRequest struct {
+	SelectedSide       int
+	SelectedSideSet    bool
 	Kind               ScenarioKind
 	Map                string
 	Mission            string
@@ -161,7 +163,7 @@ func ComposeFreshBattle(request FreshBattleRequest) (FreshBattle, error) {
 	var sess *session.Session
 	switch kind {
 	case ScenarioCampaign:
-		sess, err = session.NewMissionWithProgressSeeds(request.FS, request.Catalog, identity, request.Difficulty, request.SimulationSeed, request.CRTSeed, request.Progress)
+		sess, err = session.NewMissionWithEntryOptions(request.FS, request.Catalog, identity, request.Difficulty, request.SimulationSeed, request.CRTSeed, session.MissionEntryOptions{SelectedSide: request.SelectedSide, SelectedSideSet: request.SelectedSideSet}, request.Progress)
 	case ScenarioDirectOTA, ScenarioSkirmish:
 		sess, err = session.NewSkirmishWithProgress(request.FS, request.Catalog, cfg, request.Progress)
 	default:

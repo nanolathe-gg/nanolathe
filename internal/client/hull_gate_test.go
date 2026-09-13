@@ -158,8 +158,8 @@ func TestHullGateOwnerAndCloakPrecedeDepth(t *testing.T) {
 		t.Fatal("a cloaked foreign unit was admitted by the samples")
 	}
 	cloaked.Decloaking = true
-	if !SnapshotVisible(f, cloaked, 0) {
-		t.Fatal("a decloaking unit did not fall through to the samples")
+	if SnapshotVisible(f, cloaked, 0) {
+		t.Fatal("a decloak timer bypassed the hidden-instance rejection [06 §3.1]")
 	}
 }
 

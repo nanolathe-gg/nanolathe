@@ -1302,14 +1302,24 @@ list as its result — the "open" action of the load/save/map lists.
 `top += 1` when it passes `top + rows − 1`), clamp to `count − 1`, reject
 heading rows, repaint and synchronise. The keyboard handlers compute
 `rows = trunc((h − 2) / (metric + 1))` — **`itemheight` is ignored** on
-this path, a retail inconsistency with the click path. A selection outside
-the window (set by a screen) goes through *scroll-to*: `top := selected`
+this path, a retail inconsistency with the click path. Programmatic
+*scroll-to* uses that same `rows` count. Only a selection outside the
+current visible interval changes top: `top := selected`
 when `maxTop ≠ 0`, `top := min(top, maxTop)`, and the assoc'd slider knob
 becomes `trunc(travel × top / maxTop)`.
 
 **Established — the painter.** Background is the `Listbox` tile of the
-common GAF (or the saved-under image), then rows `i = 0, 1, …` while
-`h − (i+1)·rowH ≥ metric` and `top + i < count`: row rectangle
+common GAF (or the saved-under image). The painter draws the first row
+once the nonempty text-list branch is admitted. After each
+row it subtracts `rowH` from remaining height and admits the next row only
+when the remainder is at least `metric` and another item remains. Thus row
+index `i > 0` requires `h − i·rowH ≥ metric`, alongside
+`top + i < count`; row zero has no additional fit test. The earlier
+`h − (i+1)·rowH` reading moved a post-draw test before the current row and
+incorrectly dropped a row. Admission caches the current font metric and
+row height before selecting the gadget’s FNT; selection leaves the active
+GAF font unchanged. A later metric query for wrapped versus single-line
+text does not replace that cached admission metric. The row rectangle is
 `(gx+2, gy+2+i·rowH) – (gx+w, gy+2+(i+1)·rowH)`; text pen X by attribute
 1 / 2 / 4 = `gx+2` / centred / `gx+w−textW`, Y the row top; a row taller
 than `metric + 6` uses the word-wrapping drawer, else the single-line
@@ -7590,14 +7600,45 @@ second on the pinned panel; with F4 off the flash arrays are never armed
 and Space shows a panel with steady numbers. The bit's user-facing name
 remains **Unknown** — no string in the image names it.
 
+**Established — idle viewport click classification.** When an idle left press
+starts a viewport drag, save a fresh reading of the scaled wall clock and
+initialize both drag endpoints from the current ground-resolved world point.
+Each coordinate is the signed whole part of its 16.16 value. On a subsequent
+non-release drag pass, replace the moving endpoint with the current
+ground-resolved point. On left release, clear drag-active and classify using
+the stored endpoints; the release pass does not first refresh the moving
+endpoint.
+
+Take a fresh scaled wall-clock reading during release processing. Form the
+saved press reading plus **25**, retaining the low 32 bits. A click requires
+the current reading to be **strictly less** than that deadline under a signed
+32-bit comparison, and the absolute differences of the two endpoints'
+whole-world **X and Z** coordinates each to be **strictly less than 32**.
+Equality at 25 or on either dimension at 32 is a box release. Y does not
+participate in this classification. A failed click test follows the existing
+box-selection path. The accepted world-click handler uses the release input
+and current resolved pointer; its command position is therefore distinct from
+the stored endpoint used for classification.
+
+**Established — timing identity and wrap.** Both press and release sample the
+live scaled clock when the battle handler processes them; they do not use the
+timestamps carried by the input records and do not use the authoritative
+simulation tick. With a 32-bit unsigned millisecond reading, the clock is
+`floor(((milliseconds × 30) modulo 2^32) / 1000)`: multiplication wraps before
+the unsigned division. The deadline comparison is an absolute signed
+comparison, not an unsigned elapsed-time subtraction. Consequently a clock
+reading lowered by multiplication wrap can still satisfy the deadline test.
+The clock's own result range is 0 through 4,294,967, so reachable clock
+readings and their 25-unit deadlines remain positive signed integers.
+
 **Established — the world-click handler is region-agnostic, and its branch
 order.** Under `Interface Type 0` the frame handler routes a left-down to
 the world-click handler whenever the armed-order latch is not idle, whatever
 the region. With the latch idle, a left-down over the **minimap** (region
 bit 0) goes to the handler at once — no box drag starts on the minimap —
 while over the view it starts a box drag whose release counts as a click
-when it arrives within 25 scaled-timer units of the press and moved under
-32 pixels on both axes. (Under `Interface Type 1` an idle-latch left-down
+when the strict clock deadline and stored whole-world endpoint tests below
+pass. (Under `Interface Type 1` an idle-latch left-down
 over the minimap sets the minimap latch of §11 instead.) The handler then
 tests, in this order:
 
@@ -7754,9 +7795,13 @@ or `Continue` callback.
 The GUI's named controls include `Start`, `LoadGame`, `SaveGame`, `MainMenu`,
 and `Difficulty`; the result action is attached to the authored `Start`
 control, not a control named `Continue`. The GAF contains `outcdivider`,
-`victory`, and `defeat` entries. `victory` and `defeat` are direct outcome
-copies rather than gadget references: the renderer blits the selected frame
-using its authored anchor offsets at the negotiated surface center [fmt gaf].
+`victory`, and `defeat` entries. **Established:** the results title uses frame
+0 of `igvictory` or `igdefeat` from `anims/igtitles.gaf`, not those endmsn
+copies. Its draw anchor is `(surfaceWidth/2, 28)` and the ordinary frame
+blitter subtracts that selected frame’s authored offsets. The earlier claim
+that ENDMSN drew its own copies at surface center was incorrect; the loader
+and results composer establish the shared title source [08 R-CAMP-01 §8]
+[fmt gaf].
 
 The file's end-mission controls are initially inactive in the retail asset.
 The end-mission initializer chooses the outcome resource from campaign

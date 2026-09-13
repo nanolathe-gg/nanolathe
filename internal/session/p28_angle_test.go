@@ -63,20 +63,37 @@ func TestP28CompositionBindsSimulationStreamBeforeCreation(t *testing.T) {
 	}
 }
 
-func TestP28SkirmishScenarioAngleOverwritesAfterAllocatorDrawSequence(t *testing.T) {
-	s := strictNewSessionWithUnits(t, 0, 43, 47)
-	def := s.Catalog.Units["armcom"]
-	def.BuildAngle = 4096
-	before := s.SimRNG().Draws()
-	m := &mission.Mission{Units: []mission.UnitPlacement{{UnitName: "armcom", Player: 0, Angle: 54321}}}
-	if err := skirmishReconstructUnits(s, SkirmishConfig{NumPlayers: 0, Location: 1}, m); err != nil {
-		t.Fatalf("skirmishReconstructUnits: %v", err)
+func TestP28SkirmishIgnoresAuthoredUnitsWithoutConsumingDraws(t *testing.T) {
+	makeRun := func(placements []mission.UnitPlacement) *Session {
+		s := strictNewSessionWithUnits(t, 0, 43, 47)
+		s.Catalog.Units["armcom"].BuildAngle = 4096
+		cfg := SkirmishConfig{NumPlayers: 2, Location: 1}
+		prepareFixtureSkirmishCatalog(s.Catalog, &cfg)
+		m := &mission.Mission{
+			Specials: []mission.Special{{Kind: 1, ID: 0, X: 10, Z: 10}, {Kind: 1, ID: 1, X: 20, Z: 20}},
+			Units:    placements,
+		}
+		before := s.SimRNG().Draws()
+		if err := skirmishReconstructUnits(s, cfg, m); err != nil {
+			t.Fatalf("skirmishReconstructUnits: %v", err)
+		}
+		if got := len(s.Units.Iter()); got != cfg.NumPlayers {
+			t.Fatalf("created %d units, want only %d eligible commanders", got, cfg.NumPlayers)
+		}
+		if got := s.SimRNG().Draws() - before; got != uint64(2*cfg.NumPlayers) {
+			t.Fatalf("allocation draw delta = %d, want two per eligible commander", got)
+		}
+		return s
 	}
-	created := s.Units.Iter()
-	if len(created) != 1 || created[0].Move.Heading != 54321 {
-		t.Fatalf("skirmish scenario heading = %+v, want authored 54321", created)
-	}
-	if got := s.SimRNG().Draws() - before; got != 2 {
-		t.Fatalf("skirmish scenario allocation draw delta = %d, want 2", got)
+	plain := makeRun(nil)
+	scenario := makeRun([]mission.UnitPlacement{
+		{UnitName: "armcom", Player: 0, Angle: 54321},
+		{UnitName: "armcom", Player: 6, Angle: 12345},
+	})
+	for i, want := range plain.Units.Iter() {
+		got := scenario.Units.Iter()[i]
+		if got.Owner != want.Owner || got.Move.Heading != want.Move.Heading || got.PlacementIdx != -1 {
+			t.Fatalf("scenario changed eligible commander %d: got %+v, want %+v", i, got, want)
+		}
 	}
 }

@@ -58,7 +58,7 @@ func newGuardLegsFixture(t *testing.T) *guardLegsFixture {
 	// [04 R-UNIT-06 §1][05 R-SHARE-01 §1] — a one-directional read, not the
 	// symmetric Hostility predicate above. Here: nobody has declared toward
 	// anybody, so a different owner is hostile.
-	b.World = &WorldQueryAdapter{DeclaresAlliance: func(from, toward uint8) bool { return from == toward }}
+	b.World = &WorldQueryAdapter{SeaLevel: func() uint8 { return 0 }, DeclaresAlliance: func(from, toward uint8) bool { return from == toward }}
 	QueueForUnit(f.guard).SetBinding(b)
 	QueueForUnit(f.enemy).SetBinding(&QueueBinding{})
 	// The ward's recorded-attacker link: the unit that last damaged it

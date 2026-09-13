@@ -281,8 +281,13 @@ func playSelectionCue(sess *session.Session, handles []pool.Handle) {
 // battle-interface dirty bit `0x10` and plays the `nextbuildmenu` cue"
 // [07 §9 "Page encoding is closed"], and the routine validates the
 // selected-builder identity and the page-count guard first — so a refused
-// switch is silent, which is why the cue keys on DispatchBuildPage succeeding.
+// switch is silent. Pending page commands participate in the old-page
+// identity so repeated input before publication only cues actual transitions.
 func (b *battleSession) dispatchBuildPageCued(page int) error {
+	f, ok := b.currentSnapshot()
+	if ok && b.effectiveBuildPage(f) == page {
+		return nil
+	}
 	err := b.DispatchBuildPage(page)
 	if err == nil {
 		b.playUICue(nil, cueNextBuildMenu)

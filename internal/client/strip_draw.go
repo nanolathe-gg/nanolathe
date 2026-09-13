@@ -52,7 +52,9 @@ func (c *Client) drawStripSlot(cur *frame.Frame, strip int8) StripDrawStats {
 		return StripDrawStats{}
 	}
 	c.drawEffectStrip(cur, strip)
-	return c.drawStripBarrier(cur, strip)
+	stats := c.drawStripBarrier(cur, strip)
+	c.addStripStats(stats)
+	return stats
 }
 
 // drawStripBarrier draws the committed strip objects of one barrier, in the

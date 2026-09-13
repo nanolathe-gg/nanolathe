@@ -13,9 +13,9 @@ const underwaterExempt uint32 = 0x200
 
 // Target is the gameplay visibility query [03 §3.2] C8.
 //
-// X, Y and Z are authoritative 16.16 world coordinates. The extents are the
-// definition's hull deltas, also 16.16, and they are NOT the full footprint —
-// [03 §3.2] distinguishes the small LOS hull box from the placement footprint.
+// X, Y and Z are the first hull probe in 16.16 world coordinates, formed by
+// TargetFromBounds for units. The extents are the definition's full signed
+// bounding spans, also 16.16 [06 §3.1][03 §3.2].
 type Target struct {
 	Owner   PlayerID
 	X, Y, Z numeric.Fixed
@@ -59,7 +59,20 @@ func pixel(v numeric.Fixed) int32 {
 // 0x200 exempt, 4 sample projection against the mode-selected source with a
 // four-point hull [03 §3.2] [06 §3.1].
 func (s *Service) IsVisible(viewer PlayerID, t Target) bool {
-	if s == nil || !validPlayer(viewer) || !validPlayer(t.Owner) {
+	if s == nil {
+		return false
+	}
+	return t.IsVisible(viewer, s.seaLevelWorld(), func(x, y, z numeric.Fixed) bool {
+		return s.sample(viewer, x, y, z)
+	})
+}
+
+// IsVisible applies the same ordered gameplay gate to live or committed hull
+// inputs. The caller supplies only the mode-selected point sampler; ownership,
+// hidden state, depth and the cumulative four-probe walk stay here [03 §3.2]
+// [06 §3.1].
+func (t Target) IsVisible(viewer PlayerID, seaLevel numeric.Fixed, sample func(x, y, z numeric.Fixed) bool) bool {
+	if !validPlayer(viewer) || !validPlayer(t.Owner) {
 		return false
 	}
 	// 1. owner identity bypass — queried record equals unit's owner ⇒ visible [C8.1] P0-11.
@@ -79,10 +92,7 @@ func (s *Service) IsVisible(viewer PlayerID, t Target) bool {
 	// Sea level is the map header byte scaled to world units [03 §2.2] C9 —
 	// not zero. Comparing against zero makes every unit between world Y 0 and
 	// sea level wrongly visible on any map with a nonzero sea-level byte.
-	if t.Status&underwaterExempt == 0 && t.Y < s.seaLevelWorld() {
-		return false
-	}
-	if s.W == 0 || s.H == 0 {
+	if t.Status&underwaterExempt == 0 && t.Y < seaLevel {
 		return false
 	}
 	// 4-5. The four hull samples ACCUMULATE: one coordinate triple is carried
@@ -90,20 +100,20 @@ func (s *Service) IsVisible(viewer PlayerID, t Target) bool {
 	// That is why the last step subtracts the X extent "again". The resulting
 	// figure is a rectangle in projected space, not a diamond about the base.
 	x, y, z := t.X, t.Y, t.Z
-	if s.sample(viewer, x, y, z) { // 0: centre
+	if sample(x, y, z) { // 0: centre
 		return true
 	}
 	x += t.XExtent
-	if s.sample(viewer, x, y, z) { // 1: east
+	if sample(x, y, z) { // 1: east
 		return true
 	}
 	y -= t.YExtent
 	z += t.ZExtent
-	if s.sample(viewer, x, y, z) { // 2: north, still carrying the east offset
+	if sample(x, y, z) { // 2: north, still carrying the east offset
 		return true
 	}
 	x -= t.XExtent
-	return s.sample(viewer, x, y, z) // 3: west, still carrying the north offset
+	return sample(x, y, z) // 3: west, still carrying the north offset
 }
 
 // sample projects one world point and tests the mode-selected source

@@ -159,12 +159,7 @@ func (s *System) moveGoalForUnit(u *units.Unit) (x, z numeric.Fixed, ok bool) {
 	if q == nil {
 		return 0, 0, false
 	}
-	var head *orders.Node
-	if q.LenPrimary() > 0 {
-		head = q.Primary()[0]
-	} else {
-		head = q.Head()
-	}
+	head := q.Head()
 	if head == nil {
 		return 0, 0, false
 	}

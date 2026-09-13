@@ -42,13 +42,14 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, f *fr
 			gad.ColorF = panel.FlashRow(i)
 		}
 		command, isCommand := commandGadgetVerdict(gad, f, paged)
-		if isCommand && command.hidden {
+		dynamic, _ := paletteGadgetVerdict(gad, f, paged, b.cat)
+		if dynamic.hidden {
 			// A hidden command button is one the switch deactivates outright —
 			// LOAD without the transport bit, BLAST with it [07 R-HUD-03 §6].
 			// An inactive gadget paints nothing [07 §3].
 			continue
 		}
-		grey := gad.GrayedOut&1 != 0 || (isCommand && command.grey)
+		grey := gad.GrayedOut&1 != 0 || dynamic.grey
 		var frameArt *formats.GAFFrame
 		if isCommand {
 			frameArt = commandButtonFrame(h.gadgetArtEntry(gad, pageGAF), gad, command.stage, grey, down != 0)
@@ -387,6 +388,25 @@ func buildButtonPage(f *frame.Frame) int {
 // gadget the table does not name — a product slot, NEXT/PREV, a label.
 func commandGadgetVerdict(gad gui.Gadget, f *frame.Frame, paged bool) (commandButtonVerdict, bool) {
 	return commandButtonState(commandButtonName(gad.Name), f, paged)
+}
+
+// paletteGadgetVerdict adds the authored page arrow and product admission
+// to the command table, shared by paint and input [07 R-HUD-03 §6].
+func paletteGadgetVerdict(gad gui.Gadget, f *frame.Frame, paged bool, cat *content.Catalog) (commandButtonVerdict, bool) {
+	if f != nil {
+		name := strings.ToUpper(gad.Name)
+		if strings.HasSuffix(name, "NEXT") || strings.HasSuffix(name, "PREV") {
+			return commandButtonVerdict{hidden: f.CommandPage.PageCount < 2}, true
+		}
+		if f.CommandPage.Page > 0 && gad.CommonAttribs&4 != 0 {
+			var product *content.UnitDef
+			if cat != nil {
+				product, _ = cat.Unit(gad.Name)
+			}
+			return commandButtonVerdict{grey: product == nil}, true
+		}
+	}
+	return commandGadgetVerdict(gad, f, paged)
 }
 
 // commandButtonNames are the gadget names of the command-button stage and grey

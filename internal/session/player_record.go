@@ -63,8 +63,9 @@ func (s *Session) SetViewingOwner(player uint8) bool {
 // [08 R-TRIG-01 §3] and the deathmatch respawn all ask it.
 //
 // A campaign battle runs no row-to-player conversion, so its side comes from
-// the campaign player table: the briefing panel's `campaignside` resolves the
-// two rows directly [08 R-CAMP-01 §1][08 R-CAMP-01 §3], and a retail restore
+// the campaign player table: the explicit frontend selection writes the two
+// rows before prime; absent selection can resolve through a named campaign's
+// admission filter [08 R-CAMP-01 §1][08 R-CAMP-01 §3]. A retail restore
 // rebuilds the same table from the account's `Side` item, "that slot's
 // player-table side ordinal" [08 "Player records"]. A campaign slot neither
 // writer supplied has no authored side and stays unknown [I9] — the caller

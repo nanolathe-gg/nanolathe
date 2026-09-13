@@ -15,38 +15,12 @@ import (
 // NumSlots is the fixed retail slot count [06 §1.2].
 const NumSlots = 3 // [06 §1.2] primary, secondary, tertiary
 
-// Slot container layout per P0-10 [06 §1.2] [06 §4.1].
-//
-// Retail's executable stores slot state inside the unit record as three
-// contiguous slot records, roughly 24 bytes of logical state each (a 28-byte
-// stride in the executable image) [06 §1.2]. Go stores named fields, not
-// packed bytes (I13); flag bit values below are the citable contract, not a
-// byte offset.
-//
-// Each slot record holds: a flags byte carrying the armed/has-target bit
-// 0x02, the Aim-request latch bit 0x01, and the tracking bit 0x10; a
-// resolved weapon definition pointer; a signed reload countdown in ticks; a
-// stockpile remainder byte; desired yaw and pitch; and an encoded target — a
-// unit slot index when the sentinel value -0x8000 is present, otherwise a
-// ground point whose world X/Z words later resolve to height through the
-// terrain query [06 §1.2]. The unit record separately carries a firing
-// status word and an out-of-range status byte.
-//
-// Determinism: slots visited 0..2 asc [06 §1.2] C1 (I1).
-const (
-	SlotStride                 = 0x1C
-	SlotBaseOffset             = 0x1F
-	SlotLogicalSize            = 24
-	FlagArmed            uint8 = 0x02    // hasTarget [06 §1.2] P0-10
-	FlagAimLatch         uint8 = 0x01    // Aim-request latch [06 §3.3] P0-10 (OR 0x01 immediately after Aim dispatch)
-	FlagTracking         uint8 = 0x10    // tracking [06 §1.2]
-	TargetSentinelUnit   int16 = -0x8000 // 0x8000 sentinel unit latch [06 §1.2] P0-10
-	TargetSentinelGround int16 = 0       // any != -0x8000 is ground
-)
+// Slot flags are logical state; visits use numeric slot order [06 §1.2].
+const FlagAimLatch uint8 = 0x01 // Aim-request latch [06 §3.3]
 
 // Slot is one weapon slot per unit [06 §1.2] C1 (I13).
 //
-// Retail offsets above are exact; Go stores named fields (I13).
+// Go stores named logical fields [I13].
 // Determinism: slots visited numeric order 0..2 [06 §1.2] C1 (I1).
 type Slot struct {
 	// Weapon is the resolved weapon definition for this slot [06 §1.2] C1 (I13).

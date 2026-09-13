@@ -178,7 +178,7 @@ func TestMissionTriggerDeadlineLatchAndCue(t *testing.T) {
 		t.Fatalf("sixth true due did not latch exact win: %+v", s.Latch)
 	}
 	events := s.publication.events.Events()
-	if len(events) != 1 || events[0].Kind != frame.KindAudio || events[0].Sound != "Victory Condition" || events[0].AudioPositional {
+	if len(events) != 1 || events[0].Kind != frame.KindAudio || events[0].Sound != "Victory Condition" || events[0].AudioPositional || !events[0].AudioAudible {
 		t.Fatalf("victory cue must publish once as unpositioned exact alias: %+v", events)
 	}
 }

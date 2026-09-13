@@ -628,3 +628,25 @@ func TestWeaponDamageLookupOrderContributesToHash(t *testing.T) {
 		t.Fatal("different lower-bound damage winners must change the definition hash")
 	}
 }
+
+func TestWeaponLookupRetainsSlotOrderWithoutSharingMutableSlice(t *testing.T) {
+	first := &WeaponDef{ID: 2}
+	first.CanonicalKey = "shared"
+	later := &WeaponDef{ID: 9}
+	later.CanonicalKey = "shared"
+	cat := &Catalog{Weapons: map[string]*WeaponDef{"first": first, "later": later}}
+	cat.RebuildWeaponIndex()
+	records := cat.WeaponRecordsByID()
+	records[0] = later
+	if got, ok := cat.WeaponByName("SHARED"); !ok || got != first {
+		t.Fatal("runtime lookup lost first slot or borrowed caller slice")
+	}
+	if n := testing.AllocsPerRun(100, func() { cat.WeaponByName("shared") }); n != 0 {
+		t.Fatalf("compiled runtime lookup allocates %v times", n)
+	}
+	clone := cat.Clone()
+	got, ok := clone.WeaponByName("shared")
+	if !ok || got == first || got != clone.Weapons["first"] {
+		t.Fatal("cloned index references original catalog")
+	}
+}

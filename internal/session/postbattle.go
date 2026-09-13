@@ -140,18 +140,20 @@ type PostBattleController struct {
 	cfg    PostBattleConfig
 	state  PostBattleState
 
-	entered          bool
-	fadeRemaining    int
-	fadeDeadline     uint32
-	glamourDone      bool
-	glamourDue       uint32
-	glamourPrompt    uint32
-	promptDone       bool
-	glamourSoundDone bool
-	progressDone     bool
-	endMissionDone   bool
-	routed           bool
-	selectedMission  int
+	entered             bool
+	fadeRemaining       int
+	fadeDeadline        uint32
+	glamourDone         bool
+	glamourDue          uint32
+	glamourPrompt       uint32
+	promptDone          bool
+	glamourSoundDone    bool
+	progressDone        bool
+	endMissionDone      bool
+	routed              bool
+	selectedMission     int
+	missionSelection    int
+	missionSelectionSet bool
 
 	effects []PostBattleEffect
 	order   []PostBattleState
@@ -268,6 +270,17 @@ func (c *PostBattleController) NextMission() (int, bool) {
 	return c.cfg.MissionIndex, true
 }
 
+// SelectMission receives a validated authored index from the ENDMSN list
+// adapter before Start; showing or changing a row does not route the screen
+// [08 R-CAMP-01 §8].
+func (c *PostBattleController) SelectMission(index int) bool {
+	if c == nil || !c.AdmitControl(PostBattleControlStart) || index < 0 {
+		return false
+	}
+	c.missionSelection, c.missionSelectionSet = index, true
+	return true
+}
+
 // SelectedMission is the successor selected by Start. It is unavailable
 // until the typed Start control is accepted and is never populated merely by
 // showing ENDMSN [08 R-CAMP-01 §8].
@@ -325,6 +338,9 @@ func (c *PostBattleController) Handle(control PostBattleControl, now uint32) boo
 		c.emit(PostBattleEffect{Kind: PostBattleEffectDifficultyChanged, Mission: c.cfg.Difficulty})
 	case PostBattleControlStart:
 		if next, ok := c.NextMission(); ok {
+			if c.missionSelectionSet {
+				next = c.missionSelection
+			}
 			c.selectedMission = next
 			c.emit(PostBattleEffect{Kind: PostBattleEffectPopulateEndMission, Mission: next})
 			c.endMissionDone = true

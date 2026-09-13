@@ -111,6 +111,21 @@ stays paused until dismissed. This is the requested host UI policy in §5.
 
 Only the non-tick half is described here.
 
+`MissionEntryOptions` carries both the selected side and an explicit presence
+bit through fresh campaign composition. Side zero is a selection. Player side
+mirrors and economy side words are installed before entry priming, and entering
+local preload preserves that primed economy state. Constructors without an
+explicit selection retain authored-side resolution. Full battle restores also
+restore the shell campaign identity, side and difficulty before continuation.
+
+The ENDMSN list uses authored mission indices and includes the whole campaign
+with completion marks. Its selection survives repaint; Start resolves the chosen
+mission and preflights its briefing GUI before installing the next controller.
+Difficulty writes the shared setup selector. Child GUI failures retain the
+parent input owner and report the unavailable resource. Fresh skirmish restart
+retains the original setup and controller rows; imported saves use their
+separate reconstruction path.
+
 `Session.CommitCampaignTeardown` is the shared campaign mark writer for the
 ordinary ending transition and manual teardown. It reads the live win bit;
 a pending outcome does not replace that bit. The frontend return retains the
@@ -1098,11 +1113,15 @@ validator to report placeable `[08 R-AI-03 §2]` `[08 R-AI-03 §3]`
 `[08 R-AI-03 §4]` `[08 R-AI-03 §4-A]` `[08 R-AI-03 §5]` `[08 R-AI-03 §7.4]`
 `[08 "Placement root and search helpers"]`.
 
-**C9 — the draw-bound census.** The bounds this package uses are 30 for the
-refresh gate, the cumulative total for the choice, 255 for the extractor
-branch, 65536 for positioning, and 5, 150 and 900 for the task rescheduling.
-Any other bound here is a defect `[08 R-P0-05 §4]` `[08 R-AI-01 §6]`
-`[08 R-AI-01 §7]` [I4].
+**C9 — the draw-bound census.** Preserve the complete ordered ledgers of
+selection, placement, task bodies and rescheduling in the owning research
+sections. Explore reschedules before its body and an empty vector still takes
+its nonzero-centre branch: one leg-count draw followed by two coordinate draws
+per leg. Construction pass one has no completion gate; its current-order static
+mask remains the relevant admission test. Bounds also include the map-derived
+placement/scatter dimensions and task-body branches, so a short list of fixed
+rescheduling constants is not an exhaustive census `[08 R-AI-01 §3]`
+`[08 R-AI-01 §6]` `[08 R-AI-01 §7]` `[08 R-AI-03 §4]` [I4].
 
 **C10 — the inert inputs stay inert.** The per-definition AI weight fragment is
 read; the per-definition AI limit has no semantic reader and is wired to

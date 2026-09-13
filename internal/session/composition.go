@@ -1409,6 +1409,30 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 	}
 }
 
+// newConstructionService applies the same difficulty/controller inputs as the
+// ledger to both construction refund sites [05 R-ECO-01 §11].
+func (s *Session) newConstructionService() *construction.Service {
+	service := construction.NewService(s.World, s.Catalog, s.Units, s.Econ)
+	s.bindConstructionEconomy(service)
+	return service
+}
+
+func (s *Session) bindConstructionEconomy(service *construction.Service) {
+	if service == nil {
+		return
+	}
+	service.Economy = s.Econ
+	service.ModeSelector = 2 // Unset difficulty follows the ledger's whole-credit path.
+	if s.Econ != nil && s.Econ.EconomySelector != nil {
+		service.ModeSelector = *s.Econ.EconomySelector
+	} else if word, ok := sessionDifficultyWord(s); ok {
+		service.ModeSelector = word
+	}
+	service.IsSpecialSecondState = func(owner uint8) bool {
+		return s.Econ != nil && int(owner) < len(s.Econ.Players) && s.Econ.Players[owner].ControllerState == 2
+	}
+}
+
 // bindOrderQueue installs the session-owned order context immediately after a
 // constructor allocates a unit. The construction service retains the same
 // binding for later product queues and queue replacement.
@@ -1417,7 +1441,7 @@ func (s *Session) bindOrderQueue(u *units.Unit) {
 		return
 	}
 	if s.Build == nil {
-		s.Build = construction.NewService(s.World, s.Catalog, s.Units, s.Econ)
+		s.Build = s.newConstructionService()
 	}
 	// Combat is a required single-player owner of weapon state. Construct it
 	// before validating the queue seam so a normal session cannot enter the
@@ -1801,7 +1825,7 @@ func createAndBindServices(s *Session) error {
 	// adapter reports the concrete service's presence; it is not an inert
 	// placeholder used to let a battle enter composition [P0-00 A.3].
 	if s.Build == nil {
-		s.Build = construction.NewService(s.World, s.Catalog, s.Units, s.Econ)
+		s.Build = s.newConstructionService()
 	}
 	// Combat is a required single-player owner of weapon state. Construct it
 	// before validating the queue seam so a normal session cannot enter the
@@ -1859,8 +1883,9 @@ func createAndBindServices(s *Session) error {
 	}
 	// Construction [05]
 	if s.Build == nil {
-		s.Build = construction.NewService(s.World, s.Catalog, s.Units, s.Econ)
+		s.Build = s.newConstructionService()
 	}
+	s.bindConstructionEconomy(s.Build)
 	s.Build.OrderBinding = queueBinding
 	s.Build.DebugBuilderIdentity = s.debugUnitIdentity
 	// Construction queries the immutable model retained by each strict COB

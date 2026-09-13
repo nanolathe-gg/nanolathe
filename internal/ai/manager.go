@@ -620,7 +620,7 @@ func (m *Manager) constructionPlacePass(tick uint32, w *units.World, econ *econo
 	// admissions to this input [R-P0-04].
 	for _, h := range m.GroupConstruction {
 		u := w.Unit(h)
-		if u == nil || !u.Alive || u.Owner != m.Player || u.Remaining != 0 || u.Def == nil {
+		if u == nil || !u.Alive || u.Owner != m.Player || u.Def == nil {
 			continue
 		}
 		// The membership test is the definition's build-option count, not its
@@ -1137,6 +1137,9 @@ func (m *Manager) broadcastGroupOrder(w *units.World, group uint8, intent int, m
 		if u == nil || !u.Alive || u.Owner != m.Player || u.Def == nil || u.Group != group {
 			continue
 		}
+		// A fresh unit may have no queue yet. Resolver admission already
+		// needs the session diplomacy and sea level [04 R-ORD-02 §1].
+		orders.BindQueueBinding(u, m.OrderBinding)
 		id := resolveAIIntent(intent, u, target, x, y, z)
 		m.submitResolvedOrder(u, id, target, x, y, z, tick, modifier, spacing)
 	}
@@ -1344,8 +1347,8 @@ func drawBelowSigned(r *rng.Simulation, bound int32) uint32 {
 // doExplore implements the explore/gather task at tick plus 30 plus RNG(900)
 // [08 "Strategy manager and its task graph"].
 // The explore vector is populated by the recovered classifier (category 8),
-// load, control-group, or wave-transfer writers. An empty vector remains a
-// normal no-op; no world scan is permitted here [P0-02][R-P0-04].
+// load, control-group, or wave-transfer writers. An empty vector still consumes
+// the centre-branch draws before broadcasting to no members [08 R-AI-01 §6].
 func (m *Manager) doExplore(tick uint32, w *units.World, econ *economy.Service) {
 	_ = econ
 	if w == nil {
@@ -1356,9 +1359,6 @@ func (m *Manager) doExplore(tick uint32, w *units.World, econ *economy.Service) 
 		return
 	}
 	group := m.GroupExplore
-	if len(group) == 0 {
-		return
-	}
 	if m.Terrain == nil {
 		return
 	}

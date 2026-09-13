@@ -10,7 +10,7 @@ import (
 )
 
 // FileVersion is the schema tag. A file whose Version is unrecognised is
-// discarded in favour of the defaults rather than half-read.
+// ignored in memory in favour of defaults. Its original bytes are preserved.
 const FileVersion = 1
 
 // EnvPath overrides the resolved settings path in full. It exists so a test or
@@ -563,16 +563,18 @@ func (s *Settings) SetDamageBarsEnabled(on bool) {
 // StoreDamageBars persists one damagebars state. Retail's key command flips
 // the bit and immediately writes every setting back, so this reads the whole
 // block, replaces the bit and rewrites the whole block [07 R-HUD-03 §7].
-// A block that could not be read is reported and the write still proceeds from
-// the defaults, because losing the rest of the preferences must not silently
-// swallow the toggle the player just pressed.
+// An unreadable block is preserved and the error reported. This host recovery
+// policy protects unrelated preferences while the in-memory toggle remains live.
 func StoreDamageBars(on bool) error {
 	s, loadErr := Load()
+	if loadErr != nil {
+		return loadErr
+	}
 	s.SetDamageBarsEnabled(on)
 	if err := s.Save(); err != nil {
 		return err
 	}
-	return loadErr
+	return nil
 }
 
 // Defaults returns the block the startup reader installs when nothing is
@@ -790,8 +792,13 @@ func (s Settings) Save() error {
 // SaveTo writes the whole block, the way the retail writer rewrites every value
 // rather than tracking which one changed. The write goes to a sibling temp
 // file and is renamed over the target, so an interrupted save cannot leave a
-// half-written file where the next start expects settings.
+// half-written file where the next start expects settings. As a host recovery
+// policy, an existing unreadable or unsupported file is never replaced; return
+// its error so the caller can report the failure while keeping in-memory state.
 func (s Settings) SaveTo(path string) error {
+	if _, err := LoadFrom(path); err != nil {
+		return fmt.Errorf("settings: preserve existing file: %w", err)
+	}
 	s.Normalize()
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {

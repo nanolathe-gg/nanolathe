@@ -5,78 +5,30 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/visibility"
 )
 
-// SnapshotVisible is the gameplay visibility gate evaluated over the committed
-// frame [03 §3.2]. Its five steps run in the researched order: owner-identity
-// bypass, cloak early-out, below-sea-level rejection with the runtime
-// exemption, then the four accumulating hull samples against the mode-selected
-// committed coverage.
-//
-// Every input is published. The hull extent triple and the exemption bit ride
-// the unit view and the scaled sea level rides the visibility view, so nothing
-// here reads a live definition or the mutable terrain [I6].
+// SnapshotVisible evaluates the shared gameplay gate using only committed
+// inputs. The published hull offsets locate the first probe independently of
+// the unit's draw base; its top height controls the sea-level test [06 §3.1].
+// The sample projection and mode-selected coverage remain committed [03 §3.2][I6].
 func SnapshotVisible(f *frame.Frame, v frame.UnitView, viewer uint8) bool {
-	if f == nil || viewer >= 10 {
+	if f == nil {
 		return false
 	}
-	if v.Owner == viewer {
-		return true
+	var status uint32
+	if v.UnderwaterExempt {
+		status = visibility.SonarBit
 	}
-	// Step 2 of the gate [03 §3.2]: a cloaked unit is hidden from a non-owner
-	// unless its decloak timer is running [03 §3.4].
-	//
-	// This used to read the instance flag word directly, as `Flags&0x4` with
-	// `Flags&0x1000` for the timer. Neither bit means that there: 0x4 is the
-	// construction layer's start-building edge and 0x1000 is the order pump's
-	// active-record marker. So every enemy builder vanished the moment it began
-	// building — a play-test report of aircraft plants disappearing behind
-	// their own nanoframe and spray — and a genuinely cloaked unit was never
-	// hidden at all. The committed frame carries the two real inputs; nothing
-	// is reconstructed from presentation bits [03 §3.2][R-VIS-01 §4].
-	if v.Cloaked && !v.Decloaking {
-		return false
+	target := visibility.Target{
+		Owner: visibility.PlayerID(v.Owner),
+		X:     v.X + v.HullOffsetX, Y: v.Y + v.HullOffsetY, Z: v.Z + v.HullOffsetZ,
+		XExtent: v.HullXExtent, YExtent: v.HullYExtent, ZExtent: v.HullZExtent,
+		Hidden: v.Cloaked, Status: status,
 	}
-	m := f.Visibility
-	// Step 3 of the gate [03 §3.2]: a base height below sea level is not
-	// visible unless the runtime underwater-exemption bit is set. Sea level is
-	// the map header byte scaled to world units — the comparison is against
-	// that scaled byte and never against zero [03 §2.2] — and the sensor phase
-	// sets the exemption on owned and allied units [03 §3.4], which is why
-	// those are never rejected for depth.
-	if !v.UnderwaterExempt && v.Y < m.SeaLevel {
-		return false
-	}
-	// Steps 4-5, the four hull samples [03 §3.2]. They ACCUMULATE: one
-	// coordinate triple is carried through all four tests and each step mutates
-	// it, which is why the last step subtracts the X extent "again". The figure
-	// is a rectangle in projected space, not a diamond about the base point.
-	// Any admitted sample returns visible.
-	//
-	// The north step subtracts the WHOLE published height word, not half of it.
-	// [03 §3.2]'s numbered list says "half-height subtracted from the height",
-	// but its own sample table writes `Y - ey` and the paragraph under that
-	// table settles what `ey` is: "its own definition field, distinct from the
-	// Z extent `ez`; the two are not the same value and neither is half of the
-	// unit's height". The list's phrase is the loose one — the projection's own
-	// half-height shear leaking into a sentence about sample offsets — and the
-	// table with its correction is the later, specific text. Halving here would
-	// admit a strictly smaller rectangle than the gate does.
-	x, y, z := v.X, v.Y, v.Z
-	if SnapshotPointVisible(m, x, y, z, viewer) { // 0: centre
-		return true
-	}
-	x += v.HullXExtent
-	if SnapshotPointVisible(m, x, y, z, viewer) { // 1: east
-		return true
-	}
-	y -= v.HullYExtent
-	z += v.HullZExtent
-	if SnapshotPointVisible(m, x, y, z, viewer) { // 2: north, still east-shifted
-		return true
-	}
-	x -= v.HullXExtent
-	return SnapshotPointVisible(m, x, y, z, viewer) // 3: west, still north-shifted
+	return target.IsVisible(visibility.PlayerID(viewer), f.Visibility.SeaLevel, func(x, y, z numeric.Fixed) bool {
+		return SnapshotPointVisible(f.Visibility, x, y, z, viewer)
+	})
 }
 
 // SnapshotPointVisible applies the committed visibility representation to one

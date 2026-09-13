@@ -378,3 +378,27 @@ func TestLoadFromDistinguishesAbsentFromZero(t *testing.T) {
 		}
 	})
 }
+
+func TestSavePreservesUnrecognizedSettings(t *testing.T) {
+	for _, body := range []string{`{"version":99,"futurePreference":"keep me"}`, `{"version":1,"difficulty":`, `{"version":1,"difficulty":"invalid"}`} {
+		path := filepath.Join(t.TempDir(), "settings.json")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := LoadFrom(path)
+		if err == nil {
+			t.Fatal("expected an unsupported or corrupt settings error")
+		}
+		if err := loaded.SaveTo(path); err == nil {
+			t.Fatal("saving defaults over unrecognized settings succeeded")
+		}
+		t.Setenv(EnvPath, path)
+		if err := StoreDamageBars(true); err == nil {
+			t.Fatal("damage bar toggle overwrote unrecognized settings")
+		}
+		got, err := os.ReadFile(path)
+		if err != nil || string(got) != body {
+			t.Fatalf("original settings changed: %q, %v", got, err)
+		}
+	}
+}

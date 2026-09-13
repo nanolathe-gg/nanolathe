@@ -359,6 +359,9 @@ func checkFogDevicePixels() error {
 		if err := checkFogDevicePixelsAt(scale); err != nil {
 			return err
 		}
+		if err := checkFogVariantDeviceStorageAt(scale); err != nil {
+			return err
+		}
 	}
 	return checkFogOrderedDevicePixels()
 }

@@ -4719,6 +4719,24 @@ friendly into a repair (only an unfinished one into assistance) and never
 resolves pickup, follow, or landing contextually; those need the explicit
 codes.
 
+**Established — delegated resolution is final.** When contextual code 1
+chooses code 3, in either interface variant, it resolves that code with the
+same actor, target and position and returns the resulting name immediately.
+This includes the empty name: an attack rejection does not resume the
+contextual list at reclaim, assistance, feature handling or move. Likewise,
+the default interface variant's hostile reclaim arm resolves code 12 and
+immediately returns its name, including an empty result. The alternative
+interface variant's hostile reclaim arm directly chooses `ReclaimUnit` or its
+air twin; it does not delegate to code 12. The default variant's unfinished
+nano-reachable target arm also immediately returns its delegated code-8
+result. Later contextual branches run only when the earlier branch's entrance
+condition was false, never because its delegated resolver rejected.
+
+Therefore an armed anti-air actor with `canattack` selecting a hostile
+non-airborne target contextually returns the same empty result as explicit
+code 3, even if the actor could otherwise reclaim or move. Equivalent
+propagation applies to the established water-class rejects of code 3.
+
 **Code 2 — move.** `canmove` required (else reject). No live mover →
 `QMove`. With a target, in order: `cancapture` and hostile → `Capture`;
 `canreclamate` and hostile → `ReclaimUnit` or air twin; friendly and

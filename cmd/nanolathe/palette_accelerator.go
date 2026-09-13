@@ -23,6 +23,7 @@ type paletteActivationContext struct {
 	page     *formats.GAF
 	paged    bool
 	selected *content.UnitDef
+	catalog  *content.Catalog
 }
 
 func (h *retailBattleHUD) paletteContext(b *battleSession) (paletteActivationContext, bool) {
@@ -41,7 +42,7 @@ func (h *retailBattleHUD) paletteContext(b *battleSession) (paletteActivationCon
 	if w == nil {
 		return paletteActivationContext{}, false
 	}
-	ctx := paletteActivationContext{frame: f, window: w, page: page, paged: commandPageIsPaged(f)}
+	ctx := paletteActivationContext{frame: f, window: w, page: page, paged: commandPageIsPaged(f), catalog: b.cat}
 	if f.CommandPage.Builder != 0 && f.CommandPage.PageCount != 0 && b.sess != nil && b.cat != nil {
 		if view, found := snapshotUnitByHandle(f, f.CommandPage.Builder); found && view.Owner == b.sess.LocalOwner {
 			if def, found := b.cat.Unit(view.DefName); found && def != nil && def.Builder {
@@ -81,7 +82,7 @@ func (h *retailBattleHUD) preparePalettePanel(p *ui.Panel, ctx paletteActivation
 	for i, gad := range ctx.window.Gadgets {
 		grey[i] = gad.GrayedOut
 		active := gad.Active != 0
-		if command, isCommand := commandGadgetVerdict(gad, ctx.frame, ctx.paged); isCommand {
+		if command, isCommand := paletteGadgetVerdict(gad, ctx.frame, ctx.paged, ctx.catalog); isCommand {
 			active = active && !command.hidden
 			if command.grey {
 				ctx.window.Gadgets[i].GrayedOut |= 1
@@ -176,7 +177,7 @@ func (h *retailBattleHUD) activatePaletteGadget(b *battleSession, ctx paletteAct
 	if gad.Active == 0 || gad.Kind != gui.KindButton || gad.GrayedOut&1 != 0 {
 		return false
 	}
-	command, isCommand := commandGadgetVerdict(gad, ctx.frame, ctx.paged)
+	command, isCommand := paletteGadgetVerdict(gad, ctx.frame, ctx.paged, ctx.catalog)
 	if isCommand && (command.hidden || command.grey) {
 		return false
 	}
@@ -199,8 +200,8 @@ func (h *retailBattleHUD) activatePaletteGadget(b *battleSession, ctx paletteAct
 			return true
 		}
 	}
-	next := hud.NextPageButton(int(ctx.frame.CommandPage.Page), int(ctx.frame.CommandPage.PageCount))
-	prev := hud.PrevPageButton(int(ctx.frame.CommandPage.Page), int(ctx.frame.CommandPage.PageCount))
+	next := hud.NextPageButton(b.effectiveBuildPage(ctx.frame), int(ctx.frame.CommandPage.PageCount))
+	prev := hud.PrevPageButton(b.effectiveBuildPage(ctx.frame), int(ctx.frame.CommandPage.PageCount))
 	if strings.Contains(upperName, "NEXTPAGE") || strings.Contains(upperName, "NEXT") && strings.Contains(upperName, "PAGE") || strings.Contains(upperName, "PAGEDOWN") {
 		if !rightClick {
 			_ = b.dispatchBuildPageCued(next)

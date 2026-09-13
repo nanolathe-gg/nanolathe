@@ -28,6 +28,7 @@ func TestRestoredFactoryAircraftRetainsPadUntilModeChange(t *testing.T) {
 	bd.FootprintX, bd.FootprintZ = 2, 2
 	pd.BMCode, pd.CanFly, pd.BuildTime = 1, true, 100
 	pd.FootprintX, pd.FootprintZ = 2, 2
+	pd.MaxVelocity = 65536 // the fixture now runs its ordinary flight integrator
 	builder.Def, product.Def = &bd, &pd
 	builder.HasMover = false
 	product.HasMover = true
@@ -108,6 +109,10 @@ func TestRestoredFactoryAircraftRetainsPadUntilModeChange(t *testing.T) {
 	if !dst.Movement.SetMoverMode(product, 2) {
 		t.Fatal("ordinary takeoff mode edge did not run")
 	}
+	assertPad(int16(product.Handle), 0)
+	dst.Movement.BeginTick(1)
+	dst.Movement.StepUnit(product.Handle, 1)
+	dst.Movement.EndTick(1)
 	assertPad(0, int16(product.Handle))
 	dst.Movement.ForgetUnit(product.Handle)
 	assertPad(0, 0)

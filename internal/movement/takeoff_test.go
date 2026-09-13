@@ -120,8 +120,12 @@ func TestTakeoffPreambleLeavesTheGroundPlane(t *testing.T) {
 	if !u.Activated {
 		t.Fatal("the preamble did not raise the activation edge — the takeoff script hook [04 R-AIR-01 §6 step 3]")
 	}
+	if _, held := sys.Grid.OccupantAt(cell); !held {
+		t.Fatal("takeoff request released ground before its mover commit [04 R-COLL-01 §1]")
+	}
+	modeCommitVisit(sys, u, 1)
 	if _, held := sys.Grid.OccupantAt(cell); held {
-		t.Fatal("an airborne aircraft still holds a ground cell [04 R-COLL-01 §4]")
+		t.Fatal("accepted takeoff retained its ground cell [04 R-COLL-01 §4]")
 	}
 	want := CruiseAltitudeForCarrier(sys.Terrain, u.X, u.Z, u, true)
 	got, pending := sys.ClimbTargetFor(u.Handle)

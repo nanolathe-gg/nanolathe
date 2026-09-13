@@ -38,9 +38,20 @@ func (g *gameShell) openCampaignBriefing() {
 	request := func() (freshBattleRequest, error) {
 		g.saveSettings()
 		identity := fmt.Sprintf("%s:MISSION%d", campaign.Path, missionIndex)
-		return missionBattleRequest(g.opts, g.cs, identity, g.missionDifficulty(), missionIndex, missionIndex, nil, battleSeeds)
+		request, err := missionBattleRequest(g.opts, g.cs, identity, g.missionDifficulty(), missionIndex, missionIndex, nil, battleSeeds)
+		request.value.SelectedSide, request.value.SelectedSideSet = g.missionSide, true
+		return request, err
 	}
-	g.briefing = NewCampaignBriefingController(loaded, g.missionSide, &crt, request)
+	briefing := NewCampaignBriefingController(loaded, g.missionSide, &crt, request)
+	panel := g.loadBriefingPanel(briefing.planet)
+	if panel == nil {
+		err := g.briefingUnavailableError()
+		if messageErr := g.showRetailMessage(err.Error()); messageErr != nil {
+			reportRetailMessageError(fmt.Errorf("%w: %v", err, messageErr))
+		}
+		return
+	}
+	g.briefing, g.briefingPanel = briefing, panel
 	if clPtr != nil && clPtr.Input() != nil {
 		clPtr.Input().DrainTokens()
 	}
@@ -60,7 +71,6 @@ func (g *gameShell) openCampaignBriefing() {
 		globals := mission.DecodeMissionGlobals(loaded.OTA.Global)
 		g.briefing.text = readBriefingText(g.cs, globals.Brief)
 	}
-	g.briefingPanel = g.loadBriefingPanel(g.briefing.planet)
 	g.installBriefingTextRegion()
 	g.briefingNowMS = 0
 }
@@ -130,42 +140,14 @@ func (g *gameShell) applyRetailContinuation(c *session.RetailCampaignContinuatio
 	if _, err := mission.LoadCampaignWithSink(g.cs.fs, c.CampaignPath, c.MissionIndex, c.Difficulty, 0, nil); err != nil {
 		return fmt.Errorf("nanolathe: retail continuation mission: %w", err)
 	}
-	// Build the selection candidate locally. In particular, do not append a
-	// newly discovered campaign to live frontend state until every identity
-	// check below has passed.
-	options := g.campaignOptions
-	optionIndex := -1
-	for i := range options {
-		candidate := options[i]
-		if strings.EqualFold(candidate.Path, c.CampaignPath) || strings.EqualFold(candidate.Name, c.CampaignName) {
-			optionIndex = i
-			break
-		}
+	if g.loadBriefingPanel(BriefingPlanet{}) == nil {
+		return g.briefingUnavailableError()
 	}
-	if optionIndex < 0 {
-		campaign, err := mission.DiscoverCampaign(g.cs.fs, c.CampaignPath)
-		if err != nil {
-			return fmt.Errorf("nanolathe: retail continuation campaign: %w", err)
-		}
-		if campaign == nil {
-			return fmt.Errorf("nanolathe: retail continuation campaign is unavailable")
-		}
-		options = append(append([]mission.Campaign(nil), options...), *campaign)
-		optionIndex = len(options) - 1
+	selection, err := g.resolveCampaignSelection(c.CampaignPath, c.MissionIndex, c.Side, c.Difficulty)
+	if err != nil {
+		return err
 	}
-	missionUIIndex, ok := campaignMissionUIIndex(options, optionIndex, c.MissionIndex)
-	if !ok {
-		return fmt.Errorf("nanolathe: retail continuation mission index %d is not selectable", c.MissionIndex)
-	}
-	// Selection/progress are now complete typed state. Only Thumbs is
-	// established on the between-missions Summary path. The older ten-slot WL
-	// view belongs to a fresh/default campaign lifetime and is reset below;
-	// there is no Thumbs-to-WL conversion.
-	g.campaignOptions = options
-	g.campaignIdx = optionIndex
-	g.missionIdx = missionUIIndex
-	g.missionDifficultyValue = c.Difficulty
-	g.missionSide = c.Side
+	g.installCampaignSelection(selection)
 	applyRetailContinuationProgress(&g.campaignProgress, c.Thumbs)
 	g.campaignProgressSet = true
 
@@ -183,6 +165,49 @@ func (g *gameShell) applyRetailContinuation(c *session.RetailCampaignContinuatio
 		g.bindFrontendClient(clPtr)
 	}
 	return nil
+}
+
+// campaignSelection resolves persistent identity before any filtered UI row is
+// retained. The file path and authored index survive opposite-side shell state
+// and subsequent NEWGAME list rebuilds [08 R-CAMP-01 §1][07 R-FE-01 §8].
+type campaignSelection struct {
+	campaigns, options                  []mission.Campaign
+	campaign, mission, side, difficulty int
+}
+
+func (g *gameShell) resolveCampaignSelection(path string, index, side, difficulty int) (campaignSelection, error) {
+	var selection campaignSelection
+	if g == nil || g.cs == nil || g.cs.fs == nil {
+		return selection, unavailableBattleContentError()
+	}
+	campaigns := g.campaigns
+	if campaigns == nil {
+		var err error
+		campaigns, err = mission.Discover(g.cs.fs)
+		if err != nil {
+			return selection, err
+		}
+	}
+	candidate := *g
+	candidate.campaigns, candidate.missionSide = campaigns, side
+	options := candidate.retailCampaignOptions()
+	for i := range options {
+		if !strings.EqualFold(options[i].Path, path) {
+			continue
+		}
+		row, ok := campaignMissionUIIndex(options, i, index)
+		if !ok {
+			break
+		}
+		return campaignSelection{campaigns: campaigns, options: options, campaign: i, mission: row, side: side, difficulty: difficulty}, nil
+	}
+	return selection, fmt.Errorf("nanolathe: campaign selection failed: logical path %s, providers searched [vfs], expected selectable authored mission %d for side %d", path, index, side)
+}
+
+func (g *gameShell) installCampaignSelection(selection campaignSelection) {
+	g.campaigns, g.campaignOptions = selection.campaigns, selection.options
+	g.campaignIdx, g.missionIdx = selection.campaign, selection.mission
+	g.missionSide, g.missionDifficultyValue = selection.side, selection.difficulty
 }
 
 func applyRetailContinuationProgress(progress *session.BankProgress, thumbs [25]byte) {
@@ -207,9 +232,15 @@ func readBriefingText(cs *contentSet, name string) string {
 	return string(data)
 }
 
-// loadBriefingPanel keeps optional briefing media lazy. The campaign can still
-// enter through Start when a bitmap, animation or GUI is absent, matching the
-// optional-media skip boundary [08 R-CAMP-01 §2].
+func (g *gameShell) briefingUnavailableError() error {
+	if g != nil && g.assets != nil && g.assets.briefing != nil && g.assets.briefing.unavailable != nil {
+		return g.assets.briefing.unavailable
+	}
+	return retailFrontendAssetError(g.cs, "briefing screen unavailable", "guis/msnbrief.gui", "MSNBRIEF authored GUI", nil)
+}
+
+// loadBriefingPanel keeps optional media lazy; a missing GUI refuses opening
+// the screen [07 §5 "Frontend asset failure boundaries"].
 func (g *gameShell) loadBriefingPanel(planet BriefingPlanet) *ui.Panel {
 	if g == nil || g.assets == nil || g.cs == nil || g.cs.fs == nil {
 		return nil
@@ -368,7 +399,7 @@ func (g *gameShell) drawBriefing(c *client.Client) {
 		}
 	}
 	b.Update(g.briefingNowMS, briefingPresentationTick(g.briefingNowMS))
-	// The authored side background names are mbriefarm/mbriefcore. Missing
+	// The authored side background names are mbriefarm/mbriefcor. Missing
 	// optional art leaves the indexed surface unchanged; no replacement image
 	// is generated [08 R-CAMP-01 §2].
 	if bg := g.briefingBackground(); bg != nil {
@@ -416,7 +447,7 @@ func (g *gameShell) briefingBackground() *formats.PCX {
 	if g == nil || g.cs == nil || g.cs.fs == nil {
 		return nil
 	}
-	name := "core"
+	name := "cor"
 	if g.missionSide == 0 {
 		name = "arm"
 	}

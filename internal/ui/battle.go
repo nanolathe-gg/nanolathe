@@ -83,21 +83,24 @@ type BattleScheduleIntent struct {
 type BattleInputState struct {
 	Latch input.Latch
 
-	DragActive       bool
-	DragStartX       int32
-	DragStartY       int32
-	DragEndX         int32
-	DragEndY         int32
-	HUDCaptured      bool
-	HUDPressX        int32
-	HUDPressY        int32
-	PlaceCaptured    bool
-	ShiftHeld        bool
-	ShiftLatchSticky bool
-	PointerX         int32
-	PointerY         int32
-	PrevMouseX       float32
-	PrevMouseY       float32
+	DragActive                       bool
+	DragPressClock                   uint32
+	DragStartWorldX, DragStartWorldZ int32
+	DragEndWorldX, DragEndWorldZ     int32
+	DragStartX                       int32
+	DragStartY                       int32
+	DragEndX                         int32
+	DragEndY                         int32
+	HUDCaptured                      bool
+	HUDPressX                        int32
+	HUDPressY                        int32
+	PlaceCaptured                    bool
+	ShiftHeld                        bool
+	ShiftLatchSticky                 bool
+	PointerX                         int32
+	PointerY                         int32
+	PrevMouseX                       float32
+	PrevMouseY                       float32
 
 	BuildDef    string
 	BuildFootX  int32
@@ -261,6 +264,9 @@ func (s *BattleState) Latch() input.Latch {
 func (s *BattleState) SetLatch(l input.Latch) bool {
 	if s == nil || !l.IsValid() {
 		return false
+	}
+	if l != input.LatchMobileBuild {
+		s.ClearPlacement()
 	}
 	s.Input.Latch = l
 	return true
@@ -548,4 +554,9 @@ func PauseIntent(paused bool) BattleScheduleIntent {
 // SpeedIntent creates a concrete relative speed request.
 func SpeedIntent(delta int) BattleScheduleIntent {
 	return BattleScheduleIntent{SpeedDelta: delta}
+}
+
+// PlacementArmed is the sole mobile-build state gate [07 R-CAM-01 §14].
+func (s *BattleState) PlacementArmed() bool {
+	return s != nil && s.Input.Latch == input.LatchMobileBuild && s.Input.BuildDef != ""
 }

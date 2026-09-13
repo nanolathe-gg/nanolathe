@@ -690,6 +690,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 	// authoritative pools have been traversed. Presentation therefore receives
 	// one coherent tick-end view and never needs to bind callbacks or inspect
 	// mutable session services [03 §3.4][03 §3.9].
+	published.Radar.BlinkPhase = s.RadarBlinkPhase() // completed phase 12 [01 R-CORE-03]
 	published.Radar.Contacts = published.Radar.Contacts[:0]
 	// The destination slot's previous contents are still live in the backing
 	// array beneath the truncated length above (Reset kept every capacity,
@@ -1304,36 +1305,22 @@ func (s *Session) SetEffectTimingResolver(resolver render.TimingResolver) {
 	pub.effects.SetTimingResolver(resolver)
 }
 
-// publishHullGateInputs copies the three inputs the committed four-point
-// visibility gate needs that nothing else on the unit view carries: the
-// definition's hull extent triple and the runtime underwater-exemption bit
-// [03 §3.2] steps 3 and 5.
-//
-// The extents are the compiled definition's own extent words, whose writers
-// are traced in [07 R-REV-01 §7]: the unit-record compiler writes
-// `xExtent = footprintX << 20` and `zExtent = footprintZ << 20` — a footprint
-// cell is sixteen world units and `<< 20` is that sixteen expressed in 16.16 —
-// and the catalog loader then rewrites the vertical word as the model's total
-// height, the same zero-seeded model-top walk the compiled catalog already
-// resolves once per definition at load.
-//
-// Presentation cannot derive the vertical word: it comes from the 3DO, not
-// from the FBI record, and reading either from the far side of the frame
-// boundary is what [I6] forbids.
+// publishHullGateInputs retains the exact definition bounds independently of
+// the draw position. Session, combat and committed presentation form the same
+// minimum-X/maximum-Y/minimum-Z probe and full spans [06 §3.1][03 §3.2][I6].
 func publishHullGateInputs(vp *frame.UnitView, u *units.Unit) {
 	if vp == nil || u == nil {
 		return
 	}
-	if u.Def != nil {
-		vp.HullXExtent = numeric.Fixed(int64(u.Def.FootprintX) << 20)
-		vp.HullZExtent = numeric.Fixed(int64(u.Def.FootprintZ) << 20)
-		vp.HullYExtent = numeric.Fixed(u.Def.ModelTopFixed)
-	}
+	min, max := u.Def.BoundingExtents()
+	hull := visibility.TargetFromBounds(visibility.Target{}, min, max)
+	vp.HullOffsetX, vp.HullOffsetY, vp.HullOffsetZ = hull.X, hull.Y, hull.Z
+	vp.HullXExtent, vp.HullYExtent, vp.HullZExtent = hull.XExtent, hull.YExtent, hull.ZExtent
 	vp.UnderwaterExempt = u.Flags&visibility.SonarBit != 0
 }
 
 // publishedSeaLevel is the map header's sea-level byte in 16.16 world units,
-// the value the visibility gate's step 3 compares a base height against
+// the value the visibility gate's step 3 compares the first probe height against
 // [03 §3.2][03 §2.2]. A session with no terrain publishes zero, which is what
 // the gate's own fixture path uses.
 func publishedSeaLevel(ter *world.Terrain) numeric.Fixed {

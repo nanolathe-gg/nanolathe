@@ -13,7 +13,6 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
-	"github.com/nanolathe-gg/nanolathe/internal/units"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
@@ -1165,45 +1164,8 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 			}
 		}
 	}
-	// Also reconstruct any mission-placed units that are not commanders, at authored positions,
-	// via sparse two-pass semantics [P0-04] – reuse same sparse logic as mission path.
-	// For skirmish, these are additional scenario units beyond commanders.
-	for idx, up := range m.Units {
-		if s.Catalog != nil {
-			if def, found := s.Catalog.Unit(up.UnitName); found && def != nil {
-				ownerIdx := int(up.Player)
-				if ownerIdx < 0 {
-					ownerIdx = 0
-				}
-				if ownerIdx >= 10 {
-					ownerIdx = 9
-				}
-				// Use authored fixed positions [P0-04]
-				h, err := s.Units.Create(def, uint8(ownerIdx), numeric.Fixed(int64(up.X)), numeric.Fixed(int64(up.Y)), numeric.Fixed(int64(up.Z)))
-				if err != nil {
-					continue
-				}
-				if u := s.Units.Unit(h); u != nil {
-					// Scenario placement overwrites the initialized heading only after
-					// both common-allocation RNG invocations [R-P28-ANG-01R §2].
-					u.Move.Heading = up.Angle
-					u.PlacementIdx = idx
-					u.PlacementIdent = up.Ident
-					u.PlacementUnitName = up.UnitName
-					if up.HealthPercentage != 0 && up.HealthPercentage != 100 {
-						u.Health = int32(int64(u.MaxHealth) * int64(up.HealthPercentage) / 100)
-					}
-					if up.IsImmune() {
-						u.Flags |= units.ImmunityStatus
-					}
-					publishOne(s, u)
-					if s.Movement != nil && s.Movement.Routes != nil {
-						s.Movement.EnsureUnit(u)
-					}
-				}
-			}
-		}
-	}
+	// Fresh skirmish entry skips the campaign unit spawner, including authored
+	// scenario units; only eligible commanders are created [08 R-ENTRY-01 §6].
 	return nil
 }
 

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/internal/client"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
 	"github.com/nanolathe-gg/nanolathe/internal/hud"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
@@ -17,7 +18,7 @@ import (
 // group together [07 R-HUD-04 §3]. Cached pages retain presentation state, so
 // clear their groups too before a later selection exposes them again.
 func (b *battleSession) resetOrderLatch() {
-	b.battleState().Input.Latch = input.LatchNormal
+	b.battleState().SetLatch(input.LatchNormal)
 	b.battleState().Input.ShiftLatchSticky = false
 	if b.hud == nil {
 		return
@@ -41,7 +42,10 @@ func (b *battleSession) switchBuildPage(digit int) {
 	if !ok || frame.CommandPage.Builder == 0 || frame.CommandPage.PageCount == 0 || digit < 1 || digit > 9 {
 		return
 	}
-	target := hud.ClampPage(hud.DigitToPage(digit), int(frame.CommandPage.PageCount))
+	target, valid := hud.DigitPage(digit, int(frame.CommandPage.PageCount))
+	if !valid {
+		return
+	}
 	_ = b.dispatchBuildPageCued(target)
 }
 
@@ -51,7 +55,7 @@ func (b *battleSession) nextBuildPage() {
 	if !ok || frame.CommandPage.Builder == 0 || frame.CommandPage.PageCount <= 1 {
 		return
 	}
-	target := hud.ClampPage(int(frame.CommandPage.Page)+1, int(frame.CommandPage.PageCount))
+	target := hud.NextPageKey(b.effectiveBuildPage(frame), int(frame.CommandPage.PageCount))
 	_ = b.dispatchBuildPageCued(target)
 }
 
@@ -61,7 +65,7 @@ func (b *battleSession) prevBuildPage() {
 	if !ok || frame.CommandPage.Builder == 0 || frame.CommandPage.PageCount <= 1 {
 		return
 	}
-	target := hud.ClampPage(int(frame.CommandPage.Page)-1, int(frame.CommandPage.PageCount))
+	target := hud.PrevPageKey(b.effectiveBuildPage(frame), int(frame.CommandPage.PageCount))
 	_ = b.dispatchBuildPageCued(target)
 }
 
@@ -82,7 +86,7 @@ func (b *battleSession) handleHudOrderButton(name string) {
 		return
 	}
 	if latch.IsValid() {
-		b.battleState().Input.Latch = latch
+		b.battleState().SetLatch(latch)
 		// "Each armed write … plays the `immediateorders` cue … or the
 		// `specialorders` cue" [07 §9]; the cue follows the armed write, not the
 		// hit test, so a button whose parse yields no valid latch is silent.
@@ -264,4 +268,8 @@ func (b *battleSession) selfDestructSelection() {
 		Kind:         session.HumanSelfDestruct,
 		SelfDestruct: session.HumanSelfDestructCommand{Handles: handles},
 	})
+}
+
+func (b *battleSession) effectiveBuildPage(f *frame.Frame) int {
+	return b.sess.PendingBuildPage(f.CommandPage.Builder, int(f.CommandPage.Page))
 }

@@ -6,6 +6,7 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
@@ -135,6 +136,11 @@ func (b *battleSession) DispatchFactoryBuildDelta(product string, count int) err
 func (b *battleSession) DispatchOrderCommand(cmd session.HumanOrderCommand) error {
 	if _, ok := b.currentSnapshot(); !ok {
 		return fmt.Errorf("nanolathe: order not dispatched: no committed frame")
+	}
+	if b.interfaceTypeRightClick() {
+		cmd.Position.InterfaceType = orders.InterfaceTypeRightClick
+	} else {
+		cmd.Position.InterfaceType = orders.InterfaceTypeLeftClick
 	}
 	return b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanOrder, Order: cmd})
 }
