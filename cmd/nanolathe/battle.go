@@ -1012,8 +1012,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 			_ = b.enqueueSelectionCommand(session.HumanCommand{Kind: session.HumanSelectionClear})
 		}
 		b.disarmPlacement()
-		b.battleState().Input.Latch = input.LatchNormal
-		b.battleState().Input.ShiftLatchSticky = false
+		b.resetOrderLatch()
 		b.battleState().Input.HUDCaptured = false
 		b.battleState().Input.DragActive = false
 		cl.Cursors().SetIndex(render.CursorNormal)

@@ -75,6 +75,19 @@ func TestBindStrictAllowsProgramWithoutCreate(t *testing.T) {
 	}
 }
 
+// Duplicate model names bind to the first match, including case variants
+// [02 R-MALF-01 §2]. Rejecting the hierarchy prevents stock ARMCH allocation.
+func TestBindStrictDuplicateModelPiecesUseFirstMatch(t *testing.T) {
+	fs := bindingFS(t, makeCOB([]uint32{0x10065000}, []string{"Create"}, []uint32{0}, []string{"beam", "base"}))
+	binding, err := BindStrict(fs, BindingRequest{UnitName: "TestUnit", ModelPieces: []string{"base", "BEAM", "beam"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := binding.PieceMap; len(got) != 2 || got[0] != 1 || got[1] != 0 {
+		t.Fatalf("piece map = %v, want [1 0]", got)
+	}
+}
+
 func TestBindStrictInstantiatesCatalogProgramWithoutVFSReadAndKeepsVMsIndependent(t *testing.T) {
 	data := makeCOB([]uint32{0x10065000}, []string{"Create"}, []uint32{0}, []string{"base"})
 	base := bindingFS(t, data)

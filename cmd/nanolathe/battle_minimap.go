@@ -234,8 +234,7 @@ func (b *battleSession) minimapClickOrder(cl *client.Client, mx, my int32, addit
 		if additive {
 			b.battleState().Input.ShiftLatchSticky = true
 		} else {
-			b.battleState().Input.Latch = input.LatchNormal
-			b.battleState().Input.ShiftLatchSticky = false
+			b.resetOrderLatch()
 		}
 		return
 	}

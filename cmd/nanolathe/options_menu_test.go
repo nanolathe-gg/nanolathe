@@ -575,6 +575,7 @@ func TestRetailOptionsEveryPageOpensAndPersists(t *testing.T) {
 		{"VISUALS", "visuals", []string{"GAMMA", "VIDSLDR"}, []string{"ANTI", "SHADING", "BSHADOWS"}},
 	} {
 		shell.activateGadget(page.button)
+		assertOptionsPageButton(t, page.key)
 		if optionsState.page != page.key {
 			t.Fatalf("%s merged page %q; want %q", page.button, optionsState.page, page.key)
 		}
@@ -904,6 +905,7 @@ func TestBattlePrefsOpensTheInBattleOptionsRootAndMergesTheRTPages(t *testing.T)
 		{"VISUALS", "visuals", "guis/visualrt.gui"},
 	} {
 		shell.activateGadget(page.button)
+		assertOptionsPageButton(t, page.key)
 		if optionsState.page != page.key {
 			t.Fatalf("%s merged page %q; want %q", page.button, optionsState.page, page.key)
 		}
@@ -1065,6 +1067,7 @@ func TestBattlePrefsPumpActivatesAuthoredPressButton(t *testing.T) {
 		t.Fatal("the authored immediate-action button did not merge VISUALS on press")
 	}
 	opened := optionsPanel
+	assertOptionsPageButton(t, "visuals")
 	if owner, button := opened.Capture(); owner != -1 || button != 0 {
 		t.Fatal("rebuilt page retained the previous panel's capture")
 	}
@@ -1185,5 +1188,24 @@ func TestSkirmishRuleStagesFollowPointerAndReload(t *testing.T) {
 	}
 	if dir := os.Getenv("NANOLATHE_OPTIONS_SHOT"); dir != "" {
 		writeShellShot(t, cl, filepath.Join(dir, "skirmish-unmapped.png"))
+	}
+}
+
+// Rebuilding a merged page must preserve its radio selection, without
+// carrying a pointer capture into the replacement panel [07 R-WGT-01 §3].
+func assertOptionsPageButton(t *testing.T, active string) {
+	t.Helper()
+	for i, gad := range optionsPanel.Window.Gadgets {
+		key, page := retailOptionsPageKey(gui.CallbackName(gad.Name))
+		if !page || retailOptionsPageGadget(gad) {
+			continue
+		}
+		want := 0
+		if key == active {
+			want = 1
+		}
+		if got := optionsPanel.DownAt(i); got != want {
+			t.Fatalf("page %s: selector %s down=%d, want %d", active, key, got, want)
+		}
 	}
 }

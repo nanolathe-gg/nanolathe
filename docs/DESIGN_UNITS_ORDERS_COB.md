@@ -340,6 +340,9 @@ program, model, piece list, required entry points, streams and sinks. Its
 diagnostics are coded, not prose-matched, so composition and asset preflight can
 classify a missing program, a piece-count mismatch or a failed `Create` start
 without parsing text.
+Duplicate model-piece names remain valid: every COB name maps to the first
+matching piece in model order, so stock models such as ARMCH bind and allocate
+normally `[02 R-MALF-01 §2]`.
 
 **Save boxes** (`retail_save.go`, `retail_restore.go`). The per-piece image and
 the thread windows. The writer persists each piece's current draw, cache and

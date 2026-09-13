@@ -642,8 +642,9 @@ bit 3 (0x8 — the build family: `BuildingBuild`, `HelpBuild`, `MobileBuild`, `V
 `VTOL_MobileBuild`); bit 4 (0x10 — `Suppress`, `Patrol`, `RepairPatrol`, `VTOL_Patrol`,
 `VTOL_RepairPatrol`); bit 5 (0x20 — the cloak/standing family, `Guard_NoMove`, `Paralyze`,
 `BeCarried`, `GetBuilt`; **located:** selects the producer insertion's head-insert branch,
-[R-ORD-01 §13]); bit 6 (0x40 — the cloak/standing family, `BuildWeapon`,
-`SelfDestruct`); bit 7 (0x80 — `Attack_NoMove`, `Attack_Chase`, `AttackSpecial`;
+[R-ORD-01 §13]); bit 6 (0x40 — the activation/cloak/standing family,
+`BuildWeapon`, `SelfDestruct`; **located:** skips the non-queued producer's
+replacement purge, [R-ORD-01 §13]); bit 7 (0x80 — `Attack_NoMove`, `Attack_Chase`, `AttackSpecial`;
 **located:** the damage dispatcher's under-attack notice reads it on the victim's front
 primary order and stays silent while it is set, [06 R-WPN-04 §2]); bit 8
 (0x100 — the cloak/standing family, `BuildingBuild`, `BuildWeapon`, `MobileBuild`,
@@ -895,9 +896,11 @@ separate producer-specific queue [P0-07].
 descriptor selects the front segment is inserted **immediately after the
 currently active order** — exactly one record carries the active marker flag;
 with no marked record it appends at the tail, so repeated interface adds still
-produce first-in-first-out ordering. Issuing a non-queued order first purges
-every unprotected queued record (records lacking the purge-survivor bit are
-unlinked and freed), and issuing a front-segment record drops leading
+produce first-in-first-out ordering. Issuing a non-queued order whose new
+descriptor lacks the preserve-queue bit first purges every unprotected queued
+record (records lacking the purge-survivor bit are unlinked and freed);
+activation, cloak, standing-order, `BuildWeapon` and `SelfDestruct` descriptors
+skip that purge [R-ORD-01 §13]. Issuing a front-segment record drops leading
 auto/default records (those carrying the auto-op flag) wherever they live. A
 record whose descriptor carries the rear-segment selection flag head-inserts at
 the front of that segment instead, inheriting the old head's auto flag when
@@ -909,7 +912,8 @@ with the auto flag, and head-inserted into the list the op's descriptor
 selects (a secondary-class default op therefore lands in the rear segment).
 
 In queue-modifier terms [P0-08]: a non-queued issue is **Replace** (purge
-unprotected queued records, then insert the single record), a queued issue
+unprotected queued records unless the new descriptor carries the preserve-queue
+bit, then insert the single record), a queued issue
 including Shift-held is **Append** (insert after the active marker without
 purging), Shift-queue (`QMove`/`QPatrol` family) is an alias with identical
 mechanics except for the descriptor's queued class, and the pump's own
@@ -4376,6 +4380,20 @@ one. Nothing else in the code sections writes the bit. In particular the
 handler head insert, the insert-before-a-record helper used by the patrol-chain
 append, and the pump's own internal-auto creator all leave it clear, which is
 why a spawned order and an idle refill are silent.
+
+**The non-queued purge has a descriptor exception.** The producer insertion
+tests the new record's static-mask copy before removing any existing mission.
+It runs the replacement purge only when the issue is non-queued **and** the
+new record lacks static bit 6 (`0x40`). `Activate`, `Deactivate`, `Cloak_On`,
+`Cloak_Off`, `Standing_MoveOrder`, `Standing_FireOrder`, `BuildWeapon` and
+`SelfDestruct` carry that bit (§3.1), so each preserves the existing mission
+queue even when issued without Shift. This does not skip the subsequent
+leading-auto drop for front-segment issues, alter caption admission, or change
+the head/after-marker insertion branch. In particular, an activation toggle
+is inserted before a waiting move or build and completes on its next pump
+visit (§2), leaving the displaced mission in place. This is the new
+descriptor's purge exception, distinct from static bit 2 on an existing record
+that lets that record survive a purge [R-MOV-03 §6].
 
 **The active marker's writers, and the head insert's silence about it.** Three
 insertion shapes exist and they divide as follows.
@@ -14045,8 +14063,8 @@ and the decider that would close it.
 - Per-phase operation-byte values inside the construction/factory handler
   family; the 68-descriptor handler set itself is closed · §3.1 · static
   trace.
-- Consumers of the unnamed static gate-mask bits (1, 3, 4, 6, 8, 11, 16, 19,
-  24; bits 2, 5, 7 and 17 have located readers) · §3.1 [R-DOC04-C] · static
+- Consumers of the unnamed static gate-mask bits (1, 3, 4, 8, 11, 16, 19,
+  24; bits 2, 5, 6, 7 and 17 have located readers) · §3.1 [R-DOC04-C] · static
   trace; store the bytes opaque.
 - Where the interface and network layers replace or cancel the front order
   · §3.3, doc 07 · static trace. The queue pump itself never does it.

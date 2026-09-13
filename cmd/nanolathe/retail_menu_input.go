@@ -284,6 +284,8 @@ func (g *gameShell) activateGadget(name string) {
 	switch g.frontend.Mode {
 	case modeMenuMain:
 		switch name {
+		case "INTRO":
+			reportRetailMessageError(g.showIntroUnavailable())
 		case "EXIT":
 			// Retail MAINMENU's EXIT callback enters frontend state 8 and
 			// closes the process; it does not open the unrelated YESORNO

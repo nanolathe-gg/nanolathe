@@ -9775,6 +9775,13 @@ body — most under `R-<id>` headings — and are not restated here.
 
 ### Video and capture
 
+**Implementation gap, not a retail behavior unknown.** Main-menu Intro playback
+has been requested, but Nanolathe has no decoder and the reference content
+install has no original `Data/2.zrb`, either loose or in its mounted archives.
+The original file is needed to establish and validate its container, palette,
+frame cadence and audio tracks before implementing playback. The current
+unavailable notice is implementation policy, not evidence of retail behavior.
+
 The single-player contract stops at the movie sequencer's observable
 behaviour — five `.zrb` cinematics, play-once, missing file skipped,
 library-driven cadence, skip on any character key or Alt+F4, the three

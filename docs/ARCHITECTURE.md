@@ -58,7 +58,7 @@ changing this table first.
 
 | Research section | Why it is out |
 |---|---|
-| `[03 §9]` Smacker cinematics and movie capture | No video decoder and no capture path. The front end goes straight to `MAINMENU`; `[07 R-FE-01 §3]` describes the movie stage that is skipped. Also excluded: the `CDCHECK` gate and the ending movie. |
+| `[03 §9]` Smacker cinematics and movie capture | Startup movies, capture, the `CDCHECK` gate and ending movies remain excluded. User-requested main-menu Intro playback is now in scope but unfinished: no decoder is present. The Intro control reports whether the original `Data/2.zrb` is missing and explains that playback is unsupported; see DESIGN_INTERFACE_HUD_INPUT §3.9 and `[07 R-FE-01 §3]`. |
 | `[07 §12]` Lobby and session shell | The multiplayer lobby. The single-player skirmish setup screen is a different surface, owned by DESIGN_INTERFACE_HUD_INPUT and DESIGN_SESSIONS_AI_SAVE through `[07 R-FE-01 §5]` and `[08 R-SKIR-01]`. |
 | `[08 "DirectPlay transport"]`, `[08 "Packet framing and dispatch"]`, `[08 "Send pacing and batching"]`, `[08 "Receive buffering"]`, `[08 "Ping and adaptive timing"]`, `[08 "Lockstep advancement"]`, `[08 "Synchronization and integrity checks"]`, `[08 "Disconnect, resign, and peer loss"]` | Networking. `[08 R-OOS-01 §1]` names the packets the *local* path still constructs; those are in scope and DESIGN_SESSIONS_AI_SAVE cites them. |
 | `[08 "Multiplayer saves"]` | Follows from the above. Single-player save/load is DESIGN_SESSIONS_AI_SAVE (`[08 "Save-file organization"]`, `[08 "Load process"]`). |

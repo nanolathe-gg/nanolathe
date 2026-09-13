@@ -129,8 +129,7 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	// Any latch held by Shift retires on the live Shift-up, regardless of
 	// order family [R-P0-11].
 	if !b.battleState().Input.ShiftHeld && b.battleState().Input.ShiftLatchSticky {
-		b.battleState().Input.Latch = input.LatchNormal
-		b.battleState().Input.ShiftLatchSticky = false
+		b.resetOrderLatch()
 	}
 
 	// An admitted minimap camera down edge only sets a presentation capture;
@@ -365,8 +364,7 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 			_ = b.enqueueSelectionCommand(session.HumanCommand{Kind: session.HumanSelectionClear})
 		}
 		b.disarmPlacement()
-		b.battleState().Input.Latch = input.LatchNormal
-		b.battleState().Input.ShiftLatchSticky = false
+		b.resetOrderLatch()
 		b.battleState().Input.HUDCaptured = false
 		b.battleState().Input.DragActive = false
 		return
@@ -402,8 +400,7 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 		}
 		if b.battleState().Input.Latch != input.LatchNormal {
 			// Cancel armed order latch to idle [07 §9][07 §8][07 §9].
-			b.battleState().Input.Latch = input.LatchNormal
-			b.battleState().Input.ShiftLatchSticky = false
+			b.resetOrderLatch()
 			return
 		}
 		if !b.interfaceTypeRightClick() && pointerModifiers.Ctrl && b.classifyPointer(mx, my) == battlePointerViewport {
@@ -533,8 +530,7 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 				if additive {
 					b.battleState().Input.ShiftLatchSticky = true
 				} else {
-					b.battleState().Input.Latch = input.LatchNormal
-					b.battleState().Input.ShiftLatchSticky = false
+					b.resetOrderLatch()
 				}
 			} else {
 				if b.deferResourceClick(cl, mx, my, pointerModifiers) {

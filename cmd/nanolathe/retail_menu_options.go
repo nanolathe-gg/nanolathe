@@ -716,6 +716,14 @@ func (g *gameShell) openRetailOptionsPage(page string) {
 	if rebuilt == nil {
 		return
 	}
+	// The merged window replaces the service state that received the radio
+	// press. Restore its page selection, including direct opens and UNDO's
+	// reopen, without retaining the old pointer capture [07 R-WGT-01 §3].
+	for i, gad := range root.Gadgets {
+		if key, isPage := retailOptionsPageKey(gui.CallbackName(gad.Name)); isPage && !retailOptionsPageGadget(gad) {
+			rebuilt.SetStatusAt(i, boolStage(key == page))
+		}
+	}
 	if g.frontend.Panels.Top() == optionsPanel {
 		g.frontend.Panels.Pop()
 	}

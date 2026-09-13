@@ -7,10 +7,32 @@ import (
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/internal/client"
+	"github.com/nanolathe-gg/nanolathe/internal/gui"
 	"github.com/nanolathe-gg/nanolathe/internal/hud"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 )
+
+// resetOrderLatch keeps the semantic idle state and the retained order-radio
+// group together [07 R-HUD-04 §3]. Cached pages retain presentation state, so
+// clear their groups too before a later selection exposes them again.
+func (b *battleSession) resetOrderLatch() {
+	b.battleState().Input.Latch = input.LatchNormal
+	b.battleState().Input.ShiftLatchSticky = false
+	if b.hud == nil {
+		return
+	}
+	// These panels are presentation-only; their iteration order has no effect
+	// on simulation or on another panel's state.
+	for window, panel := range b.hud.palettePanels {
+		for i, gad := range window.Gadgets {
+			if gad.Kind == gui.KindButton && commandButtonName(gad.Name) == "STOP" {
+				panel.ClearButtonGroup(i)
+				break
+			}
+		}
+	}
+}
 
 // switchBuildPage handles digit 1..9 build page switching [07 §9] C10.
 // Page number lives in flag bits 23-25 with bit 22 paged indicator [07 §9].
@@ -55,7 +77,7 @@ func (b *battleSession) handleHudOrderButton(name string) {
 	// completed"].
 	if latch == input.LatchNormal && containsStop(name) {
 		_ = b.dispatchStopCommand()
-		b.battleState().Input.Latch = input.LatchNormal
+		b.resetOrderLatch()
 		b.playUICue(nil, cueImmediateOrders)
 		return
 	}

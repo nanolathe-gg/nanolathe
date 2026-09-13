@@ -772,10 +772,10 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		}
 		s.bindOrderQueue(u)
 		if q := orders.QueueForUnit(u); q != nil {
-			if !c.Activation.Queued {
-				q.PurgeUnprotected()
-				q.DropLeadingAutoOps()
-			}
+			// Both activation descriptors carry the preserve-queue bit, so
+			// even a nonqueued toggle skips the replacement purge. Push still
+			// drops leading auto orders and inserts at the head
+			// [04 R-ORD-01 §13].
 			q.Push(id, orders.NewNodeForOrder(id, 0, 0, 0, 0, tick, u.Handle, c.Activation.Queued))
 		}
 	case HumanStance:

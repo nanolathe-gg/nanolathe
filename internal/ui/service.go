@@ -745,6 +745,18 @@ func (p *Panel) cycleDown(idx int, hooks WidgetHooks) {
 		p.markDirty()
 	}
 }
+
+// ClearButtonGroup releases every button in the indexed control's authored
+// association, including the control itself [07 R-HUD-04 §3].
+func (p *Panel) ClearButtonGroup(idx int) {
+	if p == nil || p.Window == nil || idx < 0 || idx >= len(p.Window.Gadgets) || p.Window.Gadgets[idx].Kind != gui.KindButton {
+		return
+	}
+	p.SetStatusAt(idx, 0)
+	p.clearGroup(idx)
+	p.markDirty()
+}
+
 func (p *Panel) clearGroup(idx int) {
 	g := p.Window.Gadgets[idx]
 	for i, o := range p.Window.Gadgets {

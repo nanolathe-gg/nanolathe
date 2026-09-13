@@ -56,7 +56,6 @@ const (
 	BindingMissingModel    BindingDiagnosticCode = "missing-model"
 	BindingPieceCount      BindingDiagnosticCode = "piece-count-mismatch"
 	BindingUnresolvedPiece BindingDiagnosticCode = "unresolved-piece"
-	BindingDuplicatePiece  BindingDiagnosticCode = "duplicate-piece"
 	BindingMissingEntry    BindingDiagnosticCode = "missing-entry-point"
 	BindingCreateStart     BindingDiagnosticCode = "create-start-failed"
 	BindingInvalidRequest  BindingDiagnosticCode = "invalid-request"
@@ -399,8 +398,10 @@ func linkDiagnostics(program *Program, modelPieces, required []string, groups []
 			diagnostics = append(diagnostics, BindingDiagnostic{Code: BindingUnresolvedPiece, Logical: logical, Provider: providers, Expected: fmt.Sprintf("model piece %d", i), Detail: "model piece name is empty"})
 			continue
 		}
-		if prior, exists := modelByName[key]; exists {
-			diagnostics = append(diagnostics, BindingDiagnostic{Code: BindingDuplicatePiece, Logical: logical, Provider: providers, Expected: name, Detail: fmt.Sprintf("model piece duplicates index %d", prior)})
+		// Authored duplicate names are legal; lookup uses the first matching
+		// piece, as modelPieceIndex does [02 R-MALF-01 §2]. ARMCH's stock
+		// hierarchy contains two beam pieces and must remain buildable.
+		if _, exists := modelByName[key]; exists {
 			continue
 		}
 		modelByName[key] = i

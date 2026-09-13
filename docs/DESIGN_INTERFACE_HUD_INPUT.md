@@ -598,6 +598,12 @@ tested before `LOAD` because it contains it, and retail has no `PICKUP`
 compare at all `[07 §9]`. `LatchToCode` maps the latch byte to the resolver's
 command code.
 
+`resetOrderLatch` returns the semantic latch to idle, clears Shift persistence,
+and releases the retained buttons in STOP's authored association. World/minimap
+dispatch, cancellation, Escape, Stop and Shift release share that transition;
+Shift-queued commands retain their down-state until the latch retires
+`[07 R-HUD-04 §3]`.
+
 **The cursor** (`cursor.go`). `ChooseCursor` is the four-step shape chooser:
 outside the world and minimap gives `cursornormal`; live mobile-build placement
 gives `cursorfindsite` or `cursortoofar`; an empty selection gives
@@ -697,6 +703,10 @@ merged pages (`SOUNDS`, `MUSIC`, `SPEEDS` — whose root button is captioned
 `INTERFACE` — and `VISUALS`), the display-mode list, the per-page `RESTORE` and
 `UNDO`, the entry snapshot `CANCEL` restores, and the slider arithmetic
 `[07 R-FE-01 §6]` `[03 R-AUD-01 §2]` `[03 R-AUD-01 §4]` `[07 R-CAM-01 §7]`.
+Rebuilding a merged page restores the selected category's down-state in the
+replacement panel, including the Nanolathe category, while releasing the old
+pointer capture. Direct opens and per-page reopens therefore show the same
+radio selection as pointer activation `[07 R-WGT-01 §3]`.
 Every routine there takes one of two arms, chosen by the `inBattle` word on the
 options state: the front end opens `STARTOPT.GUI` over `options4x` and merges
 `SOUNDS`/`MUSIC`/`SPEEDS`/`VISUALS` with their own full-screen plates; the
@@ -1551,8 +1561,17 @@ excluded with multiplayer `[07 R-CAM-01 §6]` `[07 R-FE-02 §12]`.
 * **The multiplayer lobby shell.** Out of scope for the whole engine; the
   single-player skirmish setup screen is a different surface and is implemented
   `[07 §12]` `[07 R-FE-02 §1]`.
-* **The front-end movie stage.** Startup goes straight to `MAINMENU`; there is
-  no video decoder and no `CDCHECK` gate `[07 R-FE-01 §3]` `[07 R-CAM-01 §8]`.
+* **The front-end movie stage.** Startup goes straight to `MAINMENU`; startup
+  movies, capture, ending movies and the `CDCHECK` gate remain excluded.
+  User-requested main-menu Intro playback is now in scope but unfinished.
+  `intro.go` checks the mounted `Data/2.zrb` resource and opens the ordinary
+  message window: it distinguishes a missing original movie from an available
+  file, and explains that playback is unsupported in either case. The menu and
+  its audio remain active. This diagnostic is Nanolathe policy; retail silently
+  skips missing movies [07 R-FE-01 §3][08 R-OOS-01 §4]. The original movie is
+  absent from the reference install's loose files and mounted archives. A
+  decoder and validation against the original file are still required; no
+  container, palette, cadence or audio properties are assumed [03 §9].
 * **`SHARE.GUI` and `CONTROL.GUI`.** The resource transfer dialog and the
   host-only player control panel are multiplayer surfaces
   `[07 R-HUD-03 §9]` `[07 R-FE-01 §7]`.
