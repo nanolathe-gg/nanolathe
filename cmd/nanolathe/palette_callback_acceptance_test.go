@@ -232,7 +232,7 @@ func TestPaletteCallbackProductNamesFactoryAndPlacement(t *testing.T) {
 		t.Fatal("missing palette context")
 	}
 	before := len(b.sess.PendingHumanCommands())
-	b.hud.activatePaletteGadget(b, ctx, 2, false, false)
+	b.hud.activatePaletteGadget(b, ctx, 2, false, input.Modifiers{})
 	if b.PlacementProduct() != "" || len(b.sess.PendingHumanCommands()) != before {
 		t.Fatal("unknown gadget name selected an ordinal product")
 	}
@@ -248,4 +248,49 @@ func paletteFactoryCommands(b *battleSession) []session.HumanCommand {
 		}
 	}
 	return commands
+}
+
+// This user-requested host extension shares the existing counted factory queue
+// producer; Alt overrides Shift rather than multiplying their batch sizes.
+func TestPaletteAltBuildBatch(t *testing.T) {
+	buttons := []gui.Gadget{
+		{Kind: gui.KindButton, Name: "ARMFAV", Active: 1, QuickKey: 'a', Rect: gui.Rect{X: 1, Y: 1, W: 20, H: 12}},
+		{Kind: gui.KindButton, Name: "ARMSOLAR", Active: 1, Rect: gui.Rect{X: 24, Y: 1, W: 20, H: 12}},
+	}
+	b, cl, factory := paletteCallbackFactory(t, buttons, []string{"armfav", "armsolar"}, 0, 2)
+	w := b.hud.windows["armfav1"]
+	spy := paletteCallbackCues(t, b, cueAddBuild, cueSubBuild)
+	for _, tc := range []struct {
+		alt, shift, right bool
+		want              int
+	}{
+		{true, false, false, 20},
+		{true, true, false, 20},
+		{true, false, true, -20},
+		{true, true, true, -20},
+		{false, true, false, 5},
+		{false, false, false, 1},
+	} {
+		before := len(paletteFactoryCommands(b))
+		cl.Input().Kbd.SetKey(input.KeyAlt, tc.alt)
+		paletteCallbackClick(t, b, cl, w, 1, tc.right, tc.shift)
+		pending := paletteFactoryCommands(b)
+		if len(pending) != before+1 {
+			t.Fatalf("modifiers %+v produced %v", tc, pending)
+		}
+		got := pending[before].FactoryBuild
+		if got.Builder != factory || got.Product != "armfav" || got.Count != tc.want {
+			t.Fatalf("modifiers %+v produced %+v", tc, got)
+		}
+	}
+	if want := []string{cueAddBuild, cueAddBuild, cueSubBuild, cueSubBuild, cueAddBuild, cueAddBuild}; !slices.Equal(spy.aliases, want) {
+		t.Fatalf("counted build cues %v, want %v", spy.aliases, want)
+	}
+	// A building button still arms one placement rather than issuing a batch.
+	cl.Input().Kbd.SetKey(input.KeyAlt, true)
+	before := len(paletteFactoryCommands(b))
+	paletteCallbackClick(t, b, cl, w, 2, false, false)
+	if b.PlacementProduct() != "armsolar" || len(paletteFactoryCommands(b)) != before {
+		t.Fatal("Alt building click did not retain placement action")
+	}
 }

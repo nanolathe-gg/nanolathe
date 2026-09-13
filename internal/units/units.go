@@ -437,12 +437,11 @@ type Unit struct {
 	// record's own pending word — which answers [04 R-ORD-01 §0]'s standing
 	// "what writes bit 16 into the unit capability word": nothing can.
 	Pending uint32
-	// Save-restored unit words whose consumers are owned by later phases. The
-	// names stay neutral where the retail census remains Unknown [08
-	// R-SAVE-02 §6]. Record byte 0x8E was carried here as an opaque
-	// "relation domain" byte with no producer; it is the attacker-side
-	// snapshot and lives in LastDamageSide above [08 R-SAVE-02 §6]
-	// [06 R-WPN-04 §2].
+	// Allocation seeds the occupancy origin and footprint dimensions before
+	// COB Create; save restoration replaces them. Once initialized, movement
+	// owns the live committed pair, copied back here by save publication. Death
+	// uses this retained pair when no movement surface exists [04 R-ORD-01 §1]
+	// [05 R-FEAT-01 §13][08 R-SAVE-02 §6].
 	CachedOccupancyX int16
 	CachedOccupancyZ int16
 	SightCellX       int16
@@ -1341,6 +1340,15 @@ func (w *World) SetSimulationRNG(sim *rng.Simulation) {
 	}
 }
 
+// initializeAllocationFootprint retains the common initializer's origin and
+// dimensions before scripts or movement initialization. Death can read these
+// even without a mover [04 R-ORD-01 §1][05 R-FEAT-01 §13].
+func initializeAllocationFootprint(u *Unit) {
+	anchorX, anchorZ := world.PlacementAnchor(u.X, u.Z, u.Def.FootprintX, u.Def.FootprintZ)
+	u.CachedOccupancyX, u.CachedOccupancyZ = int16(anchorX), int16(anchorZ)
+	u.FootprintSizeX, u.FootprintSizeZ = int16(u.Def.FootprintX), int16(u.Def.FootprintZ)
+}
+
 // initializeAllocationHeading performs the two common-initializer RNG
 // invocations in retail order: the buildangle-bounded heading invocation,
 // followed by the full-domain draw [R-P28-ANG-01R §2] places immediately after
@@ -1754,6 +1762,7 @@ func (w *World) create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed,
 		// [06 R-WPN-04 §2].
 		LastDamageSide: NeutralAttackerSide,
 	}
+	initializeAllocationFootprint(u)
 	installWeapons(u, def) // [06 §1.2] wire Weapon1/2/3 definitions into Slots [P0-I04]
 	u.InitEconomyState()   // [P1-I04] on/off, cloak, activation from definition
 	w.initializeAllocationHeading(u, def)
@@ -2016,6 +2025,7 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 		// stands.
 		LastDamageSide: NeutralAttackerSide,
 	}
+	initializeAllocationFootprint(u)
 	installWeapons(u, def) // [06 §1.2] wire Weapon1/2/3 definitions [P0-I04]
 	u.InitEconomyState()   // [P1-I04]
 	w.initializeAllocationHeading(u, def)

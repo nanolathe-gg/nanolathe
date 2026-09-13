@@ -387,7 +387,13 @@ then the height snap `[05 R-FEAT-01 §3]` `[05 R-FEAT-01 §3-A]`. `PopulateFromT
 is the map bootstrap. Successful sprite stamps reset accumulated damage; teardown
 preserves the prior word until that initialization. Stamps preserve unrelated
 control flags and install neutral placer 10, except `PlaceCorpse`, which takes
-the dying unit's owner explicitly. Publication accepts player zero as an owner
+the dying unit's owner and committed footprint anchor explicitly. The session
+reads that anchor from movement before teardown, or from the unit's retained
+allocator/save pair when no movement surface exists. Both ordinary and forced
+allocation initialize that pair before scripts. The corpse's stored position
+remains the victim's exact position. The stamp must not derive its origin from
+the centre cell or recenter for the corpse's own footprint `[05 R-FEAT-01 §13]`.
+Publication accepts player zero as an owner
 `[05 R-FEAT-01 §3]` `[05 R-FEAT-01 §4]` `[03 §5.1.5]`.
 `RestoreAt` is the save path, which places through the same
 helper and then copies only the family state words `[08 R-SAVE-FEATURE-01]`.

@@ -92,7 +92,7 @@ func TestCorpseSinkingAdmissionUsesExactVictimPoint(t *testing.T) {
 			svc := NewService(terrain, nil, nil, nil)
 			def := defP1("slope-corpse", 1, 1, "wreck", "")
 			pos := [3]numeric.Fixed{numeric.FixedFromInt(tc.point), 90 << 16, numeric.FixedFromInt(tc.point)}
-			inst := svc.PlaceCorpse(pos, Orientation{}, def, false, 0)
+			inst := svc.PlaceCorpse(world.Cell{X: 1, Z: 1}, pos, Orientation{}, def, false, 0)
 			if inst == nil || inst.IsSinking != tc.sinking {
 				t.Fatalf("corpse=%+v, want sinking=%t", inst, tc.sinking)
 			}

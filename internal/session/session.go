@@ -1233,6 +1233,14 @@ func (s *Session) RegisterAll() {
 						}
 					}
 					if corpseDef != nil {
+						// Movement owns the live committed pair. Before its
+						// initialization (and for types without that surface),
+						// the allocator/save record already retains the same
+						// origin [05 R-FEAT-01 §13][04 R-ORD-01 §1].
+						anchor := world.Cell{X: int32(u.CachedOccupancyX), Z: int32(u.CachedOccupancyZ)}
+						if committed, _, _, ok := s.Movement.CommittedFootprint(h); ok {
+							anchor = world.Cell{X: committed.X, Z: committed.Z}
+						}
 						// The corpse stamper takes the dying unit's EXACT
 						// position triple, not just its footprint cell
 						// [05 R-FEAT-01 §13 "The corpse creator's chain and
@@ -1249,6 +1257,7 @@ func (s *Session) RegisterAll() {
 						// resurrection transplant copies back into the
 						// replacement unit [05 R-WORK-01 §7].
 						corpse := s.Features.PlaceCorpse(
+							anchor,
 							[3]numeric.Fixed{u.X, u.Y, u.Z},
 							features.Orientation{Bank: u.Move.Bank, Heading: u.Move.Heading, Pitch: u.Move.Pitch},
 							corpseDef, u.Def.IsFeature, u.Owner)

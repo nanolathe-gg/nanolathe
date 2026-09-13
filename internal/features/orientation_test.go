@@ -20,7 +20,7 @@ func TestCorpseAndBarePlacementOrientation(t *testing.T) {
 
 	wreck := defP1("orientwreck", 1, 1, "orientwreck.3do", "")
 	fell := Orientation{Bank: 0x1234, Heading: 0xC000, Pitch: 0x0456}
-	corpse := svc.PlaceCorpse([3]numeric.Fixed{
+	corpse := svc.PlaceCorpse(world.Cell{X: 2, Z: 3}, [3]numeric.Fixed{
 		world.CellToWorld(2),
 		numeric.Fixed(11 * 65536),
 		world.CellToWorld(3),
@@ -57,7 +57,7 @@ func TestReplacementRetainsAttachedTransform(t *testing.T) {
 			wreck.FeatureDeadDef, wreck.FeatureReclamateDef = successor, successor
 			pos := [3]numeric.Fixed{world.CellToWorld(4) + 123, numeric.Fixed(11*65536 + 456), world.CellToWorld(4) + 789}
 			orient := Orientation{Bank: 1, Heading: 2, Pitch: 3}
-			corpse := svc.PlaceCorpse(pos, orient, wreck, true, 0)
+			corpse := svc.PlaceCorpse(world.Cell{X: 4, Z: 4}, pos, orient, wreck, true, 0)
 			if corpse == nil {
 				t.Fatal("corpse refused")
 			}

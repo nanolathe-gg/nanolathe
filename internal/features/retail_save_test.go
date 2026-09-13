@@ -77,7 +77,7 @@ func TestThreeDRecordRoundTripsAWreckMidDescent(t *testing.T) {
 
 	// Mid-descent: above the coarse floor (height byte 10) and below the sea.
 	descending := numeric.Fixed(22*65536 + 0x4000)
-	saved := svc.PlaceCorpse([3]numeric.Fixed{
+	saved := svc.PlaceCorpse(world.Cell{X: 3, Z: 4}, [3]numeric.Fixed{
 		world.CellToWorld(3).Add(numeric.Fixed(5 * 65536)),
 		descending,
 		world.CellToWorld(4).Add(numeric.Fixed(7 * 65536)),
@@ -178,7 +178,7 @@ func TestRetailFeatureImageIncludesAdmittedDefinitionNames(t *testing.T) {
 	terrain.FeatureDefs = []*content.FeatureDef{tree, unused}
 	svc := NewService(terrain, nil, nil, nil)
 	wreck := defP1("wreck", 1, 1, "wreck.3do", "")
-	if svc.PlaceCorpse([3]numeric.Fixed{world.CellToWorld(3), world.CellToWorld(2), world.CellToWorld(4)}, Orientation{}, wreck, false, 0) == nil {
+	if svc.PlaceCorpse(world.Cell{X: 3, Z: 4}, [3]numeric.Fixed{world.CellToWorld(3), world.CellToWorld(2), world.CellToWorld(4)}, Orientation{}, wreck, false, 0) == nil {
 		t.Fatal("corpse refused")
 	}
 	image, err := svc.RetailFeatureImage()

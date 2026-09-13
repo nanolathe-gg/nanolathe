@@ -7,6 +7,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
 	"github.com/nanolathe-gg/nanolathe/internal/hud"
+	"github.com/nanolathe-gg/nanolathe/internal/input"
 )
 
 // hoveredGadgetSource reports the footer's first source: the hovered-gadget
@@ -93,21 +94,21 @@ func (h *retailBattleHUD) dispatchFactoryBuild(b *battleSession, product string,
 // are data-driven with count guard [R-P0-03][07 §9] C10.
 func (h *retailBattleHUD) consumeClick(b *battleSession, x, y int32) bool {
 	shift := b != nil && b.battleState() != nil && b.battleState().Input.ShiftHeld
-	return h.consumeClickDelta(b, x, y, false, shift)
+	return h.consumeClickDelta(b, x, y, false, input.Modifiers{Shift: shift})
 }
 
-func (h *retailBattleHUD) consumeClickWithShift(b *battleSession, x, y int32, shift bool) bool {
-	return h.consumeClickDelta(b, x, y, false, shift)
+func (h *retailBattleHUD) consumeClickWithModifiers(b *battleSession, x, y int32, modifiers input.Modifiers) bool {
+	return h.consumeClickDelta(b, x, y, false, modifiers)
 }
 
-// consumeRightClickWithShift handles the signed cancellation form of a factory
+// consumeRightClickWithModifiers handles the signed cancellation form of a factory
 // product button. Other authored controls are consumed without an action;
 // right-click remains deselect/cancel on the world [R-P0-11].
-func (h *retailBattleHUD) consumeRightClickWithShift(b *battleSession, x, y int32, shift bool) bool {
-	return h.consumeClickDelta(b, x, y, true, shift)
+func (h *retailBattleHUD) consumeRightClickWithModifiers(b *battleSession, x, y int32, modifiers input.Modifiers) bool {
+	return h.consumeClickDelta(b, x, y, true, modifiers)
 }
 
-func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightClick, shift bool) bool {
+func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightClick bool, modifiers input.Modifiers) bool {
 	if h == nil || b == nil {
 		return false
 	}
@@ -149,7 +150,7 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 		if !guiRectContains(r, x, y) {
 			continue
 		}
-		if h.activatePaletteGadget(b, ctx, i, rightClick, shift) {
+		if h.activatePaletteGadget(b, ctx, i, rightClick, modifiers) {
 			return true
 		}
 		// Greyed command records are transparent to a later overlapping

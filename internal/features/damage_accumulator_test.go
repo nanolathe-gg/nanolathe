@@ -12,7 +12,7 @@ import (
 // and returns its live instance, which the stamp leaves with a zero accumulator.
 func placeWreck(t *testing.T, svc *Service, def *content.FeatureDef, cx, cz int) *Instance {
 	t.Helper()
-	inst := svc.PlaceCorpse([3]numeric.Fixed{
+	inst := svc.PlaceCorpse(world.Cell{X: int32(cx), Z: int32(cz)}, [3]numeric.Fixed{
 		world.CellToWorld(int32(cx)), numeric.Fixed(10 * 65536), world.CellToWorld(int32(cz)),
 	}, Orientation{}, def, false, 0)
 	if inst == nil {

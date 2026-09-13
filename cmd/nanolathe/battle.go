@@ -221,11 +221,13 @@ type battleSession struct {
 	currentUnit        pool.Handle
 }
 
-// factoryBuildDelta applies the retail signed button count: left click adds
-// one, Shift-left adds five; right-click variants pass negative values.
-func factoryBuildDelta(shiftHeld, rightClick bool) int {
+// factoryBuildDelta retains the signed count [07 R-P0-11 §1] and adds the
+// requested Alt batch of twenty (DESIGN_INTERFACE_HUD_INPUT §5).
+func factoryBuildDelta(modifiers input.Modifiers, rightClick bool) int {
 	count := 1
-	if shiftHeld {
+	if modifiers.Alt {
+		count = 20
+	} else if modifiers.Shift {
 		count = 5
 	}
 	if rightClick {

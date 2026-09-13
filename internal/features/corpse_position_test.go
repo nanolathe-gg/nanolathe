@@ -32,7 +32,7 @@ func TestCorpseKeepsTheVictimsPositionAndSinks(t *testing.T) {
 		numeric.Fixed(seaByte * 65536),
 		world.CellToWorld(4).Add(numeric.Fixed(7 * 65536)),
 	}
-	inst := svc.PlaceCorpse(victim, Orientation{}, corpse, false, 0)
+	inst := svc.PlaceCorpse(world.Cell{X: 2, Z: 3}, victim, Orientation{}, corpse, false, 0)
 	if inst == nil {
 		t.Fatal("corpse refused")
 	}
@@ -40,10 +40,10 @@ func TestCorpseKeepsTheVictimsPositionAndSinks(t *testing.T) {
 		t.Fatalf("corpse position (%d,%d,%d), want the victim's triple (%d,%d,%d)",
 			inst.X.Raw(), inst.Y.Raw(), inst.Z.Raw(), victim[0].Raw(), victim[1].Raw(), victim[2].Raw())
 	}
-	// The plot anchor is the victim's cell, derived separately from the stored
-	// position and unaffected by the footprint centring.
-	if inst.CX != 3 || inst.CZ != 4 {
-		t.Fatalf("corpse anchored at (%d,%d), want the victim's plot cell (3,4)", inst.CX, inst.CZ)
+	// The committed footprint anchor is independent of the exact centre
+	// position [05 R-FEAT-01 §13].
+	if inst.CX != 2 || inst.CZ != 3 {
+		t.Fatalf("corpse anchored at (%d,%d), want the committed footprint origin (2,3)", inst.CX, inst.CZ)
 	}
 	if !inst.IsSinking || inst.Settled {
 		t.Fatalf("corpse over water is IsSinking=%v Settled=%v at birth, want sinking", inst.IsSinking, inst.Settled)

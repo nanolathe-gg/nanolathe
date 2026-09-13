@@ -1240,7 +1240,8 @@ chosen on the **press** edge. In order:
    deselect and cancel only. Under `Interface Type 1`, an idle right-down in
    the viewport issues the contextual order; an armed placement or latch still
    cancels on right. A factory product button is the one exception, subtracting
-   one or five from the matching tail node. Thus only Type 1's idle viewport
+   one or five from the matching tail node (or twenty with the Alt extension
+   in §5). Thus only Type 1's idle viewport
    path queues a right-button order `[07 R-CAM-01 §5]` `[07 §9]` `[04 §3.4]`
    `[07 R-P0-11 §1]`.
 3. **Left press that lands on chrome** takes the HUD capture and records the
@@ -1743,6 +1744,15 @@ fixtures define the new input policy; it is not attributed to retail evidence.
   order icon `[07 R-P0-11 §3]`.
 
 ## 5. Divergences
+
+* **Alt batches factory products by twenty.** This user-requested build-menu
+  extension adds twenty on Alt-left-click and subtracts twenty on
+  Alt-right-click. Alt takes precedence over Shift; Shift alone retains five
+  and no modifier retains one. The shared product callback uses the held
+  modifiers at activation, including a product quickkey. Counts use the existing
+  signed queue command, so addition coalesces and subtraction consumes matching
+  queued products normally. Mobile building placement and stockpile toys keep
+  their existing actions. This is host input policy, not a retail behavior claim.
 
 * **Tab resumes an already paused battle.** As user-requested host policy,
   Tab with no modal open resumes the battle directly; F2 still opens options.

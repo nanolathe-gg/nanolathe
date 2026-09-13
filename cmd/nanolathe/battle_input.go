@@ -382,8 +382,9 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	// not grant an actor or bypass command validation [07 R-CAM-01 §5].
 	if mouse.Pressed(input.MouseButtonRight) {
 		// A factory product button is the one right-click exception: it
-		// subtracts one/five from the matching tail node [R-P0-11].
-		if b.hud != nil && b.hud.hitTestFor(b, mx, my) && b.hud.consumeRightClickWithShift(b, mx, my, pointerModifiers.Shift) {
+		// subtracts the modifier-selected batch from the matching tail node
+		// [R-P0-11]; Alt extends this to twenty (DESIGN_INTERFACE_HUD_INPUT §5).
+		if b.hud != nil && b.hud.hitTestFor(b, mx, my) && b.hud.consumeRightClickWithModifiers(b, mx, my, pointerModifiers) {
 			return
 		}
 		state := b.battleState().Input
@@ -441,7 +442,7 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 		// across the rail from activating a different control [07 §3][07 §4].
 		b.battleState().Input.HUDCaptured = false
 		b.battleState().Input.DragActive = false
-		if b.hud != nil && b.hud.sameButton(b, b.battleState().Input.HUDPressX, b.battleState().Input.HUDPressY, mx, my) && b.hud.consumeClickWithShift(b, mx, my, pointerModifiers.Shift) {
+		if b.hud != nil && b.hud.sameButton(b, b.battleState().Input.HUDPressX, b.battleState().Input.HUDPressY, mx, my) && b.hud.consumeClickWithModifiers(b, mx, my, pointerModifiers) {
 			return
 		}
 		return

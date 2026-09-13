@@ -551,18 +551,12 @@ func (s *Service) PlaceAtWorld(x, z numeric.Fixed, def *content.FeatureDef) *Ins
 // PlaceCorpse stamps a corpse feature for a dying unit and initiates sinking
 // when submerged [05 "Feature sinking and water interaction"].
 //
-// `pos` is the dying unit's EXACT position triple, and the two things it feeds
-// are deliberately separate [05 R-FEAT-01 §13 "The corpse creator's chain and
-// stamp"]: the corpse is stamped at the unit's plot cell, derived from X and Z
-// by the floor-corrected cell conversion [03 §2.1] I3, while the instance's
-// stored position is the triple verbatim — not the footprint centre, and not
-// the terrain floor under it, which is what the null-position stamp of
-// [05 R-FEAT-01 §3] step 4 computes instead.
-//
-// The Y is what makes a sinking wreck a wreck. Handing this helper only X and
-// Z left every corpse starting at the coarse floor, so a surface ship's wreck
-// was already resting on the seabed on its first lifecycle visit — settled,
-// never descending — and its horizontal position jumped to the cell centre.
+// anchor is the dying unit's committed footprint origin, supplied separately
+// from its exact position [05 R-FEAT-01 §13]. Reading the centre's cell here
+// shifts a large wreck into neighboring units. The saved anchor remains the
+// origin even when the chosen corpse definition has a different footprint.
+// pos is stored verbatim, preserving a surface ship's starting height for
+// sinking [05 R-FEAT-01 §3 step 4].
 //
 // `orient` is the dying unit's own bank/heading/pitch, the second optional
 // pointer the stamp takes [05 "Feature instance and terrain cell"]. The corpse
@@ -576,13 +570,11 @@ func (s *Service) PlaceAtWorld(x, z numeric.Fixed, def *content.FeatureDef) *Ins
 // descend. Chain depth is already resolved by the caller from the Killed-variant
 // low nibble [04 §5.1][06 §12.1] C23; this helper just stamps the resolved def.
 // Returns the corpse instance or nil.
-func (s *Service) PlaceCorpse(pos [3]numeric.Fixed, orient Orientation, def *content.FeatureDef, fromIsFeature bool, owner uint8) *Instance {
+func (s *Service) PlaceCorpse(anchor world.Cell, pos [3]numeric.Fixed, orient Orientation, def *content.FeatureDef, fromIsFeature bool, owner uint8) *Instance {
 	if def == nil || s.Terrain == nil {
 		return nil
 	}
-	cx := int(world.WorldToCell(pos[0]))
-	cz := int(world.WorldToCell(pos[2]))
-	inst := s.stampFeature(cx, cz, def, &pos, &orient, owner)
+	inst := s.stampFeature(int(anchor.X), int(anchor.Z), def, &pos, &orient, owner)
 	if inst == nil {
 		return nil
 	}

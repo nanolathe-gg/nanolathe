@@ -141,8 +141,11 @@ func (h *retailBattleHUD) servicePaletteFrame(b *battleSession, in *input.State,
 		in.DiscardTokens(result.ConsumedTokens)
 	}
 	if result.Fired {
-		shift := in.Kbd != nil && in.Kbd.HasShift()
-		h.activatePaletteGadget(b, ctx, result.FiredIndex, result.FiredButton == 2, shift)
+		modifiers := input.Modifiers{Alt: frame.AltHeld}
+		if in.Kbd != nil {
+			modifiers.Shift = in.Kbd.HasShift()
+		}
+		h.activatePaletteGadget(b, ctx, result.FiredIndex, result.FiredButton == 2, modifiers)
 	}
 	return result, result.Fired && result.FiredButton != 0 || wasCaptured || p.CaptureIndex() >= 0
 }
@@ -165,7 +168,7 @@ func (h *retailBattleHUD) servicePalettePointer(b *battleSession, in *input.Stat
 // activatePaletteGadget returns whether the gadget was an admitted activation
 // target. Hidden and greyed records are deliberately not admitted; callers
 // then continue their ordered walk [07 R-WGT-01 §1][07 R-HUD-03 §6].
-func (h *retailBattleHUD) activatePaletteGadget(b *battleSession, ctx paletteActivationContext, index int, rightClick, shift bool) bool {
+func (h *retailBattleHUD) activatePaletteGadget(b *battleSession, ctx paletteActivationContext, index int, rightClick bool, modifiers input.Modifiers) bool {
 	if index <= 0 || index >= len(ctx.window.Gadgets) {
 		return false
 	}
@@ -224,7 +227,7 @@ func (h *retailBattleHUD) activatePaletteGadget(b *battleSession, ctx paletteAct
 	}
 	if StockpileGadget(gad) {
 		if !rightClick {
-			if err := b.DispatchStockpileGadget(shift); err != nil {
+			if err := b.DispatchStockpileGadget(modifiers.Shift); err != nil {
 				h.dispatchErr = err
 			}
 		}
@@ -236,7 +239,7 @@ func (h *retailBattleHUD) activatePaletteGadget(b *battleSession, ctx paletteAct
 	if ctx.selected != nil && b.cat != nil {
 		if product, found := b.cat.Unit(gad.Name); found && product != nil {
 			if !hud.ProductArmsPlacement(product) {
-				delta := factoryBuildDelta(shift, rightClick)
+				delta := factoryBuildDelta(modifiers, rightClick)
 				b.playUICue(nil, countedBuildCue(delta))
 				if err := h.dispatchFactoryBuild(b, product.CanonicalKey, delta); err != nil {
 					h.dispatchErr = err
@@ -254,7 +257,7 @@ func (h *retailBattleHUD) activatePaletteGadget(b *battleSession, ctx paletteAct
 	upper := strings.ToUpper(gad.Name)
 	if strings.HasSuffix(upper, "ONOFF") {
 		if !rightClick {
-			b.toggleOnOffSelected(shift)
+			b.toggleOnOffSelected(modifiers.Shift)
 			b.playUICue(nil, cueSpecialOrders)
 		}
 		return true

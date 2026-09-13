@@ -75,10 +75,11 @@ func (r *Renderer) appendGroundLights() {
 	k := r.sched.txf(1)
 	for i := range l.lights {
 		light := &l.lights[i]
-		// The ground point beneath a light is its UNSHEARED position: terrain is
-		// drawn with a zero shear term, so a ground pixel's screen row IS its
-		// world row (terrain.go, [03 §2.5]). position[1] already holds that row.
-		gx, gy := light.position[0]*k, light.position[1]*k
+		// This pass overlays the painted terrain without a receiver height.
+		// Centre its pool on the projected source, as the visible art is, rather
+		// than treating the unsheared world row as a terrain pixel (SC20).
+		// Physical model/smoke distances still use the unsheared source (§23.2).
+		gx, gy := light.position[0]*k, (light.position[1]-light.position[2]*0.5)*k
 		height := light.position[2] * k
 		radius := light.radius * k
 		if radius <= 0 || height >= radius {

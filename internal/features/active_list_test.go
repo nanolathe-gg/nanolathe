@@ -32,7 +32,7 @@ func TestThreeDRecordsGoDormantAtZeroVelocity(t *testing.T) {
 	if still == nil || !still.onActive {
 		t.Fatal("a stamped 3D instance did not join the active list")
 	}
-	sinking := svc.PlaceCorpse([3]numeric.Fixed{
+	sinking := svc.PlaceCorpse(world.Cell{X: 3, Z: 4}, [3]numeric.Fixed{
 		world.CellToWorld(3).Add(numeric.Fixed(5 * 65536)),
 		numeric.Fixed(20 * 65536),
 		world.CellToWorld(4).Add(numeric.Fixed(7 * 65536)),

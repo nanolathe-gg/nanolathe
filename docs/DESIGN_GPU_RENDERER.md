@@ -6080,7 +6080,7 @@ left the ground exactly as the map painted it. The terrain pass now ends, after
 
 The fragment is **base × light**, not a flat wash: it samples the copied
 composite under the pixel — the ground albedo already carrying the map's painted
-lighting — and outputs `min(base × colour × falloff × 0.9, 1 − base)` with alpha
+lighting — and outputs `min(base × colour × falloff × 2.0, 1 − base)` with alpha
 zero. Multiplying by the albedo keeps every painted detail (a dark rock stays
 darker than the sand beside it); the per-channel clamp against `1 − base` is
 what stops a bright source from flattening the ground to white; the additive
@@ -6094,9 +6094,19 @@ The falloff is the radial law of §23.2 **with the square dropped**, and
 core; a ground pool is read as a shape and wants a body. Squared, the pool was a
 bright point inside a wide invisible skirt; linear in `d²/r²` it carries light
 out to most of its radius and still reaches zero at the edge. As for the faces:
-the ground point beneath a light is its UNSHEARED position, because terrain is
-drawn with a zero shear term, so a ground pixel's screen row IS its world row
-[03 §2.5]. `h` is the light's height above that row. The quad covers the light's
+the source's stored absolute height remains the attenuation term `h`. The pool
+is centred on the source's projected position, `Y − h/2`, using the same
+half-height projection as visible objects [03 §2.5]. This is a screen-space
+presentation approximation: the pass has no terrain receiver height. The
+previous unsheared placement treated a terrain pixel as a zero-height world
+point, moving the pool down by half the source's absolute height; SC20 explains
+why painted terrain cannot be inverted that way on elevated ground. The same
+correction applies to every light family, including nanolathe clusters. Model
+and smoke receivers retain their physical source coordinates and response.
+The explosion source retains its existing quarter-frame lift (§23.2), so its
+pool projects one eighth of a frame above the event anchor. No new lift or art
+centroid is introduced. Air bursts retain absolute-height attenuation; this
+does not reconstruct their footprint on terrain relief. The quad covers the light's
 full radius rather than the smaller disc a lifted light actually reaches: the
 shader's own distance test discards the difference, so the cover is conservative
 and needs no square root [I2]. The world transform of §16.3 applies exactly
@@ -6145,7 +6155,12 @@ ground quads' clipping to the viewport and the empty-batch cases. The opt-in
 real-device fixture checks that a stroke brightens the terrain beneath it while
 terrain beyond its reach is untouched, that a flame sprite lights a facing model
 face but not a back-facing one, and that disabling Lighting restores the
-composite exactly.
+composite exactly. The projected-pool regression additionally checks native and
+2× recordings, a fractional final world transform, all five source families,
+elevated explosion and nanolathe admission, unchanged physical sources, and
+zero ground contribution at the height/radius boundary. Real-device native and
+2× captures check equal terrain brightness on opposite sides of the projected
+source, together with exact restoration when Lighting is disabled.
 
 ### 31.5 Known limits
 

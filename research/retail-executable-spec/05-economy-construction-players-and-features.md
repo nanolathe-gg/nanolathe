@@ -6592,9 +6592,16 @@ knows (reader census: none); the rate is the constant above.
 handoff from `[06 §12.2]` at feature precision). The corpse ordinal is the
 unit definition's resolved `corpse` (§2's lookup); the creator follows
 `featuredead` `depth − 1` times (depth from the `Killed` script's result),
-stopping silently on any sentinel; then stamps at the unit's plot cell with
-the unit's exact position triple and orientation triple and the owner's
-player index as the placer nibble. The dense-pack rule applies: the corpse
+stopping silently on any sentinel; then stamps at the unit's **committed
+footprint anchor** with the unit's exact position triple and orientation
+triple and the owner's player index as the placer nibble. The anchor is the
+saved cell pair used by occupancy clear/stamp [04 R-COLL-01 §1], not the cell
+containing the world-position centre. Its initializer applies the unit
+footprint's half-span bias before cell quantization [04 R-ORD-01 §1]; the
+corpse creator reads that pair directly, without re-quantizing the position
+or using the corpse definition's footprint to recenter it. The selected
+corpse definition controls the stamped extent starting at this saved anchor.
+The dense-pack rule applies: the corpse
 tears down every non-indestructible feature under its footprint and is
 silently not created over an indestructible one, a void cell, or when the
 slot pool is empty (§3). There is one attempt.
