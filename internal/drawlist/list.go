@@ -132,6 +132,11 @@ type Sprite struct {
 	// to a bounded window, for a source whose emission flickers (§31). It is
 	// zero for every other sprite and classic ignores it.
 	LightingTime float32
+	// LightingAge is explosion age in committed ticks plus presentation fraction,
+	// independent of Distortion. Presence distinguishes frame zero from missing
+	// timing in detached sources (GPU design §31.6).
+	LightingAge    float32
+	HasLightingAge bool
 	// ReflectionHeight is the projectile body anchor above sea in recording
 	// pixels. Ground shadows never ReflectWater (GPU design §26).
 	ReflectWater     bool
@@ -140,6 +145,10 @@ type Sprite struct {
 	// is the maximum authored animation extent in world pixels (GPU design §25).
 	// Zero size disables refraction; classic ignores both.
 	BlastAge, BlastSize float32
+	// Authored weapon scalars copied at explosion admission; no source-handle
+	// lookup or damage inference from shared artwork (GPU design §25.2).
+	HasBlastProfile                bool
+	BlastAreaOfEffect, BlastDamage int32
 	// HeatSource and HeatTime drive the modern burning-feature shimmer (GPU design §27).
 	// Time is committed ticks plus presentation fraction; classic ignores both.
 	HeatSource bool

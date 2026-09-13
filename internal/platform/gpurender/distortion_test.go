@@ -39,6 +39,9 @@ func TestBlastWaveLifetimeAndScale(t *testing.T) {
 }
 
 func checkBlastDistortionDevicePixels() error {
+	if err := captureDynamicBlastExamples(); err != nil {
+		return err
+	}
 	const w, h = 320, 240
 	pal := fixturePalette()
 	r, err := NewChecked(&pal, w, h)

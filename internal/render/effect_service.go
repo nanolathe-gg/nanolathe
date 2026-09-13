@@ -250,6 +250,7 @@ func (s *EffectService) admit(now uint32, e Event) bool {
 		FlashRadius: e.FlashRadius, FlashLevel: e.FlashLevel,
 		HasFlashDisc: e.HasFlashDisc, Strip: e.Strip,
 		HasCalculatedFlash: e.HasCalculatedFlash, CalculatedTable: e.CalculatedTable,
+		HasBlastProfile: e.HasBlastProfile, BlastAreaOfEffect: e.BlastAreaOfEffect, BlastDamage: e.BlastDamage,
 		NanolatheIndex: e.NanolatheIndex, NanolatheCount: e.NanolatheCount,
 		NanolatheGeometryKnown:  e.NanolatheGeometryKnown,
 		NanolatheTargetBoxKnown: e.NanolatheTargetBoxKnown,

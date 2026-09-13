@@ -173,11 +173,17 @@ func TestBlastMetadataUsesAdmissionAgeAndAuthoredSize(t *testing.T) {
 		{Frame: &formats.GAFFrame{Width: 16, Height: 16, Pixels: make([]byte, 256)}},
 	}}}}}
 
-	v := frame.EffectView{Kind: frame.KindExplosion.String(), Graphic: "blast", ActiveA: true, StartTick: 100, SeqA: 2, X: numeric.FixedFromInt(20), Z: numeric.FixedFromInt(20)}
+	v := frame.EffectView{HasBlastProfile: true, BlastAreaOfEffect: 110, BlastDamage: 350, Kind: frame.KindExplosion.String(), Graphic: "blast", ActiveA: true, StartTick: 100, SeqA: 2, X: numeric.FixedFromInt(20), Z: numeric.FixedFromInt(20)}
 	c.DrawEffectViews([]frame.EffectView{v}, options)
 	count := 0
 	c.list.VisitLightSources(func(sp drawlist.Sprite) {
 		count++
+		if !sp.HasBlastProfile || sp.BlastAreaOfEffect != 110 || sp.BlastDamage != 350 {
+			t.Fatalf("lost authored blast metadata: %+v", sp)
+		}
+		if !sp.HasLightingAge || sp.LightingAge != 5.5 {
+			t.Fatalf("lighting age = %v, known=%v", sp.LightingAge, sp.HasLightingAge)
+		}
 		if sp.BlastAge != 5.5 || sp.BlastSize != 80 || sp.LightingSize != 80 || sp.LightingScale != 2 {
 			t.Fatalf("blast age/size/scale = %v/%v/%v", sp.BlastAge, sp.BlastSize, sp.LightingScale)
 		}
@@ -197,7 +203,7 @@ func TestBlastMetadataUsesAdmissionAgeAndAuthoredSize(t *testing.T) {
 			count = 0
 			c.list.VisitLightSources(func(sp drawlist.Sprite) {
 				count++
-				if sp.LightingSize != 80 || sp.BlastSize != 0 || sp.BlastAge != 0 {
+				if !sp.HasLightingAge || sp.LightingAge != 5.5 || sp.LightingSize != 80 || sp.BlastSize != 0 || sp.BlastAge != 0 {
 					t.Fatalf("Distortion off changed lighting extent: %+v", sp)
 				}
 			})

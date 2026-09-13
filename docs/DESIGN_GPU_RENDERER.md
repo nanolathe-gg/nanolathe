@@ -5174,6 +5174,81 @@ profiles are under `/private/tmp/distortion-integrated-{before,after}-{modern,cl
 the comparison crop is `/private/tmp/distortion-final-comparison.png` and the
 synthetic motion preview is `/private/tmp/distortion-wave.gif`.
 
+### 25.2 Dynamic ordinary blast prototype
+
+This is a user-authorized modern presentation experiment. All tuning
+below is authored Nanolathe design, not a retail behavioral claim. The purpose
+is to differentiate ordinary explosions that share art, without shrinking
+existing waves or changing the largest special explosions.
+
+The central combat impact event copies the immutable weapon's authored
+`AreaOfEffect` and `DamageDefault` into value-only presentation metadata. A
+separate presence bit distinguishes a known zero from a missing profile. The
+session bridge, fixed effect pool and committed view preserve these values,
+and the client forwards them with the existing art extent and age. No renderer
+lookup follows a source unit or projectile handle. A unit's death blast uses
+the death weapon selected by the existing central impact path. Scripted
+fireballs and water-crossing splashes without this profile keep §25's original
+artwork-only wave. Authoritative damage, RNG, effect admission and lifetime do
+not read the added scalars.
+
+Known profiles with artwork extent at least 128 world pixels retain the
+original special-explosion treatment. For smaller art:
+
+- Below 48 pixels: no wave, even with high authored damage.
+- From 48 to below 64 pixels: admit only when authored AoE is at least 32 and
+  default damage at least 80. This admits substantial medium shells while
+  excluding small missile/laser hits. Existing art of at least 64 pixels keeps
+  its admission regardless of the profile values.
+- Baseline target radius is `max(2.5 × art extent, 160)` world pixels.
+- Breadth is `sqrt(clamp((AoE − 48) / 208, 0, 1))`. Target radius is the greater
+  of baseline and `min(baseline × (1 + 0.5 × breadth), 280)`. The baseline floor
+  preserves the few ordinary art entries already larger than that cap.
+- Force is `sqrt(clamp((default damage − 80) / 1120, 0, 1))`. Multiply the
+  original displacement strength by `1 + 0.75 × force`.
+- Start radius, band half-width, 15-tick lifetime, attack/decay, visibility,
+  clipping, zoom transforms, strongest-32 selection and shared draw remain §25.
+
+These two independent boosts use authored values as visual signals, not a
+calculation of damage dealt. In particular armor overrides, victim counts,
+falloff and overkill do not affect the visual. The current floor preserves the
+size of all previously admitted waves. Source animations still stop
+contributing when hidden or finished; the prototype does not extend them.
+
+`NANOLATHE_DYNAMIC_BLAST=0` is a temporary construction-time comparison control
+that restores the previous artwork-only formula. It leaves tree heat and the
+player's Distortion setting in control of their existing paths. No additional
+saved setting or shader pass is introduced.
+
+`NANOLATHE_DYNAMIC_BLAST_SHOTS` enables staged paired captures in the existing
+GPU device loop, using installed weapon definitions, actual GAF animation
+holds and Great Divide terrain. Left is artwork-only, right is dynamic. These
+isolate primary explosion art and refraction and are not combat simulations;
+the live battle benchmark supplies the integrated scene check. The capture
+fixture also requires exact pixel equality for tiny and expired waves.
+
+Prototype verification on the integrated branch passed `tools/check`,
+`tools/check-retail` including lint, the affected packages and the real GPU
+fixture loop. The float audit explicitly lists the device-only square roots
+in I2. The six installed-art clips and the live modern/classic battle captures
+were visually inspected. Tiny and expired paired captures are pixel-identical.
+
+The sequential comparison used one binary with its dynamic formula disabled
+and enabled: scene version 4, Great Divide, seed 7, 1920×1080, zoom 2,
+auto-remaster off, factories on, 300 pre-ticks, 120 warmup draws and 180 measured
+draws at 60 draws/s. Metadata and every census matched within renderer pairs.
+Modern waves grew from 0–10 (mean 2.98) to 1–17 (mean 7.26), with identical
+per-frame device draw counts. Submit median/p95/max was 3.650/4.011/4.184 →
+3.665/4.037/4.126 ms; cadence median was 16.708 → 16.668 ms. This is a short
+host-timing sample, not a GPU timing or guarantee. It isolates the renderer
+formula, not the scalar-copy overhead relative to a pre-prototype binary.
+Classic capture bytes match; its host cadence varied from 22.596 to 24.874 ms
+median with a 192.509 ms outlier, so those samples do not establish a cost for
+the modern-only formula. Captures retained moving and damaged armies, sprite
+features and burning trees, projectiles, effects, construction and nanolathe
+activity. Raw runs and profiles are outside the repository under
+`/private/tmp/dynamic-blast-review`.
+
 ## 26. Coastal water prototype (Enhanced)
 
 This is an authored Nanolathe presentation experiment, not a retail behavioral
@@ -6224,6 +6299,65 @@ drawn over it. A fresh wreck's light borrows the §28 cooling emission, which th
 Distortion switch owns: with Distortion off a wreck emits no light even when
 Lighting is on. The flicker's phase hash is a position hash, so two fires at the
 same recorded position pulse together, and a fire that moves changes phase.
+
+### 31.6 Short explosion terrain flash prototype
+
+User-authorized modern presentation tuning, not retail behavior. The previous
+terrain light used gain 2.0 and the current art's measured colour for the full
+primary animation. Bright lingering frames therefore kept a broad, saturated
+pool on the ground. The explosion's light reaching nearby models and smoke
+was the same source, so lowering its shared colour would mute those receivers.
+
+Only the terrain receiver now multiplies explosion RGB by 0.375 (effective
+peak gain 0.75 instead of 2.0), holds that multiplier through age two ticks,
+and then applies `(1 − (age − 2) / 10)²` until age twelve ticks, when it omits
+the ground quad. At 30 Hz the hold is about 67 ms and the entire terrain flash
+ends at 400 ms. At age seven ticks (233 ms), only one quarter of the new peak
+remains. Current-art colour still modulates this envelope, so it cannot invent
+light from dark pixels. The radius, position, radial falloff and albedo law are
+unchanged. Water receives the same short flash through the existing pass.
+
+The recorder supplies an independent, presence-tagged `LightingAge`: committed
+tick minus published effect StartTick plus the presentation fraction when
+enabled. It is populated regardless of the Distortion setting. Untimed detached
+sources receive the lower peak gain but retain art-driven lifetime; missing
+age does not mean an expired or newly restarted explosion. The main production
+explosion recorder always publishes age. Hidden/finished primary art still
+stops contributing immediately.
+
+The shared light's colour, radius and selection strength are unchanged. Nearby
+models and smoke retain the prior full-colour response; fire, projectiles,
+nanolathe and wreck terrain lights keep their prior gain and timing. There is
+no new shader, texture, pass, clock, simulation state or RNG consumer.
+`NANOLATHE_EXPLOSION_GROUND_FLASH=0` temporarily restores the previous terrain
+light for developer comparisons.
+
+The existing GPU fixture loop checks softened and fading ground pixels,
+exact ground restoration at expiration, stable replay and identical warm
+model pixels before/after the terrain change. Recorder checks cover age while
+Distortion is disabled. `NANOLATHE_GROUND_FLASH_SHOTS` selects paired captures
+from the existing six installed-art examples: both sides retain dynamic blast
+waves, with prior terrain light left and the new short flash right.
+
+Verification passed the affected packages, fast and retail gates (including
+lint), and the real GPU fixtures. The original sequence-radius onset fixture
+uses the old terrain gain to isolate its earlier contract; the new pixel
+fixture independently verifies the short fade and unchanged model color.
+The installed-art comparisons and live battle captures were visually inspected.
+
+Sequential live battle pairs used the same binary with the terrain-flash
+comparison off/on: Great Divide scene 4, seed 7, 1920×1080, zoom 2,
+auto-remaster off, factories on, 300 lead-in ticks, 120 warmup draws and 180
+measured draws at 60 draws/s. Every census and pairwise scene metadata matched.
+Modern ground quads averaged 25.73 → 13.82; source lights, lit model faces,
+blast waves and device draws matched on every frame. Submit median/p95/max
+was 3.566/4.240/7.247 → 3.442/4.037/5.383 ms; cadence median 16.719 → 16.669 ms.
+Classic capture bytes matched, with Submit median 0.465 → 0.472 ms and cadence
+median 21.238 → 21.106 ms. These short host samples isolate the terrain formula,
+not GPU time or a performance guarantee. Both scenes retained moving and
+damaged units, projectiles, effects, sprite and burning features, construction
+and nanolathe activity. Raw profiles and runs are under
+`/private/tmp/ground-flash-review`, outside the repository.
 
 ## 32. Reflected explosions, shoreline band, and the removed sun glitter (Enhanced)
 

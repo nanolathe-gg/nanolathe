@@ -111,6 +111,9 @@ func checkExplosionTemporalDevicePixels() error {
 		if err != nil {
 			return err
 		}
+		// Isolate the sequence-radius onset contract from the separate short
+		// terrain envelope, whose receiver pixels are checked in §31.6.
+		r.SetExplosionGroundFlash(false)
 		step := camera.ViewScaleNative
 		if scale == 2 {
 			step = camera.ViewScaleDetail

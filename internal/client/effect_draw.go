@@ -280,17 +280,21 @@ func (c *Client) DrawEffectViews(effects []frame.EffectView, options EffectDrawO
 		// The blast ring metadata is the player's Distortion switch (§25, §30);
 		// zero extent admits no ring. The lighting kind is recorded either way
 		// — the executor gates the lighting pass itself.
-		var blastAge, blastSize, lightingSize float32
+		var blastAge, blastSize, lightingSize, lightingAge float32
+		hasLightingAge := c.enhanced && lightingKind == drawlist.SpriteLightingExplosion
+		if hasLightingAge {
+			lightingAge = float32(options.LightingFrame.Tick - view.StartTick)
+			if c.interpolation {
+				lightingAge += c.TickFraction()
+			}
+		}
 		if c.enhanced && lightingKind == drawlist.SpriteLightingExplosion && options.BlastSize != nil {
 			// The tiny opening frame must illuminate the same region as the
 			// rest of its flash; frame bounds grow after the brightest phase.
 			lightingSize = options.BlastSize(view)
 			if c.effects.Distortion {
 				blastSize = lightingSize
-				blastAge = float32(options.LightingFrame.Tick - view.StartTick)
-				if c.interpolation {
-					blastAge += c.TickFraction()
-				}
+				blastAge = lightingAge
 			}
 		}
 		scale := float32(c.viewScale().Float())
@@ -300,8 +304,9 @@ func (c *Client) DrawEffectViews(effects []frame.EffectView, options EffectDrawO
 		// already returns false when the player's Water switch is off (§30).
 		c.emitSprite(drawlist.Sprite{Frame: c.viewFrame(frame), X: x - 128, Y: y - 32, Kind: drawlist.BlitKeyed, Anchored: true, Emissive: true,
 			BlastAge: blastAge, BlastSize: blastSize,
+			HasBlastProfile: view.HasBlastProfile, BlastAreaOfEffect: view.BlastAreaOfEffect, BlastDamage: view.BlastDamage,
 			ReflectWater: c.reflectionWaterAt(d.X, d.Z), ReflectionHeight: c.reflectionHeight(d.Y),
-			LightingKind: lightingKind, LightingSize: lightingSize, WorldHeight: float32(d.Y.Raw()) / 65536 * scale, LightingScale: scale})
+			LightingKind: lightingKind, LightingSize: lightingSize, LightingAge: lightingAge, HasLightingAge: hasLightingAge, WorldHeight: float32(d.Y.Raw()) / 65536 * scale, LightingScale: scale})
 		stats.Sprites++
 	}
 	return stats

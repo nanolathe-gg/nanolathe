@@ -215,6 +215,9 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 		gafImages:        make(map[*formats.GAFFrame]*ebiten.Image),
 		copyIdx:          [6]uint32{0, 1, 2, 1, 2, 3},
 	}
+	// Temporary prototype comparison; no saved setting (GPU design §25.2).
+	r.SetDynamicBlastDistortion(os.Getenv("NANOLATHE_DYNAMIC_BLAST") != "0")
+	r.SetExplosionGroundFlash(os.Getenv("NANOLATHE_EXPLOSION_GROUND_FLASH") != "0")
 	if pal != nil {
 		r.displayPalette = pal.Base
 	}

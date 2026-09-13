@@ -182,6 +182,7 @@ func TestRS06_FloatAudit(t *testing.T) {
 		"internal/ai/placement.go":                         true, // placement sqrt [P0-03 §4][I2] transient
 		"internal/upscale/sprite.go":                       true, // load-time 2x art synthesis, presentation-only, never on a sim path [I2][DESIGN_GPU_RENDERER §14.4]
 		"internal/upscale/terrain_basis.go":                true, // the terrain synthesizer's PCA basis norm, presentation-only, never on a sim path [I2][DESIGN_GPU_RENDERER §14.4]
+		"internal/platform/gpurender/distortion.go":        true, // Authored modern blast boosts only, never simulation input [I2][DESIGN_GPU_RENDERER §25.2]
 		"internal/platform/gpurender/lighting.go":          true, // Enhanced light response only, never simulation input [I2][DESIGN_GPU_RENDERER §23]
 		"internal/client/water_wakes.go":                   true, // Enhanced visible-path geometry, never simulation input [I2][DESIGN_GPU_RENDERER §26]
 		"internal/platform/gpurender/water_reflections.go": true, // reflection stroke length, presentation-only, never simulation input [I2][DESIGN_GPU_RENDERER §26.4]

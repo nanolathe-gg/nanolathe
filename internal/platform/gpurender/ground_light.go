@@ -21,13 +21,34 @@ import (
 // carries the map's painted lighting, and the clamp against 1 − base keeps that
 // detail — but it has to be far enough above zero for the pool to read without
 // amplification, which the first 0.9 was not. It is an artistic choice.
+// Explosion receivers now apply their separate lower gain and short fade (§31.6).
 const groundLightGain = 2.0
 
+// explosionGroundScale multiplies only the terrain receiver's emission.
+// Authored presentation tuning: 0.75 peak gain instead of 2, two ticks of
+// peak followed by squared decay to zero at twelve ticks (GPU design §31.6).
+func explosionGroundScale(age float32, known bool) float32 {
+	const peak = float32(0.75 / groundLightGain)
+	if !known {
+		return peak
+	}
+	if age < 0 || age >= 12 {
+		return 0
+	}
+	tail := 1 - max(age-2, 0)/10
+	return peak * tail * tail
+}
+
+// SetExplosionGroundFlash compares the short terrain flash with the earlier
+// full-animation ground light. It never changes model lighting (§31.6).
+func (r *Renderer) SetExplosionGroundFlash(on bool) { r.ground.legacyExplosion = !on }
+
 type groundLighting struct {
-	shader  *ebiten.Shader
-	verts   []ebiten.Vertex
-	indices []uint32
-	opts    ebiten.DrawTrianglesShaderOptions
+	legacyExplosion bool
+	shader          *ebiten.Shader
+	verts           []ebiten.Vertex
+	indices         []uint32
+	opts            ebiten.DrawTrianglesShaderOptions
 }
 
 // drawGroundLighting runs at the end of the terrain pass, after the water
@@ -75,6 +96,13 @@ func (r *Renderer) appendGroundLights() {
 	k := r.sched.txf(1)
 	for i := range l.lights {
 		light := &l.lights[i]
+		gain := float32(1)
+		if light.kind == lightExplosion && !g.legacyExplosion {
+			gain = explosionGroundScale(light.age, light.ageKnown)
+			if gain <= 0 {
+				continue
+			}
+		}
 		// This pass overlays the painted terrain without a receiver height.
 		// Centre its pool on the projected source, as the visible art is, rather
 		// than treating the unsheared world row as a terrain pixel (SC20).
@@ -101,7 +129,7 @@ func (r *Renderer) appendGroundLights() {
 		base := uint32(len(g.verts))
 		for _, p := range [4][2]float32{{x0, y0}, {x1, y0}, {x0, y1}, {x1, y1}} {
 			g.verts = append(g.verts, ebiten.Vertex{DstX: p[0], DstY: p[1], SrcX: p[0], SrcY: p[1],
-				ColorR: light.color[0], ColorG: light.color[1], ColorB: light.color[2], ColorA: 0,
+				ColorR: light.color[0] * gain, ColorG: light.color[1] * gain, ColorB: light.color[2] * gain, ColorA: 0,
 				Custom0: gx, Custom1: gy, Custom2: height, Custom3: radius})
 		}
 		g.indices = append(g.indices, base, base+1, base+2, base+1, base+2, base+3)

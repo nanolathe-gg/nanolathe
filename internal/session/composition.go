@@ -1952,6 +1952,7 @@ func createAndBindServices(s *Session) error {
 			X: ev.Position.X, Y: ev.Position.Y, Z: ev.Position.Z,
 			Graphic: ev.Graphic, AssetID: ev.Bank, Magnitude: ev.Magnitude,
 			HasCalculatedFlash: ev.HasCalculatedFlash, CalculatedTable: ev.CalculatedTable,
+			HasBlastProfile: ev.HasBlastProfile, BlastAreaOfEffect: ev.BlastAreaOfEffect, BlastDamage: ev.BlastDamage,
 
 			DurationsB: render.FlashFrameDurations(int(ev.CalculatedTable)),
 		}

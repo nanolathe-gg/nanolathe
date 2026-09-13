@@ -145,6 +145,13 @@ type EffectRecord struct {
 	AnimA EffectAnimPlayer
 	AnimB EffectAnimPlayer
 
+	// Blast profile copies the impact weapon's compiled values for the modern
+	// presentation prototype (DESIGN_GPU_RENDERER §25). Presence is separate
+	// from zero damage; these values never feed authoritative damage.
+	HasBlastProfile   bool
+	BlastAreaOfEffect int32
+	BlastDamage       int32
+
 	// HasCalculatedFlash and CalculatedTable select the procedurally generated
 	// table the secondary cursor indexes [06 R-WFX-01 §2].
 	HasCalculatedFlash bool
@@ -190,6 +197,7 @@ func (p *FixedEffectPool) AppendView(v frame.EffectView) bool {
 		VX: v.VX, VY: v.VY, VZ: v.VZ,
 		Gravity: v.Gravity, ExpiryTick: v.ExpiryTick,
 		HasCalculatedFlash: v.HasCalculatedFlash, CalculatedTable: v.CalculatedTable,
+		HasBlastProfile: v.HasBlastProfile, BlastAreaOfEffect: v.BlastAreaOfEffect, BlastDamage: v.BlastDamage,
 		AnimA:    EffectAnimPlayer{Idx: v.SeqA, Active: validDurations(v.DurationsA), Frames: len(v.DurationsA), Durations: append([]int32(nil), v.DurationsA...), Loop: v.LoopA},
 		AnimB:    EffectAnimPlayer{Idx: v.SeqB, Active: validDurations(v.DurationsB), Frames: len(v.DurationsB), Durations: append([]int32(nil), v.DurationsB...), Loop: v.LoopB},
 		HasModel: v.HasModel, NanolatheGeometryKnown: v.NanolatheGeometryKnown,
@@ -271,6 +279,7 @@ func (p *FixedEffectPool) SnapshotViewsInto(out []frame.EffectView) []frame.Effe
 			// live first frame [03 §1][03 §4.4].
 			ActiveA: r.AnimA.live(), ActiveB: r.AnimB.live(),
 			HasCalculatedFlash: r.HasCalculatedFlash, CalculatedTable: r.CalculatedTable,
+			HasBlastProfile: r.HasBlastProfile, BlastAreaOfEffect: r.BlastAreaOfEffect, BlastDamage: r.BlastDamage,
 			DurationsA: append(a[:0], r.AnimA.Durations...), DurationsB: append(b[:0], r.AnimB.Durations...),
 			LoopA: r.AnimA.Loop, LoopB: r.AnimB.Loop,
 			Strip: r.Strip,

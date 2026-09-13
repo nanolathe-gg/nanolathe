@@ -66,6 +66,13 @@ type Event struct {
 	// frame.  A zero/empty value is an unresolved optional resource, never
 	// permission to choose fallback art [03 §5.4][03 §5.5][I9].
 	AssetID string
+	// Blast profile copies the impact weapon's compiled values for the modern
+	// presentation prototype (DESIGN_GPU_RENDERER §25). Presence is separate
+	// from zero damage; these values never feed authoritative damage.
+	HasBlastProfile   bool
+	BlastAreaOfEffect int32
+	BlastDamage       int32
+
 	// HasCalculatedFlash and CalculatedTable are the explosion pool's SECONDARY
 	// cursor [06 R-WFX-01 §2]: every impact allocates a record with a
 	// procedurally generated disc under its named art, and a weapon with no art
@@ -357,13 +364,14 @@ func (c *EventBuffer) SnapshotEventsInto(dst []EventView) []EventView {
 			Graphic:  e.Graphic,
 			X:        e.X, Y: e.Y, Z: e.Z,
 			TargetX: e.TargetX, TargetY: e.TargetY, TargetZ: e.TargetZ,
-			Lifetime:   e.Lifetime,
-			ExpiryTick: e.ExpiryTick,
-			Mode:       e.Mode,
-			Team:       e.Team,
-			PaletteRow: e.PaletteRow,
-			Magnitude:  e.Magnitude,
-			AssetID:    e.AssetID, SequenceID: e.SequenceID,
+			Lifetime:        e.Lifetime,
+			ExpiryTick:      e.ExpiryTick,
+			Mode:            e.Mode,
+			Team:            e.Team,
+			PaletteRow:      e.PaletteRow,
+			Magnitude:       e.Magnitude,
+			HasBlastProfile: e.HasBlastProfile, BlastAreaOfEffect: e.BlastAreaOfEffect, BlastDamage: e.BlastDamage,
+			AssetID: e.AssetID, SequenceID: e.SequenceID,
 			DurationsA: append(a[:0], e.DurationsA...), DurationsB: append(b[:0], e.DurationsB...),
 			LoopA: e.LoopA, LoopB: e.LoopB,
 			FlashRadius: e.FlashRadius, FlashLevel: e.FlashLevel, HasFlashDisc: e.HasFlashDisc,

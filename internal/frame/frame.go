@@ -410,6 +410,13 @@ type EffectView struct {
 	// sole producer of these views and publishes the fact instead.
 	ActiveA bool
 	ActiveB bool
+	// Blast profile copies the impact weapon's compiled values for the modern
+	// presentation prototype (DESIGN_GPU_RENDERER §25). Presence is separate
+	// from zero damage; these values never feed authoritative damage.
+	HasBlastProfile   bool
+	BlastAreaOfEffect int32
+	BlastDamage       int32
+
 	// HasCalculatedFlash and CalculatedTable carry the explosion pool's
 	// SECONDARY cursor over a procedurally generated disc [06 R-WFX-01 §2].
 	// SeqB is that cursor's frame; the table index selects which of the three
@@ -787,6 +794,10 @@ func (k EventKind) String() string {
 // EventView is an ordered transient cue admitted during one authoritative
 // tick. Sequence preserves producer order for presentation playback.
 type EventView struct {
+	// Copied impact weapon values for modern presentation (DESIGN_GPU_RENDERER §25).
+	HasBlastProfile           bool
+	BlastAreaOfEffect         int32
+	BlastDamage               int32
 	ID                        uint32
 	Sequence                  uint64
 	Tick                      uint32

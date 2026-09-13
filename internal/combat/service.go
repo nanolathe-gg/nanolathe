@@ -1853,6 +1853,7 @@ func handleProjectileImpact(s *Service, h pool.Handle, p *Projectile, weapon *co
 			s.emitEvent(Event{
 				Kind: kind, Tick: tick, Source: p.Shooter, Position: p.Pos,
 				Graphic: graphic, Bank: bank, Smoke: weapon.StartSmoke,
+				HasBlastProfile: true, BlastAreaOfEffect: weapon.AreaOfEffect, BlastDamage: weapon.DamageDefault,
 				// "the central impact passes (point, land or water holder, 0,
 				// waterCell) — so EVERY projectile impact, land or water, draws
 				// calculated table 0 under its art" [06 R-WFX-01 §2].

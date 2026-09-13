@@ -21,6 +21,7 @@ type blastWave struct {
 type worldDistortion struct {
 	candidates              []blastWave
 	blastDisabled, resolved bool
+	profileDisabled         bool
 	shader                  *ebiten.Shader
 	waves                   [blastLimit]blastWave
 	count                   int
@@ -31,6 +32,34 @@ type worldDistortion struct {
 
 // SetBlastDistortion is an executor comparison control for the modern prototype.
 func (r *Renderer) SetBlastDistortion(on bool) { r.distortion.blastDisabled = !on }
+
+// SetDynamicBlastDistortion compares the authored profile against artwork-only
+// waves during prototype comparisons (GPU design §25.2).
+func (r *Renderer) SetDynamicBlastDistortion(on bool) { r.distortion.profileDisabled = !on }
+
+// dynamicBlastShape is modern artistic tuning, not retail damage arithmetic.
+// Keep existing artwork waves, admit substantial medium impacts, and saturate
+// ordinary blast boosts before the special-effect sizes (GPU design §25.2).
+func dynamicBlastShape(age, size, scale float32, area, damage int32, known bool) (radius, width, strength float32) {
+	if !known || size >= 128 {
+		return blastShape(age, size, scale)
+	}
+	if age < 0 || age >= blastTicks || scale <= 0 || size < 48 {
+		return
+	}
+	if size < blastMinSize && (area < 32 || damage < 80) {
+		return
+	}
+	t := age / blastTicks
+	baseline := max(size*2.5, 160)
+	breadth := float32(math.Sqrt(float64(min(max(float32(area)-48, 0)/208, 1))))
+	force := float32(math.Sqrt(float64(min(max(float32(damage)-80, 0)/1120, 1))))
+	extent := max(baseline, min(baseline*(1+0.5*breadth), 280))
+	radius = (12 + (extent-12)*t) * scale
+	width = (10 + size*0.12) * scale
+	strength = min(age, 1) * (1 - t) * (1 - t) * min(size/16, 7) * (1 + 0.75*force) * scale
+	return
+}
 
 func blastShape(age, size, scale float32) (radius, width, strength float32) {
 	if age < 0 || age >= blastTicks || size < blastMinSize || scale <= 0 {
@@ -56,7 +85,7 @@ func (r *Renderer) prepareBlastDistortion(list *drawlist.List) {
 		if sp.LightingKind != drawlist.SpriteLightingExplosion || sp.Frame == nil {
 			return
 		}
-		radius, width, strength := blastShape(sp.BlastAge, sp.BlastSize, sp.LightingScale)
+		radius, width, strength := dynamicBlastShape(sp.BlastAge, sp.BlastSize, sp.LightingScale, sp.BlastAreaOfEffect, sp.BlastDamage, sp.HasBlastProfile && !d.profileDisabled)
 		if strength <= 0 {
 			return
 		}

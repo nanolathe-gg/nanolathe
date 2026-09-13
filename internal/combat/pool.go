@@ -169,6 +169,13 @@ type Event struct {
 	Magnitude int32
 	Duration  int32
 
+	// Blast profile copies the impact weapon's compiled values for the modern
+	// presentation prototype (DESIGN_GPU_RENDERER §25). Presence is separate
+	// from zero damage; these values never feed authoritative damage.
+	HasBlastProfile   bool
+	BlastAreaOfEffect int32
+	BlastDamage       int32
+
 	// HasCalculatedFlash and CalculatedTable carry the explosion pool's
 	// secondary cursor: the procedurally generated disc every impact draws
 	// under its art, whether or not it has any [06 R-WFX-01 §2].

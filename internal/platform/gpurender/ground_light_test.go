@@ -76,6 +76,9 @@ func TestElevatedExplosionAndNanoGroundSources(t *testing.T) {
 // Read the real ground pass at native and doubled recording scales. Equal
 // samples above/below the projected source must match, despite its elevation.
 func checkProjectedGroundLightDevicePixels() error {
+	if err := checkExplosionGroundFlashDevicePixels(); err != nil {
+		return err
+	}
 	for _, scale := range []int{1, 2} {
 		w, h := 240*scale, 120*scale
 		pal := fixturePalette()
@@ -130,6 +133,99 @@ func checkProjectedGroundLightDevicePixels() error {
 				}
 			}
 		}
+	}
+	return nil
+}
+
+// User-authored terrain flash policy (§31.6), independent of source emission.
+func TestExplosionGroundFlashLeavesOtherReceiversIntact(t *testing.T) {
+	r := &Renderer{w: 400, h: 300}
+	for kind := lightKind(0); kind < lightKindCount; kind++ {
+		source := battleLight{position: [3]float32{100, 100, 10}, color: [3]float32{1, .5, .2}, radius: 100, kind: kind, ageKnown: true}
+		for _, age := range []float32{0, 2, 7, 12, 30} {
+			source.age = age
+			r.lighting.lights = []battleLight{source}
+			r.appendGroundLights()
+			if r.lighting.lights[0] != source {
+				t.Fatal("terrain fade mutated model/smoke emission")
+			}
+			if kind == lightExplosion && age >= 12 {
+				if len(r.ground.indices) != 0 {
+					t.Fatal("expired terrain flash retained geometry")
+				}
+			} else {
+				if len(r.ground.verts) != 4 {
+					t.Fatal("active light lost terrain receiver")
+				}
+				gain := r.ground.verts[0].ColorR
+				if kind != lightExplosion && gain != 1 {
+					t.Fatal("another source family changed")
+				}
+				if kind == lightExplosion && (gain <= 0 || gain >= 1) {
+					t.Fatal("terrain flash did not soften")
+				}
+			}
+		}
+	}
+	peak := explosionGroundScale(2, true)
+	if peak != explosionGroundScale(0, true) || explosionGroundScale(7, true) != peak/4 || explosionGroundScale(12, true) != 0 {
+		t.Fatal("flash hold/fade boundary changed")
+	}
+	if explosionGroundScale(100, false) != peak {
+		t.Fatal("unknown timing invented an expiration")
+	}
+}
+
+// Real pixels prove the ground can return to its unlit value while the nearby
+// opaque model still carries the same warm explosion light (§31.6).
+func checkExplosionGroundFlashDevicePixels() error {
+	const w, h = 240, 140
+	pal := fixturePalette()
+	pal.Base[230] = [4]byte{255, 90, 20, 255}
+	r, err := NewChecked(&pal, w, h)
+	if err != nil {
+		return err
+	}
+	art := &formats.GAFFrame{Width: 12, Height: 12, XOffset: 6, YOffset: 6, Pixels: bytes.Repeat([]byte{230}, 144)}
+	pixel := func(p []byte, x, y int) []byte { return p[(y*w+x)*4 : (y*w+x)*4+4] }
+	read := func(age float32, flash, lighting bool) []byte {
+		var l drawlist.List
+		l.RecordClear()
+		l.RecordTerrain(drawlist.Terrain{Terrain: groundFixtureTerrain(40), Cam: &camera.Camera{}, DstW: w, DstH: h, Scale: camera.ViewScaleNative})
+		face := directFace(0, 0, 18, 18, 95, 10, 10)
+		face.Normal = [3]float32{1, 0, 0}
+		l.RecordModel(drawlist.Model{Geometry: directSubject(62, 48, 18, 18, face)})
+		l.RecordLightSource(drawlist.Sprite{Frame: art, X: 105, Y: 65, WorldHeight: 12, LightingScale: 1, LightingSize: 66, LightingKind: drawlist.SpriteLightingExplosion, LightingAge: age, HasLightingAge: true})
+		l.RecordExpand()
+		r.SetExplosionGroundFlash(flash)
+		r.SetBattleLighting(lighting)
+		p := make([]byte, w*h*4)
+		r.Execute(&l, w, h).ReadPixels(p)
+		return p
+	}
+	unlit := read(0, true, false)
+	old := read(2, false, true)
+	early := read(2, true, true)
+	late := read(7, true, true)
+	expired := read(12, true, true)
+	ground := func(p []byte) byte { return pixel(p, 120, 40)[0] }
+	if !(ground(old) > ground(early) && ground(early) > ground(late) && ground(late) > ground(unlit)) {
+		return fmt.Errorf("terrain flash did not soften/fade: %d %d %d base=%d", ground(old), ground(early), ground(late), ground(unlit))
+	}
+	if !bytes.Equal(pixel(expired, 120, 40), pixel(unlit, 120, 40)) {
+		return fmt.Errorf("terrain still lit after flash")
+	}
+	for _, p := range [][]byte{early, late, expired} {
+		if !bytes.Equal(pixel(p, 70, 56), pixel(old, 70, 56)) {
+			return fmt.Errorf("terrain flash altered nearby model color")
+		}
+	}
+	warm := pixel(expired, 70, 56)
+	if warm[0] <= pixel(unlit, 70, 56)[0]+5 || warm[0] <= warm[1] {
+		return fmt.Errorf("nearby model lost warm illumination")
+	}
+	if !bytes.Equal(early, read(2, true, true)) {
+		return fmt.Errorf("replay changed terrain flash")
 	}
 	return nil
 }

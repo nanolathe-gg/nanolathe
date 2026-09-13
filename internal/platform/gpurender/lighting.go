@@ -13,8 +13,8 @@ const battleLightLimit = 64
 const subjectLightLimit = 8
 
 // lightKind is the emitter family a selected source came from. It exists for
-// the budget and the diagnostics only: every kind reaches the receivers through
-// the same falloff (§31 "Budget").
+// the budget, diagnostics and terrain flash selection; model and smoke
+// receivers retain the shared falloff (§31 "Budget", §31.6).
 type lightKind uint8
 
 const (
@@ -74,6 +74,9 @@ type battleLight struct {
 	position [3]float32 // recorded screen X, unsheared screen Y, scaled height
 	color    [3]float32
 	radius   float32
+	// Receiver-specific terrain flash timing; model/smoke color stays intact (§31.6).
+	age      float32
+	ageKnown bool
 	kind     lightKind
 }
 
@@ -208,7 +211,7 @@ func (r *Renderer) addSpriteLight(sp drawlist.Sprite) {
 	}
 	l.add(battleLight{
 		position: [3]float32{ax, ay + sp.WorldHeight*0.5, sp.WorldHeight + float32(sp.Frame.Height)*0.25},
-		color:    color, radius: radius, kind: kind,
+		color:    color, radius: radius, kind: kind, age: sp.LightingAge, ageKnown: sp.HasLightingAge,
 	})
 }
 
