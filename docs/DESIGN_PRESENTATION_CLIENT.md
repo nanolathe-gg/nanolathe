@@ -899,8 +899,12 @@ the published offset to the camera.
   labels, the auxiliary unit traversal at the end of strip 7, and the two
   optional overlays after strip 9 have no published draw record; they are left
   as empty passes rather than filled with an invented route `[03 §1]` [I9].
-* **Cinematics and capture** are out of scope; ARCHITECTURE's exclusion table
-  owns that, and doc 03 §9 stops at the sequencer's observable behaviour.
+* **Main-menu Intro** uses `formats/zrb` for indexed movie frames and PCM,
+  `Client.SetMoviePalette` for a shared classic/GPU display palette, and
+  `Backend.NewMoviePlayer` for finite soundtrack output with its own lifetime.
+  PCM converts/resamples in bounded reads; full decoded video is never retained.
+  DESIGN_INTERFACE_HUD_INPUT §3.9 owns the shell behavior `[03 §9]` `[fmt zrb]`.
+  Startup/ending cinematics and capture remain excluded by ARCHITECTURE.
 
 ## 4. Retail behaviour that is not a bug
 

@@ -5596,16 +5596,21 @@ path.
 **What the sequencer does around the library (Established).** For one
 file: stop all sounds; join the path; **a missing file is skipped
 silently**; lock, clear and unlock the display; hide the cursor; then
-exactly one open → play → close pass (the repeat word that would loop it is
-written only by a dead debug routine); then the input queue is drained and
-the display cleared again. The open step reports, fatally through the modal
+an open → play → close pass, repeated only when Shift was held at
+main-menu `INTRO` activation. That live callback sets the repeat latch;
+releasing Shift does not clear it. A character key or Alt+F4 clears it. After
+the final pass, the input queue is drained and the display cleared again. The open step reports, fatally through the modal
 of [R-ENTRY-01 §1], `Could not open movie file, please check filename in INI.` when
 the library cannot open the file, `Could not setup Direct Draw to play
 movie.` when no surface can be created, and the message box
 `Smacker Error` / `Unsupported pixel format.` when the display is neither
 8-bit indexed nor one of four 16-bit layouts (565, 555, a 565 variant with a
 6-bit green mask, and 655 — [03 §9]). Sound is enabled for the movie iff the
-display's full-screen flag is set.
+existing DirectSound device is available; the movie library is given that
+same device. This is separate from the menu's full-screen gate. After normal
+return, the main-menu loader rebuilds the menu palette and cursor state and
+starts `BGM` anew [07 R-FE-01 §3]; it does not resume stopped sounds at their
+old playback positions.
 
 **What the frame loop observes back (Established).** It is a
 `PeekMessage` pump: with no message pending it asks the library whether the
@@ -5614,10 +5619,16 @@ has focus; frame cadence is therefore the library's (the file's frame rate),
 never the engine's 30 Hz clock, and the engine reads nothing but "due" and
 "palette changed". Playback ends when the frame index reaches the frame
 count − 1, or on **any character key** (`WM_CHAR`), or on Alt+F4
-(`WM_SYSKEYDOWN` with F4, which also posts the quit message). Nothing about
-the codec, frame buffers, audio mixing or ordinals is part of the contract;
-Nanolathe may substitute any decoder that honours "play once, skip on any
-character key, resume the shell".
+(`WM_SYSKEYDOWN` with F4, which also posts the quit message). Ordinary
+physical key messages and mouse buttons do not directly skip the movie;
+a translated character does. The final frame is decoded before the end test.
+The engine does not jump directly to a later frame index when late. The
+library uses audio playback progress when available, with a file-period
+clock fallback; exact sound-cursor calibration and focus recovery remain
+Unknown [03 §9]. A substitute decoder must preserve this sequential-frame,
+character-skip and shell-return boundary, including the explicit Shift
+repeat request. File data belongs to [fmt zrb]; presentation dimensions and
+scanline handling belong to [03 §9].
 
 ### The single-player boundary: the cheat gate per kind [R-OOS-01 §5]
 

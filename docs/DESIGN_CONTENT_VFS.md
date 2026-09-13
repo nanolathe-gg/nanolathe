@@ -83,7 +83,8 @@ fixtures; the runtime engine only reads them.
 
 ### 2.2 `formats` — lossless readers
 
-One package, one file per format, no rendering or audio dependency. Every
+Ordinary formats share one package, one file per format. The stateful movie
+decoder lives in `formats/zrb`; neither imports rendering or audio devices. Every
 reader takes a byte slice (or an `FSOps` plus a logical path) and returns a
 structure; readers that need bounds carry an explicit `…Limits` struct with a
 `Default…Limits()` so a malformed file cannot request an unbounded allocation.
@@ -109,8 +110,15 @@ allocating presentation geometry or sorting a second time.
 | `LoadFNT`, `FNT`, `FNTGlyph` | The bitmap font: byte height, ignored byte, signed baseline, first code, per-glyph rasters | `[fmt fnt]` `[02 §7]` |
 | `LoadPCX`, `PCX` | The run-length image used by the front end | `[fmt pcx]` `[02 §7]` |
 | `LoadWAV`, `LoadAudio`, `WAV` | PCM metadata for canonical RIFF/WAVE and the legacy container, sample bytes left in the VFS | `[fmt wav]` `[02 §7]` |
+| `zrb.New`, `Decoder.Next`, `Decoder.DecodeAudio` | Smacker 2 movie frames, palette history, static and dynamic Huffman trees, PCM/DPCM soundtrack; bounded state and explicit unsupported-codec rejection | `[fmt zrb]` |
 | `LoadSCT` | The editor section file: validated `2W × 2H` `Heights`, exact v2/v3 `AttributeData`, and preserved `Raw` bytes | `[02 §6]` |
 | `LoadBMP` | The uncompressed BMP variants the install carries | `[02 §6]` |
+
+`formats/zrb` retains encoded movie bytes and one indexed image. `Next` returns
+reusable palette/image/audio buffers; callers copy any data they retain beyond
+the next decode. `DecodeAudio` decodes a selected complete soundtrack without
+advancing video state. The shell owns playback cadence, scanline display and
+menu restoration; the decoder owns only authored data `[fmt zrb]` `[03 §9]`.
 
 The compiled script archive is decoded by `internal/cob`, not here; its byte
 layout is `[fmt cob]` and its behaviour belongs to DESIGN_UNITS_ORDERS_COB.

@@ -90,6 +90,8 @@ type menuAssets struct {
 // kept in ui.Panel in retail_menu.go and is reset whenever retail
 // opens a new .GUI panel.
 type gameShell struct {
+	intro *introPlayback
+
 	opts Options
 	cs   *contentSet
 
@@ -404,6 +406,7 @@ func runGameShell(opts Options, cs *contentSet) error {
 		}
 	}
 	fmt.Fprintf(os.Stderr, "nanolathe: retail frontend: %d skirmish maps\n", len(maps))
+	defer shell.closeIntro(cl)
 	return ebitenapp.Run(cl, rendererMode(shell.opts), shell.windowOptions())
 }
 
@@ -737,6 +740,10 @@ func (g *gameShell) panelWindowNeedsUnder(mode shellMode) bool {
 }
 
 func (g *gameShell) step(delta float64, cl *client.Client) {
+	if g.intro != nil {
+		g.stepIntro(delta, cl)
+		return
+	}
 	pumpAudio(time.Now())
 	if cl != nil && cl.IsFocused() && g.audioOwner != nil && g.audioOwner.Music != nil {
 		serviceMusic(g.audioOwner)
@@ -1016,6 +1023,10 @@ func retailFold(c byte) byte {
 }
 
 func (g *gameShell) draw(c *client.Client, _ client.UIFrame) {
+	if g.intro != nil {
+		g.drawIntro(c)
+		return
+	}
 	if g.frontend.Mode == modeLoading {
 		g.drawLoadingScreen(c)
 		return

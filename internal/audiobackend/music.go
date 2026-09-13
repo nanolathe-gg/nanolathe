@@ -41,6 +41,12 @@ func (b *Backend) NewMusicPlayer(source io.ReadSeeker, extension string) (retail
 	if err != nil {
 		return nil, err
 	}
+	return b.newMusicPlayer(decoded)
+}
+
+// newMusicPlayer owns a finite PCM stream independently of wave voices. Movie
+// playback shares this device lifetime without entering the CD controller.
+func (b *Backend) newMusicPlayer(decoded io.ReadCloser) (retailaudio.MusicPlayer, error) {
 	reader := &musicReader{ReadCloser: decoded}
 	b.mu.Lock()
 	defer b.mu.Unlock()

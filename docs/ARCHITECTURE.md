@@ -58,7 +58,7 @@ changing this table first.
 
 | Research section | Why it is out |
 |---|---|
-| `[03 §9]` Smacker cinematics and movie capture | Startup movies, capture, the `CDCHECK` gate and ending movies remain excluded. User-requested main-menu Intro playback is now in scope but unfinished: no decoder is present. The Intro control reports whether the original `Data/2.zrb` is missing and explains that playback is unsupported; see DESIGN_INTERFACE_HUD_INPUT §3.9 and `[07 R-FE-01 §3]`. |
+| `[03 §9]` Smacker cinematics and movie capture | Startup movies, capture, the `CDCHECK` gate and ending movies remain excluded. Main-menu Intro playback is implemented with the original `Data/2.zrb`, an independently authored Smacker 2 decoder and portable PCM output; see DESIGN_INTERFACE_HUD_INPUT §3.9 and `[07 R-FE-01 §3]`. |
 | `[07 §12]` Lobby and session shell | The multiplayer lobby. The single-player skirmish setup screen is a different surface, owned by DESIGN_INTERFACE_HUD_INPUT and DESIGN_SESSIONS_AI_SAVE through `[07 R-FE-01 §5]` and `[08 R-SKIR-01]`. |
 | `[08 "DirectPlay transport"]`, `[08 "Packet framing and dispatch"]`, `[08 "Send pacing and batching"]`, `[08 "Receive buffering"]`, `[08 "Ping and adaptive timing"]`, `[08 "Lockstep advancement"]`, `[08 "Synchronization and integrity checks"]`, `[08 "Disconnect, resign, and peer loss"]` | Networking. `[08 R-OOS-01 §1]` names the packets the *local* path still constructs; those are in scope and DESIGN_SESSIONS_AI_SAVE cites them. |
 | `[08 "Multiplayer saves"]` | Follows from the above. Single-player save/load is DESIGN_SESSIONS_AI_SAVE (`[08 "Save-file organization"]`, `[08 "Load process"]`). |
@@ -80,6 +80,7 @@ package implements.
 |---|---|---|
 | `vfs` | The logical content namespace: an overlay of loose directories and HPI-family archives (HAPI, cipher, SQSH) with mount order, shadowing and a provenance manifest | DESIGN_CONTENT_VFS |
 | `formats` | Lossless readers and writers for the authored formats — TDF (comments blanked with byte offsets preserved), GAF, TNT, 3DO, OTA, PAL, PCX, FNT, WAV, GUI, SCT, BMP | DESIGN_CONTENT_VFS |
+| `formats/zrb` | Stateful Smacker 2 movie decoder: indexed frames, palette deltas, PCM soundtrack and authored cadence | DESIGN_CONTENT_VFS |
 | `internal/content` | Compiles authored data into immutable definitions with defaults and conversions applied once: units, weapons, features, movement classes, sides, sounds, maps, AI profiles, battle tables; the catalog hash; and the authored animation metadata the SIMULATION depends on — a feature's burn/die/reclaim frame geometry and lifetimes in visits, an effect entry's frame count (`CompileSimArt`), compiled before the session's features and strips exist so headless and windowed battles run one simulation | DESIGN_CONTENT_VFS |
 | `internal/settings` | Front-end preferences that survive a restart (last skirmish setup, per-slot side/colour/ally, difficulty) | DESIGN_CONTENT_VFS |
 

@@ -9469,32 +9469,48 @@ effect on the `play cdaudio from … to …` command, whose bound is
 
 ## 9. Smacker cinematics and movie capture
 
-The imports and invocation census establish Smacker DLL ordinal invocations for
-opening, decoding, frame access, and teardown, but the ordinal-to-Smack API
-mapping is not fully recovered. The cinematic path:
+**Established.** The cinematic player resolves five authored Smacker files
+and owns a separate message pump until playback ends. Its menu entry,
+Shift-repeat latch, character-key skip, errors, sound-device binding and
+return to the shell are [08 R-OOS-01 §4]. The decoder's open, decode,
+next-frame, wait and close entry points have been identified in the supplied
+Smacker library; the file layout and decoded content are [fmt zrb].
 
-- opens a configured movie and reports “Could not open movie file” on failure;
-- prepares a DirectDraw/display path and reports setup failure when that cannot
-  be created;
-- checks supported pixel format and shows a Smacker Error dialog for an
-  unsupported format;
-- runs a separate `PeekMessageA`/`TranslateMessage`/`DispatchMessage` loop,
-  including quit handling, while frames are consumed; and
-- uses window/DC, palette, client-to-screen, and window-position calls around
-  playback. A debug string says movies require fullscreen.
+**Established — display size and placement.** The library honours the file's
+vertical display mode before the player reads its height. The authored
+alternate-scanline mode doubles the reported height and writes each decoded
+row two destination rows apart, retaining the intervening rows. The player
+clears the display before entry, copies at horizontal origin zero and at
+`floor((480 − displayHeight) / 2)`, and requests no additional copy scaling.
+The available `1.zrb` through `4.zrb` are encoded at 640×240 with this mode;
+their display extent is 640×480 with alternating cleared rows. `5.zrb` is
+640×304 without that mode and begins at vertical coordinate 88. Replacing
+the alternate rows with duplicated image rows would change the authored
+presentation. Palette changes update all 256 display RGB entries before the
+corresponding decode step. Byte-level vertical-mode flags belong to [fmt zrb].
 
-The configuration contains `PlayMovie`, `nomovie`, and `Movie Output Rate`.
-The capture path writes files named `MOVIE%03i` under the configured image
-output directory. A wall-clock dispatcher gates capture at a 30-Hz base divided
-by the output-rate setting, and separate capture/encode helpers are present.
-Whether capture is raw indexed frames or a secondary encoder output, the exact
-Smacker pixel formats, frame timing, dropped-frame policy, palette handoff,
-fullscreen transition, and movie/audio synchronization are not established.
-The contract here is the import/invocation census: Smacker DLL ordinals for
-open/decode/frame-access/teardown, the cinematic message-loop ownership, and
-the 30-Hz capture gate are all that is evidenced; everything below that line
-is out of scope for Nanolathe's single-player scope and is listed in "Missing
-and unknown" without a resolution plan.
+**Established — cadence boundary.** With no message pending, the player asks
+the library whether a frame is due; it decodes and advances one sequential
+frame only while its window has focus. The final frame is decoded before
+completion. Movie cadence is independent of the simulation's 30 Hz clock.
+The library uses selected audio-track playback progress when sound is active
+and a file-period wall clock otherwise. All five available movies specify a
+33.33 ms frame period. The executable does not skip directly to a computed
+frame index when late.
+
+**Unknown.** Exact audio-cursor calibration, delayed-host resynchronization
+with active sound, and sound behavior across focus loss need the remaining
+library timing and audio-backend trace. A replacement elapsed-time scheduler
+must identify these differences as implementation policy until settled.
+Native window restoration and close-message handling beyond the established
+Alt+F4 path also remain unresolved; menu restoration is established above.
+
+**Established — capture boundary.** Configuration contains `PlayMovie`,
+`nomovie`, and `Movie Output Rate`. The separate capture path writes names
+`MOVIE%03i` under the configured image output directory; a wall-clock
+dispatcher gates it at a 30 Hz base divided by the output-rate setting.
+**Unknown:** capture encoding, numbering and failure behavior remain outside
+the requested Intro playback implementation.
 
 ## 10. Established facts, supported inference, and confidence
 
@@ -9775,25 +9791,28 @@ body — most under `R-<id>` headings — and are not restated here.
 
 ### Video and capture
 
-**Implementation gap, not a retail behavior unknown.** Main-menu Intro playback
-has been requested, but Nanolathe has no decoder and the reference content
-install has no original `Data/2.zrb`, either loose or in its mounted archives.
-The original file is needed to establish and validate its container, palette,
-frame cadence and audio tracks before implementing playback. The current
-unavailable notice is implementation policy, not evidence of retail behavior.
+**Implementation reconciliation.** The reference install now supplies all
+five original movies under `Data`, so absence of the Intro file no longer
+blocks codec research and validation. The authored container, image and audio
+contracts belong to [fmt zrb]. The independently authored `formats/zrb` decoder has been verified against all
+five movies, and the main-menu Intro player uses their image, palette and
+audio data. Portable windowed output, joint audio/video pause on focus loss
+and uncalibrated device playback-position scheduling are implementation
+policies documented in DESIGN_INTERFACE_HUD_INPUT §3.9; they do not settle
+the remaining proprietary audio timing questions below.
 
-The single-player contract stops at the movie sequencer's observable
-behaviour — five `.zrb` cinematics, play-once, missing file skipped,
-library-driven cadence, skip on any character key or Alt+F4, the three
-verbatim failure texts — recorded in [08 R-OOS-01 §4]; everything below the
-library's ordinal calls is out of scope.
+**Established.** The movie sequencer's observable behavior is recorded in
+[08 R-OOS-01 §4], with display size, scanline mode and cadence in §9. The
+repeat latch has a live main-menu writer, and sound is gated by an available
+audio device rather than by the full-screen flag. These correct earlier
+interpretations; the menu's separate full-screen requirement remains.
 
-- Smacker ordinal/API mapping, supported pixel formats, palette transfer,
-  frame timing, dropped-frame handling, and audio synchronization · §9 ·
-  static trace.
-- Fullscreen requirement enforcement, window restoration after a movie,
-  quit/close handling, and movie-message-loop ownership of the main renderer
-  lock · §9 · static trace.
+**Unknown:**
+
+- Exact audio-cursor calibration, delayed-host resynchronization with active
+  sound and focus-loss audio behavior · §9 · library/backend timing trace.
+- Native window restoration and quit/close handling beyond Alt+F4, and movie
+  message-loop ownership of the main renderer lock · §9 · static trace.
 - `Movie Output Rate` exact units, capture frame numbering, file format and
   encoder, capture failure behavior, and whether captured frames include
   GUI/cursor or only the world framebuffer · §9 · static trace.

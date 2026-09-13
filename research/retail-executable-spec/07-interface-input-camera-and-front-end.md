@@ -2741,7 +2741,7 @@ table before the transition.
 |---|---|---|---|
 | `MAINMENU` | `SINGLE` (S) | cue `BigButton`; requested 5 | `SINGLE` |
 | `MAINMENU` | `MULTI` (M) | mount pass; needs the `multiplay` content root, else MSGBOX `Please insert the Multiplayer CD (Disc 1) and try again`; requested 6 | multiplayer (OOS) |
-| `MAINMENU` | `INTRO` (I) | cue `smlButton`; windowed → MSGBOX `Debug:  You must be in full-screen mode to play a movie.`; no disc (check 0 and 1) → MSGBOX `Please insert a Total Annihilation CD and try again`; else remember Shift-held (movie repeats while held), drain input, phase 1 | intro movie, then `MAINMENU` |
+| `MAINMENU` | `INTRO` (I) | cue `smlButton`; windowed → MSGBOX `Debug:  You must be in full-screen mode to play a movie.`; no disc (check 0 and 1) → MSGBOX `Please insert a Total Annihilation CD and try again`; else latch Shift-held (repeat until a character key cancels), drain input, phase 1 | intro movie, then `MAINMENU` |
 | `MAINMENU` | `EXIT` (E) | requested 8 | process quit |
 | `MAINMENU` | `Credits` | cue `smlButton`; same full-screen and disc gates; requested 9 | credits movie, then `MAINMENU` |
 | `SINGLE` | `NewCamp` (N) | disc check 0 else MSGBOX (Disc 2); mount pass; cue `BigButton`; requested 10 | `NEWGAME` (play-any layout) |
@@ -2800,8 +2800,13 @@ endings, `5.zrb` the credits. The logo plays only in full-screen and only
 when the `PlayMovie` preference is set (it is then cleared and the
 preferences persisted, so it plays once per install) or when the
 process-level replay flag is clear; the intro after it is unconditional in
-that pass. Movie playback loops while the "Shift held at `INTRO`" latch is
-set and drains the input queue before returning.
+that pass. `INTRO` samples Shift once when the button activates. If held,
+playback reopens the movie after each ending until a character key cancels;
+releasing Shift alone does not change that latch. The callback is installed
+by the live main-menu loader. The earlier claim that only a dead debug
+routine writes the repeat latch was incorrect. Playback drains the input
+queue before returning. Detailed playback, sizing and sound contracts are
+[08 R-OOS-01 §4] and [03 §9].
 
 The shell loader closes every open window, clears the display, opens
 `MAINMENU.GUI` with the deferred-fill flag, installs the callback and the

@@ -1587,15 +1587,27 @@ excluded with multiplayer `[07 R-CAM-01 §6]` `[07 R-FE-02 §12]`.
   `[07 §12]` `[07 R-FE-02 §1]`.
 * **The front-end movie stage.** Startup goes straight to `MAINMENU`; startup
   movies, capture, ending movies and the `CDCHECK` gate remain excluded.
-  User-requested main-menu Intro playback is now in scope but unfinished.
-  `intro.go` checks the mounted `Data/2.zrb` resource and opens the ordinary
-  message window: it distinguishes a missing original movie from an available
-  file, and explains that playback is unsupported in either case. The menu and
-  its audio remain active. This diagnostic is Nanolathe policy; retail silently
-  skips missing movies [07 R-FE-01 §3][08 R-OOS-01 §4]. The original movie is
-  absent from the reference install's loose files and mounted archives. A
-  decoder and validation against the original file are still required; no
-  container, palette, cadence or audio properties are assumed [03 §9].
+  Main-menu `INTRO` resolves `Data/2.zrb` from the mounted content and plays
+  it through `formats/zrb` and the existing desktop PCM device. The shell
+  stops ordinary sound, narration and CD music, drains the activation input,
+  hides the cursor and installs the movie palette. Original alternate-row
+  scanlines are retained, at the native display size and vertical placement
+  `[03 §9]` `[fmt zrb]`. Each focused update advances at most one sequential
+  frame when due; audio playback position supplies the clock when available,
+  with authored frame-duration scheduling for silent playback. No simulation
+  ticks run. Character input (including Escape) skips; mouse clicks and
+  untranslated navigation/function keys do not. Shift held at activation
+  latches repeat until a character cancels `[08 R-OOS-01 §4]`.
+
+  EOF, skip and decode failure close the soundtrack and restore the menu's
+  palette, gamma, cursor and newly started `BGM`. Missing movies skip silently;
+  invalid media produces a provenance-bearing message window. Portable host
+  policy permits playback with sound in windowed mode, bounds movie input to
+  256 MiB, pauses both clocks while unfocused and uses the device's reported
+  playback position without proprietary cursor calibration. Exact retail
+  audio calibration and focus-loss sound behavior remain a marked research
+  gap `[03 §9]`. The pure Go decoder and bounded PCM conversion add no module
+  dependencies and do not invoke an external decoder at runtime.
 * **`SHARE.GUI` and `CONTROL.GUI`.** The resource transfer dialog and the
   host-only player control panel are multiplayer surfaces
   `[07 R-HUD-03 §9]` `[07 R-FE-01 §7]`.
