@@ -12,7 +12,18 @@ import (
 // Nanolathe preferences migrate independently of the retail display block
 // (DESIGN_GPU_RENDERER §13.5, §14.6).
 func TestPresentationPreferencesLoadAndRoundTrip(t *testing.T) {
-	if got := Defaults().Presentation; got != (Presentation{Renderer: "modern", FPS: 60}) {
+	one := DefaultEffectSwitch
+	// The five effect switches default on, so a value the case does not name is
+	// the default. want builds a block from the two named fields plus overrides.
+	want := func(renderer string, fps int, effects ...int) Presentation {
+		p := Presentation{Renderer: renderer, FPS: fps, Water: one, Lighting: one, Finish: one, Distortion: one, Marks: one}
+		fields := []*int{&p.Water, &p.Lighting, &p.Finish, &p.Distortion, &p.Marks}
+		for i, v := range effects {
+			*fields[i] = v
+		}
+		return p
+	}
+	if got := Defaults().Presentation; got != want("modern", 60) {
 		t.Fatalf("default presentation = %+v", got)
 	}
 	for _, tc := range []struct {
@@ -20,11 +31,19 @@ func TestPresentationPreferencesLoadAndRoundTrip(t *testing.T) {
 		body string
 		want Presentation
 	}{
-		{"older file", `{"version":1}`, Presentation{"modern", 60}},
-		{"missing fps", `{"version":1,"presentation":{"renderer":"classic"}}`, Presentation{"classic", 60}},
-		{"display refresh", `{"version":1,"presentation":{"renderer":"modern","fps":0}}`, Presentation{"modern", 0}},
-		{"arbitrary CLI cap", `{"version":1,"presentation":{"renderer":"classic","fps":90}}`, Presentation{"classic", 90}},
-		{"invalid preferences", `{"version":1,"presentation":{"renderer":"unknown","fps":-1}}`, Presentation{"modern", 60}},
+		{"older file", `{"version":1}`, want("modern", 60)},
+		{"missing fps", `{"version":1,"presentation":{"renderer":"classic"}}`, want("classic", 60)},
+		{"display refresh", `{"version":1,"presentation":{"renderer":"modern","fps":0}}`, want("modern", 0)},
+		{"arbitrary CLI cap", `{"version":1,"presentation":{"renderer":"classic","fps":90}}`, want("classic", 90)},
+		{"invalid preferences", `{"version":1,"presentation":{"renderer":"unknown","fps":-1}}`, want("modern", 60)},
+		// A file that omits the effect keys entirely still decodes to the
+		// defaults, and a stored 0 is "off" and survives the round trip.
+		{"effects off", `{"version":1,"presentation":{"renderer":"modern","fps":60,"water":0,"lighting":0,"finish":0,"distortion":0,"marks":0}}`,
+			want("modern", 60, 0, 0, 0, 0, 0)},
+		{"one effect off", `{"version":1,"presentation":{"renderer":"modern","fps":60,"distortion":0}}`,
+			want("modern", 60, one, one, one, 0)},
+		{"negative effect repaired", `{"version":1,"presentation":{"renderer":"modern","fps":60,"marks":-3}}`,
+			want("modern", 60)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "settings.json")

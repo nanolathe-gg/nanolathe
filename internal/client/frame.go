@@ -338,8 +338,10 @@ func (c *Client) drawTerrainPrep() {
 
 // waterSurfaceMetadata records the authored Enhanced water phase (GPU design
 // §26.1). Raw wind remains committed; only its visual response is filtered [I6].
+// A disabled Water switch (§30) records no phase, so the executor's coastal
+// surface never opens and the water-motion history stays empty.
 func (c *Client) waterSurfaceMetadata() drawlist.WaterSurface {
-	if c == nil || !c.enhanced || c.strategicView() || c.buffer == nil {
+	if c == nil || !c.enhanced || !c.effects.Water || c.strategicView() || c.buffer == nil {
 		return drawlist.WaterSurface{}
 	}
 	cur := c.buffer.Current()

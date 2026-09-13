@@ -243,10 +243,21 @@ const waterShaderSource = `//kage:unit pixels
 package main
 
 func noise(p vec2) float {
- a := floor(p)
  f := fract(p)
+ // Time and the integrated wind drift scroll this lattice without bound, so
+ // the hashed cell index has to be wrapped before it reaches the sine: an
+ // unbounded argument loses all float precision over a long game and the
+ // pattern degrades. Wrapping every corner on one period keeps the lattice
+ // continuous instead of jumping — the field simply repeats every 289 cells,
+ // which at the scales used here (0.07, 0.166 and 0.025 cells per world
+ // pixel) is thousands of world pixels, far wider than any viewport
+ // (GPU design §26.3).
+ a := floor(p)
+ a = a-floor(a/289.0)*289.0
+ b := a+vec2(1.0)
+ b = b-floor(b/289.0)*289.0
  f = f*f*(3.0-2.0*f)
- h := vec4(dot(a,vec2(43.17,97.53)),dot(a+vec2(1,0),vec2(43.17,97.53)),dot(a+vec2(0,1),vec2(43.17,97.53)),dot(a+vec2(1,1),vec2(43.17,97.53)))
+ h := vec4(dot(a,vec2(43.17,97.53)),dot(vec2(b.x,a.y),vec2(43.17,97.53)),dot(vec2(a.x,b.y),vec2(43.17,97.53)),dot(b,vec2(43.17,97.53)))
  h = fract(sin(h)*17341.23)
  return mix(mix(h.x,h.y,f.x),mix(h.z,h.w,f.x),f.y)
 }

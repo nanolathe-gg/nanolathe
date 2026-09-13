@@ -6,6 +6,7 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/palette"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
@@ -46,9 +47,12 @@ func stripTestClient(t *testing.T) *Client {
 	}
 	return &Client{
 		width: 64, height: 64,
-		indexed:     make([]uint8, 64*64),
-		cam:         &camera.Camera{},
-		pal:         pal,
+		indexed: make([]uint8, 64*64),
+		cam:     &camera.Camera{},
+		pal:     pal,
+		// New installs the full Enhanced effect selection (§30); a directly
+		// constructed fixture has to match it or every effect reads as off.
+		effects:     drawlist.AllEffects(),
 		effectBanks: map[string]*formats.GAF{stripTestBankName: bank},
 	}
 }

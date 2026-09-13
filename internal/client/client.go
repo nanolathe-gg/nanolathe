@@ -381,6 +381,11 @@ type Client struct {
 	// (docs/DESIGN_GPU_RENDERER.md §19). It is a Nanolathe display option with
 	// no retail bit; the settings file persists it as display.glow.
 	glow bool
+	// effects is the player's Enhanced effect selection
+	// (docs/DESIGN_GPU_RENDERER.md §30), persisted in the presentation block.
+	// The recorder gates the producers that cost work to record; the executor
+	// gates the passes. Classic composes the same pixels whatever it says.
+	effects drawlist.Effects
 	// shadows is options word bit2 0x04, the master model-shadow gate;
 	// vehicleShadows is bit3 0x08, featureShadows is bit4 0x10, and shading is
 	// bit5 0x20. Feature sprites read bit4 directly; it remains independent of
@@ -508,6 +513,8 @@ func New(opts Options) (*Client, error) {
 		// The glow layer is on until the player turns it off; it costs nothing
 		// under the classic executor, which never sees it (§19).
 		glow: true,
+		// Every Enhanced effect is on until the player turns it off (§30).
+		effects: drawlist.AllEffects(),
 		// Restore-defaults sets the Shading bit, so shading is on unless the
 		// player turns it off [R-RND-02A]; the bulk shadow key sets its three
 		// bits together [03 §5.3].
@@ -919,11 +926,44 @@ func (c *Client) AntiAlias() bool { return c.antiAlias }
 
 // SetGlow selects the Enhanced glow layer: bloom from emissive world art under
 // the modern executor (docs/DESIGN_GPU_RENDERER.md §19). The recording is the
-// same either way; the executor reads this switch through Glow.
-func (c *Client) SetGlow(v bool) { c.glow = v }
+// same either way; the executor reads this switch through Glow. The paused
+// world raster is cached against its inputs and the executor resolves glow
+// into it, so a changed switch is a different raster (§13.10).
+func (c *Client) SetGlow(v bool) {
+	if c == nil || c.glow == v {
+		return
+	}
+	c.glow = v
+	c.pausedWorldRevision++
+}
 
 // Glow returns the Enhanced glow layer switch.
 func (c *Client) Glow() bool { return c != nil && c.glow }
+
+// SetEffects selects the player's Enhanced effects (§30). A changed selection
+// retires the transient histories the same way an executor swap does: the
+// trail, wake, water-motion and scorch states are accumulated per committed
+// tick while their producer runs, so a switch that was off left gaps in them
+// and a switch turned off must not leave stale marks behind. Nothing here
+// touches simulation state [I6].
+func (c *Client) SetEffects(e drawlist.Effects) {
+	if c == nil || c.effects == e {
+		return
+	}
+	c.effects = e
+	c.resetTrails()
+	// The paused world composite is cached against its inputs; a changed
+	// selection is a different world raster (§13.10).
+	c.pausedWorldRevision++
+}
+
+// Effects returns the player's Enhanced effect selection.
+func (c *Client) Effects() drawlist.Effects {
+	if c == nil {
+		return drawlist.Effects{}
+	}
+	return c.effects
+}
 
 // SetShadowOptions selects the master shadow, vehicle-shadow and shading bits
 // [03 §5.3][R-REN-03D §1].

@@ -11,7 +11,10 @@ func (c *Client) applyWreckHeat(g *drawlist.ModelGeometry, f frame.FeatureView) 
 	// Packets may reuse storage, so clear even when the source stops qualifying.
 	g.WreckEmission = [3]float32{}
 	g.WreckHeatStrength, g.WreckHeatTime, g.WreckHeatScale = 0, 0, 0
-	if !c.enhanced || !f.WreckHeatKnown || c.buffer == nil {
+	// The cooling emission and the shimmer are one prototype, so they share the
+	// player's Distortion switch (§30): off, a fresh wreck keeps its ordinary
+	// palette colour and refracts nothing.
+	if !c.enhanced || !c.effects.Distortion || !f.WreckHeatKnown || c.buffer == nil {
 		return
 	}
 	cur := c.buffer.Current()

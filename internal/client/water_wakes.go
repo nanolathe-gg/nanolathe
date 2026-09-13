@@ -166,15 +166,22 @@ func (c *Client) drawSurfaceWakes() {
 	st.arena = st.arena[:0]
 	scale := float32(c.cam.EffectiveScale().Float())
 	w, h := c.recordExtent()
+	// Whole ticks would step the spread and fade at 30 Hz on a faster display.
+	// Scorch and blast ages already carry the presentation fraction (§13.5);
+	// the lifetime in ticks is unchanged.
+	fraction := float32(0)
+	if c.interpolation {
+		fraction = c.TickFraction()
+	}
 	// Visit oldest first even after the ring wraps, keeping soft overdraw
 	// stable as older particles spread and fade.
 	for n := range st.marks {
 		m := st.marks[(st.next+n)%len(st.marks)]
-		elapsed := st.tick - m.born
+		elapsed := float32(st.tick-m.born) + fraction
 		if elapsed >= wakeDustLife {
 			continue
 		}
-		age := float32(elapsed) / float32(wakeDustLife)
+		age := elapsed / float32(wakeDustLife)
 		width := (m.width + 7*age) * scale
 		half := (m.half + 5*age) * scale
 		sx, sy := c.cam.WorldToScreen(m.x, m.y, m.z)

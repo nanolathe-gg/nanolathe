@@ -91,6 +91,39 @@ func TestSurfaceWakesRetainTurnsAndFade(t *testing.T) {
 	}
 }
 
+// The recorded age carries the presentation fraction, so the puffs spread and
+// fade at display rate instead of stepping at 30 Hz. The lifetime in ticks and
+// the zero-fraction recording are unchanged.
+func TestSurfaceDustAgeUsesPresentationFraction(t *testing.T) {
+	c, f := wakeScene(t)
+	c.placeSurfaceWakes(f)
+	stepWake(c, f, 38, 32)
+	base := recordWakes(c)
+	if len(base) != 1 {
+		t.Fatalf("fixture recorded %d puffs", len(base))
+	}
+	c.interpolation = true
+	c.SetTickFraction(0)
+	if zero := recordWakes(c); len(zero) != 1 || zero[0] != base[0] {
+		t.Fatalf("zero fraction changed the recording: %+v, want %+v", zero, base)
+	}
+	c.SetTickFraction(0.5)
+	half := recordWakes(c)
+	if len(half) != 1 || half[0].Age <= base[0].Age || half[0].Alpha >= base[0].Alpha || half[0].CrossY <= base[0].CrossY {
+		t.Fatalf("dust did not age with the presentation fraction: %+v after %+v", half, base)
+	}
+	for range wakeDustLife - 1 {
+		stepWake(c, f, 38, 32)
+	}
+	if len(recordWakes(c)) != 1 {
+		t.Fatal("the fraction shortened the dust lifetime")
+	}
+	stepWake(c, f, 38, 32)
+	if len(recordWakes(c)) != 0 {
+		t.Fatal("expired dust still recorded")
+	}
+}
+
 func TestSurfaceDustUsesDistanceCadence(t *testing.T) {
 	slow, sf := wakeScene(t)
 	fast, ff := wakeScene(t)

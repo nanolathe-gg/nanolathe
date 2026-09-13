@@ -277,8 +277,11 @@ func (c *Client) DrawEffectViews(effects []frame.EffectView, options EffectDrawO
 		if visibleExplosionSource(view, options.LightingFrame) {
 			lightingKind = drawlist.SpriteLightingExplosion
 		}
+		// The blast ring metadata is the player's Distortion switch (§25, §30);
+		// zero extent admits no ring. The lighting kind is recorded either way
+		// — the executor gates the lighting pass itself.
 		var blastAge, blastSize float32
-		if c.enhanced && lightingKind == drawlist.SpriteLightingExplosion && options.BlastSize != nil {
+		if c.enhanced && c.effects.Distortion && lightingKind == drawlist.SpriteLightingExplosion && options.BlastSize != nil {
 			blastSize = options.BlastSize(view)
 			blastAge = float32(options.LightingFrame.Tick - view.StartTick)
 			if c.interpolation {

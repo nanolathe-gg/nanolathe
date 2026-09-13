@@ -84,6 +84,15 @@ func (b *battleSession) saveDirectChatSetting(change func(*settings.Settings)) {
 		s.Display.Shading = boolInt(shading)
 		s.Display.Glow = boolInt(b.cl.Glow())
 		s.Display.DitheredFog = boolInt(b.cl.DitheredFog())
+		// The five Enhanced effect switches are live client values in a direct
+		// battle too, so the write-all captures them beside the display bits
+		// (DESIGN_GPU_RENDERER §30). Renderer and FPS stay as stored.
+		e := b.cl.Effects()
+		s.Presentation.Water = boolInt(e.Water)
+		s.Presentation.Lighting = boolInt(e.Lighting)
+		s.Presentation.Finish = boolInt(e.Finish)
+		s.Presentation.Distortion = boolInt(e.Distortion)
+		s.Presentation.Marks = boolInt(e.Marks)
 	}
 	s.Display.Gamma = b.gammaSetting
 	// A direct battle owns the live clock preference just as it owns the live
@@ -95,6 +104,42 @@ func (b *battleSession) saveDirectChatSetting(change func(*settings.Settings)) {
 	if err := s.Save(); err != nil {
 		fmt.Fprintf(os.Stderr, "nanolathe: %v\n", err)
 	}
+}
+
+// toggleEffectChatSetting flips one Enhanced effect switch on the live client
+// and persists the presentation block (DESIGN_GPU_RENDERER §30). The windowed
+// shell owns the preference the host polls, so it writes there; a direct battle
+// owns the client value and the write-all above captures it.
+func (b *battleSession) toggleEffectChatSetting(command string) {
+	if b == nil || b.cl == nil {
+		return
+	}
+	e := b.cl.Effects()
+	var live *bool
+	var stored func(*settings.Presentation) *int
+	switch command {
+	case "water":
+		live, stored = &e.Water, func(p *settings.Presentation) *int { return &p.Water }
+	case "lights":
+		live, stored = &e.Lighting, func(p *settings.Presentation) *int { return &p.Lighting }
+	case "finish":
+		live, stored = &e.Finish, func(p *settings.Presentation) *int { return &p.Finish }
+	case "heat":
+		live, stored = &e.Distortion, func(p *settings.Presentation) *int { return &p.Distortion }
+	case "marks":
+		live, stored = &e.Marks, func(p *settings.Presentation) *int { return &p.Marks }
+	default:
+		return
+	}
+	*live = !*live
+	b.cl.SetEffects(e)
+	value := boolInt(*live)
+	if b.shell != nil {
+		*stored(&b.shell.presentation) = value
+		b.shell.saveSettings()
+		return
+	}
+	b.saveDirectChatSetting(func(s *settings.Settings) { *stored(&s.Presentation) = value })
 }
 
 // dispatchLocalCommand handles the bounded command set currently owned by
@@ -390,6 +435,11 @@ func (b *battleSession) dispatchLocalCommand(text string) {
 		} else {
 			b.saveDirectChatSetting(func(s *settings.Settings) { s.Display.Glow = boolInt(value) })
 		}
+	case "water", "lights", "finish", "heat", "marks":
+		// The five Enhanced effect toggles, Nanolathe commands with no retail
+		// counterpart (docs/DESIGN_GPU_RENDERER.md §30). They mirror the options
+		// page's rows and persist in the presentation block.
+		b.toggleEffectChatSetting(strings.ToLower(words[0]))
 	case "dither":
 		if b.cl == nil {
 			return

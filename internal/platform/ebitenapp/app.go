@@ -12,6 +12,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/audiobackend"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/clock"
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/platform/gpurender"
 )
@@ -127,6 +128,10 @@ type RunOptions struct {
 	// PresentationSettings supplies committed live executor and FPS preferences
 	// (DESIGN_GPU_RENDERER §13.5, §14.6). Nil keeps the Run mode and MaxFPS.
 	PresentationSettings func() (RendererMode, int)
+	// Effects supplies the committed live Enhanced effect selection
+	// (DESIGN_GPU_RENDERER §30). Nil leaves the client's own selection alone,
+	// which is every effect on.
+	Effects func() drawlist.Effects
 	// RendererChanged reports an F10 executor swap synchronously. The owner must
 	// update PresentationSettings before the next poll so it preserves the swap.
 	// Applying an external preference does not invoke this callback.
@@ -258,6 +263,11 @@ func (a *app) serviceRendererRequest() {
 // syncPresentationSettings runs after the host step commits options and before
 // F10 is serviced, so the shortcut remains the last selection of this update.
 func (a *app) syncPresentationSettings() {
+	if a.options.Effects != nil {
+		// The client owns the recorder-side gates; the executor is given the
+		// same selection beside the palette on each present (§30).
+		a.c.SetEffects(a.options.Effects())
+	}
 	maxFPS := a.options.MaxFPS
 	if a.options.PresentationSettings != nil {
 		mode, fps := a.options.PresentationSettings()
@@ -419,6 +429,7 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 		}
 		a.gpu.SetDisplayPalette(a.c.DisplayPalette())
 		a.gpu.SetGlow(a.c.Glow())
+		a.gpu.SetEffects(a.c.Effects())
 		// Ebitengine has already sampled this Update's pointer even when its
 		// client input publication is deferred to the Draw tail. Place only the
 		// cursor from that newer sample after the recorder joins [07 §8].

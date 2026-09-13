@@ -139,6 +139,14 @@ func checkWaterReflectionDevicePixels() error {
 	if err := checkReflectionBlurFootprint(r.reflections.softResolveShader); err != nil {
 		return err
 	}
+	for _, variant := range []struct {
+		name   string
+		shader *ebiten.Shader
+	}{{"resolve", r.reflections.resolveShader}, {"soft resolve", r.reflections.softResolveShader}} {
+		if err := checkReflectionShorelineCoverage(variant.shader); err != nil {
+			return fmt.Errorf("%s: %w", variant.name, err)
+		}
+	}
 	// A sloping triangle samples its own stored key at a texel centre. Using
 	// the interpolated key at another subpixel point produces reflection holes.
 	triangle := body(30, 10)
@@ -313,6 +321,68 @@ func checkReflectionBlurFootprint(shader *ebiten.Shader) error {
 		if boat[i] != mixed[i] {
 			return fmt.Errorf("nearby aircraft changed low reflection colour")
 		}
+	}
+	return nil
+}
+
+// Authored shoreline fixture: an unbroken reflection straddling the wet/dry
+// boundary must fade across it, not end on a whole mask texel. Mask texels
+// cover eight screen pixels here, as they do on a large map, and the source is
+// uniformly opaque so only the mask can shape the edge (GPU design §26.4).
+func checkReflectionShorelineCoverage(shader *ebiten.Shader) error {
+	const size, maskStep, shore = 64, 8, 32
+	bounds := image.Rect(0, 0, size, size)
+	opaque := image.NewRGBA(bounds)
+	for i := range opaque.Pix {
+		opaque.Pix[i] = 255
+	}
+	coast := image.NewRGBA(image.Rect(0, 0, size/maskStep, size/maskStep))
+	for y := 0; y < size/maskStep; y++ {
+		for x := 0; x < size/maskStep; x++ {
+			wet := byte(255)
+			if x >= shore/maskStep {
+				wet = 0
+			}
+			coast.SetRGBA(x, y, color.RGBA{wet, 0, 0, 255})
+		}
+	}
+	source, water, heights := ebiten.NewImageFromImage(opaque), ebiten.NewImageFromImage(coast), ebiten.NewImageFromImage(opaque)
+	defer source.Deallocate()
+	defer water.Deallocate()
+	defer heights.Deallocate()
+	target := ebiten.NewImage(size, size)
+	defer target.Deallocate()
+	vertices := []ebiten.Vertex{{DstX: 0, DstY: 0}, {DstX: size, DstY: 0}, {DstX: size, DstY: size}, {DstX: 0, DstY: size}}
+	for i := range vertices {
+		// Recording origin 0, native scale, and the mask's own texel step.
+		vertices[i].ColorB = 1
+		vertices[i].ColorA = maskStep
+		vertices[i].Custom2 = 1
+	}
+	target.DrawTrianglesShader(vertices, []uint16{0, 1, 2, 0, 2, 3}, shader, &ebiten.DrawTrianglesShaderOptions{Images: [4]*ebiten.Image{source, water, heights}})
+	pixels := make([]byte, size*size*4)
+	target.ReadPixels(pixels)
+	// Stay clear of the map edge, where a bilinear mask legitimately fades.
+	const first, last = 16, 48
+	row := func(x int) int { return int(pixels[((size/2)*size+x)*4+3]) }
+	open := row(first)
+	if open < 32 {
+		return fmt.Errorf("open water lost its reflection: alpha %d", open)
+	}
+	if row(last) != 0 {
+		return fmt.Errorf("reflection reached dry land: alpha %d", row(last))
+	}
+	soft := 0
+	for x := first; x < last; x++ {
+		if row(x+1) > row(x) {
+			return fmt.Errorf("shoreline coverage is not monotone at %d: %d then %d", x, row(x), row(x+1))
+		}
+		if a := row(x); a > 4 && a < open-4 {
+			soft++
+		}
+	}
+	if soft == 0 {
+		return fmt.Errorf("reflection still steps from %d to 0 at the shore", open)
 	}
 	return nil
 }

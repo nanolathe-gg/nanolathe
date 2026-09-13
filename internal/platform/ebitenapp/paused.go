@@ -37,6 +37,9 @@ func (a *app) drawPaused(screen *ebiten.Image, width, height int) bool {
 	a.pipe.armed = false
 	a.gpu.SetDisplayPalette(a.c.DisplayPalette())
 	a.gpu.SetGlow(a.c.Glow())
+	// A changed effect selection advances the client's paused-world revision,
+	// so the digest below already rejects the cached raster (§30).
+	a.gpu.SetEffects(a.c.Effects())
 	if !a.paused.valid || a.paused.inputs != inputs {
 		world := a.gpu.Execute(a.c.RecordPausedWorld(), width, height)
 		if world == nil {

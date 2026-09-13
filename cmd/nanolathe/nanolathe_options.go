@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
 	"github.com/nanolathe-gg/nanolathe/internal/platform/ebitenapp"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
@@ -41,6 +42,20 @@ func (g *gameShell) setPresentation(p settings.Presentation) {
 	p.Normalize()
 	g.presentation = p
 	g.opts.Renderer, g.opts.FPS = p.Renderer, p.FPS
+}
+
+// presentationEffects converts the persisted switches into the value both the
+// recorder and the modern executor read (DESIGN_GPU_RENDERER §30). The
+// conversion lives here so internal/settings stays a leaf the frontend converts
+// to and from rather than one that knows about the draw list.
+func presentationEffects(p settings.Presentation) drawlist.Effects {
+	return drawlist.Effects{
+		Water:      p.Water != 0,
+		Lighting:   p.Lighting != 0,
+		Finish:     p.Finish != 0,
+		Distortion: p.Distortion != 0,
+		Marks:      p.Marks != 0,
+	}
 }
 
 // An F10 swap is its own save point. Read the saved block so it cannot commit
@@ -112,30 +127,65 @@ func nanolatheOptionsPage(window *gui.Window) error {
 	button.Status = 0
 	label.Link = ""
 	label.Rect.X, label.Rect.W = button.Rect.X, button.Rect.W
-	top := label.Rect.Y
-	for i, row := range []struct {
+	// The page has to fit the in-battle column as well as the front-end one, so
+	// the two captioned rows use a tight caption-plus-control pitch and the six
+	// effect switches carry their own names in their stage text instead of
+	// spending a caption line each (DESIGN_INTERFACE_HUD_INPUT §3.4.1).
+	const captionedPitch, switchPitch = 44, 24
+	y := label.Rect.Y
+	for _, row := range []struct {
 		name, title, text string
 		stages            uint8
 	}{
 		{"NRENDER", "Renderer", "Classic|Modern", 2},
-		{"NFPS", "FPS cap", "30|60|120", 3},
+		{"NFPS", "FPS cap (Modern)", "30|60|120", 3},
 	} {
 		caption, control := label, button
 		caption.Name, caption.SourceName, caption.Text = row.name+"LABEL", row.name+"LABEL", row.title
-		caption.Rect.Y = top + int32(i)*64
+		caption.Rect.Y = y
 		control.Name, control.SourceName, control.Text, control.Stages = row.name, row.name, row.text, row.stages
 		control.Rect.Y = caption.Rect.Y + caption.Rect.H + 4
 		kept = append(kept, caption, control)
+		y += captionedPitch
 	}
-	// The cap is an upper bound for modern. Classic retains its 30 Hz cadence.
-	for i, text := range []string{"Classic: 30 FPS", "Modern: capped"} {
-		note := label
-		note.Name, note.SourceName, note.Text = fmt.Sprintf("NNOTE%d", i), fmt.Sprintf("NNOTE%d", i), text
-		note.Rect.Y = top + 140 + int32(i)*18
-		kept = append(kept, note)
+	// The Enhanced presentation switches (DESIGN_GPU_RENDERER §30). Glow keeps
+	// its home in the display block; the other five are presentation values.
+	// The modern executor is their only consumer — classic composes the same
+	// pixels whatever they say.
+	for i, row := range []struct{ name, text string }{
+		{"NGLOW", "Glow: Off|Glow: On"},
+		{"NWATER", "Water: Off|Water: On"},
+		{"NLIGHTS", "Lights: Off|Lights: On"},
+		{"NFINISH", "Metal: Off|Metal: On"},
+		{"NHEAT", "Heat: Off|Heat: On"},
+		{"NMARKS", "Marks: Off|Marks: On"},
+	} {
+		control := button
+		control.Name, control.SourceName, control.Text, control.Stages = row.name, row.name, row.text, 2
+		control.Rect.Y = y + int32(i)*switchPitch
+		kept = append(kept, control)
 	}
 	window.Gadgets = kept
 	return nil
+}
+
+type nanolatheEffectSwitch struct {
+	name  string
+	value *int
+}
+
+// nanolatheEffectSwitches is the page order of the five presentation switches,
+// paired with the persisted field each one writes. `NGLOW` is not among them:
+// glow stays in the display block, where the chat command and the capture route
+// already read it (DESIGN_GPU_RENDERER §19.4).
+func nanolatheEffectSwitches(p *settings.Presentation) [5]nanolatheEffectSwitch {
+	return [5]nanolatheEffectSwitch{
+		{"NWATER", &p.Water},
+		{"NLIGHTS", &p.Lighting},
+		{"NFINISH", &p.Finish},
+		{"NHEAT", &p.Distortion},
+		{"NMARKS", &p.Marks},
+	}
 }
 
 var nanolatheFPSChoices = [...]int{30, 60, 120}
@@ -145,6 +195,17 @@ func (g *gameShell) syncNanolatheOptions() {
 		return
 	}
 	optionsPanel.SetStageAt(optionsPanel.Index("NRENDER"), boolInt(g.presentation.Renderer == "modern"))
+	g.syncNanolatheFPSStage()
+	// The six Enhanced switches. Glow reads the display block; the other five
+	// read the presentation block (DESIGN_GPU_RENDERER §30).
+	optionsPanel.SetStageAt(optionsPanel.Index("NGLOW"), boolInt(g.display.Glow != 0))
+	p := g.presentation
+	for _, sw := range nanolatheEffectSwitches(&p) {
+		optionsPanel.SetStageAt(optionsPanel.Index(sw.name), boolInt(*sw.value != 0))
+	}
+}
+
+func (g *gameShell) syncNanolatheFPSStage() {
 	index := optionsPanel.Index("NFPS")
 	for stage, fps := range nanolatheFPSChoices {
 		if g.presentation.FPS == fps {
@@ -180,7 +241,25 @@ func (g *gameShell) activateNanolatheOption(name string) bool {
 		stage := g.retailOptionsStage(name, len(nanolatheFPSChoices), current)
 		p.FPS = nanolatheFPSChoices[stage]
 		optionsPanel.Window.Gadgets[optionsPanel.Index("NFPS")].Labels = []string{"30", "60", "120"}
+	case "NGLOW":
+		// Glow lives in the display block, so it takes the same live path the
+		// VISUALS controls take rather than the presentation poll (§19.4).
+		g.display.Glow = g.retailOptionsStage(name, 2, boolInt(g.display.Glow != 0))
+		optionsPanel.SetStageAt(optionsPanel.Index("NGLOW"), g.display.Glow)
+		g.applyRetailVisualOptions(clPtr)
+		return true
 	default:
+		// The five presentation switches. The host polls the shell's committed
+		// preference each update, so writing it here is the live preview (§30).
+		for _, sw := range nanolatheEffectSwitches(&p) {
+			if sw.name != name {
+				continue
+			}
+			*sw.value = g.retailOptionsStage(name, 2, boolInt(*sw.value != 0))
+			g.setPresentation(p)
+			g.syncNanolatheOptions()
+			return true
+		}
 		return false
 	}
 	g.setPresentation(p)

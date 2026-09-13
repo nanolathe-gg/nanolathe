@@ -196,10 +196,17 @@ func (c *Client) ObserveCommittedTick() {
 	if c == nil {
 		return
 	}
-	c.placeTrails(c.buffer.Current())
-	c.placeSurfaceWakes(c.buffer.Current())
-	c.observeWaterMotion(c.buffer.Current())
-	c.observeScorchMarks(c.buffer.Current())
+	// Each observer is gated by its player switch (§30). A switch that is off
+	// accumulates no history, so turning it back on starts from the current
+	// tick instead of replaying marks that were never drawn.
+	if c.effects.Marks {
+		c.placeTrails(c.buffer.Current())
+		c.observeScorchMarks(c.buffer.Current())
+	}
+	if c.effects.Water {
+		c.placeSurfaceWakes(c.buffer.Current())
+		c.observeWaterMotion(c.buffer.Current())
+	}
 }
 
 func (c *Client) resetTrails() {

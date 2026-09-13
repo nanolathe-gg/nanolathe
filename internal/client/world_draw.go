@@ -362,8 +362,13 @@ func (c *Client) drawCommittedWorld(cur *frame.Frame, ok bool) {
 	// Terrain/static preparation, radar preparation, and viewport clipping are
 	// unconditional. Radar and clip have no concrete frame input yet.
 	c.drawTerrainPrep()
-	c.drawScorchMarks(c.buffer.Current())
-	if !c.strategicView() {
+	// The ground marks and the water layers are the player's Marks and Water
+	// switches (§30); each is gated here rather than inside its producer so the
+	// recording is identical to the one a build without the effect would make.
+	if c.effects.Marks {
+		c.drawScorchMarks(c.buffer.Current())
+	}
+	if c.effects.Water && !c.strategicView() {
 		c.placeSurfaceWakes(c.buffer.Current())
 		c.drawSurfaceWakes()
 		c.drawBuildingFoam(c.buffer.Current())
@@ -373,7 +378,7 @@ func (c *Client) drawCommittedWorld(cur *frame.Frame, ok bool) {
 	// the blended view, so the layer never moves with the blend fraction.
 	// Below the strategic cut the marks are smaller than a pixel and cost more
 	// than they show, so they are one of the layers §16.10 drops.
-	if !c.strategicView() {
+	if c.effects.Marks && !c.strategicView() {
 		c.placeTrails(c.buffer.Current())
 		c.drawTrails()
 	}
@@ -821,11 +826,12 @@ func (c *Client) drawFeature(f *frame.FeatureView) {
 		// animtrans selector applies only to the static definition cursor
 		// [03 R-RAST-01 §6].
 		normalTrans := f.AnimTrans && !f.RuntimeLive
-		// Modern presentation experiment (GPU design §27). The additional LOS
-		// gate prevents an unseen burning feature from refracting visible ground.
+		// Modern presentation experiment (GPU design §27), under the player's
+		// Distortion switch (§30). The additional LOS gate prevents an unseen
+		// burning feature from refracting visible ground.
 		heat := false
 		var heatTime float32
-		if c.enhanced && f.IsBurning && c.buffer != nil {
+		if c.enhanced && c.effects.Distortion && f.IsBurning && c.buffer != nil {
 			cur := c.buffer.Current()
 			heat = cur != nil && SnapshotPointVisible(cur.Visibility, f.X, f.Y, f.Z, cur.ViewingPlayer)
 			if heat {

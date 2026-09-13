@@ -281,6 +281,9 @@ func (g *battleBenchmark) Draw(screen *ebiten.Image) {
 		start = time.Now()
 		g.gpu.SetDisplayPalette(g.c.DisplayPalette())
 		g.gpu.SetGlow(g.c.Glow())
+		// The benchmark scene is fixed: every Enhanced effect stays on so two
+		// runs measure the same work (§30).
+		g.gpu.SetEffects(g.c.Effects())
 		g.glint.update(g.gpu)
 		g.img = g.gpu.Execute(list, 1920, 1080)
 		if err := g.gpu.FogContentError(); err != nil {

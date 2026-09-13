@@ -156,6 +156,43 @@ func checkWaterDevicePixels() error {
 			}
 		}
 	}
+	// A very long game keeps a live, well-formed surface: the noise lattice is
+	// wrapped before hashing, so elapsed time and accumulated drift cannot push
+	// the hash argument out of float precision (§26.3).
+	const distant = 10_000_000
+	far, farOff, farLater := read(distant, 1, true, 0), read(distant, 1, false, 0), read(distant+300, 1, true, 0)
+	if bytes.Equal(far, farOff) {
+		return fmt.Errorf("water surface vanished after a long elapsed time")
+	}
+	if bytes.Equal(far, farLater) {
+		return fmt.Errorf("water animation stopped after a long elapsed time")
+	}
+	// Detail, not just difference: a hash argument that has outrun its float
+	// precision flattens the field into blocks or a constant.
+	gap := func(a, b byte) int { return max(int(a)-int(b), int(b)-int(a)) }
+	detail := func(p []byte) int {
+		total, n := 0, 0
+		for y := 8; y < h-8; y++ {
+			for x := 8; x+16 < 100; x++ {
+				i := (y*w + x) * 4
+				if p[i] == 0 && p[i+1] == 0 && p[i+2] == 0 {
+					return -1
+				}
+				total += gap(p[i], p[i+4]) + gap(p[i], p[i+w*4])
+				n++
+			}
+		}
+		// Hundredths of a level: the fixture's painted terrain is deliberately
+		// low contrast, so a whole-level average would quantize this away.
+		return total * 100 / max(n, 1)
+	}
+	fresh, aged := detail(read(30, 1, true, 0)), detail(far)
+	if aged < 0 {
+		return fmt.Errorf("water produced a black texel after a long elapsed time")
+	}
+	if aged*2 < fresh {
+		return fmt.Errorf("water pattern degraded after a long elapsed time: detail %d, was %d", aged, fresh)
+	}
 	r.ResetSources()
 	if r.water.mask != nil || r.water.source != nil {
 		return fmt.Errorf("coastal mask survived source reset")

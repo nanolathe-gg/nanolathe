@@ -21,7 +21,14 @@ func (c *Client) drawBuildingFoam(cur *frame.Frame) {
 	c.waterFoam = c.waterFoam[:0]
 	scale := float32(c.cam.EffectiveScale().Float())
 	w, h := c.recordExtent()
-	phase := float32(cur.Tick%240) / 240
+	// The ring phase advances with the presentation fraction, as scorch and
+	// blast ages do (§13.5), so the foam does not step at 30 Hz on a faster
+	// display. The tick is still wrapped first, keeping the phase bounded.
+	fraction := float32(0)
+	if c.interpolation {
+		fraction = c.TickFraction()
+	}
+	phase := (float32(cur.Tick%240) + fraction) / 240
 	for _, u := range cur.Units {
 		if !u.IsBuilding || u.BuildRemaining > 0 || isCarried(u) || !unitVisibleForFrame(cur, u, cur.ViewingPlayer) ||
 			(u.Owner != cur.ViewingPlayer && fogUnexploredUnit(cur.Fog, u)) {

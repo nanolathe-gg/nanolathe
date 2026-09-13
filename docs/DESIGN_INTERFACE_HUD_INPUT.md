@@ -1177,15 +1177,32 @@ end uses the original options background; battle uses the game's tiled window ba
 BUTTONS0 and stagebuttn2/3 from the game assets supply the buttons and controls.
 No retail asset is copied into the repository or changed on disk.
 
-The page contains Renderer (Classic / Modern) and FPS cap (30 / 60 / 120).
-Defaults are Modern and 60 FPS. These are presentation choices; simulation
-remains 30 Hz. The cap bounds modern presentation on the display's refresh grid;
-classic still presents at 30 Hz. Higher or refresh-following values remain
-available through `--fps`; a value outside the presets is displayed as stored.
+The page contains Renderer (Classic / Modern) and FPS cap (Modern)
+(30 / 60 / 120), each with a caption, then six two-stage switches whose stage
+text carries their own name: Glow, Water, Lights, Metal, Heat and Marks. The two
+captioned rows use a tight caption-plus-control pitch and the six switches a
+narrower one, so the page fits the in-battle column as well as the front-end
+one without reaching Restore Defaults or Undo Changes.
+
+Defaults are Modern, 60 FPS and every switch on. These are presentation choices;
+simulation remains 30 Hz. The cap bounds modern presentation on the display's
+refresh grid; classic still presents at 30 Hz. Higher or refresh-following
+values remain available through `--fps`; a value outside the presets is
+displayed as stored.
+
+The six switches select the Enhanced effects the modern executor draws, listed
+with what each gates in [DESIGN_GPU_RENDERER.md](DESIGN_GPU_RENDERER.md) §30.
+Glow edits the display block, where §19.4 already put it, so it previews through
+the same live path the Visuals rows use; the other five edit the presentation
+block, which the host polls each update. Classic presents identically whatever
+they say. The same five toggle from the message line as `+water`, `+lights`,
+`+finish`, `+heat` and `+marks`, beside the existing `+glow`, each persisting
+its value the way the display-bit commands do.
 
 Edits preview immediately. OK saves the presentation block with the existing
 settings transaction; Cancel restores the entry values, Undo restores this
-page, and Restore Defaults chooses Modern / 60. F10 updates the shell and saves
+page — including its glow bit — and Restore Defaults chooses Modern / 60 with
+every effect on. F10 updates the shell and saves
 only the renderer field, preserving other pending preferences. The adapter polls
 the live shell preference and shares executor-swap cleanup with F10. A saved
 renderer also controls subsequent battle loading and detail-art preparation.

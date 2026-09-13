@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/nanolathe-gg/nanolathe/internal/client"
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/platform/ebitenapp"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
 )
@@ -23,6 +24,9 @@ func (g *gameShell) windowOptions() ebitenapp.RunOptions {
 	g.fullscreen = startupFullscreen(g.opts, g.fullscreen)
 	options.Fullscreen = g.fullscreen
 	options.PresentationSettings = func() (ebitenapp.RendererMode, int) { return rendererMode(g.opts), g.presentation.FPS }
+	// The Enhanced effect switches are polled the same way, so an options-page
+	// edit previews on the next update (DESIGN_GPU_RENDERER §30).
+	options.Effects = func() drawlist.Effects { return presentationEffects(g.presentation) }
 	options.RendererChanged = g.rendererChanged
 	g.commitWindowSize()
 	options.WindowSize = func() (int, int) { return g.windowSize.W, g.windowSize.H }

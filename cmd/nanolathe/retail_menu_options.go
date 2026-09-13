@@ -1121,7 +1121,11 @@ func (g *gameShell) activateRetailMusicTransport(key string) {
 func (g *gameShell) restoreRetailOptionsDefaults() {
 	switch optionsState.page {
 	case "nanolathe":
+		// The page also owns the glow bit, which lives in the display block
+		// (DESIGN_GPU_RENDERER §19.4, §30).
 		g.setPresentation(settings.DefaultPresentation())
+		g.display.Glow = settings.DefaultGlow
+		g.applyRetailVisualOptions(clPtr)
 	case "visuals":
 		// Bits 1-5 set, gamma 12 and — front end only — 640x480 with
 		// `DitheredFog` cleared [07 R-FE-01 §6]. The size pair is the front
@@ -1182,6 +1186,10 @@ func (g *gameShell) undoRetailOptionsPage() {
 	switch optionsState.page {
 	case "nanolathe":
 		g.setPresentation(s.presentation)
+		// The glow bit is this page's too, so its UNDO takes it back from the
+		// entry snapshot's display block without disturbing the VISUALS bits.
+		g.display.Glow = s.display.Glow
+		g.applyRetailVisualOptions(clPtr)
 	case "visuals":
 		// Bits 1-6, gamma and — front end only — the display size
 		// [07 R-FE-01 §6].
@@ -1279,7 +1287,9 @@ func (g *gameShell) setRetailShadowBits(on bool) {
 // handler that consumes the fired result [07 R-WGT-01 §3].
 func retailOptionsCue(key string) string {
 	switch key {
-	case "nanolathe", "nrender", "nfps", "sound", "music", "speeds", "visuals", "prev",
+	case "nanolathe", "nrender", "nfps",
+		"nglow", "nwater", "nlights", "nfinish", "nheat", "nmarks",
+		"sound", "music", "speeds", "visuals", "prev",
 		"restore", "undo",
 		"anti", "shading", "bshadows",
 		"mode", "speech",
@@ -1305,7 +1315,7 @@ func (g *gameShell) activateRetailOptionsGadget(name string) bool {
 	// precedes them all, as it does on the screens frontendCue serves.
 	g.playMenuCue(retailOptionsCue(retailOptionsCueKey(name)))
 	switch name {
-	case "NRENDER", "NFPS":
+	case "NRENDER", "NFPS", "NGLOW", "NWATER", "NLIGHTS", "NFINISH", "NHEAT", "NMARKS":
 		return g.activateNanolatheOption(name)
 	case "NANOLATHE", "SOUND", "MUSIC", "SPEEDS", "VISUALS":
 		page, _ := retailOptionsPageKey(name)
@@ -1668,6 +1678,18 @@ func retailOptionsCueKey(name string) string {
 		return "nrender"
 	case "NFPS":
 		return "nfps"
+	case "NGLOW":
+		return "nglow"
+	case "NWATER":
+		return "nwater"
+	case "NLIGHTS":
+		return "nlights"
+	case "NFINISH":
+		return "nfinish"
+	case "NHEAT":
+		return "nheat"
+	case "NMARKS":
+		return "nmarks"
 	case "SOUND":
 		return "sound"
 	case "MUSIC":

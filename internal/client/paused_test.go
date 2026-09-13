@@ -61,6 +61,12 @@ func TestPausedWorldInvalidationAndRandomProjectileFallback(t *testing.T) {
 		t.Fatal("render preferences reused the old raster")
 	}
 	before = after
+	c.SetGlow(!c.Glow())
+	after, _ = c.PausedWorldDigest()
+	if before == after {
+		t.Fatal("glow switch reused the old raster")
+	}
+	before = after
 	c.SetModelFS(nil)
 	after, _ = c.PausedWorldDigest()
 	if before == after {

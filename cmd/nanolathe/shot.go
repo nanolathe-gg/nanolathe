@@ -146,6 +146,10 @@ func runShot(opts Options, cs *contentSet) error {
 	// defaults. Without this a capture could never show a structure composed
 	// at 1x or a model drawn unshaded [07 R-FE-01 §6].
 	applyVisualOptions(cl, loadedSettings().Display)
+	// The Enhanced effect switches come from the same file, so a modern capture
+	// composes under the switches the window would use (§30). The executor is
+	// given the same selection where it is handed the display palette.
+	cl.SetEffects(presentationEffects(loadedSettings().Presentation))
 	// The capture route runs the load-time remaster inline — it has no loader
 	// goroutine and no bar to report against — so a 2x capture shows the same
 	// synthesized art the window would (DESIGN_GPU_RENDERER §14.4 "When"). At

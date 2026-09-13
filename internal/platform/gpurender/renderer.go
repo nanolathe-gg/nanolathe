@@ -23,6 +23,11 @@ import (
 // (C-G3). The fog composite is not one of them: it compiles as an ordinary
 // destination command over the visible fog region.
 type Renderer struct {
+	// effectEnv holds the construction-time environment overrides and
+	// effects/effectsSet the last player selection SetEffects applied (§30).
+	effectEnv
+	effects          drawlist.Effects
+	effectsSet       bool
 	materialsEnabled bool
 	scorchEnabled    bool
 	scorchShader     *ebiten.Shader
@@ -187,10 +192,20 @@ func (r *Renderer) SetDisplayPalette(p [256][4]byte) {
 // drawing family guards its own resources; callers report the initialization
 // error before attempting a frame.
 func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
+	// The three environment overrides are read once, here, and then AND-ed with
+	// the player's switches on every SetEffects (§29.2, §30). Reading them at
+	// construction is what lets a developer's `…=0` keep a family off no matter
+	// what the options page later selects.
+	env := effectEnv{
+		materials:  os.Getenv("NANOLATHE_MODEL_MATERIALS") != "0",
+		scorch:     os.Getenv("NANOLATHE_SCORCH") != "0",
+		metalGlint: os.Getenv("NANOLATHE_METAL_GLINT") != "0",
+	}
 	r := &Renderer{
-		materialsEnabled: os.Getenv("NANOLATHE_MODEL_MATERIALS") != "0",
-		scorchEnabled:    os.Getenv("NANOLATHE_SCORCH") != "0",
-		metalGlint:       os.Getenv("NANOLATHE_METAL_GLINT") != "0",
+		effectEnv:        env,
+		materialsEnabled: env.materials,
+		scorchEnabled:    env.scorch,
+		metalGlint:       env.metalGlint,
 		tables:           uploadTables(pal),
 		tileAtlases:      make(map[tileAtlasKey]*tileAtlas),
 		gafImages:        make(map[*formats.GAFFrame]*ebiten.Image),

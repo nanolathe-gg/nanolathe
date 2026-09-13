@@ -83,6 +83,10 @@ const (
 	// DefaultGlow is the Enhanced glow layer switch, a Nanolathe option with no
 	// retail bit: on until the player turns it off (DESIGN_GPU_RENDERER §19).
 	DefaultGlow = 1
+	// DefaultEffectSwitch is the shared default of the five Enhanced effect
+	// switches in the presentation block (DESIGN_GPU_RENDERER §30). Like Glow
+	// they have no retail bit and start on.
+	DefaultEffectSwitch = 1
 
 	DefaultGamma = 12
 	// `VISUALS` `GAMMA` is a kind-4 slider whose maximum is 20; the stored
@@ -410,21 +414,51 @@ func (m *Messages) Normalize() {
 type Presentation struct {
 	Renderer string `json:"renderer"`
 	FPS      int    `json:"fps"`
+	// The five Enhanced effect switches (DESIGN_GPU_RENDERER §30). They are
+	// Nanolathe options with no retail bit, read only by the modern recorder
+	// and executor, and stored as integers for the same reason the display
+	// bits are: a stored 0 is "off" and is kept, so only a negative value is
+	// repaired. A file that omits a key keeps the default, because the loader
+	// decodes over the defaults [02 "Settings"].
+	//
+	// Water is the coastal water surface, wakes and hover dust, building foam,
+	// water motion and the screen-space reflections.
+	Water int `json:"water"`
+	// Lighting is the battle lighting of models and smoke.
+	Lighting int `json:"lighting"`
+	// Finish is the metallic glint and the metal/paint material finishes.
+	Finish int `json:"finish"`
+	// Distortion is the blast rings, the burning-vegetation heat shimmer and
+	// the fresh-wreck shimmer with its cooling emission colour.
+	Distortion int `json:"distortion"`
+	// Marks is the scorch marks and the trail layer of footprints and tracks.
+	Marks int `json:"marks"`
 }
 
-// DefaultPresentation selects the modern executor with a 60 FPS cap.
+// DefaultPresentation selects the modern executor with a 60 FPS cap and every
+// Enhanced effect on.
 func DefaultPresentation() Presentation {
-	return Presentation{Renderer: "modern", FPS: 60}
+	return Presentation{
+		Renderer: "modern", FPS: 60,
+		Water: DefaultEffectSwitch, Lighting: DefaultEffectSwitch, Finish: DefaultEffectSwitch,
+		Distortion: DefaultEffectSwitch, Marks: DefaultEffectSwitch,
+	}
 }
 
 // Normalize repairs unsupported values while preserving the CLI's display
-// refresh choice (zero) and arbitrary positive presentation caps.
+// refresh choice (zero) and arbitrary positive presentation caps. The five
+// effect switches are booleans, so only a negative value is repaired.
 func (p *Presentation) Normalize() {
 	if p.Renderer != "classic" && p.Renderer != "modern" {
 		p.Renderer = DefaultPresentation().Renderer
 	}
 	if p.FPS < 0 {
 		p.FPS = DefaultPresentation().FPS
+	}
+	for _, value := range []*int{&p.Water, &p.Lighting, &p.Finish, &p.Distortion, &p.Marks} {
+		if *value < 0 {
+			*value = DefaultEffectSwitch
+		}
 	}
 }
 

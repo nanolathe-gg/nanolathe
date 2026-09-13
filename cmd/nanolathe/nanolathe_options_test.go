@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/platform/ebitenapp"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
@@ -40,6 +41,11 @@ func TestPresentationStartupOverrides(t *testing.T) {
 // These are Nanolathe's options transactions, not retail behavioral claims.
 func TestNanolatheOptionsPreviewCancelAndPersistence(t *testing.T) {
 	g, _, cl := retailAssetShell(t)
+	// The page's glow row reaches the live client through the shared visual
+	// pointer, exactly as the VISUALS rows do (DESIGN_GPU_RENDERER §19.4).
+	previous := clPtr
+	clPtr = cl
+	t.Cleanup(func() { clPtr = previous })
 	t.Setenv(settings.EnvPath, filepath.Join(t.TempDir(), "settings.json"))
 	g.attachSettings()
 	t.Cleanup(g.closeRetailOptionsScreen)
@@ -49,7 +55,7 @@ func TestNanolatheOptionsPreviewCancelAndPersistence(t *testing.T) {
 	if optionsState.page != "nanolathe" {
 		t.Fatal("new category did not open")
 	}
-	for _, name := range []string{"NANOLATHE", "NRENDER", "NFPS"} {
+	for _, name := range []string{"NANOLATHE", "NRENDER", "NFPS", "NGLOW", "NWATER", "NLIGHTS", "NFINISH", "NHEAT", "NMARKS"} {
 		gad := optionsPanel.Window.Gadgets[optionsPanel.Index(name)]
 		if gad.ButtonArt == nil {
 			t.Fatalf("%s has no game-data button art", name)
@@ -64,14 +70,31 @@ func TestNanolatheOptionsPreviewCancelAndPersistence(t *testing.T) {
 	if mode, fps := host.PresentationSettings(); mode != ebitenapp.RendererClassic || fps != 120 {
 		t.Fatalf("preview %v %d", mode, fps)
 	}
+	// Every Enhanced switch previews through the same poll the host makes, and
+	// glow previews straight onto the live client (DESIGN_GPU_RENDERER §30).
+	for _, name := range effectGadgets {
+		g.activateRetailOptionsGadget(name)
+	}
+	if got := host.Effects(); got != (drawlist.Effects{}) {
+		t.Fatalf("effect preview %+v", got)
+	}
+	if g.display.Glow != 0 || cl.Glow() {
+		t.Fatalf("glow preview: stored %d live %v", g.display.Glow, cl.Glow())
+	}
 	g.activateRetailOptionsGadget("CANCEL")
 	if g.presentation != settings.DefaultPresentation() {
 		t.Fatalf("cancel %+v", g.presentation)
+	}
+	if g.display.Glow != settings.DefaultGlow || !cl.Glow() {
+		t.Fatalf("cancel left glow at %d (live %v)", g.display.Glow, cl.Glow())
 	}
 	g.activateGadget("Options")
 	g.activateRetailOptionsGadget("NANOLATHE")
 	g.activateRetailOptionsGadget("NRENDER")
 	g.activateRetailOptionsGadget("NFPS")
+	g.activateRetailOptionsGadget("NWATER")
+	g.activateRetailOptionsGadget("NMARKS")
+	g.activateRetailOptionsGadget("NGLOW")
 	g.activateRetailOptionsGadget("PREV")
 	saved, err := settings.Load()
 	if err != nil {
@@ -79,6 +102,12 @@ func TestNanolatheOptionsPreviewCancelAndPersistence(t *testing.T) {
 	}
 	if saved.Presentation != g.presentation || saved.Presentation.FPS != 120 {
 		t.Fatalf("saved %+v", saved.Presentation)
+	}
+	if saved.Presentation.Water != 0 || saved.Presentation.Marks != 0 || saved.Presentation.Lighting != 1 {
+		t.Fatalf("saved effects %+v", saved.Presentation)
+	}
+	if saved.Display.Glow != 0 {
+		t.Fatalf("saved glow %d", saved.Display.Glow)
 	}
 	next := &gameShell{}
 	next.applySettings(saved)
@@ -91,9 +120,16 @@ func TestNanolatheOptionsPreviewCancelAndPersistence(t *testing.T) {
 	if g.presentation != settings.DefaultPresentation() {
 		t.Fatal("defaults not restored")
 	}
+	if g.display.Glow != settings.DefaultGlow || !cl.Glow() {
+		t.Fatalf("restore left glow at %d (live %v)", g.display.Glow, cl.Glow())
+	}
 	g.activateRetailOptionsGadget("UNDO")
 	if g.presentation != saved.Presentation {
 		t.Fatal("undo lost entry selection")
+	}
+	// UNDO takes this page's glow bit back from the entry snapshot too.
+	if g.display.Glow != 0 || cl.Glow() {
+		t.Fatalf("undo left glow at %d (live %v)", g.display.Glow, cl.Glow())
 	}
 	// F10 is independently persisted and must not save this pending cap.
 	g.activateRetailOptionsGadget("NFPS")
@@ -110,6 +146,9 @@ func TestNanolatheOptionsPreviewCancelAndPersistence(t *testing.T) {
 		t.Fatal("cancel undid independently saved renderer")
 	}
 }
+
+// effectGadgets is the page order of the six Enhanced switches.
+var effectGadgets = []string{"NGLOW", "NWATER", "NLIGHTS", "NFINISH", "NHEAT", "NMARKS"}
 
 func TestBattleNanolatheOptionsPointerAndLayout(t *testing.T) {
 	g, b, cl := retailBattleOptionsShell(t)
@@ -146,6 +185,34 @@ func TestBattleNanolatheOptionsPointerAndLayout(t *testing.T) {
 	click("NFPS")
 	if g.presentation.FPS != 30 {
 		t.Fatalf("pointer did not wrap cap: %+v", g.presentation)
+	}
+	// Every switch has button art and a hit rectangle inside the battle column,
+	// and one click cycles it to Off (DESIGN_INTERFACE_HUD_INPUT §3.4.1).
+	canvasW, canvasH := cl.Size()
+	for _, name := range append([]string{"NRENDER", "NFPS"}, effectGadgets...) {
+		index := optionsPanel.Index(name)
+		if optionsPanel.Window.Gadgets[index].ButtonArt == nil {
+			t.Fatalf("%s has no game-data button art", name)
+		}
+		r := optionsPanel.Window.PlacedRect(index)
+		if r.X < 0 || r.Y < 0 || int(r.X+r.W) > canvasW || int(r.Y+r.H) > canvasH {
+			t.Fatalf("%s at %+v leaves the %dx%d canvas", name, r, canvasW, canvasH)
+		}
+		for _, other := range []string{"RESTORE", "UNDO"} {
+			o := optionsPanel.Window.PlacedRect(optionsPanel.Index(other))
+			if r.X < o.X+o.W && o.X < r.X+r.W && r.Y < o.Y+o.H && o.Y < r.Y+r.H {
+				t.Fatalf("%s at %+v overlaps %s at %+v", name, r, other, o)
+			}
+		}
+	}
+	for _, name := range effectGadgets {
+		click(name)
+	}
+	if got := presentationEffects(g.presentation); got != (drawlist.Effects{}) {
+		t.Fatalf("pointer left effects at %+v", got)
+	}
+	if g.display.Glow != 0 {
+		t.Fatalf("pointer left glow at %d", g.display.Glow)
 	}
 	g.activateRetailOptionsGadget("CANCEL")
 	if g.presentation != settings.DefaultPresentation() {

@@ -10,7 +10,9 @@ import (
 // (GPU design §26). The body's origin may be submerged: the executor clips
 // physical corners, so an above-water piece still contributes.
 func (c *Client) reflectionWaterAt(x, z numeric.Fixed) bool {
-	if c == nil || c.terrain == nil {
+	// Reflections belong to the player's Water switch (§30): with it off no
+	// site is admitted, so no reflected geometry is recorded at all.
+	if c == nil || c.terrain == nil || !c.effects.Water {
 		return false
 	}
 	t := c.terrain

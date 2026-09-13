@@ -411,11 +411,23 @@ func weightedSample(p vec2, low, high float) vec4 {
  f:=fract(p-.5)
  return mix(mix(weightedTexel(b,low,high),weightedTexel(b+vec2(1,0),low,high),f.x),mix(weightedTexel(b+vec2(0,1),low,high),weightedTexel(b+vec2(1,1),low,high),f.x),f.y)
 }
+// Shoreline coverage on the same bilinear/smoothstep terms the water surface
+// and the wake shader use. A nearest mask rejection drew the reflection edge
+// as a step of whole mask texels, which are several world pixels wide on a
+// large map. Coordinates are mask texels in the source-0 convention.
+func waterCoverage(p vec2) float {
+ q:=p-vec2(0.5)
+ a:=floor(q)
+ f:=fract(q)
+ o:=imageSrc0Origin()
+ m:=mix(mix(imageSrc1AtFromSrc0Pos(o+a).r,imageSrc1AtFromSrc0Pos(o+a+vec2(1,0)).r,f.x),mix(imageSrc1AtFromSrc0Pos(o+a+vec2(0,1)).r,imageSrc1AtFromSrc0Pos(o+a+vec2(1,1)).r,f.x),f.y)
+ return smoothstep(0.8,1.0,m)
+}
 func Fragment(dst vec4,src vec2,color vec4,custom vec4) vec4 {
  p:=dst.xy-imageDstOrigin()
  world:=color.xy+p*color.z
- mask:=imageSrc1AtFromSrc0Pos(imageSrc0Origin()+world/color.w)
- if mask.r<.99 { return vec4(0) }
+ coverage:=waterCoverage(world/color.w)
+ if coverage<=0 { return vec4(0) }
  t:=custom.x
  ripple:=sin(world.y*.19+t*1.9+sin(world.x*.07-t*.6))*.65+sin(world.y*.37-t*1.3)*.35
  q:=p+vec2(ripple*(.65+custom.y*.65)*custom.z,0)
@@ -437,6 +449,7 @@ func Fragment(dst vec4,src vec2,color vec4,custom vec4) vec4 {
   c+=weightedTexel(floor(q+vec2(0,2*step))+.5,0,.015)+weightedTexel(floor(q-vec2(0,2*step))+.5,0,.015)
  }
  c.rgb*=vec3(.76,.88,.94)
- return c*.25
+ // The result is premultiplied, so one factor fades colour and coverage alike.
+ return c*(.25*coverage)
 }
 `

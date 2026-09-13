@@ -5272,6 +5272,21 @@ The matching land-battle benchmark showed no measurable modern regression and
 an identical classic capture. It does not establish the cost of a large naval
 battle's active water/particle cost.
 
+Two later corrections keep the treatment steady in time. The hover-dust age and
+the building-foam ring phase now add the presentation tick fraction, as the
+scorch and blast ages do, so both advance at display rate instead of stepping at
+30 Hz on a faster display; the dust lifetime, the foam cycle length and the
+recording at fraction zero are unchanged, and the foam tick is still wrapped
+before the fraction is added. The surface shader's value noise also reduces its
+integer lattice coordinate onto a 289-cell period before hashing it. Elapsed
+time and the integrated drift scroll that lattice without bound, and an
+unbounded sine argument eventually leaves float precision, degrading the pattern
+on some devices; a modulo on time itself would make the pattern jump, whereas
+wrapping every lattice corner on one period leaves the field continuous. The
+noise becomes tile-periodic, and at the scales used here that tile is thousands
+of world pixels across, wider than any viewport. Both are implementation choices
+for this prototype, not retail evidence.
+
 
 ### 26.4 Above-water screen-space reflections
 
@@ -5320,6 +5335,16 @@ approximation. The source plane is allocated only when needed and released on
 source reset; draw work is skipped without visible water or admitted geometry.
 `SetWaterReflections` is a capture-only comparison switch. Shore foam's opacity
 is additionally reduced by one quarter; its shape and timing are unchanged.
+
+A later correction gives the resolve the same shoreline treatment the surface
+and wake shaders already use: it samples the shared mask bilinearly in their
+coordinate convention, converts it to coverage with the same smoothstep, and
+multiplies its premultiplied result by that coverage, keeping the early-out
+where coverage is zero. Rejecting a nearest sample below full coverage had made
+the reflection end on a whole mask texel, which is several world pixels wide on
+a large map, so the edge read as a stepped line rather than a shore. Both
+compiled resolve variants share the one shader source, so both fade. This is an
+implementation choice, not retail evidence.
 
 
 At 1920×1080, the reflection source has 7.9 MiB of logical RGBA pixels. The
@@ -5842,3 +5867,54 @@ measurements do not establish GPU execution cost. The small observed host cost,
 unchanged image storage and inspected captures support keeping both effects.
 Profiles, full percentile/maxima data, census and captures are under
 `/private/tmp/selected-materials-scorch-battles`.
+
+## 30. Player controls for Enhanced effects
+
+The Enhanced effects reached this point as prototypes with executor comparison
+switches, environment variables, or nothing a player could reach. Five persisted
+switches now cover them, beside the glow switch of §19.4. They are Nanolathe
+presentation preferences, not retail evidence: the classic executor composes
+identical pixels whatever they say, and nothing here is visible to the
+simulation or to any committed frame [I6].
+
+`settings.Presentation` stores them as `water`, `lighting`, `finish`,
+`distortion` and `marks`, each defaulting to 1. They are integers for the same
+reason the display bits are: a stored 0 is "off" and is kept, only a negative
+value is repaired, and a file that omits a key keeps the default because the
+loader decodes over the defaults [02 "Settings"]. `internal/drawlist.Effects` is
+the value type both sides read; `cmd/nanolathe` converts the stored integers to
+it, so `internal/settings` remains a leaf.
+
+| Switch | Recorder gate | Executor gate |
+|---|---|---|
+| Water | the water phase (§26.1), the wake, foam and water-motion producers, and reflection site admission (§26.4) | `SetWaterEffects`, `SetWaterReflections` |
+| Lighting | none — lighting kinds are always recorded | `SetBattleLighting` (§23) |
+| Finish | none — face material and normals are always recorded | `SetMetalGlint` (§23.7), `SetMaterials` (§29.1) |
+| Distortion | blast ring metadata (§25), the burning-feature heat tag (§27), and the fresh-wreck emission and shimmer (§28) | `SetBlastDistortion`, `SetTreeHeat` |
+| Marks | the scorch observer and draw (§29.2) and the trail layer (§15) | `SetScorch` |
+
+`Client.SetEffects` retires the trail, wake, water-motion and scorch histories
+whenever the selection changes, the way an executor swap does, so a switch that
+was off leaves no stale marks and a switch turned back on starts from the
+current tick. It also advances the paused-world revision, because a changed
+selection is a different world raster (§13.10).
+
+`Renderer.SetEffects` early-returns on a selection equal to the last one it
+applied. That is load-bearing: the host calls it once per presented frame beside
+`SetGlow`, and without the early return it would overwrite the local comparison
+controls every frame — the Ctrl+Shift+G glint shortcut would revert on the next
+Draw instead of holding until the player changes a setting. The three
+environment overrides (`NANOLATHE_MODEL_MATERIALS`, `NANOLATHE_METAL_GLINT`,
+`NANOLATHE_SCORCH`) are read once at construction and AND-ed with the player's
+switch on every application, so a developer's `…=0` keeps its family off
+whatever the options page selects. A source reset retires images only; the
+applied selection and the per-family switches survive it.
+
+The window polls the shell's committed preference each update
+(`RunOptions.Effects`) and hands the executor the client's selection beside the
+display palette on every present, on the running, paused and benchmark paths;
+the benchmark keeps every effect on so two runs measure the same work. A
+`--shot` capture reads the same settings file, so it composes under the player's
+switches. The options page rows and the `+water`, `+lights`, `+finish`, `+heat`
+and `+marks` chat commands are described in
+[DESIGN_INTERFACE_HUD_INPUT.md](DESIGN_INTERFACE_HUD_INPUT.md) §3.4.1.
