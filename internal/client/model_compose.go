@@ -132,6 +132,19 @@ func unitTeamColor(v frame.UnitView) teamColor {
 	return teamColor{index: v.OwnerColor, known: v.OwnerColorKnown}
 }
 
+// featureTeamColor reads the colour of the pseudo-unit's retained owner slot,
+// independently of the plot's placer and the viewer [03 R-RAST-01 §3].
+func (c *Client) featureTeamColor() teamColor {
+	if c.buffer == nil {
+		return teamColor{}
+	}
+	current := c.buffer.Current()
+	if current == nil || !current.Players[0].Present {
+		return teamColor{}
+	}
+	return teamColor{index: current.Players[0].Logo, known: true}
+}
+
 // teamTextureFrame applies the LOGOS selector directly. A missing player
 // colour, an index beyond the entry, or an absent frame is a missing texture,
 // so the textured quad contributes no pixels; no slot or modulo fallback is

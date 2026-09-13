@@ -6186,13 +6186,11 @@ transport family, `TargetCleared`, the `StartBuilding`/`StopBuilding` forms,
 and the network-mirror lookups) dereferences it directly. So even if the
 creation-time query were skipped, the first of those to run would fault.
 
-**Consequence for Nanolathe.** The contract is "a unit definition without a
-loadable COB program cannot exist in retail". The right divergence is to
-reject the definition at catalog compile time with the standard diagnostic
-shape (`nanolathe: unit script missing: logical path scripts/<name>.cob,
-providers searched [...], expected COB program`), never to create a
-scriptless unit. [R-COB-01 §3] reads the initializer's null branch against
-this query call and reaches the same conclusion.
+**Established — admission boundary.** The catalog can retain a definition whose
+script is absent; the fault occurs when an instance is first created. This does
+not establish a retail catalog-wide refusal. Nanolathe's diagnostic refusal of
+a required script is a host policy owned by DESIGN_CONTENT_VFS §3.4 C9 and
+DESIGN_UNITS_ORDERS_COB §2.1; it never creates a functioning scriptless unit.
 
 ### `SetSpeed`, `SetDirection`, and `MotionControl` units and signs [R-COB-04 §9]
 
@@ -7036,8 +7034,9 @@ branch, gives the sequence:
 
 So the null dereference of [R-COB-04 §8] is reached during creation, before
 `SetMaxReloadTime`, before the unit is ever ticked, and with no diagnostic.
-[R-COB-04 §8]'s "Consequence for Nanolathe" — reject the definition at catalog
-compile time, never create a scriptless unit — is the unconflicted rule.
+The definition can remain in the catalog, but no scriptless instance survives
+creation. The host diagnostic refusal boundary is documented separately in
+DESIGN_CONTENT_VFS §3.4 C9 and DESIGN_UNITS_ORDERS_COB §2.1.
 
 **Established — nothing refuses after allocation.** The heap allocation of the
 VM instance is checked only to skip the constructor: a null result is stored

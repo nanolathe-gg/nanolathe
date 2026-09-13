@@ -102,7 +102,15 @@ func unitPortBindings(vm *cob.VM, u *Unit) map[cob.Port]cob.PortBinding {
 	if u == nil {
 		return nil
 	}
-	ports := make(map[cob.Port]cob.PortBinding, 8)
+	ports := make(map[cob.Port]cob.PortBinding, 10)
+	// Read the current two-bit stance fields, including changes made after
+	// binding. These ports have no write arm [04 R-COB-03 §3].
+	ports[cob.Port(2)] = cob.PortBinding{Read: func([4]int32) int32 {
+		return int32((u.Flags >> StandingMoveShift) & StandingFieldMask)
+	}}
+	ports[cob.Port(3)] = cob.PortBinding{Read: func([4]int32) int32 {
+		return int32((u.Flags >> StandingFireShift) & StandingFieldMask)
+	}}
 	bindFlag := func(port cob.Port, get func() bool, set func(bool)) {
 		ports[port] = cob.PortBinding{
 			Read: func([4]int32) int32 {
@@ -181,8 +189,8 @@ func bindCOBWithPortsAndVisibility(fs vfs.FSOps, def *content.UnitDef, mdl *mode
 			Code: cob.BindingMissingModel, Expected: "loaded 3DO model", Detail: fmt.Sprintf("unit %q has no model", def.UnitName),
 		}}}
 	}
-	// The catalog compiler is the primary missing-script rejection boundary.
-	// BindStrict remains the asset-level defense: retail faults during creation
+	// The catalog retains missing scripts with warnings; preflight and this
+	// strict bind refuse their use. Retail faults during creation
 	// when unconditional queries reach a null VM, so configured production
 	// allocation must never proceed without a loadable COB [R-COB-04 §8].
 	modelPieces := make([]string, len(mdl.Pieces))
@@ -309,7 +317,7 @@ type creationCallbacks interface {
 // a null dereference and retail faults while creating the unit
 // [04 R-COB-04 §8][04 R-COB-01 §3]. Exactly three producers in the whole image
 // test the VM for null and none of them is on this path. Nanolathe takes the
-// divergence §8 sanctions rather than the fault: attachCOB refuses a
+// diagnostic refusal documented in DESIGN_UNITS_ORDERS_COB §2.1: creation refuses a
 // definition with no loadable program and the skirmish preflight reports a
 // missing COB as fatal, so a scriptless unit is never created and this nil
 // guard is unreachable in a real battle. It stays because a crash is not a

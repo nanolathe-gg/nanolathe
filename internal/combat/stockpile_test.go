@@ -127,8 +127,8 @@ func TestStockpileCountLifecycle(t *testing.T) {
 			if entry.Count != 1 {
 				t.Fatalf("queue count after one completion %d want 1 (2->1) [06 §11.1]", entry.Count)
 			}
-			if entry.Progress != 0 {
-				t.Fatalf("progress after completion %d want 0", entry.Progress)
+			if entry.Progress != 5 {
+				t.Fatalf("progress after completion %d want next round first step 5 [06 R-WPN-05 §2]", entry.Progress)
 			}
 			// Launch before production check: round just completed cannot launch until next tick [06 §11.1] C29
 			// Simulate that launch check would happen at next tick before next production Tick

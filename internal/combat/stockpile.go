@@ -88,7 +88,7 @@ func StockpileBuildTime(w *content.WeaponDef) int32 {
 // CanStartStockpileRound reports whether a new round may start given the slot's
 // byte-sized completed-round remainder [06 §11.1].
 // A new round is blocked when the slot byte is already greater than 199 [06 §11.1] [P1-09 §2.2].
-// Malformed slot byte 200..255 all block; byte inc wraps 255→0 [P1-09 §2.3].
+// Saved slot byte values 200..255 all block [06 R-WPN-05 §2].
 func CanStartStockpileRound(ammo int32) bool {
 	return ammo <= StockpileSlotByteCap // [P1-09 §2.2] >199 blocked
 }
@@ -149,14 +149,16 @@ func StockpileCostDelta(oldProg, newProg int32, cost float64, buildTime int32) f
 //   - completion increments slot byte, decrements signed queue count, requests interface refresh [06 §11.1]
 //   - new round blocked with 300 wait when slot byte >199 [06 §11.1]
 //   - ordinary path can reach 200 but does not start beyond it [06 §11.1]
-//   - assets whose buildTime <=5 can complete multiple queued rounds in one visit while admission remains open [06 §11.1]
+//   - completion restarts immediately; the next round attempts its first step in the same visit [06 R-WPN-05 §2]
 //   - launch is checked before production in the same unit slot, so a round completed by secondary queue cannot launch until next tick [06 §11.1] C29
 //
 // admit is the two-resource admission helper; it should return true when both
 // carries are non-positive (both accepted), false otherwise [05 "Two-resource admission"].
 // When admit is nil, admission is assumed always accepted (tests without economy).
 //
-// Returns nextTick (0 when no further work), refreshed (interface refresh requested), and completedRounds.
+// Returns nextTick (the absolute retry deadline when Count remains positive,
+// otherwise 0), refreshed (interface refresh requested), and completedRounds.
+// A retry deadline can wrap to zero [04 §3.3].
 func TickStockpile(entry *StockpileEntry, slot *Slot, tick uint32, admit func(energy, metal float32) bool) (nextTick uint32, refreshed bool, completedRounds int) {
 	if entry == nil || slot == nil || entry.Weapon == nil {
 		return 0, false, 0
@@ -187,7 +189,8 @@ func TickStockpile(entry *StockpileEntry, slot *Slot, tick uint32, admit func(en
 	if !CanStartStockpileRound(slot.Ammo) {
 		return tick + StockpileRetryBlocked, false, 0 // [06 §11.1] >199 block [P1-09 §2.2]
 	}
-	// Multi-completion loop for assets whose buildTime <=5 [06 §11.1]
+	// The pump restarts after every completion without arming a deadline, so
+	// the next round attempts its first step in this visit [06 R-WPN-05 §2].
 	for {
 		if entry.Count <= 0 {
 			break
@@ -198,6 +201,11 @@ func TickStockpile(entry *StockpileEntry, slot *Slot, tick uint32, admit func(en
 				return tick + StockpileRetryBlocked, true, completedRounds
 			}
 			return tick + StockpileRetryBlocked, false, 0
+		}
+		// Completed progress can survive a full-slot hold. Once the gate
+		// opens, phase 0 resets it before the next admission [06 R-WPN-05 §2].
+		if entry.Progress == buildTime {
+			entry.Progress = 0
 		}
 		oldProg := entry.Progress
 		newProg := oldProg + StockpileProgressStep // [06 §11.1] advances by five
@@ -225,48 +233,26 @@ func TickStockpile(entry *StockpileEntry, slot *Slot, tick uint32, admit func(en
 		if entry.Progress < buildTime {
 			// Accepted but incomplete work schedules 5-tick retry [06 §11.1]
 			if completedRounds > 0 {
-				// Lost: we already completed some rounds in this same tick, but still incomplete for next round.
-				// Spec says assets with buildTime <=5 can multi-complete; for larger buildTime, incomplete should schedule 5 and not loop.
+				// The completed round and the next round's first step share
+				// this visit [06 R-WPN-05 §2].
 				return tick + StockpileRetryAccepted, true, completedRounds
 			}
 			return tick + StockpileRetryAccepted, false, 0 // [06 §11.1]
 		}
-		// Completion: increment slot byte with wrap 255→0 [P1-09 §2.3], decrement signed queue count, request refresh [06 §11.1]
+		// Completion increments ammunition and decrements the queue count [06 §11.1].
 		// Phase 2's increment: no cap and no wrap test [06 R-WPN-05 §2]. The
 		// >199 gate at the top of this loop is what bounds it, so the byte
 		// tops out at 200 and the old mask was dead.
 		slot.Ammo++
-		entry.Count--      // signed queue count decrement [06 §11.1]
-		entry.Progress = 0 // new round progress resets
+		entry.Count-- // signed queue count decrement [06 §11.1]
 		completedRounds++
 		refreshed = true // [06 §11.1] refresh helper itself does not mutate values and does not clamp [06 §11.1]
 		if entry.Count == 0 {
 			// Queue empty: no further retry
 			break
 		}
-		// More queued rounds exist
-		if buildTime <= 5 {
-			// Assets whose build time <=5 can complete multiple queued rounds in one visit while admission remains open [06 §11.1]
-			// Continue loop without returning, attempting next round immediately in same tick.
-			// Admission remains open is checked at top of next iteration via admit result.
-			continue
-		}
-		// For buildTime >5, completion waits for next tick even if more queued; schedule accepted-incomplete boundary? Spec suggests completed round does not immediately start next round in same tick unless buildTime <=5.
-		// Return with accepted incomplete scheduling? Actually completed round just finished, next round not started; next work visit schedules 5? But spec says failed admission 10, accepted incomplete 5. Completed case not explicitly retried, but loop will start next round on next tick.
-		// Return with 5? To match spec's "accepted but incomplete work schedules 5", after completion the next round is at 0, so incomplete? But completion already consumed one round. For >5 case, we stop after one completion and schedule next tick with 5? Conservative: return 5 to schedule next round's first step.
-		return tick + StockpileRetryAccepted, true, completedRounds // schedule next round's work
 	}
-	if completedRounds > 0 {
-		if entry.Count > 0 {
-			// More rounds queued but not completed due to loop break (blocked or single completion with >5 buildTime)
-			if !CanStartStockpileRound(slot.Ammo) {
-				return tick + StockpileRetryBlocked, true, completedRounds
-			}
-			return tick + StockpileRetryAccepted, true, completedRounds
-		}
-		return 0, true, completedRounds
-	}
-	return 0, false, 0
+	return 0, refreshed, completedRounds
 }
 
 // There is no separate stockpile launcher. WU-19-185 deleted the one that used

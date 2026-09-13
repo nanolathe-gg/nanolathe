@@ -128,9 +128,12 @@ receive this refresh, including the health-sample roll consumed by `Killed`;
 **The script binding** (`cob_binding.go`). One production binding per unit: the
 compiled program, the model piece list linked against the script's piece table,
 the per-unit port handlers, the callback bridge and the simulation stream. A
-definition whose program is missing is rejected at catalog compile rather than
-allowed to create a scriptless unit, because retail faults at creation instead
-`[04 R-COB-04 §8]` `[04 R-COB-01 §3]`.
+definition whose program is unavailable remains in the catalog with a warning.
+Preflight refuses a required missing program, and all creation paths (including
+nanoframes, capture and forced-slot save reconstruction) reject it before pool
+allocation or creation RNG draws. This diagnostic refusal is Nanolathe host
+policy: retail faults during creation `[04 R-COB-04 §8]` `[04 R-COB-01 §3]`.
+Unrelated definitions remain usable; no scriptless instance is created.
 
 Catalog linking retains both that immutable program and the winning COB
 provenance. Unit creation passes this asset into strict binding, which links the
@@ -334,6 +337,11 @@ re-issue and authorizes nothing, and a ready latch granted only by a nonzero
 value delivered to the completion receiver. A failed start delivers zero through
 the same receiver; a signal or abnormal termination never invokes it
 `[04 R-CB-01 §6]` `[04 R-COB-04 §9]` `[06 §3.3]` `[06 R-P0-07]`.
+
+Ports 2 and 3 read the unit's current two-bit standing-move and standing-fire
+fields, including changes after binding. They have no write arm: an engine
+write leaves the stance unchanged and raises only the ordinary script-touched
+marker `[04 R-COB-03 §3]` `[04 R-COB-03 §4]`.
 
 **The binding** (`binding.go`). `BindingRequest` is the strict production bind:
 program, model, piece list, required entry points, streams and sinks. Its
@@ -554,8 +562,9 @@ until the producer clears the aim state and re-issues. This is retail
 PLAN 06 listed "an absent script" as a third zero case; that case cannot arise.
 Every creator runs the synchronous primary-weapon query through the VM reference
 with no null test, so retail faults at unit creation instead. Nanolathe rejects
-such a definition at catalog compile with the standard diagnostic shape and never
-creates a scriptless unit `[04 R-COB-04 §8]` `[04 R-COB-01 §3]`.
+required use during preflight or creation with the standard diagnostic shape,
+while retaining the definition with a catalog warning (§2.1). It never creates
+a scriptless unit `[04 R-COB-04 §8]` `[04 R-COB-01 §3]`.
 
 **C17 — same-tick windows.** In order: unit update (the phase-2 session visit
 calls the wind-generator notifier after the player gate, which queues the

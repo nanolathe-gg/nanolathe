@@ -53,7 +53,7 @@ func unitScript(name string) *UnitDef {
 	return &UnitDef{UnitName: name}
 }
 
-func TestFillUnitScriptsRequiresLoadableProgram(t *testing.T) {
+func TestFillUnitScriptsWarnsWithoutInventingProgram(t *testing.T) {
 	tests := []struct {
 		name      string
 		fs        vfs.FSOps
@@ -66,10 +66,14 @@ func TestFillUnitScriptsRequiresLoadableProgram(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := fillUnitScripts(tt.fs, map[string]*UnitDef{"test": unitScript("TEST")})
+			u := unitScript("TEST")
+			warnings := fillUnitScripts(tt.fs, map[string]*UnitDef{"test": u})
 			want := "nanolathe: unit script missing: logical path scripts/test.cob, providers searched [" + tt.providers + "], expected COB program"
-			if err == nil || err.Error() != want {
-				t.Fatalf("fillUnitScripts error = %v, want %q", err, want)
+			if len(warnings) != 1 || !strings.HasPrefix(warnings[0], want) {
+				t.Fatalf("fillUnitScripts warnings = %v, want %q", warnings, want)
+			}
+			if u.Script != nil || u.ScriptProvenance.LogicalPath != "scripts/test.cob" {
+				t.Fatal("unavailable script gained a program or lost its logical path")
 			}
 		})
 	}
@@ -78,12 +82,9 @@ func TestFillUnitScriptsRequiresLoadableProgram(t *testing.T) {
 func TestFillUnitScriptsRejectsUnreadableWithProvider(t *testing.T) {
 	base := newFixtureFS(t, fixtureFile{path: "scripts/test.cob", data: string(contentTestCOB([]uint32{0}))})
 	fs := unreadableScriptFS{fixtureFS: base}
-	err := fillUnitScripts(fs, map[string]*UnitDef{"test": unitScript("TEST")})
-	if err == nil {
-		t.Fatal("fillUnitScripts accepted an unreadable COB")
-	}
-	if !strings.Contains(err.Error(), "logical path scripts/test.cob") || !strings.Contains(err.Error(), "expected COB program") {
-		t.Fatalf("unreadable COB diagnostic = %v", err)
+	warnings := fillUnitScripts(fs, map[string]*UnitDef{"test": unitScript("TEST")})
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "logical path scripts/test.cob") || !strings.Contains(warnings[0], "fixture: script read failed") {
+		t.Fatalf("unreadable COB diagnostic = %v", warnings)
 	}
 }
 
@@ -110,7 +111,39 @@ func TestFillUnitScriptKeepsEmptyBasename(t *testing.T) {
 	if u.Script == nil || u.ScriptProvenance.LogicalPath != "scripts/.cob" {
 		t.Fatal("empty name lost script or provenance")
 	}
-	if err := fillUnitRecordScripts(newFixtureFS(t), []*UnitDef{{}}); err == nil || !strings.Contains(err.Error(), "scripts/.cob") {
-		t.Fatalf("empty script diagnostic = %v", err)
+	if warnings := fillUnitRecordScripts(newFixtureFS(t), []*UnitDef{{}}); len(warnings) != 1 || !strings.Contains(warnings[0], "scripts/.cob") {
+		t.Fatalf("empty script diagnostic = %v", warnings)
+	}
+}
+
+// A broken candidate must not prevent a later definition from receiving its
+// immutable program. Required use still fails preflight [04 R-COB-04 §8].
+func TestScriptMissRetainsLaterProgramAndRequiredPreflightFailure(t *testing.T) {
+	fs := newFixtureFS(t, fixtureFile{path: "scripts/valid.cob", data: string(contentTestCOB([]uint32{0}))})
+	bad, good := unitScript("missing"), unitScript("valid")
+	warnings := fillUnitRecordScripts(fs, []*UnitDef{bad, good})
+	if len(warnings) != 1 || bad.Script != nil || good.Script == nil {
+		t.Fatalf("candidate boundary lost: warnings=%v, bad=%v, good=%v", warnings, bad.Script, good.Script)
+	}
+	p := &skirmishPreflight{fs: fs, manifest: &SkirmishManifest{}}
+	p.script("required-unit", bad, true)
+	if !p.finish().Fatal() {
+		t.Fatal("required unavailable script passed preflight")
+	}
+}
+
+// A callback directory cannot make an empty code body usable. Catalog admission
+// and required preflight share this host boundary [04 R-COB-04 §8].
+func TestEmptyScriptCodeRetainsWarningButRefusesRequiredPreflight(t *testing.T) {
+	fs := newFixtureFS(t, fixtureFile{path: "scripts/empty.cob", data: string(contentTestCOB(nil))})
+	u := unitScript("empty")
+	warnings := fillUnitRecordScripts(fs, []*UnitDef{u})
+	if len(warnings) != 1 || u.Script != nil {
+		t.Fatalf("empty code admission: warnings=%v program=%v", warnings, u.Script)
+	}
+	p := &skirmishPreflight{fs: fs, manifest: &SkirmishManifest{}}
+	p.script("required-unit", u, true)
+	if !p.finish().Fatal() {
+		t.Fatal("required empty code passed preflight because its directory named Create")
 	}
 }

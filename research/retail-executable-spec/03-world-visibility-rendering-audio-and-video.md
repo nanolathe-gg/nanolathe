@@ -2273,12 +2273,26 @@ rows over the same screen area that another player's `32×32` frame covers in
 `h-1` is one larger. The frame offsets, which vary wildly across colours in
 the stock file, are inert in the model path.
 
-**Unknown (bounded static trace).** The feature draw dispatcher constructs a
-pseudo-unit from a feature's model, position and orientation, but the recovered
-initialization does not settle which player-colour selector, if any, its team
-faces carry. A feature `LOGOS` face must therefore stay absent in Nanolathe
-until that initialization or the selector reader is traced; colour zero is not
-a supported fallback.
+**Established (direct-static): feature team colour.** The shared feature
+pseudo-unit is cleared at initialization, leaving its owner slot at zero.
+Initialization then supplies its fixed rendering flags and definition; the
+per-feature dispatcher replaces only its model, position and orientation.
+Neither that reuse nor the ordinary model presenter changes its owner slot.
+Both shaded and unshaded composition paths pass that retained slot to the
+ordinary player-colour lookup. A feature `LOGOS` quad therefore selects
+**player slot zero's current colour**, irrespective of the feature's placer,
+the dying unit's owner, or the viewer. This is not a constant frame-zero
+selector: if player zero's colour is seven, the feature uses frame seven.
+The selected frame's dimensions and out-of-range omission follow the ordinary
+lookup above.
+
+**Established (bounded stock asset census).** The reference install's compiled
+feature catalog contains 432 model-backed definitions naming 285 distinct
+models. After primary-bank precedence and the textured-quad dispatch rules,
+only `corkrog_dead` uses fallback ten-frame `LOGOS` art: three textured quads.
+This census includes every compiled feature definition, rather than only
+currently placed map features or one battle's wrecks. It does not claim that
+other content sets cannot author such faces.
 
 #### The option defaults, the waterline bit, the shadow gate and the punch-out offset [R-RAST-01 §4]
 
@@ -5922,7 +5936,8 @@ Then:
 
 - **live instance** (cell bit 0): a 3DO definition fills the engine's
   feature pseudo-unit — model pointer, position and the slot's orientation
-  words — and hands it to the ordinary per-unit present of §7; a sprite
+  words — and hands it to the ordinary per-unit present of §7. Its retained
+  owner slot selects player zero's colour for team faces (§3 above); a sprite
   definition blits the instance's shadow cursor frame (only when the
   instance's shadow bit and the feature-shadow option bit are set) and then
   its normal cursor frame, both through the opaque blitter and both at the

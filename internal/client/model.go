@@ -302,12 +302,11 @@ func (c *Client) drawFeatureModel(f frame.FeatureView) bool {
 	draw.Structure, draw.KeyPlane = true, true
 	// The nanoframe reveal is a construction-fraction contract; a sinking
 	// feature is not an unfinished unit and takes the ordinary model path.
-	// TODO(question): identify the feature pseudo-unit player-colour selector
-	// used for LOGOS faces. The observed construction supplies model, position
-	// and orientation but not a published selector, so a feature team face stays
-	// absent rather than borrowing player colour zero [03 R-RAST-01 §3].
+	// The cleared pseudo-unit retains owner slot zero through each feature
+	// draw; its LOGOS faces read that player's current colour [03 R-RAST-01 §3].
+	selector := c.featureTeamColor()
 	if c.geometryOnlyModels {
-		g := c.prepareModelGeometry(draw, 0, teamColor{}, featurePresentationID(f), modelCursorFeature, nil, 0)
+		g := c.prepareModelGeometry(draw, 0, selector, featurePresentationID(f), modelCursorFeature, nil, 0)
 		if g == nil {
 			return false
 		}
@@ -315,7 +314,7 @@ func (c *Client) drawFeatureModel(f frame.FeatureView) bool {
 		c.list.RecordModel(drawlist.Model{Geometry: g})
 		return true
 	}
-	return c.drawModel(draw, 0, teamColor{}, featurePresentationID(f), modelCursorFeature, nil, 0)
+	return c.drawModel(draw, 0, selector, featurePresentationID(f), modelCursorFeature, nil, 0)
 }
 
 func (c *Client) drawProjectileModel(p frame.ProjectileView) bool {

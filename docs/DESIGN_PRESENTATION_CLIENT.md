@@ -305,6 +305,13 @@ with a per-pixel **height key**, and that image is blitted. The split across
   else is an animated sequence with per-frame holds `[03 §2.4.1]` `[03 §4.4]`
   `[03 R-CRD-005 §1]`. Decoded-frame adapters read `TexturePlayer.FrameIndex`
   directly; resolving a frame neither advances playback nor rebuilds asset IDs.
+  Feature models use the committed player-zero row's colour in both classic
+  composition and modern geometry recording, independently of the feature's
+  placer and the viewer `[03 R-RAST-01 §3]`. An absent committed row remains
+  an absent selector; an out-of-range colour contributes no team face. This
+  safe missing-input boundary does not invent retail behaviour for a missing
+  player record. The stock affected model is `corkrog_dead`; its three team
+  quads are covered by the corpus census and focused capture test.
 * `model_outline.go` — the nanoframe wireframe: not a polyline, but the edge
   walk's per-scanline extremes written into the composition image, admitted
   against the same key plane `[03 R-P0-19-N]` `[03 R-COMP-01 §3]`.
@@ -1181,9 +1188,6 @@ behaviour is bounded rather than guessed:
   `[02 R-MALF-01 §6]`.
 * The exact PCM conversion for legacy WAV variants beyond the DIGI and raw rules
   `[03 §8.2]`.
-* The player-colour selector of a feature pseudo-unit's `LOGOS` faces. The
-  client leaves those faces absent until the pseudo-unit initialization path is
-  traced; it does not substitute colour zero `[03 R-RAST-01 §3]`.
 
 ## On-demand diagnostic capture
 

@@ -143,24 +143,13 @@ func buildWeaponHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) C
 	if ce.Count <= 0 {
 		return Code(5)
 	}
-	// Otherwise keep node alive with custom retry deadline (5/10/300) per
-	// [06 §11.1]. TickStockpile returns tick+retry; store it as absolute tick.
-	// EVERY hold arms a deadline first: a hold returned with a clear gate would
-	// leave the pump re-dispatching this head for the rest of the visit
-	// [06 R-WPN-05 §2], which is why the fall-through below arms one too.
-	if nextTick != 0 {
-		n.Deadline = int32(nextTick)
-		n.DynamicGate = 1
-		// Return 2 to keep node with our custom deadline (code 3 would overwrite
-		// with tick+30+rand15, which is not the stockpile cadence). Pump's
-		// case 2 just keeps the node alive with existing DynamicGate/Deadline.
-		return Code(2)
-	}
-	// No nextTick but count remains: keep node, schedule default 5-tick retry
-	// so the pump does not spin. Use 5 as accepted-incomplete boundary.
-	n.Deadline = int32(tick + combat.StockpileRetryAccepted)
+	// With work remaining, the helper has reached an actual hold: rejected
+	// admission, accepted incomplete work, or the full-slot gate. Completion
+	// itself restarts without a delay [06 R-WPN-05 §2]. Preserve the absolute
+	// deadline even when it wraps to zero [04 §3.3].
+	n.Deadline = int32(nextTick)
 	n.DynamicGate = 1
-	return Code(2)
+	return Code(2) // hold preserves this deadline; code 3 would replace it
 }
 
 // StockpileCounts returns the UI-visible stockpile state for a unit: the

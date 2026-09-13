@@ -285,9 +285,7 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 		return nil, err
 	}
 	warnings = append(warnings, applyDownloadRecordMenus(records, units, buildMenus, downloadPlacements)...)
-	if err := fillUnitRecordScripts(fs, records); err != nil {
-		return nil, err
-	}
+	warnings = append(warnings, fillUnitRecordScripts(fs, records)...)
 	report.Report(FamilyModels, 100)
 
 	// Manifest: vfs.ManifestHash() for identity [PLAN 02].
@@ -1411,39 +1409,51 @@ func requiredModelPath(name string) string {
 	return "objects3d/" + name + ".3do"
 }
 
-// fillUnitScripts resolves every unit's required compiled COB program at
-// catalog link time. Retail cannot create a unit with a null program, so the
-// catalog rejects missing, unreadable, malformed, nil, and empty programs
-// before publishing any definition [04 R-COB-04 §8].
-func fillUnitScripts(fs vfs.FSOps, units map[string]*UnitDef) error {
+// fillUnitScripts retains unavailable programs as catalog warnings. Preflight
+// and creation refuse a required missing program; unrelated definitions remain
+// usable [04 R-COB-04 §8], DESIGN_CONTENT_VFS §3.4 C9.
+func fillUnitScripts(fs vfs.FSOps, units map[string]*UnitDef) []string {
 	return fillUnitRecordScripts(fs, unitMapRecords(units))
 }
 
-func fillUnitRecordScripts(fs vfs.FSOps, records []*UnitDef) error {
+func fillUnitRecordScripts(fs vfs.FSOps, records []*UnitDef) []string {
 	if fs == nil || len(records) == 0 {
 		return nil
 	}
+	var warnings []string
 	for _, u := range records {
 		if u == nil {
 			continue
 		}
 		logical := vfs.ResourcePath("scripts", CanonicalKey(u.UnitName), "cob")
+		u.Script = nil
+		u.ScriptProvenance = vfs.Provenance{LogicalPath: logical}
 		info, statErr := fs.Stat(logical)
 		if statErr != nil || info.IsDir {
-			return unitScriptMissingError(fs, logical)
+			warnings = append(warnings, unitScriptMissingError(fs, logical).Error())
+			continue
 		}
-		prog, found, err := cob.LoadFromFS(fs, u.UnitName)
-		if err != nil || !found || prog == nil || len(prog.Code) == 0 {
-			return unitScriptMissingError(fs, logical)
+		u.ScriptProvenance = info.Source
+		u.ScriptProvenance.LogicalPath = logical
+		// Read the same winning logical path that was just inspected, retaining
+		// read failures instead of collapsing them into a missing-file result.
+		// Keep the COB loader's existing host byte bound [fmt cob].
+		data, err := fs.ReadFileLimit(logical, 4<<20)
+		var prog *cob.Program
+		if err == nil {
+			prog, err = cob.Load(data)
+		}
+		if err != nil || prog == nil || len(prog.Code) == 0 {
+			warning := unitScriptMissingError(fs, logical).Error()
+			if err != nil {
+				warning += ": " + err.Error()
+			}
+			warnings = append(warnings, warning)
+			continue
 		}
 		u.Script = prog
-		provenance := info.Source
-		if provenance.LogicalPath == "" {
-			provenance.LogicalPath = logical
-		}
-		u.ScriptProvenance = provenance
 	}
-	return nil
+	return warnings
 }
 
 // fillUnitRecordBuildPages compiles every definition's build-menu page-count byte from

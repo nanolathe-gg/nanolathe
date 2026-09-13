@@ -13,6 +13,8 @@ import (
 	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/cob"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
@@ -70,7 +72,7 @@ func minimalThreeDO(t *testing.T) []byte {
 
 // compileFixtureCatalog runs the real content compile over a minimal authored
 // install with a loadable COB for every unit definition.
-func compileFixtureCatalog(t *testing.T) *content.Catalog {
+func compileFixtureCatalog(t *testing.T, missing ...string) *content.Catalog {
 	t.Helper()
 	root := t.TempDir()
 	write := func(logical, data string) {
@@ -111,10 +113,14 @@ func compileFixtureCatalog(t *testing.T) *content.Catalog {
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}
 	}
-	write("scripts/armtest.cob", string(minimalCOB(t)))
-	write("scripts/armless.cob", string(minimalCOB(t)))
-	write("scripts/armnone.cob", string(minimalCOB(t)))
+	for _, name := range []string{"armtest", "armless", "armnone"} {
+		if len(missing) != 0 && name == missing[0] {
+			continue
+		}
+		write("scripts/"+name+".cob", string(minimalCOB(t)))
+	}
 	mounted := vfs.New()
+	t.Cleanup(func() { _ = mounted.Close() })
 	if err := mounted.MountDirectory(root, 10); err != nil {
 		t.Fatalf("MountDirectory: %v", err)
 	}
@@ -125,9 +131,7 @@ func compileFixtureCatalog(t *testing.T) *content.Catalog {
 	return cat
 }
 
-// TestDefinitionLoadRequiresLoadableCOB locks the strict catalog boundary:
-// every published unit definition carries a non-empty compiled program
-// [R-COB-04 §8].
+// Available scripts remain immutable catalog programs [R-COB-04 §8].
 func TestDefinitionLoadRequiresLoadableCOB(t *testing.T) {
 	cat := compileFixtureCatalog(t)
 	for _, name := range []string{"armtest", "armless", "armnone"} {
@@ -139,6 +143,47 @@ func TestDefinitionLoadRequiresLoadableCOB(t *testing.T) {
 	armed, _ := cat.Unit("armtest")
 	if got, ok := armed.Script.Scripts["Create"]; !ok || got != 0 {
 		t.Fatalf("stored program scripts = %v, want Create at word 0", armed.Script.Scripts)
+	}
+}
+
+// Missing programs remain discoverable but cannot become fresh, captured,
+// unfinished or restored instances. Refusal precedes slots and random draws
+// under the host policy of DESIGN_UNITS_ORDERS_COB §2.1 [R-COB-04 §8].
+func TestCatalogMissingScriptRefusesAllCreationPaths(t *testing.T) {
+	cat := compileFixtureCatalog(t, "armnone")
+	bad, ok := cat.Unit("armnone")
+	if !ok || bad.Script != nil {
+		t.Fatal("catalog dropped unavailable definition or invented its script")
+	}
+	foundWarning := false
+	for _, warning := range cat.Warnings {
+		foundWarning = foundWarning || strings.Contains(warning, "logical path scripts/armnone.cob")
+	}
+	good, _ := cat.Unit("armtest")
+	if !foundWarning || good.Script == nil {
+		t.Fatal("catalog lost warning or unrelated valid program")
+	}
+	for _, tc := range []struct {
+		name   string
+		create func(*World) (pool.Handle, error)
+	}{
+		{"fresh", func(w *World) (pool.Handle, error) { return w.Create(bad, 0, 0, 0, 0) }},
+		{"nanoframe", func(w *World) (pool.Handle, error) { return w.CreateNanoframe(bad, 0, 0, 0, 0) }},
+		{"capture", func(w *World) (pool.Handle, error) { return w.CreateWithMoverMode(bad, 0, 0, 0, 0, 1) }},
+		{"restore", func(w *World) (pool.Handle, error) { return w.CreateWithForcedSlot(bad, 0, 0, 0, 0, 1) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := NewSliced(4, cat)
+			sim := rng.NewSimulation(7)
+			w.SetSimulationRNG(&sim)
+			h, err := tc.create(w)
+			if h != 0 || err == nil || !strings.Contains(err.Error(), "unit script missing") {
+				t.Fatalf("unavailable program admitted: handle=%d err=%v", h, err)
+			}
+			if w.Used() != 0 || sim.Draws() != 0 {
+				t.Fatal("rejected program consumed allocation or RNG")
+			}
+		})
 	}
 }
 

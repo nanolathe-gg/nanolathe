@@ -468,8 +468,14 @@ inactivity rather than for a nil pointer; a corpse miss is the no-corpse
 sentinel and leaves no wreck; a movement-class miss takes the per-unit scratch
 record, which is compiled through the same ordered reads and unconditional
 clamps as a pooled class so the two cannot drift; a script miss is a null
-program that crashes retail at first creation, which the preflight turns into
-a refusal to start (§3.5) `[04 R-COB-04 §8]`; a model miss is fatal, reported
+program that crashes retail at first creation `[04 R-COB-04 §8]`. Catalog
+linking retains that definition with a warning and the attempted logical path;
+an existing unreadable or malformed file also retains its winning provenance.
+A required missing, empty or malformed program refuses preflight (§3.5), and
+unit creation/restore independently refuses it before allocation. Valid programs
+remain immutable catalog assets. This user-authorized host refusal boundary
+keeps an unrelated broken unit from preventing use of the whole install; it
+never substitutes an empty VM. A model miss is fatal, reported
 against the `objects3d\<objectname>.3DO` path.
 
 **C10 — the downloadable enforcement.** A unit reachable from a build menu

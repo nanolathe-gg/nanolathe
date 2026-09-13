@@ -954,9 +954,12 @@ distinct signed queue count, byte-sized completed rounds, and per-node
 progress; each visit adds 5 up to the build time and requests the delta between
 independently truncated cumulative metal and energy costs. Rejected admission
 retries in 10 ticks, accepted incomplete work in 5, and a slot above 199 waits
-300; launch is checked before production, and only a successful spawn
-decrements ammunition. Interceptor acquisition scans the current projectile
-prefix ascending for the first unclaimed enemy-owned targetable record whose
+300. Completion restarts immediately in the same visit for every build time:
+if the count and ammunition gate allow it, the next round resets progress and
+admits its first step before any retry is scheduled. A newly full slot retains
+the completed progress while waiting at the gate. Launch is checked before
+production, and only a successful spawn decrements ammunition. Interceptor
+acquisition scans the current projectile prefix ascending for the first unclaimed enemy-owned targetable record whose
 stored **aim point** lies within the separate inclusive axis-aligned coverage
 square; the slot stores that candidate's current position, firing rescans, and
 the spawn writes the authoritative reservation link `[06 §11.1]` `[06 §11.2]`

@@ -491,7 +491,7 @@ func (p *skirmishPreflight) script(kind string, u *UnitDef, required bool) {
 		p.diag(SkirmishDiagnostic{Code: "malformed-cob", Fatal: required, Kind: kind + ".cob", Logical: path, Message: fmt.Sprintf("cannot parse COB: %v", err)})
 		return
 	}
-	if !found || program == nil {
+	if !found || program == nil || len(program.Code) == 0 {
 		p.fatal(kind+".cob", path, u.UnitName, "required COB is unavailable")
 		return
 	}

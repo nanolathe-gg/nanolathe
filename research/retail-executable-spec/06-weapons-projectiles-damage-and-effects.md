@@ -4417,7 +4417,12 @@ The pair is admitted through the ordinary two-resource helper. Progress is not
 advanced when admission is rejected, but both requested amounts are retained.
 Failed admission schedules a ten-tick retry deadline; accepted but incomplete
 work schedules a five-tick retry. Completion increments the slot byte,
-decrements the signed queue count, and requests the selected-unit refresh. A
+decrements the signed queue count, and requests the selected-unit refresh.
+Completion itself sets no deadline: it restarts the node immediately in the
+same pump visit, regardless of build time. If more rounds remain and the slot
+allows a new round, progress resets to zero and the first five-unit step of
+that round is admitted in this visit. Its admission result selects the next
+deadline: ten ticks if rejected, five if accepted but incomplete. A
 new round is blocked with a 300-tick wait when the slot byte is already
 greater than 199; the ordinary path can reach 200 but does not start a round
 beyond it, and assets whose build time is at most five can complete multiple
@@ -4459,7 +4464,10 @@ trunc(old·cost/reloadtime)` formed in floating point with the multiply
 before the divide; the two-resource admission refused → deadline 10,
 *hold*; accepted → progress := next; `next < reloadtime` → deadline 5,
 *hold*; else *advance*. Phase 2: slot byte += 1 (no cap, no wrap test),
-count −= 1, request the selected-unit refresh, *restart* (phase 0). Any
+count −= 1, request the selected-unit refresh, *restart* (code 0, phase 0),
+without arming a deadline. The restarted phase 0 tests the remaining count
+and slot byte before resetting progress: if completion reaches 200 rounds
+with more queued, the 300-tick hold retains the completed progress value. Any
 other phase → *cancel-all*. The codes are [04 §3.3]'s.
 
 **Established — the secondary pump re-dispatches the head after every
@@ -4471,7 +4479,10 @@ deadline has not expired is passed over for its successor. So a round whose
 and the chain stops only when the count reaches 0 (*complete*), the
 admission refuses (*hold* 10), or the slot byte passes 199 (*hold* 300).
 This is the mechanism behind §11.1's "assets whose build time is at most
-five can complete multiple queued rounds in one visit". Every
+five can complete multiple queued rounds in one visit". The same restart
+applies to larger build times: after finishing a round, the next round
+immediately attempts its first step, then holds for five ticks if accepted
+or ten if rejected. There is no separate completion delay. Every
 *hold* in the handler arms a deadline first; a *hold* returned with a clear
 gate would spin the pump on the head for the rest of the visit.
 

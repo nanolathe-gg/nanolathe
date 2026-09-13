@@ -287,8 +287,9 @@ type UnitDef struct {
 	SelfDestructAsDef *WeaponDef // resolved selfdestructas
 
 	// Script is the required compiled COB program resolved at catalog link time
-	// from scripts/<unitname>.cob. Catalog compilation rejects a missing,
-	// unreadable, malformed, nil, or empty program [04 R-COB-04 §8]. Deliberately
+	// from scripts/<unitname>.cob. Missing, unreadable, malformed, nil, or empty
+	// programs remain nil with catalog warnings; required preflight and creation
+	// refuse them [04 R-COB-04 §8], DESIGN_CONTENT_VFS §3.4 C9. Deliberately
 	// absent from writeUnitCanonical: the hash is the FBI record's identity, and
 	// this value comes from a different asset with its own provenance.
 	Script           *cob.Program
