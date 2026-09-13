@@ -60,9 +60,12 @@ func (b *battleSession) ensurePostBattleController() {
 		return
 	}
 	cfg := session.PostBattleConfig{
-		Kind:              session.PostBattleSkirmish,
-		MissionIndex:      -1,
-		Windowed:          true,
+		Kind:         session.PostBattleSkirmish,
+		MissionIndex: -1,
+		// The portable movie player also supports windowed presentation.
+		// Admit the retail movie route independently of host window mode
+		// [08 R-CAMP-01 §6]; individual absent files skip in the shell.
+		EndingMedia:       b.shell != nil,
 		CampaignCDOK:      true, // no CD backend exists, so state 8 cannot strand
 		ProgressCommitted: false,
 	}
@@ -236,6 +239,7 @@ func (b *battleSession) consumePostBattleEffects(now uint32, cl *client.Client) 
 		return
 	}
 	effects := b.postBattle.Effects()
+	var movies []string
 	for b.postBattleEffectPos < len(effects) {
 		effect := effects[b.postBattleEffectPos]
 		b.postBattleEffectPos++
@@ -273,8 +277,17 @@ func (b *battleSession) consumePostBattleEffects(now uint32, cl *client.Client) 
 			b.advancePostBattleGlamourFade(now, cl)
 		case session.PostBattleEffectFadeOutStep:
 			b.postBattleFadeLevels = append(b.postBattleFadeLevels, effect.Level)
+		case session.PostBattleEffectEndingMovie:
+			movies = append(movies, "data/"+effect.Resource)
 		case session.PostBattleEffectRouteRouter:
+			// Teardown clears b.shell. Keep the returning shell and start its
+			// sequence only after battle resources and audio are retired.
+			shell := b.shell
 			b.routePostBattleRouter(cl)
+			if shell != nil && len(movies) > 0 {
+				reportRetailMessageError(shell.startMovieSequence(cl, movies...))
+			}
+			return
 		}
 	}
 	if b.sess != nil && b.sess.Audio != nil {

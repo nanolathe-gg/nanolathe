@@ -132,6 +132,13 @@ a pending outcome does not replace that bit. The frontend return retains the
 retired session's bank after teardown, while starting a new campaign remains
 the reset owner [08 R-CAMP-01 §7] [08 R-CAMP-01 §8].
 
+The postbattle adapter admits ending media for the portable shell, including
+windowed playback. After the existing final-victory/`nomovie` decision and
+results fade, it collects the controller's ordered ending and credits requests,
+tears down the battle, then starts that sequence in the frontend movie player.
+Defeats, campaigns with a successor, and `nomovie` missions retain their
+existing ENDMSN/glamour route [08 R-CAMP-01 §6].
+
 **The state machine.** `State` is `0..7` with one dispatch method,
 `Session.Advance`, that runs exactly one state operation per call. The
 transition graph is a fixed matrix: `0→2`, `1→2`, `2→{3,4,5}`, `3→5`, `4→5`,

@@ -90,7 +90,9 @@ type menuAssets struct {
 // kept in ui.Panel in retail_menu.go and is reset whenever retail
 // opens a new .GUI panel.
 type gameShell struct {
-	intro *introPlayback
+	intro               *introPlayback
+	startupMoviePending bool
+	movieQueue          []string
 
 	opts Options
 	cs   *contentSet
@@ -406,6 +408,7 @@ func runGameShell(opts Options, cs *contentSet) error {
 		}
 	}
 	fmt.Fprintf(os.Stderr, "nanolathe: retail frontend: %d skirmish maps\n", len(maps))
+	shell.queueStartupMovie()
 	defer shell.closeIntro(cl)
 	return ebitenapp.Run(cl, rendererMode(shell.opts), shell.windowOptions())
 }
@@ -740,6 +743,11 @@ func (g *gameShell) panelWindowNeedsUnder(mode shellMode) bool {
 }
 
 func (g *gameShell) step(delta float64, cl *client.Client) {
+	if g.startupMoviePending {
+		g.startupMoviePending = false
+		reportRetailMessageError(g.startMovie(cl, startupMoviePath, false))
+		return
+	}
 	if g.intro != nil {
 		g.stepIntro(delta, cl)
 		return
@@ -1023,6 +1031,11 @@ func retailFold(c byte) byte {
 }
 
 func (g *gameShell) draw(c *client.Client, _ client.UIFrame) {
+	if g.startupMoviePending {
+		w, h := c.Size()
+		c.UIFillRect(0, 0, w, h, 0)
+		return
+	}
 	if g.intro != nil {
 		g.drawIntro(c)
 		return

@@ -230,6 +230,78 @@ type introCursorPlayer struct {
 	closed   bool
 }
 
+// The requested startup policy runs once at ordinary interactive entry and
+// leaves direct battle entry alone [07 R-FE-01 §3].
+func TestStartupMovieEntry(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts Options
+		want bool
+	}{
+		{"menu", Options{}, true},
+		{"map", Options{Map: "authored-map"}, false},
+		{"save", Options{LoadSave: "authored-save"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := &gameShell{opts: tc.opts}
+			g.queueStartupMovie()
+			if g.startupMoviePending != tc.want || g.intro != nil {
+				t.Fatal("startup selection opened playback before the platform was ready")
+			}
+		})
+	}
+}
+
+func TestStartupMovieRetailAudioAndReturn(t *testing.T) {
+	g, _, cl := retailAssetShell(t)
+	if _, err := g.cs.fs.Stat(startupMoviePath); err != nil {
+		t.Skip("optional original startup movie absent")
+	}
+	previous := clPtr
+	clPtr = cl
+	t.Cleanup(func() { clPtr = previous })
+	oldOutput := audio.GlobalOutput()
+	audio.SetGlobalOutput(nil)
+	t.Cleanup(func() { audio.SetGlobalOutput(oldOutput) })
+	g.queueStartupMovie()
+	// The backend becomes available after shell construction. Its first update
+	// must use that device, while Shift must not repeat the startup logo.
+	output := &startupMovieOutput{}
+	audio.SetGlobalOutput(output)
+	cl.SetFocused(true)
+	cl.Input().Kbd.SetKey(input.KeyShift, true)
+	g.step(0, cl)
+	t.Cleanup(func() { g.closeIntro(cl) })
+	if g.startupMoviePending || g.intro == nil || g.intro.logical != startupMoviePath || g.intro.repeat {
+		t.Fatal("startup did not enter the single-pass logo")
+	}
+	if output.sample == nil || output.sample.Alias != startupMoviePath || len(output.sample.Data) == 0 || output.loops != 0 {
+		t.Fatal("startup soundtrack missing or overlapped by menu music")
+	}
+	cl.Input().EnqueueToken(input.Token{Kind: input.TokenEdit, Key: input.KeyEscape})
+	g.step(0, cl)
+	if g.intro != nil || !output.player.closed || !g.menuBGMPending || g.frontend.Mode != modeMenuMain {
+		t.Fatal("startup skip did not close sound and restore the menu")
+	}
+	g.step(0, cl)
+	g.openMenu(modeMenuMain)
+	g.step(0, cl)
+	if g.intro != nil || g.startupMoviePending {
+		t.Fatal("returning to the main menu replayed startup")
+	}
+}
+
+type startupMovieOutput struct {
+	shellLoopOutput
+	sample *audio.Sample
+	player introCursorPlayer
+}
+
+func (o *startupMovieOutput) NewMoviePlayer(sample *audio.Sample) (audio.MusicPlayer, error) {
+	o.sample = sample
+	return &o.player, nil
+}
+
 func (*introCursorPlayer) Play()                 {}
 func (*introCursorPlayer) Pause()                {}
 func (*introCursorPlayer) IsPlaying() bool       { return true }

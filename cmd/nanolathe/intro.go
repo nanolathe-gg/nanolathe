@@ -13,10 +13,13 @@ import (
 )
 
 const introPath = "data/2.zrb"
+const startupMoviePath = "data/1.zrb"
+const creditsMoviePath = "data/5.zrb"
 
 // introPlayback belongs to the shell, outside the authoritative tick. The
 // decoder owns indexed frames; the device owns a finite soundtrack [fmt zrb].
 type introPlayback struct {
+	logical        string
 	data           []byte
 	decoder        *zrb.Decoder
 	frame          *zrb.Frame
@@ -33,10 +36,58 @@ type movieOutput interface {
 	NewMoviePlayer(*audio.Sample) (audio.MusicPlayer, error)
 }
 
-// startIntro resolves the original resource through the normal mounted VFS.
+// queueStartupMovie arms only the normal interactive entry. It runs after
+// the platform installs its audio output, before menu music or input service.
+// The logo is Data/1.zrb [07 R-FE-01 §3]; playing it every normal launch in
+// windowed mode as well is the requested portable startup policy.
+func (g *gameShell) queueStartupMovie() {
+	g.startupMoviePending = g.opts.Map == "" && g.opts.LoadSave == ""
+}
+
+func (g *gameShell) startIntro(cl *client.Client) error {
+	repeat := cl != nil && cl.Input().Kbd.HasShift()
+	return g.startMovie(cl, introPath, repeat)
+}
+
+// startMovieSequence preserves the router's ordered reels [08 R-OOS-01 §4].
+func (g *gameShell) startMovieSequence(cl *client.Client, paths ...string) error {
+	if cl == nil || g.intro != nil {
+		return nil
+	}
+	g.movieQueue = append([]string(nil), paths...)
+	return g.startNextMovie(cl)
+}
+
+func (g *gameShell) startNextMovie(cl *client.Client) error {
+	for len(g.movieQueue) > 0 {
+		logical := g.movieQueue[0]
+		g.movieQueue = g.movieQueue[1:]
+		if err := g.openMovie(cl, logical, false); err != nil {
+			g.movieQueue = nil
+			return g.movieFailure(logical, err)
+		}
+		if g.intro != nil {
+			return nil
+		}
+		// Missing files skip individually, including a missing ending before
+		// the common credits reel [08 R-OOS-01 §4].
+	}
+	g.movieQueue = nil
+	g.openMenu(modeMenuMain)
+	return nil
+}
+
+func (g *gameShell) startMovie(cl *client.Client, logical string, repeat bool) error {
+	if err := g.openMovie(cl, logical, repeat); err != nil {
+		return g.movieFailure(logical, err)
+	}
+	return nil
+}
+
+// openMovie resolves a cinematic through the normal mounted VFS.
 // Windowed playback is a host adaptation: the original fullscreen/CD checks
 // are obsolete here; sequencer/input behavior follows [08 R-OOS-01 §4].
-func (g *gameShell) startIntro(cl *client.Client) error {
+func (g *gameShell) openMovie(cl *client.Client, logical string, repeat bool) error {
 	if g.intro != nil || cl == nil {
 		return nil
 	}
@@ -49,19 +100,19 @@ func (g *gameShell) startIntro(cl *client.Client) error {
 		}
 	}
 	cl.Input().DrainTokens()
-	data, err := g.cs.fs.ReadFileLimit(introPath, 256<<20)
+	data, err := g.cs.fs.ReadFileLimit(logical, 256<<20)
 	if errors.Is(err, vfs.ErrNotFound) {
 		g.armMenuBGM()
 		return nil // Missing cinematics are silently skipped [08 R-OOS-01 §4].
 	}
 	if err != nil {
-		return g.introFailure(err)
+		return err
 	}
 	d, err := zrb.New(data)
 	if err != nil {
-		return g.introFailure(err)
+		return err
 	}
-	m := &introPlayback{data: data, decoder: d, cursors: cl.Cursors(), repeat: cl.Input().Kbd.HasShift()}
+	m := &introPlayback{logical: logical, data: data, decoder: d, cursors: cl.Cursors(), repeat: repeat}
 	// A single complete PCM track is small compared with decoded movie pixels.
 	// Decode audio alone up front; video remains one mutable indexed frame.
 	if _, available := audio.GlobalOutput().(movieOutput); available {
@@ -71,9 +122,9 @@ func (g *gameShell) startIntro(cl *client.Client) error {
 			}
 			pcm, decodeErr := d.DecodeAudio(track)
 			if decodeErr != nil {
-				return g.introFailure(decodeErr)
+				return decodeErr
 			}
-			m.sample = &audio.Sample{Alias: introPath, Container: "raw", AudioFormat: 1,
+			m.sample = &audio.Sample{Alias: logical, Container: "raw", AudioFormat: 1,
 				SampleRate: uint32(info.SampleRate), Channels: uint16(info.Channels),
 				BitsPerSample: 16, BlockAlign: uint16(info.Channels * 2),
 				ByteRate: uint32(info.SampleRate * info.Channels * 2), Data: pcm}
@@ -81,7 +132,7 @@ func (g *gameShell) startIntro(cl *client.Client) error {
 		}
 	}
 	if err := m.begin(); err != nil {
-		return g.introFailure(err)
+		return err
 	}
 	g.intro = m
 	if p := g.activePanel(); p != nil {
@@ -111,9 +162,9 @@ func (m *introPlayback) begin() error {
 	return nil
 }
 
-func (g *gameShell) introFailure(cause error) error {
+func (g *gameShell) movieFailure(logical string, cause error) error {
 	g.armMenuBGM()
-	err := retailFrontendAssetError(g.cs, "play intro", introPath, "Smacker 2 movie and PCM soundtrack", cause)
+	err := retailFrontendAssetError(g.cs, "play movie", logical, "Smacker 2 movie and PCM soundtrack", cause)
 	return g.showRetailMessage(err.Error())
 }
 
@@ -140,9 +191,11 @@ func introSkip(in *input.State) (skip, quit bool) {
 func (g *gameShell) stepIntro(delta float64, cl *client.Client) {
 	m := g.intro
 	if skip, quit := introSkip(cl.Input()); skip {
-		g.closeIntro(cl)
 		if quit {
+			g.closeIntro(cl)
 			cl.RequestExit()
+		} else {
+			g.finishMovie(cl)
 		}
 		return
 	}
@@ -170,7 +223,7 @@ func (g *gameShell) stepIntro(delta float64, cl *client.Client) {
 	// a rounded device cursor may never reach that extra deadline [08 R-OOS-01 §4].
 	if m.frame.Index+1 == m.decoder.FrameCount {
 		if !m.repeat {
-			g.closeIntro(cl)
+			g.finishMovie(cl)
 			return
 		}
 		if m.player != nil {
@@ -184,7 +237,7 @@ func (g *gameShell) stepIntro(delta float64, cl *client.Client) {
 		}
 		if err != nil {
 			g.closeIntro(cl)
-			reportRetailMessageError(g.introFailure(err))
+			reportRetailMessageError(g.movieFailure(m.logical, err))
 			return
 		}
 		m.installFrame(cl)
@@ -196,7 +249,7 @@ func (g *gameShell) stepIntro(delta float64, cl *client.Client) {
 	if m.player != nil {
 		if err := m.player.Err(); err != nil {
 			g.closeIntro(cl)
-			reportRetailMessageError(g.introFailure(err))
+			reportRetailMessageError(g.movieFailure(m.logical, err))
 			return
 		}
 		if !m.player.Completed() {
@@ -212,7 +265,7 @@ func (g *gameShell) stepIntro(delta float64, cl *client.Client) {
 	f, err := m.decoder.Next()
 	if err != nil {
 		g.closeIntro(cl)
-		reportRetailMessageError(g.introFailure(err))
+		reportRetailMessageError(g.movieFailure(m.logical, err))
 		return
 	}
 	m.frame = f
@@ -264,18 +317,32 @@ func (g *gameShell) drawIntro(cl *client.Client) {
 }
 
 func (g *gameShell) closeIntro(cl *client.Client) {
+	g.movieQueue = nil
+	if g.intro == nil {
+		return
+	}
+	g.releaseMovie(cl)
+	g.openMenu(modeMenuMain)
+}
+
+func (g *gameShell) finishMovie(cl *client.Client) {
+	g.releaseMovie(cl)
+	reportRetailMessageError(g.startNextMovie(cl))
+}
+
+// Release one reel without rebuilding the menu or starting BGM between reels.
+func (g *gameShell) releaseMovie(cl *client.Client) {
 	if g.intro == nil {
 		return
 	}
 	m := g.intro
 	if m.player != nil {
 		if err := m.player.Close(); err != nil {
-			reportRetailMessageError(fmt.Errorf("nanolathe: close intro audio: logical path %s, providers searched [PCM device], expected stopped soundtrack: %w", introPath, err))
+			reportRetailMessageError(fmt.Errorf("nanolathe: close movie audio: logical path %s, providers searched [PCM device], expected stopped soundtrack: %w", m.logical, err))
 		}
 	}
 	g.intro = nil
 	cl.SetCursors(m.cursors)
 	cl.SetMoviePalette(nil)
 	cl.Input().DrainTokens()
-	g.openMenu(modeMenuMain)
 }

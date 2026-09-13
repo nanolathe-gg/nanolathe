@@ -1585,8 +1585,23 @@ excluded with multiplayer `[07 R-CAM-01 §6]` `[07 R-FE-02 §12]`.
 * **The multiplayer lobby shell.** Out of scope for the whole engine; the
   single-player skirmish setup screen is a different surface and is implemented
   `[07 §12]` `[07 R-FE-02 §1]`.
-* **The front-end movie stage.** Startup goes straight to `MAINMENU`; startup
-  movies, capture, ending movies and the `CDCHECK` gate remain excluded.
+* **The front-end movie stage.** Normal launches play the original startup
+  logo `Data/1.zrb` once, then open `MAINMENU` `[07 R-FE-01 §3]`. Playback
+  is deferred to the first shell update so the platform PCM device is ready;
+  the pending surface is black and menu music starts only after completion.
+  Direct map and saved-game launches bypass the logo. The requested portable
+  startup policy plays the logo on every normal launch, including windowed
+  launches; it does not add retail's one-install `PlayMovie` preference or
+  automatically append the full intro. Holding Shift at startup does not
+  request repeat. Capture and the `CDCHECK` gate remain excluded.
+  The authored main-menu `Credits` callback plays `Data/5.zrb` once.
+  Campaign victory with no next authored mission and `nomovie=0` routes after
+  the results fade to `Data/3.zrb` for local side zero (Arm), otherwise
+  `Data/4.zrb` (Core), then `Data/5.zrb` [08 R-CAMP-01 §6]. These movies use
+  the same portable windowed playback policy as Intro. Battle teardown and
+  campaign progress retention precede the movie sequence; the menu appears
+  only after the sequence. Missing reels skip individually. A character skips
+  the current reel; Alt+F4 cancels the sequence and quits [08 R-OOS-01 §4].
   Main-menu `INTRO` resolves `Data/2.zrb` from the mounted content and plays
   it through `formats/zrb` and the existing desktop PCM device. The shell
   stops ordinary sound, narration and CD music, drains the activation input,

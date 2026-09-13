@@ -191,3 +191,32 @@ func TestPostBattleFinalWinEndingMovieSideMapping(t *testing.T) {
 		}
 	}
 }
+
+// Only a final campaign victory with movies enabled bypasses ENDMSN for the
+// closing reels [08 R-CAMP-01 §6].
+func TestPostBattleEndingAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		kind          PostBattleSessionKind
+		result        string
+		next, nomovie bool
+	}{
+		{"defeat", PostBattleCampaign, "defeat", false, false},
+		{"successor", PostBattleCampaign, "victory", true, false},
+		{"nomovie", PostBattleCampaign, "victory", false, true},
+		{"skirmish", PostBattleSkirmish, "victory", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewPostBattleController(frame.ResultView{Ended: true, Kind: tc.result}, PostBattleConfig{Kind: tc.kind, HasNext: tc.next, Nomovie: tc.nomovie, EndingMedia: true, CampaignCDOK: true})
+			advanceToEndMission(t, c, false)
+			if c.Routed() || c.State() != PostBattleEndMission {
+				t.Fatal("ordinary results routed to ending movies")
+			}
+			for _, e := range c.Effects() {
+				if e.Kind == PostBattleEffectEndingMovie {
+					t.Fatal("ineligible result emitted an ending reel")
+				}
+			}
+		})
+	}
+}

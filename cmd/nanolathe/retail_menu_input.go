@@ -286,6 +286,8 @@ func (g *gameShell) activateGadget(name string) {
 		switch name {
 		case "INTRO":
 			reportRetailMessageError(g.startIntro(clPtr))
+		case "Credits":
+			reportRetailMessageError(g.startMovieSequence(clPtr, creditsMoviePath))
 		case "EXIT":
 			// Retail MAINMENU's EXIT callback enters frontend state 8 and
 			// closes the process; it does not open the unrelated YESORNO
