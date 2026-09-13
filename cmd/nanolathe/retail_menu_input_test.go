@@ -10,6 +10,24 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/ui"
 )
 
+// The lobby callback writes the campaign reader as well as the setup record
+// [08 "Skirmish configuration"], including the Hard-to-Easy wrap.
+func TestSkirmishDifficultyCallbackUpdatesCampaignSelector(t *testing.T) {
+	w := &gui.Window{Gadgets: []gui.Gadget{{Kind: gui.KindPanel}, {Kind: gui.KindButton, Name: "Difficulty", Stages: 3}}}
+	g := &gameShell{frontend: ui.NewFrontend(modeMenuSingle), missionDifficultyValue: 2,
+		assets: &menuAssets{panel: map[shellMode]*retailPanelAssets{modeMenuSkirmish: {window: w}}}}
+	g.openMenu(modeMenuSkirmish)
+	if g.missionDifficulty() != 0 || g.activePanel() == nil {
+		t.Fatal("skirmish entry did not adopt lobby difficulty")
+	}
+	for _, want := range []int{1, 2, 0} {
+		g.activateGadget("Difficulty")
+		if g.setup.Difficulty != want || g.missionDifficulty() != want {
+			t.Fatalf("difficulty setup/campaign = %d/%d, want %d", g.setup.Difficulty, g.missionDifficulty(), want)
+		}
+	}
+}
+
 func editorMenuShell(t *testing.T) (*gameShell, *ui.Panel, *client.Client) {
 	t.Helper()
 	window := &gui.Window{Gadgets: []gui.Gadget{

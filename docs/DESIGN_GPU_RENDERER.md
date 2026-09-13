@@ -80,6 +80,7 @@ classic executor) and by `internal/platform/gpurender` (modern executor).
   | `Glyphs` | FNT reference, glyph run, baseline, colour byte | the FNT blitter `[03 §7.1]` |
   | `Fill` | rect, index, style (`Solid`, `Outline`, `LitRect(row)`, `ShadeRect(row)`) | `fillIndexedRect`, `frameIndexedRect`, the UI light/shade rects |
   | `Line` | two endpoints, index | `drawIndexedLine` |
+  | `Lens` | projected center, view scale, viewport clip, transparent key | ordered snapshot refraction through the generated displacement map |
   | `Points` | packed `(x, y, index)` triples | nanolathe particles `[03 §5.5]`, flash discs, sprinkle 2×2 fills |
   | `Model` | the projected face list of one composed subject (§2.3), origin, key mode, flags | the model rasterizer and its commit |
   | `Fog` | the op list `render.BuildFogOpsWindowInto` produced, already clipped | the three fog fills and the fog GAF blit `[03 §3.3]` |
@@ -318,6 +319,21 @@ hidden Ebitengine loop, then reads pixels for the PNG. Explicit
 `--shot-renderer both` also composes the independent classic reference and
 writes both images and their diff. Readback and PNG encoding are capture costs,
 excluded from presentation timing (§6). The diff tool is `tools/framediff`.
+
+The render-type-2 `Lens` is a destination reader at its exact projectile-list
+position [03 R-FX-01 §4]. Both executors sample a snapshot containing earlier
+commands; later lenses see earlier lens output. Its fixed map is shared immutable
+data. Geometry follows the existing view-scale policy, with no age deformation
+or light/alpha-table capability gate. Safe sampling computes only admitted output
+cells; the verified map's changed samples remain inside the viewport.
+
+The command carries the consumer's transparent key explicitly. The producer uses
+zero under SPEC_CONFLICTS SC18 and retains a `TODO(question)` for retail's
+uninitialized key. Classic compares indexed source bytes exactly. Modern's
+accumulated surface is RGBA: its explicit approximation compares sampled RGB to
+the active display palette's key colour. Duplicate palette colours and enhanced
+colours do not retain original index identity. This limitation changes no lens
+geometry and does not justify introducing an unverified retail key constant.
 
 ## 3. Contracts — C-G1 … C-G11
 

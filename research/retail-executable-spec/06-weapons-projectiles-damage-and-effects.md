@@ -5707,6 +5707,17 @@ indexed by the authored byte.
 | 6 | `shadow` as type 1, then the model with the record's orientation words verbatim `{roll word, yaw, pitch}` (no `0x8000` offsets) | 4: the `dropped` bombs |
 | 7 | two passes of jagged segments from the tail point to the current point in `palette(color)`, single stroke (`color2` is authored on both stock lightning weapons and **not read**): segment count `n = trunc(dist / 5)` where `dist` is the truncated 16.16 length of the tail→head vector: `nFixed = (dist << 16) / 0x50000` (64-bit, a 16.16 count) and `n` is its whole part; when `n` is zero nothing is drawn; each pass steps `(delta << 16) / nFixed` per axis (64-bit truncating divisions), and after each step **each of the three axes** receives `crtRand() · 11 / 0x8000 − 5` whole world units added to the stepped point's high word — **three CRT draws per generated point, `2·n` points**, so `6·n` draws per lightning record per frame; each jittered point is the end of one segment and the start of the next | 2: `lightning`, `armlatnk_weapon` |
 
+**Established — beam/lightning palette identity.** `palette(color)` in
+cases 0 and 7 is the live GUI-to-display semantic map built from GUIPAL.PAL
+into the active display palette. The rasterizer consumes its physical result
+without another lookup. The authored secondary byte is tested for zero before
+mapping; a nonzero secondary mapping to physical zero still draws its stroke.
+
+**Established, bounded installed-content observation:** MINDGUN is authored,
+but no mounted unit file references it in the reference install. Its lens
+construction and pixel mechanics are established in [03 R-FX-01 §4]; the
+transparent-key initialization remains that section's explicit Unknown.
+
 **Established — the families are not the types.** `rendertype` is an authored
 byte with no default other than 0 and no relationship enforced against the
 behavior flags; the table's right column is what stock content does, not a
@@ -5809,7 +5820,7 @@ no authoritative state (`[01 §7]`).
 
 **Established fact:** The simulation publishes model/effect/sound identifiers, impact positions, feature/fire state, and camera-follow state. The renderer consumes those events later. The explosion pool (300, dropping) and the effect strips (401, evicting) are the two presentation containers those events land in; `[R-WFX-01 §2]` and `[R-WFX-01 §5]` name what each weapon event puts where.
 
-**Unknown:** the lens blitter's pixel mechanics for render type 2, the flash and frame blitters' pixel rules, and 3DO model orientation from the angle blocks are doc 03's (`[03 §5.2]`, `[03 §5.5]`, `[03 §4.4]`); the render-type-3 angle block and the null-handle sound case are the two residuals listed in the tail.
+**Ownership:** the lens blitter's pixel mechanics for render type 2 are established in [03 R-FX-01 §4], with its transparent key an explicit Unknown. The flash and frame blitters' pixel rules and 3DO model orientation from the angle blocks are doc 03's (`[03 §5.2]`, `[03 §5.5]`, `[03 §4.4]`); the render-type-3 angle block and the null-handle sound case are the two residuals listed in the tail.
 
 ## 14. Evidence basis
 

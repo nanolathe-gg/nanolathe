@@ -32,7 +32,10 @@ func skipAfterDeviceLoop(t *testing.T) {
 // goroutine. macOS graphics backends reject RunGame from a testing worker
 // goroutine; ordinary tests still do no device work unless explicitly opted in.
 func TestMain(m *testing.M) {
-	if os.Getenv("NANOLATHE_GPU_DEVICE_TEST") == "1" {
+	if os.Getenv("NANOLATHE_LENS_PROFILE_FRAMES") != "" {
+		deviceFixtureLoop = true
+		deviceFixtureResult = runLensFrozenProfile()
+	} else if os.Getenv("NANOLATHE_GPU_DEVICE_TEST") == "1" {
 		deviceFixtureLoop = true
 		game := &modelFixtureGame{}
 		ebiten.SetWindowVisible(false)
@@ -78,6 +81,7 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 	// its own renderer, draws its own list and reads the composite back. The
 	// model lane's are in model_direct_test.go.
 	for _, check := range []func() error{
+		checkLensDevicePixels,
 		checkStrategicIconDevicePixels,
 		checkMixedStrategicIconBatch,
 		checkPausedCompositePixels,

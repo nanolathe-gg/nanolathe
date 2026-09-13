@@ -626,6 +626,9 @@ func (g *gameShell) openMenu(mode shellMode) {
 				g.applyRetailMissionLayout(window)
 			}
 			if mode == modeMenuSkirmish {
+				// Screen entry copies the lobby selector into the shared session
+				// word before building its controls [08 "Skirmish configuration"].
+				g.missionDifficultyValue = g.setup.Difficulty
 				g.installSkirmishDynamicGadgets(window)
 			}
 			// The builder sees runtime-appended controls and resolves all

@@ -36,6 +36,7 @@ func (c *Client) SetAudioService(a *audio.Service) {
 	c.audioService = a
 	if a != nil {
 		a.Init(nil)
+		a.SetAcknowledgementClock(func() uint64 { return c.audioOpportunity })
 	}
 	if a != nil && a.Queue != nil {
 		a.Queue.OnCaption(func(line string, _ audio.Slot, unit pool.Handle) {
@@ -70,11 +71,13 @@ func (c *Client) AudioViewport() audio.Viewport {
 	return c.audioService.Viewport()
 }
 
-// TickAudio drains the queue once per rendered frame outside simulation
-// [03 §8.3] C18 I6. At most one voice is audible per 30 frames; silent
+// TickAudio applies retained events on every presentation outside simulation.
+// The Nanolathe host admits at most one queue pop per 30 Hz host update;
+// arbitration still uses the committed global tick [03 §8.3] C18 I6.
+// At most one voice is audible per 30 global ticks; silent
 // resolves within the window still print speech but play no sound; full-queue
 // eviction resolves the last entry silently before inserting [03 §8.3] C16.
-// It also ticks the music controller via the MCI poll [03 §8.4].
+// It evaluates battle intensity; the host pump services music timers/media.
 // The queue's OnPlay variant draw [03 §8.3] C17 is played via PCM with
 // volume/pan from the positional math [03 §8.3].
 //
@@ -101,10 +104,14 @@ func (c *Client) TickAudio() {
 	}
 	c.enqueueStatusEvents(committedTick, c.committedEvents)
 	if c.audioService != nil {
-		// One drain per rendered frame keeps the queue's single pop and the MCI
-		// poll on the presentation cadence [03 §8.3] C18 [03 §8.4]; the
-		// accumulated positional cues are played inside it, in raise order.
+		// Event delivery is independent of the queue-pop host policy; no
+		// repeated draw or paused simulation can discard committed activity.
 		c.audioService.DrainEvents(committedTick, c.committedEvents)
+		if c.buffer != nil {
+			if current := c.buffer.Current(); current != nil && int(current.Selection.LocalPlayer) < len(current.Players) {
+				c.audioService.UpdateBattleMusic(current.Players[current.Selection.LocalPlayer].LiveUnits, current.Result.Ended)
+			}
+		}
 	}
 }
 

@@ -2241,6 +2241,9 @@ func (s *Service) AcceptDamage(w *units.World, tick uint32, in DamageInput) Dama
 		victim.EngagementTarget = in.Attacker
 		if rawAttacker := w.RawUnitRecord(in.Attacker); rawAttacker != nil {
 			victim.LastDamageSide = rawAttacker.Owner
+			if s.DamageActivity != nil {
+				s.DamageActivity(victim, rawAttacker, tick)
+			}
 		}
 	}
 

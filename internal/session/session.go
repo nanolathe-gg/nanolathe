@@ -1036,6 +1036,7 @@ func (s *Session) RegisterAll() {
 			// the other victim teardown records [06 §12.1]. Packet-aware combat
 			// paths may call RecordDeathStatistics with the stored attacker side.
 			s.recordFinalizedDeathStatistics(cause, u)
+			s.emitDeathMusicIntensity(u)
 			// Commander identity is owner/side data, not the broad authored
 			// Commander convenience flag. The owner transition is deferred until
 			// FinalizeDeath has decremented the live counter [08 R-SKIR-01 §3].

@@ -55,7 +55,6 @@ func TestDispatchProjectileViewAllAuthoredGAFFamilies(t *testing.T) {
 		base bool
 	}{
 		{RenderTypeBaseSpriteModel, "base-sprite+model", true},
-		{RenderTypeGlobalGAF, "global-gaf", false},
 		{RenderTypeBaseModelDistinct, "base+model-distinct", true},
 		{RenderTypeSelectorGAF, "selector-gaf", false},
 		{RenderTypeLifetimeGAF, "lifetime-gaf", false},
@@ -84,7 +83,7 @@ func TestDispatchProjectileViewAllAuthoredGAFFamilies(t *testing.T) {
 func TestDispatchProjectileViewMissingAuthoredDataSuppresses(t *testing.T) {
 	base := frame.ProjectileView{Model: "peewee.3do", Selector: 2, CreationTick: 100, ExpiryTick: 120, Lifetime: 20}
 	missing := ProjectileDispatchOptions{FrameCount: testFrameCount, ResolveGAF: func(ProjectileGAFRequest) (*formats.GAFFrame, bool) { return nil, false }}
-	for _, rt := range []int32{RenderTypeBaseSpriteModel, RenderTypeGlobalGAF, RenderTypeBaseModelDistinct, RenderTypeSelectorGAF, RenderTypeLifetimeGAF, RenderTypeRecordOrientation} {
+	for _, rt := range []int32{RenderTypeBaseSpriteModel, RenderTypeBaseModelDistinct, RenderTypeSelectorGAF, RenderTypeLifetimeGAF, RenderTypeRecordOrientation} {
 		v := base
 		v.RenderType = rt
 		if d := DispatchProjectileView(v, 105, missing); !d.Suppressed {
@@ -187,5 +186,17 @@ func TestBuildProjectileDrawsNilVisibilityFailsClosed(t *testing.T) {
 	draws, aborted := BuildProjectileDraws(views, 1, nil, nil, opts)
 	if aborted || len(draws) != 0 {
 		t.Fatalf("nil visibility must fail closed: draws=%v aborted=%v", draws, aborted)
+	}
+}
+
+func TestLensDispatchNeedsNoArtOrAge(t *testing.T) {
+	for _, now := range []uint32{0, 100, 999} {
+		d := DispatchProjectileView(frame.ProjectileView{Handle: 1, RenderType: RenderTypeGlobalGAF}, now, ProjectileDispatchOptions{ResolveGAF: func(ProjectileGAFRequest) (*formats.GAFFrame, bool) {
+			t.Fatal("lens looked up GAF art")
+			return nil, false
+		}})
+		if d.Suppressed || d.Kind != "lens" || d.FrameAsset != nil {
+			t.Fatalf("lens dispatch: %+v", d)
+		}
 	}
 }

@@ -253,14 +253,14 @@ func TestSelectionChromeKeepsFogWhenNoUnitBracketIsEmitted(t *testing.T) {
 // emits no footprint bracket — is TestSelectionChromeKeepsFogWhenNoUnitBracketIsEmitted
 // above.
 
-func TestUnresolvedGlobalGAFDoesNotAbortOtherProjectiles(t *testing.T) {
-	c := &Client{width: 8, height: 8, indexed: make([]uint8, 64), cam: &camera.Camera{}}
+func TestLensDoesNotNeedPublishedGAFArt(t *testing.T) {
+	c := &Client{width: 640, height: 480, indexed: make([]uint8, 640*480), cam: &camera.Camera{}}
 	views := []frame.ProjectileView{
-		{Handle: 1, RenderType: render.RenderTypeGlobalGAF, AssetID: "unpublished"},
+		{Handle: 1, X: numeric.FixedFromInt(160), Z: numeric.FixedFromInt(64), RenderType: render.RenderTypeGlobalGAF, AssetID: "unpublished"},
 		{Handle: 2, RenderType: render.RenderTypeBeam, PrimaryColor: 7, HasPrimaryColor: true},
 	}
 	stats := c.DrawProjectileViews(views, 1, func(frame.ProjectileView) bool { return true }, func(frame.ProjectileView) bool { return true }, c.projectileDispatchOptions())
 	if stats.Aborted {
-		t.Fatal("unresolved global GAF aborted unrelated projectile dispatch")
+		t.Fatal("lens without GAF art aborted unrelated projectile dispatch")
 	}
 }

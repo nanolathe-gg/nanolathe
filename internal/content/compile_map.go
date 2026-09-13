@@ -4,6 +4,7 @@ package content
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -336,12 +337,20 @@ func CompileMaps(fs vfs.FSOps) (map[string]*MapHeader, error) {
 // retail install it dominates a whole-install compile; it is the only family
 // the loading screen can show advancing rather than completing.
 func compileMapsWithProgress(fs vfs.FSOps, report Progress) (map[string]*MapHeader, error) {
+	maps, _, err := compileMapsWithDiagnostics(fs, report)
+	return maps, err
+}
+
+// compileMapsWithDiagnostics retains per-candidate rejection diagnostics for
+// the catalog. A parsed OTA without GlobalHeader is a nonfatal discovery miss,
+// before any terrain access [02 R-MAP-01 §2][02 R-MAP-01 §9].
+func compileMapsWithDiagnostics(fs vfs.FSOps, report Progress) (map[string]*MapHeader, []string, error) {
 	if fs == nil {
-		return nil, fmt.Errorf("content: nil VFS")
+		return nil, nil, fmt.Errorf("content: nil VFS")
 	}
 	entries, err := fs.ReadDir("maps")
 	if err != nil {
-		return nil, fmt.Errorf("content: maps: %w", err)
+		return nil, nil, fmt.Errorf("content: maps: %w", err)
 	}
 	// ReadDir is sorted by Path [vfs.ReadDir] (I1). Build paired sets.
 	otaByBase := make(map[string]vfs.EntryInfo) // base -> entry
@@ -368,6 +377,7 @@ func compileMapsWithProgress(fs vfs.FSOps, report Progress) (map[string]*MapHead
 	}
 	sort.Strings(bases)
 	result := make(map[string]*MapHeader, len(bases))
+	var warnings []string
 	for i, base := range bases {
 		if len(bases) != 0 {
 			report.Report(FamilyMaps, i*100/len(bases))
@@ -379,23 +389,29 @@ func compileMapsWithProgress(fs vfs.FSOps, report Progress) (map[string]*MapHead
 		otaProv := ProvenanceFrom(otaEntry)
 		tntProv := ProvenanceFrom(tntEntry)
 		// OTA via formats/ota.go [PLAN 02].
-		otaData, err := fs.ReadFileLimit(otaLogical, 1<<20)
+		// The parser owns the host byte bound; there is no separate retail OTA
+		// size gate [02 R-MALF-01 §4].
+		otaData, err := fs.ReadFileLimit(otaLogical, int64(formats.DefaultTDFLimits().MaxBytes))
 		if err != nil {
-			return nil, fmt.Errorf("content: %s: %w", otaLogical, err)
+			return nil, warnings, fmt.Errorf("content: %s: %w", otaLogical, err)
 		}
 		ota, err := formats.LoadOTA(otaData)
+		if errors.Is(err, formats.ErrMissingOTAHeader) {
+			warnings = append(warnings, fmt.Sprintf("nanolathe: map rejected: logical path %s, providers searched [%s], expected OTA GlobalHeader: %v", otaLogical, otaProv.ProviderID, err))
+			continue
+		}
 		if err != nil {
-			return nil, fmt.Errorf("content: %s: %w", otaLogical, err)
+			return nil, warnings, fmt.Errorf("content: %s: %w", otaLogical, err)
 		}
 		// TNT header lightweight [fmt tnt].
 		hdr, err := loadTNTHeaderLite(fs, tntLogical)
 		if err != nil {
-			return nil, fmt.Errorf("content: %s: %w", tntLogical, err)
+			return nil, warnings, fmt.Errorf("content: %s: %w", tntLogical, err)
 		}
 		mh := compileMapHeader(otaLogical, tntLogical, otaProv, tntProv, ota, hdr)
 		key := CanonicalKey(mh.Name)
 		// Duplicate canonical keys: last wins in sorted order is deterministic (I1).
 		result[key] = mh
 	}
-	return result, nil
+	return result, warnings, nil
 }

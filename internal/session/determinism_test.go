@@ -165,6 +165,7 @@ func TestRS06_GlobalInventory(t *testing.T) {
 func TestRS06_FloatAudit(t *testing.T) {
 	root := findRepoRoot(t)
 	allowlist := map[string]bool{
+		"internal/drawlist/lens.go":                        true, // startup-only presentation lens map, narrowed to integer offsets [I2][03 R-FX-01 §4]
 		"internal/combat/aim.go":                           true, // ballistic discriminant [I2]
 		"internal/combat/motion.go":                        true, // projectile motion wide calc [I2][06 §6.5] transient
 		"internal/combat/impact.go":                        true, // area damage distance [I2][06 §9.3] transient

@@ -2,7 +2,6 @@ package main
 
 import (
 	"github.com/nanolathe-gg/nanolathe/internal/audio"
-	"github.com/nanolathe-gg/nanolathe/internal/audiobackend"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
@@ -40,22 +39,12 @@ func attachBattleAudio(cl *client.Client, sess *session.Session, fs vfs.FSOps) {
 	cl.UpdateAudioViewportFromCamera()
 }
 
-// detachBattleAudio stops the battle's voices and music when the battle view
-// closes. The queue, cache and controller stay owned by the audio service.
-//
-// The PCM device itself is not uninstalled. It is a process resource that the
-// platform adapter installs once; tearing it down here is what previously
-// forced the client to re-create one lazily on the next battle. Backend.Close
-// stops every live voice and leaves the backend reusable.
+// detachBattleAudio stops battle voices and requests the exit music fade.
+// The shell retains and pumps the service after the battle releases it;
+// closing the backend here would cut off that fade [03 R-AUD-01 §4].
 func detachBattleAudio(cl *client.Client, sess *session.Session) {
 	if sess != nil && sess.Audio != nil {
-		sess.Audio.Close()
-	}
-	if cl == nil {
-		return
-	}
-	if be, ok := audio.GlobalOutput().(*audiobackend.Backend); ok {
-		be.Close()
+		sess.Audio.EndBattleMusic()
 	}
 }
 

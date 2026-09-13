@@ -588,12 +588,10 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 	music := b.sess.Audio.Music
 	music.SetVolume(prefs.MusicVol)
 	music.SetEnabled(prefs.MusicMode != 0)
-	music.Configure(audio.PlayMode(prefs.CDMode), 0)
+	music.Configure(audio.PlayMode(prefs.CDMode), music.DesiredCategory())
 	// Battle entry requests Building music [03 R-AUD-01 §5]. Device
 	// creation can follow installation, so playback starts on the host pump.
-	// TODO(T23): connect the established damage/death intensity producer
-	// [03 R-AUD-01 §5]; until then, retain Building or explicit user selection.
-	b.sess.Audio.StartMusic()
+	b.sess.Audio.StartBattleMusic()
 }
 
 // applyBattleAudioOptions supplies the presentation output configuration at
@@ -657,6 +655,10 @@ func (b *battleSession) teardown(cl *client.Client) {
 		}
 	}
 	detachBattleAudio(cl, b.sess)
+	if b.shell == nil && b.sess != nil && b.sess.Audio != nil {
+		// A direct process exit has no continuing shell to service the fade.
+		b.sess.Audio.Close()
+	}
 	if b.controller != nil {
 		b.controller.battle = nil
 	}
@@ -903,6 +905,9 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	// release-inside gesture; no battle hotkey or world command leaks through
 	// [07 §3][07 §11].
 	if b.isResultVisible() {
+		if b.postBattle == nil && b.sess != nil && b.sess.Audio != nil {
+			b.sess.Audio.EndBattleMusic()
+		}
 		// The first terminal frame freezes the result and installs the one
 		// post-battle controller. From here on the controller and its effect
 		// cursor own the presentation sequence; no live-world value is read

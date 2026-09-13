@@ -284,13 +284,15 @@ patch correctly beating the base archives.
 budget, not a global limit, and the converged retail state is every valid
 local archive mounted (SC1). When more than ten local HPI archives are present
 the mount records one note naming the count, so the discrepancy stays visible
-rather than silent; `FS.Notes()` returns it.
+rather than silent; `FS.Notes()` returns it. Count only newly successful mounts,
+excluding rejected candidates and duplicate paths.
 
 **C3 — mount dedup.** A provider is keyed by its canonicalized absolute path,
 compared case-insensitively; an equal path suppresses the second mount and
 records a note `[02 §2]`. The suppression applies at both append points —
 directories and archives — which also makes a second pass over the same plan a
-no-op.
+no-op. Failed mount attempts do not enter the dedup set, so a corrected
+candidate can be explicitly retried.
 
 **C4 — the patch tier's extensions.** The tier is `rev<name>.GP3` in retail;
 the mount also accepts `.gp4`, `.gpf` and `.swx` at that tier because installs
@@ -303,6 +305,18 @@ present. The four edition bytes between them are not compared, and the year
 census is an observation, not a gate `[02 §2]`. A save bank (`ArchiveOptions.
 AllowBank`) is the one other accepted version word; that container belongs to
 DESIGN_SESSIONS_AI_SAVE.
+
+Automatic discovery continues after `ErrRejectedArchive` header/footer gate
+failures and candidate open failures, recording portable provider diagnostics
+in `FS.Notes()`. Direct `MountArchive` retains its error. Directory and payload
+failures remain fatal; they are not reclassified as harmless container rejection.
+
+Map catalog discovery similarly skips only `ErrMissingOTAHeader`, retaining a
+`Catalog.Warnings` diagnostic before reading the rejected candidate's terrain
+`[02 R-MAP-01 §2]` `[02 R-MAP-01 §9]`. The parser's existing 16 MiB host limit
+governs OTA reads. Read failures, syntax errors and required TNT failures still
+abort compilation. Accepted campaign maps remain in the catalog; the browser
+owns network-schema filtering. No rejected map receives fabricated metadata.
 
 **C6 — directory cipher.** The key byte is the low byte of the header key
 word; the derived byte is `(k>>6) | (k<<2)`; from offset `0x14` onward each

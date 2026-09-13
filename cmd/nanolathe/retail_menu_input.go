@@ -389,6 +389,8 @@ func (g *gameShell) activateSkirmishGadget(name string) {
 		g.cycleLineOfSight(1)
 	case "Difficulty":
 		g.setup.Difficulty = cycleInt(g.setup.Difficulty, 0, 2, 1)
+		// SKIRMISH writes both selectors [08 "Skirmish configuration"].
+		g.missionDifficultyValue = g.setup.Difficulty
 	default:
 		g.activateDynamicSkirmishGadget(name)
 		return

@@ -1,6 +1,7 @@
 package vfs_test
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -224,17 +225,21 @@ func TestManifestHashPortable(t *testing.T) {
 // the count.
 func TestTenHPIDiagnostic(t *testing.T) {
 	dir := t.TempDir()
+	var archive bytes.Buffer
+	if err := vfs.WriteArchive(&archive, []vfs.ArchiveFile{{Path: "file", Data: []byte("data")}}, vfs.ArchiveWriteOptions{}); err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < 11; i++ {
 		name := filepath.Join(dir, fmt.Sprintf("dummy%d.hpi", i))
-		if err := os.WriteFile(name, []byte("not really an archive"), 0o644); err != nil {
+		if err := os.WriteFile(name, archive.Bytes(), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
 	fs := vfs.New()
 	defer fs.Close()
-	// The >10 note is emitted while planning, before any archive opens, so
-	// the garbage payloads' open errors do not hide the diagnostic.
-	_ = fs.MountGameDirectoryWithPlan(dir, vfs.DefaultRetailMountPlan())
+	if err := fs.MountGameDirectoryWithPlan(dir, vfs.DefaultRetailMountPlan()); err != nil {
+		t.Fatal(err)
+	}
 	notesSeen := false
 	for _, note := range fs.Notes() {
 		if strings.Contains(note, "local HPI") && strings.Contains(note, "SC1") {

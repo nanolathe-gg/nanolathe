@@ -12,8 +12,9 @@ import (
 )
 
 // Service is the single retail audio owner. Simulation code submits events to
-// this service; the presentation edge calls Drain once for each rendered
-// frame. Queue arbitration, alias identity, decoded samples, music state, and
+// this service; the presentation edge delivers events every rendered frame.
+// The host may separately admit queue pops at its 30 Hz update cadence.
+// Queue arbitration, alias identity, decoded samples, music state, and
 // their shared CRT stream stay together here [03 §8.2–§8.4] [I4] [I6].
 //
 // The service deliberately does not know about Session, visibility, units, or
@@ -40,6 +41,10 @@ type Service struct {
 	streamDeadlines   []uint32
 	streamPlaying     bool
 	voiceCache        *SampleCache
+	ackClock          func() uint64
+	ackOpportunity    uint64
+	hasAckOpportunity bool
+	intensity         battleIntensity
 }
 
 // NewService constructs the queue, registry/cache, and music controller with
@@ -102,6 +107,7 @@ func (a *Service) ResetBattleCues() {
 	}
 	a.Queue.resetBattle()
 	a.frame, a.lastEventTick, a.hasEventTick = 0, 0, false
+	a.hasAckOpportunity = false
 }
 
 func (a *Service) installPlayback() {
@@ -200,7 +206,7 @@ func (a *Service) Emit(frame uint32, slot Slot, unit pool.Handle, text string) b
 // presentation edge. A committed tick is consumed once; repeated rendered
 // frames must not replay its events [03 §8.3] [I6].
 //
-// The drain runs once per rendered frame, but the value it arbitrates against
+// The host limits queue-pop opportunities separately, but the value it arbitrates against
 // is the global tick counter, not a private presentation counter: the queue's
 // thirty-frame window and the per-slot next-allowed frames are expressed in
 // that one counter [03 §8.3], and [R-AUD-01 §3] names it "the global tick
@@ -222,9 +228,14 @@ func (a *Service) DrainEvents(committedTick uint32, events []framepkg.EventView)
 	if a.Queue == nil || a.Music == nil {
 		a.Init(nil)
 	}
-	a.Queue.Drain(committedTick)
+	if a.Queue.Count != 0 && a.admitAcknowledgement() {
+		a.Queue.Drain(committedTick)
+	}
 	if events != nil && (!a.hasEventTick || committedTick != a.lastEventTick) {
 		for _, ev := range events {
+			if ev.Kind == framepkg.EventKindMusicIntensity && a.intensity.active {
+				a.intensity.buckets[a.intensity.current] += ev.Magnitude
+			}
 			if ev.Kind != framepkg.EventKindAudio || ev.Sound == "" {
 				continue
 			}
@@ -512,8 +523,8 @@ func (a *Service) StopStream() {
 	a.streamPlaying = false
 }
 
-// Close stops presentation music when the battle view leaves. Queue and
-// decoded aliases remain service-owned for the session lifetime.
+// Close immediately releases presentation music at process shutdown. Battle
+// departure uses EndBattleMusic so the shell can finish its category fade.
 func (a *Service) Close() {
 	if a == nil {
 		return

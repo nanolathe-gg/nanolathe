@@ -178,6 +178,9 @@ type Client struct {
 
 	// Runtime is presentation-only bookkeeping for backend frame cadence.
 	runtime float64
+	// Host update identity for acknowledgement admission; simulation speed and
+	// pause do not change this counter (DESIGN_PRESENTATION_CLIENT C18).
+	audioOpportunity uint64
 
 	// base is the gamma-adjusted output palette. Every final indexed pixel
 	// resolves through it; pal.Base retains the authored source [03 §4.3].
@@ -770,6 +773,7 @@ func (c *Client) Step(delta float64) {
 	}
 	c.cursorRestorePending = false
 	c.runtime += delta
+	c.audioOpportunity++
 	if c.opts.Step != nil {
 		c.opts.Step(delta)
 	}

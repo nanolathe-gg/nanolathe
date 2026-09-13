@@ -5,6 +5,7 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/palette"
 	"github.com/nanolathe-gg/nanolathe/internal/render"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
@@ -29,6 +30,8 @@ func (c *projectileLineCollector) Expand()                  {}
 func TestSegmentedProjectilePassesUsePrimaryPaletteColor(t *testing.T) {
 	c := newTestClient(t)
 	c.resetListForTest()
+	c.pal = &palette.Tables{}
+	c.pal.Logical[37] = 91
 	d := render.ProjectileDraw{
 		Color:  37,
 		Color2: 201,
@@ -54,8 +57,8 @@ func TestSegmentedProjectilePassesUsePrimaryPaletteColor(t *testing.T) {
 		t.Fatalf("passes did not retain distinct jitter geometry: %+v", collector.lines)
 	}
 	for i, line := range collector.lines {
-		if got := line.Index; got != 37 {
-			t.Fatalf("pass %d palette index = %d, want primary color 37 [06 R-WFX-01 §4]", i, got)
+		if got := line.Index; got != 91 {
+			t.Fatalf("pass %d palette index = %d, want mapped primary color 91 [06 R-WFX-01 §4]", i, got)
 		}
 	}
 }
@@ -86,5 +89,26 @@ func TestProjectileStrokesAreRecordedEmissive(t *testing.T) {
 		if !line.Emissive {
 			t.Fatalf("line %d is not marked emissive: %+v", i, line)
 		}
+	}
+}
+
+func TestBeamMapsEachStrokeAfterRawSecondaryGate(t *testing.T) {
+	c := newTestClient(t)
+	c.resetListForTest()
+	c.pal = &palette.Tables{}
+	c.pal.Logical[37] = 91
+	c.pal.Logical[201] = 0
+	if n := c.drawProjectileBeam(render.ProjectileDraw{Color: 37, Color2: 201}, frame.ProjectileView{TailX: numeric.FixedFromInt(16)}); n != 2 {
+		t.Fatalf("mapped-black secondary suppressed: strokes=%d", n)
+	}
+	var got projectileLineCollector
+	c.list.Replay(&got)
+	if len(got.lines) != 2 || got.lines[0].Index != 0 || got.lines[1].Index != 91 {
+		t.Fatalf("physical beam bytes: %+v", got.lines)
+	}
+	c.resetListForTest()
+	c.pal.Logical[0] = 99
+	if n := c.drawProjectileBeam(render.ProjectileDraw{Color: 37}, frame.ProjectileView{}); n != 1 {
+		t.Fatalf("raw zero secondary became stroke: %d", n)
 	}
 }

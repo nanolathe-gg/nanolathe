@@ -6482,7 +6482,8 @@ definition’s rendertype byte; all eight cases are established:
 
 - 0 — line from the current endpoint to the tail endpoint (the beam geometry
   below). Colors are the definition’s primary and secondary color bytes
-  remapped through the live palette lookup; a zero secondary byte draws one
+  remapped through the live GUI-to-display semantic map of §4.3.1; a zero
+  authored secondary byte draws one
   one-pixel stroke, otherwise two adjacent strokes ordered endpoint-swapped,
   secondary first and primary on top.
 - 1 — the ground shadow sprite (frame 0 of the `fx` bank's `shadow` entry at
@@ -6491,7 +6492,7 @@ definition’s rendertype byte; all eight cases are established:
   drawn whenever the model has one and the current tick is strictly before
   the record’s expiry deadline, with the `propeller` flag substituting the
   spinning propeller angle for the roll word (§5.2).
-- 2 — a fixed global GAF entry (the 22×22 lens frame) drawn at the projected point; a failed
+- 2 — the startup-generated 22×22 displacement lens [R-FX-01 §4] drawn at the projected point; a failed
   draw-buffer admission executes an immediate return that ABORTS THE ENTIRE
   PROJECTILE RENDERER, not just this record — the only control-flow exit
   spanning later records.
@@ -7145,23 +7146,42 @@ applies it per literal and per repeat run and skips transparent runs);
 composed frames recurse per subframe. The blit has no coverage gate, matching
 [06 R-WFX-01 §2]. **Established.**
 
-**The lens blitter (Established, direct-static).** The 22×22 lens frame is a
-`w × h` array of signed 16-bit **source offsets** ([06 R-WFX-01 §2]; the
-lane's "displacement/distortion map"), consumed only by render type 2
-(`mindgun`). Per blit: swap the frame's pixel pointer with its scratch
-pointer; copy the framebuffer rectangle under the destination — top-left `(x −
-x_offset, y − y_offset)`, `w × h`, clipped — into the scratch buffer; then for
-every cell `i`, when the offset word is the sentinel `32000` write the frame's
-transparent key (`0xff`), else write `captured[offset]`; the result is
-assembled behind the captured block, the frame's pixel pointer is pointed at it
-for one call of the ordinary frame blitter (which honours the key), and the
-pointers are restored. Each destination pixel thus shows the background pixel
-the lens map points at — a refraction disc with a transparent corner mask —
-and the map is sampled once per blit with no random draw. **Established
-(direct-static):** this path does not test the flash blitter's light-table
-capability or the tinted blitter's alpha-blend capability. Its render-type-2
-caller applies the ordinary projectile visibility selection and a viewport-point
-test before calling the capture/displacement/keyed-copy path.
+**The lens generator and blitter (Established, direct-static).** Startup
+constructs one shared 22×22 signed-16 displacement map, anchored at `(11,11)`,
+with strength 8. It is generated data, not a GAF-bank entry. For each cell
+`(x,y)`, let `dx=x−11`, `dy=y−11`, and `r=sqrt(dx²+dy²)` in floating point.
+When `trunc(r) >= 5`, store sentinel 32000. Otherwise set
+`factor=(11−r)/8`, `sourceX=11+trunc(dx/factor)`,
+`sourceY=11+trunc(dy/factor)`, and store the relative displacement
+`sourceY*22+sourceX−(y*22+x)`. Each coordinate conversion truncates toward zero.
+The map has no age, yaw, intensity or random input; it moves with the projected
+projectile position and resamples the background on each draw.
+
+After ordinary projectile visibility admission, render type 2 tests its
+projected center against the viewport inclusively. A failed center test returns
+from the whole projectile renderer: earlier output remains and later records
+are skipped. An admitted lens captures the full 22×22 background block at
+center minus `(11,11)` before constructing any output. Capture itself is not
+clipped. For cell `i`, a nonsentinel displacement reads
+`captured[i+displacement[i]]`; a sentinel writes the transparent key. The final
+ordinary keyed blit clips output to the viewport and skips sampled bytes equal
+to that key. A later lens observes all earlier drawing, including earlier lenses.
+There is no light-table or alpha-table capability gate.
+
+**Established finite-map check:** Every nonidentity sample points inward from
+its destination toward the admitted center. Computing only visible output
+cells from a pre-command snapshot therefore preserves changed pixels without
+reproducing unused out-of-bounds capture reads. Binary64 and high-precision
+independent evaluations give identical integer entries for the complete map.
+
+**Unknown — lens transparent key.** The constructor does not initialize this
+byte, and the bounded lifetime writer/reader census finds no later assignment.
+Ordinary retail allocation is not zero-filled [01 §6]. Thus neither 255 nor zero
+is an established universal key. Observing actual startup allocation contents
+would settle a specific session's key, not a universal value. Nanolathe may use
+zero under the deterministic host initialization policy in SPEC_CONFLICTS SC18,
+while retaining this question at the code site. The consumer's sampled-key
+comparison is established independently of the unknown initial value.
 
 **Which presentation families do not use the authored countdown cursor.**
 Every sequence family of §4.4 — feature and model textures (phases 6 and 7),
@@ -9147,31 +9167,53 @@ of `SetDesired`:
 
 Nothing requests 2 or 3; `Victory`/`Defeat` tracks are never chosen.
 
-**Established fact — the intensity chooser** (host frame, wall-clock, in
-battle only, skipped once the battle-over latch is set unless the exit bit
-is also set):
+**Established fact — the intensity chooser** (host frame, scaled wall-clock,
+in battle only, skipped once the battle-over latch is set unless the exit bit
+is also set). A fresh process starts with evaluation count and clock stamp
+zero, and retained last-want −1. Battle setup clears the thirty buckets and
+current index only; the other chooser fields survive battle transitions.
 
-* Two counters feed a 30-bucket ring: **+1** per damage event whose victim
-  is owned by the local player (the damage intake path), **+5** per unit
-  death of a local-player unit. The ring is zeroed at battle start.
-* Every time the scaled clock [07 R-CAM-01 §1] has advanced by more than 30
-  units (≈ one second) since the last evaluation: `evals++`; when
-  `evals > 10`, compute `sum30` over all 30 buckets and `sum5` over the 5
-  most recent (walking backwards from the current bucket); then
-  * if `desired == 0` and (`sum30 > 50` or `sum5 > 30`) and the local
-    player's unit count `> 30` → want `1` (`Battle`);
-  * else if `desired == 1` and `sum30 < 10` and `sum5 == 0` and
-    `evals > 60` → want `0` (`Building`);
-  * else keep the last want.
-  A changed want calls `SetDesired(want)` (which fades, [R-AUD-01 §4]) and
-  resets `evals`. Finally the bucket index advances (mod 30), the new
-  current bucket is cleared, and the clock stamp is taken.
+**Damage producer, Established:** An accepted packet for a live, not-dying
+victim contributes +1 after damage reaction and cause/provenance stores when
+its non-null reconstructed attacker record exists and either that record's
+owner or the victim's current owner equals the local player. There is no amount
+test: zero damage, paralyzer and no-reaction packets qualify. Healing and
+null-attacker environmental damage do not.
 
-All comparisons are signed and strict as written. So battle music needs a
-force of more than 30 units *and* either 50 damage/death points over the
-last 30 seconds or 30 within the last 5; calm music returns after at least
-60 quiet evaluations (≈ a minute) with no local damage at all in the last 5
-seconds. The counters are presentation-side and never reach the simulation.
+**Death producer, Established:** Ordinary and Cargo deaths enter the full
+accounting branch directly. Reclaim enters it only when the victim's stored
+attacker side is nonneutral and differs from the victim owner. All three require
+the victim player record to exist. At that branch's tail, +5 is added when the stored attacker side equals
+the local player. This is attacker provenance, not victim ownership; completion,
+commander status and current attacker liveness do not gate the increment.
+Other death causes do not enter this branch.
+
+**Evaluation, Established:** Admission uses unsigned
+`now > uint32(stamp+30)`, not signed elapsed time. On admission increment the
+signed evaluation count. Once `evals > 10`, sum all thirty buckets, walking
+backward from the bucket immediately before current; the five-bucket sum uses
+the first five visited buckets and excludes current. Start `want` from retained
+last-want, then:
+
+- If the music controller's desired category is Building (0),
+  `(sum30 > 50 or sum5 > 30)`, and the local player's unsigned 16-bit unit
+  count is `> 30`, set want to Battle (1).
+- Otherwise, if desired is Battle (1), `sum30 < 10`, `sum5 == 0`, and
+  `evals > 60`, set want to Building (0).
+- Otherwise retain the previous want.
+
+Sums, evaluation-count comparisons and thresholds are signed and strict.
+A want different from retained last-want calls `SetDesired(want)`, stores the
+new last-want and clears the evaluation count. Finally advance the current
+bucket modulo thirty, clear the new bucket, and sample the scaled clock again
+for the stamp. Activity counters and chooser state never feed simulation.
+
+**Established cross-battle consequence:** The full writer census finds no
+other last-want, evaluation-count or stamp reset. If a battle exits with
+last-want Battle (1), the next battle's explicit Building request does not
+clear it. A later hot evaluation computes Battle again, equal to retained
+last-want, and therefore does not request that transition. This quirk must not
+be repaired by an inferred reset in a retail-compatible chooser.
 
 **Established fact — the front-end loop (`BGM`).** Building the main menu
 plays the alias `BGM` (stock `allsound.tdf`: `drone2`) through the **loop
@@ -9663,6 +9705,11 @@ body — most under `R-<id>` headings — and are not restated here.
 - Minimap marker blit site · §3.9 · static trace. The layer ordering
   (contacts overwrite markers) is supported inference. Marked `TODO(question)`.
 ### Renderer
+
+- **Unknown:** render-type-2 lens transparent key left by heap history; its
+  constructor and bounded lifetime contain no initializing write. Observe the
+  startup allocation to settle a particular session. The host uses SC18
+  zero-initialization with a code-site question [R-FX-01 §4].
 
 - **Implementation reconciliation (Unknown):** the normal-scale CPU model
   target currently commits pixels using a separate coverage plane, including

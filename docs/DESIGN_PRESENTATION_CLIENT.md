@@ -4,7 +4,8 @@
 `internal/audiobackend`, `internal/platform/ebitenapp`, and the consumption
 side of `internal/frame`. One window, one software framebuffer of palette
 indices, one ordered pass over the committed frame, one expansion to RGBA at
-the very end, and one audio service drained once per rendered frame.
+the very end, and one audio service consuming committed presentation events.
+Acknowledgement pop cadence follows the explicit host policy in C18.
 
 This is one of the design documents listed by [ARCHITECTURE.md](ARCHITECTURE.md);
 that document owns package boundaries, the tick, and the citation routing that
@@ -389,6 +390,20 @@ live only for playback; no soundtrack data is shipped in the repository.
 Battle entry applies retained music preferences and arms Building playback
 until the desktop output is installed. Front-end creation configures media
 without starting it. Headless session construction never opens the device.
+Damage intake and death accounting publish semantic intensity events with
+captured local ownership and weights. The audio consumer retains all committed
+cues in raise order, then evaluates the chooser using the local player's
+published live-unit count and the scaled presentation clock. The local player
+is `Selection.LocalPlayer`; viewport/viewing-player changes do not retarget it.
+The committed `Result.Ended` flag suppresses chooser evaluation; the first
+results presentation and battle teardown request category 4. The shell retains
+the service and pumps its Custom-mode fade after releasing the battle, while
+ordinary voices and narration stop. Existing focus gating still applies.
+Non-Custom modes retain their established category-request behavior. Final
+process shutdown closes immediately because no continuing shell can pump it.
+Ring-only battle reset preserves the researched chooser history, including its
+cross-battle retained-want quirk [03 R-AUD-01 §5].
+
 Native CD-drive access and registry history remain T23 platform residuals.
 The private CD table does not model retail slot competition and callback
 ordering with delayed stream opening, which shares the retail timer table
@@ -821,7 +836,7 @@ document carries them.
   `10 − speechThreshold < priority` passes, print the override or the caption,
   prefixed by the unit name when the unit is still alive `[03 §8.3]`
   `[03 R-AUD-01 §3]`.
-* **C18 Drain.** Runs once per **rendered frame, outside the simulation**: an
+* **C18 Drain.** Retail runs once per **rendered frame, outside the simulation**: an
   empty queue does nothing; within 30 frames of the base time the head resolves
   **silently**; otherwise the head resolves audibly and the base time resets.
   Then the head's text is freed and it is shifted out. The consequence to
@@ -833,6 +848,14 @@ document carries them.
   raise may cross the publication boundary only when each committed tick's
   events are applied exactly once in raise order `[03 R-AUD-01 §7]`
   `[03 R-AUD-02 §2]`.
+  Nanolathe's host cadence policy admits at most one acknowledgement queue pop
+  per 30 Hz client Update opportunity. Repeated modern draws between Updates
+  do not consume additional entries, and missed opportunities do not cause
+  catch-up pops. This service cadence continues while paused and is independent
+  of game speed; the existing arbitration window and slot cooldowns still use
+  the committed global tick. Retained status insertion and ordinary audio event
+  delivery run on every presentation, independently of this pop gate. This is
+  an explicit presentation policy, not a claim that retail drains per sim tick.
 * **C19 No feedback and spatial placement.** Audio state never enters the
   simulation and no audio path draws from the simulation RNG [I4] [I6]. The
   selected Sound Mode, rather than a device stereo-capability probe, selects
@@ -872,17 +895,14 @@ the published offset to the camera.
 
 ### 3.4 Not implemented
 
-* **Render type 2 draws nothing.** The dispatch classifies a `mindgun`
-  projectile and then finds no art: the lens is a startup-built displacement
-  frame, not a shared `fx` entry, and the resolver returns no frame rather than
-  substituting one. The blitter is fully described — a `w × h` array of signed
-  16-bit source offsets, the framebuffer rectangle under the destination copied
-  into scratch, then per cell either the transparent key for the sentinel
-  `32000` or `captured[offset]`, assembled behind the captured block and handed
-  to one ordinary frame blit — so implementing it is work, not research
-  `[03 R-FX-01 §4]` `[03 §5.4]`. The palette capability writer is now traced:
-  startup enables the flash blitter's light table, and the lens path has no
-  corresponding palette-table gate `[03 R-REN-03D §4]`.
+* **Lens transparent-key initialization.** The generated render-type-2 lens
+  uses the ordered `drawlist.Lens` destination reader in both executors. Its
+  constructor arithmetic, relative displacement sampling and prior-output
+  preservation are established [03 R-FX-01 §4]. Retail leaves the key byte
+  uninitialized; the producer uses SC18 zero-initialization and retains the
+  code-site question. Modern's RGB key comparison is the explicit approximation
+  in DESIGN_GPU_RENDERER §2. Stock assets define MINDGUN without a unit binding;
+  validation uses an authored projectile fixture.
 * **The mobile and Digger shadow branches.** Retail selects one of three shadow
   branches: a Digger's buried-clip silhouette, a mobile unit's waterline-clip
   silhouette, and a structure's re-rasterized, punched, cached shadow. Only the
@@ -892,9 +912,8 @@ the published offset to the camera.
 * **Music and CD/MCI.** File-backed music plays through the portable desktop
   audio backend (§2.6). Native CD drives and per-disc registry history remain
   unavailable `[03 §8.4]` `[03 R-AUD-01 §4]`. The five playback modes and
-  category fades are implemented; the damage/death-driven battle-intensity
-  producer is still unwired, so battle entry selects Building until another
-  explicit category request `[03 R-AUD-01 §5]`.
+  category fades and the damage/death-driven intensity producer are implemented
+  `[03 R-AUD-01 §5]`. Native drive/history support remains the platform residual.
 * **Empty established slots.** The key-controlled overlay before the unit
   labels, the auxiliary unit traversal at the end of strip 7, and the two
   optional overlays after strip 9 have no published draw record; they are left

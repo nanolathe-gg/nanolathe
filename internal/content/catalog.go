@@ -225,7 +225,7 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 		aliasOrder = soundData.AliasOrder
 	}
 	report.Report(FamilySounds, 100)
-	maps, err := compileMapsWithProgress(fs, report)
+	maps, mapWarnings, err := compileMapsWithDiagnostics(fs, report)
 	if err != nil {
 		// Maps header discovery [02 "Map files"]; retail has 275 each; allow empty
 		// on a minimal fixture but whole-install expects them.
@@ -269,6 +269,7 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 		return nil, err
 	}
 	warnings := catalogUnitWarnings(unitResult.incompatibilityWarning, units, nil)
+	warnings = append(warnings, mapWarnings...)
 	warnings = append(warnings, enforceDownloadableRecords(records, MenuButtonNames(buildMenus))...)
 	// Model sorting C13: sort model catalog case-insensitively before caching per-unit-type pointer [03 §2.4].
 	report.Report(FamilyBuildMenus, 100)

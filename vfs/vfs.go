@@ -157,7 +157,7 @@ func (f *FS) Providers() []ProviderInfo {
 }
 
 // Notes returns mount-time observations a caller should surface: suppressed
-// duplicate mounts, and the archive-count remark described in
+// duplicate mounts, rejected archive candidates, and the archive-count remark described in
 // docs/SPEC_CONFLICTS.md SC1.
 func (f *FS) Notes() []string { return append([]string(nil), f.notes...) }
 
@@ -360,6 +360,7 @@ func (f *FS) MountDirectory(root string, priority int) error {
 	if err != nil {
 		return err
 	}
+	f.rememberMount(root)
 	f.insertMount(mountedProvider{provider: p, priority: priority, order: f.nextOrder})
 	return nil
 }
@@ -375,6 +376,7 @@ func (f *FS) MountArchive(filename string, priority int) (*Archive, error) {
 	if err != nil {
 		return nil, err
 	}
+	f.rememberMount(filename)
 	a.setMountInfo(priority, f.nextOrder)
 	f.insertMount(mountedProvider{provider: a, priority: priority, order: f.nextOrder})
 	return a, nil
@@ -429,15 +431,19 @@ func canonicalMountKey(name string) string {
 // suppresses the second mount of an equal full path [02 §2].
 func (f *FS) alreadyMounted(name string) bool {
 	key := canonicalMountKey(name)
-	if f.mountedBy == nil {
-		f.mountedBy = make(map[string]string)
-	}
 	if first, ok := f.mountedBy[key]; ok {
 		f.notes = append(f.notes, fmt.Sprintf("duplicate mount suppressed: %s (already mounted as %s)", name, first))
 		return true
 	}
-	f.mountedBy[key] = name
 	return false
+}
+
+// Failed candidates must remain eligible for a later mount attempt [02 §2].
+func (f *FS) rememberMount(name string) {
+	if f.mountedBy == nil {
+		f.mountedBy = make(map[string]string)
+	}
+	f.mountedBy[canonicalMountKey(name)] = name
 }
 
 // MountGameDirectoryWithPlan mounts an installation directory under an
@@ -480,16 +486,6 @@ func (f *FS) mountGameDirectory(root string, plan MountPlan, basePriority int) e
 	// campaign archives. See docs/SPEC_CONFLICTS.md SC1.
 	localHPI := 0
 	for _, entry := range archives {
-		if strings.EqualFold(filepath.Ext(entry.Name()), ".hpi") {
-			localHPI++
-		}
-	}
-	if localHPI > 10 {
-		f.notes = append(f.notes, fmt.Sprintf(
-			"%d local HPI archives mounted; retail documents a cap of 10 (docs/SPEC_CONFLICTS.md SC1)", localHPI))
-	}
-
-	for _, entry := range archives {
 		extension := strings.ToLower(filepath.Ext(entry.Name()))
 		tier := plan.HPI
 		switch extension {
@@ -503,9 +499,30 @@ func (f *FS) mountGameDirectory(root string, plan MountPlan, basePriority int) e
 			tier = plan.UFO
 		}
 		full := filepath.Join(root, entry.Name())
-		if _, err := f.MountArchive(full, basePriority+int(tier)*10); err != nil {
+		archive, err := f.MountArchive(full, basePriority+int(tier)*10)
+		if err != nil {
+			// Only the container gate and an unavailable candidate open are
+			// discovery rejection [02 §2]. Indexing and later payload errors
+			// keep their own failure boundary.
+			var pathErr *os.PathError
+			reason := err
+			openFailed := errors.As(err, &pathErr) && pathErr.Op == "open"
+			if openFailed {
+				reason = pathErr.Err // provider identity below replaces the host path
+			}
+			if errors.Is(err, ErrRejectedArchive) || openFailed {
+				f.notes = append(f.notes, fmt.Sprintf("nanolathe: archive rejected: logical path %s, providers searched [%s], expected HPI container: %v", entry.Name(), entry.Name(), reason))
+				continue
+			}
 			return err
 		}
+		if archive != nil && extension == ".hpi" {
+			localHPI++
+		}
+	}
+	if localHPI > 10 {
+		f.notes = append(f.notes, fmt.Sprintf(
+			"%d local HPI archives mounted; retail documents a cap of 10 (docs/SPEC_CONFLICTS.md SC1)", localHPI))
 	}
 	return f.MountDirectory(root, basePriority+int(plan.Loose)*10)
 }

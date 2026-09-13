@@ -30,6 +30,11 @@ const (
 // chunk stream does not decode.
 var ErrMalformedArchive = errors.New("vfs: malformed HPI archive")
 
+// ErrRejectedArchive identifies a failed container gate, including safely
+// rejected short header/footer reads [02 §2]. Directory and payload failures
+// remain ErrMalformedArchive without this classification.
+var ErrRejectedArchive = fmt.Errorf("%w: rejected container", ErrMalformedArchive)
+
 // ArchiveOptions controls defensive limits while indexing and decoding an
 // archive. The defaults are deliberately generous for retail data while
 // preventing malformed input from requesting unbounded allocations.
@@ -103,7 +108,7 @@ func NewArchive(name string, reader io.ReaderAt, size int64, options ArchiveOpti
 		return nil, fmt.Errorf("%w: nil reader", ErrMalformedArchive)
 	}
 	if size < hpiHeaderSize {
-		return nil, fmt.Errorf("%w: archive is too small", ErrMalformedArchive)
+		return nil, fmt.Errorf("%w: archive is too small", ErrRejectedArchive)
 	}
 	a := &Archive{name: name, reader: reader, size: size, options: options.withDefaults(), entries: make(map[string]*providerEntry)}
 	if err := a.index(); err != nil {
@@ -162,14 +167,17 @@ func (a *Archive) setMountInfo(priority, order int) {
 func (a *Archive) index() error {
 	header := make([]byte, hpiHeaderSize)
 	if err := readAtFull(a.reader, 0, header); err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return fmt.Errorf("%w: header: %v", ErrRejectedArchive, err)
+		}
 		return fmt.Errorf("%w: header: %v", ErrMalformedArchive, err)
 	}
 	if string(header[0:4]) != "HAPI" {
-		return fmt.Errorf("%w: marker %q", ErrMalformedArchive, header[0:4])
+		return fmt.Errorf("%w: marker %q", ErrRejectedArchive, header[0:4])
 	}
 	version := binary.LittleEndian.Uint32(header[4:8])
 	if version != 0x00010000 && !(a.options.AllowBank && version == 0x4B4E4142) {
-		return fmt.Errorf("%w: unsupported version 0x%08x", ErrMalformedArchive, version)
+		return fmt.Errorf("%w: unsupported version 0x%08x", ErrRejectedArchive, version)
 	}
 	// Footer: retail seeks to the end of the file, reads the 36 trailing
 	// bytes, overwrites the four edition bytes with literal "0000", and
@@ -181,15 +189,18 @@ func (a *Archive) index() error {
 		const footerTemplate = "Copyright 0000 Cavedog Entertainment"
 		const editionStart, editionEnd = 10, 14
 		if a.size < int64(len(footerTemplate)) {
-			return fmt.Errorf("%w: missing footer %q", ErrMalformedArchive, footerTemplate)
+			return fmt.Errorf("%w: missing footer %q", ErrRejectedArchive, footerTemplate)
 		}
 		tail := make([]byte, len(footerTemplate))
 		if err := readAtFull(a.reader, a.size-int64(len(footerTemplate)), tail); err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				return fmt.Errorf("%w: footer: %v", ErrRejectedArchive, err)
+			}
 			return fmt.Errorf("%w: footer: %v", ErrMalformedArchive, err)
 		}
 		copy(tail[editionStart:editionEnd], "0000")
 		if string(tail) != footerTemplate {
-			return fmt.Errorf("%w: missing footer %q", ErrMalformedArchive, footerTemplate)
+			return fmt.Errorf("%w: missing footer %q", ErrRejectedArchive, footerTemplate)
 		}
 	}
 	blobSize := uint64(binary.LittleEndian.Uint32(header[8:12]))

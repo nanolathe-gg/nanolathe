@@ -769,12 +769,15 @@ const (
 	// queue; an announcement has no audio slot and goes straight to the
 	// message ring [07 R-HUD-03 §14.3][08 R-CAMP-01 §9].
 	EventKindAnnounce
+	// EventKindMusicIntensity carries an admitted local battle-activity weight
+	// in Magnitude and its captured local owner in Team [03 R-AUD-01 §5].
+	EventKindMusicIntensity
 )
 
 // String names the event kind for diagnostics; an out-of-range value reads as
 // "invalid".
 func (k EventKind) String() string {
-	names := [...]string{"invalid", "cob_sfx", "nanolathe", "muzzle_flash", "smoke_start", "smoke_end", "projectile_trail", "impact", "water_impact", "explosion", "lht_flash", "shake", "corpse", "audio", "status", "announce"}
+	names := [...]string{"invalid", "cob_sfx", "nanolathe", "muzzle_flash", "smoke_start", "smoke_end", "projectile_trail", "impact", "water_impact", "explosion", "lht_flash", "shake", "corpse", "audio", "status", "announce", "music_intensity"}
 	if int(k) >= len(names) {
 		return names[0]
 	}

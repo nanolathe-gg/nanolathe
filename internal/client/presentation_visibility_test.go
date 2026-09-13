@@ -59,7 +59,7 @@ func TestTerrainScreenCoverageIsMapBounded(t *testing.T) {
 	}
 }
 
-func TestDrawProjectileViewsDropsEarlierInstructionsOnGlobalAbort(t *testing.T) {
+func TestDrawProjectileViewsPreservesEarlierInstructionsOnLensAbort(t *testing.T) {
 	c := &Client{
 		width:   8,
 		height:  8,
@@ -81,14 +81,14 @@ func TestDrawProjectileViewsDropsEarlierInstructionsOnGlobalAbort(t *testing.T) 
 			Color: func(frame.ProjectileView) (int32, int32, bool) { return 7, 0, true },
 		},
 	)
-	if !stats.Aborted || stats.Dispatched != 0 {
-		t.Fatalf("global GAF abort leaked prior instructions: %+v", stats)
+	if !stats.Aborted || stats.Dispatched != 1 {
+		t.Fatalf("lens abort lost prior instructions: %+v", stats)
 	}
-	for i, px := range c.indexed {
-		if px != 0 {
-			t.Fatalf("aborted projectile renderer wrote pixel %d=%d", i, px)
-		}
+	c.replayForTest()
+	if c.indexed[0] != 7 {
+		t.Fatalf("earlier beam disappeared: %d", c.indexed[0])
 	}
+
 }
 
 func TestDrawEffectViewsAdmitsAuthoredLHTRowZero(t *testing.T) {

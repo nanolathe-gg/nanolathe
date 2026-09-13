@@ -130,7 +130,8 @@ type Renderer struct {
 
 	// fog is the fog pass state of docs/DESIGN_GPU_RENDERER.md §11.2, owned by
 	// fog.go so the fog unit and the model unit never edit the same file.
-	fog fogPass
+	fog  fogPass
+	lens lensPass
 
 	// glow is the Enhanced glow layer of docs/DESIGN_GPU_RENDERER.md §19: the
 	// emissive batch, its planes and passes (glow.go).
@@ -234,6 +235,7 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 	}
 	compile(&r.scene2D, newScene2DShader)
 	compile(&r.sceneDest, newSceneDestShader)
+	compile(&r.lens.shader, newLensShader)
 	compile(&r.markerShader, newMarkerShader)
 	compile(&r.scorchShader, newScorchShader)
 	compile(&r.water.shader, newWaterShader)

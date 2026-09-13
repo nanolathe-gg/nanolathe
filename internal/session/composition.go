@@ -2444,6 +2444,13 @@ func (s *Session) bindDamageReaction() {
 	if s == nil || s.Combat == nil {
 		return
 	}
+	s.Combat.DamageActivity = func(victim, attacker *units.Unit, tick uint32) {
+		// The intake has already excluded healing and null attackers. Either
+		// participant may belong to the local player [03 R-AUD-01 §5].
+		if victim.Owner == s.LocalOwner || attacker.Owner == s.LocalOwner {
+			s.emitMusicIntensity(tick, victim.Handle, 1)
+		}
+	}
 	s.Combat.Reaction = &combat.ReactionSeams{
 		// Part 1: pending bit 0x10 on every order record observing the victim
 		// [06 R-WPN-04 §2 part 1][04 R-MOV-03 §7].

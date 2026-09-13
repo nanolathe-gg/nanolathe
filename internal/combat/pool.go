@@ -248,6 +248,9 @@ type Service struct {
 	// 4. The session installs it at composition; with none installed the
 	// routine's four parts are no-ops. See ReactionSeams in damage.go.
 	Reaction *ReactionSeams `json:"-"`
+	// DamageActivity observes accepted non-heal intake after reaction and
+	// provenance writes, before the paralyzer branch [03 R-AUD-01 §5].
+	DamageActivity func(victim, attacker *units.Unit, tick uint32) `json:"-"`
 
 	// Features is the feature runtime the area walk of [06 §9.3] hands its
 	// accepted feature candidates to. Every cell inside a blast offers one, and

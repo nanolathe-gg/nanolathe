@@ -396,8 +396,8 @@ func (c *Client) drawProjectiles(cur *frame.Frame) {
 	if c.strategicView() {
 		return
 	}
-	// Missing projectile GAF metadata suppresses that instruction through the
-	// resolver; admission stays open so it cannot abort unrelated projectiles.
+	// Sprite families use authored metadata; the generated lens supplies its
+	// own inclusive viewport admission and ordered abort [03 R-FX-01 §4].
 	c.DrawProjectileViews(cur.Projectiles, cur.Tick, projectileVisible(cur.Visibility, cur.ViewingPlayer), func(frame.ProjectileView) bool { return true }, c.projectileDispatchOptions())
 }
 

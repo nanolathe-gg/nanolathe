@@ -24,6 +24,7 @@ type ProjectileDrawStats struct {
 	Strokes    int
 	Skipped    int
 	Aborted    bool
+	Lenses     int
 }
 
 // DrawProjectileViews draws each typed rendertype instruction from the
@@ -39,16 +40,13 @@ func (c *Client) DrawProjectileViews(current []frame.ProjectileView, now uint32,
 	}
 	// The dispatch list is rebuilt from the committed views every frame and is
 	// read only inside this call, so it lives in a retained buffer.
-	draws, aborted := render.BuildProjectileDrawsInto(c.projectileDraws[:0], current, now, visible, admitGlobalGAF, options)
+	admitLens := func(v frame.ProjectileView) bool {
+		return c.admitProjectileLens(v) && (admitGlobalGAF == nil || admitGlobalGAF(v))
+	}
+	draws, aborted := render.BuildProjectileDrawsInto(c.projectileDraws[:0], current, now, visible, admitLens, options)
 	c.projectileDraws = draws[:cap(draws)]
 	stats.Aborted = aborted
-	// Rendertype 2 admission failure aborts the entire projectile renderer, not
-	// merely the failing record. BuildProjectileDraws retains earlier
-	// instructions for diagnostics, but those instructions must not reach the
-	// framebuffer after an abort [03 §5.4].
-	if aborted {
-		return stats
-	}
+	// A rejected lens stops later records; earlier writes survive [03 §5.4].
 	stats.Dispatched = len(draws)
 	for _, d := range draws {
 		view := projectileViewByHandle(current, d.Handle)
@@ -80,6 +78,9 @@ func (c *Client) DrawProjectileViews(current []frame.ProjectileView, now uint32,
 				continue
 			}
 			stats.Models++
+		case render.RenderTypeGlobalGAF:
+			c.drawProjectileLens(view)
+			stats.Lenses++
 		case render.RenderTypeBeam:
 			stats.Strokes += c.drawProjectileBeam(d, view)
 		case render.RenderTypeSegmented:
@@ -181,7 +182,7 @@ func (c *Client) drawProjectileBeam(d render.ProjectileDraw, v frame.ProjectileV
 	for i, stroke := range strokes {
 		// Each beam stroke is one indexed line; the sink runs the raw Bresenham
 		// primitive [03 §5.4].
-		line := drawlist.Line{X0: stroke.X0, Y0: stroke.Y0, X1: stroke.X1, Y1: stroke.Y1, Index: indexedColor(stroke.Color), Emissive: true}
+		line := drawlist.Line{X0: stroke.X0, Y0: stroke.Y0, X1: stroke.X1, Y1: stroke.Y1, Index: c.paletteIndex(indexedColor(stroke.Color)), Emissive: true}
 		c.setLineHeights(&line, v.Y, v.TailY)
 		c.setLineReflection(&line, render.ProjectilePoint{X: v.X, Y: v.Y, Z: v.Z}, render.ProjectilePoint{X: v.TailX, Y: v.TailY, Z: v.TailZ})
 		if d.Color2 != 0 && i == 0 {
@@ -200,7 +201,7 @@ func (c *Client) drawProjectileSegments(d render.ProjectileDraw) int {
 		b := d.Segments[i]
 		ax, ay := c.cam.WorldToScreen(a.X, a.Y, a.Z)
 		bx, by := c.cam.WorldToScreen(b.X, b.Y, b.Z)
-		line := drawlist.Line{X0: ax - 128, Y0: ay - 32, X1: bx - 128, Y1: by - 32, Index: indexedColor(d.Color), Emissive: true}
+		line := drawlist.Line{X0: ax - 128, Y0: ay - 32, X1: bx - 128, Y1: by - 32, Index: c.paletteIndex(indexedColor(d.Color)), Emissive: true}
 		c.setLineHeights(&line, a.Y, b.Y)
 		c.setLineReflection(&line, a, b)
 		c.emitLine(line)
@@ -226,7 +227,7 @@ func (c *Client) drawProjectileSegmentsSecond(d render.ProjectileDraw) int {
 		b := d.Segments2[i]
 		ax, ay := c.cam.WorldToScreen(a.X, a.Y, a.Z)
 		bx, by := c.cam.WorldToScreen(b.X, b.Y, b.Z)
-		line := drawlist.Line{X0: ax - 128, Y0: ay - 32, X1: bx - 128, Y1: by - 32, Index: indexedColor(d.Color), Emissive: true}
+		line := drawlist.Line{X0: ax - 128, Y0: ay - 32, X1: bx - 128, Y1: by - 32, Index: c.paletteIndex(indexedColor(d.Color)), Emissive: true}
 		c.setLineHeights(&line, a.Y, b.Y)
 		c.setLineReflection(&line, a, b)
 		c.emitLine(line)

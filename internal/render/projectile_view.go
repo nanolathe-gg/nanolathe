@@ -178,17 +178,9 @@ func DispatchProjectileView(v frame.ProjectileView, now uint32, opts ProjectileD
 		}
 		d.BaseFrame = frame
 	case RenderTypeGlobalGAF:
-		d.Kind = "global-gaf"
-		if opts.ResolveGAF == nil {
-			d.Suppressed = true
-			return d
-		}
-		frame, ok := opts.ResolveGAF(ProjectileGAFRequest{View: v, Family: v.RenderType, Sequence: 0, Frame: 0, AssetID: v.AssetID})
-		if !ok || frame == nil {
-			d.Suppressed = true
-			return d
-		}
-		d.FrameAsset = frame
+		// The shared startup displacement map needs no authored art, age or
+		// frame resolver [03 R-FX-01 §4].
+		d.Kind = "lens"
 	case RenderTypeBaseModelDistinct:
 		d.Kind = "base+model-distinct"
 		if v.Model == "" || opts.ResolveGAF == nil {
@@ -329,9 +321,8 @@ func BuildProjectileDrawsInto(dst []ProjectileDraw, projectiles []frame.Projecti
 		if visible == nil || !visible(v) { // [03 §5.4] absent visibility dependency fails closed
 			continue
 		}
-		// The global sequence reserves/draws its destination before looking up
-		// the frame. A failed admission aborts the whole renderer and must not
-		// perform any later asset work [03 §5.4].
+		// A lens outside the viewport stops this walk. Earlier instructions
+		// remain visible and later records do no work [03 §5.4].
 		if v.RenderType == RenderTypeGlobalGAF && admitGlobalGAF != nil && !admitGlobalGAF(v) {
 			return out, true
 		}

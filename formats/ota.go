@@ -1,10 +1,15 @@
 package formats
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
+
+// ErrMissingOTAHeader distinguishes a parsed definition rejected by map
+// discovery from fatal authored-text syntax errors [02 R-MAP-01 §2].
+var ErrMissingOTAHeader = errors.New("ota: missing GlobalHeader")
 
 // OTA contains the map metadata needed by menus and the game-start path.
 // The full TDF document remains available for mission-specific consumers.
@@ -42,7 +47,7 @@ func LoadOTA(data []byte) (*OTA, error) {
 	}
 	global := document.Root.Section("GlobalHeader")
 	if global == nil {
-		return nil, fmt.Errorf("ota: missing GlobalHeader")
+		return nil, ErrMissingOTAHeader
 	}
 	result := &OTA{
 		Document:           document,

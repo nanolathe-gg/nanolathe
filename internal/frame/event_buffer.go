@@ -31,6 +31,7 @@ const (
 	KindAudio           = EventKindAudio
 	KindStatus          = EventKindStatus
 	KindAnnounce        = EventKindAnnounce
+	KindMusicIntensity  = EventKindMusicIntensity
 )
 
 const (
@@ -381,12 +382,13 @@ func (c *EventBuffer) SnapshotEventsInto(dst []EventView) []EventView {
 }
 
 // isStatusKind reports whether a kind is excluded from the effect bound. The
-// bound counts every admitted event that is not a status or announcement
-// record: neither is an effect, so neither belongs against the effect-pool
-// bound this window stands in for.
-func isStatusKind(k Kind) bool { return k == KindStatus || k == KindAnnounce }
+// bound excludes semantic status, announcement and music-activity records;
+// these never allocate a visual effect.
+func isStatusKind(k Kind) bool {
+	return k == KindStatus || k == KindAnnounce || k == KindMusicIntensity
+}
 
-func validKind(k Kind) bool { return k >= KindCOBSFX && k <= KindAnnounce }
+func validKind(k Kind) bool { return k >= KindCOBSFX && k <= KindMusicIntensity }
 
 func (c *EventBuffer) emit(kind Kind, e Event) bool {
 	e.Kind = kind

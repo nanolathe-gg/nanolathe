@@ -567,6 +567,7 @@ const (
 	familyHalo
 	familySurfaceWakes
 	familyScorchMarks
+	familyLens
 )
 
 // tag is one ordering entry: which family, and which element of that family's
@@ -600,6 +601,7 @@ type List struct {
 	halo         []Halo
 	surfaceWakes []SurfaceWakes
 	scorchMarks  []ScorchMarks
+	lens         []Lens
 
 	classicImages    []*ClassicModelImage
 	classicImageNext int
@@ -802,6 +804,7 @@ func (l *List) Reset() {
 	l.markers = l.markers[:0]
 	l.flash = l.flash[:0]
 	l.halo = l.halo[:0]
+	l.lens = l.lens[:0]
 	clear(l.surfaceWakes)
 	l.surfaceWakes = l.surfaceWakes[:0]
 	clear(l.scorchMarks)
@@ -815,6 +818,7 @@ func (l *List) Replay(s Sink) {
 	// The trail family is optional: an executor that cannot present it (the
 	// Original executor) simply lacks the hook.
 	trails, _ := s.(TrailSink)
+	lenses, _ := s.(LensSink)
 	wakes, _ := s.(SurfaceWakeSink)
 	scorch, _ := s.(ScorchSink)
 	// The world boundary and the strategic marker layer are optional in exactly
@@ -872,6 +876,10 @@ func (l *List) Replay(s Sink) {
 			s.Flash(l.flash[t.idx])
 		case familyHalo:
 			s.Halo(l.halo[t.idx])
+		case familyLens:
+			if lenses != nil {
+				lenses.Lens(l.lens[t.idx])
+			}
 		}
 	}
 }
@@ -948,6 +956,7 @@ func (l *List) Clone() List {
 	// way it shares GAF frames [I6].
 	c.flash = append([]Flash(nil), l.flash...)
 	c.halo = append([]Halo(nil), l.halo...)
+	c.lens = append([]Lens(nil), l.lens...)
 	c.surfaceWakes = make([]SurfaceWakes, len(l.surfaceWakes))
 	for i, wakes := range l.surfaceWakes {
 		c.surfaceWakes[i] = SurfaceWakes{Marks: append([]SurfaceWake(nil), wakes.Marks...)}

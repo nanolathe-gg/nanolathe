@@ -691,6 +691,12 @@ time. A list refresh with unchanged rows preserves `top`, and an external
 change to `top` synchronizes the associated knob before pointer service
 `[07 R-WGT-01 §4]` `[07 R-WGT-01 §5]`.
 
+SKIRMISH screen entry copies the lobby selector into the campaign/session
+selector before building the controls. Its Difficulty callback cycles the lobby selector and writes the same
+value to the campaign/session selector, including the Hard-to-Easy wrap
+`[08 "Skirmish configuration"]`. The coupling belongs to this screen; it
+does not make every preference load or NEWGAME write update both fields.
+
 `activateGadget`,
 `activateEscape`, `activateSkirmishGadget` and `activateDynamicSkirmishGadget`
 are the callbacks; `openMissionMenu`, `retailSkirmishStartError` and
