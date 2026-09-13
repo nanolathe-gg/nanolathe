@@ -121,6 +121,9 @@ type UnitView struct {
 	// model away [R-REN-03A §8].
 	Digger     bool
 	IsBuilding bool
+	// IsFactory is the authored structure-builder classification used by
+	// presentation to resolve completed yard occupants with the building.
+	IsFactory bool
 	// Activated is the committed on/off state used by UI command dispatch.
 	// Presentation must not rehydrate a selected unit from the live pool [I6].
 	Activated bool

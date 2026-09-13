@@ -52,6 +52,19 @@ func (g *gameShell) serviceMenuWidgets(p *ui.Panel, in *input.State) bool {
 			}
 		}
 	}
+	// Wheel and precise trackpad samples are a host menu extension. Keep the
+	// fractional remainder in the panel and route only to the hovered list or
+	// its associated bar/arrows; the existing service owns clicks and capture.
+	if in.Mouse.Scrolled() {
+		index := p.HitTest(int32(in.Mouse.X), int32(in.Mouse.Y))
+		if index >= 0 {
+			gad := p.Window.Gadgets[index]
+			if gad.Kind == gui.KindScrollBar || (gad.Kind == gui.KindButton && gad.Attribs&0x1800 != 0) {
+				index = listIndexForAssocPanel(p, gad.Assoc)
+			}
+		}
+		p.ScrollTextListAt(index, -in.Mouse.ScrollY)
+	}
 	editorIndex := p.EditorIndex()
 	frame := pointerFrame(in, widgetTokens(in), g.widgetTimerAdvanced(p))
 	frame.TokenMode = true

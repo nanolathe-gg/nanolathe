@@ -147,9 +147,10 @@ func TestCampaignContinuationWalkWritesAndResumesABank(t *testing.T) {
 		t.Fatalf("summary=%+v", summary)
 	}
 
-	// CANCEL returns to the surface underneath, and the battle is retired the
-	// way a real results-screen load would retire it.
-	shell.activateSaveLoadGadget("CANCEL")
+	// A successful save returns to the surface underneath without CANCEL.
+	if saveLoadUI != nil || saveLoadPanel != nil || saveLoadAssets != nil {
+		t.Fatal("successful continuation save did not close the dialog")
+	}
 	shell.battle = nil
 
 	// The front end's LoadGame lists the bank and resumes it.
@@ -287,5 +288,31 @@ func TestBattleOptionsMenuOpensTheSaveDialog(t *testing.T) {
 	shell.activateSaveLoadGadget("CANCEL")
 	if saveLoadUI != nil {
 		t.Fatal("CANCEL did not close the dialog")
+	}
+}
+
+func TestSaveDialogRetainsEditorForEmptyNameAndFailedWrite(t *testing.T) {
+	resetSaveLoadScreenState(t)
+	shell, _ := retailShellForTest(t)
+	if err := shell.openSaveLoadScreen(saveScreenMode, saveLoadFromBattle); err != nil {
+		t.Fatal(err)
+	}
+	screen, panel := saveLoadUI, saveLoadPanel
+	shell.activateSaveLoadGadget("LOAD")
+	if saveLoadUI != screen || !shell.saveLoadPanelActive() || shell.frontend.Panels.Modal() != nil {
+		t.Fatal("empty save name closed the dialog or raised a message")
+	}
+	// No battle is installed, so writing fails without creating a save file.
+	saveLoadUI.SetName("retry")
+	shell.activateSaveLoadGadget("LOAD")
+	if saveLoadUI != screen || saveLoadPanel != panel || saveLoadUI.Name() != "retry" {
+		t.Fatal("failed save discarded the dialog or typed name")
+	}
+	if shell.frontend.Panels.Modal() == nil {
+		t.Fatal("failed save did not show its error")
+	}
+	shell.frontend.Panels.CloseModal()
+	if !shell.saveLoadPanelActive() {
+		t.Fatal("dismissing the error did not return to the save editor")
 	}
 }

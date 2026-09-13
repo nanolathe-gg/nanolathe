@@ -940,6 +940,27 @@ the published offset to the camera.
 
 ## 5. Divergences
 
+* **Completed units crossing factory yards retain per-pixel composition.**
+  Retail detaches a product at completion `[04 R-FAC-02 §3]`. Nanolathe’s
+  independent Z-row blit can then be overwritten by the factory plate. The requested host
+  presentation policy extends the existing height-plane staging
+  `[03 R-REN-03A §4]` to admitted, completed grounded mobiles whose authored
+  footprint rectangles overlap an admitted, completed structure builder.
+  `UnitView.IsFactory` copies `Builder && BMcode == 0` from the definition;
+  mobility, unit names, selection and remembered construction history are not
+  classification inputs. Ground units crossing any open factory yard receive
+  the same treatment, including after save restoration. The current frame alone
+  establishes the group, and strict rectangle overlap ends it when the edges
+  touch. Actual cargo stays first in its published order; yard occupants follow
+  in committed unit order. A unit overlapping multiple factories joins the
+  first admitted factory in that order. Existing visibility and pass-A window
+  admission apply independently to both subjects. A grouped occupant has one
+  body present, through the factory; geometry preparation skips its standalone
+  packet. Neither positions, attachment links nor height keys change. The
+  existing per-pixel height test keeps the factory walls able to occlude the
+  unit while the lower plate cannot overwrite its higher surfaces. This policy
+  applies to both executors and uses no depth bias.
+
 * **One window backend replaces two.** Retail has a GDI windowed path and a
   DirectDraw fullscreen path `[03 §4.1]` `[03 §4.2]`; Nanolathe has one
   Ebitengine loop presenting a software framebuffer. The fixed logical size and

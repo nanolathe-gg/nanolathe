@@ -205,6 +205,10 @@ func (g *gameShell) drawListSelection(c *client.Client, r gui.Rect, y, h int) {
 const retailListSelectionLevel = 30
 
 func (g *gameShell) drawRetailScrollbar(c *client.Client, p *ui.Panel, index int, gad gui.Gadget, r gui.Rect) {
+	if p != nil && p.ListAt(listIndexForAssocPanel(p, gad.Assoc)) != nil {
+		g.drawRetailListScrollbar(c, p, index, gad, r)
+		return
+	}
 	if g.assets == nil || g.assets.common == nil {
 		return
 	}
@@ -343,6 +347,78 @@ func (g *gameShell) drawRetailScrollbar(c *client.Client, p *ui.Panel, index int
 	if (gad.GrayedOut != 0 || gad.Attribs&gui.AttribInert != 0) && g.assets != nil {
 		c.UIShadeRect(g.assets.pal, int(r.X), int(r.Y), int(r.W), int(r.H), retailGreyedButtonShade)
 	}
+}
+
+func (g *gameShell) drawRetailListScrollbar(c *client.Client, p *ui.Panel, index int, gad gui.Gadget, r gui.Rect) {
+	if g.assets == nil || g.assets.common == nil {
+		return
+	}
+	e, ok := g.assets.common.Find("SLIDERS")
+	if !ok || len(e.Frames) < 20 {
+		return
+	}
+	// Runtime construction has already removed the arrow extents from this
+	// rectangle and appended the two arrow buttons. Paint the retained knob
+	// serviced by Panel, within that same track [07 R-WGT-01 §5].
+	vertical := gad.Attribs&1 == 0
+	base := 0
+	if !vertical {
+		base = 10
+	}
+	track0, track1, track2 := e.Frames[base].Frame, e.Frames[base+1].Frame, e.Frames[base+2].Frame
+	thumb0, thumb1, thumb2 := e.Frames[base+3].Frame, e.Frames[base+4].Frame, e.Frames[base+5].Frame
+	if track0 == nil || track1 == nil || track2 == nil || thumb0 == nil || thumb1 == nil || thumb2 == nil {
+		return
+	}
+	knobSize, _ := p.SliderMetricsAt(index, g.retailTextHeight())
+	knob := p.SliderKnobAt(index)
+	x, y := int(r.X), int(r.Y)
+	if vertical {
+		drawRetailScrollbarTrack(c, track0, track1, track2, y, x, y+int(r.H), false)
+		thumbX := x + int(track0.Width)/2 - int(thumb0.Width)/2
+		thumbY := y + 3 + knob
+		length := min(knobSize, int(r.H)-6)
+		drawRetailScrollbarThumbClipped(c, thumb0, thumb1, thumb2, thumbX, thumbY, length, false, r)
+	} else {
+		drawRetailScrollbarTrack(c, track0, track1, track2, x, y, x+int(r.W), true)
+		thumbX := min(x+3+knob, x+int(r.W)-int(thumb0.Width)-2)
+		thumbY := y + int(track0.Height)/2 - int(thumb0.Height)/2
+		length := min(knobSize, int(r.W)-6)
+		drawRetailScrollbarThumbClipped(c, thumb0, thumb1, thumb2, thumbX, thumbY, length, true, r)
+	}
+	if (gad.GrayedOut != 0 || gad.Attribs&gui.AttribInert != 0) && g.assets != nil {
+		c.UIShadeRect(g.assets.pal, int(r.X), int(r.Y), int(r.W), int(r.H), retailGreyedButtonShade)
+	}
+}
+
+// The final body tile and cap stay inside the painted knob's trailing clip
+// boundary even when the repeatable middle does not divide its length
+// [07 R-WGT-01 §5].
+func drawRetailScrollbarThumbClipped(c *client.Client, first, middle, last *formats.GAFFrame, x, y, length int, horizontal bool, r gui.Rect) {
+	if length <= 0 {
+		return
+	}
+	clipX, clipY, clipW, clipH := x, y, int(first.Width), min(length, int(r.Y+r.H)-3-y)
+	firstLen, middleLen, lastLen := int(first.Height), int(middle.Height), int(last.Height)
+	if horizontal {
+		clipW, clipH = min(length, int(r.X+r.W)-3-x), int(first.Height)
+		firstLen, middleLen, lastLen = int(first.Width), int(middle.Width), int(last.Width)
+	}
+	if clipW <= 0 || clipH <= 0 || middleLen <= 0 {
+		return
+	}
+	blit := func(f *formats.GAFFrame, pos int) {
+		px, py := x, y+pos
+		if horizontal {
+			px, py = x+pos, y
+		}
+		c.UIBlitClipped(f, px, py, clipX, clipY, clipW, clipH)
+	}
+	blit(first, 0)
+	for pos := firstLen; pos < length-lastLen; pos += middleLen {
+		blit(middle, pos)
+	}
+	blit(last, length-lastLen)
 }
 
 func drawRetailScrollbarTrack(c *client.Client, first, middle, last *formats.GAFFrame, start, cross0, cross1 int, horizontal bool) {

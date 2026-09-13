@@ -669,15 +669,23 @@ half `[07 R-FE-01 §11]`. `step` is the per-host-frame pump: battle, loading, or
 the menu pass, each installing its cursor shape — the hourglass across the
 blocking load transition and the idle shape everywhere else `[07 §8]`.
 
-`retail_menu_input.go` is the gadget service pass, in retail's order: the
-scrollbar drag update and the held-arrow repeat, the wheel, then press — which
-takes the capture and gives the gadget focus before any callback, so a
-following Return or Space activates the same control — then release, which runs
-the list, scrollbar or callback arm and **returns immediately**, because a
-callback may close the window it was invoked from; then the skirmish
-right-button rows, then Escape, then Enter/Space against the focused gadget or
-the window's `crdefault`, then the authored quick keys, then the list arrows
-`[07 R-WGT-01 §1]` `[07 R-WGT-01 §2]` `[07 R-WGT-02 §5]`. `activateGadget`,
+`retail_menu_input.go` adapts the host sample to `Panel.ServiceFrame`, which
+owns pointer capture, held repeats, selection and keyboard dispatch. A
+user-requested host extension routes wheel and two-finger scrolling over a
+text list or its associated scrollbar/arrows to that list. One normalized
+wheel unit moves one row; fractional units accumulate per panel and target
+list, and clamping discards outward fractional motion. This changes `top`
+without changing the selected row. It is host presentation policy: retail has
+no dedicated wheel-message case `[07 §1]`.
+
+List scrollbar painting consumes the service's retained knob and derived knob
+size from the already-built track rectangle. Runtime arrow children paint
+separately; the painter must not remove their extents from the track a second
+time. A list refresh with unchanged rows preserves `top`, and an external
+change to `top` synchronizes the associated knob before pointer service
+`[07 R-WGT-01 §4]` `[07 R-WGT-01 §5]`.
+
+`activateGadget`,
 `activateEscape`, `activateSkirmishGadget` and `activateDynamicSkirmishGadget`
 are the callbacks; `openMissionMenu`, `retailSkirmishStartError` and
 `retailAllPlayersSameAlliedGroup` are the `SKIRMISH` start preflight
@@ -1735,6 +1743,11 @@ fixtures define the new input policy; it is not attributed to retail evidence.
   order icon `[07 R-P0-11 §3]`.
 
 ## 5. Divergences
+
+* **Tab resumes an already paused battle.** As user-requested host policy,
+  Tab with no modal open resumes the battle directly; F2 still opens options.
+  Child dialogs retain input ownership, so this shortcut cannot bypass a
+  save/load or confirmation dialog. This is not a retail behavior claim.
 
 * **Modern resource construction shortcut** is the user-requested input policy
   in §3.10. It produces ordinary typed commands, with no alternate simulation

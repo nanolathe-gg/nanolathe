@@ -191,10 +191,11 @@ type worldBuckets struct {
 	// plus one, so zero means "no children"; childNext is the same encoding
 	// indexed by child. touched lists the carrier slots written this frame so
 	// the reset costs the number of carriers rather than the slot space.
-	childHead    []int32
-	childNext    []int32
-	childTouched []int32
-	unitIndex    []int32 // unit slot to committed slice index plus one
+	childHead     []int32
+	childNext     []int32
+	childTouched  []int32
+	unitIndex     []int32       // unit slot to committed slice index plus one
+	factoryParent []pool.Handle // presentation-only grouping, indexed by committed unit
 }
 
 func (b *worldBuckets) reset() {
@@ -210,6 +211,7 @@ func (b *worldBuckets) reset() {
 	b.childTouched = b.childTouched[:0]
 	b.childNext = b.childNext[:0]
 	b.units = nil
+	b.factoryParent = b.factoryParent[:0]
 }
 
 // indexChildren resolves each carrier's published head-first cargo list.
@@ -262,6 +264,63 @@ func (b *worldBuckets) indexChildren(units []frame.UnitView) {
 			previous = childIndex
 		}
 	}
+}
+
+// indexFactoryOccupants extends the existing height-plane composition to
+// completed ground units crossing a factory footprint. Completion clears the
+// actual carrier link [04 R-FAC-02 §3]; independent row painting can then hide
+// the product under the plate. This is the host presentation policy documented
+// in DESIGN_PRESENTATION_CLIENT §5, not a change to attachment or world height.
+func (b *worldBuckets) indexFactoryOccupants(win worldWindow) {
+	b.factoryParent = resizeScratch(b.factoryParent, len(b.units))
+	clear(b.factoryParent)
+	// Only admitted drawables participate: an invisible unit cannot become
+	// visible by overlapping a visible factory, or disappear with a hidden one.
+	for _, d := range b.items {
+		factory := d.unit
+		if factory == nil || factory.Slot == 0 || !factory.IsFactory || factory.BuildRemaining != 0 ||
+			factory.MoverMode != moverModeGrounded || isCarried(*factory) || !win.admitsPassARow(d.row) {
+			continue
+		}
+		tail := b.firstChild(factory.Slot)
+		for tail >= 0 && b.nextChild(tail) >= 0 {
+			tail = b.nextChild(tail)
+		}
+		for _, candidate := range b.items {
+			u := candidate.unit
+			if u == nil || candidate.index < 0 || u.Slot == factory.Slot || !u.BMCode ||
+				u.BuildRemaining != 0 || u.MoverMode != moverModeGrounded || isCarried(*u) ||
+				len(u.Cargo) != 0 || b.isFactoryOccupant(candidate.index) || !win.admitsPassARow(candidate.row) ||
+				!factoryFootprintsOverlap(*factory, *u) {
+				continue
+			}
+			idx := int(candidate.index)
+			b.factoryParent[idx] = factory.Slot
+			if tail < 0 {
+				b.childHead[int(factory.Slot)] = int32(idx) + 1
+				b.childTouched = append(b.childTouched, int32(factory.Slot))
+			} else {
+				b.childNext[tail] = int32(idx) + 1
+			}
+			tail = idx
+		}
+	}
+}
+
+func (b *worldBuckets) isFactoryOccupant(index int32) bool {
+	return index >= 0 && int(index) < len(b.factoryParent) && b.factoryParent[index] != 0
+}
+
+// Footprints are authored cell extents. Test their world-space rectangles,
+// with strict overlap so touching edges release the presentation grouping.
+func factoryFootprintsOverlap(a, b frame.UnitView) bool {
+	if a.FootX <= 0 || a.FootZ <= 0 || b.FootX <= 0 || b.FootZ <= 0 {
+		return false
+	}
+	halfX := numeric.Fixed((int64(a.FootX) + int64(b.FootX)) * cellPixels << 15)
+	halfZ := numeric.Fixed((int64(a.FootZ) + int64(b.FootZ)) * cellPixels << 15)
+	dx, dz := a.X-b.X, a.Z-b.Z
+	return dx > -halfX && dx < halfX && dz > -halfZ && dz < halfZ
 }
 
 // firstChild returns the index of a carrier's first attached child, or -1.
@@ -599,6 +658,7 @@ func (c *Client) drawWorldPass(cur *frame.Frame, ok bool) {
 		sx, sy := c.featureScreenPos(*f)
 		b.add(worldDrawable{row: featureBucketRow(f.CZ, camZ), feature: f, screenX: sx, screenY: sy, index: -1})
 	}
+	b.indexFactoryOccupants(win)
 	// Stage one: both unit passes' per-unit geometry, in parallel, into slots
 	// indexed by unit (docs/DESIGN_GPU_RENDERER.md §13.9). It runs over the
 	// finished bucket order and writes nothing to the list, so the two
@@ -714,7 +774,7 @@ func (c *Client) presentUnit(d worldDrawable) {
 	if c.strategicView() {
 		return
 	}
-	if isCarried(u) {
+	if isCarried(u) || c.worldBuckets.isFactoryOccupant(d.index) {
 		return
 	}
 	if u.Model == "" && c.modelForUnit(u) == nil {

@@ -4881,7 +4881,8 @@ render target or extra blur pass is added. The existing glow switch controls it.
 **NL3 — local lighting.** Before model preparation, visible particles join the
 nearest existing cluster within 24 world pixels in unsheared physical space.
 Clusters follow the arithmetic mean of their particles' positions, with no
-screen-grid snapping. Each particle adds 0.06 times its displayed palette RGB;
+screen-grid snapping. Each particle adds 0.06 times the mean displayed RGB of
+the seven-entry nano palette ramp [03 §5.5];
 the completed cluster is uniformly scaled down if its peak exceeds 0.7.
 Its radius is 80 world pixels. These parameters are presentation tuning.
 At most 64 clusters occupy fixed scratch storage; later particles may join an
@@ -4890,9 +4891,13 @@ explosions for the existing 64-light budget by peak energy and stable ties.
 Subject selection, outward face response, smoke scattering and radial falloff
 are the existing BL3–BL4 path. Dense overlapping clusters may add together;
 there is no per-builder brightness normalization. All source state is rebuilt
-from the current recorded particles, so energy varies with the looping palette
-shimmer and disappears when those particles expire. The battle-lighting comparison
-switch disables both explosion and nano lighting; glow remains independent.
+from the current recorded particles and displayed palette, and disappears when
+those particles expire. The broad illumination stays constant across the
+seven-step particle shimmer: using each particle's instantaneous palette entry
+made the factory faces and ground pools flash. The particle cores and their
+small glow retain that shimmer. No temporal history or delayed extinction is
+introduced; particle count, grouping and motion still affect illumination.
+The battle-lighting comparison switch disables both explosion and nano lighting; glow remains independent.
 
 The same limitations as §23.3 apply: face-centroid lighting, no occlusion
 between models and no terrain relighting. Particle grouping is bounded and
@@ -4908,6 +4913,18 @@ clipping, clone/reset, green illumination on a facing model surface, an unlit
 back face, a halo beside the particle cores, and restoration when the effects
 are disabled. Independent read-only review found no implementation issues;
 the description was corrected to call the looping particle ramp a shimmer.
+
+The factory-flash regression sweeps an unchanged spray through all seven
+palette entries and replays entries out of order. Broad source energy stays
+identical, while replacing the displayed palette updates its hue. A separate
+sparse-spray sequence verifies proportional energy for one, two and three
+particles and immediate removal at zero; count and geometry changes still
+change illumination. The device fixture checks every pixel outside the particle
+cores across the full ramp: armour and terrain remain byte-identical, with
+nonzero ground illumination, while the cores retain their palette animation.
+`NANOLATHE_NANO_SHOTS` optionally captures those seven frames during the existing
+GPU device gate. This isolates palette flicker; it does not claim that particle
+motion, changing cluster membership or light-budget contention are smoothed.
 
 Matching scene-version-4 Great Divide runs used seed 7, 1920×1080, native zoom,
 60 target draws/s, 300 pre-ticks, 120 warmup draws and 180 measured draws,

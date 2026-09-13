@@ -508,7 +508,11 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 	// post-loop diagnostics installed by a caller intact.
 	bindBattleMessageRetirement(b.sess, cl)
 	cl.SetSnapshot(b.sess.Snapshot)
-	cl.SetPresentationPaused(b.sess.Clock != nil && b.sess.Clock.Paused)
+	// Restore pause truth before input can run; the first draw is not an
+	// initialization boundary [08 "Scheduler and random state in saves"][I6].
+	paused := b.sess.Clock != nil && b.sess.Clock.Paused
+	b.battleState().SetPauseTruth(paused)
+	cl.SetPresentationPaused(paused)
 	cl.SetTerrain(b.sess.World)
 	// The detail-art provider is installed with the terrain it belongs to and
 	// cleared by the SetTerrain(nil) of teardown (DESIGN_GPU_RENDERER §14.3).
@@ -987,7 +991,14 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		in = &residual
 	}
 	if !talkOwned && (keyDown(input.KeyTab) || keyDown(input.KeyF2) && !shiftHeld) {
-		b.openBattleMenu()
+		// Host UI policy: a paused save opens without ARMOPT, so Tab resumes
+		// it directly instead of requiring an open/close cycle. F2 retains
+		// access to options (DESIGN_INTERFACE_HUD_INPUT §3.4).
+		if keyDown(input.KeyTab) && state.Paused() {
+			b.applyBattleSchedule(ui.PauseIntent(false))
+		} else {
+			b.openBattleMenu()
+		}
 		cl.Cursors().SetIndex(render.CursorNormal)
 		return
 	}

@@ -204,3 +204,43 @@ func TestBattleMenuTabCloseConsumesClosingFrame(t *testing.T) {
 		t.Fatalf("closing modal frame leaked %d human commands", len(got))
 	}
 }
+
+// A loaded clock can be paused without an options window. Input must work
+// before a draw synchronizes the overlay, and the resume edge owns the frame.
+func TestInstalledPausedBattleResumesWithOneTabBeforeDraw(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		key  input.Key
+	}{{"Tab", input.KeyTab}, {"F2", input.KeyF2}, {"Pause", input.KeyPause}} {
+		t.Run(tc.name, func(t *testing.T) {
+			key := tc.key
+			b := newTestBattle(testCatalogON05(), testWorldON05(20, 20))
+			b.hud = &retailBattleHUD{}
+			b.sess.Clock.Paused = true
+			cl := b.cl
+			installBattleClient(cl, b)
+			if !b.battleState().Paused() {
+				t.Fatal("install did not initialize the saved pause truth")
+			}
+			cl.Input().Kbd.SetKey(key, true)
+			if key == input.KeyTab {
+				cl.Input().Kbd.SetKey(input.KeyM, true)
+				cl.Input().Mouse.SetPosition(200, 200)
+				cl.Input().Mouse.SetButton(input.MouseButtonLeft, true)
+			}
+			b.viewerStep(0, cl)
+			if key == input.KeyF2 {
+				if !b.sess.Clock.Paused || b.battleState().Modal() != ui.BattleModalOptions {
+					t.Fatal("F2 did not retain access to the paused options window")
+				}
+				return
+			}
+			if b.sess.Clock.Paused || b.battleState().Paused() || b.battleState().Modal() != ui.BattleModalClosed {
+				t.Fatal("one press did not resume the paused battle")
+			}
+			if b.battleState().Input.Latch != input.LatchNormal || len(b.sess.PendingHumanCommands()) != 0 {
+				t.Fatal("resume frame leaked unrelated world input")
+			}
+		})
+	}
+}

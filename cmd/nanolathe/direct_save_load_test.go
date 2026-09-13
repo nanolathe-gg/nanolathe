@@ -14,6 +14,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/testsupport"
+	"github.com/nanolathe-gg/nanolathe/internal/ui"
 )
 
 // Exercise the windowed --map owner, including its installed Step callback.
@@ -147,7 +148,13 @@ func TestDirectBattleSaveLoadThroughWindowInput(t *testing.T) {
 	if _, err := save.Open(path); err != nil {
 		t.Fatalf("UI save failed: %v (modal %v)", err, shell.frontend.Panels.Modal())
 	}
-	click(saveLoadPanel.Window, "CANCEL")
+	if saveLoadUI != nil || saveLoadPanel != nil || saveLoadAssets != nil {
+		t.Fatal("successful save did not close and release the dialog")
+	}
+	if b.battleState().Modal() != ui.BattleModalOptions || !b.sess.Clock.Paused {
+		t.Fatal("saving did not return to the paused options window")
+	}
+	captureSaveLoadUI(t, cl, "after-save")
 	click(b.hud.optionsWin, "LOADGAME")
 	if !shell.saveLoadPanelActive() {
 		t.Fatal("LOADGAME click did not open a dialog")
@@ -169,6 +176,9 @@ func TestDirectBattleSaveLoadThroughWindowInput(t *testing.T) {
 	if restored == b || restored == nil || restored.sess.Clock.GlobalTick != tick {
 		t.Fatal("load did not replace the battle at its saved tick")
 	}
+	if !restored.battleState().Paused() {
+		t.Fatal("loaded pause truth was not installed before the first draw")
+	}
 	captureSaveLoadUI(t, cl, "battle-after-load")
 	for i, h := range handles {
 		u := restored.sess.Units.Unit(h)
@@ -187,10 +197,14 @@ func TestDirectBattleSaveLoadThroughWindowInput(t *testing.T) {
 			}
 		}
 	}
-	// The scheduler account retains the options-menu pause. Resume through
-	// the newly restored battle's own options controls [01 §4.3].
-	openOptions()
-	click(restored.hud.optionsWin, "OK")
+	// The scheduler account retains the saved pause. The host Tab shortcut
+	// resumes it in one press without first opening another options window.
+	cl.Input().Kbd.SetKey(input.KeyTab, true)
+	step()
+	if restored.sess.Clock.Paused || restored.battleState().Modal() != ui.BattleModalClosed {
+		t.Fatal("one Tab press did not resume the loaded battle")
+	}
+	cl.Input().Kbd.SetKey(input.KeyTab, false)
 	for i := 0; i < 4; i++ {
 		step()
 	}
@@ -211,6 +225,9 @@ func TestDirectBattleSaveLoadThroughWindowInput(t *testing.T) {
 	step()
 	if _, err := save.Open(session.RetailSavePath(shell.saveLoadDir(), "again")); err != nil {
 		t.Fatalf("save after load: %v", err)
+	}
+	if saveLoadUI != nil || saveLoadPanel != nil {
+		t.Fatal("saving with Enter did not close the dialog")
 	}
 	t.Logf("saved and restored %d added units at tick %d; resumed at %d", len(handles), tick, restored.sess.Clock.GlobalTick)
 }

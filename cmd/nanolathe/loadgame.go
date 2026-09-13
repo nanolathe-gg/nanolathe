@@ -362,13 +362,9 @@ func (g *gameShell) commitSaveLoadLoad() {
 // between-missions continuation from the results panel, a live-battle bank
 // from inside a battle [08 R-CAMP-01 §8] [08 "Summary"].
 //
-// The save action leaves the dialog exactly as it found it: retail's handler
-// plays its cue, writes the file when the name box is non-empty, and returns.
-// It does not close the window and — unlike `DELETE`, which re-enumerates and
-// rewrites the summary panel beside it — it does not rebuild the slot list, so
-// the slot just written is not in the list until the dialog is reopened. The
-// asymmetry with `DELETE` is what makes it deliberate rather than an omission
-// [08 R-SAVE-02 §1].
+// Successful saves close the dialog, a requested host UI policy documented in
+// DESIGN_SESSIONS_AI_SAVE §5. Empty names and failed writes keep the editor so
+// the player can correct them without reopening the dialog.
 func (g *gameShell) commitSaveLoadWrite() {
 	// The cue precedes the empty-name test, so a click on the action button
 	// with a blank name box is audible and does nothing else
@@ -393,7 +389,9 @@ func (g *gameShell) commitSaveLoadWrite() {
 	}
 	if err != nil {
 		reportRetailMessageError(g.showRetailMessage(err.Error()))
+		return
 	}
+	g.closeSaveLoadScreen()
 }
 
 // retailSaveGameID is the `Game ID` string: the C-library wall-clock time at

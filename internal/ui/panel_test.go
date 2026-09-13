@@ -358,3 +358,28 @@ func TestPanelDuplicateListsKeepAssociationAndCapture(t *testing.T) {
 		t.Fatal("duplicate lists shared selection")
 	}
 }
+
+// Host wheel/trackpad scrolling retains fractions and selection while keeping
+// the associated bar ready for the next pointer pass [07 R-WGT-01 §5].
+func TestTextListWheelFractionsBoundsAndKnob(t *testing.T) {
+	p := servicePanel(
+		gui.Gadget{Kind: gui.KindListBox, Active: 1, Assoc: 1, Rect: gui.Rect{H: 22}, ItemHeight: 5},
+		gui.Gadget{Kind: gui.KindScrollBar, Active: 1, Assoc: 1, Rect: gui.Rect{W: 8, H: 80}},
+	)
+	p.FillTextListAt(1, make([]string, 30), nil, 4)
+	p.SetListTopAt(1, 10, p.ListMaxTopAt(1))
+	p.ScrollTextListAt(1, 0.75)
+	p.ScrollTextListAt(1, 0.25)
+	_, travel := p.SliderMetricsAt(2, 4)
+	if p.ListAt(1).Top() != 11 || p.ListAt(1).Selected() != 0 || p.SliderKnobAt(2) != 11*travel/p.ListMaxTopAt(1) {
+		t.Fatalf("wheel top/selection/knob=%d/%d/%d", p.ListAt(1).Top(), p.ListAt(1).Selected(), p.SliderKnobAt(2))
+	}
+	// Upward input at the top must not leave fractional debt to consume the
+	// user's first downward gesture.
+	p.ScrollTextListAt(1, -100)
+	p.ScrollTextListAt(1, -0.75)
+	p.ScrollTextListAt(1, 1)
+	if p.ListAt(1).Top() != 1 {
+		t.Fatalf("first downward gesture after upper clamp top=%d", p.ListAt(1).Top())
+	}
+}

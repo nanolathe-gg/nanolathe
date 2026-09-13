@@ -38,11 +38,13 @@ func (r *Renderer) nanoInView(f drawlist.Fill) bool {
 
 // prepareNanoLighting groups the spray in physical space, with fixed scratch
 // storage. A group follows its particles' mean position, preserving camera
-// translation and recording scale without screen-grid snapping. RGB comes from
-// each particle's current palette ramp, following its looping shimmer [03 §5.5].
+// translation and recording scale without screen-grid snapping. Broad illumination
+// uses the mean palette ramp: the looping shimmer stays on the tiny particle
+// cores and their glow, instead of flashing the entire factory (GPU design §23.5).
 func (r *Renderer) prepareNanoLighting(list *drawlist.List) {
 	l := &r.lighting
 	l.nanoCount = 0
+	color := nanoLightColor(&r.displayPalette)
 	list.VisitNanoSources(func(f drawlist.Fill) {
 		if !r.nanoInView(f) {
 			return
@@ -69,10 +71,9 @@ func (r *Renderer) prepareNanoLighting(list *drawlist.List) {
 		}
 		group := &l.nano[at]
 		group.count++
-		color := r.displayPalette[f.Index]
 		for j := range pos {
 			group.light.position[j] += (pos[j] - group.light.position[j]) / float32(group.count)
-			group.light.color[j] += float32(color[j]) / 255 * nanoParticleEnergy
+			group.light.color[j] += color[j] * nanoParticleEnergy
 		}
 	})
 	for i := 0; i < l.nanoCount; i++ {
@@ -88,6 +89,19 @@ func (r *Renderer) prepareNanoLighting(list *drawlist.List) {
 		}
 		l.add(light)
 	}
+}
+
+// nanoLightColor averages the displayed seven-entry nano ramp [03 §5.5].
+// This is an Enhanced emission policy, not a change to the recorded palette
+// index. Sampling the palette each gather also honors palette updates without
+// retained time, source identities or illumination surviving expired particles.
+func nanoLightColor(pal *[256][4]byte) (color [3]float32) {
+	for index := 0xa1; index <= 0xa7; index++ {
+		for j := range color {
+			color[j] += float32(pal[index][j]) / (255 * 7)
+		}
+	}
+	return color
 }
 
 // glowNano widens the emission footprint around the existing two-pixel core.

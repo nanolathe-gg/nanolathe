@@ -264,6 +264,9 @@ func (s *Session) publishSnapshot(tick uint32) {
 				vp.Model = u.Def.ObjectName
 				vp.FootX = int8(u.Def.FootprintX)
 				vp.FootZ = int8(u.Def.FootprintZ)
+				// Structure-builder classification follows the factory arm, never
+				// authored CanMove (stock factories author CanMove) [04 R-FAC-02 §1].
+				vp.IsFactory = u.Def.Builder && u.Def.BMCode == 0
 				vp.BMCode = u.Def.BMCode != 0 // model-shading class gate [R-RND-02A]
 				vp.ZBuffer = u.Def.ZBuffer    // composition height plane [R-REN-03A §2]
 				// Model shadow gate and digger clip [R-REN-03D §1][R-REN-03A §8].

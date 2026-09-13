@@ -103,6 +103,9 @@ so the highlighted first save is immediately loadable and its summary and
 name match the selected file [07 R-FE-02 §5] [08 R-SAVE-02 §1].
 A battle routes message-box input ahead of its options controls, including
 the empty-list refusal that opens without a save/load panel.
+Successful saves close the save dialog and release its buffers. Empty names
+and write errors retain it for correction; the battle options window underneath
+stays paused until dismissed. This is the requested host UI policy in §5.
 
 ### 2.1 `internal/session` — states, entry, results, saves
 
@@ -1206,6 +1209,11 @@ transfer shortcut `[04 R-ORD-02 §1]` `[08 R-AI-01 §7]`.
 
 ## 5. Divergences
 
+* **Close the save dialog after a successful write.** This user-requested host
+  UI policy dismisses the save dialog after the writer returns success, for
+  both battle and campaign-continuation saves. Empty names and failed writes
+  leave it open. The underlying options or results surface remains in place.
+  Retail's save callback leaves the dialog open [08 R-SAVE-02 §1].
 * **SC25 — the stock save/load screen authors fewer gadgets than the section
   lists.** The reference install's load-game layout does not author four of the
   gadgets the screen code sets by name, so those writes are inert rather than

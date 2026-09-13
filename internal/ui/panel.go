@@ -105,6 +105,8 @@ type Panel struct {
 	pressed      int
 	rightPressed int
 	drag         scrollDrag
+	wheelList    int
+	wheelRows    float32
 	editor       editorState
 	message      string
 
@@ -373,6 +375,40 @@ func (p *Panel) SliderKnobAt(index int) int {
 		return 0
 	}
 	return p.knob[index]
+}
+
+// SliderMetricsAt exposes the same list-derived knob size and travel used by
+// pointer service, so a painter does not size a competing thumb [07 R-WGT-01 §5].
+func (p *Panel) SliderMetricsAt(index, metric int) (size, travel int) {
+	hooks := WidgetHooks{Metric: func(int) int { return metric }}
+	return p.sliderKnobSize(index, hooks), p.sliderTravel(index, hooks)
+}
+
+// ScrollTextListAt is a host wheel/trackpad adaptation. One wheel unit moves
+// one row; fractional units accumulate for the same list. Selection is retained.
+// This is presentation policy, not a retail input contract.
+func (p *Panel) ScrollTextListAt(index int, delta float32) bool {
+	if p == nil || p.Window == nil {
+		return false
+	}
+	if p.wheelList != index {
+		p.wheelList, p.wheelRows = index, 0
+	}
+	l := p.ListAt(index)
+	if l == nil || !p.ActiveAt(index) || p.Window.Gadgets[index].Attribs&0x10 == 0 {
+		p.wheelRows = 0
+		return false
+	}
+	p.wheelRows += delta
+	steps := int(p.wheelRows)
+	p.wheelRows -= float32(steps)
+	if steps != 0 {
+		p.SetListTopAt(index, l.top+steps, p.ListMaxTopAt(index))
+	}
+	if (l.top == 0 && p.wheelRows < 0) || (l.top == p.ListMaxTopAt(index) && p.wheelRows > 0) {
+		p.wheelRows = 0
+	}
+	return true
 }
 
 // SetSliderKnobAt installs a screen-derived knob position before a service
@@ -1014,6 +1050,25 @@ func (p *Panel) SetListTopAt(index int, top, maxTop int) bool {
 	if l.top > maxTop {
 		l.top = maxTop
 	}
+	// A screen or host wheel may move top without changing selection. Keep
+	// associated bars in step before their next pointer pass [07 R-WGT-01 §5].
+	for i, other := range p.Window.Gadgets {
+		if i == index || other.Assoc != p.Window.Gadgets[index].Assoc {
+			continue
+		}
+		if other.Kind == gui.KindScrollBar {
+			p.knob[i] = 0
+			if maxTop > 0 {
+				p.knob[i] = l.top * p.sliderTravel(i, WidgetHooks{}) / maxTop
+			}
+		}
+		if other.Kind == gui.KindListBox {
+			if peer := p.ListAt(i); peer != nil {
+				peer.top = l.top
+			}
+		}
+	}
+	p.markDirty()
 	return true
 }
 
