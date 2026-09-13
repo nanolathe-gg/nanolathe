@@ -199,3 +199,64 @@ func TestMenuEscapeUsesExactDefaultAndSeparatePrefix(t *testing.T) {
 		})
 	}
 }
+
+// SELMAP authors uppercase PREVMENU, unlike the surrounding screens. Both
+// its pointer action and Escape default close without committing the preview
+// selection [07 R-FE-01 §2][07 R-FE-01 §5].
+func TestMapCancelAuthoredCallback(t *testing.T) {
+	shell := &gameShell{frontend: ui.NewFrontend(modeMenuMap), mapReturn: modeMenuSkirmish}
+	shell.activateGadget("PREVMENU")
+	if shell.frontend.Mode != modeMenuSkirmish {
+		t.Fatal("authored Cancel callback did not return to skirmish")
+	}
+	if frontendCue(modeMenuMap, frontendCallbackKey("PREVMENU")) != "Previous" {
+		t.Fatal("authored Cancel callback lost its Previous cue")
+	}
+}
+
+func TestRetailMapCancelPreservesSelectedSkirmishMap(t *testing.T) {
+	for _, escape := range []bool{false, true} {
+		name := "click"
+		if escape {
+			name = "escape"
+		}
+		t.Run(name, func(t *testing.T) {
+			shell, _, cl := retailAssetShell(t)
+			shell.openMenu(modeMenuSkirmish)
+			original := shell.setup.MapName
+			shell.activateGadget("SelectMap")
+			p := shell.activePanel()
+			if shell.frontend.Mode != modeMenuMap {
+				t.Fatal("map chooser did not open")
+			}
+			preview := (shell.mapIdx + 1) % len(shell.maps)
+			shell.commitListSelection("MAPNAMES", preview)
+			if shell.maps[preview] == original {
+				t.Fatal("fixture needs a different preview map")
+			}
+			if escape {
+				cl.Input().EnqueueToken(input.Token{Kind: input.TokenEdit, Key: input.KeyEscape})
+				shell.menuInput(cl)
+			} else {
+				r := p.Window.PlacedRect(p.Index("PREVMENU"))
+				in := cl.Input()
+				in.Mouse.SetPosition(float32(r.X+r.W/2), float32(r.Y+r.H/2))
+				in.Mouse.SetButton(input.MouseButtonLeft, true)
+				shell.menuInput(cl)
+				in.Mouse.ResetEdges()
+				in.Mouse.SetButton(input.MouseButtonLeft, false)
+				shell.menuInput(cl)
+				in.Mouse.ResetEdges()
+			}
+			if shell.frontend.Mode != modeMenuSkirmish {
+				t.Fatal("Cancel did not return to skirmish")
+			}
+			if shell.setup.MapName != original {
+				t.Fatalf("Cancel committed preview: map=%q, want %q", shell.setup.MapName, original)
+			}
+			if len(shell.frontend.Panels.Entries()) != 1 {
+				t.Fatal("Cancel left the chooser on the window stack")
+			}
+		})
+	}
+}

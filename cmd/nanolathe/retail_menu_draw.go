@@ -111,7 +111,12 @@ func (g *gameShell) drawRetailWindow(c *client.Client, mode shellMode, p *ui.Pan
 		case gui.KindButton:
 			g.drawRetailButton(c, p, i, gad, r)
 		case gui.KindListBox:
-			g.drawRetailList(c, p, i, gad, r)
+			// The window bitmap already restores the list's background and
+			// authored frame; LISTBOX is only a fallback [07 R-WGT-01 §4].
+			if background == nil && mode != modeMenuMap {
+				g.drawListBox(c, r)
+			}
+			g.drawRetailListRows(c, p, i, gad, r)
 		case gui.KindScrollBar:
 			g.drawRetailScrollbar(c, p, i, gad, r)
 		case gui.KindSurface:
@@ -527,33 +532,10 @@ func boolInt(value bool) int {
 func (g *gameShell) drawRetailSurface(c *client.Client, p *ui.Panel, index int, gad gui.Gadget, r gui.Rect) {
 	if p != nil && p.Window != nil && p.Window.GadgetIndex("MAPPIC") == index && len(g.maps) != 0 && g.mapIdx >= 0 && g.mapIdx < len(g.maps) {
 		if d := g.mapDataFor(g.maps[g.mapIdx]); d != nil && d.tnt != nil {
-			// the retail implementation writes the selected RADARPIC into the authored
-			// MAPPIC canvas using the map's aspect, leaving the surrounding
-			// canvas intact. The TNT minimap is the same indexed source for
-			// this frontend path; preserve that retail letterbox instead of
-			// stretching rectangular maps into the 125×125 square.
-			// The source passed to the retail implementation is RADARPIC. Its aspect is
-			// the minimap raster, not the terrain cell dimensions in TNT's
-			// header.
-			previewW, previewH := int(d.tnt.MinimapWidth), int(d.tnt.MinimapHeight)
-			if previewW <= 0 || previewH <= 0 {
-				return
-			}
-			drawW, drawH := int(r.W), int(r.H)
-			if previewW < previewH {
-				drawW = drawH * previewW / previewH
-			} else {
-				drawH = drawW * previewH / previewW
-			}
-			if drawW < 1 {
-				drawW = 1
-			}
-			if drawH < 1 {
-				drawH = 1
-			}
-			x := int(r.X) + (int(r.W)-drawW)/2
-			y := int(r.Y) + (int(r.H)-drawH)/2
-			c.UIBlitIndexed(d.tnt.Minimap, int(d.tnt.MinimapWidth), int(d.tnt.MinimapHeight), x, y, drawW, drawH)
+			// Crop the authored padding, then map the usable terrain into a
+			// cleared and centred canvas [07 R-FE-01 §5].
+			pixels := d.previewPixels(int(r.W), int(r.H))
+			c.UIBlitIndexed(pixels, int(r.W)-1, int(r.H)-1, int(r.X), int(r.Y), int(r.W)-1, int(r.H)-1)
 		}
 		return
 	}

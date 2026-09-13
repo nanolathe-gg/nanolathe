@@ -64,11 +64,13 @@ func (g *gameShell) skirmishConfigForStart(mapName string) session.SkirmishConfi
 }
 
 type retailMapData struct {
-	label       string
-	description string
-	size        string
-	ota         *formats.OTA
-	tnt         *formats.TNT
+	label              string
+	description        string
+	size               string
+	ota                *formats.OTA
+	tnt                *formats.TNT
+	preview            []byte
+	previewW, previewH int
 }
 
 func (g *gameShell) mapDataFor(name string) *retailMapData {

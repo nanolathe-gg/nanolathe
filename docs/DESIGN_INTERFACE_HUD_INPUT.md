@@ -690,6 +690,12 @@ separately; the painter must not remove their extents from the track a second
 time. A list refresh with unchanged rows preserves `top`, and an external
 change to `top` synchronizes the associated knob before pointer service
 `[07 R-WGT-01 §4]` `[07 R-WGT-01 §5]`.
+`openMenu` finishes associated list scrollbars with `BuildSlider` before
+creating the panel, retaining the selected arrow entry and frame bases.
+The window background supplies a list's decoration when present; `SELMAP`
+also suppresses the fallback tile through its opening flags. Its preview
+caches an indexed canvas per map and canvas size, with the authored padding
+cropped and usable terrain centred on palette zero `[07 R-FE-01 §5]`.
 
 SKIRMISH screen entry copies the lobby selector into the campaign/session
 selector before building the controls. Its Difficulty callback cycles the lobby selector and writes the same
@@ -1117,6 +1123,12 @@ release-inside activation, and the retail campaign, map and skirmish callback
 rules `[07 "Retail closure for the single-player menu slice"]`
 `[07 "Retail frontend control activation and raster rules"]`
 `[07 "Retail palette contract"]`.
+
+Opening `MAINMENU` activates its authored `DebugString` label and supplies the
+retail literal `v3.1`. Its fresh window rectangle moves left by half the primary
+GAF text width (active FNT fallback), with integer division; the cached authored
+window stays unchanged so returning to the menu cannot accumulate the shift
+`[07 R-FE-01 §3]`.
 
 **C17 — preferences survive the process.** Retail reads its whole preference
 block once at startup, installing a per-value default for anything absent, and

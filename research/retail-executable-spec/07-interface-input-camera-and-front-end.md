@@ -1308,8 +1308,14 @@ current visible interval changes top: `top := selected`
 when `maxTop ≠ 0`, `top := min(top, maxTop)`, and the assoc'd slider knob
 becomes `trunc(travel × top / maxTop)`.
 
-**Established — the painter.** Background is the `Listbox` tile of the
-common GAF (or the saved-under image). The painter draws the first row
+**Established — the painter.** Restore the list's authored rectangle from
+the window's installed background surface, or the context's alternate
+background when the window has none. Only when both are absent and window
+placement bit `0x80` is clear does the painter draw the common `Listbox`
+tile. Otherwise existing background pixels remain. Both `SELMAP` openers
+set that bit, and its installed bitmap already carries the decorative frame;
+painting an additional `Listbox` tile produces an incorrect inner border.
+The painter draws the first row
 once the nonempty text-list branch is admitted. After each
 row it subtracts `rowH` from remaining height and admits the next row only
 when the remainder is at least `metric` and another item remains. Thus row
@@ -2438,7 +2444,8 @@ horizontal frames. The staged common entries used by this menu are
   and a one-pixel cap, so the knob is a computed run and never the sum of those
   frames: the thumb-length routine stores its length as
   `round(visibleRows / itemCount * (barLength - 3))`, clamped up to ten pixels.
-  An arrow changes the associated list by one row. A left press inside
+  An arrow moves the associated knob by one step, then synchronises the list
+  [R-WGT-01 §3][R-WGT-01 §5]. A left press inside
   the computed thumb captures the pointer and maps held pointer displacement
   through the thumb travel/range, truncating integer division toward zero.
   A click on the track beside the thumb does not invent a page step.
@@ -2813,8 +2820,15 @@ The shell loader closes every open window, clears the display, opens
 per-frame shimmer tick (§5 SPARKS), loads `bitmaps\FrontendX.pcx`, starts
 the `BGM` front-end loop ([03 R-AUD-01 §5]), rebuilds the semantic colour
 map from `palettes\guipal.pal`, selects the `COMIX` font, and writes the
-version string `v3.1` into the `DebugString` label (authored inactive;
-shown, and moved left by half its rendered width). Four once-per-process
+version string `v3.1` into the `DebugString` label. **Established:** this is
+a literal built into the executable, copied unchanged by the menu loader;
+it is not read from `gamedata/version.tdf` or formatted from GUI version fields.
+The loader activates the authored inactive label, replaces its text, then
+subtracts half the measured text width from its authored horizontal position,
+using integer division. Measurement uses the primary GAF font when present
+(the sum of glyph frame widths), otherwise the active FNT. The label keeps its
+other authored geometry and drawing attributes. Reopening starts from the
+authored position again. Four once-per-process
 prompts follow, in order: `YESORNO` `Close Windows CD Player?` (only when a
 CD-player process is detected; `CHOICE1` closes it), a `MSGBOX` warning
 about the installed DirectX version, `No sound driver is available for
@@ -2902,6 +2916,29 @@ opener uses `0x980` and keeps the previous name for `PREVMENU` restore);
 an empty census raises `There are no skirmish maps to choose from` and does
 not open. The map census reads `Maps\*.ota`, keeps maps that pass the
 multiplayer-capable filter, and switches the cursor to busy while scanning.
+
+**Established — map preview.** Clear the entire authored `MAPPIC` canvas to
+palette index zero before drawing the selected minimap. Its aspect comes from
+the usable map extents `EW = TNT.Width*16 - 32` and
+`EH = TNT.Height*16 - 128`, rather than the stored minimap raster's aspect.
+For stored size `SW × SH` and canvas size `CW × CH`, when `EW < EH`,
+crop the source to its top-left `trunc(EW*SW/EH) × SH` and fit it to
+`trunc(EW*CW/EH) × CH`; otherwise crop to
+`SW × trunc(EH*SH/EW)` and fit to `CW × trunc(EH*CH/EW)`.
+Centre the fitted short axis using half the unused canvas extent, truncated.
+The crop excludes authored padding [fmt tnt]. The shared quad mapper receives
+source corners through `(srcW-1, srcH-1)` and destination corners through
+`(x+dstW, y+dstH)`. The clear leaves black bars around the centred picture.
+The mapper divides the 16.16 source corner spans by the destination extents
+before accumulating each step, with no half-pixel bias. Exclusive spans
+clipped to the surface's inclusive last coordinates leave its final canvas
+row and column clear [03 R-RAST-01 §1].
+The surface gadget then maps that canvas a second time: source corners
+`(1,1)` through `(CW-1,CH-1)` map to gadget corners `(gx,gy)` through
+`(gx+CW-1,gy+CH-1)`. The same fixed-step, exclusive fill leaves the gadget's
+last row and column as backdrop. Thus the first displayed pixel samples
+canvas `(1,1)`, and the horizontal source step is
+`trunc(((CW-2)*65536)/(CW-1))`, with the corresponding vertical expression.
 
 ### The options family and the slider arithmetic [R-FE-01 §6]
 

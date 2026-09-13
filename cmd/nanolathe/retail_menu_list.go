@@ -27,10 +27,14 @@ type retailScrollbarGeometry struct {
 }
 
 func (g *gameShell) drawRetailList(c *client.Client, p *ui.Panel, index int, gad gui.Gadget, r gui.Rect) {
+	g.drawListBox(c, r)
+	g.drawRetailListRows(c, p, index, gad, r)
+}
+
+func (g *gameShell) drawRetailListRows(c *client.Client, p *ui.Panel, index int, gad gui.Gadget, r gui.Rect) {
 	if p == nil {
 		return
 	}
-	g.drawListBox(c, r)
 	// The list owner installs maxTop while it fills rows. Drawing reads that
 	// state without deriving or mutating a competing visible-row limit.
 	items, selected, top, ok := p.ListValuesAt(index)
@@ -684,5 +688,52 @@ func (g *gameShell) releaseRetailScrollbar(index int, gad gui.Gadget, r gui.Rect
 		g.adjustRetailScrollbar(index, gad, -1)
 	} else if coordinate >= geometry.axisEnd {
 		g.adjustRetailScrollbar(index, gad, 1)
+	}
+}
+
+// Finish list-associated kind-4 records before Panel copies their state.
+// The standalone options sliders have a separate owner [07 R-WGT-01 §5].
+func (g *gameShell) installRetailListScrollbars(window *gui.Window, own *formats.GAF) {
+	var entry *formats.GAFEntry
+	if own != nil {
+		entry, _ = own.Find("SLIDERS")
+	}
+	if entry == nil && g.assets != nil && g.assets.common != nil {
+		entry, _ = g.assets.common.Find("SLIDERS")
+	}
+	for i, bar := range window.Gadgets {
+		if bar.Kind != gui.KindScrollBar || bar.Assoc == 0 {
+			continue
+		}
+		associated := false
+		for _, list := range window.Gadgets {
+			if list.Kind == gui.KindListBox && list.Assoc == bar.Assoc {
+				associated = true
+				break
+			}
+		}
+		if !associated {
+			continue
+		}
+		var metrics *gui.SliderArt
+		base := int(gui.SliderFrameBase(bar.Rect))
+		if entry != nil && len(entry.Frames) > base+8 {
+			track, knob, arrow := entry.Frames[base].Frame, entry.Frames[base+5].Frame, entry.Frames[base+6].Frame
+			if track != nil && knob != nil && arrow != nil {
+				metrics = &gui.SliderArt{BaseExtent: int32(track.Width), KnobExtent: int32(knob.Width), ArrowExtent: int32(arrow.Height), ArrowCrossExtent: int32(arrow.Width)}
+				if base == 10 {
+					metrics.BaseExtent = int32(track.Height)
+					metrics.ArrowExtent = int32(arrow.Width)
+					metrics.ArrowCrossExtent = int32(arrow.Height)
+				}
+			}
+		}
+		built, arrows := gui.BuildSlider(bar, metrics)
+		window.Gadgets[i] = built
+		for j := range arrows {
+			arrows[j].ButtonArt = entry
+			arrows[j].ButtonArtResolved = true
+		}
+		window.Gadgets = append(window.Gadgets, arrows...)
 	}
 }

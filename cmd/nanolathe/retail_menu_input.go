@@ -337,7 +337,7 @@ func (g *gameShell) activateGadget(name string) {
 		}
 	case modeMenuMap:
 		switch name {
-		case "PrevMenu":
+		case "PREVMENU":
 			g.openMenu(g.mapReturn)
 		case "LOAD", "MAPNAMES":
 			if len(g.maps) != 0 && g.mapIdx >= 0 && g.mapIdx < len(g.maps) {
@@ -549,7 +549,7 @@ func frontendCallbackKey(name string) string {
 		return "skirmish"
 	case "Options":
 		return "options"
-	case "PrevMenu":
+	case "PrevMenu", "PREVMENU":
 		return "prevmenu"
 	case "LoadGame":
 		return "loadgame"

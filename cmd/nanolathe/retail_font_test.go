@@ -44,6 +44,42 @@ func TestRetailGAFTextMetrics(t *testing.T) {
 	}
 }
 
+// [07 R-FE-01 §3] halves the primary font's width with integer division,
+// and each menu open starts from the authored (initially hidden) label.
+func TestMainMenuVersionPlacementOnReopen(t *testing.T) {
+	font := syntheticRetailGAFFont()
+	for _, code := range []byte("v3.1") {
+		font.Frames[code] = formats.GAFFrameRef{Frame: &formats.GAFFrame{Width: 3}}
+	}
+	font.Frames['v'].Frame.Width = 4 // Total width 13: the shift must be 6.
+	window := &gui.Window{Gadgets: []gui.Gadget{
+		{Kind: gui.KindPanel},
+		{Kind: gui.KindLabel, Name: "DebugString", Text: "authored", Rect: gui.Rect{X: 320, Y: 460, W: 100, H: 20}},
+	}}
+	shell := &gameShell{
+		assets: &menuAssets{
+			panel:   map[shellMode]*retailPanelAssets{modeMenuMain: {window: window}},
+			gafFont: &formats.GAF{Entries: []formats.GAFEntry{*font}},
+		},
+		font: fixedWidthFont(10), // Different fallback metrics must not win.
+	}
+	for open := 0; open < 2; open++ {
+		shell.openMenu(modeMenuMain)
+		panel := shell.activePanel()
+		if !panel.ActiveOf("DebugString") || panel.TextOf("DebugString") != "v3.1" {
+			t.Fatalf("open %d: version label active=%t text=%q", open, panel.ActiveOf("DebugString"), panel.TextOf("DebugString"))
+		}
+		want := window.Gadgets[1].Rect
+		want.X = 314
+		if got := panel.Window.Gadgets[1].Rect; got != want {
+			t.Fatalf("open %d: version rectangle = %+v, want %+v", open, got, want)
+		}
+	}
+	if got := window.Gadgets[1]; got.Rect.X != 320 || got.Active != 0 || got.Text != "authored" {
+		t.Fatalf("cached authored label changed: %+v", got)
+	}
+}
+
 func TestRetailMainMenuUsesPrimaryGAFGlyphPixels(t *testing.T) {
 	root := probeRetail(t)
 	cs, err := openContent(Options{Root: root})

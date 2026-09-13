@@ -635,7 +635,19 @@ func (g *gameShell) openMenu(mode shellMode) {
 			// records before Panel copies instance state. Repaints only use the
 			// installed record and never reassign keys [07 R-WGT-01 §3].
 			g.installRetailWindowButtonArt(window, p.art)
+			g.installRetailListScrollbars(window, p.art)
 			panel = ui.NewPanel(window)
+			if mode == modeMenuMain {
+				// Retail supplies this literal, reveals the authored label, and
+				// shifts its fresh rectangle by half the primary-font width
+				// (integer division) [07 R-FE-01 §3].
+				const menuVersion = "v3.1"
+				panel.SetActive("DebugString", true)
+				panel.SetText("DebugString", menuVersion)
+				if i := window.GadgetIndex("DebugString"); i >= 0 {
+					window.Gadgets[i].Rect.X -= int32(g.retailTextWidth(menuVersion) / 2)
+				}
+			}
 		}
 	}
 	saveUnder := oldPanel != nil && mode != oldMode && g.panelWindowNeedsUnder(mode)

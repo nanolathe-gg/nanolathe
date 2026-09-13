@@ -36,13 +36,21 @@ func TestMapPreviewBindsOnlyFirstNamedSurface(t *testing.T) {
 	w.Gadgets[1].Name = "MAPPIC\x00tail"
 	panel := ui.NewPanel(w)
 	art := &formats.GAF{Entries: []formats.GAFEntry{bindingEntry("generic", 83)}}
-	shell := &gameShell{frontend: ui.NewFrontend(modeMenuMap), cs: &contentSet{fs: vfs.New()}, assets: &menuAssets{panel: map[shellMode]*retailPanelAssets{modeMenuMap: {window: w, art: art}}}, maps: []string{"fixture"}, mapData: map[string]*retailMapData{"fixture": {tnt: &formats.TNT{MinimapWidth: 1, MinimapHeight: 1, Minimap: []byte{37}}}}}
+	shell := &gameShell{frontend: ui.NewFrontend(modeMenuMap), cs: &contentSet{fs: vfs.New()}, assets: &menuAssets{panel: map[shellMode]*retailPanelAssets{modeMenuMap: {window: w, art: art}}}, maps: []string{"fixture"}, mapData: map[string]*retailMapData{"fixture": {tnt: &formats.TNT{Width: 4, Height: 10, MinimapWidth: 1, MinimapHeight: 1, Minimap: []byte{37}}}}}
 	shell.frontend.Panels.Replace(panel)
+	backdrop := make([]byte, 32*24)
+	for i := range backdrop {
+		backdrop[i] = 31
+	}
+	shell.assets.panel[modeMenuMap].background = &formats.PCX{Width: 32, Height: 24, Pixels: backdrop}
 	c := bindingClient(t)
 	c.SetUIStage(gameShellUIStage{shell: shell})
 	snap := c.ComposeFrameSnapshot()
 	if snap.Indexed[4*snap.Width+4] != 37 || snap.Indexed[4*snap.Width+20] != 83 {
 		t.Fatal("map preview replaced later duplicate's generic surface")
+	}
+	if snap.Indexed[4*snap.Width+9] != 31 || snap.Indexed[9*snap.Width+4] != 31 {
+		t.Fatal("map surface overwrote the backdrop at its exclusive trailing edges")
 	}
 	writeShellShot(t, c, os.Getenv("NANOLATHE_BINDING_SHOT"))
 }

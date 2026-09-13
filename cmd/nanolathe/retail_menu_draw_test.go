@@ -172,3 +172,70 @@ func duplicateGadgetSnapshot(t *testing.T) client.ComposedFrameSnapshot {
 	cl.SetUIStage(gameShellUIStage{shell: shell})
 	return cl.ComposeFrameSnapshot()
 }
+
+// Exercise the stock builder, painter and pointer service together: the
+// backdrop owns the frame, and the synthesized arrows own their normal art
+// and one-step knob callbacks [07 R-WGT-01 §4][07 R-WGT-01 §5].
+func TestRetailMapDialogFrameAndArrows(t *testing.T) {
+	g, _, cl := retailAssetShell(t)
+	for i, name := range g.maps {
+		if name == "Great Divide" {
+			g.mapIdx = i
+			break
+		}
+	}
+	g.openMenu(modeMenuSkirmish)
+	g.openMenu(modeMenuMap)
+	p := g.activePanel()
+	list := p.Index("MAPNAMES")
+	p.SetListTopAt(list, g.mapIdx, p.ListMaxTopAt(list))
+	snap := cl.ComposeFrameSnapshot()
+	r := p.Window.PlacedRect(list)
+	bg := g.panelBackground()
+	// This authored list corner lies inside the background's decorative frame.
+	want := bg.Pixels[int(r.Y-p.Window.Rect.Y)*int(bg.Width)+int(r.X-p.Window.Rect.X)]
+	if snap.Indexed[int(r.Y)*snap.Width+int(r.X)] != want {
+		t.Fatal("list painted an extra border over its background")
+	}
+	arrows := 0
+	for i, gad := range p.Window.Gadgets {
+		if gad.Kind != gui.KindButton || gad.Assoc != p.Window.Gadgets[list].Assoc || gad.Attribs&0x1800 == 0 {
+			continue
+		}
+		arrows++
+		art := g.retailButtonArt(gad, 0, 0, false)
+		if art == nil {
+			t.Fatal("scroll arrow has no art")
+		}
+		ar := p.Window.PlacedRect(i)
+		for y := 0; y < int(art.Height); y++ {
+			for x := 0; x < int(art.Width); x++ {
+				pixel, opaque := art.At(x, y)
+				if opaque && snap.Indexed[(int(ar.Y)+y)*snap.Width+int(ar.X)+x] != pixel {
+					t.Fatalf("arrow %d missing pixel (%d,%d)", i, x, y)
+				}
+			}
+		}
+		bar := p.Index("SLIDER")
+		before := p.SliderKnobAt(bar)
+		in := cl.Input()
+		in.Mouse.SetPosition(float32(ar.X+ar.W/2), float32(ar.Y+ar.H/2))
+		in.Mouse.SetButton(input.MouseButtonLeft, true)
+		g.serviceMenuWidgets(p, in)
+		in.Mouse.ResetEdges()
+		in.Mouse.SetButton(input.MouseButtonLeft, false)
+		g.serviceMenuWidgets(p, in)
+		in.Mouse.ResetEdges()
+		delta := 1
+		if gad.Attribs == gui.AttribSliderDecrement {
+			delta = -1
+		}
+		if p.SliderKnobAt(bar) != before+delta {
+			t.Fatalf("arrow moved knob %d -> %d, want delta %d", before, p.SliderKnobAt(bar), delta)
+		}
+	}
+	if arrows != 2 {
+		t.Fatalf("map scrollbar has %d arrows", arrows)
+	}
+	writeShellShot(t, cl, os.Getenv("NANOLATHE_MAP_DIALOG_SHOT"))
+}
