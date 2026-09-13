@@ -12,7 +12,7 @@ import (
 // StrategicIconRevision versions our Enhanced presentation vocabulary. These
 // mappings describe authored inputs, not recovered retail icon behavior
 // (DESIGN_GPU_RENDERER §18). They never alter a content definition or its hash.
-const StrategicIconRevision = 2
+const StrategicIconRevision = 5
 
 // StrategicIconDescriptor is immutable after catalog construction. Evidence and
 // Unresolved are audit metadata, never additional enemy hover information.
@@ -21,6 +21,7 @@ type StrategicIconDescriptor struct {
 	Rect                               drawlist.Rect
 	Family, Role, Subtype              string
 	CommanderAppearance                bool
+	Level                              int
 	Evidence, Capabilities, Unresolved []string
 }
 
@@ -48,6 +49,7 @@ func NewStrategicIconCatalog(cat *content.Catalog) *StrategicIconCatalog {
 	c := &StrategicIconCatalog{byName: make(map[string]StrategicIconDescriptor), byID: make(map[uint16]string), byRecord: make(map[uint16]StrategicIconDescriptor)}
 	c.fallback = StrategicIconDescriptor{Family: "generic", Role: "support", Unresolved: []string{"definition absent from this catalog"}}
 	if cat != nil {
+		levels := strategicIconBuildLevels(cat)
 		for _, u := range cat.UnitRecords() {
 			if u == nil {
 				continue
@@ -57,6 +59,20 @@ func NewStrategicIconCatalog(cat *content.Catalog) *StrategicIconCatalog {
 				key = content.CanonicalKey(u.UnitName)
 			}
 			d := classifyStrategicIcon(cat, u)
+			if !d.CommanderAppearance {
+				graph := levels[key]
+				// Build menus resolve names to one record [02 R-CAT-01 §5].
+				// A retained same-name record cannot inherit that record's route.
+				if named, ok := cat.Unit(key); !ok || named != u {
+					graph = strategicIconLevel{}
+				}
+				level := strategicResolveIconLevel(u.Category, graph)
+				d.Level = level.Level
+				d.Evidence = append(d.Evidence, level.Evidence)
+				if level.Unresolved != "" {
+					d.Unresolved = append(d.Unresolved, level.Unresolved)
+				}
+			}
 			if u.UnitDefID > 0 && u.UnitDefID <= 65535 {
 				c.byID[uint16(u.UnitDefID)] = key
 			}
@@ -225,13 +241,16 @@ func classifyStrategicIcon(cat *content.Catalog, u *content.UnitDef) StrategicIc
 	cap("metal production", u.MetalMake > 0)
 	cap("energy storage", u.EnergyStorage > 0)
 	cap("metal storage", u.MetalStorage > 0)
-	weaponKinds := make(map[string]bool)
+	primaryWeapon := ""
 	for slot, w := range []*content.WeaponDef{u.Weapon1Def, u.Weapon2Def, u.Weapon3Def} {
 		if content.IsWeaponInactive(w) {
 			continue
 		}
 		kind := strategicWeaponKind(w)
-		weaponKinds[kind] = true
+		if primaryWeapon == "" {
+			primaryWeapon = kind
+			d.Evidence = append(d.Evidence, fmt.Sprintf("primary weapon: first active authored slot, weapon%d", slot+1))
+		}
 		flags := []string{}
 		for _, f := range []struct {
 			name string
@@ -244,7 +263,7 @@ func classifyStrategicIcon(cat *content.Catalog, u *content.UnitDef) StrategicIc
 		}
 		d.Evidence = append(d.Evidence, fmt.Sprintf("weapon%d: active %s [%s]; glyph=%s", slot+1, w.CanonicalKey, strings.Join(flags, ", "), kind))
 	}
-	active := len(weaponKinds) > 0
+	active := primaryWeapon != ""
 	menu := cat.BuildMenus[content.CanonicalKey(u.CanonicalKey)]
 	products := 0
 	if menu != nil {
@@ -267,22 +286,11 @@ func classifyStrategicIcon(cat *content.Catalog, u *content.UnitDef) StrategicIc
 	case u.CanResurrect:
 		set("resurrection", "", "CanResurrect")
 	case u.Builder && u.BMCode == 0 && products > 0:
-		badge, why := strategicFactoryFamily(cat, menu.Buttons)
-		set("factory", badge, "BMCode=0; Builder; resolved final build products: "+why)
-		if badge == "" {
-			d.Unresolved = append(d.Unresolved, "factory product families mixed or unresolved; generic factory glyph")
-		}
+		set("factory", "", "BMCode=0; Builder; nonempty resolved final build menu")
 	case u.IsAirBase:
 		set("airbase", "", "IsAirBase; aircraft repair/support")
 	case u.Builder && products > 0:
 		set("construction", "", "Builder with final build products")
-		if t["CONSTR"] {
-			d.Subtype, evidence, unknown = strategicConstructorClass(u.Category)
-			d.Evidence = append(d.Evidence, evidence)
-			if unknown != "" {
-				d.Unresolved = append(d.Unresolved, unknown)
-			}
-		}
 	case u.Builder:
 		set("assist", "", "Builder with empty product menu; general build/repair support")
 	case u.CanLoad && u.TransportCapacity > 0:
@@ -314,13 +322,7 @@ func classifyStrategicIcon(cat *content.Catalog, u *content.UnitDef) StrategicIc
 	case !active && t["SPY"]:
 		set("spy", "", "authored SPY category")
 	case active:
-		kind := "mixed"
-		if len(weaponKinds) == 1 {
-			for k := range weaponKinds {
-				kind = k
-			}
-		}
-		set("combat", kind, "all active resolved weapon slots; flag-derived weapon glyph")
+		set("combat", primaryWeapon, "first active resolved weapon slot; flag-derived primary weapon glyph")
 		// TODO(question): AA/fighter/artillery/scout/heavy roles have no complete
 		// reviewed mapping (§18.3). Keep weapon capabilities and a generic combat
 		// purpose; authored descriptions and targeting review can settle the gap.
@@ -335,29 +337,6 @@ func classifyStrategicIcon(cat *content.Catalog, u *content.UnitDef) StrategicIc
 	sort.Strings(d.Capabilities)
 	d.Capabilities = compactStrategicStrings(d.Capabilities)
 	return d
-}
-
-func strategicConstructorClass(category string) (string, string, string) {
-	// The reviewed constructor-only mapping uses authored CONSTR with LEVEL1
-	// or LEVEL2 (DESIGN_GPU_RENDERER §18.2). It does not reinterpret levels for
-	// other roles, including minelayers and empty-menu assist builders.
-	levels := make(map[string]bool)
-	for _, token := range strings.Fields(strings.ToUpper(category)) {
-		if strings.HasPrefix(token, "LEVEL") {
-			levels[token] = true
-		}
-	}
-	if len(levels) == 1 {
-		if levels["LEVEL1"] {
-			return "basic", "constructor: CONSTR and sole LEVEL1 token; reviewed basic constructor mapping", ""
-		}
-		if levels["LEVEL2"] {
-			return "advanced", "constructor: CONSTR and sole LEVEL2 token; reviewed advanced constructor mapping", ""
-		}
-	}
-	// TODO(question): which constructor class is intended without one reviewed
-	// level token? Review authored build art/products; keep the unqualified tool.
-	return "", "constructor: no single reviewed LEVEL1/LEVEL2 token", "constructor class missing, conflicting or outside the reviewed authored levels"
 }
 
 func compactStrategicStrings(a []string) []string {
@@ -390,33 +369,4 @@ func strategicWeaponKind(w *content.WeaponDef) string {
 	default:
 		return "projectile"
 	}
-}
-func strategicFactoryFamily(cat *content.Catalog, products []string) (string, string) {
-	family := ""
-	evidence := []string{}
-	mixed := false
-	for _, name := range products {
-		u, ok := cat.Unit(name)
-		if !ok || u == nil {
-			mixed = true
-			evidence = append(evidence, name+"=unresolved")
-			continue
-		}
-		f, _, unknown := strategicFamily(u)
-		if u.Commander || strategicEditorClass(u) == "COMMANDER" {
-			f = "commander"
-		}
-		evidence = append(evidence, name+"="+f)
-		if unknown != "" || f == "structure" || f == "generic" || f == "commander" {
-			mixed = true
-		}
-		if family != "" && family != f {
-			mixed = true
-		}
-		family = f
-	}
-	if mixed {
-		family = ""
-	}
-	return family, strings.Join(evidence, ", ")
 }

@@ -330,3 +330,35 @@ func TestStrategicIconsRemain24PixelsAcrossTacticalZooms(t *testing.T) {
 		}
 	}
 }
+
+// Hiding a visible nanoframe must not leave its generic radar mark or pick box.
+// Completion is read from this publication, without a cached lifecycle state.
+func TestStrategicIconNanoframeAdmissionAndCompletion(t *testing.T) {
+	c, f := iconLayoutFixture(t)
+	f.Units[0].BuildRemaining = .5
+	f.Units[0].Flags |= 0x10
+	f.Builds = []frame.BuildProgressView{{Builder: 8, Product: 7, Remaining: .5}}
+	c.drawStrategicMarkers(f)
+	if len(c.markerArena) != 0 {
+		t.Fatal("nanoframe left a marker")
+	}
+	if _, _, ok := c.PickPresentedUnit(f, 300, 200, 0); ok {
+		t.Fatal("nanoframe left an icon hit")
+	}
+	if len(f.Builds) != 1 || f.Builds[0].Remaining != .5 {
+		t.Fatal("builder progress publication changed")
+	}
+	f.Units[0].BuildRemaining = 0
+	c.drawStrategicMarkers(f)
+	if len(c.markerArena) != 1 || c.markerArena[0].IconAtlas == nil {
+		t.Fatal("completed unit did not appear")
+	}
+	f.Units[0].BuildRemaining = .5
+	f.Units[0].Owner = 1
+	f.Units[0].Cloaked = true
+	f.Radar.Contacts[0].Owner = 1
+	c.drawStrategicMarkers(f)
+	if len(c.markerArena) != 1 || c.markerArena[0].IconAtlas != nil {
+		t.Fatal("sensor contact disclosed hidden construction state")
+	}
+}

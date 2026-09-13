@@ -3856,7 +3856,7 @@ Vocabulary used by the generated review sheet:
 |---|---|---|
 | Outer contour | Family | circle for kbot, diamond for vehicle, triangle for aircraft, trapezoid for hovercraft, hull for ship, capsule for submarine, square for structure |
 | Inner symbol | Primary purpose | construction tool, factory, extractor, energy, storage, sensor, jammer, transport, weapon or generic support |
-| Small secondary mark | Useful supported distinction | manufactured family on a factory; weapon subtype where verified |
+| Bottom dots | Presentation level | no dots for 0/1; two for 2; three for 3 or greater; commander appearances have none |
 | Color | Owner | dominant opaque shade of the published lobby color's `32xlogos` frame |
 | Halo | Selection / hover | separate from role and ownership; retain contrast over bright and dark terrain |
 
@@ -3869,9 +3869,29 @@ projection, clipped to the battle viewport and outside the scaled world region.
 Keep the existing 0.625× fade-in / 0.5× full-icon transition for the first pass;
 retuning zoom thresholds and model crossfade are separate decisions.
 
-Do not reinterpret category levels as universal tech tiers. The reviewed
-construction-only LEVEL1/LEVEL2 distinction (§18.2) uses a single/crossed tool
-glyph; other level tokens remain audit metadata.
+Revision 3 uses a single larger crown for commander appearances, a flat-topped
+rounded hull for ships, one factory silhouette for every product family, a
+filled downward triangle for extraction, and a slashed circle for jammers.
+Ballistic weapons use a filled circle, water weapons a horizontal capsule, and
+fallback projectiles a smaller filled circle. Construction uses one tool at
+all levels. Revision 5 embeds the level marks as small dark cutouts centered
+on the original lower border. They follow each family's contour and affect
+only team-colored border ink. Frame thickness, body size, glyph placement and
+selection halo are unchanged; no detached dot row or compression is used.
+
+Levels follow the requested Enhanced presentation policy, not retail tech-tier
+semantics: compute the minimum count of factories on a final build-menu path
+from a true commander. If no route exists, use a sole positive numeric LEVEL
+token as fallback. Preserve both graph and authored evidence in the audit.
+Entering a structure builder with a nonempty final product menu adds one;
+other edges add zero. Include the destination factory in that count. Cycles
+cannot increase the shortest path. An unreachable unit without a single authored
+level remains unresolved. Never infer from cost, names or descriptions. Levels
+0/1 have no dots, level 2 has two, and level 3 or greater has three; retain the
+exact value and source in the audit. Commander and decoy appearances suppress
+levels entirely. Compute the graph once when the catalog loads. A name-resolved
+route applies only to its resolved record; other retained same-name records
+use their own authored fallback.
 
 ### 18.2 What the installed data establishes
 
@@ -3903,12 +3923,12 @@ proof of an icon family.
 | Constructors and factories carry incidental resource production/storage; `ARMRAD` has EnergyMake | A positive resource field is insufficient to assign an economy role |
 | `ARMMOHO`: ExtractsMetal; `ARMMAKR` and `ARMMMKR`: MakesMetal; `ARMESTOR`: STORAGE and EnergyStorage | Separate extraction, conversion and storage; do not confuse incidental storage with dedicated storage |
 | `ARMFIG` and `ARMJETH` linked missiles have ToAirWeapon false | That flag alone cannot identify fighter / anti-air roles. Weapon family and targeting preferences need a bounded evidence review |
-| `ARMPT` has laser and missile slots; `ARMLATNK` has two weapon slots | Do not choose the first weapon as the unit's entire role |
+| `ARMPT` has laser and missile slots; `ARMLATNK` has two weapon slots | Revision 3 displays the first active slot's weapon kind; retain other weapon capabilities in the audit |
 | `CORNECRO`: CanResurrect, Builder, category WEAPON, inactive weapon slots | Capability and resolved active weapon links must qualify broad category tags |
 | `ARMSUB`: UNDERWATER; `ARMATL`: structure, TORP and WaterWeapon; `ARMTIDE`: TEDClass WATER | Water-related metadata does not establish a mobile submarine |
 | `ARMAMPH`: KBOT and CanHover; `CORSCORP`: Category TANK, TEDClass SPECIAL | A single mobility flag or editor class is not an exhaustive physical-family taxonomy |
 | `ARMCOM` / `CORCOM`: Commander true, LEVEL10; decoy commanders: TEDClass COMMANDER, Commander false | True-command capability and visual disguise are separate; enemy art must not expose the difference |
-| `ARMMOHO`, `ARMBRTHA`, `ARMAMD`: LEVEL3; `CORSSUB`: bare LEVEL; six definitions have no level token | No BAR T1/T2/T3 reinterpretation, inferred cost tiers, or guessed missing levels |
+| `ARMMOHO`, `ARMBRTHA`, `ARMAMD`: LEVEL3; `CORSSUB`: bare LEVEL; six definitions have no level token | Authored category numbers are not universal tech tiers; revision 3 uses reachable factory depth and retains authored numbers as fallback |
 | `ARMDRAG`: IsFeature, category METAL, TEDClass FORT | It is not a metal producer; after conversion its feature stays in the existing feature layer |
 
 The audit also found five mobile definitions without any of the usual explicit
@@ -3925,10 +3945,19 @@ pairs cover vehicles, kbots and aircraft. CSA seaplanes, CH hovercraft and CS
 ships use LEVEL1; ACSUB submarines use LEVEL2. ARMMLV's LEVEL2 and CORMLV's
 LEVEL1 do not make minelayers ordinary constructors: neither authors CONSTR.
 ARMFARK's CONSTR LEVEL2 and empty product menu retain the assist classification.
-The icon policy applies basic/advanced only to a construction-role definition
-with CONSTR and a single reviewed level token. Missing, conflicting or other
-levels retain the unqualified tool and an audit unknown; no costs or localized
+The original constructor-only mapping used single/crossed tools. Revision 3
+replaces it with the general level-dot policy above; no costs or localized
 names participate in classification.
+
+**Established — revision 3 asset audit.** The minimum route for `CORKROG` is
+`CORCOM -> CORLAB -> CORCK -> CORALAB -> CORACK -> CORGANT -> CORKROG`:
+three factories, while its category authors LEVEL2. `ARMMOHO` needs two
+factories but authors LEVEL3. The user selected graph-first presentation,
+so these show three and two dots respectively. Basic and advanced constructors
+and factories have matching route counts of one and two. `CORSSUB` authors a
+bare LEVEL and has a two-factory path. `ARMGATE` and `CORGATE` have neither a
+reachable route nor a valid authored number in this mount; their level remains
+unknown and unmarked. These observations do not change retail definitions.
 
 ### 18.3 Classification contract
 
@@ -3951,16 +3980,18 @@ neither changes the authoritative definition hash.
    must retain all supported capabilities even when the icon displays one.
    Confirm precedence against the full audit rather than baking this list into
    a gameplay rule.
-3. Derive factory product badges from resolved final build-menu products,
-   including downloads. Mixed or unresolved product families receive a generic
-   factory symbol. Never infer products from a unit-name prefix.
+3. A structure builder with a nonempty final product menu uses the single
+   factory glyph. Product families never add a subtype or badge. Final menus,
+   including downloads, also supply the level graph described in §18.1.
 4. Use explicit economy/sensor category tags plus capability fields to
    distinguish dedicated functions. Energy generation must include negative
    EnergyUse, wind and tide as documented inputs [02 "Unit record"]. A
    constructor's production, a plant's storage or a gun's radar does not
    replace its primary role.
 5. Use only active resolved weapon slots, never ExplodeAs or SelfDestructAs,
-   to describe armament. Interceptor, dropped, water-weapon and paralyzer flags
+   to describe armament. Display the first active slot in authored 1/2/3 order;
+   never combine slots into a mixed glyph. Retain all active capabilities in the
+   audit. Interceptor, dropped, water-weapon and paralyzer flags
    are evidence for capabilities; interpreting them as a primary unit role
    still requires a reviewed mapping. Do not infer scout/artillery/heavy/AA
    from arbitrary speed, range, cost, damage, or weapon-name thresholds.
@@ -3972,8 +4003,8 @@ neither changes the authoritative definition hash.
    never the role of an unrelated stock unit with the same name.
 
 **Unknown / design follow-ups.** The complete AA/fighter/artillery distinction,
-ambiguous physical families, exact-unit differentiation, and constructor classes
-with missing/conflicting/unreviewed level tokens remain audit unknowns. Existing retail facts
+ambiguous physical families, exact-unit differentiation, and levels with
+neither a reachable build path nor one unambiguous authored token remain audit unknowns. Existing retail facts
 need no new executable analysis; any new claim about targeting or disguise
 behavior must first be established and recorded in its owning research category.
 Missing evidence is shown in the audit and becomes `TODO(question)` at the
@@ -3997,6 +4028,13 @@ resolves attachment links; missing links and nested cargo cannot reveal attached
 Sensor-only contacts retain MinimapBlipAdmitted, blink included, and never expose
 definition art or a UnitView hit. Identities are not remembered across visibility
 loss; retained hover identity uses InstanceID rather than a reusable pool slot.
+
+Visible nanoframes (`BuildRemaining > 0`) have no strategic icon or icon hit.
+The identified-unit lane still consumes their radar records to prevent a stray
+contact square. Sensor-only contacts retain their existing admission; concealed
+construction state cannot remove their blip. The frame's builder/factory
+progress and existing selection UI remain unchanged. Completed units enter the
+icon list on the next publication without a persistent lifecycle cache.
 
 Team ink comes from the most frequent opaque index in the published lobby
 selector's authored `textures/logos.gaf` `32xlogos` frame. The retail `radlogo`
@@ -4116,18 +4154,24 @@ interiors are tight at 16. `go run ./tools/strategic-icon-sheet -root <install>
 -out <external-directory>` emits `index.html`, `catalog.png`, `vocabulary.png` and
 `audit.json` and a constructor-only `constructors.png` comparison from the loaded catalog and the same masks the GPU uses.
 
-The current reference mount yields 81 semantic symbols across 278 definitions
-after adding crossed tools for advanced constructors (single tool for basic).
+**Established — revision 5 outcome.** The reference mount yields 104 shared
+symbols across 278 definitions. Constructors use one full-size tool; two or
+three small dark cutouts in the original lower border carry the level, without
+thickening or compressing the frame. Factories use one silhouette with no
+product-family badges. Combat symbols use the first active weapon slot; all
+active weapon capabilities remain in audit evidence. Visible nanoframes are
+excluded from icon drawing and picking while sensor-only contacts preserve
+their knowledge boundary and builder/factory progress remains available.
+
 These are audit observations, not test expectations. Ten primary-role fallbacks
 are accepted: ARMPEEP, CORFINK, ARMBEAC, CORBEAC, ARMDEV1, CORDEV1, ARMUWES,
 ARMUWMS, CORBUILD and CORTRUCK. ARMSCORP and CORTHOVR retain a generic physical
-family. Seven mixed/unresolved factory menus use an unqualified factory badge.
-Combat symbols describe the flags of every active weapon slot; AA, fighter,
-artillery and heavy-role interpretations remain explicitly unresolved. The
-fallbacks are visible in the audit; no runtime name/description guessing or
-stock-name override table was added. Teleporters use the literal Teleporter
-capability. Commander-looking definitions share their complete art, including
-true commanders and decoys; icon audit evidence is never new hover information.
+family. AA, fighter, artillery and heavy-role interpretations remain explicitly
+unresolved. The fallbacks are visible in the audit; no runtime name/description
+guessing or stock-name override table was added. Teleporters use the literal
+Teleporter capability. Commander-looking definitions share their complete art,
+including true commanders and decoys; icon audit evidence is never new hover
+information.
 
 `StrategicIconCatalog` lives in the client and is bound once at battle entry.
 The renderer uploads the immutable mask atlas once per resource identity and

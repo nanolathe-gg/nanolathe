@@ -1,6 +1,7 @@
 package client
 
 import (
+	"fmt"
 	"image"
 	"image/color"
 	"math"
@@ -15,7 +16,7 @@ import (
 const strategicIconSourceSize = 32
 
 func strategicArtKey(d StrategicIconDescriptor) string {
-	return d.Family + "/" + d.Role + "/" + d.Subtype
+	return fmt.Sprintf("%s/%s/%s/dots%d", d.Family, d.Role, d.Subtype, strategicLevelDots(d))
 }
 func makeStrategicIconAtlas(descriptors []StrategicIconDescriptor) (*drawlist.MarkerAtlas, map[string]drawlist.Rect) {
 	unique := make(map[string]StrategicIconDescriptor)
@@ -58,7 +59,30 @@ func makeStrategicIconAtlas(descriptors []StrategicIconDescriptor) (*drawlist.Ma
 	}
 	return atlas, rects
 }
+
+// Level marks are a compact presentation policy; commander disguises never
+// expose a tier. The review sheet retains the exact resolved level as evidence.
+func strategicLevelDots(d StrategicIconDescriptor) int {
+	if d.CommanderAppearance || d.Level < 2 {
+		return 0
+	}
+	return min(d.Level, 3)
+}
 func strategicCoverage(d StrategicIconDescriptor, x, y float64) int {
+	if d.Family == "commander" {
+		// One large team-colored crown, with the same black edge and selection halo.
+		if strategicContour("commander", x, y) {
+			return 0
+		}
+		if strategicContour("commander", x/1.11, y/1.11) {
+			return 3
+		}
+		if strategicContour("commander", x/1.20, y/1.20) {
+			return 2
+		}
+		return -1
+	}
+
 	if !strategicContour(d.Family, x/1.20, y/1.20) {
 		return -1
 	}
@@ -68,20 +92,36 @@ func strategicCoverage(d StrategicIconDescriptor, x, y float64) int {
 	if !strategicContour(d.Family, x, y) {
 		return 3
 	}
-	if !strategicContour(d.Family, x/.84, y/.84) {
+	interior := strategicContour(d.Family, x/.84, y/.84)
+	dots := strategicLevelDots(d)
+	if !interior && dots > 0 {
+		// Follow the lower rim without rescaling or shifting the body or glyph.
+		for i := 0; i < dots; i++ {
+			cx := (float64(i) - float64(dots-1)/2) * 5
+			cy := (strategicBottom(d.Family, cx) + .84*strategicBottom(d.Family, cx/.84)) / 2
+			dx, dy := x-cx, y-cy
+			if dx*dx+dy*dy <= 1.15*1.15 {
+				return 3
+			}
+		}
+	}
+	if interior {
+		gx, gy := x, y
+		if d.Family == "aircraft" {
+			gy -= 2.8
+			gx /= .86
+			gy /= .86
+		}
+		if d.Family == "vehicle" {
+			gx /= .85
+			gy /= .85
+		}
+		if strategicGlyph(d, gx, gy) {
+			return 1
+		}
+	}
+	if !interior {
 		return 0
-	}
-	if d.Family == "aircraft" {
-		y -= 2.8
-		x /= 0.86
-		y /= 0.86
-	}
-	if d.Family == "vehicle" {
-		x /= .85
-		y /= .85
-	}
-	if strategicGlyph(d, x, y) {
-		return 1
 	}
 	return 3
 }
@@ -113,16 +153,38 @@ func strategicContour(family string, x, y float64) bool {
 	case "hovercraft":
 		return strategicPolygon(x, y, strategicPoint{-8, -10}, strategicPoint{8, -10}, strategicPoint{12, 10}, strategicPoint{-12, 10})
 	case "ship":
-		return strategicPolygon(x, y, strategicPoint{-11, -10}, strategicPoint{11, -10}, strategicPoint{11, 5}, strategicPoint{0, 12}, strategicPoint{-11, 5})
+		return y >= -10 && ((y <= 1 && math.Abs(x) <= 11) || (y > 1 && x*x+(y-1)*(y-1) <= 11*11))
 	case "submarine":
 		dx := math.Max(math.Abs(x)-4, 0)
 		return dx*dx+y*y <= 8*8
 	case "commander":
-		return strategicPolygon(x, y, strategicPoint{-8, -11}, strategicPoint{8, -11}, strategicPoint{12, -5}, strategicPoint{12, 5}, strategicPoint{0, 12}, strategicPoint{-12, 5}, strategicPoint{-12, -5})
+		return strategicPolygon(x, y, strategicPoint{-12, -8}, strategicPoint{-6, -2}, strategicPoint{0, -11}, strategicPoint{6, -2}, strategicPoint{12, -8}, strategicPoint{9, 9}, strategicPoint{-9, 9})
 	default:
 		return strategicPolygon(x, y, strategicPoint{-6, -11}, strategicPoint{6, -11}, strategicPoint{12, 0}, strategicPoint{6, 11}, strategicPoint{-6, 11}, strategicPoint{-12, 0})
 	}
 }
+
+// Lower boundary of the original frame, used to center holes on its rim.
+func strategicBottom(family string, x float64) float64 {
+	switch family {
+	case "structure":
+		return 11.5
+	case "kbot":
+		return math.Sqrt(math.Max(144-x*x, 0))
+	case "vehicle":
+		return 12.5 - math.Abs(x)
+	case "aircraft", "hovercraft":
+		return 10
+	case "ship":
+		return 1 + math.Sqrt(math.Max(121-x*x, 0))
+	case "submarine":
+		dx := math.Max(math.Abs(x)-4, 0)
+		return math.Sqrt(math.Max(64-dx*dx, 0))
+	default:
+		return math.Min(11, (12-math.Abs(x))*11/6)
+	}
+}
+
 func strategicLine(x, y, ax, ay, bx, by, width float64) bool {
 	dx, dy := bx-ax, by-ay
 	t := ((x-ax)*dx + (y-ay)*dy) / (dx*dx + dy*dy)
@@ -142,26 +204,12 @@ func strategicBolt(x, y float64) bool {
 func strategicGlyph(d StrategicIconDescriptor, x, y float64) bool {
 	line := func(ax, ay, bx, by float64) bool { return strategicLine(x, y, ax, ay, bx, by, 1.8) }
 	switch d.Role {
-	case "commander":
-		return strategicPolygon(x, y, strategicPoint{-6, -4}, strategicPoint{-3, 0}, strategicPoint{0, -5.5}, strategicPoint{3, 0}, strategicPoint{6, -4}, strategicPoint{4.5, 4}, strategicPoint{-4.5, 4}) || line(-4.5, 6, 4.5, 6)
 	case "construction", "assist":
-		tool := line(-4.5, 5, 3, -2.5) || (strategicRing(x-3, y+3, 3, 2) && !(x > 3 && y < -3))
-		if d.Role == "construction" && d.Subtype == "advanced" {
-			// A second crossed tool makes the reviewed constructor distinction
-			// visible without shrinking the family contour (design §18.7).
-			tool = tool || line(4.5, 5, -3, -2.5) || (strategicRing(x+3, y+3, 3, 2) && !(x < -3 && y < -3))
-		}
-		return tool
+		return line(-4.5, 5, 3, -2.5) || (strategicRing(x-3, y+3, 3, 2) && !(x > 3 && y < -3))
 	case "resurrection":
 		return line(-5, 0, 5, 0) || line(0, -5, 0, 5) || (strategicRing(x, y, 7.1, 1.2) && x < -2)
 	case "factory":
-		if strategicBox(x, y, -6, -1, 6, 1) || strategicBox(x, y, -6, -6, -4, 1) || strategicPolygon(x, y, strategicPoint{-4, -1}, strategicPoint{0, -5}, strategicPoint{0, -1}, strategicPoint{5, -5}, strategicPoint{5, -1}) {
-			return true
-		}
-		if d.Subtype != "" {
-			return strategicContour(d.Subtype, x/.31, (y-5)/.31)
-		}
-		return strategicBox(x, y, -5, 4, -2, 6) || strategicBox(x, y, 2, 4, 5, 6)
+		return strategicPolygon(x, y, strategicPoint{-6, -6}, strategicPoint{-3, -6}, strategicPoint{-3, -1}, strategicPoint{1, -4}, strategicPoint{1, -1}, strategicPoint{6, -4}, strategicPoint{6, 6}, strategicPoint{-6, 6})
 	case "airbase":
 		return line(-5, -5, -5, 5) || line(5, -5, 5, 5) || line(-5, 0, 5, 0)
 	case "transport":
@@ -175,15 +223,14 @@ func strategicGlyph(d StrategicIconDescriptor, x, y float64) bool {
 		}
 		return frame || line(-2, 0, 2, 0) || line(-2, 3, 2, 3)
 	case "extractor":
-		return line(-5, -4, 5, -4) || line(0, -4, 0, 5) || line(-4, 1, 0, 5) || line(4, 1, 0, 5) || line(-5, 7, 5, 7)
+		return strategicPolygon(x, y, strategicPoint{-6, -4}, strategicPoint{6, -4}, strategicPoint{0, 6})
 	case "converter":
 		return line(-5, -4, 4, -4) || line(1, -7, 4, -4) || line(-5, 4, 4, 4) || line(-5, 4, -2, 7) || strategicBox(x, y, -1, -1, 1, 1)
-	case "radar", "sonar", "jammer":
+	case "jammer":
+		return strategicRing(x, y, 5, 1.8) || line(-4, 4, 4, -4)
+	case "radar", "sonar":
 		beam := line(0, 5, 0, -2) || strategicRing(x, y-5, 1.1, 1.5)
 		arcs := y < 0 && (strategicRing(x, y-1, 4, 1.7) || strategicRing(x, y-1, 7, 1.7))
-		if d.Role == "jammer" {
-			return beam || arcs || line(-5, 6, 6, -5)
-		}
 		if d.Role == "sonar" {
 			return line(-6, -3, 6, -3) || (y > -1 && (strategicRing(x, y+1, 3, 1.7) || strategicRing(x, y+1, 6, 1.7)))
 		}
@@ -207,17 +254,15 @@ func strategicGlyph(d StrategicIconDescriptor, x, y float64) bool {
 		case "dropped":
 			return strategicRing(x, y-2, 3.2, 2.8) || line(0, -5, 0, 0) || line(-3, -5, 3, -5)
 		case "water":
-			return line(-6, -3, 6, -3) || line(-4, 2, 4, 2) || line(4, 2, 1, -1) || line(4, 2, 1, 5)
+			return strategicLine(x, y, -4, 0, 4, 0, 4.5)
 		case "beam":
 			return line(-5, 5, 5, -5) || line(-5, 0, 0, -5) || line(0, 5, 5, 0)
 		case "ballistic":
-			return strategicRing(x-3, y+3, 2, 2.2) || line(-5, 4, -3, 0) || line(-3, 0, 0, -3)
+			return x*x+y*y <= 4.5*4.5
 		case "propelled":
 			return strategicPolygon(x, y, strategicPoint{0, -6}, strategicPoint{3, -1}, strategicPoint{3, 4}, strategicPoint{0, 2}, strategicPoint{-3, 4}, strategicPoint{-3, -1}) || line(0, 4, 0, 6)
-		case "mixed":
-			return line(-5, -4, 5, 4) || line(-5, 4, 5, -4)
 		default:
-			return line(-5, 4, 4, -5) || line(-4, -1, 1, 4) || line(-6, 6, -3, 3)
+			return x*x+y*y <= 2.5*2.5
 		}
 	default:
 		return strategicRing(x, y, 3, 1.8) || strategicBox(x, y, -1, -1, 1, 1)

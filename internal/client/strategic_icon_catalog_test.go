@@ -9,22 +9,23 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 )
 
-func TestStrategicIconConstructorClassRequiresQualifiedAuthoredLevel(t *testing.T) {
+func TestStrategicIconAuthoredLevelsDoNotDependOnRoleOrNames(t *testing.T) {
 	cat := iconTestCatalog()
 	cases := []struct {
-		name, category, subtype string
-		products                bool
-		unresolved              bool
+		name, category string
+		level          int
+		products       bool
+		unresolved     bool
 	}{
-		{"basic", "TANK CONSTR level1 LEVEL1", "basic", true, false},
-		{"advanced", "TANK CONSTR LEVEL2", "advanced", true, false},
-		{"conflict", "TANK CONSTR LEVEL1 LEVEL2", "", true, true},
-		{"missing", "TANK CONSTR", "", true, true},
-		{"bare", "TANK CONSTR LEVEL", "", true, true},
-		{"other", "TANK CONSTR LEVEL20", "", true, true},
-		{"mixed", "TANK CONSTR LEVEL2 LEVEL3", "", true, true},
-		{"minelayer", "TANK MINELAYER LEVEL2", "", true, false},
-		{"assist", "TANK CONSTR LEVEL2", "", false, false},
+		{"basic", "TANK CONSTR level1 LEVEL1", 1, true, false},
+		{"advanced", "TANK CONSTR LEVEL2", 2, true, false},
+		{"conflict", "TANK CONSTR LEVEL1 LEVEL2", 0, true, true},
+		{"missing", "TANK CONSTR", 0, true, true},
+		{"bare", "TANK CONSTR LEVEL", 0, true, true},
+		{"other", "TANK CONSTR LEVEL20", 20, true, false},
+		{"mixed", "TANK CONSTR LEVEL2 LEVEL3", 0, true, true},
+		{"minelayer", "TANK MINELAYER LEVEL2", 2, true, false},
+		{"assist", "TANK CONSTR LEVEL2", 2, false, false},
 	}
 	for i, tc := range cases {
 		u := iconUnit(tc.name, tc.category, uint32(i+1))
@@ -45,8 +46,8 @@ func TestStrategicIconConstructorClassRequiresQualifiedAuthoredLevel(t *testing.
 		if !tc.products {
 			role = "assist"
 		}
-		if d.Role != role || d.Subtype != tc.subtype || (len(d.Unresolved) > 0) != tc.unresolved {
-			t.Errorf("%s: got role=%s subtype=%s unresolved=%v", tc.name, d.Role, d.Subtype, d.Unresolved)
+		if d.Role != role || d.Level != tc.level || d.Subtype != "" || (len(d.Unresolved) > 0) != tc.unresolved {
+			t.Errorf("%s: got role=%s level=%d unresolved=%v", tc.name, d.Role, d.Level, d.Unresolved)
 		}
 	}
 	basic, _ := icons.Lookup("basic", 0)
@@ -82,7 +83,7 @@ func TestStrategicIconFamilyUsesWholeTokensAndStructureIdentity(t *testing.T) {
 	cat := iconTestCatalog(ground, amph, factory, conflict)
 	cat.BuildMenus["factory"] = &content.BuildMenuPage{Buttons: []string{"ground"}}
 	icons := NewStrategicIconCatalog(cat)
-	for _, tc := range []struct{ name, family, role, sub string }{{"ground", "vehicle", "support", ""}, {"amph", "kbot", "support", ""}, {"factory", "structure", "factory", "vehicle"}, {"conflict", "generic", "support", ""}} {
+	for _, tc := range []struct{ name, family, role, sub string }{{"ground", "vehicle", "support", ""}, {"amph", "kbot", "support", ""}, {"factory", "structure", "factory", ""}, {"conflict", "generic", "support", ""}} {
 		d, ok := icons.Lookup(tc.name, 0)
 		if !ok || d.Family != tc.family || d.Role != tc.role || d.Subtype != tc.sub {
 			t.Errorf("%s: got %+v", tc.name, d)
@@ -90,17 +91,17 @@ func TestStrategicIconFamilyUsesWholeTokensAndStructureIdentity(t *testing.T) {
 	}
 }
 func TestStrategicIconCommanderAppearanceCoversEntireDescriptorArt(t *testing.T) {
-	commander := iconUnit("commander", "COMMANDER", 1)
+	commander := iconUnit("commander", "COMMANDER LEVEL10", 1)
 	commander.Commander = true
 	commander.Builder = true
-	decoy := iconUnit("decoy", "WEAPON", 2)
+	decoy := iconUnit("decoy", "WEAPON LEVEL2", 2)
 	decoy.Unknown = map[string]string{"tedclass": "Commander"}
 	decoy.Weapon1Def = &content.WeaponDef{ID: 1, Dropped: true}
 	decoy.BMCode = 0
 	c := NewStrategicIconCatalog(iconTestCatalog(commander, decoy))
 	a, _ := c.Lookup("commander", 1)
 	b, _ := c.Lookup("decoy", 2)
-	if !a.CommanderAppearance || !b.CommanderAppearance || a.Family != b.Family || a.Role != b.Role || a.Subtype != b.Subtype || a.Rect != b.Rect || a.Atlas != b.Atlas {
+	if !a.CommanderAppearance || !b.CommanderAppearance || a.Family != b.Family || a.Role != b.Role || a.Subtype != b.Subtype || a.Rect != b.Rect || a.Atlas != b.Atlas || a.Level != 0 || b.Level != 0 {
 		t.Fatal("commander and decoy must share the complete appearance")
 	}
 }
@@ -135,7 +136,7 @@ func TestStrategicIconSpecificPurposePrecedesIncidentalResources(t *testing.T) {
 		}
 	}
 }
-func TestStrategicIconUsesEveryActiveWeaponSlot(t *testing.T) {
+func TestStrategicIconPrimaryWeaponUsesFirstActiveSlot(t *testing.T) {
 	u := iconUnit("mixed", "TANK WEAPON", 1)
 	u.Weapon1Def = &content.WeaponDef{ID: 1, BeamWeapon: true}
 	u.Weapon2Def = &content.WeaponDef{ID: 2, SelfProp: true}
@@ -144,8 +145,8 @@ func TestStrategicIconUsesEveryActiveWeaponSlot(t *testing.T) {
 	cat := iconTestCatalog(u)
 	c := NewStrategicIconCatalog(cat)
 	d, _ := c.Lookup("mixed", 1)
-	if d.Role != "combat" || d.Subtype != "mixed" {
-		t.Fatalf("all active slots must contribute: %+v", d)
+	if d.Role != "combat" || d.Subtype != "beam" {
+		t.Fatalf("first active slot must supply the glyph: %+v", d)
 	}
 	u.Weapon1Def = nil
 	c = NewStrategicIconCatalog(cat)
@@ -155,7 +156,7 @@ func TestStrategicIconUsesEveryActiveWeaponSlot(t *testing.T) {
 	}
 }
 func TestStrategicIconCatalogIdentityAndDisjointAtlas(t *testing.T) {
-	a, b := iconUnit("a", "TANK", 1), iconUnit("b", "KBOT", 2)
+	a, b := iconUnit("a", "TANK LEVEL2", 1), iconUnit("b", "KBOT LEVEL3", 2)
 	cat := iconTestCatalog(a, b)
 	c := NewStrategicIconCatalog(cat)
 	if _, ok := c.Lookup("unknown", 1); ok {
@@ -181,15 +182,18 @@ func TestStrategicIconCatalogIdentityAndDisjointAtlas(t *testing.T) {
 			t.Fatalf("coverage sum %d at pixel %d", sum, i/4)
 		}
 	}
-	for y := int(d.Rect.Y); y < int(d.Rect.Y+d.Rect.H); y++ {
-		for x := int(d.Rect.X); x < int(d.Rect.X+d.Rect.W); x++ {
-			if x != int(d.Rect.X) && x != int(d.Rect.X+d.Rect.W)-1 && y != int(d.Rect.Y) && y != int(d.Rect.Y+d.Rect.H)-1 {
-				continue
-			}
-			offset := (y*d.Atlas.Width + x) * 4
-			for _, v := range d.Atlas.Pixels[offset : offset+4] {
-				if v != 0 {
-					t.Fatal("source tile gutter must be transparent")
+	for _, d := range c.Audit() {
+		d := d.Descriptor
+		for y := int(d.Rect.Y); y < int(d.Rect.Y+d.Rect.H); y++ {
+			for x := int(d.Rect.X); x < int(d.Rect.X+d.Rect.W); x++ {
+				if x != int(d.Rect.X) && x != int(d.Rect.X+d.Rect.W)-1 && y != int(d.Rect.Y) && y != int(d.Rect.Y+d.Rect.H)-1 {
+					continue
+				}
+				offset := (y*d.Atlas.Width + x) * 4
+				for _, v := range d.Atlas.Pixels[offset : offset+4] {
+					if v != 0 {
+						t.Fatal("source tile gutter must be transparent")
+					}
 				}
 			}
 		}
@@ -211,8 +215,8 @@ func TestStrategicIconFactoryMixedProductsAndNameIndependence(t *testing.T) {
 	cat.BuildMenus["factory"] = &content.BuildMenuPage{Buttons: []string{"plane", "ship"}}
 	c := NewStrategicIconCatalog(cat)
 	d, _ := c.Lookup("factory", 3)
-	if d.Role != "factory" || d.Subtype != "" || len(d.Unresolved) == 0 {
-		t.Fatal("mixed final products need generic factory art")
+	if d.Role != "factory" || d.Subtype != "" {
+		t.Fatal("all final products use the same factory art")
 	}
 	before, _ := c.Lookup("plane", 1)
 	plane.Name = "Heavy anti-air artillery"
@@ -249,5 +253,27 @@ func TestStrategicIconDuplicateNamesKeepRecordDescriptors(t *testing.T) {
 	byName, ok := icons.Lookup("same", 0)
 	if !ok || byName.Family != a.Family {
 		t.Fatal("name lookup did not select first equal record")
+	}
+}
+
+func TestStrategicIconDuplicateRecordAuthoredFallback(t *testing.T) {
+	first := iconUnit("same", "TANK LEVEL2", 1)
+	second := iconUnit("same", "TANK LEVEL3", 2)
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{"a": first, "b": second}}
+	c := NewStrategicIconCatalog(cat)
+	a, _ := c.Lookup("same", 1)
+	b, _ := c.Lookup("same", 2)
+	if a.Level != 2 || b.Level != 3 || a.Rect == b.Rect {
+		t.Fatal("retained record lost its authored level fallback")
+	}
+	commander := iconUnit("commander", "COMMANDER", 3)
+	commander.Commander, commander.Builder = true, true
+	cat.Units = map[string]*content.UnitDef{"commander": commander, "same": first, "z-retained": second}
+	cat.BuildMenus = map[string]*content.BuildMenuPage{"commander": {Buttons: []string{"same"}}}
+	c = NewStrategicIconCatalog(cat)
+	a, _ = c.Lookup("same", 1)
+	b, _ = c.Lookup("same", 2)
+	if a.Level != 0 || b.Level != 3 {
+		t.Fatal("retained duplicate inherited the named record's reachable route")
 	}
 }

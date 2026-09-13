@@ -173,7 +173,7 @@ func (c *Client) layoutStrategicMarkers(f *frame.Frame, viewer uint8, dst *strat
 		for i := range f.Units {
 			u := f.Units[i]
 			selected := u.Owner == viewer && u.Flags&0x10 != 0
-			if u.Slot == 0 || selected != (pass == 1) || !strategicUnitVisible(f, u, viewer, dst.slots) || (isCarried(u) && u.CarriedPiece < 0) {
+			if u.Slot == 0 || u.BuildRemaining > 0 || selected != (pass == 1) || !strategicUnitVisible(f, u, viewer, dst.slots) || (isCarried(u) && u.CarriedPiece < 0) {
 				continue
 			}
 			// Only this world-visibility gate permits definition art and a unit
