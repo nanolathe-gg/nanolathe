@@ -187,7 +187,7 @@ func (b *battleSession) toggleViewScale(modern bool) {
 		fmt.Fprintf(os.Stderr, "nanolathe: view scale %s\n", next)
 		return
 	}
-	next := nextZoomTarget(b.zoom.Target(b.cam))
+	next := nextZoomTarget(b.cam.RequestedZoom())
 	setBattleZoom(b, next)
 	fmt.Fprintf(os.Stderr, "nanolathe: view scale %s\n", next)
 }

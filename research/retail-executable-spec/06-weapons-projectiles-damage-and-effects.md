@@ -450,6 +450,15 @@ status, or ballistic feasibility. They also preserve the previous Aim-request
 latch and asynchronous Aim result. Validation therefore belongs to the order
 handler, later slot processing, or both; it is not inherent in target storage.
 
+**Established — clearing a slot target is separate from inhibiting it.** The
+unconditional target-clear operation tests only whether the chosen slot's target
+pair is nonempty. If so it clears the pair and schedules `TargetCleared` for that
+slot; an empty target is a no-op. It does not inspect enabled/autonomy bits,
+change the control byte, clear Aim state, or change the unit's pending events.
+The bomber's break leg uses this operation on slot 0 ([04 R-AIR-01 §8]). The
+inhibit/release verbs instead guard both their control-bit write and target clear
+with the slot-control predicates of [04 R-ORD-01 §7].
+
 **Established fact:** The recovered order handlers use several distinct
 admission policies:
 
@@ -5763,18 +5772,18 @@ means 7.
 | `startsmoke` (§4.1, muzzle point) | `(3, 1, 30, 0, 0)` | one particle, frames 0..3 of `smoke 1`, hold 30 — a slow four-frame puff |
 | land dust of every above-sea explosion (§2) | `(0, 7, 0, 15, 0)` | one particle at spawn and one every 7 ticks while `nextSpawn ≤ now + 15`: three particles, all frames, hold 7 |
 
-**Established** (the emitter's spawn loop and the particle update; the family's
-record is `[03 R-FX-02 §3]`, whose reading this states for the weapon-side
-producers). Per particle: at spawn the emitter draws one CRT value for the
+**Established** (the emitter's spawn loop, particle update and draw; the
+weapon-smoke class is distinguished from geothermal steam in `[03 R-FX-01 §3]`).
+Per particle: at spawn the emitter draws one CRT value for the
 particle's **last frame**, `crtRand() · (lastFrameBase − 2) / 0x8000 + 2`,
 and sets the first countdown to `hold` directly — the first countdown is
 **not** random. Every tick the particle moves by `windX · 8`, `+gravity · 4`
 in Y (upward), `windZ · 8`, decrements the countdown, and at zero advances one
 frame and redraws `crtRand() · (hold/2) / 0x8000 + hold/2`; it is removed when
 its frame index reaches its last frame. Each particle is drawn as the selected
-frame at its projected point with **no** coverage gate of its own — this
-family's draw walk tests nothing before blitting, unlike the flame and
-sprinkle families `[03 R-FX-02 §3]`. `lastFrameBase` is the emitter's
+frame only after its own one-point coverage gate passes `[03 R-FX-01 §3]`.
+The ungated draw in `[03 R-FX-02 §3]` belongs to geothermal steam, a separate
+class, and does not apply to weapon smoke. `lastFrameBase` is the emitter's
 frame-limit field: the bound entry's frame count **less one**, clamped by the
 table's `frameCap` when that is nonzero — so with `frameCap` 0 a puff's life
 is `crtRand · (frameCount − 3) / 0x8000 + 2` frames `[03 R-FX-01 §3]`.

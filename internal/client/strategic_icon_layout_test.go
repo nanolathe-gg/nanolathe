@@ -362,3 +362,79 @@ func TestStrategicIconNanoframeAdmissionAndCompletion(t *testing.T) {
 		t.Fatal("sensor contact disclosed hidden construction state")
 	}
 }
+
+// Enhanced policy extends the existing sensor square across all zooms, while
+// keeping the minimap's admission/blink contract [03 §3.9] and world visibility.
+func TestRadarDotsAcrossModernZooms(t *testing.T) {
+	for _, z := range []camera.Zoom{camera.ZoomUnit / 4, strategicModelCut, (strategicModelCut + strategicMarkerOn) / 2, strategicMarkerOn, camera.ZoomUnit, camera.ZoomUnit * 3 / 2, camera.ZoomUnit * 2} {
+		t.Run(z.String(), func(t *testing.T) {
+			c, f := iconLayoutFixture(t)
+			c.cam.Zoom, c.cam.Scale = z, z.Step()
+			// Hold the contact at one screen location, including height projection.
+			x := int32(180 * int32(camera.ZoomUnit) / int32(z))
+			depth := int32(90 * int32(camera.ZoomUnit) / int32(z))
+			f.Units[0].Owner = 1
+			f.Units[0].X, f.Units[0].Y, f.Units[0].Z = numeric.FixedFromInt(int64(x)), numeric.FixedFromInt(40), numeric.FixedFromInt(int64(depth+20))
+			p := &f.Radar.Contacts[0]
+			p.Owner, p.X, p.Y, p.Z = 1, f.Units[0].X, f.Units[0].Y, f.Units[0].Z
+			f.Radar.MappingLOS = 3
+			f.Visibility = frame.VisibilityView{W: 32, H: 32, Valid: true, CoverageBytes: true, Visible: make([]byte, 32*32)}
+			f.Fog = frame.FogView{W: 32, H: 32, Valid: true, Ch0: make([]byte, 32*32)}
+			checkDot := func() {
+				t.Helper()
+				c.drawStrategicMarkers(f)
+				if len(c.markerArena) != 1 {
+					t.Fatalf("hidden contact produced %d markers", len(c.markerArena))
+				}
+				m := c.markerArena[0]
+				if m.IconAtlas != nil || m.Alpha != 255 || m.Size != strategicMarkerSize || m.X != 180 || m.Y != 90 || !m.HasClip || c.strategicDraw.targets[0] != 0 {
+					t.Fatalf("sensor dot changed projection, opacity, size or identity: %+v", m)
+				}
+			}
+			checkDot()
+			cell := int(depth+20)/32*32 + int(x)/32
+			f.Fog.Ch0[cell] = 15 // unexplored fog must not erase an admitted radar dot
+			checkDot()
+			f.Fog.Ch0[cell] = 0
+			for i := range f.Visibility.Visible {
+				f.Visibility.Visible[i] = 1
+			}
+			c.drawStrategicMarkers(f)
+			for _, m := range c.markerArena {
+				if m.IconAtlas == nil {
+					t.Fatal("visible unit retained a duplicate sensor dot")
+				}
+			}
+			clear(f.Visibility.Visible)
+			p.Visible = false
+			c.drawStrategicMarkers(f)
+			if len(c.markerArena) != 0 {
+				t.Fatal("lost radar admission left a dot")
+			}
+			p.Visible, p.BlinkSuppress = true, 1
+			c.drawStrategicMarkers(f)
+			if len(c.markerArena) != 0 {
+				t.Fatal("sensor dot ignored the minimap blink suppression")
+			}
+			f.Radar.BlinkPhase = 1
+			checkDot()
+			c.SetStrategicIconCatalog(nil)
+			checkDot() // radar dots do not depend on generated unit art
+			if z >= strategicMarkerOn {
+				for i := range f.Visibility.Visible {
+					f.Visibility.Visible[i] = 1
+				}
+				c.drawStrategicMarkers(f)
+				if len(c.markerArena) != 0 {
+					t.Fatal("missing icon catalog left a dot over a visible model")
+				}
+				clear(f.Visibility.Visible)
+				c.SetEnhanced(false)
+				c.drawStrategicMarkers(f)
+				if len(c.markerArena) != 0 {
+					t.Fatal("classic normal zoom gained sensor dots")
+				}
+			}
+		})
+	}
+}

@@ -410,6 +410,7 @@ type Client struct {
 	// cmd-owned authored surfaces run once at its final interface slot [03 §1].
 	uiStage            UIStage
 	displayedResources DisplayedResources
+	resourceTimers     [10]resourceDisplayTimer
 	// recordNextResources selects a pure prediction on the pre-record worker.
 	recordNextResources bool
 
@@ -680,9 +681,10 @@ func (c *Client) SetSnapshot(b *frame.Buffer) {
 	if c != nil && b != nil && c.buffer != b {
 		c.resetFogCache()
 		c.resetTrails()
-		// Battle entry and restore reset the display; View keeps this buffer
-		// and therefore retains the pair [07 R-HUD-03 §4].
-		c.displayedResources = DisplayedResources{}
+		// Entry and restore reset stocks and bind the new saved deadlines;
+		// the four rate latches survive this reset [07 R-HUD-03 §4].
+		c.displayedResources.Energy, c.displayedResources.Metal = 0, 0
+		c.resourceTimers = [10]resourceDisplayTimer{}
 		c.buffer = b
 		c.SetPresentationPaused(false)
 	}

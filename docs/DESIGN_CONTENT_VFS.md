@@ -674,14 +674,43 @@ Host limits and compatibility boundaries are recorded under [I11]:
   No shipped archive contains a `/`, `.` or `..` entry, so the window is
   unexercised, and archive-internal indexing keeps retail's rule (C7).
 * **Bounds.** Directory offsets must be in range, decompressed size is capped,
-  directory cycles are detected, and each format reader carries explicit
-  limits. Format limits include aggregate decoded storage and reference/index
-  budgets, so repeated file pointers cannot multiply host allocations; traversal
-  depth is bounded and long sibling lists use iteration. These are Nanolathe
-  host-safety policy, not recovered retail limits. They reject malformed input
-  retail would crash on — the sanctioned exception to [I11] — and must not
-  reject anything in a stock install, which the whole-install format walk is
-  there to prove.
+  and HPI directory cycles are detected. Format readers have host limits;
+  3DO, GAF and TDF bound nesting, 3DO iterates sibling lists, and 3DO/GAF
+  budget aggregate geometry or references. These are Nanolathe host-safety
+  policy, not recovered retail limits, and must not reject stock assets.
+  The whole-install format walk checks that compatibility boundary [I11].
+* **Expansion limits — user-authorized host divergence [I11].** Acyclic shared
+  references can cause exponential work even when cycles are rejected. HPI
+  indexing therefore budgets every traversed entry, including hidden duplicate
+  branches, directory depth including the root, and aggregate name scanning and
+  path construction. Defaults are 65,536 entries, depth 64 and 16 MiB of string
+  work per archive. Both name scans include the terminator; path work charges
+  the logical and original joined lengths before normalization/allocation.
+  Exceeding a limit fails the archive index instead of publishing a partial
+  provider. The existing raw-directory and decoded-file limits remain separate.
+* **GAF expansion limits.** Metadata validation computes each subtree's full
+  traversal cost from cached child costs, counting shared children once per
+  reference without actually expanding them. Checked additions reject a graph
+  before pixel materialization if it exceeds 65,536 expanded frame visits or
+  128 Mi expanded source pixels per bank, summed over distinct top-level frames.
+  Repeated top-level pointers share one cached variant and are charged once;
+  shared descendants of distinct roots are charged to each root. Existing
+  unique-frame storage and depth-64 budgets still apply. Metadata and full
+  decoding accept the same inputs. These bounds also constrain downstream
+  recursive resampling and drawing of loaded assets; presentation scaling still
+  multiplies the source-pixel cost. `GAFLimits` permits explicit overrides;
+  zero for either new expansion field selects its default, never unlimited work.
+  Accepted frame order and composition remain unchanged.
+* **Expansion-limit evidence and remaining unknowns.** The installed-asset
+  census found HPI maxima of 1,955 traversed entries, depth 4 and 130,578 string
+  bytes across 30 archives. The 426 visible GAF banks used at most 5,183 expanded
+  visits (`anims/trees.gaf`) and 78,223,933 expanded source pixels
+  (`anims/ur-buildings1.gaf`). These observations justify default headroom, not
+  retail limits or a fixed inventory requirement. Authored regressions exercise
+  exponential sharing, budget boundaries, cached subtrees and counter overflow.
+  Retail acceptance of shared HPI nodes and nested GAF layouts remains
+  **Unknown** in `[02 R-MALF-01 §3]` and `[02 R-MALF-01 §6]`; host rejection
+  limits do not require those layouts to be classified first.
 * **Text terminators.** The parser scans forward to the next semicolon across
   newlines; reaching EOF without one is a fatal syntax error
   `[02 R-MALF-01 §4]`. Empty unit identity is preserved through discovery and

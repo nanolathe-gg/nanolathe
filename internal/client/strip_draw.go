@@ -62,11 +62,9 @@ func (c *Client) drawStripSlot(cur *frame.Frame, strip int8) StripDrawStats {
 //
 // The three researched draw forms differ in more than their art:
 //
-//   - the two puff classes blit the selected frame of their bound entry with
-//     NO coverage test at all — "this family's draw walk tests nothing before
-//     blitting, unlike the flame and sprinkle families" [03 R-FX-02 §3];
-//   - the two flame classes blit theirs after the one-point coverage gate
-//     [03 R-FX-02 §2][03 R-FX-01 §3];
+//   - geothermal steam blits without a coverage test [03 R-FX-02 §3];
+//   - weapon smoke and both flame classes blit after the per-particle
+//     one-point coverage gate [03 R-FX-01 §3][03 R-FX-02 §2];
 //   - the sprinkle and nanolathe families fill a two-by-two rectangle after
 //     that same gate, with their colour byte written raw [03 R-FX-01 §3]
 //     [03 §5.5].
@@ -74,10 +72,8 @@ func (c *Client) drawStripSlot(cur *frame.Frame, strip int8) StripDrawStats {
 // Both blitting families go through the tinted blitter, the ALP-blend family,
 // not the opaque keyed one [03 R-FX-02 §2][03 R-FX-02 §3][R-COMP-01 §2].
 //
-// Doc 06's per-puff sentence says the puff blits "after its own one-point
-// coverage gate" [06 R-WFX-01 §5]. [03 R-FX-02 §3] is the instruction-level
-// read of that same class's draw, names the disagreement, and says the puff's
-// draw has no gate; the later, more specific reading is the one implemented.
+// Coverage admission precedes sprite recording, so classic and modern receive
+// the same visible puffs [03 R-FX-01 §3].
 func (c *Client) drawStripBarrier(cur *frame.Frame, strip int8) StripDrawStats {
 	var stats StripDrawStats
 	if c == nil || cur == nil || c.cam == nil || len(c.indexed) == 0 {
@@ -99,6 +95,10 @@ func (c *Client) drawStripBarrier(cur *frame.Frame, strip int8) StripDrawStats {
 		v := views[i]
 		switch v.Family {
 		case frame.StripFamilySmokePuff, frame.StripFamilyVentSteam:
+			if v.Family == frame.StripFamilySmokePuff && !PointVisible(cur.Visibility, v.X, v.Y, v.Z, mode, local) {
+				stats.Gated++
+				continue
+			}
 			if !c.blitStripFrame(v) {
 				stats.Unresolved++
 				continue

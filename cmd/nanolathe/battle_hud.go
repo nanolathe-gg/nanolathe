@@ -119,12 +119,6 @@ type retailBattleHUD struct {
 	productGAFs       map[string]*formats.GAF
 	productGAFChecked map[string]bool
 
-	// Retail refreshes the displayed production/consumption counters on a
-	// one-second (30 tick) cadence while the stock bars remain live [07 §6].
-	rateSampleTick uint32
-	rateSample     frame.EconomyView
-	rateSampleOK   bool
-
 	// radar owns the presentation-only PICTURE→MAPPED→FINAL lifecycle. Its
 	// inputs are rebuilt from the committed frame at draw time [03 §3.6].
 	radar *render.MinimapService

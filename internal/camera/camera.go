@@ -38,6 +38,10 @@ type Camera struct {
 	// that scale is one and the recording reaches pixels untouched.
 	Zoom Zoom
 
+	// Requested factor before the map floor, retained across the animation so
+	// a tactical stop remains distinct from native on small maps (§16.7).
+	requestedZoom Zoom
+
 	// Fractional arrow-key motion at the live zoom (DESIGN_INTERFACE_HUD_INPUT §3.8).
 	scrollX, scrollZ int64
 	scrollZoom       Zoom
@@ -374,6 +378,7 @@ func (c *Camera) SetScaleAbout(mx, my int32, newS ViewScale) {
 	// and F9's classic cycle (§16.8). The map-derived floor of MinZoom is NOT
 	// applied here — a step is always at least 1x, and the view-larger-than-map
 	// domain of clampAxis stays exactly where [07 §10] left it.
+	c.requestedZoom = ZoomOf(newS)
 	c.setZoomAboutRaw(mx, my, ZoomOf(newS))
 	c.Scale = newS.Norm()
 }
@@ -392,11 +397,34 @@ func (c *Camera) SetZoomAbout(mx, my int32, newZ Zoom) {
 	if c == nil {
 		return
 	}
+	c.requestedZoom = newZ.Norm()
+	c.setLiveZoomAbout(mx, my, newZ)
+}
+
+// setLiveZoomAbout advances the animation without replacing its requested stop.
+func (c *Camera) setLiveZoomAbout(mx, my int32, newZ Zoom) {
 	newZ = newZ.Norm()
 	if minZ := c.MinZoom(); newZ < minZ {
 		newZ = minZ
 	}
 	c.setZoomAboutRaw(mx, my, newZ)
+}
+
+// RequestedZoom reports the selected zoom before the map floor is applied.
+// A camera without an explicit request uses its live factor.
+func (c *Camera) RequestedZoom() Zoom {
+	if c != nil && c.requestedZoom > 0 {
+		return c.requestedZoom
+	}
+	return c.EffectiveZoom()
+}
+
+// TacticalAtFloor identifies a sub-native request that has reached the map's
+// floor. Enhanced presentation uses full icons there even when the floor is
+// above its usual model cutoff (DESIGN_GPU_RENDERER §16.7, §16.10).
+func (c *Camera) TacticalAtFloor() bool {
+	return c != nil && c.requestedZoom > 0 && c.requestedZoom < ZoomUnit &&
+		c.requestedZoom < c.MinZoom() && c.EffectiveZoom() <= c.MinZoom()
 }
 
 // setZoomAboutRaw is SetZoomAbout without the map-derived floor, so the step

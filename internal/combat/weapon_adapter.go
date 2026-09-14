@@ -107,9 +107,16 @@ func FireWeaponPoint(u *units.Unit, idx int, x, z numeric.Fixed, _ uint32) bool 
 	return true
 }
 
-// StopWeaponFiring is the slot-level stop operation used by air attack
-// break-off legs. It deliberately leaves no presentation-only shot behind.
-func StopWeaponFiring(u *units.Unit, idx int) bool { return InhibitWeaponSlot(u, idx) }
+// StopWeaponFiring clears the target without changing slot control or Aim state.
+// The bomber's break leg uses this distinct verb, not inhibit [06 §3.2].
+func StopWeaponFiring(u *units.Unit, idx int) bool {
+	slot := orderSlot(u, idx)
+	if slot == nil {
+		return false
+	}
+	clearOrderWeaponTarget(u, slot, idx)
+	return true
+}
 
 func orderSlot(u *units.Unit, idx int) *units.Slot {
 	if u == nil || idx < 0 || idx >= units.NumSlots {

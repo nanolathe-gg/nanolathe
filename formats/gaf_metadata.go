@@ -54,6 +54,9 @@ type GAFMetadataFrame struct {
 	Subframes        []*GAFMetadataFrame
 
 	compositeDepth uint32
+	// Costs of a full traversal, counting shared children once per reference.
+	// Cached costs keep validation linear in the stored graph, not its expansion.
+	expandedFrames, expandedPixels uint64
 }
 
 // LoadGAFMetadata validates and indexes an animation bank without allocating
@@ -72,6 +75,13 @@ func LoadGAFMetadataWithLimits(data []byte, limits GAFLimits) (*GAFMetadata, err
 	}
 	if limits.MaxFrameRefs == 0 || limits.MaxDecodedPixels == 0 || limits.MaxCompositeDepth == 0 {
 		return nil, fmt.Errorf("gaf: invalid decode limits")
+	}
+	defaults := DefaultGAFLimits()
+	if limits.MaxExpandedFrames == 0 {
+		limits.MaxExpandedFrames = defaults.MaxExpandedFrames
+	}
+	if limits.MaxExpandedPixels == 0 {
+		limits.MaxExpandedPixels = defaults.MaxExpandedPixels
 	}
 	meta := &GAFMetadata{
 		Version:    binary.LittleEndian.Uint32(data[0:4]),
@@ -127,6 +137,9 @@ func LoadGAFMetadataWithLimits(data []byte, limits GAFLimits) (*GAFMetadata, err
 			if err != nil {
 				return nil, fmt.Errorf("gaf: entry %q frame %d: %w", entry.Name, frame, err)
 			}
+			if err := budget.addExpandedRoot(decoded); err != nil {
+				return nil, fmt.Errorf("gaf: entry %q frame %d: %w", entry.Name, frame, err)
+			}
 			entry.Frames[frame].Frame = decoded
 		}
 		entryCache[offset] = entry
@@ -158,8 +171,29 @@ func (g *GAFMetadata) Find(name string) (*GAFMetadataEntry, bool) {
 }
 
 type gafMetadataBudget struct {
-	limits       GAFLimits
-	refs, pixels uint64
+	limits                         GAFLimits
+	refs, pixels                   uint64
+	expandedFrames, expandedPixels uint64
+	roots                          map[*GAFMetadataFrame]bool
+}
+
+func (b *gafMetadataBudget) addExpandedRoot(frame *GAFMetadataFrame) error {
+	if b.roots[frame] {
+		return nil
+	}
+	if frame.expandedFrames > b.limits.MaxExpandedFrames-b.expandedFrames {
+		return fmt.Errorf("aggregate expanded frames exceed limit")
+	}
+	if frame.expandedPixels > b.limits.MaxExpandedPixels-b.expandedPixels {
+		return fmt.Errorf("aggregate expanded pixels exceed limit")
+	}
+	b.expandedFrames += frame.expandedFrames
+	b.expandedPixels += frame.expandedPixels
+	if b.roots == nil {
+		b.roots = make(map[*GAFMetadataFrame]bool)
+	}
+	b.roots[frame] = true
+	return nil
 }
 
 func (b *gafMetadataBudget) addRefs(n uint64) error {
@@ -220,6 +254,11 @@ func indexGAFFrame(data []byte, offset uint32, cache map[uint32]*GAFMetadataFram
 	if err := budget.addPixels(pixelCount); err != nil {
 		return nil, fmt.Errorf("frame 0x%x: %w", offset, err)
 	}
+	frame.expandedFrames = 1
+	frame.expandedPixels = pixelCount
+	if pixelCount > budget.limits.MaxExpandedPixels {
+		return nil, fmt.Errorf("expanded pixels exceed limit")
+	}
 	if frame.Compressed != 0 && frame.Compressed != 1 {
 		return nil, fmt.Errorf("frame 0x%x has compression %d", offset, frame.Compressed)
 	}
@@ -239,6 +278,16 @@ func indexGAFFrame(data []byte, offset uint32, cache map[uint32]*GAFMetadataFram
 			if err != nil {
 				return nil, err
 			}
+			// Check before adding, including cache hits: repeated child pointers
+			// multiply downstream work and must not wrap either budget counter.
+			if subframe.expandedFrames > budget.limits.MaxExpandedFrames-frame.expandedFrames {
+				return nil, fmt.Errorf("expanded frames exceed limit")
+			}
+			if subframe.expandedPixels > budget.limits.MaxExpandedPixels-frame.expandedPixels {
+				return nil, fmt.Errorf("expanded pixels exceed limit")
+			}
+			frame.expandedFrames += subframe.expandedFrames
+			frame.expandedPixels += subframe.expandedPixels
 			frame.Subframes[i] = subframe
 			if subframe.compositeDepth == math.MaxUint32 || subframe.compositeDepth+1 > frame.compositeDepth {
 				frame.compositeDepth = subframe.compositeDepth + 1

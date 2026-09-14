@@ -73,6 +73,10 @@ func (f *GAFFrame) Resampled(num, den int) *GAFFrame {
 	}
 	if len(f.Subframes) != 0 {
 		out.Subframes = make([]*GAFFrame, len(f.Subframes))
+		// The loader budgets the fully expanded graph before materialization,
+		// including repeated child references, so this copy stays bounded for
+		// accepted assets. Retail nested-layout support remains a separate unknown
+		// [02 R-MALF-01 §6]; the expansion limits are host policy [I11].
 		for i, child := range f.Subframes {
 			out.Subframes[i] = child.Resampled(num, den)
 		}

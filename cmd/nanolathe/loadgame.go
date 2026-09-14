@@ -464,6 +464,7 @@ func (g *gameShell) writeBattleSave(path, description string) error {
 	if err != nil {
 		return err
 	}
+	in.DisplayTimers = g.battle.cl.ResourceDisplayTimers()
 	return sess.WriteRetailSave(path, in)
 }
 

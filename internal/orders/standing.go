@@ -561,12 +561,11 @@ func opportunityScan(u *units.Unit) *units.Unit {
 	if u.Def != nil && u.Def.SightDistance > 0 {
 		rangeLimit = uint32(u.Def.SightDistance)
 	}
-	for slot := 0; slot < units.NumSlots; slot++ {
-		if handle, ok := q.Binding().Weapons.Acquire(u, slot, rangeLimit); ok {
-			if target := q.Binding().Lookup(handle); target != nil {
-				return target
-			}
-		}
+	// The opportunity helper asks once through slot zero. Trying additional
+	// weapons after a refusal changes both target choice and RNG consumption
+	// [04 R-STANCE-01 §3].
+	if handle, ok := q.Binding().Weapons.Acquire(u, 0, rangeLimit); ok {
+		return q.Binding().Lookup(handle)
 	}
 	return nil
 }
@@ -714,6 +713,13 @@ func autoEngage(u *units.Unit, target *units.Unit, force bool) bool {
 	}
 	q.PushHead(id, node)
 	return true
+}
+
+// AutonomousEngage exposes the unforced issuer to movement's targeted seek
+// entry. Success has inserted attack work before the seeker restarts; setting
+// a weapon target alone cannot make that restart progress [04 R-AIR-01 §7].
+func AutonomousEngage(u *units.Unit, target *units.Unit) bool {
+	return autoEngage(u, target, false)
 }
 
 // AutonomousAcquire is "the ordinary autonomous acquisition" the idle rows of

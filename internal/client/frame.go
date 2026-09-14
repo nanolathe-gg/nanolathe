@@ -383,7 +383,12 @@ func (c *Client) drawInterface(cur *frame.Frame) {
 		}
 		c.uiStage.DrawUI(c, UIFrame{Committed: cur, Resources: resources})
 	}
-	c.drawMessageLines()
+	// The battle composer owns the column, including paused frames. Menus
+	// and briefings have no committed battle frame; ENDMSN owns a separate
+	// result surface after the battle ends [07 R-HUD-03 §14.3].
+	if cur != nil && !cur.Result.Ended {
+		c.drawMessageLines()
+	}
 }
 
 func (c *Client) drawProjectiles(cur *frame.Frame) {

@@ -698,6 +698,12 @@ func (g *gameShell) applyDisplaySize(cl *client.Client, width, height int) {
 	if g.cam != nil {
 		g.cam.ViewW, g.cam.ViewH = int32(width), int32(height)
 		g.cam.Clamp()
+		// Refit a retained overview to the new floor, including one that had
+		// already settled. Its old factor may no longer be tactical (§16.7).
+		if g.battle != nil && g.battle.cam == g.cam && cl.Enhanced() && g.cam.RequestedZoom() < camera.ZoomUnit {
+			mx, my := battleViewCentre(g.cam)
+			jumpBattleZoom(g.battle, mx, my, g.cam.RequestedZoom(), true)
+		}
 	}
 }
 

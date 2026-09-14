@@ -4035,6 +4035,12 @@ stack is exhausted (stack-overflow fault). The entry-count loop runs
 `count − 1 ≥ 0` times as a **signed** test, so a count with the top bit set
 means no entries.
 
+**Unknown — acyclic shared directories.** The outcome when separate entries
+reference the same directory node after an earlier visit relocated it is not
+established by the ancestor-cycle case above. A trace of that repeated-node
+relocation and a stock directory-reference census would settle support; a
+checked host accepting the graph is not evidence of retail acceptance.
+
 At read time a stored record clamps the request to `size − position` and
 returns the C-runtime count. A compressed record reads its chunk table at
 open (count ignored), then per chunk: allocates the stored length, reads it
@@ -4201,7 +4207,10 @@ caller was found; it does not establish a general scaled-image rule.
 
 **Unknown — remaining consumers and nested relocation.** Ordinary loading
 relocates direct children only, while drawing can recurse. Which authored
-nested layouts survive requires a caller/layout trace. Feature-mask and
+nested layouts survive, including multiple references to the same nested
+frame, requires a caller/layout trace through relocation and the selected
+pixel reader. Host decoding or resampling of an authored shared graph does
+not establish retail support for that layout. Feature-mask and
 structure-texture paths outside the bounded census remain open. Nanolathe's
 ordinary-only compatibility raster is a host fallback, not a universal retail
 composition; callers must follow their particular contracts `[fmt gaf]`.
@@ -4355,8 +4364,12 @@ questions do not supersede those consumer contracts.
   §7 "Model archive (3DO)" / "Compiled script archive (COB)" · find authored
   nonzero references with identifiable target data or a traced consuming
   reader. Relocation alone establishes offsets, not the target schema.
-* GAF nested child layouts supported by ordinary relocation, and remaining
-  alternate-child behavior in feature-mask and structure-texture consumers ·
+* HPI acyclic shared-directory support after the first relocation visit ·
+  [R-MALF-01 §3] · trace repeated-node relocation and census stock directory
+  references; ancestor-cycle behavior does not settle shared-node acceptance.
+* GAF nested child layouts, including shared nested frames, supported by
+  ordinary relocation, and remaining alternate-child behavior in feature-mask
+  and structure-texture consumers ·
   [R-MALF-01 §6] · trace each selected frame through its actual pixel reader.
   Fog, glyph, flash, precomputed visibility-mask and projectile-model paths
   have bounded contracts there; implementation reconciliation is separate

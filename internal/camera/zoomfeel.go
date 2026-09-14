@@ -139,20 +139,16 @@ func (z *ZoomController) Wheel(cam *Camera, mx, my int32, dy float64, now uint32
 }
 
 // stepTarget moves the target one step in the given direction, when there is
-// one. Stepping out below the map's floor lands on the floor (setTarget
-// clamps); from the floor a further step out is refused, because every step
-// that remains is below it.
+// one. Navigation uses the requested stop so native and tactical remain
+// distinct even when the map floor clamps both to the same live factor.
 func (z *ZoomController) stepTarget(cam *Camera, mx, my int32, in bool) bool {
-	current := z.Target(cam)
+	current := cam.RequestedZoom()
 	next, ok := NextZoomStep(current, in)
 	if !ok {
 		return false
 	}
-	if !in && current <= cam.MinZoom() {
-		return false
-	}
 	z.setTarget(cam, mx, my, next)
-	return z.Target(cam) != current
+	return cam.RequestedZoom() != current
 }
 
 // SetTarget aims the zoom at a factor about (mx, my) without a wheel gesture —
@@ -169,9 +165,8 @@ func (z *ZoomController) SetTarget(cam *Camera, mx, my int32, want Zoom) {
 // setTarget clamps a requested factor into the camera's usable range and
 // records the anchor the animation is taken about.
 func (z *ZoomController) setTarget(cam *Camera, mx, my int32, want Zoom) {
-	if want > ZoomMax {
-		want = ZoomMax
-	}
+	want = want.Norm()
+	cam.requestedZoom = want
 	if minZ := cam.MinZoom(); want < minZ {
 		want = minZ
 	}
@@ -207,7 +202,7 @@ func (z *ZoomController) Step(cam *Camera) bool {
 	if !z.anchored {
 		mx, my = OriginX, OriginY
 	}
-	cam.SetZoomAbout(mx, my, next)
+	cam.setLiveZoomAbout(mx, my, next)
 	// The camera's own floor may have refused the target outright (a map the
 	// view already covers); adopt what it took so the ease terminates.
 	if got := cam.EffectiveZoom(); got != next && (got > z.target) == (next > z.target) {

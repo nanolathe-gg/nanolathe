@@ -16,7 +16,7 @@ import (
 const strategicIconSourceSize = 32
 
 func strategicArtKey(d StrategicIconDescriptor) string {
-	return fmt.Sprintf("%s/%s/%s/dots%d", d.Family, d.Role, d.Subtype, strategicLevelDots(d))
+	return fmt.Sprintf("%s/%s/%s/ticks%d", d.Family, d.Role, d.Subtype, strategicLevelMarks(d))
 }
 func makeStrategicIconAtlas(descriptors []StrategicIconDescriptor) (*drawlist.MarkerAtlas, map[string]drawlist.Rect) {
 	unique := make(map[string]StrategicIconDescriptor)
@@ -62,7 +62,7 @@ func makeStrategicIconAtlas(descriptors []StrategicIconDescriptor) (*drawlist.Ma
 
 // Level marks are a compact presentation policy; commander disguises never
 // expose a tier. The review sheet retains the exact resolved level as evidence.
-func strategicLevelDots(d StrategicIconDescriptor) int {
+func strategicLevelMarks(d StrategicIconDescriptor) int {
 	if d.CommanderAppearance || d.Level < 2 {
 		return 0
 	}
@@ -83,6 +83,23 @@ func strategicCoverage(d StrategicIconDescriptor, x, y float64) int {
 		return -1
 	}
 
+	// Light ticks keep level legible for dark team colors. Draw their keyline
+	// across the lower rim without shrinking the frame or glyph (§18.5).
+	outline := false
+	marks := strategicLevelMarks(d)
+	for i := 0; i < marks; i++ {
+		cx := (float64(i) - float64(marks-1)/2) * 5
+		cy := (strategicBottom(d.Family, cx) + .84*strategicBottom(d.Family, cx/.84)) / 2
+		dx, dy := math.Abs(x-cx), math.Abs(y-cy)
+		if dx <= 1 && dy <= 2 {
+			return 1
+		}
+		outline = outline || (dx <= 1.75 && dy <= 2.75)
+	}
+	if outline {
+		return 3
+	}
+
 	if !strategicContour(d.Family, x/1.20, y/1.20) {
 		return -1
 	}
@@ -93,18 +110,7 @@ func strategicCoverage(d StrategicIconDescriptor, x, y float64) int {
 		return 3
 	}
 	interior := strategicContour(d.Family, x/.84, y/.84)
-	dots := strategicLevelDots(d)
-	if !interior && dots > 0 {
-		// Follow the lower rim without rescaling or shifting the body or glyph.
-		for i := 0; i < dots; i++ {
-			cx := (float64(i) - float64(dots-1)/2) * 5
-			cy := (strategicBottom(d.Family, cx) + .84*strategicBottom(d.Family, cx/.84)) / 2
-			dx, dy := x-cx, y-cy
-			if dx*dx+dy*dy <= 1.15*1.15 {
-				return 3
-			}
-		}
-	}
+
 	if interior {
 		gx, gy := x, y
 		if d.Family == "aircraft" {
@@ -164,7 +170,7 @@ func strategicContour(family string, x, y float64) bool {
 	}
 }
 
-// Lower boundary of the original frame, used to center holes on its rim.
+// Lower boundary of the original frame, used to center level marks on its rim.
 func strategicBottom(family string, x float64) float64 {
 	switch family {
 	case "structure":

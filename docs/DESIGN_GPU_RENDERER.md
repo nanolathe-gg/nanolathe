@@ -3467,6 +3467,22 @@ to letterbox. Targets below it are clamped, both at the controller and at the
 camera. The viewport span is taken in framebuffer pixels — the chrome does not
 move with the zoom, so the span being fitted is a constant of the window.
 
+The camera also retains the requested factor before clamping. Wheel, pinch and
+F9 navigate that request, so the tactical and native stops remain distinct even
+if the map floor gives them the same live factor. Animation changes only the
+live factor. Direct zoom jumps retain the request too; classic step changes
+replace it with their own factor.
+
+In Enhanced presentation, a sub-native request clamped by the floor becomes a
+full strategic view when the live factor reaches that floor. This makes the
+furthest-out stop usable on small maps and large framebuffers without turning
+an ordinary native view into icons. Before arrival the usual fade applies;
+at arrival models disappear, icons become fully opaque, and icon picking and
+selection outlines take over together. Choosing native or detail clears this
+exception immediately. The paused world cache includes this strategic gate;
+resolution changes refit the retained tactical request to the new floor.
+This is presentation policy, not retail behavior.
+
 The step writer deliberately does **not** apply this floor: a step is always at
 least 1×, and clampAxis's view-larger-than-map domain stays exactly where
 [07 §10] left it.
@@ -3501,7 +3517,8 @@ least 1×, and clampAxis's view-larger-than-map domain stays exactly where
 ### 16.10 What the strategic view drops — contract Z7
 
 At and below `strategicModelCut` (0.5×) — inclusive, so the 0.25× tactical target of
-§16.6 is a marker view — the recorder does not emit unit models,
+§16.6 is a marker view — or at the clamped Enhanced tactical stop of §16.7,
+the recorder does not emit unit models,
 projectiles, effect strips, trails, unit labels or health bars. Terrain, fog,
 **the features** — sprite and 3DO alike, with their shadows — the selection
 quad, the build ghost, the order-queue overlay, the drag rectangle and the
@@ -3539,7 +3556,8 @@ icons and Enhanced team color. Below `strategicMarkerOn` (0.625×) each unit bec
   Naming a colour instead would be a second table to keep in step with the art.
 * **Selection** adds a one-pixel outline in the selection colour, which fades
   with the layer rather than appearing at full strength first.
-* **The fade** is linear from alpha 0 at 0.625× to 255 at 0.5×. Models are
+* **The fade** is linear from alpha 0 at 0.625× to 255 at 0.5×, with full
+  opacity at the clamped Enhanced tactical stop (§16.7). Models are
   hard-cut at 0.5×; a model cross-fade needs an alpha lane on the model commit,
   whose `sceneOpModelCommit` fragment is opaque today, and is a follow-up
   (`TODO(question)` at `Client.markerAlpha`).
@@ -3856,7 +3874,7 @@ Vocabulary used by the generated review sheet:
 |---|---|---|
 | Outer contour | Family | circle for kbot, diamond for vehicle, triangle for aircraft, trapezoid for hovercraft, hull for ship, capsule for submarine, square for structure |
 | Inner symbol | Primary purpose | construction tool, factory, extractor, energy, storage, sensor, jammer, transport, weapon or generic support |
-| Bottom dots | Presentation level | no dots for 0/1; two for 2; three for 3 or greater; commander appearances have none |
+| Bottom ticks | Presentation level | no marks for 0/1; two for 2; three for 3 or greater; commander appearances have none |
 | Color | Owner | dominant opaque shade of the published lobby color's `32xlogos` frame |
 | Halo | Selection / hover | separate from role and ownership; retain contrast over bright and dark terrain |
 
@@ -3866,18 +3884,24 @@ and map-clamped intermediate factors; picking uses the same fixed footprint.
 The review sheet retains 16/20/24 comparisons; these are design choices, not
 retail constants. Keep icons upright, centered on the current marker
 projection, clipped to the battle viewport and outside the scaled world region.
-Keep the existing 0.625× fade-in / 0.5× full-icon transition for the first pass;
-retuning zoom thresholds and model crossfade are separate decisions.
+The usual transition remains 0.625× fade-in / 0.5× full icons, with the
+clamped tactical-stop exception in §16.7. Model crossfade remains separate.
 
 Revision 3 uses a single larger crown for commander appearances, a flat-topped
 rounded hull for ships, one factory silhouette for every product family, a
 filled downward triangle for extraction, and a slashed circle for jammers.
 Ballistic weapons use a filled circle, water weapons a horizontal capsule, and
 fallback projectiles a smaller filled circle. Construction uses one tool at
-all levels. Revision 5 embeds the level marks as small dark cutouts centered
-on the original lower border. They follow each family's contour and affect
-only team-colored border ink. Frame thickness, body size, glyph placement and
-selection halo are unchanged; no detached dot row or compression is used.
+all levels. Revision 6 uses light ticks with dark keylines across the original
+lower border, replacing the dark cutouts that were hard to see at 24px. Marks
+follow each family's lower contour at the same centers as revision 5. Each
+white core is 2×4 source pixels with a 0.75-source-pixel dark keyline; at the
+24px destination this is a 1.5×3px core before filtering. Centers are five
+source pixels apart. The existing white and black mask channels carry the
+marks, so brightness is independent of team color. Frame thickness, body size,
+glyph placement and selection halo are unchanged; no detached row or body
+compression is used. The keylines may cross the original contour to preserve
+contrast on light terrain. These are approved presentation geometry choices.
 
 Levels follow the requested Enhanced presentation policy, not retail tech-tier
 semantics: compute the minimum count of factories on a final build-menu path
@@ -3887,7 +3911,7 @@ Entering a structure builder with a nonempty final product menu adds one;
 other edges add zero. Include the destination factory in that count. Cycles
 cannot increase the shortest path. An unreachable unit without a single authored
 level remains unresolved. Never infer from cost, names or descriptions. Levels
-0/1 have no dots, level 2 has two, and level 3 or greater has three; retain the
+0/1 have no marks, level 2 has two ticks, and level 3 or greater has three; retain the
 exact value and source in the audit. Commander and decoy appearances suppress
 levels entirely. Compute the graph once when the catalog loads. A name-resolved
 route applies only to its resolved record; other retained same-name records
@@ -4026,8 +4050,16 @@ units even when a radar record is absent. Own visible icons remain steady during
 combat. A same-publication slot lookup suppresses duplicate radar marks and
 resolves attachment links; missing links and nested cargo cannot reveal attached units.
 Sensor-only contacts retain MinimapBlipAdmitted, blink included, and never expose
-definition art or a UnitView hit. Identities are not remembered across visibility
-loss; retained hover identity uses InstanceID rather than a reusable pool slot.
+definition art or a UnitView hit. They draw at every Enhanced zoom at full
+opacity, including the strategic icon fade band: a hidden unit has no visible
+model to replace. The existing four-framebuffer-pixel square, team tint,
+committed contact projection and viewport clip are shared with the strategic
+view. This foreground pass follows fog and precedes HUD chrome; it also runs
+when the paused world is reused. Visible models consume their contact without
+a duplicate dot, even when the strategic icon catalog is unavailable. This is
+an Enhanced presentation policy; it does not add sensor detection or reveal
+unit identity, and the classic marker fade is unchanged. Identities are not
+remembered across visibility loss; retained hover identity uses InstanceID rather than a reusable pool slot.
 
 Visible nanoframes (`BuildRemaining > 0`) have no strategic icon or icon hit.
 The identified-unit lane still consumes their radar records to prevent a stray
@@ -4062,9 +4094,9 @@ the nearest square; `PickSnapshotUnit` actually tests model hulls and scores by
 size. Enlarging icons without a new hit test would make the displayed target
 and clickable target disagree.
 
-**Implementation policy.** At/below the existing 0.5× model cutoff, visible typed icons
-use the same screen bounds for drawing and picking. Keep normal hull picking
-above that cutoff during the fade. At/below the cutoff, selection uses the icon's
+**Implementation policy.** In the strategic view (§16.10), visible typed icons
+use the same screen bounds for drawing and picking. Outside the strategic view,
+the fade keeps normal hull picking. In the strategic view, selection uses the icon's
 contour halo alone: suppress the world-space ground footprint quad to avoid a
 second, offset selection cue. Keep the ground quad during the fade, at normal
 zoom, and for presentation without generated icons. Selection membership,
@@ -4154,9 +4186,9 @@ interiors are tight at 16. `go run ./tools/strategic-icon-sheet -root <install>
 -out <external-directory>` emits `index.html`, `catalog.png`, `vocabulary.png` and
 `audit.json` and a constructor-only `constructors.png` comparison from the loaded catalog and the same masks the GPU uses.
 
-**Established — revision 5 outcome.** The reference mount yields 104 shared
+**Established — revision 6 outcome.** The reference mount yields 104 shared
 symbols across 278 definitions. Constructors use one full-size tool; two or
-three small dark cutouts in the original lower border carry the level, without
+three light ticks with dark keylines across the original lower border carry the level, without
 thickening or compressing the frame. Factories use one silhouette with no
 product-family badges. Combat symbols use the first active weapon slot; all
 active weapon capabilities remain in audit evidence. Visible nanoframes are

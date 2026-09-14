@@ -198,3 +198,41 @@ func TestTheEaseReachesTheTargetAndStops(t *testing.T) {
 		t.Fatalf("settling on 2x left the camera off its step: factor %s, step %s", cam.EffectiveZoom(), cam.EffectiveScale())
 	}
 }
+
+// Nanolathe presentation policy (§16.7): a clamped overview is a distinct
+// stop, even when native and tactical have identical geometry.
+func TestClampedTacticalStopRetainsIntent(t *testing.T) {
+	for _, floor := range []Zoom{ZoomUnit * 9 / 16, ZoomUnit * 3 / 4, ZoomUnit, ZoomUnit * 5 / 4, ZoomMax} {
+		t.Run(floor.String(), func(t *testing.T) {
+			cam := &Camera{ViewW: int32(floor) + OriginX, ViewH: 480, MapW: int32(ZoomUnit), MapH: 16384}
+			var z ZoomController
+			z.Wheel(cam, 400, 240, -1, 0)
+			for z.Active(cam) {
+				if cam.EffectiveZoom() > cam.MinZoom() && cam.TacticalAtFloor() {
+					t.Fatal("overview replaced models before reaching the floor")
+				}
+				z.Step(cam)
+			}
+			if cam.EffectiveZoom() != floor || cam.RequestedZoom() != ZoomUnit/4 || !cam.TacticalAtFloor() {
+				t.Fatalf("lost overview: live=%s requested=%s tactical=%v", cam.EffectiveZoom(), cam.RequestedZoom(), cam.TacticalAtFloor())
+			}
+			z.Wheel(cam, 400, 240, -1, 500)
+			if cam.RequestedZoom() != ZoomUnit/4 {
+				t.Fatal("extra scroll changed tactical stop")
+			}
+			z.Wheel(cam, 400, 240, 1, 500)
+			if cam.RequestedZoom() != ZoomUnit || cam.TacticalAtFloor() {
+				t.Fatal("scroll in did not restore native models")
+			}
+			cam.SetZoomAbout(400, 240, ZoomUnit/4)
+			z.Reset()
+			if !cam.TacticalAtFloor() {
+				t.Fatal("direct zoom jump lost tactical intent")
+			}
+			cam.SetScaleAbout(400, 240, ViewScaleNative)
+			if cam.TacticalAtFloor() {
+				t.Fatal("classic scale retained tactical intent")
+			}
+		})
+	}
+}

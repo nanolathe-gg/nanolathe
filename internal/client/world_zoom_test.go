@@ -233,6 +233,33 @@ func TestStrategicViewDropsTheUnitLayers(t *testing.T) {
 	if got := len(recordedLines(&strategic.list)); got != fullLines {
 		t.Fatalf("classic lost ground selection: lines=%d want %d", got, fullLines)
 	}
+	// The same model/icon/selection switch must work above the fixed cut when
+	// resolution prevents the tactical stop reaching it (§16.7).
+	full.SetEnhanced(true)
+	full.SetStrategicIconCatalog(NewStrategicIconCatalog(nil))
+	for _, mapW := range []int32{896, 704, 512, 400} {
+		full.SetCamera(&camera.Camera{ViewW: 640, ViewH: 480, MapW: mapW, MapH: 16384})
+		full.cam.SetZoomAbout(320, 240, camera.ZoomUnit/4)
+		full.list.Reset()
+		full.drawCommittedFrame(cur, true)
+		if len(full.list.ModelCommands()) != 0 || len(recordedLines(&full.list)) != 0 {
+			t.Fatalf("map width %d retained models or ground selection", mapW)
+		}
+		if !full.StrategicIconsActive() || len(full.markerArena) != 1 || !full.markerArena[0].Selected || full.markerArena[0].Alpha != 255 {
+			t.Fatalf("map width %d lost full selected icon", mapW)
+		}
+		mark := full.markerArena[0]
+		if h, _, ok := full.PickPresentedUnit(cur, mark.X+11, mark.Y+11, 0); !ok || h != 1 {
+			t.Fatalf("map width %d did not pick at the icon corner", mapW)
+		}
+		full.cam.SetZoomAbout(320, 240, camera.ZoomUnit)
+		full.list.Reset()
+		full.drawCommittedFrame(cur, true)
+		if len(full.list.ModelCommands()) == 0 || full.StrategicIconsActive() {
+			t.Fatalf("map width %d did not restore native models", mapW)
+		}
+	}
+
 }
 
 // installZoomFeatureArt gives the client one four-by-three sprite feature entry,

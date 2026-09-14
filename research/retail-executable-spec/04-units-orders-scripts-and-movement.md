@@ -1729,7 +1729,8 @@ two-line helper returns a target only when the standing fire field reads
 search — the order-work acquisition path of [06 §3.2], which builds its
 candidate list per call — with its range argument taken from the definition's
 `sightdistance` read as a signed 16-bit value; otherwise it returns nothing
-without searching. Its callers are the idle/loiter arms of `Patrol`,
+without searching. It makes exactly one acquisition call with weapon slot 0;
+failure does not retry with slots 1 or 2. Its callers are the idle/loiter arms of `Patrol`,
 `Standby`, `Standby_Mine`, `VTOL_Standby`, `VTOL_Patrol` and `VTOL_SeekAttack`,
 each of which feeds the returned target straight into the auto-engage issuer
 above with `force = 0`.
@@ -13008,20 +13009,35 @@ Phase 2 is the idle decision:
 
 **Established — `VTOL_SeekAttack` is a randomized search orbit.** Entry: a
 satisfied goal-release bit `0x40` returns 5, and the off-map recovery of [R-AIR-01 §5]
-pre-empts. Phase 0 requires a live mover and `canfly`; with a target already
-bound it simply tries to latch it and, on success, clears the gate word and
-returns 0; with no target it defaults the cached goal to the unit's position if
-that goal is exactly `(0,0,0)`, draws one full-circle bearing (random below
-`0x10000`), stores it and its low bit, and runs the shared takeoff preamble.
+pre-empts. Phase 0 requires a live mover and `canfly`. With a target already
+bound, it calls the shared autonomous attack issuer with force clear
+([R-STANCE-01 §3], [R-STANCE-01 §4]). Success inserts the resolved attack
+ahead of the seek record, including the return move for maneuver stance,
+then clears the seek gate and returns 0. The seek remains behind that work;
+the restarted pump visits the inserted head. Refusal returns 1 immediately,
+without initializing the orbit or running takeoff. Only with no target does
+it default the cached goal to the unit's position if that goal is exactly
+`(0,0,0)`, draw one full-circle bearing (random below `0x10000`), store it
+and its low bit, and run the shared takeoff preamble, returning 1.
 
-Phase 1, in this order: set the manual-target latch on all three slots; if the unit's health
+**Established — target acceptance creates orders, not weapon latches.** The
+phase-0 issuer and phase-1 acquisition were rechecked against the executable
+after a seek restart froze the implementation. Merely binding the target to
+weapon slots leaves the same ungated seek at the head and makes result 0
+repeat phase 0 forever. The queue insertion is part of the acceptance contract.
+
+Phase 1, in this order: inhibit weapon slots 0, 1, and 2 using the shared
+slot-control verb ([R-ORD-01 §7]); if the unit's health
 is **below three quarters** of its definition's `MaxDamage` (computed as
 `(MaxDamage >> 2) * 3`, unsigned, strict `<`), collect the nearby-unit
 candidate list within `0xF00` for the unit's ally group and, if it is non-empty,
 clear the goal payload, draw one random index over the candidate count, push a
 `VTOL_LANDING` order at that candidate, clear the gate word and return 0; then
-ask the ordinary acquisition for a target and return 5 if one is latched;
-then, if the arrival bits `0xE0` are set, advance the search bearing by
+ask the fire-at-will opportunity scan for a target within `sightdistance`,
+then call the same unforced autonomous issuer. Return 5 only when a target
+is found and the attack is issued; this branch does not write the seek's
+target or gate. Otherwise continue the orbit: if the arrival bits `0xE0` are
+set, advance the search bearing by
 `−(0x5555 + random below 0x2000)`; finally build a point marker at the cached
 goal offset by the search bearing at radius `firstWeaponRange + 0xA0` world
 units, horizontal arrival radius `0x80`, install, set the deadline to the
@@ -13100,17 +13116,30 @@ masks could never arrive. The five masks and the three bit producers are
 Established (direct trace of each entry); the gate correspondence is read
 off the gate words this section already records.
 
+**Established — the attack-phase slot verbs.** The phrase “set the manual-target
+latch” in these phase descriptions means **inhibit all three weapon slots**, using
+the control-byte verb of [R-ORD-01 §7]. It does not bind the order's target.
+All four attack executors run this inhibit-all operation in phase 1. `AirStrike`
+then releases slot 0 without binding it; its target stays empty during the
+repositioning and approach legs. `AirToGround` and `AirToGroundHover` release and
+bind slot 0 in phase 2. `AirToAir` inhibits all slots, releases slot 0, and binds
+its unit target to slot 0 in phase 1, before testing arrival or the pursuit
+counter. Each binding here names **slot 0 only**, not all populated slots.
+The bomber's phase-5 point binding is also slot 0 only; its phase-6 stop clears
+that slot's target without reading or changing its control byte or Aim state
+([06 §3.2]). These are distinct operations, confirmed at each caller.
+
 **Established — `AirStrike`: the bombing run, with a ballistic release lead.**
 
 | Phase | Work | Result |
 |---:|---|---:|
 | 0 | Status caption `Attacking`; shared takeoff preamble. | 1 |
-| 1 | Set the manual-target latch on all three slots, then release it on slot 0. Measure `d = hypot(goal − unit)` in 16.16. If `d < 0x1E00000` (480 world units) the bomber is too close to start a run: build a point marker at `unitPos − offset(bearing(unit, goal), 0x8C00000)` — a point 2240 world units from the aircraft along the bearing helper's axis — with horizontal arrival radius `0x3C0` (960), and gate `\|= 0xE2`. Both branches return 1, so the phase advances either way; the test only decides whether a repositioning marker is installed. | 1 |
+| 1 | Inhibit all three weapon slots, then release slot 0 without binding a target. Measure `d = hypot(goal − unit)` in 16.16. If `d < 0x1E00000` (480 world units) the bomber is too close to start a run: build a point marker at `unitPos − offset(bearing(unit, goal), 0x8C00000)` — a point 2240 world units from the aircraft along the bearing helper's axis — with horizontal arrival radius `0x3C0` (960), and gate `\|= 0xE2`. Both branches return 1, so the phase advances either way; the test only decides whether a repositioning marker is installed. | 1 |
 | 2 | The swing-wide leg. `d = hypot(goal − unit)`; `h = bearing(unit, goal)`; draw one random value below `0x4000` and form `h' = h + draw − 0x2000` (a uniform ±45-degree jitter); build a point marker at `unitPos − offset(h', d/2)` with horizontal arrival radius `0x1E0` (480); gate `= 0x100E8`. | 1 |
 | 3 | No work. | 1 |
 | 4 | The release-point leg. If the satisfied set contains any of the arrival bits `0xE0`, return 1 immediately (advancing the phase) and do nothing else. Read the map's `gravity`; **if it is zero, return 7 — a cancel-all of the whole queue.** Otherwise compute the release lead exactly as `t = sqrt((2 · cruisealt) / gravity)` in float, `lead = trunc(t · 30.0 · speedInteger)` where `speedInteger` is the signed 16-bit integer part of the mover's scalar speed word, and set the marker's horizontal arrival radius to `lead + 1 + attackrunlength`. The marker is a follow-unit marker on the target when one is bound, else a point marker on the cached goal. Install; deadline `= tick + 1`; gate `\|= 0x100E8`. | 2 |
-| 5 | The overfly leg. Release the slot-0 latch; order the weapons to fire at the cached goal position; build a point marker at `unitPos − offset(bearing(unit, goal), (attackrunlength + 0x3C0) << 16)` with horizontal arrival radius `0x3C0`; gate `= 0xE2`. | 1 |
-| 6 | The break-off leg. Stop firing; build a point marker at `unitPos − offset(unitHeading, 0x5A00000)` — 1440 world units along the unit's own heading axis — with horizontal arrival radius `0x80`; gate `= 0xE2`. Then, if health is at or above three quarters of `MaxDamage`, set the phase to 3 and return 2 (fly another run). Otherwise collect candidates within `0xF00`, and if any exist clear the payload, draw one random index, push a `VTOL_LANDING` order at that candidate, clear the gate word and return 0; with no candidates return 0. | 2 or 0 |
+| 5 | The overfly leg. Release the slot-0 latch; bind slot 0 to the cached goal position; build a point marker at `unitPos − offset(bearing(unit, goal), (attackrunlength + 0x3C0) << 16)` with horizontal arrival radius `0x3C0`; gate `= 0xE2`. | 1 |
+| 6 | The break-off leg. Clear slot 0's target without changing its control byte or Aim state; build a point marker at `unitPos − offset(unitHeading, 0x5A00000)` — 1440 world units along the unit's own heading axis — with horizontal arrival radius `0x80`; gate `= 0xE2`. Then, if health is at or above three quarters of `MaxDamage`, set the phase to 3 and return 2 (fly another run). Otherwise collect candidates within `0xF00`, and if any exist clear the payload, draw one random index, push a `VTOL_LANDING` order at that candidate, clear the gate word and return 0; with no candidates return 0. | 2 or 0 |
 
 `attackrunlength` therefore has exactly one gameplay consumer: it lengthens the
 bomb-release radius in phase 4 and the overfly distance in phase 5. It is a
@@ -13134,10 +13163,10 @@ truncates to 111 rather than 112 `[03 §2.2]`.
 **Established — `AirToGround`: the strafing run.** Six phases.
 
 * 0 — status caption `Attacking`; shared takeoff preamble.
-* 1 — set the manual-target latch on all three slots; the same `±0x2000` random jitter about the bearing to
+* 1 — inhibit all three weapon slots; the same `±0x2000` random jitter about the bearing to
   the goal at half the current distance, horizontal arrival radius `0x80`;
   gate `= 0x100E8`.
-* 2 — release the slot-0 latch; order the weapons at the target if one is bound, else
+* 2 — release slot 0; bind that slot to the target if one is bound, else
   at the cached goal point; build a point marker on the cached goal whose
   horizontal arrival radius is **the unit's first weapon slot's `Range`**;
   gate `= 0x100E8`.
@@ -13152,7 +13181,7 @@ truncates to 111 rather than 112 `[03 §2.2]`.
 * 5 — set the phase to 2 and return 2, closing the loop.
 
 **Established — `AirToGroundHover`: the `hoverattack` standoff.** Phases 0 and 1
-match `AirToGround`. Phase 2 releases the slot-0 latch, aims at the target, builds a point marker on the
+match `AirToGround`. Phase 2 releases slot 0, binds that slot to the target, builds a point marker on the
 **target's** current position with horizontal arrival radius equal to the first
 weapon slot's `Range`, and zeroes two record scratch words (a side flag and a
 miss counter). Phase 3 is the orbit:
@@ -13205,7 +13234,8 @@ additional requirement — when that flag is set — that the velocity's bearing
 equal the commanded heading exactly. The flag is never set in play
 ([R-AIR-01 §14]), so the rotation and the heading requirement are dead. Phase
 0 is the takeoff preamble plus a
-one-tick deadline. Phase 1 aims at the target and then:
+one-tick deadline. Phase 1 inhibits all slots, releases slot 0, binds the unit
+target to slot 0 and then:
 
 * When the arrival bits `0xE0` are set and the dot product of the
   unit→target bearing vector and the unit's own facing vector (both taken at

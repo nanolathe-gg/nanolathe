@@ -97,7 +97,7 @@ func (c *Client) layoutStrategicMarkers(f *frame.Frame, viewer uint8, dst *strat
 		return
 	}
 	alpha := c.markerAlpha()
-	if alpha == 0 {
+	if alpha == 0 && !c.enhanced {
 		return
 	}
 	viewport := c.battleViewportRect()
@@ -120,7 +120,7 @@ func (c *Client) layoutStrategicMarkers(f *frame.Frame, viewer uint8, dst *strat
 	if typed {
 		neutral = c.nearestIndex(255, 255, 255)
 	}
-	if typed {
+	if c.enhanced {
 		dst.indexUnits(f)
 	}
 	// Visible world units are independent of the minimap contact latch and its
@@ -144,13 +144,23 @@ func (c *Client) layoutStrategicMarkers(f *frame.Frame, viewer uint8, dst *strat
 			if p.Kind != frame.RadarContactUnit || !p.PaletteKnown || (typed && p.Selected != (pass == 1)) {
 				continue
 			}
-			if typed && p.Handle != 0 && int(p.Handle) < len(dst.slots) {
+			visible := false
+			if c.enhanced && p.Handle != 0 && int(p.Handle) < len(dst.slots) {
 				if n := dst.slots[int(p.Handle)]; n != 0 {
 					u := f.Units[n-1]
 					if u.Owner == p.Owner && (strategicUnitVisible(f, u, viewer, dst.slots) || (isCarried(u) && unitVisibleForFrame(f, u, viewer))) {
-						continue // the unit lane below owns this contact, including hidden cargo
+						visible = true
 					}
 				}
+			}
+			if visible && (typed || alpha == 0) {
+				continue // the visible model/icon lane owns this contact, including hidden cargo
+			}
+			// Enhanced sensor dots stay legible above fog at every zoom (§18.4).
+			// Only identified units take the strategic fade; radar cannot grant identity.
+			contactAlpha := alpha
+			if c.enhanced && !visible {
+				contactAlpha = 255
 			}
 			contact := render.MinimapContact{Owner: p.Owner, Status: p.Status, BlinkSuppress: p.BlinkSuppress, Visible: p.Visible, LocalPlayer: viewer, Options: c.radarOptions, MinimapMode: f.Radar.MappingLOS}
 			if !render.MinimapBlipAdmitted(contact, blink) {
@@ -160,14 +170,14 @@ func (c *Client) layoutStrategicMarkers(f *frame.Frame, viewer uint8, dst *strat
 			if !ok {
 				continue
 			}
-			if typed {
+			if c.enhanced {
 				if team, known := c.strategicTeamColor(p.Palette); known {
 					index = team
 				}
 			}
-			appendMark(drawlist.Marker{X: z.Project(int32(int64(p.X)>>16) - camX), Y: z.Project(int32(int64(p.Z)>>16) - (int32(int64(p.Y)>>16) >> 1) - camZ), Size: strategicMarkerSize, Index: index, Outline: outline, Selected: p.Selected, Alpha: alpha, Clip: viewport, HasClip: true}, 0)
+			appendMark(drawlist.Marker{X: z.Project(int32(int64(p.X)>>16) - camX), Y: z.Project(int32(int64(p.Z)>>16) - (int32(int64(p.Y)>>16) >> 1) - camZ), Size: strategicMarkerSize, Index: index, Outline: outline, Selected: p.Selected, Alpha: contactAlpha, Clip: viewport, HasClip: true}, 0)
 		}
-		if !typed {
+		if !typed || alpha == 0 {
 			continue
 		}
 		for i := range f.Units {
@@ -223,7 +233,7 @@ func strategicUnitVisible(f *frame.Frame, u frame.UnitView, viewer uint8, slots 
 // current presentation. The battle shell retains its ordinary camera picker
 // for every other mode, including clients not yet bound to a battle camera.
 func (c *Client) StrategicIconsActive() bool {
-	return c != nil && c.enhanced && c.strategicIcons != nil && c.cam != nil && c.liveZoom() <= strategicModelCut
+	return c != nil && c.enhanced && c.strategicIcons != nil && c.cam != nil && c.strategicView()
 }
 
 // PickPresentedUnit keeps the retail hull picker at normal zoom and during the

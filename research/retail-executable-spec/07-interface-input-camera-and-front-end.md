@@ -4154,6 +4154,15 @@ ease from zero. A viewing-player change retains both displayed values and
 continues easing toward the newly viewed player’s stocks; it does not perform
 this battle-entry reset.
 
+**Established — rate-latch lifetime.** Initial process storage clears the
+four latched production/request values to zero. The battle-entry top-strip
+reset clears displayed stocks and capacities but leaves those four rates
+unchanged; loading another battle likewise retains them until the restored
+viewing player's display deadline becomes due. Each active player's deadline
+is seeded from the battle's current tick and save loading restores its saved
+value. A viewing-player change uses that player's own deadline without
+resetting the shared rate latch [05 R-ECO-01 §1, §6].
+
 **Established — redraw condition.** The composer keeps a 33-byte snapshot —
 the viewing slot byte, then eight singles: displayed energy, latched energy
 produced, latched energy requested, displayed metal, latched metal produced,
@@ -4629,6 +4638,20 @@ Append (`text`, `class`, `sourceUnit`, `speakerSlot`):
 5. the `MessageArrived` cue plays **only** when the speaker slot is not the
    sentinel;
 6. if a window named `TIMEOUT.GUI` is open it is repainted.
+
+**Established — lifetime.** Every battle's common world rebuild, including a
+save load, resets the producer and display indices to zero
+([08 R-ENTRY-01 §3]). F12 performs the same cursor reset ([R-CAM-01 §2]).
+Neither operation erases the stored records or changes the message settings.
+The empty displayed span makes old captions and their source-unit ids
+unreachable to both drawing and F3. A later append replaces the five fields
+above but preserves the upper class-byte flags, including F3's visited and
+destination marks ([R-CAM-01 §14]). The message column belongs to the battle
+composer (§14.4), including its frozen-frame message boxes; front-end menus
+and mission briefings do not paint that column. The post-battle `ENDMSN`
+screen also omits it: after the frozen-frame message-box stage, result setup
+clears the surface and installs its authored outcome background, and the
+result reveal/service stages paint the result window without the column.
 
 Ageing is [R-CAM-01 §7]'s rule unchanged: once per host frame after the
 sub-tick loop, the oldest visible line expires when

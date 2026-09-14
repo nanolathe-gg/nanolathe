@@ -22,15 +22,9 @@ func (h *retailBattleHUD) drawResources(c *client.Client, f *frame.Frame, displa
 	if res == nil {
 		return
 	}
-	// TODO(question): use the viewing player's saved display deadline when that
-	// presentation timing has an owner; this existing 30-tick latch stays
-	// intact on View [07 R-HUD-03 §4].
-	if !h.rateSampleOK || f.Tick < h.rateSampleTick || f.Tick-h.rateSampleTick >= 30 {
-		h.rateSampleTick = f.Tick
-		h.rateSample = *res
-		h.rateSampleOK = true
-	}
-	rates := &h.rateSample
+	// The host presentation boundary owns the saved-deadline rate latch.
+	// Drawing or speculative recording only consumes its value [05 R-ECO-01 §6].
+	rates := &displayed
 	energy := h.side.EnergyColor
 	metal := h.side.MetalColor
 	if energy < 0 || energy > 255 {

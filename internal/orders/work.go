@@ -179,18 +179,23 @@ func isqrt64(v int64) int64 {
 	if v <= 0 {
 		return 0
 	}
-	r := int64(1)
-	for r*r <= v {
-		r <<= 1
+	// Refine one base-four digit per step. Squaring a doubled candidate
+	// overflows for v >= 2^62 and eventually leaves that search stuck at zero.
+	digit := int64(1) << 62
+	for digit > v {
+		digit >>= 2
 	}
-	x := int64(0)
-	for b := r; b > 0; b >>= 1 {
-		t := x + b
-		if t*t <= v {
-			x = t
+	root := int64(0)
+	for digit != 0 {
+		if v >= root+digit {
+			v -= root + digit
+			root = (root >> 1) + digit
+		} else {
+			root >>= 1
 		}
+		digit >>= 2
 	}
-	return x
+	return root
 }
 
 // footprintPad is one end's half-footprint diagonal in whole world units:

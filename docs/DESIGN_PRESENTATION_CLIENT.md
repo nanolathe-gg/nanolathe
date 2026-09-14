@@ -232,6 +232,16 @@ the fog handles, the display option bits, the software cursor, the message
 ring, and the bound audio service. `Options` injects `Step`, the frame
 `Buffer`, the logical size and the title.
 
+`BeginPresentationFrame` owns resource-display advancement. Stocks ease every
+presented frame; the four rates copy settled totals only when the viewed
+player's saved display deadline is strictly below the committed tick, advancing
+that prior deadline by 30 once. `UIFrame.Resources` and the pre-record digest
+carry the same six displayed values. Prediction copies the deadline state and
+cannot advance it. New battle buffers reset stocks and deadline bindings but
+retain the four rate latches `[05 R-ECO-01 §1, §6]` `[07 R-HUD-03 §4]`.
+The client exports detached display deadlines for the host's save projection;
+neither presentation nor that overlay mutates live economy state [I6].
+
 Battle adoption binds the primary COMIX FNT with `SetMessageFNT`, preserving
 the side font installed by `SetFNT` for group digits `[03 R-FX-01 §6A]`.
 `SetFNT(nil)` clears both bindings on teardown. The message column's glyph
@@ -678,6 +688,11 @@ document carries them.
   HUD `[03 §1]`. Strips 0, 1, 3 and 8 have no producer anywhere in retail and
   hold no object in any session; their walks are no-ops and nothing may be
   attached to them `[03 R-FX-02 §5]`.
+  Weapon-smoke puffs pass the per-particle coverage gate before the shared
+  composer records their sprites, so classic and modern both hide smoke outside
+  sight. Geothermal steam skips that gate `[03 R-FX-01 §3]`
+  `[03 R-FX-02 §3]`. Explosion art and calculated flashes also skip coverage
+  admission and remain beneath the fog composite `[06 R-WFX-01 §2]`.
 * **C2.1 Nanolathe publication.** Strip-6 emitter records own their particles
   and advance them during the phase-11 strip sweep. Publication copies every
   live particle into `Frame.Strips`; the client paints those copies as raw

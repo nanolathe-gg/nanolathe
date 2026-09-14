@@ -40,10 +40,33 @@ func (c *Client) SetUIStage(stage UIStage) {
 	}
 }
 
-// DisplayedResources is the presentation-owned stock pair. It never replaces
+// DisplayedResources is the presentation-owned stock pair and rate latch. It never replaces
 // the authoritative EconomyView [05 R-ECO-01 §6][07 R-HUD-03 §4].
 type DisplayedResources struct {
-	Energy, Metal float32
+	Energy, Metal                  float32
+	EnergyProduced, EnergyConsumed float32
+	MetalProduced, MetalConsumed   float32
+}
+
+type resourceDisplayTimer struct {
+	deadline uint32
+	bound    bool
+}
+
+// ResourceDisplayTimers returns a detached save-projection overlay for players
+// whose display deadlines presentation has owned. Unviewed players retain the
+// session's saved values; no presentation value is written into simulation [I6].
+func (c *Client) ResourceDisplayTimers() map[uint8]uint32 {
+	if c == nil {
+		return nil
+	}
+	out := make(map[uint8]uint32)
+	for player, timer := range c.resourceTimers {
+		if timer.bound {
+			out[uint8(player)] = timer.deadline
+		}
+	}
+	return out
 }
 
 // BeginPresentationFrame advances host-frame presentation state exactly once.
@@ -53,18 +76,26 @@ func (c *Client) BeginPresentationFrame() {
 	if c == nil {
 		return
 	}
-	c.displayedResources = c.nextDisplayedResources()
+	c.displayedResources, c.resourceTimers = c.nextResourceDisplayState()
 	c.TickPresentationAudio()
 }
 
 func (c *Client) nextDisplayedResources() DisplayedResources {
+	next, _ := c.nextResourceDisplayState()
+	return next
+}
+
+// Prediction copies both latch and deadlines. Only BeginPresentationFrame
+// commits this state; composition and pre-record retries cannot advance it.
+func (c *Client) nextResourceDisplayState() (DisplayedResources, [10]resourceDisplayTimer) {
 	next := c.displayedResources
+	timers := c.resourceTimers
 	if c.buffer == nil {
-		return next
+		return next, timers
 	}
 	f := c.buffer.Current()
 	if f == nil {
-		return next
+		return next, timers
 	}
 	// A missing viewing row retains the pair; another owner is never a fallback.
 	for _, live := range f.Economy {
@@ -73,9 +104,22 @@ func (c *Client) nextDisplayedResources() DisplayedResources {
 		}
 		next.Energy = easeDisplayedStock(next.Energy, live.Energy, live.EnergyCapacity)
 		next.Metal = easeDisplayedStock(next.Metal, live.Metal, live.MetalCapacity)
+		if int(live.Player) < len(timers) {
+			timer := &timers[live.Player]
+			if !timer.bound {
+				timer.deadline, timer.bound = live.DisplayTimer, true
+			}
+			// Unsigned, strict, and one prior-deadline advance per presented
+			// frame even when several intervals are overdue [05 R-ECO-01 §1, §6].
+			if timer.deadline < f.Tick {
+				timer.deadline += 30
+				next.EnergyProduced, next.EnergyConsumed = live.EnergyProduced, live.EnergyConsumed
+				next.MetalProduced, next.MetalConsumed = live.MetalProduced, live.MetalConsumed
+			}
+		}
 		break
 	}
-	return next
+	return next, timers
 }
 
 // Low-word integer truncation precedes the wrapped gap and signed divide; the

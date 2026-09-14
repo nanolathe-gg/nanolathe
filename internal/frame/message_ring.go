@@ -104,7 +104,11 @@ func (r *MessageRing) Append(text string, class uint8, source pool.Handle, speak
 	if len(text) > 63 {
 		text = text[:63]
 	}
-	r.Entries[r.Producer] = MessageLine{Text: text, StoredTick: tick, SourceUnit: source, SpeakerSlot: speaker, Class: class & 0x0f}
+	// The poster replaces only the routing nibble of the flag byte; F3's
+	// visited and destination marks survive slot reuse [07 R-HUD-03 §14.3].
+	line := &r.Entries[r.Producer]
+	line.Text, line.StoredTick, line.SourceUnit = text, tick, source
+	line.SpeakerSlot, line.Class = speaker, class&0x0f
 	r.Producer = next
 	return true
 }
@@ -207,13 +211,12 @@ func (r *MessageRing) PostSilent(text string, class uint8, tick uint32) bool {
 	return r.Append(text, class, 0, 10, tick)
 }
 
-// Clear resets the ring, producer and display index. It is F12's whole action
-// [07 R-CAM-01 §2].
+// Clear resets only the producer and display cursors. Hidden records and
+// settings survive both F12 and battle entry [07 R-HUD-03 §14.3].
 func (r *MessageRing) Clear() {
 	if r == nil {
 		return
 	}
-	r.Entries = [30]MessageLine{}
 	r.Producer, r.Display = 0, 0
 }
 

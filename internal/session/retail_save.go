@@ -27,6 +27,10 @@ import (
 type RetailSaveInputs struct {
 	Summary save.Summary
 	Camera  save.Camera
+	// DisplayTimers overlays presentation-owned deadline advances on detached
+	// player records only. Omitted players keep the restored/seeded value
+	// [05 R-ECO-01 §1, §6][I6].
+	DisplayTimers map[uint8]uint32
 
 	// StableIDs maps every live unit handle and every referenced pool slot to
 	// its save-stable identifier. Missing entries are an exact projection
@@ -89,7 +93,11 @@ func ProjectRetailSession(s *Session, in RetailSaveInputs) (save.RetailProjectio
 			if !player.Exists {
 				continue
 			}
-			players = append(players, save.PlayerSlotFromEconomy(i, *player))
+			row := save.PlayerSlotFromEconomy(i, *player)
+			if deadline, ok := in.DisplayTimers[uint8(i)]; ok {
+				row.DisplayTimer = int32(deadline)
+			}
+			players = append(players, row)
 		}
 		p.Players = players
 	}

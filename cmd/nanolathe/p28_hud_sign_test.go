@@ -22,7 +22,7 @@ type p28PanelResourceStage struct {
 	resources *frame.Frame
 }
 
-func (s p28PanelResourceStage) DrawUI(c *client.Client, _ client.UIFrame) {
+func (s p28PanelResourceStage) DrawUI(c *client.Client, presented client.UIFrame) {
 	if s.hud == nil || c == nil {
 		return
 	}
@@ -30,7 +30,7 @@ func (s p28PanelResourceStage) DrawUI(c *client.Client, _ client.UIFrame) {
 	blitBattlePanel(c, s.hud.panelBottom, 129, 480-32)
 	blitBattlePanel(c, s.hud.panelSide, 0, 0)
 	if s.resources != nil {
-		s.hud.drawResources(c, s.resources, client.DisplayedResources{Energy: 50, Metal: 50})
+		s.hud.drawResources(c, s.resources, presented.Resources)
 	}
 }
 
@@ -55,7 +55,7 @@ func TestRetailResourceConsumptionUsesAuthoredPanelMinus(t *testing.T) {
 	if err != nil {
 		t.Skipf("retail HUD assets unavailable: %v", err)
 	}
-	resources := &frame.Frame{Economy: []frame.EconomyView{{
+	resources := &frame.Frame{ViewingPlayer: h.owner, Economy: []frame.EconomyView{{
 		Player:         h.owner,
 		Metal:          50,
 		MetalCapacity:  100,
@@ -79,6 +79,7 @@ func TestRetailResourceConsumptionUsesAuthoredPanelMinus(t *testing.T) {
 	c.SetFNT(h.console)
 	stage := p28PanelResourceStage{hud: h, resources: resources}
 	c.SetUIStage(stage)
+	c.BeginPresentationFrame()
 
 	// First capture the authored panel without text. The baseline retains the
 	// panel's own minus glyph, so the expected image overlays only "8.7" at the

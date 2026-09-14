@@ -145,7 +145,7 @@ compares the next-spawn tick against both the object's window end and the
 global tick, so the deadline its producer stores is a real lifetime and a
 weapon-side container with lifetime 0 is a one-shot; the geothermal vent's
 class alone has a constant-false verdict and a gate with no window term, so a
-vent steams until the strip evicts it. The table of the four differences, and
+vent steams until the strip evicts it. The table of the class differences, and
 the parts that are identical, is in [R-FX-01 §3]. One family's sub-records
 also expire early when the terrain height beneath them falls below sea level —
 its marks die on water.
@@ -6717,7 +6717,7 @@ is empty" for the flame, trail, sprinkle and nano families, "list empty and
 deadline passed" for the strips-5/9 smoke puffer, and constant false for the
 vent (the two smoke classes are tabulated below). Sub-record draws
 project `sx = Xword − viewX + 128`, `sy = (Zword − Yword/2) − viewZ + 32`
-(16-bit truncated) and pass the one-point coverage gate at tile `(Xword >> 5,
+(16-bit truncated). Except for geothermal steam, they pass the one-point coverage gate at tile `(Xword >> 5,
 (Zword − Yword/2) >> 5)` — the viewing player's byte grid when mode bit 1 is
 set, else the word-grid bit — with an off-map tile failing the gate. The
 "root flag byte that disables all strip allocation" ([R-STRIP-01 §1]) has **twenty readers and no writer anywhere in the image**: it is a
@@ -6853,7 +6853,7 @@ overridden slot decompiled; the vent's behaviour corroborated by an
 eighteen-second retail capture of a geothermal vent on a green map).** The
 strips-5/9 smoke puffer and the geothermal vent's class of [R-FX-02 §3] are
 **two classes with two object vtables**, not one class reached from two
-producers. Read side by side, they differ in exactly four places:
+producers. Their lifecycle, art selection and draw admission differ as follows:
 
 | | strips-5/9 smoke puffer | geothermal vent |
 |---|---|---|
@@ -6861,6 +6861,19 @@ producers. Read side by side, they differ in exactly four places:
 | spawn gate | next-spawn `<=` deadline **and** next-spawn `<=` tick | next-spawn `<=` tick |
 | vertical drift | gravity word **× 4** | gravity word **× 16** |
 | blitted entry | selected by an init flag between the two smoke entries | the first smoke entry, bound directly |
+| draw admission | per-puff one-point coverage gate | no coverage gate |
+
+**Established (direct-static, both class draw dispatches and their draw walks):**
+weapon trail, muzzle, impact and land-dust smoke uses the strips-5/9 puffer's
+gate at each puff's own current position, independently of the launcher or
+projectile's visibility. The tile is `(Xword >> 5, (Zword − (Yword >> 1)) >> 5)`;
+both shifts are arithmetic. An off-map tile fails. With current sight enabled,
+the viewing player's coverage byte must be nonzero; otherwise its mapping-word
+bit must be set. Geothermal steam alone skips this test. Explosion art and its
+calculated flash also skip coverage admission [06 R-WFX-01 §2]. All these draws
+precede the fog overlay (§3.3): explored fog can retain explosion pixels under
+its gray or dither treatment, while fully unexplored cells cover them. The
+geothermal exception must not be applied to weapon smoke.
 
 Everything else is identical, instruction for instruction: the two wind terms
 (both × 8), the countdown and its `hold/2 + crtRand × (hold/2) / 0x8000`
@@ -6981,7 +6994,7 @@ does not make these flame, trail or smoke sprites disappear.
 
 **Established** (instruction-level read of the constructor, the
 three-argument init, spawn, update and draw). This is the **vent's** class;
-[R-FX-01 §3] tabulates its four differences from the strips-5/9 smoke
+[R-FX-01 §3] tabulates its differences from the strips-5/9 smoke
 puffer.
 
 **Constructor:** base constructor, then the smoke vtable, creation tick,

@@ -188,3 +188,55 @@ func TestOnScreenUnitIsJudgedWhereTheUnitIsDrawn(t *testing.T) {
 		}
 	}
 }
+
+func TestClampedOverviewAcrossZoomInputs(t *testing.T) {
+	for _, method := range []string{"wheel", "pinch", "F9", "capture"} {
+		t.Run(method, func(t *testing.T) {
+			b := zoomTestBattle()
+			b.cam.ViewW, b.cam.ViewH, b.cam.MapW, b.cam.MapH = 1920, 1080, 1600, 3968
+			// This floor exceeds 1x, so geometric zoom alone cannot distinguish
+			// the native and tactical stops.
+			switch method {
+			case "wheel":
+				b.wheelZoom(400, 250, -1)
+			case "pinch":
+				b.applyTrackpadGestures(&input.MouseState{Pinches: []input.PinchEvent{{Began: true, Delta: -0.2, Ended: true}}}, true, 400, 250)
+			case "F9":
+				b.toggleViewScale(true)
+				b.toggleViewScale(true)
+			case "capture":
+				jumpBattleZoom(b, 400, 250, camera.ZoomUnit/4, true)
+			}
+			for i := 0; i < 100; i++ {
+				b.zoom.Step(b.cam)
+			}
+			if !b.cam.TacticalAtFloor() || b.cam.EffectiveZoom() != b.cam.MinZoom() {
+				t.Fatal("input did not reach the clamped tactical stop")
+			}
+			b.toggleViewScale(true)
+			if b.cam.RequestedZoom() != camera.ZoomUnit || b.cam.TacticalAtFloor() {
+				t.Fatal("F9 did not return to native from clamped overview")
+			}
+		})
+	}
+}
+
+func TestResolutionChangeRefitsClampedOverview(t *testing.T) {
+	b := zoomTestBattle()
+	b.cam.MapW, b.cam.MapH = 1600, 3968
+	c, err := client.New(client.Options{Width: 640, Height: 480})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.SetEnhanced(true)
+	g := &gameShell{battle: b, cam: b.cam}
+	g.applyDisplaySize(c, 1920, 1080)
+	jumpBattleZoom(b, 400, 250, camera.ZoomUnit/4, true)
+	for _, size := range [][2]int{{1600, 900}, {2560, 1440}, {1920, 1080}} {
+		g.applyDisplaySize(c, size[0], size[1])
+		b.zoom.Step(b.cam)
+		if !b.cam.TacticalAtFloor() || b.cam.EffectiveZoom() != b.cam.MinZoom() {
+			t.Fatalf("resize to %v lost tactical stop", size)
+		}
+	}
+}

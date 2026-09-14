@@ -12,7 +12,7 @@ import (
 // StrategicIconRevision versions our Enhanced presentation vocabulary. These
 // mappings describe authored inputs, not recovered retail icon behavior
 // (DESIGN_GPU_RENDERER §18). They never alter a content definition or its hash.
-const StrategicIconRevision = 5
+const StrategicIconRevision = 6
 
 // StrategicIconDescriptor is immutable after catalog construction. Evidence and
 // Unresolved are audit metadata, never additional enemy hover information.

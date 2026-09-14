@@ -198,3 +198,27 @@ func TestPausedForegroundOmitsWorldModelPreparation(t *testing.T) {
 		t.Fatal("world preparation or foreground redraw count changed")
 	}
 }
+
+func TestPausedWorldInvalidatesClampedTacticalMode(t *testing.T) {
+	c := pausedClient(t)
+	c.SetEnhanced(true)
+	c.cam.MapW = c.cam.ViewW - camera.OriginX
+	c.cam.SetZoomAbout(200, 120, camera.ZoomUnit)
+	native, ok := c.PausedWorldDigest()
+	if !ok {
+		t.Fatal("paused fixture is ineligible")
+	}
+	c.cam.SetZoomAbout(200, 120, camera.ZoomUnit/4)
+	tactical, ok := c.PausedWorldDigest()
+	if !ok || native == tactical {
+		t.Fatal("tactical mode reused native models")
+	}
+	if native.zoom != tactical.zoom || native.camX != tactical.camX || native.camZ != tactical.camZ {
+		t.Fatal("fixture changed camera geometry")
+	}
+	c.cam.SetZoomAbout(200, 120, camera.ZoomUnit)
+	restored, ok := c.PausedWorldDigest()
+	if !ok || restored != native {
+		t.Fatal("returning to native reused tactical world")
+	}
+}

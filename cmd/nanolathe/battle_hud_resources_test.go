@@ -68,3 +68,57 @@ func TestResourcePainterUsesDisplayedPair(t *testing.T) {
 		}
 	}
 }
+
+// Rate pixels follow the strict saved deadline, not settlement publication or
+// a first-draw sample. Recomposition cannot refresh them [05 R-ECO-01 §1, §6].
+func TestResourcePainterUsesLatchedRatesAtDeadlineBoundary(t *testing.T) {
+	buf := frame.NewBuffer()
+	c, err := client.New(client.Options{Width: 640, Height: 480, Buffer: buf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	font := &formats.FNT{Height: 1}
+	for ch := byte(32); ch < 127; ch++ {
+		font.Glyphs[ch] = &formats.FNTGlyph{Width: 4, Height: 1, Bits: []byte{(ch%15 + 1) << 4}}
+	}
+	h := &retailBattleHUD{side: &content.SideDef{}, console: font}
+	c.SetFNT(font)
+	anchors := []int{hud.AnchorEnergyProduced, hud.AnchorEnergyConsumed, hud.AnchorMetalProduced, hud.AnchorMetalConsumed}
+	for row, anchor := range anchors {
+		h.anchors[anchor] = hud.Rect{X1: 20, Y1: int32(20 + row*5)}
+	}
+	c.SetUIStage(displayedResourceStage{h})
+	for _, step := range []struct {
+		tick       uint32
+		live, want float32
+	}{{120, 10, 0}, {121, 10, 10}, {150, 20, 10}, {151, 20, 20}} {
+		f := buf.BeginWrite()
+		f.Economy = append(f.Economy, frame.EconomyView{
+			Player: 0, DisplayTimer: 120,
+			EnergyProduced: step.live, EnergyConsumed: step.live,
+			MetalProduced: step.live, MetalConsumed: step.live,
+		})
+		if err := buf.Publish(step.tick); err != nil {
+			t.Fatal(err)
+		}
+		c.BeginPresentationFrame()
+		for range 2 {
+			shot := c.ComposeFrameSnapshot()
+			for row, text := range []string{
+				hud.FormatEnergyProduced(step.want), hud.FormatEnergyConsumed(step.want),
+				hud.FormatMetalProduced(step.want), hud.FormatMetalConsumed(step.want),
+			} {
+				y := 20 + row*5
+				color := h.guiColor(10)
+				if row%2 == 1 {
+					color = h.guiColor(12)
+				}
+				want := make([]byte, 640*480)
+				client.DrawText(want, 640, 480, font, text, 20, y, 0, color)
+				if !bytes.Equal(shot.Indexed[y*640:(y+1)*640], want[y*640:(y+1)*640]) {
+					t.Fatalf("tick %d rate row %d does not show latched %s", step.tick, row, text)
+				}
+			}
+		}
+	}
+}

@@ -8,9 +8,9 @@ import (
 
 // The strategic view's marker layer (docs/DESIGN_GPU_RENDERER.md §16.11).
 //
-// Below strategicMarkerOn admitted contacts become fixed-screen markers.
-// Visible units use generated role art (§18); sensor-only contacts keep a
-// generic square. The layer is recorded after the world region closes, positioned through
+// Below strategicMarkerOn visible units use generated role art (§18).
+// Enhanced sensor-only contacts keep a generic square at every zoom.
+// The layer is recorded after the world region closes, positioned through
 // the LIVE zoom factor, because a fixed-pixel mark must not be scaled by the
 // executor's world transform.
 //
@@ -115,9 +115,8 @@ type strategicBlipColor struct {
 	ok       bool
 }
 
-// drawStrategicMarkers records this frame's marker layer. It is a no-op above
-// strategicMarkerOn, which is every ordinary frame, so the whole of the
-// strategic view costs one comparison at a normal zoom.
+// drawStrategicMarkers records strategic icons and Enhanced sensor dots.
+// Dots share the foreground layer so they remain visible over fog at any zoom.
 func (c *Client) drawStrategicMarkers(cur *frame.Frame) {
 	if c == nil {
 		return

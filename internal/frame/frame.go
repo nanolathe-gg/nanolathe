@@ -643,6 +643,7 @@ type EconomyView struct {
 	MetalConsumed  float32
 	EnergyProduced float32
 	EnergyConsumed float32
+	DisplayTimer   uint32 // saved presentation deadline, seeded at battle entry [05 R-ECO-01 §1]
 	Active         bool
 }
 

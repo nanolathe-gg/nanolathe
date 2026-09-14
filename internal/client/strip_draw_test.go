@@ -156,38 +156,76 @@ func TestStripBarrierDrawsBothFormsAtTheirOwnSlot(t *testing.T) {
 	}
 }
 
-// TestPuffDrawHasNoCoverageGateAndFlameDoesLocks the difference [03 R-FX-02 §3]
-// records between the families: "this family's draw walk tests nothing before
-// blitting, unlike the flame and sprinkle families". Doc 06's per-puff sentence
-// says the opposite [06 R-WFX-01 §5]; §3 is the instruction-level read of the
-// class's own draw and names the disagreement.
-func TestPuffDrawHasNoCoverageGateAndFlameDoes(t *testing.T) {
-	dark := func(v frame.StripView) *frame.Frame { return stripTestFrame(false, v) }
+// Smoke visibility belongs to each puff, while geothermal steam has no coverage
+// gate [03 R-FX-01 §3][03 R-FX-02 §3]. Rejecting the sprite before recording
+// protects both executors; classic replay also verifies the resulting pixels.
+func TestSmokeCoverageAndVentException(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		family   frame.StripFamily
+		visible  bool
+		wantDraw bool
+	}{
+		{"hidden weapon smoke", frame.StripFamilySmokePuff, false, false},
+		{"visible weapon smoke", frame.StripFamilySmokePuff, true, true},
+		{"hidden geothermal steam", frame.StripFamilyVentSteam, false, true},
+		{"visible geothermal steam", frame.StripFamilyVentSteam, true, true},
+		{"hidden flame trail", frame.StripFamilyFlameTrail, false, false},
+		{"visible flame trail", frame.StripFamilyFlameTrail, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := frame.StripView{Strip: 9, Family: tc.family, Bank: stripTestBankName,
+				Entry: "smoke 1", X: numeric.FixedFromInt(20), Z: numeric.FixedFromInt(20)}
+			if tc.family == frame.StripFamilyVentSteam {
+				v.Strip = 4
+			}
+			if tc.family == frame.StripFamilyFlameTrail {
+				v.Entry = "flamestream"
+			}
+			c := stripTestClient(t)
+			stats := c.drawStripBarrier(stripTestFrame(tc.visible, v), v.Strip)
+			sprites := 0
+			c.list.VisitSprites(func(drawlist.Sprite) { sprites++ })
+			if (sprites != 0) != tc.wantDraw || (stats.Blitted != 0) != tc.wantDraw || (stats.Gated == 0) != tc.wantDraw {
+				t.Fatalf("draw = %+v, sprites = %d, want drawn = %t", stats, sprites, tc.wantDraw)
+			}
+			c.replayForTest()
+			if (stripPainted(c) != 0) != tc.wantDraw {
+				t.Fatalf("classic painted = %d, want drawn = %t", stripPainted(c), tc.wantDraw)
+			}
+		})
+	}
+}
 
-	puff := frame.StripView{
-		Strip: 9, Family: frame.StripFamilySmokePuff,
-		Bank: stripTestBankName, Entry: "smoke 1",
-		X: numeric.FixedFromInt(20), Z: numeric.FixedFromInt(20),
-	}
-	c := stripTestClient(t)
-	if stats := c.drawStripBarrier(dark(puff), 9); stats.Blitted != 1 || stats.Gated != 0 {
-		t.Fatalf("a puff over unseen ground drew %+v; the puff class gates on nothing [03 R-FX-02 §3]", stats)
-	}
-
-	trail := puff
-	trail.Family = frame.StripFamilyFlameTrail
-	trail.Entry = "flamestream"
-	c2 := stripTestClient(t)
-	if stats := c2.drawStripBarrier(dark(trail), 9); stats.Gated != 1 || stats.Blitted != 0 {
-		t.Fatalf("a flame trail over unseen ground drew %+v; the flame families gate [03 R-FX-02 §2]", stats)
-	}
-	if stripPainted(c2) != 0 {
-		t.Fatal("a gated flame segment still painted pixels")
-	}
-	// The same segment over seen ground draws.
-	c3 := stripTestClient(t)
-	if stats := c3.drawStripBarrier(stripTestFrame(true, trail), 9); stats.Blitted != 1 {
-		t.Fatalf("a flame trail over seen ground drew %+v", stats)
+// The sheared puff position selects the tile, and current sight takes precedence
+// over exploration. The word-grid fallback tests the viewing player's own bit
+// [03 R-FX-01 §3]. Two adjacent puffs must be admitted independently.
+func TestSmokeCoverageUsesEachShearedPointAndViewer(t *testing.T) {
+	puff := frame.StripView{Strip: 9, Family: frame.StripFamilySmokePuff,
+		Bank: stripTestBankName, Entry: "smoke 1", X: numeric.FixedFromInt(20),
+		Y: numeric.FixedFromInt(64), Z: numeric.FixedFromInt(52)}
+	hidden := puff
+	hidden.X = numeric.FixedFromInt(52)
+	for _, bytes := range []bool{true, false} {
+		cur := stripTestFrame(false, puff, hidden)
+		cur.ViewingPlayer = 2
+		cur.Visibility.CoverageBytes = bytes
+		cur.Visibility.WordVisible = make([]uint16, 16)
+		cur.Visibility.WordVisible[0] = 1 << 2
+		cur.Visibility.WordVisible[1] = 1 << 1
+		cur.Visibility.Visible[0] = 1
+		if bytes {
+			cur.Visibility.WordVisible[1] |= 1 << 2
+		}
+		c := stripTestClient(t)
+		stats := c.drawStripBarrier(cur, 9)
+		if stats.Blitted != 1 || stats.Gated != 1 {
+			t.Fatalf("byte coverage = %t: %+v, want only the first puff", bytes, stats)
+		}
+		c.replayForTest()
+		if c.indexed[20*c.width+20] != 0x41 || c.indexed[20*c.width+52] != 0 {
+			t.Fatalf("byte coverage = %t: wrong puff pixels", bytes)
+		}
 	}
 }
 

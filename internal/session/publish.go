@@ -878,6 +878,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 				MetalConsumed:  pl.PassConsumed[economy.Metal],
 				EnergyProduced: pl.PassProduced[economy.Energy],
 				EnergyConsumed: pl.PassConsumed[economy.Energy],
+				DisplayTimer:   pl.DisplayTimer,
 				Active:         pl.Exists && !pl.IsObserver,
 			})
 		}

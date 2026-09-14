@@ -902,7 +902,7 @@ describes this block.
 
 **Established — the HUD deadline is one tick stricter.** The sibling
 `DisplayTimer` field is advanced by the same `+30` but by a **strict**
-compare, `if (playerDisplayTimer < globalTick)`. Its consumer is the resource
+unsigned compare, `if (playerDisplayTimer < globalTick)`. Its consumer is the resource
 bar ([R-ECO-01 §6]). `UpdateTime` uses `<=`, `DisplayTimer` uses `<`; the
 difference is real and is not a transcription slip. `DisplayTimer` has
 exactly one consumer, the resource bar's rate latch. `WinLoseTime` has no
@@ -2284,9 +2284,14 @@ unscaled, into its own display record. There is **no averaging, no smoothing
 and no rate conversion** on those four values: what the bar shows is the last
 settlement pass's totals verbatim. They are re-sampled only when the player's
 `DisplayTimer` deadline is due, on the strict compare of [R-ECO-01 §1], and
-the deadline is then advanced by 30 — so the numbers change at most once per
-30 ticks even though the bar redraws every frame. *This is the whole of the
-`DisplayTimer` mechanism.*
+the previous deadline is advanced by 30 exactly once per presented frame.
+There is no catch-up loop and no replacement with the current tick plus 30.
+If several intervals are overdue, repeated presented frames at one committed
+tick can therefore advance that deadline repeatedly, one interval per frame.
+Equality does not refresh. The deadline belongs to the viewed player, while
+the four latched values belong to the shared display: changing the viewed
+player retains those values until that player's deadline is due.
+*This is the whole of the `DisplayTimer` mechanism.*
 
 What **is** smoothed, every frame rather than every 30 ticks, is the pair of
 displayed **stock** values beside them. For each resource the bar holds its

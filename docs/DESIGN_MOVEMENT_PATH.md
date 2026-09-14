@@ -351,6 +351,18 @@ bounded negative: ground route failure has no flight producer, and recovered
 preemption paths either preserve the landing binding or remove the landing
 record before another movement record installs. The handler's Established
 non-arrival branches remain implemented `[04 R-AIR-01 §6]`.
+Air attack preparation uses the inhibit-all slot verb, not target binding.
+The strafing and hover release phases and the bomber release phase bind only
+slot zero; dogfight phase one inhibits all, then releases and binds slot zero.
+The bomber break phase clears its primary target without changing control or
+Aim state. These verbs pass through the existing combat adapter
+`[04 R-AIR-01 §8]` `[06 §3.2]`.
+
+`VTOL_SeekAttack` calls orders' `AutonomousEngage` for a retained target and
+`AutonomousAcquire` for its search phase. Both issue resolved attack records;
+the targeted restart requires the new queue head to exist before it returns.
+The weapon adapter's target setter does not perform this queue handoff
+`[04 R-AIR-01 §7]` `[04 R-STANCE-01 §3]`.
 Cruise altitude is `max(sea level, terrain height at the target) + offset`,
 scaled to 16.16 and capped at `0x1FF0000`, with no lower clamp `[04 §10.1]`.
 

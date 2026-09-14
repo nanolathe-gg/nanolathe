@@ -855,6 +855,16 @@ handler is installed, into the 25-slot campaign array; the registry holds only
 the difficulty and the two flag mirrors, and progress persists solely through a
 save bank's `Summary` `[08 R-CAMP-01 §8]`.
 
+Result team identifiers and per-row win/loss labels are host presentation
+metadata; retail provides the local latch and the per-player score rows, with
+no team column `[08 R-CAMP-01 §7]`. Campaign and skirmish results use the same
+player-record team mapping for their winner/loser lists and score labels.
+Campaign results retain the local latch as their overall outcome. This avoids
+marking every score row as a loss by comparing a raw owner slot with a team
+identifier. Validation covers both outcomes, either local slot, and the empty
+setup rows left after restore; a stock Arm mission save also continues through
+its authored location victory with the local row marked as a win.
+
 **C23 — the post-battle sequence is a screen, not an overlay.** The controller
 plays retail's state order over a frozen result, emitting the darkening fade,
 the glamour art, the click-to-continue prompt, the statistic reveal and the

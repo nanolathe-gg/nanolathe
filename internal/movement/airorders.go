@@ -1484,18 +1484,16 @@ func orderWeapons(u *units.Unit) *orders.WeaponAdapter {
 	return q.Binding().Weapons
 }
 
-func setManualTarget(u *units.Unit, target pool.Handle) bool {
+// Attack preparation inhibits slots without installing a target. Binding is a
+// later, primary-slot operation [04 R-AIR-01 §8][04 R-ORD-01 §7].
+func inhibitAirWeapons(u *units.Unit) {
 	w := orderWeapons(u)
-	if w == nil || w.SetManualTarget == nil {
-		return false
+	if w == nil || w.InhibitSlot == nil {
+		return
 	}
-	ok := true
 	for idx := 0; idx < units.NumSlots; idx++ {
-		if !w.SetManualTarget(u, idx, target) {
-			ok = false
-		}
+		w.InhibitSlot(u, idx)
 	}
-	return ok
 }
 
 func releaseWeapon(u *units.Unit, idx int) bool {
@@ -1503,50 +1501,20 @@ func releaseWeapon(u *units.Unit, idx int) bool {
 	return w != nil && w.ReleaseSlot != nil && w.ReleaseSlot(u, idx)
 }
 
-func fireTargetWeapons(u *units.Unit, target pool.Handle, tick uint32) bool {
+func firePrimaryTarget(u *units.Unit, target pool.Handle, tick uint32) bool {
 	w := orderWeapons(u)
-	if w == nil || w.FireTarget == nil || target == 0 {
-		return false
-	}
-	ok := true
-	for idx := 0; idx < units.NumSlots; idx++ {
-		if !w.FireTarget(u, idx, target, tick) {
-			ok = false
-		}
-	}
-	return ok
+	return w != nil && w.FireTarget != nil && target != 0 && w.FireTarget(u, 0, target, tick)
 }
 
-func firePointWeapons(u *units.Unit, x, z numeric.Fixed, tick uint32) bool {
+func firePrimaryPoint(u *units.Unit, x, z numeric.Fixed, tick uint32) bool {
 	w := orderWeapons(u)
-	if w == nil || w.FirePoint == nil {
-		return false
-	}
-	ok := true
-	for idx := 0; idx < units.NumSlots; idx++ {
-		if !w.FirePoint(u, idx, x, z, tick) {
-			ok = false
-		}
-	}
-	return ok
+	return w != nil && w.FirePoint != nil && w.FirePoint(u, 0, x, z, tick)
 }
 
-func stopWeapons(u *units.Unit) {
-	w := orderWeapons(u)
-	if w == nil || w.StopFiring == nil {
-		return
+func stopPrimaryWeapon(u *units.Unit) {
+	if w := orderWeapons(u); w != nil && w.StopFiring != nil {
+		w.StopFiring(u, 0)
 	}
-	for idx := 0; idx < units.NumSlots; idx++ {
-		w.StopFiring(u, idx)
-	}
-}
-
-func acquireWeaponTarget(u *units.Unit, idx int, limit uint32) (pool.Handle, bool) {
-	w := orderWeapons(u)
-	if w == nil || w.Acquire == nil {
-		return 0, false
-	}
-	return w.Acquire(u, idx, limit)
 }
 
 // weaponCanEngage is the shot-admission gate of [04 R-ORD-01 §7] asked
@@ -1804,17 +1772,18 @@ func airLegUnbound(n *orders.Node, tick uint32) orders.Code {
 // target flies while looking for one.
 //
 //	Phase 0 requires a live mover and `canfly`; with a target already bound it
-//	tries to latch it and, on success, clears the gate word and returns 0; with
+//	issues autonomous attack work and, on success, clears the gate and returns
+//	0; refusal advances without orbit initialization or takeoff. With
 //	no target it defaults the cached goal to the unit's position if that goal is
 //	exactly (0,0,0), draws one full-circle bearing (random below 0x10000),
 //	stores it and its low bit, and runs the shared takeoff preamble.
 //
-//	Phase 1, in this order: set the manual-target latch on all three slots; if
+//	Phase 1, in this order: inhibit all three weapon slots; if
 //	health is below three quarters of MaxDamage, collect the nearby-unit
 //	candidate list within 0xF00 and, if it is non-empty, clear the goal payload,
 //	draw one random index, push a VTOL_Landing order at that candidate, clear
 //	the gate word and return 0; then ask the ordinary acquisition for a target
-//	and return 5 if one is latched; then, if the arrival bits 0xE0 are set,
+//	and return 5 if an attack is issued; then, if the arrival bits 0xE0 are set,
 //	advance the search bearing by −(0x5555 + random below 0x2000); finally build
 //	a point marker at the cached goal offset by the search bearing at radius
 //	firstWeaponRange + 0xA0, horizontal arrival radius 0x80, install, set the
@@ -1833,9 +1802,12 @@ func (s *System) legVTOLSeekAttack(u *units.Unit, n *orders.Node, satisfied uint
 		if !s.airMoverReady(u) {
 			return 7 // *cancel-all* [04 R-ORD-02 §3]
 		}
-		if n.Target != 0 && setManualTarget(u, n.Target) {
-			n.DynamicGate = 0
-			return 0 // acquired target ends the seek orbit [04 R-AIR-01 §7]
+		if n.Target != 0 {
+			if orders.AutonomousEngage(u, s.unitFor(n.Target)) {
+				n.DynamicGate = 0
+				return 0 // restart at the inserted attack [04 R-AIR-01 §7]
+			}
+			return 1 // refusal skips the targetless initializer [04 R-AIR-01 §7]
 		}
 		if sim == nil {
 			return airLegUnbound(n, tick)
@@ -1847,24 +1819,22 @@ func (s *System) legVTOLSeekAttack(u *units.Unit, n *orders.Node, satisfied uint
 		n.Param1 = draw
 		n.Param2 = draw & 1
 		s.takeoffPreamble(u, n)
-		// §7 does not name phase 0's result code; every sibling phase 0 in
-		// [04 R-ORD-02 §2] and [04 R-ORD-02 §3] advances, and phase 1 below is
-		// only reachable that way.
 		return 1
 	case 1:
 		if sim == nil {
 			return airLegUnbound(n, tick)
 		}
-		// The manual-target latch is installed before the health and
-		// acquisition branches, in slot order [04 R-AIR-01 §7]. A zero target
-		// disables autonomous tracking without inventing a target.
-		setManualTarget(u, n.Target)
+		// Inhibit before repair and acquisition; the slot-control verb owns
+		// the guarded target clear [04 R-AIR-01 §7][04 R-ORD-01 §7].
+		if weapons := orderWeapons(u); weapons != nil && weapons.InhibitSlot != nil {
+			for slot := 0; slot < units.NumSlots; slot++ {
+				weapons.InhibitSlot(u, slot)
+			}
+		}
 		if airBelowThreeQuarters(u) && s.airFindBaseAndLand(u, n, sim, tick) {
 			return 0 // *restart* [04 R-AIR-01 §7][04 R-AIR-01 §11]
 		}
-		if target, ok := acquireWeaponTarget(u, 0, uint32(firstWeaponRange(u))); ok {
-			n.Target = target
-			n.DynamicGate = 0
+		if orders.AutonomousAcquire(u) {
 			return 5 // acquisition succeeds and the seek order completes
 		}
 		if satisfied&airLegGate != 0 {
@@ -2025,7 +1995,7 @@ func (s *System) legAirStrike(u *units.Unit, n *orders.Node, satisfied uint32, t
 		s.takeoffPreamble(u, n)
 		return 1
 	case 1:
-		setManualTarget(u, n.Target)
+		inhibitAirWeapons(u)
 		releaseWeapon(u, 0)
 		// The test only decides whether a repositioning marker is installed;
 		// both branches return 1, so the phase advances either way.
@@ -2083,7 +2053,7 @@ func (s *System) legAirStrike(u *units.Unit, n *orders.Node, satisfied uint32, t
 		releaseWeapon(u, 0)
 		// The bomber's release row always orders a point shot at the cached
 		// goal, even when that cache came from a live target [04 R-AIR-01 §8].
-		firePointWeapons(u, n.GoalX, n.GoalZ, tick)
+		firePrimaryPoint(u, n.GoalX, n.GoalZ, tick)
 		runLength := int64(0)
 		if u.Def != nil {
 			runLength = int64(u.Def.AttackRunLength)
@@ -2096,7 +2066,7 @@ func (s *System) legAirStrike(u *units.Unit, n *orders.Node, satisfied uint32, t
 		n.DynamicGate = airLegGateReposition
 		return 1
 	case 6:
-		stopWeapons(u)
+		stopPrimaryWeapon(u)
 		ox, oz := offsetAtBearing(u.Move.Heading, numeric.Fixed(0x5A00000)) // 1440 world units
 		m := s.newPointMarker(u, Vec3{X: u.X - ox, Y: u.Y, Z: u.Z - oz})
 		m.setArrivalRadius(0x80)
@@ -2213,16 +2183,16 @@ func (s *System) legAirToGround(u *units.Unit, n *orders.Node, tick uint32) orde
 		if sim == nil {
 			return airLegUnbound(n, tick)
 		}
-		setManualTarget(u, n.Target)
+		inhibitAirWeapons(u)
 		s.airJitteredApproach(u, n, sim, 0x80)
 		n.DynamicGate = airLegGateStrike
 		return 1
 	case 2:
 		releaseWeapon(u, 0)
 		if n.Target != 0 {
-			fireTargetWeapons(u, n.Target, tick)
+			firePrimaryTarget(u, n.Target, tick)
 		} else {
-			firePointWeapons(u, n.GoalX, n.GoalZ, tick)
+			firePrimaryPoint(u, n.GoalX, n.GoalZ, tick)
 		}
 		m := s.newPointMarker(u, Vec3{X: n.GoalX, Y: n.GoalY, Z: n.GoalZ})
 		m.setArrivalRadius(airRadiusWord(int64(firstWeaponRange(u))))
@@ -2316,16 +2286,16 @@ func (s *System) legAirToGroundHover(u *units.Unit, n *orders.Node, tick uint32)
 		if sim == nil {
 			return airLegUnbound(n, tick)
 		}
-		setManualTarget(u, n.Target)
+		inhibitAirWeapons(u)
 		s.airJitteredApproach(u, n, sim, 0x80)
 		n.DynamicGate = airLegGateStrike
 		return 1
 	case 2:
 		releaseWeapon(u, 0)
 		if n.Target != 0 {
-			fireTargetWeapons(u, n.Target, tick)
+			firePrimaryTarget(u, n.Target, tick)
 		} else {
-			firePointWeapons(u, targetX, targetZ, tick)
+			firePrimaryPoint(u, targetX, targetZ, tick)
 		}
 		m := s.newPointMarker(u, Vec3{X: targetX, Y: targetY, Z: targetZ})
 		m.setArrivalRadius(airRadiusWord(int64(firstWeaponRange(u))))
@@ -2580,10 +2550,11 @@ func (s *System) legAirToAir(u *units.Unit, n *orders.Node, satisfied uint32, ti
 		if sim == nil {
 			return airLegUnbound(n, tick)
 		}
-		// Dogfight aiming uses the same manual target and armed slot state as
-		// the other air attack families; subsequent fire admission is owned by
-		// combat's ordinary unit-phase pipeline.
-		setManualTarget(u, n.Target)
+		// Dogfight preparation releases and binds only the primary slot after
+		// inhibiting all slots [04 R-AIR-01 §8].
+		inhibitAirWeapons(u)
+		releaseWeapon(u, 0)
+		firePrimaryTarget(u, n.Target, tick)
 		targetX, targetY, targetZ := n.GoalX, n.GoalY, n.GoalZ
 		t := s.unitFor(n.Target)
 		if t != nil && t.Alive {

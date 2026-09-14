@@ -60,7 +60,7 @@ func (b *battleSession) applyTrackpadGestures(mouse *input.MouseState, allowed b
 				// Spend the gesture even at a zoom limit. Reversing or holding the same
 				// pinch cannot issue a second step, however long the gesture lasts.
 				g.pinchUsed = true
-				if next, ok := camera.NextZoomStep(b.zoom.Target(b.cam), g.magnification > 0); ok {
+				if next, ok := camera.NextZoomStep(b.cam.RequestedZoom(), g.magnification > 0); ok {
 					b.zoom.SetTarget(b.cam, g.anchorX, g.anchorY, next)
 				}
 			}

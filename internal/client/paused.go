@@ -55,6 +55,7 @@ type PausedWorldInputs struct {
 	camX, camZ, viewW, viewH, mapW, mapH int32
 	scale                                camera.ViewScale
 	zoom                                 camera.Zoom
+	strategic                            bool
 
 	terrain *world.Terrain
 	palette *palette.Tables
@@ -92,7 +93,7 @@ func (c *Client) PausedWorldDigest() (PausedWorldInputs, bool) {
 		terrain: c.terrain, palette: c.pal, display: c.base, detail: c.detailArt, font: c.fnt,
 		antiAlias: c.antiAlias, shadows: c.shadows, vehicleShadows: c.vehicleShadows,
 		featureShadows: c.featureShadows, shading: c.shading, ditheredFog: c.ditheredFog,
-		damageBars: damageBars,
+		damageBars: damageBars, strategic: c.strategicView(),
 	}
 	// Use precisely the same previous-frame admission and camera arithmetic as
 	// recordFrameNoAudio, including the viewport-sized teleport snap (§13.5).

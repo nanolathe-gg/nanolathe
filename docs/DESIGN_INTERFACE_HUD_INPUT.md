@@ -849,6 +849,17 @@ column advances by the COMIX glyph height. Each line resolves logical colour
 recording its glyph command, so classic and modern share the same foreground
 `[07 R-HUD-03 §14.4]` `[07 "Retail palette contract"]` `[03 §4.3]`.
 
+Successful battle installation clears the ring's producer/display cursors,
+including on save load, so captions and source handles from an earlier battle
+cannot reach the column or F3 `[08 R-ENTRY-01 §3]`. This is the same cursor-only
+operation as F12: hidden records and configured limits remain, and appending
+replaces the message fields while retaining the slot's visited/jumped flags
+`[07 R-HUD-03 §14.3]`. `drawInterface` records the column only with a committed
+nonterminal battle frame. The front-end's unpublished snapshot therefore
+suppresses old captions on menus and briefings; terminal results use ENDMSN's
+separate outcome surface. Paused nonterminal battle frames still draw the
+column `[07 R-HUD-03 §14.3]` `[07 R-HUD-03 §14.4]`.
+
 The column shares the HUD's loaded `32xlogos` entry through
 `SetMessageLogos`. A real speaker selects the committed roster's `Logo` byte;
 the scaled logo precedes the text using the geometry in `[07 R-HUD-03 §14.4]`.
@@ -886,8 +897,16 @@ the command page does `[07 R-HUD-03 §8]`.
 **Displayed resource stocks.** `Client` owns the two displayed singles and
 passes them by value in `UIFrame.Resources`. `BeginPresentationFrame` advances
 them once per host presented frame using `[05 R-ECO-01 §6]`; both stock bars
-and current numbers consume this pair, while capacities and rates retain their
-existing sources. Multiple presented frames at one committed tick each step
+and current numbers consume this pair, while capacities remain live.
+`UIFrame.Resources` also carries the four unscaled settlement-rate latches.
+`Client` binds each viewed player's saved `EconomyView.DisplayTimer` once per
+battle buffer. On each presented frame, unsigned `deadline < tick` samples
+the four rates and advances the previous deadline by 30 exactly once. Equality
+does not sample; an overdue deadline can catch up across repeated presented
+frames at one committed tick. The shared rate latch survives `View` and buffer
+replacement; only the deadline bindings and displayed stocks reset on a new
+buffer `[05 R-ECO-01 §1, §6]` `[07 R-HUD-03 §4]`.
+Multiple presented frames at one committed tick each step
 the pair. Composition and replay do not step it. Only the viewing player's
 committed economy row is admitted; a missing row retains the previous pair.
 Binding a different snapshot buffer at battle installation or save restoration
@@ -895,12 +914,18 @@ resets both values to zero `[07 R-HUD-03 §4]`. `View` publishes into the same
 buffer and retains the pair. The audio-only `TickPresentationAudio` API remains
 an audio drain; the host boundary calls it after advancing displayed stocks.
 
-The modern pre-record worker draws a pure prediction of the next pair and
+The modern pre-record worker draws a pure prediction of the next stocks and rates and
 includes it in its presentation digest. The real host boundary computes the
 same step before consuming that list; a miss or discarded prediction cannot
 advance or restore the retained pair. See DESIGN_GPU_RENDERER §13.10.
 `--shot` advances one presentation frame before choosing its executor; the
 `both` route composes both images from that same retained pair.
+
+The save host supplies `Client.ResourceDisplayTimers()` as detached metadata
+to `RetailSaveInputs.DisplayTimers`. Projection overlays only those initialized
+player deadlines on copied save rows; unviewed players retain the session's
+seeded or restored values. Presentation never writes stocks, ledger fields, or
+the authoritative session's timer copies [I6].
 
 **The slide strip.** The panel offset has exactly one consumer. It is not a side
 rail: it is the strip that slides up from the bottom edge of the *view* when
@@ -1546,9 +1571,9 @@ helper still needs its model-radius binding and replacement of the old flat
 approximation with the established sixteen-segment world projection; it is
 not enabled by the range adapter.
 
-The resource strip retains its existing 30-tick rate latch across `View`.
-The retail viewing-player display deadline is not yet a live presentation
-owner; that existing timing approximation stays marked at the readout site
+The resource strip retains its shared rate latch across `View`, while the next
+refresh uses the newly viewed player's own display deadline. The presentation
+owner and save-projection handoff are described in §2 above
 `[07 R-HUD-03 §4]`.
 
 The retained classic and native model-cache keys include the published team

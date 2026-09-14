@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
@@ -375,14 +376,30 @@ func TestStandbyNeedsAMoverAndStandbyMineTheBuildingClassBit(t *testing.T) {
 // TestOpportunityScanIsFireAtWillOnly locks the one behavioral difference
 // between return fire and fire at will [04 R-STANCE-01 §3]: the shared scan
 // returns nothing without searching unless the unit's standing fire field reads
-// exactly 2. Only the gate is asserted — the search itself is the combat
-// layer's and is a recorded placeholder at the site.
+// exactly 2. A refused slot-zero search is final; other slots do not get
+// additional candidate draws [04 R-STANCE-01 §3].
 func TestOpportunityScanIsFireAtWillOnly(t *testing.T) {
-	_, u := standingFixture(nil)
+	q, u := standingFixture(&content.UnitDef{SightDistance: 500})
+	calls := 0
+	q.Binding().Weapons = &WeaponAdapter{Acquire: func(_ *units.Unit, slot int, limit uint32) (pool.Handle, bool) {
+		calls++
+		if slot != 0 || limit != 500 {
+			t.Fatalf("opportunity scan used slot %d range %d, want slot 0 sightdistance 500", slot, limit)
+		}
+		return 0, false
+	}}
 	for value := uint32(0); value <= 3; value++ {
+		calls = 0
 		u.Flags = (u.Flags &^ (3 << stanceFireShift)) | (value << stanceFireShift)
 		if got := opportunityScan(u); got != nil {
-			t.Fatalf("fire stance %d: scan returned a target; the search is not implemented", value)
+			t.Fatalf("fire stance %d: refused scan returned a target", value)
+		}
+		want := 0
+		if value == 2 {
+			want = 1
+		}
+		if calls != want {
+			t.Fatalf("fire stance %d: acquisition calls %d, want %d", value, calls, want)
 		}
 	}
 }

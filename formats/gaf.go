@@ -82,11 +82,20 @@ type GAFLimits struct {
 	MaxFrameRefs      uint64
 	MaxDecodedPixels  uint64
 	MaxCompositeDepth uint32
+	// Expanded limits count every child occurrence below each distinct root
+	// frame, including aliases. They bound later recursive drawing/resampling,
+	// which can visit a shared subtree many times despite cheap unique decoding.
+	// Zero selects the default so existing callers retain a bounded policy.
+	MaxExpandedFrames uint64
+	MaxExpandedPixels uint64
 }
 
 // DefaultGAFLimits returns the host-safety budget for one decoded bank.
 func DefaultGAFLimits() GAFLimits {
-	return GAFLimits{MaxFrameRefs: 1 << 20, MaxDecodedPixels: 128 << 20, MaxCompositeDepth: 64}
+	return GAFLimits{
+		MaxFrameRefs: 1 << 20, MaxDecodedPixels: 128 << 20, MaxCompositeDepth: 64,
+		MaxExpandedFrames: 1 << 16, MaxExpandedPixels: 128 << 20,
+	}
 }
 
 // LoadGAF decodes an animation bank from its bytes [fmt gaf].

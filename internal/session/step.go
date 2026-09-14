@@ -1125,22 +1125,18 @@ func (s *Session) pollMissionTriggers(tick uint32) {
 			if win {
 				kind = "victory"
 			}
-			var winners, losers []int
-			if win {
-				winners = []int{localPlayer}
-				losers = []int{1}
-			} else {
-				winners = []int{1}
-				losers = []int{localPlayer}
-			}
-			scores := s.collectScores(winners[0], false)
+			// Retail supplies the local latch and per-player rows, not team
+			// identifiers [08 R-CAMP-01 §7–§8]. Keep the host result metadata
+			// in the score rows' team domain, including after a player restore.
+			winner, losers := s.resultTeams(win)
+			scores := s.collectScores(winner, false)
 			reason := "campaign"
 			if win && len(s.Mission.Victory) > 0 {
 				reason = "victory_trigger"
 			} else if !win && len(s.Mission.Defeat) > 0 {
 				reason = "defeat_trigger"
 			}
-			s.result = Result{Ended: true, Draw: false, Kind: kind, WinnerTeam: winners[0], Winners: winners, Losers: losers, Reason: reason, Tick: tick, ArmedTick: tick, Countdown: s.Latch.Countdown, Scores: scores, ColumnMaxima: resultColumnMaxima(scores)}
+			s.result = Result{Ended: true, Draw: false, Kind: kind, WinnerTeam: winner, Winners: resultWinnersFor(winner, false), Losers: losers, Reason: reason, Tick: tick, ArmedTick: tick, Countdown: s.Latch.Countdown, Scores: scores, ColumnMaxima: resultColumnMaxima(scores)}
 		}
 		_ = s.TransitionTo(StatePostBattle)
 	}

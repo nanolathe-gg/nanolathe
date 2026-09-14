@@ -176,10 +176,9 @@ func (c *Client) liveZoom() camera.Zoom {
 // features and the drag rectangle are not gated on it. Generated icons replace
 // ground selection quads when StrategicIconsActive (§18.4).
 func (c *Client) strategicView() bool {
-	// Inclusive, so the 0.5x WHEEL STEP (camera.ZoomSteps) is a marker view
-	// and not the one factor at which both the models and the fully faded-in
-	// markers are drawn together.
-	return c.liveZoom() <= strategicModelCut
+	// The inclusive cut and the clamped tactical stop share one gate so models,
+	// icon picking and selection outlines switch together (§16.10).
+	return c.liveZoom() <= strategicModelCut || (c.enhanced && c.cam.TacticalAtFloor())
 }
 
 // markerAlpha is the strategic layer's fade: zero at and above
@@ -191,6 +190,9 @@ func (c *Client) strategicView() bool {
 // lane on the model commit — the sceneOpModelCommit path of §13.3 writes an
 // opaque fragment. A cross-fade is a follow-up on that lane.
 func (c *Client) markerAlpha() uint8 {
+	if c.strategicView() {
+		return 255
+	}
 	z := c.liveZoom()
 	if z >= strategicMarkerOn {
 		return 0

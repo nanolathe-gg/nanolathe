@@ -332,13 +332,13 @@ func restartDirectBattle(opts Options, cs *contentSet, cl *client.Client, curren
 	old := *current
 	zoom := camera.ZoomUnit
 	if old.cam != nil {
-		zoom = old.cam.EffectiveZoom()
+		zoom = old.cam.RequestedZoom()
 	}
 	old.teardown(cl)
 	*current = next
 	installBattleClient(cl, next)
 	fitDirectBattleViewport(cl, next)
-	// The restarted battle keeps the factor the player was on (§16.8).
+	// Preserve the requested stop, including a map-clamped overview (§16.8).
 	if next.cam != nil && zoom != camera.ZoomUnit {
 		mx, my := battleViewCentre(next.cam)
 		jumpBattleZoom(next, mx, my, zoom, modernRenderer(opts))
@@ -503,6 +503,9 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 		return
 	}
 	b.cl = cl
+	// Every successful battle rebuild, including a load, empties the visible
+	// message span before old source handles can be reused [08 R-ENTRY-01 §3].
+	cl.MessageRing().Clear()
 	cl.SetModelTextureRegistry(b.modelTextures)
 	// The session executor owns one message-ring retirement per host pump;
 	// the client remains the sole presentation owner of the ring itself

@@ -44,6 +44,14 @@ type ArchiveOptions struct {
 	VerifyChecksums   bool
 	SkipChecksums     bool
 	AllowBank         bool
+	// Directory expansion limits are host safety policy, not retail limits.
+	// Nonpositive values select defaults. Entries include repeated references
+	// and hidden duplicates; depth includes the root and empty directories.
+	MaxDirectoryEntries int64
+	MaxDirectoryDepth   int
+	// MaxDirectoryStringBytes counts name bytes scanned (including each NUL)
+	// and both joined path lengths before normalization or materialization.
+	MaxDirectoryStringBytes int64
 }
 
 func (o ArchiveOptions) withDefaults() ArchiveOptions {
@@ -52,6 +60,17 @@ func (o ArchiveOptions) withDefaults() ArchiveOptions {
 	}
 	if o.MaxFileBytes <= 0 {
 		o.MaxFileBytes = defaultMaxFileBytes
+	}
+	// These defaults leave at least 33x entry, 16x depth and 128x string-work
+	// headroom over the reference install; see DESIGN_CONTENT_VFS §5.
+	if o.MaxDirectoryEntries <= 0 {
+		o.MaxDirectoryEntries = 1 << 16
+	}
+	if o.MaxDirectoryDepth <= 0 {
+		o.MaxDirectoryDepth = 64
+	}
+	if o.MaxDirectoryStringBytes <= 0 {
+		o.MaxDirectoryStringBytes = 16 << 20
 	}
 	if !o.SkipChecksums {
 		o.VerifyChecksums = true
@@ -231,7 +250,8 @@ func (a *Archive) index() error {
 		decrypt(blob[hpiHeaderSize:], hpiHeaderSize, a.key)
 	}
 
-	view := hpiDirectoryView{archive: a, bytes: blob, start: 0, end: blobSize}
+	view := hpiDirectoryView{archive: a, bytes: blob, start: 0, end: blobSize,
+		entriesLeft: uint64(a.options.MaxDirectoryEntries), stringsLeft: uint64(a.options.MaxDirectoryStringBytes)}
 	root := EntryInfo{Path: "", Name: "", IsDir: true, OriginalPath: "", Source: Provenance{ProviderType: "hpi", SourcePath: a.name, MountOrder: 0}}
 	a.entries[""] = &providerEntry{info: root}
 	stack := make(map[uint64]bool)
@@ -242,10 +262,12 @@ func (a *Archive) index() error {
 }
 
 type hpiDirectoryView struct {
-	archive *Archive
-	bytes   []byte
-	start   uint64
-	end     uint64
+	archive     *Archive
+	bytes       []byte
+	start       uint64
+	end         uint64
+	entriesLeft uint64
+	stringsLeft uint64
 }
 
 func (v hpiDirectoryView) offset(pos uint64, length uint64) (int, error) {
@@ -269,19 +291,35 @@ func (v hpiDirectoryView) u32(pos uint64) (uint32, error) {
 	return binary.LittleEndian.Uint32(v.bytes[index : index+4]), nil
 }
 
-func (v hpiDirectoryView) cstring(pos uint64) (string, error) {
+func (v *hpiDirectoryView) cstring(pos uint64) (string, error) {
 	index, err := v.offset(pos, 1)
 	if err != nil {
 		return "", err
 	}
-	end := bytes.IndexByte(v.bytes[index:], 0)
+	// Limit the scan itself, rather than charging only after a long shared
+	// name has already consumed work. Each visit pays again [I11].
+	scan := v.bytes[index:]
+	if uint64(len(scan)) > v.stringsLeft {
+		scan = scan[:int(v.stringsLeft)]
+	}
+	end := bytes.IndexByte(scan, 0)
 	if end < 0 {
+		if len(scan) < len(v.bytes)-index {
+			return "", fmt.Errorf("%w: directory string work limit", ErrMalformedArchive)
+		}
 		return "", fmt.Errorf("%w: unterminated name at 0x%x", ErrMalformedArchive, pos)
 	}
+	v.stringsLeft -= uint64(end) + 1
 	return string(v.bytes[index : index+end]), nil
 }
 
-func (v hpiDirectoryView) walkDirectory(nodeOffset uint64, parent, originalParent string, stack map[uint64]bool, visible bool) error {
+func (v *hpiDirectoryView) walkDirectory(nodeOffset uint64, parent, originalParent string, stack map[uint64]bool, visible bool) error {
+	// TODO(question): establish retail acceptance of acyclic shared directories
+	// by tracing repeated-node relocation [02 R-MALF-01 §3]. Host limits bound
+	// expansion independently of that unknown (DESIGN_CONTENT_VFS §5).
+	if len(stack) >= v.archive.options.MaxDirectoryDepth {
+		return fmt.Errorf("%w: directory depth limit", ErrMalformedArchive)
+	}
 	if stack[nodeOffset] {
 		return fmt.Errorf("%w: directory cycle at 0x%x", ErrMalformedArchive, nodeOffset)
 	}
@@ -298,6 +336,12 @@ func (v hpiDirectoryView) walkDirectory(nodeOffset uint64, parent, originalParen
 	if uint64(listOffset) < v.start || uint64(listOffset) > v.end || count > uint32((v.end-uint64(listOffset))/hpiEntrySize) {
 		return fmt.Errorf("%w: entry list overflows directory", ErrMalformedArchive)
 	}
+	// Reserve the entire list before allocating its lookup map or scanning
+	// names. Revisited and shadowed subtrees consume the same global budget.
+	if uint64(count) > v.entriesLeft {
+		return fmt.Errorf("%w: directory entry limit", ErrMalformedArchive)
+	}
+	v.entriesLeft -= uint64(count)
 	// Lookup chooses each component from the directory's last matching entry;
 	// earlier duplicate directories contribute no reachable descendants [02 §2].
 	// Still validate every subtree and retain every authored entry for diagnostics.
@@ -331,6 +375,19 @@ func (v hpiDirectoryView) walkDirectory(nodeOffset uint64, parent, originalParen
 		if err != nil {
 			return err
 		}
+		// Charge both joined inputs before joinPath can allocate or normalize
+		// them. Use widened lengths so hostile names cannot overflow an int.
+		pathBytes := uint64(len(parent)) + uint64(len(originalParent)) + 2*uint64(len(name))
+		if parent != "" {
+			pathBytes++
+		}
+		if originalParent != "" {
+			pathBytes++
+		}
+		if pathBytes > v.stringsLeft {
+			return fmt.Errorf("%w: directory string work limit", ErrMalformedArchive)
+		}
+		v.stringsLeft -= pathBytes
 		logical, err := joinPath(parent, name)
 		if err != nil {
 			return fmt.Errorf("%w: entry %q: %v", ErrMalformedArchive, name, err)

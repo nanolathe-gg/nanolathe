@@ -23,6 +23,10 @@ func TestBattleMessageColumnUsesPrimaryFont(t *testing.T) {
 		sess: &session.Session{Snapshot: frame.NewBuffer()},
 		hud:  &retailBattleHUD{primaryFont: primary, console: console},
 	}
+	b.sess.Snapshot.BeginWrite()
+	if err := b.sess.Snapshot.Publish(1); err != nil {
+		t.Fatal(err)
+	}
 	c, err := client.New(client.Options{Width: 160, Height: 80})
 	if err != nil {
 		t.Fatal(err)
