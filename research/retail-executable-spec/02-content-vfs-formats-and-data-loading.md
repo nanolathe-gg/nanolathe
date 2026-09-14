@@ -4215,15 +4215,26 @@ structure-texture paths outside the bounded census remain open. Nanolathe's
 ordinary-only compatibility raster is a host fallback, not a universal retail
 composition; callers must follow their particular contracts `[fmt gaf]`.
 
-The RLE blitter decodes each row until it has produced `width` pixels: a
-skip, repeat or literal run that would overshoot is **clamped to the
-remaining width** (the excess is discarded; a literal run still advances the
-source by its full count); a row whose stored payload count is zero is left
-untouched (fully transparent); a row whose commands run out **before**
+**Established — RLE row consumption.** The blitter decodes each row until it
+has produced `width` pixels: a skip, repeat or literal run that would overshoot is **clamped to the
+remaining width**. A repeat consumes its one palette byte; a literal reads
+and advances by only the copied, clamped count. The earlier full-authored-count
+source-advance wording is corrected for the ordinary row output path: the
+discarded literal suffix is not read. A zero-length skip consumes the command
+byte without advancing the pixel position. A row whose stored payload count
+is zero is left untouched (fully transparent); a row whose commands run out **before**
 `width` pixels is not detected — the decoder continues into the next row's
 count bytes and payload as commands, and only the next row start (computed
 from the stored count) is correct again. Frames wholly outside the clip
 rectangle draw nothing; there is no per-pixel bound beyond the row width.
+
+**Established — empty leaf geometry.** A zero width or height makes the leaf's
+inclusive rectangle empty, so the ordinary blitter returns without reading
+raw pixels or RLE rows. The loader does not reject that geometry. Composite
+parents bypass the leaf rectangle test and traverse their children even when
+the parent dimensions are zero. This does not waive the loader's pointer
+relocation or establish safe out-of-file data. Nanolathe's file bounds and
+aggregate work limits remain host policy, documented in `[fmt gaf]`.
 
 #### TNT [R-MALF-01 §7]
 

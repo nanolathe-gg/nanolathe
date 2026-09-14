@@ -2785,6 +2785,14 @@ invisible at 1× and 2×.
 | World-anchored text: group digits, labels | anchor through `WorldToScreen` | glyphs unscaled; text is interface, not world |
 | Cursor, HUD, minimap, messages, menus | unchanged | unscaled; the minimap's viewport rectangle comes from `EffectiveView`, the view divided by s |
 
+Classic attached-unit staging uses the child-minus-carrier world projection at
+native raster scale, then magnifies the completed union about the carrier
+anchor once. It must not reuse the already magnified screen-anchor difference
+or invert that rounded difference: the latter loses a pixel at 1.5× for some
+anchor phases. Temporary staging views carry the native displacement; the
+child's own retained image, shadow and trace anchors stay unchanged. At 1×
+this is the original staging placement [03 R-REN-03A §4].
+
 Picking goes through `ScreenToWorld` and the viewport transform, which
 already funnel every pointer conversion through the camera: unit hover and
 selection hulls are projected from world corners, so they scale with the
@@ -4860,6 +4868,27 @@ structure) or its 1× raster (a mobile). The ARMLAB nanoframe's "two missing
 band pixels" of the first landing were of that kind: half-covered texels of
 the doubled geometry at the reveal notch, which classic without the
 supersample leaves empty and classic with it blends with index 1.
+
+The GP-03 stock transport check exercises ARMATLAS with ARMPW and CORVALK
+with CORAK through normal pickup, flight and return-site unload orders/COB on
+Ashap Plateau. The active modern recorder forces each attached child to a
+key-plane packet; a previously cached keyless child is rebuilt on attachment.
+These checkpoints have no skipped subjects, no-body subjects or direct-region
+overflow. Classic/modern captures at native and 2× scale exposed a classic
+staging displacement scaled twice, corrected under §14.2; modern hull coverage
+of correctly positioned cargo is expected composition, not missing geometry.
+
+The stock carrier census and normal admission path bound the separate nested
+child concern: ground/sea carriers and airbases exceed stock transport size;
+a loaded air transport remains airborne, which rejects its pickup. A carried
+aircraft starts its own pickup by detaching first, and airbase landing transfers
+cargo before attaching the aircraft [04 §10.2][04 R-AIR-01 §7][04 R-AIR-01 §10].
+This does not establish arbitrary mod or authored nested-packet behavior.
+The modern executor still omits a child packet that is keyless or itself has
+children; the stock paths above did not reproduce that omission. Legacy
+staging/trace records are not the active modern recorder's packets (§4): a
+trace-only no-body record follows pixels already committed by the carrier and
+does not request another body. No software fallback is added.
 
 ### 22.4 Owed
 

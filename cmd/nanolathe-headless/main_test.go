@@ -2,11 +2,14 @@ package main
 
 import (
 	"bytes"
+	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/headless"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
+	"github.com/nanolathe-gg/nanolathe/internal/settings"
 	"github.com/nanolathe-gg/nanolathe/internal/testsupport"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
@@ -83,5 +86,35 @@ func TestRepeatedRootFlags(t *testing.T) {
 	}
 	if _, _, _, _, err := parse([]string{"--root="}, &bytes.Buffer{}); err == nil {
 		t.Fatal("empty root accepted")
+	}
+}
+
+func TestParseUnitLimit(t *testing.T) {
+	t.Setenv(settings.EnvPath, filepath.Join(t.TempDir(), "settings.json"))
+	stored := settings.Defaults()
+	stored.UnitLimit = 1500
+	if err := stored.Save(); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		args        []string
+		want, bench int
+	}{
+		{nil, 1500, headless.SimBenchDefaultUnitLimit},
+		{[]string{"--unit-limit", "2000"}, 2000, 2000},
+		{[]string{"--sim-benchmark", "/tmp/unused-benchmark"}, 0, headless.SimBenchDefaultUnitLimit},
+	} {
+		req, _, _, bench, err := parse(tc.args, io.Discard)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if req.UnitLimit != tc.want || bench.UnitLimit != tc.bench {
+			t.Fatalf("limits = %d/%d, want %d/%d", req.UnitLimit, bench.UnitLimit, tc.want, tc.bench)
+		}
+	}
+	for _, value := range []string{"-1", "0", "19", "3277"} {
+		if _, _, _, _, err := parse([]string{"--unit-limit", value}, io.Discard); err == nil {
+			t.Fatalf("accepted %s", value)
+		}
 	}
 }

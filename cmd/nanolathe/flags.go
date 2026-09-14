@@ -14,6 +14,7 @@ import (
 // Options is the command-line surface for the retail runtime and its host
 // configuration. Developer probes and capture modes are separate tools.
 type Options struct {
+	UnitLimit          int // zero uses the saved preference; explicit CLI values override it
 	BattleBenchmark    string
 	BenchmarkFactories bool
 	BenchmarkFrames    int
@@ -92,6 +93,7 @@ var ErrHelp = errors.New("help requested")
 
 func parseFlags(args []string, out io.Writer) (Options, error) {
 	var opts Options
+	var unitLimitSet bool
 	set := flag.NewFlagSet("nanolathe", flag.ContinueOnError)
 	set.SetOutput(out)
 	set.Func("root", "content root; repeat in load order (later roots win); omitted uses $NANOLATHE_TA_ROOT or installation discovery", func(root string) error {
@@ -105,6 +107,7 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 		return nil
 	})
 	set.StringVar(&opts.Map, "map", "", "map name without extension, e.g. \"ashap plateau\"")
+	set.IntVar(&opts.UnitLimit, "unit-limit", 0, "per-player skirmish unit limit (20..3276); omitted uses saved unitLimit, otherwise 1000")
 	set.Int64Var(&opts.Seed, "seed", -1, "battle RNG seed for both streams; negative derives a pair from the clock")
 	set.BoolVar(&opts.Headless, "headless", false, "run a skirmish or mission without opening a window")
 	set.IntVar(&opts.Ticks, "ticks", 0, "headless authoritative tick limit (0 = until result or 18000 ticks)")
@@ -170,6 +173,8 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	}
 	set.Visit(func(f *flag.Flag) {
 		switch f.Name {
+		case "unit-limit":
+			unitLimitSet = true
 		case "fullscreen":
 			opts.FullscreenSet = true
 		case "renderer":
@@ -178,6 +183,11 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 			opts.FPSSet = true
 		}
 	})
+	if unitLimitSet && (opts.UnitLimit < settings.MinUnitLimit || opts.UnitLimit > settings.MaxUnitLimit) {
+		err := fmt.Errorf("nanolathe: invalid unit limit: logical path <command line>, providers searched [unit-limit], expected %d..%d", settings.MinUnitLimit, settings.MaxUnitLimit)
+		fmt.Fprintln(out, err) // mainOptions expects parseFlags to print validation failures.
+		return opts, err
+	}
 	// The classic executor has no free zoom: its factor is always its record
 	// step, so it takes only the three views (DESIGN_GPU_RENDERER §16.8). The
 	// modern one takes any factor the flag's own function accepted; the

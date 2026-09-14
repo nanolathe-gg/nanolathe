@@ -1297,6 +1297,11 @@ or re-blitted into it, both planes. Then:
 3. the waterline and digger passes of §7 run over the staging image;
 4. the staging image is blitted once.
 
+**Placement space (Established).** The child offset belongs to the composition
+image: it positions the child within the union before the completed image is
+blitted. The final image placement therefore moves the carrier and its
+composited children together; it is not another independent child placement.
+
 **Store width of the shifted key (Established, direct-static).** In step 2 the comparison is made at full register width — both
 stored key bytes widened, the signed height delta added to the child's — but
 the store narrows: the staging plane receives the **low byte** of

@@ -88,6 +88,9 @@ type GAFLimits struct {
 	// Zero selects the default so existing callers retain a bounded policy.
 	MaxExpandedFrames uint64
 	MaxExpandedPixels uint64
+	// MaxRLECommands bounds decoded commands across unique frames, including
+	// zero-length skips and overlapping short-row reads. Zero selects default.
+	MaxRLECommands uint64
 }
 
 // DefaultGAFLimits returns the host-safety budget for one decoded bank.
@@ -95,6 +98,7 @@ func DefaultGAFLimits() GAFLimits {
 	return GAFLimits{
 		MaxFrameRefs: 1 << 20, MaxDecodedPixels: 128 << 20, MaxCompositeDepth: 64,
 		MaxExpandedFrames: 1 << 16, MaxExpandedPixels: 128 << 20,
+		MaxRLECommands: 128 << 20,
 	}
 }
 

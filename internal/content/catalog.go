@@ -4,7 +4,9 @@
 package content
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,8 +23,27 @@ import (
 // [AGENTS.md diagnostics].
 func requiredContentError(fs vfs.FSOps, logical, expected string, cause error) error {
 	providers := searchedProviderIDs(fs, logical)
-	return fmt.Errorf("nanolathe: required authored resource: logical path %s, providers searched [%s], expected %s: %w", logical, strings.Join(providers, ", "), expected, cause)
+	return fmt.Errorf("nanolathe: required authored resource: logical path %s, providers searched [%s], expected %s: %w", logical, strings.Join(providers, ", "), expected, portableContentCause(cause))
 }
+
+// Resource diagnostics already carry the logical path and portable provider.
+// Keep OS filenames out of their display while retaining the original cause
+// for errors.Is/errors.As (DESIGN_CONTENT_VFS C13).
+func portableContentCause(cause error) error {
+	var pathError *fs.PathError
+	if errors.As(cause, &pathError) {
+		return contentReadCause{cause: cause, message: pathError.Op + ": " + portableContentCause(pathError.Err).Error()}
+	}
+	return cause
+}
+
+type contentReadCause struct {
+	cause   error
+	message string
+}
+
+func (e contentReadCause) Error() string { return e.message }
+func (e contentReadCause) Unwrap() error { return e.cause }
 
 func searchedProviderIDs(fs vfs.FSOps, logical string) []string {
 	providers := make([]string, 0, 2)
@@ -269,6 +290,7 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 		return nil, err
 	}
 	warnings := catalogUnitWarnings(unitResult.incompatibilityWarning, units, nil)
+	warnings = append(warnings, unitResult.warnings...)
 	warnings = append(warnings, mapWarnings...)
 	warnings = append(warnings, enforceDownloadableRecords(records, MenuButtonNames(buildMenus))...)
 	// Model sorting C13: sort model catalog case-insensitively before caching per-unit-type pointer [03 §2.4].

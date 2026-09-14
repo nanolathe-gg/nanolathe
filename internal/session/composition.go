@@ -689,7 +689,7 @@ func newSlicedWorldWithCOB(cat *content.Catalog, fs vfs.FSOps) (*units.World, er
 // explicit seam for the mode-3 player records; mode 0 is the identity wrapper
 // used by fixture-only construction [R-P0-16-A].
 //
-// It sizes the pool from the established missing-value unit limit. Every
+// It sizes the pool from Nanolathe's default unit limit. Every
 // battle-entry site that knows its own limit — a skirmish's configured
 // `UnitLimit`, a campaign's OTA `maxunits` — calls the Sized form instead.
 func newBattleSlicedWorldWithCOB(cat *content.Catalog, fs vfs.FSOps, mode int, sortKeys [pool.PlayerCount]uint32) (*units.World, error) {

@@ -102,8 +102,8 @@ but readers must not assume pixel extents are uniquely owned.
 
 | Offset | Size | Type | Name | Description |
 | ---: | ---: | --- | --- | --- |
-| +0 | 2 | u16 | width | pixels, > 0 |
-| +2 | 2 | u16 | height | pixels, > 0 |
+| +0 | 2 | u16 | width | pixels; zero is accepted |
+| +2 | 2 | u16 | height | pixels; zero is accepted |
 | +4 | 2 | i16 | x_offset | signed placement offset (see below) |
 | +6 | 2 | i16 | y_offset | |
 | +8 | 1 | u8 | color_key | `9` in **all 48,519 retail frames**. On the raw path it is the transparent palette index: the frame draw passes this byte to the blitter, which skips every matching source pixel. The RLE path carries transparency in skip runs and does not consume this key. Community notes mislabel it "palette index" and list it as unknown. |
@@ -171,18 +171,30 @@ Real example — first row of the 80×40 `Credits` frame in
 edition. The surrounding format description retains its stated evidence and
 confidence.
 
-**Nanolathe validation policy:** every nonempty row must produce exactly
-`width` pixels and consume its payload exactly; overflowing runs, truncated
-commands, unused payload and zero-length skip commands are rejected by both
-metadata and pixel readers. These checks are stricter than retail.
-**Established:** what the executable does with such a row
-(`[02 R-MALF-01 §6]`): a run that would overshoot is clamped to the
-remaining width (excess discarded, but a literal command advances its source
-by the full authored count); a payload that runs out is **not
-detected** — decoding continues into the following bytes (the next row's
-count and payload) until `width` pixels exist, and the next row still
-starts at `row + 2 + payload_count`; a payload count of 0 leaves the row
-untouched (transparent).
+**Established** (`[02 R-MALF-01 §6]`): nonempty rows decode until
+`width` pixels have been covered. Skip, repeat and literal runs are clamped to
+the remaining width. A zero-length skip consumes its command byte and does
+nothing else. A repeated run consumes one palette byte; a literal consumes
+only the bytes copied after clamping. The discarded suffix of an overflowing
+literal is not read. This corrects the earlier full-authored-count source
+advance claim for the ordinary row output path.
+
+The stored payload count does not bound command decoding. A short row
+continues into following bytes until its width is covered; extra payload
+bytes after that point are ignored. Regardless of how many command bytes were
+consumed, the next row begins at `row + 2 + payload_count`. A payload count of
+zero leaves the row untouched (transparent).
+
+**Established:** a leaf with zero width or height draws nothing and does not
+read its pixel or RLE stream. A composite still traverses its children even
+when its own dimensions are zero; the child geometry determines drawing.
+
+**Nanolathe host policy:** both metadata and pixel readers use the same checked
+row walk. Row headers, stored row extents and bytes actually consumed must fit
+within the file; zero-size leaves still require an in-file data location.
+Out-of-file data rejects the bank, without substitute frames. An aggregate
+command budget bounds zero-progress skips and overlapping short-row scans;
+this is a host work limit, not an authored or retail restriction.
 
 ### Composed frames (`subframe_count > 0`)
 
@@ -208,8 +220,11 @@ host reader, independently of retail's unsafe relocation.
 Retail imposes no aggregate allocation or composition-depth bound during its
 pointer relocation `[02 R-MALF-01 §6]`. Nanolathe therefore applies explicit
 host-safety budgets to decoded pixels and frame references, and bounds composed
-frame depth. These are implementation limits rather than file-format or retail
-rules. Repeated entry-table pointers share their immutable decoded reference
+frame depth. A separate aggregate RLE-command budget counts every command
+visited in each unique frame, including zero-length skips and repeated reads
+caused by short rows; its default is 128 Mi commands. These are implementation
+limits rather than file-format or retail rules. Repeated entry-table pointers
+share their immutable decoded reference
 table, so a repeated pointer does not consume the reference budget again.
 
 ## Nanolathe metadata index

@@ -260,6 +260,10 @@ The user-requested startup root list is a sanctioned host extension
 existing provider tiers; one root retains its existing resolution. Installation
 discovery is host policy and supplies explicit roots before content loading.
 
+The user-requested skirmish unit-limit default of 1000 and expanded configured
+range are sanctioned setup policy (DESIGN_CONTENT_VFS §5), with CLI and JSON
+configuration. Campaign limits remain authored by the mission.
+
 The renderer is the sanctioned presentation switch of
 [DESIGN_GPU_RENDERER.md](DESIGN_GPU_RENDERER.md): currently classic or modern,
 with modern the default and a 60 FPS presentation cap. Both are persisted

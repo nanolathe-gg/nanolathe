@@ -156,7 +156,7 @@ func TestGAFMetadataRejectsInvalidPixelPayloadsLikeFullLoader(t *testing.T) {
 				frameOffset := gafFirstFrameOffset(data)
 				data[binary.LittleEndian.Uint32(data[frameOffset+16:])+2] = 1 // a zero-length skip run
 			},
-			want: "invalid transparent run",
+			want: "command is outside file",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

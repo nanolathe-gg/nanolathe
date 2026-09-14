@@ -244,6 +244,16 @@ adapter supplies successive pointer deltas. The camera primitive quantizes the
 retail beam origin through `BattleViewOrigin`, never framebuffer `X`/`Z`,
 because the two coordinate frames differ by the viewport inset `[07 R-CAM-01 §11]` `[03 §4.1]`.
 
+Small signed displacements are discarded on each input service; there is no
+residual accumulator. The ordinary desktop adapter currently services input
+at its configured 30 Updates per second. Display refresh can cause additional
+Draw calls, but those calls do not independently poll or step drag input;
+modern deferred updates still consume each scheduled Update once. Slow motion
+below four pixels per serviced sample can therefore leave the camera still,
+including while paused. That quantization is the established retail rule;
+neither a residual accumulator nor a simulation-tick throttle is implied by
+it `[07 R-CAM-01 §11]`.
+
 `battleSession` admits this capture only for an idle Type-0 Ctrl-right event
 inside the world view. It spends motion before release and suppresses the
 ordinary camera scroll branch during that frame. `Client.SetPointerCaptured`
@@ -1283,8 +1293,16 @@ activation share hidden/grey product and arrow decisions, and hit rectangles
 end at the authored last pixel. Feature commands read mapping memory at the
 projected pointer, independently of current feature visibility.
 
-One press/release pair is routed through exactly one path, and the path is
-chosen on the **press** edge. In order:
+The active command window's GUI service runs before the battlefield paths
+below. A down inside its inclusive window rectangle belongs to that service,
+even on blank space or a greyed/hidden control; gadget capture is not the
+admission test. Right-down there preserves an armed latch or placement. An
+admitted factory product activation still subtracts the signed batch. The
+same ownership applies to both interface types and while paused `[07 §3]`
+`[07 R-P0-11 §1]`.
+
+For a pointer record left available by that service, one press/release pair
+is routed through exactly one path, chosen on the **press** edge. In order:
 
 1. **Over the fitted minimap lens.** Under the default `Interface Type 0`
    polarity, a right down edge sets the minimap camera capture. The frame that

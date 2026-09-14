@@ -14,7 +14,8 @@
 // persisted all the same, and the two stores collapse into the one JSON file
 // below.
 //
-// Nanolathe keeps the value set, the defaults, and the read-once/write-whole
+// Nanolathe raises the unit-limit default/range (DESIGN_CONTENT_VFS §5),
+// otherwise keeps the value set, defaults, and the read-once/write-whole
 // shape, and swaps the registry for one JSON file. Only the preferences retail
 // actually persists are stored here — audio mixing and the networking identity
 // fields are retail values Nanolathe has no owner for yet and are deliberately

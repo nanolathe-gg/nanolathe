@@ -341,7 +341,7 @@ func CompileFeatures(fs vfs.FSOps) (map[string]*FeatureDef, error) {
 		if err != nil {
 			// Missing features directory is not silent; caller decides fatal vs empty.
 			// For the top-level features dir, propagate error.
-			return err
+			return requiredContentError(fs, dir, "readable feature directory", err)
 		}
 		// ReadDir already sorts by Path [vfs.ReadDir], so iteration is stable (I1).
 		for _, e := range entries {
@@ -355,11 +355,13 @@ func CompileFeatures(fs vfs.FSOps) (map[string]*FeatureDef, error) {
 			if !strings.HasSuffix(asciiFoldContent(e.Path), ".tdf") {
 				continue
 			}
-			data, err := fs.ReadFileLimit(e.Path, 1<<20)
-			if err != nil {
-				continue
-			}
+			// The parser's own byte budget is the admission bound; a smaller
+			// read cap silently dropped otherwise valid feature packs [fmt tdf].
 			prov := ProvenanceFrom(e)
+			data, err := fs.ReadFileLimit(e.Path, int64(formats.DefaultTDFLimits().MaxBytes))
+			if err != nil {
+				return fmt.Errorf("nanolathe: feature definition read: logical path %s, providers searched [%s], expected readable feature definitions: %w", e.Path, prov.ProviderID, portableContentCause(err))
+			}
 			doc, err := formats.ParseTDF(data)
 			if err != nil {
 				return formats.WithTDFContext(fs, err, e.Path)
@@ -385,7 +387,7 @@ func CompileFeatures(fs vfs.FSOps) (map[string]*FeatureDef, error) {
 	}
 
 	if err := walk("features"); err != nil {
-		return nil, fmt.Errorf("content: features: %w", err)
+		return nil, err
 	}
 
 	// Second pass: resolve successor hops, fatal on missing [GAP T14] C9.

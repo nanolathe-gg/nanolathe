@@ -120,6 +120,18 @@ func (h *retailBattleHUD) servicePaletteFrame(b *battleSession, in *input.State,
 	defer restore()
 
 	frame := pointerFrame(in, nil, false)
+	// The earlier GUI fetch consumes an inside down before it tests gadgets.
+	// Blank, hidden and greyed window space therefore also owns that down;
+	// only an unconsumed record reaches battlefield cancellation [07 §3].
+	downOwned := false
+	if frame.HeldButtons != 0 {
+		for _, event := range frame.PointerEvents {
+			switch event.Kind {
+			case input.LeftDown, input.LeftDoubleClick, input.RightDown, input.RightDoubleClick:
+				downOwned = downOwned || guiRectContains(ctx.window.Rect, event.X, event.Y)
+			}
+		}
+	}
 	if tokens {
 		// This is the zero-token-mode command palette: quickkeys may claim the
 		// shared ring prefix, while the navigation/default matrix remains off.
@@ -148,7 +160,7 @@ func (h *retailBattleHUD) servicePaletteFrame(b *battleSession, in *input.State,
 		}
 		h.activatePaletteGadget(b, ctx, result.FiredIndex, result.FiredButton == 2, modifiers)
 	}
-	return result, result.Fired && result.FiredButton != 0 || wasCaptured || p.CaptureIndex() >= 0
+	return result, downOwned || result.Fired && result.FiredButton != 0 || wasCaptured || p.CaptureIndex() >= 0
 }
 
 // servicePalettePointer reuses the production pass verdict rather than servicing

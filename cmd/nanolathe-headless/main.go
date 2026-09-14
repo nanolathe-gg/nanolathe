@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nanolathe-gg/nanolathe/internal/headless"
+	"github.com/nanolathe-gg/nanolathe/internal/settings"
 )
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -138,6 +139,7 @@ func parse(args []string, output io.Writer) (headless.Request, string, profileOp
 	var bench headless.SimBenchOptions
 	var seed int64
 	var ticks int64
+	var unitLimit int
 	var warmup, measured int64
 	flags := flag.NewFlagSet("nanolathe-headless", flag.ContinueOnError)
 	flags.SetOutput(output)
@@ -163,12 +165,29 @@ func parse(args []string, output io.Writer) (headless.Request, string, profileOp
 	flags.StringVar(&bench.Map, "sim-benchmark-map", headless.SimBenchDefaultMap, "map for the simulation-cost benchmark scene")
 	flags.Int64Var(&warmup, "warmup-ticks", int64(headless.SimBenchDefaultWarmupTicks), "unmeasured ticks run before the benchmark window opens")
 	flags.Int64Var(&measured, "benchmark-ticks", int64(headless.SimBenchDefaultMeasureTicks), "measured authoritative ticks in the benchmark window")
-	flags.IntVar(&bench.UnitLimit, "unit-limit", headless.SimBenchDefaultUnitLimit, "configured per-player unit limit for the benchmark scene")
+	flags.IntVar(&unitLimit, "unit-limit", 0, "per-player skirmish unit limit (20..3276); omitted uses saved unitLimit, otherwise 1000 (benchmark default 400)")
 	flags.IntVar(&bench.CensusCount, "census-samples", headless.SimBenchDefaultCensusCount, "census samples taken across the benchmark window")
 	flags.BoolVar(&bench.PhaseTiming, "phase-timing", true, "attribute measured time to the twelve authoritative phases")
 	flags.BoolVar(&bench.Profiles, "benchmark-profiles", true, "write cpu.pprof and the allocation profile pair for the measured window")
 	if err := flags.Parse(args); err != nil {
 		return request, reportPath, profiles, bench, err
+	}
+	unitLimitSet := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "unit-limit" {
+			unitLimitSet = true
+		}
+	})
+	if unitLimitSet && (unitLimit < settings.MinUnitLimit || unitLimit > settings.MaxUnitLimit) {
+		return request, reportPath, profiles, bench, fmt.Errorf("nanolathe: invalid unit limit: logical path <command line>, providers searched [unit-limit], expected %d..%d", settings.MinUnitLimit, settings.MaxUnitLimit)
+	}
+	bench.UnitLimit = headless.SimBenchDefaultUnitLimit
+	if unitLimitSet {
+		request.UnitLimit = unitLimit
+		bench.UnitLimit = unitLimit
+	} else if bench.OutputDir == "" {
+		stored, _ := settings.Load()
+		request.UnitLimit = stored.UnitLimit
 	}
 	if ticks < 0 || uint64(ticks) > uint64(^uint32(0)) {
 		return request, reportPath, profiles, bench, fmt.Errorf("nanolathe: tick limit is outside the non-negative 32-bit battle boundary")

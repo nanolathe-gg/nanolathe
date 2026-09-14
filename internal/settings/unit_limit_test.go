@@ -8,9 +8,8 @@ import (
 )
 
 // TestUnitLimitDefaultAndClamp locks the configured per-player unit limit:
-// missing installs 250, and a stored value outside 20..500 is pulled to the
-// nearer bound, which is retail's own start-up clamp rather than a schema
-// repair [02 "Unit limit"][08 R-SKIR-01 §6].
+// Nanolathe raises the missing value and upper bound by user request
+// (DESIGN_CONTENT_VFS §5); settings still clamp once at startup.
 func TestUnitLimitDefaultAndClamp(t *testing.T) {
 	if got := Defaults().UnitLimit; got != DefaultUnitLimit {
 		t.Fatalf("Defaults().UnitLimit = %d, want %d", got, DefaultUnitLimit)
@@ -21,7 +20,11 @@ func TestUnitLimitDefaultAndClamp(t *testing.T) {
 		{19, MinUnitLimit},
 		{20, 20},
 		{500, 500},
-		{501, MaxUnitLimit},
+		{501, 501},
+		{1000, 1000},
+		{2000, 2000},
+		{3276, 3276},
+		{3277, MaxUnitLimit},
 	} {
 		s := Defaults()
 		s.UnitLimit = tc.in
@@ -38,7 +41,7 @@ func TestUnitLimitDefaultAndClamp(t *testing.T) {
 func TestUnitLimitSurvivesRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	s := Defaults()
-	s.UnitLimit = 320
+	s.UnitLimit = 2000
 	if err := s.SaveTo(path); err != nil {
 		t.Fatalf("SaveTo: %v", err)
 	}
@@ -46,8 +49,8 @@ func TestUnitLimitSurvivesRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFrom: %v", err)
 	}
-	if got.UnitLimit != 320 {
-		t.Fatalf("UnitLimit = %d, want 320", got.UnitLimit)
+	if got.UnitLimit != 2000 {
+		t.Fatalf("UnitLimit = %d, want 2000", got.UnitLimit)
 	}
 
 	// A hand-written file with no `unitLimit` key takes the default, the way

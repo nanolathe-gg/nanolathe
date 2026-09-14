@@ -173,10 +173,10 @@ value fails closed to the elimination behaviour instead of inventing a fourth
 `[08 R-SKIR-01 §3]`. The controller predicates keep *observer* distinct from
 *computer*: an observer is a nonzero controller, and treating "nonzero" as
 "computer" hands an observer slot a manager, units and a share of the result.
-Retail's start-up clamp — a missing value becomes 250, below 20 becomes 20,
-above 500 becomes 500 — is applied to a profile value, not a lobby gadget, and
-applied there only: it lives in `internal/settings`' loader. Skirmish battle
-entry copies the configured word over the session's unit-limit word verbatim
+Retail's profile read defaults to 250 and clamps to 20..500, without a lobby
+gadget. Nanolathe's user-requested default is 1000 and its settings loader
+clamps to 20..3276; the command-line override takes precedence (DESIGN_CONTENT_VFS
+§5). Skirmish battle entry copies the configured word over the session's unit-limit word verbatim
 (`unitLimitOrDefault`, which rewrites only this build's zero sentinel), so only
 a campaign keeps a map's authored count, and a value a save restore carried
 into the configured word reaches the next battle unclamped `[08 R-SKIR-01 §6]`

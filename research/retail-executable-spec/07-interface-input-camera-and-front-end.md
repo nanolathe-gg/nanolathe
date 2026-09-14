@@ -740,6 +740,21 @@ dispatcher. An active GUI therefore consumes queued keyboard tokens before
 battle hotkeys run; this is an ordering contract, not a claim that every GUI
 consumes every input.
 
+**Established — command-window downs precede battlefield cancellation.** The
+GUI mouse fetch peeks the queued pointer record. With an active window, it
+consumes the record when its pointer lies inside that window's inclusive
+rectangle or no button is held. This admission precedes gadget hit testing:
+blank window space and hidden or greyed gadgets do not make an inside down
+available to the battlefield. An outside held record remains queued. The
+outer input pass compares the message kinds before and after GUI service.
+Equal kinds pop the next available record into the battlefield input. Different
+kinds retain the earlier record only when it was a release; otherwise they use
+the later record. Thus a down consumed by the command window does not itself
+reach battlefield cancellation; a subsequent queued record may still do so. The
+factory product's signed subtraction remains its GUI activation callback
+([R-P0-11 §1]), not a battlefield right-down order. This window admission is
+independent of the battle interface's button polarity.
+
 Inside the GUI pass, when the top GUI's token-mode field is nonzero the pass
 consumes one queued token; when it is zero the pass peeks without consuming
 and suppresses tokens `0xE2..0xEB` inclusive for that pass (they are replaced
@@ -6006,7 +6021,7 @@ After selection, one selected unit takes the single-unit presentation path
 and multiple units take the multiple-unit path; any change sets the dirty bit
 above and plays `SelectMultipleUnits` or the single select cue.
 
-**Mouse-button assignment is closed (for `Interface Type 0`; the `1` polarity is [R-CAM-01 §5]).** Every world action — single-unit picking, rectangle drag selection, building placement, and issuing every order including the contextual code 1 — is performed with the **left** mouse button. The **right** mouse button performs only deselection and cancellation: it cancels an armed order or build placement (returning the command latch to idle) or, when the latch is already idle, clears the current selection. The battle input pump routes left-button press and release through the single-click and drag-rectangle paths and the order dispatcher, while right-button press is routed exclusively to the cancellation path that returns the latch to idle and, when idle, clears selection; no right-button path queues an order. The cursor table shows the same polarity: every latch shape fires its order on left-click; the right-click column is empty or a transition back to the normal cursor [04 §3.4][07 §8].
+**Mouse-button assignment is closed (for `Interface Type 0`; the `1` polarity is [R-CAM-01 §5]).** Every world action — single-unit picking, rectangle drag selection, building placement, and issuing every order including the contextual code 1 — is performed with the **left** mouse button. The **right** mouse button performs only deselection and cancellation: it cancels an armed order or build placement (returning the command latch to idle) or, when the latch is already idle, clears the current selection. The battle input pump routes left-button press and release through the single-click and drag-rectangle paths and the order dispatcher, while a right-button press left available by the earlier GUI service (§3) is routed exclusively to the cancellation path that returns the latch to idle and, when idle, clears selection; no battlefield right-button path queues an order. The cursor table shows the same polarity: every latch shape fires its order on left-click; the right-click column is empty or a transition back to the normal cursor [04 §3.4][07 §8].
 
 Control groups store one group value per unit rather than membership bits in
 several groups. Ctrl+digits (tokens `0xC5..0xCD`) assign groups with the
@@ -7397,6 +7412,16 @@ axis — four map pixels per screen pixel of mouse travel, quantised to 16 —
 relative to the previous frame, and the origin is always a multiple of 16
 while the mode is active. The mode's entry clears the hold count, tracked
 object and followed projectile.
+
+**Established — discarded motion has no remainder owner.** The frame stores
+only the clamped, quantized origin as the next anchor and recenters the
+pointer on every visit, including a visit with displacement smaller than four
+pixels. Repeated signed displacements from −3 through 3 contribute zero to
+the motion term; origin quantization and clamping still apply. There is no
+stored remainder that could combine such samples into a later full step.
+This is a host-frame rule, not a 30-Hz simulation-tick gate. Its outcome can
+depend on how the same physical travel is divided among host frames; the
+arithmetic alone establishes no fixed display refresh rate.
 
 ### The camera-jump family and what breaks a follow [R-CAM-01 §12]
 

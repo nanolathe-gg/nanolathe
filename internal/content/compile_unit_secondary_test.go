@@ -85,6 +85,12 @@ func TestUnitSecondaryFailurePreservesDiscoveryOnly(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if len(result.warnings) != 1 || !strings.Contains(result.warnings[0], "logical path units/a.fbi") || !strings.Contains(result.warnings[0], "discovered at units/a.fbi from provider fixture.hpi") {
+				t.Fatalf("secondary failure lost its source diagnostic: %v", result.warnings)
+			}
+			if mode == "read failure" && !strings.Contains(result.warnings[0], "authored read failure") {
+				t.Fatalf("secondary read cause was discarded: %v", result.warnings)
+			}
 			u := result.units["a"]
 			if u == nil || u.Name != "first" || u.ObjectName != "model" || u.BuildCostMetal != 7 || !u.NoRestrict {
 				t.Fatal("secondary failure changed discovery fields")
@@ -101,7 +107,7 @@ func TestUnitSecondaryEmptyNameAndAbsentIdentity(t *testing.T) {
 		fs := newFixtureFS(t, fixtureFile{path: "units/a.fbi", data: `[UNITINFO]{UnitName=a; Name=old; ObjectName=old;}`})
 		u := compileUnitDiscovery(mustParseTDF(t, fs.files["units/a.fbi"]).Root.Section("UNITINFO"), "", Provenance{})
 		fs.files["units/a.fbi"] = body
-		if err := compileUnitSecondary(fs, u, ""); err != nil {
+		if _, err := compileUnitSecondary(fs, u, ""); err != nil {
 			t.Fatal(err)
 		}
 		if u.UnitName != "" || u.Name != "" || u.ObjectName != "" {
@@ -120,7 +126,7 @@ func TestUnitSecondaryEmptyNameAndAbsentIdentity(t *testing.T) {
 	// may already have finished before a secondary resource becomes available.
 	fs.files["units/.fbi"] = `[UNITINFO]{UnitName=; ObjectName=new; MaxDamage=12;}`
 	u := result.units[""]
-	if err := compileUnitSecondary(fs, u, ""); err != nil {
+	if _, err := compileUnitSecondary(fs, u, ""); err != nil {
 		t.Fatal(err)
 	}
 	if u.UnitName != "" || u.ObjectName != "new" || u.MaxDamage != 12 {
@@ -183,7 +189,7 @@ func TestUnitSecondaryResourceExtensionReplacesLastPeriod(t *testing.T) {
 		}
 		fs := newFixtureFS(t, fixtureFile{path: resource, data: `[UNITINFO]{UnitName=parsed;}`})
 		u := &UnitDef{UnitName: name}
-		if err := compileUnitSecondary(fs, u, ""); err != nil {
+		if _, err := compileUnitSecondary(fs, u, ""); err != nil {
 			t.Fatal(err)
 		}
 		if u.UnitName != "parsed" {

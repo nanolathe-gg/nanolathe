@@ -423,6 +423,15 @@ func (p *skirmishPreflight) unit(kind string, u *UnitDef, required bool) {
 	if u == nil {
 		return
 	}
+	if u.DiscoveryOnly {
+		// Discovery retains the record but initializes no gameplay links.
+		// Refuse required use rather than treating those zeros as a playable
+		// definition [02 R-CAT-01 §5], DESIGN_CONTENT_VFS §2.3.
+		p.diag(SkirmishDiagnostic{Code: "incomplete-unit-definition", Fatal: required, Kind: kind,
+			Logical: vfs.ResourcePath("units", u.UnitName, "fbi"), Entry: u.UnitName,
+			Message: unitSecondaryDiagnostic(p.fs, u, "secondary gameplay fields were not initialized")})
+		return
+	}
 	p.modelAsset(kind+".3do", requiredUnitModelPath(u.ObjectName), required)
 	if u.MovementClass != "" {
 		if _, ok := p.catalog.Movement[CanonicalKey(u.MovementClass)]; !ok {

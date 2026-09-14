@@ -138,15 +138,18 @@ const (
 // a missing-value default of 250, then clamps it into 20..500 and keeps it as
 // a sixteen-bit configured limit [02 "Unit limit"][08 R-SKIR-01 §6].
 //
+// Nanolathe raises the default and upper bound by user request; see
+// DESIGN_CONTENT_VFS §5. The retail evidence above remains unchanged.
+//
 // It is stored at the top level rather than inside the Skirmish block for the
 // same reason ScrollSpeed is: the Skirmish block mirrors the values retail
 // keeps under its Skirmish key, and this is not one of them. Skirmish battle
 // entry is nonetheless its only consumer here, because a campaign's limit is
 // the map's `maxunits` instead [08 R-SKIR-01 §6].
 const (
-	DefaultUnitLimit = 250 // missing `UnitLimit` [08 R-SKIR-01 §6]
-	MinUnitLimit     = 20  // below 20 becomes 20 [08 R-SKIR-01 §6]
-	MaxUnitLimit     = 500 // above 500 becomes 500 [08 R-SKIR-01 §6]
+	DefaultUnitLimit = 1000 // Nanolathe policy; DESIGN_CONTENT_VFS §5.
+	MinUnitLimit     = 20   // below 20 becomes 20 [08 R-SKIR-01 §6]
+	MaxUnitLimit     = 3276 // ten player slices must fit positive signed 16-bit occupancy IDs.
 )
 
 // The audio option values the `SOUND` and `MUSIC` options pages write
@@ -661,10 +664,8 @@ func (s *Settings) Normalize() {
 	if s.ScrollSpeed < 0 || s.ScrollSpeed > 255 {
 		s.ScrollSpeed = DefaultScrollSpeed
 	}
-	// The unit limit's clamp is retail's own start-up clamp, not a schema
-	// repair: an absent value installs 250, and a stored value outside
-	// 20..500 is pulled to the nearer bound [08 R-SKIR-01 §6]. Zero cannot be
-	// a stored choice because the legal range starts at 20.
+	// Nanolathe's configured range is wider than retail's startup clamp
+	// [08 R-SKIR-01 §6]; see DESIGN_CONTENT_VFS §5. Zero means absent.
 	if s.UnitLimit == 0 {
 		s.UnitLimit = DefaultUnitLimit
 	}

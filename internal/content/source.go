@@ -64,7 +64,7 @@ func readContentEntry(fs vfs.FSOps, entry archiveContentFile) ([]byte, error) {
 		if provider == "" {
 			provider = "unknown"
 		}
-		return nil, fmt.Errorf("nanolathe: content entry read: logical path %s, providers searched [%s], expected readable content definition: %w", entry.info.Path, provider, err)
+		return nil, fmt.Errorf("nanolathe: content entry read: logical path %s, providers searched [%s], expected readable content definition: %w", entry.info.Path, provider, portableContentCause(err))
 	}
 	return data, nil
 }

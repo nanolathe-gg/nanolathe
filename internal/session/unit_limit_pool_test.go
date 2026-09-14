@@ -12,8 +12,7 @@ import (
 // missing-value default and the verbatim copy every stage after the start-up
 // read makes of it [08 R-SKIR-01 §6][08 R-SESS-01 §9]. Zero is the absent
 // sentinel: the legal range starts at 20, so no stored choice can collide
-// with it. The 20..500 clamp is the profile read's and is locked in
-// internal/settings.
+// with it. Nanolathe's expanded startup range is locked in internal/settings.
 func TestSkirmishConfigUnitLimitDefaults(t *testing.T) {
 	for _, tc := range []struct {
 		in, want int

@@ -39,8 +39,9 @@ GUI and HUD, camera and minimap, audio, effects, and save/load of a
 single-player battle.
 
 Authoritative behavior follows retail, including documented faults. Bounds
-rejection, ordered startup roots (DESIGN_CONTENT_VFS §5), and the renderer
-presentation policies of DESIGN_GPU_RENDERER are the
+rejection, ordered startup roots (DESIGN_CONTENT_VFS §5), the renderer
+presentation policies of DESIGN_GPU_RENDERER, and the configured skirmish
+unit-limit policy (DESIGN_CONTENT_VFS §5) are the
 sanctioned departures under [INVARIANTS.md](INVARIANTS.md) I11. Original preserves
 the retail raster reference; GPU Classic permits visually reviewed raster
 approximations, and Enhanced has separately designed visual features. These

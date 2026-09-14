@@ -826,6 +826,7 @@ type unitCompileResult struct {
 	units                  map[string]*UnitDef
 	records                []*UnitDef
 	incompatibilityWarning bool
+	warnings               []string
 }
 
 func compileUnitsWithLanguage(fs vfs.FSOps, language string) (unitCompileResult, error) {
@@ -905,14 +906,19 @@ func compileUnitsWithLanguage(fs vfs.FSOps, language string) (unitCompileResult,
 		records = kept
 	}
 	sortUnitRecords(records)
+	var warnings []string
 	for i, u := range records {
 		u.UnitDefID = uint32(i + 1)
-		if err := compileUnitSecondary(fs, u, language); err != nil {
+		warning, err := compileUnitSecondary(fs, u, language)
+		if err != nil {
 			return unitCompileResult{}, err
+		}
+		if warning != "" {
+			warnings = append(warnings, warning)
 		}
 		u.Hash = HashDefinition(writeUnitCanonical(u))
 	}
-	return unitCompileResult{units: firstUnitNames(records), records: records, incompatibilityWarning: versionDropped && !suppressWarning}, nil
+	return unitCompileResult{units: firstUnitNames(records), records: records, incompatibilityWarning: versionDropped && !suppressWarning, warnings: warnings}, nil
 }
 
 const incompatibleUnitsWarning = "Incompatible units found.  They will be ignored.  Please download the latest version of the game."

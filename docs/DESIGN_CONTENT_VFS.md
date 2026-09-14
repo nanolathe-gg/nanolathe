@@ -212,10 +212,24 @@ the final order. `DiscoveryProvenance` retains the admission source;
 `Provenance` and untyped source text follow a successful secondary read,
 except for discovery-only `ai_limit`. Empty resource identities remain valid
 path inputs, selecting `objects3d/.3do` and `scripts/.cob`.
+The host collects a warning for each unavailable secondary definition in
+retained record order, naming the attempted resource and the original
+discovery path/provider, with read failures retaining their cause.
+Required preflight use of a `DiscoveryOnly` record is refused; optional use
+is diagnosed without inventing gameplay fields. These are host diagnostics
+around the unchanged discovery contract `[02 R-CAT-01 §5]`.
+
 All category, weapon, movement, model, script, page and downloadable passes
 consume retained records. Download builder indices and restriction names
 still resolve only to the first matching record. Clone and hash include every
 record; stock unique-name catalogs preserve their prior IDs and hash stream.
+
+Feature reads use the TDF parser's byte budget. A read failure returns the
+winning logical path, provider and underlying cause before successor linking;
+it cannot silently remove a definition and later masquerade as a missing
+successor. Authored syntax and successor-miss policies remain unchanged.
+Filesystem causes display their operation and reason without a host filename;
+returned errors retain the original cause for programmatic inspection.
 
 `CanonicalKey` is the one key rule: trim, fold to lower case. Every catalog
 map, every cross-reference and every hash input goes through it, so a lookup
@@ -225,8 +239,8 @@ can never disagree with a sort order `[02 §5]`.
 
 Retail keeps the front-end preferences in the registry, plus the per-player
 unit limit in the profile file's `[Preferences]` section `[02 §3]` `[07 §10]`.
-Nanolathe keeps the same value set, the same defaults and the same
-read-once/write-whole shape, and swaps both stores for one JSON file at
+Nanolathe keeps the same value set, defaults except for the unit limit (§5),
+and the same read-once/write-whole shape, and swaps both stores for one JSON file at
 `$XDG_CONFIG_HOME/nanolathe/settings.json`.
 
 `Settings` carries the last skirmish setup (`Skirmish` and its ten `Player`
@@ -603,6 +617,18 @@ Each is a place where the code deliberately departs from the written contract,
 with the reason and the resolution. None is a compatibility flag: there is one
 behaviour.
 
+* **Configured skirmish unit limit (user-requested policy).** Default 1000
+  per player instead of retail's 250, configurable without a UI gadget via
+  top-level JSON `unitLimit` or `--unit-limit`. Both desktop entry (including
+  direct `--map`, captures and `--headless`) and the displayless command accept
+  the override. Precedence is explicit CLI, saved setting, default. Existing
+  stored choices are preserved; normal menu settings writes retain the active
+  configured value. Settings clamp to 20..3276; CLI values outside that range
+  are rejected. Ten player slices at 3276 fit positive signed 16-bit occupancy
+  identities (movement's `occupancyWord` rejects larger IDs). This replaces only
+  the configured default/range in `[08 R-SKIR-01 §6]`; campaign OTA `maxunits`
+  and save-restoration semantics retain their own sources. The simulation
+  benchmark keeps its explicit default of 400 for workload comparability.
 * **SC1 — the ten-archive cap.** The spec states a cap of ten local archives;
   the reference install has thirteen and plays. The cap is real but
   per-invocation, and repeated invocations converge to every valid local
@@ -688,6 +714,13 @@ Host limits and compatibility boundaries are recorded under [I11]:
   the logical and original joined lengths before normalization/allocation.
   Exceeding a limit fails the archive index instead of publishing a partial
   provider. The existing raw-directory and decoded-file limits remain separate.
+* **GAF row compatibility.** Metadata and pixel loading share the bounded
+  retail row walk `[fmt gaf]`: clipped run lengths, empty rows, zero-progress
+  skips and stored next-row anchors agree in both readers. Zero-size leaves
+  retain geometry without pixel reads; composites retain their children.
+  File bounds remain mandatory. The host `MaxRLECommands` policy defaults to
+  128 Mi commands per bank across unique frames, including zero-progress
+  commands and overlapping row scans; zero selects the default.
 * **GAF expansion limits.** Metadata validation computes each subtree's full
   traversal cost from cached child costs, counting shared children once per
   reference without actually expanding them. Checked additions reject a graph

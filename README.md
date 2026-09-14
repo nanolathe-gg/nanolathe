@@ -42,6 +42,15 @@ installation can be selected explicitly:
 ./nanolathe --root "/path/to/Total Annihilation"
 ```
 
+Skirmishes default to **1000 units per player**. Override with
+`./nanolathe --unit-limit 2000`, or set the top-level `"unitLimit": 2000`
+value in `~/.config/nanolathe/settings.json` (or
+`$XDG_CONFIG_HOME/nanolathe/settings.json`; `NANOLATHE_SETTINGS` overrides the
+full path). Accepted limits are 20..3276. CLI takes precedence over the saved
+value; an existing saved choice remains in effect until changed. This also
+works with direct `--map`, `--headless`, and `nanolathe-headless`. Campaign
+missions retain their authored unit limits.
+
 Mods can live in separate directories. Repeat `--root` in load order:
 
 ```sh

@@ -346,6 +346,10 @@ with a per-pixel **height key**, and that image is blitted. The split across
   composition image has a key plane, its cargo is composed into a union box and
   resolved per pixel against one height plane, which is why a transport hull can
   stand in front of the unit it carries `[03 R-REN-03A §4]`.
+  Classic staging computes child displacement at native raster scale before
+  the final view-scaled group blit (`DESIGN_GPU_RENDERER` §14.2), so zoom applies
+  once. A temporary image view changes only that staging anchor; cached child
+  images and their separate shadow/trace anchors remain intact.
   The committed unit view copies each carrier's head-first cargo list from the
   linkage owner. Both executors receive children in that order, including after
   detach/reattach; pool-slot order never substitutes for attachment order.

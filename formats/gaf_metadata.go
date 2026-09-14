@@ -83,6 +83,9 @@ func LoadGAFMetadataWithLimits(data []byte, limits GAFLimits) (*GAFMetadata, err
 	if limits.MaxExpandedPixels == 0 {
 		limits.MaxExpandedPixels = defaults.MaxExpandedPixels
 	}
+	if limits.MaxRLECommands == 0 {
+		limits.MaxRLECommands = defaults.MaxRLECommands
+	}
 	meta := &GAFMetadata{
 		Version:    binary.LittleEndian.Uint32(data[0:4]),
 		EntryCount: binary.LittleEndian.Uint32(data[4:8]),
@@ -172,7 +175,7 @@ func (g *GAFMetadata) Find(name string) (*GAFMetadataEntry, bool) {
 
 type gafMetadataBudget struct {
 	limits                         GAFLimits
-	refs, pixels                   uint64
+	refs, pixels, rleCommands      uint64
 	expandedFrames, expandedPixels uint64
 	roots                          map[*GAFMetadataFrame]bool
 }
@@ -244,8 +247,8 @@ func indexGAFFrame(data []byte, offset uint32, cache map[uint32]*GAFMetadataFram
 		SubframeCount:    header[10],
 		AlternateBlitter: header[11],
 	}
-	if frame.Width == 0 || frame.Height == 0 {
-		return nil, fmt.Errorf("frame 0x%x has empty dimensions", offset)
+	if uint64(frame.DataOffset) > uint64(len(data)) {
+		return nil, fmt.Errorf("frame 0x%x data pointer is outside file", offset)
 	}
 	pixelCount := uint64(frame.Width) * uint64(frame.Height)
 	if pixelCount > uint64(math.MaxInt) || pixelCount > maxGAFFramePixels {
@@ -304,57 +307,83 @@ func indexGAFFrame(data []byte, offset uint32, cache map[uint32]*GAFMetadataFram
 		if dataStart > uint64(len(data)) || pixelCount > uint64(len(data))-dataStart {
 			return nil, fmt.Errorf("frame 0x%x raw pixels are truncated", offset)
 		}
-	} else if err := validateGAFRLE(data, offset, frame); err != nil {
-		return nil, err
+	} else if err := walkGAFRLE(data, frame, nil, budget); err != nil {
+		return nil, fmt.Errorf("frame 0x%x: %w", offset, err)
 	}
 	cache[offset] = frame
 	return frame, nil
 }
 
-func validateGAFRLE(data []byte, offset uint32, frame *GAFMetadataFrame) error {
-	position := uint64(frame.DataOffset)
-	for row := 0; row < int(frame.Height); row++ {
+// walkGAFRLE applies the same checked command stream to metadata and pixels.
+// The stored length anchors the next row; only the remaining width stops a
+// nonempty row's commands [02 R-MALF-01 §6]. A nil output validates only.
+func walkGAFRLE(data []byte, meta *GAFMetadataFrame, out *GAFFrame, budget *gafMetadataBudget) error {
+	// Empty leaf rectangles never reach the retail pixel reader [02 R-MALF-01 §6].
+	if meta.Width == 0 || meta.Height == 0 {
+		return nil
+	}
+	position := uint64(meta.DataOffset)
+	width := int(meta.Width)
+	for row := 0; row < int(meta.Height); row++ {
 		if position > uint64(len(data)) || uint64(len(data))-position < 2 {
-			return fmt.Errorf("frame 0x%x RLE row header is truncated", offset)
+			return fmt.Errorf("RLE row %d header is truncated", row)
 		}
 		rowSize := uint64(binary.LittleEndian.Uint16(data[position : position+2]))
 		position += 2
 		if rowSize > uint64(len(data))-position {
-			return fmt.Errorf("frame 0x%x RLE row is truncated", offset)
-		}
-		if rowSize == 0 {
-			continue
+			return fmt.Errorf("RLE row %d extent is outside file", row)
 		}
 		rowEnd := position + rowSize
-		x := 0
-		for position < rowEnd && x < int(frame.Width) {
+		if rowSize == 0 {
+			if out != nil {
+				for x := 0; x < width; x++ {
+					out.Transparent[row*width+x] = true
+				}
+			}
+			continue
+		}
+		for x := 0; x < width; {
+			if position >= uint64(len(data)) {
+				return fmt.Errorf("RLE row %d command is outside file", row)
+			}
+			if budget != nil {
+				if budget.rleCommands >= budget.limits.MaxRLECommands {
+					return fmt.Errorf("aggregate RLE commands exceed limit")
+				}
+				budget.rleCommands++
+			}
 			command := data[position]
 			position++
+			n := min(int(command>>2)+1, width-x)
 			switch {
 			case command&1 != 0:
-				n := int(command >> 1)
-				if n == 0 || x+n > int(frame.Width) {
-					return fmt.Errorf("frame 0x%x invalid transparent run", offset)
+				n = min(int(command>>1), width-x)
+				if out != nil {
+					for i := 0; i < n; i++ {
+						out.Transparent[row*width+x+i] = true
+					}
 				}
-				x += n
 			case command&2 != 0:
-				n := int(command>>2) + 1
-				if position >= rowEnd || x+n > int(frame.Width) {
-					return fmt.Errorf("frame 0x%x invalid repeat run", offset)
+				if position >= uint64(len(data)) {
+					return fmt.Errorf("RLE row %d repeat byte is outside file", row)
 				}
+				value := data[position]
 				position++
-				x += n
+				if out != nil {
+					for i := 0; i < n; i++ {
+						out.Pixels[row*width+x+i] = value
+					}
+				}
 			default:
-				n := int(command>>2) + 1
-				if uint64(n) > rowEnd-position || x+n > int(frame.Width) {
-					return fmt.Errorf("frame 0x%x invalid literal run", offset)
+				if uint64(n) > uint64(len(data))-position {
+					return fmt.Errorf("RLE row %d literal bytes are outside file", row)
+				}
+				if out != nil {
+					copy(out.Pixels[row*width+x:row*width+x+n], data[position:position+uint64(n)])
 				}
 				position += uint64(n)
-				x += n
 			}
-		}
-		if x != int(frame.Width) || position != rowEnd {
-			return fmt.Errorf("frame 0x%x RLE row %d does not decode to width (decoded %d/%d, payload %d bytes, consumed %d)", offset, row, x, frame.Width, rowSize, position-(rowEnd-rowSize))
+			x += n
 		}
 		position = rowEnd
 	}
@@ -441,7 +470,9 @@ func materializeGAFFrame(data []byte, meta *GAFMetadataFrame, cache map[*GAFMeta
 		view.Transparent, view.PlainPixels, view.PlainTransparent = nil, nil, nil
 		frame.directRaster = &view
 	}
-	decodeGAFRLEPixels(data, meta, frame)
+	if err := walkGAFRLE(data, meta, frame, nil); err != nil {
+		return nil, err
+	}
 	return frame, nil
 }
 
@@ -466,48 +497,6 @@ func compositeGAFPlain(parent, child *GAFFrame) {
 			parent.PlainPixels[index] = child.PlainPixels[subIndex]
 			parent.PlainTransparent[index] = false
 		}
-	}
-}
-
-func decodeGAFRLEPixels(data []byte, meta *GAFMetadataFrame, frame *GAFFrame) {
-	position := uint64(meta.DataOffset)
-	for row := 0; row < int(meta.Height); row++ {
-		rowSize := uint64(binary.LittleEndian.Uint16(data[position : position+2]))
-		position += 2
-		if rowSize == 0 {
-			for x := 0; x < int(meta.Width); x++ {
-				frame.Transparent[row*int(meta.Width)+x] = true
-			}
-			continue
-		}
-		rowEnd := position + rowSize
-		x := 0
-		for position < rowEnd && x < int(meta.Width) {
-			command := data[position]
-			position++
-			switch {
-			case command&1 != 0:
-				n := int(command >> 1)
-				for i := 0; i < n; i++ {
-					frame.Transparent[row*int(meta.Width)+x+i] = true
-				}
-				x += n
-			case command&2 != 0:
-				n := int(command>>2) + 1
-				value := data[position]
-				position++
-				for i := 0; i < n; i++ {
-					frame.Pixels[row*int(meta.Width)+x+i] = value
-				}
-				x += n
-			default:
-				n := int(command>>2) + 1
-				copy(frame.Pixels[row*int(meta.Width)+x:row*int(meta.Width)+x+n], data[position:position+uint64(n)])
-				position += uint64(n)
-				x += n
-			}
-		}
-		position = rowEnd
 	}
 }
 

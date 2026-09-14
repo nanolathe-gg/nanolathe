@@ -71,10 +71,9 @@ const (
 // sees a map's `maxunits`; only a campaign keeps the OTA value
 // [08 R-SKIR-01 §6][05 R-SHARE-01 §7].
 //
-// The 20..500 clamp is the profile read's alone and lives with it, in
-// internal/settings (`MinUnitLimit`, `MaxUnitLimit`); this package sees the
-// word only after that read and copies it verbatim.
-const SkirmishDefaultUnitLimit = 250 // missing `UnitLimit` [08 R-SKIR-01 §6]
+// Nanolathe raises the default to 1000 and the settings range by user request
+// (DESIGN_CONTENT_VFS §5). This package copies explicit limits verbatim.
+const SkirmishDefaultUnitLimit = 1000
 
 // unitLimitOrDefault is the copy every stage after the start-up read makes of
 // the configured unit limit: verbatim, no clamp. Retail clamps the word once,
@@ -187,7 +186,7 @@ type SkirmishConfig struct {
 	// [05 R-SHARE-01 §7] — and is read again by the AI's half-capacity term
 	// [08 R-AI-01 §13]. Zero means the value was absent; ApplyDefaults and
 	// Normalize install the default and otherwise carry the value verbatim —
-	// the 20..500 clamp is applied once, when the profile file is read, and a
+	// the configured range is checked at startup (DESIGN_CONTENT_VFS §5), and a
 	// restored save may legitimately carry a value outside it into the next
 	// battle [08 R-SESS-01 §9]. No skirmish gadget edits it — it comes from
 	// the profile file, not the lobby screen [08 R-SKIR-01 §6].
@@ -260,8 +259,8 @@ func (c *SkirmishConfig) ApplyDefaults() {
 	}
 	// The unit limit sits outside the rules-defaults guard on purpose: unlike
 	// the six scalars above, zero is not a choice a player can make — the
-	// legal range is 20..500 — so it is the missing-value sentinel on every
-	// call. The value itself is carried verbatim: the 20..500 clamp is the
+	// configured range starts at 20 — so it is the missing-value sentinel on every
+	// call. The value itself is carried verbatim: the startup clamp is the
 	// profile read's, not battle entry's [08 R-SKIR-01 §6][08 R-SESS-01 §9].
 	c.UnitLimit = unitLimitOrDefault(c.UnitLimit)
 	c.MapName = strings.TrimSpace(c.MapName)
@@ -356,7 +355,7 @@ func (c *SkirmishConfig) Normalize() error {
 	}
 	c.NumPlayers = n
 	// The configured unit limit, verbatim; zero is the missing-value
-	// sentinel, never a choice, and the 20..500 clamp is the profile read's
+	// sentinel, never a choice, and the startup clamp is the profile read's
 	// alone [08 R-SKIR-01 §6][08 R-SESS-01 §9].
 	c.UnitLimit = unitLimitOrDefault(c.UnitLimit)
 	// Clear inactive rows beyond NumPlayers to ensure inactive cannot affect result [GAP T14].
@@ -586,7 +585,7 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 	// [05 R-SHARE-01 §7]. A skirmish's limit is the configured
 	// `[Preferences] UnitLimit`, which battle entry copies over the session
 	// word — a skirmish never uses the map's `maxunits` [08 R-SKIR-01 §6].
-	// Normalize above applied the missing-value default and the 20..500 clamp.
+	// Normalize above applied only the missing-value default.
 	unitsWorld, err := newBattleSlicedWorldWithCOBSized(cat, fs, sessionKindSkirmish, [pool.PlayerCount]uint32{}, cfg.UnitLimit)
 	if err != nil {
 		return nil, err

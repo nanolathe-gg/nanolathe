@@ -95,6 +95,7 @@ type Request struct {
 	SimulationSeed uint32
 	CRTSeed        uint32
 	TickLimit      uint32
+	UnitLimit      int // zero uses the skirmish default; campaign keeps authored maxunits
 }
 
 // Run mounts a retail install and enters the ordinary session composition and
@@ -129,8 +130,13 @@ func RunWithContent(request Request, fs vfs.FSOps, catalog *content.Catalog) (Re
 	if kind == ScenarioMission {
 		freshKind = ScenarioCampaign
 	}
+	cfg := session.DirectSkirmishConfig(request.Map)
+	if request.UnitLimit != 0 {
+		cfg.UnitLimit = request.UnitLimit
+	}
 	composed, err := ComposeFreshBattle(FreshBattleRequest{
 		Kind:           freshKind,
+		Skirmish:       cfg,
 		Map:            request.Map,
 		Mission:        request.Mission,
 		Difficulty:     request.Difficulty,

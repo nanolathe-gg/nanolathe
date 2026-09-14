@@ -77,6 +77,9 @@ func (g *gameShell) applySettings(s settings.Settings) {
 	// screen edits it: retail reads it from the profile file, and the
 	// skirmish lobby has no gadget for it [08 R-SKIR-01 §6].
 	g.setup.UnitLimit = s.UnitLimit
+	if g.opts.UnitLimit != 0 {
+		g.setup.UnitLimit = g.opts.UnitLimit
+	}
 
 	sk := s.Skirmish
 	// ApplyDefaults has already run in newGameShell, so the six scalars below

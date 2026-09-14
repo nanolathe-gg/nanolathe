@@ -38,6 +38,35 @@ import (
 type stagingChild struct {
 	model    composedModel
 	keyDelta int32
+	// Only the staging view moves; the child retains its shadow/trace anchor.
+	rasterDX, rasterDY int32
+}
+
+func (child stagingChild) stagingTarget() modelTarget {
+	if child.model.image == nil {
+		return modelTarget{}
+	}
+	target := *child.model.image
+	target.anchorX += child.rasterDX
+	target.anchorY += child.rasterDY
+	return target
+}
+
+// stagingDisplacement keeps classic composition in native raster space before
+// its final scaled blit (DESIGN_GPU_RENDERER §14.2). Project the world anchors
+// at raster scale: inverting their rounded screen difference loses pixels at
+// fractional view scales. The carrier retains its actual framebuffer anchor.
+func (c *Client) stagingDisplacement(parent, child composedModel) (int32, int32) {
+	if c == nil || c.cam == nil || c.modelBlitScale().Native() {
+		return 0, 0
+	}
+	rasterCamera := *c.cam
+	rasterCamera.Scale = c.modelScale()
+	p, ch := parent.draw.WorldPos, child.draw.WorldPos
+	px, py := rasterCamera.WorldToScreen(p[0], p[1], p[2])
+	cx, cy := rasterCamera.WorldToScreen(ch[0], ch[1], ch[2])
+	return parent.image.anchorX + cx - px - child.image.anchorX,
+		parent.image.anchorY + cy - py - child.image.anchorY
 }
 
 // composeCarrier presents one unit together with its attached children.
@@ -101,8 +130,10 @@ func (c *Client) composeCarrier(v frame.UnitView, sx, sy int32, children []frame
 		if !ok {
 			continue
 		}
+		dx, dy := c.stagingDisplacement(carrier, child)
 		staged = append(staged, stagingChild{
-			model: child,
+			model:    child,
+			rasterDX: dx, rasterDY: dy,
 			// "the child's world-height difference added to every key it
 			// contributes": a child's keys are relative to its own origin, and
 			// this is what puts them on the carrier's scale. Both images carry
@@ -118,7 +149,8 @@ func (c *Client) composeCarrier(v frame.UnitView, sx, sy int32, children []frame
 	}
 	staging := stagingImage(carrier.image, staged, c.borrowModelImage)
 	for i := range staged {
-		staging.compositeChild(staged[i].model.image, staged[i].keyDelta)
+		target := staged[i].stagingTarget()
+		staging.compositeChild(&target, staged[i].keyDelta)
 		if carrier.geometry != nil && staged[i].model.geometry != nil {
 			carrier.geometry.Children = append(carrier.geometry.Children, drawlist.ModelChild{Geometry: staged[i].model.geometry, KeyDelta: staged[i].keyDelta})
 		}
@@ -348,11 +380,10 @@ func (c *Client) drawChildModel(v frame.UnitView) {
 // newStagingImage allocates the staging image and copies the carrier's cached
 // image into it, both planes [R-REN-03A §4].
 //
-// The box is the union of the carrier's own box with every child's, taken in
-// framebuffer space: each image already records where its model origin lands on
-// screen, so "offset by the child's world position relative to the parent" is
-// the offset those anchors already carry. Uniting the projected rectangles is
-// that statement without a second copy of the projection.
+// The box is the union in composition raster space, anchored at the carrier.
+// Each stagingTarget carries the child's relative raster displacement: at native
+// scale this is already its screen-anchor offset; magnified classic composition
+// normalizes that offset before the completed union is scaled on the blit.
 func newStagingImage(body *modelTarget, children []stagingChild) *modelTarget {
 	return stagingImage(body, children, newModelImage)
 }
@@ -366,8 +397,8 @@ func stagingImage(body *modelTarget, children []stagingChild, allocate func(int,
 	left, top := body.screenX(0), body.screenY(0)
 	right, bottom := body.screenX(int32(body.width)-1), body.screenY(int32(body.heightPx)-1)
 	for i := range children {
-		ch := children[i].model.image
-		if ch == nil || ch.width == 0 || ch.heightPx == 0 {
+		ch := children[i].stagingTarget()
+		if ch.width == 0 || ch.heightPx == 0 {
 			continue
 		}
 		if l := ch.screenX(0); l < left {
