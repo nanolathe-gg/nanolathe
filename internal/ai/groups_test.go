@@ -233,6 +233,52 @@ func TestMergeWaveGroupsTransfersOnlyEstablishedMembers(t *testing.T) {
 	}
 }
 
+// Wave shedding retains sums adjusted by the member occupying the removed
+// slot after swap-delete, including the transition to one member. Collection
+// uses that centroid until all peers have been considered [08 R-P0-04 §3].
+func TestWaveMergeRetainsPostSwapCoordinateSums(t *testing.T) {
+	for _, tt := range []struct {
+		name               string
+		x                  []int32
+		own                int
+		wantWave, wantPeer []int
+	}{
+		{"nonfinal removal", []int32{0, 0, 600, 0, 400}, 4, []int{0, 1, 3, 4}, []int{2}},
+		{"final removal", []int32{0, 0, 0, 600, 400}, 4, []int{0, 1, 2}, []int{4, 3}},
+		{"single survivor", []int32{600, 0, 550}, 2, []int{1, 2, 0}, nil},
+		{"signed distance wrap", []int32{-32768, 32767}, 1, []int{0, 1}, nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "wave-fixture"}, UnitName: "wave-fixture", MaxDamage: 100}
+			w := newAIFixtureWorld(16, &content.Catalog{Units: map[string]*content.UnitDef{def.CanonicalKey: def}})
+			var handles []pool.Handle
+			for _, x := range tt.x {
+				h, err := w.Create(def, 0, numeric.FixedFromInt(int64(x)), 0, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				w.Unit(h).Remaining = 0
+				handles = append(handles, h)
+			}
+			wave, peer := mergeWaveGroupRecordsFixture(handles[:tt.own], handles[tt.own:], w, waveAThreshold)
+			for _, group := range []struct {
+				name string
+				got  []pool.Handle
+				want []int
+			}{{"wave", wave, tt.wantWave}, {"peer", peer, tt.wantPeer}} {
+				if len(group.got) != len(group.want) {
+					t.Fatalf("%s=%v, want member indices %v", group.name, group.got, group.want)
+				}
+				for i, index := range group.want {
+					if group.got[i] != handles[index] {
+						t.Fatalf("%s=%v, want member indices %v", group.name, group.got, group.want)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestGroupCentroidUsesStoredPixelDomain(t *testing.T) {
 	def := &content.UnitDef{
 		DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armflash")},

@@ -443,10 +443,12 @@ per-cell bits drive the structure-yard mark, occupancy, slope sampling, height
 sampling, feature-free, blocked-class and geothermal requirement. The parse is
 retail's character loop, not a one-to-one fill: a character outside the table
 advances the string without consuming a cell, the final character repeats for
-every unfilled cell, characters past the last cell are never read, and a
-building with no yard map takes the all-open default. Only building-class
+every unfilled cell, and characters past the last cell are never read. When
+bounded source text is exhausted, including an absent yard map, Nanolathe fills
+the remainder with occupied `o` cells. This is the shared host policy, not a
+retail absent-key default; retail can scan beyond its source. Only building-class
 definitions carry a yard map at all `[04 §6.2]` `[05 "Geothermal requirement"]`
-(SC19).
+`[fmt fbi]` (SC19).
 
 **W11 — geothermal.** The requirement is the yard bit validated against the
 covered cell's *resolved* feature carrying the definition's geothermal flag,

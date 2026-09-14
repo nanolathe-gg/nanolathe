@@ -318,6 +318,12 @@ func SelectWithCandidates(m Selector, builder *units.Unit, econ *economy.Service
 		}
 		// C5: profile limit (count < limit or -1) [08] [PLAN 11 C5]
 		def := strat.lookupDef(ck)
+		if strat.Catalog != nil && def == nil {
+			// The base-menu compiler retains unresolved names. Retail's invalid
+			// type gate rejects only this candidate before the limit/vector reads
+			// or reservoir draw [02 R-CAT-01 §5][08 R-AI-02 §2].
+			continue
+		}
 		limit := profile.LimitForControl(controlByte, ck)
 		if def != nil {
 			limit = profile.LimitForDefinition(controlByte, def)

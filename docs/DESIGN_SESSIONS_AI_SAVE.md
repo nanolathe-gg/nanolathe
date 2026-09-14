@@ -1055,8 +1055,10 @@ fragment with kinds unfiltered, folding into the types the file did not lock
 **C5 — the candidate gates.** Applied before scoring: an energy stock below 50,
 a metal stock below 25, the per-definition gate bit, and the profile limit —
 which rejects type index zero and any index at or above the catalog count
-before it reads the limit vector. A third hard gate rejects a downloadable
-candidate when the manager received authoritative session kind one at battle
+before it reads the limit vector. The base-menu compiler preserves authored
+names, so selection skips unresolved products individually without a draw;
+resolved definitions still require initialized class vectors. A third hard gate
+rejects a downloadable candidate when the manager received authoritative session kind one at battle
 construction; fresh and restored construction pass that kind explicitly. The
 **post-selection** filter
 compares the *selected* definition's authored side string against the builder's
@@ -1181,6 +1183,13 @@ transfer shortcut `[04 R-ORD-02 §1]` `[08 R-AI-01 §7]`.
 
 ## 4. Retail behaviour that is not a bug
 
+* **A mixed land/hover wave can recall advancing hovercraft.** Wave merge
+  sheds members by distance from the group calculation; the paired regroup
+  then orders them toward the remaining wave. A usable route across water does
+  not exempt a hovercraft from those group operations. The Two Continents
+  seed-seven probe demonstrates this sequence in Nanolathe; it is not a reason
+  to add a separate hover tactic `[08 R-P0-04 §3]` `[08 R-AI-01 §5]`.
+
 * **The computer player re-attacks every 300 ticks while its wave latch is set,
   even as it loses members.** A trickle of single units after a failed wave is
   retail; the latch is cleared only by the gather arm at three or fewer members
@@ -1234,6 +1243,14 @@ transfer shortcut `[04 R-ORD-02 §1]` `[08 R-AI-01 §7]`.
   `[08 "Scheduler and random state in saves"]` `[08 R-SAVE-02 §11]`.
 
 ## 5. Divergences
+
+* **Malformed building yard text uses the shared bounded parser.** AI placement
+  applies the same occupied remainder as human placement and occupancy when a
+  compiled building's yard text is exhausted, including an absent key. The
+  definition remains eligible for the ordinary radius, selector and helper
+  steps; it is not rejected as a missing definition. This is Nanolathe host
+  policy, not an established retail empty-yard default; retail may read beyond
+  that text `[fmt fbi]` `[08 R-AI-03 §2]`.
 
 * **Close the save dialog after a successful write.** This user-requested host
   UI policy dismisses the save dialog after the writer returns success, for

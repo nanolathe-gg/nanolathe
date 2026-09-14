@@ -1005,21 +1005,24 @@ func (m *Manager) mergeWaveGroupRecords(groupID, peerID uint8, w *units.World, t
 			m.transferGroupMember(u, peerID, groupID)
 		}
 	}
-	cx, cz, ok := retailGroupCentroid(*current, w)
-	if !ok {
-		return
+	var sumX, sumZ int32
+	for _, h := range *current {
+		u := w.Unit(h) // reconciled live members [08 R-P0-04 §3]
+		sumX += retailCoord(u.X)
+		sumZ += retailCoord(u.Z)
 	}
+	cx, cz := sumX/int32(len(*current)), sumZ/int32(len(*current))
 	for len(*current) > 1 {
-		limit := int64(threshold) * int64(len(*current))
+		limit := threshold * int32(len(*current))
 		farthest := -1
-		var farthestDistance int64
+		var farthestDistance int32
 		for i, h := range *current {
 			u := w.Unit(h)
 			if u == nil || !u.Alive {
 				continue
 			}
 			distance := retailDistanceSquared(u, cx, cz)
-			if farthest < 0 || distance > farthestDistance {
+			if distance > farthestDistance {
 				farthest, farthestDistance = i, distance
 			}
 		}
@@ -1027,6 +1030,11 @@ func (m *Manager) mergeWaveGroupRecords(groupID, peerID uint8, w *units.World, t
 			break
 		}
 		before := len(*current)
+		// The writer replaces the removed slot with the last member, including
+		// when that slot already is last. Retail subtracts that member's
+		// coordinates after the transfer, retaining the resulting biased sums
+		// rather than recomputing the survivors' true mean [08 R-P0-04 §3].
+		replacement := w.Unit((*current)[before-1])
 		if u := w.Unit((*current)[farthest]); u != nil {
 			m.transferGroupMember(u, groupID, peerID)
 		}
@@ -1038,19 +1046,11 @@ func (m *Manager) mergeWaveGroupRecords(groupID, peerID uint8, w *units.World, t
 		if len(*current) >= before {
 			break
 		}
-		cx, cz, ok = retailGroupCentroid(*current, w)
-		if !ok {
-			return
-		}
+		sumX -= retailCoord(replacement.X)
+		sumZ -= retailCoord(replacement.Z)
+		cx, cz = sumX/int32(len(*current)), sumZ/int32(len(*current))
 	}
-	if len(*current) == 0 {
-		return
-	}
-	cx, cz, ok = retailGroupCentroid(*current, w)
-	if !ok {
-		return
-	}
-	limit := int64(threshold) * int64(len(*current))
+	limit := threshold * int32(len(*current))
 	collected := make([]pool.Handle, 0, len(*peer))
 	for _, h := range *peer {
 		u := w.Unit(h)

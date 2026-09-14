@@ -190,16 +190,10 @@ func TestPlacementRejectsMissingDependencies(t *testing.T) {
 			}
 		})
 	}
-
-	m := makePlacementManager(placementCatalog("armsolar", "", 0), ter, 0)
-	res := PlaceWithResult(m, "armsolar", ter)
-	if res.Valid || res.Reason != ReasonMissingDefinition {
-		t.Fatalf("missing building yard must reject explicitly: %+v", res)
-	}
 	bad := placementCatalog("armsolar", "oooo", 0)
 	bad.Units["armsolar"].FootprintX = 0
-	m = makePlacementManager(bad, ter, 0)
-	res = PlaceWithResult(m, "armsolar", ter)
+	m := makePlacementManager(bad, ter, 0)
+	res := PlaceWithResult(m, "armsolar", ter)
 	if res.Valid || res.Reason != ReasonInvalidFootprint {
 		t.Fatalf("invalid footprint must reject explicitly: %+v", res)
 	}

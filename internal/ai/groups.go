@@ -254,11 +254,6 @@ func (m *Manager) insertGroupMember(h pool.Handle, group uint8) {
 	}
 }
 
-func retailGroupCentroid(handles []pool.Handle, w *units.World) (int32, int32, bool) {
-	x, _, z, ok := retailGroupCentroid3(handles, w)
-	return x, z, ok
-}
-
 func retailGroupCentroid3(handles []pool.Handle, w *units.World) (int32, int32, int32, bool) {
 	if len(handles) == 0 || w == nil {
 		return 0, 0, 0, false
@@ -280,12 +275,14 @@ func retailGroupCentroid3(handles []pool.Handle, w *units.World) (int32, int32, 
 	return sumX / count, sumY / count, sumZ / count, true
 }
 
-func retailDistanceSquared(u *units.Unit, x, z int32) int64 {
+// retailDistanceSquared retains the signed 32-bit products and sum used by
+// wave admission [08 R-P0-04 §3].
+func retailDistanceSquared(u *units.Unit, x, z int32) int32 {
 	if u == nil {
 		return 0
 	}
-	dx := int64(retailCoord(u.X)) - int64(x)
-	dz := int64(retailCoord(u.Z)) - int64(z)
+	dx := retailCoord(u.X) - x
+	dz := retailCoord(u.Z) - z
 	return dx*dx + dz*dz
 }
 

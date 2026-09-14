@@ -2851,15 +2851,15 @@ The recovered order:
 
 1. resolve the peer task from the passed slot index; if it is the calling task itself, return;
 2. **bootstrap**: if the own group is empty, return when the peer group is also empty; otherwise transfer the peer group's **first** member into the own group through the ordinary group-transfer helper, and continue with the steps below;
-3. compute the own group's centroid as the integer mean of its members' signed world coordinate words, truncating toward zero;
+3. sum the own group's signed world coordinate words and divide each sum by its member count, truncating toward zero; retain these sums throughout this invocation;
 4. while the own group holds more than one member, find its farthest member from that centroid and, while `distanceSquared >= threshold * ownGroupCount`, transfer that member to the peer group through the same helper;
-5. after each such transfer, subtract the departed member's coordinates from the running sums and recompute the centroid against the new count;
+5. after each such transfer, subtract the coordinates occupying the removed member's vector position **after** swap-delete. For a non-final position this is the former last member; for the final position it is the departed member. Recompute the centroid from these retained sums and the new count, even when only one member remains. Do not replace these sums with a fresh sum of the survivors;
 6. scan the peer group and collect members satisfying `distanceSquared < threshold * ownGroupCount` into a temporary vector, in peer-vector order; and
 7. transfer the collected members into the own group through the same transfer path, in that same order.
 
-The farthest-member comparison is inclusive (`>=`) and the peer-collection comparison is strict (`<`). The farthest search keeps the **first** maximum on ties, which makes the vector order the tie-break. Wave A uses threshold 20,000 and wave B uses 50,000; both carry minimum three and maximum six members. No random draw is taken by the merge.
+Coordinate sums, squared distances (including the sum of both axes), and threshold products use signed 32-bit arithmetic with wrapping. The farthest search starts at distance zero and selects only a strictly greater distance. The collection pass holds its centroid and own-member count fixed until all accepted peers have been recorded. The farthest-member comparison is inclusive (`>=`) and the peer-collection comparison is strict (`<`). The farthest search keeps the **first** maximum on ties, which makes the vector order the tie-break. Wave A uses threshold 20,000 and wave B uses 50,000; both carry minimum three and maximum six members. No random draw is taken by the merge.
 
-The bootstrap is the single step that lets a wave start from nothing, and it moves exactly one member per merge call — so a wave fills from its regroup peer over successive 300-tick task runs rather than all at once. [08 "Strategy manager and its task graph"]
+The bootstrap lets a wave start from nothing by moving exactly one member. The subsequent collection pass can admit additional nearby members in the same invocation; more distant reinforcements may require later 300-tick task runs. [08 "Strategy manager and its task graph"]
 
 ##### The direct manager-group writer
 

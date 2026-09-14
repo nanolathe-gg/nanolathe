@@ -133,9 +133,9 @@ func resolveRetailPlacementDef(m *Manager, defKey string) (retailPlacementDef, P
 	}
 	var yard []world.YardCell
 	if def.BMCode == 0 {
-		if strings.TrimSpace(def.YardMap) == "" {
-			return retailPlacementDef{}, placementFailure(HelperNone, ReasonMissingDefinition, fmt.Sprintf("unit %q has no placement yard", defKey))
-		}
+		// Share the bounded malformed-source policy with human placement and
+		// occupancy. Empty text is still a compiled building definition; its
+		// exhausted source receives the parser's occupied remainder [fmt fbi].
 		yard, err = world.ParseYardMap(def.YardMap, int(footX), int(footZ))
 		if err != nil {
 			return retailPlacementDef{}, placementFailure(HelperNone, ReasonMissingDefinition, err.Error())
