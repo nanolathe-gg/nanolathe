@@ -417,6 +417,9 @@ func (m *Messages) Normalize() {
 type Presentation struct {
 	Renderer string `json:"renderer"`
 	FPS      int    `json:"fps"`
+	// ExpandedSidebar uses spare modern UI height for more authored controls.
+	// This is a Nanolathe presentation preference (interface design §3.3).
+	ExpandedSidebar int `json:"expandedSidebar"`
 	// The five Enhanced effect switches (DESIGN_GPU_RENDERER §30). They are
 	// Nanolathe options with no retail bit, read only by the modern recorder
 	// and executor, and stored as integers for the same reason the display
@@ -442,7 +445,7 @@ type Presentation struct {
 // Enhanced effect on.
 func DefaultPresentation() Presentation {
 	return Presentation{
-		Renderer: "modern", FPS: 60,
+		Renderer: "modern", FPS: 60, ExpandedSidebar: 1,
 		Water: DefaultEffectSwitch, Lighting: DefaultEffectSwitch, Finish: DefaultEffectSwitch,
 		Distortion: DefaultEffectSwitch, Marks: DefaultEffectSwitch,
 	}
@@ -457,6 +460,9 @@ func (p *Presentation) Normalize() {
 	}
 	if p.FPS < 0 {
 		p.FPS = DefaultPresentation().FPS
+	}
+	if p.ExpandedSidebar < 0 {
+		p.ExpandedSidebar = DefaultPresentation().ExpandedSidebar
 	}
 	for _, value := range []*int{&p.Water, &p.Lighting, &p.Finish, &p.Distortion, &p.Marks} {
 		if *value < 0 {

@@ -82,7 +82,7 @@ func (h *retailBattleHUD) preparePalettePanel(p *ui.Panel, ctx paletteActivation
 	for i, gad := range ctx.window.Gadgets {
 		grey[i] = gad.GrayedOut
 		active := gad.Active != 0
-		if command, isCommand := paletteGadgetVerdict(gad, ctx.frame, ctx.paged, ctx.catalog); isCommand {
+		if command, isCommand := h.sidebarGadgetVerdict(ctx.window, gad, ctx.frame, ctx.paged, ctx.catalog); isCommand {
 			active = active && !command.hidden
 			if command.grey {
 				ctx.window.Gadgets[i].GrayedOut |= 1
@@ -145,7 +145,8 @@ func (h *retailBattleHUD) servicePaletteFrame(b *battleSession, in *input.State,
 		if index < 0 || index >= len(ctx.window.Gadgets) {
 			return 0
 		}
-		if entry := h.gadgetArtEntry(ctx.window.Gadgets[index], ctx.page); entry != nil {
+		_, art := h.sidebarSource(ctx.window, index, ctx.page)
+		if entry := h.gadgetArtEntry(ctx.window.Gadgets[index], art); entry != nil {
 			return len(entry.Frames)
 		}
 		return 0
@@ -189,7 +190,7 @@ func (h *retailBattleHUD) activatePaletteGadget(b *battleSession, ctx paletteAct
 	if gad.Active == 0 || gad.Kind != gui.KindButton || gad.GrayedOut&1 != 0 {
 		return false
 	}
-	command, isCommand := paletteGadgetVerdict(gad, ctx.frame, ctx.paged, ctx.catalog)
+	command, isCommand := h.sidebarGadgetVerdict(ctx.window, gad, ctx.frame, ctx.paged, ctx.catalog)
 	if isCommand && (command.hidden || command.grey) {
 		return false
 	}
@@ -201,6 +202,9 @@ func (h *retailBattleHUD) activatePaletteGadget(b *battleSession, ctx paletteAct
 				return true
 			}
 			b.playUICue(nil, ordersButtonCue)
+			if _, handled := h.selectExpandedSidebarPage(b, ctx.frame, 0); handled {
+				return true
+			}
 			_ = b.DispatchBuildPage(0)
 			return true
 		case "BUILD":
@@ -208,12 +212,17 @@ func (h *retailBattleHUD) activatePaletteGadget(b *battleSession, ctx paletteAct
 				return true
 			}
 			b.playUICue(nil, buildButtonCue)
+			if state, ok := h.expandedSidebarPaging(b, ctx.frame); ok {
+				h.selectExpandedSidebarPage(b, ctx.frame, state.Remembered)
+				return true
+			}
 			_ = b.DispatchBuildPage(buildButtonPage(ctx.frame))
 			return true
 		}
 	}
-	next := hud.NextPageButton(b.effectiveBuildPage(ctx.frame), int(ctx.frame.CommandPage.PageCount))
-	prev := hud.PrevPageButton(b.effectiveBuildPage(ctx.frame), int(ctx.frame.CommandPage.PageCount))
+	page, count := b.buildPageNavigationState(ctx.frame)
+	next := hud.NextPageButton(page, count)
+	prev := hud.PrevPageButton(page, count)
 	if strings.Contains(upperName, "NEXTPAGE") || strings.Contains(upperName, "NEXT") && strings.Contains(upperName, "PAGE") || strings.Contains(upperName, "PAGEDOWN") {
 		if !rightClick {
 			_ = b.dispatchBuildPageCued(next)
@@ -251,6 +260,9 @@ func (h *retailBattleHUD) activatePaletteGadget(b *battleSession, ctx paletteAct
 	// a slot list. Use the same name that supplies the art and hover card.
 	if ctx.selected != nil && b.cat != nil {
 		if product, found := b.cat.Unit(gad.Name); found && product != nil {
+			if ctx.window == h.expandedSidebar.window && !sidebarProductAllowed(ctx.frame, b.cat, gad.Name) {
+				return false
+			}
 			if !hud.ProductArmsPlacement(product) {
 				delta := factoryBuildDelta(modifiers, rightClick)
 				b.playUICue(nil, countedBuildCue(delta))

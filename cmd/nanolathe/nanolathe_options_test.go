@@ -55,7 +55,7 @@ func TestNanolatheOptionsPreviewCancelAndPersistence(t *testing.T) {
 	if optionsState.page != "nanolathe" {
 		t.Fatal("new category did not open")
 	}
-	for _, name := range []string{"NANOLATHE", "NRENDER", "NFPS", "NGLOW", "NWATER", "NLIGHTS", "NFINISH", "NHEAT", "NMARKS"} {
+	for _, name := range []string{"NANOLATHE", "NRENDER", "NFPS", "NGLOW", "NWATER", "NLIGHTS", "NFINISH", "NHEAT", "NMARKS", "NSIDEBAR"} {
 		gad := optionsPanel.Window.Gadgets[optionsPanel.Index(name)]
 		if gad.ButtonArt == nil {
 			t.Fatalf("%s has no game-data button art", name)
@@ -74,6 +74,10 @@ func TestNanolatheOptionsPreviewCancelAndPersistence(t *testing.T) {
 	// glow previews straight onto the live client (DESIGN_GPU_RENDERER §30).
 	for _, name := range effectGadgets {
 		g.activateRetailOptionsGadget(name)
+	}
+	g.activateRetailOptionsGadget("NSIDEBAR")
+	if (&battleSession{shell: g}).expandedSidebarEnabled() {
+		t.Fatal("sidebar preference did not preview immediately")
 	}
 	if got := host.Effects(); got != (drawlist.Effects{}) {
 		t.Fatalf("effect preview %+v", got)
@@ -95,6 +99,7 @@ func TestNanolatheOptionsPreviewCancelAndPersistence(t *testing.T) {
 	g.activateRetailOptionsGadget("NWATER")
 	g.activateRetailOptionsGadget("NMARKS")
 	g.activateRetailOptionsGadget("NGLOW")
+	g.activateRetailOptionsGadget("NSIDEBAR")
 	g.activateRetailOptionsGadget("PREV")
 	saved, err := settings.Load()
 	if err != nil {
@@ -108,6 +113,9 @@ func TestNanolatheOptionsPreviewCancelAndPersistence(t *testing.T) {
 	}
 	if saved.Display.Glow != 0 {
 		t.Fatalf("saved glow %d", saved.Display.Glow)
+	}
+	if saved.Presentation.ExpandedSidebar != 0 {
+		t.Fatal("saved preference lost the disabled sidebar")
 	}
 	next := &gameShell{}
 	next.applySettings(saved)
@@ -189,7 +197,7 @@ func TestBattleNanolatheOptionsPointerAndLayout(t *testing.T) {
 	// Every switch has button art and a hit rectangle inside the battle column,
 	// and one click cycles it to Off (DESIGN_INTERFACE_HUD_INPUT §3.4.1).
 	canvasW, canvasH := cl.Size()
-	for _, name := range append([]string{"NRENDER", "NFPS"}, effectGadgets...) {
+	for _, name := range append([]string{"NRENDER", "NFPS", "NSIDEBAR"}, effectGadgets...) {
 		index := optionsPanel.Index(name)
 		if optionsPanel.Window.Gadgets[index].ButtonArt == nil {
 			t.Fatalf("%s has no game-data button art", name)
@@ -207,6 +215,10 @@ func TestBattleNanolatheOptionsPointerAndLayout(t *testing.T) {
 	}
 	for _, name := range effectGadgets {
 		click(name)
+	}
+	click("NSIDEBAR")
+	if b.expandedSidebarEnabled() {
+		t.Fatal("pointer did not disable expanded sidebar")
 	}
 	if got := presentationEffects(g.presentation); got != (drawlist.Effects{}) {
 		t.Fatalf("pointer left effects at %+v", got)

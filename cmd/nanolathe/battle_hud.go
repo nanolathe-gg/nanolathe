@@ -26,6 +26,9 @@ import (
 )
 
 type retailBattleHUD struct {
+	expandedSidebar expandedSidebarLayout
+	sidebarPaging   sidebarRowPaging
+
 	commandWindowInput commandWindowInputState
 	// palettePanels retain the generic widget state per selected command-window
 	// instance. The GUI pointer, not a gadget name, is the identity because

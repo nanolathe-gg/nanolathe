@@ -29,11 +29,12 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, f *fr
 	}
 	paged := commandPageIsPaged(f)
 	for i, gad := range window.Gadgets {
+		sourceWindow, sourceArt := h.sidebarSource(window, i, pageGAF)
 		if i == 0 || gad.Active == 0 || gad.Kind == gui.KindFont || gad.Kind == gui.KindPanel {
 			continue
 		}
-		// Fixed in authored coordinates: the §6 slide moves no rail window and
-		// no gadget rectangle [07 R-HUD-05] (WU-19-223).
+		// The resolved window includes modern block translations. The §6
+		// slide still moves no rail window or gadget [07 R-HUD-05].
 		r := window.PlacedRect(i)
 		down, stage := int(gad.Status), 0
 		panel := h.palettePanels[window]
@@ -41,20 +42,20 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, f *fr
 			down, stage = panel.DownAt(i), panel.StageAt(i)
 			gad.ColorF = panel.FlashRow(i)
 		}
-		command, isCommand := commandGadgetVerdict(gad, f, paged)
-		dynamic, _ := paletteGadgetVerdict(gad, f, paged, b.cat)
-		if dynamic.hidden {
+		_, isCommand := commandGadgetVerdict(gad, f, paged)
+		command, _ := h.sidebarGadgetVerdict(window, gad, f, paged, b.cat)
+		if command.hidden {
 			// A hidden command button is one the switch deactivates outright —
 			// LOAD without the transport bit, BLAST with it [07 R-HUD-03 §6].
 			// An inactive gadget paints nothing [07 §3].
 			continue
 		}
-		grey := gad.GrayedOut&1 != 0 || dynamic.grey
+		grey := gad.GrayedOut&1 != 0 || command.grey
 		var frameArt *formats.GAFFrame
 		if isCommand {
-			frameArt = commandButtonFrame(h.gadgetArtEntry(gad, pageGAF), gad, command.stage, grey, down != 0)
+			frameArt = commandButtonFrame(h.gadgetArtEntry(gad, sourceArt), gad, command.stage, grey, down != 0)
 		} else {
-			frameArt = h.gadgetButtonFrame(gad, pageGAF, down, stage, grey)
+			frameArt = h.gadgetButtonFrame(gad, sourceArt, down, stage, grey)
 		}
 		if frameArt != nil {
 			// .GUI controls use the authored rectangle origin; unlike the PANEL
@@ -114,7 +115,7 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, f *fr
 				// record, `armbutt`/`corbutt` — and the common font when none
 				// matches. That FNT is only reached on the GAF pen's null-slot
 				// fallback below [07 R-WGT-01 §6][03 R-FONT-01 §5].
-				h.drawProductButtonCaptionSelected(c, gad, r, window.Rect, text, window.Font(h.fs, gad.FontNumber))
+				h.drawProductButtonCaptionSelected(c, gad, r, window.Rect, text, sourceWindow.Font(h.fs, gad.FontNumber))
 			}
 		}
 	}

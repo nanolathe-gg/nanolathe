@@ -569,6 +569,13 @@ disagree (§16.11). Identified units draw generated icons (§18); unidentified
 contacts keep §16.11's square. HUD and cursor scale stay independent of the view
 scale in every case.
 
+The user-requested expanded sidebar prototype is specified in
+[DESIGN_INTERFACE_HUD_INPUT §3.3](DESIGN_INTERFACE_HUD_INPUT.md#modern-expanded-sidebar-prototype).
+It uses spare framebuffer height to show authored orders and build controls
+together, adding complete build rows as space permits. This is a modern HUD
+composition change; the GPU executor and world zoom transform are unchanged.
+Classic retains the single-page rail of [07 R-HUD-05].
+
 ### 5.3 Enhanced interpolation
 
 Enhanced targets the display's refresh rate while retaining the 30 Hz

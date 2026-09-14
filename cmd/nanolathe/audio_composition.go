@@ -274,6 +274,16 @@ func playSelectionCue(sess *session.Session, handles []pool.Handle) {
 // identity so repeated input before publication only cues actual transitions.
 func (b *battleSession) dispatchBuildPageCued(page int) error {
 	f, ok := b.currentSnapshot()
+	// Adaptive rows navigate locally; the command below remains an authored
+	// page command for Classic and fallback layouts (interface design §3.3).
+	if ok && b.hud != nil {
+		if changed, handled := b.hud.selectExpandedSidebarPage(b, f, page); handled {
+			if changed {
+				b.playUICue(nil, cueNextBuildMenu)
+			}
+			return nil
+		}
+	}
 	if ok && b.effectiveBuildPage(f) == page {
 		return nil
 	}

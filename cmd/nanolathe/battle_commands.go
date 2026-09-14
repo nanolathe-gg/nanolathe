@@ -42,7 +42,8 @@ func (b *battleSession) switchBuildPage(digit int) {
 	if !ok || frame.CommandPage.Builder == 0 || frame.CommandPage.PageCount == 0 || digit < 1 || digit > 9 {
 		return
 	}
-	target, valid := hud.DigitPage(digit, int(frame.CommandPage.PageCount))
+	_, count := b.buildPageNavigationState(frame)
+	target, valid := hud.DigitPage(digit, count)
 	if !valid {
 		return
 	}
@@ -55,7 +56,8 @@ func (b *battleSession) nextBuildPage() {
 	if !ok || frame.CommandPage.Builder == 0 || frame.CommandPage.PageCount <= 1 {
 		return
 	}
-	target := hud.NextPageKey(b.effectiveBuildPage(frame), int(frame.CommandPage.PageCount))
+	page, count := b.buildPageNavigationState(frame)
+	target := hud.NextPageKey(page, count)
 	_ = b.dispatchBuildPageCued(target)
 }
 
@@ -65,7 +67,8 @@ func (b *battleSession) prevBuildPage() {
 	if !ok || frame.CommandPage.Builder == 0 || frame.CommandPage.PageCount <= 1 {
 		return
 	}
-	target := hud.PrevPageKey(b.effectiveBuildPage(frame), int(frame.CommandPage.PageCount))
+	page, count := b.buildPageNavigationState(frame)
+	target := hud.PrevPageKey(page, count)
 	_ = b.dispatchBuildPageCued(target)
 }
 
@@ -272,4 +275,16 @@ func (b *battleSession) selfDestructSelection() {
 
 func (b *battleSession) effectiveBuildPage(f *frame.Frame) int {
 	return b.sess.PendingBuildPage(f.CommandPage.Builder, int(f.CommandPage.Page))
+}
+
+// Modern row pages have a presentation-local index. Keep every navigation
+// producer on the same range while preserving authored paging for Classic
+// and unsupported GUI layouts (interface design §3.3).
+func (b *battleSession) buildPageNavigationState(f *frame.Frame) (page, count int) {
+	if b.hud != nil {
+		if state, ok := b.hud.expandedSidebarPaging(b, f); ok {
+			return state.Page, state.Count
+		}
+	}
+	return b.effectiveBuildPage(f), int(f.CommandPage.PageCount)
 }

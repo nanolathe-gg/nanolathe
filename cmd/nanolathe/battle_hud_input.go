@@ -51,11 +51,11 @@ func (h *retailBattleHUD) updateHoveredGadget(b *battleSession, f *frame.Frame, 
 		// [07 R-WGT-01 §1]. A greyed one is not: the hovered-gadget writer has
 		// no grey test, so a greyed button still fills the footer's first
 		// source [07 R-HUD-03 §1].
-		if command, isCommand := paletteGadgetVerdict(gad, f, paged, b.cat); isCommand && command.hidden {
+		if command, isCommand := h.sidebarGadgetVerdict(window, gad, f, paged, b.cat); isCommand && command.hidden {
 			continue
 		}
-		// The rail's gadget rectangles are fixed in authored coordinates and
-		// the §6 slide never translates them [07 R-HUD-05] (WU-19-223).
+		// The resolved window includes the modern block translations; the
+		// §6 slide never translates rail controls [07 R-HUD-05].
 		r := window.PlacedRect(i)
 		if !guiRectContains(r, x, y) {
 			continue
@@ -142,7 +142,7 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 		if i == 0 || gad.Active == 0 || gad.GrayedOut&1 != 0 || gad.Kind != gui.KindButton {
 			continue
 		}
-		command, isCommand := paletteGadgetVerdict(gad, f, ctx.paged, b.cat)
+		command, isCommand := h.sidebarGadgetVerdict(window, gad, f, ctx.paged, b.cat)
 		if isCommand && command.hidden {
 			continue
 		}
@@ -193,12 +193,11 @@ func (h *retailBattleHUD) hitTestFor(b *battleSession, x, y int32) bool {
 		// Neither a greyed nor a hidden command button is an activation target
 		// [07 R-WGT-01 §3][07 R-HUD-03 §6], so neither reports a hit here — the
 		// same reading the authored-grey test above already applies.
-		if command, isCommand := paletteGadgetVerdict(gad, f, paged, b.cat); isCommand && (command.grey || command.hidden) {
+		if command, isCommand := h.sidebarGadgetVerdict(window, gad, f, paged, b.cat); isCommand && (command.grey || command.hidden) {
 			continue
 		}
-		// Fixed in authored coordinates: the §6 slide moves no rail gadget
-		// rectangle, so the hit test never follows it [07 R-HUD-05]
-		// (WU-19-223).
+		// Read the same resolved rectangle as the painter, including modern
+		// block translations. The §6 slide is separate [07 R-HUD-05].
 		r := window.PlacedRect(i)
 		if guiRectContains(r, x, y) {
 			return true
@@ -231,12 +230,11 @@ func (h *retailBattleHUD) buttonAt(b *battleSession, x, y int32) int {
 		// A greyed button takes no capture and a hidden one is skipped before
 		// the hit test [07 R-WGT-01 §3][07 R-WGT-01 §1], so neither can be the
 		// gadget a press and its release identify.
-		if command, isCommand := paletteGadgetVerdict(gad, f, paged, b.cat); isCommand && (command.grey || command.hidden) {
+		if command, isCommand := h.sidebarGadgetVerdict(window, gad, f, paged, b.cat); isCommand && (command.grey || command.hidden) {
 			continue
 		}
-		// Fixed in authored coordinates: the §6 slide moves no rail gadget
-		// rectangle, so the hit test never follows it [07 R-HUD-05]
-		// (WU-19-223).
+		// Read the same resolved rectangle as the painter, including modern
+		// block translations. The §6 slide is separate [07 R-HUD-05].
 		r := window.PlacedRect(i)
 		if guiRectContains(r, x, y) {
 			return i

@@ -16,7 +16,7 @@ func TestPresentationPreferencesLoadAndRoundTrip(t *testing.T) {
 	// The five effect switches default on, so a value the case does not name is
 	// the default. want builds a block from the two named fields plus overrides.
 	want := func(renderer string, fps int, effects ...int) Presentation {
-		p := Presentation{Renderer: renderer, FPS: fps, Water: one, Lighting: one, Finish: one, Distortion: one, Marks: one}
+		p := Presentation{Renderer: renderer, FPS: fps, ExpandedSidebar: 1, Water: one, Lighting: one, Finish: one, Distortion: one, Marks: one}
 		fields := []*int{&p.Water, &p.Lighting, &p.Finish, &p.Distortion, &p.Marks}
 		for i, v := range effects {
 			*fields[i] = v

@@ -128,10 +128,10 @@ func nanolatheOptionsPage(window *gui.Window) error {
 	label.Link = ""
 	label.Rect.X, label.Rect.W = button.Rect.X, button.Rect.W
 	// The page has to fit the in-battle column as well as the front-end one, so
-	// the two captioned rows use a tight caption-plus-control pitch and the six
-	// effect switches carry their own names in their stage text instead of
+	// the three captioned rows use a tight caption-plus-control pitch and the
+	// presentation switches carry their own names in their stage text instead of
 	// spending a caption line each (DESIGN_INTERFACE_HUD_INPUT §3.4.1).
-	const captionedPitch, switchPitch = 44, 24
+	const captionedPitch, switchPitch = 40, 22
 	y := label.Rect.Y
 	for _, row := range []struct {
 		name, title, text string
@@ -139,6 +139,7 @@ func nanolatheOptionsPage(window *gui.Window) error {
 	}{
 		{"NRENDER", "Renderer", "Classic|Modern", 2},
 		{"NFPS", "FPS cap (Modern)", "30|60|120", 3},
+		{"NSIDEBAR", "Expanded sidebar", "Off|On", 2},
 	} {
 		caption, control := label, button
 		caption.Name, caption.SourceName, caption.Text = row.name+"LABEL", row.name+"LABEL", row.title
@@ -150,8 +151,7 @@ func nanolatheOptionsPage(window *gui.Window) error {
 	}
 	// The Enhanced presentation switches (DESIGN_GPU_RENDERER §30). Glow keeps
 	// its home in the display block; the other five are presentation values.
-	// The modern executor is their only consumer — classic composes the same
-	// pixels whatever they say.
+	// Classic composes the same pixels whatever these switches say.
 	for i, row := range []struct{ name, text string }{
 		{"NGLOW", "Glow: Off|Glow: On"},
 		{"NWATER", "Water: Off|Water: On"},
@@ -199,6 +199,7 @@ func (g *gameShell) syncNanolatheOptions() {
 	// The six Enhanced switches. Glow reads the display block; the other five
 	// read the presentation block (DESIGN_GPU_RENDERER §30).
 	optionsPanel.SetStageAt(optionsPanel.Index("NGLOW"), boolInt(g.display.Glow != 0))
+	optionsPanel.SetStageAt(optionsPanel.Index("NSIDEBAR"), boolInt(g.presentation.ExpandedSidebar != 0))
 	p := g.presentation
 	for _, sw := range nanolatheEffectSwitches(&p) {
 		optionsPanel.SetStageAt(optionsPanel.Index(sw.name), boolInt(*sw.value != 0))
@@ -225,6 +226,8 @@ func (g *gameShell) syncNanolatheFPSStage() {
 func (g *gameShell) activateNanolatheOption(name string) bool {
 	p := g.presentation
 	switch name {
+	case "NSIDEBAR":
+		p.ExpandedSidebar = g.retailOptionsStage(name, 2, boolInt(p.ExpandedSidebar != 0))
 	case "NRENDER":
 		stage := g.retailOptionsStage(name, 2, boolInt(p.Renderer == "modern"))
 		p.Renderer = "classic"

@@ -1147,6 +1147,116 @@ selection and health, projectiles, explosions, gadgets, squad overlays. The
 compositor is DESIGN_PRESENTATION_CLIENT's; this document owns the gadget
 layer's contents `[07 §6]` `[03 §1]`.
 
+#### Modern expanded sidebar prototype
+
+This is a user-requested presentation extension, not retail evidence. Classic
+keeps the single authored command window and the unused lower rail described
+by [07 R-HUD-05]. Modern can use that rail for additional controls when the
+framebuffer is tall enough. World zoom does not change the available UI pixels.
+The Nanolathe options page's **Expanded sidebar** switch enables this layout.
+It defaults on, persists in `presentation.expandedSidebar`, and previews through
+the live shell with the page's ordinary Cancel, Undo and Restore transactions.
+Off restores the authored single page even when the surface has spare height.
+
+The modern view partitions resolved build pages into complete authored rows.
+Rows retain button identities, artwork, horizontal geometry, empty slots and
+internal spacing. They form one sequence in authored page and vertical row
+order, rather than a list reconstructed from build membership. Each visible
+page takes as many complete rows as fit after reserving tabs, page navigation,
+orders and the common command footer. There is no fixed six- or twelve-item
+limit: an ordinary two-column GUI can show eight or ten items when four or
+five rows fit. The last page stops at the sequence end without repeating rows
+from its beginning. Trailing template-only rows from each source page do not
+contribute to pagination; holes before or beside real product records retain
+their authored positions. Navigation, orders and footer positions reserve the
+same build-area height on every visible page, including a partially filled last
+page. A builder whose entire row sequence fits uses only that sequence's height.
+Additional orders remain above the normal bottom command
+buttons, preserving the Orders page's authored gap before that block.
+
+Visible page numbering is presentation state, independent of the authored GUI
+page numbers and committed unit page bits. Page zero selects Orders while
+displaying the remembered visible build page. Positive pages select partitions
+of the row sequence; Count includes Orders. Arrow buttons cycle among visible
+build pages, comma/period also visit Orders, and digit d selects visible page
+d−1 if it exists. The existing SwitchAlt gate still chooses paging versus squad
+recall. BUILD returns to the remembered visible build page. These navigation
+actions update the view and its cue without submitting simulation commands.
+
+Resizing repartitions the rows and selects the new page containing the previous
+first visible authored row. A changed builder or externally changed authored
+page seeds the view from that source page. Switching to Classic or disabling
+expansion discards this local state and restores ordinary authored paging.
+Layouts whose rows, navigation and bottom commands cannot be separated and
+combined safely retain the original single page.
+
+The mod boundary is explicit:
+
+| Authored by assets | Owned by engine code |
+|---|---|
+| `.GUI` gadget names, rectangles, activity, labels, shortcuts, associations and font choices | Command-window selection, command interpretation, retained pointer service and page navigation |
+| GAF button and panel artwork, including dimensions | Sidebar/minimap/world regions, screen-edge anchoring and modern block placement |
+| Side-data interface names, fonts, colours and readout anchors | Dynamic selection, command availability, queue counts and resource text |
+| Numbered GUI pages and download-menu placements | Resolving physical/generated windows and preserving their product identities |
+
+These responsibilities follow [02 §6], [07 §4], [07 §6] and
+[07 R-HUD-03 §6]. The extension uses resolved windows through the existing VFS;
+it neither replaces mod art nor derives pages by slicing the combined build
+membership list. Sparse and reordered download placements retain their authored
+slots. A layout the prototype cannot compose safely falls back to the original
+single-page UI; this is not a promise of support for arbitrary replacement GUIs.
+Adaptive rows require consistent row height and pitch, compatible column slots,
+and matching navigation/footer geometry across the source build pages. A row
+may omit a column or repeat a record without changing its placement. The first
+source page supplies the spacing skeleton even when a visible page starts on
+a shorter source page; each gadget still uses its own source art and font.
+In particular, the prototype accepts button/font pages with controls and art
+contained in the rail. Bounds include every artwork state's visible extent
+without changing the authored hit rectangle; a border wider than the button
+can still fit. Linked controls, editors, sliders, unsupported widget
+kinds and art that spills into the world retain the original UI. Definitions
+with a custom `<unit>0.GUI` also retain the original path: that pre-existing
+orders-page support is outside this prototype.
+
+The composed window keeps source artwork and font lookup per gadget. Matching
+order groups share the single command latch; unrelated associations remain
+separate per source block. Only repeated semantic command
+and navigation controls are omitted; product records and empty slots are not
+deduplicated. Quickkeys retain source record precedence among displayed
+controls. The layout caches source definitions, surface, visible and authored
+page state, and the transport capability that chooses LOAD versus BLAST.
+
+Drawing, hit testing, hover cards and retained pointer/keyboard service must
+share the composed geometry. Source-window identity must survive composition
+for font and artwork resolution. Resize, page/selection change and renderer
+switch must release stale pointer capture. No composed window may mutate cached
+source windows, committed frames, catalogs or simulation state.
+
+Verification: authored synthetic layouts exercise translated activation,
+source identity, unsupported-shape fallback and capture changes; retail checks
+exercise physical and generated pages. GPU captures review the expanded rail
+and compare classic and short modern surfaces against their previous pixels.
+The row-paging checks include partial source pages, non-overlapping navigation,
+last-page behavior, resize anchoring and unchanged-frame persistence. GPU
+captures verify intermediate capacities and source artwork across page
+boundaries. Both options-panel captures fit the caption and Off/On control at
+640×480; transaction checks cover live preview, persistence, Cancel, Undo and
+Restore.
+
+The row prototype's stock ARM captures show eight items at 1280×780, ten at
+1280×844, twelve at 1280×908 and eighteen at 1920×1080. Advancing the eight-item
+view shows the next eight records. A loose GUI override that swaps two build
+buttons retains that order across the source-page boundary. Classic at
+1920×1080 and short Modern at 640×480 match the pre-prototype baseline pixels.
+These sizes describe the checked stock layout, not fixed engine thresholds.
+The empty-page regression capture at 1280×844 verifies that Next wraps after
+the populated pages. At 1280×908, the first and partially filled final page
+render identical pixels throughout the navigation/orders/footer region.
+
+Frozen-frame GPU timing was unavailable during prototype verification: the
+baseline Metal profiling path failed on both attempts before the comparison
+reached this prototype.
+
 ### 3.4 Screens, dispatch and preferences (C16…C18)
 
 **C16 — the front-end subset is resource-driven.** `mainmenu.gui`, `single.gui`,
@@ -1248,10 +1358,11 @@ end uses the original options background; battle uses the game's tiled window ba
 BUTTONS0 and stagebuttn2/3 from the game assets supply the buttons and controls.
 No retail asset is copied into the repository or changed on disk.
 
-The page contains Renderer (Classic / Modern) and FPS cap (Modern)
-(30 / 60 / 120), each with a caption, then six two-stage switches whose stage
-text carries their own name: Glow, Water, Lights, Metal, Heat and Marks. The two
-captioned rows use a tight caption-plus-control pitch and the six switches a
+The page contains Renderer (Classic / Modern), FPS cap (Modern)
+(30 / 60 / 120), and Expanded sidebar (Off / On), each with a caption, then six
+two-stage switches whose stage text carries their own name: Glow, Water, Lights,
+Metal, Heat and Marks. The three captioned rows use a tight
+caption-plus-control pitch and the switches a
 narrower one, so the page fits the in-battle column as well as the front-end
 one without reaching Restore Defaults or Undo Changes.
 
@@ -1269,6 +1380,8 @@ block, which the host polls each update. Classic presents identically whatever
 they say. The same five toggle from the message line as `+water`, `+lights`,
 `+finish`, `+heat` and `+marks`, beside the existing `+glow`, each persisting
 its value the way the display-bit commands do.
+Expanded sidebar selects the modern composition described in §3.3 and remains
+independent of the renderer choice; Classic always uses the authored page.
 
 Edits preview immediately. OK saves the presentation block with the existing
 settings transaction; Cancel restores the entry values, Undo restores this

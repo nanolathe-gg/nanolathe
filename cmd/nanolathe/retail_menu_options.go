@@ -1317,7 +1317,7 @@ func (g *gameShell) setRetailShadowBits(on bool) {
 // handler that consumes the fired result [07 R-WGT-01 §3].
 func retailOptionsCue(key string) string {
 	switch key {
-	case "nanolathe", "nrender", "nfps",
+	case "nanolathe", "nrender", "nfps", "nsidebar",
 		"nglow", "nwater", "nlights", "nfinish", "nheat", "nmarks",
 		"sound", "music", "speeds", "visuals", "prev",
 		"restore", "undo",
@@ -1345,7 +1345,7 @@ func (g *gameShell) activateRetailOptionsGadget(name string) bool {
 	// precedes them all, as it does on the screens frontendCue serves.
 	g.playMenuCue(retailOptionsCue(retailOptionsCueKey(name)))
 	switch name {
-	case "NRENDER", "NFPS", "NGLOW", "NWATER", "NLIGHTS", "NFINISH", "NHEAT", "NMARKS":
+	case "NRENDER", "NFPS", "NGLOW", "NWATER", "NLIGHTS", "NFINISH", "NHEAT", "NMARKS", "NSIDEBAR":
 		return g.activateNanolatheOption(name)
 	case "NANOLATHE", "SOUND", "MUSIC", "SPEEDS", "VISUALS":
 		page, _ := retailOptionsPageKey(name)
@@ -1708,6 +1708,8 @@ func retailOptionsCueKey(name string) string {
 		return "nrender"
 	case "NFPS":
 		return "nfps"
+	case "NSIDEBAR":
+		return "nsidebar"
 	case "NGLOW":
 		return "nglow"
 	case "NWATER":

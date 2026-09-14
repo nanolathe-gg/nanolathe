@@ -29,6 +29,14 @@ import (
 // every presentation and input caller [07 §6][07 §9].
 func (h *retailBattleHUD) windowForRequired(b *battleSession, f *frame.Frame) (selected *gui.Window, art *formats.GAF, failure error) {
 	defer func() { h.commandWindowInput.open(b, f, selected) }()
+	selected, art, failure = h.authoredWindowForRequired(b, f)
+	if failure == nil {
+		selected = h.expandedSidebarWindow(b, f, selected, art)
+	}
+	return
+}
+
+func (h *retailBattleHUD) authoredWindowForRequired(b *battleSession, f *frame.Frame) (*gui.Window, *formats.GAF, error) {
 	// Cache resolved GUI/model once instead of reparsing on draw/click [ON-05 1]
 	// Name selection is data-driven with paging: builder's page bits select guis/<unit><page>.gui [R-P0-03][07 §9] C10
 	name := ""
