@@ -3,14 +3,76 @@ package gpurender
 import (
 	"bytes"
 	"fmt"
+	"testing"
+
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
-	"testing"
 )
 
 func TestAircraftShadowShaderCompiles(t *testing.T) {
 	if _, err := newAircraftShadowShader(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// aircraftShadowCommitFixture is one eligible aircraft and the atlas region its
+// silhouette occupies, placed well inside the fixture's clip rectangle.
+func aircraftShadowCommitFixture() (*drawlist.ModelGeometry, modelDirectRegion) {
+	g := directSubject(30, 30, 20, 8)
+	g.AircraftShadowHeight, g.AircraftShadowScale = 200, 1
+	g.Shadow = &drawlist.ModelGeometry{
+		Eligible: true, KeyPlane: true, Silhouette: true,
+		Width: 20, Height: 8, AnchorX: 30, AnchorY: 36, Scale: 1,
+	}
+	return g, modelDirectRegion{x: 4, y: 4, bounds: modelWorldBounds(g), ok: true}
+}
+
+// The commit runs once per aircraft per frame, so it allocates nothing. Binding
+// a sub-image view of the page cost one *ebiten.Image and one entry in the
+// page's sub-image cache for every rectangle asked for, and a moving aircraft
+// asks for a new rectangle every frame; the index order of its one quad was
+// built per aircraft as well (§34, §13 "CPU/allocation policy").
+func TestAircraftShadowCommitAllocatesNothing(t *testing.T) {
+	r, _ := schedulerFixture(t)
+	g, region := aircraftShadowCommitFixture()
+	const aircraft = 8
+	commit := func() {
+		r.sched.resetFrame(64, 64)
+		for i := 0; i < aircraft; i++ {
+			if !r.commitAircraftShadow(g, region) {
+				t.Fatal("the commit declined an eligible aircraft")
+			}
+		}
+	}
+	// The scheduler sizes its pooled batch storage from the previous segment,
+	// so the steady state is what this measures.
+	for i := 0; i < 4; i++ {
+		commit()
+	}
+	if n := testing.AllocsPerRun(20, commit); n != 0 {
+		t.Fatalf("committing %d aircraft allocated %v times, want 0", aircraft, n)
+	}
+}
+
+// Every aircraft on one page now binds the same images, so the frame's aircraft
+// shadows compile into ONE device run instead of one per subject: distinct
+// sub-image views were distinct bindings and split the batch (§34).
+func TestAircraftShadowCommitsShareOneRun(t *testing.T) {
+	r, _ := schedulerFixture(t)
+	g, region := aircraftShadowCommitFixture()
+	r.sched.resetFrame(64, 64)
+	const aircraft = 4
+	for i := 0; i < aircraft; i++ {
+		if !r.commitAircraftShadow(g, region) {
+			t.Fatal("the commit declined an eligible aircraft")
+		}
+	}
+	runs := 0
+	for i := 0; i < r.sched.nphase; i++ {
+		runs += len(r.sched.phases[i].batch[schedDest].runs)
+	}
+	if runs != 1 {
+		t.Fatalf("%d aircraft compiled %d runs, want 1", aircraft, runs)
 	}
 }
 

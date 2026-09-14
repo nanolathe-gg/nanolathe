@@ -298,7 +298,7 @@ func (c *Client) collectDrawPolysLaneProjected(draw *presentationrender.UnitDraw
 			if c.recordModelGeometry {
 				poly.normal = modelLightingNormal(piece.WorldVertices, pr.VertexIndices)
 				if kind == modelCursorUnit && texFrame != nil {
-					poly.material = modelTextureMaterial(pr.TextureName)
+					poly.material = ref.materialAnnotation(pr.TextureName)
 				}
 			}
 			// The live-piece invocation is the separate unshaded renderer entry.
@@ -405,7 +405,13 @@ func (c *Client) resolveModelTexture(name string) (texRef, bool) {
 	if c == nil {
 		return texRef{}, false
 	}
-	return resolveTextureRef(c.texIndex, c.logoIndex, c.modelNameKey(name))
+	// The name key is already the memoized lowercase spelling the annotation
+	// table is keyed on, so the finish costs one map probe here and nothing per
+	// face (DESIGN_GPU_RENDERER §29.1).
+	key := c.modelNameKey(name)
+	ref, ok := resolveTextureRef(c.texIndex, c.logoIndex, key)
+	ref.material, ref.materialGen = materialForKey(key)
+	return ref, ok
 }
 
 // modelExtent measures the composition image from the collected faces: retail

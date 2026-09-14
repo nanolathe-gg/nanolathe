@@ -5,29 +5,29 @@ import (
 	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/palette"
-	"os"
 )
 
 // Renderer is the modern (GPU) executor (docs/DESIGN_GPU_RENDERER.md §2.3,
 // §11.2, §11.5, §13.3). It owns the palette table atlas, the scene atlas, the
-// true-colour composite surface Execute returns, the read surface the fog run
-// copies into, and the compiled passes. It implements drawlist.Sink, so Execute
-// replays a recorded List straight through it. Every device resource lives here,
-// never on the client [I6].
+// true-colour composite surface Execute returns, the read surface the layers
+// that sample the composite copy into (readcopy.go), and the compiled passes. It
+// implements drawlist.Sink, so Execute replays a recorded List straight through
+// it. Every device resource lives here, never on the client [I6].
 //
 // The Sink methods compile rather than draw: each appends its command's clipped
 // rectangle, class and vertices to the phase scheduler (schedule.go), and Execute
-// submits the phases after Replay returns. A barrier — a carrier/child group, a
-// model subject the slot atlas could not fit, the clear and the Expand marker —
-// submits everything pending first, so those keep their places in record order
-// (C-G3). The fog composite is not one of them: it compiles as an ordinary
-// destination command over the visible fog region.
+// submits the phases after Replay returns. A barrier — the clear, the Expand
+// marker, a world-region change, the glow resolve and every layer that reads the
+// composite it rewrites — submits everything pending first, so what follows it
+// observes the composite in record order (C-G3). The model lane is not one of
+// them: a subject, its shadow and the fallback a subject no atlas page could hold
+// all compile into the batch like any other family (§22), and the fog composite
+// compiles as an ordinary destination command over the visible fog region, its
+// read copy taken by the scheduler at submission (§13.3).
 type Renderer struct {
-	// effectEnv holds the construction-time environment overrides and
-	// effects/effectsSet the last player selection SetEffects applied (§30).
-	effectEnv
+	// effects is the last player selection SetEffects applied (§30). Every
+	// per-family switch below is set from it and from nothing else.
 	effects          drawlist.Effects
-	effectsSet       bool
 	materialsEnabled bool
 	scorchEnabled    bool
 	scorchShader     *ebiten.Shader
@@ -46,8 +46,10 @@ type Renderer struct {
 	// surfaces[0] is the true-colour composite the whole frame is drawn into and
 	// the image Execute returns: every source index is resolved through PAL as it
 	// is written, so there is no expansion pass (C-G8 as amended, §13.3).
-	// surfaces[1] holds the read copy for fog, Enhanced water and blast distortion. Each run's
-	// destination region is copied here just before the run reads it.
+	// surfaces[1] holds the read copy every layer that samples the composite it
+	// rewrites shares: fog, the ordered lens, the ground-light pools and the
+	// blast and plume refraction. Only the region the batch will actually sample
+	// is copied here, just before the batch reads it (readcopy.go).
 	surfaces [2]*ebiten.Image
 	// placeholder backs an image slot no op in a run requested, for the case
 	// where no palette (and so no table atlas) has been installed.
@@ -146,8 +148,9 @@ type Renderer struct {
 	distortion     worldDistortion
 	heat           treeHeat
 
-	// modelDirect is the PROTOTYPE direct model lane (model_direct.go): faces
-	// drawn straight onto the composite instead of through the slot stage.
+	// modelDirect is the model lane (model_direct.go), the modern executor's ONE
+	// model path: faces triangulated from the packet's projected corners onto a
+	// per-frame atlas page, then commits resolved onto the composite (§22).
 	modelDirect modelDirectLane
 }
 
@@ -197,28 +200,16 @@ func (r *Renderer) SetDisplayPalette(p [256][4]byte) {
 // drawing family guards its own resources; callers report the initialization
 // error before attempting a frame.
 func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
-	// The three environment overrides are read once, here, and then AND-ed with
-	// the player's switches on every SetEffects (§29.2, §30). Reading them at
-	// construction is what lets a developer's `…=0` keep a family off no matter
-	// what the options page later selects.
-	env := effectEnv{
-		materials:  os.Getenv("NANOLATHE_MODEL_MATERIALS") != "0",
-		scorch:     os.Getenv("NANOLATHE_SCORCH") != "0",
-		metalGlint: os.Getenv("NANOLATHE_METAL_GLINT") != "0",
-	}
 	r := &Renderer{
-		effectEnv:        env,
-		materialsEnabled: env.materials,
-		scorchEnabled:    env.scorch,
-		metalGlint:       env.metalGlint,
-		tables:           uploadTables(pal),
-		tileAtlases:      make(map[tileAtlasKey]*tileAtlas),
-		gafImages:        make(map[*formats.GAFFrame]*ebiten.Image),
-		copyIdx:          [6]uint32{0, 1, 2, 1, 2, 3},
+		tables:      uploadTables(pal),
+		tileAtlases: make(map[tileAtlasKey]*tileAtlas),
+		gafImages:   make(map[*formats.GAFFrame]*ebiten.Image),
+		copyIdx:     [6]uint32{0, 1, 2, 1, 2, 3},
 	}
-	// Temporary prototype comparison; no saved setting (GPU design §25.2).
-	r.SetDynamicBlastDistortion(os.Getenv("NANOLATHE_DYNAMIC_BLAST") != "0")
-	r.SetExplosionGroundFlash(os.Getenv("NANOLATHE_EXPLOSION_GROUND_FLASH") != "0")
+	// Every Enhanced family starts on, which is what each player switch also
+	// defaults to (§30). The host applies the player's selection through the
+	// same single entry point on its first present.
+	r.SetEffects(drawlist.AllEffects())
 	if pal != nil {
 		r.displayPalette = pal.Base
 	}
@@ -307,12 +298,12 @@ func (r *Renderer) Execute(list *drawlist.List, w, h int) *ebiten.Image {
 	r.worldW, r.worldH = r.w, r.h
 	r.modelPrep.reset()
 	defer r.modelPrep.reset()
-	// Every eligible subject of the frame is rasterized into the slot atlas
-	// before Replay commits any of them, so the model stages cost a fixed
-	// number of draws instead of one set per subject (§11.2). The frame's
-	// attached-unit groups then compose over the shared staging atlas, ordered by
-	// destination, so their cost is a fixed handful of passes rather than three
-	// per group (model_stage.go).
+	// These prepare passes walk the whole list before Replay commits any of it,
+	// so each layer's device cost is a fixed handful of passes rather than one
+	// set per subject (§11.2). prepareModelDirect is the largest: every eligible
+	// subject and shadow of the frame, an attached-unit group in ONE region, is
+	// rasterized onto the lane's atlas pages in two passes over one vertex batch
+	// before Replay commits any of them (§22).
 	r.prepareBattleLighting(list)
 	r.reflections.resetFrame()
 	r.prepareBlastDistortion(list)

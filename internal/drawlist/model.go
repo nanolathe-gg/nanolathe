@@ -54,8 +54,6 @@ type ModelFallbackReason uint8
 
 const (
 	ModelFallbackNone ModelFallbackReason = iota
-	ModelFallbackRevealOrOutline
-	ModelFallbackWaterlineOrDigger
 	ModelFallbackStaging
 	ModelFallbackNoBodyCommit
 )
@@ -175,8 +173,11 @@ const (
 //
 // A zero Body means "not reusable" and is the value of every packet whose raster
 // inputs the recorder cannot prove stable: the direct lanes, children, a shadow
-// whose subject has no retained body, and any retained body carrying a reveal,
-// an outline or a live lane this frame.
+// whose subject has no retained body, and a feature the recorder projects per
+// frame. The key names the retained CACHED lane alone: a keyed packet may also
+// carry a reveal, an outline or a live lane this frame, which an executor
+// composes per frame after that lane (they follow the cached lane in retail's
+// order whether or not the lane was replayed), so none of them clears the key.
 type ModelCacheKey struct {
 	Body         uint64
 	Revision     uint64

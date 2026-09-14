@@ -93,9 +93,9 @@ type battleLighting struct {
 	recordW, recordH float32
 }
 
-// SetBattleLighting controls the prototype for capture comparisons. It changes
-// only this executor's presentation; normal Enhanced rendering enables it.
-func (r *Renderer) SetBattleLighting(on bool) { r.lighting.disabled = !on }
+// setBattleLighting is the executor gate the player's Lighting switch drives
+// (§30). It changes only this executor's presentation.
+func (r *Renderer) setBattleLighting(on bool) { r.lighting.disabled = !on }
 
 // prepareBattleLighting gathers explicitly classified, visible emitter art
 // before any model is rasterized. Smoke and generic bloom flags are never
@@ -492,20 +492,34 @@ func packBattleLight(rgb [3]float32) float32 {
 }
 
 // modelFaceLight evaluates a flat face at its physical centroid. Heights never
-// use the wrapping composition key; the doubled raster changes XY only.
+// use the wrapping composition key; the doubled raster changes XY only. The
+// centroid and the evaluation are separate so a retained lane can keep the
+// one and repeat the other (model_retain.go) through the same arithmetic.
 func (r *Renderer) modelFaceLight(f *drawlist.ModelFace) float32 {
 	d := &r.modelDirect
 	if d.lightSources.count == 0 || f.Normal == [3]float32{} || len(f.Vertices) == 0 {
 		return 0
 	}
-	var x, y, h float32
+	x, y, h := modelFaceCentre(f)
+	return d.lightAt(x, y, h, f.Normal)
+}
+
+// modelFaceCentre is a face's mean corner in raster-local pixels and its mean
+// physical height.
+func modelFaceCentre(f *drawlist.ModelFace) (x, y, h float32) {
 	for _, v := range f.Vertices {
 		x += float32(v.X)
 		y += float32(v.Y)
 		h += v.Height
 	}
 	inv := 1 / float32(len(f.Vertices))
-	return packBattleLight(d.lightSources.irradiance(d.lightX+x*inv*d.lightScale, d.lightY+y*inv*d.lightScale, d.lightHeight+h*inv, f.Normal, false))
+	return x * inv, y * inv, h * inv
+}
+
+// lightAt packs the subject's chosen sources' irradiance at a raster-local
+// centroid (x, y) and relative height h for a face of normal n.
+func (d *modelDirectLane) lightAt(x, y, h float32, n [3]float32) float32 {
+	return packBattleLight(d.lightSources.irradiance(d.lightX+x*d.lightScale, d.lightY+y*d.lightScale, d.lightHeight+h, n, false))
 }
 
 const battleLightShaderSource = `

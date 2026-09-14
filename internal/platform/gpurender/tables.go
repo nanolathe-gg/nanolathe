@@ -13,7 +13,10 @@ import (
 // the difference is the whole point of C-G4/C-G8:
 //
 //   - PAL is the colour table: each texel the actual RGB of that index with alpha
-//     forced opaque. The expansion pass reads a colour from it (C-G8).
+//     forced opaque. Every fragment that writes the composite resolves its index
+//     through this row as it writes, which is the retail composite's own final
+//     lookup done per fragment instead of once per frame in an expansion pass
+//     (C-G8 as amended, §13.3).
 //   - ALP, LHT, SHD, Gray and Blue are index→index remap tables. Their values are
 //     palette indices, so each is stored with the index byte in the red channel
 //     and G/B/A carrying no meaning (C-G4).
@@ -22,8 +25,8 @@ import (
 //
 // Every table is packed into ONE 256-wide RGBA8 image at fixed row offsets, so a
 // shader that needs any of them binds a single source image and leaves the other
-// three Ebitengine image slots to the scene atlas, the phase snapshot and the
-// model slot atlas (§11.2 "One table atlas"). The layout is:
+// three Ebitengine image slots to the scene atlas, the model lane's atlas pages
+// and the terrain tile atlas (§11.2 "One table atlas", §22). The layout is:
 //
 //	rows   0..255  ALP    texel (col=dst, row=src) = Alpha[src*256 + dst]
 //	row      256   PAL    texel (col=index)        = the index's RGB, alpha 255
@@ -34,19 +37,14 @@ import (
 //
 // A shader therefore addresses one entry as (index, tableRowX + row); the row
 // base rides the vertex lanes, so no draw needs a uniform (§11.2 "Allocation
-// policy"). The per-table images below are kept beside the atlas because the
-// model rasterization passes and the fog pass bind single tables directly.
+// policy"). The atlas is the ONLY table image: every pass that once bound a
+// single table now addresses it by row, so no per-table texture is uploaded.
 type tables struct {
-	// atlas is the packed table image described above (§11.2). It is the only
-	// image the expansion and the two scene passes bind; the single-table images
-	// below serve the model rasterization passes and the fog pass, which bind one
-	// table directly.
+	// atlas is the packed table image described above (§11.2). Every pass that
+	// reads a palette table binds it, which is what frees the other three
+	// Ebitengine image slots for the scene atlas, the model lane's atlas pages
+	// and the terrain tile atlas.
 	atlas *ebiten.Image
-	alpha *ebiten.Image // PALETTE.ALP, 256×256, index in red (C-G4)
-	light *ebiten.Image // PALETTE.LHT, 256×32, index in red (C-G4)
-	shade *ebiten.Image // PALETTE.SHD, 256×32, index in red (C-G4)
-	gray  *ebiten.Image // GRAY TABLE, 256×1, index in red (C-G4)
-	blue  *ebiten.Image // BLUE TABLE, 256×1, index in red (C-G4)
 }
 
 // The table atlas row offsets. They are shader constants as well as Go
@@ -65,22 +63,15 @@ const (
 	tableAtlasH  = 323
 )
 
-// uploadTables builds every palette texture from pal. It is called once per
-// renderer. A nil pal yields nil handles; the caller guards on tables.atlas
-// before expanding, so a renderer built before the palette is installed simply
-// cannot expand rather than panicking.
+// uploadTables builds the palette table atlas from pal. It is called once per
+// renderer. A nil pal yields a nil handle; the caller guards on tables.atlas
+// before binding it, so a renderer built before the palette is installed simply
+// resolves no index rather than panicking.
 func uploadTables(pal *palette.Tables) tables {
 	if pal == nil {
 		return tables{}
 	}
-	return tables{
-		atlas: uploadTableAtlas(pal),
-		alpha: uploadAlpha(pal),
-		light: uploadLight(pal),
-		shade: uploadShade(pal),
-		gray:  uploadRedTable256x1(&pal.Gray),
-		blue:  uploadRedTable256x1(&pal.Blue),
-	}
+	return tables{atlas: uploadTableAtlas(pal)}
 }
 
 // uploadTableAtlas packs ALP, PAL, SHD, LHT, GRAY and BLUE into one image at the
@@ -111,62 +102,6 @@ func uploadTableAtlas(pal *palette.Tables) *ebiten.Image {
 		}
 	}
 	img := ebiten.NewImage(tableAtlasW, tableAtlasH)
-	img.WritePixels(buf)
-	return img
-}
-
-// uploadAlpha stores PALETTE.ALP as a 256×256 texture with the remapped index in
-// the red channel: texel (x, y) carries Alpha[y*256 + x] (C-G4).
-func uploadAlpha(pal *palette.Tables) *ebiten.Image {
-	buf := make([]byte, 256*256*4)
-	for i := 0; i < 256*256; i++ {
-		buf[i*4+0] = pal.Alpha[i]
-		buf[i*4+3] = 255
-	}
-	img := ebiten.NewImage(256, 256)
-	img.WritePixels(buf)
-	return img
-}
-
-// uploadLight stores PALETTE.LHT as a 256×32 texture (256 indices wide, 32 rows
-// tall) with the remapped index in the red channel: texel (col, row) carries
-// Light[row*256 + col] (C-G4). Light is the brighten-only halo table [03 §4.3.1].
-func uploadLight(pal *palette.Tables) *ebiten.Image {
-	buf := make([]byte, 256*32*4)
-	for i := 0; i < 256*32; i++ {
-		buf[i*4+0] = pal.Light[i]
-		buf[i*4+3] = 255
-	}
-	img := ebiten.NewImage(256, 32)
-	img.WritePixels(buf)
-	return img
-}
-
-// uploadShade stores PALETTE.SHD as a 256×32 texture (256 indices wide, 32 rows
-// tall) with the remapped index in the red channel: texel (col, row) carries
-// Shade[row][col] (C-G4). Shade is the full signed ramp [03 §4.3.2].
-func uploadShade(pal *palette.Tables) *ebiten.Image {
-	buf := make([]byte, 256*32*4)
-	for row := 0; row < 32; row++ {
-		for col := 0; col < 256; col++ {
-			buf[(row*256+col)*4+0] = pal.Shade[row][col]
-			buf[(row*256+col)*4+3] = 255
-		}
-	}
-	img := ebiten.NewImage(256, 32)
-	img.WritePixels(buf)
-	return img
-}
-
-// uploadRedTable256x1 stores a 256-entry index→index table (GRAY or BLUE) as a
-// 256×1 texture with the remapped index in the red channel (C-G4).
-func uploadRedTable256x1(table *[256]byte) *ebiten.Image {
-	buf := make([]byte, 256*4)
-	for i := 0; i < 256; i++ {
-		buf[i*4+0] = table[i]
-		buf[i*4+3] = 255
-	}
-	img := ebiten.NewImage(256, 1)
 	img.WritePixels(buf)
 	return img
 }

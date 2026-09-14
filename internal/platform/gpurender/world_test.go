@@ -1,6 +1,7 @@
 package gpurender
 
 import (
+	"math"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
@@ -208,6 +209,50 @@ func TestLitPointsBrightenEachScreenPixelOnceUnderTheTransform(t *testing.T) {
 	for p, n := range cover {
 		if (p[0] >= 12 || p[1] >= 12) && n > 0 {
 			t.Fatalf("screen pixel %v outside the shrunk block is lit", p)
+		}
+	}
+}
+
+// The resample is the inverse of nearest sampling, at every factor and not only
+// the dyadic ones the fixtures above use (§16.3 "Lit points"). The rule it has
+// to satisfy is a relationship, not a count: a screen pixel is lit exactly when
+// the record point nearest sampling would read for its centre — floor((s+.5)/k)
+// — is one of the batch's points. Selecting the destination pixel with
+// floor(x*k) broke that at a non-dyadic factor: the point the filter keeps for
+// screen pixel s can floor to s-1, so s was claimed by nobody and the halo drew
+// with unlit columns (0.9 lost 60 of 179 columns, 0.8 lost 40, 0.7 lost 23).
+// 0.75 and 0.5 are here because they are the factors that already passed, and
+// must keep passing unchanged.
+func TestLitPointResampleInvertsNearestSamplingAtEveryFactor(t *testing.T) {
+	const block = 40
+	for _, k := range []float32{.9, .8, .7, .75, .5, 1} {
+		r, _ := schedulerFixture(t)
+		r.sched.resetFrame(64, 64)
+		r.worldW, r.worldH = 64, 64
+		r.World(drawlist.WorldSpace{Begin: true, Factor: k, Step: camera.ViewScaleNative, RecordW: 128, RecordH: 128})
+		if r.sched.worldOn != (k != 1) {
+			t.Fatalf("factor %v: transform armed %v", k, r.sched.worldOn)
+		}
+		var pts []drawlist.Point
+		for y := 0; y < block; y++ {
+			for x := 0; x < block; x++ {
+				pts = append(pts, drawlist.Point{X: int32(x), Y: int32(y), Index: 20})
+			}
+		}
+		r.Points(drawlist.Points{Kind: drawlist.PointLit, Points: pts})
+		cover := litCoverage(r, 64, 64)
+		for sy := 0; sy < 64; sy++ {
+			for sx := 0; sx < 64; sx++ {
+				rx := math.Floor((float64(sx) + .5) / float64(k))
+				ry := math.Floor((float64(sy) + .5) / float64(k))
+				want := 0
+				if rx >= 0 && ry >= 0 && rx < block && ry < block {
+					want = 1
+				}
+				if got := cover[[2]int{sx, sy}]; got != want {
+					t.Fatalf("factor %v: screen pixel (%d,%d) lit %d times, want %d (its nearest record point is %v,%v)", k, sx, sy, got, want, rx, ry)
+				}
+			}
 		}
 	}
 }

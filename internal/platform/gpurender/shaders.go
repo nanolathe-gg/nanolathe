@@ -60,13 +60,6 @@ const (
 	// world transform takes when it is not the identity
 	// (docs/DESIGN_GPU_RENDERER.md §16.3 "Sampling").
 	sceneOpTerrain = 4
-	// sceneOpModelCommit copies a resolved model subject out of the resolved
-	// slot plane bound in source 2: premultiplied colour with the subject's
-	// coverage as alpha, so an uncovered texel is the keyed commit's skip and a
-	// partly covered edge texel blends by its coverage — the keyed model body
-	// commit [03 R-REN-03A §5] with the coverage resolve of §17. It is the one
-	// opaque op whose source is already colour.
-	sceneOpModelCommit = 5
 	// sceneOpScaled reproduces the byte writers' integer source mapping for the
 	// scaled GAF blit and the indexed surface blit [07 R-HUD-03 §11]. ColorR/G
 	// are the x numerator and denominator, ColorB/A the y pair, Custom0/1 the
@@ -81,34 +74,49 @@ const (
 	// (docs/DESIGN_GPU_RENDERER.md §13.3 "Fog keeps one read copy"). It is the
 	// only op whose source is already colour, so it resolves no index.
 	sceneOpCopyColor = 8
-	// sceneOpModelDirect is the PROTOTYPE direct model lane's FALLBACK face
-	// fragment (model_direct.go): the flat index in ColorG, or when Custom0 is
-	// set the nearest texel of the model texture page bound in source 2 at the
+	// sceneOpModelDirect is the model lane's FALLBACK face fragment
+	// (model_direct.go): the flat index in ColorG, or when Custom0 is set the
+	// nearest texel of the model texture page bound in source 2 at the
 	// interpolated texel position, dropped when it is the composition
-	// transparent index 1, resolved through PAL and scaled by the interpolated
-	// shade factor in ColorR (§13.2 SHD row).
+	// transparent index 1, resolved through PAL, scaled by the interpolated
+	// shade factor in ColorR (§13.2 SHD row) and lit by Custom2; Custom1 is
+	// the body's opacity, half for a cloaked subject's ALP half-colour
+	// [03 R-COMP-01 §2]. Op 5 is retired.
 	sceneOpModelDirect = 9
 	// sceneOpModelDirectCommit commits one model lane subject from the lane's
 	// 2× colour page bound in source 2: the four texels under the pixel are
 	// box-resolved, colour the mean of the covered ones and alpha their share,
 	// which is §17's coverage resolve done in the commit (§22).
 	sceneOpModelDirectCommit = 10
+	// sceneOpTint composites each opaque source texel over what is already there
+	// as the ALP table's own arithmetic, floor((src + dst)/2) per channel: the
+	// translucent strip blit and the translucent feature body and shadow
+	// [03 §4.3.4][03 R-COMP-01 §2][03 R-FX-02 §2][03 §5.3.1]. The fragment is the
+	// premultiplied half-colour (PAL[src]/2, 1/2) and source-over adds the
+	// destination's other half (§13.3).
+	//
+	// It lives in THIS shader rather than the destination one although it
+	// composites, because its blend is already source-over — the same blend the
+	// opaque families draw under, since an opaque fragment is just the alpha-1
+	// case of it. Ebitengine merges consecutive draws only on identical
+	// destination, sources, shader and blend, so sharing the shader is what lets
+	// a tinted sprite and the opaque writes around it be ONE device run, drawn in
+	// record order by the device's primitive order — the same guarantee C-G3
+	// already relies on for two overlapping opaque writes (§11.2 "The scheduler").
+	// Custom0 set carries the smoke light modulation of §23 in the colour lanes.
+	sceneOpTint = 11
 )
 
 // The destination shader's op selector, carried in Custom3.
 const (
-	// destOpTint composites each opaque source texel over the destination as the
-	// ALP table's own arithmetic, floor((src + dst)/2) per channel: the
-	// translucent strip blit and the translucent feature body and shadow
-	// [03 §4.3.4][03 R-COMP-01 §2][03 R-FX-02 §2][03 §5.3.1]. The fragment is the
-	// premultiplied half-colour (PAL[src]/2, 1/2) and the source-over blend adds
-	// the destination's other half (§13.3).
-	destOpTint = 0
 	// destOpTable scales the destination by one row family's factor: the UI light
 	// rect, the UI shade rect and the lit point batch
 	// [03 §4.3.1][03 R-COMP-02 §5][03 R-FX-01 §4]. The factor k is computed on the
 	// CPU from the LHT/SHD builder arithmetic [03 §4.3.4] and split across ColorR
-	// (min(k,1)) and ColorG (max(k-1,0)) for the scale blend (§13.3).
+	// (min(k,1)) and ColorG (max(k-1,0)) for the scale blend (§13.3). It is this
+	// shader's trailing op, so an unrecognized selector resolves to it. Op 0 is
+	// retired: the ALP strip and feature blit it named moved to the scene shader's
+	// sceneOpTint, because its blend was never distinct from the opaque one.
 	destOpTable = 1
 	// destOpTrail scales the destination by the trail mark's darkening times
 	// a coverage evaluated from the quad's local coordinates: an oval for a
@@ -295,9 +303,6 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 		}
 		p := imageSrc0Origin() + floor(srcPos-imageSrc0Origin()) + vec2(0.5, 0.5)
 		idx = floor(imageSrc3AtFromSrc0Pos(p).r*255.0 + 0.5)
-	} else if op == ` + fmt.Sprint(sceneOpModelCommit) + ` {
-		p := imageSrc0Origin() + floor(srcPos-imageSrc0Origin()) + vec2(0.5, 0.5)
-		return imageSrc2AtFromSrc0Pos(p)
 	} else if op == ` + fmt.Sprint(sceneOpScaled) + ` {
 		// The destination-relative offset rides SrcX/SrcY, so flooring the
 		// interpolated position recovers the byte writer's dx and dy exactly.
@@ -316,8 +321,8 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 		}
 		idx = floor(tex.r*255.0 + 0.5)
 	} else if op == ` + fmt.Sprint(sceneOpModelDirect) + ` {
-		// The direct model lane's fallback (model_direct.go): no key test, no
-		// supersample. Custom0 is 0 flat, 1 textured.
+		// The model lane's fallback (model_direct.go): no key test, no
+		// supersample. Custom0 is 0 flat, 1 textured; Custom1 the opacity.
 		encoded := floor(color.g + 0.5)
 		glint := mod(floor(encoded/256.0), 256.0)
 		finish := floor(encoded/65536.0)
@@ -330,7 +335,7 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 			return vec4(0.0)
 		}
 		albedo := palAt(idx)
-		return vec4(modelFinish(albedo, metalGlint(albedo, battleLit(albedo, color.r, custom.z), glint), finish), 1.0)
+		return vec4(modelFinish(albedo, metalGlint(albedo, battleLit(albedo, color.r, custom.z), glint), finish), 1.0) * custom.y
 	} else if op == ` + fmt.Sprint(sceneOpModelDirectCommit) + ` {
 		// The direct lane's commit: srcPos interpolates the 2× atlas texel of
 		// the pixel, one texel into its block; floor back to the block and
@@ -365,6 +370,21 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 		// The fog run's read copy: the composite is already colour here, so it is
 		// copied through unchanged (§13.3).
 		return vec4(imageSrc0At(srcPos).rgb, 1.0)
+	} else if op == ` + fmt.Sprint(sceneOpTint) + ` {
+		// The ALP families' premultiplied half-colour fragment. Source-over adds
+		// the destination's own half, which is floor((src + dst)/2) per channel up
+		// to the device's rounding [03 §4.3.4](§13.2 ALP row). The key test is the
+		// keyed blit's own: a transparent texel is the byte writer's skip.
+		tex := imageSrc0At(srcPos)
+		if tex.g < 0.5 {
+			return vec4(0.0)
+		}
+		rgb := palAt(floor(tex.r*255.0 + 0.5))
+		if custom.x > 0.5 {
+			// Smoke receives soft light at unchanged coverage, never additive opacity.
+			rgb = min(rgb + (vec3(0.2)+rgb*0.8)*color.rgb, vec3(1.0))
+		}
+		return vec4(rgb*0.5, 0.5)
 	} else {
 		tex := imageSrc0At(srcPos)
 		if tex.g < 0.5 {
@@ -380,9 +400,15 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 // sceneDestShaderSource is the one destination-compositing pass. Source 0 is the
 // scene atlas page (or, for a shadow commit, the model body page), source 1 the
 // table atlas and source 3 the model shadow page. Nothing here samples the
-// destination: the ALP families hand the device a premultiplied half-colour
-// fragment and the row families hand it a scale, and the blend does the
-// arithmetic the tables were generated from [03 §4.3.4](§13.2, §13.3).
+// destination: the remaining ALP families hand the device a premultiplied
+// half-colour fragment and the row families hand it a scale, and the blend does
+// the arithmetic the tables were generated from [03 §4.3.4](§13.2, §13.3).
+//
+// The ALP STRIP and feature blit is no longer one of them: its blend is
+// source-over, which is the opaque families' blend, so it evaluates in the scene
+// shader as sceneOpTint and shares their runs and their stream. What is left
+// here either scales the destination — a different blend — or composites a
+// source the scene shader has no reason to carry.
 //
 // Commands in one batch either have disjoint rectangles or share a blend
 // stream, and a command that must observe one of another stream is a phase
@@ -403,12 +429,6 @@ func palAt(idx float) vec3 {
 
 func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 	op := int(custom.w + 0.5)
-	if op == ` + fmt.Sprint(destOpTable) + ` {
-		// The row families carry their scale k, already split by the CPU into the
-		// part the colour factor can express and the part the alpha factor adds:
-		// the blend forms dst * (min(k,1) + max(k-1,0)) = dst * k (§13.3).
-		return vec4(color.r, color.r, color.r, color.g)
-	}
 	if op == ` + fmt.Sprint(destOpLaneAtlas) + ` {
 		// The lit point plane and the explosion disc atlas. The stored triple is
 		// an integer below 2^24, so every term and every partial sum below is
@@ -502,39 +522,11 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 		}
 		return vec4(palAt(0.0)*cover/4.0*0.5, cover/4.0*0.5)
 	}
-	idx := 0.0
-	if op == ` + fmt.Sprint(destOpTint) + ` {
-		tex := imageSrc0At(srcPos)
-		if tex.g < 0.5 {
-			return vec4(0.0)
-		}
-		idx = floor(tex.r*255.0 + 0.5)
-	} else {
-		local := floor(srcPos - imageSrc0Origin())
-		shadow := imageSrc3AtFromSrc0Pos(imageSrc0Origin() + local + vec2(0.5, 0.5))
-		// The body plane is punched at the body slot's own page coordinates; a
-		// shadow texel outside that slot is uncovered.
-		bp := local + custom.xy
-		cover := 0.0
-		if bp.x >= floor(color.r+0.5) && bp.y >= floor(color.g+0.5) && bp.x < floor(color.b+0.5) && bp.y < floor(color.a+0.5) {
-			cover = imageSrc0At(imageSrc0Origin() + bp + vec2(0.5, 0.5)).a
-		}
-		if shadow.a <= 0.0 || cover >= 1.0 {
-			return vec4(0.0)
-		}
-		// The silhouette is already colour at its coverage, so the half-colour
-		// fragment is half of it (§17).
-		return vec4(shadow.rgb*0.5, shadow.a*0.5)
-	}
-	// The ALP families' premultiplied half-colour fragment: source-over adds the
-	// destination's own half, which is floor((src + dst)/2) per channel up to the
-	// device's rounding [03 §4.3.4](§13.2 ALP row).
-	rgb := palAt(idx)
- if custom.x > 0.5 {
-  // Smoke receives soft light at unchanged coverage, never additive opacity.
-  rgb = min(rgb + (vec3(0.2)+rgb*0.8)*color.rgb, vec3(1.0))
- }
- return vec4(rgb*0.5, 0.5)
+	// destOpTable, the one op left: the row families carry their scale k, already
+	// split by the CPU into the part the colour factor can express and the part
+	// the alpha factor adds, so the blend forms
+	// dst * (min(k,1) + max(k-1,0)) = dst * k (§13.3).
+	return vec4(color.r, color.r, color.r, color.g)
 }
 `
 }

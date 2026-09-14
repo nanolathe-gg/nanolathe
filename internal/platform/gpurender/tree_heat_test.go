@@ -42,9 +42,9 @@ func checkTreeHeatDevicePixels() error {
 		return pix
 	}
 	l := makeList(4)
-	r.SetTreeHeat(false)
+	r.setTreeHeat(false)
 	before := read(&l)
-	r.SetTreeHeat(true)
+	r.setTreeHeat(true)
 	after := read(&l)
 	if bytes.Equal(before, after) || r.modelStats.HeatPlumes != 1 {
 		return fmt.Errorf("heat did not distort background")
@@ -120,8 +120,8 @@ func checkCombinedDistortionDevicePixels() error {
 	l.RecordWorld(drawlist.WorldSpace{})
 	l.RecordExpand()
 	read := func(blast, heat bool) ([]byte, ModelStats) {
-		r.SetBlastDistortion(blast)
-		r.SetTreeHeat(heat)
+		r.setBlastDistortion(blast)
+		r.setTreeHeat(heat)
 		pix := make([]byte, w*h*4)
 		r.Execute(&l, w, h).ReadPixels(pix)
 		return pix, r.ModelStats()

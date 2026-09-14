@@ -20,9 +20,10 @@ import (
 // [03 §4.4][07 §4].
 //
 // ALP-tinted blits, including translucent feature bodies and shadows, and the
-// source-through-LHT BlitLit are implemented in deststage.go. The
-// destination-reading ALP path runs over the phase snapshot, exactly as the
-// classic sink's counterpart reads c.indexed.
+// source-through-LHT BlitLit are implemented in deststage.go. The ALP path
+// composites against the framebuffer through the device blend, and since its
+// blend is source-over — the opaque families' own — it compiles into this file's
+// stream and shares its runs (shaders.go sceneOpTint, §13.3).
 
 // buildGAFFrameImage uploads one GAF frame as a standalone index texture: index
 // in red, opacity flag in green (255 opaque, 0 transparent), alpha opaque so

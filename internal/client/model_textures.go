@@ -39,6 +39,24 @@ type texRef struct {
 	entry *formats.GAFEntry // team/animated: full frame list
 	cum   []int             // animated: cumulative delay ticks per frame
 	total int               // animated: full-cycle length in ticks
+	// material is the authored finish annotation of this texture name, read
+	// once when the reference is resolved so the per-face compose path is a
+	// field read rather than a lowercase and a map probe
+	// (DESIGN_GPU_RENDERER §29.1). materialGen is the annotation generation it
+	// was read under; a later install makes the byte stale and the compose path
+	// resolves that face's name itself. A zero value is stale by construction,
+	// because installing the embedded table leaves generation one.
+	material    uint8
+	materialGen uint64
+}
+
+// materialAnnotation is the finish this reference carries while the annotation
+// it was read from is still installed, and a fresh resolution otherwise.
+func (r *texRef) materialAnnotation(texture string) uint8 {
+	if r.materialGen == materialGeneration.Load() {
+		return r.material
+	}
+	return modelTextureMaterial(texture)
 }
 
 // modelTextureCursor binds the generic presentation cursor to decoded GAF

@@ -52,8 +52,8 @@ import (
 // constants; they were tuned by eye against the battle benchmark and the M2/M5
 // captures.
 const (
-	// glowLineWidth is the width in screen pixels of a stroke's emissive quad
-	// at the native view scale; it scales with the world transform.
+	// glowLineWidth is the width of a stroke's emissive quad in WORLD pixels;
+	// it is scaled to screen pixels by the frame's view scale.
 	glowLineWidth = 4.0
 	// glowGain multiplies every emission before the blur.
 	glowGain = 1.0
@@ -72,10 +72,24 @@ const (
 	glowNearWeight = 0.65
 	glowFarWeight  = 0.5
 	// glowTapCount is the number of taps on each side of the centre of the
-	// separable blur, and glowSigma its standard deviation in texels of the
-	// octave being blurred.
+	// separable blur, and glowSigma its standard deviation in steps of the tap
+	// spacing the blur is drawn with.
 	glowTapCount = 4
 	glowSigma    = 2.0
+	// glowOctaveNear and glowOctaveFar are the two blurred octaves' shrink
+	// factors from the frame: a near texel is four framebuffer pixels across and
+	// a far texel eight.
+	glowOctaveNear = 4.0
+	glowOctaveFar  = 8.0
+	// glowNearSigmaWorld is the near octave's blur radius in WORLD pixels. The
+	// halo is sized in world pixels, not screen pixels, because everything it
+	// surrounds — the beam, the sprite, the flash disc — is drawn at the frame's
+	// view scale (§16.3): a halo fixed in screen pixels is half as wide, relative
+	// to the units it comes from, at the 2x step as at 1x, and changes size under
+	// the wheel. The far octave is twice this, as it is twice the near octave's
+	// texel. At the native view scale this is the eight framebuffer pixels the
+	// layer was tuned at, so a 1x frame composes exactly as it did.
+	glowNearSigmaWorld = glowSigma * glowOctaveNear
 	// glowRunVertexLimit bounds one device draw, as the scheduler's runs are.
 	glowRunVertexLimit = schedRunVertexLimit
 )
@@ -114,6 +128,11 @@ type glowLayer struct {
 	// resolved is set once this frame's resolve has run, so a frame with both
 	// a fog composite and a world-region close resolves once.
 	resolved bool
+	// viewScale is the frame's screen pixels per world pixel, recorded as the
+	// sources append so the resolve sizes the blur the same way the sources
+	// sized themselves. Zero means no source appended and is read as the native
+	// view.
+	viewScale float32
 
 	runs  []glowRun
 	verts []ebiten.Vertex
@@ -154,9 +173,31 @@ func (r *Renderer) glowActive() bool {
 	return r.glow.on && r.tables.atlas != nil && r.surfaces[0] != nil
 }
 
+// glowViewScale is the frame's screen pixels per world pixel: the record step
+// the recorder projected the world at, times the live zoom factor the scheduler
+// applies to world geometry (§16.2, §16.3). The terrain record carries the step
+// — the aircraft shadow layer reads it from the same place — and a frame with no
+// terrain is the native view. Every glow source is appended inside the world
+// region, so the transform is armed whenever this is read.
+func (r *Renderer) glowViewScale() float32 {
+	s := float32(r.water.record.Scale.Float()) * r.sched.txf(1)
+	if s <= 0 {
+		return 1
+	}
+	return s
+}
+
+// noteGlowViewScale records the scale a source was appended at, and returns it.
+func (r *Renderer) noteGlowViewScale() float32 {
+	s := r.glowViewScale()
+	r.glow.viewScale = s
+	return s
+}
+
 // resetFrame drops the batch for a new Execute; storage is kept.
 func (g *glowLayer) resetFrame() {
 	g.resolved = false
+	g.viewScale = 0
 	g.runs = g.runs[:0]
 	g.verts = g.verts[:0]
 	g.idx = g.idx[:0]
@@ -205,9 +246,9 @@ func (g *glowLayer) rect(imgs [4]*ebiten.Image, dx0, dy0, dx1, dy1, sx0, sy0, sx
 		col, [4][4]float32{custom, custom, custom, custom})
 }
 
-// glowLine appends a beam or lightning stroke: a quad glowLineWidth screen
-// pixels wide (scaled with the world transform) along the stroke, extended by
-// half its width at both ends so a short stroke keeps its energy.
+// glowLine appends a beam or lightning stroke: a quad glowLineWidth world
+// pixels wide along the stroke, extended by half its width at both ends so a
+// short stroke keeps its energy.
 func (r *Renderer) glowLine(l drawlist.Line) {
 	if !r.glowActive() {
 		return
@@ -215,7 +256,10 @@ func (r *Renderer) glowLine(l drawlist.Line) {
 	s := &r.sched
 	x0, y0 := s.txx(float32(l.X0)+0.5), s.txy(float32(l.Y0)+0.5)
 	x1, y1 := s.txx(float32(l.X1)+0.5), s.txy(float32(l.Y1)+0.5)
-	hw := float32(glowLineWidth) * 0.5 * s.txf(1)
+	// The stroke itself is one record pixel wide, so its halo has to take its
+	// width from the view scale rather than from the stroke: at the 2x step the
+	// free-zoom factor alone is half the screen pixels a world pixel covers.
+	hw := float32(glowLineWidth) * 0.5 * r.noteGlowViewScale()
 	if hw < 1 {
 		hw = 1
 	}
@@ -238,6 +282,7 @@ func (r *Renderer) glowSprite(f *formats.GAFFrame, x, y, clipX, clipY, clipW, cl
 	if !e.ok {
 		return
 	}
+	r.noteGlowViewScale()
 	fw, fh := int(f.Width), int(f.Height)
 	minX, minY := maxInt(clipX, 0), maxInt(clipY, 0)
 	maxX, maxY := minInt(clipX+clipW, r.clipW()), minInt(clipY+clipH, r.clipH())
@@ -262,6 +307,7 @@ func (r *Renderer) glowFlash(cx0, cy0, cx1, cy1 int, sx0, sy0, sx1, sy1 float32)
 	if !r.glowActive() || r.sched.flash.img == nil {
 		return
 	}
+	r.noteGlowViewScale()
 	s := &r.sched
 	r.glow.rect([4]*ebiten.Image{0: s.flash.img, 1: r.tables.atlas, 2: r.surfaces[0]},
 		s.txx(float32(cx0)), s.txy(float32(cy0)), s.txx(float32(cx1)), s.txy(float32(cy1)),
@@ -276,6 +322,7 @@ func (r *Renderer) glowHalo(cx0, cy0, cx1, cy1 int, high, lx0, ly0, lx1, ly1, r2
 	if !r.glowActive() || high <= 0 {
 		return
 	}
+	r.noteGlowViewScale()
 	s := &r.sched
 	r.glow.quad([4]*ebiten.Image{1: r.tables.atlas, 2: r.surfaces[0]},
 		[4]float32{s.txx(float32(cx0)), s.txx(float32(cx1)), s.txx(float32(cx0)), s.txx(float32(cx1))},
@@ -364,24 +411,50 @@ func (r *Renderer) resolveGlow() {
 		r.frameDraws++
 	}
 
-	// 2. Shrink to the two octaves and blur each separably.
+	// 2. Shrink to the two octaves and blur each separably. The tap spacing is
+	// what carries the halo's world-pixel size onto the octaves: the near
+	// octave's kernel has to reach glowNearSigmaWorld world pixels, which is
+	// that many framebuffer pixels times the view scale, and one near texel is
+	// glowOctaveNear framebuffer pixels. The far octave takes the same spacing
+	// on a texel twice as wide, so it stays twice the near halo as it was. At
+	// the native view scale the spacing is exactly one texel, which is the
+	// kernel the layer was tuned with.
+	step := glowBlurStep(g.viewScale)
 	r.glowShrink(g.half, g.source)
 	r.glowShrink(g.quarter, g.half)
-	r.glowBlur(g.quarterB, g.quarter, 1, 0)
-	r.glowBlur(g.quarter, g.quarterB, 0, 1)
+	r.glowBlur(g.quarterB, g.quarter, step, 0)
+	r.glowBlur(g.quarter, g.quarterB, 0, step)
 	r.glowShrink(g.eighth, g.quarter)
-	r.glowBlur(g.eighthB, g.eighth, 1, 0)
-	r.glowBlur(g.eighth, g.eighthB, 0, 1)
+	r.glowBlur(g.eighthB, g.eighth, step, 0)
+	r.glowBlur(g.eighth, g.eighthB, 0, step)
 
 	// 3. Add the octaves back, magnified with linear filtering so the blur's
 	// texels do not show as blocks.
-	r.glowAdd(r.surfaces[0], g.quarter, 4, glowNearWeight)
-	r.glowAdd(r.surfaces[0], g.eighth, 8, glowFarWeight)
+	r.glowAdd(r.surfaces[0], g.quarter, glowOctaveNear, glowNearWeight)
+	r.glowAdd(r.surfaces[0], g.eighth, glowOctaveFar, glowFarWeight)
 	r.modelStats.GlowPasses += 9
 	g.runs = g.runs[:0]
 	g.verts = g.verts[:0]
 	g.idx = g.idx[:0]
 	g.quads = 0
+}
+
+// glowBlurStep is the separable blur's tap spacing, in texels of the octave
+// being blurred, for a frame drawn at viewScale screen pixels per world pixel.
+// It is the one place the halo's world-pixel size becomes screen pixels:
+// glowSigma taps of spacing t cover t × glowOctaveNear × glowSigma framebuffer
+// pixels of the near octave, and that has to be glowNearSigmaWorld × viewScale.
+// A zero or negative scale is the native view.
+//
+// Fetches are nearest, so a spacing below one texel folds taps onto the same
+// texel — the kernel narrows toward the octave's own resolution rather than
+// aliasing, which is the right failure at a zoomed-out view where the halo is
+// already finer than the octave can hold.
+func glowBlurStep(viewScale float32) float32 {
+	if viewScale <= 0 {
+		viewScale = 1
+	}
+	return viewScale * glowNearSigmaWorld / (glowSigma * glowOctaveNear)
 }
 
 // glowShrink halves src into dst with linear filtering: each destination

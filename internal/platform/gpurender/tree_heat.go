@@ -24,8 +24,8 @@ type treeHeat struct {
 	disabled bool
 }
 
-// SetTreeHeat controls the modern prototype for visual comparisons.
-func (r *Renderer) SetTreeHeat(on bool) { r.heat.disabled = !on }
+// setTreeHeat is the second executor gate the Distortion switch drives (§30).
+func (r *Renderer) setTreeHeat(on bool) { r.heat.disabled = !on }
 
 func (r *Renderer) prepareTreeHeat(list *drawlist.List) {
 	d := &r.heat

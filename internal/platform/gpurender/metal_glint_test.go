@@ -48,7 +48,7 @@ func checkMetalGlintDevicePixels() error {
 	}
 	list.RecordExpand()
 	read := func(on bool) []byte {
-		r.SetMetalGlint(on)
+		r.setMetalGlint(on)
 		out := r.Execute(&list, w, h)
 		pixels := make([]byte, w*h*4)
 		out.ReadPixels(pixels)

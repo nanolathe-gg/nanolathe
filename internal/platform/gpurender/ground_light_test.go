@@ -99,7 +99,7 @@ func checkProjectedGroundLightDevicePixels() error {
 		list.RecordSprite(drawlist.Sprite{Frame: art, X: int32(120 * scale), Y: int32(50 * scale), Kind: drawlist.BlitKeyed, Anchored: true, LightingKind: drawlist.SpriteLightingExplosion, WorldHeight: 48 * float32(scale), LightingScale: float32(scale)})
 		list.RecordExpand()
 		read := func(on bool) []byte {
-			r.SetBattleLighting(on)
+			r.setBattleLighting(on)
 			p := make([]byte, w*h*4)
 			r.Execute(&list, w, h).ReadPixels(p)
 			return p
@@ -188,7 +188,7 @@ func checkExplosionGroundFlashDevicePixels() error {
 	}
 	art := &formats.GAFFrame{Width: 12, Height: 12, XOffset: 6, YOffset: 6, Pixels: bytes.Repeat([]byte{230}, 144)}
 	pixel := func(p []byte, x, y int) []byte { return p[(y*w+x)*4 : (y*w+x)*4+4] }
-	read := func(age float32, flash, lighting bool) []byte {
+	read := func(age float32, lighting bool) []byte {
 		var l drawlist.List
 		l.RecordClear()
 		l.RecordTerrain(drawlist.Terrain{Terrain: groundFixtureTerrain(40), Cam: &camera.Camera{}, DstW: w, DstH: h, Scale: camera.ViewScaleNative})
@@ -197,35 +197,65 @@ func checkExplosionGroundFlashDevicePixels() error {
 		l.RecordModel(drawlist.Model{Geometry: directSubject(62, 48, 18, 18, face)})
 		l.RecordLightSource(drawlist.Sprite{Frame: art, X: 105, Y: 65, WorldHeight: 12, LightingScale: 1, LightingSize: 66, LightingKind: drawlist.SpriteLightingExplosion, LightingAge: age, HasLightingAge: true})
 		l.RecordExpand()
-		r.SetExplosionGroundFlash(flash)
-		r.SetBattleLighting(lighting)
+		r.setBattleLighting(lighting)
 		p := make([]byte, w*h*4)
 		r.Execute(&l, w, h).ReadPixels(p)
 		return p
 	}
-	unlit := read(0, true, false)
-	old := read(2, false, true)
-	early := read(2, true, true)
-	late := read(7, true, true)
-	expired := read(12, true, true)
+	unlit := read(0, false)
+	early := read(2, true)
+	late := read(7, true)
+	expired := read(12, true)
 	ground := func(p []byte) byte { return pixel(p, 120, 40)[0] }
-	if !(ground(old) > ground(early) && ground(early) > ground(late) && ground(late) > ground(unlit)) {
-		return fmt.Errorf("terrain flash did not soften/fade: %d %d %d base=%d", ground(old), ground(early), ground(late), ground(unlit))
+	if !(ground(early) > ground(late) && ground(late) > ground(unlit)) {
+		return fmt.Errorf("terrain flash did not fade: %d %d base=%d", ground(early), ground(late), ground(unlit))
 	}
 	if !bytes.Equal(pixel(expired, 120, 40), pixel(unlit, 120, 40)) {
 		return fmt.Errorf("terrain still lit after flash")
 	}
-	for _, p := range [][]byte{early, late, expired} {
-		if !bytes.Equal(pixel(p, 70, 56), pixel(old, 70, 56)) {
-			return fmt.Errorf("terrain flash altered nearby model color")
+	for _, p := range [][]byte{late, expired} {
+		if !bytes.Equal(pixel(p, 70, 56), pixel(early, 70, 56)) {
+			return fmt.Errorf("the fading terrain flash altered nearby model color")
 		}
 	}
 	warm := pixel(expired, 70, 56)
 	if warm[0] <= pixel(unlit, 70, 56)[0]+5 || warm[0] <= warm[1] {
 		return fmt.Errorf("nearby model lost warm illumination")
 	}
-	if !bytes.Equal(early, read(2, true, true)) {
+	if !bytes.Equal(early, read(2, true)) {
 		return fmt.Errorf("replay changed terrain flash")
 	}
 	return nil
+}
+
+// The pass copies only the pixels its shader samples. Every ground fragment
+// reads its own pixel, so the read region is exactly the union of the clipped
+// discs — a lit frame no longer costs a full-frame blit (readcopy.go).
+func TestGroundLightReadRegionIsTheDiscUnion(t *testing.T) {
+	r := &Renderer{w: 400, h: 300}
+	r.lighting.lights = []battleLight{
+		{position: [3]float32{100, 80, 0}, radius: 20},
+		{position: [3]float32{300, 200, 0}, radius: 10},
+	}
+	r.appendGroundLights()
+	if len(r.ground.verts) != 8 {
+		t.Fatalf("expected two pools, got %d vertices", len(r.ground.verts))
+	}
+	x0, y0, x1, y1 := r.ground.verts[0].DstX, r.ground.verts[0].DstY, r.ground.verts[0].DstX, r.ground.verts[0].DstY
+	for _, v := range r.ground.verts {
+		x0, y0 = min(x0, v.DstX), min(y0, v.DstY)
+		x1, y1 = max(x1, v.DstX), max(y1, v.DstY)
+	}
+	got := r.ground.read
+	if !got.any || float32(got.x0) != x0 || float32(got.y0) != y0 || float32(got.x1) != x1 || float32(got.y1) != y1 {
+		t.Fatalf("read region %+v want %v,%v..%v,%v", got, x0, y0, x1, y1)
+	}
+	if area := (got.x1 - got.x0) * (got.y1 - got.y0); area >= r.w*r.h/2 {
+		t.Fatalf("two small pools copied %d of %d pixels", area, r.w*r.h)
+	}
+	r.lighting.lights = nil
+	r.appendGroundLights()
+	if r.ground.read.any {
+		t.Fatal("a frame with no light still asked for a copy")
+	}
 }

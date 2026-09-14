@@ -21,6 +21,10 @@ func deviceFixtureLoopRan() bool { return deviceFixtureLoop }
 // skipAfterDeviceLoop skips a fixture that builds a renderer once that loop has
 // finished. The ordinary (non-device) run covers these cases, and the device
 // run exists for the fixtures inside the loop.
+//
+// This is why tools/check-retail runs the device loop as its own `go test`
+// invocation rather than setting the variable for the whole-tree run: in one
+// process the two sets are mutually exclusive, and the gate wants both.
 func skipAfterDeviceLoop(t *testing.T) {
 	t.Helper()
 	if deviceFixtureLoopRan() {
@@ -48,9 +52,15 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// TestModelDeviceFixtures is opt-in because ordinary tests must not require a
-// graphics device. It runs all ownership cases in one hidden Ebitengine loop,
-// so the assertions inspect expanded/index pixels from the real backend.
+// TestDeviceFixtureLoop reports the hidden Ebitengine loop's single result. It
+// is opt-in because ordinary tests must not require a graphics device (C-G10);
+// the loop runs every ownership case in one hidden Ebitengine loop, so the
+// assertions inspect expanded/index pixels from the real backend.
+//
+// tools/check-retail selects this test by name on a machine with a display, and
+// TestMain runs the loop whatever -run says, so this one invocation exercises
+// every check the loop hosts. The other device tests in the package report the
+// same result; they exist so a failure names the area a reader is looking at.
 func TestDeviceFixtureLoop(t *testing.T) {
 	if os.Getenv("NANOLATHE_GPU_DEVICE_TEST") != "1" {
 		t.Skip("set NANOLATHE_GPU_DEVICE_TEST=1 for real-device model fixtures")
@@ -108,6 +118,8 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 		checkWreckHeatDevicePixels,
 		checkNanoDevicePixels,
 		checkModelDirectDevicePixels,
+		checkModelDirectFallbackCloak,
+		checkModelRetainDevicePixels,
 		checkModelCloakDevicePixels,
 		checkSourceLifecycleDevicePixels,
 	} {
@@ -200,7 +212,7 @@ func fixtureModelList() drawlist.List {
 	}, Color: 6})})
 	// Unsupported geometry has an explicit fallback and no model source. It
 	// contributes diagnostics without claiming a successful body image.
-	list.RecordModel(drawlist.Model{Geometry: &drawlist.ModelGeometry{Fallback: drawlist.ModelFallbackWaterlineOrDigger}, ShadowOmissions: 2, GroupOmission: true})
+	list.RecordModel(drawlist.Model{Geometry: &drawlist.ModelGeometry{Fallback: drawlist.ModelFallbackStaging}, ShadowOmissions: 2})
 	// A non-parallelogram has different conventional triangle mappings under a
 	// cyclic corner rotation. The two-chain row mapper must instead produce the
 	// same device pixels in the two translated regions [03 R-RAST-01 §1].

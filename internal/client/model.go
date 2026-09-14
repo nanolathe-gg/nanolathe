@@ -295,7 +295,23 @@ func (c *Client) drawFeatureModel(f frame.FeatureView) bool {
 	// It is zero for every placement but a corpse, so map-authored 3DO features
 	// draw as before and a wreck now lies the way its unit fell
 	// [05 "Feature instance and terrain cell"].
-	draw := presentationrender.BuildUnitDrawSimple(m.compiled, nil, f.Heading, f.Pitch, f.Bank, [3]numeric.Fixed{f.X, f.Y, f.Z})
+	// The pseudo-unit is zero but for its model, position and orientation, so
+	// the ordinary unit builder produces the same draw as the standalone
+	// constructor: no orientation cache (no retained body), no construction
+	// fraction and no sonar bit. Borrowing the frame's pooled scratch is what
+	// stops every wreck from allocating a fresh state, transform, piece and
+	// vertex arena on every recorded frame; the pool resets with the frame, and
+	// the draw stays valid until this feature's slot is borrowed again.
+	// One consequence is deliberate: the class gate is now the cited one. A
+	// pseudo-unit's structure bit is set, so it draws through the shaded piece
+	// renderer exactly while the `Shading` display option is on, and unshaded
+	// when the player clears it [03 R-RND-02A]. The standalone constructor
+	// ignored that option and shaded a wreck either way.
+	draw := presentationrender.BuildUnitDrawInto(m.compiled, nil, f.Heading, f.Pitch, f.Bank,
+		frame.UnitView{X: f.X, Y: f.Y, Z: f.Z}, nil, c.borrowDrawScratch())
+	if draw == nil {
+		return false
+	}
 	// The feature-backed pseudo-unit has no FBI to read and sets both the
 	// structure class bit and the height-plane bit unconditionally at
 	// construction, so 3DO wrecks anti-alias like buildings [R-REN-03A §2].

@@ -21,21 +21,41 @@ type blastWave struct {
 type worldDistortion struct {
 	candidates              []blastWave
 	blastDisabled, resolved bool
-	profileDisabled         bool
 	shader                  *ebiten.Shader
 	waves                   [blastLimit]blastWave
 	count                   int
 	verts                   []ebiten.Vertex
 	indices                 []uint32
 	opts                    ebiten.DrawTrianglesShaderOptions
+	// read is the union of the regions the refraction samples. Unlike the
+	// ground pools a refraction reads away from its own fragment, so each quad
+	// widens the region by the bound on its own displacement (readcopy.go).
+	read readRect
 }
 
-// SetBlastDistortion is an executor comparison control for the modern prototype.
-func (r *Renderer) SetBlastDistortion(on bool) { r.distortion.blastDisabled = !on }
+// blastMaxOffset bounds the blast shader's displacement as a multiple of the
+// wave's strength lane. The shader moves a fragment along the radial direction
+// by band·(1−band²)²·3.5·strength, and |band·(1−band²)²| peaks at band = 1/√5
+// with the value (1/√5)·(4/5)² = 0.28644, so the displacement can never exceed
+// 3.5 × 0.28644 = 1.0026 strengths.
+const blastMaxOffset = 1.0026
 
-// SetDynamicBlastDistortion compares the authored profile against artwork-only
-// waves during prototype comparisons (GPU design §25.2).
-func (r *Renderer) SetDynamicBlastDistortion(on bool) { r.distortion.profileDisabled = !on }
+// treeHeatMaxOffsetX and treeHeatMaxOffsetY bound the plume shader's
+// displacement as a multiple of the scale lane the plume's vertices carry. The
+// lateral term is (sin ± 0.35·sin)·envelope·1.8, whose bracket is bounded by
+// 1.35 and whose envelope is bounded by 1; the vertical term is the same
+// product with an extra 0.24 factor (tree_heat.go).
+const (
+	treeHeatMaxOffsetX = 1.35 * 1.8
+	treeHeatMaxOffsetY = 0.24 * 1.8
+)
+
+// bilinearPad is the extra texel the refraction's bilinear tap reaches past a
+// displaced sample point.
+const bilinearPad = 1
+
+// setBlastDistortion is the executor gate the player's Distortion switch drives (§30).
+func (r *Renderer) setBlastDistortion(on bool) { r.distortion.blastDisabled = !on }
 
 // dynamicBlastShape is modern artistic tuning, not retail damage arithmetic.
 // Keep existing artwork waves, admit substantial medium impacts, and saturate
@@ -85,7 +105,7 @@ func (r *Renderer) prepareBlastDistortion(list *drawlist.List) {
 		if sp.LightingKind != drawlist.SpriteLightingExplosion || sp.Frame == nil {
 			return
 		}
-		radius, width, strength := dynamicBlastShape(sp.BlastAge, sp.BlastSize, sp.LightingScale, sp.BlastAreaOfEffect, sp.BlastDamage, sp.HasBlastProfile && !d.profileDisabled)
+		radius, width, strength := dynamicBlastShape(sp.BlastAge, sp.BlastSize, sp.LightingScale, sp.BlastAreaOfEffect, sp.BlastDamage, sp.HasBlastProfile)
 		if strength <= 0 {
 			return
 		}
@@ -106,19 +126,30 @@ func (r *Renderer) resolveDistortion() {
 		return
 	}
 	d.verts, d.indices = d.verts[:0], d.indices[:0]
+	d.read.reset()
 	r.appendBlastWaves()
+	heat := len(d.verts)
 	r.appendTreeHeat()
-	if len(d.indices) == 0 {
-		return
+	d.addHeatRead(heat)
+	r.drawOverComposite(d.read, d.verts, d.indices, d.shader, &d.opts, ebiten.BlendCopy)
+}
+
+// addHeatRead widens the read region by the plume quads appended from position
+// first onward. The plumes share this batch but belong to tree_heat.go, so the
+// region is derived from the vertices they wrote rather than from that file:
+// each plume is four corners in the order (x0,y0) (x1,y0) (x0,y1) (x1,y1),
+// carrying its clip limits in the colour lanes and one plus its scale lane in
+// the source-Y offset. The shader clamps every sample into those same clip
+// limits, so the displaced quad intersected with them is a cover.
+func (d *worldDistortion) addHeatRead(first int) {
+	for i := first; i+3 < len(d.verts); i += 4 {
+		a, b := &d.verts[i], &d.verts[i+3]
+		lane := b.SrcY - b.DstY - 1
+		padX := treeHeatMaxOffsetX*lane + bilinearPad
+		padY := treeHeatMaxOffsetY*lane + bilinearPad
+		d.read.add(max(a.ColorR, a.DstX-padX), max(a.ColorG, a.DstY-padY),
+			min(a.ColorB, b.DstX+padX), min(a.ColorA, b.DstY+padY))
 	}
-	r.submitSchedule()
-	r.copyComposite(r.surfaces[1], r.surfaces[0], 0, 0, r.w, r.h)
-	d.opts.Images = [4]*ebiten.Image{r.surfaces[1]}
-	d.opts.Blend = ebiten.BlendCopy
-	r.beginPass(r.surfaces[0])
-	r.recordSubmission(len(d.verts), len(d.indices))
-	r.surfaces[0].DrawTrianglesShader32(d.verts, d.indices, d.shader, &d.opts)
-	r.frameDraws++
 }
 
 func (r *Renderer) appendBlastWaves() {
@@ -156,6 +187,11 @@ func (r *Renderer) appendBlastWaves() {
 			d.verts[len(d.verts)-1].SrcX += strength
 		}
 		d.indices = append(d.indices, base, base+1, base+2, base+1, base+2, base+3)
+		// The wave samples outward from its own ring, and the shader clamps every
+		// sample into the same clip limits the quad was cut to, so the displaced
+		// quad intersected with those limits covers every texel the batch reads.
+		pad := blastMaxOffset*strength + bilinearPad
+		d.read.add(max(cx0, x0-pad), max(cy0, y0-pad), min(cx1, x1+pad), min(cy1, y1+pad))
 		r.modelStats.BlastWaves++
 	}
 }

@@ -87,24 +87,49 @@ func (c *Client) TickFraction() float32 {
 // §13.5 reads it at Draw time, not at the 30 Hz step, because the whole point
 // is a position *between* two steps: the producer is the battle's own
 // millisecond source, un-floored, and the client only clamps what it returns.
+//
+// Under the record/submit pipeline this frame's fraction has already been
+// settled before the pass starts — by ResolveTickFraction ahead of the validity
+// digest, or by StartPreRecord's prediction — so the pass consumes it as an
+// input instead of sampling the producer a second time (§13.10).
 func (c *Client) sampleTickFraction() int64 {
-	return int64(c.ResolveTickFraction())
+	if c.pre.hostFraction {
+		return int64(c.tickFraction16)
+	}
+	return int64(c.producerTickFraction())
 }
 
-// ResolveTickFraction settles this frame's blend fraction from the producer and
-// returns it in the client's 16.16 domain. The record/submit pipeline calls it
-// before it builds a validity digest, so the number the digest compares and the
-// number the recording pass blends with are the same one — a producer read
-// twice would be two different wall-clock samples (§13.10). The recorder itself
-// calls it too, so a client that never uses the pipeline is unchanged.
-func (c *Client) ResolveTickFraction() int32 {
-	if c == nil {
-		return 0
-	}
+// producerTickFraction narrows the option producer's current value into the
+// client's 16.16 domain and stores it. An explicit SetTickFraction outranks the
+// producer for the rest of the run, which is how the 120 TPS benchmark drives
+// the four fractions itself (§13.5).
+func (c *Client) producerTickFraction() int32 {
 	if !c.tickFractionSet && c.opts.TickFraction != nil {
 		c.tickFraction16 = clampFraction16(c.opts.TickFraction())
 	}
 	return c.tickFraction16
+}
+
+// ResolveTickFraction settles this presented frame's blend fraction from the
+// producer and returns it in the client's 16.16 domain. It is the pipeline's
+// single sample point: the host calls it once per presented frame, before it
+// builds the validity digest, so the number the digest compares and the number
+// the recording pass blends with are the same one. A second read is a second,
+// later wall-clock sample — the list would then be recorded for an instant the
+// digest never named, and a pre-recorded frame would present a pose a present
+// interval behind the camera that frames it, since the camera blend already
+// uses the installed prediction (§13.10).
+//
+// Calling it is also the client's only signal that its host settles the
+// fraction itself, so from the first call the recording pass stops reading the
+// producer. A client that never uses the pipeline — classic, `--shot`, tests —
+// never calls it and resolves from the producer inside the record as before.
+func (c *Client) ResolveTickFraction() int32 {
+	if c == nil {
+		return 0
+	}
+	c.pre.hostFraction = true
+	return c.producerTickFraction()
 }
 
 // SetInterpolation selects the Enhanced blended view. Only the modern window

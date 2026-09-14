@@ -21,10 +21,13 @@ import (
 //
 //   - Every subject of the frame, and its shadow, gets a region of a per-frame
 //     2× atlas page, packed by shelf, no residency; an attached-unit group
-//     composes in one region. Faces are fan-triangulated straight from the
-//     packet's projected corners: the recorder's doubled lane when the packet
-//     carries one (half-pixel offset included, §17.3), the native corners
-//     doubled here otherwise.
+//     composes in one region, and a carried child that casts a shadow composes
+//     a second time in a region of its own, because a shadow is cut from its
+//     subject's own finished image [03 R-REN-03D §1]. Faces are
+//     fan-triangulated straight from the packet's projected corners: the
+//     recorder's doubled lane when the packet carries one (half-pixel offset
+//     included, §17.3), the native corners doubled here otherwise.
+//
 //   - A key pass writes each face's height key into a KEY plane under a max
 //     blend, so a texel holds the highest key drawn there. The colour pass
 //     draws a face's texel only where its own key is not below the stored one:
@@ -33,6 +36,7 @@ import (
 //     Both passes draw one vertex batch, and a four-corner face's key is the
 //     span writer's two-chain mapping in both, so the passes never disagree
 //     about a texel's key.
+//
 //   - The nanoframe reveal, the outline endpoints, the waterline tint and the
 //     Digger erase are per-texel verdicts on the height key
 //     [03 §5.2][03 R-COMP-01 §3][03 R-WATER-01 §2][03 R-REN-03A §8], so the
@@ -41,14 +45,28 @@ import (
 //     verdicts read its own key, before the group delta; the carrier's
 //     waterline and Digger clip then read the shifted key, as the staging
 //     image's passes do [03 R-REN-03A §4].
+//
 //   - Textures sample through the same two-chain span mapping the slot stage
 //     used for textured quads (§11.2 "Textured quads without strips"); the SHD
 //     lookup becomes the scale the table was generated from (§13.2).
+//
 //   - The body commit into the composite is one quad per subject through the
 //     scheduler, in record order, whose fragment box-resolves the four 2×
 //     texels under a pixel: §17's coverage resolve without its passes, for
 //     models only. The shadow commit resolves the silhouette the same way and
 //     punches the body's wholly covered blocks, as the slot stage's did.
+//
+//   - A subject whose cached lane the recorder proves unchanged (a reusable
+//     ModelCacheKey) keeps its PACKED vertices and parameter entries across
+//     frames (model_retain.go): the parameter corners are subject-local, so
+//     the retained arrays depend only on the raster, the texture slots and
+//     the finish switches, and a later frame rewrites just the atlas
+//     placement, the verdict entry and the per-face battle light. A subject
+//     whose lane did change (a turning unit: a new revision of the same body)
+//     appends WARM: every face is packed from this frame's corners through
+//     the cold path's own core, with what its texture alone decides — the
+//     slot, the run it binds, its texel bounds — answered by the body entry
+//     the last cold append recorded.
 //
 // A frame whose subjects overflow every page draws the rest straight onto the
 // composite at native scale in painter order (drawModelDirectFallback): no key,
@@ -134,6 +152,23 @@ type modelDirectLane struct {
 	page                  int32
 	packX, packY, packRow int32
 	regions               map[*drawlist.ModelGeometry]modelDirectRegion
+	// solo holds the region of a carried child composed a second time on its
+	// own, so its shadow is cut from the child's own finished image rather than
+	// from the group's texels. An entry is present for every carried child that
+	// casts a shadow, invalid when the atlas could not hold it.
+	solo map[*drawlist.ModelGeometry]modelDirectRegion
+	// soloPass is set while that second composition is appended: the commit
+	// reads that image for coverage and keys alone, so its faces take the
+	// coverage-only path and skip everything a colour needs.
+	soloPass bool
+	// soloOutline is the outline walk the group composition made of the packet
+	// the solo pass is about to repeat, so the rows are walked once. Valid only
+	// between those two appends of soloOutlineFor.
+	soloOutline    []modelGPUFace
+	soloOutlineFor *drawlist.ModelGeometry
+	// soloSlot is the same reuse for the doubled lane's box (slotBoundsFor).
+	soloSlot    image.Rectangle
+	soloSlotFor *drawlist.ModelGeometry
 
 	keyShader, colourShader *ebiten.Shader
 	shaderErr               error
@@ -158,14 +193,29 @@ type modelDirectLane struct {
 	standalone []int
 	doubled    [4]drawlist.ModelVertex
 	opts       ebiten.DrawTrianglesShaderOptions
+
+	// retain holds the packed vertices of subjects whose cached lane the
+	// recorder proved unchanged (model_retain.go).
+	retain modelRetainStore
+	// noQuads is set for a subject whose frame origin the verdict entry cannot
+	// carry, so its four-corner faces interpolate linearly rather than map
+	// through a frame the fragment cannot recover.
+	noQuads bool
+	// fallbackOpacity is the fallback batch's body opacity: one, or the ALP
+	// half-colour's half for a cloaked subject [03 R-COMP-01 §2].
+	fallbackOpacity float32
 }
 
 // modelDirectFace is one face's place in the fallback's painter order.
 type modelDirectFace struct {
-	// key is the face's mean height key in 1/256 units, the sort key.
+	// key is the face's mean height key in 1/256 units, with a carried child's
+	// delta applied: the sort key over the whole group.
 	key int64
 	// index names the face: non-negative in Faces, ^index in LiveFaces.
 	index int32
+	// child names the packet the face belongs to: -1 the carrier, else its
+	// index in Children.
+	child int32
 }
 
 // initModelDirect compiles the lane's two atlas passes.
@@ -208,6 +258,14 @@ func (d *modelDirectLane) resetFrame() {
 	} else {
 		clear(d.regions)
 	}
+	if d.solo == nil {
+		d.solo = make(map[*drawlist.ModelGeometry]modelDirectRegion)
+	} else {
+		clear(d.solo)
+	}
+	d.soloPass = false
+	// The per-packet reuse holds slices and boxes of this frame's packets only.
+	d.soloOutline, d.soloOutlineFor, d.soloSlotFor = nil, nil, nil
 	d.runs, d.verts, d.idx = d.runs[:0], d.verts[:0], d.idx[:0]
 	d.params.reset()
 }
@@ -271,15 +329,21 @@ func (q *modelQuadParams) addPacked(packed *[modelQuadBytes]byte) int {
 // whose waterline and Digger clip the whole staging image, children included
 // [03 R-REN-03A §4], or nil.
 //
+// The entry also carries the subject's FRAME: the atlas texel of the raster's
+// local (0,0), (ox, oy), which is what a mapped face's fragment subtracts from
+// its own position before evaluating the subject-local parameters
+// (model_quads.go). Every non-shadow subject therefore has an entry; one that
+// carries no verdict at all is returned NEGATED, so the fragment can find the
+// frame through its magnitude and skip the verdicts on its sign.
+//
 // The entry's lanes, two 16-bit values a texel: (line, floor), (below+2,
 // band+2), (above+2, waterline mode), (waterline key, digger), (digger key,
 // has reveal), (delta + 32768, group clip: 0 none, else waterline mode + 1),
-// (group waterline key, group digger), (group digger key, 0).
-func (d *modelDirectLane) subjectVerdicts(reveal *drawlist.ModelReveal, g *drawlist.ModelGeometry, delta int32, group *drawlist.ModelGeometry) int {
+// (group waterline key, group digger), (group digger key, 0), then the frame
+// (ox + 32768, oy + 32768).
+func (d *modelDirectLane) subjectVerdicts(reveal *drawlist.ModelReveal, g *drawlist.ModelGeometry, delta int32, group *drawlist.ModelGeometry, ox, oy float32) int {
 	groupClip := group != nil && (group.Waterline != drawlist.ModelWaterlineNone || group.Digger)
-	if reveal == nil && g.Waterline == drawlist.ModelWaterlineNone && !g.Digger && !groupClip {
-		return 0
-	}
+	verdicts := reveal != nil || g.Waterline != drawlist.ModelWaterlineNone || g.Digger || groupClip
 	var packed [modelQuadBytes]byte
 	hasReveal := 0
 	if v := reveal; v != nil {
@@ -313,7 +377,21 @@ func (d *modelDirectLane) subjectVerdicts(reveal *drawlist.ModelReveal, g *drawl
 	} else {
 		putQuadLane(packed[20:], int(delta)+modelQuadKeyBias, 0)
 	}
-	return d.params.addPacked(&packed)
+	fx, fy := int(ox)+modelQuadKeyBias, int(oy)+modelQuadKeyBias
+	d.noQuads = !fitsQuadLane(fx) || !fitsQuadLane(fy)
+	if !d.noQuads {
+		putQuadLane(packed[32:], fx, fy)
+	}
+	entry := d.params.addPacked(&packed)
+	if entry == 0 {
+		// The image is full: no face of this subject maps either, because the
+		// per-face admission tests the same capacity.
+		d.noQuads = true
+	}
+	if !verdicts {
+		return -entry
+	}
+	return entry
 }
 
 // prepareModelDirect runs before Replay: it places every eligible subject and
@@ -322,6 +400,9 @@ func (d *modelDirectLane) subjectVerdicts(reveal *drawlist.ModelReveal, g *drawl
 func (r *Renderer) prepareModelDirect(l *drawlist.List) {
 	d := &r.modelDirect
 	d.resetFrame()
+	// The retained lanes bake the finish switches into their colour lane, so
+	// a change drops every entry rather than drawing last frame's finish.
+	d.retain.setSwitches(r.metalGlint, r.materialsEnabled)
 	if r.tables.atlas == nil {
 		return
 	}
@@ -429,24 +510,82 @@ func (r *Renderer) prepareModelDirect(l *drawlist.List) {
 	}
 }
 
-// placeModelDirect allocates one subject's region — and its shadow's — and
-// appends their faces to the batch. An attached-unit group composes in one
-// region over the union of its bounds: the carrier's faces, then each
-// mergeable child's with its signed height delta added to the keys, saturating
-// at the byte's range where retail would wrap [03 R-REN-03A §4]; a child's
-// own region entry points into the group's so its shadow can punch it. A
-// subject the atlas cannot hold is recorded with an invalid region and takes
-// the fallback at commit time; its shadow is then omitted, as the slot stage
-// omitted a shadow it could not place.
-func (r *Renderer) placeModelDirect(g *drawlist.ModelGeometry) {
-	d := &r.modelDirect
+// assignGroupRegions places one subject's regions and nothing else, so the
+// packer's assignment is decided in one place and is testable without a device:
+//
+//   - the group region, over the union of the carrier's bounds and its
+//     mergeable children's, which the whole group composes into;
+//   - each mergeable child's entry, a sub-rectangle of that group region —
+//     the child's texels within it, the carrier's beside and beneath them;
+//   - a region of its own for each carried child that casts a shadow, because
+//     a shadow is cut from its subject's FINISHED image [03 R-REN-03D §1] and
+//     the group region's texels at the child's box are the carrier's as much as
+//     the child's. Carried units are rare, so the extra image is bounded.
+//
+// The returned region is invalid when the atlas could not hold the group; a
+// child's solo region is invalid when it could not hold that.
+func (d *modelDirectLane) assignGroupRegions(g *drawlist.ModelGeometry) modelDirectRegion {
 	bounds := modelWorldBounds(g)
 	if len(g.Children) != 0 {
 		bounds = modelGroupBounds(g)
 	}
-	region, ok := d.allocRegion(bounds)
+	region, _ := d.allocRegion(bounds)
 	d.regions[g] = region
-	if !ok {
+	if !region.ok {
+		return region
+	}
+	for _, child := range g.Children {
+		cg := child.Geometry
+		if !mergeableChild(cg) {
+			continue
+		}
+		cb := modelWorldBounds(cg)
+		d.regions[cg] = modelDirectRegion{
+			x: region.x + 2*int32(cb.Min.X-bounds.Min.X), y: region.y + 2*int32(cb.Min.Y-bounds.Min.Y),
+			page: region.page, bounds: cb, ok: true,
+		}
+		if cg.Shadow == nil {
+			continue
+		}
+		// The solo image is the same 2× region every subject gets: both shadow
+		// commits resolve the four texels under a pixel and count their share
+		// (destOpModelSilhouetteShadow, destOpModelDirectShadow), so a 1× image
+		// would be read as though it were doubled.
+		solo, _ := d.allocRegion(cb)
+		d.solo[cg] = solo
+	}
+	return region
+}
+
+// shadowSource is the region a subject's shadow is cut from: the solo region of
+// a carried child that casts one, else the subject's own. The second result is
+// false when there is no usable image — a subject the atlas could not hold, or
+// a carried child whose solo region it could not hold — and the shadow is then
+// omitted rather than cut from texels that are not the subject's.
+func (d *modelDirectLane) shadowSource(g *drawlist.ModelGeometry) (modelDirectRegion, bool) {
+	if solo, carried := d.solo[g]; carried {
+		return solo, solo.ok
+	}
+	region, placed := d.regions[g]
+	return region, placed && region.ok
+}
+
+// placeModelDirect allocates one subject's regions — its own, its group's and
+// its shadow's — and appends their faces to the batch. An attached-unit group
+// composes in one region over the union of its bounds: the carrier's faces,
+// then each mergeable child's with its signed height delta added to the keys,
+// saturating at the byte's range where retail would wrap [03 R-REN-03A §4]. A
+// carried child that casts a shadow composes a second time in a region of its
+// own, with its own keys and its own verdicts and no carrier clip — the image
+// the classic composer's child pass produces, and the one its shadow is cut
+// from [03 R-REN-03A §4][03 R-REN-03D §1]. A subject the atlas cannot hold is
+// recorded with an invalid region and takes the fallback at commit time; its
+// shadow is then omitted, as the slot stage omitted a shadow it could not
+// place.
+func (r *Renderer) placeModelDirect(g *drawlist.ModelGeometry) {
+	d := &r.modelDirect
+	region := d.assignGroupRegions(g)
+	if !region.ok {
 		r.modelStats.DirectOverflow++
 		return
 	}
@@ -458,13 +597,20 @@ func (r *Renderer) placeModelDirect(g *drawlist.ModelGeometry) {
 			r.modelStats.Skipped++
 			continue
 		}
-		cb := modelWorldBounds(cg)
-		d.regions[cg] = modelDirectRegion{
-			x: region.x + 2*int32(cb.Min.X-bounds.Min.X), y: region.y + 2*int32(cb.Min.Y-bounds.Min.Y),
-			page: region.page, bounds: cb, ok: true,
-		}
 		r.modelStats.DirectSubjects++
 		r.appendPacket(cg, region, false, child.KeyDelta, g)
+		solo, carried := d.solo[cg]
+		if !carried {
+			continue
+		}
+		if !solo.ok {
+			r.modelStats.DirectOverflow++
+			continue
+		}
+		r.modelStats.DirectCargoImages++
+		d.soloPass = true
+		r.appendPacket(cg, solo, false, 0, nil)
+		d.soloPass = false
 	}
 	if g.Shadow != nil && !g.Shadow.Silhouette {
 		r.placeModelDirectShadow(g.Shadow)
@@ -506,6 +652,20 @@ func (d *modelDirectLane) allocRegion(bounds image.Rectangle) (modelDirectRegion
 // the cached faces, the outline endpoints, then the live faces
 // [03 R-REN-03A §4]. keyDelta is added to every key and group is the carrier
 // whose clip applies (a group child), else nil.
+//
+// A packet the recorder marked reusable (§13.12) and that composes alone —
+// no group delta, no solo pass, no water reflection — takes its cached lane
+// from the retained store when the store holds it (model_retain.go): the
+// packed vertices are replayed at this frame's placement, and only the
+// verdict entry and the battle light are made anew. The outline and the live
+// lane are per-frame and are appended cold after the cached lane whether it
+// was replayed or not, exactly as they follow a cold cached lane. The first
+// sighting of a key primes a stub, the second captures the cold append's
+// output, and every later one replays it, so a subject that rebuilds every
+// frame never pays for a copy nobody reads. A key miss whose body the index
+// holds — the same object under a new revision — appends the lane warm
+// (appendWarmLane), captured all the same when the key is primed; a cold
+// append records the body for the next revision.
 func (r *Renderer) appendPacket(g *drawlist.ModelGeometry, region modelDirectRegion, shadow bool, keyDelta int32, group *drawlist.ModelGeometry) {
 	d := &r.modelDirect
 	// Atlas texel of the raster's local (0,0) and the scale the corners take.
@@ -521,20 +681,41 @@ func (r *Renderer) appendPacket(g *drawlist.ModelGeometry, region modelDirectReg
 	nox := float32(rx) - float32(local.Min.X)*2
 	noy := float32(ry) - float32(local.Min.Y)*2
 	ox, oy := nox, noy
-	if ss := g.Supersample; ss != nil {
-		ssLocal := modelSlotBounds(ss)
+	reflecting := !shadow && g.ReflectWater && !r.reflections.disabled && !r.water.disabled
+	e, body, keyed := r.retainedEntry(g, keyDelta, group, reflecting)
+	hit := e != nil && e.captured && e.matches(g)
+	if hit {
+		if e.doubled {
+			raster, scale = g.Supersample, 1
+			slot := e.slotFor(g.Supersample)
+			ox = float32(rx) - float32(slot.Min.X&^1)
+			oy = float32(ry) - float32(slot.Min.Y&^1)
+		}
+	} else if ss := g.Supersample; ss != nil {
+		ssLocal := d.slotBoundsFor(ss)
 		if !ssLocal.Empty() {
 			raster, scale = ss, 1
 			ox = float32(rx) - float32(ssLocal.Min.X&^1)
 			oy = float32(ry) - float32(ssLocal.Min.Y&^1)
 		}
 	}
+	// The warm append needs the body entry to describe this raster's faces
+	// exactly; otherwise the lane is cold and, for a keyed packet, records the
+	// body anew. A reflecting packet is cold only when it is not warm.
+	warm := !hit && body != nil && body.matches(raster.Faces, raster == g.Supersample, r.texturePage())
+	if !warm {
+		body = nil
+		if reflecting && keyed {
+			r.modelStats.DirectColdReflect++
+		}
+	}
 	entry := 0
+	d.noQuads = false
 	if !shadow {
 		// The reveal rides the raster (a doubled lane carries its own copy);
 		// the waterline and Digger ride the packet, which is the one the
-		// recorder configures.
-		entry = d.subjectVerdicts(raster.Reveal, g, keyDelta, group)
+		// recorder configures; the frame is where this raster lands.
+		entry = d.subjectVerdicts(raster.Reveal, g, keyDelta, group, ox, oy)
 	}
 	mode := 0
 	if shadow {
@@ -542,30 +723,74 @@ func (r *Renderer) appendPacket(g *drawlist.ModelGeometry, region modelDirectReg
 	}
 	d.keyDelta = keyDelta
 	d.lightSources = subjectLights{}
-	if !shadow {
+	if !shadow && !d.soloPass {
+		// A solo image's colour is never read, so it carries no light, and the
+		// world geometry it repeats reflects once, not twice.
 		d.lightSources = r.lighting.near(float32(wb.Min.X+wb.Max.X)*0.5, float32(wb.Min.Y+wb.Max.Y)*0.5, float32(wb.Dx()+wb.Dy())*0.5)
 		d.lightX = float32(region.bounds.Min.X) + (ox-float32(region.x))*0.5
 		d.lightY = float32(region.bounds.Min.Y) + (oy-float32(region.y))*0.5
 		d.lightScale, d.lightHeight = scale*0.5, g.WorldHeight
-	}
-	if !shadow {
 		r.reflections.active, r.reflections.region = g, region
 	}
-	r.appendDirectLane(raster.Faces, raster, ox, oy, scale, mode, entry)
+	fits := hit && !d.noQuads && d.params.count+e.quads <= modelDirectParamCap
+	r.modelStats.countRetainMiss(e, hit, fits, warm)
+	switch {
+	case fits:
+		r.replayRetained(e, g, ox, oy, entry, shadow)
+	case e != nil && e.primed:
+		d.retain.beginCapture(e, d.params.count, len(d.verts), r.modelStats)
+		r.appendCachedLane(g, raster, body, keyed, ox, oy, scale, mode, entry)
+		d.retain.finishCapture(d, g, raster == g.Supersample, ox, oy, r.modelStats)
+		if e.captured {
+			r.modelStats.DirectCaptured++
+		} else if !warm {
+			r.modelStats.DirectColdParams++
+		}
+	default:
+		if e != nil {
+			e.primed = true
+		}
+		r.appendCachedLane(g, raster, body, keyed, ox, oy, scale, mode, entry)
+	}
 	if !shadow && len(g.Outline) != 0 {
 		// The outline endpoints are one native pixel each, from the native
 		// packet's rows drawn at 2× about the native origin: retail walks the
 		// rows of the 1× image after the anti-alias resolve [03 R-COMP-01 §3],
 		// so an endpoint is a whole pixel. The doubled lane's own rows would
 		// put an endpoint at a doubled column, straddling two pixels' blocks
-		// and resolving to half an endpoint in each.
-		for _, f := range r.prepareModelOutline(g, false) {
+		// and resolving to half an endpoint in each. A solo image reuses the
+		// walk the group composition just made of the same packet — the frame
+		// arena hands out slices that stay valid and distinct for the whole
+		// frame — instead of walking those rows a second time.
+		faces := d.soloOutline
+		if !d.soloPass || d.soloOutlineFor != g {
+			faces = r.prepareModelOutline(g, false)
+			d.soloOutline, d.soloOutlineFor = faces, g
+		}
+		for _, f := range faces {
 			r.appendDirectGPUFace(f, nox, noy, 2, entry)
 		}
 	}
 	r.appendDirectLane(raster.LiveFaces, raster, ox, oy, scale, mode|modelDirectLive, entry)
 	d.keyDelta = 0
 	r.reflections.active = nil
+}
+
+// slotBoundsFor is modelSlotBounds with the group composition's own walk reused
+// by the solo pass that repeats the same packet an instant later: the doubled
+// lane's box costs a pass over every corner of the packet, and the two appends
+// ask for the same one. Only the solo pass reads the memo, and only the
+// composition that precedes it writes one, so it never outlives its packet.
+func (d *modelDirectLane) slotBoundsFor(ss *drawlist.ModelGeometry) image.Rectangle {
+	if d.soloPass {
+		if d.soloSlotFor == ss {
+			return d.soloSlot
+		}
+		return modelSlotBounds(ss)
+	}
+	b := modelSlotBounds(ss)
+	d.soloSlotFor, d.soloSlot = ss, b
+	return b
 }
 
 // modelDirectShiftKey is a face corner's key lane: the packet's key plus the
@@ -599,12 +824,49 @@ func (r *Renderer) texturePage() *ebiten.Image {
 	return r.placeholderImage()
 }
 
+// appendCachedLane appends a packet's cached lane: warm from body when the
+// store offered one (model_retain.go), else cold, recording the body of a
+// keyed packet for the next revision's warm append. The body recording
+// closes here, before the per-frame lanes that follow it.
+func (r *Renderer) appendCachedLane(g, raster *drawlist.ModelGeometry, body *modelRetainedBody, keyed bool, ox, oy, scale float32, mode, entry int) {
+	d := &r.modelDirect
+	if body != nil {
+		r.appendWarmLane(raster.Faces, body, ox, oy, scale, mode, entry)
+		r.modelStats.DirectWarm++
+		return
+	}
+	if keyed {
+		d.retain.beginBody(g.Cache, raster == g.Supersample)
+	}
+	r.appendDirectLane(raster.Faces, raster, ox, oy, scale, mode, entry)
+	d.retain.endBody()
+}
+
+// appendWarmLane appends one cached lane from this frame's faces and the
+// body entry's texture products: the faces in the order the cold lane
+// appends them, each into the run bound to the image the entry recorded,
+// through the core the cold lane runs. The entry has been matched against
+// faces (modelRetainedBody.matches), so every recorded face is there with
+// the corner count and texture the entry describes.
+func (r *Renderer) appendWarmLane(faces []drawlist.ModelFace, body *modelRetainedBody, ox, oy, scale float32, mode, entry int) {
+	d := &r.modelDirect
+	for i := range body.faces {
+		bf := &body.faces[i]
+		run := d.colourRun([2]*ebiten.Image{bf.img, r.tables.atlas}, 8)
+		r.appendFaceCore(&faces[bf.index], bf.tex, ox, oy, scale, mode, entry, run)
+	}
+}
+
 // appendDirectLane appends one face list to the batch, faces on the shared
 // texture page (or flat) first and faces on standalone textures after, each
-// group in its own run.
+// group in its own run. A body recording in progress takes every face in
+// this order with the image its run binds.
 func (r *Renderer) appendDirectLane(faces []drawlist.ModelFace, g *drawlist.ModelGeometry, ox, oy, scale float32, mode, entry int) {
 	d := &r.modelDirect
 	page := r.texturePage()
+	if b := d.retain.body; b != nil {
+		b.page = page
+	}
 	d.standalone = d.standalone[:0]
 	for i := range faces {
 		f := &faces[i]
@@ -613,22 +875,68 @@ func (r *Renderer) appendDirectLane(faces []drawlist.ModelFace, g *drawlist.Mode
 			d.standalone = append(d.standalone, i)
 			continue
 		}
-		r.appendDirectFace(f, slot, ox, oy, scale, mode, entry, d.colourRun([2]*ebiten.Image{page, r.tables.atlas}))
+		r.appendLaneFace(f, i, slot, page, ox, oy, scale, mode, entry, d.colourRun([2]*ebiten.Image{page, r.tables.atlas}, 8))
 	}
 	for _, i := range d.standalone {
 		f := &faces[i]
 		slot := r.modelTextureFor(f.Texture)
-		r.appendDirectFace(f, slot, ox, oy, scale, mode, entry, d.colourRun([2]*ebiten.Image{slot.img, r.tables.atlas}))
+		r.appendLaneFace(f, i, slot, slot.img, ox, oy, scale, mode, entry, d.colourRun([2]*ebiten.Image{slot.img, r.tables.atlas}, 8))
 	}
 }
 
+// appendLaneFace appends face index of the lane through the full path, or
+// through the coverage-only path while a carried child's solo image is being
+// composed; img is the image its run binds.
+func (r *Renderer) appendLaneFace(f *drawlist.ModelFace, index int, slot modelTextureSlot, img *ebiten.Image, ox, oy, s float32, mode, entry int, run *modelDirectRun) {
+	d := &r.modelDirect
+	if d.soloPass {
+		r.appendSoloFace(f, slot, ox, oy, s, mode, entry, run)
+		return
+	}
+	tex := modelFaceTexFor(f, slot)
+	if b := d.retain.body; b != nil {
+		b.faces = append(b.faces, modelBodyFace{index: int32(index), n: int32(len(f.Vertices)), texture: f.Texture, img: img, tex: tex})
+	}
+	r.appendFaceCore(f, tex, ox, oy, s, mode, entry, run)
+}
+
+// modelFaceTex is what a face's texture alone decides, which is what the
+// body index keeps across a subject's revisions (model_retain.go): the slot
+// origin its corners' texel coordinates are offset by, and the ColorA/ColorB
+// lanes in both forms — the slot for a mapped face, the face's texel bounds
+// for a linear textured one, which the fragment clamps to because a
+// fattened corner's interpolated texel can reach one texel past the authored
+// ring into a neighbouring texture on the page. The bounds are the texture's
+// own dimensions in corner order, as the recorder authors them.
+type modelFaceTex struct {
+	x, y       int32
+	quadA      float32
+	linA, linB float32
+}
+
+// modelFaceTexFor resolves a face's texture products from its slot.
+func modelFaceTexFor(f *drawlist.ModelFace, slot modelTextureSlot) modelFaceTex {
+	t := modelFaceTex{x: int32(slot.x), y: int32(slot.y), quadA: float32(slot.x*4096 + slot.y)}
+	if f.Texture != nil && len(f.Vertices) != 0 {
+		u0, v0, u1, v1 := f.Vertices[0].U, f.Vertices[0].V, f.Vertices[0].U, f.Vertices[0].V
+		for _, v := range f.Vertices[1:] {
+			u0, v0 = min(u0, v.U), min(v0, v.V)
+			u1, v1 = max(u1, v.U), max(v1, v.V)
+		}
+		u1, v1 = max(u1-1, u0), max(v1-1, v0)
+		t.linA = float32((int32(slot.x)+u0)*4096 + int32(slot.y) + v0)
+		t.linB = float32((int32(slot.x)+u1)*4096 + int32(slot.y) + v1)
+	}
+	return t
+}
+
 // colourRun returns the open colour run for imgs on the current page, opening
-// one when the last run binds something else, draws into another page or is
-// full.
-func (d *modelDirectLane) colourRun(imgs [2]*ebiten.Image) *modelDirectRun {
+// one when the last run binds something else, draws into another page or
+// cannot take need more vertices.
+func (d *modelDirectLane) colourRun(imgs [2]*ebiten.Image, need int) *modelDirectRun {
 	if n := len(d.runs); n > 0 {
 		run := &d.runs[n-1]
-		if run.imgs == imgs && run.page == d.page && int(run.vLen)+8 <= schedRunVertexLimit {
+		if run.imgs == imgs && run.page == d.page && int(run.vLen)+need <= schedRunVertexLimit {
 			return run
 		}
 	}
@@ -636,12 +944,92 @@ func (d *modelDirectLane) colourRun(imgs [2]*ebiten.Image) *modelDirectRun {
 	return &d.runs[len(d.runs)-1]
 }
 
+// appendSoloFace appends one face of a carried child's solo image: the image
+// the shadow commits read for COVERAGE, and for KEYS when a clip applies
+// [03 R-REN-03D §1]. Its colour is never sampled — the silhouette composites
+// the half-colour of index 0 — so the face carries only what decides whether a
+// texel is covered: its fattened corners, its key lane, its flat index (index 1
+// is the composition transparent one and leaves a hole, as it does in the group
+// image) or its texture's texel, and the subject's verdict entry, whose reveal
+// and clip erases are part of the finished image. It skips the shade row, the
+// battle light, the glint, the finish and the reflection, all of which only
+// reach a colour.
+//
+// It also skips the parameter entry, so a four-corner face's key interpolates
+// linearly here rather than through the span writer's two-chain mapping. Both
+// atlas passes read the same lane, so they still agree about a texel; the
+// departure is confined to where a SLOPED quad's key crosses a silhouette clip
+// key, which can move that boundary by a texel of the shadow's edge.
+func (r *Renderer) appendSoloFace(f *drawlist.ModelFace, slot modelTextureSlot, ox, oy, s float32, mode, entry int, run *modelDirectRun) {
+	d := &r.modelDirect
+	n := len(f.Vertices)
+	if n < 3 {
+		return
+	}
+	var area int64
+	for i := range f.Vertices {
+		a, b := f.Vertices[i], f.Vertices[(i+1)%n]
+		area += int64(a.X)*int64(b.Y) - int64(a.Y)*int64(b.X)
+	}
+	if area <= 0 {
+		r.modelStats.DirectCulled++
+		return
+	}
+	var cx, cy float32
+	for _, v := range f.Vertices {
+		cx += float32(v.X)
+		cy += float32(v.Y)
+	}
+	cx /= float32(n)
+	cy /= float32(n)
+	// A textured face keeps the linear texel path, clamped to its own authored
+	// bounds, because a transparent texel is a hole in the finished image and so
+	// a hole in its shadow.
+	colorA, colorB := float32(0), float32(0)
+	if f.Texture != nil {
+		mode |= modelDirectTextured
+		u0, v0, u1, v1 := f.Vertices[0].U, f.Vertices[0].V, f.Vertices[0].U, f.Vertices[0].V
+		for _, v := range f.Vertices[1:] {
+			u0, v0 = min(u0, v.U), min(v0, v.V)
+			u1, v1 = max(u1, v.U), max(v1, v.V)
+		}
+		u1, v1 = max(u1-1, u0), max(v1-1, v0)
+		colorA = float32((int32(slot.x)+u0)*4096 + int32(slot.y) + v0)
+		colorB = float32((int32(slot.x)+u1)*4096 + int32(slot.y) + v1)
+	}
+	base := uint32(len(d.verts)) - uint32(run.vOff)
+	for _, v := range f.Vertices {
+		d.verts = append(d.verts, ebiten.Vertex{
+			DstX: ox + fattenBy(float32(v.X), cx, s, modelDirectFatten), DstY: oy + fattenBy(float32(v.Y), cy, s, modelDirectFatten),
+			SrcX: float32(slot.x + int(v.U)), SrcY: float32(slot.y + int(v.V)),
+			ColorR: 1, ColorG: float32(f.Color), ColorB: colorB, ColorA: colorA,
+			Custom0: float32(mode), Custom1: d.laneKey(v.Key), Custom2: float32(entry), Custom3: 0,
+		})
+	}
+	for i := 1; i+1 < n; i++ {
+		d.idx = append(d.idx, base, base+uint32(i), base+uint32(i+1))
+	}
+	run.vLen += int32(n)
+	run.iLen += int32(3 * (n - 2))
+	r.modelStats.DirectFaces++
+}
+
 // appendDirectFace fan-triangulates one face at scale s about the origin
 // (ox, oy) into run (the atlas batch) or, when run is nil, into the fallback
-// batch. mode is the face's Custom0 lane and entry the subject's verdict
-// entry. A ring whose signed area is not positive is a back face or degenerate
-// and is culled, as the slot stage's triangulator culled it.
+// batch, resolving its texture products first (the cold path).
 func (r *Renderer) appendDirectFace(f *drawlist.ModelFace, slot modelTextureSlot, ox, oy, s float32, mode, entry int, run *modelDirectRun) {
+	r.appendFaceCore(f, modelFaceTexFor(f, slot), ox, oy, s, mode, entry, run)
+}
+
+// appendFaceCore is the pose-dependent whole of a face's append, shared by
+// the cold and the warm lanes so the two produce the same bytes by
+// construction: the winding test, the parameter entry, the centroid, the
+// reflection, the battle light, the glint and the finish (both from the
+// world normal), the shade lanes and the packed corners, with tex the
+// texture's part. mode is the face's Custom0 lane and entry the subject's
+// verdict entry. A ring whose signed area is not positive is a back face or
+// degenerate and is culled, as the slot stage's triangulator culled it.
+func (r *Renderer) appendFaceCore(f *drawlist.ModelFace, tex modelFaceTex, ox, oy, s float32, mode, entry int, run *modelDirectRun) {
 	d := &r.modelDirect
 	n := len(f.Vertices)
 	if n < 3 {
@@ -657,18 +1045,25 @@ func (r *Renderer) appendDirectFace(f *drawlist.ModelFace, slot modelTextureSlot
 		return
 	}
 	shadow := mode&7 == modelDirectShadow
-	// A four-corner face is described to the parameter image in atlas texels
-	// and mapped per fragment, flat or textured, so its key is the span
-	// writer's two-chain interpolation rather than the device's per-triangle
-	// one; anything else interpolates its lanes linearly.
+	// A four-corner face is described to the parameter image in the subject's
+	// own frame at the atlas scale (model_quads.go) and mapped per fragment,
+	// flat or textured, so its key is the span writer's two-chain
+	// interpolation rather than the device's per-triangle one; anything else
+	// interpolates its lanes linearly.
 	quad := 0
-	if n == 4 && run != nil && !shadow && d.params.count < modelDirectParamCap {
-		for i, v := range f.Vertices {
-			d.doubled[i] = v
-			d.doubled[i].X = int32(ox + float32(v.X)*s)
-			d.doubled[i].Y = int32(oy + float32(v.Y)*s)
+	if n == 4 && run != nil && !shadow && !d.noQuads && d.params.count < modelDirectParamCap {
+		// At scale one (the recorder's own doubled lane) the corners are the
+		// packet's: the scaled copy would be exact and is not made.
+		corners := f.Vertices
+		if s != 1 {
+			for i, v := range f.Vertices {
+				d.doubled[i] = v
+				d.doubled[i].X = int32(float32(v.X) * s)
+				d.doubled[i].Y = int32(float32(v.Y) * s)
+			}
+			corners = d.doubled[:]
 		}
-		quad = d.params.add(d.doubled[:], 0, 0, d.keyDelta)
+		quad = d.params.add(corners, modelQuadLocalBias, modelQuadLocalBias, d.keyDelta)
 	}
 	if !shadow {
 		switch {
@@ -700,18 +1095,6 @@ func (r *Renderer) appendDirectFace(f *drawlist.ModelFace, slot modelTextureSlot
 	if run != nil && !shadow {
 		r.reflectModelFace(f, ox, oy, s, cx, cy, fat, quad, run.page)
 	}
-	// The face's texel bounds, for the linear textured path to clamp to: a
-	// fattened corner's interpolated texel can reach one texel past the
-	// authored ring, into a neighbouring texture on the page.
-	var u0, v0, u1, v1 int32
-	if f.Texture != nil {
-		u0, v0, u1, v1 = f.Vertices[0].U, f.Vertices[0].V, f.Vertices[0].U, f.Vertices[0].V
-		for _, v := range f.Vertices[1:] {
-			u0, v0 = min(u0, v.U), min(v0, v.V)
-			u1, v1 = max(u1, v.U), max(v1, v.V)
-		}
-		u1, v1 = max(u1-1, u0), max(v1-1, v0)
-	}
 	base := uint32(len(d.verts))
 	if run != nil {
 		base -= uint32(run.vOff)
@@ -719,10 +1102,9 @@ func (r *Renderer) appendDirectFace(f *drawlist.ModelFace, slot modelTextureSlot
 	// A mapped face carries its texture slot in ColorA and its entry in
 	// ColorB; a linear textured face carries its texel bounds there instead,
 	// absolute on the page.
-	colorA, colorB := float32(slot.x*4096+slot.y), float32(quad)
+	colorA, colorB := tex.quadA, float32(quad)
 	if quad == 0 && f.Texture != nil {
-		colorA = float32((int32(slot.x)+u0)*4096 + int32(slot.y) + v0)
-		colorB = float32((int32(slot.x)+u1)*4096 + int32(slot.y) + v1)
+		colorA, colorB = tex.linA, tex.linB
 	}
 	lighting := float32(0)
 	if !shadow {
@@ -750,12 +1132,19 @@ func (r *Renderer) appendDirectFace(f *drawlist.ModelFace, slot modelTextureSlot
 				k = rowScaleMax
 			}
 		}
+		// The atlas batch's key lane is the fallback batch's opacity: the
+		// fallback fragment tests no key and the cloaked half-colour needs a
+		// lane [03 R-COMP-01 §2].
+		custom1 := d.laneKey(v.Key)
+		if run == nil {
+			custom1 = d.fallbackOpacity
+		}
 		d.verts = append(d.verts, ebiten.Vertex{
 			DstX: ox + fattenBy(float32(v.X), cx, s, fat), DstY: oy + fattenBy(float32(v.Y), cy, s, fat),
-			SrcX: float32(slot.x + int(v.U)), SrcY: float32(slot.y + int(v.V)),
+			SrcX: float32(tex.x + v.U), SrcY: float32(tex.y + v.V),
 			ColorR: k, ColorG: colorG, ColorB: colorB,
 			ColorA:  colorA,
-			Custom0: float32(mode), Custom1: d.laneKey(v.Key), Custom2: custom2, Custom3: custom3,
+			Custom0: float32(mode), Custom1: custom1, Custom2: custom2, Custom3: custom3,
 		})
 	}
 	for i := 1; i+1 < n; i++ {
@@ -764,6 +1153,9 @@ func (r *Renderer) appendDirectFace(f *drawlist.ModelFace, slot modelTextureSlot
 	if run != nil {
 		run.vLen += int32(n)
 		run.iLen += int32(3 * (n - 2))
+		if d.retain.capture != nil {
+			d.retain.captureFace(f, run.imgs[0], n, quad)
+		}
 	}
 	r.modelStats.DirectFaces++
 }
@@ -777,7 +1169,7 @@ func (r *Renderer) appendDirectGPUFace(f modelGPUFace, ox, oy, s float32, entry 
 	if n < 3 {
 		return
 	}
-	run := d.colourRun([2]*ebiten.Image{r.texturePage(), r.tables.atlas})
+	run := d.colourRun([2]*ebiten.Image{r.texturePage(), r.tables.atlas}, 8)
 	base := uint32(len(d.verts)) - uint32(run.vOff)
 	for _, v := range f.Vertices {
 		d.verts = append(d.verts, ebiten.Vertex{
@@ -846,14 +1238,16 @@ func (r *Renderer) commitModelDirect(g *drawlist.ModelGeometry) {
 // destination command over the shadow's clipped world rectangle whose fragment
 // resolves the silhouette from the shadow's page (source 3) and punches the
 // body's wholly covered blocks read from the body's page (source 2)
-// (destOpModelDirectShadow). A shadow without a region is omitted, as the
-// slot stage omitted one it could not place.
+// (destOpModelDirectShadow). The body image is the subject's own — a carried
+// child's solo region, not the group's texels — so the punch tests the
+// subject's coverage and nothing else. A shadow without a region is omitted, as
+// the slot stage omitted one it could not place.
 func (r *Renderer) commitModelDirectShadow(g *drawlist.ModelGeometry) {
 	d := &r.modelDirect
 	sg := g.Shadow
 	shadow, ok := d.regions[sg]
-	body, bok := d.regions[g]
-	if !ok || !shadow.ok || !bok || !body.ok || r.sceneDest == nil {
+	body, bok := d.shadowSource(g)
+	if !ok || !shadow.ok || !bok || r.sceneDest == nil {
 		r.modelStats.ShadowsOmitted++
 		return
 	}
@@ -889,12 +1283,16 @@ func (r *Renderer) commitModelDirectShadow(g *drawlist.ModelGeometry) {
 // only when a clip applies), and
 // composites the ALP half-colour of index 0 (destOpModelSilhouetteShadow)
 // [03 R-REN-03D §1, §4]. The body's region is the source, so the shadow costs
-// no region and no faces; a body without a region (the fallback) casts none.
+// no region and no faces of its own; a body without a region (the fallback)
+// casts none. For a carried child that source is the child's solo region: the
+// silhouette is the child's finished image, as the classic composer's copy is,
+// and the clip key then compares against the child's OWN keys rather than the
+// group plane's shifted ones [03 R-REN-03A §4][03 R-REN-03D §1].
 func (r *Renderer) commitModelSilhouetteShadow(g *drawlist.ModelGeometry) {
 	d := &r.modelDirect
 	sg := g.Shadow
-	body, bok := d.regions[g]
-	if !bok || !body.ok || r.sceneDest == nil {
+	body, bok := d.shadowSource(g)
+	if !bok || r.sceneDest == nil {
 		r.modelStats.ShadowsOmitted++
 		return
 	}
@@ -939,50 +1337,54 @@ func (r *Renderer) commitModelSilhouetteShadow(g *drawlist.ModelGeometry) {
 
 // drawModelDirectFallback draws a subject's faces straight onto the composite
 // at native scale in painter order — mean key ascending, recorded order on
-// ties, no key test, no supersample, no reveal — for a subject the atlas
-// could not hold.
+// ties, no key test, no supersample — for a subject the atlas could not hold.
+// An attached-unit group draws as one: every mergeable child's faces join the
+// carrier's in that one order, each at its own anchor and with its key delta
+// applied, so an overflowed transport still carries its cargo
+// [03 R-REN-03A §4].
+//
+// What this path does NOT reproduce, all of it for want of a key plane to put
+// the verdict on or a lane in the fragment to carry it:
+//
+//   - the nanoframe reveal, the waterline tint and the Digger erase
+//     [03 §5.2][03 R-WATER-01 §2][03 R-REN-03A §8], which are per-texel
+//     verdicts on the stored key;
+//   - the subject's shadow, which commitModelDirect's callers omit with no
+//     region to cut it from.
+//
+// A cloaked subject draws the ALP half-colour of its faces, source-over, as
+// the commit does for the group as a whole [03 R-COMP-01 §2]: the carrier's
+// blend covers its cargo, as a staged carrier's does.
+//
+// A frame reaches here only when both atlas pages are full, which neither
+// battle view does (§22.2).
 func (r *Renderer) drawModelDirectFallback(g *drawlist.ModelGeometry) {
 	d := &r.modelDirect
-	b := modelWorldBounds(g)
+	b := modelGroupBounds(g)
 	x0, y0 := maxInt(b.Min.X, 0), maxInt(b.Min.Y, 0)
 	x1, y1 := minInt(b.Max.X, r.clipW()), minInt(b.Max.Y, r.clipH())
 	if x0 >= x1 || y0 >= y1 {
 		return
 	}
-	d.order = d.order[:0]
-	collect := func(faces []drawlist.ModelFace, live bool) {
-		for i := range faces {
-			n := len(faces[i].Vertices)
-			if n < 3 {
-				continue
-			}
-			var sum int64
-			for _, v := range faces[i].Vertices {
-				sum += int64(v.Key)
-			}
-			index := int32(i)
-			if live {
-				index = ^index
-			}
-			d.order = append(d.order, modelDirectFace{key: sum * 256 / int64(n), index: index})
-		}
+	d.fallbackOpacity = 1
+	if g.Cloaked {
+		d.fallbackOpacity = 0.5
 	}
-	collect(g.Faces, false)
-	collect(g.LiveFaces, true)
-	slices.SortStableFunc(d.order, func(a, b modelDirectFace) int { return cmp.Compare(a.key, b.key) })
-	ox, oy := float32(g.AnchorX-g.OriginX), float32(g.AnchorY-g.OriginY)
+	r.modelStats.Skipped += d.groupPainterOrder(g)
 	d.lightSources = r.lighting.near(float32(b.Min.X+b.Max.X)*0.5, float32(b.Min.Y+b.Max.Y)*0.5, float32(b.Dx()+b.Dy())*0.5)
-	d.lightX, d.lightY, d.lightScale, d.lightHeight = ox, oy, 1, g.WorldHeight
+	d.lightX, d.lightY, d.lightScale, d.lightHeight = float32(g.AnchorX-g.OriginX), float32(g.AnchorY-g.OriginY), 1, g.WorldHeight
 	page := r.texturePage()
 	d.verts, d.idx = d.verts[:0], d.idx[:0]
 	d.standalone = d.standalone[:0]
 	for oi, of := range d.order {
-		f := modelDirectFaceAt(g, of.index)
+		owner := modelDirectFaceOwner(g, of.child)
+		f := modelDirectFaceAt(owner, of.index)
 		slot := r.modelTextureFor(f.Texture)
 		if f.Texture != nil && slot.img != nil && slot.img != page {
 			d.standalone = append(d.standalone, oi)
 			continue
 		}
+		ox, oy := modelDirectFaceOrigin(owner)
 		r.appendDirectFace(f, slot, ox, oy, 1, 0, 0, nil)
 	}
 	if len(d.idx) > 0 {
@@ -991,9 +1393,11 @@ func (r *Renderer) drawModelDirectFallback(g *drawlist.ModelGeometry) {
 		}
 	}
 	for _, oi := range d.standalone {
-		f := modelDirectFaceAt(g, d.order[oi].index)
+		owner := modelDirectFaceOwner(g, d.order[oi].child)
+		f := modelDirectFaceAt(owner, d.order[oi].index)
 		slot := r.modelTextureFor(f.Texture)
 		d.verts, d.idx = d.verts[:0], d.idx[:0]
+		ox, oy := modelDirectFaceOrigin(owner)
 		r.appendDirectFace(f, slot, ox, oy, 1, 0, 0, nil)
 		if len(d.idx) == 0 {
 			continue
@@ -1003,6 +1407,63 @@ func (r *Renderer) drawModelDirectFallback(g *drawlist.ModelGeometry) {
 		}
 	}
 	d.verts, d.idx = d.verts[:0], d.idx[:0]
+}
+
+// groupPainterOrder fills the lane's order with every face a fallback group
+// draws — the carrier's cached and live lanes, then each mergeable child's —
+// sorted by mean height key ascending, stably, so faces of equal key keep the
+// order they were recorded in. A child's key delta is applied to its corners as
+// the group region's composition applies it, saturating at the byte's range
+// [03 R-REN-03A §4], so the cargo sorts against the carrier where its keys
+// actually put it. It returns the children the lane cannot merge, which the
+// caller counts as skipped.
+func (d *modelDirectLane) groupPainterOrder(g *drawlist.ModelGeometry) (skipped int) {
+	d.order = d.order[:0]
+	collect := func(faces []drawlist.ModelFace, live bool, child, delta int32) {
+		for i := range faces {
+			n := len(faces[i].Vertices)
+			if n < 3 {
+				continue
+			}
+			var sum int64
+			for _, v := range faces[i].Vertices {
+				sum += int64(modelDirectShiftKey(v.Key, delta))
+			}
+			index := int32(i)
+			if live {
+				index = ^index
+			}
+			d.order = append(d.order, modelDirectFace{key: sum * 256 / int64(n), index: index, child: child})
+		}
+	}
+	collect(g.Faces, false, -1, 0)
+	collect(g.LiveFaces, true, -1, 0)
+	for ci, child := range g.Children {
+		cg := child.Geometry
+		if !mergeableChild(cg) {
+			skipped++
+			continue
+		}
+		collect(cg.Faces, false, int32(ci), child.KeyDelta)
+		collect(cg.LiveFaces, true, int32(ci), child.KeyDelta)
+	}
+	slices.SortStableFunc(d.order, func(a, b modelDirectFace) int { return cmp.Compare(a.key, b.key) })
+	return skipped
+}
+
+// modelDirectFaceOwner is the packet a fallback face belongs to: the carrier,
+// or one of its carried children.
+func modelDirectFaceOwner(g *drawlist.ModelGeometry, child int32) *drawlist.ModelGeometry {
+	if child < 0 {
+		return g
+	}
+	return g.Children[child].Geometry
+}
+
+// modelDirectFaceOrigin is where a packet's local corners land on the
+// framebuffer: each child carries its own anchor.
+func modelDirectFaceOrigin(g *drawlist.ModelGeometry) (float32, float32) {
+	return float32(g.AnchorX - g.OriginX), float32(g.AnchorY - g.OriginY)
 }
 
 func modelDirectFaceAt(g *drawlist.ModelGeometry, index int32) *drawlist.ModelFace {
@@ -1026,7 +1487,8 @@ func modelDirectMapped(mode int) bool {
 // modelDirectKeyShaderSource is the key pass: the face's height key — the
 // two-chain mapping's for a mapped face, the vertex lane's otherwise —
 // narrowed to a byte as the span writers narrow it, in red, under a max
-// blend. Source 3 is the parameter image.
+// blend. Source 3 is the parameter image; a mapped face's Custom2 names the
+// subject's entry, whose magnitude locates the frame its parameters are in.
 func modelDirectKeyShaderSource() string {
 	return `//kage:unit pixels
 
@@ -1039,7 +1501,10 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 	}
 	key := floor(custom.y)
 	if modelDirectMapped(mode) {
-		key = floor(modelQuadLanes(color.b, floor(dstPos.xy-imageDstOrigin())).z)
+		// The parameters are subject-local: the subject's frame, read from its
+		// verdict entry (either sign), shifts the fragment into them.
+		frame := modelQuadFrame(abs(floor(custom.z + 0.5)))
+		key = floor(modelQuadLanes(color.b, floor(dstPos.xy-imageDstOrigin())-frame).z)
 	}
 	key = key - floor(key/256.0)*256.0
 	return vec4(key/255.0, 0.0, 0.0, 1.0)
@@ -1049,8 +1514,9 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 
 // modelDirectColourShaderSource is the colour pass over the atlas. Source 0 is
 // the texture page (or a standalone texture), 1 the table atlas, 2 the key
-// plane, 3 the parameter image. A fragment whose key is below the stored one
-// is another face's pixel. The reveal rewrites a cached face's index by its
+// plane, 3 the parameter image, whose corners are subject-local and read
+// through the frame the subject's entry carries. A fragment whose key is
+// below the stored one is another face's pixel. The reveal rewrites a cached face's index by its
 // key band [03 §5.2]; the waterline and Digger clip erase or tint at and
 // below their keys [03 R-WATER-01 §2][03 R-REN-03A §8], the subject's own on
 // its own key and then the carrier's on the group key, every verdict on the
@@ -1098,9 +1564,11 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 	}
 	key := floor(custom.y)
 	mapped := modelDirectMapped(mode)
+	// The subject's verdict entry: negated when it carries the frame alone.
+	entry := floor(custom.z + 0.5)
 	var lanes vec4
 	if mapped {
-		lanes = modelQuadLanes(color.b, d)
+		lanes = modelQuadLanes(color.b, d-modelQuadFrame(abs(entry)))
 		key = floor(lanes.z)
 	}
 	key = key - floor(key/256.0)*256.0
@@ -1141,7 +1609,6 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 		t := clamp(floor(srcPos-imageSrc0Origin()), lo, hi)
 		idx = floor(imageSrc0At(imageSrc0Origin()+t+vec2(0.5, 0.5)).r*255.0 + 0.5)
 	}
-	entry := floor(custom.z + 0.5)
 	if entry > 0.5 && mode != ` + fmt.Sprint(modelDirectShadow) + ` {
 		base := (entry-1.0)*12.0
 		a := modelQuadTexel(base)

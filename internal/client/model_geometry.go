@@ -305,6 +305,11 @@ func (c *Client) shadowGeometryAt(draw *presentationrender.UnitDraw, anchorX, an
 }
 
 func (c *Client) prepareModelGeometry(draw *presentationrender.UnitDraw, owner uint8, selector teamColor, id uint64, kind uint8, reveal *presentationrender.NanoframeReveal, outline uint8) *drawlist.ModelGeometry {
+	if kind == modelCursorFeature {
+		if g, retained := c.featureGeometry(draw, selector, id); retained {
+			return g
+		}
+	}
 	polys := c.collectDrawPolys(draw, selector, id, kind)
 	if len(polys) == 0 {
 		return nil
@@ -317,6 +322,64 @@ func (c *Client) prepareModelGeometry(draw *presentationrender.UnitDraw, owner u
 	g.Supersample = supersample
 	c.configureModelGeometry(g, draw, owner, kind, reveal, outline)
 	return g
+}
+
+// featureGeometry is prepareModelGeometry for a 3DO feature — a wreck, or a
+// map-authored model feature — with a publication identity: its faces are
+// retained beside that identity and rebased onto this frame's placement, so
+// the packet carries a cache key the executor's retained store can replay
+// (docs/DESIGN_GPU_RENDERER.md §13.12, §22) and the recorder projects the
+// model only when an input of the projection changes. The second result is
+// false for a feature the retained path does not take, which keeps the
+// per-frame projection: no frame arena, a draw whose pose does not describe
+// every piece, or a model with an animated texture, whose frames the
+// per-frame walk advances (a retained lane would freeze them). A feature
+// without a published identity — which is every feature today — is retained
+// under its map position (featureBodyID).
+//
+// The projection's inputs are exactly those of the unit path's cached lane,
+// which this reuses: the model by name, the folded piece pose (which is what
+// carries the corpse's orientation triple [03 R-RAST-01 §6]), the published
+// team colour for LOGOS faces [03 R-RAST-01 §3], the shading option, the
+// geometry supersample gate, the view scale, the palette tables, and the
+// texture index generation the model's table was resolved under. The
+// position is not one: every corner is model-local, and the placement, the
+// half-pixel offset, the lighting height and the waterline are supplied by
+// the rebase and configureModelGeometryFor each frame, exactly as for a
+// unit. The rebased packet is therefore the packet the per-frame projection
+// builds, corner for corner (verified by the battle capture).
+func (c *Client) featureGeometry(draw *presentationrender.UnitDraw, selector teamColor, id uint64) (*drawlist.ModelGeometry, bool) {
+	if draw == nil || draw.Model == nil || !c.modelScratch.active || !shadowPoseComplete(draw) || c.modelHasAnimatedTexture(draw.Model) {
+		return nil, false
+	}
+	key := featureBodyID(id, draw.WorldPos[0], draw.WorldPos[2])
+	body := c.cachedBody(key)
+	in := c.featureBodyInputs(draw, selector)
+	if body == nil || body.geometry == nil || body.featureInputs != in || !samePieceStates(body.featurePose, draw.PieceStates) {
+		polys := c.collectDrawPolys(draw, selector, id, modelCursorFeature)
+		if len(polys) == 0 {
+			return nil, true
+		}
+		w, h, ox, oy := modelExtent(polys)
+		ax, ay := c.modelAnchor(draw)
+		// As for a unit, the retained doubled lane carries no half-pixel
+		// offset; the rebase adds this frame's.
+		supersample := c.modelSupersampleGeometry(polys, draw.KeyPlane, w, h, c.doubledPlacement(ox, oy, 0, 0, false))
+		placeFaces(polys, ox, oy, 1)
+		base := c.borrowModelPacket(polys, int32(w), int32(h), ox, oy, ax, ay, 1, draw.KeyPlane, drawlist.ModelFallbackNone)
+		base.Supersample = supersample
+		body = c.replaceFeatureGeometry(key, draw, in, base)
+	}
+	body.featureSeenTick = c.frameTick
+	src := body.geometry
+	ax, ay, hx, hy := c.modelPlacement(draw)
+	g := c.borrowRebasedModelGeometry(src, src.Width, src.Height, src.OriginX, src.OriginY, ax, ay, hx, hy)
+	if g == nil {
+		return nil, false
+	}
+	g.Cache = body.cacheKey(hx, hy)
+	c.configureModelGeometryFor(body, g, draw, 0, modelCursorFeature, nil, 0)
+	return g, true
 }
 
 // unitGeometryPair records the native counterpart of the retained classic
@@ -414,10 +477,15 @@ func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (*drawli
 		return nil, nil
 	}
 	// The rebased packet is the retained raster placed for this frame, so it
-	// carries the identity a modern executor keys its persistent slot on
-	// (docs/DESIGN_GPU_RENDERER.md §13.12). The reveal, the outline and the live
-	// lane below are rebuilt every frame into that same slot, so any of them
-	// disqualifies the packet from being kept.
+	// carries the identity a modern executor keys its retained cached lane on
+	// (docs/DESIGN_GPU_RENDERER.md §13.12). The key names the CACHED faces
+	// alone: the reveal, the outline and the live lane below are rebuilt every
+	// frame, and the executor draws them per frame after the cached lane in
+	// retail's order whether or not it replayed that lane [03 R-REN-03A §4],
+	// so none of them disqualifies the packet. A nanoframe's cached lane
+	// rebuilds when its construction fraction moves (cachedGeometryMustRebuild)
+	// and takes a new revision then; between those, the faces are the same
+	// and the reveal band rides the verdict entry.
 	g.Cache = body.cacheKey(hx, hy)
 	// Cloak changes the final image blit, not the retained raster or its key
 	// [03 R-RAST-01 §7]. Direct live packets below keep their opaque fill.
@@ -427,9 +495,6 @@ func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (*drawli
 	// cached lane is not, so a reveal or a live lane here does not disturb it
 	// (§13.12 "Shadows — contract P4").
 	c.configureModelGeometryFor(body, g, draw, v.Owner, modelCursorUnit, reveal, outline)
-	if g.Reveal != nil || len(g.Outline) != 0 {
-		g.Cache = drawlist.ModelCacheKey{}
-	}
 	if len(live) != 0 {
 		if ss := g.Supersample; ss != nil {
 			// The live lane joins the doubled raster too, at the same
@@ -440,14 +505,12 @@ func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (*drawli
 		g.LiveFaces = c.borrowModelPacket(live, int32(w), int32(h), ox, oy, ax, ay, 1, draw.KeyPlane, drawlist.ModelFallbackNone).Faces
 	}
 	if g.KeyPlane {
-		if len(g.LiveFaces) != 0 || g.Supersample != nil && len(g.Supersample.LiveFaces) != 0 {
-			g.Cache = drawlist.ModelCacheKey{}
-		}
+		// The keyed packet carries both lanes; its key still names the
+		// cached one alone (above).
 		return g, nil
 	}
 	// The one-plane branch commits its cached body, then the direct projected
-	// live invocation as a later Model command [03 R-RAST-01 §2]. Its slot holds
-	// the cached lane alone, so it stays reusable.
+	// live invocation as a later Model command [03 R-RAST-01 §2].
 	g.LiveFaces = nil
 	if ss := g.Supersample; ss != nil {
 		ss.LiveFaces = nil

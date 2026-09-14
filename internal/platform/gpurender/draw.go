@@ -7,13 +7,19 @@ import (
 
 // The destination-independent 2D primitive families for the modern executor:
 // solid and outline fills, the Bresenham line, and the plain point batch
-// (docs/DESIGN_GPU_RENDERER.md §2.3, C-G4). Each writes a physical palette index
-// straight into the indexed offscreen, so the stored bytes match the classic byte
-// writers exactly. Every write is an axis-aligned integer quad, which rasterizes
+// (docs/DESIGN_GPU_RENDERER.md §2.3, C-G4). Each carries a physical palette index
+// that the scene shader resolves through the table atlas's PAL row as it writes
+// the true-colour composite, so the pixel holds exactly the colour the classic
+// byte writer's stored index expands to (C-G8 as amended, §13.3). The index a
+// family chooses is still the classic one, so a family that picks its index by
+// another table's lookup keeps that integer step intact.
+// Every write is an axis-aligned integer quad, which rasterizes
 // to exactly the classic rectangle's pixels; a single-pixel write is a 1×1 quad.
 // Lines and outline frames are reduced to the exact pixel set the classic integer
-// algorithms produce and drawn as 1×1 quads, because a GPU-native line or thin
-// quad would not match the integer Bresenham / per-edge clip [03 §5.4][R-SEL-02A].
+// algorithms produce, because a GPU-native line or thin quad would not match the
+// integer Bresenham / per-edge clip [03 §5.4][R-SEL-02A]. That pixel set is drawn
+// as its RUNS of consecutive pixels rather than pixel by pixel: a frame edge is
+// one run, a shallow line one run per row, and a steep line runs of one.
 //
 // None of them draws directly: each compiles into the scheduler's opaque batch
 // under the scene shader's constant-index op (§11.2), so a whole phase's fills,
@@ -138,65 +144,105 @@ func (r *Renderer) fillSolidInclusive(left, top, right, bottom int32, idx uint8)
 	r.appendSolidQuad(float32(left), float32(top), float32(right+1), float32(bottom+1), idx)
 }
 
+// appendSolidRunX appends the quads covering one horizontal run of consecutive
+// one-pixel writes, [xLo..xHi] inclusive on row y. appendSolidRunY is the same
+// for a column. A run's pixels are contiguous and carry one index, so the run is
+// the union of its members' quads and a later overlapping write resolves the
+// same way either way.
+//
+// At a world factor of one or above — which includes every command outside the
+// world region — that union is exactly the record-space quad [lo, hi+1), because
+// the scheduler scales the span and leaves it alone. Below one the scheduler
+// widens every sub-pixel span to exactly one screen pixel (§16.3), so the run's
+// LAST pixel reaches one screen pixel past the transform of hi while [lo, hi+1)
+// reaches only the transform of hi+1. The run is then two quads, [lo, hi) and
+// the final pixel, whose union is exactly the per-pixel union; every edge is
+// still the transform of an integer, so the split introduces no rounding of its
+// own.
+func (r *Renderer) appendSolidRunX(xLo, xHi, y int, idx uint8) {
+	if xLo > xHi {
+		return
+	}
+	if xLo < xHi && r.subPixelSpan() {
+		r.appendSolidQuad(float32(xLo), float32(y), float32(xHi), float32(y+1), idx)
+		r.appendSolidQuad(float32(xHi), float32(y), float32(xHi+1), float32(y+1), idx)
+		return
+	}
+	r.appendSolidQuad(float32(xLo), float32(y), float32(xHi+1), float32(y+1), idx)
+}
+
+func (r *Renderer) appendSolidRunY(x, yLo, yHi int, idx uint8) {
+	if yLo > yHi {
+		return
+	}
+	if yLo < yHi && r.subPixelSpan() {
+		r.appendSolidQuad(float32(x), float32(yLo), float32(x+1), float32(yHi), idx)
+		r.appendSolidQuad(float32(x), float32(yHi), float32(x+1), float32(yHi+1), idx)
+		return
+	}
+	r.appendSolidQuad(float32(x), float32(yLo), float32(x+1), float32(yHi+1), idx)
+}
+
+// subPixelSpan reports whether the open world transform shrinks a one-pixel
+// record span below one screen pixel, which is the case the scheduler's minimum
+// span widens (§16.3).
+func (r *Renderer) subPixelSpan() bool {
+	return r.sched.worldOn && r.sched.worldScale < 1
+}
+
 // drawFrameInclusive reproduces internal/client drawIndexedFrameInclusive: a
 // one-pixel inclusive frame whose four edges are each clipped independently
-// against the inclusive clip rectangle, then written as the exact pixel set. It
-// draws that pixel set as 1×1 quads so the covered pixels match the byte writer
-// including its corner and degenerate-edge behaviour [R-SEL-02A].
+// against the inclusive clip rectangle, then written as the exact pixel set
+// [R-SEL-02A].
+//
+// The byte writer walks that pixel set one pixel at a time and tests each pixel
+// against the clip rectangle and the framebuffer. For an axis-aligned frame the
+// test is redundant: every pixel of an edge shares the edge's row or column, so
+// the surviving pixels are the edge clamped to the intersection of the frame,
+// the clip rectangle and the framebuffer — one contiguous run. Each edge is
+// therefore emitted as one run rather than as its pixels, which is four runs for
+// a frame instead of 2(W+H) one-pixel quads.
 func (r *Renderer) drawFrameInclusive(rMinX, rMinY, rMaxX, rMaxY, clipMinX, clipMinY, clipMaxX, clipMaxY int, idx uint8) {
 	if rMinX > rMaxX || rMinY > rMaxY || clipMinX > clipMaxX || clipMinY > clipMaxY {
 		return
 	}
-	// The command's screen rectangle is the frame's clipped bounding box; the
-	// per-pixel writes below stay inside it.
-	bx0 := maxInt(maxInt(rMinX, clipMinX), 0)
-	by0 := maxInt(maxInt(rMinY, clipMinY), 0)
-	bx1 := minInt(minInt(rMaxX, clipMaxX)+1, r.clipW())
-	by1 := minInt(minInt(rMaxY, clipMaxY)+1, r.clipH())
-	if !r.beginSolid(bx0, by0, bx1, by1) {
+	// The intersection of the frame, the clip rectangle and the framebuffer, as
+	// inclusive bounds. It is both the command's screen rectangle and the extent
+	// every edge run is clamped to.
+	left := maxInt(maxInt(rMinX, clipMinX), 0)
+	top := maxInt(maxInt(rMinY, clipMinY), 0)
+	right := minInt(minInt(rMaxX, clipMaxX), r.clipW()-1)
+	bottom := minInt(minInt(rMaxY, clipMaxY), r.clipH()-1)
+	if !r.beginSolid(left, top, right+1, bottom+1) {
 		return
 	}
-	write := func(x, y int) {
-		if x < 0 || y < 0 || x >= r.clipW() || y >= r.clipH() {
-			return
-		}
-		if x < clipMinX || x > clipMaxX || y < clipMinY || y > clipMaxY {
-			return
-		}
-		r.appendSolidQuad(float32(x), float32(y), float32(x+1), float32(y+1), idx)
+	// An edge survives when its own row or column is inside that intersection;
+	// the frame's own bounds are implied, since each edge lies on one of them.
+	if rMinY >= top && rMinY <= bottom {
+		r.appendSolidRunX(left, right, rMinY, idx)
 	}
-	horizontal := func(y int) {
-		if y < clipMinY || y > clipMaxY {
-			return
-		}
-		left, right := maxInt(rMinX, clipMinX), minInt(rMaxX, clipMaxX)
-		for x := left; x <= right; x++ {
-			write(x, y)
-		}
+	if rMaxY != rMinY && rMaxY >= top && rMaxY <= bottom {
+		r.appendSolidRunX(left, right, rMaxY, idx)
 	}
-	vertical := func(x int) {
-		if x < clipMinX || x > clipMaxX {
-			return
-		}
-		top, bottom := maxInt(rMinY, clipMinY), minInt(rMaxY, clipMaxY)
-		for y := top; y <= bottom; y++ {
-			write(x, y)
-		}
+	if rMinX >= left && rMinX <= right {
+		r.appendSolidRunY(rMinX, top, bottom, idx)
 	}
-	horizontal(rMinY)
-	if rMaxY != rMinY {
-		horizontal(rMaxY)
-	}
-	vertical(rMinX)
-	if rMaxX != rMinX {
-		vertical(rMaxX)
+	if rMaxX != rMinX && rMaxX >= left && rMaxX <= right {
+		r.appendSolidRunY(rMaxX, top, bottom, idx)
 	}
 }
 
 // Line replays one indexed line. A GPU-native line does not match the classic
-// integer Bresenham, so this walks the identical Bresenham sequence and draws
-// each point as a 1×1 quad; points off the framebuffer no-op, exactly as the
-// byte writer's per-point clip skips them [03 §5.4].
+// integer Bresenham, so this walks the identical Bresenham sequence; points off
+// the framebuffer no-op, exactly as the byte writer's per-point clip skips them
+// [03 §5.4].
+//
+// The walk emits horizontal RUNS rather than one quad per point. Within one row
+// Bresenham advances x by the same step every iteration and never returns to a
+// row it has left, so a row's visible points are consecutive and the whole row
+// is one run (appendSolidRunX). A shallow line costs about one run per row
+// instead of one quad per pixel; a steep line has runs of one and costs what it
+// always did.
 func (r *Renderer) Line(l drawlist.Line) {
 	if r == nil || r.surfaces[0] == nil {
 		return
@@ -230,9 +276,20 @@ func (r *Renderer) Line(l drawlist.Line) {
 		sy = -1
 	}
 	err := dx - dy
+	cw, ch := int32(r.clipW()), int32(r.clipH())
+	// The open run: its row and its inclusive first and last column.
+	var runY, runLo, runHi int32
+	open := false
 	for {
-		if x0 >= 0 && x0 < int32(r.clipW()) && y0 >= 0 && y0 < int32(r.clipH()) {
-			r.appendSolidQuad(float32(x0), float32(y0), float32(x0+1), float32(y0+1), l.Index)
+		if x0 >= 0 && x0 < cw && y0 >= 0 && y0 < ch {
+			if open && y0 == runY {
+				runLo, runHi = minInt32(runLo, x0), maxInt32(runHi, x0)
+			} else {
+				if open {
+					r.appendSolidRunX(int(runLo), int(runHi), int(runY), l.Index)
+				}
+				runY, runLo, runHi, open = y0, x0, x0, true
+			}
 		}
 		if x0 == x1 && y0 == y1 {
 			break
@@ -246,6 +303,9 @@ func (r *Renderer) Line(l drawlist.Line) {
 			err += dx
 			y0 += sy
 		}
+	}
+	if open {
+		r.appendSolidRunX(int(runLo), int(runHi), int(runY), l.Index)
 	}
 }
 

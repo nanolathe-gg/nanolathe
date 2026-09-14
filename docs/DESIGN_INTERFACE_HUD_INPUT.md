@@ -1927,7 +1927,7 @@ superseding keyboard commands, and a short release crossing into the radar.
 
 The integrated fast and retail gates passed. The sequential live battle check
 used Great Divide, seed 7, 1920×1080, 180 measured frames, 30 FPS, native zoom,
-and `NANOLATHE_METAL_GLINT=0` for matching scene metadata. Classic/modern median
+with the metallic glint off on both sides for matching scene metadata. Classic/modern median
 cadence was 33.334/33.334 ms; median host draw work was 14.977/9.977 ms.
 Frame-by-frame workload censuses matched, including 9–15 burning features and
 four active factories per owner. Both captures were inspected. These are paced

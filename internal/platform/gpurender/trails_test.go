@@ -104,3 +104,35 @@ func TestTrailDeviceFixture(t *testing.T) {
 		t.Fatalf("device fixture loop: %v", deviceFixtureResult)
 	}
 }
+
+// TestTrailsCompileIsAllocationFree locks the §11.2 allocation policy for the
+// mark batch. The scheduler needs the batch's rectangle before any quad is
+// appended, so the marks are visited twice; neither pass may keep a list, which
+// is what the per-frame corner, strength and shape slices used to be.
+func TestTrailsCompileIsAllocationFree(t *testing.T) {
+	r, _ := schedulerFixture(t)
+	marks := make([]drawlist.Trail, 64)
+	for i := range marks {
+		marks[i] = drawlist.Trail{
+			X: int32(i % 60), Y: int32((i * 7) % 60),
+			AxisX: 512, AxisY: 128, CrossX: -128, CrossY: 512,
+			Strength: uint8(20 + i%200),
+		}
+	}
+	// Two marks that contribute nothing: a faded one and a degenerate one. Both
+	// passes must agree on skipping them, or the emitted quads would not match
+	// the rectangle the bounds pass measured.
+	marks[3].Strength = 0
+	marks[9].AxisX, marks[9].AxisY = 0, 0
+	compile := func() {
+		r.sched.resetFrame(64, 64)
+		r.Trails(drawlist.Trails{Marks: marks})
+	}
+	compile()
+	if got, want := len(r.sched.classVerts(schedDest)), (len(marks)-2)*quadVertices; got != want {
+		t.Fatalf("the mark batch compiled %d vertices, want %d (one quad per contributing mark)", got, want)
+	}
+	if got := testing.AllocsPerRun(8, compile); got != 0 {
+		t.Fatalf("the mark batch allocated %v objects per frame, want none", got)
+	}
+}

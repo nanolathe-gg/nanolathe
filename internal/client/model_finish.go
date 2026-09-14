@@ -33,6 +33,29 @@ var embeddedMaterialTDF []byte
 // at load time, so the pointer swap is atomic and the map itself never mutates.
 var materialTable atomic.Pointer[map[string]uint8]
 
+// materialGeneration counts the annotations installed into materialTable. It
+// exists so a resolved texture reference can carry the finish it read as a
+// plain byte and still be invalidated when an install replaces the table: the
+// per-face compose path compares this counter instead of lowercasing the
+// texture name and probing the map on every textured face.
+//
+// A writer stores the table first and bumps the counter second, and a reader
+// samples the counter first and the table second. Both orders are the
+// conservative one: a byte read across an install is labelled with the older
+// generation and is therefore discarded, never kept under the new one.
+var materialGeneration atomic.Uint64
+
+// materialForKey annotates an already-lowercased texture name and reports the
+// generation it was read under, for a caller that wants to cache the byte.
+func materialForKey(key string) (uint8, uint64) {
+	gen := materialGeneration.Load()
+	table := materialTable.Load()
+	if table == nil {
+		return drawlist.ModelMaterialDefault, gen
+	}
+	return (*table)[key], gen
+}
+
 func init() {
 	table, err := parseMaterialTable(embeddedMaterialTDF)
 	if err != nil {
@@ -42,6 +65,7 @@ func init() {
 		panic(fmt.Sprintf("nanolathe: embedded material annotation is unreadable: %v", err))
 	}
 	materialTable.Store(&table)
+	materialGeneration.Add(1)
 }
 
 // parseMaterialTable reads the authored [materials] section into a lowercase
@@ -104,6 +128,7 @@ func SetMaterialTable(logical string, data []byte, providers string) error {
 		return materialDiagnostic(logical, providers, err)
 	}
 	materialTable.Store(&table)
+	materialGeneration.Add(1)
 	return nil
 }
 

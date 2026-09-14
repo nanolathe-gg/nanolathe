@@ -126,19 +126,26 @@ func checkAircraftShadowCaptures() error {
 						}
 					}
 					for frame, tick := range phases {
-						var list drawlist.List
-						list.RecordClear()
-						list.RecordTerrain(drawlist.Terrain{
-							Terrain: terrain, DstW: w, DstH: h, Scale: camera.ViewScale(scale * 2),
-							OriginX: int32(site.point.X) - w/(2*scale), OriginY: int32(site.point.Y) - shadowY/scale,
-							Water: drawlist.WaterSurface{Enabled: true, Tick: tick, Energy: .7},
-						})
-						list.RecordModel(drawlist.Model{Geometry: g})
-						list.RecordExpand()
 						sheet := image.NewRGBA(image.Rect(0, 0, 2*w, h))
 						var before []byte
-						for col, on := range []bool{false, true} {
-							renderer.SetAircraftShadows(on)
+						// The soft treatment has no switch: a recorded clearance
+						// of zero is what selects the ordinary silhouette route,
+						// so the left panel records that instead (§34).
+						for col, soft := range []bool{false, true} {
+							subject := g
+							if !soft {
+								subject = g.Clone()
+								subject.AircraftShadowHeight = 0
+							}
+							var list drawlist.List
+							list.RecordClear()
+							list.RecordTerrain(drawlist.Terrain{
+								Terrain: terrain, DstW: w, DstH: h, Scale: camera.ViewScale(scale * 2),
+								OriginX: int32(site.point.X) - w/(2*scale), OriginY: int32(site.point.Y) - shadowY/scale,
+								Water: drawlist.WaterSurface{Enabled: true, Tick: tick, Energy: .7},
+							})
+							list.RecordModel(drawlist.Model{Geometry: subject})
+							list.RecordExpand()
 							pixels := make([]byte, w*h*4)
 							renderer.Execute(&list, w, h).ReadPixels(pixels)
 							if col == 0 {
@@ -259,27 +266,35 @@ func profileAircraftShadows(dir, site string, renderer *Renderer, body *drawlist
 	var results []result
 	const w, h = 1280, 960
 	for _, count := range []int{1, 64} {
-		var list drawlist.List
-		list.RecordClear()
-		terrain := renderer.water.record
-		terrain.DstW, terrain.DstH = w, h
-		list.RecordTerrain(terrain)
-		for i := 0; i < count; i++ {
-			g := body.Clone()
-			x, y := int32(80+(i%8)*155), int32(125+(i/8)*115)
-			g.AnchorX, g.AnchorY = x-10, y-80
-			g.Shadow.AnchorX, g.Shadow.AnchorY = x, y
-			list.RecordModel(drawlist.Model{Geometry: g})
+		// Clearance zero selects the ordinary silhouette route, so the two
+		// arms of the pairing differ in the recording, not in a switch (§34).
+		build := func(soft bool) *drawlist.List {
+			list := &drawlist.List{}
+			list.RecordClear()
+			terrain := renderer.water.record
+			terrain.DstW, terrain.DstH = w, h
+			list.RecordTerrain(terrain)
+			for i := 0; i < count; i++ {
+				g := body.Clone()
+				x, y := int32(80+(i%8)*155), int32(125+(i/8)*115)
+				g.AnchorX, g.AnchorY = x-10, y-80
+				g.Shadow.AnchorX, g.Shadow.AnchorY = x, y
+				if !soft {
+					g.AircraftShadowHeight = 0
+				}
+				list.RecordModel(drawlist.Model{Geometry: g})
+			}
+			list.RecordExpand()
+			return list
 		}
-		list.RecordExpand()
 		for run, on := range []bool{false, true, true, false} {
-			renderer.SetAircraftShadows(on)
+			list := build(on)
 			var submits, completions []float64
 			var img *ebiten.Image
 			var pixel [4]byte
 			for frame := 0; frame < 240; frame++ {
 				start := time.Now()
-				img = renderer.Execute(&list, w, h)
+				img = renderer.Execute(list, w, h)
 				submitted := time.Since(start)
 				img.SubImage(image.Rect(0, 0, 1, 1)).(*ebiten.Image).ReadPixels(pixel[:])
 				completed := time.Since(start)

@@ -1,30 +1,23 @@
 package gpurender
 
-import (
-	"github.com/nanolathe-gg/nanolathe/formats"
-	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
-)
+import "github.com/nanolathe-gg/nanolathe/internal/drawlist"
 
-// Geometry preparation for the model slot atlas: face triangulation, the
 // Outline preparation for the model lane: the row walk that turns a
 // nanoframe outline ring into its per-row endpoint quads, with the span
 // writer's own edge arithmetic (docs/DESIGN_GPU_RENDERER.md §22)
 // [03 R-COMP-01 §3][03 R-RAST-01 §1].
 
-// modelGPUVertex is one prepared corner: positions and lanes carried as
-// fractions until the fragment narrows them.
+// modelGPUVertex is one prepared endpoint corner: its position and key,
+// carried as fractions until the fragment narrows them.
 type modelGPUVertex struct {
-	X, Y  float32
-	Key   float32
-	U, V  float32
-	Shade float32
+	X, Y float32
+	Key  float32
 }
 
+// modelGPUFace is one endpoint quad in the outline's flat colour.
 type modelGPUFace struct {
 	Vertices []modelGPUVertex
-	Texture  *formats.GAFFrame
 	Color    uint8
-	Shaded   bool
 }
 
 func (r *Renderer) prepareModelOutline(g *drawlist.ModelGeometry, doubled bool) []modelGPUFace {
@@ -116,8 +109,6 @@ func chainAt(v []drawlist.ModelVertex, top, bot, step int, y int32) (modelGPUVer
 			candidate = modelGPUVertex{
 				X: float32(biasedEdgeX(a, b, y)), Y: float32(y),
 				Key: mix(float32(a.Key), float32(b.Key)),
-				U:   mix(float32(a.U), float32(b.U)), V: mix(float32(a.V), float32(b.V)),
-				Shade: mix(float32(a.Shade), float32(b.Shade)),
 			}
 			found = true
 		}

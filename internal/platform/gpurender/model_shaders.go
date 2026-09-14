@@ -1,5 +1,7 @@
 package gpurender
 
+import "fmt"
+
 // The model passes deliberately retain the source key as a varying until the
 // fragment.  Reducing already-wrapped vertex bytes is observably different at
 // a signed interpolation crossing [03 R-REN-03A §2][03 R-RAST-01 §1].
@@ -17,11 +19,26 @@ package gpurender
 // holding two 16-bit values each — four corner positions, four corner texel
 // coordinates, then four corner key/shade pairs with the bottom corner's
 // rotated index in the first pair's spare byte.
-const modelQuadMapperSource = `
+//
+// Corner positions are subject-local plus modelQuadLocalBias (model_quads.go),
+// so a caller shifts the fragment's atlas position into the same frame first:
+// modelQuadFrame reads the subject's origin from its verdict entry and returns
+// what to subtract. Every operand of the edge walk then stays non-negative and
+// the arithmetic is the one the absolute positions gave, translated.
+var modelQuadMapperSource = `
 func modelQuadTexel(n float) vec4 {
 	w := imageSrc3Size().x
 	y := floor(n/w)
 	return imageSrc3AtFromSrc0Pos(imageSrc0Origin()+vec2(n-y*w+0.5, y+0.5))
+}
+
+// modelQuadFrame is the atlas texel a subject's packed frame begins at: its
+// local origin texel, stored offset-binary in texel 8 of its verdict entry,
+// less the local bias. A fragment at atlas texel d is at d - modelQuadFrame(e)
+// in the frame the subject's corners were packed in.
+func modelQuadFrame(entry float) vec2 {
+	t := modelQuadTexel((entry-1.0)*12.0 + 8.0)
+	return vec2(modelQuadU16(t.r, t.g), modelQuadU16(t.b, t.a)) - vec2(` + fmt.Sprint(modelQuadKeyBias+modelQuadLocalBias) + `.0)
 }
 
 func modelQuadU16(hi float, lo float) float {

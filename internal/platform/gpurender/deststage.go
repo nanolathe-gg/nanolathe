@@ -7,11 +7,11 @@ import (
 	"math"
 )
 
-// The destination-compositing families for the modern executor beyond fog: the
-// translucent strip blit (BlitTinted), translucent feature bodies and shadows,
-// the UI light/shade rects (FillLitRect/FillShadeRect) and the lit point batch
-// (PointLit), plus the source-through-LHT strip blit (BlitLit), which reads no
-// destination (docs/DESIGN_GPU_RENDERER.md §2.3, C-G4, C-G7, §13.3).
+// The compositing families for the modern executor beyond fog: the translucent
+// strip blit (BlitTinted), translucent feature bodies and shadows, the UI
+// light/shade rects (FillLitRect/FillShadeRect) and the lit point batch
+// (PointLit), plus the source-through-LHT strip blit (BlitLit), which composites
+// nothing (docs/DESIGN_GPU_RENDERER.md §2.3, C-G4, C-G7, §13.3).
 //
 // None of them reads the destination any more. In the true-colour composite the
 // destination-side tables are the arithmetic they were generated from
@@ -21,12 +21,22 @@ import (
 // (§13.2, §13.3). The GPU reads the framebuffer for them, so there is no
 // snapshot and no copy.
 //
-// The order they impose is unchanged. A command of this class is placed one
-// whole phase after every earlier command of the class it overlaps in ANOTHER
-// blend stream, and may share a phase with an earlier one of its own stream,
-// because a fixed-function blend reads and writes the attachment in primitive
-// order and a phase's batch is drawn in record order (§13.11). Either way an
-// overlapping later command composites over the earlier command's result,
+// That leaves the ALP families drawing under source-over, which is the blend
+// every OPAQUE family already draws under — an opaque fragment is the alpha-1
+// case of it — so the tinted blit compiles into the opaque stream with the scene
+// shader's sceneOpTint and shares its runs. It needs no phase of its own against
+// an opaque write: within one run the device applies fragments in primitive
+// order, which is record order, so a later opaque write still overwrites the
+// tinted one and a later tinted blit still composites over the opaque one (C-G3,
+// §11.2 "The scheduler"). Only the ROW families, whose scale blend is genuinely
+// different arithmetic, still take the destination class.
+//
+// The order every family imposes is unchanged. A destination-class command is
+// placed one whole phase after every earlier command of the class it overlaps in
+// ANOTHER blend stream, and may share a phase with an earlier one of its own
+// stream, because a fixed-function blend reads and writes the attachment in
+// primitive order and a phase's batch is drawn in record order (§13.11). Either
+// way an overlapping later command composites over the earlier command's result,
 // exactly as the byte writers do when they read c.indexed in record order
 // (§11.2 "The scheduler")[03 R-COMP-01 §2].
 
@@ -45,7 +55,7 @@ func clampLHTRow(level int) int {
 
 // drawLit writes every opaque source texel as LightLookup(row, src), clipping
 // after preserving its source offset from (x,y). The transparent key is skipped
-// [03 §4.3.1]. It reads no destination, so it joins the opaque batch. row is the
+// [03 §4.3.1]. It composites nothing, so it joins the opaque batch. row is the
 // caller's LHT row clamped to 0..31.
 func (r *Renderer) drawLit(f *formats.GAFFrame, x, y, row, clipX, clipY, clipW, clipH int) {
 	if f == nil || r.scene2D == nil || r.tables.atlas == nil {
@@ -119,7 +129,7 @@ func (r *Renderer) drawTint(f *formats.GAFFrame, x, y, clipX, clipY, clipW, clip
 // drawTintLight preserves the strip blend and ordering while modulating only
 // explicitly classified smoke with nearby visible explosion light (§23).
 func (r *Renderer) drawTintLight(f *formats.GAFFrame, x, y, clipX, clipY, clipW, clipH int, lights *subjectLights, height float32) {
-	if f == nil || r.sceneDest == nil || r.tables.atlas == nil {
+	if f == nil || r.scene2D == nil || r.tables.atlas == nil {
 		return
 	}
 	e := r.sceneFrameFor(f)
@@ -139,15 +149,19 @@ func (r *Renderer) drawTintLight(f *formats.GAFFrame, x, y, clipX, clipY, clipW,
 	dx0, dy0, dx1, dy1 := x+col0, y+row0, x+col1, y+row1
 	imgs := r.sceneImages(e)
 	imgs[1] = r.tables.atlas
-	if !r.sched.begin(schedDest, dx0, dy0, dx1, dy1, imgs) {
+	// The opaque stream, not the destination one: the half-colour fragment draws
+	// under source-over, which is what every opaque family draws under, so it
+	// shares their shader, their run and their placement rules (§13.3 "Blend
+	// classes", shaders.go sceneOpTint).
+	if !r.sched.begin(schedOpaque, dx0, dy0, dx1, dy1, imgs) {
 		return
 	}
-	batch := &r.sched.phases[r.sched.curPhase].batch[schedDest]
+	batch := &r.sched.phases[r.sched.curPhase].batch[schedOpaque]
 	before := len(batch.verts)
-	r.sched.quad(schedDest,
+	r.sched.quad(schedOpaque,
 		float32(dx0), float32(dy0), float32(dx1), float32(dy1),
 		float32(int(e.x)+col0), float32(int(e.y)+row0), float32(int(e.x)+col1), float32(int(e.y)+row1),
-		[4]float32{}, [4]float32{0, 0, 0, destOpTint})
+		[4]float32{}, [4]float32{0, 0, 0, sceneOpTint})
 	if lights != nil && lights.count > 0 {
 		// quad transforms destination coordinates, so evaluate the four RECORD
 		// corners explicitly instead of reading back the transformed vertices.
@@ -285,13 +299,18 @@ func (r *Renderer) drawLitPoints(points []drawlist.Point) {
 	for _, pt := range points {
 		x, y := int(pt.X), int(pt.Y)
 		if resample {
-			sx, sy := int(math.Floor(float64(x)*k)), int(math.Floor(float64(y)*k))
-			if ox != 0 || oy != 0 {
-				// The first framebuffer centre covered by this translated record
-				// texel. Keep legacy zero-offset selection byte-exact.
-				sx = int(math.Ceil(float64(x)*k + ox - 0.5))
-				sy = int(math.Ceil(float64(y)*k + oy - 0.5))
-			}
+			// The first framebuffer centre this record texel covers. A zero
+			// offset is just this expression's general case, not a separate
+			// rule: selecting by floor(x*k) instead lost whole screen columns
+			// for a non-dyadic factor, because the record point the filter
+			// below keeps for screen pixel s — floor((s+0.5)/k) — can satisfy
+			// floor(x*k) < s, so no point ever claimed s and the halo showed
+			// unlit stripes. With the ceil form the two are inverse for every
+			// factor at or below one: floor((s+0.5-o)/k) = x implies
+			// x*k <= s+0.5-o < (x+1)*k, so ceil(x*k+o-0.5) is at most s and,
+			// since k <= 1, greater than s-1 — that is, exactly s.
+			sx := int(math.Ceil(float64(x)*k + ox - 0.5))
+			sy := int(math.Ceil(float64(y)*k + oy - 0.5))
 			// The record point nearest sampling chooses for this screen pixel's
 			// centre; every other record point that lands here is dropped.
 			if x != int(math.Floor((float64(sx)+0.5-ox)/k)) || y != int(math.Floor((float64(sy)+0.5-oy)/k)) {

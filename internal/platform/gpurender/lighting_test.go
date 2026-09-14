@@ -57,7 +57,7 @@ func TestBattleLightSourcesAndReset(t *testing.T) {
 	if len(r.lighting.lights) != 1 {
 		t.Fatal("clone lost lighting metadata")
 	}
-	r.SetBattleLighting(false)
+	r.setBattleLighting(false)
 	r.prepareBattleLighting(&clone)
 	if len(r.lighting.lights) != 0 {
 		t.Fatal("disabled prototype emitted light")
@@ -108,7 +108,7 @@ func checkBattleLightingDevicePixels() error {
 	list.RecordSprite(drawlist.Sprite{Frame: art, X: 105, Y: 65, WorldHeight: 12, LightingScale: 1, Kind: drawlist.BlitKeyed, Anchored: true, LightingKind: drawlist.SpriteLightingExplosion})
 	list.RecordExpand()
 	read := func(on bool) []byte {
-		r.SetBattleLighting(on)
+		r.setBattleLighting(on)
 		out := r.Execute(&list, w, h)
 		pixels := make([]byte, w*h*4)
 		out.ReadPixels(pixels)

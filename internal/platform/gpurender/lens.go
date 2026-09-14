@@ -10,6 +10,9 @@ type lensPass struct {
 	verts   []ebiten.Vertex
 	indices []uint32
 	opts    ebiten.DrawTrianglesShaderOptions
+	// read is the union of the source rectangles the displaced samples come
+	// from — the region this lens has to snapshot (readcopy.go).
+	read readRect
 }
 
 var _ drawlist.LensSink = (*Renderer)(nil)
@@ -23,29 +26,19 @@ func (r *Renderer) Lens(l drawlist.Lens) {
 	}
 	p := &r.lens
 	p.verts, p.indices = p.verts[:0], p.indices[:0]
-	x0, y0, x1, y1 := r.appendLens(l)
-	if len(p.indices) == 0 {
-		return
-	}
-	r.submitSchedule()
-	r.copyComposite(r.surfaces[1], r.surfaces[0], x0, y0, x1, y1)
-	p.opts.Images = [4]*ebiten.Image{r.surfaces[1]}
-	p.opts.Blend = blendComposite
-	r.beginPass(r.surfaces[0])
-	r.recordSubmission(len(p.verts), len(p.indices))
-	r.surfaces[0].DrawTrianglesShader32(p.verts, p.indices, p.shader, &p.opts)
-	r.frameDraws++
+	p.read.reset()
+	r.appendLens(l)
+	r.drawOverComposite(p.read, p.verts, p.indices, p.shader, &p.opts, blendComposite)
 }
 
 // appendLens transforms record coordinates exactly once. Only nonidentity
 // samples need geometry: key and sentinel tests cannot change identity pixels.
 // The native map is shared with the classic executor; no radial arithmetic or
 // animation is invented by the shader (GPU design C-G3, lens replay).
-func (r *Renderer) appendLens(l drawlist.Lens) (int, int, int, int) {
+func (r *Renderer) appendLens(l drawlist.Lens) {
 	p := &r.lens
 	b := l.Bounds()
 	key := r.displayPalette[l.Key]
-	minX, minY, maxX, maxY := r.w, r.h, 0, 0
 	for y := b.Y; y < b.Y+b.H; y++ {
 		for x := b.X; x < b.X+b.W; x++ {
 			sx, sy, ok := l.Source(x, y)
@@ -80,13 +73,11 @@ func (r *Renderer) appendLens(l drawlist.Lens) (int, int, int, int) {
 				p.verts = append(p.verts, ebiten.Vertex{DstX: v[0], DstY: v[1], SrcX: v[2], SrcY: v[3], ColorR: float32(key[0]), ColorG: float32(key[1]), ColorB: float32(key[2])})
 			}
 			p.indices = append(p.indices, base, base+1, base+2, base+1, base+2, base+3)
-			minX = min(minX, int(tx))
-			minY = min(minY, int(ty))
-			maxX = max(maxX, lensCeil(tx+ce-cx))
-			maxY = max(maxY, lensCeil(ty+cf-cy))
+			// The shader samples the interpolated source point and nothing else,
+			// so the source rectangle is exactly what the snapshot must carry.
+			p.read.add(tx, ty, tx+ce-cx, ty+cf-cy)
 		}
 	}
-	return minX, minY, maxX, maxY
 }
 
 func newLensShader() (*ebiten.Shader, error) { return ebiten.NewShader([]byte(lensShaderSource)) }
@@ -104,11 +95,3 @@ func Fragment(dst vec4, src vec2, key vec4) vec4 {
  return sample
 }
 `
-
-func lensCeil(v float32) int {
-	n := int(v)
-	if float32(n) < v {
-		n++
-	}
-	return n
-}

@@ -48,6 +48,41 @@ type ModelStats struct {
 	// rows the regions reached over every page, and the pages used.
 	DirectSubjects, DirectShadows, DirectFaces, DirectCulled, DirectOverflow, DirectPasses int
 	DirectAtlasRows, DirectPages                                                           int
+	// DirectCargoImages is the carried children composed a second time in a
+	// region of their own, because their shadow is cut from the child's own
+	// finished image and the group region holds the carrier's texels too
+	// [03 R-REN-03D §1] (§22).
+	DirectCargoImages int
+	// DirectRetained is the packets (bodies and projected shadows) whose
+	// packed vertices were replayed from the retained store rather than
+	// packed again, DirectWarm the packets appended warm — a key miss whose
+	// body the store's index held under another revision, packed from this
+	// frame's corners with the texture products of the last cold append —
+	// and DirectCaptured the packets captured into the store this frame,
+	// from a cold or a warm append (model_retain.go). Together with
+	// DirectSubjects + DirectShadows they say how much of the frame's face
+	// work the store absorbed.
+	DirectRetained, DirectWarm, DirectCaptured int
+	// DirectRetainedLive and DirectRetainedOutline are the replayed packets
+	// that also carried a per-frame live lane or an outline, which were
+	// appended cold after the replayed cached lane (model_retain.go).
+	DirectRetainedLive, DirectRetainedOutline int
+	// The cold packets by reason, so a fall in DirectRetained can be read
+	// without a profiler. A packet is counted once, at the first reason that
+	// applies, in this order: DirectColdNoKey has no reusable key (the direct
+	// lanes, a subject without a retained body, a shadow projected per frame)
+	// — DirectColdNoKeyOutline and DirectColdNoKeyLive are the subset of those
+	// that carried an outline or a live lane, which the recorder used to
+	// zero the key for; DirectColdGroup is a group child, its delta or its
+	// solo pass; DirectColdReflect a body reflecting in water this frame;
+	// DirectColdPrimed a key's first sighting (the stub); DirectColdShape a
+	// captured key whose packet shape changed (captured again);
+	// DirectColdParams a replay or capture the parameter image could not
+	// take. DirectRetainEvicted is the store entries the frame's inserts
+	// evicted — store pressure when it is not zero.
+	DirectColdNoKey, DirectColdNoKeyOutline, DirectColdNoKeyLive int
+	DirectColdGroup, DirectColdReflect, DirectColdPrimed         int
+	DirectColdShape, DirectColdParams, DirectRetainEvicted       int
 	// DeviceDraws is every device draw Execute issued this frame.
 	DeviceDraws int
 	// GPU is the model subjects committed, Skipped the packets omitted (a child

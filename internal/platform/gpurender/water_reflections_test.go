@@ -63,7 +63,7 @@ func checkWaterReflectionDevicePixels() error {
 		}
 		l.RecordExpand()
 		cloned := l.Clone()
-		r.SetWaterReflections(on)
+		r.setWaterReflections(on)
 		img := r.Execute(&cloned, w, h)
 		p := make([]byte, w*h*4)
 		img.ReadPixels(p)
@@ -220,7 +220,7 @@ func checkSurfaceImpactReflection(r *Renderer, ter *world.Terrain) error {
 		}
 		l.RecordSprite(drawlist.Sprite{Frame: f, X: x, Y: anchorY, Kind: drawlist.BlitKeyed, Anchored: true, ReflectWater: !dry, ReflectionHeight: 0})
 		l.RecordExpand()
-		r.SetWaterReflections(on)
+		r.setWaterReflections(on)
 		img := r.Execute(&l, w, h)
 		p := make([]byte, w*h*4)
 		img.ReadPixels(p)
@@ -491,5 +491,32 @@ func TestReflectionSofteningFractionalCoordinates(t *testing.T) {
 	s := waterReflections{runs: []reflectionRun{{page: 0, count: 3, indexCount: 3}}, indices: []uint32{0, 1, 2}, transformed: []ebiten.Vertex{{DstX: 300, DstY: 100, Custom0: 180}, {DstX: 301, DstY: 100, Custom0: 180}, {DstX: 301, DstY: 101, Custom0: 180}}}
 	if !s.markSofteningTiles(512, 256, 1, .75, .7, 0, 0) || !s.softTiles[2*8+6] || s.softTiles[1*8+4] {
 		t.Fatalf("screen bounds not converted to recording coordinates: %v", s.softTiles)
+	}
+}
+
+// The source pass is the only Enhanced shader with uniforms, and it draws once
+// per run per target per frame. Its options and uniform storage are retained,
+// so a steady-state frame allocates nothing to submit them.
+func TestReflectionSourceUniformsAreRetained(t *testing.T) {
+	var s waterReflections
+	op := s.sourceOptions(1, 0, 0, 1, 0)
+	if n := testing.AllocsPerRun(100, func() {
+		s.sourceOptions(2, 3, 4, 0.5, 7)
+		s.metadata[0] = 1
+	}); n != 0 {
+		t.Fatalf("retained uniforms allocated %v per run", n)
+	}
+	if s.sourceOptions(2, 3, 4, 0.5, 7) != op {
+		t.Fatal("options value was rebuilt")
+	}
+	// The map still points at the storage the update writes through.
+	if got := op.Uniforms["Surface"].([]float32); got[0] != 3 || got[1] != 4 || got[2] != 0.5 || got[3] != 7 {
+		t.Fatalf("Surface lanes %v", got)
+	}
+	if got := op.Uniforms["RecordScale"].([]float32); len(got) != 1 || got[0] != 2 {
+		t.Fatalf("RecordScale lane %v", got)
+	}
+	if got := op.Uniforms["Metadata"].([]float32); len(got) != 1 || got[0] != 1 {
+		t.Fatalf("Metadata lane %v", got)
 	}
 }

@@ -18,6 +18,14 @@ import (
 // The vertex lane that carries it is the flat colour byte: a textured face
 // resolves its index from the texture, so that lane is dead on exactly the
 // faces a quad index describes.
+//
+// Corner positions are SUBJECT-LOCAL: the raster's own coordinates at the
+// atlas scale, plus modelQuadLocalBias, and never the atlas texel the region
+// landed on this frame. The fragment shifts its own atlas position into that
+// frame by the subject's origin, carried in the subject's verdict entry
+// (model_direct.go, subjectVerdicts). That is what lets a retained subject's
+// packed parameters be reused at whatever region a later frame gives it
+// (docs/DESIGN_GPU_RENDERER.md §22 "Retained packed vertices").
 const (
 	// One row of the parameter image. The address arithmetic is a divide and a
 	// remainder in the shader, so the width is a renderer payload choice, not a
@@ -34,6 +42,15 @@ const (
 	// The image grows in row blocks and is reused, so a steady-state frame
 	// neither reallocates it nor allocates its byte buffer.
 	modelQuadGrowRows = 64
+	// modelQuadLocalBias is added to every packed subject-local corner and to
+	// the fragment's shifted position alike, so both stay non-negative: the
+	// edge walk's integer division truncates toward zero, which is the floor
+	// the span writer's shift takes only for a non-negative operand
+	// [03 R-RAST-01 §1]. A corner can sit a little outside its packet's box
+	// (the doubled lane's half-pixel offset, an outline ring the box clip
+	// dropped), so the bias is wider than any such reach and narrower than
+	// the shader's integer headroom.
+	modelQuadLocalBias = 8192
 )
 
 // modelQuadParams is the frame's quad parameter store: the packed bytes, the
@@ -43,25 +60,23 @@ type modelQuadParams struct {
 	img  *ebiten.Image
 	buf  []byte
 	rows int
-	// count is the number of quads described this frame; uploaded is how many
-	// of them the parameter image already holds, so the per-subject fallback
-	// route can add more quads after the shared pages have been drawn.
-	count    int
-	uploaded int
+	// count is the number of entries described this frame.
+	count int
 }
 
 // reset starts a new frame. The byte buffer and the image are retained.
 func (q *modelQuadParams) reset() {
-	q.count, q.uploaded = 0, 0
+	q.count = 0
 	q.buf = q.buf[:0]
 }
 
 // add describes one four-corner face and returns its one-based index, or zero
 // when the face cannot be described and must keep the strip path.
 //
-// dx and dy shift the authored corners onto the subject's slot, so every packed
-// coordinate is the page pixel the fragment shader compares against; keyDelta
-// is a group child's delta, applied to the corner keys as the vertex lane
+// dx and dy shift the authored corners into the packed frame — the local bias
+// for the model lane, which keeps its corners subject-local (see the file
+// comment) — so every packed coordinate is what the fragment shader compares
+// its own shifted position against; keyDelta is a group child's delta, applied to the corner keys as the vertex lane
 // applies it (modelDirectShiftKey). The corners are rotated so that index 0 is
 // the corner holding the minimum Y — the first one attaining it, as the
 // extrema pass records — which turns the two chains of [03 R-RAST-01 §1] into
@@ -122,11 +137,30 @@ func putQuadLane(b []byte, hi, lo int) {
 	b[2], b[3] = byte(lo>>8), byte(lo)
 }
 
-// upload publishes every quad added since the last upload. It is called before
-// each set of page draws, so the per-subject fallback route's late additions
-// reach the device too.
+// appendBlock appends a retained run of n packed entries — one subject's
+// mapped faces, captured from an earlier frame in the subject-local frame —
+// and returns the one-based index of its first entry, or zero when the image
+// cannot hold the whole block. A block is all or nothing so the retained
+// vertices' local indices stay valid.
+func (q *modelQuadParams) appendBlock(block []byte, n int) int {
+	if n == 0 || q.count+n > modelDirectParamCap {
+		return 0
+	}
+	need := (q.count + n) * modelQuadBytes
+	if cap(q.buf) < need {
+		q.buf = slices.Grow(q.buf, need-len(q.buf))
+	}
+	q.buf = q.buf[:need]
+	copy(q.buf[q.count*modelQuadBytes:], block[:n*modelQuadBytes])
+	first := q.count + 1
+	q.count += n
+	return first
+}
+
+// upload publishes the frame's entries. It is called once a frame, before the
+// page draws.
 func (q *modelQuadParams) upload() {
-	if q.count == q.uploaded {
+	if q.count == 0 {
 		return
 	}
 	texels := q.count * modelQuadTexels
@@ -152,7 +186,6 @@ func (q *modelQuadParams) upload() {
 	sub := q.img.RecyclableSubImage(image.Rect(0, 0, modelQuadParamWidth, rows))
 	sub.WritePixels(q.buf[:need])
 	sub.Recycle()
-	q.uploaded = q.count
 }
 
 // ceilTo rounds v up to a multiple of a.

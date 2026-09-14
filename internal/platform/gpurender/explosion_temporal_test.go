@@ -111,14 +111,19 @@ func checkExplosionTemporalDevicePixels() error {
 		if err != nil {
 			return err
 		}
-		// Isolate the sequence-radius onset contract from the separate short
-		// terrain envelope, whose receiver pixels are checked in §31.6.
-		r.SetExplosionGroundFlash(false)
+		// The sprites below carry no LightingAge, so the terrain receiver holds
+		// the untimed peak gain and this fixture stays an onset/radius contract
+		// rather than a second check of the short fade of §31.6.
 		step := camera.ViewScaleNative
 		if scale == 2 {
 			step = camera.ViewScaleDetail
 		}
-		terrain := groundFixtureTerrain(40)
+		// A neutral mid-grey ground (retail index 86). The pool multiplies the
+		// albedo under the pixel, and the sample below reads the red channel;
+		// the former dark green ground (index 40, red 7) could not register the
+		// shipped 0.75 explosion gain, which only the retired full-gain path
+		// had been able to move.
+		terrain := groundFixtureTerrain(86)
 		terrain.CellW, terrain.CellH = 24, 16
 		terrain.TileIndices = make([]uint16, 12*8)
 		sheet := image.NewRGBA(image.Rect(0, 0, w*7, h*2))

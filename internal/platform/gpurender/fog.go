@@ -98,7 +98,9 @@ type fogPass struct {
 
 	// draws counts the device draws the most recent Fog command compiled, so the
 	// per-frame device-call budget of §11.4 can be asserted. Since §11.5 the fog
-	// composite is one scheduled draw with no snapshot copy of its own.
+	// composite is one scheduled draw; the read copy its shader samples is taken
+	// by the scheduler at submission, not by this family (§13.3 "Fog keeps one
+	// read copy").
 	draws int
 }
 
@@ -127,10 +129,13 @@ func (r *Renderer) FogContentError() error {
 	return r.fog.contentErr
 }
 
-// Fog replays one clipped fog op list into the indexed offscreen (C-G7). It runs
-// the same per-op rebase and clip classicSink.Fog runs, encodes each op into the
-// cell grid, and then computes every fog pixel in one pass whose per-pixel value
-// is the byte writer's [03 §3.3].
+// Fog replays one clipped fog op list over the true-colour composite (C-G7). It
+// runs the same per-op rebase and clip classicSink.Fog runs, encodes each op into
+// the cell grid, and then computes every fog pixel in one pass. Fog is the one
+// family that still reads the pixels it rewrites — the gray remap is a
+// desaturation no fixed-function blend expresses — so its pass samples a copy of
+// its own region and writes the colour the byte writer's remapped index expands
+// to [03 §3.3](§13.3 "Fog keeps one read copy").
 func (r *Renderer) Fog(fg drawlist.Fog) {
 	if r == nil {
 		return

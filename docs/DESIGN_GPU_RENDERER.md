@@ -1,25 +1,44 @@
 # Design — The frame draw list and the GPU renderer
 
-`internal/drawlist` (new), `internal/platform/gpurender` (new), and the
-recording side of `internal/client`. One committed-frame walk records one
-ordered list of draw commands; two executors replay it. The **classic** executor is the software composer writing palette indices into
-a byte surface. The **modern** executor replays through Ebitengine in palette
-index space, with conventional GPU model rasterization permitted by the visual
-acceptance policy below. Original, GPU Classic, and Enhanced are the intended
-three user-facing modes, backed by one CPU and one shared GPU implementation.
+`internal/drawlist`, `internal/platform/gpurender`, and the recording side of
+`internal/client`. One committed-frame walk records one ordered list of draw
+commands; two executors replay it. The **classic** executor is the software
+composer writing palette indices into a byte surface. The **modern** executor
+replays the same list through Ebitengine, composing in true colour on the GPU.
 The public choices are `--renderer=classic|modern`, default modern, also
-selectable on the Nanolathe options page. The default presentation cap is 60 FPS;
-both choices persist between windowed runs (DESIGN_INTERFACE_HUD_INPUT §3.4.1).
-The simulation cannot tell which executor is selected. The current GPU-only
-execution contract is §9–§12; it supersedes the historical P1–P3 CPU model bridge
-and fallback requirements below.
+selectable on the Nanolathe options page and with F10. The simulation cannot
+tell which executor is selected.
+
+This document states what the code does now. The measurement record behind it —
+benchmark runs, capture comparisons, the rounds of work that got here, and the
+mechanisms that were retired on the way — is
+[GPU_RENDERER_HISTORY.md](GPU_RENDERER_HISTORY.md).
 
 This document is listed by [ARCHITECTURE.md](ARCHITECTURE.md), which owns
 package boundaries. [DESIGN_PRESENTATION_CLIENT.md](DESIGN_PRESENTATION_CLIENT.md)
-owns what a frame contains and in what order; this document owns how that
-walk is recorded and how the recording reaches pixels. Rules every diff is
-reviewed against are in [INVARIANTS.md](INVARIANTS.md); I11's single
-sanctioned presentation switch is this one.
+owns what a frame contains and in what order; this document owns how that walk
+is recorded and how the recording reaches pixels. Rules every diff is reviewed
+against are in [INVARIANTS.md](INVARIANTS.md); I11's single sanctioned
+presentation switch is this one.
+
+**Section numbers are stable.** More than three hundred code comments cite them,
+so a section keeps its number and its subject even when its content is rewritten.
+§8, §12 and §24 were whole-section records and now live in the history file;
+their numbers are retired rather than reused. Reading order:
+
+| Read for | Sections |
+|---|---|
+| Purpose and boundary | §1 |
+| Packages, files and key types | §2 |
+| Contracts | §3 |
+| The pipeline: record → compile → submit | §11, §13 |
+| The model lane | §22, with §9, §10 and §17 for what it inherited |
+| The Enhanced layers, one each | §14–§21, §23, §25–§29, §31–§34 |
+| Player and developer controls | §30 |
+| Verification gates and recipes | §6, §11.4, §13.4 |
+| Retail behaviour that is not a bug; divergences | §4, §5 |
+| Research map | §7 |
+| Known limitations and owed work | §35 |
 
 ## 1. Purpose and boundary
 
@@ -31,18 +50,18 @@ Retail evidence remains in the owning research document.
    every current pixel has been verified against retail. Rasterization and CPU
    captures need no GPU; the current interactive Ebitengine window still does.
    A GPU-free window backend is separate, deferred platform work.
-2. **GPU Classic** targeted the original appearance and composition rules with
-   modern GPU techniques while staying in palette index space. It was the
-   modern executor through §11 and is retired by §13: an index-exact composite
-   needs one render pass per destination read, which is what keeps the
-   executor off a 120 Hz cadence. Its measurements and fixtures remain the
-   record of what the index-exact device path cost.
-3. **Enhanced** is the modern executor from §13 on. It composes in true colour
-   with the palette tables' generating arithmetic in place of their
-   nearest-palette quantization, presents at the display's refresh rate and
-   interpolates committed poses (§13.5). Differences from Original are measured
-   and reviewed visually, including in motion; a pixel threshold alone is never
-   approval. No enhancement changes authoritative simulation.
+2. **GPU Classic** — a modern executor that stayed in palette index space and
+   reproduced the retail composite byte for byte — was retired in 2026-09, because
+   an index-exact composite needs one render pass per destination read and that is
+   what kept it off a refresh-rate cadence. Its design and measurements are in the
+   history file; nothing in the current executor descends from it but the
+   scheduler and the source atlases.
+3. **Enhanced** is the modern executor. It composes in true colour with the
+   palette tables' generating arithmetic in place of their nearest-palette
+   quantization (§13.3), presents at the display's refresh rate and interpolates
+   committed poses (§13.5). Differences from Original are measured and reviewed
+   visually, including in motion; a pixel threshold alone is never approval. No
+   enhancement changes authoritative simulation.
 
 One committed-frame ordering remains `drawCommittedFrame` [03 §1]. Neither
 executor reads live pools or simulation RNG or writes authoritative state [I6].
@@ -66,54 +85,108 @@ cannot be reconstructed from the expanded image alone.
 Pure Go, no Ebitengine, no device. Imported by `internal/client` (recorder and
 classic executor) and by `internal/platform/gpurender` (modern executor).
 
-* `List` — one frame's commands in record order, with reusable backing slices
-  with allocation and upload costs measured after warm-up. `Reset()` between frames.
-* `Sink` — the executor interface, one method per command family (§3 C-G3).
-  `List.Replay(Sink)` calls them in record order.
-* Command families, each a plain struct carrying **physical palette indices**
-  and immutable resource references:
+* `List` — one frame's commands in record order. It is **not** one slice of a
+  sum type: a private `order []tag` names `(family, index)` pairs and each
+  family has its own backing slice, so a command is a plain struct appended to
+  its own array. `family` is private, so order is expressible only through
+  `Replay`. `Reset()` truncates every slice to zero length without releasing
+  capacity, so a re-recorded frame that fits allocates nothing.
+* `Sink` — the executor interface, one method per mandatory command family
+  (§3 C-G3): `Clear`, `Terrain`, `Sprite`, `Glyphs`, `Fill`, `Line`, `Points`,
+  `Flash`, `Halo`, `Model`, `Fog`, `Surface`, `Cursor`, `Expand`.
+  `List.Replay(Sink)` walks `order` and calls them in record order.
+* Optional sinks, type-asserted once by `Replay`: `TrailSink`, `WorldSink`,
+  `MarkerSink`, `ScorchSink`, `SurfaceWakeSink`, `LensSink`. A sink without one
+  replays the frame unchanged, which is how the classic executor and every test
+  collector ignore the Enhanced-only families.
+* The list carries **no digest or hash**. The only digest in this area is
+  `client.PresentationInputs`, which is an input-side validity digest (§13.10).
 
-  | Family | Carries | Classic executes as |
-  |---|---|---|
-  | `Terrain` | tile set reference, tile index grid window, camera origin | the tile blitter |
-  | `Sprite` | GAF frame reference, position, clip rect, blit kind (`Keyed`, `Tinted`, `Lit(row)`, `Scaled(src,dst)`), transparent key | the keyed, ALP-tinted, LHT-lit and scaled GAF blitters |
-  | `Glyphs` | FNT reference, glyph run, baseline, colour byte | the FNT blitter `[03 §7.1]` |
-  | `Fill` | rect, index, style (`Solid`, `Outline`, `LitRect(row)`, `ShadeRect(row)`) | `fillIndexedRect`, `frameIndexedRect`, the UI light/shade rects |
-  | `Line` | two endpoints, index | `drawIndexedLine` |
-  | `Lens` | projected center, view scale, viewport clip, transparent key | ordered snapshot refraction through the generated displacement map |
-  | `Points` | packed `(x, y, index)` triples | nanolathe particles `[03 §5.5]`, flash discs, sprinkle 2×2 fills |
-  | `Model` | the projected face list of one composed subject (§2.3), origin, key mode, flags | the model rasterizer and its commit |
-  | `Fog` | the op list `render.BuildFogOpsWindowInto` produced, already clipped | the three fog fills and the fog GAF blit `[03 §3.3]` |
-  | `Surface` | an indexed byte surface (minimap, radar), destination rect | `UIBlitIndexed` |
-  | `Cursor` | GAF frame reference, hot spot | `drawCursor` `[07 §8]` |
-  | `Expand` | none | `convertIndexedToRGBA` |
+Command families, each a plain struct carrying **physical palette indices**
+(`uint8`) and immutable resource references:
 
-  A `Model` record is the durable form of a unit, feature model or
-  projectile model. Its classic packet owns the completed body or staging
-  color, coverage and optional key planes; the pre-punched shadow planes; and
-  every image placement scalar. Its modern packet carries the face list with
-  per-vertex screen position, height key,
-  UV and shade row, the primitive's texture reference (or LOGOS frame choice),
-  the flat colour byte, plus the subject flags — key plane or painter order
-  `[03 R-REN-03A §2]`, supersample `[03 R-REN-03A §6]`, waterline threshold,
-  digger erase `[03 R-REN-03A §8]`, nanoframe reveal bands and outline colour,
-  shadow shear, and the attached children with their height deltas
-  `[03 R-REN-03A §4]`. `internal/client` already builds every one of these
-  values; recording them is the refactor, not computing them.
+| Family | Carries | Classic executes as |
+|---|---|---|
+| `Terrain` | tile set reference, camera, view scale, optional 2× detail tiles, `Water` | the tile blitter |
+| `Sprite` | GAF frame reference, position, clip rect, blit kind (`Keyed`, `Tinted`, `Lit(row)`, `Scaled`, `FeatureNormal`, `FeatureShadow`), transparent key | the keyed, ALP-tinted, LHT-lit and scaled GAF blitters |
+| `Glyphs` | FNT reference, glyph run, baseline, colour byte | the FNT blitter `[03 §7.1]` |
+| `Fill` | rect, index, style (`Solid`, `Outline`, `LitRect(row)`, `ShadeRect(row)`, `SolidInclusive`, `FrameInclusive`) | `fillIndexedRect`, `frameIndexedRect`, the UI light/shade rects |
+| `Line` | two endpoints, index | `drawIndexedLine` |
+| `Points` | a capped sub-slice of the recorder's point arena, `PointPlain` or `PointLit` | nanolathe particles `[03 §5.5]`, sprinkle fills |
+| `Flash`, `Halo` | one lit disc or ground halo as a command (§13.11), each with an `Expand` that emits the points it stands for | the points `Expand` emits |
+| `Model` | the classic packet and/or the geometry packet of one composed subject | the model rasterizer and its commit |
+| `Fog` | the op list `render.BuildFogOpsWindowInto` produced, already clipped, plus the gray and black GAF entries | the three fog fills and the fog GAF blit `[03 §3.3]` |
+| `Surface` | an indexed byte surface (minimap, radar), destination rect, optional identity/revision | `UIBlitIndexed` |
+| `Cursor` | GAF frame reference, hot spot | `drawCursor` `[07 §8]` |
+| `Lens` | projected center, view scale, viewport clip, transparent key | ordered snapshot refraction through the generated displacement map |
+| `Expand` | none | the marker that ends the composite |
+| `Trails`, `WorldSpace`, `Markers`, `SurfaceWakes`, `ScorchMarks` | the Enhanced families, reached through the optional sinks | not executed |
+
+A `Model` record is the durable form of a unit, feature model or projectile
+model. Its classic packet owns the completed body or staging colour, coverage
+and optional key planes; the pre-punched shadow planes; and every image
+placement scalar. Its modern packet carries the face list with per-vertex screen
+position, height key, UV and shade row, the primitive's texture reference (or
+LOGOS frame choice), the flat colour byte, the face's material annotation
+(§29.1), plus the subject flags — key plane or painter order
+`[03 R-REN-03A §2]`, the doubled `Supersample` lane `[03 R-REN-03A §6]` (§17),
+waterline threshold, digger erase `[03 R-REN-03A §8]`, nanoframe reveal bands
+and outline colour, shadow shear or `Silhouette`, and the attached children with
+their height deltas `[03 R-REN-03A §4]`.
+
+**Source lifetime.** Immutable-after-load resources are shared by pointer for
+the life of the process: GAF frames and entries, PCX, FNT, the palette tables,
+the terrain and its detail tiles, a marker atlas. Mutable per-frame buffers are
+**borrowed until `Reset`**: the point arena sub-slices, the fog op slice, a
+surface's bytes, and the trail, marker, wake and scorch mark slices. A consumer
+that retains a frame calls `Clone()`, which deep-copies the order, every family
+slice, those arenas, each `Model`'s classic and geometry packets, and each
+terrain command's camera by value, while still sharing the immutable resources.
+`RecordFrame` states the borrowing contract from the caller's side: the returned
+list must be replayed before the next frame is recorded and must not be retained.
 
 ### 2.2 `internal/client` — recorder and classic executor
 
 `drawCommittedFrame` keeps its ten barriers and every gate it has today. Each
-place that writes into `c.indexed` becomes a record into `c.list`, and the
-byte-writing code moves behind `classicSink`, a `Sink` implementation in the
-same package whose methods are the existing blitters. `Frame` records and replays through the classic sink, including cursor and expansion commands. The parity
+place that would write into `c.indexed` records into `c.list`, and the
+byte-writing code sits behind `classicSink`, a `Sink` implementation in the same
+package whose methods are the existing blitters. `Frame` records and replays
+through the classic sink, including cursor and expansion commands. The parity
 fixtures that digest the indexed surface see nothing change.
 
-The recorder never batches, reorders or culls beyond what the walk already
-does. If two sprites overlap, the list says so in that order.
+The recorder never batches, reorders or culls beyond what the walk already does.
+If two sprites overlap, the list says so in that order.
 
-`ComposeFrameSnapshot` gains the recorded `List` beside `Indexed` and `RGBA`,
+`ComposeFrameSnapshot` returns the recorded `List` beside `Indexed` and `RGBA`,
 which is what the diff tool replays through the GPU executor.
+
+**Pooled frame scratch.** `composeIndexed` arms a per-client `modelScratch` pool
+for the recording pass and disarms it after. Feature, projectile and debris
+draws borrow from it — `borrowDrawScratch`, `borrowProjectileScratch`,
+`borrowPacketScratch`, `borrowModelPacket`, `borrowPolys`, `borrowOutline`,
+`borrowModelStates` — rather than allocating a fresh state, transform, piece and
+vertex arena per subject per frame. A borrow outside a recording pass allocates
+and is owned by its caller, so diagnostic callers are unaffected. The pool
+resets with the frame; a borrowed draw stays valid until its slot is borrowed
+again. Each `record_parallel.go` worker holds its own pool (§13.9).
+
+**PERF-REND-04 minimap surface submission.** `DrawMinimapLayout` keeps the
+canonical two-step integer sampling and unchanged letterbox bars, clips the
+picture to the framebuffer, and records one owned indexed `Surface` at
+one-to-one output size. Frame-local byte storage is reused in lockstep with list
+reset; multiple packets own disjoint ranges, and retained clones copy their
+bytes. The shared scaled-index shader subtracts the destination atlas origin
+before integer source mapping. Both executors consume that same packet; viewport
+markers remain later point commands. This removes per-pixel point/quad
+submission without changing the separate PICTURE/MAPPED/FINAL lifecycle
+[03 R-MM-01 §1]. A `Surface` may carry a nonzero presentation identity and
+revision. That pair identifies immutable source content for the duration of a
+durable command: a zero identity retains the dynamic per-call upload behaviour,
+and a cloned list preserves both fields while owning its byte slice. The GPU
+holds a small bounded set of such textures and writes pixels again only when the
+revision (or dimensions) changes; it never hashes a whole source every frame.
+MAPPED consumes the committed visibility mapping version, whereas FINAL still
+refreshes for committed contacts and blink phase.
 
 ### 2.2.1 Cached and live model lanes
 
@@ -130,11 +203,16 @@ image reference, while `CacheValidityRevision` requests a cached-body rebuild.
 underlying unit object is replaced. It is deliberately distinct from the retail
 pool slot and affects neither simulation state nor RNG; it lets presentation
 retention reject same-slot replacements.
+
 The image is rebuilt for first use, an orientation delta strictly greater than
 seven, a structure construction-state change, a changed full-validity revision,
-or a missing image that the structure/key-plane contract requires. An image-less
-mobile subject with a valid state and no required key plane draws `All` directly
-without changing the cached orientation reference. The cached lane uses the local composition projection;
+or a missing image that the structure/key-plane contract requires. The cached
+lane also applies the three-term gate the classic composer applies, including
+the cached-image discard a `cache`/`shade` script setter raises
+[03 R-COMP-01 §4][04 R-MOV-03 §4], so a piece whose cache bit comes back cannot
+end up in neither lane's present. An image-less mobile subject with a valid
+state and no required key plane draws `All` directly without changing the cached
+orientation reference. The cached lane uses the local composition projection;
 the direct live lane adds world position before flooring. A keyed body copies
 into staging before its live lane and children resolve under the key; a keyless
 body commits first and live pieces and children draw directly in painter order.
@@ -144,16 +222,24 @@ Live pieces rasterize at 1x into the current union target, including key-colored
 texels that erase cached colors. Each attached child uses its own cached/live
 present; group waterline and Digger processing follows child composition.
 Construction reveal changes a frame-owned copy, preserving the raw retained
-body. The direct fill keeps the same exclusive last-row/column clip as the
-local rasterizer.
+body. The direct fill keeps the same exclusive last-row/column clip as the local
+rasterizer.
+
 Classic recording consumes these lanes directly. Geometry-only modern recording
 retains only cached-lane faces beside the same presentation identity and emits
-current live faces every frame. A keyed packet carries both lanes: cached faces
+current live faces every frame; a 3DO feature's projected faces are retained the
+same way, beside its map position (§13.12 "Wrecks and other 3DO features"). A
+keyed packet carries both lanes: cached faces
 resolve, reveal and outline first, then native unshaded live faces enter the
 same key plane. A keyless packet commits its cached faces and records direct
-projected live faces as the later Model command. Neither route creates a
-classic image or a device image cache.
+projected live faces as the later Model command. Neither route creates a classic
+image or a device image cache.
 [03 R-REN-03A §4][03 R-RAST-01 §2][03 §5.2][03 R-COMP-01 §4]
+
+Each cached body keeps its own face and vertex arenas and the frame's packet is
+copied into them, rather than allocating a fresh packet per rebuild: under
+Enhanced interpolation every mobile subject rebuilds every presented frame,
+because its blended pose genuinely moves (§13.5).
 
 For its own retained-raster memoization, the classic client also records the
 effective presentation inputs that alter the cached physical-index image: the
@@ -163,153 +249,107 @@ memoized image before reuse. These inputs are not additional retail
 script-validity or image-purge gates; they prevent a Nanolathe retained raster
 from surviving a presentation configuration that changes its pixels.
 
-**PERF-REND-04 minimap surface submission.** `DrawMinimapLayout` keeps the
-canonical two-step integer sampling and unchanged letterbox bars, clips the
-picture to the framebuffer, and records one owned indexed `Surface` at one-to-one
-output size. Frame-local byte storage is reused in lockstep with list reset;
-multiple packets own disjoint ranges, and retained clones copy their bytes.
-The shared scaled-index shader subtracts the destination atlas origin before
-integer source mapping; the real-device fixture exposed and now locks this
-existing executor correction. Both executors consume that same packet; viewport markers
-remain later point commands. This removes per-pixel point/quad submission without
-changing the separate PICTURE/MAPPED/FINAL lifecycle [03 R-MM-01 §1]. A
-`Surface` may additionally carry a nonzero presentation identity and revision.
-That pair identifies immutable source content for the duration of a durable
-command: a zero identity retains the dynamic per-call upload behaviour, and a
-cloned list preserves both fields while owning its byte slice. The GPU holds a
-small bounded set of such textures and writes pixels again only when the
-revision (or dimensions) changes; it never hashes a whole source every frame.
-MAPPED consumes the committed visibility mapping version, whereas FINAL still
-refreshes for committed contacts and blink phase. Acceptance compares the former
-sampling result at native and fractional display sizes, both letterbox axes,
-clipped/reversed rectangles and retained replay after source reuse.
-
-A scoped warm-submission benchmark on darwin/arm64 Apple M3 Pro at 126×126
-measured the former point producer at 31.4 µs and the surface producer at 20.2 µs,
-both zero steady-state allocations. One surface replaces 15,876 points and
-63,504 solid vertices with one textured quad. This measures command production,
-not whole-frame GPU time or fog/minimap recomposition savings; the surface
-executor still uploads indexed bytes for each call.
-
-The classic cached/live implementation was independently reviewed and passed
-full, installed-retail and GPU-device gates through `dce05045`. A sequential
-scene-3 Ashap Plateau comparison against `dd7f58b6` used seed 7, factories,
-1920×1080, 30 TPS, 60 warmup draws and 180 measured frames. Metadata and every
-frame's census matched (187–198 units, 6–31 projectiles, 73–162 effects).
-Classic Record median/p95/max changed from 12.600/13.195/13.909 ms to
-10.412/11.389/11.621 ms; allocation increased from 0.906 to 1.124 MB/frame,
-and 30-Hz cadence remained 98%. This is a correctness implementation with a
-measured allocation cost, not completion of the remaining allocation work.
-Modern Record was 3.972/4.567/4.713 ms versus 4.046/4.555/4.731 ms,
-allocation 1.640 versus 1.649 MB/frame, cadence 98% versus 97%; no modern
-performance improvement is claimed. Its comparison image was byte-identical.
-Classic changed 36,332 pixels inside the model region, consistent with the
-corrected cached/live, transparency and shadow paths; both final images were
-visually inspected. Modern recording now retains cached geometry per
-presentation identity and carries current live geometry in its native packet.
-
-Modern cached/live acceptance compares `dd8c9337` with `1e72ddb7` using the
-same scene above, native zoom and automatic detail-art generation disabled.
-Metadata and all 180 frame censuses match; classic pixels are identical and
-modern changes 36,101 model-region pixels. Both final captures were inspected.
-Modern Record median/p95/max is 3.828/4.193/4.649 → 5.156/5.751/14.797 ms;
-Submit is 5.512/6.460/13.104 → 5.182/6.093/8.289 ms. Allocation is
-1.500 → 1.993 MB/frame after reusing existing packet scratch (the initial
-implementation allocated 4.723 MB/frame). Cadence is 98% → 97%, with a
-73.861 ms maximum interval in the final run. Classic Record is
-10.517/11.282/11.706 → 10.211/11.266/14.058 ms, allocation
-1.124 → 1.125 MB/frame and cadence 98% → 97%. These results accept the
-bounded cost of the corrected stages; they do not establish a performance gain.
-
-The classic mobile/Digger silhouette and child-window clipping comparison
-uses `bfdf1d11` → `e553e499` with the same scene-3 native workload above.
-Metadata and every census match. Classic changes 12,965 pixels; modern is
-byte-identical. Both final battle images, dry/submerged ARMSUB captures and the
-clipped editor fixture were inspected. Classic Record median/p95/max is
-10.228/11.973/12.590 → 9.294/10.523/10.817 ms, allocation
-1.125 → 1.111 MB/frame and cadence 98% in both runs. Modern Record is
-5.554/6.227/14.790 → 5.420/6.334/6.702 ms, Submit
-5.393/6.463/7.578 → 5.351/6.542/7.555 ms, allocation
-2.164 → 1.991 MB/frame and cadence 96% → 94% (maximum interval
-62.293 → 67.527 ms). The modern run establishes unchanged pixels, not a
-cadence improvement. Scoped clipping also passes the actual GPU lit-sprite
-and scaled-surface checks.
-
 ### 2.3 `internal/platform/gpurender` — the modern executor
 
-The bitmap/clipping/shadow closeout comparison used pinned `05cd68af` and
-`f258705a`, the same native scene-3 workload above. Unit, projectile, build and
-production counts match; newly admitted bitmap effects raise the peak effect
-count from 162 to 184 and change the shared CRT camera-shake history.
-Both final captures were inspected. Classic Record median/p95/max is
-10.650/11.451/11.906 → 10.165/12.423/22.228 ms, allocation
-1.125 → 1.148 MB/frame and cadence 98% → 97%. Modern Record is
-5.276/5.969/8.595 → 5.288/6.645/10.553 ms; Submit is
-5.292/6.109/11.644 → 12.534/28.525/45.214 ms, allocation
-2.239 → 4.485 MB/frame and cadence 98% → 76% (79.590 ms maximum interval).
-The large calculated table-2 flashes are newly reachable in this workload.
-Coalescing contiguous equal-light pixels within their existing scheduler phase
-reduced Submit from the initial 14.209 ms median and allocation from
-5.001 MB/frame, with identical pixels and all frame censuses in both executors.
-Residual flash submission cost remains a measured limitation; this closeout
-adds no second flash renderer or cache. Artifacts use
-`/private/tmp/nanolathe-last-batch-{baseline,spans}-{classic,modern}`.
-
 Imports Ebitengine; joins `internal/platform/ebitenapp`, `internal/audiobackend`
-and `cmd/nanolathe` in the architecture test's Ebitengine allowlist. Exposes:
+and `cmd/nanolathe` in the architecture test's Ebitengine allowlist. Forty-five
+non-test files; the ones a reader starts from:
 
-* `New(pal *palette.Tables, w, h int) *Renderer` — uploads the tables
-  once: `PAL` as 256×1 RGBA, `ALP` as 256×256, `SHD` and `LHT` as 256×32,
-  `Gray` and `Blue` as 256×1, each storing indices in the red channel.
-* `(*Renderer).SetDisplayPalette([256][4]byte)` — updates only the final
-  colour row when the client's gamma-adjusted palette changes. Index remapping
-  tables and source assets remain immutable `[07 R-FE-01 §11]`.
+| File | Owns |
+|---|---|
+| `renderer.go` | the `Renderer` value, `New`/`NewChecked`, `Execute`, `Clear`, `Expand`, `SetDisplayPalette` |
+| `schedule.go` | the phase scheduler: placement, streams, the cell grid, pooled batch storage, submission, the world affine transform |
+| `shaders.go` | the two compiled scene passes — `scene2D` (opaque) and `sceneDest` (destination-compositing) |
+| `tables.go`, `atlas.go` | the packed palette table atlas; the shared source atlas for GAF frames, glyph strips, PCX and surfaces |
+| `terrain.go`, `sprites.go`, `draw.go`, `deststage.go`, `text.go` | the 2D families |
+| `fog.go`, `fog_ordered.go`, `fog_shaders.go` | the fog composite and its ordered-leaf fallback |
+| `model_direct.go`, `model_prepare.go`, `model_quads.go`, `model_atlas.go`, `model_shaders.go`, `model_scratch.go`, `model_retain.go`, `models.go` | the model lane (§22), its retained-lane store and `ModelStats` |
+| `points.go`, `flash.go` | the lit point plane and the lit-disc atlas |
+| `readcopy.go` | the shared "copy only the region you sample" helper |
+| `glow.go`, `lighting.go`, `ground_light.go`, `nano.go`, `metal_glint.go`, `model_finish.go` | the Enhanced light and finish layers |
+| `water.go`, `water_reflections.go`, `trails.go`, `scorch.go`, `distortion.go`, `tree_heat.go`, `aircraft_shadow.go`, `lens.go` | the remaining Enhanced layers |
+| `world.go`, `strategic_icons.go` | the world region transform and the strategic marker/icon layer |
+| `visual_controls.go`, `source_lifecycle.go`, `paused.go`, `debug_capture.go` | `SetEffects`, `ResetSources`, `ExecuteOver`, diagnostics |
+
+Public API:
+
+* `New(pal *palette.Tables, w, h int) *Renderer` — uploads the tables once into
+  one 256-wide RGBA8 atlas with fixed row offsets (rows 0–255 `ALP`, 256 `PAL`,
+  257–288 `SHD`, 289–320 `LHT`, 321 `Gray`, 322 `Blue`), each storing indices in
+  the red channel, and compiles every pass. `w`/`h` may be zero to defer surface
+  allocation. `NewChecked` is the same and also returns the first shader compile
+  error; a family whose shader is nil no-ops rather than panicking.
+* `(*Renderer).SetDisplayPalette([256][4]byte)` — updates only the final colour
+  row. Index remapping tables and source assets remain immutable
+  `[07 R-FE-01 §11]`.
 * `(*Renderer).Execute(list *drawlist.List, w, h int) *ebiten.Image` — the
-  `Sink`; replays into the frame's indexed offscreen and returns the expanded
-  RGB image for `Draw` to present, or for `--shot` to read back.
-* Resource caches keyed by pointer identity: tile-set atlases per map, GAF
-  frame atlases filled on first use, FNT glyph atlases, the 3DO texture atlas
-  with its LOGOS frames, and reusable GPU model composition surfaces (§3 C-G5).
+  `Sink`. It sizes the surfaces, runs the pre-`Replay` preparation passes
+  (battle lighting, reflections, blast distortion, tree heat, the model lane's
+  atlas, projectile reflections), replays the list, submits the schedule and
+  returns the composite. It returns nil for a nil list or a degenerate size.
+* `(*Renderer).ExecuteOver(list, background *ebiten.Image, w, h int)` — the
+  paused path: copy a retained world composite in, then execute a
+  foreground-only list over it (§13.10 "Paused world reuse").
+* `(*Renderer).SetEffects`, `SetGlow`, `ResetSources`, and the diagnostics
+  `DeviceDraws`, `ModelStats`, `FogContentError`, `DebugSnapshot`,
+  `DebugLastFrame`.
+* Resource caches keyed by pointer identity: tile atlases per (tile set, detail
+  set, scale), GAF frame atlases filled on first use, FNT glyph atlases, the 3DO
+  texture atlas with its LOGOS frames.
 
-The indexed offscreen is an RGBA8 image whose red channel holds the palette
-index. Every shader runs in Kage pixel mode and samples with nearest
-filtering, so `index = int(r * 255 + 0.5)` recovers the byte exactly.
+There is **no art binder**. Everything but the palette arrives as recorded
+commands; the executor caches by the pointer identity the record carries.
+
+**Two surfaces, both true colour.** `surfaces[0]` is the composite the whole
+frame is drawn into and the image `Execute` returns: every source index is
+resolved through `PAL` at the fragment that writes it, so there is no expansion
+pass (§13.3, C-G8 as amended). `surfaces[1]` holds the read copy the fog run and
+the `readcopy.go` layers sample. Index-carrying *sources* — tiles, GAF frames,
+glyph strips, the model pages' key plane — stay in the red channel of RGBA8,
+sampled nearest in Kage pixel mode, so `index = int(r*255 + 0.5)` recovers the
+byte exactly (C-G4).
 
 Batching is specified by the compiled executor of §11: the scheduler groups
-commands into phases wherever that is order-preserving (C-G3). The families that read the
-destination pixel — `Tinted`, `Lit`, `LitRect`, `ShadeRect`, the gray and
-checker fog fills, the model shadow commit and the waterline tint — cannot be
-fixed-function blends because they are table lookups on the destination. The scheduler therefore runs them over a phase snapshot: a run of
-destination-reading commands whose screen rectangles are pairwise disjoint
-reads one snapshot; a command that overlaps an earlier member of the run opens
-the next phase (§11.2).
-Two overlapping smoke puffs therefore blend one after the other, exactly as
-the byte writers do `[03 R-COMP-01 §2]` `[03 R-FX-02 §3]`.
+commands into phases wherever that is order-preserving (C-G3). The families
+whose result depends on what is already there — `Tinted`, `Lit`, `LitRect`,
+`ShadeRect`, the model shadow commit, the trail marks, the lit discs and the fog
+composite — are device blends rather than destination reads since §13.3, but the
+order they impose is the same, so the placement rules are unchanged. Two
+overlapping smoke puffs blend one after the other, exactly as the byte writers
+do `[03 R-COMP-01 §2]` `[03 R-FX-02 §3]`.
 
 **Source lifetime (host ownership).** The window compares the client's terrain
 binding generation after a joined update and before either executor draws. A
 changed binding, including teardown to no terrain and reloading the same map,
 discards speculative recording and the paused-world image and identity, then
 calls `Renderer.ResetSources`. This retires terrain pages, GAF/PCX/FNT source
-atlases, model texture and composition pages, fog sources and their dependent
-compiled runs, upload identities and frame scratch. Shared images are released
-once. Shader programs, palette tables, output surfaces, and renderer settings
-survive. Stable bindings, zoom changes and ordinary frames retain their caches.
+atlases, model texture pages, fog sources and their dependent compiled runs,
+upload identities and frame scratch. Shared images are released once. Shader
+programs, palette tables, output surfaces, the player's effect selection and
+renderer settings survive. Stable bindings, zoom changes and ordinary frames
+retain their caches.
 
 This is a host resource-lifetime correction, not a retail rendering claim.
-Previously the one process-lived renderer retained each newly loaded terrain
-and immutable source identity forever. Same-map restarts also loaded new
-identities, so memory grew with the number of battles. The terrain reference
-also retains its movement-service binding.
+Previously the one process-lived renderer retained each newly loaded terrain and
+immutable source identity forever, so memory grew with the number of battles.
+The terrain reference also retains its movement-service binding.
 
 ### 2.4 `internal/platform/ebitenapp` — the switch
 
-The adapter owns one `client.Client` and, lazily, one `gpurender.Renderer`.
-`Draw` asks the client for the frame's list and either uploads the classic
-bytes as today or executes the list. The active executor is `Options.Renderer`
-at startup. Runtime selection, persistence, and the eventual three labels are
-deferred until prototypes receive human visual review. Cache warm-up is measured,
-not promised to fit one frame. Graphics-device recovery is not a prototype gate.
+The adapter owns one `client.Client` and, lazily, one `gpurender.Renderer` built
+on the first modern Draw, so a classic run never allocates device textures.
+`RendererMode` is `RendererClassic` or `RendererModern`; it is host state, never
+client state, and an unrecognised value presents classic. `Draw` either uploads
+the classic bytes or executes the list (§13.10).
+
+Runtime selection exists and has two routes, both funnelling through one
+`setRenderer` cleanup: **F10**, which the client counts and the adapter services
+inside an update body, and the **options page / settings file**, polled once per
+update through `RunOptions.PresentationSettings`. `setRenderer` cancels any
+speculative record, disarms the pipeline, and turns interpolation, the Enhanced
+flag and the synthesized detail art off when classic takes over, or on when
+modern does; the retained screen bridges the swap. Neither key is a retail
+binding.
 
 ### 2.5 `cmd/nanolathe` — flags and capture
 
@@ -321,7 +361,7 @@ writes both images and their diff. Readback and PNG encoding are capture costs,
 excluded from presentation timing (§6). The diff tool is `tools/framediff`.
 
 The render-type-2 `Lens` is a destination reader at its exact projectile-list
-position [03 R-FX-01 §4]. Both executors sample a snapshot containing earlier
+position [03 R-FX-01 §4]. Both executors sample a copy containing earlier
 commands; later lenses see earlier lens output. Its fixed map is shared immutable
 data. Geometry follows the existing view-scale policy, with no age deformation
 or light/alpha-table capability gate. Safe sampling computes only admitted output
@@ -337,107 +377,128 @@ geometry and does not justify introducing an unverified retail key constant.
 
 ## 3. Contracts — C-G1 … C-G11
 
-* **C-G1 One walk.** `drawCommittedFrame` is the only committed-frame
-  ordering. It records; it does not know which executor will replay. No
-  executor walks the committed frame `[03 §1]` [I6].
-* **C-G2 Physical indices only.** Every byte in a record is a physical
-  `PALETTE.PAL` index. Logical GUI colours, primitive colours, FNT colours and
-  `dcb[]` entries are resolved through the logical map **before** recording,
-  as the presentation design's C7 already requires of the byte writers
-  `[03 §4.3]`. GAF, PCX and TNT bytes are physical already and pass through.
+* **C-G1 One walk.** `drawCommittedFrame` is the only committed-frame ordering.
+  It records; it does not know which executor will replay. No executor walks the
+  committed frame `[03 §1]` [I6].
+* **C-G2 Physical indices only.** Every colour byte in a record is a physical
+  `PALETTE.PAL` index in a `uint8` field. Logical GUI colours, primitive
+  colours, FNT colours and `dcb[]` entries are resolved through the logical map
+  **before** recording, as the presentation design's C7 already requires of the
+  byte writers `[03 §4.3]`. GAF, PCX and TNT bytes are physical already and pass
+  through. Geometry is `int32`; the only wider integers in a record are
+  non-index scalars (a scorch variant, a water tick, a wind heading).
 * **C-G3 Replay preserves order.** `List.Replay` visits commands in record
-  order. An executor may merge consecutive same-family commands into one
-  device draw only when no merged command's pixels depend on another merged
-  command's result: opaque keyed sprites merge freely; destination-reading
-  families merge only while their rectangles are pairwise disjoint (§2.3).
-  A quad batch whose `uint16` index scratch reaches its 65,536-vertex domain
-  is submitted and restarted before the next quad; this executor limit never
-  drops or reorders geometry. A destination-reading run keeps its one
-  pre-run snapshot across such chunks, while an overlapping command closes
-  the run and snapshots after the earlier write.
-* **C-G4 Exact index arithmetic.** Indices live in the red channel of RGBA8
-  images, sampled nearest in pixel mode, decoded by rounding. Every table
-  operation is an integer texel fetch on the uploaded table. There is no
-  linear filtering, no blending arithmetic on indices, and no float
-  intermediate that can land between two entries.
-* **C-G5 Durable model composition.** `drawlist.Model.Classic` owns each
-  mutable classic body/staging/shadow plane and placement scalar at record
-  time; a retained `List.Clone` deep-copies those planes. The pre-punched
-  shadow is built while recording, so classic replay has no `UnitDraw`, client
-  model state, or per-frame index lookup. It preserves shadow, one body blit,
-  then trace-observer order, including a carried child's earlier shadow-only
-  command. The optional trace image and observer are diagnostic-only and cannot
-  affect pixels. Modern geometry stays a separate owned packet. Ordinary face pixels
-  use a per-subject
-  maximum-byte-key pass and a color pass in original face order, so ties retain
-  the later face [03 R-REN-03A §2–§3]. Conventional triangle interpolation is an
-  intentional GPU approximation (§5); tests isolate key admission from that
-  approximation. No scene-wide depth buffer may replace subject painter order.
-  Texture key-colored texels still participate in face ownership; composition
-  transparency is applied at the image boundary [03 R-REN-03A §5].
-  Cached body, live pieces, and attached children are separate stages. Render
-  each child independently, then composite children sequentially using the full
-  signed shifted-key comparison and wrapped-byte store [03 R-REN-03A §4]. Never
-  flatten children into one maximum reduction. Waterline, digger, reveal and
-  outline retain their established stage order when implemented. The current
-  implementation provides the classic subject stages (§10); invalid geometry
-  or unavailable resources remain explicit skips (§9). It never substitutes
-  a CPU-rendered model image.
+  order. An executor may merge consecutive commands into one device draw only
+  when no merged command's pixels depend on another merged command's result:
+  opaque writes merge freely; destination-compositing commands merge while their
+  rectangles are pairwise disjoint, and, since §13.11, also while they belong to
+  the same blend stream, because one pass applies its fragments in primitive
+  order and that order is record order. A run's vertex storage is bounded by
+  `schedRunVertexLimit` (2²⁰ vertices) and a batch that reaches it is submitted
+  and restarted before the next quad; this executor limit never drops or
+  reorders geometry. Device indices are `uint32` through
+  `DrawTrianglesShader32`, so no quad count can wrap an index onto earlier
+  geometry.
+* **C-G4 Exact index arithmetic on the source side.** Every index a source
+  carries lives in the red channel of an RGBA8 image, sampled nearest in pixel
+  mode, decoded by rounding, and every table operation applied to it is an
+  integer texel fetch on the uploaded table. There is no linear filtering of an
+  index, no blending arithmetic on indices, and no float intermediate that can
+  land between two entries. Where a fragment must blend — the coverage resolve
+  of §17, the filtered terrain of §16.3 — it blends **colours**, after the `PAL`
+  lookup, never indices.
+* **C-G5 Durable model composition.** `drawlist.Model.Classic` owns each mutable
+  classic body/staging/shadow plane and placement scalar at record time; a
+  retained `List.Clone` deep-copies those planes. The pre-punched shadow is
+  built while recording, so classic replay has no `UnitDraw`, client model
+  state, or per-frame index lookup. It preserves shadow, one body blit, then
+  trace-observer order, including a carried child's earlier shadow-only command.
+  The optional trace image and observer are diagnostic-only and cannot affect
+  pixels. Modern geometry stays a separate owned packet.
+
+  In the modern executor every subject's faces are rasterized into a region of
+  a per-frame 2× atlas page and committed as one quad (§22). Ordinary face
+  pixels take a per-subject maximum-key pass and a colour pass in original face
+  order, so ties retain the later face [03 R-REN-03A §2–§3]. Conventional
+  triangle interpolation is an intentional GPU approximation (§5.1); tests
+  isolate key admission from that approximation. No scene-wide depth buffer may
+  replace subject painter order. Texture key-colored texels still participate in
+  face ownership; composition transparency is applied at the image boundary
+  [03 R-REN-03A §5]. Cached body, live pieces and attached children remain
+  separate stages, and the nanoframe reveal, the outline, the waterline tint and
+  the Digger erase remain per-texel verdicts in their established order — the
+  lane evaluates them at the fragment rather than in separate passes. A carried
+  child that casts a shadow composes a second time in a region of its own, with
+  its own keys and verdicts and no carrier clip, because a shadow is cut from
+  its subject's own finished image [03 R-REN-03D §1]. A subject no page can hold
+  takes the native painter-order fallback and its shadow is omitted; invalid
+  geometry or unavailable resources remain explicit skips (§9). It never
+  substitutes a CPU-rendered model image.
+
   Classic image copies use a separate pool owned by the recording draw list.
   Every body, shadow and trace copy gets a distinct slot until `List.Reset`;
   composition scratch never aliases the recorded planes. `List.Clone` and
   `ModelCommands` still deep-copy all mutable planes for retained consumers.
   Carrier/factory staging images borrow their own composition scratch slot and
   are copied into the draw list only after child composition finishes.
-* **C-G6 Structure supersample.** Preserve the cached/all versus live gate,
-  pre-shear doubled projection, ordered ALP color resolve, and top-left key
-  resolve [03 R-REN-03A §6–§7]. Live pieces draw at native scale afterward.
-  Mobile units are not supersampled in retail. This is the classic executor's
-  contract. Enhanced replaces it with the subject-wide coverage supersample of
-  §17: every subject doubled, live lane included, outline endpoints whole
-  pixels, resolved with fractional coverage and no fringe (§22). The GPU recorder retains the cached lane
-  and records current live faces separately in both.
+* **C-G6 Structure supersample.** The classic executor preserves the cached/all
+  versus live gate, pre-shear doubled projection, ordered ALP colour resolve,
+  and top-left key resolve [03 R-REN-03A §6–§7]. Live pieces draw at native
+  scale afterward. Mobile units are not supersampled in retail. Enhanced
+  replaces this with the subject-wide coverage supersample of §17: every subject
+  is rasterized at 2× and box-resolved by coverage in the commit fragment, live
+  lane included, outline endpoints whole pixels, no fringe (§22). The Anti-Alias
+  display option gates both, but it gates different things: in classic it
+  decides whether a structure is doubled; in modern it decides only whether the
+  **recorder** hands the executor a pre-doubled raster, because the lane doubles
+  the native corners itself when it does not.
 * **C-G7 Fog composition.** The recorded fog ops are converted to a per-tile
-  grid texture (kind, variant, frame, pattern parity) and may be applied by a combined
-  shader over the world image: solid fills write the dark index, gray fills
-  write `Gray[dst]`, patterned fills test the same `(x + y + parity) & 1` the
-  byte writer tests, and fog GAF frames sample their frame `[03 §3.3]`
-  `[03 §4.3.3 R-RR16-A §1]`. The visible result per pixel is the byte writer's,
-  subject to Enhanced's approved colour arithmetic (§13). Composite fog uses
-  the ordered child path in §13.3 rather than a flattened atlas mask.
-* **C-G8 Expansion last, PAL only.** The final pass maps index to colour
-  through `PALETTE.PAL` alone, forcing alpha opaque as the software expansion
-  does. Nothing after it in the retail composite exists. Enhanced (§13) has no
-  separate expansion pass: it resolves each source index through `PALETTE.PAL`
-  at the moment it is written, which is the same lookup applied per fragment
-  instead of per frame, and every colour the retail composite would have
-  looked up is looked up the same way.
-* **C-G9 Model textures resolve once.** The 3DO texture atlas is built from
-  the same resolution the classic path performs at load: case-insensitive name
+  grid texture (kind, variant, frame, pattern parity) and applied by one shader
+  over the world image: solid fills write the dark index, gray fills desaturate,
+  patterned fills test the same `(x + y + parity) & 1` the byte writer tests, and
+  fog GAF frames sample their frame `[03 §3.3]` `[03 §4.3.3 R-RR16-A §1]`. The
+  visible result per pixel is the byte writer's, subject to Enhanced's approved
+  colour arithmetic (§13.3). A composite frame, a frame that extends past its
+  atlas tile, or a frame beyond the atlas's range takes the ordered leaf path of
+  §13.3 rather than a flattened atlas mask.
+* **C-G8 Expansion last, PAL only.** In the classic executor the final pass maps
+  index to colour through `PALETTE.PAL` alone, forcing alpha opaque as the
+  software expansion does. Nothing after it in the retail composite exists.
+  Enhanced has **no** separate expansion pass: it resolves each source index
+  through `PALETTE.PAL` at the moment it is written, which is the same lookup
+  applied per fragment instead of per frame, and every colour the retail
+  composite would have looked up is looked up the same way. `Expand` survives as
+  a barrier: it submits everything pending so a caller reading the composite
+  after the marker sees a finished frame.
+* **C-G9 Model textures resolve once.** The 3DO texture atlas is built from the
+  same resolution the classic path performs at load: case-insensitive name
   against the side's texture set then the fallback set, a miss becoming flat
   colour, exactly-ten-frame entries being LOGOS team textures chosen per owner
   at draw time, other multi-frame entries animated by the phase-7 sequence
   cursors `[03 §2.4.1]`. The record carries the resolved frame, so the atlas
-  never re-resolves a name.
-* **C-G10 No device in tests.** `internal/drawlist` and the recorder are
-  covered by ordinary tests with no window. GPU parity runs in the retail
-  tier, through `--shot-renderer both` and `tools/framediff`, because CI has
-  no GPU. Small authored GPU fixtures may run on a device-equipped host without retail
-  assets. Backend compilation and pixel execution require real device validation.
+  never re-resolves a name. The recorder memoizes the resolution per compiled
+  model (`modelTexRefs`) and reads the face's material annotation once at that
+  bind, under a generation stamp, rather than per face (§29.1).
+* **C-G10 No device in tests.** `internal/drawlist` and the recorder are covered
+  by ordinary tests with no window. GPU parity runs in the retail tier, through
+  `--shot-renderer both` and `tools/framediff`, because CI has no GPU. Small
+  authored GPU fixtures run on a device-equipped host under
+  `NANOLATHE_GPU_DEVICE_TEST=1`, without retail assets. Backend compilation and
+  pixel execution require real device validation.
 * **C-G11 Classic is the reference.** Where modern differs from classic, the
   difference must be diagnosed as a defect or an intentional approximation or
-  enhancement in §5, with reproducible visual evidence. A
-  divergence in §5 names the classic behaviour it replaces and cites the
-  research the classic behaviour implements. Retail parity remains classic
-  mode's contract, owned by the presentation design; GPU Classic follows the visual-fidelity policy of §1/§5.1, and Enhanced
-  follows its separately designed presentation divergences.
+  enhancement in §5, with reproducible visual evidence. A divergence in §5 names
+  the classic behaviour it replaces and cites the research the classic behaviour
+  implements. Retail parity remains classic mode's contract, owned by the
+  presentation design; Enhanced follows its separately designed presentation
+  divergences.
 
 ### Retained list camera ownership
 
 `List.Clone` captures each non-nil terrain camera by value, including zoom;
 subsequent movement of the live camera cannot change a cloned terrain command.
-Nil-camera projection remains distinct. The ordinary recording path retains
-its same-frame borrowed camera and adds no snapshot allocation. Modern terrain
+Nil-camera projection remains distinct. The ordinary recording path retains its
+same-frame borrowed camera and adds no snapshot allocation. Modern terrain
 already uses the command's copied origin and destination dimensions.
 
 Together with C-G5's owned classic model planes, this makes a cloned list
@@ -449,158 +510,168 @@ projection.
 ## 4. Retail behaviour that is not a bug
 
 Everything the presentation design lists under this heading holds for both
-executors, because both replay the same record. Two are worth restating
-because a GPU habit would "fix" them:
+executors, because both replay the same record. Two are worth restating because
+a GPU habit would "fix" them:
 
-* **A structure paints over an aircraft in a later row.** Cross-subject order
-  is Y-row painter order with no depth test `[03 R-RAST-01 §7]`. The height
-  key of C-G5 is a property of one subject's image, never of the scene. The
-  slot atlas exists so that no two subjects share a key image.
-* **The anti-aliased building has a coloured fringe.** The two-by-two
+* **A structure paints over an aircraft in a later row.** Cross-subject order is
+  Y-row painter order with no depth test `[03 R-RAST-01 §7]`. The height key of
+  C-G5 is a property of one subject's image, never of the scene. Each subject
+  gets its own atlas region so that no two subjects share a key plane.
+* **The anti-aliased building has a coloured fringe.** The classic two-by-two
   resolve blends the background index in `[03 R-REN-03A §7]`. A resolve that
-  excludes uncovered texels is cleaner and wrong.
+  excludes uncovered texels is cleaner and wrong — so classic keeps it, and
+  Enhanced deliberately drops it (§17.6).
 
 ## 5. Divergences
 
-### 5.1 GPU Classic raster approximation (approved scope, visual approval pending)
+### 5.1 Model raster approximation
 
-GPU model faces may be triangulated and attributes interpolated by the graphics
-backend instead of the classic authored-polygon fixed-point edge/span walk
-[03 R-RAST-01 §1]. This can change face interiors as well as edges. The reason
-is to use conventional GPU rasterization while preserving the original look.
-Large occlusion errors, unexpected missing subjects, incorrect stage ordering,
-and unstable seams are defects, not covered by this allowance. Explicit GPU-only
-omissions under §9 are tracked separately from raster approximations. Human review of captures and
-motion is the acceptance gate; keep approved recipes and measured differences.
+Model faces are triangulated and their attributes interpolated by the graphics
+backend instead of by the classic authored-polygon fixed-point edge/span walk
+[03 R-RAST-01 §1]. This changes face interiors as well as edges. The reason is
+to use conventional GPU rasterization while preserving the original look. Large
+occlusion errors, unexpected missing subjects, incorrect stage ordering and
+unstable seams are defects, not covered by this allowance. Human review of
+captures and motion is the acceptance gate.
 
-The current prototype uses two geometry preparation paths. Simple untextured
-clockwise projected rings use conventional triangles. Textured quads and folded
-projected rings are prepared as one-pixel-high
-quads from the same ordered decreasing-index left chain and increasing-index
-right chain as the established span walk; only rows whose right edge is strictly
-right of the left edge become strips. The strips carry interpolated key, UV and
-shade lanes to the GPU, which still performs the fragment key reduction and
-colour write. This preserves the positive-span topology without uploading a CPU
-body image. It is a prototype preparation cost and not a claim of exact
-inside-face interpolation parity.
+Two properties keep the approximation bounded. A four-corner face — flat or
+textured — evaluates retail's own two-chain span mapping per fragment from the
+parameter image (§11.2 "Textured quads without strips"), rather than a generic
+inverse-bilinear map, so a non-parallelogram quad does not develop the diagonal
+bend that motivated the original strip path. And the key pass and the colour
+pass evaluate the same mapping, so the two never disagree about a texel's key.
+Rings that are not four-corner faces interpolate their lanes linearly.
 
-The texture-alignment correction extends two-chain row preparation to textured
-quads. Conventional quad triangulation created a visible internal UV bend on
-ARMSOLAR, so the original ordered polygon determines each row's endpoints.
-Rows sharing a source face are batched up to the index-transport limit. GPU
-varyings are adjusted by half a horizontal step so sampling at a pixel center
-recovers the integer-column lane, and the texture shader floors U/V before
-addressing the texel center. A 2^-20 texel guard corrects observed floating
-endpoint residue; this is a chosen GPU numerical tolerance which can also bias
-values that close to a texel boundary, not a recovered retail constant.
-
-Folded-row attributes remain private float32 preparation data until the device
-fragment stage. Each row uses the last applicable descending edge on the ordered
-chains with half-open Y bounds and the established biased fixed-point X walk.
-Empty positive-span coverage is skipped. All texture sampling, palette shading,
-key comparison and color writes remain on the device. The shared GAF upload
-retains raw color indices even for transparent-marked texels; keyed sprite
-families still use their independent coverage flag. GPU final model composition
-keys index 1 as researched. The CPU target's differing index-1 coverage remains
-a documented comparison exception, not a change to classic.
-
-The device raster is also sensitive to where a subject lands in the slot atlas:
-moving a subject's slot origin by one pixel, with no other change, moves a few
-hundred silhouette-edge pixels across a full battle frame (measured: 452 of
-2,073,600 on the seeded benchmark capture, one to three pixels per unit). The
-shader arithmetic is translation-invariant; the residue is the device's edge
-and varying interpolation at absolute positions, and it is part of this
-approximation. A capture comparison between two revisions is therefore only
-byte-exact when their slot placement is identical; a placement change is
-reviewed on the model preview captures and by inspection, not by pixel count.
+The remaining visible difference inside a face is shade rounding: retail looks a
+shaded texel up in the SHD table, and the lane multiplies by the scale that
+table was generated from (§13.2). The device raster is also sensitive to where a
+subject's region lands on the atlas page — the shader arithmetic is
+translation-invariant, but the device's edge and varying interpolation are
+evaluated at absolute page coordinates, so a lane sitting exactly on a rounding
+boundary can flip when a region moves. It is a few texels per two-megapixel
+capture. A capture comparison between two revisions is therefore only
+byte-exact when their packing is identical; a packing change is reviewed on the
+model preview captures and by inspection, not by pixel count.
 
 ### 5.2 Enhanced zoom and strategic view
 
-The detailed view is designed in §14: a view scale in half steps (1×, 1.5×,
-2×), 2× terrain and feature art synthesized from the map's own pixels at load
-time and resampled to 1.5× by nearest sampling, and model geometry rasterized
-at output scale, with every world-space layer, picking, fog and the minimap
-sharing the one transform.
+The detailed view is designed in §14: a view scale in half steps (1×, 1.5×, 2×),
+2× terrain and feature art synthesized from the map's own pixels at load time and
+resampled to 1.5× by nearest sampling, and model geometry rasterized at output
+scale, with every world-space layer, picking, fog and the minimap sharing the one
+transform.
 
 Continuous zoom between the steps, and the strategic view below 1×, are **§16**,
 and they are modern-only: the classic executor keeps §14's three steps exactly.
 Strategic markers show only player-known information — they take the minimap's
 own committed contact records and its own admission gate, so the two cannot
-disagree (§16.11). Icon art, aggregation and filtering are still unbuilt; the
-marker is one team-coloured square per unit. HUD and cursor scale stay
-independent of the view scale in every case.
+disagree (§16.11). Identified units draw generated icons (§18); unidentified
+contacts keep §16.11's square. HUD and cursor scale stay independent of the view
+scale in every case.
 
 ### 5.3 Enhanced interpolation
 
-Target the display's refresh rate — 120 presented frames/s, an 8.3 ms frame
-budget — while retaining the 30 Hz authoritative simulation. Rendering more
-often without interpolation repeats committed poses. Enhanced interpolation
-uses two immutable committed snapshots; it never writes interpolated values
-back or consumes simulation RNG. Object identity across slot reuse, spawn and
-death, teleportation, child attachment changes, piece animation, input latency
-and pause behaviour are specified in §13.5. Original retains committed-tick
-sampling; I6 names Enhanced as the one presentation path allowed to read two
-committed ticks.
+Enhanced targets the display's refresh rate while retaining the 30 Hz
+authoritative simulation. Rendering more often without interpolation repeats
+committed poses. Enhanced interpolation uses two immutable committed snapshots;
+it never writes interpolated values back or consumes simulation RNG. Object
+identity across slot reuse, spawn and death, teleportation, child attachment
+changes, piece animation, input latency and pause behaviour are specified in
+§13.5. Original retains committed-tick sampling; I6 names Enhanced as the one
+presentation path allowed to read two committed ticks.
 
-### 5.4 Lighting (deferred); glow (§19); antialiasing (§17)
+### 5.4 The Enhanced layers
 
-Lighting may be palette/tint based or use model geometry/material information;
-no technique is selected. Preserve resolved asset and geometry identity rather
-than inventing material values. Glow is designed and landed in §19: an
-Enhanced-only bloom from beams, lightning, effect and projectile art and the
-explosion light, resolved under the fog. Model antialiasing is designed and
-landed in §17: subject-wide supersampling with a coverage resolve, Enhanced
-only.
+Lighting, glow and antialiasing are no longer deferred: model antialiasing is
+§17, glow is §19, battle lighting is §23 and §31. Each is a named divergence
+with its own section, its own switch (§30) and its own verification. The
+classic executor composes identical pixels whatever any of them says.
 
 ## 6. Verification
 
-Three independent gates replace the old single tolerance gate:
+Three independent gates replace a single tolerance gate:
 
-1. **Classic regression:** compare current classic against a baseline from the
+1. **Classic regression.** Compare current classic against a baseline from the
    same simulation/content revision. Renderer-only work must preserve classic
    bytes and equal-tick simulation fingerprints. Attribute upstream baseline
    changes before refreshing; never hide them in a tolerance.
-2. **GPU comparison:** record once and replay the same ordered list through classic and
-   modern, save both images and a diff, report changed pixels/clusters, and fail
-   on execution/capture errors. Test the tool rejects a deliberately wrong image.
-   Exact non-model fixtures remain exact; GPU model approximations use explicit
-   per-scene thresholds only after visual review. No rule that merely connects a
-   difference cluster to an edge, and no threshold derived as automatic approval.
-3. **Performance:** repeated device-backed replay of one frozen list after
-   warm-up. Do not re-record that list in the measured loop: recording can
-   consume private presentation RNG and drain audio. Report one-time preparation
-   separately, distinguishing modern geometry recording from an explicitly
-   requested classic comparison. Screenshot readback and PNG encoding are
-   excluded from all rendering/cadence metrics. Submit repeated frames to the
-   screen without readback; capture the final PNG only after the measured
-   sequence. Report CPU submission duration and observed Draw-to-Draw cadence
-   (median/p95/p99), with pacing settings, hardware/backend, resolution, frames
-   and scene. Cadence includes device backpressure, presentation and host
-   scheduling; submission alone is not GPU time, and neither is an isolated
-   GPU timestamp. A frozen-list benchmark excludes simulation and recurring
+2. **GPU comparison.** Record once and replay the same ordered list through
+   classic and modern, save both images and a diff, report changed
+   pixels/clusters, and fail on execution/capture errors. Test that the tool
+   rejects a deliberately wrong image. Exact non-model fixtures remain exact;
+   model approximations and every blended Enhanced pixel are reported, not
+   gated, because they differ by design. No rule that merely connects a
+   difference cluster to an edge, and no threshold derived as automatic
+   approval. `tools/gpu-compare` is the runner; `--shot-renderer both` and
+   `tools/framediff` are what it drives.
+3. **Performance.** Repeated device-backed replay of one frozen list after
+   warm-up, or the live battle benchmark of
+   [BATTLE_BENCHMARK.md](BATTLE_BENCHMARK.md). Do not re-record a frozen list in
+   the measured loop: recording can consume private presentation RNG and drain
+   audio. Report one-time preparation separately. Screenshot readback and PNG
+   encoding are excluded from all rendering/cadence metrics. Report CPU
+   submission duration and observed Draw-to-Draw cadence (median/p95/p99), with
+   pacing settings, hardware/backend, resolution, frames and scene. Cadence
+   includes device backpressure, presentation and host scheduling; submission
+   alone is not GPU time, and Ebitengine's public API exposes neither GPU
+   completion nor actual presentation timestamps, so both are reported as
+   unavailable. A frozen-list benchmark excludes simulation and recurring
    preparation, so it cannot establish a universal gameplay frame-rate claim.
-   Existing headless `--profile-seconds` measures classic composition only;
-   it must not be presented as modern gameplay performance.
+   Existing headless `--profile-seconds` measures classic composition only.
 
-The existing matrix is useful history, not exhaustive coverage: its script does
-not vary DitheredFog and Ring Atoll does not ensure digger or submerged-hull
-pixels. Add authored focused fixtures plus model-rich captures: flat/textured,
-shaded/unshaded, equal keys, painter order, cached/live structure parts, children,
-waterline/digger, reveal/outline, shadows and overlapping effects. The activated, open ARMSOLAR is a mandatory human-review scene: its
-light-colored base must be visible around and between the intersecting panels.
+**Device fixtures.** `NANOLATHE_GPU_DEVICE_TEST=1 go test
+./internal/platform/gpurender` runs the opt-in authored fixtures on a real
+device; ordinary tests skip them, and `TestMain` keeps the optional Ebiten loop
+on the process main goroutine for macOS. They need no retail assets. The
+fixtures cover the model lane's verdicts, fog, tinted overlap, carrier/child
+composition, glow, water, reflections, distortion, tree heat, scorch, trails,
+aircraft shadows, the strategic icon batch and the paused-world split. Several
+accept an environment variable naming an output PNG directory so a reviewer can
+look at what the fixture asserted.
+
+They are not optional at merge time. `tools/check-retail`, the pre-merge gate
+(ARCHITECTURE §6), ends by running them whenever the session has a window
+server — an Aqua session on macOS, `$DISPLAY`/`$WAYLAND_DISPLAY` elsewhere — and
+on a headless host prints `GPU device fixtures: SKIPPED` instead of counting
+them as passed, because a missing graphics device is a property of the machine
+and not of the change. Renderer work is merged from a host with a display. That
+run inherits the gate's exported retail root, so the handful of fixtures that
+render the installed art — the explosion sequence's onset contract among them —
+opt themselves in there; on a bare `NANOLATHE_GPU_DEVICE_TEST=1` run by hand
+they return early and assert nothing, which is why a developer run of the
+fixtures is not a substitute for the gate's.
+
+The gate runs them as a **separate** `go test` invocation, filtered to
+`-run '^TestDeviceFixtureLoop$'`, and that separation is load-bearing.
+Ebitengine allows one `RunGame` per process and rejects image allocation once it
+returns, so `TestMain` hosts every device check inside the one hidden loop and
+`skipAfterDeviceLoop` skips the fixtures that build their own renderer — the
+scheduler, atlas and retained-list cases — once the loop has finished. In a
+single process the two sets are mutually exclusive, so setting the variable for
+the gate's whole-tree run would have bought the device fixtures by quietly
+dropping the others. Two processes keep both: the whole-tree run sees no device
+loop, and this run is nothing else. `TestMain` starts the loop whatever `-run`
+selects, and every other device test in the package reports the same single
+loop result, so the filtered invocation exercises all of them; the per-area test
+names exist so a failure reads as the area a reviewer is looking at.
+
+**Scenes.** Add authored focused fixtures plus model-rich captures:
+flat/textured, shaded/unshaded, equal keys, painter order, cached/live structure
+parts, children, waterline/digger, reveal/outline, shadows and overlapping
+effects. The activated, open ARMSOLAR is a mandatory human-review scene: its
+light-coloured base must be visible around and between the intersecting panels.
 That ownership relationship is a hard correctness gate, not an allowed raster
-approximation. This scene must exercise GPU model rasterization and report that
-path was used; a CPU-fallback-only capture cannot pass the solar gate. Capture closed and activated/open poses, a close crop and an
-ordinary gameplay-scale view, using a reproducible authored pose or session setup.
-The solar/lab ownership experiment [03 R-REN-03A §3] isolates this composition
-behavior but proves no texture interpolation contract. Inspect sequential frames, resize, clipping and cache
-reuse. Backend coverage is reported honestly; one host is not cross-platform proof.
+approximation, and the capture must report that the GPU model path was used.
+Capture closed and activated/open poses, a close crop and an ordinary
+gameplay-scale view. The solar/lab ownership experiment [03 R-REN-03A §3]
+isolates this composition behavior but proves no texture interpolation contract.
+Inspect sequential frames, resize, clipping and cache reuse. Backend coverage is
+reported honestly; one host is not cross-platform proof.
 
-Capture recipes, command settings, revision metadata and policies are versioned;
-retail images/assets stay local and uncommitted. Preserve the classic reference
-independently; §9 prohibits substituting its output for missing GPU stages.
-Unsupported prototype cases must be listed in the handoff, not described as full
-GPU parity.
+Capture recipes, command settings and revision metadata are versioned; retail
+images and assets stay local and uncommitted. Preserve the classic reference
+independently; §9 prohibits substituting its output for a missing GPU stage.
+Unsupported cases are listed in the handoff, never described as full GPU parity.
 
 ## 7. Research map
 
@@ -613,747 +684,433 @@ GPU parity.
 | Staging image, attached children, height delta | `[03 R-REN-03A §4]` |
 | Face dispatch, four span writers, LOGOS frames | `[03 §2.4.1]` `[03 R-REN-03A §5]` |
 | Structure supersample and its fringe | `[03 R-REN-03A §6]` `[03 R-REN-03A §7]` |
-| Waterline and digger erase | `[03 R-REN-03A §8]` |
+| Waterline and digger erase | `[03 R-REN-03A §8]` `[03 R-WATER-01 §2]` |
 | Shadow raster, punch-out, tinted commit | `[03 R-REN-03D]` |
-| Palette, `ALP`, `LHT`, `SHD`, gray table | `[03 §4.3]` `[03 §4.3.3 R-RR16-A §1]` |
+| Palette, `ALP`, `LHT`, `SHD`, gray table and their builders | `[03 §4.3]` `[03 §4.3.3 R-RR16-A §1]` `[03 §4.3.4]` |
 | Tinted blitter family for strips | `[03 R-COMP-01 §2]` `[03 R-FX-01 §3]` `[03 R-FX-02 §2]` `[03 R-FX-02 §3]` |
 | Fog composite tiles and variants | `[03 §3.3]` |
 | Nanolathe particles | `[03 §5.5]` |
+| Calculated flash tables and the ground halo | `[06 R-WFX-01 §2]` `[03 §4.3.1]` |
+| Beam and segment strokes | `[06 R-WFX-01 §4]` `[03 §5.4]` |
+| Minimap sampling and blip admission | `[03 R-MM-01 §1]` `[03 R-MM-01 §3]` `[03 §3.9]` |
 | FNT text | `[03 §7.1]` |
 | Software cursor | `[07 §8]` |
+| Camera glide, scroll pass and the wheel's owner | `[07 R-CAM-01 §12]` `[07 §10]` `[07 §2]` |
+| The clock's scaled timebase and budget carry | `[01 §4.1]` `[01 §4.2]` |
 
-## 8. Historical prototype work sequence and public API contract
+## 8. (retired)
 
-This section records the earlier P1–P3 staging design. Its model-image adapters,
-CPU fallbacks, and native-only structure restriction have been removed. Use
-§9–§10 for the current API and behavior; do not reintroduce those adapters.
+The P0–P3 prototype work sequence and the staged model-packet API it defined.
+Its model-image adapters, CPU fallbacks and native-only structure restriction
+were removed; §9–§10 and §22 are the current API and behaviour. The section's
+text is in [GPU_RENDERER_HISTORY.md](GPU_RENDERER_HISTORY.md). Do not
+reintroduce those adapters.
 
-User-approved milestone: reviewed GPU raster prototypes behind `--renderer=modern`
-and a local human-review capture bundle. No new public renderer modes, zoom,
-lighting, glow, interpolation, or runtime switch in this milestone. Luna/Terra
-implementation units run one at a time in separate worktrees; Sol reviews each;
-the orchestrator independently verifies and merges reviewed commits.
+## 9. GPU-only modern execution
 
-| Unit | Scope | Gate |
-|---|---|---|
-| P0 | Design and invariant alignment | Sol review; existing checks |
-| P1 | Reproducible classic/modern comparison and device timing tooling | Actual GPU captures, injected mismatch rejected, exact Phase 2 scenes |
-| P2 | Additive immutable model geometry packet; retain classic execution | Classic byte parity; packet lifetime and face ordering fixtures |
-| P3 | Conventional GPU model raster prototype, explicit fallback | Real models and focused fixtures rendered; diffs and timing; Sol review |
-| Human gate | Review paired images and moving scenes | User decides whether approximations are unobtrusive |
+`--renderer=modern` exercises the GPU implementation even where coverage is
+incomplete. CPU-rendered model bodies and shadows are never substituted into the
+modern frame. Classic remains unchanged and separate.
 
-P2 owns the additive `internal/drawlist` model API and client producer. GPU code
-must consume that published API without modifying the producer. The packet is
-plain Go: subject-local projected ordered polygon vertices with integer X/Y,
-key, texture U/V and shade row; resolved immutable texture frame, physical flat
-color, shade selector; target dimensions, origin/anchor, key-plane flag and
-supersample scale. Preserve polygon order and arity; triangulation is GPU-owned.
-Retain per-corner pre-shear information if needed to reproduce structure scaling.
-Ordinary geometry packets borrow distinct per-frame vertex and face storage,
-valid until the next recording pass. `List.Clone` deep-copies that storage for
-consumers that retain a frame.
-No client pointer, live camera, or simulation pool is permitted in it. Give the
-CPU bridge neutral pixel-plane data rather than making drawlist import client.
-
-**Published model packet ownership.** `drawlist.Model` holds
-`Classic *drawlist.ClassicModel` and `Geometry *drawlist.ModelGeometry`.
-`ClassicModel` owns the mutable completed body/staging and pre-punched shadow
-pixel operands: each plane's colour bytes, coverage bits, optional key bytes,
-transparent index, dimensions, origin and framebuffer anchor. Recording builds
-the shadow before it releases the composer, so replay retains no live draw,
-camera, client model cache, or frame-local lookup. Its optional trace image and
-observer are strictly diagnostic and cannot write pixels. `List.Clone`
-deep-copies all classic plane slices and modern geometry. `ModelGeometry` carries
-ordered `[]ModelFace` and `[]ModelVertex` slices, borrowed for the recording
-frame or independently owned by a clone; a vertex holds projected
-`X`, `Y`, signed pre-interpolation `Key`, integer texel `U`/`V`, and physical
-`Shade` row. A face holds its immutable resolved `*formats.GAFFrame` (or nil),
-physical flat `Color`, and `Shaded` selector. The packet carries `Width`,
-`Height`, `OriginX/Y`, `AnchorX/Y`, `Scale`, and `KeyPlane`. A GPU consumer
-interpolates `Key` before narrowing for its subject-local maximum-key pass; it
-must never narrow vertex keys early. `Geometry.Eligible` selects the P2 body
-subset. An ineligible packet carries `ModelFallbackReason` (`RevealOrOutline`,
-`Supersample`, `WaterlineOrDigger`, `Staging`, or `NoBodyCommit`) so P3 can
-report an explicit CPU fallback. Shadows remain CPU fallback in P2. The packet
-is emitted only by `RecordFrame`, `ComposeFrameSnapshot`, and
-`ModelPreviewRenderer.RecordModel`; ordinary classic `Frame` does not allocate
-it. The preview record supplies the classic reference image, model-only list,
-physical background index, and palette for a neutral replay plane. Its
-`PiecePoses []frame.PieceView` is a static supplied pose, not COB playback;
-`ARMSOLAROpenPreviewPose` names stock `dish1`–`dish4` and applies the researched
-135-degree Z pose. `ModelPreviewOptions.DisableAntiAlias` suppresses only the
-structure's 2x resolve for one preview call and restores the renderer setting
-afterward; it leaves the structure/shaded path active. The anti-aliased
-structure path remains supersample fallback; a structure preview with this
-explicit control is the scale-one solar geometry review subset.
-
-The packet keeps every projected primitive ring that the CPU collector hands to
-its span walker. P3 must apply the same winding admission before triangle
-rasterization: a ring whose CPU two-chain walk has no positive span contributes
-no pixels. It must not reinterpret retained back-facing rings as visible
-triangles.
-
-The first packet may describe a safely bounded subset (ordinary completed model
-bodies) and mark other subjects ineligible. Explicit eligibility must exclude
-any unrepresented child/staging, reveal/outline, live-piece or supersample stage;
-those continue through existing CPU composition under modern. P3 must prove it
-actually takes the GPU path for review scenes and report GPU/fallback counts.
-Classic uses its existing raster arithmetic unchanged. A full all-subject
-recording/execution split follows the prototype decision; do not claim the bridge
-or its recording-time CPU work has been eliminated before that is measured.
-
-P1 adds a separate `tools/gpu-compare` runner rather than changing the meaning of
-historical `tools/gpu-parity`. It uses `--renderer=modern --shot-renderer=both`
-and the existing `--shot-renderer-max` acceptance argument. Device timing stays
-opt-in to capture/profiling and must not alter normal simulation or presentation.
-P3's visual difference report mode is not acceptance; human-approved thresholds
-are recorded after review. Build/vet/test and classic regression apply to every
-unit. Graphics device recovery and backend replacement are deferred.
-
-**P3b status.** The core raster path now preserves fractional folded-row
-attributes through device preparation, validates folded materials, and treats
-empty folded rings as correctly culled input. `--shot-renderer=modern` and
-`--shot-renderer=both` require the modern executor, now the default. Isolated model preview resolves the selected unit's ObjectName,
-BMCode structure class, and ZBuffer from the compiled catalog, rejecting an
-arbitrary unclassified 3DO. The open ARMSOLAR command route remains a named
-synthetic PieceView pose; `--shot-model-pose=activated` separately loads the
-compiled ARMSOLAR UnitDef, binds its stock COB through the production unit
-port path, settles Create, raises the activation edge, and snapshots the VM
-piece lanes. No dish angle is hardcoded. The preview fails clearly if an
-unsupported model would require a CPU fallback without a ModelSource. The
-opt-in authored device fixture is `NANOLATHE_GPU_DEVICE_TEST=1 go test
-./internal/platform/gpurender -run '^TestModelDeviceFixtures$'`; ordinary tests
-skip it; its `TestMain` keeps the optional Ebiten loop on the process main
-goroutine for macOS. The fixture uses separate spatial regions for equal-key,
-transparent texture, wrapped-key interpolation, keyless painter, folded-span,
-transparent keyed Sprite, and explicit CPU-fallback/missing-source checks. A
-repeatable paired capture matrix is provided by
-`tools/gpu-model-preview /private/tmp/nanolathe-gpu-review/p3-final-model`.
-Each row writes `<id>.png`, `<id>.modern.png`, `<id>.diff.png`, and `<id>.log`;
-the logs include GPU and CPU-fallback counters and separate closed,
-synthetic-open, and production-activated ARMSOLAR rows. Device execution and
-human review of synthetic and actual activated captures remain acceptance
-gates.
-
-The isolated model matrix uses 320×240 surfaces so the activated solar panels
-fit at 2x. `--shot-gpu-profile-frames` profiles frozen battle captures only;
-model preview captures reject it explicitly instead of silently ignoring it.
-
-## 9. GPU-only modern execution (current user-approved contract)
-
-The user requires `--renderer=modern` to exercise the GPU implementation even
-when coverage is incomplete. CPU-rendered model bodies and shadows must never
-be substituted into the modern frame. Classic remains unchanged and separate.
-This instruction replaces the earlier fallback-first prototype staging policy.
-
-- `Client.RecordFrame` records geometry and the existing non-model draw
-  commands without allocating/rasterizing software model color, coverage or
-  height planes. CPU transforms, visibility/order decisions, texture decoding,
-  and GPU vertex preparation remain legitimate preparation work.
-- Structures follow the existing Anti-Alias option through a GPU doubled
-  projection and palette resolve (§10). Its scratch surfaces are bounded by
-  model dimensions. This preserves the classic stage; it does not enable a
-  new Enhanced MSAA/SSAA policy.
-- Model shadows, nanoframe reveal/outline, waterline/digger processing, and
-  carrier/child composition now have GPU passes (§10). Unsupported geometry or
-  missing material resources remain explicit skips. Resolved subjects retain
-  selection chrome, and both recording routes preserve per-primitive texture
-  cursor registration. A missing carrier still presents valid children.
-- Remove the model-image source adapter from the live platform and modern
+- `Client.RecordFrame` records geometry and the non-model draw commands without
+  allocating or rasterizing software model colour, coverage or height planes.
+  CPU transforms, visibility and order decisions, texture decoding and GPU
+  vertex preparation remain legitimate preparation work.
+- Model shadows, nanoframe reveal and outline, waterline and Digger processing,
+  carrier/child composition and the supersample all have GPU passes (§22).
+  Unsupported geometry or missing material resources remain **explicit skips**,
+  counted in `ModelStats` (`Skipped`, `NoBody`, `ShadowsOmitted`,
+  `DirectOverflow`). Resolved subjects retain selection chrome, and both
+  recording routes preserve per-primitive texture cursor registration. A missing
+  carrier still presents valid children.
+- There is no model-image source adapter in the live platform or modern
   screenshot paths. The GPU executor consumes geometry; missing geometry or
   resources records a skip rather than consulting a CPU renderer.
 - When `--shot-renderer` is omitted, screenshots follow `--renderer`, so
-  `--renderer=modern --shot=frame.png` exercises the GPU. Explicit `classic`
-  and `both` remain diagnostic choices. Reject the CPU-only `--profile-seconds`
-  path with `--renderer=modern`; use the GPU capture profiler instead.
-- An explicit `--shot-renderer=both` comparison may compose the classic
-  reference separately as diagnostic work. It does not supply pixels to the
-  modern executor. The modern geometry carries the same structure-resolve option as the classic
-  reference. Preserve a single
-  presentation walk where possible so presentation RNG/audio side effects are
-  not repeated. Ordinary modern-only captures use geometry recording only.
-- Texture alignment is a correctness gate before this switch: the activated
-  and synthetic-open ARMSOLAR panel's blue/black boundary must not develop the
-  visibly bent/zig-zag mapping reported at 2x. A mapping correction is driven by
-  the original polygon and authored texture coordinates, never a unit-specific
-  UV adjustment. Keep a focused authored fixture and real-device comparisons.
-
-Verification adds an AA-enabled structure recording check with no CPU pixel
-planes, GPU skip diagnostics for unsupported stages, and real-GPU solar captures
-with the classic option enabled. The performance policy is §6: no screenshot
-readback or PNG encode time is counted toward presentation performance.
+  `--renderer=modern --shot=frame.png` exercises the GPU. Explicit `classic` and
+  `both` remain diagnostic choices. The CPU-only `--profile-seconds` path is
+  rejected with `--renderer=modern`; use the GPU capture profiler instead.
+- An explicit `--shot-renderer=both` comparison composes the classic reference
+  separately as diagnostic work. It does not supply pixels to the modern
+  executor, and it preserves a single presentation walk where possible so
+  presentation RNG and audio side effects are not repeated.
 
 ### Current recording API
 
 `Client.RecordFrame()` selects geometry-only model preparation for live modern
-presentation. Its returned list remains same-frame data; callers retaining a
-frozen diagnostic list call `Clone()`. `ComposeFrameSnapshot()` additionally
-composes the classic reference and includes GPU geometry and stage metadata; its
-classic image is never a GPU input. `ModelPreviewRenderer.RecordGeometry()`
-returns a durable list, palette and background with a nil `Image`, while
-`RecordModel()` retains the classic preview image for explicit comparisons.
-The model-only `both` recipe disables the classic structure resolve to isolate
-native-scale texture mapping and says so in its log. Modern-only previews do
-not require disabling the classic Anti-Alias option.
+presentation; `RecordModernFrame()` is the same pass without the host
+presentation advance, which is what the pre-record worker runs (§13.10). Its
+returned list is same-frame data; a caller retaining a frozen diagnostic list
+calls `Clone()`. `ComposeFrameSnapshot()` additionally composes the classic
+reference and includes GPU geometry and stage metadata; its classic image is
+never a GPU input. `ModelPreviewRenderer.RecordGeometry()` returns a durable
+list, palette and background with a nil `Image`, while `RecordModel()` retains
+the classic preview image for explicit comparisons.
 
-`gpurender.Model` consumes `Model.Geometry` and never reads `Model.Classic`;
-that packet belongs only to the classic sink. The former `ModelSource`,
-`ModelImage` and client/platform image adapters have been removed. `ModelStats`
-reports GPU bodies, GPU shadows, composed groups, skips and geometry/material
-failures. Legacy omission counters remain available for explicitly unsupported
-packets; trace-only records are not counted as missing bodies. These are
-diagnostic counts, not simulation data.
+`gpurender` consumes `Model.Geometry` and never reads `Model.Classic`; that
+packet belongs only to the classic sink. `ModelStats` reports the lane's
+accounting — subjects and shadows placed, faces appended, rings culled, packets
+the atlas could not hold, atlas passes, rows and pages, cargo images, lanes
+replayed from and captured into the retained store, device draws, phases,
+passes, submitted vertices — plus the per-family counters the
+Enhanced layers publish. These are diagnostic counts, not simulation data.
 
-## 10. Approximate visual parity before enhanced features
+## 10. Composition stages the modern executor implements
 
-GPU model shadows, cached/live composition, reveal/outline, waterline/digger
-processing, attached-unit staging, and structure resolve are implemented. The capture audit below checks
-these stages alongside the existing terrain, feature, weapon, effect, fog and
-interface command families. All work stays behind `--renderer=modern`. Enhanced
-lighting, glow, camera zoom and interpolation wait for human visual acceptance.
-The passes consume immutable geometry and palette tables; none uploads a
-software-rendered model image or reads GPU pixels during play.
+Model shadows, cached/live composition, reveal and outline, waterline and Digger
+processing, attached-unit staging and the supersample are all implemented, and
+since the model lane landed they are all **fragment verdicts inside the lane's
+two passes** rather than separate stages; §22 is where the current mechanism is
+written down. This section records what each stage owes retail, because that is
+what a reviewer checks the lane against.
 
 ### Model shadows
 
-A body packet can own a separate shadow geometry packet. The recorder reuses
-`collectShadowPolys` and `shadowAnchor`, preserving the current classic
-projection, ordering and placement without allocating software image planes.
-The GPU rasterizes the silhouette, retains it while rasterizing the body, then
-punches the body's coverage out and blends each remaining shadow pixel once
-through `ALP[src*256+dst]`. The destination is snapshotted before that commit;
-multiple faces of the same silhouette must not repeatedly darken the ground.
-The body commits afterward. Clones own both packets independently.
+Only a **structure** projects a separate, quarter-sheared, punched shadow. The
+recorder reuses `collectShadowPolys` and `shadowAnchor`, preserving the classic
+projection, ordering and placement without allocating software image planes; the
+executor rasterizes the silhouette into its own region, and the shadow commit
+punches a pixel whose body block is wholly covered and composites the ALP
+half-colour once, so overlapping silhouette faces of one subject darken the
+ground once and shadows of different subjects darken it twice
+[03 R-REN-03D §4–§5].
 
-Modern shadows for mobile and Digger subjects are the body's own silhouette,
-as retail's are: the recorder emits a faceless shadow packet carrying the body's
-box, the shadow anchor and the buried or submerged clip key, and the model lane
-reads the body's finished raster at that placement (§22). Classic copies the
-finished body image for those subjects, clears transparent colour-key coverage,
-flattens to index 0 and applies the inclusive underwater/buried cutoff; the two
-executors now agree on the shape. Only a structure projects a separate,
-quarter-sheared, punched shadow. The
-producer applies the corrected master/vehicle/Digger gates, independently
-of the structure-body `Shading` preference [03 R-REN-03D §1, §4].
-Actual GPU shadows and omitted shadows are reported separately. The device
-fixture verifies the blend, body punch and overlapping-face behavior; paired
-battle captures verify placement against the classic output.
+A **mobile or Digger** subject's shadow is the body's own silhouette, as
+retail's is: the recorder emits a faceless packet (`ModelGeometry.Silhouette`)
+carrying the body's box, the shadow anchor and the buried or submerged clip key,
+and the commit reads the body's own finished raster at that placement, erasing a
+texel at or below the clip key and compositing the half-colour of index 0
+[03 R-REN-03D §1]. Classic copies the finished body image for those subjects,
+clears transparent colour-key coverage, flattens to index 0 and applies the
+inclusive cutoff; the two executors agree on the shape. The producer applies the
+corrected master/vehicle/Digger gates independently of the structure body's
+`Shading` preference [03 R-REN-03D §1, §4].
 
 ### Feature sprite raster selection
 
 Feature commands retain their already-offset destination and shadow-before-body
 order. `FeatureShadows` is a separate client preference populated by display
 settings. `Sprite.Trans` carries the selected raster route: definition flags
-apply to static/rest-cursor sprites, while a published live event selects opaque
-for both commands [03 R-RAST-01 §6][03 §5.3.1]. Both executors use the existing
-keyed/tinted primitives for these selections, including the startup palette
-capability; there is no separate feature-shadow shader or shade-row policy.
-The publisher carries independent `RuntimeLive` and `ShadowEnabled` state.
-A live record without a drawable event cursor does not select static rest art.
-The retained-slot arena limitation remains documented in the economy design
-under EC-G2; it does not require another presentation fallback.
+apply to static and rest-cursor sprites, while a published live event selects
+opaque for both commands [03 R-RAST-01 §6][03 §5.3.1]. Both executors use the
+existing keyed and tinted primitives for these selections, including the startup
+palette capability; there is no separate feature-shadow shader or shade-row
+policy. The publisher carries independent `RuntimeLive` and `ShadowEnabled`
+state. A live record without a drawable event cursor does not select static rest
+art.
 
 ### Reveal, outline and submerged geometry
 
 A geometry packet carries the producer's resolved nanoframe bands, complete
-outline rings, and waterline/sonar/owner decision. The body fragment applies the
-reveal after material lookup, writing the composition background when erased
-while retaining key ownership. Outline geometry consists of the two row
-endpoints from each ring, with the same subject key test; no polygon-border
-line primitive replaces that pass. The GPU applies BLUE TABLE or erasure at the
-inclusive waterline threshold, then the Digger erase. Keyless subjects skip
-both clipping passes. The final body coverage punches its shadow, as in classic.
-These passes replace the whole-subject omissions from §9. No software image
-planes are allocated during recording. [03 R-COMP-01 §3][03 R-WATER-01 §2]
+outline rings, and waterline/sonar/owner decision. The reveal is applied after
+material lookup, writing the composition background where erased while retaining
+key ownership; a replaced reveal index is written flat, as retail rewrites its
+plane after shading. Outline geometry is the two row endpoints from each ring,
+key-tested against the pixel's key; no polygon-border line primitive replaces
+that pass. BLUE TABLE or erasure applies at the inclusive waterline threshold,
+then the Digger erase. Keyless subjects skip both clipping passes. The final
+body coverage punches its shadow, as in classic. No software image planes are
+allocated during recording. [03 R-COMP-01 §3][03 R-WATER-01 §2]
 
 ### Attached-unit composition
 
 A keyed carrier owns an ordered list of child geometry and signed height deltas.
-Each child keeps its own reveal, outline, waterline and Digger processing. Its
-shadow-only command remains before the carrier's shadow/body command, preserving
-classic order without uploading a CPU image. The GPU packs the carrier's color
-and key planes into red/green channels, including keys under erased pixels,
-then merges each finished child using a separate destination image. The signed
-shifted key is compared before narrowing to the stored byte. The next child
-sees that narrowed key. The carrier's live lane enters before those merges;
-after the final child, waterline and Digger process the combined plane once,
-then the group commits once. [03 R-REN-03A §4]
+Each child keeps its own reveal, outline, waterline and Digger processing on its
+**own** key; the carrier's waterline and Digger then clip the child on the
+**shifted** key, which is what the staging image's passes do. Its shadow-only
+command remains before the carrier's shadow/body command. The signed shifted key
+is compared before narrowing to the stored byte, and the next child sees that
+narrowed key. The carrier's live lane enters before those merges; after the
+final child, waterline and Digger process the combined plane once, then the
+group commits once. [03 R-REN-03A §4]
 
 A keyless carrier records independent body commands in painter order; a missing
-carrier still records each valid child independently. Both diagnostic and
-geometry-only recording preserve this behavior and texture cursor registration.
-Nested child groups are not emitted by the current presentation walk. A device
-fixture covers carrier/child occlusion, signed compare before wrapped store,
-later-child ordering, invisible key ownership, and child shadow-only commits.
+carrier still records each valid child independently. Nested child groups are
+not emitted by the current presentation walk, and the modern executor still
+omits a child packet that is keyless or itself has children.
 
 ### Structure resolve
 
-The recorder carries an optional doubled body projection using the same
-`placeFaces` operation as classic, including the odd-height shear correction.
-Its coordinates target a model-sized local scratch image. The GPU renders that
-body and its reveal, then resolves each 2×2 block with the three ordered ALP
-lookups; the resolved key is the top-left sample. Transparent background
-participates in the filter. The native outline and clipping passes follow the
-resolve, and a child's resolved image is what enters carrier composition.
-No CPU pixels are involved. [03 R-REN-03A §6–§7]
+Retail doubles a structure's cached lane, resolves each 2×2 block through three
+ordered ALP lookups with the top-left sample as the resolved key, and draws live
+faces at native scale afterward [03 R-REN-03A §6–§7]. The classic executor does
+exactly that. Enhanced replaces it with §17's subject-wide coverage supersample:
+every subject is rasterized at 2×, the live lane included, and the commit
+fragment box-resolves coverage. Only cached faces enter the recorder's doubled
+lane; native live faces join the same raster unshaded.
 
-Only cached faces enter this GPU path. Native live faces follow its resolve at
-1x and are unshaded, so the structure filter never includes a live piece.
-Model-only `both` captures can continue using their explicitly logged
-native-scale comparison recipe; the scene matrix and AA-enabled preview API
-cover the normal structure option.
+### Weapon, effect and asset coverage
 
-### Weapon, effect and asset coverage review
-
-Weapon and effect producers already emit palette-index draw commands through
-both executors. Their modern path uses GPU lines, points, sprites, destination
-palette operations, and model geometry. A separate per-weapon GPU implementation
-would duplicate the presentation rules and is unnecessary. The device capture
-audit supplies authored committed views using installed definition properties,
+Weapon and effect producers emit palette-index draw commands through both
+executors. The modern path uses GPU lines, points, sprites, destination
+compositing and model geometry. A separate per-weapon GPU implementation would
+duplicate the presentation rules and is unnecessary. The device capture audit
+supplies authored committed views using installed definition properties,
 composes the classic reference, then independently calls `RecordFrame` for the
-modern list. It resets the presentation CRT copy for reproducible lightning.
-Every case must change visible pixels from an empty terrain frame; model cases
-must report GPU body execution and no skips. Screenshot reads happen only after
-execution, outside timing.
+modern list; it resets the presentation CRT copy for reproducible lightning.
+Every case must change visible pixels from an empty terrain frame, and model
+cases must report GPU body execution and no skips. The audit covers every
+installed projectile model identity, the published laser, lightning, flame and
+plasma paths, all three calculated-flash tables, named explosion/smoke/flame
+art, every published strip family, overlapping smoke and impacts, every
+installed unit definition at two headings, every unique feature model, and
+representative feature sprite banks and transparency modes.
 
-The audit covers all installed projectile model identities, the published laser,
-lightning, flame and plasma paths, all three calculated-flash tables, named
-explosion/smoke/flame art, every published strip family, and overlapping smoke
-and impacts. The broader audit adds every installed unit definition at two headings, every
-unique feature model, and representative feature sprite banks/transparency
-modes: 1,000 non-empty cases (556 unit, 404 feature, 26 weapon, 14 effect/strip),
-plus an empty-frame control. All cases draw visible pixels without skipped
-models after the polygon fix below. Non-model cases match classic exactly on
-the tested Metal device; model cases retain edge/shade raster differences.
-These static unit poses expose every piece and do not claim to be COB states.
-Render type 2's fixed global sprite binding remains unresolved in classic as
-well; this milestone does not invent that resource. The capture source and
-paired images are retained in the human-review artifact, not as retail fixtures
-in the repository.
+This is approximate parity with the current classic implementation, not proof of
+complete retail behavior or of every animated pose. The shared classic gaps, the
+covered-index-1 discrepancy at model commit, and producerless world passes
+remain explicit. Render type 2's fixed global sprite binding remains unresolved
+in classic as well.
 
-This is approximate parity with the current classic implementation, not proof
-of complete retail behavior or every animated pose. The shared classic gaps
-above, the covered-index-1 discrepancy at model commit, and producerless world
-passes remain explicit. Live motion, camera movement, team textures, activation,
-construction, cargo, waterline and combat remain human review targets. The
-existing 30 Hz presentation sampling is unchanged; the 16.7 ms budget remains a
-performance acceptance target, not a result established by static captures.
+## 11. Compiled execution
 
-A catalog-wide capture audit exposed three disappearing subjects when a flat
-projected ring could not be triangulated. Such a ring now uses the same
-positive-row strip preparation as folded geometry, retaining device key and
-color passes. One bad ear no longer drops the whole unit. An authored touching
-ring checks both positive lobes and its empty pinch on the device; this is a
-geometry path, not a CPU image fallback. [03 R-RAST-01 §1]
-
-## 11. Compiled execution (current performance contract)
-
-> **Retired in part (2026-09-11).** The model slot stage this section and
-> §11.5 "Model slot passes" designed — the per-subject slot atlas, its key,
-> body, reveal, clip and resolve passes and the residency table of §13.12 —
-> is gone; the model lane of §22 is the modern executor's only model path.
-> The 2D families, the scheduler and the allocation policy below stand.
-
-Implementation policy, not retail behavior. This section replaces the earlier
-per-body image cache and page packer (retained only in git history) and the
-per-command execution the first modern executor used. Classic is untouched.
-
-### 11.1 Why the first executor was slow
-
-Measured on the seeded Ashap Plateau battle benchmark at 1920×1080 (darwin/arm64,
-Metal), the modern executor issued about 2,700 device draws and 59 image clears
-per frame: one draw per fog cell (1,177), two per translucent sprite (snapshot
-then tint), three per model commit, four to five scratch passes per model cache
-miss, and one per solid fill. Ebitengine's Metal driver opens a new render pass
-whenever the destination image changes, with a load and store of the whole
-target, so the snapshot ping-pong and per-model scratch work produced more than a
-thousand full-screen passes per frame. The body image cache missed on every
-animated mobile unit because pose is part of identity (143 misses and 146
-evictions per frame against a full 128 MiB budget). Textured quads were cut into
-one-pixel strips on the CPU (about 21,700 per frame), and per-draw uniform maps
-plus per-strip slices allocated 11 MB and 213k objects per frame. The result was
-12 ms of CPU submission, a further 12 ms on the render thread, and a 65 ms
-cadence against classic's 15 ms of CPU and 33 ms cadence.
+Implementation policy, not retail behavior. Classic is untouched by everything
+in this section.
 
 ### 11.2 Design
 
-Fog admission examines scaled geometry without allocating rasters. The executor
-retains one immutable variant per source frame and magnified scale, sharing
-child identities across parents and across atlas/ordered paths. Source reset
-retires these variants with scene atlas entries. Warmed fog compilation and
-repeated device replay fixtures require stable allocations, source entries,
-pages and pixels.
-
 The recorded `drawlist.List` is unchanged and remains the contract with the
-recorder and the classic sink. The modern executor still implements
-`drawlist.Sink`, but its Sink methods **compile** the command into a small number
-of batched passes; `Execute` submits those passes after `Replay` returns. Order
-is preserved exactly where pixels depend on each other and relaxed everywhere
-else (C-G3). Byte semantics of every family are unchanged (C-G2, C-G4, C-G7,
-C-G8).
+recorder and the classic sink. The modern executor implements `drawlist.Sink`,
+but its Sink methods **compile** the command into a small number of batched
+passes; `Execute` submits those passes after `Replay` returns. Order is
+preserved exactly where pixels depend on each other and relaxed everywhere else
+(C-G3). Byte semantics of every family are unchanged (C-G2, C-G4, C-G7, C-G8).
 
-**One table atlas.** `PAL`, `Gray`, `Blue` (256×1 each), `SHD` and `LHT`
-(256×32 each) and `ALP` (256×256) are packed into one RGBA8 image with fixed row
-offsets, index in red. Every shader receives it as one source image, which frees
-Ebitengine's four image slots and lets unrelated families share a shader.
+**One table atlas.** `PAL`, `Gray`, `Blue`, `SHD`, `LHT` and `ALP` are packed
+into one 256-wide RGBA8 image with fixed row offsets, index in red. Every shader
+receives it as one source image, which frees Ebitengine's four image slots and
+lets unrelated families share a shader.
 
 **One scene shader for the 2D families.** Terrain tiles, keyed GAF sprites,
 feature sprites, PCX, glyphs, fills, lines, points, indexed surfaces, the cursor
-and model body commits are all "opaque" writes: they read no destination. They
-draw with one Kage shader whose per-vertex custom attributes select the source
-(constant index, GAF atlas texel keyed on the green flag, table row remap for
-`BlitLit`, scaled integer mapping for `BlitScaled`/`Surface`). The
-destination-reading families (`BlitTinted`, translucent feature body and shadow,
-`FillLitRect`, `FillShadeRect`, `PointLit`, the model shadow commit) draw with
-one destination shader whose custom attributes select the table (ALP, LHT or
-SHD) and row, sampling a snapshot image. No uniforms are used on any per-frame
-draw; every parameter rides the vertex. Sources are: the scene GAF atlas (frames
-packed on first use into 2048-square pages, keyed by frame identity), the
-snapshot, the table atlas and the model slot atlas.
+and model body commits are all "opaque" writes: their result does not depend on
+what is already there. They draw with one Kage shader (`scene2D`) whose
+per-vertex custom attributes select the source — constant index, GAF atlas texel
+keyed on the green flag, table row remap for `BlitLit`, scaled integer mapping
+for `BlitScaled` and `Surface`, the model commit's coverage resolve. It also
+carries `BlitTinted` and the translucent feature body and shadow: they
+composite, but under source-over, which is the blend an opaque write already
+draws with, so evaluating them in this shader is what lets a tinted sprite share
+a device run with the opaque writes around it instead of opening a phase against
+them. The remaining destination-compositing families (`FillLitRect`,
+`FillShadeRect`, `PointLit`, the trail marks, the lit discs, the model shadow
+commits, the strategic marker layer) draw with one
+destination shader (`sceneDest`) whose custom attributes select the table and
+row. Every parameter rides the vertex, and the aircraft shadow layer's
+`AircraftWater` is the **one** uniform on a per-frame draw in the executor: its
+four operands are frame constants and its custom lanes were spent on the
+subject's atlas rectangle (§34). Sources are the scene atlas (GAF frames, glyph
+strips, PCX and the per-frame indexed surface packed into 2048-square pages on
+first use), the read copy, the table atlas and the model lane's pages.
 
-**The scheduler.** `Execute` keeps a coarse screen grid (32 px cells). Each
-compiled command has a clipped screen rectangle and a class, opaque or
-destination-reading. Commands are appended to *phases* in record order. A phase
-is executed as: (1) one draw of its opaque batch, (2) one copy of the offscreen
-into the snapshot, (3) one draw of its destination-reading batch. The rules:
+**Rectangles and lines compile as runs, not per-pixel quads.** A one-pixel
+inclusive frame is four contiguous runs, because every pixel of an edge shares
+the edge's row or column and the surviving pixels are the edge clamped to the
+intersection of the frame, the clip rectangle and the framebuffer — one run per
+edge instead of 2(W+H) one-pixel quads. A Bresenham line walks the identical
+integer sequence the byte writer walks, but emits one run per row: within a row
+the walk advances x by the same step every iteration and never returns to a row
+it has left, so a row's visible points are consecutive. A shallow line costs
+about one run per row; a steep line has runs of one and costs what it always
+did. The pixel set is unchanged in both cases [03 §5.4][R-SEL-02A].
 
-* an opaque command joins the current phase unless it overlaps a
-  destination-reading command already in the current phase; then it
-  opens the next phase (it must overwrite that result, so it must draw after it);
-* a destination-reading command joins the current phase unless it overlaps
-  another destination-reading command already in the
-  current phase; then it opens the next phase (the later one reads the earlier
-  one's result);
-* a cell tag names the destination-reading commands that covered it — four,
-  after which the cell answers every later test conservatively — and the test
-  then compares the two rectangles, so sharing a cell without overlapping does
-  not split a phase. Both tests cost one grid lookup per cell of the rectangle
-  and allocate nothing after warm-up.
+**The scheduler.** `Execute` keeps a coarse 32-pixel screen grid. Each compiled
+command has a clipped screen rectangle and a class, opaque or
+destination-compositing. Commands are appended to *phases*; a phase submits its
+opaque batch and then its destination batch. A command is placed in the
+**earliest** phase its overlaps permit (§11.5), and the placement rules are:
 
-One relaxation of the rectangle test is exact, not heuristic: a lit point batch
-tags the cell of each visible point rather than the cells of its bounding
-rectangle, and two points conflict only when they write the same pixel; the
-phase keeps the pixel set that decides it. Any other command sharing a cell with
-a point still opens the next phase.
+* a destination-compositing command must follow, by a whole phase, every earlier
+  destination-compositing command it overlaps **of a different blend stream**,
+  or of any stream when either samples the phase's read copy (§13.11);
+* a destination-compositing command must be preceded, in the same or an earlier
+  phase, by every earlier opaque write it covers, because a phase draws its
+  opaque batch before its destination batch;
+* an opaque write must follow, by a whole phase, every earlier
+  destination-compositing command it covers, because it has to overwrite that
+  result;
+* an opaque write may share a phase with earlier opaque writes, because one
+  batch rasterizes in vertex order, which is record order.
 
-A second relaxation was claimed here and is retracted: that a model body commit
-may join the phase of its own shadow commit because the shadow writes only
-pixels the body plane leaves uncovered [03 R-REN-03D §4–§5] and the body only
-pixels it covers. Measured against the battle capture the two pixel sets are not
-exactly complementary — a column of the silhouette at the body's edge belongs to
-both — and drawing the body first drops the shadow there. The sequential
-scheduler never exercised the exemption (a body commit almost always overlapped
-some other destination read of its shadow's phase), so removing it changes no
-pixel of that executor; critical-path placement exercises it constantly. The
-shadow commit is an ordinary destination read and the body commit that follows
-it takes the next phase [03 R-REN-03D §4].
+A cell remembers up to four owners with their rectangles, phases and classes;
+the rectangles decide, so merely sharing a cell constrains nothing. A cell that
+runs out of slots forgets its **oldest** owner and folds that owner's
+contribution into a floor every later placement over the cell takes, kept per
+query stream — conservative, so it can cost a phase that was not needed and can
+never place a command too early. An opaque owner whose phase is zero is not
+recorded at all, which keeps the frame's terrain, background fills and
+first-phase sprites off the grid entirely.
 
-This is C-G3's disjoint-run rule generalised across families. Within one batch,
-vertex order is record order, and the device rasterizes primitives of one draw in
-order, so overlapping opaque writes in the same batch still resolve to the later
-command. The snapshot copy in (2) may be limited to the
-union rectangle of the phase's destination-reading batch. Batches whose vertex
-count would exceed the 16-bit index domain are split into consecutive draws
-without reordering.
+One relaxation of the rectangle test is exact, not heuristic: a lit point tags
+the cell of its own pixel rather than the cells of its batch's bounding
+rectangle, and two points conflict only when they write the same pixel. The
+pixel set is one screen-sized pixel→phase table stamped with the segment serial
+— so nothing is cleared at a barrier — laid out cell-major, so one cell's page
+is a contiguous 8 KiB block. A run of points is placed **once**, with the
+maximum of its pixels' individual answers: a run's x values are consecutive and
+distinct, so no pixel of a run can depend on another pixel of the same run, and
+stamping the whole run leaves exactly the tag state placing them one at a time
+leaves. A command of another stream sharing a cell with a point is still pushed
+past it, because a rectangle test cannot enumerate the point set.
 
-Overlapping translucent effects, not the 2D families, set the phase count: at
-1920×1080 the battle benchmark compiles about eighty phases per frame, of which
-about thirty-five are opened by an overlapping ALP-tinted sprite and about
-twenty-five by model shadow and body commits that genuinely chain. Sharing one
-snapshot between two phases was measured and rejected: only about ten of those
-eighty phases have a destination rectangle that even misses the previous
-phase's, which is an upper bound on what a snapshot-validity scheme could save.
+**Barriers.** The clear, a composed attached-unit group's shared staging image,
+a model subject the atlas could not hold, and the `Expand` marker end a
+*segment*: everything compiled so far is submitted and every later command is
+placed after it. Fog is **not** a barrier — it is an ordinary
+destination-compositing command whose rectangle is the visible fog region.
 
 **Fog as one pass** (C-G7). The recorded fog ops become a per-cell grid texture
-(kind, variant, frame and parity in the four channels) covering the visible
-cell range, rebuilt each frame from the record. One full-screen draw reads the
-pre-fog snapshot, the grid, the fog GAF atlas (all four variants of both
-families packed once) and the table atlas, and writes the fog result in place of
-the 1,177 per-cell draws. Per-pixel results equal the byte writers' [03 §3.3].
-Fog remains its own phase between the world phases before it and the interface
-phases after it, because it reads everything drawn so far.
+(kind, variant, frame and parity in the four channels) covering the visible cell
+range, rebuilt each frame from the record and re-uploaded only when its bytes
+differ. One draw reads the phase's read copy, the grid, the fog GAF atlas (all
+four variants of both families packed once per family identity and scale) and
+the table atlas, and writes the fog result in place of one draw per cell.
+Per-pixel results equal the byte writers' [03 §3.3]. The sequential
+cell-to-cell dependency the byte writers have is reproduced by the shader
+carrying a running index through the 2×2 block of cells that can reach a pixel,
+in the op list's own row-major order. A frame that reaches past its atlas tile
+is left out and **reported** (`FogContentError`), never silently clipped.
 
-**Models: per-frame slot atlas, no cache.** Every `Model` command with eligible
-geometry is allocated a slot in a per-frame atlas image (2048 wide, grown in
-height as needed, at most two pages) sized to its composition box; a body with a
-supersample packet gets a 2× slot on a separate 2× page and a native slot. The
-slot atlas is cleared once. All subjects' key passes are one draw (max blend,
-subject-local because each slot is disjoint), all colour passes are one draw
-(each fragment compares the interpolated key with the key stored at its own slot
-texel), all shadow silhouettes are one draw into shadow slots, and all 2× resolves
-are one draw into native slots. Outline, waterline/Digger clipping and reveal keep
-their researched semantics inside the colour pass or in one batched follow-up
-draw over the affected slots. The scene commit of a body is then a keyed quad in
-the opaque batch sampling the slot; the shadow commit is a destination-reading
-quad sampling the shadow slot and the body slot (for the coverage punch) through
-`ALP`. Attached-unit groups keep the sequential child merge of §10 over a small
-staging image, since there are a handful per frame. The image cache, its LRU,
-identity keys, page packer and pinning are removed; `ModelStats` drops the cache
-fields and keeps the counters that describe work performed.
-
-**Textured quads without strips.** Retail's span mapper finds, for each row,
-the active edge on the decreasing-index chain and on the increasing-index chain
-of the quad, interpolates every lane along each edge by the row's parameter,
-then interpolates across the row by the column's parameter [03 R-RAST-01 §1].
-A textured quad therefore draws as two device triangles whose key and colour
+**Textured quads without strips.** Retail's span mapper finds, for each row, the
+active edge on the decreasing-index chain and on the increasing-index chain of
+the quad, interpolates every lane along each edge by the row's parameter, then
+interpolates across the row by the column's parameter [03 R-RAST-01 §1]. A
+four-corner face therefore draws as two device triangles whose key and colour
 passes evaluate exactly that two-chain mapping per fragment from a per-frame
-quad parameter image (twelve RGBA8 texels per quad: corner positions, corner
-texel coordinates, corner key and shade), then floor before sampling as before.
-This is not a generic inverse-bilinear map, which differs from the retail mapping
-on a non-parallelogram. It removes the diagonal bend the strip path was
-introduced for [§5.1] without CPU scanline work. Crossed (folded) rings, rings
-with no ear and non-quad textured faces keep the strip path, about 300 strips
-per frame in the battle benchmark. The activated ARMSOLAR captures are the
-acceptance gate; a visible diagonal or zig-zag is a defect.
+parameter image — twelve RGBA8 texels per entry: corner positions, corner texel
+coordinates, corner key and shade, and the subject's verdict lanes — then floor
+before sampling. This is not a generic inverse-bilinear map, which differs from
+the retail mapping on a non-parallelogram. It removes the diagonal bend the
+strip path was introduced for (§5.1) without CPU scanline work. Rings that are
+not four-corner faces interpolate their lanes linearly.
 
-**Allocation policy.** Steady-state frames allocate nothing in the executor:
-vertex and index buffers, phase lists, grid tags, prepared face scratch and the
-fog grid bytes are reused across frames; no `map[string]any` uniform maps; no
-per-strip or per-face slice literals; texture and glyph atlases are built once
-per identity.
+**Allocation policy.** Steady-state frames allocate nothing in the executor.
+Batch vertex and index storage is pooled by power-of-two size class and each
+batch remembers what it held at the last reset, so its first growth asks the
+pool for that size and skips the doublings. The phase list is a high-water pool,
+never truncated. The draw options value, the copy quad's vertex and index
+arrays, the point rows and runs, the point plane and the model lane's arenas are
+all retained across frames. No `map[string]any` uniform map is built per frame —
+the aircraft shadow layer's single map and its float slice are allocated once
+and written in place (§34) — and there are no per-strip or per-face slice
+literals; texture and glyph atlases are built once
+per identity, and a surface whose revision changed but whose bytes did not is
+not re-uploaded, because Ebitengine's Metal driver builds a staging texture per
+`WritePixels`.
+
+**Every atlas cell carries a border — contract Z9.** Under the world transform a
+nearest sample near a quad's far edge can round one texel past its source
+rectangle, which shows as an intermittent tile seam or a stray foreign pixel
+beside a sprite. Ebitengine cannot confine a sample to a sub-rectangle, so three
+atlases carry a border of duplicated edge texels: the tile atlas pads each cell
+by one texel of the tile's own edge (`tileAtlasPad`), the scene atlas reserves
+and fills the same one-texel border around every packed frame, glyph strip, PCX
+and surface (`sceneAtlasPad`), and the model lane leaves a two-texel margin
+around every region (`modelDirectMargin`). An entry's recorded placement stays
+its first **inner** texel in all three, so no recorded source rectangle changes
+and a rest step composes exactly what it composed without them.
 
 ### 11.3 Public API
 
-Unchanged: `New`, `NewChecked`, `Execute(list, w, h) *ebiten.Image`,
+`New`, `NewChecked`, `Execute(list, w, h) *ebiten.Image`, `ExecuteOver`,
 `ModelStats()` (fields may be removed, never given new meaning), and the
-`drawlist.Sink` implementation. `Execute` still visits the list in record order
-and still returns the expanded image after the `Expand` marker.
+`drawlist.Sink` implementation. `Execute` visits the list in record order.
 
 ### 11.4 Verification
 
-Gates in addition to §6: the battle benchmark (`docs/BATTLE_BENCHMARK.md`) on
-both renderers before and after each unit, comparing modern against its own
-baseline capture; the instrumented device-call count (draws and clears per
-frame) reported in the unit's commit message; the fog, tinted-overlap,
-carrier/child and ARMSOLAR device fixtures; and zero steady-state allocations in
-the executor measured by the benchmark's allocation delta. The targets for the
-complete redesign at 1920×1080 are about thirty device draws per frame, CPU
-submission under 2 ms, and a 33 ms cadence at 30 Hz with headroom for 60 Hz
-presentation.
+Gates in addition to §6: the battle benchmark on both renderers before and after
+each change, comparing modern against its own baseline capture; the instrumented
+device-call count (draws, phases and passes per frame) reported in the commit
+message; the fog, tinted-overlap, carrier/child and ARMSOLAR device fixtures;
+and zero steady-state allocations in the executor, measured by the benchmark's
+allocation delta.
 
-Measured after G5 on the seeded Ashap Plateau battle benchmark at 1920×1080:
-cadence 33.3 ms — the 30 Hz vsync floor, and classic's own figure — with CPU
-submission about 7.4 ms over roughly 230 device calls (about 80 phases, each a
-batched opaque draw, a snapshot copy and a batched destination draw, plus the
-model slot passes, the fog pass and the expansion). The device-call and
-submission targets are therefore not met: the phase count, not the draw count
-within a phase, is what stands between the executor and them, and the phases
-that remain are real per-pixel dependencies between overlapping translucent
-effects. The executor itself allocates about a hundred objects per frame; the
-benchmark's 42,000 are Ebitengine's per-Metal-call boxing (about a hundred
-objects per device call, a third of them in opening the render pass a
-destination change forces) and the recorder in `internal/client`.
+### 11.5 Render passes, not draws
 
-### 11.5 Render passes, not draws (second round)
-
-Measured after G5 with `--benchmark-tps=60` (one simulation step per draw, the
-enhanced presentation target): classic holds the 16.7 ms floor with 15 ms of
-CPU, modern's cadence leaves it (27.5 ms median, 79% of frames on the 30 Hz
-floor but few on the 60 Hz one) with only 13 ms of CPU. Modern is device-bound.
-Skip experiments in a throwaway worktree attributed the device time: dropping the
-snapshot copies alone put modern on the 60 Hz floor; dropping the
-destination-reading draws while keeping the copies did not; dropping the fog
-pass or the model slot passes changed nothing; copying into a 512-square
-snapshot instead of the full-size one was slower. Ebitengine's Metal driver opens
-a render command encoder whenever the destination image changes, loading and
-storing the whole attachment, and that switch costs on the order of 70 µs
-whatever it draws. Of the roughly 195 passes per frame, about 168 are the
-offscreen → snapshot → offscreen alternation of the phases. The unit of cost is
-therefore the destination switch, and the executor's job is to issue as few as
-possible; the draw count within a pass and the pixels a pass touches are
-secondary.
-
-Two changes follow, both preserving the §11.2 order rules exactly.
+The unit of device cost is the **destination switch**, not the draw. Ebitengine's
+Metal driver opens a render command encoder whenever the destination image
+changes, loading and storing the whole attachment, and that switch costs on the
+order of 70 µs whatever it draws. The executor's job is therefore to issue as
+few as possible; the draw count within a pass and the pixels a pass touches are
+secondary. `ModelStats` reports `Phases` and `Passes` (device destination
+switches) so the benchmark rows record them.
 
 **Critical-path placement.** A command is placed in the earliest phase its
-overlaps permit, not the latest open one. With record order the only order, the
-phase of a command C is the maximum, over every earlier-recorded command E whose
-clipped rectangle overlaps C's, of E's phase plus one when E reads the
-destination and E's phase when it does not; a command overlapping nothing goes to
-phase zero. This is exactly the dependency the sequential rules express: a
-destination read must follow, by a phase, every earlier destination read and
-must be preceded, in the same or an earlier phase, by every earlier opaque write
-it covers (the opaque batch of a phase draws before its destination batch); an
-opaque write must follow, by a phase, every earlier destination read it covers,
-and may share a phase with earlier opaque writes because a batch is drawn in
-record order. Each phase therefore keeps its own vertex and index storage, and a
-command appends to the storage of the phase it was placed in, so a batch is
-still record-ordered. The lit point and body/shadow relaxations of §11.2 carry
-over unchanged: they only alter which pairs count as overlapping. The cell grid
-keeps, per cell, up to four owners with their phases; the rectangle test decides,
-and a saturated cell answers with the largest phase it has seen. Barriers (fog,
-a composed group's staging, the clear, the expansion) end a *segment*: every
-later command is placed after the barrier's phase. Estimated on the battle
-benchmark by placing every command of the current scheduler's stream both ways:
-31 phases per frame mean and 54 maximum, against 70 and 102 today.
+overlaps permit, not the latest open one — the rule stated in §11.2. Each phase
+keeps its own vertex and index storage and a command appends to the storage of
+the phase it was placed in, so a batch is still record-ordered inside itself.
 
-**One pass per phase.** Two full-size indexed surfaces alternate as the
-destination, so the separate snapshot surface and its pass disappear. Phase k
-writes surface W_k and its destination batch reads the other, R_k, which is
-W_{k-1}. Pass k, in this order and all into W_k: (1) copy R_k over the previous
-phase's destination rectangle (the only pixels W_k still lacks: that rectangle
-in R_k already holds the later opaque writes over it, which is the later state
-anyway); (2) the opaque batch of phase k; (3) the destination batch of phase k,
-reading R_k; (4) the opaque batch of phase k+1, so that W_k already holds it
-when it becomes R_{k+1}. Every opaque batch is thus drawn twice, once per
-surface, and every destination batch once. The invariant is that before pass k,
-R_k holds the complete state through phase k-1 plus the opaque batch of phase k,
-and W_k holds the complete state through phase k-2 plus the opaque batch of
-phase k-1. The clear is an opaque full-surface fill in the first phase, so both
-surfaces receive it. Fog is a phase of its own whose destination batch is the
-one fog draw over the visible region, reading R (complete by the invariant); the
-next pass copies that rectangle like any other. The expansion reads the last
-written surface. Model slot pages are built before the phases and are not
-involved. A destination-reading run's read surface is resolved at submission,
-not at compilation. `ModelStats` gains `Phases` and `Passes` (device
-destination switches the executor issued) so the benchmark rows record them.
+**One pass per phase** — two full-size surfaces alternating as the destination so
+the read copy and its pass disappear — is designed but **not landed**.
+Implemented as written it composes a battle frame whose model shadow commits
+lose about five hundred pixels of two million, and the loss survives every
+variation tried while the same placement over the read-copy submission is
+byte-identical. Why the alternation itself changes those pixels is unexplained;
+the executor keeps a read copy per phase that needs one (`TODO(H1)` at the
+submit site) until it is. Since §13.3 only fog binds a read slot, so the cost
+this would remove is now small.
 
-Expected: passes fall from about 195 to about 30 phase passes plus the model
-slot passes, the fog pass and the expansion. The doubled opaque fill (terrain,
-sprites and body commits, a few million pixels) is cheap on a tiled device and is
-accepted.
-
-*Status.* Critical-path placement is landed. The two-surface alternation is
-not: implemented as written, it composes a battle frame whose model shadow
-commits lose about 500 of 2,073,600 pixels (the pre-shadow value remains), and
-the loss survives every variation tried — copying the full surface instead of
-the rectangle, either copy blend, no run merging, fog as a barrier, an exact
-grid-free placement — while the same placement over the snapshot submission is
-byte-identical, as is drawing every opaque batch into both surfaces under that
-submission. Why the alternation itself changes those pixels is unexplained;
-the executor keeps the snapshot copy per phase (`TODO(H1)` at the submit site)
-until it is, and the phase count alone still more than halves the passes.
-
-Measured after H1–H3 on the battle benchmark, 180 frames: phases 42 per frame
-median (against 70 before placement; the retracted exemption costs some of the
-estimated 31), device destination switches 104 including the model stage's 6
-(against about 195), modern allocation 1.9 MB and 24k objects per frame
-(against 3.9 MB and 42k), modern Submit 7.3 ms (against 7.8) and Record 4.8
-ms. At 60 TPS modern's cadence median is about 20–23 ms with 2–12% of frames on
-the 16.7 ms floor (classic: 17.6 ms, 45%); at 30 TPS both are on the floor.
-The device time still tracks the pass count, so the remaining lever is the
-two-surface alternation above, or fewer phases.
-
-**Model slot passes.** The slot stage today alternates its destinations per
-page: two clears, the key faces into the key plane, the colour faces into the
-body plane, reveal, the outline keys back into the key plane, the outline
-colours into the body plane, the separate live key and colour passes, then
-the clip pass, for each of up to three native
-pages and the supersample page, about twenty switches. Stacking every page as a
-vertical band of one image per plane (body, key, post; 2048 wide) and ordering
-the work by destination — every page's clears, then every page's key work, then
-colour, then the follow-ups — brings the stage to a fixed handful of passes
-regardless of page count. The researched pass semantics (§10: outline colour
-compares against the key plane including the outline keys; clipping follows
-colour; reveal) decide which stages may merge; where they must stay ordered, they
-stay ordered, and the count is reported.
-
-**CPU.** Both renderers now spend the larger part of their main-thread CPU in
-the Go allocator rather than in any renderer code: on this platform every fresh
-heap span costs a page re-commit and the heap of a loaded battle grows for
-seconds between collections, so per-frame allocation is paid at allocation
-time, not at collection. The battle benchmark's 3.9 MB and 42,000 objects per
-frame (modern) break down as about 37,000 objects in Ebitengine's per-Metal-call
-boxing on the render thread (proportional to passes and draws, which the two
-changes above cut), Ebitengine's per-destination temporary vertex and index
-buffers (which reallocate on every new high-water mark), the executor's own
-scratch (cleared each frame instead of merely reset, and grown slot by slot), and
-about 2,500 objects in the recorder and HUD (`internal/client` outline geometry
-and model composition, effect draw lists, the minimap surfaces rebuilt and
-copied every frame). The policy of §11.2 stands: a steady-state frame allocates
-nothing in the executor, and the recorder and HUD retain their per-frame
-buffers across frames. The recorded list is the contract and must not change:
+**CPU.** Both renderers spend the larger part of their main-thread CPU in the Go
+allocator rather than in any renderer code: on this platform every fresh heap
+span costs a page re-commit and the heap of a loaded battle grows for seconds
+between collections, so per-frame allocation is paid at allocation time, not at
+collection. The policy of §11.2 stands — a steady-state frame allocates nothing
+in the executor, and the recorder and HUD retain their per-frame buffers across
+frames. What a frame still allocates is Ebitengine's per-device-call boxing and
+its per-destination temporary vertex and index buffers, which reallocate on
+every new high-water mark. Preparation records that reference recorder geometry
+are cleared after submission and page subject references are retired at the next
+frame boundary, including dormant overflow pages; numeric arenas retain their
+capacity and contents. The recorded list is the contract and must not change:
 classic output stays byte-identical.
-
-Preparation records also reference recorder geometry and earlier arena
-allocations. The executor clears used pointer-bearing preparation records after
-submission and retires page subject references at the next frame boundary,
-including dormant overflow pages. Numeric arenas retain their capacity and
-contents. Recorder refill clears removed face references; polygon records drop
-lane references only when their backing arrays are replaced. Growth preserves
-every earlier slice still in use within the frame. Warm reuse remains free of
-allocations. This corrects reachability; it does not attribute a measured
-long-match heap footprint to those references.
 
 **Hidden-frame command lifetime.** Ebitengine 2.10.1 is the minimum backend
 version: it completes graphics frames even when the window is hidden or
-occluded, without presenting them. The earlier release candidate still called
-Draw but skipped the queue flush, accumulating ordinary frames' vertex/index
-copies until presentation resumed. This is a backend lifetime correction;
-background simulation and model geometry are unchanged.
+occluded, without presenting them. An earlier release candidate called Draw but
+skipped the queue flush, accumulating ordinary frames' vertex and index copies
+until presentation resumed. This is a backend lifetime correction; background
+simulation and model geometry are unchanged.
 
-Capture diagnostics count the actual vertex and index slice lengths at every
-executor triangle submission, including model padding and overflow passes.
-`ModelKeyVertices` and `ModelColourVertices` separate the expensive model
-lanes; `MaxSubmissionVertices` identifies a single unusually large draw.
-The renderer retains the full statistics and Execute sequence number of the
-frame with the most submitted vertices. These counters exclude image-copy
-draws, adapter draws and dependency-internal work, and describe submissions,
-not retained heap or GPU memory. They require no per-frame allocation and
-never enter authoritative state.
+**Capture diagnostics.** The executor counts the actual vertex and index slice
+lengths at every triangle submission, including model padding and overflow
+passes. `ModelKeyVertices` and `ModelColourVertices` separate the expensive
+model lanes; `MaxSubmissionVertices` identifies a single unusually large draw.
+The renderer retains the full statistics and `Execute` sequence number of the
+frame with the most submitted vertices. These counters exclude image-copy draws,
+adapter draws and dependency-internal work, and describe submissions, not
+retained heap or GPU memory. They require no per-frame allocation and never
+enter authoritative state.
 
-## 12. Work units for §11
+## 12. (retired)
 
-Each unit is one worktree, one sub-agent, exclusive files; the orchestrator
-reviews the diff, re-runs the gates and merges.
+The work units for §11 (G1–G5, H0–H3). See
+[GPU_RENDERER_HISTORY.md](GPU_RENDERER_HISTORY.md).
 
-| Unit | Scope | Files owned | Gate |
-|---|---|---|---|
-| G1 fog grid | grid texture, fog GAF atlas, one fog pass | `fog.go`, `fog_shaders.go` (new), `fog_test.go` | fog device fixture; M6 dithered and M2 regions equal to classic bytes; fog draws 1,177 → 2 |
-| G2 slot atlas | per-frame model slot atlas, batched key/colour/shadow/resolve passes, cache removal | `models.go`, `model_*.go`, `model_shaders.go`, model tests | model device fixtures; ARMSOLAR and carrier captures; model draws per frame independent of unit count |
-| G3 scheduler | table atlas, scene and destination shaders, phase scheduler, all 2D families and model commits through it | `renderer.go`, `draw.go`, `sprites.go`, `deststage.go`, `text.go`, `terrain.go`, `shaders.go`, `tables.go`, `batch.go`, `schedule.go` (new), `atlas.go` (new); model commit call sites by API agreed with G2 | tinted-overlap fixture; M1–M8 non-model regions equal to classic; total draws about thirty |
-| G4 bilinear quads | inverse-bilinear textured quads, strips only for folded rings | `model_shaders.go`, prepare functions in `models.go` | ARMSOLAR activated/open captures; strip count about 66 |
-| G5 render-pass and allocation sweep | phase count, per-frame uploads, zero steady-state allocation in the executor | `internal/platform/gpurender` | M1–M8 modern byte-identical to the previous revision's modern; device fixtures; benchmark phase, pass and allocation counts reported |
+## 13. True-colour composite and refresh-rate presentation
 
-G1 and G2 are independent and run first in parallel. G3 follows G2 because the
-model commit goes through the scheduler. G4 follows G2. G5 runs last. After each
-merge the orchestrator runs the battle benchmark on both renderers and records
-draws per frame, submission, cadence and allocations in the merge commit.
+Implementation decisions approved by the user on 2026-09-08, not retail
+findings. The goal was 120 presented frames per second with the 30 Hz
+simulation interpolated, staying visually close to Original without requiring
+index-exact pixels. Why the index-exact executor could not get there is in the
+history file.
 
-### Second round (§11.5)
-
-| Unit | Scope | Files owned | Gate |
-|---|---|---|---|
-| H0 benchmark | `--benchmark-tps`, on-cadence share in the report | `cmd/nanolathe/flags.go`, `cmd/nanolathe/battle_benchmark.go`, `internal/platform/ebitenapp/battle_benchmark.go`, `tools/battle-bench-report`, `docs/BATTLE_BENCHMARK.md` | landed (`a4fb00cd`) |
-| H1 scheduler | critical-path placement (landed), one pass per phase (not landed, see §11.5 status), `Phases`/`Passes` stats, fog and clear as phases, retained uint32 index buffers | `schedule.go`, `deststage.go`, `renderer.go`, `fog.go`, `draw.go`, `sprites.go`, `terrain.go`, `text.go`, `shaders.go`, `atlas.go`, `models.go` (commit and shadow call sites), their tests | M1–M8 modern byte-identical to the previous revision's modern; fog, tinted-overlap and carrier fixtures; phases about 31 and phase passes equal to phases on the benchmark; 60 TPS on-cadence share reported |
-| H2 model stage (landed) | stacked pages, passes ordered by destination, vertices emitted once per page for key and colour, scratch arena without per-frame clearing, uint32 indices, recyclable sub-images | `model_slots.go`, `model_prepare.go`, `model_quads.go`, `model_scratch.go`, `model_atlas.go`, `model_shaders.go`, their tests | model device fixtures; ARMSOLAR and carrier captures; model stage passes ≤ 10 and independent of page count; executor allocations reported |
-| H3 recorder (landed) | retained buffers in the recorder and HUD: outline geometry, composition scratch, effect draws, minimap surfaces | `internal/client/model_geometry.go`, `internal/client/model_scratch.go`, `internal/model/model.go` (composition scratch only), `internal/render/effect_view.go`, `internal/render/minimap*.go`, `cmd/nanolathe/battle_hud_minimap.go`, their tests | M1–M8 classic byte-identical; classic and modern battle captures identical to the previous revision's; recorder objects per frame reported before and after |
-
-H1, H2 and H3 are independent and run in parallel; H1 owns `models.go` and H2
-must report, not make, any change it needs there. After each merge the
-orchestrator runs the battle benchmark on both renderers at 30 and 60 TPS and
-records phases, passes, submission, cadence, on-cadence share and allocations in
-the merge commit.
-
-## 13. True-colour composite and refresh-rate presentation (third round)
-
-These are implementation decisions approved by the user on 2026-09-08, not
-retail findings. The goal of this round is 120 presented frames per second
-with the 30 Hz simulation interpolated, staying visually close to Original
-without requiring index-exact pixels.
-
-### 13.1 Why the index-exact executor cannot get there
-
-Measured on main `eb7a6df1` (1080p battle benchmark, 180 frames, M3 Pro):
-
-| | per presented frame |
-|---|---|
-| Budget at 120 Hz | 8.3 ms |
-| Modern Submit (CPU) at 30 TPS | 6.4 ms |
-| Destination switches (render passes) | 104, about 70 µs each on the device |
-| Ebitengine with 20 draws of 2,000 quads, vsync on, TPS 30 | 120.2 fps, 1.8 ms CPU per Draw |
-| Ebitengine with 60 such draws | 121 fps, 2.9 ms |
-| Ebitengine with 150 such draws | 100 fps, 6.1 ms |
-
-Ebitengine calls Draw at the display's refresh rate with vsync on and Update at
-TPS, which is exactly the interpolation model; it holds 120 Hz on this display
-up to roughly sixty device draws per frame. The passes are the problem, and
-every pass exists for one reason: the framebuffer holds palette indices, the
-destination-reading families remap the destination index through a table, and
-a Kage shader cannot read its render target. Each destination read therefore
-costs a snapshot copy and a pass. Optimising the pass structure further (§11.5)
-bottoms out near fifty passes, which is still 3.5 ms of device time before a
-pixel is drawn. The composite has to stop reading the destination.
+**CPU/allocation policy.** Reaching a refresh-rate cadence made the executor's
+own steady-state allocation the binding cost, so the rounds below established
+one rule and every later layer follows it: **a steady-state frame allocates
+nothing in the executor**, beyond an atlas that genuinely grows. In practice
+that means three things. Scratch is *pooled and hinted* rather than owned by a
+frame-varying index: a batch's load is similar from one frame to the next even
+though which phase holds it is not, so storage is sized in powers of two,
+returned to a pool when a segment ends, and re-taken at the size the same batch
+last held, which skips the doublings — and their copies — that walking up from
+the smallest class would cost. An arena that must grow grows to hold *what the
+frame has already handed out plus the new request*, so it converges in one step
+instead of once per request. And a constant reaches a shader as a literal rather
+than a uniform, because a uniform map is a per-frame allocation for a value that
+never changes. The same rule is why a value read after a call returns must not be
+borrowed from per-frame scratch. §11.2 "Allocation policy" states the standing
+policy and §11.5 "CPU" says where the frame's remaining allocation actually
+lives.
 
 ### 13.2 The tables are their formulas
 
@@ -1369,95 +1126,86 @@ of them is its builder's arithmetic followed by the nearest-palette search:
 | GRAY | avg = floor((r+g+b)/3) | 5.6 | 5.6 |
 | BLUE | (r/2, g/2, b/2 + 50) | 17.8 | 17.6 |
 
-(The floor is the mean distance from the formula's colour to the nearest
-palette entry; where the two columns agree the table adds nothing beyond
-quantization.) So an executor that evaluates the arithmetic in RGB reproduces
-the retail composite up to palette rounding, and the rounding is the only
-thing it loses. That is the whole of the visual change in this round.
+(The floor is the mean distance from the formula's colour to the nearest palette
+entry; where the two columns agree the table adds nothing beyond quantization.)
+So an executor that evaluates the arithmetic in RGB reproduces the retail
+composite up to palette rounding, and the rounding is the only thing it loses.
+That is the whole of the visual change.
 
 ### 13.3 The Enhanced composite
 
-The recorded `drawlist.List` is unchanged; the classic sink and the recorder
-are untouched. Sources stay indexed: GAF frames, tiles, glyph strips, PCX and
-the model slot pages carry the index in red exactly as before (C-G4 applies to
-every source and to the model stage). What changes is the framebuffer and the
-destination-reading families.
+The recorded `drawlist.List` is unchanged; the classic sink and the recorder are
+untouched. Sources stay indexed: GAF frames, tiles, glyph strips, PCX and the
+model pages' key plane carry the index in red exactly as before (C-G4 applies to
+every source). What changes is the framebuffer and the destination-side
+families.
 
 **Framebuffer.** One RGBA8 composite surface holding colour. Every opaque
 family's fragment resolves its index through the PAL row of the table atlas
-before writing (C-G8 as amended). The expansion pass disappears; `Expand`
-remains a barrier and the composite is what `Execute` returns. The clear
-writes PAL[0].
+before writing (C-G8 as amended). There is no expansion pass; `Expand` remains a
+barrier and the composite is what `Execute` returns. The clear writes PAL[0].
 
 **Source-side lookups stay exact.** `BlitLit` (source through one LHT row) and
-the model stage's SHD, ALP resolve, Gray-free paths and BLUE waterline all
-remap a texel before it is written; they keep their integer texel fetches and
-resolve through PAL at the end. The model slot atlas, key plane, reveal,
-outline, waterline and digger are unchanged. As first landed only the commit
-resolved colour; since §17 the model stage ends in a coverage resolve that
-produces colour on the slot page, and the commit copies it.
+the model lane's SHD, ALP resolve and BLUE waterline all remap a texel before it
+is written; they keep their integer texel fetches and resolve through PAL at the
+end.
 
 **Destination-side lookups become blends** with the arithmetic of §13.2:
 
 * *ALP families* — `BlitTinted`, translucent feature body and shadow, and the
-  model shadow commit — write `mix(dst, PAL[src], 1/2)`: source-over with the
-  premultiplied fragment `(PAL[src]/2, 1/2)`. The shadow commit keeps its body
-  punch in the shader (a shadow texel under the body's own coverage is skipped)
-  so overlapping silhouette faces of one subject darken once; overlapping
-  shadows of different subjects darken twice, as the byte writers do
-  [03 R-REN-03D §4–§5].
-* *Row families* — `FillLitRect`, `FillShadeRect`, `PointLit` — scale the
-  destination: LHT row r by `1 + r/30`, SHD row r by `0.06875·r`. One blend
-  serves both: source factor destination-colour, destination factor
-  source-alpha, so `out = dst · (src.rgb + src.a)`; the fragment carries
-  `(min(k,1), min(k,1), min(k,1), max(k−1, 0))`. A factor above 2 clamps at 2
-  (SHD row 31 is 2.13; the difference is below the quantization floor).
-* *Fog* keeps one read copy. The gray remap is a desaturation, which no
+  model shadow commits — write `mix(dst, PAL[src], 1/2)`: source-over with the
+  premultiplied fragment `(PAL[src]/2, 1/2)`. A shadow commit keeps its body
+  punch in the shader so overlapping silhouette faces of one subject darken
+  once; overlapping shadows of different subjects darken twice, as the byte
+  writers do [03 R-REN-03D §4–§5]. Source-over is also the opaque blend, so the
+  first two — the ones that need no source of their own beyond the scene atlas —
+  ride the OPAQUE stream and the scene shader (§11.2); the others keep shaders
+  of their own and stay in the destination class.
+* *Row families* — `FillLitRect`, `FillShadeRect`, `PointLit`, the lit discs and
+  the trail marks — scale the destination: LHT row r by `1 + r/30`, SHD row r by
+  `0.06875·r`. One blend serves both: source factor destination-colour,
+  destination factor source-alpha, so `out = dst · (src.rgb + src.a)`; the
+  fragment carries `(min(k,1), min(k,1), min(k,1), max(k−1, 0))`. A factor above
+  2 clamps at 2 (SHD row 31 is 2.13; the difference is below the quantization
+  floor).
+* *Fog keeps one read copy.* The gray remap is a desaturation, which no
   fixed-function blend expresses, so the fog command stays a shader run over a
   copy of its region: luminance `floor((r+g+b)/3)` for the gray fills and gray
   GAF, PAL[dark] for the solid and checker fills, keyed copies for the black
   family. Ordinary stock frames keep one copy pass per frame. If a selected
   frame is composite, extends outside its atlas tile, or lies beyond the atlas's
-  frame range, the entire fog command uses an ordered fallback. It walks ops
+  frame range, the whole fog command takes the **ordered fallback**: it walks ops
   and children in their original order and clips each leaf only to the target
   [03 R-COMP-01 §2]. Gray/checker recursion applies the raw gate before each
-  parent or child and ignores alternate selectors. Black recursion selects ALP
+  parent or child and ignores alternate selectors; black recursion selects ALP
   for an alternate child and propagates tint through its descendants. Keyed and
-  tinted leaves use the existing sprite streams; gray/checker leaves use a
-  masked fog shader in the scheduler's snapshot stream. Overlapping gray leaves
-  therefore receive separate read copies even though modern desaturation is
-  idempotent. The fallback changes ordering representation, retaining this
-  section's approved colour arithmetic. Child anchors can reach before the cell
-  origin or outside the parent's dimensions without atlas clipping.
-
-  Authored tests lock repeated gray snapshot phases, nested black-child ALP
-  order, parent/child raw gates, transparent holes, and child extensions. The
-  existing opt-in fog device fixture checks actual pixels and ordinary versus
-  composite scroll crops at all three view scales. Setting
-  `NANOLATHE_FOG_COMPOSITE_CAPTURE` to an output PNG path saves its authored
-  composite scene for visual review.
+  tinted leaves use the existing sprite streams; gray and checker leaves use a
+  masked fog shader in the read-copy stream, so overlapping gray leaves receive
+  separate read copies even though modern desaturation is idempotent. Child
+  anchors can reach before the cell origin or outside the parent's dimensions
+  without atlas clipping. The fallback changes ordering representation, not this
+  section's colour arithmetic.
 
 **The scheduler keeps its placement and loses its snapshots.** Critical-path
-placement (§11.5) still decides order among overlapping commands — the blends
-are order-dependent exactly where the table lookups were. A phase now submits
-its opaque runs and then its destination runs into the same surface, with no
-copy between them; a run is keyed by images, shader and blend, and within one
-phase's destination batch the runs may be grouped by blend because the batch's
-rectangles are pairwise disjoint. A whole segment is therefore one render pass.
-Passes per 1080p battle frame as landed: model stage 6, fog copy 2, composite
-1, attached-unit staging 2 — eleven on every benchmark frame, against 104.
-The staging figure needed one change beyond this section's first draft:
-composing each attached-unit group on the shared staging pair cost three
-passes per group (9 + 3 × groups, 21–33 on the benchmark with four to eight
-factories building), so R1 also placed every group of the frame on one
-staging atlas ordered by destination, with one pass for every group's
-background and parent and one pass per child index across all groups. The
-merge order inside a group is unchanged and the captures are byte-identical
-with and without it.
+placement still decides order among overlapping commands — the blends are
+order-dependent exactly where the table lookups were. A phase submits its opaque
+runs and then its destination runs into the same surface, with no copy between
+them; a run is keyed by images, shader and blend, and within one phase's
+destination batch the runs may be grouped by blend because the batch's
+rectangles are pairwise disjoint or same-stream (§13.11). A whole segment is
+therefore one render pass, except where fog takes its copy.
 
-**Blend classes.** `schedOpaque` draws with source-over and alpha 1 or 0 as
-today. `schedDest` splits into source-over (ALP families) and scale (row
-families); the fog run binds its own shader and read slot as it does now.
+**Blend classes.** `schedOpaque` draws with source-over: alpha 1 or 0 for an
+opaque write, and the ALP half-colour fragment for the tinted strip and feature
+blit, which is the same blend and so the same class and the same run.
+`schedDest` splits into source-over (the ALP families that bind their own
+shader) and scale (row families); the fog run binds its own shader and read
+slot.
+
+**Attached-unit staging.** Every composed group of the frame is placed on one
+staging atlas ordered by destination, with one pass for every group's background
+and parent and one pass per child index across all groups, rather than three
+passes per group. The merge order inside a group is unchanged.
 
 ### 13.4 Verification
 
@@ -1467,371 +1215,217 @@ families); the fog run binds its own shader and read slot as it does now.
   covered pixels' mean RGB distance from the classic expansion is at or below
   the §13.2 floor for that family plus 5 units; the fixture states which
   family's floor it uses.
-* Captures M1–M8 through `tools/gpu-compare --report-only`, viewed by the
-  orchestrator beside classic; `--shot-renderer both` pixel counts are
-  reported, not gated, because every blended pixel now differs by design.
-* Battle benchmark at 30 and 60 TPS: passes per frame ≤ 12, phases unchanged,
-  Submit and on-cadence share reported in the merge commit.
+* Captures through `tools/gpu-compare --report-only`, viewed beside classic;
+  `--shot-renderer both` pixel counts are reported, not gated, because every
+  blended pixel now differs by design.
+* Battle benchmark at 30, 60 and 120 TPS: passes and phases per frame, Submit
+  and on-cadence share reported in the merge commit.
 * Ebitengine allowlist and `docs/INVARIANTS.md` checks unchanged.
 
 ### 13.5 Refresh-rate presentation and interpolation
 
-The composite of §13.3 draws one recorded list in a few passes, so the modern
-window can record and replay a list every presented frame. Interpolation then
-needs no new draw-list family: the recorder is handed a blended view of the
-two most recent committed ticks and records it exactly as it records a
-committed tick today. Everything below is an Enhanced presentation rule, not
-retail behaviour; Original keeps committed-tick sampling.
+The composite draws one recorded list in a few passes, so the modern window can
+record and replay a list every presented frame. Interpolation needs no new
+draw-list family: the recorder is handed a blended view of the two most recent
+committed ticks and records it exactly as it records a committed tick.
+Everything below is an Enhanced presentation rule; Original keeps committed-tick
+sampling.
 
-**Cadence.** The window's Update stays at 30 per second. Everything the
-battle step does per host frame — input edges, the follow-camera glide's
-per-frame step [07 R-CAM-01 §12], the scroll pass [07 §10], the sub-tick
-budget [01 §4.2] — keeps the cadence retail gives it, unchanged. Draw is
-called at the display's refresh rate regardless of TPS; Original presents
-only after an Update, as today, and Enhanced presents on every Draw, so the
-presentation-only work between two Updates is one recording and one replay
-per frame. `--fps N` caps how often Enhanced presents: a Draw that arrives
+**Cadence.** The window's Update stays at 30 per second. Everything the battle
+step does per host frame — input edges, the follow-camera glide's per-frame step
+[07 R-CAM-01 §12], the scroll pass [07 §10], the sub-tick budget [01 §4.2] —
+keeps the cadence retail gives it. Draw is called at the display's refresh rate
+regardless of TPS; Original presents only after an Update, and Enhanced presents
+on every Draw. `--fps N` caps how often Enhanced presents: a Draw that arrives
 sooner than the cap's interval (less an eighth of it, the vsync jitter
 allowance) returns without recording and the retained screen keeps the last
 frame. Draw still sits on the display's vsync grid, so the cap lands on the
-nearest refresh multiple below it — 60 on a 120 Hz display presents every
-second refresh — which is what makes a 120 Hz display a stand-in for a 60 Hz
-one. Original ignores the cap; it presents once per Update.
+nearest refresh multiple below it. Original ignores the cap.
 
-The default cap is 60 FPS. The Nanolathe options page offers 30 / 60 / 120
-and previews changes immediately; OK persists them, Cancel restores the entry
-value. Explicit `--fps` overrides the saved preference at window startup, with
-zero retaining display-refresh presentation. Captures and benchmarks use their
+The default cap is 60 FPS. The Nanolathe options page offers 30 / 60 / 120 and
+previews changes immediately; OK persists them, Cancel restores the entry value.
+Explicit `--fps` overrides the saved preference at window startup, with zero
+retaining display-refresh presentation. Captures and benchmarks use their
 command-line settings independently of saved window preferences.
 
-**Pointer latency.** Ebitengine's public cursor API reads its most recent
-Update snapshot, so the window still samples pointer motion at 30 Hz. Modern
-positions the recorded software cursor from that snapshot immediately before
-GPU replay, after joining the recorder. This removes the additional presented
-frame of positional delay from deferred input publication; it does not make
-input polling refresh-rate-driven. The cursor's shape and animation, hover,
-orders, placement previews and camera continue using the ordinary host step.
-The GAF hotspot remains authored [07 §8]. Capture keeps the pointer hidden;
-the release frame preserves its saved restore point [07 R-CAM-01 §11].
-Original's retained frame and `--shot` keep their existing path. F11 reads the
-submitted GPU image, including the cursor at its late-positioned location.
+**Pointer latency.** Ebitengine's public cursor API reads its most recent Update
+snapshot, so the window still samples pointer motion at 30 Hz. Modern positions
+the recorded software cursor from that snapshot immediately before GPU replay,
+after joining the recorder (`PositionPresentationCursor`). This removes the
+additional presented frame of positional delay from deferred input publication;
+it does not make input polling refresh-rate-driven. The cursor's shape and
+animation, hover, orders, placement previews and camera continue using the
+ordinary host step. The GAF hotspot remains authored [07 §8]. Capture keeps the
+pointer hidden; the release frame preserves its saved restore point
+[07 R-CAM-01 §11]. F11 reads the submitted GPU image, cursor included.
 
-**Fraction.** Read at Draw time, when the modern path records. The
-scheduler's time source is the scaled timebase floor(milliseconds × 30 /
-1000) [01 §4.1], so its delta is a whole number of thirtieths and, at the
-nominal speed, the budget's carry is identically zero after every step: the
-carry alone never resolves a position inside a tick. The client therefore
-takes a `TickFraction func() float32` option beside `Step`, and the battle
-supplies it as the time since the most recent tick actually fired: the
-controller notes the host millisecond, the carry and the global tick after
-every session step, stamping them only when the global tick moved, and the
-fraction is `carry at the fire + elapsed seconds × 30 × eff` with `eff` the
-clock's effective speed (active × 0.1 [01 §4.2]), clamped to [0, 1]. While
-paused the budget does not run and the battle returns the value it last
-returned unpaused, so the blend is frozen. The benchmark at 120 sets the
-four fractions explicitly.
+**Fraction.** Read at Draw time, when the modern path records. The scheduler's
+time source is the scaled timebase floor(milliseconds × 30 / 1000) [01 §4.1], so
+its delta is a whole number of thirtieths and, at the nominal speed, the
+budget's carry is identically zero after every step: the carry alone never
+resolves a position inside a tick. The client therefore takes a `TickFraction`
+option beside `Step`, and the battle supplies **the time since the most recent
+tick actually fired**: the controller notes the host millisecond, the carry and
+the global tick after every session step, stamping them only when the global
+tick moved, and the fraction is `carry at the fire + elapsed seconds × 30 × eff`
+with `eff` the clock's effective speed (active × 0.1 [01 §4.2]), clamped to
+[0, 1). While paused the budget does not run and the battle returns the value it
+last returned unpaused, so the blend is frozen. Measuring from the fire is what
+makes the fraction monotonic inside a tick: an Update that releases nothing
+saturates it and holds the pose, where reading the wall clock's own phase slid
+every blended pose back toward the previous tick for a whole Update and then
+jumped two ticks forward.
 
-The first form of this rule read the wall clock's own phase, `(milliseconds
-× 30 mod 1000) / 1000`, as the elapsed part of the scaled unit. That is
-right for the budget but wrong for the blend: ticks are released only inside
-the window's 30 Hz Update, whose timing drifts against that phase, so an
-Update landing just before the phase wrapped released no tick while the
-phase reset to zero, and every blended pose slid back toward the previous
-tick for a whole Update before jumping two ticks forward. Slowly moving
-units hid it; COB pieces animating at speed showed it as a jiggle. Measured
-from the fire, the fraction cannot move backwards within one tick: an
-Update that releases nothing saturates it at one and holds the pose.
-
-**Camera.** The camera moves in the 30 Hz step, so Enhanced blends it too:
-the client samples the precise camera origin and zoom at every Step, keeps the
-previous sample, and while recording presents the affine transform blended
-between those samples (§16.5), restoring the complete live camera after the record. The
-camera's fraction is not the tick fraction: the camera advances on the
-window's Update grid, which is not phase-aligned with the simulation's scaled
-units, so blending it by the tick fraction would snap it back whenever a tick
-fired mid-update. The window adapter timestamps each Update and hands the
-client `(now − lastUpdate) × 30`, clamped to [0, 1), before each modern Draw
+**Camera.** The camera moves in the 30 Hz step, so Enhanced blends it too: the
+client samples the precise camera origin and zoom at the end of every `Step`,
+after the scroll and follow passes have moved it, keeps the previous sample, and
+while recording presents the affine transform blended between those samples
+(§16.5), restoring the complete live camera after the record. The camera's
+fraction is **not** the tick fraction: the camera advances on the window's
+Update grid, which is not phase-aligned with the simulation's scaled units, so
+blending it by the tick fraction would snap it back whenever a tick fired
+mid-update. The window adapter timestamps each Update and hands the client
+`(now − lastUpdate) × 30`, clamped to [0, 1), before each modern Draw
 (`SetCameraFraction`); this is platform time in the adapter, where the input
-timestamps already live, and never reaches the client's clock or the sim. A
-jump larger than the viewport in either axis at an unchanged zoom (a minimap
-click or a bookmark recall) snaps rather than sweeps. Zoom-induced translation
-is part of the coupled transform, including when a wide zoom step crosses more
-than one viewport.
+timestamps already live, and never reaches the client's clock or the sim. A jump
+larger than the viewport in either axis at an unchanged zoom (a minimap click or
+a bookmark recall) snaps rather than sweeps.
 
-**Two committed ticks.** `frame.Buffer` gains `Previous()`: the slot published
-immediately before `Current()`, or nil before the second publication or while
-a write is in progress. Presentation reads both slots on the main goroutine
+**Two committed ticks.** `frame.Buffer.Previous()` is the slot published
+immediately before `Current()`, or nil before the second publication or while a
+write is in progress. Presentation reads both slots on the main goroutine
 between Updates, when no write is in progress. A nil previous is a snap.
 
-**Blended view.** `RecordFrame` in the Enhanced path records a shallow copy
-of the current `Frame` whose `Units`, `Projectiles` and `Effects` slices are
-replaced by blended copies held in retained client buffers; every other slice
-and scalar (fog, visibility, selection, orders, events, HUD readouts, `Tick`)
-is the current tick's. Blending is `prev + (cur − prev)·f` with the fraction
-as 16.16 and truncation toward zero for `numeric.Fixed`, and along the
-shortest arc for `uint16` angles (the signed 16-bit difference scaled by f).
-Blended fields:
+**Blended view.** The Enhanced path records a shallow copy of the current
+`Frame` whose `Units`, `Projectiles` and `Effects` slices are replaced by
+blended copies held in retained client buffers; every other slice and scalar
+(fog, visibility, selection, orders, events, HUD readouts, `Tick`) is the
+current tick's. Blending is `prev + (cur − prev)·f` with the fraction as 16.16
+and truncation toward zero for `numeric.Fixed`, and along the shortest arc for
+`uint16` angles. Blended fields:
 
 * unit `X, Y, Z`, `Heading, Pitch, Bank`, and each piece's `Tx, Ty, Tz`,
   `RotX, RotY, RotZ`;
 * projectile `X, Y, Z`, `StartX..Z`, `TailX..Z`, `Yaw, Pitch, Roll`,
   `PropellerRoll`, `MeteorPitch`;
-* effect `X, Y, Z`.
+* effect `X, Y, Z` — position only; the sprite and animation cursors, the flash
+  tables and the strip assignment are the current tick's.
 
 **Identity and snap.** A published unit match first requires equal nonzero
 `InstanceID` values. Publication assigns that presentation-only identity to a
 live object and changes it when a pool slot is reused; it is not authoritative
 state. Frames that both carry zero retain the fixture fallback: pool handles
-carry no generation [01 §6.1], so the match is a handle plus consistency. A
-unit then requires the same `Slot` with equal `DefID` and `Owner`, unchanged
+carry no generation [01 §6.1], so the match is a handle plus consistency. A unit
+then requires the same `Slot` with equal `DefID` and `Owner`, unchanged
 `Carrier` and `MoverMode`, the same number of pieces, and a horizontal
-displacement of at most 64 world units in the tick. If only one unit has a
-usable identity, it takes the current pose. A projectile first requires an
-equal nonzero `PresentationID`, then retains the existing equal `WeaponID`,
-`Shooter`, and `CreationTick` continuity checks. Combat assigns one process-local,
+displacement of at most 64 world units in the tick, tested per axis first so a
+map-crossing teleport cannot overflow the squared distance. If only one unit has
+a usable identity, it takes the current pose. A projectile first requires an
+equal nonzero `PresentationID`, then retains the existing `WeaponID`, `Shooter`
+and `CreationTick` continuity checks; combat assigns one process-local,
 presentation-only admission identity for every root and burst clone, carries it
 in a parallel array through stable pool compaction, and publishes it without
-changing the authoritative packed handle, RNG, or retail save state. A zero-ID
-fixture projectile always takes the current pose; it never falls back to the
-packed `Handle`. An effect matches on
-`PresentationID` when nonzero, else on `ID`, `EventSeq` and `StartTick`.
-Anything else takes the current pose. The 64-unit bound is a presentation
-constant chosen above any retail movement rate; it is not a retail datum.
+changing the authoritative packed handle, RNG or retail save state. An effect
+matches on `PresentationID` when nonzero, else on `ID`, `EventSeq` and
+`StartTick`. Anything else takes the current pose. The 64-unit bound is a
+presentation constant chosen above any retail movement rate; it is not a retail
+datum.
 
-**Never interpolated.** Sprite and animation frame indices, the nanoframe
-reveal band, damage flashes, palette rows, fog, visibility, selection, the
-cursor and the HUD. A piece hidden in either tick is drawn as the current tick
-says. A COB `turn` with no speed sweeps over one tick instead of jumping; this
-is accepted.
+**Never interpolated.** Sprite and animation frame indices, the nanoframe reveal
+band, damage flashes, palette rows, fog, visibility, selection, the cursor and
+the HUD. A piece hidden in either tick is drawn as the current tick says. A COB
+`turn` with no speed sweeps over one tick instead of jumping; this is accepted.
 
 **Benchmark.** `--benchmark-tps=120` runs one authoritative step every fourth
 Draw and presents the four frames at fractions 0, ¼, ½ and ¾, so the report
 measures the interpolated presentation; 30 and 60 keep one step per Draw.
 
-**I6.** Amended for Enhanced only: the presentation may read the two most
-recent committed ticks and the clock's carry; it writes nothing back and
-consumes no simulation RNG. `--shot` and Original never blend.
+**I6.** Amended for Enhanced only: the presentation may read the two most recent
+committed ticks and the clock's carry; it writes nothing back and consumes no
+simulation RNG. `--shot` and Original never blend.
 
-**Per-frame model differences are the blend, not the atlas.** A report of a
-"static structure that renders differently on every presented frame" was
-traced against the 1080p battle benchmark at `--benchmark-tps=120` with the
-four presented frames of three consecutive ticks dumped. Hashing every
-recorded `ModelGeometry` per subject per frame separates the two sides. Of
-145 subjects, 64 recorded a byte-identical packet across all twelve frames,
-and every one of those rendered identical pixels except where a moving
-neighbour crossed its box; a device fixture now holds the executor to that
-premise (`checkModelSlotNeighbourIndependence` — uncommitted subjects added
-to the page move every later subject to a different page origin and parity
-and must not change one committed byte). The subjects that did differ per
-frame were mobile units whose blended pose genuinely moved; the screen box
-the report named holds seven of them and no structure. Original snaps to the
-committed tick, so the same subjects step once per tick there — the contrast
-is the blend working, not a defect.
+### 13.7 Outcome of the true-colour round
 
-The real defect the investigation did find is on the recording side and is
-not per-frame: `unitGeometryPair` never read the cached-image discard a
-`cache`/`shade` script setter raises [03 R-COMP-01 §4][04 R-MOV-03 §4], so a
-piece whose cache bit came back was in the retained lane's past and neither
-lane's present and stopped being drawn. It now applies the same three-term
-gate the classic composer applies, and the cached lane's membership can no
-longer go stale across an animation that toggles cache bits.
+The composite reduced a 1080p battle frame from about a hundred device
+destination switches to about a dozen, which is what put the modern executor on
+a refresh-rate cadence at all; the measurements are in the history file. Two
+items remained above two per cent of a frame afterwards and each became its own
+round: Ebitengine's per-draw vertex conversion, and the lit point volume — one
+quad per covered pixel of every flash disc [03 R-FX-01 §4] — which §13.8 and
+§13.11 between them removed from the modern lane entirely.
 
-### 13.6 Work units
+### 13.8 The lit point plane
 
-| Unit | Scope | Files owned | Gate |
-|---|---|---|---|
-| R1 composite (landed) | true-colour surface, PAL resolve in the scene shader, blend classes for the ALP and row families, shadow commit blend, fog over one read copy, scheduler without per-phase snapshots, expansion removed, attached-unit staging on one atlas, device fixtures rewritten to §13.4 | `internal/platform/gpurender/*` | §13.4 fixtures; M1–M8 captures viewed; passes 11 on every benchmark frame |
-| R2 cadence and interpolation | Update stays at 30, modern presents on every Draw; `Buffer.Previous`; draw-time tick fraction from the un-floored millisecond source; blended camera origin; blended view with the identity and snap rules of §13.5; `--benchmark-tps=120` | `internal/frame/frame.go`, `internal/client/interpolate.go` (new) and the client entry points it needs, `internal/platform/ebitenapp/app.go`, `internal/platform/ebitenapp/battle_benchmark.go`, `cmd/nanolathe/battle.go`, `cmd/nanolathe/battle_benchmark.go`, `cmd/nanolathe/flags.go`, `docs/BATTLE_BENCHMARK.md` | `--shot` captures byte-identical on both renderers; classic benchmark rows unchanged; 120 TPS benchmark on-cadence share reported; motion viewed |
-
-| R3a executor CPU (landed) | lit points placed from a cached cell with a stamped pixel table; batch storage pooled by size class and written in place; ring self-intersection tested once per face with triangle and quad fast paths; faces prepared by pointer; slot planes from the recyclable sub-image pool | `internal/platform/gpurender/*` | M1–M8 modern and both battle.png byte-identical; Submit 120 TPS 3.9 → 2.9 ms, 30 TPS 6.6 → 4.9 ms; passes 11 |
-| R3b recorder CPU (landed) | piece chain collapsed to its rotating nodes with a reference-equivalence test, vertices applied in bulk, piece draws and polygons written in place, hidden pieces resolved once, projectile scratch retained | `internal/client/*`, `internal/render/*`, `internal/model/*` | `--shot` and M1–M8 byte-identical on both renderers; Record 120 TPS 2.8 → 2.0 ms; classic 30 Record not worse |
-| R4 the lit point plane (landed, §13.8) | lit point runs placed once instead of once per pixel; a phase group of points committed as one quad over a per-frame plane atlas; the retained cached model lane copied into the body's own arenas | `internal/platform/gpurender/*`, `internal/client/model_cached_live.go` | both battle.png byte-identical at 180 and 720 frames; M1–M8 byte-identical on both renderers; classic Record not worse; Submit 120 TPS 720 frames 12.1 → 4.5 ms |
-| R5 two-stage unit record (landed, §13.9) | per-unit geometry computed on a persistent worker pool into slots indexed by unit, consumed by the unchanged sequential bucket walk; per-worker scratch arenas; orientation and cached-body entries pre-created on the recording goroutine | `internal/client/record_parallel.go` (new), `internal/client/client.go`, `internal/client/frame.go`, `internal/client/model_geometry.go`, `internal/client/world_draw.go` | both battle.png byte-identical at 180 and 720 frames on three runs each; M1–M8 byte-identical to main on **both** renderers; identical list at one and twelve participants; `go test -race` and a race-built 180-frame battle clean; classic Record not worse; Record 120 TPS 720 frames 4.85 → 2.30 ms |
-
-R1 and R2 are independent (R2 never edits `internal/platform/gpurender`) and
-ran in parallel; R3a and R3b followed, also in parallel, once the 120 TPS
-benchmark showed the frame CPU-bound (§13.7).
-
-### 13.7 Outcome
-
-Measured on main after R3 (1080p battle benchmark, 180 frames, M3 Pro):
-
-| | modern before this round (main `eb7a6df1`) | modern after (main after R3) |
-|---|---|---|
-| Passes per frame | 104 | 11 |
-| Phases per frame | 42 | 24 (30 TPS), 8 (120 TPS) |
-| 30 TPS Record / Submit | 4.3 / 6.4 ms | 3.4 / 4.9 ms |
-| 60 TPS cadence median, on the 16.7 ms floor | 19–23 ms, 2–22% | 16.7 ms, 79% |
-| 120 TPS Record / Submit / cadence median, on the 8.3 ms floor | not reachable | 2.3 / 2.8 / 8.3 ms, 71% |
-| Allocation per frame (30 TPS) | 1.9 MB, 24k objects | 1.4 MB, 12.5k objects |
-
-Classic is unchanged at 13.1 ms Record and 93% on the 30 Hz floor.
-
-What remains above 2% of a frame is Ebitengine's per-draw vertex conversion
-(about 200,000 vertices per frame, half of them the model stage's key and
-colour planes) and the lit point volume (one quad per covered pixel of every
-flash disc [03 R-FX-01 §4]); a human motion review at the window is still
-owed, because the agents that built this could not inject input.
-
-### 13.8 The lit point plane (fourth round)
-
-§13.7 left "the lit point volume (one quad per covered pixel of every flash
-disc)" as one of the two items above 2% of a frame. Instrumented, it was not
-one of two items; it was the frame. A 1080p battle at `--benchmark-tps=120`
-covers a **median 179,000 screen pixels per frame** with lit points and a
-maximum of 963,000, and the batch compiled into 150,000 quads — **97% of every
-vertex the executor handed the device**, about thirty megabytes of vertex
-traffic per presented frame, written once by the executor and copied again by
-Ebitengine into its command queue. Over a 720-frame run `drawLitPoints` and the
-`DrawTrianglesShader32` under it were about 40% of the process, against 15% for
-the whole recorder.
-
-The span coalescing already in `drawLitPoints` could not help: the disc's ramp
-is jittered per pixel by a CRT draw [06 R-WFX-01 §2], so the LHT row changes
-almost every pixel and the average span was 1.19 pixels long.
+`PointLit` brightens one destination pixel through one LHT row [03 §4.3.1]. A
+disc's ramp is jittered per pixel by a CRT draw [06 R-WFX-01 §2], so the row
+changes almost every pixel and span coalescing cannot help: the average span is
+1.19 pixels. Two mechanisms keep the batch cheap.
 
 **Placement per run.** A batch arrives as contiguous horizontal runs, because a
-disc is recorded row by row. A run's x values are consecutive and distinct, so
-no pixel of a run can depend on another pixel of the same run, and the phase
-they must all take is the maximum of their individual answers; stamping the
-whole run with that maximum leaves exactly the tag state placing them one at a
-time leaves. `placePointSpan` evaluates the cell floor and the owner rectangles
-once per *cell* the run crosses, scans the run's contiguous slice of the
-cell-major point phase table, and stamps in one pass. Placing a pixel later than
-its own dependency requires is always safe — it can only push a write further
-behind things it already had to follow — so this is a relaxation of the phase
-count, never of the order. `placePoint` survives as the per-pixel definition the
-new placement is checked against in `schedule_point_span_test.go`.
+disc is recorded row by row, and `placePointSpan` places a whole run at once
+(§11.2). `placePoint` survives as the per-pixel definition the run placement is
+checked against.
 
 **Geometry as a texture.** The runs of one batch that landed in ONE phase are
 written into a rectangle of a per-frame RGBA8 atlas, one texel per covered
 pixel, and committed as a single quad over their bounding box (`points.go`).
-Four bytes per pixel replace two hundred and sixteen. A group too sparse to pay
-for its box, too small, or larger than the atlas can serve keeps the quad path.
+Four bytes per pixel replace the two hundred and sixteen a quad costs. A group
+too sparse to pay for its box, too small, or larger than the atlas can serve
+keeps the quad path. The atlas is grouped by phase *number* and its regions are
+shelved by height class.
 
-Two properties make that byte-identical rather than close.
+Two properties make that byte-identical rather than close. *The lane*: the scale
+blend forms `dst × (src.rgb + src.a)`, and for every LHT row `k = 1 + row/30` is
+at least one, so the low lane is exactly 1 and the whole of the per-pixel
+information is the high lane. That lane is a multiple of 2⁻²³, so three bytes
+hold it exactly; the shader reassembles `r·65536 + g·256 + b` — every term and
+partial sum an integer below 2²⁴, so exact in binary32 in any association order
+— and scales by 2⁻²³, exact because it is a power of two. *The box*: placement
+is unchanged, so two points of one phase group can never be the same pixel, and
+one quad brightens each texel exactly once. An uncovered texel is zero, whose
+fragment is `(1,1,1,0)`: the blend forms `dst × 1` and writes the destination
+back unchanged, which is what lets one quad cover a whole box including pixels
+other commands of the same phase own.
 
-*The lane.* The scale blend forms `dst × (src.rgb + src.a)`, and for every LHT
-row `k = 1 + row/30` is at least one, so the low lane is exactly 1 and the whole
-of the per-pixel information is the high lane. That lane is a multiple of 2⁻²³:
-the CPU forms it as `fl(1 + fl(row/30)) − 1`, a sum whose value lies in [1,2) is
-a multiple of 2⁻²³, and the rows the §13.3 clamp caps at 2 leave exactly 1.
-Three bytes therefore hold it exactly. The shader reassembles
-`r·65536 + g·256 + b` — every term and every partial sum an integer below 2²⁴,
-so exact in binary32 in any association order a driver chooses — and scales by
-2⁻²³, exact because it is a power of two. `points_test.go` holds all thirty-two
-rows to that round trip.
+**Nothing in the modern lane produces `PointLit` today.** Its two producers, the
+flash disc and the ground halo, are lit-disc commands since §13.11, and the
+benchmark's point-pixel counter is zero on every frame. `points.go`,
+`drawLitPoints` and the `PointLit` path stay in place — they are the classic
+sink's own family, the fallback for any future producer, and the definition the
+disc atlas's lane encoding is checked against.
 
-*The box.* Placement is unchanged, so two points of one phase group can never be
-the same pixel: a repeat is placed a phase later by construction. The group's
-texels are pairwise distinct and one quad brightens each exactly once. An
-uncovered texel is zero, whose lane is zero, whose fragment is `(1,1,1,0)`: the
-blend forms `dst × 1` and writes the destination back unchanged. That is what
-lets one quad cover a whole box, including pixels other commands of the same
-phase own, and the box is the union rectangle the per-pixel placements already
-grew the phase's destination rectangle to.
+**The model overflow barrier stays.** A subject the atlas cannot fit rasterizes
+into a fallback page at commit time, and because the page is reused that is a
+scheduler barrier, one per overflowing subject. A ring of fallback pages that
+merges two segments across an overflow was implemented and measured: with a ring
+of two the frame is byte-identical, and with a ring of four the composed frame
+**changes**, for a reason the placement rules do not explain, while Submit gets
+slightly worse. It is not a performance lever, and the barrier stays.
 
-The atlas is grouped by phase *number* rather than by scanning a small fixed set
-of groups, because a late battle frame's discs overlap each other and each
-other's earlier phases and one batch spreads over dozens of phases; and its
-regions are shelved by height class, because one shelf shared by every height
-made a shelf of ordinary discs as tall as the one tall region on it and wanted
-about five times the area its regions needed.
+### 13.9 Two-stage unit recording
 
-**The recorder's cached lane.** `replaceCachedGeometry` copied the frame-scratch
-packet out with `ModelGeometry.Clone` — a fresh packet, four fresh slices and
-one fresh vertex slice per face — on every rebuild, and under Enhanced
-interpolation every mobile subject rebuilds every presented frame because its
-blended pose genuinely moves (§13.5). Each cached body now keeps its own face
-and vertex arenas and the packet is copied into them with the same
-`copyModelFaces` the rebase path uses.
-
-*Measured*, 1080p Ashap Plateau seed 7, `--benchmark-tps=120`, modern, medians
-over three interleaved runs of each build:
-
-| | 180 frames before / after | 720 frames before / after |
-|---|---|---|
-| Record | 3.12 / 3.05 ms | 4.96 / 4.81 ms |
-| Submit | 3.98 / 2.63 ms | 12.11 / 4.48 ms |
-| Cadence median | 9.02 / 8.34 ms | 20.78 / 13.16 ms |
-| On the 8.3 ms floor | 40% / 70% | 11% / 23% |
-| Worst cadence | 41 / 40 ms | 240 / 124 ms |
-| Allocation per frame | 2.24 MB, 10.1k objects / 1.41 MB, 8.2k objects | 4.37 MB, 21.3k objects / 1.90 MB, 19.3k objects |
-| Point quads per frame | — / 127 | 150,185 / 1,649 |
-| Vertices per frame | — / 12,038 | 614,714 / 21,016 |
-
-Draws, phases and passes per frame are unchanged (30/20/13 at 180 frames,
-54/53/45 at 720): this round moved the vertices, not the device calls. Classic
-is unchanged at 11.2 ms Record with byte-identical captures.
-
-**Dropped.** Merging device runs across phase boundaries (§13.3 makes a segment
-one render pass, so consecutive runs of identical state could be one call) was
-dropped: the frame already issues only 30–54 draws and `DrawTrianglesShader32`
-fell to under 5% once the point vertices went, so a per-segment vertex arena
-would risk the byte gate for under 2%.
-
-Deferring the **model overflow barrier** was dropped and is a finding. A subject
-the slot atlas cannot fit rasterizes into a fallback page at commit time, and
-because the page is reused, that has always been a scheduler barrier — one per
-overflowing subject, a median eight per frame. A ring of fallback pages that
-lets a body and a shadow reserve their two pages together, and defers the
-barrier until the ring is exhausted, was implemented and measured. With a ring
-of two — one barrier per subject, the behaviour it replaces — the frame is
-byte-identical, so the ring itself is sound. With a ring of four the phase count
-falls from 53 to 47 and **the composed frame changes**, while Submit gets
-slightly *worse* (4.48 → 4.66 ms median). Merging two segments across a model
-overflow therefore changes composited pixels for a reason the placement rules do
-not explain, in the same family as the unexplained shadow pixels of the
-`TODO(H1)` two-surface alternation (§11.5 status). It is not a performance
-lever, and the barrier stays.
-
-**What remains.** The frame is now about evenly split between Record (4.8 ms)
-and Submit (4.5 ms) at 720 frames. Above 2% of the process: `runtime.madvise`
-at 17%, which is page commits for the 19,000 objects a frame still allocates —
-those are Ebitengine's per-Metal-call boxing and `internal/render`'s
-`reuseDrawSlice`, not the executor, which allocates only its atlas growth;
-`runtime.cgocall` at 11%, the Metal calls themselves on the render thread; and
-`unitGeometryPair` at 12%, now spread thinly over `collectDrawPolys`,
-`unitDrawFor`, `borrowRebasedModelGeometry` and `configureModelGeometry` with no
-single item dominant.
-
-**Cadence spikes.** They are not periodic and not the collector: over a 720-frame
-run the Go collector ran twice for 0.9 ms of total pause before this round and
-once for 0.08 ms after. The spikes track the effect census — the runs of frames
-above 60 ms are consecutive frames at 200–230 live effects and 25–37 fragments,
-which is the lit point volume — and this round removed them, from 52 frames
-above 60 ms to 3. The one that remains, 124 ms at the frame with 963,000 covered
-pixels, is the frame where the plane atlas grows: a new image, a fresh staging
-buffer and an upload of every row it uses.
-
-### 13.9 Two-stage unit recording (fifth round)
-
-§13.8 left Record and Submit about even at 4.8 and 4.5 ms over 720 frames, with
-`unitGeometryPair` the largest single item inside Record and no dominant piece
-within it. That shape is the argument for splitting the work rather than
-shaving it: a unit's piece transforms, projection, material resolution, polygon
-collection and cached-lane rebase read the committed frame and the unit's own
-retained body and touch nothing another unit's does.
-
-**The split.** Recording a frame's units is two stages.
+A unit's piece transforms, projection, material resolution, polygon collection
+and cached-lane rebase read the committed frame and the unit's own retained body
+and touch nothing another unit's does, so recording a frame's units is split in
+two.
 
 *Stage one* runs after the bucket build, over a persistent pool sized to
 `runtime.NumCPU()` participants — the recording goroutine plus `NumCPU()-1`
-workers parked on a wake channel between frames, because the frame budget is
-8.3 ms and a goroutine per unit per frame would spend a visible part of it on
-the scheduler. Its job list is every unit the two passes will present on their
-own: the pass-A window and mover-mode split of [03 R-RAST-01 §7] and then
-`presentUnit`'s strategic-view, carrier-link and model-name gates, resolved
-once so both passes read one slot array. Each job computes the unit's geometry
-pair into a slot indexed by that unit's position in the committed unit slice.
-Participants take jobs from a shared cursor: per-unit cost varies by an order
-of magnitude, so a shared cursor balances better than a fixed stripe.
+workers parked on a wake channel between frames, because a goroutine per unit
+per frame would spend a visible part of an 8.3 ms budget on the scheduler. Its
+job list is every unit the two passes will present on their own: the pass-A
+window and mover-mode split of [03 R-RAST-01 §7] and then `presentUnit`'s
+strategic-view, carrier-link and model-name gates, resolved once so both passes
+read one slot array. Each job computes the unit's geometry pair into a slot
+indexed by that unit's position in the committed unit slice. Participants take
+jobs from a shared cursor, because per-unit cost varies by an order of magnitude
+and a shared cursor balances better than a fixed stripe.
 
 *Stage two* is the unchanged sequential walk. It visits the buckets in exactly
 the order [03 R-RAST-01 §7] fixes and appends the Model commands from those
-slots. **Nothing is read from a slot until stage two reaches that unit's place
-in the bucket order**, so completion order cannot reach the recorded list and
-the list is identical whatever the worker count [I1]. A slot carries the
+slots. **Nothing is read from a slot until stage two reaches that unit's place in
+the bucket order**, so completion order cannot reach the recorded list and the
+list is identical whatever the worker count [I1]. A slot carries the
 presentation identity it was computed for and stage two checks it, so a slot
 that does not belong to the subject in hand is rebuilt inline rather than used.
 
@@ -1842,454 +1436,266 @@ arena is carried across the per-frame refresh, so a steady-state frame still
 allocates nothing per unit. Writes a worker makes to its own copy are dropped,
 which is safe only because stage one is a pure function of the committed frame
 and of cache entries that already exist: every orientation and cached-body map
-entry a job can reach is created on the recording goroutine **before** stage
-one starts, so workers read those maps and write only through the pointers the
+entry a job can reach is created on the recording goroutine **before** stage one
+starts, so workers read those maps and write only through the pointers the
 entries hold. It is the insertion, not the entry, that cannot be concurrent —
-distinct units own distinct entries. An entry with neither geometry nor image
-is indistinguishable from a missing one at every read, so pre-creating one
-changes no decision. The per-worker name memo lives in the arena and is a
-memo of `strings.ToLower`, so a worker that has not seen a name recomputes the
-same string.
+distinct units own distinct entries — and an entry with neither geometry nor
+image is indistinguishable from a missing one at every read, so pre-creating one
+changes no decision.
 
 Three lanes stay sequential and are named here rather than left to be
 rediscovered. **The classic composer** keeps the whole sequential path: its
 per-unit work rasterizes palette planes through a different set of borrowed
-slots, and the classic benchmark measured no regression from leaving it alone.
-**Attached children** are computed in stage two, because a child's forced key
-plane depends on whether its carrier turned out to have one — which is known
-only after the carrier's own pair exists; a carrier's own pair is the first
-geometry call of its present in both branches, so it is precomputed like any
-other unit. **A standalone model registry** is excluded, because it loads and
-binds models on first use, and that is a write to shared registry maps; a
-battle registry has every model bound before the first frame. A parity trace
-sink is excluded as a diagnostic path.
+slots. **Attached children** are computed in stage two, because a child's forced
+key plane depends on whether its carrier turned out to have one, which is known
+only after the carrier's own pair exists. **A standalone model registry** is
+excluded, because it loads and binds models on first use and that is a write to
+shared registry maps; a battle registry has every model bound before the first
+frame. A parity trace sink is excluded as a diagnostic path.
 
-**Measured** (1080p Ashap Plateau seed 7, `--benchmark-tps=120`, modern, three
-interleaved runs per configuration, medians of the per-run medians):
+### 13.10 The record/submit pipeline
 
-| | 180 frames before | 180 after | 720 before | 720 after |
-|---|---|---|---|---|
-| Record | 3.07 ms | 1.16 ms | 4.85 ms | 2.30 ms |
-| Submit | 2.65 ms | 2.69 ms | 4.48 ms | 4.60 ms |
-| Cadence | 8.33 ms | 8.33 ms | 13.40 ms | 10.90 ms |
-| On the 8.3 ms floor | 67% | 71% | 22% | 29% |
-| Allocation | 1.5 MB, 8.2k objects | 1.6 MB, 8.2k objects | 1.9 MB, 19.3k objects | 2.1 MB, 19.3k objects |
+Ebitengine runs Update and Draw on the game goroutine and encodes to the device
+on a render thread of its own. `Execute` only *enqueues*: the device's vertices
+are copied at enqueue, so by the time it returns the client's draw list and its
+scratch arenas are nobody's. With VSync on the end-of-frame flush is then
+**synchronous**: after our Draw returns, the game goroutine sits in the flush and
+the swap until the next Update, and at the Enhanced rate that idle window is
+several milliseconds every frame.
 
-Record is the whole of the gain: it more than halves, and at 720 frames the
-cadence median falls with it. **Submit did not move.** The interleaved batch
-above put it 0.1–0.3 ms higher in all three pairs, which reads like worker
-threads competing with Ebitengine's render thread for cores; a later run of the
-finished build, taken at a higher host load, put Submit at 4.45 ms against the
-baseline's 4.48. The rise is therefore host-load noise on a shared machine, not
-a cost of the split, and the number to carry forward is "unchanged". The
-competition is real in one measurable way: the process keeps 96% of its sample
-budget busy where the sequential build kept 78%, and stage one costs more
-*total* CPU than the sequential build did (1.2 s → 1.8 s of samples over a
-720-frame run) while costing less wall time on the frame's critical path.
-Allocation per frame is unchanged in object count and about 8% higher in bytes,
-which is the workers' arenas each carrying their own high-water mark.
-
-Classic is unaffected: 10.89 → 11.09 ms Record at 30 TPS, allocation identical,
-capture byte-identical. Both battle captures are byte-identical at 180 and 720
-frames on every run, and M1–M8 are byte-identical to main on **both** renderers,
-which is the check that matters here because the recorder is shared.
-
-### 13.10 The record/submit pipeline (sixth round)
-
-§13.9 left Record at 2.3 ms and Submit at 4.6 ms over 720 frames, both on the
-game goroutine, one after the other, inside an 8.3 ms period. This round takes
-Record off that critical path entirely rather than making it smaller.
-
-**The idle window.** Ebitengine runs our Update and Draw on the game goroutine
-and encodes to the device on a render thread of its own. `Execute` only
-*enqueues*: the device's vertices are copied at enqueue, so by the time it
-returns the client's draw list and its scratch arenas are nobody's. With VSync
-on — the window and the benchmark both set it — the end-of-frame flush is then
-**synchronous**: after our Draw returns, the game goroutine sits in the flush
-and the swap until the next Update. At the Enhanced rate that idle window is
-the remainder of the period, several milliseconds, every frame.
-
-**The shape.** At the end of a modern Draw, after `Execute` and the screen
-blit, the client records the **next** frame on one persistent goroutine. The
-game goroutine joins that record before it touches client state again — at the
-top of Update, before input, and at the common entry to the next Draw, for
-both executors. An executor switch cancels the pending speculative record,
-including its saved presentation-CRT state, before classic can advance
-presentation. The modern Draw tail rechecks the executor after its deferred
-Update before launching another record: an F10 handled there may have selected
-classic. Recording therefore owns the client for exactly the span the game
-goroutine spends in the window layer. The §13.9 worker pool runs
-inside it as before, so the pre-record is itself parallel.
-
-Nothing is double-buffered. The list, the point and surface arenas and the
-model scratch are reused in place, because the frame that used them has already
-been enqueued and copied.
+**The shape.** At the end of a modern Draw, after `Execute` and the screen blit,
+the client records the **next** frame on one persistent goroutine. The game
+goroutine joins that record before it touches client state again — at the top of
+Update, before input, and at the common entry to the next Draw, for both
+executors. An executor switch cancels the pending speculative record, including
+its saved presentation-CRT state, before classic can advance presentation. The
+modern Draw tail rechecks the executor after its deferred Update before
+launching another record: an F10 handled there may have selected classic.
+Recording owns the client for exactly the span the game goroutine spends in the
+window layer, and the §13.9 worker pool runs inside it, so the pre-record is
+itself parallel. Nothing is double-buffered: the list, the point and surface
+arenas and the model scratch are reused in place, because the frame that used
+them has already been enqueued and copied.
 
 **When the pre-recorded list may be presented.** Only when it is the list a
 synchronous record would have produced at this Draw. That is decided by
-comparing a `PresentationInputs` digest taken at the launch against one taken
-at the Draw that would consume it. The digest is deliberately not a field list
-of everything the recorder reads — that list is most of the client and would
-drift out of date behind it. It is:
+comparing a `PresentationInputs` digest taken at the launch against one taken at
+the Draw that would consume it. The digest is deliberately not a field list of
+everything the recorder reads — that list is most of the client and would drift
+out of date behind it. It is:
 
 - **the host's mutation epoch**, bumped once per window Update and once per
-  benchmark step, which is every point where the host writes client state:
-  input and its selection, hover, command page, minimap viewport, pointer
-  capture and focus; the simulation step and its publication; the camera the
-  scroll pass and the follow glide moved; the executor toggle;
-- **the committed frame**, by pointer identity and tick, as a cross-check on
-  the epoch;
+  benchmark step, which is every point where the host writes client state: input
+  and its selection, hover, command page, minimap viewport, pointer capture and
+  focus; the simulation step and its publication; the camera the scroll pass and
+  the follow glide moved; the executor toggle;
+- **the committed frame**, by pointer identity and tick, as a cross-check on the
+  epoch;
 - **the two blend fractions of §13.5** and whether the camera's is set at all;
 - **the camera origin and its two stepped samples**, the surface size, and the
   interpolation and Enhanced switches;
 - **the caption ring's producer and display cursors**, because the audio drain
-  is the one thing that runs on the game goroutine between a launch and the
-  Draw that consumes it, and the ring is what it writes that the recorder reads
+  is the one thing that runs on the game goroutine between a launch and the Draw
+  that consumes it, and the ring is what it writes that the recorder reads
   [07 R-HUD-03 §14];
 - **the displayed resource pair**, predicted purely for the next presentation
   when launching, compared against the pair advanced by the consuming Draw
   [05 R-ECO-01 §6][07 R-HUD-03 §4].
 
-A mismatch discards the list and records synchronously exactly as before.
+A mismatch discards the list and records synchronously exactly as before. Misses
+are counted by reason (`MissEpoch`, `MissCommitted`, `MissTickFraction`,
+`MissCameraFraction`, `MissOther`) so the window's readout says which.
 
-**What stayed on the game goroutine.** The audio step —
-`UpdateAudioViewportFromCamera` and `TickAudio` — is called from Draw on every
-presented frame whether the list was pre-recorded or not, so its cadence and
-its thread are unchanged [03 §8.3] C18. It moved *ahead* of the recording pass
-rather than into it: `recordFrame` is now the host presentation advance followed by
-`recordFrameNoAudio`, and a pre-recorded list was recorded after the previous
-frame's drain rather than after this one's. That is why the ring cursors are in
-the digest — a drain that wrote a caption discards the pre-record. Resolving
-the blend fraction moved with it, into `ResolveTickFraction`, so the digest and
-the record read one sample of a wall-clock producer rather than two. The cursor
-blit resolves its art and visibility inside the recording pass, covered by the
-epoch. The window then replaces only that command's coordinates with the latest
-Ebitengine pointer snapshot before replay (§13.5), without publishing input or
-changing the recorded world and interface. This also applies to the paused
-foreground. No mutation overlaps the pre-record worker.
+**The pre-record blends at the predicted fraction.** The launcher installs the
+two predicted fractions as the recording pass's **input**, not as a hint it may
+re-derive: the worker blends with exactly those numbers and the digest is taken
+from them, so a hit presents the list the digest describes. Re-reading the
+wall-clock producer inside the pass would record the world at the launch instant
+while the camera used the prediction, which is the world a present interval
+behind its camera. The Draw that consumes the list settles its own fractions and
+the digest comparison decides; a miss simply re-records with those.
 
-**Displayed stocks share the host boundary.** `BeginPresentationFrame` steps
-the retained stock pair and drains presentation audio once per presented frame,
+**What stayed on the game goroutine.** The audio step is called from Draw on
+every presented frame whether the list was pre-recorded or not, so its cadence
+and its thread are unchanged [03 §8.3] C18. It moved *ahead* of the recording
+pass rather than into it: `recordFrame` is the host presentation advance
+followed by `recordFrameNoAudio`, and a pre-recorded list was recorded after the
+previous frame's drain rather than after this one's — which is why the ring
+cursors are in the digest. Resolving the blend fraction moved with it, into
+`ResolveTickFraction`, so the digest and the record read one sample of a
+wall-clock producer rather than two. The cursor blit resolves its art and
+visibility inside the recording pass, covered by the epoch; the window then
+replaces only that command's coordinates with the latest Ebitengine pointer
+snapshot before replay, without publishing input or changing the recorded world.
+
+**Displayed stocks share the host boundary.** `BeginPresentationFrame` steps the
+retained stock pair and drains presentation audio once per presented frame,
 before `TakePreRecord`. `Frame` and `RecordFrame` call that boundary; the modern
 host calls it explicitly. `RecordModernFrame`, `ComposeFrame` and snapshots do
 not advance it. The pre-record worker selects a pure next-step value for
-`UIFrame.Resources`; it never writes the retained pair. Launch records that
-same prediction in the digest. Stock changes therefore continue to hit when
+`UIFrame.Resources`; it never writes the retained pair, and the launch records
+that same prediction in the digest. Stock changes therefore continue to hit when
 prediction and presentation agree, including multiple frames on one committed
-tick. Retried or discarded records need no stock rollback, and a changed
-viewer or publication remains covered by the ordinary mutation/frame checks.
-The `--shot` entry advances once before either or both executors compose.
+tick. Retried or discarded records need no stock rollback. The `--shot` entry
+advances once before either or both executors compose.
 
-**What a discarded record must undo.** A recording pass writes presentation
-state, and a discarded one must not leave it advanced twice. Almost all of it
-is safe already: the list and arenas are reset by the next pass, the blended
-view is rebuilt from scratch, the lazy art caches are memos, and the trail
-layer and the feature animation cursors are both guarded against advancing
-twice within one committed tick. The exception is the presentation CRT the
-segmented projectile pass draws from, which is a stream; the launch snapshots
-it and a discard puts it back [03 §2.4.1][I4].
+**What a discarded record must undo.** Almost nothing: the list and arenas are
+reset by the next pass, the blended view is rebuilt from scratch, the lazy art
+caches are memos, and the trail layer and the feature animation cursors are both
+guarded against advancing twice within one committed tick. The exception is the
+presentation CRT the segmented projectile pass draws from, which is a stream;
+the launch snapshots it and a discard puts it back [03 §2.4.1][I4].
 
-**Benchmark pacing and measurement.** Harness version 2 runs every Draw callback
-with Ebitengine updates synchronized to drawing and one explicit host deadline.
-If a draw arrives late, the next deadline is based on its arrival; the harness
-never catches up with a burst of unpaced draws. A fixed draw-to-tick ratio keeps
-30 authoritative ticks per target second at every supported presentation rate;
-falling below the target slows wall-clock battle progression without changing
-the measured tick sequence [I6]. Renderer warmup covers two simulated seconds.
+**The tolerance is the host's.** The benchmark and `--shot` pass **zero**, so a
+measured frame is byte-identical to a synchronous record; the benchmark also
+knows the next frame exactly — the group's next fraction is
+`(phase+1)/drawsPerTick` — and a draw that publishes a tick records in place.
+The window passes **one present interval**, computed per Draw as
+`period × 30 × 65536` quanta, where the period is the one the window
+**nominally** presents at (the `--fps` cap, the display's own rate, or the wider
+of the two). It is deliberately not the interval this particular prediction was
+extrapolated over: a frame that hitched measures a long period, and a tolerance
+computed from that period would widen by exactly the lateness it exists to
+catch. So the window presents a matching list **at the fractions it was recorded
+for**, and the pipeline's one presentation divergence is stated as what it is: a
+pre-recorded frame is presented at the instant it was predicted for, and the
+error is bounded by present jitter and capped at one present interval. A fixed
+tolerance cannot work here: the battle's tick fraction reads a millisecond
+source, so at the nominal speed it moves in steps of about 1966 quanta, and a
+tolerance below a producer's own quantisation can never be met by a prediction
+of that producer.
 
-The cadence timestamp is taken before simulation, after the intentional pacing
-wait. The first measured interval is invalid because profiling setup separates
-it from warmup. Reports distinguish complete host callback work, explicit pacing
-sleep, and time outside the previous callback (including deferred driver work,
-queue/display waits and scheduling). The public Ebitengine API exposes neither
-GPU completion nor actual presentation timestamps; both are recorded as
-unavailable. A low Submit timer plus a long cadence cannot establish GPU
-saturation. See BATTLE_BENCHMARK.md for the field meanings and compatibility.
-
-**Predicting the fractions.** The benchmark knows the next frame exactly: the
-group's next fraction is `(phase+1)/drawsPerTick`, with one authoritative
-tick per `FPS/30` draws. At 60 FPS one of two draws can hit; at 120 FPS three
-of four can hit. A draw that publishes a tick records in place, so no pre-record
-is launched across it. The comparison is **exact** —
-zero tolerance — so a measured frame is byte-identical to a synchronous record.
-
-The window predicts from the measured present interval: the camera fraction is
-where the next Draw will sit in the current update, and the tick fraction is
-extrapolated over the interval that remains at the rate the last two samples
-measured. Neither prediction declines at the end of its range; both take the
-client's own clamp, because that is where the measured value of the last
-presented frame of a period will be too. The classic executor and `--shot`
-never launch a pre-record at all.
-
-**The window presents at the fraction it predicted.** When a pre-recorded
-list's digest matches on every field but the two fractions, the window presents
-it *at the fractions it was recorded for* rather than re-recording it at the
-measured ones — it accepts the prediction. That is the pipeline's one
-presentation divergence, and it is now stated as what it is: **a pre-recorded
-frame is presented at the instant it was predicted for, and the error is
-bounded by present jitter and capped at one present interval.** The cap is the
-guard rail. The tolerance is computed per Draw as `period × 30 × 65536` quanta,
-the amount both fractions advance across one present, and the period is the one
-the window **nominally** presents at — the `--fps` cap, the display's own rate,
-or the wider of the two, with the last launch's measurement as a last resort.
-It is deliberately not the interval this particular prediction was extrapolated
-over: a frame that hitched measures a long period, and a tolerance computed
-from that period would widen by exactly the lateness it exists to catch. So a
-frame that arrived a whole refresh late is further out than any jitter and
-takes the exact path instead.
-
-Measured over 4,800 presented frames of a live skirmish, the error the window
-actually presents is far inside the guard rail: **mean 1,638 quanta (0.025 of a
-tick, 0.8 ms) and a maximum of 20,658 (0.32 of a tick)** against a cap of
-32,768 at 60 presented frames per second. The typical error is a single step of
-the millisecond producer, which is what the old 2048-quantum tolerance was
-sized against and could not meet.
-
-The first form of this rule was a fixed tolerance of 2048 quanta, one
-thirty-second of a tick, sized to sit *below* the fraction producer's own
-resolution. That could not work. The battle's tick fraction reads a millisecond
-source, so at the nominal speed it moves in steps of about 1966 quanta; a
-tolerance of 2048 is one step of the number being compared, and one millisecond
-of draw jitter — an eighth of a 120 Hz present — puts the measured value in a
-neighbouring bucket. Almost every launched window frame missed on
-`MissTickFraction` for that reason. A tolerance smaller than a producer's
-quantisation cannot be met by a prediction of that producer; the choice is
-between accepting the prediction and never pre-recording at all.
-
-**The update body runs in the Draw's idle window.** A pre-record can only serve
-a frame if every client write that frame reads happened before the launch, and
-the launch is at the end of the *previous* Draw. An Ebitengine Update — input,
-the camera the scroll pass moves, the step and its publication — is exactly
-such a write, so a frame with an Update in front of it used to be a frame no
-pre-record could serve; roughly half of the window's frames never launched for
-that reason.
-
-Ebitengine runs a frame as *(zero or more Updates) → Draw → flush and swap*,
-and takes a fresh input snapshot immediately before each Update it calls; a
-frame with no Update leaves the game-visible input state exactly as the last
-tick saw it. The body of an update therefore moves to **the end of the modern
-Draw that the Update call precedes**, after `Execute` and before the launch. An
-`updateLedger` counts every Update call and guarantees one body per call: the
-call defers when the modern executor's Draw tail is alive and nothing is owed
-already, and otherwise runs every owed body inline, so the simulation can
-neither step twice for one update period nor skip one however the window
-behaves. The classic executor never defers; a Draw skipped by `--fps` runs no
-tail, and the next Update call runs the body itself. An exit request seen from
-a tail cannot return a Termination, so it is recorded and the next Update call
-returns it.
-
-Every frame then launches, and the frame that follows an update is the same
-kind of frame as any other.
+**The update body runs in the Draw's idle window.** A pre-record can only serve a
+frame if every client write that frame reads happened before the launch, and the
+launch is at the end of the *previous* Draw. An Ebitengine Update is exactly such
+a write, so a frame with an Update in front of it used to be a frame no
+pre-record could serve. Ebitengine runs a frame as *(zero or more Updates) →
+Draw → flush and swap*, and takes a fresh input snapshot immediately before each
+Update it calls; a frame with no Update leaves the game-visible input state
+exactly as the last tick saw it. The body of an update therefore moves to **the
+end of the modern Draw that the Update call precedes**, after `Execute` and
+before the launch. An `updateLedger` counts every Update call and guarantees one
+body per call: the call defers when the modern executor's Draw tail is alive and
+nothing is owed already, and otherwise runs every owed body inline, so the
+simulation can neither step twice for one update period nor skip one however the
+window behaves. The classic executor never defers; a Draw skipped by `--fps`
+runs no tail, and the next Update call runs the body itself. An exit request
+seen from a tail cannot return a Termination, so it is recorded and the next
+Update call returns it.
 
 *What it costs is one presented frame of input latency, and that is the floor
 rather than an accident of this design.* A list recorded during the previous
-frame's flush cannot contain input that arrived after that flush began, so a
-pre-recorded frame is always one present behind live input; the body's writes
-first reach the screen on the Draw after the one that ran them. Running the
-body *early* instead — before the Update call it belongs to, as the first
-sketch of this round proposed — is strictly worse: Ebitengine refreshes the
+frame's flush cannot contain input that arrived after that flush began. Running
+the body *early* instead is strictly worse: Ebitengine refreshes the
 game-visible input snapshot per tick and not per frame, so an early body would
 read the previous tick's snapshot, costing a whole update period rather than a
-present, and would consume one snapshot twice on entering the regime.
+present. The blend absorbs the shift: the frame that used to present the new
+tick at fraction 0 now presents the previous pair at a fraction clamped just
+under 1, and `prev + (cur − prev)·f` at `f` just under one is the same pose, so
+the sequence of presented positions is unchanged and only its labelling moves.
 
-The blend absorbs the shift. The frame that used to present the new tick at
-fraction 0 now presents the previous pair at a fraction clamped just under 1,
-and `prev + (cur − prev)·f` at `f` just under one is the same pose as the new
-pair at zero: the sequence of presented positions is unchanged, only its
-labelling.
-
-**Measured** (1080p Ashap Plateau seed 7, `--benchmark-tps=120`, modern, six
-interleaved pairs per frame count, medians of the per-run medians; the
-untouched branch is the baseline, rebuilt for this round because unit
-supersampling had landed):
-
-| | 180 frames before | 180 after | 720 before | 720 after |
-|---|---|---|---|---|
-| Record (game goroutine) | 1.30 ms | 0.003 ms | 2.41 ms | 0.25 ms |
-| PreRecord (off the path) | — | 1.32 ms | — | 1.81 ms |
-| Submit | 2.95 ms | 3.00 ms | 4.87 ms | 4.89 ms |
-| Cadence | 8.34 ms | 8.33 ms | 9.92 ms | 9.00 ms |
-| On the 8.3 ms floor | 74% | 73% | 33% | 40% |
-| Pipeline hits | — | 75% | — | 75% |
-| Allocation | 1.1–1.6 MB, 8.0k objects | 1.3–1.6 MB, 8.0k objects | 1.90 MB, 12.6k objects | 1.85 MB, 12.6k objects |
-
-Record is gone from the critical path: on a hit it is the join, and the join is
-three microseconds because the record finished during the previous frame's
-flush. **Where that buys cadence depends on whether there was headroom to buy.**
-At 180 frames the scene is light, the run already sits on the 8.3 ms floor, and
-removing 1.3 ms of CPU changes nothing measurable — the on-floor share moves
-within the baseline's own run-to-run spread, which was 55–76% across six
-baseline runs. At 720 frames the battle is heavy and the cadence median falls
-0.9 ms with the on-floor share up eight points, consistently across all six
-pairs. Submit did not move.
-
-**Window, measured after the two changes above** (live skirmish, Ashap Plateau
-seed 7, modern, 1.5× window at 60 presented frames per second, the readout the
-window prints every 600 presented frames; the baseline is main's own build run
-back to back with it on the same host):
-
-| | before | after |
-|---|---|---|
-| Pre-recorded frames | 24% steady state | **99.8%** |
-| Never launched (the prediction declined) | 47% | 0.1% |
-| Missed on the tick fraction | 22% | 0.02% |
-| Presented drift, mean / max | — | 1,638 / 20,658 quanta (0.025 / 0.32 tick) |
-| Update bodies per second | 30.0 | 30.00 |
-| Committed ticks per second | 30.0 | 30.00 |
-
-The benchmark is unmoved by either change, which is the point of it here: it
-passes tolerance zero and steps inside its own Draw, so its rows and its
-`battle.png` are the regression gate rather than the result. Over three
-interleaved pairs at each frame count its medians are within run-to-run spread
-(180 frames: Record 0.003 ms both, Submit 3.07 → 3.10 ms, cadence 8.33 ms both;
-720 frames: Record 0.14 → 0.23 ms, Submit 5.07 → 5.10 ms, cadence 9.07 →
-9.10 ms), and `battle.png` is byte-identical on every run.
-
-The paragraph this replaces recorded the problem, and is kept because it is the
-measurement that motivated both changes:
-
-**Window hit rate is much lower than the benchmark's: 20%** over three thousand
-presented frames of a live skirmish. Roughly half the frames decline to launch
-because the predicted Draw would cross an Update, and most of the rest miss on
-the tick fraction, where the producer's millisecond quantisation puts the
-prediction in a neighbouring bucket. The benchmark's rate is the ceiling — it
-knows the next fraction rather than guessing it — and closing the window's gap
-means a finer fraction source, or a prediction that rounds to the producer's
-own quantisation, neither of which this round attempted.
-
-**Verification.** `battle.png` is byte-identical to the untouched branch at 180
-and 720 frames on every run, which is the check that matters: the benchmark's
-tolerance is zero, so any list presented from the pipeline was the list a
-synchronous record would have produced. M1–M8 are byte-identical to the
-baseline on **both** renderers. `go test -race` over the client and window
-packages is clean, and a race-built binary through a 180-frame modern benchmark
-reports no race and the same capture.
+**Benchmark pacing.** Harness version 2 runs every Draw callback with Ebitengine
+updates synchronized to drawing and one explicit host deadline. If a draw
+arrives late, the next deadline is based on its arrival; the harness never
+catches up with a burst of unpaced draws. A fixed draw-to-tick ratio keeps 30
+authoritative ticks per target second at every supported presentation rate;
+falling below the target slows wall-clock battle progression without changing
+the measured tick sequence [I6]. Renderer warmup covers two simulated seconds.
+The cadence timestamp is taken before simulation, after the intentional pacing
+wait; the first measured interval is invalid because profiling setup separates
+it from warmup. Reports distinguish complete host callback work, explicit pacing
+sleep, and time outside the previous callback. See
+[BATTLE_BENCHMARK.md](BATTLE_BENCHMARK.md) for field meanings.
 
 #### Paused world reuse
 
 The modern window retains the completed world through its fog barrier while
-paused. The retained result is one framebuffer-sized GPU colour image; there
-is no retained duplicate draw list or model geometry. A matching world skips
-recording, interpolation rebuild, model-cache pruning, and world GPU replay.
-The ordinary foreground still records and executes every presented frame:
-drag selection, strategic markers, HUD, messages, modal panels, build previews,
-order overlays and the software cursor. Restoring the world image before that
-foreground preserves destination-reading shade/overlay operations and removes
-the previous cursor or gesture. Original and `--shot` keep their full-frame
-paths.
+paused. The retained result is one framebuffer-sized GPU colour image; there is
+no retained duplicate draw list or model geometry, and `ExecuteOver` copies it
+back before a foreground-only list. A matching world skips recording,
+interpolation rebuild, model-cache pruning and world GPU replay. The ordinary
+foreground still records and executes every presented frame: drag selection,
+strategic markers, HUD, messages, modal panels, build previews, order overlays
+and the software cursor. Restoring the world image before that foreground
+preserves destination-compositing shade and overlay operations and removes the
+previous cursor or gesture. Original and `--shot` keep their full-frame paths.
 
-Pause truth comes directly from the scheduling bridge's `SetPaused` result;
+Pause truth comes from the scheduling bridge's `SetPaused` result;
 `Frame.Paused` alone is insufficient because a stopped scheduler publishes no
-new tick. Battle attach/restore installs the scheduler's truth after binding
-the snapshot. Replacing the snapshot clears this mirror. Unpause and executor
+new tick. Battle attach/restore installs the scheduler's truth after binding the
+snapshot; replacing the snapshot clears this mirror. Unpause and executor
 switches discard the retained image; resizing replaces its allocation.
 
 `PausedWorldInputs` compares the committed frame identity and tick, frozen tick
 fraction, interpolation and Enhanced switches, actual blended camera origin,
-viewport/map extents, scale and smooth zoom factor, dimensions, world/asset
-binding revision, terrain, detail art, font, palette and display colours, and
-the shadow, shading, antialias, fog and damage-bar options. The actual origin
-uses §13.5's existing integer blend and teleport snap, so a stationary camera
-can reuse across changing camera fractions, while pan/follow/zoom redraw at
-their existing cadence. Unit flags, selection and group labels, fog, features,
-and model-texture animation remain owned by committed publication and the
-stopped phase-7 service. Immutable asset rebinding invalidates the key. The
-host mutation epoch is deliberately absent here: input changes covered by that
-epoch are rendered freshly in the foreground.
+viewport and map extents, scale and smooth zoom factor, dimensions, world/asset
+binding revision, terrain, detail art, font, palette and display colours, the
+shadow, shading, antialias, fog and damage-bar options, and the effect selection
+(§30). The actual origin uses §13.5's integer blend and teleport snap, so a
+stationary camera can reuse across changing camera fractions while pan, follow
+and zoom redraw at their existing cadence. Unit flags, selection and group
+labels, fog, features and model-texture animation remain owned by committed
+publication and the stopped phase-7 service. The host mutation epoch is
+deliberately absent: input changes it covers are rendered freshly in the
+foreground.
 
-The per-present randomized segmented-projectile family is an exception.
-Any published member conservatively disables world reuse, even offscreen;
-full recording preserves its CRT draws and painter position [03 §5.4][I4].
-A renderer trace also disables reuse. No fixed refresh throttle or altered
-animation cadence is introduced. Thus this optimization is not a promise of
-minimal paused CPU for every possible scene.
+The per-present randomized segmented-projectile family is an exception: any
+published member conservatively disables world reuse, even offscreen, because
+full recording preserves its CRT draws and painter position [03 §5.4][I4]. A
+renderer trace also disables reuse. No fixed refresh throttle or altered
+animation cadence is introduced, so this is not a promise of minimal paused CPU
+for every scene. Entering the split joins and cancels speculative recording with
+the ordinary CRT rollback; paused Draws never launch another pre-record. Audio
+draining and displayed-resource advancement still run once per presentation
+before the split, and every Draw still reaches the update-ledger tail. Opt-in
+`--stats` counts world recordings and reuses; F11's renderer metadata retains
+pipeline and paused-world counters regardless of that setting.
 
-Entering the split joins and cancels speculative recording with the ordinary
-CRT rollback. Paused Draws never launch another pre-record, including the
-random-projectile fallback. Audio draining and displayed-resource advancement
-still run once per presentation before the split, and every Draw still reaches
-the existing update-ledger tail. On resume the normal pipeline starts again.
-Opt-in `--stats` diagnostics count world recordings and reuses; foregrounds
-remain in the ordinary presented-frame and update-body cadence totals.
-Periodic and exit pipeline/cadence/cache readouts are disabled by default.
-F11's renderer metadata retains pipeline and paused-world counters regardless
-of the terminal-statistics setting.
+### 13.11 Flash quads and same-stream phases
 
-Verification: the client regression compares whole and split indexed rasters,
-including a moved/removed gesture and destination-reading UI; key tests cover
-stationary and moving camera fractions, zoom, settings and assets, publication,
-unpause and session replacement, and speculative CRT rollback. The real-device
-fixture compares exact RGBA bytes of whole replay against retained-world replay
-with moving/removable foreground and modal shading over model/shadow content.
-Live pause/pan/zoom/capture/resume and paired battle performance checks remain
-the integration gate; the old paused-process profile is observational evidence,
-not a controlled timing baseline for this newer source.
-
-### 13.11 Flash quads and same-stream phases (seventh round)
-
-Measured on the 720-frame modern battle benchmark at 1920×1080 with about 190
-units, Submit is all CPU on the game goroutine and its scaling term is the
-effect layer. At about 200 live effects the executor writes around a million
-lit-point texels per frame; Submit's correlation with the frame's vertex count
-is 0.93, and the phase count reaches 113–121 because overlapping
-destination-reading commands split phases. Two changes follow. The first is
-exact and its captures are byte-identical; the second is an Enhanced-only
-approximation the user approved on 2026-09-10 — the modern executor does not
-have to match retail's lit brightening of flashes and halos exactly, it has to
-look similar. Classic output is byte-identical either way.
+Two changes, the first exact and the second an Enhanced-only approximation the
+user approved on 2026-09-10: the modern executor does not have to match retail's
+lit brightening of flashes and halos exactly, it has to look similar. Classic
+output is byte-identical either way.
 
 **The same-stream rule.** Until this round a destination-reading command opened
-the next phase whenever it overlapped another destination-reading command of the
-current phase (§11.2). That rule was written when a destination read meant
-sampling a per-phase snapshot copy. Since §13.3 it does not: the row families
-(`FillLitRect`, `FillShadeRect`, `PointLit`, the trail marks) and the ALP
-families (`BlitTinted`, the translucent feature body and shadow, the model
-shadow commit, the strategic marker layer) hand the device a fragment and a
-fixed-function blend, and the blend is a read-modify-write of the real
-attachment. A pass applies its fragments in primitive order, and inside a
+the next phase whenever it overlapped another of the current phase. That rule
+was written when a destination read meant sampling a per-phase copy. Since
+§13.3 it does not: the row families and the ALP families hand the device a
+fragment and a fixed-function blend, and the blend is a read-modify-write of the
+real attachment. A pass applies its fragments in primitive order, and inside a
 phase's destination batch that order **is** record order — runs are appended in
 record order and a run's vertices are its commands in record order. Two
 overlapping commands of the same blend stream therefore leave exactly the
 per-pixel sequence the phase split left.
 
-A destination-reading command now opens the next phase only when
-
-* it overlaps an earlier destination-reading command of a **different** stream,
-  or
-* either command samples the phase's read copy in its shader.
-
-The streams are the ALP half-blend, the row-family scale blend, and the
-read-copy stream. The last has exactly one member: **fog** is the only family
-that still binds a read slot (§13.3 "Fog keeps one read copy"), so it splits
-from every destination command it overlaps in both directions — the copy is
-taken once per phase, and a second command over the same region would read a
-state the copy no longer describes. Cross-stream pairs keep the split rather
-than an argument about commuting two different pieces of arithmetic. Every other
-rule stands: an opaque write over an earlier destination read still opens the
-next phase, a lit point still follows any earlier point at its own pixel by a
-phase, and the cell grid's forgotten-owner floor stays conservative — it is now
-kept per query stream, because what a forgotten owner costs depends on who asks.
-A command's stream is derived from the blend and read slot it already binds, so
-no family outside the scheduler changed.
-
-*Measured*, 1080p Ashap Plateau seed 7, `--benchmark-tps=120`, modern, phases
-per frame: 20 median / 26 max before, 14 / 16 after at 180 frames; 42 / 112
-before, 19 / 64 after at 720 frames. M1–M8 and `battle.png` at 180 and 720
-frames are byte-identical on both renderers.
+A destination-compositing command now opens the next phase only when it overlaps
+an earlier one of a **different** stream, or when either samples the phase's read
+copy. The streams are the ALP half-blend, the row-family scale blend, and the
+read-copy stream; the last has exactly one member, **fog**, so fog splits from
+every destination command it overlaps in both directions — the copy is taken
+once per phase, and a second command over the same region would read a state the
+copy no longer describes. Cross-stream pairs keep the split rather than an
+argument about commuting two different pieces of arithmetic. Every other rule
+stands: an opaque write over an earlier destination read still opens the next
+phase, a lit point still follows any earlier point at its own pixel by a phase,
+and the cell grid's forgotten-owner floor stays conservative and is kept per
+query stream, because what a forgotten owner costs depends on who asks. A
+command's stream is derived from the blend and read slot it already binds, so no
+family outside the scheduler changed.
 
 **The lit discs as quads.** An explosion's calculated disc [06 R-WFX-01 §2] and
 an effect's ground halo [03 §4.3.1] are the same operation the row families
 already express — every covered pixel folded through one LHT row — and the
-recorder was carrying each of them as one lit point per covered SCREEN pixel.
-That is where the million texels a frame came from. Each disc becomes one
-command instead:
+recorder used to carry each of them as one lit point per covered screen pixel.
+Each disc is one command instead:
 
 * `drawlist.Flash` carries the generated frame's identity (table and clamped
   frame index), its `Side` and `Offset`, its texels resolved to LHT rows with
   `FlashTransparentRow` outside the disc, the screen anchor, the view scale and
-  the **gate as a rectangle**. The gate is what `terrainScreenCoverage` already
-  is: two independent half-open range tests against the map, so the admitted set
-  is the map rectangle in screen space and no executor needs a callback.
+  the **gate as a rectangle** — what `terrainScreenCoverage` already is: two
+  independent half-open range tests against the map, so the admitted set is the
+  map rectangle in screen space and no executor needs a callback.
 * `drawlist.Halo` carries the centre, the radius already taken through the view
   scale, the LHT row and the same rectangle.
 
@@ -2303,421 +1709,183 @@ points the classic lane records at all three view scales — so a modern-lane li
 replayed through the classic executor composes the same bytes.
 
 In the modern executor a generated frame is packed on first use into one
-persistent RGBA8 intensity atlas (`flash.go`), one page of 1024², which is
-enough for all three tables at once. A texel stores exactly what a lit point
-plane texel stores — the row family's high lane as a 24-bit fixed-point triple,
-from the same `pointLaneBytes` table — so the two paths run the same fragment op
-(`destOpLaneAtlas`) and the brightening per row cannot drift between them; an
-uncovered texel is zero, whose fragment is the identity scale, so the disc's
-transparent ring needs no key test and each frame gets a one-texel identity
-border for the magnified sampler. The flash is then one quad over its projected
-extent, the halo one quad whose fragment recovers the integer `(dx, dy)` from
-its interpolated corner lanes and runs the byte writer's own `dx² + dy² ≤ r²`
-test. Both are row-stream commands, so under the rule above they never split a
-phase among themselves or against the trails and the fills.
+persistent RGBA8 intensity atlas (`flash.go`), one 1024² page, which is enough
+for all three tables at once. A texel stores exactly what a lit point plane
+texel stores — the row family's high lane as a 24-bit fixed-point triple, from
+the same `pointLaneBytes` table — so the two paths run the same fragment op and
+the brightening per row cannot drift between them; an uncovered texel is zero,
+whose fragment is the identity scale, so the disc's transparent ring needs no key
+test, and each frame gets a one-texel identity border for the magnified sampler.
+The flash is then one quad over its projected extent, the halo one quad whose
+fragment recovers the integer `(dx, dy)` from its interpolated corner lanes and
+runs the byte writer's own `dx² + dy² ≤ r²` test. Both are row-stream commands,
+so they never split a phase among themselves or against the trails and the
+fills.
 
-**Divergences (Enhanced only).** The user decided on 2026-09-10 that the modern
-executor need not match retail exactly here, only look the same.
+**Divergences (Enhanced only).** The disc is texture-sampled rather than
+magnified by a per-source-pixel loop. At the native and detail scales that is
+the same pixel set — the loop's span for source pixel `c` is
+`[Project(c−Offset), Project(c−Offset+1))`, which is one and two screen pixels
+exactly — and both were measured byte-identical. At the 1.5× step the loop's
+alternating one- and two-wide columns become nearest-sample columns, which
+shifts some ramp columns by a pixel; every differing pixel lies inside a disc
+footprint, and the largest difference is what a pixel gaining or losing the
+brightest ring costs (`dst × 2` against `dst × 1`), not a lane error. The halo
+has no texture and stays exact at every scale. Flash and halo pixels that also
+fall under a later opaque command are still overwritten, exactly as before.
 
-* The disc is texture-sampled rather than magnified by a per-source-pixel loop.
-  At the native and detail scales that is the same pixel set — the loop's span
-  for source pixel `c` is `[Project(c−Offset), Project(c−Offset+1))`, which is
-  one and two screen pixels exactly — and both were **measured byte-identical**.
-  At the 1.5× step the loop's alternating one- and two-wide columns become
-  nearest-sample columns, which shifts some ramp columns by a pixel.
-  `battle.png` at 180 frames, `--zoom 1.5`: 11,627 of 2,073,600 pixels differ
-  (0.56%), mean channel difference 14.7 inside them and maximum 184, and every
-  differing pixel lies inside a disc footprint. The maximum is what a pixel
-  gaining or losing the brightest ring costs (`dst × 2` against `dst × 1`), not
-  a lane error; the halo has no texture and stays exact at every scale.
-* Flash and halo pixels that also fall under a later opaque command are still
-  overwritten, exactly as before.
-* The shader's per-fragment lane and the plane's stored lane are the same bytes
-  by construction, not by argument: both read `pointLaneBytes`. The measured
-  zero-pixel difference at 1× and 2× is the check.
+### 13.12 Model slot identity and retained shadows
 
-*Measured*, 1080p Ashap Plateau seed 7, `--benchmark-tps=120`, modern, medians
-over three interleaved 720-frame runs of each build:
+The executor's per-subject slot atlas and its device-side **residency table are
+gone**: the model lane of §22 rasterizes every subject each frame into a
+per-frame atlas and keeps no region between frames. The recorder's cache key
+survives, and it is load-bearing in two places — it gates the retained shadow
+projection below, and it is the key of the lane's retained packed-vertex store
+(§22.1), which is CPU preparation work rather than device residency. What
+survives on the recorder side, and what the executor still owes the frame, is
+below; the retired design and its measurements are in the history file.
 
-| | before | after |
-|---|---|---|
-| Submit | 4.95 ms | 3.24 ms |
-| PreRecord | 1.80 ms | 1.26 ms |
-| Cadence median | 9.05 ms | 8.34 ms (the 8.3 ms floor) |
-| Worst cadence | 127 ms (329 ms on one run) | 40 ms |
-| Phases per frame | 42 median, 112 max | 10 median, 14 max |
-| Vertices per frame | 22,500 median, 1,186,272 max | 14,362 median, 18,076 max |
-| Lit point pixels | 181,538 median, 963,506 max | 0 |
-| Lit discs (`Flashes`) | — | 49.5 median, 90 max |
-| Allocation per frame | 1.96 MB | 0.75 MB |
+`drawlist.ModelCacheKey` is what the recorder stamps on a packet:
 
-Passes (13) and draws (27) are unchanged: this round moved the vertices and the
-phases, not the device calls.
-
-**The lit point plane now serves nothing in the modern lane.** `PointLit` had
-exactly two producers, the flash disc and the halo, and both are lit-disc
-commands now; the benchmark's `PointPixels` is zero on every frame. `points.go`,
-`drawLitPoints` and the `PointLit` path stay in place — they are the classic
-sink's own family, the fallback for any future `PointLit` producer, and the
-definition the disc atlas's lane encoding is checked against — but nothing in
-the modern executor exercises them today, and a later round may retire the
-per-frame plane atlas if none appears.
-
-### 13.12 Persistent model slots (eighth round)
-
-> **Retired (2026-09-11).** Persistent slots went with the slot stage; the
-> model lane of §22 rasterizes every subject each frame into a per-frame
-> atlas and needs no residency. Kept as the record of what was measured.
-
-**The problem.** On the 720-frame modern battle benchmark (1920×1080, ~190
-units, 120 TPS) `Submit` sat at a 4.9 ms median, of which `prepareModelSlots`
-was 2.8 ms median and 3.7 ms p95 — and **flat across the scene**: it did not
-move with the effect count, the projectile count or the fire count. The reason
-is that the slot atlas was a per-frame product. Every frame reset the shared
-page and then re-placed, re-analysed (`modelFacesSupported`) and re-prepared
-(`prepareModelFaces`) every subject before rasterizing all of them, although
-most subjects are the same retained body the recorder already caches: a
-structure, an idle unit, a moving unit between orientation changes. About
-1.2 ms of the 2.8 was the page flush — the vertex build and the raster passes —
-and the rest was the `VisitModels` walk.
-
-**The decision.** A slot stays where it is until its raster inputs change. A
-frame analyses and rasterizes only the subjects it could not find already
-resident, and the flat term becomes proportional to what changed.
-
-#### Identity — contract P1
-
-The executor sees a per-frame scratch packet, never the retained body pointer,
-so it cannot key on the pointer. `drawlist.ModelCacheKey` is what the recorder
-stamps on the packet instead:
-
-* `Body` — a serial the recorder gives a retained `cachedModelBody` the first
-  time it stores geometry, unique for the life of the process. It is not the
+* `Body` — a serial the recorder gives a retained cached body the first time it
+  stores geometry, unique for the life of the process. It is not the
   presentation identity: `InvalidateModelImages` drops every body at once and
-  the replacements would otherwise present an identity the executor still holds
-  a raster for.
+  the replacements would otherwise present an identity a consumer still holds a
+  raster for.
 * `Revision` — incremented on every `replaceCachedGeometry`, which is the one
   place the cached lane is stored. An equal `(Body, Revision)` means literally
   the same retained faces.
-* `HalfX`, `HalfY` — the frame's half-pixel offset. The rebase adds it to the
+* `HalfX`, `HalfY` — the frame's half-pixel offset, which the rebase adds to the
   **doubled** corners alone (§17), so the packet's own origin does not imply it.
-  There are four of them, so a moving supersampled subject cycles through four
-  rasters and residency holds the ones it is using.
 * `Lane` — which of the retained object's rasters this is, body or shadow. The
-  two share the serial and keep separate revisions; see "Shadows — contract P4"
-  below, which added the field.
+  two share the serial and keep separate revisions.
+
+**The key names the retained CACHED lane alone.** A keyed packet may also carry
+a reveal, an outline or a live lane this frame; all three are per-frame, and an
+executor composes them after that lane — they follow the cached lane in retail's
+order [03 R-REN-03A §4] whether or not the lane was replayed — so none of them
+clears the key. The comment on `drawlist.ModelCacheKey` is the authoritative
+wording of that rule. A nanoframe's cached lane rebuilds when its construction
+fraction moves and takes a new revision then; between those the faces are the
+same and the reveal band rides the per-frame verdict entry.
 
 A zero `Body` means "not reusable", and it is the value of every packet whose
 raster inputs the recorder cannot prove stable: the direct projected lanes,
-children, a shadow whose subject has no retained body (P4), and any retained
-body carrying a reveal, an outline or a live lane this frame. The recorder
-clears the key for those explicitly rather than relying on the executor to
-notice.
+children, a shadow whose subject has no retained body, and a feature the recorder
+projects per frame. The recorder clears the
+key explicitly rather than relying on a consumer to notice. The team texture is
+folded in — the cached lane rebuilds when `unitTeamColor` changes, which bumps
+the revision. An **animated** model texture is not: the retained lane keeps the
+`GAFFrame` it was stored with until some other gate rebuilds it, so the recorder
+is already showing a frozen frame there. That is a pre-existing recorder
+property.
 
-The executor's slot key adds what it reads off the packet itself: `Width`,
-`Height`, `OriginX`, `OriginY` (which fix the rebase delta, and with it every
-cached corner's position inside the slot), `Scale`, `KeyPlane`, `Waterline`,
-`WaterlineKey`, `Digger`, `DiggerKey`, and whether a `Supersample` lane is
-present. It refuses a packet outright when a reveal, an outline, a live lane on
-either scale, or a child list is present.
+#### Wrecks and other 3DO features
 
-**Established by reading, not assumed.** The team texture is folded in: the
-recorder rebuilds the cached lane when `unitTeamColor` changes
-(`cachedGeometryMustRebuild`), which bumps the revision. An **animated** model
-texture is not: the retained lane keeps the `GAFFrame` it was stored with until
-some other gate rebuilds it, so the recorder is already showing a frozen frame
-there and reuse changes nothing. That is a pre-existing recorder property, not
-one this round introduces.
+A 3DO feature — a wreck, or a map-authored model feature — is retained the way a
+unit's cached lane is: its projected faces are stored beside an identity and
+rebased onto this frame's placement, so its packet carries a key and the
+recorder projects the model only when an input of the projection changes
+(`featureGeometry`, `internal/client/model_cached_live.go`). The inputs are
+exactly the unit lane's: the model by name, the folded piece pose — which is
+what carries a corpse's orientation triple [03 R-RAST-01 §6] — the published team
+colour for LOGOS faces, the shading option, the supersample gate, the view
+scale, the palette tables and the texture index generation the model's table was
+resolved under. The **position is not one**: every corner is model-local and the
+placement, half-pixel offset, lighting height and waterline are supplied by the
+rebase each frame, so the rebased packet is the per-frame projection corner for
+corner. The retained path is not taken, and the per-frame projection kept, for a
+draw with no frame arena, a pose that does not describe every piece, or a model
+with an **animated** texture, whose frames the per-frame walk advances and a
+retained lane would freeze.
 
-#### Executor-side inputs — contract P2
+The identity is the **map position**, because the session publishes no feature
+`InstanceID` (§35): one feature stands at a cell and never moves off its anchor
+while it stands [05 "Feature instance and terrain cell"], a sinking feature
+keeping its X and Z. Feature keys are marked in their top bits so they can never
+collide with a unit's publication identity, and two features that stood at one
+cell in turn share a key harmlessly — the retained lane is a pure function of the
+compared inputs, so a different corpse re-projects and an identical one reuses
+faces that are identical.
 
-The slot page holds resolved **colour** since §17, so the executor's own inputs
-to the raster invalidate residency. They are held in one comparable value and a
-change retires the whole table rather than being compared per slot:
-
-* the **display palette**, counted by a generation the renderer bumps inside
-  `SetDisplayPalette`. The battle benchmark offers a palette every frame;
-  `SetDisplayPalette` ignores a repeat of the one already installed, so an
-  unchanged palette does not disturb residency.
-* the **table atlas** and the shade, blue and alpha tables the raster and
-  resolve stages bind.
-* the **model page limit** test hook, which changes the packing.
-
-The **model texture atlas** is deliberately not one of them: a frame is packed
-once per identity and keeps its page and rectangle for its lifetime
-(`model_atlas.go`), so a face's source texels never move. Neither is the
-framebuffer size: a slot is rasterized in subject-local coordinates and only its
-commit is clipped.
-
-#### Residency — contract P3
-
-The page's shelf and pixels persist. Each frame:
-
-1. Entries no frame has claimed for more than `modelSlotIdleFrames` are retired
-   and their regions returned to the free list, in entry order.
-2. The previous frame's **transient** regions — the subjects that could not be
-   kept — are released. Without this the frontier advances once per shadow per
-   frame and the page reaches its row bound in a second.
-3. A subject whose key is resident keeps its slot: no admission scan, no face
-   preparation, no vertex, no draw.
-4. Before allocating, protect every resident key the complete frame will use.
-   A new subject early in record order cannot evict a hit appearing later.
-   Reserve subjects in descending raster height, with stable record-order ties,
-   to reduce wasted shelf height. Replay still commits the original painter
-   order; the disjoint raster reservations carry no inter-subject ordering.
-5. A new subject takes a region from the free list (smallest that fits, lowest
-   index breaking the tie), then the shelf frontier, then by evicting the least
-   recently used slot this frame does not use (lowest index breaking the tie).
-   Split a larger free rectangle into the requested reservation and at most two
-   disjoint remainders. On release, join adjacent free regions only when their
-   union is rectangular; never span a still-owned slot. A
-   frame that still cannot place a subject takes the per-subject fallback route
-   and asks the next frame to start from an empty page — which is exactly what a
-   full page did before slots persisted.
-
-Nothing here depends on map order: the residency map is looked up and never
-ranged, and every choice among candidates is resolved by an ordered scan [I1].
-
-**Measured packing follow-up (2026-09-11).** In the Great Divide scene-4
-benchmark at 30 Hz, 1080p, seed 7, the preceding allocator overflowed in 90 of
-180 measured frames and discarded all residency on the following frame. The
-policy above reduced overflow frames to 45 and raised median slot reuse from
-3.3% to 21.9%; median raster pixels fell from 3,188,520 to 2,293,608 and total
-allocation from 1.746 to 1.647 MB/frame. Median Submit stayed near 5.6 ms and
-98% of frames stayed on cadence. Metadata and every measured simulation census
-matched. Device fixtures check reuse under pressure against a cold raster;
-the battle captures were inspected and differed in 50 of 2,073,600 pixels,
-within the reviewed placement-sensitive raster policy below. This is a packing
-and allocation improvement, not evidence of a higher frame-rate ceiling.
-
-Overflow still requests a rebuild. Keeping fragmented residency indefinitely
-was measured separately and rejected: it increased overflow fallback work,
-allocations and frame time despite a higher hit count. Page size, pixel inputs,
-cache invalidation and simulation behavior are unchanged by this follow-up.
-
-The clears follow: only the reservations a frame allocated are cleared, in one
-device draw per plane, and a page with nothing carried over clears its whole
-used extent as before. The resolved plane is **seeded** from the page's own
-finished raster over those same reservations, which is what the clipping
-stage's whole-page copy used to leave there — some commits sample a texel past
-their box (§16.3 "Sampling"), and seeding per region makes what they find a
-property of the region rather than of the page's history.
-
-Two stage changes follow from persistence. The waterline/Digger stage no longer
-exchanges the two page planes: that would move every resident raster to the
-plane the resolved colours live on. It clips each subject's own rectangle into
-the scratch and copies it back, which costs a frame that clips one extra
-destination switch (`modelStageMaxPasses` 8 → 9) and nothing on a frame that
-does not. And a page that grows now carries its pixels forward into the larger
-planes instead of losing every raster it holds.
-
-#### Outcome
-
-Three interleaved 720-frame runs each on a loaded host (`uptime` 4.7–5.6),
-after the same-stream phase work of §13.11:
-
-| | §13.11 executor | persistent slots |
-|---|---|---|
-| `Submit` median | 3.019 ms | **2.335 ms** |
-| `Submit` p95 | 3.58 ms | 2.87 ms |
-| `RasterPixels` median | 2,060,810 | 1,519,184 |
-| model draws median | 27 | 28 |
-| destination switches median | 13 | 13 |
-
-Reuse is a **32% median** of the frame's subjects (99 reused against 235
-rasterized), with 27 evictions in a median frame, 255 resident slots and no
-fallback subject over the whole run. The ceiling is about 43%: shadows are 138
-of the ~360 subjects a battle frame reserves and none of them is retained by the
-recorder, so every one is rasterized every frame. Retaining the shadow lane
-beside the body lifts that ceiling and is the next subsection.
+Feature bodies are pruned by **age**, not by membership of the frame's feature
+set: a committed frame carries thousands of features, and building a per-frame
+set over them cost more allocation than the retention saved. A body records the
+committed tick it was last recorded on and is dropped after `featureRetainTicks`
+(30, one simulated second), so a wreck that scrolls out of view and back inside
+that window is rebased rather than re-projected, and one that is gone frees its
+arenas. A stale entry can never draw a departed feature — the next recording
+compares the inputs — it can only hold its arenas for a second.
 
 #### Shadows — contract P4
 
-A shadow is a subject like any other — its own slot, its own raster, its own
-commit — and it was the one the recorder could not name. `collectShadowPolys`
-walked the model and sheared it again every frame, and the packet carried a zero
-`Cache`, so the executor rasterized every shadow of every frame.
+A shadow is a subject like any other — its own region, its own raster, its own
+commit. **The shadow's inputs are not the body's**, and this is established by
+reading rather than assumed: the body's retained lane is the *cached* piece lane
+frozen at its last rebuild, with the orientation cache holding the root angles
+until an axis moves more than seven units, while the shadow projects **every**
+piece from the **current** pose. A subject whose retained body is untouched can
+have a shadow that genuinely moved — a turret slewing, a factory pad opening —
+so gating the shadow on the body's rebuild would freeze a silhouette the body is
+not freezing. The two lanes are retained side by side and gated apart.
 
-**The shadow's inputs are not the body's.** This is the whole difficulty, and it
-is established by reading rather than assumed. The body's retained lane is the
-*cached* piece lane frozen at its last rebuild: the orientation cache holds the
-root angles until an axis moves more than seven units, and the live lane is
-rebuilt separately. The shadow projects **every** piece from the **current**
-pose. So a subject whose retained body is untouched can have a shadow that
-genuinely moved — a turret slewing, a factory pad opening — and gating the
-shadow on the body's rebuild would freeze a silhouette the body is not freezing.
-The two lanes are retained side by side and gated apart.
+What the projection reads is exactly: the **model**, by name, as the body's own
+gate reads it; the **folded piece pose** (`UnitDraw.PieceStates`), from which
+`BuildUnitDrawInto` derives every piece's transform, its hidden verdict and its
+world corners, so an equal pose is an equal projection; the **model scale**, and
+whether the doubled lane is present at all; and the **shadow gate** —
+`CastsShadow` with the palette the projection requires. The subject's
+**position is not an input**: `PieceDraw.WorldVertices` are the transformed
+corners plus `worldPos` and `shadowLocalVertex` subtracts `worldPos` straight
+back off in fixed point, so the cancellation is exact. Neither is the terrain
+under the unit, the waterline or the Digger clip: those reach the shadow through
+its *placement* (`shadowPlacement`, whose Y is sheared by `GroundY`
+[03 R-REN-03D §3]) and through the body packet's own clip fields, never through
+the projected corners. A `DontShadow` piece flag exists in the pose and is
+compared with it, though the projection does not yet consult it — a pre-existing
+gap this section does not close.
 
-What the projection does read is exactly:
+The retained lane is therefore stored with **no placement at all** — anchor
+zero, half-pixel offset zero — and the rebase supplies both, exactly as it does
+for the body. A draw whose pose does not describe every piece of its model is
+outside that derivation and keeps the per-frame projection.
 
-* the **model**, by name, as the body's own gate reads it;
-* the **folded piece pose** (`UnitDraw.PieceStates`). `BuildUnitDrawInto` derives
-  every piece's transform, its hidden verdict and therefore its world corners
-  from that slice alone, so an equal pose is an equal projection. Comparing
-  `len(pieces)` small comparable structs is what replaces the walk, the shear and
-  the winding test;
-* the **model scale** (`scaleModelLocal`), and whether the §17 **doubled lane** is
-  present at all;
-* the **shadow gate** — `CastsShadow` with the palette the projection requires.
+**Only a structure's shadow is projected and retained this way.** A Digger or
+mobile subject's shadow is a faceless packet (`ModelGeometry.Silhouette`)
+carrying the body's box, the shadow anchor and a clip key, and the executor
+reads the body's own raster at that placement (§22): nothing is projected,
+retained or keyed for it.
 
-The subject's **position is not an input**: `PieceDraw.WorldVertices` are the
-transformed corners plus `worldPos` and `shadowLocalVertex` subtracts `worldPos`
-straight back off in fixed point, so the cancellation is exact. Neither is the
-terrain under the unit, the waterline or the Digger clip: those reach the modern
-shadow through its *placement* (`shadowPlacement`, whose Y is sheared by
-`GroundY` [03 R-REN-03D §3]) and through the body packet's own clip fields, never
-through the projected corners. A `DontShadow` piece flag exists in the pose and
-is compared with it, though the projection does not yet consult it — a
-pre-existing gap this section does not close.
+#### Page planes are unmanaged
 
-So the retained lane is stored with **no placement at all** — anchor zero,
-half-pixel offset zero — and the rebase supplies both, exactly as it does for the
-body: the anchor is written on the packet and the half-pixel offset is added to
-the doubled corners alone. A draw whose pose does not describe every piece of its
-model is outside the derivation above and keeps the per-frame projection.
-
-**Identity.** `drawlist.ModelCacheKey` gains a `Lane`. The shadow shares the
-body's serial — it is the same retained object — and keeps a revision of its own,
-bumped on every reprojection. The lane is what separates the two: without it a
-shadow and a body whose `Width`, `Height`, `Origin`, `Scale` and flags happened
-to agree could answer to each other's slot. The executor needed no other change;
-the lane rides the key it already compares, and `modelSlotKeyFor` now admits a
-shadow on exactly the terms it admits a body. The shadow commit is indifferent to
-either slot's provenance: its body punch reads the body slot's *box* on the page,
-not how that raster came to be there.
-
-A shadow whose subject has no retained body — no presentation identity, no
-scratch arena, the direct projected route — keeps the per-frame projection and a
-zero key, as before.
-
-**Outcome.** Three interleaved 720-frame runs each, 1920×1080, 120 TPS, on a
-loaded host (`uptime` 4.9–6.2):
-
-| | persistent slots | retained shadows |
-|---|---|---|
-| `Submit` median | 2.542 ms | **2.219 ms** |
-| `PreRecord` median | 1.295 ms | 1.248 ms |
-| slot reuse median | 29.3% | **47.8%** |
-| `SlotsReused` median | 104 | 164 |
-| `SlotsRasterized` median | 248 | 208 |
-| `RasterPixels` median | 1,557,314 | 1,327,618 |
-
-Shadow reuse alone is a **47.7% median** (76 of 168 shadow subjects). The
-recorder's saving is real but small — `PreRecord` moves about 0.05 ms, because a
-reprojecting subject now pays the projection *and* a copy into its store — and
-the executor's is the one that matters.
-
-Two costs come with it. The residency table roughly doubles, 247 to 408 resident
-slots, and the page is under more pressure: `SlotOverflows` p95 rises from 1 to 4
-and body reuse falls from 104 to 88 as shadows compete for the same shelf. The
-frame is still well ahead, but the page size is now the binding constraint rather
-than the recorder's identity, which is where the next round should look.
-
-**Verification.** B0 the executor before this section, B1 with it. M1–M8
-`.modern.png` and `.png` **byte-identical**, and the 2× `--shot` byte-identical.
-`battle.png` differs by **1** pixel of 2,073,600 at 180 frames and **8** at 720,
-every one an isolated texel at a model's own silhouette edge — the same
-placement-rounding residual §13.12's verification names, of the same order as the
-3 and 4 recorded there, and for the same reason: a slot that is kept sits where
-an earlier frame put it rather than where this frame would have. Both builds are
-self-deterministic; three 720-frame runs each produce byte-identical `battle.png`
-within a build. `go test -race ./internal/platform/gpurender ./internal/client` is
-clean, and `checkModelSlotShadowResidency` joins the opt-in device fixtures: the
-same list executed twice reuses every shadow slot for the same bytes, and a
-bumped shadow revision rasterizes exactly that shadow.
-
-**Since the model lane's silhouette shadows.** Only a structure's shadow is
-projected and retained as above. A Digger or mobile subject's shadow is a
-faceless packet (`ModelGeometry.Silhouette`) with the body's box, the shadow
-anchor and a clip key, and the executor reads the body's own raster at that
-placement (§22): nothing is projected, retained or keyed for it. The pose gate,
-the shadow store and the lane in the cache key remain the structure path's.
-
-#### The defect this round exposed, and its fix
-
-Persistent slots first came out **not** byte-identical to the executor they
-replaced: 1,567 pixels of 2,073,600 differed on a 720-frame battle capture, all
-at model edges, with a one-pixel column along many subjects' right edge. The
-isolating experiments, each with reuse disabled so only the packing changed:
-
-| experiment (reuse disabled throughout) | pixels changed |
-|---|---|
-| the branch's clip and clear restructuring, packing unchanged | 5 |
-| every slot translated 32 px across the page | 1 |
-| slot gutter widened from 2 to 8, then to 16 | 16, then 266 |
-| **only the page's allocated height forced from 768 to 1280 rows** | **67,166** |
-
-The last row is the mechanism, and it is not a packing question at all: with the
-packing, the record and every subject untouched, making the page's planes
-*taller* moved three per cent of the frame. An Ebitengine image is by default a
-**region of a shared texture**, and which region it gets depends on its own size
-and on what else is on that atlas. The model passes address a page by whole page
-pixels — the body pass reads the key stored at its own destination texel, the
-resolve reads the two-by-two block under a native pixel, a commit samples its
-slot's box — and that addressing does not survive the page moving. The first
-hint was a capture whose page planes were read back with `ReadPixels`, which
-takes an image off the atlas: it agreed with the tall page instead of the short
-one.
-
-The fix is one line of allocation policy: the three slot page planes are
-allocated **unmanaged**, so they are their own textures at every size. The same
-height experiment then moves **no** pixel, which is exactly the property
-persistent slots need, because a page whose slots survive is a page that grows.
-It is a defect correction in its own right — the current executor's model pixels
-already depend on how tall its page happens to be — and it is verified below
-against the executor without residency.
-
-Two device fixtures lock the property: `checkModelSlotNeighbourBleed` varies a
-neighbour's colour, shape, texture and scale, and moves the subject's own slot
-with a filler recorded before it; `checkModelSlotPageSizeIndependence` grows the
-page past the atlas threshold with committed-off-screen fillers. Both assert
-that the finished frame does not change. Neither reproduces the defect at
-fixture scale — an eighty-by-forty-eight frame with a handful of subjects does
-not put enough on the atlas — so the failing evidence is the table above, which
-the 180-frame benchmark reproduces in two minutes.
-
-#### Verification structure
-
-Three binaries, all built outside the repository: **B0** the executor before
-this round, **B1** B0 plus the page-plane allocation alone, **B2** the full
-branch.
-
-* **B2 against B1** — M1–M8 `.modern.png` byte-identical, the 2× `--shot`
-  byte-identical, `battle.png` 3 pixels of 2,073,600 at 180 frames and 4 at 720.
-* **B1 against B0** — M1–M8 and the 2× shot byte-identical, `battle.png`
-  identical at 180 frames and 1,077 pixels at 720, all at model edges and all
-  darker in B1: the run has to be long enough for the page to grow past the
-  atlas threshold before the defect can show.
-
-The four remaining pixels are the executor's residual sensitivity to where a
-slot sits, not a residency fault: B1 alone, with every slot moved a thousand
-rows down its page and residency still disabled, differs from B1 by **1** pixel
-over the same 720-frame capture. A subject is rasterized at absolute page
-coordinates, so the device's own interpolation and edge rules are evaluated
-there, and a lane sitting exactly on a rounding boundary can flip when the slot
-moves. It is a few texels per two-megapixel capture, it scales with how far a
-slot moves, and it belongs to the executor's raster passes rather than to
-anything this round changed.
-
-Both builds are **self-deterministic**: repeated 180- and 720-frame runs produce
-byte-identical `battle.png`. `go test -race ./internal/platform/gpurender
-./internal/client` is clean and the opt-in device fixtures pass, including the
-residency case — the same list executed twice reuses every eligible subject and
-produces the same bytes, and a bumped revision rasterizes exactly the changed
-subject.
-
+An Ebitengine image is by default a **region of a shared texture**, and which
+region it gets depends on its own size and on what else is on that atlas. The
+model passes address a page by whole page pixels — the colour pass reads the key
+stored at its own destination texel, the commit resolves the 2×2 block under a
+native pixel — and that addressing does not survive the page moving. Making a
+page's planes taller, with the packing and every subject untouched, moved three
+per cent of a battle frame. The page planes are therefore allocated
+**unmanaged**, so they are their own textures at every size, and the same
+experiment then moves no pixel. Two device fixtures lock the property:
+`checkModelSlotNeighbourBleed` varies a neighbour's colour, shape, texture and
+scale and moves the subject's own region with a filler recorded before it, and
+`checkModelSlotPageSizeIndependence` grows the page past the atlas threshold
+with committed-off-screen fillers; both assert the finished frame does not
+change. Neither reproduces the defect at fixture scale, so the failing evidence
+is the measurement in the history file, which the 180-frame benchmark reproduces
+in two minutes.
 
 ## 14. The detail view: 1.5× and 2× steps and load-time remaster
 
 ### 14.1 Decision
 
 The view scale is one of three steps: 1×, 1.5× and 2×. `camera.Scale`
-[F-P1-008] is a `camera.ViewScale`, the scale in half steps — `ViewScaleNative`
-(2), `ViewScaleMid` (3) and `ViewScaleDetail` (4), zero reading as native — and
-the free fractional zoom that the camera once clamped to 0.25..4 stays
-retired, with every `float32` in the projection. Retail has one scale, and
-the point of the magnified views is that each is *the same view drawn from
-more pixels*. The projection is integer at every step,
+[F-P1-008] is a `camera.ViewScale`, the scale in half steps —
+`ViewScaleNative` (2), `ViewScaleMid` (3) and `ViewScaleDetail` (4), zero
+reading as native — and the free fractional zoom the camera once clamped to
+0.25..4 stays retired, with every `float32` in the projection. Retail has one
+scale, and the point of the magnified views is that each is *the same view drawn
+from more pixels*. The projection is integer at every step,
 
     screenX = Project(worldX − camX) + originX
     screenY = Project(worldZ − (worldY >> 1) − camZ) + originY
@@ -2728,101 +1896,71 @@ is its exact inverse at every step: every screen pixel names one world pixel,
 and every world pixel projects to the first screen pixel that picks it. At 1×
 and 2× both reduce to the multiply and the floor divide the detail view was
 built on, so a 2× asset lands on the pixel grid one-to-one and a 1× asset
-doubled by nearest sampling lands on the same grid; nothing composed at scale
-1 changes by a pixel from the build before this section, and nothing at 2×
-from the build before the 1.5× step. At 1.5× consecutive world pixels are
-alternately two and one screen pixel apart, which is nearest sampling at 3/2,
-and the arithmetic is the named type's: `Project` for a position, `Px` —
+doubled by nearest sampling lands on the same grid. At 1.5× consecutive world
+pixels are alternately two and one screen pixel apart, which is nearest sampling
+at 3/2, and the arithmetic is the named type's: `Project` for a position, `Px` —
 `v·s/2` rounded half away from zero — for an extent or an authored offset, and
-`Inverse` for a picked pixel. The type is distinct from `int32` so that a
-plain multiply against a pixel count does not compile.
-
-Continuous zoom is not lost by this, and §16 has since built it for the modern
-executor: the recorder still emits at an integer step and the executor scales
-the recording by the live factor over that step, so this section's integer
-projection is what the free factor is built ON rather than something it
-replaces. The classic executor keeps these three steps and only these three.
-The 1.5× step exists because a 1080p window is too small at 1× and shows too
-little at 2×, and it is the window's default above 800×600 (§14.6); in the
-modern executor 1.5× is now the 2× step shrunk by three quarters rather than
-the 1.5× variant art set, which is a classic-only path from §16 on.
-
-The simulation never reads the scale [I6]. Movement, orders, physics, the
-tick fingerprint and the save image are identical at 1× and 2× by
-construction; the only thing that differs is which pixels present the same
-committed frame. That is also the test: a 2× capture of a seed is a capture of
-the same committed tick as the 1× capture.
+`Inverse` for a picked pixel. The type is distinct from `int32` so that a plain
+multiply against a pixel count does not compile.
 
 ### 14.2 The view transform — contract D1
 
 Every world-space command is recorded in screen space by the recorder, and the
 recorder is the one place the scale is applied. The executors replay recorded
-coordinates and never rescale; both replay the same list, so the parity gate
-of §6 applies at 2× exactly as at 1×. The rule per layer:
+coordinates and never rescale; both replay the same list, so the parity gate of
+§6 applies at 2× exactly as at 1×.
 
-At 1.5× every row below holds with `Px` in place of `×s` and the 1.5× variant
-of §14.3 in place of the 2× one: terrain tiles are 48 pixels, fog cells 48,
-the health bar's half-extents `Px(17)` and `Px(2)`, the shadow's five-pixel
-step `Px(5) = 8`, the flash disc's pixels the one- or two-pixel spans their
-world pixels project to, and a model's local offsets `Px` each (Enhanced) or
-its native image blitted over those spans (Original). A pre-scaled sprite
-cannot be phase-exact at a fractional factor — a source column covers two
-screen pixels or one depending on where its anchor projects — so a 1.5×
-sprite may sit one pixel off the terrain's own sampling phase; that is the
-cost of drawing variants rather than sampling on the device, and it is
-invisible at 1× and 2×.
+At 1.5× every row below holds with `Px` in place of `×s` and the 1.5× variant of
+§14.3 in place of the 2× one: terrain tiles are 48 pixels, fog cells 48, the
+health bar's half-extents `Px(17)` and `Px(2)`, the shadow's five-pixel step
+`Px(5) = 8`. A pre-scaled sprite cannot be phase-exact at a fractional factor —
+a source column covers two screen pixels or one depending on where its anchor
+projects — so a 1.5× sprite may sit one pixel off the terrain's own sampling
+phase; that is the cost of drawing variants rather than sampling on the device,
+and it is invisible at 1× and 2×.
 
 | Layer | Position | Size and art at s = 2 |
 |---|---|---|
 | Terrain | tile origin through `WorldToScreen` | 64×64 tiles from the detail tile set (§14.3), or the 32×32 tile doubled by nearest sampling when there is none; the record carries the scale and the detail tiles |
 | Feature sprites, normal and shadow, opaque and ALP-tinted | anchor through `WorldToScreen`, authored offsets ×s | the frame's 2× variant (§14.3), drawn one-to-one through the same blit kind |
 | Effect and projectile sprites | anchor through `WorldToScreen`, offsets ×s | the 2× variant; the load-time remaster covers features only, so these are nearest-doubled variants |
-| Models: units, 3DO features, projectiles, the build ghost | anchor through `WorldToScreen` | Enhanced: projected local offsets ×s (`scaleModelLocal`, integer) and the image rasterized at output scale from the scaled geometry, textures sampling nearest so each texel covers s×s pixels; shadow, outline, reveal and waterline use the same scaled geometry. Original: the image is rasterized at native size exactly as at 1× and the classic blit doubles it about the anchor (`ClassicModelImage.Blit`), the shadow's five-pixel step included, so the classic frame is a pure nearest upscale. Height keys, the digger erase threshold and the sea level are world heights and do not scale in either |
-| Fog | cell rectangle through the same projection | cell edge 32·s; the gray-remap and solid fills cover the scaled rectangle; the fog GAF cell (the cloud-edge variants) is drawn once from its 2× variant. The dither checker is a destination-pixel test inside the blit, so it stays one pixel at any scale on its own — tiling the 32×32 frame s×s times, the first draft here, stamped four cloud edges per cell and drew a cross through every boundary cell |
+| Models: units, 3DO features, projectiles, the build ghost | anchor through `WorldToScreen` | Enhanced: projected local offsets ×s (`scaleModelLocal`, integer) and the image rasterized at output scale from the scaled geometry, textures sampling nearest so each texel covers s×s pixels; shadow, outline, reveal and waterline use the same scaled geometry. Original: the image is rasterized at native size exactly as at 1× and the classic blit doubles it about the anchor, the shadow's five-pixel step included, so the classic frame is a pure nearest upscale. Height keys, the digger erase threshold and the sea level are world heights and do not scale in either |
+| Fog | cell rectangle through the same projection | cell edge 32·s; the gray-remap and solid fills cover the scaled rectangle; the fog GAF cell is drawn once from its 2× variant. The dither checker is a destination-pixel test inside the blit, so it stays one pixel at any scale on its own — tiling the 32×32 frame s×s times stamped four cloud edges per cell and drew a cross through every boundary cell |
 | Fills: health bars, selection plate, footprint and drag rectangles | through `WorldToScreen` | extents ×s |
-| Lit points (flash discs) | centre through `WorldToScreen` | radius ×s; the point count grows with s², a known cost (§14.5) |
+| Lit discs and halos | centre through `WorldToScreen` | radius ×s (§13.11) |
 | Lines: nano beams, lasers, selection quad, dotted paths | endpoints through `WorldToScreen` | one pixel wide at every scale — a divergence accepted for now; a scaled width needs a width on the record in both executors |
 | World-anchored text: group digits, labels | anchor through `WorldToScreen` | glyphs unscaled; text is interface, not world |
 | Cursor, HUD, minimap, messages, menus | unchanged | unscaled; the minimap's viewport rectangle comes from `EffectiveView`, the view divided by s |
 
 Classic attached-unit staging uses the child-minus-carrier world projection at
-native raster scale, then magnifies the completed union about the carrier
-anchor once. It must not reuse the already magnified screen-anchor difference
-or invert that rounded difference: the latter loses a pixel at 1.5× for some
-anchor phases. Temporary staging views carry the native displacement; the
-child's own retained image, shadow and trace anchors stay unchanged. At 1×
-this is the original staging placement [03 R-REN-03A §4].
+native raster scale, then magnifies the completed union about the carrier anchor
+once. It must not reuse the already magnified screen-anchor difference or invert
+that rounded difference: the latter loses a pixel at 1.5× for some anchor
+phases. At 1× this is the original staging placement [03 R-REN-03A §4].
 
-Picking goes through `ScreenToWorld` and the viewport transform, which
-already funnel every pointer conversion through the camera: unit hover and
-selection hulls are projected from world corners, so they scale with the
-projection; the selection rectangle converts to a world rectangle with floor
-division; the terrain cursor resolve runs on the world point. The camera
-clamp measures the view in world pixels (`EffectiveView`, insets divided by
-s, integer division). Scrolling and the follow glide move in world pixels per
-host frame as retail does, so the screen moves twice as fast at 2×; that is
-the retail behaviour at twice the magnification, not a defect. Middle-drag
-converts the screen delta by 1/s so the world stays under the pointer.
+Picking goes through `ScreenToWorld` and the viewport transform, which already
+funnel every pointer conversion through the camera: hover and selection hulls are
+projected from world corners, so they scale with the projection; the selection
+rectangle converts to a world rectangle with floor division; the terrain cursor
+resolve runs on the world point. The camera clamp measures the view in world
+pixels (`EffectiveView`, insets divided by s, integer division). Scrolling and
+the follow glide move in world pixels per host frame as retail does, so the
+screen moves twice as fast at 2×; that is the retail behaviour at twice the
+magnification, not a defect. Middle-drag converts the screen delta by 1/s so the
+world stays under the pointer.
 
-The audit that lands D1 is the recorder's emission inventory: every
-`emitSprite`, `emitFill`, `emitLine`, `emitPoints`, `emitModel`, `emitFog` and
-`emitTerrain` site whose coordinates come from the world, in
-`internal/client/{world_draw,effect_draw,projectile_draw,healthbar,flash_disc,
-strip_draw,selection_quad,selection_overlay,selection_plate,hover_hull,
-model_compose,model_shadow_pass,model_staging,frame,terrain}.go` and the fog
-op builder in `internal/render/fog.go`. A site that draws in HUD space is left
-alone. The build before this section scaled only terrain and model geometry,
-which is why a 2× capture showed fog, sprites and bars at 1× positions.
+The audit that lands D1 is the recorder's emission inventory: every `emitSprite`,
+`emitFill`, `emitLine`, `emitPoints`, `emitModel`, `emitFog` and `emitTerrain`
+site whose coordinates come from the world. A site that draws in HUD space is
+left alone.
 
-Fog edge clipping correction (2026-09-11): both executors keep the projected
-cell origin for GAF placement and clip destination writes only after the
-frame offset is applied [03 §3.3][R-RR16-A §3]. Previously the classic sink
-clamped the origin before calling its blitter, and the GPU shader duplicated
-that clamp. A partially offscreen top or left cell therefore pinned its art
-to the screen edge; at 2× it could displace the cloud by nearly 64 pixels.
-Fill rectangles remain clipped. Regression fixtures pan black, gray and
-dithered gray masks past both edges at 1×, 1.5× and 2× and compare the result
-with a crop of the unpanned image, including actual GPU readback.
+Fog edge clipping: both executors keep the projected cell origin for GAF
+placement and clip destination writes only after the frame offset is applied
+[03 §3.3][R-RR16-A §3]. Clamping the origin before the blitter pins a partially
+offscreen top or left cell's art to the screen edge, which at 2× displaces the
+cloud by nearly 64 pixels. Fill rectangles remain clipped. Regression fixtures
+pan black, gray and dithered gray masks past both edges at 1×, 1.5× and 2× and
+compare with a crop of the unpanned image, including actual GPU readback.
 
 ### 14.3 Detail art — contract D2
 
@@ -2833,334 +1971,252 @@ battle entry and cleared with the terrain:
   the same order — recorded on the terrain command beside the scale; and
 * detail sprite banks — for a feature GAF bank named by the map's feature
   definitions, a second bank with the same entry names and frame counts whose
-  frames are 2×: width, height and the authored anchor offsets doubled, the
-  same colour key, pixels and transparency at four times the count.
+  frames are 2×: width, height and the authored anchor offsets doubled, the same
+  colour key, pixels and transparency at four times the count.
 
 The client maps a loaded frame to its 2× variant by entry and frame index, not
-by content, so the remastered bank and the loaded bank need not share
-pointers. The provider is consulted only while the Enhanced executor
-presents: the synthesized art is an Enhanced feature, and Original draws the
-authored tiles and frames at every scale, so switching to classic at 2×
-shows the original art nearest-doubled. The adapter tells the client which
-executor presents on every switch; the capture and benchmark routes tell it
-for the executor they drive (a "both" capture records for the modern one).
-Where no variant exists — an effect, a projectile sprite, a bank the
-remaster did not cover, the whole provider when `--auto-remaster=false`, or
-any frame while Original presents — the client builds the nearest-doubled
-frame on first use and keeps it for the life of the client, keyed by the
-source frame's pointer (frames are immutable after load). The doubled frame is a plain frame: composites with alternate
-children are doubled leaf by leaf. Executors see only frames; a variant is
-just another frame to the sprite atlas.
+by content, so the remastered bank and the loaded bank need not share pointers.
+The provider is consulted only while the Enhanced executor presents: the
+synthesized art is an Enhanced feature, and Original draws the authored tiles
+and frames at every scale, so switching to classic at 2× shows the original art
+nearest-doubled. The adapter tells the client which executor presents on every
+switch. Where no variant exists — an effect, a projectile sprite, a bank the
+remaster did not cover, the whole provider when `--auto-remaster=false`, or any
+frame while Original presents — the client builds the nearest-doubled frame on
+first use and keeps it for the life of the client, keyed by the source frame's
+pointer. The doubled frame is a plain frame: composites with alternate children
+are doubled leaf by leaf. Executors see only frames; a variant is just another
+frame to the sprite atlas.
 
-**The 1.5× variants.** `formats.(*GAFFrame).Resampled(num, den)` is the
-general nearest resample — sizes `ceil(v·num/den)`, anchors rounded half away
-from zero, output pixel `j` reading source `floor(j·den/num)` — of which
-`Doubled` is the 2/1 case. At 1.5× the client draws the provider's 2× variant
-resampled at 3/4 when one exists (the remaster loses every fourth row and
-column, which reads better than the authored frame at 3/2 with its uneven
-columns) and the authored frame at 3/2 otherwise; both are built once per
-source frame and kept, in caches separate from the doubled ones. The detail
-tile set is decimated the same way, 64×64 to 48×48 by nearest sampling, once
-per provider, and recorded on the terrain command in place of the 64×64 set:
-the record's tiles are always at the screen tile size of its scale, stored
-with that side as their row stride, so an executor copies a detail tile
-one-to-one and resamples the 32×32 tile through `Inverse` only when there is
-none. The fog cloud frames, never remastered, take the 3/2 variant in both
-executors; the queue overlay's dash and icon art take it through the same
-helper.
+**The 1.5× variants.** `formats.(*GAFFrame).Resampled(num, den)` is the general
+nearest resample — sizes `ceil(v·num/den)`, anchors rounded half away from zero,
+output pixel `j` reading source `floor(j·den/num)` — of which `Doubled` is the
+2/1 case. At 1.5× the client draws the provider's 2× variant resampled at 3/4
+when one exists (the remaster loses every fourth row and column, which reads
+better than the authored frame at 3/2 with its uneven columns) and the authored
+frame at 3/2 otherwise; both are built once per source frame and kept, in caches
+separate from the doubled ones. The detail tile set is decimated the same way,
+64×64 to 48×48, once per provider, and recorded on the terrain command in place
+of the 64×64 set: the record's tiles are always at the screen tile size of its
+scale, so an executor copies a detail tile one-to-one and resamples the 32×32
+tile through `Inverse` only when there is none. The fog cloud frames, never
+remastered, take the 3/2 variant in both executors. This variant path is
+**classic-only** from §16.2 on: modern's 1.5× is the 2× step shrunk by three
+quarters.
 
 ### 14.4 Load-time remaster — contract D3
 
 `internal/upscale` holds the two synthesizers that lived in
-`tools/mapupscale/patchmatchgo` and `tools/mapupscale/featupscale`, moved
-without changing what they compute: the terrain tool and the sprite tool
-become thin wrappers over the package, and on a fixed input the wrapper's
-output is byte-identical to the tool's output before the move — that is the
-move's gate. The premise and the algorithm are documented in
-`tools/mapupscale/patchmatchgo/README.md` and the sprite tool's README; this
-section records only the engine contract.
+`tools/mapupscale/patchmatchgo` and `tools/mapupscale/featupscale`; the tools are
+thin wrappers over the package, and on a fixed input the wrapper's output is
+byte-identical to the tool's output before the move. The premise and the
+algorithm are documented in those READMEs; this section records only the engine
+contract.
 
-* **Inputs and outputs.** Terrain: the tile set, the tile map, the palette
-  and the ALP table in; one 64×64 index tile per source tile out. Sprites: a
-  query bank, its example banks, the palette and the ALP in; a parallel 2×
-  bank out. Every option keeps the tools' shipped defaults; the engine passes
-  none.
+* **Inputs and outputs.** Terrain: the tile set, the tile map, the palette and
+  the ALP table in; one 64×64 index tile per source tile out. Sprites: a query
+  bank, its example banks, the palette and the ALP in; a parallel 2× bank out.
+  Every option keeps the tools' shipped defaults; the engine passes none.
 * **Determinism.** Seeds derive from tile and sample indices and tiles are
-  independent, so worker count does not change the result. The cache below
-  relies on that: a cached result and a fresh one are identical.
-* **Coverage.** Terrain, and the feature banks the map's plot cells name
-  through their feature definitions' `Filename`. The queries are the entries
-  those definitions name — the rest sequence and the burn, die and reclaim
-  sequences — not every entry of the bank: a bank can hold art no feature
-  uses (`trees.gaf` carries three 640×480 `treegrow` frames that cost 3 s
-  each, and frames of one entry are seeded from the previous frame so they
-  cannot run in parallel), and synthesizing it would triple the first load
-  for nothing on screen. The examples are the bank's own entries less the
-  tool's default exclusions (fire, explosion, smoke and reclaim art, whose
-  colours leak into idle art); the package expresses that as a filtered bank
-  passed in `examples`, while `skip` names entries not synthesized at all.
-  Shadow sequences — the entries a definition names as a shadow twin — are
-  flat two-colour art the synthesizer handles badly (README); they are
-  skipped and nearest-doubled by the client. An entry skipped and an entry
-  the definitions do not name both leave nil frame slots, which the client
-  doubles itself (D2). 3DO features and effect banks are not remastered.
-* **Cache.** `os.UserCacheDir()/nanolathe/upscale/<format version>/<key>`
-  where the key is a SHA-256 over the algorithm version and every input byte
-  (tiles, tile map, palette, ALP; or bank bytes, example bank bytes, palette,
-  ALP). One file per result with a magic and a version; a file that fails to
-  parse is recomputed and rewritten. The cache is derived retail art and is
-  never committed or shipped.
+  independent, so worker count does not change the result. The cache relies on
+  that: a cached result and a fresh one are identical.
+* **Coverage.** Terrain, and the feature banks the map's plot cells name through
+  their feature definitions' `Filename`. The queries are the entries those
+  definitions name — the rest sequence and the burn, die and reclaim sequences —
+  not every entry of the bank: a bank can hold art no feature uses, and
+  synthesizing it would lengthen the first load for nothing on screen. The
+  examples are the bank's own entries less the tool's default exclusions (fire,
+  explosion, smoke and reclaim art, whose colours leak into idle art); the
+  package expresses that as a filtered bank passed in `examples`, while `skip`
+  names entries not synthesized at all. Shadow sequences are flat two-colour art
+  the synthesizer handles badly; they are skipped and nearest-doubled by the
+  client. An entry skipped and an entry the definitions do not name both leave
+  nil frame slots, which the client doubles itself (D2). 3DO features and effect
+  banks are not remastered.
+* **Cache.** `os.UserCacheDir()/nanolathe/upscale/<format version>/<key>` where
+  the key is a SHA-256 over the algorithm version and every input byte. One file
+  per result with a magic and a version; a file that fails to parse is recomputed
+  and rewritten. The cache is derived retail art and is never committed or
+  shipped.
 * **When.** On the loader goroutine after the session composes, before the
   battle is adopted, for the frontend load and the `--map` direct route; the
-  capture route runs it inline and only at `--zoom 2`; a save restore adopts
-  on the render thread and runs it inline too, blocking on a cold cache once
-  for that map. Every windowed load pays it, even at 1×, because F9 can
-  raise the scale later. First load of a map
-  costs seconds (the READMEs' numbers: 2–5 s for terrain on twelve workers,
-  0.2–1 s per bank plus 10–20 ms per frame); a cached load costs a file read.
-  Progress is reported through the loading screen's progress callback under
-  its own family so the Terrain bar moves. A synthesis failure is reported on
-  stderr and the client falls back to nearest doubling; it never fails the load.
-* **Remaster status popup (Nanolathe presentation).** After 350 ms of remaster
-  work on the loading screen, a centered, non-interactive popup uses the
-  installed MSGBOX panel art, frontend font, and unscaled LIGHTBAR grille.
-  It labels preparation, map tiles, and sprites separately. Its extra bar
-  reports completed unique tiles during terrain synthesis, then frame progress
-  across the sorted sprite banks with equal weight per bank. This measures work,
-  not estimated time; the phase change may reset the percentage. Animated dots
-  and elapsed seconds continue during example preparation and cache I/O.
-  Each part reports its boundary even on a cache hit or fallback, and the
-  overall family's completion removes the popup. Quick cached loads finish
-  before the delay, and disabled remastering never opens it. The worker
-  publishes immutable phase/percentage snapshots; elapsed time and painting
-  remain on the render thread. This extends the existing loading screen only;
-  inline save restoration and capture paths retain their existing behavior.
-* **Switches.** `--auto-remaster` (default on) enables it; `--remaster <dir>`
-  is unchanged — hand-authored 1× overrides mounted above retail are what
-  the synthesizer then sees, and are remastered like retail art.
+  capture route runs it inline and only at `--zoom 2`; a save restore adopts on
+  the render thread and runs it inline too, blocking on a cold cache once for
+  that map. Every windowed load pays it, even at 1×, because F9 can raise the
+  scale later. First load of a map costs seconds; a cached load costs a file
+  read. Progress is reported through the loading screen's progress callback
+  under its own family so the Terrain bar moves. A synthesis failure is reported
+  on stderr and the client falls back to nearest doubling; it never fails the
+  load.
+* **Remaster status popup.** After 350 ms of remaster work on the loading
+  screen, a centered, non-interactive popup uses the installed MSGBOX panel art,
+  frontend font and unscaled LIGHTBAR grille. It labels preparation, map tiles
+  and sprites separately, and its extra bar reports completed unique tiles
+  during terrain synthesis, then frame progress across the sorted sprite banks
+  with equal weight per bank. This measures work, not estimated time; the phase
+  change may reset the percentage. Each part reports its boundary even on a
+  cache hit or fallback, and the family's completion removes the popup. Quick
+  cached loads finish before the delay, and disabled remastering never opens it.
+  The worker publishes immutable phase/percentage snapshots; elapsed time and
+  painting remain on the render thread.
+* **Switches.** `--auto-remaster` (default on) enables it; `--remaster <dir>` is
+  unchanged — hand-authored 1× overrides mounted above retail are what the
+  synthesizer then sees, and are remastered like retail art.
 
 ### 14.5 The modern executor at 2× — contract D4
 
-The executor replays the recorded coordinates, so most layers need nothing.
-The terrain pass builds one atlas per (tile set, scale): 64×64 tiles from the
-record's detail tiles when present, else the 32×32 tiles doubled, and samples
-it exactly as the native atlas at the native scale. The largest retail tile
-set is Lava & Two Hills at 11,561 tiles (a scan of all 276 retail maps; the
-first draft here named Painted Desert's 6,875): a 108×108 grid, 6,912² pixels
-at 64×64, 182 MB as the RGBA8 index texture the atlas is today. That is one
-page under this device's 16,384 maximum image size and three under a 4,096
-one, so the atlas pages against `ebiten.MaxImageSize()` and draws one pass
-per page. Storing the index in one channel would cut the texture to a
-quarter; that is a follow-up.
-Model geometry arrives in screen space and rasterizes as at 1×. The lit-point
-volume grows with s² and was already the second lever of §13.7; if 2× costs
-the 120 Hz budget, the disc becomes one quad with the disc test in the
-fragment, which is a follow-up, not part of this section.
+The executor replays recorded coordinates, so most layers need nothing. The
+terrain pass builds one atlas per (tile set, detail set, scale): 64×64 tiles from
+the record's detail tiles when present, else the 32×32 tiles doubled, sampled
+exactly as the native atlas at the native scale. The largest retail tile set is
+Lava & Two Hills at 11,561 tiles (a scan of all 276 retail maps), which is a
+108×108 grid and 6,912² pixels at 64×64 — one page under a 16,384 maximum image
+size and three under a 4,096 one, so the atlas pages against
+`ebiten.MaxImageSize()` and draws one pass per page. Storing the index in one
+channel would cut the texture to a quarter; that is a follow-up (§35). Model
+geometry arrives in screen space and rasterizes as at 1×.
 
 ### 14.6 Runtime switches
 
-These are the original detail-view controls, retained by classic. Modern
-uses the defaults and controls in §16.8.
-
 * **F9** cycles the view scale 1× → 1.5× → 2× → 1× about the viewport centre
-  (`ViewScale.Next`).
-* **F10** toggles the executor between classic and modern. The client
-  publishes the requested executor; the adapter switches at the next Update,
-  turning interpolation and the synthesized art off when classic takes over
-  (§14.3), and the retained screen bridges the swap. Neither key is a retail binding; retail's dispatcher does
-  not read them. F10 also updates the shell preference and persists only the
-  renderer field. The Nanolathe options page uses the same swap cleanup for
-  live previews and Cancel restoration (DESIGN_INTERFACE_HUD_INPUT §3.4.1).
-* `--zoom 1|1.5|2` sets the scale at battle entry and applies to captures
-  too; it replaces `--shot-zoom`, whose free fractional values are gone.
-  Left unset, the window opens at 1.5× when its framebuffer exceeds 800×600
-  in either dimension — the retail 640×480 and 800×600 modes stay native, a
-  1024×768 or 1080p window opens magnified — and a restart keeps the scale
-  the player was on. A capture and the battle benchmark take no such default:
-  unset is native there, so every existing capture and benchmark scene is
-  unchanged and a run's scale is always the one on its command line.
-  `--shot-focus` stays. `--fps` is §13.5. The battle benchmark accepts
-  `--zoom` and records it in the scene metadata as the factor (1, 1.5 or 2).
+  (`ViewScale.Next`) in classic; modern's cycle is §16.8.
+* **F10** toggles the executor between classic and modern. The client publishes
+  the requested executor; the adapter switches at the next Update, turning
+  interpolation and the synthesized art off when classic takes over (§14.3), and
+  the retained screen bridges the swap. Neither key is a retail binding. F10
+  also updates the shell preference and persists only the renderer field. The
+  Nanolathe options page uses the same swap cleanup for live previews and Cancel
+  restoration (DESIGN_INTERFACE_HUD_INPUT §3.4.1).
+* `--zoom` sets the scale at battle entry and applies to captures too; it
+  replaced `--shot-zoom`, whose free fractional values are gone. Classic accepts
+  only 1, 1.5 or 2; modern accepts any factor in the free range (§16.8). Left
+  unset, the window opens at 1.5× in classic when its framebuffer exceeds
+  800×600 in either dimension — the retail 640×480 and 800×600 modes stay native
+  — and a restart keeps the scale the player was on. A capture and the battle
+  benchmark take no such default: unset is native there, so every existing
+  capture and benchmark scene is unchanged and a run's scale is always the one on
+  its command line. `--shot-focus` stays. `--fps` is §13.5.
 
 ### 14.7 Verification
 
 1. **1× unchanged.** Every capture of the §6 matrix and the battle scene is
-   byte-identical to main on both executors; the 6000- and 54000-tick
-   fingerprints are unchanged.
-2. **The list relationship.** A test records one committed frame at scale 1
-   and again at scale 2 with the camera on the same world origin and asserts,
-   for every world-space command, that the scale-2 coordinates are the
-   scale-1 coordinates doubled about the beam origin and the extents doubled;
-   HUD commands are identical between the two lists. This is the automated
-   form of the §14.2 audit.
-3. **Picking.** For every screen pixel of a viewport at scale 2, the
-   round trip screen → world → screen lands on the pixel's own 2×2 block, and
-   a drag rectangle at scale 2 converts to the same world rectangle as the
-   scale-1 rectangle over the same world.
+   byte-identical on both executors; the 6000- and 54000-tick fingerprints are
+   unchanged.
+2. **The list relationship.** A test records one committed frame at scale 1 and
+   again at scale 2 with the camera on the same world origin and asserts, for
+   every world-space command, that the scale-2 coordinates are the scale-1
+   coordinates doubled about the beam origin and the extents doubled; HUD
+   commands are identical between the two lists. This is the automated form of
+   the §14.2 audit.
+3. **Picking.** For every screen pixel of a viewport at scale 2, the round trip
+   screen → world → screen lands on the pixel's own 2×2 block, and a drag
+   rectangle at scale 2 converts to the same world rectangle as the scale-1
+   rectangle over the same world.
 4. **Parity at 2×.** `--shot-renderer both --zoom 2` on the matrix: the two
-   executors differ only in the model raster approximation of §5.1, reported
-   as a count, terrain, sprites, fog and fills identical.
-5. **The remaster move.** The terrain tool's output on one exported map, and
-   the sprite tool's output on one bank, are byte-identical before and after
-   the move to the package; the cache round trip returns the computed bytes.
-6. **Viewed.** 2× captures with the remaster and with nearest doubling,
-   beside the 1× capture of the same tick, at least the M7/M8 battle scenes
-   and one sprite-heavy map; then the window itself, both executors, both
-   scales, toggled with F9 and F10 during motion.
-
-### 14.8 Work units
-
-| Unit | Scope | Files owned | Gate |
-|---|---|---|---|
-| U1 upscale package (landed) | move both synthesizers into `internal/upscale` with the tools as wrappers; the cache; the bank and tile-set APIs of §14.4 | `internal/upscale/*` (new), `tools/mapupscale/patchmatchgo/*`, `tools/mapupscale/featupscale/*` | byte-identical tool output before and after (9 of 9 files on `ac01` and `trees`); cache round trip; first load 1.35 s wall for a 1,984-tile map, 3 ms cached |
-| D1 client view scale (landed) | integer camera scale; every world-space layer of §14.2; the detail-art provider and nearest-doubled fallback of §14.3; terrain record with scale and detail tiles; `--zoom` replaces `--shot-zoom` | `internal/camera/*`, `internal/client/*`, `internal/render/fog*.go`, `internal/drawlist/*`, `formats/gaf_variant.go` (new), `cmd/nanolathe/shot.go`, `cmd/nanolathe/flags.go` | §14.7 items 1–3; a classic 2× capture with every layer in place, viewed |
-| D4 modern executor (landed) | detail tile atlas per scale; everything else verified rather than changed | `internal/platform/gpurender/*` | §14.7 items 1 and 4 |
-| W1 wiring (landed) | load-time remaster on the loader goroutine with the cache and progress; the provider installed at battle entry and for captures; F9/F10; `--auto-remaster`; benchmark `--zoom` | `cmd/nanolathe/*`, `internal/platform/ebitenapp/app.go`, `docs/BATTLE_BENCHMARK.md` | §14.7 items 5 and 6; first-load and cached-load times reported |
-
-U1 and D1 are independent and run in parallel. D4 and W1 follow D1 (D4 needs
-the terrain record's scale and detail tiles; W1 needs the provider API) and
-run in parallel with each other; W1 also needs U1.
-
-### 14.9 Outcome
-
-All four units landed 2026-09-09 (main `dd8c9337`). Measured:
-
-| | value |
-|---|---|
-| 1× captures, both executors, four scenes | byte-identical to main before the round |
-| First load with the remaster (terrain + feature banks) | Ashap Plateau 4.8 s, Great Divide 2.2 s, Arm mission 1 2.5 s |
-| Cached load | 13–90 ms |
-| 2× classic-vs-modern diff, Ashap Plateau / Great Divide | 1.4% / 1.9% of pixels, all fog-table and ALP rounding of the §13.3 composite (max channel delta 11–92); at 1× the same scenes differ by 0.6% / 1.2% with the §5.1 model raster (max delta 236–240) |
-| 120 TPS modern benchmark, 1× | cadence 8.33 ms median, 71% on the floor (unchanged) |
-| 120 TPS modern benchmark, 2× | cadence 8.86 ms median, 48% on the floor; Submit 4.1 ms against 2.5 ms |
-| Largest 64×64 tile atlas | Lava & Two Hills, 6,912² pixels, 182 MB RGBA8 |
-
-`--shot-renderer both` records the classic indexed image and the modern
-geometry list separately, from one unchanged committed frame, camera and
-presentation configuration. The modern half uses the same geometry-only
-recording path as `--shot-renderer modern`; it never replays a
-classic-inclusive packet or falls back to CPU model planes. This keeps the
-combined route a valid parity tool after cached/live model composition.
-
-Owed: a human look at the window with `--renderer=modern --zoom 2`, F9 and
-F10 during motion, and at projectiles, effects, halos and health bars at
-2×, which no capture scene produced.
+   executors differ only in the model raster approximation of §5.1 and the
+   blended Enhanced pixels of §13.3, reported as counts; terrain, sprites, fog
+   and fills are identical in structure.
+5. **The remaster.** The terrain tool's output on one exported map, and the
+   sprite tool's output on one bank, are byte-identical before and after the move
+   to the package; the cache round trip returns the computed bytes.
+6. **Viewed.** 2× captures with the remaster and with nearest doubling, beside
+   the 1× capture of the same tick, at least the battle scenes and one
+   sprite-heavy map; then the window itself, both executors, both scales,
+   toggled with F9 and F10 during motion.
 
 ## 15. Trails: Enhanced ground marks
 
-### 15.1 Decision
-
 Mobile ground units leave fading marks on the terrain: alternating footprints
 for legged units, a pair of track segments for tracked ones. Retail leaves no
-marks, so this is a Nanolathe presentation feature under the Enhanced umbrella
-of §14.3: on while the modern executor presents, absent from Original, and
-never a simulation input [I6]. The classic executor is unchanged and stays
-the byte-exact reference.
-
-The marks are geometry, not art: an oval and a segment whose coverage the
-shader evaluates, darkening whatever terrain is under them. There is nothing
-to author and the look is right on every tile set, because the terrain's own
-colour is what fades.
+marks, so this is a Nanolathe presentation feature — on while the modern
+executor presents, absent from Original, never a simulation input [I6]. The
+marks are geometry, not art: an oval and a segment whose coverage the shader
+evaluates, darkening whatever terrain is under them, so there is nothing to
+author and the look is right on every tile set because the terrain's own colour
+is what fades. The Marks switch gates the layer (§30).
 
 ### 15.2 Placement — contract T1
 
-`internal/client/trails.go` keeps one ring of at most 4,096 marks and one
-tracker per unit, keyed by the publication identity the orientation cache
-uses and pruned with the live unit set. Once per committed tick, only while
-Enhanced presents, every unit the classifier accepts is compared with the
-point where it last laid a mark:
+`internal/client/trails.go` keeps one ring of at most 4,096 marks and one tracker
+per unit, keyed by the publication identity the orientation cache uses and pruned
+with the live unit set. Once per committed tick, only while Enhanced presents,
+every unit the classifier accepts is compared with the point where it last laid a
+mark:
 
-- **Class.** The FBI's `TEDClass` word decides: `KBOT` and `COMMANDER` lay
-  feet, `TANK` lays tracks, the fixed and flying classes lay nothing. The
-  movement class names describe footprint size and terrain rules (most kbots
-  ride `TANKSH2`), so they only exclude: a `HOVER` or `BOAT` class lays
-  nothing. `CNSTR` and `SPECIAL` cover both walkers and vehicles and fall back
-  to the model: a piece named for a leg makes it a walker. The class is
-  cached per definition.
+- **Class.** The FBI's `TEDClass` word decides: `KBOT` and `COMMANDER` lay feet,
+  `TANK` lays tracks, the fixed and flying classes lay nothing. The movement
+  class names describe footprint size and terrain rules (most kbots ride
+  `TANKSH2`), so they only exclude: a `HOVER` or `BOAT` class lays nothing.
+  `CNSTR` and `SPECIAL` cover both walkers and vehicles and fall back to the
+  model: a piece named for a leg makes it a walker. The class is cached per
+  definition.
 - **Gate.** The unit must be mobile (BMcode), on the ground (mode mirror 1),
-  complete, within two world pixels of the terrain under it, above sea level,
-  and visible to the local player by the painter's own gate: a trail is the
-  memory of a walk that was watched, never a sensor. A unit that fails the
-  gate restarts its stride where it next qualifies.
-- **Stride.** Feet every 10 world pixels, tracks every 8, laid along the
-  straight line from the last mark to the current position, several per tick
-  if the unit is fast. A step above eight strides is a move (factory exit,
-  transport drop, restore), not a walk, and bridges nothing. Feet alternate
-  sides at each mark.
-- **Age.** A mark lives 300 committed ticks and its strength fades linearly
-  to zero over that life. Ages are tick differences, never wall time.
+  complete, within two world pixels of the terrain under it, above sea level, and
+  visible to the local player by the painter's own gate: a trail is the memory of
+  a walk that was watched, never a sensor. A unit that fails the gate restarts
+  its stride where it next qualifies.
+- **Stride.** Feet every 10 world pixels, tracks every 8, laid along the straight
+  line from the last mark to the current position, several per tick if the unit
+  is fast. A step above eight strides is a move (factory exit, transport drop,
+  restore), not a walk, and bridges nothing. Feet alternate sides at each mark.
+- **Age.** A mark lives 300 committed ticks and its strength fades linearly to
+  zero over that life. Ages are tick differences, never wall time.
 
 ### 15.3 Recording and drawing — contract T2
 
 Recording projects each live mark through the view transform of §14.2 at the
 terrain height under it, culls to the viewport plus a margin, and records the
-whole frame as ONE `drawlist.Trails` batch between the terrain record and
-strip 0, so features, shadows, units and the fog composite draw over it. The
-batch rides the optional `drawlist.TrailSink` hook: a sink without it (the
-classic executor, every test collector) replays the frame unchanged.
-
-Mark geometry at view scale s, with the direction of travel mapped straight
-onto the screen plane:
+whole frame as ONE `drawlist.Trails` batch between the terrain record and strip
+0, so features, shadows, units and the fog composite draw over it. The batch
+rides the optional `drawlist.TrailSink` hook, so a sink without it replays the
+frame unchanged.
 
 | mark | centre | half-length | half-width | peak darkening |
 |---|---|---|---|---|
 | footprint | ±2·FootX·s px across the path, alternating | 4·s px along the path | 2·s px | 0.4 |
 | track (two per mark) | ±(4·FootX + 2)·s px across the path | 4·s px (the stride, so segments join) | 1.75·s px | 0.3 |
 
-The modern executor draws the batch as one destination command over the
-union of its marks under the row families' scale blend (§13.3): each mark is
-a rotated quad whose fragment is `1 − strength × coverage`, the coverage a
-soft oval for a footprint and a soft-sided, hard-ended segment for a track,
-evaluated by the scene destination shader's `destOpTrail` from the quad's
-local coordinates. Multiplies commute, so marks that overlap need no phase
-ordering between them, and the scheduler still places the batch after the
-terrain it darkens and before everything drawn over it.
-
-The capture route observes every tick it advances (`Client.ObserveCommittedTick`)
-so a `--shot` shows the marks the window would.
+The modern executor draws the batch as one destination command over the union of
+its marks under the row families' scale blend (§13.3): each mark is a rotated
+quad whose fragment is `1 − strength × coverage`, the coverage a soft oval for a
+footprint and a soft-sided, hard-ended segment for a track, evaluated from the
+quad's local coordinates. Multiplies commute, so marks that overlap need no
+phase ordering between them, and the scheduler still places the batch after the
+terrain it darkens and before everything drawn over it. The capture route
+observes every tick it advances (`Client.ObserveCommittedTick`) so a `--shot`
+shows the marks the window would.
 
 ### 15.4 Verification
 
-- `internal/client/trails_test.go`: the classifier table; a walker laying two
-  alternating footprints along its step, nothing on first sighting, nothing
-  re-recording the same tick, fading and expiry, nothing in Original; and no
-  marks for airborne, elevated or moved units.
-- `internal/platform/gpurender/trails_test.go`: the optional-sink replay, and
-  the device fixture (`NANOLATHE_GPU_DEVICE_TEST=1`): a full-strength
-  footprint darkens its centre to near zero and leaves the field untouched
-  beyond its half-width and half-length; a half-strength track halves the
-  field along its whole length and not beside or past it.
-- Captures: `--renderer=modern --shot-renderer=modern` at 1× and 2× on the
-  seeded Ashap Plateau scene, viewed.
-- 120 TPS modern benchmark at 1× against main on the same machine state:
-  Record and Submit within noise.
+`internal/client/trails_test.go` locks the classifier table; a walker laying two
+alternating footprints along its step; nothing on first sighting; nothing
+re-recording the same tick; fading and expiry; nothing in Original; and no marks
+for airborne, elevated or moved units.
+`internal/platform/gpurender/trails_test.go` locks the optional-sink replay and,
+on a device, that a full-strength footprint darkens its centre to near zero and
+leaves the field untouched beyond its half-width and half-length, and that a
+half-strength track halves the field along its whole length and not beside or
+past it.
 
 ## 16. Smooth zoom and the strategic view (modern)
 
 ### 16.1 Decision
 
-The modern executor's view scale becomes a free factor. §14's three half steps
-stay exactly what they are for the **classic** executor — 1×, 1.5× and 2×,
-switched by F9 and `--zoom`, with the 1.5× variant art set and nothing else —
-and nothing in this section changes a classic pixel. In the modern executor the
-factor is continuous: the mouse wheel over the battle viewport moves it, it
-eases toward its target on the host Update grid, it snaps onto a rest step when
-the wheel goes quiet near one, and below half scale the world becomes the
-**strategic view** — terrain, fog and selection with the units drawn as
-markers.
-
-This is the §5.2 item, and it is a Nanolathe presentation feature under the
-Enhanced umbrella. Retail has one world scale and no wheel zoom; nothing here
-is a retail finding, and the simulation cannot tell what the factor is [I6].
-
-The invariant everything below rests on:
+The modern executor's view scale is a free factor. §14's three half steps stay
+exactly what they are for the **classic** executor, and nothing in this section
+changes a classic pixel. In the modern executor the factor is continuous: the
+mouse wheel over the battle viewport moves it, it eases toward its target on the
+host Update grid, and below half scale the world becomes the **strategic view**
+— terrain, fog, features and selection with the units drawn as icons. Retail has
+one world scale and no wheel zoom; the simulation cannot tell what the factor is
+[I6]. The invariant everything rests on:
 
 > **The recorder emits at an integer step; the executor scales what it emitted.**
 
 At 1× and 2× the two are the same number, the executor's transform is the
-identity, and the output is byte-for-byte what the build before this section
-composed. That is what keeps the §6 parity gate intact while the view in
-between them is free.
+identity, and the output is byte-for-byte what the build without this section
+composed. That is what keeps the §6 parity gate intact while the view in between
+is free.
 
 ### 16.2 The factor and the step — contract Z1
 
@@ -3170,30 +2226,20 @@ factors (1024, 1536, 2048) its `Project`, `Inverse` and `Px` answer exactly what
 the matching half step's own arithmetic answers — the unit is 1/1024 rather than
 16.16 precisely so those three are exact small integers.
 
-`Camera` now carries both:
+`Camera` carries both. `Scale` is the **record step** the recorder projects at:
+`WorldToScreen`, the terrain record, the detail-art selection and the fog op
+builder read it and are unchanged. `Zoom` is the **live factor** the player sees:
+`EffectiveView`, `clampInsets`, `BattleView`, `Drag`, `ScreenToWorld` and the
+minimap's viewport rectangle read it, because they measure the view in world
+pixels and the view is what is on screen. A zero `Zoom` reads as the step's own
+factor, which is the classic executor's permanent state.
 
-* `Scale` is the **record step** the recorder projects at. `WorldToScreen`,
-  the terrain record, the detail-art selection and the fog op builder all read
-  it and are unchanged.
-* `Zoom` is the **live factor** the player sees. `EffectiveView`, `clampInsets`,
-  `BattleView`, `Drag`, `ScreenToWorld` and the minimap's viewport rectangle all
-  read it, because they measure the view in world pixels and the view is what is
-  on screen.
-
-A zero `Zoom` reads as the step's own factor, so a camera that never sets one
-behaves exactly as it did before this section — which is the classic executor's
-permanent state.
-
-The record step follows the factor for the modern executor (`Zoom.Step`): the
-2× step above 1×, the native step at or below it. The 1.5× variant art of §14.3
-is therefore a **classic-only** path from here on: modern's 1.5× is the 2× step
-shrunk by three quarters. `Camera.AtRestStep` reports the identity case.
-
-The classic executor does not derive its step from a factor: a factor handed to
-it is one of the three views and is set through `SetScaleAbout`, which writes
-the step and the factor together (`ViewScaleForZoom` names the step). Deriving
-it instead was a defect caught by the capture gate — it turned a classic 1.5×
-capture into a 2× one.
+The record step follows the factor for the modern executor (`Zoom.Step`): the 2×
+step above 1×, the native step at or below it. The classic executor does not
+derive its step from a factor: a factor handed to it is one of the three views
+and is set through `SetScaleAbout`, which writes the step and the factor
+together (`ViewScaleForZoom` names the step). Deriving it instead was a defect
+the capture gate caught — it turned a classic 1.5× capture into a 2× one.
 
 ### 16.3 The transform and the record extent — contract Z2
 
@@ -3201,120 +2247,98 @@ capture into a 2× one.
 `drawlist.WorldSpace` marker carrying the factor, the step, the record extent
 and the battle viewport. A positive `Factor` carries the unquantized live zoom,
 overriding `Zoom` for GPU replay; `OffsetX` and `OffsetY` carry framebuffer
-translation after scaling. Zero extra fields preserve the prior capture path.
-It reaches an executor through the optional
-`drawlist.WorldSink` interface, exactly as the trail family reaches one, so the
-classic executor and every existing fixture are unaffected. The region opens
-after the clear and closes before the chrome; the strategic marker layer sits
-between them.
+translation after scaling. It reaches an executor through the optional
+`drawlist.WorldSink`, so the classic executor and every existing fixture are
+unaffected. The region opens after the clear and closes before the chrome; the
+strategic marker layer sits between them.
 
 **The rule the region encodes.** A draw positioned from WORLD coordinates
 belongs inside a world region; a draw positioned from POINTER or framebuffer
 coordinates belongs outside one. A pick test compares like with like: presented
 pointer against presented positions, or record pointer (`ScreenToRecord`)
-against record positions. The first build of this section broke the rule in
-both directions and a play test found each:
+against record positions. Two consequences worth naming, because the first build
+broke the rule in both directions:
 
-* The **drag-selection rectangle** takes the pointer's own framebuffer corners
-  and was recorded before the close marker, so the executor scaled it and the
-  rubber band came away from the cursor. It now records after the close, and its
-  clip is the framebuffer's rather than the record extent's.
+* The **drag-selection rectangle** takes the pointer's own framebuffer corners,
+  so it records after the close marker and its clip is the framebuffer's rather
+  than the record extent's.
 * The **build ghost** and the **order-queue overlay** are world-positioned but
-  are composed in the UI stage, after the close marker, so they were left at
-  record coordinates while the world under them shrank — at half scale the ghost
-  sat twice as far from the framebuffer origin as its site. The client therefore
-  exposes `BeginWorldOverlay`/`EndWorldOverlay`, a **second** world region the UI
-  stage brackets those two with. The executor already submits its schedule at
-  every boundary, so a second region costs two more submissions on the frames
-  that open one, and the battle opens one only when a placement is armed or
-  Shift is held.
+  composed in the UI stage, after the close marker, so the client exposes
+  `BeginWorldOverlay`/`EndWorldOverlay`, a **second** world region the UI stage
+  brackets those two with. The executor submits its schedule at every boundary,
+  so a second region costs two more submissions on the frames that open one, and
+  the battle opens one only when a placement is armed or Shift is held. Inside an
+  overlay region the UI helpers that bake a framebuffer bound into the recorded
+  command — `UIBlit`'s clip and `UIText`'s default control width — take the
+  record extent instead.
 
-Inside an overlay region the UI helpers that bake a framebuffer bound into the
-recorded command — `UIBlit`'s clip and `UIText`'s default control width — take
-the record extent instead, so a world overlay near the right or bottom edge is
-not clipped away before the executor has shrunk it. At a rest factor the two
-extents are equal, so none of this changes a composed pixel there.
+**The transform.** Inside the region the scheduler scales every rectangle it
+places and every vertex it appends by *factor / step's factor*, about the
+**surface origin**. The integer recording origin maps to the framebuffer origin
+before the subpixel correction; during interpolated presentation each axis also
+receives `(recordOrigin − preciseOrigin) × preciseZoom` framebuffer pixels of
+translation. Positions, conservative overlap bounds and inverse shader sampling
+use this same affine transform; lengths receive only its scale. The precise
+factor is never above the step's, so the transform only ever shrinks, though
+translation can arm it even at a rest scale. It is applied at the scheduler's
+intake, so the overlap tests that decide a command's phase compare what actually
+lands on the composite.
 
-**The transform.** Inside the region the modern executor's scheduler scales
-every rectangle it places and every vertex it appends by *factor / step's
-factor*, about the **surface origin**. The integer recording origin maps to the framebuffer origin before the
-subpixel correction. During interpolated presentation, each axis also receives
-`(recordOrigin − preciseOrigin) × preciseZoom` framebuffer pixels of translation.
-Positions, conservative overlap bounds and inverse shader sampling use this
-same affine transform; lengths receive only its scale. The precise factor is never above the step's, so the transform only ever
-shrinks. Translation can arm the transform even at native or detail scale.
-
-It is applied at the scheduler's intake — `beginBlended`, `beginPoint`, `quad`
-and `quadCorners` — so the overlap tests that decide a command's phase compare
-what actually lands on the composite. At a rest step it is disarmed and every
-device call is the one the build before this section made.
-
-**The record extent.** Below the step the recorded world has to cover more
-pixels than the framebuffer has: `recordW = Project_step(Inverse_factor(width))`
-plus a two-step pad for the rounding of the two conversions, and the same on the
-other axis. `internal/client` keeps it in `recordW`/`recordH`, refreshed once per
+**The record extent.** Below the step the recorded world has to cover more pixels
+than the framebuffer has: `recordW = Project_step(Inverse_factor(width))` plus a
+two-step pad for the rounding of the two conversions, and the same on the other
+axis. `internal/client` keeps it in `recordW`/`recordH`, refreshed once per
 recorded frame, and **equal to the framebuffer whenever the factor is on the
-step** — which is always, in classic. Every world emission site of §14.2's D1
-inventory clips against it; interface sites keep `c.width`/`c.height`, because
-the chrome is drawn in framebuffer pixels at every factor. The modern executor
-clips world commands against the extent the marker carries (`clipW`/`clipH`) and
-interface commands against the framebuffer.
-
-The classic byte writer for point batches bounds its own store, because a
-`--shot-renderer both` capture replays one list through both executors and the
-list may be recorded past the framebuffer.
+step** — which is always, in classic. Every world emission site clips against
+it; interface sites keep `c.width`/`c.height`. The modern executor clips world
+commands against the extent the marker carries and interface commands against
+the framebuffer. The classic byte writer for point batches bounds its own store,
+because a `--shot-renderer both` capture replays one list through both executors
+and the list may be recorded past the framebuffer.
 
 **Fog.** The fog composite is the one family the generic transform cannot carry.
-It reads the pre-fog copy of the composite 1:1 under each fragment, so its
-source coordinates have to equal its destination coordinates in screen space,
-and its shader recovers a fog cell from the fragment's own position, so it has
-to be told which record pixel that position is. Its region is therefore
-transformed by hand, the generic transform is held off for that one command, and
-the screen-per-record factor rides the colour lane the fog quad never used. The
-shader's cell lattice and atlas tile stay in record pixels; its dither checker
-stays a test on the destination pixel, and so stays one screen pixel wide, as it
-already did at every view scale.
+It reads the pre-fog copy 1:1 under each fragment, so its source coordinates have
+to equal its destination coordinates in screen space, and its shader recovers a
+fog cell from the fragment's own position, so it has to be told which record
+pixel that position is. Its region is therefore transformed by hand, the generic
+transform is held off for that one command, and the screen-per-record factor
+rides the colour lane the fog quad never used. The shader's cell lattice and
+atlas tile stay in record pixels; its dither checker stays a test on the
+destination pixel, and so stays one screen pixel wide.
 
-**Lit points.** The explosion and muzzle-flash halos are point batches that
-READ the destination and brighten it through an `LHT` row, so a screen pixel
-must receive each batch at most once. Scaled quad by quad, a shrinking
-transform lands two or three record points on one screen pixel and brightens it
-two or three times, and the halo drew as a lattice of over-lit pixels at the
-1.5× default. The executor therefore resamples a lit batch under the transform:
-each screen pixel is lit by exactly the record point nearest sampling chooses
-for its centre, the same rule the terrain and sprites follow, and the point is
-placed in screen pixels with the transform held off. At a rest step the batch
-takes the path it always took.
+**Lit points.** A lit point READS the destination and brightens it through an
+LHT row, so a screen pixel must receive each batch at most once. Scaled quad by
+quad, a shrinking transform lands two or three record points on one screen pixel
+and brightens it two or three times, which drew the halo as a lattice of over-lit
+pixels. The executor therefore **resamples** a lit batch under the transform:
+each screen pixel is lit by exactly the record point nearest sampling chooses for
+its centre, and the point is placed in screen pixels with the transform held off.
+The forward map is the **ceil** form, `sx = ceil(x·k + ox − 0.5)`, at every
+offset rather than only at zero: selecting by `floor(x·k)` instead lost whole
+screen columns for a non-dyadic factor, because the record point the filter keeps
+for screen pixel `s` — `floor((s + 0.5 − o)/k)` — can satisfy `floor(x·k) < s`,
+so no point ever claimed `s` and the halo showed unlit stripes. With the ceil
+form the two are inverse for every factor at or below one: `floor((s+0.5−o)/k) =
+x` implies `x·k ≤ s+0.5−o < (x+1)·k`, so `ceil(x·k + o − 0.5)` is at most `s`
+and, since `k ≤ 1`, greater than `s−1` — that is, exactly `s`. At a rest step the
+batch takes the path it always took.
 
 **Sampling — contract Z10.** A palette index cannot be interpolated, so every
 index-space lookup is a nearest texel fetch and stays one (C-G4). Filtering, when
 it happens, happens **after** the palette resolve: four texels, each resolved
-through PAL, blended in colour.
-
-The terrain takes that path whenever the world transform is not the identity.
-One screen pixel then covers more than one tile texel, and a nearest fetch picks
-an arbitrary one of them, so the map's noise crawls as the view eases and
-sparkles between adjacent factors. The four taps ride the tile atlas's own
-border, so they need no clamp of their own, and the choice rides a vertex lane
-(`Custom0` of `sceneOpTerrain`) rather than a second shader, so the terrain still
-merges into the frame's own opaque run. At a rest step the lane is zero and the
-fetch is the nearest one this pass has always made, which is what keeps the §6
-parity gate exact.
-
-Measured on the seeded Ashap Plateau scene at 1024×768 over a 200×150 terrain
-region: the mean absolute difference between captures at 0.70× and 0.71× falls
-from 10.75 to 7.83, and the region's high-frequency energy — each pixel against
-its own 3×3 mean, which is what "sparkle" is — from 7.12 to 4.42, a 38%
-reduction. The cost did not register: submission time is unchanged (1.35 ms
-against 1.37 ms at 0.7×) because the lane is one more float, and the draw cadence
-sits on the display's 16.68 ms floor both ways at 1024×768 **and** at 3840×2160,
-so the extra fragment work has headroom to spare on a Metal host.
-
-Sprites, model commits and the fog atlas stay nearest. `TODO(question)`: a keyed
-source cannot be blended the same way — the four taps straddle the colour key, so
-the blend has to weight by coverage and hand the composite a fractional alpha,
-which is an antialiased sprite edge and a look to approve rather than a
-correctness fix. Whether the Enhanced view wants that is a human call.
+through PAL, blended in colour. The terrain takes that path whenever the world
+transform is not the identity, because one screen pixel then covers more than one
+tile texel and a nearest fetch picks an arbitrary one, so the map's noise crawls
+as the view eases and sparkles between adjacent factors. The four taps ride the
+tile atlas's own border, so they need no clamp of their own, and the choice rides
+a vertex lane rather than a second shader, so the terrain still merges into the
+frame's own opaque run. At a rest step the lane is zero and the fetch is the
+nearest one this pass has always made, which is what keeps the §6 parity gate
+exact. Sprites, model commits and the fog atlas stay nearest. `TODO(question)`:
+a keyed source cannot be blended the same way — the four taps straddle the colour
+key, so the blend would have to weight by coverage and hand the composite a
+fractional alpha, which is an antialiased sprite edge and a look to approve
+rather than a correctness fix.
 
 **One screen pixel, exactly one.** A world quad that would shrink below one
 screen pixel is given a span of exactly 1.0, not "at least one". The world is
@@ -3324,210 +2348,127 @@ centres and vanish at an arbitrary subset of factors; with a floor that rounded
 up any further they would cover one centre at some factors and two at others, and
 a one-pixel line would flicker in width as the view eased. A span of exactly 1.0
 contains exactly one pixel centre wherever it starts. Nothing already wider is
-touched, so the terrain's tiles and every sprite still tile the plane exactly and
-seamlessly, and since the transform only ever shrinks, a one-record-pixel
-primitive can never arrive wider than one screen pixel to begin with.
+touched, and since the transform only ever shrinks, a one-record-pixel primitive
+can never arrive wider than one screen pixel.
 
-**Every atlas cell carries a border — contract Z9.** Nearest sampling is exact
-only while the source coordinate lands strictly inside the quad's source
-rectangle, and under the transform it does not always. The rectangle's source
-span is longer than its destination span, so the fragment nearest the far edge
-maps to within a fraction of a texel of the source rectangle's far edge, and the
-interpolator's own rounding is enough to floor it one texel over. Whether it does
-depends on where the quad's screen edge falls relative to a pixel centre, which
-is a function of the factor and of the camera modulo the tile — so it happens for
-a periodic subset of tile columns at some factors and for none at others. That is
-the intermittent **tile seam** the play test reported, and the same read at a
-sprite's or a model slot's edge is the stray foreign pixel beside it.
-
-The fix is a border of duplicated edge texels around every packed entry, which is
-the clamp the sampler will not do for us: Ebitengine does not confine a sample to
-a sub-rectangle of a bound image, and a per-quad clamp would need four more
-vertex lanes than the scene shader has. Three atlases carry one:
-
-* the **tile atlas** pads each cell by one texel of the tile's own edge
-  (`tileAtlasPad`), at 13% of the atlas at the native tile and 6% at the detail
-  one;
-* the **scene atlas** reserves and fills the same one-texel border around every
-  packed GAF frame, glyph strip, PCX and surface (`sceneAtlasPad`);
-* the **model slot atlas** leaves a two-texel gutter around every slot
-  (`modelSlotGutter`, a multiple of `modelSlotAlign` so slot origins stay even
-  [03 R-REN-03A §7]). The page is cleared to the composition background over its
-  whole used extent, and the commit skips that index, so a read into the gutter
-  is the skip it should be.
-
-An entry's recorded placement stays its first **inner** texel in all three, so no
-recorded source rectangle changes and a rest step composes exactly what it
-composed before. Measured on the seeded Ashap Plateau scene at 1024×768: the
-borders change nothing at 1× or 2× and nothing at most factors, and they remove
-between three and 2,314 pixels at 0.75×, 0.78×, 0.8×, 0.82×, 0.92×, 1.25× and
-1.75× — every one of them a run along a tile, sprite or slot edge.
+Atlas borders (contract Z9) are in §11.2 "Every atlas cell carries a border",
+because they serve every scale, not only this one.
 
 ### 16.4 Picking — contract Z3
 
 Screen to world is `cameraOrigin + floor((screen − viewportOrigin) / factor)`,
 integer throughout: the exact inverse of the projection at a rest factor and the
-obvious floor in flight. Every pointer conversion already funnels through
+obvious floor in flight. Every pointer conversion funnels through
 `Camera.ScreenToWorld`, so the terrain cursor, order targets and the minimap
-follow it for nothing.
-
-The two pick tests that cannot be expressed as a world point — the hover hull
-polygon and the drag rectangle's containment test — compare the pointer against
-corners produced by `WorldToScreen`, which projects at the **record step**.
-`Camera.ScreenToRecord` bridges them: it composes the live inverse with the
-record projection, and it is the identity at every rest factor, so nothing about
-picking changes there.
+follow it for nothing. The two pick tests that cannot be expressed as a world
+point — the hover hull polygon and the drag rectangle's containment test —
+compare the pointer against corners produced by `WorldToScreen`, which projects
+at the **record step**; `Camera.ScreenToRecord` bridges them by composing the
+live inverse with the record projection, and it is the identity at every rest
+factor.
 
 ### 16.5 Zoom about a point — contract Z4
 
 `Camera.SetZoomAbout(mx, my, f)` is `SetScaleAbout` generalized: the world point
 under (mx, my) is computed through the old factor, the new origin is that point
 less the same quantity at the new factor, the record step is re-derived, and the
-camera is clamped. The world point under the anchor does not move.
+camera is clamped. The world point under the anchor does not move. The anchor is
+in **beam pixels** — the framebuffer point plus the viewport offset (128, 32) —
+which is the space `ScreenToWorld` takes, because the recorder stores a world
+point at its beam position less that offset [03 §2.5]. The battle's zoom writers
+convert the pointer, the viewport centre and `--shot-focus` from framebuffer
+pixels at one seam. Anchoring on the raw framebuffer point instead holds the
+world 128/f pixels left of and 32/f above the pointer fixed, and the map slides
+under the cursor.
 
-The anchor is in **beam pixels** — the framebuffer point plus the viewport
-offset `(128, 32)` — which is the space `ScreenToWorld` takes, because the
-recorder stores a world point at its beam position less that offset [03 §2.5].
-The battle session's zoom writers (`beamAnchor` in `cmd/nanolathe`) convert the
-pointer, the viewport centre and `--shot-focus` from framebuffer pixels at one
-seam, so the test of the contract is the one that matters to the player: a
-world point drawn at framebuffer pixel P before the zoom is drawn at P after
-it. The first build of this section anchored on the raw framebuffer point,
-which held the world 128/f pixels left of and 32/f above the pointer fixed
-instead, and the map slid under the cursor.
-
-**Continuous Enhanced presentation.** The 30 Hz zoom controller still owns
-input targets and the existing ease. Its integer camera remains available to
-ordinary input and clamp consumers. Beside that origin, zoom operations retain
-the precise anchor using `origin + anchor/oldZoom − anchor/newZoom`; a clamped
-axis takes the integer clamp result. Another writer changing the integer origin
-or factor invalidates the retained fraction. This is Enhanced implementation
-policy, not a retail behavior finding.
-
-Every host sample carries `(originX, originZ, zoom)`. At presentation fraction
-`t`, use `zoom = lerp(previousZoom, currentZoom, t)` and, for each axis,
+**Continuous Enhanced presentation.** The 30 Hz zoom controller owns input
+targets and the ease, and its integer camera remains available to ordinary input
+and clamp consumers. Beside that origin, zoom operations retain the precise
+anchor using `origin + anchor/oldZoom − anchor/newZoom`; a clamped axis takes the
+integer clamp result, and another writer changing the integer origin or factor
+invalidates the retained fraction. Every host sample carries
+`(originX, originZ, zoom)`. At presentation fraction `t`,
+`zoom = lerp(previousZoom, currentZoom, t)` and, for each axis,
 `origin = lerp(previousOrigin × previousZoom, currentOrigin × currentZoom, t) / zoom`.
-This interpolates the complete screen transform: a world point anchored at both
-endpoints stays anchored throughout the transition. Independently blending the
-origin and zoom would introduce a curved drift. The former origin-only blend
-paired the new 30 Hz zoom with the old camera position, repeatedly displacing
-the world and then pulling it back toward the cursor.
+This interpolates the complete screen transform, so a world point anchored at
+both endpoints stays anchored throughout; blending the origin and the zoom
+independently introduces a curved drift, and an origin-only blend pairs the new
+30 Hz zoom with the old camera position and repeatedly displaces the world and
+pulls it back toward the cursor.
 
 The temporary recording camera uses the whole origin and a quantized factor for
 integer culling and layer thresholds, selecting its recording step from the
-precise factor. The world boundary carries the unquantized factor and remaining
-translation. Record extents round the factor down and add the usual pad so the
-frame remains covered. Strategic markers and tactical guides project through
-the same precise view before rounding to their final screen pixels. Strategic
-picking retains the transform actually submitted; paused-world and speculative
-recording identities include the precise camera samples/view. The entire live
-camera is restored after recording. Stationary paused views reuse their raster
-across changing host fractions; subpixel motion invalidates it.
-
-Acceptance exercises every displayed fraction through both directions, a target
-reversal, the native recording-step boundary, final settling, an axis clamp,
-external camera movement, paused cache reuse and submitted strategic picking.
-A static point at the cursor stays fixed, and an off-anchor point moves
-monotonically between unchanged-direction targets. Actual-device fixtures verify
-affine placement and inverse sampling with the HUD outside the transform.
-
-Validation (2026-09-13): the camera/recorder regression tests, independent
-review and actual-device GPU fixtures passed. A frozen Ring Atoll scene,
-seed 7, 90 ticks, 1024×768, with explicit half-update presentation fractions
-was captured through 1×→2×→0.25×→1×. The commander at the cursor rocks in the
-baseline and stays anchored in the corrected capture; both zoom directions
-were visually inspected. Captures are outside the repository under
-`/private/tmp/nanolathe-zoom-visible-{before,after}`; the side-by-side video is
-`/private/tmp/nanolathe-zoom-comparison.mp4`.
-
-Sequential Great Divide scene-4 battle runs compared baseline `74b9ba21` with
-the integrated fix, seed 7, 1920×1080, native scale, 300 preticks, 60 warmup
-and 180 measured draws at 30 TPS, factories on, automatic remaster off.
-Both renderers have identical metadata, every frame's census (including
-features and construction), and byte-identical final battle captures; the
-captures were visually inspected. Classic Record median/p95 changed from
-14.058/18.304 ms to 16.727/50.253 ms, with 1.585 MB/frame in both runs.
-Modern Record median changed from 4.244 to 3.746 ms and Submit median from
-5.574 to 4.748 ms; allocation was 1.875 versus 1.601 MB/frame. Other tasks
-were building and testing on this host during these runs, so the timings are
-not an isolated performance comparison and establish no speedup or regression.
-Artifacts are `/private/tmp/nanolathe-zoom-bench-{base,fixed}-{classic,modern}`.
-The separate motion capture and anchor tests exercise zoom interpolation;
-the battle benchmark holds the camera fixed.
+precise factor; the world boundary carries the unquantized factor and remaining
+translation. Record extents round the factor down and add the usual pad. Icons
+and tactical guides project through the same precise view before rounding to
+their final screen pixels. Strategic picking retains the transform actually
+submitted; paused-world and speculative recording identities include the precise
+camera samples. The entire live camera is restored after recording.
 
 ### 16.6 The wheel, the steps and the ease — contract Z5
 
 `camera.ZoomController` is the state machine, driven once per host Update from
-the battle's camera pass. Easing uses host Updates and scroll cooldown uses
-the supplied monotonic host milliseconds; neither reads simulation time [I6].
+the battle's camera pass. Easing uses host Updates and scroll cooldown uses the
+supplied monotonic host milliseconds; neither reads simulation time [I6].
 
 * **The steps.** `ZoomSteps` is the ascending list {0.25, 1, 2}: a tactical
-  overview, the default native view, and the detail view. Fractional stops
-  above 1× were removed after visual feedback on uneven sprite/model scaling
-  and its mismatch with filtered terrain (§16.3). The 0.25× overview shows
-  four times the native span on each axis when the map is large enough. Smaller maps clamp
-  to the minimum factor that fills the viewport (§16.7), such as 0.5×; the
-  floor need not be one of the named steps. These are presentation choices,
-  not retail findings.
-* **The wheel** requires `ZoomScrollThreshold` of accumulated travel:
-  1000 thousandths, or one Ebitengine wheel unit, restoring one conventional
-  mouse click per step. A call can move at most one stop, even for a large
-  scroll delta. After an accepted step, `ZoomScrollCooldownMillis` discards
-  further scroll input for 500 host milliseconds. Discarded input neither
-  accumulates nor extends the deadline, and the triggering event's excess is
-  discarded too. Thus a burst from 2× first targets 1× and cannot queue a
-  second jump to 0.25×. Continuing scroll after the hold can take another step.
-  This is a presentation feel choice, independent of game speed and pause.
-  F9 and pinch bypass the cooldown and clear pending wheel state.
-  Below-threshold fractions accumulate; reversing direction clears that
-  remainder. A step refused at a zoom limit does not start a cooldown.
-  From a free factor the wheel takes the nearest stop in its direction of
-  travel. Zoom stays anchored at the pointer throughout the animation.
+  overview, the default native view, and the detail view. Fractional stops above
+  1× were removed after visual feedback on uneven sprite and model scaling and
+  its mismatch with filtered terrain. The 0.25× overview shows four times the
+  native span on each axis when the map is large enough; smaller maps clamp to
+  the minimum factor that fills the viewport (§16.7), and that floor need not be
+  one of the named steps.
+* **The wheel** requires `ZoomScrollThreshold` of accumulated travel — 1000
+  thousandths, one Ebitengine wheel unit — so one conventional mouse click is one
+  step. A call moves at most one stop whatever the delta. After an accepted step
+  `ZoomScrollCooldownMillis` discards further scroll input for 500 host
+  milliseconds; discarded input neither accumulates nor extends the deadline, and
+  the triggering event's excess is discarded too, so a burst from 2× first
+  targets 1× and cannot queue a second jump to 0.25×. Below-threshold fractions
+  accumulate; reversing direction clears that remainder. A step refused at a zoom
+  limit does not start a cooldown. From a free factor the wheel takes the nearest
+  stop in its direction of travel, and zoom stays anchored at the pointer
+  throughout the animation. F9 and pinch bypass the cooldown and clear pending
+  wheel state.
 * **macOS two-finger scrolling** pans both axes in Enhanced. A local AppKit
   monitor uses `hasPreciseScrollingDeltas` to distinguish point-based touch
   scrolling from conventional wheel events; Magic Mouse touch scrolling also
   pans. Raw point deltas follow the user's macOS scrolling direction, convert
-  through the window's letterbox scale into logical pixels, then divide by
-  the live zoom. Fractional world-pixel remainders carry between direct
-  deltas, so slow scrolling still moves at 2×. Panning clears camera follow.
-  `momentumPhase != 0` events never pan or zoom: movement stops on finger
-  lift instead of continuing through the inertial tail. GUI controls retain
-  all scroll events in Ebitengine wheel units (precise points × 0.1).
+  through the window's letterbox scale into logical pixels, then divide by the
+  live zoom. Fractional world-pixel remainders carry between direct deltas, so
+  slow scrolling still moves at 2×. Panning clears camera follow.
+  `momentumPhase != 0` events never pan or zoom: movement stops on finger lift
+  instead of continuing through the inertial tail. GUI controls retain all scroll
+  events in Ebitengine wheel units.
 * **macOS pinch** accumulates signed magnification deltas until their net
   magnitude reaches `pinchThreshold` (0.12), then requests one adjacent zoom
   stop, anchored at the pointer sampled when the gesture began. Even a large,
-  reversed, or long-held pinch cannot step again until a new gesture begins.
-  An attempt at a zoom limit also spends the gesture. End/cancel events retire
-  the gesture; cancellation does not undo an already accepted zoom target.
-  Ordered pinch events survive host batching and the semantic input copy,
-  including complete gestures occurring between two polls. Blocked camera
-  input cancels the active pinch; later change events cannot reactivate it.
+  reversed or long-held pinch cannot step again until a new gesture begins, and
+  an attempt at a zoom limit spends the gesture. End and cancel events retire it;
+  cancellation does not undo an already accepted target. Ordered pinch events
+  survive host batching and the semantic input copy. Blocked camera input cancels
+  the active pinch.
 * **The ease** closes `ZoomEaseFraction` of the remaining gap per Update, moves
   at least one unit so an integer factor cannot stall, and settles outright
-  inside `ZoomSettleEpsilon`. It is what makes a notch a glide rather than a
-  cut, and it is the only time the live factor is off a step.
+  inside `ZoomSettleEpsilon`. It is what makes a notch a glide rather than a cut,
+  and it is the only time the live factor is off a step.
 
-The native monitor implements these presentation choices using
-[Apple's gesture and scroll-event semantics](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/EventOverview/HandlingTouchEvents/HandlingTouchEvents.html).
-It returns events unchanged. Empty native polls stay empty rather than replaying
-Ebiten's copy. Other platforms and VM guests retain Ebitengine wheel zoom; no
-device classification is guessed from delta magnitude or event timing.
-
-The first build of this section had a free log-scale wheel with an idle snap
-onto the detail steps and nothing below 1×. The play test preferred discrete
-steps with the glide between them, on both sides of 1×, and that is what stands.
-Every one of the names above is a **feel-tuning knob**, not a derived value, and
-wheel/ease knobs live at the top of `internal/camera/zoomfeel.go`;
-`pinchThreshold` lives in `cmd/nanolathe/trackpad.go`.
+Every one of those names is a **feel-tuning knob**, not a derived value; the
+wheel and ease knobs live at the top of `internal/camera/zoomfeel.go` and
+`pinchThreshold` in `cmd/nanolathe/trackpad.go`. The native monitor implements
+these choices using Apple's gesture and scroll-event semantics and returns events
+unchanged; empty native polls stay empty rather than replaying Ebiten's copy, and
+other platforms retain Ebitengine wheel zoom with no device classification
+guessed from delta magnitude or timing.
 
 The wheel binding is Nanolathe's, not retail's. Retail leaves the wheel to the
 active GUI list under the pointer [07 §2][07 §10], and the UI boundary still
-consumes it first: the camera pass sees only a wheel the chrome did not want,
-and takes it only over the battle viewport, only outside TALK, only with no
-modal open and the pointer off the minimap, and only in the executor that can
-present a free factor. Trackpad controls share these gates and additionally
-require window focus and no command palette or unit-info ownership. Skipping
-the camera pass (including modal and result screens) clears gesture state.
+consumes it first: the camera pass sees only a wheel the chrome did not want, and
+takes it only over the battle viewport, only outside TALK, only with no modal
+open and the pointer off the minimap, and only in the executor that can present a
+free factor. Trackpad controls share these gates and additionally require window
+focus and no command palette or unit-info ownership. Skipping the camera pass
+clears gesture state.
 
 ### 16.7 The minimum factor — contract Z6
 
@@ -3535,170 +2476,135 @@ the camera pass (including modal and result screens) clears gesture state.
 the playable map, rounded up: the factor at which the view in world pixels
 exactly covers the map in whichever axis runs out first, so the clamp never has
 to letterbox. Targets below it are clamped, both at the controller and at the
-camera. The viewport span is taken in framebuffer pixels — the chrome does not
-move with the zoom, so the span being fitted is a constant of the window.
+camera. The viewport span is taken in framebuffer pixels, because the chrome does
+not move with the zoom.
 
-The camera also retains the requested factor before clamping. Wheel, pinch and
-F9 navigate that request, so the tactical and native stops remain distinct even
-if the map floor gives them the same live factor. Animation changes only the
-live factor. Direct zoom jumps retain the request too; classic step changes
-replace it with their own factor.
-
-In Enhanced presentation, a sub-native request clamped by the floor becomes a
-full strategic view when the live factor reaches that floor. This makes the
-furthest-out stop usable on small maps and large framebuffers without turning
-an ordinary native view into icons. Before arrival the usual fade applies;
-at arrival models disappear, icons become fully opaque, and icon picking and
-selection outlines take over together. Choosing native or detail clears this
-exception immediately. The paused world cache includes this strategic gate;
-resolution changes refit the retained tactical request to the new floor.
-This is presentation policy, not retail behavior.
+The camera also retains the requested factor before clamping. Wheel, pinch and F9
+navigate that request, so the tactical and native stops remain distinct even if
+the map floor gives them the same live factor; animation changes only the live
+factor, direct jumps retain the request, and classic step changes replace it with
+their own factor. In Enhanced presentation a sub-native request clamped by the
+floor becomes a full strategic view when the live factor reaches that floor,
+which makes the furthest-out stop usable on small maps and large framebuffers
+without turning an ordinary native view into icons. Before arrival the usual fade
+applies; at arrival models disappear, icons become fully opaque, and icon picking
+and selection outlines take over together. Choosing native or detail clears the
+exception immediately. The paused world cache includes this gate; resolution
+changes refit the retained tactical request to the new floor.
 
 The step writer deliberately does **not** apply this floor: a step is always at
-least 1×, and clampAxis's view-larger-than-map domain stays exactly where
+least 1×, and `clampAxis`'s view-larger-than-map domain stays exactly where
 [07 §10] left it.
 
 ### 16.8 Runtime switches
 
 * **F9** in classic is the unchanged 1× → 1.5× → 2× step cycle about the
   viewport centre. Modern cycles 1× → 2× → 0.25× → 1× as animated targets,
-  sharing the wheel's step list. A free factor cycles to the first step above
-  it, wrapping to 0.25× at the top; the map floor still applies.
+  sharing the wheel's step list; a free factor cycles to the first step above it,
+  wrapping to 0.25× at the top, and the map floor still applies.
 * **The wheel** is §16.6.
 * **`--zoom`** accepts any factor in the free range for the modern executor and
-  only 1, 1.5 or 2 for classic — the executor's restriction is applied after
-  parsing, because `--renderer` may follow `--zoom` on the command line. A
-  capture follows `--shot-renderer` when one is given. The map-derived floor is
-  applied at battle entry, where the map is known. Modern defaults to 1× at
-  every resolution. Classic keeps its resolution default: 1.5× above 800×600
-  and native at or below it. Captures and the benchmark stay native. A restart
-  keeps the factor the player was on. Battle entry, a restart and a capture take the factor outright rather
-  than easing it: there is no motion to smooth.
-* **F10** is unchanged (§14.6).
+  only 1, 1.5 or 2 for classic — the restriction is applied after parsing,
+  because `--renderer` may follow `--zoom` on the command line. A capture follows
+  `--shot-renderer` when one is given. The map-derived floor is applied at battle
+  entry, where the map is known. Modern defaults to 1× at every resolution;
+  classic keeps its resolution default. Captures and the benchmark stay native. A
+  restart keeps the factor the player was on. Battle entry, a restart and a
+  capture take the factor outright rather than easing it.
+* **F10** is §14.6.
 
 ### 16.9 Gating summary
 
 | Factor | World |
 |---|---|
 | 2× … 1× | everything, recorded at the 2× step |
-| 1× … 0.625× | everything, recorded at the 1× step (2× above 1×) |
-| 0.625× … 0.5× (exclusive) | everything, plus the marker layer fading in |
-| 0.5× and below | terrain, fog, features and their shadows, selection fills, the build ghost and queue overlay, drag rectangle, dotted paths, markers |
+| 1× … 0.625× | everything, recorded at the 1× step |
+| 0.625× … 0.5× (exclusive) | everything, plus the marker/icon layer fading in |
+| 0.5× and below | terrain, fog, features and their shadows, selection fills, the build ghost and queue overlay, drag rectangle, dotted paths, icons |
 
 ### 16.10 What the strategic view drops — contract Z7
 
-At and below `strategicModelCut` (0.5×) — inclusive, so the 0.25× tactical target of
-§16.6 is a marker view — or at the clamped Enhanced tactical stop of §16.7,
-the recorder does not emit unit models,
-projectiles, effect strips, trails, unit labels or health bars. Terrain, fog,
-**the features** — sprite and 3DO alike, with their shadows — the selection
-quad, the build ghost, the order-queue overlay, the drag rectangle and the
-dotted paths still record: they are the map, and the map is what the strategic
-view is for.
-
-Features were originally dropped with the units. A play test found that jarring
-and it is: a marker stands in for a unit, and nothing stands in for a rock, a
-tree or a wreck, so the map lost its landmarks at exactly the factor a player
-pulls out to read them by. They cost one sprite quad each and the transform
-shrinks them like everything else, so they stay.
+At and below `strategicModelCut` (0.5×) — inclusive, so the 0.25× tactical target
+is a marker view — or at the clamped Enhanced tactical stop of §16.7, the
+recorder does not emit unit models, projectiles, effect strips, trails, unit
+labels or health bars. Terrain, fog, **the features** — sprite and 3DO alike,
+with their shadows — the selection quad, the build ghost, the order-queue
+overlay, the drag rectangle and the dotted paths still record: they are the map,
+and the map is what the strategic view is for. Features were originally dropped
+with the units; a play test found that jarring and it is — a marker stands in for
+a unit and nothing stands in for a rock, a tree or a wreck, so the map lost its
+landmarks at exactly the factor a player pulls out to read them by.
 
 Terrain below 0.5× is the 1× tile set sampled down by the transform.
 `TODO(question)`: a half-resolution tile set would sample better and cost a
-quarter of the atlas; whether the load-time cost is worth it is unmeasured.
-
-The recorder emits many more tiles and fog cells at a low factor. That path is
-allocation-free per frame as the rest of the recorder is — the record extent is
-two integers, the marker batch is a reused arena — but the per-frame tile and
-cell counts do grow with 1/factor², which is the cost of the view.
+quarter of the atlas; whether the load-time cost is worth it is unmeasured. The
+recorder emits many more tiles and fog cells at a low factor. That path is
+allocation-free per frame as the rest of the recorder is, but the per-frame tile
+and cell counts grow with 1/factor², which is the cost of the view.
 
 ### 16.11 The marker layer — contract Z8
 
-This original generic-marker contract is superseded by §18 for generated
-icons and Enhanced team color. Below `strategicMarkerOn` (0.625×) each unit becomes one filled square of
+This generic-marker contract is superseded by §18 for identified units and
+Enhanced team colour; it remains the contract for unidentified contacts. Below
+`strategicMarkerOn` (0.625×) such a contact becomes one filled square of
 `strategicMarkerSize` (4) **framebuffer** pixels.
 
 * **Its records and its gate are the minimap's own.** The markers come from the
-  committed radar contact list and pass exactly `render.MinimapBlipAdmitted`,
-  the gate the minimap's dots take [03 §3.9][03 R-MM-01 §3]. Visibility is not
+  committed radar contact list and pass exactly `render.MinimapBlipAdmitted`, the
+  gate the minimap's dots take [03 §3.9][03 R-MM-01 §3]. Visibility is not
   re-derived: a unit the minimap will not show has no marker either.
 * **Its colour is the minimap's own.** The client is handed the `radlogo` blip
   art at battle entry and takes each player colour's marker index from that
   colour's own frame — its most common opaque index, resolved once per colour.
   Naming a colour instead would be a second table to keep in step with the art.
-* **Selection** adds a one-pixel outline in the selection colour, which fades
-  with the layer rather than appearing at full strength first.
-* **The fade** is linear from alpha 0 at 0.625× to 255 at 0.5×, with full
-  opacity at the clamped Enhanced tactical stop (§16.7). Models are
-  hard-cut at 0.5×; a model cross-fade needs an alpha lane on the model commit,
-  whose `sceneOpModelCommit` fragment is opaque today, and is a follow-up
-  (`TODO(question)` at `Client.markerAlpha`).
+  (Identified-unit icons take their ink from `logos.gaf` instead; see §18.4 for
+  why.)
+* **Selection** adds a one-pixel outline in the selection colour, which fades with
+  the layer rather than appearing at full strength first.
+* **The fade** is linear from alpha 0 at 0.625× to 255 at 0.5×, with full opacity
+  at the clamped Enhanced tactical stop. Models are hard-cut at 0.5×; a model
+  cross-fade needs an alpha lane on the model commit, whose fragment is opaque
+  today, and is a follow-up (`TODO(question)` at `Client.markerAlpha`).
 * **No projectile markers.** A shot is an event, not a thing on the map.
 * Markers are recorded **outside** the world region, already positioned through
   the live factor, because a fixed-pixel mark must not be scaled by the world
-  transform. They draw through a new destination op (`destOpMarker`) as a
-  premultiplied flat index at the layer's alpha.
-* **Hover** picks the nearest marker within its square: picking runs on the
-  world point under the pointer as always, and at these factors one screen pixel
-  is several world pixels, so a hull test already admits the pointer anywhere
-  over the marker.
+  transform. They draw through a destination op as a premultiplied flat index at
+  the layer's alpha.
 
 ### 16.12 Verification
 
 1. **The rest steps are untouched.** Classic captures at 1×, 1.5× and 2× and
    modern captures at 1× and 2× are byte-identical to the build before this
-   section, on the seeded Ashap Plateau scene at 1024×768.
+   section.
 2. **The camera.** `internal/camera/zoom_test.go`: the free factor agrees with
    the half steps at each of them; picking is the exact inverse at rest and the
    floor in flight; zooming about a point leaves that point fixed; the minimum
    factor is tight against the map; the step writer keeps the classic camera on
    its step; `ScreenToRecord` is the identity at rest.
-3. **The state machine.** `internal/camera/zoomfeel_test.go`: the wheel composes
-   on the log scale; the snap waits for the idle delay and fires only inside the
-   band and only at or above 1×; the ease terminates.
-4. **The recorder.** `internal/client/world_zoom_test.go`: the record extent;
-   one world region per frame with the right operands; the strategic drops, the
+3. **The state machine.** `internal/camera/zoomfeel_test.go`: the wheel's
+   threshold, cooldown and direction reversal; the ease terminates.
+4. **The recorder.** `internal/client/world_zoom_test.go`: the record extent; one
+   world region per frame with the right operands; the strategic drops, the
    surviving selection fills and the surviving features; the drag rectangle
-   recorded outside every region; the marker count and the alpha ramp at 0.625×,
-   0.5625× and 0.5×; the minimap gate.
+   recorded outside every region; the marker count and the alpha ramp; the
+   minimap gate.
 5. **The UI stage's own region.** `cmd/nanolathe/battle_world_overlay_test.go`:
-   at 0.5× and at 1.3× an armed placement records two open/close pairs, the
-   ghost's fills lie inside a region, and the recorded rectangle put through
-   factor/step is the presented `f·(site − camera)` to within a pixel.
+   an armed placement records two open/close pairs, the ghost's fills lie inside
+   a region, and the recorded rectangle put through factor/step is the presented
+   `f·(site − camera)` to within a pixel.
 6. **The executor.** `internal/platform/gpurender/world_test.go`: a rest step
    compiles byte-identical geometry, a non-rest factor places a known sprite at
-   the expected scaled rectangle, and a sub-pixel world primitive compiles to a
-   span of exactly one screen pixel while a wider one is untouched.
+   the expected scaled rectangle, a sub-pixel world primitive compiles to a span
+   of exactly one screen pixel while a wider one is untouched, and the lit-point
+   resample is the inverse of nearest sampling at every factor and offset.
    `atlas_pad_test.go`: each of the three atlases keeps its border, and the tile
    border holds the cell's own edge.
-7. **Viewed.** Modern captures at 1.3×, 0.7×, 0.45× and 0.3× on the same scene:
-   terrain seamless, HUD unscaled, features present at every factor, markers
-   present and unit models absent below 0.5×.
-8. **The seam sweep.** Modern captures at 38 factors from 0.45× to 2×, before and
-   after the atlas borders: identical at every rest step and at 31 of the others,
-   and a run of foreign pixels removed at 0.75×, 0.78×, 0.8×, 0.82×, 0.92×, 1.25×
-   and 1.75×.
+7. **Viewed.** Modern captures at several intermediate factors: terrain seamless,
+   HUD unscaled, features present at every factor, icons present and unit models
+   absent below 0.5×; and a seam sweep across many factors before and after the
+   atlas borders.
 
-### 16.13 Owed
-
-A human look at the window itself: the wheel in motion, the snap's feel, F9
-across the executors, and the strategic view on a map with many units — no
-capture route produces motion, and the feel knobs are meant to be tuned against
-it. The filtered terrain is part of that look: it is a taste call as well as a
-measurement, and a player who wants the crunchy nearest-sampled map back should
-be heard before the lane becomes permanent.
-
-The known follow-ups: a keyed source's filtered sampling (`TODO(question)` in
-`gpurender/schedule.go`), the half-resolution tile set for the strategic range
-(`TODO(question)` in `gpurender/terrain.go`), and the model cross-fade at the
-strategic cut (`TODO(question)` at `Client.markerAlpha`). The capture route now supports a prospective build placement through
-`--shot-build` (§20), after `--shot-select` has published its selection.
-
-## 17. Model antialiasing: subject-wide supersampling with a coverage resolve (Enhanced)
-
-> **Superseded (2026-09-11).** The recorder's doubled lane and half-pixel
-> positioning (§17.2, §17.3) stand and feed the model lane of §22, which
-> resolves coverage in its commit fragment; the executor stages of §17.4–§17.5
-> went with the slot stage.
+## 17. Model antialiasing: subject-wide supersampling with a coverage resolve
 
 ### 17.1 Decision
 
@@ -3714,815 +2620,464 @@ how much of it the subject covers.
 This replaces, in Enhanced only, retail's structure supersample of
 [03 R-REN-03A §6–§7], which doubled structures alone, drew the live lane at
 native scale afterwards, and resolved through the ordered ALP table with the
-composition background index blended in — the coloured fringe of §4. The
-classic executor keeps that behaviour exactly (C-G6); the Anti-Alias display
-option keeps its name and gates both: on, Enhanced supersamples everything and
-classic supersamples structures; off, both rasterize at native scale.
+composition background index blended in — the coloured fringe of §4. The classic
+executor keeps that behaviour exactly (C-G6). The fringe is not preserved: the
+user's decision is that it was a defect of the original rather than a look to
+keep, and Enhanced is the mode that is allowed to diverge.
 
-The fringe is not preserved. The user's decision is that it was a defect of the
-original rather than a look to keep, and Enhanced is the mode that is allowed to
-diverge (§1, §13). The classic executor remains the retail reference for it.
-
-The subject is also placed at **half-pixel precision**: the doubled raster is
-offset inside its slot by the half pixel the subject's interpolated position
-actually lands on, which the two-to-one resolve turns into a genuine half-pixel
-step on screen. Enhanced presents interpolated positions at the display rate
-(§13.5), and without this every unit still moved in whole pixels.
+The Anti-Alias display option keeps its name and gates both, but it gates
+different things. In classic it decides whether a structure is doubled. In
+modern it decides only whether the **recorder** builds the doubled lane
+(`Client.supersampleGeometry`, which tests the option and a palette and nothing
+about the subject); the model lane doubles the native corners itself when there
+is no doubled lane, so **every subject is rasterized at 2× either way**. What
+the option actually changes in modern is which corners the 2× raster comes from
+— the recorder's exact doubled projection, or the native corners times two.
 
 MSAA was considered and rejected: Ebitengine exposes no multisampled render
-target, its `AntiAlias` draw option is a stencil path for solid vector fills,
-and the model passes are index-space shaders with a key-plane discard that such
-a path cannot express. Supersampling reuses the doubled slot the executor
-already had for structures.
+target, its `AntiAlias` draw option is a stencil path for solid vector fills, and
+the model passes are index-space shaders with a key-plane discard that such a
+path cannot express.
 
 ### 17.2 The recorder — contract S1
 
-`Client.supersampleGeometry` is the gate: the Anti-Alias option and a palette,
-nothing about the subject. When it holds, every recorded `ModelGeometry`
-carries a `Supersample` packet at scale 2 holding the subject's own doubled
-raster: its `Faces` (the cached lane, or every lane for a direct subject), its
-`LiveFaces` and its `Reveal`, all in the doubled packet's local image
-coordinates; the outline endpoints stay on the native packet, which the model
-lane draws as whole pixel blocks (§22). The outer packet keeps its native faces, box, origin and
-anchor; the executor rasterizes none of the native faces when a doubled raster
-is present, but the box remains the commit rectangle and the anchor the
-subject's screen position.
+When `supersampleGeometry` holds, every recorded `ModelGeometry` carries a
+`Supersample` packet at scale 2 holding the subject's own doubled raster: its
+`Faces` (the cached lane, or every lane for a direct subject), its `LiveFaces`
+and its `Reveal`, all in the doubled packet's local image coordinates. The
+outline endpoints stay on the native packet, which the model lane draws as whole
+pixel blocks (§22). The outer packet keeps its native faces, box, origin and
+anchor; the lane rasterizes none of the native faces when a doubled raster is
+present, but the box remains the commit rectangle and the anchor the subject's
+screen position.
 
 The doubled projection is retail's: corner `(x, y)` of the native local
 projection lands at `2·(x + originX) + hx`, `2·(y + originY) − odd + hy`, where
-`odd` is the low bit of the corner's model-relative height, so the doubled
-shear is `2z − y` rather than `2·(z − (y >> 1))` [03 R-REN-03A §6], and
-`(hx, hy)` is the subject's half-pixel offset (§17.3). The shadow's doubled
-quarter shear moves the corner one raster pixel right as well as up when the
-second bit of the height is set, which is the same identity applied to
-`ry >> 2`. At a magnified view scale the correction is the view's own pixel
-(`ViewScale.Px(1)`), because the scaled native offset already lost the half it
-restores. The doubled packet is filled straight from the unplaced polygons, so
-the lane costs no copy of their corner lanes.
+`odd` is the low bit of the corner's model-relative height, so the doubled shear
+is `2z − y` rather than `2·(z − (y >> 1))` [03 R-REN-03A §6], and `(hx, hy)` is
+the subject's half-pixel offset (§17.3). The shadow's doubled quarter shear moves
+the corner one raster pixel right as well as up when the second bit of the height
+is set, which is the same identity applied to `ry >> 2`. At a magnified view
+scale the correction is the view's own pixel (`ViewScale.Px(1)`), because the
+scaled native offset already lost the half it restores. The doubled packet is
+filled straight from the unplaced polygons, so the lane costs no copy of their
+corner lanes.
 
-The cached lane is retained without the half-pixel offset; the offset is added
-when the retained lane is rebased into the frame's packet, so a subject that
-moves without changing pose keeps its cache. A keyed subject whose pieces are
-all live retains an empty doubled lane so its live faces have a raster to join.
-The geometry cache's identity carries this gate separately from the classic
-image's structure-only one, so toggling the option rebuilds the right lane.
-
-A direct-projected subject's packet used to declare the whole record extent as
-its box; it now declares its corners' own extent with retail's two-pixel
-margin, origin at the box pixel of screen (0,0) and anchor at screen (0,0), so
-its slot is the subject's size and can be doubled.
+The cached lane is retained **without** the half-pixel offset; the offset is
+added when the retained lane is rebased into the frame's packet, so a subject
+that moves without changing pose keeps its cache. A keyed subject whose pieces
+are all live retains an empty doubled lane so its live faces have a raster to
+join. The geometry cache's identity carries this gate separately from the classic
+image's structure-only one, so toggling the option rebuilds the right lane. A
+direct-projected subject's packet declares its corners' own extent with retail's
+two-pixel margin, origin at the box pixel of screen (0,0) and anchor at screen
+(0,0), so its region is the subject's size and can be doubled — declaring the
+whole record extent instead overflowed the atlas and cost a frame dozens of
+passes.
 
 ### 17.3 Half-pixel positioning — contract S2
 
 `Camera.WorldToScreenDoubled` is `WorldToScreen` carried in 16.16 at twice the
 record step: `floor(2·s·(x − cameraX))` and `floor(s·(2z − y − 2·cameraZ))`,
-viewport origin included, with `s` the record step. A supersampled subject is
-anchored on that result's whole pixel (`sx2 >> 1`, `sy2 >> 1`) and its doubled
-raster is offset inside the slot by the half (`sx2 & 1`, `sy2 & 1`), so the
-offset is 0 or 1 on both axes at every view scale and the composition box's
-margin always holds it. The anchor can sit one pixel from `WorldToScreen`'s,
-because retail's shear halves the whole part of the height while the doubled
-projection halves the height itself; that is the subject drawn where it is
-rather than where retail's truncation put it, and the classic executor keeps
-retail's pixel. At 2× the retail anchor was always an even screen pixel, so
-units moved in two-pixel steps; the doubled projection restores the missing
-step. The shadow projects the ground point, which is what its anchor projects
-[03 R-REN-03D §3], with shadowAnchor's five-pixel X offset on the whole pixel.
+viewport origin included. A supersampled subject is anchored on that result's
+whole pixel (`sx2 >> 1`, `sy2 >> 1`) and its doubled raster is offset inside its
+region by the half (`sx2 & 1`, `sy2 & 1`), so the offset is 0 or 1 on both axes
+at every view scale and the composition box's margin always holds it. The anchor
+can sit one pixel from `WorldToScreen`'s, because retail's shear halves the whole
+part of the height while the doubled projection halves the height itself; that is
+the subject drawn where it is rather than where retail's truncation put it, and
+the classic executor keeps retail's pixel. At 2× the retail anchor was always an
+even screen pixel, so units moved in two-pixel steps; the doubled projection
+restores the missing step. The shadow projects the ground point, which is what
+its anchor projects [03 R-REN-03D §3], with `shadowAnchor`'s five-pixel X offset
+on the whole pixel. A direct-projected subject has no shared offset: its corners
+are projected one by one, so each carries its own exact doubled position and the
+doubled lane takes those.
 
-A direct-projected subject (debris, a keyless live lane) has no shared
-offset: its corners are projected one by one, so each carries its own exact
-doubled position (`screenPoly.x2, y2`) and the doubled lane takes those. Its
-box counts the doubled corners' whole pixels too, so it holds the lane at any
-scale.
+### 17.4 The resolve
 
-### 17.4 The executor — contract S3
+The executor stages §17 designed — a page with separate key, colour and resolved
+planes, a resolve pass, and the outline and live lanes as their own passes — went
+with the slot stage. The model lane of §22 resolves coverage **in the commit
+fragment** instead: it box-resolves the four 2× texels under a native pixel, the
+colour the mean of the covered ones and the alpha their share, with the
+composition transparent index dropped at the fragment. The outline of a
+supersampled subject is drawn from the NATIVE rows as whole pixel blocks rather
+than two raster pixels wide, because the doubled lane's own rows would put an
+endpoint at a doubled column, straddling two pixels.
 
-One page, one stage, every stage in index space until the last:
-
-```
-img   clear
-key   clear; every subject's key faces
-img   every subject's colour faces
-post  the nanoframe reveal (ping-pong)
-key   the outline keys, then the live keys, max-blended over the body keys
-img   the revealed regions copied back, then the outline colours, then the
-      live colours
-post  waterline/Digger clipping, then the planes swap
-post  THE RESOLVE: every subject's raster → its native box, as colour
-```
-
-The outline and live lanes share two passes: with a max-key plane the order of
-an outline endpoint and a live face is decided by key whether the endpoint's
-colour was written before the live key was raised or after, and the colour
-runs still draw the outline before the live faces so an equal key goes to the
-later one [03 R-REN-03A §3].
-
-A supersampled subject reserves only its doubled slot; its resolved native box
-is that slot's top-left quadrant on the resolved plane, which nothing reads
-once the raster is finished, so the page holds no native slot for it and its
-rows are the doubled rasters alone. A native subject's raster is its native
-slot, and the same resolve pass copies it one-to-one through PAL at alpha 1. A
-page of mixed subjects is one pass, and the stage is at most eight destination
-switches whatever the frame holds. The resolved plane is `post`; the finished
-index plane is `img`. A commit samples the resolved plane. A group merge
-samples the index plane at the parent's scale. Only the raster that draws is
-admitted: a supersampled subject's native faces are never tested or prepared.
-
-The resolve shader reads the block under each native pixel — one sample for a
-native raster, four for a doubled one — and for every sample whose index is not
-the composition transparent index 1 looks the index up through PAL and counts
-it. It writes `(Σ colour / 4, n / 4)`, premultiplied. Colours are averaged
-after the PAL lookup, never indices (C-G4). Index 1 is exactly the texel the
-keyed commit skipped [03 R-REN-03A §5], so a native raster resolves to the same
-skip and colour the commit used to produce.
-
-The outline of a supersampled subject is drawn two raster pixels wide, so the
-resolved line keeps a whole pixel's weight where it aligns with the block and
-splits into two half-weight pixels where it does not, instead of resolving to a
-quarter-weight line.
-
-Slots stay even-aligned with even dimensions (§11.2), so the block a native
-pixel reads is the block its doubled raster wrote.
-
-### 17.5 Commits, shadows and groups — contract S4
-
-* **Body commit.** `sceneOpModelCommit` copies the resolved texel: an
-  uncovered texel is the key skip, a covered one is the colour at its coverage,
-  and the opaque batch's source-over blends it. Ordering is unchanged: within a
-  batch quads draw in record order and source-over honours it, and the
-  scheduler already places an opaque command after any destination command it
-  overlaps.
-* **Shadow commit.** Both planes are resolved ones. The silhouette's fragment
-  is half its premultiplied colour at half its coverage, so a partly covered
-  silhouette edge darkens the ground by its coverage. The punch skips a shadow
-  texel only where the body's coverage is whole: under a partly covered body
-  edge the shadow stays and the body's own blend restores the shadowed ground
-  in proportion, which is the composite the byte writers' opaque punch
-  approximated [03 R-REN-03D §4–§5].
-* **Attached-unit groups.** A group composes at its parent's raster scale, on
-  index planes, with the unchanged child merge and clip shaders
-  [03 R-REN-03A §4], then one resolve pass turns every group into colour on
-  the staging atlas' out plane, which the commit samples. A child whose scale
-  differs from its parent's cannot join the plane and takes the fallback path,
-  where it is an explicit omission. The fallback path does the same for one
-  group on its own three images.
+For the shadow, both sources are resolved the same way: a structure's silhouette
+resolves from its own region and punches a pixel whose body block is wholly
+covered, so under a partly covered body edge the shadow stays and the body's own
+blend restores the shadowed ground in proportion — the composite the byte
+writers' opaque punch approximated [03 R-REN-03D §4–§5]. A group composes at its
+parent's scale in one region and resolves once at its commit.
 
 ### 17.6 Divergences
 
-* Edge pixels of every subject are blended with the composite by coverage;
-  face boundaries inside a subject are averaged. Neither exists in retail.
+* Edge pixels of every subject are blended with the composite by coverage; face
+  boundaries inside a subject are averaged. Neither exists in retail.
 * Structures lose the ALP fringe.
 * The live lane and the outline are supersampled with the body; retail draws
   both at native scale after the structure resolve.
 * A subject's doubled raster sits at its half-pixel position, so a subject can
-  present half a pixel from where the classic executor puts it, and its
-  resolved silhouette differs by that.
+  present half a pixel from where the classic executor puts it, and its resolved
+  silhouette differs by that.
+* A mobile subject is supersampled too, where retail draws it at 1×.
 
 ### 17.7 Verification
 
-1. **Device fixture.** `model_fixture_test.go`: the supersampled subject's
-   left pixel resolves the mean of its four covered samples with the live lane
-   having joined the doubled raster; its right pixel resolves three covered
-   samples at three-quarter coverage over the background after the child merge
-   and the carrier's waterline; the one-sample edge subject resolves at a
-   quarter over the background with no fringe. The stage pass bound is eight.
-   The neighbour-independence and fallback-route checks are unchanged and pass.
-2. **CI tier.** `go test ./...` green; the recorder's direct-route tests now
-   assert the tight box and screen anchor.
-3. **Captures.** The M2 commander and the M8 mission units through
-   `--renderer=modern` before and after, magnified: silhouettes smooth, no
-   fringe, shadows intact.
-4. **Benchmark.** The modern battle benchmark, 1080p, 180 frames, main
-   against this branch, run back to back. At 120 TPS: Record 3.0 → 3.3 ms
-   median, Submit 2.6 → 3.0, cadence 8.32 → 8.34, on the 8.3 ms floor 73% →
-   68%; passes 13 both, raster pixels 0.87M → 1.8M, one page band both. The
-   floor share moves by ten points between runs of one binary, so it is read
-   from adjacent runs only. At 30 TPS both sit on the floor. Two rounds of the stage design got there: the first landing cost
-   sixteen passes, a second page band and a 24% floor share, from a separate
-   native slot per subject, four outline/live passes, a doubled admission and a
-   copied polygon lane per subject; each is gone. The 30 TPS main run also
-   showed an older pathology this branch removes: direct-projected subjects
-   (debris, keyless live lanes) declared framebuffer-sized boxes, overflowed
-   the atlas and cost that run 81 passes and 41M raster pixels a frame.
-
-### 17.8 Owed
-
-A human look at motion in the window: the half-pixel step at 120 Hz, and
-whether the two-raster-pixel outline reads right on a rising nanoframe. The
-Anti-Alias option's menu text still describes the retail structure behaviour;
-its Enhanced meaning is wider now and the text is owed a line.
+1. **Device fixture.** `model_fixture_test.go` and `model_direct_test.go`: the
+   supersampled subject's left pixel resolves the mean of its four covered
+   samples with the live lane having joined the doubled raster; its right pixel
+   resolves three covered samples at three-quarter coverage over the background
+   after the child merge and the carrier's waterline; the one-sample edge subject
+   resolves at a quarter over the background with no fringe.
+2. **CI tier.** `go test ./...` green; the recorder's direct-route tests assert
+   the tight box and screen anchor.
+3. **Captures.** Model-rich scenes through `--renderer=modern`, magnified:
+   silhouettes smooth, no fringe, shadows intact.
+4. **Benchmark.** The modern battle benchmark at 120 TPS, run back to back
+   against the build without the change.
 
 ## 18. Generated strategic icons (modern)
 
 ### 18.1 Scope and visual direction
 
-**Implemented.** Extend §16.11's four-pixel contact squares with a small,
-consistently generated symbol vocabulary for identified units in the modern
-strategic view.
-This is an Enhanced presentation feature under I6/I11, not recovered retail
-behavior. This section supersedes §16.11 for identified units; unidentified
-contacts retain its generic square.
-Classic, simulation, unit definitions and their authoritative identities retain
-their existing behavior.
+For **identified** units in the modern strategic view, §16.11's four-pixel contact
+squares become a small generated symbol vocabulary. Enhanced presentation under
+I6/I11, not recovered retail behavior: unidentified contacts keep §16.11's square,
+and classic, the simulation and unit definitions are unchanged. The organization —
+family shape, role symbol, level mark — follows BAR's public Strategic Icons guide
+(accessed 2026-09-11) with independently authored geometry; BAR's implementation,
+artwork, balance roles and tier meanings are not inputs. Icons are generated
+deterministically from vector geometry into one shared atlas at load time, with no
+network generation, randomness or image generation during play; units of the same
+verified family and role may share one, and exact identity stays available only
+through the existing permitted hover information.
 
-The reference is BAR's public [Strategic Icons guide](https://www.beyondallreason.info/guide/strategic-icons)
-(accessed 2026-09-11): it combines family shapes, role symbols and level marks.
-Adopt that general visual organization with independently authored geometry;
-BAR's implementation, artwork, balance roles and tier meanings are not inputs.
-
-Generate icons deterministically from simple vector geometry, rasterized into
-one shared atlas at load time. A role icon should remain legible when the unit
-model would be only a few pixels wide. Model thumbnails and per-unit generated
-paintings are poor first choices for that purpose. No network generation,
-randomness or image generation occurs during play. Units with the same verified
-family and role may share an icon; a unique symbol for every definition is not
-a first-release requirement. Exact identity remains available through the
-existing permitted hover information.
-
-Vocabulary used by the generated review sheet:
-
-| Component | Meaning | Starting design |
+| Component | Meaning | Design |
 |---|---|---|
-| Outer contour | Family | circle for kbot, diamond for vehicle, triangle for aircraft, trapezoid for hovercraft, hull for ship, capsule for submarine, square for structure |
+| Outer contour | Family | circle for kbot, diamond for vehicle, triangle for aircraft, trapezoid for hovercraft, flat-topped rounded hull for ship, capsule for submarine, square for structure |
 | Inner symbol | Primary purpose | construction tool, factory, extractor, energy, storage, sensor, jammer, transport, weapon or generic support |
-| Bottom ticks | Presentation level | no marks for 0/1; two for 2; three for 3 or greater; commander appearances have none |
-| Color | Owner | dominant opaque shade of the published lobby color's `32xlogos` frame |
-| Halo | Selection / hover | separate from role and ownership; retain contrast over bright and dark terrain |
+| Bottom ticks | Presentation level | none for 0/1; two for 2; three for 3 or more; commander appearances have none |
+| Colour | Owner | dominant opaque shade of the published lobby colour's `32xlogos` frame |
+| Halo | Selection / hover | separate from role and ownership; retains contrast over bright and dark terrain |
 
-The accepted size is 24 framebuffer pixels after play-test feedback on 20px.
-It stays 24 pixels at every camera zoom, including the 0.25× tactical target
-and map-clamped intermediate factors; picking uses the same fixed footprint.
-The review sheet retains 16/20/24 comparisons; these are design choices, not
-retail constants. Keep icons upright, centered on the current marker
-projection, clipped to the battle viewport and outside the scaled world region.
-The usual transition remains 0.625× fade-in / 0.5× full icons, with the
-clamped tactical-stop exception in §16.7. Model crossfade remains separate.
+**Size and placement.** 24 framebuffer pixels from a 32-pixel supersampled source
+tile, fixed at every camera zoom including the 0.25× tactical target and
+map-clamped intermediate factors; picking uses the same footprint. Icons stay
+upright, centred on the current marker projection, clipped to the battle viewport
+and outside the scaled world region. The transition is §16.11's 0.625× fade-in /
+0.5× full icons with §16.7's clamped tactical-stop exception.
 
-Revision 3 uses a single larger crown for commander appearances, a flat-topped
-rounded hull for ships, one factory silhouette for every product family, a
-filled downward triangle for extraction, and a slashed circle for jammers.
-Ballistic weapons use a filled circle, water weapons a horizontal capsule, and
-fallback projectiles a smaller filled circle. Construction uses one tool at
-all levels. Revision 6 uses light ticks with dark keylines across the original
-lower border, replacing the dark cutouts that were hard to see at 24px. Marks
-follow each family's lower contour at the same centers as revision 5. Each
-white core is 2×4 source pixels with a 0.75-source-pixel dark keyline; at the
-24px destination this is a 1.5×3px core before filtering. Centers are five
-source pixels apart. The existing white and black mask channels carry the
-marks, so brightness is independent of team color. Frame thickness, body size,
-glyph placement and selection halo are unchanged; no detached row or body
-compression is used. The keylines may cross the original contour to preserve
-contrast on light terrain. These are approved presentation geometry choices.
+**Vocabulary.** A larger crown marks commander appearances and one factory
+silhouette serves every product family; the remaining role glyphs are authored
+geometry in `strategic_icon_art.go`. Level ticks are light with dark keylines
+across the lower border — white cores of 2×4 source pixels, a 0.75-pixel dark
+keyline, centres five source pixels apart — carried on the white and black mask
+channels so brightness is independent of team colour; a keyline may cross the
+contour rather than shrink the frame or glyph.
 
-Levels follow the requested Enhanced presentation policy, not retail tech-tier
-semantics: compute the minimum count of factories on a final build-menu path
-from a true commander. If no route exists, use a sole positive numeric LEVEL
-token as fallback. Preserve both graph and authored evidence in the audit.
-Entering a structure builder with a nonempty final product menu adds one;
-other edges add zero. Include the destination factory in that count. Cycles
-cannot increase the shortest path. An unreachable unit without a single authored
-level remains unresolved. Never infer from cost, names or descriptions. Levels
-0/1 have no marks, level 2 has two ticks, and level 3 or greater has three; retain the
-exact value and source in the audit. Commander and decoy appearances suppress
-levels entirely. Compute the graph once when the catalog loads. A name-resolved
-route applies only to its resolved record; other retained same-name records
-use their own authored fallback.
-
-### 18.2 What the installed data establishes
-
-**Established — implementation and asset observations.** On 2026-09-11, a
-read-only audit at main `f0673b3` used `vfs.MountGameDirectory` and
-`content.Compile` on `~/TotalAnnihilation`, then walked `SortedUnitKeys`,
-compiled weapon links, build menus and retained inert FBI keys. It found 278
-loaded definitions, 139 per side. This is an observation of this mount, not a
-required count, a test fixture or a statement about all installs. Raw audit
-output stays outside the repository. Reproduce via the same catalog path;
-reading loose FBI files or scanning archives independently would bypass the
-winning-provider and admission rules [02 R-CAT-01 §4][SC24].
-
-Available inputs: `BMCode`, `Category`, capabilities and economy fields,
-resolved movement data, `Weapon1Def..Weapon3Def`, and final build-menu products.
-`TEDClass` is retained in `UnitDef.Unknown`; it is inert in retail gameplay
-[fmt fbi]. Reading it as authored editor metadata for this new presentation
-feature does not give it simulation behavior. The current trail implementation
-already reads it, but its movement-name and model-piece heuristics are not
-proof of an icon family.
-
-| Observed examples | Implication for classification |
-|---|---|
-| `ARMPW`: `KBOT`; `ARMFLASH`: `TANK` in Category and TEDClass | Strong explicit evidence for their family contours |
-| `ARMCK`: `KBOT CONSTR`; `ARMCV`: `TANK CONSTR`, TEDClass `CNSTR`; `ARMCA`: `VTOL CONSTR`; `ARMCS`: `SHIP CONSTR` | Construction is a role independent of mobility family; TEDClass alone loses the vehicle constructor's family |
-| `ARMVP`, `ARMLAB`, `ARMAP`, `ARMSY`, `ARMHP`: structure BMCode, Builder and CanMove set, nonempty product menus | Do not classify buildings with `!CanMove`. Use structure identity, then the build products [SC21] |
-| `ARMASP`, `CORASP`: structure builders, empty product menus, TEDClass `SPECIAL` | Builder alone does not establish a factory; preserve repair/support distinctions |
-| `ARMSOLAR`: EnergyMake zero, EnergyUse negative; `ARMWIN`: WindGenerator; `ARMTIDE`: TidalGenerator | Energy sources require the actual authored economy vocabulary, not a positive EnergyMake test |
-| Constructors and factories carry incidental resource production/storage; `ARMRAD` has EnergyMake | A positive resource field is insufficient to assign an economy role |
-| `ARMMOHO`: ExtractsMetal; `ARMMAKR` and `ARMMMKR`: MakesMetal; `ARMESTOR`: STORAGE and EnergyStorage | Separate extraction, conversion and storage; do not confuse incidental storage with dedicated storage |
-| `ARMFIG` and `ARMJETH` linked missiles have ToAirWeapon false | That flag alone cannot identify fighter / anti-air roles. Weapon family and targeting preferences need a bounded evidence review |
-| `ARMPT` has laser and missile slots; `ARMLATNK` has two weapon slots | Revision 3 displays the first active slot's weapon kind; retain other weapon capabilities in the audit |
-| `CORNECRO`: CanResurrect, Builder, category WEAPON, inactive weapon slots | Capability and resolved active weapon links must qualify broad category tags |
-| `ARMSUB`: UNDERWATER; `ARMATL`: structure, TORP and WaterWeapon; `ARMTIDE`: TEDClass WATER | Water-related metadata does not establish a mobile submarine |
-| `ARMAMPH`: KBOT and CanHover; `CORSCORP`: Category TANK, TEDClass SPECIAL | A single mobility flag or editor class is not an exhaustive physical-family taxonomy |
-| `ARMCOM` / `CORCOM`: Commander true, LEVEL10; decoy commanders: TEDClass COMMANDER, Commander false | True-command capability and visual disguise are separate; enemy art must not expose the difference |
-| `ARMMOHO`, `ARMBRTHA`, `ARMAMD`: LEVEL3; `CORSSUB`: bare LEVEL; six definitions have no level token | Authored category numbers are not universal tech tiers; revision 3 uses reachable factory depth and retains authored numbers as fallback |
-| `ARMDRAG`: IsFeature, category METAL, TEDClass FORT | It is not a metal producer; after conversion its feature stays in the existing feature layer |
-
-The audit also found five mobile definitions without any of the usual explicit
-family tokens: the two decoy commanders, `ARMSCAB`, `CORMABM`, and `ARMSCORP`.
-TEDClass narrows some of these, but a rule must report its fallback rather than
-silently treating SPECIAL as a tank. Case-insensitive whole-token comparison
-is required; `NOTAIR` is not an aircraft token and `NOTSUB` is not a submarine
-token [02 "Unit record"][fmt fbi].
-
-**Established — constructor asset audit.** The 20 ordinary constructors in the
-reference mount each author CONSTR and one LEVEL1/LEVEL2 token, corroborated by
-their authored basic/advanced descriptions. ARM/CORE CV/ACV, CK/ACK and CA/ACA
-pairs cover vehicles, kbots and aircraft. CSA seaplanes, CH hovercraft and CS
-ships use LEVEL1; ACSUB submarines use LEVEL2. ARMMLV's LEVEL2 and CORMLV's
-LEVEL1 do not make minelayers ordinary constructors: neither authors CONSTR.
-ARMFARK's CONSTR LEVEL2 and empty product menu retain the assist classification.
-The original constructor-only mapping used single/crossed tools. Revision 3
-replaces it with the general level-dot policy above; no costs or localized
-names participate in classification.
-
-**Established — revision 3 asset audit.** The minimum route for `CORKROG` is
-`CORCOM -> CORLAB -> CORCK -> CORALAB -> CORACK -> CORGANT -> CORKROG`:
-three factories, while its category authors LEVEL2. `ARMMOHO` needs two
-factories but authors LEVEL3. The user selected graph-first presentation,
-so these show three and two dots respectively. Basic and advanced constructors
-and factories have matching route counts of one and two. `CORSSUB` authors a
-bare LEVEL and has a two-factory path. `ARMGATE` and `CORGATE` have neither a
-reachable route nor a valid authored number in this mount; their level remains
-unknown and unmarked. These observations do not change retail definitions.
+**Levels** follow Enhanced presentation policy, not retail tech-tier semantics:
+the minimum count of factories on a final build-menu path from a true commander.
+Entering a structure builder with a nonempty final product menu adds one, other
+edges add zero, the destination factory counts, and cycles cannot increase a
+shortest path. Failing a route, a sole positive numeric LEVEL token is the
+fallback; an unreachable unit without one stays unresolved and unmarked. Commander
+and decoy appearances suppress levels entirely. The graph is computed once at
+catalog load, and a name-resolved route applies only to its resolved record. Never
+infer from cost, names or descriptions.
 
 ### 18.3 Classification contract
 
-**Implementation policy.** Build a presentation-only descriptor table from the final
-compiled catalog, indexed by canonical definition identity within that catalog.
-Each descriptor stores its family, role, optional subtype and evidence:
-source logical path/provider, relevant authored fields, rule identifier, and
-whether the result is established input, a reviewed presentation mapping, or
-unresolved. Icon geometry and classification rules have their own revision;
-neither changes the authoritative definition hash.
+A presentation-only descriptor table compiled from the final catalog, indexed by
+canonical definition identity within it. Each descriptor stores family, role,
+optional subtype and evidence: source logical path and provider, the authored
+fields read, rule identifier, and whether the result is established input, a
+reviewed presentation mapping, or unresolved. Icon geometry and classification
+rules carry their own revision; neither changes the definition hash.
 
-1. Establish structure versus mobile from the existing compiled BMCode
-   convention. Partition capabilities from role rather than collapsing both
-   into one enum. Use explicit category family tokens where available,
-   compatible TEDClass metadata next; contradictory or absent evidence keeps a
-   generic family until reviewed. Do not infer legs from a TANK movement name.
-2. Resolve specific purpose before incidental stats: feature conversion,
-   commander appearance, resurrection/construction, manufacturing/repair,
-   dedicated economy and sensors, then combat/general support. A classifier
-   must retain all supported capabilities even when the icon displays one.
-   Confirm precedence against the full audit rather than baking this list into
-   a gameplay rule.
-3. A structure builder with a nonempty final product menu uses the single
-   factory glyph. Product families never add a subtype or badge. Final menus,
-   including downloads, also supply the level graph described in §18.1.
-4. Use explicit economy/sensor category tags plus capability fields to
-   distinguish dedicated functions. Energy generation must include negative
-   EnergyUse, wind and tide as documented inputs [02 "Unit record"]. A
-   constructor's production, a plant's storage or a gun's radar does not
-   replace its primary role.
-5. Use only active resolved weapon slots, never ExplodeAs or SelfDestructAs,
-   to describe armament. Display the first active slot in authored 1/2/3 order;
-   never combine slots into a mixed glyph. Retain all active capabilities in the
-   audit. Interceptor, dropped, water-weapon and paralyzer flags
-   are evidence for capabilities; interpreting them as a primary unit role
-   still requires a reviewed mapping. Do not infer scout/artillery/heavy/AA
-   from arbitrary speed, range, cost, damage, or weapon-name thresholds.
-6. Audit unresolved cases using authored descriptions, build relationships,
-   weapon data and original model/build art. Runtime classification never
-   parses localized display names. A small explicit presentation mapping is
-   acceptable only with recorded evidence and applicability to the relevant
-   definition content; an unknown/modded definition gets a generic fallback,
-   never the role of an unrelated stock unit with the same name.
+| # | Evidence and order | Never |
+|---|---|---|
+| 1 | Structure versus mobile from the compiled BMCode convention, capabilities partitioned from role; explicit category family tokens first, compatible `TEDClass` metadata next; contradictory or absent evidence keeps a generic family. Comparison is case-insensitive whole-token [02 "Unit record"][fmt fbi] | infer legs from a TANK movement name; read `NOTAIR` as an aircraft token or `NOTSUB` as a submarine one |
+| 2 | Specific purpose before incidental stats: feature conversion, commander appearance, resurrection/construction, manufacturing/repair, dedicated economy and sensors, then combat and general support; every supported capability is retained even when the icon displays one | collapse capabilities into the displayed role |
+| 3 | A structure builder with a nonempty final product menu uses the single factory glyph | add a subtype or badge for a product family |
+| 4 | Explicit economy and sensor tags plus capability fields distinguish dedicated functions; energy generation must include negative EnergyUse, wind and tide as documented inputs [02 "Unit record"] | let a constructor's production, a plant's storage or a gun's radar replace a primary role |
+| 5 | Only active resolved weapon slots, first active slot in authored 1/2/3 order; interceptor, dropped, water-weapon and paralyzer flags are capability evidence, and a primary role read from one needs a reviewed mapping | use ExplodeAs or SelfDestructAs; combine slots into a mixed glyph; infer scout/artillery/heavy/AA from speed, range, cost, damage or weapon-name thresholds |
+| 6 | A small explicit presentation mapping, only with recorded evidence; an unknown or modded definition gets a generic fallback | parse localized display names at runtime; give a definition the role of an unrelated stock unit with the same name |
 
-**Unknown / design follow-ups.** The complete AA/fighter/artillery distinction,
-ambiguous physical families, exact-unit differentiation, and levels with
-neither a reachable build path nor one unambiguous authored token remain audit unknowns. Existing retail facts
-need no new executable analysis; any new claim about targeting or disguise
-behavior must first be established and recorded in its owning research category.
-Missing evidence is shown in the audit and becomes `TODO(question)` at the
-classifier site. A generic symbol is a complete supported fallback.
+`TEDClass` is retained in `UnitDef.Unknown` and inert in retail gameplay
+[fmt fbi], so reading it as authored editor metadata gives it no simulation
+behavior. The audit behind these rules is in the history file. **Unknown:** the
+complete AA / fighter / artillery distinction, ambiguous physical families,
+exact-unit differentiation, and levels with neither a reachable build path nor one
+unambiguous authored token. Missing evidence becomes `TODO(question)` at the
+classifier site; a generic symbol is a complete supported fallback.
 
 ### 18.4 Visibility and interaction contract
 
-**Established — implementation inputs.** Committed UnitViews carry model
-visibility, owner color and selection. RadarContactViews also contain concealed
-definition metadata; contact presence, Visible, Graphic and Commander are not
-identification proofs. The painter gates enemies by explored fog at the anchor
-and the committed hull visibility predicate [03 §3.2][03 §3.3]. Attached models
-inherit the admission of their carrier through its published Cargo list;
-piece-less cargo is omitted [03 R-RAST-01 §7].
+Committed `UnitView`s carry model visibility, owner colour and selection;
+`RadarContactView`s also carry concealed definition metadata, so contact presence,
+`Visible`, `Graphic` and `Commander` are **not** identification proofs.
 
-**Implementation policy.** Visible-unit icons use that world-painter admission,
-independently of minimap contact status and damage blinking. Iterate the committed
-units even when a radar record is absent. Own visible icons remain steady during
-combat. A same-publication slot lookup suppresses duplicate radar marks and
-resolves attachment links; missing links and nested cargo cannot reveal attached units.
-Sensor-only contacts retain MinimapBlipAdmitted, blink included, and never expose
-definition art or a UnitView hit. They draw at every Enhanced zoom at full
-opacity, including the strategic icon fade band: a hidden unit has no visible
-model to replace. The existing four-framebuffer-pixel square, team tint,
-committed contact projection and viewport clip are shared with the strategic
-view. This foreground pass follows fog and precedes HUD chrome; it also runs
-when the paused world is reused. Visible models consume their contact without
-a duplicate dot, even when the strategic icon catalog is unavailable. This is
-an Enhanced presentation policy; it does not add sensor detection or reveal
-unit identity, and the classic marker fade is unchanged. Identities are not
-remembered across visibility loss; retained hover identity uses InstanceID rather than a reusable pool slot.
-
-Visible nanoframes (`BuildRemaining > 0`) have no strategic icon or icon hit.
-The identified-unit lane still consumes their radar records to prevent a stray
-contact square. Sensor-only contacts retain their existing admission; concealed
-construction state cannot remove their blip. The frame's builder/factory
-progress and existing selection UI remain unchanged. Completed units enter the
-icon list on the next publication without a persistent lifecycle cache.
-
-Team ink comes from the most frequent opaque index in the published lobby
-selector's authored `textures/logos.gaf` `32xlogos` frame. The retail `radlogo`
-contains eight gray border pixels and four team-color interior pixels, so its
-majority index is gray even for blue/red teams. Colors are resolved once per
-art/selector binding; no owner-slot-to-color assumption or alternate RGB team
-table is introduced. Enhanced sensor dots use the same logo tint when available.
-Missing team art/color gives visible-unit icons neutral ink, never invisibility;
-generic contact admission still requires its published radar art/selector.
-
-Disguise is an additional information boundary even for visible units. Until
-its retail disclosure contract is verified, use a shared commander-looking
-symbol for visible non-owned commanders and decoy commanders, with no truthful
-commander/decoy badge. This is a conservative new presentation policy, not a
-claim that retail icons existed. Restrict any exact-role embellishment or
-new tooltip information accordingly. Disguise protection covers the complete
-descriptor: contour, role, secondary badges, size and newly exposed hover
-metadata. Unresolved commander-looking definitions keep that shared appearance
-until reviewed. Visibility loss and changes of viewer, camera, viewport or
-mode must invalidate presented icon/hit-test lists immediately; never reuse a
-prior projection or frame's typed list just because its texture remains cached.
-
-**Established — implementation discrepancy.** §16.11 says marker hover picks
-the nearest square; `PickSnapshotUnit` actually tests model hulls and scores by
-size. Enlarging icons without a new hit test would make the displayed target
-and clickable target disagree.
-
-**Implementation policy.** In the strategic view (§16.10), visible typed icons
-use the same screen bounds for drawing and picking. Outside the strategic view,
-the fade keeps normal hull picking. In the strategic view, selection uses the icon's
-contour halo alone: suppress the world-space ground footprint quad to avoid a
-second, offset selection cue. Keep the ground quad during the fade, at normal
-zoom, and for presentation without generated icons. Selection membership,
-orders and drag-selection behavior do not change.
-Resolve overlaps by drawing ordinary icons
-with sensor contacts before visible units in stable publication order, selected icons last, and hit-testing in reverse draw
-order; a hover halo does not itself reorder icons. Share this decision across
-cursor, click selection, tooltips and command targeting. Generic contacts retain
-existing command/knowledge restrictions; a hit must not hand hidden UnitView
-metadata to a tooltip or enable a new target action. Keep drag selection's
-existing visible projected-center policy. No aggregation, displacement or
-cluster counts in the first release; inspect dense overlap before designing any.
+- **Admission.** Enemies are gated by explored fog at the anchor and the committed
+  hull visibility predicate [03 §3.2][03 §3.3]; attached models inherit their
+  carrier's admission through its published Cargo list, and piece-less cargo is
+  omitted [03 R-RAST-01 §7]. Visible-unit icons use that world-painter admission
+  alone — never the minimap's contact latch or its blink term — and iterate the
+  committed units even with no radar record. A same-publication slot
+  lookup suppresses duplicate radar marks and resolves attachment links; missing
+  links and nested cargo cannot reveal attached units. Visible nanoframes
+  (`BuildRemaining > 0`) have no icon and no icon hit, though the identified lane
+  still consumes their radar records.
+- **Sensor-only contacts** retain `MinimapBlipAdmitted`, blink included, never
+  expose definition art or a `UnitView` hit, and draw at full opacity at every
+  Enhanced zoom including the fade band — a hidden unit has no visible model to
+  replace.
+- **Placement.** The foreground pass follows fog and precedes HUD chrome, and runs
+  when the paused world is reused. Identities are not remembered across visibility
+  loss; retained hover identity uses `InstanceID`, not a reusable pool slot.
+- **Team ink** is the most frequent opaque index in the published lobby selector's
+  authored `textures/logos.gaf` `32xlogos` frame — **not** `radlogo`, whose gray
+  border outnumbers its team-colour interior. Colour resolves once per
+  art/selector binding; no owner-slot-to-colour assumption or alternate RGB team
+  table. Missing team art gives neutral ink, never invisibility.
+- **Disguise** is an information boundary even for visible units: until the retail
+  disclosure contract is verified, visible non-owned commanders and decoys share
+  one commander-looking symbol with no truthful commander/decoy badge, and the
+  protection covers the complete descriptor — contour, role, secondary badges,
+  size and any newly exposed hover metadata. Unresolved commander-looking
+  definitions keep that shared appearance until reviewed.
+- **Picking.** A visible typed icon uses the same screen bounds for drawing and
+  picking (`PickSnapshotUnit` scores model hulls by size, so the two must agree),
+  and selection uses the icon's contour halo alone; the ground footprint quad is
+  suppressed there and kept during the fade, at normal zoom, and for presentation
+  without generated icons. Overlaps draw ordinary icons with sensor contacts
+  before visible units in stable publication order and selected icons last, and
+  hit-test in reverse draw order; a hover halo does not reorder. That order is
+  shared across cursor, click selection, tooltips and command targeting. Generic
+  contacts retain existing command and knowledge restrictions: a hit must not hand
+  hidden `UnitView` metadata to a tooltip or enable a new target action. Drag
+  selection keeps its visible projected-centre policy. Visibility loss and changes
+  of viewer, camera, viewport or mode invalidate presented icon and hit-test lists
+  immediately.
 
 ### 18.5 Implementation boundaries
 
-Implementation contract:
-
 - A client-owned `StrategicIconCatalog` compiles immutable descriptors from
-  `content.Catalog`; returns descriptor plus evidence and a generic fallback.
-  No sim package imports it; no change to `content.UnitDef` is needed.
-- Client layout takes the committed frame, viewer, live camera, viewport,
-  catalog, radar option flags, bound logo/radlogo/palette resources and reusable
-  storage. Together with the frame mapping/blink fields, those explicit
-  presentation inputs preserve current admission and color resolution, including
-  the current missing-art and unknown-palette behavior. It
-  returns admitted icon instances and the corresponding restricted hit targets
-  for the same presented frame.
-- Drawlist icon records carry immutable atlas identity/UV bounds, screen
-  bounds, tint, alpha, selection and clip. They own or safely retain referenced
-  data through `List.Clone`, replay and asynchronous record/submit buffering.
-- The modern executor uploads the generated atlas once and batches lightweight
-  quads. Do not allocate an image, scan definitions, rasterize geometry or
-  upload a texture per unit per frame. Outline/foreground masks can share the
-  atlas; any extra passes must be counted and measured.
+  `content.Catalog` and returns a descriptor plus evidence, with a generic
+  fallback. No sim package imports it; `content.UnitDef` is unchanged.
+- Client layout takes the committed frame, viewer, live camera, viewport, catalog,
+  radar option flags, bound logo/radlogo/palette resources and reusable storage,
+  and returns admitted icon instances with the corresponding restricted hit
+  targets for the same presented frame, rebuilding admission and the
+  same-publication slot lookup on every record and pick in reusable storage.
+- Drawlist icon records carry immutable atlas identity and UV bounds, screen
+  bounds, tint, alpha, selection and clip, and own or safely retain referenced data
+  through `List.Clone`, replay and asynchronous record/submit buffering.
+- The executor uploads the generated atlas once per resource identity and batches
+  lightweight quads through a bounded four-entry cache retired on source reset.
+  R/G/B/A hold disjoint team, white, selected-halo and black coverage — not a
+  premultiplied RGBA image, so a stored alpha of zero is mask data that must
+  survive upload — and the fragment combines coverage with the live display
+  palette and applies the layer fade to colour and opacity together. Palette
+  changes do not re-upload the masks. It must not allocate an image, scan
+  definitions, rasterize geometry or upload a texture per unit per frame. One
+  batch serves typed icons and generic contacts: the shared atlas is bound for
+  both and a flat-palette shader branch draws the generic squares, so alternating
+  kinds do not fragment the run.
+- Input uses the projection of the last successfully submitted list while frame,
+  tick, viewer, zoom, viewport, catalog and camera samples still match. The
+  record/submit pipeline can accept a predicted camera fraction within its
+  tolerance, so retaining the actual submitted origin is what stops a later
+  measured fraction from moving the clickable rectangle (§13.10); speculative
+  records cannot replace it. Changed publication or projection invalidates it, and
+  visibility and identity are always rechecked. Icon hover and art are foreground
+  state and do not invalidate the paused terrain/fog cache.
 
 Classification, geometry, layout and evidence live in
-`internal/client/strategic_icon_{catalog,art,layout}.go`. The existing
-`strategic_markers.go` records the shared layout. `internal/drawlist/world.go`
-and `list.go` own records and lifetime; `internal/platform/gpurender/world.go`
-and `strategic_icons.go` execute them. Battle setup, cursor, selection and input
-bind the catalog and share presented picking. The app's successful submission
-hooks preserve the exact accepted camera projection for input.
+`internal/client/strategic_icon_{catalog,art,layout}.go`; `strategic_markers.go`
+records the shared layout; `internal/drawlist/world.go` and `list.go` own the
+records and their lifetime; `internal/platform/gpurender/world.go` and
+`strategic_icons.go` execute them.
 
-### 18.6 Stages and acceptance gates
+### 18.6 Review sheet and acceptance
 
-1. **Catalog audit and design sheet.** First produce an independently generated,
-   labeled sheet of every loaded definition, grouped by family/role,
-   plus an evidence table and unresolved/collision list. Include both factions,
-   expansion/download units, factories, nanoframes, decoys and support units.
-   Show multiple sizes over bright/dark terrain. Human review chooses the
-   visual vocabulary and resolves or explicitly accepts every generic fallback.
-   The current planning audit establishes inputs and pitfalls; it does not
-   claim all 278 definitions already have reviewed icons.
-2. **Atlas and recorder integration.** Implement the accepted catalog and art,
-   generic-contact boundary and fixed-screen layer with the existing zoom
-   transition. Keep model omission, feature persistence, build ghosts, queue
-   overlays and unscaled HUD from §16. Defer icon picking until stage 3 is ready
-   to land with it; do not ship enlarged icons with the old hull-only picker.
-3. **Interaction and verification.** Land shared draw/pick bounds, selection
-   and overlap rules, then inspect motion and dense scenes. Small authored
-   fixtures lock radar-only fallback, cloak/visibility loss, decoy appearance,
-   immediate slot reuse, classification traps, clip/zoom boundaries, retained
-   list replay and draw/pick agreement. Retail tests skip without assets and
-   assert relationships rather than a fixed catalog census.
-4. **Review and performance.** Run `go build ./...`, `go vet ./...`,
-   `gofmt -l .`, `go test ./...` and the applicable GPU device fixtures.
-   View captures at 1×, 0.625×, inside the fade, 0.5× and a lower allowed zoom;
-   include buildings under construction, aircraft/submarines, selected dense
-   armies, radar-only contacts and fog boundaries. Run the live battle benchmark
-   sequentially for classic and modern per BATTLE_BENCHMARK.md, plus matching
-   modern before/after runs at 0.5×. Compare identical scene metadata, inspect
-   feature census and captures, and report CPU time, allocations, atlas uploads,
-   quad/pass counts and frame times. Re-run checks after integration with main.
-
-Generated review sheets, local audit output and captures stay outside the repo;
-committed assets are our authored geometry/rules and light synthetic fixtures.
-The implementation outcome and accepted fallbacks are recorded below.
-
-
-### 18.7 Implementation outcome and accepted fallbacks
-
-The current release uses 24 framebuffer pixels with a 32-pixel supersampled
-source tile, an upright family contour, white role glyph, authored team-color
-ink, dark backing and a selection/hover halo. These are Enhanced design choices,
-not retail constants. The reviewed sheet shows 16/20/24 alternatives; aircraft
-interiors are tight at 16. `go run ./tools/strategic-icon-sheet -root <install>
--out <external-directory>` emits `index.html`, `catalog.png`, `vocabulary.png` and
-`audit.json` and a constructor-only `constructors.png` comparison from the loaded catalog and the same masks the GPU uses.
-
-**Established — revision 6 outcome.** The reference mount yields 104 shared
-symbols across 278 definitions. Constructors use one full-size tool; two or
-three light ticks with dark keylines across the original lower border carry the level, without
-thickening or compressing the frame. Factories use one silhouette with no
-product-family badges. Combat symbols use the first active weapon slot; all
-active weapon capabilities remain in audit evidence. Visible nanoframes are
-excluded from icon drawing and picking while sensor-only contacts preserve
-their knowledge boundary and builder/factory progress remains available.
-
-These are audit observations, not test expectations. Ten primary-role fallbacks
-are accepted: ARMPEEP, CORFINK, ARMBEAC, CORBEAC, ARMDEV1, CORDEV1, ARMUWES,
-ARMUWMS, CORBUILD and CORTRUCK. ARMSCORP and CORTHOVR retain a generic physical
-family. AA, fighter, artillery and heavy-role interpretations remain explicitly
-unresolved. The fallbacks are visible in the audit; no runtime name/description
-guessing or stock-name override table was added. Teleporters use the literal
-Teleporter capability. Commander-looking definitions share their complete art,
-including true commanders and decoys; icon audit evidence is never new hover
-information.
-
-`StrategicIconCatalog` lives in the client and is bound once at battle entry.
-The renderer uploads the immutable mask atlas once per resource identity and
-uses a bounded four-entry cache, retired on source reset. R/G/B/A hold disjoint
-team/white/selected-halo/black coverage, not a premultiplied RGBA image. Bilinear
-filtering clamps samples inside each tile; the fragment combines coverage with
-the live display palette and applies the layer fade to both color and opacity.
-List clones retain the immutable atlas while owning their marker slices.
-
-Layout rebuilds world-unit and sensor-contact admission plus a same-publication
-slot lookup on every
-record/pick, in reusable storage. Input uses the projection of the last
-successfully submitted list when frame, tick, viewer, zoom, viewport, catalog
-and camera samples still match. The record/submit pipeline can accept a predicted
-camera fraction within its tolerance; retaining its actual submitted origin
-prevents a subsequently measured fraction from moving the clickable rectangle.
-Speculative records cannot replace this origin. Changed publication or projection
-invalidates it, and visibility/identity are always rechecked. Icon hover and
-art are foreground state and do not invalidate the paused terrain/fog cache.
-Normal zoom keeps the existing battle-camera hull picker; at/below 0.5× icons
-and clicks share bounds with selected-last, reverse-hit ordering.
-
-Initial 20px validation on the reference install passed build, vet, formatting, the full
-Go test suite, `tools/check-retail` (including staticcheck, deadcode and tagged
-retail tests), and real Metal device fixtures. Native 1× classic and modern
-before/after captures were byte-identical. Selected commander captures at
-0.625×, 0.5625×, 0.5× and 0.3× verified the transition and fixed-size icon.
-Dense live-battle captures covered aircraft, factories, nanoframes, mixed typed
-and radar-only contacts, and fog boundaries. The generated sheet covers the
-naval families; synthetic layout/device fixtures cover overlap priority,
-visibility loss, clipping, selected halos and camera/publication changes.
-
-Sequential classic and modern live benchmarks completed. Matching Comet Catcher
-modern runs at 0.5× (seed 7, 180 measured draws, target 30 Hz) had identical
-scene metadata and every frame's census: the final frame contained 316 units,
-198 moving units, eight nanoframes and 92 features. Median record time was
-0.928 → 1.007 ms, submission 1.495 → 1.653 ms, and total draw work
-6.189 → 6.588 ms; cadence stayed 33.333 ms. These are host measurements from
-one pair, not GPU timings or a general performance guarantee. Measured
-allocation bytes were 105,061,368 → 105,111,152 (about +0.05%), with
-726,738 → 728,801 allocation calls. Median executor counters remained seven
-passes, three phases, six draws and 31,868 vertices.
-
-An initial implementation fragmented batches when typed icons alternated with
-generic contacts. The final path binds the shared icon atlas for both and uses
-a flat-palette shader branch for generic squares, retaining their existing base
-and four outline primitives. A 100-contact device fixture proves one scheduled
-run, byte-identical output against singleton legacy-dot batches, and one atlas
-upload across replay. Palette changes do not upload the masks. This removed
-the initial excess graphics-driver allocations without reordering contacts.
-### 18.8 Play-test feedback correction
-
-The 24px revision corrects three related visibility/color defects: world icons
-no longer depend on the minimap's stale contact latch or its damage-blink term,
-and their team ink comes from HUD logo art instead of radlogo's gray border.
-Visibility tests cover enemies with LOS but no admitted/published radar contact,
-both damage-blink phases, owner selection, radar-only fallback, unexplored fog,
-24px hit edges, missing team color, direct attached models and hidden/nested
-cargo. The constructors sheet verifies basic/advanced glyphs across both
-factions and physical families against the authored categories.
-
-Sequential Comet Catcher live benchmarks (seed 7, modern 0.5×, 180 measured
-draws at 30 Hz) retain identical scene metadata and every frame's simulation
-census. Median record time was 0.983 → 1.075 ms, submission 1.522 → 1.510 ms,
-total draw work 6.021 → 6.255 ms, cadence 33.335 → 33.334 ms. Measured allocation
-bytes were 105,112,192 → 107,592,640; allocation calls 728,826 → 732,206.
-The corrected view draws more visible units: median vertices 31,868 → 32,230,
-with six draws, seven passes and three phases unchanged. These are one pair's
-host measurements, not GPU timings. Classic also completed the live benchmark;
-its capture and the before/after modern captures were visually inspected.
-Build, vet, formatting, full tests, real GPU device fixtures and
-`tools/check-retail` passed on the integrated revision. Selected-unit captures
-at 0.625×, 0.5625×, 0.5× and 0.3× were inspected; native 1× classic and modern
-before/after captures were byte-identical.
+`go run ./tools/strategic-icon-sheet -root <install> -out <external-directory>`
+emits `index.html`, `catalog.png`, `vocabulary.png`, a constructor-only
+`constructors.png` comparison and `audit.json` from the loaded catalog and the
+same masks the GPU uses. Generated sheets, audit output and captures stay outside
+the repository; committed assets are our authored geometry and rules plus light
+synthetic fixtures, and retail tests skip without assets and assert relationships,
+never a fixed catalog census. Acceptance is a human review of that sheet in which
+every generic fallback is resolved or explicitly accepted; the checklist, the
+fallbacks accepted on the reference mount and the live benchmark runs are in the
+history file (§18.7, §18.8). No runtime name or description guessing and no
+stock-name override table exists; teleporters use the literal Teleporter
+capability. No aggregation, displacement or cluster counts: inspect dense overlap
+before designing any.
 
 ## 19. Glow: Enhanced bloom from the world's light sources
 
 ### 19.1 Decision
 
 Retail's composite has no light. A laser is a one-pixel Bresenham line in a
-palette colour, an explosion is animated art with a brightening of the
-pixels under it, and nothing spills past its own pixels. The glow layer gives
-the world's light sources a halo: an Enhanced presentation feature under the
-umbrella of §14.3, on by default while the modern executor presents, absent
-from Original, and never a simulation input [I6]. The classic executor is
-unchanged and stays the byte-exact reference; with the layer switched off the
-modern executor's output is byte-identical to the executor without it
-(§19.5).
+palette colour, an explosion is animated art with a brightening of the pixels
+under it, and nothing spills past its own pixels. The glow layer gives the
+world's light sources a halo: an Enhanced presentation feature, on by default
+while the modern executor presents, absent from Original, never a simulation
+input [I6]. With the layer switched off the modern executor's output is
+byte-identical to the executor without it.
 
-The user's brief relaxed the requirement that Enhanced match retail's
-software composite, so the layer is designed for the look rather than for a
-retail-derived arithmetic. Two things are still not invented: which pixels
-are a light, which the recording already knows, and what colour a light adds,
-which is either the palette colour retail draws or the brightening retail
-applies.
+The user's brief relaxed the requirement that Enhanced match retail's software
+composite, so the layer is designed for the look rather than for a retail-derived
+arithmetic. Two things are still not invented: which pixels are a light, which
+the recording already knows, and what colour a light adds, which is either the
+palette colour retail draws or the brightening retail applies.
 
 ### 19.2 The sources — contract L1
 
 The recording marks its light sources and nothing else changes in it.
-`drawlist.Line` and `drawlist.Sprite` carry an `Emissive` flag; the recorder
-sets it on:
+`drawlist.Line` and `drawlist.Sprite` carry an `Emissive` flag; the recorder sets
+it on the beam and segment strokes of the projectile renderer (lasers and
+lightning) [06 R-WFX-01 §4], never on the selection quad or a path; and on the
+effect, projectile and strip sprites (fire, explosion animation, smoke), never on
+unit, feature, chrome or shadow art. The flag is metadata: every executor draws
+the flagged command exactly as it did, and the classic sink and every parity
+fixture ignore it. The lit discs and halos of §13.11 need no flag — they are
+modern-only commands and always light sources.
 
-- the beam and segment strokes of the projectile renderer (lasers and
-  lightning) [06 R-WFX-01 §4], never on the selection quad or a path;
-- the effect, projectile (plasma shells, flares) and strip (fire, explosion
-  animation, smoke) sprites, never on unit, feature, chrome or shadow art.
+| source | emission |
+|---|---|
+| stroke | `PAL[index] × glowGain` over a quad `glowLineWidth` **world** px wide, converted to screen pixels by the frame's view scale (below) and extended by its half-width at both ends — a one-pixel line has too little energy to survive the blur |
+| sprite | the texel's `PAL` colour × `smoothstep(glowThreshold, 1, max channel)` × `glowSpriteGain`; a tinted strip sprite at half that, so fire and flares emit and smoke and debris do not; only the sprite's keyed texels |
+| lit disc | the composite colour under the fragment × the disc atlas lane `max(k−1, 0)` × `glowLightGain`, read from the same atlas texel the disc used (§13.11), so the glow's colour is the lit ground's |
+| halo | the composite colour under the fragment × the row's high lane × `glowLightGain`, inside the same disc test the halo runs |
+| nanolathe spray | a palette-coloured quad two world pixels beyond each side of the particle core, at gain 0.45 (§23.5) |
 
-The flag is metadata: every executor draws the flagged command exactly as it
-did, and the classic sink and every parity fixture ignore it. The explosion
-flash disc and the ground halo (§13.11) need no flag — they are modern-only
-commands and always light sources.
-
-What each source emits into the glow plane, `internal/platform/gpurender/glow.go`:
-
-| source | emission | notes |
-|---|---|---|
-| stroke | `PAL[index] × glowGain` over a quad `glowLineWidth` screen px wide (scaled by the world transform), extended by its half-width at both ends | a one-pixel line has too little energy to survive the blur; the quad gives it some |
-| sprite | the texel's `PAL` colour × `smoothstep(glowThreshold, 1, max channel)` × `glowSpriteGain`; a tinted strip sprite at half that | fire and flares emit, smoke and debris do not; only the sprite's keyed texels |
-| flash disc | the composite colour under the fragment × the disc atlas lane `max(k−1, 0)` × `glowLightGain` | the brightening the disc applied, read from the same atlas texel the disc used (§13.11), so the glow's colour is the lit ground's |
-| halo | the composite colour under the fragment × the row's high lane × `glowLightGain`, inside the same disc test `destOpHalo` runs | as above |
-
-The composite is bound as a source image while the glow plane is the
-destination, so reading it there is legal and reads the frame as replayed so
-far. The emission fragment's alpha is its largest channel, so the plane stays
-a valid premultiplied image through the linear-filtered shrinks.
+The composite is bound as a source image while the glow plane is the destination,
+so reading it there is legal and reads the frame as replayed so far. The emission
+fragment's alpha is its largest channel, so the plane stays a valid premultiplied
+image through the linear-filtered shrinks.
 
 ### 19.3 The resolve — contract L2
 
-The batch is additive and order-free, so it rides no phase: sources append
-quads (with the world transform of §16.3 applied to their vertices exactly
-as the scheduler applies it) to runs keyed by image bindings, and the
-resolve runs at most once per frame, at the first of:
+The batch is additive and order-free, so it rides no phase: sources append quads
+(with the world transform of §16.3 applied to their vertices exactly as the
+scheduler applies it) to runs keyed by image bindings, and the resolve runs at
+most once per frame, at the first of: the fog command, before it compiles — so
+the grey composite dims the glow and the black one hides it, exactly as they
+treat the light sources themselves — or the close of the world region, so a frame
+recorded without a fog composite still resolves before the chrome is painted over
+the world. A front-end frame has no emissive commands and drops nothing.
 
-1. the fog command, before it compiles — so the grey composite dims the
-   glow and the black one hides it, exactly as they treat the light sources
-   themselves;
-2. the close of the world region — so a frame recorded without a fog
-   composite still resolves before the chrome is painted over the world.
+The resolve submits the scheduler first, so it is a barrier costing one segment,
+then: clears the full-frame emission plane and draws the runs into it under
+`BlendLighter`; shrinks it to a half and a quarter of the frame with linear
+filtering, blurs the quarter plane with a separable nine-tap Gaussian
+(`glowSigma` 2, ping-pong), shrinks that to an eighth and blurs again; and adds
+the quarter plane (×4, `glowNearWeight`) and the eighth plane (×8, `glowFarWeight`)
+onto the composite with linear magnification under a **screen** blend,
+`out = src + dst × (1 − src)`. Screen rather than additive is what keeps a
+fireball's own art: an already-white core stays white instead of clipping, and
+the halo shows where the ground is darker.
 
-A frame with neither (a front-end frame) has no emissive commands and drops
-nothing. The resolve submits the scheduler first, so it is a barrier costing
-one segment, then:
+**The halo is sized in world pixels, not in framebuffer pixels.** Everything a
+halo surrounds — the beam, the sprite, the flash disc — is drawn at the frame's
+**view scale**: the record step the recorder projected the world at times the
+live zoom factor the scheduler applies (§14.2, §16.2). The terrain record
+carries the step, so the executor reads it from the same place the aircraft
+shadow does (`glowViewScale`); a frame with no terrain is the native view. A
+halo fixed in framebuffer pixels is half as wide, *relative to the units it
+comes from*, at the 2× step as at 1×, and changes size under the wheel. So
+`glowNearSigmaWorld` states the near octave's blur radius in world pixels and
+`glowBlurStep` converts it once, into the separable blur's tap spacing in texels
+of the octave being blurred; the stroke quad's half-width takes the same view
+scale. The far octave keeps the same spacing on a texel twice as wide, so it
+stays twice the near halo. At the native view the spacing is exactly one texel
+and the quad four screen pixels, so a 1× frame composes exactly as it did.
+Blur fetches are nearest, so a spacing below one texel folds taps onto the same
+texel: the kernel narrows toward the octave's own resolution rather than
+aliasing, which is the right failure at a zoomed-out view where the halo is
+already finer than the octave can hold.
 
-1. clears the full-frame emission plane and draws the runs into it under
-   `BlendLighter`;
-2. shrinks it to a half and a quarter of the frame with linear filtering,
-   blurs the quarter plane with a separable nine-tap Gaussian (σ = 2 texels,
-   ping-pong), shrinks that to an eighth and blurs again;
-3. adds the quarter plane (×4, weight `glowNearWeight`) and the eighth plane
-   (×8, weight `glowFarWeight`) onto the composite with linear magnification
-   under a **screen** blend, `out = src + dst × (1 − src)`. Screen rather
-   than additive is what keeps a fireball's own art: an already-white core
-   stays white instead of clipping, and the halo shows where the ground is
-   darker.
+That is nine device passes per frame with something glowing and about 2.4 frames
+of fill, most of it the two magnified adds; a frame with nothing emissive costs
+nothing. The planes are allocated once per frame size, and the emission plane is
+**unmanaged** so its texels never depend on an atlas placement (§13.12 "Page
+planes are unmanaged"). Steady-state frames allocate no options, no uniform map
+and no geometry here.
 
-That is nine device passes per frame with something glowing and about 2.4
-frames of fill, most of it the two magnified adds; a frame with nothing
-emissive costs nothing. The planes are allocated once per frame size; the
-emission plane is unmanaged so its texels never depend on an atlas placement
-(§13.12 "The defect this round exposed"). Steady-state frames allocate no
-options, no uniform map and no geometry here.
-
-The knobs (`glowLineWidth` 4, `glowGain` 1, `glowThreshold` 0.65,
+The knobs (`glowLineWidth` 4 world px, `glowGain` 1, `glowThreshold` 0.65,
 `glowSpriteGain` 0.6, `glowLightGain` 0.35, `glowNearWeight` 0.65,
-`glowFarWeight` 0.5, σ 2 over four taps) are presentation choices tuned by
-eye on the battle benchmark capture; the first pass at 0.8/0.5 with an
-additive composite and no sprite gain blew every fireball to a white blob,
-which is the case the screen blend and the sprite threshold exist for.
+`glowFarWeight` 0.5, `glowSigma` 2 over `glowTapCount` 4 taps a side,
+`glowNearSigmaWorld` = `glowSigma` × `glowOctaveNear` = 8 world px, which is the
+eight framebuffer pixels the layer was tuned at when the view scale is 1) are
+presentation choices tuned by eye on
+the battle benchmark capture; a first pass at 0.8/0.5 with an additive composite
+and no sprite gain blew every fireball to a white blob, which is the case the
+screen blend and the sprite threshold exist for.
 
 ### 19.4 The switch
 
-`settings.Display.Glow` (`display.glow`, default 1) is a Nanolathe option with
-no retail bit. The shell and the capture route apply it with the other
-display bits (`applyVisualOptions` → `Client.SetGlow`), the `+glow` chat
-command toggles and persists it beside `+antialias` and `+dither`, and every
-modern executor site copies the client's switch to the renderer
-(`Renderer.SetGlow`) before `Execute`, next to the display palette. A settings
-file that omits the key keeps the default because the loader decodes over the
-defaults [02 "Settings"]. Off, no source appends and the resolve is a no-op.
+`settings.Display.Glow` (`display.glow`, default 1) is a Nanolathe option with no
+retail bit. The shell and the capture route apply it with the other display bits
+(`applyVisualOptions` → `Client.SetGlow`), the `+glow` chat command toggles and
+persists it beside `+antialias` and `+dither`, and every modern executor site
+copies the client's switch to the renderer (`Renderer.SetGlow`) before `Execute`,
+next to the display palette and the effect selection. A settings file that omits
+the key keeps the default because the loader decodes over the defaults
+[02 "Settings"]. Off, no source appends and the resolve is a no-op. It is
+deliberately **not** one of the five `Effects` families of §30.
 
 ### 19.5 Verification
 
-1. **Device fixture.** `glow_test.go` (`NANOLATHE_GPU_DEVICE_TEST=1`): a flat
+1. **Device fixture.** `glow_test.go` under `NANOLATHE_GPU_DEVICE_TEST=1`: a flat
    field with one emissive stroke inside a rest-factor world region. Off, the
    frame is the exact classic expansion and the counters are zero. On, the
-   stroke's own pixels are unchanged (screen leaves white white), the field
-   beside it is clearly brighter, the brightening falls off with distance, and
-   the far corner is the field to within the blur's last tap.
-2. **CI tier.** Unit tests lock the normalized kernel, run-relative indices
-   and run splitting of the batch, the stroke quad's geometry, and the
-   recorder's emissive marks on beam and segment strokes; `tools/check` green.
-3. **Byte-identical off.** The modern battle benchmark (1080p, 120 TPS, 180
-   frames) with `display.glow` 0 on this branch against main:
-   `battle.png` identical; the M-matrix captures of quiet frames identical
-   with the switch on (nothing emissive in frame).
-4. **Look.** The benchmark capture with the switch on beside the same frame
-   off, cropped at 1:1 around an explosion cluster and around a laser: the
-   fireballs keep their texture with a soft warm halo, the Leveler's green
-   beam glows, burning trees glow, smoke does not, and the fogged half of the
-   map shows the glow greyed.
-5. **Cost.** Same benchmark, glow off → on, adjacent runs on a host at load
-   ~5: Submit 5.21 → 5.33 ms median, cadence 8.53 → 8.61 ms, OutsideDraw 2.76
-   → 2.94 ms, on the 8.8 ms floor 58% → 53%, passes 13 → 22 median, ~570
-   emissive quads and 2.2k more Ebitengine objects per frame. GPU time is not
-   observable through Ebitengine (docs/BATTLE_BENCHMARK.md), so the outside-
-   draw delta is the upper bound on what the nine passes cost the device.
-
-### 19.6 Owed
-
-A human look at the window in motion, where the glow is interpolated with
-the sources. Nanolathe spray glow and local illumination are prototyped in
-§23.5. Unit-mounted lights still need a material or piece-name signal the
-model lane does not carry. The two
-magnified adds could be one shader pass sampling both octaves, and the half
-plane could go if Ebitengine's mipmapped shrink proves cheaper than a pass;
-neither was needed at the measured cost.
+   stroke's own pixels are unchanged (screen leaves white white), the field beside
+   it is clearly brighter, the brightening falls off with distance, and the far
+   corner is the field to within the blur's last tap.
+2. **CI tier.** Unit tests lock the normalized kernel, run-relative indices and
+   run splitting of the batch, the stroke quad's geometry, and the recorder's
+   emissive marks on beam and segment strokes.
+3. **Byte-identical off.** The modern battle benchmark with `display.glow` 0
+   against the build without the layer.
+4. **Look.** The benchmark capture with the switch on beside the same frame off,
+   cropped 1:1 around an explosion cluster and around a laser: the fireballs keep
+   their texture with a soft warm halo, the beam glows, burning trees glow, smoke
+   does not, and the fogged half of the map shows the glow greyed.
 
 ## 20. Shift tactical range guides (Enhanced)
 
 ### 20.1 Presentation policy
 
-Holding Shift at any modern-renderer zoom, including 1× and 2×, draws
-ranges for selected own units and the hovered identified unit.
-An armed build product also shows its prospective ranges at the snapped site,
-including an invalid site while the player repositions it. This is an Enhanced
-UI choice, not a retail hotkey or an authoritative coverage calculation. It
-uses the product definition, footprint centre and validated preview height;
-arming or displaying a guide never submits a construction order.
-
-Releasing the key, losing focus, switching to classic, opening a modal/result
-or entering chat hides the guides. Shift retains its existing selection and
-command-queue handling. A single-line on-screen legend names only the categories
-present, in their guide colors, without a heading or footer:
+Holding Shift at any modern-renderer zoom, including 1× and 2×, draws ranges for
+selected own units and the hovered identified unit. An armed build product also
+shows its prospective ranges at the snapped site, including an invalid site while
+the player repositions it. This is an Enhanced UI choice, not a retail hotkey or
+an authoritative coverage calculation. It uses the product definition, footprint
+centre and validated preview height; arming or displaying a guide never submits a
+construction order. Releasing the key, losing focus, switching to classic,
+opening a modal or result screen, or entering chat hides the guides, and Shift
+retains its existing selection and command-queue handling. A single-line on-screen
+legend names only the categories present, in their guide colours.
 
 | Guide | Ink | Radius source |
 |---|---|---|
-| Weapon | Orange, solid | Each independently enabled, active weapon slot's `Range` |
+| Weapon | Orange, solid | each independently enabled, active weapon slot's `Range` |
 | Radar | Cyan, solid | `RadarDistance` |
 | Sonar | Blue, dashed | `SonarDistance` |
 | Radar jammer | Purple, dashed | `RadarDistanceJam` |
 | Sonar jammer | Pink, dashed | `SonarDistanceJam` |
-| Build | Green, dashed | Builder's `BuildDistance` |
-| Interceptor guide | Yellow, dashed | Interceptor weapon's `Coverage` |
+| Build | Green, dashed | builder's `BuildDistance` |
+| Interceptor | Yellow, dashed | interceptor weapon's `Coverage` |
 
-Equal weapon radii on one unit collapse to one ring. Sonar is dashed so radar
-and sonar remain visible when their authored distances coincide. Preview products use all
-active authored slots; live units use the committed independently enabled slot
-bits. Record-zero NOWEAPON links are omitted even if they author a range.
+Equal weapon radii on one unit collapse to one ring. Sonar is dashed so radar and
+sonar remain visible when their authored distances coincide. Preview products use
+all active authored slots; live units use the committed independently enabled
+slot bits. Record-zero NOWEAPON links are omitted even if they author a range.
 Stockpiling alone does not select interception coverage. Sensor guides for an
 inactive switchable unit become dashed; they describe its nominal capability.
 
@@ -4530,195 +3085,158 @@ inactive switchable unit become dashed; they describe its nominal capability.
 
 **Established source contracts:** ordinary `Range` is in whole world units
 [06 §3.3]; definition activity and independent slot bits are [06 R-WPN-05 §3].
-Sensor/jammer readers sign-extend their stored 16-bit fields, while construction
-reach zero-extends its 16-bit field [07 R-P0-11 §3]. No unit-name lookup table or
-invented weapon range is involved.
+Sensor and jammer readers sign-extend their stored 16-bit fields, while
+construction reach zero-extends its 16-bit field [07 R-P0-11 §3]. No unit-name
+lookup table or invented weapon range is involved.
 
-**Enhanced guide policy:** these are planning circles. Actual firing also tests
-terrain, target restrictions, firing arcs and ballistic feasibility [06 §3.3].
-Actual interceptor acquisition uses an inclusive X/Z square about the incoming
-projectile's stored aim point [06 §11.2]; its explicitly named coverage circle
-is a visual guide. Actual build/repair reach includes footprint terms and differs
-from reclaim reach [05 R-WORK-01 §2]. Sensor coverage also depends on activation,
-terrain, altitude, water and detection/jamming gates [03 §3.4][03 R-VIS-01 §4–5].
-The HUD therefore calls these range guides rather than guaranteed coverage.
+**These are planning circles.** Actual firing also tests terrain, target
+restrictions, firing arcs and ballistic feasibility [06 §3.3]. Actual interceptor
+acquisition uses an inclusive X/Z square about the incoming projectile's stored
+aim point [06 §11.2]; its named coverage circle is a visual guide. Actual build
+and repair reach includes footprint terms and differs from reclaim reach
+[05 R-WORK-01 §2]. Sensor coverage also depends on activation, terrain, altitude,
+water and detection/jamming gates [03 §3.4][03 R-VIS-01 §4–5]. The HUD therefore
+calls these range guides, not guaranteed coverage.
 
-At icon zoom the client admits targets through the existing committed strategic
-icon layout. At model zoom it applies the same committed visibility and carrier
-checks directly, using projected world anchors with the same screen margin.
-The latter path does not need an icon catalog or a nonzero marker alpha.
-Hidden units, radar-only contacts, carried passengers excluded by that layout,
-and off-screen unit anchors expose no definition to the overlay. Selected own units
-remain subject to the same friendly visibility policy as §18. Commander-looking
-enemy units are omitted so differences in truthful ranges cannot identify a
-decoy through otherwise identical icon art. This is deliberately conservative
-presentation disclosure, not a simulation change.
+At icon zoom the client admits targets through the committed strategic icon
+layout; at model zoom it applies the same committed visibility and carrier checks
+directly, using projected world anchors with the same screen margin, so that path
+needs no icon catalog and no nonzero marker alpha. Hidden units, radar-only
+contacts, carried passengers excluded by that layout, and off-screen unit anchors
+expose no definition to the overlay. Selected own units remain subject to the same
+friendly visibility policy as §18. Commander-looking enemy units are omitted so
+differences in truthful ranges cannot identify a decoy through otherwise
+identical icon art.
 
 ### 20.3 Rendering and verification
 
 `TacticalOverlayStage` runs after the committed world, outside its scale region,
-before the icons and HUD. The same live zoom and camera origin as icons project
-the ring. Each terrain endpoint uses the greater of centre height and sampled
-ground height [07 R-P0-11 §3]. One-pixel palette-coloured segments are clipped to
-the battle viewport before recording. Wide integer coordinates avoid long-range
-wrap; only clipping ratios use transient floating point. Screen-adaptive
-32..512 chords per ring bound tessellation, including huge authored ranges.
-These bounds, dash pattern and colors are Enhanced presentation constants.
-The Shift-off path does not resolve colors, visit targets or record range lines.
+before the icons and HUD. The same live zoom and camera origin as the icons
+project the ring. Each terrain endpoint uses the greater of centre height and
+sampled ground height [07 R-P0-11 §3]. One-pixel palette-coloured segments are
+clipped to the battle viewport before recording. Wide integer coordinates avoid
+long-range wrap; only clipping ratios use transient floating point.
+Screen-adaptive 32..512 chords per ring bound tessellation, including huge
+authored ranges. These bounds, the dash pattern and the colours are Enhanced
+presentation constants. The Shift-off path does not resolve colours, visit
+targets or record range lines.
 
 Focused tests cover inactive placeholder weapons, independent slot admission,
 interceptor versus stockpile data, deduplication, field narrowing, held-key
-release/focus loss, prospective product/site selection, invalid placement,
-classic fallback, all-zoom committed visibility, terrain projection,
+release and focus loss, prospective product and site selection, invalid
+placement, classic fallback, all-zoom committed visibility, terrain projection,
 viewport clipping, bounded long-range geometry and pre-icon draw ordering.
-`--shot-shift --shot-select` captures selected ranges; `--shot-build armllt`
-previews a named product beside the first selection (or at the world viewport
-centre without a selection), without an order. The
-capture switches apply after simulation and zoom setup, so matched scenes retain
-the same simulation state. Full checks and visual results are recorded below.
-
-Initial strategic-only validation on the retail install (2026-09-11):
-
-- Full `go build ./...`, `go vet ./...`, `gofmt -l .`, and `go test ./...`
-  passed after integrating current main. Independent review's retained-hover
-  finding was fixed and covered: drag selection clears hover guides while
-  selected own ranges remain.
-- Viewed modern 1280×720, 0.5× Ashap Plateau captures with selected commander,
-  ARM light laser tower preview and ARM radar preview. The weapon ring is
-  centred on the valid snapped footprint; radar's larger cyan guide clips at
-  the viewport. Sonar dashes preserve coincident cyan radar segments. Icons
-  and the selection halo remain above guides; the category legend stays legible.
-- Matched Alt-off strategic, classic and modern native captures are
-  byte-identical to main. Both live battle captures are also byte-identical
-  before/after, with matching scene metadata and per-frame workload census:
-  332..338 units, eight builds and 411..416 visible sprite features.
-- Sequential 180-frame, 120-TPS live battle checks at native 1920×1080:
-  classic median record 12.259 → 12.254 ms and cadence 14.551 → 14.554 ms;
-  modern median submit 5.284 → 5.294 ms and cadence 8.663 → 8.512 ms.
-  These exercise the unchanged normal-view path, not active guide cost.
-- Active-guide frozen-scene timing remains unmeasured: the repeated-frame
-  capture route crashed in the host Metal drawable/texture call on this branch
-  twice and on unchanged main. Single-frame modern capture and both live
-  benchmark executors completed. This does not establish active-overlay cost
-  for a large selection; per-ring tessellation is bounded by the geometry test.
-
-Review artifacts are outside the repository in
-`/private/tmp/nanolathe-tactical-review/`.
+`--shot-shift --shot-select` captures selected ranges; `--shot-build <name>`
+previews a named product beside the first selection, or at the world viewport
+centre without a selection, without an order. The capture switches apply after
+simulation and zoom setup, so matched scenes retain the same simulation state.
 
 ## 21. Modern resource construction input
 
-The user-requested modern-only resource double-click shortcut is specified in
+The modern-only resource double-click shortcut is specified in
 DESIGN_INTERFACE_HUD_INPUT §3.10. The active executor gates input recognition;
 ordinary session build commands and placement validation own all resulting
-construction. This is an explicit input convenience beyond visual differences,
-not alternate economy, construction or simulation behavior.
-
-All-zoom extension validation (2026-09-11): unit admission and placement tests
-now exercise 0.5×, 1×, 1.5× and 2×, with terrain/projection also tested at 0.375×.
-The model-view admission test removes the icon catalog and still admits only
-the committed visible unit, excluding hidden, radar-only and off-screen targets.
-Viewed retail ARM commander and laser-tower placement captures at 1×, 1.5× and
-2×; guides remain centred and clipped, with their one-pixel stroke and HUD
-legend independent of model scale. Alt-off captures at all four zooms are
-byte-identical to the prior implementation.
-
-Sequential native live battle runs (180 frames, target 120 TPS) have matching
-scene metadata and byte-identical before/after captures for both executors.
-The feature census remains 2547..2549 features, 411..416 visible sprite features,
-and eight builds. Classic median record is 11.468 → 11.514 ms; modern median
-submission is 4.973 → 4.940 ms. These are Alt-off regression checks. Full build,
-vet, formatting and test checks pass after integrating current main. Artifacts
-are in `/private/tmp/nanolathe-all-zoom-review/` outside the repository.
-Modern drag construction, rectangular area work, and free-form formation
-commands are specified in [DESIGN_INTERFACE_HUD_INPUT §3.11](DESIGN_INTERFACE_HUD_INPUT.md#311-modern-drag-commands).
-Their previews share the world-overlay transform and ordinary indexed line/fill
-primitives. These are explicit input extensions; no renderer state enters
-construction or movement. Alt grid capture takes precedence over tactical ranges.
+construction. Modern drag construction, rectangular area work and free-form
+formation commands are specified in
+[DESIGN_INTERFACE_HUD_INPUT §3.11](DESIGN_INTERFACE_HUD_INPUT.md#311-modern-drag-commands);
+their previews share the world-overlay transform of §16.3 and ordinary indexed
+line and fill primitives. Alt grid capture takes precedence over tactical ranges.
+These are explicit input extensions beyond visual differences; no renderer state
+enters construction or movement, and there is no alternate economy, construction
+or simulation behavior.
 
 ## 22. The model lane
 
 ### 22.1 What it is
 
-The modern executor's one model path. Its predecessor, the slot-atlas stage
-of §11.2, §13.12 and §17, reproduced retail's per-unit composition image
-exactly through a key pass, a body pass, reveal, outline, clipping, a
-coverage resolve and a residency table, and was the executor's largest CPU
-term. The lane keeps what retail's picture needs and drops the rest.
-`internal/platform/gpurender/model_direct.go` is the whole of it, plus three
-ops in the scene and destination shaders, `scheduler.tris`, the outline row
-walk (`model_prepare.go`), the parameter packing (`model_quads.go`) and
-the texture page (`model_atlas.go`).
+The modern executor's **one** model path. Its predecessor, the slot-atlas stage,
+reproduced retail's per-unit composition image exactly through a key pass, a body
+pass, reveal, outline, clipping, a coverage resolve and a residency table, and
+was the executor's largest CPU term. The lane keeps what retail's picture needs
+and drops the rest. `internal/platform/gpurender/model_direct.go` is the whole of
+it, plus three ops in the scene and destination shaders, `scheduler.tris`, the
+outline row walk (`model_prepare.go`), the parameter packing
+(`model_quads.go`), the retained-lane store (`model_retain.go`) and the texture
+page (`model_atlas.go`).
 
-Before Replay, every subject of the frame and its shadow are given a region
-of a per-frame 2× atlas page — 4096 × 4096 texels, two planes, shelf-packed
-tallest first, no residency — and their faces are fan-triangulated straight
-from the packet's projected corners. A 1080p battle frame uses about 1,300
-rows of the first page and the 2× detail view about 4,000; a second page
-opens when the first is full (128 MiB of device memory a page, allocated
-on demand and retained), and only a frame that fills both takes the
-fallback. The doubled lane is the recorder's own packet when it carries
-one, half-pixel offset included (§17.3); a packet without one has its
-native corners doubled here. An attached-unit group composes in one region
-over the union of its bounds: the carrier's faces, then each mergeable
-child's with its signed height delta added to the keys, saturating at the
-byte's range where retail would wrap [03 R-REN-03A §4]. Two passes over ONE
-vertex batch draw the whole frame's subjects at once:
+Before `Replay`, every subject of the frame and its shadow are given a region of
+a per-frame 2× atlas page — 4096 × 4096 texels, two planes, shelf-packed
+tallest-first, **no residency** — and their faces are fan-triangulated straight
+from the packet's projected corners. A 1080p battle frame uses about 1,300 rows
+of the first page and the 2× detail view about 4,000; a second page opens when
+the first is full (128 MiB of device memory a page, allocated on demand and
+retained), and only a frame that fills both takes the fallback. Region dimensions
+are rounded up to even so a native pixel's 2×2 block never straddles regions, and
+a two-texel margin separates them (§11.2 "Every atlas cell carries a border").
+The doubled lane is the recorder's own packet when it carries one, half-pixel
+offset included (§17.3); a packet without one has its native corners doubled
+here.
 
-1. **Key.** Each face's height key, narrowed to a byte as the span writers
-   narrow it, into a key plane under a MAX blend, so a texel holds the
-   highest key drawn there. A four-corner face, flat or textured, takes its
-   key from the span writer's two-chain mapping of its corners, evaluated
-   per fragment from the parameter image; any other ring interpolates its
-   lanes linearly. The key shader reads positions, the key lane and the
-   parameter image, so the batch is the colour pass's own.
-2. **Colour.** Each face's texel where its own key is not below the stored
-   one — retail's `stored ≤ incoming` admission [03 R-REN-03A §2] — into a
-   colour plane, faces in RECORDED order so a tie goes to the later-drawn
-   face as retail's does. That tie is what puts a solar collector's base rim
-   over its open panels, which lie at its height; a painter's sort by mean
-   key lost it. A mapped face's key is the same mapping the key pass wrote,
-   so the passes never disagree about a texel. Shadow silhouettes draw in
-   their index with no key test. The nanoframe reveal, the waterline tint
-   and the Digger erase are verdicts on the height key
-   [03 §5.2][03 R-WATER-01 §2][03 R-REN-03A §8]; the fragment evaluates
-   them on the PIXEL's key — the stored key at the block's top-left texel,
-   which is the key retail's 1× image holds after the 2:1 resolve samples
-   it [03 R-REN-03A §6] — so all four texels under a pixel take one verdict
-   and a band one key wide resolves to whole pixels. A replaced reveal
-   index is written flat, as retail rewrites its plane after shading. A
-   carried child's own verdicts read its own key (the entry carries the
-   delta, taken back off at the fragment) and the carrier's waterline and
-   Digger then clip the child on the shifted key, which is what the
-   staging image's passes do [03 R-REN-03A §4]; the classic composer runs
-   the child's own pass and then the carrier's, and the lane follows it.
-   The subject's verdicts ride the parameter image beside the mapped
-   faces, eight texels of a twelve-texel entry. Outline endpoints come
+An attached-unit group composes in **one** region over the union of its bounds:
+the carrier's faces, then each mergeable child's with its signed height delta
+added to the keys, saturating at the byte's range where retail would wrap
+[03 R-REN-03A §4]. A carried child that casts a shadow composes a **second** time
+in a region of its own — its own keys, its own verdicts, no carrier clip — because
+a shadow is cut from its subject's own finished image and the group region holds
+the carrier's texels too [03 R-REN-03D §1]; `ModelStats.DirectCargoImages` counts
+them, and the second composition is suppressed from the reflection source so the
+same world geometry does not reflect twice. A shadow whose source region is
+invalid is **omitted**, never cut from texels that are not the subject's.
+
+Two passes over ONE vertex batch draw the whole frame's subjects at once:
+
+1. **Key.** Each face's height key, narrowed to a byte as the span writers narrow
+   it, into a key plane under a MAX blend, so a texel holds the highest key drawn
+   there. A four-corner face, flat or textured, takes its key from the span
+   writer's two-chain mapping of its corners, evaluated per fragment from the
+   parameter image; any other ring interpolates its lanes linearly.
+2. **Colour.** Each face's texel where its own key is not below the stored one —
+   retail's `stored ≤ incoming` admission [03 R-REN-03A §2] — into a colour
+   plane, faces in RECORDED order so a tie goes to the later-drawn face as
+   retail's does. That tie is what puts a solar collector's base rim over its
+   open panels, which lie at its height; a painter's sort by mean key loses it. A
+   mapped face's key is the same mapping the key pass wrote, so the passes never
+   disagree about a texel. Shadow silhouettes draw in their index with no key
+   test. The nanoframe reveal, the waterline tint and the Digger erase are
+   verdicts on the height key [03 §5.2][03 R-WATER-01 §2][03 R-REN-03A §8]; the
+   fragment evaluates them on the PIXEL's key — the stored key at the block's
+   top-left texel, which is the key retail's 1× image holds after the 2:1 resolve
+   samples it [03 R-REN-03A §6] — so all four texels under a pixel take one
+   verdict and a band one key wide resolves to whole pixels. A replaced reveal
+   index is written flat, as retail rewrites its plane after shading. A carried
+   child's own verdicts read its own key (the entry carries the delta, taken back
+   off at the fragment) and the carrier's waterline and Digger then clip the
+   child on the shifted key, which is what the staging image's passes do
+   [03 R-REN-03A §4]. The subject's verdicts ride the parameter image beside the
+   mapped faces, eight texels of a twelve-texel entry; its ninth texel carries
+   the subject's **frame origin**, the atlas texel of the raster's local (0,0),
+   because a parameter entry is packed **subject-local** — corners in the
+   raster's own frame at the atlas scale, plus a bias that keeps the edge walk's
+   operands non-negative — and the fragment shifts its atlas position by that
+   origin. Every non-shadow subject therefore has an entry, negated when it
+   carries the frame alone, so the verdict block still gates on the sign.
+   Outline endpoints come
    from the span writer's own row walk over the NATIVE packet
-   (`prepareModelOutline`) and draw as one pixel block each, key-tested
-   once against the pixel's key, between the cached and live lanes in
-   retail's order [03 R-COMP-01 §3][03 R-REN-03A §4]; the doubled lane's
-   own rows would put an endpoint at a doubled column, straddling two
-   pixels, so the recorder no longer builds them.
+   (`prepareModelOutline`) and draw as one pixel block each, key-tested once
+   against the pixel's key, between the cached and live lanes in retail's order
+   [03 R-COMP-01 §3][03 R-REN-03A §4].
 
-Replay then compiles, per subject and in record order through the scheduler,
-a shadow commit and a body commit. A structure's shadow commit
-(`destOpModelDirectShadow`) resolves the four silhouette texels under a
-pixel from the shadow's page, punches a pixel whose body block — read from
-the body's page, which may be the other one — is wholly covered, and
-composites the ALP half-colour fragment [03 R-REN-03D §4–§5]. A Digger's or
-a mobile's shadow is retail's copy of the finished body: the recorder emits
-a faceless packet (`Silhouette`) with the body's box, the shadow anchor and
-the buried or submerged clip key, and its commit
-(`destOpModelSilhouetteShadow`) resolves the body's own colour texels at the
-shadow's placement — cached lane, live lane and staged children, as the
-classic copy holds them — erasing a texel at or below the clip key read from
-the key page, and composites the half-colour of index 0 [03 R-REN-03D §1].
-It spends no region, no faces and no projection; it binds the colour page in
-the projected shadow's slots so the two kinds share a run. The body
-commit (`sceneOpModelDirectCommit`) box-resolves the four texels under a
-pixel: colour the mean of the covered ones, alpha their share — §17's
-coverage resolve done in the commit, for models only; sprites and terrain
-are untouched, as terrain is authored to be drawn as is.
+`Replay` then compiles, per subject and in record order through the scheduler, a
+shadow commit and a body commit. A structure's shadow commit resolves the four
+silhouette texels under a pixel from the shadow's page, punches a pixel whose
+body block — read from the body's page, which may be the other one — is wholly
+covered, and composites the ALP half-colour fragment [03 R-REN-03D §4–§5]. A
+Digger's or a mobile's shadow is retail's copy of the finished body: the recorder
+emits a faceless packet (`Silhouette`) with the body's box, the shadow anchor and
+the buried or submerged clip key, and its commit resolves the body's own colour
+texels at the shadow's placement — cached lane, live lane and staged children, as
+the classic copy holds them — erasing a texel at or below the clip key read from
+the key page, and composites the half-colour of index 0 [03 R-REN-03D §1]. It
+spends no region, no faces and no projection, and it binds the colour page in the
+projected shadow's slots so the two kinds share a run. The body commit
+box-resolves the four texels under a pixel: colour the mean of the covered ones,
+alpha their share — §17's coverage resolve done in the commit, for models only;
+sprites and terrain are untouched, as terrain is authored to be drawn as is.
 
 | retail | model lane |
 |---|---|
@@ -4726,1497 +3244,848 @@ are untouched, as terrain is authored to be drawn as is.
 | back faces culled by ring winding | same rule, same sign |
 | SHD row lookup per texel | `0.06875 × row` interpolated across the face (§13.2); the table's nearest-index rounding is the visible difference |
 | textured quad by two-chain span mapping | the same mapping, evaluated per fragment from the parameter image (§11.2 "Textured quads without strips"); flat quads mapped the same way for their key and shade |
-| inclusive span fill | corners on the far side of the face centroid pushed one 2× texel (the span's inclusive right and bottom ends); a linear textured face clamps its texel to its authored bounds |
+| inclusive span fill | corners on the far side of the face centroid pushed one 2× texel; a linear textured face clamps its texel to its authored bounds |
 | composition transparent index 1 | dropped at the fragment |
 | reveal, waterline, Digger over the 1× image after the resolve | the same verdicts per texel on the pixel's nearest-sampled key |
 | outline endpoints written at 1× after the resolve, key-tested once | native rows drawn as pixel blocks, key-tested once against the pixel's key |
-| structure supersample (§17), ALP downscale blending with index 1 | every subject at 2×, resolved in the commit fragment by coverage: an edge or a thin feature is a coverage alpha over what is beneath, never the red/purple fringe [03 R-REN-03A §7]; a mobile subject is supersampled too, where retail draws it at 1× |
+| structure supersample, ALP downscale blending with index 1 | every subject at 2×, resolved in the commit fragment by coverage: an edge or a thin feature is a coverage alpha over what is beneath, never the red/purple fringe [03 R-REN-03A §7]; a mobile subject is supersampled too, where retail draws it at 1× |
 | structure shadow punched by body coverage | same punch, both planes resolved from the pages |
 | Digger and mobile shadow: the finished body image copied, flattened, clipped, blitted at the ground point five pixels right | the body's own raster read at that placement in the commit fragment; a mobile is never punched, as retail's is not |
 | child composed alone, its erased pixels transparent, then `prior > key + delta` keeps prior, wrapped store | child faces in the group region under the same admission with the shifted key; the sum saturates instead of wrapping; a child texel its own reveal or clip erases stays a hole where retail shows the carrier through it |
 
-A subject no page can hold falls back to painter-order native triangles
-straight on the composite (no key, no supersample, no reveal, no children)
-and its shadow is omitted; the benchmark never overflows at either view.
-The parameter image grows to what a frame uses up to 2,048 rows (174k
-entries); a frame past it draws its remaining faces linearly. The commit
-quads bind only the colour plane, so they share a run with the sprites
-around them.
+A subject no page can hold falls back to painter-order native triangles straight
+on the composite (no key, no supersample, no reveal, no children) and its shadow
+is omitted; the benchmark never overflows at either view. The fallback fragment
+carries an opacity lane, so an overflowed cloaked subject draws the ALP
+half-colour (§33) rather than an opaque body. The parameter image grows to what a
+frame uses up to 2,048 rows (174,762 entries); a frame past it draws its
+remaining faces linearly. The commit quads bind only the colour plane, so they
+share a run with the sprites around them.
+
+**Retained packed vertices.** The lane's largest CPU term was re-deriving, for
+every cached-lane face of every presented frame, what the recorder had already
+proved unchanged: the winding test, the centroid, the texture slot, the parameter
+entry, the glint, the finish, the shade lanes and the packed vertices. An equal
+`drawlist.ModelCacheKey` means literally the same retained faces (§13.12), so
+`model_retain.go` keeps, per key, that lane's packed vertex array and packed
+parameter block **in a frame that does not know where on the atlas the subject
+lands**: the vertices' destination coordinates are relative to the subject's
+frame origin, which is what the cold path adds to every corner; the parameter
+block is subject-local by construction; and a face's parameter index is kept
+relative to the block. Only the placement, the verdict entry, the block-relative
+parameter index and the per-face battle light are rewritten on replay, the light
+from the retained centroid and normal through the same arithmetic the cold path
+uses. The store is a **bounded LRU** (`modelRetainCap` 2,048 entries, stubs
+included — a 1080p battle frame has about four hundred subjects, each on up to
+four half-pixel keys, §17.3): a key's first sighting primes a stub, its second
+captures the cold append, and every later one replays, so a subject that rebuilds
+every frame — a turning turret, a walking kbot — costs a stub and nothing else.
+The replay is byte-for-byte what the cold path would have produced, because the
+integer-valued lanes are exact in binary32 and the light is the same function of
+the same operands. A finish switch change (§30) or a source reset drops the
+store. This is **CPU-side** retention of preparation work; the atlas regions
+themselves are still per-frame and carry no residency.
+
+**The warm path: a body across its revisions.** A key that never returns gets
+nothing from the store above: a turning unit's cached lane rebuilds on every
+presented frame under retail's orientation threshold [03 §5.2] and takes a new
+revision each time, so its every sighting was a stub and a cold append — in
+the 1080p battle about 112 of 390 packets a frame, each at the full cold cost.
+Its packed vertices are a function of the pose, but most of what the cold
+append derives per face is not. Reading the recorder's face construction
+(`collectDrawPolysLaneProjected`): the texture frame, the flat colour, the
+shade switch, the material and the corner count come from the model and its
+primitive, and the texel coordinates are the texture's own dimensions in
+corner order — none of them moves with the pose. What does: the corners and
+their keys, the SHD rows, the corner heights and the lighting normal, and so
+everything derived from them — the winding test and its culling, the
+parameter entry, the centroid, the battle light, the glint and the finish
+response, the shade lanes. The store therefore keeps a second index, keyed on
+`(Body, Lane)` across revisions, holding the pose-independent products of the
+last cold append: per face, in the order the cold lane appends them (the
+shared page's faces, then each standalone texture's), the run image the face
+binds and its texture-derived lanes (`modelFaceTex`: the slot origin, and the
+ColorA/ColorB pair in both the mapped and the texel-bounds form). A key miss
+whose body hits appends **warm**: the same core the cold lane runs
+(`appendFaceCore`), fed this frame's corners, keys, rows, heights and normals,
+with the texture resolution, the page/standalone run routing and the texel
+bounds answered by the body entry — so the warm append is the cold append's
+bytes by construction, verified exactly by `model_retain_test.go` and on the
+device by the retain fixture's turned frame. The body is used only when the
+raster's face list has the same length and, face by face, the same corner
+count and the same texture frame as the recorded one — a different build
+state, a damage variant or an advanced animated texture frame fails that in
+one pointer compare per face — and when the texture page the routing was
+decided against is still the page; anything else is cold, and every cold
+append of a keyed packet records the body anew, the priming sighting
+included, because a turning unit never reaches a capture. A reflecting
+packet, cold for the replay because the reflection batch is placement-bound,
+goes warm too: the warm append runs per face and reflects each one as the
+cold append does. What stays cold under the warm path is what has no key or
+composes as a group. The body index is a bounded LRU of its own
+(`modelRetainBodyCap` 1,024 entries) and is dropped with the store. Measured
+on the 160-face authored packet: cold 12.7 µs, warm 10.3 µs, replayed 1.65 µs
+— the warm path removes the texture lookups, the run routing and the texel
+bounds and keeps the pose-dependent arithmetic, which is most of a cold
+append; the scale-one corner copy before the parameter packing, dead work in
+both paths, went with it.
+
+**An outline and a live lane ride over a replayed lane.** Neither disqualifies a
+packet, because the key names the cached faces alone (§13.12): both are appended
+**cold, after** the replayed lane, in retail's own order [03 R-REN-03A §4] — the
+capture closes before either is appended, and the replay puts the cached lane's
+vertices, parameter block and runs back exactly where the cold append would, so
+the per-frame lanes that follow land on the same batch either way. The one thing
+they touch is the doubled raster's slot box, whose even-rounded corner is the
+lane's frame origin: the entry keeps the box of the **cached faces alone**
+(`retainedSlotBounds`) and the replay unions this frame's live and outline
+corners into it (`slotFor`), which is the box the cold path measures. So a unit
+with a `DontCache` piece, a nanoframe under its reveal and outline, and a wreck
+(§13.12) all replay. What stays **cold**: a packet with a group delta or a water
+reflection this frame (the reflection batch is placement-bound), the solo cargo
+pass, the fallback, and a subject whose parameter block would not fit the image
+this frame.
+
+**Counters.** `DirectRetained` reports the lanes replayed, `DirectWarm` the
+lanes appended warm, and `DirectCaptured` the lanes captured into the store —
+through a cold or a warm append, so it overlaps `DirectWarm` on the second
+sighting of a key whose body was already held. `DirectRetainedLive` and
+`DirectRetainedOutline` are the replays that also carried a per-frame lane,
+and `DirectRetainEvicted` the store entries a frame's inserts evicted — store
+pressure whenever it is not zero. The cold packets are counted by reason, once
+each, at the first that applies: `DirectColdNoKey` (no reusable key, with
+`DirectColdNoKeyOutline` and `DirectColdNoKeyLive` the subsets the recorder
+used to zero the key for), `DirectColdGroup` (a group child, its delta or the
+solo pass), `DirectColdReflect` (a reflecting body the warm path could not
+take), `DirectColdPrimed` (a key's first sighting, the stub, when its body was
+not held either), `DirectColdShape` (a captured key whose packet shape
+changed, captured again cold) and `DirectColdParams` (a replay or cold capture
+the parameter image could not take). A packet is one of replayed, warm or cold
+by reason; a fall in `DirectRetained` or `DirectWarm` can therefore be read
+from the benchmark's counters without a profiler.
 
 The recorder feeds the lane once per display frame. Two of its per-unit costs
-went in the same round as the silhouette shadow: every cached unit projected
-all of its faces again each frame only to measure its composition box, which
-is now the retained lane's envelope unioned with the live pieces' extent
-(`retainedModelExtent`), and every face resolved its texture through a
-name-key map, a lowercase scan and two index lookups, which is now a
-per-model table (`modelTexRefs`) keyed on the compiled model and rebuilt when
-the client installs new indices — units and features only, because a
-projectile or debris draw is one piece copied into a scratch model every such
-draw reuses.
+went with the silhouette shadow: every cached unit used to project all of its
+faces again each frame only to measure its composition box, which is now the
+retained lane's envelope unioned with the live pieces' extent
+(`retainedModelExtent`), and every face used to resolve its texture through a
+name-key map, a lowercase scan and two index lookups, which is now a per-model
+table (`modelTexRefs`) keyed on the compiled model and rebuilt when the client
+installs new indices — units and features only, because a projectile or debris
+draw is one piece copied into a scratch model every such draw reuses.
 
 The isolated model preview exercises the lane's verdicts without a session:
 `--shot-model-build-remaining` poses a nanoframe; `--shot-model-world-height`
-sets the world height, and as the preview has no map its sea level is zero,
-so a negative height submerges the model and runs the waterline erase;
-`--shot-model-underwater-exempt` sets the sonar-contact bit that turns the
-erase into the blue tint; a Digger definition (`armamb`, `cortoast`,
-`corvipe`) brings its own clip. The preview's list opens with its clear and
-background fill, so both executors compose over the same background, and
-`--shot-renderer=both` keeps the classic structure supersample: the
-Enhanced classic image is the like-for-like reference.
-
-### 22.2 Measured (battle benchmark, 1080p, 120 TPS, 180 frames, one binary, back to back)
-
-The last pair before the slot stage was removed, host load 3–4:
-
-| median | slot stage | model lane |
-|---|---|---|
-| Submit | 5.25 ms (p95 6.70, max 7.27) | 4.39 ms (p95 4.68, max 4.89) |
-| Cadence | 8.71 ms (p95 21.0, max 22.8) | 8.45 ms (p95 12.0, max 12.9) |
-| OutsideDraw | 3.08 ms (p95 9.8) | 2.35 ms (p95 3.0) |
-| on the 8.8 ms floor | 52% | 75% |
-| alloc / objects per frame | 1.34 MB / 29.5k | 0.81 MB / 11.2k |
-| device draws / passes | ~250 / 24 | 102 / 14 |
-
-Pixel diff against the slot stage: 4.0%, all on model bodies and shadows;
-isolated tank models differ on 0.2–0.4% of pixels, a solar collector on 2%,
-all of it shade rounding. At 4× the silhouettes are as smooth, texture rows
-are straight, the solar collector's base rim cuts through its open panels,
-shadows fall where retail puts them, and a nanoframe's fill, outline and
-band match. The capture after the removal is byte-identical to the last
-prototype run's.
-
-Stages measured on the way, each a back-to-back pair: bodies only on a keyed
-atlas (load 12) Submit 5.65 → 4.89 ms; shadows on the lane 5.26 → 4.63;
-reveal and clipping 5.41 → 4.53; native painter's triangles on the composite
-(no key, no supersample) 4.84 → 4.23. Ebitengine's triangle `AntiAlias`
-option was tried and rejected: cadence 43 ms, OutsideDraw 37 ms.
-
-The follow-up round (pages, mapped keys in both passes for every quad,
-block-key verdicts, native-row endpoints, the group clip; host load 3.3):
-
-| median | before | after |
-|---|---|---|
-| Submit | 4.37 ms (p95 4.67, max 4.85) | 4.14 ms (p95 4.54, max 4.76) |
-| Cadence | 8.56 ms (p95 11.6) | 8.58 ms (p95 11.7) |
-| OutsideDraw | 2.30 ms (p95 3.0) | 2.35 ms (p95 3.1) |
-| on the 8.8 ms floor | 72% | 70% |
-| alloc / objects per frame | 0.81 MB / 11.0k | 0.78 MB / 10.4k |
-| device draws / lane faces / vertices | 101 / 24.7k / 222k | 85 / 22.3k / 203k |
-
-Evaluating the two-chain mapping in the key pass as well, and for flat
-quads, shows in none of the cadence figures; the native-row endpoints halve
-the outline quads, and the endpoint run now binds the texture page and
-merges with the faces' runs, which is the draw count. The 2× detail view
-peaks at 4,040 rows of the first page on the benchmark scene, so the second
-page is exercised by the fixture, not the benchmark.
-
-The recorder round, two pairs each against the binary before it (host load
-3–4). The box measurement and the per-model texture table:
-
-| median | before | after |
-|---|---|---|
-| PreRecord | 3.15 ms (p95 3.90) | 2.72 ms (p95 3.51) |
-| miss Record | p95 3.42 | p95 3.18 |
-| Cadence | 8.46 ms (p95 12.1) | 8.46 ms (p95 11.6) |
-| alloc per frame | 0.81 MB | 0.79 MB |
-
-The silhouette shadow (Digger and mobile shadows from the body's raster):
-
-| median | before | after |
-|---|---|---|
-| Submit | 4.09 ms (p95 4.47, max 4.69) | 3.01 ms (p95 3.26, max 3.45) |
-| PreRecord | 2.66 ms (p95 3.28) | 1.97 ms (p95 2.52) |
-| Cadence | 8.46 ms (p95 10.9, max 12.8) | 8.40 ms (p95 9.2, max 9.8) |
-| OutsideDraw | 2.13 ms | 1.64 ms |
-| alloc per frame | 0.79 MB | 0.72 MB |
-| device draws / lane faces / vertices / atlas rows | 86 / 22.3k / 203k / 1,160 | 86 / 13.3k / 131k / 736 |
-
-The capture changes on 1.9% of pixels, all shadows of mobiles, and moves
-closer to the classic capture of the same frame (pixels differing from it
-by more than 40 levels: 39.8k → 38.4k); run to run it is byte-identical. The
-first cut bound the key page in the shadow commit's slot 2 and the second in
-slot 0, which split the destination runs (108 and 238 draws); the commit
-binds the colour page in the projected shadow's slots and takes the key page
-only for a clipped silhouette. The first cut also overwrote its scratch
-packet wholesale, dropping the face arena a live-lane packet retained in the
-same slot, which regrew every frame (+0.26 MB per frame).
+sets the world height, and as the preview has no map its sea level is zero, so a
+negative height submerges the model and runs the waterline erase;
+`--shot-model-underwater-exempt` sets the sonar-contact bit that turns the erase
+into the blue tint; a Digger definition (`armamb`, `cortoast`, `corvipe`) brings
+its own clip. The preview's list opens with its clear and background fill, so
+both executors compose over the same background, and `--shot-renderer=both`
+keeps the classic structure supersample so the Enhanced classic image is the
+like-for-like reference.
 
 ### 22.3 Verification
 
-`model_direct_test.go`: a device fixture (in the hidden loop) locks the key
-test against draw order, the tie rule, the reveal verdicts written flat, the
-waterline erase and the blue tint at and below their key, the Digger erase,
-a carried child's reveal on its own key under its carrier's clip on the
-shifted key, an outline endpoint drawn whole against the pixel's key (and
-rejected under a higher body key), the shadow half-blend beside its body and
-the half-covered far edge, and a body whose shadow is its own silhouette
-placed beside it with a clip key (the low half casts nothing, the high half
-the half-blend of index 0, no region spent) — run once plainly and once behind a page-wide
-filler so every subject draws and commits from the second page; a unit test
-locks the shelf packer and its page turn. `model_quads_test.go` locks the
-parameter packing. The classic executor remains the byte-exact reference for
-retail's composition; the lane's departures are the table above.
+`model_direct_test.go` holds a device fixture (in the hidden loop) locking the
+key test against draw order, the tie rule, the reveal verdicts written flat, the
+waterline erase and the blue tint at and below their key, the Digger erase, a
+carried child's reveal on its own key under its carrier's clip on the shifted
+key, an outline endpoint drawn whole against the pixel's key (and rejected under
+a higher body key), the shadow half-blend beside its body and the half-covered
+far edge, and a body whose shadow is its own silhouette placed beside it with a
+clip key (the low half casts nothing, the high half the half-blend of index 0, no
+region spent) — run once plainly and once behind a page-wide filler so every
+subject draws and commits from the second page. A unit test locks the shelf
+packer and its page turn; `model_quads_test.go` locks the parameter packing; and
+`model_retain_test.go` holds the retained store to its contract, with a device
+check that a replayed frame is byte-identical to a cold frame of the same list at
+a shifted placement, including a nanoframe replayed under both per-frame lanes
+and a doubled live face reaching past the retained box (which is what locks
+`slotFor`). Client tests lock the keying rule: a keyed unit with a `DontCache`
+piece keeps its key across two frames and changes it on a validity clear; a
+nanoframe keeps its key across ticks and takes a new revision on construction
+progress; and a 3DO feature is retained, its rebased packet is corner for corner
+the per-frame projection, it re-projects on an orientation or team-colour change
+and it ages out. The
+classic executor remains the byte-exact reference for retail's composition; the
+lane's departures are the table above.
 
-Isolated previews against classic, `--shot-renderer=both`: a submerged
-submarine (`armsub` at world height −6) erased and, with the exemption bit,
-blue-tinted; a submerged solar collector; and the pop-up `armamb` erased at
-and below its origin — inside each model the two images agree, and every
-difference of more than a few levels sits on an edge or a thin feature,
-where the lane's coverage alpha stands against classic's fringe blend (a
-structure) or its 1× raster (a mobile). The ARMLAB nanoframe's "two missing
-band pixels" of the first landing were of that kind: half-covered texels of
-the doubled geometry at the reveal notch, which classic without the
-supersample leaves empty and classic with it blends with index 1.
+Isolated previews against classic, `--shot-renderer=both`: a submerged submarine
+(`armsub` at world height −6) erased and, with the exemption bit, blue-tinted; a
+submerged solar collector; and the pop-up `armamb` erased at and below its
+origin. Inside each model the two images agree, and every difference of more than
+a few levels sits on an edge or a thin feature, where the lane's coverage alpha
+stands against classic's fringe blend (a structure) or its 1× raster (a mobile).
 
-The GP-03 stock transport check exercises ARMATLAS with ARMPW and CORVALK
-with CORAK through normal pickup, flight and return-site unload orders/COB on
-Ashap Plateau. The active modern recorder forces each attached child to a
-key-plane packet; a previously cached keyless child is rebuilt on attachment.
-These checkpoints have no skipped subjects, no-body subjects or direct-region
-overflow. Classic/modern captures at native and 2× scale exposed a classic
-staging displacement scaled twice, corrected under §14.2; modern hull coverage
-of correctly positioned cargo is expected composition, not missing geometry.
-
-The stock carrier census and normal admission path bound the separate nested
-child concern: ground/sea carriers and airbases exceed stock transport size;
-a loaded air transport remains airborne, which rejects its pickup. A carried
-aircraft starts its own pickup by detaching first, and airbase landing transfers
-cargo before attaching the aircraft [04 §10.2][04 R-AIR-01 §7][04 R-AIR-01 §10].
-This does not establish arbitrary mod or authored nested-packet behavior.
-The modern executor still omits a child packet that is keyless or itself has
-children; the stock paths above did not reproduce that omission. Legacy
-staging/trace records are not the active modern recorder's packets (§4): a
-trace-only no-body record follows pixels already committed by the carrier and
-does not request another body. No software fallback is added.
+The stock transport check exercises ARMATLAS with ARMPW and CORVALK with CORAK
+through normal pickup, flight and return-site unload orders and COB. The active
+modern recorder forces each attached child to a key-plane packet; a previously
+cached keyless child is rebuilt on attachment. These checkpoints have no skipped
+subjects, no-body subjects or region overflow. The stock carrier census and the
+normal admission path bound the separate nested-child concern: ground and sea
+carriers and airbases exceed stock transport size; a loaded air transport remains
+airborne, which rejects its pickup; a carried aircraft starts its own pickup by
+detaching first, and airbase landing transfers cargo before attaching the
+aircraft [04 §10.2][04 R-AIR-01 §7][04 R-AIR-01 §10]. This does not establish
+arbitrary mod or authored nested-packet behavior. The modern executor still omits
+a child packet that is keyless or itself has children; the stock paths above did
+not reproduce that omission, and no software fallback is added.
 
 ### 22.4 Owed
 
-1. The first explosion/model/smoke lighting prototype is specified in §23.
-   Richer material response and per-pixel lighting remain future work.
-2. A carried child texel that the child's own reveal or clip erases stays a
-   hole where retail shows the carrier through it, because the child's key
-   reached the group's key plane; reproducing that needs the child composed
-   in its own region and merged under the staging admission. Only a
-   transport's cargo is carried in this build and it is a finished unit, so
-   no stock scene reaches it.
-3. The recorder still builds the doubled packet's faces. A packet with a
-   doubled lane has its native faces read only by the fallback and the
-   bounds; the doubled corners of a direct projection are exact rather than
-   native × 2 plus an offset, so the offset alone cannot replace them.
+1. Richer material response and per-pixel lighting remain future work beyond
+   §23, §29 and §31.
+2. A carried child texel that the child's own reveal or clip erases stays a hole
+   where retail shows the carrier through it, because the child's key reached the
+   group's key plane; reproducing that needs the child composed in its own region
+   and merged under the staging admission. Only a transport's cargo is carried in
+   this build and it is a finished unit, so no stock scene reaches it.
+3. The recorder still builds the doubled packet's faces. A packet with a doubled
+   lane has its native faces read only by the fallback and the bounds; the doubled
+   corners of a direct projection are exact rather than native × 2 plus an offset,
+   so the offset alone cannot replace them.
 
-## 23. Battle lighting prototype (Enhanced)
+## 23. Battle lighting (Enhanced)
 
 ### 23.1 Scope and inputs
 
-This is a user-authorized presentation design, not retail evidence. The first
-prototype adds coloured diffuse light to model faces and soft illumination to
-smoke around visible explosions and weapon impacts. It keeps the projection,
-existing shade, silhouette, composition key, fog, effect lifetime and simulation
-unchanged. Shadows from point lights, terrain relighting, material masks and
-reflections are later work. The local brainstorm is intentionally uncommitted.
+A user-authorized presentation design, not retail evidence. It adds coloured
+diffuse light to model faces and soft illumination to smoke around visible
+explosions and weapon impacts, keeping the projection, existing shade,
+silhouette, composition key, fog, effect lifetime and simulation unchanged.
+Shadows from point lights, terrain relighting from geometry, material masks and
+reflections are not part of it. The player's Lighting switch (§30) is its only
+control and defaults on; `BattleLights`, `LitModelFaces` and `LitSmokeSprites`
+are frame diagnostics.
 
 **Contract BL1 — sources.** Named art for explicit explosion, impact and water
 impact events contributes only while the primary animation is active and its
-frame resolves. Source metadata additionally requires PointVisible at the event
+frame resolves. Source metadata additionally requires `PointVisible` at the event
 position for the current viewing player; absent visibility fails closed. This
 extra gate changes light emission alone, not the original art draw. The
-calculated secondary flash and generic glow flag are not additional sources:
-counting both layers would double an explosion and the glow flag also marks
-smoke. Smoke-puff and vent-steam strip families are receivers; art colour does
-not identify their producer. Existing effect and strip composition remains
-[03 R-FX-01], [03 R-FX-02], with light applied beneath the existing fog boundary.
+calculated secondary flash and the generic glow flag are **not** additional
+sources: counting both layers would double an explosion, and the glow flag also
+marks smoke. Smoke-puff and vent-steam strip families are receivers; art colour
+does not identify their producer. Existing effect and strip composition remains
+[03 R-FX-01][03 R-FX-02], with light applied beneath the existing fog boundary.
 
 **Contract BL2 — physical coordinates.** Model faces carry outward normals in
-world X, world Z, height axes. The producer computes the standard cross product
-from transformed vertices, then mirrors model Z to match the visual projection
-[03 §2.5]. Corners carry model-relative height in recording-scale pixels,
-independent of the wrapping composition key. Every packet refreshes its current
-absolute origin height, including retained, direct and attached subjects.
+world X, world Z and height axes. The producer computes the standard cross
+product from transformed vertices, then mirrors model Z to match the visual
+projection [03 §2.5]. Corners carry model-relative height in recording-scale
+pixels, independent of the wrapping composition key. Every packet refreshes its
+current absolute origin height, including retained, direct and attached subjects.
 Supersampling doubles raster coordinates only: physical height and normals stay
 unchanged. Adding half the absolute height to projected Y recovers unsheared Y
 for receiver-minus-source distances. The same final world transform applies to
-the lit subject and source, so lighting is evaluated in record coordinates.
+the lit subject and the source, so lighting is evaluated in record coordinates.
 
 ### 23.2 Bounded lighting and composition
 
 **Contract BL3 — artistic response.** Before model preparation, the executor
 borrows source metadata recorded once before composite art is decomposed into
-leaf blits. It caches each immutable art frame's emission colour:
-covered texels above maximum-channel brightness 0.45 receive squared weights
-((brightness − 0.45) / 0.55)². Their weighted mean RGB is scaled by the square
-root of mean weight across all covered texels. Thus dark trailing animation
-frames lose energy, and colour comes from the displayed palette. Palette changes
+leaf blits. It caches each immutable art frame's emission colour: covered texels
+above maximum-channel brightness 0.45 receive squared weights
+`((brightness − 0.45) / 0.55)²`, and their weighted mean RGB is scaled by the
+square root of mean weight across all covered texels, so dark trailing animation
+frames lose energy and colour comes from the displayed palette. Palette changes
 clear the cache; source reset releases it. Frames below 0.015 peak emission are
 ignored. Composite frames are measured on a bounded 32×32 sampling grid,
 compositing their ordered leaves over black with the authored keyed/half-alpha
-selection. Overwritten bright leaves do not emit, and one composite consumes
-one light budget slot. This is an approximate intrinsic emission measurement,
-independent of the ground behind a translucent effect. These thresholds are presentation choices, not authored material data.
+selection, so overwritten bright leaves do not emit and one composite consumes
+one budget slot. This is an approximate intrinsic emission measurement,
+independent of the ground behind a translucent effect; the thresholds are
+presentation choices, not authored material data.
 
-The explosion source radius is 1.4 times the largest width or height across
-its own resolved animation entry, clamped to 48–192 world pixels and extended
-by 50% (72–288 world pixels), then multiplied by the record scale. The recorder
-carries this immutable native-art extent as `LightingSize`, independently of
-the Distortion switch; legacy callers without the extent use the current frame.
-Colour still comes from the current frame. This Enhanced policy makes the
-reach available during the initial flash instead of growing into nearby
-receivers as the fireball dims. It adds no age curve or lingering source.
-The 50% extension reaches both model and smoke receivers without changing their gains
-or the light budgets. The point is lifted one quarter of the frame
-height above the event, with its ground position fixed, to represent the bright
-volume above an impact. At most 64 sources survive per frame, retaining the
-strongest with stable ties. Each subject chooses at most eight nearby sources
-using a conservative projected bound and distance-weighted source strength.
-Each face evaluates those sources at its physical centroid, with outward
-Lambert response and squared radial falloff (1 − distance² / radius²)², gain
-3.25 (30% stronger than the initial prototype). Back-facing faces receive zero;
-distance at or beyond the radius receives zero. Contributions sum and are
-capped at two per channel before storage.
+The explosion source radius is 1.4 times the largest width or height across its
+own resolved animation **entry**, clamped to 48–192 world pixels and extended by
+50% (72–288), then multiplied by the record scale. The recorder carries this
+immutable native-art extent as `LightingSize`, independently of the Distortion
+switch; colour still comes from the current frame. Using the entry rather than
+the current frame makes the reach available during the initial flash instead of
+growing into nearby receivers as the fireball dims, and it adds no age curve or
+lingering source. The point is lifted one quarter of the frame height above the
+event, with its ground position fixed, to represent the bright volume above an
+impact. At most 64 sources survive per frame, retaining the strongest with stable
+ties. Each subject chooses at most eight nearby sources using a conservative
+projected bound and distance-weighted source strength. Each face evaluates those
+sources at its physical centroid, with outward Lambert response and squared
+radial falloff `(1 − distance²/radius²)²` and gain 3.25. Back-facing faces
+receive zero; distance at or beyond the radius receives zero. Contributions sum
+and are capped at two per channel before storage.
 
 **Contract BL4 — existing passes.** A constant numeric RGB code carries the
-face's contribution through the otherwise unused fourth custom vertex lane in
-the atlas colour pass. This is three base-128 digits for [0,2] channel values,
-not a float bitcast. Its 21-bit maximum leaves device-float rounding
-headroom at channel carry boundaries. The native overflow fallback carries the
-same code in its unused third custom lane. The shader adds albedo times incident
-light to existing shaded colour and clamps to one. Zero contribution uses the
-previous colour expression exactly. Outline endpoints and shadow silhouettes
-receive no light; key, reveal and waterline processing retain their order.
-No new model pass, texture or per-frame uniform map is needed.
+face's contribution through the otherwise unused fourth custom vertex lane in the
+atlas colour pass — three base-128 digits for [0,2] channel values, not a float
+bitcast, whose 21-bit maximum leaves device-float rounding headroom at channel
+carry boundaries. The native overflow fallback carries the same code in its
+unused third custom lane. The shader adds albedo times incident light to the
+existing shaded colour and clamps to one; zero contribution uses the previous
+colour expression exactly. Outline endpoints and shadow silhouettes receive no
+light; key, reveal and waterline processing retain their order. No new model
+pass, texture or per-frame uniform map is needed.
 
-Smoke retains gain 2.5 and uses the same nearby sources and radial falloff with
-a soft response of 0.8 independent of facing. Its four clipped corners carry RGB contributions
-through the existing tinted-sprite vertices; interpolation supplies the interior.
-The fragment adds (0.2 + 0.8 × source colour) times light to the smoke colour,
-clamps it, and preserves the original one-half premultiplied alpha. The source
-transparency mask, blend order and fog are unchanged. Smoke is never promoted to
-a light source. This approximates scattering without volumetric geometry.
+Smoke uses gain 2.5 and the same nearby sources and radial falloff with a soft
+response of 0.8 independent of facing. Its four clipped corners carry RGB
+contributions through the existing tinted-sprite vertices; interpolation supplies
+the interior. The fragment adds `(0.2 + 0.8 × source colour) × light` to the
+smoke colour, clamps it, and preserves the original one-half premultiplied alpha.
+The source transparency mask, blend order and fog are unchanged. Smoke is never
+promoted to a light source. This approximates scattering without volumetric
+geometry.
 
-### 23.3 Verification and limits
-
-`SetBattleLighting` is an executor-level comparison control; Enhanced enables
-the prototype by default. It adds no simulation mode or saved setting.
-`BattleLights`, `LitModelFaces`, and `LitSmokeSprites` are frame diagnostics.
-
-The 50% radius extension was visually checked against the preceding 3.25-gain
-build in the matching 2× Great Divide battle (60 FPS, nearest-doubled art).
-Median submission time was 3.592 → 3.689 ms, p95 3.931 → 4.138 ms; median
-cadence was 16.694 → 16.775 ms. Median lit model faces rose from 1,089.5 to
-2,038.5. Scene metadata and all frame censuses matched. Classic's matching
-native capture remained pixel-identical. These are one pair of host timings,
-not GPU timing or a guarantee for every battle. Build, renderer vet and the
-existing GPU device fixtures passed. Captures and timing data are under
-`/private/tmp/nanolathe-lighting-{radius-before-modern,radius50-modern,radius50-classic}`.
-
-The synthetic tier verifies outward roof winding, record-scale heights across
-retention and supersampling, explicit source/family classification, missing or
-hidden visibility exclusion, directional falloff, common translation/scale,
-owned list replay and shader compilation. The existing opt-in real-device loop
-also checks lit versus back-facing model surfaces, lit versus untagged smoke,
-unchanged output after disabling the prototype, and can write comparison PNGs
-through `NANOLATHE_LIGHTING_SHOTS`. Run `tools/check`, `tools/check-retail`, and
-`NANOLATHE_GPU_DEVICE_TEST=1 go test ./internal/platform/gpurender` before landing.
-Use sequential matching classic/modern live battle benchmarks and inspect their
-census, captures and host timings; GPU duration is unavailable through this API.
+### 23.3 Limits
 
 The face-centroid response is intentionally coarse and has no light occlusion
 between visible objects. Smoke uses flat sprite depth. Material-specific
-reflectance, per-pixel normals and additional emitter families remain outside
-this prototype. The source visibility gate prevents hidden events from lighting
+reflectance, per-pixel normals and additional emitter families are outside this
+prototype. The source visibility gate prevents hidden events from lighting
 visible receivers; ordinary final fog still controls receiver presentation.
 
-### 23.4 Prototype outcome
+The synthetic tier verifies outward roof winding, record-scale heights across
+retention and supersampling, explicit source/family classification, missing or
+hidden visibility exclusion, directional falloff, common translation and scale,
+owned list replay and shader compilation. The opt-in real-device loop checks lit
+versus back-facing model surfaces, lit versus untagged smoke, and unchanged
+output after disabling the pass, and can write comparison PNGs through
+`NANOLATHE_LIGHTING_SHOTS`.
 
-Reviewed on Apple M3 Pro / darwin-arm64 using the scene-version-4 Great Divide
-battle, seed 7, 1920×1080, factories enabled, 300 pre-ticks, 60 target draws/s,
-120 warmup draws and 180 measured draws, automatic detail art disabled. Baseline
-is `bca5042`; final executable is `9d79216`. Metadata and every frame's simulation
-census match within each pair, including feature/fire, movement, construction
-and camera state. The classic capture is byte-identical. Modern changes 57,818
-pixels at native zoom and 87,923 at 2×; both before/after views were inspected.
+### 23.5 Nanolathe glow and local illumination
 
-| View | Submit median / p95 / max, ms (before → after) | Cadence median, ms | Allocation MB/frame |
-|---|---|---|---|
-| Modern native | 3.319 / 3.752 / 4.309 → 3.692 / 4.161 / 4.585 | 16.681 → 16.786 | 0.817 → 0.868 |
-| Classic native | 0.461 / 0.639 / 0.767 → 0.461 / 0.644 / 0.730 | 17.156 → 17.189 | 1.163 → 1.166 |
-| Modern 2× | 3.163 / 3.384 / 3.677 → 3.528 / 3.809 / 4.153 | 16.673 → 16.696 | 0.996 → 1.005 |
+The source is the committed strip-6 particles of [03 §5.5], with their
+established two-pixel marks, palette ramp, motion, coverage gate and draw order;
+the nanolathe event itself adds no synthetic beam or additional particle
+lifetime.
 
-Modern native Record p95 is 2.946 → 3.122 ms (max 3.181 → 6.931); classic
-Record median/p95/max is 12.144/16.244/23.400 → 12.624/15.952/18.412 ms.
-These short samples show bounded added submission work, not GPU execution time
-or a performance improvement. Native frames contain 63–64 selected sources,
-723–1,316 illuminated model faces and 173–250 illuminated smoke sprites;
-the 2× view contains 704–1,317 illuminated faces and 87–176 illuminated smoke
-sprites. Artifacts are outside the repository in
-`/private/tmp/nanolathe-lighting-{before-modern,final-modern,before-classic,final-classic,detail-before,detail-after}`.
-
-`tools/check`, full retail-tagged vet/tests with installed assets, and the
-complete real-device fixture loop pass. `tools/check-retail` stops at its lint
-stage on four existing unused content helpers (`buildModelCatalog`,
-`requiredModelPaths`, `fillBuildPages`, `sortedUnitKeys`); `tools/lint` on
-unchanged main reproduces the same failures. Retail tests were therefore run
-separately and passed. The lighting code introduces no new lint finding.
-
-### 23.5 Nanolathe glow and local illumination prototype
-
-User-authorized Enhanced presentation design; these are artistic choices, not
-retail evidence. The source remains the committed strip-6 particles of
-[03 §5.5], with their established two-pixel marks, palette ramp, motion,
-coverage gate and draw order. The nanolathe event itself adds no synthetic
-beam or additional particle lifetime.
-
-**NL1 — source admission.** Only fills explicitly tagged by the nano strip
-family emit. The tag is attached after the existing PointVisible gate and
-carries absolute particle height, recording scale and recording viewport.
-Ordinary fills and impact sprinkles never emit, even with the same palette
-colour. A particle whose core misses the recorded viewport contributes neither
-bloom nor lighting. The viewport travels with the fill because source gathering
-precedes world-region replay; fractional zoom can record beyond the device's
-pixel extent. Fill ownership, clone and reset retain or release the metadata
-with its pixels.
+**NL1 — source admission.** Only fills explicitly tagged by the nano strip family
+emit. The tag is attached after the existing `PointVisible` gate and carries
+absolute particle height, recording scale and recording viewport. Ordinary fills
+and impact sprinkles never emit, even with the same palette colour. A particle
+whose core misses the recorded viewport contributes neither bloom nor lighting.
+The viewport travels with the fill because source gathering precedes world-region
+replay, and fractional zoom can record beyond the device's pixel extent. Fill
+ownership, clone and reset retain or release the metadata with its pixels.
 
 **NL2 — spray glow.** The existing glow source pass receives a palette-coloured
 quad extending two world pixels beyond each side of the particle core, at gain
-0.45. The existing two blur octaves resolve it beneath fog and interface.
-The live world transform applies once, just as for the particle. No shader,
-render target or extra blur pass is added. The existing glow switch controls it.
+0.45. The existing two blur octaves resolve it beneath fog and interface. No
+shader, render target or extra blur pass is added, and the existing glow switch
+controls it.
 
 **NL3 — local lighting.** Before model preparation, visible particles join the
 nearest existing cluster within 24 world pixels in unsheared physical space.
 Clusters follow the arithmetic mean of their particles' positions, with no
-screen-grid snapping. Each particle adds 0.06 times the mean displayed RGB of
-the seven-entry nano palette ramp [03 §5.5];
-the completed cluster is uniformly scaled down if its peak exceeds 0.7.
-Its radius is 80 world pixels. These parameters are presentation tuning.
-At most 64 clusters occupy fixed scratch storage; later particles may join an
-existing cluster but cannot open a 65th one. Clusters then compete with
-explosions for the existing 64-light budget by peak energy and stable ties.
-Subject selection, outward face response, smoke scattering and radial falloff
-are the existing BL3–BL4 path. Dense overlapping clusters may add together;
-there is no per-builder brightness normalization. All source state is rebuilt
-from the current recorded particles and displayed palette, and disappears when
-those particles expire. The broad illumination stays constant across the
-seven-step particle shimmer: using each particle's instantaneous palette entry
-made the factory faces and ground pools flash. The particle cores and their
-small glow retain that shimmer. No temporal history or delayed extinction is
-introduced; particle count, grouping and motion still affect illumination.
-The battle-lighting comparison switch disables both explosion and nano lighting; glow remains independent.
+screen-grid snapping. Each particle adds 0.06 times the mean displayed RGB of the
+seven-entry nano palette ramp [03 §5.5]; the completed cluster is uniformly
+scaled down if its peak exceeds 0.7, and its radius is 80 world pixels. At most
+64 clusters occupy fixed scratch storage; later particles may join an existing
+cluster but cannot open a 65th. Clusters then compete with explosions for the
+64-light budget by peak energy with stable ties. Subject selection, outward face
+response, smoke scattering and radial falloff are the BL3–BL4 path. Dense
+overlapping clusters may add together; there is no per-builder brightness
+normalization. All source state is rebuilt from the current recorded particles
+and displayed palette and disappears when those particles expire. The broad
+illumination stays **constant** across the seven-step particle shimmer: using
+each particle's instantaneous palette entry made the factory faces and ground
+pools flash. The particle cores and their small glow retain that shimmer. No
+temporal history or delayed extinction is introduced; particle count, grouping
+and motion still affect illumination, and an overloaded scene may drop distant
+construction sources. The Lighting switch disables both explosion and nano
+lighting; glow remains independent.
 
-The same limitations as §23.3 apply: face-centroid lighting, no occlusion
-between models and no terrain relighting. Particle grouping is bounded and
-record-order dependent, so overloaded scenes may drop distant construction
-sources. No new simulation behavior, RNG calls, asset requirements or saved
-settings are introduced.
+### 23.7 Metallic glint
 
-### 23.6 Nanolathe prototype verification
+A small directional highlight using the existing outward face normals. One fixed
+unit half-vector, `(-0.35, -0.15, 0.9246621)` in world X/Z/height axes, defines
+an artistic overhead key; the clamped normal dot product is squared five times
+(power 32), once per rendered face. There is no camera position, clock, RNG,
+per-pixel normal, point-light loop or additional geometry: rotating panels change
+their response and a stationary panel keeps its highlight.
 
-The synthetic and real-device fixtures check visibility admission, palette
-classification, physical height and scale, clustering, recorded-viewport
-clipping, clone/reset, green illumination on a facing model surface, an unlit
-back face, a halo beside the particle cores, and restoration when the effects
-are disabled. Independent read-only review found no implementation issues;
-the description was corrected to call the looping particle ramp a shimmer.
+The face-constant ColorG attribute holds the original palette byte plus 256 times
+the rounded 0–255 highlight weight; both the atlas body shader and the native
+overflow shader decode those sixteen numeric bits, and the packed RGB battle
+light retains its own precision. Shadows and outline endpoints carry zero
+highlight, and construction bands that replace material colour suppress it.
+Palette lookup, waterline, transparency and composition ownership retain order,
+with the highlight applied to surviving model colour under final fog.
 
-The factory-flash regression sweeps an unchanged spray through all seven
-palette entries and replays entries out of order. Broad source energy stays
-identical, while replacing the displayed palette updates its hue. A separate
-sparse-spray sequence verifies proportional energy for one, two and three
-particles and immediate removal at zero; count and geometry changes still
-change illumination. The device fixture checks every pixel outside the particle
-cores across the full ramp: armour and terrain remain byte-identical, with
-nonzero ground illumination, while the cores retain their palette animation.
-`NANOLATHE_NANO_SHOTS` optionally captures those seven frames during the existing
-GPU device gate. This isolates palette flicker; it does not claim that particle
-motion, changing cluster membership or light-budget contention are smoothed.
+The shader masks dark seams with a brightness smoothstep from 0.12 to 0.35, and
+saturated paint with one minus a saturation smoothstep from 0.2 to 0.65. Its
+highlight tint is 35% white plus 65% albedo, with peak gain 0.48; RGB clamps to
+one and keeps the original coverage. These are tunable artistic choices, not
+authored metalness or roughness — neutral painted panels can look metallic too,
+and there is no shadow occlusion or map-specific sun direction. No passes,
+textures, uniforms, normal buffers or per-frame allocations are added. The
+player's **Finish** switch (§30) is its only control.
 
-Matching scene-version-4 Great Divide runs used seed 7, 1920×1080, native zoom,
-60 target draws/s, 300 pre-ticks, 120 warmup draws and 180 measured draws,
-with factories enabled and auto-remaster disabled. Every frame's census and
-all scene metadata matched within each before/after renderer pair. Features,
-fire and active factory construction were present; both captures were visually
-inspected. The classic capture is byte-identical. Modern adds green light to
-the factory bays and nearby surfaces while keeping the existing particle cores.
+## 24. (retired)
 
-| Executor | Submit median / p95, ms (before → after) | Cadence median / p95, ms (before → after) |
-|---|---|---|
-| Modern | 3.744 / 4.073 → 3.508 / 3.808 | 16.664 / 17.017 → 16.661 / 17.549 |
-| Classic | 0.458 / 0.643 → 0.475 / 0.591 | 17.204 / 19.669 → 17.210 / 20.917 |
+Wind in vegetation, removed at the user's request after live review: the initial
+filtered sprite bend blurred the foliage, and replacing it with integer row
+shifts preserved colours but looked glitchy in motion. Vegetation uses the
+ordinary static sprite path, and the prototype's name heuristic, presentation
+filter, sprite displacement, GPU operation and dedicated wind snapshot payload
+were removed with it. The coastal treatment in §26 separately publishes the
+existing wind for water motion, and the simulation's wind behavior is unchanged.
+Future vegetation animation would need a separate art decision; this section
+prescribes no replacement. The removal record is in
+[GPU_RENDERER_HISTORY.md](GPU_RENDERER_HISTORY.md).
 
-This single pair shows no measurable submission regression; the lower modern
-submission time is host variation, not an optimization claim. Device GPU time
-is unavailable. The source budget stays at 64 total; the final modern frame
-adds 254 glow quads and lights 2,169 model faces versus 1,929 before.
-Artifacts are in `/private/tmp/nanolathe-nano-{before,after}-{modern,classic}`.
+## 25. Explosion distortion
 
-### 23.7 Metallic glint (Enhanced)
-
-This user-requested prototype is an Enhanced presentation choice, not retail
-material evidence. It adds a small directional highlight using the existing
-outward face normals. Classic and authoritative data are unaffected. No
-material identity is inferred as fact from an asset's colour.
-
-One fixed unit half-vector, (-0.35, -0.15, 0.9246621) in world X/Z/height axes,
-defines an artistic overhead key. The clamped normal dot product is squared
-five times (power 32), once per rendered face. There is no camera-position,
-clock, RNG, per-pixel normal, point-light loop or additional geometry. Rotating
-panels change their response; a stationary panel keeps its highlight.
-
-The face-constant ColorG attribute holds the original palette byte plus 256
-times the rounded 0–255 highlight weight. Both the atlas body shader and the
-native overflow shader decode those sixteen numeric bits; the existing packed
-RGB battle light retains its original precision. Shadows and outline endpoints
-carry zero highlight. Construction bands that replace material colour suppress
-it. Palette lookup, waterline, transparency and composition ownership retain
-order, with the highlight applied to surviving model colour under final fog.
-
-The shader masks dark seams with a brightness smoothstep from 0.12 to 0.35,
-and saturated paint with one minus a saturation smoothstep from 0.2 to 0.65.
-Its highlight tint is 35% white plus 65% albedo, with peak gain 0.48; RGB clamps
-to one and keeps the original coverage. These are tunable artistic choices,
-not authored metalness or roughness. Neutral painted panels can consequently
-look metallic too. There is no shadow occlusion or map-specific sun direction.
-No passes, textures, uniforms, normal buffers or per-frame allocations are added.
-
-The effect starts enabled in the modern renderer. `NANOLATHE_METAL_GLINT=0` selects the
-original appearance for comparisons. Ctrl+Shift+G toggles it during modern
-window play and benchmark viewing; the terminal reports the state. Paused-world
-reuse is invalidated immediately. The setting is temporary and is never saved.
-`tools/try-metal-glint` opens the game; `tools/try-metal-glint battle` watches a
-20-second seeded benchmark battle with the same toggle. Additional arguments
-pass through (for example `--zoom=2`). Benchmark metadata records initial state
-and rows record the actual state, so manually toggled runs remain identifiable.
-
-Validation: synthetic facing and byte-packing checks; a real-device neutral,
-saturated, dark and transparent material fixture; exact off/on/off restoration;
-matching classic and modern Great Divide battle captures at native and 2× zoom.
-The open and closed synthetic ARMSOLAR captures both exercised the GPU lane
-(one subject, no skipped or overflow subjects); the open base remains visible
-between the panels. An injected-input hidden window run confirmed one toggle
-per held chord. A host input test also checks that releasing modifiers first
-cannot leak the still-held G to game/chat input. A second reviewer inspected
-the diff and reran renderer/host/docs tests and the real-device fixtures.
-
-Measured on Apple M3 Pro, Metal, darwin-arm64, using scene-version-4 Great
-Divide, seed 7, 1920×1080, 300 pre-ticks, 60 target draws/s, 120 warmup draws,
-180 measured draws and nearest-doubled detail art. Repeated runs are sequential.
-
-| View | Submit median / p95 / max, ms (off → on) | Cadence median, ms (off → on) |
-|---|---|---|
-| Native pair 1 | 3.767 / 3.971 / 4.123 → 3.803 / 4.044 / 9.514 | 16.666 → 16.695 |
-| Native pair 2 | 3.712 / 4.015 / 4.468 → 3.755 / 3.953 / 4.051 | 16.667 → 16.688 |
-| Detail 2× | 3.658 / 3.838 / 3.951 → 3.622 / 3.868 / 5.273 | 16.661 → 16.634 |
-
-Every frame's census and renderer counters match within each off/on pair:
-no extra draw calls, passes, atlas pages or geometry. The native disabled
-capture is pixel-identical to unchanged main; the final classic capture is
-also pixel-identical to main with matching censuses. Comparing main and the
-final enabled native build gives 3.813 → 3.797 ms median submission and
-16.761 → 16.685 ms cadence. These are short host measurements, not GPU time
-or evidence of a speedup; the few-hundredths-of-a-millisecond median changes
-are within run variation. The isolated 9.514 ms submission maximum in the
-first on-run did not recur in the second or final native runs. Per-frame
-allocation measurements overlap (0.843–0.885 MB native); no effect-specific
-per-frame allocation is introduced by the implementation.
-
-The visual result is a modest facet highlight, more legible at detail zoom.
-It is worth human evaluation as inexpensive polish, but is not a physical
-material model: texture neutrality is an aesthetic proxy and a static roof
-can keep a fixed sheen. `tools/check`, `tools/check-retail`, and the real-device
-gate passed. The final shortcut adjustment passed the host package tests.
-The separate frozen-list timing gate is blocked on this host: the supported
-battle capture route (`--map="ashap plateau" --shot-ticks=60 --shot-select
---shot-size=1920x1080 --shot-gpu-profile-frames=180 --renderer=modern --zoom=2`)
-crashes while acquiring the Metal drawable texture, both with the prototype
-disabled and in the unchanged-main binary. Its logs are
-`/private/tmp/glint-frozen-{off,main}.log`. The isolated model capture route
-explicitly rejects profiling, so no frozen-list timings are claimed. Resolving
-the existing capture-driver failure would settle that remaining gate; live
-battle runs and unprofiled model captures completed normally.
-Local evidence is in `/private/tmp/glint-{off,on}-native-{1,2}`,
-`/private/tmp/glint-{off,on}-detail`, `/private/tmp/glint-main-{native,classic}`,
-and `/private/tmp/glint-final-{native,classic}`; screenshots remain uncommitted.
-Landing verification also integrated the subsequent vegetation-wind removal.
-Fast, retail and real-device gates passed on that combined tree. Sequential
-matching native Great Divide runs retain equal frame censuses and renderer
-counters; classic and disabled modern captures remain pixel-identical to the
-updated main baseline. Modern submission median/p95/max was
-3.550/4.011/5.930 ms disabled and 3.767/3.999/4.174 ms enabled in this pair;
-both renderer captures were inspected. Evidence is local in
-`/private/tmp/glint-land2-{base-modern,base-classic,off-modern,on-modern,on-classic}`.
-
-The user visually approved this appearance and authorized its inclusion in main.
-The comparison controls remain available; classic rendering is unchanged.
-
-## 24. Wind in vegetation (removed prototype)
-
-Removed at the user's request after live review. The initial filtered sprite
-bend blurred the foliage; replacing it with integer row shifts preserved colors
-but looked glitchy in motion. Vegetation now uses the ordinary static sprite
-path. The prototype's name heuristic, presentation filter, sprite displacement,
-GPU operation and dedicated wind snapshot payload were removed with that
-prototype. The coastal treatment in §26 separately publishes the existing wind
-for water motion. The simulation's wind behavior remains unchanged.
-
-The abandoned implementations and their visual/performance checks remain in
-Git history. Future vegetation animation would need a separate art decision;
-this section does not prescribe a replacement effect.
-
-Removal checks include the normal GPU device fixtures and matching native
-Great Divide battle runs: seed 7, 1920×1080, 60 draws/s, 300 pre-ticks,
-120 warmup draws and 180 measured draws, factories and auto-remaster enabled.
-Metadata, every frame's census and final session diagnostics match within both
-renderer pairs; classic captures are byte-identical. Both restored captures
-were inspected. Modern submit median was 3.674 → 4.043 ms; a reverse-order
-repeat was 6.534 → 3.746 ms. These short pairs are too variable for a performance
-conclusion. Artifacts are outside the repository at
-`/private/tmp/wind-removed-{before,after}-{modern,classic}` and
-`/private/tmp/wind-removed-repeat-{before,after}-modern`.
-
-## 25. Explosion distortion prototype
-
-This is a user-authorized modern presentation experiment, not retail evidence.
-It uses §23's resolved, player-visible primary explosion/impact art sources.
-The recorder adds elapsed ticks since the published StartTick (plus the existing
-presentation fraction when interpolation is enabled) and the maximum authored
-animation extent in world pixels, cached once per immutable entry. Classic ignores this metadata.
-No persistent emitter history, wall clock, simulation mutation or RNG is used;
-replaying a list, pausing, changing cameras and restarting cannot restart a wave.
-A finished or newly hidden primary animation stops contributing immediately.
+A modern presentation experiment, not retail evidence. It uses §23's resolved,
+player-visible primary explosion and impact art sources. The recorder adds
+elapsed ticks since the published `StartTick` (plus the presentation fraction
+when interpolation is on) and the maximum authored animation extent in world
+pixels, cached once per immutable entry. Classic ignores this metadata. No
+persistent emitter history, wall clock, simulation mutation or RNG is used;
+replaying a list, pausing, changing cameras and restarting cannot restart a wave,
+and a finished or newly hidden primary animation stops contributing immediately.
 
 Art at least 64 world pixels across produces a ring lasting 15 simulation ticks
-(half a second at normal speed). Its radius grows linearly from 12 pixels to
-2.5 times the art extent, clamped to 120–320 pixels. Band half-width is
-10 + 0.12 times art extent. Displacement strength is min(age, 1) times
-(1 − age/15)² times min(extent/16, 7). All lengths take recording scale and the
-same final zoom transform as the source. These are artistic tuning choices.
-The bipolar radial profile has zero displacement at either band edge; bilinear
-sampling lets fractional displacement fade smoothly instead of snapping off.
+(half a second at normal speed). Its radius grows linearly from 12 pixels to 2.5
+times the art extent, clamped to 120–320 pixels. Band half-width is
+`10 + 0.12 × art extent`. Displacement strength is `min(age, 1)` times
+`(1 − age/15)²` times `min(extent/16, 7)`. All lengths take recording scale and
+the same final zoom transform as the source. The bipolar radial profile has zero
+displacement at either band edge, and bilinear sampling lets fractional
+displacement fade smoothly instead of snapping off. These are artistic tuning
+choices.
 
-The executor retains at most 32 strongest rings with stable source-order ties.
-It flushes the existing glow/world work, copies the world once into the existing
-fog scratch surface and draws clipped ring quads in one batch before fog and
-chrome. Tree heat shares that copy and batch, appended after every ring (§27.2). Shader discards leave every pixel outside a ring untouched. Sampling is
-clamped to the source's world clip. Overlapping bands read the same snapshot;
-the last submitted band wins where they overlap, without recursive refraction.
-There is no extra copy or draw in frames without either visible active rings
-or tree heat, and no new full-frame image. BlastWaves reports the submitted ring count.
-SetBlastDistortion is an executor-level comparison switch, enabled by default.
+The executor retains at most 32 strongest rings with stable source-order ties. It
+flushes the glow and world work, copies **only the region the batch samples** out
+of the composite into the read surface (`readcopy.go`), and draws clipped ring
+quads in one batch before fog and chrome. Tree heat and wreck shimmer share that
+copy and batch (§27.2, §28). Shader discards leave every pixel outside a ring
+untouched; sampling is clamped to the source's world clip; overlapping bands read
+the same snapshot and the last submitted band wins, without recursive
+refraction. There is no extra copy or draw in a frame without visible active
+rings or heat, and no new full-frame image. `BlastWaves` reports the submitted
+ring count. The player's **Distortion** switch (§30) is its only control.
 
-Verification: source admission/age/scale and bounded lifetime checks, shader
-compilation, and the existing opt-in GPU device loop exercise the ring against
-a patterned background, including clipping, replay, disabling and expiration.
-Run tools/check, tools/check-retail, the GPU device loop and sequential matching
-classic/modern battle benchmarks; inspect captures and source counts as well as
-host timings. GPU execution timing is unavailable through Ebitengine's API.
+### 25.2 Dynamic ordinary blast
 
-### 25.1 Prototype verification
-
-Implemented on the blast-distortion branch, with main's nanolathe lighting
-integrated. The source-size scan uses the entire animation because the installed
-large fireballs open at only 4–22 pixels and grow to 66–126 pixels; measuring
-only frame zero excluded them. Source gathering carries scalar metadata into
-the owned draw list. Budget selection happens after final viewport clipping,
-so offscreen explosions cannot suppress visible rings; removing the latest
-weakest source preserves earlier ties and survivor composition order.
-
-The fast gate, full retail gate (including lint), and real-GPU fixture loop
-passed on the integrated implementation. Independent review checked the source
-cache lifetime, timing and scaling, shader coordinates, fog ordering and budget
-selection. Synthetic GPU captures show the full attack/expansion/fade, unchanged
-pixels beyond the clip and HUD, identical repeated replay and exact expiration.
-Native and 2× battle captures were visually inspected.
-
-The final comparison used main dbf410c and integrated code 992171f: scene
-version 4, Great Divide, seed 7, 1920×1080, factories enabled, 300 pre-ticks,
-60 target draws/s, 120 warmup draws and 180 measured draws, auto-remaster off.
-All scene metadata and every frame's census matched within each renderer pair.
-Both retained sprite features, fire, movement, damage, projectiles, effects,
-construction and nanolathe activity. Classic pixels are identical. The modern
-2× capture changes 55,591 pixels and the measured frames contain 0–8 waves;
-the earlier native comparison contained 0–11 waves.
-
-| Executor | Submit median / p95 / max, ms (before → after) | Cadence median / p95 / max, ms (before → after) |
-|---|---|---|
-| Modern 2× | 3.571 / 4.061 / 8.687 → 3.622 / 3.912 / 4.016 | 16.664 / 17.113 / 17.606 → 16.658 / 17.062 / 17.641 |
-| Classic native | 0.457 / 0.530 / 0.690 → 0.458 / 0.498 / 0.706 | 17.152 / 19.113 / 21.972 → 17.182 / 20.246 / 33.248 |
-
-These are short host measurements, not GPU timings or a performance guarantee.
-Earlier runs varied substantially, including frames with no active wave; the
-final runs were repeated after verification workloads finished. The prototype
-adds one world copy and one clipped wave batch only when needed. Captures and
-profiles are under `/private/tmp/distortion-integrated-{before,after}-{modern,classic}`;
-the comparison crop is `/private/tmp/distortion-final-comparison.png` and the
-synthetic motion preview is `/private/tmp/distortion-wave.gif`.
-
-### 25.2 Dynamic ordinary blast prototype
-
-This is a user-authorized modern presentation experiment. All tuning
-below is authored Nanolathe design, not a retail behavioral claim. The purpose
-is to differentiate ordinary explosions that share art, without shrinking
-existing waves or changing the largest special explosions.
+Authored Nanolathe design, not a retail behavioral claim. The purpose is to
+differentiate ordinary explosions that share art, without shrinking existing
+waves or changing the largest special explosions.
 
 The central combat impact event copies the immutable weapon's authored
-`AreaOfEffect` and `DamageDefault` into value-only presentation metadata. A
-separate presence bit distinguishes a known zero from a missing profile. The
-session bridge, fixed effect pool and committed view preserve these values,
-and the client forwards them with the existing art extent and age. No renderer
-lookup follows a source unit or projectile handle. A unit's death blast uses
-the death weapon selected by the existing central impact path. Scripted
-fireballs and water-crossing splashes without this profile keep §25's original
-artwork-only wave. Authoritative damage, RNG, effect admission and lifetime do
-not read the added scalars.
+`AreaOfEffect` and `DamageDefault` into value-only presentation metadata, with a
+separate presence bit distinguishing a known zero from a missing profile. The
+session bridge, fixed effect pool and committed view preserve these values, and
+the client forwards them with the existing art extent and age. No renderer lookup
+follows a source unit or projectile handle. A unit's death blast uses the death
+weapon the existing central impact path selects. Scripted fireballs and
+water-crossing splashes without a profile keep §25's artwork-only wave.
+Authoritative damage, RNG, effect admission and lifetime do not read the added
+scalars.
 
-Known profiles with artwork extent at least 128 world pixels retain the
-original special-explosion treatment. For smaller art:
+Known profiles with artwork extent at least 128 world pixels retain the original
+special-explosion treatment. For smaller art:
 
 - Below 48 pixels: no wave, even with high authored damage.
 - From 48 to below 64 pixels: admit only when authored AoE is at least 32 and
   default damage at least 80. This admits substantial medium shells while
-  excluding small missile/laser hits. Existing art of at least 64 pixels keeps
-  its admission regardless of the profile values.
+  excluding small missile and laser hits. Existing art of at least 64 pixels
+  keeps its admission regardless of the profile values.
 - Baseline target radius is `max(2.5 × art extent, 160)` world pixels.
 - Breadth is `sqrt(clamp((AoE − 48) / 208, 0, 1))`. Target radius is the greater
-  of baseline and `min(baseline × (1 + 0.5 × breadth), 280)`. The baseline floor
+  of baseline and `min(baseline × (1 + 0.5 × breadth), 280)`; the baseline floor
   preserves the few ordinary art entries already larger than that cap.
 - Force is `sqrt(clamp((default damage − 80) / 1120, 0, 1))`. Multiply the
   original displacement strength by `1 + 0.75 × force`.
-- Start radius, band half-width, 15-tick lifetime, attack/decay, visibility,
-  clipping, zoom transforms, strongest-32 selection and shared draw remain §25.
+- Start radius, band half-width, 15-tick lifetime, attack and decay, visibility,
+  clipping, zoom transforms, strongest-32 selection and the shared draw remain
+  §25's.
 
 These two independent boosts use authored values as visual signals, not a
-calculation of damage dealt. In particular armor overrides, victim counts,
-falloff and overkill do not affect the visual. The current floor preserves the
-size of all previously admitted waves. Source animations still stop
-contributing when hidden or finished; the prototype does not extend them.
+calculation of damage dealt: armor overrides, victim counts, falloff and overkill
+do not affect the visual. This is the one blast shape; the player's Distortion
+switch decides whether any wave is drawn. The admission rules, including the
+artwork-only fallback for a missing profile and for art of at least 128 pixels,
+are locked by the shape's own unit checks, and the device-only square roots are
+listed explicitly in I2.
 
-`NANOLATHE_DYNAMIC_BLAST=0` is a temporary construction-time comparison control
-that restores the previous artwork-only formula. It leaves tree heat and the
-player's Distortion setting in control of their existing paths. No additional
-saved setting or shader pass is introduced.
+## 26. Coastal water (Enhanced)
 
-`NANOLATHE_DYNAMIC_BLAST_SHOTS` enables staged paired captures in the existing
-GPU device loop, using installed weapon definitions, actual GAF animation
-holds and Great Divide terrain. Left is artwork-only, right is dynamic. These
-isolate primary explosion art and refraction and are not combat simulations;
-the live battle benchmark supplies the integrated scene check. The capture
-fixture also requires exact pixel equality for tiny and expired waves.
-
-Prototype verification on the integrated branch passed `tools/check`,
-`tools/check-retail` including lint, the affected packages and the real GPU
-fixture loop. The float audit explicitly lists the device-only square roots
-in I2. The six installed-art clips and the live modern/classic battle captures
-were visually inspected. Tiny and expired paired captures are pixel-identical.
-
-The sequential comparison used one binary with its dynamic formula disabled
-and enabled: scene version 4, Great Divide, seed 7, 1920×1080, zoom 2,
-auto-remaster off, factories on, 300 pre-ticks, 120 warmup draws and 180 measured
-draws at 60 draws/s. Metadata and every census matched within renderer pairs.
-Modern waves grew from 0–10 (mean 2.98) to 1–17 (mean 7.26), with identical
-per-frame device draw counts. Submit median/p95/max was 3.650/4.011/4.184 →
-3.665/4.037/4.126 ms; cadence median was 16.708 → 16.668 ms. This is a short
-host-timing sample, not a GPU timing or guarantee. It isolates the renderer
-formula, not the scalar-copy overhead relative to a pre-prototype binary.
-Classic capture bytes match; its host cadence varied from 22.596 to 24.874 ms
-median with a 192.509 ms outlier, so those samples do not establish a cost for
-the modern-only formula. Captures retained moving and damaged armies, sprite
-features and burning trees, projectiles, effects, construction and nanolathe
-activity. Raw runs and profiles are outside the repository under
-`/private/tmp/dynamic-blast-review`.
-
-## 26. Coastal water prototype (Enhanced)
-
-This is an authored Nanolathe presentation experiment, not a retail behavioral
-claim. Original water is painted terrain plus script-emitted strip-2 sprinkles
-[03 R-WATER-01 §1]. Simulation, script sprinkles, collision, LOS and RNG remain
-unchanged. The prototype adds quiet drifting water, soft shoreline/building foam,
-and land hovercraft particles that lightly brighten the ground. Original
-blue/white script particles remain the water wakes; the added white movement
-strokes were removed after visual review. Above-water model pieces and admitted projectiles also receive faint, rippled
-reflections.
+An authored Nanolathe presentation treatment, not a retail behavioral claim.
+Original water is painted terrain plus script-emitted strip-2 sprinkles
+[03 R-WATER-01 §1]; simulation, script sprinkles, collision, LOS and RNG are
+unchanged, and the original blue and white script particles remain the water
+wakes. The treatment adds quiet drifting water, soft shoreline and building foam,
+land hovercraft particles that lightly brighten the ground, and faint rippled
+reflections of above-water model pieces and admitted projectiles. The player's
+**Water** switch (§30) gates all of it: with it off the recorder marks no water
+surface and admits no reflection site.
 
 ### 26.1 Public API and ownership
 
 `frame.WindView { Heading uint16; Strength int32 }` and `Frame.Wind` copy the
-existing session wind at publication [01 §7.3][I6]. Reset clears the value.
-The renderer never reads the live wind service.
+session wind at publication [01 §7.3][I6]; reset clears the value, and the
+renderer never reads the live wind service. `drawlist.WaterSurface { Enabled;
+Tick; Fraction16; WindHeading; WindStrength; DriftX, DriftZ, Energy }` is the
+value field `Terrain.Water`, enabled by the terrain recorder only for Enhanced
+non-strategic world drawing, from committed tick and wind plus the presentation
+fraction; paused captures retain their phase. `drawlist.SurfaceWake { X, Y, AxisX,
+AxisY, CrossX, CrossY, Age, Alpha; Dust; Foam }` is a rotated quad — centre and
+half-vectors in recording pixels, age and opacity in [0,1] — immutable until the
+next list reset; `SurfaceWakes`, `List.RecordSurfaceWakes` and the optional
+`SurfaceWakeSink` carry batches after terrain and before objects, `Clone` owns its
+marks, and world transforms apply exactly once in the executor.
 
-`drawlist.WaterSurface { Enabled bool; Tick uint32; Fraction16 int32;
-WindHeading uint16; WindStrength int32; DriftX, DriftZ, Energy float32 }` is the
-value field `Terrain.Water`.
-The terrain recorder enables it only for Enhanced non-strategic world drawing,
-using committed tick/wind and the presentation tick fraction. Paused captures
-must retain their phase. Classic ignores the metadata.
+Client wake ownership is `water_wakes.go`, hooked from `world_draw.go` and
+`trails.go`. The hooks observe every committed tick through the session
+publication observer, **including catch-up ticks**, reset with trails at battle,
+source and renderer changes, and record the batch immediately after terrain. The
+producer uses authored `CanHover`, footprint and committed movement; hidden,
+carried, airborne, unfinished and teleported units must not bridge wake history;
+every emitted mark starts at a player-visible position, and existing fog
+composites cover the batch. A bounded ring holds the recent path and zero movement
+emits nothing. Grounded mode admits hovercraft without comparing model Y to the
+centre terrain height, because the four-corner conform can differ from that sample
+[04 R-MOV-01 §5]. Hot or damaging liquid receives no water foam.
 
-`drawlist.SurfaceWake { X, Y, AxisX, AxisY, CrossX, CrossY, Age, Alpha float32;
-Dust, Foam bool }` describes a rotated quad: centre and half-vectors in recording
-pixels, age in [0,1], opacity in [0,1]. It is immutable until the next list
-reset. `SurfaceWakes { Marks []SurfaceWake }`, `List.RecordSurfaceWakes` and
-optional `SurfaceWakeSink.SurfaceWakes(SurfaceWakes)` carry batches after
-terrain and before objects. Clone owns its marks; Reset releases their live
-length. World transforms apply exactly once in the executor.
-
-Client wake ownership: `water_wakes.go`, its tests, the new `Client.wakes`
-state, hooks in `world_draw.go` and `trails.go`. The hooks observe every committed
-tick through the session publication observer (including catch-up ticks),
-reset with trails at battle/source/renderer changes,
-and record the batch immediately after terrain. The producer uses authored
-`CanHover`, footprint and committed movement. Hidden, carried, airborne,
-unfinished and teleported units
-must not bridge wake history. Every emitted mark starts at a player-visible
-position; existing fog composites cover the batch. A bounded ring holds the
-recent path; zero movement emits nothing. Hovercraft emit discrete skirt-side
-particles on dry terrain, with each particle retaining its birth height and
-direction. Grounded mode admits hovercraft without comparing model Y to the
-centre terrain height: the four-corner conform can differ from that sample
-[04 R-MOV-01 §5]. Hot or
-damaging liquid receives no water foam in this first experiment. Geometry
-and lifetimes are artistic presentation constants.
-
-GPU ownership: `water.go`, its shader/fixtures, renderer lifecycle and the
-terrain hook. Cache a conservative water/shore mask in painted map coordinates
-using the terrain inverse projection [07 §8][03 §2.5]. Never treat a negative
-height sentinel as water. Preserve painted colours. Draw the water treatment
-before objects and fog; clip wake fragments to the matching wet/dry mask.
-No postprocess may displace units, HUD or fog. Cache resources are released on
-map replacement and disposal. Visible-region work and history are bounded;
-benchmark classic and modern sequentially with matching metadata.
-
-### 26.2 Validation gate
-
-Build/vet/test with `tools/check`; targeted real-device renderer fixtures with
-`NANOLATHE_GPU_DEVICE_TEST=1 go test ./internal/platform/gpurender -count=1`.
-Inspect actual coastal captures at multiple ticks, native and fractional zoom;
-check clone/replay, fog, shoreline clipping, pause and classic identity.
-Use the existing battle benchmark for regression. Verify movement after loading
-a real save and issuing normal orders; staged placement is a presentation
-diagnostic and cannot establish that the gameplay producer works. The opt-in
-`TestCoastalSavedGameParticles` accepts `NANOLATHE_COASTAL_SAVE` and retail assets
-to exercise normal and two-tick catch-up cadence without writing the save.
+GPU ownership is `water.go` and `water_reflections.go`. A conservative water/shore
+mask is cached in painted map coordinates through the terrain inverse projection
+[07 §8][03 §2.5]; a negative height sentinel is never water; painted colours are
+preserved; the treatment draws before objects and fog; wake fragments clip to the
+matching wet/dry mask. No postprocess displaces units, HUD or fog. Cache resources
+are released on map replacement and disposal.
 
 ### 26.3 Surface treatment and cost bounds
 
-The GPU builds an RGBA mask once per terrain identity. Red identifies ordinary
-water, green encodes inward shore distance, and blue independently identifies
-valid dry ground; excluded liquid and invalid terrain belong to neither medium.
-The mask starts at one painted map pixel per texel and doubles that step until
-its largest side is at most 2,048 texels (at most 16 MiB of GPU pixels). Two
-integer chamfer sweeps approximate distance up to 32 world pixels. A separable
-nine-tap blur smooths the distance channel without changing wet/dry labels.
-Its sample spacing is at least two world pixels to round height-grid corners
-even on the finest mask level.
-Bilinear sampling softens the mask while conservative coverage clips both foam
-and dust. Source reset releases the mask. A future height-editing path must
-invalidate this cache as well as the painted terrain sources.
+**The mask** is one RGBA image per terrain identity: red ordinary water, green
+inward shore distance, blue valid dry ground, **alpha the damp band's ring term**
+(§32.3); excluded liquid and invalid terrain belong to neither medium. It starts
+at one painted map pixel per texel and doubles
+that step until its largest side is ≤2,048 texels (≤16 MiB of GPU pixels). Two
+integer chamfer sweeps approximate distance up to 32 world pixels; a separable
+nine-tap blur smooths the distance channel without changing wet/dry labels, its
+sample spacing at least two world pixels so height-grid corners round even on the
+finest level. Bilinear sampling softens the mask while conservative coverage clips
+foam and dust. A future height-editing path must invalidate this cache as well as
+the painted terrain sources.
 
-A 128-pixel block index skips the water pass when no water intersects the view.
-Otherwise the scheduler copies the terrain composite and applies a viewport
-water shader before objects. Every constant in that shader is an authored
-Nanolathe presentation choice, not a retail behavioural claim.
+A 128-pixel block index skips the water pass when no water intersects the view,
+plus one block of slack a side so a coast just past the viewport edge still runs
+the pass for the damp band (§32.3). Otherwise the scheduler copies the terrain
+composite and applies a viewport water shader before objects. Every constant in
+that shader is an authored presentation choice.
 
-Three layers of smooth value noise perturb the terrain by up to 3.4 world pixels
-per axis, and none of them scrolls on a velocity of its own: each travels only
-on the integrated wind drift, the broad ripple at six times that drift, the fine
-ripple at eleven and a coarse gust layer at twenty-two. The earlier treatment
-added a fixed scroll on top of the drift, and in calm wind that scroll — about
-2.6 world pixels per second — matched the drift itself, so the whole surface slid
-as one sheet in a direction unrelated to the wind. With the fixed scroll gone the
-direction of travel is always the wind, and the three multiples give the surface
-parallax rather than a single sliding sheet.
+**The ripple.** Three smooth value-noise layers displace the terrain sample by up
+to 3.4 world pixels per axis, plus a domain warp that deforms them. **None of the
+three scrolls on a velocity of its own**: each travels only on the integrated wind
+drift, because translation alone reads as a moving tile.
 
-Translation alone still reads as a moving tile, so the ripple is deformed as well
-as moved. A slow domain warp — two more noise evaluations on a lattice about four
-times coarser than the broad ripple, advancing roughly 0.08 of a cell per second
-— offsets the broad lattice by up to 0.8 of its cells and the fine lattice by up
-to 0.45 of its own. The warp lattice is the only term that advances on time
-alone, and because it is a deformation rather than a translation, ripple cells
-stretch, split and merge in place instead of marching past. The fine lattice is
-additionally rotated 37 degrees about the map origin — one fixed rotation applied
-once, not a wind-following one — so its cell rows never coincide with the broad
-lattice's and the pair stops reading as a grid.
+| Layer | Travel | Deformation |
+|---|---|---|
+| broad ripple | 6 × the integrated drift | offset up to 0.8 of its cells by the warp |
+| fine ripple | 11 × the drift | offset up to 0.45 of its cells; lattice rotated 37° about the map origin — one fixed rotation, never a wind-following one, so its cell rows never coincide with the broad lattice's |
+| coarse gust patch | 22 × the drift | where it passes, up to a fifth more ripple amplitude and displacement and up to 5% darker water at full wind energy |
+| domain warp | the only term that advances on time alone, ≈0.08 cell per second | two noise evaluations on a lattice about 4× coarser than the broad ripple; a deformation, so cells stretch, split and merge in place instead of marching past |
 
-The coarse layer is a gust patch, a cat's paw: it glides downwind fastest, and
-where it passes it both roughens the ripple, by up to a fifth more amplitude and
-displacement, and darkens the water by up to five percent at full wind energy. In
-a dead calm the darkening vanishes and only the mild roughening remains.
-
-The field is translated by the wind and never oriented by it. Retail re-rolls the
-wind heading to a fresh random value every 150 to 420 ticks
+**The field is translated by the wind and never oriented by it.** Retail re-rolls
+the wind heading to a fresh random value every 150 to 420 ticks
 [05 "The wind phase, its draws, and the generator notification"], so crests
 aligned to the heading would swing through a new angle every few seconds; and any
-rotation about a fixed point sweeps distant pixels across the screen at a speed
-proportional to their distance from it. Translation has neither defect.
+rotation about a fixed point sweeps distant pixels in proportion to their distance
+from it.
 
-Moving brightness and blue highlights make that motion readable against fine
-painted texture. Bilinear terrain sampling prevents displacement from snapping
+Moving brightness and blue highlights make the motion readable against fine
+painted texture, and bilinear terrain sampling keeps displacement from snapping
 between original pixels. Shore fronts travel toward the coast along the blurred
-distance field on an approximately four-second cycle, with spatially varying
-phase and opacity. Broad crests fade across the last seven world pixels before
-the wet/dry boundary to avoid outlining its grid. Surface brightness now varies
-between −16.5 and +11.5 percent of the painted colour at full wind strength
-inside a gust, and between −6.7 and +6.7 percent in a dead calm; the blue
-highlight blend is still bounded to eight percent at full wind strength. These
-subdued lighting coefficients preserve readable refraction; wave timing,
-displacement and wind drift are independent of highlight strength. A wet pixel
-costs six value-noise evaluations — gust, two warp, broad, fine and the shore
-patch — against seven while the surface carried the sun glitter of §32.1, and
-three before §32 added anything. No new pass, texture, uniform or allocation.
+distance field on a ≈4-second cycle with spatially varying phase and opacity;
+broad crests fade across the last seven world pixels before the wet/dry boundary,
+so its grid is not outlined. Surface brightness varies between −16.5% and +11.5%
+of the painted colour at full wind strength inside a gust and between −6.7% and
++6.7% in a dead calm; the blue highlight blend is bounded to 8% at full wind
+strength. A wet pixel costs six value-noise evaluations — gust, two warp, broad,
+fine and the shore patch. No new pass, texture, uniform or allocation.
 
-`water_motion.go` observes committed wind, using its negative sine/cosine
-components [R-WIND-01]. Strength is normalized against 5,000 and clamped to [0,1].
-The target drift speed is 0.4–2 world pixels per second; velocity and visual
-strength approach the target by 1/90 of the remaining difference each tick.
-The surface shader scales that integrated drift by six, eleven and twenty-two,
-one multiple per layer, for visible movement.
-Integrating the velocity preserves pattern position when wind changes, including
-heading wrap and reversals. The field is never rotated about the map origin.
-Recording interpolates the previous/current visual values with the permitted
-presentation fraction. Repeated ticks do nothing; source/renderer changes reset
-the state, as do tick rewinds and observation gaps exceeding 300 ticks.
-These coefficients
-describe this experiment, not retail arithmetic. The snapshot and water draw
-add two render passes; cost depends primarily on viewport pixels, not map area.
+**Wind response.** `water_motion.go` observes committed wind through its negative
+sine and cosine components [R-WIND-01]. Strength is normalized against 5,000 and
+clamped to [0,1]; target drift speed is 0.4–2 world pixels per second; velocity
+and visual strength approach the target by 1/90 of the remaining difference each
+tick. Integrating the velocity preserves pattern position across wind changes,
+heading wrap and reversals included. Recording interpolates previous and current
+visual values with the permitted presentation fraction. Repeated ticks do nothing;
+source and renderer changes, tick rewinds and observation gaps over 300 ticks
+reset the state. The value noise reduces its integer lattice coordinate onto a
+289-cell period before hashing, because the drift scrolls that lattice without
+bound and an unbounded hash argument leaves float precision, whereas a modulo on
+time itself would make the pattern jump; the resulting tile is thousands of world
+pixels across, wider than any viewport.
 
-Particle history is bounded to 8,192 marks and 4,096 tracked unit identities.
-Land particles emit every six travelled world pixels, alternate around the
-rear skirt, starting near its outer edge, and live for 45 ticks. Their initial
-opacity is 0.45. They spread and drift sideways with quadratic
-opacity decay. The soft lobed profile composites white at low opacity, so it
-can brighten terrain without darkening it or requiring another snapshot.
-The additional
-work scales with visible marks and their overdraw. Renderer changes clear
-history; no simulation service or gameplay RNG is consulted. `water_buildings.go`
-records broken elliptical ripples beneath visible, completed floating
-buildings, bounded to 1,024 visible rings. Admission uses wet terrain, a model
-top reaching the surface, and committed base height equal to sea minus authored
-waterline [05 "Geothermal requirement"]. It does not require the FBI `Floater`
-flag: stock water-yard buildings such as tidal generators do not set it.
-Two staggered rings expand and dissolve inside each quad, avoiding a squared
-footprint outline. This approximates displacement around the base, not the
-model's exact waterline intersection; the shared mask clips it to water.
+**Particles.** History is bounded to 8,192 marks and 4,096 tracked unit
+identities. Hover-dust age and building-foam ring phase both add the presentation
+fraction, as scorch and blast ages do, so they advance at display rate rather than
+stepping at 30 Hz on a faster display.
 
-Validation includes real-device native and fractional zoom fixtures for phase
-replay, animation, dry/wet clipping, opaque object preservation and source
-reset, plus publication and history lifecycle tests. Actual saved-game testing
-found that observing only during recording lost history whenever two simulation
-ticks preceded a draw. Per-publication observation fixes that while retaining
-the reset on genuinely missing history; loading itself preserves the needed
-unit metadata. A staged Coast to Coast
-diagnostic uses actual ARMPT, CORPT, ARMSH and ARMTIDE models with prescribed trajectories
-and a deliberate wind reversal; it demonstrates the effects but does not measure naval gameplay.
-The matching land-battle benchmark showed no measurable modern regression and
-an identical classic capture. It does not establish the cost of a large naval
-battle's active water/particle cost.
-
-Two later corrections keep the treatment steady in time. The hover-dust age and
-the building-foam ring phase now add the presentation tick fraction, as the
-scorch and blast ages do, so both advance at display rate instead of stepping at
-30 Hz on a faster display; the dust lifetime, the foam cycle length and the
-recording at fraction zero are unchanged, and the foam tick is still wrapped
-before the fraction is added. The surface shader's value noise also reduces its
-integer lattice coordinate onto a 289-cell period before hashing it. Elapsed
-time and the integrated drift scroll that lattice without bound, and an
-unbounded sine argument eventually leaves float precision, degrading the pattern
-on some devices; a modulo on time itself would make the pattern jump, whereas
-wrapping every lattice corner on one period leaves the field continuous. The
-noise becomes tile-periodic, and at the scales used here that tile is thousands
-of world pixels across, wider than any viewport. Both are implementation choices
-for this prototype, not retail evidence.
-
+| Mark | Admission | Emission and life |
+|---|---|---|
+| land hover dust | the producer rules of §26.1 | every six travelled world pixels, alternating around the rear skirt from near its outer edge; 45 ticks from initial opacity 0.45, spreading and drifting sideways with quadratic opacity decay; the soft lobed profile composites white at low opacity, so it brightens terrain without darkening it or needing another copy |
+| building foam (`water_buildings.go`) | a visible completed floating building on wet terrain, its model top reaching the surface, its committed base height equal to sea minus authored waterline [05 "Geothermal requirement"] — **not** the FBI `Floater` flag, which stock water-yard buildings such as tidal generators do not set | broken elliptical ripples, bounded to 1,024 visible rings; two staggered rings expand and dissolve inside each quad so the footprint is not outlined as a square. This approximates displacement around the base, not the model's waterline intersection, and the shared mask clips it to water |
 
 ### 26.4 Above-water screen-space reflections
 
-This is an Enhanced presentation approximation. `ModelGeometry.ReflectWater`
-admits a visible body whose origin is over valid ordinary water;
-`ReflectionSea` is absolute sea height in recording-scale pixels, alongside
-`WorldHeight`.
-Vertex `Height` remains physical relative height, including in
-supersampled geometry. `Sprite.ReflectWater/ReflectionHeight` and
-`Line.ReflectWater/ReflectionHeight0/ReflectionHeight1` carry signed above-sea
-height for admitted projectile bodies and endpoints. Ground-shadow sprites do
-not opt in. Classic ignores these value fields; cloned lists retain them.
+`ModelGeometry.ReflectWater` admits a visible body whose origin is over valid
+ordinary water; `ReflectionSea` is absolute sea height in recording-scale pixels,
+alongside `WorldHeight`. Vertex `Height` remains physical relative height,
+supersampled geometry included. `Sprite.ReflectWater/ReflectionHeight` and
+`Line.ReflectWater/ReflectionHeight0/1` carry signed above-sea height for admitted
+projectile bodies and endpoints. Ground-shadow sprites do not opt in; classic
+ignores these value fields; cloned lists retain them.
 
-The direct model lane captures front-facing faces while preparing its normal
-atlas. Each reflected vertex samples that existing resolved colour at its
-original atlas position. The original key plane and quad mapper reject source
-pixels belonging to an obscuring piece. Physical height, independent of the
-retail comparison key, clips fragments at and below sea. Reflect only physical
-height, preserving the hull's ground footprint: the camera subtracts half height
-[03 §2.5], so reflected screen Y is source screen Y plus its above-water height.
-Equal-height points retain their screen-space direction at every heading. Low
-hulls can obscure much of their own reflection; do not move or flip the whole
-image to force it into view. No extra model atlas or alternative scene camera
-is built.
-The atlas already applies materials, construction reveal and waterline tint.
-Models omitted from that atlas do not receive fallback reflections.
+The model lane captures front-facing faces while preparing its atlas, and each
+reflected vertex samples that resolved colour at its original atlas position; the
+key plane and quad mapper reject source pixels belonging to an obscuring piece.
+Physical height, independent of the retail comparison key, clips fragments at and
+below sea. Only physical height is reflected, which preserves the hull's ground
+footprint: the camera subtracts half height [03 §2.5], so reflected screen Y is
+source screen Y plus above-water height, and equal-height points keep their
+screen-space direction at every heading. Low hulls can obscure much of their own
+reflection; the image is never moved or flipped to force it into view. No extra
+model atlas or alternative scene camera is built, and a model omitted from the
+atlas gets no fallback reflection. The atlas already applies materials,
+construction reveal and waterline tint.
 
-Projectile model pieces share this path. GAF projectiles are reflected
-billboards about their anchor's water-plane projection; their art has no
-per-pixel physical depth. Beam/segment endpoints use committed heights and
-interpolate the waterline clip across each stroke. No effect, UI glyph or
-projectile ground shadow is inferred to be reflective from its brightness.
-§32 lifts that for named explosion and impact art alone, which the recorder now
-admits explicitly over water; UI glyphs and ground shadows still never reflect,
-and nothing is inferred from brightness.
+Projectile model pieces share this path. GAF projectiles are reflected billboards
+about their anchor's water-plane projection, their art having no per-pixel
+physical depth; beam and segment endpoints use committed heights and interpolate
+the waterline clip across each stroke. No effect, UI glyph or projectile ground
+shadow is inferred reflective from its brightness; §32.2 lifts this for named
+explosion and impact art alone, which the recorder admits explicitly.
 
 A retained viewport RGBA plane receives the reflection source, capped at 32,768
-vertices per frame, reserving 4,096 for projectile sprites and strokes. A water-only resolve introduces two irregular horizontal
-ripple frequencies, a three-sample softening, a cool tint and 25 percent opacity.
-Sources fade between 64 and 160 world pixels above sea. Wave phase uses the same
-committed time/fraction as the water and freezes on pause. World zoom applies
-once, to destination coordinates; source atlas positions remain unchanged.
-The resolve is after painted water and before objects, wakes and fog. Thus
-reflections cannot paint over foreground units, shore or UI, and black fog
-covers the result. Only bodies already admitted by presentation can reflect.
-This does not reconstruct offscreen or hidden surfaces, trace rays, or solve
+vertices a frame with 4,096 reserved for projectile sprites and strokes. A
+water-only resolve adds two irregular horizontal ripple frequencies, a softening
+filter, a cool tint and 25% opacity; wave phase uses the same committed time and
+fraction as the water and freezes on pause. World zoom applies once, to
+destination coordinates; source atlas positions are unchanged. The resolve runs
+after painted water and before objects, wakes and fog, so reflections cannot paint
+over foreground units, shore or UI, and black fog covers the result. It samples
+the shared mask **bilinearly** in the surface and wake shaders' coordinate
+convention, converts it to coverage with the same smoothstep and multiplies its
+premultiplied result by that coverage, keeping the early-out where coverage is
+zero. The source plane is allocated only when needed and released on source reset.
+Nothing here reconstructs offscreen or hidden surfaces, traces rays or solves
 inter-unit reflected depth ordering; overlapping reflected subjects remain an
-approximation. The source plane is allocated only when needed and released on
-source reset; draw work is skipped without visible water or admitted geometry.
-`SetWaterReflections` is a capture-only comparison switch. Shore foam's opacity
-is additionally reduced by one quarter; its shape and timing are unchanged.
+approximation. Shore foam's opacity is reduced by one quarter beside it.
 
-A later correction gives the resolve the same shoreline treatment the surface
-and wake shaders already use: it samples the shared mask bilinearly in their
-coordinate convention, converts it to coverage with the same smoothstep, and
-multiplies its premultiplied result by that coverage, keeping the early-out
-where coverage is zero. Rejecting a nearest sample below full coverage had made
-the reflection end on a whole mask texel, which is several world pixels wide on
-a large map, so the edge read as a stepped line rather than a shore. Both
-compiled resolve variants share the one shader source, so both fade. This is an
-implementation choice, not retail evidence.
+### 26.6 Aircraft and boat reflections
 
+Four smooth height ramps, in world pixels above sea, shape a model source; every
+term depends on physical height alone, so boat opacity is unchanged, no
+classification is added and a tall non-aircraft model follows the same rule.
 
-At 1920×1080, the reflection source has 7.9 MiB of logical RGBA pixels. The
-current Ebitengine Metal backend rounds each texture dimension up to a power of
-two, allocating a 2048×2048 texture (16 MiB), plus the bounded vertex/index
-buffers. This corrects a logical-pixel-only estimate of device storage.
+| Term | Ramp | Effect |
+|---|---|---|
+| source fade | 64–320 (sprite and beam sources keep 64–160) | aircraft at flight altitude leave a faint reflected image; covers every model source, tall pieces and model projectiles included |
+| opacity | 64–160 | model opacity 1 down to 0.35, multiplied again by world-anchored horizontal transmission bands, 1 down to 0.7 at full ramp strength, so a high reflection is weakened and broken up rather than mirrored cleanly |
+| horizontal displacement | the opacity ramp, floored at strength 0.35 after normalized height is clamped to 0–1, so a submerged corner cannot displace without bound | two world-anchored sine waves of amplitude 3 and 1.05 world pixels; at the floor, 1.05 and 0.3675 |
+| blur strength | 64–200 | each source texel blends its narrow horizontal filter (centre 0.5, sides 0.25) with a filled cross kernel — centre 0.25, horizontal pairs at distances one to four weighing 0.12, 0.09, 0.06 and 0.03 each, vertical pairs at distances one and two weighing 0.06 and 0.015 each; both kernels sum to one |
 
-An isolated M3 Pro probe at 1080p alternated reflections on/off on the same
-committed frame, warmed both paths, and forced completion with an identical
-full-frame readback after every Execute. Two runs of 120 pairs measured median
-paired overhead of 0.2–0.6 ms for three water bodies, a dry hovercraft and a
-projectile stroke, and about 0.8 ms for a dense 64-body water scene plus a stroke.
-CPU submission overhead was about 0.03 ms and 0.32 ms respectively; total device
-draws increased by two in both scenes. These are renderer/completion deltas,
-not isolated GPU timestamps or full-game FPS estimates. Scene overlap, visible
-water area, device and resolution affect cost. Raising opacity from 20 to 25
-percent changes a shader coefficient without adding geometry, passes or storage.
+The displacement moves the already recorded reflection vertices and retains their
+original atlas coordinates, so it samples no neighbouring model region and needs
+no second camera; shared corners follow the same continuous displacement, the
+distortion uses committed water time and fraction, freezes on pause, and scales
+once with zoom. The wide blur kernel uses nearest texels on a fixed
+one-screen-pixel grid — four screen pixels horizontally, two vertically — which
+keeps one-pixel details connected at every zoom while the narrow contribution
+stays bilinear and scales with zoom; the wide contribution can advance by whole
+pixels with water motion, an intentional sampling approximation.
 
-### 26.5 Integration verification
-
-The user approved the final water, foam, hover dust and physical-height
-reflections, including 25 percent reflection opacity, for main. Integration
-retains metallic glints, nanolathe illumination and explosion distortion;
-vegetation remains static. Independent read-only review found no implementation
-issues. The fast, retail and real-device gates passed, as did the saved-game
-hover movement check at ordinary and two-tick catch-up cadence. Coastal captures
-at native and 2× recording scale, before and after a staged wind change, were
-inspected; the device fixtures also exercise fractional zoom and replay.
-
-Sequential Great Divide baseline/integrated runs used scene version 4, seed 7,
-1920×1080, 60 draws/s, 300 pre-ticks, 120 warmup draws and 180 measured draws,
-with factories enabled and auto-remaster disabled. Modern used 2× zoom; classic
-used native. Within each renderer pair all scene metadata and frame censuses
-match, and final RGB captures are identical. Both captures contain fire,
-moving units, projectiles and active factory construction and were inspected.
-
-| Executor | DrawWork median / p95 / maximum, ms (baseline → integrated) |
-|---|---|
-| Modern 2× | 5.500 / 8.501 / 9.985 → 5.562 / 8.439 / 10.187 |
-| Classic native | 13.989 / 17.874 / 26.168 → 13.766 / 17.788 / 20.340 |
-
-These short host samples show no clear regression. The dry battle is a
-regression control, not a measurement of active water or reflection GPU cost;
-§26.4 records the separate active-water completion probe. Artifacts remain
-outside the repository in `/private/tmp/coastal-land-{base,after}-{modern,classic}`
-and `/private/tmp/coastal-land-multiframe`; gate logs use the same
-`/private/tmp/coastal-land-` prefix.
-
-
-### 26.6 Aircraft and boat water reflections
-
-The user approved landing this Enhanced treatment after blue-water skirmish
-review. It combines height-dependent aircraft fading and softening with gentle
-boat reflection wobble.
-It is an implementation choice, not a retail behavioral claim. Model sources
-now fade smoothly between 64 and 320 world pixels above sea, instead of ending
-at 160. This lets aircraft at flight altitude leave a faint reflected image.
-The distance applies to all model sources, including tall model pieces and model
-projectiles; sprite and beam sources keep their 64–160 fade. The 25 percent
-resolve opacity, ripple, tint, water mask, fog order and physical-height
-projection of §26.4 are retained. Values are artistic choices for this prototype.
-
-The second visual iteration weakens and breaks up high model reflections. A
-smooth 64–160-world-pixel height ramp multiplies model opacity by 1 down to 0.7;
-world-anchored horizontal transmission bands multiply it by another 1 down to
-0.7 at full ramp strength. Averaged over the bands, a fighter at height 110 is
-about 20 percent fainter than the first prototype and a bomber at 200 about
-40 percent fainter. These are relative artistic opacity changes, not measured
-luminance or retail behavior.
-
-The same ramp introduces a horizontal displacement of the already recorded
-reflection vertices: two world-anchored sine waves, amplitudes 3 and 1.05 world
-pixels. Their original atlas coordinates are retained, so this does not sample
-neighboring model slots or require another camera. Shared corners follow the
-same continuous displacement. The distortion uses committed water time/fraction,
-freezes on pause, and scales once with zoom. The third iteration extends this
-wobble to boats: the displacement ramp has a minimum strength of 0.35, giving
-low model corners wave amplitudes of 1.05 and 0.3675 world pixels. The stronger
-height-dependent displacement still applies above that floor. The floor is
-applied after clamping the normalized height to 0–1, so submerged corners do not
-produce an unbounded displacement. This is an authored water treatment, not a
-retail behavioral claim.
-
-Boat opacity stays unchanged: the distance fade and transmission-band ramp
-still depend only on physical height, so boat-height corners do not inherit
-aircraft dimming. Existing water-only resolve ripples continue to soften the
-whole reflection. Sprites and beams keep their previous treatment. Tall
-non-aircraft models follow the same height rule; no classification is added.
-
-Through the third iteration, geometry admission, vertex budget, source texture
-allocation, render passes and texture sample count are unchanged. That increment
-is vertex arithmetic and model-fragment arithmetic in the existing source pass. No underside,
-offscreen body or reflected depth is reconstructed. Top-surface reuse remains
-an intentional approximation for human review.
-
-The fourth iteration makes the same 64–160 height ramp reduce model opacity
-from 1 to 0.35 instead of 0.7. Relative to iteration three, a height-110 model
-is about 20 percent fainter and heights at or above 160 are 50 percent fainter,
-before filtering. The 64–320 terminal fade and transmission bands remain.
-
-Blur strength uses a separate smooth height ramp from 64 to 200. Each source
-texel blends its old horizontal filter (centre 0.5, sides 0.25) with a filled
-cross kernel: centre 0.25; horizontal pairs at distances one, two, three and
-four weigh 0.12, 0.09, 0.06 and 0.03 each; vertical pairs at distances one and
-two weigh 0.06 and 0.015 each. Both kernels sum to one. The wide kernel uses
-nearest texels on a fixed one-screen-pixel grid: four screen pixels horizontally
-and two vertically. This keeps even one-pixel details connected at every zoom;
-the existing narrow contribution remains bilinear and scales with zoom. The
-wide contribution can advance by whole pixels with water motion, an intentional
-sampling approximation to keep this faint screen-space treatment inexpensive.
-
-The source shader also writes a viewport-sized RGBA8 height buffer using the
-same admitted reflection geometry, atlas samples and hidden-piece checks.
-Red stores blur strength times source alpha; alpha stores source coverage after
-fading. Normal premultiplied composition preserves a weighted strength when
-reflections overlap. The resolve recovers strength as red/alpha and weights
-each source texel before interpolation or summation. Adjacent boats cannot inherit
-an aircraft's blur strength; exact overlap has the combined source strength.
-Final water masking and foreground/fog composition retain their existing order.
-
-The executor marks a coarse grid of 64×64 recording pixels from elevated triangle bounds,
-expanded by the full filter reach, water displacement and sampling margin. Only
-marked cells run the heavier filter; unmarked cells retain the old three samples.
-Screen bounds and margins are converted back to recording coordinates before
-marking, so fractional zoom does not transform the grid twice. Adjacent same-kind
-cells share horizontal quads. Cheap and soft cells use separate compile-time
-shader variants in two non-overlapping groups; ordinary water avoids the larger
-shader's register cost as well as its samples.
+The source shader also writes a viewport-sized RGBA8 height buffer from the same
+admitted geometry, atlas samples and hidden-piece checks: red is blur strength
+times source alpha, alpha is source coverage after fading, and normal
+premultiplied composition preserves a weighted strength where reflections overlap.
+The resolve recovers strength as red/alpha and weights each source texel before
+interpolation, so adjacent boats cannot inherit an aircraft's blur strength. The
+executor marks a coarse grid of 64×64 recording pixels from elevated triangle
+bounds, expanded by the full filter reach, water displacement and sampling margin,
+converting screen bounds back to recording coordinates before marking so
+fractional zoom does not transform the grid twice. Only marked cells run the
+heavier filter; adjacent same-kind cells share horizontal quads; cheap and soft
+cells use separate compile-time shader variants in two non-overlapping groups, so
+ordinary water avoids the larger shader's register cost as well as its samples.
 Triangles entirely below 64 or above 320, and bounds outside the viewport, mark
-nothing. Height-range intersection is conservative: a face spanning below 64
-to above 320 still has eligible interior fragments. A frame without marked cells
-skips the metadata render and retains the old single resolve quad.
-The buffer allocates lazily, is reused, is resized when next needed and is
-retired on source reset. Its logical storage is 4.69 MiB at 1280×960 or 7.91 MiB
-at 1920×1080, excluding backend padding. Active frames add one geometry
-submission per existing reflection run. The resolve has a fixed maximum of
-three bilinear positions for the narrow contribution and 13 nearest positions
-for the wide contribution (25 colour texel reads) within marked cells, with one
-metadata read for each nonempty colour texel, versus 12 colour reads before. The larger sample count
-requires measurement: this is a bounded prototype, not a claim of free blur.
-There is no new scene camera, model rasterization or simulation work.
+nothing; height-range intersection is conservative. A frame without marked cells
+skips the metadata render and retains the single resolve quad. The buffer
+allocates lazily, is reused, is resized when next needed, and is retired on source
+reset. Top-surface reuse remains an intentional approximation: no underside,
+offscreen body or reflected depth is reconstructed.
 
-First-iteration validation passed `tools/check` and the Metal device fixtures, including
-an above-water model at height 180 at native and fractional zoom. Before/after
-Great Divide battle runs (seed 7, 1920×1080, 180 measured draws at 30 FPS) have
-identical captures and per-tick censuses in each renderer. This dry battle is a
-regression control, not an active-reflection cost measurement.
+## 27. Burning vegetation heat shimmer
 
-A frozen staged Seven Islands scene with a fighter at height 160, a bomber at
-200 and a dry hovercraft was replayed at 1280×960, 2× zoom, on an M3 Pro/Metal.
-Two baseline and two prototype runs each used 60 warmup and 180 measured draws,
-VSync on, with no readback in the timed window. Baseline median CPU submission
-was 0.31–0.42 ms; prototype was 0.35 ms. Median draw cadence remained 8.31–8.32 ms.
-All four reported 252 reflection vertices, seven passes and eleven device draws.
-This small scene showed no measurable median regression; it does not establish
-isolated GPU cost or dense-fleet performance. An initial VSync-off scratch
-harness failed in baseline Metal presentation and supplied no timing result.
-
-Second-iteration checks passed the fast gate and Metal device fixtures, including
-frozen replay of the high reflection at native and fractional zoom. Actual
-saved-skirmish captures and a 2× staged capture were visually inspected. The
-boat control is byte-identical at native and 2× zoom. Matching classic and modern
-battle captures and per-tick censuses remain byte/value-identical to the first
-prototype. Two paired frozen-aircraft runs with the settings above measured
-median CPU submission 0.240–0.243 ms before and 0.268–0.276 ms after, roughly
-0.03 ms more in this small scene. Median cadence stayed 8.31–8.33 ms and counts
-remained 252 reflection vertices, seven passes and eleven device draws. This is
-CPU submission and paced cadence, not an isolated GPU-time measurement. Exact
-second-iteration artifacts are in the `revision2` subdirectory.
-
-Third-iteration checks passed the fast gate and Metal device fixtures. Native
-and 2× blue-water captures were visually inspected; a Ring Atoll save contains
-eight aircraft and four boats, verified moving before and after production save
-reload. Classic and modern battle metadata, per-tick censuses and captures
-match the second iteration. Two paired frozen boat runs (same display settings
-and measurement window above) measured median CPU submission 0.207–0.298 ms
-before and 0.224–0.321 ms after. Paired differences were 0.017 and 0.023 ms;
-run-to-run variation is larger, so this is only a small-scene indication.
-Median cadence stayed 8.31–8.33 ms. All runs retained 548 reflection vertices,
-seven passes and ten device draws. Third-iteration artifacts are in `revision3`.
-
-Fourth-iteration validation passed the fast gate and Metal fixtures. Authored
-one- and four-pixel stripes at 0.75×, 1× and 2× retain connected footprints,
-increase their horizontal second moment with height, do not increase peak
-opacity, and stay within the energy tolerance. A nearby high reflection does
-not alter a low reflection's colour contribution. Height fading, frozen replay,
-water/foreground clipping, stale metadata, resource retirement, ramp-crossing
-bounds and off-origin fractional culling are covered. Saved Ring Atoll captures
-at native and 2× zoom were visually inspected; independent code review passed.
-
-Final classic and modern Great Divide live-battle checks match iteration three
-in scene metadata, every per-tick census and exact PNG bytes. They retain active
-movement/combat, burning sprite features and factory nanoframes. Median
-record/submit/cadence in milliseconds is 13.843/0.454/33.333 for classic and
-3.133/4.997/33.334 for modern. These dry controls do not measure water cost.
-The paced active-water pair records median CPU submission 0.209 ms before and
-0.278 ms after, with median cadence 8.337 and 8.325 ms respectively.
-
-The final frozen active-water comparison uses the same M3 Pro/Metal, 1280×960,
-2× zoom, 60 warmup and 180 measured frames as above. Four alternating runs with
-a synchronous one-pixel readback after Execute measured median completion
-latency 5.757 and 5.981 ms before, 6.294 and 6.645 ms after. Paired increments
-are 0.537 and 0.664 ms; median cadence remains 8.33 ms. Completion includes
-CPU submission, driver synchronization and readback, not isolated GPU timestamps.
-The scene retains 252 admitted reflection vertices; pass count rises from seven
-to eight and device draws from eleven to thirteen. This small scene does not
-establish dense-fleet cost. The first fully bilinear whole-viewport attempt
-added approximately 1.4–1.6 ms; the final filter reduces that cost with fewer
-samples and bounded shader regions. Final artifacts use the `final-` prefix in
-`revision4`; earlier intermediate results remain there for reproducibility.
-
-Local captures, exact diagnostic source, logs and playtest artifacts are under
-`/private/tmp/nanolathe-air-reflection-review`. The four prototype iterations
-above record the visual tuning and cost measurements behind the approved result.
-
-## 27. Burning vegetation heat shimmer prototype
-
-This is a user-requested modern GPU presentation experiment, not a retail
-behavior claim. The user visually approved it and authorized landing with the
-shared distortion pass and tree-heat overlap priority described in §27.2.
-The recorder tags the resolved body art of burning sprite features using the
-committed IsBurning flag, with an additional anchor LOS check. No new fire,
-simulation state, RNG calls or asset edits are introduced. Classic ignores the
-metadata. Missing art, hidden anchors and finished burning emit no shimmer.
-
-Time comes from the committed tick modulo 3600, plus the existing presentation
-fraction when enabled, with a stable cell-derived phase offset. The shader's
-frequencies wrap at that tick period. Replaying a list and pausing freeze it.
+A modern GPU presentation experiment, not a retail behavior claim. The recorder
+tags the resolved body art of burning sprite features using the committed
+`IsBurning` flag, with an additional anchor LOS check. No new fire, simulation
+state, RNG calls or asset edits are introduced; classic ignores the metadata; and
+missing art, hidden anchors and finished burning emit no shimmer. Time comes from
+the committed tick modulo 3600, plus the presentation fraction when enabled, with
+a stable cell-derived phase offset, and the shader's frequencies wrap at that
+tick period, so replaying a list and pausing freeze it.
 
 The plume starts 45% down the resolved body's art and extends upward. Its
-half-width is 55% of the art width clamped to 14–38 world pixels; height is 125%
-of the art height clamped to 56–112 pixels. Two upward-travelling waves, a small
-sideways drift and a squared soft envelope create up to about 2.4 world pixels
-of horizontal refraction. These numbers are artistic tuning, not retail facts.
-Recording scale and final smooth zoom apply to all lengths together.
+half-width is 55% of the art width clamped to 14–38 world pixels; its height is
+125% of the art height clamped to 56–112 pixels. Two upward-travelling waves, a
+small sideways drift and a squared soft envelope create up to about 2.4 world
+pixels of horizontal refraction. Recording scale and the final smooth zoom apply
+to all lengths together. These numbers are artistic tuning.
 
-The executor culls against the world viewport before admitting at most 128
-plumes in source order. It shares one world copy and one distortion batch with
-explosion rings, appending the heat quads last before fog/chrome (§27.2). Bilinear sampling is clamped to the source clip. Outside the soft
-plume envelope pixels are untouched. Overlaps read the same snapshot; the last
-plume wins rather than recursively amplifying displacement. Tree heat also
-wins wherever it overlaps an explosion ring. With neither visible plumes nor
-explosion rings, the shared pass performs no copy or draw. HeatPlumes counts the submitted plumes.
-SetTreeHeat is an executor-only comparison control.
-
-Verification uses shader compilation and the existing real-device fixture loop
-for motion, frozen replay, clipping and source removal, followed by sequential
-live battle captures and timing checks. The prototype does not claim physical
-refraction or exact occlusion against foreground units within the plume.
-
-
-### 27.1 Prototype verification
-
-The affected client/draw-list/GPU/doc packages, tools/check and the real-device
-fixture loop passed. The source test covers modern/classic, visible/hidden,
-burning/reclaiming and missing art. The device check covers frozen replay,
-changed time, clip boundaries and source removal. These initial prototype
-checks preceded the full pre-landing retail gate.
-
-Sequential Great Divide scene-v4 runs used seed 7, native 1920×1080, 300
-pre-ticks, 30 draws/s and 180 measured frames, with factory production enabled.
-The measured modern frames submitted 7–11 visible plumes. The endpoint contained
-15 burning features, 13 with in-view anchors, 160 moving units, 61 projectiles,
-300 effects, 8 nanoframes and 4 nanolathe events. Before/after censuses matched.
-The classic endpoint PNGs were byte-identical. Modern captures were inspected.
-
-| Renderer | Revision | Host draw work median / p95 / max (ms) | Host submission median / p95 / max (ms) |
-|---|---|---|---|
-| Modern | Before | 9.083 / 10.239 / 15.855 | 4.238 / 4.803 / 7.771 |
-| Modern | Prototype | 9.585 / 10.575 / 11.847 | 4.670 / 5.116 / 5.444 |
-| Classic | Before | 15.650 / 19.216 / 28.068 | 0.469 / 0.543 / 0.704 |
-| Classic | Prototype | 15.522 / 19.374 / 22.092 | 0.460 / 0.512 / 0.663 |
-
-Median host cadence remained approximately 33.33 ms. These are single short
-host samples, not GPU timings or a performance guarantee. Comparison outputs
-are in /private/tmp/tree-heat-{before,after}-{modern,classic}. A separate live
-capture used temporary readback instrumentation; its timings are excluded and
-the instrumentation is absent from the prototype. The resulting motion preview
-is /private/tmp/nanolathe-tree-heat-preview.mp4.
-
+The executor culls against the world viewport before admitting at most 128 plumes
+in source order. Bilinear sampling is clamped to the source clip; outside the
+soft plume envelope pixels are untouched; overlaps read the same snapshot and the
+last plume wins rather than recursively amplifying displacement. `HeatPlumes`
+counts the submitted plumes. The player's **Distortion** switch gates the plumes
+beside the blast rings (§30). Preparation copies only scalar geometry, clip, time
+and scale into its scratch buffer, so no GAF-frame reference escapes the borrowed
+list and a retained heat source cannot keep decoded art alive across a map reset;
+source reset clears that buffer.
 
 ### 27.2 Shared explosion and tree-heat pass
 
-The user explicitly chose tree heat to overwrite explosion distortion wherever
-both occur, accepting the small overlap change. The two families now append to
-one retained vertex/index batch and use one shader, one immutable world copy
+Tree heat **overwrites** explosion distortion wherever both occur — the user's
+explicit choice, accepting the small overlap change. The two families append to
+one retained vertex and index batch and use one shader, one immutable world copy
 and one draw. All explosion quads precede all heat quads regardless of source
-recording order. A heat fragment outside its plume discards, preserving the
-blast beneath; a covered heat fragment replaces it with a heat-only sample of
-the original world. Heat does not refract an already distorted explosion image.
-
-The source-coordinate Y offset selects the shader formula: negative for a
-blast, one plus scaled heat amplitude for heat (§28). X carries blast strength
-or heat time. Each quad has one selector throughout, and both formulas retain
-their previous arithmetic, clipping, bilinear sampler and independent budgets.
-The existing per-family comparison controls remain independent. A GPU fixture
+recording order. A heat fragment outside its plume discards, preserving the blast
+beneath; a covered heat fragment replaces it with a heat-only sample of the
+original world, so heat does not refract an already distorted explosion image.
+The source-coordinate Y offset selects the shader formula: negative for a blast,
+one plus scaled heat amplitude for heat (§28). X carries blast strength or heat
+time. Each quad has one selector throughout, and both formulas retain their
+arithmetic, clipping, bilinear sampler and independent budgets. A GPU fixture
 checks overlap priority, unaffected blast pixels outside the plume, frozen
 replay, and exactly two extra submissions (copy plus draw) with either or both
 families, compared with neither. No extra render target is allocated.
 
-Shared-pass verification: tools/check and the real-GPU fixture loop passed.
-The same scene/settings as §27.1 were run twice for modern in the order
-separate, shared, shared, separate, followed by shared/classic and
-separate/classic. All frame censuses matched. Of 180 modern frames, 167 had
-both sources active: each saved exactly two device submissions; the other 13
-saved none. Classic captures remained byte-identical. The shared modern capture
-was inspected; the intentional overlap change preserves heat priority.
+## 28. Fresh wreck cooling
 
-| Modern pass layout / run | Host draw work median / p95 / max (ms) | Host submission median / p95 / max (ms) |
-|---|---|---|
-| Separate / 1 | 10.059 / 10.689 / 23.863 | 4.693 / 5.077 / 9.369 |
-| Shared / 1 | 10.089 / 10.717 / 12.615 | 4.725 / 5.108 / 5.409 |
-| Shared / 2 | 9.993 / 10.619 / 12.268 | 4.716 / 5.079 / 5.337 |
-| Separate / 2 | 10.026 / 10.743 / 12.716 | 4.769 / 5.106 / 5.368 |
+An Enhanced presentation experiment extending §27's shared heat pass; artistic
+tuning, not a claim about retail temperature or damage. A successful violent
+unit-death corpse placement records the returned feature instance's birth tick in
+session publication state. **Only that exact live instance** publishes a known
+birth: map features, restored features, nonviolent feature conversions and newly
+discovered features do not acquire heat. The metadata is presentation-only and is
+neither simulation input nor saved state.
 
-The repeated host medians are effectively unchanged; these measurements do not
-establish a CPU speedup. Median cadence stayed near 33.33 ms. The eliminated
-copy/draw is confirmed by device-submission counts; GPU duration and bandwidth
-were not measured. Classic host draw work was 15.384 / 18.404 / 20.861 ms
-separate and 15.579 / 18.609 / 20.853 ms shared (median / p95 / max).
-Artifacts are /private/tmp/tree-heat-shared-{before,after}-{modern,classic}-{1,2}
-(the classic pair has run 1 only). The original launchers now use the shared-pass
-build. These measurements preceded the full pre-landing retail checks.
-
-
-### 27.3 Landing review
-
-The independent landing review found that retained heat-source sprites could
-keep decoded art alive across a map reset. Preparation now copies only scalar
-geometry, clip, time and scale into its scratch buffer; no GAF-frame reference
-escapes the borrowed list. Source reset clears that buffer and preserves the
-comparison toggle, covered by the existing lifecycle test. This changes resource
-ownership only; plume geometry and the shared shader remain the approved design.
-
-
-Landing integrates the approved coastal water/reflection implementation while
-retaining both renderer states, shader families, counters and reset paths. Heat
-uses §27 so the coastal §26 anchors remain unchanged. The frozen battle capture
-route was retried on the heat candidate and unchanged pre-coastal main; both
-failed while acquiring a Metal drawable texture, reproducing the existing §23.7
-host limitation. No frozen-list timing or paired-capture success is claimed for
-that route. Logs are /private/tmp/tree-heat-land-frozen-{candidate,main}.log;
-real-device fixtures and live battle comparisons are the available visual and
-performance evidence.
-
-## 28. Fresh wreck cooling prototype
-
-User-requested Enhanced presentation experiment, extending §27's shared heat
-pass. This is artistic tuning, not a claim about retail temperature or damage.
-A successful violent unit-death corpse placement records the returned feature
-instance's birth tick in session publication state. Only that exact live
-instance publishes a known birth; map features, restored features, nonviolent
-feature conversions and newly discovered features do not acquire heat. The
-metadata is presentation-only and is neither simulation input nor saved state.
-
-The modern 3DO feature recorder samples committed age and the existing optional
-tick fraction. Replaying a list cannot advance age. Anchor LOS is required;
-underwater origins suppress both effects. Removal/reclamation removes the
-source with the feature. A birth tick of zero is valid; an unknown birth is
-explicit. Packet operands are cleared before each visibility/age decision.
+The modern 3DO feature recorder samples committed age and the optional tick
+fraction, so replaying a list cannot advance age. Anchor LOS is required;
+underwater origins suppress both effects; removal and reclamation remove the
+source with the feature. A birth tick of zero is valid and an unknown birth is
+explicit. Packet operands are cleared before each visibility and age decision.
 
 The material begins pale orange for six ticks, loses its pale component, then
-cools through orange/red to its original texture by 180 ticks. A weaker shimmer
-fades quadratically over 300 ticks. These durations and colours are prototype
-choices. The emission is computed once per wreck on the CPU and carried in
-unused vertex RGB lanes of its existing body composite. A screen blend preserves
-texture variation and premultiplied model coverage. There is no extra material
-draw, render target, texture lookup, bloom blur, or dynamic light. The atlas
-capacity fallback currently omits emission; normal atlas bodies carry it.
+cools through orange and red to its original texture by 180 ticks; a weaker
+shimmer fades quadratically over 300 ticks. The emission is computed once per
+wreck on the CPU and carried in unused vertex RGB lanes of its existing body
+composite, and a screen blend preserves texture variation and premultiplied model
+coverage. There is no extra material draw, render target, texture lookup, bloom
+blur or dynamic light. The atlas-overflow fallback omits emission; normal atlas
+bodies carry it.
 
 Wreck plumes use the recorded model bounds, capped to 40 scaled pixels in half
 width and 64 in height, with a 32-visible-plume budget applied after clipping.
 They append after explosion rings and before tree plumes to the same distortion
-mesh; trees still win overlapping pixels. The tree budget remains 128. All
-three families share the existing world copy and single distortion draw; a
-frame containing only wreck shimmer still needs that copy/draw pair. Distortion
+mesh; trees still win overlapping pixels, and the tree budget remains 128. All
+three families share the existing world copy and single distortion draw; a frame
+containing only wreck shimmer still needs that copy and draw pair. Distortion
 amplitude is encoded with a positive bias so a nearly cold source cannot round
 into the explosion selector. No GPU readback or extra full-screen pass is added.
-
-### 28.1 Prototype verification
-
-Fast and retail gates passed, as did the real-device fixture loop and an
-independent read-only review with fresh affected-package tests. Device checks
-cover glow with unchanged submission/pass counts, transparent model holes,
-removal/cooling, vanishing amplitude, the 32-plume cap, and the existing shared
-blast/tree ordering. Publication checks cover tick zero, successful versus
-rejected death placement, conversion, replacement/reclaim/restore, expiry and
-reset, unchanged saved feature bytes, and unchanged RNG consumption.
-
-Sequential live-battle comparisons against the integrated tree-heat build
-`9e61946` used Great Divide, seed 7, 1920×1080, native zoom, 300 preticks and
-180 measured draws at 30 Hz. Every matching census agreed. The classic final
-capture was byte-identical. Modern showed 6–12 visible wreck plumes, and every
-measured frame had exactly the baseline draw count; added plume geometry was
-four vertices and six indices per wreck. Two stable repeat pairs measured
-median CPU DrawWork 9.768→9.838 ms and 9.702→9.664 ms; CPU Submit was
-4.587→4.611 ms and 4.764→4.503 ms. Median cadence stayed 33.33 ms. An earlier
-pair was inconsistent across all CPU phases (DrawWork 7.038→9.865 ms,
-simulation Step 1.304→2.111 ms), prompting those reverse-order and forward-order
-repeats. These are host timings, not GPU timestamps; the repeats show no
-resolved CPU frame-cost increase and cannot establish GPU execution time.
-
-Artifacts are outside the repository under `/private/tmp/wreck-heat-*`.
-Live footage covers 180 draws with 1–6 wreck plumes after 120 preticks; its
-PNG readbacks were diagnostic instrumentation, removed after building a
-separate capture binary and excluded from all timing comparisons. The material
-contact sheet uses the real `armstump_dead` model with supplied ages
-0/6/30/90/180/300 ticks, drawn on the actual GPU. The existing frozen `--shot`
-Metal tooling failure is recorded in §27.3; the real-device fixture and live
-capture paths remain the visual evidence for this prototype.
+The **Distortion** switch owns it (§30), which is why a wreck emits no light
+(§31.1) when Distortion is off even if Lighting is on.
 
 ## 29. Metal/paint finishes and fading scorch marks
 
-The user selected material polish and cooling/scorch from the four experiments.
-Unit emission/halo and brief dust/spark/water impact accents are rejected and
-are not part of this implementation. Existing glow, blast art, coastal wakes
-and the independent fresh-wreck treatment of §28 keep their own contracts.
-All new coefficients and texture annotations are authored presentation choices,
-not retail material/temperature evidence.
+All coefficients and texture annotations here are authored presentation choices,
+not retail material or temperature evidence. Unit emission/halo and brief
+dust/spark/water impact accents were rejected and are not part of this. Existing
+glow, blast art, coastal wakes and §28's wreck treatment keep their own
+contracts.
 
 ### 29.1 Materials
 
 A curated texture-name table annotates textured unit faces as default, metal or
 paint. It does not classify feature or wreck faces. Metal receives a broad cool
-response beneath the existing glint; paint receives a weaker rough highlight.
-The coefficients preserve authored dark seams and panel hue. Untagged faces
+response beneath the existing glint; paint receives a weaker rough highlight. The
+coefficients preserve authored dark seams and panel hue, and untagged faces
 retain their existing shading. The team-colour panel textures `colorslt`,
 `colorsmd`, `colorsdk` and `colordk2` use the metal finish for every player
-frame, preserving the selected team hue. This is an authored presentation
-choice; team logos retain their existing classification.
+frame, preserving the selected team hue; team logos retain their existing
+classification.
 
-The table is authored data, not Go source. `internal/client/materials/
+The table is **authored data, not Go source**. `internal/client/materials/
 materials.tdf` is a TDF file with one `[materials]` section whose keys are 3DO
 texture names and whose values are `metal` or `paint`; it is embedded in the
 binary and parsed once into a lowercase map, and an unrecognised value annotates
-nothing. A mounted install may replace it wholesale by supplying the logical
-path `nanolathe/materials.tdf` — a remaster pack or a loose gamedata directory —
-which the command layer installs after mounting. A missing override is the
-ordinary case; one that cannot be read is reported in the standard diagnostic
-shape and leaves the embedded table in force, because presentation art never
-fails a load. Both the embedded file and any override are authored presentation
-choices, not retail material evidence: the retail executable carries no material
-classification for model textures, and nothing here reaches authoritative
-state.
+nothing. A mounted install may replace it wholesale by supplying the logical path
+`nanolathe/materials.tdf` — a remaster pack or a loose gamedata directory — which
+the command layer installs after mounting. A missing override is the ordinary
+case; one that cannot be read is reported in the standard diagnostic shape and
+leaves the embedded table in force, because presentation art never fails a load.
+The retail executable carries no material classification for model textures, and
+nothing here reaches authoritative state.
 
-`ModelFace.Material` carries the annotation. The color vertex lane retains its
-low 16 bits for palette index and glint, followed by two material bits and three
-quantized normal-response bits: at most 21 bits, exactly representable as a
-float32 integer. Shadow geometry carries no finish. The existing color shader
-applies the finish after palette lighting, sharing its key, reveal and waterline
-verdicts; reveal replacements clear the finish. There is no additional model
-pass, emission atlas or render target. The independent wreck composite of §28
-is unchanged.
+`ModelFace.Material` carries the annotation, resolved **once at texture bind**
+rather than per face: `resolveModelTexture` stamps the annotation and the
+generation it was read under onto the cached texture reference, and the compose
+path reads a field instead of lowercasing a name and probing a map. A later
+install bumps the generation, which makes the stored byte stale and sends that
+face's name through a fresh resolution; a zero value is stale by construction,
+because installing the embedded table leaves generation one. The colour vertex
+lane retains its low 16 bits for palette index and glint, followed by two
+material bits and three quantized normal-response bits: at most 21 bits, exactly
+representable as a float32 integer. Shadow geometry carries no finish. The
+existing colour shader applies the finish after palette lighting, sharing its
+key, reveal and waterline verdicts; reveal replacements clear the finish. There
+is no additional model pass, emission atlas or render target.
 
 ### 29.2 Cooling and fading scorch
 
-The client observes every committed publication, including ticks between draws.
-A nonzero effect ID paired with its event sequence deduplicates primary impact
-art at birth; unresolved, hidden and pre-existing effects cannot later create a
-mark. Both the event and its ground anchor must be visible. Valid dry terrain
-within 12 world-height pixels of the impact admits a mark, sized to 0.55 times
-the resolved art extent and clamped to 8–64 world pixels. These thresholds and
-the procedural appearance are artistic presentation choices.
+The client observes every committed publication, including ticks between draws. A
+nonzero effect ID paired with its event sequence deduplicates primary impact art
+at birth; unresolved, hidden and pre-existing effects cannot later create a mark.
+Both the event and its ground anchor must be visible. Valid dry terrain within 12
+world-height pixels of the impact admits a mark, sized to 0.55 times the resolved
+art extent and clamped to 8–64 world pixels.
 
-A FIFO retains at most 256 world-space marks. A separate 512-identity budget
-bounds work within one publication. Marks reset on source/load, viewer change
-or tick rewind; they are not saved. Camera projection produces screen-space
-`ScorchMark` records with radius, committed age plus the optional draw fraction,
-and a stable variant. Drawlist cloning owns a copy of the batch.
-
-The warm center cools through 90 ticks. Whole-mark opacity then smoothly fades
-from tick 90 to 450: fading starts at three simulated seconds and the mark is
-gone at fifteen. Shared drawlist constants define these ages and the cap.
-At expiry the CPU removes the mark and the GPU rejects it without submission.
-The GPU also caps externally supplied batches to 256 marks per frame.
+A FIFO retains at most 256 world-space marks, with a separate 512-identity budget
+bounding work within one publication. Marks reset on source or load change,
+viewer change or tick rewind; they are not saved. Camera projection produces
+screen-space `ScorchMark` records with radius, committed age plus the optional
+draw fraction, and a stable variant; drawlist cloning owns a copy of the batch.
+The warm centre cools through 90 ticks, and whole-mark opacity then fades
+smoothly from tick 90 to 450 — fading starts at three simulated seconds and the
+mark is gone at fifteen. Shared drawlist constants define these ages and the cap.
+At expiry the CPU removes the mark and the GPU rejects it without submission, and
+the GPU caps externally supplied batches to 256 marks per frame.
 
 A smooth uneven procedural quad draws immediately above terrain, below objects
 and fog. It reuses the coastal mask's dry channel, including when water animation
-is disabled, and has no persistent GPU history or additional render target.
-No dust, spark or water-splash accent is included.
-
-Both effects default enabled. Diagnostic `SetMaterials`/`SetScorch` controls and
-`NANOLATHE_MODEL_MATERIALS=0` / `NANOLATHE_SCORCH=0` disable them independently.
-`ModelStats.MaterialFaces` and `ScorchQuads` report the submitted workload.
+is disabled, and has no persistent GPU history or additional render target. The
+**Marks** switch owns it (§30); `ModelStats.MaterialFaces` and `ScorchQuads`
+report the submitted workload.
 
 ### 29.3 Verification
 
-The fast and retail gates and real Metal device fixture loop passed. Independent
-review covered both implementations and their integration. Device readbacks
-verify material key/reveal/waterline behavior, unchanged model submissions and
-image allocation, and compatibility with the independent wreck composite.
-Scorch checks cover monotonic fading, exact disabled-output equality at expiry,
-zero expired submissions, object/HUD and wet masking, cloned replay, view scale,
-reset and bounded public batches.
-
-Stock-model captures confirm restrained metal/paint response. Staged impacts on
-Comet Catcher were observed through 511 ticks: early warm centers become dark
-marks, fade, and leave images byte-identical to the disabled output after every
-mark expires. Artifacts remain outside the repository under
-`/private/tmp/selected-material-capture`, `/private/tmp/selected-scorch-fade` and
-`/private/tmp/selected-scorch-fixtures`.
-
-Sequential live battles compared against main `774f79c` on Metal, using Great
-Divide, seed 7, 1920×1080, 2× detail, 300 preticks, 60 warmup draws and 180
-measured draws at 30 Hz. Two modern pairs ran in opposite order. They submitted
-2,439–3,387 annotated faces and 39–143 scorch quads per draw, with 3–6 existing
-wreck plumes and no model overflow. Every matching census agreed, and the
-classic final captures were byte-identical. GPU image storage was unchanged
-at 526,532,608 bytes for modern and 66,732,032 bytes for classic.
-
-Host DrawWork timing in milliseconds (median / p95 / maximum):
-
-| Run | Baseline | Selected |
-|---|---|---|
-| Modern pair 1 | 6.901 / 8.312 / 19.126 | 7.092 / 7.849 / 9.827 |
-| Modern pair 2 | 9.656 / 10.314 / 11.162 | 9.793 / 10.634 / 11.543 |
-| Classic | 22.559 / 33.811 / 42.436 | 22.159 / 31.286 / 40.617 |
-
-Modern median Submit changed 3.549→3.657 ms and 4.799→4.825 ms. Median cadence
-remained 33.33 ms. The combined effects added about 0.14–0.19 ms to median host
-DrawWork in these pairs. Absolute host speed varied between pairs; these CPU
-measurements do not establish GPU execution cost. The small observed host cost,
-unchanged image storage and inspected captures support keeping both effects.
-Profiles, full percentile/maxima data, census and captures are under
-`/private/tmp/selected-materials-scorch-battles`.
+Device readbacks verify material key, reveal and waterline behavior, unchanged
+model submissions and image allocation, and compatibility with §28's independent
+wreck composite. Scorch checks cover monotonic fading, exact disabled-output
+equality at expiry, zero expired submissions, object/HUD and wet masking, cloned
+replay, view scale, reset and bounded public batches. Staged impacts observed
+through 511 ticks must leave images byte-identical to the disabled output once
+every mark expires.
 
 ## 30. Player controls for Enhanced effects
 
 The Enhanced effects reached this point as prototypes with executor comparison
-switches, environment variables, or nothing a player could reach. Five persisted
-switches now cover them, beside the glow switch of §19.4. They are Nanolathe
-presentation preferences, not retail evidence: the classic executor composes
-identical pixels whatever they say, and nothing here is visible to the
+switches, environment variables, or nothing a player could reach. **Five
+persisted switches** now cover them, beside the glow switch of §19.4. They are
+Nanolathe presentation preferences, not retail evidence: the classic executor
+composes identical pixels whatever they say, and nothing here is visible to the
 simulation or to any committed frame [I6].
 
 `settings.Presentation` stores them as `water`, `lighting`, `finish`,
@@ -6224,58 +4093,62 @@ simulation or to any committed frame [I6].
 reason the display bits are: a stored 0 is "off" and is kept, only a negative
 value is repaired, and a file that omits a key keeps the default because the
 loader decodes over the defaults [02 "Settings"]. `internal/drawlist.Effects` is
-the value type both sides read; `cmd/nanolathe` converts the stored integers to
-it, so `internal/settings` remains a leaf.
+the value type both sides read, with one `bool` field per switch;
+`drawlist.AllEffects()` is every family on. `cmd/nanolathe` converts the stored
+integers, so `internal/settings` remains a leaf.
 
 | Switch | Recorder gate | Executor gate |
 |---|---|---|
-| Water | the water phase (§26.1), the wake, foam and water-motion producers, and reflection site admission (§26.4) | `SetWaterEffects`, `SetWaterReflections` |
-| Lighting | none — lighting kinds are always recorded | `SetBattleLighting` (§23) |
-| Finish | none — face material and normals are always recorded | `SetMetalGlint` (§23.7), `SetMaterials` (§29.1) |
-| Distortion | blast ring metadata (§25), the burning-feature heat tag (§27), and the fresh-wreck emission and shimmer (§28) | `SetBlastDistortion`, `SetTreeHeat` |
-| Marks | the scorch observer and draw (§29.2) and the trail layer (§15) | `SetScorch` |
+| Water | the water phase (§26.1), the wake, foam and water-motion producers, and reflection site admission (§26.4) | the water surface and the screen-space reflections |
+| Lighting | none — lighting kinds are always recorded | the battle light pass and its ground pools (§23, §31) |
+| Finish | none — face material and normals are always recorded | the metallic glint (§23.7) and the metal/paint finishes (§29.1) |
+| Distortion | blast ring metadata (§25), the burning-feature heat tag (§27), and the fresh-wreck emission and shimmer (§28) | the blast rings and the vegetation heat shimmer |
+| Marks | the scorch observer and draw (§29.2) and the trail layer (§15) | the fading scorch layer |
+
+These five are the whole **effect** surface. `Renderer.SetEffects` is its only
+entry point: the per-family setters are package-internal, each is set from the
+selection and from nothing else, and there are no environment overrides, no
+window chords and no prototype comparison switches beside them — the package
+reads no environment variable at runtime at all. Two exported switches sit
+outside the five and are set beside them on every present: `SetGlow` (§19.4) and
+`SetDisplayPalette`. Treatments with no switch of their own — the aircraft soft
+shadows of §34, the trail layer's executor half — are on whenever the executor
+that draws them is; §34's shadows soften a shadow the executor draws either way,
+so they belong to the shadow rather than to a family. `New` applies the all-on
+selection at construction, so a renderer is in the same state whether or not the
+host has presented a frame yet, and a source reset preserves the selection.
 
 `Client.SetEffects` retires the trail, wake, water-motion and scorch histories
 whenever the selection changes, the way an executor swap does, so a switch that
-was off leaves no stale marks and a switch turned back on starts from the
-current tick. It also advances the paused-world revision, because a changed
-selection is a different world raster (§13.10).
+was off leaves no stale marks and a switch turned back on starts from the current
+tick. It also advances the paused-world revision, because a changed selection is
+a different world raster (§13.10).
 
-`Renderer.SetEffects` early-returns on a selection equal to the last one it
-applied. That is load-bearing: the host calls it once per presented frame beside
-`SetGlow`, and without the early return it would overwrite the local comparison
-controls every frame — the Ctrl+Shift+G glint shortcut would revert on the next
-Draw instead of holding until the player changes a setting. The three
-environment overrides (`NANOLATHE_MODEL_MATERIALS`, `NANOLATHE_METAL_GLINT`,
-`NANOLATHE_SCORCH`) are read once at construction and AND-ed with the player's
-switch on every application, so a developer's `…=0` keeps its family off
-whatever the options page selects. A source reset retires images only; the
-applied selection and the per-family switches survive it.
-
-The window polls the shell's committed preference each update
-(`RunOptions.Effects`) and hands the executor the client's selection beside the
-display palette on every present, on the running, paused and benchmark paths;
-the benchmark keeps every effect on so two runs measure the same work. A
-`--shot` capture reads the same settings file, so it composes under the player's
-switches. The options page rows and the `+water`, `+lights`, `+finish`, `+heat`
-and `+marks` chat commands are described in
+The host calls `Renderer.SetEffects` once per presented frame. Re-applying an
+unchanged selection is a no-op by construction — every switch is assigned from
+the argument — so no guard is needed and nothing else can move a switch between
+calls. The window polls the shell's committed preference each update
+(`RunOptions.Effects`) and hands the executor the client's selection on the
+running, paused and benchmark paths; the benchmark keeps every effect on so two
+runs measure the same work. A `--shot` capture reads the same settings file, so
+it composes under the player's switches. The options page rows and the `+water`,
+`+lights`, `+finish`, `+heat` and `+marks` chat commands are described in
 [DESIGN_INTERFACE_HUD_INPUT.md](DESIGN_INTERFACE_HUD_INPUT.md) §3.4.1.
 
 ## 31. Fire, projectile and ground lighting (Enhanced)
 
-Two extensions of the battle lighting prototype of §23, both user-authorized
-Enhanced presentation design rather than retail evidence: more of the world's
-light sources emit, and the light they emit now reaches the ground. Classic
-composes the same pixels whatever this section says, nothing here is visible to
-the simulation or to a committed frame [I6], and the player's Lighting switch
-(§30) gates every source and the ground pass with it.
+Two extensions of §23, both Enhanced presentation design rather than retail
+evidence: more of the world's light sources emit, and the light they emit now
+reaches the ground. Classic composes the same pixels whatever this section says,
+nothing here is visible to the simulation or a committed frame [I6], and the
+player's Lighting switch gates every source and the ground pass with it.
 
 ### 31.1 The added sources — contract BL5
 
-The five families that now feed the budget are the two of §23 plus three more.
-Every one of them is already admitted by its producer's own visibility gate, so
-an unseen event never lights a visible receiver (BL1); the kind is recorded
-whatever the switches say and the executor gates emission.
+The five families that feed the budget are §23's two plus three more. Every one is
+already admitted by its producer's own visibility gate, so an unseen event never
+lights a visible receiver (BL1); the kind is recorded whatever the switches say
+and the executor gates emission.
 
 | Source | Recorder | Colour | Radius (world px at record scale) |
 |---|---|---|---|
@@ -6285,43 +4158,36 @@ whatever the switches say and the executor gates emission.
 | beam / lightning | an `Emissive` stroke of the projectile renderer [06 R-WFX-01 §4] | `PAL[index] × 0.8` — a stroke has no art to measure, so its colour is the colour it is drawn in | `0.6 × length`, clamped 48–160 |
 | fresh wreck | a model packet whose §28 cooling emission is non-zero | that emission × 0.6, so it fades on the wreck's own cooling curve | 80 |
 
-Muzzle-flash art is an effect record the explosion path already counts, so
-nothing is doubled. Smoke stays a receiver and is never promoted (§23.1).
+Muzzle-flash art is an effect record the explosion path already counts, so nothing
+is doubled; smoke stays a receiver and is never promoted (§23.1).
 
-A burning feature's light is placed at its frame ANCHOR: feature art records the
-top-left the blitter writes from [03 §5.3.1] while effect, projectile and strip
-art record the anchor, so the executor recovers one placement from the authored
-offsets and every emitter then shares one position and one clip test. A stroke
-carries the committed ABSOLUTE height of each endpoint in record-scale pixels,
-in fields of its own: the reflection heights beside them are relative to sea
-(§26) and cannot stand in for a physical height. Its light sits at the stroke's
-midpoint at the mean of the two heights.
+**Placement.** A burning feature's light sits at its frame **anchor**, recovered
+from the authored offsets: feature art records the top-left the blitter writes
+from [03 §5.3.1] while effect, projectile and strip art record the anchor, so every
+emitter shares one position and one clip test. A stroke carries the committed
+ABSOLUTE height of each endpoint in recording-scale pixels, in fields of its own —
+the reflection heights beside them are relative to sea (§26) and cannot stand in
+for a physical height — and its light sits at the stroke's midpoint at the mean of
+the two heights.
 
 **Flicker.** A fire's emitted strength is multiplied by
 `0.75 + 0.25 × (0.5 + 0.5 sin(2π t / 15 + phase))`, a bounded [0.75, 1] wave of
 about half a second, where `t` is the committed tick plus the presentation
-fraction and `phase` is an integer hash of the recorded position. No wall clock
-and no RNG stream is read, so a replayed or paused frame reproduces the frame
-exactly, and neighbouring fires do not pulse together. Sources that do not
-flicker keep their measured or authored strength.
+fraction and `phase` is an integer hash of the recorded position. No wall clock and
+no RNG stream is read, so a replayed or paused frame reproduces exactly and
+neighbouring fires do not pulse together. Sources that do not flicker keep their
+measured or authored strength.
 
-**Fire energy.** Measured on the reference install's burning-tree art, a fire
-frame's peak emission is 0.39–0.51 — well above the 0.25 fallback threshold, so
-the installed art carries its own hue, but well below an explosion's, which is
-what the rest of the prototype was tuned against. A fire's measured colour is
-therefore multiplied by 1.6 before the flicker. Without it a fire's light is
-technically present and visually unreadable: the first build's pools showed
-only under an 8× amplified difference.
-
-**The warm fallback.** The fallback `(0.95, 0.55, 0.18)` did not engage in the
-reviewed scene. It exists for art too dark to carry a hue at all, and it scales
-by the measured peak, so a dying fire still fades rather than jumping to
-orange.
+**Fire energy.** Measured fire art peaks at 0.39–0.51 on the reference install:
+above the 0.25 fallback threshold, so the installed art carries its own hue, but
+far below an explosion's. A fire's measured colour is therefore multiplied by 1.6
+before the flicker. The warm fallback `(0.95, 0.55, 0.18)` serves art too dark to
+carry a hue, and scales by the measured peak so a dying fire fades.
 
 ### 31.2 Budget — contract BL6
 
-The budget stays 64 sources. Each kind now has a **cap**, the most it may hold,
-and a **reserve**, the slots it cannot be evicted below:
+The budget stays 64 sources. Each kind has a **cap**, the most it may hold, and a
+**reserve**, the slots it cannot be evicted below:
 
 | kind | cap | reserve |
 |---|---|---|
@@ -6331,218 +4197,110 @@ and a **reserve**, the slots it cannot be evicted below:
 | projectile | 24 | 12 |
 | wreck | 16 | 4 |
 
-The reserves partition the budget exactly (a compile-time check holds them to
-it). A kind at its cap competes only with itself, keeping its own strongest.
-When the budget is full the slot is taken from the kind furthest ABOVE its
-reserve, and within one kind the stronger source wins with stable, record-order
-ties. So a field of burning trees cannot starve explosions, and a volley of
-explosions cannot push the fires already selected below their reserve. A source
-whose reach misses the recorded viewport never reaches the budget at all; the
-extent comes from the world record rather than the framebuffer, because
-gathering precedes replay and the record extent is wider than the framebuffer
-below a rest factor (§16.3).
-
-`ModelStats.BattleLightKinds` counts the selection by family in that order, and
-a `--shot` capture prints it beside `GroundLights`.
+The reserves partition the budget exactly (a compile-time check holds them to it).
+A kind at its cap competes only with itself, keeping its own strongest. When the
+budget is full the slot is taken from the kind furthest ABOVE its reserve, and
+within one kind the stronger source wins with stable, record-order ties — so a
+field of burning trees cannot starve explosions, and a volley of explosions cannot
+push selected fires below their reserve. A source whose reach misses the recorded
+viewport never reaches the budget at all, and that extent comes from the world
+record rather than the framebuffer, because gathering precedes replay and the
+record extent is wider than the framebuffer below a rest factor (§16.3).
+`ModelStats.BattleLightKinds` counts the selection by family in that order, and a
+`--shot` capture prints it beside `GroundLights`.
 
 ### 31.3 Ground illumination — contract BL7
 
-Terrain received no coloured light before this: an explosion over open ground
-left the ground exactly as the map painted it. The terrain pass now ends, after
-`drawWater` and `drawWaterReflections`, with one pass over the visible lights:
+The terrain pass ends, after the water surface and the reflection resolve, with
+one pass over the visible lights:
 
-1. if no light is selected, or the Lighting switch is off, nothing happens at
-   all — no copy, no batch, no cost;
-2. otherwise the scheduler is submitted (one barrier), the composite is copied
-   into the existing scratch surface the refraction batch uses, and one clipped
-   quad per light is drawn in ONE additive batch.
+1. if no light is selected, or the Lighting switch is off, nothing happens at all
+   — no copy, no batch, no cost;
+2. otherwise the scheduler is submitted (one barrier), the region the batch
+   samples is copied into the read surface (`readcopy.go`), and one clipped quad
+   per light is drawn in ONE additive batch.
 
-The fragment is **base × light**, not a flat wash: it samples the copied
-composite under the pixel — the ground albedo already carrying the map's painted
-lighting — and outputs `min(base × colour × falloff × 2.0, 1 − base)` with alpha
-zero. Multiplying by the albedo keeps every painted detail (a dark rock stays
-darker than the sand beside it); the per-channel clamp against `1 − base` is
-what stops a bright source from flattening the ground to white; the additive
-blend makes overlapping pools sum as `base × (1 + Σ L)`. The gain 2.0 stays well
-below the model-face gain of §23.2 — terrain already carries the map's own
-lighting — but it has to be far enough above zero for the pool to read without
-amplification, which the first 0.9 was not.
+The fragment is **base × light**, not a flat wash: it samples the copied composite
+under the pixel — the ground albedo already carrying the map's painted lighting —
+and outputs `min(base × colour × falloff × 2.0, 1 − base)` with alpha zero. The
+clamp against `1 − base` stops a bright source from flattening the ground to
+white, and the additive blend makes overlapping pools sum as `base × (1 + Σ L)`.
+The gain 2.0 stays well below §23.2's model-face gain, because terrain already
+carries the map's own lighting.
 
-The falloff is the radial law of §23.2 **with the square dropped**, and
-`distance² = dx² + dy² + h²`. A model face is a small target and wants a tight
-core; a ground pool is read as a shape and wants a body. Squared, the pool was a
-bright point inside a wide invisible skirt; linear in `d²/r²` it carries light
-out to most of its radius and still reaches zero at the edge. As for the faces:
-the source's stored absolute height remains the attenuation term `h`. The pool
-is centred on the source's projected position, `Y − h/2`, using the same
-half-height projection as visible objects [03 §2.5]. This is a screen-space
-presentation approximation: the pass has no terrain receiver height. The
-previous unsheared placement treated a terrain pixel as a zero-height world
-point, moving the pool down by half the source's absolute height; SC20 explains
-why painted terrain cannot be inverted that way on elevated ground. The same
-correction applies to every light family, including nanolathe clusters. Model
-and smoke receivers retain their physical source coordinates and response.
-The explosion source retains its existing quarter-frame lift (§23.2), so its
-pool projects one eighth of a frame above the event anchor. No new lift or art
-centroid is introduced. Air bursts retain absolute-height attenuation; this
-does not reconstruct their footprint on terrain relief. The quad covers the light's
-full radius rather than the smaller disc a lifted light actually reaches: the
-shader's own distance test discards the difference, so the cover is conservative
-and needs no square root [I2]. The world transform of §16.3 applies exactly
-once, here, as it does for the refraction batch.
+The falloff is the radial law of §23.2 **with the square dropped** — a ground pool
+is read as a shape and wants a body, where a model face wants a tight core — over
+`distance² = dx² + dy² + h²`, `h` being the source's stored absolute height. The
+pool is centred on the source's **projected** position, `Y − h/2`, the same
+half-height projection as visible objects [03 §2.5], because the pass has no
+terrain receiver height (SC20 explains why painted terrain cannot be inverted that
+way on elevated ground); that correction applies to every family, nanolathe
+clusters included, while model and smoke receivers retain their physical source
+coordinates and response. The explosion source retains its quarter-frame lift
+(§23.2), taken from the current animation frame, so its pool projects one eighth
+of a frame above the event anchor, and
+the per-animation reach of §23.2 is what lets it light the opening flash; no new
+lift or art centroid is introduced. Air bursts retain absolute-height attenuation.
+The quad covers the light's full radius rather than the smaller disc a lifted
+light reaches, so the cover is conservative and the shader's own distance test
+discards the difference without a square root [I2]. The world transform of §16.3
+applies exactly once, here.
 
-Placement is deliberate. The copy is taken AFTER the water and reflection
-resolve, so the pools brighten the water surface too; and the pass runs BEFORE
-objects, wakes and scorch, so units are drawn over it and the ordinary fog
-composite covers it (§26.3).
-
-The per-animation explosion reach in §23.2 also fixes a temporal consequence
-of the retained height attenuation. In the installed `fx/Explosion` sequence
-at event height 79, the old per-frame radius admitted no ground light for
-frames 0–7: the bright opening art was too small for its reach to exceed the
-source height. Ground illumination peaked at frame 15, long after art emission
-peaked at frame 2. Fixed entry reach lights the opening flash and lets the
-measured art colour govern its decay. The current frame continues to determine the quarter-frame lift, and the projected placement
-above remains unchanged. This addresses radius-induced delay; the absolute
-height approximation can still suppress an entire small explosion on high
-ground. It does not supply missing terrain receiver height.
-
-The installed-art regression compares bright frame 2 against trailing frame
-16 at native and doubled record scales, revisits the cached bright frame, and
-checks retirement. It fails the former radius calculation. The GPU device
-fixture renders all frames in order with the installed palette and checks an
-outside-art ground pixel: the opening flash must exceed the tail. Optional
-`NANOLATHE_EXPLOSION_SHOTS` captures frames 0, 2, 7, 12, 16, 20 and 22, with
-stable reach above the former per-frame reach. Native and detail sheets were
-visually inspected: light is present with the bright opening art and fades
-with its tail, without the former late pool onset.
+Placement is deliberate: the copy is taken AFTER the water and reflection resolve,
+so the pools brighten the water surface too, and the pass runs BEFORE objects,
+wakes and scorch, so units are drawn over it and the ordinary fog composite covers
+it.
 
 ### 31.4 Cost and verification
 
-Cost is two extra submissions — the barrier's copy and the batch — in a frame
-with a light in view, and nothing in a frame without one. Measured on Apple M3
-Pro / darwin-arm64 with the scene-version-4 Great Divide live battle benchmark,
-seed 7, 1920×1080, `--zoom 2`, 300 pre-ticks, 180 measured draws, factories on.
-
-Against the executor without the pass: modern `Submit` median/p95 4.798/5.100 →
-4.875/5.282 ms, `DrawWork` median 10.130 → 10.157 ms, `Cadence` median unchanged
-at 33.333 ms, device passes per frame 16 → 18 and phases 16 → 17 with the same
-vertex count.
-
-Against the first, too-faint build of this section, the tuning above is free:
-`Submit` median 4.893 → 4.890 ms, `DrawWork` median 10.207 → 10.304 ms,
-`Cadence` median 33.333 ms both, passes 18 and phases 17 both. It is worth
-what it costs visually: over the whole frame the mean per-channel difference
-rises from 0.43/255 to 2.12/255, and in a 500×280 crop at 2× the mean is
-5.2/255 around a burning tree, 6.1/255 around an explosion on open ground and
-10.6/255 over a smoky volley, with a maximum of 73. The first build's pools
-were legible only under an 8× amplified difference; these read in the raw crop.
-
-Every frame's census and all scene metadata match within each pair (338 → 315
-units, 74 → 61 projectiles, 2,546 features, 15 burning, ticks 361 → 540). The
-classic pair's `battle.png` is byte-identical and its timings are unchanged.
-These are single host pairs, not GPU execution time. The final tuned modern
-frame selected 45 explosion, 7 fire, 8 projectile and 4 wreck sources and
-batched 24 ground discs. Artifacts are outside the repository in
-`/private/tmp/d-bench-*` and `/private/tmp/d2-bench-*`.
-
-The synthetic tier checks admission and rejection per kind, the radius clamps,
-the flicker's bounds, determinism, period and per-source phase, the warm
-fallback's hue and energy, the stroke midpoint/height/colour, the wreck's
-emission and its shadow packet, the anchor recovery for feature art, viewport
-culling of sources, the per-kind caps and reserves in both arrival orders, the
-ground quads' clipping to the viewport and the empty-batch cases. The opt-in
-real-device fixture checks that a stroke brightens the terrain beneath it while
-terrain beyond its reach is untouched, that a flame sprite lights a facing model
-face but not a back-facing one, and that disabling Lighting restores the
-composite exactly. The projected-pool regression additionally checks native and
-2× recordings, a fractional final world transform, all five source families,
-elevated explosion and nanolathe admission, unchanged physical sources, and
-zero ground contribution at the height/radius boundary. Real-device native and
-2× captures check equal terrain brightness on opposite sides of the projected
-source, together with exact restoration when Lighting is disabled.
+Cost is two extra submissions — the barrier's copy and the batch — in a frame with
+a light in view, and nothing in a frame without one. Optional
+`NANOLATHE_EXPLOSION_SHOTS` captures a frame sequence for inspection. The
+synthetic and opt-in real-device coverage this section carried, and the
+measurements behind its constants, are in the history file (§31.4, §31.6).
 
 ### 31.5 Known limits
 
-There is no occlusion: a fire lights the ground on the far side of a wall, and
-a unit standing between a light and the ground casts no shadow into the pool.
-Terrain has no normals here, so a hillside takes the same light as flat ground —
-the pool is a screen-space disc, not a projection onto relief. The ground pass
-reads one copy of the composite, so a light is applied to whatever the terrain
-pass has already drawn, including the water surface, and never to the objects
-drawn over it. A fresh wreck's light borrows the §28 cooling emission, which the
-Distortion switch owns: with Distortion off a wreck emits no light even when
-Lighting is on. The flicker's phase hash is a position hash, so two fires at the
-same recorded position pulse together, and a fire that moves changes phase.
+There is no occlusion: a fire lights the ground on the far side of a wall, and a
+unit between a light and the ground casts no shadow into the pool. Terrain has no
+normals here, so a hillside takes the same light as flat ground — the pool is a
+screen-space disc, not a projection onto relief. The ground pass reads one copy of
+the composite, so a light applies to whatever the terrain pass has already drawn,
+water surface included, and never to the objects over it. The absolute-height
+approximation can still suppress an entire small explosion on high ground, and
+supplies no missing terrain receiver height. A fresh wreck's light borrows the §28
+cooling emission, which the Distortion switch owns: with Distortion off a wreck
+emits no light even when Lighting is on. The flicker's phase hash is a position
+hash, so two fires at one recorded position pulse together and a moving fire
+changes phase.
 
-### 31.6 Short explosion terrain flash prototype
+### 31.6 Short explosion terrain flash
 
-User-authorized modern presentation tuning, not retail behavior. The previous
-terrain light used gain 2.0 and the current art's measured colour for the full
-primary animation. Bright lingering frames therefore kept a broad, saturated
-pool on the ground. The explosion's light reaching nearby models and smoke
-was the same source, so lowering its shared colour would mute those receivers.
+Modern presentation tuning, not retail behavior. Only the **terrain** receiver
+multiplies explosion RGB by 0.375 (effective peak gain 0.75 instead of 2.0), holds
+that multiplier through age two ticks, then applies `(1 − (age − 2) / 10)²` until
+age twelve ticks, when it omits the ground quad. At 30 Hz the hold is about 67 ms
+and the whole terrain flash ends at 400 ms; at age seven ticks one quarter of the
+new peak remains. Current-art colour still modulates this envelope, so it cannot
+invent light from dark pixels. Radius, position, radial falloff and the albedo law
+are unchanged, and water receives the same short flash through the existing pass.
+Nearby models and smoke retain the prior full-colour response; fire, projectile,
+nanolathe and wreck terrain lights keep their prior gain and timing.
 
-Only the terrain receiver now multiplies explosion RGB by 0.375 (effective
-peak gain 0.75 instead of 2.0), holds that multiplier through age two ticks,
-and then applies `(1 − (age − 2) / 10)²` until age twelve ticks, when it omits
-the ground quad. At 30 Hz the hold is about 67 ms and the entire terrain flash
-ends at 400 ms. At age seven ticks (233 ms), only one quarter of the new peak
-remains. Current-art colour still modulates this envelope, so it cannot invent
-light from dark pixels. The radius, position, radial falloff and albedo law are
-unchanged. Water receives the same short flash through the existing pass.
+The recorder supplies an independent, presence-tagged `LightingAge`: committed tick
+minus published effect `StartTick` plus the presentation fraction when enabled,
+populated regardless of the Distortion setting. Untimed detached sources receive
+the lower peak gain but retain art-driven lifetime; missing age does not mean an
+expired or newly restarted explosion, and the main production explosion recorder
+always publishes age. Hidden or finished primary art still stops contributing
+immediately. There is no new shader, texture, pass, clock, simulation state or RNG
+consumer. This short flash is the one terrain response.
 
-The recorder supplies an independent, presence-tagged `LightingAge`: committed
-tick minus published effect StartTick plus the presentation fraction when
-enabled. It is populated regardless of the Distortion setting. Untimed detached
-sources receive the lower peak gain but retain art-driven lifetime; missing
-age does not mean an expired or newly restarted explosion. The main production
-explosion recorder always publishes age. Hidden/finished primary art still
-stops contributing immediately.
+## 32. Reflected explosions, shoreline band, and the removed sun glitter
 
-The shared light's colour, radius and selection strength are unchanged. Nearby
-models and smoke retain the prior full-colour response; fire, projectiles,
-nanolathe and wreck terrain lights keep their prior gain and timing. There is
-no new shader, texture, pass, clock, simulation state or RNG consumer.
-`NANOLATHE_EXPLOSION_GROUND_FLASH=0` temporarily restores the previous terrain
-light for developer comparisons.
-
-The existing GPU fixture loop checks softened and fading ground pixels,
-exact ground restoration at expiration, stable replay and identical warm
-model pixels before/after the terrain change. Recorder checks cover age while
-Distortion is disabled. `NANOLATHE_GROUND_FLASH_SHOTS` selects paired captures
-from the existing six installed-art examples: both sides retain dynamic blast
-waves, with prior terrain light left and the new short flash right.
-
-Verification passed the affected packages, fast and retail gates (including
-lint), and the real GPU fixtures. The original sequence-radius onset fixture
-uses the old terrain gain to isolate its earlier contract; the new pixel
-fixture independently verifies the short fade and unchanged model color.
-The installed-art comparisons and live battle captures were visually inspected.
-
-Sequential live battle pairs used the same binary with the terrain-flash
-comparison off/on: Great Divide scene 4, seed 7, 1920×1080, zoom 2,
-auto-remaster off, factories on, 300 lead-in ticks, 120 warmup draws and 180
-measured draws at 60 draws/s. Every census and pairwise scene metadata matched.
-Modern ground quads averaged 25.73 → 13.82; source lights, lit model faces,
-blast waves and device draws matched on every frame. Submit median/p95/max
-was 3.566/4.240/7.247 → 3.442/4.037/5.383 ms; cadence median 16.719 → 16.669 ms.
-Classic capture bytes matched, with Submit median 0.465 → 0.472 ms and cadence
-median 21.238 → 21.106 ms. These short host samples isolate the terrain formula,
-not GPU time or a performance guarantee. Both scenes retained moving and
-damaged units, projectiles, effects, sprite and burning features, construction
-and nanolathe activity. Raw profiles and runs are under
-`/private/tmp/ground-flash-review`, outside the repository.
-
-## 32. Reflected explosions, shoreline band, and the removed sun glitter (Enhanced)
-
-Three user-requested additions to the coastal water of §26, one of which
-(§32.1) was later removed on review and is kept here only as a record. They are
-authored Nanolathe presentation choices, not retail behavioral claims: every
-constant below is artistic, the classic executor composes identical pixels, and
-the player's Water switch (§30) gates the surviving two — with it off the
-recorder marks no water surface and admits no reflection site, and the composed
-frame is byte-identical to the same build without them.
+Additions to §26's coastal water, authored presentation choices rather than
+retail behavioral claims: every constant is artistic, the classic executor
+composes identical pixels, and the player's Water switch gates the surviving two.
 
 ### 32.1 Sun glitter
 
@@ -6550,262 +4308,278 @@ frame is byte-identical to the same build without them.
 tops, driven by a pseudo-normal differenced from the drifting height field. It
 landed at a peak of 0.35, was cut to 0.08 on the first review as too strong for a
 surface that must stay subtle, and was removed entirely on the second: the user
-judged it was not earning its keep — "I don't think it's doing much" — and asked
-for motion that reads as living water instead of a tiled sheet sliding across the
-screen. The lobe, the half-vector it met, and the shared two-layer height
-function it needed are all gone; the four value-noise evaluations they cost went
-with them.
-
-The replacement is in §26.3: no fixed scroll, three downwind speeds, a slow
-domain warp so the ripple field churns in place, a rotated fine lattice, and
-coarse gust patches that darken and roughen the water they cross. Nothing else in
-§32 changed, and the Water switch still gates the whole treatment.
+judged it was not earning its keep and asked for motion that reads as living
+water instead of a tiled sheet sliding across the screen. The lobe, the
+half-vector it met and the shared two-layer height function it needed are all
+gone, and the four value-noise evaluations they cost went with them. The
+replacement is §26.3: no fixed scroll, three downwind speeds, a slow domain warp,
+a rotated fine lattice, and coarse gust patches.
 
 ### 32.2 Reflected explosions and impacts
 
-Named explosion and impact art now records `ReflectWater` and
-`ReflectionHeight` like a projectile billboard does, from the same
-`reflectionWaterAt`/`reflectionHeight` pair, so the Water switch already
-governs admission. The reflection preparation admits a billboard at height
-zero, where it previously required a strictly positive height, and the source
-shader's waterline clip makes the same distinction: a model face or beam stroke
-carries per-fragment physical height and is still cut at and below sea, while a
-billboard's height is one constant for the whole quad and its admission has
-already happened on the recording side.
+Named explosion and impact art records `ReflectWater` and `ReflectionHeight` like
+a projectile billboard does, from the same `reflectionWaterAt`/`reflectionHeight`
+pair, so the Water switch already governs admission. The reflection preparation
+admits a billboard at height **zero**, where it previously required a strictly
+positive height, and the source shader's waterline clip makes the same
+distinction: a model face or beam stroke carries per-fragment physical height and
+is still cut at and below sea, while a billboard's height is one constant for the
+whole quad and its admission has already happened on the recording side.
 
 Height zero is the case that matters. A surface impact's anchor sits at sea
-level, so mirroring about that anchor sends the opaque upper half of the
-fireball below the anchor, where the art itself is keyed out — which is where
-the reflection becomes visible. Reflected fire is drawn before objects, so the
+level, so mirroring about that anchor sends the opaque upper half of the fireball
+below the anchor, where the art itself is keyed out — which is where the
+reflection becomes visible. Reflected fire is drawn before objects, so the
 explosion composites over its own reflection afterwards; that ordering is
 intended. The resolve keeps its cool tint and 25 percent opacity for fire as
-well: the reflection reads as water rather than as a second fireball, and
-nothing about bright art is treated as a special case.
-
-A projectile billboard resting exactly at the surface is admitted on the same
-terms. Nothing else changes: the 4,096-vertex sprite/stroke reservation, the
-32,768-vertex frame cap, the source plane, the passes and the mask-clipped
-resolve are all as §26.4 and §26.6 left them.
+well, so the reflection reads as water rather than as a second fireball, and
+nothing about bright art is treated as a special case. A projectile billboard
+resting exactly at the surface is admitted on the same terms. Nothing else
+changes: the vertex reservations, the frame cap, the source plane, the passes and
+the mask-clipped resolve are as §26.4 and §26.6 left them.
 
 ### 32.3 Damp shoreline band and shallow tint
 
-Dry ground the water has just washed keeps a darker tone. The mask cannot carry
-a dry-side distance field — its alpha is opaque everywhere and Ebitengine
-images are premultiplied, and a dry-side green would corrupt the wet-side
-`deep` and `shore` terms wherever bilinear filtering crossed the boundary — so
-the shader measures nearness by sampling instead. Eight taps on a ring of eight
-world pixels, at the mask step, give a maximum and a mean. The maximum is
-converted with a 0.2-to-1.0 smoothstep as the band's admission; the mean shapes
-its falloff through a 0.10-to-0.45 smoothstep, because the red channel is
-binary and the maximum alone would end the band on a whole texel. Both taps are
-bilinear, which is what makes the band resolution-independent: the mask step
-grows with map size, and on a large map, where one texel is eight world pixels,
-the ring spans a single texel and only the filtered reading still resolves the
-band's width.
+Dry ground the water has just washed keeps a darker tone. How much ordinary
+water surrounds a texel is the **ring term**, and it is precomputed into the
+mask's alpha channel when the mask is built (`waterRingField`, §26.3): eight
+bilinear readings on a ring of eight world pixels give a maximum and a mean, the
+maximum converted with a 0.2-to-1.0 smoothstep as the band's admission and the
+mean shaping its falloff through a 0.10-to-0.45 smoothstep, and the two are
+multiplied once. The mean is needed because the red channel is binary and the
+maximum alone would end the band on a whole texel; both readings are bilinear,
+which is what makes the band resolution-independent, since on a large map where
+one texel is eight world pixels the ring spans a single texel and only the
+filtered reading still resolves the band's width. Water further from the shore
+than the ring reaches has water on every tap, so its term is filled in without
+sampling.
+
+The shader reads the term out of the `wetMask` tap it already takes for the
+other three channels, so the band costs **no fetch at all**. It used to run per
+fragment, and the water quad covers the whole viewport whenever any water is
+within a block of it, so every inland pixel paid eight bilinear readings —
+thirty-two texture fetches on top of the twelve the other channels cost:
+**forty-four mask reads per dry pixel, where there are now twelve.** The ring
+depends on nothing but the terrain, so an inland pixel was paying every frame
+for the same answer. The term is written on the wet side by the same formula so
+the bilinear blend across the wet/dry boundary stays continuous (the dry gate
+below removes it there), and because it is computed at texel centres and
+filtered back, a fragment reads the per-fragment ring's own numbers blended
+across one texel rather than exactly.
 
 The result multiplies a dry gate — a 0.05-to-0.5 smoothstep on the mask's blue
 channel, times one minus water coverage. The gate is deliberately low: its only
 job is to exclude terrain that is neither medium, since invalid ground and
 excluded liquid carry no dry flag at all, and a higher threshold would suppress
-the band exactly at the waterline, where it belongs. The band darkens the
-painted colour by up to twelve percent, half of that steady and half pulsing on
-the lap phase the shore foam carries at the boundary, so the ground darkens as
-a wave front arrives. All of this runs before the shader's dry early-out,
-because the band lives on dry texels; a pixel with no water on its ring returns
-the painted colour unchanged, and the added taps cost nothing on wet pixels.
+the band exactly at the waterline, where it belongs. The band darkens the painted
+colour by up to twelve percent, half of that steady and half pulsing on the lap
+phase the shore foam carries at the boundary, so the ground darkens as a wave
+front arrives. All of this runs before the shader's dry early-out, because the
+band lives on dry texels; a pixel with no water on its ring returns the painted
+colour unchanged, and the mask's alpha says so without a second lookup.
 
 On the water side, the result mixes eight percent toward a pale cyan
-(0.62, 0.80, 0.84), scaled by one minus a 0.0-to-0.35 smoothstep of the shore
+`(0.62, 0.80, 0.84)`, scaled by one minus a 0.0-to-0.35 smoothstep of the shore
 distance, so water lightens as the bottom rises. Deep water is untouched.
-
-Because the band lies beside the water rather than on it, the 128-pixel block
-index now queries one block of slack on each side of the viewport, so a coast
-just past the viewport edge still runs the pass and the band reaches the
-visible strip.
 
 ### 32.4 Verification
 
-Real-device fixtures (`NANOLATHE_GPU_DEVICE_TEST=1`) cover the surviving
-additions. The surface fixture uses an authored flat-grey terrain and a straight
-authored coast, drawn through the shipped shader source and through variants that
-replace exactly one term with a constant, so any difference is that term: the
-composed surface is byte-identical on a held phase and different as the field
-advances; a gust patch changes water texels and no dry texel, and with the gust
-held flat the surface still differs between two phases, so the churn comes from
-the domain warp and not from the gust alone; the damp band darkens only dry
-texels, never brightens, leaves covered water untouched and leaves ground beyond
-the ring byte-identical; the shallow tint changes near-shore wet texels only. No
-census is pinned for the gust — its lattice is far coarser than the fixture, so
-how much of the fixture one patch covers is an accident of the authored extent.
-The reflection fixture adds a surface impact at height zero whose upper half
-alone is opaque, and checks that it casts a reflection below its anchor, that the
-mask holds it off dry ground, and that the same art standing on dry ground is
-never admitted.
-
-`tools/check` and `tools/check-retail` pass. Modern captures at 1280x960 native
-and at 2x zoom were taken from main and from this branch on Brain Coral, which
-opens on open sea, and Ring Atoll, which opens on a beach. Open water now carries
-broad light and dark patches a few hundred world pixels across, drifting over a
-finer diagonal ripple; the same water on main is an even speckle with no
-structure above the ripple scale. At 2x the ripple reads as irregular swirls
-rather than aligned rows. The beach still shows a continuous darker strip along
-the waterline and a paler band of water inside it.
-
-Motion was measured rather than asserted. Thirty consecutive captures two ticks
-apart, cropped to a 400x300 window of open water, differ from their predecessor
-by a mean of 1.51 levels of 255 per channel — minimum 1.49, maximum 1.53 — so
-every frame moves and no frame jumps; main's figure on the same window is 1.21.
-The churn alone was measured on the drift-free device fixture, where nothing but
-the domain warp can move: the surface decorrelates by about 0.4 levels per second
-and about 1.3 over four seconds, against roughly 3 at full decorrelation. Four
-times slower warp speeds left the field visually static over the same interval
-and eight times faster began to shimmer, so the landed speeds are the middle of
-that bracket.
-
-**Gap.** No human has watched the surface in a live window; the evidence above is
-captures and frame arithmetic. Whether the churn reads as "alive" rather than as
-a slow wobble, and whether the gust patches read as wind, are judgements only a
-live viewing can settle. The eight-times bracket above was also judged from a
-numeric decorrelation rate, not from watching it.
-
-**Gap.** No live capture of an explosion over water was obtained: `--shot` runs
-a skirmish with no opponent, so nothing fires, and the battle benchmark places
-its armies on dry ground. The device fixture is the only evidence for the
-reflected effect; an AI opponent reachable from a capture flag, or a staged
-coastal diagnostic like the one §26.3 describes, would settle it.
+Real-device fixtures cover the surviving additions. The surface fixture uses an
+authored flat-grey terrain and a straight authored coast, drawn through the
+shipped shader source **and** through variants that replace exactly one term with
+a constant, so any difference is that term: the composed surface is
+byte-identical on a held phase and different as the field advances; a gust patch
+changes water texels and no dry texel, and with the gust held flat the surface
+still differs between two phases, so the churn comes from the domain warp and not
+from the gust alone; the damp band darkens only dry texels, never brightens,
+leaves covered water untouched and leaves ground beyond the ring byte-identical;
+the shallow tint changes near-shore wet texels only. A further variant restores
+the retired per-fragment ring search, so the precomputed alpha field is held to
+within two levels of the numbers it replaced across the coastal scene. No census
+is pinned for the gust — its lattice is far coarser than the fixture, so how
+much of the fixture one patch covers is an accident of the authored extent. The
+reflection fixture adds a surface impact at height zero whose upper half alone is
+opaque, and checks that it casts a reflection below its anchor, that the mask
+holds it off dry ground, and that the same art standing on dry ground is never
+admitted.
 
 ## 33. Cloaked model image commits
 
 `ModelGeometry.Cloaked` is refreshed from the admitted committed unit on each
 cached or staged image packet. It is not part of `ModelCacheKey`, retained face
-colors, or the atlas raster. The final atlas resolve scales both premultiplied
-RGB and coverage by the ALP half-colour formula already used by Enhanced
-(§13.2), so background details remain visible through the body. This adds no
-pass or texture read. It preserves the ordinary shadow immediately before the
-body [03 R-RAST-01 §7][03 R-REN-03D §4].
+colours or the atlas raster. The final atlas resolve scales both premultiplied
+RGB and coverage by the ALP half-colour formula Enhanced already uses (§13.2), so
+background details remain visible through the body. This adds no pass or texture
+read, and it preserves the ordinary shadow immediately before the body
+[03 R-RAST-01 §7][03 R-REN-03D §4].
 
 A keyed carrier blends its complete staged image once, including children;
-keyless direct live polygons keep their ordinary writer. The classic packet
-uses the loaded ALP lookup instead of RGB approximation. Cloak toggles therefore
-need no raster rebuild, and one instance cannot recolor another's model.
-`ModelPreviewOptions.Cloaked` supplies this same committed lane for static
-visual review. Focused tests exercise source-major ALP, native/detail placement,
+keyless direct live polygons keep their ordinary writer. The classic packet uses
+the loaded ALP lookup instead of the RGB approximation. Cloak toggles therefore
+need no raster rebuild, and one instance cannot recolour another's model.
+`ModelPreviewOptions.Cloaked` supplies the same committed lane for static visual
+review. Focused tests exercise source-major ALP, native and detail placement,
 retained opaque/cloaked/decloaked transitions, direct live lanes, and real-device
-pixels. Existing visibility regressions retain owner bypass and foreign cloak
-rejection. The existing atlas-overflow direct-polygon fallback remains a
-presentation approximation with no staged image blend.
+pixels; existing visibility regressions retain owner bypass and foreign cloak
+rejection. The atlas-overflow fallback remains a presentation approximation with
+no staged image blend.
 
 ## 34. Aircraft soft shadows (Enhanced)
 
-User-approved Enhanced presentation treatment, not retail evidence. It does
-not change authoritative flight or retail
-shadow gates [03 R-REN-03D §1]. Airborne mover-mode units supply clearance above
-the higher of terrain under the unit and sea level. This is one receiver height
-per aircraft, not terrain-conforming projection across the entire footprint.
-Ground units, structures, clipped silhouettes and Original use their existing
-shadow route. Placement and source silhouette remain the existing mobile path.
+An Enhanced presentation treatment, not retail evidence. It does not change
+authoritative flight or the retail shadow gates [03 R-REN-03D §1]. Airborne
+mover-mode units supply **clearance** above the higher of the terrain under the
+unit and sea level — one receiver height per aircraft, not a terrain-conforming
+projection across the footprint. Ground units, structures, clipped silhouettes
+and Original use their existing shadow route, and placement and source silhouette
+remain the existing mobile path (§22).
 
 The recording carries clearance and model scale independently of retained face
-geometry; each placement refresh clears old admission. The Enhanced executor
-filters body alpha at the shadow placement, with a normalized 5-by-5 binomial
-kernel and bilinear taps in the existing twice-resolution body atlas. Radius is
-clearance/60, capped at three world pixels, plus an upper-altitude increment.
-That increment is smoothstep over clearances 120–200, from zero to 1.5 world
-pixels, so the final radius reaches 4.5 at clearance 200 and stays capped there.
-Lower flight retains the reviewed curve. Scale is applied once after these
-world-space calculations. The kernel weights on each axis are
-1,4,6,4,1, divided by 16. This preserves integrated coverage away from clipping
-and makes thin details fade as the penumbra grows. No framebuffer colour is
-filtered. These are artistic constants, not an optical calibration.
+geometry, and each placement refresh clears old admission. The executor filters
+body alpha at the shadow placement with a normalized 5-by-5 binomial kernel
+(weights 1, 4, 6, 4, 1 divided by 16 on each axis) and bilinear taps in the
+existing twice-resolution body atlas. The radius is `clearance/60`, capped at
+three world pixels, plus an upper-altitude increment: a smoothstep over
+clearances 120–200 from zero to 1.5 world pixels, so the final radius reaches 4.5
+at clearance 200 and stays capped there. Lower flight retains the reviewed curve,
+and scale is applied once after these world-space calculations. Preserving
+integrated coverage away from clipping is what makes thin details fade as the
+penumbra grows. No framebuffer colour is filtered. These are artistic constants,
+not an optical calibration.
 
-Each receiving pixel samples the existing ordinary-water mask with its existing
-0.8–1 coverage ramp. Wet pixels interpolate shadow opacity from one half to one
-fifth, add half a world pixel of filter radius, and displace the silhouette with
-bounded world-anchored waves driven by committed water phase and integrated
-wind drift. The motion freezes on pause, scales once with zoom, and cannot
-warp a dry shadow pixel. This approximates water's weaker shadow response; it
-does not trace refraction or separate sky reflection from direct lighting.
+Each receiving pixel samples the ordinary-water mask with its existing 0.8–1
+coverage ramp. Wet pixels interpolate shadow opacity from one half to one fifth,
+add half a world pixel of filter radius, and displace the silhouette with bounded
+world-anchored waves driven by committed water phase and integrated wind drift.
+The motion freezes on pause, scales once with zoom, and cannot warp a dry shadow
+pixel. This approximates water's weaker shadow response; it does not trace
+refraction or separate sky reflection from direct lighting.
 
 The command is one clipped, expanded rectangle per eligible aircraft, in its
-ordinary shadow-before-body order. A subimage view bounds the source to the
-body's atlas region, making out-of-subject taps transparent without copying
-pixels or sampling another model. Expansion includes filter and displacement
-reach. There is no full-screen blur or extra render target. The extra shader
-uses 25 bilinear coverage taps, plus a bilinear water-mask lookup and palette
-lookup. Subimage views may split batches; cost needs measured aircraft scenes.
-SetAircraftShadows is the renderer's capture comparison control.
+ordinary shadow-before-body order, and the expansion includes filter and
+displacement reach. The **whole colour page** binds, and the silhouette's
+rectangle on it rides the four custom lanes — which is how the projected shadow
+commit already samples a page (§22). The fragment clamps its own taps to that
+rectangle, on the same half-open test, so a tap outside this subject is
+transparent and an adjacent atlas slot can never be read. A sub-image view gave
+that bound for free and is gone: Ebitengine allocates and caches one image per
+distinct rectangle, a moving aircraft asks for a new rectangle every frame, and
+a distinct image splits the batch, so each aircraft also cost an image, a cache
+entry and a device draw of its own. Every aircraft whose body is on one page now
+shares one device run (`TestAircraftShadowCommitsShareOneRun`). There is no
+full-screen blur and no extra render target. The shader uses 25 bilinear
+coverage taps plus a bilinear water-mask lookup and a palette lookup.
 
-### Initial prototype verification and cost
+**The one uniform on a per-frame draw.** Giving the custom lanes to the
+rectangle left nowhere on the vertex for the four water operands — committed
+phase, the two integrated drift components and the mask step — so they ride a
+Kage uniform, `AircraftWater`, installed on the scheduler's shared scene options
+before the segment is submitted. This is the single exception to §11.2's rule
+that every parameter rides the vertex, and it holds for the reason that rule
+exists: the four are **frame constants**, written by the frame's one terrain
+command, so every aircraft compiled into a submission was compiled against the
+values in place. Their storage — a four-float slice and its one-entry map — is
+retained and written in place, so the layer still allocates nothing in a
+steady-state frame.
 
-tools/check and tools/check-retail pass, as do the focused client/draw-list/GPU
-checks and Metal device loop. Pixel
-relationships verify wider spread without extra integrated shadow mass, water
-attenuation, dry stability, frozen replay, neighboring atlas isolation and
-fractional zoom. Independent read-only review verified source coordinates,
-clearance normalization, filter weights and conservative expansion.
+The treatment has no switch of its own: it softens a shadow the executor draws
+either way, so in Enhanced it is always on (§30). A recorded clearance of zero is
+what selects the ordinary silhouette route, and the paired capture fixture pairs
+on that.
 
-Installed ARM fighter and bomber models were inspected on Seven Islands and
-Ring Atoll over land, water and shore, at native and twice scale, with staged
-clearances of 32 and 200 world pixels. The 2x Ring Atoll shoreline sequence
-advances water through 60 frames while holding the aircraft fixed. These are
-staged visual fixtures, not simulated flight. Captures and profiles are outside
-the repository. Reproduce with NANOLATHE_GPU_DEVICE_TEST=1,
-NANOLATHE_RETAIL_ASSETS pointing to the install, NANOLATHE_AIRCRAFT_MAP set to
-Ring Atoll and NANOLATHE_AIRCRAFT_SHOTS pointing to an output directory, then
-run go test ./internal/platform/gpurender -run '^TestDeviceFixtureLoop$' -count=1.
-NANOLATHE_AIRCRAFT_PROFILE=1 additionally runs the paired frozen profile under
-the shared benchmark lock.
+Verification: pixel relationships verify wider spread without extra integrated
+shadow mass, water attenuation, dry stability, frozen replay, neighbouring atlas
+isolation and fractional zoom; the normalized-coverage device test exercises
+clearance 200, and the radius test checks low-flight preservation, the upper cap
+and scale independence. Installed fighter and bomber models are inspected over
+land, water and shore at native and twice scale with staged clearances, and a
+shoreline sequence advances water while holding the aircraft fixed. Reproduce
+with `NANOLATHE_GPU_DEVICE_TEST=1`, `NANOLATHE_RETAIL_ASSETS` pointing at the
+install, `NANOLATHE_AIRCRAFT_MAP` naming a coastal map and
+`NANOLATHE_AIRCRAFT_SHOTS` an output directory, then
+`go test ./internal/platform/gpurender -run '^TestDeviceFixtureLoop$' -count=1`;
+`NANOLATHE_AIRCRAFT_PROFILE=1` additionally runs the paired frozen profile under
+the shared benchmark lock. These are staged visual fixtures, not simulated
+flight.
 
-On the M3 Pro/Metal, 1280x960, 2x model scale, 60 warmup and 180 measured frames
-per case, four alternating off/on/on/off runs with 64 installed fighters gave
-median completed-frame times 5.668/6.265/6.307/5.656 ms on the land camera and
-6.126/6.685/6.752/6.350 ms on the water camera. Paired increments are roughly
-0.40–0.65 ms; averaged increments are 0.62 ms and 0.48 ms. Completion includes
-CPU submission, driver synchronization and one-pixel readback, not isolated
-GPU timestamps. Passes stay at seven; device draws rise from 11 to 74 because
-bounded subimage sources split the aircraft runs. A lone fighter's small cost
-is not established by these noisy comparisons. Dense overlapping formations
-and other GPU backends remain unmeasured.
+## 35. Known limitations and owed work
 
-Live Great Divide battle comparisons against the prototype's exact starting
-revision match scene metadata and every measured tick's census for both
-executors, retaining moving armies, factory construction, sprite features and
-fire. Classic's capture is byte-identical. Modern's changed pixels follow the
-aircraft shadow footprints; captures were inspected. Median record/submit/
-cadence in milliseconds: classic 13.517/0.485/33.333 before and
-13.332/0.469/33.334 after; modern 2.998/4.817/33.333 before and
-2.975/5.142/33.333 after. Modern's first measured frame retains 409 direct
-subjects, 293 shadows, zero overflow and 18 passes; draws rise 95 to 118.
-These measurements describe the initial three-pixel prototype. The user then
-approved the upper-altitude increment and landing the treatment in main.
+**Owed human review.** Several layers were built by agents that could not inject
+input, so their evidence is captures and frame arithmetic rather than a live
+window: the wheel in motion and the snap's feel (§16); the half-pixel step at
+refresh rate and whether the two-raster-pixel outline reads right on a rising
+nanoframe (§17); the glow interpolated with its sources (§19); and whether the
+water's churn reads as alive rather than as a slow wobble, and whether the gust
+patches read as wind (§26.3, §32.4). The filtered terrain of §16.3 is a taste
+call as well as a measurement: a player who wants the crunchy nearest-sampled map
+back should be heard before the lane becomes permanent.
 
-### Upper-altitude closeout
+**Executor.**
+- The two-surface alternation of §11.5 is unexplained and unlanded
+  (`TODO(H1)`), and so is the model overflow barrier's sensitivity to segment
+  merging (§13.8). Both change composited pixels for reasons the placement rules
+  do not account for.
+- The model lane's atlas is two 4096² pages; a frame that fills both takes the
+  native painter-order fallback, which has no key plane, no supersample, no
+  reveal and no children, and omits its shadows (§22.1). The parameter image
+  caps at 174,762 entries, past which a frame's remaining faces interpolate
+  linearly, and the retained-lane store caps at 2,048 entries, past which the
+  least recently used lane is re-derived cold.
+- Glow's two magnified adds could be one shader pass sampling both octaves, and
+  the half plane could go if Ebitengine's mipmapped shrink proves cheaper than a
+  pass; the glow's cost is resolution-dependent and was measured only at 1080p
+  (§19.3).
+- The terrain atlas stores one index per RGBA8 texel; storing it in one channel
+  would cut the texture to a quarter (§14.5). A half-resolution tile set for the
+  strategic range is unmeasured (`TODO(question)` in `terrain.go`, §16.10).
+- A keyed source cannot take the filtered sampling of §16.3 without an
+  antialiased sprite edge, which is a look to approve (`TODO(question)` in
+  `schedule.go`).
+- A model cross-fade at the strategic cut needs an alpha lane on the model
+  commit (`TODO(question)` at `Client.markerAlpha`, §16.11).
+- Aircraft soft shadows on one page now compile into one device run (§34), but
+  dense overlapping formations and non-Metal backends are unmeasured, and the
+  5×5 kernel's hundred bilinear taps per pixel over the expanded rectangle are
+  unchanged.
 
-The final four-pixel treatment passed the focused tests and independent Metal
-review. After integrating the current main, tools/check, tools/check-retail and
-the Metal device fixture loop passed again. All twelve installed-art low-altitude captures remain byte-identical
-to the initial prototype. The high bomber land, water and shore captures were
-inspected; the outer silhouette softens further while the body stays unchanged.
-The normalized-coverage device test now exercises clearance 200, and the
-radius test checks low-flight preservation, upper cap and scale independence.
+**Recorder and content.**
+- The dominant cold reason in the model lane is now the **first sighting of a key
+  that never comes back**: a subject whose cached lane is re-stored every
+  presented frame, which under interpolation is every turning unit, because
+  retail rebuilds on an orientation delta **strictly greater than seven**
+  [03 §5.2] (§2.2.1). That is retail's contract and is not changed here — a
+  rebuild is a new revision of the same body, as it should be — but it means the
+  store sits at its cap with inserts evicting one for one, and a cheaper key for
+  a lane that turns is unexplored.
+- The session publishes no feature `InstanceID`, so a 3DO feature's retained lane
+  is keyed by its map position and pruned by age (§13.12). Publishing one would
+  key the lane by identity and let it be pruned with the feature set, which is
+  owed work on the publication boundary, not on the renderer.
+- The recorder still builds the doubled packet's native faces (§22.4).
+- A carried child texel its own reveal or clip erases stays a hole where retail
+  shows the carrier through it (§22.4), and the modern executor omits a child
+  packet that is keyless or itself has children (§22.3).
+- `DontShadow` exists in the pose and is compared with it but the shadow
+  projection does not consult it (§13.12).
+- The strategic icon catalog's AA, fighter, artillery and heavy-role
+  distinctions are unresolved, as are levels with neither a reachable build path
+  nor one unambiguous authored token (§18.3).
+- The Anti-Alias option's menu text still describes the retail structure
+  behaviour; its Enhanced meaning is wider and the text is owed a line (§17).
+- Render type 2's fixed global sprite binding is unresolved in classic as well
+  (§10), and the `Lens` transparent key carries a `TODO(question)` for retail's
+  uninitialized value under SPEC_CONFLICTS SC18 (§2.5).
 
-Final pre-landing Great Divide runs retain equal scene metadata and every
-measured census, with byte-identical Classic captures and only aircraft-shadow
-footprints changed in Modern. Classic median record/submit/cadence is
-13.247/0.475/33.333 ms before and 13.424/0.460/33.333 ms after. Modern's first
-pair is 2.048/3.657/33.333 ms before and 3.082/4.869/33.333 ms after; a repeated
-baseline is 2.513/3.833/33.333 ms and its paired integrated run is
-2.994/4.932/33.334 ms. Both pairs retain equal metadata and censuses; host
-timing variation is material, so these timings do not isolate the filter.
-Modern retains 18 passes, 409 direct subjects, 293 shadows and zero overflow;
-first-frame draws rise from 95 to 118.
-
-The final 64-fighter frozen profile retains the same sampling count and seven
-passes. Its off/on/on/off completed-frame medians are
-5.854/7.825/7.025/6.118 ms on the land camera and
-7.210/8.107/7.985/7.556 ms on the water camera. Paired increments range from
-about 0.43 to 1.97 ms in this run, greater and more variable than the initial
-three-pixel profile; the expanded filter footprint does additional GPU work.
-CPU submission increments in those pairs remain about 0.01–0.06 ms. These
-synchronized completion measurements include readback overhead; the rendering
-path performs no CPU readback. No isolated GPU duration is established.
+**Measurement gaps.**
+- No live capture of an explosion over water has been obtained: `--shot` runs a
+  skirmish with no opponent, so nothing fires, and the battle benchmark places
+  its armies on dry ground. The device fixture is the only evidence for the
+  reflected effect (§32.2); an AI opponent reachable from a capture flag, or a
+  staged coastal diagnostic, would settle it.
+- The frozen-list capture route (`--shot-gpu-profile-frames`) fails on the
+  reference host while acquiring the Metal drawable texture, on unchanged main as
+  well as on branches, so several layers have live-benchmark evidence but no
+  frozen-list timing. Resolving that host failure would settle those gates.
+- Ebitengine's public API exposes neither GPU completion nor actual presentation
+  timestamps, so no measurement in this repository establishes GPU execution time
+  (§6).

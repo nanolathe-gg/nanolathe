@@ -68,6 +68,48 @@ func TestWaterMaskProjectionAndLiquidGate(t *testing.T) {
 	}
 }
 
+// The damp band's ring term is built into the mask's alpha once per terrain
+// identity, so the shader reads it out of the tap it already takes rather than
+// sampling eight bilinear water readings on every pixel of a viewport-wide quad
+// (§32). It reaches about eight world pixels inland from the coast and is zero
+// beyond, which is the band the sampled ring drew.
+func TestWaterMaskCarriesTheDampBandRing(t *testing.T) {
+	p, w, _, step, _, _, _ := waterMaskPixels(waterFixtureTerrain())
+	if step != 1 {
+		t.Fatalf("fixture mask step %d, want the finest level", step)
+	}
+	red := func(x, y int) byte { return p[(y*w+x)*4] }
+	ring := func(x, y int) byte { return p[(y*w+x)*4+3] }
+	const row = 80
+	coast := 0
+	for x := 0; x < w; x++ {
+		if red(x, row) == 0 {
+			coast = x
+			break
+		}
+	}
+	if coast == 0 || coast >= w {
+		t.Fatalf("no coast on row %d", row)
+	}
+	if ring(coast-1, row) == 0 {
+		t.Fatal("the last wet texel carries no ring term; the field must be continuous across the boundary")
+	}
+	if ring(coast+1, row) < 128 {
+		t.Fatalf("one texel inland the ring term is %d, want the band at full strength", ring(coast+1, row))
+	}
+	if got := ring(coast+8, row); got != 0 {
+		t.Fatalf("eight world pixels inland the ring term is %d, want the band ended", got)
+	}
+	if got := ring(coast+40, row); got != 0 {
+		t.Fatalf("well inland the ring term is %d, want zero", got)
+	}
+	for x := coast + 1; x < coast+8; x++ {
+		if ring(x, row) > ring(x-1, row) {
+			t.Fatalf("the ring term rises with distance from the water at %d", x)
+		}
+	}
+}
+
 func checkWaterDevicePixels() error {
 	pal := fixturePalette()
 	ter := waterFixtureTerrain()
@@ -197,12 +239,78 @@ func checkWaterDevicePixels() error {
 	if aged*2 < fresh {
 		return fmt.Errorf("water pattern degraded after a long elapsed time: detail %d, was %d", aged, fresh)
 	}
+	if err := checkWaterDampBandMatchesRing(r, read); err != nil {
+		return err
+	}
 	if err := checkWaterSurfaceAdditions(); err != nil {
 		return err
 	}
 	r.ResetSources()
 	if r.water.mask != nil || r.water.source != nil {
 		return fmt.Errorf("coastal mask survived source reset")
+	}
+	return nil
+}
+
+// dampBandRingReference is the damp band's gate as the shader once computed it:
+// eight bilinear water taps around the fragment, every frame, on top of the
+// twelve reads the other channels cost. waterRingField now builds the same
+// product once per terrain identity into the mask's alpha, and this is the
+// reference the built field is checked against.
+const dampBandRingReference = `
+func refWater(p vec2) float {
+ q := p-vec2(0.5)
+ a := floor(q)
+ f := fract(q)
+ o := imageSrc0Origin()
+ return mix(mix(imageSrc1AtFromSrc0Pos(o+a).r,imageSrc1AtFromSrc0Pos(o+a+vec2(1,0)).r,f.x),mix(imageSrc1AtFromSrc0Pos(o+a+vec2(0,1)).r,imageSrc1AtFromSrc0Pos(o+a+vec2(1,1)).r,f.x),f.y)
+}
+
+func refRing(p vec2, r float) float {
+ d := r*0.70710678
+ s := vec4(refWater(p+vec2(r,0.0)),refWater(p-vec2(r,0.0)),refWater(p+vec2(0.0,r)),refWater(p-vec2(0.0,r)))
+ u := vec4(refWater(p+vec2(d,d)),refWater(p-vec2(d,d)),refWater(p+vec2(d,-d)),refWater(p-vec2(d,-d)))
+ m := max(max(max(s.x,s.y),max(s.z,s.w)),max(max(u.x,u.y),max(u.z,u.w)))
+ return smoothstep(0.2,1.0,m)*smoothstep(0.10,0.45,(s.x+s.y+s.z+s.w+u.x+u.y+u.z+u.w)*0.125)
+}
+`
+
+// checkWaterDampBandMatchesRing draws the coastal fixture through the shipped
+// shader and through one that recomputes the ring per fragment, and requires the
+// two to agree. The built field is sampled at texel centres and filtered back,
+// so a fragment reads the ring's own numbers blended across one texel; a
+// difference beyond a level or two, or one away from the shore, would mean the
+// field is not the ring it replaced.
+func checkWaterDampBandMatchesRing(r *Renderer, read func(tick uint32, zoom float32, enabled bool, wakes int) []byte) error {
+	const old = " damp := mask.w*dry"
+	if !strings.Contains(waterShaderSource, old) {
+		return fmt.Errorf("water shader no longer gates the damp band on the mask's ring term")
+	}
+	source := strings.Replace(waterShaderSource, old, " damp := refRing(world/custom.x,8.0/custom.x)*dry", 1) + dampBandRingReference
+	reference, err := ebiten.NewShader([]byte(source))
+	if err != nil {
+		return err
+	}
+	defer reference.Deallocate()
+	shipped := r.water.shader
+	on := read(30, 1, true, 0)
+	r.water.shader = reference
+	sampled := read(30, 1, true, 0)
+	r.water.shader = shipped
+	worst, at := 0, [2]int{}
+	const w, h = 160, 120
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			i := (y*w + x) * 4
+			for ch := 0; ch < 3; ch++ {
+				if d := max(int(on[i+ch])-int(sampled[i+ch]), int(sampled[i+ch])-int(on[i+ch])); d > worst {
+					worst, at = d, [2]int{x, y}
+				}
+			}
+		}
+	}
+	if worst > 2 {
+		return fmt.Errorf("the built ring field differs from the per-fragment ring by %d levels at %d,%d", worst, at[0], at[1])
 	}
 	return nil
 }
@@ -230,13 +338,21 @@ func waterSurfaceFixtureImages() (terrain, mask *ebiten.Image) {
 	m := image.NewRGBA(image.Rect(0, 0, texels, texels))
 	for y := 0; y < texels; y++ {
 		for x := 0; x < texels; x++ {
+			// Alpha is the damp band's ring term (waterRingField): full within
+			// the ring's eight world pixels of the authored coast and zero
+			// beyond, which is what the sampled ring produced for a straight
+			// boundary.
+			ring := byte(0)
+			if x < shore+8/surfaceFixtureStep {
+				ring = 255
+			}
 			if x >= shore {
-				m.SetRGBA(x, y, color.RGBA{0, 0, 255, 255})
+				m.SetRGBA(x, y, color.RGBA{0, 0, 255, ring})
 				continue
 			}
 			// Shore distance grows inward from the last wet texel, so the
 			// fixture carries both a shallow band and genuinely deep water.
-			m.SetRGBA(x, y, color.RGBA{255, byte(min((shore-x)*20, 255)), 0, 255})
+			m.SetRGBA(x, y, color.RGBA{255, byte(min((shore-x)*20, 255)), 0, ring})
 		}
 	}
 	return ebiten.NewImageFromImage(flat), ebiten.NewImageFromImage(m)

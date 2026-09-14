@@ -464,9 +464,6 @@ type Model struct {
 	// modern mode. It is a count because one staged carrier group may contain
 	// several shadow-casting subjects.
 	ShadowOmissions int
-	// GroupOmission marks the one accounting command for a carrier/child group
-	// that modern mode omits as a whole.
-	GroupOmission bool
 }
 
 // Fog records the already-clipped fog op list the client built with

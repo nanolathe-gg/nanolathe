@@ -53,54 +53,109 @@ func TestSchedulerPlacesCommandsOnTheCriticalPath(t *testing.T) {
 	if got := r.sched.curPhase; got != 0 {
 		t.Fatalf("the opening opaque fill landed in phase %d, want 0", got)
 	}
-	// First destination-reading command: nothing overlapping is recorded yet.
-	r.Sprite(drawlist.Sprite{Frame: frame, X: 0, Y: 0, Kind: drawlist.BlitTinted})
+	// First destination-class command: nothing overlapping is recorded yet.
+	r.Fill(drawlist.Fill{Rect: drawlist.Rect{X: 0, Y: 0, W: 8, H: 8}, Style: drawlist.FillLitRect, Level: 6})
 	if got := r.sched.curPhase; got != 0 {
-		t.Fatalf("the first tinted sprite landed in phase %d, want 0", got)
+		t.Fatalf("the first lit rect landed in phase %d, want 0", got)
 	}
-	// Overlapping the first in the SAME stream: both are the ALP half-blend, the
-	// batch draws them in record order and the blend reads the attachment, so the
-	// later one still composites over the earlier one's result inside one phase.
-	r.Sprite(drawlist.Sprite{Frame: frame, X: 4, Y: 4, Kind: drawlist.BlitTinted})
+	// Overlapping the first in the SAME stream: both are the row scale, the batch
+	// draws them in record order and the blend reads the attachment, so the later
+	// one still scales the earlier one's result inside one phase.
+	r.Fill(drawlist.Fill{Rect: drawlist.Rect{X: 4, Y: 4, W: 8, H: 8}, Style: drawlist.FillLitRect, Level: 6})
 	if got := r.sched.curPhase; got != 0 {
-		t.Fatalf("the overlapping tinted sprite landed in phase %d, want 0", got)
+		t.Fatalf("the overlapping lit rect landed in phase %d, want 0", got)
 	}
 	// Inside the same 32-pixel cell as the first two but disjoint from both: the
 	// exact rectangles decide, and nothing constrains it.
-	r.Sprite(drawlist.Sprite{Frame: frame, X: 16, Y: 16, Kind: drawlist.BlitTinted})
+	r.Fill(drawlist.Fill{Rect: drawlist.Rect{X: 16, Y: 16, W: 8, H: 8}, Style: drawlist.FillLitRect, Level: 6})
 	if got := r.sched.curPhase; got != 0 {
-		t.Fatalf("the same-cell disjoint tinted sprite landed in phase %d, want 0", got)
+		t.Fatalf("the same-cell disjoint lit rect landed in phase %d, want 0", got)
 	}
 	// A different cell likewise.
-	r.Sprite(drawlist.Sprite{Frame: frame, X: 40, Y: 40, Kind: drawlist.BlitTinted})
+	r.Fill(drawlist.Fill{Rect: drawlist.Rect{X: 40, Y: 40, W: 8, H: 8}, Style: drawlist.FillLitRect, Level: 6})
 	if got := r.sched.curPhase; got != 0 {
-		t.Fatalf("the disjoint tinted sprite landed in phase %d, want 0", got)
+		t.Fatalf("the disjoint lit rect landed in phase %d, want 0", got)
 	}
-	// A ROW-family command over the same pixels is different arithmetic, so it
-	// keeps the phase the historical rule gave it.
-	r.Fill(drawlist.Fill{Rect: drawlist.Rect{X: 4, Y: 4, W: 4, H: 4}, Style: drawlist.FillLitRect, Level: 6})
+	// A tinted sprite rides the OPAQUE stream (§13.3): its source-over blend is
+	// the opaque families' own. It composites over the row scales it covers, and
+	// a phase draws its opaque batch BEFORE its destination batch, so it cannot
+	// share their phase.
+	r.Sprite(drawlist.Sprite{Frame: frame, X: 4, Y: 4, Kind: drawlist.BlitTinted})
 	if got := r.sched.curPhase; got != 1 {
-		t.Fatalf("the overlapping lit rect landed in phase %d, want 1", got)
+		t.Fatalf("the tinted sprite over the lit rects landed in phase %d, want 1", got)
 	}
-	// An opaque write over pixels the phase-0 tinted sprites and the phase-1 lit
-	// rect covered must overwrite the later of them, so it follows phase 1.
+	// An opaque write over the tinted sprite needs no phase of its own: it is the
+	// same stream, the same shader and the same run, and the device rasterizes one
+	// draw's primitives in record order (C-G3).
 	r.Fill(drawlist.Fill{Rect: drawlist.Rect{X: 5, Y: 5, W: 1, H: 1}, Index: 9})
-	if got := r.sched.curPhase; got != 2 {
-		t.Fatalf("the overwriting fill landed in phase %d, want 2", got)
+	if got := r.sched.curPhase; got != 1 {
+		t.Fatalf("the write over the tinted sprite landed in phase %d, want 1", got)
 	}
-	if got := r.sched.nphase; got != 3 {
-		t.Fatalf("compiled %d phases, want 3", got)
+	if got := r.sched.nphase; got != 2 {
+		t.Fatalf("compiled %d phases, want 2", got)
 	}
 	// Each phase's destination rectangle is the union of its own destination
 	// batch, which is all the following pass has to copy forward.
 	if p := r.sched.phases[0]; !p.hasDest || p.x0 != 0 || p.y0 != 0 || p.x1 != 48 || p.y1 != 48 {
-		t.Fatalf("phase 0 destination rectangle = %+v, want the union of its four tinted sprites", p)
+		t.Fatalf("phase 0 destination rectangle = %+v, want the union of its four lit rects", p)
 	}
-	if p := r.sched.phases[1]; !p.hasDest || p.x0 != 4 || p.y0 != 4 || p.x1 != 8 || p.y1 != 8 {
-		t.Fatalf("phase 1 destination rectangle = %+v, want its one lit rect", p)
+	if !r.sched.phases[1].batch[schedDest].empty() {
+		t.Fatal("phase 1 compiled a destination batch, want only the tint and the overwrite")
 	}
-	if !r.sched.phases[2].batch[schedDest].empty() {
-		t.Fatal("phase 2 compiled a destination batch, want only the opaque overwrite")
+}
+
+// The ALP-tinted blit is an opaque-stream command since §13.3's blend classes
+// collapsed onto source-over: it draws with the scene shader under the opaque
+// blend, so it shares a device run with the opaque writes around it and the
+// device's primitive order keeps the byte writers' record order. The row
+// families keep their own blend and never join that run.
+func TestSchedulerTintedSpritesShareTheOpaqueRun(t *testing.T) {
+	r, _ := schedulerFixture(t)
+	frame := &formats.GAFFrame{Width: 8, Height: 8, Pixels: make([]byte, 64), Transparent: make([]bool, 64)}
+	r.sched.resetFrame(64, 64)
+
+	// A tinted sprite, an opaque write over it, and a second tinted sprite over
+	// that: one phase, one run, three quads in record order.
+	r.Sprite(drawlist.Sprite{Frame: frame, X: 0, Y: 0, Kind: drawlist.BlitTinted})
+	r.Fill(drawlist.Fill{Rect: drawlist.Rect{X: 2, Y: 2, W: 4, H: 4}, Index: 9})
+	r.Sprite(drawlist.Sprite{Frame: frame, X: 2, Y: 2, Kind: drawlist.BlitTinted})
+	if got := r.sched.nphase; got != 1 {
+		t.Fatalf("a tint, an overwrite and a tint compiled %d phases, want 1", got)
+	}
+	b := &r.sched.phases[0].batch[schedOpaque]
+	if len(b.runs) != 1 {
+		t.Fatalf("compiled %d opaque runs, want one shared run", len(b.runs))
+	}
+	if len(b.verts) != 3*quadVertices {
+		t.Fatalf("compiled %d vertices, want three quads", len(b.verts))
+	}
+	ops := [3]float32{b.verts[0].Custom3, b.verts[quadVertices].Custom3, b.verts[2*quadVertices].Custom3}
+	if ops != [3]float32{sceneOpTint, sceneOpSolid, sceneOpTint} {
+		t.Fatalf("run ops %v, want the tint, the fill and the tint in record order", ops)
+	}
+	if !r.sched.phases[0].batch[schedDest].empty() {
+		t.Fatal("the tinted sprites compiled a destination batch, want the opaque stream only")
+	}
+
+	// A row-family command over the same pixels is a different blend, so it never
+	// joins that run. It may still share the phase, because a phase's destination
+	// batch is drawn after its opaque batch and therefore observes the tint.
+	r.Fill(drawlist.Fill{Rect: drawlist.Rect{X: 2, Y: 2, W: 4, H: 4}, Style: drawlist.FillLitRect, Level: 6})
+	if got := r.sched.curPhase; got != 0 {
+		t.Fatalf("the lit rect over the tinted sprites landed in phase %d, want 0", got)
+	}
+	if got := len(r.sched.phases[0].batch[schedOpaque].runs); got != 1 {
+		t.Fatalf("the lit rect grew the opaque batch to %d runs, want it in the destination batch", got)
+	}
+	if r.sched.phases[0].batch[schedDest].empty() {
+		t.Fatal("the lit rect compiled no destination batch")
+	}
+	// The reverse direction still splits: an opaque-stream command — tinted or
+	// not — cannot share a phase with an earlier row scale it covers, because the
+	// opaque batch is drawn first.
+	r.Sprite(drawlist.Sprite{Frame: frame, X: 2, Y: 2, Kind: drawlist.BlitTinted})
+	if got := r.sched.curPhase; got != 1 {
+		t.Fatalf("the tinted sprite over the lit rect landed in phase %d, want 1", got)
 	}
 }
 
@@ -299,15 +354,15 @@ func TestSchedulerCompileIsAllocationFree(t *testing.T) {
 // placed after it — the forgetting may cost a phase, never correctness.
 func TestSchedulerForgottenCellOwnerStillConstrains(t *testing.T) {
 	r, _ := schedulerFixture(t)
-	frame := &formats.GAFFrame{Width: 1, Height: 1, Pixels: []byte{7}, Transparent: []bool{false}}
 	r.sched.resetFrame(64, 64)
-	// schedCellOwners+1 pairwise disjoint destination reads inside one 32-pixel
-	// cell: each is unconstrained, so all land in phase 0, and the last one makes
-	// the cell forget the first.
+	// schedCellOwners+1 pairwise disjoint destination-class commands inside one
+	// 32-pixel cell: each is unconstrained, so all land in phase 0, and the last
+	// one makes the cell forget the first.
 	for i := 0; i <= schedCellOwners; i++ {
-		r.Sprite(drawlist.Sprite{Frame: frame, X: int32(2 * i), Kind: drawlist.BlitTinted})
+		r.Fill(drawlist.Fill{Rect: drawlist.Rect{X: int32(2 * i), W: 1, H: 1},
+			Style: drawlist.FillLitRect, Level: 6})
 		if got := r.sched.curPhase; got != 0 {
-			t.Fatalf("disjoint tinted sprite %d landed in phase %d, want 0", i, got)
+			t.Fatalf("disjoint lit rect %d landed in phase %d, want 0", i, got)
 		}
 	}
 	// An opaque write over the forgotten command's own pixel has to overwrite its

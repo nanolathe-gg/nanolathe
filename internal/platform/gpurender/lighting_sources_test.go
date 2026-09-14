@@ -52,12 +52,12 @@ func TestAddedLightKindsAdmittedAndRejected(t *testing.T) {
 		}
 		// The Lighting switch gates every added family exactly as it gates the
 		// explosion prototype (§30).
-		r.SetBattleLighting(false)
+		r.setBattleLighting(false)
 		r.prepareBattleLighting(&list)
 		if len(r.lighting.lights) != 0 || r.modelStats.BattleLights != 0 {
 			t.Fatalf("kind %d emitted with lighting off", tc.kind)
 		}
-		r.SetBattleLighting(true)
+		r.setBattleLighting(true)
 	}
 }
 
@@ -354,7 +354,7 @@ func checkStrokeGroundLightDevicePixels() error {
 	list.RecordLine(drawlist.Line{X0: 48, Y0: 40, X1: 128, Y1: 40, Index: 250, Emissive: true, LightingScale: 1})
 	list.RecordExpand()
 	read := func(on bool) ([]byte, error) {
-		r.SetBattleLighting(on)
+		r.setBattleLighting(on)
 		img := r.Execute(&list, w, h)
 		if img == nil {
 			return nil, fmt.Errorf("ground light fixture returned no image")
@@ -423,7 +423,7 @@ func checkFlameLightDevicePixels() error {
 		Kind: drawlist.BlitTinted, LightingKind: drawlist.SpriteLightingFire})
 	list.RecordExpand()
 	read := func(on bool) []byte {
-		r.SetBattleLighting(on)
+		r.setBattleLighting(on)
 		out := r.Execute(&list, w, h)
 		pixels := make([]byte, w*h*4)
 		out.ReadPixels(pixels)

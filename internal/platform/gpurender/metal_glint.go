@@ -1,9 +1,8 @@
 package gpurender
 
-// MetalGlint and SetMetalGlint are temporary A/B controls for the user-requested
-// Enhanced finish experiment (GPU design §23.7). They never change a draw list.
-func (r *Renderer) MetalGlint() bool      { return r.metalGlint }
-func (r *Renderer) SetMetalGlint(on bool) { r.metalGlint = on }
+// setMetalGlint is the executor gate the player's Finish switch drives
+// (GPU design §23.7, §30). It never changes a draw list.
+func (r *Renderer) setMetalGlint(on bool) { r.metalGlint = on }
 
 // metalFaceGlint is a deliberately cheap, artistic directional specular lobe.
 // The fixed unit half-vector is in the same world X/Z/height axes as Normal.

@@ -16,48 +16,32 @@ import (
 // its marks: multiplies commute, so marks that overlap need no ordering
 // between them, and the scheduler still places the batch after the terrain
 // it darkens and before the features and units drawn over it.
+//
+// The scheduler needs the batch's screen rectangle before any quad is
+// appended, so the marks are visited twice: once for the bounds and once to
+// emit. Neither pass keeps a list — a mark's four corners are eight adds over
+// values already in the record, which is cheaper than the scratch that would
+// carry them between the passes and leaves the family allocating nothing in
+// steady state (§11.2 "Allocation policy").
 func (r *Renderer) Trails(t drawlist.Trails) {
 	if r == nil || r.sceneDest == nil || r.tables.atlas == nil || len(t.Marks) == 0 {
 		return
 	}
-	// Corner order matches the scheduler's quad: (−1,−1) (1,−1) (−1,1) (1,1)
-	// in (along, across) local coordinates, which the custom lanes carry to
-	// the shader.
-	type corners struct {
-		xs, ys [4]float32
-	}
-	quads := make([]corners, 0, len(t.Marks))
-	strengths := make([]uint8, 0, len(t.Marks))
-	shapes := make([]float32, 0, len(t.Marks))
 	minX, minY := float32(r.clipW()), float32(r.clipH())
 	maxX, maxY := float32(0), float32(0)
-	for _, m := range t.Marks {
-		if m.Strength == 0 {
+	any := false
+	for i := range t.Marks {
+		xs, ys, ok := trailQuad(t.Marks[i])
+		if !ok {
 			continue
 		}
-		ax, ay := float32(m.AxisX)/256, float32(m.AxisY)/256
-		px, py := float32(m.CrossX)/256, float32(m.CrossY)/256
-		if m.AxisX == 0 && m.AxisY == 0 || m.CrossX == 0 && m.CrossY == 0 {
-			continue
+		for j := 0; j < 4; j++ {
+			minX, maxX = min(minX, xs[j]), max(maxX, xs[j])
+			minY, maxY = min(minY, ys[j]), max(maxY, ys[j])
 		}
-		cx, cy := float32(m.X), float32(m.Y)
-		q := corners{
-			xs: [4]float32{cx - ax - px, cx + ax - px, cx - ax + px, cx + ax + px},
-			ys: [4]float32{cy - ay - py, cy + ay - py, cy - ay + py, cy + ay + py},
-		}
-		for i := 0; i < 4; i++ {
-			minX, maxX = min(minX, q.xs[i]), max(maxX, q.xs[i])
-			minY, maxY = min(minY, q.ys[i]), max(maxY, q.ys[i])
-		}
-		quads = append(quads, q)
-		strengths = append(strengths, m.Strength)
-		shape := float32(0)
-		if m.Shape == drawlist.TrailTrack {
-			shape = 1
-		}
-		shapes = append(shapes, shape)
+		any = true
 	}
-	if len(quads) == 0 {
+	if !any {
 		return
 	}
 	x0, y0 := maxInt(int(math.Floor(float64(minX))), 0), maxInt(int(math.Floor(float64(minY))), 0)
@@ -69,16 +53,43 @@ func (r *Renderer) Trails(t drawlist.Trails) {
 		[4]*ebiten.Image{1: r.tables.atlas}, nil, blendScaleDestination, schedReadNone) {
 		return
 	}
-	for i, q := range quads {
-		k := 1 - float32(strengths[i])/255
+	for i := range t.Marks {
+		xs, ys, ok := trailQuad(t.Marks[i])
+		if !ok {
+			continue
+		}
+		k := 1 - float32(t.Marks[i].Strength)/255
 		low, high := rowScaleLanes(k)
 		col := [4]float32{low, high, 0, 0}
-		shape := shapes[i]
-		r.sched.quadCorners(schedDest, q.xs, q.ys, col, [4][4]float32{
+		shape := float32(0)
+		if t.Marks[i].Shape == drawlist.TrailTrack {
+			shape = 1
+		}
+		r.sched.quadCorners(schedDest, xs, ys, col, [4][4]float32{
 			{-1, -1, shape, destOpTrail},
 			{1, -1, shape, destOpTrail},
 			{-1, 1, shape, destOpTrail},
 			{1, 1, shape, destOpTrail},
 		})
 	}
+}
+
+// trailQuad returns one mark's four corners, or ok=false for a mark that
+// contributes nothing: a faded-out strength, or an axis or cross vector of zero
+// length, whose quad would be degenerate. The corner order matches the
+// scheduler's quad — (−1,−1) (1,−1) (−1,1) (1,1) in (along, across) local
+// coordinates — which the custom lanes carry to the shader.
+func trailQuad(m drawlist.Trail) (xs, ys [4]float32, ok bool) {
+	if m.Strength == 0 {
+		return xs, ys, false
+	}
+	if m.AxisX == 0 && m.AxisY == 0 || m.CrossX == 0 && m.CrossY == 0 {
+		return xs, ys, false
+	}
+	ax, ay := float32(m.AxisX)/256, float32(m.AxisY)/256
+	px, py := float32(m.CrossX)/256, float32(m.CrossY)/256
+	cx, cy := float32(m.X), float32(m.Y)
+	xs = [4]float32{cx - ax - px, cx + ax - px, cx - ax + px, cx + ax + px}
+	ys = [4]float32{cy - ay - py, cy + ay - py, cy - ay + py, cy + ay + py}
+	return xs, ys, true
 }

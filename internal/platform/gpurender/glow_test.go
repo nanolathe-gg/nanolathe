@@ -2,8 +2,11 @@ package gpurender
 
 import (
 	"fmt"
+	"image"
+	"image/png"
 	"math"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -57,6 +60,47 @@ func TestGlowBatchIndicesAreRunRelative(t *testing.T) {
 	g.resetFrame()
 	if g.quads != 0 || len(g.runs) != 0 || len(g.verts) != 0 || g.resolved {
 		t.Fatalf("resetFrame left the batch non-empty: %+v", g)
+	}
+}
+
+// The halo is sized in world pixels, so the blur's tap spacing rides the view
+// scale: one texel at the native view, which is the kernel the layer was tuned
+// with, and proportionally wider or narrower at any other scale (§19, §16.3).
+func TestGlowBlurStepFollowsViewScale(t *testing.T) {
+	if got := glowBlurStep(1); got != 1 {
+		t.Fatalf("native view tap spacing %v, want exactly 1 texel", got)
+	}
+	for _, tc := range []struct{ scale, want float32 }{{2, 2}, {1.5, 1.5}, {0.5, 0.5}, {0.25, 0.25}} {
+		if got := glowBlurStep(tc.scale); got != tc.want {
+			t.Fatalf("view scale %v tap spacing %v, want %v", tc.scale, got, tc.want)
+		}
+	}
+	if got := glowBlurStep(0); got != 1 {
+		t.Fatalf("a frame with no source read %v, want the native view's 1", got)
+	}
+}
+
+// The frame's screen pixels per world pixel is the recorder's step times the
+// live zoom factor the scheduler applies. Reading only one of the two is what
+// made a beam's halo half its width at the 2x step (§16.2).
+func TestGlowViewScaleCombinesStepAndZoom(t *testing.T) {
+	r := &Renderer{}
+	if got := r.glowViewScale(); got != 1 {
+		t.Fatalf("a frame with no terrain read %v, want the native view's 1", got)
+	}
+	r.water.record.Scale = camera.ViewScaleDetail
+	if got := r.glowViewScale(); got != 2 {
+		t.Fatalf("the 2x step at rest read %v, want 2", got)
+	}
+	// The 2x step with the factor eased to 1.5x: the recorder projected at two
+	// screen pixels per world pixel and the executor shrinks by three quarters.
+	r.sched.setWorldTransform(0.75, 0, 0)
+	if got := r.glowViewScale(); got != 1.5 {
+		t.Fatalf("the 2x step under a 0.75 transform read %v, want 1.5", got)
+	}
+	r.water.record.Scale = camera.ViewScaleNative
+	if got := r.glowViewScale(); got != 0.75 {
+		t.Fatalf("the native step under a 0.75 transform read %v, want 0.75", got)
 	}
 }
 
@@ -168,6 +212,82 @@ func checkGlowDevicePixels() error {
 	}
 	if corner > field+2 {
 		return fmt.Errorf("the far corner reads %d, want the field %d to within the blur's reach", corner, field)
+	}
+	// The same recorded stroke on a frame the recorder projected at the 2x step:
+	// a world pixel is two screen pixels, so the halo is twice as many screen
+	// pixels across and the reading twelve pixels out rises (§19, §16.3). The
+	// step reaches the layer through the terrain record, as it reaches the
+	// aircraft shadows; this fixture records no terrain, so it is set directly.
+	r.water.record.Scale = camera.ViewScaleDetail
+	defer func() { r.water.record.Scale = 0 }()
+	detail, err := read(true)
+	if err != nil {
+		return err
+	}
+	atDetail := func(x, y int) int { return int(detail[(y*w+x)*4]) }
+	if err := checkExactIndex("the stroke itself at the 2x step", detail, (32*w+64)*4, &pal, bright); err != nil {
+		return err
+	}
+	if d := atDetail(64, 44); d <= far {
+		return fmt.Errorf("twelve pixels from the stroke the 2x-step halo reads %d, want above the 1x halo's %d", d, far)
+	}
+	if d := atDetail(64, 38); d <= field+8 {
+		return fmt.Errorf("beside the stroke the 2x-step halo reads %d, want clearly above the field %d", d, field)
+	}
+	if dir := os.Getenv("NANOLATHE_GLOW_SHOTS"); dir != "" {
+		return writeGlowScaleCaptures(dir)
+	}
+	return nil
+}
+
+// writeGlowScaleCaptures writes the same world scene at the native step and at
+// the 2x step, for a review of the halo's size against the thing it comes from.
+// The 2x frame is the same world drawn from twice as many pixels — twice the
+// framebuffer, twice the stroke — so halving it should land on the 1x frame.
+// It is the review the battle benchmark cannot give cheaply: a capture route
+// frame at the player's start position has nothing emissive in it.
+func writeGlowScaleCaptures(dir string) error {
+	const field, bright = 20, 255
+	pal := fixturePalette()
+	for _, step := range []camera.ViewScale{camera.ViewScaleNative, camera.ViewScaleDetail} {
+		s := int32(step.Norm()) / 2
+		w, h := 192*s, 128*s
+		r, err := NewChecked(&pal, int(w), int(h))
+		if err != nil {
+			return err
+		}
+		r.SetGlow(true)
+		// The step reaches the layer through the terrain record; this fixture
+		// records no terrain, so it is set the way a terrain command would.
+		r.water.record.Scale = step
+		var list drawlist.List
+		list.RecordClear()
+		list.RecordWorld(drawlist.WorldSpace{Begin: true, Zoom: camera.ZoomOf(step), Step: step,
+			Viewport: drawlist.Rect{W: w, H: h}, RecordW: w, RecordH: h})
+		list.RecordFill(drawlist.Fill{Rect: drawlist.Rect{X: 0, Y: 0, W: w, H: h}, Index: field, Style: drawlist.FillSolid})
+		// One horizontal and one diagonal beam, in world pixels times the step.
+		list.RecordLine(drawlist.Line{X0: 24 * s, Y0: 40 * s, X1: 168 * s, Y1: 40 * s, Index: bright, Emissive: true})
+		list.RecordLine(drawlist.Line{X0: 48 * s, Y0: 108 * s, X1: 144 * s, Y1: 76 * s, Index: bright, Emissive: true})
+		list.RecordWorld(drawlist.WorldSpace{Begin: false, Zoom: camera.ZoomOf(step), Step: step,
+			Viewport: drawlist.Rect{W: w, H: h}, RecordW: w, RecordH: h})
+		list.RecordExpand()
+		img := r.Execute(&list, int(w), int(h))
+		if img == nil {
+			return fmt.Errorf("glow capture at step %v returned no image", step)
+		}
+		pixels := make([]byte, int(w)*int(h)*4)
+		img.ReadPixels(pixels)
+		f, err := os.Create(filepath.Join(dir, fmt.Sprintf("glow-step-%dx.png", s)))
+		if err != nil {
+			return err
+		}
+		err = png.Encode(f, &image.RGBA{Pix: pixels, Stride: int(w) * 4, Rect: image.Rect(0, 0, int(w), int(h))})
+		if closeErr := f.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

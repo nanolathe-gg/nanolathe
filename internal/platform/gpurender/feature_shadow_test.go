@@ -60,7 +60,7 @@ func checkFeatureShadowRouteGeometry() error {
 		class int
 	}{
 		{name: "opaque keyed", class: schedOpaque},
-		{name: "translucent ALP", trans: true, class: schedDest},
+		{name: "translucent ALP", trans: true, class: schedOpaque},
 	} {
 		r.sched.resetFrame(16, 12)
 		r.Sprite(drawlist.Sprite{Frame: f, X: 3, Y: 4, Kind: drawlist.BlitFeatureShadow, Trans: tc.trans})

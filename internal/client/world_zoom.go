@@ -202,9 +202,11 @@ func (c *Client) strategicViewAtZoom(z camera.Zoom) bool {
 // (§16.11).
 //
 // TODO(question): models are hard-cut at strategicModelCut rather than
-// cross-faded against the marker layer, because a model fade needs an alpha
-// lane on the model commit — the sceneOpModelCommit path of §13.3 writes an
-// opaque fragment. A cross-fade is a follow-up on that lane.
+// cross-faded against the marker layer, because a model fade needs a continuous
+// opacity lane on the model lane's commit — that fragment's alpha is the 2×2
+// coverage share, and its only opacity lane is the cloak's fixed half
+// (docs/DESIGN_GPU_RENDERER.md §22, §33). A cross-fade is a follow-up on that
+// lane.
 func (c *Client) markerAlpha() uint8 { return c.markerAlphaAtZoom(c.liveZoom()) }
 
 func (c *Client) markerAlphaAtZoom(z camera.Zoom) uint8 {

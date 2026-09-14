@@ -31,10 +31,39 @@ type waterReflections struct {
 	runs                                           []reflectionRun
 	source, height                                 *ebiten.Image
 	sourceShader, resolveShader, softResolveShader *ebiten.Shader
+	// The source pass is the only Enhanced shader that takes uniforms, and it
+	// draws once per run per target per frame. Building the options value and
+	// its uniform map inline allocated the map, the three boxed values and the
+	// vec4's backing array on every one of those draws. The options and the
+	// backing arrays are retained instead and their elements written in place:
+	// Ebitengine flattens the uniform values into its own scratch buffer inside
+	// the draw call and never keeps the caller's storage, so nothing here is
+	// read after the call returns (§13 "CPU/allocation policy").
+	sourceOpts  ebiten.DrawTrianglesShaderOptions
+	metadata    []float32
+	recordScale []float32
+	surface     []float32
 }
 
-// SetWaterReflections isolates this treatment for capture comparisons.
-func (r *Renderer) SetWaterReflections(on bool) { r.reflections.disabled = !on }
+// sourceOptions updates the retained uniform storage for this frame and returns
+// the retained options value. A scalar uniform accepts a one-element slice, so
+// every lane can be written in place rather than reboxed into an interface.
+func (s *waterReflections) sourceOptions(scale, ox, oy, invScale, time float32) *ebiten.DrawTrianglesShaderOptions {
+	if s.sourceOpts.Uniforms == nil {
+		s.metadata, s.recordScale, s.surface = make([]float32, 1), make([]float32, 1), make([]float32, 4)
+		s.sourceOpts.Uniforms = map[string]any{
+			"Metadata":    s.metadata,
+			"RecordScale": s.recordScale,
+			"Surface":     s.surface,
+		}
+	}
+	s.recordScale[0] = scale
+	s.surface[0], s.surface[1], s.surface[2], s.surface[3] = ox, oy, invScale, time
+	return &s.sourceOpts
+}
+
+// setWaterReflections is the second executor gate the Water switch drives (§30).
+func (r *Renderer) setWaterReflections(on bool) { r.reflections.disabled = !on }
 
 func (s *waterReflections) resetFrame() {
 	s.active = nil
@@ -85,7 +114,11 @@ func (r *Renderer) reflectModelFace(f *drawlist.ModelFace, ox, oy, scale, cx, cy
 		x := float32(s.region.bounds.Min.X) + (sx-float32(s.region.x))*.5
 		sourceY := float32(s.region.bounds.Min.Y) + (sy-float32(s.region.y))*.5
 		y := sourceY + height
-		s.verts = append(s.verts, ebiten.Vertex{DstX: x, DstY: y, SrcX: sx, SrcY: sy, ColorA: 1,
+		// A mapped face's colour lanes carry the subject's packed frame, which
+		// its key gradient would otherwise ride (model_shaders.go,
+		// modelQuadFrame): the parameters are subject-local.
+		s.verts = append(s.verts, ebiten.Vertex{DstX: x, DstY: y, SrcX: sx, SrcY: sy,
+			ColorR: ox - modelQuadLocalBias, ColorG: oy - modelQuadLocalBias, ColorA: 1,
 			Custom0: height, Custom1: r.modelDirect.laneKey(v.Key), Custom2: float32(quad), Custom3: 0})
 	}
 	if quad != 0 {
@@ -217,32 +250,35 @@ func (r *Renderer) drawWaterReflections(c drawlist.Terrain) {
 	if soften {
 		targets[1] = s.height
 	}
+	op := s.sourceOptions(scale, ox, oy, 1/effective, time)
 	for metadata, target := range targets {
 		if target == nil {
 			continue
 		}
+		s.metadata[0] = float32(metadata)
 		for _, run := range s.runs {
-			op := ebiten.DrawTrianglesShaderOptions{Uniforms: map[string]any{"Metadata": float32(metadata), "RecordScale": scale, "Surface": []float32{ox, oy, 1 / effective, time}}}
+			var imgs [4]*ebiten.Image
 			if run.page >= 0 {
 				pg := &r.modelDirect.pages[run.page]
-				op.Images = [4]*ebiten.Image{pg.colour, pg.key, nil, r.modelDirect.params.img}
+				imgs = [4]*ebiten.Image{pg.colour, pg.key, nil, r.modelDirect.params.img}
 			} else {
-				op.Images[0] = r.placeholderImage()
-				op.Images[1] = r.tables.atlas
+				imgs[0] = r.placeholderImage()
+				imgs[1] = r.tables.atlas
 				if run.frame != nil {
-					op.Images[0] = r.gafImageFor(run.frame)
+					imgs[0] = r.gafImageFor(run.frame)
 				}
 			}
-			if op.Images[0] == nil {
+			if imgs[0] == nil {
 				continue
 			}
-			for i := range op.Images {
-				if op.Images[i] == nil {
-					op.Images[i] = r.placeholderImage()
+			for i := range imgs {
+				if imgs[i] == nil {
+					imgs[i] = r.placeholderImage()
 				}
 			}
+			op.Images = imgs
 			r.beginPass(target)
-			target.DrawTrianglesShader32(s.transformed[run.first:run.first+run.count], s.indices[run.firstIndex:run.firstIndex+run.indexCount], s.sourceShader, &op)
+			target.DrawTrianglesShader32(s.transformed[run.first:run.first+run.count], s.indices[run.firstIndex:run.firstIndex+run.indexCount], s.sourceShader, op)
 			r.frameDraws++
 			r.recordSubmission(run.count, run.indexCount)
 		}
@@ -356,7 +392,7 @@ func Fragment(dst vec4, src vec2, color vec4, custom vec4) vec4 {
  if custom.w<0.5 {
   p:=floor(src-imageSrc0Origin())
   key:=floor(custom.y+dot(color.rg,p+vec2(.5)-(src-imageSrc0Origin())))
-  if custom.z>0.5 { key=floor(modelQuadLanes(custom.z,p).z) }
+  if custom.z>0.5 { key=floor(modelQuadLanes(custom.z,p-color.rg).z) }
   key=key-floor(key/256)*256
   stored:=floor(imageSrc1AtFromSrc0Pos(imageSrc0Origin()+p+vec2(.5)).r*255+.5)
   if key<stored { return vec4(0) }

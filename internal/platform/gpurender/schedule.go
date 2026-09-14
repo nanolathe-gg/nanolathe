@@ -73,7 +73,18 @@ import (
 //
 // Fog and Enhanced water read a snapshot; since §13.3 the ALP
 // families hand the device a premultiplied half-colour fragment and the row
-// families a scale, and the fixed-function blend reads the real framebuffer. A
+// families a scale, and the fixed-function blend reads the real framebuffer.
+//
+// The ALP fragment's blend is source-over, which is exactly the blend an opaque
+// write draws under, so the tinted strip and feature blit is not a destination
+// command at all: it compiles into the OPAQUE class with the scene shader's own
+// sceneOpTint (deststage.go, shaders.go). One run then carries the opaque writes
+// and the tinted ones together in record order, and neither the opaque-over-ALP
+// split nor the ALP-over-opaque one is taken. What stays in the destination
+// class is the row families, whose scale blend is different arithmetic, the
+// snapshot families, and the ALP commands that bind a shader of their own.
+//
+// A
 // blend is a read-modify-write of the attachment, and the device applies the
 // fragments of one pass in primitive order, which inside a phase's destination
 // batch is record order — runs are appended in record order and each run's
@@ -127,9 +138,13 @@ const (
 // placement asks with, and it never matches a destination owner.
 const (
 	schedStreamNone = iota
-	// schedStreamALP is the premultiplied half-colour fragment under source-over:
-	// BlitTinted, the translucent feature body and shadow, the model shadow
-	// commit and the strategic marker layer [03 §4.3.4](§13.3 "Blend classes").
+	// schedStreamALP is the premultiplied half-colour fragment under source-over
+	// for the commands that still bind a shader of their own: the model shadow
+	// commits, the strategic marker layer, the aircraft shadow, the scorch marks
+	// and the water reflection resolve [03 §4.3.4](§13.3 "Blend classes"). The
+	// tinted strip and feature blit shares this arithmetic but rides the OPAQUE
+	// stream, because it shares the opaque shader as well and one run is better
+	// than one stream.
 	schedStreamALP
 	// schedStreamRow is the row families' scale blend: FillLitRect, FillShadeRect,
 	// the lit point batch, the trail marks and the lit discs of §13.11

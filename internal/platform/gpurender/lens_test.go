@@ -18,12 +18,14 @@ func TestLensGeometryAppliesWorldTransformAndFramebufferClip(t *testing.T) {
 	r := &Renderer{w: 40, h: 40}
 	r.sched.setWorld(1, 2)
 	l := drawlist.Lens{X: 40, Y: 40, Scale: camera.ViewScaleDetail, Clip: drawlist.Rect{X: 20, Y: 20, W: 20, H: 20}}
-	x0, y0, x1, y1 := r.appendLens(l)
+	r.lens.read.reset()
+	r.appendLens(l)
 	if len(r.lens.verts) == 0 {
 		t.Fatal("lens emitted no clipped geometry")
 	}
-	if x0 < 20 || y0 < 20 || x1 > 22 || y1 > 22 {
-		t.Fatalf("inward capture bounds=%d,%d..%d,%d", x0, y0, x1, y1)
+	c := r.lens.read
+	if !c.any || c.x0 < 20 || c.y0 < 20 || c.x1 > 22 || c.y1 > 22 {
+		t.Fatalf("inward capture bounds=%d,%d..%d,%d", c.x0, c.y0, c.x1, c.y1)
 	}
 	for _, v := range r.lens.verts {
 		if v.DstX < 20 || v.DstY < 20 || v.DstX > 23 || v.DstY > 23 {

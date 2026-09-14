@@ -47,11 +47,9 @@ const (
 // The *ebiten.Image lives here, not on the client: it is a device resource,
 // and the client's business is the pixels it hands over.
 type app struct {
-	glintInputCaptured bool
-	glint              metalGlintControl
-	paused             pausedWorld
-	c                  *client.Client
-	img                *ebiten.Image
+	paused pausedWorld
+	c      *client.Client
+	img    *ebiten.Image
 	// mode selects the executor Draw presents through. gpu is the modern
 	// executor, built lazily on the first modern Draw so its device textures and
 	// offscreen never exist in a classic run. Both live here, off the client
@@ -199,7 +197,6 @@ func (a *app) updateBody() {
 	a.c.BumpPresentationEpoch()
 	a.syncWindowSize()
 	sample := readInput(a.scaledInputNow())
-	a.consumeMetalGlintShortcut(&sample)
 	if a.scrollPointScale > 0 {
 		sample.panX *= a.scrollPointScale
 		sample.panY *= a.scrollPointScale
@@ -402,6 +399,9 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 	// the recorder reads discards the pre-record rather than presenting a list
 	// recorded before it (§13.10).
 	a.c.BeginPresentationFrame()
+	// The one wall-clock sample this presented frame takes. The digest below
+	// compares it and a synchronous record consumes it, so the miss path records
+	// the frame the digest named instead of a second, later sample (§13.10).
 	tick16 := a.c.ResolveTickFraction()
 	// Present at the fraction the list was predicted for when the prediction
 	// held to within one present interval, and take the exact path when it did
@@ -409,9 +409,6 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 	// display the window is actually running on.
 	// The interval is the one the outstanding prediction was made over, so a
 	// frame that arrived late cannot widen the tolerance by its own lateness.
-	if a.glint.update(a.gpu) {
-		a.paused.clear()
-	}
 	if !a.drawPaused(screen, width, height) {
 		tolerance := fractionTolerance(a.pipe.tolerancePeriod(a.presentInterval, ebiten.ActualFPS()))
 		list, hit := a.c.TakePreRecord(a.c.PresentationDigest(), tolerance)
@@ -456,6 +453,10 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 		// twice and none is dropped.
 		a.updateBody()
 		sampledAt = time.Now()
+		// This frame has already been presented; the body may have released a
+		// tick, so the prediction below needs a base taken after it. It is the
+		// next frame's sample, not a second one for this frame — the fraction
+		// the presented list was recorded with is settled and untouched by it.
 		tick16 = a.c.ResolveTickFraction()
 	}
 	// The next Draw sits one present period after this one began; the tick

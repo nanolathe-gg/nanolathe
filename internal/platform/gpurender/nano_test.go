@@ -105,7 +105,7 @@ func checkNanoDevicePixels() error {
 	list.RecordWorld(drawlist.WorldSpace{}) // resolve glow before the interface
 	list.RecordExpand()
 	read := func(light, glow bool) []byte {
-		r.SetBattleLighting(light)
+		r.setBattleLighting(light)
 		r.SetGlow(glow)
 		out := r.Execute(&list, w, h)
 		p := make([]byte, w*h*4)

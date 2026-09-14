@@ -354,6 +354,26 @@ would report their targets as unused. A retail diagnostic string that trips
 `ST1005` carries `//lint:ignore ST1005 retail text` with its citation. `internal/testsupport.RetailRoot` is
 the single place a test consults those variables and skips.
 
+**GPU device fixtures.** `tools/check-retail` finishes with the modern
+executor's authored pixel fixtures — the only pixel-level lock on the model
+lane, the pass scheduler and the Enhanced effect layers — run as a separate
+`go test ./internal/platform/gpurender -run '^TestDeviceFixtureLoop$'` with
+`NANOLATHE_GPU_DEVICE_TEST=1`. They need a real graphics device but no retail
+assets (DESIGN_GPU_RENDERER C-G10 and its §6). The separate invocation is
+required, not cosmetic: Ebitengine allows one `RunGame` per process and rejects
+image allocation after it returns, so the package's `TestMain` hosts every
+device check in one hidden loop, and the fixtures that build their own renderer
+skip once that loop has finished. Setting the variable for the whole-tree run
+would therefore silently remove those fixtures from the gate. `TestMain` runs
+the loop whatever `-run` selects, and the package's other device tests report
+the same single result, so the one filtered invocation exercises all of them.
+The gate detects a window server — an Aqua session on macOS,
+`$DISPLAY`/`$WAYLAND_DISPLAY` elsewhere — and on a headless host prints
+`GPU device fixtures: SKIPPED` rather than folding an unrun fixture into `OK`.
+Renderer work is merged from a host with a display. The invocation inherits the
+gate's exported retail root, so the few device fixtures that render installed
+art opt in there; run by hand without it they return early and assert nothing.
+
 **Partial state fingerprint.** The headless report retains the JSON key
 `state_hash`; its value now starts with `partial-v1:`. This diagnostic covers
 the explicit subset in DESIGN_RUNTIME_DETERMINISM §4. Equal values do not

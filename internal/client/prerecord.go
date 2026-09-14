@@ -150,6 +150,16 @@ type preRecorder struct {
 	joined  bool
 	// recorded is the digest the in-flight (or waiting) list was recorded for.
 	recorded PresentationInputs
+	// hostFraction records that this client's host settles the blend fraction
+	// itself, which every pipeline host does: the Draw resolves one producer
+	// sample before it builds the digest, and a launch installs its prediction
+	// in place of it. From then on the recording pass consumes c.tickFraction16
+	// as an input and never reads the producer, so the list is recorded for the
+	// instant the digest names rather than for a later wall-clock sample
+	// (§13.10). A client that never uses the pipeline leaves it false and
+	// resolves inside the record exactly as before. Written on the game
+	// goroutine only; the worker reads it and never writes it.
+	hostFraction bool
 	// nanos is the wall time the last completed pre-record spent on its
 	// goroutine. Written before the done is sent, read after it is received.
 	nanos int64
@@ -267,9 +277,15 @@ func (c *Client) StartPreRecord(tickFraction16, cameraFraction16 int32, cameraFr
 		c.pre.done = make(chan struct{})
 		go c.servePreRecord()
 	}
-	// Install the predicted fractions. The Draw that consumes the list settles
-	// its own and the digest comparison decides; a miss simply re-records with
-	// whatever the settled values then are.
+	// Install the predicted fractions. They are the recording pass's input, not
+	// a hint it may re-derive: the worker blends with exactly these two numbers,
+	// and the digest below is taken from them, so a hit presents the list the
+	// digest describes. Re-reading the wall-clock producer inside the pass would
+	// record the world at the launch instant while the camera used the
+	// prediction, which is the world a present interval behind its camera
+	// (§13.10). The Draw that consumes the list settles its own fractions and
+	// the digest comparison decides; a miss simply re-records with those.
+	c.pre.hostFraction = true
 	c.tickFraction16 = tickFraction16
 	c.cameraFraction16 = cameraFraction16
 	c.cameraFractionSet = cameraFractionSet

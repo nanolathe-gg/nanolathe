@@ -17,7 +17,7 @@ func TestModelMaterialControlsAndPacking(t *testing.T) {
 	if r.modelFinishColor(&f, base) != base {
 		t.Fatal("disabled materials changed glint")
 	}
-	r.SetMaterials(true)
+	r.setMaterials(true)
 	for material := uint8(0); material <= 3; material++ {
 		f.Material = material
 		for low := 0; low < 65536; low++ {
@@ -61,7 +61,7 @@ func checkMaterialDevicePixels() error {
 	if err != nil {
 		return err
 	}
-	r.SetMetalGlint(true)
+	r.setMetalGlint(true)
 	var list drawlist.List
 	list.RecordClear()
 	list.RecordFill(drawlist.Fill{Rect: drawlist.Rect{W: w, H: h}, Index: 25})
@@ -101,7 +101,7 @@ func checkMaterialDevicePixels() error {
 	}
 	list.RecordExpand()
 	read := func(on bool) ([]byte, ModelStats) {
-		r.SetMaterials(on)
+		r.setMaterials(on)
 		pixels := make([]byte, w*h*4)
 		r.Execute(&list, w, h).ReadPixels(pixels)
 		return pixels, r.ModelStats()

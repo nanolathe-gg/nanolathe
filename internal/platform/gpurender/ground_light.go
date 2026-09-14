@@ -39,16 +39,16 @@ func explosionGroundScale(age float32, known bool) float32 {
 	return peak * tail * tail
 }
 
-// SetExplosionGroundFlash compares the short terrain flash with the earlier
-// full-animation ground light. It never changes model lighting (§31.6).
-func (r *Renderer) SetExplosionGroundFlash(on bool) { r.ground.legacyExplosion = !on }
-
 type groundLighting struct {
-	legacyExplosion bool
-	shader          *ebiten.Shader
-	verts           []ebiten.Vertex
-	indices         []uint32
-	opts            ebiten.DrawTrianglesShaderOptions
+	shader  *ebiten.Shader
+	verts   []ebiten.Vertex
+	indices []uint32
+	opts    ebiten.DrawTrianglesShaderOptions
+	// read is the union of the discs' clipped quads. The shader samples the
+	// fragment's own pixel and nothing else, so the quads are exactly the
+	// region the copy has to carry: a couple of explosions no longer cost a
+	// full-frame blit (readcopy.go).
+	read readRect
 }
 
 // drawGroundLighting runs at the end of the terrain pass, after the water
@@ -68,19 +68,9 @@ func (r *Renderer) drawGroundLighting() {
 	if len(g.indices) == 0 {
 		return
 	}
-	// The batch reads the composite it writes, so the terrain has to be on the
-	// composite first and the read has to come from a copy, exactly as the
-	// refraction batch does (distortion.go).
-	r.submitSchedule()
-	r.copyComposite(r.surfaces[1], r.surfaces[0], 0, 0, r.w, r.h)
-	g.opts.Images = [4]*ebiten.Image{r.surfaces[1]}
 	// Additive, so overlapping pools sum: the composite becomes
 	// base × (1 + sum of the discs' contributions), clamped per channel.
-	g.opts.Blend = ebiten.BlendLighter
-	r.beginPass(r.surfaces[0])
-	r.recordSubmission(len(g.verts), len(g.indices))
-	r.surfaces[0].DrawTrianglesShader32(g.verts, g.indices, g.shader, &g.opts)
-	r.frameDraws++
+	r.drawOverComposite(g.read, g.verts, g.indices, g.shader, &g.opts, ebiten.BlendLighter)
 }
 
 // appendGroundLights builds the frame's clipped discs. A light whose disc falls
@@ -90,6 +80,7 @@ func (r *Renderer) appendGroundLights() {
 	l := &r.lighting
 	g := &r.ground
 	g.verts, g.indices = g.verts[:0], g.indices[:0]
+	g.read.reset()
 	// The world transform of §16.3 applies exactly once, here, as it does for
 	// the distortion batch: the lights are in record coordinates and the quads
 	// this pass submits are device geometry.
@@ -97,7 +88,7 @@ func (r *Renderer) appendGroundLights() {
 	for i := range l.lights {
 		light := &l.lights[i]
 		gain := float32(1)
-		if light.kind == lightExplosion && !g.legacyExplosion {
+		if light.kind == lightExplosion {
 			gain = explosionGroundScale(light.age, light.ageKnown)
 			if gain <= 0 {
 				continue
@@ -133,6 +124,7 @@ func (r *Renderer) appendGroundLights() {
 				Custom0: gx, Custom1: gy, Custom2: height, Custom3: radius})
 		}
 		g.indices = append(g.indices, base, base+1, base+2, base+1, base+2, base+3)
+		g.read.add(x0, y0, x1, y1)
 		r.modelStats.GroundLights++
 	}
 }

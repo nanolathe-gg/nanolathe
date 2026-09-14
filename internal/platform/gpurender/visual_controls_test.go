@@ -8,67 +8,84 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 )
 
-// The player's Enhanced effect switches (GPU design §30). These lock the
-// mapping onto the existing per-family controls, the environment overrides and
-// the unchanged-selection early return; none of it is retail behaviour.
-func TestSetEffectsMapsFamiliesAndHonoursEnvOverrides(t *testing.T) {
-	r := &Renderer{effectEnv: effectEnv{materials: true, scorch: true, metalGlint: true}}
-	r.SetEffects(drawlist.AllEffects())
-	if r.water.disabled || r.reflections.disabled || r.lighting.disabled ||
-		r.distortion.blastDisabled || r.heat.disabled ||
-		!r.metalGlint || !r.materialsEnabled || !r.scorchEnabled {
-		t.Fatalf("all effects on left a family off: %+v", r.Effects())
+// families reports each executor gate's state, in the order of the controls
+// table of GPU design §30.
+func families(r *Renderer) map[string]bool {
+	return map[string]bool{
+		"water":       !r.water.disabled,
+		"reflections": !r.reflections.disabled,
+		"lighting":    !r.lighting.disabled,
+		"glint":       r.metalGlint,
+		"materials":   r.materialsEnabled,
+		"blast":       !r.distortion.blastDisabled,
+		"heat":        !r.heat.disabled,
+		"scorch":      r.scorchEnabled,
 	}
+}
 
+// The player's five Enhanced switches are the whole executor surface (§30):
+// every family is on exactly when its switch is, with no second control and no
+// environment override beside it. None of this is retail behaviour.
+func TestSetEffectsIsTheOnlyGate(t *testing.T) {
+	r := &Renderer{}
+	r.SetEffects(drawlist.AllEffects())
+	for name, on := range families(r) {
+		if !on {
+			t.Fatalf("all effects on left %s off", name)
+		}
+	}
 	off := drawlist.Effects{}
 	r.SetEffects(off)
-	if !r.water.disabled || !r.reflections.disabled || !r.lighting.disabled ||
-		!r.distortion.blastDisabled || !r.heat.disabled ||
-		r.metalGlint || r.materialsEnabled || r.scorchEnabled {
-		t.Fatal("all effects off left a family on")
+	for name, on := range families(r) {
+		if on {
+			t.Fatalf("all effects off left %s on", name)
+		}
 	}
 	if r.Effects() != off {
 		t.Fatalf("Effects() = %+v after an all-off selection", r.Effects())
 	}
-
-	// An environment override keeps its family off whatever the player selects.
-	r = &Renderer{effectEnv: effectEnv{materials: false, scorch: false, metalGlint: false}}
-	r.SetEffects(drawlist.AllEffects())
-	if r.metalGlint || r.materialsEnabled || r.scorchEnabled {
-		t.Fatal("an environment override was overridden by the player switch")
-	}
-	// The other families have no override and follow the selection.
-	if r.water.disabled || r.lighting.disabled || r.distortion.blastDisabled {
-		t.Fatal("an unoverridden family followed the environment")
-	}
 }
 
-// SetEffects runs once per presented frame, so an unchanged selection must not
-// overwrite the host's Ctrl+Shift+G glint toggle between setting changes.
-func TestSetEffectsLeavesComparisonControlsAloneWhenUnchanged(t *testing.T) {
-	r := &Renderer{effectEnv: effectEnv{materials: true, scorch: true, metalGlint: true}}
-	all := drawlist.AllEffects()
-	r.SetEffects(all)
-	r.SetMetalGlint(false)
-	for range 3 {
-		r.SetEffects(all)
-	}
-	if r.MetalGlint() {
-		t.Fatal("a repeated identical selection revived the glint")
-	}
-	// A real change re-applies every family, including the one the shortcut
-	// had turned off.
-	changed := all
-	changed.Water = false
-	r.SetEffects(changed)
-	if !r.MetalGlint() || !r.water.disabled {
-		t.Fatalf("a changed selection did not re-apply: glint %v water disabled %v", r.MetalGlint(), r.water.disabled)
+// Each switch owns exactly the families the controls table gives it, so turning
+// one off cannot silently take another with it.
+func TestEachSwitchOwnsItsFamilies(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		clear func(*drawlist.Effects)
+		off   []string
+	}{
+		{"water", func(e *drawlist.Effects) { e.Water = false }, []string{"water", "reflections"}},
+		{"lighting", func(e *drawlist.Effects) { e.Lighting = false }, []string{"lighting"}},
+		{"finish", func(e *drawlist.Effects) { e.Finish = false }, []string{"glint", "materials"}},
+		{"distortion", func(e *drawlist.Effects) { e.Distortion = false }, []string{"blast", "heat"}},
+		{"marks", func(e *drawlist.Effects) { e.Marks = false }, []string{"scorch"}},
+	} {
+		e := drawlist.AllEffects()
+		tc.clear(&e)
+		r := &Renderer{}
+		r.SetEffects(e)
+		expected := map[string]bool{}
+		for _, f := range tc.off {
+			expected[f] = true
+		}
+		for name, on := range families(r) {
+			if on == expected[name] {
+				t.Fatalf("%s off: %s on=%v", tc.name, name, on)
+			}
+		}
+		// The switch turned back on restores every family it owns.
+		r.SetEffects(drawlist.AllEffects())
+		for name, on := range families(r) {
+			if !on {
+				t.Fatalf("%s back on left %s off", tc.name, name)
+			}
+		}
 	}
 }
 
 // A source reset retires images, never the applied selection.
 func TestSetEffectsSurvivesSourceReset(t *testing.T) {
-	r := &Renderer{effectEnv: effectEnv{materials: true, scorch: true, metalGlint: true}}
+	r := &Renderer{}
 	off := drawlist.Effects{Lighting: true}
 	r.SetEffects(off)
 	r.resetSources(func(*ebiten.Image) {})

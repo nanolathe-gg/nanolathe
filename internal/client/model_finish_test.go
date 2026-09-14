@@ -38,10 +38,57 @@ func TestModelMaterialExplicitArtAndPacket(t *testing.T) {
 }
 
 // restoreMaterialTable puts the table in force back after a test replaces it.
+// Putting it back is an install like any other, so the generation advances too;
+// otherwise a byte cached under the replacement's generation would survive the
+// restore and answer for a table that is no longer installed.
 func restoreMaterialTable(t *testing.T) {
 	t.Helper()
 	before := materialTable.Load()
-	t.Cleanup(func() { materialTable.Store(before) })
+	t.Cleanup(func() {
+		materialTable.Store(before)
+		materialGeneration.Add(1)
+	})
+}
+
+// A resolved texture reference carries its finish so the per-face compose path
+// never lowercases a texture name (DESIGN_GPU_RENDERER §29.1). The cached byte
+// must agree with the table in force for every spelling, and an install must
+// invalidate it.
+func TestTextureReferenceCachesMaterialAnnotation(t *testing.T) {
+	restoreMaterialTable(t)
+	c := testModelTextureClient()
+	names := []string{"CoLoRsLt", "metal3a", "MeTaL3C", "CAMOB3", "bluenoise4", "MySheet", "unknown", ""}
+	refs := make([]texRef, len(names))
+	for i, name := range names {
+		refs[i], _ = c.resolveModelTexture(name)
+		if got, want := refs[i].materialAnnotation(name), modelTextureMaterial(name); got != want {
+			t.Fatalf("cached material for %q = %d, want %d", name, got, want)
+		}
+	}
+
+	// An override replaces the table whole. Every byte cached above was read
+	// from the previous one, so every one of them must be resolved again.
+	authored := []byte("[materials]\n\t{\n\tmetal3a=paint;\n\tMYSHEET=metal;\n\t}\n")
+	if err := SetMaterialTable("test", authored, "test"); err != nil {
+		t.Fatal(err)
+	}
+	for i, name := range names {
+		if got, want := refs[i].materialAnnotation(name), modelTextureMaterial(name); got != want {
+			t.Fatalf("after the install, stale cached material for %q = %d, want %d", name, got, want)
+		}
+	}
+	if got := refs[1].materialAnnotation(names[1]); got != drawlist.ModelMaterialPaint {
+		t.Fatalf("metal3a did not follow the install: %d", got)
+	}
+	if got := refs[0].materialAnnotation(names[0]); got != drawlist.ModelMaterialDefault {
+		t.Fatalf("colorslt survived a replacement that dropped it: %d", got)
+	}
+
+	// A reference resolved after the install caches the new table's byte.
+	fresh, _ := c.resolveModelTexture("MySheet")
+	if fresh.material != drawlist.ModelMaterialMetal || fresh.materialAnnotation("MySheet") != drawlist.ModelMaterialMetal {
+		t.Fatalf("reference resolved under the override cached %d", fresh.material)
+	}
 }
 
 // The embedded annotation is the whole table: every classification the renderer

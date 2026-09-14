@@ -9,6 +9,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/model"
 	"github.com/nanolathe-gg/nanolathe/internal/palette"
 	presentationrender "github.com/nanolathe-gg/nanolathe/internal/render"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // modelBodySerials numbers retained body objects for the modern executor's
@@ -86,6 +87,117 @@ type cachedModelBody struct {
 	shadowPose     []model.PieceState
 	shadowRevision uint64
 	shadowValid    bool
+	// A 3DO feature's retained lane (featureGeometry) is gated on these two
+	// rather than on the unit fields above: a feature publishes no cache
+	// revisions, no construction fraction and no orientation cache, and its
+	// pose is the corpse's folded orientation triple, compared whole.
+	featureInputs featureBodyInputs
+	featurePose   []model.PieceState
+	// featureSeenTick is the committed tick the feature was last recorded on;
+	// pruneCachedModelBodies drops a feature body unseen for featureRetainTicks.
+	featureSeenTick uint32
+}
+
+// featureRetainTicks is how long a 3DO feature's retained lane outlives its
+// last recording — one simulated second — so a wreck that scrolls out of view
+// and back inside it is rebased, not re-projected, and one that is gone or
+// stays out of view frees its arenas. Presentation retention only.
+const featureRetainTicks = 30
+
+// featureBodyID is the cachedModelBodies key of a 3DO feature's retained body:
+// its publication identity when it has one, else its map position, because one
+// feature stands at a cell and a feature never moves off its anchor while it
+// stands [05 "Feature instance and terrain cell"] (a sinking feature keeps
+// its X and Z). Unit and feature publication identities are separate
+// counters, so the feature's is marked in the top bit, and a position key in
+// the top two, to keep the three from ever naming one entry;
+// pruneCachedModelBodies ages the marked entries out. Sharing a key between
+// two features that stood at one cell in turn is harmless: the retained lane
+// is a pure function of the inputs featureGeometry compares, so a different
+// corpse re-projects and an identical one reuses faces that are identical.
+func featureBodyID(id uint64, x, z numeric.Fixed) uint64 {
+	if id != 0 {
+		return id | featureBodyMark
+	}
+	return uint64(uint32(x.Raw()))<<32 | uint64(uint32(z.Raw())) | featureBodyMark | 1<<62
+}
+
+// featureBodyMark is the top bit every feature body key carries.
+const featureBodyMark = uint64(1) << 63
+
+// featureBodyInputs are the inputs of a 3DO feature's projection other than
+// its pose (featureGeometry): the model, the team colour of its LOGOS faces,
+// the presentation inputs the unit lane memoizes on, and the texture index
+// generation its resolution table was built under.
+type featureBodyInputs struct {
+	model     string
+	teamColor teamColor
+	inputs    cachedBodyInputs
+	texGen    uint64
+}
+
+func (c *Client) featureBodyInputs(draw *presentationrender.UnitDraw, selector teamColor) featureBodyInputs {
+	in := featureBodyInputs{teamColor: selector, inputs: c.cachedBodyInputs(draw)}
+	if c != nil {
+		in.texGen = c.texGen
+	}
+	if draw != nil && draw.Model != nil {
+		in.model = draw.Model.Name
+	}
+	return in
+}
+
+// modelHasAnimatedTexture reports whether any primitive of m resolves to an
+// animated texture sequence, whose frame the per-face walk advances by the
+// feature's cursor: such a model is projected every frame rather than
+// retained. The per-model table answers when it exists; otherwise the
+// primitives are resolved here, once per rebuild decision.
+func (c *Client) modelHasAnimatedTexture(m *model.Model) bool {
+	if c == nil || m == nil {
+		return false
+	}
+	if refs := c.modelTexRefs(m); refs != nil {
+		for i := range refs.refs {
+			for j := range refs.refs[i] {
+				if refs.ok[i][j] && refs.refs[i][j].kind == texAnimated {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	for i := range m.Pieces {
+		for _, pr := range m.Pieces[i].Primitives {
+			if ref, ok := c.resolveModelTexture(pr.TextureName); ok && ref.kind == texAnimated {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// replaceFeatureGeometry retains a 3DO feature's projected faces beside its
+// identity, as replaceCachedGeometry does a unit's cached lane: new faces are
+// a new revision, so the executor never replays a lane the recorder has
+// re-projected (§13.12).
+func (c *Client) replaceFeatureGeometry(key uint64, draw *presentationrender.UnitDraw, in featureBodyInputs, geometry *drawlist.ModelGeometry) *cachedModelBody {
+	if c.cachedModelBodies == nil {
+		c.cachedModelBodies = make(map[uint64]*cachedModelBody)
+	}
+	body := c.cachedModelBodies[key]
+	if body == nil {
+		body = &cachedModelBody{}
+		c.cachedModelBodies[key] = body
+	}
+	body.geometry = body.retainGeometry(geometry)
+	body.takeSerial()
+	body.geometryRevision++
+	body.model, body.structure, body.teamColor = in.model, draw.Structure, in.teamColor
+	body.shaded, body.scale, body.palette = in.inputs.shaded, in.inputs.scale, in.inputs.palette
+	body.geometrySupersampled = in.inputs.geometrySupersampled
+	body.featureInputs = in
+	body.featurePose = append(body.featurePose[:0], draw.PieceStates...)
+	return body
 }
 
 // cacheKey is the identity a rebased packet carries for the modern executor's
@@ -385,6 +497,12 @@ func (c *Client) cachedBody(id uint64) *cachedModelBody {
 // slot: the producer changes it when a slot receives a replacement object.
 // Keeping both body and orientation entries on that identity prevents a
 // departed subject from lending either to a later subject [I6].
+//
+// A 3DO feature's body (featureBodyID) is pruned by age instead: the
+// committed feature set is thousands of sprites a frame, and a per-frame set
+// over it was a measurable allocation, while the retained lane is a pure
+// function of inputs the next recording compares, so a stale entry can never
+// draw a departed feature — it can only cost its arenas until it ages out.
 func (c *Client) pruneCachedModelBodies(cur *frame.Frame) {
 	if c == nil {
 		return
@@ -400,7 +518,13 @@ func (c *Client) pruneCachedModelBodies(cur *frame.Frame) {
 			live[id] = struct{}{}
 		}
 	}
-	for id := range c.cachedModelBodies {
+	for id, body := range c.cachedModelBodies {
+		if id&featureBodyMark != 0 {
+			if cur.Tick > body.featureSeenTick+featureRetainTicks {
+				delete(c.cachedModelBodies, id)
+			}
+			continue
+		}
 		if _, ok := live[id]; !ok {
 			delete(c.cachedModelBodies, id)
 		}

@@ -8,6 +8,10 @@
 # Point it at an install with $NANOLATHE_RETAIL_ASSETS, or let it default to
 # ~/TotalAnnihilation. An unreadable root fails loudly rather than skipping,
 # so a typo cannot masquerade as a green run.
+#
+# It also runs the modern executor's authored device pixel fixtures when the
+# session has a window server; without one it says SKIPPED, because a missing
+# graphics device is a property of the machine, not of the change.
 set -e
 
 if [ -z "${NANOLATHE_RETAIL_ASSETS:-}" ] && [ -n "${NANOLATHE_TA_ROOT:-}" ]; then
@@ -36,4 +40,47 @@ echo "==> go test (retail corpus, tagged)"
 # Bounded for the same reason as tools/check, and it matters more here: each
 # package binary that opts in holds a compiled retail catalog.
 go test -tags retail -p "${NANOLATHE_TEST_P:-4}" ./... -count=1
+
+# The modern executor's authored pixel fixtures are the only pixel-level lock on
+# the model lane, the pass scheduler and the Enhanced effect layers, and they can
+# only run against a real graphics device (C-G10). Most need no retail assets,
+# but this is the tier that runs on a developer machine, so this is where they
+# belong — and the run inherits the exported retail root above, so the few
+# fixtures that render the installed art opt themselves in here rather than
+# returning early as they do on a bare device run.
+#
+# They run as their OWN `go test` invocation, deliberately. Ebitengine allows one
+# RunGame per process and rejects image allocation once it returns, so the
+# package's TestMain hosts every device check inside a single hidden loop and the
+# fixtures that build a renderer afterwards skip themselves. Setting the variable
+# for the main run above would therefore silently eat the scheduler and atlas
+# fixtures that the untagged run is supposed to cover. A separate process keeps
+# both sets honest: the run above sees no device loop, this one is nothing else.
+#
+# -run selects the loop's reporter; TestMain runs the loop regardless of the
+# filter, and every other device test in the package reports the same single
+# result, so this one invocation covers all of them.
+echo "==> GPU device fixtures (modern executor, real device)"
+device_display_available() {
+	case "$(uname -s)" in
+	Darwin)
+		# A headless session (ssh, a launchd daemon) reports something other
+		# than Aqua; only an Aqua session has a window server to open on.
+		[ "$(launchctl managername 2>/dev/null)" = "Aqua" ]
+		;;
+	*)
+		[ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]
+		;;
+	esac
+}
+if device_display_available; then
+	NANOLATHE_GPU_DEVICE_TEST=1 go test -tags retail ./internal/platform/gpurender \
+		-run '^TestDeviceFixtureLoop$' -count=1
+	echo "==> GPU device fixtures: PASSED"
+else
+	# Say SKIPPED, not OK. A gate that reports a fixture it never ran as passing
+	# is worse than one that does not run it at all.
+	echo "==> GPU device fixtures: SKIPPED (no window server on this session; run tools/check-retail on a machine with a display before merging renderer work)"
+fi
+
 echo "OK"

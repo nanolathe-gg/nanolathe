@@ -77,7 +77,7 @@ func checkScorchDevicePixels() error {
 	}
 
 	read := func(l *drawlist.List, enabled bool) ([]byte, ModelStats) {
-		r.SetScorch(enabled)
+		r.setScorch(enabled)
 		p := make([]byte, w*h*4)
 		r.Execute(l, w, h).ReadPixels(p)
 		return p, r.ModelStats()
@@ -96,7 +96,7 @@ func checkScorchDevicePixels() error {
 	for _, waterEnabled := range []bool{true, false} {
 		// Clearing source caches exercises mask preparation without earlier water draws.
 		r.ResetSources()
-		r.SetWaterEffects(waterEnabled)
+		r.setWaterEffects(waterEnabled)
 		for _, zoom := range []camera.Zoom{camera.ZoomUnit, camera.ZoomUnit * 3 / 4} {
 			early := makeList(8, zoom)
 			base, bs := read(&early, false)
@@ -189,7 +189,7 @@ func checkScorchDevicePixels() error {
 	if !bytes.Equal(detachedBase, detachedPixels) || detachedStats.ScorchQuads != 0 {
 		return fmt.Errorf("scorch survived terrain source removal")
 	}
-	if dir := os.Getenv("NANOLATHE_SCORCH_SHOTS"); dir != "" {
+	if dir := os.Getenv("NANOLATHE_MARKS_SHOTS"); dir != "" {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return err
 		}
