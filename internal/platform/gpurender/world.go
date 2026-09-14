@@ -11,12 +11,12 @@ import (
 // One affine transform does the whole of it. The recorder emits the world at an
 // integer step; between the world region's two boundary markers the scheduler
 // scales every placed rectangle and every appended vertex by the live factor
-// over that step, about the surface origin, and clips against the record extent
-// rather than against the framebuffer. Outside the region — the chrome, the
+// over that step, then adds the fractional camera offset. Clipping uses the
+// record extent rather than the framebuffer. Outside the region — the chrome, the
 // cursor, the strategic markers — nothing changes, which is why the HUD stays
 // at its authored pixel size at every factor.
 //
-// At a rest factor the scale is one, the record extent IS the framebuffer, and
+// At a rest factor with no camera fraction the scale is one, and
 // every device call this package makes is the one it made before §16. That is
 // what keeps the §6 parity gate exact at 1x and 2x.
 
@@ -49,9 +49,12 @@ func (r *Renderer) World(w drawlist.WorldSpace) {
 	if int(w.RecordH) > r.worldH {
 		r.worldH = int(w.RecordH)
 	}
-	// The two factors are exact small integers in the same units, so the scale
-	// is an exact rational and a rest step disarms the transform outright.
 	r.sched.setWorld(int32(w.Zoom), int32(camera.ZoomOf(w.Step)))
+	k := r.sched.worldScale
+	if w.Factor > 0 {
+		k = w.Factor / (float32(camera.ZoomOf(w.Step)) / float32(camera.ZoomUnit))
+	}
+	r.sched.setWorldTransform(k, w.OffsetX, w.OffsetY)
 }
 
 // clipW and clipH are the extent every family clips a world command against:

@@ -57,17 +57,24 @@ func TestTacticalRangeHeldKeyAndFocus(t *testing.T) {
 	in := input.NewState()
 	in.Kbd.SetKey(input.KeyAlt, true)
 	b.updateTacticalRangeInput(in, true)
+	if b.tacticalRangesHeld {
+		t.Fatal("Alt enabled the Shift overlay")
+	}
+	in.Kbd.SetKey(input.KeyAlt, false)
+	in.Kbd.SetKey(input.KeyShift, true)
+	b.updateTacticalRangeInput(in, true)
 	if !b.tacticalRangesHeld {
-		t.Fatal("held Alt was ignored")
+		t.Fatal("held Shift was ignored")
 	}
 	b.updateTacticalRangeInput(in, false)
 	if b.tacticalRangesHeld {
-		t.Fatal("focus loss retained Alt")
+		t.Fatal("focus loss retained Shift")
 	}
-	in.Kbd.SetKey(input.KeyAlt, false)
+	in.Kbd.SetKey(input.KeyAlt, true)
+	in.Kbd.SetKey(input.KeyShift, false)
 	b.updateTacticalRangeInput(in, true)
 	if b.tacticalRangesHeld {
-		t.Fatal("release retained Alt")
+		t.Fatal("release retained Shift")
 	}
 }
 

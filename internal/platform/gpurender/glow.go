@@ -213,8 +213,8 @@ func (r *Renderer) glowLine(l drawlist.Line) {
 		return
 	}
 	s := &r.sched
-	x0, y0 := s.txf(float32(l.X0)+0.5), s.txf(float32(l.Y0)+0.5)
-	x1, y1 := s.txf(float32(l.X1)+0.5), s.txf(float32(l.Y1)+0.5)
+	x0, y0 := s.txx(float32(l.X0)+0.5), s.txy(float32(l.Y0)+0.5)
+	x1, y1 := s.txx(float32(l.X1)+0.5), s.txy(float32(l.Y1)+0.5)
 	hw := float32(glowLineWidth) * 0.5 * s.txf(1)
 	if hw < 1 {
 		hw = 1
@@ -250,7 +250,7 @@ func (r *Renderer) glowSprite(f *formats.GAFFrame, x, y, clipX, clipY, clipW, cl
 	imgs := r.sceneImages(e)
 	imgs[1] = r.tables.atlas
 	r.glow.rect(imgs,
-		s.txf(float32(x+col0)), s.txf(float32(y+row0)), s.txf(float32(x+col1)), s.txf(float32(y+row1)),
+		s.txx(float32(x+col0)), s.txy(float32(y+row0)), s.txx(float32(x+col1)), s.txy(float32(y+row1)),
 		float32(int(e.x)+col0), float32(int(e.y)+row0), float32(int(e.x)+col1), float32(int(e.y)+row1),
 		[4]float32{0, gain * glowSpriteGain * glowGain, glowThreshold, 0}, [4]float32{0, 0, 0, glowOpKeyed})
 }
@@ -264,7 +264,7 @@ func (r *Renderer) glowFlash(cx0, cy0, cx1, cy1 int, sx0, sy0, sx1, sy1 float32)
 	}
 	s := &r.sched
 	r.glow.rect([4]*ebiten.Image{0: s.flash.img, 1: r.tables.atlas, 2: r.surfaces[0]},
-		s.txf(float32(cx0)), s.txf(float32(cy0)), s.txf(float32(cx1)), s.txf(float32(cy1)),
+		s.txx(float32(cx0)), s.txy(float32(cy0)), s.txx(float32(cx1)), s.txy(float32(cy1)),
 		sx0, sy0, sx1, sy1,
 		[4]float32{0, glowLightGain * glowGain, 0, 0}, [4]float32{0, 0, 0, glowOpLight})
 }
@@ -278,8 +278,8 @@ func (r *Renderer) glowHalo(cx0, cy0, cx1, cy1 int, high, lx0, ly0, lx1, ly1, r2
 	}
 	s := &r.sched
 	r.glow.quad([4]*ebiten.Image{1: r.tables.atlas, 2: r.surfaces[0]},
-		[4]float32{s.txf(float32(cx0)), s.txf(float32(cx1)), s.txf(float32(cx0)), s.txf(float32(cx1))},
-		[4]float32{s.txf(float32(cy0)), s.txf(float32(cy0)), s.txf(float32(cy1)), s.txf(float32(cy1))},
+		[4]float32{s.txx(float32(cx0)), s.txx(float32(cx1)), s.txx(float32(cx0)), s.txx(float32(cx1))},
+		[4]float32{s.txy(float32(cy0)), s.txy(float32(cy0)), s.txy(float32(cy1)), s.txy(float32(cy1))},
 		[4]float32{}, [4]float32{},
 		[4]float32{high, glowLightGain * glowGain, 0, 0},
 		[4][4]float32{

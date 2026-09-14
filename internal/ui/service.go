@@ -145,7 +145,14 @@ func (p *Panel) ServiceFrame(frame WidgetFrame, hooks WidgetHooks) ServiceResult
 		}
 		if len(frame.Tokens) != 0 && !matrixConsumed && !suppressedPeekToken(frame.TokenMode, frame.Tokens[0]) && p.keyboardQuickKeyAt(i, frame.Tokens[0], frame.AltHeld, &result) {
 			result.ConsumedTokens = 1
-			return finish()
+			matrixConsumed = true
+			if result.Fired {
+				return finish()
+			}
+			// A linked-label key can transfer focus without firing. Retire its
+			// token, then keep visiting later gadgets; only a fired result ends
+			// the indexed service pass [07 R-WGT-01 §1][07 R-WGT-01 §7].
+			continue
 		}
 		handled := false
 		for _, event := range frame.PointerEvents {
@@ -180,7 +187,7 @@ func (p *Panel) ServiceFrame(frame WidgetFrame, hooks WidgetHooks) ServiceResult
 }
 
 func suppressedPeekToken(tokenMode bool, token input.Token) bool {
-	return !tokenMode && token.Kind == input.TokenEdit && token.Key >= input.KeyF1 && token.Key <= input.KeyF10
+	return !tokenMode && token.Kind == input.TokenEdit && !token.Ctrl && token.Key >= input.KeyF1 && token.Key <= input.KeyF10
 }
 
 func (p *Panel) serviceDown(button uint8, double bool, hooks WidgetHooks, result *ServiceResult) bool {

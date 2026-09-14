@@ -117,6 +117,9 @@ func (p *Panel) quickKeyMutation(index int) {
 }
 
 func matrixKey(token input.Token) input.Key {
+	if token.Ctrl {
+		return input.KeyNone
+	}
 	if token.Kind == input.TokenEdit {
 		return token.Key
 	}
@@ -158,6 +161,22 @@ func matrixQuickKeyMatchesToken(token input.Token, quick byte) bool {
 	}
 	if token.Kind != input.TokenEdit {
 		return false
+	}
+	if token.Ctrl {
+		// Ctrl composition belongs to the queued token, so it cannot match
+		// an unmodified key even after Ctrl is released [07 §2].
+		var value byte
+		switch {
+		case token.Key >= input.KeyA && token.Key <= input.KeyZ:
+			value = 0xaa + byte(token.Key-input.KeyA)
+		case token.Key >= input.Key0 && token.Key <= input.Key9:
+			value = 0xc4 + byte(token.Key-input.Key0)
+		case token.Key >= input.KeyF1 && token.Key <= input.KeyF12:
+			value = 0xce + byte(token.Key-input.KeyF1)
+		default:
+			return false
+		}
+		return matrixQuickKeyMatches(rune(value), quick)
 	}
 	value, ok := editTokenByte(token.Key)
 	return ok && matrixQuickKeyMatches(rune(value), quick)

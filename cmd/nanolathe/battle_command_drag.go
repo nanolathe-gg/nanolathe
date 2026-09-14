@@ -65,14 +65,24 @@ func (b *battleSession) beginCommandDrag(cl *client.Client, mouse input.MouseSta
 		}
 	case input.LatchRepair, input.LatchReclaim, input.LatchMove:
 	case input.LatchNormal:
-		if !b.interfaceTypeRightClick() || modifiers.Ctrl || len(b.dragMoveActors()) == 0 {
+		if modifiers.Ctrl {
 			return false
 		}
-		target, _, pos := b.pickTarget(mx, my)
-		if target != 0 || pos == nil || pos.HasFeature {
+		// Alt-left explicitly requests movement in either interface mode. Armed
+		// commands above keep their own gestures, including Alt construction grids.
+		if !(modifiers.Alt && mouse.Pressed(input.MouseButtonLeft)) {
+			if !b.interfaceTypeRightClick() || !mouse.Pressed(input.MouseButtonRight) {
+				return false
+			}
+			target, _, pos := b.pickTarget(mx, my)
+			if target != 0 || pos == nil || pos.HasFeature {
+				return false
+			}
+			button = input.MouseButtonRight
+		}
+		if len(b.dragMoveActors()) == 0 {
 			return false
 		}
-		button = input.MouseButtonRight
 	default:
 		return false
 	}
@@ -106,7 +116,8 @@ func (b *battleSession) serviceCommandDrag(in *input.State, cl *client.Client, m
 	cancelled := !ok || cl == nil || !cl.Enhanced() || !cl.IsFocused() || b.palettePointerOwned ||
 		state.Latch != d.latch || state.BuildDef != d.product || !slices.Equal(f.Selection.Handles, d.selection) ||
 		(d.product != "" && f.CommandPage.Builder != d.builder)
-	if in.Kbd.KeyDown(input.KeyEscape) || (d.button == input.MouseButtonLeft && mouse.Pressed(input.MouseButtonRight)) {
+	kbd := battleShortcutKeyboard(in)
+	if kbd.KeyDown(input.KeyEscape) || (d.button == input.MouseButtonLeft && mouse.Pressed(input.MouseButtonRight)) {
 		b.modernDrag = nil
 		b.disarmPlacement()
 		b.resetOrderLatch()
@@ -116,6 +127,11 @@ func (b *battleSession) serviceCommandDrag(in *input.State, cl *client.Client, m
 	if cancelled {
 		b.modernDrag = nil
 		return true
+	}
+	if in.ShortcutTokenMode && in.ShortcutToken.Kind != input.TokenNone {
+		b.modernDrag = nil
+		state.PlaceCaptured = d.button == input.MouseButtonLeft && mouse.Held(d.button)
+		return false
 	}
 	for key := input.Key(1); key < input.KeyCount; key++ {
 		if key != input.KeyShift && key != input.KeyAlt && key != input.KeyCtrl && in.Kbd.KeyDown(key) {
@@ -150,7 +166,12 @@ func (b *battleSession) serviceCommandDrag(in *input.State, cl *client.Client, m
 				return true
 			}
 		} else {
-			b.orderSelected(hud.LatchToCode(d.latch), mx, my, modifiers.Shift)
+			code := hud.LatchToCode(d.latch)
+			if d.latch == input.LatchNormal && d.button == input.MouseButtonLeft {
+				// A short Alt gesture is an explicit point move, even over a target.
+				code = hud.LatchToCode(input.LatchMove)
+			}
+			b.orderSelected(code, mx, my, modifiers.Shift)
 		}
 	} else {
 		switch d.latch {

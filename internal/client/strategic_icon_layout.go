@@ -1,6 +1,8 @@
 package client
 
 import (
+	"math"
+
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
@@ -31,19 +33,26 @@ type strategicProjectionKey struct {
 	viewport                 drawlist.Rect
 	icons                    *StrategicIconCatalog
 	blended                  bool
-	x, z, prevX, prevZ       int32
+	x, z                     int32
 	viewW, viewH, mapW, mapH int32
+	prevView, curView        camera.PresentationView
 }
 type strategicProjection struct {
 	key   strategicProjectionKey
-	x, z  int32
+	view  camera.PresentationView
 	valid bool
 }
 
 func (c *Client) strategicProjectionKey(f *frame.Frame, viewer uint8) strategicProjectionKey {
 	k := strategicProjectionKey{frame: f, tick: f.Tick, viewer: viewer, zoom: c.liveZoom(), viewport: c.battleViewportRect(), icons: c.strategicIcons, blended: c.hasCameraBlend(), x: c.cam.X, z: c.cam.Z, viewW: c.cam.ViewW, viewH: c.cam.ViewH, mapW: c.cam.MapW, mapH: c.cam.MapH}
+	if c.camBlending {
+		k.zoom = c.camSave.EffectiveZoom()
+	} else {
+		k.zoom = c.cam.EffectiveZoom()
+	}
+	k.prevView, k.curView = c.camPrevView, c.camCurView
 	if k.blended {
-		k.x, k.z, k.prevX, k.prevZ = c.camCurX, c.camCurZ, c.camPrevX, c.camPrevZ
+		k.x, k.z = int32(c.camCurView.X), int32(c.camCurView.Z)
 	}
 	return k
 }
@@ -76,15 +85,10 @@ func (c *Client) SetStrategicHover(instance uint64) {
 	}
 }
 
-// strategicOrigin is shared by the recorder and input. The recorder temporarily
-// blends c.cam; deriving the origin from the same sample pair also works when
-// input observes the restored camera (GPU design §13.5, §18.4).
-func (c *Client) strategicOrigin() (int32, int32) {
-	if c.hasCameraBlend() {
-		w, h := c.cam.EffectiveView()
-		return lerpOrigin(c.camPrevX, c.camCurX, int64(c.cameraFraction16), w), lerpOrigin(c.camPrevZ, c.camCurZ, int64(c.cameraFraction16), h)
-	}
-	return c.cam.X, c.cam.Z
+// presentationPoint rounds only after applying the complete view transform.
+// Fixed-size markers and guides share the world's subpixel camera placement.
+func presentationPoint(v camera.PresentationView, x, z int64) (int64, int64) {
+	return int64(math.Ceil((float64(x) - v.X) * v.Factor)), int64(math.Ceil((float64(z) - v.Z) * v.Factor))
 }
 
 func (c *Client) layoutStrategicMarkers(f *frame.Frame, viewer uint8, dst *strategicLayoutScratch, picking bool) {
@@ -96,22 +100,21 @@ func (c *Client) layoutStrategicMarkers(f *frame.Frame, viewer uint8, dst *strat
 	if c == nil || f == nil || c.cam == nil || viewer >= 10 {
 		return
 	}
-	alpha := c.markerAlpha()
-	if alpha == 0 && !c.enhanced {
-		return
-	}
 	viewport := c.battleViewportRect()
 	if viewport.W <= 0 || viewport.H <= 0 {
 		return
 	}
-	z := c.liveZoom()
-	camX, camZ := c.strategicOrigin()
+	view := c.presentationCameraView()
 	key := c.strategicProjectionKey(f, viewer)
 	if picking && c.strategicPresented.valid && c.strategicPresented.key == key {
-		camX, camZ = c.strategicPresented.x, c.strategicPresented.z
+		view = c.strategicPresented.view
 	}
 	if !picking {
-		c.strategicRecorded = strategicProjection{key: key, x: camX, z: camZ, valid: true}
+		c.strategicRecorded = strategicProjection{key: key, view: view, valid: true}
+	}
+	alpha := c.markerAlphaAtZoom(camera.Zoom(math.Round(view.Factor * float64(camera.ZoomUnit))))
+	if alpha == 0 && !c.enhanced {
+		return
 	}
 	blink := render.BlinkState{Phase: f.Radar.BlinkPhase}
 	outline := c.paletteIndex(selectionQuadLogicalColor)
@@ -175,7 +178,8 @@ func (c *Client) layoutStrategicMarkers(f *frame.Frame, viewer uint8, dst *strat
 					index = team
 				}
 			}
-			appendMark(drawlist.Marker{X: z.Project(int32(int64(p.X)>>16) - camX), Y: z.Project(int32(int64(p.Z)>>16) - (int32(int64(p.Y)>>16) >> 1) - camZ), Size: strategicMarkerSize, Index: index, Outline: outline, Selected: p.Selected, Alpha: contactAlpha, Clip: viewport, HasClip: true}, 0)
+			x, y := presentationPoint(view, int64(p.X)>>16, (int64(p.Z)>>16)-(int64(p.Y)>>17))
+			appendMark(drawlist.Marker{X: int32(x), Y: int32(y), Size: strategicMarkerSize, Index: index, Outline: outline, Selected: p.Selected, Alpha: contactAlpha, Clip: viewport, HasClip: true}, 0)
 		}
 		if !typed || alpha == 0 {
 			continue
@@ -195,7 +199,8 @@ func (c *Client) layoutStrategicMarkers(f *frame.Frame, viewer uint8, dst *strat
 					index = team
 				}
 			}
-			appendMark(drawlist.Marker{X: z.Project(int32(int64(u.X)>>16) - camX), Y: z.Project(int32(int64(u.Z)>>16) - (int32(int64(u.Y)>>16) >> 1) - camZ), Size: strategicIconSize, Index: index, Outline: outline, Selected: selected || (u.InstanceID != 0 && u.InstanceID == c.strategicHover), Alpha: alpha, Clip: viewport, HasClip: true, IconAtlas: icon.Atlas, IconRect: icon.Rect}, i+1)
+			x, y := presentationPoint(view, int64(u.X)>>16, (int64(u.Z)>>16)-(int64(u.Y)>>17))
+			appendMark(drawlist.Marker{X: int32(x), Y: int32(y), Size: strategicIconSize, Index: index, Outline: outline, Selected: selected || (u.InstanceID != 0 && u.InstanceID == c.strategicHover), Alpha: alpha, Clip: viewport, HasClip: true, IconAtlas: icon.Atlas, IconRect: icon.Rect}, i+1)
 		}
 	}
 }
@@ -243,7 +248,17 @@ func (c *Client) PickPresentedUnit(f *frame.Frame, x, y int32, viewer uint8) (po
 	if c == nil {
 		return 0, frame.UnitView{}, false
 	}
-	if !c.StrategicIconsActive() {
+	if f == nil || c.cam == nil {
+		return 0, frame.UnitView{}, false
+	}
+	view := c.presentationCameraView()
+	if c.strategicPresented.valid && c.strategicPresented.key == c.strategicProjectionKey(f, viewer) {
+		view = c.strategicPresented.view
+	}
+	// The accepted view decides both the projection and the model/icon cut.
+	// A later predicted fraction must not switch the picker before the display.
+	strategic := c.enhanced && c.strategicIcons != nil && c.strategicViewAtZoom(camera.Zoom(math.Round(view.Factor*float64(camera.ZoomUnit))))
+	if !strategic {
 		return PickSnapshotUnit(f, x, y, c.cam, viewer)
 	}
 	c.layoutStrategicMarkers(f, viewer, &c.strategicPick, true)

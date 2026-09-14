@@ -7979,6 +7979,9 @@ and the decider that would close it.
 - Text-input code page and IME behavior · §2, §7 · presentation-level platform
   detail; no retail contract observed beyond the ASCII token set
   (`TODO(T23)`).
+- Portable clipboard text-to-byte mapping · §2 · the retail `CF_TEXT` paste
+  operation is established, but its code page must be identified before a
+  Unicode host clipboard can reproduce it (`TODO(T25)`).
 - Whether the character values of the key-token producer hold on a non-US
   keyboard layout (Supported inference) · §10 [R-CAM-01 §14] · manual retail
   observation.

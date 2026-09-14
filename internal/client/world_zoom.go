@@ -48,10 +48,13 @@ func (c *Client) refreshRecordExtent() {
 		return
 	}
 	c.recordW, c.recordH = c.width, c.height
-	if c.cam == nil || c.cam.AtRestStep() {
+	if c.cam == nil || (c.cam.AtRestStep() && !c.camBlending) {
 		return
 	}
 	z := c.cam.EffectiveZoom()
+	if c.camBlending {
+		z = camera.Zoom(c.camDrawView.Factor * float64(camera.ZoomUnit))
+	}
 	s := c.cam.EffectiveScale()
 	pad := 2 * int(s.Px(1))
 	if w := int(s.Project(z.Inverse(int32(c.width)))) + pad; w > c.recordW {
@@ -89,6 +92,12 @@ func (c *Client) worldSpace(begin bool) drawlist.WorldSpace {
 	if c.cam != nil {
 		w.Zoom = c.cam.EffectiveZoom()
 		w.Step = c.cam.EffectiveScale()
+		if c.camBlending {
+			v := c.camDrawView
+			w.Factor = float32(v.Factor)
+			w.OffsetX = float32((float64(c.cam.X) - v.X) * v.Factor)
+			w.OffsetY = float32((float64(c.cam.Z) - v.Z) * v.Factor)
+		}
 	}
 	w.Viewport = c.battleViewportRect()
 	return w
@@ -167,6 +176,9 @@ func (c *Client) liveZoom() camera.Zoom {
 	if c == nil || c.cam == nil {
 		return camera.ZoomUnit
 	}
+	if c.camBlending || c.hasCameraBlend() {
+		return camera.Zoom(c.presentationCameraView().Factor*float64(camera.ZoomUnit) + 0.5)
+	}
 	return c.cam.EffectiveZoom()
 }
 
@@ -178,7 +190,11 @@ func (c *Client) liveZoom() camera.Zoom {
 func (c *Client) strategicView() bool {
 	// The inclusive cut and the clamped tactical stop share one gate so models,
 	// icon picking and selection outlines switch together (§16.10).
-	return c.liveZoom() <= strategicModelCut || (c.enhanced && c.cam.TacticalAtFloor())
+	return c.strategicViewAtZoom(c.liveZoom())
+}
+
+func (c *Client) strategicViewAtZoom(z camera.Zoom) bool {
+	return z <= strategicModelCut || (c.enhanced && c.cam.TacticalAtFloor() && z <= c.cam.MinZoom())
 }
 
 // markerAlpha is the strategic layer's fade: zero at and above
@@ -189,11 +205,12 @@ func (c *Client) strategicView() bool {
 // cross-faded against the marker layer, because a model fade needs an alpha
 // lane on the model commit — the sceneOpModelCommit path of §13.3 writes an
 // opaque fragment. A cross-fade is a follow-up on that lane.
-func (c *Client) markerAlpha() uint8 {
-	if c.strategicView() {
+func (c *Client) markerAlpha() uint8 { return c.markerAlphaAtZoom(c.liveZoom()) }
+
+func (c *Client) markerAlphaAtZoom(z camera.Zoom) uint8 {
+	if c.strategicViewAtZoom(z) {
 		return 255
 	}
-	z := c.liveZoom()
 	if z >= strategicMarkerOn {
 		return 0
 	}

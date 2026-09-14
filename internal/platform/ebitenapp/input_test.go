@@ -97,3 +97,58 @@ func TestApplyInputKeepsPublishedRecordSeparateFromNewLiveState(t *testing.T) {
 		t.Fatal("newer live state was not retained independently")
 	}
 }
+
+// Special-key initial transitions and Ctrl composition are established input
+// tokens, independent of the unavailable native repeat chronology [07 §2].
+func TestApplyInputProducesSpecialAndComposedTokens(t *testing.T) {
+	for _, key := range []input.Key{input.KeyPrior, input.KeyNext, input.KeyInsert, input.KeyPause, input.KeyF1, input.KeyF12} {
+		in := input.NewState()
+		sample := sampledInput{}
+		sample.keys[key] = true
+		applyInput(in, sample)
+		got := in.DrainTokens()
+		if len(got) != 1 || got[0] != (input.Token{Kind: input.TokenEdit, Key: key}) {
+			t.Fatalf("key %v tokens=%v", key, got)
+		}
+		if !in.ShortcutTokenMode {
+			t.Fatal("production input did not select token mode")
+		}
+	}
+	in := input.NewState()
+	sample := sampledInput{modifiers: input.Modifiers{Ctrl: true}}
+	sample.keys[input.KeyA], sample.keys[input.KeyCtrl] = true, true
+	applyInput(in, sample)
+	sample.modifiers.Ctrl = false
+	sample.keys[input.KeyA], sample.keys[input.KeyCtrl] = false, false
+	applyInput(in, sample)
+	got := in.DrainTokens()
+	if len(got) != 1 || got[0] != (input.Token{Kind: input.TokenEdit, Key: input.KeyA, Ctrl: true}) {
+		t.Fatalf("composed history=%v", got)
+	}
+}
+
+func TestApplyInputAltUsesSystemCharacterIdentity(t *testing.T) {
+	in := input.NewState()
+	sample := sampledInput{modifiers: input.Modifiers{Alt: true, Shift: true}, characters: []rune{'!'}}
+	sample.keys[input.Key1], sample.keys[input.KeyAlt], sample.keys[input.KeyShift] = true, true, true
+	applyInput(in, sample)
+	got := in.DrainTokens()
+	if len(got) != 1 || got[0] != (input.Token{Kind: input.TokenText, Rune: '1'}) {
+		t.Fatalf("Alt digit=%v", got)
+	}
+}
+
+func TestCtrlPunctuationKeepsPlainTokenIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		key  input.Key
+		text rune
+	}{
+		{input.KeyEqual, '='}, {input.KeyMinus, '-'},
+		{input.KeyComma, ','}, {input.KeyPeriod, '.'}, {input.KeyBackquote, '`'},
+	} {
+		token, ok := translatedKeyToken(tc.key, input.Modifiers{Ctrl: true, Shift: true})
+		if !ok || token != (input.Token{Kind: input.TokenText, Rune: tc.text}) {
+			t.Fatalf("Ctrl punctuation %v = %+v, want plain %q [07 §2]", tc.key, token, tc.text)
+		}
+	}
+}

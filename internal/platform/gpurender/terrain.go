@@ -337,8 +337,8 @@ func (r *Renderer) Terrain(c drawlist.Terrain) {
 	// Filtered sampling rides a vertex lane rather than a second shader, so the
 	// terrain still merges into the frame's own opaque run
 	// (docs/DESIGN_GPU_RENDERER.md §16.3 "Sampling"). It is armed exactly when
-	// the world transform is: at a rest step the fetch is the nearest one this
-	// pass has always made, so the parity gate is untouched.
+	// the world transform is: rest scales with a fractional camera offset also
+	// filter. An identity transform keeps the original nearest fetch and parity.
 	filter := float32(0)
 	if r.sched.worldOn {
 		filter = 1

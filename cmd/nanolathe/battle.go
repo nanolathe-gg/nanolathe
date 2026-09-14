@@ -164,7 +164,7 @@ type battleSession struct {
 	// showRanges is a process-lifetime presentation toggle, retained by the
 	// shell across battles and never written to settings [07 R-CAM-01 §6].
 	showRanges bool
-	// Alt/Option tactical guides are presentation input only (GPU design §20).
+	// Shift tactical guides are presentation input only (GPU design §20).
 	tacticalRangesHeld bool
 
 	// interfaceType is the persisted LEFTCLICK stage for a direct battle. A
@@ -928,15 +928,30 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	// Escape must not hand the same frame's remaining mouse/key edges to the
 	// battle controller [07 §2][07 §3].
 	modalAtFrameStart := state.Modal() != ui.BattleModalClosed
+	shortcutKeyboard := battleShortcutKeyboard(in)
 	keyDown := func(key input.Key) bool {
-		return in != nil && in.Kbd != nil && in.Kbd.KeyDown(key)
+		return shortcutKeyboard != nil && shortcutKeyboard.KeyDown(key)
 	}
-	shiftHeld := in != nil && in.Kbd != nil && in.Kbd.HasShift()
 	// F2 is the options window's own key, and Tab toggles it in battle mode;
 	// Escape only ever closes it. The "ESC bit" name survives because Escape is
 	// the bit's clearer, but token 0xE3 is F2, not Escape
 	// [07 R-CAM-01 §2 "Escape versus F2"].
 	if modalAtFrameStart {
+		pendingBeforeModal := in.PendingTokens()
+		defer func() {
+			// A modal's unclaimed event has no battle action, but must still
+			// retire before the next queued key can be serviced [07 §2].
+			if pendingBeforeModal != 0 && in.PendingTokens() == pendingBeforeModal {
+				in.DiscardTokens(1)
+			}
+		}()
+		// Inspect the first queued event without stealing it from a child.
+		modalInput := *in
+		modalInput.ShortcutTokenMode = in.ShortcutTokenMode || in.PendingTokens() != 0
+		if tokens := in.PeekTokens(); len(tokens) != 0 {
+			modalInput.ShortcutToken = tokens[0]
+		}
+		shortcutKeyboard = battleShortcutKeyboard(&modalInput)
 		// Tab is the authored root-modal toggle. Handle it before the modal
 		// dispatcher so the same edge cannot also activate a newly closed/opened
 		// window. Escape remains owned by the modal handler (which applies its
@@ -946,8 +961,9 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		// options root and the save/load dialog both do — so the toggle is
 		// suppressed for as long as one is open and the modal dispatcher
 		// routes the frame to it instead [07 R-WGT-01 §1][07 R-FE-01 §6].
-		if (keyDown(input.KeyTab) || keyDown(input.KeyF2)) && state.Modal() == ui.BattleModalOptions &&
+		if (keyDown(input.KeyTab) || keyDown(input.KeyF2) && !shortcutKeyboard.KeyHeld(input.KeyCtrl)) && state.Modal() == ui.BattleModalOptions &&
 			!b.battlePrefsActive() && !(b.shell != nil && (b.shell.saveLoadPanelActive() || b.shell.frontend.Panels.Modal() != nil)) {
+			in.DiscardTokens(1)
 			b.closeBattleMenu()
 		} else {
 			b.handleBattleMenuInput(in, cl)
@@ -994,17 +1010,13 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		b.resourceClick = nil
 		b.resourceQueueFeedback = nil
 	}
-	if tokenClaimed && in.Kbd != nil {
-		// A GUI-claimed token cannot also trigger its physical press edge in the
-		// residual dispatcher. Preserve held modifiers and independent pointer
-		// work; the client's original sample remains untouched [07 §3].
-		residual := *in
-		keyboard := *in.Kbd
-		keyboard.ResetEdges()
-		residual.Kbd = &keyboard
-		in = &residual
+	if !talkOwned {
+		in = battleTokenInput(in, tokenClaimed)
 	}
-	if !talkOwned && (keyDown(input.KeyTab) || keyDown(input.KeyF2) && !shiftHeld) {
+	shortcutKeyboard = battleShortcutKeyboard(in)
+	shiftHeld := shortcutKeyboard != nil && shortcutKeyboard.HasShift()
+	ctrlHeld := shortcutKeyboard != nil && shortcutKeyboard.KeyHeld(input.KeyCtrl)
+	if !talkOwned && (keyDown(input.KeyTab) || keyDown(input.KeyF2) && !ctrlHeld && !shiftHeld) {
 		// Host UI policy: a paused save opens without ARMOPT, so Tab resumes
 		// it directly instead of requiring an open/close cycle. F2 retains
 		// access to options (DESIGN_INTERFACE_HUD_INPUT §3.4).
@@ -1051,13 +1063,6 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		}
 		b.controller.Step(sample, cl)
 		resourceInputServiced = true
-		// The controller receives a value sample, not the client token ring. A
-		// palette/UNITINFO peek that left its prefix unclaimed has now had the
-		// residual battle hotkey pass; battle owns no editor, so it drains the
-		// remaining producer records before a later window can inherit them.
-		if in != nil {
-			producerIn.DiscardTokens(producerIn.PendingTokens())
-		}
 	}
 	if b.ended {
 		return

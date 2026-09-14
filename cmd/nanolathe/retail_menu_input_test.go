@@ -136,17 +136,15 @@ func TestOrdinaryTokensDoNotEnterLaterSaveEditor(t *testing.T) {
 	}
 }
 
-func TestBattleInputDiscardsOrdinaryTokens(t *testing.T) {
+func TestBattleInputPreservesUnservicedTokenTail(t *testing.T) {
 	b := newTestBattle(testCatalogON05(), testWorldON05(20, 20))
 	in := input.NewState()
-	for i := 0; i < 29; i++ {
-		if !in.EnqueueToken(input.Token{Kind: input.TokenText, Rune: 'x'}) {
-			t.Fatalf("battle token %d refused before ring capacity", i)
-		}
+	for _, r := range "xy" {
+		in.EnqueueToken(input.Token{Kind: input.TokenText, Rune: r})
 	}
-	b.handleInput(in, nil)
-	if pending := in.PendingTokens(); pending != 0 {
-		t.Fatalf("battle ordinary pass left %d tokens", pending)
+	b.handleInput(battleTokenInput(in, false), nil)
+	if tokens := in.PeekTokens(); len(tokens) != 1 || tokens[0].Rune != 'y' {
+		t.Fatalf("battle ordinary pass lost the unserviced tail: %v", tokens)
 	}
 }
 

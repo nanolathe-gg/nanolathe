@@ -128,7 +128,7 @@ func TestBlastBudgetCullsBeforeSelectingAndKeepsOrder(t *testing.T) {
 		d.candidates = append(d.candidates, blastWave{x: float32(i + 1), y: 20, radius: 10, width: 5, strength: 1})
 	}
 	d.candidates = append(d.candidates, blastWave{x: 99, y: 20, radius: 10, width: 5, strength: 2})
-	d.selectVisible(0.75, 100, 100)
+	d.selectVisible(0.75, 100, 100, 0, 0)
 	if d.count != blastLimit {
 		t.Fatalf("visible count %d", d.count)
 	}

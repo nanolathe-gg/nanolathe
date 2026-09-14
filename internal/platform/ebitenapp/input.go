@@ -71,6 +71,8 @@ func applyInput(in *input.State, sample sampledInput) {
 	if in == nil || in.Mouse == nil || in.Kbd == nil {
 		return
 	}
+	in.ShortcutTokenMode = true
+	in.ShortcutToken = input.Token{}
 	m, k := in.Mouse, in.Kbd
 	m.ResetEdges()
 	k.ResetEdges()
@@ -79,8 +81,10 @@ func applyInput(in *input.State, sample sampledInput) {
 		wasHeld := k.KeyHeld(key)
 		down := sample.keys[key]
 		k.SetKey(key, down)
-		if down && !wasHeld && keyboardTokenKey(key) {
-			in.EnqueueToken(input.Token{Kind: input.TokenEdit, Key: key})
+		if down && !wasHeld {
+			if token, ok := translatedKeyToken(key, sample.modifiers); ok {
+				in.EnqueueToken(token)
+			}
 		}
 	}
 
@@ -122,6 +126,11 @@ func applyInput(in *input.State, sample sampledInput) {
 
 	// AppendInputChars preserves character order within its own batch. Ebiten
 	// does not order that batch against the polled physical transitions above.
+	// Alt system-key translation supplies its own raw character token and
+	// has no character-message companion in retail [07 R-CAM-01 §14].
+	if sample.modifiers.Alt {
+		return
+	}
 	for _, r := range sample.characters {
 		in.EnqueueToken(input.Token{Kind: input.TokenText, Rune: r})
 	}
@@ -129,12 +138,52 @@ func applyInput(in *input.State, sample sampledInput) {
 
 func keyboardTokenKey(key input.Key) bool {
 	switch key {
-	case input.KeyBackspace, input.KeyDelete, input.KeyHome, input.KeyEnd,
+	case input.KeyBackspace, input.KeyDelete, input.KeyInsert, input.KeyHome, input.KeyEnd,
+		input.KeyPrior, input.KeyNext, input.KeyPause,
 		input.KeyLeft, input.KeyRight, input.KeyUp, input.KeyDown, input.KeyTab,
 		input.KeyEnter, input.KeyEscape:
 		return true
 	}
-	return false
+	return key >= input.KeyF1 && key <= input.KeyF12
+}
+
+// translatedKeyToken is the observed key-down translator. Ordinary text stays
+// with the host character batch; Ctrl composition and Alt system keys retain
+// their separate established identities [07 §2][07 R-CAM-01 §14].
+func translatedKeyToken(key input.Key, modifiers input.Modifiers) (input.Token, bool) {
+	composable := key >= input.KeyA && key <= input.KeyZ || key >= input.Key0 && key <= input.Key9 || key >= input.KeyF1 && key <= input.KeyF12
+	if modifiers.Ctrl && composable {
+		return input.Token{Kind: input.TokenEdit, Key: key, Ctrl: true}, true
+	}
+	if keyboardTokenKey(key) {
+		return input.Token{Kind: input.TokenEdit, Key: key}, true
+	}
+	if modifiers.Alt || modifiers.Ctrl {
+		var r rune
+		switch {
+		case key >= input.KeyA && key <= input.KeyZ:
+			r = 'a' + rune(key-input.KeyA)
+		case key >= input.Key0 && key <= input.Key9:
+			r = '0' + rune(key-input.Key0)
+		default:
+			switch key {
+			case input.KeyMinus:
+				r = '-'
+			case input.KeyEqual:
+				r = '='
+			case input.KeyBackquote:
+				r = '`'
+			case input.KeyComma:
+				r = ','
+			case input.KeyPeriod:
+				r = '.'
+			}
+		}
+		if r != 0 {
+			return input.Token{Kind: input.TokenText, Rune: r}, true
+		}
+	}
+	return input.Token{}, false
 }
 
 func ebitenKey(k input.Key) (ebiten.Key, bool) {

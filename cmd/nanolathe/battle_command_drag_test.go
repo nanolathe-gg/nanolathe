@@ -21,6 +21,7 @@ func dragInput(b *battleSession, cl *client.Client, x, y int32, button input.Mou
 	in.Mouse.SetPosition(float32(x), float32(y))
 	in.Kbd.SetKey(input.KeyShift, mods.Shift)
 	in.Kbd.SetKey(input.KeyAlt, mods.Alt)
+	in.Kbd.SetKey(input.KeyCtrl, mods.Ctrl)
 	in.Kbd.ResetEdges()
 	in.Mouse.SetButton(button, true)
 	if phase != "press" {
@@ -176,8 +177,8 @@ func TestCommandDragAreaFiltersTargets(t *testing.T) {
 }
 
 func TestCommandDragFormationUsesCurveAndIndividualActors(t *testing.T) {
-	for _, right := range []bool{false, true} {
-		t.Run(fmt.Sprint(right), func(t *testing.T) {
+	for _, gesture := range []string{"armed", "right", "alt-left", "alt-left-right-interface"} {
+		t.Run(gesture, func(t *testing.T) {
 			b, cl, _, builder := resourceFixture(t, false)
 			def := b.cat.Units["armcons"]
 			handles := []pool.Handle{builder}
@@ -194,12 +195,20 @@ func TestCommandDragFormationUsesCurveAndIndividualActors(t *testing.T) {
 			b.sess.Step(b.sess.Clock.ScaledAnchor + 1)
 			button := input.MouseButtonLeft
 			b.battleState().SetLatch(input.LatchMove)
-			if right {
+			if gesture == "right" {
 				b.interfaceType = settings.InterfaceTypeRightClick
 				b.battleState().SetLatch(input.LatchNormal)
 				button = input.MouseButtonRight
 			}
-			dragInput(b, cl, 300, 200, button, "press", input.Modifiers{})
+			mods := input.Modifiers{}
+			if gesture == "alt-left" || gesture == "alt-left-right-interface" {
+				b.battleState().SetLatch(input.LatchNormal)
+				mods.Alt = true
+				if gesture == "alt-left-right-interface" {
+					b.interfaceType = settings.InterfaceTypeRightClick
+				}
+			}
+			dragInput(b, cl, 300, 200, button, "press", mods)
 			dragInput(b, cl, 300, 300, button, "held", input.Modifiers{})
 			dragInput(b, cl, 400, 300, button, "release", input.Modifiers{Shift: true})
 			cmds := b.sess.PendingHumanCommands()
@@ -307,5 +316,87 @@ func TestCommandDragShortReleaseAtRadarKeepsViewport(t *testing.T) {
 	cmds := b.sess.PendingHumanCommands()
 	if len(cmds) != 1 || cmds[0].Order.Position.X != wx || cmds[0].Order.Position.Z != wz {
 		t.Fatalf("release jumped to radar: %+v; want %v,%v", cmds, wx, wz)
+	}
+}
+
+func TestCommandDragAltMoveOverFeature(t *testing.T) {
+	for _, drag := range []bool{false, true} {
+		for _, queued := range []bool{false, true} {
+			t.Run(fmt.Sprintf("drag=%v queued=%v", drag, queued), func(t *testing.T) {
+				b, cl, _, builder := resourceFixture(t, true)
+				b.cat.Features["deposit"].Reclaimable = true
+				b.sess.Step(b.sess.Clock.ScaledAnchor + 1)
+				x, y := o5ScreenWorld(b.cam, 320<<16, 0, 320<<16)
+				_, _, pos := b.pickTarget(x, y)
+				if pos == nil || !pos.HasFeature {
+					t.Fatal("fixture must start on a reclaimable feature")
+				}
+				b.tacticalRangesHeld = true
+				if !b.tacticalRangesActive(cl) {
+					t.Fatal("held Shift must show ranges before a drag")
+				}
+				dragInput(b, cl, x, y, input.MouseButtonLeft, "press", input.Modifiers{Alt: true, Shift: queued})
+				if b.tacticalRangesActive(cl) {
+					t.Fatal("range guides obscure the drag preview")
+				}
+				if b.modernDrag == nil || b.battleState().Input.DragActive || len(b.sess.PendingHumanCommands()) != 0 {
+					t.Fatal("Alt press did not exclusively capture movement")
+				}
+				if drag {
+					x += 100
+				}
+				// The initiating Alt may be released; Shift at release controls queuing.
+				dragInput(b, cl, x, y, input.MouseButtonLeft, "release", input.Modifiers{Shift: queued})
+				cmds := b.sess.PendingHumanCommands()
+				if len(cmds) != 1 || cmds[0].Kind != session.HumanOrder || cmds[0].Order.Code != int(input.LatchMove) || cmds[0].Order.Queued != queued {
+					t.Fatalf("Alt gesture emitted contextual work or selection: %+v", cmds)
+				}
+				b.tacticalRangesHeld = true
+				if !b.tacticalRangesActive(cl) {
+					t.Fatal("completed gesture retained range suppression")
+				}
+				if drag && !slices.Equal(cmds[0].Order.Handles, []pool.Handle{builder}) {
+					t.Fatal("formation lost its explicit actor")
+				}
+				f, _ := b.currentSnapshot()
+				if !slices.Equal(f.Selection.Handles, []pool.Handle{builder}) {
+					t.Fatal("Alt gesture changed the selection")
+				}
+				if b.modernDrag != nil || b.battleState().Input.Latch != input.LatchNormal || b.battleState().Input.ShiftLatchSticky {
+					t.Fatal("Alt gesture left a persistent move mode")
+				}
+			})
+		}
+	}
+}
+
+func TestCommandDragAltRespectsSelectionAndArmedWork(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		mods    input.Modifiers
+		classic bool
+		latch   input.Latch
+		capture bool
+	}{
+		{name: "normal selection"},
+		{name: "additive selection", mods: input.Modifiers{Shift: true}},
+		{name: "classic Alt selection", mods: input.Modifiers{Alt: true}, classic: true},
+		{name: "Ctrl selection", mods: input.Modifiers{Alt: true, Ctrl: true}},
+		{name: "repair precedence", mods: input.Modifiers{Alt: true}, latch: input.LatchRepair, capture: true},
+		{name: "reclaim precedence", mods: input.Modifiers{Alt: true}, latch: input.LatchReclaim, capture: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, cl, _, _ := resourceFixture(t, false)
+			cl.SetEnhanced(!tc.classic)
+			b.battleState().SetLatch(tc.latch)
+			dragInput(b, cl, 300, 250, input.MouseButtonLeft, "press", tc.mods)
+			if tc.capture {
+				if b.modernDrag == nil || b.modernDrag.latch != tc.latch {
+					t.Fatal("Alt overrode armed work")
+				}
+			} else if b.modernDrag != nil || !b.battleState().Input.DragActive {
+				t.Fatal("formation shortcut stole selection")
+			}
+		})
 	}
 }

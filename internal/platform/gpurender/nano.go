@@ -116,7 +116,7 @@ func (r *Renderer) glowNano(f drawlist.Fill) {
 	y1 := min(float32(f.Rect.Y+f.Rect.H)+pad, float32(r.clipH()))
 	s := &r.sched
 	r.glow.rect([4]*ebiten.Image{1: r.tables.atlas},
-		s.txf(x0), s.txf(y0), s.txf(x1), s.txf(y1), 0, 0, 0, 0,
+		s.txx(x0), s.txy(y0), s.txx(x1), s.txy(y1), 0, 0, 0, 0,
 		[4]float32{float32(f.Index), nanoGlowGain * glowGain, 0, 0},
 		[4]float32{0, 0, 0, glowOpSolid})
 }

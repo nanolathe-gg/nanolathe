@@ -418,17 +418,10 @@ func TestCameraDoesNotBlendWithoutACameraFraction(t *testing.T) {
 // A jump larger than the viewport is a minimap click or a bookmark recall, not
 // motion: that axis snaps to the current origin (§13.5).
 func TestCameraBlendSnapsOnAViewportSizedJump(t *testing.T) {
-	if got := lerpOrigin(0, 100, int64(fractionOne)/2, 640); got != 50 {
-		t.Fatalf("blend inside the viewport = %d, want 50", got)
-	}
-	if got := lerpOrigin(0, 641, int64(fractionOne)/2, 640); got != 641 {
-		t.Fatalf("blend across a viewport-sized jump = %d, want the current origin 641", got)
-	}
-	if got := lerpOrigin(1000, 300, int64(fractionOne)/2, 640); got != 300 {
-		t.Fatalf("backwards jump = %d, want the current origin 300", got)
-	}
-	// Truncation toward zero, not rounding [I3].
-	if got := lerpOrigin(0, 3, int64(fractionOne)/2, 640); got != 1 {
-		t.Fatalf("truncated blend = %d, want 1", got)
+	for _, tc := range []struct{ prev, cur, want int32 }{{0, 100, 50}, {0, 641, 641}, {1000, 300, 300}, {0, 3, 1}} {
+		c := &Client{cam: &camera.Camera{ViewW: 640, ViewH: 480}, camPrevView: camera.PresentationView{X: float64(tc.prev), Factor: 1}, camCurView: camera.PresentationView{X: float64(tc.cur), Factor: 1}, cameraFraction16: fractionOne / 2}
+		if got := int32(c.blendedCameraView().X); got != tc.want {
+			t.Fatalf("%d -> %d: %d, want %d", tc.prev, tc.cur, got, tc.want)
+		}
 	}
 }

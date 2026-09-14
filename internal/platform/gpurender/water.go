@@ -138,8 +138,9 @@ func waterMaskPixels(t *world.Terrain) (pixels []byte, w, h, step int, blocks []
 func (r *Renderer) prepareWater(c drawlist.Terrain) {
 	st := &r.water
 	st.record = c
-	// Scorch shares the dry channel even when water animation is disabled (§29).
-	if c.Terrain == nil || ((!c.Water.Enabled || st.disabled) && !r.scorchEnabled) {
+	// Scorch and aircraft shadows share the receiving mask even when water
+	// animation is disabled (GPU design §29, §34).
+	if c.Terrain == nil || ((!c.Water.Enabled || st.disabled) && !r.scorchEnabled && r.aircraftShadow.disabled) {
 		return
 	}
 	if st.source == c.Terrain {
@@ -214,7 +215,8 @@ func (r *Renderer) SurfaceWakes(batch drawlist.SurfaceWakes) {
 	if r.sched.worldOn {
 		scale *= r.sched.worldScale
 	}
-	mapping := [4]float32{float32(st.record.OriginX), float32(st.record.OriginY), 1 / scale, float32(st.step)}
+	ox, oy := r.sched.inverseOrigin(float32(st.record.OriginX), float32(st.record.OriginY), scale)
+	mapping := [4]float32{ox, oy, 1 / scale, float32(st.step)}
 	for _, m := range batch.Marks {
 		if m.Alpha <= 0 || (!m.Dust && !m.Foam) {
 			continue

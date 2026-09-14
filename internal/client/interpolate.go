@@ -1,6 +1,9 @@
 package client
 
 import (
+	"math"
+
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
@@ -155,8 +158,7 @@ func (c *Client) sampleCameraOrigin() {
 		c.camSamples = 0
 		return
 	}
-	c.camPrevX, c.camPrevZ = c.camCurX, c.camCurZ
-	c.camCurX, c.camCurZ = c.cam.X, c.cam.Z
+	c.camPrevView, c.camCurView = c.camCurView, c.cam.PresentationView()
 	if c.camSamples < 2 {
 		c.camSamples++
 	}
@@ -180,30 +182,57 @@ func (c *Client) SetCameraFraction(f float32) {
 	c.cameraFractionSet = true
 }
 
-// beginCameraBlend moves the live camera origin to its blended position for the
-// duration of one recording and reports whether it must be restored. Nothing
-// else observes the blend: endCameraBlend puts the stepped origin back before
-// the frame ends, so hit testing, orders and the next step all see the camera
-// the 30 Hz step left (§13.5) [I6].
-//
-// A jump larger than the viewport in an axis — a minimap click, a bookmark
-// recall — snaps that axis instead of sweeping across the map. Scale is not
-// blended. A client whose presentations do not come through the window adapter
-// — the 120 TPS benchmark, a test harness — supplies no camera fraction, and
-// its camera is not blended at all.
+// blendedCameraView interpolates the affine projection, not the origin and
+// scale independently: lerp(origin*zoom)/lerp(zoom) keeps an anchored world
+// point fixed for every displayed fraction (DESIGN_GPU_RENDERER §16.5).
+func (c *Client) blendedCameraView() camera.PresentationView {
+	prev, cur := c.camPrevView, c.camCurView
+	f := float64(c.cameraFraction16) / float64(fractionOne)
+	factor := prev.Factor + (cur.Factor-prev.Factor)*f
+	axis := func(a, b float64, viewport int32) float64 {
+		if prev.Factor == cur.Factor && viewport > 0 && math.Abs(b-a) > float64(viewport) {
+			return b
+		}
+		return (a*prev.Factor + (b*cur.Factor-a*prev.Factor)*f) / factor
+	}
+	w, h := c.cam.EffectiveView()
+	return camera.PresentationView{X: axis(prev.X, cur.X, w), Z: axis(prev.Z, cur.Z, h), Factor: factor}
+}
+
+// presentationCameraView is shared by recording, paused reuse and strategic
+// picking. During a record it returns the exact view installed for that record.
+func (c *Client) presentationCameraView() camera.PresentationView {
+	if c.camBlending {
+		return c.camDrawView
+	}
+	if c.hasCameraBlend() {
+		return c.blendedCameraView()
+	}
+	if c.cam == nil {
+		return camera.PresentationView{Factor: 1}
+	}
+	return camera.PresentationView{X: float64(c.cam.X), Z: float64(c.cam.Z), Factor: c.cam.EffectiveZoom().Float()}
+}
+
+// beginCameraBlend installs a temporary recording camera. Integer projection
+// sites use its whole origin and step; the world boundary carries the remaining
+// subpixel transform to the GPU. The complete camera is restored afterwards.
 func (c *Client) beginCameraBlend() bool {
 	if c == nil || c.cam == nil || c.camSamples < 2 || !c.cameraFractionSet {
 		return false
 	}
-	f16 := int64(c.cameraFraction16)
-	c.camSaveX, c.camSaveZ = c.cam.X, c.cam.Z
-	// The snap threshold is the viewport measured in WORLD pixels, because the
-	// origins being blended are world pixels: at the detail scale the same
-	// framebuffer shows half the world, so a step that crosses the visible band
-	// is half as large [F-P1-008] (DESIGN_GPU_RENDERER §14.2).
-	viewW, viewH := c.cam.EffectiveView()
-	c.cam.X = lerpOrigin(c.camPrevX, c.camCurX, f16, viewW)
-	c.cam.Z = lerpOrigin(c.camPrevZ, c.camCurZ, f16, viewH)
+	c.camSave = *c.cam
+	c.camDrawView = c.blendedCameraView()
+	c.camBlending = true
+	// Floor so the residual only shifts the recording toward the leading
+	// edge; integer clipping cannot expose an unrecorded strip there.
+	c.cam.X, c.cam.Z = int32(math.Floor(c.camDrawView.X)), int32(math.Floor(c.camDrawView.Z))
+	c.cam.Zoom = camera.Zoom(math.Round(c.camDrawView.Factor * float64(camera.ZoomUnit)))
+	// The record step follows the precise factor even just above native.
+	c.cam.Scale = camera.ViewScaleNative
+	if c.camDrawView.Factor > 1 {
+		c.cam.Scale = camera.ViewScaleDetail
+	}
 	return true
 }
 
@@ -211,20 +240,11 @@ func (c *Client) endCameraBlend(applied bool) {
 	if !applied || c == nil || c.cam == nil {
 		return
 	}
-	c.cam.X, c.cam.Z = c.camSaveX, c.camSaveZ
+	*c.cam = c.camSave
+	c.camBlending = false
 }
 
-// lerpOrigin blends one camera axis with integer truncation, snapping when the
-// step moved further than the viewport measures in that axis (§13.5).
-func lerpOrigin(prev, cur int32, f16 int64, viewport int32) int32 {
-	d := int64(cur) - int64(prev)
-	if viewport > 0 && (d > int64(viewport) || d < -int64(viewport)) {
-		return cur
-	}
-	return int32(int64(prev) + (d*f16)/int64(fractionOne))
-}
-
-// pausedBlendInputs names the immutable frame pair and the frozen blend.
+// pausedBlendInputs identifies the frozen committed pose blend.
 type pausedBlendInputs struct {
 	previous, current         *frame.Frame
 	previousTick, currentTick uint32

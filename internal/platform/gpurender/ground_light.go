@@ -107,7 +107,7 @@ func (r *Renderer) appendGroundLights() {
 		// Centre its pool on the projected source, as the visible art is, rather
 		// than treating the unsheared world row as a terrain pixel (SC20).
 		// Physical model/smoke distances still use the unsheared source (§23.2).
-		gx, gy := light.position[0]*k, (light.position[1]-light.position[2]*0.5)*k
+		gx, gy := r.sched.txx(light.position[0]), r.sched.txy(light.position[1]-light.position[2]*0.5)
 		height := light.position[2] * k
 		radius := light.radius * k
 		if radius <= 0 || height >= radius {

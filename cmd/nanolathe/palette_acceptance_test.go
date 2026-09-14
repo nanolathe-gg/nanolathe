@@ -112,8 +112,12 @@ func TestPaletteAcceptanceUnitInfoDoneOwnsWholeHostFrame(t *testing.T) {
 	if got := b.battleState().Input.Latch; got != input.LatchNormal {
 		t.Fatalf("UNITINFO close leaked its second token to palette latch=%v", got)
 	}
-	if got := cl.Input().PendingTokens(); got != 0 {
+	if got := cl.Input().PendingTokens(); got != 1 {
 		t.Fatalf("second token pending=%d", got)
+	}
+	b.viewerStep(0, cl)
+	if got := b.battleState().Input.Latch; got != input.LatchAttack || cl.Input().PendingTokens() != 0 {
+		t.Fatalf("next frame lost the queued palette shortcut: latch=%v pending=%d", got, cl.Input().PendingTokens())
 	}
 }
 

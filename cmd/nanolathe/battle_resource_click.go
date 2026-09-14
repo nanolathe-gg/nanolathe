@@ -208,6 +208,10 @@ func (b *battleSession) serviceResourceClick(in *input.State, cl *client.Client,
 	}
 	// A new keyboard command supersedes the deferred click (Escape must never
 	// replay a Move); pointer commands outside the pair retain event order.
+	if in.ShortcutTokenMode && in.ShortcutToken.Kind != input.TokenNone {
+		b.resourceClick = nil
+		return false
+	}
 	for key := input.Key(1); key < input.KeyCount; key++ {
 		if key != input.KeyShift && in.Kbd.KeyDown(key) {
 			b.resourceClick = nil

@@ -95,17 +95,15 @@ type Client struct {
 	// producer; interp owns the blended view and its retained buffers. The
 	// camera fields are the two stepped origin samples, the blend's save slot
 	// and how many samples exist yet. See interpolate.go.
-	interpolation   bool
-	tickFraction16  int32
-	tickFractionSet bool
-	interp          interpolator
-	camPrevX        int32
-	camPrevZ        int32
-	camCurX         int32
-	camCurZ         int32
-	camSaveX        int32
-	camSaveZ        int32
-	camSamples      uint8
+	interpolation           bool
+	tickFraction16          int32
+	tickFractionSet         bool
+	interp                  interpolator
+	camSamples              uint8
+	camPrevView, camCurView camera.PresentationView
+	camSave                 camera.Camera
+	camDrawView             camera.PresentationView
+	camBlending             bool
 	// cameraFraction16 is the camera's own blend fraction — how far the window
 	// is through the current Update — which is not the tick fraction (§13.5).
 	// cameraFractionSet is false for a client that never presents through the
@@ -608,7 +606,12 @@ func (c *Client) TerrainGeneration() uint64 {
 }
 
 // SetCamera sets the camera for Gate 1 pan [07 §10].
-func (c *Client) SetCamera(cam *camera.Camera) { c.cam = cam }
+func (c *Client) SetCamera(cam *camera.Camera) {
+	if c.cam != cam {
+		c.camSamples = 0
+	}
+	c.cam = cam
+}
 
 // SetPalette installs real palette tables [03 §4.3] C7.
 func (c *Client) SetPalette(p *palette.Tables) {

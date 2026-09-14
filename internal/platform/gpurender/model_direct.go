@@ -898,6 +898,11 @@ func (r *Renderer) commitModelSilhouetteShadow(g *drawlist.ModelGeometry) {
 		r.modelStats.ShadowsOmitted++
 		return
 	}
+	if r.commitAircraftShadow(g, body) {
+		r.modelStats.Shadows++
+		r.modelStats.Silhouettes++
+		return
+	}
 	sb := modelWorldBounds(sg)
 	x0, y0 := maxInt(sb.Min.X, 0), maxInt(sb.Min.Y, 0)
 	x1, y1 := minInt(sb.Max.X, r.clipW()), minInt(sb.Max.Y, r.clipH())

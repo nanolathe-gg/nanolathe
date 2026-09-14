@@ -40,15 +40,13 @@ func (c *Client) VisitTacticalUnits(f *frame.Frame, visit func(frame.UnitView)) 
 	// screen anchor margin without depending on marker alpha or generated art.
 	c.strategicDraw.indexUnits(f)
 	clip := c.battleViewportRect()
-	zoom := c.liveZoom()
-	camX, camZ := c.strategicOrigin()
+	view := c.presentationCameraView()
 	const margin = strategicIconSize / 2
 	for _, u := range f.Units {
 		if u.Slot == 0 || !strategicUnitVisible(f, u, f.ViewingPlayer, c.strategicDraw.slots) {
 			continue
 		}
-		x := strategicRangeProject((int64(u.X)>>16)-int64(camX), zoom)
-		y := strategicRangeProject((int64(u.Z)>>16)-(int64(u.Y)>>17)-int64(camZ), zoom)
+		x, y := presentationPoint(view, int64(u.X)>>16, (int64(u.Z)>>16)-(int64(u.Y)>>17))
 		if x+margin <= int64(clip.X) || x-margin >= int64(clip.X+clip.W) || y+margin <= int64(clip.Y) || y-margin >= int64(clip.Y+clip.H) {
 			continue
 		}
@@ -85,7 +83,7 @@ func (c *Client) DrawTacticalRange(x, y, z numeric.Fixed, radius int32, color ui
 		}
 	}
 	zoom := c.liveZoom().Norm()
-	camX, camZ := c.strategicOrigin()
+	view := c.presentationCameraView()
 	segments := strategicRangeSegments(radius, zoom)
 	point := func(i int) (int64, int64) {
 		a := numeric.Angle(uint16(i * 65536 / segments))
@@ -95,7 +93,7 @@ func (c *Client) DrawTacticalRange(x, y, z numeric.Fixed, radius int32, color ui
 		px := (int64(x) >> 16) + (int64(radius)*int64(numeric.Sin(a))+4096)>>13
 		pz := (int64(z) >> 16) + (int64(radius)*int64(numeric.Cos(a))+4096)>>13
 		py := max(y, c.GroundHeightAt(numeric.Fixed(px<<16), numeric.Fixed(pz<<16)))
-		return strategicRangeProject(px-int64(camX), zoom), strategicRangeProject(pz-(int64(py)>>17)-int64(camZ), zoom)
+		return presentationPoint(view, px, pz-(int64(py)>>17))
 	}
 	ax, ay := point(0)
 	for i := 1; i <= segments; i++ {
@@ -115,14 +113,6 @@ func (c *Client) DrawTacticalRange(x, y, z numeric.Fixed, radius int32, color ui
 func strategicRangeSegments(radius int32, zoom camera.Zoom) int {
 	screenRadius := int64(radius) * int64(zoom.Norm()) / int64(camera.ZoomUnit)
 	return int(max(int64(32), min(int64(512), ((screenRadius*4/5+3)/4)*4)))
-}
-
-func strategicRangeProject(v int64, zoom camera.Zoom) int64 {
-	p := v * int64(zoom.Norm())
-	if p >= 0 {
-		return (p + int64(camera.ZoomUnit) - 1) / int64(camera.ZoomUnit)
-	}
-	return p / int64(camera.ZoomUnit)
 }
 
 // Liang-Barsky clips wide projected coordinates before narrowing or rasterizing.

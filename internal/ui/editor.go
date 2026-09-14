@@ -95,6 +95,10 @@ func (p *Panel) ApplyEditorTokens(tokens []input.Token, measure func(string) int
 		result.Consumed = i + 1
 		if token.Kind == input.TokenEdit {
 			switch token.Key {
+			case input.KeyInsert, input.KeyV:
+				// TODO(T25): wire the host clipboard to the established paste
+				// operation for Insert and Ctrl+V. Until the host byte/codepage
+				// mapping is settled, leave text unchanged [07 §2].
 			case input.KeyEscape:
 				text = ""
 				p.editor.caret = 0

@@ -1,6 +1,8 @@
 package client
 
 import (
+	"math"
+
 	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
@@ -55,6 +57,7 @@ type PausedWorldInputs struct {
 	camX, camZ, viewW, viewH, mapW, mapH int32
 	scale                                camera.ViewScale
 	zoom                                 camera.Zoom
+	view                                 camera.PresentationView
 	strategic                            bool
 
 	terrain *world.Terrain
@@ -97,11 +100,12 @@ func (c *Client) PausedWorldDigest() (PausedWorldInputs, bool) {
 	}
 	// Use precisely the same previous-frame admission and camera arithmetic as
 	// recordFrameNoAudio, including the viewport-sized teleport snap (§13.5).
+	d.view = c.presentationCameraView()
 	if c.hasCameraBlend() {
-		w, h := c.cam.EffectiveView()
-		d.camX = lerpOrigin(c.camPrevX, c.camCurX, int64(c.cameraFraction16), w)
-		d.camZ = lerpOrigin(c.camPrevZ, c.camCurZ, int64(c.cameraFraction16), h)
+		d.camX, d.camZ = int32(math.Floor(d.view.X)), int32(math.Floor(d.view.Z))
+		d.zoom = camera.Zoom(d.view.Factor * float64(camera.ZoomUnit))
 	}
+
 	return d, true
 }
 

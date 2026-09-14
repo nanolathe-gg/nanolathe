@@ -17,6 +17,9 @@ type Token struct {
 	Kind TokenKind
 	Rune rune
 	Key  Key
+	// Ctrl distinguishes translated Ctrl-letter, digit and function-key tokens
+	// from their plain counterparts, independently of later held state [07 §2].
+	Ctrl bool
 }
 
 const tokenRingSlots = 30

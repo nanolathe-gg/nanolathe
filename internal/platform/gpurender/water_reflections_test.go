@@ -466,14 +466,14 @@ func TestReflectionSofteningBounds(t *testing.T) {
 		}
 		// Transformed corners are screen coordinates; native effective scale
 		// equals record scale in this case.
-		if !s.markSofteningTiles(192, 192, scale, scale, .7) || !s.softTiles[0] || !s.softTiles[1] || !s.softTiles[3] || !s.softTiles[4] || s.softTiles[8] {
+		if !s.markSofteningTiles(192, 192, scale, scale, .7, 0, 0) || !s.softTiles[0] || !s.softTiles[1] || !s.softTiles[3] || !s.softTiles[4] || s.softTiles[8] {
 			t.Fatalf("ramp crossing or filter margin culled incorrectly: scale=%v tiles=%v", scale, s.softTiles)
 		}
 		for _, height := range []float32{32, 330} {
 			for i := range s.transformed {
 				s.transformed[i].Custom0 = height * scale
 			}
-			if s.markSofteningTiles(192, 192, scale, scale, .7) {
+			if s.markSofteningTiles(192, 192, scale, scale, .7, 0, 0) {
 				t.Fatalf("inactive height retained blur work: %v", height)
 			}
 		}
@@ -481,7 +481,7 @@ func TestReflectionSofteningBounds(t *testing.T) {
 			s.transformed[i].Custom0 = 180 * scale
 			s.transformed[i].DstX += 300
 		}
-		if s.markSofteningTiles(192, 192, scale, scale, .7) {
+		if s.markSofteningTiles(192, 192, scale, scale, .7, 0, 0) {
 			t.Fatal("offscreen reflection retained blur work")
 		}
 	}
@@ -489,7 +489,7 @@ func TestReflectionSofteningBounds(t *testing.T) {
 
 func TestReflectionSofteningFractionalCoordinates(t *testing.T) {
 	s := waterReflections{runs: []reflectionRun{{page: 0, count: 3, indexCount: 3}}, indices: []uint32{0, 1, 2}, transformed: []ebiten.Vertex{{DstX: 300, DstY: 100, Custom0: 180}, {DstX: 301, DstY: 100, Custom0: 180}, {DstX: 301, DstY: 101, Custom0: 180}}}
-	if !s.markSofteningTiles(512, 256, 1, .75, .7) || !s.softTiles[2*8+6] || s.softTiles[1*8+4] {
+	if !s.markSofteningTiles(512, 256, 1, .75, .7, 0, 0) || !s.softTiles[2*8+6] || s.softTiles[1*8+4] {
 		t.Fatalf("screen bounds not converted to recording coordinates: %v", s.softTiles)
 	}
 }

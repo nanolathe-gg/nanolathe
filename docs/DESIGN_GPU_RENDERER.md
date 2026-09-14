@@ -1543,9 +1543,9 @@ from the fire, the fraction cannot move backwards within one tick: an
 Update that releases nothing saturates it at one and holds the pose.
 
 **Camera.** The camera moves in the 30 Hz step, so Enhanced blends it too:
-the client samples the camera origin (X, Z) at every Step, keeps the previous
-sample, and while recording an interpolated frame presents the origin blended
-with integer truncation, restoring the live origin after the record. The
+the client samples the precise camera origin and zoom at every Step, keeps the
+previous sample, and while recording presents the affine transform blended
+between those samples (§16.5), restoring the complete live camera after the record. The
 camera's fraction is not the tick fraction: the camera advances on the
 window's Update grid, which is not phase-aligned with the simulation's scaled
 units, so blending it by the tick fraction would snap it back whenever a tick
@@ -1553,8 +1553,10 @@ fired mid-update. The window adapter timestamps each Update and hands the
 client `(now − lastUpdate) × 30`, clamped to [0, 1), before each modern Draw
 (`SetCameraFraction`); this is platform time in the adapter, where the input
 timestamps already live, and never reaches the client's clock or the sim. A
-jump larger than the viewport in either axis (a minimap click or a bookmark
-recall) snaps rather than sweeps. Zoom is not blended.
+jump larger than the viewport in either axis at an unchanged zoom (a minimap
+click or a bookmark recall) snaps rather than sweeps. Zoom-induced translation
+is part of the coupled transform, including when a wide zoom step crosses more
+than one viewport.
 
 **Two committed ticks.** `frame.Buffer` gains `Previous()`: the slot published
 immediately before `Current()`, or nil before the second publication or while
@@ -3189,7 +3191,10 @@ capture into a 2× one.
 
 **The world region.** The recorder brackets its world commands with a
 `drawlist.WorldSpace` marker carrying the factor, the step, the record extent
-and the battle viewport. It reaches an executor through the optional
+and the battle viewport. A positive `Factor` carries the unquantized live zoom,
+overriding `Zoom` for GPU replay; `OffsetX` and `OffsetY` carry framebuffer
+translation after scaling. Zero extra fields preserve the prior capture path.
+It reaches an executor through the optional
 `drawlist.WorldSink` interface, exactly as the trail family reaches one, so the
 classic executor and every existing fixture are unaffected. The region opens
 after the clear and closes before the chrome; the strategic marker layer sits
@@ -3224,13 +3229,12 @@ extents are equal, so none of this changes a composed pixel there.
 
 **The transform.** Inside the region the modern executor's scheduler scales
 every rectangle it places and every vertex it appends by *factor / step's
-factor*, about the **surface origin**. It is a pure scale with no translation
-term because the recorder projects the world from the framebuffer's own
-top-left — the camera origin is drawn there and the chrome is painted over it —
-so record x = step·(worldX − camX) and screen x = factor·(worldX − camX) differ
-by exactly this ratio, and the world under the viewport's corner therefore stays
-put on its own. The factor is never above the step's, so the transform only ever
-shrinks.
+factor*, about the **surface origin**. The integer recording origin maps to the framebuffer origin before the
+subpixel correction. During interpolated presentation, each axis also receives
+`(recordOrigin − preciseOrigin) × preciseZoom` framebuffer pixels of translation.
+Positions, conservative overlap bounds and inverse shader sampling use this
+same affine transform; lengths receive only its scale. The precise factor is never above the step's, so the transform only ever
+shrinks. Translation can arm the transform even at native or detail scale.
 
 It is applied at the scheduler's intake — `beginBlended`, `beginPoint`, `quad`
 and `quadCorners` — so the overlap tests that decide a command's phase compare
@@ -3383,6 +3387,65 @@ world point drawn at framebuffer pixel P before the zoom is drawn at P after
 it. The first build of this section anchored on the raw framebuffer point,
 which held the world 128/f pixels left of and 32/f above the pointer fixed
 instead, and the map slid under the cursor.
+
+**Continuous Enhanced presentation.** The 30 Hz zoom controller still owns
+input targets and the existing ease. Its integer camera remains available to
+ordinary input and clamp consumers. Beside that origin, zoom operations retain
+the precise anchor using `origin + anchor/oldZoom − anchor/newZoom`; a clamped
+axis takes the integer clamp result. Another writer changing the integer origin
+or factor invalidates the retained fraction. This is Enhanced implementation
+policy, not a retail behavior finding.
+
+Every host sample carries `(originX, originZ, zoom)`. At presentation fraction
+`t`, use `zoom = lerp(previousZoom, currentZoom, t)` and, for each axis,
+`origin = lerp(previousOrigin × previousZoom, currentOrigin × currentZoom, t) / zoom`.
+This interpolates the complete screen transform: a world point anchored at both
+endpoints stays anchored throughout the transition. Independently blending the
+origin and zoom would introduce a curved drift. The former origin-only blend
+paired the new 30 Hz zoom with the old camera position, repeatedly displacing
+the world and then pulling it back toward the cursor.
+
+The temporary recording camera uses the whole origin and a quantized factor for
+integer culling and layer thresholds, selecting its recording step from the
+precise factor. The world boundary carries the unquantized factor and remaining
+translation. Record extents round the factor down and add the usual pad so the
+frame remains covered. Strategic markers and tactical guides project through
+the same precise view before rounding to their final screen pixels. Strategic
+picking retains the transform actually submitted; paused-world and speculative
+recording identities include the precise camera samples/view. The entire live
+camera is restored after recording. Stationary paused views reuse their raster
+across changing host fractions; subpixel motion invalidates it.
+
+Acceptance exercises every displayed fraction through both directions, a target
+reversal, the native recording-step boundary, final settling, an axis clamp,
+external camera movement, paused cache reuse and submitted strategic picking.
+A static point at the cursor stays fixed, and an off-anchor point moves
+monotonically between unchanged-direction targets. Actual-device fixtures verify
+affine placement and inverse sampling with the HUD outside the transform.
+
+Validation (2026-09-13): the camera/recorder regression tests, independent
+review and actual-device GPU fixtures passed. A frozen Ring Atoll scene,
+seed 7, 90 ticks, 1024×768, with explicit half-update presentation fractions
+was captured through 1×→2×→0.25×→1×. The commander at the cursor rocks in the
+baseline and stays anchored in the corrected capture; both zoom directions
+were visually inspected. Captures are outside the repository under
+`/private/tmp/nanolathe-zoom-visible-{before,after}`; the side-by-side video is
+`/private/tmp/nanolathe-zoom-comparison.mp4`.
+
+Sequential Great Divide scene-4 battle runs compared baseline `74b9ba21` with
+the integrated fix, seed 7, 1920×1080, native scale, 300 preticks, 60 warmup
+and 180 measured draws at 30 TPS, factories on, automatic remaster off.
+Both renderers have identical metadata, every frame's census (including
+features and construction), and byte-identical final battle captures; the
+captures were visually inspected. Classic Record median/p95 changed from
+14.058/18.304 ms to 16.727/50.253 ms, with 1.585 MB/frame in both runs.
+Modern Record median changed from 4.244 to 3.746 ms and Submit median from
+5.574 to 4.748 ms; allocation was 1.875 versus 1.601 MB/frame. Other tasks
+were building and testing on this host during these runs, so the timings are
+not an isolated performance comparison and establish no speedup or regression.
+Artifacts are `/private/tmp/nanolathe-zoom-bench-{base,fixed}-{classic,modern}`.
+The separate motion capture and anchor tests exercise zoom interpolation;
+the battle benchmark holds the camera fixed.
 
 ### 16.6 The wheel, the steps and the ease — contract Z5
 
@@ -4421,11 +4484,11 @@ magnified adds could be one shader pass sampling both octaves, and the half
 plane could go if Ebitengine's mipmapped shrink proves cheaper than a pass;
 neither was needed at the measured cost.
 
-## 20. Alt/Option tactical range guides (Enhanced)
+## 20. Shift tactical range guides (Enhanced)
 
 ### 20.1 Presentation policy
 
-Holding Alt/Option at any modern-renderer zoom, including 1× and 2×, draws
+Holding Shift at any modern-renderer zoom, including 1× and 2×, draws
 ranges for selected own units and the hovered identified unit.
 An armed build product also shows its prospective ranges at the snapped site,
 including an invalid site while the player repositions it. This is an Enhanced
@@ -4434,8 +4497,9 @@ uses the product definition, footprint centre and validated preview height;
 arming or displaying a guide never submits a construction order.
 
 Releasing the key, losing focus, switching to classic, opening a modal/result
-or entering chat hides the guides. Alt's existing command-group handling stays
-intact. A small on-screen legend names only the categories present:
+or entering chat hides the guides. Shift retains its existing selection and
+command-queue handling. A single-line on-screen legend names only the categories
+present, in their guide colors, without a heading or footer:
 
 | Guide | Ink | Radius source |
 |---|---|---|
@@ -4492,14 +4556,14 @@ the battle viewport before recording. Wide integer coordinates avoid long-range
 wrap; only clipping ratios use transient floating point. Screen-adaptive
 32..512 chords per ring bound tessellation, including huge authored ranges.
 These bounds, dash pattern and colors are Enhanced presentation constants.
-The Alt-off path does not resolve colors, visit targets or record range lines.
+The Shift-off path does not resolve colors, visit targets or record range lines.
 
 Focused tests cover inactive placeholder weapons, independent slot admission,
 interceptor versus stockpile data, deduplication, field narrowing, held-key
 release/focus loss, prospective product/site selection, invalid placement,
 classic fallback, all-zoom committed visibility, terrain projection,
 viewport clipping, bounded long-range geometry and pre-icon draw ordering.
-`--shot-alt --shot-select` captures selected ranges; `--shot-build armllt`
+`--shot-shift --shot-select` captures selected ranges; `--shot-build armllt`
 previews a named product beside the first selection (or at the world viewport
 centre without a selection), without an order. The
 capture switches apply after simulation and zoom setup, so matched scenes retain
@@ -6601,3 +6665,118 @@ retained opaque/cloaked/decloaked transitions, direct live lanes, and real-devic
 pixels. Existing visibility regressions retain owner bypass and foreign cloak
 rejection. The existing atlas-overflow direct-polygon fallback remains a
 presentation approximation with no staged image blend.
+
+## 34. Aircraft soft shadows (Enhanced)
+
+User-approved Enhanced presentation treatment, not retail evidence. It does
+not change authoritative flight or retail
+shadow gates [03 R-REN-03D §1]. Airborne mover-mode units supply clearance above
+the higher of terrain under the unit and sea level. This is one receiver height
+per aircraft, not terrain-conforming projection across the entire footprint.
+Ground units, structures, clipped silhouettes and Original use their existing
+shadow route. Placement and source silhouette remain the existing mobile path.
+
+The recording carries clearance and model scale independently of retained face
+geometry; each placement refresh clears old admission. The Enhanced executor
+filters body alpha at the shadow placement, with a normalized 5-by-5 binomial
+kernel and bilinear taps in the existing twice-resolution body atlas. Radius is
+clearance/60, capped at three world pixels, plus an upper-altitude increment.
+That increment is smoothstep over clearances 120–200, from zero to 1.5 world
+pixels, so the final radius reaches 4.5 at clearance 200 and stays capped there.
+Lower flight retains the reviewed curve. Scale is applied once after these
+world-space calculations. The kernel weights on each axis are
+1,4,6,4,1, divided by 16. This preserves integrated coverage away from clipping
+and makes thin details fade as the penumbra grows. No framebuffer colour is
+filtered. These are artistic constants, not an optical calibration.
+
+Each receiving pixel samples the existing ordinary-water mask with its existing
+0.8–1 coverage ramp. Wet pixels interpolate shadow opacity from one half to one
+fifth, add half a world pixel of filter radius, and displace the silhouette with
+bounded world-anchored waves driven by committed water phase and integrated
+wind drift. The motion freezes on pause, scales once with zoom, and cannot
+warp a dry shadow pixel. This approximates water's weaker shadow response; it
+does not trace refraction or separate sky reflection from direct lighting.
+
+The command is one clipped, expanded rectangle per eligible aircraft, in its
+ordinary shadow-before-body order. A subimage view bounds the source to the
+body's atlas region, making out-of-subject taps transparent without copying
+pixels or sampling another model. Expansion includes filter and displacement
+reach. There is no full-screen blur or extra render target. The extra shader
+uses 25 bilinear coverage taps, plus a bilinear water-mask lookup and palette
+lookup. Subimage views may split batches; cost needs measured aircraft scenes.
+SetAircraftShadows is the renderer's capture comparison control.
+
+### Initial prototype verification and cost
+
+tools/check and tools/check-retail pass, as do the focused client/draw-list/GPU
+checks and Metal device loop. Pixel
+relationships verify wider spread without extra integrated shadow mass, water
+attenuation, dry stability, frozen replay, neighboring atlas isolation and
+fractional zoom. Independent read-only review verified source coordinates,
+clearance normalization, filter weights and conservative expansion.
+
+Installed ARM fighter and bomber models were inspected on Seven Islands and
+Ring Atoll over land, water and shore, at native and twice scale, with staged
+clearances of 32 and 200 world pixels. The 2x Ring Atoll shoreline sequence
+advances water through 60 frames while holding the aircraft fixed. These are
+staged visual fixtures, not simulated flight. Captures and profiles are outside
+the repository. Reproduce with NANOLATHE_GPU_DEVICE_TEST=1,
+NANOLATHE_RETAIL_ASSETS pointing to the install, NANOLATHE_AIRCRAFT_MAP set to
+Ring Atoll and NANOLATHE_AIRCRAFT_SHOTS pointing to an output directory, then
+run go test ./internal/platform/gpurender -run '^TestDeviceFixtureLoop$' -count=1.
+NANOLATHE_AIRCRAFT_PROFILE=1 additionally runs the paired frozen profile under
+the shared benchmark lock.
+
+On the M3 Pro/Metal, 1280x960, 2x model scale, 60 warmup and 180 measured frames
+per case, four alternating off/on/on/off runs with 64 installed fighters gave
+median completed-frame times 5.668/6.265/6.307/5.656 ms on the land camera and
+6.126/6.685/6.752/6.350 ms on the water camera. Paired increments are roughly
+0.40–0.65 ms; averaged increments are 0.62 ms and 0.48 ms. Completion includes
+CPU submission, driver synchronization and one-pixel readback, not isolated
+GPU timestamps. Passes stay at seven; device draws rise from 11 to 74 because
+bounded subimage sources split the aircraft runs. A lone fighter's small cost
+is not established by these noisy comparisons. Dense overlapping formations
+and other GPU backends remain unmeasured.
+
+Live Great Divide battle comparisons against the prototype's exact starting
+revision match scene metadata and every measured tick's census for both
+executors, retaining moving armies, factory construction, sprite features and
+fire. Classic's capture is byte-identical. Modern's changed pixels follow the
+aircraft shadow footprints; captures were inspected. Median record/submit/
+cadence in milliseconds: classic 13.517/0.485/33.333 before and
+13.332/0.469/33.334 after; modern 2.998/4.817/33.333 before and
+2.975/5.142/33.333 after. Modern's first measured frame retains 409 direct
+subjects, 293 shadows, zero overflow and 18 passes; draws rise 95 to 118.
+These measurements describe the initial three-pixel prototype. The user then
+approved the upper-altitude increment and landing the treatment in main.
+
+### Upper-altitude closeout
+
+The final four-pixel treatment passed the focused tests and independent Metal
+review. After integrating the current main, tools/check, tools/check-retail and
+the Metal device fixture loop passed again. All twelve installed-art low-altitude captures remain byte-identical
+to the initial prototype. The high bomber land, water and shore captures were
+inspected; the outer silhouette softens further while the body stays unchanged.
+The normalized-coverage device test now exercises clearance 200, and the
+radius test checks low-flight preservation, upper cap and scale independence.
+
+Final pre-landing Great Divide runs retain equal scene metadata and every
+measured census, with byte-identical Classic captures and only aircraft-shadow
+footprints changed in Modern. Classic median record/submit/cadence is
+13.247/0.475/33.333 ms before and 13.424/0.460/33.333 ms after. Modern's first
+pair is 2.048/3.657/33.333 ms before and 3.082/4.869/33.333 ms after; a repeated
+baseline is 2.513/3.833/33.333 ms and its paired integrated run is
+2.994/4.932/33.334 ms. Both pairs retain equal metadata and censuses; host
+timing variation is material, so these timings do not isolate the filter.
+Modern retains 18 passes, 409 direct subjects, 293 shadows and zero overflow;
+first-frame draws rise from 95 to 118.
+
+The final 64-fighter frozen profile retains the same sampling count and seven
+passes. Its off/on/on/off completed-frame medians are
+5.854/7.825/7.025/6.118 ms on the land camera and
+7.210/8.107/7.985/7.556 ms on the water camera. Paired increments range from
+about 0.43 to 1.97 ms in this run, greater and more variable than the initial
+three-pixel profile; the expanded filter footprint does additional GPU work.
+CPU submission increments in those pairs remain about 0.01–0.06 ms. These
+synchronized completion measurements include readback overhead; the rendering
+path performs no CPU readback. No isolated GPU duration is established.

@@ -219,11 +219,16 @@ func TestCtrlCategorySelectUsesCatalog(t *testing.T) {
 	if len(sel) != 2 {
 		t.Fatalf("Shift+Ctrl+B selected %v, want the union of both categories", sel)
 	}
-	// A letter no stock category authors selects nothing and changes nothing.
+	// An empty category adds nothing with Shift, but replaces the selection
+	// with nothing without Shift [07 R-CAM-01 §2].
 	before := len(sel)
-	pressKeys(b, input.KeyCtrl, input.KeyQ)
+	pressKeys(b, input.KeyCtrl, input.KeyShift, input.KeyQ)
 	if got := len(selectedHandles(t, b)); got != before {
-		t.Fatalf("Ctrl+Q changed the selection from %d to %d", before, got)
+		t.Fatalf("Shift+Ctrl+Q changed the selection from %d to %d", before, got)
+	}
+	pressKeys(b, input.KeyCtrl, input.KeyQ)
+	if got := selectedHandles(t, b); len(got) != 0 {
+		t.Fatalf("Ctrl+Q retained %v, want an empty selection", got)
 	}
 }
 

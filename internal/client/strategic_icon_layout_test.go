@@ -145,7 +145,9 @@ func TestStrategicIconBlendUsesCommittedVisibility(t *testing.T) {
 	}
 	c.SetSnapshot(buffer)
 	c.SetInterpolation(true)
-	c.camPrevX, c.camCurX, c.camSamples = 0, 100, 2
+	c.camPrevView = camera.PresentationView{Factor: c.cam.EffectiveZoom().Float()}
+	c.camCurView = camera.PresentationView{X: 100, Factor: c.cam.EffectiveZoom().Float()}
+	c.camSamples = 2
 	c.SetCameraFraction(0.5)
 	c.drawStrategicMarkers(buffer.Current())
 	if c.markerArena[0].X != 275 {
@@ -182,7 +184,9 @@ func TestStrategicIconAcceptedProjection(t *testing.T) {
 	}
 	c.SetSnapshot(buffer)
 	c.SetInterpolation(true)
-	c.camPrevX, c.camCurX, c.camSamples = 0, 240, 2
+	c.camPrevView = camera.PresentationView{Factor: c.cam.EffectiveZoom().Float()}
+	c.camCurView = camera.PresentationView{X: 240, Factor: c.cam.EffectiveZoom().Float()}
+	c.camSamples = 2
 	c.SetCameraFraction(0.5)
 	c.drawStrategicMarkers(buffer.Current())
 	c.SetCameraFraction(0.625)      // measured fraction after predicted recording
@@ -195,7 +199,7 @@ func TestStrategicIconAcceptedProjection(t *testing.T) {
 	if _, _, ok := c.PickPresentedUnit(buffer.Current(), 249, 200, 0); !ok {
 		t.Fatal("speculative frame replaced displayed hit bounds")
 	}
-	c.camCurX = 400 // a new camera sample invalidates the old projection
+	c.camCurView.X = 400 // a new camera sample invalidates the old projection
 	if _, _, ok := c.PickPresentedUnit(buffer.Current(), 249, 200, 0); ok {
 		t.Fatal("old projection survived a camera change")
 	}

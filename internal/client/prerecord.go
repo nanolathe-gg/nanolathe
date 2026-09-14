@@ -20,6 +20,7 @@ package client
 // handling, the simulation step, or the audio drain.
 
 import (
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"time"
 
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
@@ -54,9 +55,11 @@ type PresentationInputs struct {
 	CameraFractionSet bool
 	// The camera origin and its two stepped samples: what beginCameraBlend
 	// blends between, and the origin every world site projects through.
-	CamX, CamZ                           int32
-	CamPrevX, CamPrevZ, CamCurX, CamCurZ int32
-	CamSamples                           uint8
+	CamX, CamZ              int32
+	CamSamples              uint8
+	CamPrevView, CamCurView camera.PresentationView
+	CamZoom                 camera.Zoom
+	CamScale                camera.ViewScale
 	// Interpolation and Enhanced are the two presentation switches a record
 	// reads; Width and Height are the surface the pass composes for.
 	Interpolation bool
@@ -222,18 +225,15 @@ func (c *Client) PresentationDigest() PresentationInputs {
 		TickFraction16:    c.tickFraction16,
 		CameraFraction16:  c.cameraFraction16,
 		CameraFractionSet: c.cameraFractionSet,
-		CamPrevX:          c.camPrevX,
-		CamPrevZ:          c.camPrevZ,
-		CamCurX:           c.camCurX,
-		CamCurZ:           c.camCurZ,
 		CamSamples:        c.camSamples,
-		Interpolation:     c.interpolation,
-		Enhanced:          c.enhanced,
-		Width:             int32(c.width),
-		Height:            int32(c.height),
-		MessageProducer:   c.messages.Producer,
-		MessageDisplay:    c.messages.Display,
-		Resources:         c.displayedResources,
+		CamPrevView:       c.camPrevView, CamCurView: c.camCurView,
+		Interpolation:   c.interpolation,
+		Enhanced:        c.enhanced,
+		Width:           int32(c.width),
+		Height:          int32(c.height),
+		MessageProducer: c.messages.Producer,
+		MessageDisplay:  c.messages.Display,
+		Resources:       c.displayedResources,
 	}
 	if c.buffer != nil {
 		if cur := c.buffer.Current(); cur != nil {
@@ -242,6 +242,7 @@ func (c *Client) PresentationDigest() PresentationInputs {
 	}
 	if c.cam != nil {
 		d.CamX, d.CamZ = c.cam.X, c.cam.Z
+		d.CamZoom, d.CamScale = c.cam.Zoom, c.cam.Scale
 	}
 	return d
 }

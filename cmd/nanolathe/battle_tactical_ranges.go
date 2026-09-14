@@ -98,11 +98,11 @@ func tacticalRanges(d *content.UnitDef, enabled [3]bool, preview, activated bool
 }
 
 func (b *battleSession) updateTacticalRangeInput(in *input.State, focused bool) {
-	b.tacticalRangesHeld = focused && in != nil && in.Kbd != nil && in.Kbd.KeyHeld(input.KeyAlt)
+	b.tacticalRangesHeld = focused && in != nil && in.Kbd != nil && in.Kbd.KeyHeld(input.KeyShift)
 }
 
 func (b *battleSession) tacticalRangesActive(c *client.Client) bool {
-	return b != nil && (b.modernDrag == nil || b.modernDrag.product == "") && c != nil && c.TacticalRangesAvailable() && b.tacticalRangesHeld && b.cat != nil && b.battleState().Modal() == ui.BattleModalClosed && !b.isResultVisible() && !b.isTalkGUIActive()
+	return b != nil && b.modernDrag == nil && c != nil && c.TacticalRangesAvailable() && b.tacticalRangesHeld && b.cat != nil && b.battleState().Modal() == ui.BattleModalClosed && !b.isResultVisible() && !b.isTalkGUIActive()
 }
 
 // Suppress capability differences that could identify a commander decoy. The
@@ -176,36 +176,30 @@ func (b *battleSession) drawTacticalRangeLegend(c *client.Client, f *frame.Frame
 		return
 	}
 	var kinds uint8
-	inactive := false
-	b.visitTacticalRanges(c, f, func(_, _, _ numeric.Fixed, r tacticalRange) { kinds |= 1 << r.kind; inactive = inactive || r.inactive })
+	b.visitTacticalRanges(c, f, func(_, _, _ numeric.Fixed, r tacticalRange) { kinds |= 1 << r.kind })
 	if kinds == 0 {
 		return
 	}
 	width, height := c.Size()
-	columns := max(1, min(4, (width-160)/140))
-	count := 0
-	for i := range tacticalRangeStyles {
+	legendWidth := 0
+	const gap = 12
+	for i, style := range tacticalRangeStyles {
 		if kinds&(1<<i) != 0 {
-			count++
+			legendWidth += client.MeasureText(b.hud.console, style.label) + gap
 		}
 	}
-	rows := (count + columns - 1) / columns
+	legendWidth -= gap
 	lineHeight := max(14, int(b.hud.console.Height)+2)
-	x, y := 140, height-40-(rows+2)*lineHeight
-	c.UIFillRect(x-4, y-3, min(width-x-4, columns*140+8), (rows+2)*lineHeight+6, c.TacticalRangeColor([3]uint8{12, 18, 24}))
-	white := c.TacticalRangeColor([3]uint8{240, 240, 240})
-	c.UIText(b.hud.console, "ALT: RANGE GUIDES", x, y, white)
-	entry := 0
+	x, y := 140, height-40-lineHeight
+	c.UIFillRect(x-4, y-3, min(width-x-4, legendWidth+8), lineHeight+6, c.TacticalRangeColor([3]uint8{12, 18, 24}))
 	for i, style := range tacticalRangeStyles {
 		if kinds&(1<<i) == 0 {
 			continue
 		}
-		c.UIText(b.hud.console, style.label, x+(entry%columns)*140, y+(entry/columns+1)*lineHeight, c.TacticalRangeColor(style.rgb))
-		entry++
+		if x >= width-8 {
+			break
+		}
+		c.UITextWidth(b.hud.console, style.label, x, y, width-x-8, c.TacticalRangeColor(style.rgb))
+		x += client.MeasureText(b.hud.console, style.label) + gap
 	}
-	note := "Terrain / target limits apply"
-	if inactive {
-		note = "Inactive sensor guides are dashed"
-	}
-	c.UIText(b.hud.console, note, x, y+(rows+1)*lineHeight, white)
 }

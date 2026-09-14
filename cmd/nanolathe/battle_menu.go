@@ -81,25 +81,39 @@ func (b *battleSession) handleBattleMenuInput(in *input.State, cl *client.Client
 	if b == nil || state == nil || in == nil || state.Modal() == ui.BattleModalClosed {
 		return
 	}
+	panel, window, page := b.battleModalPanel()
+	result := b.serviceBattleChildPanel(panel, window, page, in)
+	if result.Fired && panel != nil && result.FiredIndex >= 0 && result.FiredIndex < len(panel.Window.Gadgets) {
+		b.activateBattleMenuButton(panel.Window.Gadgets[result.FiredIndex].Name, cl)
+		return
+	}
+	// The child gets its indexed quickkey peek first; only an unclaimed
+	// event can enter the battle caller's modal rows [07 §3].
+	if result.ConsumedTokens != 0 {
+		return
+	}
+	modalInput := *in
+	modalInput.ShortcutTokenMode = in.ShortcutTokenMode || in.PendingTokens() != 0
+	if tokens := in.PeekTokens(); len(tokens) != 0 {
+		modalInput.ShortcutToken = tokens[0]
+	}
+	kbd := battleShortcutKeyboard(&modalInput)
 	// This is the modal-chain back transition, not the ordinary child window's
 	// Escape default.  It remains a battle caller key and therefore does not
 	// enable the zero-token child's key matrix [07 R-FE-01 §7][07 R-WGT-01 §2].
-	if in.Kbd != nil && in.Kbd.KeyDown(input.KeyEscape) {
+	if kbd != nil && kbd.KeyDown(input.KeyEscape) {
+		in.DiscardTokens(1)
 		b.applyBattleSchedule(state.Back())
 		return
 	}
 	// YESORNO additionally has an explicit battle caller row: raw Enter routes
 	// to CHOICE2.  It is not the child key matrix or a header default, which
 	// stays excluded by zero token mode [07 R-FE-01 §7][07 R-CAM-01 §2].
-	if in.Kbd != nil && in.Kbd.KeyDown(input.KeyEnter) &&
+	if kbd != nil && kbd.KeyDown(input.KeyEnter) &&
 		(state.Modal() == ui.BattleModalConfirmMain || state.Modal() == ui.BattleModalConfirmExit) {
+		in.DiscardTokens(1)
 		b.activateBattleMenuButton("CHOICE2", cl)
 		return
-	}
-	panel, window, page := b.battleModalPanel()
-	result := b.serviceBattleChildPanel(panel, window, page, in)
-	if result.Fired && panel != nil && result.FiredIndex >= 0 && result.FiredIndex < len(panel.Window.Gadgets) {
-		b.activateBattleMenuButton(panel.Window.Gadgets[result.FiredIndex].Name, cl)
 	}
 }
 

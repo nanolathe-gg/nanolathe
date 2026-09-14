@@ -70,18 +70,18 @@ func (r *Renderer) appendTreeHeat() {
 		scale := sp.scale * k
 		width := min(max(sp.width*0.55*k, 14*scale), 38*scale)
 		height := min(max(sp.height*1.25*k, 56*scale), 112*scale)
-		x := (sp.x + sp.width*0.5) * k
-		bottom := (sp.y + sp.height*0.45) * k
+		x := r.sched.txx(sp.x + sp.width*0.5)
+		bottom := r.sched.txy(sp.y + sp.height*0.45)
 		if sp.wreck {
 			// Lower, broader rising air over the wreck's metal body.
 			width = min(max(sp.width*0.55*k, 12*scale), 40*scale)
 			height = min(max(sp.height*0.85*k, 32*scale), 64*scale)
-			bottom = (sp.y + sp.height*0.65) * k
+			bottom = r.sched.txy(sp.y + sp.height*0.65)
 		}
 		loX, loY, hiX, hiY := float32(0), float32(0), float32(r.w), float32(r.h)
 		if sp.hasClip {
-			loX, loY = max(loX, float32(sp.clip.X)*k), max(loY, float32(sp.clip.Y)*k)
-			hiX, hiY = min(hiX, float32(sp.clip.X+sp.clip.W)*k), min(hiY, float32(sp.clip.Y+sp.clip.H)*k)
+			loX, loY = max(loX, r.sched.txx(float32(sp.clip.X))), max(loY, r.sched.txy(float32(sp.clip.Y)))
+			hiX, hiY = min(hiX, r.sched.txx(float32(sp.clip.X+sp.clip.W))), min(hiY, r.sched.txy(float32(sp.clip.Y+sp.clip.H)))
 		}
 		x0, y0, x1, y1 := max(loX, x-width), max(loY, bottom-height), min(hiX, x+width), min(hiY, bottom)
 		if x0 >= x1 || y0 >= y1 {

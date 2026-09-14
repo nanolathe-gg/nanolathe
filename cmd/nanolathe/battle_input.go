@@ -54,8 +54,8 @@ func (b *battleSession) syncSelectionDrag(cl *client.Client) {
 // against what this dispatcher does, in table order. Retail folds Ctrl into
 // the token itself (`Ctrl+A..Z` -> 0xAA..0xC3, `Ctrl+0..9` -> 0xC4..0xCD,
 // `Ctrl+F1..F12` -> 0xCE..0xD9), so a Ctrl-composed token can never reach an
-// unmodified key's case; this key-based layer reproduces that by testing the
-// held Ctrl state on both arms.
+// unmodified key's case. The shortcut decoder keeps that token identity
+// separate from the live Ctrl state used by pointer gestures.
 //
 //	token                  key            state
 //	0x09                   Tab            done — opens/closes the options window (viewerStep)
@@ -107,26 +107,31 @@ func (b *battleSession) syncSelectionDrag(cl *client.Client) {
 // data-driven from cat.BuildMenus; input-capture latch prevents HUD presses
 // from leaking into world drag [F-P0-003][F-P1-008].
 func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
-	// Battle owns no kind-3 editor. Its translated/edit tokens are therefore
-	// fully serviced or ignored by this ordinary input pass and cannot survive
-	// into a later save/load child panel [07 §2][07 R-WGT-01 §12]. Save/load
-	// routes return through gameShell.menuInput before this method is reached.
-	defer in.DiscardTokens(in.PendingTokens())
+	// viewerStep owns the producer queue; this pass receives its one selected
+	// residual token alongside independent live input [07 §2].
+	shortcutsServiced := false
+	defer func() {
+		// Captured pointer work still precedes the residual token. Its early
+		// return must not drop a queued shortcut [07 R-CAM-01 §1].
+		if !shortcutsServiced && in.ShortcutTokenMode && in.ShortcutToken.Kind != input.TokenNone {
+			b.handleBattleShortcuts(in, cl)
+		}
+	}()
 	kbd := in.Kbd
 	b.updateTacticalRangeInput(in, cl == nil || cl.IsFocused())
 	mouse, pointerModifiers := publishedPointer(in)
 	mx, my := int32(mouse.X), int32(mouse.Y)
 	b.updateResourceQueueFeedback(cl)
 	if b.serviceCommandDrag(in, cl, mouse, pointerModifiers) {
+		// The modern gesture already applies Escape's cancellation; applying
+		// it twice would deselect after clearing the latch.
+		shortcutsServiced = battleShortcutKeyboard(in).KeyDown(input.KeyEscape)
 		return
 	}
 	if b.serviceResourceClick(in, cl, mouse, pointerModifiers) {
 		return
 	}
 	b.dragScrollStepped = false
-	if !b.palettePointerOwned && b.serviceDragScroll(mx, my, mouse.Held(input.MouseButtonRight), cl) {
-		return
-	}
 	b.battleState().Input.ShiftHeld = kbd.HasShift()
 	b.battleState().Input.PointerX, b.battleState().Input.PointerY = mx, my
 	// Any latch held by Shift retires on the live Shift-up, regardless of
@@ -135,6 +140,9 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 		b.resetOrderLatch()
 	}
 
+	if !b.palettePointerOwned && b.serviceDragScroll(mx, my, mouse.Held(input.MouseButtonRight), cl) {
+		return
+	}
 	// An admitted minimap camera down edge only sets a presentation capture;
 	// its first jump is serviced here on the following host frame. Capture is
 	// intentionally serviced before fresh clicks and continues outside the
@@ -168,210 +176,11 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 		return
 	}
 
-	// Ctrl is a held-key query made at dispatch time, and a Ctrl-composed token
-	// never reaches an unmodified key's case [07 R-CAM-01 §2]. Every unmodified
-	// arm below is therefore gated on Ctrl being clear, so Ctrl+A selects and
-	// does not also arm the attack latch.
-	ctrlHeld := kbd.KeyHeld(input.KeyCtrl)
-	if !ctrlHeld {
-		// `n` (0x6E) cycles the next unvisited own unit. `N` (0x4E) is a
-		// separate character token and the dispatcher has no case for it, so
-		// Shift+n does nothing: the stockpile round is enqueued only by the
-		// palette's `MAKENUKE`/`MAKEANTI` gadgets [07 R-CAM-01 §14 item 3]
-		// [07 §6]. The Shift+N stand-in that used to call stockpileSelected
-		// here is gone; stockpileSelected keeps its one authored caller, the
-		// gadget dispatch of DispatchStockpile.
-		if kbd.KeyDown(input.KeyN) && !kbd.HasShift() {
-			b.cycleNextUnvisitedUnit()
-		}
-	}
-	// The "label every unit" bit. Retail's dispatcher has a case for each of
-	// five character tokens — `!` `#` `*` `` ` `` `~` — and every one of them
-	// flips interface-flags bit 0 and writes all settings back
-	// [07 R-CAM-01 §2][07 R-HUD-03 §7]. Both backquote tokens are the same
-	// physical key, shifted and unshifted, so one key edge covers them.
-	//
-	// The other three are the shifted digits: the window procedure pushes the
-	// translated *character*, so Shift+1/3/8 on the US layout the retail
-	// install assumes are `!` `#` `*` and never the digit token
-	// [07 R-CAM-01 §14 "the key-token producer"]. The digit case of §2 is
-	// reached by an unshifted digit character or by Alt+digit, so the label
-	// toggle and group recall never meet — the apparent contradiction this
-	// site used to record was two different tokens. The shifted-digit arm
-	// lives in the digit loop below, where the same key edge is classified.
-	if kbd.KeyDown(input.KeyBackquote) {
-		b.toggleDamageBars()
-	}
-	// Game-speed and pause keys [07 §2][07 §11]: +/- clamp Requested 1..20
-	// with localized messages; Pause toggles pause with the retail message.
-	if kbd.KeyDown(input.KeyPause) {
-		b.togglePause()
-	}
-	if kbd.KeyDown(input.KeyEqual) || kbd.KeyDown(input.KeyNumpadAdd) {
-		b.adjustGameSpeed(1)
-	}
-	if kbd.KeyDown(input.KeyMinus) || kbd.KeyDown(input.KeyNumpadSubtract) {
-		b.adjustGameSpeed(-1)
-	}
-	// F9 and F10 are Nanolathe bindings, not retail's: retail's dispatcher has
-	// no case for either key (DESIGN_GPU_RENDERER §14.6). F9 toggles the view
-	// scale about the viewport centre; F10 asks the window adapter to swap
-	// executors. Both are presentation-only — the simulation cannot tell which
-	// scale or which executor is active [I6].
-	if kbd.KeyDown(input.KeyF9) {
-		// The modern executor cycles the same three factors as animated zoom
-		// targets; the classic one steps the record scale as it always did
-		// (DESIGN_GPU_RENDERER §16.8).
-		b.toggleViewScale(cl.Enhanced())
-	}
-	if kbd.KeyDown(input.KeyF10) {
-		requestRendererToggle(cl)
-	}
-	// Digit routing uses the established SwitchAlt gate [07 R-CAM-01 §4].
-	// Ctrl+digit is assignment and plays `CreateSquad`; the non-page branch is
-	// group recall with Shift as preserve / toggle and plays `SelectSquad`
-	// [07 R-CAM-01 §2][07 §9] C9-C10. Ctrl+0 has no case.
-	//
-	// Which physical edges reach the digit case is the key-token producer of
-	// [07 R-CAM-01 §14]. Ctrl composes the token itself, so Ctrl+Shift+digit
-	// still assigns. Without Ctrl the digit case is reached by an *unshifted*
-	// digit character or by Alt+digit — Alt's system key-down pushes the raw
-	// digit value and produces no character message. Shift with Alt therefore
-	// keeps the digit token and the Shift argument recall reads is live only
-	// for Shift+Alt+digit; Shift without Alt yields the shifted character
-	// instead, and only `!` `#` `*` (Shift+1/3/8) have a case — the label
-	// toggle. The other six shifted digits do nothing. Under the default
-	// SwitchAlt = 0 that makes additive recall Shift+Alt+digit; with
-	// SwitchAlt = 1 a plain digit recalls and additive recall is unreachable
-	// from the keyboard, which is retail's behaviour and not a gap to patch.
-	for d := 1; d <= 9; d++ {
-		var key input.Key
-		switch d {
-		case 1:
-			key = input.Key1
-		case 2:
-			key = input.Key2
-		case 3:
-			key = input.Key3
-		case 4:
-			key = input.Key4
-		case 5:
-			key = input.Key5
-		case 6:
-			key = input.Key6
-		case 7:
-			key = input.Key7
-		case 8:
-			key = input.Key8
-		case 9:
-			key = input.Key9
-		}
-		if !kbd.KeyDown(key) {
-			continue
-		}
-		altHeld := kbd.KeyHeld(input.KeyAlt)
-		switch {
-		case ctrlHeld:
-			if b.DispatchGroupAssign(d) == nil {
-				b.playUICue(cl, "CreateSquad") // [07 R-CAM-01 §2]
-			}
-		case kbd.HasShift() && !altHeld:
-			// The shifted-digit character tokens. `!` `#` `*` flip the label
-			// bit; the other six have no case [07 R-CAM-01 §14 item 2].
-			if d == 1 || d == 3 || d == 8 {
-				b.toggleDamageBars()
-			}
-		default:
-			b.routeDigit(d, altHeld, kbd.HasShift(), cl)
-		}
-	}
-	// Page next/prev data-driven with guard [R-P0-03][07 §9] C10: no hardcoding.
-	// `,` is the previous page and `.` the next, both with the `nextbuildmenu`
-	// cue [07 R-CAM-01 §2]; PageUp/PageDown and the shifted arrows are this
-	// build's extra bindings and keep working.
-	if kbd.KeyDown(input.KeyPrior) || kbd.KeyDown(input.KeyRight) && kbd.HasShift() {
-		b.nextBuildPage()
-	}
-	if kbd.KeyDown(input.KeyNext) || kbd.KeyDown(input.KeyLeft) && kbd.HasShift() {
-		b.prevBuildPage()
-	}
-	// `.` and `,` are the next/previous build page of [07 R-CAM-01 §2]. The
-	// `nextbuildmenu` cue that row names belongs to the page-switch routine
-	// itself [07 §9 "Page encoding is closed"], so it is raised inside the page
-	// helpers below and not a second time here.
-	if !ctrlHeld && kbd.KeyDown(input.KeyPeriod) {
-		b.nextBuildPage()
-	}
-	if !ctrlHeld && kbd.KeyDown(input.KeyComma) {
-		b.prevBuildPage()
-	}
-	// The follow camera. `t` tracks the next selected unit after the current
-	// tracked object in slot order and `T` (Shift held) the previous, wrapping
-	// within the local slot range; with nothing selected the tracked object
-	// becomes null. Neither moves the camera itself — the follow step does
-	// [07 R-CAM-01 §2][07 R-CAM-01 §12].
-	if !ctrlHeld && kbd.KeyDown(input.KeyT) {
-		b.cycleFollowTarget(kbd.HasShift())
-	}
-	if ctrlHeld {
-		b.dispatchCtrlLetters(kbd)
-	}
-	// Camera bookmarks: Ctrl+F5..F8 store the current origin into slot 0..3 and
-	// F5..F8 recall it, both with the `SelectSquad` cue [07 R-CAM-01 §2]
-	// [07 R-CAM-01 §12].
-	for slot, key := range [camera.BookmarkSlots]input.Key{input.KeyF5, input.KeyF6, input.KeyF7, input.KeyF8} {
-		if !kbd.KeyDown(key) {
-			continue
-		}
-		if ctrlHeld {
-			if b.cam.StoreBookmark(slot) {
-				b.playUICue(cl, "SelectSquad")
-			}
-			continue
-		}
-		if b.cam.RecallBookmark(slot) {
-			if b.deferFollowInput {
-				b.pendingFollowInput = func() { b.cam.RecallBookmark(slot) }
-			}
-			b.playUICue(cl, "SelectSquad")
-		}
-	}
-	if !ctrlHeld && kbd.KeyDown(input.KeyF1) {
-		b.openUnitInfo()
-	}
-	if !ctrlHeld && kbd.KeyDown(input.KeyF3) {
-		b.glideToMessageSource()
-	}
-	if !ctrlHeld && kbd.KeyDown(input.KeyF4) {
-		// Interface-flags bit 0x80 has exactly two readers, and F4 pins both
-		// [07 R-CAM-01 §14 "F4 pins the score panel open and arms the kill/loss
-		// flash"]. The score panel shows while the bit is set as if Space were
-		// held ([07 R-HUD-04 §1]), and the kill-credit finalize arms the
-		// crediting slot's kill flash and the victim slot's loss flash to 30
-		// **only** while it is set — with F4 off the arrays are never armed and
-		// a Space-held panel shows steady numbers. Both readers are wired; the
-		// bit is not a term of the rail slide. The bit's user-facing name is
-		// recorded Unknown in [07 §2] — no string in the image names it — and
-		// it is a naming curiosity, not an open behavioral question: both
-		// readers are closed and nothing here or downstream reads a name.
-		b.panelHoldFlag = !b.panelHoldFlag
-	}
-	if !ctrlHeld && kbd.KeyDown(input.KeyF12) {
-		b.messageRing().Clear() // [07 R-CAM-01 §2]
-	}
-	// Escape: an armed latch or placement returns to idle; an idle latch
-	// deselects everything [07 R-CAM-01 §2]. viewerStep intercepts the same
-	// edge ahead of this dispatcher, so both copies apply the one arm.
-	if kbd.KeyDown(input.KeyEscape) {
-		if b.battleState().Input.Latch == input.LatchNormal && !b.battleState().PlacementArmed() {
-			_ = b.enqueueSelectionCommand(session.HumanCommand{Kind: session.HumanSelectionClear})
-		}
-		b.disarmPlacement()
-		b.resetOrderLatch()
-		b.battleState().Input.HUDCaptured = false
-		b.battleState().Input.DragActive = false
+	shortcutsServiced = true
+	if b.handleBattleShortcuts(in, cl) {
 		return
 	}
+
 	// The earlier active-GUI pass owns its pointer gesture before world input.
 	// Reuse that verdict; direct controller samples service the same retained
 	// panel here [07 §3][07 R-WGT-01 §3].
@@ -634,6 +443,215 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	// every armed row still uses left and right cancels it [07 R-CAM-01 §5].
 }
 
+// handleBattleShortcuts reports whether Escape owns the remaining input pass.
+func (b *battleSession) handleBattleShortcuts(in *input.State, cl *client.Client) bool {
+	// Ctrl composition belongs to the selected token. The decoder gives the
+	// letter, digit and function-key arms that identity even if live Ctrl has
+	// since changed [07 R-CAM-01 §2].
+	kbd := battleShortcutKeyboard(in)
+	ctrlHeld := kbd.KeyHeld(input.KeyCtrl)
+	if !ctrlHeld {
+		// `n` (0x6E) cycles the next unvisited own unit. `N` (0x4E) is a
+		// separate character token and the dispatcher has no case for it, so
+		// Shift+n does nothing: the stockpile round is enqueued only by the
+		// palette's `MAKENUKE`/`MAKEANTI` gadgets [07 R-CAM-01 §14 item 3]
+		// [07 §6]. The Shift+N stand-in that used to call stockpileSelected
+		// here is gone; stockpileSelected keeps its one authored caller, the
+		// gadget dispatch of DispatchStockpile.
+		if kbd.KeyDown(input.KeyN) && !kbd.HasShift() {
+			b.cycleNextUnvisitedUnit()
+		}
+	}
+	// The "label every unit" bit. Retail's dispatcher has a case for each of
+	// five character tokens — `!` `#` `*` `` ` `` `~` — and every one of them
+	// flips interface-flags bit 0 and writes all settings back
+	// [07 R-CAM-01 §2][07 R-HUD-03 §7]. Both backquote tokens are the same
+	// physical key, shifted and unshifted, so one key edge covers them.
+	//
+	// The other three are the shifted digits: the window procedure pushes the
+	// translated *character*, so Shift+1/3/8 on the US layout the retail
+	// install assumes are `!` `#` `*` and never the digit token
+	// [07 R-CAM-01 §14 "the key-token producer"]. The digit case of §2 is
+	// reached by an unshifted digit character or by Alt+digit, so the label
+	// toggle and group recall never meet — the apparent contradiction this
+	// site used to record was two different tokens. The shifted-digit arm
+	// lives in the digit loop below, where the same key edge is classified.
+	if kbd.KeyDown(input.KeyBackquote) {
+		b.toggleDamageBars()
+	}
+	// Game-speed and pause keys [07 §2][07 §11]: +/- clamp Requested 1..20
+	// with localized messages; Pause toggles pause with the retail message.
+	if kbd.KeyDown(input.KeyPause) {
+		b.togglePause()
+	}
+	if kbd.KeyDown(input.KeyEqual) || kbd.KeyDown(input.KeyNumpadAdd) {
+		b.adjustGameSpeed(1)
+	}
+	if kbd.KeyDown(input.KeyMinus) || kbd.KeyDown(input.KeyNumpadSubtract) {
+		b.adjustGameSpeed(-1)
+	}
+	// F9 and F10 are Nanolathe bindings, not retail's: retail's dispatcher has
+	// no case for either key (DESIGN_GPU_RENDERER §14.6). F9 toggles the view
+	// scale about the viewport centre; F10 asks the window adapter to swap
+	// executors. Both are presentation-only — the simulation cannot tell which
+	// scale or which executor is active [I6].
+	if !ctrlHeld && kbd.KeyDown(input.KeyF9) {
+		// The modern executor cycles the same three factors as animated zoom
+		// targets; the classic one steps the record scale as it always did
+		// (DESIGN_GPU_RENDERER §16.8).
+		b.toggleViewScale(cl.Enhanced())
+	}
+	if !ctrlHeld && kbd.KeyDown(input.KeyF10) {
+		requestRendererToggle(cl)
+	}
+	// Digit routing uses the established SwitchAlt gate [07 R-CAM-01 §4].
+	// Ctrl+digit is assignment and plays `CreateSquad`; the non-page branch is
+	// group recall with Shift as preserve / toggle and plays `SelectSquad`
+	// [07 R-CAM-01 §2][07 §9] C9-C10. Ctrl+0 has no case.
+	//
+	// Which physical edges reach the digit case is the key-token producer of
+	// [07 R-CAM-01 §14]. Ctrl composes the token itself, so Ctrl+Shift+digit
+	// still assigns. Without Ctrl the digit case is reached by an *unshifted*
+	// digit character or by Alt+digit — Alt's system key-down pushes the raw
+	// digit value and produces no character message. Shift with Alt therefore
+	// keeps the digit token and the Shift argument recall reads is live only
+	// for Shift+Alt+digit; Shift without Alt yields the shifted character
+	// instead, and only `!` `#` `*` (Shift+1/3/8) have a case — the label
+	// toggle. The other six shifted digits do nothing. Under the default
+	// SwitchAlt = 0 that makes additive recall Shift+Alt+digit; with
+	// SwitchAlt = 1 a plain digit recalls and additive recall is unreachable
+	// from the keyboard, which is retail's behaviour and not a gap to patch.
+	for d := 1; d <= 9; d++ {
+		var key input.Key
+		switch d {
+		case 1:
+			key = input.Key1
+		case 2:
+			key = input.Key2
+		case 3:
+			key = input.Key3
+		case 4:
+			key = input.Key4
+		case 5:
+			key = input.Key5
+		case 6:
+			key = input.Key6
+		case 7:
+			key = input.Key7
+		case 8:
+			key = input.Key8
+		case 9:
+			key = input.Key9
+		}
+		if !kbd.KeyDown(key) {
+			continue
+		}
+		altHeld := kbd.KeyHeld(input.KeyAlt)
+		switch {
+		case ctrlHeld:
+			if b.DispatchGroupAssign(d) == nil {
+				b.playUICue(cl, "CreateSquad") // [07 R-CAM-01 §2]
+			}
+		case !in.ShortcutTokenMode && kbd.HasShift() && !altHeld:
+			// The shifted-digit character tokens. `!` `#` `*` flip the label
+			// bit; the other six have no case [07 R-CAM-01 §14 item 2].
+			if d == 1 || d == 3 || d == 8 {
+				b.toggleDamageBars()
+			}
+		default:
+			b.routeDigit(d, altHeld, kbd.HasShift(), cl)
+		}
+	}
+	// Page next/prev data-driven with guard [R-P0-03][07 §9] C10: no hardcoding.
+	// `,` is the previous page and `.` the next, both with the `nextbuildmenu`
+	// cue [07 R-CAM-01 §2]; PageUp/PageDown and the shifted arrows are this
+	// build's extra bindings and keep working.
+	if kbd.KeyDown(input.KeyPrior) || kbd.KeyDown(input.KeyRight) && kbd.HasShift() {
+		b.nextBuildPage()
+	}
+	if kbd.KeyDown(input.KeyNext) || kbd.KeyDown(input.KeyLeft) && kbd.HasShift() {
+		b.prevBuildPage()
+	}
+	// `.` and `,` are the next/previous build page of [07 R-CAM-01 §2]. The
+	// `nextbuildmenu` cue that row names belongs to the page-switch routine
+	// itself [07 §9 "Page encoding is closed"], so it is raised inside the page
+	// helpers below and not a second time here.
+	if !ctrlHeld && kbd.KeyDown(input.KeyPeriod) {
+		b.nextBuildPage()
+	}
+	if !ctrlHeld && kbd.KeyDown(input.KeyComma) {
+		b.prevBuildPage()
+	}
+	// The follow camera. `t` tracks the next selected unit after the current
+	// tracked object in slot order and `T` (Shift held) the previous, wrapping
+	// within the local slot range; with nothing selected the tracked object
+	// becomes null. Neither moves the camera itself — the follow step does
+	// [07 R-CAM-01 §2][07 R-CAM-01 §12].
+	if !ctrlHeld && kbd.KeyDown(input.KeyT) {
+		b.cycleFollowTarget(kbd.HasShift())
+	}
+	if ctrlHeld {
+		b.dispatchCtrlLetters(kbd)
+	}
+	// Camera bookmarks: Ctrl+F5..F8 store the current origin into slot 0..3 and
+	// F5..F8 recall it, both with the `SelectSquad` cue [07 R-CAM-01 §2]
+	// [07 R-CAM-01 §12].
+	for slot, key := range [camera.BookmarkSlots]input.Key{input.KeyF5, input.KeyF6, input.KeyF7, input.KeyF8} {
+		if !kbd.KeyDown(key) {
+			continue
+		}
+		if ctrlHeld {
+			if b.cam.StoreBookmark(slot) {
+				b.playUICue(cl, "SelectSquad")
+			}
+			continue
+		}
+		if b.cam.RecallBookmark(slot) {
+			if b.deferFollowInput {
+				b.pendingFollowInput = func() { b.cam.RecallBookmark(slot) }
+			}
+			b.playUICue(cl, "SelectSquad")
+		}
+	}
+	if !ctrlHeld && !kbd.HasShift() && kbd.KeyDown(input.KeyF1) {
+		b.openUnitInfo()
+	}
+	if !ctrlHeld && kbd.KeyDown(input.KeyF3) {
+		b.glideToMessageSource()
+	}
+	if !ctrlHeld && kbd.KeyDown(input.KeyF4) {
+		// Interface-flags bit 0x80 has exactly two readers, and F4 pins both
+		// [07 R-CAM-01 §14 "F4 pins the score panel open and arms the kill/loss
+		// flash"]. The score panel shows while the bit is set as if Space were
+		// held ([07 R-HUD-04 §1]), and the kill-credit finalize arms the
+		// crediting slot's kill flash and the victim slot's loss flash to 30
+		// **only** while it is set — with F4 off the arrays are never armed and
+		// a Space-held panel shows steady numbers. Both readers are wired; the
+		// bit is not a term of the rail slide. The bit's user-facing name is
+		// recorded Unknown in [07 §2] — no string in the image names it — and
+		// it is a naming curiosity, not an open behavioral question: both
+		// readers are closed and nothing here or downstream reads a name.
+		b.panelHoldFlag = !b.panelHoldFlag
+	}
+	if !ctrlHeld && kbd.KeyDown(input.KeyF12) {
+		b.messageRing().Clear() // [07 R-CAM-01 §2]
+	}
+	// Escape: an armed latch or placement returns to idle; an idle latch
+	// deselects everything [07 R-CAM-01 §2]. viewerStep intercepts the same
+	// edge ahead of this dispatcher, so both copies apply the one arm.
+	if kbd.KeyDown(input.KeyEscape) {
+		if b.battleState().Input.Latch == input.LatchNormal && !b.battleState().PlacementArmed() {
+			_ = b.enqueueSelectionCommand(session.HumanCommand{Kind: session.HumanSelectionClear})
+		}
+		b.disarmPlacement()
+		b.resetOrderLatch()
+		b.battleState().Input.HUDCaptured = false
+		b.battleState().Input.DragActive = false
+		return true
+	}
+	return false
+}
+
 func (b *battleSession) routeDigit(digit int, altHeld, shiftHeld bool, cl *client.Client) {
 	// The gate is `switchAlt == alt` [07 R-CAM-01 §4]: by default digits pick
 	// build pages and Alt+digit recalls groups; with the persistent `SwitchAlt`
@@ -714,12 +732,13 @@ func (b *battleSession) dispatchCtrlLetters(kbd *input.KeyboardState) {
 		if !kbd.KeyDown(letter.key) {
 			continue
 		}
-		mask, ok := b.categoryMask("CTRL_" + string(letter.name))
-		if ok && !mask.IsZero() {
-			b.commitSelection(b.ownSelectableHandles(func(v frame.UnitView) bool {
-				return b.inCategory(v, mask)
-			}), shift)
-		}
+		// Missing authored categories resolve to an empty membership set.
+		// The replacement still runs: without Shift it deselects the previous
+		// selection, while Shift preserves it [07 R-CAM-01 §2].
+		mask, _ := b.categoryMask("CTRL_" + string(letter.name))
+		b.commitSelection(b.ownSelectableHandles(func(v frame.UnitView) bool {
+			return b.inCategory(v, mask)
+		}), shift)
 		if letter.name == 'C' {
 			b.followCommander()
 		}

@@ -81,6 +81,7 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 	// its own renderer, draws its own list and reads the composite back. The
 	// model lane's are in model_direct_test.go.
 	for _, check := range []func() error{
+		checkWorldAffineDevicePixels,
 		checkLensDevicePixels,
 		checkStrategicIconDevicePixels,
 		checkMixedStrategicIconBatch,
@@ -96,6 +97,8 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 		checkGroundAndSourceLightingDevicePixels,
 		checkWaterDevicePixels,
 		checkWaterReflectionDevicePixels,
+		checkAircraftShadowDevicePixels,
+		checkAircraftShadowCaptures,
 		checkMetalGlintDevicePixels,
 		checkMaterialDevicePixels,
 		checkScorchDevicePixels,

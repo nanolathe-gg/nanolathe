@@ -137,6 +137,12 @@ type State struct {
 	Mouse *MouseState
 	Kbd   *KeyboardState
 
+	// ShortcutToken is the single residual event selected after GUI service.
+	// Mode distinguishes a production pass with no event from legacy samples
+	// whose shortcut input consists of physical edges [07 §2].
+	ShortcutToken     Token
+	ShortcutTokenMode bool
+
 	tokens TokenRing
 
 	pointers PointerRing
@@ -300,6 +306,8 @@ type Sample struct {
 	PressedButtons, ReleasedButtons [4]bool
 	MouseMoved                      bool
 	Elapsed                         float64
+	ShortcutToken                   Token
+	ShortcutTokenMode               bool
 	PressedKeys                     []Key
 	HeldKeys                        []Key
 	// Pointer is the one record already published by the host service.
@@ -350,6 +358,7 @@ func SampleFromState(in *State, elapsed float64, surfaceW, surfaceH int32) Sampl
 	if in == nil {
 		return s
 	}
+	s.ShortcutToken, s.ShortcutTokenMode = in.ShortcutToken, in.ShortcutTokenMode
 	if m := in.Mouse; m != nil {
 		s.MouseX, s.MouseY = logical(m.X, surfaceW), logical(m.Y, surfaceH)
 		s.Buttons = MouseButtons{Left: m.Held(MouseButtonLeft), Middle: m.Held(MouseButtonMiddle), Right: m.Held(MouseButtonRight)}
@@ -383,6 +392,7 @@ func SampleFromState(in *State, elapsed float64, surfaceW, surfaceH int32) Sampl
 // input model in command code.
 func StateFromSample(s Sample) *State {
 	in := NewState()
+	in.ShortcutToken, in.ShortcutTokenMode = s.ShortcutToken, s.ShortcutTokenMode
 	in.Mouse.SetPosition(float32(s.MouseX), float32(s.MouseY))
 	in.Mouse.SetButton(MouseButtonLeft, s.Buttons.Left)
 	in.Mouse.SetButton(MouseButtonMiddle, s.Buttons.Middle)

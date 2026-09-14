@@ -246,6 +246,10 @@ type ModelGeometry struct {
 	// view-scale pixels. Retained corners carry relative heights; placement
 	// refreshes this value, including when the retained body does not rebuild.
 	WorldHeight float32
+	// AircraftShadowHeight and AircraftShadowScale are Enhanced placement inputs
+	// (GPU design §34). Height is clearance above the higher of terrain and sea
+	// under the aircraft, in recording pixels; zero keeps the ordinary shadow.
+	AircraftShadowHeight, AircraftShadowScale float32
 	// ReflectWater admits this body over ordinary water. ReflectionSea is the
 	// absolute sea plane in recording-scale pixels; individual corners are
 	// clipped against it by the Enhanced executor (GPU design §26).

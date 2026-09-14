@@ -195,12 +195,13 @@ func (r *Renderer) drawWaterReflections(c drawlist.Terrain) {
 			wave := math.Sin(float64(y*.65+time*1.7)) + .35*math.Sin(float64(x*.11-y*.31-time*1.1))
 			v.DstX += float32(wave) * 3 * amount * scale
 		}
-		v.DstX = r.sched.txf(v.DstX)
-		v.DstY = r.sched.txf(v.DstY)
+		v.DstX = r.sched.txx(v.DstX)
+		v.DstY = r.sched.txy(v.DstY)
 	}
 	effective := r.sched.txf(scale)
 	w, h := min(int(c.DstW), r.clipW()), min(int(c.DstH), r.clipH())
-	soften := s.markSofteningTiles(w, h, scale, effective, c.Water.Energy)
+	ox, oy := r.sched.inverseOrigin(float32(c.OriginX), float32(c.OriginY), effective)
+	soften := s.markSofteningTiles(w, h, scale, effective, c.Water.Energy, r.sched.txx(0), r.sched.txy(0))
 	// A second colour-sized buffer carries premultiplied blur strength/coverage.
 	// It reuses the admitted mesh and visibility verdict, never a scene camera.
 	if soften {
@@ -221,7 +222,7 @@ func (r *Renderer) drawWaterReflections(c drawlist.Terrain) {
 			continue
 		}
 		for _, run := range s.runs {
-			op := ebiten.DrawTrianglesShaderOptions{Uniforms: map[string]any{"Metadata": float32(metadata), "RecordScale": scale, "Surface": []float32{float32(c.OriginX), float32(c.OriginY), 1 / effective, time}}}
+			op := ebiten.DrawTrianglesShaderOptions{Uniforms: map[string]any{"Metadata": float32(metadata), "RecordScale": scale, "Surface": []float32{ox, oy, 1 / effective, time}}}
 			if run.page >= 0 {
 				pg := &r.modelDirect.pages[run.page]
 				op.Images = [4]*ebiten.Image{pg.colour, pg.key, nil, r.modelDirect.params.img}
@@ -257,7 +258,7 @@ func (r *Renderer) drawWaterReflections(c drawlist.Terrain) {
 			flag = 1
 		}
 		r.sched.quad(schedDest, float32(x0), float32(y0), float32(x1), float32(y1), 0, 0, 0, 0,
-			[4]float32{float32(c.OriginX), float32(c.OriginY), 1 / effective, float32(st.step)},
+			[4]float32{ox, oy, 1 / effective, float32(st.step)},
 			[4]float32{time, c.Water.Energy, effective, flag})
 	}
 	if !soften {
@@ -299,7 +300,7 @@ const reflectionSoftTile = 64
 // Bound the expensive filter by elevated triangles, including its full gather
 // footprint and water displacement. Geometry bounds only cull shader work;
 // per-source height still determines every sample's weight (GPU design §26.6).
-func (s *waterReflections) markSofteningTiles(w, h int, scale, effective, energy float32) bool {
+func (s *waterReflections) markSofteningTiles(w, h int, scale, effective, energy, ox, oy float32) bool {
 	cols, rows := (w+reflectionSoftTile-1)/reflectionSoftTile, (h+reflectionSoftTile-1)/reflectionSoftTile
 	n := cols * rows
 	if cap(s.softTiles) < n {
@@ -320,8 +321,8 @@ func (s *waterReflections) markSofteningTiles(w, h int, scale, effective, energy
 			if max(a.Custom0, b.Custom0, c.Custom0) <= 64*scale || min(a.Custom0, b.Custom0, c.Custom0) >= 320*scale {
 				continue
 			}
-			x0, y0 := max(0, int(math.Floor(float64((min(a.DstX, b.DstX, c.DstX)-margin)*toRecord)))), max(0, int(math.Floor(float64((min(a.DstY, b.DstY, c.DstY)-margin)*toRecord))))
-			x1, y1 := min(w, int(math.Ceil(float64((max(a.DstX, b.DstX, c.DstX)+margin)*toRecord)))), min(h, int(math.Ceil(float64((max(a.DstY, b.DstY, c.DstY)+margin)*toRecord))))
+			x0, y0 := max(0, int(math.Floor(float64((min(a.DstX, b.DstX, c.DstX)-margin-ox)*toRecord)))), max(0, int(math.Floor(float64((min(a.DstY, b.DstY, c.DstY)-margin-oy)*toRecord))))
+			x1, y1 := min(w, int(math.Ceil(float64((max(a.DstX, b.DstX, c.DstX)+margin-ox)*toRecord)))), min(h, int(math.Ceil(float64((max(a.DstY, b.DstY, c.DstY)+margin-oy)*toRecord))))
 			if x0 >= x1 || y0 >= y1 {
 				continue
 			}

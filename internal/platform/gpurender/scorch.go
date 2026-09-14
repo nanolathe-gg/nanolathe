@@ -26,7 +26,8 @@ func (r *Renderer) ScorchMarks(batch drawlist.ScorchMarks) {
 	if r.sched.worldOn {
 		scale *= r.sched.worldScale
 	}
-	mapping := [4]float32{float32(st.record.OriginX), float32(st.record.OriginY), 1 / scale, float32(st.step)}
+	ox, oy := r.sched.inverseOrigin(float32(st.record.OriginX), float32(st.record.OriginY), scale)
+	mapping := [4]float32{ox, oy, 1 / scale, float32(st.step)}
 	for _, m := range batch.Marks {
 		if r.modelStats.ScorchQuads >= drawlist.ScorchMarkLimit {
 			break

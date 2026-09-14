@@ -44,7 +44,6 @@ func (r *Renderer) Lens(l drawlist.Lens) {
 func (r *Renderer) appendLens(l drawlist.Lens) (int, int, int, int) {
 	p := &r.lens
 	b := l.Bounds()
-	k := r.sched.txf(1)
 	key := r.displayPalette[l.Key]
 	minX, minY, maxX, maxY := r.w, r.h, 0, 0
 	for y := b.Y; y < b.Y+b.H; y++ {
@@ -53,8 +52,8 @@ func (r *Renderer) appendLens(l drawlist.Lens) (int, int, int, int) {
 			if !ok || (sx == x && sy == y) {
 				continue
 			}
-			dx, dy := float32(x)*k, float32(y)*k
-			ex, ey := float32(x+1)*k, float32(y+1)*k
+			dx, dy := r.sched.txx(float32(x)), r.sched.txy(float32(y))
+			ex, ey := r.sched.txx(float32(x+1)), r.sched.txy(float32(y+1))
 			cx, cy := max(dx, float32(l.Clip.X), 0), max(dy, float32(l.Clip.Y), 0)
 			ce, cf := min(ex, float32(l.Clip.X+l.Clip.W), float32(r.w)), min(ey, float32(l.Clip.Y+l.Clip.H), float32(r.h))
 			if cx >= ce || cy >= cf {
@@ -62,7 +61,7 @@ func (r *Renderer) appendLens(l drawlist.Lens) (int, int, int, int) {
 			}
 			// Crop source and destination together. The fixed map's changed samples
 			// point inward, but explicit checks protect malformed authored commands.
-			tx, ty := float32(sx)*k+(cx-dx), float32(sy)*k+(cy-dy)
+			tx, ty := r.sched.txx(float32(sx))+(cx-dx), r.sched.txy(float32(sy))+(cy-dy)
 			if tx < 0 {
 				cx -= tx
 				tx = 0

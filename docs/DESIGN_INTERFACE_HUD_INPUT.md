@@ -1341,9 +1341,15 @@ latch or placement to idle, and an already-idle latch deselects everything
 
 ### 3.6 The keyboard table
 
-Retail folds Ctrl into the token itself, so a Ctrl-composed token can never
-reach an unmodified key's case; every unmodified arm here is gated on Ctrl being
-clear, which reproduces that. The rows below are the battle hotkey census
+Retail folds Ctrl into letter, digit and function-key tokens, so a composed
+token cannot reach an unmodified key's case. The platform producer queues those
+compositions and all special keys alongside translated text. After GUI service,
+the battle consumes one unclaimed token and retains its queued tail. The
+controller sample carries that exact token independently of live modifiers:
+literal case selects `n` versus `N` and `t` versus `T`, while group recall still
+queries live Shift and Alt. A production pass with no token has no shortcut
+press edges. Hand-authored controller fixtures may still supply physical edges.
+The rows below are the battle hotkey census
 `[07 R-CAM-01 §2]` `[07 R-CAM-01 §14]`.
 
 | Keys | Effect |
@@ -1364,7 +1370,7 @@ clear, which reproduces that. The rows below are the battle hotkey census
 | Ctrl+S | select the own selectable units on screen, replacing |
 | Ctrl+Z | select every own unit sharing a selected definition |
 | Ctrl+F5..F8 / F5..F8 | store and recall camera bookmarks 0..3, both playing `SelectSquad` |
-| F1 | open `UNITINFOx.GUI` for the hovered unit or the hovered build button's product |
+| F1 without Shift | open `UNITINFOx.GUI` for the hovered unit or the hovered build button's product |
 | F3 | glide to the message source |
 | F4 | the interface-flags bit that pins the score panel open and arms the kill/loss flash `[07 R-HUD-04 §1]` |
 | F12 | clear the message ring |
@@ -1378,8 +1384,11 @@ before this residual table and activates that exact gadget record through the
 same callback path as a pointer release. The production viewer services the
 original token ring and published pointer together in one indexed GUI pass,
 then carries its pointer-ownership verdict into the controller. A claimed
-token clears only the residual sample's press edges; held modifiers and
-unclaimed pointer work remain available. UNITINFO ownership is captured at
+token prevents residual shortcut dispatch for that pass; held modifiers and
+unclaimed pointer work remain available. A focus-only linked-label shortcut
+consumes its token and continues later gadget visits. Ctrl-composed quickkeys
+retain their own authored byte identities, including through a battle child's
+function-key suppression filter. UNITINFO ownership is captured at
 frame entry, so closing it cannot service the underlying palette again in
 that frame. Closing or changing the selected command window retires the old
 panel's pointer capture, and cycle controls obtain the resolved art-frame
@@ -1390,6 +1399,13 @@ F11 are developer mode, `Ctrl+F9` is a screenshot with no in-battle writer,
 `h` is the multiplayer share dialog and remains out of scope. Unclaimed Enter
 opens the single-player TALK editor through partial I10 (§3.9)
 `[07 §5 "Chat"]` `[07 R-CAM-01 §9]`.
+
+An absent `CTRL_%c` category supplies an empty membership set: its shortcut
+clears the selection unless Shift requests an additive selection. Camera
+capture still services a queued shortcut after its pointer work. Modern command
+gestures treat a queued token as superseding input even when there is no new
+physical edge. The plain F9/F10 presentation extensions leave their Ctrl
+compositions to the excluded retail developer paths.
 
 ### 3.7 The command dispatch boundary
 
@@ -1670,8 +1686,14 @@ excluded with multiplayer `[07 R-CAM-01 §6]` `[07 R-FE-02 §12]`.
   host-only player control panel are multiplayer surfaces
   `[07 R-HUD-03 §9]` `[07 R-FE-01 §7]`.
 * **Developer mode.** The `\` console, the contour overlay, the in-battle
-  screenshot and the Unit Builder Probe are not implemented
+  screenshot and the Unit State/Builder Probes are not implemented
   `[07 R-CAM-01 §9]` `[07 R-FE-02 §11]`.
+  The front-end `DRDEATH` cheat sequence also lacks its token-history consumer
+  `[07 R-FE-02 §10]`.
+* **Clipboard paste.** Insert and Ctrl+V reach the editor, but the portable host
+  has no clipboard byte bridge. They leave the current text unchanged. Retail's
+  bounded `CF_TEXT` replacement operation is established; translating a host
+  Unicode clipboard into the retail code page remains unresolved `[07 §2]`.
 * **Never-opened GUIs.** The windows retail's own code never opens are not
   implemented, and implementing one would be inventing a screen
   `[07 R-FE-01 §12]`.
@@ -1806,7 +1828,7 @@ its existing click and selection handling. Authoritative construction, work,
 and movement still receive ordinary typed commands and apply existing gates.
 
 Left drag while placing a structure previews a straight row. Alt switches the
-preview to an axis-aligned rectangular grid, taking precedence over Alt range
+preview to an axis-aligned rectangular grid, taking precedence over Shift range
 guides for the duration of construction capture. Anchors use the compiled footprint
 in map cells, starting at the press anchor. A row advances by one footprint on
 its dominant normalized axis; the other axis follows the straight segment,
@@ -1827,9 +1849,19 @@ are queued per capable selected actor. An explicit target batch replaces only
 at each actor's first admitted target, and never invokes repeat-click removal.
 This is a one-time work list, not a persistent area task. Empty areas leave existing orders intact.
 
-Move accepts a left drag with Move armed. With right-click interface mode,
-idle right drag on empty ground also draws a formation. Ordinary left box
-selection remains available. The traced polyline accepts curves and zigzags;
+Move accepts a left drag with Move armed, or Alt-left-drag from the idle latch
+in either mouse-interface mode. Alt is sampled on press; releasing it during
+the gesture does not turn movement into selection. Alt-click gives an explicit
+point Move, including over units or features. Armed commands take precedence:
+Alt continues to choose a construction grid, and R/E followed by left-drag keep
+their repair/reclaim areas. Ctrl prevents the idle formation shortcut. With
+right-click interface mode, idle right drag on empty ground also draws a
+formation. Ordinary left box selection and Shift-additive selection remain
+available; Shift at a command's release appends instead. Shift also shows
+tactical ranges; Alt+digit keeps the squad shortcut. Active command drags
+suppress range guides so their preview stays readable; releasing or cancelling
+the drag restores guides if Shift remains held. The traced polyline accepts
+curves and zigzags;
 units receive individual destinations evenly spaced by arc length, including
 both endpoints (a single unit receives the midpoint); whole world destinations
 round nearest with halves away from zero. Selected mobile actors are matched
@@ -2065,10 +2097,10 @@ about maximum-size drag latency.
 
 ## 7. Not implemented and open
 
-No `TODO(T23)` or `TODO(question)` marker remains in `internal/gui`,
-`internal/input`, `internal/camera`, `internal/ui` or `internal/hud`. The open
-questions these contracts still carry are these, each with the observation that
-would settle it.
+Native event history, text code pages and the clipboard bridge remain marked
+platform gaps in the input and editor paths (§2.2 and §3.9). The other open
+questions these contracts carry follow, with the observation that would settle
+each one.
 
 * Whether the world-click producer receives a goal point alongside a target
   handle. The match rule takes both arguments optionally, and the click is

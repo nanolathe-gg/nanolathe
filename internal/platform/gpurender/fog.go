@@ -210,6 +210,7 @@ func (r *Renderer) Fog(fg drawlist.Fog) {
 	sx0, sy0, sx1, sy1 := r.sched.txRect(int(region.x0), int(region.y0), int(region.x1), int(region.y1))
 	sx0, sy0 = maxInt(sx0, 0), maxInt(sy0, 0)
 	sx1, sy1 = minInt(sx1, r.w), minInt(sy1, r.h)
+	ox, oy := r.sched.txx(0), r.sched.txy(0)
 	worldOn := r.sched.worldOn
 	r.sched.worldOn = false
 	defer func() { r.sched.worldOn = worldOn }()
@@ -226,7 +227,7 @@ func (r *Renderer) Fog(fg drawlist.Fog) {
 	x0, y0 := float32(sx0), float32(sy0)
 	x1, y1 := float32(sx1), float32(sy1)
 	r.sched.quad(schedDest, x0, y0, x1, y1, x0, y0, x1, y1,
-		[4]float32{k, 0, 0, 0},
+		[4]float32{k, ox, oy, 0},
 		[4]float32{float32(region.originX), float32(region.originY),
 			float32(fogParityOps(fg.Ops, scale)), float32(scale.Float())})
 	r.fog.draws++

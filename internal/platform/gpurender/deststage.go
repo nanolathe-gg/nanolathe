@@ -249,6 +249,7 @@ func (r *Renderer) drawLitPoints(points []drawlist.Point) {
 	// point takes the path it always took.
 	resample := r.sched.worldOn
 	k := float64(r.sched.worldScale)
+	ox, oy := float64(r.sched.txx(0)), float64(r.sched.txy(0))
 	if resample {
 		r.sched.worldOn = false
 		defer func() { r.sched.worldOn = true }()
@@ -285,9 +286,15 @@ func (r *Renderer) drawLitPoints(points []drawlist.Point) {
 		x, y := int(pt.X), int(pt.Y)
 		if resample {
 			sx, sy := int(math.Floor(float64(x)*k)), int(math.Floor(float64(y)*k))
+			if ox != 0 || oy != 0 {
+				// The first framebuffer centre covered by this translated record
+				// texel. Keep legacy zero-offset selection byte-exact.
+				sx = int(math.Ceil(float64(x)*k + ox - 0.5))
+				sy = int(math.Ceil(float64(y)*k + oy - 0.5))
+			}
 			// The record point nearest sampling chooses for this screen pixel's
 			// centre; every other record point that lands here is dropped.
-			if x != int(math.Floor((float64(sx)+0.5)/k)) || y != int(math.Floor((float64(sy)+0.5)/k)) {
+			if x != int(math.Floor((float64(sx)+0.5-ox)/k)) || y != int(math.Floor((float64(sy)+0.5-oy)/k)) {
 				continue
 			}
 			if sx < 0 || sy < 0 || sx >= r.w || sy >= r.h {

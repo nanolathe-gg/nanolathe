@@ -150,10 +150,17 @@ func (c *Client) setModelLightingHeight(g *drawlist.ModelGeometry, draw *present
 	}
 	scale := float32(c.modelScale().Float())
 	g.WorldHeight = float32(draw.WorldPos[1].Raw()) / 65536 * scale
+	g.AircraftShadowHeight, g.AircraftShadowScale = 0, scale
+	if c.enhanced && draw.Airborne {
+		receiver := max(draw.GroundY, c.seaLevel())
+		g.AircraftShadowHeight = max(0, float32(draw.WorldPos[1].Sub(receiver).Raw())/65536*scale)
+	}
 	g.ReflectWater = c.reflectionWaterAt(draw.WorldPos[0], draw.WorldPos[2])
 	g.ReflectionSea = float32(c.seaLevel().Raw()) / 65536 * scale
 	if g.Supersample != nil {
 		g.Supersample.WorldHeight = g.WorldHeight
+		g.Supersample.AircraftShadowHeight = g.AircraftShadowHeight
+		g.Supersample.AircraftShadowScale = g.AircraftShadowScale
 		g.Supersample.ReflectWater = g.ReflectWater
 		g.Supersample.ReflectionSea = g.ReflectionSea
 	}

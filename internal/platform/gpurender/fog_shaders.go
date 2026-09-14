@@ -144,14 +144,13 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 	sp := floor(dstPos.xy - imageDstOrigin())
 	col := imageSrc0At(srcPos).rgb
 	// The record pixel that screen pixel shows. color.r is the free zoom's
-	// screen-per-record factor (§16.3): one outside the strategic range, and the
-	// only thing that separates the cell lattice from the framebuffer inside it.
+	// screen-per-record factor (§16.3); color.gb is the framebuffer translation.
 	// The cell arithmetic below is entirely in RECORD pixels, so the atlas tile
 	// and the cell edge keep their recorded sizes at any factor.
 	k := max(color.r, 0.0)
 	p := sp
 	if k > 0.0 {
-		p = floor(sp / k)
+		p = floor((sp - color.gb) / k)
 	}
 	// The view scale: the cell edge and the atlas tile are both measured in it.
 	viewScale := max(custom.w, 1.0)

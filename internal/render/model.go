@@ -323,6 +323,8 @@ type UnitDraw struct {
 	// it rather than by the unit's own height, which is what slides a shadow
 	// across a slope [R-REN-03D §3].
 	GroundY numeric.Fixed
+	// Airborne selects the Enhanced aircraft shadow treatment (GPU design §34).
+	Airborne bool
 	// DiggerClip erases everything at or below the model origin, which is the
 	// buried half of a pop-up defence [R-REN-03A §8].
 	DiggerClip bool

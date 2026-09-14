@@ -163,7 +163,8 @@ func (r *Renderer) drawFogRemap(fr *formats.GAFFrame, x0, y0, x1, y1 int, mode f
 	if r.sched.worldOn {
 		k = r.sched.worldScale
 	}
-	sx0, sy0, sx1, sy1 := fogRemapScreenRect(x0, y0, x1, y1, k)
+	ox, oy := r.sched.txx(0), r.sched.txy(0)
+	sx0, sy0, sx1, sy1 := fogRemapScreenRectOffset(x0, y0, x1, y1, k, ox, oy)
 	sx0, sy0, sx1, sy1 = max(sx0, 0), max(sy0, 0), min(sx1, r.w), min(sy1, r.h)
 	worldOn := r.sched.worldOn
 	r.sched.worldOn = false
@@ -173,7 +174,7 @@ func (r *Renderer) drawFogRemap(fr *formats.GAFFrame, x0, y0, x1, y1 int, mode f
 	}
 	xa, ya, xb, yb := float32(sx0), float32(sy0), float32(sx1), float32(sy1)
 	r.sched.quad(schedDest, xa, ya, xb, yb, xa, ya, xb, yb,
-		[4]float32{k, masked, 0, 0}, [4]float32{ax, ay, float32(parity), float32(mode)})
+		[4]float32{k, masked, ox, oy}, [4]float32{ax, ay, float32(parity), float32(mode)})
 	r.fog.draws++
 }
 
@@ -182,12 +183,13 @@ func (r *Renderer) drawFogRemap(fr *formats.GAFFrame, x0, y0, x1, y1 int, mode f
 // edge could sample outside the leaf and into another scene atlas entry when
 // zooming out; the stock fog shader rejects those samples in its cell test.
 func fogRemapScreenRect(x0, y0, x1, y1 int, k float32) (int, int, int, int) {
-	if k == 1 {
-		return x0, y0, x1, y1
-	}
+	return fogRemapScreenRectOffset(x0, y0, x1, y1, k, 0, 0)
+}
+
+func fogRemapScreenRectOffset(x0, y0, x1, y1 int, k, ox, oy float32) (int, int, int, int) {
 	scale := float64(k)
-	return int(math.Ceil(float64(x0) * scale)), int(math.Ceil(float64(y0) * scale)),
-		int(math.Ceil(float64(x1) * scale)), int(math.Ceil(float64(y1) * scale))
+	return int(math.Ceil(float64(x0)*scale + float64(ox))), int(math.Ceil(float64(y0)*scale + float64(oy))),
+		int(math.Ceil(float64(x1)*scale + float64(ox))), int(math.Ceil(float64(y1)*scale + float64(oy)))
 }
 
 // The desaturation and checker arithmetic is identical to the stock fog pass
@@ -198,7 +200,7 @@ package main
 func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 	sp := floor(dstPos.xy - imageDstOrigin())
 	if color.g > 0.5 {
-		p := floor(sp / color.r)
+		p := floor((sp - color.ba) / color.r)
 		mask := imageSrc1AtFromSrc0Pos(imageSrc0Origin() + p + custom.xy + vec2(0.5))
 		if mask.g < 0.5 {
 			discard()

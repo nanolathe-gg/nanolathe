@@ -33,6 +33,11 @@ type WorldSpace struct {
 	Begin bool
 	// Zoom is the live presentation factor (camera.Zoom, 1/1024 units).
 	Zoom camera.Zoom
+	// Factor, when positive, is the unquantized presentation zoom. OffsetX/Y
+	// translate AFTER scaling into framebuffer pixels. They retain the camera
+	// fraction through GPU replay (DESIGN_GPU_RENDERER §16.5).
+	Factor           float32
+	OffsetX, OffsetY float32
 	// Step is the record step the world commands were projected at.
 	Step camera.ViewScale
 	// Viewport is the battle viewport in framebuffer pixels — the rectangle the
@@ -49,7 +54,9 @@ type WorldSpace struct {
 // Identity reports whether the region needs no transform at all, which is the
 // case at every rest step and therefore in the whole classic executor.
 func (w WorldSpace) Identity() bool {
-	return w.Zoom <= 0 || w.Zoom == camera.ZoomOf(w.Step)
+	return w.OffsetX == 0 && w.OffsetY == 0 &&
+		((w.Factor > 0 && w.Factor == float32(camera.ZoomOf(w.Step))/float32(camera.ZoomUnit)) ||
+			(w.Factor <= 0 && (w.Zoom <= 0 || w.Zoom == camera.ZoomOf(w.Step))))
 }
 
 // MarkerAtlas holds immutable generated icon coverage (GPU design §18).

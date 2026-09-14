@@ -139,11 +139,12 @@ type Renderer struct {
 	lighting battleLighting
 	// ground is the Enhanced terrain illumination pass of §31: one clipped
 	// disc per battle light, drawn at the end of the terrain pass.
-	ground      groundLighting
-	water       waterLayer
-	reflections waterReflections
-	distortion  worldDistortion
-	heat        treeHeat
+	ground         groundLighting
+	aircraftShadow aircraftShadowLayer
+	water          waterLayer
+	reflections    waterReflections
+	distortion     worldDistortion
+	heat           treeHeat
 
 	// modelDirect is the PROTOTYPE direct model lane (model_direct.go): faces
 	// drawn straight onto the composite instead of through the slot stage.
@@ -241,6 +242,7 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 	compile(&r.lens.shader, newLensShader)
 	compile(&r.markerShader, newMarkerShader)
 	compile(&r.scorchShader, newScorchShader)
+	compile(&r.aircraftShadow.shader, newAircraftShadowShader)
 	compile(&r.water.shader, newWaterShader)
 	compile(&r.water.wakeShader, newSurfaceWakeShader)
 	compile(&r.reflections.sourceShader, newReflectionSourceShader)

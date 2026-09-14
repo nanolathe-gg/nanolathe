@@ -126,17 +126,18 @@ func (r *Renderer) appendBlastWaves() {
 	if d.blastDisabled {
 		return
 	}
-	d.selectVisible(r.sched.txf(1), r.w, r.h)
+	d.selectVisible(r.sched.txf(1), r.w, r.h, r.sched.txx(0), r.sched.txy(0))
+	ox, oy := r.sched.txx(0), r.sched.txy(0)
 	for i := 0; i < d.count; i++ {
 		wave := d.waves[i]
 		k := r.sched.txf(1)
-		x, y := wave.x*k, wave.y*k
+		x, y := wave.x*k+ox, wave.y*k+oy
 		radius, width, strength := wave.radius*k, wave.width*k, wave.strength*k
 		reach := radius + width
 		cx0, cy0, cx1, cy1 := float32(0), float32(0), float32(r.w), float32(r.h)
 		if wave.hasClip {
-			cx0, cy0 = max(cx0, float32(wave.clip.X)*k), max(cy0, float32(wave.clip.Y)*k)
-			cx1, cy1 = min(cx1, float32(wave.clip.X+wave.clip.W)*k), min(cy1, float32(wave.clip.Y+wave.clip.H)*k)
+			cx0, cy0 = max(cx0, float32(wave.clip.X)*k+ox), max(cy0, float32(wave.clip.Y)*k+oy)
+			cx1, cy1 = min(cx1, float32(wave.clip.X+wave.clip.W)*k+ox), min(cy1, float32(wave.clip.Y+wave.clip.H)*k+oy)
 		}
 		x0, y0 := max(cx0, float32(math.Floor(float64(x-reach)))), max(cy0, float32(math.Floor(float64(y-reach))))
 		x1, y1 := min(cx1, float32(math.Ceil(float64(x+reach)))), min(cy1, float32(math.Ceil(float64(y+reach))))
@@ -200,15 +201,15 @@ func Fragment(dst vec4, src vec2, clip vec4, wave vec4) vec4 {
 
 // Select only after the final world transform is known. Offscreen explosions
 // must never consume the visible wave budget, including during smooth zoom.
-func (d *worldDistortion) selectVisible(k float32, w, h int) {
+func (d *worldDistortion) selectVisible(k float32, w, h int, ox, oy float32) {
 	d.count = 0
 	for _, wave := range d.candidates {
 		reach := (wave.radius + wave.width) * k
-		x, y := wave.x*k, wave.y*k
+		x, y := wave.x*k+ox, wave.y*k+oy
 		x0, y0, x1, y1 := float32(0), float32(0), float32(w), float32(h)
 		if wave.hasClip {
-			x0, y0 = max(x0, float32(wave.clip.X)*k), max(y0, float32(wave.clip.Y)*k)
-			x1, y1 = min(x1, float32(wave.clip.X+wave.clip.W)*k), min(y1, float32(wave.clip.Y+wave.clip.H)*k)
+			x0, y0 = max(x0, float32(wave.clip.X)*k+ox), max(y0, float32(wave.clip.Y)*k+oy)
+			x1, y1 = min(x1, float32(wave.clip.X+wave.clip.W)*k+ox), min(y1, float32(wave.clip.Y+wave.clip.H)*k+oy)
 		}
 		if x0 >= x1 || y0 >= y1 || x+reach <= x0 || y+reach <= y0 || x-reach >= x1 || y-reach >= y1 {
 			continue

@@ -42,6 +42,12 @@ type Camera struct {
 	// a tactical stop remains distinct from native on small maps (§16.7).
 	requestedZoom Zoom
 
+	// Precise zoom placement is presentation-only; integer camera consumers
+	// keep their existing contract (DESIGN_GPU_RENDERER §16.5).
+	zoomView             PresentationView
+	zoomViewX, zoomViewZ int32
+	zoomViewFactor       Zoom
+
 	// Fractional arrow-key motion at the live zoom (DESIGN_INTERFACE_HUD_INPUT §3.8).
 	scrollX, scrollZ int64
 	scrollZoom       Zoom
@@ -431,6 +437,7 @@ func (c *Camera) TacticalAtFloor() bool {
 // path can keep clampAxis's view-larger-than-map domain untouched.
 func (c *Camera) setZoomAboutRaw(mx, my int32, newZ Zoom) {
 	oldZ := c.zoom()
+	view := c.PresentationView()
 	newZ = newZ.Norm()
 	if newZ != oldZ {
 		dx := mx - OriginX
@@ -442,7 +449,20 @@ func (c *Camera) setZoomAboutRaw(mx, my int32, newZ Zoom) {
 	}
 	c.Zoom = newZ
 	c.Scale = newZ.Step()
+	beforeX, beforeZ := c.X, c.Z
 	c.Clamp()
+	// Preserve the exact anchor between zoom steps, instead of accumulating
+	// inverse-projection rounding. A clamp takes precedence in its own axis.
+	view.X += float64(mx-OriginX) * (1/view.Factor - 1/newZ.Float())
+	view.Z += float64(my-OriginY) * (1/view.Factor - 1/newZ.Float())
+	view.Factor = newZ.Float()
+	if c.X != beforeX {
+		view.X = float64(c.X)
+	}
+	if c.Z != beforeZ {
+		view.Z = float64(c.Z)
+	}
+	c.zoomView, c.zoomViewX, c.zoomViewZ, c.zoomViewFactor = view, c.X, c.Z, newZ
 }
 
 // floorDiv is the floor division of [I3]: the screen-to-world inverse must

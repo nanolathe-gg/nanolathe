@@ -440,22 +440,12 @@ type scheduler struct {
 	curPhase int32
 	curClass int
 
-	// world is the free-zoom transform of docs/DESIGN_GPU_RENDERER.md §16.3:
-	// while the recording is inside its world region, every rectangle placed and
-	// every vertex appended is scaled by the live factor over the record step,
-	// about the surface origin. worldOn is false everywhere else — the chrome,
-	// the strategic markers, and every frame of the classic executor and of a
-	// modern one sitting on a rest step — and then nothing below costs more than
-	// one predictable branch.
-	//
-	// The transform is a pure scale about (0,0) because the recorder projects
-	// the world from the FRAMEBUFFER's own top-left: the camera origin is drawn
-	// there and the chrome painted over it, so record x = step·(worldX − camX)
-	// and screen x = factor·(worldX − camX) differ by exactly this factor. That
-	// is also why it needs no translation term to keep the world under the
-	// viewport corner fixed.
-	worldOn    bool
-	worldScale float32
+	// Enhanced presentation applies one affine transform to world geometry
+	// (DESIGN_GPU_RENDERER §16.3, §16.5). Offsets are framebuffer pixels,
+	// applied after scaling. The zero-offset rest path remains the identity.
+	worldOn                    bool
+	worldScale                 float32
+	worldOffsetX, worldOffsetY float32
 
 	// flash is the lit-disc intensity atlas of docs/DESIGN_GPU_RENDERER.md
 	// §13.11 (flash.go): one page holding every generated explosion frame the
@@ -466,19 +456,22 @@ type scheduler struct {
 	flash flashDiscAtlas
 }
 
-// setWorld arms or disarms the world transform. num/den are the live factor and
-// the record step's factor in the same units; num == den disarms, so a rest
-// step compiles byte-identically to the build before §16.
+// setWorld retains the quantized factor path for existing recordings.
 func (s *scheduler) setWorld(num, den int32) {
-	if num <= 0 || den <= 0 || num == den {
-		s.worldOn, s.worldScale = false, 1
-		return
+	k := float32(1)
+	if num > 0 && den > 0 {
+		k = float32(num) / float32(den)
 	}
-	s.worldOn, s.worldScale = true, float32(num)/float32(den)
+	s.setWorldTransform(k, 0, 0)
 }
 
-// clearWorld closes the world region.
-func (s *scheduler) clearWorld() { s.worldOn, s.worldScale = false, 1 }
+func (s *scheduler) setWorldTransform(k, x, y float32) {
+	s.worldScale, s.worldOffsetX, s.worldOffsetY = k, x, y
+	s.worldOn = k != 1 || x != 0 || y != 0
+}
+
+// clearWorld closes the world region, including its fractional translation.
+func (s *scheduler) clearWorld() { s.setWorldTransform(1, 0, 0) }
 
 // Sampling is nearest in index space and filtered, when it is filtered, only
 // after the palette resolve (DESIGN_GPU_RENDERER §16.3 "Sampling", C-G4). The
@@ -491,12 +484,35 @@ func (s *scheduler) clearWorld() { s.worldOn, s.worldScale = false, 1 }
 // to approve rather than a correctness fix. Sprites, model commits and the fog
 // atlas therefore stay nearest.
 
-// txf maps one record coordinate to its screen coordinate.
+// txf scales a length; positions use txx or txy so translation never changes sizes.
 func (s *scheduler) txf(v float32) float32 {
 	if !s.worldOn {
 		return v
 	}
 	return v * s.worldScale
+}
+
+func (s *scheduler) txx(v float32) float32 {
+	if !s.worldOn {
+		return v
+	}
+	return v*s.worldScale + s.worldOffsetX
+}
+
+func (s *scheduler) txy(v float32) float32 {
+	if !s.worldOn {
+		return v
+	}
+	return v*s.worldScale + s.worldOffsetY
+}
+
+// inverseOrigin rebases a map origin for shaders that recover world coordinates
+// from framebuffer pixels: origin + (screen-offset)/effectiveScale.
+func (s *scheduler) inverseOrigin(x, y, effectiveScale float32) (float32, float32) {
+	if !s.worldOn {
+		return x, y
+	}
+	return x - s.worldOffsetX/effectiveScale, y - s.worldOffsetY/effectiveScale
 }
 
 // txRect maps a record-space integer rectangle to the screen pixels it covers:
@@ -507,8 +523,9 @@ func (s *scheduler) txRect(x0, y0, x1, y1 int) (int, int, int, int) {
 		return x0, y0, x1, y1
 	}
 	k := float64(s.worldScale)
-	return int(math.Floor(float64(x0) * k)), int(math.Floor(float64(y0) * k)),
-		int(math.Ceil(float64(x1) * k)), int(math.Ceil(float64(y1) * k))
+	x, y := float64(s.worldOffsetX), float64(s.worldOffsetY)
+	return int(math.Floor(float64(x0)*k + x)), int(math.Floor(float64(y0)*k + y)),
+		int(math.Ceil(float64(x1)*k + x)), int(math.Ceil(float64(y1)*k + y))
 }
 
 // resetFrame drops the compiled segment and re-sizes the cell grid. The backing
@@ -960,7 +977,7 @@ func (s *scheduler) quad(class int, dx0, dy0, dx1, dy1, sx0, sy0, sx1, sy1 float
 		run = &b.runs[len(b.runs)-1]
 	}
 	if s.worldOn {
-		dx0, dy0, dx1, dy1 = s.txf(dx0), s.txf(dy0), s.txf(dx1), s.txf(dy1)
+		dx0, dy0, dx1, dy1 = s.txx(dx0), s.txy(dy0), s.txx(dx1), s.txy(dy1)
 		// A world quad that shrinks below one screen pixel is given a span of
 		// EXACTLY one: the one-pixel primitives the world is full of — the
 		// selection quad's lines, a dotted path's dots, a lit point's row span —
@@ -1039,7 +1056,7 @@ func (s *scheduler) quadCorners(class int, xs, ys [4]float32, col [4]float32, cu
 	b.verts = b.verts[:nv+quadVertices]
 	v := b.verts[nv : nv+quadVertices : nv+quadVertices]
 	for i := 0; i < quadVertices; i++ {
-		v[i] = ebiten.Vertex{DstX: s.txf(xs[i]), DstY: s.txf(ys[i]),
+		v[i] = ebiten.Vertex{DstX: s.txx(xs[i]), DstY: s.txy(ys[i]),
 			ColorR: col[0], ColorG: col[1], ColorB: col[2], ColorA: col[3],
 			Custom0: custom[i][0], Custom1: custom[i][1], Custom2: custom[i][2], Custom3: custom[i][3]}
 	}
@@ -1234,7 +1251,7 @@ func (s *scheduler) tris(class int, verts []ebiten.Vertex, idx []uint32) {
 	v := b.verts[nv : nv+len(verts) : nv+len(verts)]
 	for i := range verts {
 		v[i] = verts[i]
-		v[i].DstX, v[i].DstY = s.txf(verts[i].DstX), s.txf(verts[i].DstY)
+		v[i].DstX, v[i].DstY = s.txx(verts[i].DstX), s.txy(verts[i].DstY)
 	}
 	ni := len(b.idx)
 	if ni+len(idx) > cap(b.idx) {
