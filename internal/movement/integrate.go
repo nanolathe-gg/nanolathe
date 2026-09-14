@@ -58,6 +58,12 @@ type System struct {
 
 	Grid      *OccupancyGrid
 	Scheduler *path.Scheduler
+
+	// airLegHandler is runAirOrderLeg bound once. The session re-registers
+	// every unit's owned rows on every visit, and a method value taken at
+	// that site is a fresh heap closure per unit per tick; the bound value
+	// is the same function either way.
+	airLegHandler orders.OwnedHandler
 	// The per-handle tables below are dense rows indexed by pool handle, not
 	// hashed maps [I5]. Handles are pool slots — dense by construction, slot 0
 	// null, reused immediately — so the identity IS the index and a nil (or

@@ -1094,15 +1094,22 @@ func reserve[T any](s []T, n int) []T {
 // Reset clears the frame in place while retaining every slice capacity,
 // including nested routes, piece transforms, effect/cue durations, result
 // lists, visibility words, and fog channels.
+//
+// Unit, feature and radar contact element bodies are retained beneath the
+// truncated length rather than zeroed (their nested slices are still
+// truncated to length zero): their writers assign every element they publish
+// in full and reslice its nested storage, and the feature writer
+// keeps a per-slot record of what it built so it can leave unchanged elements
+// alone (internal/session feature_publication.go). Every retained value
+// references only immutable catalog data or the frame's own nested storage,
+// so nothing transient is kept alive by leaving them in place.
 func (f *Frame) Reset() {
 	if f == nil {
 		return
 	}
 	for i := range f.Units {
-		pieces, cargo := f.Units[i].Pieces, f.Units[i].Cargo
-		clear(pieces)
-		clear(cargo)
-		f.Units[i] = UnitView{Pieces: pieces[:0], Cargo: cargo[:0]}
+		f.Units[i].Pieces = f.Units[i].Pieces[:0]
+		f.Units[i].Cargo = f.Units[i].Cargo[:0]
 	}
 	for i := range f.Effects {
 		a, b := f.Effects[i].DurationsA, f.Effects[i].DurationsB
@@ -1135,7 +1142,6 @@ func (f *Frame) Reset() {
 	f.Result.Losers = f.Result.Losers[:0]
 	f.Result.Scores = f.Result.Scores[:0]
 	clear(f.Projectiles)
-	clear(f.Features)
 	clear(f.Debris)
 	clear(f.Fragments)
 	clear(f.Economy)
@@ -1181,8 +1187,7 @@ func (f *Frame) Reset() {
 	f.Fog.Ch1 = f.Fog.Ch1[:0]
 	f.Visibility = VisibilityView{Visible: f.Visibility.Visible, WordVisible: f.Visibility.WordVisible}
 	for i := range f.Radar.Contacts {
-		clear(f.Radar.Contacts[i].Rings)
-		f.Radar.Contacts[i] = RadarContactView{Rings: f.Radar.Contacts[i].Rings[:0]}
+		f.Radar.Contacts[i].Rings = f.Radar.Contacts[i].Rings[:0]
 	}
 	f.Radar.Contacts = f.Radar.Contacts[:0]
 	f.Radar = RadarView{Contacts: f.Radar.Contacts}

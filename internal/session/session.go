@@ -178,6 +178,10 @@ type Session struct {
 	// featurePublicationScratch is reused only while copying feature values.
 	// Entries are cleared before publication returns, so retired records are not retained.
 	featurePublicationScratch []*features.Instance
+	// featurePubCaches holds one input cache per committed-frame slot
+	// (feature_publication.go); a view whose inputs did not change since the
+	// slot was last written is retained in place.
+	featurePubCaches [2]featurePublicationCache
 
 	postLoop *postLoopState // once-per-pump executor tail; owned by the session goroutine [01 §4.4]
 	phase7   Phase7Service  // presentation-owned model-texture cadence [R-CRD-005 §1][I6]

@@ -1349,7 +1349,10 @@ func (s *System) RegisterOrderHandlers(q *orders.Queue) {
 	if s == nil || q == nil {
 		return
 	}
-	q.SetOwnedHandler(airStandbyRowID, s.runAirOrderLeg)
+	if s.airLegHandler == nil {
+		s.airLegHandler = s.runAirOrderLeg
+	}
+	q.SetOwnedHandler(airStandbyRowID, s.airLegHandler)
 }
 
 // AirLegRunner returns this system's executor for installation on a

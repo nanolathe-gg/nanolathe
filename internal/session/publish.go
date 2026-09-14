@@ -307,7 +307,10 @@ func (s *Session) publishSnapshot(tick uint32) {
 				vp.CacheRevision = vm.CacheRevision()
 				vp.CacheValidityRevision = vm.CacheValidityRevision()
 				if vmPieces := vm.Pieces; len(vmPieces) > 0 {
-					flags := vm.SnapshotFlags()
+					// The live array, not a copy: the loop below consumes it
+					// before anything else runs, and a per-unit allocation here
+					// was a measurable share of the publication [I6].
+					flags := vm.RenderPieceFlags()
 					prog := vm.Program()
 					var names []string
 					if prog != nil {
@@ -506,79 +509,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 		published.Visibility = frame.VisibilityView{}
 		published.Fog = frame.FogView{}
 	}
-	published.Features = published.Features[:0]
-	if s.Features != nil {
-		s.featurePublicationScratch = s.Features.AppendInstances(s.featurePublicationScratch[:0])
-		for _, inst := range s.featurePublicationScratch {
-			if inst == nil || inst.Def == nil {
-				continue
-			}
-			featureOwner, featureOwnerKnown := featureOwnerSelector(inst)
-			runtime := inst.RuntimeView()
-			// Written through the destination element for the same reason the
-			// unit view above is: the copy of a 208-byte value, six thousand
-			// times a tick, is the cost here rather than the fields [I6].
-			published.Features = reserveFeatureView(published.Features)
-			fv := &published.Features[len(published.Features)-1]
-			*fv = frame.FeatureView{
-				Owner:      featureOwner,
-				OwnerKnown: featureOwnerKnown,
-				CX:         int32(inst.CX),
-				CZ:         int32(inst.CZ),
-				X:          inst.X,
-				Y:          inst.Y,
-				Z:          inst.Z,
-				// The live record's orientation triple, published because the
-				// 3DO feature pass fills a pseudo-unit with "model pointer,
-				// position and the slot's orientation words"
-				// [03 R-RAST-01 §6][05 "Feature instance and terrain cell"].
-				// Zero for everything but a wreck.
-				Bank:      inst.Bank,
-				Heading:   inst.Heading,
-				Pitch:     inst.Pitch,
-				DefName:   inst.Def.CanonicalKey,
-				Model:     inst.Def.Object,
-				Status:    uint32(inst.Status),
-				IsBurning: inst.IsBurning,
-				IsSinking: inst.IsSinking,
-				FootX:     int8(inst.FootprintX),
-				FootZ:     int8(inst.FootprintZ),
-
-				Filename:        inst.Def.Filename,
-				SeqName:         inst.Def.SeqName,
-				SeqNameShad:     inst.Def.SeqNameShad,
-				Animating:       inst.Def.Animating != 0,
-				AnimTrans:       inst.Def.AnimTrans != 0,
-				ShadTrans:       inst.Def.ShadTrans != 0,
-				Blocking:        inst.Def.Blocking,
-				Reclaimable:     inst.Def.Reclaimable,
-				NoDrawUnderGray: inst.Def.NoDrawUnderGray,
-				Height:          inst.Def.Height,
-				Geothermal:      inst.Def.Geothermal,
-				RuntimeLive:     runtime.Live,
-				ShadowEnabled:   runtime.ShadowEnabled,
-			}
-			fv.WreckBornTick, fv.WreckHeatKnown = publication.wrecks.births[inst]
-			if fv.Model == "" {
-				fv.Model = inst.Def.Filename
-			}
-			// A cell carrying a live EVENT record draws that record's own
-			// cursor, not the definition's rest cursor [03 R-RAST-01 §6]
-			// [05 R-FEAT-01 §10] pass 3. Publishing only the rest sequence left
-			// a reclaimed tree standing on its idle frame for the whole
-			// animation and then popping straight to its successor: the
-			// reclaim sequence the definition names was resolved by the
-			// simulation, which timed the record from it, and then never drawn.
-			if name, shadow, visit, ok := inst.EventSequence(); ok {
-				fv.EventSeqName = name
-				fv.EventSeqNameShad = shadow
-				fv.EventSeqVisit = visit
-			}
-		}
-		// The committed frame owns values; release the borrowed live pointers
-		// while retaining only the scratch capacity for the next publication [I6].
-		clear(s.featurePublicationScratch)
-	}
+	s.publishFeatures(published, publication)
 	published.Projectiles = published.Projectiles[:0]
 	if s.Combat != nil {
 		for i := 0; i < s.Combat.Count(); i++ {
@@ -819,13 +750,27 @@ func (s *Session) publishSnapshot(tick uint32) {
 			Visible: radarPointVisible(s, owner, p.OwnerKnown, p.X, p.Y, p.Z),
 		})
 	}
-	for _, f := range published.Features {
+	for i := range published.Features {
+		// By pointer: a feature view is over 250 bytes, and copying six
+		// thousand of them a tick was a measurable share of the publication.
+		f := &published.Features[i]
 		palette, paletteKnown := radarOwnerPalette(s, f.Owner, f.OwnerKnown)
-		published.Radar.Contacts = append(published.Radar.Contacts, frame.RadarContactView{
+		// Written through the destination element, keeping whatever ring
+		// storage the slot's previous contact at this index owned, for the
+		// same reason the unit and feature views are.
+		contactIdx := len(published.Radar.Contacts)
+		var rings []frame.RadarRingView
+		if contactIdx < len(existingContacts) {
+			rings = existingContacts[contactIdx].Rings[:0]
+		}
+		published.Radar.Contacts = reserveRadarContact(published.Radar.Contacts)
+		c := &published.Radar.Contacts[contactIdx]
+		*c = frame.RadarContactView{
 			Kind: frame.RadarContactFeature, Owner: f.Owner, OwnerKnown: f.OwnerKnown, Palette: palette, PaletteKnown: paletteKnown, X: f.X, Y: f.Y, Z: f.Z,
 			Graphic: f.Model, AssetID: f.Filename, Status: f.Status,
 			Visible: radarFeatureVisible(s, f),
-		})
+			Rings:   rings,
+		}
 	}
 	if s.Build != nil && s.Units != nil {
 		// BuilderLinks is the construction service's authoritative product→builder
@@ -1195,8 +1140,11 @@ func radarPointVisible(s *Session, owner uint8, ownerKnown bool, x, y, z numeric
 // `nodrawundergray` and the plot placer nibble (see
 // `featureVisibleForFrame` in internal/client/world_draw.go). The minimap
 // contacts pass carries neither of those terms.
-func radarFeatureVisible(s *Session, f frame.FeatureView) bool {
+func radarFeatureVisible(s *Session, f *frame.FeatureView) bool {
 	if s == nil {
+		return false
+	}
+	if f == nil {
 		return false
 	}
 	if f.OwnerKnown && f.Owner < 10 && f.Owner == s.ViewingOwner {

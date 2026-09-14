@@ -6,6 +6,18 @@ package cob
 // array; otherwise it returns the VM-local fallback (fixture VMs).
 // It remains live presentation state; the removed VM snapshots were
 // save/restore-only continuation helpers.
+// RenderPieceFlags returns the live piece flag array SnapshotFlags copies.
+// It is for a reader that consumes the flags before the simulation advances
+// again — the publication loop reads them straight into the frame — and the
+// slice must be neither retained nor written. SnapshotFlags remains the
+// detached form.
+func (v *VM) RenderPieceFlags() []uint8 {
+	if v == nil {
+		return nil
+	}
+	return v.renderPieceFlags()
+}
+
 func (v *VM) SnapshotFlags() []uint8 {
 	if v == nil {
 		return nil

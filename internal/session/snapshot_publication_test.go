@@ -264,15 +264,15 @@ func TestRadarFeatureContactUsesPlacerOwnerAndExtents(t *testing.T) {
 	vis := visibility.New(terrain, visibility.ModeHistoryEnabled|visibility.ModeCurrentEnabled)
 	local := uint8(0)
 	owned := frame.FeatureView{Owner: local, OwnerKnown: true, CX: 4, CZ: 4, FootX: 1, FootZ: 1, Y: 0}
-	if !radarFeatureVisible(&Session{Vis: vis, LocalOwner: local, ViewingOwner: local}, owned) {
+	if !radarFeatureVisible(&Session{Vis: vis, LocalOwner: local, ViewingOwner: local}, &owned) {
 		t.Fatal("local placer owner should bypass feature LOS")
 	}
 	unknown := frame.FeatureView{Owner: combat.NeutralSide, OwnerKnown: false, CX: 4, CZ: 4, FootX: 1, FootZ: 1, Y: 0}
-	if radarFeatureVisible(&Session{Vis: vis, LocalOwner: local, ViewingOwner: local}, unknown) {
+	if radarFeatureVisible(&Session{Vis: vis, LocalOwner: local, ViewingOwner: local}, &unknown) {
 		t.Fatal("unknown feature owner must not bypass LOS")
 	}
 	unknownZero := frame.FeatureView{Owner: 0, OwnerKnown: false, CX: 4, CZ: 4, FootX: 1, FootZ: 1, Y: 0}
-	if radarFeatureVisible(&Session{Vis: vis, LocalOwner: local, ViewingOwner: local}, unknownZero) {
+	if radarFeatureVisible(&Session{Vis: vis, LocalOwner: local, ViewingOwner: local}, &unknownZero) {
 		t.Fatal("unknown owner-zero feature must not bypass LOS")
 	}
 	inst := &features.Instance{Terrain: terrain, CX: 4, CZ: 4}
@@ -427,7 +427,7 @@ func TestSnapshotPublicationUsesWordCoverageWhenBytesDisabled(t *testing.T) {
 		t.Fatal("foreign unit bypassed disabled byte coverage through permissive fill")
 	}
 	foreignFeature := frame.FeatureView{Owner: 1, OwnerKnown: true, CX: 0, CZ: 0, FootX: 1, FootZ: 1, Y: 0}
-	if radarFeatureVisible(s, foreignFeature) {
+	if radarFeatureVisible(s, &foreignFeature) {
 		t.Fatal("foreign feature bypassed disabled byte coverage through permissive fill")
 	}
 }

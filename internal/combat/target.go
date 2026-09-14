@@ -12,6 +12,7 @@ package combat
 import (
 	"github.com/nanolathe-gg/nanolathe/internal/cob"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/model"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
@@ -924,6 +925,55 @@ func UnitTargetPoint(target *units.Unit) Vec3 {
 		return pos
 	}
 	return Vec3{X: pos.X.Add(centre[0]), Y: pos.Y.Add(centre[1]), Z: pos.Z.Add(centre[2])}
+}
+
+// boxCentreKey identifies one piece of one loaded model for the box-centre
+// memo. Models are shared immutable catalog objects, so the pointer is the
+// identity.
+type boxCentreKey struct {
+	model *model.Model
+	piece int
+}
+
+type boxCentreEntry struct {
+	centre [3]numeric.Fixed
+	ok     bool
+}
+
+// unitTargetPoint is UnitTargetPoint with the piece box centre memoised on the
+// service. Every weapon slot with a unit target asks for the point every tick,
+// and the vertex scan was a measurable share of weapon service; the memo
+// returns exactly what pieceVertexBoxCentre computes for the same model and
+// piece, and UnitTargetPoint stays the definition the tests lock.
+func (s *Service) unitTargetPoint(target *units.Unit) Vec3 {
+	if s == nil || target == nil {
+		return UnitTargetPoint(target)
+	}
+	pos := Vec3{X: target.X, Y: target.Y, Z: target.Z}
+	binding := target.COBBinding()
+	if binding == nil {
+		return pos
+	}
+	var piece int32 // cell 0 seeded zero [06 R-WPN-03 §6]
+	if binding.Callbacks != nil {
+		piece = binding.Callbacks.SweetSpot().QueryValue()
+	}
+	if binding.Model == nil || piece < 0 || int(piece) >= len(binding.PieceMap) {
+		return pos
+	}
+	key := boxCentreKey{model: binding.Model, piece: binding.PieceMap[piece]}
+	entry, hit := s.boxCentres[key]
+	if !hit {
+		entry.centre, entry.ok = pieceVertexBoxCentre(binding, piece)
+		if s.boxCentres == nil {
+			s.boxCentres = make(map[boxCentreKey]boxCentreEntry)
+		}
+		s.boxCentres[key] = entry
+	}
+	if !entry.ok {
+		return pos
+	}
+	return Vec3{X: pos.X.Add(entry.centre[0]), Y: pos.Y.Add(entry.centre[1]), Z: pos.Z.Add(entry.centre[2])}
 }
 
 // pieceVertexBoxCentre is the `SweetSpot` piece-to-offset transform of

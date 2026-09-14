@@ -290,7 +290,7 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 			// scalar speed at every commit [04 R-MOV-01 §1][04 R-COLL-01 §1].
 			// This site used to carry an open-question marker saying the
 			// triple was not available; it is.
-			tgtPos = PreFireLeadPoint(u, tu, slot, weapon, UnitTargetPoint(tu))
+			tgtPos = PreFireLeadPoint(u, tu, slot, weapon, s.unitTargetPoint(tu))
 		} else {
 			tgtPos = Vec3{X: slot.Target.X, Y: PointTargetHeight(terrain, slot.Target.X, slot.Target.Z), Z: slot.Target.Z}
 		}

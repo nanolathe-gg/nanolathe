@@ -214,3 +214,36 @@ func TestBufferWarmPublishAllocationsAfterWarmup(t *testing.T) {
 		t.Fatalf("warm BeginWrite/Publish allocated %v times", allocs)
 	}
 }
+
+// Feature element bodies survive Reset: the session's per-slot feature cache
+// rewrites only the elements whose inputs changed and relies on the rest
+// still holding what it last built there.
+func TestFrameResetRetainsFeatureViewBodies(t *testing.T) {
+	f := Frame{Features: []FeatureView{{DefName: "tree", CX: 4}}}
+	f.Reset()
+	if len(f.Features) != 0 || cap(f.Features) != 1 {
+		t.Fatalf("features len/cap = %d/%d, want 0/1", len(f.Features), cap(f.Features))
+	}
+	if got := f.Features[:1][0]; got.DefName != "tree" || got.CX != 4 {
+		t.Fatalf("reset cleared a retained feature view: %#v", got)
+	}
+}
+
+// Unit and radar contact bodies survive Reset as well, with their nested
+// storage intact: their writers assign every published element in full.
+func TestFrameResetRetainsUnitAndContactBodies(t *testing.T) {
+	f := Frame{
+		Units: []UnitView{{DefName: "armpw", Pieces: make([]PieceView, 1, 4)}},
+		Radar: RadarView{Contacts: []RadarContactView{{Graphic: "armpw", Rings: make([]RadarRingView, 1, 2)}}},
+	}
+	f.Reset()
+	if len(f.Units) != 0 || len(f.Radar.Contacts) != 0 {
+		t.Fatalf("lengths after reset: units %d contacts %d", len(f.Units), len(f.Radar.Contacts))
+	}
+	if u := f.Units[:1][0]; u.DefName != "armpw" || cap(u.Pieces) != 4 {
+		t.Fatalf("reset lost the retained unit body or its piece storage: %#v", u)
+	}
+	if c := f.Radar.Contacts[:1][0]; c.Graphic != "armpw" || cap(c.Rings) != 2 {
+		t.Fatalf("reset lost the retained contact body or its ring storage: %#v", c)
+	}
+}

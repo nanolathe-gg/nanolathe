@@ -217,8 +217,12 @@ type Service struct {
 	doubleShot      bool
 	halfShot        bool
 
-	Events        func(Event)               // optional ordered combat event sink; nil-safe
-	pendingAims   map[pendingKey]pendingAim // Aim dispatch tracking ON-04 [06 §3.3]
+	Events      func(Event)               // optional ordered combat event sink; nil-safe
+	pendingAims map[pendingKey]pendingAim // Aim dispatch tracking ON-04 [06 §3.3]
+	// boxCentres memoises pieceVertexBoxCentre per (model, model piece). The
+	// value is a pure function of immutable loaded model data, so the memo
+	// changes nothing observable; it is read by key, never ranged [I1].
+	boxCentres    map[boxCentreKey]boxCentreEntry
 	deathNotified map[pool.Handle]*units.Unit
 
 	// scanCursor is the autonomous target scan's persistent per-player

@@ -324,7 +324,14 @@ func TestCommandDragAltMoveOverFeature(t *testing.T) {
 		for _, queued := range []bool{false, true} {
 			t.Run(fmt.Sprintf("drag=%v queued=%v", drag, queued), func(t *testing.T) {
 				b, cl, _, builder := resourceFixture(t, true)
-				b.cat.Features["deposit"].Reclaimable = true
+				// A compiled definition is immutable once a battle publishes
+				// it (publication retains views by definition identity), so
+				// the reclaimable variant is a new definition swapped in for
+				// the placed instance, not an edit of the old one in place.
+				reclaimable := *b.cat.Features["deposit"]
+				reclaimable.Reclaimable = true
+				b.cat.Features["deposit"] = &reclaimable
+				b.sess.Features.InstanceAt(20, 20).Def = &reclaimable
 				b.sess.Step(b.sess.Clock.ScaledAnchor + 1)
 				x, y := o5ScreenWorld(b.cam, 320<<16, 0, 320<<16)
 				_, _, pos := b.pickTarget(x, y)

@@ -45,7 +45,7 @@ func TestRadarFeatureVisibleSamplesOwnPositionNotFootprintCorners(t *testing.T) 
 		X: far, Y: 0, Z: far,
 	}
 	s := &Session{Vis: vis, LocalOwner: local, ViewingOwner: local}
-	if radarFeatureVisible(s, f) {
+	if radarFeatureVisible(s, &f) {
 		t.Fatal("feature admitted through a footprint-corner cell, not its own projected position [03 §3.9]")
 	}
 
@@ -54,7 +54,7 @@ func TestRadarFeatureVisibleSamplesOwnPositionNotFootprintCorners(t *testing.T) 
 	u := int32(int16(int64(far)>>16)) >> 5
 	vIdx := int32(int16(int64(far)>>16)) >> 5
 	grid[int(vIdx*w+u)] = 1
-	if !radarFeatureVisible(s, f) {
+	if !radarFeatureVisible(s, &f) {
 		t.Fatal("feature was not admitted once its own projected position became visible [03 §3.9]")
 	}
 }
@@ -68,11 +68,11 @@ func TestRadarFeatureVisibleOwnerLocalBypass(t *testing.T) {
 	s := &Session{Vis: vis, LocalOwner: local, ViewingOwner: local}
 
 	notLocal := frame.FeatureView{Owner: 1, OwnerKnown: true}
-	if radarFeatureVisible(s, notLocal) {
+	if radarFeatureVisible(s, &notLocal) {
 		t.Fatal("a foreign-owned, un-lit feature was admitted without an LOS or owner bypass")
 	}
 	owned := frame.FeatureView{Owner: local, OwnerKnown: true}
-	if !radarFeatureVisible(s, owned) {
+	if !radarFeatureVisible(s, &owned) {
 		t.Fatal("an owner-local feature did not bypass the LOS gate")
 	}
 }
@@ -94,12 +94,12 @@ func TestRadarPublishedFeatureIgnoresFriendlyContactStatusBits(t *testing.T) {
 	// Not visible, not owner-local: must not be admitted regardless of any
 	// status-shaped field a caller might otherwise be tempted to pass through.
 	notDrawn := frame.FeatureView{Owner: 2, OwnerKnown: true, Status: 0x300}
-	if radarFeatureVisible(s, notDrawn) {
+	if radarFeatureVisible(s, &notDrawn) {
 		t.Fatal("an un-lit, non-local feature was admitted [03 §3.9]")
 	}
 	// Owner-local: admitted regardless of status.
 	drawn := frame.FeatureView{Owner: local, OwnerKnown: true, Status: 0x300}
-	if !radarFeatureVisible(s, drawn) {
+	if !radarFeatureVisible(s, &drawn) {
 		t.Fatal("an owner-local feature was not admitted [03 §3.9]")
 	}
 }
