@@ -622,9 +622,8 @@ var windowOwned atomic.Bool
 //
 // (0, 0) is the headless answer, not a sentinel invented here: it is what the
 // monitor query itself reported with no display attached, and callers already
-// treat it as "no desktop metrics" — retailDisplayModes gates every optional
-// row on a minimum size, so a zero desktop offers exactly the unconditional
-// rows.
+// treat it as "no desktop metrics": the options list keeps its fixed presets
+// and saved selection, omitting desktop-gated and monitor-derived additions.
 //
 // The display-mode table the `VIDSLDR` slider indexes is gated on the desktop
 // size in retail's windowed (GDI) presentation: 640x480, 800x600 and 1024x768

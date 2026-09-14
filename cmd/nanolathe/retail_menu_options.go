@@ -155,6 +155,7 @@ type retailOptionsState struct {
 	sliders map[int]*retailSliderState
 	drag    retailSliderDrag
 	modes   []retailDisplayMode
+	desktop retailDisplayMode
 
 	// inBattle selects the in-battle arm of every routine in this file: the
 	// `PREFS.GUI` root, the `…RT.GUI` pages, no page bitmap, and the writes
@@ -207,8 +208,9 @@ type retailDisplayMode struct{ W, H int }
 // whose device-independent dimensions need not match its physical pixel count.
 //
 // The options page still sorts by width then height and drops modes below
-// 640x480 [07 R-FE-01 §6]. The original modes retain their desktop gates.
-func retailDisplayModes(desktopW, desktopH int) []retailDisplayMode {
+// 640x480 [07 R-FE-01 §6]. The original list retains its desktop gates;
+// monitor-derived and saved sizes are additional host choices.
+func retailDisplayModes(desktopW, desktopH int, selected retailDisplayMode) []retailDisplayMode {
 	modes := []retailDisplayMode{{640, 480}, {800, 600}, {1024, 768}, {1280, 720}, {1600, 900}, {1920, 1080}}
 	if desktopW >= 1280 && desktopH >= 1024 {
 		modes = append(modes, retailDisplayMode{1280, 1024})
@@ -216,6 +218,17 @@ func retailDisplayModes(desktopW, desktopH int) []retailDisplayMode {
 	if desktopW >= 1600 && desktopH >= 1200 {
 		modes = append(modes, retailDisplayMode{1600, 1200})
 	}
+	// Host choices follow the monitor's proportions at the existing widescreen
+	// widths, rounded to the nearest logical pixel (DESIGN_PRESENTATION_CLIENT §2.1).
+	if desktopW > 0 && desktopH > 0 {
+		for _, width := range []int{1280, 1600, 1920} {
+			height := int((int64(width)*int64(desktopH) + int64(desktopW)/2) / int64(desktopW))
+			modes = append(modes, retailDisplayMode{width, height})
+		}
+		modes = append(modes, retailDisplayMode{desktopW, desktopH})
+	}
+	// A monitor move must not change the saved selection when the page opens.
+	modes = append(modes, selected)
 	sort.SliceStable(modes, func(a, b int) bool {
 		if modes[a].W != modes[b].W {
 			return modes[a].W < modes[b].W
@@ -227,15 +240,16 @@ func retailDisplayModes(desktopW, desktopH int) []retailDisplayMode {
 		if m.W < settings.MinDisplaymodeWidth || m.H < settings.MinDisplaymodeHeight {
 			continue
 		}
-		kept = append(kept, m)
+		if len(kept) == 0 || kept[len(kept)-1] != m {
+			kept = append(kept, m)
+		}
 	}
 	return kept
 }
 
 // retailDisplayModeIndex is the slider position the stored size names. A size
-// the table does not carry — a hand-edited settings file, or a desktop that
-// shrank since the mode was chosen — falls back to the first row, which the
-// filter above guarantees is 640x480.
+// the table does not carry (such as an invalid sub-minimum size) falls back
+// to the first row, which the filter above guarantees is 640x480.
 func retailDisplayModeIndex(modes []retailDisplayMode, width, height int) int {
 	for i, m := range modes {
 		if m.W == width && m.H == height {
@@ -412,7 +426,8 @@ func (g *gameShell) openRetailOptionsScreen(inBattle bool) error {
 	optionsAssets = &retailPanelAssets{window: window, background: background}
 	optionsState = &retailOptionsState{
 		sliders:           map[int]*retailSliderState{},
-		modes:             retailDisplayModes(desktopW, desktopH),
+		modes:             retailDisplayModes(desktopW, desktopH, retailDisplayMode{g.display.Width, g.display.Height}),
+		desktop:           retailDisplayMode{desktopW, desktopH},
 		categories:        retailDefaultCategories(),
 		inBattle:          inBattle,
 		serviceStageIndex: -1,
@@ -673,6 +688,9 @@ func (g *gameShell) openRetailOptionsPage(page string) {
 		}
 	}
 
+	if page == "visuals" && !inBattle {
+		addDisplayAspectLabels(pageWindow)
+	}
 	if page == "nanolathe" {
 		if err := nanolatheOptionsPage(pageWindow); err != nil {
 			reportRetailMessageError(g.showRetailMessage(retailFrontendAssetError(g.cs, "Nanolathe options template unavailable", pageGUI, "a visual options button and label", err).Error()))
@@ -861,6 +879,10 @@ func (g *gameShell) syncRetailVideoLabel() {
 		return
 	}
 	optionsPanel.SetText("VIDVAL", fmt.Sprintf("%d X %d", g.display.Width, g.display.Height))
+	optionsPanel.SetText("NASPECT", displayAspect(g.display.Width, g.display.Height))
+	if optionsState != nil && optionsState.desktop.W > 0 && optionsState.desktop.H > 0 {
+		optionsPanel.SetText("NMONITOR", "Monitor: "+displayAspect(optionsState.desktop.W, optionsState.desktop.H))
+	}
 }
 
 // syncRetailMaxLinesLabel writes the two interface-page read-outs.

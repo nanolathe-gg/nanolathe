@@ -758,6 +758,7 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 			c.BeginWorldOverlay()
 		}
 		b.drawBuildGhost(c)
+		b.drawCommandDrag(c)
 		if frameOK && cur != nil {
 			// The walker's four full-mask sources [R-P0-11 §3]: the follow
 			// camera's tracked unit, the unit whose command page is open, the

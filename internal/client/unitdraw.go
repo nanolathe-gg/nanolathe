@@ -127,6 +127,14 @@ func (c *Client) UIFillRect(x, y, w, h int, idx uint8) {
 	})
 }
 
+// UIWorldLine records a non-emissive line inside the caller's world overlay.
+// Modern command previews use one segment per path edge instead of a fill per
+// pixel (DESIGN_INTERFACE_HUD_INPUT §3.11). World-region clipping is shared with
+// the ordinary world line primitives.
+func (c *Client) UIWorldLine(x0, y0, x1, y1 int32, index uint8) {
+	c.emitLine(drawlist.Line{X0: x0, Y0: y0, X1: x1, Y1: y1, Index: index})
+}
+
 // UIFrameRect outlines a clipped rectangle in the indexed framebuffer. idx is
 // an active PALETTE.PAL index. It emits; the classic sink runs frameIndexedRect
 // (docs/DESIGN_GPU_RENDERER.md §2.2).

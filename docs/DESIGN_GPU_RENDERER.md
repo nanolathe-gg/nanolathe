@@ -4557,6 +4557,12 @@ and eight builds. Classic median record is 11.468 → 11.514 ms; modern median
 submission is 4.973 → 4.940 ms. These are Alt-off regression checks. Full build,
 vet, formatting and test checks pass after integrating current main. Artifacts
 are in `/private/tmp/nanolathe-all-zoom-review/` outside the repository.
+Modern drag construction, rectangular area work, and free-form formation
+commands are specified in [DESIGN_INTERFACE_HUD_INPUT §3.11](DESIGN_INTERFACE_HUD_INPUT.md#311-modern-drag-commands).
+Their previews share the world-overlay transform and ordinary indexed line/fill
+primitives. These are explicit input extensions; no renderer state enters
+construction or movement. Alt grid capture takes precedence over tactical ranges.
+
 ## 22. The model lane
 
 ### 22.1 What it is

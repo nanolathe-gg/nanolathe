@@ -230,7 +230,7 @@ func (b *battleSession) worldOverlayArmed(cur *frame.Frame) bool {
 	if state == nil {
 		return false
 	}
-	return state.PlacementArmed() || (cur != nil && state.Input.ShiftHeld)
+	return b.modernDrag != nil || state.PlacementArmed() || (cur != nil && state.Input.ShiftHeld)
 }
 
 // drawBuildGhost draws the armed build site the way retail does [07 §9].
@@ -245,7 +245,7 @@ func (b *battleSession) worldOverlayArmed(cur *frame.Frame) bool {
 // Retail suppresses the ghost whenever the pointer leaves the world viewport,
 // so it never appears over the side panel or the minimap.
 func (b *battleSession) drawBuildGhost(c *client.Client) {
-	if !b.battleState().PlacementArmed() || b.cam == nil {
+	if b.modernDrag != nil || !b.battleState().PlacementArmed() || b.cam == nil {
 		return
 	}
 	if !b.overWorld(b.battleState().Input.PointerX, b.battleState().Input.PointerY) {

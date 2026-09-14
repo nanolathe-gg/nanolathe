@@ -142,6 +142,9 @@ func (b *battleSession) DispatchOrderCommand(cmd session.HumanOrderCommand) erro
 	} else {
 		cmd.Position.InterfaceType = orders.InterfaceTypeLeftClick
 	}
+	for i := range cmd.Targets {
+		cmd.Targets[i].Position.InterfaceType = cmd.Position.InterfaceType
+	}
 	return b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanOrder, Order: cmd})
 }
 

@@ -117,6 +117,9 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	mouse, pointerModifiers := publishedPointer(in)
 	mx, my := int32(mouse.X), int32(mouse.Y)
 	b.updateResourceQueueFeedback(cl)
+	if b.serviceCommandDrag(in, cl, mouse, pointerModifiers) {
+		return
+	}
 	if b.serviceResourceClick(in, cl, mouse, pointerModifiers) {
 		return
 	}
@@ -373,6 +376,9 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	// Reuse that verdict; direct controller samples service the same retained
 	// panel here [07 §3][07 R-WGT-01 §3].
 	if b.hud != nil && b.hud.servicePalettePointer(b, in) {
+		return
+	}
+	if b.beginCommandDrag(cl, mouse, pointerModifiers) {
 		return
 	}
 	// A right click over the viewport is Type 1's idle contextual-order path.

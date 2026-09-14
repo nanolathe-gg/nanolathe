@@ -486,6 +486,11 @@ func TestResourceSingleOrderClickReplacesQueue(t *testing.T) {
 				in.Mouse.SetPosition(400, 320)
 				in.Mouse.SetButton(input.MouseButtonRight, true)
 				b.handleInput(in, cl)
+				// Modern empty-ground clicks wait for release so the same
+				// capture can become a formation (interface design §3.11).
+				in.Mouse.ResetEdges()
+				in.Mouse.SetButton(input.MouseButtonRight, false)
+				b.handleInput(in, cl)
 			}
 			b.sess.Step(b.sess.Clock.ScaledAnchor + 1)
 			q := orders.QueueForUnit(b.sess.Units.Unit(builder))

@@ -78,7 +78,7 @@ func (b *battleSession) classifyPointer(x, y int32) battlePointerRegion {
 	if unitInfoCovers(x, y) || b.battleState().HasOptionsLayer() {
 		return battlePointerChrome
 	}
-	if !b.battleState().Input.DragActive && b.isOnRadar(x, y) {
+	if b.modernDrag == nil && !b.battleState().Input.DragActive && b.isOnRadar(x, y) {
 		return battlePointerMinimap
 	}
 	if b.overWorld(x, y) {
@@ -115,7 +115,7 @@ func (b *battleSession) minimapOrderButton() input.MouseButton {
 // keeps resolving against the view even as the pointer crosses the rail
 // [07 R-CAM-01 §11].
 func (b *battleSession) minimapPointerWorld(x, y int32) (int32, int32, bool) {
-	if b == nil || b.sess == nil || b.battleState().Input.DragActive {
+	if b == nil || b.sess == nil || b.modernDrag != nil || b.battleState().Input.DragActive {
 		return 0, 0, false
 	}
 	m, dst, ok := b.minimapLayout()

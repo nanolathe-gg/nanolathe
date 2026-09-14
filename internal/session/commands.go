@@ -69,12 +69,23 @@ type HumanSelectionCommand struct{ Handles []pool.Handle }
 // is the front-segment `SelfDestructFG`, which [04 R-ORD-01 §2] names as the
 // button's own; the rear-segment `SelfDestruct` is the kamikaze/mine spawn.
 type HumanSelfDestructCommand struct{ Handles []pool.Handle }
+
+// HumanOrderTarget is one captured target in an area work list. Unit handles
+// are revalidated at the input boundary; feature goals use Position.
+type HumanOrderTarget struct {
+	Target   pool.Handle
+	Position orders.ResolvePos
+}
+
 type HumanOrderCommand struct {
 	Handles  []pool.Handle
 	Code     int
 	Target   pool.Handle
 	Position orders.ResolvePos
 	Queued   bool
+	// Nonempty Targets explicitly requests an area batch under
+	// DESIGN_INTERFACE_HUD_INPUT §3.11. Empty Targets retains ordinary clicks.
+	Targets []HumanOrderTarget
 }
 type HumanStopCommand struct{ Handles []pool.Handle }
 type HumanActivationCommand struct {
@@ -212,6 +223,7 @@ func cloneHumanHandles(in []pool.Handle) []pool.Handle {
 func cloneHumanCommand(c HumanCommand) HumanCommand {
 	c.Selection.Handles = cloneHumanHandles(c.Selection.Handles)
 	c.Order.Handles = cloneHumanHandles(c.Order.Handles)
+	c.Order.Targets = append([]HumanOrderTarget(nil), c.Order.Targets...)
 	c.Stop.Handles = cloneHumanHandles(c.Stop.Handles)
 	c.SelfDestruct.Handles = cloneHumanHandles(c.SelfDestruct.Handles)
 	return c
@@ -1017,6 +1029,10 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 			q.Push(id, orders.NewNodeForOrder(id, 0, u.X, u.Y, u.Z, tick, u.Handle, true))
 		}
 	case HumanOrder:
+		if len(c.Order.Targets) != 0 {
+			s.applyHumanOrderBatch(c.Order, tick)
+			return
+		}
 		var target *units.Unit
 		if c.Order.Target != 0 {
 			target = s.humanTarget(c.Order.Target)
@@ -1057,6 +1073,54 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 				q.DropLeadingAutoOps()
 			}
 			q.Push(id, orders.NewNodeForOrder(id, c.Order.Target, gx, gy, gz, tick, u.Handle, c.Order.Queued))
+		}
+	}
+}
+
+// applyHumanOrderBatch preserves the captured target order for each actor.
+// The area gesture is an explicit extension (DESIGN_INTERFACE_HUD_INPUT §3.11):
+// the first admitted target replaces once unless queued, then all others append
+// without the ordinary repeat-click toggle [07 R-P0-11 §6].
+func (s *Session) applyHumanOrderBatch(c HumanOrderCommand, tick uint32) {
+	handles := c.Handles
+	if len(handles) == 0 {
+		handles = s.selectedHumanHandles()
+	}
+	for _, h := range handles {
+		u := s.humanUnit(h)
+		if u == nil {
+			continue
+		}
+		s.bindOrderQueue(u)
+		q := orders.QueueForUnit(u)
+		if q == nil {
+			continue
+		}
+		queued := c.Queued
+		for _, goal := range c.Targets {
+			var target *units.Unit
+			if goal.Target != 0 {
+				target = s.humanTarget(goal.Target)
+				if target == nil {
+					// A vanished captured unit must not turn into a ground
+					// order. Existing targets use [04 R-ORD-02 §1]'s gates.
+					continue
+				}
+			}
+			id := orders.Resolve(c.Code, u, target, &goal.Position)
+			if id == 0 {
+				continue
+			}
+			gx, gy, gz := goal.Position.X, goal.Position.Y, goal.Position.Z
+			if target != nil {
+				gx, gy, gz = target.X, target.Y, target.Z
+			}
+			if !queued {
+				q.PurgeUnprotected()
+				q.DropLeadingAutoOps()
+			}
+			q.Push(id, orders.NewNodeForOrder(id, goal.Target, gx, gy, gz, tick, u.Handle, queued))
+			queued = true
 		}
 	}
 }

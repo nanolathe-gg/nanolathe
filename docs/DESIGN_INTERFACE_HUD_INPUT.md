@@ -1393,8 +1393,8 @@ opens the single-player TALK editor through partial I10 (§3.9)
 
 ### 3.7 The command dispatch boundary
 
-Every gesture that changes authoritative state becomes one
-`session.HumanCommand` and goes through `Session.EnqueueHumanCommand`. The
+Every gesture that changes authoritative state becomes one or more
+`session.HumanCommand` values and goes through `Session.EnqueueHumanCommand`. The
 value is immutable at the boundary: the enqueue copies handle slices and
 strings, so a caller may reuse its buffers, and it assigns the sequence and the
 due tick — the next session tick, because no input-delay constant exists
@@ -1797,6 +1797,92 @@ builders without extractors, repeated/rapid queued spacing, unselected local
 builders, mixed footprints, illegal edges, deposit coverage, geothermal menu
 detection and yard alignment, nearby/fogged vents, and cancellation. Synthetic
 fixtures define the new input policy; it is not attributed to retail evidence.
+
+### 3.11 Modern drag commands
+
+**Established implementation policy (user-requested extension).** These gestures
+belong to modern input; their geometry is not retail evidence. Classic retains
+its existing click and selection handling. Authoritative construction, work,
+and movement still receive ordinary typed commands and apply existing gates.
+
+Left drag while placing a structure previews a straight row. Alt switches the
+preview to an axis-aligned rectangular grid, taking precedence over Alt range
+guides for the duration of construction capture. Anchors use the compiled footprint
+in map cells, starting at the press anchor. A row advances by one footprint on
+its dominant normalized axis; the other axis follows the straight segment,
+rounded to the nearest cell, with half-cell ties toward the drag endpoint.
+Normalized axis ties choose X. A grid walks rows from the pressed corner toward
+the current corner. Touching edges are allowed. Invalid sites and reserved
+queued footprints are red and skipped; valid sites are green. On release the
+first accepted build replaces orders unless Shift is held, and subsequent sites
+append without duplicate-site toggle. If no site is valid, placement stays armed.
+A click still uses the existing single-site path, on release in modern mode.
+
+Repair and Reclaim use rectangular world areas, with their command armed and
+the left button dragged. Repair visits visible local damaged or unfinished
+units. Reclaim visits visible reclaimable features, avoiding accidental unit
+reclamation. Ordinary clicks preserve the existing target resolver. Targets
+are captured from the committed frame at release, in publication order; orders
+are queued per capable selected actor. An explicit target batch replaces only
+at each actor's first admitted target, and never invokes repeat-click removal.
+This is a one-time work list, not a persistent area task. Empty areas leave existing orders intact.
+
+Move accepts a left drag with Move armed. With right-click interface mode,
+idle right drag on empty ground also draws a formation. Ordinary left box
+selection remains available. The traced polyline accepts curves and zigzags;
+units receive individual destinations evenly spaced by arc length, including
+both endpoints (a single unit receives the midpoint); whole world destinations
+round nearest with halves away from zero. Selected mobile actors are matched
+one-to-one to these destinations to minimize total straight-line travel across
+the group. The presentation uses an epsilon-scaled auction assignment (the
+classical algorithm described in [Bertsekas, §2](https://web.mit.edu/dimitrib/www/Bertsekas_Auction_Assignment_Algorithms_RICO.pdf)):
+an actor displaced from a destination bids again, so internal slot order cannot
+strand later actors at distant leftover spots. Costs are Euclidean distances;
+the final epsilon is `1/(destination count + 1)`, bounding the whole group's
+extra travel above the optimum to less than one world pixel, apart from
+floating-point roundoff. Coarse passes start at one quarter of the largest
+cost and divide epsilon by four, retaining prices between passes. This makes
+large selections practical without pursuing imperceptible improvements.
+Destination coordinates sort by X then Z before matching, so reversing an
+identical destination set produces the same assignments. Equal bids prefer an
+unused destination, then coordinate order; actors enter each pass in slot order.
+The solver uses floating-point input geometry and quadratic memory, and runs
+once on release. Commands still carry whole fixed-point destinations. The line
+defines destinations, not mandatory paths around obstacles; existing
+pathfinding chooses each route.
+
+All gestures activate after six logical screen pixels of displacement, commit
+once on matching release, and cancel on Escape, right cancellation, loss of
+focus, modal ownership, or selection/latch changes. Shift at release appends.
+Geometry is bounded to 1024 building sites and 2048 sampled path vertices per
+gesture to keep input and preview work bounded. These are UI budgets, not
+retail constants. Validation covers capture ownership, queue replacement versus
+append, footprint spacing, curve sampling, fog filtering, and zoomed overlays.
+
+The shell owns capture and preview in `battle_command_drag.go`; pure geometry
+lives in `battle_drag_geometry.go`. An area's `HumanOrderCommand.Targets` slice
+is copied at enqueue. The session resolves that work list in actor/target order
+and purges only at the first admitted target for each actor. Explicit formation
+handles give each mobile actor its own destination without editing selection.
+`UIWorldLine` records one non-emissive segment per traced edge inside the same
+world overlay used by placement, avoiding one recorded fill per line pixel.
+
+Visual review used real modern GPU captures on Great Divide (seed 7), at
+1024×768: mixed legal/illegal grid footprints, reclaim bounds and visible target
+markers, and eight selected units distributed around a curved line at 0.75 zoom.
+Capture-only input scripting stayed in an isolated QA worktree; assets and PNGs
+remain outside the repository. Focused tests cover release without a held sample,
+queue replacement/append, reservations, fog, cancellation, classic press behavior,
+superseding keyboard commands, and a short release crossing into the radar.
+
+The integrated fast and retail gates passed. The sequential live battle check
+used Great Divide, seed 7, 1920×1080, 180 measured frames, 30 FPS, native zoom,
+and `NANOLATHE_METAL_GLINT=0` for matching scene metadata. Classic/modern median
+cadence was 33.334/33.334 ms; median host draw work was 14.977/9.977 ms.
+Frame-by-frame workload censuses matched, including 9–15 burning features and
+four active factories per owner. Both captures were inspected. These are paced
+host measurements of ordinary battle load, not isolated GPU timing or a claim
+about maximum-size drag latency.
 
 ## 4. Retail behaviour that is not a bug
 

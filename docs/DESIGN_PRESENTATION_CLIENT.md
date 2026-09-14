@@ -189,6 +189,23 @@ or device-independent desktop size. Fullscreen scales them to the display;
 selecting a different aspect still letterboxes rather than stretching. The
 combined list remains sorted by width then height, with no duplicates.
 
+The user-requested monitor aspect options are also host policy. Each opening of
+Options queries the monitor containing the window through `DesktopSize`. Its
+reported desktop dimensions are offered directly, together with widths 1280,
+1600 and 1920 whose heights follow the desktop ratio rounded to the nearest
+logical pixel. A monitor-derived size is available even when the original list
+would gate that same size out on a smaller desktop. These are render sizes, not
+enumerated hardware display modes; the query uses device-independent pixels. Missing monitor metrics add no modes.
+The current stored size stays in the table when moving between monitors, so
+opening the page cannot silently replace it. All additions share the minimum
+640×480 filter and sorting/deduplication. The list stays fixed during an options
+session to preserve slider capture; reopening Options queries the monitor again.
+
+The Visuals page shows the selected size's reduced aspect beside its read-out
+and the detected monitor's aspect below that. Ratios use exact integer reduction
+(with 8:5 displayed as the customary 16:10). These labels extend the authored
+page using its label font and height; the resolution read-out retains its format.
+
 Desktop fullscreen uses Ebitengine's fullscreen API without changing the
 monitor mode. The top-level settings field `fullscreen` defaults to false
 when absent. `--fullscreen[=true|false]` overrides startup; omission restores

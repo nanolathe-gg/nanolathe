@@ -24,7 +24,7 @@ import (
 // and must remain selectable even on a smaller or high-DPI logical desktop.
 func TestRetailDisplayModeTableIsGatedSortedAndFiltered(t *testing.T) {
 	for _, desktop := range [][2]int{{0, 0}, {1024, 768}, {1280, 1024}, {1600, 1199}, {1600, 1200}, {1920, 1080}} {
-		modes := retailDisplayModes(desktop[0], desktop[1])
+		modes := retailDisplayModes(desktop[0], desktop[1], retailDisplayMode{})
 		has := func(mode retailDisplayMode) bool {
 			for _, candidate := range modes {
 				if candidate == mode {
@@ -40,8 +40,11 @@ func TestRetailDisplayModeTableIsGatedSortedAndFiltered(t *testing.T) {
 		}
 		for _, mode := range []retailDisplayMode{{1280, 1024}, {1600, 1200}} {
 			want := desktop[0] >= mode.W && desktop[1] >= mode.H
+			// The host extension can independently offer a legacy size when
+			// it matches this monitor, even below the original desktop gate.
+			want = want || (desktop[0] > 0 && desktop[1] > 0 && mode.W*desktop[1] == mode.H*desktop[0])
 			if has(mode) != want {
-				t.Fatalf("desktop %v changed retail gate for %v", desktop, mode)
+				t.Fatalf("desktop %v incorrect availability for %v", desktop, mode)
 			}
 		}
 		for i, mode := range modes {
@@ -58,6 +61,73 @@ func TestRetailDisplayModeTableIsGatedSortedAndFiltered(t *testing.T) {
 				t.Fatalf("mode %v does not reopen at its slider index", mode)
 			}
 		}
+	}
+}
+
+// Nanolathe's host extension follows arbitrary monitor proportions and keeps
+// a saved size selectable after moving to another monitor (§2.1 of the client design).
+func TestMonitorDisplayOptions(t *testing.T) {
+	for _, tc := range []struct {
+		desktop, scaled retailDisplayMode
+		aspect          string
+	}{
+		{retailDisplayMode{2560, 1600}, retailDisplayMode{1280, 800}, "16:10"},
+		{retailDisplayMode{3440, 1440}, retailDisplayMode{1920, 804}, "43:18"},
+		{retailDisplayMode{1080, 1920}, retailDisplayMode{1280, 2276}, "9:16"},
+		{retailDisplayMode{1512, 982}, retailDisplayMode{1600, 1039}, "756:491"},
+	} {
+		modes := retailDisplayModes(tc.desktop.W, tc.desktop.H, retailDisplayMode{1720, 720})
+		for _, want := range []retailDisplayMode{tc.desktop, tc.scaled, {1720, 720}} {
+			index := retailDisplayModeIndex(modes, want.W, want.H)
+			if modes[index] != want {
+				t.Fatalf("desktop %v omitted %v: %v", tc.desktop, want, modes)
+			}
+		}
+		if got := displayAspect(tc.desktop.W, tc.desktop.H); got != tc.aspect {
+			t.Fatalf("desktop %v aspect = %q, want %q", tc.desktop, got, tc.aspect)
+		}
+	}
+}
+
+// Exercise monitor-derived choices through the authored slider and its OK,
+// reopen and Cancel transaction. Optional captures use the production painter.
+func TestMonitorOptionsSelectionSurvivesReopen(t *testing.T) {
+	shell, _, cl := retailAssetShell(t)
+	window := shell.windowOptions()
+	shell.openMenu(modeMenuSingle)
+	shell.activateGadget("Options")
+	optionsState.desktop = retailDisplayMode{2560, 1600}
+	optionsState.modes = retailDisplayModes(2560, 1600, retailDisplayMode{640, 480})
+	shell.activateGadget("VISUALS")
+	slider := shell.retailOptionsSlider("VIDSLDR")
+	index := retailDisplayModeIndex(optionsState.modes, 1280, 800)
+	shell.moveRetailSlider("VIDSLDR", slider, retailSliderKnob(index, slider.travel, slider.max))
+	if got := optionsPanel.TextOf("NASPECT"); got != "16:10" {
+		t.Fatalf("selected aspect = %q", got)
+	}
+	if got := optionsPanel.TextOf("NMONITOR"); got != "Monitor: 16:10" {
+		t.Fatalf("monitor aspect = %q", got)
+	}
+	if shotDir := os.Getenv("NANOLATHE_OPTIONS_SHOT"); shotDir != "" {
+		writeShellShot(t, cl, shotDir+"/options-monitor-16-10.png")
+	}
+	if w, h := window.WindowSize(); w != 640 || h != 480 {
+		t.Fatalf("pending monitor mode resized window to %dx%d", w, h)
+	}
+	shell.activateGadget("PREV")
+	if w, h := window.WindowSize(); w != 1280 || h != 800 {
+		t.Fatalf("OK committed %dx%d, want 1280x800", w, h)
+	}
+	// The headless shell has no monitor on reopen: retain the saved mode anyway.
+	shell.activateGadget("Options")
+	shell.activateGadget("VISUALS")
+	if shell.display.Width != 1280 || shell.display.Height != 800 {
+		t.Fatalf("reopening changed selection to %dx%d", shell.display.Width, shell.display.Height)
+	}
+	shell.activateGadget("RESTORE")
+	shell.activateGadget("CANCEL")
+	if shell.display.Width != 1280 || shell.display.Height != 800 {
+		t.Fatal("Cancel did not restore monitor-derived selection")
 	}
 }
 
@@ -97,7 +167,7 @@ func TestRetailSliderArithmetic(t *testing.T) {
 	}
 	// Every mode index round-trips through position and back, which is what
 	// keeps a reopened page showing the size that was chosen.
-	for max := 1; max < len(retailDisplayModes(1920, 1200)); max++ {
+	for max := 1; max < len(retailDisplayModes(1920, 1200, retailDisplayMode{})); max++ {
 		for value := 0; value <= max; value++ {
 			if got := retailSliderValue(retailSliderKnob(value, 90, max), 90, max); got != value {
 				t.Fatalf("value %d of max %d round-tripped to %d", value, max, got)

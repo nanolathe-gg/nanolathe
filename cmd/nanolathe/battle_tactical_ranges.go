@@ -102,7 +102,7 @@ func (b *battleSession) updateTacticalRangeInput(in *input.State, focused bool) 
 }
 
 func (b *battleSession) tacticalRangesActive(c *client.Client) bool {
-	return b != nil && c != nil && c.TacticalRangesAvailable() && b.tacticalRangesHeld && b.cat != nil && b.battleState().Modal() == ui.BattleModalClosed && !b.isResultVisible() && !b.isTalkGUIActive()
+	return b != nil && (b.modernDrag == nil || b.modernDrag.product == "") && c != nil && c.TacticalRangesAvailable() && b.tacticalRangesHeld && b.cat != nil && b.battleState().Modal() == ui.BattleModalClosed && !b.isResultVisible() && !b.isTalkGUIActive()
 }
 
 // Suppress capability differences that could identify a commander decoy. The

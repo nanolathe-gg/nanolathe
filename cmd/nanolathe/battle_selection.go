@@ -127,7 +127,7 @@ func (b *battleSession) pickTarget(sx, sy int32) (pool.Handle, *units.Unit, *ord
 	// already taken the lens branch for the position, so only the unit word
 	// differs — and both take it under the same condition, an armed drag
 	// rectangle keeping the pointer in the view branch [07 R-CAM-01 §11].
-	if b.isOverMinimap(sx, sy) && !b.battleState().Input.DragActive {
+	if b.modernDrag == nil && b.isOverMinimap(sx, sy) && !b.battleState().Input.DragActive {
 		f, ok := b.currentSnapshot()
 		if !ok {
 			return 0, nil, pos
