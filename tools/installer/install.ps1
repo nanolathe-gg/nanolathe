@@ -51,6 +51,7 @@ function Expand-NanolatheArchive([string]$Archive, [string]$Destination) {
     Write-Host "Extracting verified archive: $Archive"
     # Use the Framework ZIP implementation to avoid per-entry PowerShell
     # overhead. Callers supply a fresh directory inside the temporary workspace.
+    Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     [IO.Compression.ZipFile]::ExtractToDirectory($Archive, $Destination)
     Write-Host 'Extraction complete.'
