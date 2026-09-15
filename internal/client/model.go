@@ -427,8 +427,7 @@ func modelLocalVertex(v, origin [3]numeric.Fixed) (lx, ly, ry int32) {
 // offset. Retail has no scale; at the retail scale of 1 this is the identity
 // and the offsets stay exactly as [R-REN-03A §1] computes them. At the detail
 // scale it is an exact integer multiply, so a doubled model lands on the pixel
-// grid one-to-one; at 1.5x it is the half-away rounding every scaled extent
-// uses (DESIGN_GPU_RENDERER §14.2).
+// grid one-to-one (DESIGN_GPU_RENDERER §14.2).
 func (c *Client) scaleModelLocal(lx, ly int32) (int32, int32) {
 	s := c.modelScale()
 	if s.Native() {

@@ -28,7 +28,6 @@ func TestWorldRegionIsTheIdentityOnARestStep(t *testing.T) {
 	}{
 		{camera.ZoomUnit, camera.ViewScaleNative},
 		{camera.ZoomMax, camera.ViewScaleDetail},
-		{camera.ZoomOf(camera.ViewScaleMid), camera.ViewScaleMid},
 	} {
 		r.sched.resetFrame(64, 64)
 		r.worldW, r.worldH = 64, 64
@@ -66,7 +65,7 @@ func TestWorldRegionScalesAWorldQuad(t *testing.T) {
 	// 1.5x recorded at the 2x step: the recording shrinks by three quarters.
 	r.sched.resetFrame(64, 64)
 	r.worldW, r.worldH = 64, 64
-	r.World(worldRegion(camera.ZoomOf(camera.ViewScaleMid), camera.ViewScaleDetail, 86, 86))
+	r.World(worldRegion(camera.ZoomUnit*3/2, camera.ViewScaleDetail, 86, 86))
 	if !r.sched.worldOn {
 		t.Fatal("1.5x recorded at the 2x step left the transform disarmed")
 	}
@@ -177,13 +176,13 @@ func litCoverage(r *Renderer, w, h int) map[[2]int]int {
 // point per screen pixel, so the explosion halo brightens each pixel exactly
 // once (§16.3 "Lit points"). Scaling the points quad by quad let two or three
 // record points land on one screen pixel and brighten it two or three times,
-// which drew the halo as a lattice at the 1.5x default.
+// which drew the halo as a lattice at fractional zoom.
 func TestLitPointsBrightenEachScreenPixelOnceUnderTheTransform(t *testing.T) {
 	r, _ := schedulerFixture(t)
 	r.sched.resetFrame(64, 64)
 	r.worldW, r.worldH = 64, 64
 	// 1.5x is the 2x step shrunk by 0.75: four record pixels to three screen ones.
-	r.World(worldRegion(camera.ZoomOf(camera.ViewScaleMid), camera.ViewScaleDetail, 64, 64))
+	r.World(worldRegion(camera.ZoomUnit*3/2, camera.ViewScaleDetail, 64, 64))
 	if !r.sched.worldOn {
 		t.Fatal("the fixture did not arm the transform")
 	}

@@ -308,16 +308,7 @@ type Client struct {
 	// Original (classic) draws the authored tiles and frames, doubled, at the
 	// detail scale (DESIGN_GPU_RENDERER §14.3).
 	doubledFrames map[*formats.GAFFrame]*formats.GAFFrame
-	// midFrames and midDetailFrames are the 1.5x variants: the authored frame
-	// at 3/2 for Original, and the provider's 2x variant at 3/4 for Enhanced,
-	// both nearest-resampled once on first use (DESIGN_GPU_RENDERER §14.3).
-	// midTiles is the same for the detail tile set, decimated from the
-	// provider's 64x64 tiles to 48x48 the first time the 1.5x view asks.
-	midFrames       map[*formats.GAFFrame]*formats.GAFFrame
-	midDetailFrames map[*formats.GAFFrame]*formats.GAFFrame
-	midTiles        [][detailTilePixels]byte
-	midTilesFrom    *[detailTilePixels]byte
-	enhanced        bool
+	enhanced      bool
 	// trails is the Enhanced trail layer's retained state (DESIGN_GPU_RENDERER
 	// §15): presentation only, reset with the model registry and the terrain.
 	trails trailState

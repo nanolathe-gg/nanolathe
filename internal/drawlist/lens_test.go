@@ -31,20 +31,6 @@ func TestLensMapTruncationAndRelativeOffsets(t *testing.T) {
 			t.Fatalf("detail subpixel %d=(%d,%d,%v)", sub, x, y, ok)
 		}
 	}
-	// At 1.5x, Project starts alternating two/one-pixel cells; the map shifts
-	// by the difference of projected cell origins and retains the within-cell
-	// position. This is the shared authored-offset policy, not radial resampling.
-	l.Scale = camera.ViewScaleMid
-	l.X, l.Y = 17, 17
-	if b := l.Bounds(); b != (Rect{W: 33, H: 33}) {
-		t.Fatalf("middle-scale footprint: %+v", b)
-	}
-	for _, tc := range [][2]int32{{14, 15}, {15, 17}, {16, 18}, {17, 17}, {18, 17}, {19, 18}, {20, 18}} {
-		x, y, ok := l.Source(tc[0], tc[0])
-		if !ok || x != tc[1] || y != tc[1] {
-			t.Fatalf("middle-scale cell %d=(%d,%d,%v), want %d", tc[0], x, y, ok, tc[1])
-		}
-	}
 }
 
 type lensRecorder struct {

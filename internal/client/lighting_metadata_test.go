@@ -27,7 +27,7 @@ func TestLightingNormalFacesOutwardFromVisibleRoof(t *testing.T) {
 func TestLightingRetainedHeightRefreshDoesNotDoublePhysicalMetadata(t *testing.T) {
 	c := testModelTextureClient()
 	c.enhanced = true
-	c.cam.Scale = camera.ViewScaleMid
+	c.cam.Scale = camera.ViewScaleDetail
 	c.modelScratch.active = true
 	p := newScreenPoly(3)
 	p.normal, p.heights[0] = [3]float32{0, 0, 1}, 3.5
@@ -39,7 +39,7 @@ func TestLightingRetainedHeightRefreshDoesNotDoublePhysicalMetadata(t *testing.T
 	draw := &presentationrender.UnitDraw{WorldPos: fixedVertex(0, 11, 0)}
 	c.setModelLightingHeight(g, draw)
 	for _, lane := range []*drawlist.ModelGeometry{g, g.Supersample} {
-		if lane.WorldHeight != 16.5 || lane.Faces[0].Vertices[0].Height != 3.5 || lane.Faces[0].Normal != p.normal {
+		if lane.WorldHeight != 22 || lane.Faces[0].Vertices[0].Height != 3.5 || lane.Faces[0].Normal != p.normal {
 			t.Fatalf("rebase changed physical metadata: %+v", lane)
 		}
 	}
@@ -51,12 +51,12 @@ func TestLightingRetainedHeightRefreshDoesNotDoublePhysicalMetadata(t *testing.T
 func TestLightingModelHeightUsesRecordScaleBeforeSupersampling(t *testing.T) {
 	c := testModelTextureClient()
 	c.enhanced, c.recordModelGeometry = true, true
-	c.cam.Scale = camera.ViewScaleMid
+	c.cam.Scale = camera.ViewScaleDetail
 	draw := testPrimitiveDraw(presentationrender.PrimitiveDraw{IsColored: 1, ColorIndex: 7, VertexIndices: []uint16{0, 1, 2}},
 		[][3]numeric.Fixed{fixedVertex(0, 12, 0), fixedVertex(4, 12, 0), fixedVertex(4, 12, -4)})
 	draw.WorldPos = fixedVertex(0, 10, 0)
 	polys := c.collectDrawPolys(draw, teamColor{}, 1, modelCursorUnit)
-	if len(polys) != 1 || polys[0].heights[0] != 3 || polys[0].normal != [3]float32{0, 0, 1} {
+	if len(polys) != 1 || polys[0].heights[0] != 4 || polys[0].normal != [3]float32{0, 0, 1} {
 		t.Fatalf("relative height/normal did not survive projection: %+v", polys)
 	}
 }

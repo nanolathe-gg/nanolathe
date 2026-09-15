@@ -519,16 +519,15 @@ type Terrain struct {
 	// Cam is the live camera the classic executor reads for per-tile projection.
 	// Clone replaces this pointer with an owned camera value.
 	Cam *camera.Camera
-	// Scale is the presentation view scale this record was projected at, in
-	// the camera's half steps, with zero read as native
-	// (DESIGN_GPU_RENDERER §14.2). A tile's screen rectangle is Scale.Px(32)
-	// on a side: 32, 48 or 64. It is additive: an executor that ignores it
+	// Scale is the presentation view scale this record was projected at,
+	// with zero read as native (DESIGN_GPU_RENDERER §14.2).
+	// A tile's screen rectangle is Scale.Px(32)
+	// on a side: 32 or 64. It is additive: an executor that ignores it
 	// draws the native view.
 	Scale camera.ViewScale
 	// Detail is the detail tile set of DESIGN_GPU_RENDERER §14.3 — one index
 	// tile per Terrain.TileSet entry, in the same order, each already at the
-	// screen tile size of the record's Scale and stored with that side as its
-	// row stride (64x64 at 2x, 48x48 in the first 2304 bytes at 1.5x), so an
+	// screen tile size of the record's Scale and stored at 64x64, so an
 	// executor copies it one-to-one. It is nil at the native scale and when
 	// no detail art is installed, and then the executor resamples the 32x32
 	// tile by nearest sampling through the scale's inverse. The tiles are

@@ -60,7 +60,7 @@ func (t *litPointTrace) Points(p drawlist.Points) {
 // the way the classic sink expands them, are exactly the points the classic lane
 // recorded — same pixels, same LHT rows, same order.
 func TestLitDiscCommandsExpandToTheClassicPoints(t *testing.T) {
-	for _, scale := range []camera.ViewScale{camera.ViewScaleNative, camera.ViewScaleMid, camera.ViewScaleDetail} {
+	for _, scale := range []camera.ViewScale{camera.ViewScaleNative, camera.ViewScaleDetail} {
 		record := func(modern bool) []drawlist.Point {
 			c := litDiscClient(scale)
 			c.recordModelGeometry = modern

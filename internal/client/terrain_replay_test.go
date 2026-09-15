@@ -22,8 +22,8 @@ func TestClonedTerrainSurvivesNextCamera(t *testing.T) {
 			terrain.TileSet[0][y*32+x] = byte(1 + x + 3*y)
 		}
 	}
-	for _, scale := range []camera.ViewScale{0, camera.ViewScaleNative, camera.ViewScaleMid, camera.ViewScaleDetail} {
-		t.Run(map[camera.ViewScale]string{0: "nil", camera.ViewScaleNative: "native", camera.ViewScaleMid: "mid", camera.ViewScaleDetail: "detail"}[scale], func(t *testing.T) {
+	for _, scale := range []camera.ViewScale{0, camera.ViewScaleNative, camera.ViewScaleDetail} {
+		t.Run(map[camera.ViewScale]string{0: "nil", camera.ViewScaleNative: "native", camera.ViewScaleDetail: "detail"}[scale], func(t *testing.T) {
 			c := &Client{width: 32, height: 24, indexed: make([]byte, 32*24)}
 			var cam *camera.Camera
 			if scale != 0 {

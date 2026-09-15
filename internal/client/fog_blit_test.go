@@ -148,7 +148,7 @@ func TestFogGrayRemapKind(t *testing.T) {
 // its signed frame offset [03 §3.3][R-RR16-A §3]. Exercise the complete sink:
 // the blitter alone already clips correctly.
 func TestFogScrollClipsWithoutMovingArt(t *testing.T) {
-	for _, scale := range []camera.ViewScale{camera.ViewScaleNative, camera.ViewScaleMid, camera.ViewScaleDetail} {
+	for _, scale := range []camera.ViewScale{camera.ViewScaleNative, camera.ViewScaleDetail} {
 		for _, kind := range []render.FogKind{render.FogKindGAFCh0, render.FogKindGAFCh1} {
 			for _, patterned := range []bool{false, true} {
 				t.Run(fmt.Sprintf("scale%d/kind%d/patterned%t", scale, kind, patterned), func(t *testing.T) {
@@ -164,7 +164,7 @@ func TestFogScrollClipsWithoutMovingArt(t *testing.T) {
 					c.fogGAF = &formats.GAF{}
 					c.fogGray[0], c.fogBlack[0] = entry, entry
 					var baseline []byte
-					// Multiples of four keep the checker phase identical at all three scales.
+					// Multiples of four keep the checker phase identical at both scales.
 					for _, pan := range [][2]int32{{0, 0}, {0, 4}, {0, 16}, {0, 28}, {4, 0}, {16, 0}, {28, 0}, {12, 12}} {
 						cam := &camera.Camera{X: 16 + pan[0], Z: 16 + pan[1], Scale: scale}
 						c.SetCamera(cam)

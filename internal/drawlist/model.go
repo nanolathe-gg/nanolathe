@@ -91,8 +91,8 @@ type ClassicModelImage struct {
 	// Blit is the nearest-neighbour view scale the blit applies: zero or
 	// native draws one framebuffer pixel per image pixel; a magnified scale
 	// draws each image pixel over the block its Project span covers about the
-	// anchor — 2x2 at 2x, alternately one and two wide at 1.5x. Original at a
-	// magnified scale rasterizes the model at its native size and scales it
+	// anchor — 2x2 at 2x. Original at a magnified scale rasterizes the model
+	// at its native size and scales it
 	// here, so the classic frame is a pure nearest upscale of the native one
 	// (DESIGN_GPU_RENDERER §14.2).
 	Blit camera.ViewScale
