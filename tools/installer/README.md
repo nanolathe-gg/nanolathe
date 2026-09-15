@@ -19,10 +19,22 @@ Windows x64, in PowerShell:
 & ([scriptblock]::Create((irm https://nanolathe.gg/install.ps1)))
 ```
 
-Close the game and rerun the same command to update. Each successful install
-creates a versioned release directory; ordinary launches use the selected build
-without downloading or compiling. Build failures leave the previous build
-selected. Saves and settings are outside those release directories.
+The shortcut checks `https://nanolathe.gg/install/release.txt` at launch. If its
+source revision differs from the installed release, it offers **Update & play**
+or **Play current version**. The check has a short timeout; an unavailable or
+invalid manifest leaves the installed game usable. Declining the update also
+starts the current build. Downloads and compilation only happen after accepting
+an update, or when you run the install command yourself.
+
+An accepted update verifies the downloaded installer against the manifest's
+SHA-256 before running it. It reuses the existing compiler and build cache,
+installs into the same user directory, then launches the selected release.
+Build or verification failures leave the previous build selected. Saves and
+settings are outside the versioned release directories.
+
+**Upgrading the first alpha:** rerun the install command once to replace the
+original shortcut launcher with one that checks for updates. You can also close
+the game and rerun that command whenever you want to update manually.
 
 Supported installer targets: Mac Intel/Apple Silicon, Linux x86-64/ARM64, and
 Windows x64. Linux requires a graphical desktop and the window-system, graphics,
@@ -121,8 +133,9 @@ hashes pin the expected bytes but are not a separate publisher signature.
    establish a playable installation. Check platform-specific shortcuts and
    folder selection on the platforms being promoted.
 5. Run website `make check` and publish its reviewed commit. Future installs
-   resolve the newly published manifest. Prior builds stay installed until the
-   user removes them.
+   resolve the newly published manifest; launchers offer its source revision on
+   the next launch. Pushes to engine `main` alone do not publish a release. Prior
+   builds stay installed until the user removes them.
 
 The first install has a cold compiler/dependency cache, so measure its time
 separately from updates. No first-install duration is promised.
