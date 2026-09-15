@@ -63,7 +63,7 @@ install_release() {
             version) [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]] || fail 'invalid version'; version=$value ;;
             source_revision) [[ "$value" =~ ^[0-9a-f]{40}$ ]] || fail 'invalid source revision'; revision=$value ;;
             go_version) [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail 'invalid Go version'; go_version=$value ;;
-            source_tar_sha256|source_zip_sha256|go_darwin_arm64_sha256|go_darwin_amd64_sha256|go_linux_arm64_sha256|go_linux_amd64_sha256|go_windows_amd64_sha256)
+            installer_sh_sha256|installer_ps1_sha256|source_tar_sha256|source_zip_sha256|go_darwin_arm64_sha256|go_darwin_amd64_sha256|go_linux_arm64_sha256|go_linux_amd64_sha256|go_windows_amd64_sha256)
                 [[ "$value" =~ ^[0-9a-f]{64}$ ]] || fail "invalid checksum: $key"
                 case "$key" in
                     source_tar_sha256) source_hash=$value ;; source_zip_sha256) zip_hash=$value ;;

@@ -132,6 +132,14 @@ chmod +x "$output"
         self.install("--no-run", success=False)
         self.assertFalse((self.path / "builds").exists())
 
+    def test_manifest_accepts_validated_installer_hashes(self):
+        self.manifest(installer_sh_sha256="c" * 64, installer_ps1_sha256="d" * 64)
+        self.install("--no-run")
+        before = (self.base / "current").resolve()
+        self.manifest(installer_sh_sha256="invalid")
+        self.install("--no-run", success=False)
+        self.assertEqual((self.base / "current").resolve(), before)
+
     def test_spaces_and_launch_without_downloads(self):
         self.install("--no-run", "--root", str(self.root))
         before = (self.path / "downloads").read_text()
