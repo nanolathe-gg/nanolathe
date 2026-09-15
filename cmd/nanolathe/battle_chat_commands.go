@@ -177,6 +177,8 @@ func (b *battleSession) dispatchLocalCommand(text string) {
 		if b.sess != nil {
 			_ = b.sess.EnqueueHumanCommand(session.HumanCommand{Kind: session.HumanNoShake})
 		}
+	case "spawn":
+		b.spawnChatCommand(words)
 	case "atm":
 		if b.sess != nil && battleSessionKind(b) == 2 {
 			_ = b.sess.EnqueueHumanCommand(session.HumanCommand{Kind: session.HumanATM})

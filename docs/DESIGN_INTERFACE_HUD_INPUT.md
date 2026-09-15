@@ -1837,6 +1837,37 @@ excluded with multiplayer `[07 R-CAM-01 §6]` `[07 R-FE-02 §12]`.
   label's quickkey letter and the map-entry `colorb` rectangle fill are not
   drawn (every stock label authors `colorb` 0) `[03 R-FONT-01 §6]`.
 
+### Modern spawn command
+
+**Nanolathe Modern policy.** The user-authorized testing command
+`+spawn <unit>` creates one fully built unit owned by `Session.LocalOwner` in
+single-player skirmish or campaign. The retail vocabulary remains defined by
+`[07 R-CAM-01 §6]`; this is a Nanolathe extension. Strict 3.1 rejects it at
+both the chat edge and the authoritative command consumer, without allocation,
+resource changes or RNG draws.
+
+The case-insensitive catalog name and world point under the cursor **at
+submission** enter the ordinary human-command queue. The pointer must be over
+the battlefield, outside the HUD and minimap. Moving the camera or pointer
+later does not retarget the queued request. Buildings use the existing mission
+footprint snap and height probe `[08 R-ENTRY-01 §6]` `[08 R-ENTRY-02 §1]`;
+mobiles retain the terrain point. The session checks the current local player,
+catalog definition, map bounds, terrain suitability, features and occupancy
+before allocation. Every footprint cell is checked even for open building
+yards; there is no search for a nearby free site or displacement of blockers.
+
+Successful allocation uses the normal fully built creator, including its unit
+limits, COB initialization, activation, allocator RNG sequence and movement
+registration. The normal observer and publication passes expose the unit. No
+build resources are charged or granted; subsequent unit operation participates
+in the ordinary economy. Rejections before allocation draw no RNG; allocator
+or script failures retain the common creator's failure semantics. Usage errors,
+unknown names, unsuitable sites and allocation failures produce chat feedback.
+
+Verification locks submission-time coordinates, local rather than viewing
+ownership, creation state, repeated-site rejection, no resource charge, ordinary
+creation RNG effects and the Strict bypass, including a mode switch after enqueue.
+
 ### 3.10 Modern resource double-click construction
 
 **Established implementation policy (user-requested departure, not retail

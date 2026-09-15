@@ -66,7 +66,15 @@ const (
 	HumanBigBrother
 	HumanShiftState
 	HumanCancelQueuedMove
+	HumanSpawn
 )
+
+// HumanSpawnCommand is the Modern testing command's captured world point.
+// See DESIGN_INTERFACE_HUD_INPUT "Modern spawn command".
+type HumanSpawnCommand struct {
+	Unit    string
+	X, Y, Z numeric.Fixed
+}
 
 type HumanSelectionCommand struct{ Handles []pool.Handle }
 
@@ -205,6 +213,7 @@ type HumanGroupCommand struct {
 // copies handle slices and strings so callers may reuse their input buffers.
 type HumanCommand struct {
 	Gameplay gameplay.Mode
+	Spawn    HumanSpawnCommand
 	// Sequence and DueTick are session-owned metadata. Callers leave both zero;
 	// EnqueueHumanCommand assigns them when the value enters the session queue.
 	Sequence         uint64
@@ -668,6 +677,9 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		return
 	case HumanNoShake:
 		s.ToggleNoShake()
+		return
+	case HumanSpawn:
+		s.applySpawnCommand(c.Spawn, tick)
 		return
 	case HumanATM:
 		if s.Mission != nil && s.Mission.Type == mission.TypeCampaign {
