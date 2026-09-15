@@ -142,12 +142,12 @@ func Fragment(dst vec4, src vec2, color vec4) vec4 {
 	}
 	elapsed := t-impact
 	span := duration-impact
-	radius := elapsed*max(far+48, 420)/(span*0.72)
+	radius := elapsed*max(far+48, 420)/(span*0.95)
 	// Match the explosion distortion field's compression/rarefaction profile
 	// (GPU §25). The moving band refracts scene pixels without adding colour.
 	band := clamp((d-radius)/28, -1, 1)
 	envelope := 1-band*band
-	fade := 1-smoothstep(span*0.3, span*0.90, elapsed)
+	fade := 1-smoothstep(span*0.35, span*0.97, elapsed)
 	direction := delta/max(d, 1)
 	shift := direction*(band*envelope*envelope*3.5)*9*scale*fade
 	// Brief presentation-only screen recoil; the camera and picking never move.

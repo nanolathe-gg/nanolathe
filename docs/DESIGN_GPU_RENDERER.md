@@ -4633,6 +4633,8 @@ one shader draw reveals the map with an overlapping warm descent streak and a
 strong warm impact flash, colourless distortion field, and damped screen recoil.
 The expanding field uses the same bipolar compression/rarefaction profile as
 explosion distortion (§25); it warps scene pixels without adding a coloured rim.
+Its expansion uses 95% of the post-impact interval, with a later fade, so the
+wave travels about a quarter slower while gameplay starts at the same time.
 The map reveals in 32-world-pixel screen chunks with a
 stronger vertical bounce, a small sideways wobble, and a damped rebound; sampling the completed scene carries terrain, trees,
 water, and fog together. It is a sampled image effect, not moving terrain
