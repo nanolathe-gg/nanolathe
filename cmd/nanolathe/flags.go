@@ -38,7 +38,7 @@ type Options struct {
 	Shot               string      // compose one frame to this PNG and exit, opening no window
 	ShotTicks          int         // authoritative ticks to advance before the frame is captured
 	Remaster           string      // remaster override: a loose directory or HPI mounted above every retail tier
-	Zoom               camera.Zoom // presentation zoom factor from --zoom; zero is unset: the window picks by resolution, a capture stays native [F-P1-008]
+	Zoom               camera.Zoom // presentation zoom factor from --zoom; zero is unset: all routes default to native [F-P1-008]
 	ZoomText           string      // the literal --zoom argument, kept so it can be rejected per executor after --renderer is known (DESIGN_GPU_RENDERER §16.8)
 	AutoRemaster       bool        // synthesize the detail view's 2x art at load time (DESIGN_GPU_RENDERER §14.4)
 	ShotFocus          string      // "x,y" screen point kept fixed while scaling; default the screen centre
@@ -128,7 +128,7 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.StringVar(&opts.Shot, "shot", "", "compose one battle frame to this PNG and exit, opening no window")
 	set.IntVar(&opts.ShotTicks, "shot-ticks", 90, "authoritative ticks to advance before --shot captures the frame")
 	set.StringVar(&opts.Remaster, "remaster", "", "remastered-art override: a loose directory or .hpi mounted above every retail archive")
-	set.Func("zoom", "presentation view scale: any factor in 0.0625..2 with --renderer=modern, or 1, 1.5 or 2 with classic; modern defaults to 1; classic windows default to 1.5 above 800x600 and 1 otherwise; captures and the benchmark default to 1", func(text string) error {
+	set.Func("zoom", "presentation view scale: any factor in 0.0625..2 with --renderer=modern, or 1 or 2 with classic; defaults to 1 for windows, captures and benchmarks", func(text string) error {
 		// The free range is parsed here and the executor's own restriction is
 		// applied after Parse, because --renderer may follow --zoom on the
 		// command line (DESIGN_GPU_RENDERER §16.8).
@@ -199,7 +199,7 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 		return opts, err
 	}
 	// The classic executor has no free zoom: its factor is always its record
-	// step, so it takes only the three views (DESIGN_GPU_RENDERER §16.8). The
+	// step, so it takes only the two views (DESIGN_GPU_RENDERER §16.8). The
 	// modern one takes any factor the flag's own function accepted; the
 	// map-derived floor of §16.7 is applied at battle entry, where the map is
 	// known. An unset flag stays zero for the routes to resolve (§14.6).

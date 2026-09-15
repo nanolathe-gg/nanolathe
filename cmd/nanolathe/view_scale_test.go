@@ -24,7 +24,7 @@ func TestF9CyclesTheViewScaleAboutTheViewportCentre(t *testing.T) {
 		b.cam.X, b.cam.Z = 2000, 1500
 		mx, my := battleViewCentre(b.cam)
 		wx, wz := b.cam.X+mx, b.cam.Z+my
-		wants := []camera.Zoom{camera.ZoomOf(camera.ViewScaleMid), camera.ZoomMax, camera.ZoomUnit}
+		wants := []camera.Zoom{camera.ZoomMax, camera.ZoomUnit}
 		if modern {
 			wants = []camera.Zoom{camera.ZoomMax, camera.ZoomUnit / 4, camera.ZoomUnit}
 		}
@@ -77,9 +77,9 @@ func TestWheelZoomKeepsTheWorldUnderThePointer(t *testing.T) {
 	}
 }
 
-// Modern opens at 1x at every resolution; classic keeps its resolution
-// default. An explicit --zoom overrides either (§16.8).
-func TestEntryZoomDefaultsByResolution(t *testing.T) {
+// Both renderers open at 1x at every resolution. An explicit --zoom overrides
+// the default (§16.8).
+func TestEntryZoomDefaultsToNativeAtEveryResolution(t *testing.T) {
 	for _, tc := range []struct {
 		w, h int32
 		zoom camera.Zoom
@@ -87,8 +87,8 @@ func TestEntryZoomDefaultsByResolution(t *testing.T) {
 	}{
 		{640, 480, 0, camera.ZoomUnit},
 		{800, 600, 0, camera.ZoomUnit},
-		{1024, 768, 0, camera.ZoomOf(camera.ViewScaleMid)},
-		{1920, 1080, 0, camera.ZoomOf(camera.ViewScaleMid)},
+		{1024, 768, 0, camera.ZoomUnit},
+		{1920, 1080, 0, camera.ZoomUnit},
 		{1920, 1080, camera.ZoomUnit, camera.ZoomUnit},
 		{640, 480, camera.ZoomMax, camera.ZoomMax},
 		// A free factor is a start-up factor too, for the modern executor
@@ -99,9 +99,6 @@ func TestEntryZoomDefaultsByResolution(t *testing.T) {
 			b := zoomTestBattle()
 			b.cam.ViewW, b.cam.ViewH = tc.w, tc.h
 			want := tc.want
-			if renderer == "modern" && tc.zoom == 0 {
-				want = camera.ZoomUnit
-			}
 			applyEntryZoom(Options{Zoom: tc.zoom, Renderer: renderer}, b)
 			if got := b.cam.EffectiveZoom(); got != want {
 				t.Errorf("%s %dx%d with --zoom %v opened at %s, want %s", renderer, tc.w, tc.h, tc.zoom, got, want)

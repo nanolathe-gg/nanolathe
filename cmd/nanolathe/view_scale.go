@@ -88,10 +88,10 @@ func setBattleZoom(b *battleSession, z camera.Zoom) {
 // route take it: there is no motion to smooth.
 //
 // The executor decides how the factor is recorded (§16.8). The classic one has
-// no free zoom, so a factor it is given is one of the three views and is set as
+// no free zoom, so a factor it is given is one of the two views and is set as
 // that VIEW SCALE — its own art and its own arithmetic, exactly as before §16.
 // The modern one derives the record step from the factor and scales the
-// recording, so its 1.5x is the 2x step shrunk rather than the 1.5x variant set.
+// recording for fractional live factors.
 func jumpBattleZoom(b *battleSession, mx, my int32, z camera.Zoom, modern bool) {
 	if b == nil || b.cam == nil {
 		return
@@ -108,34 +108,13 @@ func jumpBattleZoom(b *battleSession, mx, my int32, z camera.Zoom, modern bool) 
 	b.zoom.Reset()
 }
 
-// The classic window's default view scale follows its resolution (§14.6): the
-// retail 640x480 and 800x600 modes keep the native picture, and anything
-// larger opens at 1.5x, where a 1080p window shows about the world a 1280x720
-// native one would.
-const (
-	defaultZoomMaxNativeW = 800
-	defaultZoomMaxNativeH = 600
-)
-
-// defaultViewScale is the view scale a window of this size opens at when
-// `--zoom` is not given.
-func defaultViewScale(viewW, viewH int32) camera.ViewScale {
-	if viewW > defaultZoomMaxNativeW || viewH > defaultZoomMaxNativeH {
-		return camera.ViewScaleMid
-	}
-	return camera.ViewScaleNative
-}
-
-// entryZoom resolves the window's start-up factor: `--zoom` when given, else
-// 1x in modern or the resolution default in classic (§16.8).
-func entryZoom(opts Options, cam *camera.Camera) camera.Zoom {
+// entryZoom resolves the start-up factor: --zoom when given, otherwise native
+// in both renderers, at every resolution (DESIGN_GPU_RENDERER §16.8).
+func entryZoom(opts Options) camera.Zoom {
 	if opts.Zoom != 0 {
 		return opts.Zoom
 	}
-	if modernRenderer(opts) || cam == nil {
-		return camera.ZoomUnit
-	}
-	return camera.ZoomOf(defaultViewScale(cam.ViewW, cam.ViewH))
+	return camera.ZoomUnit
 }
 
 // applyEntryZoom applies the start-up factor at battle entry for the windowed
@@ -145,7 +124,7 @@ func applyEntryZoom(opts Options, b *battleSession) {
 	if b == nil || b.cam == nil {
 		return
 	}
-	z := entryZoom(opts, b.cam)
+	z := entryZoom(opts)
 	if z == camera.ZoomUnit {
 		return
 	}
@@ -173,8 +152,7 @@ func viewZoomOf(b *battleSession) camera.Zoom {
 	return b.cam.EffectiveZoom()
 }
 
-// toggleViewScale is F9. In the classic executor it is the unchanged 1x, 1.5x,
-// 2x step cycle about the viewport centre; modern cycles 1x, 2x, 0.25x as
+// toggleViewScale is F9. In the classic executor it is the 1x, 2x step cycle about the viewport centre; modern cycles 1x, 2x, 0.25x as
 // animated zoom targets (§16.8). It is a Nanolathe binding,
 // not a retail one — retail's dispatcher has no case for F9 or F10 (§14.6).
 func (b *battleSession) toggleViewScale(modern bool) {
