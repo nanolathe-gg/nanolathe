@@ -40,6 +40,11 @@ func (g *gameShell) saveLoadDir() string {
 	if g == nil {
 		return retailSaveDir("")
 	}
+	// The installer selects an exact per-user directory as sanctioned host
+	// policy (DESIGN_SESSIONS_AI_SAVE §5); do not append SAVEGAME.
+	if g.opts.SaveDir != "" {
+		return g.opts.SaveDir
+	}
 	// Discovery resolves the install in contentSet without rewriting the
 	// command-line options. Save beside that install, not the launch directory
 	// [08 R-SAVE-02 §1]. An explicit save-root override still takes precedence.
@@ -67,6 +72,7 @@ func (g *gameShell) openSaveLoadScreen(mode saveLoadMode, source saveLoadSource)
 		}
 	}
 	screen := newSaveLoadScreen(mode, dir, source)
+	screen.hostSaveDir = g.opts.SaveDir != ""
 	if mode == loadScreenMode && len(screen.Entries()) == 0 {
 		// The load screen is closed again and the message shown; the save
 		// screen shows no message for an empty list [08 R-SAVE-02 §2].

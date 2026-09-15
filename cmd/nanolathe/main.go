@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/nanolathe-gg/nanolathe/internal/install"
 	"github.com/nanolathe-gg/nanolathe/internal/platform/benchlock"
 	"github.com/nanolathe-gg/nanolathe/internal/version"
 )
@@ -80,6 +81,35 @@ func seedsFor(opts Options) (sim, crt uint32) {
 }
 
 func run(opts Options, out *os.File) error {
+	// Installer diagnostics are host policy (DESIGN_CONTENT_VFS §5). Resolve
+	// and validate before the banner, benchmark lock, or game startup.
+	if opts.ListInstalls || opts.CheckInstall {
+		if (opts.ListInstalls && opts.CheckInstall) || opts.Map != "" || opts.Mission != "" || opts.LoadSave != "" || opts.Headless || opts.Shot != "" || opts.BattleBenchmark != "" {
+			return &missingProductError{what: "incompatible installation diagnostic flags", logical: "<command line>", expected: "one of --list-installs or --check-install without a game, capture, or benchmark mode"}
+		}
+		if opts.ListInstalls {
+			explicit := opts.Roots
+			if len(explicit) == 0 && opts.Root != "" {
+				explicit = []string{opts.Root}
+			}
+			roots, err := install.Resolve(explicit)
+			if err != nil {
+				return err
+			}
+			for _, root := range roots {
+				if _, err := fmt.Fprintln(out, root); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		content, err := openContent(opts)
+		if err != nil {
+			return err
+		}
+		return content.Close()
+	}
+
 	if opts.BattleBenchmark != "" {
 		path, err := benchlock.Path()
 		if err != nil {

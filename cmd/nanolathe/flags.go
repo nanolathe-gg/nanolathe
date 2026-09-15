@@ -22,8 +22,11 @@ type Options struct {
 	BenchmarkFrames    int
 	BenchmarkTPS       int
 	BenchmarkPreTicks  int
-	Root               string      // first root; also the save directory for programmatic callers
+	Root               string      // first content root; default save parent for programmatic callers
 	Roots              []string    // ordered content roots; empty enables host discovery
+	ListInstalls       bool        // print resolved installation roots without mounting content
+	CheckInstall       bool        // validate startup content and exit without opening a window
+	SaveDir            string      // exact save/load directory override; empty uses the install root
 	Map                string      // map name without extension, e.g. "ashap plateau"
 	Seed               int64       // battle RNG seed for both streams; <0 = derive pair from clock
 	Headless           bool        // run the session without opening a window
@@ -110,6 +113,9 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 		}
 		return nil
 	})
+	set.BoolVar(&opts.ListInstalls, "list-installs", false, "print selected or discovered content roots, one per line, without mounting")
+	set.BoolVar(&opts.CheckInstall, "check-install", false, "validate selected content roots without opening a game window")
+	set.StringVar(&opts.SaveDir, "save-dir", "", "exact save/load directory (omitted uses savegame beneath the installation)")
 	set.StringVar(&opts.Map, "map", "", "map name without extension, e.g. \"ashap plateau\"")
 	set.IntVar(&opts.UnitLimit, "unit-limit", 0, "per-player skirmish unit limit (20..3276); omitted uses saved unitLimit, otherwise 1000")
 	set.Int64Var(&opts.Seed, "seed", -1, "battle RNG seed for both streams; negative derives a pair from the clock")

@@ -662,7 +662,8 @@ than one root is selected; the single-root policy and retail catalog admission
 rules are unchanged. An explicit mod root need not contain a base install.
 Equal full provider paths still keep the first mount (C3). `--remaster` wins
 above all roots, even with many roots. The content context retains the entire
-list for battle restarts; the first root remains the save directory.
+list for battle restarts; the first root remains the default save parent,
+unless the host selects an exact `--save-dir` (§5 of DESIGN_SESSIONS_AI_SAVE).
 
 `internal/install.Resolve` owns host discovery, outside simulation and retail
 evidence. Explicit flags win, then a nonempty `NANOLATHE_TA_ROOT` selects one
@@ -692,6 +693,20 @@ to select one installation or control the order yourself.
 | macOS | Steam and configured libraries, system/user Applications folders, CrossOver and Whisky bottles |
 | Wine hosts | `WINEPREFIX`, `~/.wine`, prefixes under home Games directories and `CX_BOTTLE_PATH`; conventional Windows game folders within each prefix |
 
+
+**Installer diagnostics (Nanolathe host policy).** `nanolathe --list-installs`
+prints the resolved roots, one per stdout line, without a profile banner,
+content mounting, or game startup. It retains explicit `--root`, environment,
+and discovery precedence described above. Success exits zero; discovery failure
+exits one with its searched-path diagnostic on stderr. Selected roots are
+candidates; listing does not establish that they contain usable game data.
+`--check-install` applies the existing `openContent` mount and startup-product
+validation, closes the mounts, and exits zero on success or one with a stderr
+diagnostic on failure. It emits no profile banner and opens no game window or
+audio device. These diagnostics are mutually exclusive and reject game,
+capture, and benchmark modes. An installer selects a single listed root and
+passes it explicitly to validation and launch; ordinary callers retain the
+existing multiple-root discovery and overlay policy.
 
 Host limits and compatibility boundaries are recorded under [I11]:
 

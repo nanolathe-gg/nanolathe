@@ -19,10 +19,15 @@ provenance questions.
 
 ## Run
 
-Install Go 1.25 or newer and provide a local retail installation. Linux desktop
-builds also need a C toolchain and graphics/audio development headers; the
-[Linux dependency script](.github/scripts/install-linux-deps.sh) lists the
-packages used by CI on Ubuntu.
+The [one-command installer](https://nanolathe.gg/get-started/) downloads a
+private Go toolchain, builds the current tested source release, and creates a
+shortcut. It remembers one selected Total Annihilation installation and stores
+new saves separately. See the [installer guide](tools/installer/README.md) for
+updates, paths, and platform limitations.
+
+To build manually, install Go 1.25 or newer and provide a local retail
+installation. Ebitengine 2.10 builds on desktop platforms with Go alone;
+Linux still needs a graphical desktop and graphics/audio runtime libraries.
 
 ```sh
 git clone https://github.com/nanolathe-gg/nanolathe.git
@@ -41,6 +46,10 @@ installation can be selected explicitly:
 ```sh
 ./nanolathe --root "/path/to/Total Annihilation"
 ```
+
+The installed launcher selects one root explicitly and supplies its own
+`--save-dir`. Manual launches preserve the root policy above and save beside
+the game installation unless `--save-dir "/path/to/saves"` is supplied.
 
 Skirmishes default to **1000 units per player**. Override with
 `./nanolathe --unit-limit 2000`, or set the top-level `"unitLimit": 2000`
