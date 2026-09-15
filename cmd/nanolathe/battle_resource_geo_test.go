@@ -8,6 +8,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/features"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/testsupport/retailcat"
@@ -162,5 +163,31 @@ func TestResourceGeothermalChoosesNearestVentAtFractionalGroundPoint(t *testing.
 	site, ok := b.nearbyResourceVent(f, b.cat.Units["geo"], numeric.FixedFromInt(328), numeric.FixedFromInt(344)+numeric.FixedFromInt(1)/4)
 	if !ok || site.deposit.z != 22 {
 		t.Fatalf("did not choose closer southern vent: %+v", site)
+	}
+}
+
+// The quick-build gesture always starts a move, even where an ordinary
+// contextual click on custom content would reclaim the vent.
+func TestResourceReclaimableVentStartsReplaceableMove(t *testing.T) {
+	b, cl, ms, builder := resourceGeoFixture(t)
+	b.cat.Features["vent"].Reclaimable = true
+	b.sess.Step(b.sess.Clock.ScaledAnchor + 1)
+	x, y := o5ScreenWorld(b.cam, numeric.FixedFromInt(328), 0, numeric.FixedFromInt(328))
+	_, _, pos := b.pickTarget(x, y)
+	if !pos.HasFeature {
+		t.Fatal("fixture must expose a reclaimable vent")
+	}
+	resourceClickAt(b, cl, x, y, true)
+	sequence := b.resourceClick.moveSequence
+	b.sess.Step(b.sess.Clock.ScaledAnchor + 1)
+	q := orders.QueueForUnit(b.sess.Units.Unit(builder))
+	if q.Head() == nil || q.Head().ID != orders.Lookup("Move_Ground") || q.Head().HumanMoveSequence != sequence {
+		t.Fatalf("first click did not issue a replaceable move: %+v", q.Head())
+	}
+	ms.ms += 100
+	resourceClickAt(b, cl, x, y, true)
+	b.sess.Step(b.sess.Clock.ScaledAnchor + 1)
+	if q.LenPrimary() != 1 || !orders.IsMobileBuild(q.Head().ID) || q.Head().BuildDefKey != "geo" {
+		t.Fatalf("second click left a contextual order before the plant: %+v", q.Primary())
 	}
 }

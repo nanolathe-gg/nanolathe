@@ -177,8 +177,10 @@ func (b *battleSession) beginResourceClick(cl *client.Client, mx, my int32, modi
 		pending.fallback = session.HumanCommand{Kind: session.HumanSelectionClear}
 	} else {
 		_, _, pos := b.pickTarget(mx, my)
+		// Explicit Move also covers custom vents that allow reclamation: the
+		// first half of this gesture must always be a replaceable move.
 		command := session.HumanCommand{Kind: session.HumanOrder, Order: session.HumanOrderCommand{
-			Handles: pending.selection, Code: 1, Position: *pos, Queued: true, TrackQueuedMove: true,
+			Handles: pending.selection, Code: 2, Position: *pos, Queued: true, TrackQueuedMove: true,
 		}}
 		sequence, err := b.sess.EnqueueHumanCommandWithSequence(command)
 		if err != nil {
