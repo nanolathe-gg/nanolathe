@@ -1,5 +1,10 @@
 # Download compatibility and playability follow-up
 
+Historical task record: the captures and measurements below describe the builds
+tested at the time, including the former fixed 1.5× view. Current camera and
+benchmark settings are in [DESIGN_GPU_RENDERER](docs/DESIGN_GPU_RENDERER.md)
+and [BATTLE_BENCHMARK](docs/BATTLE_BENCHMARK.md).
+
 Authorized scope: CV-04, CV-11/12, and focused investigation of GP-03 and
 HI-06/11. Starting main: `58397146`. This is task state, not retail evidence.
 

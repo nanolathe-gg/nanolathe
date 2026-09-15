@@ -17,8 +17,8 @@ const (
 // X,Z are the camera origin in map pixels.
 // ViewW,ViewH are the viewport size in the same units.
 // MapW,MapH are the map extents in map pixels.
-// Scale is the presentation-only view scale [F-P1-008] in half steps: zero
-// and ViewScaleNative mean native, ViewScaleMid the 1.5x view and
+// Scale is the presentation-only view scale [F-P1-008] encoded at twice its factor: zero
+// and ViewScaleNative mean native, and
 // ViewScaleDetail the 2x detail view. The projection and its inverse are
 // integer at every step (DESIGN_GPU_RENDERER §14.1).
 type Camera struct {
@@ -175,7 +175,7 @@ func (c *Camera) clampInsets() (leadX, trailX, leadZ, trailZ int32) { // [03 §4
 	return z.Inverse(OriginX), 0, insetY, insetY
 }
 
-// scale returns the effective view scale, clamped to the three views with
+// scale returns the effective view scale, clamped to the two views with
 // zero meaning native [F-P1-008] (DESIGN_GPU_RENDERER §14.1).
 func (c *Camera) scale() ViewScale {
 	if c == nil {
@@ -365,7 +365,7 @@ func (c *Camera) Drag(dx, dy int32) {
 	c.Pan(-wx, -wz)
 }
 
-// SetScaleAbout sets the view scale, clamped to the three views, keeping the
+// SetScaleAbout sets the view scale, clamped to the two views, keeping the
 // world point under screen position (mx, my) where it is [F-P1-008]
 // (DESIGN_GPU_RENDERER §14.1). F9 cycles through it about the viewport
 // centre; `--zoom` with `--shot-focus` uses it for captures.
@@ -529,8 +529,7 @@ func (c *Camera) Scroll(setting byte, rawDelta int32, dir Direction) { // [07 §
 //	screenX = Project(worldX>>16 - cameraX) + originX
 //	screenY = Project((worldZ>>16 - ((worldY>>16)>>1)) - cameraZ) + originY
 //
-// where Project is the scale's ceil((v·s)/2): the exact multiply at 1x and 2x
-// and the first covering screen pixel at 1.5x (ViewScale.Project). The
+// where Project is the exact multiply at 1x and 2x (ViewScale.Project). The
 // half-height shear ((worldY>>16)>>1) uses arithmetic shifts so negative
 // worldY is handled as retail does, and it is applied BEFORE the scale, so a
 // magnified view is the same picture at more pixels rather than a differently
@@ -571,7 +570,7 @@ func (c *Camera) WorldToScreen(x, y, z numeric.Fixed) (sx, sy int32) { // [03 §
 // this whole pixel and offset by the half. Presentation only; it never reaches
 // the simulation.
 func (c *Camera) WorldToScreenDoubled(x, y, z numeric.Fixed) (sx2, sy2 int32) {
-	n := int64(c.scale().Norm()) // the record step as a half-step count: 2, 3 or 4
+	n := int64(c.scale().Norm()) // the record step as a half-step count: 2 or 4
 	dx := int64(x) - int64(c.X)<<16
 	dz := 2*int64(z) - int64(y) - 2*(int64(c.Z)<<16)
 	sx2 = int32((n*dx)>>16) + 2*OriginX
@@ -590,7 +589,7 @@ func (c *Camera) WorldToScreenDoubled(x, y, z numeric.Fixed) (sx2, sy2 int32) {
 // pair (-1, 0) onto world pixel 0 at 2x while leaving -1 unreachable
 // [I3][03 §2.1]. With the floor inverse every screen pixel names exactly one
 // world pixel and the round trip world → screen → world is the identity at
-// every scale, 1.5x included (ViewScale.Inverse; DESIGN_GPU_RENDERER §14.1).
+// both record scales (ViewScale.Inverse; DESIGN_GPU_RENDERER §14.1).
 // Since DESIGN_GPU_RENDERER §16 the inverse goes through the LIVE zoom factor
 // rather than the record step, because the pointer names a pixel of the
 // PRESENTED picture: world = cameraOrigin + floor((screen − viewportOrigin)/f).

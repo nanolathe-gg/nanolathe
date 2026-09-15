@@ -1,5 +1,10 @@
 # Gameplay review follow-up
 
+Historical task record: the captures and measurements below describe the builds
+tested at the time, including the former fixed 1.5× view. Current camera and
+benchmark settings are in [DESIGN_GPU_RENDERER](docs/DESIGN_GPU_RENDERER.md)
+and [BATTLE_BENCHMARK](docs/BATTLE_BENCHMARK.md).
+
 User authorization: complete PC-03, PC-09, FE-10, PC-01, PC-11 and CV-01/02.
 Starting main: `eb2a333`. This is task state, not retail evidence.
 

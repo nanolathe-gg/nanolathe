@@ -139,12 +139,12 @@ func TestGPUProfileWindowHasExactlyMeasuredCadenceSamples(t *testing.T) {
 }
 
 // --zoom is the view scale of DESIGN_GPU_RENDERER §14.6 and the free factor of
-// §16.8: the classic executor takes only the three views, the modern one any
+// §16.8: the classic executor takes only the two views, the modern one any
 // factor in the free range. It is not a capture option — the window path takes
 // it too — so it is validated whatever route the run takes, and left unset it
 // stays zero for the routes to resolve.
 func TestZoomFlagPerExecutor(t *testing.T) {
-	for arg, want := range map[string]camera.Zoom{"1": camera.ZoomUnit, "1.5": camera.ZoomOf(camera.ViewScaleMid), "2": camera.ZoomMax} {
+	for arg, want := range map[string]camera.Zoom{"1": camera.ZoomUnit, "2": camera.ZoomMax} {
 		opts, err := parseFlags([]string{"-zoom", arg}, io.Discard)
 		if err != nil {
 			t.Fatalf("--zoom %s rejected: %v", arg, err)
@@ -156,15 +156,18 @@ func TestZoomFlagPerExecutor(t *testing.T) {
 	if opts, err := parseFlags(nil, io.Discard); err != nil || opts.Zoom != 0 {
 		t.Fatalf("unset --zoom = %v, %v; want zero and no error", opts.Zoom, err)
 	}
-	// Classic rejects anything but the three views.
-	for _, arg := range []string{"1.25", "0.7", "0.3"} {
-		_, err := parseFlags([]string{"-renderer", "classic", "-zoom", arg}, io.Discard)
-		if err == nil || !strings.Contains(err.Error(), "must be 1 (native), 1.5 or 2 (the detail view)") {
-			t.Fatalf("classic --zoom %s error = %v, want the three-view rejection", arg, err)
+	// Classic rejects fractional views on every entry route, including benchmarks.
+	for _, route := range [][]string{nil, {"--shot", "/tmp/unused.png"}, {"--battle-benchmark", "/tmp/unused-benchmark"}} {
+		for _, arg := range []string{"1.5", "1.5x", "1.25", "0.7", "0.3"} {
+			args := append([]string{"-renderer", "classic", "-zoom", arg}, route...)
+			_, err := parseFlags(args, io.Discard)
+			if err == nil || !strings.Contains(err.Error(), "must be 1 (native) or 2 (the detail view)") {
+				t.Fatalf("classic --zoom %s route %v error = %v, want the two-view rejection", arg, route, err)
+			}
 		}
 	}
 	// Modern accepts them.
-	for arg, want := range map[string]camera.Zoom{"1.25": camera.ZoomUnit * 5 / 4, "0.7": 717, "0.3": 307} {
+	for arg, want := range map[string]camera.Zoom{"1.5": camera.ZoomUnit * 3 / 2, "1.25": camera.ZoomUnit * 5 / 4, "0.7": 717, "0.3": 307} {
 		opts, err := parseFlags([]string{"-renderer", "modern", "-zoom", arg}, io.Discard)
 		if err != nil {
 			t.Fatalf("modern --zoom %s rejected: %v", arg, err)

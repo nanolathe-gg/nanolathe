@@ -25,9 +25,9 @@ func fogNeedsOrdered(fg drawlist.Fog, scale camera.ViewScale) bool {
 		if len(fr.Subframes) != 0 || fr.SubframeCount != 0 || op.Frame >= fogAtlasCols {
 			return true
 		}
-		// Admission only needs geometry. Match Resampled's ceil extents and
-		// signed half-away-from-zero anchors, including their stored narrowing,
-		// without allocating any pixel planes (DESIGN_GPU_RENDERER §14.3).
+		// Admission only needs geometry. Match the variant's scaled extents and
+		// signed anchors, including their stored narrowing, without allocating any
+		// pixel planes (DESIGN_GPU_RENDERER §14.3).
 		geometry := formats.GAFFrame{
 			Width: uint16(scale.Project(int32(fr.Width))), Height: uint16(scale.Project(int32(fr.Height))),
 			XOffset: int16(scale.Px(int32(fr.XOffset))), YOffset: int16(scale.Px(int32(fr.YOffset))),

@@ -266,9 +266,8 @@ func (c *Client) drawCalculatedFlash(table int, frameIndex int32, cx, cy int, co
 	}
 	// The disc is a lit-point batch whose radius takes the view scale
 	// (DESIGN_GPU_RENDERER §14.2): each generated pixel covers the block of
-	// screen pixels its world pixel projects to — s-by-s at a whole scale,
-	// alternately one and two wide at 1.5x — so the disc keeps its traced
-	// intensity texture magnified rather than being regenerated at another
+	// screen pixels its world pixel projects to — s-by-s — so the disc keeps
+	// its traced intensity texture magnified rather than being regenerated at another
 	// radius, and the batch grows with s squared. At s = 1 the inner loops run
 	// once and the emitted points are the same points, in the same order.
 	s := c.viewScale()

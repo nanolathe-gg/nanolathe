@@ -11,7 +11,6 @@ import (
 
 // Classic composes attachment offsets at native resolution, then magnifies
 // the complete image about the carrier anchor (DESIGN_GPU_RENDERER §14.2).
-// Odd absolute anchors at 1.5x catch inversion of rounded screen differences.
 func TestCarrierStagingScaleAppliesDisplacementOnce(t *testing.T) {
 	for _, tc := range []struct {
 		name                               string
@@ -19,8 +18,6 @@ func TestCarrierStagingScaleAppliesDisplacementOnce(t *testing.T) {
 		px, py, dx, dy, screenDX, screenDY int32
 	}{
 		{"native", camera.ViewScaleNative, 49, 50, 3, -3, 3, -3},
-		{"fractional", camera.ViewScaleMid, 49, 50, 3, -3, 5, -4},
-		{"fractional-negative", camera.ViewScaleMid, 52, 47, -3, 3, -4, 5},
 		{"double", camera.ViewScaleDetail, 49, 50, 3, -3, 6, -6},
 		{"double-negative", camera.ViewScaleDetail, 52, 47, -3, 3, -6, 6},
 	} {

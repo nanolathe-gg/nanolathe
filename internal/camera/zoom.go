@@ -19,12 +19,12 @@ import (
 // clamp, the insets, picking, middle-drag, the minimap rectangle — measures it
 // through Zoom.
 //
-// The unit is 1/1024 rather than 16.16 so that the three rest steps are exact
-// small integers (1024, 1536, 2048) and every product below stays inside
+// The unit is 1/1024 rather than 16.16 so that the two record steps are exact
+// small integers (1024, 2048) and every product below stays inside
 // int64 without a shift convention of its own. It is presentation state; no
 // simulation phase reads it [I6].
 //
-// At the three rest steps Project, Inverse and Px agree with ViewScale's own
+// At the two record steps Project, Inverse and Px agree with ViewScale's own
 // arithmetic pixel for pixel, so a camera whose Zoom is its step's factor
 // composes exactly what the build before this type composed.
 type Zoom int32
@@ -41,7 +41,7 @@ const (
 	ZoomFloor Zoom = ZoomUnit / 16 // 0.0625
 )
 
-// ZoomOf is a rest step's factor: native 1024, mid 1536, detail 2048.
+// ZoomOf is a rest step's factor: native 1024, detail 2048.
 func ZoomOf(s ViewScale) Zoom {
 	return Zoom(s.Norm()) * (ZoomUnit / 2)
 }
@@ -73,7 +73,7 @@ func (z Zoom) Step() ViewScale {
 
 // Project scales a world-relative offset to the first screen pixel it covers:
 // ceil(v·z/ZoomUnit). It is ViewScale.Project generalized, and equals it
-// exactly at the three rest factors.
+// exactly at the two record factors.
 func (z Zoom) Project(v int32) int32 {
 	n := int64(z.Norm())
 	p := int64(v) * n
@@ -120,7 +120,7 @@ func (z Zoom) String() string {
 
 // ParseZoom reads a free factor the way `--zoom` spells it for the modern
 // executor: any decimal in (0, 2], with an optional trailing "x". The classic
-// executor takes ParseViewScale instead, which accepts only the three steps
+// executor takes ParseViewScale instead, which accepts only the two record steps
 // (§16.8).
 func ParseZoom(text string) (Zoom, error) {
 	trimmed := strings.TrimSuffix(strings.TrimSpace(text), "x")
@@ -185,12 +185,12 @@ func (c *Camera) MinZoom() Zoom {
 
 // ViewScaleForZoom names the rest STEP a factor is exactly on, and false for
 // every factor between them. The classic executor takes this route: it has no
-// free zoom, so a factor it is given must be one of the three views and is
+// free zoom, so a factor it is given must be one of the two views and is
 // recorded — and drawn — at that step's own art and arithmetic
 // (DESIGN_GPU_RENDERER §16.8). The modern executor takes Zoom.Step instead,
-// which records 1.5x at the 2x step and shrinks it.
+// which records fractional factors above native at the detail step and shrinks it.
 func ViewScaleForZoom(z Zoom) (ViewScale, bool) {
-	for _, s := range [3]ViewScale{ViewScaleNative, ViewScaleMid, ViewScaleDetail} {
+	for _, s := range [2]ViewScale{ViewScaleNative, ViewScaleDetail} {
 		if ZoomOf(s) == z.Norm() {
 			return s, true
 		}

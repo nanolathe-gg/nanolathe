@@ -111,9 +111,8 @@ func runBattleBenchmark(opts Options, b *battleSession, c *client.Client) error 
 	// the scene's own camera jump and about the viewport centre, so the army
 	// stays framed, and it is recorded in the scene metadata below: two runs
 	// are comparable only at the same scale.
-	// The benchmark scene is native unless `--zoom` asks otherwise: the
-	// window's resolution default (§14.6) would silently change the scene two
-	// runs are compared on, and the scale is part of the scene metadata.
+	// The benchmark defaults to native, as do the window and capture routes.
+	// An explicit --zoom is part of the scene metadata (§14.6).
 	if opts.Zoom != 0 && opts.Zoom != camera.ZoomUnit {
 		mx, my := battleViewCentre(b.cam)
 		jumpBattleZoom(b, mx, my, opts.Zoom, modernRenderer(opts))

@@ -213,7 +213,7 @@ func drawDashChain(c *client.Client, entry *formats.GAFEntry, op hud.QueuePrimit
 
 // overlayViewFrame is the world-anchored overlay's own frame selector: the
 // authored frame natively, and its nearest-resampled variant at a magnified
-// view — doubled at 2x, 3/2 at 1.5x — built once per source frame and scale
+// view — doubled at 2x — built once per source frame
 // and kept for the process's life (DESIGN_GPU_RENDERER §14.3). Frames are
 // immutable after load, so the source pointer identifies the variant; the
 // cursor GAF this art comes from is loaded once per mounted install, like
@@ -222,23 +222,18 @@ func overlayViewFrame(f *formats.GAFFrame, scale camera.ViewScale) *formats.GAFF
 	if f == nil || scale.Native() {
 		return f
 	}
-	cache := overlayDetailFrames[scale.Norm()]
-	if cache == nil {
-		cache = map[*formats.GAFFrame]*formats.GAFFrame{}
-		overlayDetailFrames[scale.Norm()] = cache
-	}
+	cache := overlayDetailFrames
 	if variant, ok := cache[f]; ok {
 		return variant
 	}
-	variant := f.Resampled(int(scale.Norm()), 2)
+	variant := f.Doubled()
 	cache[f] = variant
 	return variant
 }
 
-// overlayDetailFrames is the resampled-overlay-art cache, one map per
-// magnified scale. It is presentation state keyed by immutable frames and is
+// overlayDetailFrames is the doubled-overlay-art cache. It is presentation state keyed by immutable frames and is
 // only ever looked up, never ranged, so it produces no order [I1][I6].
-var overlayDetailFrames = map[camera.ViewScale]map[*formats.GAFFrame]*formats.GAFFrame{}
+var overlayDetailFrames = map[*formats.GAFFrame]*formats.GAFFrame{}
 
 // drawQueueIcon blits the queued-order icon at the order's anchor.  The frame
 // comes from the cursor handle array slot the descriptor's icon byte names, and

@@ -2,12 +2,12 @@ package camera
 
 import "testing"
 
-// The free factor generalizes the three half steps: at each of them Project,
+// The free factor generalizes the two record steps: at each of them Project,
 // Inverse and Px must answer exactly what ViewScale's own arithmetic answers,
 // which is what makes a camera on a rest factor compose the picture the build
 // before DESIGN_GPU_RENDERER §16 composed (§16.2).
 func TestZoomAgreesWithTheStepsAtTheRestFactors(t *testing.T) {
-	for _, s := range []ViewScale{ViewScaleNative, ViewScaleMid, ViewScaleDetail} {
+	for _, s := range []ViewScale{ViewScaleNative, ViewScaleDetail} {
 		z := ZoomOf(s)
 		for v := int32(-200); v <= 200; v++ {
 			if got, want := z.Project(v), s.Project(v); got != want {
@@ -29,7 +29,7 @@ func TestZoomAgreesWithTheStepsAtTheRestFactors(t *testing.T) {
 // screen pixels share a world pixel or the other way round (§16.4).
 func TestPickingIsTheExactInverseAtRestAndFloorsInFlight(t *testing.T) {
 	cam := &Camera{X: 400, Z: 300, ViewW: 1024, ViewH: 768, MapW: 8192, MapH: 8192}
-	for _, s := range []ViewScale{ViewScaleNative, ViewScaleMid, ViewScaleDetail} {
+	for _, s := range []ViewScale{ViewScaleNative, ViewScaleDetail} {
 		cam.Scale, cam.Zoom = s, ZoomOf(s)
 		for v := int32(0); v < 400; v++ {
 			sx := s.Project(v) + OriginX
@@ -97,7 +97,7 @@ func TestMinZoomFitsTheMapWithoutLetterboxing(t *testing.T) {
 // step writer is what guarantees it.
 func TestSetScaleAboutKeepsTheFactorOnTheStep(t *testing.T) {
 	cam := &Camera{X: 400, Z: 300, ViewW: 1024, ViewH: 768, MapW: 8192, MapH: 8192}
-	for _, s := range []ViewScale{ViewScaleMid, ViewScaleDetail, ViewScaleNative, ViewScaleMid} {
+	for _, s := range []ViewScale{ViewScaleDetail, ViewScaleNative} {
 		cam.SetScaleAbout(500, 300, s)
 		if cam.EffectiveScale() != s {
 			t.Fatalf("SetScaleAbout(%s) recorded step %s", s, cam.EffectiveScale())
@@ -143,7 +143,7 @@ func TestRecordStepFollowsTheFactor(t *testing.T) {
 // there (§16.4).
 func TestScreenToRecordIsTheIdentityAtRest(t *testing.T) {
 	cam := &Camera{X: 400, Z: 300, ViewW: 1024, ViewH: 768, MapW: 8192, MapH: 8192}
-	for _, s := range []ViewScale{ViewScaleNative, ViewScaleMid, ViewScaleDetail} {
+	for _, s := range []ViewScale{ViewScaleNative, ViewScaleDetail} {
 		cam.Scale, cam.Zoom = s, ZoomOf(s)
 		for v := int32(0); v < 300; v += 7 {
 			if x, y := cam.ScreenToRecord(v, v); x != v || y != v {

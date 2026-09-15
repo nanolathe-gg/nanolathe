@@ -1,5 +1,10 @@
 # Approved review fixes — execution state
 
+Historical task record: the captures and measurements below describe the builds
+tested at the time, including the former fixed 1.5× view. Current camera and
+benchmark settings are in [DESIGN_GPU_RENDERER](docs/DESIGN_GPU_RENDERER.md)
+and [BATTLE_BENCHMARK](docs/BATTLE_BENCHMARK.md).
+
 User authorization: complete every item in the recommended overnight queue and
 important additional P2 list from the validated 2026-09-12 review. This plan is
 implementation/task state, not retail evidence. Starting main: `f2af3fa`.

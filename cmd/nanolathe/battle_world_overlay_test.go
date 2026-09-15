@@ -145,7 +145,6 @@ func TestBuildGhostBorderHasNoGap(t *testing.T) {
 		width int32
 	}{
 		{camera.ViewScaleNative, 2},
-		{camera.ViewScaleMid, 3},
 		{camera.ViewScaleDetail, 4},
 	} {
 		t.Run(tc.scale.String(), func(t *testing.T) {

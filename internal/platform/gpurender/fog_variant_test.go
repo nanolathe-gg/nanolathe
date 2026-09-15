@@ -13,10 +13,10 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/render"
 )
 
-// Cached art retains Resampled's exact pixels, masks, plain raster and signed
+// Cached art retains Doubled's exact pixels, masks, plain raster and signed
 // geometry (DESIGN_GPU_RENDERER §14.3). Shared children keep their own identity
 // across parents without changing the authored traversal [03 R-COMP-01 §2].
-func TestFogVariantPreservesResamplingAndSharedChildren(t *testing.T) {
+func TestFogVariantPreservesDoublingAndSharedChildren(t *testing.T) {
 	leaf := fogTestLeaf(7, 3, -5, 3, 5)
 	leaf.Pixels[2] = 9
 	leaf.Transparent = make([]bool, len(leaf.Pixels))
@@ -28,7 +28,7 @@ func TestFogVariantPreservesResamplingAndSharedChildren(t *testing.T) {
 	parent.Pixels, parent.PlainPixels = []byte{10}, []byte{11}
 	other := fogTestComposite(leaf)
 	var fog fogPass
-	for _, scale := range []camera.ViewScale{0, camera.ViewScaleNative, camera.ViewScaleMid, camera.ViewScaleDetail} {
+	for _, scale := range []camera.ViewScale{0, camera.ViewScaleNative, camera.ViewScaleDetail} {
 		got := fog.viewFrame(parent, scale)
 		if scale.Native() {
 			if got != parent || len(fog.variants) != 0 {
@@ -36,7 +36,7 @@ func TestFogVariantPreservesResamplingAndSharedChildren(t *testing.T) {
 			}
 			continue
 		}
-		want := parent.Resampled(int(scale), 2)
+		want := parent.Doubled()
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("scale %s variant changed resampled art: got %+v want %+v", scale, got, want)
 		}
@@ -51,19 +51,10 @@ func TestFogVariantPreservesResamplingAndSharedChildren(t *testing.T) {
 			t.Fatal("repeated parent acquired a new identity")
 		}
 	}
-	// Both magnified scales survive a zoom cycle within this source generation.
-	mid, detail := fog.viewFrame(parent, camera.ViewScaleMid), fog.viewFrame(parent, camera.ViewScaleDetail)
-	if mid == detail || mid.Width != 2 || detail.Width != 2 || mid.Subframes[0].Width != 5 || detail.Subframes[0].Width != 6 {
-		t.Fatal("scale variants alias or lost ceil extents")
-	}
-	if mid.Subframes[0].XOffset != -5 || mid.Subframes[0].YOffset != 8 {
-		t.Fatal("half-step signed anchors no longer round away from zero")
-	}
 	if parent.Subframes[0] != leaf || leaf.Width != 3 || leaf.XOffset != -3 || leaf.YOffset != 5 {
 		t.Fatal("variant construction mutated its source")
 	}
 	if allocs := testing.AllocsPerRun(100, func() {
-		fog.viewFrame(parent, camera.ViewScaleMid)
 		fog.viewFrame(parent, camera.ViewScaleDetail)
 	}); allocs != 0 {
 		t.Fatalf("warmed variant lookup allocates %g objects", allocs)
@@ -72,14 +63,17 @@ func TestFogVariantPreservesResamplingAndSharedChildren(t *testing.T) {
 
 // Admission must agree with the actual stored resample, including narrow
 // geometry wrapping, while needing no raster allocations (§11.2, §14.3).
-func TestFogOrderedAdmissionMatchesResampledGeometryWithoutAllocations(t *testing.T) {
-	for _, scale := range []camera.ViewScale{0, camera.ViewScaleNative, camera.ViewScaleMid, camera.ViewScaleDetail} {
+func TestFogOrderedAdmissionMatchesVariantGeometryWithoutAllocations(t *testing.T) {
+	for _, scale := range []camera.ViewScale{0, camera.ViewScaleNative, camera.ViewScaleDetail} {
 		for _, width := range []uint16{0, 1, 3, 63, 64, 65, 32768, 65535} {
 			for _, offset := range []int16{-32768, -43, -1, 0, 1, 32767} {
 				// Zero height keeps the reference conversion device- and raster-free;
 				// restore its independently scaled positive height before placement.
 				fr := &formats.GAFFrame{Width: width, XOffset: offset, YOffset: -1}
-				wantFrame := fr.Resampled(int(scale.Norm()), 2)
+				wantFrame := fr
+				if !scale.Native() {
+					wantFrame = fr.Doubled()
+				}
 				fr.Height = 3
 				wantFrame.Height = uint16(scale.Project(3))
 				_, _, fits := fogFrameTilePlacement(wantFrame, fogAtlasTile(scale))
@@ -98,7 +92,7 @@ func TestFogOrderedAdmissionMatchesResampledGeometryWithoutAllocations(t *testin
 }
 
 func TestFogRepeatedCommandsKeepAtlasAndVariantStorage(t *testing.T) {
-	for _, scale := range []camera.ViewScale{camera.ViewScaleNative, camera.ViewScaleMid, camera.ViewScaleDetail} {
+	for _, scale := range []camera.ViewScale{camera.ViewScaleNative, camera.ViewScaleDetail} {
 		for _, shape := range []string{"simple", "composite", "oversized"} {
 			t.Run(scale.String()+"/"+shape, func(t *testing.T) {
 				r, _ := schedulerFixture(t)
@@ -141,14 +135,13 @@ func TestFogRepeatedCommandsKeepAtlasAndVariantStorage(t *testing.T) {
 func TestFogSourceResetReleasesVariants(t *testing.T) {
 	var r Renderer
 	fr := fogTestComposite(fogTestLeaf(7, 0, 0, 3, 5))
-	old := r.fog.viewFrame(fr, camera.ViewScaleMid)
-	r.fog.viewFrame(fr, camera.ViewScaleDetail)
+	old := r.fog.viewFrame(fr, camera.ViewScaleDetail)
 	r.scene.frames = map[*formats.GAFFrame]sceneEntry{old.Subframes[0]: {ok: true}}
 	r.resetSources(func(*ebiten.Image) { t.Fatal("device-free variants unexpectedly owned an image") })
 	if r.fog.variants != nil || len(r.scene.frames) != 0 {
 		t.Fatal("source reset retained fog variants or scene identities")
 	}
-	if next := r.fog.viewFrame(fr, camera.ViewScaleMid); next == old || next.Subframes[0] == old.Subframes[0] {
+	if next := r.fog.viewFrame(fr, camera.ViewScaleDetail); next == old || next.Subframes[0] == old.Subframes[0] {
 		t.Fatal("new source generation reused a retired fog variant")
 	}
 }

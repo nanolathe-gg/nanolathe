@@ -67,7 +67,7 @@ type FogOp struct {
 	Patterned          bool  // dither checker when applicable [03 §3.3]
 	R, G, B, A         uint8 // palette/SHD dark color or GAF-modulated (presentation) [03 §4.3]
 	// Scale is the presentation view scale the rectangle was projected at, in
-	// the camera's half steps (DESIGN_GPU_RENDERER §14.2). It is an additive
+	// the camera's native and detail record scales (DESIGN_GPU_RENDERER §14.2). It is an additive
 	// field, zero meaning native, and it is what tells an executor which
 	// variant of the fog frame covers the scaled cell. The fills need only the
 	// rectangle, which already carries the scale.
