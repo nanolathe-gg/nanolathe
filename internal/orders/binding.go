@@ -289,6 +289,10 @@ type WeaponAdapter struct {
 	StopFiring      func(*units.Unit, int) bool
 	Acquire         func(*units.Unit, int, uint32) (pool.Handle, bool)
 	Engaged         func(*units.Unit, int) bool
+	// TargetsInRadius queries the owner's cached primary/secondary registry
+	// around a point, without weapon scoring or new visibility checks. Wait
+	// and Guard_NoMove share this enumeration [04 R-SPEC-01 §8].
+	TargetsInRadius func(*units.Unit, numeric.Fixed, numeric.Fixed, int32) []pool.Handle
 	// CanEngage is the shot-admission gate of [04 R-ORD-01 §7]: given a
 	// shooter, a candidate target and a slot index, may that slot be bound to
 	// that target right now. `Attack_Chase` phases 1 and 3 branch on it

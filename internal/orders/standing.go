@@ -406,7 +406,7 @@ func waitHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code {
 		return Code(5)
 	}
 	if n.Param2 != 0 {
-		if scanRadiusTarget(u, int32(n.Param2), true) != nil {
+		if u != nil && len(scanRegistryAroundPoint(u, u.X, u.Z, int32(n.Param2))) != 0 {
 			return Code(5) // a hostile registry entry is already in range
 		}
 		if int32(n.Param1) < 1 {

@@ -1801,10 +1801,15 @@ dispatcher exists with no caller and no code-pointer reference and is dead.
 **Established — the bounded negative that matters.** No weapon-slot processing,
 aim, reload, shot-admission, or projectile path reads either standing-order
 field. Hold fire does **not** disarm a slot: it clears the autonomous slots'
-current targets once, at the moment the order runs [R-STANCE-01 §2], and then
-suppresses every path that would give the slot a new one. A slot target
+current targets once, at the moment the order runs [R-STANCE-01 §2], and
+suppresses the stance-gated acquisition paths listed above. A slot target
 installed by a manual order, by a script, or by the guard's forced join is
-still aimed and still fired regardless of the stance.
+still aimed and still fired regardless of the stance. The stationary
+`Guard_NoMove` handler also reads neither standing-order field: its phase 1
+takes an existing live slot target out of autonomous mode, and its phase 3
+can install another registry candidate even at hold fire [R-ORD-01 §3].
+Consequently a hold-fire transition can preserve a target taken by that
+automatic guard order; it does not establish that a player issued an attack.
 
 ### The standing-move gates, the chase leash, and the return to post [R-STANCE-01 §4]
 
@@ -3453,6 +3458,19 @@ Phase 3: enumerate the target registry within 640 world units of the
 record's goal for my side; a hit → pick index `RNG(count)`, bind the
 smart-reference and slot 0 to it, phase = 1, hold; none → *restart*. Other:
 cancel-all. Two draws per wake at most, three per scan.
+
+**Established — the stationary guard's scan uses the shared registry area
+enumeration of [R-SPEC-01 §8], also used by `Wait`.** The centre is the
+record's saved goal, not the guarding unit's position. Entries retain the
+cached primary-list order; each is filtered by the inclusive planar distance
+test of [06 §3.1], current aliveness and the death latch. Only an empty primary
+result with the owning player's targeting-upgrade gate set permits the same
+walk over the secondary list. Neither walk retests visibility, hostility,
+categories or weapon admission. The enumeration consumes no random draw;
+the guard then makes the single index draw stated above. No phase of this
+handler tests the fire stance. In particular, phase 1 with no slot target
+waits, whereas phase 3 can install a new registry candidate while at hold
+fire. The weapon phase still applies its ordinary shot-admission gate.
 
 **`Standby`.** Phase 0: no mover reference → cancel-all; inhibit all; gate |=
 `0x10000`; deadline 1; advance. Phase 1: run the opportunity scan

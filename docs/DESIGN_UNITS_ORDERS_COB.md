@@ -226,6 +226,18 @@ slice, not a map, because registration order is a contract [I1]. Every installer
 assigns only where a descriptor's handler is still nil, so the list is
 idempotent and its order is what settles a row two families both name.
 
+**Order registry queries.** `WeaponAdapter.TargetsInRadius` connects `Wait`
+and the stationary `Guard_NoMove` scan to
+`combat.Service.TargetsInRadius(owner uint8, x, z numeric.Fixed, radius int32,
+world *units.World) []pool.Handle`. Session composition supplies the owning
+player and unit world. Combat returns a caller-owned slice in cached registry
+order using the primary list, with secondary fallback behind the player's
+targeting-upgrade gate. The query consumes no RNG; the guard owns its one
+index draw. It preserves registry cadence and does not repeat visibility,
+hostility or weapon scoring [04 R-SPEC-01 §8][06 §3.1]. The guard queries
+around its saved target position; `Wait` queries around its own unit. A live
+unit-pool scan cannot substitute for this query.
+
 Rows whose bodies belong to a package `internal/orders` cannot import register
 on the queue instead. `OwnedHandler` returns a result code and a boolean: `true`
 means it ran the row's body and the pump applies the code through the ordinary

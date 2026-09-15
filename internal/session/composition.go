@@ -1173,6 +1173,9 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 			Acquire: func(u *units.Unit, idx int, limit uint32) (pool.Handle, bool) {
 				return s.Combat.AcquireWeaponTarget(u, idx, limit, s.Units, s.Vis, s.World, s.Econ, s.Catalog, s.SimRNG())
 			},
+			TargetsInRadius: func(u *units.Unit, x, z numeric.Fixed, radius int32) []pool.Handle {
+				return s.Combat.TargetsInRadius(u.Owner, x, z, radius, s.Units)
+			},
 			CanEngage: func(u *units.Unit, target pool.Handle, idx int) bool {
 				if s.Combat == nil || s.Units == nil {
 					return false

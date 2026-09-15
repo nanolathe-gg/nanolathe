@@ -825,8 +825,8 @@ func guardNoMoveHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) C
 			return Code(0) // *restart*
 		}
 		pick := list[int(drawBelow(u, uint32(len(list))))]
-		n.BindTarget(pick.Handle)
-		bindSlotToUnit(u, 0, pick.Handle)
+		n.BindTarget(pick)
+		bindSlotToUnit(u, 0, pick)
 		n.Phase = 1
 		return Code(2) // *hold* with the phase already set [04 R-ORD-01 §3]
 	default:
@@ -857,31 +857,15 @@ func slotTargetUnit(u *units.Unit, k int) *units.Unit {
 	return b.Lookup(s.Target.Unit)
 }
 
-// scanRegistryAroundPoint is the stationary guard's phase-3 enumeration: the
-// live units hostile to `u` whose whole-unit planar distance from (x, z) is
-// within radius, in pool-slot order (I1). "For my side" is the same reading
-// `Wait`'s registry test takes [04 R-ORD-01 §2] — the registry a side scans is
-// the one holding its enemies.
-func scanRegistryAroundPoint(u *units.Unit, x, z numeric.Fixed, radius int32) []*units.Unit {
+// scanRegistryAroundPoint shares the cached target-registry query between
+// Guard_NoMove and Wait [04 R-SPEC-01 §8]. Walking the live hostile pool here
+// would bypass the primary visibility list and the secondary upgrade gate.
+func scanRegistryAroundPoint(u *units.Unit, x, z numeric.Fixed, radius int32) []pool.Handle {
 	b := bindingFor(u)
-	if b == nil {
+	if u == nil || b == nil || b.Weapons == nil || b.Weapons.TargetsInRadius == nil {
 		return nil
 	}
-	var out []*units.Unit
-	b.ForEachUnit(func(h pool.Handle, candidate *units.Unit) bool {
-		if h == 0 || candidate == nil || !candidate.Alive || candidate == u {
-			return scanNext
-		}
-		if !scanHostile(b, u, candidate) {
-			return scanNext
-		}
-		if !withinPlanarRadius(candidate, x, z, radius) {
-			return scanNext
-		}
-		out = append(out, candidate)
-		return scanNext
-	})
-	return out
+	return b.Weapons.TargetsInRadius(u, x, z, radius)
 }
 
 // ---------------------------------------------------------------------------
