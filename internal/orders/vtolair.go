@@ -82,20 +82,15 @@ func airHandOff(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 // VTOL_Evade [04 R-AIR-01 §8]
 // ---------------------------------------------------------------------------
 
-// vtolEvadeHandler is the random break of [04 R-AIR-01 §8]: "Entry returns 5 on
-// a null target or when the satisfied set intersects `0x10008`."
-//
-// That is `airEntry` with mask `pendTargetGone` and nothing else: §8 names
-// `VTOL_Evade` inside step 1's own `0x10008` list, alongside
-// `AirToGroundHover`, so the evasion runs the same shared entry sequence the
-// four attack executors do — including its per-visit cached-goal refresh and
-// its maneuver leash — rather than a private two-arm test.
+// vtolEvadeHandler has its own entry guard: missing target, then removal or
+// cloak, each completes without the attack entries' seek replacement, goal
+// refresh or leash check [04 R-AIR-01 §8].
 //
 // The descriptor carries a zero static mask, so a `VTOL_Evade` record dispatches
 // on sight: it is the order that proves the family reaches its legs at all.
 func vtolEvadeHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
-	if code, done := airEntry(u, n, satisfied, pendTargetGone); done {
-		return code
+	if targetOf(u, n) == nil || satisfied&pendTargetGone != 0 {
+		return Code(5)
 	}
 	return airHandOff(u, n, satisfied, tick)
 }

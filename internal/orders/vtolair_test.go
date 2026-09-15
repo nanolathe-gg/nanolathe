@@ -61,12 +61,9 @@ func TestVTOLAirOrdersDispatchAndDoNotPark(t *testing.T) {
 	}
 }
 
-// TestVTOLEvadeEntryIsTheSharedOne locks the reuse [04 R-AIR-01 §8] states:
-// "Established — `VTOL_Evade`. Entry returns 5 on a null target or when the
-// satisfied set intersects `0x10008`." That is `airEntry` with mask
-// `pendTargetGone`, the same entry the four air-attack executors run — §8's own
-// step 1 lists `VTOL_Evade` beside `AirToGroundHover` under that mask.
-func TestVTOLEvadeEntryIsTheSharedOne(t *testing.T) {
+// Evade completes on missing/removed/cloaked targets without replacing itself
+// with a seek order [04 R-AIR-01 §8].
+func TestVTOLEvadeEntryCompletesWithoutSeek(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		target    pool.Handle
@@ -79,9 +76,30 @@ func TestVTOLEvadeEntryIsTheSharedOne(t *testing.T) {
 		q, u := gateFixture()
 		q.SetBinding(&QueueBinding{SimRNG: q.binding.SimRNG, Lookup: func(pool.Handle) *units.Unit { return u }})
 		n := &Node{ID: Lookup("VTOL_Evade"), Owner: u.Handle, Target: tc.target}
+		u.Flags |= 2 << units.StandingFireShift
+		before := *q.binding.SimRNG
 		if code := vtolEvadeHandler(u, n, tc.satisfied, 40); code != 5 {
 			t.Fatalf("%s: code %d, want 5 [04 R-AIR-01 §8]", tc.name, code)
 		}
+		if q.LenPrimary() != 0 || *q.binding.SimRNG != before {
+			t.Fatalf("%s: evasion completion replaced the order or consumed RNG", tc.name)
+		}
+	}
+}
+
+// Evade bypasses the attack entries' leash and cache update [04 R-AIR-01 §8].
+func TestVTOLEvadeEntryReachesLegOutsideLeash(t *testing.T) {
+	q, u := gateFixture()
+	q.binding.Lookup = func(pool.Handle) *units.Unit { return u }
+	n := &Node{ID: Lookup("VTOL_Evade"), Owner: u.Handle, Target: 7, Param3: 1}
+	if !leashBroken(u, n) {
+		t.Fatal("fixture must be outside attack leash")
+	}
+	if code := vtolEvadeHandler(u, n, 0, 40); code != 2 || n.Deadline != 41 {
+		t.Fatalf("evade did not reach unbound movement handoff: code=%d deadline=%d", code, n.Deadline)
+	}
+	if n.GoalX != 0 || n.GoalY != 0 || n.GoalZ != 0 {
+		t.Fatal("evade refreshed cached goal")
 	}
 }
 

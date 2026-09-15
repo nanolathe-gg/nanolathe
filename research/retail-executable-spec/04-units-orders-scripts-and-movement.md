@@ -13148,7 +13148,7 @@ diverge completely.
 **Established — the shared entry sequence.** In this order:
 
 1. If the satisfied set intersects `0x1000A` (`AirStrike`, `AirToGround`) or
-   `0x10008` (`AirToGroundHover`, `AirToAir`, `VTOL_Evade`): when the record is
+   `0x10008` (`AirToGroundHover`, `AirToAir`): when the record is
    the last on its segment (its next-record link is null) **and** the unit's
    fire-stance pair (status bits 20–21, `0x300000`) is not *hold fire*,
    replace the current order with a fresh `VTOL_SEEKATTACK` record carrying
@@ -13157,9 +13157,12 @@ diverge completely.
    (`0x200`, *issued against a target*) is set: when the record is the last
    on its segment, replace it with `VTOL_SEEKATTACK` at the unit's own
    position; return 5 either way ([R-AIR-01 §16]).
-3. If the target reference is live, **refresh the record's cached goal from the
-   target's current position every visit** — the cached goal is a stale-target
-   fallback, not a fixed aim point.
+   A position-issued attack has this bit clear and continues with its cached
+   goal; it is not a lost-target case.
+3. `AirStrike` and `AirToGround` refresh the cached goal from a live target's
+   current position every visit. Without a unit target they retain the issued
+   point. `AirToGroundHover` and `AirToAir` do not refresh the cached goal in
+   their entry blocks.
 4. Off-map recovery ([R-AIR-01 §5]) — `AirToAir` and `AirToGroundHover` take the
    recovery leg and return from it; `AirToGround` instead sets the record's
    deadline to the current tick plus 30, **forces the phase to 2**, and falls
@@ -13343,8 +13346,10 @@ target to slot 0 and then:
   counter and the gate, and returns *restart* ([R-ORD-02 §5]); the seek
   re-issue belongs to the entry sequence's step 1.
 
-**Established — `VTOL_Evade`.** Entry returns 5 on a null target or when the satisfied set
-intersects `0x10008`. Phase 0 requires a live mover and `canfly`, draws
+**Established — `VTOL_Evade`.** Its separate entry first returns 5 on a null
+target, then returns 5 when the satisfied set intersects `0x10008`. Neither
+completion inserts a seek order. It performs no cached-goal refresh or maneuver
+leash check before phase dispatch. Phase 0 requires a live mover and `canfly`, draws
 `random below 2` into a record scratch word, and forms
 `h = unitHeading + (draw == 0 ? 0x4000 : 0xC000)` — a random 90-degree break
 left or right — then builds a point marker at `unitPos − offset(h, Range)`
@@ -13947,8 +13952,8 @@ bombing run's entry block (the four executors share it):
   descriptor mask bit that `[R-MOV-03 §7]` shows the record constructor
   clears when the record was built with no target. It means *this record was
   issued against a target*, so a null target reference now is a target that
-  has since gone (the cached goal is the position step 3 kept refreshing
-  while it lived).
+  has since gone. For bombing and strafing runs, step 3 refreshed the cached
+  goal while the target lived.
 * **Step 2 is also gated on the successor test.** With the target null and
   the mask bit set, a record that has a successor returns 5 **without**
   issuing the seek; only the last record on its segment replaces itself.

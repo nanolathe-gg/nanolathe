@@ -691,6 +691,15 @@ mover, a candidate in active locomotion, a ground carrier against a candidate
 authoring a non-negative `MinWaterDepth`, and a submerged candidate
 `[04 §10.2]` `[04 R-AIR-01 §9]` `[04 R-AIR-01 §10]` `[04 R-UNIT-06 §3]`.
 
+**Explicit air attacks at a position (Established retail behavior).** Ground
+and feature attack commands resolve to `AirStrike` or `AirToGround` with a
+cached goal and no unit observer [04 R-ORD-02 §1][04 R-MOV-03 §7]. The entry
+must preserve that goal and continue into the flight phases. Only a record
+originally issued against a unit takes the missing-target completion path
+[04 R-AIR-01 §8][04 R-AIR-01 §16]. This applies to Modern and Strict 3.1.
+`air_point_attack_test.go` in orders checks admission; its movement counterpart
+runs ground and feature orders through bomb release in both modes.
+
 ### 3.4.1 Modern bomber pass completion
 
 **Nanolathe Modern policy.** An accepted bombing pass may finish before its

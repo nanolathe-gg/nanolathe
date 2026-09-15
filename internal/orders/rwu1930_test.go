@@ -107,8 +107,13 @@ func TestAirEntryStep2SeekReplacement(t *testing.T) {
 		n := q.Primary()[0]
 
 		code, done := airEntry(u, n, 0, pendTargetGone)
-		if !done || code != 5 {
-			t.Fatalf("%s: (code %d, done %v), want (5, true) — a null target reference ends the order [04 R-AIR-01 §8]", tc.name, code, done)
+		wantDone := tc.mask&staticTargetObserver != 0
+		wantCode := Code(0)
+		if wantDone {
+			wantCode = 5
+		}
+		if done != wantDone || code != wantCode {
+			t.Fatalf("%s: (code %d, done %v), want (%d, %v) — only issued-unit orders complete on a missing target [04 R-AIR-01 §8]", tc.name, code, done, wantCode, wantDone)
 		}
 		seek := seekAtHead(q)
 		if (seek != nil) != tc.wantSeek {

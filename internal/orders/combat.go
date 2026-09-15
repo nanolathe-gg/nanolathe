@@ -878,17 +878,16 @@ func scanRegistryAroundPoint(u *units.Unit, x, z numeric.Fixed, radius int32) []
 // arms ends the order.
 //
 //  1. If the satisfied set intersects 0x1000A (`AirStrike`, `AirToGround`) or
-//     0x10008 (`AirToGroundHover`): when the record is the last on its segment
+//     0x10008 (`AirToGroundHover`, `AirToAir`): when the record is the last on its segment
 //     and the unit's fire stance is not *hold fire*, replace the current order
 //     with a fresh `VTOL_SeekAttack` carrying the same target and cached goal;
 //     return 5 either way.
 //  2. If the target reference is null but the record was issued against a
-//     target and it is the last on its segment, replace the current order with
-//     `VTOL_SeekAttack` at the unit's own position and return 5.
-//  3. If the target reference is live, refresh the record's cached goal from
-//     the target's current position every visit — the cached goal trails a
-//     live target and stands in for it once it is gone; it is never a fixed
-//     aim point.
+//     target, return 5; if it is the last on its segment, first replace it
+//     with `VTOL_SeekAttack` at the unit's own position.
+//  3. AirStrike and AirToGround refresh the cached goal from a live target;
+//     position-issued attacks retain their goal. The other two entries do
+//     not refresh it.
 //  4. Off-map recovery ([04 R-AIR-01 §5]).
 //  5. The maneuver leash ... return 5 when `leash <= distance`.
 //
@@ -920,16 +919,19 @@ func airEntry(u *units.Unit, n *Node, satisfied uint32, interruptMask uint32) (C
 		return Code(5), true // "return 5 either way"
 	}
 	tgt := targetOf(u, n)
-	if tgt == nil {
+	if tgt == nil && n.StaticGate&staticTargetObserver != 0 {
 		// Step 2: with the target gone, the seek starts from the unit's own
 		// position and carries no target [04 R-AIR-01 §16].
-		if n.StaticGate&staticTargetObserver != 0 && !hasSuccessor(u, n) && u != nil {
+		if !hasSuccessor(u, n) && u != nil {
 			spawnSeekAttack(u, n, 0, u.X, u.Y, u.Z)
 		}
 		return Code(5), true
 	}
-	// Step 3: the cached goal follows the target every visit.
-	n.GoalX, n.GoalY, n.GoalZ = tgt.X, tgt.Y, tgt.Z
+	// Step 3: bomber and strafer goals follow a live target. Position-issued
+	// attacks retain their clicked goal [04 R-AIR-01 §8].
+	if tgt != nil && (DescriptorFor(n.ID).Name == "AirStrike" || DescriptorFor(n.ID).Name == "AirToGround") {
+		n.GoalX, n.GoalY, n.GoalZ = tgt.X, tgt.Y, tgt.Z
+	}
 	if !deferBomberLeash(u, n) && leashBroken(u, n) {
 		return Code(5), true // step 5, the maneuver leash [R-STANCE-01 §4]
 	}
