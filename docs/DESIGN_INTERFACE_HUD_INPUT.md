@@ -28,8 +28,9 @@ These packages answer three questions, and nothing else:
   table whose every row is a traced retail token, and one camera that scrolls,
   jumps, follows and converts between screen, world and minimap space
   `[07 R-CAM-01 §1]` `[07 R-CAM-01 §2]`.
-* **What does the session hear about it?** Exactly one call:
-  `Session.EnqueueHumanCommand`, taking a typed value that carries handles and
+* **What does the session hear about it?** One typed input queue:
+  `Session.EnqueueHumanCommand` (or its receipt-returning form
+  `EnqueueHumanCommandWithSequence`), taking a value that carries handles and
   numbers and no pointers. Everything above is presentation; nothing above
   writes a unit, an order or a resource `[07 §9]` [I6].
 
@@ -1541,8 +1542,8 @@ compositions to the excluded retail developer paths.
 ### 3.7 The command dispatch boundary
 
 Every gesture that changes authoritative state becomes one or more
-`session.HumanCommand` values and goes through `Session.EnqueueHumanCommand`. The
-value is immutable at the boundary: the enqueue copies handle slices and
+`session.HumanCommand` values and goes through `Session.EnqueueHumanCommand`
+or its receipt-returning form. The value is immutable at the boundary: the enqueue copies handle slices and
 strings, so a caller may reuse its buffers, and it assigns the sequence and the
 due tick — the next session tick, because no input-delay constant exists
 `[08 "Soft pacing — no per-tick input barrier"]`. The kinds are selection
@@ -1837,11 +1838,11 @@ excluded with multiplayer `[07 R-CAM-01 §6]` `[07 R-FE-02 §12]`.
 
 **Established implementation policy (user-requested departure, not retail
 behavior).** With the modern executor active, an idle selected mobile builder
-accepts left double-click on a metal deposit to build its strongest
+accepts Shift-left-double-click on a metal deposit to build its strongest
 available extractor, near a geothermal vent to build an available geothermal
 plant, or on ordinary ground to build a solar collector. Every
-double-click appends, whether Shift is held or not. The typed mobile-build
-command carries explicit `Queued` and `AppendOnly` intent: existing work is
+Shift-double-click appends, preserving the normal queue-command modifier. The
+typed mobile-build command carries explicit `Queued` and `AppendOnly` intent: existing work is
 preserved; a repeated site is moved clear of queued footprints instead of
 using the manual Shift-placement removal gesture. The complete authored build
 menu supplies candidates, independent of the currently displayed page. Equal
@@ -1920,18 +1921,35 @@ overlap with a different yard cell or another vent does not qualify. An already
 reserved vent therefore refuses another overlapping plant.
 
 The battle input layer recognizes a pair within 400 host milliseconds after
-first release, at most six logical pixels apart on each axis, with no Ctrl/Alt.
-Shift state does not distinguish gestures. The second press must resolve to the same product
-and snapped site. These are modern gesture choices, not native double-click
-identity; the platform's retail event-history gap in §2.2 is unchanged. The
-first qualifying ground click is deferred until expiry: otherwise Type 0
-would enqueue a Move before the queued build, and Type 1 would clear the builder.
-Expiry performs the original single-click action at the captured world point.
-Other pointer presses flush that action in event order; keyboard commands other
-than Shift,
-selection changes, armed modes, leaving the battle input pass, and renderer
-changes cancel the pending gesture. The second press owns its release even on
-refusal, and neither arms persistent placement nor adds a contextual order.
+first release, at most six logical pixels apart on each axis, with Shift held
+and no Ctrl/Alt. The second press must resolve to the same product and snapped
+site. These are modern gesture choices, not native double-click identity; the
+platform's retail event-history gap in §2.2 is unchanged.
+
+In Type 0, the first Shift-click immediately enqueues a move for the captured
+selection. This gesture's move appends without the ordinary repeated-position
+toggle, so even an older move at the same location survives a double-click.
+`EnqueueHumanCommandWithSequence` returns the input sequence as a receipt;
+the issued move carries it as transient `HumanMoveSequence` metadata. On the
+matching second click, a typed `HumanCancelQueuedMove` removes only that
+sequence's still-live ground or air move from the captured local actors, then
+an ordinary append-only build follows at the same input boundary. Cancellation
+uses the actual matching node and ordinary cleanup, never coordinate matching,
+a saved queue copy, or a stale pointer. It is harmless if the move has already
+finished or been removed. An idle unit can begin walking between the clicks;
+that movement is not rolled back. Refused builds consume the gesture's move
+without removing older work. Receipts are not saved: loading or leaving a battle
+ends input recognition.
+
+In Type 1, Shift-left-click is selection input, so its empty-ground deselect
+waits for expiry or Shift release to keep the builder available for the second
+click. Type 1's right-button move input keeps its immediate dispatch. Ordinary
+unmodified clicks and Type 0's Shift-click moves never wait for recognition.
+Expiry, Shift release, or a different pointer press ends recognition without
+reissuing a move. Keyboard commands other than Shift, selection changes, armed
+modes, leaving the battle input pass, and renderer changes discard the gesture
+receipt. They do not undo the already issued move. The second press owns its
+release even on refusal and never arms persistent placement.
 
 A successful double-click reveals the existing animated order-queue path and
 queued footprint markers for 1.5 host seconds, restarting the interval for each
@@ -1944,9 +1962,10 @@ do not start feedback. A normal unshifted order click remains the escape hatch:
 left-click in Type 0, right-click in Type 1, using the usual queue replacement.
 
 Verification: `TestResource*` replays the production input/command seam with an
-injected host clock, checking modern/classic behavior, unconditional queue preservation and feedback,
-single-click expiry, refusal, deposit centering in and outside current LOS,
-builders without extractors, repeated/rapid queued spacing, unselected local
+injected host clock, checking modern/classic behavior, Shift-only queue
+preservation and feedback, immediate plain and Shift moves, replacement across
+ticks, gesture expiry and modifier transitions, refusal, deposit centering in
+and outside current LOS, builders without extractors, repeated/rapid queued spacing, unselected local
 builders, mixed footprints, illegal edges, deposit coverage, geothermal menu
 detection and yard alignment, nearby/fogged vents, and cancellation. Synthetic
 fixtures define the new input policy; it is not attributed to retail evidence.

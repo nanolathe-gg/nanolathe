@@ -174,7 +174,7 @@ type battleSession struct {
 	interfaceType         int
 	resourceQueueFeedback *resourceQueueFeedback // transient modern queue overlay; DESIGN_INTERFACE_HUD_INPUT §3.10
 	modernDrag            *battleCommandDrag     // modern command capture; DESIGN_INTERFACE_HUD_INPUT §3.11
-	resourceClick         *resourceClick         // modern-only deferred ground click; DESIGN_INTERFACE_HUD_INPUT §3.10
+	resourceClick         *resourceClick         // modern resource gesture receipt; DESIGN_INTERFACE_HUD_INPUT §3.10
 	// gammaSetting retains the direct battle's write-all value independently
 	// of the command's immediate display factor [07 R-CAM-01 §6].
 	gammaSetting int
@@ -845,8 +845,8 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	if b.stepArrival(delta, cl) {
 		return
 	}
-	// Cancel deferred ground input before any modal or accelerator can consume
-	// its key edges. Returning to battle must not replay an older Move.
+	// End input gestures before any modal or accelerator consumes their key
+	// edges. Returning to battle must not reinterpret an earlier click.
 	if !cl.IsFocused() || b.isResultVisible() || b.battleState().Modal() != ui.BattleModalClosed || b.isTalkGUIActive() || unitInfoOpen() {
 		b.modernDrag = nil
 		b.resourceClick = nil

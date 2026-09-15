@@ -50,9 +50,9 @@ func TestResourceGeothermalNearVentQueuesCenteredPlant(t *testing.T) {
 					}
 				}
 				x, y := o5ScreenWorld(b.cam, numeric.FixedFromInt(328+offset), 0, numeric.FixedFromInt(328))
-				resourceClickAt(b, cl, x, y, false)
+				resourceClickAt(b, cl, x, y, true)
 				ms.ms += 100
-				resourceClickAt(b, cl, x, y, false)
+				resourceClickAt(b, cl, x, y, true)
 				cmds := resourceBuildCommands(b.sess)
 				if len(cmds) != 1 || cmds[0].Product != "geo" || !cmds[0].Queued || !cmds[0].AppendOnly || cmds[0].WX != numeric.FixedFromInt(336) || cmds[0].WZ != numeric.FixedFromInt(336) || b.resourceQueueFeedback == nil {
 					t.Fatalf("vent did not queue its aligned plant: %+v", cmds)
@@ -97,9 +97,9 @@ func TestResourceGeothermalAvailabilityAndRange(t *testing.T) {
 	}
 	b.cat.BuildMenus["armcons"].Buttons = []string{"geo"}
 	cl.SetEnhanced(false)
-	resourceClickAt(b, cl, x, y, false)
+	resourceClickAt(b, cl, x, y, true)
 	ms.ms += 100
-	resourceClickAt(b, cl, x, y, false)
+	resourceClickAt(b, cl, x, y, true)
 	if len(resourceBuildCommands(b.sess)) != 0 {
 		t.Fatal("classic must not use the geothermal shortcut")
 	}
@@ -113,9 +113,9 @@ func TestResourceGeothermalSpacingKeepsRequiredYardOnVent(t *testing.T) {
 	}
 	x, y := o5ScreenWorld(b.cam, numeric.FixedFromInt(352), 0, numeric.FixedFromInt(328))
 	for i := 0; i < 2; i++ {
-		resourceClickAt(b, cl, x, y, false)
+		resourceClickAt(b, cl, x, y, true)
 		ms.ms += 100
-		resourceClickAt(b, cl, x, y, false)
+		resourceClickAt(b, cl, x, y, true)
 	}
 	cmds := resourceBuildCommands(b.sess)
 	if len(cmds) != 2 || cmds[1].Product != "geo" {
