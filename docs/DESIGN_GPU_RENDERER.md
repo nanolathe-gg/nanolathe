@@ -4593,8 +4593,8 @@ back should be heard before the lane becomes permanent.
 
 ## 36. Commander arrival prototype
 
-User-requested artistic presentation, isolated on `prototype/commander-arrival`;
-not a retail behavioral claim. `--arrival` opts fresh modern skirmishes into a
+User-requested artistic presentation, available through the opt-in `--arrival`
+flag; not a retail behavioral claim. It opts fresh modern skirmishes into a
 1.95-second opening. Saves, campaign entry, classic, and ordinary captures retain
 their existing entry. A skirmish without a local commander skips the opening.
 
