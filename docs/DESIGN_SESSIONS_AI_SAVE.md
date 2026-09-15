@@ -92,6 +92,12 @@ save's `Player%i` account — reads the player record `[08 R-SKIR-01 §2]`
 
 ## 2. Packages and key types
 
+The save/load directory is `savegame` beneath the resolved installation root,
+including when host discovery supplies that root. An explicit `Options.Root`
+continues to select the save location for programmatic callers and tests.
+Both dialogs use the same directory; the process launch directory does not
+replace a discovered installation [08 R-SAVE-02 §1].
+
 The frontend save/load dialog compiles side definitions from its mounted VFS
 without building a battle catalog. It owns a prepared side display-name slice
 until close; the summary painter indexes that copy by the saved side ordinal

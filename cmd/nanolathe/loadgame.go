@@ -40,6 +40,12 @@ func (g *gameShell) saveLoadDir() string {
 	if g == nil {
 		return retailSaveDir("")
 	}
+	// Discovery resolves the install in contentSet without rewriting the
+	// command-line options. Save beside that install, not the launch directory
+	// [08 R-SAVE-02 §1]. An explicit save-root override still takes precedence.
+	if g.opts.Root == "" && g.cs != nil {
+		return retailSaveDir(g.cs.root)
+	}
 	return retailSaveDir(g.opts.Root)
 }
 
