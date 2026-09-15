@@ -81,10 +81,118 @@ function Publish-NanolatheRelease([string]$Base, [string]$Stage, [string]$Name, 
     return $destination
 }
 
+# Launch-time updates are host installation policy; see tools/installer/README.md.
+function Get-NanolatheUpdateDownload([string]$Url, [string]$Path, [int]$TimeoutSeconds) {
+    Add-Type -AssemblyName System.Net.Http
+    $handler = New-Object Net.Http.HttpClientHandler
+    # The public endpoints are fixed HTTPS URLs. A redirect is a failed check.
+    $handler.AllowAutoRedirect = $false
+    $client = New-Object Net.Http.HttpClient($handler)
+    $response = $null
+    $tlsBefore = [Net.ServicePointManager]::SecurityProtocol
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = $tlsBefore -bor [Net.SecurityProtocolType]::Tls12
+        $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSeconds)
+        $request = $client.GetAsync($Url)
+        # Bound the caller's wait as well, including slow name resolution.
+        if (!$request.Wait($TimeoutSeconds * 1000)) { throw 'Update download timed out.' }
+        $response = $request.GetAwaiter().GetResult()
+        [void]$response.EnsureSuccessStatusCode()
+        $bytes = $response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()
+        [IO.File]::WriteAllBytes($Path, $bytes)
+    } finally {
+        if ($response) { $response.Dispose() }
+        $client.Dispose()
+        [Net.ServicePointManager]::SecurityProtocol = $tlsBefore
+    }
+}
+
+function Confirm-NanolatheUpdate([string]$Version) {
+    if (![Environment]::UserInteractive -or
+        @([Environment]::GetCommandLineArgs() | Where-Object { $_ -match '^-noni' }).Count -gt 0) { return $false }
+    try {
+        Add-Type -AssemblyName System.Windows.Forms
+        $dialog = New-Object Windows.Forms.Form
+        try {
+            $dialog.AutoScaleDimensions = New-Object Drawing.SizeF(96, 96)
+            $dialog.AutoScaleMode = [Windows.Forms.AutoScaleMode]::Dpi
+            $dialog.Text = 'Nanolathe update'
+            $dialog.ClientSize = New-Object Drawing.Size(450, 140)
+            $dialog.StartPosition = 'CenterScreen'
+            $dialog.FormBorderStyle = 'FixedDialog'
+            $dialog.MaximizeBox = $false
+            $dialog.MinimizeBox = $false
+            $label = New-Object Windows.Forms.Label
+            $label.Text = "A new Nanolathe build ($Version) is available."
+            $label.SetBounds(20, 20, 410, 40)
+            $update = New-Object Windows.Forms.Button
+            $update.Text = 'Update && play'
+            $update.SetBounds(20, 85, 190, 32)
+            $update.DialogResult = [Windows.Forms.DialogResult]::OK
+            $current = New-Object Windows.Forms.Button
+            $current.Text = 'Play current version'
+            $current.SetBounds(230, 85, 200, 32)
+            $current.DialogResult = [Windows.Forms.DialogResult]::Cancel
+            $dialog.Controls.AddRange(@($label, $update, $current))
+            $dialog.AcceptButton = $current
+            $dialog.CancelButton = $current
+            return ($dialog.ShowDialog() -eq [Windows.Forms.DialogResult]::OK)
+        } finally { $dialog.Dispose() }
+    } catch {
+        # Headless and redirected launches always retain the working build.
+        if ([Console]::IsInputRedirected) { return $false }
+        try {
+            $answer = Read-Host "A new Nanolathe build ($Version) is available. [u] Update & play / [Enter] Play current version"
+            return ($answer -ieq 'u')
+        } catch { return $false }
+    }
+}
+
+function Invoke-NanolatheUpdate([string]$Base, [string]$Release) {
+    if ($env:NANOLATHE_SKIP_UPDATE_CHECK -eq '1') { return $null }
+    $temporary = $null
+    $installDirBefore = [Environment]::GetEnvironmentVariable('NANOLATHE_INSTALL_DIR', 'Process')
+    $ProgressPreference = 'SilentlyContinue'
+    try {
+        $selected = Join-Path (Join-Path $Base 'releases') $Release
+        $installed = Read-NanolatheManifest ([IO.File]::ReadAllText((Join-Path $selected 'release.txt')))
+        $temporary = Join-Path ([IO.Path]::GetTempPath()) ('nanolathe-update-' + [guid]::NewGuid().ToString('N'))
+        [void][IO.Directory]::CreateDirectory($temporary)
+        $manifestPath = Join-Path $temporary 'release.txt'
+        Get-NanolatheUpdateDownload 'https://nanolathe.gg/install/release.txt' $manifestPath 3
+        $available = Read-NanolatheManifest ([IO.File]::ReadAllText($manifestPath))
+        if ($available.source_revision -ceq $installed.source_revision) { return $null }
+        if (!$available.ContainsKey('installer_ps1_sha256') -or $available.installer_ps1_sha256 -cnotmatch '^[0-9a-fA-F]{64}$') {
+            throw 'Missing or invalid installer checksum.'
+        }
+        if (!(Confirm-NanolatheUpdate $available.version)) { return $null }
+        Write-Host 'Updating Nanolathe. The build may take several minutes...'
+        $installerPath = Join-Path $temporary 'install.ps1'
+        Get-NanolatheUpdateDownload 'https://nanolathe.gg/install.ps1' $installerPath 60
+        # Hash the downloaded bytes, preserving any BOM and CRLF line endings.
+        Test-NanolatheChecksum $installerPath $available.installer_ps1_sha256
+        [Environment]::SetEnvironmentVariable('NANOLATHE_INSTALL_DIR', $Base, 'Process')
+        & ([scriptblock]::Create([IO.File]::ReadAllText($installerPath))) -NoRun | Out-Host
+        $next = [IO.File]::ReadAllText((Join-Path $Base 'current.txt'))
+        if ($next -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]+$' -or $next -ceq $Release) { throw 'Update did not select a new build.' }
+        $destination = Join-Path (Join-Path $Base 'releases') $next
+        $launcher = Join-Path $destination 'launch.ps1'
+        if (![IO.File]::Exists($launcher) -or ![IO.File]::Exists((Join-Path $destination 'nanolathe.exe'))) { throw 'Updated build is incomplete.' }
+        return $launcher
+    } catch {
+        Write-Host "Update unavailable: $($_.Exception.Message) Playing the current version."
+        return $null
+    } finally {
+        [Environment]::SetEnvironmentVariable('NANOLATHE_INSTALL_DIR', $installDirBefore, 'Process')
+        if ($temporary -and [IO.Directory]::Exists($temporary)) { Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
 function Get-NanolatheLauncher {
-    return @'
+    $template = @'
 [CmdletBinding()]
 param([Parameter(Mandatory=$true)][string]$Base, [string]$Root)
+UPDATE_HELPERS
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 $settingsBefore = [Environment]::GetEnvironmentVariable('NANOLATHE_SETTINGS', 'Process')
@@ -94,6 +202,15 @@ try {
     if ($release -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]+$') { throw 'Invalid current release pointer.' }
     $exe = Join-Path (Join-Path (Join-Path $Base 'releases') $release) 'nanolathe.exe'
     if (!(Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'The installed game is missing. Rerun the installer.' }
+    $updatedLauncher = Invoke-NanolatheUpdate $Base $release
+    if ($updatedLauncher) {
+        $skipBefore = [Environment]::GetEnvironmentVariable('NANOLATHE_SKIP_UPDATE_CHECK', 'Process')
+        try {
+            [Environment]::SetEnvironmentVariable('NANOLATHE_SKIP_UPDATE_CHECK', '1', 'Process')
+            & ([scriptblock]::Create([IO.File]::ReadAllText($updatedLauncher))) -Base $Base -Root $Root
+        } finally { [Environment]::SetEnvironmentVariable('NANOLATHE_SKIP_UPDATE_CHECK', $skipBefore, 'Process') }
+        return
+    }
     $remembered = Join-Path $Base 'root.txt'
     $explicitRoot = ![string]::IsNullOrWhiteSpace($Root)
     if (!$explicitRoot -and [IO.File]::Exists($remembered)) { $Root = [IO.File]::ReadAllText($remembered) }
@@ -159,6 +276,11 @@ try {
     [Environment]::SetEnvironmentVariable('NANOLATHE_SETTINGS', $settingsBefore, 'Process')
 }
 '@
+    $helpers = foreach ($name in @('Read-NanolatheManifest', 'Test-NanolatheChecksum',
+        'Get-NanolatheUpdateDownload', 'Confirm-NanolatheUpdate', 'Invoke-NanolatheUpdate')) {
+        "function $name {`n" + (Get-Item "function:$name").Definition + "`n}"
+    }
+    return $template.Replace('UPDATE_HELPERS', ($helpers -join "`n"))
 }
 
 function Get-NanolatheLaunchCommand([string]$Base) {
@@ -319,7 +441,13 @@ Downloads verified source and a private Go compiler. Original game assets are re
         if ($transcribing) { Stop-Transcript -ErrorAction SilentlyContinue | Out-Null }
         if ($lock) { $lock.Dispose() }
     }
-    if (!$NoRun) { & ([scriptblock]::Create((Get-NanolatheLauncher))) -Base $base -Root $Root }
+    if (!$NoRun) {
+        $skipBefore = [Environment]::GetEnvironmentVariable('NANOLATHE_SKIP_UPDATE_CHECK', 'Process')
+        try {
+            [Environment]::SetEnvironmentVariable('NANOLATHE_SKIP_UPDATE_CHECK', '1', 'Process')
+            & ([scriptblock]::Create((Get-NanolatheLauncher))) -Base $base -Root $Root
+        } finally { [Environment]::SetEnvironmentVariable('NANOLATHE_SKIP_UPDATE_CHECK', $skipBefore, 'Process') }
+    }
 }
 
 # Dot-sourcing exposes the pure helpers for offline tests without running setup.
