@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/nanolathe-gg/nanolathe/internal/audio"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/clock"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
@@ -56,7 +57,8 @@ func (b *battleSession) stepArrival(delta float64, cl *client.Client) bool {
 		cl.StepArrivalCooling(delta)
 		return false
 	}
-	seconds := cl.ArrivalSeconds()
+	previous := cl.ArrivalSeconds()
+	seconds := previous
 	if cl.ArrivalPresented() && cl.IsFocused() && delta > 0 {
 		// Loading/device stalls must not consume the entire opening unseen.
 		seconds += float32(min(delta, 0.05))
@@ -68,6 +70,9 @@ func (b *battleSession) stepArrival(delta float64, cl *client.Client) bool {
 		in.DiscardTokens(in.PendingTokens())
 	}
 	cl.SetArrivalSeconds(seconds)
+	if previous < drawlist.ArrivalImpactSeconds && seconds >= drawlist.ArrivalImpactSeconds && seconds < drawlist.ArrivalDurationSeconds {
+		b.playArrivalImpact()
+	}
 	if !cl.ArrivalActive() && b.sess != nil && b.sess.Clock != nil {
 		if b.millisSource == nil {
 			b.millisSource = newMonotonicMillisSource()
@@ -76,4 +81,22 @@ func (b *battleSession) stepArrival(delta float64, cl *client.Client) bool {
 		b.tickFiredValid = false
 	}
 	return true
+}
+
+// User-selected stock sample and artistic gain for the opening (GPU §36).
+// Crossing the impact time calls this once; redraws and Escape do not replay it.
+func (b *battleSession) playArrivalImpact() {
+	if b.sess == nil || b.sess.Audio == nil || b.sess.Audio.Cache == nil {
+		return
+	}
+	output := audio.GlobalOutput()
+	if output == nil {
+		return
+	}
+	sample, err := b.sess.Audio.Cache.LoadPath("sounds/xplolrg1.wav")
+	if err != nil || sample == nil {
+		return
+	}
+	// The ordinary backend applies master mute and the player's FX gain once.
+	_ = output.PlaySample(sample, audio.VolumeFromCentibel(audio.VolInView)*0.75, 0)
 }
