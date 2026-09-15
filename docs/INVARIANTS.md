@@ -259,6 +259,12 @@ The user-requested startup root list is a sanctioned host extension
 (DESIGN_CONTENT_VFS §5). Only multiple roots add directory precedence above
 existing provider tiers; one root retains its existing resolution. Installation
 discovery is host policy and supplies explicit roots before content loading.
+The installer-facing `--list-installs` and `--check-install` diagnostics are
+sanctioned host entry points (DESIGN_CONTENT_VFS §5). `--save-dir` selects an
+exact save/load directory independently of the content roots, retaining the
+existing directory policy when omitted (DESIGN_SESSIONS_AI_SAVE §5). With that
+explicit override, filename normalization applies only to the leaf name and
+rejects path components so dotted ancestors cannot redirect the write.
 
 The user-requested skirmish unit-limit default of 1000 and expanded configured
 range are sanctioned setup policy (DESIGN_CONTENT_VFS §5), with CLI and JSON

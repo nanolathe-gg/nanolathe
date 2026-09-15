@@ -96,7 +96,11 @@ The save/load directory is `savegame` beneath the resolved installation root,
 including when host discovery supplies that root. An explicit `Options.Root`
 continues to select the save location for programmatic callers and tests.
 Both dialogs use the same directory; the process launch directory does not
-replace a discovered installation [08 R-SAVE-02 §1].
+replace a discovered installation [08 R-SAVE-02 §1]. A nonempty
+`Options.SaveDir` (`--save-dir`) takes precedence over both and names the exact
+directory, with no `savegame` suffix appended. Empty preserves the existing
+lookup. The shell retains the option across battle entry and restart. Explicit
+`--load-save` paths continue to be opened as supplied.
 
 The frontend save/load dialog compiles side definitions from its mounted VFS
 without building a battle catalog. It owns a prepared side display-name slice
@@ -1259,6 +1263,19 @@ transfer shortcut `[04 R-ORD-02 §1]` `[08 R-AI-01 §7]`.
   `[08 "Scheduler and random state in saves"]` `[08 R-SAVE-02 §11]`.
 
 ## 5. Divergences
+
+* **Installer-selected save directory.** The user-authorized `--save-dir`
+  override lets a source installer place both save/load dialogs in a writable
+  per-user directory even when retail content is elsewhere. With this override,
+  the save screen applies the existing strip-last-dot filename normalization
+  to the name alone, then joins it beneath the selected directory. Dots in
+  ancestor directories (such as `.local`) therefore cannot truncate the path.
+  Names containing either slash style, absolute paths, or host volume names
+  are rejected as empty commit paths and write nothing; empty names retain
+  their existing no-op. Listing and serialization retain their existing
+  contracts. This is host convenience policy, not recovered retail behavior.
+  Without the override, saves retain the existing whole-path normalization
+  beneath the installation [08 R-SAVE-02 §1].
 
 * **Malformed building yard text uses the shared bounded parser.** AI placement
   applies the same occupied remainder as human placement and occupancy when a
