@@ -53,6 +53,9 @@ func checkTrailDevicePixels() error {
 	list.RecordTrails(drawlist.Trails{Marks: []drawlist.Trail{
 		// A footprint at (16,16), 3 px half-length along +x, 2 px half-width.
 		{X: 16, Y: 16, AxisX: 3 * 256, AxisY: 0, CrossX: 0, CrossY: 2 * 256, Shape: drawlist.TrailFootprint, Strength: 255},
+		// Smallest geometry-derived tip: two pixels in both dimensions. A
+		// one-pixel oval centred at an integer misses native raster samples.
+		{X: 32, Y: 8, AxisX: 256, CrossY: 256, Shape: drawlist.TrailFootprint, Strength: 102},
 		// A vertical track segment at (48,16): 8 px half-length along +y, 1.5 px half-width.
 		{X: 48, Y: 16, AxisX: 0, AxisY: 8 * 256, CrossX: -384, CrossY: 0, Shape: drawlist.TrailTrack, Strength: 128},
 	}})
@@ -77,6 +80,9 @@ func checkTrailDevicePixels() error {
 	}
 	if c := at(21, 16); c != field {
 		return fmt.Errorf("outside the footprint along reads %d, want the untouched field %d", c, field)
+	}
+	if c := at(32, 8); c >= field {
+		return fmt.Errorf("minimum footprint vanished at native scale: centre=%d, field=%d", c, field)
 	}
 	// Track: half strength halves the field at the centre line for its whole
 	// length, and the sides are untouched 3 px away.

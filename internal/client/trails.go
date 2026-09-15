@@ -34,7 +34,7 @@ const (
 	// trailLifeTicks is a mark's life in committed ticks: ten seconds at the
 	// 30 Hz tick.
 	trailLifeTicks = 300
-	// Strides between marks in world pixels. A track segment is as long as
+	// Fallback strides between marks in world pixels. A track segment is as long as
 	// its stride, so consecutive segments join into a continuous line.
 	trailFeetStride  = 10.0
 	trailTrackStride = 8.0
@@ -49,7 +49,7 @@ const (
 	trailSnap = 8
 )
 
-// trailMark is one retained mark in world space; the screen geometry is
+// trailMark is one retained quad in world space; the screen geometry is
 // derived at record time from the camera of that frame.
 type trailMark struct {
 	x, z numeric.Fixed
@@ -57,10 +57,10 @@ type trailMark struct {
 	dirX, dirZ int32
 	born       uint32
 	class      trailClass
-	// side alternates per footprint; unused for tracks.
-	side  uint8
-	footX int8
-	live  bool
+	// Dimensions are captured at placement; later model loads and camera
+	// changes cannot resize an existing mark.
+	halfLength, halfWidth float64
+	live                  bool
 }
 
 // trailTracker is one unit's placement state: where its last mark was laid.
@@ -76,9 +76,10 @@ type trailState struct {
 	units map[uint64]*trailTracker
 	// classes caches the per-definition class; the definition never changes
 	// during a battle.
-	classes map[uint16]trailClass
-	tick    uint32
-	valid   bool
+	classes  map[uint16]trailClass
+	geometry map[*unitModel]trailGeometry
+	tick     uint32
+	valid    bool
 	// arena is the reusable slice the frame's batch record borrows.
 	arena []drawlist.Trail
 }
@@ -113,14 +114,11 @@ func trailLegPiece(name string) bool {
 	return false
 }
 
-// classifyTrail decides a definition's mark from its map-editor class word,
-// its movement class name, whether it flies and whether its model has leg
-// pieces. TEDClass is the editor's own classification and the only authored
-// word that separates kbots from vehicles: the movement class names
-// (TANKSH2, KBOTSS2, TANKHOVER3, BOATS4…) describe footprint and terrain
-// rules, and most kbots share the TANK-prefixed ones. Hover and boat classes
-// touch no ground. The constructor and special words cover both walkers and
-// vehicles, so they fall back to the model's leg pieces.
+// classifyTrail selects the presentation mark (DESIGN_GPU_RENDERER §15.2).
+// Editor TANK includes the six-legged spider, so leg pieces override that
+// hint. Aircraft, boats, hovercraft and fixed editor classes remain excluded.
+// Movement class names describe footprint and terrain rules [fmt fbi]; they
+// exclude non-ground movers but never establish feet or tread spacing.
 func classifyTrail(ted, move string, aircraft, legs bool) trailClass {
 	if aircraft {
 		return trailNone
@@ -133,6 +131,11 @@ func classifyTrail(ted, move string, aircraft, legs bool) trailClass {
 	case "KBOT", "COMMANDER":
 		return trailFeet
 	case "TANK":
+		// The spider is editor-class TANK, but its authored legs walk.
+		// Terrain and non-ground exclusions above/below still take priority.
+		if legs {
+			return trailFeet
+		}
 		return trailTracks
 	case "VTOL", "SHIP", "WATER", "PLANT", "FORT", "METAL", "ENERGY":
 		return trailNone
@@ -264,10 +267,8 @@ func (c *Client) placeTrails(cur *frame.Frame) {
 			tr.x, tr.z = u.X, u.Z
 			continue
 		}
-		stride := trailFeetStride
-		if class == trailTracks {
-			stride = trailTrackStride
-		}
+		style := c.trailStyleFor(*u, class)
+		stride := style.stride
 		dx := float64(u.X-tr.x) / float64(numeric.FixedOne)
 		dz := float64(u.Z-tr.z) / float64(numeric.FixedOne)
 		dist := math.Sqrt(dx*dx + dz*dz)
@@ -285,7 +286,25 @@ func (c *Client) placeTrails(cur *frame.Frame) {
 		for ; dist >= stride; dist -= stride {
 			tr.x += stepX
 			tr.z += stepZ
-			st.push(trailMark{x: tr.x, z: tr.z, dirX: dirX, dirZ: dirZ, born: cur.Tick, class: class, side: tr.side, footX: u.FootX, live: true})
+			// Store actual contact centres and one quad per ring slot. Track
+			// pairs consume two slots, so the budget bounds rendered work.
+			place := func(side float64) {
+				offset := style.spread * side
+				st.push(trailMark{
+					x:    tr.x + numeric.Fixed(math.Round(-uz*offset*float64(numeric.FixedOne))),
+					z:    tr.z + numeric.Fixed(math.Round(ux*offset*float64(numeric.FixedOne))),
+					dirX: dirX, dirZ: dirZ, born: cur.Tick, class: class,
+					halfLength: style.halfLength, halfWidth: style.halfWidth, live: true,
+				})
+			}
+			if class == trailTracks {
+				place(-1)
+				place(1)
+			} else if tr.side == 0 {
+				place(-1)
+			} else {
+				place(1)
+			}
 			tr.side ^= 1
 		}
 	}
@@ -310,7 +329,6 @@ func (c *Client) drawTrails() {
 	s := c.cam.EffectiveScale()
 	recW, recH := c.recordExtent()
 	w, h := int32(recW), int32(recH)
-	margin := s.Px(32)
 	st.arena = st.arena[:0]
 	for i := range st.marks {
 		m := &st.marks[i]
@@ -328,6 +346,7 @@ func (c *Client) drawTrails() {
 		sx, sy := c.cam.WorldToScreen(m.x, c.terrain.HeightAt(m.x, m.z), m.z)
 		sx -= camera.OriginX
 		sy -= camera.OriginY
+		margin := int32(math.Ceil((m.halfLength+m.halfWidth)*s.Float())) + 2
 		if sx < -margin || sy < -margin || sx >= w+margin || sy >= h+margin {
 			continue
 		}
@@ -340,42 +359,20 @@ func (c *Client) drawTrails() {
 		if strength == 0 {
 			continue
 		}
-		foot := int32(m.footX)
-		if foot < 1 {
-			foot = 1
+		// Axes retain 1/256-pixel precision at the record scale. Each
+		// centre already includes its lateral offset at the sampled terrain.
+		shape := drawlist.TrailFootprint
+		if m.class == trailTracks {
+			shape = drawlist.TrailTrack
 		}
-		// The perpendicular to the travel direction, scaled by 256 like the
-		// direction itself; offsets along it are (perp × pixels) >> 8.
-		perpX, perpY := -m.dirZ, m.dirX
-		switch m.class {
-		case trailFeet:
-			// Feet alternate either side of the path, a footprint's width
-			// apart; the oval is longer along the step than across it.
-			spread := s.Px(foot * 2)
-			if m.side == 0 {
-				spread = -spread
-			}
-			st.arena = append(st.arena, drawlist.Trail{
-				X: sx + (perpX*spread)>>8, Y: sy + (perpY*spread)>>8,
-				AxisX: s.Px(m.dirX * 4), AxisY: s.Px(m.dirZ * 4),
-				CrossX: s.Px(perpX * 2), CrossY: s.Px(perpY * 2),
-				Shape: drawlist.TrailFootprint, Strength: strength,
-			})
-		case trailTracks:
-			// Two segments, one per tread, each as long as the stride so the
-			// line is continuous.
-			spread := s.Px(foot*4 + 2)
-			half := s.Px(int32(trailTrackStride / 2))
-			for _, sign := range [...]int32{-1, 1} {
-				off := spread * sign
-				st.arena = append(st.arena, drawlist.Trail{
-					X: sx + (perpX*off)>>8, Y: sy + (perpY*off)>>8,
-					AxisX: m.dirX * half, AxisY: m.dirZ * half,
-					CrossX: (perpX * s.Px(448)) >> 8, CrossY: (perpY * s.Px(448)) >> 8,
-					Shape: drawlist.TrailTrack, Strength: strength,
-				})
-			}
-		}
+		st.arena = append(st.arena, drawlist.Trail{
+			X: sx, Y: sy,
+			AxisX:  int32(math.Round(float64(m.dirX) * m.halfLength * s.Float())),
+			AxisY:  int32(math.Round(float64(m.dirZ) * m.halfLength * s.Float())),
+			CrossX: int32(math.Round(float64(-m.dirZ) * m.halfWidth * s.Float())),
+			CrossY: int32(math.Round(float64(m.dirX) * m.halfWidth * s.Float())),
+			Shape:  shape, Strength: strength,
+		})
 	}
 	if len(st.arena) == 0 {
 		return

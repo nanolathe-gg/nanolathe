@@ -31,7 +31,12 @@ func TestClassifyTrail(t *testing.T) {
 		{"CNSTR", "BOATS4", false, false, trailNone},
 		{"CNSTR", "TANKSH2", false, true, trailFeet},    // construction kbot: legs decide
 		{"CNSTR", "TANKSH3", false, false, trailTracks}, // construction vehicle
-		{"SPECIAL", "SPID3", false, true, trailFeet},    // spider
+		{"SPECIAL", "SPID3", false, true, trailFeet},
+		{"TANK", "SPID3", false, true, trailFeet}, // spider: legs outrank editor TANK
+		{"SHIP", "", false, true, trailNone},
+		{"PLANT", "", false, true, trailNone},
+		{"VTOL", "", false, true, trailNone},
+		{"TANK", "TANKHOVER3", false, true, trailNone},
 		{"VTOL", "", true, false, trailNone},
 		{"CNSTR", "", true, false, trailNone},
 		{"", "", false, true, trailFeet},

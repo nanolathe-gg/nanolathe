@@ -2154,66 +2154,163 @@ is what fades. The Marks switch gates the layer (§30).
 
 ### 15.2 Placement — contract T1
 
-`internal/client/trails.go` keeps one ring of at most 4,096 marks and one tracker
-per unit, keyed by the publication identity the orientation cache uses and pruned
-with the live unit set. Once per committed tick, only while Enhanced presents,
-every unit the classifier accepts is compared with the point where it last laid a
-mark:
+**Nanolathe presentation policy.** These marks are a modern-renderer effect,
+independent of gameplay mode. Geometry supplies approximate contact dimensions;
+committed travel supplies placement. None of the sizing or stride rules below
+claims to reproduce retail footfalls. Retail provides the model hierarchy and
+piece geometry [03 §2.4][fmt 3do]; the effect does not change simulation state,
+RNG, resource consumption, or Strict 3.1 gameplay.
 
-- **Class.** The FBI's `TEDClass` word decides: `KBOT` and `COMMANDER` lay feet,
-  `TANK` lays tracks, the fixed and flying classes lay nothing. The movement
-  class names describe footprint size and terrain rules (most kbots ride
-  `TANKSH2`), so they only exclude: a `HOVER` or `BOAT` class lays nothing.
-  `CNSTR` and `SPECIAL` cover both walkers and vehicles and fall back to the
-  model: a piece named for a leg makes it a walker. The class is cached per
-  definition.
-- **Gate.** The unit must be mobile (BMcode), on the ground (mode mirror 1),
-  complete, within two world pixels of the terrain under it, above sea level, and
-  visible to the local player by the painter's own gate: a trail is the memory of
-  a walk that was watched, never a sensor. A unit that fails the gate restarts
-  its stride where it next qualifies.
-- **Stride.** Feet every 10 world pixels, tracks every 8, laid along the straight
-  line from the last mark to the current position, several per tick if the unit
-  is fast. A step above eight strides is a move (factory exit, transport drop,
-  restore), not a walk, and bridges nothing. Feet alternate sides at each mark.
-- **Age.** A mark lives 300 committed ticks and its strength fades linearly to
-  zero over that life. Ages are tick differences, never wall time.
+`internal/client/trails.go` retains at most 4,096 **individual quads** and one
+tracker per unit, keyed by publication identity and pruned with the live unit
+set. A track pair uses two ring slots; a footprint uses one. The oldest mark is
+overwritten when full, so a busy scene can retire marks before their nominal
+lifetime. Class is cached per definition and geometry per immutable loaded
+model, including unsuccessful geometry lookups.
+
+- **Class.** Aircraft and movement classes containing `HOVER` or beginning
+  `BOAT` leave nothing. Fixed/flying editor classes remain excluded. `KBOT`
+  and `COMMANDER` leave feet. `TANK` leaves feet if its model has a leg-named
+  piece, otherwise tracks. This includes the stock spider, whose editor class
+  is `TANK`. Other editor classes fall back to leg-name detection, then tracks.
+  Leg-name clues are `leg`, `foot`, `thigh`, `knee`, `shin`, and `toe`.
+- **Gate.** The unit must be mobile (BMcode), not a building, on the ground
+  (mode mirror 1), complete, no more than two world pixels above the terrain
+  under it, at or above sea level, and visible to the local player by the
+  painter's own gate. A unit that fails the gate restarts its distance history
+  where it next qualifies. A trail is memory of observed movement, not a sensor.
+- **Foot geometry.** A leg assembly starts at its highest leg-named ancestor
+  and includes its leg-named descendants. Compose their authored translations
+  with no script pose. Take the assembly's lowest two world pixels, including
+  polygon-edge intersections with the band ceiling, and bound those surfaces
+  in X/Z. Selection polygons, unused vertices and primitive-free emit points
+  are excluded. Combine sole and toe pieces in one assembly rather than
+  counting them as separate feet. Average assembly widths, lengths and absolute
+  X centres to obtain the representative print width, length and lateral
+  spread. Width and length have a two-world-pixel visual minimum for pointed
+  tips: a one-pixel oval at an integer centre can miss every native raster
+  sample. This is a rest-geometry approximation, not a contact solver.
+- **Vehicle geometry.** Conventional tanks need not have tread pieces; the
+  base texture can depict them. Measure the root's actual surface width in X;
+  if unavailable, try named `base`, `body`, or `chassis` pieces in model order.
+  Turret/barrel children and selection faces cannot expand this width. Each
+  track's full width is `bodyWidth × 3.5 / 32`. Its centre is one full track
+  width inward from the body's side and its outer edge is half a track
+  width inside the body edge. This allows for body overhang; visual review of
+  Stumpy and Bulldog found body-edge placement too wide. Width and inset are
+  presentation tuning retaining the old 3.5-pixel strip on a 32-pixel body,
+  not a measured tread boundary.
+- **Fallback.** If contact/body geometry is unavailable, retain the earlier
+  8×4 print with lateral spread `2×max(FootX,1)`, or the 3.5-pixel track with
+  spread `4×max(FootX,1)+2`. Footprint metadata never overrides usable geometry.
+- **Stride.** Feet are laid every `max(10, measuredPrintLength)` world pixels;
+  the ten-pixel floor bounds emission density for tiny leg tips and preserves
+  the old small-walker cadence. Tracks remain eight pixels apart and eight
+  pixels long so straight segments join. Feet still alternate between two
+  sides: leg count, gait phase, individual wheel paths and turning tread motion
+  are not modeled by this stage. The stride is an explicitly approximate size
+  scale, not a measurement of foot swing or animation period. Several marks
+  may be laid along a straight travel step. A distance above eight strides is
+  treated as a relocation and bridges nothing.
+- **Age.** A mark lives at most 300 committed ticks, fading linearly to zero.
+  Ages are tick differences, never wall time.
 
 ### 15.3 Recording and drawing — contract T2
 
-Recording projects each live mark through the view transform of §14.2 at the
-terrain height under it, culls to the viewport plus a margin, and records the
-whole frame as ONE `drawlist.Trails` batch between the terrain record and strip
-0, so features, shadows, units and the fog composite draw over it. The batch
-rides the optional `drawlist.TrailSink` hook, so a sink without it replays the
-frame unchanged.
+Each retained mark stores its final world-space contact centre, travel direction
+and half dimensions at placement. A track pair becomes two marks immediately;
+its count cannot expand during drawing. Project each centre at the terrain
+height beneath that contact, cull using its scaled dimensions, and preserve
+1/256-pixel precision in the two recorded screen-axis vectors; the executor
+applies live fractional zoom afterwards (§16).
+A later camera or model-cache change never changes the world dimensions of an
+existing mark.
 
-| mark | centre | half-length | half-width | peak darkening |
-|---|---|---|---|---|
-| footprint | ±2·FootX·s px across the path, alternating | 4·s px along the path | 2·s px | 0.4 |
-| track (two per mark) | ±(4·FootX + 2)·s px across the path | 4·s px (the stride, so segments join) | 1.75·s px | 0.3 |
-
-The modern executor draws the batch as one destination command over the union of
-its marks under the row families' scale blend (§13.3): each mark is a rotated
-quad whose fragment is `1 − strength × coverage`, the coverage a soft oval for a
-footprint and a soft-sided, hard-ended segment for a track, evaluated from the
-quad's local coordinates. Multiplies commute, so marks that overlap need no
-phase ordering between them, and the scheduler still places the batch after the
-terrain it darkens and before everything drawn over it. The capture route
-observes every tick it advances (`Client.ObserveCommittedTick`) so a `--shot`
-shows the marks the window would.
+Record the whole frame as ONE `drawlist.Trails` batch between terrain and strip
+0, so features, shadows, units and fog draw over it. The optional
+`drawlist.TrailSink` hook leaves other sinks unchanged. The modern executor draws
+the batch through the row families' scale blend (§13.3): each rotated quad's
+fragment is `1 − strength × coverage`, with a soft oval for a footprint and a
+soft-sided, hard-ended segment for a track. Peak darkening remains 0.4 for feet
+and 0.3 for tracks. Multiplies commute, so overlapping marks need no additional
+phase ordering. `Client.ObserveCommittedTick` records every advanced capture
+tick so a `--shot` observes the same history as the window.
 
 ### 15.4 Verification
 
-`internal/client/trails_test.go` locks the classifier table; a walker laying two
+`internal/client/trails_test.go` locks the classifier table, including the
+spider and non-ground exclusions; a walker laying two
 alternating footprints along its step; nothing on first sighting; nothing
 re-recording the same tick; fading and expiry; nothing in Original; and no marks
 for airborne, elevated or moved units.
+`internal/client/trail_geometry_test.go` locks combined sole/toe bounds,
+selection/emit exclusion, pointed-tip clipping, geometry-scaled stride and
+quad dimensions, inset track placement, the actual-quad ring budget and
+allocation-free warm lookup. Asset-gated checks compare stock walker sizes and
+vehicle body widths.
 `internal/platform/gpurender/trails_test.go` locks the optional-sink replay and,
 on a device, that a full-strength footprint darkens its centre to near zero and
 leaves the field untouched beyond its half-width and half-length, and that a
 half-strength track halves the field along its whole length and not beside or
 past it.
+
+### 15.5 Animation-aware footfall experiment (2026-09-15)
+
+**Decision:** ship the geometry-scaled distance placement above. Keep
+animation-aware placement experimental until automatic contact selection and
+calibration behave reliably across the model corpus. CPU cost alone does not
+rule it out; a lift detector alone does not cover even these three walkers.
+
+An independently authored probe replayed 360 committed poses each for Peewee,
+Krogoth and Spider walking on Town & Country, seed 7. Contact assemblies were
+explicitly selected: each Peewee foot, each Krogoth leg plus toe, and each
+Spider leg. Proposed detection learned each assembly's minimum body-local
+height over 60 samples, armed above that level plus two pixels, and emitted
+once on return within one pixel. These are experimental presentation choices,
+not authored contact flags or recovered retail footprint behavior.
+
+In a subsequent 120-sample window, Peewee produced no lift events. Detecting
+forward-to-back reversal of its stable foot-piece origin instead produced six
+per foot, with a 19-tick same-foot period and alternating 9/10-tick events.
+Krogoth produced two per foot with a 70-tick same-foot period; Spider produced
+five per leg with a 24-tick period and some simultaneous plants. These are
+observations of this probe, not constants to encode for the unit definitions.
+They also demonstrate why foot swing distance cannot be equated with ground
+stride and why an alternating pair cannot represent Spider's six-foot pattern.
+
+Using the horizontal centroid of the currently lowest vertices for swing
+reversal produced extra false Peewee events: the centroid changes abruptly as
+sole corners rotate. Krogoth's walking minimum was also below its unanimated
+resting sole. Thus a static rest-height threshold is insufficient, and a stable
+reference is needed before interpreting apparent foot sliding. Spider's
+candidate planted lateral offsets were approximately 14–24 pixels from the
+centre, consistent in scale with the unposed geometry's representative spread.
+
+A CPU-only replay benchmark on Apple M3 Pro, Go 1.25.0, used equal mixes of the
+three models at staggered phases. Three one-second samples measured the
+following **per tick over the entire population**, with reusable scratch:
+
+| Work | 300 walkers | 600 walkers |
+|---|---:|---:|
+| Pose adaptation, contact transforms, vertex scan and plant detection (median) | 0.337 ms | 0.647 ms |
+| Same work, observed range across three samples | 0.330–0.343 ms | 0.642–0.666 ms |
+| Minimal squared-distance selector (median) | 0.0024 ms | 0.0048 ms |
+| Warm allocations | 0 | 0 |
+
+The distance comparator is deliberately minimal, not the full production
+trail producer. Both measurements exclude visibility/terrain checks, mark
+insertion, GPU recording and drawing. Cold preparation plus one pose took
+about 2.3–3.7 microseconds and 5–10 KB per walker; loading assets and the
+60-sample calibration were excluded. Calibration also introduces an observation
+delay. These measurements establish a modest but measurable CPU cost, not a
+whole-game frame-rate guarantee or GPU cost.
+
+Before adopting this experiment: establish generic contact assemblies, choose
+lift versus swing detection without unit-name switches, handle unrepresentative
+calibration and posture changes, compose full orientation on slopes, and reset
+history across visibility gaps and relocations. Stamp once at the plant event;
+do not drag an existing print with a sliding animated foot. The current
+geometry stage remains independent of those unresolved presentation choices.
 
 ## 16. Smooth zoom and the strategic view (modern)
 
