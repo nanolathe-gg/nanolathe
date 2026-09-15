@@ -555,14 +555,13 @@ model preview captures and by inspection, not by pixel count.
 
 ### 5.2 Enhanced zoom and strategic view
 
-The detailed view is designed in §14: a view scale in half steps (1×, 1.5×, 2×),
-2× terrain and feature art synthesized from the map's own pixels at load time and
-resampled to 1.5× by nearest sampling, and model geometry rasterized at output
-scale, with every world-space layer, picking, fog and the minimap sharing the one
-transform.
+The detailed view is designed in §14: native (1×) and detail (2×) record steps,
+2× terrain and feature art synthesized from the map's own pixels at load time,
+and model geometry rasterized at output scale, with every world-space layer,
+picking, fog and the minimap sharing the one transform.
 
 Continuous zoom between the steps, and the strategic view below 1×, are **§16**,
-and they are modern-only: the classic executor keeps §14's three steps exactly.
+and they are modern-only: the classic executor uses §14's two steps.
 Strategic markers show only player-known information — they take the minimap's
 own committed contact records and its own admission gate, so the two cannot
 disagree (§16.11). Identified units draw generated icons (§18); unidentified
@@ -1712,7 +1711,7 @@ lane is unchanged**: it still emits the points, so classic output is
 byte-identical by construction. The classic *sink* implements the two commands
 by expanding them back into exactly those points — `Flash.Expand` and
 `Halo.Expand` are the definition, and a test locks their output against the
-points the classic lane records at all three view scales — so a modern-lane list
+points the classic lane records at both view scales — so a modern-lane list
 replayed through the classic executor composes the same bytes.
 
 In the modern executor a generated frame is packed on first use into one
@@ -1733,9 +1732,9 @@ fills.
 magnified by a per-source-pixel loop. At the native and detail scales that is
 the same pixel set — the loop's span for source pixel `c` is
 `[Project(c−Offset), Project(c−Offset+1))`, which is one and two screen pixels
-exactly — and both were measured byte-identical. At the 1.5× step the loop's
-alternating one- and two-wide columns become nearest-sample columns, which
-shifts some ramp columns by a pixel; every differing pixel lies inside a disc
+exactly — and both were measured byte-identical. In the historical 1.5×
+comparison, the loop's alternating one- and two-wide columns became
+nearest-sample columns, which shifted some ramp columns by a pixel; every differing pixel lies inside a disc
 footprint, and the largest difference is what a pixel gaining or losing the
 brightest ring costs (`dst × 2` against `dst × 1`), not a lane error. The halo
 has no texture and stays exact at every scale. Flash and halo pixels that also
@@ -1882,49 +1881,38 @@ change. Neither reproduces the defect at fixture scale, so the failing evidence
 is the measurement in the history file, which the 180-frame benchmark reproduces
 in two minutes.
 
-## 14. The detail view: 1.5× and 2× steps and load-time remaster
+## 14. The detail view: native and 2× steps and load-time remaster
 
 ### 14.1 Decision
 
-The view scale is one of three steps: 1×, 1.5× and 2×. `camera.Scale`
-[F-P1-008] is a `camera.ViewScale`, the scale in half steps —
-`ViewScaleNative` (2), `ViewScaleMid` (3) and `ViewScaleDetail` (4), zero
-reading as native — and the free fractional zoom the camera once clamped to
-0.25..4 stays retired, with every `float32` in the projection. Retail has one
-scale, and the point of the magnified views is that each is *the same view drawn
-from more pixels*. The projection is integer at every step,
+The record scale has two steps: 1× and 2×. `camera.Scale` [F-P1-008] is a
+`camera.ViewScale`: `ViewScaleNative` (2) and `ViewScaleDetail` (4), with zero
+reading as native. The encoding retains its denominator of two. Classic uses
+these two views; modern adds a free live factor above this projection (§16).
+Retail has one scale; the magnified view is Nanolathe presentation policy.
+The projection is integer at each record step:
 
     screenX = Project(worldX − camX) + originX
     screenY = Project(worldZ − (worldY >> 1) − camZ) + originY
-    Project(v) = ceil(v·s / 2)
+    Project(v) = v · (s / 2)
 
-and the inverse used for picking, `world = cam + floor(2·(screen − origin) / s)`,
-is its exact inverse at every step: every screen pixel names one world pixel,
-and every world pixel projects to the first screen pixel that picks it. At 1×
-and 2× both reduce to the multiply and the floor divide the detail view was
-built on, so a 2× asset lands on the pixel grid one-to-one and a 1× asset
-doubled by nearest sampling lands on the same grid. At 1.5× consecutive world
-pixels are alternately two and one screen pixel apart, which is nearest sampling
-at 3/2, and the arithmetic is the named type's: `Project` for a position, `Px` —
-`v·s/2` rounded half away from zero — for an extent or an authored offset, and
-`Inverse` for a picked pixel. The type is distinct from `int32` so that a plain
+Here `s` is the encoded step, 2 or 4. The inverse used for picking is
+`world = cam + floor(2·(screen − origin) / s)`: every screen pixel names one
+world pixel, and every world pixel projects to the first screen pixel that
+picks it. A 2× asset lands on the pixel grid one-to-one and a 1× asset doubled
+by nearest sampling lands on the same grid. `Project` scales a position;
+`Px` scales an extent or authored offset by the same exact integer multiply;
+`Inverse` converts a picked pixel. The type is distinct from `int32` so that a plain
 multiply against a pixel count does not compile.
 
 ### 14.2 The view transform — contract D1
 
 Every world-space command is recorded in screen space by the recorder, and the
 recorder is the one place the scale is applied. The executors replay recorded
-coordinates and never rescale; both replay the same list, so the parity gate of
-§6 applies at 2× exactly as at 1×.
-
-At 1.5× every row below holds with `Px` in place of `×s` and the 1.5× variant of
-§14.3 in place of the 2× one: terrain tiles are 48 pixels, fog cells 48, the
-health bar's half-extents `Px(17)` and `Px(2)`, the shadow's five-pixel step
-`Px(5) = 8`. A pre-scaled sprite cannot be phase-exact at a fractional factor —
-a source column covers two screen pixels or one depending on where its anchor
-projects — so a 1.5× sprite may sit one pixel off the terrain's own sampling
-phase; that is the cost of drawing variants rather than sampling on the device,
-and it is invisible at 1× and 2×.
+coordinates directly at these steps; modern applies its additional live-factor
+transform only when needed (§16). Both replay the same list at 1× and 2×, so
+the parity gate of §6 applies at both steps. In the table below, `s` is the
+linear magnification (1 or 2), rather than its encoded `ViewScale` value.
 
 | Layer | Position | Size and art at s = 2 |
 |---|---|---|
@@ -1941,9 +1929,9 @@ and it is invisible at 1× and 2×.
 
 Classic attached-unit staging uses the child-minus-carrier world projection at
 native raster scale, then magnifies the completed union about the carrier anchor
-once. It must not reuse the already magnified screen-anchor difference or invert
-that rounded difference: the latter loses a pixel at 1.5× for some anchor
-phases. At 1× this is the original staging placement [03 R-REN-03A §4].
+once. It must not reuse the already magnified screen-anchor difference: the
+completed union receives the scale once, including its child offsets. At 1×
+this is the original staging placement [03 R-REN-03A §4].
 
 Picking goes through `ScreenToWorld` and the viewport transform, which already
 funnel every pointer conversion through the camera: hover and selection hulls are
@@ -1966,7 +1954,7 @@ placement and clip destination writes only after the frame offset is applied
 [03 §3.3][R-RR16-A §3]. Clamping the origin before the blitter pins a partially
 offscreen top or left cell's art to the screen edge, which at 2× displaces the
 cloud by nearly 64 pixels. Fill rectangles remain clipped. Regression fixtures
-pan black, gray and dithered gray masks past both edges at 1×, 1.5× and 2× and
+pan black, gray and dithered gray masks past both edges at 1× and 2× and
 compare with a crop of the unpanned image, including actual GPU readback.
 
 ### 14.3 Detail art — contract D2
@@ -1995,21 +1983,9 @@ pointer. The doubled frame is a plain frame: composites with alternate children
 are doubled leaf by leaf. Executors see only frames; a variant is just another
 frame to the sprite atlas.
 
-**The 1.5× variants.** `formats.(*GAFFrame).Resampled(num, den)` is the general
-nearest resample — sizes `ceil(v·num/den)`, anchors rounded half away from zero,
-output pixel `j` reading source `floor(j·den/num)` — of which `Doubled` is the
-2/1 case. At 1.5× the client draws the provider's 2× variant resampled at 3/4
-when one exists (the remaster loses every fourth row and column, which reads
-better than the authored frame at 3/2 with its uneven columns) and the authored
-frame at 3/2 otherwise; both are built once per source frame and kept, in caches
-separate from the doubled ones. The detail tile set is decimated the same way,
-64×64 to 48×48, once per provider, and recorded on the terrain command in place
-of the 64×64 set: the record's tiles are always at the screen tile size of its
-scale, so an executor copies a detail tile one-to-one and resamples the 32×32
-tile through `Inverse` only when there is none. The fog cloud frames, never
-remastered, take the 3/2 variant in both executors. This variant path is
-**classic-only** from §16.2 on: modern's 1.5× is the 2× step shrunk by three
-quarters.
+Only native and doubled art are retained. Modern fractional zoom samples its
+recorded world through the live-factor transform (§16.3), without dedicated
+fractional sprite, fog or terrain variants or caches.
 
 ### 14.4 Load-time remaster — contract D3
 
@@ -2085,7 +2061,7 @@ geometry arrives in screen space and rasterizes as at 1×.
 
 ### 14.6 Runtime switches
 
-* **F9** cycles the view scale 1× → 1.5× → 2× → 1× about the viewport centre
+* **F9** toggles the view scale 1× ↔ 2× about the viewport centre
   (`ViewScale.Next`) in classic; modern's cycle is §16.8.
 * **F10** toggles the executor between classic and modern. The client publishes
   the requested executor; the adapter switches at the next Update, turning
@@ -2094,15 +2070,11 @@ geometry arrives in screen space and rasterizes as at 1×.
   also updates the shell preference and persists only the renderer field. The
   Nanolathe options page uses the same swap cleanup for live previews and Cancel
   restoration (DESIGN_INTERFACE_HUD_INPUT §3.4.1).
-* `--zoom` sets the scale at battle entry and applies to captures too; it
-  replaced `--shot-zoom`, whose free fractional values are gone. Classic accepts
-  only 1, 1.5 or 2; modern accepts any factor in the free range (§16.8). Left
-  unset, the window opens at 1.5× in classic when its framebuffer exceeds
-  800×600 in either dimension — the retail 640×480 and 800×600 modes stay native
-  — and a restart keeps the scale the player was on. A capture and the battle
-  benchmark take no such default: unset is native there, so every existing
-  capture and benchmark scene is unchanged and a run's scale is always the one on
-  its command line. `--shot-focus` stays. `--fps` is §13.5.
+* `--zoom` sets the scale at battle entry and applies to captures too. Classic
+  accepts only 1 or 2; modern accepts any factor in the free range (§16.8).
+  Both renderers default to native 1× at every window resolution, including
+  captures and the battle benchmark. A restart keeps the player's scale.
+  `--shot-focus` stays. `--fps` is §13.5.
 
 ### 14.7 Verification
 
@@ -2209,10 +2181,10 @@ past it.
 
 ### 16.1 Decision
 
-The modern executor's view scale is a free factor. §14's three half steps stay
-exactly what they are for the **classic** executor, and nothing in this section
-changes a classic pixel. In the modern executor the factor is continuous: the
-mouse wheel over the battle viewport moves it, it eases toward its target on the
+The modern executor's view scale is a free factor. The **classic** executor
+uses §14's native and detail steps. In the modern executor the factor is
+continuous: the mouse wheel over the battle viewport moves it, it eases toward
+its target on the
 host Update grid, and below half scale the world becomes the **strategic view**
 — terrain, fog, features and selection with the units drawn as icons. Retail has
 one world scale and no wheel zoom; the simulation cannot tell what the factor is
@@ -2228,10 +2200,10 @@ is free.
 ### 16.2 The factor and the step — contract Z1
 
 `camera.Zoom` is the live factor in 1/1024 units: `ZoomUnit` is 1×, `ZoomMax`
-2×. It is the free generalization of `camera.ViewScale`, and at the three rest
-factors (1024, 1536, 2048) its `Project`, `Inverse` and `Px` answer exactly what
-the matching half step's own arithmetic answers — the unit is 1/1024 rather than
-16.16 precisely so those three are exact small integers.
+2×. It is the free generalization of `camera.ViewScale`; at the native and
+detail factors (1024 and 2048), its `Project`, `Inverse` and `Px` agree exactly
+with the matching record step. Fractional factors, including 1.5× (1536),
+remain representable for explicit CLI zoom and smooth transitions.
 
 `Camera` carries both. `Scale` is the **record step** the recorder projects at:
 `WorldToScreen`, the terrain record, the detail-art selection and the fog op
@@ -2243,10 +2215,9 @@ factor, which is the classic executor's permanent state.
 
 The record step follows the factor for the modern executor (`Zoom.Step`): the 2×
 step above 1×, the native step at or below it. The classic executor does not
-derive its step from a factor: a factor handed to it is one of the three views
+derive its step from a free factor: a factor handed to it is native or detail
 and is set through `SetScaleAbout`, which writes the step and the factor
-together (`ViewScaleForZoom` names the step). Deriving it instead was a defect
-the capture gate caught — it turned a classic 1.5× capture into a 2× one.
+together (`ViewScaleForZoom` names the step).
 
 ### 16.3 The transform and the record extent — contract Z2
 
@@ -2505,18 +2476,16 @@ least 1×, and `clampAxis`'s view-larger-than-map domain stays exactly where
 
 ### 16.8 Runtime switches
 
-* **F9** in classic is the unchanged 1× → 1.5× → 2× step cycle about the
-  viewport centre. Modern cycles 1× → 2× → 0.25× → 1× as animated targets,
+* **F9** in classic toggles 1× ↔ 2× about the viewport centre. Modern cycles 1× → 2× → 0.25× → 1× as animated targets,
   sharing the wheel's step list; a free factor cycles to the first step above it,
   wrapping to 0.25× at the top, and the map floor still applies.
 * **The wheel** is §16.6.
 * **`--zoom`** accepts any factor in the free range for the modern executor and
-  only 1, 1.5 or 2 for classic — the restriction is applied after parsing,
+  only 1 or 2 for classic — the restriction is applied after parsing,
   because `--renderer` may follow `--zoom` on the command line. A capture follows
   `--shot-renderer` when one is given. The map-derived floor is applied at battle
-  entry, where the map is known. Modern defaults to 1× at every resolution;
-  classic keeps its resolution default. Captures and the benchmark stay native. A
-  restart keeps the factor the player was on. Battle entry, a restart and a
+  entry, where the map is known. Both renderers default to 1× at every
+  resolution, including captures and the benchmark. A restart keeps the factor the player was on. Battle entry, a restart and a
   capture take the factor outright rather than easing it.
 * **F10** is §14.6.
 
@@ -2580,11 +2549,11 @@ Enhanced team colour; it remains the contract for unidentified contacts. Below
 
 ### 16.12 Verification
 
-1. **The rest steps are untouched.** Classic captures at 1×, 1.5× and 2× and
+1. **The rest steps are untouched.** Classic captures at 1× and 2× and
    modern captures at 1× and 2× are byte-identical to the build before this
    section.
 2. **The camera.** `internal/camera/zoom_test.go`: the free factor agrees with
-   the half steps at each of them; picking is the exact inverse at rest and the
+   the native and detail steps; picking is the exact inverse at rest and the
    floor in flight; zooming about a point leaves that point fixed; the minimum
    factor is tight against the map; the step writer keeps the classic camera on
    its step; `ScreenToRecord` is the identity at rest.
