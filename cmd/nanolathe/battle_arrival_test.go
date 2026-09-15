@@ -18,6 +18,13 @@ func TestArrivalHoldsGameplayAndRebasesHandoff(t *testing.T) {
 	state := &clock.State{GlobalTick: 7, ScaledAnchor: 10, Requested: 10, Active: 10}
 	b := &battleSession{sess: &session.Session{Clock: state}, millisSource: &scriptedMillisSource{samples: []uint32{10000}}}
 	before := *state
+	for i := 0; i < 120; i++ {
+		b.viewerStep(1.0/60, cl)
+	}
+	if cl.ArrivalSeconds() != 0 || *state != before {
+		t.Fatal("window startup consumed the opening")
+	}
+	cl.MarkArrivalPresented()
 	for i := 0; i < 30; i++ {
 		b.viewerStep(1.0/60, cl)
 	}

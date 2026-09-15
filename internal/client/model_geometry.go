@@ -386,7 +386,12 @@ func (c *Client) featureGeometry(draw *presentationrender.UnitDraw, selector tea
 // body. The cached lane keeps the orientation used when it was recorded; the
 // live lane is rebuilt from this frame's script pose and is rebased into the
 // cached body's current union box [03 R-REN-03A §4].
-func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (*drawlist.ModelGeometry, *drawlist.ModelGeometry) {
+func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (arrivalBody, arrivalLive *drawlist.ModelGeometry) {
+	// Tag only outgoing frame packets, after retained geometry has been copied.
+	defer func() {
+		c.applyArrivalHeat(arrivalBody, v)
+		c.applyArrivalHeat(arrivalLive, v)
+	}()
 	// Stage one may already have built this pair on a worker's own arena
 	// (docs/DESIGN_GPU_RENDERER.md §13.9). The slot is handed over for exactly
 	// one call — a carrier's own pair is the first unitGeometryPair of its

@@ -435,6 +435,7 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 		if img := a.gpu.Execute(list, width, height); img != nil {
 			a.c.CommitStrategicPresentation()
 			screen.DrawImage(img, &ebiten.DrawImageOptions{})
+			a.c.MarkArrivalPresented()
 		}
 	}
 	// Execute has enqueued this frame and copied what the device needs, so the

@@ -104,11 +104,11 @@ func checkArrivalDevicePixels() error {
 	}
 	before := read(false, 0)
 	plainDraws := r.DeviceDraws()
-	for _, seconds := range []float32{0.2, 0.5, 0.7, 0.83, 0.95, 1.2, 1.54} {
+	for _, seconds := range []float32{0.2, 0.75, 1.15, 1.28, 1.33, 1.45, 2.04} {
 		after := read(true, seconds)
 		// The settled map and a descent still above this small viewport can
 		// legitimately be unchanged. Reveal and impact must affect pixels.
-		if (seconds < 0.3 || seconds >= drawlist.ArrivalImpactSeconds && seconds < 1.5) && bytes.Equal(before, after) {
+		if (seconds < 1.1 || seconds >= drawlist.ArrivalImpactSeconds && seconds < drawlist.ArrivalDurationSeconds-0.05) && bytes.Equal(before, after) {
 			return fmt.Errorf("arrival at %v did not affect scene", seconds)
 		}
 		if !bytes.Equal(after, read(true, seconds)) {

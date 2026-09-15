@@ -405,8 +405,8 @@ func shotSceneLabel(opts Options) string {
 }
 
 func validateShotOptions(opts Options) error {
-	if opts.Arrival && (opts.ShotArrivalTime < 0 || float32(opts.ShotArrivalTime) > drawlist.ArrivalDurationSeconds || math.IsNaN(opts.ShotArrivalTime) || opts.ShotTicks != 0 || effectiveShotRenderer(opts) != "modern" || opts.ShotModel != "" || opts.ProfileSeconds != 0) {
-		return fmt.Errorf("nanolathe: arrival capture requires --renderer=modern --shot-ticks=0 --shot-arrival-time between 0 and %.2f, without model or profile modes", drawlist.ArrivalDurationSeconds)
+	if opts.Arrival && (opts.ShotArrivalTime < 0 || float32(opts.ShotArrivalTime) > drawlist.ArrivalCoolingEndSeconds || math.IsNaN(opts.ShotArrivalTime) || opts.ShotTicks != 0 || effectiveShotRenderer(opts) != "modern" || opts.ShotModel != "" || opts.ProfileSeconds != 0) {
+		return fmt.Errorf("nanolathe: arrival capture requires --renderer=modern --shot-ticks=0 --shot-arrival-time between 0 and %.2f, without model or profile modes", drawlist.ArrivalCoolingEndSeconds)
 	}
 	shotRenderer := effectiveShotRenderer(opts)
 	if opts.ShotModel != "" {

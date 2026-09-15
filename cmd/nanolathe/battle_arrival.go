@@ -53,10 +53,11 @@ func arrivalCommander(cur *frame.Frame, cat *content.Catalog) (frame.UnitView, b
 // behavior [01 §4.3]; the intro is outside that scheduler (GPU §36).
 func (b *battleSession) stepArrival(delta float64, cl *client.Client) bool {
 	if !cl.ArrivalActive() {
+		cl.StepArrivalCooling(delta)
 		return false
 	}
 	seconds := cl.ArrivalSeconds()
-	if cl.IsFocused() && delta > 0 {
+	if cl.ArrivalPresented() && cl.IsFocused() && delta > 0 {
 		// Loading/device stalls must not consume the entire opening unseen.
 		seconds += float32(min(delta, 0.05))
 	}

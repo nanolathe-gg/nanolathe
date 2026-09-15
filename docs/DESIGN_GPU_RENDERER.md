@@ -4595,7 +4595,7 @@ back should be heard before the lane becomes permanent.
 
 User-requested artistic presentation, isolated on `prototype/commander-arrival`;
 not a retail behavioral claim. `--arrival` opts fresh modern skirmishes into a
-1.55-second opening. Saves, campaign entry, classic, and ordinary captures retain
+2.05-second opening. Saves, campaign entry, classic, and ordinary captures retain
 their existing entry. A skirmish without a local commander skips the opening.
 
 The shell requests one tick-zero publication of the loaded session through
@@ -4603,13 +4603,16 @@ The shell requests one tick-zero publication of the loaded session through
 RNG draw. It selects the local published commander using the immutable
 definition's Commander flag, frames the landing in the final viewport, and
 holds gameplay input and the authoritative pump. Escape skips; losing focus
-holds presentation time. Handoff rebases the host scheduler anchor so the intro
+holds presentation time. Its clock waits for the first submitted GPU frame,
+then holds a dim scene for 0.5 seconds before the 0.8-second map reveal. The
+commander overlaps its final quarter-second, with no intervening pause.
+Handoff rebases the host scheduler anchor so the intro
 cannot become accumulated tick debt. The ordinary pause mechanism is untouched.
 
 `Client` stores only commander identity, position, and elapsed presentation
-seconds. The commander is hidden during the map reveal until 0.55 seconds,
+seconds. The commander is hidden during the map reveal until 1.05 seconds,
 then a local model-input copy accelerates downward from 640 world units above
-its committed height with cubic easing, hitting the ground at 0.83 seconds;
+its committed height with cubic easing, hitting the ground at 1.33 seconds;
 its shadow is suppressed during descent. No committed pose, occupancy, weapon,
 health, damage, or simulation RNG changes. Snapshot replacement retires the
 intro, and every time change cancels speculative recording before invalidating
@@ -4618,8 +4621,10 @@ the presentation epoch.
 The world-begin packet carries elapsed seconds, landing position, map-grid
 origin, and recording scale by value. The executor transforms them once through
 the world affine mapping. After fog and before interface, one viewport copy and
-one shader draw first reveal the map, then add a short descent streak and a
-strong warm impact flash, cyan distortion ring, and damped screen recoil.
+one shader draw reveals the map with an overlapping warm descent streak and a
+strong warm impact flash, colourless distortion field, and damped screen recoil.
+The expanding field uses the same bipolar compression/rarefaction profile as
+explosion distortion (§25); it warps scene pixels without adding a coloured rim.
 The map reveals in 32-world-pixel screen chunks with a
 small rise and settle; sampling the completed scene carries terrain, trees,
 water, and fog together. It is a sampled image effect, not moving terrain
@@ -4627,9 +4632,19 @@ geometry. Black source fog stays black. The ring finishes according to the
 viewport's farthest corner; the final stage returns the exact source image.
 The pass borrows the existing read surface and submits nothing when inactive.
 
+The falling commander starts hot, reusing wreck emission, nearby lighting and
+rising air distortion (§28) on outgoing model packets. A warm orange glow cools
+to the ordinary texture over four seconds after impact; the heat follows the
+same unit identity as it moves. Gameplay resumes at 2.05 seconds while cooling
+continues on a small presentation clock, frozen on pause or focus loss. Both
+glow and shimmer respect the existing Distortion switch. No texture is replaced
+and no additional model shader is needed. The shared diagnostics count this
+source with wreck heat/lights, an intentional prototype shortcut.
+
 For repeatable visual inspection, use `--arrival --shot-ticks=0
---shot-arrival-time=0.2` with a modern `--shot`; useful stages are 0.2 (reveal),
-0.7 (descent), 0.83 (contact), 0.95 (shockwave), and 1.55 (normal scene).
+--shot-arrival-time=0.75` with a modern `--shot`; useful stages are 0.2 (lead-in),
+0.75 (reveal), 1.28 (descent), 1.33 (contact), 1.45 (distortion),
+2.05 (gameplay with hot commander), and 5.33 (fully cooled).
 Timings, tint, displacement and attenuation are authored prototype choices.
 There is no dedicated arrival sound, landing joint animation,
 terrain-specific impact treatment, or multiplayer start barrier in this version.

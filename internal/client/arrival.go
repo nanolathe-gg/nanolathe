@@ -10,9 +10,11 @@ import (
 // arrivalPresentation owns only the displayed opening, never a mutable unit.
 // All timing and displacement here are artistic prototype choices (GPU §36).
 type arrivalPresentation struct {
-	active  bool
-	seconds float32
-	unit    frame.UnitView
+	active    bool
+	cooling   bool
+	presented bool
+	seconds   float32
+	unit      frame.UnitView
 }
 
 // StartArrival binds the already-published local commander to a fresh intro.
@@ -22,13 +24,23 @@ func (c *Client) StartArrival(unit frame.UnitView) {
 	}
 	c.CancelPreRecord()
 	// Retain identity and position only, not the publication's piece slices.
-	c.arrival = arrivalPresentation{active: true, unit: frame.UnitView{
+	c.arrival = arrivalPresentation{active: true, cooling: true, unit: frame.UnitView{
 		Slot: unit.Slot, InstanceID: unit.InstanceID, X: unit.X, Y: unit.Y, Z: unit.Z,
 	}}
 	c.BumpPresentationEpoch()
 }
 
 func (c *Client) ArrivalActive() bool { return c != nil && c.arrival.active }
+
+// MarkArrivalPresented starts the host's intro clock only after its first GPU
+// frame is submitted. Window creation must not consume the reveal (GPU §36).
+func (c *Client) MarkArrivalPresented() {
+	if c.ArrivalActive() {
+		c.arrival.presented = true
+	}
+}
+
+func (c *Client) ArrivalPresented() bool { return c.ArrivalActive() && c.arrival.presented }
 
 func (c *Client) ArrivalSeconds() float32 {
 	if c == nil {
@@ -49,6 +61,9 @@ func (c *Client) SetArrivalSeconds(seconds float32) {
 	}
 	c.arrival.seconds = seconds
 	if seconds >= drawlist.ArrivalDurationSeconds {
+		c.arrival.active = false
+	}
+	if seconds >= drawlist.ArrivalCoolingEndSeconds {
 		c.arrival = arrivalPresentation{}
 	}
 	c.BumpPresentationEpoch()
@@ -88,4 +103,33 @@ func (c *Client) arrivalUnit(v frame.UnitView) frame.UnitView {
 		v.NoShadow = true
 	}
 	return v
+}
+
+// StepArrivalCooling keeps the hot model moving with gameplay after handoff.
+// This is a short presentation clock, frozen on pause/focus loss (GPU §36).
+func (c *Client) StepArrivalCooling(delta float64) {
+	if c != nil && c.arrival.cooling && !c.arrival.active && c.IsFocused() && !c.PresentationPaused() && delta > 0 {
+		c.SetArrivalSeconds(c.arrival.seconds + float32(min(delta, 0.05)))
+	}
+}
+
+// Reuse the wreck's emission and rising air field on per-frame model packets.
+// The retained model texture stays intact; no authoritative unit is changed.
+func (c *Client) applyArrivalHeat(g *drawlist.ModelGeometry, v frame.UnitView) {
+	if g == nil {
+		return
+	}
+	g.WreckEmission = [3]float32{}
+	g.WreckHeatStrength, g.WreckHeatTime, g.WreckHeatScale = 0, 0, 0
+	if !c.enhanced || !c.effects.Distortion || !c.arrival.cooling || v.Slot != c.arrival.unit.Slot || v.InstanceID != c.arrival.unit.InstanceID || c.arrival.seconds < drawlist.ArrivalDropSeconds {
+		return
+	}
+	age := max(0, c.arrival.seconds-drawlist.ArrivalImpactSeconds)
+	cool := max(0, 1-age/4)
+	red, amber := cool*cool, cool*cool*cool*cool
+	flash := max(0, 1-age/0.3)
+	g.WreckEmission = [3]float32{0.95*red + 0.15*flash, 0.30*amber + 0.55*flash, 0.025*amber + 0.42*flash}
+	g.WreckHeatStrength = 0.85 * cool * cool
+	g.WreckHeatScale = float32(c.viewScale().Float())
+	g.WreckHeatTime = c.arrival.seconds * 30
 }

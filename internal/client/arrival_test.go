@@ -57,3 +57,49 @@ func TestArrivalTimeInvalidatesSpeculativeRecord(t *testing.T) {
 		t.Fatal("reused a record from another intro stage")
 	}
 }
+
+func TestArrivalHeatCoolsDuringGameplayAndDoesNotFollowReusedSlot(t *testing.T) {
+	c, buffer := pipelineClient(t)
+	c.SetEnhanced(true)
+	c.effects.Distortion = true
+	c.SetFocused(true)
+	u := buffer.Current().Units[0]
+	c.StartArrival(u)
+	c.SetArrivalSeconds(drawlist.ArrivalImpactSeconds)
+	var g drawlist.ModelGeometry
+	c.applyArrivalHeat(&g, u)
+	hot := g.WreckEmission[0]
+	if hot <= 0 || g.WreckHeatStrength <= 0 {
+		t.Fatal("landing is cold")
+	}
+	c.SetArrivalSeconds(drawlist.ArrivalDurationSeconds)
+	if c.ArrivalActive() {
+		t.Fatal("cooling blocks gameplay")
+	}
+	c.applyArrivalHeat(&g, u)
+	if g.WreckEmission[0] <= 0 || g.WreckEmission[0] >= hot {
+		t.Fatal("handoff did not retain cooling glow")
+	}
+	before := c.ArrivalSeconds()
+	c.StepArrivalCooling(1.0 / 60)
+	if c.ArrivalSeconds() <= before {
+		t.Fatal("gameplay does not advance cooling")
+	}
+	c.SetPresentationPaused(true)
+	before = c.ArrivalSeconds()
+	c.StepArrivalCooling(1)
+	if c.ArrivalSeconds() != before {
+		t.Fatal("paused commander cooled")
+	}
+	other := u
+	other.InstanceID++
+	c.applyArrivalHeat(&g, other)
+	if g.WreckEmission != [3]float32{} || g.WreckHeatStrength != 0 {
+		t.Fatal("heat followed a reused slot")
+	}
+	c.SetArrivalSeconds(drawlist.ArrivalCoolingEndSeconds)
+	c.applyArrivalHeat(&g, u)
+	if g.WreckEmission != [3]float32{} || g.WreckHeatStrength != 0 || c.arrival.cooling {
+		t.Fatal("heat did not retire")
+	}
+}
