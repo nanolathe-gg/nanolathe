@@ -61,6 +61,7 @@ const (
 	HumanMeteor
 	HumanBigBrother
 	HumanShiftState
+	HumanCancelQueuedMove
 )
 
 type HumanSelectionCommand struct{ Handles []pool.Handle }
@@ -83,11 +84,22 @@ type HumanOrderCommand struct {
 	Target   pool.Handle
 	Position orders.ResolvePos
 	Queued   bool
+	// TrackQueuedMove gives a queued targetless ground/air move a transient
+	// receipt and bypasses the repeat-click toggle. This is explicit Enhanced
+	// gesture policy, not retail behavior (DESIGN_INTERFACE_HUD_INPUT §3.10).
+	TrackQueuedMove bool
 	// Nonempty Targets explicitly requests an area batch under
 	// DESIGN_INTERFACE_HUD_INPUT §3.11. Empty Targets retains ordinary clicks.
 	Targets []HumanOrderTarget
 }
 type HumanStopCommand struct{ Handles []pool.Handle }
+
+// HumanCancelQueuedMoveCommand names the first click's move and captured actors
+// for the Enhanced construction gesture (DESIGN_INTERFACE_HUD_INPUT §3.10).
+type HumanCancelQueuedMoveCommand struct {
+	Sequence uint64
+	Handles  []pool.Handle
+}
 type HumanActivationCommand struct {
 	Unit             pool.Handle
 	Activate, Queued bool
@@ -192,6 +204,7 @@ type HumanCommand struct {
 	Selection        HumanSelectionCommand
 	Order            HumanOrderCommand
 	Stop             HumanStopCommand
+	CancelQueuedMove HumanCancelQueuedMoveCommand
 	Activation       HumanActivationCommand
 	MobileBuild      HumanMobileBuildCommand
 	FactoryBuild     HumanFactoryBuildCommand
@@ -225,6 +238,7 @@ func cloneHumanCommand(c HumanCommand) HumanCommand {
 	c.Order.Handles = cloneHumanHandles(c.Order.Handles)
 	c.Order.Targets = append([]HumanOrderTarget(nil), c.Order.Targets...)
 	c.Stop.Handles = cloneHumanHandles(c.Stop.Handles)
+	c.CancelQueuedMove.Handles = cloneHumanHandles(c.CancelQueuedMove.Handles)
 	c.SelfDestruct.Handles = cloneHumanHandles(c.SelfDestruct.Handles)
 	return c
 }
@@ -232,8 +246,16 @@ func cloneHumanCommand(c HumanCommand) HumanCommand {
 // EnqueueHumanCommand appends one command for the next authoritative input
 // phase. It performs no simulation mutation.
 func (s *Session) EnqueueHumanCommand(c HumanCommand) error {
+	_, err := s.EnqueueHumanCommandWithSequence(c)
+	return err
+}
+
+// EnqueueHumanCommandWithSequence also returns the session-owned command receipt.
+// Enhanced input uses it to replace only its first click's queued move with a
+// build at a later input boundary (DESIGN_INTERFACE_HUD_INPUT §3.10).
+func (s *Session) EnqueueHumanCommandWithSequence(c HumanCommand) (uint64, error) {
 	if s == nil {
-		return fmt.Errorf("session: nil human-command owner")
+		return 0, fmt.Errorf("session: nil human-command owner")
 	}
 	s.humanMu.Lock()
 	defer s.humanMu.Unlock()
@@ -261,7 +283,7 @@ func (s *Session) EnqueueHumanCommand(c HumanCommand) error {
 		c.DueTick = s.Clock.GlobalTick + 1
 	}
 	s.pendingHuman = append(s.pendingHuman, cloneHumanCommand(c))
-	return nil
+	return c.Sequence, nil
 }
 
 // PendingHumanCommands returns immutable command copies for diagnostics/tests
@@ -1028,6 +1050,8 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 			}
 			q.Push(id, orders.NewNodeForOrder(id, 0, u.X, u.Y, u.Z, tick, u.Handle, true))
 		}
+	case HumanCancelQueuedMove:
+		s.applyHumanCancelQueuedMove(c.CancelQueuedMove)
 	case HumanOrder:
 		if len(c.Order.Targets) != 0 {
 			s.applyHumanOrderBatch(c.Order, tick)
@@ -1059,20 +1083,61 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 			if q == nil {
 				continue
 			}
+			trackedMove := c.Order.TrackQueuedMove && c.Order.Queued && c.Order.Target == 0 && isHumanMoveOrder(id)
 			if c.Order.Queued {
 				// The producer's first act, once per acting unit: a queued
 				// click that repeats an already-queued order of this kind at
 				// (or within one cell of) the same point removes it and issues
 				// nothing [07 R-P0-11 §6]. It runs ONLY in queued mode; a plain
 				// click falls through to the Replace below without testing.
-				if removeQueuedWorldOrder(u, id, c.Order.Target, gx, gz) {
+				if !trackedMove && removeQueuedWorldOrder(u, id, c.Order.Target, gx, gz) {
 					continue
 				}
 			} else {
 				q.PurgeUnprotected()
 				q.DropLeadingAutoOps()
 			}
-			q.Push(id, orders.NewNodeForOrder(id, c.Order.Target, gx, gy, gz, tick, u.Handle, c.Order.Queued))
+			n := orders.NewNodeForOrder(id, c.Order.Target, gx, gy, gz, tick, u.Handle, c.Order.Queued)
+			if trackedMove {
+				n.HumanMoveSequence = c.Sequence
+			}
+			q.Push(id, n)
+		}
+	}
+}
+
+func isHumanMoveOrder(id orders.ID) bool {
+	return id != 0 && (id == orders.Lookup("Move_Ground") || id == orders.Lookup("VTOL_Move"))
+}
+
+func (s *Session) applyHumanCancelQueuedMove(c HumanCancelQueuedMoveCommand) {
+	if c.Sequence == 0 {
+		return
+	}
+	for _, h := range c.Handles {
+		u := s.humanUnit(h)
+		if u == nil {
+			continue
+		}
+		q := orders.QueueForUnit(u)
+		if q == nil {
+			continue
+		}
+		for {
+			var found *orders.Node
+			for _, n := range q.Primary() {
+				if n != nil && n.HumanMoveSequence == c.Sequence && isHumanMoveOrder(n.ID) {
+					found = n
+					break
+				}
+			}
+			if found == nil {
+				break
+			}
+			// Use a currently linked pointer: the removal helper's fallback
+			// for stale pointers could otherwise remove unrelated work. Reload
+			// after cleanup, which can itself mutate the queue [04 §3.3].
+			q.RemovePrimaryNode(found, false)
 		}
 	}
 }
