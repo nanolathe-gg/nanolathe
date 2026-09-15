@@ -149,6 +149,9 @@ type saveLoadScreen struct {
 	dir      string
 	entries  []saveGameEntry
 	selected int
+	// hostSaveDir keeps filename normalization inside an explicit --save-dir
+	// (DESIGN_SESSIONS_AI_SAVE §5). Default retail path assembly is unchanged.
+	hostSaveDir bool
 	// sideNames is the dialog-owned presentation copy [08 R-SAVE-02 §3].
 	sideNames []string
 	// name is the `GAMENAME` edit's text: the file stem a save writes under,
@@ -286,6 +289,19 @@ func (s *saveLoadScreen) SetMode(mode saveLoadMode) {
 func (s *saveLoadScreen) CommitPath() string {
 	if s == nil {
 		return ""
+	}
+	if s.hostSaveDir {
+		// Reject path components rather than letting a typed name escape the
+		// installer-selected folder. Normalize only the filename, so dots in
+		// parent directories cannot truncate the save directory [I11].
+		if strings.ContainsAny(s.name, `/\`) || filepath.IsAbs(s.name) || filepath.VolumeName(s.name) != "" {
+			return ""
+		}
+		leaf := session.RetailSavePath("", s.name)
+		if leaf == "" {
+			return ""
+		}
+		return filepath.Join(s.dir, leaf)
 	}
 	return session.RetailSavePath(s.dir, s.name)
 }
