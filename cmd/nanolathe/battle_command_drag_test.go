@@ -147,9 +147,11 @@ func TestCommandDragAreaFiltersTargets(t *testing.T) {
 		{Slot: 4, Owner: 0, X: 900 << 16, Z: 900 << 16, Health: 50, MaxHealth: 100},
 	}
 	next.Features = []frame.FeatureView{
-		{CX: 12, CZ: 12, FootX: 1, FootZ: 1, X: 200 << 16, Z: 200 << 16, Reclaimable: true},
-		{CX: 13, CZ: 13, FootX: 1, FootZ: 1, X: 216 << 16, Z: 216 << 16, Reclaimable: false},
-		{CX: 40, CZ: 40, FootX: 1, FootZ: 1, X: 648 << 16, Z: 648 << 16, Reclaimable: true},
+		{CX: 12, CZ: 12, FootX: 1, FootZ: 1, X: 200 << 16, Z: 200 << 16, Reclaimable: true, Blocking: true},
+		{CX: 13, CZ: 13, FootX: 1, FootZ: 1, X: 216 << 16, Z: 216 << 16, Reclaimable: false, Blocking: true},
+		{CX: 40, CZ: 40, FootX: 1, FootZ: 1, X: 648 << 16, Z: 648 << 16, Reclaimable: true, Blocking: true},
+		// Reclaimable ground cover inside the drag must not become work.
+		{CX: 14, CZ: 14, FootX: 1, FootZ: 1, X: 232 << 16, Z: 232 << 16, Reclaimable: true},
 	}
 	if err := b.sess.Snapshot.Publish(f.Tick + 1); err != nil {
 		t.Fatal(err)
@@ -161,7 +163,7 @@ func TestCommandDragAreaFiltersTargets(t *testing.T) {
 	}
 	d.latch = input.LatchReclaim
 	reclaim := b.dragAreaTargets(d)
-	if len(reclaim) != 1 || reclaim[0].Target != 0 || !reclaim[0].Position.HasFeature {
+	if len(reclaim) != 1 || reclaim[0].Target != 0 || !reclaim[0].Position.HasFeature || reclaim[0].Position.X != 200<<16 {
 		t.Fatalf("reclaim %+v", reclaim)
 	}
 	f, _ = b.currentSnapshot()

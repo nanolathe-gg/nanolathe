@@ -311,7 +311,9 @@ func (b *battleSession) dragAreaTargets(d *battleCommandDrag) []session.HumanOrd
 		}
 	} else {
 		for _, v := range f.Features {
-			if !v.Reclaimable || !inside(v.X, v.Z) || !snapshotFeatureVisible(f, v, f.ViewingPlayer) {
+			// The authored blocking flag covers movement and building placement
+			// [05 R-FEAT-01 §6]; drag reclaim clears only these obstacles (§3.11).
+			if !v.Reclaimable || !v.Blocking || !inside(v.X, v.Z) || !snapshotFeatureVisible(f, v, f.ViewingPlayer) {
 				continue
 			}
 			wreck := b.isCorpseName(v.DefName)

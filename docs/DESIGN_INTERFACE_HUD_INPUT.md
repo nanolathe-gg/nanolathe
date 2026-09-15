@@ -1973,7 +1973,11 @@ A click still uses the existing single-site path, on release in modern mode.
 
 Repair and Reclaim use rectangular world areas, with their command armed and
 the left button dragged. Repair visits visible local damaged or unfinished
-units. Reclaim visits visible reclaimable features, avoiding accidental unit
+units. Reclaim visits visible reclaimable features whose authored `blocking`
+flag is set, clearing movement and building obstacles such as trees and rocks
+while leaving non-blocking grass and moss alone. That flag's movement and
+placement meaning is established in [05 R-FEAT-01 §6]; using it to filter this
+gesture is user-requested input policy. Reclaim avoids accidental unit
 reclamation. Ordinary clicks preserve the existing target resolver. Targets
 are captured from the committed frame at release, in publication order; orders
 are queued per capable selected actor. An explicit target batch replaces only
