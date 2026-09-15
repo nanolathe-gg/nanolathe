@@ -33,7 +33,7 @@ func yieldFixture(t *testing.T) (*Service, *units.Unit, *units.Unit, *orders.Nod
 func yieldFixtureCatalog(t *testing.T, cat *content.Catalog, factoryDef, product *content.UnitDef) (*Service, *units.Unit, *units.Unit, *orders.Node) {
 	t.Helper()
 	svc, w := exitService(t, exitTerrain(40, 40), cat)
-	svc.ModernFactoryExit = true
+	svc.ModernConstructionClearance = true
 	sys := movement.NewSystem(svc.Terrain, movement.Profile{}, movement.NewOccupancyGrid())
 	sys.SetClasses(cat.Movement)
 	sys.BindWorld(w)
@@ -70,7 +70,7 @@ func yieldFixtureCatalog(t *testing.T, cat *content.Catalog, factoryDef, product
 	return svc, factory, blocker, node
 }
 
-func TestModernFactoryExitPreservesIneligibleBlockers(t *testing.T) {
+func TestModernConstructionClearancePreservesIneligibleBlockers(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		change func(*Service, *units.Unit)
@@ -80,7 +80,7 @@ func TestModernFactoryExitPreservesIneligibleBlockers(t *testing.T) {
 		{"automatic standby", func(s *Service, u *units.Unit) {
 			s.queueForUnit(u).Push(orders.Lookup("Standby"), orders.Node{Flags: orders.FlagAutoOp})
 		}, true},
-		{"Strict", func(s *Service, _ *units.Unit) { s.ModernFactoryExit = false }, false},
+		{"Strict", func(s *Service, _ *units.Unit) { s.ModernConstructionClearance = false }, false},
 		{"hold position", func(_ *Service, u *units.Unit) { u.Flags &^= StandingMoveMask }, false},
 		{"enemy", func(_ *Service, u *units.Unit) { u.Owner = 1 }, false},
 		{"other owner allied", func(_ *Service, u *units.Unit) { u.Owner = 2 }, false},
@@ -170,7 +170,7 @@ func TestModernFactoryYieldResumesProduction(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			svc, factory, u, node := yieldFixture(t)
-			svc.ModernFactoryExit = modern
+			svc.ModernConstructionClearance = modern
 			svc.handleState2(factory, node, 1)
 			if node.Target != 0 {
 				t.Fatal("allocated over blocker")
@@ -211,7 +211,7 @@ func TestModernFactoryYieldRetryAndNeighborPreservation(t *testing.T) {
 func TestModernFactoryYardCloseYieldsAtSuppliedTick(t *testing.T) {
 	for _, modern := range []bool{false, true} {
 		svc, factory, u, _ := yieldFixture(t)
-		svc.ModernFactoryExit = modern
+		svc.ModernConstructionClearance = modern
 		if svc.YardOpenTransactionAt(factory, false, 71) || !factory.YardOpen {
 			t.Fatal("closed over blocker")
 		}

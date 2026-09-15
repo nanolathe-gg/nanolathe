@@ -27,20 +27,22 @@ func TestForgetUnitLeavesNoPerHandleState(t *testing.T) {
 	setHandleRow(&s.prevSFXBand, h, 2)
 	setHandleRow(&s.pathFailures, h, &PathFailure{})
 	setHandleRow(&s.activeOrders, h, &activeMove{})
+	setHandleRow(&s.clearanceRoutes, h, &modernClearanceRoute{})
 	setHandleRow(&s.arrivalHandles, h, &arrivalHandle{})
 	s.ForgetUnit(h)
 
 	for name, present := range map[string]bool{
-		"Routes":         rowHas(s.Routes, h),
-		"Steers":         rowHas(s.Steers, h),
-		"Collisions":     rowHas(s.Collisions, h),
-		"Flights":        rowHas(s.Flights, h),
-		"profiles":       rowHas(s.profiles, h),
-		"prevMoveTier":   handleRow(s.prevMoveTier, h) != 0,
-		"prevSFXBand":    handleRow(s.prevSFXBand, h) != 0,
-		"pathFailures":   rowHas(s.pathFailures, h),
-		"activeOrders":   rowHas(s.activeOrders, h),
-		"arrivalHandles": rowHas(s.arrivalHandles, h),
+		"Routes":          rowHas(s.Routes, h),
+		"Steers":          rowHas(s.Steers, h),
+		"Collisions":      rowHas(s.Collisions, h),
+		"Flights":         rowHas(s.Flights, h),
+		"profiles":        rowHas(s.profiles, h),
+		"prevMoveTier":    handleRow(s.prevMoveTier, h) != 0,
+		"prevSFXBand":     handleRow(s.prevSFXBand, h) != 0,
+		"pathFailures":    rowHas(s.pathFailures, h),
+		"activeOrders":    rowHas(s.activeOrders, h),
+		"clearanceRoutes": rowHas(s.clearanceRoutes, h),
+		"arrivalHandles":  rowHas(s.arrivalHandles, h),
 	} {
 		if present {
 			t.Errorf("ForgetUnit left %s state for handle %d", name, h)

@@ -392,6 +392,10 @@ func (s *Service) mobilePlacementVisit(builder *units.Unit, node *orders.Node, t
 		// ticks with no random draw while the counter is at most 10; the
 		// first blocked visit with the counter above 10 notifies "Target
 		// area was blocked" and abandons the order (code 8, remove).
+		// Do not request another clearance move on the terminal give-up visit.
+		if node.Param3 <= 10 {
+			s.yieldConstructionSite(builder, rect, tick)
+		}
 		text, code := orders.MobileBuildBlockedVisit(node, tick)
 		s.notifyStatus(text)
 		// The same two captions are status kind 7 on the builder

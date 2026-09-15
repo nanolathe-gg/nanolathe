@@ -756,7 +756,7 @@ owned by the factory's player to walk away when they obstruct production or
 a yard close. This is independent of that script flag and of retail's normal
 product parking [05 R-EGRESS-02].
 
-`construction.Service.ModernFactoryExit` is a session projection of the central
+`construction.Service.ModernConstructionClearance` is a session projection of the central
 `gameplay.Mode`. Its zero value is Strict behavior. When enabled:
 
 1. A failed state-2 placement examines the exact product exit rectangle; a
@@ -803,6 +803,48 @@ footprint legality, enclosed/no-destination failure, retry and two-factory order
 preservation, resource/RNG neutrality, yard refusal and eventual production.
 Installed-factory fixtures exercise the same production path with authored
 factory/product definitions. Strict fixtures preserve all existing outcomes.
+
+### Modern construction-site yielding
+
+**Nanolathe Modern policy (user-authorized), not retail evidence.** The same
+central `gameplay.Mode` projection, `ModernConstructionClearance`, covers
+factory exits and mobile-builder construction sites. Strict 3.1 retains the
+blocked-site counter, eleven 30-tick waits, removal and queue advancement
+[04 R-ORDER-02 §1]. Modern keeps that exact budget too.
+
+On the first failed placement visit, and each nonterminal retry, inspect the
+snapped product footprint and request clearance from idle same-owner ground or
+naval movers. Use the factory policy's eligibility, physical occupancy checks,
+ascending-handle selection, bounded cardinal search and separate destinations.
+The requesting builder is excluded; its own site-clearance approach remains
+unchanged. Hold Position, explicit orders, moving units, work, aircraft and
+other owners remain untouched. Failed terrain/feature admission may coexist
+with mobile blockers; moving those blockers does not waive any admission test.
+No new clearance request is made on the terminal give-up visit.
+
+**Priority means prompt routing, not stronger collision rights.** Issue an
+ordinary quiet `Move_Ground` immediately, replacing only automatic idle work.
+Retain the search's complete cardinal route instead of throwing it away and
+waiting for global A* service. The movement adapter stages this one-shot route
+for the new order; its next ordinary activation installs it directly, with no
+extra pump, simulation RNG, global search-budget debit, or changes to unit speed.
+The search limits urgent paths to 19 edges so every bend fits the follower's
+existing 20-point capacity. It never publishes a truncated path which ends
+inside the construction site. Factory-exit requests retain their existing
+ordinary path scheduling.
+
+The normal follower, collision validator and later repath still govern motion.
+A trapped, very slow or subsequently obstructed unit may not clear before the
+existing deadline; in that case the build order gives up and the queue advances.
+No timer extension, teleport, forced displacement or occupancy reservation is
+added. Disabling Modern stops new requests; issued moves finish normally.
+
+Tests exercise first-visit issuance and physical clearance/allocation before
+330 elapsed ticks with the global scheduler entirely unserviced; Strict's
+unchanged give-up; requester/explicit-order/Hold Position/other-owner exclusion;
+route bends, ordinary replacement and stale-hint cleanup. The movement-side
+lifetime and save rules are in
+[Modern construction clearance priority](DESIGN_MOVEMENT_PATH.md#modern-construction-clearance-priority).
 
 ### 3.4 Features — C25…C28
 

@@ -13,8 +13,8 @@ import (
 )
 
 // These bounded search limits are Modern policy, not retail constants:
-// DESIGN_ECONOMY_CONSTRUCTION, "Modern factory-exit yielding". Clearance
-// issues ordinary orders; it never writes movement, occupancy, resources or RNG.
+// DESIGN_ECONOMY_CONSTRUCTION, "Modern factory-exit yielding" and "Modern construction-site yielding". Clearance
+// issues ordinary orders; it never writes transforms, occupancy, resources or RNG.
 const (
 	factoryYieldRadius   = 8
 	factoryYieldBudget   = 256
@@ -28,12 +28,26 @@ func (s *Service) yieldClosingYard(factory *units.Unit, requested bool, rect wor
 }
 
 func (s *Service) yieldFactoryExit(factory *units.Unit, clear world.FootprintRect, closingYard []world.YardCell, tick uint32) {
-	if s == nil || !s.ModernFactoryExit || s.World == nil || s.Movement == nil || s.Terrain == nil || factory == nil || factory.Def == nil || factory.Def.BMCode != 0 || !factory.Def.Builder {
+	if factory == nil || factory.Def == nil || factory.Def.BMCode != 0 || !factory.Def.Builder {
+		return
+	}
+	s.yieldObstruction(factory, clear, closingYard, tick, false)
+}
+
+// yieldConstructionSite gives an idle blocker's local route priority over the
+// global search backlog, without extending the builder's blocked-site budget.
+// Nanolathe Modern policy: DESIGN_ECONOMY_CONSTRUCTION, "Modern construction-site yielding".
+func (s *Service) yieldConstructionSite(builder *units.Unit, clear world.FootprintRect, tick uint32) {
+	s.yieldObstruction(builder, clear, nil, tick, true)
+}
+
+func (s *Service) yieldObstruction(requester *units.Unit, clear world.FootprintRect, closingYard []world.YardCell, tick uint32, urgent bool) {
+	if s == nil || !s.ModernConstructionClearance || s.World == nil || s.Movement == nil || s.Terrain == nil || requester == nil {
 		return
 	}
 	var blockers []pool.Handle
 	add := func(id int) {
-		if id > 0 && pool.Handle(id) != factory.Handle && !slices.Contains(blockers, pool.Handle(id)) {
+		if id > 0 && pool.Handle(id) != requester.Handle && !slices.Contains(blockers, pool.Handle(id)) {
 			blockers = append(blockers, pool.Handle(id))
 		}
 	}
@@ -53,7 +67,7 @@ func (s *Service) yieldFactoryExit(factory *units.Unit, clear world.FootprintRec
 	slices.Sort(blockers)
 	eligible := blockers[:0]
 	for _, h := range blockers {
-		if s.factoryYieldEligible(factory, s.World.Unit(h)) {
+		if s.factoryYieldEligible(requester, s.World.Unit(h)) {
 			eligible = append(eligible, h)
 			if len(eligible) == factoryYieldBlockers {
 				break
@@ -75,7 +89,7 @@ func (s *Service) yieldFactoryExit(factory *units.Unit, clear world.FootprintRec
 	}
 	for _, h := range eligible {
 		u := s.World.Unit(h)
-		destination, ok := s.factoryYieldDestination(u, forbidden)
+		destination, route, ok := s.factoryYieldDestination(u, forbidden, urgent)
 		if !ok {
 			continue
 		}
@@ -85,6 +99,9 @@ func (s *Service) yieldFactoryExit(factory *units.Unit, clear world.FootprintRec
 		q := s.queueForUnit(u)
 		id := orders.Lookup("Move_Ground")
 		q.Push(id, orders.NewMoveNode(id, x, z, tick, u.Handle, true))
+		if urgent {
+			s.Movement.StageModernClearance(u, q.Head(), route)
+		}
 		forbidden = append(forbidden, destination)
 	}
 }
@@ -116,18 +133,20 @@ func yieldOverlap(a, b world.FootprintRect) bool {
 	return a.MinX() < b.MaxX() && b.MinX() < a.MaxX() && a.MinZ() < b.MaxZ() && b.MinZ() < a.MaxZ()
 }
 
-func (s *Service) factoryYieldDestination(u *units.Unit, forbidden []world.FootprintRect) (world.FootprintRect, bool) {
+func (s *Service) factoryYieldDestination(u *units.Unit, forbidden []world.FootprintRect, urgent bool) (world.FootprintRect, []movement.Cell, bool) {
 	start, fx, fz, ok := s.Movement.CommittedFootprint(u.Handle)
 	if !ok || fx <= 0 || fz <= 0 {
-		return world.FootprintRect{}, false
+		return world.FootprintRect{}, nil, false
 	}
 	extent, err := world.NewFootprintExtent(int32(fx), int32(fz))
 	if err != nil {
-		return world.FootprintRect{}, false
+		return world.FootprintRect{}, nil, false
 	}
 	const width = 2*factoryYieldRadius + 1
 	var visited [width * width]bool
 	var queue [width * width]movement.Cell
+	var parents [width * width]int
+	var depths [width * width]int
 	queue[0] = start
 	visited[factoryYieldRadius*width+factoryYieldRadius] = true
 	tail := 1
@@ -152,8 +171,20 @@ func (s *Service) factoryYieldDestination(u *units.Unit, forbidden []world.Footp
 				}
 			}
 			if legal {
-				return rect, true
+				var route []movement.Cell
+				if urgent {
+					route = make([]movement.Cell, depths[head]+1)
+					for i, at := len(route)-1, head; i >= 0; i, at = i-1, parents[at] {
+						route[i] = queue[at]
+					}
+				}
+				return rect, route, true
 			}
+		}
+		// Preserve every bend in the priority route within the follower's
+		// existing 20-point capacity; never truncate a route before clearance.
+		if urgent && depths[head] >= 19 {
+			continue
 		}
 		for _, delta := range directions {
 			next := movement.Cell{X: cell.X + delta.X, Z: cell.Z + delta.Z}
@@ -167,10 +198,12 @@ func (s *Service) factoryYieldDestination(u *units.Unit, forbidden []world.Footp
 			}
 			visited[index] = true
 			queue[tail] = next
+			parents[tail] = head
+			depths[tail] = depths[head] + 1
 			tail++
 		}
 	}
-	return world.FootprintRect{}, false
+	return world.FootprintRect{}, nil, false
 }
 
 func (s *Service) factoryYieldClear(self pool.Handle, rect world.FootprintRect, profile movement.Profile) bool {

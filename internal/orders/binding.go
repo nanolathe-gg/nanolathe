@@ -26,6 +26,11 @@ type QueueBinding struct {
 	// Nanolathe Modern policy: docs/DESIGN_UNITS_ORDERS_COB.md "Modern Hold Fire".
 	ModernHoldFire bool
 
+	// ModernBomberPass defers the maneuver leash until a bombing pass ends.
+	// Projected from the central gameplay mode; false retains Strict 3.1.
+	// Nanolathe Modern policy: DESIGN_MOVEMENT_PATH §3.4.1.
+	ModernBomberPass bool
+
 	Economy interface {
 		UnitBuckets(pool.Handle) *[2]economy.Bucket
 	}

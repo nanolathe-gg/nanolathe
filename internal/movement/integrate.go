@@ -140,12 +140,13 @@ type System struct {
 	// head after a replace/purge in the same tick.  Direct movement callers do
 	// not bind an order and retain the legacy SubmitMove surface used by the
 	// movement package fixtures.
-	activeOrders   []*activeMove
-	nextActivation uint64
-	arrivalHandles []*arrivalHandle // per-unit Move_Ground arrival handle [R-P0-01]
-	moveGoals      []*moveGoal      // per-unit movement-goal handle [04 §8.3][04 §7.4]
-	recordGoals    [][]recordGoal   // retained record objects, independent of controller binding [04 R-ORD-01 §9]
-	pathProvider   *pathProvider
+	clearanceRoutes []*modernClearanceRoute // one-shot Modern local paths, bound to an order
+	activeOrders    []*activeMove
+	nextActivation  uint64
+	arrivalHandles  []*arrivalHandle // per-unit Move_Ground arrival handle [R-P0-01]
+	moveGoals       []*moveGoal      // per-unit movement-goal handle [04 §8.3][04 §7.4]
+	recordGoals     [][]recordGoal   // retained record objects, independent of controller binding [04 R-ORD-01 §9]
+	pathProvider    *pathProvider
 	// AirSectors is the coarse second grid the map loader builds after the
 	// terrain is decoded: 128-world-unit cells whose smoothed byte is the
 	// maximum terrain height over the 3x3 block of sectors around each one
@@ -2023,6 +2024,10 @@ func (s *System) ActivateMove(u *units.Unit, head *orders.Node) bool {
 	if route := handleRow(s.Routes, u.Handle); route != nil && !selectedPoint {
 		goalPointX, goalPointZ, haveGoalPoint := groundGoalPoint(goalObj, u, fx, fz)
 		installGroundGoal(route, u, goalObj, goalPointX, goalPointZ, haveGoalPoint, allowSyntheticFor(head), s.staticObstacleRevision(), s.tick)
+	}
+	if s.consumeModernClearance(u, head, start, goal) {
+		s.bindArrivalHandle(u, head)
+		return true
 	}
 	s.submitGoalForOrder(u, start, goalObj, token)
 	s.bindArrivalHandle(u, head)

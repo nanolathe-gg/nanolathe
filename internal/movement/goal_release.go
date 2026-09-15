@@ -114,6 +114,7 @@ func (s *System) ReleaseGoalPayload(n *orders.Node) bool {
 	if u := s.unitFor(n.Owner); u != nil && u.Flags&units.BuildingClassStatus != 0 {
 		return false
 	}
+	s.discardModernClearance(n)
 	return s.releaseRecordGoal(n)
 }
 

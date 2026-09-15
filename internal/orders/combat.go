@@ -930,10 +930,20 @@ func airEntry(u *units.Unit, n *Node, satisfied uint32, interruptMask uint32) (C
 	}
 	// Step 3: the cached goal follows the target every visit.
 	n.GoalX, n.GoalY, n.GoalZ = tgt.X, tgt.Y, tgt.Z
-	if leashBroken(u, n) {
+	if !deferBomberLeash(u, n) && leashBroken(u, n) {
 		return Code(5), true // step 5, the maneuver leash [R-STANCE-01 §4]
 	}
 	return Code(0), false
+}
+
+// deferBomberLeash lets an accepted Modern bombing pass reach release and
+// finish overflight before applying its return-to-post leash. Phase 6 is
+// dispatched after overflight; ordinary completion then clears weapon targets
+// and resumes the queued return move. Target/cancel checks still precede this
+// decision. Nanolathe Modern policy: DESIGN_MOVEMENT_PATH §3.4.1.
+func deferBomberLeash(u *units.Unit, n *Node) bool {
+	b := bindingOfUnit(u)
+	return b != nil && b.ModernBomberPass && n.Phase >= 1 && n.Phase <= 5 && DescriptorFor(n.ID).Name == "AirStrike"
 }
 
 // spawnSeekAttack head-inserts the fresh `VTOL_SeekAttack` record the air

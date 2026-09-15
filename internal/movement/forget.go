@@ -61,6 +61,7 @@ func (s *System) ForgetUnit(h pool.Handle) {
 	setHandleRow(&s.prevSFXBand, h, 0)
 	setHandleRow(&s.pathFailures, h, nil)
 	setHandleRow(&s.activeOrders, h, nil)
+	setHandleRow(&s.clearanceRoutes, h, nil)
 	setHandleRow(&s.arrivalHandles, h, nil)
 	setHandleRow(&s.moveGoals, h, nil)
 

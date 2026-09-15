@@ -18,15 +18,15 @@ func TestGameplayChangesAtCommandBoundary(t *testing.T) {
 	if err := s.EnqueueHumanCommand(HumanCommand{Kind: HumanGameplay, Gameplay: gameplay.Strict31}); err != nil {
 		t.Fatal(err)
 	}
-	if !s.Combat.ModernTerrainAdmission || !s.Combat.ModernHoldFire || !s.Build.ModernFactoryExit || !s.Build.OrderBinding.ModernHoldFire {
+	if !s.Combat.ModernTerrainAdmission || !s.Combat.ModernHoldFire || !s.Build.ModernConstructionClearance || !s.Build.OrderBinding.ModernHoldFire || !s.Build.OrderBinding.ModernBomberPass {
 		t.Fatal("presentation changed combat before command boundary")
 	}
 	s.applyHumanCommands(11)
-	if s.Gameplay != gameplay.Strict31 || s.Combat.ModernTerrainAdmission || s.Combat.ModernHoldFire || s.Build.ModernFactoryExit || s.Build.OrderBinding.ModernHoldFire {
+	if s.Gameplay != gameplay.Strict31 || s.Combat.ModernTerrainAdmission || s.Combat.ModernHoldFire || s.Build.ModernConstructionClearance || s.Build.OrderBinding.ModernHoldFire || s.Build.OrderBinding.ModernBomberPass {
 		t.Fatal("strict command did not apply")
 	}
 	s.SetGameplay("")
-	if !s.Combat.ModernTerrainAdmission || !s.Combat.ModernHoldFire || !s.Build.ModernFactoryExit || !s.Build.OrderBinding.ModernHoldFire {
+	if !s.Combat.ModernTerrainAdmission || !s.Combat.ModernHoldFire || !s.Build.ModernConstructionClearance || !s.Build.OrderBinding.ModernHoldFire || !s.Build.OrderBinding.ModernBomberPass {
 		t.Fatal("default must be modern")
 	}
 }
@@ -60,10 +60,10 @@ func TestModernOrderPolicyComposition(t *testing.T) {
 	for _, mode := range []gameplay.Mode{gameplay.Modern, gameplay.Strict31, gameplay.Modern} {
 		s.SetGameplay(mode)
 		modern := mode == gameplay.Modern
-		if s.Combat.ModernHoldFire != modern || s.Build.ModernFactoryExit != modern || s.Build.OrderBinding.ModernHoldFire != modern {
+		if s.Combat.ModernHoldFire != modern || s.Build.ModernConstructionClearance != modern || s.Build.OrderBinding.ModernHoldFire != modern || s.Build.OrderBinding.ModernBomberPass != modern {
 			t.Fatalf("policy projection differs for %s", mode)
 		}
-		if b := s.newOrderBinding(); b.ModernHoldFire != modern {
+		if b := s.newOrderBinding(); b.ModernHoldFire != modern || b.ModernBomberPass != modern {
 			t.Fatalf("new queue retained wrong policy for %s", mode)
 		}
 		for _, u := range s.Units.Iter() {
@@ -72,7 +72,7 @@ func TestModernOrderPolicyComposition(t *testing.T) {
 				if !ok {
 					t.Fatalf("unit %d has no queue", u.Handle)
 				}
-				if q.Binding().ModernHoldFire != modern {
+				if q.Binding().ModernHoldFire != modern || q.Binding().ModernBomberPass != modern {
 					t.Fatalf("unit %d retained wrong policy for %s", u.Handle, mode)
 				}
 			}

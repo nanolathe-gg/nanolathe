@@ -59,6 +59,7 @@ func (s *System) ReleaseGoal(n *orders.Node) bool {
 	if s == nil || n == nil {
 		return false
 	}
+	s.discardModernClearance(n)
 	s.deleteRecordGoal(n, false)
 	return true
 }

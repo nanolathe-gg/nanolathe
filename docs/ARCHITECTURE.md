@@ -41,7 +41,7 @@ single-player battle.
 Authoritative behavior follows retail, including documented faults, except for
 the explicit Modern gameplay contracts (terrain admission in
 DESIGN_WEAPONS_PROJECTILES §2.3.1, Hold Fire in DESIGN_UNITS_ORDERS_COB,
-and factory-exit yielding in DESIGN_ECONOMY_CONSTRUCTION).
+and factory-exit/construction-site yielding in DESIGN_ECONOMY_CONSTRUCTION).
 Modern is the default gameplay choice; Strict 3.1 disables all intentional
 Modern gameplay departures. These documented differences must not be removed
 as parity defects. Each new departure requires a contract in its owning design

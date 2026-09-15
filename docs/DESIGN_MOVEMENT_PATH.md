@@ -38,9 +38,42 @@ immediate replan inside the collision commit. A blocked mover halves its speed,
 clamps against its old footprint boundary and proposes the same move next tick; what
 looks like sidestepping emerges from two independent timers — the follower's
 60-tick repath and the class layer's 30-tick occupant age — and from nothing
-else `[04 R-COLL-01 §7]` `[04 R-MOV-01 §7]`. Every plausible-looking addition
-in this area is invented behaviour, and it is indistinguishable from a traced
-contract once merged.
+else `[04 R-COLL-01 §7]` `[04 R-MOV-01 §7]`. Unapproved additions in this area invent retail behaviour. The explicit
+Modern construction-clearance contract below is a user-authorized exception
+and must not be removed as a parity defect.
+
+### Modern construction clearance priority
+
+**Nanolathe Modern policy.** Construction may supply `StageModernClearance`
+with a new idle blocker's `Move_Ground` record and a locally proven cardinal
+path. Only the central Modern policy produces these requests; Strict produces
+none. Eligibility, proof and work limits belong to
+[Modern construction-site yielding](DESIGN_ECONOMY_CONSTRUCTION.md#modern-construction-site-yielding).
+
+Staging writes no position, occupancy, speed, RNG or scheduler state. The hint
+is keyed by unit slot and exact order record. The next normal `ActivateMove`
+installs the ordinary goal/arrival ownership, verifies the hint's start and end
+against the live request and verifies cardinal adjacency, then publishes the
+complete local path through existing route storage instead of submitting A*.
+World waypoints use each committed cell plus the mover's half-footprint bias
+[04 §7.1]; point zero uses the actual current position. There is no smoothing.
+At most 20 points are accepted. The hint is consumed once, so later goal changes
+and collision-driven repaths keep the normal scheduler. A mismatched hint is
+discarded and ordinary activation proceeds. Explicit order cleanup and unit
+forgetting also discard pending hints, preventing slot reuse from inheriting one.
+
+This gives the construction request routing priority without interrupting an
+active global search or changing its budgets. The ordinary mover still owns
+turning, acceleration, collision, arrival and completion. No additional movement
+or order visit is run outside the authoritative phase sequence.
+
+The hint is transient and is not a retail save field. A route already installed
+uses ordinary route persistence; if saved before activation, the retained
+`Move_Ground` restores through ordinary pathfinding. Changing to Strict does not
+cancel an already issued move. These boundaries do not promise physical
+clearance when a route becomes obstructed or a unit cannot move fast enough.
+
+### Package boundaries
 
 The boundary runs at five places:
 
@@ -657,6 +690,49 @@ attach phase ends the transport. Admission is the nine rejects in order — the
 mover, a candidate in active locomotion, a ground carrier against a candidate
 authoring a non-negative `MinWaterDepth`, and a submerged candidate
 `[04 §10.2]` `[04 R-AIR-01 §9]` `[04 R-AIR-01 §10]` `[04 R-UNIT-06 §3]`.
+
+### 3.4.1 Modern bomber pass completion
+
+**Nanolathe Modern policy.** An accepted bombing pass may finish before its
+maneuver leash makes it return to post. The central `gameplay.Mode` projects
+this policy into the session's shared order binding; Strict 3.1 disables it.
+
+**Strict baseline (Established).** Autonomous Maneuver inserts a leashed
+attack followed by a return move [04 R-STANCE-01 §4]. Air attacks test that
+leash before their phase body [04 R-AIR-01 §8]. A close-target bomber setup
+uses a 2240-world-unit displacement and a strict 960-unit arrival radius
+[04 R-AIR-01 §8][04 R-AIR-01 §4]. The 1280-unit leash observed on the captured Thunder can
+therefore end the attack when setup arrives, before bomb release. This
+interaction reproduces in Nanolathe; exact repeated-loop timing in retail
+remains unverified. The individual retail rules remain unchanged in research.
+
+**Modern behavior.** Only `AirStrike` defers the leash in phases 1 through 5:
+setup, approach and release. Phase 6 is admitted after the overflight marker
+completes, and applies the ordinary inclusive leash comparison before starting
+another pass. If outside, normal order completion clears the weapon targets,
+releases the movement marker and exposes the saved return move. If inside,
+the existing break-off and next-pass/repair behavior continues. Phase 0 keeps
+its existing admission check. No new latch, target blacklist, trajectory
+prediction or serialized state is introduced.
+
+**Boundaries.** Target removal/cloaking, explicit cancellation and replacement,
+readiness failure and zero-gravity cancellation retain their existing paths.
+Hold Fire, resource costs, reload, aiming and projectile admission retain their
+own gates: reaching the release phase guarantees neither a launch nor a hit.
+Unleashed attacks, other air executors and ground combat retain their behavior.
+Changing the central mode affects the next handler visit, including an existing
+pass. The policy consumes no random draws or resources itself; completing a
+previously aborted pass naturally reaches the existing approach-jitter and
+weapon draw/cost sites.
+
+**Verification.** Focused order tests lock the phase boundary, inclusive leash,
+cancellation and executor scope, with unchanged RNG/resource state at the
+policy decision. A movement regression runs a close-target autonomous bombing
+attack through real order and flight updates: Strict returns before release;
+Modern reaches release, finishes overflight and returns when beyond the leash.
+Session tests cover command-boundary mode changes and existing/new queues.
+Run `tools/check`, `tools/check-retail` and the live battle performance checks
+from [BATTLE_BENCHMARK.md](BATTLE_BENCHMARK.md).
 
 ### 3.5 Goal-family wiring — `[OW-3-P]`
 

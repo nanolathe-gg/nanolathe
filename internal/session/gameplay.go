@@ -11,9 +11,10 @@ func (s *Session) SetGameplay(mode gameplay.Mode) {
 		s.Combat.ModernHoldFire = s.Gameplay == gameplay.Modern
 	}
 	if s.Build != nil {
-		s.Build.ModernFactoryExit = s.Gameplay == gameplay.Modern
+		s.Build.ModernConstructionClearance = s.Gameplay == gameplay.Modern
 		if s.Build.OrderBinding != nil {
 			s.Build.OrderBinding.ModernHoldFire = s.Gameplay == gameplay.Modern
+			s.Build.OrderBinding.ModernBomberPass = s.Gameplay == gameplay.Modern
 		}
 	}
 }
