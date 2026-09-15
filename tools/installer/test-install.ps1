@@ -18,6 +18,14 @@ function Assert-Equal($Actual, $Expected, [string]$Message) {
     if ($Actual -cne $Expected) { throw "$Message (actual: $Actual; expected: $Expected)" }
 }
 
+Assert-Equal (Resolve-NanolatheWindowsArchitecture @(9) $true) 'amd64' 'Native x64 selection'
+Assert-Equal (Resolve-NanolatheWindowsArchitecture @(12) $true) 'arm64' 'Native ARM64 selection, including emulated shells'
+Assert-Equal (Resolve-NanolatheWindowsArchitecture @(12, 12) $true) 'arm64' 'Multiple ARM64 processors'
+Assert-Throws { Resolve-NanolatheWindowsArchitecture @(9) $false } '32-bit PowerShell'
+Assert-Throws { Resolve-NanolatheWindowsArchitecture @() $true } 'missing CPU information'
+Assert-Throws { Resolve-NanolatheWindowsArchitecture @(0) $true } 'unsupported CPU'
+Assert-Throws { Resolve-NanolatheWindowsArchitecture @(9, 12) $true } 'inconsistent CPU information'
+
 $hash = 'a' * 64
 $manifest = @"
 version=alpha-1

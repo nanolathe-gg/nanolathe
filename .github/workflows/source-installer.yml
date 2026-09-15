@@ -29,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
+        os: [macos-latest, ubuntu-latest, windows-latest, windows-11-arm]
     runs-on: ${{ matrix.os }}
     env:
       CGO_ENABLED: '0'
@@ -78,7 +78,9 @@ jobs:
           $env:NANOLATHE_INSTALL_DIR = Join-Path $env:RUNNER_TEMP 'Nanolathe Install Test'
           if (([uri]$env:MANIFEST_URL).Scheme -ne 'https') { throw 'Manifest must use HTTPS' }
           $script = [IO.File]::ReadAllText((Join-Path $env:GITHUB_WORKSPACE 'tools/installer/install.ps1'))
-          & ([scriptblock]::Create($script.Replace('https://nanolathe.gg/install/release.txt', $env:MANIFEST_URL))) -NoRun
+          $manifestBase = $env:MANIFEST_URL.Substring(0, $env:MANIFEST_URL.LastIndexOf('/') + 1)
+          $script = $script.Replace('https://nanolathe.gg/install/release.txt', $env:MANIFEST_URL).Replace('https://nanolathe.gg/install/go', $manifestBase + 'go')
+          & ([scriptblock]::Create($script)) -NoRun
           $release = [IO.File]::ReadAllText((Join-Path $env:NANOLATHE_INSTALL_DIR 'current.txt'))
           & (Join-Path (Join-Path (Join-Path $env:NANOLATHE_INSTALL_DIR 'releases') $release) 'nanolathe.exe') --help
           # Exercise the launcher's bounded HTTP client on Windows PowerShell 5.1.
@@ -90,6 +92,11 @@ jobs:
           $installed = Read-NanolatheManifest ([IO.File]::ReadAllText($installedPath))
           if ($available.source_revision -cne $installed.source_revision) { throw 'Update check did not find the installed source release.' }
           Write-Host 'Native update manifest download and comparison passed.'
+          $installedExe = Join-Path (Join-Path (Join-Path $env:NANOLATHE_INSTALL_DIR 'releases') $release) 'nanolathe.exe'
+          $buildInfo = (& go version -m $installedExe) -join "`n"
+          $expectedArch = Resolve-NanolatheWindowsArchitecture @(Get-CimInstance Win32_Processor | Select-Object -ExpandProperty Architecture) $true
+          if ($buildInfo -notmatch "GOARCH=$expectedArch") { throw 'Installed executable does not match the native CPU.' }
+          Write-Host "Installed native Windows $expectedArch executable verified."
       - name: Upload installer diagnostics
         if: always() && inputs.manifest_url != ''
         uses: actions/upload-artifact@v4

@@ -34,6 +34,15 @@ function Read-NanolatheManifest([string]$Text) {
     return $values
 }
 
+function Resolve-NanolatheWindowsArchitecture([int[]]$NativeArchitectures, [bool]$Is64BitProcess) {
+    if (!$Is64BitProcess) { throw 'Run 64-bit PowerShell to install Nanolathe.' }
+    # Native CPU information also identifies ARM64 from an emulated x64 shell.
+    if ($NativeArchitectures.Count -eq 0) { throw 'Could not identify the native Windows architecture.' }
+    if (@($NativeArchitectures | Where-Object { $_ -ne 9 }).Count -eq 0) { return 'amd64' }
+    if (@($NativeArchitectures | Where-Object { $_ -ne 12 }).Count -eq 0) { return 'arm64' }
+    throw 'Nanolathe supports x64 and ARM64 Windows.'
+}
+
 function Test-NanolatheChecksum([string]$Path, [string]$Expected) {
     if ((Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash -ine $Expected) {
         throw "SHA-256 verification failed: $Path"
@@ -307,7 +316,7 @@ function Invoke-NanolatheInstaller {
     $ProgressPreference = 'SilentlyContinue'
     if ($Help) {
         Write-Host @'
-Nanolathe source installer for x64 Windows (PowerShell 5.1 or later).
+Nanolathe source installer for x64 and ARM64 Windows (PowerShell 5.1 or later).
 Usage: & ([scriptblock]::Create((irm https://nanolathe.gg/install.ps1))) [-Root PATH] [-NoRun]
 Rerun the same command to update. -NoRun skips game-folder selection and launch.
 Set NANOLATHE_INSTALL_DIR to override the default LOCALAPPDATA\Nanolathe folder.
@@ -315,16 +324,9 @@ Downloads verified source and a private Go compiler. Original game assets are re
 '@
         return
     }
-    if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'This installer supports x64 Windows only.' }
-    $architecture = $env:PROCESSOR_ARCHITECTURE
-    if ($env:PROCESSOR_ARCHITEW6432) { $architecture = $env:PROCESSOR_ARCHITEW6432 }
-    # Check the host as well as this process: x64 emulation on ARM reports an
-    # AMD64 process, which does not establish support for this alpha.
+    if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'This installer supports Windows only.' }
     $nativeArchitectures = @(Get-CimInstance -ClassName Win32_Processor | Select-Object -ExpandProperty Architecture)
-    if ($architecture -ine 'AMD64' -or ![Environment]::Is64BitProcess -or
-        $nativeArchitectures.Count -eq 0 -or @($nativeArchitectures | Where-Object { $_ -ne 9 }).Count -ne 0) {
-        throw 'This alpha supports x64 Windows only. Run 64-bit PowerShell on an x64 PC; ARM64 is not supported.'
-    }
+    $goArch = Resolve-NanolatheWindowsArchitecture $nativeArchitectures ([Environment]::Is64BitProcess)
     $base = $env:NANOLATHE_INSTALL_DIR
     if ([string]::IsNullOrWhiteSpace($base)) { $base = Join-Path $env:LOCALAPPDATA 'Nanolathe' }
     $base = [IO.Path]::GetFullPath($base)
@@ -350,12 +352,21 @@ Downloads verified source and a private Go compiler. Original game assets are re
         Write-Host "Release manifest verified: $($manifest.version)"
         $work = Join-Path $base ('work-' + [guid]::NewGuid().ToString('N'))
         [void][IO.Directory]::CreateDirectory($work)
-        $toolchainName = 'go-' + $manifest.go_version + '-' + $manifest.go_windows_amd64_sha256.Substring(0,16).ToLowerInvariant()
+        $goHash = $manifest.go_windows_amd64_sha256
+        if ($goArch -eq 'arm64') {
+            # Keep release.txt compatible with installed Unix launchers, which
+            # reject unknown keys. The Go version pins this separate checksum.
+            $checksumPath = Join-Path $work 'go-arm64.sha256'
+            Invoke-WebRequest -UseBasicParsing -Uri "https://nanolathe.gg/install/go$($manifest.go_version).windows-arm64.sha256" -OutFile $checksumPath -TimeoutSec 60
+            $goHash = [IO.File]::ReadAllText($checksumPath).Trim()
+            if ($goHash -cnotmatch '^[0-9a-f]{64}$') { throw 'Invalid Windows ARM64 Go checksum.' }
+        }
+        $toolchainName = 'go-' + $manifest.go_version + '-' + $goHash.Substring(0,16).ToLowerInvariant()
         $toolchain = Join-Path (Join-Path $base 'toolchains') $toolchainName
         $go = Join-Path $toolchain 'go\bin\go.exe'
         if (!(Test-Path -LiteralPath $go -PathType Leaf)) {
             $archive = Join-Path $work 'go.zip'
-            Get-NanolatheDownload "https://go.dev/dl/go$($manifest.go_version).windows-amd64.zip" $archive $manifest.go_windows_amd64_sha256
+            Get-NanolatheDownload "https://go.dev/dl/go$($manifest.go_version).windows-$goArch.zip" $archive $goHash
             $unpack = Join-Path $work 'toolchain'
             Expand-NanolatheArchive $archive $unpack
             if (!(Test-Path -LiteralPath (Join-Path $unpack 'go\bin\go.exe'))) { throw 'Go archive is missing go.exe.' }
@@ -369,12 +380,12 @@ Downloads verified source and a private Go compiler. Original game assets are re
         if (!(Test-Path -LiteralPath (Join-Path $source 'go.sum'))) { throw 'Source archive is missing go.sum.' }
         $sumBefore = (Get-FileHash -LiteralPath (Join-Path $source 'go.sum') -Algorithm SHA256).Hash
         $environment = @{
-            GOENV = 'off'; GOTOOLCHAIN = 'local'; CGO_ENABLED = '0'; GOOS = 'windows'; GOARCH = 'amd64'; GO111MODULE = 'on'
+            GOENV = 'off'; GOTOOLCHAIN = 'local'; CGO_ENABLED = '0'; GOOS = 'windows'; GOARCH = $goArch; GO111MODULE = 'on'
             GOPATH = (Join-Path $base 'cache\gopath'); GOCACHE = (Join-Path $base 'cache\build')
             GOROOT = (Join-Path $toolchain 'go'); GOFLAGS = ''; GOWORK = 'off'
             GOMODCACHE = (Join-Path $base 'cache\gopath\pkg\mod')
             GOPROXY = 'https://proxy.golang.org'; GOSUMDB = 'sum.golang.org'
-            GOPRIVATE = ''; GONOPROXY = ''; GONOSUMDB = ''; GOEXPERIMENT = ''; GOAMD64 = 'v1'
+            GOPRIVATE = ''; GONOPROXY = ''; GONOSUMDB = ''; GOEXPERIMENT = ''; GOAMD64 = 'v1'; GOARM64 = 'v8.0'
         }
         foreach ($key in $environment.Keys) {
             $savedEnvironment[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')

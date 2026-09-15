@@ -13,7 +13,7 @@ Mac or Linux, in Terminal:
 curl -fsSL https://nanolathe.gg/install.sh | bash
 ```
 
-Windows x64, in PowerShell:
+Windows x64 or ARM64, in PowerShell:
 
 ```powershell
 & ([scriptblock]::Create((irm https://nanolathe.gg/install.ps1)))
@@ -37,10 +37,10 @@ original shortcut launcher with one that checks for updates. You can also close
 the game and rerun that command whenever you want to update manually.
 
 Supported installer targets: Mac Intel/Apple Silicon, Linux x86-64/ARM64, and
-Windows x64. Linux requires a graphical desktop and the window-system, graphics,
+Windows x64/ARM64. Linux requires a graphical desktop and the window-system, graphics,
 and audio runtime libraries used by Ebitengine. Go alone builds the desktop
-engine; a separate C compiler is not required. Windows ARM64 is not supported by
-this first installer.
+engine; a separate C compiler is not required. The Windows installer selects a native compiler and engine for the host CPU,
+including when PowerShell itself runs under x64 emulation on ARM64.
 
 These builds have no paid publisher signature. Locally building the game does
 not override OS execution policies. The ordinary Windows SmartScreen dialog may
@@ -113,7 +113,11 @@ compiler and cache too. The original TA installation remains separate.
 The canonical scripts live here; the website serves byte-for-byte copies as
 `/install.sh` and `/install.ps1`. A website-owned `/install/release.txt` pins the
 source commit, source archive hashes, Go patch version, and per-platform Go
-archive hashes. Manifest data is never evaluated as code. Downloads use HTTPS;
+archive hashes. Windows ARM64 uses a separate, versioned
+`/install/go<version>.windows-arm64.sha256` checksum file so existing Unix
+launchers can still parse the release manifest. The release generator obtains
+that checksum from the same official Go release metadata and preserves existing
+versioned checksum files. Manifest data is never evaluated as code. Downloads use HTTPS;
 hashes pin the expected bytes but are not a separate publisher signature.
 
 1. Integrate changes and run `tools/check`, `tools/check-retail`, and the native
