@@ -290,6 +290,8 @@ Public API:
 * `(*Renderer).ExecuteOver(list, background *ebiten.Image, w, h int)` — the
   paused path: copy a retained world composite in, then execute a
   foreground-only list over it (§13.10 "Paused world reuse").
+* `(*Renderer).PrepareTerrain(drawlist.Terrain)` prepares the native and detail
+  terrain atlas keys during loading (§14.8), without replaying a frame.
 * `(*Renderer).SetEffects`, `SetGlow`, `ResetSources`, and the diagnostics
   `DeviceDraws`, `ModelStats`, `FogContentError`, `DebugSnapshot`,
   `DebugLastFrame`.
@@ -297,8 +299,9 @@ Public API:
   set, scale), GAF frame atlases filled on first use, FNT glyph atlases, the 3DO
   texture atlas with its LOGOS frames.
 
-There is **no art binder**. Everything but the palette arrives as recorded
-commands; the executor caches by the pointer identity the record carries.
+Draw art arrives as recorded commands; the executor caches by the pointer
+identity the record carries. Loading can supply the same immutable terrain
+identities early through `PrepareTerrain` (§14.8).
 
 **Two surfaces, both true colour.** `surfaces[0]` is the composite the whole
 frame is drawn into and the image `Execute` returns: every source index is
@@ -337,7 +340,8 @@ The terrain reference also retains its movement-service binding.
 ### 2.4 `internal/platform/ebitenapp` — the switch
 
 The adapter owns one `client.Client` and, lazily, one `gpurender.Renderer` built
-on the first modern Draw, so a classic run never allocates device textures.
+on modern loading preparation or the first modern Draw, so a classic run never
+allocates device textures.
 `RendererMode` is `RendererClassic` or `RendererModern`; it is host state, never
 client state, and an unrecognised value presents classic. `Draw` either uploads
 the classic bytes or executes the list (§13.10).
@@ -2102,6 +2106,40 @@ geometry arrives in screen space and rasterizes as at 1×.
    the 1× capture of the same tick, at least the battle scenes and one
    sprite-heavy map; then the window itself, both executors, both scales,
    toggled with F9 and F10 during motion.
+
+### 14.8 Loading-time terrain upload
+
+Modern battle loading prepares both native and detail terrain atlases after
+successful client binding, before returning to interactive presentation. The
+client's `PrepareBattlePresentation` hook calls the window device owner; no GPU
+calls run on the content loader goroutine. Fresh loads and save restoration use
+the hook while the retained loading/front-end image is still on screen. Direct
+map startup and a battle first entered with classic prepare on the first modern
+draw instead. A failed load never invokes the hook.
+
+`BattleTerrainSources` returns the installed immutable terrain and the same
+complete detail provider the recorder would admit at 2×, without changing zoom,
+recording a frame, advancing animation or consuming either random stream.
+`Renderer.PrepareTerrain` calls the ordinary atlas cache for native with no
+detail identity and detail with the provider identity (or nearest doubling).
+The source-generation barrier retires the previous battle before preparation;
+the first draw keeps those same pages. Teardown retires both scales through
+`ResetSources`, and ordinary draws only check a readiness bit.
+
+This is Nanolathe loading policy, not a retail claim. It moves CPU packing and
+GPU upload submission earlier and retains the 2× atlas even when the player
+never zooms. Its padded RGBA8 cells cost 66×66×4 bytes per detail tile, plus
+unused cells at the end of each page; native remains 34×34×4 per tile. Device
+allocation can add overhead beyond these source-image extents. Loading takes
+longer; sustained rendering executes the same cached atlas path. Dynamic model
+scratch, newly visible sprites and other first-use resources remain demand
+allocated; this change does not promise every first-view cost is eliminated.
+
+Verification checks exact cache identity with and without a provider, zero
+allocation on the warm detail lookup, retirement of both scales, classic's
+device-free loading, and lifecycle invalidation. Compare cold and prepared
+first-detail submissions separately from repeated detail draws; upload
+submission time is not a GPU completion timestamp (§6).
 
 ## 15. Trails: Enhanced ground marks
 

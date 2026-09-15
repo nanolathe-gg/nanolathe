@@ -79,15 +79,31 @@ func TestLifecycleTerrainTransitionsInvalidatePausedSourcesOnce(t *testing.T) {
 		c.SetTerrain(terrain)
 		a.paused.valid = true
 		a.pipe.armed = true
+		a.sourcesPrepared = true
 		a.syncRendererSources()
-		if a.sourceGeneration != c.TerrainGeneration() || a.paused.valid || a.pipe.armed {
+		if a.sourceGeneration != c.TerrainGeneration() || a.paused.valid || a.pipe.armed || a.sourcesPrepared {
 			t.Fatal("terrain transition retained previous presentation")
 		}
 		a.paused.valid = true
+		a.sourcesPrepared = true
 		a.syncRendererSources()
-		if !a.paused.valid {
+		if !a.paused.valid || !a.sourcesPrepared {
 			t.Fatal("unchanged terrain reset its warm presentation")
 		}
+	}
+}
+
+func TestClassicLoadingDoesNotCreateGPUResources(t *testing.T) {
+	c, err := client.New(client.Options{Width: 32, Height: 32})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &app{c: c, mode: RendererClassic}
+	c.SetBattlePresentationPreparer(a.prepareBattlePresentation)
+	c.SetTerrain(&world.Terrain{TileSet: make([][1024]byte, 1), TileIndices: []uint16{0}})
+	c.PrepareBattlePresentation()
+	if a.gpu != nil || a.sourcesPrepared {
+		t.Fatal("classic loading allocated a modern renderer")
 	}
 }
 

@@ -57,6 +57,7 @@ type app struct {
 	mode             RendererMode
 	gpu              *gpurender.Renderer
 	sourceGeneration uint64
+	sourcesPrepared  bool
 	// rendererToggles is the client's executor-swap request count this adapter
 	// has already acted on. Update compares it with the client's own count, so
 	// one F10 press swaps once (docs/DESIGN_GPU_RENDERER.md §14.6).
@@ -370,8 +371,10 @@ func (a *app) Draw(screen *ebiten.Image) {
 // (docs/DESIGN_GPU_RENDERER.md §2.4). The renderer is built lazily on first use
 // from the installed palette.
 func (a *app) drawModern(screen *ebiten.Image, width, height int) {
-	if a.gpu == nil {
-		a.gpu = gpurender.New(a.c.PaletteTables(), width, height)
+	if !a.sourcesPrepared {
+		// Direct --map entry and the first classic-to-modern switch have no
+		// modern loading callback. Prepare once before their first battle draw.
+		a.prepareBattlePresentation()
 	}
 	// The pipeline's second barrier: this Draw is about to settle fractions,
 	// drain audio and either consume or replace the pre-recorded list, and none
@@ -495,6 +498,7 @@ func (a *app) syncRendererSources() {
 		a.gpu.ResetSources()
 	}
 	a.sourceGeneration = generation
+	a.sourcesPrepared = false
 }
 
 // launchPreRecord rechecks the executor after the deferred Update: that body
@@ -669,6 +673,8 @@ func Run(c *client.Client, mode RendererMode, options RunOptions) error {
 		be.WarmUp()
 	}
 	game := &app{c: c, mode: mode, options: options, fullscreen: options.Fullscreen}
+	game.c.SetBattlePresentationPreparer(game.prepareBattlePresentation)
+	defer game.c.SetBattlePresentationPreparer(nil)
 	game.c.SetDebugDeviceCapture(game.writeDebugDeviceCapture)
 	defer game.c.SetDebugDeviceCapture(nil)
 	defer game.paused.clear()

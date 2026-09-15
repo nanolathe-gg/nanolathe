@@ -296,6 +296,7 @@ func (g *gameShell) loadRetailSavePath(path string) error {
 	}
 	g.importedRetailBattle = true
 	g.commitBattleCandidate(battle)
+	clPtr.PrepareBattlePresentation()
 	battle.beginBattleArrival(g.opts, clPtr, true)
 	return nil
 }
@@ -412,6 +413,8 @@ func (g *gameShell) stepLoading(delta float64) {
 			g.openMenu(returnMode)
 			g.bindFrontendClient(clPtr)
 			reportRetailMessageError(g.showRetailMessage(err.Error()))
+		} else {
+			clPtr.PrepareBattlePresentation()
 		}
 	default:
 	}

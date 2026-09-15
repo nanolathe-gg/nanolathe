@@ -196,9 +196,10 @@ type Client struct {
 	// terrainGeneration lets the host retire source caches after a battle
 	// transition without keeping the old world alive through a cache key
 	// (DESIGN_GPU_RENDERER §14.3). It is presentation bookkeeping only.
-	terrainGeneration uint64
-	cam               *camera.Camera
-	fnt               *formats.FNT
+	terrainGeneration         uint64
+	prepareBattlePresentation func()
+	cam                       *camera.Camera
+	fnt                       *formats.FNT
 	// messageFNT is the primary COMIX face selected by the later message pass;
 	// the group-digit walk retains the side font in fnt [07 R-HUD-03 §14.4]
 	// [03 R-FX-01 §6A].
