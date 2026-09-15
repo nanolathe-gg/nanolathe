@@ -1,9 +1,12 @@
 package client
 
 import (
+	"math"
+
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/render"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
@@ -76,11 +79,14 @@ func (c *Client) arrivalPacket() drawlist.Arrival {
 	u := c.arrival.unit
 	x, y := c.cam.WorldToScreen(u.X, u.Y, u.Z)
 	gx, gy := c.cam.WorldToScreen(0, 0, 0)
-	return drawlist.Arrival{Active: true, Seconds: c.arrival.seconds,
+	a := drawlist.Arrival{Active: true, Seconds: c.arrival.seconds,
 		X: float32(x - camera.OriginX), Y: float32(y - camera.OriginY),
 		GridX: float32(gx - camera.OriginX), GridY: float32(gy - camera.OriginY),
 		Scale: float32(c.cam.EffectiveScale().Project(32)) / 32,
 	}
+	a.DropHeight = c.arrivalDropHeight()
+	a.RevealRadius = c.arrivalRevealRadius(a)
+	return a
 }
 
 func (c *Client) arrivalMatches(v frame.UnitView) bool {
@@ -99,7 +105,7 @@ func (c *Client) arrivalUnit(v frame.UnitView) frame.UnitView {
 	if t < 1 {
 		// Accelerate into contact rather than braking at the ground. Height
 		// shear halves the displayed lift; only a value copy changes [I6].
-		v.Y += numeric.Fixed(640 * (1 - t*t*t) * 65536)
+		v.Y += numeric.Fixed(c.arrivalDropHeight() * (1 - t*t*t) * 65536)
 		v.NoShadow = true
 	}
 	return v
@@ -132,4 +138,74 @@ func (c *Client) applyArrivalHeat(g *drawlist.ModelGeometry, v frame.UnitView) {
 	g.WreckHeatStrength = 0.85 * cool * cool
 	g.WreckHeatScale = float32(c.viewScale().Float())
 	g.WreckHeatTime = c.arrival.seconds * 30
+}
+
+// Measure only the chunks the player can actually see. Using the viewport's
+// black corners made a small starting island finish long before the drop.
+// Fog Ch0 == 15 is wholly unexplored; partial edges and explored gray terrain
+// still contain image pixels and participate [03 §3.3]. No GPU readback needed.
+func (c *Client) arrivalRevealRadius(a drawlist.Arrival) float32 {
+	if c.buffer == nil || c.buffer.Current() == nil || c.cam == nil || a.Scale <= 0 {
+		return 0
+	}
+	fog := c.buffer.Current().Fog
+	if !fog.Valid {
+		return 0
+	}
+	if _, ok := visibilityGridSize(fog.W, fog.H, len(fog.Ch0)); !ok {
+		return 0
+	}
+	viewport := c.battleViewportRect()
+	factor := float32(c.cam.EffectiveZoom().Float()) / a.Scale
+	ox, oy := float32(0), float32(0)
+	if c.camBlending {
+		factor = float32(c.camDrawView.Factor) / a.Scale
+		ox = float32((float64(c.cam.X) - c.camDrawView.X) * c.camDrawView.Factor)
+		oy = float32((float64(c.cam.Z) - c.camDrawView.Z) * c.camDrawView.Factor)
+	}
+	left, top := (float32(viewport.X)-ox)/factor, (float32(viewport.Y)-oy)/factor
+	right, bottom := (float32(viewport.X+viewport.W)-ox)/factor, (float32(viewport.Y+viewport.H)-oy)/factor
+	tile := 32 * a.Scale
+	farSquared := float32(0)
+	for z := int32(0); z < fog.H; z++ {
+		for x := int32(0); x < fog.W; x++ {
+			if fog.Ch0[z*fog.W+x] == 15 {
+				continue
+			}
+			x0, y0, x1, y1 := render.FogScreenRect(c.cam, x+fog.OriginX, z+fog.OriginZ)
+			l, t := max(left, float32(x0-camera.OriginX)), max(top, float32(y0-camera.OriginY))
+			r, b := min(right, float32(x1-camera.OriginX)), min(bottom, float32(y1-camera.OriginY))
+			if l >= r || t >= b {
+				continue
+			}
+			// The reveal animates grid-aligned chunks, not individual fog pixels.
+			// Match the shader's cell centres, including partially exposed chunks.
+			for _, p := range [4][2]float32{{l, t}, {r - 0.001, t}, {l, b - 0.001}, {r - 0.001, b - 0.001}} {
+				cx := a.GridX + (float32(math.Floor(float64((p[0]-a.GridX)/tile)))+0.5)*tile
+				cy := a.GridY + (float32(math.Floor(float64((p[1]-a.GridY)/tile)))+0.5)*tile
+				dx, dy := (cx-a.X)/a.Scale, (cy-a.Y)/a.Scale
+				farSquared = max(farSquared, dx*dx+dy*dy)
+			}
+		}
+	}
+	return max(32, float32(math.Sqrt(float64(farSquared))))
+}
+
+// Start in view at the upper edge, so the authored descent interval is visible
+// rather than spent crossing empty sky above the window (GPU §36).
+func (c *Client) arrivalDropHeight() float32 {
+	if c.cam == nil {
+		return 640
+	}
+	u := c.arrival.unit
+	_, sy := c.cam.WorldToScreen(u.X, u.Y, u.Z)
+	scale := float32(c.cam.EffectiveScale().Float())
+	factor := float32(c.cam.EffectiveZoom().Float()) / scale
+	oy := float32(0)
+	if c.camBlending {
+		factor = float32(c.camDrawView.Factor) / scale
+		oy = float32((float64(c.cam.Z) - c.camDrawView.Z) * c.camDrawView.Factor)
+	}
+	top := (float32(c.battleViewportRect().Y) - oy) / factor
+	return 2 * max(32, (float32(sy-camera.OriginY)-top)/scale-16)
 }

@@ -13,7 +13,7 @@ type arrivalLayer struct {
 	packet   drawlist.Arrival
 	resolved bool
 	clip     [4]float32
-	params   [11]float32
+	params   [13]float32
 	verts    [4]ebiten.Vertex
 	opts     ebiten.DrawTrianglesShaderOptions
 }
@@ -51,8 +51,8 @@ func (r *Renderer) resolveArrival() {
 		return
 	}
 	p, c := a.packet, a.clip
-	a.params = [11]float32{p.X, p.Y, p.GridX, p.GridY, p.Seconds, p.Scale,
-		drawlist.ArrivalImpactSeconds, drawlist.ArrivalDurationSeconds, drawlist.ArrivalDropSeconds, drawlist.ArrivalLeadSeconds, drawlist.ArrivalRevealSeconds}
+	a.params = [13]float32{p.X, p.Y, p.GridX, p.GridY, p.Seconds, p.Scale,
+		drawlist.ArrivalImpactSeconds, drawlist.ArrivalDurationSeconds, drawlist.ArrivalDropSeconds, drawlist.ArrivalLeadSeconds, drawlist.ArrivalRevealSeconds, p.RevealRadius, p.DropHeight}
 	if a.opts.Uniforms == nil {
 		a.opts.Uniforms = map[string]any{"Arrival": a.params[:], "Clip": a.clip[:]}
 	}
@@ -73,7 +73,7 @@ func newArrivalShader() (*ebiten.Shader, error) {
 const arrivalShaderSource = `//kage:unit pixels
 package main
 
-var Arrival [11]float
+var Arrival [13]float
 var Clip vec4
 
 // Sampling stays inside the copied viewport, including every bilinear tap.
@@ -114,7 +114,11 @@ func Fragment(dst vec4, src vec2, color vec4) vec4 {
 	if t < Arrival[10] {
 		// The commander falls while the last outer tiles are still settling.
 		revealTime := max(t-lead, 0)
-		speed := max(far+48, 240)/(Arrival[10]-lead-0.20)
+		extent := Arrival[11]
+		if extent <= 0 {
+			extent = max(far+48, 240)
+		}
+		speed := extent/(Arrival[10]-lead-0.20)
 		cell := floor((p-grid)/(32*scale))
 		cellCenter := grid+(cell+vec2(0.5))*32*scale
 		local := revealTime-length((cellCenter-center)/scale)/speed
@@ -127,7 +131,9 @@ func Fragment(dst vec4, src vec2, color vec4) vec4 {
 	if t < impact {
 		// A short warm streak follows the falling, heated model.
 		u := clamp((t-drop)/(impact-drop), 0, 1)
-		head := -320*(1-u*u*u)
+		height := Arrival[12]
+		if height <= 0 { height = 640 }
+		head := -height*0.5*(1-u*u*u)
 		trail := smoothstep(head-160, head-12, delta.y)*(1-smoothstep(head, head+12, delta.y))
 		core := exp(-delta.x*delta.x/24.0)*trail*u
 		rgb += hot*core*0.60*visibility*base.a

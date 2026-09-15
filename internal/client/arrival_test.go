@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 )
@@ -101,5 +102,54 @@ func TestArrivalHeatCoolsDuringGameplayAndDoesNotFollowReusedSlot(t *testing.T) 
 	c.applyArrivalHeat(&g, u)
 	if g.WreckEmission != [3]float32{} || g.WreckHeatStrength != 0 || c.arrival.cooling {
 		t.Fatal("heat did not retire")
+	}
+}
+
+func TestArrivalRevealMeasuresExploredTilesInsteadOfBlackViewport(t *testing.T) {
+	c, buffer := pipelineClient(t)
+	c.SetEnhanced(true)
+	c.width, c.height = 640, 480
+	c.cam = &camera.Camera{}
+	fog := frame.FogView{W: 40, H: 30, Valid: true, Ch0: make([]byte, 40*30)}
+	for i := range fog.Ch0 {
+		fog.Ch0[i] = 15
+	}
+	for z := 6; z <= 8; z++ {
+		for x := 9; x <= 11; x++ {
+			fog.Ch0[z*40+x] = 0
+		}
+	}
+	buffer.Current().Fog = fog
+	u := buffer.Current().Units[0]
+	u.X, u.Z = wu(320), wu(240)
+	c.StartArrival(u)
+	small := c.arrivalPacket().RevealRadius
+	if small <= 32 || small >= 160 {
+		t.Fatalf("small explored patch radius = %v", small)
+	}
+	c.width, c.height = 1024, 768
+	if got := c.arrivalPacket().RevealRadius; got != small {
+		t.Fatalf("black viewport padding changed radius: %v -> %v", small, got)
+	}
+	fog.Ch0[6*40+38] = 0 // Explored, but beyond the right edge.
+	if got := c.arrivalPacket().RevealRadius; got != small {
+		t.Fatalf("off-screen tile changed radius: %v", got)
+	}
+	fog.Ch0[6*40+17] = 1 // A partially exposed distant tile still matters.
+	if got := c.arrivalPacket().RevealRadius; got <= small {
+		t.Fatal("partial explored edge did not extend the reveal")
+	}
+	fog.Ch0[6*40+17] = 15
+	c.SetArrivalSeconds(drawlist.ArrivalDropSeconds)
+	for _, scale := range []camera.ViewScale{camera.ViewScaleNative, camera.ViewScaleDetail} {
+		c.cam.Scale = scale
+		raised := c.arrivalUnit(u)
+		_, sy := c.cam.WorldToScreen(raised.X, raised.Y, raised.Z)
+		if y := sy - camera.OriginY; y < camera.OriginY || y > camera.OriginY+scale.Px(32) {
+			t.Fatalf("drop starts outside upper viewport edge at scale %v: y=%v", scale, y)
+		}
+	}
+	if got := c.arrivalPacket().RevealRadius; got != small {
+		t.Fatalf("zoom changed world-space radius: %v -> %v", small, got)
 	}
 }

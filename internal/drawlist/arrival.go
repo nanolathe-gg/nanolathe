@@ -9,6 +9,11 @@ type Arrival struct {
 	X, Y         float32
 	GridX, GridY float32
 	Scale        float32
+	// RevealRadius is the farthest on-screen explored chunk in world pixels.
+	// Zero falls back to the viewport extent when fog metadata is unavailable.
+	RevealRadius float32
+	// DropHeight is the authored starting lift in world pixels.
+	DropHeight float32
 }
 
 // ArrivalImpactSeconds and ArrivalDurationSeconds are artistic prototype

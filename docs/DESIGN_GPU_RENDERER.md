@@ -4611,15 +4611,23 @@ cannot become accumulated tick debt. The ordinary pause mechanism is untouched.
 
 `Client` stores only commander identity, position, and elapsed presentation
 seconds. The commander is hidden during the map reveal until 1.05 seconds,
-then a local model-input copy accelerates downward from 640 world units above
-its committed height with cubic easing, hitting the ground at 1.33 seconds;
+then a local model-input copy accelerates downward with cubic easing, hitting
+the ground at 1.33 seconds. Starting lift places the commander at the top of the
+battle viewport, so his drop is visible throughout that interval;
 its shadow is suppressed during descent. No committed pose, occupancy, weapon,
 health, damage, or simulation RNG changes. Snapshot replacement retires the
 intro, and every time change cancels speculative recording before invalidating
 the presentation epoch.
 
 The world-begin packet carries elapsed seconds, landing position, map-grid
-origin, and recording scale by value. The executor transforms them once through
+origin, recording scale, starting lift, and explored reveal radius by value. The radius measures
+reveal-chunk centres overlapping on-screen fog cells whose channel zero is not
+15, including partial fog edges and gray explored terrain [03 §3.3]. Fully black
+fog and off-screen tiles do not set the reveal speed: even a small starting
+island fills the reveal interval and overlaps the descent. The short-lived scan
+reads the published fog grid and needs no GPU readback; missing fog metadata
+falls back to the viewport extent. The radius is in world pixels; positions and
+scale pass once through
 the world affine mapping. After fog and before interface, one viewport copy and
 one shader draw reveals the map with an overlapping warm descent streak and a
 strong warm impact flash, colourless distortion field, and damped screen recoil.

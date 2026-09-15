@@ -25,10 +25,10 @@ func TestArrivalTransformsOnceAndBoundsLifetime(t *testing.T) {
 	w := drawlist.WorldSpace{Begin: true, Step: camera.ViewScaleDetail,
 		Factor: 1.5, OffsetX: 3.25, OffsetY: -1.5,
 		Viewport: drawlist.Rect{X: 20, Y: 30, W: 600, H: 420},
-		Arrival:  drawlist.Arrival{Active: true, Seconds: 0.4, X: 200, Y: 120, GridX: -16, GridY: -24, Scale: 2}}
+		Arrival:  drawlist.Arrival{Active: true, Seconds: 0.4, X: 200, Y: 120, GridX: -16, GridY: -24, Scale: 2, RevealRadius: 75, DropHeight: 84}}
 	r.World(w)
 	a := r.arrival.packet
-	if !a.Active || a.X != 153.25 || a.Y != 88.5 || a.GridX != -8.75 || a.GridY != -19.5 || a.Scale != 1.5 {
+	if !a.Active || a.X != 153.25 || a.Y != 88.5 || a.GridX != -8.75 || a.GridY != -19.5 || a.Scale != 1.5 || a.RevealRadius != 75 || a.DropHeight != 84 {
 		t.Fatalf("arrival transform: %+v", a)
 	}
 	if r.arrival.clip != [4]float32{20, 30, 620, 450} {
@@ -81,7 +81,7 @@ func checkArrivalDevicePixels() error {
 		l.RecordClear()
 		l.RecordWorld(drawlist.WorldSpace{Begin: true, Step: camera.ViewScaleNative,
 			Viewport: drawlist.Rect{X: 20, Y: 16, W: 280, H: 208},
-			Arrival:  drawlist.Arrival{Active: active, Seconds: seconds, X: 160, Y: 136, GridX: -8, GridY: -16, Scale: 1}})
+			Arrival:  drawlist.Arrival{Active: active, Seconds: seconds, X: 160, Y: 136, GridX: -8, GridY: -16, Scale: 1, RevealRadius: 190, DropHeight: 220}})
 		for y := int32(16); y < 224; y += 8 {
 			for x := int32(20); x < 300; x += 8 {
 				l.RecordFill(drawlist.Fill{Rect: drawlist.Rect{X: x, Y: y, W: 8, H: 8}, Index: uint8(60 + ((x/8+y/8)%2)*60)})
