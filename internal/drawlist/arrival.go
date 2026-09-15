@@ -1,10 +1,12 @@
 package drawlist
 
-// Arrival is an authored, presentation-only skirmish opening (GPU design §36).
+// Arrival is an authored, presentation-only battle opening (GPU design §36).
 // Coordinates and Scale are in recording pixels; the world transform applies
 // once in the executor. Zero Active leaves ordinary rendering untouched.
 type Arrival struct {
-	Active       bool
+	Active bool
+	// RevealOnly ends after the map fade and bounce, without descent or impact.
+	RevealOnly   bool
 	Seconds      float32
 	X, Y         float32
 	GridX, GridY float32

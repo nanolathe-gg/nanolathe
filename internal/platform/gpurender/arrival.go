@@ -13,7 +13,7 @@ type arrivalLayer struct {
 	packet   drawlist.Arrival
 	resolved bool
 	clip     [4]float32
-	params   [13]float32
+	params   [14]float32
 	verts    [4]ebiten.Vertex
 	opts     ebiten.DrawTrianglesShaderOptions
 }
@@ -22,7 +22,11 @@ func (r *Renderer) prepareArrival(w drawlist.WorldSpace) {
 	a := w.Arrival
 	r.arrival.packet = drawlist.Arrival{}
 	r.arrival.resolved = false
-	if !a.Active || !(a.Seconds >= 0 && a.Seconds < drawlist.ArrivalDurationSeconds) || !(a.Scale > 0) {
+	duration := drawlist.ArrivalDurationSeconds
+	if a.RevealOnly {
+		duration = drawlist.ArrivalRevealSeconds
+	}
+	if !a.Active || !(a.Seconds >= 0 && a.Seconds < duration) || !(a.Scale > 0) {
 		return
 	}
 	// Positions receive the single §16 affine transform; lengths receive only
@@ -51,8 +55,11 @@ func (r *Renderer) resolveArrival() {
 		return
 	}
 	p, c := a.packet, a.clip
-	a.params = [13]float32{p.X, p.Y, p.GridX, p.GridY, p.Seconds, p.Scale,
+	a.params = [14]float32{p.X, p.Y, p.GridX, p.GridY, p.Seconds, p.Scale,
 		drawlist.ArrivalImpactSeconds, drawlist.ArrivalDurationSeconds, drawlist.ArrivalDropSeconds, drawlist.ArrivalLeadSeconds, drawlist.ArrivalRevealSeconds, p.RevealRadius, p.DropHeight}
+	if p.RevealOnly {
+		a.params[13] = 1
+	}
 	if a.opts.Uniforms == nil {
 		a.opts.Uniforms = map[string]any{"Arrival": a.params[:], "Clip": a.clip[:]}
 	}
@@ -73,7 +80,7 @@ func newArrivalShader() (*ebiten.Shader, error) {
 const arrivalShaderSource = `//kage:unit pixels
 package main
 
-var Arrival [13]float
+var Arrival [14]float
 var Clip vec4
 
 // Sampling stays inside the copied viewport, including every bilinear tap.
@@ -128,6 +135,9 @@ func Fragment(dst vec4, src vec2, color vec4) vec4 {
 		sway := sin(u*9.424778)*2*(1-u)*scale
 		sample := arrivalLinear(p+vec2(sway,lift))
 		rgb = sample.rgb*(0.025+0.975*reveal)
+	}
+	if Arrival[13] != 0 {
+		return vec4(min(rgb, vec3(base.a)), base.a)
 	}
 	if t < impact {
 		// A short warm streak follows the falling, heated model.

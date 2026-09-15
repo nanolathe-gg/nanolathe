@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -67,6 +68,29 @@ func TestArrivalSourceResetDropsTransientBindings(t *testing.T) {
 	}
 }
 
+func TestArrivalRevealOnlyEndsAtRevealBoundary(t *testing.T) {
+	r := &Renderer{w: 320, h: 240}
+	w := drawlist.WorldSpace{Begin: true, Step: camera.ViewScaleNative,
+		Arrival: drawlist.Arrival{Active: true, RevealOnly: true, Scale: 1}}
+	for _, tc := range []struct {
+		seconds float32
+		active  bool
+	}{
+		{-0.1, false},
+		{0, true},
+		{math.Nextafter32(drawlist.ArrivalRevealSeconds, 0), true},
+		{drawlist.ArrivalRevealSeconds, false},
+		{drawlist.ArrivalImpactSeconds, false},
+		{drawlist.ArrivalDurationSeconds, false},
+	} {
+		w.Arrival.Seconds = tc.seconds
+		r.World(w)
+		if a := r.arrival.packet; a.Active != tc.active || tc.active && !a.RevealOnly {
+			t.Fatalf("reveal-only at %v: %+v, want active %v", tc.seconds, a, tc.active)
+		}
+	}
+}
+
 // Called by the shared optional device loop. Authored checker/feature/pond
 // shapes exercise completed-scene sampling; no retail assets are needed.
 func checkArrivalDevicePixels() error {
@@ -76,12 +100,12 @@ func checkArrivalDevicePixels() error {
 	if err != nil {
 		return err
 	}
-	makeList := func(active bool, seconds float32) drawlist.List {
+	makeList := func(active, revealOnly bool, seconds float32) drawlist.List {
 		var l drawlist.List
 		l.RecordClear()
 		l.RecordWorld(drawlist.WorldSpace{Begin: true, Step: camera.ViewScaleNative,
 			Viewport: drawlist.Rect{X: 20, Y: 16, W: 280, H: 208},
-			Arrival:  drawlist.Arrival{Active: active, Seconds: seconds, X: 160, Y: 136, GridX: -8, GridY: -16, Scale: 1, RevealRadius: 190, DropHeight: 220}})
+			Arrival:  drawlist.Arrival{Active: active, RevealOnly: revealOnly, Seconds: seconds, X: 160, Y: 136, GridX: -8, GridY: -16, Scale: 1, RevealRadius: 190, DropHeight: 220}})
 		for y := int32(16); y < 224; y += 8 {
 			for x := int32(20); x < 300; x += 8 {
 				l.RecordFill(drawlist.Fill{Rect: drawlist.Rect{X: x, Y: y, W: 8, H: 8}, Index: uint8(60 + ((x/8+y/8)%2)*60)})
@@ -96,11 +120,14 @@ func checkArrivalDevicePixels() error {
 		l.RecordExpand()
 		return l
 	}
-	read := func(active bool, seconds float32) []byte {
-		list := makeList(active, seconds)
+	readMode := func(active, revealOnly bool, seconds float32) []byte {
+		list := makeList(active, revealOnly, seconds)
 		pix := make([]byte, w*h*4)
 		r.Execute(&list, w, h).ReadPixels(pix)
 		return pix
+	}
+	read := func(active bool, seconds float32) []byte {
+		return readMode(active, false, seconds)
 	}
 	before := read(false, 0)
 	plainDraws := r.DeviceDraws()
@@ -148,6 +175,47 @@ func checkArrivalDevicePixels() error {
 		}
 		if r.arrival.opts.Uniforms != nil || r.arrival.opts.Images[0] != nil {
 			return fmt.Errorf("completed arrival retained temporary bindings")
+		}
+	}
+	// Before descent, save reveal reuses the same fade and bounce. The neutral
+	// scene must remain neutral during descent time: any warm trail is a bug.
+	if !bytes.Equal(read(true, 0.75), readMode(true, true, 0.75)) {
+		return fmt.Errorf("reveal-only changed the existing fade and bounce")
+	}
+	for _, seconds := range []float32{0.2, 0.75, 1.18} {
+		after := readMode(true, true, seconds)
+		if seconds < 0.9 && bytes.Equal(before, after) {
+			return fmt.Errorf("reveal-only at %v did not affect scene", seconds)
+		}
+		if r.DeviceDraws() <= plainDraws {
+			return fmt.Errorf("reveal-only at %v retired before its endpoint", seconds)
+		}
+		if !bytes.Equal(after, readMode(true, true, seconds)) {
+			return fmt.Errorf("reveal-only at %v advanced during identical replay", seconds)
+		}
+		for i := 0; i < len(after); i += 4 {
+			if after[i] != after[i+1] || after[i] != after[i+2] {
+				return fmt.Errorf("reveal-only at %v added warm descent colour", seconds)
+			}
+			x, y := (i/4)%w, (i/4)/w
+			outside := x < 20 || x >= 300 || y < 16 || y >= 224
+			black := before[i] == 0 && before[i+1] == 0 && before[i+2] == 0
+			if (outside || black) && !bytes.Equal(before[i:i+4], after[i:i+4]) {
+				return fmt.Errorf("reveal-only at %v changed fog or chrome at %d,%d", seconds, x, y)
+			}
+		}
+		if seconds == 1.18 && bytes.Equal(after, read(true, seconds)) {
+			return fmt.Errorf("descent fixture failed to distinguish full arrival from reveal-only")
+		}
+	}
+	// A save resumes at the exact reveal endpoint. It never submits the later
+	// flash, shockwave or recoil, and releases all temporary composite bindings.
+	for _, seconds := range []float32{drawlist.ArrivalRevealSeconds, drawlist.ArrivalImpactSeconds, 1.35, drawlist.ArrivalDurationSeconds} {
+		if !bytes.Equal(before, readMode(true, true, seconds)) || r.DeviceDraws() != plainDraws {
+			return fmt.Errorf("completed reveal-only at %v changed ordinary pixels or draw count", seconds)
+		}
+		if r.arrival.opts.Uniforms != nil || r.arrival.opts.Images[0] != nil {
+			return fmt.Errorf("completed reveal-only retained temporary bindings")
 		}
 	}
 	return nil
