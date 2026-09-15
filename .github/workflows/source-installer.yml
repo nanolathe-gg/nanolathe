@@ -81,6 +81,15 @@ jobs:
           & ([scriptblock]::Create($script.Replace('https://nanolathe.gg/install/release.txt', $env:MANIFEST_URL))) -NoRun
           $release = [IO.File]::ReadAllText((Join-Path $env:NANOLATHE_INSTALL_DIR 'current.txt'))
           & (Join-Path (Join-Path (Join-Path $env:NANOLATHE_INSTALL_DIR 'releases') $release) 'nanolathe.exe') --help
+          # Exercise the launcher's bounded HTTP client on Windows PowerShell 5.1.
+          . ./tools/installer/install.ps1
+          $checkPath = Join-Path $env:RUNNER_TEMP 'update-check.txt'
+          Get-NanolatheUpdateDownload $env:MANIFEST_URL $checkPath 3
+          $available = Read-NanolatheManifest ([IO.File]::ReadAllText($checkPath))
+          $installedPath = Join-Path (Join-Path (Join-Path $env:NANOLATHE_INSTALL_DIR 'releases') $release) 'release.txt'
+          $installed = Read-NanolatheManifest ([IO.File]::ReadAllText($installedPath))
+          if ($available.source_revision -cne $installed.source_revision) { throw 'Update check did not find the installed source release.' }
+          Write-Host 'Native update manifest download and comparison passed.'
       - name: Upload installer diagnostics
         if: always() && inputs.manifest_url != ''
         uses: actions/upload-artifact@v4
