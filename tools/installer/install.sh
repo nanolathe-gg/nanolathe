@@ -131,7 +131,88 @@ write_launcher() {
 set -euo pipefail
 umask 077
 base=$1; shift
-binary="$(cd "$base/current" && pwd -P)/nanolathe"
+# Keep the installed executable selected if any update step fails.
+release=$(cd "$base/current" && pwd -P)
+binary="$release/nanolathe"
+read_update_manifest() {
+    local line key value seen='|'
+    manifest_revision= manifest_installer= manifest_version=
+    # Bash discards NUL bytes when reading; reject non-text before parsing.
+    [ "$(wc -c < "$1")" -le 16384 ] || return 1
+    [ "$(LC_ALL=C tr -d '\12\40-\176' < "$1" | wc -c)" -eq 0 ] || return 1
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in *=*) ;; *) return 1 ;; esac
+        key=${line%%=*}; value=${line#*=}
+        case "$seen" in *"|$key|"*) return 1 ;; esac
+        seen="$seen$key|"
+        case "$key" in
+            version) [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]] || return 1; manifest_version=$value ;;
+            source_revision) [[ "$value" =~ ^[0-9a-f]{40}$ ]] || return 1; manifest_revision=$value ;;
+            go_version) [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1 ;;
+            installer_sh_sha256|installer_ps1_sha256|source_tar_sha256|source_zip_sha256|go_darwin_arm64_sha256|go_darwin_amd64_sha256|go_linux_arm64_sha256|go_linux_amd64_sha256|go_windows_amd64_sha256)
+                [[ "$value" =~ ^[0-9a-f]{64}$ ]] || return 1
+                if [ "$key" = installer_sh_sha256 ]; then manifest_installer=$value; fi ;;
+            *) return 1 ;;
+        esac
+    done < "$1"
+    for key in version source_revision go_version source_tar_sha256 source_zip_sha256 go_darwin_arm64_sha256 go_darwin_amd64_sha256 go_linux_arm64_sha256 go_linux_amd64_sha256 go_windows_amd64_sha256; do
+        case "$seen" in *"|$key|"*) ;; *) return 1 ;; esac
+    done
+}
+offer_update() (
+    # A subshell owns temporary files and terminal descriptors, including on failure.
+    update_stage=$(mktemp -d "$base/.update-XXXXXXXX") || return 1
+    trap 'rm -rf "$update_stage"' EXIT
+    curl --disable --proto '=https' --proto-redir '=https' --tlsv1.2 --fail --location --silent \
+        --connect-timeout 2 --max-time 3 --max-filesize 16384 \
+        --output "$update_stage/release.txt" https://nanolathe.gg/install/release.txt 2>/dev/null || return 1
+    read_update_manifest "$release/release.txt" || return 1
+    installed_revision=$manifest_revision
+    read_update_manifest "$update_stage/release.txt" || return 1
+    [ -n "$manifest_installer" ] && [ "$manifest_revision" != "$installed_revision" ] || return 1
+    answer=
+    if { exec 6<> /dev/tty; } 2>/dev/null; then
+        printf '\nNanolathe %s has an update. Update & play? [y/N] (N: Play current version): ' "$manifest_version" >&6
+        IFS= read -r answer <&6 || return 1
+        exec 6>&-
+        case "$answer" in y|Y|yes|YES) ;; *) return 1 ;; esac
+    elif [ "$(uname -s)" = Darwin ]; then
+        answer=$(/usr/bin/osascript - "$manifest_version" <<'APPLE' 2>/dev/null
+on run argv
+    set choice to display dialog ("Nanolathe " & item 1 of argv & " has an update. Building it may take several minutes.") with title "Nanolathe" buttons {"Play current version", "Update & play"} default button "Play current version" cancel button "Play current version"
+    return button returned of choice
+end run
+APPLE
+) || return 1
+        [ "$answer" = 'Update & play' ] || return 1
+    else
+        return 1
+    fi
+    printf 'Downloading the Nanolathe updater…\n'
+    if ! curl --disable --proto '=https' --proto-redir '=https' --tlsv1.2 --fail --location --silent --show-error \
+        --connect-timeout 5 --max-time 60 --max-filesize 1048576 \
+        --output "$update_stage/install.sh" https://nanolathe.gg/install.sh; then
+        printf 'Update download failed; playing the current version.\n' >&2; return 1
+    fi
+    if command -v shasum >/dev/null; then
+        actual=$(shasum -a 256 < "$update_stage/install.sh") || return 1
+    elif command -v sha256sum >/dev/null; then
+        actual=$(sha256sum < "$update_stage/install.sh") || return 1
+    else
+        return 1
+    fi
+    if [ "${actual%% *}" != "$manifest_installer" ]; then
+        printf 'Update checksum failed; playing the current version.\n' >&2; return 1
+    fi
+    if ! NANOLATHE_INSTALL_DIR="$base" /bin/bash "$update_stage/install.sh" --no-run; then
+        printf 'Update failed; playing the current version.\n' >&2; return 1
+    fi
+)
+if [ "${NANOLATHE_SKIP_UPDATE_CHECK:-}" = 1 ]; then
+    unset NANOLATHE_SKIP_UPDATE_CHECK
+elif offer_update; then
+    NANOLATHE_SKIP_UPDATE_CHECK=1 exec /bin/bash "$base/launch.sh" "$@"
+fi
 log="$base/logs/run-$(date +%Y%m%d-%H%M%S)-$$.log"
 export NANOLATHE_SETTINGS="$base/settings.json"
 root= explicit=false desktop=false
@@ -216,7 +297,7 @@ root_file=$(mktemp "$base/.game-root-XXXXXXXX")
 printf '%s\n' "$root" > "$root_file"
 mv -f "$root_file" "$base/game-root"
 printf 'Nanolathe log: %s\n' "$log"
-# The launcher never downloads or compiles. Device/library errors go to this log.
+# Device/library errors go to this log.
 "$binary" --root "$root" --save-dir "$base/saves" "$@" >> "$log" 2>&1
 LAUNCHER
     chmod +x "$1"
@@ -272,4 +353,4 @@ install_release >> "$log" 2>&1
 rm -rf "$stage"; stage=
 rmdir "$base/.install-lock"
 trap - EXIT
-if [ "$no_run" = false ]; then exec /bin/bash "$base/launch.sh"; fi
+if [ "$no_run" = false ]; then NANOLATHE_SKIP_UPDATE_CHECK=1 exec /bin/bash "$base/launch.sh"; fi
