@@ -526,7 +526,7 @@ func (t *modelTarget) commit(dst []uint8, width, height int) {
 // commitBlock is the nearest-neighbour form of commit and tintedCommit for
 // Original at a magnified view: every image pixel covers the block of
 // framebuffer pixels between its own screen position and the next image
-// pixel's — 2×2 at 2x, one or two wide at 1.5x — about the anchor, clipped to
+// pixel's — 2×2 at 2x — about the anchor, clipped to
 // the framebuffer. With alp nil it is the keyed body blit; with alp set it is
 // the translucent shadow blit. The image itself was rasterized at native
 // size, so the block is the whole of the scaling (DESIGN_GPU_RENDERER §14.2).

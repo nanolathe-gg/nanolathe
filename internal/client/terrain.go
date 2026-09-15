@@ -26,9 +26,7 @@ const (
 	terrainTileSize   = 32   // pixels per tile side [03 §2.1] C1
 	terrainTilePixels = 1024 // 32×32 [03 §2.2] C5
 	// detailTileSize and detailTilePixels are the 2x tile of the detail view,
-	// the largest tile any scale needs; the 1.5x view's 48x48 tiles occupy the
-	// same slots with their own side as the row stride
-	// (DESIGN_GPU_RENDERER §14.3): one 64x64 index tile per TileSet entry.
+	// one 64x64 index tile per TileSet entry (DESIGN_GPU_RENDERER §14.3).
 	// detailTilePixels is drawlist.DetailTilePixels, so the two tile types are
 	// the same Go type and a tile set passes across the record unconverted.
 	detailTileSize   = terrainTileSize * 2
@@ -243,8 +241,7 @@ func blitTerrain(dst []uint8, dstW, dstH int, t *world.Terrain, cam *camera.Came
 			// nearest sampling through the scale's inverse (DESIGN_GPU_RENDERER
 			// §14.2, §14.3). Both are one walk over an exact integer rectangle:
 			// the source pixel of destination column dx is dx - sx for the
-			// detail tile and Inverse(dx - sx) for the native one — at 2x the
-			// halving the doubled tile always had, at 1.5x floor(2/3 of it).
+			// detail tile and Inverse(dx - sx) for the native one, halving it at 2x.
 			srcSide := terrainTileSize
 			src := tile[:]
 			direct := true

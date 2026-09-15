@@ -182,9 +182,9 @@ func checkTerrainDeviceScale(scale camera.ViewScale) error {
 }
 
 // checkTerrainDevicePixels is the device-loop entry point: the native scale
-// (which must be unchanged by §14.5), the 1.5x view and the detail scale.
+// (which must be unchanged by §14.5) and the detail scale.
 func checkTerrainDevicePixels() error {
-	for _, scale := range []camera.ViewScale{camera.ViewScaleNative, camera.ViewScaleMid, camera.ViewScaleDetail} {
+	for _, scale := range []camera.ViewScale{camera.ViewScaleNative, camera.ViewScaleDetail} {
 		if err := checkTerrainDeviceScale(scale); err != nil {
 			return err
 		}

@@ -38,9 +38,7 @@ import (
 // The disc is magnified by the view scale through the sampler rather than by the
 // recorder's per-source-pixel loop. At the native and detail scales that is the
 // same pixel set the loop covers — the span of source pixel c is
-// [Project(c-Offset), Project(c-Offset+1)), which is c and 2c exactly — and at
-// the 1.5× step the loop's alternating one- and two-wide columns become nearest
-// sample columns instead (§13.11 "Divergences").
+// [Project(c-Offset), Project(c-Offset+1)), which is c and 2c exactly.
 //
 // # The halo: a fragment test
 //

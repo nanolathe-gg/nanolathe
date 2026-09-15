@@ -349,10 +349,10 @@ func TestFogAtlasFitsRetail(t *testing.T) {
 // [03 §4.3.3]. The fill therefore uses an index whose PAL entry is NOT grey, so
 // the desaturation is visible: (30,60,90) averages to 60.
 func checkFogDevicePixels() error {
-	// The native scale, then the 1.5x and the detail view (§14.2): every
+	// The native scale, then the detail view (§14.2): every
 	// rectangle and the frame the cell draws scale together, and the checker
 	// does not.
-	for _, scale := range []camera.ViewScale{camera.ViewScaleNative, camera.ViewScaleMid, camera.ViewScaleDetail} {
+	for _, scale := range []camera.ViewScale{camera.ViewScaleNative, camera.ViewScaleDetail} {
 		if err := checkFogScrollDevicePixelsAt(scale); err != nil {
 			return err
 		}

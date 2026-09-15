@@ -149,12 +149,12 @@ func (r *ModelPreviewRenderer) recordModel(opts ModelPreviewOptions, geometryOnl
 	if opts.Width <= 0 || opts.Height <= 0 || opts.Width > maxModelPreviewDimension || opts.Height > maxModelPreviewDimension {
 		return ModelPreviewRecord{}, fmt.Errorf("nanolathe: rendering model preview: output size %dx%d outside 1..%d", opts.Width, opts.Height, maxModelPreviewDimension)
 	}
-	// The view scale is one of the three views: 0 or 1 is native, 1.5 the
-	// mid view and 2 the detail view (DESIGN_GPU_RENDERER §14.1). Any other
-	// request is rejected rather than rounded, so a caller learns the
+	// The view scale is one of two views: 0 or 1 is native and 2 is the
+	// detail view (DESIGN_GPU_RENDERER §14.1). Any other request is rejected
+	// rather than rounded, so a caller learns the
 	// magnification is unavailable instead of silently receiving another one.
-	if opts.Scale != 0 && opts.Scale != 1 && opts.Scale != 1.5 && opts.Scale != 2 {
-		return ModelPreviewRecord{}, fmt.Errorf("nanolathe: rendering model preview: scale %.3g is not 1, 1.5 or 2", opts.Scale)
+	if opts.Scale != 0 && opts.Scale != 1 && opts.Scale != 2 {
+		return ModelPreviewRecord{}, fmt.Errorf("nanolathe: rendering model preview: scale %.3g is not 1 or 2", opts.Scale)
 	}
 
 	c := r.client

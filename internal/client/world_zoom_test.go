@@ -31,7 +31,7 @@ func zoomRecorderClient(t *testing.T) *Client {
 // (DESIGN_GPU_RENDERER §16.3).
 func TestRecordExtentIsTheFramebufferAtRestAndWiderBelowIt(t *testing.T) {
 	c := zoomRecorderClient(t)
-	for _, s := range []camera.ViewScale{camera.ViewScaleNative, camera.ViewScaleMid, camera.ViewScaleDetail} {
+	for _, s := range []camera.ViewScale{camera.ViewScaleNative, camera.ViewScaleDetail} {
 		c.cam.Scale, c.cam.Zoom = s, camera.ZoomOf(s)
 		c.refreshRecordExtent()
 		if w, h := c.recordExtent(); w != c.width || h != c.height {
