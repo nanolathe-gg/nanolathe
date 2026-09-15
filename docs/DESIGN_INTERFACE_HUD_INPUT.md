@@ -1580,16 +1580,16 @@ world scale; this build adds a presentation zoom so a capture or an inspection
 can magnify the composed frame. It changes no authoritative state, is never read
 by a simulation phase, and is not saved [I6].
 
-* **The two values.** `Scale` is a `camera.ViewScale`, the RECORD step in half
-  steps: `ViewScaleNative` (2, also the zero value's meaning), `ViewScaleMid`
-  (3, 1.5×) and `ViewScaleDetail` (4, 2×). `Zoom` is a `camera.Zoom`, the LIVE
-  factor in 1/1024 units, free between the map-derived floor and 2×; a zero
+* **The two values.** `Scale` is a `camera.ViewScale`, the RECORD step:
+  `ViewScaleNative` (2, also the zero value's meaning) and `ViewScaleDetail`
+  (4, 2×), retaining the denominator-two encoding. `Zoom` is a `camera.Zoom`,
+  the LIVE factor in 1/1024 units, free between the map-derived floor and 2×; a zero
   `Zoom` reads as the step's own factor. Both were once a fractional `float32`
   clamped to `[0.25, 4]`; DESIGN_GPU_RENDERER §14 made the projection an
   integer so it and its inverse are exact, and §16 put the free factor back on
   top of that integer projection rather than in place of it. `Project` is
   `ceil(v·f)`, its inverse `floor(v/f)`, and `Px` scales an extent with
-  half-away rounding; at the three rest factors the free arithmetic and the
+  half-away rounding; at native and detail factors the free arithmetic and the
   step's own agree exactly.
 * **What each one drives.** The step drives the RECORDING: `WorldToScreen`, the
   terrain record and the art variant selection. The factor drives everything
@@ -1606,17 +1606,17 @@ by a simulation phase, and is not saved [I6].
   map-pixel rate.
 * **The native fast path is exact.** At factor 1 both conversions take the
   original integer path unchanged, so nothing composed at native scale differs
-  by a pixel from a build without the feature; the same holds at 1.5× and 2×
+  by a pixel from a build without the feature; the same holds at 2×
   when the factor is on the step.
-* **Its writers.** F9 in the battle, which in classic cycles the step
-  1× → 1.5× → 2× → 1× about the viewport centre and in modern aims the same
-  three factors as animated zoom targets; **the mouse wheel over the battle
+* **Its writers.** F9 in the battle, which in classic toggles the step
+  1× ↔ 2× about the viewport centre and in modern cycles
+  1× → 2× → 0.25× → 1× as animated zoom targets; **the mouse wheel over the battle
   viewport**, which in the modern executor steps a zoom target through the
   fixed factors about the pointer (below); middle-drag through `Drag`, which converts the
   screen delta by the inverse of the factor before panning; `--zoom` with
-  `--shot-focus`, which takes a free factor for modern and one of the three
-  views for classic; and, with `--zoom` unset, the window's resolution default
-  at battle entry — 1.5× above 800×600, native at or below it
+  `--shot-focus`, which takes a free factor for modern and one of the two
+  views for classic; and, with `--zoom` unset, native 1× at battle entry for
+  both renderers at every window resolution
   (DESIGN_GPU_RENDERER §14.6, §16.8). `SetScaleAbout` and `SetZoomAbout` keep
   the world point under a given screen position fixed and then clamp.
 * **The wheel binding.** Retail's wheel is not a camera control: it belongs to
@@ -1625,7 +1625,7 @@ by a simulation phase, and is not saved [I6].
   the wheel the chrome did not want: over the battle viewport, outside TALK,
   with no modal open and the pointer off the minimap, and only while the modern
   executor presents, one wheel notch moves the zoom target one step along
-  the fixed list {0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2}, wheel-up zooming in
+  the fixed list {0.25, 1, 2}, wheel-up zooming in
   and the world point under the pointer staying put; a trackpad's fractions
   bank until they are worth a notch. The live factor eases toward that target
   on the host Update grid, so a notch is a glide between two steps. The
