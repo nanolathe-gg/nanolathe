@@ -68,16 +68,23 @@ func (c *Client) arrivalPacket() drawlist.Arrival {
 	}
 }
 
+func (c *Client) arrivalMatches(v frame.UnitView) bool {
+	return c.ArrivalActive() && c.enhanced && v.Slot == c.arrival.unit.Slot && v.InstanceID == c.arrival.unit.InstanceID
+}
+
+func (c *Client) arrivalHidesUnit(v frame.UnitView) bool {
+	return c.arrivalMatches(v) && c.arrival.seconds < drawlist.ArrivalDropSeconds
+}
+
 func (c *Client) arrivalUnit(v frame.UnitView) frame.UnitView {
-	if !c.ArrivalActive() || !c.enhanced || v.Slot != c.arrival.unit.Slot || v.InstanceID != c.arrival.unit.InstanceID {
+	if !c.arrivalMatches(v) {
 		return v
 	}
-	t := c.arrival.seconds / drawlist.ArrivalImpactSeconds
+	t := max(0, (c.arrival.seconds-drawlist.ArrivalDropSeconds)/(drawlist.ArrivalImpactSeconds-drawlist.ArrivalDropSeconds))
 	if t < 1 {
-		// Fast descent easing into ground contact; height shear halves this
-		// world-space lift on screen. Only a local value copy is changed [I6].
-		remain := 1 - t
-		v.Y += numeric.Fixed(640 * remain * remain * 65536)
+		// Accelerate into contact rather than braking at the ground. Height
+		// shear halves the displayed lift; only a value copy changes [I6].
+		v.Y += numeric.Fixed(640 * (1 - t*t*t) * 65536)
 		v.NoShadow = true
 	}
 	return v

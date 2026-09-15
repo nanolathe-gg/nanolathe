@@ -13,7 +13,7 @@ type arrivalLayer struct {
 	packet   drawlist.Arrival
 	resolved bool
 	clip     [4]float32
-	params   [8]float32
+	params   [9]float32
 	verts    [4]ebiten.Vertex
 	opts     ebiten.DrawTrianglesShaderOptions
 }
@@ -51,8 +51,8 @@ func (r *Renderer) resolveArrival() {
 		return
 	}
 	p, c := a.packet, a.clip
-	a.params = [8]float32{p.X, p.Y, p.GridX, p.GridY, p.Seconds, p.Scale,
-		drawlist.ArrivalImpactSeconds, drawlist.ArrivalDurationSeconds}
+	a.params = [9]float32{p.X, p.Y, p.GridX, p.GridY, p.Seconds, p.Scale,
+		drawlist.ArrivalImpactSeconds, drawlist.ArrivalDurationSeconds, drawlist.ArrivalDropSeconds}
 	if a.opts.Uniforms == nil {
 		a.opts.Uniforms = map[string]any{"Arrival": a.params[:], "Clip": a.clip[:]}
 	}
@@ -73,7 +73,7 @@ func newArrivalShader() (*ebiten.Shader, error) {
 const arrivalShaderSource = `//kage:unit pixels
 package main
 
-var Arrival [8]float
+var Arrival [9]float
 var Clip vec4
 
 // Sampling stays inside the copied viewport, including every bilinear tap.
@@ -106,48 +106,47 @@ func Fragment(dst vec4, src vec2, color vec4) vec4 {
 	delta := (p-center)/scale
 	d := length(delta)
 	cyan := vec3(0.42, 0.85, 1)
-	if t < impact {
-		// The vertical corridor keeps the descending commander legible against
-		// the dim map. The soft edges never cut rectangular holes in the scene.
-		column := exp(-delta.x*delta.x/450.0)*(1-smoothstep(2, 34, delta.y))
-		core := exp(-delta.x*delta.x/18.0)*(1-smoothstep(0, 18, delta.y))
-		charge := smoothstep(0, impact, t)
-		glow := (column*0.07+core*0.14)*charge
-		foot := exp(-d*d/450.0)*0.12*charge
-		rgb := base.rgb*(0.10+column*0.90)+cyan*(glow+foot)*visibility*base.a
-		return vec4(min(rgb, vec3(base.a)), base.a)
-	}
-	// Use the farthest viewport corner to finish the outward wave before the
-	// final settling interval, including origins displaced by camera movement.
+	drop := Arrival[8]
 	far := max(max(length(Clip.xy-center), length(Clip.zw-center)),
 		max(length(vec2(Clip.x, Clip.w)-center), length(vec2(Clip.z, Clip.y)-center)))/scale
-	span := duration-impact
+	if t < drop {
+		// Assemble the empty battlefield first. Leave a small settling interval
+		// before the commander appears, so impact reads as a separate beat.
+		speed := max(far+48, 240)/(drop*0.60)
+		cell := floor((p-grid)/(32*scale))
+		cellCenter := grid+(cell+vec2(0.5))*32*scale
+		local := t-length((cellCenter-center)/scale)/speed
+		reveal := smoothstep(0, 0.12, local)
+		u := clamp(local/0.20, 0, 1)
+		lift := sin(u*3.14159265)*6*(1-u)*scale
+		sample := arrivalLinear(p+vec2(0,lift))
+		front := exp(-pow((d-t*speed)/12, 2))*(1-smoothstep(drop*0.7, drop, t))
+		rgb := sample.rgb*(0.025+0.975*reveal)+cyan*front*0.12*visibility*base.a
+		return vec4(min(rgb, vec3(base.a)), base.a)
+	}
+	if t < impact {
+		// A short streak follows the falling model. The map is fully revealed.
+		u := clamp((t-drop)/(impact-drop), 0, 1)
+		head := -320*(1-u*u*u)
+		trail := smoothstep(head-160, head-12, delta.y)*(1-smoothstep(head, head+12, delta.y))
+		core := exp(-delta.x*delta.x/24.0)*trail*u
+		rgb := base.rgb+cyan*core*0.60*visibility*base.a
+		return vec4(min(rgb, vec3(base.a)), base.a)
+	}
 	elapsed := t-impact
-	speed := max(far+48, 240)/(span*0.66)
-	radius := elapsed*speed
-	cell := floor((p-grid)/(32*scale))
-	cellCenter := grid+(cell+vec2(0.5))*32*scale
-	cellDistance := length((cellCenter-center)/scale)
-	local := elapsed-cellDistance/speed
-	reveal := smoothstep(-0.035, 0.26, local)
-	// A small vertical inverse warp makes the complete chunk (trees, water,
-	// terrain) rise and settle. Sampling a complete scene avoids exposed seams.
-	u := clamp(local/0.52, 0, 1)
-	lift := sin(u*3.14159265)*3.4*(1-u)*scale
-	band := (d-radius)/15
-	ring := exp(-band*band)
-	fade := 1-smoothstep(span*0.68, span*0.96, elapsed)
+	span := duration-impact
+	radius := elapsed*max(far+48, 420)/(span*0.72)
+	ring := exp(-pow((d-radius)/20, 2))
+	fade := 1-smoothstep(span*0.3, span*0.90, elapsed)
 	direction := delta/max(d, 1)
-	shift := direction*ring*1.5*scale*fade
-	sample := arrivalLinear(p+vec2(0,lift)+shift)
-	// Keep the commander neighborhood readable through the impact, while the
-	// cell front restores the rest of the map in expanding rings.
-	near := exp(-d*d/1800.0)*(1-smoothstep(0, 0.35, elapsed))
-	light := max(reveal, near)
-	rgb := sample.rgb*(0.10+0.90*light)
-	flash := exp(-d*d/1600.0)*exp(-elapsed*11)*0.75
-	rim := ring*0.25*fade*smoothstep(0, 0.05, elapsed)
-	rgb += cyan*(flash+rim)*visibility*base.a
+	shift := direction*ring*5*scale*fade
+	// Brief presentation-only screen recoil; the camera and picking never move.
+	recoil := vec2(sin(elapsed*95)*4, cos(elapsed*79)*6)*exp(-elapsed*13)*scale
+	sample := arrivalLinear(p+shift+recoil)
+	flash := exp(-d*d/5600.0)*exp(-elapsed*18)*1.7
+	rim := ring*0.55*fade*smoothstep(0, 0.025, elapsed)
+	wash := exp(-elapsed*24)*0.10
+	rgb := sample.rgb+((vec3(1,0.85,0.60)*flash+cyan*rim)+vec3(wash))*visibility*base.a
 	return vec4(min(rgb, vec3(base.a)), base.a)
 }
 `

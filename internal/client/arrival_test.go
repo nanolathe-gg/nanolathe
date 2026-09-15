@@ -13,6 +13,13 @@ func TestArrivalChangesOnlyMatchingDisplayedUnitAndRetires(t *testing.T) {
 	c.SetEnhanced(true)
 	original := buffer.Current().Units[0]
 	c.StartArrival(original)
+	if !c.arrivalHidesUnit(original) {
+		t.Fatal("commander appeared before the map reveal")
+	}
+	c.SetArrivalSeconds(drawlist.ArrivalDropSeconds)
+	if c.arrivalHidesUnit(original) {
+		t.Fatal("commander remained hidden during descent")
+	}
 	raised := c.arrivalUnit(original)
 	if raised.Y <= original.Y {
 		t.Fatal("commander did not descend from above")

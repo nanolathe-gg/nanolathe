@@ -4595,7 +4595,7 @@ back should be heard before the lane becomes permanent.
 
 User-requested artistic presentation, isolated on `prototype/commander-arrival`;
 not a retail behavioral claim. `--arrival` opts fresh modern skirmishes into a
-3.2-second opening. Saves, campaign entry, classic, and ordinary captures retain
+1.55-second opening. Saves, campaign entry, classic, and ordinary captures retain
 their existing entry. A skirmish without a local commander skips the opening.
 
 The shell requests one tick-zero publication of the loaded session through
@@ -4607,8 +4607,9 @@ holds presentation time. Handoff rebases the host scheduler anchor so the intro
 cannot become accumulated tick debt. The ordinary pause mechanism is untouched.
 
 `Client` stores only commander identity, position, and elapsed presentation
-seconds. Before impact at 0.8 seconds, a local model-input copy receives a
-quadratic downward motion from 640 world units above its committed height;
+seconds. The commander is hidden during the map reveal until 0.55 seconds,
+then a local model-input copy accelerates downward from 640 world units above
+its committed height with cubic easing, hitting the ground at 0.83 seconds;
 its shadow is suppressed during descent. No committed pose, occupancy, weapon,
 health, damage, or simulation RNG changes. Snapshot replacement retires the
 intro, and every time change cancels speculative recording before invalidating
@@ -4617,8 +4618,9 @@ the presentation epoch.
 The world-begin packet carries elapsed seconds, landing position, map-grid
 origin, and recording scale by value. The executor transforms them once through
 the world affine mapping. After fog and before interface, one viewport copy and
-one shader draw apply a soft arrival column, then an expanding cyan-white flash
-and distortion ring. The map reveals in 32-world-pixel screen chunks with a
+one shader draw first reveal the map, then add a short descent streak and a
+strong warm impact flash, cyan distortion ring, and damped screen recoil.
+The map reveals in 32-world-pixel screen chunks with a
 small rise and settle; sampling the completed scene carries terrain, trees,
 water, and fog together. It is a sampled image effect, not moving terrain
 geometry. Black source fog stays black. The ring finishes according to the
@@ -4626,10 +4628,10 @@ viewport's farthest corner; the final stage returns the exact source image.
 The pass borrows the existing read surface and submits nothing when inactive.
 
 For repeatable visual inspection, use `--arrival --shot-ticks=0
---shot-arrival-time=0.4` with a modern `--shot`; useful stages are 0.4 (descent),
-0.8 (contact), 1.3 (reveal), 2.2 (settling), and 3.2 (normal scene).
+--shot-arrival-time=0.2` with a modern `--shot`; useful stages are 0.2 (reveal),
+0.7 (descent), 0.83 (contact), 0.95 (shockwave), and 1.55 (normal scene).
 Timings, tint, displacement and attenuation are authored prototype choices.
-There is no dedicated arrival sound, landing joint animation, camera recoil,
+There is no dedicated arrival sound, landing joint animation,
 terrain-specific impact treatment, or multiplayer start barrier in this version.
 
 Verification locks clock/RNG preservation, handoff without catch-up, immutable
