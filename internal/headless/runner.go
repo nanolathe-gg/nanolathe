@@ -3,6 +3,7 @@ package headless
 import (
 	"errors"
 	"fmt"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"os"
 	"strings"
 
@@ -44,6 +45,7 @@ const (
 // camera and HUD from the completed authoritative session [08 R-ENTRY-01
 // §2–§8][I6].
 type FreshBattleRequest struct {
+	Gameplay           gameplay.Mode
 	SelectedSide       int
 	SelectedSideSet    bool
 	Kind               ScenarioKind
@@ -87,6 +89,7 @@ type FreshBattle struct {
 // Request is the displayless battle boundary. Seeds and the tick limit are
 // explicit so equal requests can be compared without consulting host time.
 type Request struct {
+	Gameplay       gameplay.Mode
 	Root           string   // fallback for callers supplying one root
 	Roots          []string // load order; omitted roots enable installation discovery
 	Map            string
@@ -136,6 +139,7 @@ func RunWithContent(request Request, fs vfs.FSOps, catalog *content.Catalog) (Re
 	}
 	composed, err := ComposeFreshBattle(FreshBattleRequest{
 		Kind:           freshKind,
+		Gameplay:       request.Gameplay,
 		Skirmish:       cfg,
 		Map:            request.Map,
 		Mission:        request.Mission,
@@ -165,10 +169,11 @@ func ComposeFreshBattle(request FreshBattleRequest) (FreshBattle, error) {
 		return FreshBattle{}, diagnostic("session load failed: content mount is unavailable", identity, nil, "a mounted skirmish map or campaign mission")
 	}
 
+	cfg.Gameplay = request.Gameplay
 	var sess *session.Session
 	switch kind {
 	case ScenarioCampaign:
-		sess, err = session.NewMissionWithEntryOptions(request.FS, request.Catalog, identity, request.Difficulty, request.SimulationSeed, request.CRTSeed, session.MissionEntryOptions{SelectedSide: request.SelectedSide, SelectedSideSet: request.SelectedSideSet}, request.Progress)
+		sess, err = session.NewMissionWithEntryOptions(request.FS, request.Catalog, identity, request.Difficulty, request.SimulationSeed, request.CRTSeed, session.MissionEntryOptions{Gameplay: request.Gameplay, SelectedSide: request.SelectedSide, SelectedSideSet: request.SelectedSideSet}, request.Progress)
 	case ScenarioDirectOTA, ScenarioSkirmish:
 		sess, err = session.NewSkirmishWithProgress(request.FS, request.Catalog, cfg, request.Progress)
 	default:

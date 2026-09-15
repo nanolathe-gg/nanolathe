@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -316,7 +317,8 @@ type Skirmish struct {
 
 // Settings is the whole persisted block.
 type Settings struct {
-	Version int `json:"version"`
+	Gameplay gameplay.Mode `json:"gameplay"`
+	Version  int           `json:"version"`
 	// Fullscreen is Nanolathe's desktop presentation preference, independent of
 	// retail display options. Absent in older settings files means windowed.
 	Fullscreen bool `json:"fullscreen"`
@@ -596,6 +598,7 @@ func StoreDamageBars(on bool) error {
 func Defaults() Settings {
 	s := Settings{Version: FileVersion, Difficulty: DefaultDifficulty, ScrollSpeed: DefaultScrollSpeed, DamageBars: DefaultDamageBars, UnitLimit: DefaultUnitLimit,
 		GameSpeed: DefaultGameSpeed, InterfaceType: DefaultInterfaceType, SwitchAlt: DefaultSwitchAlt, Clock: DefaultClock}
+	s.Gameplay = gameplay.Modern
 	s.Display = DefaultDisplay()
 	s.Presentation = DefaultPresentation()
 	s.Audio = DefaultAudio()
@@ -661,6 +664,7 @@ func (s *Skirmish) Normalize() {
 
 // Normalize applies Skirmish.Normalize and the top-level defaults.
 func (s *Settings) Normalize() {
+	s.Gameplay = s.Gameplay.Normalize()
 	if s.Version == 0 {
 		s.Version = FileVersion
 	}

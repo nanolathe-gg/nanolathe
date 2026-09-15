@@ -2,17 +2,35 @@ package main
 
 import (
 	"fmt"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"os"
 
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
 	"github.com/nanolathe-gg/nanolathe/internal/platform/ebitenapp"
+	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
 )
 
 // Nanolathe's presentation preferences extend the options family without
 // changing retail controls. See DESIGN_INTERFACE_HUD_INPUT §3.4.1.
+func startupGameplay(opts Options, saved gameplay.Mode) gameplay.Mode {
+	if opts.GameplaySet {
+		return opts.Gameplay.Normalize()
+	}
+	return saved.Normalize()
+}
+
+func (g *gameShell) setGameplay(mode gameplay.Mode) {
+	mode = mode.Normalize()
+	changed := g.gameplay.Normalize() != mode
+	g.gameplay, g.opts.Gameplay = mode, mode
+	if changed && g.battle != nil && g.battle.sess != nil {
+		g.battle.sess.EnqueueHumanCommand(session.HumanCommand{Kind: session.HumanGameplay, Gameplay: mode})
+	}
+}
+
 func startupPresentation(opts Options, saved settings.Presentation) settings.Presentation {
 	if opts.RendererSet {
 		saved.Renderer = opts.Renderer
@@ -128,7 +146,7 @@ func nanolatheOptionsPage(window *gui.Window) error {
 	label.Link = ""
 	label.Rect.X, label.Rect.W = button.Rect.X, button.Rect.W
 	// The page has to fit the in-battle column as well as the front-end one, so
-	// the three captioned rows use a tight caption-plus-control pitch and the
+	// the two captioned rows use a tight caption-plus-control pitch and the
 	// presentation switches carry their own names in their stage text instead of
 	// spending a caption line each (DESIGN_INTERFACE_HUD_INPUT §3.4.1).
 	const captionedPitch, switchPitch = 40, 22
@@ -138,8 +156,7 @@ func nanolatheOptionsPage(window *gui.Window) error {
 		stages            uint8
 	}{
 		{"NRENDER", "Renderer", "Classic|Modern", 2},
-		{"NFPS", "FPS cap (Modern)", "30|60|120", 3},
-		{"NSIDEBAR", "Expanded sidebar", "Off|On", 2},
+		{"NGAMEPLAY", "Gameplay", "Strict 3.1|Modern", 2},
 	} {
 		caption, control := label, button
 		caption.Name, caption.SourceName, caption.Text = row.name+"LABEL", row.name+"LABEL", row.title
@@ -148,6 +165,20 @@ func nanolatheOptionsPage(window *gui.Window) error {
 		control.Rect.Y = caption.Rect.Y + caption.Rect.H + 4
 		kept = append(kept, caption, control)
 		y += captionedPitch
+	}
+	// Compact controls leave room for gameplay within the authored column.
+	for _, row := range []struct {
+		name, text string
+		stages     uint8
+	}{
+		{"NFPS", "FPS: 30|FPS: 60|FPS: 120", 3},
+		{"NSIDEBAR", "Sidebar: Off|Sidebar: On", 2},
+	} {
+		control := button
+		control.Name, control.SourceName, control.Text, control.Stages = row.name, row.name, row.text, row.stages
+		control.Rect.Y = y
+		kept = append(kept, control)
+		y += switchPitch
 	}
 	// The Enhanced presentation switches (DESIGN_GPU_RENDERER §30). Glow keeps
 	// its home in the display block; the other five are presentation values.
@@ -194,6 +225,7 @@ func (g *gameShell) syncNanolatheOptions() {
 	if optionsState == nil || optionsState.page != "nanolathe" || optionsPanel == nil {
 		return
 	}
+	optionsPanel.SetStageAt(optionsPanel.Index("NGAMEPLAY"), boolInt(g.gameplay.Normalize() == gameplay.Modern))
 	optionsPanel.SetStageAt(optionsPanel.Index("NRENDER"), boolInt(g.presentation.Renderer == "modern"))
 	g.syncNanolatheFPSStage()
 	// The six Enhanced switches. Glow reads the display block; the other five
@@ -216,16 +248,24 @@ func (g *gameShell) syncNanolatheFPSStage() {
 	}
 	// CLI/file values outside the menu presets remain visible until changed.
 	optionsPanel.SetStageAt(index, 0)
-	label := fmt.Sprintf("%d", g.presentation.FPS)
+	label := fmt.Sprintf("FPS: %d", g.presentation.FPS)
 	if g.presentation.FPS == 0 {
-		label = "Display"
+		label = "FPS: Display"
 	}
-	optionsPanel.Window.Gadgets[index].Labels = []string{label, "60", "120"}
+	optionsPanel.Window.Gadgets[index].Labels = []string{label, "FPS: 60", "FPS: 120"}
 }
 
 func (g *gameShell) activateNanolatheOption(name string) bool {
 	p := g.presentation
 	switch name {
+	case "NGAMEPLAY":
+		mode := gameplay.Strict31
+		if g.retailOptionsStage(name, 2, boolInt(g.gameplay.Normalize() == gameplay.Modern)) == 1 {
+			mode = gameplay.Modern
+		}
+		g.setGameplay(mode)
+		g.syncNanolatheOptions()
+		return true
 	case "NSIDEBAR":
 		p.ExpandedSidebar = g.retailOptionsStage(name, 2, boolInt(p.ExpandedSidebar != 0))
 	case "NRENDER":
@@ -243,7 +283,7 @@ func (g *gameShell) activateNanolatheOption(name string) bool {
 		}
 		stage := g.retailOptionsStage(name, len(nanolatheFPSChoices), current)
 		p.FPS = nanolatheFPSChoices[stage]
-		optionsPanel.Window.Gadgets[optionsPanel.Index("NFPS")].Labels = []string{"30", "60", "120"}
+		optionsPanel.Window.Gadgets[optionsPanel.Index("NFPS")].Labels = []string{"FPS: 30", "FPS: 60", "FPS: 120"}
 	case "NGLOW":
 		// Glow lives in the display block, so it takes the same live path the
 		// VISUALS controls take rather than the presentation poll (§19.4).

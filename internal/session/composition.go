@@ -1452,6 +1452,8 @@ func (s *Session) bindOrderQueue(u *units.Unit) {
 	if s.Combat == nil {
 		s.Combat = &combat.Service{}
 	}
+	s.SetGameplay(s.Gameplay)
+	s.Combat.ProjectileWind = s.Wind
 	s.Build.Combat = s.Combat
 	s.Build.World = s.Units
 	s.Build.DebugBuilderIdentity = s.debugUnitIdentity
@@ -1836,6 +1838,8 @@ func createAndBindServices(s *Session) error {
 	if s.Combat == nil {
 		s.Combat = &combat.Service{}
 	}
+	s.SetGameplay(s.Gameplay)
+	s.Combat.ProjectileWind = s.Wind
 	s.Build.Combat = s.Combat
 	// The area walk of [06 §9.3] offers a feature candidate in every covered
 	// cell, and the entry it reaches is the feature damage of [06 §13.1]. The

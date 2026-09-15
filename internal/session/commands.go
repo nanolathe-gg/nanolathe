@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 
 	"github.com/nanolathe-gg/nanolathe/internal/construction"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
@@ -18,6 +19,8 @@ import (
 // HumanCommandKind identifies a typed local-player command. Payloads contain
 // handles and values only; they never retain pointers into simulation pools.
 type HumanCommandKind uint8
+
+const HumanGameplay HumanCommandKind = 255
 
 const (
 	HumanSelectionReplace HumanCommandKind = iota + 1
@@ -196,6 +199,7 @@ type HumanGroupCommand struct {
 // HumanCommand is an immutable-at-boundary command value. EnqueueHumanCommand
 // copies handle slices and strings so callers may reuse their input buffers.
 type HumanCommand struct {
+	Gameplay gameplay.Mode
 	// Sequence and DueTick are session-owned metadata. Callers leave both zero;
 	// EnqueueHumanCommand assigns them when the value enters the session queue.
 	Sequence         uint64
@@ -643,6 +647,9 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		return
 	}
 	switch c.Kind {
+	case HumanGameplay:
+		s.SetGameplay(c.Gameplay)
+		return
 	case HumanBigBrother:
 		s.bigBrother.enabled = !s.bigBrother.enabled
 		if s.bigBrother.enabled {

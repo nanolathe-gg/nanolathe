@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/internal/ai"
@@ -171,6 +172,7 @@ type SkirmishPlayer struct {
 // Location selects start-position assignment: 0 = randomized via CRT shuffle
 // [P0-04], !=0 = identity mapping [P0-04].
 type SkirmishConfig struct {
+	Gameplay       gameplay.Mode
 	MapName        string
 	NumPlayers     int
 	Players        [10]SkirmishPlayer
@@ -626,6 +628,7 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 		}
 	}
 	s := &Session{
+		Gameplay:     cfg.Gameplay.Normalize(),
 		Catalog:      cat,
 		World:        terrain,
 		Mission:      m,

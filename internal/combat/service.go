@@ -1237,6 +1237,17 @@ func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terra
 		ShooterMaxHealth: u.MaxHealth,
 		ShooterKills:     u.Kills,
 	}
+	terrainBlocked := false
+	if svc.ModernTerrainAdmission {
+		ports.AdmitTerrain = func(muzzle, aim Vec3, launch Slot) bool {
+			var target *units.Unit
+			if tgt.Kind == TargetUnit && w != nil {
+				target = w.Unit(tgt.Unit)
+			}
+			terrainBlocked = modernTerrainAdmission(launch, muzzle, aim, tick, terrain, target, svc.ProjectileWind) == terrainShotBlocked
+			return !terrainBlocked
+		}
+	}
 	cSlot = Slot{
 		Weapon:       weapon,
 		Reload:       slot.Reload,
@@ -1257,6 +1268,13 @@ func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terra
 	// R-WPN-05 §5].
 	scriptAdapter.slot = &cSlot
 	_, ok := TryFire(svc, &cSlot, idx, tgt, tick, ports)
+	if terrainBlocked {
+		// Modern policy: a refused launch keeps the relative Aim pair. The
+		// muzzle query converted its temporary yaw to absolute; copying that
+		// back would add hull heading again on every retry [06 R-WPN-05 §4].
+		slot.MuzzlePiece = cSlot.MuzzlePiece
+		return false
+	}
 	// The spread's mutation of the slot's stored angles is retained whether or
 	// not the allocation succeeded [06 §4.4].
 	slot.DesiredYaw = cSlot.DesiredYaw

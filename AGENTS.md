@@ -29,6 +29,26 @@ does before anything enters `research/`, code comments, or commits.
 
 **4. Everyone works in a worktree.** Never edit the shared `main` checkout.
 
+### Intentional Modern gameplay
+
+The user explicitly authorizes **Modern** gameplay (default) alongside opt-in
+**Strict 3.1**. Retail research defines the strict baseline. Approved Modern
+rules are intentional departures, not parity defects: **do not remove them
+merely because retail behaves differently**.
+
+Every new intentional gameplay departure must be selected through the existing
+central `gameplay.Mode`, disabled by Strict 3.1, and documented as **Nanolathe
+Modern policy** in the owning design document. Record the strict behavior,
+modern behavior, boundaries and tests there; do not rewrite retail research to
+claim the new policy is historical behavior. Tests must preserve both the
+Modern contract and the Strict bypass, including RNG and resource effects.
+This is an explicit exception to rule 1 for approved policy, not permission to
+invent unresolved retail mechanics. Renderer and host preferences retain their
+separate controls.
+
+Current policy: [DESIGN_WEAPONS_PROJECTILES.md §2.3.1](docs/DESIGN_WEAPONS_PROJECTILES.md#231-modern-terrain-admission).
+See also [INVARIANTS.md I11](docs/INVARIANTS.md#i11--retail-baseline-and-modern-gameplay).
+
 ---
 
 ## Clean-room discipline
@@ -83,8 +103,9 @@ numbered docs, `[05 "Two-stage settlement algorithm"]` for docs 05 and 08
 (unnumbered headings), `[fmt tnt]` for a format doc, `[R-P0-18-A §1]` for an
 inline addendum section whose heading retains that exact anchor.
 
-**Precedence:** `research/retail-executable-spec` owns behavior;
-`research/formats` owns byte layout.
+**Precedence:** `research/retail-executable-spec` owns retail behavior;
+`research/formats` owns byte layout. Explicitly approved Modern gameplay
+departures are owned by their design contracts, as described above.
 
 **Our implementation docs** (not retail evidence):
 
@@ -259,7 +280,8 @@ unrecoverable failure mode.
   **Not now:** networking/multiplayer, replay beyond an optional debug
   recorder, competitive desync hashes. No GPL code — MIT only.
 - Keep the codebase simple and fast. No over-engineering, no scattered
-  compatibility flags — there is one behavior. Prefer immutable compiled
+  compatibility flags. The user-authorized central Modern / Strict 3.1 gameplay
+  policy is the exception; see docs/DESIGN_WEAPONS_PROJECTILES.md §2.3.1. Prefer immutable compiled
   definitions + mutable instances; preserve provenance (logical path,
   provider, mount order) for diagnostics.
 - Fixed-point world is `16.16` (`internal/sim/numeric.Fixed`), angles `uint16`

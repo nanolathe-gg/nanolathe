@@ -9,6 +9,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 	"github.com/nanolathe-gg/nanolathe/internal/visibility"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // projectilePresentationSequence is deliberately process-local. It supplies
@@ -208,6 +209,14 @@ type pendingAim struct {
 // Records is the parallel named storage (107-byte retail identity, I13) moved
 // identically to the metadata on compaction.
 type Service struct {
+	// ModernTerrainAdmission enables the user-requested terrain preflight
+	// policy. False retains the retail admission gate [06 R-WPN-05 §1].
+	ModernTerrainAdmission bool
+
+	// ProjectileWind is the session-owned wind used by ballistic admission.
+	// Its phase-8 deadline bounds future wind knowledge [01 §7.3].
+	ProjectileWind *world.Wind
+
 	Slots   pool.Projectiles               // sole count/dead authority (I5) [06 §5.1]
 	Records [ProjectileCapacity]Projectile // named records parallel to Slots
 	// presentationIDs are non-retail publication identities. They move with

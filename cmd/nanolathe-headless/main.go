@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"io"
 	"os"
 	"runtime"
@@ -152,6 +153,12 @@ func parse(args []string, output io.Writer) (headless.Request, string, profileOp
 			request.Root = root
 		}
 		return nil
+	})
+	flags.Func("gameplay", "gameplay rules: modern (default) or strict-3.1", func(text string) error {
+		mode, err := gameplay.Parse(text)
+		request.Gameplay = mode
+		bench.Gameplay = mode
+		return err
 	})
 	flags.StringVar(&request.Map, "map", "", "map name without extension")
 	flags.StringVar(&request.Mission, "mission", "", "campaign selector, e.g. camps/Arm Campaign.tdf:MISSION0")

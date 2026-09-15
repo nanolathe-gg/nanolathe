@@ -1349,7 +1349,7 @@ A page write in battle reaches the running session as well as the stored block:
 straight to the backend and the client. `CANCEL` re-applies all of them from the
 entry snapshot, the same way it re-applies gamma and the volumes.
 
-#### 3.4.1 Nanolathe presentation options
+#### 3.4.1 Nanolathe options
 
 This is a Nanolathe extension authorized by the user, not a retail finding.
 The fifth options category, **Nanolathe**, sits one authored category spacing
@@ -1359,15 +1359,17 @@ end uses the original options background; battle uses the game's tiled window ba
 BUTTONS0 and stagebuttn2/3 from the game assets supply the buttons and controls.
 No retail asset is copied into the repository or changed on disk.
 
-The page contains Renderer (Classic / Modern), FPS cap (Modern)
-(30 / 60 / 120), and Expanded sidebar (Off / On), each with a caption, then six
-two-stage switches whose stage text carries their own name: Glow, Water, Lights,
-Metal, Heat and Marks. The three captioned rows use a tight
+The page contains captioned Renderer (Classic / Modern) and Gameplay
+(Strict 3.1 / Modern) rows. Compact FPS (30 / 60 / 120), Sidebar (Off / On),
+Glow, Water, Lights, Metal, Heat and Marks controls carry their own names.
+The two captioned rows use a tight
 caption-plus-control pitch and the switches a
 narrower one, so the page fits the in-battle column as well as the front-end
 one without reaching Restore Defaults or Undo Changes.
 
-Defaults are Modern, 60 FPS and every switch on. These are presentation choices;
+Gameplay defaults to Modern, independently of the renderer, and follows
+DESIGN_WEAPONS_PROJECTILES §2.3.1. The remaining controls default to Modern,
+60 FPS and every switch on. These are presentation choices;
 simulation remains 30 Hz. The cap bounds modern presentation on the display's
 refresh grid; classic still presents at 30 Hz. Higher or refresh-following
 values remain available through `--fps`; a value outside the presets is
@@ -1384,7 +1386,8 @@ its value the way the display-bit commands do.
 Expanded sidebar selects the modern composition described in §3.3 and remains
 independent of the renderer choice; Classic always uses the authored page.
 
-Edits preview immediately. OK saves the presentation block with the existing
+Edits preview immediately; gameplay changes enqueue a typed command for the
+next simulation boundary. OK saves gameplay and the presentation block with the existing
 settings transaction; Cancel restores the entry values, Undo restores this
 page — including its glow bit — and Restore Defaults chooses Modern / 60 with
 every effect on. F10 updates the shell and saves

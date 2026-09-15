@@ -120,6 +120,12 @@ type FirePorts struct {
 	// [06 §6.3], so a unit target has no trajectory without it.
 	TargetWorld func(h pool.Handle) (Vec3, bool)
 
+	// AdmitTerrain is the Modern policy's optional preflight. It receives the
+	// already queried muzzle, resolved aim and post-spread slot copy before
+	// allocation and fire callbacks. Its RNG draws commit only on admission.
+	// Nil preserves retail's admission [06 R-WPN-05 §1].
+	AdmitTerrain func(muzzle, aim Vec3, launch Slot) bool
+
 	// Gravity is the map's gravity, consumed by the ballistic solver
 	// [06 §3.3] [06 §6.4].
 	Gravity numeric.Fixed
@@ -264,6 +270,22 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 		}
 	}
 
+	// Modern previews the exact spread on value copies. Rejecting preserves the
+	// shared stream and slot angles; admission commits once, even on pool-full.
+	// The synchronous muzzle query above is never repeated speculatively.
+	callerSlot := slot
+	var trialSlot Slot
+	var trialRNG rng.Simulation
+	shotRNG := ports.RNG
+	if ports.AdmitTerrain != nil {
+		trialSlot = *slot
+		slot = &trialSlot
+		if shotRNG != nil {
+			trialRNG = *shotRNG
+			ports.RNG = &trialRNG
+		}
+	}
+
 	// The accuracy spread. It lives in the **turret** executor and only there
 	// [06 §4.4] [06 R-WPN-03 §4]: a weapon without `turret` reaches the same
 	// ordinary creator, computes no spread and consumes no randomness at all.
@@ -298,6 +320,19 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 			slot.DesiredYaw = uint16(int32(slot.DesiredYaw) + yawSpread)
 			slot.DesiredPitch = uint16(int32(slot.DesiredPitch) + pitchSpread)
 		}
+	}
+
+	if ports.AdmitTerrain != nil {
+		if !ports.AdmitTerrain(muzzle, target, *slot) {
+			return 0, false
+		}
+		if shotRNG != nil {
+			*shotRNG = trialRNG
+		}
+		ports.RNG = shotRNG
+		// Restore the caller's slot pointer before creator/callback mutations.
+		*callerSlot = *slot
+		slot = callerSlot
 	}
 
 	// The executor selects its creator after the retained muzzle and spread

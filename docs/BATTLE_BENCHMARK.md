@@ -80,7 +80,7 @@ separates that scheduler from the benchmark's pacing; its timings are not
 directly comparable with version 1, even when `scene_version` remains 4.
 
 `frames.json` records benchmark and scene versions, seed, map, renderer, view
-scale, display options, runtime and build information, per-frame timings and
+scale, gameplay mode, display options, runtime and build information, per-frame timings and
 feature census. Version 2 metadata includes `benchmark_version=2`,
 `simulation_tps=30`, `draws_per_tick=TPS/30`, `warmup_draws=TPS*2`,
 `pacing="draw-deadline"`, `gpu_timing_available=false` and

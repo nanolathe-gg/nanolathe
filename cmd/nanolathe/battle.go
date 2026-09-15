@@ -254,6 +254,8 @@ func runBattleView(opts Options, cs *contentSet) error {
 // for dialogs and battle replacement as menu entry. Both the update callback
 // and interpolation producer follow the current battle after loading a save.
 func newDirectBattleView(opts Options, cs *contentSet) (*gameShell, *client.Client, error) {
+	saved := loadedSettings()
+	opts.Gameplay = startupGameplay(opts, saved.Gameplay)
 	request, err := directMapBattleRequest(opts, cs, newBattleSeedSource(opts))
 	if err != nil {
 		return nil, nil, err
@@ -266,7 +268,7 @@ func newDirectBattleView(opts Options, cs *contentSet) (*gameShell, *client.Clie
 	if err != nil {
 		return nil, nil, err
 	}
-	shell.applySettings(loadedSettings())
+	shell.applySettings(saved)
 	if err := validatePresentationZoom(shell.opts); err != nil {
 		return nil, nil, err
 	}

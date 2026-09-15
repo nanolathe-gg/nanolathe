@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/internal/clock"
@@ -22,10 +23,11 @@ import (
 // battle-entry random seeds. Retail saves omit both streams [08 "Scheduler
 // and random state in saves"] [01 R-CORE-02].
 type RetailLoadDeps struct {
-	FS      vfs.FSOps
-	Catalog *content.Catalog
-	SimSeed uint32
-	CRTSeed uint32
+	Gameplay gameplay.Mode
+	FS       vfs.FSOps
+	Catalog  *content.Catalog
+	SimSeed  uint32
+	CRTSeed  uint32
 	// UnitLimit is the configured `[Preferences] UnitLimit` as it stands when
 	// the load starts. A restored battle's pool is sized from the limit word
 	// as it was *before* the restore — the save's own Summary `maxunits` is
@@ -143,6 +145,7 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 	// [08 "Scheduler and random state in saves"] [01 R-CORE-02].
 	clk := &clock.State{}
 	s := &Session{
+		Gameplay:     deps.Gameplay.Normalize(),
 		State:        StateBattle,
 		Catalog:      cat,
 		World:        terrain,

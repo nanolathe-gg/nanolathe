@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"sort"
 	"strconv"
 	"strings"
@@ -56,6 +57,7 @@ func NewMissionWithProgressSeeds(fs vfs.FSOps, cat *content.Catalog, path string
 // MissionEntryOptions carries the frontend selection independently of its value:
 // zero is an explicitly selected Arm side [08 R-CAMP-01 §3].
 type MissionEntryOptions struct {
+	Gameplay        gameplay.Mode
 	SelectedSide    int
 	SelectedSideSet bool
 }
@@ -148,6 +150,7 @@ func NewMissionWithEntryOptions(fs vfs.FSOps, cat *content.Catalog, path string,
 	}
 	report.Report(FamilyUnitWorld, 100)
 	s := &Session{
+		Gameplay:     options.Gameplay.Normalize(),
 		Catalog:      cat,
 		World:        terrain,
 		Mission:      m,

@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
 	"io"
 	"math"
@@ -14,6 +15,8 @@ import (
 // Options is the command-line surface for the retail runtime and its host
 // configuration. Developer probes and capture modes are separate tools.
 type Options struct {
+	Gameplay           gameplay.Mode
+	GameplaySet        bool
 	Arrival            bool    // modern battle opening (GPU §36)
 	ShotArrivalTime    float64 // seconds into a reproducible opening capture; negative disables
 	UnitLimit          int     // zero uses the saved preference; explicit CLI values override it
@@ -155,6 +158,11 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.StringVar(&opts.CPUProfile, "cpuprofile", "", "write a pprof CPU profile of the --shot compose path to this file")
 	set.StringVar(&opts.MemProfile, "memprofile", "", "write a pprof allocation profile of the --shot compose path to this file")
 	set.IntVar(&opts.ProfileSeconds, "profile-seconds", 0, "with classic --shot, run the CPU viewer loop headlessly for this many seconds of battle time and report ms per frame")
+	set.Func("gameplay", "gameplay rules: modern (default) or strict-3.1; omitted uses saved preference", func(text string) error {
+		mode, err := gameplay.Parse(text)
+		opts.Gameplay = mode
+		return err
+	})
 	set.StringVar(&opts.Renderer, "renderer", settings.DefaultPresentation().Renderer, "start-up presentation renderer (omitted uses saved preference): \"classic\" (software) or \"modern\" (GPU); any other value is classic")
 	set.BoolVar(&opts.Fullscreen, "fullscreen", false, "desktop fullscreen (Alt+Enter toggles); omitted uses saved preference")
 	set.BoolVar(&opts.Stats, "stats", false, "print periodic presentation statistics to the terminal")
@@ -187,6 +195,8 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 			unitLimitSet = true
 		case "fullscreen":
 			opts.FullscreenSet = true
+		case "gameplay":
+			opts.GameplaySet = true
 		case "renderer":
 			opts.RendererSet = true
 		case "fps":

@@ -237,7 +237,7 @@ func (g *gameShell) loadRetailSavePath(path string) error {
 	// A restored non-campaign battle sizes its unit pool from the configured
 	// `[Preferences] UnitLimit`, as a fresh skirmish does [05 R-SHARE-01 §7].
 	loaded, err := session.LoadRetailSavePath(path, session.RetailLoadDeps{
-		FS: g.cs.fs, SimSeed: sim, CRTSeed: crt, UnitLimit: g.setup.UnitLimit,
+		FS: g.cs.fs, SimSeed: sim, CRTSeed: crt, UnitLimit: g.setup.UnitLimit, Gameplay: g.gameplay,
 	})
 	if err != nil {
 		return err

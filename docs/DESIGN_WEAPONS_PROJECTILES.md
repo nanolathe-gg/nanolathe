@@ -187,6 +187,93 @@ the computer player's rally task needs it and does not carry its operands
 `[08 R-AI-01 §19]`. Neither form tests radar, cloak or jamming, and neither
 consults reload, ammunition or cost.
 
+### 2.3.1 Modern terrain admission
+
+**Nanolathe policy, explicitly requested by the user; not retail evidence.**
+The central gameplay mode defaults to **Modern**. **Strict 3.1** preserves the
+retail shot-admission path, including shots into terrain. This choice is
+independent of Classic / Modern rendering and applies to every player.
+`internal/gameplay` owns the vocabulary; the session projects the choice into
+`combat.Service.ModernTerrainAdmission`.
+
+This is a maintained gameplay contract. A difference from the cited retail
+algorithms is not grounds to remove it. Every extension to this policy must
+remain behind the same mode and preserve Strict 3.1's path.
+
+| Family | Strict 3.1 | Modern |
+|---|---|---|
+| Ordinary direct, including Annihilator | Retail range/medium/aim admission, no terrain preflight | Preview actual launch and discrete movement; reject proven terrain obstruction before the resolved target |
+| Ballistic | Retail feasibility solution, no hill clearance check | Preview the actual spread-adjusted launch, slot distance word, gravity and known wind; allow clear arcs and potentially useful splash |
+| Guided ordinary launch | Retail pursuit steering, no launch clearance check | Reject only when every possible first-step turn endpoint is blocked before the resolved target |
+| Target-independent self-propelled launch | Retail motion and phase transition | Preview only the deterministically known launch portion; stop before guidance or uncertain transition |
+
+All previews use the actual firing muzzle from the existing single Query
+call, existing launch/motion kernels, and discrete post-motion collision
+samples. Unit contact precedes terrain in the same sample. Equality at the
+terrain floor passes, and splash that can reach the resolved target remains
+admissible. No continuous visibility ray replaces projectile geometry.
+
+**Spread and side effects.** Ballistic creation consumes the stored yaw and
+pitch after accuracy spread. Modern computes those same draws on a temporary
+value copy of the simulation RNG before checking terrain. A rejected shot
+commits neither those draws nor a projectile, Fire/Rock callbacks, reload,
+ammunition or resource debit. It retains the live slot's relative aim pair and
+target/order state. An admitted shot commits the same draw state that the
+ordinary executor would have consumed, including on a later pool-full failure.
+Strict 3.1 does not use this speculative path. No extra COB query is made.
+
+**Wind horizon.** `combat.Service.ProjectileWind` shares the session's current
+wind state. Ballistic motion adds its raw X/Z words directly, without a world
+unit rescale, and uses the map gravity. Firing is in phase 2, projectiles move
+in phase 3, and wind changes in phase 8: the first preview sample is the
+creation tick. That tick's wind is known even if its redraw deadline is due.
+A later sample is not predicted after a preceding phase-8 redraw could have
+changed the wind; incomplete prediction admits the shot. A provably constant
+zero-wind field does not need that cutoff. The preview never draws future wind
+randomness or advances the real wind object.
+
+**Guided launch proof.** Ordinary guidance can turn toward a live target that
+moves before the first projectile sample. The preview therefore covers every
+possible initial yaw/pitch change permitted by the turn rate, enumerating the
+shared integer trig table's distinct angle cells. It rejects only if every
+candidate first sample establishes terrain obstruction before the resolved
+target, with no possible current target contact or useful splash. A candidate
+that clears, passes the target, or cannot be proved blocked admits the launch.
+This changes launch admission only; it does not add terrain avoidance steering.
+Target-independent launch portions use the existing self-propelled motion
+kernel and stop before uncertain guidance/phase behavior.
+
+**Limits.** Proof is relative to the currently resolved target geometry, not a
+prediction of future target movement or interception by other units/features.
+Bursts, bounce, units-only and non-exploding projectiles, unsupported medium,
+interceptor/cruise cases, burn-blow guided steering, uncertain phase/expiry
+effects, prior water contact, malformed geometry,
+arithmetic wrap and work-budget exhaustion remain admitted. Guided turn
+coverage and flight sampling use a bounded Modern work budget of 4,096;
+incomplete proof always admits. Existing target selection and retention are
+unchanged, so a rejected target can be retried as geometry changes.
+
+**Verification.** Lock clear ballistic arcs versus ridges, exact spread and
+RNG commit/abandon, raw wind drift and phase-8 cutoff, target contact/splash,
+guided turn alternatives and uncertainty, no wasted energy/reload/ammunition,
+and identical Strict bypass behavior. Run the weapon/session tests, both full
+repository gates, simulation-cost and classic/modern live battle benchmarks.
+Compare Strict runs against the baseline; Modern census changes from refused
+shots must be reported separately from performance differences.
+
+The persisted host preference `gameplay` accepts `modern` or `strict-3.1`.
+Missing or invalid stored values select Modern. `--gameplay` explicitly
+overrides it; invalid command-line values are errors. Fresh skirmish,
+campaign and restored battles receive the chosen mode before composition.
+Retail save bytes contain no new fields: loading a save uses the current host
+preference. Displayless requests carry the mode explicitly and report it;
+their default is Modern, independent of desktop settings.
+
+The Nanolathe options page previews mode changes through `HumanGameplay` at
+the next authoritative input boundary. Cancel/Undo enqueue the restored
+choice; a paused match consumes the final queued choice when it resumes.
+Strict mode does not undo shots or state changes made earlier in Modern.
+
 ### 2.4 Aiming
 
 The composed unit-death observer releases combat's pending Aim tracking before

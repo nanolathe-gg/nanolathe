@@ -7,6 +7,7 @@ package headless
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"io"
 	"os"
 	"path/filepath"
@@ -50,6 +51,7 @@ const (
 
 // SimBenchOptions is the whole benchmark request.
 type SimBenchOptions struct {
+	Gameplay     gameplay.Mode `json:"gameplay"`
 	Root         string
 	Roots        []string
 	OutputDir    string
@@ -168,6 +170,7 @@ type SimBenchGC struct {
 
 // SimBenchReport is the whole run: scene, timings, census and provenance.
 type SimBenchReport struct {
+	Gameplay           gameplay.Mode       `json:"gameplay"`
 	SceneVersion       int                 `json:"scene_version"`
 	Map                string              `json:"map"`
 	SimulationSeed     uint32              `json:"simulation_seed"`
@@ -270,6 +273,7 @@ func runSimBenchmarkWithContent(opts SimBenchOptions, fs vfs.FSOps, catalog *con
 	}
 	sess := composed.Session
 	report := SimBenchReport{
+		Gameplay:     opts.Gameplay.Normalize(),
 		SceneVersion: SimBenchSceneVersion, Map: opts.Map,
 		SimulationSeed: opts.Seed, CRTSeed: opts.Seed, Difficulty: opts.Difficulty,
 		WarmupTicks: opts.WarmupTicks, MeasuredTicks: opts.MeasureTicks,
@@ -382,7 +386,8 @@ func ComposeSimBenchBattle(opts SimBenchOptions, fs vfs.FSOps, catalog *content.
 	opts.applyDefaults()
 	cfg := simBenchConfig(opts.Map, opts.UnitLimit)
 	composed, err := ComposeFreshBattle(FreshBattleRequest{
-		Kind: ScenarioDirectOTA, Map: opts.Map, LocalOwner: -1,
+		Gameplay: opts.Gameplay,
+		Kind:     ScenarioDirectOTA, Map: opts.Map, LocalOwner: -1,
 		Difficulty: opts.Difficulty, Skirmish: cfg,
 		SimulationSeed: opts.Seed, CRTSeed: opts.Seed,
 		FS: fs, Catalog: catalog,

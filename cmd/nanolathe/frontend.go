@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"os"
 	"sort"
 	"strings"
@@ -143,6 +144,7 @@ type gameShell struct {
 	// for Nanolathe's stable host window (DESIGN_PRESENTATION_CLIENT §2.1).
 	display      settings.Display
 	presentation settings.Presentation
+	gameplay     gameplay.Mode
 	// messages is the message-column ring configuration (`textlines`,
 	// `textscroll`, `screenchat`, `unitchattext`). The options family's
 	// interface page writes `textscroll`, `textlines` and `unitchattext`;
@@ -295,6 +297,7 @@ func newGameShell(opts Options, cs *contentSet) (*gameShell, error) {
 	shell.missionDifficultyValue = session.SkirmishDefaultDifficulty
 	shell.scrollSpeed = settings.DefaultScrollSpeed // [02 "Settings"] [07 §10]
 	shell.presentation = startupPresentation(opts, settings.DefaultPresentation())
+	shell.setGameplay(startupGameplay(opts, gameplay.Modern))
 	shell.display = settings.DefaultDisplay()   // [02 R-KEYS-01 §5]
 	shell.messages = settings.DefaultMessages() // [02 §3]
 	// The audio block, the game-speed word and the `Interface Type` word are

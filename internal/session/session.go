@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"sync"
 
 	"github.com/nanolathe-gg/nanolathe/internal/ai"
@@ -126,6 +127,7 @@ func (s *Session) ensurePublicationState() *publicationState {
 // services owned centrally by this package C5.
 // Go allows methods in any file, but the struct is defined once here.
 type Session struct {
+	Gameplay                 gameplay.Mode
 	bigBrother               bigBrotherState
 	publicationObserver      func(*frame.Frame)
 	fragmentMaterialResolver func(uint16, int, int, uint8) render.FrozenFragmentMaterial

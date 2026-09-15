@@ -7,11 +7,13 @@ import (
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/client"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/save"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
+	"github.com/nanolathe-gg/nanolathe/internal/settings"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/testsupport"
 	"github.com/nanolathe-gg/nanolathe/internal/ui"
@@ -22,6 +24,12 @@ import (
 // callback that keeps advancing the retired battle after load [08 R-SAVE-02 §11].
 func TestDirectBattleSaveLoadThroughWindowInput(t *testing.T) {
 	resetSaveLoadScreenState(t)
+	t.Setenv(settings.EnvPath, filepath.Join(t.TempDir(), "settings.json"))
+	prefs := settings.Defaults()
+	prefs.Gameplay = gameplay.Strict31
+	if err := prefs.Save(); err != nil {
+		t.Fatal(err)
+	}
 	opts := Options{Root: testsupport.RetailRoot(t), Map: "ashap plateau", Seed: 7}
 	cs, err := openContent(opts)
 	if err != nil {
@@ -40,6 +48,9 @@ func TestDirectBattleSaveLoadThroughWindowInput(t *testing.T) {
 		t.Fatal("direct battle retained the pending main-menu music cue")
 	}
 	b := shell.battle
+	if shell.gameplay != gameplay.Strict31 || b.sess.Gameplay != gameplay.Strict31 || b.sess.Combat.ModernTerrainAdmission {
+		t.Fatal("direct entry ignored saved strict gameplay")
+	}
 	if b.shell != shell {
 		t.Fatal("direct battle has no dialog owner")
 	}

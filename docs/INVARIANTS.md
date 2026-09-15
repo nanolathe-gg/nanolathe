@@ -137,6 +137,12 @@ discarded**: a pool-full fire attempt still draws up to two spread values
 `reproduce=0` `[03 §5.1.2]`; `bound < 2` returns 0 without advancing
 `[01 §7.1]`.
 
+Modern shot admission may preview accuracy draws on a temporary value copy of
+that same simulation stream, committing its resulting state only when the
+shot passes the terrain check (DESIGN_WEAPONS_PROJECTILES §2.3.1). This is a
+bounded transaction over the one stream, not a persistent alternate generator.
+Strict 3.1 retains the original draw sites and failure effects.
+
 Which stream: gameplay normally uses the simulation stream; meteor geometry
 `[06 §6.5]`, screen shake `[03 §5.6]`, audio variant selection `[03 §8.3]`, and
 wind's next-change interval `[01 §7.3]` use the CRT recurrence. Audio advances
@@ -247,13 +253,26 @@ var turnPenalty = [8]int32{0, 40, 60, 80, 100, 80, 60, 40}
 **Why.** Review is a spot-check against the source of truth. An uncited constant
 cannot be reviewed, only trusted.
 
-## I11 — One behavior
+## I11 — Retail baseline and Modern gameplay
 
-No compatibility flags, no "retail mode" toggles, no alternate code paths for
-mods. Where retail's behavior is a bug (unguarded divide, wrapped deadline,
-stale pointer after compaction), reproduce it and cite it; do not defend against
-it. Bounds checks that reject data retail would accept are the one exception and
-must be noted in the plan's Divergences.
+The central gameplay mode selects **Modern** by default or opt-in **Strict
+3.1**, independently of the renderer. Every new intentional gameplay departure
+must be gated by this setting so Strict 3.1 disables it. No scattered
+compatibility flags or unapproved alternate behavior paths.
+
+**Modern differences are intentional and user-authorized.** Do not remove a
+documented Modern rule as a retail parity fix. The owning design document must
+state its retail baseline, Modern rule, conservative limits and verification;
+retail research continues to describe the executable. Both branches need
+contract tests, including resource and RNG effects. An unknown retail mechanic
+is still an unknown; the Modern setting does not authorize invented evidence.
+The current weapon policy is DESIGN_WEAPONS_PROJECTILES §2.3.1.
+
+Strict 3.1 retains the retail firing pipeline, including documented faults.
+Outside an explicitly approved Modern contract, reproduce retail bugs
+(unguarded divide, wrapped deadline, stale pointer after compaction) and cite
+them. Bounds rejection and the existing host/presentation policies listed
+below retain their separately documented exceptions.
 
 The user-requested startup root list is a sanctioned host extension
 (DESIGN_CONTENT_VFS §5). Only multiple roots add directory precedence above

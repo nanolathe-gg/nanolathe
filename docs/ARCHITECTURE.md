@@ -38,7 +38,13 @@ damage, the COB script machine, features and fire, the skirmish planner, the
 GUI and HUD, camera and minimap, audio, effects, and save/load of a
 single-player battle.
 
-Authoritative behavior follows retail, including documented faults. Bounds
+Authoritative behavior follows retail, including documented faults, except for
+the explicit Modern gameplay policy (DESIGN_WEAPONS_PROJECTILES §2.3.1).
+Modern is the default gameplay choice; Strict 3.1 disables all intentional
+Modern gameplay departures. These documented differences must not be removed
+as parity defects. Each new departure requires a contract in its owning design
+document and tests for both modes (INVARIANTS I11). Retail research remains the
+historical baseline. Bounds
 rejection, ordered startup roots (DESIGN_CONTENT_VFS §5), the renderer
 presentation policies of DESIGN_GPU_RENDERER, and the configured skirmish
 unit-limit policy (DESIGN_CONTENT_VFS §5) are the
@@ -97,6 +103,7 @@ package implements.
 | `internal/pool` | Fixed-capacity pools with slot 0 null, lowest-free allocation and immediate reuse | DESIGN_RUNTIME_DETERMINISM |
 | `internal/frame` | The committed frame: what the simulation publishes at the end of each sub-tick and what presentation samples | DESIGN_RUNTIME_DETERMINISM (publication), DESIGN_PRESENTATION_CLIENT (consumption) |
 | `internal/session` | The authoritative session: state machine, battle entry for skirmish and mission, the twelve-phase tick, publication, results, save staging and restore, effect strips, eyeballs, status cues | DESIGN_RUNTIME_DETERMINISM (tick, publication), DESIGN_SESSIONS_AI_SAVE (states, entry, results, saves) |
+| `internal/gameplay` | Central Modern / Strict 3.1 policy vocabulary shared by settings and session; no simulation or presentation dependencies | DESIGN_WEAPONS_PROJECTILES |
 | `internal/version` | Build identity | DESIGN_RUNTIME_DETERMINISM |
 
 ### World
@@ -422,8 +429,9 @@ asset presence of a full run outside the tree.
 ## 7. Citation conventions
 
 Code and documents cite research by document and section, never by line
-number. `research/retail-executable-spec` wins for behavior;
-`research/formats` wins for byte layout.
+number. `research/retail-executable-spec` wins for retail behavior;
+`research/formats` wins for byte layout. Approved Modern gameplay contracts
+in the owning design documents govern their explicit departures (I11).
 
 | Form | Means |
 |---|---|

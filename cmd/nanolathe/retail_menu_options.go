@@ -18,6 +18,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"sort"
 	"strings"
 
@@ -131,6 +132,7 @@ var (
 type retailOptionsSnapshot struct {
 	display       settings.Display
 	presentation  settings.Presentation
+	gameplay      gameplay.Mode
 	audio         settings.Audio
 	messages      settings.Messages
 	scrollSpeed   int
@@ -556,6 +558,7 @@ func (g *gameShell) retailOptionsSnapshot() retailOptionsSnapshot {
 	s := retailOptionsSnapshot{
 		display:       g.display,
 		presentation:  g.presentation,
+		gameplay:      g.gameplay,
 		audio:         g.audioPrefs,
 		messages:      g.messages,
 		scrollSpeed:   g.scrollSpeed,
@@ -575,6 +578,7 @@ func (g *gameShell) retailOptionsSnapshot() retailOptionsSnapshot {
 func (g *gameShell) restoreRetailOptionsSnapshot(s retailOptionsSnapshot) {
 	g.display = s.display
 	g.setPresentation(s.presentation)
+	g.setGameplay(s.gameplay)
 	g.audioPrefs = s.audio
 	g.messages = s.messages
 	g.scrollSpeed = s.scrollSpeed
@@ -1154,6 +1158,7 @@ func (g *gameShell) restoreRetailOptionsDefaults() {
 		// The page also owns the glow bit, which lives in the display block
 		// (DESIGN_GPU_RENDERER §19.4, §30).
 		g.setPresentation(settings.DefaultPresentation())
+		g.setGameplay(gameplay.Modern)
 		g.display.Glow = settings.DefaultGlow
 		g.applyRetailVisualOptions(clPtr)
 	case "visuals":
@@ -1216,6 +1221,7 @@ func (g *gameShell) undoRetailOptionsPage() {
 	switch optionsState.page {
 	case "nanolathe":
 		g.setPresentation(s.presentation)
+		g.setGameplay(s.gameplay)
 		// The glow bit is this page's too, so its UNDO takes it back from the
 		// entry snapshot's display block without disturbing the VISUALS bits.
 		g.display.Glow = s.display.Glow
@@ -1317,7 +1323,7 @@ func (g *gameShell) setRetailShadowBits(on bool) {
 // handler that consumes the fired result [07 R-WGT-01 §3].
 func retailOptionsCue(key string) string {
 	switch key {
-	case "nanolathe", "nrender", "nfps", "nsidebar",
+	case "nanolathe", "ngameplay", "nrender", "nfps", "nsidebar",
 		"nglow", "nwater", "nlights", "nfinish", "nheat", "nmarks",
 		"sound", "music", "speeds", "visuals", "prev",
 		"restore", "undo",
@@ -1345,7 +1351,7 @@ func (g *gameShell) activateRetailOptionsGadget(name string) bool {
 	// precedes them all, as it does on the screens frontendCue serves.
 	g.playMenuCue(retailOptionsCue(retailOptionsCueKey(name)))
 	switch name {
-	case "NRENDER", "NFPS", "NGLOW", "NWATER", "NLIGHTS", "NFINISH", "NHEAT", "NMARKS", "NSIDEBAR":
+	case "NGAMEPLAY", "NRENDER", "NFPS", "NGLOW", "NWATER", "NLIGHTS", "NFINISH", "NHEAT", "NMARKS", "NSIDEBAR":
 		return g.activateNanolatheOption(name)
 	case "NANOLATHE", "SOUND", "MUSIC", "SPEEDS", "VISUALS":
 		page, _ := retailOptionsPageKey(name)
@@ -1704,6 +1710,8 @@ func retailOptionsCueKey(name string) string {
 	switch name {
 	case "NANOLATHE":
 		return "nanolathe"
+	case "NGAMEPLAY":
+		return "ngameplay"
 	case "NRENDER":
 		return "nrender"
 	case "NFPS":

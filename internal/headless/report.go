@@ -1,6 +1,7 @@
 package headless
 
 import (
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"sort"
 
 	"github.com/nanolathe-gg/nanolathe/internal/ai"
@@ -61,6 +62,7 @@ type PlayerReport struct {
 // Session.PartialStateFingerprint, whose intentionally partial coverage is listed
 // in docs/DESIGN_RUNTIME_DETERMINISM.md §4; it is not a whole-session parity gate.
 type Report struct {
+	Gameplay                  gameplay.Mode    `json:"gameplay"`
 	ScenarioKind              ScenarioKind     `json:"scenario_kind"`
 	ScenarioIdentity          string           `json:"scenario_identity"`
 	SimulationSeed            uint32           `json:"simulation_seed"`
@@ -167,6 +169,7 @@ func groupCounts(m *ai.Manager) [10]uint16 {
 func buildReport(request Request, kind ScenarioKind, identity string, sess *session.Session, observer *observer) (Report, error) {
 	report := Report{
 		ScenarioKind:     kind,
+		Gameplay:         sess.Gameplay.Normalize(),
 		ScenarioIdentity: identity,
 		SimulationSeed:   request.SimulationSeed,
 		CRTSeed:          request.CRTSeed,

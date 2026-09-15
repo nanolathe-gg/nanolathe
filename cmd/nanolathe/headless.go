@@ -77,6 +77,7 @@ func installHeadlessModelTextureRegistry(sess *session.Session, fs *vfs.FS) (*cl
 
 func headlessFreshBattleRequest(opts Options, cs *contentSet, source BattleSeedSource) (freshBattleRequest, headless.Request, error) {
 	reportRequest := headless.Request{
+		Gameplay:   opts.Gameplay,
 		Map:        opts.Map,
 		Mission:    opts.Mission,
 		Difficulty: opts.Difficulty,
@@ -94,7 +95,8 @@ func headlessFreshBattleRequest(opts Options, cs *contentSet, source BattleSeedS
 			seeds = source.NextBattleSeeds()
 		}
 		request.value = headless.FreshBattleRequest{
-			Map: opts.Map, Mission: opts.Mission, Difficulty: opts.Difficulty,
+			Gameplay: opts.Gameplay,
+			Map:      opts.Map, Mission: opts.Mission, Difficulty: opts.Difficulty,
 			LocalOwner: -1, SimulationSeed: uint32(seeds.Simulation), CRTSeed: seeds.CRT,
 			FS: cs.fs, PresentationWidth: retailScreenW, PresentationHeight: retailScreenH,
 		}

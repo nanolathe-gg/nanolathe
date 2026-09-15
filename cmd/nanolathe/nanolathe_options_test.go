@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"io"
 	"os"
 	"path/filepath"
@@ -55,7 +56,7 @@ func TestNanolatheOptionsPreviewCancelAndPersistence(t *testing.T) {
 	if optionsState.page != "nanolathe" {
 		t.Fatal("new category did not open")
 	}
-	for _, name := range []string{"NANOLATHE", "NRENDER", "NFPS", "NGLOW", "NWATER", "NLIGHTS", "NFINISH", "NHEAT", "NMARKS", "NSIDEBAR"} {
+	for _, name := range []string{"NANOLATHE", "NGAMEPLAY", "NRENDER", "NFPS", "NGLOW", "NWATER", "NLIGHTS", "NFINISH", "NHEAT", "NMARKS", "NSIDEBAR"} {
 		gad := optionsPanel.Window.Gadgets[optionsPanel.Index(name)]
 		if gad.ButtonArt == nil {
 			t.Fatalf("%s has no game-data button art", name)
@@ -65,6 +66,10 @@ func TestNanolatheOptionsPreviewCancelAndPersistence(t *testing.T) {
 		writeShellShot(t, cl, filepath.Join(dir, "nanolathe-options.png"))
 	}
 	host := g.windowOptions()
+	g.activateRetailOptionsGadget("NGAMEPLAY")
+	if g.gameplay != gameplay.Strict31 {
+		t.Fatal("gameplay did not switch to strict")
+	}
 	g.activateRetailOptionsGadget("NRENDER")
 	g.activateRetailOptionsGadget("NFPS")
 	if mode, fps := host.PresentationSettings(); mode != ebitenapp.RendererClassic || fps != 120 {
@@ -86,6 +91,9 @@ func TestNanolatheOptionsPreviewCancelAndPersistence(t *testing.T) {
 		t.Fatalf("glow preview: stored %d live %v", g.display.Glow, cl.Glow())
 	}
 	g.activateRetailOptionsGadget("CANCEL")
+	if g.gameplay != gameplay.Modern {
+		t.Fatal("cancel did not restore modern gameplay")
+	}
 	if g.presentation != settings.DefaultPresentation() {
 		t.Fatalf("cancel %+v", g.presentation)
 	}
@@ -197,7 +205,7 @@ func TestBattleNanolatheOptionsPointerAndLayout(t *testing.T) {
 	// Every switch has button art and a hit rectangle inside the battle column,
 	// and one click cycles it to Off (DESIGN_INTERFACE_HUD_INPUT §3.4.1).
 	canvasW, canvasH := cl.Size()
-	for _, name := range append([]string{"NRENDER", "NFPS", "NSIDEBAR"}, effectGadgets...) {
+	for _, name := range append([]string{"NGAMEPLAY", "NRENDER", "NFPS", "NSIDEBAR"}, effectGadgets...) {
 		index := optionsPanel.Index(name)
 		if optionsPanel.Window.Gadgets[index].ButtonArt == nil {
 			t.Fatalf("%s has no game-data button art", name)
@@ -227,6 +235,9 @@ func TestBattleNanolatheOptionsPointerAndLayout(t *testing.T) {
 		t.Fatalf("pointer left glow at %d", g.display.Glow)
 	}
 	g.activateRetailOptionsGadget("CANCEL")
+	if g.gameplay != gameplay.Modern {
+		t.Fatal("cancel did not restore modern gameplay")
+	}
 	if g.presentation != settings.DefaultPresentation() {
 		t.Fatalf("battle cancel %+v", g.presentation)
 	}
@@ -249,5 +260,25 @@ func TestSavedRendererControlsZoomValidation(t *testing.T) {
 	g.applySettings(prefs)
 	if err := validatePresentationZoom(g.opts); err != nil {
 		t.Fatalf("explicit modern did not override saved classic: %v", err)
+	}
+}
+
+func TestGameplayStartupOverrides(t *testing.T) {
+	opts, err := parseFlags(nil, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := startupGameplay(opts, gameplay.Strict31); got != gameplay.Strict31 {
+		t.Fatal("saved strict mode ignored")
+	}
+	opts, err = parseFlags([]string{"--gameplay=modern"}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if startupGameplay(opts, gameplay.Strict31) != gameplay.Modern {
+		t.Fatal("explicit override ignored")
+	}
+	if _, err = parseFlags([]string{"--gameplay=guess"}, io.Discard); err == nil {
+		t.Fatal("invalid mode accepted")
 	}
 }

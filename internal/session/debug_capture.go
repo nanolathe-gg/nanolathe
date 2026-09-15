@@ -16,6 +16,7 @@ func (s *Session) DebugSnapshot() map[string]any {
 	}
 	d := map[string]any{"pending_human_commands": s.PendingHumanCommands(), "state": s.State,
 		"pending_battle":           s.pendingBattle,
+		"gameplay":                 s.Gameplay.Normalize(),
 		"rng_sim_state":            s.rngSim.State,
 		"rng_crt_state":            s.rngCrt.State,
 		"rng_initialized":          s.rngInitialized,
