@@ -93,7 +93,7 @@ func (b *battleSession) playArrivalImpact() {
 	if output == nil {
 		return
 	}
-	sample, err := b.sess.Audio.Cache.LoadPath("sounds/xplolrg1.wav")
+	sample, err := b.sess.Audio.Cache.LoadPath("sounds/xplosml3.wav")
 	if err != nil || sample == nil {
 		return
 	}

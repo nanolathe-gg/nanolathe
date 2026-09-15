@@ -4664,7 +4664,7 @@ For repeatable visual inspection, use `--arrival --shot-ticks=0
 0.75 (reveal), 1.08 (descent), 1.23 (contact), 1.35 (distortion),
 1.95 (gameplay with hot commander), and 5.23 (fully cooled).
 Timings, tint, displacement and attenuation are authored prototype choices.
-The stock `sounds/xplolrg1.wav` plays once when presentation time crosses
+The stock `sounds/xplosml3.wav` plays once when presentation time crosses
 impact, at 75% of the ordinary in-view cue gain and centred pan. The existing
 backend applies master mute and FX volume. Missing audio stays silent; Escape
 skips without playing the impact, and GPU redraws cannot retrigger it. No

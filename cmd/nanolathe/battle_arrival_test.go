@@ -60,7 +60,7 @@ func TestArrivalImpactSoundPlaysOnceAndSkipStaysSilent(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Authored PCM, not copied game bytes.
-	if err := os.WriteFile(filepath.Join(root, "sounds", "xplolrg1.wav"), []byte{128, 140, 116, 128}, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "sounds", "xplosml3.wav"), []byte{128, 140, 116, 128}, 0600); err != nil {
 		t.Fatal(err)
 	}
 	fs := vfs.New()
