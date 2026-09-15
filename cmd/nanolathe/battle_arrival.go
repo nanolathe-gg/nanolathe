@@ -8,14 +8,12 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
-	"github.com/nanolathe-gg/nanolathe/internal/mission"
 )
 
-// beginArrival is an authored modern skirmish opening, not a retail behavior.
-// It resolves the commander from published units and immutable definitions;
-// saves and campaign placement never call it (DESIGN_GPU_RENDERER §36).
+// beginArrival is the authored opening for fresh matches and missions.
+// Missions without a local commander reveal the existing scene (GPU §36).
 func (b *battleSession) beginArrival(cl *client.Client) bool {
-	if b == nil || b.sess == nil || b.sess.Mission == nil || b.sess.Mission.Type != mission.TypeSkirmish || cl == nil || cl.Buffer() == nil {
+	if b == nil || b.sess == nil || cl == nil || cl.Buffer() == nil {
 		return false
 	}
 	if !b.sess.PublishOpeningFrame() {
@@ -23,7 +21,8 @@ func (b *battleSession) beginArrival(cl *client.Client) bool {
 	}
 	u, ok := arrivalCommander(cl.Buffer().Current(), b.cat)
 	if !ok {
-		return false
+		cl.StartMapReveal()
+		return cl.ArrivalActive()
 	}
 	// The opening frames the landing after final viewport/zoom selection.
 	// This is presentation choreography, including the unit's height shear.
@@ -32,6 +31,19 @@ func (b *battleSession) beginArrival(cl *client.Client) bool {
 	}
 	cl.StartArrival(u)
 	return true
+}
+
+// beginBattleArrival is shared by fresh entry, restart, and successful save
+// adoption. Restored frames are already published and must not be republished.
+func (b *battleSession) beginBattleArrival(opts Options, cl *client.Client, restored bool) {
+	if !opts.Arrival || !modernRenderer(opts) || cl == nil {
+		return
+	}
+	if restored {
+		cl.StartMapReveal()
+	} else {
+		b.beginArrival(cl)
+	}
 }
 
 func arrivalCommander(cur *frame.Frame, cat *content.Catalog) (frame.UnitView, bool) {
@@ -57,6 +69,7 @@ func (b *battleSession) stepArrival(delta float64, cl *client.Client) bool {
 		cl.StepArrivalCooling(delta)
 		return false
 	}
+	duration, hasDrop := cl.ArrivalDuration(), cl.ArrivalHasDrop()
 	previous := cl.ArrivalSeconds()
 	seconds := previous
 	if cl.ArrivalPresented() && cl.IsFocused() && delta > 0 {
@@ -65,12 +78,12 @@ func (b *battleSession) stepArrival(delta float64, cl *client.Client) bool {
 	}
 	if in := cl.Input(); in != nil {
 		if in.Kbd.KeyDown(input.KeyEscape) {
-			seconds = drawlist.ArrivalDurationSeconds
+			seconds = duration
 		}
 		in.DiscardTokens(in.PendingTokens())
 	}
 	cl.SetArrivalSeconds(seconds)
-	if previous < drawlist.ArrivalImpactSeconds && seconds >= drawlist.ArrivalImpactSeconds && seconds < drawlist.ArrivalDurationSeconds {
+	if hasDrop && previous < drawlist.ArrivalImpactSeconds && seconds >= drawlist.ArrivalImpactSeconds && seconds < duration {
 		b.playArrivalImpact()
 	}
 	if !cl.ArrivalActive() && b.sess != nil && b.sess.Clock != nil {

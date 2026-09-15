@@ -847,9 +847,7 @@ func (g *gameShell) enterBattleAtCamera(sess *session.Session, cat *content.Cata
 		return err
 	}
 	g.commitBattleCandidate(battle)
-	if savedCamera == nil && g.opts.Arrival && g.opts.Renderer == "modern" {
-		battle.beginArrival(clPtr)
-	}
+	battle.beginBattleArrival(g.opts, clPtr, savedCamera != nil)
 	return nil
 }
 

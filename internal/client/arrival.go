@@ -13,12 +13,13 @@ import (
 // arrivalPresentation owns only the displayed opening, never a mutable unit.
 // All timing and displacement here are artistic prototype choices (GPU §36).
 type arrivalPresentation struct {
-	active    bool
-	cooling   bool
-	landed    bool
-	presented bool
-	seconds   float32
-	unit      frame.UnitView
+	active     bool
+	revealOnly bool
+	cooling    bool
+	landed     bool
+	presented  bool
+	seconds    float32
+	unit       frame.UnitView
 }
 
 // StartArrival binds the already-published local commander to a fresh intro.
@@ -33,6 +34,30 @@ func (c *Client) StartArrival(unit frame.UnitView) {
 	}}
 	c.BumpPresentationEpoch()
 }
+
+// StartMapReveal fades and bounces the already-published scene around the
+// current camera, preserving saved unit poses and camera placement (GPU §36).
+func (c *Client) StartMapReveal() {
+	if c == nil || c.cam == nil {
+		return
+	}
+	c.CancelPreRecord()
+	viewport := c.battleViewportRect()
+	x, z := c.cam.ScreenToWorld(viewport.X+viewport.W/2+camera.OriginX, viewport.Y+viewport.H/2+camera.OriginY)
+	c.arrival = arrivalPresentation{active: true, revealOnly: true, unit: frame.UnitView{X: x, Z: z}}
+	c.BumpPresentationEpoch()
+}
+
+// ArrivalDuration bounds input holding for the selected opening.
+func (c *Client) ArrivalDuration() float32 {
+	if c != nil && c.arrival.revealOnly {
+		return drawlist.ArrivalRevealSeconds
+	}
+	return drawlist.ArrivalDurationSeconds
+}
+
+// ArrivalHasDrop distinguishes landing cues from a scene-only reveal.
+func (c *Client) ArrivalHasDrop() bool { return c != nil && !c.arrival.revealOnly }
 
 func (c *Client) ArrivalActive() bool { return c != nil && c.arrival.active }
 
@@ -64,10 +89,10 @@ func (c *Client) SetArrivalSeconds(seconds float32) {
 		seconds = 0
 	}
 	c.arrival.seconds = seconds
-	if seconds >= drawlist.ArrivalImpactSeconds && (c.arrival.active || c.arrival.cooling) {
+	if !c.arrival.revealOnly && seconds >= drawlist.ArrivalImpactSeconds && (c.arrival.active || c.arrival.cooling) {
 		c.arrival.landed = true
 	}
-	if seconds >= drawlist.ArrivalDurationSeconds {
+	if seconds >= c.ArrivalDuration() {
 		c.arrival.active = false
 	}
 	if seconds >= drawlist.ArrivalCoolingEndSeconds {
@@ -85,7 +110,7 @@ func (c *Client) arrivalPacket() drawlist.Arrival {
 	u := c.arrival.unit
 	x, y := c.cam.WorldToScreen(u.X, u.Y, u.Z)
 	gx, gy := c.cam.WorldToScreen(0, 0, 0)
-	a := drawlist.Arrival{Active: true, Seconds: c.arrival.seconds,
+	a := drawlist.Arrival{Active: true, RevealOnly: c.arrival.revealOnly, Seconds: c.arrival.seconds,
 		X: float32(x - camera.OriginX), Y: float32(y - camera.OriginY),
 		GridX: float32(gx - camera.OriginX), GridY: float32(gy - camera.OriginY),
 		Scale: float32(c.cam.EffectiveScale().Project(32)) / 32,
@@ -96,7 +121,7 @@ func (c *Client) arrivalPacket() drawlist.Arrival {
 }
 
 func (c *Client) arrivalMatches(v frame.UnitView) bool {
-	return c.ArrivalActive() && c.enhanced && v.Slot == c.arrival.unit.Slot && v.InstanceID == c.arrival.unit.InstanceID
+	return c.ArrivalActive() && !c.arrival.revealOnly && c.enhanced && v.Slot == c.arrival.unit.Slot && v.InstanceID == c.arrival.unit.InstanceID
 }
 
 func (c *Client) arrivalHidesUnit(v frame.UnitView) bool {

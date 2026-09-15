@@ -344,6 +344,7 @@ func restartDirectBattle(opts Options, cs *contentSet, cl *client.Client, curren
 		mx, my := battleViewCentre(next.cam)
 		jumpBattleZoom(next, mx, my, zoom, modernRenderer(opts))
 	}
+	next.beginBattleArrival(opts, cl, false)
 	if next.hud != nil && next.hud.windowContext != nil {
 		next.hud.windowContext.completeTransition()
 	}

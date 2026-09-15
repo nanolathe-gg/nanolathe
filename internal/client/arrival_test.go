@@ -181,3 +181,42 @@ func TestArrivalScarStaysAtLandingAfterCoolingAndResetsWithBattle(t *testing.T) 
 		t.Fatal("scar survived battle replacement")
 	}
 }
+
+func TestMapRevealPreservesCameraAndUnitsWithoutLanding(t *testing.T) {
+	c, buffer := pipelineClient(t)
+	c.SetEnhanced(true)
+	c.width, c.height = 640, 480
+	c.cam = &camera.Camera{X: 400, Z: 700, ViewW: 640, ViewH: 480, MapW: 4096, MapH: 4096}
+	beforeCamera := *c.cam
+	u := buffer.Current().Units[0]
+	c.StartMapReveal()
+	if !c.ArrivalActive() || c.ArrivalHasDrop() || c.ArrivalDuration() != drawlist.ArrivalRevealSeconds {
+		t.Fatal("scene reveal selected landing choreography")
+	}
+	if *c.cam != beforeCamera {
+		t.Fatal("reveal changed the saved camera")
+	}
+	for _, age := range []float32{0, drawlist.ArrivalDropSeconds, drawlist.ArrivalRevealSeconds} {
+		c.SetArrivalSeconds(age)
+		if c.arrivalHidesUnit(u) || !reflect.DeepEqual(c.arrivalUnit(u), u) {
+			t.Fatal("reveal altered saved unit pose")
+		}
+		var g drawlist.ModelGeometry
+		c.applyArrivalHeat(&g, u)
+		if g.WreckHeatStrength != 0 || g.WreckEmission != [3]float32{} || c.arrival.cooling || c.arrival.landed {
+			t.Fatal("reveal emitted landing heat or scar")
+		}
+	}
+	if c.ArrivalActive() {
+		t.Fatal("reveal held gameplay after tiles settled")
+	}
+	c.StartMapReveal()
+	if !c.worldSpace(true).Arrival.RevealOnly {
+		t.Fatal("missing reveal-only packet")
+	}
+	c.BeginWorldOverlay()
+	if c.worldSpace(true).Arrival.Active {
+		t.Fatal("overlay replayed the scene reveal")
+	}
+	c.EndWorldOverlay()
+}

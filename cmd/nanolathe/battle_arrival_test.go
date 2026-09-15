@@ -1,6 +1,10 @@
 package main
 
 import (
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/mission"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -98,5 +102,70 @@ func TestArrivalImpactSoundPlaysOnceAndSkipStaysSilent(t *testing.T) {
 	b.stepArrival(0.02, cl)
 	if len(spy.gains) != 1 {
 		t.Fatal("skipping intro replayed impact")
+	}
+}
+
+func TestArrivalEntryDistinguishesFreshMissionAndSavedBattle(t *testing.T) {
+	cl, err := client.New(client.Options{Width: 640, Height: 480})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cam := &camera.Camera{X: 400, Z: 700, ViewW: 640, ViewH: 480, MapW: 4096, MapH: 4096}
+	cl.SetCamera(cam)
+	cl.SetFocused(true)
+	buffer := frame.NewBuffer()
+	buffer.BeginWrite().Units = []frame.UnitView{{Slot: 1, DefName: "commander", Owner: 0}}
+	if err := buffer.Publish(0); err != nil {
+		t.Fatal(err)
+	}
+	cl.SetSnapshot(buffer)
+	b := &battleSession{cam: cam, cat: &content.Catalog{Units: map[string]*content.UnitDef{"commander": {Commander: true}}}, sess: &session.Session{Snapshot: buffer, Clock: &clock.State{}, Mission: &mission.Mission{Type: mission.TypeCampaign}}}
+	opts := Options{Arrival: true, Renderer: "modern"}
+	b.beginBattleArrival(opts, cl, false)
+	if !cl.ArrivalActive() || !cl.ArrivalHasDrop() {
+		t.Fatal("fresh mission omitted commander arrival")
+	}
+	// A loaded tick-zero save is still a save. Entry source, not tick count,
+	// chooses reveal-only, and no frame is republished or camera recentered.
+	beforeCamera, beforeFrame := *cam, buffer.Current()
+	b.beginBattleArrival(opts, cl, true)
+	if !cl.ArrivalActive() || cl.ArrivalHasDrop() || *cam != beforeCamera || buffer.Current() != beforeFrame {
+		t.Fatal("save entry changed camera/frame or selected drop")
+	}
+	cl.MarkArrivalPresented()
+	b.sess.Clock.GlobalTick = 800
+	b.millisSource = &scriptedMillisSource{samples: []uint32{10000}}
+	for i := 0; i < 100 && cl.ArrivalActive(); i++ {
+		b.stepArrival(0.02, cl)
+	}
+	if cl.ArrivalActive() || b.sess.Clock.GlobalTick != 800 || b.sess.Clock.ScaledAnchor != 300 {
+		t.Fatal("save reveal advanced simulation or did not hand off")
+	}
+	delete(b.cat.Units, "commander")
+	b.sess.Clock.GlobalTick = 0
+	b.beginBattleArrival(opts, cl, false)
+	if !cl.ArrivalActive() || cl.ArrivalHasDrop() {
+		t.Fatal("commander-less mission did not reveal scene")
+	}
+}
+
+func TestArrivalDefaultsDoNotAnimateOrdinaryCaptures(t *testing.T) {
+	for _, args := range [][]string{nil, {"--shot=frame.png"}, {"--shot=frame.png", "--renderer=classic"}, {"--shot=frame.png", "--shot-model=armsolar"}} {
+		opts, err := parseFlags(args, io.Discard)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !opts.Arrival || opts.ShotArrivalTime != -1 {
+			t.Fatal("opening default or capture sentinel changed")
+		}
+		if opts.Shot != "" {
+			if err := validateShotOptions(opts); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	opts, err := parseFlags([]string{"--arrival=false"}, io.Discard)
+	if err != nil || opts.Arrival {
+		t.Fatal("opening opt-out ignored")
 	}
 }

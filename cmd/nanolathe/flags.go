@@ -14,7 +14,7 @@ import (
 // Options is the command-line surface for the retail runtime and its host
 // configuration. Developer probes and capture modes are separate tools.
 type Options struct {
-	Arrival            bool    // opt-in modern skirmish opening prototype (GPU §36)
+	Arrival            bool    // modern battle opening (GPU §36)
 	ShotArrivalTime    float64 // seconds into a reproducible opening capture; negative disables
 	UnitLimit          int     // zero uses the saved preference; explicit CLI values override it
 	BattleBenchmark    string
@@ -100,7 +100,7 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	var opts Options
 	var unitLimitSet bool
 	set := flag.NewFlagSet("nanolathe", flag.ContinueOnError)
-	set.BoolVar(&opts.Arrival, "arrival", false, "prototype commander arrival and radial map reveal for fresh modern skirmishes")
+	set.BoolVar(&opts.Arrival, "arrival", true, "modern battle opening: commander arrival for new games, map reveal for saves")
 	set.Float64Var(&opts.ShotArrivalTime, "shot-arrival-time", -1, "capture the arrival prototype at these presentation seconds (requires --shot --shot-ticks=0)")
 	set.SetOutput(out)
 	set.Func("root", "content root; repeat in load order (later roots win); omitted uses $NANOLATHE_TA_ROOT or installation discovery", func(root string) error {

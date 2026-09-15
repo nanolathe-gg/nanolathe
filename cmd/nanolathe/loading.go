@@ -296,6 +296,7 @@ func (g *gameShell) loadRetailSavePath(path string) error {
 	}
 	g.importedRetailBattle = true
 	g.commitBattleCandidate(battle)
+	battle.beginBattleArrival(g.opts, clPtr, true)
 	return nil
 }
 

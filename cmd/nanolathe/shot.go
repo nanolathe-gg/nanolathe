@@ -351,9 +351,9 @@ func runShot(opts Options, cs *contentSet) error {
 	// it and a classic capture records the authored art; "both" records once
 	// for the executor under test, the modern one (DESIGN_GPU_RENDERER §14.3).
 	cl.SetEnhanced(shotRenderer != "classic")
-	if opts.Arrival {
+	if opts.Arrival && opts.ShotArrivalTime != -1 {
 		if !b.beginArrival(cl) {
-			return fmt.Errorf("nanolathe: arrival capture requires a fresh skirmish with a local commander")
+			return fmt.Errorf("nanolathe: arrival capture requires a fresh match or mission")
 		}
 		cl.SetArrivalSeconds(float32(opts.ShotArrivalTime))
 	}
@@ -405,7 +405,7 @@ func shotSceneLabel(opts Options) string {
 }
 
 func validateShotOptions(opts Options) error {
-	if opts.Arrival && (opts.ShotArrivalTime < 0 || float32(opts.ShotArrivalTime) > drawlist.ArrivalCoolingEndSeconds || math.IsNaN(opts.ShotArrivalTime) || opts.ShotTicks != 0 || effectiveShotRenderer(opts) != "modern" || opts.ShotModel != "" || opts.ProfileSeconds != 0) {
+	if opts.Arrival && opts.ShotArrivalTime != -1 && (opts.ShotArrivalTime < 0 || float32(opts.ShotArrivalTime) > drawlist.ArrivalCoolingEndSeconds || math.IsNaN(opts.ShotArrivalTime) || opts.ShotTicks != 0 || effectiveShotRenderer(opts) != "modern" || opts.ShotModel != "" || opts.ProfileSeconds != 0) {
 		return fmt.Errorf("nanolathe: arrival capture requires --renderer=modern --shot-ticks=0 --shot-arrival-time between 0 and %.2f, without model or profile modes", drawlist.ArrivalCoolingEndSeconds)
 	}
 	shotRenderer := effectiveShotRenderer(opts)

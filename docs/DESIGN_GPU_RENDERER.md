@@ -4593,10 +4593,22 @@ back should be heard before the lane becomes permanent.
 
 ## 36. Commander arrival prototype
 
-User-requested artistic presentation, available through the opt-in `--arrival`
-flag; not a retail behavioral claim. It opts fresh modern skirmishes into a
-1.95-second opening. Saves, campaign entry, classic, and ordinary captures retain
-their existing entry. A skirmish without a local commander skips the opening.
+User-requested artistic presentation, enabled by default for modern battle
+entry; not a retail behavioral claim. Fresh skirmishes and missions use the
+1.95-second commander arrival. `--arrival=false` disables the opening. Classic
+and ordinary captures retain their existing entry; an explicit
+`--shot-arrival-time` stages an arrival capture.
+
+Loading a save uses only the 1.2-second scene fade/bounce, including tiles,
+sprites and units. Its origin is the saved camera view's centre, with no camera
+recentering or changes to saved unit poses. It has no commander drop, descent
+trail, impact flash, distortion wave, landing sound, heat or new scar. A fresh
+mission without a local commander uses this same scene-only reveal. Save entry
+is identified by the load path, including tick-zero saves; it consumes the
+already-published restored frame without republishing. Input/simulation holding,
+first-frame readiness, focus handling, and anchor rebasing apply to both
+openings, and reveal-only hands control back as soon as tiles settle. World UI
+overlays do not repeat the completed-scene effect.
 
 The shell requests one tick-zero publication of the loaded session through
 `Session.PublishOpeningFrame`, using the ordinary publisher without a phase or
@@ -4639,7 +4651,8 @@ The map reveals in 32-world-pixel screen chunks with a
 stronger vertical bounce, a small sideways wobble, and a damped rebound; sampling the completed scene carries terrain, trees,
 water, and fog together. It is a sampled image effect, not moving terrain
 geometry. Black source fog stays black. The ring finishes according to the
-viewport's farthest corner; the final stage returns the exact source image.
+viewport's farthest corner; the final stage returns the exact source image. A `RevealOnly` packet ends at
+the reveal boundary and never submits the descent or impact effects.
 The pass borrows the existing read surface and submits nothing when inactive.
 
 The falling commander starts hot, reusing wreck emission, nearby lighting and
