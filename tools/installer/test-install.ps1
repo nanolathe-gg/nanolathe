@@ -46,6 +46,17 @@ Assert-Throws { Read-NanolatheManifest ($manifest.Replace("source_tar_sha256=$ha
 $base = Join-Path ([IO.Path]::GetTempPath()) ("nanolathe-test O'Brien & `$x; [alpha] " + [guid]::NewGuid().ToString('N'))
 try {
     [void][IO.Directory]::CreateDirectory((Join-Path $base 'releases'))
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = Join-Path $base 'authored.zip'
+    $zip = [IO.Compression.ZipFile]::Open($archive, [IO.Compression.ZipArchiveMode]::Create)
+    try {
+        $entry = $zip.CreateEntry("nested O'Brien & [alpha]/sentinel.txt")
+        $writer = New-Object IO.StreamWriter($entry.Open())
+        try { $writer.Write('authored archive content') } finally { $writer.Dispose() }
+    } finally { $zip.Dispose() }
+    $unpack = Join-Path $base 'extracted [alpha]'
+    Expand-NanolatheArchive $archive $unpack
+    Assert-Equal ([IO.File]::ReadAllText((Join-Path $unpack "nested O'Brien & [alpha]/sentinel.txt"))) 'authored archive content' 'ZIP extraction round trip'
     $old = Join-Path (Join-Path $base 'releases') 'old-release'
     [void][IO.Directory]::CreateDirectory($old)
     [IO.File]::WriteAllText((Join-Path $old 'nanolathe.exe'), 'working binary')

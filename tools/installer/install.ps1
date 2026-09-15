@@ -47,6 +47,15 @@ function Get-NanolatheDownload([string]$Url, [string]$Path, [string]$Hash) {
     Test-NanolatheChecksum $Path $Hash
 }
 
+function Expand-NanolatheArchive([string]$Archive, [string]$Destination) {
+    Write-Host "Extracting verified archive: $Archive"
+    # Use the Framework ZIP implementation to avoid per-entry PowerShell
+    # overhead. Callers supply a fresh directory inside the temporary workspace.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [IO.Compression.ZipFile]::ExtractToDirectory($Archive, $Destination)
+    Write-Host 'Extraction complete.'
+}
+
 function Write-NanolatheData([string]$Path, [string]$Value) {
     $temp = "$Path.$([guid]::NewGuid().ToString('N')).tmp"
     $backup = "$temp.previous"
@@ -225,14 +234,14 @@ Downloads verified source and a private Go compiler. Original game assets are re
             $archive = Join-Path $work 'go.zip'
             Get-NanolatheDownload "https://go.dev/dl/go$($manifest.go_version).windows-amd64.zip" $archive $manifest.go_windows_amd64_sha256
             $unpack = Join-Path $work 'toolchain'
-            Expand-Archive -LiteralPath $archive -DestinationPath $unpack
+            Expand-NanolatheArchive $archive $unpack
             if (!(Test-Path -LiteralPath (Join-Path $unpack 'go\bin\go.exe'))) { throw 'Go archive is missing go.exe.' }
             [IO.Directory]::Move($unpack, $toolchain)
         }
         $archive = Join-Path $work 'source.zip'
         Get-NanolatheDownload "https://codeload.github.com/nanolathe-gg/nanolathe/zip/$($manifest.source_revision)" $archive $manifest.source_zip_sha256
         $unpack = Join-Path $work 'source'
-        Expand-Archive -LiteralPath $archive -DestinationPath $unpack
+        Expand-NanolatheArchive $archive $unpack
         $source = Join-Path $unpack ('nanolathe-' + $manifest.source_revision)
         if (!(Test-Path -LiteralPath (Join-Path $source 'go.sum'))) { throw 'Source archive is missing go.sum.' }
         $sumBefore = (Get-FileHash -LiteralPath (Join-Path $source 'go.sum') -Algorithm SHA256).Hash
