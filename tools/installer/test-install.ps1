@@ -38,6 +38,7 @@ go_darwin_amd64_sha256=$hash
 go_linux_amd64_sha256=$hash
 go_linux_arm64_sha256=$hash
 go_windows_amd64_sha256=$hash
+go_windows_arm64_sha256=$hash
 "@
 Assert-Equal (Read-NanolatheManifest $manifest).version 'alpha-1' 'Valid manifest'
 Assert-Equal (Read-NanolatheManifest ($manifest.Replace("`n", "`r`n"))).go_version '1.25.0' 'CRLF manifest'

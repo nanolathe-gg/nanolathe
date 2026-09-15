@@ -78,9 +78,7 @@ jobs:
           $env:NANOLATHE_INSTALL_DIR = Join-Path $env:RUNNER_TEMP 'Nanolathe Install Test'
           if (([uri]$env:MANIFEST_URL).Scheme -ne 'https') { throw 'Manifest must use HTTPS' }
           $script = [IO.File]::ReadAllText((Join-Path $env:GITHUB_WORKSPACE 'tools/installer/install.ps1'))
-          $manifestBase = $env:MANIFEST_URL.Substring(0, $env:MANIFEST_URL.LastIndexOf('/') + 1)
-          $script = $script.Replace('https://nanolathe.gg/install/release.txt', $env:MANIFEST_URL).Replace('https://nanolathe.gg/install/go', $manifestBase + 'go')
-          & ([scriptblock]::Create($script)) -NoRun
+          & ([scriptblock]::Create($script.Replace('https://nanolathe.gg/install/release.txt', $env:MANIFEST_URL))) -NoRun
           $release = [IO.File]::ReadAllText((Join-Path $env:NANOLATHE_INSTALL_DIR 'current.txt'))
           & (Join-Path (Join-Path (Join-Path $env:NANOLATHE_INSTALL_DIR 'releases') $release) 'nanolathe.exe') --help
           # Exercise the launcher's bounded HTTP client on Windows PowerShell 5.1.

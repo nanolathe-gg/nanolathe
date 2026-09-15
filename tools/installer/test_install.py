@@ -93,7 +93,7 @@ chmod +x "$output"
         values = dict(version="alpha.1", source_revision=REVISION, source_tar_sha256=self.source_hash,
                       source_zip_sha256="b" * 64, go_version="1.25.0",
                       installer_sh_sha256=hashlib.sha256((self.path / "install.sh").read_bytes()).hexdigest())
-        for platform in ("darwin_arm64", "darwin_amd64", "linux_amd64", "linux_arm64", "windows_amd64"):
+        for platform in ("darwin_arm64", "darwin_amd64", "linux_amd64", "linux_arm64", "windows_amd64", "windows_arm64"):
             values[f"go_{platform}_sha256"] = self.go_hash
         values.update(overrides)
         (self.path / "release.txt").write_text("".join(f"{k}={v}\n" for k, v in values.items()))

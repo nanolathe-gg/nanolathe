@@ -23,7 +23,7 @@ function Read-NanolatheManifest([string]$Text) {
         go_version = '^[0-9]+\.[0-9]+\.[0-9]+$'
     }
     foreach ($key in @('source_tar_sha256', 'source_zip_sha256', 'go_darwin_arm64_sha256',
-        'go_darwin_amd64_sha256', 'go_linux_amd64_sha256', 'go_linux_arm64_sha256', 'go_windows_amd64_sha256')) {
+        'go_darwin_amd64_sha256', 'go_linux_amd64_sha256', 'go_linux_arm64_sha256', 'go_windows_amd64_sha256', 'go_windows_arm64_sha256')) {
         $rules[$key] = '^[0-9a-fA-F]{64}$'
     }
     foreach ($key in $rules.Keys) {
@@ -352,15 +352,7 @@ Downloads verified source and a private Go compiler. Original game assets are re
         Write-Host "Release manifest verified: $($manifest.version)"
         $work = Join-Path $base ('work-' + [guid]::NewGuid().ToString('N'))
         [void][IO.Directory]::CreateDirectory($work)
-        $goHash = $manifest.go_windows_amd64_sha256
-        if ($goArch -eq 'arm64') {
-            # Keep release.txt compatible with installed Unix launchers, which
-            # reject unknown keys. The Go version pins this separate checksum.
-            $checksumPath = Join-Path $work 'go-arm64.sha256'
-            Invoke-WebRequest -UseBasicParsing -Uri "https://nanolathe.gg/install/go$($manifest.go_version).windows-arm64.sha256" -OutFile $checksumPath -TimeoutSec 60
-            $goHash = [IO.File]::ReadAllText($checksumPath).Trim()
-            if ($goHash -cnotmatch '^[0-9a-f]{64}$') { throw 'Invalid Windows ARM64 Go checksum.' }
-        }
+        $goHash = $manifest["go_windows_${goArch}_sha256"]
         $toolchainName = 'go-' + $manifest.go_version + '-' + $goHash.Substring(0,16).ToLowerInvariant()
         $toolchain = Join-Path (Join-Path $base 'toolchains') $toolchainName
         $go = Join-Path $toolchain 'go\bin\go.exe'

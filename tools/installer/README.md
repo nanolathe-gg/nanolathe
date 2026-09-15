@@ -113,11 +113,7 @@ compiler and cache too. The original TA installation remains separate.
 The canonical scripts live here; the website serves byte-for-byte copies as
 `/install.sh` and `/install.ps1`. A website-owned `/install/release.txt` pins the
 source commit, source archive hashes, Go patch version, and per-platform Go
-archive hashes. Windows ARM64 uses a separate, versioned
-`/install/go<version>.windows-arm64.sha256` checksum file so existing Unix
-launchers can still parse the release manifest. The release generator obtains
-that checksum from the same official Go release metadata and preserves existing
-versioned checksum files. Manifest data is never evaluated as code. Downloads use HTTPS;
+archive hashes. Manifest data is never evaluated as code. Downloads use HTTPS;
 hashes pin the expected bytes but are not a separate publisher signature.
 
 1. Integrate changes and run `tools/check`, `tools/check-retail`, and the native

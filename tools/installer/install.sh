@@ -52,7 +52,7 @@ replace_pointer() {
 install_release() {
     stage=$(mktemp -d "$base/.install-XXXXXXXX")
     fetch https://nanolathe.gg/install/release.txt "$stage/release.txt"
-    local line key value seen='|' version= revision= source_hash= go_version= go_da= go_dx= go_la= go_lx= zip_hash= go_wx=
+    local line key value seen='|' version= revision= source_hash= go_version= go_da= go_dx= go_la= go_lx= zip_hash= go_wx= go_wa=
     while IFS= read -r line || [ -n "$line" ]; do
         [ -n "$line" ] || fail 'empty manifest line'
         case "$line" in *=*) ;; *) fail 'malformed manifest line' ;; esac
@@ -63,18 +63,18 @@ install_release() {
             version) [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]] || fail 'invalid version'; version=$value ;;
             source_revision) [[ "$value" =~ ^[0-9a-f]{40}$ ]] || fail 'invalid source revision'; revision=$value ;;
             go_version) [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail 'invalid Go version'; go_version=$value ;;
-            installer_sh_sha256|installer_ps1_sha256|source_tar_sha256|source_zip_sha256|go_darwin_arm64_sha256|go_darwin_amd64_sha256|go_linux_arm64_sha256|go_linux_amd64_sha256|go_windows_amd64_sha256)
+            installer_sh_sha256|installer_ps1_sha256|source_tar_sha256|source_zip_sha256|go_darwin_arm64_sha256|go_darwin_amd64_sha256|go_linux_arm64_sha256|go_linux_amd64_sha256|go_windows_amd64_sha256|go_windows_arm64_sha256)
                 [[ "$value" =~ ^[0-9a-f]{64}$ ]] || fail "invalid checksum: $key"
                 case "$key" in
                     source_tar_sha256) source_hash=$value ;; source_zip_sha256) zip_hash=$value ;;
                     go_darwin_arm64_sha256) go_da=$value ;; go_darwin_amd64_sha256) go_dx=$value ;;
                     go_linux_arm64_sha256) go_la=$value ;; go_linux_amd64_sha256) go_lx=$value ;;
-                    go_windows_amd64_sha256) go_wx=$value ;;
+                    go_windows_amd64_sha256) go_wx=$value ;; go_windows_arm64_sha256) go_wa=$value ;;
                 esac ;;
             *) fail "unknown manifest key: $key" ;;
         esac
     done < "$stage/release.txt"
-    for value in "$version" "$revision" "$source_hash" "$go_version" "$zip_hash" "$go_da" "$go_dx" "$go_la" "$go_lx" "$go_wx"; do
+    for value in "$version" "$revision" "$source_hash" "$go_version" "$zip_hash" "$go_da" "$go_dx" "$go_la" "$go_lx" "$go_wx" "$go_wa"; do
         [ -n "$value" ] || fail 'manifest is missing a required key'
     done
     local go_hash toolchain release
@@ -149,13 +149,13 @@ read_update_manifest() {
             version) [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]] || return 1; manifest_version=$value ;;
             source_revision) [[ "$value" =~ ^[0-9a-f]{40}$ ]] || return 1; manifest_revision=$value ;;
             go_version) [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1 ;;
-            installer_sh_sha256|installer_ps1_sha256|source_tar_sha256|source_zip_sha256|go_darwin_arm64_sha256|go_darwin_amd64_sha256|go_linux_arm64_sha256|go_linux_amd64_sha256|go_windows_amd64_sha256)
+            installer_sh_sha256|installer_ps1_sha256|source_tar_sha256|source_zip_sha256|go_darwin_arm64_sha256|go_darwin_amd64_sha256|go_linux_arm64_sha256|go_linux_amd64_sha256|go_windows_amd64_sha256|go_windows_arm64_sha256)
                 [[ "$value" =~ ^[0-9a-f]{64}$ ]] || return 1
                 if [ "$key" = installer_sh_sha256 ]; then manifest_installer=$value; fi ;;
             *) return 1 ;;
         esac
     done < "$1"
-    for key in version source_revision go_version source_tar_sha256 source_zip_sha256 go_darwin_arm64_sha256 go_darwin_amd64_sha256 go_linux_arm64_sha256 go_linux_amd64_sha256 go_windows_amd64_sha256; do
+    for key in version source_revision go_version source_tar_sha256 source_zip_sha256 go_darwin_arm64_sha256 go_darwin_amd64_sha256 go_linux_arm64_sha256 go_linux_amd64_sha256 go_windows_amd64_sha256 go_windows_arm64_sha256; do
         case "$seen" in *"|$key|"*) ;; *) return 1 ;; esac
     done
 }
