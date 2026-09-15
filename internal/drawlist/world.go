@@ -29,6 +29,7 @@ import "github.com/nanolathe-gg/nanolathe/internal/camera"
 // Zoom == ZoomOf(Step) the scale is one and the region reaches pixels
 // untouched, which is what keeps the §6 parity gate exact at 1x and 2x.
 type WorldSpace struct {
+	Arrival Arrival
 	// Begin opens the region; a false Begin closes it.
 	Begin bool
 	// Zoom is the live presentation factor (camera.Zoom, 1/1024 units).
