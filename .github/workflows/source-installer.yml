@@ -1,0 +1,89 @@
+name: Source installer
+on:
+  push:
+    paths:
+      - 'tools/installer/**'
+      - 'cmd/nanolathe/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/source-installer.yml'
+  pull_request:
+    paths:
+      - 'tools/installer/**'
+      - 'cmd/nanolathe/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/source-installer.yml'
+  workflow_dispatch:
+    inputs:
+      manifest_url:
+        description: 'Optional HTTPS release manifest for a full clean install without game assets'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      CGO_ENABLED: '0'
+      GOTOOLCHAIN: local
+      MANIFEST_URL: ${{ inputs.manifest_url }}
+      NANOLATHE_INSTALL_DIR: ${{ runner.temp }}/Nanolathe Install Test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.8'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Build desktop command with Go alone
+        run: go build -o nanolathe-installer-check.exe ./cmd/nanolathe
+      - name: Startup and save-directory contracts
+        run: go test ./cmd/nanolathe -run 'Installer|SaveDirectory'
+      - name: Unix installer failure and launch contracts
+        if: runner.os != 'Windows'
+        run: python3 tools/installer/test_install.py
+      - name: Windows installer failure and launch contracts
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./tools/installer/test-install.ps1
+      - name: Clean Unix source install
+        if: runner.os != 'Windows' && inputs.manifest_url != ''
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          from urllib.parse import urlsplit
+          url = os.environ['MANIFEST_URL']
+          if urlsplit(url).scheme != 'https':
+              raise SystemExit('Manifest must use HTTPS')
+          script = Path('tools/installer/install.sh').read_text()
+          Path(os.environ['RUNNER_TEMP'], 'install-test.sh').write_text(script.replace('https://nanolathe.gg/install/release.txt', url))
+          PY
+          bash "$RUNNER_TEMP/install-test.sh" --no-run
+          "$NANOLATHE_INSTALL_DIR/current/nanolathe" --help
+      - name: Clean Windows source install
+        if: runner.os == 'Windows' && inputs.manifest_url != ''
+        shell: powershell
+        run: |
+          if (([uri]$env:MANIFEST_URL).Scheme -ne 'https') { throw 'Manifest must use HTTPS' }
+          $script = [IO.File]::ReadAllText((Join-Path $env:GITHUB_WORKSPACE 'tools/installer/install.ps1'))
+          & ([scriptblock]::Create($script.Replace('https://nanolathe.gg/install/release.txt', $env:MANIFEST_URL))) -NoRun
+          $release = [IO.File]::ReadAllText((Join-Path $env:NANOLATHE_INSTALL_DIR 'current.txt'))
+          & (Join-Path (Join-Path (Join-Path $env:NANOLATHE_INSTALL_DIR 'releases') $release) 'nanolathe.exe') --help
+      - name: Upload installer diagnostics
+        if: always() && inputs.manifest_url != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-logs-${{ matrix.os }}
+          path: ${{ runner.temp }}/Nanolathe Install Test/logs
+          if-no-files-found: ignore
