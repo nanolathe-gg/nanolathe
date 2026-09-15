@@ -42,7 +42,8 @@ function Test-NanolatheChecksum([string]$Path, [string]$Expected) {
 
 function Get-NanolatheDownload([string]$Url, [string]$Path, [string]$Hash) {
     Write-Host "Downloading $Url"
-    Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $Path
+    Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $Path -TimeoutSec 600
+    Write-Host 'Download complete; verifying SHA-256...'
     Test-NanolatheChecksum $Path $Hash
 }
 
@@ -169,6 +170,9 @@ try {
 }
 
 function Invoke-NanolatheInstaller {
+    # Windows PowerShell 5.1 renders progress for each download chunk. Suppress
+    # that overhead only in this invocation; explicit stage messages remain.
+    $ProgressPreference = 'SilentlyContinue'
     if ($Help) {
         Write-Host @'
 Nanolathe source installer for x64 Windows (PowerShell 5.1 or later).
@@ -208,8 +212,10 @@ Downloads verified source and a private Go compiler. Original game assets are re
         $transcribing = $true
         Write-Host "Installing Nanolathe into $base"
         [Net.ServicePointManager]::SecurityProtocol = $tlsBefore -bor [Net.SecurityProtocolType]::Tls12
-        $manifestText = (Invoke-WebRequest -UseBasicParsing -Uri 'https://nanolathe.gg/install/release.txt').Content
+        Write-Host 'Downloading release manifest...'
+        $manifestText = (Invoke-WebRequest -UseBasicParsing -Uri 'https://nanolathe.gg/install/release.txt' -TimeoutSec 60).Content
         $manifest = Read-NanolatheManifest $manifestText
+        Write-Host "Release manifest verified: $($manifest.version)"
         $work = Join-Path $base ('work-' + [guid]::NewGuid().ToString('N'))
         [void][IO.Directory]::CreateDirectory($work)
         $toolchainName = 'go-' + $manifest.go_version + '-' + $manifest.go_windows_amd64_sha256.Substring(0,16).ToLowerInvariant()
