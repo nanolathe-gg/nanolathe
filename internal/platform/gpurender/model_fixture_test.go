@@ -92,6 +92,7 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 	// model lane's are in model_direct_test.go.
 	for _, check := range []func() error{
 		checkWorldAffineDevicePixels,
+		checkArrivalDevicePixels,
 		checkLensDevicePixels,
 		checkStrategicIconDevicePixels,
 		checkMixedStrategicIconBatch,

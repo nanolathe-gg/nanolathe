@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"math"
 	"os"
 	"runtime"
 	"runtime/pprof"
@@ -349,6 +350,12 @@ func runShot(opts Options, cs *contentSet) error {
 	// it and a classic capture records the authored art; "both" records once
 	// for the executor under test, the modern one (DESIGN_GPU_RENDERER §14.3).
 	cl.SetEnhanced(shotRenderer != "classic")
+	if opts.Arrival {
+		if !b.beginArrival(cl) {
+			return fmt.Errorf("nanolathe: arrival capture requires a fresh skirmish with a local commander")
+		}
+		cl.SetArrivalSeconds(float32(opts.ShotArrivalTime))
+	}
 	// One presented state for either executor, including the both capture.
 	cl.BeginPresentationFrame()
 	switch shotRenderer {
@@ -397,6 +404,9 @@ func shotSceneLabel(opts Options) string {
 }
 
 func validateShotOptions(opts Options) error {
+	if opts.Arrival && (opts.ShotArrivalTime < 0 || opts.ShotArrivalTime > 3.2 || math.IsNaN(opts.ShotArrivalTime) || opts.ShotTicks != 0 || effectiveShotRenderer(opts) != "modern" || opts.ShotModel != "" || opts.ProfileSeconds != 0) {
+		return fmt.Errorf("nanolathe: arrival capture requires --renderer=modern --shot-ticks=0 --shot-arrival-time between 0 and 3.2, without model or profile modes")
+	}
 	shotRenderer := effectiveShotRenderer(opts)
 	if opts.ShotModel != "" {
 		if opts.Shot == "" {

@@ -4,11 +4,11 @@ package drawlist
 // Coordinates and Scale are in recording pixels; the world transform applies
 // once in the executor. Zero Active leaves ordinary rendering untouched.
 type Arrival struct {
-	Active bool
-	Seconds float32
-	X, Y float32
+	Active       bool
+	Seconds      float32
+	X, Y         float32
 	GridX, GridY float32
-	Scale float32
+	Scale        float32
 }
 
 // ArrivalImpactSeconds and ArrivalDurationSeconds are artistic prototype

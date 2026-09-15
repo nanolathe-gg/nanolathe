@@ -842,6 +842,9 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	if b == nil || cl == nil {
 		return
 	}
+	if b.stepArrival(delta, cl) {
+		return
+	}
 	// Cancel deferred ground input before any modal or accelerator can consume
 	// its key edges. Returning to battle must not replay an older Move.
 	if !cl.IsFocused() || b.isResultVisible() || b.battleState().Modal() != ui.BattleModalClosed || b.isTalkGUIActive() || unitInfoOpen() {

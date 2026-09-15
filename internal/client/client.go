@@ -51,6 +51,7 @@ type Options struct {
 // keeps retail's 8-bit indexed renderer and presents one RGBA upload per
 // frame. Rendering consumes only the currently committed frame (I6).
 type Client struct {
+	arrival             arrivalPresentation
 	presentationPaused  bool
 	pausedWorldRevision uint64
 	pausedLayer         pausedRecordLayer
@@ -689,6 +690,7 @@ func (c *Client) SetSnapshot(b *frame.Buffer) {
 		c.displayedResources.Energy, c.displayedResources.Metal = 0, 0
 		c.resourceTimers = [10]resourceDisplayTimer{}
 		c.buffer = b
+		c.arrival = arrivalPresentation{}
 		c.SetPresentationPaused(false)
 	}
 }

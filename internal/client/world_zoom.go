@@ -100,6 +100,9 @@ func (c *Client) worldSpace(begin bool) drawlist.WorldSpace {
 		}
 	}
 	w.Viewport = c.battleViewportRect()
+	if begin {
+		w.Arrival = c.arrivalPacket()
+	}
 	return w
 }
 
