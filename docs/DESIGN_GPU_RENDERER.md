@@ -1711,7 +1711,7 @@ lane is unchanged**: it still emits the points, so classic output is
 byte-identical by construction. The classic *sink* implements the two commands
 by expanding them back into exactly those points — `Flash.Expand` and
 `Halo.Expand` are the definition, and a test locks their output against the
-points the classic lane records at all three view scales — so a modern-lane list
+points the classic lane records at both view scales — so a modern-lane list
 replayed through the classic executor composes the same bytes.
 
 In the modern executor a generated frame is packed on first use into one
@@ -1894,15 +1894,15 @@ The projection is integer at each record step:
 
     screenX = Project(worldX − camX) + originX
     screenY = Project(worldZ − (worldY >> 1) − camZ) + originY
-    Project(v) = ceil(v·s / 2)
+    Project(v) = v · (s / 2)
 
 Here `s` is the encoded step, 2 or 4. The inverse used for picking is
 `world = cam + floor(2·(screen − origin) / s)`: every screen pixel names one
 world pixel, and every world pixel projects to the first screen pixel that
 picks it. A 2× asset lands on the pixel grid one-to-one and a 1× asset doubled
 by nearest sampling lands on the same grid. `Project` scales a position;
-`Px` scales an extent or authored offset with half-away rounding; `Inverse`
-converts a picked pixel. The type is distinct from `int32` so that a plain
+`Px` scales an extent or authored offset by the same exact integer multiply;
+`Inverse` converts a picked pixel. The type is distinct from `int32` so that a plain
 multiply against a pixel count does not compile.
 
 ### 14.2 The view transform — contract D1
