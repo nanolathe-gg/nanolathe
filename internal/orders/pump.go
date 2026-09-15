@@ -418,8 +418,8 @@ func (q *Queue) randBelow30() uint32 {
 }
 
 // moveGroundGoalRadius is the arrival radius `Move_Ground` phase 0 binds with
-// its point goal: "radius `(int16)payloadType + 4`" [04 R-ORD-01 §4], the
-// record's first general parameter word read as a SIGNED 16-bit value.
+// its point goal: the full signed 32-bit first parameter plus 4, retaining
+// the 32-bit sum [04 R-ORD-01 §4].
 //
 // MoveGroundGoalRadius below is the read-back seam for the movement layer, the
 // same shape PatrolGoalRadius and ParkGoalRect already give it: the handler
@@ -429,7 +429,7 @@ func moveGroundGoalRadius(n *Node) int32 {
 	if n == nil {
 		return 4
 	}
-	return int32(int16(uint16(n.Param1))) + 4
+	return int32(n.Param1) + 4
 }
 
 // MoveGroundGoalRadius reports the arrival radius `Move_Ground` binds, and
@@ -446,7 +446,7 @@ func MoveGroundGoalRadius(n *Node) (int32, bool) {
 // was wrong).
 //
 // Row [04 R-ORD-01 §4][R-P0-01]: phase 0: carried -> cancel-all; caption clear;
-// point goal at the record's goal with radius `(int16)payloadType + 4`; gate =
+// point goal at the record's goal with radius `int32(firstGeneralParameter) + 4`; gate =
 // 0xE0; advance. Phase 1: satisfied 0x20 -> status 6 (`Arrived`), complete;
 // else *re-arm* (9), which resets the phase and rebinds from phase 0 after
 // 30..59 ticks. Other phase: cancel-all — a phase byte outside the machine
@@ -470,8 +470,8 @@ func MoveGroundGoalRadius(n *Node) (int32, bool) {
 // installPointGoal (combat.go) — so this row now clears pending `0x20`-`0x200`,
 // releases its own previous object and binds the new one exactly as they do.
 //
-// The radius is the row's own: `(int16)payloadType + 4`, the record's first
-// general parameter word read as a SIGNED 16-bit value [04 R-ORD-01 §4]. It is
+// The radius is the row's own: `int32(firstGeneralParameter) + 4`, with the
+// full parameter and sum retained at 32 bits [04 R-ORD-01 §4]. It is
 // 0 for interface- and most AI-issued moves (radius 4, handle threshold
 // floor(4/16)² = 0 — arrival on the exact goal cell) and 160 for the AI wave
 // task's gather broadcast [08 R-AI-01 §19]. internal/movement's
@@ -483,7 +483,7 @@ func moveGroundHandler(u *units.Unit, n *Node, satisfied uint32, _ uint32) Code 
 	}
 	if n.Phase == 0 {
 		captionClear(u, n) // [04 R-ORD-01 §4] "caption clear" [04 R-ORD-01 §1]
-		// "point goal at the record's goal with radius `(int16)payloadType + 4`"
+		// "point goal at the record's goal with radius `int32(firstGeneralParameter) + 4`"
 		// [04 R-ORD-01 §4].
 		installPointGoal(u, n, n.GoalX, n.GoalY, n.GoalZ, moveGroundGoalRadius(n))
 		n.DynamicGate = 0xE0 // [R-P0-01] phase 0 arms gate 0xE0

@@ -1973,6 +1973,33 @@ builders, mixed footprints, illegal edges, deposit coverage, geothermal menu
 detection and yard alignment, nearby/fogged vents, and cancellation. Synthetic
 fixtures define the new input policy; it is not attributed to retail evidence.
 
+### Ordinary group-click destinations
+
+Retail's selection broadcast preserves nearby actors' offsets from the
+selection centroid for formation-enabled order descriptors. The exact
+counting, rounding, cutoff and producer boundaries are [04 R-STANCE-01 §5].
+This ordinary click behavior is separate from the explicit drag destinations
+in §3.11. It belongs at the authoritative command boundary, where the current
+actor positions and complete selection are available.
+
+The `internal/session/commands.go` ordinary `HumanOrder` path computes the
+centroid before per-actor resolution, excluding the designated target where
+the numeric command requires it. Captured handles are treated as a set in pool
+order. Formation-enabled descriptors apply the retail offset before queued
+point matching and insertion. This behavior applies in both gameplay modes.
+The producer does not consume RNG or resources, and retains the supplied Y.
+
+Explicit drag destinations set `HumanOrderCommand.AssignedPosition`; those
+already assigned coordinates pass through without another offset. Ordinary
+clicks, including the tracked queued move used by the resource gesture, leave
+that field clear. Area target batches retain their existing separate dispatch.
+
+Tests cover centroid truncation, separately truncated squared components at
+the inclusive cutoff, outliers, per-actor command rejection after counting,
+selected-target exclusion, non-formation rally descriptors, queued toggles,
+and exact fractional drag destinations. Blocked-move completion and retaliation
+retain their retail contracts [04 R-ORDER-02 §1][04 R-STANCE-01 §3].
+
 ### 3.11 Modern drag commands
 
 **Established implementation policy (user-requested extension).** These gestures

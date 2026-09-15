@@ -151,7 +151,14 @@ func TestResourceMoveTrackingAdmissionAndOrdinaryToggle(t *testing.T) {
 			case "unqueued":
 				c.Queued = false
 			case "targeted":
-				c.Target = h
+				// A target must be distinct from the actor: retail excludes the
+				// designated target from this command's recipients.
+				u := s.Units.Unit(h)
+				target, err := s.Units.Create(u.Def, 0, u.X+32<<16, u.Y, u.Z)
+				if err != nil {
+					t.Fatal(err)
+				}
+				c.Target = target
 			case "other-order":
 				c.Code = 9
 				s.Units.Unit(h).Def.CanPatrol = true

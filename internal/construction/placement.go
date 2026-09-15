@@ -340,8 +340,18 @@ func (s *Service) RestoreBuildingPlacement(u *units.Unit) error {
 
 // YardOpenTransaction performs port 18's admission and accepted restamp as
 // one ordered operation. It returns false on silent denial [04 §4.7 port 18]
-// [04 R-COLL-01 §4][04 R-FAC-02 §5].
+// [04 R-COLL-01 §4][04 R-FAC-02 §5]. Modern clearance uses the binding
+// tick (zero without a binding); the session uses YardOpenTransactionAt.
 func (s *Service) YardOpenTransaction(u *units.Unit, requested bool) bool {
+	if s == nil {
+		return false
+	}
+	return s.YardOpenTransactionAt(u, requested, s.OrderBinding.Tick())
+}
+
+// YardOpenTransactionAt supplies the authoritative tick for Modern clearance
+// orders. Successful transactions and Strict 3.1 keep the retail admission.
+func (s *Service) YardOpenTransactionAt(u *units.Unit, requested bool, tick uint32) bool {
 	if s == nil || s.Terrain == nil || u == nil || u.Handle == 0 || uint64(u.Handle) > uint64(^uint16(0)>>1) {
 		return false
 	}
@@ -424,9 +434,11 @@ func (s *Service) YardOpenTransaction(u *units.Unit, requested bool) bool {
 			}
 			cell := s.Terrain.PlotAt(x, z)
 			if cell == nil || (cell.OccupantA() != 0 && cell.OccupantA() != id) {
+				s.yieldClosingYard(u, requested, record.rect, yard, tick)
 				return false
 			}
 			if occ, held := grid.OccupantAt(movement.Cell{X: x, Z: z}); held && occ != 0 && occ != gridID {
+				s.yieldClosingYard(u, requested, record.rect, yard, tick)
 				return false
 			}
 		}

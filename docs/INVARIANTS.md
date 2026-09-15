@@ -266,7 +266,11 @@ state its retail baseline, Modern rule, conservative limits and verification;
 retail research continues to describe the executable. Both branches need
 contract tests, including resource and RNG effects. An unknown retail mechanic
 is still an unknown; the Modern setting does not authorize invented evidence.
-The current weapon policy is DESIGN_WEAPONS_PROJECTILES §2.3.1.
+Current contracts are DESIGN_WEAPONS_PROJECTILES §2.3.1 (terrain admission),
+DESIGN_UNITS_ORDERS_COB "Modern Hold Fire", and
+DESIGN_ECONOMY_CONSTRUCTION "Modern factory-exit yielding". The service and
+queue booleans are projections of the central session mode, not independently
+configurable flags; new and restored queues inherit the same mode.
 
 Strict 3.1 retains the retail firing pipeline, including documented faults.
 Outside an explicitly approved Modern contract, reproduce retail bugs

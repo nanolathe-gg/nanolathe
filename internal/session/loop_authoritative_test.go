@@ -9,6 +9,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/economy"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
@@ -17,7 +18,9 @@ import (
 )
 
 // helper to create a minimal session with 2 players and N units for authoritative loop tests.
-// It uses sliced pool, flat terrain, and binds all services.
+// It uses sliced pool, flat terrain, and binds all services. These tests lock
+// retail phase/callback contracts, so select Strict explicitly rather than the
+// host default Modern (whose Hold Fire suppresses these zero-stance fixtures).
 func newLoopTestSession(t *testing.T, nUnits int) *Session {
 	t.Helper()
 	cat := minimalCatalogForStrict()
@@ -32,6 +35,7 @@ func newLoopTestSession(t *testing.T, nUnits int) *Session {
 	terrain := minimalTerrain()
 	m := syntheticMission()
 	s := &Session{
+		Gameplay: gameplay.Strict31,
 		Catalog:  cat,
 		World:    terrain,
 		Mission:  m,

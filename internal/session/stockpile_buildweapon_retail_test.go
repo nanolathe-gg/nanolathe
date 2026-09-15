@@ -3,6 +3,8 @@ package session
 import (
 	"testing"
 
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
+
 	"github.com/nanolathe-gg/nanolathe/internal/economy"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
@@ -32,6 +34,8 @@ import (
 func TestRetailRetaliatorStockpilesAndFiresANuke(t *testing.T) {
 	f := loadRetailFixture(t)
 	s := f.session(t)
+	// This fixture locks retail launch semantics, including authored Hold Fire.
+	s.SetGameplay(gameplay.Strict31)
 	stepRetail(s, 2)
 	if s.State != StateBattle {
 		t.Fatalf("session state %v, want battle", s.State)

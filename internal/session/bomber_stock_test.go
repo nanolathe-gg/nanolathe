@@ -3,6 +3,8 @@ package session
 import (
 	"testing"
 
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
+
 	"github.com/nanolathe-gg/nanolathe/internal/combat"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
@@ -14,6 +16,8 @@ import (
 // while keeping the point target fixed; it does not prescribe bombs per run.
 func TestRetailBomberCadenceAndDeath(t *testing.T) {
 	s := aiE2ESkirmish(t, "ashap plateau", 7)
+	// This fixture locks retail launch semantics, including authored Hold Fire.
+	s.SetGameplay(gameplay.Strict31)
 	for _, key := range s.Catalog.SortedUnitKeys() {
 		def, _ := s.Catalog.Unit(key)
 		if def == nil || !def.CanFly || def.Weapon1Def == nil || !def.Weapon1Def.Dropped {

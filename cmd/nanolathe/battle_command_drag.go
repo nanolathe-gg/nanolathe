@@ -207,7 +207,7 @@ func (b *battleSession) serviceCommandDrag(in *input.State, cl *client.Client, m
 			goals := dragAssignDestinations(points, dragSamplePath(d.path, len(actors)))
 			for i, p := range goals {
 				pos := dragGroundPosition(cl, p)
-				_ = b.DispatchOrderCommand(session.HumanOrderCommand{Handles: []pool.Handle{actors[i]}, Code: hud.LatchToCode(input.LatchMove), Position: pos, Queued: modifiers.Shift})
+				_ = b.DispatchOrderCommand(session.HumanOrderCommand{Handles: []pool.Handle{actors[i]}, Code: hud.LatchToCode(input.LatchMove), Position: pos, Queued: modifiers.Shift, AssignedPosition: true})
 			}
 		}
 	}

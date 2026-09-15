@@ -632,10 +632,12 @@ markers, 2 build-footprint.
 **Retained-opaque static gate-mask bits — Established census.** The union
 of the 68 static masks is bits 1-11, 16, 17, 18, 19, 20, and 24. Beyond the named bits above
 (9, 10, 18, 20 static; 14 and 21 exist only at runtime and appear in no static mask), the
-following static bits are carried; bits 2, 5 and 7 have located readers (noted inline) and the
+following static bits are carried; bits 1, 2, 5, 6 and 7 have located readers (noted inline) and the
 rest have no located consumer and must be stored opaque, not interpreted:
 bit 1 (0x2 — `Move_Ground`, `Patrol`, `RepairPatrol`, `VTOL_Move`, `VTOL_Patrol`,
-`VTOL_RepairPatrol`); bit 2 (0x4 — `MakeSelectable`, `Wait`, `AttackUType`,
+`VTOL_RepairPatrol`; **located:** the selection broadcast preserves nearby
+actors' offsets from the selection centroid for these descriptors,
+[R-STANCE-01 §5]); bit 2 (0x4 — `MakeSelectable`, `Wait`, `AttackUType`,
 `WaitForAttack`, `GetBuilt`, `BeCarried`, `Paralyze`, `SelfRepair`, `BuildingBuild`;
 **located:** the purge-survivor bit of section 3.3, [R-MOV-03 §6]);
 bit 3 (0x8 — the build family: `BuildingBuild`, `HelpBuild`, `MobileBuild`, `VTOL_HelpBuild`,
@@ -1597,6 +1599,48 @@ ground position. A unit whose definition lacks the matching flag is skipped
 even when it is selected, so one click can leave a mixed selection **still**
 mixed at the unit level.
 
+**Established — positioned selection broadcasts preserve nearby offsets.**
+The same broadcast has a formation branch for orders with a ground position
+whose resolved descriptor carries static bit 1. This includes `Move_Ground`,
+`Patrol`, `RepairPatrol` and their three VTOL counterparts (§3.1). It is part
+of ordinary click dispatch, not a modifier-enabled formation command:
+
+1. Walk the local player's unit slice in ascending pool order. Count selected
+   units except the designated command target when that exclusion applies.
+   For numeric command broadcasts the exclusion applies to every code except
+   5, 10 and 14; direct descriptor broadcasts instead read the descriptor
+   target-required bit.
+   Sum each selected unit's signed whole-world-unit X and Z components into
+   signed 32-bit totals. This pass precedes per-actor command resolution and
+   acceptance; a selected unit later refused still contributes to the count
+   and centroid.
+2. With a nonzero count `N`, divide each total by `N`, truncating toward zero,
+   then multiply by 65536 to obtain fixed-point centroid `C`. Fractions are
+   discarded **before** averaging, and the integer average is truncated before
+   conversion back to fixed point.
+3. For each accepted actor of a formation-enabled order with a supplied point,
+   form signed 32-bit fixed-point `dx = actor.X - C.X` and `dz = actor.Z - C.Z`.
+   Square each into signed 64 bits, shift each product right by 32 separately,
+   and add the resulting signed 32-bit terms. If the sum is **at most
+   `3000 * N`**, submit `(click.X + dx, click.Y, click.Z + dz)`; otherwise
+   submit the original clicked point. The additions and subtractions retain
+   their 32-bit results. The supplied height is unchanged.
+4. Submit through the ordinary order producer, with its usual queue modifier
+   and parameters. The two ordinary mouse paths supply first general parameter
+   zero for a move. The offset calculation changes neither that parameter nor
+   arrival tolerance, and consumes no RNG. Shift controls queueing; no
+   Shift, Control or Alt test enables or disables these offsets.
+
+For example, two actors at X positions 100 and 140 on the same Z receive
+X destinations 980 and 1020 for a click at X 1000. With 30 actors the squared
+cutoff is 90000. Outliers beyond the cutoff receive the same clicked point,
+and the branch performs no terrain, occupancy or destination-reservation test.
+Thus the broadcast reduces common-point crowding without guaranteeing that
+all destinations are reachable or distinct. The ordinary point-goal arrival
+and unbounded blocked-last-move retry of [R-ORDER-02 §1] still apply to each
+resulting order. A shared-point crowding example must not be generalized into
+"every member of every retail group move receives the same destination".
+
 ### Defaults, factory inheritance, and save [R-STANCE-01 §6]
 
 **Established — creation.** Both fields are seeded at unit creation from one
@@ -1735,9 +1779,11 @@ failure does not retry with slots 1 or 2. Its callers are the idle/loiter arms o
 each of which feeds the returned target straight into the auto-engage issuer
 above with `force = 0`.
 
-**This is the only behavioral difference between return fire and fire at
-will.** Both values pass every `!= 0` gate listed here; only `2` opens the scan, and
-`0` closes every one of them.
+**Established — order-work and weapon-slot scans are separate.** Only value
+`2` opens this opportunity scan. The per-player weapon-maintenance pass also
+requires fire-at-will for autonomous slot acquisition, including human players;
+it does not require an idle front order [06 §3.2][08 R-AI-01 §15]. Return fire
+and fire at will both pass the damage reaction's nonzero-fire gate below.
 
 **Established — retaliation ("return fire") is one site in the damage path.**
 For every damaged unit the damage-intake path runs one reaction site
@@ -1756,8 +1802,10 @@ computer-player-specific:
   [08 R-AI-01 §11]) and the attacker passes the slot-0 admission predicate
   [06 §3.1];
 * if no order was issued **and** the standing fire field is non-zero, each of
-  the three weapon slots that is present and enabled is offered the attacker,
-  subject to the slot's admission predicate.
+  the three enabled, autonomous, non-`commandfire` weapon slots is offered the
+  attacker, subject to that slot's physical admission predicate. An existing
+  target is kept only when it passes the same predicate and is outside that
+  slot's bad-target set [06 R-WPN-04 §2].
 
 "Being attacked" is therefore a **per-damage-event edge, not a state**: the
 record consulted is the attacker reference the damage packet carries, the
@@ -1765,6 +1813,19 @@ reaction is evaluated once per damage application, and there is no retaliation
 timer, latch, or expiry anywhere in the path. A return-fire unit that is hit
 once and whose attacker then dies simply stops having a target when the ordinary
 retention scan drops it [06 §3.2].
+
+**Established — a blocked move prevents a chase, not weapon fire.** A
+`Move_Ground` retained in the retry loop of [R-ORDER-02 §1] is not standby
+interruptible, including during its deadline wait. Damage therefore cannot
+replace it with an automatic attack order. It can still offer the attacker to
+an autonomous weapon slot, and ordinary fire-at-will weapon maintenance can
+still acquire targets. Neither the ground move handler nor the weapon update
+makes a pending Move a prohibition on firing [06 §3.2][06 §3.3]. Both damage
+branches require the relevant slot's physical admission, including weapon
+range; the damage offer does not require visibility or registry membership.
+Consequently an out-of-range attacker is not automatically chased merely
+because the victim is set to roam, even if its Move is cancelled. Roam removes
+the leash on an **admitted** chase; it does not bypass admission.
 
 **Established — the guard's slot re-target gates on the fire field alone.**
 The guard handlers' slot re-target step ([R-UNIT-06 §1] step 2) is **skipped
@@ -3544,8 +3605,12 @@ load can change the bit. The full layout is `[06 R-WPN-05 §3]`.
 ### The ground movement handlers [R-ORD-01 §4]
 
 **`Move_Ground`.** Phase 0: carried → cancel-all; caption clear; point goal
-at the record's goal with radius `(int16)payloadType + 4` — 4 for every
-interface- or AI-issued move; gate = `0xE0`; advance. Phase 1: satisfied
+at the record's goal with radius `int32(firstGeneralParameter) + 4`, retaining
+the 32-bit sum. The handler reads the full parameter, not a signed 16-bit
+narrowing. Ordinary mouse moves pass zero and therefore use radius 4; the AI
+wave gather producer passes 160 [08 R-AI-01 §19], so "every AI move uses 4"
+is incorrect. Group offsets change the goal, not this radius [R-STANCE-01 §5].
+Gate = `0xE0`; advance. Phase 1: satisfied
 `0x20` → status 6 (`Arrived`), complete; else *re-arm* (the last record
 rebinds from phase 0 after 30–59 ticks, [R-ORDER-02 §1]). Other: cancel-all.
 
@@ -5229,9 +5294,12 @@ picked candidate is admitted when **its** definition has `shootme`, **or** the
 searching unit's owning player has controller type 2 (a computer player),
 **or** a session option bit is set — `shootme` is the authored key behind
 [06 §3.2]'s definition flag. The consequence for content: a definition that omits `shootme` is never picked
-up by a human player's fire-at-will scan, guard scan, `Wait` scan or
-retaliation, but a computer player's units target it freely, and any player
-may attack it by explicit order (the resolver does not read the flag).
+up by a human player's acquisition through this shared target search unless
+the session-option exception applies. It does not gate damage retaliation:
+that path calls the physical admission predicate directly, bypassing this
+search [R-STANCE-01 §3][06 R-WPN-04 §2]. A computer player's search bypasses
+the flag, and any player may attack by explicit order (the resolver does not
+read it).
 
 **Established — the default is 0, not 1.** The parser reads `shootme` with the
 integer reader and a default argument of zero; stock definitions author

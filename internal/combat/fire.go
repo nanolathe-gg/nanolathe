@@ -202,6 +202,9 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 	if svc == nil || slot == nil || slot.Weapon == nil {
 		return 0, false
 	}
+	if svc.holdsFire(ports.Shooter) {
+		return 0, false
+	}
 	w := slot.Weapon
 	if !hasLiveWeaponExecutor(w) {
 		return 0, false
@@ -772,4 +775,11 @@ func (s *Service) SweepBurstAnchorsForShooter(shooter pool.Handle) int {
 		// No `i--`: the record shifted into the vacated slot is skipped.
 	}
 	return killed
+}
+
+// holdsFire applies only the central mode's projected Modern policy. It does
+// not add a liveness or generation check to retail shooter references.
+// Nanolathe Modern policy: docs/DESIGN_WEAPONS_PROJECTILES.md §2.6.1.
+func (s *Service) holdsFire(u *units.Unit) bool {
+	return s != nil && s.ModernHoldFire && u != nil && u.Flags>>units.StandingFireShift&units.StandingFieldMask == 0
 }

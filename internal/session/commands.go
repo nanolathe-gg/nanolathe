@@ -2,11 +2,12 @@ package session
 
 import (
 	"fmt"
-	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
+	"slices"
 
 	"github.com/nanolathe-gg/nanolathe/internal/construction"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/economy"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/hud"
 	"github.com/nanolathe-gg/nanolathe/internal/mission"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
@@ -87,6 +88,10 @@ type HumanOrderCommand struct {
 	Target   pool.Handle
 	Position orders.ResolvePos
 	Queued   bool
+	// AssignedPosition is an explicit per-actor destination from a drag
+	// formation (DESIGN_INTERFACE_HUD_INPUT §3.11). Ordinary clicks leave it
+	// false so the retail selection offsets apply [04 R-STANCE-01 §5].
+	AssignedPosition bool
 	// TrackQueuedMove gives a queued targetless ground/air move a transient
 	// receipt and bypasses the repeat-click toggle. This is explicit Enhanced
 	// gesture policy, not retail behavior (DESIGN_INTERFACE_HUD_INPUT §3.10).
@@ -1071,10 +1076,24 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		handles := c.Order.Handles
 		if len(handles) == 0 {
 			handles = s.selectedHumanHandles()
+		} else {
+			// A captured selection remains a set visited in pool order [I1].
+			handles = slices.Clone(handles)
+			slices.Sort(handles)
+			handles = slices.Compact(handles)
+		}
+		var excluded pool.Handle
+		if !c.Order.AssignedPosition && c.Order.Code != 5 && c.Order.Code != 10 && c.Order.Code != 14 && target != nil {
+			excluded = target.Handle // numeric broadcast target exclusion [04 R-STANCE-01 §5]
+		}
+		var center orders.ResolvePos
+		var count int32
+		if !c.Order.AssignedPosition {
+			center, count = s.humanOrderCentroid(handles, excluded)
 		}
 		for _, h := range handles {
 			u := s.humanUnit(h)
-			if u == nil {
+			if u == nil || h == excluded {
 				continue
 			}
 			s.bindOrderQueue(u)
@@ -1085,6 +1104,10 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 			gx, gy, gz := c.Order.Position.X, c.Order.Position.Y, c.Order.Position.Z
 			if target != nil {
 				gx, gy, gz = target.X, target.Y, target.Z
+			}
+			if !c.Order.AssignedPosition && orders.DescriptorFor(id).StaticGate&2 != 0 && count != 0 {
+				goal := humanFormationGoal(c.Order.Position, u, center, count)
+				gx, gy, gz = goal.X, goal.Y, goal.Z
 			}
 			q := orders.QueueForUnit(u)
 			if q == nil {
@@ -1111,6 +1134,37 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 			q.Push(id, n)
 		}
 	}
+}
+
+// humanOrderCentroid counts the selection before per-actor command admission.
+// Whole coordinates are summed before the truncating average; rejected actors
+// still contribute [04 R-STANCE-01 §5]. This is integer-only and draws no RNG.
+func (s *Session) humanOrderCentroid(handles []pool.Handle, excluded pool.Handle) (orders.ResolvePos, int32) {
+	var x, z, count int32
+	for _, h := range handles {
+		if u := s.humanUnit(h); u != nil && h != excluded {
+			x += int32(u.X) >> 16
+			z += int32(u.Z) >> 16
+			count++
+		}
+	}
+	if count == 0 {
+		return orders.ResolvePos{}, 0
+	}
+	return orders.ResolvePos{X: numeric.Fixed((x / count) << 16), Z: numeric.Fixed((z / count) << 16)}, count
+}
+
+// humanFormationGoal preserves nearby actors' offsets; distant outliers keep
+// the clicked point. Each square is truncated separately, and equality passes
+// the cutoff. Height and first general parameter are unchanged [04 R-STANCE-01 §5].
+func humanFormationGoal(goal orders.ResolvePos, u *units.Unit, center orders.ResolvePos, count int32) orders.ResolvePos {
+	dx, dz := int32(u.X-center.X), int32(u.Z-center.Z)
+	distance := int32((int64(dx)*int64(dx))>>32) + int32((int64(dz)*int64(dz))>>32)
+	if distance <= 3000*count {
+		goal.X += numeric.Fixed(dx)
+		goal.Z += numeric.Fixed(dz)
+	}
+	return goal
 }
 
 func isHumanMoveOrder(id orders.ID) bool {

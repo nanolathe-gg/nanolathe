@@ -19,20 +19,10 @@ func nodeNamed(t *testing.T, name string, param1 uint32) *orders.Node {
 	return &orders.Node{ID: id, Param1: param1}
 }
 
-// TestGroundMoveRadiusFollowsArgumentWord locks the `Move_Ground` phase-0
-// binding of [04 R-ORD-01 §4]: the point goal's radius is
-// `(int16)argument + 4`, where the argument is the record's first parameter
-// word read as a SIGNED 16-bit value.
-//
-// The relationships asserted are the ones that regress silently:
-//   - the radius TRACKS the word (it is not the hardcoded 4 it used to be),
-//     so the AI wave gather's forwarded 160 [08 R-AI-01 §19] becomes 164 and
-//     not 4;
-//   - the offset is exactly 4, on every input;
-//   - the word is read signed and only 16 bits wide, so a word with bit 15 set
-//     produces a NEGATIVE radius rather than a huge positive one;
-//   - VTOL_Move ignores the word entirely — it binds
-//     max(KamikazeDistance, 16) — so the two families cannot be confused.
+// TestGroundMoveRadiusFollowsArgumentWord locks the Move_Ground phase-0
+// binding of [04 R-ORD-01 §4]: the point goal's radius reads the full signed
+// 32-bit first parameter and adds 4 with 32-bit wraparound. VTOL_Move instead
+// binds max(KamikazeDistance, 16), independently of the parameter.
 func TestGroundMoveRadiusFollowsArgumentWord(t *testing.T) {
 	def := &content.UnitDef{UnitName: "armflea"}
 
@@ -44,7 +34,7 @@ func TestGroundMoveRadiusFollowsArgumentWord(t *testing.T) {
 		}
 	}
 
-	// Interface- and AI-issued point moves leave the word 0, which is the
+	// Ordinary interface point moves leave the parameter 0, which is the
 	// familiar radius 4 and handle threshold floor(4/16)² = 0 — arrival on the
 	// exact goal cell only.
 	if got := goalRadiusParamFor(def, nodeNamed(t, "Move_Ground", 0)); got != 4 || ThresholdSqFromRadius(got) != 0 {
@@ -59,15 +49,20 @@ func TestGroundMoveRadiusFollowsArgumentWord(t *testing.T) {
 			gather, ThresholdSqFromRadius(gather), plain, ThresholdSqFromRadius(plain))
 	}
 
-	// Bit 15 set: the word wraps to a negative radius because the handler reads
-	// it as int16, not as the unsigned word the node stores it in.
-	if got := goalRadiusParamFor(def, nodeNamed(t, "Move_Ground", 0xFF60)); got != -156 {
-		t.Fatalf("argument 0xFF60 = %d, want -156 ((int16)-160 + 4) [04 R-ORD-01 §4]", got)
-	}
-	// The read is 16 bits wide: the high half of the parameter word does not
-	// reach the radius.
-	if got := goalRadiusParamFor(def, nodeNamed(t, "Move_Ground", 0xDEAD0000)); got != 4 {
-		t.Fatalf("argument 0xDEAD0000 = %d, want 4 — only the low word is read [04 R-ORD-01 §4]", got)
+	// The high half participates in both the value and its sign. Bit 15
+	// alone does not make the full parameter negative.
+	for _, tc := range []struct {
+		argument uint32
+		radius   int32
+	}{
+		{0xFF60, 65380},
+		{0xFFFFFF60, -156},
+		{0xDEAD0000, -559087612},
+		{0x7FFFFFFF, -2147483645},
+	} {
+		if got := goalRadiusParamFor(def, nodeNamed(t, "Move_Ground", tc.argument)); got != tc.radius {
+			t.Fatalf("argument %x = radius %d, want %d [04 R-ORD-01 §4]", tc.argument, got, tc.radius)
+		}
 	}
 
 	// VTOL_Move takes no argument: it binds max(KamikazeDistance, 16).

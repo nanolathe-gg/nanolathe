@@ -141,6 +141,10 @@ const (
 
 // Service holds the factory lifecycle dependencies [PLAN_08].
 type Service struct {
+	// ModernFactoryExit projects gameplay.Mode; false preserves Strict 3.1.
+	// The yielding contract is DESIGN_ECONOMY_CONSTRUCTION, "Modern factory-exit yielding".
+	ModernFactoryExit bool
+
 	Terrain *world.Terrain
 	Catalog *content.Catalog
 	World   *units.World

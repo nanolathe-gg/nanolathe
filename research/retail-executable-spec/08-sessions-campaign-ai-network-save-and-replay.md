@@ -3790,9 +3790,13 @@ not allied, then:
   the attacker;
 * otherwise, when the victim's standing-fire field is non-zero (which §10
   guarantees for computer-player units), each of the victim's three weapon
-  slots that is present and enabled is offered the attacker as a target: the
-  attacker is assigned when it passes the slot's admission predicate and the
-  slot's existing target does not already pass it.
+  slots that is enabled and autonomous and whose weapon is not `commandfire`
+  is offered the attacker. The attacker must pass that slot's physical
+  admission predicate, including range. Keep an existing target only when it
+  passes that same predicate and is outside the slot's bad-target set;
+  otherwise assign the attacker [06 R-WPN-04 §2]. This offer remains available
+  while a Move order blocks the chase branch, and consults neither visibility
+  nor registry membership [04 R-STANCE-01 §3].
 
 Retaliation is therefore **not** computer-player-specific; it is the engine's
 return-fire behavior and applies to human players' units too. What the computer

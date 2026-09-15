@@ -16,7 +16,9 @@ import (
 )
 
 // wu19115Rally builds the shared scenario: five `armflash` on one row, all
-// ordered to a single reachable cell well clear of their start. It returns the
+// assigned to a single reachable cell well clear of their start. This
+// deliberately bypasses ordinary group offsets to retain the occupied-goal
+// contract [04 R-ORDER-02 §1]. It returns the
 // session, the step function, the handles and the goal cell.
 func wu19115Rally(t *testing.T) (*Session, func(), []pool.Handle, path.Cell) {
 	t.Helper()
@@ -52,9 +54,10 @@ func wu19115Rally(t *testing.T) (*Session, func(), []pool.Handle, path.Cell) {
 	if err := sess.EnqueueHumanCommand(HumanCommand{
 		Kind: HumanOrder,
 		Order: HumanOrderCommand{
-			Handles:  made,
-			Code:     2,
-			Position: orders.ResolvePos{X: world.CellToWorld(goal.X), Z: world.CellToWorld(goal.Z)},
+			Handles:          made,
+			Code:             2,
+			AssignedPosition: true,
+			Position:         orders.ResolvePos{X: world.CellToWorld(goal.X), Z: world.CellToWorld(goal.Z)},
 		},
 	}); err != nil {
 		t.Fatalf("issue rally move: %v", err)

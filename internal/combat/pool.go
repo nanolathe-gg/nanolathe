@@ -209,6 +209,11 @@ type pendingAim struct {
 // Records is the parallel named storage (107-byte retail identity, I13) moved
 // identically to the metadata on compaction.
 type Service struct {
+	// ModernHoldFire is projected from the central gameplay mode. It suppresses
+	// new launches while held; false retains retail standing-fire behavior.
+	// Nanolathe Modern policy: docs/DESIGN_WEAPONS_PROJECTILES.md §2.6.1.
+	ModernHoldFire bool
+
 	// ModernTerrainAdmission enables the user-requested terrain preflight
 	// policy. False retains the retail admission gate [06 R-WPN-05 §1].
 	ModernTerrainAdmission bool

@@ -220,7 +220,7 @@ func TestCommandDragFormationUsesCurveAndIndividualActors(t *testing.T) {
 			seen := map[pool.Handle]bool{}
 			goals := map[dragPoint]bool{}
 			for _, c := range cmds {
-				if c.Kind != session.HumanOrder || c.Order.Code != int(input.LatchMove) || len(c.Order.Handles) != 1 || !c.Order.Queued {
+				if c.Kind != session.HumanOrder || c.Order.Code != int(input.LatchMove) || len(c.Order.Handles) != 1 || !c.Order.Queued || !c.Order.AssignedPosition {
 					t.Fatalf("command: %+v", c)
 				}
 				h := c.Order.Handles[0]

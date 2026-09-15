@@ -242,6 +242,7 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 	// exit exactly as at a chosen site [04 R-FAC-02 §4][04 §6.4].
 	if _, err := s.validatePlacement(factory.Handle, factoryPlacement.Rect(), def, yard, false); err != nil {
 		s.recordAdmission(tick, factory, def.UnitName, factoryPlacement.Rect(), AdmissionBlockedTransiently, err)
+		s.yieldFactoryExit(factory, factoryPlacement.Rect(), nil, tick)
 		// Silent blocked revalidation: retry in exactly 15 ticks, stays — no
 		// message/sound/allocation; repeats every 15 while obstructed; NO
 		// timeout [05 C17]. Wake mask is bits {1,2}: schedule(node,15) sets

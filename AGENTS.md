@@ -46,7 +46,9 @@ This is an explicit exception to rule 1 for approved policy, not permission to
 invent unresolved retail mechanics. Renderer and host preferences retain their
 separate controls.
 
-Current policy: [DESIGN_WEAPONS_PROJECTILES.md §2.3.1](docs/DESIGN_WEAPONS_PROJECTILES.md#231-modern-terrain-admission).
+Current policies: [terrain admission](docs/DESIGN_WEAPONS_PROJECTILES.md#231-modern-terrain-admission),
+[Hold Fire](docs/DESIGN_UNITS_ORDERS_COB.md#modern-hold-fire), and
+[factory-exit yielding](docs/DESIGN_ECONOMY_CONSTRUCTION.md#modern-factory-exit-yielding).
 See also [INVARIANTS.md I11](docs/INVARIANTS.md#i11--retail-baseline-and-modern-gameplay).
 
 ---

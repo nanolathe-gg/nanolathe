@@ -39,15 +39,14 @@ func moveGoalFixture() (*Queue, *units.Unit, *[]PointGoalRequest, *[]*Node) {
 
 // TestMoveGroundPhaseZeroInstallsItsPointGoal locks the half of
 // [04 R-ORD-01 §4]'s `Move_Ground` row that phase 0 did not run before
-// WU-19-97: "point goal at the record's goal with radius `(int16)payloadType +
+// WU-19-97: "point goal at the record's goal with radius `int32(firstGeneralParameter) +
 // 4`; gate = `0xE0`". Without the install the ordinary move was the one row of
 // the table that owned no goal payload, so the follower had no object to ask
 // for arrival [04 R-MOV-03 §2] and no other record's install could displace it
 // from the controller's slot [04 R-ORD-01 §9].
 //
-// The argument word is read as a SIGNED 16-bit value, which is why the
-// negative case is here: it is the difference between radius 3 and radius
-// 65539.
+// The full 32-bit argument and wrapping addition distinguish large positive
+// values from negative values with the same low word.
 func TestMoveGroundPhaseZeroInstallsItsPointGoal(t *testing.T) {
 	id := Lookup("Move_Ground")
 	if id == 0 {
@@ -62,7 +61,9 @@ func TestMoveGroundPhaseZeroInstallsItsPointGoal(t *testing.T) {
 		{"interface move", 0, 4},
 		// The AI wave task's gather broadcast forwards 160 [08 R-AI-01 §19].
 		{"ai gather", 160, 164},
-		{"signed sixteen bit read", 0xFFFF, 3},
+		{"full positive parameter", 0xFFFF, 65539},
+		{"negative parameter", 0xFFFFFFFF, 3},
+		{"wrapping addition", 0x7FFFFFFF, -2147483645},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			q, u, installs, _ := moveGoalFixture()
@@ -75,7 +76,7 @@ func TestMoveGroundPhaseZeroInstallsItsPointGoal(t *testing.T) {
 			}
 			got := (*installs)[0]
 			if got.Radius != tc.want {
-				t.Fatalf("install radius = %d, want (int16)%#x + 4 = %d [04 R-ORD-01 §4]", got.Radius, tc.param1, tc.want)
+				t.Fatalf("install radius = %d, want int32(%#x) + 4 = %d [04 R-ORD-01 §4]", got.Radius, tc.param1, tc.want)
 			}
 			if got.X != goalX || got.Z != goalZ {
 				t.Fatalf("install point = (%d,%d), want the record's goal (%d,%d)", got.X, got.Z, goalX, goalZ)

@@ -671,7 +671,8 @@ evicted the mover's single goal slot `[04 §7.2]` `[04 §7.4]` `[04 §3.5]`.
 
 | Order | Family | Radii |
 |---|---|---|
-| Ordinary ground movement, patrol legs, and everything not listed below | point, radius 0 | none `[04 §7.2]` |
+| `Move_Ground` | point at the order's goal | first general parameter plus 4; ordinary mouse move uses 4 `[04 R-ORD-01 §4]` |
+| Patrol legs and everything not listed below | point, radius 0 | none `[04 §7.2]` |
 | `Attack_Chase` | whatever its own maneuver phase installed — a point goal for five of the six live substates, an annulus for the other two | every radius sized from the slot's weapon range: `d`, `d/2`, `trunc(d/4)`, `0`, annulus `(d, d/2)`, annulus `(2d, d)` `[04 R-ORD-01 §3]` `[06 R-WPN-05 §1]` |
 | `Follow_Ground` (the ground guard's follow) | point at the ward's position plus the record's stored anchor offset | arrival radius is half the handler's `(FootPrintX(me) + FootPrintX(ward) + 2) · 16` `[04 R-ORD-01 §8]` |
 | `HelpBuild` phase 0 | annulus at the target | outer `builddistance + half`, inner `half`, where `half` is the assist approach term over the **target's** footprint and `builddistance` is the builder's own `[04 R-ORD-01 §12]` `[05 R-WORK-01 §2]` |
@@ -680,6 +681,19 @@ evicted the mover's single goal slot `[04 §7.2]` `[04 §7.4]` `[04 §3.5]`.
 | `MobileBuild` approach | rectangle perimeter at the product's anchor cell and footprint | no candidate generator, no range filter and no sort: the candidate set is the search's own border enumeration and the selection is the border cell it closes first `[04 R-PATH-01 §12]` `[04 R-PATH-01 §13]` `[04 R-MOV-03 §9]` |
 | `VTOL_MobileBuild` approach (the air executor's phase 1) | air point marker at the goal snapped onto the product's footprint | horizontal arrival radius `builddistance`, strict; construction dispatches the movement leg from record phase 1, which installs the marker and gate `0xE0`; phase 2 consumes its outcome before placement `[04 R-ORD-02 §2]` `[04 R-AIR-01 §6]` |
 | `Park` (a no-rally product's terminal record) | rectangle perimeter on the rectangle the handler installed, centred on the product's own committed cell | `[04 R-FAC-02 §4]` `[04 §7.2]` |
+
+The ground move's radius is quantized by the point goal's arrival predicate;
+a radius of 4 still requires the exact destination cell. Stopping at the best
+reachable point does not complete the last Move: it can retry indefinitely
+[04 R-ORDER-02 §1]. Ordinary group commands can supply different per-actor
+goals upstream [04 R-STANCE-01 §5]; the broadcast boundary is described
+in DESIGN_INTERFACE_HUD_INPUT, "Ordinary group-click destinations".
+
+`internal/orders/pump.go` reads the complete signed 32-bit first parameter
+before adding 4, retaining the 32-bit sum [04 R-ORD-01 §4]. Its point-goal
+installation tests distinguish a large positive parameter from a negative
+parameter with the same low word and preserve addition wraparound. Ordinary
+mouse moves (zero) and the AI gather value (160) use the same path.
 
 Two surfaces are deliberately **unwired**, and each is unwired because no
 established producer exists rather than because the work is outstanding:

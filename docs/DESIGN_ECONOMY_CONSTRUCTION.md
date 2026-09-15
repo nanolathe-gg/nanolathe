@@ -746,6 +746,64 @@ earned, capped result, including its final quantum `[05 "Construction arithmetic
 `[05 "Multiple builders"]` `[05 "Completion"]` `[05 R-WORK-01 §1]`
 `[05 R-WORK-01 §9]` `[05 R-WORK-01 §11]` `[04 R-ORD-01 §11]`.
 
+### Modern factory-exit yielding
+
+**Nanolathe Modern policy, not retail evidence.** Strict 3.1 keeps C17, the
+refused yard close, and the ordinary blocked mover unchanged: retail has no clearance broadcast
+and the script-visible `BUGGER_OFF` flag has no engine consumer
+[04 R-FAC-02 §5] [04 R-FAC-02 §6] [04 R-COB-05]. Modern may ask idle units
+owned by the factory's player to walk away when they obstruct production or
+a yard close. This is independent of that script flag and of retail's normal
+product parking [05 R-EGRESS-02].
+
+`construction.Service.ModernFactoryExit` is a session projection of the central
+`gameplay.Mode`. Its zero value is Strict behavior. When enabled:
+
+1. A failed state-2 placement examines the exact product exit rectangle; a
+   refused close examines only the yard cells selected by the closed state.
+   `YardOpenTransactionAt` accepts the current authoritative tick from the
+   session callback; the compatibility wrapper uses `OrderBinding.Tick()`.
+   Neither path calls a script query beyond the queries retail already makes.
+2. Read both ground occupancy representations, deduplicate blockers, and visit
+   ascending unit slots. Consider at most eight eligible blockers per attempt.
+   A candidate must be a live, completed, uncarried, nonflying mobile mover of
+   the same owner, with a nonzero standing move stance, no velocity, no active
+   route or path request, no secondary work, and either no primary record or
+   just an automatic `Standby`. Explicit orders (including explicit standby),
+   patrol, guard, repair, build work, Hold Position, other owners, and incomplete
+   products are preserved.
+3. Search cardinal neighbors in north, west, south, east order with a local
+   breadth-first walk: at most 256 examined anchors within eight cells on each
+   axis of the blocker's committed anchor. These are Modern work limits, not
+   historical constants. Every traversed footprint passes the existing movement
+   terrain and physical cell predicates and contains no foreign ground occupant.
+   The initial footprint may overlap the blocker itself. A destination must be
+   outside the clearance rectangle and every registered factory footprint.
+   Chosen destinations are reserved within the pass so blockers receive distinct,
+   nonoverlapping footprints. The bounded walk proves a currently clear local
+   cardinal connection; actual movement still uses the ordinary path scheduler.
+4. Insert an ordinary `Move_Ground` to the chosen footprint center. The normal
+   queue API removes the automatic idle record. The new order makes the unit
+   ineligible to another factory until it finishes; factory footprints are
+   avoided even when their yard cells are currently open. No destination means
+   no order or other mutation. Moving traffic can still obstruct the subsequent
+   route, which retains ordinary collision and repath behavior.
+5. Keep the existing 15-tick allocation retry and script-owned yard-close retry.
+   A close is still refused until the cells actually clear. Never teleport,
+   push, stack, reserve world occupancy, spend resources, or draw RNG during
+   clearance. Resource admission and allocation run only on a later successful
+   placement attempt. Disabling Modern stops new clearance requests; an already
+   issued ordinary move completes as normal.
+
+**Boundaries and checks.** This policy clears direct exit/closing-yard blockers;
+there is no general traffic yield for a product blocked farther along its route,
+no displacement of another player's allied unit, and no guarantee when local
+connectivity exceeds the search budget. Synthetic fixtures cover selection,
+footprint legality, enclosed/no-destination failure, retry and two-factory order
+preservation, resource/RNG neutrality, yard refusal and eventual production.
+Installed-factory fixtures exercise the same production path with authored
+factory/product definitions. Strict fixtures preserve all existing outcomes.
+
 ### 3.4 Features — C25…C28
 
 **C25 — reproduction.** Phase six, after catalog rest cursors and before the
@@ -824,8 +882,8 @@ active-list order `[05 R-FEAT-01 §10]` [I1].
 
 ## 4. Retail behaviour that is not a bug
 
-* **Units piling up at a factory exit are not waiting for a broadcast.** The
-  script port often read as a "bugger off" flag has **no engine reader at all**:
+* **In Strict 3.1, units piling up at a factory exit are not waiting for a
+  broadcast.** The script port often read as a "bugger off" flag has **no engine reader at all**:
   it is written by the set-port arm, read back by the get-port arm, cleared at
   creation and serialized, and nothing in the simulation consults it
   `[04 R-COB-05]`. What retail does is the silent 15-tick exit retry, the
@@ -866,8 +924,8 @@ active-list order `[05 R-FEAT-01 §10]` [I1].
 * **Reclaiming a feature pays out only at the two segment boundaries, and the
   stock pools are small.** A rock that pays half a metal is authored, not broken
   `[05 R-WORK-01 §5]` `[05 R-WORK-01 §5-A]`.
-* **A factory whose product never moves is blocked indefinitely.** There is no
-  push, no stacking and no force placement `[04 R-FAC-02 §6]`.
+* **In Strict 3.1, a factory whose product never moves is blocked indefinitely.**
+  There is no push, no stacking and no force placement `[04 R-FAC-02 §6]`.
 
 ## 5. Divergences
 

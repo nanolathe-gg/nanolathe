@@ -135,13 +135,14 @@ const (
 // VTOL_ReclaimUnit (internal/construction) and VTOL_Standby
 // (internal/movement).
 
-// StaticGate census [04 §3.1][R-DOC04-C]. Named readers: bit 9 (0x200) is
+// StaticGate census [04 §3.1][R-DOC04-C]. Bit 1 selects nearby selection
+// offsets in the command broadcast [04 R-STANCE-01 §5]. Bit 9 (0x200) is
 // cleared when the order is constructed without a target unit; bit 10 (0x400)
 // is cleared when constructed without a goal position; bit 18 (0x40000) marks
 // a record that belongs in the rear queue segment; bit 20 (0x100000) marks
 // the nanolathe/build-site class, read by the guard-assist branch. Bits 14
 // and 21 exist only at runtime (tail-record inheritance and the cached target
-// position) and appear in no static mask. The remaining static bits (1-8, 11,
+// position) and appear in no static mask. The remaining static bits (2-8, 11,
 // 16, 17, 19, 24) have no located reader in the [R-DOC04-C] census: the raw
 // mask is stored verbatim and never interpreted — do not add readers, do not
 // add or drop bits, without a new research finding.

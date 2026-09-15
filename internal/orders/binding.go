@@ -21,6 +21,11 @@ import (
 // reconstruction an explicit value transfer instead of a collection of
 // package-level fallbacks [04 §3.3][04 §3.4][06 §11.1].
 type QueueBinding struct {
+	// ModernHoldFire is projected from the central gameplay mode. It prevents
+	// forced guard combat joins while held; false retains the retail bypass.
+	// Nanolathe Modern policy: docs/DESIGN_UNITS_ORDERS_COB.md "Modern Hold Fire".
+	ModernHoldFire bool
+
 	Economy interface {
 		UnitBuckets(pool.Handle) *[2]economy.Bucket
 	}

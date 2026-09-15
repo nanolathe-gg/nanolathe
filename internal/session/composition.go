@@ -14,6 +14,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/economy"
 	"github.com/nanolathe-gg/nanolathe/internal/features"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/mission"
 	"github.com/nanolathe-gg/nanolathe/internal/model"
 	"github.com/nanolathe-gg/nanolathe/internal/movement"
@@ -515,7 +516,11 @@ func (s *Session) bindUnitCOB(fs vfs.FSOps, u *units.Unit) error {
 		// the callback therefore observes the cached placement and can commit the
 		// bit before restamping [04 §4.7 port 18][04 R-COLL-01 §4].
 		u.SetYardOpenTransaction(func(requested bool) {
-			s.Build.YardOpenTransaction(u, requested)
+			tick := uint32(0)
+			if s.Clock != nil {
+				tick = s.Clock.GlobalTick
+			}
+			s.Build.YardOpenTransactionAt(u, requested, tick)
 		})
 		if err := s.Build.RegisterBuildingPlacement(u); err != nil {
 			return fmt.Errorf("unit %q building placement: %w", u.Def.UnitName, err)
@@ -974,11 +979,12 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 		}
 	}
 	return &orders.QueueBinding{
-		Damage:    s.acceptDamage,
-		Economy:   s.Econ,
-		Lookup:    worldQueries.LookupUnit,
-		Hostility: worldQueries.Hostile,
-		SimRNG:    s.SimRNG(),
+		ModernHoldFire: s.Gameplay.Normalize() == gameplay.Modern,
+		Damage:         s.acceptDamage,
+		Economy:        s.Econ,
+		Lookup:         worldQueries.LookupUnit,
+		Hostility:      worldQueries.Hostile,
+		SimRNG:         s.SimRNG(),
 		CurrentTick: func() uint32 {
 			if s.Clock == nil {
 				return 0

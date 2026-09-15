@@ -286,6 +286,26 @@ primary segment then the secondary, continuing one sequence across both, and
 carries the handler-private phase byte verbatim because handlers own its
 interpretation `[08 R-SAVE-ORDER-01]` `[08 R-SAVE-02 §6]`.
 
+### Modern Hold Fire
+
+**Nanolathe Modern policy (user-authorized).** The central `gameplay.Mode`
+projects `orders.QueueBinding.ModernHoldFire`; false preserves Strict 3.1.
+Modern Hold Fire refuses the guard's forced combat join even though retail's
+force flag bypasses both standing-order fields `[04 R-STANCE-01 §3]`
+`[04 R-UNIT-06 §1]`. The guard retains its existing follow/assistance order and
+continues its ordinary movement/repair behavior. Standing move still has its
+retail force bypass, and Return Fire keeps its existing behavior.
+
+Changing fire stance retains explicit attack orders and their manually bound
+targets, so leaving Hold Fire resumes firing when the ordinary launch gates
+permit. The existing standing-order writer still clears autonomous slot
+targets for its exact unmasked parameters zero and one
+`[04 R-STANCE-01 §2]`; Modern adds no queue cancellation or replacement.
+The authoritative suppression of launches and pending burst cancellation are
+owned by [DESIGN_WEAPONS_PROJECTILES.md §2.6.1](DESIGN_WEAPONS_PROJECTILES.md#261-modern-hold-fire).
+Tests preserve queued attack/guard records, verify ground and aircraft guard
+combat-join suppression, and cover Strict bypass and Return Fire.
+
 ### 2.3 `internal/cob`
 
 **The program** (`load.go`). `Program` is the immutable compiled script: the
@@ -889,11 +909,13 @@ their first order [04 R-ORD-02 §1] [07 R-CAM-01 §5].
 
 ## 4. Retail behaviour that is not a bug
 
-* **Units piling up at a factory exit are not waiting for a broadcast.** The
+* **In Strict 3.1, units piling up at a factory exit are not waiting for a broadcast.** The
   script port usually read as a "bugger off" flag has no engine reader at all
   `[04 R-COB-05]`. What retail does is the silent 15-tick exit retry, the
   refused yard close and an ordinary blocked mover `[04 R-FAC-02 §5]`
   `[04 R-P0-08]`. Do not build a scatter or crowd-avoidance rule on that flag.
+  Modern independently requests ordinary moves from eligible idle blockers,
+  as specified in [DESIGN_ECONOMY_CONSTRUCTION "Modern factory-exit yielding"](DESIGN_ECONOMY_CONSTRUCTION.md#modern-factory-exit-yielding).
 * **A column of products behind a factory is a defect, not retail.**
   `[04 R-EGRESS-01]` composed the column from four traces and concluded it was
   retail; **`[05 R-EGRESS-02]` supersedes it on that verdict**. Retail's no-rally

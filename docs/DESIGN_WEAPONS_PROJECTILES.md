@@ -417,6 +417,41 @@ pellet scatters about the original aim instead of random-walking
 `[06 §4.3]` `[06 R-WPN-01 §2]`. A shooter's death sweeps its anchors, so no
 anchor outlives its shooter.
 
+### 2.6.1 Modern Hold Fire
+
+**Nanolathe Modern policy (user-authorized).** The central `gameplay.Mode`
+projects `combat.Service.ModernHoldFire`; false preserves Strict 3.1. This is
+an intentional departure from the retail standing-fire readers
+`[04 R-STANCE-01 §2]` `[04 R-STANCE-01 §3]`, which allow an already assigned
+explicit attack target to fire and allow forced guard combat joins.
+
+In Modern mode, standing fire zero suppresses all new unit weapon launches,
+including explicit unit/ground attacks, command-fire and stockpile weapons.
+The per-unit weapon visit continues the ordinary reload countdown, then skips
+new aim/query/fire work while held. The spawner also rejects a held shooter
+before muzzle queries, allocation, callbacks, reveal stamping or shot RNG.
+No launch means no shot reload assignment, resource debit or ammunition use.
+Already running scripts retain their ordinary scheduling; unrelated simulation
+RNG and economy work are outside this policy.
+
+The projectile phase silently retires a held shooter's parked burst anchors
+before their next clone attempt, even before the next pellet deadline. Already
+launched pellets keep their ordinary motion and impact behavior. The cancelled
+remainder is neither refunded nor replayed. Leaving Hold Fire, or switching to
+Strict 3.1, allows retained attack orders and targets to fire through the normal
+reload, aim, resource and ammunition gates; a cancelled burst can only restart
+as a newly admitted shot. Missing shooter references retain the existing
+projectile behavior, and no new unit identity or generation scheme is added.
+Death explosions, self-destruction, environmental damage and stockpile
+production are outside this weapon-launch policy. Return Fire keeps its retail
+behavior. Order retention and guard admission are owned by
+[DESIGN_UNITS_ORDERS_COB.md "Modern Hold Fire"](DESIGN_UNITS_ORDERS_COB.md#modern-hold-fire).
+
+Tests cover existing unit and point targets, stance/mode resumption, Strict
+bypass, command-fire/stockpile admission, no suppressed-shot resource/ammo/RNG
+or callback effects, normal reload countdown, and cancellation of burst
+remainders while airborne pellets continue.
+
 ### 2.7 Motion families
 
 Live unit fire selects turret → vertical launch → LOS/self-propelled → dropped,
