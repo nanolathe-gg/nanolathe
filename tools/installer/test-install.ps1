@@ -46,6 +46,7 @@ Assert-Throws { Read-NanolatheManifest ($manifest.Replace("source_tar_sha256=$ha
 $base = Join-Path ([IO.Path]::GetTempPath()) ("nanolathe-test O'Brien & `$x; [alpha] " + [guid]::NewGuid().ToString('N'))
 try {
     [void][IO.Directory]::CreateDirectory((Join-Path $base 'releases'))
+    Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $archive = Join-Path $base 'authored.zip'
     $zip = [IO.Compression.ZipFile]::Open($archive, [IO.Compression.ZipArchiveMode]::Create)
