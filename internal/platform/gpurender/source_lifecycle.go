@@ -84,6 +84,7 @@ func (r *Renderer) resetSources(release func(*ebiten.Image)) {
 	r.reflections = waterReflections{disabled: r.reflections.disabled, sourceShader: r.reflections.sourceShader, resolveShader: r.reflections.resolveShader, softResolveShader: r.reflections.softResolveShader}
 	r.modelDirect = modelDirectLane{keyShader: r.modelDirect.keyShader, colourShader: r.modelDirect.colourShader, shaderErr: r.modelDirect.shaderErr}
 	r.fog = fogPass{shader: r.fog.shader, shaderErr: r.fog.shaderErr, compiled: r.fog.compiled}
+	r.arrival = arrivalLayer{shader: r.arrival.shader}
 	// Retained compiled runs and options also reference source images. Drop
 	// those and frame scratch together; nothing from the old frame is replayable.
 	r.sched = scheduler{}

@@ -35,6 +35,7 @@ func (r *Renderer) World(w drawlist.WorldSpace) {
 		// glow before the chrome is drawn over the world (§19).
 		r.resolveGlow()
 		r.resolveDistortion()
+		r.resolveArrival()
 	}
 	r.submitSchedule()
 	if !w.Begin {
@@ -55,6 +56,7 @@ func (r *Renderer) World(w drawlist.WorldSpace) {
 		k = w.Factor / (float32(camera.ZoomOf(w.Step)) / float32(camera.ZoomUnit))
 	}
 	r.sched.setWorldTransform(k, w.OffsetX, w.OffsetY)
+	r.prepareArrival(w)
 }
 
 // clipW and clipH are the extent every family clips a world command against:

@@ -146,6 +146,7 @@ type Renderer struct {
 	water          waterLayer
 	reflections    waterReflections
 	distortion     worldDistortion
+	arrival        arrivalLayer
 	heat           treeHeat
 
 	// modelDirect is the model lane (model_direct.go), the modern executor's ONE
@@ -240,6 +241,7 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 	compile(&r.reflections.resolveShader, newReflectionResolveShader)
 	compile(&r.reflections.softResolveShader, newSoftReflectionResolveShader)
 	compile(&r.distortion.shader, newDistortionShader)
+	compile(&r.arrival.shader, newArrivalShader)
 	compile(&r.ground.shader, newGroundLightShader)
 	if err := r.initModelDirect(); err != nil && firstErr == nil {
 		firstErr = err
@@ -296,6 +298,7 @@ func (r *Renderer) Execute(list *drawlist.List, w, h int) *ebiten.Image {
 	r.pointPlane.resetFrame()
 	r.glow.resetFrame()
 	r.worldW, r.worldH = r.w, r.h
+	r.arrival.packet = drawlist.Arrival{}
 	r.modelPrep.reset()
 	defer r.modelPrep.reset()
 	// These prepare passes walk the whole list before Replay commits any of it,
@@ -311,6 +314,9 @@ func (r *Renderer) Execute(list *drawlist.List, w, h int) *ebiten.Image {
 	r.prepareModelDirect(list)
 	r.prepareProjectileReflections(list)
 	list.Replay(r)
+	if !r.arrival.packet.Active {
+		r.arrival.opts = ebiten.DrawTrianglesShaderOptions{}
+	}
 	// A list without an Expand marker still leaves no compiled work behind.
 	r.submitSchedule()
 	r.modelStats.DeviceDraws = r.frameDraws
