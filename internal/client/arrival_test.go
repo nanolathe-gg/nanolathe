@@ -153,3 +153,31 @@ func TestArrivalRevealMeasuresExploredTilesInsteadOfBlackViewport(t *testing.T) 
 		t.Fatalf("zoom changed world-space radius: %v -> %v", small, got)
 	}
 }
+
+func TestArrivalScarStaysAtLandingAfterCoolingAndResetsWithBattle(t *testing.T) {
+	c, f := scorchScene(t)
+	f.Effects = nil
+	u := frame.UnitView{Slot: 1, X: wu(32), Z: wu(32)}
+	c.StartArrival(u)
+	if marks := recordScorch(c, f); len(marks) != 0 {
+		t.Fatal("scar appeared before impact")
+	}
+	c.SetArrivalSeconds(drawlist.ArrivalImpactSeconds)
+	marks := recordScorch(c, f)
+	if len(marks) != 1 || !marks[0].Landing {
+		t.Fatalf("landing mark = %+v", marks)
+	}
+	first := marks[0]
+	c.SetArrivalSeconds(drawlist.ArrivalCoolingEndSeconds)
+	u.X += wu(64)
+	f.Units = []frame.UnitView{u}
+	f.Tick += 10000
+	marks = recordScorch(c, f)
+	if len(marks) != 1 || !marks[0].Landing || marks[0].X != first.X || marks[0].Y != first.Y {
+		t.Fatalf("scar expired or followed commander: %+v", marks)
+	}
+	c.SetSnapshot(frame.NewBuffer())
+	if marks := recordScorch(c, f); len(marks) != 0 {
+		t.Fatal("scar survived battle replacement")
+	}
+}

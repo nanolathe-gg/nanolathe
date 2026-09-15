@@ -4595,7 +4595,7 @@ back should be heard before the lane becomes permanent.
 
 User-requested artistic presentation, isolated on `prototype/commander-arrival`;
 not a retail behavioral claim. `--arrival` opts fresh modern skirmishes into a
-2.05-second opening. Saves, campaign entry, classic, and ordinary captures retain
+1.95-second opening. Saves, campaign entry, classic, and ordinary captures retain
 their existing entry. A skirmish without a local commander skips the opening.
 
 The shell requests one tick-zero publication of the loaded session through
@@ -4604,15 +4604,15 @@ RNG draw. It selects the local published commander using the immutable
 definition's Commander flag, frames the landing in the final viewport, and
 holds gameplay input and the authoritative pump. Escape skips; losing focus
 holds presentation time. Its clock waits for the first submitted GPU frame,
-then holds a dim scene for 0.5 seconds before the 0.8-second map reveal. The
+then holds a dim scene for 0.5 seconds before the 0.7-second map reveal. The
 commander overlaps its final quarter-second, with no intervening pause.
 Handoff rebases the host scheduler anchor so the intro
 cannot become accumulated tick debt. The ordinary pause mechanism is untouched.
 
 `Client` stores only commander identity, position, and elapsed presentation
-seconds. The commander is hidden during the map reveal until 1.05 seconds,
+seconds. The commander is hidden during the map reveal until 0.95 seconds,
 then a local model-input copy accelerates downward with cubic easing, hitting
-the ground at 1.33 seconds. Starting lift places the commander at the top of the
+the ground at 1.23 seconds. Starting lift places the commander at the top of the
 battle viewport, so his drop is visible throughout that interval;
 its shadow is suppressed during descent. No committed pose, occupancy, weapon,
 health, damage, or simulation RNG changes. Snapshot replacement retires the
@@ -4634,7 +4634,7 @@ strong warm impact flash, colourless distortion field, and damped screen recoil.
 The expanding field uses the same bipolar compression/rarefaction profile as
 explosion distortion (§25); it warps scene pixels without adding a coloured rim.
 The map reveals in 32-world-pixel screen chunks with a
-small rise and settle; sampling the completed scene carries terrain, trees,
+stronger vertical bounce, a small sideways wobble, and a damped rebound; sampling the completed scene carries terrain, trees,
 water, and fog together. It is a sampled image effect, not moving terrain
 geometry. Black source fog stays black. The ring finishes according to the
 viewport's farthest corner; the final stage returns the exact source image.
@@ -4643,16 +4643,26 @@ The pass borrows the existing read surface and submits nothing when inactive.
 The falling commander starts hot, reusing wreck emission, nearby lighting and
 rising air distortion (§28) on outgoing model packets. A warm orange glow cools
 to the ordinary texture over four seconds after impact; the heat follows the
-same unit identity as it moves. Gameplay resumes at 2.05 seconds while cooling
+same unit identity as it moves. Gameplay resumes at 1.95 seconds while cooling
 continues on a small presentation clock, frozen on pause or focus loss. Both
 glow and shimmer respect the existing Distortion switch. No texture is replaced
 and no additional model shader is needed. The shared diagnostics count this
 source with wreck heat/lights, an intentional prototype shortcut.
 
+Impact also leaves one small dry-ground landing scar. A 38-world-pixel radius
+quad reuses the scorch layer beneath objects and fog, with a ragged charcoal
+patch and short trailing burn. It cools with the arrival, then stays at the
+original landing point for the rest of the battle, outside the fading blast
+mark FIFO. It respects the Marks switch and the dry terrain mask. This is a
+cosmetic ground mark: no height, collision, pathing, damage or reclaim value.
+It resets on terrain/session replacement and is not serialized in saves in
+this prototype. The existing scorch shader's landing variant keeps the scar
+without extra images or a new render layer.
+
 For repeatable visual inspection, use `--arrival --shot-ticks=0
 --shot-arrival-time=0.75` with a modern `--shot`; useful stages are 0.2 (lead-in),
-0.75 (reveal), 1.28 (descent), 1.33 (contact), 1.45 (distortion),
-2.05 (gameplay with hot commander), and 5.33 (fully cooled).
+0.75 (reveal), 1.08 (descent), 1.23 (contact), 1.35 (distortion),
+1.95 (gameplay with hot commander), and 5.23 (fully cooled).
 Timings, tint, displacement and attenuation are authored prototype choices.
 There is no dedicated arrival sound, landing joint animation,
 terrain-specific impact treatment, or multiplayer start barrier in this version.

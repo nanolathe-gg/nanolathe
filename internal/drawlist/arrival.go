@@ -19,9 +19,9 @@ type Arrival struct {
 // ArrivalImpactSeconds and ArrivalDurationSeconds are artistic prototype
 // timings, not retail behavior or simulation time.
 const ArrivalLeadSeconds float32 = 0.5
-const ArrivalDropSeconds float32 = 1.05
-const ArrivalImpactSeconds float32 = 1.33
-const ArrivalDurationSeconds float32 = 2.05
+const ArrivalDropSeconds float32 = 0.95
+const ArrivalImpactSeconds float32 = 1.23
+const ArrivalDurationSeconds float32 = 1.95
 
-const ArrivalRevealSeconds float32 = 1.3
+const ArrivalRevealSeconds float32 = 1.2
 const ArrivalCoolingEndSeconds float32 = ArrivalImpactSeconds + 4

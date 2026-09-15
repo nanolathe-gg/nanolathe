@@ -32,7 +32,7 @@ func (r *Renderer) ScorchMarks(batch drawlist.ScorchMarks) {
 		if r.modelStats.ScorchQuads >= drawlist.ScorchMarkLimit {
 			break
 		}
-		if !(m.Radius > 0) || !(m.Age >= 0 && m.Age < drawlist.ScorchLifeTicks) {
+		if !(m.Radius > 0) || !(m.Age >= 0 && (m.Landing || m.Age < drawlist.ScorchLifeTicks)) {
 			continue
 		}
 		rx, ry := m.Radius, m.Radius*0.7
@@ -41,6 +41,9 @@ func (r *Renderer) ScorchMarks(batch drawlist.ScorchMarks) {
 			continue
 		}
 		variant := float32(m.Variant % 64)
+		if m.Landing {
+			variant += 64 // Dedicated appearance in the existing ground-mark shader.
+		}
 		r.sched.quadCorners(schedDest, [4]float32{x0, x1, x0, x1}, [4]float32{y0, y0, y1, y1}, mapping, [4][4]float32{{-1, -1, m.Age, variant}, {1, -1, m.Age, variant}, {-1, 1, m.Age, variant}, {1, 1, m.Age, variant}})
 		r.modelStats.ScorchQuads++
 	}
@@ -70,6 +73,8 @@ func Fragment(dst vec4, src vec2, color vec4, custom vec4) vec4 {
  world := color.rg+screen*color.b
  mask := scorchMask(world/color.a)
  seed := custom.w
+ landing := seed >= 64.0
+ if landing { seed -= 64.0 }
  p := custom.xy
  age := custom.z
  n := scorchNoise(p*4.1+vec2(seed*2.7,seed*1.3))
@@ -85,6 +90,15 @@ func Fragment(dst vec4, src vec2, color vec4, custom vec4) vec4 {
  hot := (1.0-smoothstep(0.0,0.30,radius))*(1.0-smoothstep(15.0,90.0,age))*(0.45+0.55*fine)
  tint := mix(vec3(0.055,0.042,0.030),vec3(0.92,0.24,0.035),hot)
  alpha := max(scorch,hot*0.50)*fade
+ if landing {
+  // Compact char with a ragged central patch and a short trailing burn.
+  // It changes only ground colour, with no terrain deformation or collision.
+  core := (1.0-smoothstep(0.22,0.78,radius))*(0.65+0.35*fine)*0.62
+  streak := (1.0-smoothstep(0.10,0.27,abs(p.x+0.07*sin(p.y*11.0))))
+  streak *= smoothstep(-0.98,-0.65,p.y)*(1.0-smoothstep(-0.20,0.10,p.y))
+  alpha = max(core,streak*(0.30+0.18*n))
+  tint = mix(vec3(0.035,0.027,0.020),vec3(0.58,0.12,0.018),hot*0.4)
+ }
  alpha = clamp(alpha*coverage,0.0,0.65)
  return vec4(tint*alpha,alpha)
 }

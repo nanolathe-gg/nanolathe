@@ -131,6 +131,9 @@ func (c *Client) drawScorchMarks(cur *frame.Frame) {
 	c.observeScorchMarks(cur)
 	st := &c.scorch
 	st.arena = st.arena[:0]
+	if mark, ok := c.arrivalScorchMark(); ok {
+		st.arena = append(st.arena, mark)
+	}
 	scale := float32(c.cam.EffectiveScale().Float())
 	w, h := c.recordExtent()
 	for n := 0; n < st.count; n++ {

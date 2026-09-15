@@ -12,6 +12,8 @@ const (
 type ScorchMark struct {
 	X, Y, Radius, Age float32
 	Variant           uint32
+	// Landing selects the small permanent arrival scar (GPU §36).
+	Landing bool
 }
 type ScorchMarks struct{ Marks []ScorchMark }
 type ScorchSink interface{ ScorchMarks(ScorchMarks) }

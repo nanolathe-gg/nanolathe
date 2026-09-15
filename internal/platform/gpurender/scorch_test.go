@@ -151,13 +151,31 @@ func checkScorchDevicePixels() error {
 			}
 		}
 	}
+	// The arrival scar uses the same masked ground layer, but remains after
+	// ordinary blast marks expire and after its own heat has cooled.
+	landingList := func(age float32) drawlist.List {
+		var l drawlist.List
+		l.RecordClear()
+		l.RecordTerrain(drawlist.Terrain{Terrain: ter, OriginX: 16, OriginY: 16, DstW: w, DstH: h, Scale: camera.ViewScaleNative})
+		l.RecordScorchMarks(drawlist.ScorchMarks{Marks: []drawlist.ScorchMark{{X: 162, Y: 76, Radius: 29, Age: age, Variant: 17, Landing: true}}})
+		l.RecordExpand()
+		return l
+	}
+	land := landingList(120)
+	plain, _ := read(&land, false)
+	cooled, _ := read(&land, true)
+	oldLand := landingList(10000)
+	old, oldStats := read(&oldLand, true)
+	if bytes.Equal(plain, old) || !bytes.Equal(cooled, old) || oldStats.ScorchQuads != 1 {
+		return fmt.Errorf("landing scar faded, disappeared or kept changing after cooling")
+	}
 	// An otherwise valid mark over water must have no output, including with
 	// coastal animation disabled. The dry channel alone controls admission.
 	wet := makeList(8, camera.ZoomUnit)
 	wet.Reset()
 	wet.RecordClear()
 	wet.RecordTerrain(drawlist.Terrain{Terrain: ter, OriginX: 16, OriginY: 16, DstW: w, DstH: h, Scale: camera.ViewScaleNative})
-	wet.RecordScorchMarks(drawlist.ScorchMarks{Marks: []drawlist.ScorchMark{{X: 60, Y: 76, Radius: 29, Age: 8}}})
+	wet.RecordScorchMarks(drawlist.ScorchMarks{Marks: []drawlist.ScorchMark{{X: 60, Y: 76, Radius: 29, Age: 8, Landing: true}}})
 	wet.RecordExpand()
 	base, _ := read(&wet, false)
 	masked, _ := read(&wet, true)

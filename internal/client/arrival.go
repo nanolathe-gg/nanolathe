@@ -15,6 +15,7 @@ import (
 type arrivalPresentation struct {
 	active    bool
 	cooling   bool
+	landed    bool
 	presented bool
 	seconds   float32
 	unit      frame.UnitView
@@ -63,11 +64,16 @@ func (c *Client) SetArrivalSeconds(seconds float32) {
 		seconds = 0
 	}
 	c.arrival.seconds = seconds
+	if seconds >= drawlist.ArrivalImpactSeconds && (c.arrival.active || c.arrival.cooling) {
+		c.arrival.landed = true
+	}
 	if seconds >= drawlist.ArrivalDurationSeconds {
 		c.arrival.active = false
 	}
 	if seconds >= drawlist.ArrivalCoolingEndSeconds {
-		c.arrival = arrivalPresentation{}
+		// Keep the world-space landing scar after the animation cools away.
+		c.arrival = arrivalPresentation{landed: c.arrival.landed, unit: c.arrival.unit,
+			seconds: drawlist.ArrivalCoolingEndSeconds}
 	}
 	c.BumpPresentationEpoch()
 }
@@ -208,4 +214,22 @@ func (c *Client) arrivalDropHeight() float32 {
 	}
 	top := (float32(c.battleViewportRect().Y) - oy) / factor
 	return 2 * max(32, (float32(sy-camera.OriginY)-top)/scale-16)
+}
+
+// A single match-long dry-ground scar, independent of the fading blast FIFO.
+// The initial location stays fixed when the commander walks away (GPU §36).
+func (c *Client) arrivalScorchMark() (drawlist.ScorchMark, bool) {
+	if !c.arrival.landed {
+		return drawlist.ScorchMark{}, false
+	}
+	u := c.arrival.unit
+	ground, ok := c.scorchSurface(u.X, u.Z)
+	if !ok {
+		return drawlist.ScorchMark{}, false
+	}
+	sx, sy := c.cam.WorldToScreen(u.X, ground, u.Z)
+	scale := float32(c.cam.EffectiveScale().Float())
+	return drawlist.ScorchMark{X: float32(sx - camera.OriginX), Y: float32(sy - camera.OriginY),
+		Radius: 38 * scale, Age: max(0, c.arrival.seconds-drawlist.ArrivalImpactSeconds) * 30,
+		Variant: 17, Landing: true}, true
 }

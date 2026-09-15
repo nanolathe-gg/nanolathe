@@ -122,10 +122,11 @@ func Fragment(dst vec4, src vec2, color vec4) vec4 {
 		cell := floor((p-grid)/(32*scale))
 		cellCenter := grid+(cell+vec2(0.5))*32*scale
 		local := revealTime-length((cellCenter-center)/scale)/speed
-		reveal := smoothstep(0, 0.12, local)
+		reveal := smoothstep(0, 0.10, local)
 		u := clamp(local/0.20, 0, 1)
-		lift := sin(u*3.14159265)*6*(1-u)*scale
-		sample := arrivalLinear(p+vec2(0,lift))
+		lift := sin(u*7.8539816)*10*(1-u)*(1-u)*scale
+		sway := sin(u*9.424778)*2*(1-u)*scale
+		sample := arrivalLinear(p+vec2(sway,lift))
 		rgb = sample.rgb*(0.025+0.975*reveal)
 	}
 	if t < impact {

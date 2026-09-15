@@ -587,6 +587,7 @@ func (c *Client) SetTerrain(t *world.Terrain) {
 	}
 	if c != nil && c.terrain != t {
 		c.terrainGeneration++
+		c.arrival = arrivalPresentation{}
 		c.resetFogCache()
 		c.resetTrails()
 		c.terrain = t
