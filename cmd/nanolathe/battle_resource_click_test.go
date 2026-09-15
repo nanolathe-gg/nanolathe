@@ -90,11 +90,11 @@ func resourceBuildCommands(s *session.Session) []session.HumanMobileBuildCommand
 
 func TestResourceDoubleClickQueuesOnlyBuild(t *testing.T) {
 	for _, kind := range []int{0, 1} {
-		for _, shift := range []bool{false, true} {
-			t.Run(fmt.Sprintf("type%d_shift%v", kind, shift), func(t *testing.T) {
+		for _, tickBetween := range []bool{false, true} {
+			t.Run(fmt.Sprintf("type%d_tickBetween%v", kind, tickBetween), func(t *testing.T) {
 				b, cl, ms, builder := resourceFixture(t, false)
 				b.interfaceType = kind
-				// Every double-click preserves existing construction, regardless of Shift.
+				// Every double-click preserves existing construction, with Shift held.
 				{
 					if err := b.DispatchMobileBuild("armsolar", numeric.FixedFromInt(480), 0, numeric.FixedFromInt(480), false); err != nil {
 						t.Fatal(err)
@@ -102,20 +102,33 @@ func TestResourceDoubleClickQueuesOnlyBuild(t *testing.T) {
 					b.sess.Step(b.sess.Clock.ScaledAnchor + 1)
 				}
 				x, y := o5ScreenWorld(b.cam, numeric.FixedFromInt(320), 0, numeric.FixedFromInt(320))
-				resourceClickAt(b, cl, x, y, shift)
-				if len(b.sess.PendingHumanCommands()) != 0 || b.resourceClick == nil {
-					t.Fatal("first click issued a command or failed to arm")
+				resourceClickAt(b, cl, x, y, true)
+				wantFirst := 1
+				if kind == 1 {
+					wantFirst = 0
 				}
-				// Let an authoritative tick pass between clicks: Type 1 must keep selection.
-				b.sess.Step(b.sess.Clock.ScaledAnchor + 1)
+				if len(b.sess.PendingHumanCommands()) != wantFirst || b.resourceClick == nil {
+					t.Fatal("first click did not dispatch immediately or failed to arm")
+				}
+				// Cover clicks on both sides of the input drain; Type 1 must keep selection.
+				if tickBetween {
+					b.sess.Step(b.sess.Clock.ScaledAnchor + 1)
+				}
 				ms.ms += 150
-				resourceClickAt(b, cl, x, y, shift)
+				resourceClickAt(b, cl, x, y, true)
 				cmds := resourceBuildCommands(b.sess)
 				if len(cmds) != 1 || cmds[0].Product != "armsolar" || !cmds[0].Queued || !cmds[0].AppendOnly {
 					t.Fatalf("build commands %+v", cmds)
 				}
-				if len(b.sess.PendingHumanCommands()) != 1 {
-					t.Fatalf("extra command after double-click: %+v", b.sess.PendingHumanCommands())
+				wantCommands := 2
+				if !tickBetween {
+					wantCommands++
+				}
+				if kind == 1 {
+					wantCommands = 1
+				}
+				if len(b.sess.PendingHumanCommands()) != wantCommands {
+					t.Fatalf("wrong replacement commands after double-click: %+v", b.sess.PendingHumanCommands())
 				}
 				b.sess.Step(b.sess.Clock.ScaledAnchor + 1)
 				q := orders.QueueForUnit(b.sess.Units.Unit(builder))
@@ -151,9 +164,9 @@ func TestResourceDepositCentersBothExtractorSizes(t *testing.T) {
 			if !ok || site.product.CanonicalKey != product || site.x != wantCell || site.z != wantCell {
 				t.Fatalf("site %+v, ok=%v", site, ok)
 			}
-			resourceClickAt(b, cl, x, y, false)
+			resourceClickAt(b, cl, x, y, true)
 			ms.ms += 100
-			resourceClickAt(b, cl, x, y, false)
+			resourceClickAt(b, cl, x, y, true)
 			cmds := resourceBuildCommands(b.sess)
 			if len(cmds) != 1 || cmds[0].Product != product || cmds[0].WX != numeric.FixedFromInt(344) || cmds[0].WZ != numeric.FixedFromInt(344) {
 				t.Fatalf("not centered on deposit: %+v", cmds)
@@ -180,9 +193,9 @@ func TestResourceFoggedDepositNeverFallsBackToSolar(t *testing.T) {
 				t.Fatal("fixture must have a deposit outside current LOS")
 			}
 			x, y := o5ScreenWorld(b.cam, numeric.FixedFromInt(366), 0, numeric.FixedFromInt(366))
-			resourceClickAt(b, cl, x, y, false)
+			resourceClickAt(b, cl, x, y, true)
 			ms.ms += 100
-			resourceClickAt(b, cl, x, y, false)
+			resourceClickAt(b, cl, x, y, true)
 			cmds := resourceBuildCommands(b.sess)
 			if product == "" {
 				if len(cmds) != 0 {
@@ -201,27 +214,36 @@ func TestResourceFoggedDepositNeverFallsBackToSolar(t *testing.T) {
 func TestResourceSingleClickExpiryAndClassic(t *testing.T) {
 	for _, modern := range []bool{false, true} {
 		for _, kind := range []int{0, 1} {
-			t.Run(fmt.Sprintf("modern%v_type%d", modern, kind), func(t *testing.T) {
-				b, cl, ms, _ := resourceFixture(t, false)
-				b.interfaceType = kind
-				cl.SetEnhanced(modern)
-				resourceClickAt(b, cl, 320, 320, false)
-				if modern {
-					if len(b.sess.PendingHumanCommands()) != 0 {
-						t.Fatal("single click not deferred")
+			for _, shift := range []bool{false, true} {
+				t.Run(fmt.Sprintf("modern%v_type%d_shift%v", modern, kind, shift), func(t *testing.T) {
+					b, cl, ms, _ := resourceFixture(t, false)
+					b.interfaceType = kind
+					cl.SetEnhanced(modern)
+					resourceClickAt(b, cl, 320, 320, shift)
+					if modern && shift {
+						wantFirst := 1
+						if kind == 1 {
+							wantFirst = 0
+						}
+						if len(b.sess.PendingHumanCommands()) != wantFirst || b.resourceClick == nil {
+							t.Fatal("Shift move must dispatch immediately; Type 1 selection must wait")
+						}
+						ms.ms += 401
+						resourceInput(b, cl, 320, 320, false, shift)
 					}
-					ms.ms += 401
-					resourceInput(b, cl, 320, 320, false, false)
-				}
-				cmds := b.sess.PendingHumanCommands()
-				want := session.HumanOrder
-				if kind == 1 {
-					want = session.HumanSelectionClear
-				}
-				if len(cmds) != 1 || cmds[0].Kind != want {
-					t.Fatalf("single click %+v, want %v", cmds, want)
-				}
-			})
+					cmds := b.sess.PendingHumanCommands()
+					want := session.HumanOrder
+					if kind == 1 {
+						want = session.HumanSelectionClear
+					}
+					if len(cmds) != 1 || cmds[0].Kind != want || b.resourceClick != nil {
+						t.Fatalf("single click %+v, want immediate %v with no pending gesture", cmds, want)
+					}
+					if kind == 0 && cmds[0].Order.Queued != shift {
+						t.Fatalf("queued=%v, want captured Shift=%v", cmds[0].Order.Queued, shift)
+					}
+				})
+			}
 		}
 	}
 }
@@ -233,11 +255,12 @@ func TestResourceRefusedSiteAndCancel(t *testing.T) {
 			if mode == "refuse" {
 				b.cat.Units["armsolar"].MinWaterDepth = 10
 			}
-			resourceClickAt(b, cl, 320, 320, false)
+			resourceClickAt(b, cl, 320, 320, true)
+			firstSequence := b.resourceClick.moveSequence
 			ms.ms += 100
 			switch mode {
 			case "refuse":
-				resourceClickAt(b, cl, 320, 320, false)
+				resourceClickAt(b, cl, 320, 320, true)
 			case "escape":
 				in := input.NewState()
 				in.Kbd.SetKey(input.KeyEscape, true)
@@ -257,7 +280,7 @@ func TestResourceRefusedSiteAndCancel(t *testing.T) {
 				t.Fatal("canceled/refused click built or stayed pending")
 			}
 			for _, c := range b.sess.PendingHumanCommands() {
-				if c.Kind == session.HumanOrder {
+				if c.Kind == session.HumanOrder && c.Sequence != firstSequence {
 					t.Fatal("cancellation replayed Move")
 				}
 			}
@@ -353,14 +376,15 @@ func TestResourcePublishedDoubleClickUsesEventSnapshot(t *testing.T) {
 	}
 }
 
-func TestResourceViewerOwnershipCancelsDeferredClick(t *testing.T) {
+func TestResourceViewerOwnershipEndsRecognitionWithoutReplayingMove(t *testing.T) {
 	for _, mode := range []string{"focus", "chat", "modal", "escape"} {
 		t.Run(mode, func(t *testing.T) {
 			b, cl, ms, _ := resourceFixture(t, false)
-			resourceClickAt(b, cl, 320, 320, false)
+			resourceClickAt(b, cl, 320, 320, true)
 			if b.resourceClick == nil {
 				t.Fatal("first click not pending")
 			}
+			firstSequence := b.resourceClick.moveSequence
 			b.controller = newReplayController(b)
 			cl.Input().Mouse.SetPosition(320, 320)
 			switch mode {
@@ -379,7 +403,7 @@ func TestResourceViewerOwnershipCancelsDeferredClick(t *testing.T) {
 				t.Fatal("input ownership left click pending")
 			}
 			for _, c := range b.sess.PendingHumanCommands() {
-				if c.Kind == session.HumanOrder || c.Kind == session.HumanMobileBuild {
+				if c.Kind == session.HumanOrder && c.Sequence != firstSequence || c.Kind == session.HumanMobileBuild {
 					t.Fatal("owned input replayed world command")
 				}
 			}
@@ -394,11 +418,11 @@ func TestResourcePaletteStopCancelsBeforeEdgesAreConsumed(t *testing.T) {
 	f, _ := b.currentSnapshot()
 	// Seed the first-click record at the input ownership boundary. The fixture's
 	// authored command palette then consumes S before the controller sees it.
-	b.resourceClick = &resourceClick{builder: f.CommandPage.Builder, selection: append([]pool.Handle(nil), f.Selection.Handles...), fallback: session.HumanCommand{Kind: session.HumanOrder, Order: session.HumanOrderCommand{Code: 1}}}
+	b.resourceClick = &resourceClick{builder: f.CommandPage.Builder, selection: append([]pool.Handle(nil), f.Selection.Handles...), moveSequence: 1}
 	cl.Input().EnqueueToken(input.Token{Kind: input.TokenText, Rune: 's'})
 	b.viewerStep(0, cl)
 	if b.resourceClick != nil {
-		t.Fatal("Stop retained earlier deferred click")
+		t.Fatal("Stop retained earlier gesture receipt")
 	}
 	for _, c := range b.sess.PendingHumanCommands() {
 		if c.Kind == session.HumanOrder {
@@ -407,26 +431,30 @@ func TestResourcePaletteStopCancelsBeforeEdgesAreConsumed(t *testing.T) {
 	}
 }
 
-func TestResourceDoubleClickIgnoresShiftChanges(t *testing.T) {
-	b, cl, ms, _ := resourceFixture(t, false)
-	resourceClickAt(b, cl, 320, 320, false)
-	ms.ms += 100
-	in := input.NewState()
-	in.Mouse.SetPosition(320, 320)
-	in.Mouse.SetButton(input.MouseButtonLeft, true)
-	in.Kbd.SetKey(input.KeyShift, true)
-	b.handleInput(in, cl)
-	cmds := resourceBuildCommands(b.sess)
-	if len(cmds) != 1 || !cmds[0].Queued || !cmds[0].AppendOnly {
-		t.Fatalf("Shift changed double-click meaning: %+v", cmds)
+func TestResourceDoubleClickRequiresShiftOnBothClicks(t *testing.T) {
+	for _, pair := range [][2]bool{{false, false}, {false, true}, {true, false}} {
+		t.Run(fmt.Sprint(pair), func(t *testing.T) {
+			b, cl, ms, _ := resourceFixture(t, false)
+			resourceClickAt(b, cl, 320, 320, pair[0])
+			ms.ms += 100
+			resourceClickAt(b, cl, 320, 320, pair[1])
+			if cmds := resourceBuildCommands(b.sess); len(cmds) != 0 {
+				t.Fatalf("built without Shift on both clicks: %+v", cmds)
+			}
+			cmds := b.sess.PendingHumanCommands()
+			if len(cmds) == 0 || cmds[0].Kind != session.HumanOrder || cmds[0].Order.Queued != pair[0] {
+				t.Fatalf("first click lost its original queue intent: %+v", cmds)
+			}
+		})
 	}
 }
 
 func TestResourceFeedbackExpiresWithoutChangingShift(t *testing.T) {
 	b, cl, ms, _ := resourceFixture(t, false)
-	resourceClickAt(b, cl, 320, 320, false)
+	resourceClickAt(b, cl, 320, 320, true)
 	ms.ms += 100
-	resourceClickAt(b, cl, 320, 320, false)
+	resourceClickAt(b, cl, 320, 320, true)
+	resourceInput(b, cl, 320, 320, false, false) // Release the real Shift key before inspecting feedback.
 	if b.resourceQueueFeedback == nil || b.battleState().Input.ShiftHeld {
 		t.Fatal("missing feedback or synthesized Shift")
 	}
@@ -460,9 +488,9 @@ func TestResourceFeedbackExpiresWithoutChangingShift(t *testing.T) {
 func TestResourceRefusalDoesNotStartQueueFeedback(t *testing.T) {
 	b, cl, ms, _ := resourceFixture(t, false)
 	b.cat.Units["armsolar"].MinWaterDepth = 10
-	resourceClickAt(b, cl, 320, 320, false)
+	resourceClickAt(b, cl, 320, 320, true)
 	ms.ms += 100
-	resourceClickAt(b, cl, 320, 320, false)
+	resourceClickAt(b, cl, 320, 320, true)
 	if b.resourceQueueFeedback != nil {
 		t.Fatal("refused placement played queue feedback")
 	}
@@ -473,14 +501,12 @@ func TestResourceSingleOrderClickReplacesQueue(t *testing.T) {
 		t.Run(fmt.Sprint(kind), func(t *testing.T) {
 			b, cl, ms, builder := resourceFixture(t, false)
 			b.interfaceType = kind
-			resourceClickAt(b, cl, 320, 320, false)
+			resourceClickAt(b, cl, 320, 320, true)
 			ms.ms += 100
-			resourceClickAt(b, cl, 320, 320, false)
+			resourceClickAt(b, cl, 320, 320, true)
 			b.sess.Step(b.sess.Clock.ScaledAnchor + 1)
 			if kind == 0 {
 				resourceClickAt(b, cl, 400, 320, false)
-				ms.ms += 401
-				resourceInput(b, cl, 400, 320, false, false)
 			} else {
 				in := input.NewState()
 				in.Mouse.SetPosition(400, 320)
@@ -506,9 +532,9 @@ func TestResourceSingleOrderClickReplacesQueue(t *testing.T) {
 func TestResourceFeedbackCancelsWhenSelectionExpands(t *testing.T) {
 	b, cl, ms, builder := resourceFixture(t, false)
 	other := placeUnit(b, "armcons", numeric.FixedFromInt(500), numeric.FixedFromInt(400))
-	resourceClickAt(b, cl, 320, 320, false)
+	resourceClickAt(b, cl, 320, 320, true)
 	ms.ms += 100
-	resourceClickAt(b, cl, 320, 320, false)
+	resourceClickAt(b, cl, 320, 320, true)
 	b.enqueueSelectionCommand(session.HumanCommand{Kind: session.HumanSelectionReplace, Selection: session.HumanSelectionCommand{Handles: []pool.Handle{builder, other.Handle}}})
 	b.sess.Step(b.sess.Clock.ScaledAnchor + 1)
 	b.updateResourceQueueFeedback(cl)

@@ -25,9 +25,9 @@ func TestResourceRepeatedSolarPacksWithoutOverlap(t *testing.T) {
 			x, y := o5ScreenWorld(b.cam, numeric.FixedFromInt(320), 0, numeric.FixedFromInt(320))
 			var placed []session.HumanMobileBuildCommand
 			for i := 0; i < 9; i++ {
-				resourceClickAt(b, cl, x, y, false)
+				resourceClickAt(b, cl, x, y, true)
 				ms.ms += 100
-				resourceClickAt(b, cl, x, y, false)
+				resourceClickAt(b, cl, x, y, true)
 				cmds := resourceBuildCommands(b.sess)
 				want := i + 1
 				if publish {
@@ -87,9 +87,9 @@ func TestResourceSpacingReservesUnselectedBuildersOnlyForLocalPlayer(t *testing.
 				t.Fatal(err)
 			}
 			x, y := o5ScreenWorld(b.cam, numeric.FixedFromInt(320), 0, numeric.FixedFromInt(320))
-			resourceClickAt(b, cl, x, y, false)
+			resourceClickAt(b, cl, x, y, true)
 			ms.ms += 100
-			resourceClickAt(b, cl, x, y, false)
+			resourceClickAt(b, cl, x, y, true)
 			cmds := resourceBuildCommands(b.sess)
 			if len(cmds) != 1 {
 				t.Fatalf("commands %+v", cmds)
@@ -121,9 +121,9 @@ func TestResourceMexSpacingStaysOnDeposit(t *testing.T) {
 				t.Fatal(err)
 			}
 			x, y := o5ScreenWorld(b.cam, numeric.FixedFromInt(366), 0, numeric.FixedFromInt(366))
-			resourceClickAt(b, cl, x, y, false)
+			resourceClickAt(b, cl, x, y, true)
 			ms.ms += 100
-			resourceClickAt(b, cl, x, y, false)
+			resourceClickAt(b, cl, x, y, true)
 			cmds := resourceBuildCommands(b.sess)
 			if covered {
 				if len(cmds) != 1 || b.resourceQueueFeedback != nil || b.resourceClick != nil {
@@ -153,9 +153,9 @@ func TestResourceSpacingSkipsIllegalEdge(t *testing.T) {
 	// The equally near north edge is void; west is the next legal edge.
 	b.sess.World.PlotAt(19, 17).SetFeature(world.PlotFeatureVoid)
 	x, y := o5ScreenWorld(b.cam, numeric.FixedFromInt(320), 0, numeric.FixedFromInt(320))
-	resourceClickAt(b, cl, x, y, false)
+	resourceClickAt(b, cl, x, y, true)
 	ms.ms += 100
-	resourceClickAt(b, cl, x, y, false)
+	resourceClickAt(b, cl, x, y, true)
 	cmds := resourceBuildCommands(b.sess)
 	if len(cmds) != 2 || cmds[1].WX != numeric.FixedFromInt(288) || cmds[1].WZ != numeric.FixedFromInt(320) {
 		t.Fatalf("did not skip the invalid north edge: %+v", cmds)

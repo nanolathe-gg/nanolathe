@@ -31,12 +31,13 @@ type resourceQueueFeedback struct {
 }
 
 type resourceClick struct {
-	x, y      int32
-	at        uint32
-	builder   pool.Handle
-	selection []pool.Handle
-	site      resourceBuildSite
-	fallback  session.HumanCommand
+	x, y         int32
+	at           uint32
+	builder      pool.Handle
+	selection    []pool.Handle
+	site         resourceBuildSite
+	fallback     session.HumanCommand
+	moveSequence uint64
 }
 
 type resourceBuildSite struct {
@@ -158,10 +159,11 @@ func (b *battleSession) resourceClickNow() uint32 {
 	return b.millisSource.Millis32()
 }
 
-// Delay only a qualifying idle ground click. In Type 0 its contextual Move
-// would contaminate the construction queue; in Type 1 its deselect would lose the builder.
-func (b *battleSession) deferResourceClick(cl *client.Client, mx, my int32, modifiers input.Modifiers) bool {
-	if cl == nil || !cl.Enhanced() || !cl.IsFocused() || b.palettePointerOwned || modifiers.Ctrl || modifiers.Alt {
+// A Shift-click starts the resource gesture (interface design §3.10). Type 0
+// queues its move immediately and retains only the command receipt. Type 1's
+// left button selects rather than moves, so its deselect still waits for expiry.
+func (b *battleSession) beginResourceClick(cl *client.Client, mx, my int32, modifiers input.Modifiers) bool {
+	if cl == nil || !cl.Enhanced() || !cl.IsFocused() || b.palettePointerOwned || !modifiers.Shift || modifiers.Ctrl || modifiers.Alt {
 		return false
 	}
 	site, ok := b.resourceSite(mx, my)
@@ -169,13 +171,25 @@ func (b *battleSession) deferResourceClick(cl *client.Client, mx, my int32, modi
 		return false
 	}
 	f, _ := b.currentSnapshot()
-	_, _, pos := b.pickTarget(mx, my)
-	fallback := session.HumanCommand{Kind: session.HumanSelectionClear}
-	if !b.interfaceTypeRightClick() {
-		fallback = session.HumanCommand{Kind: session.HumanOrder, Order: session.HumanOrderCommand{Code: 1, Position: *pos, Queued: modifiers.Shift}}
+	pending := &resourceClick{x: mx, y: my, at: b.resourceClickNow(),
+		builder: f.CommandPage.Builder, selection: slices.Clone(f.Selection.Handles), site: site}
+	if b.interfaceTypeRightClick() {
+		pending.fallback = session.HumanCommand{Kind: session.HumanSelectionClear}
+	} else {
+		_, _, pos := b.pickTarget(mx, my)
+		// Explicit Move also covers custom vents that allow reclamation: the
+		// first half of this gesture must always be a replaceable move.
+		command := session.HumanCommand{Kind: session.HumanOrder, Order: session.HumanOrderCommand{
+			Handles: pending.selection, Code: 2, Position: *pos, Queued: true, TrackQueuedMove: true,
+		}}
+		sequence, err := b.sess.EnqueueHumanCommandWithSequence(command)
+		if err != nil {
+			return false
+		}
+		pending.moveSequence = sequence
+		b.resourceQueueFeedback = nil
 	}
-	b.resourceClick = &resourceClick{x: mx, y: my, at: b.resourceClickNow(),
-		builder: f.CommandPage.Builder, selection: slices.Clone(f.Selection.Handles), site: site, fallback: fallback}
+	b.resourceClick = pending
 	return true
 }
 
@@ -186,8 +200,6 @@ func (b *battleSession) flushResourceClick() {
 		b.resourceQueueFeedback = nil
 		if pending.fallback.Kind == session.HumanSelectionClear {
 			_ = b.enqueueSelectionCommand(pending.fallback)
-		} else {
-			_ = b.enqueueHumanCommand(pending.fallback)
 		}
 	}
 }
@@ -206,8 +218,8 @@ func (b *battleSession) serviceResourceClick(in *input.State, cl *client.Client,
 		b.resourceClick = nil
 		return false
 	}
-	// A new keyboard command supersedes the deferred click (Escape must never
-	// replay a Move); pointer commands outside the pair retain event order.
+	// A new keyboard command ends recognition without replaying the first
+	// click. An already queued move remains an ordinary order.
 	if in.ShortcutTokenMode && in.ShortcutToken.Kind != input.TokenNone {
 		b.resourceClick = nil
 		return false
@@ -223,7 +235,7 @@ func (b *battleSession) serviceResourceClick(in *input.State, cl *client.Client,
 	matching := dx >= -resourceDoubleClickPixels && dx <= resourceDoubleClickPixels &&
 		dy >= -resourceDoubleClickPixels && dy <= resourceDoubleClickPixels &&
 		!modifiers.Ctrl && !modifiers.Alt
-	if b.resourceClickNow()-pending.at > resourceDoubleClickMillis || mouse.Pressed(input.MouseButtonRight) ||
+	if b.resourceClickNow()-pending.at > resourceDoubleClickMillis || !modifiers.Shift || mouse.Pressed(input.MouseButtonRight) ||
 		mouse.Pressed(input.MouseButtonMiddle) || (mouse.Pressed(input.MouseButtonLeft) && !matching) {
 		b.flushResourceClick()
 		return false
@@ -237,6 +249,13 @@ func (b *battleSession) serviceResourceClick(in *input.State, cl *client.Client,
 		return false
 	}
 	b.resourceClick = nil
+	// Cancellation crosses the same tick boundary as the build. Only the move
+	// created by this first click can be removed, even if it has already run.
+	// A refused build also consumes the gesture's move, leaving older work alone.
+	if pending.moveSequence != 0 {
+		_ = b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanCancelQueuedMove,
+			CancelQueuedMove: session.HumanCancelQueuedMoveCommand{Sequence: pending.moveSequence, Handles: pending.selection}})
+	}
 	state.DragActive = false
 	state.PlaceCaptured = true
 	site, result, buildOK := b.spaceResourceBuild(site, pending.builder)

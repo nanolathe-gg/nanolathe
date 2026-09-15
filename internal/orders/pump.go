@@ -169,6 +169,11 @@ type Node struct {
 	// internal/construction/queue.go, the mission spawner and the AI planner —
 	// keep the non-queued default, which is what they issue today.
 	QueuedIssue bool
+	// HumanMoveSequence is a transient, unsaved Enhanced gesture receipt. It
+	// identifies only the move issued by the first Shift click so the second
+	// can replace that move with a build (DESIGN_INTERFACE_HUD_INPUT §3.10).
+	// It is implementation policy, not retail order state.
+	HumanMoveSequence uint64
 }
 
 // Queue holds the two segments [04 §3.2] C5.

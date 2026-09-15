@@ -360,7 +360,7 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 			// Uses the immutable committed-frame picker so fog, radius, strict tie,
 			// and viewer rules are shared by selection and targeting [07 §9][03 §3.2].
 
-			if b.deferResourceClick(cl, mx, my, pointerModifiers) {
+			if b.beginResourceClick(cl, mx, my, pointerModifiers) {
 				return
 			}
 			// With Type 1 an idle left click remains the selection/drag button;

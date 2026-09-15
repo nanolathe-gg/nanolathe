@@ -8,6 +8,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/features"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/testsupport/retailcat"
@@ -50,9 +51,9 @@ func TestResourceGeothermalNearVentQueuesCenteredPlant(t *testing.T) {
 					}
 				}
 				x, y := o5ScreenWorld(b.cam, numeric.FixedFromInt(328+offset), 0, numeric.FixedFromInt(328))
-				resourceClickAt(b, cl, x, y, false)
+				resourceClickAt(b, cl, x, y, true)
 				ms.ms += 100
-				resourceClickAt(b, cl, x, y, false)
+				resourceClickAt(b, cl, x, y, true)
 				cmds := resourceBuildCommands(b.sess)
 				if len(cmds) != 1 || cmds[0].Product != "geo" || !cmds[0].Queued || !cmds[0].AppendOnly || cmds[0].WX != numeric.FixedFromInt(336) || cmds[0].WZ != numeric.FixedFromInt(336) || b.resourceQueueFeedback == nil {
 					t.Fatalf("vent did not queue its aligned plant: %+v", cmds)
@@ -97,9 +98,9 @@ func TestResourceGeothermalAvailabilityAndRange(t *testing.T) {
 	}
 	b.cat.BuildMenus["armcons"].Buttons = []string{"geo"}
 	cl.SetEnhanced(false)
-	resourceClickAt(b, cl, x, y, false)
+	resourceClickAt(b, cl, x, y, true)
 	ms.ms += 100
-	resourceClickAt(b, cl, x, y, false)
+	resourceClickAt(b, cl, x, y, true)
 	if len(resourceBuildCommands(b.sess)) != 0 {
 		t.Fatal("classic must not use the geothermal shortcut")
 	}
@@ -113,9 +114,9 @@ func TestResourceGeothermalSpacingKeepsRequiredYardOnVent(t *testing.T) {
 	}
 	x, y := o5ScreenWorld(b.cam, numeric.FixedFromInt(352), 0, numeric.FixedFromInt(328))
 	for i := 0; i < 2; i++ {
-		resourceClickAt(b, cl, x, y, false)
+		resourceClickAt(b, cl, x, y, true)
 		ms.ms += 100
-		resourceClickAt(b, cl, x, y, false)
+		resourceClickAt(b, cl, x, y, true)
 	}
 	cmds := resourceBuildCommands(b.sess)
 	if len(cmds) != 2 || cmds[1].Product != "geo" {
@@ -162,5 +163,31 @@ func TestResourceGeothermalChoosesNearestVentAtFractionalGroundPoint(t *testing.
 	site, ok := b.nearbyResourceVent(f, b.cat.Units["geo"], numeric.FixedFromInt(328), numeric.FixedFromInt(344)+numeric.FixedFromInt(1)/4)
 	if !ok || site.deposit.z != 22 {
 		t.Fatalf("did not choose closer southern vent: %+v", site)
+	}
+}
+
+// The quick-build gesture always starts a move, even where an ordinary
+// contextual click on custom content would reclaim the vent.
+func TestResourceReclaimableVentStartsReplaceableMove(t *testing.T) {
+	b, cl, ms, builder := resourceGeoFixture(t)
+	b.cat.Features["vent"].Reclaimable = true
+	b.sess.Step(b.sess.Clock.ScaledAnchor + 1)
+	x, y := o5ScreenWorld(b.cam, numeric.FixedFromInt(328), 0, numeric.FixedFromInt(328))
+	_, _, pos := b.pickTarget(x, y)
+	if !pos.HasFeature {
+		t.Fatal("fixture must expose a reclaimable vent")
+	}
+	resourceClickAt(b, cl, x, y, true)
+	sequence := b.resourceClick.moveSequence
+	b.sess.Step(b.sess.Clock.ScaledAnchor + 1)
+	q := orders.QueueForUnit(b.sess.Units.Unit(builder))
+	if q.Head() == nil || q.Head().ID != orders.Lookup("Move_Ground") || q.Head().HumanMoveSequence != sequence {
+		t.Fatalf("first click did not issue a replaceable move: %+v", q.Head())
+	}
+	ms.ms += 100
+	resourceClickAt(b, cl, x, y, true)
+	b.sess.Step(b.sess.Clock.ScaledAnchor + 1)
+	if q.LenPrimary() != 1 || !orders.IsMobileBuild(q.Head().ID) || q.Head().BuildDefKey != "geo" {
+		t.Fatalf("second click left a contextual order before the plant: %+v", q.Primary())
 	}
 }
