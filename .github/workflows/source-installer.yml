@@ -35,7 +35,6 @@ jobs:
       CGO_ENABLED: '0'
       GOTOOLCHAIN: local
       MANIFEST_URL: ${{ inputs.manifest_url }}
-      NANOLATHE_INSTALL_DIR: ${{ runner.temp }}/Nanolathe Install Test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -59,6 +58,7 @@ jobs:
         if: runner.os != 'Windows' && inputs.manifest_url != ''
         shell: bash
         run: |
+          export NANOLATHE_INSTALL_DIR="$RUNNER_TEMP/Nanolathe Install Test"
           python3 - <<'PY'
           import os
           from pathlib import Path
@@ -75,6 +75,7 @@ jobs:
         if: runner.os == 'Windows' && inputs.manifest_url != ''
         shell: powershell
         run: |
+          $env:NANOLATHE_INSTALL_DIR = Join-Path $env:RUNNER_TEMP 'Nanolathe Install Test'
           if (([uri]$env:MANIFEST_URL).Scheme -ne 'https') { throw 'Manifest must use HTTPS' }
           $script = [IO.File]::ReadAllText((Join-Path $env:GITHUB_WORKSPACE 'tools/installer/install.ps1'))
           & ([scriptblock]::Create($script.Replace('https://nanolathe.gg/install/release.txt', $env:MANIFEST_URL))) -NoRun
