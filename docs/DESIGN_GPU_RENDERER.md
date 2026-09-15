@@ -4607,7 +4607,9 @@ mission without a local commander uses this same scene-only reveal. Save entry
 is identified by the load path, including tick-zero saves; it consumes the
 already-published restored frame without republishing. Input/simulation holding,
 first-frame readiness, focus handling, and anchor rebasing apply to both
-openings, and reveal-only hands control back as soon as tiles settle. World UI
+openings, and reveal-only hands control back as soon as tiles settle. Paused
+world caching is bypassed while an opening is active, so a paused save still
+reveals and then remains paused. World UI
 overlays do not repeat the completed-scene effect.
 
 The shell requests one tick-zero publication of the loaded session through

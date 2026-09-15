@@ -188,10 +188,14 @@ func TestMapRevealPreservesCameraAndUnitsWithoutLanding(t *testing.T) {
 	c.width, c.height = 640, 480
 	c.cam = &camera.Camera{X: 400, Z: 700, ViewW: 640, ViewH: 480, MapW: 4096, MapH: 4096}
 	beforeCamera := *c.cam
+	c.SetPresentationPaused(true)
 	u := buffer.Current().Units[0]
 	c.StartMapReveal()
 	if !c.ArrivalActive() || c.ArrivalHasDrop() || c.ArrivalDuration() != drawlist.ArrivalRevealSeconds {
 		t.Fatal("scene reveal selected landing choreography")
+	}
+	if _, cached := c.PausedWorldDigest(); cached {
+		t.Fatal("paused cache froze the opening before its first presented frame")
 	}
 	if *c.cam != beforeCamera {
 		t.Fatal("reveal changed the saved camera")
@@ -209,6 +213,9 @@ func TestMapRevealPreservesCameraAndUnitsWithoutLanding(t *testing.T) {
 	}
 	if c.ArrivalActive() {
 		t.Fatal("reveal held gameplay after tiles settled")
+	}
+	if _, cached := c.PausedWorldDigest(); !cached {
+		t.Fatal("completed reveal did not restore paused caching")
 	}
 	c.StartMapReveal()
 	if !c.worldSpace(true).Arrival.RevealOnly {

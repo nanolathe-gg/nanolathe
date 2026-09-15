@@ -74,8 +74,9 @@ type PausedWorldInputs struct {
 // Segmented projectiles retain their ordinary per-present CRT draws and full
 // painter order [03 §5.4][I4]; conservatively reject even offscreen members.
 // A diagnostic trace also requires real recording rather than cached pixels.
+// Battle openings animate even when a restored scheduler is paused (GPU §36).
 func (c *Client) PausedWorldDigest() (PausedWorldInputs, bool) {
-	if c == nil || !c.presentationPaused || c.buffer == nil || c.cam == nil || c.rendererTraceSink != nil {
+	if c == nil || !c.presentationPaused || c.buffer == nil || c.cam == nil || c.rendererTraceSink != nil || c.ArrivalActive() {
 		return PausedWorldInputs{}, false
 	}
 	cur := c.buffer.Current()
