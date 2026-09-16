@@ -193,6 +193,7 @@ func (c *Client) recordCarrierGeometry(v frame.UnitView, children []frame.UnitVi
 		if g == nil {
 			continue
 		}
+		deferChildFinalPasses(g)
 		c.list.RecordModel(drawlist.Model{Geometry: g, ShadowOnly: true})
 		delta := int32(int64(child.Y)>>16) - int32(int64(v.Y)>>16)
 		carrier.Children = append(carrier.Children, drawlist.ModelChild{Geometry: g, KeyDelta: delta})
@@ -252,9 +253,6 @@ func (c *Client) composeUnitModelState(v frame.UnitView, child, finalPasses bool
 	// non-retained all-piece adapter rather than pretending to be a live unit.
 	if id == 0 || !c.modelScratch.active {
 		m, ok := c.composeModelLane(draw, v.Owner, unitTeamColor(v), id, modelCursorUnit, reveal, outline, presentationrender.PieceLaneAll, false)
-		if ok && reveal != nil {
-			c.outlineModelInto(m.image, m.raster, draw, outline)
-		}
 		if ok && finalPasses {
 			c.finalizeModelImage(m.image, draw, v.Owner, modelCursorUnit)
 		}
@@ -327,16 +325,16 @@ func (c *Client) stageLivePieces(base *modelTarget, draw *presentationrender.Uni
 	if len(polys) == 0 {
 		return base
 	}
-	w, h, ox, oy := modelExtent(polys)
+	w, h, ox, oy, _ := c.projectedModelExtent(draw, presentationrender.PieceLaneLive, false)
 	ax, ay := c.modelAnchor(draw)
 	extent := modelTarget{width: w, heightPx: h, originX: ox, originY: oy, anchorX: ax, anchorY: ay}
 	stage := stagingImage(base, []stagingChild{{model: composedModel{image: &extent}}}, c.borrowModelImage)
 	placeFaces(polys, stage.originX, stage.originY, 1)
 	for i := range polys {
 		if polys[i].frame != nil {
-			c.blitTexturedPolyTarget(stage, &polys[i], polys[i].frame, nil, id)
+			c.blitTexturedPolyTarget(stage, &polys[i], polys[i].frame, id)
 		} else {
-			c.fillPolyTarget(stage, &polys[i], polys[i].color, nil, id)
+			c.fillPolyTarget(stage, &polys[i], polys[i].color, id)
 		}
 	}
 	return stage
@@ -352,7 +350,7 @@ func (c *Client) composeChildModel(v frame.UnitView) (composedModel, bool) {
 	if c == nil || c.cam == nil {
 		return composedModel{}, false
 	}
-	m, ok := c.composeUnitModelState(v, true, true)
+	m, ok := c.composeUnitModelState(v, true, false)
 	if !ok {
 		return composedModel{}, false
 	}
@@ -364,6 +362,7 @@ func (c *Client) composeChildModel(v frame.UnitView) (composedModel, bool) {
 	// pass touches c.indexed nowhere (WU-1.8). The shadow reads the child's
 	// finished image, which the staging composite only reads and never mutates, so
 	// a deferred replay sees the same pixels the inline blit did.
+	deferChildFinalPasses(m.geometry)
 	c.emitModel(pendingModelCommit{m: m, shadow: true})
 	return m, true
 }
@@ -556,4 +555,17 @@ func (c *Client) unitDrawFor(v frame.UnitView) (*presentationrender.UnitDraw, bo
 		draw.KeyPlane = true
 	}
 	return draw, true
+}
+
+// The child's own present is skipped; only its carrier clips the union
+// [03 R-REN-03A §4][03 R-RAST-01 §7-A]. Reveal and shadow remain child inputs.
+func deferChildFinalPasses(g *drawlist.ModelGeometry) {
+	if g == nil {
+		return
+	}
+	g.Waterline, g.WaterlineKey = drawlist.ModelWaterlineNone, 0
+	g.Digger, g.DiggerKey = false, 0
+	if g.Supersample != nil {
+		deferChildFinalPasses(g.Supersample)
+	}
 }

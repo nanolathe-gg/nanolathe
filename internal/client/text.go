@@ -24,10 +24,10 @@ package client
 //     across rows (not byte-aligned) [fmt fnt]. Set bits write the current text
 //     color; clear bits are transparent.
 //
-// This file writes directly into the indexed framebuffer (active palette
-// indices) that client.Frame composes at logical size. Palette conversion
-// happens at present time in convertIndexedToRGBA (C7). GUI semantic color
-// fields are resolved by the GUI caller before invoking this rasterizer.
+// This file writes physical palette indices into the indexed framebuffer that
+// client.Frame composes at logical size. GUI semantic colors are resolved
+// through the logical map before recording the command; presentation later
+// expands these physical indices to RGBA (C7).
 //
 // No simulation state is read or written here (I6). RNG draw counts shown in
 // the overlay are passed in by the caller.
@@ -116,7 +116,7 @@ func TruncateToWidth(fnt *formats.FNT, text string, maxWidth int) string { // [0
 
 // DrawText draws text into the indexed framebuffer using FNT glyphs [02 §7][03 §7.1] C8.
 //
-//   - frame is row-major width×height indexed pixels (logical palette indices).
+//   - frame is row-major width×height indexed pixels (physical palette indices).
 //   - fnt is the bitmap font (*formats.FNT); nil is a no-op.
 //   - text is treated as bytes; 0x0A or NUL terminates the advance [02 §7].
 //   - x,y is the baseline origin: glyph rows are drawn at y - the signed FNT
@@ -126,10 +126,11 @@ func TruncateToWidth(fnt *formats.FNT, text string, maxWidth int) string { // [0
 //     truncated via TruncateToWidth until its advance fits [07 §7][GAP T22].
 //   - color is the indexed color written where glyph bits are set (1-bit,
 //     MSB first, packed continuously [fmt fnt]); clear bits are transparent.
-//   - Pixels outside the framebuffer are clipped.
+//   - The unadjusted whole-string rectangle must fit the inclusive clip bounds.
+//     Baseline overrun is bounded only by framebuffer storage [03 R-FONT-01 §3].
 //
-// No palette conversion is performed here (C7); that happens at present time in
-// convertIndexedToRGBA. No simulation state is touched (I6).
+// The caller has already resolved semantic colors through the logical map
+// (C7). No simulation state is touched (I6).
 func DrawText(frame []uint8, width, height int, fnt *formats.FNT, text string, x, y, maxWidth int, color byte) { // [02 §7][03 §7.1][07 §7]
 	drawText(frame, width, height, fnt, text, x, y, maxWidth, color, nil)
 }
@@ -141,8 +142,8 @@ func drawText(frame []uint8, width, height int, fnt *formats.FNT, text string, x
 	drawTextClipped(frame, width, height, fnt, text, x, y, maxWidth, color, 0, 0, width, height, onWrite)
 }
 
-// drawTextClipped retains drawText's layout and truncation, then confines its
-// pixel writes to one private GUI surface rectangle [03 R-FONT-01 §3].
+// drawTextClipped admits the entire unadjusted string rectangle against the
+// private surface before applying the baseline [03 R-FONT-01 §3].
 func drawTextClipped(frame []uint8, width, height int, fnt *formats.FNT, text string, x, y, maxWidth int, color byte, clipX, clipY, clipW, clipH int, onWrite func(int)) {
 	if len(frame) < width*height || fnt == nil || width <= 0 || height <= 0 || len(text) == 0 {
 		return
@@ -157,7 +158,13 @@ func drawTextClipped(frame []uint8, width, height int, fnt *formats.FNT, text st
 			return
 		}
 	}
-	desc := baselineDescender(fnt) // y - *(char*)(fnt+2) [02 §7]
+	// The text rectangle's one-past edge is tested against the clip's last
+	// pixel: one column/row of slack is required [03 R-FONT-01 §3]. The
+	// baseline is deliberately absent from this test.
+	if x < clipX || y < clipY || x+MeasureText(fnt, text) >= clipRight || y+int(fnt.Height) >= clipBottom {
+		return
+	}
+	desc := baselineDescender(fnt) // signed baseline [03 R-FONT-01 §1]
 	top := y - desc
 	curX := x
 	for i := 0; i < len(text); i++ {
@@ -170,10 +177,11 @@ func drawTextClipped(frame []uint8, width, height int, fnt *formats.FNT, text st
 			continue
 		}
 		// Blit 1bpp glyph, MSB first, packed continuously [fmt fnt].
-		// Clip per pixel against the indexed framebuffer.
+		// Retail allows baseline rows outside the private clip. Bound only
+		// host storage here, preserving the documented overrun when in range.
 		for gy := 0; gy < int(g.Height); gy++ {
 			dy := top + gy
-			if dy < 0 || dy >= height || dy < clipY || dy >= clipBottom {
+			if dy < 0 || dy >= height {
 				continue
 			}
 			rowBase := dy * width
@@ -182,7 +190,7 @@ func drawTextClipped(frame []uint8, width, height int, fnt *formats.FNT, text st
 					continue
 				}
 				dx := curX + gx
-				if dx < 0 || dx >= width || dx < clipX || dx >= clipRight {
+				if dx < 0 || dx >= width {
 					continue
 				}
 				index := rowBase + dx

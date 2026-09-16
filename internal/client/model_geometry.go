@@ -295,7 +295,7 @@ func (c *Client) shadowGeometryAt(draw *presentationrender.UnitDraw, anchorX, an
 	if len(polys) == 0 {
 		return nil
 	}
-	width, height, originX, originY := modelExtent(polys)
+	width, height, originX, originY, _ := c.projectedModelExtent(draw, presentationrender.PieceLaneAll, true)
 	supersample := c.modelSupersampleGeometry(polys, true, width, height, c.doubledPlacement(originX, originY, hx, hy, true))
 	placeFaces(polys, originX, originY, 1)
 	g := c.borrowModelPacket(polys, int32(width), int32(height), originX, originY, anchorX, anchorY, 1, true, drawlist.ModelFallbackNone)
@@ -310,12 +310,15 @@ func (c *Client) prepareModelGeometry(draw *presentationrender.UnitDraw, owner u
 			return g
 		}
 	}
-	polys := c.collectDrawPolys(draw, selector, id, kind)
-	if len(polys) == 0 {
+	width, height, originX, originY, visible := c.projectedModelExtent(draw, presentationrender.PieceLaneAll, false)
+	if !visible {
 		return nil
 	}
 	anchorX, anchorY, hx, hy := c.modelPlacement(draw)
-	width, height, originX, originY := modelExtent(polys)
+	polys := c.collectDrawPolys(draw, selector, id, kind)
+	if len(polys) == 0 && reveal == nil {
+		return nil
+	}
 	supersample := c.modelSupersampleGeometry(polys, draw.KeyPlane, width, height, c.doubledPlacement(originX, originY, hx, hy, false))
 	placeFaces(polys, originX, originY, 1)
 	g := c.borrowModelPacket(polys, int32(width), int32(height), originX, originY, anchorX, anchorY, 1, draw.KeyPlane, drawlist.ModelFallbackNone)
@@ -356,11 +359,14 @@ func (c *Client) featureGeometry(draw *presentationrender.UnitDraw, selector tea
 	body := c.cachedBody(key)
 	in := c.featureBodyInputs(draw, selector)
 	if body == nil || body.geometry == nil || body.featureInputs != in || !samePieceStates(body.featurePose, draw.PieceStates) {
+		w, h, ox, oy, visible := c.projectedModelExtent(draw, presentationrender.PieceLaneAll, false)
+		if !visible {
+			return nil, true
+		}
 		polys := c.collectDrawPolys(draw, selector, id, modelCursorFeature)
 		if len(polys) == 0 {
 			return nil, true
 		}
-		w, h, ox, oy := modelExtent(polys)
 		ax, ay := c.modelAnchor(draw)
 		// As for a unit, the retained doubled lane carries no half-pixel
 		// offset; the rebase adds this frame's.
@@ -434,15 +440,14 @@ func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (arrival
 	missing := body == nil || body.geometry == nil || body.cacheRevision != v.CacheRevision
 	required := draw.Structure || draw.KeyPlane
 	if c.cachedGeometryMustRebuild(body, v, draw, orient) || missing && required {
-		all := c.collectDrawPolys(draw, unitTeamColor(v), id, modelCursorUnit)
-		cached := c.collectDrawPolysLane(draw, unitTeamColor(v), id, modelCursorUnit, presentationrender.PieceLaneCached)
-		if len(all) == 0 {
+		w, h, ox, oy, visible := c.projectedModelExtent(draw, presentationrender.PieceLaneAll, false)
+		if !visible {
 			return c.directUnitGeometry(draw, unitTeamColor(v), id, presentationrender.PieceLaneAll), nil
 		}
+		cached := c.collectDrawPolysLane(draw, unitTeamColor(v), id, modelCursorUnit, presentationrender.PieceLaneCached)
 		if len(cached) == 0 && !draw.KeyPlane {
 			return c.directUnitGeometry(draw, unitTeamColor(v), id, presentationrender.PieceLaneAll), nil
 		}
-		w, h, ox, oy := modelExtent(all)
 		ax, ay := c.modelAnchor(draw)
 		// The retained doubled lane carries no half-pixel offset: the offset
 		// follows the subject's position frame by frame and is added when the
@@ -475,7 +480,8 @@ func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (arrival
 	if !draw.UnderConstruction {
 		live = c.collectDrawPolysLane(draw, unitTeamColor(v), id, modelCursorUnit, presentationrender.PieceLaneLive)
 	}
-	w, h, ox, oy := retainedModelExtent(body.geometry, live)
+	w, h, ox, oy, _ := c.projectedModelExtent(draw, presentationrender.PieceLaneLive, false)
+	w, h, ox, oy = retainedModelExtent(body.geometry, w, h, ox, oy)
 	ax, ay, hx, hy := c.modelPlacement(draw)
 	g := c.borrowRebasedModelGeometry(body.geometry, int32(w), int32(h), ox, oy, ax, ay, hx, hy)
 	if g == nil {
@@ -537,10 +543,9 @@ func drawHasFaces(draw *presentationrender.UnitDraw) bool {
 // retainedModelExtent is the retained cached envelope unioned with the
 // current live pieces' box. A packet's declared box is its commit rectangle,
 // so rebasing cached corners into only the live box would crop them.
-func retainedModelExtent(retained *drawlist.ModelGeometry, current []screenPoly) (width, height int, originX, originY int32) {
-	width, height, originX, originY = modelExtent(current)
+func retainedModelExtent(retained *drawlist.ModelGeometry, width, height int, originX, originY int32) (int, int, int32, int32) {
 	if retained == nil {
-		return
+		return width, height, originX, originY
 	}
 	minX, minY := -originX, -originY
 	maxX, maxY := int32(width)-originX, int32(height)-originY

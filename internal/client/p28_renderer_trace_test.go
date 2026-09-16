@@ -38,7 +38,7 @@ func renderTracedTriangles(t *testing.T, triangles ...screenPoly) ([]uint8, []Re
 	target.winner = target.trace.winner
 	target.trace.width, target.trace.height = width, height
 	for i := range triangles {
-		c.fillPolyTarget(target, &triangles[i], triangles[i].color, nil, 77)
+		c.fillPolyTarget(target, &triangles[i], triangles[i].color, 77)
 	}
 	target.commit(c.indexed, c.width, c.height)
 	target.trace.resolve(target, c.indexed, width, height)
@@ -195,7 +195,7 @@ func TestP28RendererTraceTexturePaletteAndShadeArePerPixel(t *testing.T) {
 	face.useSHD = true
 	face.attr[spanRow][0], face.attr[spanRow][1], face.attr[spanRow][2] = 7, 19, 31
 	var got []RendererCandidate
-	c.blitTexturedPolyTarget(target, &face, frame, nil, 123)
+	c.blitTexturedPolyTarget(target, &face, frame, 123)
 	target.commit(c.indexed, c.width, c.height)
 	target.trace.resolve(target, c.indexed, 6, 6)
 	target.trace.emit(func(v RendererCandidate) { got = append(got, v) }, nil)
@@ -229,7 +229,8 @@ func TestP28RendererTraceNanoframeEraseIsUnknown(t *testing.T) {
 	target.trace.width, target.trace.height = 6, 6
 	face := traceFace(4, 33)
 	reveal := presentationrender.NanoframeReveal{Below: presentationrender.NanoframeErase, Band: presentationrender.NanoframeErase, Above: presentationrender.NanoframeErase}
-	c.fillPolyTarget(target, &face, face.color, &reveal, 55)
+	c.fillPolyTarget(target, &face, face.color, 55)
+	c.revealModelImage(target, nil, &reveal, 0)
 	target.commit(c.indexed, c.width, c.height)
 	target.trace.resolve(target, c.indexed, 6, 6)
 	var erased *RendererCandidate
@@ -259,7 +260,7 @@ func TestP28RendererTraceOutlineOnlyAndOverwrite(t *testing.T) {
 	target.trace.width, target.trace.height = 6, 6
 	c := &Client{width: 6, height: 6, indexed: make([]uint8, 36)}
 	tri := traceTriangle(5, 20)
-	c.fillPolyTarget(target, &tri, tri.color, nil, 91)
+	c.fillPolyTarget(target, &tri, tri.color, 91)
 	target.trace.composite(1, 1, 200, 3, 4)
 	target.trace.composite(4, 4, 201, 5, 6)
 	target.commit(c.indexed, c.width, c.height)
@@ -306,7 +307,7 @@ func TestP28RendererTraceNilSinkPreservesPixels(t *testing.T) {
 	}
 	target := newModelTarget(6, 6)
 	for i := range triangles {
-		c.fillPolyTarget(target, &triangles[i], triangles[i].color, nil, 77)
+		c.fillPolyTarget(target, &triangles[i], triangles[i].color, 77)
 	}
 	target.commit(c.indexed, c.width, c.height)
 	if !reflect.DeepEqual(c.indexed, want) {
@@ -326,7 +327,7 @@ func TestP28RendererTraceCapPreservesPixels(t *testing.T) {
 	}
 	target := newModelTarget(c.width, c.height)
 	for i := range triangles {
-		c.fillPolyTarget(target, &triangles[i], triangles[i].color, nil, 77)
+		c.fillPolyTarget(target, &triangles[i], triangles[i].color, 77)
 	}
 	target.commit(c.indexed, c.width, c.height)
 	if !reflect.DeepEqual(c.indexed, traced) {

@@ -353,6 +353,9 @@ func checkFogDevicePixels() error {
 	// rectangle and the frame the cell draws scale together, and the checker
 	// does not.
 	for _, scale := range []camera.ViewScale{camera.ViewScaleNative, camera.ViewScaleDetail} {
+		if err := checkFogOffscreenOverhangDevicePixelsAt(scale); err != nil {
+			return err
+		}
 		if err := checkFogScrollDevicePixelsAt(scale); err != nil {
 			return err
 		}
@@ -549,4 +552,43 @@ func checkFogScrollDeviceFrameAt(scale camera.ViewScale, composite bool) error {
 		}
 	}
 	return nil
+}
+
+// A nominal cell ending at the left/top boundary still contributes its opaque
+// authored overhang. The atlas pass must retain both its lattice entry and
+// visible output region [03 R-RR16-A §3].
+func TestFogAtlasRetainsOffscreenCellOverhang(t *testing.T) {
+	for _, scale := range []camera.ViewScale{camera.ViewScaleNative, camera.ViewScaleDetail} {
+		for _, kind := range []render.FogKind{render.FogKindGAFCh0, render.FogKindGAFCh1} {
+			op := fogOpAtScale(0, 0, 48, 48, scale, kind)
+			op.Variant, op.Frame = 0, 0
+			region := fogRegionFor([]render.FogOp{op}, 64, 64, scale)
+			if !region.ok || region.x0 != 0 || region.y0 != 0 || region.x1 <= 0 || region.y1 <= 0 {
+				t.Fatalf("lost overhang region: %+v", region)
+			}
+			var f fogPass
+			f.slotPresent[0], f.slotPresent[fogSlots] = true, true
+			f.encodeGrid(region, []render.FogOp{op}, 64, 64, scale, true)
+			if f.gridBuf[0] == 0 && f.gridBuf[1] == 0 {
+				t.Fatal("offscreen cell missing from atlas grid")
+			}
+		}
+	}
+}
+
+func TestFogOrderedRetainsOffscreenCellOverhang(t *testing.T) {
+	r, _ := schedulerFixture(t)
+	// Positive offset reaches left from a cell starting at the right edge;
+	// this art cannot fit the forward-only atlas and must use ordered leaves.
+	fr := &formats.GAFFrame{Width: 1, Height: 1, XOffset: 1, Pixels: []byte{0}, Transparent: []bool{false}}
+	entry := &formats.GAFEntry{Frames: []formats.GAFFrameRef{{Frame: fr}}}
+	op := fogOpAt(0, 0, -48, 16, render.FogKindGAFCh0)
+	op.Variant, op.Frame = 0, 0
+	fg := drawlist.Fog{Ops: []render.FogOp{op}, Black: [4]*formats.GAFEntry{entry}}
+	r.sched.resetFrame(64, 64)
+	r.Fog(fg)
+	verts := r.sched.classVerts(schedOpaque)
+	if len(verts) != 4 || verts[0].DstX != 63 || verts[1].DstX != 64 {
+		t.Fatalf("ordered overhang vertices=%+v", verts)
+	}
 }

@@ -96,29 +96,34 @@ func TestRendertypeDispatchTable(t *testing.T) {
 	}
 }
 
-// TestBeamStrokes verifies C7: color2==0 draws one stroke, otherwise two secondary first primary on top [03 §5.4] C7.
+// [06 R-WFX-01 §4] Secondary geometry is sorted by the strict major-axis
+// choice; reversing the inputs preserves both strokes when color2 is present.
 func TestBeamStrokes(t *testing.T) {
-	hs := [2]int32{10, 20}
-	ts := [2]int32{30, 40}
-	// color2 zero -> one stroke primary.
-	strokes := BeamStrokes(hs, ts, 5, 0)
-	if len(strokes) != 1 || strokes[0].Color != 5 {
-		t.Fatalf("beam single stroke %v want one with color 5 [03 §5.4] C7", strokes)
-	}
-	// color2 nonzero -> two strokes secondary outer primary inner [03 §5.4].
-	strokes = BeamStrokes(hs, ts, 5, 9)
-	if len(strokes) != 2 {
-		t.Fatalf("beam double strokes len %d want 2 [03 §5.4] C7", len(strokes))
-	}
-	if strokes[0].Color != 9 || strokes[1].Color != 5 {
-		t.Fatalf("beam double colors %d %d want 9,5 secondary first primary on top [03 §5.4] C7", strokes[0].Color, strokes[1].Color)
-	}
-	// Endpoint swapped: first stroke tail->head, second head->tail [03 §5.4].
-	if strokes[0].X0 != ts[0] || strokes[0].Y0 != ts[1] || strokes[0].X1 != hs[0] || strokes[0].Y1 != hs[1] {
-		t.Fatalf("beam first stroke not tail->head swapped %v [03 §5.4]", strokes[0])
-	}
-	if strokes[1].X0 != hs[0] || strokes[1].Y0 != hs[1] || strokes[1].X1 != ts[0] || strokes[1].Y1 != ts[1] {
-		t.Fatalf("beam second stroke not head->tail %v [03 §5.4]", strokes[1])
+	for _, tc := range []struct {
+		name      string
+		a, b      [2]int32
+		secondary BeamStroke
+	}{
+		{"horizontal", [2]int32{10, 20}, [2]int32{30, 20}, BeamStroke{10, 19, 30, 19, 9}},
+		{"vertical", [2]int32{10, 20}, [2]int32{10, 40}, BeamStroke{9, 20, 11, 40, 9}},
+		{"shallow", [2]int32{10, 20}, [2]int32{30, 30}, BeamStroke{10, 19, 30, 29, 9}},
+		{"steep", [2]int32{10, 20}, [2]int32{20, 40}, BeamStroke{9, 20, 21, 40, 9}},
+		{"equal spans", [2]int32{10, 20}, [2]int32{30, 40}, BeamStroke{9, 20, 31, 40, 9}},
+		{"descending", [2]int32{30, 20}, [2]int32{20, 40}, BeamStroke{29, 20, 21, 40, 9}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			primary := BeamStroke{tc.a[0], tc.a[1], tc.b[0], tc.b[1], 5}
+			for _, pair := range [][2][2]int32{{tc.a, tc.b}, {tc.b, tc.a}} {
+				got := BeamStrokes(pair[0], pair[1], 5, 9)
+				if len(got) != 2 || got[0] != tc.secondary || got[1] != primary {
+					t.Fatalf("strokes = %+v, want secondary %+v then primary %+v", got, tc.secondary, primary)
+				}
+			}
+			got := BeamStrokes(tc.b, tc.a, 5, 0)
+			if len(got) != 1 || got[0] != (BeamStroke{tc.b[0], tc.b[1], tc.a[0], tc.a[1], 5}) {
+				t.Fatalf("absent secondary changed primary geometry: %+v", got)
+			}
+		})
 	}
 }
 

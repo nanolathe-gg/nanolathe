@@ -42,7 +42,7 @@ func TestShadedFlatWriterResolvesThroughSHD(t *testing.T) {
 		c := &Client{width: 8, height: 8, indexed: make([]uint8, 64), pal: shadeTestTables()}
 		img := newModelImage(c.width, c.height, 0, 0, 0, 0, true, 1)
 		face := shadedFlatFace(70, row)
-		c.fillPolyTarget(img, &face, color, nil)
+		c.fillPolyTarget(img, &face, color)
 		want := uint8((int(color) + int(row)) & 0xff)
 		if got := img.color[1*c.width+1]; got != want {
 			t.Fatalf("row %d composed %d, want SHD[%d][%d] = %d", row, got, row, color, want)
@@ -63,7 +63,7 @@ func TestUnshadedFlatWriterEmitsTheRawColour(t *testing.T) {
 	if face.useSHD {
 		t.Fatal("fixture face must carry no SHD row")
 	}
-	c.fillPolyTarget(img, &face, color, nil)
+	c.fillPolyTarget(img, &face, color)
 	if got := img.color[1*c.width+1]; got != color {
 		t.Fatalf("unshaded flat writer composed %d, want the raw %d", got, color)
 	}
@@ -77,7 +77,7 @@ func TestShadedFlatWriterWithNoPaletteKeepsTheColour(t *testing.T) {
 	c := &Client{width: 8, height: 8, indexed: make([]uint8, 64)}
 	img := newModelImage(c.width, c.height, 0, 0, 0, 0, true, 1)
 	face := shadedFlatFace(70, 7)
-	c.fillPolyTarget(img, &face, color, nil)
+	c.fillPolyTarget(img, &face, color)
 	if got := img.color[1*c.width+1]; got != color {
 		t.Fatalf("composed %d with no palette, want the raw %d", got, color)
 	}
@@ -96,7 +96,7 @@ func TestShadedFlatRowMatchesTheTexturedRow(t *testing.T) {
 	c := &Client{width: 8, height: 8, indexed: make([]uint8, 64), pal: shadeTestTables()}
 	img := newModelImage(c.width, c.height, 0, 0, 0, 0, true, 1)
 	face := shadedFlatFace(70, row)
-	c.fillPolyTarget(img, &face, color, nil)
+	c.fillPolyTarget(img, &face, color)
 	flat := img.color[1*c.width+1]
 	if flat != c.pal.Shade[row][color] {
 		t.Fatalf("flat writer composed %d, want the row-%d entry %d", flat, row, c.pal.Shade[row][color])

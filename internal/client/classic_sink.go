@@ -692,7 +692,7 @@ func (s classicSink) Fog(fg drawlist.Fog) {
 		if y1 > int32(h) {
 			y1 = int32(h)
 		}
-		if x0 >= x1 || y0 >= y1 {
+		if (x0 >= x1 || y0 >= y1) && op.Kind != render.FogKindGAFCh0 && op.Kind != render.FogKindGAFCh1 {
 			continue
 		}
 		switch op.Kind {

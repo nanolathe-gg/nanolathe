@@ -130,7 +130,7 @@ func TestBattleModalButtonPaintsRuntimeFrames(t *testing.T) {
 	}
 }
 
-func TestBattleModalButtonFNTCaptionClipsToWindow(t *testing.T) {
+func TestBattleModalButtonFNTCaptionRejectsPartialWindowOverlap(t *testing.T) {
 	font := &formats.FNT{Height: 1}
 	font.Glyphs['A'] = &formats.FNTGlyph{Width: 4, Height: 1, Bits: []byte{0xf0}}
 	window := &gui.Window{
@@ -146,11 +146,16 @@ func TestBattleModalButtonFNTCaptionClipsToWindow(t *testing.T) {
 	c.SetUIStage(painterBindingStage(func(c *client.Client) { h.drawGUIWindowState(c, window, nil, "", panel, nil) }))
 	snap := c.ComposeFrameSnapshot()
 	// The centred pen starts at x=6, but the modal surface begins at x=8.
+	// Whole-string admission rejects the caption [03 R-FONT-01 §3].
 	if snap.Indexed[7*32+6] != 0 || snap.Indexed[7*32+7] != 0 {
 		t.Fatal("modal FNT caption escaped its private surface")
 	}
-	if snap.Indexed[7*32+8] != 9 || snap.Indexed[7*32+9] != 9 {
-		t.Fatalf("modal FNT caption did not retain its normal layout inside the clip: %v", snap.Indexed[7*32+4:7*32+12])
+	window.Gadgets[1].Text = ""
+	blank := c.ComposeFrameSnapshot()
+	for i, pixel := range snap.Indexed {
+		if pixel != blank.Indexed[i] {
+			t.Fatalf("rejected modal caption left a fragment at (%d,%d)", i%32, i/32)
+		}
 	}
 }
 

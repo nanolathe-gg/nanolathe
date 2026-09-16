@@ -101,44 +101,17 @@ func (c *Client) developerProject(x, y, z int32) Point {
 	return Point{sx - camera.OriginX, sy - camera.OriginY}
 }
 
-// Preserve the original Bresenham phase while clipping emitted pixels. Clipping
-// the endpoints first can move diagonal edge pixels [03 R-COMP-01 §2].
+// Clip to the diagnostic viewport before the shared line primitive clips to
+// the surface and initializes its raster [03 R-COMP-01 §2].
 func (c *Client) developerLine(a, b Point, ink byte, clip drawlist.Rect) {
-	if clip.W <= 0 || clip.H <= 0 || max(a.X, b.X) < clip.X || min(a.X, b.X) >= clip.X+clip.W || max(a.Y, b.Y) < clip.Y || min(a.Y, b.Y) >= clip.Y+clip.H {
+	if clip.W <= 0 || clip.H <= 0 {
 		return
 	}
-	if min(a.X, b.X) >= clip.X && max(a.X, b.X) < clip.X+clip.W && min(a.Y, b.Y) >= clip.Y && max(a.Y, b.Y) < clip.Y+clip.H {
-		c.emitLine(drawlist.Line{X0: a.X, Y0: a.Y, X1: b.X, Y1: b.Y, Index: ink})
+	x0, y0, x1, y1 := int64(a.X), int64(a.Y), int64(b.X), int64(b.Y)
+	if !clipIndexedLine(&x0, &y0, &x1, &y1, int64(clip.X), int64(clip.Y), int64(clip.X)+int64(clip.W)-1, int64(clip.Y)+int64(clip.H)-1) {
 		return
 	}
-	off := len(c.pointArena)
-	dx, dy := abs32(b.X-a.X), abs32(b.Y-a.Y)
-	sx, sy := int32(1), int32(1)
-	if a.X > b.X {
-		sx = -1
-	}
-	if a.Y > b.Y {
-		sy = -1
-	}
-	err := dx - dy
-	for {
-		if a.X >= clip.X && a.X < clip.X+clip.W && a.Y >= clip.Y && a.Y < clip.Y+clip.H {
-			c.pointArena = append(c.pointArena, drawlist.Point{X: a.X, Y: a.Y, Index: ink})
-		}
-		if a == b {
-			break
-		}
-		e := 2 * err
-		if e > -dy {
-			err -= dy
-			a.X += sx
-		}
-		if e < dx {
-			err += dx
-			a.Y += sy
-		}
-	}
-	c.emitPoints(off, drawlist.PointPlain)
+	c.emitLine(drawlist.Line{X0: int32(x0), Y0: int32(y0), X1: int32(x1), Y1: int32(y1), Index: ink})
 }
 
 func (c *Client) developerQuad(q [4]Point, ink byte, clip drawlist.Rect) {

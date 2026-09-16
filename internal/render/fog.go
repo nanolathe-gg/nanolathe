@@ -292,62 +292,95 @@ func BuildFogOpsInto(out []FogOp, cache *visibility.FogCache, cam *camera.Camera
 	return out
 }
 
-// BuildFogOpsWindowInto is BuildFogOpsInto restricted to the cells that can
-// land on a surface of surfW x surfH pixels.
-//
-// The fog cache is map-sized, so BuildFogOpsInto emits one operation for every
-// fogged cell of the whole map -- better than seventeen thousand of them on a
-// stock map -- and the composer then clips all but the few hundred that touch
-// the viewport. Building and discarding the rest is pure waste: the composer's
-// clip already reduces an off-surface operation to nothing, so not emitting it
-// paints exactly the same pixels.
-//
-// The surface rectangle is the composer's, not the camera's: the composer
-// rebases every operation off the retail viewport origin before clipping, and
-// FogScreenRect adds that same origin, so the two cancel and a cell's rebased
-// rect is [gx*32 + 16 - camX, +32) by [gy*32 + 16 - camZ, +32). A cell survives
-// exactly when that rect overlaps [0, surfW) x [0, surfH) -- the same test the
-// composer's clip applies -- and the survivors keep their row-major order, so
-// the paint sequence is unchanged [03 §3.3][I1].
-//
-// BuildFogOpsInto is left alone: it is the unwindowed contract the render tests
-// drive, several of which pass a zero viewport.
+// BuildFogOpsWindowInto preserves all GAF cells when no authored art is supplied:
+// a nominal cell rectangle cannot bound an offset frame [03 R-RR16-A §3].
+// Call BuildFogOpsWindowWithArtInto for a bounded viewport walk.
 func BuildFogOpsWindowInto(out []FogOp, cache *visibility.FogCache, cam *camera.Camera, surfW, surfH int32, tables *palette.Tables, dither bool) []FogOp {
+	return buildFogOpsWindowInto(out, cache, cam, surfW, surfH, tables, dither, nil)
+}
+
+// BuildFogOpsWindowWithArtInto bounds the window by the union of authored leaf
+// extents and cell fills. Composite parents do not clip their children, whose
+// offsets are measured from the original anchor [03 R-COMP-01 §2][fmt gaf].
+// The conservative rectangle preserves row-major painter order without making
+// the window depend on a stock-art reach constant [03 R-RR16-A §3].
+func BuildFogOpsWindowWithArtInto(out []FogOp, cache *visibility.FogCache, cam *camera.Camera, surfW, surfH int32, tables *palette.Tables, dither bool, gray, black [4]*formats.GAFEntry) []FogOp {
+	scale := camera.ViewScaleNative
+	if cam != nil {
+		scale = cam.EffectiveScale()
+	}
+	bounds := [4]int32{0, 0, scale.Px(FogTilePixels), scale.Px(FogTilePixels)}
+	var include func(*formats.GAFFrame)
+	include = func(fr *formats.GAFFrame) {
+		if fr == nil {
+			return
+		}
+		if len(fr.Subframes) != 0 || fr.SubframeCount != 0 {
+			for _, child := range fr.Subframes {
+				include(child)
+			}
+			return
+		}
+		// Match the stored dimensions and offsets of the scaled variant.
+		x := -int32(int16(scale.Px(int32(fr.XOffset))))
+		y := -int32(int16(scale.Px(int32(fr.YOffset))))
+		w := int32(uint16(scale.Project(int32(fr.Width))))
+		h := int32(uint16(scale.Project(int32(fr.Height))))
+		if w <= 0 || h <= 0 {
+			return
+		}
+		bounds[0], bounds[1] = min(bounds[0], x), min(bounds[1], y)
+		bounds[2], bounds[3] = max(bounds[2], x+w), max(bounds[3], y+h)
+	}
+	for _, family := range [2][4]*formats.GAFEntry{gray, black} {
+		for _, entry := range family {
+			if entry == nil {
+				continue
+			}
+			for _, ref := range entry.Frames {
+				include(ref.Frame)
+			}
+		}
+	}
+	return buildFogOpsWindowInto(out, cache, cam, surfW, surfH, tables, dither, &bounds)
+}
+
+func buildFogOpsWindowInto(out []FogOp, cache *visibility.FogCache, cam *camera.Camera, surfW, surfH int32, tables *palette.Tables, dither bool, bounds *[4]int32) []FogOp {
 	out = out[:0]
 	if cache == nil || surfW <= 0 || surfH <= 0 {
 		return out
 	}
 	ox, oz := cache.Origin()
 	w, h := cache.Dimensions()
-	if w <= 0 || h <= 0 {
-		return out
-	}
 	var camX, camZ int32
 	scale := camera.ViewScaleNative
 	if cam != nil {
-		camX, camZ = cam.X, cam.Z
-		scale = cam.EffectiveScale()
+		camX, camZ, scale = cam.X, cam.Z, cam.EffectiveScale()
 	}
-	// The window test is in SCREEN pixels: the composer's rebase and
-	// FogScreenRect's origin still cancel, but the cell's rebased rect is
-	// [Project(gx*32 + 16 - camX), +Px(32)) at the view scale, so both the
-	// offset and the edge carry it (DESIGN_GPU_RENDERER §14.2).
 	edge := scale.Px(FogTilePixels)
 	for row := int32(0); row < h; row++ {
-		// The row test is hoisted out of the column walk: a fog grid is far
-		// taller than a viewport, so most rows are rejected by one comparison
-		// instead of by one per cell.
 		y0 := scale.Project((oz+row)*FogTilePixels + FogTilePixels/2 - camZ)
-		if y0+edge <= 0 || y0 >= surfH {
+		if bounds != nil && (y0+bounds[3] <= 0 || y0+bounds[1] >= surfH) {
 			continue
 		}
 		for col := int32(0); col < w; col++ {
 			x0 := scale.Project((ox+col)*FogTilePixels + FogTilePixels/2 - camX)
-			if x0+edge <= 0 || x0 >= surfW {
+			if bounds != nil && (x0+bounds[2] <= 0 || x0+bounds[0] >= surfW) {
 				continue
 			}
 			c0, c1 := cache.Channel(col, row)
 			if c0 == 0 && c1 == 0 {
+				continue
+			}
+			// Fills alone use the nominal cell; GAF masks are clipped by the
+			// executor after applying the authored offset [03 §3.3].
+			if x0+edge <= 0 || y0+edge <= 0 || x0 >= surfW || y0 >= surfH {
+				var scratch [2]FogOp
+				for _, op := range cellOpsInto(scratch[:0], ox+col, oz+row, c0, c1, cam, tables, dither) {
+					if op.Kind == FogKindGAFCh0 || op.Kind == FogKindGAFCh1 {
+						out = append(out, op)
+					}
+				}
 				continue
 			}
 			out = cellOpsInto(out, ox+col, oz+row, c0, c1, cam, tables, dither)

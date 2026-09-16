@@ -1,7 +1,7 @@
 package client
 
 // The two span writers the model draw uses: the flat fill and the textured
-// blit, each with the nanoframe reveal gate [03 R-REN-03A §5].
+// blit [03 R-REN-03A §5]. Reveal reads the completed image afterwards.
 
 import (
 	"github.com/nanolathe-gg/nanolathe/formats"
@@ -26,8 +26,7 @@ func nanoframeVerdict(rev presentationrender.NanoframeReveal, key uint8, compose
 
 // fillPolyTarget is retail's flat polygon span writer over the two-chain walk:
 // one colour byte per pixel, the key interpolated across the span and tested
-// per pixel [R-RAST-01 §1] steps 5-6, [R-REN-03A §5]. A non-nil reveal composes
-// the nanoframe verdict on top of the same admission [03 §5.2].
+// per pixel [R-RAST-01 §1] steps 5-6, [R-REN-03A §5].
 //
 // There are two flat writers, not one: [R-REN-03A §5]'s table pairs the
 // unshaded flat polygon, which writes the colour byte raw, with the shaded flat
@@ -38,11 +37,11 @@ func nanoframeVerdict(rev presentationrender.NanoframeReveal, key uint8, compose
 // this did until now — left every untextured face at full palette intensity,
 // so a model's flat panels ignored the light while its textured panels obeyed
 // it, and the two halves of one hull could not agree on a tone.
-func (c *Client) fillPolyTarget(target *modelTarget, p *screenPoly, color uint8, rev *presentationrender.NanoframeReveal, ids ...uint64) {
+func (c *Client) fillPolyTarget(target *modelTarget, p *screenPoly, color uint8, ids ...uint64) {
 	if target == nil || p == nil {
 		return
 	}
-	if target.trace == nil && rev == nil && !p.useSHD {
+	if target.trace == nil && !p.useSHD {
 		target.fillPlainModelPoly(p, color)
 		return
 	}
@@ -76,20 +75,9 @@ func (c *Client) fillPolyTarget(target *modelTarget, p *screenPoly, color uint8,
 			switch {
 			case !target.admit(idx, key):
 				target.traceRejected(event, RendererReasonHeightRejected, "height")
-			case rev == nil:
-				target.traceAdmitted(idx, event)
-				target.write(idx, b, true)
 			default:
 				target.traceAdmitted(idx, event)
-				if v, ok := nanoframeVerdict(*rev, key, b); ok {
-					if event >= 0 {
-						target.trace.events[event].CandidateIndex = v
-					}
-					target.write(idx, v, true)
-				} else {
-					target.traceRejected(event, RendererReasonNanoframeErase, "nanoframe-erase")
-					target.write(idx, 0, false)
-				}
+				target.write(idx, b, true)
 			}
 			for k := spanKey; k < last; k++ {
 				acc[k] += da[k]
@@ -121,11 +109,11 @@ func (c *Client) fillPolyTarget(target *modelTarget, p *screenPoly, color uint8,
 // corner UVs keep the interpolation inside `[0, w-1] × [0, h-1]` by
 // construction, so the guard is unreachable on well-formed art
 // [R-RAST-01 §1].
-func (c *Client) blitTexturedPolyTarget(target *modelTarget, p *screenPoly, gafFrame *formats.GAFFrame, rev *presentationrender.NanoframeReveal, ids ...uint64) {
+func (c *Client) blitTexturedPolyTarget(target *modelTarget, p *screenPoly, gafFrame *formats.GAFFrame, ids ...uint64) {
 	if target == nil || p == nil || gafFrame == nil {
 		return
 	}
-	if target.trace == nil && rev == nil {
+	if target.trace == nil {
 		c.blitOrdinaryTexturedPoly(target, p, gafFrame)
 		return
 	}
@@ -170,14 +158,6 @@ func (c *Client) blitTexturedPolyTarget(target *modelTarget, p *screenPoly, gafF
 				target.traceAdmitted(idx, event)
 				if c != nil && c.pal != nil && p.useSHD {
 					b = c.pal.Shade[shade][b]
-				}
-				if rev != nil {
-					var ok bool
-					if b, ok = nanoframeVerdict(*rev, key, b); !ok {
-						target.traceRejected(event, RendererReasonNanoframeErase, "nanoframe-erase")
-						target.write(idx, 0, false)
-						break
-					}
 				}
 				if event >= 0 {
 					target.trace.events[event].CandidateIndex = b

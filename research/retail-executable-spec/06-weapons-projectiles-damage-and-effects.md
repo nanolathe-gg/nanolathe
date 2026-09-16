@@ -5731,7 +5731,7 @@ indexed by the authored byte.
 
 | Type | Draws | Stock authors (asset census, 198 weapons) |
 |---|---|---|
-| 0 | line from the current point to the tail point in `palette(color)`; when `color2 != 0` a second one-pixel stroke in `palette(color2)` is drawn **first**, offset one pixel (horizontal-major lines: both endpoints one pixel up after sorting by x; vertical-major: endpoints shifted −1/+1 in x after sorting by y), then the `color` stroke on top | 34 `lineofsight+beamweapon` lasers (colors 96/98, 144/217, 208, 209/211, 232/234) and 4 with no family (`noweapon`, `gasbag`, `treeburn`, `shrubburn`) |
+| 0 | line from the current point to the tail point in `palette(color)`; when `color2 != 0` a second stroke in `palette(color2)` is drawn **first** using the offset rule below, then the unshifted `color` stroke on top | 34 `lineofsight+beamweapon` lasers (colors 96/98, 144/217, 208, 209/211, 232/234) and 4 with no family (`noweapon`, `gasbag`, `treeburn`, `shrubburn`) |
 | 1 | the `shadow` frame at `(sx, sy_floor)` where `sy_floor` uses the record's cached average floor height (§8.1, halved) instead of the projectile's own Y — the ground shadow — then the definition's 3DO model at the point with angle block `{roll word, yaw − 0x8000, pitch − 0x8000}` — the roll word is the record's first orientation word, the one meteors accumulate (§6.5) and no creator or the common initializer writes (**Supported inference:** a non-meteor model is drawn with whatever roll its pool slot last held; decider: writer census of that word); when the model has a child piece and `currentTick < expiry`, the child is drawn with the same block, except that under `propeller` the first word is the record's spinning propeller angle (+0x400 per tick, §7.1) | 68: every `selfprop` missile and torpedo (33 `los+selfprop`, 16 `+propeller`, 13 `vlaunch`, 4 `vlaunch+propeller`) and the two model meteors |
 | 2 | the 22×22 displacement (lens) frame at `(sx, sy)` through the lens blitter; the screen-rect admission failing here **returns from the whole renderer** (later records are skipped that frame, `[03 §5.4]`) | 1: `mindgun` |
 | 3 | `shadow` as type 1, then the model with an angle block this rendering path does not initialize (**Supported inference:** uninitialised stack — decider: a bounded writer census for those orientation values) | 2: the disintegrators |
@@ -5739,6 +5739,15 @@ indexed by the authored byte.
 | 5 | frame `f = N − ((expiry − currentTick) · N) / weapontimer` of `flamestream`, `N` its frame count (20), signed 32-bit arithmetic, drawn only while `0 ≤ f < N`; a zero `weapontimer` divides by zero | 1: `flamethrower` |
 | 6 | `shadow` as type 1, then the model with the record's orientation words verbatim `{roll word, yaw, pitch}` (no `0x8000` offsets) | 4: the `dropped` bombs |
 | 7 | two passes of jagged segments from the tail point to the current point in `palette(color)`, single stroke (`color2` is authored on both stock lightning weapons and **not read**): segment count `n = trunc(dist / 5)` where `dist` is the truncated 16.16 length of the tail→head vector: `nFixed = (dist << 16) / 0x50000` (64-bit, a 16.16 count) and `n` is its whole part; when `n` is zero nothing is drawn; each pass steps `(delta << 16) / nFixed` per axis (64-bit truncating divisions), and after each step **each of the three axes** receives `crtRand() · 11 / 0x8000 − 5` whole world units added to the stepped point's high word — **three CRT draws per generated point, `2·n` points**, so `6·n` draws per lightning record per frame; each jittered point is the end of one segment and the start of the next | 2: `lightning`, `armlatnk_weapon` |
+
+**Established (direct-static) — secondary beam geometry.** With a nonzero
+secondary byte, horizontal-major means `abs(dx) > abs(dy)` strictly; equal
+spans use the vertical-major branch. Order the endpoints by increasing X for
+horizontal-major lines, otherwise by increasing Y. The secondary moves both
+endpoints one pixel up in the horizontal-major branch; otherwise it moves the
+first endpoint one pixel left and the second one pixel right. The primary
+uses the same ordered endpoints without the offsets. A zero secondary byte
+bypasses this ordering and draws the original single segment.
 
 **Established — beam/lightning palette identity.** `palette(color)` in
 cases 0 and 7 is the live GUI-to-display semantic map built from GUIPAL.PAL

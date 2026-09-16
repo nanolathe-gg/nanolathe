@@ -825,9 +825,9 @@ allocated during recording. [03 R-COMP-01 §3][03 R-WATER-01 §2]
 ### Attached-unit composition
 
 A keyed carrier owns an ordered list of child geometry and signed height deltas.
-Each child keeps its own reveal, outline, waterline and Digger processing on its
-**own** key; the carrier's waterline and Digger then clip the child on the
-**shifted** key, which is what the staging image's passes do. Its shadow-only
+Each child keeps its own reveal and outline on its **own** key. Its raw
+composition joins the carrier before waterline and Digger processing, so only
+the carrier's passes act on the child's **shifted** key. Its shadow-only
 command remains before the carrier's shadow/body command. The signed shifted key
 is compared before narrowing to the stored byte, and the next child sees that
 narrowed key. The carrier's live lane enters before those merges; after the
@@ -1833,11 +1833,10 @@ A shadow is a subject like any other — its own region, its own raster, its own
 commit. **The shadow's inputs are not the body's**, and this is established by
 reading rather than assumed: the body's retained lane is the *cached* piece lane
 frozen at its last rebuild, with the orientation cache holding the root angles
-until an axis moves more than seven units, while the shadow projects **every**
-piece from the **current** pose. A subject whose retained body is untouched can
-have a shadow that genuinely moved — a turret slewing, a factory pad opening —
-so gating the shadow on the body's rebuild would freeze a silhouette the body is
-not freezing. The two lanes are retained side by side and gated apart.
+until an axis moves more than seven units, while the structure shadow projects
+visible **cached** pieces from the **current** pose, including during
+construction [03 R-REN-03D §2]. The two lanes remain retained side by side
+and gated apart.
 
 What the projection reads is exactly: the **model**, by name, as the body's own
 gate reads it; the **folded piece pose** (`UnitDraw.PieceStates`), from which
@@ -1931,6 +1930,11 @@ linear magnification (1 or 2), rather than its encoded `ViewScale` value.
 | World-anchored text: group digits, labels | anchor through `WorldToScreen` | glyphs unscaled; text is interface, not world |
 | Cursor, HUD, minimap, messages, menus | unchanged | unscaled; the minimap's viewport rectangle comes from `EffectiveView`, the view divided by s |
 
+The laser's secondary stroke is offset after projecting its world endpoints:
+its one-screen-pixel offset remains one pixel at both record scales, consistent
+with the line-width policy above. Only the world endpoints scale
+[06 R-WFX-01 §4].
+
 Classic attached-unit staging uses the child-minus-carrier world projection at
 native raster scale, then magnifies the completed union about the carrier anchor
 once. It must not reuse the already magnified screen-anchor difference: the
@@ -1957,7 +1961,10 @@ Fog edge clipping: both executors keep the projected cell origin for GAF
 placement and clip destination writes only after the frame offset is applied
 [03 §3.3][R-RR16-A §3]. Clamping the origin before the blitter pins a partially
 offscreen top or left cell's art to the screen edge, which at 2× displaces the
-cloud by nearly 64 pixels. Fill rectangles remain clipped. Regression fixtures
+cloud by nearly 64 pixels. Fill rectangles remain clipped. The producer expands
+its viewport window by the authored leaf-frame bounds, including composite
+children; neither executor rejects a GAF solely because its nominal cell is
+offscreen. Regression fixtures
 pan black, gray and dithered gray masks past both edges at 1× and 2× and
 compare with a crop of the unpanned image, including actual GPU readback.
 

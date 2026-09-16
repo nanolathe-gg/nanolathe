@@ -105,6 +105,10 @@ func (c *Client) collectShadowPolys(draw *presentationrender.UnitDraw) []screenP
 			continue
 		}
 		piece := &draw.Pieces[pi]
+		// Construction does not override the shadow's cached-piece gate [03 R-REN-03D §2].
+		if piece.DontCache {
+			continue
+		}
 		for pri := range piece.Primitives {
 			pr := &piece.Primitives[pri]
 			if draw.Model.Pieces[pi].Selection && pri == 0 {
@@ -173,7 +177,7 @@ func (c *Client) buildModelShadow(draw *presentationrender.UnitDraw, body *model
 	if len(polys) == 0 {
 		return nil
 	}
-	width, height, originX, originY := modelExtent(polys)
+	width, height, originX, originY, _ := c.projectedModelExtent(draw, presentationrender.PieceLaneAll, true)
 	anchorX, anchorY := c.shadowAnchor(draw)
 	// The shadow image is never supersampled: [R-REN-03A §6]'s gate is about
 	// the body composition, and §2 measures and allocates the shadow image
@@ -181,7 +185,7 @@ func (c *Client) buildModelShadow(draw *presentationrender.UnitDraw, body *model
 	placeFaces(polys, originX, originY, 1)
 	img := c.borrowModelImage(width, height, originX, originY, anchorX, anchorY, true, 1)
 	for i := range polys {
-		c.fillPolyTarget(img, &polys[i], shadowColorIndex, nil)
+		c.fillPolyTarget(img, &polys[i], shadowColorIndex)
 	}
 	c.punchOutModelShadow(img, body)
 	return img

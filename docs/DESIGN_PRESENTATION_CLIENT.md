@@ -307,6 +307,11 @@ files:
 
 ### 2.3 The model rasterizer
 
+Sprite feature placement uses the terrain-height average around the feature's
+anchor cell, independently of its center-sampled instance height; body and
+shadow share that anchor. 3DO feature models retain their instance position
+`[03 §5.1.4]` `[03 R-RAST-01 §6]`.
+
 A unit is not blitted from a sprite. It is composed into its own indexed image
 with a per-pixel **height key**, and that image is blitted. The split across
 `model_*.go` follows the stages:
@@ -691,6 +696,10 @@ are C1 and C3 of §3.1.
   `[03 R-FONT-01 §2]` `[03 R-FONT-01 §3]`. The control word's high byte is a
   base-character bias applied during measurement only when it is at or below
   the code; retail fonts store zero.
+  Both executors admit the rectangle at the unadjusted baseline against the
+  private surface's inclusive bounds. The signed baseline may then put glyph
+  rows above that private clip; only host framebuffer bounds suppress those
+  writes `[03 R-FONT-01 §4]`.
 * **C9 Frame boundary.** Update calls the injected step, then reads the latest
   committed frame. Presentation samples that frame without interpolation; the
   client never advances the simulation clock and never writes authoritative

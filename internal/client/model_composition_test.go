@@ -83,15 +83,15 @@ func TestAbsentKeyPlaneIsPainterOrder(t *testing.T) {
 	low := heightPlaneFace(10)
 
 	withKey := newModelImage(8, 8, 0, 0, 0, 0, true, 1)
-	c.fillPolyTarget(withKey, &high, 40, nil)
-	c.fillPolyTarget(withKey, &low, 41, nil)
+	c.fillPolyTarget(withKey, &high, 40)
+	c.fillPolyTarget(withKey, &low, 41)
 	if got := withKey.color[1*8+1]; got != 40 {
 		t.Fatalf("with a key plane the lower face won: %d, want 40", got)
 	}
 
 	noKey := newModelImage(8, 8, 0, 0, 0, 0, false, 1)
-	c.fillPolyTarget(noKey, &high, 40, nil)
-	c.fillPolyTarget(noKey, &low, 41, nil)
+	c.fillPolyTarget(noKey, &high, 40)
+	c.fillPolyTarget(noKey, &low, 41)
 	if got := noKey.color[1*8+1]; got != 41 {
 		t.Fatalf("without a key plane the later face must win: %d, want 41", got)
 	}

@@ -200,3 +200,38 @@ func TestLensDispatchNeedsNoArtOrAge(t *testing.T) {
 		}
 	}
 }
+
+// [06 R-WFX-01 §4] Scheduler roots never reach visibility, lens admission,
+// art resolution or the presentation CRT; emitted shots keep pool order.
+func TestBuildProjectileDrawsSkipsBurstSchedulersBeforeCallbacks(t *testing.T) {
+	views := []frame.ProjectileView{
+		{Handle: 1, RenderType: RenderTypeSegmented, BurstRemaining: 2},
+		{Handle: 2, RenderType: RenderTypeGlobalGAF, BurstRemaining: -1},
+		{Handle: 3, RenderType: RenderTypeBeam, HasPrimaryColor: true, PrimaryColor: 5},
+	}
+	visibilityCalls := 0
+	visible := func(v frame.ProjectileView) bool {
+		visibilityCalls++
+		if v.Handle != 3 {
+			t.Fatalf("scheduler reached visibility: %+v", v)
+		}
+		return true
+	}
+	options := ProjectileDispatchOptions{
+		SegmentPoints: func(frame.ProjectileView) ([]ProjectilePoint, []ProjectilePoint, bool) {
+			t.Fatal("scheduler consumed segment work")
+			return nil, nil, false
+		},
+		ResolveGAF: func(ProjectileGAFRequest) (*formats.GAFFrame, bool) {
+			t.Fatal("scheduler resolved art")
+			return nil, false
+		},
+	}
+	draws, aborted := BuildProjectileDrawsInto(nil, views, 10, visible, func(frame.ProjectileView) bool {
+		t.Fatal("scheduler reached lens admission")
+		return false
+	}, options)
+	if aborted || visibilityCalls != 1 || len(draws) != 1 || draws[0].Handle != 3 {
+		t.Fatalf("draws=%+v aborted=%v visibilityCalls=%d", draws, aborted, visibilityCalls)
+	}
+}

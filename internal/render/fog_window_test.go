@@ -1,22 +1,19 @@
 package render
 
 import (
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"reflect"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 )
 
 // TestFogWindowMatchesClippedFullBuild locks BuildFogOpsWindowInto against the
-// map-wide builder it replaces in the composer: for every camera position, the
-// windowed operations must be exactly the map-wide operations that survive the
-// composer's clip, in the same order.
+// map-wide builder: without art extents every GAF op must survive, while the
+// fills are culled to the surface, in the same order.
 //
-// The clip is reproduced here because that is the contract. The composer
-// rebases each operation off the retail viewport origin and then drops it if
-// the clipped rectangle is empty; the windowed builder claims to reach the same
-// set without building the rest. A phase error of one tile in either direction
-// would show up as a missing or extra fog cell at a screen edge, which is
-// exactly the defect a full-screen capture of a mostly-explored map hides.
+// An unbounded GAF frame may cross any nominal cell edge. Fills alone use the
+// nominal rectangle; clipping a GAF is the executor's job once art is known.
 func TestFogWindowMatchesClippedFullBuild(t *testing.T) {
 	const gw, gh = 24, 24
 	cache := testFogCache(t, gw, gh)
@@ -63,7 +60,7 @@ func TestFogWindowMatchesClippedFullBuild(t *testing.T) {
 				if y1 > surfH {
 					y1 = surfH
 				}
-				if x0 >= x1 || y0 >= y1 {
+				if (x0 >= x1 || y0 >= y1) && op.Kind != FogKindGAFCh0 && op.Kind != FogKindGAFCh1 {
 					continue
 				}
 				want = append(want, op)
@@ -116,5 +113,43 @@ func TestFogWindowReusesScratch(t *testing.T) {
 	again := BuildFogOpsWindowInto(scratch, cache, cam, 320, 200, nil, false)
 	if cap(again) != cap(grown) || &again[:1][0] != &grown[:1][0] {
 		t.Fatal("windowed build reallocated the scratch slice instead of refilling it")
+	}
+}
+
+// With authored extents the bounded walk must retain the same ordered draws as
+// the map-wide walk, including a one-pixel overhang beyond a nominal cell.
+func TestFogWindowWithArtMatchesFullBuild(t *testing.T) {
+	cache := testFogCache(t, 24, 24)
+	for y := int32(0); y < 24; y++ {
+		for x := int32(0); x < 24; x++ {
+			cache.SetChannel(x, y, uint8((x*3+y*5)%16), uint8((x*7+y*11)%16))
+		}
+	}
+	fr := &formats.GAFFrame{Width: 33, Height: 33}
+	entry := &formats.GAFEntry{Frames: make([]formats.GAFFrameRef, 14)}
+	for i := range entry.Frames {
+		entry.Frames[i].Frame = fr
+	}
+	family := [4]*formats.GAFEntry{entry, entry, entry, entry}
+	for _, scale := range []camera.ViewScale{camera.ViewScaleNative, camera.ViewScaleDetail} {
+		for _, pan := range [][2]int32{{48, 48}, {17, 3}, {511, 511}, {5000, 5000}, {-32, -32}} {
+			cam := &camera.Camera{X: pan[0], Z: pan[1], Scale: scale}
+			full := BuildFogOpsInto(nil, cache, cam, 64, 64, 24, 24, nil, false)
+			var want []FogOp
+			for _, op := range full {
+				edge := scale.Px(32)
+				if op.Kind == FogKindGAFCh0 || op.Kind == FogKindGAFCh1 {
+					edge = scale.Px(33)
+				}
+				x, y := op.ScreenX0-camera.OriginX, op.ScreenY0-camera.OriginY
+				if x+edge > 0 && y+edge > 0 && x < 64 && y < 64 {
+					want = append(want, op)
+				}
+			}
+			got := BuildFogOpsWindowWithArtInto(nil, cache, cam, 64, 64, nil, false, family, family)
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("scale %d camera %v: got %d ops, want %d ordered ops", scale, pan, len(got), len(want))
+			}
+		}
 	}
 }

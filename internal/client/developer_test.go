@@ -222,24 +222,19 @@ func TestDeveloperMovementStopsAtFirstSelectedAndUsesCommittedFootprint(t *testi
 	}
 }
 
-func TestDeveloperClippedLinePreservesRasterAndSmoothZoom(t *testing.T) {
+func TestDeveloperLineClipsEndpointsAndSmoothZoom(t *testing.T) {
 	c := developerFixture()
 	a, b := Point{110, 35}, Point{160, 71}
 	clip := c.developerClip()
-	c.drawIndexedLine(a.X, a.Y, b.X, b.Y, 77)
+	// The private viewport's left edge is 128. Parametric truncation moves
+	// the first endpoint to (128,47) before raster initialization [03 R-COMP-01 §2].
+	c.drawIndexedLine(128, 47, b.X, b.Y, 77)
 	want := append([]byte(nil), c.indexed...)
-	for y := 0; y < c.height; y++ {
-		for x := 0; x < c.width; x++ {
-			if int32(x) < clip.X || int32(x) >= clip.X+clip.W || int32(y) < clip.Y || int32(y) >= clip.Y+clip.H {
-				want[y*c.width+x] = 0
-			}
-		}
-	}
 	clear(c.indexed)
 	c.developerLine(a, b, 77, clip)
 	c.replayForTest()
 	if !bytes.Equal(want, c.indexed) {
-		t.Fatal("clipping changed Bresenham phase")
+		t.Fatal("developer line did not clip endpoints before rasterization")
 	}
 	c.cam.Zoom = camera.ZoomUnit * 3 / 4
 	got := c.developerClip()

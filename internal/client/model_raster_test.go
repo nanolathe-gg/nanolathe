@@ -180,9 +180,10 @@ func TestTexturedRasterBypassesSHDOnlyForNoShadeRow(t *testing.T) {
 			target := newModelTarget(c.width, c.height)
 			if nanoframe {
 				reveal := presentationRevealKeep()
-				c.blitTexturedPolyTarget(target, &face, texture, &reveal)
+				c.blitTexturedPolyTarget(target, &face, texture)
+				c.revealModelImage(target, nil, &reveal, 0)
 			} else {
-				c.blitTexturedPolyTarget(target, &face, texture, nil)
+				c.blitTexturedPolyTarget(target, &face, texture)
 			}
 			target.commit(c.indexed, c.width, c.height)
 			want := source

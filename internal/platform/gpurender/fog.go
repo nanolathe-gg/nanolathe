@@ -243,8 +243,8 @@ func (r *Renderer) Fog(fg drawlist.Fog) {
 // to the full-window shell origin (0,0), then clamped to the framebuffer
 // [03 §2.5][03 §3.3]. rawX and rawY are the UNCLAMPED rebased origin the
 // fog GAF is anchored at; x0 and y0 are the clipped fill bounds.
-// ok is false for the degenerate rectangles classicSink.Fog
-// skips.
+// ok rejects empty fills only; a GAF leaf must be clipped after its authored
+// offset is applied, even when its nominal cell is offscreen [R-RR16-A §3].
 //
 // The modern executor always rebases: the op list is only ever recorded with a
 // live camera (drawFog gates on c.cam != nil), which is classicSink.Fog's
@@ -267,7 +267,7 @@ func fogOpRect(op *render.FogOp, w, h int32) (rawX, rawY, x0, y0, x1, y1 int32, 
 	if y1 > h {
 		y1 = h
 	}
-	if x0 >= x1 || y0 >= y1 {
+	if (x0 >= x1 || y0 >= y1) && op.Kind != render.FogKindGAFCh0 && op.Kind != render.FogKindGAFCh1 {
 		return rawX, rawY, x0, y0, x1, y1, false
 	}
 	return rawX, rawY, x0, y0, x1, y1, true
@@ -298,6 +298,9 @@ func fogRegionFor(ops []render.FogOp, w, h int32, scale camera.ViewScale) fogReg
 	for i := range ops {
 		rawX, rawY, x0, y0, _, _, ok := fogOpRect(&ops[i], w, h)
 		if !ok {
+			continue
+		}
+		if rawX+tile <= 0 || rawY+tile <= 0 || rawX >= w || rawY >= h {
 			continue
 		}
 		if !out.ok {

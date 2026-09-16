@@ -105,7 +105,7 @@ func (c *Client) drawFragment(v frame.FragmentView) bool {
 	target := c.borrowModelImage(int(maxX-minX+1), int(maxY-minY+1), -minX, -minY, 0, 0, false, 1)
 	target.blit = camera.ViewScaleNative
 	for i := range polys {
-		c.blitTexturedPolyTarget(target, &polys[i], polys[i].frame, nil, uint64(v.Slot))
+		c.blitTexturedPolyTarget(target, &polys[i], polys[i].frame, uint64(v.Slot))
 	}
 	c.emitModel(pendingModelCommit{m: composedModel{image: target, raster: target, direct: true}, blit: target, body: true})
 	return true

@@ -1,63 +1,43 @@
 package gpurender
 
 import (
-	"testing"
-
 	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
+	"testing"
 )
 
-// TestGlyphsClipCompilesMatchingDestinationAndSourceQuads exercises the real
-// Renderer.Glyphs scheduler path. The source span must shrink with the
-// destination span: clipping only destination coordinates stretches the glyph
-// back across the clipped rectangle instead of preserving its bitmap pixels.
-func TestGlyphsClipCompilesMatchingDestinationAndSourceQuads(t *testing.T) {
+// FNT admission uses the whole unadjusted string rectangle, including its
+// one-past right/bottom edges [03 R-FONT-01 §3].
+func TestGlyphsWholeStringAdmissionAndBaseline(t *testing.T) {
 	r, _ := schedulerFixture(t)
-	font := &formats.FNT{Height: 4}
-	font.Glyphs['A'] = &formats.FNTGlyph{Width: 4, Height: 4, Bits: []byte{0xf0, 0xf0, 0xf0, 0xf0}}
-
+	font := &formats.FNT{Height: 2, Baseline: 1}
+	font.Glyphs['A'] = &formats.FNTGlyph{Width: 3, Height: 2, Bits: []byte{0xfc}}
+	for _, tc := range []struct {
+		name string
+		x, y int32
+		want bool
+	}{
+		{"inside", 2, 2, true}, {"inclusive one-past bounds", 3, 3, true}, {"left", 1, 2, false}, {"top", 2, 1, false},
+		{"right last pixel", 4, 2, false}, {"bottom last pixel", 2, 4, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r.sched.resetFrame(16, 16)
+			r.Glyphs(drawlist.Glyphs{Font: font, Text: "A", X: tc.x, Y: tc.y, Color: 9, HasClip: true, Clip: drawlist.Rect{X: 2, Y: 2, W: 5, H: 4}})
+			verts := r.sched.classVerts(schedOpaque)
+			if (len(verts) != 0) != tc.want {
+				t.Fatalf("vertices=%d, admitted=%v", len(verts), tc.want)
+			}
+			if tc.want && (verts[0].DstY != float32(tc.y-1) || verts[3].DstY != float32(tc.y+1)) {
+				t.Fatalf("baseline overrun was clipped: %+v", verts)
+			}
+		})
+	}
+	// Host-storage clipping retains source coordinates for an admitted glyph
+	// whose baseline places its first row above the framebuffer.
 	r.sched.resetFrame(16, 16)
-	r.Glyphs(drawlist.Glyphs{
-		Font: font, Text: "A", X: 2, Y: 4, Color: 9,
-		HasClip: true, Clip: drawlist.Rect{X: 4, Y: 5, W: 2, H: 2},
-	})
+	r.Glyphs(drawlist.Glyphs{Font: font, Text: "A", X: 2, Y: 0, Color: 9})
 	verts := r.sched.classVerts(schedOpaque)
-	if len(verts) != 4 {
-		t.Fatalf("clipped glyph vertices=%d, want one quad", len(verts))
-	}
-	if verts[0].DstX != 4 || verts[0].DstY != 5 || verts[3].DstX != 6 || verts[3].DstY != 7 {
-		t.Fatalf("clipped destination=%+v..%+v, want (4,5)..(6,7)", verts[0], verts[3])
-	}
-	if got := verts[1].SrcX - verts[0].SrcX; got != 2 {
-		t.Fatalf("clipped source width=%v, want 2 to match destination crop", got)
-	}
-	if got := verts[2].SrcY - verts[0].SrcY; got != 2 {
-		t.Fatalf("clipped source height=%v, want 2 to match destination crop", got)
-	}
-
-	clippedOrigin := verts[0]
-	r.sched.resetFrame(16, 16)
-	r.Glyphs(drawlist.Glyphs{
-		Font: font, Text: "A", X: 2, Y: 4, Color: 9,
-		HasClip: true, Clip: drawlist.Rect{X: 12, Y: 12, W: 2, H: 2},
-	})
-	if got := len(r.sched.classVerts(schedOpaque)); got != 0 {
-		t.Fatalf("clipped-away glyph vertices=%d, want none", got)
-	}
-
-	r.sched.resetFrame(16, 16)
-	r.Glyphs(drawlist.Glyphs{Font: font, Text: "A", X: 2, Y: 4, Color: 9})
-	verts = r.sched.classVerts(schedOpaque)
-	if len(verts) != 4 {
-		t.Fatalf("unclipped glyph vertices=%d, want one full quad", len(verts))
-	}
-	if verts[0].DstX != 2 || verts[0].DstY != 4 || verts[3].DstX != 6 || verts[3].DstY != 8 {
-		t.Fatalf("unclipped destination=%+v..%+v, want (2,4)..(6,8)", verts[0], verts[3])
-	}
-	if clippedOrigin.SrcX-verts[0].SrcX != 2 || clippedOrigin.SrcY-verts[0].SrcY != 1 {
-		t.Fatalf("source origin did not advance by the destination crop: clipped=%+v full=%+v", clippedOrigin, verts[0])
-	}
-	if got := verts[1].SrcX - verts[0].SrcX; got != 4 {
-		t.Fatalf("unclipped source width=%v, want 4", got)
+	if len(verts) != 4 || verts[0].DstY != 0 || verts[3].DstY != 1 || verts[2].SrcY-verts[0].SrcY != 1 {
+		t.Fatalf("host-storage crop=%+v", verts)
 	}
 }

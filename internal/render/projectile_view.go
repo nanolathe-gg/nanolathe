@@ -318,6 +318,9 @@ func BuildProjectileDraws(projectiles []frame.ProjectileView, now uint32, visibl
 func BuildProjectileDrawsInto(dst []ProjectileDraw, projectiles []frame.ProjectileView, now uint32, visible func(frame.ProjectileView) bool, admitGlobalGAF func(frame.ProjectileView) bool, opts ProjectileDispatchOptions) ([]ProjectileDraw, bool) {
 	out := dst[:0]
 	for _, v := range projectiles {
+		if v.BurstRemaining != 0 { // Skip schedulers before visibility, art or CRT work [06 R-WFX-01 §4].
+			continue
+		}
 		if visible == nil || !visible(v) { // [03 §5.4] absent visibility dependency fails closed
 			continue
 		}

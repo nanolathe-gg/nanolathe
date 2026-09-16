@@ -85,8 +85,12 @@ func TestReflectionBeamEndpointHeightsFollowStrokeOrder(t *testing.T) {
 	if len(lines) != 2 || !lines[0].ReflectWater || !lines[1].ReflectWater {
 		t.Fatalf("beam crossing water was not admitted: %+v", lines)
 	}
-	if lines[0].ReflectionHeight0 != -4 || lines[0].ReflectionHeight1 != 10 || lines[1].ReflectionHeight0 != 10 || lines[1].ReflectionHeight1 != -4 {
-		t.Fatalf("beam swapped or truncated physical heights: %+v", lines)
+	// Both strokes follow the sorted major-axis endpoints. Pixel offsets
+	// change geometry alone, never the committed world heights.
+	for _, line := range lines {
+		if line.ReflectionHeight0 != -4 || line.ReflectionHeight1 != 10 || line.WorldHeight0 != 16 || line.WorldHeight1 != 30 {
+			t.Fatalf("beam heights did not follow sorted endpoints: %+v", line)
+		}
 	}
 	c.resetListForTest()
 	d := render.ProjectileDraw{Segments: []render.ProjectilePoint{{X: v.X, Y: v.Y, Z: v.Z}, {X: v.TailX, Y: v.TailY, Z: v.TailZ}}}

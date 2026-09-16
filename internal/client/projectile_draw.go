@@ -179,16 +179,19 @@ func (c *Client) drawProjectileBeam(d render.ProjectileDraw, v frame.ProjectileV
 	hx, hy := c.cam.WorldToScreen(v.X, v.Y, v.Z)
 	tx, ty := c.cam.WorldToScreen(v.TailX, v.TailY, v.TailZ)
 	strokes := render.BeamStrokes([2]int32{hx - 128, hy - 32}, [2]int32{tx - 128, ty - 32}, d.Color, d.Color2)
-	for i, stroke := range strokes {
+	head := render.ProjectilePoint{X: v.X, Y: v.Y, Z: v.Z}
+	tail := render.ProjectilePoint{X: v.TailX, Y: v.TailY, Z: v.TailZ}
+	primary := strokes[len(strokes)-1]
+	if primary.X0 != hx-128 || primary.Y0 != hy-32 {
+		// Both strokes share the major-axis endpoint order [06 R-WFX-01 §4].
+		head, tail = tail, head
+	}
+	for _, stroke := range strokes {
 		// Each beam stroke is one indexed line; the sink runs the raw Bresenham
 		// primitive [03 §5.4].
 		line := drawlist.Line{X0: stroke.X0, Y0: stroke.Y0, X1: stroke.X1, Y1: stroke.Y1, Index: c.paletteIndex(indexedColor(stroke.Color)), Emissive: true}
-		c.setLineHeights(&line, v.Y, v.TailY)
-		c.setLineReflection(&line, render.ProjectilePoint{X: v.X, Y: v.Y, Z: v.Z}, render.ProjectilePoint{X: v.TailX, Y: v.TailY, Z: v.TailZ})
-		if d.Color2 != 0 && i == 0 {
-			// The secondary stroke swaps head and tail [03 §5.4].
-			line.ReflectionHeight0, line.ReflectionHeight1 = line.ReflectionHeight1, line.ReflectionHeight0
-		}
+		c.setLineHeights(&line, head.Y, tail.Y)
+		c.setLineReflection(&line, head, tail)
 		c.emitLine(line)
 	}
 	return len(strokes)
@@ -246,42 +249,90 @@ func indexedColor(v int32) byte {
 	return byte(v)
 }
 
-// drawIndexedLine is the integer Bresenham primitive used by beam families
-// [03 §5.4]. It writes indexed pixels only and clips each point to the
-// software framebuffer.
+// drawIndexedLine clips endpoints before initializing the major/minor raster.
+// The classic target's clip is its surface extent; the fixed edge order,
+// truncating intersections and diagonal step on ties are [03 R-COMP-01 §2].
 func (c *Client) drawIndexedLine(x0, y0, x1, y1 int32, color byte) {
-	dx := x1 - x0
-	if dx < 0 {
-		dx = -dx
+	if c.width <= 0 || c.height <= 0 {
+		return
 	}
-	sx := int32(1)
-	if x0 > x1 {
-		sx = -1
+	x, y, endX, endY := int64(x0), int64(y0), int64(x1), int64(y1)
+	if !clipIndexedLine(&x, &y, &endX, &endY, 0, 0, int64(c.width-1), int64(c.height-1)) {
+		return
 	}
-	dy := y1 - y0
+	if x > endX {
+		x, endX = endX, x
+		y, endY = endY, y
+	}
+	dx, dy := endX-x, endY-y
+	stepY := int64(1)
 	if dy < 0 {
 		dy = -dy
+		stepY = -1
 	}
-	sy := int32(1)
-	if y0 > y1 {
-		sy = -1
+	major, minor := dx, dy
+	if dy > dx {
+		major, minor = dy, dx
 	}
-	err := dx - dy
-	for {
-		if x0 >= 0 && x0 < int32(c.width) && y0 >= 0 && y0 < int32(c.height) {
-			c.indexed[y0*int32(c.width)+x0] = color
+	err := 2*minor - major
+	for remaining := major; remaining >= 0; remaining-- {
+		c.indexed[int(y)*c.width+int(x)] = color
+		if err >= 0 {
+			if dx >= dy {
+				y += stepY
+			} else {
+				x++
+			}
+			err += 2 * (minor - major)
+		} else {
+			err += 2 * minor
 		}
-		if x0 == x1 && y0 == y1 {
-			return
-		}
-		e2 := 2 * err
-		if e2 > -dy {
-			err -= dy
-			x0 += sx
-		}
-		if e2 < dx {
-			err += dx
-			y0 += sy
+		if dx >= dy {
+			x++
+		} else {
+			y += stepY
 		}
 	}
+}
+
+// clipIndexedLine visits left, top, right, bottom for the first endpoint,
+// then the same edges for the second, with signed truncating division and
+// wide products [03 R-COMP-01 §2].
+func clipIndexedLine(x0, y0, x1, y1 *int64, left, top, right, bottom int64) bool {
+	dx, dy := *x1-*x0, *y1-*y0
+	for endpoint := 0; endpoint < 2; endpoint++ {
+		if *x0 < left {
+			if dx <= 0 {
+				return false
+			}
+			*y0 += (left - *x0) * dy / dx
+			*x0 = left
+		}
+		if *y0 < top {
+			if dy <= 0 {
+				return false
+			}
+			*x0 += (top - *y0) * dx / dy
+			*y0 = top
+		}
+		if *x0 > right {
+			if dx >= 0 {
+				return false
+			}
+			*y0 += (right - *x0) * dy / dx
+			*x0 = right
+		}
+		if *y0 > bottom {
+			if dy >= 0 {
+				return false
+			}
+			*x0 += (bottom - *y0) * dx / dy
+			*y0 = bottom
+		}
+		x0, x1 = x1, x0
+		y0, y1 = y1, y0
+		dx, dy = -dx, -dy
+	}
+	return *x0 >= left && *x0 <= right && *y0 >= top && *y0 <= bottom &&
+		*x1 >= left && *x1 <= right && *y1 >= top && *y1 <= bottom
 }

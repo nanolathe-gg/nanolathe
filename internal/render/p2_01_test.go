@@ -296,8 +296,8 @@ func TestBeamSingleVsDualP2(t *testing.T) {
 	if dual[0].Color != 7 || dual[1].Color != 5 {
 		t.Fatalf("dual order %v want [7,5]", dual)
 	}
-	// ensure endpoint swap for outer
-	if dual[0].X0 != tail[0] || dual[1].X0 != head[0] {
-		t.Fatalf("dual endpoint swap failed")
+	// Equal spans use the vertical-major secondary offset [06 R-WFX-01 §4].
+	if dual[0] != (BeamStroke{-1, 0, 11, 10, 7}) || dual[1] != (BeamStroke{0, 0, 10, 10, 5}) {
+		t.Fatalf("dual endpoint offsets failed: %+v", dual)
 	}
 }

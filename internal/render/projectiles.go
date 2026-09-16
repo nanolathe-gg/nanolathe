@@ -101,23 +101,39 @@ func ProjectToScreen(pos combat.Vec3, camX, camZ int32) (sx, sy int32) { // [03 
 type BeamStroke struct {
 	X0, Y0 int32
 	X1, Y1 int32
-	Color  int32 // palette-remapped color [03 §5.4]
+	Color  int32 // authored logical color; mapped by the client [06 R-WFX-01 §4]
 }
 
-// BeamStrokes returns the one or two strokes for a beam [03 §5.4] C7.
-// color2==0 draws one stroke; otherwise two adjacent strokes ordered
-// endpoint-swapped, secondary first and primary on top [03 §5.4] C7.
-// No anti-aliasing, no distance width [03 §5.4].
-func BeamStrokes(headScreen, tailScreen [2]int32, color, color2 int32) []BeamStroke { // [03 §5.4] C7
+// BeamStrokes returns the primary stroke and, when color2 is nonzero, its
+// offset secondary stroke first. Endpoint sorting and the strict major-axis
+// comparison follow [06 R-WFX-01 §4]; color presence is tested before mapping.
+func BeamStrokes(headScreen, tailScreen [2]int32, color, color2 int32) []BeamStroke {
+	primary := BeamStroke{X0: headScreen[0], Y0: headScreen[1], X1: tailScreen[0], Y1: tailScreen[1], Color: color}
 	if color2 == 0 {
-		return []BeamStroke{{X0: headScreen[0], Y0: headScreen[1], X1: tailScreen[0], Y1: tailScreen[1], Color: color}} // [03 §5.4] one stroke
+		return []BeamStroke{primary}
 	}
-	// Two parallel one-pixel lines, using color2 as outer stroke and color as inner [03 §5.4].
-	// Order endpoint-swapped, secondary first [03 §5.4].
-	return []BeamStroke{
-		{X0: tailScreen[0], Y0: tailScreen[1], X1: headScreen[0], Y1: headScreen[1], Color: color2}, // secondary first, swapped [03 §5.4]
-		{X0: headScreen[0], Y0: headScreen[1], X1: tailScreen[0], Y1: tailScreen[1], Color: color},  // primary on top [03 §5.4]
+	dx, dy := int64(primary.X1)-int64(primary.X0), int64(primary.Y1)-int64(primary.Y0)
+	if dx < 0 {
+		dx = -dx
 	}
+	if dy < 0 {
+		dy = -dy
+	}
+	horizontal := dx > dy // Equal spans use the vertical-major adjustment.
+	if horizontal && primary.X0 > primary.X1 || !horizontal && primary.Y0 > primary.Y1 {
+		primary.X0, primary.X1 = primary.X1, primary.X0
+		primary.Y0, primary.Y1 = primary.Y1, primary.Y0
+	}
+	secondary := primary
+	secondary.Color = color2
+	if horizontal {
+		secondary.Y0--
+		secondary.Y1--
+	} else {
+		secondary.X0--
+		secondary.X1++
+	}
+	return []BeamStroke{secondary, primary}
 }
 
 // TrailEmitter keeps an additive next-emission deadline for smoke trails
@@ -384,6 +400,9 @@ func RenderBatch(projectiles []combat.Projectile, weapons map[int32]*content.Wea
 	aborted := false
 	// Deterministic iteration: projectiles already in stable pool order (I1) [03 §1].
 	for _, p := range projectiles {
+		if p.BurstRemaining != 0 { // Scheduler records have no image [06 R-WFX-01 §4].
+			continue
+		}
 		if visible == nil || !visible(p.Pos) { // [03 §5.4] draw gate once per record; absent dependency fails closed
 			continue
 		}

@@ -79,7 +79,7 @@ func TestTheWindingCullIsTheSpanComparison(t *testing.T) {
 		w, h, ox, oy := modelExtent(polys)
 		placeFaces(polys, ox, oy, 1)
 		target := newModelImage(w, h, ox, oy, 0, 0, true, 1)
-		c.fillPolyTarget(target, &polys[0], polys[0].color, nil)
+		c.fillPolyTarget(target, &polys[0], polys[0].color)
 		n := 0
 		for _, covered := range target.covered {
 			if covered {
@@ -153,9 +153,9 @@ func TestRetailFlapKeepsItsOuterSkin(t *testing.T) {
 	copy(previous, target.color)
 	for i := range polys {
 		if polys[i].frame != nil {
-			c.blitTexturedPolyTarget(target, &polys[i], polys[i].frame, nil, 1)
+			c.blitTexturedPolyTarget(target, &polys[i], polys[i].frame, 1)
 		} else {
-			c.fillPolyTarget(target, &polys[i], polys[i].color, nil, 1)
+			c.fillPolyTarget(target, &polys[i], polys[i].color, 1)
 		}
 		for p := range target.color {
 			if target.color[p] != previous[p] {

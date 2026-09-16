@@ -234,7 +234,7 @@ func TestCachedLiveCarrierDiggerEraseIncludesAttachedChild(t *testing.T) {
 	child.Digger = false
 	child.X += numeric.Fixed(40 << 16)
 	// The child is outside the carrier body but below its final key-125 erase.
-	// It survives its own ordinary waterline, then disappears in group finalization.
+	// Its raw image survives until the carrier's group finalization.
 	clearIndexed(c)
 	c.resetListForTest()
 	c.modelScratch.reset()

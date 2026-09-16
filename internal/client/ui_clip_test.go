@@ -69,8 +69,8 @@ func TestPushUIClipConfinesRecordedUIPrimitives(t *testing.T) {
 		c.UIFillRect(2, 4, 4, 2, 6)
 		restore()
 		c.replayForTest()
-		if got := c.indexed[3*c.width+3]; got != 4 {
-			t.Fatalf("clipped text pixel = %d, want 4", got)
+		if got := c.indexed[3*c.width+3]; got != 0 {
+			t.Fatalf("whole-string rejection left pixel = %d, want 0", got)
 		}
 		if got := c.indexed[3*c.width+2]; got != 0 {
 			t.Fatalf("text escaped clip = %d, want 0", got)

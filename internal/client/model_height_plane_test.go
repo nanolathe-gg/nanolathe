@@ -24,11 +24,11 @@ func TestModelHeightPlaneHigherFaceWinsRegardlessOfOrder(t *testing.T) {
 		low, high := heightPlaneFace(50), heightPlaneFace(70)
 		target := newModelTarget(c.width, c.height)
 		if reverse {
-			c.fillPolyTarget(target, &high, 22, nil)
-			c.fillPolyTarget(target, &low, 11, nil)
+			c.fillPolyTarget(target, &high, 22)
+			c.fillPolyTarget(target, &low, 11)
 		} else {
-			c.fillPolyTarget(target, &low, 11, nil)
-			c.fillPolyTarget(target, &high, 22, nil)
+			c.fillPolyTarget(target, &low, 11)
+			c.fillPolyTarget(target, &high, 22)
 		}
 		target.commit(c.indexed, c.width, c.height)
 		if got := c.indexed[1*c.width+1]; got != 22 {
@@ -42,8 +42,8 @@ func TestModelHeightPlaneCrossingFacesUsePerPixelKey(t *testing.T) {
 	a := walkPoly([][2]int32{{0, 0}, {6, 0}, {0, 6}}, []int32{50, 100, 50})
 	b := walkPoly([][2]int32{{0, 0}, {6, 0}, {0, 6}}, []int32{80, 60, 80})
 	target := newModelTarget(c.width, c.height)
-	c.fillPolyTarget(target, &a, 11, nil)
-	c.fillPolyTarget(target, &b, 22, nil)
+	c.fillPolyTarget(target, &a, 11)
+	c.fillPolyTarget(target, &b, 22)
 	target.commit(c.indexed, c.width, c.height)
 	if got := c.indexed[1*c.width+1]; got != 22 {
 		t.Fatalf("crossing faces pixel=%d, want per-pixel higher face 22", got)
@@ -54,8 +54,8 @@ func TestModelHeightPlaneEqualKeyLaterFaceWins(t *testing.T) {
 	c := heightPlaneClient()
 	a, b := heightPlaneFace(64), heightPlaneFace(64)
 	target := newModelTarget(c.width, c.height)
-	c.fillPolyTarget(target, &a, 11, nil)
-	c.fillPolyTarget(target, &b, 22, nil)
+	c.fillPolyTarget(target, &a, 11)
+	c.fillPolyTarget(target, &b, 22)
 	target.commit(c.indexed, c.width, c.height)
 	if got := c.indexed[1*c.width+1]; got != 22 {
 		t.Fatalf("equal-key pixel=%d, want later face 22", got)
@@ -70,12 +70,12 @@ func TestModelHeightPlaneSharedByFlatAndTexturedFaces(t *testing.T) {
 		target := newModelTarget(c.width, c.height)
 		if texturedFirst {
 			low.frame = texture
-			c.blitTexturedPolyTarget(target, &low, texture, nil)
-			c.fillPolyTarget(target, &high, 44, nil)
+			c.blitTexturedPolyTarget(target, &low, texture)
+			c.fillPolyTarget(target, &high, 44)
 		} else {
-			c.fillPolyTarget(target, &high, 44, nil)
+			c.fillPolyTarget(target, &high, 44)
 			low.frame = texture
-			c.blitTexturedPolyTarget(target, &low, texture, nil)
+			c.blitTexturedPolyTarget(target, &low, texture)
 		}
 		target.commit(c.indexed, c.width, c.height)
 		if got := c.indexed[1*c.width+1]; got != 44 {
@@ -102,7 +102,7 @@ func TestModelTexelKeyIndexIsWrittenLikeAnyOther(t *testing.T) {
 	// model path it is a colour like any other.
 	frame := &formats.GAFFrame{Width: 1, Height: 1, ColorKey: 9, Pixels: []byte{9}, Transparent: []bool{true}}
 	target := newModelTarget(c.width, c.height)
-	c.blitTexturedPolyTarget(target, &face, frame, nil)
+	c.blitTexturedPolyTarget(target, &face, frame)
 	if got := target.height[1*c.width+1]; got != 70 {
 		t.Fatalf("key-coloured texel left the height key at %d, want the face's own 70", got)
 	}
@@ -127,7 +127,7 @@ func TestModelTexelOutsideTextureWritesNothing(t *testing.T) {
 	// A zero-sized frame puts every sample outside the texture.
 	frame := &formats.GAFFrame{Width: 0, Height: 0}
 	target := newModelTarget(c.width, c.height)
-	c.blitTexturedPolyTarget(target, &face, frame, nil)
+	c.blitTexturedPolyTarget(target, &face, frame)
 	if got := target.height[1*c.width+1]; got != 0 {
 		t.Fatalf("out-of-texture sample moved the height key to %d", got)
 	}
@@ -193,8 +193,9 @@ func TestConstructionUsesTheSameHeightPlaneAdmission(t *testing.T) {
 	low, high := heightPlaneFace(50), heightPlaneFace(70)
 	reveal := presentationRevealKeep()
 	target := newModelTarget(c.width, c.height)
-	c.fillPolyTarget(target, &low, 11, &reveal)
-	c.fillPolyTarget(target, &high, 22, &reveal)
+	c.fillPolyTarget(target, &low, 11)
+	c.fillPolyTarget(target, &high, 22)
+	c.revealModelImage(target, nil, &reveal, 0)
 	target.commit(c.indexed, c.width, c.height)
 	if got := c.indexed[1*c.width+1]; got != 22 {
 		t.Fatalf("construction pixel=%d, want higher face 22", got)
@@ -212,8 +213,9 @@ func TestNanoframeEraseClearsPreviouslyComposedLowerFace(t *testing.T) {
 		Above: presentationrender.NanoframeErase,
 	}
 	target := newModelTarget(c.width, c.height)
-	c.fillPolyTarget(target, &low, 11, &reveal)
-	c.fillPolyTarget(target, &high, 22, &reveal)
+	c.fillPolyTarget(target, &low, 11)
+	c.fillPolyTarget(target, &high, 22)
+	c.revealModelImage(target, nil, &reveal, 0)
 	target.commit(c.indexed, c.width, c.height)
 	if got := c.indexed[1*c.width+1]; got != 77 {
 		t.Fatalf("erased winning face changed destination to %d, want existing background 77", got)
@@ -226,7 +228,7 @@ func TestEachModelComposesIntoItsOwnImage(t *testing.T) {
 	c := heightPlaneClient()
 	first := heightPlaneFace(70)
 	target := newModelTarget(c.width, c.height)
-	c.fillPolyTarget(target, &first, 11, nil)
+	c.fillPolyTarget(target, &first, 11)
 	target.commit(c.indexed, c.width, c.height)
 	if c.indexed[1*c.width+1] != 11 {
 		t.Fatal("first model did not populate its composition image")
@@ -237,7 +239,7 @@ func TestEachModelComposesIntoItsOwnImage(t *testing.T) {
 	c.indexed[1*c.width+1] = 77
 	second := walkPoly([][2]int32{{6, 0}, {6, 6}, {0, 6}}, []int32{70, 70, 70})
 	target = newModelTarget(c.width, c.height)
-	c.fillPolyTarget(target, &second, 22, nil)
+	c.fillPolyTarget(target, &second, 22)
 	target.commit(c.indexed, c.width, c.height)
 	if got := c.indexed[1*c.width+1]; got != 77 {
 		t.Fatalf("stale model pixel leaked as %d, want destination 77", got)

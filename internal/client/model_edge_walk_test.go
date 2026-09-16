@@ -28,7 +28,7 @@ func paintedRows(t *testing.T, w, h int, p *screenPoly, color uint8) map[int32][
 	t.Helper()
 	c := &Client{width: w, height: h, indexed: make([]uint8, w*h)}
 	img := newModelImage(w, h, 0, 0, 0, 0, true, 1)
-	c.fillPolyTarget(img, p, color, nil)
+	c.fillPolyTarget(img, p, color)
 	out := map[int32][]int32{}
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
@@ -125,7 +125,7 @@ func TestEdgeWalkKeyIsTheChainInterpolation(t *testing.T) {
 	p := walkPoly([][2]int32{{4, 0}, {20, 0}, {4, 16}}, []int32{60, 100, 60})
 	c := &Client{width: w, height: h, indexed: make([]uint8, w*h)}
 	img := newModelImage(w, h, 0, 0, 0, 0, true, 1)
-	c.fillPolyTarget(img, &p, 77, nil)
+	c.fillPolyTarget(img, &p, 77)
 
 	// Row 0: the left chain sits at x = 4 with key 60, the right chain at the
 	// ceiling of 20 with key 100. The per-pixel step is (100-60)<<16 / 16.
@@ -172,7 +172,7 @@ func TestEdgeWalkInterpolatesTheShadeRowLikeTheKey(t *testing.T) {
 	p.attr[spanRow][0], p.attr[spanRow][1], p.attr[spanRow][2] = 0, 31, 0
 
 	img := newModelImage(w, h, 0, 0, 0, 0, true, 1)
-	c.blitTexturedPolyTarget(img, &p, texture, nil)
+	c.blitTexturedPolyTarget(img, &p, texture)
 
 	first := img.color[0*w+4]
 	varied := false
@@ -199,9 +199,9 @@ func TestEdgeWalkInterpolatesTheShadeRowLikeTheKey(t *testing.T) {
 	}
 }
 
-// TestNanoframeRevealRidesTheEdgeWalk keeps the construction reveal on the same
+// TestNanoframeRevealReadsTheComposedKey keeps the construction reveal on the same
 // admission and the same interpolated key as a finished body [03 §5.2].
-func TestNanoframeRevealRidesTheEdgeWalk(t *testing.T) {
+func TestNanoframeRevealReadsTheComposedKey(t *testing.T) {
 	const w, h = 24, 24
 	c := &Client{width: w, height: h, indexed: make([]uint8, w*h)}
 
@@ -209,8 +209,9 @@ func TestNanoframeRevealRidesTheEdgeWalk(t *testing.T) {
 	low := walkPoly([][2]int32{{4, 0}, {20, 0}, {4, 16}}, []int32{50, 50, 50})
 	high := walkPoly([][2]int32{{4, 0}, {20, 0}, {4, 16}}, []int32{70, 70, 70})
 	img := newModelImage(w, h, 0, 0, 0, 0, true, 1)
-	c.fillPolyTarget(img, &high, 22, &keep)
-	c.fillPolyTarget(img, &low, 11, &keep)
+	c.fillPolyTarget(img, &high, 22)
+	c.fillPolyTarget(img, &low, 11)
+	c.revealModelImage(img, nil, &keep, 0)
 	if got := img.color[1*w+5]; got != 22 {
 		t.Fatalf("reveal pixel = %d, want the higher face 22", got)
 	}
@@ -222,8 +223,9 @@ func TestNanoframeRevealRidesTheEdgeWalk(t *testing.T) {
 		Above: presentationrender.NanoframeErase,
 	}
 	img = newModelImage(w, h, 0, 0, 0, 0, true, 1)
-	c.fillPolyTarget(img, &low, 11, &erase)
-	c.fillPolyTarget(img, &high, 22, &erase)
+	c.fillPolyTarget(img, &low, 11)
+	c.fillPolyTarget(img, &high, 22)
+	c.revealModelImage(img, nil, &erase, 0)
 	if img.covered[1*w+5] {
 		t.Fatal("an erased face left a covered pixel behind")
 	}

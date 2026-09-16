@@ -19,10 +19,10 @@ func TestFNTTextMeasurementAndNewline(t *testing.T) {
 	}
 }
 
-func TestFNTTextDrawsContinuousBitsAndClips(t *testing.T) {
+func TestFNTTextDrawsContinuousBitsAfterAdmission(t *testing.T) {
 	f := testFont()
-	frame := make([]uint8, 8*4)
-	DrawText(frame, 8, 4, f, "A", 1, 2, 0, 7)
+	frame := make([]uint8, 8*5)
+	DrawText(frame, 8, 5, f, "A", 1, 2, 0, 7)
 	// A's 3x2 bits are 101/011 and the low control byte shifts rows by 1.
 	if frame[1+1*8] != 7 || frame[3+1*8] != 7 || frame[2+2*8] != 7 || frame[3+2*8] != 7 {
 		t.Fatalf("glyph pixels were not rasterized at the baseline: %v", frame)

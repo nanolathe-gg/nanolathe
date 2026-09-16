@@ -205,10 +205,6 @@ func (r *Renderer) Glyphs(g drawlist.Glyphs) {
 	if fnt == nil || fnt.Height == 0 || len(g.Text) == 0 {
 		return
 	}
-	atlas := r.fntAtlasFor(fnt)
-	if atlas == nil || !atlas.entry.ok {
-		return
-	}
 	text := g.Text
 	// Truncate-to-width happens before clipping, exactly as drawText does [07 §7].
 	if int(g.MaxWidth) > 0 {
@@ -217,12 +213,24 @@ func (r *Renderer) Glyphs(g drawlist.Glyphs) {
 			return
 		}
 	}
+	// Whole-string admission uses the baseline origin, not the adjusted glyph
+	// top, and tests one-past text edges against inclusive clip bounds
+	// [03 R-FONT-01 §3].
+	clipX0, clipY0, clipX1, clipY1 := glyphClipBounds(g, r.clipW(), r.clipH())
+	if int(g.X) < clipX0 || int(g.Y) < clipY0 || int(g.X)+measureText(fnt, text) >= clipX1 || int(g.Y)+int(fnt.Height) >= clipY1 {
+		return
+	}
+	atlas := r.fntAtlasFor(fnt)
+	if atlas == nil || !atlas.entry.ok {
+		return
+	}
+	// Once admitted, the signed baseline may overrun the private surface.
+	// Only framebuffer bounds remain as host storage protection.
+	clipX0, clipY0, clipX1, clipY1 = 0, 0, r.clipW(), r.clipH()
 	top := int(g.Y) - baselineDescender(fnt)
 	curX := int(g.X)
 	gh := atlas.height
-	// The run's screen rectangle is its total advance by the font height; the
-	// per-glyph clip below decides the covered pixels inside it.
-	clipX0, clipY0, clipX1, clipY1 := glyphClipBounds(g, r.clipW(), r.clipH())
+	// The scheduler bounds cover the baseline-adjusted pixels.
 	bx0, by0 := maxInt(curX, clipX0), maxInt(top, clipY0)
 	bx1 := minInt(curX+measureText(fnt, text), clipX1)
 	by1 := minInt(top+gh, clipY1)

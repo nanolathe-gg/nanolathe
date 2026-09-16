@@ -487,9 +487,9 @@ func (c *Client) drawFog(cur *frame.Frame) {
 		}
 		c.ensureFogGAF()
 		// The window is the composed surface, which is what the per-operation
-		// clip below measures against; a cell outside it clips to nothing, so
-		// leaving it unbuilt paints the same pixels [03 §3.3].
-		c.fogOps = render.BuildFogOpsWindowInto(c.fogOps, c.fogCache, c.cam, int32(w), int32(h), c.pal, c.ditheredFog)
+		// clip below measures against, expanded by authored fog leaf extents
+		// so an offscreen cell can still paint its overhang [03 R-RR16-A §3].
+		c.fogOps = render.BuildFogOpsWindowWithArtInto(c.fogOps, c.fogCache, c.cam, int32(w), int32(h), c.pal, c.ditheredFog, c.fogGray, c.fogBlack)
 		// The op-list execution — the per-op clip, the three fog fills and the
 		// fog GAF blit — moved to classicSink.Fog; building the ops stays here. The
 		// resolved fog GAF variant families ride the record so an executor that

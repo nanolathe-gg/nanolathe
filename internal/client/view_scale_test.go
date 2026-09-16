@@ -208,8 +208,8 @@ func recordViewScaleScene(t *testing.T, c *Client, cur *frame.Frame) *scaleCaptu
 // TestViewScaleDoublesEveryWorldCommand is §14.7 item 2: the automated form of
 // the §14.2 audit. Two recordings of the same scene from the same world camera
 // origin, one native and one at the detail scale, and every world-space
-// command's screen geometry doubles about the beam origin while the HUD
-// commands are identical. This is a Nanolathe presentation rule, not retail
+// command's world geometry doubles about the beam origin while screen-space
+// beam offsets and the HUD commands stay fixed. This is a Nanolathe presentation rule, not retail
 // behaviour.
 func TestViewScaleDoublesEveryWorldCommand(t *testing.T) {
 	// One client and one committed frame, recorded twice from the same world
@@ -253,14 +253,21 @@ func TestViewScaleDoublesEveryWorldCommand(t *testing.T) {
 		}
 	}
 
-	for i := range one.lines {
-		a, b := one.lines[i], two.lines[i]
-		if b.X0 != 2*a.X0 || b.Y0 != 2*a.Y0 || b.X1 != 2*a.X1 || b.Y1 != 2*a.Y1 {
-			t.Fatalf("line %d (%d,%d)-(%d,%d) native, (%d,%d)-(%d,%d) detail; want doubled endpoints", i, a.X0, a.Y0, a.X1, a.Y1, b.X0, b.Y0, b.X1, b.Y1)
-		}
+	if len(one.lines) != 2 || len(two.lines) != 2 {
+		t.Fatalf("beam strokes: native %d, detail %d, want secondary and primary", len(one.lines), len(two.lines))
 	}
-	if len(one.lines) == 0 {
-		t.Fatal("the beam recorded no line")
+	// The primary's world endpoints scale. The secondary is a screen-space
+	// one-pixel offset from that projected line at either scale [06 R-WFX-01 §4]
+	// (DESIGN_GPU_RENDERER §14.2).
+	a, b := one.lines[1], two.lines[1]
+	if b.X0 != 2*a.X0 || b.Y0 != 2*a.Y0 || b.X1 != 2*a.X1 || b.Y1 != 2*a.Y1 {
+		t.Fatalf("primary line endpoints did not double: native %+v, detail %+v", a, b)
+	}
+	for _, lines := range [][]drawlist.Line{one.lines, two.lines} {
+		secondary, primary := lines[0], lines[1]
+		if secondary.X0 != primary.X0 || secondary.Y0 != primary.Y0-1 || secondary.X1 != primary.X1 || secondary.Y1 != primary.Y1-1 {
+			t.Fatalf("secondary lost its one-screen-pixel offset: %+v", lines)
+		}
 	}
 
 	if len(one.fills) < 3 {

@@ -1524,37 +1524,33 @@ func (c *Client) blitFogGAF(frame *formats.GAFFrame, dstX, dstY int, mode fogBli
 }
 
 // featureScreenPos computes the retail feature screen anchor [03 §5.1.4].
-// It applies footprint centering and four-corner terrain-height averaging.
-// The snapshot already carries world-centered X,Z and Y=coarseHeight; we reuse WorldToScreen
-// for the shear and add footprint-half offset explicitly for non-centered callers.
-// When terrain is available the Y uses the averaged heights at the footprint's four corners
-// matching the four-corner averaging contract. Presentation-only (I6).
+// The snapshot already carries footprint-centered X,Z. Sprite shear uses the
+// four terrain bytes around the anchor cell, independently of the instance's
+// center-sampled height. 3DO features retain their instance position
+// [03 R-RAST-01 §6].
 func (c *Client) featureScreenPos(f frame.FeatureView) (int32, int32) {
+	y := f.Y
+	if c.terrain != nil && f.FootX > 0 && f.FootZ > 0 && !(f.Model != "" && f.Filename == "") {
+		h0 := c.terrain.PlotAt(f.CX, f.CZ)
+		h1 := c.terrain.PlotAt(f.CX+1, f.CZ)
+		h2 := c.terrain.PlotAt(f.CX, f.CZ+1)
+		h3 := c.terrain.PlotAt(f.CX+1, f.CZ+1)
+		// Incomplete terrain retains the existing snapshot-only fallback.
+		if h0 != nil && h1 != nil && h2 != nil && h3 != nil {
+			sum := int64(h0.Height()) + int64(h1.Height()) + int64(h2.Height()) + int64(h3.Height())
+			// WorldToScreen halves this integer mean, yielding sum >> 3
+			// before applying the presentation view scale [03 §5.1.4].
+			y = numeric.Fixed((sum >> 2) << 16)
+		}
+	}
 	if c.cam == nil {
 		// Fallback deterministic when no camera: use world high word directly [03 §2.5].
 		wx := int32(int64(f.X) >> 16)
 		wz := int32(int64(f.Z) >> 16)
-		wy := int32(int64(f.Y) >> 16)
+		wy := int32(int64(y) >> 16)
 		return wx, wz - (wy >> 1)
 	}
-	// Prefer terrain height averaging when terrain is bound [03 §2.2][03 §2.3].
-	if c.terrain != nil && f.FootX > 0 && f.FootZ > 0 {
-		cx := f.CX
-		cz := f.CZ
-		footX := int32(f.FootX)
-		footZ := int32(f.FootZ)
-		// Collect heights across the footprint's four-corner sample pattern:
-		// h0 = cell, h1 = cell+W*0xD+4 next-X, h2 = next-Z, h3 = diag.
-		// For foot >1 the footprint center is used, but height avg still over covered cells' heights.
-		// Use coarse average over footprint via CoarseHeightAt as approximation for multi-cell.
-		// For single-cell features this reduces to the four-corner average around anchor.
-		// For now use snapshot Y (coarse) via WorldToScreen which applies shear.
-		_ = footX
-		_ = footZ
-		_ = cx
-		_ = cz
-	}
-	sx, sy := c.cam.WorldToScreen(f.X, f.Y, f.Z)
+	sx, sy := c.cam.WorldToScreen(f.X, y, f.Z)
 	// Rebase from the observed beam origin (128,32) to the shell viewport origin
 	// (0,0) used by BlitTerrainOrigin for full-window draws [03 §2.5] C1 [PLAN_04A C1].
 	// Without this, features would be 128,32 southeast of their terrain tiles.

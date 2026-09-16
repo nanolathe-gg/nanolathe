@@ -318,7 +318,9 @@ func (c *Client) cachedBodyInputs(draw *presentationrender.UnitDraw) cachedBodyI
 // pose (docs/DESIGN_GPU_RENDERER.md §13.12 "Shadows — contract P4").
 //
 // Established by reading collectShadowPolys and modelShadowGeometry, not
-// assumed. The projection walks draw.Pieces, whose local corners are the piece
+// assumed. The projection admits visible cached pieces, including during
+// construction, while its bounds measure all visible vertices. Their
+// local corners are the piece
 // transforms applied to the model's authored vertices — WorldVertices carry
 // worldPos and shadowLocalVertex subtracts it back off exactly, so the subject's
 // position is not an input at all — scales each corner by the model scale

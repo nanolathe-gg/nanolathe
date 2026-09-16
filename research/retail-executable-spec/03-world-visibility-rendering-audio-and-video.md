@@ -1649,6 +1649,11 @@ all three together; the per-category keys move only their own bit.
 
 ##### 2. The structure-shadow rasterization
 
+**Established (direct-static):** only visible cached pieces enter the shadow
+rasterizer, both during construction and after completion. The body's
+construction override does not apply to this separate pass. Shadow bounds
+still measure every visible piece, including noncached pieces.
+
 The structure shadow is **a second rasterization of the model**, not a reuse of
 the body image. Its projection is the composition path's own narrowing
 ([R-RAST-01 §2]) — the high word of each model-relative 16.16 coordinate, with
@@ -5476,7 +5481,10 @@ rectangle remap used for a fully-current-fogged cell.
 parametrically — endpoints are moved along the line with truncating integer
 division in the fixed order *x0 < left, y0 < top, x0 > right, y0 > bottom, x1 <
 left, y1 < top, x1 > right, y1 > bottom*, rejecting when the line runs away
-from the violated edge or has no extent along that axis — then a second time
+from the violated edge or has no extent along that axis. **Established
+(direct-static):** all eight adjustments use the original endpoint differences
+and direction tests. Moving an endpoint does not recompute the slope for the
+remaining edges. The line is then clipped a second time
 against the surface extent `[0, w−1] × [0, h−1]` with 64-bit products. The
 drawer then takes a vertical run (`|dy| + 1` pixels) when `dx = 0`; otherwise
 orders the endpoints so `x` increases, takes a horizontal run (`dx + 1`
@@ -6638,9 +6646,10 @@ definition’s rendertype byte; all eight cases are established:
 - 0 — line from the current endpoint to the tail endpoint (the beam geometry
   below). Colors are the definition’s primary and secondary color bytes
   remapped through the live GUI-to-display semantic map of §4.3.1; a zero
-  authored secondary byte draws one
-  one-pixel stroke, otherwise two adjacent strokes ordered endpoint-swapped,
-  secondary first and primary on top.
+  authored secondary byte draws one one-pixel stroke. Otherwise both strokes
+  use endpoints ordered along the major axis, with the offset secondary first
+  and the unshifted primary on top; the exact offsets and major-axis tie rule
+  are established in [06 R-WFX-01 §4].
 - 1 — the ground shadow sprite (frame 0 of the `fx` bank's `shadow` entry at
   the record's cached floor height, [R-FX-01 §2]), then the definition’s
   model oriented from the projectile record; the model's child piece is
@@ -9878,17 +9887,6 @@ body — most under `R-<id>` headings — and are not restated here.
   constructor and bounded lifetime contain no initializing write. Observe the
   startup allocation to settle a particular session. The host uses SC18
   zero-initialization with a code-site question [R-FX-01 §4].
-
-- **Implementation reconciliation (Unknown):** the normal-scale CPU model
-  target currently commits pixels using a separate coverage plane, including
-  covered colour index 1. The researched opaque body blit keys out the image's
-  transparent index ([R-RAST-01 §7], “Tinted bodies”). The experimental GPU
-  model path follows that researched keying contract; its comparisons may
-  therefore differ at these pixels. Determine why the CPU coverage path was
-  introduced and reconcile it with the keyed-blit contract before treating
-  this case as a CPU parity oracle. This records an implementation discrepancy,
-  not a revision to the established retail contract. Marked `TODO(question)`
-  at the GPU composition site.
 
 - The unit of the terrain-record word that sizes the composition memory
   cache (read as the map height in 16.16; `n = trunc(v / 2^20) + 1`) ·

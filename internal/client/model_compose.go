@@ -414,10 +414,35 @@ func (c *Client) resolveModelTexture(name string) (texRef, bool) {
 	return ref, ok
 }
 
-// modelExtent measures the composition image from the collected faces: retail
-// walks every visible piece's vertices, tracks the min and max of the projected
-// offsets with the extrema seeded at zero so the box always contains the model
-// origin, then adds a two-pixel margin on every side [R-REN-03A §1].
+// projectedModelExtent measures every visible piece vertex before material
+// dispatch, including selection and unreferenced vertices [03 R-REN-03A §1].
+// Hidden pieces publish no vertices. A shadow uses its own quarter shear.
+func (c *Client) projectedModelExtent(draw *presentationrender.UnitDraw, lane presentationrender.PieceLane, shadow bool) (width, height int, originX, originY int32, visible bool) {
+	var minX, minY, maxX, maxY int32
+	if draw == nil || draw.Model == nil {
+		return
+	}
+	for i := range draw.Pieces {
+		piece := &draw.Pieces[i]
+		if !lane.Includes(piece.DontCache, draw.UnderConstruction) {
+			continue
+		}
+		for _, vertex := range piece.WorldVertices {
+			visible = true
+			x, y, _ := modelLocalVertex(vertex, draw.WorldPos)
+			if shadow {
+				x, y, _ = shadowLocalVertex(vertex, draw.WorldPos)
+			}
+			x, y = c.scaleModelLocal(x, y)
+			minX, minY = min(minX, x), min(minY, y)
+			maxX, maxY = max(maxX, x), max(maxY, y)
+		}
+	}
+	return int(maxX - minX + 2*modelTargetMargin), int(maxY - minY + 2*modelTargetMargin), modelTargetMargin - minX, modelTargetMargin - minY, visible
+}
+
+// modelExtent measures an already projected polygon envelope.
+// Extrema include the origin and carry the composition margin [03 R-REN-03A §1].
 func modelExtent(polys []screenPoly) (width, height int, originX, originY int32) {
 	var minX, minY, maxX, maxY int32 // seeded at the model origin, not at a vertex
 	for i := range polys {
@@ -566,10 +591,10 @@ func (c *Client) composeDirectLiveModel(draw *presentationrender.UnitDraw, selec
 	target := c.borrowModelImage(recW, recH, 0, 0, 0, 0, false, 1)
 	for i := range polys {
 		if polys[i].frame != nil {
-			c.blitTexturedPolyTarget(target, &polys[i], polys[i].frame, nil, id)
+			c.blitTexturedPolyTarget(target, &polys[i], polys[i].frame, id)
 			continue
 		}
-		c.fillPolyTarget(target, &polys[i], polys[i].color, nil, id)
+		c.fillPolyTarget(target, &polys[i], polys[i].color, id)
 	}
 	return composedModel{image: target, raster: target, draw: draw, direct: true, directLane: lane}, true
 }
@@ -596,10 +621,10 @@ func (c *Client) composeDirectDebrisModel(draw *presentationrender.UnitDraw, sel
 	target.blit = camera.ViewScaleNative
 	for i := range polys {
 		if polys[i].frame != nil {
-			c.blitTexturedPolyTarget(target, &polys[i], polys[i].frame, nil, id)
+			c.blitTexturedPolyTarget(target, &polys[i], polys[i].frame, id)
 			continue
 		}
-		c.fillPolyTarget(target, &polys[i], polys[i].color, nil, id)
+		c.fillPolyTarget(target, &polys[i], polys[i].color, id)
 	}
 	return composedModel{image: target, raster: target, draw: draw, direct: true, directLane: presentationrender.PieceLaneAll}, true
 }
@@ -681,20 +706,17 @@ func (c *Client) composeModel(draw *presentationrender.UnitDraw, owner uint8, se
 // [03 R-REN-03A §1][03 R-REN-03A §4]. finalPasses applies waterline and Digger
 // only to the per-frame subject image, never the retained body source.
 func (c *Client) composeModelLane(draw *presentationrender.UnitDraw, owner uint8, selector teamColor, id uint64, kind uint8, reveal *presentationrender.NanoframeReveal, outline uint8, lane presentationrender.PieceLane, finalPasses bool) (composedModel, bool) {
-	all := c.collectDrawPolys(draw, selector, id, kind)
-	if len(all) == 0 {
+	width, height, originX, originY, visible := c.projectedModelExtent(draw, presentationrender.PieceLaneAll, false)
+	if !visible {
 		return composedModel{}, false
 	}
-	// The collector borrows one scratch slice: measure before a lane walk
-	// replaces its contents [03 R-REN-03A §1].
 	anchorX, anchorY := c.modelAnchor(draw)
-	width, height, originX, originY := modelExtent(all)
-	polys := all
-	if lane != presentationrender.PieceLaneAll {
-		polys = c.collectDrawPolysLane(draw, selector, id, kind, lane)
+	polys := c.collectDrawPolysLane(draw, selector, id, kind, lane)
+	if len(polys) == 0 && reveal == nil && lane == presentationrender.PieceLaneAll {
+		return composedModel{}, false
 	}
 	var geometry *drawlist.ModelGeometry
-	if c.recordModelGeometry && len(polys) != 0 {
+	if c.recordModelGeometry {
 		// The outer packet describes native output. An optional doubled body
 		// projection below supplies the GPU resolve; neither packet inherits
 		// pixels from the classic composition.
@@ -727,39 +749,19 @@ func (c *Client) composeModelLane(draw *presentationrender.UnitDraw, owner uint8
 
 	for i := range polys {
 		if polys[i].frame != nil {
-			c.blitTexturedPolyTarget(raster, &polys[i], polys[i].frame, reveal, id)
+			c.blitTexturedPolyTarget(raster, &polys[i], polys[i].frame, id)
 			continue
 		}
-		c.fillPolyTarget(raster, &polys[i], polys[i].color, reveal, id)
+		c.fillPolyTarget(raster, &polys[i], polys[i].color, id)
 	}
 	if scale == 2 {
 		raster.resolveSupersample(target, &c.pal.Alpha)
 	}
-	if finalPasses && reveal != nil {
-		// The nanoframe outline is a pass over the composition image, not an
-		// overdraw on the framebuffer: retail runs the reveal and the outline
-		// over the image it is about to composite from — the unit's own image
-		// after the cached body is copied in, a carried child's own image
-		// before it is composited into the carrier's staging image — so the
-		// outline is key-tested there and the digger erase, the waterline
-		// pass and a carrier's geometry all act on it like any other pixel
-		// [R-COMP-01 §3]. It follows the anti-alias resolve because that is
-		// the image the reveal reads, at 1x.
-		c.outlineModelInto(target, raster, draw, outline)
-	}
-	// The waterline runs before the Digger erase, and both before the blit
-	// [R-WATER-01 §2]. It acts on the image the reveal and the outline have
-	// just written into, so a nanoframe rising under water is tinted like any
-	// other submerged geometry [R-COMP-01 §3].
+	c.revealModelImage(target, draw, reveal, outline)
 	if finalPasses {
-		c.waterlinePass(target, draw, owner, kind)
+		c.finalizeModelImage(target, draw, owner, kind)
 	}
-	if finalPasses && draw.DiggerClip {
-		// A Digger definition raises every key by 75; erasing at or below 125
-		// therefore removes exactly the geometry at or below the model origin,
-		// which is the buried half of a pop-up defence [R-REN-03A §8].
-		target.eraseAtOrBelow(uint8(diggerEraseThreshold))
-	}
+
 	return composedModel{image: target, raster: raster, draw: draw, geometry: geometry}, true
 }
 
@@ -786,11 +788,8 @@ func (c *Client) composeModelLane(draw *presentationrender.UnitDraw, owner uint8
 // no-key-plane present skips the waterline and digger passes outright
 // [R-RAST-01 §4].
 //
-// This runs on the subject's own composition image rather than on a carrier's
-// staging image, which is where the section places it. The two differ only for
-// a carrier: each carried child is tinted at its own depth instead of at the
-// carrier's. The Digger erase beside it already sits the same way, and moving
-// either is a staging-path change, not a waterline one.
+// A carrier runs this once over its completed staging union; a child's own
+// composition defers it to the carrier [03 R-REN-03A §4].
 func (c *Client) waterlinePass(target *modelTarget, draw *presentationrender.UnitDraw, owner, kind uint8) {
 	if c == nil || target == nil || draw == nil || target.height == nil {
 		return
@@ -820,6 +819,14 @@ func (c *Client) revealModelImage(target *modelTarget, draw *presentationrender.
 			continue
 		}
 		color, present := nanoframeVerdict(*reveal, target.storedKey(i), color)
+		if target.trace != nil && i < len(target.winner) {
+			event := target.winner[i]
+			if !present {
+				target.traceRejected(event, RendererReasonNanoframeErase, "nanoframe-erase")
+			} else if event >= 0 {
+				target.trace.events[event].CandidateIndex = color
+			}
+		}
 		target.write(i, color, present)
 	}
 	c.outlineModelInto(target, target, draw, outline)
