@@ -101,23 +101,16 @@ func firstFreeCaptionKey(w *Window, caption string) byte {
 	return 0
 }
 
+// quickKeyTaken compares candidates under the deliberately byte-local fold:
+// the established locale trace changes A..Z only, and extended bytes compare
+// only with themselves [07 R-WGT-01 §3].
 func quickKeyTaken(w *Window, candidate byte) bool {
-	needle := foldQuickKeyASCII(candidate)
+	needle := formats.FoldASCIIByte(candidate)
 	for i := range w.Gadgets {
 		g := w.Gadgets[i]
-		if (g.Kind == KindButton || g.Kind == KindLabel) && g.QuickKey != 0 && foldQuickKeyASCII(g.QuickKey) == needle {
+		if (g.Kind == KindButton || g.Kind == KindLabel) && g.QuickKey != 0 && formats.FoldASCIIByte(g.QuickKey) == needle {
 			return true
 		}
 	}
 	return false
-}
-
-// foldQuickKeyASCII is deliberately byte-local. The established locale trace
-// changes A..Z only; extended bytes compare only with themselves
-// [07 R-WGT-01 §3].
-func foldQuickKeyASCII(v byte) byte {
-	if v >= 'A' && v <= 'Z' {
-		return v + ('a' - 'A')
-	}
-	return v
 }

@@ -314,10 +314,10 @@ func TestNoReverse(t *testing.T) {
 		t.Fatalf("one authored brake step speed=%d, want 32768", s.Speed)
 	}
 	// Also via ClampSpeed helper
-	if got := ClampSpeed(-100, 0, 65536, 20, 10, 0); got < 0 {
+	if got := clampSpeed(-100, 0, 65536, 20, 10, 0); got < 0 {
 		t.Fatalf("ClampSpeed negative target gave negative %d", got)
 	}
-	if got := ClampSpeed(-100, 0, 65536, 20, 10, 0); got != 0 {
+	if got := clampSpeed(-100, 0, 65536, 20, 10, 0); got != 0 {
 		t.Fatalf("ClampSpeed negative target want 0 got %d", got)
 	}
 	// Speed should never go negative even when cap is small and current Speed is high then pitch changes

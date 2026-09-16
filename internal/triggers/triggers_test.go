@@ -1,6 +1,8 @@
 package triggers
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -141,63 +143,34 @@ func TestDefaultTriggers(t *testing.T) {
 	}
 }
 
-func TestParseArgsFormats(t *testing.T) {
-	// Two argument formats: <name>,<int> and <name>,<int>,<int>,<int> [C14][08].
-	typ, args, isFour, err := ParseArgs("CORLAB, 1")
-	if err != nil || typ != "CORLAB" || args[0] != 1 || isFour {
-		t.Fatalf("ParseArgs CORLAB,1: %v %q %v %v", err, typ, args, isFour)
-	}
-	typ, args, isFour, err = ParseArgs("ARMCOM, 1942, 1519, 100")
-	if err != nil || typ != "ARMCOM" || args[0] != 1942 || args[1] != 1519 || args[2] != 100 || !isFour {
-		t.Fatalf("ParseArgs ARMCOM,1942,1519,100: %v %q %v %v", err, typ, args, isFour)
-	}
-	// ANYTYPE wildcard [C14].
-	typ, _, _, err = ParseArgs("ANYTYPE, 5")
-	if err != nil || !IsANYTYPE(typ) {
-		t.Fatalf("ANYTYPE parse failed %v %q", err, typ)
-	}
-	// Single int boundary for Any* [08 "Defeat trigger types"].
-	typ, args, _, err = ParseArgs("4500")
-	if err != nil || typ != "" || args[0] != 4500 {
-		t.Fatalf("single int parse %v %q %v", err, typ, args)
-	}
-	// Mixed case ANYTYPE
-	if !IsANYTYPE("anytype") || !IsANYTYPE("AnYtYpE") {
-		t.Fatalf("IsANYTYPE case-insensitive")
-	}
-	if IsANYTYPE("ARMCOM") {
-		t.Fatalf("IsANYTYPE false positive")
-	}
-}
-
 func TestParseLine(t *testing.T) {
 	// Flag-only
-	tr, err := ParseLine("KillEnemyCommander=1;")
+	tr, err := parseLine("KillEnemyCommander=1;")
 	if err != nil || tr.Kind != KindKillEnemyCommander {
-		t.Fatalf("ParseLine KillEnemyCommander %v %v", err, tr)
+		t.Fatalf("parseLine KillEnemyCommander %v %v", err, tr)
 	}
-	if tr, err = ParseLine("KillEnemyCommander=0;"); err == nil || tr != nil {
+	if tr, err = parseLine("KillEnemyCommander=0;"); err == nil || tr != nil {
 		t.Fatalf("zero flag must not build a record: %v %+v", err, tr)
 	}
 	// Type+count
-	tr, err = ParseLine("KillUnitType=CORLAB, 1")
+	tr, err = parseLine("KillUnitType=CORLAB, 1")
 	if err != nil || tr.Kind != KindKillUnitType || tr.Type != "CORLAB" || tr.Args[0] != 1 {
-		t.Fatalf("ParseLine KillUnitType %v %v %v", err, tr.Type, tr.Args)
+		t.Fatalf("parseLine KillUnitType %v %v %v", err, tr.Type, tr.Args)
 	}
 	// Timer seconds×30 [C17]
-	tr, err = ParseLine("VictoryTimerRunsOut=3600")
+	tr, err = parseLine("VictoryTimerRunsOut=3600")
 	if err != nil || tr.Args[0] != 3600*30 {
 		t.Fatalf("timer %v %v", err, tr)
 	}
-	if tr, err = ParseLine("VictoryTimerRunsOut=0"); err == nil || tr != nil {
+	if tr, err = parseLine("VictoryTimerRunsOut=0"); err == nil || tr != nil {
 		t.Fatalf("zero timer must not build a record: %v %+v", err, tr)
 	}
 	// Boundary single int — stored after arithmetic >>4 [08 "Evaluation"].
-	tr, err = ParseLine("AnyUnitPassesX=4500;")
+	tr, err = parseLine("AnyUnitPassesX=4500;")
 	if err != nil || tr.Kind != KindAnyUnitPassesX || tr.Args[0] != int32(4500)>>4 {
 		t.Fatalf("AnyUnitPassesX %v %v want %d", err, tr, int32(4500)>>4)
 	}
-	if tr, err = ParseLine("AnyUnitPassesX=-1;"); err == nil || tr != nil {
+	if tr, err = parseLine("AnyUnitPassesX=-1;"); err == nil || tr != nil {
 		t.Fatalf("negative boundary must not build a record: %v %+v", err, tr)
 	}
 	for _, value := range []string{"", "nonnumeric", "0x100tail"} {
@@ -209,31 +182,31 @@ func TestParseLine(t *testing.T) {
 		t.Fatalf("authored zero boundary must be present: %+v present=%v", tr, present)
 	}
 	// Radius three ints
-	tr, err = ParseLine("MoveUnitToRadius=ARMCOM, 1942, 1519, 100")
+	tr, err = parseLine("MoveUnitToRadius=ARMCOM, 1942, 1519, 100")
 	if err != nil || tr.Kind != KindMoveUnitToRadius || tr.Type != "ARMCOM" || tr.Args[0] != 1942 || tr.Args[1] != 1519 || tr.Args[2] != 100 {
 		t.Fatalf("MoveUnitToRadius %v %v", err, tr)
 	}
-	tr, err = ParseLine("MoveUnitToRadius=ARMCOM2, 1, 2, 3")
+	tr, err = parseLine("MoveUnitToRadius=ARMCOM2, 1, 2, 3")
 	if err != nil || tr.Type != "ARMCOM" {
 		t.Fatalf("letters-only scanset did not stop before digit: %v %+v", err, tr)
 	}
 	// ANYTYPE in boundary — stored after >>4.
-	tr, err = ParseLine("UnitTypePassesX=ANYTYPE, 6000")
+	tr, err = parseLine("UnitTypePassesX=ANYTYPE, 6000")
 	if err != nil || tr.Type != "" || tr.Args[0] != int32(6000)>>4 {
 		t.Fatalf("ANYTYPE boundary %v %v want %d", err, tr, int32(6000)>>4)
 	}
 	// Name-only records copy the entire authored value, including commas.
-	tr, err = ParseLine("BuildUnitType=ARMSY, 1")
+	tr, err = parseLine("BuildUnitType=ARMSY, 1")
 	if err != nil || tr.Type != "ARMSY, 1" || tr.Args[0] != 0 {
 		t.Fatalf("name-only value %v %+v", err, tr)
 	}
 	// AllUnitsKilledOfType type only
-	tr, err = ParseLine("AllUnitsKilledOfType=ARMGATE")
+	tr, err = parseLine("AllUnitsKilledOfType=ARMGATE")
 	if err != nil || tr.Kind != KindAllUnitsKilledOfType || tr.Type != "ARMGATE" {
 		t.Fatalf("AllUnitsKilledOfType %v %v", err, tr)
 	}
 	// Unknown condition
-	if _, err = ParseLine("UnknownTrigger=1"); err == nil {
+	if _, err = parseLine("UnknownTrigger=1"); err == nil {
 		t.Fatalf("unknown should error")
 	}
 }
@@ -283,4 +256,35 @@ func TestParseConditionScanIntegerFamilies(t *testing.T) {
 	if tr, present = ParseCondition("KillEnemyCommander", "1tail"); !present || tr == nil {
 		t.Fatalf("flag decimal prefix did not build: %+v present=%v", tr, present)
 	}
+}
+
+// parseLine parses a full authored line like "KillUnitType=CORLAB, 1" or
+// "AnyUnitPassesX=4500" into a Trigger, handling the condition name,
+// ANYTYPE wildcard, and seconds×30 for timer kinds [C14][C15][C17].
+func parseLine(line string) (*Trigger, error) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return nil, fmt.Errorf("triggers: empty line")
+	}
+	// Split at first '=' as TDF assignment would [08 "Victory and defeat triggers"].
+	eq := strings.IndexByte(line, '=')
+	var key, rest string
+	if eq >= 0 {
+		key = strings.TrimSpace(line[:eq])
+		rest = strings.TrimSpace(line[eq+1:])
+		// Strip trailing ';' as TDF does [fmt tdf].
+		rest = strings.TrimSuffix(rest, ";")
+		rest = strings.TrimSpace(rest)
+	} else {
+		// No '=', treat whole line as key with no args (flag-only)
+		key = strings.TrimSpace(line)
+	}
+	if _, ok := KindByName[strings.ToLower(key)]; !ok {
+		return nil, fmt.Errorf("triggers: unknown condition %q", key)
+	}
+	t, present := ParseCondition(key, rest)
+	if !present {
+		return nil, fmt.Errorf("triggers: condition %q is not present for value %q", key, rest)
+	}
+	return t, nil
 }

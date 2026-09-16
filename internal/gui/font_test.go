@@ -10,7 +10,7 @@ import "testing"
 // the walk counts.
 func TestFontRecordCountsKindSevenFromZero(t *testing.T) {
 	fs := testFS(t, "testdata")
-	w, err := Load(fs, "fonts.gui")
+	w, err := LoadWithTranslation(fs, "fonts.gui", nil)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestFontRecordCountsKindSevenFromZero(t *testing.T) {
 
 func TestFontLoadsRecordFileOnceAndIgnoresMissing(t *testing.T) {
 	fs := testFS(t, "testdata")
-	w, err := Load(fs, "fonts.gui")
+	w, err := LoadWithTranslation(fs, "fonts.gui", nil)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestFontRecordWithoutRecordsIsCommonFont(t *testing.T) {
 	// whose gadgets still carry font numbers — selects the common font for
 	// every number, including 0 [03 R-FONT-01 §5].
 	fs := testFS(t, "testdata")
-	w, err := Load(fs, "defaults.gui")
+	w, err := LoadWithTranslation(fs, "defaults.gui", nil)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}

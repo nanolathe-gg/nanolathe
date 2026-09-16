@@ -70,7 +70,6 @@ package movement
 
 import (
 	"slices"
-	"sort"
 
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
@@ -99,16 +98,6 @@ const worldUnitsPerCell int64 = 16 * 65536 // 1048576 [03 §2.1]
 // Post-merge unification may replace worldUnitsPerCell with world.CellToWorld
 // helpers once movement imports world; the constant stays until then.
 const blockedBand int32 = 0x7FFFF // [04 §8.2] C24 literal ± band
-
-// floorDiv returns floor(a/b) with sign correction [I3][03 §2.1] — retail's
-// arithmetic shift with sign correction, not trunc-toward-zero division.
-func floorDiv(a, b int64) int64 {
-	q := a / b
-	if a%b != 0 && (a < 0) != (b < 0) {
-		q--
-	}
-	return q
-}
 
 // Cell is a lattice coordinate on the TNT attribute-cell grid [04 §7.1]. Movement
 // occupancy is keyed by Cell [04 §8.2] C22; one cell = 16 map pixels.
@@ -1613,13 +1602,13 @@ func (s *CollisionState) HalfBias() (int32, int32) {
 // QuantizedAnchor quantizes a world X/Z proposal into its footprint anchor
 // using signed arithmetic and the instance's packed half-cell bias [04 §8.2] C23.
 //
-// anchor = floorDiv(proposed + halfCell - footprint*halfCell, cell)
+// anchor = numeric.FloorDiv(proposed + halfCell - footprint*halfCell, cell)
 // [04 R-COLL-01 §1][03 §2.1]. HalfBias carries the additive
 // halfCell-footprint*halfCell term.
 func QuantizedAnchor(proposedX, proposedZ int32, halfBiasX, halfBiasZ int32) Cell { // [04 §8.2] C23
 	return Cell{
-		X: int32(floorDiv(int64(proposedX)+int64(halfBiasX), worldUnitsPerCell)),
-		Z: int32(floorDiv(int64(proposedZ)+int64(halfBiasZ), worldUnitsPerCell)),
+		X: int32(numeric.FloorDiv(int64(proposedX)+int64(halfBiasX), worldUnitsPerCell)),
+		Z: int32(numeric.FloorDiv(int64(proposedZ)+int64(halfBiasZ), worldUnitsPerCell)),
 	}
 }
 
@@ -1849,39 +1838,6 @@ func (s *CollisionState) CommitOne(grid *OccupancyGrid, proposedMode uint8, perC
 	// success [04 §8.2] C22 C25
 	s.CommitSuccess(propAnchor, proposedMode&0x3, propX, propY, propZ, grid)
 	return false, false
-}
-
-// CommitSweep commits a slice of movers synchronously in deterministic slot order
-// [04 §8.2] C22 I1. It sorts states by ID ascending (pool slot asc) and runs
-// CommitOne for each, so claim-first blocks later movers, vacated cells are
-// reusable in same sweep, and head-on swaps block [04 §8.2] C22. One unit's
-// clear/commit/stamp finishes before the next slot [04 §8.2] C22.
-//
-// perCellFactory and aggregateFactory are injected per-mover predicates so
-// movement remains profile-independent per plan (path profile-independent
-// passability reaches you as injected funcs). For occupancy tests, perCell
-// should check grid.CanOccupy or grid.IsOccupied.
-func CommitSweep(states []*CollisionState, grid *OccupancyGrid, perCellFactory func(*CollisionState) func(Cell) bool, aggregateFactory func(*CollisionState) func() bool) {
-	if len(states) == 0 {
-		return
-	}
-	// deterministic iteration: slot ascending [I1][01 §6.2]
-	sort.Slice(states, func(i, j int) bool { return states[i].ID < states[j].ID })
-	for _, s := range states {
-		if s == nil {
-			continue
-		}
-		var perCell func(Cell) bool
-		var aggregate func() bool
-		if perCellFactory != nil {
-			perCell = perCellFactory(s)
-		}
-		if aggregateFactory != nil {
-			aggregate = aggregateFactory(s)
-		}
-		// proposedMode is current mode unless caller injects variation; use s.Mode
-		s.CommitOne(grid, s.Mode, perCell, aggregate)
-	}
 }
 
 // --- the overlap protocol's unit window [04 R-COLL-01 §4] ---

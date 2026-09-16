@@ -51,7 +51,7 @@ func testFS(t *testing.T, dir string) vfs.FSOps {
 
 func TestLoadAllKinds(t *testing.T) {
 	fs := testFS(t, "testdata")
-	w, err := Load(fs, "all_kinds.gui")
+	w, err := LoadWithTranslation(fs, "all_kinds.gui", nil)
 	if err != nil {
 		t.Fatalf("Load all_kinds: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestLoadAllKinds(t *testing.T) {
 		}
 	}
 	// Defaults: check that gadgets with missing keys default to 0/empty
-	w2, err := Load(testFS(t, "testdata"), "defaults.gui")
+	w2, err := LoadWithTranslation(testFS(t, "testdata"), "defaults.gui", nil)
 	if err != nil {
 		t.Fatalf("Load defaults: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestLoadAllKinds(t *testing.T) {
 
 func TestSentinelCentering(t *testing.T) {
 	fs := testFS(t, "testdata")
-	w, err := Load(fs, "all_kinds.gui")
+	w, err := LoadWithTranslation(fs, "all_kinds.gui", nil)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestMaxCharsCappedAt127(t *testing.T) {
 	// [07 R-WGT-01 §11][07 R-WGT-01 §12]. The name field is 16 bytes for every
 	// kind and is retained in full here for diagnostics.
 	fs := testFS(t, "testdata")
-	w, err := Load(fs, "all_kinds.gui")
+	w, err := LoadWithTranslation(fs, "all_kinds.gui", nil)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestFileSlotArms(t *testing.T) {
 	// Kind 7 loads `<font directory>\<filename>.FNT`; kind 8 loads the
 	// authored filename verbatim into the same slot [07 R-WGT-01 §12].
 	fs := testFS(t, "testdata")
-	w, err := Load(fs, "all_kinds.gui")
+	w, err := LoadWithTranslation(fs, "all_kinds.gui", nil)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestLabelArmInertOnEmptyLink(t *testing.T) {
 	// which is why plain caption labels never react
 	// [07 R-WGT-01 §12][07 R-WGT-01 §7].
 	fs := testFS(t, "testdata")
-	w, err := Load(fs, "all_kinds.gui")
+	w, err := LoadWithTranslation(fs, "all_kinds.gui", nil)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -278,7 +278,7 @@ func TestLabelArmInertOnEmptyLink(t *testing.T) {
 
 func TestStoredWidthsHonored(t *testing.T) {
 	fs := testFS(t, "testdata")
-	w, err := Load(fs, "all_kinds.gui")
+	w, err := LoadWithTranslation(fs, "all_kinds.gui", nil)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -293,7 +293,7 @@ func TestStoredWidthsHonored(t *testing.T) {
 
 func TestScrollbarAssociation(t *testing.T) {
 	fs := testFS(t, "testdata")
-	w, err := Load(fs, "all_kinds.gui")
+	w, err := LoadWithTranslation(fs, "all_kinds.gui", nil)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -401,7 +401,7 @@ func TestLoadDoesNotSynthesizeSliderChildren(t *testing.T) {
 	// The kind-4 arm needs SLIDERS metrics; the loader holds no GAF handle, so
 	// it leaves the authored record alone [07 R-WGT-01 §5].
 	fs := testFS(t, "testdata")
-	w, err := Load(fs, "all_kinds.gui")
+	w, err := LoadWithTranslation(fs, "all_kinds.gui", nil)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -419,7 +419,7 @@ func TestLoadDoesNotSynthesizeSliderChildren(t *testing.T) {
 
 func TestArtResolutionOrder(t *testing.T) {
 	fs := testFS(t, "testdata")
-	w, err := Load(fs, "art_resolution.gui")
+	w, err := LoadWithTranslation(fs, "art_resolution.gui", nil)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -461,7 +461,7 @@ func TestArtResolutionOrder(t *testing.T) {
 	}
 	// The side-specific interface GAF is the middle link between a gadget's
 	// own entry and the built-in fallback [07 §4], mirroring the file order
-	// cmd/nanolathe's gadgetArtEntry/modalGadgetFrame walk (page -> side
+	// cmd/nanolathe's gadgetArtEntry/modalGadgetFrameState walk (page -> side
 	// intGAF -> common). Passing a side handle inserts it in that slot.
 	for _, g := range w.Gadgets {
 		if g.Name == "OwnArtButton" {
@@ -475,7 +475,7 @@ func TestArtResolutionOrder(t *testing.T) {
 
 func TestHitTestHoversGreyedButOnlyUngreyedFires(t *testing.T) {
 	fs := testFS(t, "testdata")
-	w, err := Load(fs, "all_kinds.gui")
+	w, err := LoadWithTranslation(fs, "all_kinds.gui", nil)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -545,7 +545,7 @@ func TestRealGUIsAssetGuarded(t *testing.T) {
 			continue
 		}
 		logical := "guis/" + e.Name
-		w, err := Load(fs, logical)
+		w, err := LoadWithTranslation(fs, logical, nil)
 		if err != nil {
 			t.Fatalf("Load %s: %v", logical, err)
 		}
@@ -580,7 +580,7 @@ func TestLoadScrollbarThickSignExtendsWord(t *testing.T) {
 		t.Run(tc.authored, func(t *testing.T) {
 			panel := fmt.Sprintf(`[HEADER] { [COMMON] { id=0; width=640; height=480; } }
 [BAR] { [COMMON] { id=4; } thick=%s; }`, tc.authored)
-			window, err := Load(guiRecordStoreFS(t, panel), "panel.gui")
+			window, err := LoadWithTranslation(guiRecordStoreFS(t, panel), "panel.gui", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -607,7 +607,7 @@ func TestLoadQuickKeyLetterOrDecimalPrefix(t *testing.T) {
 		t.Run(tc.authored, func(t *testing.T) {
 			panel := fmt.Sprintf(`[HEADER] { [COMMON] { id=0; width=640; height=480; } }
 [BUTTON] { [COMMON] { id=1; } quickkey=%s; }`, tc.authored)
-			window, err := Load(guiRecordStoreFS(t, panel), "panel.gui")
+			window, err := LoadWithTranslation(guiRecordStoreFS(t, panel), "panel.gui", nil)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -213,8 +213,8 @@ func (r *Renderer) Fog(fg drawlist.Fog) {
 		k = 1
 	}
 	sx0, sy0, sx1, sy1 := r.sched.txRect(int(region.x0), int(region.y0), int(region.x1), int(region.y1))
-	sx0, sy0 = maxInt(sx0, 0), maxInt(sy0, 0)
-	sx1, sy1 = minInt(sx1, r.w), minInt(sy1, r.h)
+	sx0, sy0 = max(sx0, 0), max(sy0, 0)
+	sx1, sy1 = min(sx1, r.w), min(sy1, r.h)
 	ox, oy := r.sched.txx(0), r.sched.txy(0)
 	worldOn := r.sched.worldOn
 	r.sched.worldOn = false
@@ -309,10 +309,10 @@ func fogRegionFor(ops []render.FogOp, w, h int32, scale camera.ViewScale) fogReg
 			minAX, maxAX, minAY, maxAY = x0, x0, y0, y0
 			continue
 		}
-		minRawX, maxRawX = minInt32(minRawX, rawX), maxInt32(maxRawX, rawX)
-		minRawY, maxRawY = minInt32(minRawY, rawY), maxInt32(maxRawY, rawY)
-		minAX, maxAX = minInt32(minAX, x0), maxInt32(maxAX, x0)
-		minAY, maxAY = minInt32(minAY, y0), maxInt32(maxAY, y0)
+		minRawX, maxRawX = min(minRawX, rawX), max(maxRawX, rawX)
+		minRawY, maxRawY = min(minRawY, rawY), max(maxRawY, rawY)
+		minAX, maxAX = min(minAX, x0), max(maxAX, x0)
+		minAY, maxAY = min(minAY, y0), max(maxAY, y0)
 	}
 	if !out.ok {
 		return out
@@ -320,10 +320,10 @@ func fogRegionFor(ops []render.FogOp, w, h int32, scale camera.ViewScale) fogReg
 	out.originX, out.originY = minRawX, minRawY
 	out.cols = int((maxRawX-minRawX)/cell) + 1
 	out.rows = int((maxRawY-minRawY)/cell) + 1
-	out.x0 = maxInt32(minAX, 0)
-	out.y0 = maxInt32(minAY, 0)
-	out.x1 = minInt32(maxAX+tile, w)
-	out.y1 = minInt32(maxAY+tile, h)
+	out.x0 = max(minAX, 0)
+	out.y0 = max(minAY, 0)
+	out.x1 = min(maxAX+tile, w)
+	out.y1 = min(maxAY+tile, h)
 	if out.x0 >= out.x1 || out.y0 >= out.y1 {
 		out.ok = false
 	}
@@ -461,7 +461,7 @@ func (f *fogPass) slotFor(family int, op *render.FogOp) (int, bool) {
 // range, never smaller than the image already allocated, so the texture grows
 // with the visible range but is not recreated when it shrinks.
 func (f *fogPass) gridImageSize(region fogRegion) (int, int) {
-	return maxInt(region.cols, f.gridW), maxInt(region.rows, f.gridH)
+	return max(region.cols, f.gridW), max(region.rows, f.gridH)
 }
 
 // uploadGrid writes the encoded grid into its texture, growing it when the
@@ -645,18 +645,4 @@ func writeFogAtlasTile(buf []byte, atlasW, tile, row, col, ox, oy int, fr *forma
 			}
 		}
 	}
-}
-
-func minInt32(a, b int32) int32 {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func maxInt32(a, b int32) int32 {
-	if a > b {
-		return a
-	}
-	return b
 }

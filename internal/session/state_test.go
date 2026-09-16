@@ -129,14 +129,14 @@ func TestGametypeRouting(t *testing.T) {
 	if _, ok := StateForGametype(3); ok {
 		t.Fatalf("StateForGametype(3) should be invalid")
 	}
-	s := New()
+	s := newBareSession()
 	if err := s.SelectForGametype(GametypeMultiplayer); err != nil {
 		t.Fatalf("SelectForGametype(2) error: %v", err)
 	}
 	if s.State != StateLoading {
 		t.Fatalf("SelectForGametype(2) state = %v want %v", s.State, StateLoading)
 	}
-	s2 := New()
+	s2 := newBareSession()
 	if err := s2.SelectForGametype(GametypeCampaign); err != nil {
 		t.Fatalf("SelectForGametype(1) error: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestGametypeRouting(t *testing.T) {
 		t.Fatalf("after 4->5 transition, state should be 5, got %v", s2.State)
 	}
 	// Invalid gametype via Session.
-	s3 := New()
+	s3 := newBareSession()
 	if err := s3.SelectForGametype(99); err == nil {
 		t.Fatalf("SelectForGametype invalid should error")
 	}
@@ -165,7 +165,7 @@ func TestAdmissionMasks(t *testing.T) {
 	// other than 5 and 6; bit1 admits 5; bit2 admits 6 [08 "Admission masks"].
 	// Mask matrix over all states × bits.
 	for s := State(0); s <= StatePostBattle; s++ {
-		mask := AdmissionMaskForState(s)
+		mask := admissionMaskForState(s)
 		var want uint8
 		switch s {
 		case StateLoading:
@@ -176,66 +176,100 @@ func TestAdmissionMasks(t *testing.T) {
 			want = MaskOther
 		}
 		if mask != want {
-			t.Fatalf("AdmissionMaskForState(%v) = %d want %d", s, mask, want)
+			t.Fatalf("admissionMaskForState(%v) = %d want %d", s, mask, want)
 		}
 	}
 	// bit0 alone
 	for s := State(0); s <= StatePostBattle; s++ {
-		admitted := IsAdmitted(s, MaskOther)
+		admitted := isAdmitted(s, MaskOther)
 		shouldAdmit := s != StateLoading && s != StateBattle
 		if admitted != shouldAdmit {
-			t.Fatalf("IsAdmitted(%v, MaskOther=1) = %v want %v", s, admitted, shouldAdmit)
+			t.Fatalf("isAdmitted(%v, MaskOther=1) = %v want %v", s, admitted, shouldAdmit)
 		}
 	}
 	// bit1 alone admits only state 5
 	for s := State(0); s <= StatePostBattle; s++ {
-		admitted := IsAdmitted(s, MaskLoading)
+		admitted := isAdmitted(s, MaskLoading)
 		shouldAdmit := s == StateLoading
 		if admitted != shouldAdmit {
-			t.Fatalf("IsAdmitted(%v, MaskLoading=2) = %v want %v", s, admitted, shouldAdmit)
+			t.Fatalf("isAdmitted(%v, MaskLoading=2) = %v want %v", s, admitted, shouldAdmit)
 		}
 	}
 	// bit2 alone admits only state 6
 	for s := State(0); s <= StatePostBattle; s++ {
-		admitted := IsAdmitted(s, MaskBattle)
+		admitted := isAdmitted(s, MaskBattle)
 		shouldAdmit := s == StateBattle
 		if admitted != shouldAdmit {
-			t.Fatalf("IsAdmitted(%v, MaskBattle=4) = %v want %v", s, admitted, shouldAdmit)
+			t.Fatalf("isAdmitted(%v, MaskBattle=4) = %v want %v", s, admitted, shouldAdmit)
 		}
 	}
 	// Combinations
-	if !IsAdmitted(StateLoading, MaskOther|MaskLoading) {
+	if !isAdmitted(StateLoading, MaskOther|MaskLoading) {
 		t.Fatalf("state5 should be admitted by mask 3")
 	}
-	if IsAdmitted(StateBattle, MaskOther|MaskLoading) {
+	if isAdmitted(StateBattle, MaskOther|MaskLoading) {
 		t.Fatalf("state6 should NOT be admitted by mask 3")
 	}
-	if !IsAdmitted(StateBattle, MaskOther|MaskBattle) {
+	if !isAdmitted(StateBattle, MaskOther|MaskBattle) {
 		t.Fatalf("state6 should be admitted by mask 5")
 	}
-	if IsAdmitted(StateLoading, MaskOther|MaskBattle) {
+	if isAdmitted(StateLoading, MaskOther|MaskBattle) {
 		t.Fatalf("state5 should NOT be admitted by mask 5")
 	}
 	// mask 7 admits all
 	for s := State(0); s <= StatePostBattle; s++ {
-		if !IsAdmitted(s, 7) {
+		if !isAdmitted(s, 7) {
 			t.Fatalf("mask 7 should admit %v", s)
 		}
 	}
 	// mask 0 admits none
 	for s := State(0); s <= StatePostBattle; s++ {
-		if IsAdmitted(s, 0) {
+		if isAdmitted(s, 0) {
 			t.Fatalf("mask 0 should admit none, but admitted %v", s)
 		}
 	}
 	// State 3 present and unreachable still respects mask: it is MaskOther.
-	if AdmissionMaskForState(StateNetworkPreload) != MaskOther {
+	if admissionMaskForState(StateNetworkPreload) != MaskOther {
 		t.Fatalf("state3 should be MaskOther")
 	}
-	if !IsAdmitted(StateNetworkPreload, MaskOther) {
+	if !isAdmitted(StateNetworkPreload, MaskOther) {
 		t.Fatalf("state3 should be admitted by bit0")
 	}
-	if IsAdmitted(StateNetworkPreload, MaskLoading) || IsAdmitted(StateNetworkPreload, MaskBattle) {
+	if isAdmitted(StateNetworkPreload, MaskLoading) || isAdmitted(StateNetworkPreload, MaskBattle) {
 		t.Fatalf("state3 should NOT be admitted by bit1 or bit2 alone")
 	}
+}
+
+// The packet admission rule and the bare constructor below have no shipped
+// caller: no packet path consumes the three-bit mask [08 "Admission masks"],
+// and production builds sessions through the skirmish and mission
+// constructors. They live here with the state-machine test that pins them.
+
+// admissionMaskForState returns the single bit that admits the given state
+// per [08 "Admission masks"] C4: bit0 admits states other than 5 and 6, bit1
+// admits state 5, bit2 admits state 6.
+func admissionMaskForState(s State) uint8 {
+	switch s {
+	case StateLoading:
+		return MaskLoading
+	case StateBattle:
+		return MaskBattle
+	default:
+		return MaskOther
+	}
+}
+
+// isAdmitted reports whether the given packet admission mask admits the
+// session state [08 "Admission masks"] C4.
+func isAdmitted(s State, mask uint8) bool {
+	return mask&admissionMaskForState(s) != 0
+}
+
+// newBareSession creates a session in teardown state 0. Production composes a
+// session through NewSkirmishWithProgress or NewMissionWithEntryOptions; only
+// the state-machine tests need a bare one.
+func newBareSession() *Session {
+	s := &Session{State: StateTeardownA}
+	s.ensurePublicationState()
+	return s
 }

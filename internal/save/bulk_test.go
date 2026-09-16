@@ -27,12 +27,16 @@ func TestBulkUnitBoxRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenBytes: %v", err)
 	}
-	if !IsUnitsLoadable(bank) {
-		t.Fatalf("units should be loadable Version 0x11")
+	if v, _, ok := ReadUnitsHeader(bank); !ok || v != UnitsVersionRetail {
+		t.Fatalf("units should be loadable Version 0x11, got version %d present %v", v, ok)
 	}
-	got, ok := ReadUnitBox(bank, 0)
+	ac0, ok := bank.Account(UnitsAccount)
 	if !ok {
-		t.Fatalf("ReadUnitBox missing")
+		t.Fatalf("Units account missing")
+	}
+	got, ok := ac0.BoxData("", 0)
+	if !ok || !ValidateUnitBoxSize(len(got)) {
+		t.Fatalf("unit box 0 missing or not an established length: present=%v size=%d", ok, len(got))
 	}
 	if !bytes.Equal(got, payload) {
 		t.Fatalf("unit box byte-exact mismatch")
@@ -76,14 +80,14 @@ func TestBulkVersionGate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenBytes: %v", err)
 	}
-	if IsUnitsLoadable(bank) {
-		t.Fatalf("Version 0x10 should not be loadable [P1-13 §3.4]")
+	if v, _, ok := ReadUnitsHeader(bank); !ok || v == UnitsVersionRetail {
+		t.Fatalf("Version 0x10 should not be loadable [P1-13 §3.4], got %d present %v", v, ok)
 	}
 	// Also test non-transactional: Players still loadable even when Units skipped.
 	// Build bank with Players and bad Units.
 	b2 := NewBuilder()
 	clk := &clock.State{Requested: 10, Active: 10, GlobalTick: 100}
-	WriteGameTime(b2, clk)
+	WriteGameTime(b2, clk.SaveBox())
 	ac2 := b2.Add(UnitsAccount)
 	ac2.SetInt("Version", 0x10)
 	ac2.SetInt("Number of Units", 1)
@@ -93,8 +97,8 @@ func TestBulkVersionGate(t *testing.T) {
 	if _, ok := ReadGameTime(bank2); !ok {
 		t.Fatalf("GameTime should still be readable when Units Version wrong [P1-13 §7]")
 	}
-	if IsUnitsLoadable(bank2) {
-		t.Fatalf("should still be not loadable")
+	if v, _, ok := ReadUnitsHeader(bank2); !ok || v == UnitsVersionRetail {
+		t.Fatalf("should still be not loadable, got %d present %v", v, ok)
 	}
 }
 
@@ -103,13 +107,15 @@ func TestBulkSchedulerPersistence(t *testing.T) {
 	clk := &clock.State{Requested: 10, Active: 10, GlobalTick: 4242}
 	clk.AdvanceSP(3)
 	b := NewBuilder()
-	WriteGameTime(b, clk)
+	WriteGameTime(b, clk.SaveBox())
 	payload := b.Bytes()
 	bank, _ := OpenBytes(payload)
-	restored, ok := ReadGameTime(bank)
+	box, ok := ReadGameTime(bank)
 	if !ok {
 		t.Fatalf("ReadGameTime missing")
 	}
+	var restored clock.State
+	restored.LoadBox(box)
 	if restored.GlobalTick != clk.GlobalTick {
 		t.Fatalf("scheduler GlobalTick %d want %d [P1-13 §4]", restored.GlobalTick, clk.GlobalTick)
 	}
@@ -121,8 +127,9 @@ func TestBulkSchedulerPersistence(t *testing.T) {
 	if _, ok := ReadGameTime(bank2); ok {
 		t.Fatalf("short GameTime should fail [P1-13 §7]")
 	}
-	if slots := ReadAllPlayerSlots(bank2); len(slots) != 0 {
-		t.Fatalf("without GameTime, Player slots should be zero [P1-13 §7]")
+	var short BattleImage
+	if err := decodePlayers(bank2, &short); err == nil || len(short.Players) != 0 {
+		t.Fatalf("without a 28-byte GameTime, no Player slot may load [P1-13 §7]: err=%v slots=%d", err, len(short.Players))
 	}
 }
 
@@ -200,16 +207,21 @@ func TestMeteorScalarsOrderAndPresence(t *testing.T) {
 			t.Fatalf("item %d = (%q,%d), want (%q,%d)", i, ac.Ints[i].Name, ac.Ints[i].Value, name, i+1)
 		}
 	}
-	if got, ok := ReadMeteorScalars(bank); !ok || got != want {
-		t.Fatalf("ReadMeteorScalars = (%+v,%v), want (%+v,true)", got, ok, want)
+	var got MeteorScalars
+	if err := decodeMeteor(bank, &got); err != nil || got != want {
+		t.Fatalf("decodeMeteor = (%+v,%v), want (%+v,nil)", got, err, want)
 	}
+	// A partial account receives no guessed defaults: the items it does not
+	// carry stay zero, which disables and deactivates the scheduler
+	// [08 R-SAVE-02 §12].
 	partial := NewBuilder()
 	partial.Add(MeteorAccount).SetInt("Enabled", 1)
 	partialBank, err := OpenBytes(partial.Bytes())
 	if err != nil {
 		t.Fatalf("OpenBytes partial: %v", err)
 	}
-	if _, ok := ReadMeteorScalars(partialBank); ok {
-		t.Fatalf("partial Meteor account must not receive guessed defaults")
+	var gotPartial MeteorScalars
+	if err := decodeMeteor(partialBank, &gotPartial); err != nil || gotPartial != (MeteorScalars{Enabled: 1}) {
+		t.Fatalf("partial Meteor account = (%+v,%v), want only Enabled set", gotPartial, err)
 	}
 }

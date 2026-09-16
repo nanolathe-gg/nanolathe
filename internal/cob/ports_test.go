@@ -228,32 +228,6 @@ func (r *recordSink) EmitSFX(piece int, sfxType int32, kind SFXKind) {
 	}{piece, sfxType, kind})
 }
 
-func TestEmitSFXDispatchVisibilityGated(t *testing.T) {
-	// Presentation-only, visibility-gated [GAP T15] C19: no sink call when not visible.
-	sink := &recordSink{}
-	if DispatchSFX(sink, 1, 0, false) {
-		t.Fatalf("DispatchSFX not visible should return false [GAP T15] C19")
-	}
-	if len(sink.calls) != 0 {
-		t.Fatalf("sink called when not visible")
-	}
-	// Visible vector type should dispatch
-	if !DispatchSFX(sink, 2, 3, true) {
-		t.Fatalf("DispatchSFX visible vector should return true")
-	}
-	if len(sink.calls) != 1 || sink.calls[0].kind != SFXVector {
-		t.Fatalf("sink calls %v want 1 vector", sink.calls)
-	}
-	// Ignored should not dispatch even when visible
-	sink2 := &recordSink{}
-	if DispatchSFX(sink2, 0, 0x104, true) {
-		t.Fatalf("ignored type should return false [GAP T15] C19")
-	}
-	if len(sink2.calls) != 0 {
-		t.Fatalf("ignored type called sink")
-	}
-}
-
 func TestEmitSFXVMIntegration(t *testing.T) {
 	// VM emit-sfx opcode should go through ClassifySFX and visibility gate [GAP T15] C19 [04 §4.3].
 	// Program: push effect 0 (vector), emit-sfx from piece 0, sleep to yield
@@ -426,7 +400,7 @@ func TestC26OrderingSubtractBeforeCallback(t *testing.T) {
 
 func TestC26PercentageClampBounds(t *testing.T) {
 	// TakeDamage percent clamp(health*100/maxHealth,0,100) unsigned division [04 §5.1] C26
-	if got := ComputeTakeDamagePercent(200, 100); got != 100 {
+	if got := TakeDamagePercent(200, 100); got != 100 {
 		t.Fatalf("clamp high got %d want 100", got)
 	}
 	// CORRECTION (AU-7): a NEGATIVE health does not clamp to 0 here. The division
@@ -436,13 +410,13 @@ func TestC26PercentageClampBounds(t *testing.T) {
 	// unsigned quotient below 2^31 and is kept only for fidelity". The old
 	// expectation of 0 came from a signed 64-bit division, which is not the
 	// traced form [04 §5.1][04 R-COB-03 §2].
-	if got := ComputeTakeDamagePercent(-10, 100); got != 100 {
+	if got := TakeDamagePercent(-10, 100); got != 100 {
 		t.Fatalf("negative health through the clamped form got %d want 100: the unsigned dividend saturates the upper bound, it does not underflow to zero [04 §5.1]", got)
 	}
-	if got := ComputeTakeDamagePercent(50, 100); got != 50 {
+	if got := TakeDamagePercent(50, 100); got != 50 {
 		t.Fatalf("50/100 got %d want 50", got)
 	}
-	if got := ComputeTakeDamagePercent(0, 100); got != 0 {
+	if got := TakeDamagePercent(0, 100); got != 0 {
 		t.Fatalf("zero got %d want 0", got)
 	}
 	// ClampedHealthPercent is the same helper under its own name; engine port 4

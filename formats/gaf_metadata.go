@@ -165,12 +165,7 @@ func (g *GAFMetadata) Find(name string) (*GAFMetadataEntry, bool) {
 	if g == nil {
 		return nil, false
 	}
-	for i := range g.Entries {
-		if gafASCIIEqual(g.Entries[i].Name, name) {
-			return &g.Entries[i], true
-		}
-	}
-	return nil, false
+	return findByFoldedName(g.Entries, name, func(e *GAFMetadataEntry) string { return e.Name })
 }
 
 type gafMetadataBudget struct {

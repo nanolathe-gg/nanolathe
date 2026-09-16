@@ -91,10 +91,6 @@ func TestSchedulerRouteSteerArrival(t *testing.T) {
 	if route.Count > 20 {
 		t.Fatalf("route count %d >20 [04 §7.3] C14", route.Count)
 	}
-	enc := EncodeRoute(route)
-	if len(enc) > 13 {
-		t.Fatalf("encLen %d >13 [04 §7.3] C16", len(enc))
-	}
 	if route.Count == 0 {
 		t.Fatalf("route empty")
 	}
@@ -139,13 +135,6 @@ func TestSchedulerRouteSteerArrival(t *testing.T) {
 	if dxC*dxC+dzC*dzC > 36 { // 6 cells tolerance
 		t.Fatalf("arrival failed: mover cell %v goal %v dxC %d dzC %d world dx %d dz %d", moverCellFinal, goalCell, dxC, dzC, dx, dz)
 	}
-	// Also check that after arrival, encoded save form still ≤13
-	if r := handleRow(system.Routes, h); r != nil {
-		enc2 := EncodeRoute(r)
-		if len(enc2) > 13 {
-			t.Fatalf("final encLen %d >13", len(enc2))
-		}
-	}
 }
 
 // TestIntegrateDeterminism ensures two runs with same synthetic terrain and same
@@ -183,7 +172,7 @@ func TestIntegrateDeterminism(t *testing.T) {
 	}
 }
 
-// TestRouteCaps ensures Publish clamping to 20 and EncodeRoute to 3 pairs [04 §7.3] C14 C16.
+// TestRouteCapsInIntegrate ensures Publish clamps to 20 [04 §7.3] C14.
 func TestRouteCapsInIntegrate(t *testing.T) {
 	var r Route
 	pts := make([]Point, 30)
@@ -194,22 +183,11 @@ func TestRouteCapsInIntegrate(t *testing.T) {
 	if r.Count != 20 {
 		t.Fatalf("publish clamp want 20 got %d [04 §7.3] C14", r.Count)
 	}
-	enc := EncodeRoute(&r)
-	if len(enc) != 13 {
-		t.Fatalf("enc len want 13 got %d [04 §7.3] C16", len(enc))
-	}
-	if enc[0]&0x3 != 3 {
-		t.Fatalf("enc count bits want 3 got %d", enc[0]&0x3)
-	}
 	// After prune to <2, active clears
 	r.Publish([]Point{{X: 0, Z: 0}, {X: 10, Z: 0}})
 	r.Prune(Point{X: 10, Z: 0})
 	if r.Active {
 		t.Fatalf("prune to <2 should clear active [04 §7.3] C15")
-	}
-	enc2 := EncodeRoute(&r)
-	if len(enc2) != 1 || enc2[0] != 0 {
-		t.Fatalf("inactive enc want [0] got %v", enc2)
 	}
 }
 
@@ -307,7 +285,7 @@ func TestBigRequestStaysActiveAcrossTicks(t *testing.T) {
 		HasBounds:  true,
 		Bounds:     bounds,
 	}
-	oneShot := path.Search(cfg)
+	oneShot := oneShotSearch(cfg)
 	if oneShot.Popped <= 100 {
 		t.Fatalf("fixture requires >100 pops to test budget, got %d", oneShot.Popped)
 	}

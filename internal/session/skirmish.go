@@ -40,20 +40,18 @@ func errStartPositionMissing(stored int) error {
 
 // C8 defaults per [02 §3], [GAP T14] and [08 "Skirmish configuration"].
 const (
-	SkirmishMinPlayers            = 2  // [GAP T14] validated 2..10
 	SkirmishMaxPlayers            = 10 // [GAP T14]
 	SkirmishDefaultPlayers        = 4  // [02 §3] missing NumSkirmishPlayers installs default 4
 	SkirmishDefaultMetal          = 1000
 	SkirmishDefaultEnergy         = 1000
-	SkirmishDefaultAllyGroup      = 5  // [GAP T14]
-	SkirmishDefaultController     = 0  // [GAP T14] human
-	SkirmishDefaultDifficulty     = 1  // Medium [02 §3] [08 "Skirmish configuration"]
-	SkirmishDefaultLocation       = 1  // pre-determined start positions [08 "Skirmish configuration"]
-	SkirmishDefaultCommanderDeath = 1  // commander death ends the game [08 "Skirmish configuration"]
-	SkirmishDefaultMapping        = 1  // terrain is blacked out until explored [08 "Skirmish configuration"]
-	SkirmishDefaultLineOfSight    = 1  // LOS enabled [08 "Skirmish configuration"]
-	SkirmishDefaultLOSType        = 1  // terrain elevations affect LOS [08 "Skirmish configuration"]
-	SkirmishNickCap               = 17 // [02 §3] 17-byte buffers
+	SkirmishDefaultAllyGroup      = 5 // [GAP T14]
+	SkirmishDefaultController     = 0 // [GAP T14] human
+	SkirmishDefaultDifficulty     = 1 // Medium [02 §3] [08 "Skirmish configuration"]
+	SkirmishDefaultLocation       = 1 // pre-determined start positions [08 "Skirmish configuration"]
+	SkirmishDefaultCommanderDeath = 1 // commander death ends the game [08 "Skirmish configuration"]
+	SkirmishDefaultMapping        = 1 // terrain is blacked out until explored [08 "Skirmish configuration"]
+	SkirmishDefaultLineOfSight    = 1 // LOS enabled [08 "Skirmish configuration"]
+	SkirmishDefaultLOSType        = 1 // terrain elevations affect LOS [08 "Skirmish configuration"]
 	// neutralSideIndex is the side ordinal that names no playable side. Every
 	// per-slot participation gate in the retail image tests it: start-position
 	// eligibility [08 R-ENTRY-01 §5], the two live-player counters
@@ -121,14 +119,6 @@ func CommanderDeathMode(v int) CommanderDeathRule {
 		return CommanderDeathEnds
 	}
 }
-
-// Shell controller states distinguished at lobby boundary before conversion [08 "Skirmish configuration"].
-const (
-	ShellControllerOpen     = 0 // open/inactive slot [08 "Skirmish configuration"]
-	ShellControllerHuman    = 1 // Player/human [08 "Skirmish configuration"]
-	ShellControllerComputer = 2 // Computer [08 "Skirmish configuration"]
-	ShellControllerObserver = 3 // observer/spectator [GAP T14]
-)
 
 // Session controller values stored in SkirmishConfig.Players[].Controller after conversion.
 const (
@@ -518,14 +508,6 @@ func (c SkirmishConfig) NormalizedBytes() []byte {
 	return b
 }
 
-// NewSkirmishWithFS is the strict production constructor. It never fabricates
-// an empty catalog, nil terrain, or invented commander. Missing retail content
-// aborts with a diagnostic.
-// [02 §5][03 §2.2][P0-16]
-func NewSkirmishWithFS(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (*Session, error) {
-	return NewSkirmishWithProgress(fs, cat, cfg, nil)
-}
-
 // The session's own load families, reported after the catalog's. They are what
 // battle entry does once the immutable catalog exists.
 const (
@@ -535,10 +517,13 @@ const (
 	FamilyScripts   = "scripts"
 )
 
-// NewSkirmishWithProgress is NewSkirmishWithFS with a load observer. The
-// observer sees the catalog's families first and then this constructor's own,
-// so a caller painting the retail loading screen can drive it from one stream.
-// A nil observer makes this exactly NewSkirmishWithFS.
+// NewSkirmishWithProgress is the strict production constructor. It never
+// fabricates an empty catalog, nil terrain, or invented commander; missing
+// retail content aborts with a diagnostic [02 §5][03 §2.2][P0-16].
+//
+// The load observer sees the catalog's families first and then this
+// constructor's own, so a caller painting the retail loading screen can drive
+// it from one stream. A nil observer reports nothing and changes nothing else.
 func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig, report content.Progress) (*Session, error) {
 	if err := cfg.Normalize(); err != nil {
 		return nil, err

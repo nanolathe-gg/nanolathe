@@ -54,8 +54,10 @@ func TestAcquisitionUsesRangeNotCoverage(t *testing.T) {
 	if WithinRange(shooterX, shooterZ, candX, candZ, weaponRange) {
 		t.Fatalf("WithinRange true for distance 100 vs range 50, want false [06 §3.3]")
 	}
-	if !WithinCoverageSquare(shooterX, shooterZ, candX, candZ, coverage) {
-		t.Fatalf("WithinCoverage true for distance 100 vs coverage 200, want true [06 §11.2]")
+	// The interceptor coverage compare is the live one [06 R-WPN-05 §10]; it
+	// admits the same candidate that ordinary fire range refuses.
+	if !WithinInterceptorCoverage(Vec3{X: candX, Z: candZ}, Vec3{X: shooterX, Z: shooterZ}, coverage) {
+		t.Fatalf("coverage 200 must admit a candidate 100 world units away [06 §11.2]")
 	}
 	candidates := []Candidate{
 		{Handle: pool.Handle(1), X: candX, Z: candZ, Category: 0, Hostile: true, Y: fixed(1)},

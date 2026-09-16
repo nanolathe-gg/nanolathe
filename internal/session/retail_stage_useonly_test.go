@@ -42,7 +42,7 @@ func TestRetailCampaignRestoreKeepsUseOnlyRestriction(t *testing.T) {
 		t.Skipf("retail fixture unit %q is absent", useOnlyExcluded)
 	}
 
-	src, err := NewMissionWithProgressSeeds(f.fs, f.cat, useOnlyMission, 0, useOnlySeed, useOnlySeed, nil)
+	src, err := NewMissionWithEntryOptions(f.fs, f.cat, useOnlyMission, 0, useOnlySeed, useOnlySeed, MissionEntryOptions{}, nil)
 	if err != nil {
 		t.Skipf("stock campaign %q is unavailable: %v", useOnlyMission, err)
 	}

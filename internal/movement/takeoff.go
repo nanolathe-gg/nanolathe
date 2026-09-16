@@ -209,7 +209,7 @@ func (s *System) takeoffPreamble(u *units.Unit, rec *orders.Node) bool {
 	}
 	s.SetMoverMode(u, 2)
 	m := s.newPointMarker(u, Vec3{X: u.X, Y: u.Y, Z: u.Z})
-	m.setAltitudeOffset(halfCruiseAlt(u.Def.CruiseAlt))
+	m.setAltitudeOffset(HalfCruiseAlt(u.Def.CruiseAlt))
 	s.installAirGoal(u, rec, m)
 	if rec != nil {
 		rec.DynamicGate |= airLegGate
@@ -217,9 +217,14 @@ func (s *System) takeoffPreamble(u *units.Unit, rec *orders.Node) bool {
 	return true
 }
 
-// halfCruiseAlt is the preamble's `cruisealt / 2`: a signed 16-bit halving with
-// C division, truncating toward zero [04 R-AIR-01 §6][I3].
-func halfCruiseAlt(cruiseAlt int32) int16 {
+// HalfCruiseAlt is the preamble's `cruisealt / 2`: the compiled altitude is
+// narrowed to a signed 16-bit word FIRST and halved after, with C division
+// truncating toward zero [04 R-AIR-01 §6][I3]. Halving the 32-bit value and
+// narrowing afterwards is a different number for any authored `cruisealt` past
+// the 16-bit range, so the order matters. Exported so a caller outside this
+// package can state the commanded climb as the preamble states it:
+// CruiseAltitudeForOffset(terrain, x, z, int32(HalfCruiseAlt(def.CruiseAlt))).
+func HalfCruiseAlt(cruiseAlt int32) int16 {
 	v := int16(cruiseAlt)
 	if v >= 0 {
 		return v / 2

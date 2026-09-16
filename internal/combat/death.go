@@ -40,11 +40,6 @@ func PackDeathByte(cause Cause, variant uint8) uint8 {
 	return uint8(cause)<<4 | (variant & 0x0F) // [04 §5.1] [06 §12.1] C23
 }
 
-// UnpackDeathByte splits packed byte into cause and depth [06 §12.1] C23.
-func UnpackDeathByte(packed uint8) (Cause, uint8) {
-	return Cause(packed >> 4), packed & 0x0F // [06 §12.1] C23
-}
-
 // ResolveCorpse returns the corpse feature for depth [06 §12.1] C23.
 // Depth is low four bits of packed death byte. Depth 0 => no corpse; depth1 => authored Corpse feature;
 // larger depths follow featuredead exactly depth-1 times, stopping at no-feature sentinel.
@@ -170,12 +165,6 @@ type DeathResolution struct {
 	DoCorpse    bool                // depth>0 and not gated [06 §12.1]
 	DoExplosion bool                // gated by remainingFraction==0 and severity>0 [06 §12.1]
 	KilledCalls int                 // number of synchronous Killed invocations (0 or 1 for local) [06 §12.1] C25
-}
-
-// ShouldDispatchReplayKilled reports whether received-network replay mode should dispatch
-// Killed asynchronously. Only when signed packet severity is positive; return is ignored [06 §12.1] C25 [04 §5.1].
-func ShouldDispatchReplayKilled(packetSeverity int8) bool {
-	return packetSeverity > 0 // [06 §12.1] C25 [04 §5.1]
 }
 
 // SelectDeathExplosionWeapon selects the death-explosion weapon per [06 §12.1][02 "Unit record"].

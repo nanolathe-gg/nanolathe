@@ -9,23 +9,15 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 )
 
-// TestShadeRowCountAndClamp locks the SHD row table size and the clamp helper
-// [03 §4.3]. The former placeholder-row lock (SHDMidRow/ModelShadeMidRow/
-// SelectShadeRow) was deleted 2026-09-01: no production draw path could reach
-// that constant, and the real formula is locked by
-// TestShadeRowFormulaEdgeCases in shade_test.go [03 R-RAST-01 §5].
-func TestShadeRowCountAndClamp(t *testing.T) {
+// TestShadeRowCount locks the SHD row table size [03 §4.3]. The former
+// placeholder-row lock (SHDMidRow/ModelShadeMidRow/SelectShadeRow) was deleted
+// 2026-09-01: no production draw path could reach that constant, and the real
+// formula is locked by TestShadeRowFormulaEdgeCases in shade_test.go
+// [03 R-RAST-01 §5]. The row narrowing the shipped span writer applies is
+// internal/client's spanShadeRow, locked there.
+func TestShadeRowCount(t *testing.T) {
 	if SHDRowCount != 32 {
 		t.Fatalf("SHDRowCount %d want 32 [03 §4.3]", SHDRowCount)
-	}
-	if got := ClampShadeRow(-1); got != 0 {
-		t.Fatalf("Clamp -1 %d want 0", got)
-	}
-	if got := ClampShadeRow(32); got != 31 {
-		t.Fatalf("Clamp 32 %d want 31", got)
-	}
-	if got := ClampShadeRow(15); got != 15 {
-		t.Fatalf("Clamp 15 %d want 15", got)
 	}
 }
 

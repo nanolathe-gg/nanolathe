@@ -241,7 +241,9 @@ The load pipeline is `[02 R-MAP-01 §6–§8]`; the per-cell semantics are
 
 `.sct` editor sections use the same tile/height concepts at small scale
 with a seven-word little-endian header. **Established — bounded editor-file
-observation**, reflected in `formats/sct.go` (not a retail runtime loader):
+observation.** Nanolathe has no SCT reader: the layout below is recorded for a
+future consumer, and nothing in the engine parses it (there is no retail
+runtime loader for it either).
 
 ```text
 u32 version                 # observed 2 or 3
@@ -301,14 +303,14 @@ canonical fourth attribute byte; `internal/world` performs the reconstruction
 above. Legacy empty codes are normalized to the canonical empty word. With
 an absent-minimap flag, the parser does not dereference the minimap pointer.
 These are checked decoding and representation choices, not retail malformed-
-input guarantees. `formats.LoadSCTWithLimits` additionally rejects overlapping
-known blocks, including the complete version-specific height-record span.
-`SCT.Heights` exposes the unsigned heights in row-major order over a
-`2*Width` by `2*Height` grid. `AttributeData` preserves exactly those records,
-including ignored bytes; `Raw` retains the complete file and any intervening
-padding. Authored tests cover both versions, nonsquare grids, independent
-graphics/preview placement and rejected incomplete or overlapping records.
+input guarantees. `AttributeData` preserves exactly those records, including
+ignored bytes; `Raw` retains the complete file and any intervening padding.
 This decoder does not assign meanings to ignored record bytes.
+
+There is no SCT reader to state a policy for. One existed and was removed as
+unreachable; a future one should reject overlapping known blocks, including
+the complete version-specific height-record span, and expose the unsigned
+heights in row-major order over a `2*Width` by `2*Height` grid.
 
 - **Unknown:** the authored meanings of the SCT record bytes ignored by the
   inspected editor, and any version beyond the observed 2/3 pair. A writer
@@ -355,6 +357,6 @@ This decoder does not assign meanings to ignored record bytes.
   section loader, section-copy/map-fill paths, and standalone/HPI writers;
   `modSections.bas` header definitions. Cross-checked against all 689 SCT
   files independently enumerated from the installed `worlds.hpi`.
-- Nanolathe readers and authored tests: `formats/tnt.go`, `formats/sct.go`,
-  `formats/tnt_test.go`, `formats/sct_test.go`, `formats/source_test.go`;
-  footprint reconstruction: `internal/world/feature_stamp_test.go`.
+- Nanolathe readers and authored tests: `formats/tnt.go`, `formats/tnt_test.go`,
+  `formats/source_test.go`; footprint reconstruction:
+  `internal/world/feature_stamp_test.go`. The SCT layout above has no reader.

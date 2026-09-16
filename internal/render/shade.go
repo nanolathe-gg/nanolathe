@@ -51,14 +51,3 @@ const SHDIdentityRow = 15 // [03 §4.3][03 R-RAST-01 §5]
 // row 15, which is not an identity mapping for every palette index [R-RND-02A]
 // [fmt pal "SHD"].
 const NoShadeRow = -1
-
-// ClampShadeRow clamps a row to 0..31 [03 §4.3].
-func ClampShadeRow(row int) int {
-	if row < 0 {
-		return 0
-	}
-	if row >= SHDRowCount {
-		return SHDRowCount - 1
-	}
-	return row
-}

@@ -93,7 +93,7 @@ func openContent(opts Options) (*contentSet, error) {
 			return nil, &missingProductError{
 				what:      "required content is missing",
 				logical:   required,
-				providers: providerNames(fileSystem),
+				providers: fileSystem.ProviderIDs(),
 				expected:  "a mounted archive or loose file supplying it",
 			}
 		}
@@ -124,18 +124,6 @@ func (c *contentSet) loadGUI(name string) (*gui.Window, error) {
 		return nil, fmt.Errorf("nanolathe: GUI load: no mounted content")
 	}
 	return gui.LoadWithTranslation(c.fs, name, c.translations)
-}
-
-// providerNames lists the mounted providers in precedence order, which is what
-// a "providers searched" diagnostic means. It is deliberately not per-entry
-// source paths: for a loose mount those are individual files.
-func providerNames(fileSystem *vfs.FS) []string {
-	providers := fileSystem.Providers()
-	names := make([]string, 0, len(providers))
-	for _, provider := range providers {
-		names = append(names, provider.ID)
-	}
-	return names
 }
 
 // remasterPriority is the legacy minimum override priority. mountRemaster

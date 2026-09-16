@@ -708,7 +708,7 @@ func DashSprites(a, b QueueWorldPoint, age uint32, ticksPerFrame, frameCount int
 	dx := int64(b.X) - int64(a.X)
 	dy := int64(b.Y) - int64(a.Y)
 	dz := int64(b.Z) - int64(a.Z)
-	distance := isqrt64(dx*dx + dy*dy + dz*dz)
+	distance := numeric.ISqrt64(dx*dx + dy*dy + dz*dz)
 	if distance < DashMinSegment {
 		return
 	}
@@ -722,25 +722,6 @@ func DashSprites(a, b QueueWorldPoint, age uint32, ticksPerFrame, frameCount int
 			numeric.Fixed(int64(a.Z)+(dz*t>>16)))
 		index = (index + 1) % frameCount
 	}
-}
-
-// isqrt64 is floor(sqrt(v)) for a non-negative v. Retail truncates a hardware
-// square root toward zero; an exact integer root reproduces that without
-// bringing a float into the overlay path [INVARIANTS I2].
-func isqrt64(v int64) int64 {
-	if v <= 0 {
-		return 0
-	}
-	r := int64(0)
-	for bit := int64(1) << 62; bit != 0; bit >>= 2 {
-		if v >= r+bit {
-			v -= r + bit
-			r = (r >> 1) + bit
-		} else {
-			r >>= 1
-		}
-	}
-	return r
 }
 
 func age(now, born uint32) uint32 {

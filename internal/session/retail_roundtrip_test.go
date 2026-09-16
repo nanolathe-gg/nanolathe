@@ -579,7 +579,7 @@ func TestRetailBattleSaveLoadCarriesAllianceRows(t *testing.T) {
 	cfg.Players[0].Side, cfg.Players[0].Controller, cfg.Players[0].AllyGroup = 0, SkirmishControllerHuman, 1
 	cfg.Players[1].Side, cfg.Players[1].Controller, cfg.Players[1].AllyGroup = 1, SkirmishControllerComputer, 2
 	cfg.Players[2].Side, cfg.Players[2].Controller, cfg.Players[2].AllyGroup = 0, SkirmishControllerComputer, 1
-	src, err := NewSkirmishWithFS(f.fs, f.cat, cfg)
+	src, err := NewSkirmishWithProgress(f.fs, f.cat, cfg, nil)
 	if err != nil {
 		// The kind-2 start-slot walk is fatal on a missing start position
 		// [08 R-ENTRY-01 §5], so a map authored for two seats cannot host this
@@ -671,4 +671,31 @@ func TestRetailBattleSaveLoadCarriesAllianceRows(t *testing.T) {
 	if dst.Econ.DeclaresAlliance(0, 1) || dst.Econ.DeclaresAlliance(1, 0) || dst.Econ.DeclaresAlliance(1, 2) {
 		t.Fatalf("hostility did not survive the round trip: %v", got)
 	}
+}
+
+// restoredComputerSlots reports the slots that hold a dispatchable computer
+// player after a restore: a manager exists and the restored controller byte is
+// the computer value [08 R-AI-01 §1]. It exists so callers (and the round-trip
+// gate) can name the slots retail would have put back to work without
+// duplicating the controller rule.
+//
+// Its one caller is the retail-tagged round-trip gate below, which an untagged
+// `deadcode` sweep does not compile — CL-5 once deleted this as unreachable on
+// that evidence and the tagged gate caught it. The tagged tier is the one that
+// decides whether a helper has a caller; this helper now lives in the file
+// that uses it, so no build can disagree about who calls it.
+func restoredComputerSlots(s *Session) []uint8 {
+	if s == nil || s.Econ == nil {
+		return nil
+	}
+	out := make([]uint8, 0, len(s.AI))
+	for i := range s.AI {
+		if s.AI[i] == nil || i >= len(s.Econ.Players) {
+			continue
+		}
+		if s.Econ.Players[i].Exists && s.Econ.Players[i].ControllerState == 2 {
+			out = append(out, uint8(i))
+		}
+	}
+	return out
 }

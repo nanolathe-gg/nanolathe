@@ -234,7 +234,6 @@ type WorldQueryAdapter struct {
 	ForEachFeature func(func(FeatureView) bool)
 	TerrainHeight  func(numeric.Fixed, numeric.Fixed) (numeric.Fixed, bool)
 	SeaLevel       func() uint8
-	ModelBounds    func(pool.Handle) (int32, int32, bool)
 	// DeclaresAlliance is the one-directional row read of [05 R-SHARE-01 §1]:
 	// row A of `from` indexed by `toward`. `Hostile` above answers the
 	// symmetric question the command resolver asks [04 R-ORD-02 §1]; this
@@ -265,14 +264,11 @@ type WorldQueryAdapter struct {
 // as a bool at this seam; concrete work services own their detailed progress,
 // economy, packet, and callback state [P0-00 C].
 type WorkAdapter struct {
-	Ready          func() bool
-	Assist         func(*units.Unit, *Node, uint32) bool
-	Repair         func(builder, patient *units.Unit, node *Node, tick uint32) bool
-	Capture        func(*units.Unit, *Node, uint32) bool
-	ReclaimFeature func(*units.Unit, *Node, uint32) bool
-	ReclaimUnit    func(*units.Unit, *Node, uint32) bool
-	Resurrect      func(*units.Unit, *Node, uint32) bool
-	Refresh        func(*units.Unit)
+	Ready     func() bool
+	Assist    func(*units.Unit, *Node, uint32) bool
+	Repair    func(builder, patient *units.Unit, node *Node, tick uint32) bool
+	Capture   func(*units.Unit, *Node, uint32) bool
+	Resurrect func(*units.Unit, *Node, uint32) bool
 	// CancelNotice is the receiver for the cleanup cancel notification of
 	// [R-ORDER-02 §2] on behalf of the records this package does not hold a
 	// handler for. cleanupNode's guard — the record's dynamic gate still holding

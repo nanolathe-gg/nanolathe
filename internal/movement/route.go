@@ -1,17 +1,12 @@
 // Ground route publication and storage.
 //
 // Research: [04 §7.3] scheduler budget, publication, route storage, pruning,
-// save form, and export helper; [04 §7.1] lattice and half-footprint bias.
-// Invariants I10 (citations), I13 (route save is the explicit-layout
-// exception).
+// and export helper; [04 §7.1] lattice and half-footprint bias. Invariant I10
+// (citations).
 
 package movement
 
 import (
-	"encoding/binary"
-	"errors"
-	"fmt"
-
 	"github.com/nanolathe-gg/nanolathe/internal/path"
 )
 
@@ -151,55 +146,10 @@ func (r *Route) Export(index int) Point { // [04 §7.3] C17
 	return r.At(index)
 }
 
-// EncodeRoute serializes a route into its save form [04 §7.3] C16.
-// Inactive routes serialize a 2-bit count of zero; active routes serialize
-// min(count,3) followed by that many signed 16-bit X/Z pairs. Bytes cross a
-// boundary so explicit layout is allowed per I13. Encoding uses little-endian
-// int16 per pair, low 2 bits of the first byte hold the count (value 0..3).
-func EncodeRoute(r *Route) []byte { // [04 §7.3] C16, I13 exception
-	if r == nil || !r.Active {
-		// inactive: 2-bit count zero [04 §7.3] C16
-		return []byte{0}
-	}
-	cnt := int(r.Count)
-	if cnt > 3 {
-		cnt = 3 // [04 §7.3] C16 min(count,3)
-	}
-	buf := make([]byte, 1+cnt*4)
-	buf[0] = byte(cnt & 0x3) // 2-bit count [04 §7.3] C16
-	off := 1
-	for i := 0; i < cnt; i++ {
-		// signed 16-bit X/Z pairs [04 §7.3] C16
-		x := int16(r.Points[i].X)
-		z := int16(r.Points[i].Z)
-		binary.LittleEndian.PutUint16(buf[off:], uint16(x))
-		binary.LittleEndian.PutUint16(buf[off+2:], uint16(z))
-		off += 4
-	}
-	return buf
-}
-
-// DecodeRoute decodes the save form produced by EncodeRoute [04 §7.3] C16.
-// It returns an error on truncated input. An inactive (count 0) encoding
-// yields an inactive route with count 0; counts are always masked to 2 bits.
-func DecodeRoute(data []byte) (*Route, error) { // [04 §7.3] C16
-	if len(data) == 0 {
-		return nil, errors.New("movement: empty route save")
-	}
-	cnt := int(data[0] & 0x3) // 2-bit count [04 §7.3] C16
-	if cnt == 0 {
-		return &Route{Active: false, Dirty: false, Count: 0}, nil
-	}
-	if len(data) < 1+cnt*4 {
-		return nil, fmt.Errorf("movement: route save truncated: need %d have %d", 1+cnt*4, len(data))
-	}
-	r := &Route{Active: true, Dirty: false, Count: uint8(cnt)}
-	off := 1
-	for i := 0; i < cnt; i++ {
-		x := int16(binary.LittleEndian.Uint16(data[off:]))
-		z := int16(binary.LittleEndian.Uint16(data[off+2:]))
-		r.Points[i] = Point{X: int32(x), Z: int32(z)}
-		off += 4
-	}
-	return r, nil
-}
+// There is no route save form. The retail mover image carries velocity, lean,
+// speed, turn residual, the stamp tick and the state byte, and route, follower,
+// proposal and last-proposal state are deliberately absent from that boundary
+// [08 R-SAVE-02 §8]; a restored mover repaths instead. The 2-bit count and
+// three signed 16-bit pairs of [04 §7.3] C16 therefore have no writer and no
+// reader here, and the codec that once stood in this file round-tripped only
+// with itself.

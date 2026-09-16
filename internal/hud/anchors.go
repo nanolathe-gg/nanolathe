@@ -56,9 +56,10 @@ var AnchorNames = [30]string{
 	"RELOAD3",
 }
 
-// Anchor index constants for direct array access [02 §6] C8.
+// Anchor index constants for direct array access [02 §6] C8. Only the indices
+// the HUD reads are named; the full 30-name order lives in AnchorNames above
+// and in [07 §6].
 const (
-	AnchorLogo           = 0
 	AnchorEnergyBar      = 1
 	AnchorEnergyNum      = 2
 	AnchorEnergyMax      = 3
@@ -67,8 +68,6 @@ const (
 	AnchorMetalNum       = 6
 	AnchorMetalMax       = 7
 	AnchorMetal0         = 8
-	AnchorTotalUnits     = 9
-	AnchorTotalTime      = 10
 	AnchorEnergyProduced = 11
 	AnchorEnergyConsumed = 12
 	AnchorMetalProduced  = 13
@@ -85,9 +84,6 @@ const (
 	AnchorDamageBar2     = 24
 	AnchorName           = 25
 	AnchorDescription    = 26
-	AnchorReload1        = 27
-	AnchorReload2        = 28
-	AnchorReload3        = 29
 )
 
 // AnchorIndex returns the array index for an anchor name (case-insensitive via
@@ -119,16 +115,6 @@ func AnchorsFromSide(side *content.SideDef) (Anchors, error) {
 		out[i] = Rect{X1: r.X1, Y1: r.Y1, X2: r.X2, Y2: r.Y2}
 	}
 	return out, nil
-}
-
-// MustAnchors is like AnchorsFromSide but panics on error. Useful for tests
-// and init-time side loading where a missing anchor is fatal [02 §6] C8.
-func MustAnchors(side *content.SideDef) Anchors {
-	a, err := AnchorsFromSide(side)
-	if err != nil {
-		panic(err)
-	}
-	return a
 }
 
 // ByName returns the rect for an anchor name if present.

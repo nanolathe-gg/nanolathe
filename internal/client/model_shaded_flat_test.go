@@ -102,3 +102,28 @@ func TestShadedFlatRowMatchesTheTexturedRow(t *testing.T) {
 		t.Fatalf("flat writer composed %d, want the row-%d entry %d", flat, row, c.pal.Shade[row][color])
 	}
 }
+
+// TestSpanShadeRowClampsToTheTable locks the row narrowing both flat and
+// textured span writers ride. The rows the model path carries are already
+// 0..31 by construction (`trunc(dot * 5.0) & 0x1F`), so the clamp is the guard
+// on the table lookup itself: a row below zero takes row 0 and a row past the
+// table takes row 31, rather than indexing outside the 32 SHD rows
+// [R-RAST-01 §5][03 §4.3]. The rows arrive as 16.16 interpolants, so the
+// narrowing is a shift before the clamp.
+func TestSpanShadeRowClampsToTheTable(t *testing.T) {
+	for _, tc := range []struct {
+		row  int64
+		want int
+	}{
+		{-1 << 16, 0},
+		{0, 0},
+		{15 << 16, 15},
+		{31 << 16, 31},
+		{32 << 16, 31},
+		{1000 << 16, 31},
+	} {
+		if got := spanShadeRow(tc.row); got != tc.want {
+			t.Fatalf("spanShadeRow(%d) = %d, want %d [R-RAST-01 §5]", tc.row, got, tc.want)
+		}
+	}
+}

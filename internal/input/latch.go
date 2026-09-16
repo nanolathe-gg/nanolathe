@@ -58,12 +58,7 @@ const (
 
 // Aliases for the latch values that have multiple order-family names [07 §9].
 const (
-	LatchLoad             = LatchPickup  // LOAD alias for PICKUP [07 §9]
-	LatchGuard            = LatchFollow  // GUARD alias for FOLLOW [07 §9]
-	LatchDefend           = LatchFollow  // DEFEND alias for FOLLOW [07 §9]
-	LatchHelpBuild        = LatchRepair  // HELPBUILD alias for REPAIR [07 §9]
-	LatchResurrect        = LatchReclaim // RESURRECT alias for RECLAIM [GAP T22]
-	LatchReclaimResurrect = LatchReclaim
+	LatchLoad = LatchPickup // LOAD alias for PICKUP [07 §9]
 )
 
 // IsValid reports whether l corresponds to a defined latch value [GAP T22].

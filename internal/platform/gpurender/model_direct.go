@@ -1211,8 +1211,8 @@ func (r *Renderer) commitModelDirect(g *drawlist.ModelGeometry) {
 		return
 	}
 	b := region.bounds
-	x0, y0 := maxInt(b.Min.X, 0), maxInt(b.Min.Y, 0)
-	x1, y1 := minInt(b.Max.X, r.clipW()), minInt(b.Max.Y, r.clipH())
+	x0, y0 := max(b.Min.X, 0), max(b.Min.Y, 0)
+	x1, y1 := min(b.Max.X, r.clipW()), min(b.Max.Y, r.clipH())
 	if x0 >= x1 || y0 >= y1 {
 		return
 	}
@@ -1252,8 +1252,8 @@ func (r *Renderer) commitModelDirectShadow(g *drawlist.ModelGeometry) {
 		return
 	}
 	sb, bb := shadow.bounds, body.bounds
-	x0, y0 := maxInt(sb.Min.X, 0), maxInt(sb.Min.Y, 0)
-	x1, y1 := minInt(sb.Max.X, r.clipW()), minInt(sb.Max.Y, r.clipH())
+	x0, y0 := max(sb.Min.X, 0), max(sb.Min.Y, 0)
+	x1, y1 := min(sb.Max.X, r.clipW()), min(sb.Max.Y, r.clipH())
 	if x0 >= x1 || y0 >= y1 {
 		r.modelStats.Shadows++
 		return
@@ -1302,8 +1302,8 @@ func (r *Renderer) commitModelSilhouetteShadow(g *drawlist.ModelGeometry) {
 		return
 	}
 	sb := modelWorldBounds(sg)
-	x0, y0 := maxInt(sb.Min.X, 0), maxInt(sb.Min.Y, 0)
-	x1, y1 := minInt(sb.Max.X, r.clipW()), minInt(sb.Max.Y, r.clipH())
+	x0, y0 := max(sb.Min.X, 0), max(sb.Min.Y, 0)
+	x1, y1 := min(sb.Max.X, r.clipW()), min(sb.Max.Y, r.clipH())
 	if x0 >= x1 || y0 >= y1 {
 		r.modelStats.Shadows++
 		r.modelStats.Silhouettes++
@@ -1361,8 +1361,8 @@ func (r *Renderer) commitModelSilhouetteShadow(g *drawlist.ModelGeometry) {
 func (r *Renderer) drawModelDirectFallback(g *drawlist.ModelGeometry) {
 	d := &r.modelDirect
 	b := modelGroupBounds(g)
-	x0, y0 := maxInt(b.Min.X, 0), maxInt(b.Min.Y, 0)
-	x1, y1 := minInt(b.Max.X, r.clipW()), minInt(b.Max.Y, r.clipH())
+	x0, y0 := max(b.Min.X, 0), max(b.Min.Y, 0)
+	x1, y1 := min(b.Max.X, r.clipW()), min(b.Max.Y, r.clipH())
 	if x0 >= x1 || y0 >= y1 {
 		return
 	}

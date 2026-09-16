@@ -51,15 +51,6 @@ func (r *RadarSurface) Set(x, y int, v byte) bool {
 	return true
 }
 
-// floorDiv returns floor(a/b) with sign correction [03 §2.1][INVARIANTS I3].
-func minimapFloorDiv(a, b int64) int64 {
-	q := a / b
-	if a%b != 0 && (a < 0) != (b < 0) {
-		q--
-	}
-	return q
-}
-
 // BuildRadarPicture builds PICTURE from terrain or baked bytes [03 §3.7][03 §3.4][07 §10].
 // playW = Wpix-32, playH = Hpix-128; RadarW/H are letterboxed via camera.LayoutMinimap.
 // baked == nil or len==0 uses 2× supersampled tile sampling and ALP 2×2→1 blending [03 §3.7][fmt tnt][fmt pal].
@@ -135,8 +126,8 @@ func BuildRadarPicture(t *world.Terrain, playW, playH int32, m camera.Minimap, b
 			worldZ := int32(int64(playH) * int64(ty) / int64(th))
 
 			// tileX = floorDiv(worldX,32) etc sign-corrected SAR 5 [03 §2.1]
-			tileX := minimapFloorDiv(int64(worldX), 32)
-			tileZ := minimapFloorDiv(int64(worldZ), 32)
+			tileX := numeric.FloorDiv(int64(worldX), 32)
+			tileZ := numeric.FloorDiv(int64(worldZ), 32)
 
 			var pix byte
 			if tileX < 0 || tileX >= int64(tileW) || tileZ < 0 || tileZ >= int64(tileH) {
@@ -275,14 +266,6 @@ func resizeALP(dst []byte, dstW, dstH int, src []byte, srcW, srcH int, tables *p
 	}
 }
 
-// BuildRadarPictureFromWorld is a helper that derives playW/H from terrain [03 §3.6][03 §2.2].
-func BuildRadarPictureFromWorld(t *world.Terrain, m camera.Minimap, baked []byte, bakedW, bakedH int, tables *palette.Tables) *RadarSurface {
-	if t == nil {
-		return BuildRadarPicture(nil, 0, 0, m, baked, bakedW, bakedH, tables)
-	}
-	return BuildRadarPicture(t, t.PlayRight, t.PlayBottom, m, baked, bakedW, bakedH, tables)
-}
-
 // resizeRadarBits returns a length-n byte slice reusing v's storage when it
 // fits. Every caller writes all n bytes before reading any, so the retained
 // tail is never observed and no clearing is owed.
@@ -293,15 +276,11 @@ func resizeRadarBits(v []byte, n int) []byte {
 	return v[:n]
 }
 
-// BuildMapped implements MAPPED composite: picture masked by authoritative LOS
-// grids [03 §3.8][03 §3.3]. It is a pure presentation operation [03 §3.6].
-func BuildMapped(picture *RadarSurface, wordMask []uint16, byteGrid []uint8, mapW, mapH int, localSlot uint8, dcb byte, guiRemap []byte) *RadarSurface {
-	return buildMappedInto(nil, picture, wordMask, byteGrid, mapW, mapH, localSlot, dcb, guiRemap)
-}
-
-// buildMappedInto is BuildMapped over a caller-owned surface. The composite
-// writes every pixel of the result from the picture and the LOS grids, so the
-// reused storage carries nothing of the previous composite; dst nil allocates.
+// buildMappedInto implements the MAPPED composite over a caller-owned surface:
+// the picture masked by the authoritative LOS grids [03 §3.8][03 §3.3]. It is a
+// pure presentation operation [03 §3.6]. The composite writes every pixel of
+// the result from the picture and the LOS grids, so the reused storage carries
+// nothing of the previous composite; dst nil allocates.
 func buildMappedInto(dst, picture *RadarSurface, wordMask []uint16, byteGrid []uint8, mapW, mapH int, localSlot uint8, dcb byte, guiRemap []byte) *RadarSurface {
 	if picture == nil || picture.Bits == nil || picture.W <= 0 || picture.H <= 0 {
 		return nil
@@ -441,10 +420,6 @@ func MinimapContactGate(c MinimapContact) bool {
 // which is what [03 §3.9] "Contact layering and ring-only cases" names.
 func MinimapBlipAdmitted(c MinimapContact, blink BlinkState) bool {
 	return MinimapContactGate(c) && (c.BlinkSuppress == 0 || blink.Phase&1 != 0)
-}
-
-func rebuildFinalExact(mapped *RadarSurface, m camera.Minimap, playW, playH int32, contacts []MinimapContact, blink BlinkState, blit MinimapContactBlitter, radarColor, jammerColor, ringColor byte) *RadarSurface {
-	return rebuildFinalExactInto(nil, mapped, m, playW, playH, contacts, blink, blit, radarColor, jammerColor, ringColor)
 }
 
 // rebuildFinalExactInto composes FINAL over a caller-owned surface. FINAL is

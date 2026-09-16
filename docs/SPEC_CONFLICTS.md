@@ -278,8 +278,9 @@ produced by the one load-time half-turn with no second sign change. The
 trailing `-Z` therefore belongs to projection, not to source conversion.
 
 **Decision:** the load-time half-turn is the sole source conversion. Model
-space is mirrored in Z against world space, which is why `ModelVertexToScreen`
-and `ModelProjectToScreen` are two names and not one; a flare or muzzle
+space is mirrored in Z against world space, which is why
+`Client.worldObjectScreen` and `camera.WorldToScreen` are two projections and
+not one; a flare or muzzle
 authored at model `(2,1,-30)` is world `(-2,1,+30)` plus the unit origin.
 
 **Contract:** `[03 §2.4]`, `[03 §2.5]`; DESIGN_PRESENTATION_CLIENT §5.

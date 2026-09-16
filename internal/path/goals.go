@@ -25,6 +25,8 @@ package path
 // family and must be reproduced as-is, not 'fixed'". Reproducing it is the
 // contract, so the sites below carry the citation and no marker.
 
+import "github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+
 // octInflated returns the inflated octile 18*max+7*min [04 §7.2] C8.
 // a and b are non-negative distances (|dx|, |dz|).
 func octInflated(a, b int32) int32 {
@@ -46,13 +48,6 @@ func octAdmissible(a, b int32) int32 {
 		minv = a
 	}
 	return 16*maxv + 6*minv
-}
-
-func abs32(v int32) int32 {
-	if v < 0 {
-		return -v
-	}
-	return v
 }
 
 // pointGoal implements the point/radius family [04 §7.2].
@@ -79,8 +74,8 @@ func PointGoalRestored(center Cell, radius, radiusSq int32) Goal {
 }
 
 func (g *pointGoal) H(c Cell) int32 {
-	dx := abs32(c.X - g.center.X)
-	dz := abs32(c.Z - g.center.Z)
+	dx := numeric.Abs(c.X - g.center.X)
+	dz := numeric.Abs(c.Z - g.center.Z)
 	oct := octInflated(dx, dz) // [04 §7.2] 18*max+7*min
 	h := oct - g.radius        // clamp to zero within R [04 §7.2]
 	if h < 0 {
@@ -151,8 +146,8 @@ func (g *annulusGoal) H(c Cell) int32 {
 	// [04 §7.2] same inflated octile with V-shaped zero band.
 	// h = 0 inside [inner,outer]; oct-outer outward; inner-oct inward.
 	// Raw authored radii in this clamp [04 §7.4].
-	dx := abs32(c.X - g.center.X)
-	dz := abs32(c.Z - g.center.Z)
+	dx := numeric.Abs(c.X - g.center.X)
+	dz := numeric.Abs(c.Z - g.center.Z)
 	oct := octInflated(dx, dz)
 	if oct < g.inner {
 		return g.inner - oct
@@ -321,60 +316,20 @@ func (g *rectGoal) StartSatisfied(start Cell) bool {
 	return start.X == r.Min.X || start.X == r.Max.X || start.Z == r.Min.Z || start.Z == r.Max.Z
 }
 
-type airWorkGoal struct{}
-type airMovingGoal struct{}
-
-// AirWorkGoal is the serialized air work goal. Like AirMovingGoal it cannot
-// satisfy a ground search: H is 0, it enumerates no cells, and it never
-// reports the start as satisfied [04 R-PATH-01 §9].
-func AirWorkGoal() Goal { return &airWorkGoal{} }
-
-// AirMovingGoal is the serialized air moving goal, with the same three
-// properties as AirWorkGoal [04 R-PATH-01 §9].
-func AirMovingGoal() Goal { return &airMovingGoal{} }
-
-func (airWorkGoal) H(Cell) int32   { return 0 }
-func (airMovingGoal) H(Cell) int32 { return 0 }
-func (airWorkGoal) Enumerate(out []Cell) []Cell {
-	if out == nil {
-		return nil
-	}
-	return out[:0]
-}
-func (airMovingGoal) Enumerate(out []Cell) []Cell {
-	if out == nil {
-		return nil
-	}
-	return out[:0]
-}
-func (airWorkGoal) StartSatisfied(Cell) bool   { return false }
-func (airMovingGoal) StartSatisfied(Cell) bool { return false }
-
-// Inspection helpers for wiring verification [OW-3-P] [04 §7.2][04 §7.4].
-// They expose the private family fields so movement/order wiring can be
-// tested without inventing a public Kind field on Goal. No retail constant
-// is invented; helpers are presentation-only for tests and save codecs.
-
-// IsPointGoal reports whether g is a point/radius goal and, if so, returns its
-// centre and radius [04 §7.2].
-func IsPointGoal(g Goal) (center Cell, radius int32, ok bool) {
-	if pg, ok2 := g.(*pointGoal); ok2 {
-		return pg.center, pg.radius, true
-	}
-	return Cell{}, 0, false
-}
-
-// IsAnnulusGoal reports whether g is a stand-off annulus goal and, if so,
-// returns its centre and its inner and outer radii [04 §7.2].
-func IsAnnulusGoal(g Goal) (center Cell, inner, outer int32, ok bool) {
-	if ag, ok2 := g.(*annulusGoal); ok2 {
-		return ag.center, ag.inner, ag.outer, true
-	}
-	return Cell{}, 0, 0, false
-}
+// The two serialized air surfaces of [04 R-PATH-01 §9] — air work and air
+// moving — have no ground-order producer anywhere, and a ground search they
+// were handed could not finish: their heuristic is zero, they enumerate no
+// cells and they never report the start satisfied. Nothing in this package
+// constructs them, so no inert family object stands here pretending otherwise;
+// a ground order that cannot name its family falls back to the point goal
+// (internal/movement/goals.go).
 
 // IsRectGoal reports whether g is a rectangle-perimeter goal and, if so,
-// returns its rectangle [04 §7.2].
+// returns its rectangle [04 §7.2]. It is the one family predicate with a
+// production reader: the follower's rectangle arm. Every other family question
+// — which family is this, with which parameters — is answered by DescribeGoal,
+// which the scheduler's diagnostics already call, so no per-family accessor
+// exists beside it. No retail constant is invented by either.
 func IsRectGoal(g Goal) (r Rect, ok bool) {
 	if rg, ok2 := g.(*rectGoal); ok2 {
 		return rg.rect, true

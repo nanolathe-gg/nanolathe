@@ -233,28 +233,6 @@ func TestRectGoalHeuristic(t *testing.T) {
 	}
 }
 
-func TestAirGoalHeuristicZero(t *testing.T) {
-	g := AirWorkGoal()
-	// Air work and moving surfaces have h identically zero [04 R-PATH-01 §9].
-	pts := []Cell{{0, 0}, {1, 1}, {10, 5}, {100, -50}, {2, 2}, {5, 5}, {6, 6}}
-	for _, p := range pts {
-		if got := g.H(p); got != 0 {
-			t.Fatalf("saved H%v want 0 got %d", p, got)
-		}
-	}
-	for _, air := range []Goal{AirWorkGoal(), AirMovingGoal()} {
-		if got := air.H(Cell{999, 999}); got != 0 {
-			t.Fatalf("air goal H want 0 got %d", got)
-		}
-		if air.StartSatisfied(Cell{}) {
-			t.Fatal("air goal must never be start-satisfied")
-		}
-		if got := air.Enumerate(nil); len(got) != 0 {
-			t.Fatalf("air goal enumeration want empty got %v", got)
-		}
-	}
-}
-
 func TestGoalEnumerate(t *testing.T) {
 	// Point: single center cell [04 §7.4].
 	pg := PointGoal(Cell{5, 5}, 100)
@@ -334,14 +312,6 @@ func TestGoalEnumerate(t *testing.T) {
 		got := g.Enumerate(nil)
 		if len(got) != tc.n {
 			t.Fatalf("rect %v enumerate want %d got %d %v", tc.rect, tc.n, len(got), got)
-		}
-	}
-
-	for _, air := range []Goal{AirWorkGoal(), AirMovingGoal()} {
-		buf = make([]Cell, 1, 10)
-		buf[0] = Cell{9, 9}
-		if got := air.Enumerate(buf); len(got) != 0 {
-			t.Fatalf("air reuse enumerate want empty got %v", got)
 		}
 	}
 }
@@ -453,11 +423,6 @@ func TestGoalStartSatisfied(t *testing.T) {
 	}
 	if rg1.StartSatisfied(Cell{6, 5}) {
 		t.Fatalf("1x1 rect neighbor should not satisfy")
-	}
-	for _, air := range []Goal{AirWorkGoal(), AirMovingGoal()} {
-		if air.StartSatisfied(Cell{1, 1}) {
-			t.Fatalf("air goal StartSatisfied should be false")
-		}
 	}
 }
 

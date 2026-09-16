@@ -44,12 +44,7 @@ func skirmishBattleRequest(opts Options, cs *contentSet, cfg session.SkirmishCon
 	if opts.UnitLimit != 0 {
 		cfg.UnitLimit = opts.UnitLimit
 	}
-	seeds := BattleSeeds{Simulation: int32(cfg.RNGSimSeed), CRT: cfg.RNGCrtSeed}
-	if source != nil {
-		seeds = source.NextBattleSeeds()
-	}
-	cfg.RNGSimSeed = uint32(seeds.Simulation)
-	cfg.RNGCrtSeed = seeds.CRT
+	cfg = configWithBattleSeeds(cfg, source)
 	localOwner := session.LocalOwnerForConfig(cfg)
 	watching := localOwner >= 0 && localOwner < len(cfg.Players) && cfg.Players[localOwner].IsObserver()
 	return freshBattleRequest{value: headless.FreshBattleRequest{

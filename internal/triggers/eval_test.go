@@ -128,20 +128,20 @@ func TestDefaultTriggersResolve(t *testing.T) {
 	c.Celebrate = func() { celebrations++ }
 
 	// DestroyAllUnits reads slot 1's live-unit counter [08 R-TRIG-01 §4].
-	vDone, dDone := Evaluate(vic, def, c)
+	vDone, dDone := EvaluateOwned(&vic, &def, c)
 	if !vDone {
 		t.Fatal("the default victory condition never resolves")
 	}
 	_ = dDone
-	if vDone, _ = Evaluate(vic, def, c); !vDone || celebrations != 1 || !vic[0].Celebrated {
+	if vDone, _ = EvaluateOwned(&vic, &def, c); !vDone || celebrations != 1 || !vic[0].Celebrated {
 		t.Fatalf("persistent default cue state = trigger=%+v cues=%d", vic[0], celebrations)
 	}
 
 	// The default defeat condition resolves when the local player is wiped out.
 	_, def2 := EnsureDefaults(nil, nil)
 	spawn(t, w, "ARMCOM", 0, 0, 0)
-	blockingVictory := []*Trigger{NewTimer(KindVictoryTimerRunsOut, 100)}
-	if _, d := Evaluate(blockingVictory, def2, pollCtx(w, 0)); d {
+	blockingVictory := []*Trigger{New(KindVictoryTimerRunsOut, "", SecondsToTicks(100))}
+	if _, d := EvaluateOwned(&blockingVictory, &def2, pollCtx(w, 0)); d {
 		t.Fatal("all-units-killed fired while the local player still has units")
 	}
 	for _, u := range w.Iter() {
@@ -149,7 +149,7 @@ func TestDefaultTriggersResolve(t *testing.T) {
 			u.Alive = false
 		}
 	}
-	if _, d := Evaluate(blockingVictory, def2, pollCtx(w, 0)); !d {
+	if _, d := EvaluateOwned(&blockingVictory, &def2, pollCtx(w, 0)); !d {
 		t.Fatal("all-units-killed did not fire with no local units left")
 	}
 }
@@ -313,7 +313,7 @@ func TestMoveRadiusSignedCoordinateSubtraction(t *testing.T) {
 // TestTimerSecondsToTicks locks the seconds×30 deadline [08 "Evaluation"] C17.
 func TestTimerSecondsToTicks(t *testing.T) {
 	w := triggerWorld(t)
-	tr := NewTimer(KindVictoryTimerRunsOut, 10)
+	tr := New(KindVictoryTimerRunsOut, "", SecondsToTicks(10))
 	if tr.Args[0] != 300 {
 		t.Fatalf("seconds 10 -> ticks %d want 300", tr.Args[0])
 	}
@@ -327,7 +327,7 @@ func TestTimerSecondsToTicks(t *testing.T) {
 	if tr.Poll(pollCtx(w, 0)) {
 		t.Fatal("timer predicate latched instead of being recomputed")
 	}
-	if got := NewTimer(KindDeathTimerRunsOut, 1200).Args[0]; got != 36000 {
+	if got := New(KindDeathTimerRunsOut, "", SecondsToTicks(1200)).Args[0]; got != 36000 {
 		t.Fatalf("1200 sec -> %d want 36000", got)
 	}
 }
@@ -358,43 +358,45 @@ func TestEvaluateCombination(t *testing.T) {
 
 	// Victory is an AND: one incomplete member blocks it.
 	vic[0].Completed = true
-	if v, _ := Evaluate(vic, def, c); v {
+	if v, _ := EvaluateOwned(&vic, &def, c); v {
 		t.Fatal("victory fired with one member incomplete")
 	}
 	vic[1].Completed = true
-	v, d := Evaluate(vic, def, c)
+	v, d := EvaluateOwned(&vic, &def, c)
 	if !v || d {
 		t.Fatalf("all victory members complete: got victory=%v defeat=%v", v, d)
 	}
 	// Simultaneous resolves as a victory.
 	def[0].Completed = true
-	if v, d := Evaluate(vic, def, c); !v || d {
+	if v, d := EvaluateOwned(&vic, &def, c); !v || d {
 		t.Fatalf("simultaneous should be a victory: victory=%v defeat=%v", v, d)
 	}
 	// Defeat is an OR.
 	vic[1].Completed = false
-	if _, d := Evaluate(vic, def, c); !d {
+	if _, d := EvaluateOwned(&vic, &def, c); !d {
 		t.Fatal("defeat OR did not fire with one member complete")
 	}
-	// Evaluate is the detached compatibility API. Its empty slice gets a
-	// temporary default record, rather than retaining the empty-AND identity;
-	// EvaluateOwned is the production path that persists that record.
+	// An empty queue gets a default record rather than retaining the empty-AND
+	// identity [08 "Default triggers"].
 	spawn(t, w, "enemy", 1, 0, 0)
-	blockingDefeat := []*Trigger{NewTimer(KindDeathTimerRunsOut, 1)}
-	if v, d := Evaluate(nil, blockingDefeat, c); v || d {
-		t.Fatalf("detached default polling returned victory=%v defeat=%v with a live enemy", v, d)
+	var emptyVictory []*Trigger
+	blockingDefeat := []*Trigger{New(KindDeathTimerRunsOut, "", SecondsToTicks(1))}
+	if v, d := EvaluateOwned(&emptyVictory, &blockingDefeat, c); v || d {
+		t.Fatalf("default polling returned victory=%v defeat=%v with a live enemy", v, d)
 	}
 }
 
 func TestEvaluateShortCircuitAndMissionArmed(t *testing.T) {
 	w := triggerWorld(t)
 	c := pollCtx(w, 0)
-	late := NewTimer(KindVictoryTimerRunsOut, 10)
+	late := New(KindVictoryTimerRunsOut, "", SecondsToTicks(10))
 	notPolledVictory := New(KindAllUnitsKilled, "")
 	firstDefeat := New(KindAllUnitsKilled, "")
 	notPolledDefeat := New(KindAllUnitsKilled, "")
 
-	if v, d := Evaluate([]*Trigger{late, notPolledVictory}, []*Trigger{firstDefeat, notPolledDefeat}, c); v || !d {
+	shortVictory := []*Trigger{late, notPolledVictory}
+	shortDefeat := []*Trigger{firstDefeat, notPolledDefeat}
+	if v, d := EvaluateOwned(&shortVictory, &shortDefeat, c); v || !d {
 		t.Fatalf("want false victory and first-true defeat, got v=%v d=%v", v, d)
 	}
 	if notPolledVictory.Completed || notPolledDefeat.Completed {
@@ -405,7 +407,9 @@ func TestEvaluateShortCircuitAndMissionArmed(t *testing.T) {
 	c.Celebrate = func() { celebrations++ }
 	c.MissionArmed = false
 	pure := New(KindDestroyAllUnits, "")
-	if v, d := Evaluate([]*Trigger{pure}, nil, c); v || d || celebrations != 0 || pure.Celebrated {
+	unarmedVictory := []*Trigger{pure}
+	var unarmedDefeat []*Trigger
+	if v, d := EvaluateOwned(&unarmedVictory, &unarmedDefeat, c); v || d || celebrations != 0 || pure.Celebrated {
 		t.Fatalf("unarmed mission evaluated queues: v=%v d=%v cues=%d trigger=%+v", v, d, celebrations, pure)
 	}
 }

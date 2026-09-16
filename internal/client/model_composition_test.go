@@ -4,7 +4,9 @@ import (
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
+	compiledmodel "github.com/nanolathe-gg/nanolathe/internal/model"
 	"github.com/nanolathe-gg/nanolathe/internal/palette"
+	presentationrender "github.com/nanolathe-gg/nanolathe/internal/render"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
@@ -32,12 +34,29 @@ func compositionClient(t *testing.T) *Client {
 	}
 }
 
+// extentDraw is one piece whose world vertices project, through
+// modelLocalVertex with the unit at the world origin, to the given local
+// offsets: lx is the x delta and ly is -z when the y delta is zero.
+func extentDraw(offsets [][2]int32) *presentationrender.UnitDraw {
+	vertices := make([][3]numeric.Fixed, len(offsets))
+	for i, o := range offsets {
+		vertices[i] = [3]numeric.Fixed{numeric.FixedFromInt(int64(o[0])), 0, numeric.FixedFromInt(int64(-o[1]))}
+	}
+	return &presentationrender.UnitDraw{
+		Model:  &compiledmodel.Model{},
+		Pieces: []presentationrender.PieceDraw{{WorldVertices: vertices}},
+	}
+}
+
 // TestCompositionImageMeasuresExtentWithMargin locks retail's image sizing:
 // the extrema are seeded at the model origin and a two-pixel margin is added on
 // every side [R-REN-03A §1].
 func TestCompositionImageMeasuresExtentWithMargin(t *testing.T) {
-	polys := []screenPoly{walkPoly([][2]int32{{3, 4}, {9, 4}, {3, 10}}, nil)}
-	w, h, ox, oy := modelExtent(polys)
+	c := compositionClient(t)
+	w, h, ox, oy, visible := c.projectedModelExtent(extentDraw([][2]int32{{3, 4}, {9, 4}, {3, 10}}), presentationrender.PieceLaneAll, false)
+	if !visible {
+		t.Fatal("a piece with published vertices measured as invisible")
+	}
 	// min is 0 on both axes because the extrema start at the model origin.
 	if w != 9+2*int(modelTargetMargin) || h != 10+2*int(modelTargetMargin) {
 		t.Fatalf("extent = %dx%d, want %dx%d", w, h, 9+2*int(modelTargetMargin), 10+2*int(modelTargetMargin))
@@ -48,10 +67,15 @@ func TestCompositionImageMeasuresExtentWithMargin(t *testing.T) {
 
 	// A model reaching left of its own origin pushes the origin right by
 	// exactly that overhang plus the margin.
-	polys = []screenPoly{walkPoly([][2]int32{{-5, 0}, {2, 0}, {-5, 3}}, nil)}
-	w, _, ox, _ = modelExtent(polys)
+	w, _, ox, _, _ = c.projectedModelExtent(extentDraw([][2]int32{{-5, 0}, {2, 0}, {-5, 3}}), presentationrender.PieceLaneAll, false)
 	if w != 7+2*int(modelTargetMargin) || ox != 5+modelTargetMargin {
 		t.Fatalf("negative overhang: width=%d origin=%d, want %d and %d", w, ox, 7+2*int(modelTargetMargin), 5+modelTargetMargin)
+	}
+
+	// A draw with no published vertices measures nothing rather than a
+	// placeholder box.
+	if _, _, _, _, visible := c.projectedModelExtent(&presentationrender.UnitDraw{Model: &compiledmodel.Model{}}, presentationrender.PieceLaneAll, false); visible {
+		t.Fatal("a draw with no vertices reported a visible extent")
 	}
 }
 

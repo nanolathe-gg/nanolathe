@@ -34,17 +34,6 @@ type UnitHullModels interface {
 	HullModel(name string) *compiledmodel.Model
 }
 
-// UnitHullModelFunc adapts a plain lookup to UnitHullModels.
-type UnitHullModelFunc func(name string) *compiledmodel.Model
-
-// HullModel calls f, or returns nil when f is nil.
-func (f UnitHullModelFunc) HullModel(name string) *compiledmodel.Model {
-	if f == nil {
-		return nil
-	}
-	return f(name)
-}
-
 // hullModels is the presentation model source the picker falls back to when a
 // caller supplies none. PickSnapshotUnit's signature is fixed by its shell
 // callers, which hold no model cache, so the cache registers itself when it is

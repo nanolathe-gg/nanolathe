@@ -215,8 +215,12 @@ func TestFeaturePassesDoNotReadFog(t *testing.T) {
 		Fog:       frame.FogView{Valid: true, W: 32, H: 32, Ch0: dark, Ch1: make([]byte, 32*32)},
 		Features:  []frame.FeatureView{short, tall},
 	}
-	if !fogUnexploredFeature(cur.Fog, short) || !fogUnexploredFeature(cur.Fog, tall) {
-		t.Fatal("scene does not exercise the never-seen state both features must ignore")
+	// Both anchors sit on never-seen fog tiles (fog is per 2x2-cell visibility
+	// tile, so the tile index is cell>>1) — the state the old gate culled on.
+	for _, f := range []frame.FeatureView{short, tall} {
+		if cur.Fog.Ch0[int((f.CZ>>1)*cur.Fog.W+(f.CX>>1))] != 15 {
+			t.Fatal("scene does not exercise the never-seen state both features must ignore")
+		}
 	}
 
 	clearIndexed(c)

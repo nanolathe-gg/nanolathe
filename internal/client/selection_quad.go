@@ -55,22 +55,6 @@ func selectionQuadBounds(m *compiledmodel.Model) (a, b [3]numeric.Fixed) {
 	return
 }
 
-// selectionQuadRotation returns the transform that rotates a model-space point
-// by the unit's orientation triple alone. Retail rotates the four corners with
-// the ordinary piece rotation of [R-RAST-01 §2] and contributes no translation
-// of its own: the root piece's authored offset is already inside the bounds of
-// rule 1, so adding it a second time would displace the quad. The authored
-// translation is therefore cancelled on this presentation copy of the piece
-// state rather than duplicating the rotation arithmetic here, which keeps the
-// Z-then-X-then-Y order and its round-to-nearest in one place [03 §2.4].
-func selectionQuadRotation(m *compiledmodel.Model, heading, pitch, bank uint16) compiledmodel.Transform {
-	states := make([]compiledmodel.PieceState, len(m.Pieces))
-	compiledmodel.FoldRootAngles(states, m.Root, heading, pitch, bank) // [03 §2.4] C24
-	root := m.Pieces[m.Root]
-	states[m.Root].Trans = [3]numeric.Fixed{-root.Translate[0], -root.Translate[1], -root.Translate[2]}
-	return compiledmodel.Compose(m, states, m.Root)
-}
-
 // selectionQuadCorners returns the four rotated corners in model space. All
 // four lie on the plane `y = A.y` and run
 // `(A.x,A.y,A.z) → (B.x,A.y,A.z) → (B.x,A.y,B.z) → (A.x,A.y,B.z)`
@@ -83,10 +67,7 @@ func selectionQuadCorners(m *compiledmodel.Model, heading, pitch, bank uint16) [
 		{b[0], a[1], b[2]},
 		{a[0], a[1], b[2]},
 	}
-	rotation := selectionQuadRotation(m, heading, pitch, bank)
-	for i, corner := range corners {
-		corners[i] = rotation.Apply(corner)
-	}
+	compiledmodel.RotatePoints(corners[:], heading, pitch, bank)
 	return corners
 }
 
@@ -108,10 +89,28 @@ func (c *Client) selectionQuadScreen(m *compiledmodel.Model, v frame.UnitView) (
 		return out, false
 	}
 	for i, r := range selectionQuadCorners(m, v.Heading, v.Pitch, v.Bank) {
-		sx, sy := c.cam.WorldToScreen(v.X.Add(r[0]), v.Y.Add(r[1]), v.Z.Sub(r[2]))
-		out[i] = [2]int32{sx - camera.OriginX, sy - camera.OriginY}
+		sx, sy := c.worldObjectScreen([3]numeric.Fixed{v.X, v.Y, v.Z}, r)
+		out[i] = [2]int32{sx, sy}
 	}
 	return out, true
+}
+
+// worldObjectScreen projects one model-relative offset about a unit position
+// with the world-object form of [03 R-WATER-01 §1] rule 3: X and Y add while
+// the rotated Z is SUBTRACTED — the 3DO handedness flip of [R-RAST-01 §2] —
+// and the result is re-based off the view origin the way every other world
+// writer re-bases it.
+//
+// It is the sum-before-floor form, not the cached composition image's
+// anchor-plus-local form, and the two must not share a helper: floor(a) +
+// floor(b) is floor(a+b) or one less, so the same vertex can land a pixel apart
+// under the two [R-RAST-01 §2].
+func (c *Client) worldObjectScreen(unit, rel [3]numeric.Fixed) (int32, int32) {
+	if c == nil || c.cam == nil {
+		return 0, 0
+	}
+	sx, sy := c.cam.WorldToScreen(unit[0].Add(rel[0]), unit[1].Add(rel[1]), unit[2].Sub(rel[2]))
+	return sx - camera.OriginX, sy - camera.OriginY
 }
 
 // drawSelectionQuad writes the four one-pixel Bresenham lines

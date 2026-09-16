@@ -400,13 +400,6 @@ func (p *DebrisPool) releaseSlot(index int) {
 	}
 }
 
-func (p *DebrisPool) evictBlock(index int) {
-	if index < 0 || index >= p.count {
-		return
-	}
-	p.clearBlock(index)
-}
-
 func (p *DebrisPool) clearBlock(index int) {
 	if index < 0 || index >= p.count || !p.blocks[index].occupied {
 		return

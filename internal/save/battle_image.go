@@ -190,15 +190,14 @@ func decodeCamera(bank *Bank, image *BattleImage) error {
 }
 
 func decodePlayers(bank *Bank, image *BattleImage) error {
-	ac, ok := bank.Account(PlayersAccount)
-	if !ok {
+	if _, ok := bank.Account(PlayersAccount); !ok {
 		return battleImageError("missing Players account", "Players account")
 	}
-	gameTime, ok := ac.BoxData(GameTimeBoxName, 0)
-	if !ok || len(gameTime) < 28 {
+	gameTime, ok := ReadGameTime(bank)
+	if !ok {
 		return battleImageError("short Players GameTime box", "at least 28 bytes")
 	}
-	copy(image.Scheduler[:], gameTime[:28])
+	image.Scheduler = gameTime
 	if meta, present := ReadPlayersMeta(bank); present {
 		image.HumanPlayer = meta.HumanPlayer
 	}

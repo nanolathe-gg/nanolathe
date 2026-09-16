@@ -6,7 +6,6 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/hud"
 	"github.com/nanolathe-gg/nanolathe/internal/render"
-	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // applyMinimapIntentForTest is the production wiring in miniature: the lens
@@ -16,19 +15,19 @@ func applyMinimapIntentForTest(cam *camera.Camera, layout camera.Minimap, dst hu
 	if cam == nil {
 		return false
 	}
-	intent, ok := MinimapCameraIntent(layout, dst, playW, playH, mouseX, mouseY)
+	wx, wz, ok := MinimapPointerWorld(layout, dst, playW, playH, mouseX, mouseY)
 	if ok {
-		cam.JumpToBattleViewCenter(intent.X, intent.Z)
+		cam.JumpToBattleViewCenter(wx, wz)
 	}
 	return ok
 }
 
-// TestMinimapCameraIntentRecentersOnTheClick locks the correction of
+// TestMinimapPointerWorldRecentersOnTheClick locks the correction of
 // [07 R-CAM-01 §11]: the clicked map point becomes the view *centre*, not the
 // camera origin. The superseded reading — "the lens writes the projected world
 // point directly as the camera origin" — is the pointer's world position, and
 // implementing it as the camera write put the click at the view's top-left.
-func TestMinimapCameraIntentRecentersOnTheClick(t *testing.T) {
+func TestMinimapPointerWorldRecentersOnTheClick(t *testing.T) {
 	playW, playH := int32(992), int32(896)
 	m := camera.LayoutMinimap(playW, playH)
 	dst := hud.Rect{X1: 0, Y1: 0, X2: 125, Y2: 125}
@@ -89,7 +88,7 @@ func TestMinimapCameraCaptureIntentClampsAnAlreadyCapturedPointer(t *testing.T) 
 	playW, playH := int32(992), int32(896)
 	m := camera.LayoutMinimap(playW, playH)
 	dst := hud.Rect{X1: 200, Y1: 100, X2: 325, Y2: 225}
-	if _, ok := MinimapCameraIntent(m, dst, playW, playH, dst.X2+40, dst.Y2+50); ok {
+	if _, _, ok := MinimapPointerWorld(m, dst, playW, playH, dst.X2+40, dst.Y2+50); ok {
 		t.Fatal("new camera latch admitted a pointer outside the radar")
 	}
 	got, ok := MinimapCameraCaptureIntent(m, dst, playW, playH, dst.X2+40, dst.Y2+50)
@@ -197,14 +196,6 @@ func TestDrawMinimapLayoutDrawsPictureOnly(t *testing.T) {
 	}
 	if layout.PadY > 0 && c.indexed[int(barY)*c.width+int(barX)] != 0 {
 		t.Fatalf("letterbox bar was written at %d,%d", barX, barY)
-	}
-}
-
-func TestMinimapPlaySizeForMinimap(t *testing.T) {
-	ter := &world.Terrain{CellW: 64, CellH: 64, PlayRight: 992, PlayBottom: 896}
-	w, h := PlaySizeForMinimap(ter)
-	if w != 992 || h != 896 {
-		t.Fatalf("PlaySizeForMinimap want 992,896 got %d,%d", w, h)
 	}
 }
 

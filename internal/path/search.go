@@ -281,17 +281,10 @@ type SearchConfig struct {
 	Workspace *Workspace
 }
 
-// SearchResult is what one completed search produced: the route points, the
-// terminating status, the status the search notified along the way, and the
-// counters the scheduler charges work against.
-type SearchResult struct {
-	Points     []Point
-	Status     Status
-	Notified   Status
-	Popped     int
-	SetupSteps int
-	Seeded     bool
-}
+// A completed search reports its route points, its terminating status, the
+// status it notified along the way and the counters the scheduler charges work
+// against; Session exposes each of them as it produces them, so no whole-search
+// result record exists in package source.
 
 type entry struct {
 	status uint8
@@ -594,38 +587,6 @@ func (s *Session) finish(points []Point) {
 
 func routeFootPrint(cfg SearchConfig) Point {
 	return Point{X: cfg.FootPrintX, Z: cfg.FootPrintZ}
-}
-
-// Search runs cfg to completion in one call and returns its result. The
-// scheduler uses the incremental Session form instead; this is the whole-search
-// entry for callers with no work budget to honour.
-func Search(cfg SearchConfig) SearchResult {
-	s := NewSession(cfg)
-	if !s.done {
-		s.Resume(1 << 30)
-	}
-	return SearchResult{Points: s.resultPoints, Status: s.resultStatus, Notified: s.notified, Popped: s.popped, SetupSteps: s.setupSteps, Seeded: s.seeded}
-}
-
-func straightRunLen(ns *NodeStore, id NodeID) int {
-	if id == invalidNodeID {
-		return 0
-	}
-	if run := ns.Get(id).Run; run != 0 {
-		return int(run)
-	}
-	n := ns.Get(id)
-	if n.Dir == DirNone {
-		return 0
-	}
-	count := 1
-	for parent := n.Parent; parent != invalidNodeID; parent = ns.Get(parent).Parent {
-		if ns.Get(parent).Dir != n.Dir {
-			break
-		}
-		count++
-	}
-	return count
 }
 
 func reconstructRoute(start, goal Cell, ns *NodeStore, footprint Point) []Point {

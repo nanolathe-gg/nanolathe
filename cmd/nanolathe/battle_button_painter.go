@@ -3,6 +3,8 @@ package main
 import (
 	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
+
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // retailButtonRenderVerdict is the button painter's state reduction. Art is
@@ -82,7 +84,7 @@ func stockButtonBase(entry *formats.GAFEntry, gad gui.Gadget) int {
 		if frame == nil {
 			continue
 		}
-		score := absInt(int(frame.Width)-int(gad.Rect.W)) + absInt(int(frame.Height)-int(gad.Rect.H))
+		score := numeric.Abs(int(frame.Width)-int(gad.Rect.W)) + numeric.Abs(int(frame.Height)-int(gad.Rect.H))
 		if score < bestScore {
 			best, bestScore = i, score
 		}
@@ -93,6 +95,25 @@ func stockButtonBase(entry *formats.GAFEntry, gad gui.Gadget) int {
 // retailButtonCaptionPen is shared by frontend and battle button captions.
 // The held down word deliberately is absent: stages move the pen, presses do
 // not [03 R-FONT-01 §6].
+//
+// It is the retail button painter's pen arithmetic [03 R-FONT-01 §6], and the
+// same arithmetic the queue-count text written into a build-product toy's own
+// text slot [07 R-P0-11 §2] is laid out with. `s` is 1 when the gadget's
+// `stages` field is non-zero. The vertical pen is
+// `gy + trunc((h-1-metric)/2) + s` for the left/right/centre attributes, but
+// the build-attribute variant (attribute bit 0x20) keeps the centred
+// horizontal pen and instead anchors near the bottom edge:
+// `bottom - 4 - metric + s`. `metric` is the line metric of the family the
+// caption is drawn with — the capital-I frame height plus two for a GAF font
+// (the build-product case; see drawProductButtonCaptionSelected), or the FNT
+// header height field on the GAF pen's null-slot fallback.
+//
+// Build-product buttons author attribute 0x20 and no left/right/centre bit
+// (asset census over the reference install's guis/*.gui files, the same
+// census that backs [07 R-P0-11 §2]'s refinement: all 480 author
+// `attribs = 32` alongside `commonattribs = 4`), so the count lands at the
+// bottom-centre of the button, not the vertically-centred left inset a
+// left-aligned button would use.
 func retailButtonCaptionPen(gad gui.Gadget, r gui.Rect, textWidth, metric int) (x, y int, build, centred bool) {
 	s := boolInt(gad.Stages != 0)
 	right, bottom := int(r.X+r.W-1), int(r.Y+r.H-1)

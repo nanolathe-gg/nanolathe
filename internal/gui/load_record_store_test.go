@@ -23,10 +23,10 @@ func guiRecordStoreFS(t *testing.T, panel string) vfs.FSOps {
 }
 
 func TestLoadMissingCommonKeepsDeterministicRecord(t *testing.T) {
-	window, err := Load(guiRecordStoreFS(t, `
+	window, err := LoadWithTranslation(guiRecordStoreFS(t, `
 [GADGET0] { [COMMON] { id=0; name=HEADER; width=640; height=480; } }
 [GADGET1] { gaffile=99; text=still parsed; }
-`), "panel.gui")
+`), "panel.gui", nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestLoadMissingCommonKeepsDeterministicRecord(t *testing.T) {
 }
 
 func TestLoadCommonGAFFileUsesTypedDuplicateLookup(t *testing.T) {
-	window, err := Load(guiRecordStoreFS(t, `
+	window, err := LoadWithTranslation(guiRecordStoreFS(t, `
 [GADGET0] { [COMMON] { id=0; name=HEADER; width=640; height=480; } }
 [GADGET1] {
   [COMMON] {
@@ -52,7 +52,7 @@ func TestLoadCommonGAFFileUsesTypedDuplicateLookup(t *testing.T) {
     gaffile=9;
   }
 }
-`), "panel.gui")
+`), "panel.gui", nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestLoadCommonGAFFileUsesTypedDuplicateLookup(t *testing.T) {
 }
 
 func TestLoadStoresCoordinatesAsSigned16BeforeSentinels(t *testing.T) {
-	window, err := Load(guiRecordStoreFS(t, `
+	window, err := LoadWithTranslation(guiRecordStoreFS(t, `
 [GADGET0] { [COMMON] { id=0; name=HEADER; width=640; height=480; } }
 [GADGET1] {
   [COMMON] {
@@ -75,7 +75,7 @@ func TestLoadStoresCoordinatesAsSigned16BeforeSentinels(t *testing.T) {
     active=1;
   }
 }
-`), "panel.gui")
+`), "panel.gui", nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}

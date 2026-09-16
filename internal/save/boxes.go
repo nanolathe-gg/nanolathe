@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nanolathe-gg/nanolathe/internal/clock"
 	"github.com/nanolathe-gg/nanolathe/internal/economy"
 )
 
@@ -350,37 +349,36 @@ func ReadCamera(bank *Bank) (Camera, bool) {
 // [01 §7.3] [PLAN_03 C14] (I13 exception).
 // ---------------------------------------------------------------------------
 
-// WriteGameTime writes the 28-byte scheduler block into Players/GameTime
+// WriteGameTime appends the 28-byte scheduler block to Players/GameTime
 // [08 "Scheduler and random state in saves"]. The writer copies those 28 bytes
 // verbatim; the loader requires at least 28 bytes and ignores trailing bytes.
-func WriteGameTime(b *Builder, clk *clock.State) {
-	if b == nil || clk == nil {
+// The block itself is produced by clock.State.SaveBox [01 §7.3].
+func WriteGameTime(b *Builder, box [28]byte) {
+	if b == nil {
 		return
 	}
 	ac := builderAccount(b, PlayersAccount)
-	box := clk.SaveBox() // 28 bytes [08 "Scheduler and random state in saves"] [01 §7.3]
 	ac.AppendBox(GameTimeBoxName, 0, box[:])
 }
 
-// ReadGameTime reads the 28-byte scheduler block from Players/GameTime.
+// ReadGameTime returns the 28-byte scheduler block from Players/GameTime.
 // It requires at least 28 bytes; larger boxes have trailing bytes ignored;
 // a short or absent read fails without partial application [08 "Scheduler and
-// random state in saves"].
-func ReadGameTime(bank *Bank) (*clock.State, bool) {
+// random state in saves"]. clock.State.LoadBox turns the block back into
+// scheduler state.
+func ReadGameTime(bank *Bank) ([28]byte, bool) {
+	var box [28]byte
 	ac, ok := bank.Account(PlayersAccount)
 	if !ok {
-		return nil, false
+		return box, false
 	}
 	data, ok := ac.BoxData(GameTimeBoxName, 0)
 	if !ok || len(data) < 28 {
-		return nil, false
+		return box, false
 	}
 	// Larger boxes: ignore trailing bytes [08 "Scheduler and random state in saves"].
-	var box [28]byte
 	copy(box[:], data[:28])
-	var clk clock.State
-	clk.LoadBox(box)
-	return &clk, true
+	return box, true
 }
 
 // ---------------------------------------------------------------------------
@@ -678,23 +676,6 @@ func ReadPlayerSlot(bank *Bank, index int) (PlayerSlot, bool) {
 	return p, true
 }
 
-// ReadAllPlayerSlots is gated on a successful 28-byte Players/GameTime read:
-// a short or absent read processes zero Player%i accounts (after the human-player
-// byte has already been applied) [08 "Player records"]. It returns up to 10 slots
-// that were present; the human-player byte is handled separately via ReadHumanPlayer.
-func ReadAllPlayerSlots(bank *Bank) []PlayerSlot {
-	if _, ok := ReadGameTime(bank); !ok { // gate [08 "Player records"]
-		return nil
-	}
-	var out []PlayerSlot
-	for i := 0; i < 10; i++ {
-		if p, ok := ReadPlayerSlot(bank, i); ok {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
 // PlayersMeta holds the Players-account scalars outside Player%i [08 "Account inventory"].
 type PlayersMeta struct {
 	HumanPlayer int32 // "Human Player" [08 "Account inventory"]
@@ -706,22 +687,6 @@ type PlayersMeta struct {
 // that lost the item leaves the local and viewing identities alone instead of
 // handing them to slot 0.
 const HumanPlayerLoadDefault int32 = 10
-
-// WritePlayersMeta writes Players-account meta: Human Player and the 28-byte
-// GameTime box via WriteGameTime (C15) [08 "Account inventory"] [08 "Scheduler and random state in saves"].
-func WritePlayersMeta(b *Builder, meta PlayersMeta, clk *clock.State) {
-	if b == nil {
-		return
-	}
-	ac := builderAccount(b, PlayersAccount)
-	ac.SetInt("Human Player", meta.HumanPlayer)
-	if clk != nil {
-		// WriteGameTime appends the 28-byte box [08 "Scheduler and random state in saves"].
-		// We already have the account; avoid duplicate Add by directly appending.
-		box := clk.SaveBox()
-		ac.AppendBox(GameTimeBoxName, 0, box[:])
-	}
-}
 
 // ReadPlayersMeta reads Human Player (always) and GameTime gating is handled by
 // callers that need Player%i; it returns the meta even if GameTime is short.

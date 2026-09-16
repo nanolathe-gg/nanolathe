@@ -27,9 +27,6 @@ func TestMobileBuildNodeCarriesRetryCounterNotOrientation(t *testing.T) {
 		get  func() Node
 	}{
 		{name: "mobile", get: func() Node { return NewMobileBuildNode(cat, "one", 4, 8, 0x1234, 1, 2, 3, false) }},
-		{name: "mobile explicit id", get: func() Node {
-			return NewMobileBuildNodeWithID(Lookup("VTOL_MobileBuild"), cat, "one", 4, 8, 0x1234, 1, 2, 3, false)
-		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			n := tc.get()
@@ -51,14 +48,8 @@ func TestBuildConstructorsKeepZeroForUnresolvedCatalogDefinition(t *testing.T) {
 		name string
 		get  func(*content.Catalog, string) Node
 	}{
-		{name: "factory", get: func(cat *content.Catalog, key string) Node {
-			return NewFactoryBuildNode(cat, key, 1, 2, 3, false)
-		}},
 		{name: "mobile", get: func(cat *content.Catalog, key string) Node {
 			return NewMobileBuildNode(cat, key, 0, 0, 0, 1, 2, 3, false)
-		}},
-		{name: "mobile explicit id", get: func(cat *content.Catalog, key string) Node {
-			return NewMobileBuildNodeWithID(Lookup("MobileBuild"), cat, key, 0, 0, 0, 1, 2, 3, false)
 		}},
 	}
 	for _, tc := range constructors {

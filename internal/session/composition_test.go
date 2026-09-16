@@ -149,7 +149,7 @@ func TestConstructorsDoNotRequireGlobalRNG(t *testing.T) {
 	rng.Global.Sim = nil
 	rng.Global.Crt = nil
 
-	if _, err := NewMissionWithProgress(nil, nil, "missing", 0, nil); err == nil || strings.Contains(err.Error(), "RNG") {
+	if _, err := NewMissionWithEntryOptions(nil, nil, "missing", 0, 0, 0, MissionEntryOptions{}, nil); err == nil || strings.Contains(err.Error(), "RNG") {
 		t.Fatalf("mission constructor error = %v, want a domain error with no RNG dependency", err)
 	}
 	if _, err := NewSkirmishWithProgress(nil, nil, SkirmishConfig{MapName: "missing"}, nil); err == nil || strings.Contains(err.Error(), "RNG") {
@@ -442,15 +442,15 @@ func TestTopologySameForBothConstructors(t *testing.T) {
 func TestMissingContentAborts(t *testing.T) {
 	fs := fsWithMap(t, "[GlobalHeader]\n{\n[Schema 0]\n{\nType=Network 1;\n}\n}\n")
 	emptyCat := &content.Catalog{Units: map[string]*content.UnitDef{}, Features: map[string]*content.FeatureDef{}, Maps: map[string]*content.MapHeader{}, Sides: []*content.SideDef{}}
-	if _, err := NewSkirmishWithFS(fs, emptyCat, SkirmishConfig{MapName: "test", NumPlayers: 2}); err == nil {
+	if _, err := NewSkirmishWithProgress(fs, emptyCat, SkirmishConfig{MapName: "test", NumPlayers: 2}, nil); err == nil {
 		t.Fatalf("strict skirmish with empty catalog should abort")
 	}
-	if _, err := NewMissionWithFS(fs, emptyCat, "test.ota", 0); err == nil {
+	if _, err := NewMissionWithEntryOptions(fs, emptyCat, "test.ota", 0, 0, 0, MissionEntryOptions{}, nil); err == nil {
 		t.Fatalf("strict mission with empty catalog should abort")
 	}
 	cat := minimalCatalogForStrict()
 	fsNoTNT := fsWithMap(t, "[GlobalHeader]\n{\n[Schema 0]\n{\nType=Network 1;\n[specials]\n{\n[special0]\n{\nspecialwhat=StartPos1;\nXPos=0;\nZPos=0;\n}\n}\n}\n}\n")
-	if _, err := NewSkirmishWithFS(fsNoTNT, cat, SkirmishConfig{MapName: "test", NumPlayers: 2}); err == nil {
+	if _, err := NewSkirmishWithProgress(fsNoTNT, cat, SkirmishConfig{MapName: "test", NumPlayers: 2}, nil); err == nil {
 		t.Fatalf("strict skirmish with missing TNT should abort")
 	}
 }

@@ -73,31 +73,9 @@ func (u *Unit) raiseScriptTouched() {
 	u.Pending |= PendingScriptTouched
 }
 
-func unitPortHandlers(vm *cob.VM, u *Unit) map[cob.Port]func([]int32) int32 {
-	bindings := unitPortBindings(vm, u)
-	ports := make(map[cob.Port]func([]int32) int32, len(bindings))
-	for port, binding := range bindings {
-		binding := binding
-		ports[port] = func(args []int32) int32 {
-			if len(args) >= 2 && binding.Write != nil {
-				binding.Write(args[1])
-				return 0
-			}
-			if binding.Read == nil {
-				return 0
-			}
-			var cells [4]int32
-			copy(cells[:], args[1:])
-			return binding.Read(cells)
-		}
-	}
-	return ports
-}
-
-// unitPortBindings is the production port surface. It preserves the legacy
-// handler helper above for callers that still exercise it directly, but makes
-// the two COB dispatches explicit: reads always receive four cells and cannot
-// invoke a state write [04 R-COB-03 §1][04 R-COB-03 §4].
+// unitPortBindings is the production port surface. It makes the two COB
+// dispatches explicit: reads always receive four cells and cannot invoke a
+// state write [04 R-COB-03 §1][04 R-COB-03 §4].
 func unitPortBindings(vm *cob.VM, u *Unit) map[cob.Port]cob.PortBinding {
 	if u == nil {
 		return nil

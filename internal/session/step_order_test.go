@@ -66,7 +66,7 @@ func TestMissionTriggerPrecedence(t *testing.T) {
 		s.Mission.Type = typ
 		s.Mission.Units = []mission.UnitPlacement{{}}
 		s.Mission.Victory = []*triggers.Trigger{triggers.New(triggers.KindDestroyAllUnits, "")}
-		s.Mission.Defeat = []*triggers.Trigger{triggers.NewTimer(triggers.KindDeathTimerRunsOut, 0)}
+		s.Mission.Defeat = []*triggers.Trigger{triggers.New(triggers.KindDeathTimerRunsOut, "", triggers.SecondsToTicks(0))}
 		for _, u := range s.Units.IterSliced() {
 			if u != nil && u.Owner == 1 {
 				s.Units.Destroy(u.Handle, units.DeathKilled)

@@ -57,36 +57,6 @@ func cycleInt(value, min, max, delta int) int {
 	return min + value
 }
 
-// setOpponentCount retains the retail slot initialization used by the
-// authored Player%d gadgets when an installed GUI provides them.
-func (g *gameShell) setOpponentCount(opponents int) {
-	if opponents < 1 {
-		opponents = 1
-	}
-	if opponents > session.SkirmishMaxPlayers-1 {
-		opponents = session.SkirmishMaxPlayers - 1
-	}
-	g.setup.NumPlayers = opponents + 1
-	g.retailControllersSet = true
-	for i := 0; i < session.SkirmishMaxPlayers; i++ {
-		switch {
-		case i == 0:
-			g.setup.Players[i].Controller = session.SkirmishDefaultController
-			g.retailControllers[i] = 1
-		case i < g.setup.NumPlayers:
-			g.setup.Players[i].Controller = 1
-			g.retailControllers[i] = 2
-		default:
-			g.setup.Players[i].Controller = session.SkirmishDefaultController
-			g.retailControllers[i] = 0
-		}
-	}
-	g.setup.ApplyDefaults()
-	if g.selectedSlot >= g.setup.NumPlayers {
-		g.selectedSlot = g.setup.NumPlayers - 1
-	}
-}
-
 func decreaseResource(value int) int {
 	value -= resourceStep
 	if value < resourceMin {
@@ -106,14 +76,4 @@ func increaseResource(value int) int {
 		return 500
 	}
 	return value
-}
-
-func lineOfSightName(enabled, losType int) string {
-	if enabled == 0 {
-		return "MAPPED"
-	}
-	if losType == 0 {
-		return "FLAT"
-	}
-	return "ELEVATION"
 }

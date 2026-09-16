@@ -23,7 +23,7 @@ import (
 
 // fr4Session composes a two-player skirmish and drives it into battle, or
 // skips. It is read-only against the catalog — it only reads map schemas and
-// hands the catalog to NewSkirmishWithFS, it never writes into it — so it
+// hands the catalog to NewSkirmishWithProgress, it never writes into it — so it
 // shares the process-wide compile [internal/testsupport/retailcat].
 func fr4Session(t *testing.T) (*Session, *content.Catalog, func()) {
 	t.Helper()
@@ -52,7 +52,7 @@ func fr4Session(t *testing.T) (*Session, *content.Catalog, func()) {
 	cfg.ApplyDefaults()
 	cfg.Players[0].Controller = 0
 	cfg.Players[1].Controller = 1
-	sess, err := NewSkirmishWithFS(fs, cat, cfg)
+	sess, err := NewSkirmishWithProgress(fs, cat, cfg, nil)
 	if err != nil {
 		t.Fatalf("skirmish: %v", err)
 	}

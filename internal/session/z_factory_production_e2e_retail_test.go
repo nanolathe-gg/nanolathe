@@ -71,7 +71,7 @@ func TestFactoryProductionEndToEndRetail(t *testing.T) {
 	cfg.ApplyDefaults()
 	cfg.Players[0].Controller = 0 // human
 	cfg.Players[1].Controller = 1 // computer
-	sess, err := NewSkirmishWithFS(fs, cat, cfg)
+	sess, err := NewSkirmishWithProgress(fs, cat, cfg, nil)
 	if err != nil {
 		t.Fatalf("skirmish: %v", err)
 	}

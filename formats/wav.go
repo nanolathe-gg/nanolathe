@@ -3,9 +3,6 @@ package formats
 import (
 	"encoding/binary"
 	"fmt"
-	"time"
-
-	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // WAV describes PCM metadata for canonical RIFF/WAVE and supported legacy
@@ -145,21 +142,4 @@ func EncodeWAV(data []byte, w *WAV) ([]byte, error) {
 	binary.LittleEndian.PutUint32(out[40:44], uint32(len(pcm)))
 	copy(out[44:], pcm)
 	return out, nil
-}
-
-// Duration returns the playing time implied by the sample count and rate.
-func (w *WAV) Duration() time.Duration {
-	if w == nil || w.ByteRate == 0 {
-		return 0
-	}
-	return time.Duration(uint64(w.DataSize) * uint64(time.Second) / uint64(w.ByteRate))
-}
-
-// LoadWAVFile reads and decodes a WAVE file from the VFS.
-func LoadWAVFile(fs *vfs.FS, name string) (*WAV, error) {
-	data, err := readVFS(fs, name)
-	if err != nil {
-		return nil, err
-	}
-	return LoadAudio(data)
 }

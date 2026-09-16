@@ -19,7 +19,6 @@ const (
 	OrderSubtypeCode5  = 0x18
 	OrderSubtypeCode6  = 0x14
 	ScriptSnapshotSize = 0x528
-	ScriptPieceSize    = 0x6C
 	FeatureTypeName    = 0x80
 
 	UnitsVersionRetail = 0x11
@@ -78,17 +77,6 @@ func ReadUnitsHeader(bank *Bank) (version int32, count int32, ok bool) {
 	return v, c, true
 }
 
-// IsUnitsLoadable reports whether the bank's Units account is loadable per
-// the retail Version==0x11 gate [P1-13 §3.4]. Retail skips whole Units
-// non-transactionally when Version!=0x11, but load returns 1 [P1-13 §3.3].
-func IsUnitsLoadable(bank *Bank) bool {
-	v, _, ok := ReadUnitsHeader(bank)
-	if !ok {
-		return false
-	}
-	return v == UnitsVersionRetail
-}
-
 // UnitStableID extracts the u16 stableID at 0x21 from a 0xB8 payload
 // [P1-13 §2.2]. Returns 0 for null sentinel [P1-13 §2.1].
 func UnitStableID(payload []byte) uint16 {
@@ -111,20 +99,6 @@ func WriteUnitBox(b *Builder, index int, payload []byte) error {
 	ac := builderAccount(b, UnitsAccount)
 	ac.AppendBox("", int32(index), payload)
 	return nil
-}
-
-// ReadUnitBox returns an opaque raw unit record when its length is one of the
-// established unit-box lengths [08 "Unit and script records"].
-func ReadUnitBox(bank *Bank, index int) ([]byte, bool) {
-	ac, ok := bank.Account(UnitsAccount)
-	if !ok {
-		return nil, false
-	}
-	data, ok := ac.BoxData("", int32(index))
-	if !ok || !ValidateUnitBoxSize(len(data)) {
-		return nil, false
-	}
-	return append([]byte(nil), data...), true
 }
 
 // WriteOrderBox appends an opaque raw order record using the established
@@ -228,35 +202,4 @@ func WriteMeteorScalars(b *Builder, m MeteorScalars) {
 	for i, name := range meteorScalarNames {
 		ac.SetInt(name, values[i])
 	}
-}
-
-// ReadMeteorScalars returns a value only when all nine established integer
-// items are present. No defaults for a partial Meteor account are established,
-// so incomplete input is reported as unsupported by the bool result
-// [08 "Meteor showers"].
-func ReadMeteorScalars(bank *Bank) (MeteorScalars, bool) {
-	var m MeteorScalars
-	ac, ok := bank.Account(MeteorAccount)
-	if !ok {
-		return m, false
-	}
-	values := [...]*int32{
-		&m.Enabled,
-		&m.Active,
-		&m.NextStrikeTime,
-		&m.TimeStrikeEnds,
-		&m.NextHitTime,
-		&m.OriginX,
-		&m.OriginZ,
-		&m.TargetX,
-		&m.TargetZ,
-	}
-	for i, name := range meteorScalarNames {
-		value, present := ac.Int(name)
-		if !present {
-			return MeteorScalars{}, false
-		}
-		*values[i] = value
-	}
-	return m, true
 }

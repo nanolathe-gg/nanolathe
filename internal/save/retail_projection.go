@@ -99,9 +99,8 @@ func (p RetailProjection) Build() (*Builder, error) {
 	}
 
 	WriteCamera(b, p.Camera)
-	players := builderAccount(b, PlayersAccount)
-	players.SetInt("Human Player", p.HumanPlayer)
-	players.AppendBox(GameTimeBoxName, 0, p.Scheduler[:])
+	builderAccount(b, PlayersAccount).SetInt("Human Player", p.HumanPlayer)
+	WriteGameTime(b, p.Scheduler)
 	// The `Players` account carries `Human Player` and the 28-byte `GameTime`
 	// box and nothing else; each slot's alliance row is written inside its own
 	// `Player%i` account by WritePlayerSlot [08 "Player records"].
@@ -272,7 +271,9 @@ func writeUnitImage(b *Builder, image UnitImage) error {
 			return fmt.Errorf("nanolathe: retail projection: unit %04x accessory box has size %d: logical path save/Units, providers searched [projection], expected 48 bytes", id, len(box.Data))
 		}
 		ac.AppendBox(box.Name, 0, box.Data)
-		ac.AppendBox("", int32(i), record.Data)
+		if err := WriteUnitBox(b, i, record.Data); err != nil {
+			return err
+		}
 	}
 	if len(image.Records) > 0 {
 		// Retail writes the header scalars only after all live unit records have

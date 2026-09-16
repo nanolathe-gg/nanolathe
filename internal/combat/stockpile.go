@@ -30,10 +30,6 @@ const StockpileRetryAccepted = 5 // [06 §11.1] accepted but incomplete work sch
 // StockpileRetryBlocked is the wait when slot byte is already greater than 199 [06 §11.1].
 const StockpileRetryBlocked = 300 // [06 §11.1] a new round is blocked with a 300-tick wait when the slot byte is already greater than 199
 
-// StockpileMaxAmmo is the ordinary path limit for completed rounds [06 §11.1].
-// Ordinary path can reach 200 but does not start a round beyond it.
-const StockpileMaxAmmo = 200 // [06 §11.1]
-
 // ---------------------------------------------------------------------------
 // Stockpile queue state [06 §11.1]
 // ---------------------------------------------------------------------------
@@ -62,9 +58,6 @@ type StockpileEntry struct {
 	Progress int32              // per-node progress 0..BuildTime, step 5 capped [06 §11.1]
 	SlotIdx  int32              // slot index selecting the unit's weapon slot directly, stored verbatim [06 §11.1]
 }
-
-// StockpileNodeSize is the retail queue node size 0x56=86 bytes [P1-09 §2.1].
-const StockpileNodeSize = 0x56 // [P1-09 §2.1]
 
 // StockpileSlotByteCap is the >199 block threshold [P1-09 §2.2] [06 §11.1].
 //
@@ -98,20 +91,6 @@ func CanStartStockpileRound(ammo int32) bool {
 // and must be treated as no weapon / wait without corrupting memory [P1-09 §2.3].
 func IsValidStockpileSlotIdx(slotIdx int32) bool {
 	return slotIdx >= 0 && slotIdx < NumSlots // 0..2 [P1-09 §2.3]
-}
-
-// QueueProducers names the four producers that push a BUILDWEAPON entry onto a
-// unit's secondary production queue [06 §11.1][P1-09 §2.1]. Cancelling a
-// partially built round unlinks the node and leaves its fractional carry in the
-// economy buckets rather than refunding it [P1-09 §5].
-//
-// The names are the producers, not their addresses: the first two literals used
-// to carry executable addresses.
-var QueueProducers = []string{
-	"HUD MAKENUKE/MAKEANTI order alias", // [06 §11.1] the two order aliases
-	"initial-mission Bw verb parser",    // [P1-09 §2.1]
-	"network build decoder 0x12",        // [P1-09 §2.1]
-	"network completion decoder 0x2C",   // [P1-09 §2.1]
 }
 
 // StockpileCostDelta computes the admitted delta for one resource for this visit
@@ -268,7 +247,7 @@ func TickStockpile(entry *StockpileEntry, slot *Slot, tick uint32, admit func(en
 // retail corpus (I14), which is the vertical-launch creator of [06 §6.6]. The
 // gate, the launch-before-production ordering, the post-spawn decrement of the
 // slot byte and the skipped reload store all belong to the pipeline
-// (StepWeaponsForUnit and TickSlot), not to the spawner [06 §4.1] C1
+// (Service.StepWeaponsForUnit), not to the spawner [06 §4.1] C1
 // [06 §4.2] C7 [06 §11.1].
 
 // ---------------------------------------------------------------------------
@@ -315,8 +294,10 @@ func InterceptorCoverageSide(coverage int32) int64 {
 // inside is rejected. A coverage at or above 32,768 wraps C<<17 and accepts
 // whatever set the formula then gives [06 R-WPN-05 §10].
 func WithinInterceptorCoverage(candidateAim Vec3, interceptorPos Vec3, coverage int32) bool {
-	bias := uint32(coverage) << 16  // C<<16 [06 R-WPN-05 §10]
-	limit := uint32(coverage) << 17 // C<<17 [06 R-WPN-05 §10]
+	// The two terms are the named 32-bit forms above, so the compare and the
+	// sizing helpers can never drift apart [06 R-WPN-05 §10].
+	bias := uint32(InterceptorCoverageHalfExtent(coverage))
+	limit := uint32(InterceptorCoverageSide(coverage))
 	// The deltas are 32-bit subtractions of the 16.16 values [06 R-WPN-05 §10].
 	dx := uint32(int32(interceptorPos.X.Raw() - candidateAim.X.Raw()))
 	if dx+bias > limit {
@@ -345,33 +326,6 @@ func IsProjectileClaimed(svc *Service, candidate pool.Handle) bool {
 		}
 	}
 	return false
-}
-
-// FindInterceptorTarget scans the current packed projectile prefix in increasing
-// order for the first unclaimed enemy-owned targetable record whose stored
-// aim point lies within the inclusive coverage square [06 §11.2] C29.
-//
-// Criteria per [06 §11.2]:
-//   - nonzero slot ammunition is checked by caller (interceptor slot must have ammo) [06 §11.2]
-//   - owner byte differs (alliance not consulted) [06 §11.2]
-//   - candidate's weapon is targetable [06 §11.2]
-//   - stored X and Z coordinates each inside inclusive coverage bounds [06 §11.2]
-//   - not already referenced by any projectile's reservation link [06 §11.2]
-//
-// The slot store written at acquisition packs the candidate's current position
-// into the interceptor unit's fixed target words [06 §11.2]; rescanning immediately
-// before firing and storing the authoritative reservation link at spawn is the
-// vertical-launch executor's, through TryFire's InterceptorRescan port
-// [06 §11.2][06 §6.6].
-//
-// Returns the candidate handle, its current position (to be stored in slot's
-// fixed target words), and whether a candidate was found.
-// Determinism: prefix ascending, first unclaimed wins, not nearest [06 §11.2] I1.
-func FindInterceptorTarget(svc *Service, interceptorPos Vec3, interceptorSide uint8, coverage int32, weapons map[int32]*content.WeaponDef) (pool.Handle, Vec3, bool) {
-	return findInterceptorTarget(svc, interceptorPos, interceptorSide, coverage, func(id int32) (*content.WeaponDef, bool) {
-		w, ok := weapons[id]
-		return w, ok
-	})
 }
 
 // findInterceptorTarget is FindInterceptorTarget over a weapon LOOKUP rather
@@ -414,77 +368,8 @@ func findInterceptorTarget(svc *Service, interceptorPos Vec3, interceptorSide ui
 }
 
 // ---------------------------------------------------------------------------
-// Interceptor detonation and victim signature [06 §11.2] [06 §9.3] C29
+// Interceptor detonation membership [06 §11.2] [06 §9.3] C29
 // ---------------------------------------------------------------------------
-
-// VictimSig is the signature packet published for each qualifying victim per
-// [06 §11.2]. It contains the victim's stored target position and weapon index
-// byte [06 §11.2].
-// The weapon byte is the one the weapon loader stamps into every record with
-// that record's own slot index, 0..255. Because an authored `ID` selects the
-// record slot ([02 "Weapon record"]), the byte is the low byte of the authored
-// ID for every record an ID selects, so `uint8(WeaponID & 0xFF)` is exact
-// [06 R-WPN-05 §10]. The signature exists to replicate the removal to other
-// endpoints; in a single-process game the local impact-selector call is the
-// whole effect and the byte has no consumer [06 R-WPN-05 §10].
-type VictimSig struct {
-	TargetPos Vec3  // stored target position [06 §11.2]
-	WeaponIdx uint8 // weapon record slot index [06 R-WPN-05 §10]
-}
-
-// PublishVictimSig builds the signature for a projectile per [06 §11.2].
-func PublishVictimSig(rec Projectile) VictimSig {
-	return VictimSig{
-		TargetPos: rec.TargetPos,              // stored target position [06 §11.2]
-		WeaponIdx: uint8(rec.WeaponID & 0xFF), // record slot index [06 R-WPN-05 §10]
-	}
-}
-
-// PublishExploderSig builds the exploding projectile's own signature per [06 §11.2].
-// It is published once per qualifying victim [06 §11.2].
-func PublishExploderSig(rec Projectile) VictimSig {
-	return VictimSig{
-		TargetPos: rec.TargetPos,
-		WeaponIdx: uint8(rec.WeaponID & 0xFF),
-	}
-}
-
-// VictimSigEqual reports exact-match equality of two signatures per [06 §11.2]
-// C29: the packet receiver scans pool order and impacts the first record whose
-// stored target position and weapon index byte all match [06 §11.2]. All fields
-// must match exactly; non-match survives.
-func VictimSigEqual(a, b VictimSig) bool {
-	return a.WeaponIdx == b.WeaponIdx &&
-		a.TargetPos.X.Raw() == b.TargetPos.X.Raw() &&
-		a.TargetPos.Y.Raw() == b.TargetPos.Y.Raw() &&
-		a.TargetPos.Z.Raw() == b.TargetPos.Z.Raw()
-}
-
-// FindVictimBySignature scans pool order ascending for the first record whose
-// stored target position and weapon index byte all match the signature [06 §11.2] C29.
-// It is the packet receiver's scan [06 §11.2].
-// Returns handle and true on exact match; false otherwise (non-match survival) [06 §11.2].
-func FindVictimBySignature(svc *Service, sig VictimSig) (pool.Handle, bool) {
-	if svc == nil {
-		return 0, false
-	}
-	cnt := svc.Count()
-	for i := 0; i < cnt; i++ {
-		h := pool.Handle(i + 1)
-		if !svc.Alive(h) {
-			continue
-		}
-		rec := &svc.Records[i]
-		candSig := VictimSig{
-			TargetPos: rec.TargetPos,
-			WeaponIdx: uint8(rec.WeaponID & 0xFF),
-		}
-		if VictimSigEqual(candSig, sig) {
-			return h, true // exact match [06 §11.2]
-		}
-	}
-	return 0, false // non-match survival [06 §11.2]
-}
 
 // ProjectileInInterceptorBlast tests whether a projectile lies within the
 // interceptor's unhalved areaofeffect per [06 §11.2][06 §9.3][06 R-WPN-05 §10].
@@ -515,104 +400,6 @@ func ProjectileInInterceptorBlast(victimPos, exploderPos Vec3, unhalvedArea int3
 	sum := int32((dx*dx)>>32) + int32((dy*dy)>>32) + int32((dz*dz)>>32)
 	area := int32(uint16(unhalvedArea)) // unhalved 16-bit areaofeffect [06 R-WPN-05 §10]
 	return sum < area*area              // signed low-word square, strict < [06 R-WPN-05 §10]
-}
-
-// CollectInterceptorVictims scans live non-self projectile records in pool
-// order using the unhalved authored area value per [06 §11.2] C29.
-// It is called after ordinary unit and feature area enumeration [06 §9.3]
-// [06 §11.2] C29, and does not filter by side, alliance, or targetable state
-// [06 §11.2] — friendly projectiles can be removed.
-// Each qualifying victim is forced through ordinary impact (modeled here as
-// collection for the caller to impact). The loop reloads live pool count so
-// records appended while scanning can be reached [06 §9.3].
-//
-// exploder is the interceptor-flagged exploding projectile handle (skipped as self) [06 §11.2].
-func CollectInterceptorVictims(svc *Service, exploder pool.Handle, exploderPos Vec3, weapon *content.WeaponDef) []pool.Handle {
-	if svc == nil || weapon == nil {
-		return nil
-	}
-	if !weapon.Interceptor {
-		return nil // only interceptor-flagged weapons do this sweep [06 §11.2]
-	}
-	unhalved := weapon.AreaOfEffect // unhalved authored area value [06 §11.2] C29
-	if unhalved <= 0 {
-		return nil
-	}
-	var victims []pool.Handle
-	// Reload live pool count during scan per [06 §9.3] C29
-	for i := 0; i < svc.Count(); i++ {
-		h := pool.Handle(i + 1)
-		if h == exploder {
-			continue // non-self skip [06 §11.2]
-		}
-		if !svc.Alive(h) {
-			continue // alive only [06 §11.2]
-		}
-		rec := &svc.Records[i]
-		if ProjectileInInterceptorBlast(rec.Pos, exploderPos, unhalved) {
-			victims = append(victims, h) // each accepted projectile forced through impact [06 §11.2]
-		}
-	}
-	return victims
-}
-
-// ApplyInterceptorExplosion performs the interceptor-flagged explosion ordering
-// per [06 §11.2] C29 and [06 §9.3] C29:
-// ordinary area enumeration (unit+feature) happens first, then the interceptor
-// force-detonation sweep of alive non-self projectiles inside its UNHALVED
-// areaofeffect [06 §11.2] [06 §9.3] C29.
-// The victim signature publication for exact-match removal is modeled via
-// Publish/Find helpers [06 §11.2] C29.
-// The helper takes callbacks so tests can verify ordering.
-//
-// ordinary enumerates units/features (broad phase plus box distance) and calls
-// perUnit/perFeature in that order [06 §9.3]. For stockpile interceptor burst,
-// the exact box enumeration is elided; only ordering (ordinary before projectile
-// sweep) matters for the C29 fixture.
-//
-// interceptorVictims is the projectile sweep; each victim is also resolved via
-// exact-match signature scan to demonstrate signature publication [06 §11.2].
-// The exploding projectile's own signature is published once per qualifying
-// victim [06 §11.2] (caller may record it).
-func ApplyInterceptorExplosion(svc *Service, exploder pool.Handle, exploderPos Vec3, weapon *content.WeaponDef, ordinary func(), onVictims func([]pool.Handle, []VictimSig, []VictimSig)) {
-	if weapon == nil || !weapon.Interceptor {
-		if ordinary != nil {
-			ordinary()
-		}
-		return
-	}
-	// Ordinary area enumeration first [06 §9.3] [06 §11.2] C29
-	if ordinary != nil {
-		ordinary()
-	}
-	// Then interceptor force-detonation sweep using unhalved area [06 §11.2] C29
-	victims := CollectInterceptorVictims(svc, exploder, exploderPos, weapon)
-	// Victim signature publication for exact-match removal [06 §11.2] C29
-	var victimSigs []VictimSig
-	var exploderSigs []VictimSig
-	if len(victims) > 0 {
-		// Need exploder record for its signature if alive
-		var exploderRec Projectile
-		if exploder != 0 {
-			idx := int(exploder) - 1
-			if idx >= 0 && idx < len(svc.Records) && idx < svc.Count() {
-				exploderRec = svc.Records[idx]
-			}
-		}
-		for _, vh := range victims {
-			idx := int(vh) - 1
-			if idx < 0 || idx >= len(svc.Records) {
-				continue
-			}
-			vsig := PublishVictimSig(svc.Records[idx]) // [06 §11.2]
-			victimSigs = append(victimSigs, vsig)
-			esig := PublishExploderSig(exploderRec) // [06 §11.2] once per qualifying victim
-			exploderSigs = append(exploderSigs, esig)
-		}
-	}
-	if onVictims != nil {
-		onVictims(victims, victimSigs, exploderSigs)
-	}
 }
 
 // ---------------------------------------------------------------------------

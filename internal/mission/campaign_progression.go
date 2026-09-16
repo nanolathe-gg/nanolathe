@@ -39,19 +39,6 @@ func NextCampaignMission(fs vfs.FSOps, campaignPath string, curIdx int) (int, bo
 	return 0, false, nil
 }
 
-// CampaignMissionCount returns the number of contiguous missions in campaignPath.
-// Lossless parse with provenance [fmt tdf] [08 "Campaign discovery"].
-func CampaignMissionCount(fs vfs.FSOps, campaignPath string) (int, error) {
-	if fs == nil {
-		return 0, fmt.Errorf("mission: nil filesystem")
-	}
-	c, err := DiscoverCampaign(fs, campaignPath)
-	if err != nil {
-		return 0, err
-	}
-	return len(c.Missions), nil
-}
-
 // There is no branching, side-gated, or registry-gated advance to add here.
 // [08 R-CAMP-01 §1 "Index helpers"] is exhaustive for the campaign record:
 // advance is `count > index + 1` and the W/L marks are not consulted, so

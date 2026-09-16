@@ -148,7 +148,7 @@ func TestStepUnit_MobileSiteSurvives(t *testing.T) {
 	if prod == nil {
 		t.Fatalf("product nil")
 	}
-	expectedCell := SnapWorldToCell(siteX, siteZ, int(prodDef.FootprintX), int(prodDef.FootprintZ))
+	expectedCell := snapAnchorCell(t, siteX, siteZ, prodDef.FootprintX, prodDef.FootprintZ)
 	wantX, wantZ := world.PlacementCenter(expectedCell.X, expectedCell.Z, prodDef.FootprintX, prodDef.FootprintZ)
 	if prod.X != wantX || prod.Z != wantZ {
 		t.Fatalf("product at (%d,%d) want model center (%d,%d), anchor (%d,%d)", prod.X.Raw(), prod.Z.Raw(), wantX.Raw(), wantZ.Raw(), expectedCell.X, expectedCell.Z)

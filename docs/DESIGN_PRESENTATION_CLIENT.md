@@ -297,7 +297,7 @@ files:
 | `projectile_draw.go` | render-type dispatch to pixels: sprites, beams, segments, shadows |
 | `presentation_resolver.go` | art identity → GAF frame, for projectiles and effects |
 | `healthbar.go` | the unit-label walk between strips 8 and 9 |
-| `selection_quad.go`, `selection_overlay.go`, `selection_plate.go`, `hover_hull.go`, `select.go`, `snapshot_select.go` | the footprint quad, the drag rectangle, the excluded authored plate, the pick hull, rectangle membership, the committed-frame visibility gate |
+| `selection_quad.go`, `selection_overlay.go`, `hover_hull.go`, `select.go`, `snapshot_select.go` | the footprint quad, the drag rectangle, the pick hull, rectangle membership, the committed-frame visibility gate |
 | `minimap_draw.go` | the radar surfaces onto the shell |
 | `cursor.go`, `text.go`, `message_lines.go`, `ui_stage.go` | software cursor, FNT text, the caption column, the single UI adapter slot |
 | `viewport.go` | the battle viewport rectangle and the transform between logical, beam and world coordinates |
@@ -367,9 +367,9 @@ with a per-pixel **height key**, and that image is blitted. The split across
 ### 2.4 `internal/render` — the presentation pools and helpers
 
 Presentation-only, and it writes no pixels: `internal/client` does that. It
-owns `Strip` and `StripObject` (the lifecycle contract), `FixedEffectPool`,
-the render-type constants and the `ProjectileDraw` dispatch, `TexturePlayer`
-and the GAF playback cursor, the cursor index table, `BuildFogOpsInto`, the
+owns `FixedEffectPool` (strip storage and the strip sweep itself are
+`internal/session`'s), the render-type constants and the `ProjectileDraw` dispatch, `TexturePlayer`
+and the GAF playback cursor, the cursor index table, `BuildFogOpsWindowWithArtInto`, the
 `RadarSurface`/`MinimapService` pair, the nanolathe emitter, the nanoframe
 reveal verdicts, the shade-row helpers, and the generated flash-table geometry.
 
@@ -1132,7 +1132,9 @@ the published offset to the camera.
   primitive zero at model load and the face walk starts at primitive one, for
   completed and under-construction models alike; what appears under a selected
   unit is the footprint quad derived from the root piece's vertex bounds
-  `[03 R-SEL-02A]` `[03 R-WATER-01 §1]`.
+  `[03 R-SEL-02A]` `[03 R-WATER-01 §1]`. The four corners rotate in place
+  through the model package's shared per-axis arithmetic, without allocating
+  a piece-state slice or transform chain; bounds already contain the root offset.
 * **There is no wake rectangle.** Wakes are script-emitted strip-2 sprinkles;
   the rectangle earlier readings attributed to wakes was the selection frame
   `[03 R-WATER-01 §1]`.
@@ -1224,8 +1226,8 @@ the published offset to the camera.
   screen helpers negate only the transient projected Z and then compute the
   `Z − Y/2` shear; they do not store that negation back into model data. Model
   space is mirrored in Z against world space, which is why
-  `ModelVertexToScreen` and `ModelProjectToScreen` are two names and not one
-  `[03 §2.4]` `[03 §2.5]`.
+  `Client.worldObjectScreen` and `camera.WorldToScreen` are two projections and
+  not one `[03 §2.4]` `[03 §2.5]`.
 * **SC14 — the muzzle query reuses pristine post-load vectors.** The piece
   transform rotates and translates the already-converted piece and centre
   vectors; there is no second sign fixup at query time `[03 §2.4]`. Same

@@ -14,10 +14,8 @@ package render
 import (
 	"math"
 
-	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/model"
-	"github.com/nanolathe-gg/nanolathe/internal/palette"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
@@ -184,51 +182,6 @@ func FoldPublishedPropellerSpin(st []model.PieceState, piece int, v frame.Projec
 	FoldPropellerSpin(st, piece, v.PropellerRoll)
 }
 
-// BuildUnitPieceStates returns a presentation copy of base with unit orientation folded into the root [03 §2.4] C24 [03 §5.2] C13.
-// bank→Z, heading→Y, pitch→X as the outermost factor [03 §2.4] C24; position never enters piece math [03 §5.2][03 §2.4] C24.
-// The returned slice is a new allocation so the caller's base is not mutated (I6).
-func BuildUnitPieceStates(m *model.Model, base []model.PieceState, heading, pitch, bank uint16) []model.PieceState { // [03 §2.4] C24 [03 §5.2]
-	if m == nil {
-		return nil
-	}
-	n := len(m.Pieces)
-	out := make([]model.PieceState, n)
-	if base != nil {
-		copy(out, base)
-	}
-	model.FoldRootAngles(out, m.Root, heading, pitch, bank) // [03 §2.4] C24 bank→Z heading→Y pitch→X
-	return out
-}
-
-// BuildProjectilePieceStates returns a presentation copy with projectile yaw/pitch folded [03 §5.2].
-// Each carries -32768 offset [03 §5.2]; presentation only (I6).
-func BuildProjectilePieceStates(m *model.Model, base []model.PieceState, yaw, pitch uint16) []model.PieceState { // [03 §5.2]
-	if m == nil {
-		return nil
-	}
-	n := len(m.Pieces)
-	out := make([]model.PieceState, n)
-	if base != nil {
-		copy(out, base)
-	}
-	FoldProjectileAngles(out, m.Root, yaw, pitch) // [03 §5.2]
-	return out
-}
-
-// UnitTransforms returns per-piece world transforms for all pieces in stable index order [03 §2.4] C21 (I1).
-// Each transform composes as ordered in-place rotate-then-translate, ancestors after descendants, via float trig round-to-nearest [03 §2.4] C21 (I2).
-func UnitTransforms(m *model.Model, states []model.PieceState) []model.Transform { // [03 §2.4] C21
-	if m == nil {
-		return nil
-	}
-	n := len(m.Pieces)
-	out := make([]model.Transform, n)
-	for i := 0; i < n; i++ {
-		out[i] = model.Compose(m, states, i) // [03 §2.4] C21 ancestor-after-descendant from pristine vertices
-	}
-	return out
-}
-
 // PrimitiveDraw is one primitive draw record in load-fixed order [03 §2.4] C20 [GAP 02-A6].
 // Geometry is in world space (transformed + worldPos) for the renderer to project [03 §2.5][03 §5.2].
 type PrimitiveDraw struct {
@@ -341,21 +294,12 @@ type UnitDraw struct {
 	UnderConstruction bool
 }
 
-// BuildPieceDraws produces per-piece draw lists with world transforms and primitive lists in load-fixed order [03 §2.4] C20 [03 §5.2] presentation only (I6).
-// worldPos is the committed world position [03 §2.4] C12; piece math itself does not include it [03 §5.2][03 §2.4] C24.
-// tables supplies the palette/SHD lookup at present time [03 §4.3] C10; pass nil for headless ordering tests.
-func BuildPieceDraws(m *model.Model, states []model.PieceState, worldPos [3]numeric.Fixed, dirty bool) []PieceDraw { // [03 §2.4] C21 [03 §5.2] C13
-	out, _ := buildPieceDraws(m, states, worldPos, dirty, true)
-	return out
-}
-
-// buildPieceDraws is the shared traversal product. UnitDraw constructors use
-// the returned transform slice directly, avoiding a second per-piece copy;
-// BuildPieceDraws remains the narrow compatibility wrapper for callers that
-// only need draw records [03 §2.4] C21.
-func buildPieceDraws(m *model.Model, states []model.PieceState, worldPos [3]numeric.Fixed, dirty, shaded bool) ([]PieceDraw, []model.Transform) {
-	return buildPieceDrawsInto(m, states, worldPos, dirty, shaded, &DrawScratch{})
-}
+// buildPieceDrawsInto is the one per-piece traversal: it produces the draw
+// records with world transforms and primitive lists in load-fixed order over
+// borrowed scratch [03 §2.4] C20 [03 §5.2]; presentation only (I6). worldPos is
+// the committed world position [03 §2.4] C12 and piece math itself does not
+// include it [03 §5.2][03 §2.4] C24. UnitDraw constructors take the returned
+// transform slice directly rather than composing the chain a second time.
 func buildPieceDrawsInto(m *model.Model, states []model.PieceState, worldPos [3]numeric.Fixed, dirty, shaded bool, scratch *DrawScratch) ([]PieceDraw, []model.Transform) { // [03 §2.4] C21 [03 §5.2] C13
 	if m == nil {
 		return nil, nil
@@ -506,7 +450,7 @@ func buildPieceDrawsInto(m *model.Model, states []model.PieceState, worldPos [3]
 		// For determinism preserve both: treat as leaf when primitives==0 && vertices>0 regardless of children?
 		// Re-evaluate: earlier we cleared isLeaf when children !=0; but spec says leaf implies no children,
 		// so a non-leaf with vertex+no primitive is not counted as leaf attachment by the strict leaf definition.
-		// Keep the strict interpretation but also expose via helper EmitPoints for any piece.
+		// Keep the strict interpretation: the flag marks strict leaves only.
 		record.WorldVertices, record.Primitives, record.IsLeafAttachment = worldVerts, prims, isLeaf
 	}
 	return out, transforms
@@ -565,19 +509,18 @@ func resolveHidden(m *model.Model, states []model.PieceState, hidden []bool, sta
 	}
 }
 
-// BuildUnitDraw builds the full per-unit draw for presentation [03 §2.4][03 §5.2] (I6).
-// It copies base states, folds unit orientation bank→Z heading→Y pitch→X [03 §2.4] C24 [03 §5.2],
-// optionally uses cache to decide rebuild, projects the committed world position [03 §2.4] C12,
-// and produces transforms and primitive lists in load-fixed order [03 §2.4] C20.
-// Caller must supply a presentation copy of base states or nil; the function never writes sim state (I6).
-// A supplied cache retains unit rotation until an axis differs by more than
-// seven; the owner updates the reference after rebuilding [03 §5.2] C13.
-func BuildUnitDraw(m *model.Model, base []model.PieceState, heading, pitch, bank uint16, current frame.UnitView, cache *OrientationCache) *UnitDraw {
-	return BuildUnitDrawInto(m, base, heading, pitch, bank, current, cache, &DrawScratch{})
-}
-
-// BuildUnitDrawInto borrows scratch until its next use. It never mutates base or
-// committed state; this only changes ownership of the presentation result.
+// BuildUnitDrawInto builds the full per-unit draw for presentation
+// [03 §2.4][03 §5.2] (I6). It copies base states, folds unit orientation
+// bank→Z heading→Y pitch→X [03 §2.4] C24 [03 §5.2], optionally uses cache to
+// decide rebuild, projects the committed world position [03 §2.4] C12, and
+// produces transforms and primitive lists in load-fixed order [03 §2.4] C20.
+// Caller must supply a presentation copy of base states or nil; the function
+// never writes sim state (I6). A supplied cache retains unit rotation until an
+// axis differs by more than seven; the owner updates the reference after
+// rebuilding [03 §5.2] C13.
+//
+// The result borrows scratch until its next use; this only changes ownership
+// of the presentation result, never base or committed state.
 func BuildUnitDrawInto(m *model.Model, base []model.PieceState, heading, pitch, bank uint16, current frame.UnitView, cache *OrientationCache, scratch *DrawScratch) *UnitDraw { // [03 §2.4] C24 [03 §5.2] C13
 	if m == nil {
 		return nil
@@ -604,7 +547,7 @@ func BuildUnitDrawInto(m *model.Model, base []model.PieceState, heading, pitch, 
 	}
 	model.FoldRootAngles(states, m.Root, heading, pitch, bank) // [03 §2.4] C24
 	worldPos := [3]numeric.Fixed{current.X, current.Y, current.Z}
-	// BuildPieceDraws is the one traversal. Derive the public transform view from
+	// buildPieceDrawsInto is the one traversal. Derive the public transform view from
 	// its records so a frame cannot apply the hierarchy twice [03 §2.4] C21.
 	// Script pose changes use the retained unit orientation until the strict
 	// orientation threshold requests its refresh [03 R-COMP-01 §4][03 §5.2].
@@ -628,32 +571,6 @@ func BuildUnitDrawInto(m *model.Model, base []model.PieceState, heading, pitch, 
 	return &scratch.draw
 }
 
-// BuildUnitDrawSimple builds a unit draw without interpolation or cache, for tests [03 §2.4] C24 [03 §5.2].
-// worldPos may be zero to test pure piece math without world offset [03 §2.4] C24; angles are as given.
-func BuildUnitDrawSimple(m *model.Model, base []model.PieceState, heading, pitch, bank uint16, worldPos [3]numeric.Fixed) *UnitDraw { // [03 §2.4] C24
-	if m == nil {
-		return nil
-	}
-	states := BuildUnitPieceStates(m, base, heading, pitch, bank)
-	pieces, transforms := buildPieceDraws(m, states, worldPos, false, true)
-	return &UnitDraw{
-		Model:       m,
-		PieceStates: states,
-		Transforms:  transforms,
-		Pieces:      pieces,
-		WorldPos:    worldPos,
-	}
-}
-
-// BuildProjectileModelPieces builds the bounded standalone model calls for a
-// projectile: type 1 draws its root then its first child while the strict
-// deadline permits it; other types draw the root only. This intentionally does not traverse grandchildren: retail's
-// effect entry receives one model piece per call, and the projectile dispatcher
-// supplies only the model header and its child slot [03 §5.4][03 R-COMP-02 §6].
-func BuildProjectileModelPieces(m *model.Model, v frame.ProjectileView, now uint32) (parent, child *UnitDraw) { // [03 §5.2][06 R-WFX-01 §4]
-	return BuildProjectileModelPiecesInto(m, v, now, &ProjectileScratch{}, &ProjectileScratch{})
-}
-
 // ProjectileScratch retains one standalone model call's storage: the detached
 // one-piece model, its single piece state and the piece-draw arrays. A
 // projectile's parent and child calls are live at the same time, so each takes
@@ -666,9 +583,14 @@ type ProjectileScratch struct {
 	result UnitDraw
 }
 
-// BuildProjectileModelPiecesInto is BuildProjectileModelPieces over borrowed
-// storage, so a frame that draws a hundred projectiles allocates nothing per
-// projectile. parentScratch and childScratch must be distinct slots.
+// BuildProjectileModelPiecesInto builds the bounded standalone model calls for
+// a projectile over borrowed storage, so a frame that draws a hundred
+// projectiles allocates nothing per projectile: type 1 draws its root then its
+// first child while the strict deadline permits it; other types draw the root
+// only. It intentionally does not traverse grandchildren — retail's effect
+// entry receives one model piece per call, and the projectile dispatcher
+// supplies only the model header and its child slot [03 §5.4][03 R-COMP-02 §6].
+// parentScratch and childScratch must be distinct slots.
 func BuildProjectileModelPiecesInto(m *model.Model, v frame.ProjectileView, now uint32, parentScratch, childScratch *ProjectileScratch) (parent, child *UnitDraw) { // [03 §5.2][06 R-WFX-01 §4]
 	if m == nil || m.Root < 0 || m.Root >= len(m.Pieces) {
 		return nil, nil
@@ -751,170 +673,21 @@ func buildProjectileStandalonePiece(m *model.Model, piece int, roll, yaw, pitch 
 	return &s.result
 }
 
-// EmitPoint returns the world-space position of a vertex attachment on a piece [03 §2.4] C23.
-// It applies the composed transform then adds the committed world position [03 §2.4] C21 [03 §5.2].
-// Presentation only; returns false when piece or vertex index out of range.
-func EmitPoint(m *model.Model, states []model.PieceState, pieceIdx int, vertexIdx int, worldPos [3]numeric.Fixed) ([3]numeric.Fixed, bool) { // [03 §2.4] C23
-	if m == nil || pieceIdx < 0 || pieceIdx >= len(m.Pieces) {
-		return [3]numeric.Fixed{}, false
-	}
-	piece := m.Pieces[pieceIdx]
-	if vertexIdx < 0 || vertexIdx >= len(piece.Vertices) {
-		return [3]numeric.Fixed{}, false
-	}
-	tr := model.Compose(m, states, pieceIdx) // [03 §2.4] C21
-	local := tr.Apply(piece.Vertices[vertexIdx])
-	world := [3]numeric.Fixed{
-		local[0].Add(worldPos[0]),
-		local[1].Add(worldPos[1]),
-		local[2].Add(worldPos[2]),
-	}
-	return world, true
-}
-
-// LeafEmitPoints returns world-space emit points for all leaf attachments in the model [03 §2.4] C23.
-// Each leaf that has a vertex but no primitive yields its first vertex transformed to world space [03 §2.4] C23.
-// Order is stable piece-index ascending (I1).
-func LeafEmitPoints(m *model.Model, states []model.PieceState, worldPos [3]numeric.Fixed) [][3]numeric.Fixed { // [03 §2.4] C23
-	if m == nil {
-		return nil
-	}
-	var out [][3]numeric.Fixed
-	for i, piece := range m.Pieces {
-		if len(piece.Primitives) != 0 || len(piece.Vertices) == 0 {
-			continue
-		}
-		if len(piece.Children) != 0 {
-			continue // strict leaf [03 §2.4] C23
-		}
-		tr := model.Compose(m, states, i)
-		for _, v := range piece.Vertices {
-			local := tr.Apply(v)
-			world := [3]numeric.Fixed{
-				local[0].Add(worldPos[0]),
-				local[1].Add(worldPos[1]),
-				local[2].Add(worldPos[2]),
-			}
-			out = append(out, world)
-			break // one emit point per leaf piece (first vertex) [03 §2.4] C23
-		}
-	}
-	return out
-}
-
-// AnyEmitPoints returns emit points for any piece with vertex but no primitive, even if non-leaf, for broader emit coverage [03 §2.4] C23.
-// This helper surfaces attachment points even when the strict leaf check fails; caller can choose strict vs any.
-func AnyEmitPoints(m *model.Model, states []model.PieceState, worldPos [3]numeric.Fixed) [][3]numeric.Fixed { // [03 §2.4] C23
-	if m == nil {
-		return nil
-	}
-	var out [][3]numeric.Fixed
-	for i, piece := range m.Pieces {
-		if len(piece.Primitives) != 0 || len(piece.Vertices) == 0 {
-			continue
-		}
-		tr := model.Compose(m, states, i)
-		local := tr.Apply(piece.Vertices[0])
-		world := [3]numeric.Fixed{
-			local[0].Add(worldPos[0]),
-			local[1].Add(worldPos[1]),
-			local[2].Add(worldPos[2]),
-		}
-		out = append(out, world)
-	}
-	return out
-}
-
-// PaletteRGBA resolves a final indexed pixel to RGBA at present time through
-// PALETTE.PAL [03 §4.3] C10. Model texture and flat-colour bytes are already
-// active palette indices, so the logical→physical map — a semantic-colour
-// route — is not applied here [07 "Retail palette contract"].
-func PaletteRGBA(tables *palette.Tables, idx byte) (r, g, b, a uint8) { // [03 §4.3] C10
-	if tables == nil {
-		return 0, 0, 0, 255
-	}
-	return tables.RGBA(idx) // PALETTE.PAL at present time [03 §4.3]
-}
-
-// ShadeRGBA resolves a palette index through an SHD row for model lighting
-// [03 §4.3] C10. The row is the caller's real per-corner value — the shaded
-// piece renderer's SHD row is trunc(dot*5.0) & 0x1F with DONT_SHADE pinning
-// row 15, computed by ShadeRowForNormal [03 R-RAST-01 §5]. This helper never
-// invents a row of its own; the production draw path in
-// internal/client/model.go interpolates PrimitiveDraw.ShadeRows directly and
-// does not call through here, so this stays a reusable, tested primitive for
-// any other consumer of PrimitiveDraw.
-func ShadeRGBA(tables *palette.Tables, idx byte, row int) (r, g, b, a uint8) { // [03 §4.3] C10 [03 R-RAST-01 §5]
-	if tables == nil {
-		return 0, 0, 0, 255
-	}
-	if row < 0 {
-		row = 0
-	}
-	if row >= 32 {
-		row = 31
-	}
-	// The texture byte is already a PALETTE.PAL index; the logical→physical
-	// map resolves semantic colour fields, never image bytes [03 §4.3]
-	// [07 "Retail palette contract"].
-	shaded := tables.Shade[row][idx] // [03 §4.3] SHD row
-	e := tables.Base[shaded]
-	return e[0], e[1], e[2], 255
-}
-
-// The four span writers of [03 R-REN-03A §5] — shaded/unshaded x
-// textured/flat — live in internal/client's model raster, which interpolates
-// PrimitiveDraw.ShadeRows itself. A PrimitiveRGBA helper used to stand here
-// that resolved a primitive's colour by reading the authored 3DO IsColored
-// flat/textured discriminator as if it were the shading one, so every flat
-// primitive took the raw-palette arm whatever row it carried. That is the
-// unshaded flat writer only, and §5 puts the split on the RENDERER. Nothing on
-// the draw path called it; two tests did. They now call the writer they mean,
-// PaletteRGBA or ShadeRGBA, and internal/client's
-// TestShadedFlatWriterResolvesThroughSHD and
-// TestUnshadedFlatWriterEmitsTheRawColour hold the real contract.
-
-// ModelProjectToScreen projects a world-space point to screen via the orthographic formula [03 §2.5].
-// Uses camera.WorldToScreen with the half-height shear [03 §2.5].
+// This file computes a unit draw; it resolves no pixel. The four span writers
+// of [03 R-REN-03A §5] — shaded/unshaded x textured/flat — live in
+// internal/client's model raster, which interpolates PrimitiveDraw.ShadeRows
+// itself, narrows the row with spanShadeRow and reads PALETTE.PAL and the SHD
+// row directly. Colour-resolution helpers that stood here (PrimitiveRGBA, then
+// PaletteRGBA and ShadeRGBA) were second statements of that resolve with no
+// caller on any draw path; internal/client's
+// TestShadedFlatWriterResolvesThroughSHD, TestUnshadedFlatWriterEmitsTheRawColour
+// and TestSpanShadeRowClampsToTheTable hold the contract on the shipped code.
 //
-// This takes a genuine world point. A composed model vertex is not one — see
-// ModelVertexToScreen — and passing one here mirrors the result in Z.
-func ModelProjectToScreen(cam *camera.Camera, world [3]numeric.Fixed) (sx, sy int32) { // [03 §2.5]
-	if cam == nil {
-		return 0, 0
-	}
-	return cam.WorldToScreen(world[0], world[1], world[2]) // [03 §2.5]
-}
-
-// ModelVertexToScreen projects one composed model vertex: a piece-chain output
-// with the unit's world position already added componentwise, which is what
-// PieceDraw.WorldVertices holds and what a UnitTransforms origin plus the unit
-// position is. It is not interchangeable with ModelProjectToScreen, and the
-// two names exist so the space a caller is in is explicit at the call site.
+// Model-space vertex attachment points (EmitPoint and the leaf walks) stood
+// here too, with no consumer anywhere; the projectile and effect paths carry
+// their own world positions [03 §5.2].
 //
-// Model space is mirrored in Z against world space, so the model-relative part
-// of the vertex reaches the screen Y lane with its sign flipped while the
-// unit's own Z keeps its ordinary sign. [R-WATER-01 §1] item 3 states the
-// world-object form for rotated model geometry drawn at a unit position:
-//
-//	sx = hi16(rx + ux - camX) + 128
-//	sy = hi16((uz - camZ) - rz) - (hi16(ry + uy) >> 1) + 32
-//
-// with r the model-relative vertex and u the unit position — "the rotated Z is
-// subtracted, the 3DO handedness flip of [R-RAST-01 §2]". Reflecting the
-// composed vertex's Z about the unit's own Z produces exactly that: the
-// model-relative part changes sign, the unit's part does not, and the shear
-// still reads the composed height ry + uy.
-//
-// This is the sum-before-floor world-object form, not the cached composition
-// image's anchor-plus-local form. [R-RAST-01 §2] requires both to exist
-// separately: floor(a) + floor(b) is floor(a+b) or one less, so the same vertex
-// can land a pixel apart under the two, and the two forms must not share a
-// helper.
-func ModelVertexToScreen(cam *camera.Camera, unit, v [3]numeric.Fixed) (sx, sy int32) { // [R-WATER-01 §1] [R-RAST-01 §2]
-	if cam == nil {
-		return 0, 0
-	}
-	flippedZ := unit[2].Sub(v[2].Sub(unit[2]))
-	return cam.WorldToScreen(v[0], v[1], flippedZ)
-}
+// Projection likewise: camera.WorldToScreen is the orthographic formula of
+// [03 §2.5], and the world-object form for rotated model geometry drawn at a
+// unit position — the 3DO handedness flip of [R-RAST-01 §2] — is
+// internal/client's Client.worldObjectScreen [03 R-WATER-01 §1].

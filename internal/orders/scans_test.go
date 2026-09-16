@@ -185,15 +185,8 @@ func TestLiveUnitEnumeratorAnswersTheStopQuestion(t *testing.T) {
 		t.Fatalf("repair scan visited %d slots, want the whole pool (%d)", visited, len(pool4))
 	}
 
-	visited = 0
-	if got := scanRadiusTarget(actor, 15, false); got != first {
-		t.Fatalf("radius scan = %v, want the first in-range candidate", got)
-	}
-	if visited != 2 {
-		t.Fatalf("radius scan visited %d slots, want it to stop on its hit (2)", visited)
-	}
 	if got := sim.Draws(); got != 0 {
-		t.Fatalf("enumerator draws = %d, want none: neither scan draws", got)
+		t.Fatalf("enumerator draws = %d, want none: the scan draws nothing", got)
 	}
 }
 

@@ -31,7 +31,7 @@ func TestUnboundMobileSitePathReportsMissingQueue(t *testing.T) {
 	b.Remaining = 0
 	sim := rng.NewSimulation(7)
 	mgr := &Manager{Player: 0, Catalog: cat, Factory: b, Terrain: rx01Terrain(), RNG: &sim}
-	res := PlaceWithResult(mgr, "armsolar", mgr.Terrain)
+	res := placeWithResult(mgr, "armsolar", mgr.Terrain)
 	if res.Valid || res.Reason != ReasonMissingQueue {
 		t.Fatalf("unbound mobile placement = valid=%v reason=%v, want missing typed queue", res.Valid, res.Reason)
 	}
@@ -51,7 +51,7 @@ func TestUnboundFactoryQueuePathReportsMissingQueue(t *testing.T) {
 	f.Remaining = 0
 	sim := rng.NewSimulation(9)
 	mgr := &Manager{Player: 0, Catalog: cat, Factory: f, Terrain: rx01Terrain(), RNG: &sim}
-	res := PlaceWithResult(mgr, "armflea", mgr.Terrain)
+	res := placeWithResult(mgr, "armflea", mgr.Terrain)
 	if res.Valid || res.Reason != ReasonMissingQueue {
 		t.Fatalf("unbound factory placement = valid=%v reason=%v, want missing typed queue", res.Valid, res.Reason)
 	}

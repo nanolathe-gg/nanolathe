@@ -100,4 +100,39 @@ func TestTrailPuffAdditiveDeadlineAndExpiryPuff(t *testing.T) {
 	if total != len(want) {
 		t.Fatalf("%d trail puffs total, want exactly the deadline and expiry set", total)
 	}
+
+	// A BURST PARENT NEVER PUFFS. The projectile phase takes the burst branch
+	// and continues before it reaches the trail window, so a parked template
+	// with an unlaunched remainder emits nothing however overdue its trail
+	// deadline is [06 §13.2][06 §4.3][R-STRIP-01 §1 strip 9]. Its burst
+	// deadline is held in the future here so the record stays a parent for the
+	// whole run: a clone would carry a cleared remainder and puff normally,
+	// which is the other side of the same clause.
+	parentSvc := &Service{}
+	ph, ok := parentSvc.Reserve()
+	if !ok {
+		t.Fatal("burst-parent reservation failed")
+	}
+	parent := &parentSvc.Records[int(ph)-1]
+	parent.WeaponID = 7
+	parent.ExpiryTick = 100
+	parent.SmokeDeadline = 0 // already past every tick below
+	parent.BurstRemaining = 1
+	parent.BurstDeadline = 1000 // no attempt is due, so the remainder stands
+	parent.Pos = wantPos
+
+	var parentEvents []Event
+	parentSvc.Events = func(ev Event) { parentEvents = append(parentEvents, ev) }
+	parentSim := rng.NewSimulation(1)
+	for tick := uint32(1); tick <= 12; tick++ {
+		parentSvc.TickProjectiles(tick, nil, nil, nil, nil, nil, nil, cat, &parentSim, nil)
+	}
+	for _, ev := range parentEvents {
+		if ev.Kind == EventTrailSmoke {
+			t.Fatalf("a burst parent with an unlaunched remainder puffed at tick %d [06 §13.2]", ev.Tick)
+		}
+	}
+	if parent.SmokeDeadline != 0 {
+		t.Fatalf("burst-parent trail deadline advanced to %d; the burst branch returns before the trail window [06 §4.3]", parent.SmokeDeadline)
+	}
 }

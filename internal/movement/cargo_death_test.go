@@ -93,7 +93,7 @@ func TestCarrierDeathCascadeCause(t *testing.T) {
 			if cargo.LastDamageSide != killer.Owner {
 				t.Fatalf("cargo attacker-side snapshot = %d, want the killer's owner %d [06 §9.1]", cargo.LastDamageSide, killer.Owner)
 			}
-			if IsCarried(w, cargo.Handle) {
+			if isCarried(w, cargo.Handle) {
 				t.Fatal("cargo still attached after the carrier's finalisation [04 R-FAC-02 §3]")
 			}
 		})

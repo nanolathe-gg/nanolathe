@@ -293,7 +293,7 @@ func (p *Panel) keyboardList(delta int, hooks WidgetHooks) bool {
 	if l == nil || l.Len() == 0 {
 		return false
 	}
-	next := maxInt(0, minInt(l.selected+delta, l.Len()-1))
+	next := max(0, min(l.selected+delta, l.Len()-1))
 	if next == l.selected {
 		return false
 	}
@@ -311,7 +311,7 @@ func (p *Panel) keyboardList(delta int, hooks WidgetHooks) bool {
 		} else if next > l.top+rows-1 {
 			l.top++
 		}
-		l.top = maxInt(0, minInt(l.top, p.listMaxTop[p.focus]))
+		l.top = max(0, min(l.top, p.listMaxTop[p.focus]))
 	}
 	p.setListSelection(p.focus, next, hooks)
 	return false

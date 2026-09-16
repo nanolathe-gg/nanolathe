@@ -81,7 +81,7 @@ func (b *battleSession) overWorld(x, y int32) bool {
 	// drawn-chrome rectangle at the negotiated surface [C-3][07 §8]
 	// [07 R-HUD-05].
 	screenW, screenH := b.surfaceSize()
-	vt := client.NewViewportTransform(b.cam, nil, screenW, screenH)
+	vt := client.NewViewportTransform(b.cam, screenW, screenH)
 	return vt.Viewport.Contains(x, y)
 }
 

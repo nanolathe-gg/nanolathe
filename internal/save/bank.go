@@ -260,9 +260,6 @@ type Bank struct {
 	warnings       []string
 }
 
-// Warnings returns decompression diagnostics emitted during open.
-func (b *Bank) Warnings() []string { return append([]string(nil), b.warnings...) }
-
 // Accounts exposes the parsed account list in file order [08 "Location and representation"].
 func (b *Bank) Accounts() []*Account { return b.accounts }
 
@@ -275,9 +272,6 @@ func (b *Bank) Account(name string) (*Account, bool) {
 	}
 	return nil, false
 }
-
-// Count returns number of accounts.
-func (b *Bank) Count() int { return len(b.accounts) }
 
 // Open reads a bank from a file path. Wrong magic/version/tag closes the
 // file and returns zero (nil bank + error) per [08 "Location and representation"] C12.
@@ -928,16 +922,6 @@ func tryDecompress(src []byte) ([]byte, error) {
 		return src, nil
 	}
 	return decodeSQSH(src)
-}
-
-// NormalizeSAV reproduces the retail naming rule: strip the last dot and
-// everything after it from the assembled path (not path-component aware), then append .SAV
-// [08 "File naming and write policy"].
-func NormalizeSAV(name string) string {
-	if dot := strings.LastIndex(name, "."); dot >= 0 {
-		name = name[:dot]
-	}
-	return name + ".SAV"
 }
 
 // WriteFile implements the retail write policy: open directly for

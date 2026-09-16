@@ -11,17 +11,12 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
-// RetailRestoreOrders rebuilds both queue segments from the detached save
-// records. The supplied binding is installed before either segment becomes
-// reachable, so no handler can run with incomplete session services [08
-// R-SAVE-02 §11]. Records remain in saved sequence order within each segment.
-func RetailRestoreOrders(u *units.Unit, records []save.OrderRecord, stable map[uint16]pool.Handle, binding *QueueBinding) error {
-	return RetailRestoreOrdersAtTick(u, records, stable, binding, 0)
-}
-
-// RetailRestoreOrdersAtTick is RetailRestoreOrders with the current global
-// tick supplied for each node's reinitialized creation stamp [05 "Saving
-// economy, construction, and features"].
+// RetailRestoreOrdersAtTick rebuilds both queue segments from the detached save
+// records, with the current global tick supplied for each node's reinitialized
+// creation stamp [05 "Saving economy, construction, and features"]. The
+// supplied binding is installed before either segment becomes reachable, so no
+// handler can run with incomplete session services [08 R-SAVE-02 §11]. Records
+// remain in saved sequence order within each segment.
 func RetailRestoreOrdersAtTick(u *units.Unit, records []save.OrderRecord, stable map[uint16]pool.Handle, binding *QueueBinding, tick uint32) error {
 	if u == nil {
 		return fmt.Errorf("orders: retail restore: nil owner")

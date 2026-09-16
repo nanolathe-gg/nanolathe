@@ -71,7 +71,7 @@ func TestVacatedReuseSameSweep(t *testing.T) { // [04 §8.2] C22
 		}
 	}
 	// Need aggregate nil
-	CommitSweep(states, grid, perCellFactory, nil)
+	commitSweep(states, grid, perCellFactory, nil)
 	// After sweep, A should be at (1,0), B at (0,0)
 	if occ, _ := grid.OccupantAt(Cell{1, 0}); occ != 1 {
 		t.Fatalf("A should occupy (1,0) after vacated reuse, got %v at (1,0)", occ)
@@ -103,7 +103,7 @@ func TestHeadOnSwapBlocks(t *testing.T) { // [04 §8.2] C22 head-on swaps block
 			return true
 		}
 	}
-	CommitSweep(states, grid, perCellFactory, nil)
+	commitSweep(states, grid, perCellFactory, nil)
 	// Both should remain blocked at old positions, no swap.
 	if occ, _ := grid.OccupantAt(Cell{0, 0}); occ != 1 {
 		t.Fatalf("head-on: (0,0) should stay 1, got %v", occ)
@@ -539,7 +539,7 @@ func TestSweepOrderIsDeterministic(t *testing.T) { // [I1][04 §8.2] C22
 	// But ValidateFootprint for each state will call perCell once? For 1x1 footprint each valid commit calls perCell once.
 	// To observe order, we need to ensure perCell called. Use CommitSweep which will sort.
 	// Need grid to have stamps? Not needed.
-	CommitSweep(states, grid, perCellFactory, nil)
+	commitSweep(states, grid, perCellFactory, nil)
 	// Expect order 1,2,3 regardless of input order
 	if len(order) != 3 || order[0] != 1 || order[1] != 2 || order[2] != 3 {
 		t.Fatalf("sweep order must be slot ascending deterministic [I1][04 §8.2] C22, got %v", order)

@@ -46,7 +46,7 @@ type BindingRequest struct {
 }
 
 // BindingDiagnosticCode identifies one strict binding failure. Codes are
-// stable so composition and asset-preflight callers can classify diagnostics
+// stable so composition and unit-creation callers can classify diagnostics
 // without parsing text.
 type BindingDiagnosticCode string
 

@@ -121,15 +121,24 @@ func (h *retailBattleHUD) drawNumberRight(c *client.Client, index int, value flo
 	if !ok {
 		return
 	}
-	text := fmt.Sprintf("%d", int(value))
+	text := formatHUDNumber(value)
 	x := r.X1 - int32(client.MeasureText(h.console, text))
 	c.UIText(h.console, text, int(x), int(r.Y1), h.guiColor(15))
 }
 
 func (h *retailBattleHUD) drawNumberAtPoint(c *client.Client, x, y int32, value float32) {
-	// The retail resource display is an integer text field; the authoritative
-	// stock remains float32, and conversion here truncates toward zero [01 §8].
-	c.UIText(h.console, fmt.Sprintf("%d", int(value)), int(x), int(y), h.guiColor(15))
+	c.UIText(h.console, formatHUDNumber(value), int(x), int(y), h.guiColor(15))
+}
+
+// formatHUDNumber renders one resource readout. The retail display is an
+// integer text field and the authoritative stock stays float32, so the
+// conversion is the signed 64-bit truncating helper's low word — truncation
+// toward zero for both signs, and a wrap rather than a saturation for a
+// magnitude past 2³¹ [01 R-DET-01 §1]. Go's own float-to-int conversion is
+// undefined once the value leaves the destination's range, so the helper is the
+// conversion, not a decoration on it.
+func formatHUDNumber(value float32) string {
+	return fmt.Sprintf("%d", numeric.TruncateFloat32ToLow32(value))
 }
 
 func (h *retailBattleHUD) drawTextAt(c *client.Client, index int, text string, color byte) {

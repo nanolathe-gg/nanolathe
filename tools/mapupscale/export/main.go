@@ -13,6 +13,7 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/formats"
 	retailpalette "github.com/nanolathe-gg/nanolathe/internal/palette"
+	"github.com/nanolathe-gg/nanolathe/tools/mapupscale/internal/mapassets"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
@@ -28,7 +29,7 @@ type metadata struct {
 }
 
 func main() {
-	root := flag.String("root", defaultAssetRoot(), "Total Annihilation asset root")
+	root := flag.String("root", mapassets.DefaultRoot(), "Total Annihilation asset root")
 	mapName := flag.String("map", "Great Divide", "map name, with or without maps/ and .tnt")
 	out := flag.String("out", "/tmp/great-divide-mapupscale", "output dataset directory")
 	listMaps := flag.Bool("list-maps", false, "list available TNT maps and exit")
@@ -51,7 +52,7 @@ func main() {
 }
 
 func exportMap(fs *vfs.FS, requestedMap, outputDirectory string) error {
-	logicalMap, err := findMap(fs, requestedMap)
+	logicalMap, err := mapassets.FindMap(fs, requestedMap)
 	if err != nil {
 		return err
 	}
@@ -120,17 +121,6 @@ func exportMap(fs *vfs.FS, requestedMap, outputDirectory string) error {
 	return nil
 }
 
-func defaultAssetRoot() string {
-	if configured := os.Getenv("NANOLATHE_TA_ROOT"); configured != "" {
-		return configured
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "TotalAnnihilation"
-	}
-	return filepath.Join(home, "TotalAnnihilation")
-}
-
 func availableMaps(fs *vfs.FS) []string {
 	seen := make(map[string]string)
 	for _, entry := range fs.Entries() {
@@ -152,23 +142,6 @@ func availableMaps(fs *vfs.FS) []string {
 	return maps
 }
 
-func findMap(fs *vfs.FS, requested string) (string, error) {
-	wanted := strings.ToLower(strings.TrimSpace(requested))
-	wanted = strings.TrimSuffix(strings.TrimPrefix(wanted, "maps/"), ".tnt")
-	for _, entry := range fs.Entries() {
-		logical := strings.ToLower(filepath.ToSlash(entry.Path))
-		if entry.IsDir || !strings.HasPrefix(logical, "maps/") || !strings.HasSuffix(logical, ".tnt") {
-			continue
-		}
-		base := strings.TrimSuffix(strings.TrimPrefix(logical, "maps/"), ".tnt")
-		if base == wanted {
-			return entry.Path, nil
-		}
-	}
-	return "", fmt.Errorf("map %q not found under maps/", requested)
-}
-
 func fatalf(format string, arguments ...any) {
-	fmt.Fprintf(os.Stderr, "nanolathe: map upscale export: "+format+"\n", arguments...)
-	os.Exit(1)
+	mapassets.Fatalf("nanolathe: map upscale export: ", format, arguments...)
 }

@@ -266,49 +266,6 @@ func BuildRenderPieceFlags(mdl *model.Model) []uint8 {
 	return flags
 }
 
-// BuildRenderPieceFlagsForProgram builds a prog-indexed flag view derived from the model.
-// For scripted units the COB piece index is the authoring index; the fill is still defined
-// per model object, so we map each prog piece name to its model piece and set bit0 based on
-// that model object's vertex count. Bits 1 and 2 stay unconditional [04 §"Piece flag polarity"].
-// When prog is nil the model-ordered flags are returned directly, for the
-// pre-attachment fixture stage.
-func BuildRenderPieceFlagsForProgram(mdl *model.Model, prog *cob.Program, pieceMap []int) []uint8 {
-	if mdl == nil {
-		return nil
-	}
-	if prog == nil {
-		return BuildRenderPieceFlags(mdl)
-	}
-	if len(prog.Pieces) == 0 {
-		return nil
-	}
-	flags := make([]uint8, len(prog.Pieces))
-	for i := range prog.Pieces {
-		f := uint8(0x02 | 0x04)
-		modelIdx := -1
-		if i < len(pieceMap) {
-			modelIdx = pieceMap[i]
-		} else {
-			// Fallback: try name match if pieceMap absent
-			for mi, mp := range mdl.Pieces {
-				if mp.Name == prog.Pieces[i] {
-					modelIdx = mi
-					break
-				}
-			}
-		}
-		if modelIdx >= 0 && modelIdx < len(mdl.Pieces) && len(mdl.Pieces[modelIdx].Vertices) >= 3 {
-			f |= 0x01
-		} else if modelIdx == -1 && prog != nil {
-			// If prog piece has no model counterpart, it would have been rejected by strict
-			// binding diagnostics [cob/binding.go]; here we treat it as bare (no draw) rather
-			// than inventing geometry.
-		}
-		flags[i] = f
-	}
-	return flags
-}
-
 // SetRenderPieceFlag toggles one bit of the unit's render-piece record [04 §"Piece flag polarity"].
 // Mask is one of 0x01 (draw), 0x02 (cache), 0x04 (shade). Returns false if piece out of range.
 func (u *Unit) SetRenderPieceFlag(piece int, mask uint8, set bool) bool {

@@ -136,7 +136,7 @@ func TestBattleChildRetailAssignedAccelerators(t *testing.T) {
 		{path: "guis/endmsn.gui", name: "MainMenu", key: 'M'},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
-			window, err := gui.Load(cs.fs, tc.path)
+			window, err := gui.LoadWithTranslation(cs.fs, tc.path, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

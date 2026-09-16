@@ -124,7 +124,7 @@ func syntheticSession(request Request) *session.Session {
 // (`sess.Skirmish.Difficulty`, read by `sessionDifficultyWord` for both the AI
 // profile's plan gate [08 R-AI-01 §12] and the computer player's production
 // discount [05 R-ECO-01 §3]), not only the campaign path's
-// NewMissionWithProgressSeeds call. Skipped when retail assets are absent.
+// NewMissionWithEntryOptions call. Skipped when retail assets are absent.
 func TestSkirmishRequestThreadsDifficultyIntoTheSessionWord(t *testing.T) {
 	fs := vfs.New()
 	if err := fs.MountGameDirectory(testsupport.RetailRoot(t)); err != nil {

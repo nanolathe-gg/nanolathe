@@ -162,7 +162,7 @@ func TestVentPersistence(t *testing.T) {
 		t.Fatalf("geothermal placement should succeed when vent present: %v", err)
 	}
 	// Ensure vent still present after validation (read-only)
-	if !VentPersistsAfterBuildingRemoval(terrain, 4, 4, ventDef) {
+	if !ventPersistsAfterBuildingRemoval(terrain, 4, 4, ventDef) {
 		t.Fatalf("vent should persist after placement validation [05 \"Geothermal requirement\"] [P1-10]")
 	}
 	// Simulate building removal (no op on feature grid) and verify vent still there
@@ -184,7 +184,7 @@ func TestVentPersistence(t *testing.T) {
 	if terrain.Plot[2+2*w].Feature() != world.PlotFeatureNone {
 		t.Fatalf("other feature removal should clear its cell")
 	}
-	if !VentPersistsAfterBuildingRemoval(terrain, 4, 4, ventDef) {
+	if !ventPersistsAfterBuildingRemoval(terrain, 4, 4, ventDef) {
 		t.Fatalf("vent should still persist after other feature removal")
 	}
 	// Also test at-least-one multi-vent satisfaction: footprint 2x2 with one vent anywhere should satisfy

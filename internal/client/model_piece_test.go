@@ -59,7 +59,7 @@ func syntheticModel(pieces []pieceInfo, tris []syntheticTri, root int) *unitMode
 		// Callers give corners in whatever order reads well for the geometry
 		// they are testing, so the ring is reversed here when it needs to be.
 		indices := []uint16{uint16(base), uint16(base + 1), uint16(base + 2), uint16(base + 2)}
-		if !modelFacePaints(piece.Vertices, indices, [3]numeric.Fixed{}) {
+		if !facePaints(piece.Vertices, indices, [3]numeric.Fixed{}, modelLocalVertex) {
 			indices = []uint16{uint16(base + 2), uint16(base + 2), uint16(base + 1), uint16(base)}
 		}
 		piece.Primitives = append(piece.Primitives, compiledmodel.Primitive{
@@ -461,14 +461,18 @@ func TestSelectionPickingStable(t *testing.T) {
 	if !rect.Contains(sx, sy) {
 		t.Fatalf("rect should contain unit center")
 	}
-	// Simulate picking logic: IsUnitViewInRect uses UnitViewToScreen which is based on X/Z only, not piece offset.
-	if !IsUnitViewInRect(c.cam, view, rect) {
-		t.Fatalf("picking should be stable on footprint/model bound, not animated piece extents; IsUnitViewInRect failed")
+	// The production drag picker projects the unit's own X/Z, not a piece
+	// offset, so the far turret never moves the pick.
+	inRect := func(v frame.UnitView) bool {
+		h := SnapshotUnitHandlesInRect(&frame.Frame{Units: []frame.UnitView{v}}, c.cam, rect, 0)
+		return len(h) == 1 && h[0] == v.Slot
 	}
-	// Also verify that turret's offset does not change IsUnitViewInRect result (it still uses unit X/Z).
+	if !inRect(view) {
+		t.Fatalf("picking should be stable on footprint/model bound, not animated piece extents")
+	}
 	viewFar := view
 	viewFar.Pieces[1].Tx = numeric.Fixed(500 * 65536)
-	if !IsUnitViewInRect(c.cam, viewFar, rect) {
+	if !inRect(viewFar) {
 		t.Fatalf("far turret offset should not affect picking rect containment")
 	}
 	_ = um

@@ -227,25 +227,6 @@ func DetachCargoMode(w *units.World, cargoHandle pool.Handle, mode int) (pool.Ha
 	return carrierHandle, true
 }
 
-// CargoCount returns live carried-count filtered by parent == carrier [04 §10.2].
-func CargoCount(w *units.World, carrierHandle pool.Handle) int {
-	if w == nil {
-		return 0
-	}
-	carrier := w.Unit(carrierHandle)
-	if carrier == nil {
-		return 0
-	}
-	n := 0
-	for _, h := range carrier.Attachment.Cargo {
-		u := w.Unit(h)
-		if u != nil && u.Attachment.Carrier == carrierHandle {
-			n++
-		}
-	}
-	return n
-}
-
 // SyncCarriedMotion slaves each cargo to its carrier's world transform [04 §10.2].
 //
 // Branch at top of occupancy commit:
@@ -700,15 +681,6 @@ func (s *System) releaseUnloadCargo(w *units.World, carrier, cargo *units.Unit) 
 	if coll := handleRow(s.Collisions, cargoHandle); coll != nil {
 		coll.Mode = cargo.Move.Mode & 0x3
 	}
-}
-
-// IsCarried reports whether unit is currently carried [04 §10.2].
-func IsCarried(w *units.World, h pool.Handle) bool {
-	if w == nil {
-		return false
-	}
-	u := w.Unit(h)
-	return u != nil && u.Attachment.Carrier != 0
 }
 
 // ScriptAttachCargo applies a COB attach opcode through the canonical cargo

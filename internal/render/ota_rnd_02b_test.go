@@ -62,7 +62,7 @@ func TestOTARND02BMobileBypassesSHDAtEveryOrientation(t *testing.T) {
 	}
 
 	for _, heading := range []uint16{0, 8192, 16384, 32768} {
-		draw := BuildUnitDraw(mdl, states, heading, 0, 0, frame.UnitView{BMCode: true}, nil)
+		draw := BuildUnitDrawInto(mdl, states, heading, 0, 0, frame.UnitView{BMCode: true}, nil, &DrawScratch{})
 		for piece := 1; piece <= 2; piece++ {
 			prim := otaRND02BPrimitive(t, draw, piece)
 			if prim.ShadeRow != NoShadeRow || prim.ShadeRows != nil {
@@ -70,7 +70,7 @@ func TestOTARND02BMobileBypassesSHDAtEveryOrientation(t *testing.T) {
 			}
 			// No SHD row means the unshaded span writer, which writes the
 			// byte raw [03 R-REN-03A §5].
-			got, _, _, _ := PaletteRGBA(&tables, byte(prim.ColorIndex&0xFF))
+			got, _, _, _ := tables.RGBA(byte(prim.ColorIndex & 0xFF))
 			if got != source {
 				t.Fatalf("heading %d piece %d resolved %d want raw texel %d", heading, piece, got, source)
 			}
@@ -87,7 +87,7 @@ func TestOTARND02BStructureShadingAndPerPieceDontShade(t *testing.T) {
 	t.Cleanup(func() { Shading = previous })
 
 	mdl := otaRND02BModel()
-	draw := BuildUnitDraw(mdl, []model.PieceState{{}, {DontShade: true}, {}}, 0, 0, 0, frame.UnitView{BMCode: false}, nil)
+	draw := BuildUnitDrawInto(mdl, []model.PieceState{{}, {DontShade: true}, {}}, 0, 0, 0, frame.UnitView{BMCode: false}, nil, &DrawScratch{})
 	pinned := otaRND02BPrimitive(t, draw, 1)
 	computed := otaRND02BPrimitive(t, draw, 2)
 	if pinned.ShadeRow != SHDIdentityRow {
@@ -103,8 +103,8 @@ func TestOTARND02BStructureShadingAndPerPieceDontShade(t *testing.T) {
 	tables.Shade[computed.ShadeRow][source] = computedIndex
 	// Both carry a real SHD row, so the shaded span writer resolves them
 	// through SHD[row*256 + byte] [03 R-REN-03A §5].
-	gotPinned, _, _, _ := ShadeRGBA(&tables, byte(pinned.ColorIndex&0xFF), pinned.ShadeRow)
-	gotComputed, _, _, _ := ShadeRGBA(&tables, byte(computed.ColorIndex&0xFF), computed.ShadeRow)
+	gotPinned, _, _, _ := tables.RGBA(tables.Shade[pinned.ShadeRow][byte(pinned.ColorIndex&0xFF)])
+	gotComputed, _, _, _ := tables.RGBA(tables.Shade[computed.ShadeRow][byte(computed.ColorIndex&0xFF)])
 	if gotPinned != pinnedIndex || gotComputed != computedIndex || gotPinned == gotComputed {
 		t.Fatalf("SHD relationship: pinned=%d computed=%d want %d/%d", gotPinned, gotComputed, pinnedIndex, computedIndex)
 	}
@@ -118,8 +118,8 @@ func TestOTARND02BShadingOptionOffMatchesMobile(t *testing.T) {
 	t.Cleanup(func() { Shading = previous })
 
 	mdl := otaRND02BModel()
-	structure := BuildUnitDraw(mdl, nil, 0, 0, 0, frame.UnitView{BMCode: false}, nil)
-	mobile := BuildUnitDraw(mdl, nil, 0, 0, 0, frame.UnitView{BMCode: true}, nil)
+	structure := BuildUnitDrawInto(mdl, nil, 0, 0, 0, frame.UnitView{BMCode: false}, nil, &DrawScratch{})
+	mobile := BuildUnitDrawInto(mdl, nil, 0, 0, 0, frame.UnitView{BMCode: true}, nil, &DrawScratch{})
 	for piece := 1; piece <= 2; piece++ {
 		a := otaRND02BPrimitive(t, structure, piece)
 		b := otaRND02BPrimitive(t, mobile, piece)

@@ -73,7 +73,7 @@ func (b *battleSession) prevBuildPage() {
 }
 
 // handleHudOrderButton binds named order buttons to the session command path
-// [R-P0-03][07 §9]. It is used by retail HUD consumeClick.
+// [R-P0-03][07 §9]. It is used by the retail HUD click pass.
 func (b *battleSession) handleHudOrderButton(name string) {
 	latch := hud.ParseButtonLatch(name, 1)
 	// STOP is a distinct immediate command. It must never dispatch contextual
@@ -188,16 +188,6 @@ func (b *battleSession) toggleCloakSelected() {
 		return
 	}
 	b.playUICue(nil, cueSpecialOrders)
-}
-
-// stockpileSelected queues one BuildWeapon round for stockpile weapons [06 §11.1].
-// Stockpile launch requires BuildWeapon descriptor (rear segment 0x40000) with count.
-func (b *battleSession) stockpileSelected(queued bool) {
-	for _, u := range b.selectedCommandUnits() {
-		if u != nil {
-			_ = b.DispatchStockpile(u.Handle, queued)
-		}
-	}
 }
 
 // enqueueSelectionCommand is every selection-changing human command this shell

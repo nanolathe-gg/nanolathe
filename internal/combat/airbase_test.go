@@ -73,7 +73,11 @@ func TestRebuildAirBaseListAllianceRowAndOrder(t *testing.T) {
 		return from == 1 && toward == 0
 	}
 
-	got := RebuildAirBaseList(arr, 0, declares)
+	// The registry's own rebuild is the only filler of the third list; tick 0
+	// is on its cadence [06 §3.1][04 R-AIR-01 §11].
+	var reg AirBaseRegistry
+	reg.Rebuild(0, arr, declares)
+	got := reg.List(0)
 	want := []pool.Handle{2, 4}
 	if len(got) != len(want) {
 		t.Fatalf("third list %v, want %v [06 §3.1]", got, want)
@@ -83,7 +87,9 @@ func TestRebuildAirBaseListAllianceRowAndOrder(t *testing.T) {
 			t.Fatalf("third list %v, want %v — members append in unit-array order [06 §3.1] (I1)", got, want)
 		}
 	}
-	if len(RebuildAirBaseList(arr, 0, nil)) != 1 {
+	var noRows AirBaseRegistry
+	noRows.Rebuild(0, arr, nil)
+	if len(noRows.List(0)) != 1 {
 		t.Fatalf("with no alliance rows composed only the ally group's own units are friendly [06 §3.1]")
 	}
 }

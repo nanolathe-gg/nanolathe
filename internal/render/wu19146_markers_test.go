@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/model"
-	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // A model projectile's angle block is {roll, yaw, pitch} onto the {Z, Y, X}
@@ -43,37 +42,4 @@ func TestPropellerSpinUsesRollSlotWithoutOffset(t *testing.T) {
 	// Out-of-range piece indices are a no-op, not a panic.
 	FoldPropellerSpin(st, -1, 1)
 	FoldPropellerSpin(st, len(st), 1)
-}
-
-// A model shadow sits five pixels right of the body and is sheared by the
-// terrain height beneath the subject, never by the subject's own height
-// [03 §5.3][03 R-REN-03D §3]. Both halves matter: the offset was missing here,
-// and the absence of a unit-height term is what makes an aircraft's shadow stay
-// on the ground.
-func TestShadowScreenVertexOffsetAndGroundShear(t *testing.T) {
-	world := [3]numeric.Fixed{numeric.FixedFromInt(100), numeric.FixedFromInt(400), numeric.FixedFromInt(200)}
-	ground := numeric.FixedFromInt(60)
-
-	x, y := ShadowScreenVertex(world, ground, 10, 20)
-	if x != 100-10+133 {
-		t.Fatalf("shadow screen X = %d, want %d (body's +128 plus the shadow's five pixels)", x, 100-10+133)
-	}
-	if y != 200-(60>>1)-20+32 {
-		t.Fatalf("shadow screen Y = %d, want %d", y, 200-(60>>1)-20+32)
-	}
-
-	// Raising the subject without moving the ground under it must not move the
-	// shadow: no altitude term exists in the placement.
-	high := world
-	high[1] = numeric.FixedFromInt(4000)
-	hx, hy := ShadowScreenVertex(high, ground, 10, 20)
-	if hx != x || hy != y {
-		t.Fatalf("shadow moved with subject height: (%d,%d) then (%d,%d)", x, y, hx, hy)
-	}
-
-	// Raising the ground under it must move it, by half the height.
-	_, uy := ShadowScreenVertex(world, numeric.FixedFromInt(80), 10, 20)
-	if uy != y-((80-60)>>1) {
-		t.Fatalf("ground shear = %d, want %d", uy, y-((80-60)>>1))
-	}
 }

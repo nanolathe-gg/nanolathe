@@ -317,50 +317,6 @@ func newDirectBattleView(opts Options, cs *contentSet) (*gameShell, *client.Clie
 	return shell, cl, nil
 }
 
-// restartDirectBattle is the --map lifecycle's fresh skirmish entry. The
-// direct battle view has no frontend shell, but it still owns a live client
-// and can construct the same retained-setup fresh entry RESTART.GUI requests
-// [08 R-CAMP-01 §8]. Candidate construction completes before the old battle
-// is retired, preserving the normal entry boundary without Session.Retry.
-func restartDirectBattle(opts Options, cs *contentSet, cl *client.Client, current **battleSession, request battleRestartRequest) error {
-	if current == nil || *current == nil {
-		return fmt.Errorf("no active direct battle")
-	}
-	if request.Campaign {
-		return fmt.Errorf("campaign request has no direct battle route")
-	}
-	sess, cat, err := newBattleSessionWithConfig(opts, cs, request.Skirmish)
-	if err != nil {
-		return err
-	}
-	next, err := composeBattleEntryDetached(sess, cat, cs, nil, nil)
-	if err != nil {
-		return err
-	}
-	// A restart is a fresh map load and gets its own remaster; the cache makes
-	// the second load of the same map a file read (§14.4 "Cache").
-	next.detail = detailArtFor(opts, cs, sess.World, nil)
-	old := *current
-	zoom := camera.ZoomUnit
-	if old.cam != nil {
-		zoom = old.cam.RequestedZoom()
-	}
-	old.teardown(cl)
-	*current = next
-	installBattleClient(cl, next)
-	fitDirectBattleViewport(cl, next)
-	// Preserve the requested stop, including a map-clamped overview (§16.8).
-	if next.cam != nil && zoom != camera.ZoomUnit {
-		mx, my := battleViewCentre(next.cam)
-		jumpBattleZoom(next, mx, my, zoom, modernRenderer(opts))
-	}
-	next.beginBattleArrival(opts, cl, false)
-	if next.hud != nil && next.hud.windowContext != nil {
-		next.hud.windowContext.completeTransition()
-	}
-	return nil
-}
-
 // rendererMode maps the --renderer flag to the platform executor selection. Any
 // value other than "modern" — including the empty string and any typo — selects
 // the classic executor (docs/DESIGN_GPU_RENDERER.md §2.4,
@@ -383,19 +339,16 @@ func windowRunOptions(opts Options) ebitenapp.RunOptions {
 	return ebitenapp.RunOptions{MaxFPS: fps, Stats: opts.Stats}
 }
 
-// composeBattleEntry is the single presentation composition for every
-// constructed battle session. Session construction has already completed the
-// authoritative entry tail's tick-zero per-player priming and second resource
-// grant [08 R-ENTRY-01 §8]. This helper does not change which authored HUD
-// surfaces the existing battle loader provides.
-func composeBattleEntry(sess *session.Session, cat *content.Catalog, cs *contentSet, cl *client.Client, shell *gameShell) (*battleSession, error) {
-	return composeBattleEntryWithDetail(sess, cat, cs, cl, shell, nil)
-}
-
-// composeBattleEntryWithDetail is composeBattleEntry with the load-time
-// remaster's art, which the route that owns the load has already synthesized
-// (DESIGN_GPU_RENDERER §14.4 "When"). The art reaches the client at the same
-// grouped adoption that installs the terrain, and is cleared with it.
+// composeBattleEntryWithDetail is the single presentation composition for
+// every constructed battle session. Session construction has already completed
+// the authoritative entry tail's tick-zero per-player priming and second
+// resource grant [08 R-ENTRY-01 §8]; this helper does not change which authored
+// HUD surfaces the existing battle loader provides.
+//
+// `detail` is the load-time remaster's art, which the route that owns the load
+// has already synthesized (DESIGN_GPU_RENDERER §14.4 "When"). It reaches the
+// client at the same grouped adoption that installs the terrain, and is
+// cleared with it.
 func composeBattleEntryWithDetail(sess *session.Session, cat *content.Catalog, cs *contentSet, cl *client.Client, shell *gameShell, detail *client.DetailArt) (*battleSession, error) {
 	b, err := composeBattleEntryDetached(sess, cat, cs, shell, nil)
 	if err != nil {
@@ -702,42 +655,6 @@ func (b *battleSession) teardown(cl *client.Client) {
 	b.modelTextures = nil
 	b.returnToMenu = nil
 	b.returnToSkirmish = nil
-}
-
-// newBattleSession builds the integrated skirmish session for the window.
-// It uses the canonical DirectSkirmishConfig normalization [08 "Skirmish configuration"] [GAP T14].
-func newBattleSession(opts Options, cs *contentSet) (*session.Session, *content.Catalog, error) {
-	request, err := directMapBattleRequest(opts, cs, newBattleSeedSource(opts))
-	if err != nil {
-		return nil, nil, err
-	}
-	authoritative, err := composeAuthoritativeBattle(request)
-	if err != nil {
-		return nil, nil, err
-	}
-	return authoritative.Session, authoritative.Session.Catalog, nil
-}
-
-// newBattleSessionWithConfig is the windowed composition path used by the
-// skirmish lobby. The menu's per-slot and round settings reach the canonical
-// session constructor [08 "Skirmish configuration"].
-func newBattleSessionWithConfig(opts Options, cs *contentSet, cfg session.SkirmishConfig) (*session.Session, *content.Catalog, error) {
-	return newBattleSessionWithConfigAndSource(opts, cs, cfg, newBattleSeedSource(opts))
-}
-
-// newBattleSessionWithConfigAndSource is the injectable composition seam for
-// battle entry. The selected pair is copied into the session configuration
-// before NewSkirmishWithFS performs any setup-owned draw [R-CORE-02].
-func newBattleSessionWithConfigAndSource(opts Options, cs *contentSet, cfg session.SkirmishConfig, source BattleSeedSource) (*session.Session, *content.Catalog, error) {
-	request, err := skirmishBattleRequest(opts, cs, cfg, headlessScenarioSkirmish, nil, source)
-	if err != nil {
-		return nil, nil, err
-	}
-	authoritative, err := composeAuthoritativeBattle(request)
-	if err != nil {
-		return nil, nil, err
-	}
-	return authoritative.Session, authoritative.Session.Catalog, nil
 }
 
 // configWithBattleSeeds is the composition boundary for skirmish setup. It

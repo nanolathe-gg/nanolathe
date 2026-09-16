@@ -371,7 +371,6 @@ type ResolvePos struct {
 	InterfaceType        int  // session option, also used by cursor [07 R-CAM-01 §5]
 	IsWreck              bool // wreck feature
 	FeatureResurrectable bool // wreck that can resurrect when actor canResurrect
-	IsLandingPad         bool // feature is landing pad (rare)
 }
 
 // Ensure handlers are registered even if init ordering placed this file before table.go.
@@ -885,10 +884,6 @@ func resolveMove(actor *units.Unit, target *units.Unit) string {
 		return "VTOL_Move"
 	}
 	return "Move_Ground"
-}
-
-func resolveAttack(actor *units.Unit, target *units.Unit) string {
-	return resolveAttackAt(actor, target, nil)
 }
 
 // slotZeroIsAntiAir is code 3's *w0* term: "*w0* be my weapon slot 0's weapon

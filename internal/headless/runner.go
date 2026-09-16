@@ -112,7 +112,7 @@ func Run(request Request) (Report, error) {
 
 	for _, required := range []string{"gamedata/moveinfo.tdf", "gamedata/sidedata.tdf"} {
 		if _, err := fs.Stat(required); err != nil {
-			return Report{}, diagnostic("required content is missing", required, providerNames(fs), "a mounted archive or loose file supplying it")
+			return Report{}, diagnostic("required content is missing", required, fs.ProviderIDs(), "a mounted archive or loose file supplying it")
 		}
 	}
 	return RunWithContent(request, fs, nil)
@@ -253,7 +253,7 @@ func normalizeFreshBattleRequest(request FreshBattleRequest) (ScenarioKind, stri
 		// requested difficulty is the caller's explicit choice, so it is
 		// written after defaults land, exactly like the two RNG seeds below —
 		// this is the same word the campaign path already threads through
-		// unconditionally via NewMissionWithProgressSeeds.
+		// unconditionally via NewMissionWithEntryOptions.
 		cfg.Difficulty = request.Difficulty
 		cfg.RNGSimSeed = request.SimulationSeed
 		cfg.RNGCrtSeed = request.CRTSeed
@@ -361,16 +361,7 @@ func providersFromOps(fs vfs.FSOps) []string {
 	if !ok {
 		return nil
 	}
-	return providerNames(concrete)
-}
-
-func providerNames(fs *vfs.FS) []string {
-	providers := fs.Providers()
-	names := make([]string, 0, len(providers))
-	for _, provider := range providers {
-		names = append(names, provider.ID)
-	}
-	return names
+	return concrete.ProviderIDs()
 }
 
 type observer struct {

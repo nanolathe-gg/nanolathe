@@ -391,9 +391,6 @@ func TestKilledDedupAcrossHandleReuse(t *testing.T) {
 			t.Fatalf("second occupant finalization should fire hook got %d", count)
 		}
 	}
-	if s.Combat != nil {
-		_ = combat.ShouldDispatchReplayKilled
-	}
 }
 
 func init() {

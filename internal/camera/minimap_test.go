@@ -90,8 +90,8 @@ func TestWorldToRadarRadarToWorldRoundTrip(t *testing.T) { // [07 §10][03 §3.1
 		mapW, mapH   int32
 		playW, playH int32
 	}{
-		{640, 480, PlayRight(640), PlayBottom(480)}, // raw pix 640,480 -> play 608,352 [03 §3.4]
-		{1024, 1024, 992, 896},                      // square
+		{640, 480, 608, 352},   // raw pix 640,480 -> play 608,352 [03 §3.4]
+		{1024, 1024, 992, 896}, // square
 		{480, 640, 448, 512},
 		{800, 600, 768, 472},
 	}
@@ -174,7 +174,7 @@ func TestWorldToRadarRadarToWorldRoundTrip(t *testing.T) { // [07 §10][03 §3.1
 }
 
 func TestRadarToWorldIsDirectCameraOrigin(t *testing.T) { // [03 §3.11]
-	playW, playH := PlayRight(640), PlayBottom(480) // 608,352
+	playW, playH := int32(608), int32(352) // world.PlayInsets(40, 30) for a 640x480-pixel map
 	m := LayoutMinimap(640, 480)
 	viewW, viewH := int32(128), int32(128)
 	// The lens writes the projected world point directly; it does not subtract
@@ -190,21 +190,6 @@ func TestRadarToWorldIsDirectCameraOrigin(t *testing.T) { // [03 §3.11]
 	spanW, spanH := cam.BattleView()
 	if cam.X != clampAxis(wx, playW, spanW, OriginX) || cam.Z != clampAxis(wz, playH, spanH, OriginY) {
 		t.Fatalf("direct-origin clamp got %d,%d", cam.X, cam.Z)
-	}
-}
-
-func TestPlayHelpers(t *testing.T) { // [03 §3.4]
-	if PlayRight(640) != 608 || PlayBottom(480) != 352 {
-		t.Fatalf("PlayRight/Bottom want 608/352 got %d/%d", PlayRight(640), PlayBottom(480))
-	}
-	w, h := PlaySize(1024, 768)
-	if w != 992 || h != 640 {
-		t.Fatalf("PlaySize want 992/640 got %d/%d", w, h)
-	}
-	// cells*16 path
-	pw, ph := PlaySizeFromCells(64, 64) // 64*16=1024
-	if pw != 992 || ph != 896 {         // 1024-32, 1024-128
-		t.Fatalf("PlaySizeFromCells want 992/896 got %d/%d", pw, ph)
 	}
 }
 

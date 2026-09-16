@@ -337,7 +337,7 @@ func TestFUPlaytestCampaignGateDefeatTrigger(t *testing.T) {
 	}
 	defer cs.Close()
 	selector := fmt.Sprintf("camps/%s.tdf:MISSION0", fuArmCampaign)
-	sess, err := session.NewMissionWithProgressSeeds(cs.fs, nil, selector, 0, 7, 7, nil)
+	sess, err := session.NewMissionWithEntryOptions(cs.fs, nil, selector, 0, 7, 7, session.MissionEntryOptions{}, nil)
 	if err != nil {
 		t.Skipf("%s unavailable: %v", selector, err)
 	}
@@ -408,7 +408,7 @@ func TestFUPlaytestCampaignNondefaultVisibility(t *testing.T) {
 	var rows []row
 	for _, c := range cases {
 		r := row{Name: c.name, Selector: c.selector, Want: uint8(c.want)}
-		sess, err := session.NewMissionWithProgressSeeds(cs.fs, nil, c.selector, 0, 7, 7, nil)
+		sess, err := session.NewMissionWithEntryOptions(cs.fs, nil, c.selector, 0, 7, 7, session.MissionEntryOptions{}, nil)
 		if err != nil {
 			r.Err = err.Error()
 			rows = append(rows, r)

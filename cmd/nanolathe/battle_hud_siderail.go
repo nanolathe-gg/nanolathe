@@ -127,43 +127,27 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, f *fr
 // primary and secondary order lists for that product. A zero total clears the
 // label; there is no clamp and no display cap.
 //
-// It is a local copy of hud.QueueCountLabel rather than a call to it: the two
-// now agree (WU-19-135 corrected hud.QueueCountLabel's stale "two separate
-// numbers" reading to this same one-sum "+%d" shape), but hud.QueueCountLabel
-// takes a []frame.OrderQueueView slice rather than the committed frame this
-// composer already holds, and internal/hud is not this unit's package to
-// re-plumb a caller into.
+// It selects the builder's own queue view and hands it to hud.QueueCountLabel,
+// which is the one implementation of the sum and the format. The two used to
+// be separate copies of the same arithmetic, kept apart only by the
+// []frame.OrderQueueView versus *frame.Frame signature.
 func productQueueCountLabel(f *frame.Frame, product string) string {
-	key := content.CanonicalKey(product)
-	if f == nil || key == "" || f.CommandPage.Builder == 0 {
+	if f == nil || f.CommandPage.Builder == 0 {
 		return ""
 	}
 	// The writer is handed the single selected builder, so only that unit's
-	// queues are counted [07 R-P0-11 §1]. Retail additionally admits only nodes
-	// carrying the counted-production flag; internal/orders models no such flag
-	// yet, and only build nodes carry a product key at all, so matching on the
-	// product is equivalent over the queues nanolathe produces today.
-	total := uint32(0)
+	// queues are counted [07 R-P0-11 §1]. Publication emits one queue view per
+	// unit, so the first match is that builder's whole queue. Retail
+	// additionally admits only nodes carrying the counted-production flag;
+	// internal/orders models no such flag yet, and only build nodes carry a
+	// product key at all, so matching on the product is equivalent over the
+	// queues nanolathe produces today.
 	for i := range f.OrderQueues {
-		q := &f.OrderQueues[i]
-		if q.Unit != f.CommandPage.Builder {
-			continue
-		}
-		for _, o := range q.Primary {
-			if content.CanonicalKey(o.BuildProduct) == key {
-				total += o.BuildCount
-			}
-		}
-		for _, o := range q.Secondary {
-			if content.CanonicalKey(o.BuildProduct) == key {
-				total += o.BuildCount
-			}
+		if f.OrderQueues[i].Unit == f.CommandPage.Builder {
+			return hud.QueueCountLabel(f.OrderQueues[i:i+1], product)
 		}
 	}
-	if total == 0 {
-		return ""
-	}
-	return fmt.Sprintf("+%d", total)
+	return ""
 }
 
 // stockpileCountLabel is the bit-0x08 format of the count-label writer
@@ -209,30 +193,7 @@ func stockpileCountLabel(f *frame.Frame) string {
 	return strings.TrimSpace(label)
 }
 
-// queueCountLabelPen is the retail button painter's pen arithmetic
-// [03 R-FONT-01 §6] for a button caption, applied to the queue-count text
-// written into a build-product toy's own text slot [07 R-P0-11 §2]. `s` is 1
-// when the gadget's `stages` field is non-zero. The vertical pen is
-// `gy + trunc((h-1-metric)/2) + s` for the left/right/centre attributes, but
-// the build-attribute variant (attribute bit 0x20) keeps the centred
-// horizontal pen and instead anchors near the bottom edge:
-// `bottom - 4 - metric + s`. `metric` is the line metric of the family the
-// caption is drawn with — the capital-I frame height plus two for a GAF font
-// (the case here; see drawProductButtonCaption), or the FNT header height
-// field on the GAF pen's null-slot fallback.
-//
-// Build-product buttons author attribute 0x20 and no left/right/centre bit
-// (asset census over the reference install's guis/*.gui files, the same
-// census that backs [07 R-P0-11 §2]'s refinement: all 480 author
-// `attribs = 32` alongside `commonattribs = 4`), so the count lands at the
-// bottom-centre of the button, not the vertically-centred left inset a
-// left-aligned button would use.
-func queueCountLabelPen(gad gui.Gadget, r gui.Rect, textWidth, metric int) (x, y int) {
-	x, y, _, _ = retailButtonCaptionPen(gad, r, textWidth, metric)
-	return x, y
-}
-
-// productButtonCaptionLayout picks the family and pen the retail button
+// productButtonCaptionLayoutSelected picks the family and pen the retail button
 // painter would use for a side-page button caption — in practice the queue
 // count the count-label writer left in the toy's own text slot
 // [07 R-P0-11 §2].
@@ -274,14 +235,9 @@ func queueCountLabelPen(gad gui.Gadget, r gui.Rect, textWidth, metric int) (x, y
 // kind-7 records — nil when none matched, which leaves the common font active.
 // It is the active FNT the null-slot fallback draws with; with a GAF font in
 // the slot it is never consulted [07 R-WGT-01 §6][03 R-FONT-01 §5].
-func (h *retailBattleHUD) productButtonCaptionLayout(gad gui.Gadget, r gui.Rect, text string) (x, y int, font *formats.GAFEntry) {
-	x, y, font, _ = h.productButtonCaptionLayoutSelected(gad, r, text, nil)
-	return x, y, font
-}
-
-// productButtonCaptionLayoutSelected is productButtonCaptionLayout with the
-// button's selected FNT; the fourth result is the FNT the null-slot fallback
-// draws with, nil when a GAF font is in the slot or no FNT is available.
+// `selected` is the button's own FNT; the fourth result is the FNT the
+// null-slot fallback draws with, nil when a GAF font is in the slot or no FNT
+// is available.
 func (h *retailBattleHUD) productButtonCaptionLayoutSelected(gad gui.Gadget, r gui.Rect, text string, selected *formats.FNT) (x, y int, font *formats.GAFEntry, fallback *formats.FNT) {
 	if font = h.buttonCaptionGAFFont(); font != nil {
 		x, y, _, _ = retailButtonCaptionPen(gad, r, retailGAFTextWidth(font, text), retailGAFTextHeight(font))
@@ -309,22 +265,16 @@ func (h *retailBattleHUD) buttonCaptionGAFFont() *formats.GAFEntry {
 	return h.modalFont
 }
 
-// drawProductButtonCaption draws that caption where productButtonCaptionLayout
-// puts it. The GAF pen blits each glyph at `penX - XOffset, penY -
+// drawProductButtonCaptionSelected draws that caption where
+// productButtonCaptionLayoutSelected puts it. The GAF pen blits each glyph at `penX - XOffset, penY -
 // normalizedYOffset` (the load-time baseline normalization of [07 §4]) and
 // stops on the first glyph wider than the remaining width, the painter's
 // `maxW = w` [03 R-FONT-01 §6]. On the null-slot fallback the FNT drawer is
 // called with the width limit dropped, which is what maxWidth < 0 means to
 // UITextWidth.
-func (h *retailBattleHUD) drawProductButtonCaption(c *client.Client, gad gui.Gadget, r gui.Rect, text string) {
-	w, height := c.Size()
-	h.drawProductButtonCaptionSelected(c, gad, r, gui.Rect{W: int32(w), H: int32(height)}, text, nil)
-}
-
-// drawProductButtonCaptionSelected is drawProductButtonCaption with the FNT
-// the button's `fontnumber` selected from the page's kind-7 records (nil when
-// none matched): the active FNT the null-slot fallback draws with
-// [07 R-WGT-01 §6][03 R-FONT-01 §5].
+// `selected` is the FNT the button's `fontnumber` picked from the page's
+// kind-7 records (nil when none matched): the active FNT the null-slot
+// fallback draws with [07 R-WGT-01 §6][03 R-FONT-01 §5].
 func (h *retailBattleHUD) drawProductButtonCaptionSelected(c *client.Client, gad gui.Gadget, r, clip gui.Rect, text string, selected *formats.FNT) {
 	_, _, font, fallback := h.productButtonCaptionLayoutSelected(gad, r, text, selected)
 	var width, metric int

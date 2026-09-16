@@ -6,6 +6,7 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/cob"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/path"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
@@ -114,4 +115,20 @@ func newMovementFixtureWorld(maxDefs int) *units.World {
 	w := units.NewSliced(maxDefs, nil)
 	w.SetCOBSource(movementFixtureCOBFS{}, cob.NewCachedLoader())
 	return w
+}
+
+// oneShotResult is what a completed reference search produced. Production has
+// no whole-search entry: the scheduler drives path.Session under a per-tick
+// work budget [04 §7.3], and these tests want the same session run to
+// completion so they can compare a live route against an unobstructed one.
+type oneShotResult struct {
+	Points []path.Point
+	Status path.Status
+	Popped int
+}
+
+func oneShotSearch(cfg path.SearchConfig) oneShotResult {
+	s := path.NewSession(cfg)
+	points, status, _ := s.Resume(1 << 30)
+	return oneShotResult{Points: points, Status: status, Popped: s.Popped()}
 }

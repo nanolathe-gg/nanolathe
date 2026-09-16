@@ -180,7 +180,7 @@ func (a *flashDiscAtlas) flush() {
 	if a.img == nil || a.dirtyY1 <= a.dirtyY0 {
 		return
 	}
-	y0, y1 := maxInt(a.dirtyY0, 0), minInt(a.dirtyY1, flashAtlasHeight)
+	y0, y1 := max(a.dirtyY0, 0), min(a.dirtyY1, flashAtlasHeight)
 	if y1 > y0 {
 		rect := image.Rect(0, y0, flashAtlasWidth, y1)
 		a.img.SubImage(rect).(*ebiten.Image).WritePixels(a.buf[y0*flashAtlasWidth*4 : y1*flashAtlasWidth*4])
@@ -282,9 +282,9 @@ func (r *Renderer) Halo(h drawlist.Halo) {
 // — the recording extent intersected with the terrain rectangle, which is what
 // the point lane applies per pixel — and with the executor's own extent.
 func clipLitDisc(x0, y0, x1, y1 int, clip drawlist.Rect, w, h int) (int, int, int, int) {
-	x0 = maxInt(maxInt(x0, int(clip.X)), 0)
-	y0 = maxInt(maxInt(y0, int(clip.Y)), 0)
-	x1 = minInt(minInt(x1, int(clip.X)+int(clip.W)), w)
-	y1 = minInt(minInt(y1, int(clip.Y)+int(clip.H)), h)
+	x0 = max(max(x0, int(clip.X)), 0)
+	y0 = max(max(y0, int(clip.Y)), 0)
+	x1 = min(min(x1, int(clip.X)+int(clip.W)), w)
+	y1 = min(min(y1, int(clip.Y)+int(clip.H)), h)
 	return x0, y0, x1, y1
 }

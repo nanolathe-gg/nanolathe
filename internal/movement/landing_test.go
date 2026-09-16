@@ -71,10 +71,10 @@ func TestVTOLLandIfCanDescendsAndGrounds(t *testing.T) {
 	}
 	// It lands over its own position: phase 1 found the current position
 	// landable, so the marker's goal was the unit's own X/Z.
-	if dx := absFixed(u.X - airborneX); dx > 4<<16 {
+	if dx := numeric.Abs(u.X - airborneX); dx > 4<<16 {
 		t.Fatalf("landed %d off its own X [04 R-AIR-01 §6 phase 1]", dx)
 	}
-	if dz := absFixed(u.Z - airborneZ); dz > 4<<16 {
+	if dz := numeric.Abs(u.Z - airborneZ); dz > 4<<16 {
 		t.Fatalf("landed %d off its own Z [04 R-AIR-01 §6 phase 1]", dz)
 	}
 	// The descent is the integrator's, against the marker's commanded Y. The
@@ -86,7 +86,7 @@ func TestVTOLLandIfCanDescendsAndGrounds(t *testing.T) {
 	if u.Y >= cruiseY {
 		t.Fatalf("the aircraft never descended: Y=%d, cruised at %d [04 R-AIR-01 §6 phase 1]", u.Y, cruiseY)
 	}
-	if dy := absFixed(u.Y - sys.Terrain.HeightAt(u.X, u.Z)); dy > numeric.Fixed(8<<16) {
+	if dy := numeric.Abs(u.Y - sys.Terrain.HeightAt(u.X, u.Z)); dy > numeric.Fixed(8<<16) {
 		t.Fatalf("landed %d above the surface, which is no landing [04 R-AIR-01 §6 phase 1]", dy)
 	}
 	landed := Cell{X: world.WorldToCell(u.X), Z: world.WorldToCell(u.Z)}
@@ -172,10 +172,10 @@ func TestLandSearchTakesANewMoveOrderAtOnce(t *testing.T) {
 	}
 	// The commanded position is the new goal, snapped onto the unit's own
 	// footprint; the search leg's own marker is gone.
-	if dx := absFixed(fl.Command.Pos.X - goalX); dx > numeric.Fixed(16<<16) {
+	if dx := numeric.Abs(fl.Command.Pos.X - goalX); dx > numeric.Fixed(16<<16) {
 		t.Fatalf("commanded X %d is not the new goal %d: the plane is still flying the land search", fl.Command.Pos.X, goalX)
 	}
-	if dz := absFixed(fl.Command.Pos.Z - goalZ); dz > numeric.Fixed(16<<16) {
+	if dz := numeric.Abs(fl.Command.Pos.Z - goalZ); dz > numeric.Fixed(16<<16) {
 		t.Fatalf("commanded Z %d is not the new goal %d: the plane is still flying the land search", fl.Command.Pos.Z, goalZ)
 	}
 }

@@ -55,7 +55,7 @@ func modelPrimitiveDispatch(pr *presentationrender.PrimitiveDraw, resolved bool)
 	return modelPrimitiveTexture
 }
 
-// modelFacePaints applies retail's winding cull to one authored primitive
+// facePaints applies retail's winding cull to one authored primitive
 // [R-RAST-01 §1] step 7.
 //
 // Retail has no normal test, no signed-area test and no backface flag. What
@@ -92,12 +92,9 @@ func modelPrimitiveDispatch(pr *presentationrender.PrimitiveDraw, resolved bool)
 // by the two passes that do not run a span writer at all — the nanoframe
 // wireframe, which draws edges rather than spans, and the shadow
 // rasterization's own quarter-shear pass.
-func modelFacePaints(vertices [][3]numeric.Fixed, indices []uint16, origin [3]numeric.Fixed) bool {
-	return facePaints(vertices, indices, origin, modelLocalVertex)
-}
-
-// facePaints is modelFacePaints over an arbitrary vertex projection, so the
-// body and shadow passes share one cull evaluated on their own corners.
+// It takes the vertex projection as an argument so the body and shadow passes
+// share one cull evaluated on their own corners; the body pass supplies
+// modelLocalVertex.
 func facePaints(vertices [][3]numeric.Fixed, indices []uint16, origin [3]numeric.Fixed, project func(v, origin [3]numeric.Fixed) (int32, int32, int32)) bool {
 	n := len(indices)
 	if n < 3 {
@@ -439,33 +436,6 @@ func (c *Client) projectedModelExtent(draw *presentationrender.UnitDraw, lane pr
 		}
 	}
 	return int(maxX - minX + 2*modelTargetMargin), int(maxY - minY + 2*modelTargetMargin), modelTargetMargin - minX, modelTargetMargin - minY, visible
-}
-
-// modelExtent measures an already projected polygon envelope.
-// Extrema include the origin and carry the composition margin [03 R-REN-03A §1].
-func modelExtent(polys []screenPoly) (width, height int, originX, originY int32) {
-	var minX, minY, maxX, maxY int32 // seeded at the model origin, not at a vertex
-	for i := range polys {
-		xs, ys := polys[i].x, polys[i].y
-		for k := range xs {
-			x, y := xs[k], ys[k]
-			if x < minX {
-				minX = x
-			}
-			if x > maxX {
-				maxX = x
-			}
-			if y < minY {
-				minY = y
-			}
-			if y > maxY {
-				maxY = y
-			}
-		}
-	}
-	originX = modelTargetMargin - minX
-	originY = modelTargetMargin - minY
-	return int(maxX - minX + 2*modelTargetMargin), int(maxY - minY + 2*modelTargetMargin), originX, originY
 }
 
 // placeFaces moves every corner into image space. At the supersample scale the

@@ -336,7 +336,7 @@ func TestStrategicMarkerCountAndAlphaRamp(t *testing.T) {
 		c.cam.Zoom, c.cam.Scale = tc.zoom, tc.zoom.Step()
 		c.list.Reset()
 		c.refreshRecordExtent()
-		if got := c.markerAlpha(); got != tc.alpha {
+		if got := c.markerAlphaAtZoom(c.liveZoom()); got != tc.alpha {
 			t.Errorf("%s: marker alpha %d, want %d", tc.zoom, got, tc.alpha)
 		}
 		c.drawStrategicMarkers(cur)

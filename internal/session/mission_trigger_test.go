@@ -120,7 +120,7 @@ func TestSimultaneousVictoryDefeatResolvesVictory(t *testing.T) {
 	// With no local units, AllUnitsKilled true.
 	def := []*triggers.Trigger{triggers.New(triggers.KindAllUnitsKilled, "")}
 	// Ensure defeat would be true: no local units in w
-	vDone, dDone := triggers.Evaluate(vic, def, ctx)
+	vDone, dDone := triggers.EvaluateOwned(&vic, &def, ctx)
 	if !vDone || dDone {
 		t.Fatalf("simultaneous should be victory: v=%v d=%v", vDone, dDone)
 	}
@@ -131,7 +131,7 @@ func TestMissionTriggerDeadlineLatchAndCue(t *testing.T) {
 	s.Mission.Type = mission.TypeCampaign
 	s.Mission.Units = []mission.UnitPlacement{{}}
 	s.Mission.Victory = []*triggers.Trigger{triggers.New(triggers.KindDestroyAllUnits, "")}
-	s.Mission.Defeat = []*triggers.Trigger{triggers.NewTimer(triggers.KindDeathTimerRunsOut, 1000)}
+	s.Mission.Defeat = []*triggers.Trigger{triggers.New(triggers.KindDeathTimerRunsOut, "", triggers.SecondsToTicks(1000))}
 	s.publication = newPublicationState(frame.NewEventBuffer(frame.Limits{}))
 	s.Latch = NewEndLatch()
 	s.LocalOwner = 9 // prove the session table, not this adapter field, owns local identity.

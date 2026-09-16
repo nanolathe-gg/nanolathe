@@ -243,7 +243,7 @@ func TestResultContinuationUsesCommittedKind(t *testing.T) {
 			}
 			live.Snapshot = buf
 			committed := (&battleSession{sess: live}).resultView()
-			if got := resultContinuesCampaign(committed); got != tc.want {
+			if got := resultWon(committed); got != tc.want {
 				t.Fatalf("committed result %+v: continuation=%t, want %t", committed, got, tc.want)
 			}
 		})

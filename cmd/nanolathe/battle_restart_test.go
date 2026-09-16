@@ -223,7 +223,7 @@ func TestBattleRestartStagedFrameUsesPanelStageWithoutShell(t *testing.T) {
 	entry := widgetArtEntry("Difficulty", 3, 7, 11)
 	gad := gui.Gadget{Kind: gui.KindButton, Name: "Difficulty", Active: 1, Stages: 3, ButtonArtResolved: true, ButtonArt: &entry, Rect: gui.Rect{W: 10, H: 10}}
 	h := &retailBattleHUD{}
-	if got := h.modalStagedButtonFrame(gad, nil, false, 2, false); got != entry.Frames[2].Frame {
+	if got := h.modalGadgetFrameState(gad, nil, 0, 2, false); got != entry.Frames[2].Frame {
 		t.Fatal("shell-less staged button did not retain selected stage frame")
 	}
 	// An explicit unresolved external button slot terminates lookup. It must
@@ -248,48 +248,6 @@ func TestBattleRestartSkirmishRetainsRowsBeforeFreshEntry(t *testing.T) {
 	if got := g.retailControllers; got[0] != 1 || got[1] != 2 || got[2] != 2 {
 		t.Fatalf("retained row conversion = %v", got[:3])
 	}
-}
-
-func TestBattleRestartDirectMapBuildsFreshRetainedSetupEntryAndExits(t *testing.T) {
-	root := testsupport.RetailRoot(t)
-	opts := Options{Root: root, Map: "ashap plateau", Seed: 1}
-	cs, err := openContent(opts)
-	if err != nil {
-		t.Skipf("retail assets unavailable: %v", err)
-	}
-	defer cs.Close()
-	sess, cat, err := newBattleSession(opts, cs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := composeBattleEntryDetached(sess, cat, cs, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	current := b
-	oldSession := current.sess
-	request := battleRestartRequest{Skirmish: current.sess.Skirmish}
-	request.Skirmish.Difficulty = 2
-	func() {
-		// runBattleView defers this closure, which must resolve `current` only
-		// when the direct view exits after Restart has replaced it.
-		defer func() { current.teardown(nil) }()
-		if err := restartDirectBattle(opts, cs, nil, &current, request); err != nil {
-			t.Fatal(err)
-		}
-		if current == b || current.sess == oldSession {
-			t.Fatal("direct restart retained the old battle/session")
-		}
-		if got := current.sess.Skirmish; got.MapName != request.Skirmish.MapName || got.NumPlayers != request.Skirmish.NumPlayers || got.Difficulty != 2 {
-			t.Fatalf("fresh direct setup = %+v, want retained map/player count and difficulty", got)
-		}
-	}()
-	if current.sess != nil {
-		t.Fatal("direct exit left the replacement session live")
-	}
-	// The captured original is already retired by restart; a second exit path
-	// must be harmless rather than dereferencing its cleared session.
-	b.teardown(nil)
 }
 
 func TestBattleRestartCampaignRetainsTeardownScoreAndSelectedMission(t *testing.T) {

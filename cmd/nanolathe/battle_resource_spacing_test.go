@@ -42,7 +42,7 @@ func TestResourceRepeatedSolarPacksWithoutOverlap(t *testing.T) {
 				}
 				touching := i == 0
 				for _, earlier := range placed {
-					dx, dz := absInt32(int32((c.WX-earlier.WX)>>16)), absInt32(int32((c.WZ-earlier.WZ)>>16))
+					dx, dz := numeric.Abs(int32((c.WX-earlier.WX)>>16)), numeric.Abs(int32((c.WZ-earlier.WZ)>>16))
 					if dx < 32 && dz < 32 {
 						t.Fatalf("2x2 solar footprints overlap: %+v and %+v", earlier, c)
 					}

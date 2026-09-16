@@ -32,10 +32,6 @@ const (
 	TargetPoint                   // world position ground point x/z words <<16, sentinel absent [06 §1.2] P0-10
 )
 
-// SentinelUnit is the retail sentinel for the unit latch in the weapon slot
-// record's target field [06 §1.2] P0-10.
-const SentinelUnit int16 = -0x8000 // 0x8000
-
 // Target is the per-slot encoded target state [06 §1.2] [06 §3.2] P0-10 (I13).
 // The weapon slot record's target field pairs a signed 16-bit unit index
 // (0=null) with a signed 16-bit sentinel [06 §1.2] P0-10.
@@ -204,26 +200,6 @@ func WithinRange(shooterX, shooterZ, candX, candZ numeric.Fixed, weaponRange int
 	return dist2 <= r2 // inclusive JLE [06 §3.3]
 }
 
-// WithinCoverageSquare reports whether the candidate's stored aim point lies within the interceptor's coverage square [06 §11.2] P0-10.
-// The scan uses an inclusive axis-aligned coverage square, not a radius circle [06 §11.2] [06 §3.3] P0-10.
-// Coverage is NOT ordinary fire range [06 §3.3] — this helper is for interceptor acquisition only [06 §11.2].
-func WithinCoverageSquare(shooterX, shooterZ, candX, candZ numeric.Fixed, coverage int32) bool {
-	if coverage < 0 {
-		return false
-	}
-	dx := candX.Sub(shooterX)
-	dz := candZ.Sub(shooterZ)
-	dxI := dx.Int()
-	if dxI < 0 {
-		dxI = -dxI
-	}
-	dzI := dz.Int()
-	if dzI < 0 {
-		dzI = -dzI
-	}
-	return dxI <= int64(coverage) && dzI <= int64(coverage) // inclusive bounds per [06 §11.2] P0-10
-}
-
 // ---------------------------------------------------------------------------
 // Candidate selection order per [06 §3.1] [06 §3.2] P0-10 (I1, I4)
 // ---------------------------------------------------------------------------
@@ -368,10 +344,11 @@ type Acquisition struct {
 	// underwater parts of the predicate are decided here from the candidate's
 	// own fields; only the sampling needs the visibility service.
 	//
-	// AcquireTarget does not read it. The predicate belongs to the registry
-	// rebuild, which files the primary list up to thirty ticks before an
-	// acquisition filters it [06 §3.1]; this field serves the single-candidate
-	// question IsValidAcquisitionCandidate answers for the reaction offer.
+	// The acquisition query itself does not read it. The predicate belongs to
+	// the registry rebuild, which files the primary list up to thirty ticks
+	// before an acquisition filters it [06 §3.1]; this field serves the
+	// single-candidate form a fixture asks about a candidate it did not get
+	// from a list [06 R-WPN-04 §2 part 3].
 	Visible func(c Candidate) bool
 
 	RNG *rng.Simulation
@@ -397,31 +374,20 @@ type Acquisition struct {
 	// rebuild writes 1 when any unit the scanning player itself owns — the
 	// same player slot, allies excluded — is alive, not dying, complete and
 	// activated and carries `istargetingupgrade`. The shooter's own definition
-	// plays no part. TargetingUpgradeGate computes it over a unit array;
-	// Service.rebuildTargetRegistry computes it on the registry's cadence and
-	// Service.acquireTargetForSlotRange hands it here.
+	// plays no part. Service.rebuildTargetRegistry computes it on the
+	// registry's cadence, one unit at a time through
+	// unitOpensTargetingUpgradeGate, and Service.acquireTargetForSlotRange
+	// hands it here.
 	HasUpgrade bool
 }
 
-// TargetingUpgradeGate computes the registry's secondary-list gate for the
-// player owning slot `owner` [06 §3.1] [04 R-SPEC-01 §8]: true when at least
-// one unit in `list` is alive, not dying, owned by that same player (allied
-// players' units do not count), complete (remaining build fraction exactly
-// zero) and activated (paralysis does not clear the bit), and whose
-// definition carries `istargetingupgrade`. Nothing is counted or summed.
-// Callers pass units in slot order; the result is order-independent (I1).
-func TargetingUpgradeGate(list []*units.Unit, owner uint8) bool {
-	for _, u := range list {
-		if unitOpensTargetingUpgradeGate(u, owner) {
-			return true
-		}
-	}
-	return false
-}
-
-// unitOpensTargetingUpgradeGate is that predicate for one unit, so the
-// registry's single rebuild walk and the exported whole-array form share one
-// body [06 §3.1]. "Friendly" here means the SAME PLAYER, not the same ally
+// unitOpensTargetingUpgradeGate is the registry's secondary-list gate for one
+// unit [06 §3.1] [04 R-SPEC-01 §8]: true when the unit is alive, not dying,
+// owned by the scanning player itself, complete (remaining build fraction
+// exactly zero) and activated (paralysis does not clear the bit), and its
+// definition carries `istargetingupgrade`. Nothing is counted or summed; the
+// rebuild walk sets the boolean on the first unit that opens it.
+// "Friendly" here means the SAME PLAYER, not the same ally
 // group: the rebuild's counting branch is entered only when the candidate's
 // owner slot equals the registry owner's, so an ally's targeting-upgrade unit
 // never opens this gate for you (refinement of 2026-09-02, point 2).
@@ -433,33 +399,6 @@ func unitOpensTargetingUpgradeGate(u *units.Unit, owner uint8) bool {
 		return false // complete (build fraction exactly zero) and activated
 	}
 	return u.Def.IsTargetingUpgrade // word A bit 10 [04 R-SPEC-01 §0][06 R-WPN-05 §7]
-}
-
-// directlyVisible is the primary list's direct-visibility predicate
-// [06 §3.1] P0-10 [03 §3.2] P0-11. It accepts own-side units, rejects cloaked units, rejects
-// underwater units without their dedicated status bit 0x200, and samples multiple
-// target-bounds points via Visible (4-point hull) [03 §3.2] P0-11.
-//
-// Acquisition does NOT call it: the registry rebuild owns this predicate now
-// (directlyVisibleAtRebuild in service.go is the same three clauses plus the
-// same probe, for an observing player rather than a built candidate record).
-// The one caller left is IsValidAcquisitionCandidate, which the damage path's
-// reaction offer asks about a single candidate it did not get from a list
-// [06 R-WPN-04 §2 part 3].
-func (a *Acquisition) directlyVisible(c Candidate) bool {
-	if c.OwnSide {
-		return true // accepted outright, before any other test [06 §3.1] P0-10
-	}
-	if c.Cloaked {
-		return false // cloaked reject [06 §3.1] P0-10 P0-11
-	}
-	if c.Underwater && !c.UnderwaterSeen {
-		return false // underwater without 0x200 alias reject [06 §3.1] P0-10 P0-11
-	}
-	if a.Visible == nil {
-		return false // hostile acquisition requires the direct-visibility predicate [06 §3.1]
-	}
-	return a.Visible(c) // 4-point hull sampling [03 §3.2] P0-11
 }
 
 // admits runs acquisition-time physical admission — the unit-to-unit gate of
@@ -514,31 +453,10 @@ func (a *Acquisition) rejectsStunned(c Candidate) bool {
 	return a.Paralyzer && c.Stunned
 }
 
-// AcquireTarget queries the cached registry, chooses a primary/secondary
-// population, then samples and scores each pick in order [06 §3.1][06 §3.2].
-// Service materialization owns the live/death check. This query preserves the
-// registry order and does not re-test hostility or visibility after rebuild.
-func AcquireTarget(candidates []Candidate, a Acquisition) (pool.Handle, bool) {
-	filtered := make([]Candidate, 0, len(candidates))
-	for _, c := range candidates {
-		if WithinRange(a.ShooterX, a.ShooterZ, c.X, c.Z, a.Range) {
-			filtered = append(filtered, c)
-		}
-	}
-	if len(filtered) == 0 && a.HasUpgrade {
-		for _, c := range a.Secondary {
-			if WithinRange(a.ShooterX, a.ShooterZ, c.X, c.Z, a.Range) {
-				filtered = append(filtered, c)
-			}
-		}
-	}
-	return acquireFilteredTarget(filtered, a)
-}
-
 // acquireFilteredTarget samples an already materialized query population. Its
-// caller owns candidates: swap-last removal deliberately mutates the slice,
-// while the public AcquireTarget entry keeps its input unchanged. Service
-// builds this short-lived snapshot per attempt and passes it directly here
+// caller owns candidates: swap-last removal deliberately mutates the slice, so
+// the caller must pass a snapshot it does not need afterwards. Service builds
+// that short-lived snapshot per attempt and passes it directly here
 // [06 §3.1][06 §3.2].
 func acquireFilteredTarget(candidates []Candidate, a Acquisition) (pool.Handle, bool) {
 	// The two score minima are independent, but draws follow pick order,
@@ -643,17 +561,6 @@ func AutonomousScanAdmitsSlot(weapon *content.WeaponDef, ownerControlByte uint8)
 	return ownerControlByte == ControlByteComputer // only controller type 2 [06 §3.2]
 }
 
-// IsValidAcquisitionCandidate reports whether a candidate passes the primary
-// list gate and acquisition-time physical admission for the given slot
-// [06 §3.1] [06 §3.3] P0-10. It is the same pair of predicates AcquireTarget filters
-// on, exposed for callers that want to test one candidate.
-func IsValidAcquisitionCandidate(c Candidate, a Acquisition) bool {
-	if !c.Hostile || !a.directlyVisible(c) {
-		return false
-	}
-	return a.admits(c)
-}
-
 // ---------------------------------------------------------------------------
 // The per-side target registry's third list — air bases
 // [06 §3.1 "the third list"] [04 R-AIR-01 §11]
@@ -692,34 +599,6 @@ func IsAirBaseListMember(u *units.Unit) bool {
 		return false // the friendly branch classifies fully built units only [06 §3.1]
 	}
 	return u.Def.Builder && u.Def.IsAirBase && u.Activated
-}
-
-// RebuildAirBaseList fills one ally group's third list from a unit array walked
-// in slot order [06 §3.1] [04 R-AIR-01 §11] (I1). `declares` is the
-// one-directional alliance row read of [05 R-SHARE-01 §1] — row A of the
-// candidate's owner indexed by the registry's ally group — and is the friendly
-// branch's own test; with none supplied only the ally group's own units are
-// friendly, which is what a session with no player rows composes.
-//
-// The result is the list as of this instant. Retail refills it once every
-// AirBaseRegistryPeriod ticks; AirBaseRegistry is the holder that applies that
-// cadence.
-func RebuildAirBaseList(list []*units.Unit, allyGroup uint8, declares func(from, toward uint8) bool) []pool.Handle {
-	var out []pool.Handle
-	for _, u := range list {
-		if !IsAirBaseListMember(u) {
-			continue
-		}
-		friendly := u.Owner == allyGroup
-		if !friendly && declares != nil {
-			friendly = declares(u.Owner, allyGroup)
-		}
-		if !friendly {
-			continue
-		}
-		out = append(out, u.Handle) // appended in unit-array order [06 §3.1]
-	}
-	return out
 }
 
 // ScanAirBaseList is the damaged-aircraft base seek's filter over one ally

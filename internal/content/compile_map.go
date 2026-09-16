@@ -63,7 +63,6 @@ type MapHeader struct {
 	// so the plain key is read; the typed accessor family is still used [02 §3] [02 §4].
 	MissionName        string // reserved campaign field; not read from OTA GlobalHeader [02 "Map files"]
 	MissionDescription string // missiondescription string default "No description available" [02 "Map files"]
-	MissionFile        string // reserved campaign field; not read from OTA GlobalHeader [02 "Map files"]
 	Planet             string // planet string empty [02 "Map files"] — vocabulary listed in [fmt ota]
 	Memory             string // memory string empty [fmt ota]
 	NumPlayers         string // numplayers string empty [fmt ota]
@@ -329,15 +328,7 @@ func baseNameWithoutExt(logical string) string {
 // via a lightweight header reader inspired by formats/tnt.go [PLAN 02].
 // It returns a map keyed by CanonicalKey(basename) [02 §5].
 func CompileMaps(fs vfs.FSOps) (map[string]*MapHeader, error) {
-	return compileMapsWithProgress(fs, nil)
-}
-
-// compileMapsWithProgress is CompileMaps with a running percentage. The map
-// census reads one OTA and one TNT header per installed map, so on a full
-// retail install it dominates a whole-install compile; it is the only family
-// the loading screen can show advancing rather than completing.
-func compileMapsWithProgress(fs vfs.FSOps, report Progress) (map[string]*MapHeader, error) {
-	maps, _, err := compileMapsWithDiagnostics(fs, report)
+	maps, _, err := compileMapsWithDiagnostics(fs, nil)
 	return maps, err
 }
 

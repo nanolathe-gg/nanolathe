@@ -668,9 +668,9 @@ func TestThresholdFormulaVectors(t *testing.T) {
 		{28, 1}, // floor(28/16)=1 →1
 	}
 	for _, v := range vectors {
-		got := ThresholdSqFromRadius(v.radiusParam)
+		got := thresholdSqFromRadius(v.radiusParam)
 		if got != v.want {
-			t.Fatalf("ThresholdSqFromRadius(%d)=%d want %d [R-P0-01]", v.radiusParam, got, v.want)
+			t.Fatalf("thresholdSqFromRadius(%d)=%d want %d [R-P0-01]", v.radiusParam, got, v.want)
 		}
 	}
 }

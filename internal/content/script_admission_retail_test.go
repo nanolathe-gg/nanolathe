@@ -9,9 +9,11 @@ import (
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
-// A broken override for the other side must not prevent this side's opening
-// bundle from loading. Required use still refuses [04 R-COB-04 §8], under
-// DESIGN_CONTENT_VFS §3.4 C9's host admission policy.
+// A broken override for one side must not prevent the other side's opening
+// bundle from compiling. The broken definition keeps its record and its
+// winning provider but carries no program, which is what refuses it at unit
+// creation [04 R-COB-04 §8], under DESIGN_CONTENT_VFS §3.4 C9's host
+// admission policy.
 func TestBrokenScriptOverrideDoesNotBlockUnrelatedBattle(t *testing.T) {
 	fs := vfs.New()
 	defer fs.Close()
@@ -40,17 +42,22 @@ func TestBrokenScriptOverrideDoesNotBlockUnrelatedBattle(t *testing.T) {
 	if !warned {
 		t.Fatalf("missing script warning: %v", cat.Warnings)
 	}
-	if manifest, err := PreflightSkirmish(fs, cat, "Ashap Plateau", 0); err != nil {
-		t.Fatalf("unrelated Arm bundle refused: %v, %+v", err, manifest.Diagnostics)
+	// The unrelated side's own commander is unaffected: it keeps a program,
+	// so a unit created from it binds normally.
+	if len(cat.Sides) < 2 || cat.Sides[0] == nil || cat.Sides[1] == nil {
+		t.Fatal("compiled corpus lost its side records")
 	}
-	manifest, err := PreflightSkirmish(fs, cat, "Ashap Plateau", 1)
-	if err == nil || !manifest.Fatal() {
-		t.Fatal("Core opening admitted its broken required script")
+	other, ok := cat.Unit(cat.Sides[0].Commander)
+	if !ok || other == nil || other.Script == nil {
+		t.Fatalf("unrelated commander %q lost its program", cat.Sides[0].Commander)
 	}
-	for _, d := range manifest.Diagnostics {
-		if d.Fatal && d.Logical == "scripts/corcom.cob" {
-			return
-		}
+	// The overridden side's commander is the one the override reached, and it
+	// is the definition with no program to bind.
+	overridden, ok := cat.Unit(cat.Sides[1].Commander)
+	if !ok || overridden == nil || overridden.Script != nil {
+		t.Fatalf("overridden commander %q kept a program from a malformed file", cat.Sides[1].Commander)
 	}
-	t.Fatal("required refusal did not identify the broken COB")
+	if overridden.CanonicalKey != bad.CanonicalKey {
+		t.Fatalf("the broken override reached %q, not the overridden side's commander %q", bad.CanonicalKey, overridden.CanonicalKey)
+	}
 }

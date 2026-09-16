@@ -4,6 +4,8 @@ import (
 	"cmp"
 	"math"
 	"slices"
+
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // dragPoint holds whole world coordinates, or footprint cells for build rows.
@@ -20,7 +22,7 @@ func dragBuildCells(start, end dragPoint, footX, footZ int32, grid bool) []dragP
 		return nil
 	}
 	dx, dz := int64(end.x)-int64(start.x), int64(end.z)-int64(start.z)
-	ax, az := dragAbs(dx), dragAbs(dz)
+	ax, az := numeric.Abs(dx), numeric.Abs(dz)
 	fx, fz := int64(footX), int64(footZ)
 	if grid {
 		cols, rows := ax/fx+1, az/fz+1
@@ -61,13 +63,6 @@ func dragBuildCells(start, end dragPoint, footX, footZ int32, grid bool) []dragP
 		})
 	}
 	return points
-}
-
-func dragAbs(value int64) int64 {
-	if value < 0 {
-		return -value
-	}
-	return value
 }
 
 func dragSigned(magnitude, direction int64) int64 {

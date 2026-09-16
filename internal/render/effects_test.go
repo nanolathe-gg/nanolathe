@@ -137,47 +137,21 @@ func TestFixedEffectRemovalWithinSameCall(t *testing.T) {
 		}
 	}
 
-	// Contrast with Strip: strip's terminal condition created during update is noticed only on next invocation [03 §1] C4.
-	// Verify that a strip object that sets shouldRem during Update is not removed until next Update,
-	// while effect pool removes immediately.
-	var s Strip
-	latch := &mockObj{id: 99, latch: true} // mockObj latch sets shouldRem during first Update
-	s.Append(latch)
-	s.Append(&mockObj{id: 100})
-	s.Update(1)
-	if len(s.Objects) != 2 {
-		t.Fatalf("strip latch first update should not remove [03 §1] C4, len %d want 2", len(s.Objects))
-	}
-	// Effect pool already removed in same call as shown above, so contrast holds.
+	// The pool removes within the same call. The session's strip sweep is the
+	// other lifecycle: a terminal condition raised during an object's update is
+	// noticed only on the next invocation [03 §1] C4, and its own tests hold it.
 }
 
-// TestFixedEffectIntegrationWithStripOrder verifies direct strip/effect updates
-// preserve their distinct lifecycle semantics deterministically [03 §1] C4 C5.
-func TestFixedEffectIntegrationWithStripOrder(t *testing.T) {
-	var strip Strip
+// TestFixedEffectPoolUpdateIsStableAcrossTicks verifies the pool's same-call
+// compaction leaves a stable survivor set on the following tick [03 §1] C5.
+func TestFixedEffectPoolUpdateIsStableAcrossTicks(t *testing.T) {
 	var effects FixedEffectPool
-	// Strip: two objects, second is shouldRem true => removed before update; first updated.
-	a := &mockObj{id: 1}
-	b := &mockObj{id: 2, shouldRem: true}
-	strip.Append(a)
-	strip.Append(b)
-
-	// Effects: one persistent, one dying (same-call removal)
+	// One persistent, one dying (same-call removal)
 	effects.Append(persistentEffect(20))
 	effects.Append(dyingEffect(21))
 
-	strip.Update(42)
 	effects.Update(42)
 
-	if len(strip.Objects) != 1 || strip.Objects[0].(*mockObj).id != 1 {
-		t.Fatalf("strip removal-before-update failed [03 §1] C4")
-	}
-	if a.updated != 1 {
-		t.Fatalf("strip survivor should be updated once, got %d", a.updated)
-	}
-	if b.updated != 0 {
-		t.Fatalf("strip removed should not be updated, got %d", b.updated)
-	}
 	if effects.Len() != 1 {
 		t.Fatalf("effects same-call compaction failed len %d want 1 [03 §1] C5", effects.Len())
 	}
@@ -185,12 +159,8 @@ func TestFixedEffectIntegrationWithStripOrder(t *testing.T) {
 		t.Fatalf("effects survivor wrong")
 	}
 
-	// Second tick: ensure no cross-contamination and stable order
-	strip.Update(43)
+	// Second tick: stable survivor set and order
 	effects.Update(43)
-	if len(strip.Objects) != 1 {
-		t.Fatalf("strip second update len %d", len(strip.Objects))
-	}
 	if effects.Len() != 1 {
 		t.Fatalf("effects second update len %d", effects.Len())
 	}
@@ -419,24 +389,19 @@ func TestFixedEffectDeterminism(t *testing.T) {
 	}
 }
 
-// TestFixedEffectAndStripIntegrationDeterminism ensures direct pool updates are deterministic.
-func TestFixedEffectAndStripIntegrationDeterminism(t *testing.T) {
-	run := func() (int, int) {
-		var strip Strip
+// TestFixedEffectPoolUpdateIsDeterministic ensures direct pool updates are
+// deterministic across repeated runs of the same sequence.
+func TestFixedEffectPoolUpdateIsDeterministic(t *testing.T) {
+	run := func() int {
 		var effects FixedEffectPool
-		strip.Append(&mockObj{id: 5})
 		effects.Append(persistentEffect(77))
 		effects.Append(dyingEffect(88))
-		strip.Update(10)
 		effects.Update(10)
-		strip.Update(11)
 		effects.Update(11)
-		return len(strip.Objects), effects.Len()
+		return effects.Len()
 	}
-	s1, e1 := run()
-	s2, e2 := run()
-	if s1 != s2 || e1 != e2 {
-		t.Fatalf("composer determinism %d/%d vs %d/%d", s1, e1, s2, e2)
+	if e1, e2 := run(), run(); e1 != e2 {
+		t.Fatalf("composer determinism %d vs %d", e1, e2)
 	}
 }
 
@@ -485,7 +450,7 @@ func TestFixedEffectPublishesPerPlayerLiveness(t *testing.T) {
 	if views[0].SeqA != 0 {
 		t.Fatalf("terminated cursor = %d; index 0 is exactly why liveness cannot be inferred from it", views[0].SeqA)
 	}
-	if draws := BuildEffectDraws(views); len(draws) != 1 || draws[0].ActiveA || !draws[0].ActiveB {
+	if draws := BuildEffectDrawsInto(nil, views); len(draws) != 1 || draws[0].ActiveA || !draws[0].ActiveB {
 		t.Fatalf("liveness did not reach the draw instruction: %+v", draws)
 	}
 

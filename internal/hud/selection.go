@@ -2,20 +2,19 @@ package hud
 
 // Selection, control groups, and build pages [07 §9] C9, C10 [GAP T22].
 //
-// This package implements the HUD-side of retail selection semantics.
-// Drag selection reuses the truth table primitives from internal/client/select.go
-// (read-only use per plan) and adds the GUI dirty-bit observation. Control
-// groups and build pages use the flag-bit layouts and gating described in
-// [07 §9]. Iteration over the owner's range is stable ascending (I1) in every
-// function that walks a slice.
+// This package implements the HUD-side of retail selection semantics that the
+// session's input boundary drives: control groups and build pages, using the
+// flag-bit layouts and gating described in [07 §9]. Iteration over the owner's
+// range is stable ascending (I1) in every function that walks a slice.
 //
-// The drag truth table is duplicated locally to avoid importing the heavy
-// client package (which pulls the Ebitengine window backend) into hud tests [07 §9] C9.
+// Drag selection itself is not here. The committed-frame rectangle walk is
+// internal/client's SnapshotUnitHandlesInRect and the membership writes are the
+// session's HumanSelectionReplace / Toggle / Clear commands, which is the one
+// path a shipped build takes [07 §9] C9.
 
 const (
 	SelectionFlag     uint32 = 0x10       // [07 §9] membership bit
 	InterfaceDirtyBit uint32 = 0x10       // [07 §9] battle-interface dirty bit (coincidentally same value, different field)
-	BulkClearMask     uint32 = 0xFFFFFF2F // [07 §9] bulk pre-clear clears 0x10 plus 0x40,0x80 companion bits
 	CtrlFFlag         uint32 = 0x80000000 // [07 §9] CTRL_F filter key flag
 
 	PagePagedBit   uint32 = 1 << 22    // 0x400000 [07 §9]
@@ -48,17 +47,6 @@ func NormalizeDragRect(ax, ay, bx, by int32) DragRect { // [07 §9] C9
 // Contains reports whether (x,y) is inside r inclusive [07 §9] C9.
 func (r DragRect) Contains(x, y int32) bool { // [07 §9] C9
 	return x >= r.MinX && x <= r.MaxX && y >= r.MinY && y <= r.MaxY
-}
-
-// IsEmpty reports whether a drag rectangle has an inverted boundary. This is
-// a geometry query only; selection ownership remains in the HUD package.
-func (r DragRect) IsEmpty() bool { return r.MinX > r.MaxX || r.MinY > r.MaxY }
-
-// BuildPage holds a page number and the builder's page count [07 §9] C10.
-// The plan's Public API requires this type and EncodePageBits.
-type BuildPage struct {
-	Page  int // 0..7, page 0 means unpaged (bit 22 clear)
-	Count int // builder definition page-count byte, >0 when builder is valid
 }
 
 // EncodePageBits encodes a page number into unit-flag bits 23-25 with bit 22
@@ -108,147 +96,6 @@ type SelectUnit struct {
 	Flags uint32
 	Group uint8
 	DefID uint16 // 0 = no definition, 1..255 valid for CTRL_F mask
-}
-
-// IsSelected reports whether flags carries SelectionFlag (0x10) [07 §9] C9.
-func IsSelected(flags uint32) bool { return flags&SelectionFlag != 0 }
-
-// NextSelected is the pure truth table for one eligible unit [07 §9] C9.
-// additive==false (modifier clear): selected = inside
-// additive==true  (modifier set):   selected = inside ? !old : old
-func NextSelected(oldSelected, inside, additive bool) bool { // [07 §9] C9
-	if additive {
-		if inside {
-			return !oldSelected
-		}
-		return oldSelected
-	}
-	return inside
-}
-
-// NextFlags applies the truth table directly to a flags word [07 §9] C9.
-func NextFlags(flags uint32, inside, additive bool) uint32 { // [07 §9] C9
-	old := flags&SelectionFlag != 0
-	next := NextSelected(old, inside, additive)
-	if next == old {
-		return flags
-	}
-	if next {
-		return flags | SelectionFlag
-	}
-	return flags &^ SelectionFlag
-}
-
-// ApplyDragSelection applies the [07 §9] C9 truth table to units in place
-// with stable ascending iteration (I1) [07 §9]. Eligible units are those that
-// pass the shared predicate; in this HUD placeholder caller supplies
-// eligibility via isEligible func when non-nil; the default (isEligible == nil)
-// treats every non-nil entry as eligible, matching the Gate-1 placeholder that
-// collapses the full active-state/float/parent predicate behind a bool.
-//
-// Truth table [07 §9] C9:
-//
-//	modifier clear (additive==false): inside => set (|=0x10), outside => clear (pre-clear &=0xFFFFFF2F)
-//	modifier set   (additive==true):  inside => toggle (^=0x10), outside => preserve
-//
-// Bulk changes also set the battle-interface dirty bit 0x10 (separate field)
-// when any membership bit changes [07 §9] C9. Returns whether any selection
-// bit changed and the post count of selected units (including ineligible that
-// were already selected, counted but not mutated).
-func ApplyDragSelection(units []*SelectUnit, rect DragRect, additive bool, dirty *uint32, getPos func(*SelectUnit) (int32, int32), isEligible func(*SelectUnit) bool) (changed bool, selectedCount int) { // [07 §9] C9
-	for i := 0; i < len(units); i++ {
-		u := units[i]
-		if u == nil {
-			continue
-		}
-		eligible := true
-		if isEligible != nil {
-			eligible = isEligible(u)
-		}
-		if !eligible {
-			if u.Flags&SelectionFlag != 0 {
-				selectedCount++
-			}
-			continue
-		}
-		var inside bool
-		if getPos != nil {
-			x, y := getPos(u)
-			inside = rect.Contains(x, y)
-		}
-		old := u.Flags&SelectionFlag != 0
-		next := NextSelected(old, inside, additive)
-		if !additive {
-			u.Flags &= BulkClearMask
-		}
-		if next != old {
-			changed = true
-		}
-		// Replacement pre-clears membership even when it remains selected.
-		// Restore the truth-table result unconditionally [07 §9].
-		if next {
-			u.Flags |= SelectionFlag
-		} else {
-			u.Flags &^= SelectionFlag
-		}
-		if u.Flags&SelectionFlag != 0 {
-			selectedCount++
-		}
-	}
-	if changed && dirty != nil {
-		*dirty |= InterfaceDirtyBit // [07 §9] C9
-	}
-	return changed, selectedCount
-}
-
-// ApplyDragSelectionFlags is a convenience for parallel flag/pos slices
-// [07 §9] C9 with dirty-bit observation. xs, ys are presentation positions;
-// eligible may be nil meaning all eligible.
-func ApplyDragSelectionFlags(flags []uint32, xs, ys []int32, rect DragRect, additive bool, eligible []bool, dirty *uint32) (changed bool, selectedCount int) { // [07 §9] C9
-	n := len(flags)
-	if len(xs) < n {
-		n = len(xs)
-	}
-	if len(ys) < n {
-		n = len(ys)
-	}
-	if eligible != nil && len(eligible) < n {
-		n = len(eligible)
-	}
-	for i := 0; i < n; i++ {
-		isEligible := true
-		if eligible != nil {
-			isEligible = eligible[i]
-		}
-		if !isEligible {
-			if flags[i]&SelectionFlag != 0 {
-				selectedCount++
-			}
-			continue
-		}
-		inside := rect.Contains(xs[i], ys[i])
-		old := flags[i]&SelectionFlag != 0
-		next := NextSelected(old, inside, additive)
-		if !additive {
-			flags[i] &= BulkClearMask // [07 §9] C9 bulk pre-clear
-		}
-		if next != old {
-			changed = true
-		}
-		// The pre-clear cannot discard an inside unit that was already selected.
-		if next {
-			flags[i] |= SelectionFlag
-		} else {
-			flags[i] &^= SelectionFlag
-		}
-		if flags[i]&SelectionFlag != 0 {
-			selectedCount++
-		}
-	}
-	if changed && dirty != nil {
-		*dirty |= InterfaceDirtyBit
-	}
-	return changed, selectedCount
 }
 
 // AssignGroup implements Ctrl+digit group assignment [07 §9] C9.
@@ -395,14 +242,6 @@ func DigitToPage(digit int) int { // [07 §9] C10
 	return digit - 1
 }
 
-// DigitToGroup converts a digit 1..9 to a group number 1..9 [07 §9] C9.
-func DigitToGroup(digit int) int { // [07 §9] C9
-	if digit < 1 || digit > 9 {
-		return 0
-	}
-	return digit
-}
-
 // ClampPage clamps a requested page to the builder's page count [07 §9] C10.
 // Page count comes from the builder definition's page-count byte. If count <=0
 // the page is 0. Excess pages clamp to count-1. Used before EncodePageBits.
@@ -446,35 +285,4 @@ func SetBuildPage(builder *SelectUnit, page, pageCount int, dirty *uint32) bool 
 		*dirty |= InterfaceDirtyBit // switching sets dirty bit 0x10 [07 §9] C10
 	}
 	return true
-}
-
-// SetBuildPageForDigit is the digit-gated wrapper for page switching [07 §9] C10.
-// Digit 1..9 maps to page digit-1; the page is clamped by pageCount before
-// encoding [07 §9] C10. Validation and dirty propagation are as SetBuildPage.
-func SetBuildPageForDigit(builder *SelectUnit, digit, pageCount int, dirty *uint32) bool { // [07 §9] C10
-	if digit < 1 || digit > 9 {
-		return false
-	}
-	page := DigitToPage(digit)
-	return SetBuildPage(builder, page, pageCount, dirty)
-}
-
-// HandleDigit routes a digit 1..9 through the battle-mode/Alt gate to either
-// build-page switching or group recall [07 §9] C10, C9. When the gate selects
-// build page, it attempts SetBuildPageForDigit on the selected builder
-// (single-select identity, nonzero DefID) guarded by builderPageCount; when it
-// selects group recall, it calls RecallGroup with the preserve (shiftHeld)
-// argument and the authored CTRL_F mask [07 §9] C9. Returns whether the digit
-// was handled as page (true) or group (false), and whether any state changed.
-func HandleDigit(battleMode byte, altHeld, shiftHeld bool, digit int, selectedBuilder *SelectUnit, builderPageCount int, units []*SelectUnit, mask [32]byte, dirty *uint32) (isPage bool, changed bool) { // [07 §9] C10, C9
-	if digit < 1 || digit > 9 {
-		return false, false
-	}
-	isPage = RoutesToPage(battleMode, altHeld)
-	if isPage {
-		changed = SetBuildPageForDigit(selectedBuilder, digit, builderPageCount, dirty)
-		return true, changed
-	}
-	changed, _ = RecallGroup(units, DigitToGroup(digit), shiftHeld, mask, dirty)
-	return false, changed
 }

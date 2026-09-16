@@ -10,10 +10,76 @@
 # Retail diagnostic strings are reproduced verbatim where the research quotes
 # them; a site that trips ST1005 for that reason carries
 # `//lint:ignore ST1005 retail text` with its citation.
+#
+# There are two deadcode runs, because they answer different questions:
+#
+#   1. With -test, tests count as roots. Nothing may be unreachable at all;
+#      any output fails the gate. This is the absolute floor.
+#   2. Without -test, only the main packages are roots, so the run reports
+#      every function no shipped binary can reach. That set is large and was
+#      historically invisible: tests reach all of it, so run 1 stays silent
+#      while it grows. tools/deadcode-baseline.txt freezes it as a ratchet —
+#      a new entry fails, and so does a baseline entry that has disappeared,
+#      which keeps the list shrink-only.
+#
+# Usage: tools/lint [--update-baseline]
 set -e
 
 STATICCHECK_VERSION=2025.1.1
 DEADCODE_VERSION=v0.36.0
+
+# The -f template prints "<package path> <function>" per unreachable function
+# and nothing else. deadcode's default format carries file:line positions,
+# which would make the baseline churn on every unrelated edit above a listed
+# function; a package-qualified name only moves when the code does.
+DEADCODE_FORMAT='{{range .Funcs}}{{printf "%s %s\n" $.Path .Name}}{{end}}'
+
+tools_dir=$(dirname "$0")
+baseline="$tools_dir/deadcode-baseline.txt"
+regenerate="tools/lint --update-baseline"
+
+update_baseline=${NANOLATHE_UPDATE_BASELINE:-0}
+for arg in "$@"; do
+	case "$arg" in
+	--update-baseline) update_baseline=1 ;;
+	*)
+		echo "nanolathe: unknown option: $arg, expected --update-baseline" >&2
+		exit 2
+		;;
+	esac
+done
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT INT TERM
+
+# production_unreachable writes the sorted, position-free deadcode report for
+# the shipped binaries to $1. The `go: ` lines are the module-cache download
+# chatter `go run pkg@version` emits on a cold cache.
+production_unreachable() {
+	go run "golang.org/x/tools/cmd/deadcode@${DEADCODE_VERSION}" \
+		-tags retail -f "$DEADCODE_FORMAT" ./... 2>&1 |
+		grep -v '^go: ' | grep -v '^[[:space:]]*$' | LC_ALL=C sort >"$1"
+}
+
+if [ "$update_baseline" = "1" ]; then
+	echo "==> regenerating $baseline"
+	production_unreachable "$work/current"
+	{
+		echo "# Functions no shipped binary can reach, from"
+		echo "#   deadcode -tags retail ./...   (tests are NOT roots)"
+		echo "#"
+		echo "# Shrink-only ratchet enforced by tools/lint. An entry here is reachable"
+		echo "# from tests but from no main package: test infrastructure, a superseded"
+		echo "# wrapper a test still pins, or code that was never wired up. Adding one"
+		echo "# is a deliberate act whose reason belongs in the commit message; wiring"
+		echo "# or deleting one means dropping its row in the same commit."
+		echo "#"
+		echo "# Regenerate with: $regenerate"
+		cat "$work/current"
+	} >"$baseline"
+	echo "OK ($(wc -l <"$work/current" | tr -d ' ') entries)"
+	exit 0
+fi
 
 echo "==> staticcheck (retail tag)"
 go run "honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION}" -tags retail ./...
@@ -27,4 +93,33 @@ if [ -n "$dead" ]; then
 	echo "$dead"
 	exit 1
 fi
+
+echo "==> deadcode (retail tag, production reachability baseline)"
+if [ ! -f "$baseline" ]; then
+	echo "nanolathe: baseline missing: logical path $baseline, providers searched [$baseline], expected the production-reachability ratchet" >&2
+	echo "generate it with: $regenerate" >&2
+	exit 1
+fi
+production_unreachable "$work/current"
+grep -v '^#' "$baseline" | grep -v '^[[:space:]]*$' | LC_ALL=C sort >"$work/baseline"
+
+status=0
+added=$(LC_ALL=C comm -13 "$work/baseline" "$work/current")
+if [ -n "$added" ]; then
+	echo "production-unreachable function added: wire it, move it to a _test.go/export_test.go file, or add it to tools/deadcode-baseline.txt with a reason in the commit"
+	echo "$added" | sed 's/^/  + /'
+	echo "regenerate the baseline with: $regenerate"
+	status=1
+fi
+stale=$(LC_ALL=C comm -23 "$work/baseline" "$work/current")
+if [ -n "$stale" ]; then
+	echo "stale baseline entry: no longer production-unreachable, so drop it from tools/deadcode-baseline.txt in this commit (the list only shrinks)"
+	echo "$stale" | sed 's/^/  - /'
+	echo "regenerate the baseline with: $regenerate"
+	status=1
+fi
+if [ "$status" != "0" ]; then
+	exit "$status"
+fi
+
 echo "OK"

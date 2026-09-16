@@ -6,8 +6,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"strings"
 
+	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
@@ -69,20 +71,33 @@ func readContentEntry(fs vfs.FSOps, entry archiveContentFile) ([]byte, error) {
 	return data, nil
 }
 
-func asciiFoldContent(value string) string {
-	for i := 0; i < len(value); i++ {
-		if value[i] >= 'A' && value[i] <= 'Z' {
-			out := []byte(value)
-			for j := i; j < len(out); j++ {
-				if out[j] >= 'A' && out[j] <= 'Z' {
-					out[j] += 'a' - 'A'
-				}
-			}
-			return string(out)
-		}
+// sortedFoldedKeys collects a map's keys and orders them by the caller's fold,
+// breaking a fold-equal tie with the raw key so the comparison is a total
+// order and the iteration is deterministic (I1). The fold differs per record:
+// the catalog key fold trims first, the unit record folds the authored key as
+// parsed.
+func sortedFoldedKeys[V any](values map[string]V, fold func(string) string) []string {
+	if values == nil {
+		return nil
 	}
-	return value
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		li, lj := fold(keys[i]), fold(keys[j])
+		if li != lj {
+			return li < lj
+		}
+		return keys[i] < keys[j]
+	})
+	return keys
 }
+
+// asciiFoldContent is the catalog's name for the shared A..Z fold. Bytes at
+// or above 0x80 stay literal until the retail code-page rule is traced
+// [02 R-CAT-01 §3].
+func asciiFoldContent(value string) string { return formats.FoldASCII(value) }
 
 // CanonicalKey folds the established ASCII domain and trims only the four TDF
 // semantic whitespace bytes. Bytes at or above 0x80 remain literal until the
@@ -94,16 +109,7 @@ func CanonicalKey(name string) string {
 
 // trimTDFSemantic is for an authored TDF semantic value or name. It accepts
 // only the four parser whitespace bytes [02 R-CAT-01 §3].
-func trimTDFSemantic(name string) string {
-	start, end := 0, len(name)
-	for start < end && contentTDFSpace(name[start]) {
-		start++
-	}
-	for end > start && contentTDFSpace(name[end-1]) {
-		end--
-	}
-	return name[start:end]
-}
+func trimTDFSemantic(name string) string { return formats.TrimASCIIFunc(name, contentTDFSpace) }
 
 func contentTDFSpace(b byte) bool { return b == ' ' || b == '\t' || b == '\r' || b == '\n' }
 
@@ -127,15 +133,11 @@ func contentASCIIFields(value string) []string {
 	return fields
 }
 
+// trimContentCWhitespace trims the wider C-runtime isspace set, which the
+// category and AI directive grammars use instead of the TDF set
+// [02 R-P0-03 §3][08 R-AI-01 §20].
 func trimContentCWhitespace(value string) string {
-	start, end := 0, len(value)
-	for start < end && contentCWhitespace(value[start]) {
-		start++
-	}
-	for end > start && contentCWhitespace(value[end-1]) {
-		end--
-	}
-	return value[start:end]
+	return formats.TrimASCIIFunc(value, contentCWhitespace)
 }
 
 func contentCWhitespace(b byte) bool {

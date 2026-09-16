@@ -16,21 +16,14 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
-// SnapWorldToCell snaps world position to map cells using footprint extents biased by half extent [05 C16].
-// Each coordinate converts from Fixed to cell index biased by half its extent to give footprint rectangle origin.
-func SnapWorldToCell(wx, wz numeric.Fixed, footX, footZ int) world.Cell {
-	// [05 "Factory production lifecycle"] C16: each coordinate biased by half its extent.
-	// WorldToCell floors with sign correction [03 §2.1] I3, then subtract half extent integer division.
-	cx := world.WorldToCell(wx)
-	cz := world.WorldToCell(wz)
-	// half extent via trunc toward zero integer division [01 §8].
-	cx -= int32(footX / 2)
-	cz -= int32(footZ / 2)
-	return world.Cell{X: cx, Z: cz}
-}
-
-// snapBias is the half-extent bias vector for tests: returns (footX/2, footZ/2) integer.
-func snapBias(footX, footZ int) (int32, int32) { return int32(footX / 2), int32(footZ / 2) }
+// The cell snap of [05 "Factory production lifecycle"] C16 — each coordinate
+// biased by half its extent before the floor to a cell — lives in
+// internal/world as SnapFootprintAnchor, which every construction site reaches
+// through SnapFactoryPlacement or SnapMobilePlacement. A second copy of it
+// used to stand here under the name SnapWorldToCell, with its own arithmetic
+// (a floor-to-cell followed by an integer half-extent subtraction) that agreed
+// with the placement seam only on cell-aligned inputs; only the seam's is
+// wired, so the copy is gone.
 
 // QueryBuildWorldPosition resolves the authored exit transform in full world
 // X/Y/Z per [05 "Factory production lifecycle"] C16.

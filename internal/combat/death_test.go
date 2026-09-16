@@ -99,9 +99,9 @@ func TestLowBitsConsumption(t *testing.T) {
 		if packedDepth := res.Packed & 0x0F; packedDepth != c.wantDepth {
 			t.Fatalf("case %d packed low nibble 0x%X got %d want %d", i, res.Packed, packedDepth, c.wantDepth)
 		}
-		cause, depth := UnpackDeathByte(res.Packed)
-		if cause != CauseOrdinary || depth != c.wantDepth {
-			t.Fatalf("case %d unpack got cause %d depth %d", i, cause, depth)
+		// The packed byte is (cause<<4)|(depth&0xF) [04 §5.1][06 §12.1] C23.
+		if cause := Cause(res.Packed >> 4); cause != CauseOrdinary {
+			t.Fatalf("case %d packed cause %d want %d", i, cause, CauseOrdinary)
 		}
 		// Also test direct Pack/Unpack helpers
 		p := PackDeathByte(CauseOrdinary, uint8(c.returned))
@@ -265,18 +265,15 @@ func TestCorpseChainDepth(t *testing.T) {
 	}
 }
 
-// TestNoDoubleKilledCallback locks C25 local authoritative death does not issue second Killed after sync query [06 §12.1].
+// TestNoDoubleKilledCallback locks C25: the authoritative death path issues the
+// synchronous Killed query at most once, and a bypassed cause issues none
+// [06 §12.1].
 func TestNoDoubleKilledCallback(t *testing.T) {
 	syncCalls := 0
-	asyncCalls := 0
 	// Simulate sync Killed that would be called once
 	syncFn := func(sev int32) (int32, bool) {
 		syncCalls++
 		return 2, true // depth2
-	}
-	// async would be separate; we track via ShouldDispatchReplayKilled + a fake async fn
-	asyncFn := func(sev int8) {
-		asyncCalls++
 	}
 	unit := makeUnitDef("heap1")
 	feats := makeFeatureChain([]string{"heap1", "heap2"})
@@ -291,47 +288,22 @@ func TestNoDoubleKilledCallback(t *testing.T) {
 	if !res.Queried {
 		t.Fatalf("Queried should be true for full pipeline")
 	}
-	// Local path must NOT dispatch async second call [06 §12.1] C25.
-	// We simulate what local does: it passes completed packet to central handler without async dispatch.
-	// If we incorrectly dispatched async, asyncCalls would be 1.
-	// For local, async should remain 0.
-	if asyncCalls != 0 {
-		t.Fatalf("local authoritative death issued second async Killed, asyncCalls %d want 0 [06 §12.1] C25", asyncCalls)
-	}
-	// Verify that replay path WOULD dispatch only when severity positive and return ignored.
-	// For severity 0 bypass, replay should not dispatch.
-	if ShouldDispatchReplayKilled(0) {
-		t.Fatalf("replay with severity 0 should not dispatch [06 §12.1] C25")
-	}
-	if !ShouldDispatchReplayKilled(10) {
-		t.Fatalf("replay with severity 10 should dispatch [06 §12.1] C25")
-	}
-	if ShouldDispatchReplayKilled(-5) {
-		t.Fatalf("replay with negative severity should not dispatch")
-	}
-	// Full pipeline replay would call async once
+	// A second full pipeline still queries exactly once [06 §12.1] C25.
 	syncCalls2 := 0
 	ctx2 := DeathContext{Health: -10, MaxHealth: 100, PriorSample: 90, Cause: CauseOrdinary, RemainingFraction: 0}
 	res2 := ResolveDeath(ctx2, feats, func(sev int32) (int32, bool) { syncCalls2++; return 1, true })
-	// Simulate replay dispatch for res2.Severity>0
-	if ShouldDispatchReplayKilled(int8(res2.Severity)) {
-		asyncFn(int8(res2.Severity))
+	if syncCalls2 != 1 || res2.KilledCalls != 1 {
+		t.Fatalf("second pipeline sync calls %d KilledCalls %d want 1/1", syncCalls2, res2.KilledCalls)
 	}
-	if syncCalls2 != 1 {
-		t.Fatalf("replay test sync calls %d want 1", syncCalls2)
-	}
-	if asyncCalls != 1 { // now async should be 1 from replay path
-		t.Fatalf("replay asyncCalls %d want 1", asyncCalls)
-	}
-	// Bypassed causes should have syncCalls 0 and no async
+	// Bypassed causes should have syncCalls 0
 	syncCalls3 := 0
 	ctx3 := DeathContext{Health: -50, MaxHealth: 100, PriorSample: 80, Cause: CauseDeconstruction, RemainingFraction: 0}
 	res3 := ResolveDeath(ctx3, feats, func(sev int32) (int32, bool) { syncCalls3++; return 2, true })
 	if syncCalls3 != 0 || res3.KilledCalls != 0 {
 		t.Fatalf("bypassed cause9 should have 0 sync calls got %d KilledCalls %d", syncCalls3, res3.KilledCalls)
 	}
-	if ShouldDispatchReplayKilled(int8(res3.Severity)) {
-		t.Fatalf("bypassed severity 0 should not dispatch replay")
+	if res3.Severity != 0 {
+		t.Fatalf("bypassed cause severity %d want 0 [06 §12.1] C22", res3.Severity)
 	}
 }
 

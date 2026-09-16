@@ -183,14 +183,13 @@ type GoalTrace struct {
 // SchedulerTraceState exposes timing/quanta gates as values for deterministic
 // diagnostics. It never exposes the mutable queue backing arrays.
 type SchedulerTraceState struct {
-	Base          int32
-	BaseSet       bool
-	LastReplenish uint32
-	HaveLast      bool
-	CallCount     uint32
-	Scales        [10]int32
-	Pending       [10]int
-	Requests      []RequestTrace
+	Base      int32
+	BaseSet   bool
+	HaveLast  bool
+	CallCount uint32
+	Scales    [10]int32
+	Pending   [10]int
+	Requests  []RequestTrace
 }
 
 // TraceState returns a copy of the live scheduler fields exposed to diagnostics.
@@ -232,16 +231,6 @@ func DescribeGoal(goal Goal) GoalTrace {
 			return GoalTrace{Unknown: true}
 		}
 		return GoalTrace{Kind: 3, Rect: g.rect}
-	case *airWorkGoal:
-		if g == nil {
-			return GoalTrace{Unknown: true}
-		}
-		return GoalTrace{Kind: 4}
-	case *airMovingGoal:
-		if g == nil {
-			return GoalTrace{Unknown: true}
-		}
-		return GoalTrace{Kind: 5}
 	default:
 		// Unknown external Goal implementations are retained as an explicit
 		// residual; no pointer formatting or guessed parameters enter a

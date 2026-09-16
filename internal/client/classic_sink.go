@@ -479,17 +479,17 @@ func (s classicSink) clip(has bool, r drawlist.Rect) (x, y, w, h int) {
 	return 0, 0, s.c.width, s.c.height
 }
 
-// Glyphs replays one FNT text run through the raw drawText rasterizer. The
+// Glyphs replays one FNT text run through the raw drawTextClipped rasterizer. The
 // converted call sites — the health-bar control-group digit, the HUD/menu
 // UIText/UITextWidth paths and the message column — emit and this is their only
 // execution. The run carries its own retail control width in g.MaxWidth: the
-// group digit records the zero value, so drawText still receives max-width 0
+// group digit records the zero value, so drawTextClipped still receives max-width 0
 // (no truncation) exactly as its direct call did, while the text paths pass the
 // authored gadget width [07 §7][03 R-FX-01 §6A]. No call installs a foreground
 // of its own and none passes a per-glyph callback [03 §7.1].
 func (s classicSink) Glyphs(g drawlist.Glyphs) {
 	clipX, clipY, clipW, clipH := s.clip(g.HasClip, g.Clip)
-	drawTextClipped(s.c.indexed, s.c.width, s.c.height, g.Font, g.Text, int(g.X), int(g.Y), int(g.MaxWidth), g.Color, clipX, clipY, clipW, clipH, nil)
+	drawTextClipped(s.c.indexed, s.c.width, s.c.height, g.Font, g.Text, int(g.X), int(g.Y), int(g.MaxWidth), g.Color, clipX, clipY, clipW, clipH)
 }
 
 // Fill replays one indexed rectangle. Solid and Outline are the plain,
@@ -647,7 +647,7 @@ func (s classicSink) Model(m drawlist.Model) {
 }
 
 // Fog replays one clipped fog op list into the indexed surface. The op-list
-// building (BuildFogOpsWindowInto and the fog cache/GAF setup) stays in
+// building (BuildFogOpsWindowWithArtInto and the fog cache/GAF setup) stays in
 // drawFog; this method runs the per-op clip and the three fog fills and the fog
 // GAF blit the direct loop ran [03 §3.3].
 func (s classicSink) Fog(fg drawlist.Fog) {

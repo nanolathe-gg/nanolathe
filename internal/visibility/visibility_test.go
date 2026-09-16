@@ -198,28 +198,6 @@ func TestSeaLevelIsHeaderByte(t *testing.T) {
 	}
 }
 
-func TestUnexploredBit(t *testing.T) {
-	var flag uint8 = 0x00
-	MarkUnexplored(&flag, 5)
-	if flag&0x04 != 0 {
-		t.Fatalf("height 5 should not set unexplored")
-	}
-	MarkUnexplored(&flag, 10)
-	if flag&0x04 == 0 {
-		t.Fatalf("height >=10 should set unexplored |4")
-	}
-	ClearUnexplored(&flag)
-	if flag&0x04 != 0 {
-		t.Fatalf("clear should have cleared 0x04 bit via &0xFB")
-	}
-	// Tall feature immediate case [C14]
-	flag = 0x00
-	MarkUnexplored(&flag, 10)
-	if flag != 0x04 {
-		t.Fatalf("flag after tall mark want 0x04 got %02x", flag)
-	}
-}
-
 func TestFogLocalOnly(t *testing.T) {
 	terrain := &world.Terrain{CellW: 32, CellH: 32}
 	s := newTestService(terrain, ModeHistoryEnabled|ModeCurrentEnabled)

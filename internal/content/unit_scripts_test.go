@@ -117,33 +117,24 @@ func TestFillUnitScriptKeepsEmptyBasename(t *testing.T) {
 }
 
 // A broken candidate must not prevent a later definition from receiving its
-// immutable program. Required use still fails preflight [04 R-COB-04 §8].
-func TestScriptMissRetainsLaterProgramAndRequiredPreflightFailure(t *testing.T) {
+// immutable program. The broken definition is left with no program at all,
+// which is what refuses it where a unit is created [04 R-COB-04 §8].
+func TestScriptMissRetainsLaterProgram(t *testing.T) {
 	fs := newFixtureFS(t, fixtureFile{path: "scripts/valid.cob", data: string(contentTestCOB([]uint32{0}))})
 	bad, good := unitScript("missing"), unitScript("valid")
 	warnings := fillUnitRecordScripts(fs, []*UnitDef{bad, good})
 	if len(warnings) != 1 || bad.Script != nil || good.Script == nil {
 		t.Fatalf("candidate boundary lost: warnings=%v, bad=%v, good=%v", warnings, bad.Script, good.Script)
 	}
-	p := &skirmishPreflight{fs: fs, manifest: &SkirmishManifest{}}
-	p.script("required-unit", bad, true)
-	if !p.finish().Fatal() {
-		t.Fatal("required unavailable script passed preflight")
-	}
 }
 
-// A callback directory cannot make an empty code body usable. Catalog admission
-// and required preflight share this host boundary [04 R-COB-04 §8].
-func TestEmptyScriptCodeRetainsWarningButRefusesRequiredPreflight(t *testing.T) {
+// A callback directory cannot make an empty code body usable: the definition
+// keeps its warning and receives no program [04 R-COB-04 §8].
+func TestEmptyScriptCodeRetainsWarningAndNoProgram(t *testing.T) {
 	fs := newFixtureFS(t, fixtureFile{path: "scripts/empty.cob", data: string(contentTestCOB(nil))})
 	u := unitScript("empty")
 	warnings := fillUnitRecordScripts(fs, []*UnitDef{u})
 	if len(warnings) != 1 || u.Script != nil {
 		t.Fatalf("empty code admission: warnings=%v program=%v", warnings, u.Script)
-	}
-	p := &skirmishPreflight{fs: fs, manifest: &SkirmishManifest{}}
-	p.script("required-unit", u, true)
-	if !p.finish().Fatal() {
-		t.Fatal("required empty code passed preflight because its directory named Create")
 	}
 }

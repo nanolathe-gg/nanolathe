@@ -47,7 +47,7 @@ func restoreVTOLBuildOrder(t *testing.T, svc *Service, builder *units.Unit) *ord
 			DescriptorName: image.DescriptorName, BuildTypeName: image.BuildTypeName,
 		}
 	}
-	if err := orders.RetailRestoreOrders(builder, records, stable, orders.QueueOfUnit(builder).Binding()); err != nil {
+	if err := orders.RetailRestoreOrdersAtTick(builder, records, stable, orders.QueueOfUnit(builder).Binding(), 0); err != nil {
 		t.Fatal(err)
 	}
 	svc.Movement = movement.NewSystem(svc.Terrain, movement.Profile{FootPrintX: 1, FootPrintZ: 1}, movement.NewOccupancyGrid())

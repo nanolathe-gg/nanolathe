@@ -59,17 +59,17 @@ func TestNextCampaignMissionLinearAdvance(t *testing.T) {
 		"maps/AC02.ota":  minOTA,
 		"maps/AC03.ota":  minOTA,
 	})
-	// Mission provenance setup via LoadCampaign to get CampaignPath/Index wired.
+	// Mission provenance setup via LoadCampaignWithSink to get CampaignPath/Index wired.
 	m0, err := LoadCampaignWithSink(fs, "camps/prog.tdf", 0, 0, 0, nil)
 	if err != nil {
-		t.Fatalf("LoadCampaign 0: %v", err)
+		t.Fatalf("LoadCampaignWithSink 0: %v", err)
 	}
 	if m0.CampaignPath != "camps/prog.tdf" || m0.CampaignIndex != 0 || m0.CampaignMissionName != "First" {
 		t.Fatalf("provenance m0: path=%q idx=%d name=%q", m0.CampaignPath, m0.CampaignIndex, m0.CampaignMissionName)
 	}
 	m2, err := LoadCampaignWithSink(fs, "camps/prog.tdf", 2, 0, 0, nil)
 	if err != nil {
-		t.Fatalf("LoadCampaign 2: %v", err)
+		t.Fatalf("LoadCampaignWithSink 2: %v", err)
 	}
 	if m2.CampaignIndex != 2 || m2.CampaignMissionName != "Third" {
 		t.Fatalf("m2 identity: idx=%d name=%q", m2.CampaignIndex, m2.CampaignMissionName)
@@ -130,12 +130,18 @@ func TestCampaignMissionCountDeterministic(t *testing.T) {
 		"maps/A.ota":  minOTA,
 		"maps/B.ota":  minOTA,
 	})
-	c, _ := CampaignMissionCount(fs, "camps/c.tdf")
-	if c != 2 {
-		t.Fatalf("count %d want 2", c)
+	first, err := DiscoverCampaign(fs, "camps/c.tdf")
+	if err != nil {
+		t.Fatalf("discover: %v", err)
 	}
-	c2, _ := CampaignMissionCount(fs, "camps/c.tdf")
-	if c2 != c {
+	if len(first.Missions) != 2 {
+		t.Fatalf("count %d want 2", len(first.Missions))
+	}
+	second, err := DiscoverCampaign(fs, "camps/c.tdf")
+	if err != nil {
+		t.Fatalf("discover again: %v", err)
+	}
+	if len(second.Missions) != len(first.Missions) {
 		t.Fatalf("count not deterministic")
 	}
 	// Provenance retained in Mission.

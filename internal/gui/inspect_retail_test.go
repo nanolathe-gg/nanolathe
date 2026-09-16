@@ -17,7 +17,7 @@ func TestRetailCommanderPagesUseAuthoredSixProductSlots(t *testing.T) {
 	}
 	defer fs.Close()
 	for _, name := range []string{"guis/armcom1.gui", "guis/armcom2.gui", "guis/armcom3.gui"} {
-		w, err := Load(fs, name)
+		w, err := LoadWithTranslation(fs, name, nil)
 		if err != nil {
 			t.Fatalf("load %s: %v", name, err)
 		}

@@ -92,9 +92,6 @@ const (
 	RendererOutsideInterface
 	RendererOutsideCursor
 	RendererOutsideAll = RendererOutsideLaterWorld | RendererOutsideProjectile | RendererOutsideEffect | RendererOutsideFog | RendererOutsideSelection | RendererOutsideInterface | RendererOutsideCursor
-	// RendererOutsideHUD retains the old name for callers that classify the
-	// interface pass as HUD; it is the same documented writer bit.
-	RendererOutsideHUD = RendererOutsideInterface
 )
 
 // RendererValueState makes unavailable source provenance explicit instead of
@@ -274,13 +271,6 @@ func (r *rendererTrace) reset() {
 	r.tick = 0
 	r.width = 0
 	r.height = 0
-}
-
-func (r *rendererTrace) stats() RendererTraceStats {
-	if r == nil {
-		return RendererTraceStats{}
-	}
-	return RendererTraceStats{Capacity: rendererTraceEventCap, Captured: len(r.events), Dropped: r.dropped, Overflowed: r.overflowed}
 }
 
 func (r *rendererTrace) pixelIndex(x, y int32) int {

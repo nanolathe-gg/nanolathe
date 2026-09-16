@@ -149,28 +149,6 @@ func scanRepairCandidates(u *units.Unit, radius int32) []*units.Unit {
 	return out
 }
 
-func scanRadiusTarget(u *units.Unit, radius int32, hostileOnly bool) *units.Unit {
-	b := bindingFor(u)
-	if b == nil {
-		return nil
-	}
-	var found *units.Unit
-	b.ForEachUnit(func(h pool.Handle, candidate *units.Unit) bool {
-		if h == 0 || candidate == nil || !candidate.Alive || candidate == u || candidate.Def == nil {
-			return scanNext
-		}
-		if hostileOnly && !scanHostile(b, u, candidate) {
-			return scanNext
-		}
-		if withinPlanarRadius(u, candidate.X, candidate.Z, radius) {
-			found = candidate
-			return scanStop
-		}
-		return scanNext
-	})
-	return found
-}
-
 // airBasePads is the damaged-aircraft base seek both patrol rows run —
 // `VTOL_Patrol` phase 2 [04 R-ORD-02 §2] and `VTOL_RepairPatrol` phase 1
 // [04 R-ORD-01 §7]. It is not a visitor: the candidate set is the per-side

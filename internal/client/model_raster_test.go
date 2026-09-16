@@ -337,9 +337,6 @@ func TestFeatureAnimatedModelSuppressesMissingIdentity(t *testing.T) {
 	if got := c.collectDrawPolys(testPrimitiveDraw(pr, vertices), teamColor{}, 0, modelCursorFeature); len(got) != 0 {
 		t.Fatalf("animated feature with missing identity emitted %d faces", len(got))
 	}
-	if got := c.animatedGAFFrame("anim", 0, c.texIndex["anim"].entry); got != nil {
-		t.Fatal("animated feature sprite with missing identity returned a frame")
-	}
 }
 
 func TestCollectDrawPolysUsesCameraScale(t *testing.T) {

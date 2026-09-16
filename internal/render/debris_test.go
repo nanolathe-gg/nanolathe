@@ -125,7 +125,7 @@ func TestDebrisEvictionDoesNotClearReusedSlot(t *testing.T) {
 	p.slots[0] = debrisSlot{live: true, generation: 2}
 	p.blocks[0] = debrisBlock{occupied: true, slot: 0, generation: 1}
 	p.count = 1
-	p.evictBlock(0)
+	p.clearBlock(0)
 	if !p.slots[0].live {
 		t.Fatal("stale allocation block cleared a reused debris slot")
 	}

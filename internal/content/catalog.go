@@ -998,7 +998,7 @@ func (c *Catalog) WeaponByName(name string) (*WeaponDef, bool) {
 // A restored battle uses the current definition-side byte for active, while
 // preserving that initial name-resolution identity [08 R-SAVE-WEAPON-01].
 //
-// LinkUnitWeapons (compile_unit.go) stores this resolution on the unit's
+// linkUnitWeaponRecords (compile_unit.go) stores this resolution on the unit's
 // link defs: a missed link holds the record-0 def when the family carries
 // one, else nil [02 §5 R-CONTENT-02].
 func (c *Catalog) WeaponLink(name string) (def *WeaponDef, active bool) {
@@ -1324,17 +1324,13 @@ func manifestHashFor(fs vfs.FSOps) (string, error) {
 	return "", nil
 }
 
-// validateRequiredModels reads each distinct named model once in logical-path
-// order. A named unit objectname, weapon model, or feature object cannot
-// degrade to an empty geometry record: retail sends its model-load failure to
-// the fatal channel [02 "Cross-reference failure policy"][02 R-CAT-01 §5].
-// Empty model fields remain their record family's distinct authored policy.
-// Feature animation sequences are deliberately absent here; their GAF lookup
-// has a separate silent-null recovery [02 R-MALF-01 §5].
-func validateRequiredModels(fs vfs.FSOps, units map[string]*UnitDef, weapons map[string]*WeaponDef, features map[string]*FeatureDef) error {
-	return validateRequiredRecordModels(fs, unitMapRecords(units), weapons, features)
-}
-
+// validateRequiredRecordModels reads each distinct named model once in
+// logical-path order. A named unit objectname, weapon model, or feature object
+// cannot degrade to an empty geometry record: retail sends its model-load
+// failure to the fatal channel [02 "Cross-reference failure policy"]
+// [02 R-CAT-01 §5]. Empty model fields remain their record family's distinct
+// authored policy. Feature animation sequences are deliberately absent here;
+// their GAF lookup has a separate silent-null recovery [02 R-MALF-01 §5].
 func validateRequiredRecordModels(fs vfs.FSOps, records []*UnitDef, weapons map[string]*WeaponDef, features map[string]*FeatureDef) error {
 	models := requiredRecordModelPaths(records, weapons, features)
 	if len(models) == 0 {
@@ -1431,13 +1427,9 @@ func requiredModelPath(name string) string {
 	return "objects3d/" + name + ".3do"
 }
 
-// fillUnitScripts retains unavailable programs as catalog warnings. Preflight
-// and creation refuse a required missing program; unrelated definitions remain
-// usable [04 R-COB-04 §8], DESIGN_CONTENT_VFS §3.4 C9.
-func fillUnitScripts(fs vfs.FSOps, units map[string]*UnitDef) []string {
-	return fillUnitRecordScripts(fs, unitMapRecords(units))
-}
-
+// fillUnitRecordScripts retains unavailable programs as catalog warnings.
+// Unit creation refuses a required missing program; unrelated definitions
+// remain usable [04 R-COB-04 §8], DESIGN_CONTENT_VFS §3.4 C9.
 func fillUnitRecordScripts(fs vfs.FSOps, records []*UnitDef) []string {
 	if fs == nil || len(records) == 0 {
 		return nil

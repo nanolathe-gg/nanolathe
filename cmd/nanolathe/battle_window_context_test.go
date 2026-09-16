@@ -33,10 +33,10 @@ func TestBattleWindowPainterUsesInstalledArtAndResolvedMiss(t *testing.T) {
 	if got := h.gadgetArtEntry(button, page); got != installed {
 		t.Fatalf("page entry = %p, want retained installed entry %p", got, installed)
 	}
-	if got := h.gadgetFrame(button, page, false, false); got != installed.Frames[4].Frame {
+	if got := h.gadgetButtonFrame(button, page, 0, 0, false); got != installed.Frames[4].Frame {
 		t.Fatalf("page frame = %p, want retained installed frame base %p", got, installed.Frames[4].Frame)
 	}
-	if got := h.modalGadgetFrame(button, page, false, false); got != installed.Frames[4].Frame {
+	if got := h.modalGadgetFrameState(button, page, 0, 0, false); got != installed.Frames[4].Frame {
 		t.Fatalf("modal frame = %p, want retained installed frame base %p", got, installed.Frames[4].Frame)
 	}
 
@@ -44,17 +44,17 @@ func TestBattleWindowPainterUsesInstalledArtAndResolvedMiss(t *testing.T) {
 	if got := h.gadgetArtEntry(picture, page); got != &page.Entries[0] {
 		t.Fatal("nonbutton borrowed generic external slot")
 	}
-	if got := h.modalGadgetFrame(picture, page, false, false); got != page.Entries[0].Frames[0].Frame {
+	if got := h.modalGadgetFrameState(picture, page, 0, 0, false); got != page.Entries[0].Frames[0].Frame {
 		t.Fatal("modal nonbutton borrowed generic external slot")
 	}
 	miss := gui.Gadget{Kind: gui.KindButton, Name: "same", Art: "same", ExternalArtResolved: true}
 	if got := h.gadgetArtEntry(miss, page); got != nil {
 		t.Fatalf("resolved external miss fell through to %p", got)
 	}
-	if got := h.gadgetFrame(miss, page, false, false); got != nil {
+	if got := h.gadgetButtonFrame(miss, page, 0, 0, false); got != nil {
 		t.Fatalf("resolved external miss frame fell through to %p", got)
 	}
-	if got := h.modalGadgetFrame(miss, page, false, false); got != nil {
+	if got := h.modalGadgetFrameState(miss, page, 0, 0, false); got != nil {
 		t.Fatalf("modal resolved external miss fell through to %p", got)
 	}
 }

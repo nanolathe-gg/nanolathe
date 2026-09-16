@@ -198,7 +198,7 @@ func TestRetailCameraMissingFieldDefaultsZero(t *testing.T) {
 func TestRetailGameTimeAndPlayerGate(t *testing.T) {
 	clk := &clock.State{Requested: 10, Active: 10, GlobalTick: 1234}
 	b := NewBuilder()
-	WriteGameTime(b, clk)
+	WriteGameTime(b, clk.SaveBox())
 	p := b.Add("Player0")
 	p.SetInt("Controller", 2)
 	bank, err := OpenBytes(b.Bytes())
@@ -208,8 +208,9 @@ func TestRetailGameTimeAndPlayerGate(t *testing.T) {
 	if _, ok := ReadGameTime(bank); !ok || len(bankAccountBox(t, bank, PlayersAccount, GameTimeBoxName)) != 28 {
 		t.Fatal("valid 28-byte GameTime was not accepted")
 	}
-	if got := ReadAllPlayerSlots(bank); len(got) != 1 || got[0].Controller != 2 {
-		t.Fatalf("player gate result = %+v", got)
+	var accepted BattleImage
+	if err := decodePlayers(bank, &accepted); err != nil || len(accepted.Players) != 1 || accepted.Players[0].Controller != 2 {
+		t.Fatalf("player gate result = %+v, err=%v", accepted.Players, err)
 	}
 
 	short := NewBuilder()
@@ -219,8 +220,12 @@ func TestRetailGameTimeAndPlayerGate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenBytes short: %v", err)
 	}
-	if _, ok := ReadGameTime(shortBank); ok || len(ReadAllPlayerSlots(shortBank)) != 0 {
-		t.Fatal("short GameTime must gate all Player%i records")
+	var gated BattleImage
+	if _, ok := ReadGameTime(shortBank); ok {
+		t.Fatal("short GameTime must not be accepted")
+	}
+	if err := decodePlayers(shortBank, &gated); err == nil || len(gated.Players) != 0 {
+		t.Fatalf("short GameTime must gate all Player%%i records: err=%v slots=%d", err, len(gated.Players))
 	}
 }
 

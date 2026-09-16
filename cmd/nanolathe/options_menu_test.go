@@ -19,6 +19,24 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/ui"
 )
 
+// retailOptionsSliderNamed and moveRetailSliderNamed are the tests' bounded
+// first-match name lookups onto the production indexed slider path. Production
+// callbacks arrive with the fired record index already selected, so the shell
+// keeps no name-resolving form [07 R-WGT-02 §2].
+func retailOptionsSliderNamed(g *gameShell, name string) *retailSliderState {
+	if optionsPanel == nil {
+		return nil
+	}
+	return g.retailOptionsSliderAt(optionsPanel.Index(name))
+}
+
+func moveRetailSliderNamed(g *gameShell, name string, s *retailSliderState, knob int) {
+	if optionsPanel == nil {
+		return
+	}
+	g.moveRetailSliderAt(optionsPanel.Index(name), s, knob)
+}
+
 // Retail modes keep their desktop gates [07 R-FE-02 §9]. The additional
 // widescreen modes are Nanolathe host choices (DESIGN_PRESENTATION_CLIENT §2.1)
 // and must remain selectable even on a smaller or high-DPI logical desktop.
@@ -99,9 +117,9 @@ func TestMonitorOptionsSelectionSurvivesReopen(t *testing.T) {
 	optionsState.desktop = retailDisplayMode{2560, 1600}
 	optionsState.modes = retailDisplayModes(2560, 1600, retailDisplayMode{640, 480})
 	shell.activateGadget("VISUALS")
-	slider := shell.retailOptionsSlider("VIDSLDR")
+	slider := retailOptionsSliderNamed(shell, "VIDSLDR")
 	index := retailDisplayModeIndex(optionsState.modes, 1280, 800)
-	shell.moveRetailSlider("VIDSLDR", slider, retailSliderKnob(index, slider.travel, slider.max))
+	moveRetailSliderNamed(shell, "VIDSLDR", slider, retailSliderKnob(index, slider.travel, slider.max))
 	if got := optionsPanel.TextOf("NASPECT"); got != "16:10" {
 		t.Fatalf("selected aspect = %q", got)
 	}
@@ -319,7 +337,7 @@ func TestRetailOptionsScreenVisualsPageDrivesDisplayMode(t *testing.T) {
 	if shell.display.Gamma != settings.DefaultGamma {
 		t.Errorf("opening visuals changed default gamma to %d", shell.display.Gamma)
 	}
-	slider := shell.retailOptionsSlider("VIDSLDR")
+	slider := retailOptionsSliderNamed(shell, "VIDSLDR")
 	if slider == nil {
 		t.Fatal("the merged page installed no VIDSLDR slider")
 	}
@@ -331,7 +349,7 @@ func TestRetailOptionsScreenVisualsPageDrivesDisplayMode(t *testing.T) {
 	}
 
 	// Moving the knob to the second row of the table selects 800x600.
-	shell.moveRetailSlider("VIDSLDR", slider, retailSliderKnob(1, slider.travel, slider.max))
+	moveRetailSliderNamed(shell, "VIDSLDR", slider, retailSliderKnob(1, slider.travel, slider.max))
 	if shell.display.Width != 800 || shell.display.Height != 600 {
 		t.Fatalf("VIDSLDR at index 1 wrote %dx%d; want 800x600", shell.display.Width, shell.display.Height)
 	}
@@ -346,7 +364,7 @@ func TestRetailOptionsScreenVisualsPageDrivesDisplayMode(t *testing.T) {
 	// menu canvas and committed host window size unchanged until OK.
 	for _, mode := range []retailDisplayMode{{1280, 720}, {1600, 900}, {1920, 1080}} {
 		index := retailDisplayModeIndex(optionsState.modes, mode.W, mode.H)
-		shell.moveRetailSlider("VIDSLDR", slider, retailSliderKnob(index, slider.travel, slider.max))
+		moveRetailSliderNamed(shell, "VIDSLDR", slider, retailSliderKnob(index, slider.travel, slider.max))
 		if w, h := window.WindowSize(); w != 640 || h != 480 {
 			t.Fatalf("pending widescreen selection resized the window to %dx%d", w, h)
 		}
@@ -373,8 +391,8 @@ func TestRetailOptionsScreenVisualsPageDrivesDisplayMode(t *testing.T) {
 
 	// Choose 800x600 again and leave through `PREV` ("OK"), which is the save
 	// point; `CANCEL` would discard it instead.
-	slider = shell.retailOptionsSlider("VIDSLDR")
-	shell.moveRetailSlider("VIDSLDR", slider, retailSliderKnob(1, slider.travel, slider.max))
+	slider = retailOptionsSliderNamed(shell, "VIDSLDR")
+	moveRetailSliderNamed(shell, "VIDSLDR", slider, retailSliderKnob(1, slider.travel, slider.max))
 	shell.activateGadget("PREV")
 	if shell.retailOptionsActive() {
 		t.Fatal("PREV did not pop the options root")
@@ -393,9 +411,9 @@ func TestRetailOptionsScreenVisualsPageDrivesDisplayMode(t *testing.T) {
 	// Cancel a second selection without moving the already-applied window.
 	shell.activateGadget("Options")
 	shell.activateGadget("VISUALS")
-	slider = shell.retailOptionsSlider("VIDSLDR")
+	slider = retailOptionsSliderNamed(shell, "VIDSLDR")
 	index := retailDisplayModeIndex(optionsState.modes, 1920, 1080)
-	shell.moveRetailSlider("VIDSLDR", slider, retailSliderKnob(index, slider.travel, slider.max))
+	moveRetailSliderNamed(shell, "VIDSLDR", slider, retailSliderKnob(index, slider.travel, slider.max))
 	shell.activateGadget("CANCEL")
 	if w, h := window.WindowSize(); w != 800 || h != 600 {
 		t.Fatalf("Cancel changed the applied window: %dx%d", w, h)
@@ -495,52 +513,34 @@ func TestBattleComposesAtTheChosenDisplayMode(t *testing.T) {
 }
 
 // A press inside the knob takes the capture and a drag maps pointer
-// displacement onto the knob; a press on the track beside it captures but does
-// not move the knob, and the release that ends a drag does not also fire the
-// synthesised arrow step [07 R-WGT-01 §5 "Pointer"].
+// displacement onto the knob, and the read-out follows it. The shared widget
+// service owns the capture; the options owner copies its knob in before the
+// pass and takes the moved knob back through Change
+// [07 R-WGT-01 §5 "Pointer"].
 func TestRetailOptionsSliderPointerCaptureAndDrag(t *testing.T) {
-	shell, _, _ := retailAssetShell(t)
+	shell, _, cl := retailAssetShell(t)
 	shell.openMenu(modeMenuSingle)
 	shell.activateGadget("Options")
 	shell.activateGadget("VISUALS")
-	slider := shell.retailOptionsSlider("VIDSLDR")
+	slider := retailOptionsSliderNamed(shell, "VIDSLDR")
 	if slider == nil {
 		t.Fatal("the merged page installed no VIDSLDR slider")
 	}
-	index, rect := -1, gui.Rect{}
-	for i, gad := range optionsPanel.Window.Gadgets {
-		if gad.Name == "VIDSLDR" {
-			index, rect = i, optionsPanel.Window.PlacedRect(i)
-			break
-		}
-	}
+	index := optionsPanel.Index("VIDSLDR")
 	if index < 0 {
 		t.Fatal("VIDSLDR is not on the merged window")
 	}
-	gad := optionsPanel.Window.Gadgets[index]
-	barX := int(rect.X) + slider.arrowW
-	knobCentre := int32(barX + 1 + slider.knob + slider.knobSize/2)
+	rect := optionsPanel.Window.PlacedRect(index)
+	in := cl.Input()
 	midY := rect.Y + rect.H/2
+	knobCentre := rect.X + 1 + int32(slider.knob) + int32(slider.knobSize)/2
 
-	// A press on the track beside the knob captures and leaves the knob alone.
-	shell.clickRetailScrollbar(index, gad, rect, int32(barX)+rect.W/2, midY)
-	if optionsState.drag.active {
-		t.Fatal("a press beside the knob started a drag")
-	}
-	if slider.knob != 0 {
-		t.Fatalf("a press beside the knob moved it to %d", slider.knob)
-	}
-
-	// A press inside the knob starts one, and dragging right raises the knob by
-	// the pointer displacement.
-	shell.clickRetailScrollbar(index, gad, rect, knobCentre, midY)
-	if !optionsState.drag.active {
-		t.Fatal("a press inside the knob did not take the capture")
-	}
-	held := &input.MouseState{}
-	held.SetPosition(float32(knobCentre)+30, float32(midY))
-	held.SetButton(input.MouseButtonLeft, true)
-	shell.updateRetailSliderDrag(held)
+	in.Mouse.ResetEdges()
+	widgetLeftDown(in, float32(knobCentre), float32(midY))
+	shell.serviceMenuWidgets(optionsPanel, in)
+	in.Mouse.ResetEdges()
+	in.Mouse.SetPosition(float32(knobCentre)+30, float32(midY))
+	shell.serviceMenuWidgets(optionsPanel, in)
 	if slider.knob != 30 {
 		t.Fatalf("a 30-pixel drag left the knob at %d; want 30", slider.knob)
 	}
@@ -548,30 +548,33 @@ func TestRetailOptionsSliderPointerCaptureAndDrag(t *testing.T) {
 	if want := retailSliderValue(30, slider.travel, slider.max); shell.display.Width != optionsState.modes[want].W {
 		t.Fatalf("the drag left %dx%d; want mode index %d", shell.display.Width, shell.display.Height, want)
 	}
+	in.Mouse.ResetEdges()
+	in.Mouse.SetButton(input.MouseButtonLeft, false)
+	shell.serviceMenuWidgets(optionsPanel, in)
 
-	// Releasing ends the drag; the release must not also step an arrow, even
-	// though the pointer is past the track's right edge.
-	freed := &input.MouseState{}
-	freed.SetPosition(float32(rect.X+rect.W+40), float32(midY))
-	shell.updateRetailSliderDrag(freed)
+	// A press on the track past the knob steps it by one; the press before it
+	// steps back. The step is unthrottled, so one serviced pass is one step
+	// [07 R-WGT-01 §5 "Pointer"].
 	before := slider.knob
-	shell.releaseRetailScrollbar(index, gad, rect, rect.X+rect.W+40, midY)
-	if slider.knob != before {
-		t.Fatalf("the release that ended the drag stepped the knob to %d; want %d", slider.knob, before)
-	}
-	if optionsState.drag.active || optionsState.drag.ended {
-		t.Fatal("the release left drag state behind")
-	}
-
-	// A release on the right arrow with no drag in flight is the arrow step.
-	shell.releaseRetailScrollbar(index, gad, rect, rect.X+rect.W-1, midY)
+	in.Mouse.ResetEdges()
+	widgetLeftDown(in, float32(rect.X+rect.W-1), float32(midY))
+	shell.serviceMenuWidgets(optionsPanel, in)
 	if slider.knob != before+1 {
-		t.Fatalf("the right arrow left the knob at %d; want %d", slider.knob, before+1)
+		t.Fatalf("the track step past the knob left it at %d; want %d", slider.knob, before+1)
 	}
-	shell.releaseRetailScrollbar(index, gad, rect, rect.X, midY)
+	in.Mouse.ResetEdges()
+	in.Mouse.SetButton(input.MouseButtonLeft, false)
+	shell.serviceMenuWidgets(optionsPanel, in)
+	in.Mouse.ResetEdges()
+	widgetLeftDown(in, float32(rect.X), float32(midY))
+	shell.serviceMenuWidgets(optionsPanel, in)
 	if slider.knob != before {
-		t.Fatalf("the left arrow left the knob at %d; want %d", slider.knob, before)
+		t.Fatalf("the track step before the knob left it at %d; want %d", slider.knob, before)
 	}
+	in.Mouse.ResetEdges()
+	in.Mouse.SetButton(input.MouseButtonLeft, false)
+	shell.serviceMenuWidgets(optionsPanel, in)
+	in.Mouse.ResetEdges()
 }
 
 // The options family's cue column: `CANCEL` alone plays `Previous`, and every
@@ -650,7 +653,7 @@ func TestRetailOptionsEveryPageOpensAndPersists(t *testing.T) {
 			t.Fatalf("%s merged page %q; want %q", page.button, optionsState.page, page.key)
 		}
 		for _, name := range page.sliders {
-			if shell.retailOptionsSlider(name) == nil {
+			if retailOptionsSliderNamed(shell, name) == nil {
 				t.Errorf("page %s installed no %s slider", page.key, name)
 			}
 		}
@@ -684,11 +687,11 @@ func TestRetailOptionsEveryPageOpensAndPersists(t *testing.T) {
 		{"MAXLINES", 18, func() int { return shell.messages.TextLines }},
 		{"GAME", 14, func() int { return shell.gameSpeed }},
 	} {
-		s := shell.retailOptionsSlider(c.slider)
+		s := retailOptionsSliderNamed(shell, c.slider)
 		if s == nil {
 			t.Fatalf("the interface page installed no %s slider", c.slider)
 		}
-		shell.moveRetailSlider(c.slider, s, retailSliderKnob(c.value, s.travel, s.max))
+		moveRetailSliderNamed(shell, c.slider, s, retailSliderKnob(c.value, s.travel, s.max))
 		if got := c.read(); got != c.value {
 			t.Errorf("%s at value %d stored %d", c.slider, c.value, got)
 		}
@@ -710,11 +713,11 @@ func TestRetailOptionsEveryPageOpensAndPersists(t *testing.T) {
 
 	// The sound page's gauge and its two stage buttons [03 R-AUD-01 §2].
 	shell.activateGadget("SOUND")
-	fx := shell.retailOptionsSlider("FXVOL")
+	fx := retailOptionsSliderNamed(shell, "FXVOL")
 	if fx == nil {
 		t.Fatal("the sound page installed no FXVOL slider")
 	}
-	shell.moveRetailSlider("FXVOL", fx, retailSliderKnob(40, fx.travel, fx.max))
+	moveRetailSliderNamed(shell, "FXVOL", fx, retailSliderKnob(40, fx.travel, fx.max))
 	if shell.audioPrefs.FXVol != 40 {
 		t.Errorf("FXVOL at 40 stored %d", shell.audioPrefs.FXVol)
 	}
@@ -811,11 +814,11 @@ func TestRetailOptionsCancelDiscardsEveryPage(t *testing.T) {
 	before := shell.retailOptionsSnapshot()
 
 	shell.activateGadget("SOUND")
-	fx := shell.retailOptionsSlider("FXVOL")
+	fx := retailOptionsSliderNamed(shell, "FXVOL")
 	if fx == nil {
 		t.Fatal("the sound page installed no FXVOL slider")
 	}
-	shell.moveRetailSlider("FXVOL", fx, retailSliderKnob(3, fx.travel, fx.max))
+	moveRetailSliderNamed(shell, "FXVOL", fx, retailSliderKnob(3, fx.travel, fx.max))
 	shell.activateGadget("SPEEDS")
 	shell.activateGadget("LEFTCLICK")
 	shell.activateGadget("CANCEL")
@@ -1038,11 +1041,11 @@ func TestBattlePrefsInterfacePageDrivesTheLiveSession(t *testing.T) {
 	}
 	shell.activateGadget("SPEEDS")
 
-	game := shell.retailOptionsSlider("GAME")
+	game := retailOptionsSliderNamed(shell, "GAME")
 	if game == nil {
 		t.Fatal("the merged interface page installed no GAME slider")
 	}
-	shell.moveRetailSlider("GAME", game, retailSliderKnob(settings.MaxGameSpeed, game.travel, game.max))
+	moveRetailSliderNamed(shell, "GAME", game, retailSliderKnob(settings.MaxGameSpeed, game.travel, game.max))
 	if shell.gameSpeed != settings.MaxGameSpeed {
 		t.Fatalf("GAME at the end of travel stored %d; want %d", shell.gameSpeed, settings.MaxGameSpeed)
 	}
@@ -1050,11 +1053,11 @@ func TestBattlePrefsInterfacePageDrivesTheLiveSession(t *testing.T) {
 		t.Fatalf("GAME left the session requesting speed %d; want %d", got, settings.MaxGameSpeed)
 	}
 
-	screen := shell.retailOptionsSlider("SCREEN")
+	screen := retailOptionsSliderNamed(shell, "SCREEN")
 	if screen == nil {
 		t.Fatal("the merged interface page installed no SCREEN slider")
 	}
-	shell.moveRetailSlider("SCREEN", screen, retailSliderKnob(settings.ScrollSliderMax, screen.travel, screen.max))
+	moveRetailSliderNamed(shell, "SCREEN", screen, retailSliderKnob(settings.ScrollSliderMax, screen.travel, screen.max))
 	if b.scrollSetting() != byte(shell.scrollSpeed) {
 		t.Fatalf("SCREEN left the camera reading %d; want the stored %d", b.scrollSetting(), shell.scrollSpeed)
 	}
@@ -1193,11 +1196,11 @@ func TestRetailOptionsGammaSurvivesStartup(t *testing.T) {
 	for _, value := range []int{6, 12, 18} {
 		shell.activateGadget("Options")
 		shell.activateGadget("VISUALS")
-		slider := shell.retailOptionsSlider("GAMMA")
+		slider := retailOptionsSliderNamed(shell, "GAMMA")
 		if slider == nil {
 			t.Fatal("visuals has no gamma slider")
 		}
-		shell.moveRetailSlider("GAMMA", slider, retailSliderKnob(value, slider.travel, slider.max))
+		moveRetailSliderNamed(shell, "GAMMA", slider, retailSliderKnob(value, slider.travel, slider.max))
 		if shell.display.Gamma != value {
 			t.Fatalf("slider gamma = %d, want %d", shell.display.Gamma, value)
 		}
@@ -1277,5 +1280,19 @@ func assertOptionsPageButton(t *testing.T, active string) {
 		if got := optionsPanel.DownAt(i); got != want {
 			t.Fatalf("page %s: selector %s down=%d, want %d", active, key, got, want)
 		}
+	}
+}
+
+// activateEscape fires the active panel's authored escape default, which is
+// how these tests press Escape on a menu. The shipped input pass resolves the
+// same default inside the widget service's key-navigation frame, so nothing in
+// the front end calls this [07 R-WGT-01 §2] [07 R-FE-01 §8].
+func (g *gameShell) activateEscape() {
+	p := g.activePanel()
+	if g.frontend.Mode == modeMenuMain || p == nil {
+		return
+	}
+	if index := p.Window.EscapeDefaultIndex(); p.ActiveAt(index) {
+		g.activateGadgetAt(p, index)
 	}
 }

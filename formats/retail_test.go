@@ -28,7 +28,7 @@ func TestRetailMainMenuResources(t *testing.T) {
 		ok   func() error
 	}{
 		{"guis/MAINMENU.GUI", func() error {
-			gui, err := LoadGUIFile(fs, "guis/mainmenu.gui")
+			gui, err := LoadGUI(readMountedFile(t, fs, "guis/mainmenu.gui"))
 			if err != nil {
 				return err
 			}
@@ -68,7 +68,7 @@ func TestRetailMainMenuResources(t *testing.T) {
 			return nil
 		}},
 		{"palettes/GUIPAL.PAL", func() error {
-			palette, err := LoadPALFile(fs, "palettes/guipal.pal")
+			palette, err := LoadPAL(readMountedFile(t, fs, "palettes/guipal.pal"))
 			if err != nil {
 				return err
 			}

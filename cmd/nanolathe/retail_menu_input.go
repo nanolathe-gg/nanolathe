@@ -249,16 +249,6 @@ func (g *gameShell) commitListSelection(name string, index int) {
 	}
 }
 
-func (g *gameShell) activateEscape() {
-	p := g.activePanel()
-	if g.frontend.Mode == modeMenuMain || p == nil {
-		return
-	}
-	if index := p.Window.EscapeDefaultIndex(); p.ActiveAt(index) {
-		g.activateGadgetAt(p, index)
-	}
-}
-
 func (g *gameShell) activateGadget(name string) {
 	name = gui.CallbackName(name)
 	key := frontendCallbackKey(name)

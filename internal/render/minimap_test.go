@@ -170,7 +170,7 @@ func TestMinimapBuildRadarPictureLetterboxAndGuard(t *testing.T) {
 	}
 }
 
-func TestMinimapBuildRadarPictureFromWorld(t *testing.T) {
+func TestMinimapBuildRadarPictureFromTerrain(t *testing.T) {
 	ter := &world.Terrain{CellW: 8, CellH: 16, PlayRight: 96, PlayBottom: 128}
 	tileW := int(ter.CellW / 2)
 	tileH := int(ter.CellH / 2)
@@ -181,12 +181,12 @@ func TestMinimapBuildRadarPictureFromWorld(t *testing.T) {
 	}
 	m := camera.LayoutMinimap(ter.CellW*16, ter.CellH*16)
 	tables := identityALP()
-	if pic := BuildRadarPictureFromWorld(ter, m, nil, 0, 0, &tables); pic == nil || pic.W != int(m.W) {
-		t.Fatalf("FromWorld failed %+v", pic)
+	if pic := BuildRadarPicture(ter, ter.PlayRight, ter.PlayBottom, m, nil, 0, 0, &tables); pic == nil || pic.W != int(m.W) {
+		t.Fatalf("terrain-derived picture failed %+v", pic)
 	}
-	// nil terrain helper
-	if pic2 := BuildRadarPictureFromWorld(nil, m, nil, 0, 0, &tables); pic2 != nil {
-		t.Fatalf("FromWorld nil terrain must be suppressed")
+	// An absent terrain is suppressed rather than sampled.
+	if pic2 := BuildRadarPicture(nil, 0, 0, m, nil, 0, 0, &tables); pic2 != nil {
+		t.Fatalf("nil terrain must be suppressed")
 	}
 }
 
@@ -267,7 +267,7 @@ func TestMinimapBuildMappedVisIdxAndGateOrder(t *testing.T) {
 	for i := 0; i < 256; i++ {
 		guiRemap[i] = byte(255 - i) // invert
 	}
-	mapped := BuildMapped(pic, wordMask, byteGrid, 2, 2, 0, dcb, guiRemap)
+	mapped := buildMappedInto(nil, pic, wordMask, byteGrid, 2, 2, 0, dcb, guiRemap)
 	if mapped == nil {
 		t.Fatalf("mapped nil")
 	}
@@ -289,26 +289,26 @@ func TestMinimapBuildMappedVisIdxAndGateOrder(t *testing.T) {
 		t.Fatalf("visIdx 1,1 want 40 got %d", got)
 	}
 	// Test nil remap -> no remap, use raw even when byte==0 but word set
-	mapped2 := BuildMapped(pic, wordMask, byteGrid, 2, 2, 0, dcb, nil)
+	mapped2 := buildMappedInto(nil, pic, wordMask, byteGrid, 2, 2, 0, dcb, nil)
 	if mapped2.Bits[2] != 30 {
 		t.Fatalf("nil guiRemap should use raw, got %d want 30", mapped2.Bits[2])
 	}
 	// Test word bit 0 → DCB regardless of byte
 	wordMaskAllZero := []uint16{0, 0, 0, 0}
-	mapped3 := BuildMapped(pic, wordMaskAllZero, byteGrid, 2, 2, 0, dcb, guiRemap)
+	mapped3 := buildMappedInto(nil, pic, wordMaskAllZero, byteGrid, 2, 2, 0, dcb, guiRemap)
 	for i, v := range mapped3.Bits {
 		if v != dcb {
 			t.Fatalf("all zero wordMask idx %d want DCB got %d", i, v)
 		}
 	}
 	// Test localSlot bit check
-	mapped4 := BuildMapped(pic, []uint16{2, 2, 2, 2}, byteGrid, 2, 2, 0, dcb, nil) // bit0 not set, bit1 set
+	mapped4 := buildMappedInto(nil, pic, []uint16{2, 2, 2, 2}, byteGrid, 2, 2, 0, dcb, nil) // bit0 not set, bit1 set
 	for _, v := range mapped4.Bits {
 		if v != dcb {
 			t.Fatalf("localSlot 0 bit not set should be DCB got %d", v)
 		}
 	}
-	mapped5 := BuildMapped(pic, []uint16{2, 2, 2, 2}, byteGrid, 2, 2, 1, dcb, nil) // slot1 -> bit 2 -> should see raw/fog
+	mapped5 := buildMappedInto(nil, pic, []uint16{2, 2, 2, 2}, byteGrid, 2, 2, 1, dcb, nil) // slot1 -> bit 2 -> should see raw/fog
 	if mapped5.Bits[0] == dcb {
 		t.Fatalf("slot1 should see")
 	}
@@ -334,7 +334,7 @@ func TestMinimapRebuildFinalLayerOrderAndBlink(t *testing.T) {
 			dst.Set(x+1, y, color)
 		}
 	}
-	final := rebuildFinalExact(mapped, m, playW, playH, contacts, blink, blit, 0xA0, 0xB0, 0xC0)
+	final := rebuildFinalExactInto(nil, mapped, m, playW, playH, contacts, blink, blit, 0xA0, 0xB0, 0xC0)
 	if final == nil {
 		t.Fatalf("final nil")
 	}
@@ -351,7 +351,7 @@ func TestMinimapRebuildFinalLayerOrderAndBlink(t *testing.T) {
 		{WorldX: 20, WorldZ: 20, WorldY: 0, Palette: 10, IsCommander: false},
 		{WorldX: 20, WorldZ: 20, WorldY: 0, Palette: 30, IsCommander: true},
 	}
-	final2 := rebuildFinalExact(mapped, m, playW, playH, contacts2, blink, blit, 0xA0, 0xB0, 0xC0)
+	final2 := rebuildFinalExactInto(nil, mapped, m, playW, playH, contacts2, blink, blit, 0xA0, 0xB0, 0xC0)
 	rx2, ry2 := RadarProjection(20, 20, 0, playW, playH, m)
 	if v, _ := final2.At(int(rx2), int(ry2)); v != 30 {
 		t.Fatalf("commander should overwrite blip at same pixel, got %d want 30", v)
@@ -366,7 +366,7 @@ func TestMinimapRebuildFinalLayerOrderAndBlink(t *testing.T) {
 	contacts3 := []MinimapContact{
 		{WorldX: 50, WorldZ: 50, WorldY: 0, Palette: 10, RawDistRadar: 20, RangeStatus: true}, // outer radius ~ 10*20/100=2
 	}
-	final3 := rebuildFinalExact(mapped, m, playW, playH, contacts3, blink, blit, 0xA0, 0xB0, 0xC0)
+	final3 := rebuildFinalExactInto(nil, mapped, m, playW, playH, contacts3, blink, blit, 0xA0, 0xB0, 0xC0)
 	// circle radius 2 should overwrite blip at offset: blip at rx,ry, circle outline at rx+2,ry should be circle color (0xA0 placeholder)
 	rx3, ry3 := RadarProjection(50, 50, 0, playW, playH, m)
 	r := RadarRadius(20, m.W, playW)
@@ -419,7 +419,7 @@ func TestMinimapSelectedUnitCircleGate(t *testing.T) {
 	// tower, which reach this layer identically.
 	mapped := &RadarSurface{W: 10, H: 10, Bits: make([]byte, 100)}
 	closed := base
-	final := rebuildFinalExact(mapped, m, playW, playH, []MinimapContact{closed}, BlinkState{Phase: 1}, blit, 7, 8, 9)
+	final := rebuildFinalExactInto(nil, mapped, m, playW, playH, []MinimapContact{closed}, BlinkState{Phase: 1}, blit, 7, 8, 9)
 	if got, _ := final.At(int(centerX), int(centerY)); got != 9 {
 		t.Fatalf("the circle gate must not suppress the blip: got %d want 9 [03 §3.9]", got)
 	}
@@ -430,7 +430,7 @@ func TestMinimapSelectedUnitCircleGate(t *testing.T) {
 	// Stealth is not a term of this gate: it cannot reopen it.
 	stealthed := base
 	stealthed.Stealth = true
-	final = rebuildFinalExact(mapped, m, playW, playH, []MinimapContact{stealthed}, BlinkState{Phase: 1}, blit, 7, 8, 9)
+	final = rebuildFinalExactInto(nil, mapped, m, playW, playH, []MinimapContact{stealthed}, BlinkState{Phase: 1}, blit, 7, 8, 9)
 	if got, _ := final.At(int(outerX), int(centerY)); got != 0 {
 		t.Fatalf("stealth reopened the selected-unit circle gate: got %d want none [03 §3.9]", got)
 	}
@@ -439,7 +439,7 @@ func TestMinimapSelectedUnitCircleGate(t *testing.T) {
 	// index, over its own blip.
 	open := base
 	open.RangeStatus = true
-	final = rebuildFinalExact(mapped, m, playW, playH, []MinimapContact{open}, BlinkState{Phase: 1}, blit, 7, 8, 9)
+	final = rebuildFinalExactInto(nil, mapped, m, playW, playH, []MinimapContact{open}, BlinkState{Phase: 1}, blit, 7, 8, 9)
 	if got, _ := final.At(int(outerX), int(centerY)); got != 7 {
 		t.Fatalf("a selected unit drew no circle: got %d want the radar index 7 [03 §3.9][03 §3.10]", got)
 	}
@@ -449,7 +449,7 @@ func TestMinimapSelectedUnitCircleGate(t *testing.T) {
 	// can appear ring-only while its range branches still run.
 	ringOnly := open
 	ringOnly.BlinkSuppress = 1
-	final = rebuildFinalExact(mapped, m, playW, playH, []MinimapContact{ringOnly}, BlinkState{Phase: 0}, blit, 7, 8, 9)
+	final = rebuildFinalExactInto(nil, mapped, m, playW, playH, []MinimapContact{ringOnly}, BlinkState{Phase: 0}, blit, 7, 8, 9)
 	if got, _ := final.At(int(centerX), int(centerY)); got == 9 {
 		t.Fatalf("a blink-suppressed contact drew its blip on a non-blink phase [03 §3.9]")
 	}
@@ -475,14 +475,14 @@ func TestMinimapWeaponRingIsGatedOnSelection(t *testing.T) {
 	ringX := centerX + RadarRadius(base.RingRange-512, m.W, playW)
 
 	mapped := &RadarSurface{W: 10, H: 10, Bits: make([]byte, 100)}
-	final := rebuildFinalExact(mapped, m, playW, playH, []MinimapContact{base}, BlinkState{Phase: 1}, blit, 7, 8, 9)
+	final := rebuildFinalExactInto(nil, mapped, m, playW, playH, []MinimapContact{base}, BlinkState{Phase: 1}, blit, 7, 8, 9)
 	if got, _ := final.At(int(ringX), int(centerY)); got != 0 {
 		t.Fatalf("an unselected contact drew a weapon ring: got %d want none [03 R-MM-01 §3]", got)
 	}
 
 	selected := base
 	selected.Status = 0x10
-	final = rebuildFinalExact(mapped, m, playW, playH, []MinimapContact{selected}, BlinkState{Phase: 1}, blit, 7, 8, 9)
+	final = rebuildFinalExactInto(nil, mapped, m, playW, playH, []MinimapContact{selected}, BlinkState{Phase: 1}, blit, 7, 8, 9)
 	if got, _ := final.At(int(ringX), int(centerY)); got != 9 {
 		t.Fatalf("a selected contact drew no weapon ring: got %d want the ring index 9 [03 R-MM-01 §3]", got)
 	}
@@ -518,18 +518,18 @@ func TestMinimapBlinkGate(t *testing.T) {
 	// A running blink-suppress countdown hides the blip off-phase and shows it
 	// on-phase.
 	suppressed := []MinimapContact{{WorldX: 10, WorldZ: 10, WorldY: 0, Palette: 9, Visible: true, BlinkSuppress: 3}}
-	finalOff := rebuildFinalExact(mapped, m, 100, 100, suppressed, BlinkState{Phase: 0}, blit, 0xA0, 0xB0, 0xC0)
+	finalOff := rebuildFinalExactInto(nil, mapped, m, 100, 100, suppressed, BlinkState{Phase: 0}, blit, 0xA0, 0xB0, 0xC0)
 	if v, _ := finalOff.At(int(rx), int(ry)); v != 5 {
 		t.Fatalf("blink-suppressed blip drawn on the clear phase, got %d want mapped 5 [03 §3.9]", v)
 	}
-	finalOn := rebuildFinalExact(mapped, m, 100, 100, suppressed, BlinkState{Phase: 1}, blit, 0xA0, 0xB0, 0xC0)
+	finalOn := rebuildFinalExactInto(nil, mapped, m, 100, 100, suppressed, BlinkState{Phase: 1}, blit, 0xA0, 0xB0, 0xC0)
 	if v, _ := finalOn.At(int(rx), int(ry)); v != 9 {
 		t.Fatalf("blink-suppressed blip missing on the blink phase, got %d want 9 [03 §3.9]", v)
 	}
 
 	// Definition stealth alone never blinks a blip.
 	stealthy := []MinimapContact{{WorldX: 10, WorldZ: 10, WorldY: 0, Palette: 9, Visible: true, Stealth: true}}
-	steady := rebuildFinalExact(mapped, m, 100, 100, stealthy, BlinkState{Phase: 0}, blit, 0xA0, 0xB0, 0xC0)
+	steady := rebuildFinalExactInto(nil, mapped, m, 100, 100, stealthy, BlinkState{Phase: 0}, blit, 0xA0, 0xB0, 0xC0)
 	if v, _ := steady.At(int(rx), int(ry)); v != 9 {
 		t.Fatalf("a stealthy contact blinked, got %d want the steady blip 9 [03 §3.9][03 R-VIS-01 §5]", v)
 	}
@@ -612,8 +612,8 @@ func TestMinimapPhaseGatesRegularAndDashedPresentation(t *testing.T) {
 		dst.Set(x, y, color)
 	}
 	rx, ry := RadarProjection(50, 50, 0, 100, 100, m)
-	off := rebuildFinalExact(mapped, m, 100, 100, contacts, BlinkState{Phase: 0}, blit, 7, 8, 9)
-	on := rebuildFinalExact(mapped, m, 100, 100, contacts, BlinkState{Phase: 1}, blit, 7, 8, 9)
+	off := rebuildFinalExactInto(nil, mapped, m, 100, 100, contacts, BlinkState{Phase: 0}, blit, 7, 8, 9)
+	on := rebuildFinalExactInto(nil, mapped, m, 100, 100, contacts, BlinkState{Phase: 1}, blit, 7, 8, 9)
 	if got, _ := off.At(int(rx), int(ry)); got != 0 {
 		t.Fatalf("regular suppressed contact phase 0 pixel = %d, want mapped 0", got)
 	}

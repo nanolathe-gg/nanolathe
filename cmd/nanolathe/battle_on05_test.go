@@ -117,10 +117,16 @@ func newTestBattle(cat *content.Catalog, terrain *world.Terrain) *battleSession 
 	return b
 }
 
+// testHullModels is the client.UnitHullModels implementation these fixtures
+// install; the shell's real source is the presentation model cache.
+type testHullModels struct{}
+
+func (testHullModels) HullModel(name string) *compiledmodel.Model { return testHullModel(name) }
+
 // installTestHullModels registers the fixture hull as the presentation model
 // source for tests that hold no VFS.
 func installTestHullModels() {
-	client.SetUnitHullModels(client.UnitHullModelFunc(testHullModel))
+	client.SetUnitHullModels(testHullModels{})
 }
 
 // testHullModel authors the fixture hull described in newTestBattle.

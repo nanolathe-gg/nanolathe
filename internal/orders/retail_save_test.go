@@ -17,7 +17,7 @@ func TestRetailOrderImagesRoundTripPreservesQueueOrderAndReferences(t *testing.T
 	BindQueue(u, NewQueueWith([]*Node{front}, []*Node{rear}))
 	ids := map[pool.Handle]uint16{100: 9, 101: 12}
 	resolve := func(h pool.Handle) (uint16, bool) { id, ok := ids[h]; return id, ok }
-	images, err := RetailOrderImages(u, resolve)
+	images, err := RetailOrderImagesWithPayload(u, resolve, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func TestRetailOrderImagesRoundTripPreservesQueueOrderAndReferences(t *testing.T
 		records[i] = save.OrderRecord{ParentStableID: image.ParentStableID, Sequence: image.Sequence, Secondary: image.Secondary, Main: image.Main, SubtypeCode: image.SubtypeCode, Subtype: image.Subtype, DescriptorName: image.DescriptorName, BuildTypeName: image.BuildTypeName}
 	}
 	v := &units.Unit{Handle: 200, Alive: true}
-	if err := RetailRestoreOrders(v, records, map[uint16]pool.Handle{9: 200, 12: 201}, nil); err != nil {
+	if err := RetailRestoreOrdersAtTick(v, records, map[uint16]pool.Handle{9: 200, 12: 201}, nil, 0); err != nil {
 		t.Fatal(err)
 	}
 	q := QueueOfUnit(v)
@@ -52,7 +52,7 @@ func TestRetailOrderImagesMainTargetLiveness(t *testing.T) {
 		return 9, true
 	}
 
-	dead, err := RetailOrderImages(owner, resolveOwnerOnly, func(pool.Handle) bool { return false })
+	dead, err := RetailOrderImagesWithPayload(owner, resolveOwnerOnly, func(pool.Handle) bool { return false }, nil)
 	if err != nil {
 		t.Fatalf("dead main target blocked save: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestRetailOrderImagesMainTargetLiveness(t *testing.T) {
 		t.Fatalf("dead main target stable ID=%d, want wire null", got)
 	}
 
-	if _, err := RetailOrderImages(owner, resolveOwnerOnly, func(h pool.Handle) bool { return h == target }); err == nil {
+	if _, err := RetailOrderImagesWithPayload(owner, resolveOwnerOnly, func(h pool.Handle) bool { return h == target }, nil); err == nil {
 		t.Fatal("live main target without a stable ID did not fail")
 	}
 }
@@ -71,7 +71,7 @@ func TestRetailOrderImagesPreservesLiveGetBuiltBuilderTarget(t *testing.T) {
 	BindQueue(product, NewQueueWith([]*Node{{ID: Lookup("GetBuilt"), Owner: product.Handle, Target: builder}}, nil))
 	ids := map[pool.Handle]uint16{product.Handle: 9, builder: 12}
 	resolve := func(h pool.Handle) (uint16, bool) { id, ok := ids[h]; return id, ok }
-	images, err := RetailOrderImages(product, resolve, func(h pool.Handle) bool { return h == builder })
+	images, err := RetailOrderImagesWithPayload(product, resolve, func(h pool.Handle) bool { return h == builder }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

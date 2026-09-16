@@ -26,7 +26,6 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/audio"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
-	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/platform/ebitenapp"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
 	"github.com/nanolathe-gg/nanolathe/internal/ui"
@@ -155,7 +154,6 @@ type retailOptionsState struct {
 	// only for the bounded first-match lookup helpers; two records that happen
 	// to share a name retain separate knob state [07 R-WGT-02 §2].
 	sliders map[int]*retailSliderState
-	drag    retailSliderDrag
 	modes   []retailDisplayMode
 	desktop retailDisplayMode
 
@@ -272,20 +270,6 @@ type retailSliderState struct {
 	max      int
 }
 
-// retailSliderDrag is the pointer capture a press inside the knob starts
-// [07 R-WGT-01 §5 "Pointer"].
-type retailSliderDrag struct {
-	active     bool
-	index      int
-	startCoord int
-	startKnob  int
-	// ended marks the pass on which the capture was freed. Release frees the
-	// capture and ends the drag; it does not also run the synthesised arrow
-	// step, even when the pointer has been dragged past the track's end
-	// [07 R-WGT-01 §5 "Pointer"].
-	ended bool
-}
-
 // retailSliderValue is the read-out the change callback computes on every knob
 // move: `value = trunc(pos / (travel - 1) * max)`, and 0 when travel is under
 // two [07 R-FE-01 §6 "slider arithmetic"].
@@ -371,18 +355,10 @@ func (g *gameShell) retailSliderMetrics(gad gui.Gadget) (travel, knobSize, arrow
 	return travel, knobSize, arrowW, true
 }
 
-// retailOptionsSlider returns the tracked slider for a gadget on the open
-// options page, or nil. Every other kind-4 gadget stays on the list-scrollbar
-// path.
-func (g *gameShell) retailOptionsSlider(name string) *retailSliderState {
-	if optionsPanel == nil {
-		return nil
-	}
-	return g.retailOptionsSliderAt(optionsPanel.Index(name))
-}
-
-// retailOptionsSliderAt uses the caller's already-selected record. This is
-// the callback path; it must not turn that record back into a name lookup.
+// retailOptionsSliderAt returns the tracked slider for the caller's
+// already-selected record on the open options page, or nil. Every other kind-4
+// gadget stays on the list-scrollbar path. This is the callback path; it must
+// not turn that record back into a name lookup.
 func (g *gameShell) retailOptionsSliderAt(index int) *retailSliderState {
 	if optionsState == nil || optionsPanel == nil || g == nil || g.activePanel() != optionsPanel {
 		return nil
@@ -1589,8 +1565,8 @@ func (g *gameShell) commitRetailSliderValue(index int, s *retailSliderState) {
 	}
 }
 
-// moveRetailSlider clamps a knob into 0..travel-1 and runs the change callback
-// when it moved [07 R-WGT-01 §5 "Pointer"].
+// moveRetailSliderAt clamps a knob into 0..travel-1 and runs the change
+// callback when it moved [07 R-WGT-01 §5 "Pointer"].
 func (g *gameShell) moveRetailSliderAt(index int, s *retailSliderState, knob int) {
 	if s == nil {
 		return
@@ -1606,88 +1582,6 @@ func (g *gameShell) moveRetailSliderAt(index int, s *retailSliderState, knob int
 	}
 	s.knob = knob
 	g.commitRetailSliderValue(index, s)
-}
-
-// moveRetailSlider is the explicit named-operation adapter. It retains the
-// GUI family's bounded first-match semantics; fired widget callbacks use the
-// indexed moveRetailSliderAt path above.
-func (g *gameShell) moveRetailSlider(name string, s *retailSliderState, knob int) {
-	if optionsPanel == nil {
-		return
-	}
-	g.moveRetailSliderAt(optionsPanel.Index(name), s, knob)
-}
-
-// clickRetailSlider takes the capture when the press lands inside the knob
-// rectangle. A press on the track beside the knob captures but does not move
-// it, and a press on an arrow is handled on release [07 R-WGT-01 §5].
-func (g *gameShell) clickRetailSlider(index int, r gui.Rect, x, y int32) bool {
-	s := g.retailOptionsSliderAt(index)
-	if s == nil {
-		return false
-	}
-	coordinate := int(x)
-	_ = y
-	// The knob rectangle is (gx+1+knob, gy+1)-(gx+1+knob+knobsize, gy+h-1) over
-	// the bar the synthesis shrank and shifted right by one arrow width
-	// [07 R-WGT-01 §5 "The knob rectangle"].
-	barX := int(r.X) + s.arrowW
-	knobStart := barX + 1 + s.knob
-	if coordinate < knobStart || coordinate >= knobStart+s.knobSize {
-		return true
-	}
-	optionsState.drag = retailSliderDrag{active: true, index: index, startCoord: coordinate, startKnob: s.knob}
-	return true
-}
-
-// releaseRetailSlider consumes the release that ended a drag, so the arrow
-// step below it does not also fire when the pointer was dragged past the end of
-// the track [07 R-WGT-01 §5 "Pointer"].
-func (g *gameShell) releaseRetailSlider(index int) bool {
-	if g.retailOptionsSliderAt(index) == nil {
-		return false
-	}
-	if optionsState.drag.ended || optionsState.drag.active {
-		optionsState.drag = retailSliderDrag{}
-		return true
-	}
-	return false
-}
-
-// updateRetailSliderDrag maps pointer displacement onto the knob:
-// `knob := savedKnob + (pointer - savedPointer)` on the bar's axis
-// [07 R-WGT-01 §5 "Pointer"].
-func (g *gameShell) updateRetailSliderDrag(mouse *input.MouseState) bool {
-	if optionsState == nil || !optionsState.drag.active {
-		return false
-	}
-	if mouse == nil || !mouse.Held(input.MouseButtonLeft) {
-		optionsState.drag = retailSliderDrag{ended: true}
-		return true
-	}
-	index := optionsState.drag.index
-	s := optionsState.sliders[index]
-	if s == nil {
-		optionsState.drag = retailSliderDrag{ended: true}
-		return true
-	}
-	g.moveRetailSliderAt(index, s, optionsState.drag.startKnob+(int(mouse.X)-optionsState.drag.startCoord))
-	return true
-}
-
-// adjustRetailSlider is the synthesised arrow buttons' step: the knob moves by
-// one while the pointer is before or after the knob rectangle and the button
-// is held [07 R-WGT-01 §5 "Pointer"].
-func (g *gameShell) adjustRetailSlider(index int, delta int) bool {
-	s := g.retailOptionsSliderAt(index)
-	if s == nil {
-		return false
-	}
-	if optionsState.drag.active {
-		return true
-	}
-	g.moveRetailSliderAt(index, s, s.knob+delta)
-	return true
 }
 
 func retailOptionsPageKey(name string) (string, bool) {

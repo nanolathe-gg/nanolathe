@@ -1,13 +1,10 @@
 // This file: transport admission [04 §10.2], the nine rejects.
 //
 // Admission predicate for (carrier, candidate) per [04 §10.2] "Admission."
-// The effective boarding range is the first enabled weapon slot's range
-// scanned via the weapon-slot enabled flag; shipped unarmed fallback is 16 [04 §10.2].
 
 package movement
 
 import (
-	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
@@ -163,66 +160,16 @@ func (s *System) CanTransport(carrierHandle, candidateHandle pool.Handle, w *uni
 	return AdmissionResult{Allowed: true, Reason: ""}
 }
 
-// BoardingRange returns the effective boarding range for carrier [04 §10.2].
-// First enabled weapon slot's range scanned via weapon-slot enabled flag; shipped unarmed fallback is weapon record 0 (NOWEAPON, Range 16) [04 §10.2].
-func BoardingRange(u *units.Unit) int32 {
-	if u == nil {
-		return 16
-	}
-	// Scan slots 0..2 for first populated weapon [06 §1.2] C1
-	for i := 0; i < 3; i++ {
-		slot := u.SlotAt(i)
-		if slot != nil && slot.Weapon != nil {
-			return slot.Weapon.Range
-		}
-		if u.Def != nil {
-			var wDef *struct{ Range int32 }
-			// Try def's direct weapon link if slots not yet wired. Only active links
-			// count; the record-0 inactive sentinel a missed link resolves to is
-			// not a weapon [02 §5 R-CONTENT-02].
-			switch i {
-			case 0:
-				if !content.IsWeaponInactive(u.Def.Weapon1Def) {
-					return u.Def.Weapon1Def.Range
-				}
-			case 1:
-				if !content.IsWeaponInactive(u.Def.Weapon2Def) {
-					return u.Def.Weapon2Def.Range
-				}
-			case 2:
-				if !content.IsWeaponInactive(u.Def.Weapon3Def) {
-					return u.Def.Weapon3Def.Range
-				}
-			}
-			_ = wDef
-		}
-	}
-	return 16 // NOWEAPON fallback [04 §10.2]
-}
-
-// Admission helpers exposed for orders compatibility (prefer movement side) [04 §10.2].
-
-// IsTransportableForOrders is the light predicate used by orders.Resolve: stub uses CantBeTransported [04 §10.2].
-// Full admission is CanTransport above.
-func IsTransportableForOrders(u *units.Unit) bool {
-	if u == nil || u.Def == nil {
-		return false
-	}
-	return !u.Def.CantBeTransported
-}
-
-// CanLoadForOrders reports carrier canload [04 §10.2].
-func CanLoadForOrders(u *units.Unit) bool {
-	if u == nil || u.Def == nil {
-		return false
-	}
-	return u.Def.CanLoad
-}
-
-// IsAirBaseForOrders reports pad detection via IsAirBase [02 "Unit record"][04 §10.2].
-func IsAirBaseForOrders(u *units.Unit) bool {
-	if u == nil || u.Def == nil {
-		return false
-	}
-	return u.Def.IsAirBase
-}
+// The nine rejects above are the whole load gate. Two things retail states
+// about loading have no consumer in this build, and neither is implemented
+// here rather than half-implemented:
+//
+//   - The effective boarding range — the first enabled weapon slot's range,
+//     with the shipped unarmed fallback of the inactive weapon record's 16
+//     [04 §10.2] — gates nothing: no command path tests a distance before
+//     admitting a load.
+//   - The three one-line definition reads the resolver needs (`cantbetransported`,
+//     `canload`, `isairbase`) belong to internal/orders, which cannot call into
+//     this package — internal/movement imports internal/orders, not the other
+//     way round — so the resolver reads its own definition fields and this file
+//     offers no forwarding twin that would drift from them.

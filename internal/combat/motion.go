@@ -568,18 +568,6 @@ func InitMeteor(p *Projectile, w *content.WeaponDef, now uint32, pos, vel Vec3) 
 	// `Speed = 0` writes that stood here were writes retail does not make.
 }
 
-// InitProjectile reconstructs a projectile event using the event creator
-// ladder [06 §6.2] C15. Live unit fire carries its executor-selected family.
-// Returns the creation family used; nil weapon returns CreationNone.
-// slotDistance and gravity are the ballistic creator's two extra operands, and
-// dropperHeading/dropperSpeed are the dropped creator's two; each pair is
-// ignored by every other family [06 §6.4].
-func InitProjectile(p *Projectile, w *content.WeaponDef, now uint32, muzzle, target Vec3, targetUnit pool.Handle, yaw, pitch numeric.Angle, meteorVel *Vec3, slotDistance int32, gravity numeric.Fixed, dropperHeading numeric.Angle, dropperSpeed numeric.Fixed) CreationFamily {
-	fam := CreationFamilyForWeapon(w)
-	initProjectileFamily(fam, p, w, now, muzzle, target, targetUnit, yaw, pitch, meteorVel, slotDistance, gravity, dropperHeading, dropperSpeed)
-	return fam
-}
-
 // Carry the selected creator through initialization without reapplying the
 // reconstruction flag ladder to a live-fire selection [06 §6.2].
 func initProjectileFamily(fam CreationFamily, p *Projectile, w *content.WeaponDef, now uint32, muzzle, target Vec3, targetUnit pool.Handle, yaw, pitch numeric.Angle, meteorVel *Vec3, slotDistance int32, gravity numeric.Fixed, dropperHeading numeric.Angle, dropperSpeed numeric.Fixed) {
@@ -734,13 +722,6 @@ func AdvanceMeteor(p *Projectile, w *content.WeaponDef, tick uint32) AdvanceResu
 // Case7 Jitter helpers use CRT stream, not sim [P1-07][P1-08 §2.10] [06 §6.10].
 // Each segment draws rand()*11/0x8000-5 per axis (3 axes per segment per pass,
 // 2 passes) via CRT *214013+2531011 [P1-08 §5]. This does not affect lockstep.
-
-// StateBits helpers for the projectile record's state byte [P1-08 §2.8]
-const (
-	StateDead      = 0x02 // state byte &2 dead [P1-08 §2.8][P1-07]
-	StateBeamLatch = 0x01 // state byte &1 beam latch [P1-08 §2.8]
-	StateTwoPhase  = 0x30 // state byte &0x30 two-phase state (bits 0x10|0x20) [P1-08 §2.8]
-)
 
 // GuidanceEnv carries the live lookups the guidance target-point helper of
 // [06 §6.7] needs to resolve a record's retained references, plus the terrain

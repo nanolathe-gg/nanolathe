@@ -502,3 +502,10 @@ func accountName(i int) string {
 
 // Ensure math import is used (for Double round-trip in earlier tests).
 var _ = math.Float64bits
+
+// Count and Warnings are read only by this package's tests: production walks
+// Accounts() and surfaces a malformed bank through the decode errors rather
+// than through the open-time diagnostic list.
+func (b *Bank) Count() int { return len(b.accounts) }
+
+func (b *Bank) Warnings() []string { return append([]string(nil), b.warnings...) }

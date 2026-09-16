@@ -618,10 +618,6 @@ func (c *Client) modelCursor(key modelTextureKey, ref texRef) *modelTextureCurso
 	return p
 }
 
-func (c *Client) modelAnimatedFrame(ref texRef, kind uint8, id uint64) *formats.GAFFrame {
-	return c.modelAnimatedFrameAt(ref, kind, id, 0, 0)
-}
-
 // modelAnimatedFrameAt resolves the cursor for one concrete model primitive.
 // In explicit standalone preview setup, a repeated texture on two primitives
 // still receives two playback players. Battle composition uses the loaded
@@ -657,26 +653,6 @@ func projectilePresentationID(v frame.ProjectileView) uint64 {
 		return v.PresentationID
 	}
 	return uint64(v.Handle)
-}
-
-// animatedGAFFrame is the separate feature sprite/event cursor adapter; it is
-// not part of the loaded-3DO phase-7 registry.
-func (c *Client) animatedGAFFrame(key string, id uint64, entry *formats.GAFEntry) *formats.GAFFrame {
-	if entry == nil || len(entry.Frames) <= 1 {
-		if entry != nil && len(entry.Frames) == 1 {
-			return entry.Frames[0].Frame
-		}
-		return nil
-	}
-	if id == 0 {
-		// Not a retail question: FeatureView carries no published stable
-		// identity for this animated sequence, so every feature would share
-		// cursor zero and step in lockstep. Suppressing is the honest answer
-		// until the publication boundary carries an identity.
-		return nil
-	}
-	ref := texRef{kind: texAnimated, key: key, entry: entry, frame: entry.Frames[0].Frame}
-	return c.modelAnimatedFrame(ref, modelCursorFeature, id)
 }
 
 // String names the texture kind for diagnostics.

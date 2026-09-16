@@ -134,29 +134,3 @@ func finishRestoredBattleEntry(s *Session) error {
 	s.battleEntryTailDone = true
 	return nil
 }
-
-// restoredComputerSlots reports the slots that hold a dispatchable computer
-// player after a restore: a manager exists and the restored controller byte is
-// the computer value [08 R-AI-01 §1]. It exists so callers (and the round-trip
-// gate) can name the slots retail would have put back to work without
-// duplicating the controller rule.
-//
-// Its one caller is the retail-tagged round-trip gate, which an untagged
-// `deadcode` sweep does not compile — CL-5 deleted this as unreachable on that
-// evidence and the tagged gate caught it. The tagged tier is the one that
-// decides whether a helper has a caller.
-func restoredComputerSlots(s *Session) []uint8 {
-	if s == nil || s.Econ == nil {
-		return nil
-	}
-	out := make([]uint8, 0, len(s.AI))
-	for i := range s.AI {
-		if s.AI[i] == nil || i >= len(s.Econ.Players) {
-			continue
-		}
-		if s.Econ.Players[i].Exists && s.Econ.Players[i].ControllerState == 2 {
-			out = append(out, uint8(i))
-		}
-	}
-	return out
-}

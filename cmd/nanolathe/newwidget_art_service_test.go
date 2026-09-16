@@ -152,7 +152,7 @@ func TestMenuWidgetPainterRepaintsOutsideCapture(t *testing.T) {
 
 // input.MouseButtonLeft is already the service's left capture bit. This locks
 // the adapter/painter boundary against an accidental +1 conversion.
-func TestRetailButtonPressedUsesRawCaptureBits(t *testing.T) {
+func TestPaintedPressedStateUsesRawCaptureBits(t *testing.T) {
 	p := ui.NewPanel(&gui.Window{Gadgets: []gui.Gadget{{Kind: gui.KindPanel}, {
 		Kind: gui.KindButton, Active: 1, Rect: gui.Rect{W: 10, H: 10},
 	}}})
@@ -162,14 +162,18 @@ func TestRetailButtonPressedUsesRawCaptureBits(t *testing.T) {
 		t.Fatal(err)
 	}
 	cl.Input().Mouse.SetButton(input.MouseButtonLeft, true)
-	if !retailButtonPressed(cl, p, 1) {
+	// The widget service owns this word, including drag-out/return and toggle
+	// state; painting reads it and never a second live-pointer predicate
+	// [07 R-WGT-01 §3], which is why the client's own mouse state above must
+	// not matter to it.
+	if p.DownAt(1) == 0 {
 		t.Fatal("left capture bit 1 was not painted as pressed")
 	}
 	p.ResetPress()
 	p.ServiceFrame(ui.WidgetFrame{PointerX: 2, PointerY: 2, HeldButtons: 2, PointerEvents: []input.PointerEvent{{Kind: input.RightDown, X: 2, Y: 2}}}, ui.WidgetHooks{})
 	cl.Input().Mouse.SetButton(input.MouseButtonLeft, false)
 	cl.Input().Mouse.SetButton(input.MouseButtonRight, true)
-	if !retailButtonPressed(cl, p, 1) {
+	if p.DownAt(1) == 0 {
 		t.Fatal("right capture bit 2 was not painted as pressed")
 	}
 }
@@ -467,9 +471,6 @@ func TestModalInputUsesWidgetDownState(t *testing.T) {
 	shell.modalInput(cl)
 	if got := p.DownAt(1); got != 1 {
 		t.Fatalf("modal down-state=%d, want armed", got)
-	}
-	if !retailButtonPressed(cl, p, 1) {
-		t.Fatal("modal capture was not visible to the button painter")
 	}
 	if got := shell.retailButtonArt(p.Window.Gadgets[1], p.DownAt(1), p.StageAt(1), false); got != shell.resolveRetailButtonArt(p.Window.Gadgets[1]).entry.Frames[1].Frame {
 		t.Fatal("modal down-state did not select the armed frame")

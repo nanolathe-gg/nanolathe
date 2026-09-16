@@ -554,7 +554,7 @@ func TestLayerSearchConsumptionOnlyZeroBlocks(t *testing.T) {
 	// The whole map is mapped for player 0, so the gate falls through to the
 	// packed terrain value everywhere [04 R-PATH-01 §2].
 	l.mapping = func(int32, int32) (uint16, bool) { return 0x03FF, true }
-	run := func(ring uint8) path.SearchResult {
+	run := func(ring uint8) oneShotResult {
 		// Paint the 8-neighbour enclosure of the start cell.
 		for z := int32(4); z <= 6; z++ {
 			for x := int32(4); x <= 6; x++ {
@@ -575,7 +575,7 @@ func TestLayerSearchConsumptionOnlyZeroBlocks(t *testing.T) {
 				return l.Passable(c.X, c.Z, 2, 2, 0)
 			},
 		}
-		return path.Search(cfg)
+		return oneShotSearch(cfg)
 	}
 	for _, ring := range []uint8{LayerSteep, LayerUnmapped, LayerClear} {
 		res := run(ring)

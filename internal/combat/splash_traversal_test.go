@@ -10,16 +10,6 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
-// floorDivInt is the sign-corrected division of [03 §2.1] I3, used here only to
-// place fixture footprints the way the occupancy stamper does.
-func floorDivInt(a, b int64) int64 {
-	q := a / b
-	if a%b != 0 && (a < 0) != (b < 0) {
-		q--
-	}
-	return q
-}
-
 // stampOccupancyPlane writes u's footprint rectangle into one of the plot
 // cell's two occupancy words, exactly as the movement stamper does for a
 // committed mover [04 R-COLL-01 §4][03 §2.2]: the anchor is
@@ -41,8 +31,8 @@ func stampOccupancyPlane(t *testing.T, terrain *world.Terrain, u *units.Unit, ai
 			footZ = u.Def.FootprintZ
 		}
 	}
-	ax := int32(floorDivInt(int64(u.X.Int())+8-int64(footX)*8, 16))
-	az := int32(floorDivInt(int64(u.Z.Int())+8-int64(footZ)*8, 16))
+	ax := int32(numeric.FloorDiv(int64(u.X.Int())+8-int64(footX)*8, 16))
+	az := int32(numeric.FloorDiv(int64(u.Z.Int())+8-int64(footZ)*8, 16))
 	for dz := int32(0); dz < footZ; dz++ {
 		for dx := int32(0); dx < footX; dx++ {
 			cell := terrain.PlotAt(ax+dx, az+dz)

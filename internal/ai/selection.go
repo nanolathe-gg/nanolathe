@@ -188,12 +188,6 @@ func ComputeScore(in ScoreInputs, cv ClassVector, weight int32) int32 {
 	return total * weight / 10000
 }
 
-// EnergyRaw is an exported accessor for TestScoreFormula to verify the worked intermediate [PLAN 11 Tests].
-func EnergyRaw(in ScoreInputs) int32 { return energyRaw(in) }
-
-// MetalRaw is an exported accessor for tests.
-func MetalRaw(in ScoreInputs) int32 { return metalRaw(in) }
-
 func buildOptionsForBuilder(m Selector, builder *units.Unit) []string {
 	b, ok := m.(interface{ GetCatalog() *content.Catalog })
 	if !ok || b == nil {

@@ -43,7 +43,7 @@ func TestCarrierStagingScaleAppliesDisplacementOnce(t *testing.T) {
 			if target.anchorX-parent.image.anchorX != tc.dx || target.anchorY-parent.image.anchorY != tc.dy {
 				t.Fatalf("raster displacement = (%d,%d), want (%d,%d)", target.anchorX-parent.image.anchorX, target.anchorY-parent.image.anchorY, tc.dx, tc.dy)
 			}
-			image := newStagingImage(parent.image, []stagingChild{staged})
+			image := stagingImage(parent.image, []stagingChild{staged}, newModelImage)
 			image.compositeChild(&target, staged.keyDelta)
 			idx := int(image.imageY(target.anchorY))*image.width + int(image.imageX(target.anchorX))
 			if image.color[idx] != 20 || image.height[idx] != 67 {

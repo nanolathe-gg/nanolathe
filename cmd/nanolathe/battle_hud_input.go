@@ -83,20 +83,6 @@ func (h *retailBattleHUD) dispatchFactoryBuild(b *battleSession, product string,
 	return b.DispatchFactoryBuildDelta(product, count)
 }
 
-// consumeClick applies the retail order-button latch parser and data-driven build
-// product binding to a visible authored side-panel button [R-P0-03][07 §9].
-// Build products are validated against cat.BuildMenus (no invention) and
-// dispatched via injected callbacks: mobile builders arm placement (definition
-// retained, cursorfindsite [07 §8] 0xE), factories queue immediately [F-P1-008].
-// Order buttons are bound via ParseButtonLatch and handleHudOrderButton which
-// routes through the injected command dispatch [R-P0-03]. Any HUD gadget hit
-// is consumed to prevent leak into world drag [07 §3][F-P0-003]. Page next/prev
-// are data-driven with count guard [R-P0-03][07 §9] C10.
-func (h *retailBattleHUD) consumeClick(b *battleSession, x, y int32) bool {
-	shift := b != nil && b.battleState() != nil && b.battleState().Input.ShiftHeld
-	return h.consumeClickDelta(b, x, y, false, input.Modifiers{Shift: shift})
-}
-
 func (h *retailBattleHUD) consumeClickWithModifiers(b *battleSession, x, y int32, modifiers input.Modifiers) bool {
 	return h.consumeClickDelta(b, x, y, false, modifiers)
 }

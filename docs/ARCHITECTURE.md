@@ -371,6 +371,31 @@ would report their targets as unused. A retail diagnostic string that trips
 `ST1005` carries `//lint:ignore ST1005 retail text` with its citation. `internal/testsupport.RetailRoot` is
 the single place a test consults those variables and skips.
 
+**Unused-code ratchets.** The `-test` deadcode run above says only that some
+test reaches a function, so a production surface nothing ships can grow
+indefinitely without a gate going red. Two shrink-only lists close that.
+`tools/lint` adds a second deadcode run *without* `-test`, so only the `main`
+packages are roots; its output is rendered through `-f` as `<package> <name>`
+with no file positions, and compared against `tools/deadcode-baseline.txt`. A
+new production-unreachable function fails, and so does a baseline row that has
+become reachable or disappeared — wire it, move it into a `_test.go` /
+`export_test.go` file, or add the row with its reason in the commit message.
+Regenerate with `tools/lint --update-baseline` (or `NANOLATHE_UPDATE_BASELINE=1
+tools/lint`). The companion guard,
+`internal/architecture.TestNoUnreferencedExported`, covers what deadcode cannot
+see at all: an exported const, var, type, func or struct field whose name
+occurs nowhere in the module but its own declaration. It runs in the fast tier,
+parses every file with `go/parser` under every build tag including tests and
+generated files, and is deliberately name-based — a same-named identifier in an
+unrelated package counts as a use, and a field is spared by a positional
+composite literal, a struct tag or embedding — so it under-reports rather than
+accusing live code. Methods are out of scope, because one reached through
+`fmt`, `encoding` or interface satisfaction is never named at the call site. Its
+list is `internal/architecture/unreferenced_exported_allow.txt`, where an entry
+kept on purpose carries a trailing `# reason`; regenerate with
+`NANOLATHE_UPDATE_ALLOWLIST=1 go test ./internal/architecture -run
+TestNoUnreferencedExported`, which preserves those reasons.
+
 **GPU device fixtures.** `tools/check-retail` finishes with the modern
 executor's authored pixel fixtures — the only pixel-level lock on the model
 lane, the pass scheduler and the Enhanced effect layers — run as a separate

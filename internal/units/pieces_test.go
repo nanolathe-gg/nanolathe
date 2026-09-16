@@ -110,16 +110,10 @@ func TestUnitRenderFlagOpcodesToggleExactlyOneBit(t *testing.T) {
 		},
 		Root: 0,
 	}
-	prog := &cob.Program{
-		Code:        []uint32{0x10065000}, // dummy, will be replaced per subtest
-		Scripts:     map[string]int{"Test": 0},
-		Pieces:      []string{"base", "arm"},
-		ScriptsByID: []int{0},
-		Statics:     0,
-	}
-	// Build unit flags prog-mapped [04 §"Piece flag polarity"].
-	// For identity names, prog-mapped equals model walk.
-	flags := BuildRenderPieceFlagsForProgram(mdl, prog, nil)
+	// The flags the unit constructor installs are the model walk
+	// [04 §"Piece flag polarity"]; this program's piece names are the model's
+	// own, in the model's order, so the prog index and the model index agree.
+	flags := BuildRenderPieceFlags(mdl)
 	if len(flags) != 2 {
 		t.Fatalf("flags len %d", len(flags))
 	}

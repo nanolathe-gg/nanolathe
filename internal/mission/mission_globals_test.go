@@ -30,34 +30,34 @@ func TestMissionGlobalCensus(t *testing.T) {
 	needPres := []string{"Planet", "brief", "MissionDescription"}
 	needInert := []string{"memory", "nomovie"}
 	for _, k := range needAuth {
-		if !IsAuthoritative(k) {
+		if !isAuthoritativeKey(k) {
 			t.Fatalf("authoritative key %q not classified [P1-02 §2.1]", k)
 		}
 	}
 	for _, k := range needPres {
-		if !IsPresentation(k) {
+		if !isPresentationKey(k) {
 			t.Fatalf("presentation key %q not classified", k)
 		}
 	}
 	for _, k := range needInert {
-		if !IsInert(k) {
+		if !isInertKey(k) {
 			t.Fatalf("inert key %q not classified", k)
 		}
 	}
 	// Fatal vs degrade: TNT fatal, MOVEINFO fatal, translate not fatal, panorama degrade, GAMEDATA not fatal [P1-02 §2.2].
-	if MediaFatal("tnt") != FatalKindFatal {
+	if mediaFatal("tnt") != FatalKindFatal {
 		t.Fatalf("TNT version fatal [P1-02 §2.2]")
 	}
-	if MediaFatal("moveinfo.tdf") != FatalKindFatal {
+	if mediaFatal("moveinfo.tdf") != FatalKindFatal {
 		t.Fatalf("MOVEINFO fatal [P1-02 §2.2]")
 	}
-	if MediaFatal("translate.tdf") != FatalKindNotFatal {
+	if mediaFatal("translate.tdf") != FatalKindNotFatal {
 		t.Fatalf("translate.tdf not fatal empty fallback [P1-02 §2.2]")
 	}
-	if MediaFatal("gamedata.tdf") != FatalKindNotFatal {
+	if mediaFatal("gamedata.tdf") != FatalKindNotFatal {
 		t.Fatalf("GAMEDATA.TDF SC2 not fatal [P1-02 §2.2][SPEC_CONFLICTS SC2]")
 	}
-	if MediaFatal("panorama") != FatalKindDegrade {
+	if mediaFatal("panorama") != FatalKindDegrade {
 		t.Fatalf("panorama miss degraded [P1-02 §2.2]")
 	}
 	// Ensure every census entry has a class.
@@ -233,11 +233,11 @@ func TestMissionGlobalsAuthoritativeDecoding(t *testing.T) {
 		t.Fatalf("UseOnlyUnits routing camps\\useonly [P1-02 §2.1] got %q", mg.UseOnlyUnitsPath)
 	}
 	// Memory is inert, not authoritative.
-	if !IsInert("memory") || IsAuthoritative("memory") {
+	if !isInertKey("memory") || isAuthoritativeKey("memory") {
 		t.Fatalf("memory inert vs authoritative [P1-02 §2.1]")
 	}
 	// Lava/water authoritative per census.
-	if !IsAuthoritative("lavaworld") || !IsAuthoritative("waterdoesdamage") {
+	if !isAuthoritativeKey("lavaworld") || !isAuthoritativeKey("waterdoesdamage") {
 		t.Fatalf("lava/water authoritative [P1-02 §2.1]")
 	}
 }
@@ -245,20 +245,20 @@ func TestMissionGlobalsAuthoritativeDecoding(t *testing.T) {
 // TestPlanetPanoramaFallback verifies optional-media fallback degraded not fatal [P1-02 §2.2].
 func TestPlanetPanoramaFallback(t *testing.T) {
 	// Known planet
-	if idx := PlanetIndex("Green planet"); idx != 0 {
+	if idx := planetIndex("Green planet"); idx != 0 {
 		t.Fatalf("Green planet index 0 got %d", idx)
 	}
-	if _, _, _, ok := ResolvePlanetMedia("Green planet"); !ok {
+	if _, _, _, ok := resolvePlanetMedia("Green planet"); !ok {
 		t.Fatalf("Green planet should resolve [P1-02 §2.1]")
 	}
 	// Unknown planet → -1 and no GAF, degraded not fatal [P1-02 §2.2].
-	if idx := PlanetIndex("UnknownPlanet42"); idx != -1 {
+	if idx := planetIndex("UnknownPlanet42"); idx != -1 {
 		t.Fatalf("unknown planet should be -1 [P1-02 §2.2] got %d", idx)
 	}
-	if _, _, _, ok := ResolvePlanetMedia("UnknownPlanet42"); ok {
+	if _, _, _, ok := resolvePlanetMedia("UnknownPlanet42"); ok {
 		t.Fatalf("unknown planet should not resolve [P1-02 §2.2]")
 	}
-	if MediaFatal("panorama") != FatalKindDegrade {
+	if mediaFatal("panorama") != FatalKindDegrade {
 		t.Fatalf("panorama miss degraded not fatal [P1-02 §2.2]")
 	}
 	// Brief empty still loads; panorama missing leaves visual absent [P1-02 §2.2].
@@ -276,10 +276,10 @@ func TestPlanetPanoramaFallback(t *testing.T) {
 
 // TestTranslateAndGAMEDATANotFatal verifies SC2 and translate fallback [P1-02 §2.2].
 func TestTranslateAndGAMEDATANotFatal(t *testing.T) {
-	if MediaFatal("translate.tdf") != FatalKindNotFatal {
+	if mediaFatal("translate.tdf") != FatalKindNotFatal {
 		t.Fatalf("translate.tdf empty fallback not fatal [P1-02 §2.2]")
 	}
-	if MediaFatal("gamedata.tdf") != FatalKindNotFatal {
+	if mediaFatal("gamedata.tdf") != FatalKindNotFatal {
 		t.Fatalf("GAMEDATA.TDF SC2 not fatal [P1-02 §2.2][SPEC_CONFLICTS SC2]")
 	}
 	// Ensure inert keys still decode without fatal.
@@ -300,7 +300,7 @@ func TestFallbackCensusEnsuresPresent(t *testing.T) {
 	// Verify that presentation keys at least have degraded handling.
 	keys := []string{"Planet", "brief", "narration", "missionhint", "glamour", "panorama"}
 	for _, k := range keys {
-		if MediaFatal(k) == FatalKindFatal {
+		if mediaFatal(k) == FatalKindFatal {
 			// Presentation keys should not be fatal.
 			// Only TNT/MOVEINFO are fatal among globals [P1-02 §2.2].
 			// Allow Planet to be degrade, not fatal.
@@ -337,5 +337,90 @@ func TestMissionDescriptionAuthoredEmptyStaysEmpty(t *testing.T) {
 	}
 	if authoredEmpty.MissionDescription != "" {
 		t.Fatalf("a present key is a bounded copy of the stored text [02 §4]; got %q", authoredEmpty.MissionDescription)
+	}
+}
+
+// The mission-global census is a documentation table with no tick reader.
+// These query helpers live with the test that pins the classification, the
+// planet-table triple and the media fatality policy; no shipped path calls
+// them [P1-02 §2.1] [P1-02 §2.2].
+
+// isAuthoritativeKey reports whether key is authoritative (simulation) [P1-02 §2.1].
+func isAuthoritativeKey(key string) bool {
+	for _, e := range MissionGlobalCensus {
+		if strings.EqualFold(e.Key, key) && e.Class == GlobalAuthoritative {
+			return true
+		}
+	}
+	return false
+}
+
+// isPresentationKey reports whether key is presentation-only [P1-02 §2.1].
+func isPresentationKey(key string) bool {
+	for _, e := range MissionGlobalCensus {
+		if strings.EqualFold(e.Key, key) && e.Class == GlobalPresentation {
+			return true
+		}
+	}
+	return false
+}
+
+// isInertKey reports whether key is inert (no tick reader) [P1-02 §2.1].
+func isInertKey(key string) bool {
+	for _, e := range MissionGlobalCensus {
+		if strings.EqualFold(e.Key, key) && e.Class == GlobalInert {
+			return true
+		}
+	}
+	return false
+}
+
+// planetIndex returns the planet-table index for the planet string, matched
+// case-insensitively [P1-02 §2.1], or -1 when unknown → presentation leaves
+// empty but game still loads degraded not fatal [P1-02 §2.2].
+func planetIndex(planet string) int {
+	planet = strings.TrimSpace(planet)
+	for i, name := range PlanetNames {
+		if strings.EqualFold(name, planet) {
+			return i
+		}
+	}
+	return -1 // unknown → no pan/rotate fetched, no abort [P1-02 §2.2]
+}
+
+// resolvePlanetMedia resolves brief/pan/rotate GAF keys for planet enum [P1-02 §2.1]
+// via the planet-table triple. Returns empty when planet unknown (degrade) [P1-02 §2.2].
+func resolvePlanetMedia(planet string) (briefKey, panKey, rotateKey string, ok bool) {
+	idx := planetIndex(planet)
+	if idx < 0 {
+		return "", "", "", false // unknown planet → no GAF, degraded not fatal [P1-02 §2.2]
+	}
+	return PlanetBriefKeys[idx], PlanetPanKeys[idx], PlanetRotateKeys[idx], true
+}
+
+// mediaFatal reports whether missing media for key is fatal [P1-02 §2.2].
+func mediaFatal(key string) FatalKind {
+	lower := strings.ToLower(strings.TrimSpace(key))
+	switch lower {
+	case "tnt", "version", "idversion":
+		return FatalKindFatal // mandatory TNT version 0x2000/0x1020 fatal [P1-02 §2.2][fmt tnt]
+	case "moveinfo", "moveinfo.tdf":
+		return FatalKindFatal // Can't load MOVEINFO.TDF fatal [P1-02 §2.2]
+	case "translate.tdf":
+		return FatalKindNotFatal // empty fallback not fatal byte-exact [P1-02 §2.2][02 §3]
+	case "gamedata.tdf":
+		return FatalKindNotFatal // SC2 not fatal, no file anywhere [P1-02 §2.2][SPEC_CONFLICTS SC2]
+	case "panorama", "brief", "pan", "rotate", "glamour":
+		return FatalKindDegrade // optional media leaves visual absent [P1-02 §2.2] G1 §4
+	case "sound", "soundcategory":
+		return FatalKindDegrade // SC7 diverge muted not fatal [P1-02 §2.2][SPEC_CONFLICTS SC7]
+	default:
+		// Check global census entry
+		for _, e := range MissionGlobalCensus {
+			if strings.EqualFold(e.Key, key) {
+				return e.Fatal
+			}
+		}
+		return FatalKindDegrade
 	}
 }

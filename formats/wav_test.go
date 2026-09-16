@@ -9,7 +9,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
-func TestWAVDecodesPCMMetadataAndDuration(t *testing.T) {
+func TestWAVDecodesPCMMetadata(t *testing.T) {
 	data := make([]byte, 48)
 	copy(data[0:4], "RIFF")
 	binary.LittleEndian.PutUint32(data[4:], 40)
@@ -28,7 +28,7 @@ func TestWAVDecodesPCMMetadataAndDuration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if wav.AudioFormat != 1 || wav.Channels != 1 || wav.SampleRate != 11025 || wav.DataSize != 4 || wav.Duration().Nanoseconds() == 0 {
+	if wav.AudioFormat != 1 || wav.Channels != 1 || wav.SampleRate != 11025 || wav.DataSize != 4 {
 		t.Fatalf("WAV metadata = %+v", wav)
 	}
 }
@@ -83,7 +83,7 @@ func TestLoadAudioNormalizesRetailLegacyContainers(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer fs.Close()
-	fileAudio, err := LoadWAVFile(fs, "legacy.wav")
+	fileAudio, err := LoadAudio(readMountedFile(t, fs, "legacy.wav"))
 	if err != nil || fileAudio.Container != "raw" {
 		t.Fatalf("file-based legacy audio = %+v, %v", fileAudio, err)
 	}

@@ -123,7 +123,7 @@ func framePixelsClassic(cw, ch, rMinX, rMinY, rMaxX, rMaxY, clipMinX, clipMinY, 
 		if y < clipMinY || y > clipMaxY {
 			return
 		}
-		for x := maxInt(rMinX, clipMinX); x <= minInt(rMaxX, clipMaxX); x++ {
+		for x := max(rMinX, clipMinX); x <= min(rMaxX, clipMaxX); x++ {
 			write(x, y)
 		}
 	}
@@ -131,7 +131,7 @@ func framePixelsClassic(cw, ch, rMinX, rMinY, rMaxX, rMaxY, clipMinX, clipMinY, 
 		if x < clipMinX || x > clipMaxX {
 			return
 		}
-		for y := maxInt(rMinY, clipMinY); y <= minInt(rMaxY, clipMaxY); y++ {
+		for y := max(rMinY, clipMinY); y <= min(rMaxY, clipMaxY); y++ {
 			write(x, y)
 		}
 	}

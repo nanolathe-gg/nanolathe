@@ -2,6 +2,8 @@
 
 package visibility
 
+import "github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+
 // FogCache is presentation-only fog [03 §3.3] C13. Its validity is solely
 // Service.mode bit 3; the cache itself never carries a second validity flag.
 type FogCache struct {
@@ -161,10 +163,10 @@ func (f *FogCache) SetChannel(x, y int32, c0, c1 uint8) {
 // four conditional border fixups when the window crosses a map edge — never an unconditional 15 store [03 §3.3] "Map-edge propagation".
 // Corner→bit 1=NW,2=NE,4=SW,8=SE remains supported inference pending asymmetric probe [03 §3.3].
 // Camera residues/offX are used for viewport-sized cache alignment; for Nanolathe's map-sized cache we generate for the whole map and
-// let BuildFogOps handle viewport clipping via hard 32 edges [03 §3.3] C13 — viewport edge forcing is therefore a render-time concern
+// let BuildFogOpsWindowWithArtInto handle viewport clipping via hard 32 edges [03 §3.3] C13 — viewport edge forcing is therefore a render-time concern
 // and the cache remains map-aligned. That is a deliberate layout divergence, not
 // an open retail question: [03 §3.3] establishes the residues and the hard-32
-// edge forcing, and BuildFogOps applies both at viewport clip time, so a
+// edge forcing, and BuildFogOpsWindowWithArtInto applies both at viewport clip time, so a
 // map-aligned cache produces the same ops a viewport-aligned one would.
 func (s *Service) RebuildFog(cameraX, cameraY int32) {
 	if s == nil || s.fog.ch0 == nil || s.mode.FogCacheValid() {
@@ -186,10 +188,10 @@ func (s *Service) RebuildFogWindow(cameraX, cameraZ, viewW, viewH int32) {
 		return
 	}
 	// Window cells cover the camera viewport and one border cell on each side.
-	startX := floorDivFog(cameraX-16, 32) - 1
-	startZ := floorDivFog(cameraZ-16, 32) - 1
-	endX := floorDivFog(cameraX+viewW-16+31, 32) + 1
-	endZ := floorDivFog(cameraZ+viewH-16+31, 32) + 1
+	startX := numeric.FloorDiv(cameraX-16, 32) - 1
+	startZ := numeric.FloorDiv(cameraZ-16, 32) - 1
+	endX := numeric.FloorDiv(cameraX+viewW-16+31, 32) + 1
+	endZ := numeric.FloorDiv(cameraZ+viewH-16+31, 32) + 1
 	w, h := endX-startX, endZ-startZ
 	if w <= 0 || h <= 0 {
 		return
@@ -291,30 +293,9 @@ func (s *Service) RebuildFogWindow(cameraX, cameraZ, viewW, viewH int32) {
 	s.fogVersion++
 }
 
-func floorDivFog(a, b int32) int32 {
-	q := a / b
-	if a%b != 0 && (a < 0) != (b < 0) {
-		q--
-	}
-	return q
-}
-
-// MarkUnexplored implements C14: plot flag byte (PlotCell byte 0x0C) bit 0x04 set/clear [03 §3.3].
-// This helper operates on world.PlotCell flag byte; caller supplies flag pointer.
-// Height >=10 immediate mark is enforced by caller scanning feature height.
-func MarkUnexplored(flag *uint8, height int32) {
-	if flag == nil {
-		return
-	}
-	if height >= 10 {
-		*flag |= 0x04 // set |4 when tall feature skipped [C14]
-	}
-}
-
-// ClearUnexplored clears &0xFB when drawn [C14].
-func ClearUnexplored(flag *uint8) {
-	if flag == nil {
-		return
-	}
-	*flag &^= 0x04
-}
+// The plot flag byte's never-explored marker (byte 0x0C bit 0x04) of C14
+// [03 §3.3] has no writer here. Nothing in this build sets or clears it:
+// presentation answers "never explored" from the fog cache's channel-zero
+// solid value at the object's tile, and `world.PlotCell.IsUnexplored` is the
+// only reader. The set/clear pair that once stood here was called by nothing
+// but its own test.

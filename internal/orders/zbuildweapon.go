@@ -152,46 +152,11 @@ func buildWeaponHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) C
 	return Code(2) // hold preserves this deadline; code 3 would replace it
 }
 
-// StockpileCounts returns the UI-visible stockpile state for a unit: the
-// completed-round byte per slot and the queued remaining count from the
-// secondary BuildWeapon node that targets that slot [06 §11.1] C29. When no
-// stockpile weapon exists on the slot, ammo is zero and queued is zero. When
-// the unit has no secondary queue, queued is zero. The first return is ammo
-// per slot [NumSlots]int32, the second is queued count per slot.
-func StockpileCounts(u *units.Unit) ([units.NumSlots]int32, [units.NumSlots]int32) {
-	var ammo [units.NumSlots]int32
-	var queued [units.NumSlots]int32
-	if u == nil {
-		return ammo, queued
-	}
-	for i := 0; i < units.NumSlots; i++ {
-		if s := u.SlotAt(i); s != nil {
-			ammo[i] = s.Ammo // slot's byte-sized completed-round remainder [06 §1.2] [06 §11.1]
-		}
-	}
-	q := QueueForUnit(u)
-	if q == nil {
-		return ammo, queued
-	}
-	for _, n := range q.Secondary() {
-		if n == nil {
-			continue
-		}
-		if DescriptorFor(n.ID).Name != "BuildWeapon" {
-			continue
-		}
-		// The node's slot index is the node's own, verbatim, exactly as the
-		// handler reads it [06 R-WPN-05 §2]. The search that used to stand here
-		// mirrored the handler's invented fallback and reported a count under a
-		// slot the producer never named; an out-of-range index belongs to no
-		// slot and is shown under none.
-		idx := int(n.Param1)
-		if idx >= 0 && idx < units.NumSlots {
-			queued[idx] += int32(n.Param2)
-		}
-	}
-	return ammo, queued
-}
+// There is no stockpile census here. The completed-round byte lives on the
+// slot and the outstanding count lives on the secondary `BuildWeapon` node's
+// own operands [06 §11.1] C29; a reader wanting the pair reads those two
+// places, which is what the publication boundary does, rather than a second
+// walk that could disagree with the handler about which slot a node names.
 
 // ensure BuildWeapon handler is registered after the descriptor table is built.
 func init() {

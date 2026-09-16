@@ -257,3 +257,20 @@ func TestMissingMandatoryFailsBeforeClientWithDiagnostic(t *testing.T) {
 		t.Fatalf("anchor error missing logical path sidedata: %v", err)
 	}
 }
+
+// newBattleSessionWithConfig is the lobby's composition in two calls: build the
+// fresh-battle request from the menu's setup, then compose the authoritative
+// battle. Production spells it out at each entry site (loading.go, shot.go,
+// headless.go), so there is no shipped wrapper to call [08 "Skirmish
+// configuration"] [R-CORE-02].
+func newBattleSessionWithConfig(opts Options, cs *contentSet, cfg session.SkirmishConfig) (*session.Session, *content.Catalog, error) {
+	request, err := skirmishBattleRequest(opts, cs, cfg, headlessScenarioSkirmish, nil, newBattleSeedSource(opts))
+	if err != nil {
+		return nil, nil, err
+	}
+	authoritative, err := composeAuthoritativeBattle(request)
+	if err != nil {
+		return nil, nil, err
+	}
+	return authoritative.Session, authoritative.Session.Catalog, nil
+}

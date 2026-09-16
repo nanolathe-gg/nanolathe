@@ -17,6 +17,40 @@ func (s displayedResourceStage) DrawUI(c *client.Client, f client.UIFrame) {
 	s.h.drawResources(c, f.Committed, f.Resources)
 }
 
+// uiTextStage records one text run and nothing else, through the same
+// Client.UIText the HUD's own painters call.
+type uiTextStage struct {
+	fnt   *formats.FNT
+	text  string
+	x, y  int
+	color byte
+}
+
+func (s uiTextStage) DrawUI(c *client.Client, _ client.UIFrame) {
+	c.UIText(s.fnt, s.text, s.x, s.y, s.color)
+}
+
+// rasterizeUIText composes a 640x480 indexed framebuffer holding only the given
+// text run. The expected pixels come from the production recorder and sink, so
+// a HUD row is compared against the same rasterizer that painted it rather than
+// against a second entry point into it.
+func rasterizeUIText(t *testing.T, fnt *formats.FNT, text string, x, y int, color byte) []byte {
+	t.Helper()
+	buf := frame.NewBuffer()
+	buf.BeginWrite()
+	if err := buf.Publish(1); err != nil {
+		t.Fatal(err)
+	}
+	c, err := client.New(client.Options{Width: 640, Height: 480, Buffer: buf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.SetFNT(fnt)
+	c.SetUIStage(uiTextStage{fnt: fnt, text: text, x: x, y: y, color: color})
+	c.BeginPresentationFrame()
+	return c.ComposeFrameSnapshot().Indexed
+}
+
 // The bars and current numbers share the eased pair; live stocks remain solely
 // the step target, and capacities stay live [07 R-HUD-03 §4].
 func TestResourcePainterUsesDisplayedPair(t *testing.T) {
@@ -61,8 +95,7 @@ func TestResourcePainterUsesDisplayedPair(t *testing.T) {
 		y    int
 		text string
 	}{{20, "100"}, {25, "10"}} {
-		want := make([]byte, 640*480)
-		client.DrawText(want, 640, 480, font, tc.text, 10, tc.y, 0, h.guiColor(15))
+		want := rasterizeUIText(t, font, tc.text, 10, tc.y, h.guiColor(15))
 		if !bytes.Equal(shot.Indexed[tc.y*640:(tc.y+1)*640], want[tc.y*640:(tc.y+1)*640]) {
 			t.Fatalf("number row %d is not displayed stock %s", tc.y, tc.text)
 		}
@@ -113,8 +146,7 @@ func TestResourcePainterUsesLatchedRatesAtDeadlineBoundary(t *testing.T) {
 				if row%2 == 1 {
 					color = h.guiColor(12)
 				}
-				want := make([]byte, 640*480)
-				client.DrawText(want, 640, 480, font, text, 20, y, 0, color)
+				want := rasterizeUIText(t, font, text, 20, y, color)
 				if !bytes.Equal(shot.Indexed[y*640:(y+1)*640], want[y*640:(y+1)*640]) {
 					t.Fatalf("tick %d rate row %d does not show latched %s", step.tick, row, text)
 				}

@@ -91,7 +91,7 @@ func TestPlacementRadiusUsesWorldUnitsAndPersistsFailure(t *testing.T) {
 	terrain := placementTerrain(16, 16, 0) // larger world extent is 256
 	m := makePlacementManager(cat, terrain, -1)
 	for i, want := range []int32{160, 320, 320} {
-		res := PlaceWithResult(m, "armmex", terrain)
+		res := placeWithResult(m, "armmex", terrain)
 		if res.Valid || res.Helper != HelperA || res.Reason != ReasonNoPatchData {
 			t.Fatalf("attempt %d=%+v", i, res)
 		}
@@ -108,7 +108,7 @@ func TestPlacementDeterministicCandidateAndRNG(t *testing.T) {
 		m := makePlacementManager(cat, terrain, 0)
 		r := rng.NewSimulation(991)
 		m.RNG = &r
-		res := PlaceWithResult(m, "armsolar", terrain)
+		res := placeWithResult(m, "armsolar", terrain)
 		return res, r.State, r.Draws()
 	}
 	a, stateA, drawsA := makeRun()
@@ -266,7 +266,7 @@ func TestScatterScoreIsTheTrialFootprintSumAndInclusive(t *testing.T) {
 		m := makePlacementManager(cat, terrain, 1) // limit 8, footprint sum 4
 		r := rng.NewSimulation(seed)
 		m.RNG = &r
-		return PlaceWithResult(m, "armsolar", terrain)
+		return placeWithResult(m, "armsolar", terrain)
 	}
 	first := run(44)
 	// The limit test compares the valid trial's own footprint metal-byte sum,
@@ -285,7 +285,7 @@ func TestPlacementSuccessResetsRadiusBeforeQueueFailure(t *testing.T) {
 	m := makePlacementManager(cat, terrain, 0)
 	m.Strategic.Radius = 320
 	m.QueueBuildTyped = func(BuildRequest) error { return errors.New("fixture queue rejection") }
-	res := PlaceWithResult(m, "armsolar", terrain)
+	res := placeWithResult(m, "armsolar", terrain)
 	if res.Valid || res.Reason != ReasonQueueFailed {
 		t.Fatalf("queue failure result=%+v", res)
 	}
@@ -405,7 +405,7 @@ func TestPlacementRepresentativeRetailAssetsGuarded(t *testing.T) {
 					t.Fatal("strategic region initialization failed")
 				}
 				m.Strategic.InitializeMetalSpots(terrain)
-				res := PlaceWithResult(m, rep.key, terrain)
+				res := placeWithResult(m, rep.key, terrain)
 				return res, r.State, r.Draws()
 			}
 			a, stateA, drawsA := run()

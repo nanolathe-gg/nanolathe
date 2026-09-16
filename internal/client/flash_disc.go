@@ -166,6 +166,8 @@ const flashTableSeed uint32 = 1
 // [06 R-WFX-01 §2][01 §6]. A private generator is what that separation looks
 // like in a presentation package, and it is why this file needs no entry on
 // the DET-01 (a) allowlist.
+// drawn is the per-table draw census the package's own geometry test checks
+// the calculated tables against [06 R-WFX-01 §2].
 type flashRand struct {
 	state uint32
 	drawn int
@@ -178,10 +180,6 @@ func (r *flashRand) Rand() int32 {
 	r.drawn++
 	return int32((r.state >> 16) & 0x7FFF)
 }
-
-// Draws reports how many values have been taken, which is what lets the table
-// geometry be checked against the published per-table draw census.
-func (r *flashRand) Draws() int { return r.drawn }
 
 // flashFrame returns one frame of one table together with the frame index it
 // resolved to, or nil when either index is out of range. A cursor past the end

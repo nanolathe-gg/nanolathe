@@ -154,7 +154,7 @@ func TestRetailFactoryProductClickQueuesAndBuilds(t *testing.T) {
 	if !b.hud.sameButton(b, clickX, clickY, clickX, clickY) {
 		t.Fatal("product button not hit at its own rect center")
 	}
-	if !b.hud.consumeClick(b, clickX, clickY) {
+	if !hudConsumeClick(b.hud, b, clickX, clickY) {
 		t.Fatal("product click not consumed by HUD")
 	}
 	if b.battleState().Input.BuildDef != "" {

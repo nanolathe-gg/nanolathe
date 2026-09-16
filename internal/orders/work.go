@@ -34,9 +34,8 @@
 // depends on it. This build has no such cache to invalidate — the HUD composes
 // from the committed frame every present [03 §2.4] — so there is nothing for
 // the order layer to call, and the rows below say so at their sites rather than
-// pretending to a missing seam. (The work adapter carries an unused `Refresh`
-// port from an earlier reading; it is not wired, because a repaint hint has no
-// consumer here.)
+// pretending to a missing seam. The work adapter therefore carries no repaint
+// port at all.
 
 package orders
 
@@ -171,39 +170,12 @@ func hasMover(u *units.Unit) bool {
 	return u != nil && u.Def != nil && u.Def.BMCode == 1
 }
 
-// isqrt64 is the floor of the square root of a non-negative value. Retail forms
-// these magnitudes on the double-precision stack and truncates toward zero
-// [05 R-WORK-01 §2]; for an exact integer radicand the two agree, and the
-// integer form keeps authoritative state out of floating point (I2).
-func isqrt64(v int64) int64 {
-	if v <= 0 {
-		return 0
-	}
-	// Refine one base-four digit per step. Squaring a doubled candidate
-	// overflows for v >= 2^62 and eventually leaves that search stuck at zero.
-	digit := int64(1) << 62
-	for digit > v {
-		digit >>= 2
-	}
-	root := int64(0)
-	for digit != 0 {
-		if v >= root+digit {
-			v -= root + digit
-			root = (root >> 1) + digit
-		} else {
-			root >>= 1
-		}
-		digit >>= 2
-	}
-	return root
-}
-
 // footprintPad is one end's half-footprint diagonal in whole world units:
 // trunc(8 · hypot(footX, footZ)) [05 R-WORK-01 §2]. Eight is half of the
 // sixteen world units a footprint cell spans, and 8·sqrt(n) is sqrt(64n).
 func footprintPad(footX, footZ int32) int32 {
 	r := int64(footX)*int64(footX) + int64(footZ)*int64(footZ)
-	return int32(isqrt64(64 * r))
+	return int32(numeric.ISqrt64(64 * r))
 }
 
 // inBuildRange is the reach test shared by `MobileBuild`, `RepairUnit`,
@@ -224,7 +196,7 @@ func inBuildRange(builder *units.Unit, targetX, targetZ numeric.Fixed, targetFoo
 	}
 	dx := int64(builder.X) - int64(targetX)
 	dz := int64(builder.Z) - int64(targetZ)
-	distFixed := isqrt64(dx*dx + dz*dz)
+	distFixed := numeric.ISqrt64(dx*dx + dz*dz)
 	// The high word is read as a signed 16-bit quantity out of a 32-bit
 	// register, not as a shift of the whole value: a separation of 32768 world
 	// units or more reads negative [05 R-WORK-01 §2].
@@ -750,7 +722,7 @@ func repairUnitNoMoveHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code
 // the builder's own. Callers must therefore pass the TARGET's footprint pair.
 func assistApproachHalf(footX, footZ int32) int32 {
 	r := int64(footX)*int64(footX) + int64(footZ) + int64(footZ)
-	return int32(isqrt64(256*r)) / 2 // 16·sqrt(r) = sqrt(256r); the /2 is signed
+	return int32(numeric.ISqrt64(256*r)) / 2 // 16·sqrt(r) = sqrt(256r); the /2 is signed
 }
 
 // AssistApproachHalf is the exported form of the term above. internal/movement

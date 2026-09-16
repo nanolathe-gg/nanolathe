@@ -3,8 +3,6 @@ package formats
 import (
 	"fmt"
 	"image/color"
-
-	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // Palette is a 256-entry indexed palette [fmt pal].
@@ -29,13 +27,4 @@ func LoadPAL(data []byte) (*Palette, error) {
 		palette.Colors[i] = color.RGBA{R: data[i*stride], G: data[i*stride+1], B: data[i*stride+2], A: 255}
 	}
 	return palette, nil
-}
-
-// LoadPALFile reads and decodes a palette from the VFS.
-func LoadPALFile(fs vfs.FSOps, name string) (*Palette, error) {
-	data, err := readVFS(fs, name)
-	if err != nil {
-		return nil, err
-	}
-	return LoadPAL(data)
 }

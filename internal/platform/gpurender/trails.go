@@ -44,8 +44,8 @@ func (r *Renderer) Trails(t drawlist.Trails) {
 	if !any {
 		return
 	}
-	x0, y0 := maxInt(int(math.Floor(float64(minX))), 0), maxInt(int(math.Floor(float64(minY))), 0)
-	x1, y1 := minInt(int(math.Ceil(float64(maxX))), r.clipW()), minInt(int(math.Ceil(float64(maxY))), r.clipH())
+	x0, y0 := max(int(math.Floor(float64(minX))), 0), max(int(math.Floor(float64(minY))), 0)
+	x1, y1 := min(int(math.Ceil(float64(maxX))), r.clipW()), min(int(math.Ceil(float64(maxY))), r.clipH())
 	if x0 >= x1 || y0 >= y1 {
 		return
 	}

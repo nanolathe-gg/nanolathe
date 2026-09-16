@@ -500,13 +500,6 @@ func retailTextPenY(gad gui.Gadget, r gui.Rect, textHeight int) int {
 	return y
 }
 
-func retailButtonPressed(_ *client.Client, p *ui.Panel, index int) bool {
-	// The widget service owns this word, including drag-out/return and toggle
-	// state. Painting must not introduce a second live-pointer predicate
-	// [07 R-WGT-01 §3].
-	return p != nil && p.DownAt(index) != 0
-}
-
 func boolInt(value bool) int {
 	if value {
 		return 1
@@ -550,11 +543,4 @@ func (g *gameShell) drawRetailSurface(c *client.Client, p *ui.Panel, index int, 
 
 func pointInRect(x, y int32, r gui.Rect) bool {
 	return x >= r.X && y >= r.Y && x < r.X+r.W && y < r.Y+r.H
-}
-
-func absInt(v int) int {
-	if v < 0 {
-		return -v
-	}
-	return v
 }

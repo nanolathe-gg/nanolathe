@@ -113,17 +113,19 @@ func TestGameTimeBoxRoundTrip(t *testing.T) {
 	clk := &clock.State{Requested: 7, Active: 4, GlobalTick: 4242}
 	clk.AdvanceSP(9)
 	b := NewBuilder()
-	WriteGameTime(b, clk)
+	WriteGameTime(b, clk.SaveBox())
 	// Also test that larger box trailing bytes are ignored.
 	payload := b.Bytes()
 	bank, err := OpenBytes(payload)
 	if err != nil {
 		t.Fatalf("OpenBytes gametime: %v", err)
 	}
-	restored, ok := ReadGameTime(bank)
+	box, ok := ReadGameTime(bank)
 	if !ok {
 		t.Fatalf("ReadGameTime missing")
 	}
+	var restored clock.State
+	restored.LoadBox(box)
 	if restored.GlobalTick != clk.GlobalTick || restored.ScaledAnchor != clk.ScaledAnchor || restored.Delta != clk.Delta || restored.Carry != clk.Carry {
 		t.Fatalf("gametime mismatch got %+v want %+v", restored, clk)
 	}
@@ -142,18 +144,20 @@ func TestGameTimeBoxRoundTrip(t *testing.T) {
 	// Larger box: append extra trailing bytes, should still succeed and ignore remainder.
 	b3 := NewBuilder()
 	ac3 := b3.Add(PlayersAccount)
-	box := clk.SaveBox()
-	extended := append(append([]byte(nil), box[:]...), []byte{9, 9, 9, 9}...)
+	saved := clk.SaveBox()
+	extended := append(append([]byte(nil), saved[:]...), []byte{9, 9, 9, 9}...)
 	ac3.AppendBox(GameTimeBoxName, 0, extended)
 	payload3 := b3.Bytes()
 	bank3, err := OpenBytes(payload3)
 	if err != nil {
 		t.Fatalf("OpenBytes extended: %v", err)
 	}
-	restored3, ok := ReadGameTime(bank3)
+	box3, ok := ReadGameTime(bank3)
 	if !ok {
 		t.Fatalf("extended GameTime should succeed")
 	}
+	var restored3 clock.State
+	restored3.LoadBox(box3)
 	if restored3.GlobalTick != clk.GlobalTick {
 		t.Fatalf("extended gametime mismatch")
 	}
@@ -228,7 +232,7 @@ func TestPlayerSlotRoundTrip(t *testing.T) {
 	clk.AdvanceSP(1)
 	b := NewBuilder()
 	// Players meta to ensure GameTime gate passes.
-	WritePlayersMeta(b, PlayersMeta{HumanPlayer: 0}, clk)
+	writePlayersMeta(b, PlayersMeta{HumanPlayer: 0}, clk)
 	p := PlayerSlot{
 		Index:               2,
 		Energy:              123.5,
@@ -274,7 +278,9 @@ func TestPlayerSlotRoundTrip(t *testing.T) {
 	if got.Controller != p.Controller || got.Logo != p.Logo || got.Side != p.Side || got.Kills != p.Kills || got.Losses != p.Losses {
 		t.Fatalf("player controller/side/kills mismatch got %+v want %+v", got, p)
 	}
-	// Gating: without GameTime, ReadAllPlayerSlots should return nil.
+	// Gating: without a 28-byte GameTime box the slot walk does not run
+	// [08 "Player records"]. The shipped decoder reports the short box rather
+	// than staging a partially loaded battle.
 	b3 := NewBuilder()
 	// Write Player0 without GameTime
 	WritePlayerSlot(b3, p2)
@@ -283,17 +289,19 @@ func TestPlayerSlotRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenBytes no gametime: %v", err)
 	}
-	if slots := ReadAllPlayerSlots(bank3); len(slots) != 0 {
-		t.Fatalf("without GameTime, ReadAllPlayerSlots should process zero accounts, got %d", len(slots))
+	var ungated BattleImage
+	if err := decodePlayers(bank3, &ungated); err == nil || len(ungated.Players) != 0 {
+		t.Fatalf("without GameTime, no Player%%i account may load: err=%v slots=%d", err, len(ungated.Players))
 	}
 	// With GameTime, should return slots.
-	if slots := ReadAllPlayerSlots(bank); len(slots) != 2 {
-		t.Fatalf("ReadAllPlayerSlots with GameTime got %d want 2", len(slots))
+	var gated BattleImage
+	if err := decodePlayers(bank, &gated); err != nil || len(gated.Players) != 2 {
+		t.Fatalf("with GameTime got %d slots, err=%v, want 2", len(gated.Players), err)
 	}
 	// Missing fields default 0 [08 "Player records"].
 	b4 := NewBuilder()
 	clk2 := &clock.State{Requested: 10, Active: 10}
-	WritePlayersMeta(b4, PlayersMeta{HumanPlayer: 1}, clk2)
+	writePlayersMeta(b4, PlayersMeta{HumanPlayer: 1}, clk2)
 	// Add Player1 with only Controller, others missing.
 	ac := b4.Add(playerAccountName(1))
 	ac.SetInt("Controller", 2)
@@ -314,23 +322,6 @@ func TestPlayerSlotRoundTrip(t *testing.T) {
 	}
 }
 
-// TestNormalizeSAV locks C14 .SAV normalization [08 "File naming and write policy"].
-func TestNormalizeSAV(t *testing.T) {
-	if got := NormalizeSAV("savegame/foo.bar.baz"); got != "savegame/foo.bar.SAV" {
-		t.Fatalf("NormalizeSAV foo.bar.baz = %q want savegame/foo.bar.SAV", got)
-	}
-	if got := NormalizeSAV("savegame\\my.save.test"); got != "savegame\\my.save.SAV" {
-		t.Fatalf("NormalizeSAV my.save.test = %q want savegame\\my.save.SAV", got)
-	}
-	// Dot in directory should be stripped too (not path-component aware) [08 "File naming and write policy"].
-	if got := NormalizeSAV("my.dir/save"); got != "my.SAV" {
-		t.Fatalf("dot in dir should be stripped, got %q want my.SAV", got)
-	}
-	if got := NormalizeSAV("nosuffix"); got != "nosuffix.SAV" {
-		t.Fatalf("nosuffix = %q want nosuffix.SAV", got)
-	}
-}
-
 // TestAlliancesArePerPlayerAccount locks the WU-19-158 census: each active
 // `Player%i` account carries its own eleven-byte row as its last item, row i
 // is slot i's row, and the `Players` account carries no row at all
@@ -345,7 +336,7 @@ func TestAlliancesArePerPlayerAccount(t *testing.T) {
 
 	clk := &clock.State{Requested: 10, Active: 10, GlobalTick: 100}
 	b := NewBuilder()
-	WritePlayersMeta(b, PlayersMeta{HumanPlayer: 0}, clk)
+	writePlayersMeta(b, PlayersMeta{HumanPlayer: 0}, clk)
 	for i, p := range []economy.Player{zero, one, two} {
 		WritePlayerSlot(b, PlayerSlotFromEconomy(i, p))
 	}
@@ -402,7 +393,7 @@ func TestAlliancesArePerPlayerAccount(t *testing.T) {
 func TestAllianceBoxAbsenceLeavesRuntimeRow(t *testing.T) {
 	clk := &clock.State{Requested: 10, Active: 10, GlobalTick: 100}
 	b := NewBuilder()
-	WritePlayersMeta(b, PlayersMeta{HumanPlayer: 0}, clk)
+	writePlayersMeta(b, PlayersMeta{HumanPlayer: 0}, clk)
 	WritePlayerSlot(b, PlayerSlot{Index: 0, Controller: 1}) // HasAlliances false
 	bank, err := OpenBytes(b.Bytes())
 	if err != nil {
@@ -508,7 +499,7 @@ func TestPlayersMetaHumanPlayerLoadDefault(t *testing.T) {
 	// WriteGameTime creates the Players account with the GameTime box alone, so
 	// the account is present and the item is not.
 	b := NewBuilder()
-	WriteGameTime(b, clk)
+	WriteGameTime(b, clk.SaveBox())
 	bank, err := OpenBytes(b.Bytes())
 	if err != nil {
 		t.Fatalf("OpenBytes: %v", err)
@@ -533,12 +524,26 @@ func TestPlayersMetaHumanPlayerLoadDefault(t *testing.T) {
 
 	// A written item still wins, including slot 0.
 	b2 := NewBuilder()
-	WritePlayersMeta(b2, PlayersMeta{HumanPlayer: 0}, clk)
+	writePlayersMeta(b2, PlayersMeta{HumanPlayer: 0}, clk)
 	bank2, err := OpenBytes(b2.Bytes())
 	if err != nil {
 		t.Fatalf("OpenBytes written: %v", err)
 	}
 	if meta, present := ReadPlayersMeta(bank2); !present || meta.HumanPlayer != 0 {
 		t.Fatalf("written Human Player 0 reads (%d,%v), want (0,true)", meta.HumanPlayer, present)
+	}
+}
+
+// writePlayersMeta is the Players-account meta these tests build: the
+// "Human Player" item followed by the 28-byte GameTime box, which is what
+// RetailProjection.Build emits [08 "Account inventory"]
+// [08 "Scheduler and random state in saves"].
+func writePlayersMeta(b *Builder, meta PlayersMeta, clk *clock.State) {
+	if b == nil {
+		return
+	}
+	builderAccount(b, PlayersAccount).SetInt("Human Player", meta.HumanPlayer)
+	if clk != nil {
+		WriteGameTime(b, clk.SaveBox())
 	}
 }

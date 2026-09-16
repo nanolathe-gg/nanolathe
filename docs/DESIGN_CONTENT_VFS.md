@@ -113,8 +113,6 @@ allocating presentation geometry or sorting a second time.
 | `LoadPCX`, `PCX` | The run-length image used by the front end | `[fmt pcx]` `[02 §7]` |
 | `LoadWAV`, `LoadAudio`, `WAV` | PCM metadata for canonical RIFF/WAVE and the legacy container, sample bytes left in the VFS | `[fmt wav]` `[02 §7]` |
 | `zrb.New`, `Decoder.Next`, `Decoder.DecodeAudio` | Smacker 2 movie frames, palette history, static and dynamic Huffman trees, PCM/DPCM soundtrack; bounded state and explicit unsupported-codec rejection | `[fmt zrb]` |
-| `LoadSCT` | The editor section file: validated `2W × 2H` `Heights`, exact v2/v3 `AttributeData`, and preserved `Raw` bytes | `[02 §6]` |
-| `LoadBMP` | The uncompressed BMP variants the install carries | `[02 §6]` |
 
 `formats/zrb` retains encoded movie bytes and one indexed image. `Next` returns
 reusable palette/image/audio buffers; callers copy any data they retain beyond
@@ -177,7 +175,6 @@ executable's own `[02 R-CAT-01 §5]`:
 | `CategoryRegistry`, `CategoryMask` | The sorted case-insensitive category token registry and the membership bitsets built from it `[02 R-P0-03]` |
 | `BuildMenuPage`, `DownloadMenuPlacement` | The authored and generated build pages |
 | `AssetID`, `AssetSequence` | Typed presentation asset identities and frame-sequence metadata used by texture playback |
-| `SkirmishManifest`, `SkirmishAsset`, `SkirmishDiagnostic` | The preflight result (§3.5) |
 
 Accessors: `Unit`, `Weapon`, `WeaponByName`, `WeaponByID`, `WeaponLink`,
 `WeaponRecordsByID`, `Category`, `ResolveCategoryMask`, `SortedUnitKeys`, `UnitRecords`,
@@ -215,8 +212,8 @@ path inputs, selecting `objects3d/.3do` and `scripts/.cob`.
 The host collects a warning for each unavailable secondary definition in
 retained record order, naming the attempted resource and the original
 discovery path/provider, with read failures retaining their cause.
-Required preflight use of a `DiscoveryOnly` record is refused; optional use
-is diagnosed without inventing gameplay fields. These are host diagnostics
+Required use of a `DiscoveryOnly` record is refused where the unit is created;
+optional use is diagnosed without inventing gameplay fields. These are host diagnostics
 around the unchanged discovery contract `[02 R-CAT-01 §5]`.
 
 All category, weapon, movement, model, script, page and downloadable passes
@@ -485,8 +482,8 @@ clamps as a pooled class so the two cannot drift; a script miss is a null
 program that crashes retail at first creation `[04 R-COB-04 §8]`. Catalog
 linking retains that definition with a warning and the attempted logical path;
 an existing unreadable or malformed file also retains its winning provenance.
-A required missing, empty or malformed program refuses preflight (§3.5), and
-unit creation/restore independently refuses it before allocation. Valid programs
+A required missing, empty or malformed program is refused by unit creation and
+restore, before allocation — the only admission gate there is (§3.5). Valid programs
 remain immutable catalog assets. This user-authorized host refusal boundary
 keeps an unrelated broken unit from preventing use of the whole install; it
 never substitutes an empty VM. A model miss is fatal, reported
@@ -528,7 +525,7 @@ into immutable `LOSTables` and `MeteorDefaults` that retain source precision.
 Visibility and combat consume the typed values and never reopen or reparse
 those files [I8].
 
-### 3.5 Unit limits, restriction and preflight
+### 3.5 Unit limits and restriction
 
 **Unit limits.** There is no per-definition unit-limit key in an FBI, and one
 must not be invented. The definition parser writes −1 (unlimited) into every
@@ -552,17 +549,26 @@ the mechanism — the removal is. The method performs that compaction, restamps
 the category registry's unit indices, and re-digests the catalog. It runs on a
 clone, once per battle.
 
-**Preflight.** `PreflightSkirmish` resolves the whole content bundle a battle
-needs — map, side, commander, the opening build chain, their models, scripts,
-sounds and art — before the session starts, and returns a `SkirmishManifest`
-whose `Diagnostics` name every failure at once rather than failing on the
-first. It is where a missing or malformed required asset becomes a refusal to
-start: a missing model or COB, a COB that names a piece the 3DO hierarchy does
-not have `[04 §4.1]` `[fmt cob]`, a missing required entry point (`Create`,
-the primary weapon's query/aim/fire family for an armed unit, the nanolathe
-queries for a builder). Optional authored references are reported only when
-they are internally inconsistent. The manifest hashes to a stable identity and
-records the winning provider per asset, never a host path (C13).
+**Preflight.** There is none, and there never was one in retail. A separate
+pass that walks a battle's whole content bundle ahead of the session — map,
+side, commander, the opening build chain, their models, scripts, sounds and
+art — once existed here and was removed: nothing shipped called it, and a
+second reading of admission alongside the compiler is exactly the duplicate
+this document warns about elsewhere.
+
+Admission failures are refused in two places instead, both on the live path.
+The **catalog compile** (§3.2) is the first: a malformed or unreadable
+secondary resource leaves the record discovery-only with no gameplay fields
+and publishes a `Warnings` line naming the logical path and the providers
+searched; an unreadable COB leaves the definition with no program and warns
+the same way; a required model that will not parse fails the compile outright.
+**Unit creation** is the second: a definition with no program, or one whose
+program names a piece the 3DO hierarchy does not have `[04 §4.1]` `[fmt cob]`,
+or which lacks a required entry point (`Create`, the primary weapon's
+query/aim/fire family for an armed unit, the nanolathe queries for a builder),
+is refused where the unit is bound, per §3.4 C9. The refusal therefore names
+one definition at the moment it is used, rather than a whole bundle before the
+battle; that is the contract callers may rely on.
 
 ### 3.6 Not implemented
 

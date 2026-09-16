@@ -117,8 +117,9 @@ func TestMediumBandThreeIsReachable(t *testing.T) {
 		t.Fatalf("wide model top: band = %d, want the cached 0; the byte-masked read would give 3", got)
 	}
 
-	// ShouldEmitWake reports the two wake bands, and band 3 is now one of them.
-	if !ShouldEmitWake(ter, bandUnit(tall, -3, 1), 0) {
-		t.Fatal("a submerged mover is in a wake band [04 §9.1]")
+	// Band 3, the fully submerged model, is one of the two bands a stock hover
+	// script answers with its wake [04 §9.1].
+	if got := MediumBand(ter, bandUnit(tall, -3, 1), 0); got != 3 {
+		t.Fatalf("a submerged mover's band = %d, want 3 [04 §9.1]", got)
 	}
 }

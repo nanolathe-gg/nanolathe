@@ -5,7 +5,6 @@ package content
 import (
 	"fmt"
 	"math"
-	"sort"
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/formats"
@@ -288,8 +287,8 @@ type UnitDef struct {
 
 	// Script is the required compiled COB program resolved at catalog link time
 	// from scripts/<unitname>.cob. Missing, unreadable, malformed, nil, or empty
-	// programs remain nil with catalog warnings; required preflight and creation
-	// refuse them [04 R-COB-04 §8], DESIGN_CONTENT_VFS §3.4 C9. Deliberately
+	// programs remain nil with catalog warnings; unit creation refuses a
+	// definition with no program [04 R-COB-04 §8], DESIGN_CONTENT_VFS §3.4 C9. Deliberately
 	// absent from writeUnitCanonical: the hash is the FBI record's identity, and
 	// this value comes from a different asset with its own provenance.
 	Script           *cob.Program
@@ -378,21 +377,7 @@ func (u *UnitDef) BoundingExtents() (min, max [3]int32) {
 
 // UnknownKeysSorted returns inert keys sorted for hash stability (I1).
 func (u *UnitDef) UnknownKeysSorted() []string {
-	if u.Unknown == nil {
-		return nil
-	}
-	keys := make([]string, 0, len(u.Unknown))
-	for k := range u.Unknown {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		li, lj := asciiFoldContent(keys[i]), asciiFoldContent(keys[j])
-		if li != lj {
-			return li < lj
-		}
-		return keys[i] < keys[j]
-	})
-	return keys
+	return sortedFoldedKeys(u.Unknown, asciiFoldContent)
 }
 
 // knownUnitKeys is the set of lower-cased keys that have a typed reader [02 "Unit record"].
@@ -808,14 +793,7 @@ func writeUnitCanonical(u *UnitDef) []byte {
 // Language-prefixed name fallback is applied via LanguageString (<Language>name then name) with
 // Translate.tdf identity fallback (byte-exact) when the file is missing [02 §3] C7.
 func CompileUnits(fs vfs.FSOps) (map[string]*UnitDef, error) {
-	return CompileUnitsWithLanguage(fs, "")
-}
-
-// CompileUnitsWithLanguage compiles units with an explicit language for the language-prefixed
-// name trial [02 §3] C7. An empty language yields the base name/description; a non-empty language
-// like "German" tries "<Language>name" then "name". Missing Translate.tdf yields identity (byte-exact) [02 §3].
-func CompileUnitsWithLanguage(fs vfs.FSOps, language string) (map[string]*UnitDef, error) {
-	result, err := compileUnitsWithLanguage(fs, language)
+	result, err := compileUnitsWithLanguage(fs, "")
 	if err != nil {
 		return nil, err
 	}
@@ -945,8 +923,8 @@ func compatibleUnitCopyright(value string) bool {
 	return string(normalized) == template
 }
 
-// LinkUnitWeapons resolves weapon1..3 (and explodeas/selfdestructas) after all weapons compile
-// so enumeration order cannot leak into identity [02 §5] C1.
+// linkUnitWeaponRecords resolves weapon1..3 (and explodeas/selfdestructas) after all weapons
+// compile so enumeration order cannot leak into identity [02 §5] C1.
 //
 // Resolution follows the recovered runtime name resolution [02 §5 R-CONTENT-02]:
 // a case-insensitive comparison against each record's catalog name, first match
@@ -968,10 +946,6 @@ func compatibleUnitCopyright(value string) bool {
 // null for any definition that went through the loader" [06 R-DMG-01 §5].
 // Established. An unarmed definition's weapon links resolve to record 0 like
 // any other miss, never to nil, for a family that carries the sentinel.
-func LinkUnitWeapons(units map[string]*UnitDef, weapons map[string]*WeaponDef) {
-	linkUnitWeaponRecords(unitMapRecords(units), weapons)
-}
-
 func linkUnitWeaponRecords(records []*UnitDef, weapons map[string]*WeaponDef) {
 	if records == nil || weapons == nil {
 		return

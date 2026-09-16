@@ -21,9 +21,7 @@ func TestModelGeometryPacketPreservesFaceOrderAndArity(t *testing.T) {
 	second := newScreenPoly(4)
 	second.x = []int32{10, 11, 12, 13}
 	second.y = []int32{14, 15, 16, 17}
-	target := newModelImage(30, 31, 7, 8, 20, 21, true, 1)
-
-	packet := modelGeometryPacket([]screenPoly{first, second}, target, 1, drawlist.ModelFallbackNone)
+	packet := modelGeometryPacketAt([]screenPoly{first, second}, 30, 31, 7, 8, 20, 21, 1, true, drawlist.ModelFallbackNone)
 	if !packet.Eligible || packet.Fallback != drawlist.ModelFallbackNone {
 		t.Fatalf("packet eligibility = %v/%v, want eligible/no fallback", packet.Eligible, packet.Fallback)
 	}

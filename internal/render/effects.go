@@ -128,8 +128,6 @@ type EffectRecord struct {
 	Graphic        string
 	AssetID        string
 	SequenceID     string
-	FrameA         int32
-	FrameB         int32
 	// Strip is the effect-strip destination (beam/muzzle/nanolathe = 6 etc.)
 	// routed at admission [03 §5.5][R-P0-06 §5]. It is preserved through the
 	// pool so the client's strip-6 nanolathe draw gate can fire.
@@ -527,8 +525,3 @@ func validDurations(durations []int32) bool {
 func sameEndpoint(a, b, c, d pool.Handle) bool {
 	return (a == b && (c == d || b == 0 || d == 0)) || (a == 0 && b == 0)
 }
-
-// SnapshotEffectsCapacity is the presentation-side bound for snapshot effect
-// views. It mirrors the fixed pool capacity [03 §1] C5 but is intentionally
-// separate from the strip's 400-object eviction bound [R-P0-06].
-const SnapshotEffectsCapacity = FixedEffectCap

@@ -135,9 +135,10 @@ rebuilt capacity and accrue the overflow as waste.
 energy at global ticks that are multiples of 60, sensor sharing at multiples of
 450, for the reference player alone, self-gated and outside settlement
 `[05 "Allied resource and sensor sharing"]` `[05 R-SHARE-01 §3]`.
-`ApplySharePacket` is the receive side, which credits the destination's
-production bucket exactly once and never redoes the source's threshold or
-capacity tests `[05 R-SHARE-01 §4]`.
+The receive side — a packet that credits the destination's production bucket
+exactly once and never redoes the source's threshold or capacity tests
+`[05 R-SHARE-01 §4]` — has no transport in a single-player build and no code
+here.
 
 **Save boxes** (`retail_save.go`, `retail_restore.go`). The detached per-unit
 account image is twelve single-precision words in two consecutive resource
@@ -152,10 +153,10 @@ This makes cancellation and unattended decay use the same researched refund
 ladder as reverse work; tests exercise the callbacks through session composition.
 
 **The request** (`queue.go`). `QueueFactoryBuild` and `QueueMobileBuild` are the
-two entry points; both push a typed payload onto the primary segment of the
-builder's existing queue. `FactoryPayload` carries the canonical definition key,
+two entry points; both push an order node onto the primary segment of the
+builder's existing queue. A factory node carries the canonical definition key,
 the stable one-based catalog index, the remaining count and the handler's phase
-byte; `MobilePayload` adds the site anchor in world 16.16 and the build angle.
+byte; a mobile node adds the site anchor in world 16.16 and the build angle.
 Counted adds coalesce tail-only; `CancelTailMost` and `CancelProductCount` match
 the tail-most node and tombstone it `[05 "Queue insertion"]`
 `[05 "Queue subtraction"]`. Validation is a preflight on the definition, not a
@@ -201,8 +202,10 @@ refusal also abandons; ground allocation refusal retains its retry
 **Exit spots and the placement seam.** `QueryBuildInfo` runs the factory
 script's build-info query synchronously with its output cell pre-initialized to
 −1, resolves the returned piece's transform against the factory origin, and
-returns a world position; `SnapWorldToCell` biases each coordinate by half its
-extent to reach the footprint rectangle's origin `[04 §3.8]` `[04 §6.3]`.
+returns a world position; `world.SnapFootprintAnchor` — the single cell snap,
+reached through `SnapFactoryPlacement` and `SnapMobilePlacement` — biases each
+coordinate by half its extent to reach the footprint rectangle's origin
+`[04 §3.8]` `[04 §6.3]`.
 `validatePlacement` is the single call into `world.CheckPlacement` for every
 construction site, with a null self identity and the full per-cell terrain gates
 `[04 R-FAC-02 §5]` `[04 R-COLL-01 §2]`. `reservePlacement` commits the accepted
@@ -288,9 +291,10 @@ and complete the visit tail after a fatal packet `[04 R-ORD-01 §5]`
 `[04 R-ORD-01 §7]` `[04 R-COB-06]` `[05 R-WORK-01 §4]`.
 
 `capture.go` holds the capture timer, its two-tick progress and the ownership transfer with its three-test entry gate and death
-latch `[05 R-WORK-01 §6]` `[05 R-WORK-01 §15]`; `resurrection.go` holds the wait
-delay, the corpse-name truncation and the single simulation draw that is an
-approach-point vertical term, not a placement jitter `[05 R-WORK-01 §7]`;
+latch `[05 R-WORK-01 §6]` `[05 R-WORK-01 §15]`; `resurrection.go` holds the
+corpse-name truncation and the revival itself, while internal/orders owns the
+row's wait delay and its single simulation draw, which is an approach-point
+vertical term, not a placement jitter `[05 R-WORK-01 §7]`;
 `reverse.go` holds only the refund selector ladder that `sharedStep`'s reverse
 arm calls.
 
@@ -906,14 +910,14 @@ active-list order `[05 R-FEAT-01 §10]` [I1].
   cadences. In a single-player battle it performs no automatic transfers,
   matching `[05 R-SHARE-01 §3]`. `Service.Transfer` exposes the existing local
   stock debit and deferred production credit for `Give`, including signed
-  amounts and source-stock clamping; the resource receive seam applies a credit
-  without repeating the debit `[05 R-SHARE-01 §2]` `[05 R-SHARE-01 §4]`.
-  Packet emission and network receipt are not implemented. The sensor branch
+  amounts and source-stock clamping `[05 R-SHARE-01 §2]`. Packet emission and
+  network receipt are not implemented, so the no-debit receive credit of
+  `[05 R-SHARE-01 §4]` has no code. The sensor branch
   increments `SensorShareCalls` as a diagnostic only: it sends no packet and
   changes no mapping grid. Its cadence tests establish candidate visitation,
   not completed sharing.
-* **Mapping sharing remains unimplemented.** `ApplySharePacket` subtype 3
-  returns without merging explored-memory bits. A future implementation needs
+* **Mapping sharing remains unimplemented.** Nothing merges explored-memory
+  bits on receipt. A future implementation needs
   the visibility-owned grid operation, its network receive binding and the
   local SHARE screen `MAPINFO` binding `[05 R-SHARE-01 §5–§6]`. The established
   operation copies mapped memory only; it does not transfer LOS or radar.

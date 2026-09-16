@@ -32,7 +32,7 @@ func TestRetailOptionsPanelPlateIsStampedNotStretched(t *testing.T) {
 	}
 	defer fs.Close()
 
-	window, err := gui.Load(fs, "guis/armopt.gui")
+	window, err := gui.LoadWithTranslation(fs, "guis/armopt.gui", nil)
 	if err != nil {
 		t.Fatalf("load ARMOPT.GUI: %v", err)
 	}

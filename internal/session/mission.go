@@ -33,27 +33,6 @@ const (
 	sessionKindSkirmish = 2
 )
 
-// NewMissionWithFS is the strict production constructor. It never fabricates
-// nil terrain, empty catalog, or missing service. [02 §5][03 §2.2][P0-16]
-func NewMissionWithFS(fs vfs.FSOps, cat *content.Catalog, path string, difficulty int) (*Session, error) {
-	return NewMissionWithProgress(fs, cat, path, difficulty, nil)
-}
-
-// NewMissionWithProgress is NewMissionWithFS with a load observer, reporting
-// the same families the skirmish constructor does so one loading screen can be
-// driven from either entry point. A nil observer makes this exactly
-// NewMissionWithFS.
-func NewMissionWithProgress(fs vfs.FSOps, cat *content.Catalog, path string, difficulty int, report content.Progress) (*Session, error) {
-	return NewMissionWithProgressSeeds(fs, cat, path, difficulty, 0, 0, report)
-}
-
-// NewMissionWithProgressSeeds is the explicit battle-entry constructor used by
-// the composition layer. The pair is installed before wind, placement, COB,
-// or AI setup can draw from either stream [01 §7.1][01 §7.2][R-CORE-02].
-func NewMissionWithProgressSeeds(fs vfs.FSOps, cat *content.Catalog, path string, difficulty int, simSeed, crtSeed uint32, report content.Progress) (*Session, error) {
-	return NewMissionWithEntryOptions(fs, cat, path, difficulty, simSeed, crtSeed, MissionEntryOptions{}, report)
-}
-
 // MissionEntryOptions carries the frontend selection independently of its value:
 // zero is an explicitly selected Arm side [08 R-CAMP-01 §3].
 type MissionEntryOptions struct {
@@ -62,9 +41,12 @@ type MissionEntryOptions struct {
 	SelectedSideSet bool
 }
 
-// NewMissionWithEntryOptions installs the selected player sides before any
-// battle-entry consumer or the tick-zero prime [08 R-ENTRY-01 §8]. Without a
-// selection, named campaign admission can resolve the side; ALL remains unknown.
+// NewMissionWithEntryOptions is the explicit battle-entry constructor used by
+// the composition layer. The RNG pair is installed before wind, placement, COB,
+// or AI setup can draw from either stream [01 §7.1][01 §7.2][R-CORE-02], and
+// the selected player sides are installed before any battle-entry consumer or
+// the tick-zero prime [08 R-ENTRY-01 §8]. Without a selection, named campaign
+// admission can resolve the side; ALL remains unknown.
 func NewMissionWithEntryOptions(fs vfs.FSOps, cat *content.Catalog, path string, difficulty int, simSeed, crtSeed uint32, options MissionEntryOptions, report content.Progress) (*Session, error) {
 	if options.SelectedSideSet && options.SelectedSide != 0 && options.SelectedSide != 1 {
 		return nil, fmt.Errorf("session: campaign selected side %d is outside the two frontend sides", options.SelectedSide)
@@ -469,17 +451,6 @@ func loadCampaignAIProfile(fs vfs.FSOps, name string) (*ai.Profile, error) {
 		return nil, fmt.Errorf("session: ai profile %q: nil profile", name)
 	}
 	return prof, nil
-}
-
-// RouteForGametype selects the initial state for a save based on gametype via
-// the existing state-machine helpers per [08 "Session states"] C3. Gametype 1
-// (campaign) selects StateLocalPreload (4) which then takes the same StateLoading
-// (5) path; gametype 2 selects StateLoading (5) directly.
-func RouteForGametype(s *Session, gametype int) error {
-	if s == nil {
-		return fmt.Errorf("session: nil session")
-	}
-	return s.SelectForGametype(gametype)
 }
 
 // battleEntryPlacement is the campaign placement half used by the production

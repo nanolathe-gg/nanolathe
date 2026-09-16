@@ -21,7 +21,7 @@ func TestPublishedPropellerSpinChangesOnlyChildCPUTransform(t *testing.T) {
 		},
 	}
 	base := []model.PieceState{{RotZ: 77}, {}}
-	states := BuildProjectilePieceStates(m, base, 0, 0)
+	states := projectilePieceStates(m, base, 0, 0)
 	v := frame.ProjectileView{PropellerRoll: 0x4000, Propeller: true, ExpiryTick: 9}
 	FoldPublishedPropellerSpin(states, 1, v, 8)
 	if states[0].RotZ != 77 || states[0].RotY != halfCircle || states[0].RotX != halfCircle {
@@ -32,18 +32,18 @@ func TestPublishedPropellerSpinChangesOnlyChildCPUTransform(t *testing.T) {
 	}
 	child := model.Compose(m, states, 1)
 	got := child.Apply([3]numeric.Fixed{numeric.FixedFromInt(1), 0, 0})
-	withoutSpin := BuildProjectilePieceStates(m, base, 0, 0)
+	withoutSpin := projectilePieceStates(m, base, 0, 0)
 	baseline := model.Compose(m, withoutSpin, 1).Apply([3]numeric.Fixed{numeric.FixedFromInt(1), 0, 0})
 	if got == baseline {
 		t.Fatalf("child CPU vertex = %v before and after committed spin", got)
 	}
 
-	deadline := BuildProjectilePieceStates(m, base, 0, 0)
+	deadline := projectilePieceStates(m, base, 0, 0)
 	FoldPublishedPropellerSpin(deadline, 1, v, 9)
 	if deadline[1].RotZ != 0 {
 		t.Fatalf("expiry equality spun child by %#04x, want strict suppression", deadline[1].RotZ)
 	}
-	nonPropeller := BuildProjectilePieceStates(m, base, 0, 0)
+	nonPropeller := projectilePieceStates(m, base, 0, 0)
 	v.Propeller = false
 	FoldPublishedPropellerSpin(nonPropeller, 1, v, 8)
 	if nonPropeller[1].RotZ != 0 {
@@ -64,7 +64,7 @@ func TestProjectileStandaloneUsesRawPieceVertices(t *testing.T) {
 		},
 	}
 	v := frame.ProjectileView{RenderType: RenderTypeBaseSpriteModel, ExpiryTick: 2, Yaw: halfCircle, Pitch: halfCircle}
-	_, child := BuildProjectileModelPieces(m, v, 1)
+	_, child := BuildProjectileModelPiecesInto(m, v, 1, &ProjectileScratch{}, &ProjectileScratch{})
 	if child == nil || len(child.Pieces) != 1 || len(child.Pieces[0].WorldVertices) != 1 {
 		t.Fatalf("child draw = %+v, want one standalone vertex", child)
 	}

@@ -36,7 +36,7 @@ func settleTestWorld(t *testing.T, n int) (*units.World, []pool.Handle) {
 // fixture says otherwise [05 "Authoritative settlement order"] C3 C4.
 func settlingPlayer(s *Service, p int) *Player {
 	pl := &s.Players[p]
-	InitPlayer(pl)
+	initPlayerRecord(pl)
 	activePlayer(pl)
 	pl.Capacity[Metal] = 1e6
 	pl.Capacity[Energy] = 1e6

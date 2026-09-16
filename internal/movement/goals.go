@@ -286,44 +286,6 @@ func (s *System) airPayloadOwner(owner pool.Handle) *orders.Node {
 // [06 R-WPN-05 §1], and the handler installs them itself through the record's
 // own payload installers. The literals are deleted, not replaced.
 
-// goalForOrder selects the path.Goal family for an order [04 §7.2][04 §7.4].
-//
-// Wired families [OW-3-P]:
-//
-//	Attack_Chase (orbit/stand-off) => whatever its own maneuver phase installed:
-//	  a point goal for five of the six live substates and an annulus for the
-//	  other two, every radius sized from the slot's weapon range
-//	  [04 R-ORD-01 §3][06 R-WPN-05 §1]. The bound payload is consulted first, so
-//	  this file supplies no chase goal of its own.
-//	Park (a no-rally factory product's terminal record) => RectPerimeterGoal on
-//	  the rectangle the handler installed. [04 R-FAC-02 §4] closes the producer
-//	  this file previously recorded as missing: Park's phase 0 installs a
-//	  rectangle goal centred on the product's own committed cell, and the ground
-//	  search treats it as a perimeter goal whose admissible cells are exactly
-//	  the border [04 §7.2]. The arithmetic lives in orders.ParkGoalRect; this
-//	  case only reads it back.
-//	Follow_Ground (the ground guard's follow) => PointGoal at the ward's
-//	  position plus the record's stored anchor offset, arrival radius p1 / 2
-//	  [04 R-ORD-01 §8]. `VTOL_Follow` and `Guard_NoMove` are not this family:
-//	  the stationary guard installs nothing and the air twin circles in
-//	  airspace [04 R-UNIT-06 §1].
-//
-// Unwired families [OW-3-P] with citation why:
-//
-//	The withdrawn saved-goal compatibility surface has no producer; air work
-//	and moving goals now own the zero-heuristic, unsatisfied surface [04 R-PATH-01 §9].
-//	  "Base/restored-from-save goals have identically-zero heuristic and a null
-//	  start predicate" [04 §7.2], used for save restore (GoalKind 3 in
-//	  internal/save/boxes.go). Patrol legs (Patrol/QPatrol/VTOL_Patrol etc) are
-//	  queued as sequential PointGoals via the ordinary order queue [04 §3.3];
-//	  no bounded evidence shows patrol chaining via an air-goal surface, so leave that
-//	  path unwired rather than forcing it [04 §7.4] UNKNOWN frequency.
-//
-// All other orders => PointGoal(radius 0) [04 §7.2] C8.
-func (s *System) goalForOrder(goalCell path.Cell, n *orders.Node) path.Goal {
-	return s.goalForOrderWithFootprint(nil, goalCell, n, 1, 1)
-}
-
 // workApproachGoal is the goal payload the ground work rows install
 // [04 R-ORD-01 §5]. Two shapes cover the family, and both are stated per-row:
 //
@@ -467,9 +429,44 @@ func featureRectForGoal(mover *units.Unit, n *orders.Node) (cellX, cellZ, footX,
 	return view.CX, view.CZ, footX, footZ, true
 }
 
-// goalForOrderWithFootprint uses the owning mover's footprint for target
-// snapping. Annulus centres are constructed from target world positions with
-// the same footprint formula as point goals [04 R-MOV-03 §2].
+// goalForOrderWithFootprint selects the path.Goal family for an order
+// [04 §7.2][04 §7.4], using the owning mover's footprint for target snapping.
+// Annulus centres are constructed from target world positions with the same
+// footprint formula as point goals [04 R-MOV-03 §2]; a caller with no mover
+// passes nil and the 1x1 footprint.
+//
+// Wired families [OW-3-P]:
+//
+//	Attack_Chase (orbit/stand-off) => whatever its own maneuver phase installed:
+//	  a point goal for five of the six live substates and an annulus for the
+//	  other two, every radius sized from the slot's weapon range
+//	  [04 R-ORD-01 §3][06 R-WPN-05 §1]. The bound payload is consulted first, so
+//	  this file supplies no chase goal of its own.
+//	Park (a no-rally factory product's terminal record) => RectPerimeterGoal on
+//	  the rectangle the handler installed. [04 R-FAC-02 §4] closes the producer
+//	  this file previously recorded as missing: Park's phase 0 installs a
+//	  rectangle goal centred on the product's own committed cell, and the ground
+//	  search treats it as a perimeter goal whose admissible cells are exactly
+//	  the border [04 §7.2]. The arithmetic lives in orders.ParkGoalRect; this
+//	  case only reads it back.
+//	Follow_Ground (the ground guard's follow) => PointGoal at the ward's
+//	  position plus the record's stored anchor offset, arrival radius p1 / 2
+//	  [04 R-ORD-01 §8]. `VTOL_Follow` and `Guard_NoMove` are not this family:
+//	  the stationary guard installs nothing and the air twin circles in
+//	  airspace [04 R-UNIT-06 §1].
+//
+// Unwired families [OW-3-P] with citation why:
+//
+//	The withdrawn saved-goal compatibility surface has no producer; air work
+//	and moving goals now own the zero-heuristic, unsatisfied surface [04 R-PATH-01 §9].
+//	  "Base/restored-from-save goals have identically-zero heuristic and a null
+//	  start predicate" [04 §7.2], used for save restore (GoalKind 3 in
+//	  internal/save/boxes.go). Patrol legs (Patrol/QPatrol/VTOL_Patrol etc) are
+//	  queued as sequential PointGoals via the ordinary order queue [04 §3.3];
+//	  no bounded evidence shows patrol chaining via an air-goal surface, so leave that
+//	  path unwired rather than forcing it [04 §7.4] UNKNOWN frequency.
+//
+// All other orders => PointGoal(radius 0) [04 §7.2] C8.
 func (s *System) goalForOrderWithFootprint(mover *units.Unit, goalCell path.Cell, n *orders.Node, footX, footZ int32) path.Goal {
 	if n == nil {
 		return path.PointGoal(goalCell, 0)
@@ -549,7 +546,8 @@ func (s *System) goalForOrderWithFootprint(mover *units.Unit, goalCell path.Cell
 // HeadingFromDelta returns the world heading (uint16, 0..65535 per circle)
 // whose position step of [04 R-MOV-01 §4] travels along the planar delta
 // (dx, dz) in 16.16 fixed units. It is the heading the ground mover steers
-// toward for a waypoint at that delta; heading 0 is -Z (up-screen).
+// toward for a waypoint at that delta; heading 0 is -Z (up-screen). The route
+// follower's per-tick desired heading is this call.
 //
 // It is NOT a way to face a builder at a build site: a mobile builder's
 // heading toward its build goal is produced by ordinary movement steering

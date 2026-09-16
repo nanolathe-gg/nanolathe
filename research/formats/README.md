@@ -161,14 +161,13 @@ bounds and known implementation differences.
 | TDF | `formats/tdf.go`, `formats/tdf_typed.go`, `internal/content` |
 | FBI | TDF parser, `internal/content/compile_unit.go` |
 | OTA | `formats/ota.go`, `internal/mission`, `internal/triggers` |
-| TNT / SCT | `formats/tnt.go`, `formats/sct.go`, `internal/world` |
+| TNT | `formats/tnt.go`, `internal/world` |
 | FNT | `formats/fnt.go`, GUI text rendering |
 | PCX | `formats/pcx.go`, client picture loading |
 | WAV | `formats/wav.go`, `internal/audio` |
 | TAD | Community recording tools identified in [tad.md](tad.md) |
 
 Coverage is deliberately explicit: retail save banks live in
-`[08 "Save-file organization"]` and `internal/save`; BMP decoding is in
-`formats/bmp.go` with retail loader evidence in `[02 §7]`; the strategic-AI
-text grammar belongs to `[08 R-AI-01 §12]` and is not TDF. These do not yet
-have standalone documents in this directory.
+`[08 "Save-file organization"]` and `internal/save`; the strategic-AI text
+grammar belongs to `[08 R-AI-01 §12]` and is not TDF. These do not yet have
+standalone documents in this directory.

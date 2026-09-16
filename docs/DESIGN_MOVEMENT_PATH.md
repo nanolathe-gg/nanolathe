@@ -137,10 +137,14 @@ that has since been replaced `[04 R-PATH-01 §8]`.
 
 **Goals** (`goals.go`). `Goal` is the family interface: `Enumerate` yields the
 goal cells, `StartSatisfied` is the early-exit predicate, `H` is the pre-scale
-heuristic. Four ground families and two air surfaces exist — `PointGoal`,
-`AnnulusGoal`, `RectPerimeterGoal`, and `AirWorkGoal`/`AirMovingGoal`, which
+heuristic. Three ground families exist — `PointGoal`, `AnnulusGoal` and
+`RectPerimeterGoal`. The two serialized air surfaces of `[04 R-PATH-01 §9]`
 carry a zero heuristic, enumerate nothing and never report the start satisfied,
-so a serialized air surface cannot satisfy a ground search `[04 R-PATH-01 §9]`.
+so a serialized air surface cannot satisfy a ground search; no ground order
+produces one, and this package constructs neither rather than shipping an inert
+family object nothing can reach. `DescribeGoal` answers which family a goal is
+and with which parameters, and the scheduler's diagnostics already call it, so
+it is also how a test reads a family.
 The annulus family stores the raw authored radii the heuristic clamps against
 and, separately, the `>>4`-quantized squared radii the arrival predicate
 compares. That is two unit systems in one family; it is the established
@@ -238,8 +242,10 @@ through fog `[04 §6.1 R-DOC04-B]` `[04 R-PATH-01 §2]`.
 **Routes** (`route.go`). `Route` is up to twenty published points plus the
 active and dirty bits. `Publish` clamps the count first and applies the zero-
 publication rule; `Prune` is the index-1 proximity test; `At` and `Export` are
-the two read shapes, only one of which is a predicate; `EncodeRoute` and
-`DecodeRoute` are the save form. Publication adopts the search's points
+the two read shapes, only one of which is a predicate. There is no route save
+codec: the retail mover image omits route, follower and proposal state
+`[08 R-SAVE-02 §8]`, so C16's two-bit count and signed pairs have no writer and
+no reader in this build. Publication adopts the search's points
 verbatim — the route-acceptance rule of `[04 R-PATH-01 §8]` belongs to the
 follower's goal installer and to nothing else, and running it here is the defect
 `[05 R-EGRESS-02]` describes.
@@ -432,14 +438,22 @@ Unknown — `[04 §9.1]` does not say where the cached band lives, and neither
 `[08 R-SAVE-02 §6]` nor `[08 R-SAVE-02 §8]` names a band word — so the code
 carries a `TODO(question)` there rather than a guess.
 
-**Diagnostics** (`audit.go`, `p28_parity_trace.go`, `airdiag_export.go`).
-`AuditVerdict` and `AuditFinding` classify evidence at a cell and deliberately
-choose no gameplay response; an unexplained case stays unexplained.
-`MovementTrace` and `CollisionTrace` are value copies taken at a capture
-boundary — the next route comes from the scheduler's own request trace, never
-from a guessed route. `AirExecutorState` exposes an air executor's phase and
-latches read-only so a harness can observe them without this package exporting
-mutable state. Nothing in the simulation reads any of them.
+**Diagnostics** (`p28_parity_trace.go`, `airdiag_export.go`). `MovementTrace`
+and `CollisionTrace` are value copies taken at a capture boundary — the next
+route comes from the scheduler's own request trace, never from a guessed route.
+`AirExecutorState` exposes an air executor's phase and latches read-only so a
+harness can observe them without this package exporting mutable state. Nothing
+in the simulation reads either of them.
+
+A third diagnostic stood here until the reachability sweep of 2026-09-16: a
+per-cell movement audit that collected the classifier's verdict, the resolved
+feature, the static layer value and the two revisions, and classified the
+result into a fault domain. No sink was ever attached — not the headless
+runner, not a benchmark, not `internal/airdiag` — so the collector, its finding
+classifier and the route-failure walk were reached by nothing but their own
+tests, and they have been removed rather than left looking wired. What the
+audit would have observed is still observable: the class layer's value, the
+feature resolution and the revision words are all read directly.
 
 ### 2.3 `internal/airdiag`
 
@@ -595,7 +609,10 @@ later points down, decrement, clear active below two points and set dirty
 
 **C16 — the save form.** An inactive route serializes a two-bit count of zero;
 an active route serializes `min(count, 3)` followed by that many signed 16-bit
-X/Z pairs. This is the explicit-layout exception [I13] `[04 §7.3]`.
+X/Z pairs `[04 §7.3]`. Nothing implements it: the retail save boundary carries
+no route `[08 R-SAVE-02 §8]`, and the codec that used to stand in `route.go`
+round-tripped only with itself, so it was removed rather than left as a mirror
+no save path consults.
 
 **C17 — the export helper is not a predicate.** It repeats the last stored point
 for excess indices and reads adjacent fields at a zero count. Callers gate on

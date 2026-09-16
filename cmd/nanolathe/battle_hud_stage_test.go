@@ -219,7 +219,7 @@ func TestClickPathRefusesDerivedGreyAndHiddenGadgets(t *testing.T) {
 	// A selection that can patrol arms the latch, which is the observable the
 	// two refusals below are measured against.
 	live := newSession(true, false)
-	if !live.hud.consumeClick(live, 5, 5) {
+	if !hudConsumeClick(live.hud, live, 5, 5) {
 		t.Fatal("a live PATROL button did not consume its click")
 	}
 	if got := live.battleState().Input.Latch; got != input.LatchPatrol {
@@ -227,7 +227,7 @@ func TestClickPathRefusesDerivedGreyAndHiddenGadgets(t *testing.T) {
 	}
 
 	greyed := newSession(false, false)
-	if greyed.hud.consumeClick(greyed, 5, 5) {
+	if hudConsumeClick(greyed.hud, greyed, 5, 5) {
 		t.Fatal("a greyed PATROL button consumed its click")
 	}
 	if got := greyed.battleState().Input.Latch; got != input.LatchNormal {
@@ -239,7 +239,7 @@ func TestClickPathRefusesDerivedGreyAndHiddenGadgets(t *testing.T) {
 
 	// LOAD without the transport bit is hidden, and a hidden gadget is not
 	// clickable either.
-	if greyed.hud.consumeClick(greyed, 5, 25) {
+	if hudConsumeClick(greyed.hud, greyed, 5, 25) {
 		t.Fatal("a hidden LOAD button consumed its click")
 	}
 	if got := greyed.battleState().Input.Latch; got != input.LatchNormal {
@@ -247,7 +247,7 @@ func TestClickPathRefusesDerivedGreyAndHiddenGadgets(t *testing.T) {
 	}
 	// With the transport bit LOAD is shown, and clicking it arms its latch.
 	shown := newSession(false, true)
-	if !shown.hud.consumeClick(shown, 5, 25) {
+	if !hudConsumeClick(shown.hud, shown, 5, 25) {
 		t.Fatal("a shown LOAD button did not consume its click")
 	}
 	if got := shown.battleState().Input.Latch; got != input.LatchLoad {

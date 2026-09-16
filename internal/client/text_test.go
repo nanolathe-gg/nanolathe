@@ -23,7 +23,7 @@ func TestFNTTextMeasurementAndNewline(t *testing.T) {
 func TestFNTTextDrawsContinuousBitsAfterAdmission(t *testing.T) {
 	f := testFont()
 	frame := make([]uint8, 8*5)
-	DrawText(frame, 8, 5, f, "A", 1, 2, 0, 7)
+	drawTextClipped(frame, 8, 5, f, "A", 1, 2, 0, 7, 0, 0, 8, 5)
 	// A's 3x2 bits are 101/011 and the low control byte shifts rows by 1.
 	if frame[1+1*8] != 7 || frame[3+1*8] != 7 || frame[2+2*8] != 7 || frame[3+2*8] != 7 {
 		t.Fatalf("glyph pixels were not rasterized at the baseline: %v", frame)
@@ -75,7 +75,7 @@ func TestFNTTextUsesCharacterCodeAfterReducedTableBias(t *testing.T) {
 		t.Fatalf("measurement = %d, want 1", got)
 	}
 	frame := make([]uint8, 3*3)
-	DrawText(frame, 3, 3, f, "A", 1, 0, 0, 9)
+	drawTextClipped(frame, 3, 3, f, "A", 1, 0, 0, 9, 0, 0, 3, 3)
 	if frame[1+1*3] != 9 {
 		t.Fatalf("negative baseline did not place glyph below pen: %v", frame)
 	}

@@ -15,7 +15,6 @@ import (
 type Kind = EventKind
 
 const (
-	KindInvalid         = EventKindInvalid
 	KindCOBSFX          = EventKindCOBSFX
 	KindNanolathe       = EventKindNanolathe
 	KindMuzzleFlash     = EventKindMuzzleFlash

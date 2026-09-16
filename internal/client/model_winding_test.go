@@ -11,6 +11,8 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/testsupport"
 	"github.com/nanolathe-gg/nanolathe/vfs"
+
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
 )
 
 // TestWindingCullKeepsClockwiseRings locks the sense of the cull
@@ -32,29 +34,29 @@ func TestWindingCullKeepsClockwiseRings(t *testing.T) {
 	vertices := [][3]numeric.Fixed{v(0, 0, 0), v(4, 0, 0), v(4, 0, -4), v(0, 0, -4)}
 	var origin [3]numeric.Fixed
 
-	if !modelFacePaints(vertices, []uint16{0, 1, 2, 3}, origin) {
+	if !facePaints(vertices, []uint16{0, 1, 2, 3}, origin, modelLocalVertex) {
 		t.Fatal("clockwise ring was culled; retail's right chain is to the right of its left chain here")
 	}
-	if modelFacePaints(vertices, []uint16{3, 2, 1, 0}, origin) {
+	if facePaints(vertices, []uint16{3, 2, 1, 0}, origin, modelLocalVertex) {
 		t.Fatal("counter-clockwise ring painted; retail's span comparison is empty on every row")
 	}
-	if !modelFacePaints(vertices, []uint16{0, 1, 2}, origin) {
+	if !facePaints(vertices, []uint16{0, 1, 2}, origin, modelLocalVertex) {
 		t.Fatal("clockwise triangle was culled")
 	}
-	if modelFacePaints(vertices, []uint16{0, 2, 1}, origin) {
+	if facePaints(vertices, []uint16{0, 2, 1}, origin, modelLocalVertex) {
 		t.Fatal("counter-clockwise triangle painted")
 	}
 	// Both chains are the same single edge for a two-corner primitive, so
 	// `xr == xl` on every row [R-RAST-01 §1] step 7.
-	if modelFacePaints(vertices, []uint16{0, 1}, origin) {
+	if facePaints(vertices, []uint16{0, 1}, origin, modelLocalVertex) {
 		t.Fatal("two-corner primitive painted")
 	}
 	// A degenerate ring encloses no rows at all.
-	if modelFacePaints([][3]numeric.Fixed{v(0, 0, 0), v(1, 0, -1), v(2, 0, -2)}, []uint16{0, 1, 2}, origin) {
+	if facePaints([][3]numeric.Fixed{v(0, 0, 0), v(1, 0, -1), v(2, 0, -2)}, []uint16{0, 1, 2}, origin, modelLocalVertex) {
 		t.Fatal("collinear ring painted")
 	}
 	// A malformed index suppresses the whole face [fmt 3do].
-	if modelFacePaints(vertices, []uint16{0, 1, 9}, origin) {
+	if facePaints(vertices, []uint16{0, 1, 9}, origin, modelLocalVertex) {
 		t.Fatal("out-of-range index painted")
 	}
 }
@@ -135,7 +137,7 @@ func TestRetailFlapKeepsItsOuterSkin(t *testing.T) {
 		t.Skipf("ARMCK in this install has %d flap pieces", len(flaps))
 	}
 
-	draw := presentationrender.BuildUnitDrawSimple(m.compiled, make([]compiledmodel.PieceState, len(m.compiled.Pieces)), 0, 0, 0, [3]numeric.Fixed{})
+	draw := presentationrender.BuildUnitDrawInto(m.compiled, make([]compiledmodel.PieceState, len(m.compiled.Pieces)), 0, 0, 0, frame.UnitView{}, nil, &presentationrender.DrawScratch{})
 	draw.KeyPlane = true
 	polys := c.collectDrawPolys(draw, teamColor{index: 0, known: true}, 1, modelCursorUnit)
 	if len(polys) == 0 {

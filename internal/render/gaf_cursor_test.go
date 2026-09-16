@@ -37,9 +37,6 @@ func TestCursorIndexTable(t *testing.T) {
 	if IsValidCursorIndex(0) {
 		t.Fatalf("slot 0 should be invalid [07 §8]")
 	}
-	if idx := CursorIndexFromName(""); idx != 0 {
-		t.Fatalf("empty name should map to 0, got %d", idx)
-	}
 	// Verify 1..20 all valid and names match table
 	want := map[int]string{
 		1:  "cursorattack",
@@ -75,13 +72,6 @@ func TestCursorIndexTable(t *testing.T) {
 		if !IsValidCursorIndex(idx) {
 			t.Fatalf("idx %d should be valid [07 §8]", idx)
 		}
-		if got := CursorIndexFromName(name); got != idx {
-			t.Fatalf("reverse name %q got idx %d want %d [07 §8]", name, got, idx)
-		}
-		// case-insensitive check [fmt gaf]
-		if got := CursorIndexFromName(stringUpper(name)); got != idx {
-			t.Fatalf("case-insensitive name %q got %d want %d", name, got, idx)
-		}
 		if prev, ok := seen[name]; ok {
 			t.Fatalf("duplicate name %q at %d and %d", name, prev, idx)
 		}
@@ -100,20 +90,6 @@ func TestCursorIndexTable(t *testing.T) {
 	if IsValidCursorIndex(-1) {
 		t.Fatalf("-1 should be invalid")
 	}
-	// Unknown name returns 0
-	if got := CursorIndexFromName("cursornonexistent"); got != 0 {
-		t.Fatalf("unknown name should return 0, got %d", got)
-	}
-}
-
-func stringUpper(s string) string {
-	b := []byte(s)
-	for i := range b {
-		if b[i] >= 'a' && b[i] <= 'z' {
-			b[i] -= 'a' - 'A'
-		}
-	}
-	return string(b)
 }
 
 // TestBuildSiteCursorChoice verifies build-site validity choosing [07 §8].
@@ -419,13 +395,6 @@ func TestGafCursorAssetGuarded(t *testing.T) {
 			}
 			if ref.Frame.Width == 0 || ref.Frame.Height == 0 {
 				t.Fatalf("entry %q frame %d zero dimensions", name, i)
-			}
-		}
-		// Also check reverse lookup
-		if got := CursorIndexFromName(entry.Name); got != idx {
-			// Name may differ in case but should still map
-			if got != idx {
-				t.Logf("name case mismatch %q idx %d lookup %d", entry.Name, idx, got)
 			}
 		}
 	}

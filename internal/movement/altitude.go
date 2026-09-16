@@ -57,23 +57,12 @@ func CruiseAltitudeForOffset(terrain *world.Terrain, x, z numeric.Fixed, offset 
 	return numeric.Fixed(val)
 }
 
-// CruiseAltitudeForCarrier computes targetY for carrier's point/follow command [04 §10.1].
-// offset is carrier.Def.CruiseAlt or CruiseAlt/2.
-func CruiseAltitudeForCarrier(terrain *world.Terrain, x, z numeric.Fixed, carrier *units.Unit, half bool) numeric.Fixed {
-	if carrier == nil || carrier.Def == nil {
-		return CruiseAltitudeForOffset(terrain, x, z, 0)
-	}
-	alt := carrier.Def.CruiseAlt
-	if half {
-		// Signed round toward zero [04 §10.2] altitude cruisealt/2
-		if alt >= 0 {
-			alt = alt / 2
-		} else {
-			alt = -((-alt) / 2)
-		}
-	}
-	return CruiseAltitudeForOffset(terrain, x, z, alt)
-}
+// A caller-less `CruiseAltitudeForCarrier` used to stand here, folding the
+// definition read and the optional halving into this file. It also halved the
+// 32-bit `cruisealt` without the preamble's 16-bit narrowing, so the two
+// expressions disagreed for any authored value past that range. Every commanded
+// altitude is now CruiseAltitudeForOffset over an offset the caller computes —
+// `def.CruiseAlt` whole, or HalfCruiseAlt of it [04 §10.1][04 R-AIR-01 §6].
 
 // AltitudesEqual tests |dy| < 65537 for explicit-altitude arrival [04 §10.1] one world unit plus one subunit.
 func AltitudesEqual(a, b numeric.Fixed) bool {
@@ -190,17 +179,11 @@ func MediumBand(terrain *world.Terrain, u *units.Unit, cached int) int {
 	return band
 }
 
-// ShouldEmitWake reports whether a shipped hover script would spawn its wake
-// effect for this unit's current band. The engine itself emits only the band
-// change — wake is not an engine effect [04 §9.1] — so this is a description of
-// what the stock scripts do with bands `2` and `3`, offered for tests and
-// diagnostics, not an engine emitter.
-func ShouldEmitWake(terrain *world.Terrain, u *units.Unit, cached int) bool {
-	band := MediumBand(terrain, u, cached)
-	return band == 2 || band == 3
-}
-
-// IsCruiseClamped reports whether altitude was capped at 0x1FF0000 [04 §10.1].
-func IsCruiseClamped(y numeric.Fixed) bool {
-	return int32(y.Raw()) >= MaxCruiseAltitude
-}
+// Wake is not an engine effect. The engine emits the band change alone
+// [04 §9.1]; bands `2` and `3` are the two a stock hover script answers with
+// its wake, and that decision belongs to the script, so no predicate here
+// states it.
+//
+// Nor is there a clamped-altitude predicate: CruiseAltitudeForOffset above is
+// the one place the 0x1FF0000 cap is applied [04 §10.1], and a caller asking
+// whether a value reached the cap compares it against MaxCruiseAltitude.

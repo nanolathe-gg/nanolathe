@@ -11,6 +11,35 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
+// placeWithResult is the search-and-submit shape these tests drive: the
+// placement root followed by the ordinary typed build queue, without the
+// construction task's distance cap. Production composes the same two calls in
+// Manager's build step [08 R-AI-03 §5][08 R-AI-01 §3].
+func placeWithResult(m *Manager, defKey string, w *world.Terrain) PlacementResult {
+	res := PlaceCandidate(m, defKey, w)
+	if !res.Valid {
+		return res
+	}
+	if err := queueExactResult(m, defKey, res); err != nil {
+		res.Valid = false
+		res.Reason = ReasonQueueFailed
+		res.Proof = err
+	}
+	return res
+}
+
+// stepTowardCenter is the two-axis fixture adapter for the three-axis root.
+// Production passes the builder and strategic-center Y through
+// retailPlacementOrigin [08 R-AI-03 §2].
+func stepTowardCenter(originX, originZ, centerX, centerZ, radius numeric.Fixed) (numeric.Fixed, numeric.Fixed) {
+	p := retailPlacementOrigin(
+		retailPlacementPoint{x: originX, z: originZ},
+		retailPlacementPoint{x: centerX, z: centerZ},
+		int32(radius.Int()),
+	)
+	return p.x, p.z
+}
+
 func placementTerrain(w, h int32, metal uint8) *world.Terrain {
 	t := &world.Terrain{CellW: w, CellH: h, Plot: make([]world.PlotCell, w*h)}
 	for i := range t.Plot {
@@ -65,7 +94,7 @@ func TestPlacementSelectorStrictBoundaryAndNoFallthrough(t *testing.T) {
 	// A positive selector draw with surfaceMetal zero chooses the exhaustive
 	// helper. Its empty battle-entry vector fails without falling through to B.
 	m := makePlacementManager(cat, ter, 0)
-	res := PlaceWithResult(m, "armmex", ter)
+	res := placeWithResult(m, "armmex", ter)
 	if res.Valid || res.Helper != HelperA || res.Reason != ReasonNoPatchData {
 		t.Fatalf("surfaceMetal < draw must select failing A without fallthrough: %+v", res)
 	}
@@ -86,7 +115,7 @@ func TestPlacementSelectorStrictBoundaryAndNoFallthrough(t *testing.T) {
 	r := rng.NewSimulation(seed)
 	m = makePlacementManager(cat, ter, 50)
 	m.RNG = &r
-	res = PlaceWithResult(m, "armmex", ter)
+	res = placeWithResult(m, "armmex", ter)
 	if res.Helper != HelperB {
 		t.Fatalf("surfaceMetal == draw must select B: %+v", res)
 	}
@@ -117,7 +146,7 @@ func TestScatterHelperDrawCensus(t *testing.T) {
 			}
 			m := makePlacementManager(cat, terrain, 0)
 			before := m.RNG.Draws()
-			res := PlaceWithResult(m, "armsolar", terrain)
+			res := placeWithResult(m, "armsolar", terrain)
 			if res.Valid || res.Helper != HelperB || res.Reason != ReasonTooManyTrials || res.Attempts != 30 {
 				t.Fatalf("scatter result: %+v", res)
 			}
@@ -139,21 +168,21 @@ func TestPlacementMetalScoreLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	score, err := placementMetalScore(ter, rect)
+	score, err := retailPlacementScore(ter, rect)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if score != 4 {
 		t.Fatalf("score arithmetic got %d, want 4", score)
 	}
-	limit := int64(1 * 2 * 2 * 2)
+	limit := int32(1 * 2 * 2 * 2)
 	if score > limit {
 		t.Fatalf("equal score must satisfy limit: score=%d limit=%d", score, limit)
 	}
 	for i := range ter.Plot {
 		ter.Plot[i][7] = 3
 	}
-	score, err = placementMetalScore(ter, rect)
+	score, err = retailPlacementScore(ter, rect)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +210,7 @@ func TestPlacementRejectsMissingDependencies(t *testing.T) {
 	cases[4].m.QueueBuildTyped = nil
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			res := PlaceWithResult(tc.m, "armsolar", tc.m.Terrain)
+			res := placeWithResult(tc.m, "armsolar", tc.m.Terrain)
 			if res.Valid || res.Reason != tc.want || res.Proof == nil {
 				t.Fatalf("missing dependency result: %+v", res)
 			}
@@ -193,14 +222,14 @@ func TestPlacementRejectsMissingDependencies(t *testing.T) {
 	bad := placementCatalog("armsolar", "oooo", 0)
 	bad.Units["armsolar"].FootprintX = 0
 	m := makePlacementManager(bad, ter, 0)
-	res := PlaceWithResult(m, "armsolar", ter)
+	res := placeWithResult(m, "armsolar", ter)
 	if res.Valid || res.Reason != ReasonInvalidFootprint {
 		t.Fatalf("invalid footprint must reject explicitly: %+v", res)
 	}
 	missingRules := placementCatalog("armsolar", "oooo", 0)
 	missingRules.Units["armsolar"].BMCode = 1
 	m = makePlacementManager(missingRules, ter, 0)
-	res = PlaceWithResult(m, "armsolar", ter)
+	res = placeWithResult(m, "armsolar", ter)
 	if res.Valid || res.Reason != ReasonMissingDefinition || res.Proof == nil {
 		t.Fatalf("unresolved placement profile must reject explicitly: %+v", res)
 	}

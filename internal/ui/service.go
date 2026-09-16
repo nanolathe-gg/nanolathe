@@ -455,7 +455,7 @@ func (p *Panel) scrollCapturedList(idx int, hooks WidgetHooks) {
 		}
 	}
 	if p.pointerY < r.Y+2 && l.top > 0 {
-		next := minInt(l.selected, l.top) - 1
+		next := min(l.selected, l.top) - 1
 		l.top--
 		if !p.listHeading(idx, next) {
 			p.setListSelection(idx, next, hooks)
@@ -509,7 +509,7 @@ func (p *Panel) setKnob(idx, value int, hooks WidgetHooks) {
 	if travel <= 0 {
 		return
 	}
-	value = maxInt(0, minInt(value, travel-1))
+	value = max(0, min(value, travel-1))
 	if p.knob[idx] == value {
 		return
 	}
@@ -597,7 +597,7 @@ func (p *Panel) sliderTravel(idx int, hooks WidgetHooks) int {
 		if hooks.Metric != nil {
 			metric = hooks.Metric(i)
 		}
-		rowH := maxInt(metric+1, int(other.ItemHeight))
+		rowH := max(metric+1, int(other.ItemHeight))
 		if rowH <= 0 {
 			return 0
 		}
@@ -606,10 +606,10 @@ func (p *Panel) sliderTravel(idx int, hooks WidgetHooks) int {
 			return 0
 		}
 		barH := int(p.Window.PlacedRect(idx).H)
-		knob := maxInt(10, int(float32(rows)/float32(l.Len())*float32(barH-3)))
-		return maxInt(0, barH-knob-3)
+		knob := max(10, int(float32(rows)/float32(l.Len())*float32(barH-3)))
+		return max(0, barH-knob-3)
 	}
-	return maxInt(0, int(g.Range))
+	return max(0, int(g.Range))
 }
 
 func (p *Panel) sliderKnobSize(idx int, hooks WidgetHooks) int {
@@ -629,12 +629,12 @@ func (p *Panel) sliderKnobSize(idx int, hooks WidgetHooks) int {
 		if hooks.Metric != nil {
 			metric = hooks.Metric(i)
 		}
-		rowH := maxInt(metric+1, int(other.ItemHeight))
+		rowH := max(metric+1, int(other.ItemHeight))
 		if rowH <= 0 {
 			return 0
 		}
 		rows := int((p.Window.PlacedRect(i).H - 2) / int32(rowH))
-		return maxInt(10, int(float32(rows)/float32(l.Len())*float32(int(p.Window.PlacedRect(idx).H)-3)))
+		return max(10, int(float32(rows)/float32(l.Len())*float32(int(p.Window.PlacedRect(idx).H)-3)))
 	}
 	return int(g.KnobSize)
 }
@@ -643,7 +643,7 @@ func (p *Panel) setListSelection(idx, sel int, hooks WidgetHooks) {
 	if l == nil || l.Len() == 0 {
 		return
 	}
-	sel = maxInt(0, minInt(sel, l.Len()-1))
+	sel = max(0, min(sel, l.Len()-1))
 	if l.selected == sel {
 		return
 	}
@@ -656,7 +656,7 @@ func (p *Panel) setListSelection(idx, sel int, hooks WidgetHooks) {
 		}
 		if other.Kind == gui.KindListBox {
 			if peer := p.ListAt(i); peer != nil {
-				peer.selected, peer.top = minInt(l.selected, peer.Len()-1), l.top
+				peer.selected, peer.top = min(l.selected, peer.Len()-1), l.top
 			}
 			continue
 		}
@@ -701,8 +701,8 @@ func (p *Panel) listPointerSelectable(idx int, hooks WidgetHooks) bool {
 		return false
 	}
 	sel := l.top + int((p.pointerY-(r.Y+2))/int32(rowH))
-	sel = minInt(sel, l.top+rows-1)
-	sel = minInt(sel, l.Len()-1)
+	sel = min(sel, l.top+rows-1)
+	sel = min(sel, l.Len()-1)
 	return sel >= 0 && !(g.Attribs&0x200 != 0 && p.listHeading(idx, sel))
 }
 func (p *Panel) listHeading(idx, selection int) bool {
@@ -823,18 +823,6 @@ func flipBinary(value int) int {
 		return 0
 	}
 	return value
-}
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 func (p *Panel) decayFlashAt(index int) {
 	if p.flash[index] == 0 {

@@ -15,6 +15,8 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
 	"github.com/nanolathe-gg/nanolathe/internal/hud"
 	"github.com/nanolathe-gg/nanolathe/vfs"
+
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // Two dead helpers stood here. buildPageCount counted authored <unit>N.GUI
@@ -243,14 +245,6 @@ func (h *retailBattleHUD) loadWindow(name string) (*gui.Window, *formats.GAF) {
 	return window, page
 }
 
-// loadWindowProbe is used only while finding the contiguous authored page
-// prefix. The first absent page is the established terminator and must not
-// become a construction error [07 §9].
-func (h *retailBattleHUD) loadWindowProbe(name string) (*gui.Window, *formats.GAF) {
-	window, page, _ := h.loadWindowInternal(name, false)
-	return window, page
-}
-
 // loadWindowRequired resolves a committed numbered builder page. Unlike a
 // probe, a selected existing page reports a missing/malformed GUI and returns
 // no usable window. Numbered page art remains optional because the established
@@ -327,7 +321,7 @@ func (h *retailBattleHUD) ensureWindowBuilt(name string, window *gui.Window, pag
 }
 
 // resolvePageArt validates the page-specific GAF independently of the GUI
-// cache. Missing or malformed page art is a normal null result: gadgetFrame
+// cache. Missing or malformed page art is a normal null result: the frame
 // then searches side/main support GAFs and common BUTTONS0 [07 §6].
 func (h *retailBattleHUD) resolvePageArt(name string) *formats.GAF {
 	if h == nil || h.side == nil || name == "" || name == strings.ToLower(h.side.NamePrefix)+"main" || name == strings.ToLower(h.side.NamePrefix)+"gen" {
@@ -421,12 +415,8 @@ func (h *retailBattleHUD) generatedProductGAF(product string) *formats.GAF {
 	return loaded
 }
 
-func (h *retailBattleHUD) gadgetFrame(gad gui.Gadget, page *formats.GAF, pressed, disabled bool) *formats.GAFFrame {
-	return h.gadgetButtonFrame(gad, page, boolInt(pressed), 0, disabled)
-}
-
 // gadgetButtonFrame consumes one installed art entry and the runtime button
-// words. Other painters retain gadgetFrame's compatibility adapter above.
+// words.
 func (h *retailBattleHUD) gadgetButtonFrame(gad gui.Gadget, page *formats.GAF, down, stage int, disabled bool) *formats.GAFFrame {
 	entry := h.gadgetArtEntry(gad, page)
 	stockButtons := false
@@ -459,7 +449,7 @@ func selectGadgetFrame(entry *formats.GAFEntry, gad gui.Gadget, pressed, disable
 			if ref.Frame == nil {
 				continue
 			}
-			score := absInt(int(ref.Frame.Width)-int(gad.Rect.W)) + absInt(int(ref.Frame.Height)-int(gad.Rect.H))
+			score := numeric.Abs(int(ref.Frame.Width)-int(gad.Rect.W)) + numeric.Abs(int(ref.Frame.Height)-int(gad.Rect.H))
 			if score < bestScore {
 				best, bestScore = i, score
 			}

@@ -34,7 +34,6 @@ func TestPlayerAccountCarriesNoPassAggregates(t *testing.T) {
 
 	// A freshly reset destination, as the load path's world rebuild leaves it.
 	var dst economy.Player
-	economy.InitPlayer(&dst)
 	slot.ApplyToEconomy(&dst)
 
 	// What the account does carry comes back.

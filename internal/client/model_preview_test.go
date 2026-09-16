@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"image"
 	"testing"
 
 	compiledmodel "github.com/nanolathe-gg/nanolathe/internal/model"
@@ -14,7 +15,7 @@ func TestModelPreviewRejectsUnusableInputs(t *testing.T) {
 		t.Fatal("nil VFS unexpectedly accepted")
 	}
 	r := &ModelPreviewRenderer{client: &Client{}, palette: nil}
-	if _, err := r.RenderModel(ModelPreviewOptions{Model: "armcom", Width: 128, Height: 128}); err == nil {
+	if _, err := r.RecordModel(ModelPreviewOptions{Model: "armcom", Width: 128, Height: 128}); err == nil {
 		t.Fatal("uninitialized renderer unexpectedly accepted")
 	}
 }
@@ -45,7 +46,7 @@ func TestModelPreviewRendersRetailArmCommanderDeterministically(t *testing.T) {
 	if !models[0].Geometry.Eligible {
 		t.Fatalf("ordinary preview geometry unexpectedly fell back: %v", models[0].Geometry.Fallback)
 	}
-	again, err := r.RenderModel(opts)
+	again, err := renderPreview(r, opts)
 	if err != nil {
 		t.Fatalf("front repeat: %v", err)
 	}
@@ -53,7 +54,7 @@ func TestModelPreviewRendersRetailArmCommanderDeterministically(t *testing.T) {
 		t.Fatal("same model inputs produced different pixels")
 	}
 	opts.Model = "armcom.3do"
-	withExtension, err := r.RenderModel(opts)
+	withExtension, err := renderPreview(r, opts)
 	if err != nil {
 		t.Fatalf("extension shorthand: %v", err)
 	}
@@ -73,7 +74,7 @@ func TestModelPreviewRendersRetailArmCommanderDeterministically(t *testing.T) {
 	}
 
 	opts.Heading = 16384
-	right, err := r.RenderModel(opts)
+	right, err := renderPreview(r, opts)
 	if err != nil {
 		t.Fatalf("right: %v", err)
 	}
@@ -108,7 +109,7 @@ func TestModelPreviewRendersRetailArmCommanderDeterministically(t *testing.T) {
 	if !hasShadedTexture {
 		t.Fatal("open solar scale-one packet lost the production shaded texture path")
 	}
-	closed, err := r.RenderModel(ModelPreviewOptions{
+	closed, err := renderPreview(r, ModelPreviewOptions{
 		Model: "armsolar", Owner: 0, Width: 192, Height: 160, Scale: 2,
 		Background: 0, KeyPlane: true, Structure: true, DisableAntiAlias: true,
 	})
@@ -181,4 +182,15 @@ func TestARMSOLAROpenPreviewPose(t *testing.T) {
 			t.Fatalf("pose %d = %#v, want %s at 135 degrees", i, poses[i], want[i])
 		}
 	}
+}
+
+// renderPreview records a preview and keeps only its classic reference image.
+// Production callers (cmd/nanolathe's shot path) use RecordModel/RecordGeometry
+// and read the record; this convenience exists for the image comparisons below.
+func renderPreview(r *ModelPreviewRenderer, opts ModelPreviewOptions) (*image.RGBA, error) {
+	record, err := r.RecordModel(opts)
+	if err != nil {
+		return nil, err
+	}
+	return record.Image, nil
 }

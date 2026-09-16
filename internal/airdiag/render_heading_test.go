@@ -6,7 +6,8 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/model"
 	"github.com/nanolathe-gg/nanolathe/internal/render"
-	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
 )
 
 // TestRenderedFacingFollowsSimHeading separates "the simulation does not turn"
@@ -34,7 +35,7 @@ func TestRenderedFacingFollowsSimHeading(t *testing.T) {
 	}
 	var samples []sample
 	for _, heading := range []uint16{0, 16384, 32768, 49152} {
-		draw := render.BuildUnitDrawSimple(m, nil, heading, 0, 0, [3]numeric.Fixed{})
+		draw := render.BuildUnitDrawInto(m, nil, heading, 0, 0, frame.UnitView{}, nil, &render.DrawScratch{})
 		if draw == nil || len(draw.Transforms) == 0 {
 			t.Fatalf("draw at heading %d produced no transforms", heading)
 		}

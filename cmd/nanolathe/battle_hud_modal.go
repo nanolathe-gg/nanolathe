@@ -510,7 +510,7 @@ func (h *retailBattleHUD) modalPage(window *gui.Window) *formats.GAF {
 	return nil
 }
 
-// modalGadgetFrame resolves modal control art through [07 §4]'s three-link
+// modalGadgetFrameState resolves modal control art through [07 §4]'s three-link
 // chain: the gadget's own named entry in the window's own GAF, then the
 // side-specific interface GAF, then the built-in fallback (the common GUI
 // stock controls, and BUTTONS0 for a button).
@@ -525,10 +525,6 @@ func (h *retailBattleHUD) modalPage(window *gui.Window) *formats.GAF {
 //
 // Side-*page* GAFs are still not consulted: they carry unrelated entries with
 // colliding names (notably EXIT) and are not part of ARMOPT's retail binding.
-func (h *retailBattleHUD) modalGadgetFrame(gad gui.Gadget, page *formats.GAF, pressed, disabled bool) *formats.GAFFrame {
-	return h.modalGadgetFrameState(gad, page, boolInt(pressed), 0, disabled)
-}
-
 func (h *retailBattleHUD) modalGadgetFrameState(gad gui.Gadget, page *formats.GAF, down, stage int, disabled bool) *formats.GAFFrame {
 	if gad.Kind == gui.KindButton && gad.ExternalArtResolved {
 		frame, _ := retailButtonFrameFromEntry(gad.ExternalArt, gad, int(gad.ArtFrame), down, stage, disabled)
@@ -565,16 +561,6 @@ func (h *retailBattleHUD) modalGadgetFrameState(gad gui.Gadget, page *formats.GA
 		}
 	}
 	return nil
-}
-
-// modalStagedButtonFrame is the compatibility adapter retained for staged
-// renderer tests. Both shell-backed and direct battles now use the same
-// installed-art verdict as the ordinary modal painter.
-func (h *retailBattleHUD) modalStagedButtonFrame(gad gui.Gadget, page *formats.GAF, pressed bool, stage int, grey bool) *formats.GAFFrame {
-	if h == nil {
-		return nil
-	}
-	return h.modalGadgetFrameState(gad, page, boolInt(pressed), stage, grey)
 }
 
 // modalButtonArtEntry has the same explicit-resolution boundary as the

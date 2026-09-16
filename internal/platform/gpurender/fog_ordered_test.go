@@ -110,7 +110,7 @@ func TestFogOrderedBlackPropagatesAlternateChildTint(t *testing.T) {
 
 func TestFogOrderedZoomClipsBeforeSamplingAtlasNeighbours(t *testing.T) {
 	for _, k := range []float32{0.25, 0.375, 0.75, 1, 1.25} {
-		x0, y0, x1, y1 := fogRemapScreenRect(5, 7, 19, 23, k)
+		x0, y0, x1, y1 := fogRemapScreenRectOffset(5, 7, 19, 23, k, 0, 0)
 		for sy := 0; sy < 32; sy++ {
 			for sx := 0; sx < 32; sx++ {
 				x, y := int(math.Floor(float64(sx)/float64(k))), int(math.Floor(float64(sy)/float64(k)))

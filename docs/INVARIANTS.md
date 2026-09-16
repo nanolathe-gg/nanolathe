@@ -117,7 +117,7 @@ A* heuristic scale as a full signed 64-bit product arithmetically shifted, and
 |---|---|---|
 | definition float → integer | signed-64 truncation, retain low 32 bits (`__ftol`) `[01 R-DET-01 §1]` | `numeric.TruncateFloat64ToLow32` |
 | in-range float → integer | truncate toward zero (`__ftol`) | `int32(f)`, `Fixed.Int` |
-| world → cell/tile | floor with sign correction `[03 §2.1]` | `world.WorldToCell` / `WorldToTile` |
+| world → cell | floor with sign correction `[03 §2.1]` | `world.WorldToCell` |
 | fixed × fixed | floor (arithmetic shift) | `Fixed.Mul` |
 | fixed ÷ fixed | truncate toward zero (`idiv`) | `Fixed.Div` |
 
@@ -334,8 +334,10 @@ type Unit struct {
 The exceptions — where byte layout *is* the contract, because bytes cross a
 boundary — are: file formats in `formats/`, the 13-byte plot cell (`[03 §2.2]`),
 the 28-byte game-time save box, HAPIBANK headers and account records, the
-9-byte damage packet's wire form if it is ever serialized, and route save
-records. The active save boundary is retail account parsing and staged battle
+9-byte damage packet's wire form if it is ever serialized, and the 35-byte
+mover save record — which carries no route state of its own, because the
+retail image rebuilds the route object instead of persisting it
+`[08 R-SAVE-02 §8]`. The active save boundary is retail account parsing and staged battle
 restoration. There is no alternate Nanolathe save codec.
 Everything else is a Go struct.
 

@@ -39,7 +39,7 @@ func composeSub(t *testing.T, c *Client, fs *vfs.FS, name string, owner uint8) (
 		c.indexed[i] = 0
 	}
 	states := make([]compiledmodel.PieceState, len(m.Pieces))
-	draw := presentationrender.BuildUnitDrawSimple(m, states, 0, 0, 0, [3]numeric.Fixed{})
+	draw := presentationrender.BuildUnitDrawInto(m, states, 0, 0, 0, frame.UnitView{}, nil, &presentationrender.DrawScratch{})
 	draw.KeyPlane = true
 	composed, ok := c.composeModel(draw, owner, teamColor{index: owner, known: true}, 1, modelCursorUnit, nil, 0)
 	if !ok {
@@ -131,7 +131,7 @@ func TestMobileShadowCopiesTheComposedSubmarine(t *testing.T) {
 		t.Skipf("ARMSUB is not in this install: %v", err)
 	}
 	states := make([]compiledmodel.PieceState, len(m.Pieces))
-	draw := presentationrender.BuildUnitDrawSimple(m, states, 0, 0, 0, [3]numeric.Fixed{})
+	draw := presentationrender.BuildUnitDrawInto(m, states, 0, 0, 0, frame.UnitView{}, nil, &presentationrender.DrawScratch{})
 	draw.KeyPlane, draw.CastsShadow = true, true
 
 	compose := func(tick uint32, sea int32, capture string) (bodyPixels, shadowPixels int) {

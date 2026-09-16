@@ -1,7 +1,6 @@
 package combat
 
 import (
-	"encoding/binary"
 	"sort"
 	"strings"
 
@@ -14,10 +13,10 @@ import (
 
 // Packet is the nine-byte damage packet [06 §9.1].
 //
-// Layout per [06 §9.1]: builder tag (1) + victim id (2) + shooter id (2) +
-// amount (2) + armor/direction (1) + kind (1) = 9 bytes. Go struct uses named
-// fields (I13); byte offsets are identity, not layout, except where serialized
-// for wire/save boundaries (I13 exception).
+// Retail's record is builder tag (1) + victim id (2) + shooter id (2) +
+// amount (2) + armor/direction (1) + kind (1) [06 §9.1]. That is record
+// identity, not Go layout: the fields below are named and the engine never
+// serializes a packet, so no byte form exists here (I13).
 // Ids are u16 with 0 = null and NO generation tags — stale-id reuse is
 // accepted per [06 §5.1], [06 §9.1] (I5).
 type Packet struct {
@@ -27,52 +26,6 @@ type Packet struct {
 	Amount    uint16 // signed 16-bit amount packed modulo 65,536 [06 §9.2] step 7 — low 16 bits after C20 pipeline
 	Direction uint8  // one-byte armor/direction value [06 §9.1], [06 §9.2] C21 — HitByWeapon receives two 400-radius trig components derived from it [06 §9.1]
 	Kind      uint8  // kind byte [06 §9.1], [06 §9.2] C21 — 1 ordinary, 2 paralyzer, 10 heal, 11 skip-reaction [06 §9.1] [06 §12.1]
-}
-
-// PacketSize is the wire size [06 §9.1].
-const PacketSize = 9 // [06 §9.1] nine-byte damage packet
-
-// MarshalPacket serializes p into 9 bytes little-endian [06 §9.1] (I13 exception).
-// Wire order: builder(1) | victim(2) | attacker(2) | amount(2) | direction(1) | kind(1) [06 §9.1].
-func MarshalPacket(p Packet) [PacketSize]byte {
-	var b [PacketSize]byte
-	b[0] = p.Builder
-	binary.LittleEndian.PutUint16(b[1:3], p.Victim)
-	binary.LittleEndian.PutUint16(b[3:5], p.Attacker)
-	binary.LittleEndian.PutUint16(b[5:7], p.Amount)
-	b[7] = p.Direction
-	b[8] = p.Kind
-	return b
-}
-
-// UnmarshalPacket deserializes 9 bytes [06 §9.1].
-func UnmarshalPacket(b [PacketSize]byte) Packet {
-	return Packet{
-		Builder:   b[0],
-		Victim:    binary.LittleEndian.Uint16(b[1:3]),
-		Attacker:  binary.LittleEndian.Uint16(b[3:5]),
-		Amount:    binary.LittleEndian.Uint16(b[5:7]),
-		Direction: b[7],
-		Kind:      b[8],
-	}
-}
-
-// MarshalBytes is a slice variant that validates length.
-func MarshalBytes(p Packet) []byte {
-	b := MarshalPacket(p)
-	out := make([]byte, PacketSize)
-	copy(out, b[:])
-	return out
-}
-
-// UnmarshalBytes validates length 9 [06 §9.1].
-func UnmarshalBytes(b []byte) (Packet, bool) {
-	if len(b) != PacketSize {
-		return Packet{}, false
-	}
-	var arr [PacketSize]byte
-	copy(arr[:], b)
-	return UnmarshalPacket(arr), true
 }
 
 // Player-slot control-byte identities [05 R-SHARE-01 §1]. The byte lives on the
@@ -393,29 +346,6 @@ func scaleAcceptedAmount(amount int32, defenderKills int32, isArmored bool, dama
 
 	// Step 7: pack low 16 bits into packet, modulo 65,536 [06 §9.2].
 	return uint16(amount) // modulo 65,536 [06 §9.2] step 7
-}
-
-// ValidatePacketTarget reports whether victim acceptance requires alive bit and
-// clear dead latch [06 §9.1]. Stale-id reuse is accepted: nonzero id converts
-// directly by slot arithmetic with no liveness probe for attacker, and victim
-// acceptance requires alive+clear dead latch so reused slot accepts stale packet
-// [06 §5.1] C18. Attacker receives NO validation [06 §9.1] C18.
-// The unit status word carries the alive bit (0x10000000) and the dead latch
-// (0x4000); acceptance requires alive set and the dead latch clear
-// [P1-07 §2.6] [06 §9.1]. Kinds 1/2/0xA/0xB are the damage kinds the
-// damage-intake handler accepts; death causes 3..11 use a separate cause
-// dispatch [P1-07 §2.6].
-func ValidatePacketTarget(victim pool.Handle, isAlive func(pool.Handle) bool, isDeadLatch func(pool.Handle) bool) bool {
-	if victim == 0 {
-		return false // 0=null [06 §9.1] C18
-	}
-	if isAlive != nil && !isAlive(victim) {
-		return false // unit status word alive bit (0x10000000) required [06 §9.1] [P1-07 §2.6]
-	}
-	if isDeadLatch != nil && isDeadLatch(victim) {
-		return false // unit status word dead latch (0x4000) must be clear [06 §9.1] [P1-07 §2.6]
-	}
-	return true
 }
 
 // ReactionSeams binds the parts of the damage-intake reaction routine of

@@ -1,6 +1,7 @@
 package client
 
 import (
+	"slices"
 	"sync/atomic"
 
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
@@ -352,22 +353,6 @@ func (c *Client) cachedShadowInputs(draw *presentationrender.UnitDraw) cachedSha
 	return in
 }
 
-// samePieceStates reports whether two poses are the same folded piece state. The
-// shadow projection is a pure function of the model, this pose and the model
-// scale, so an equal pose means an equal projection; comparing len(pieces) small
-// structs is what replaces the per-frame walk, transform and winding test.
-func samePieceStates(a, b []model.PieceState) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
 // retainedShadowGeometry is this frame's shadow packet for a subject that has a
 // retained body. The projection is reused whenever its own inputs are unchanged,
 // and the packet the frame records is the retained one rebased onto this frame's
@@ -381,7 +366,7 @@ func (c *Client) retainedShadowGeometry(body *cachedModelBody, draw *presentatio
 		return c.modelShadowGeometry(draw)
 	}
 	if in := c.cachedShadowInputs(draw); !body.shadowValid || body.shadowInputs != in ||
-		!samePieceStates(body.shadowPose, drawPieceStates(draw)) {
+		!slices.Equal(body.shadowPose, drawPieceStates(draw)) {
 		c.replaceCachedShadow(body, draw, in)
 	}
 	if body.shadow == nil {

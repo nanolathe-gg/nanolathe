@@ -344,7 +344,6 @@ func (p *pathProvider) HasRequest(unit pool.Handle) bool {
 	}
 	return false
 }
-func (p *pathProvider) pending(player uint8) int { return len(p.requests[player]) }
 func (p *pathProvider) allRequests() []path.Request {
 	var out []path.Request
 	if p.world == nil {
@@ -494,7 +493,7 @@ func goalCellForWorld(goal numeric.Fixed, foot int32) int32 {
 	half := int64(0x80000) // 1<<19 half cell [R-P0-01][03 §2.1]
 	cell := int64(1 << 20) // 0x100000 one cell [03 §2.1]
 	v := int64(goal) + half - int64(foot)*half
-	return int32(floorDiv(v, cell))
+	return int32(numeric.FloorDiv(v, cell))
 }
 
 func (s *System) pathFootprint(u *units.Unit) (int32, int32) {
@@ -560,9 +559,6 @@ func (s *System) livePathOrder(r path.Request) (*units.Unit, *orders.Node, bool)
 	}
 	return u, binding.order, true
 }
-
-// ThresholdSqFromRadius is exported helper for tests [R-P0-01].
-func ThresholdSqFromRadius(radiusParam int32) int32 { return thresholdSqFromRadius(radiusParam) }
 
 // ArrivalHandleFor returns the cached arrival handle for a unit, if any [R-P0-01].
 func (s *System) ArrivalHandleFor(h pool.Handle) (goalX, goalZ int32, threshSq int32, ok bool) {
@@ -3140,10 +3136,10 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	desired := u.Move.Heading
 	if !brakingOnly {
 		// The mover's desired heading uses the self-minus-target vector; the
-		// ground velocity step negates its sine/cosine components, so this
-		// operand reversal points the unit toward its waypoint [04 R-MOV-01
-		// §2][04 R-MOV-01 §4].
-		desired = numeric.AngleFromAtan2(-dx, -dz).Raw()
+		// ground velocity step negates its sine/cosine components, so the
+		// operand reversal HeadingFromDelta performs points the unit toward its
+		// waypoint [04 R-MOV-01 §2][04 R-MOV-01 §4].
+		desired = HeadingFromDelta(dx, dz)
 	}
 	oldXRaw := int64(u.X)
 	oldZRaw := int64(u.Z)

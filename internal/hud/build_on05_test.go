@@ -46,22 +46,23 @@ func TestBuildProductsDataDrivenPaging(t *testing.T) {
 		t.Fatalf("nil definition page count = %d, want 0", got)
 	}
 	// The NEXT and PREV gadgets never return to page 0 [07 R-HUD-03 §6].
-	flags := uint32(0) // page 0
-	flags = NextPage(flags, cnt)
-	if DecodePage(flags) != 1 {
-		t.Fatalf("next page want 1 got %d", DecodePage(flags))
+	// TestPageCycleKeysButtonsAndDigits below walks the whole range; this
+	// checks the wrap on the page count this builder actually authors.
+	page := NextPageButton(0, cnt)
+	if page != 1 {
+		t.Fatalf("next page want 1 got %d", page)
 	}
-	flags = NextPage(flags, cnt)
-	if DecodePage(flags) != 2 {
-		t.Fatalf("next page want 2 got %d", DecodePage(flags))
+	page = NextPageButton(page, cnt)
+	if page != 2 {
+		t.Fatalf("next page want 2 got %d", page)
 	}
-	flags = NextPage(flags, cnt)
-	if DecodePage(flags) != 1 {
-		t.Fatalf("next from the last page wraps to 1, got %d", DecodePage(flags))
+	page = NextPageButton(page, cnt)
+	if page != 1 {
+		t.Fatalf("next from the last page wraps to 1, got %d", page)
 	}
-	flags = PrevPage(flags, cnt)
-	if DecodePage(flags) != 2 {
-		t.Fatalf("prev from page 1 wraps to the last page, got %d", DecodePage(flags))
+	page = PrevPageButton(page, cnt)
+	if page != 2 {
+		t.Fatalf("prev from page 1 wraps to the last page, got %d", page)
 	}
 	// Validate product not invented
 	if !ValidateBuildProductForTest(all, "a") {

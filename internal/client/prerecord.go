@@ -25,6 +25,7 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // PresentationInputs is the pipeline's validity digest: everything a recording
@@ -409,7 +410,7 @@ func (c *Client) savePresentationCRT() {
 // itself, since a presented frame is shown at the instant it was predicted for
 // (§13.10).
 func (p *preRecorder) observeDrift(want PresentationInputs, presented bool) {
-	tick := abs32(p.recorded.TickFraction16 - want.TickFraction16)
+	tick := numeric.Abs(p.recorded.TickFraction16 - want.TickFraction16)
 	if tick > p.driftTick {
 		p.driftTick = tick
 	}
@@ -423,20 +424,13 @@ func (p *preRecorder) observeDrift(want PresentationInputs, presented bool) {
 	if !p.recorded.CameraFractionSet || !want.CameraFractionSet {
 		return
 	}
-	camera := abs32(p.recorded.CameraFraction16 - want.CameraFraction16)
+	camera := numeric.Abs(p.recorded.CameraFraction16 - want.CameraFraction16)
 	if camera > p.driftCamera {
 		p.driftCamera = camera
 	}
 	if presented && camera > p.driftHitCamera {
 		p.driftHitCamera = camera
 	}
-}
-
-func abs32(v int32) int32 {
-	if v < 0 {
-		return -v
-	}
-	return v
 }
 
 // PreRecordMisses reports the miss counts by reason, indexed by MissReason, and

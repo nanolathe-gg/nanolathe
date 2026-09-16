@@ -6,6 +6,8 @@ import (
 	compiledmodel "github.com/nanolathe-gg/nanolathe/internal/model"
 	presentationrender "github.com/nanolathe-gg/nanolathe/internal/render"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
 )
 
 // TestModelNoseFacesTravelDirection locks the one relationship that ties the
@@ -65,7 +67,7 @@ func TestModelNoseFacesTravelDirection(t *testing.T) {
 		{49152, reach, 0, "+X, right"},
 	}
 	for _, tc := range cases {
-		states := presentationrender.BuildUnitPieceStates(m, nil, tc.heading, 0, 0)
+		states := presentationrender.BuildUnitDrawInto(m, nil, tc.heading, 0, 0, frame.UnitView{}, nil, &presentationrender.DrawScratch{}).PieceStates
 		nose := compiledmodel.Compose(m, states, m.Root).Apply(m.Pieces[0].Vertices[1])
 		gotX, gotY, _ := modelLocalVertex(nose, [3]numeric.Fixed{})
 		if gotX != tc.wantX || gotY != tc.wantY {

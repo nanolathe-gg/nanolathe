@@ -69,6 +69,12 @@ func TestAnchorsMissingIsFatal(t *testing.T) {
 	if _, err := AnchorsFromSide(nil); err == nil {
 		t.Fatalf("expected error for nil SideDef")
 	}
+	// The first anchor in file order is equally mandatory [02 §6] C8.
+	side3 := makeFullSide("ARM")
+	delete(side3.Anchors, content.CanonicalKey("LOGO"))
+	if _, err := AnchorsFromSide(side3); err == nil {
+		t.Fatalf("expected error for missing LOGO")
+	}
 }
 
 func TestAnchorsVerbatimNoNormalization(t *testing.T) {
@@ -147,15 +153,4 @@ func TestAnchorsOrderedHelper(t *testing.T) {
 	if l2 != 10 || r2v != 100 || t2 != 20 || b2 != 200 {
 		t.Fatalf("Ordered normal failed")
 	}
-}
-
-func TestMustAnchorsPanicsOnMissing(t *testing.T) {
-	side := makeFullSide("ARM")
-	delete(side.Anchors, content.CanonicalKey("LOGO"))
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatalf("expected panic for missing anchor")
-		}
-	}()
-	_ = MustAnchors(side)
 }

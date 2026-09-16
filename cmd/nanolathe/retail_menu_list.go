@@ -15,17 +15,6 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/ui"
 )
 
-type retailScrollbarGeometry struct {
-	vertical   bool
-	axisStart  int
-	axisEnd    int
-	thumbLen   int
-	travel     int
-	maxTop     int
-	arrowStart int
-	arrowEnd   int
-}
-
 func (g *gameShell) drawRetailList(c *client.Client, p *ui.Panel, index int, gad gui.Gadget, r gui.Rect) {
 	g.drawListBox(c, r)
 	g.drawRetailListRows(c, p, index, gad, r)
@@ -497,10 +486,6 @@ func drawRetailScrollbarThumb(c *client.Client, first, middle, last *formats.GAF
 	blitRetailFrame(c, last, x, end)
 }
 
-func (g *gameShell) listForAssoc(assoc int32) *ui.List {
-	return listForAssocPanel(g.activePanel(), assoc)
-}
-
 func listForAssocPanel(p *ui.Panel, assoc int32) *ui.List {
 	return p.ListAt(listIndexForAssocPanel(p, assoc))
 }
@@ -529,63 +514,6 @@ func listRectForAssocPanel(p *ui.Panel, assoc int32) gui.Rect {
 	return gui.Rect{}
 }
 
-func (g *gameShell) retailScrollbarGeometry(gad gui.Gadget, r gui.Rect) (retailScrollbarGeometry, bool) {
-	if g == nil || g.assets == nil || g.assets.common == nil {
-		return retailScrollbarGeometry{}, false
-	}
-	e, ok := g.assets.common.Find("SLIDERS")
-	if !ok || len(e.Frames) < 20 {
-		return retailScrollbarGeometry{}, false
-	}
-	vertical := r.H >= r.W
-	base := 0
-	if !vertical {
-		base = 10
-	}
-	arrow0 := e.Frames[base+6].Frame
-	arrow1 := e.Frames[base+8].Frame
-	thumb0 := e.Frames[base+3].Frame
-	thumb1 := e.Frames[base+4].Frame
-	thumb2 := e.Frames[base+5].Frame
-	if arrow0 == nil || arrow1 == nil || thumb0 == nil || thumb1 == nil || thumb2 == nil {
-		return retailScrollbarGeometry{}, false
-	}
-	maxTop := 0
-	if p := g.activePanel(); p != nil {
-		maxTop = p.ListMaxTopAt(listIndexForAssocPanel(p, gad.Assoc))
-	}
-	geometry := retailScrollbarGeometry{
-		vertical: vertical,
-		maxTop:   maxTop,
-	}
-	if vertical {
-		arrowExtent := int(arrow0.Height)
-		if int(arrow1.Height) > arrowExtent {
-			arrowExtent = int(arrow1.Height)
-		}
-		geometry.arrowStart = int(r.Y)
-		geometry.arrowEnd = int(r.Y+r.H) - arrowExtent
-		geometry.axisStart = int(r.Y) + arrowExtent
-		geometry.axisEnd = int(r.Y+r.H) - arrowExtent
-		geometry.thumbLen = int(thumb0.Height) + int(thumb1.Height) + int(thumb2.Height)
-	} else {
-		arrowExtent := int(arrow0.Width)
-		if int(arrow1.Width) > arrowExtent {
-			arrowExtent = int(arrow1.Width)
-		}
-		geometry.arrowStart = int(r.X)
-		geometry.arrowEnd = int(r.X+r.W) - arrowExtent
-		geometry.axisStart = int(r.X) + arrowExtent
-		geometry.axisEnd = int(r.X+r.W) - arrowExtent
-		geometry.thumbLen = int(thumb0.Width) + int(thumb1.Width) + int(thumb2.Width)
-	}
-	geometry.travel = geometry.axisEnd - geometry.axisStart - geometry.thumbLen
-	if geometry.travel < 0 {
-		geometry.travel = 0
-	}
-	return geometry, true
-}
-
 // the retail implementation raises a list's authored item height to at least one pixel
 // beyond the active font height. This is the default used by the authored
 // campaign and map lists when itemheight is zero.
@@ -608,87 +536,6 @@ func retailListAssocItemHeightPanel(g *gameShell, p *ui.Panel, assoc int32) int 
 		}
 	}
 	return g.retailTextHeight() + 1
-}
-
-func (g *gameShell) adjustRetailScrollbar(index int, gad gui.Gadget, delta int) {
-	if g == nil || delta == 0 {
-		return
-	}
-	// Scrollbar and slider are one kind [07 R-WGT-01 §5]; a kind-4 gadget on
-	// the open options page drives its own value rather than a list origin.
-	if g.adjustRetailSlider(index, delta) {
-		return
-	}
-	l := g.listForAssoc(gad.Assoc)
-	if l == nil || l.Len() == 0 {
-		return
-	}
-	if p := g.activePanel(); p != nil {
-		listIndex := listIndexForAssocPanel(p, gad.Assoc)
-		_ = p.SetListTopAt(listIndex, l.Top()+delta, p.ListMaxTopAt(listIndex))
-	}
-}
-
-func (g *gameShell) clickRetailScrollbar(index int, gad gui.Gadget, r gui.Rect, x, y int32) {
-	if g.clickRetailSlider(index, r, x, y) {
-		return
-	}
-	geometry, ok := g.retailScrollbarGeometry(gad, r)
-	if !ok {
-		return
-	}
-	coordinate := int(x)
-	if geometry.vertical {
-		coordinate = int(y)
-	}
-	// The runtime builder appends two ordinary button gadgets for the arrow
-	// frames. Their callbacks move the associated list one row at a time.
-	if coordinate < geometry.axisStart {
-		// Keep the arrow armed until the left button is released. The ordinary
-		// child button callback is not run on the down edge.
-		return
-	}
-	if coordinate >= geometry.axisEnd {
-		// Keep the arrow armed until the left button is released. The ordinary
-		// child button callback is not run on the down edge.
-		return
-	}
-	l := g.listForAssoc(gad.Assoc)
-	if l == nil {
-		return
-	}
-	thumbPos := geometry.axisStart
-	if geometry.maxTop > 0 {
-		thumbPos += l.Top() * geometry.travel / geometry.maxTop
-	}
-	if coordinate < thumbPos || coordinate >= thumbPos+geometry.thumbLen {
-		// the retail implementation starts capture only when the click is in the
-		// calculated knob rectangle; clicking the track beside it does not
-		// invent page-step behavior.
-		return
-	}
-	if p := g.activePanel(); p != nil {
-		_ = p.BeginScrollDrag(index, geometry.vertical, int32(coordinate), geometry.maxTop, geometry.travel)
-	}
-}
-
-func (g *gameShell) releaseRetailScrollbar(index int, gad gui.Gadget, r gui.Rect, x, y int32) {
-	if g.releaseRetailSlider(index) {
-		return
-	}
-	geometry, ok := g.retailScrollbarGeometry(gad, r)
-	if !ok {
-		return
-	}
-	coordinate := int(x)
-	if geometry.vertical {
-		coordinate = int(y)
-	}
-	if coordinate < geometry.axisStart {
-		g.adjustRetailScrollbar(index, gad, -1)
-	} else if coordinate >= geometry.axisEnd {
-		g.adjustRetailScrollbar(index, gad, 1)
-	}
 }
 
 // Finish list-associated kind-4 records before Panel copies their state.

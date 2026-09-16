@@ -124,10 +124,10 @@ func TestCampaignInvalidDifficulty(t *testing.T) {
 		} else if err.Error() != "No suitable schema type..." {
 			t.Fatalf("difficulty %d: want verbatim No suitable schema type... got %q", d, err.Error())
 		}
-		if _, err := SelectSchema(ota, d, 2); err == nil {
-			t.Fatalf("SelectSchema difficulty %d: want failure", d)
+		if _, err := SelectSchemaForType(ota, TypeCampaign, d, 2); err == nil {
+			t.Fatalf("SelectSchemaForType difficulty %d: want failure", d)
 		} else if err.Error() != "No suitable schema type..." {
-			t.Fatalf("SelectSchema difficulty %d: verbatim mismatch got %q", d, err.Error())
+			t.Fatalf("SelectSchemaForType difficulty %d: verbatim mismatch got %q", d, err.Error())
 		}
 	}
 }
@@ -250,13 +250,13 @@ func TestNetworkZeroCountAcceptance(t *testing.T) {
 	if s.Name != "Schema 1" {
 		t.Fatalf("zero: want Schema 1 (last accepted candidate) got %q", s.Name)
 	}
-	// Also via unified SelectSchema with network map
-	s, err = SelectSchema(ota, -1, 0)
+	// Also through the typed entry point the load path uses.
+	s, err = SelectSchemaForType(ota, TypeSkirmish, -1, 0)
 	if err != nil {
-		t.Fatalf("unified zero: %v", err)
+		t.Fatalf("typed zero: %v", err)
 	}
 	if s.Name != "Schema 1" {
-		t.Fatalf("unified zero: want Schema 1 got %q", s.Name)
+		t.Fatalf("typed zero: want Schema 1 got %q", s.Name)
 	}
 }
 
@@ -366,8 +366,8 @@ func TestVerbatimDiagnostics(t *testing.T) {
 	if _, err := SelectNetworkSchema(ota, 2); err == nil || err.Error() != "Very bad news! No MSG!" {
 		t.Fatalf("missing Global network: want verbatim got %v", err)
 	}
-	if _, err := SelectSchema(ota, 0, 2); err == nil || err.Error() != "Very bad news! No MSG!" {
-		t.Fatalf("missing Global unified: want verbatim got %v", err)
+	if _, err := SelectSchemaForType(ota, TypeCampaign, 0, 2); err == nil || err.Error() != "Very bad news! No MSG!" {
+		t.Fatalf("missing Global typed: want verbatim got %v", err)
 	}
 	// No suitable schema type...
 	src := `
@@ -393,14 +393,14 @@ func TestVerbatimDiagnostics(t *testing.T) {
 		t.Fatalf("no suitable network: want verbatim got %v", err)
 	}
 	// Nil OTA
-	if _, err := SelectSchema(nil, 0, 2); err == nil || err.Error() != "Very bad news! No MSG!" {
+	if _, err := SelectSchemaForType(nil, TypeCampaign, 0, 2); err == nil || err.Error() != "Very bad news! No MSG!" {
 		t.Fatalf("nil OTA: want Very bad news! got %v", err)
 	}
 }
 
 func TestSchemaBeforePlacementOrdering(t *testing.T) {
 	// C4: selection happens BEFORE placement records are instantiated.
-	// Reflect in API: SelectSchema returns Schema name; placement builder consumes it later.
+	// Reflect in API: SelectSchemaForType returns Schema name; placement builder consumes it later.
 	// Verify that selecting a schema does not require units/features to be present,
 	// and that the returned name can be used to locate the schema section for later
 	// placement building.
@@ -450,8 +450,8 @@ func TestSchemaBeforePlacementOrdering(t *testing.T) {
 	}
 }
 
-func TestUnifiedSelectSchema(t *testing.T) {
-	// Campaign map via unified
+func TestSelectSchemaForTypeDispatch(t *testing.T) {
+	// Campaign map through the campaign type
 	camp := `
 [GlobalHeader]
 {
@@ -461,11 +461,11 @@ func TestUnifiedSelectSchema(t *testing.T) {
 }
 `
 	otaCamp := mustLoadOTA(t, camp)
-	s, err := SelectSchema(otaCamp, 1, 0)
+	s, err := SelectSchemaForType(otaCamp, TypeCampaign, 1, 0)
 	if err != nil || s.Name != "Schema 1" {
-		t.Fatalf("unified campaign: %v %q", err, s.Name)
+		t.Fatalf("campaign type: %v %q", err, s.Name)
 	}
-	// Network map via unified (difficulty ignored when map is network-only)
+	// Network map through a skirmish type (difficulty is not consulted)
 	net := `
 [GlobalHeader]
 {
@@ -482,11 +482,11 @@ func TestUnifiedSelectSchema(t *testing.T) {
 }
 `
 	otaNet := mustLoadOTA(t, net)
-	s, err = SelectSchema(otaNet, 0, 2) // difficulty 0 but map is network-only -> should still select Network 1
+	s, err = SelectSchemaForType(otaNet, TypeSkirmish, 0, 2) // difficulty 0 is ignored; Network 1 is selected
 	if err != nil || s.Name != "Schema 0" {
-		t.Fatalf("unified network: %v %q", err, s.Name)
+		t.Fatalf("skirmish type: %v %q", err, s.Name)
 	}
-	// Ensure case-insensitive unified
+	// Ensure case-insensitive candidate comparison
 	campCI := `
 [GlobalHeader]
 {
@@ -494,9 +494,9 @@ func TestUnifiedSelectSchema(t *testing.T) {
 }
 `
 	otaCI := mustLoadOTA(t, campCI)
-	s, err = SelectSchema(otaCI, 0, 0)
+	s, err = SelectSchemaForType(otaCI, TypeCampaign, 0, 0)
 	if err != nil || s.Name != "Schema 0" {
-		t.Fatalf("unified case-insensitive: %v %q", err, s.Name)
+		t.Fatalf("case-insensitive: %v %q", err, s.Name)
 	}
 }
 

@@ -7,9 +7,10 @@ import (
 	compiledmodel "github.com/nanolathe-gg/nanolathe/internal/model"
 	"github.com/nanolathe-gg/nanolathe/internal/palette"
 	presentationrender "github.com/nanolathe-gg/nanolathe/internal/render"
-	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/testsupport"
 	"github.com/nanolathe-gg/nanolathe/vfs"
+
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
 )
 
 // composeStockModel renders one stock 3DO into a small framebuffer with the
@@ -29,9 +30,10 @@ func composeStockModel(t *testing.T, pal *palette.Tables, fs *vfs.FS, name strin
 		cam:       &camera.Camera{X: -48, Z: -50, ViewW: w, ViewH: h, MapW: 4096, MapH: 4096},
 		antiAlias: antiAlias,
 	}
-	draw := presentationrender.BuildUnitDrawSimple(m, nil, 0, 0, 0, [3]numeric.Fixed{0, 0, 0})
+	draw := presentationrender.BuildUnitDrawInto(m, nil, 0, 0, 0, frame.UnitView{}, nil, &presentationrender.DrawScratch{})
 	draw.Structure, draw.KeyPlane = structure, true
-	// Compose through the UNSHADED renderer. BuildUnitDrawSimple always emits
+	// Compose through the UNSHADED renderer. A BMcode=0 pose with the Shading
+	// display option on emits
 	// per-corner SHD rows, and the shaded flat writer of [R-REN-03A §5] would
 	// then resolve this fixture's one authored colour into a spread of tones —
 	// correct for a structure, but it is the downscale this test is measuring,

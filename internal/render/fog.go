@@ -15,16 +15,8 @@ import (
 	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/palette"
-	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/visibility"
 )
-
-// FogFrames is the resolved, immutable fog art supplied by the presentation
-// asset catalog. A nil entry is an ordinary optional-resource miss.
-type FogFrames struct {
-	Gray  [4][]*formats.GAFFrame
-	Black [4][]*formats.GAFFrame
-}
 
 // FogTilePixels is the hard fog tile size in map pixels [03 §3.3][03 §2.1].
 // One visibility cell covers 32 world pixels and edges are hard [03 §3.3].
@@ -80,33 +72,6 @@ type FogOp struct {
 // (DESIGN_GPU_RENDERER §14.2).
 func (op FogOp) ViewScale() camera.ViewScale {
 	return op.Scale.Norm()
-}
-
-// floorDiv returns floor(a/b) for b>0 with sign correction [03 §2.1][I3].
-// Go's / truncates toward zero; fog alignment needs floor for negative camera
-// residues including signed residues [03 §3.3].
-func floorDiv(a, b int32) int32 {
-	q := a / b
-	r := a % b
-	if r != 0 && (a < 0) != (b < 0) {
-		q--
-	}
-	return q
-}
-
-// FogTileForPixel returns the fog grid coordinate for a map pixel [03 §2.1][03 §3.3].
-// One tile is 32 map pixels; alignment uses floor division for negative
-// coordinates including signed residues [03 §2.1][I3].
-func FogTileForPixel(px int32) int32 {
-	return floorDiv(px, FogTilePixels)
-}
-
-// FogTileForWorld returns the fog grid coordinate for a world Fixed coordinate
-// [03 §2.1][03 §3.3] (I2) (I3). The world value is narrowed to its signed high
-// word (map pixel) before the shift by five [03 §3.2] "pixel components".
-func FogTileForWorld(world numeric.Fixed) int32 {
-	px := int32(int64(world) >> 16) // high word [03 §3.2]
-	return FogTileForPixel(px)
 }
 
 // FogScreenRect returns the hard-edged 32x32 screen rectangle for grid cell
@@ -257,48 +222,6 @@ func cellOpsInto(ops []FogOp, gx, gy int32, c0, c1 uint8, cam *camera.Camera, ta
 	return ops
 }
 
-// BuildFogOpsInto is the reusable-scratch variant for the live client frame
-// path. It preserves row-major operation order while avoiding an operation
-// slice allocation after warmup [03 §3.3][I1].
-func BuildFogOpsInto(out []FogOp, cache *visibility.FogCache, cam *camera.Camera, viewW, viewH int32, gridW, gridH int32, tables *palette.Tables, dither bool) []FogOp {
-	if cache == nil {
-		return out[:0]
-	}
-	// FogCache is the sole producer of viewport nibbles. This function only
-	// translates the already-aligned cache to ordered blits; a zero origin is
-	// valid and is not a sentinel for a map-sized cache. [03 §3.3]
-	_ = viewW
-	_ = viewH
-	_ = gridW
-	_ = gridH
-	ox, oz := cache.Origin()
-	w, h := cache.Dimensions()
-	if w <= 0 || h <= 0 {
-		return out[:0]
-	}
-	out = out[:0]
-	if cap(out) < int(w*h) {
-		out = make([]FogOp, 0, int(w*h))
-	}
-	for row := int32(0); row < h; row++ {
-		for col := int32(0); col < w; col++ {
-			c0, c1 := cache.Channel(col, row)
-			if c0 == 0 && c1 == 0 {
-				continue
-			}
-			out = cellOpsInto(out, ox+col, oz+row, c0, c1, cam, tables, dither)
-		}
-	}
-	return out
-}
-
-// BuildFogOpsWindowInto preserves all GAF cells when no authored art is supplied:
-// a nominal cell rectangle cannot bound an offset frame [03 R-RR16-A §3].
-// Call BuildFogOpsWindowWithArtInto for a bounded viewport walk.
-func BuildFogOpsWindowInto(out []FogOp, cache *visibility.FogCache, cam *camera.Camera, surfW, surfH int32, tables *palette.Tables, dither bool) []FogOp {
-	return buildFogOpsWindowInto(out, cache, cam, surfW, surfH, tables, dither, nil)
-}
-
 // BuildFogOpsWindowWithArtInto bounds the window by the union of authored leaf
 // extents and cell fills. Composite parents do not clip their children, whose
 // offsets are measured from the original anchor [03 R-COMP-01 §2][fmt gaf].
@@ -345,6 +268,11 @@ func BuildFogOpsWindowWithArtInto(out []FogOp, cache *visibility.FogCache, cam *
 	return buildFogOpsWindowInto(out, cache, cam, surfW, surfH, tables, dither, &bounds)
 }
 
+// buildFogOpsWindowInto walks the cache in row-major order and emits the fog
+// blits that reach the surface. A nil bounds preserves every GAF cell — a
+// nominal cell rectangle cannot bound an offset frame [03 R-RR16-A §3] — while
+// a supplied bounds is the authored-art window BuildFogOpsWindowWithArtInto
+// measures.
 func buildFogOpsWindowInto(out []FogOp, cache *visibility.FogCache, cam *camera.Camera, surfW, surfH int32, tables *palette.Tables, dither bool, bounds *[4]int32) []FogOp {
 	out = out[:0]
 	if cache == nil || surfW <= 0 || surfH <= 0 {

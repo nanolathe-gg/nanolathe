@@ -42,7 +42,20 @@ func TestSecondaryWarningReachesCatalogWithoutBlockingStockOpening(t *testing.T)
 	if !found {
 		t.Fatalf("catalog did not publish the secondary diagnostic: %v", cat.Warnings)
 	}
-	if manifest, err := PreflightSkirmish(fs, cat, "Ashap Plateau", 0); err != nil {
-		t.Fatalf("unrelated stock opening refused: %v, %+v", err, manifest.Diagnostics)
+	// The unrelated stock opening is untouched by the mismatched download:
+	// the side's own commander still compiles as a complete, playable
+	// definition with its program and weapon links resolved. There is no
+	// separate admission gate to consult — a definition either survives the
+	// compile with its links, or it is refused where a unit is created
+	// (DESIGN_CONTENT_VFS §3.5).
+	if len(cat.Sides) == 0 || cat.Sides[0] == nil {
+		t.Fatal("compiled corpus lost its side records")
+	}
+	commander, ok := cat.Unit(cat.Sides[0].Commander)
+	if !ok || commander == nil || commander.DiscoveryOnly {
+		t.Fatalf("stock commander %q lost its playable identity", cat.Sides[0].Commander)
+	}
+	if commander.Script == nil || commander.Weapon1Def == nil {
+		t.Fatalf("stock commander %q lost its script or weapon links", commander.CanonicalKey)
 	}
 }

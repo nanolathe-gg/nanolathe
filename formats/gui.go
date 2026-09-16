@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-
-	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // GUI is a decoded panel definition: its header gadget and the gadgets that
@@ -240,15 +238,6 @@ func isGUIStringStart(value byte) bool {
 
 func isGUIStringByte(value byte) bool {
 	return isGUIStringStart(value) || value >= '0' && value <= '9' || value == ' ' || value == '_' || value == '-' || value == '!' || value == '?' || value == '.'
-}
-
-// LoadGUIFile reads and decodes a panel definition from the VFS.
-func LoadGUIFile(fs vfs.FSOps, name string) (*GUI, error) {
-	data, err := readVFS(fs, name)
-	if err != nil {
-		return nil, err
-	}
-	return LoadGUI(data)
 }
 
 func fillCommon(out *CommonGadget, section *Section) error {

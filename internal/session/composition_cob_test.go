@@ -22,24 +22,21 @@ import (
 )
 
 // TestCompositionRetailCOBBindings exercises the production path against the
-// authored chain selected by the retail preflight: commander, Peewee, solar,
-// mex, and Kbot lab. It is deliberately asset-gated; no synthetic model or
-// empty COB is accepted here.
+// side's authored opening chain: commander, Kbot-lab product, solar, mex, and
+// Kbot lab. It is deliberately asset-gated; no synthetic model or empty COB is
+// accepted here.
 //
 // Read-only: it only looks up units and binds independently-constructed COB
 // state, it never writes into the catalog, so it shares the process-wide
 // compile [internal/testsupport/retailcat].
 func TestCompositionRetailCOBBindings(t *testing.T) {
 	cat, fs := retailcat.Shared(t)
-	manifest, err := content.PreflightSkirmish(fs, cat, "Ashap Plateau", 0)
-	if err != nil {
-		t.Fatalf("retail preflight: %v", err)
-	}
-	names := []string{manifest.Commander, manifest.LabProduct, manifest.Solar, manifest.Mex, manifest.KbotLab}
+	chain := retailcat.SelectOpeningChain(t, cat, 0)
+	names := []string{chain.Commander, chain.LabProduct, chain.Solar, chain.Mex, chain.KbotLab}
 	for _, name := range names {
 		def, ok := cat.Unit(name)
 		if !ok || def == nil {
-			t.Fatalf("preflight unit %q missing from catalog", name)
+			t.Fatalf("selected unit %q missing from catalog", name)
 		}
 		mdl, firstProv, err := loadAuthoredModel(fs, def.ObjectName)
 		if err != nil {

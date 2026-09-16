@@ -1,7 +1,6 @@
 package movement
 
 import (
-	"reflect"
 	"testing"
 )
 
@@ -27,16 +26,5 @@ func TestRoutePruneUsesSecondWaypoint(t *testing.T) {
 	r.Prune(Point{X: 5, Z: 1})
 	if r.Count != 2 || r.Points[0] != (Point{X: 5, Z: -2}) || r.Points[1] != (Point{X: 9, Z: 4}) || !r.Active {
 		t.Fatalf("prune = active %v count %d points %#v", r.Active, r.Count, r.Points[:2])
-	}
-}
-
-func TestRouteSaveRoundTrip(t *testing.T) {
-	want := &Route{Active: true, Count: 3, Points: [20]Point{{X: -2, Z: 4}, {X: 8, Z: -16}, {X: 31, Z: 32}}}
-	got, err := DecodeRoute(EncodeRoute(want))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Active != want.Active || got.Count != want.Count || !reflect.DeepEqual(got.Points[:3], want.Points[:3]) {
-		t.Fatalf("round trip = %+v, want %+v", got, want)
 	}
 }

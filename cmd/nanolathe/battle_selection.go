@@ -55,20 +55,6 @@ func (b *battleSession) selectedCommandUnits() []*units.Unit {
 	return out
 }
 
-// catalogDefID returns the stable compiled catalog identity used by the HUD
-// page guard. It is deliberately not a literal placeholder and does not use
-// the allocation order of the live unit pool [02 §5][07 §9] C10.
-func (b *battleSession) catalogDefID(u *units.Unit) uint16 {
-	if b == nil || b.cat == nil || u == nil || u.Def == nil {
-		return 0
-	}
-	id, ok := b.cat.UnitDefIndex(u.Def.CanonicalKey)
-	if !ok || id == 0 || id > 0xffff {
-		return 0
-	}
-	return uint16(id)
-}
-
 // pickTarget returns the unit handle under the cursor if any, else ground pos.
 // It is the ONE picking routine that respects fog (local-player word), overlap
 // (nearest squared distance wins with strict < tie-break so lower slot wins on
@@ -199,6 +185,8 @@ func snapshotFeatureVisible(f *frame.Frame, v frame.FeatureView, viewer uint8) b
 		client.SnapshotPointVisible(f.Visibility, maxX, v.Y, maxZ, viewer)
 }
 
+// isCorpseName is a definition-only helper for authored feature checks.
+// Picking itself never calls the live feature service [07 §8][I6].
 func (b *battleSession) isCorpseName(name string) bool {
 	if b == nil || b.cat == nil {
 		return false
@@ -212,15 +200,6 @@ func (b *battleSession) isCorpseName(name string) bool {
 	}
 	_, ok := b.cat.Unit(key)
 	return ok
-}
-
-// isCorpseFeature remains a definition-only helper for authored feature
-// checks. Picking itself never calls the live feature service [07 §8][I6].
-func (b *battleSession) isCorpseFeature(def *content.FeatureDef) bool {
-	if def == nil {
-		return false
-	}
-	return b.isCorpseName(def.CanonicalKey)
 }
 
 func (b *battleSession) snapshotUnitCopy(v frame.UnitView) *units.Unit {

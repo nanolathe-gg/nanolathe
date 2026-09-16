@@ -44,9 +44,10 @@ type FireEvents interface {
 // FirePorts carries everything the spawner needs from outside this package.
 //
 // Slot reload, stockpile ammunition and resource payment are deliberately NOT
-// here. The per-slot pipeline owns those steps [06 §4.1] C1 — see TickSlot —
-// and the spawner only validates, allocates, initializes and notifies. Both
-// layers owning them is how a stockpile launch could consume two rounds.
+// here. The per-slot pipeline owns those steps [06 §4.1] C1 — see
+// Service.StepWeaponsForUnit — and the spawner only validates, allocates,
+// initializes and notifies. Both layers owning them is how a stockpile launch
+// could consume two rounds.
 type FirePorts struct {
 	// ShooterSide is the firing unit's side, recorded on the projectile so
 	// damage credit and hostility resolve against a real owner [06 §6.1].
@@ -196,8 +197,8 @@ func liveCreationFamilyForWeapon(w *content.WeaponDef) CreationFamily {
 // pool-full [06 §4.1] C4.
 //
 // Reload (C7), stockpile ammunition and the resource debit (C6) are the
-// pipeline's, not the spawner's: TickSlot performs them after a successful
-// return, in the order its PipelineStep enumeration fixes.
+// pipeline's, not the spawner's: Service.StepWeaponsForUnit performs them
+// after a successful return, in the established step order [06 §4.1] C1.
 func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, ports FirePorts) (pool.Handle, bool) {
 	if svc == nil || slot == nil || slot.Weapon == nil {
 		return 0, false

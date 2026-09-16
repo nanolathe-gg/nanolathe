@@ -432,7 +432,7 @@ func (p *Panel) SetListMaxTopAt(index, top int) {
 	if p == nil || index < 0 || index >= len(p.listMaxTop) {
 		return
 	}
-	p.listMaxTop[index] = maxInt(0, top)
+	p.listMaxTop[index] = max(0, top)
 }
 func (p *Panel) Hovered() int {
 	if p == nil {
@@ -948,7 +948,7 @@ func (p *Panel) FillTextListAt(index int, items []string, flags []byte, metric i
 		g.ItemHeight = int16(rowH)
 	}
 	remaining := int(p.Window.PlacedRect(index).H)
-	maxTop := maxInt(0, len(l.items)-1)
+	maxTop := max(0, len(l.items)-1)
 	for row := len(l.items) - 1; row >= 0; row-- {
 		remaining -= rowH
 		if remaining < 0 {

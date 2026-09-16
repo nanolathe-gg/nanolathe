@@ -20,7 +20,7 @@ func TestRetailEndMissionAuthoredControls(t *testing.T) {
 	}
 	defer fs.Close()
 
-	window, err := gui.Load(fs, "guis/endmsn.gui")
+	window, err := gui.LoadWithTranslation(fs, "guis/endmsn.gui", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

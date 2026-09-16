@@ -129,7 +129,7 @@ func TestSeaplanePlatformBuildClicksUseInstalledNames(t *testing.T) {
 		if !b.hud.sameButton(b, cx, cy, cx, cy) {
 			t.Fatalf("%s: gadget %d not hit at its own rect center", name, gadgetIndex)
 		}
-		if !b.hud.consumeClick(b, cx, cy) {
+		if !hudConsumeClick(b.hud, b, cx, cy) {
 			t.Fatalf("%s: click not consumed by HUD", name)
 		}
 		if b.battleState().Input.BuildDef != "" {

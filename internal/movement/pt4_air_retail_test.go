@@ -61,7 +61,7 @@ func pt4Session(t *testing.T) *pt4Fixture {
 	cfg.Players[0].Side, cfg.Players[0].Controller = 0, session.SkirmishControllerHuman
 	cfg.Players[1].Side, cfg.Players[1].Controller = 1, session.SkirmishControllerComputer
 	cfg.Players[0].AllyGroup, cfg.Players[1].AllyGroup = 5, 5
-	s, err := session.NewSkirmishWithFS(fs, cat, cfg)
+	s, err := session.NewSkirmishWithProgress(fs, cat, cfg, nil)
 	if err != nil {
 		t.Fatalf("construct retail %q: %v", pt4Map, err)
 	}
@@ -198,18 +198,7 @@ func pt4Offset(angle uint16, r numeric.Fixed) (numeric.Fixed, numeric.Fixed) {
 func pt4Dist(a *units.Unit, x, z numeric.Fixed) int64 {
 	dx := int64(a.X-x) >> 16
 	dz := int64(a.Z-z) >> 16
-	return isqrt64(dx*dx + dz*dz)
-}
-
-func isqrt64(v int64) int64 {
-	if v <= 0 {
-		return 0
-	}
-	r := int64(1)
-	for r*r <= v {
-		r++
-	}
-	return r - 1
+	return numeric.ISqrt64(dx*dx + dz*dz)
 }
 
 // TestRetailConstructionAircraftFliesToTheSiteBeforeBuilding is play-test
@@ -271,7 +260,7 @@ func TestRetailConstructionAircraftFliesToTheSiteBeforeBuilding(t *testing.T) {
 	tested := history[createdTick-2]
 	dx := int64(tested.x-product.X) >> 16
 	dz := int64(tested.z-product.Z) >> 16
-	testedDist := isqrt64(dx*dx + dz*dz)
+	testedDist := numeric.ISqrt64(dx*dx + dz*dz)
 	if testedDist >= int64(ca.Def.BuildDistance) {
 		t.Fatalf("nanoframe created at tick %d with the aircraft %d world units from the product (started %d from the site); the air leg arrives only inside builddistance %d [04 R-ORD-02 §2]",
 			createdTick, testedDist, startDist, ca.Def.BuildDistance)

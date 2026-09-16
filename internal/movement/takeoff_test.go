@@ -127,7 +127,10 @@ func TestTakeoffPreambleLeavesTheGroundPlane(t *testing.T) {
 	if _, held := sys.Grid.OccupantAt(cell); held {
 		t.Fatal("accepted takeoff retained its ground cell [04 R-COLL-01 §4]")
 	}
-	want := CruiseAltitudeForCarrier(sys.Terrain, u.X, u.Z, u, true)
+	// The preamble's own expression: the goal offset is the 16-bit narrowing of
+	// cruisealt halved, resolved against max(sea level, terrain height)
+	// [04 R-AIR-01 §6][04 §10.1].
+	want := CruiseAltitudeForOffset(sys.Terrain, u.X, u.Z, int32(HalfCruiseAlt(u.Def.CruiseAlt)))
 	got, pending := sys.ClimbTargetFor(u.Handle)
 	if !pending {
 		t.Fatal("the preamble installed no initial climb marker [04 R-AIR-01 §6 step 4]")

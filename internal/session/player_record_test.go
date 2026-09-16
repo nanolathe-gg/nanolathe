@@ -85,3 +85,16 @@ func TestPostEntryReadersSurviveAnEmptySetupRecord(t *testing.T) {
 		t.Fatalf("a reader consulted the setup record:\nbefore %+v\nafter  %+v", before, after)
 	}
 }
+
+// controllerForOwner is the slot's control byte — 1 a locally controlled
+// human, 2 a computer player, 3 a remote peer, 0 an inactive slot
+// [05 R-SHARE-01 §1][08 R-SKIR-01 §2]. It is the byte registration stores and
+// the `Player%i` account persists; this test reads it through the same record
+// lookup the shipped accessors use.
+func (s *Session) controllerForOwner(owner int) uint8 {
+	p := s.playerRecord(owner)
+	if p == nil || !p.Exists {
+		return 0
+	}
+	return p.ControllerState
+}

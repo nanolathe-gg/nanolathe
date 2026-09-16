@@ -22,53 +22,40 @@ func bindFixtureControlBytes(s *Service) {
 	s.ControlByte = func(uint8) uint8 { return ControlByteHuman }
 }
 
-func TestPacketRoundTrip(t *testing.T) {
-	// C18: packet is nine bytes with u16 ids where 0=null, no generation tags [06 §9.1] C18 (I5)
-	cases := []Packet{
-		{Victim: 0, Attacker: 0, Amount: 0, Direction: 0, Kind: KindOrdinary, Builder: 0},
-		{Victim: 1, Attacker: 2, Amount: 30000, Direction: 42, Kind: KindParalyzer, Builder: 7},
-		{Victim: 300, Attacker: 300, Amount: 65535, Direction: 255, Kind: KindNoReaction, Builder: 255},
-	}
-	for _, p := range cases {
-		b := MarshalPacket(p)
-		if len(b) != PacketSize {
-			t.Fatalf("packet size %d != %d [06 §9.1] C18", len(b), PacketSize)
-		}
-		q := UnmarshalPacket(b)
-		if p != q {
-			t.Fatalf("round-trip mismatch: got %+v want %+v [06 §9.1] C18", q, p)
-		}
-		// Slice variant
-		s := MarshalBytes(p)
-		r, ok := UnmarshalBytes(s)
-		if !ok || r != p {
-			t.Fatalf("slice round-trip mismatch [06 §9.1] C18")
-		}
-	}
-	// 0 = null sentinel preserved [06 §5.1] C18
-	nullPkt := Packet{Victim: 0, Attacker: 0, Amount: 123, Builder: 1}
-	b := MarshalPacket(nullPkt)
-	q := UnmarshalPacket(b)
-	if q.Victim != 0 || q.Attacker != 0 {
-		t.Fatalf("null id not preserved [06 §5.1] C18")
-	}
-}
-
 func TestPacketNoGenerationStaleReuse(t *testing.T) {
-	// C18: ids are u16 with no generation token, stale-id reuse accepted [06 §5.1] C18 (I5)
-	// Simulate slot reuse: damage packet addressing reused slot is accepted if alive+clear dead latch, no generation check.
-	h1 := pool.Handle(5)
-	// Pretend slot 5 was freed and reused; packet still addresses 5 and is accepted based on current alive, not generation
-	isAlive := func(h pool.Handle) bool { return h == 5 }
-	isDeadLatch := func(h pool.Handle) bool { return false }
-	p := Packet{Victim: uint16(h1), Attacker: uint16(pool.Handle(2)), Amount: 100, Kind: KindOrdinary}
-	if !ValidatePacketTarget(pool.Handle(p.Victim), isAlive, isDeadLatch) {
-		t.Fatalf("stale-id reuse should be accepted when slot alive [06 §5.1] C18")
+	// C18: handles are 16-bit with no generation token, so a packet addressing
+	// a slot that was freed and reused is accepted on the CURRENT occupant's
+	// alive bit and clear death latch and never on a generation compare
+	// [06 §5.1] C18 [06 §9.1] (I5). The attacker id receives NO validation at
+	// all [06 §9.1] C18. The live gate is AcceptDamage's victim test.
+	f := newReactionFixture(t)
+	victim, attacker := f.victim.Handle, f.attacker.Handle
+
+	if got := f.svc.AcceptDamage(f.w, 1, DamageInput{Victim: victim, Attacker: attacker, Nominal: 1, Kind: KindOrdinary}); !got.Accepted {
+		t.Fatalf("a live slot must accept the packet addressed to it [06 §5.1] C18")
 	}
-	// Attacker receives NO validation [06 §9.1] C18
-	if ValidatePacketTarget(pool.Handle(p.Attacker), func(h pool.Handle) bool { return false }, nil) {
-		// victim check fails — but attacker check should not be performed on attacker id
-		// ValidatePacketTarget is victim-only; attacker id is not validated at all
+
+	// The attacker's slot is freed under the packet: nothing validates it, so
+	// the packet is still accepted [06 §9.1] C18.
+	f.w.FreeImmediate(attacker)
+	if got := f.svc.AcceptDamage(f.w, 2, DamageInput{Victim: victim, Attacker: attacker, Nominal: 1, Kind: KindOrdinary}); !got.Accepted {
+		t.Fatalf("the attacker id receives no validation [06 §9.1] C18")
+	}
+
+	// The victim's two acceptance terms, one at a time.
+	f.victim.Dying = true
+	if got := f.svc.AcceptDamage(f.w, 3, DamageInput{Victim: victim, Nominal: 1, Kind: KindOrdinary}); got.Accepted {
+		t.Fatalf("victim acceptance requires a clear death latch [06 §9.1] C18")
+	}
+	f.victim.Dying = false
+	f.victim.Alive = false
+	if got := f.svc.AcceptDamage(f.w, 4, DamageInput{Victim: victim, Nominal: 1, Kind: KindOrdinary}); got.Accepted {
+		t.Fatalf("victim acceptance requires the alive bit set [06 §9.1] C18")
+	}
+
+	// Handle 0 is the pool's null sentinel and is never a victim [06 §9.1] C18.
+	if got := f.svc.AcceptDamage(f.w, 5, DamageInput{Victim: 0, Nominal: 1, Kind: KindOrdinary}); got.Accepted {
+		t.Fatalf("the null handle is never accepted [06 §9.1] C18")
 	}
 }
 
@@ -279,28 +266,6 @@ func TestFalloffNoClamp(t *testing.T) {
 	}
 }
 
-func TestNoImpulse(t *testing.T) {
-	// C26: there is NO impulse or pushing [06 §9.4] C26. ApplyImpulse is
-	// intentionally empty, and this pins that it stays empty: nothing in the
-	// blast path may move a victim.
-	//
-	// The live area sweep is ExplodeWeaponAt, whose victim enumeration is
-	// covered by the splash-traversal and feature-impact cases; this test used
-	// to drive a second, unit-only copy of the sweep that had no non-test
-	// caller and has since been removed (AU-14 W-6).
-	u := UnitForArea{
-		Handle: 2,
-		Pos:    Vec3{X: numericFromInt(0), Y: numericFromInt(0), Z: numericFromInt(0)},
-		Min:    Vec3{X: numericFromInt(-10), Y: numericFromInt(-10), Z: numericFromInt(-10)},
-		Max:    Vec3{X: numericFromInt(10), Y: numericFromInt(10), Z: numericFromInt(10)},
-	}
-	before := u.Pos
-	ApplyImpulse()
-	if u.Pos != before {
-		t.Fatalf("ApplyImpulse is not empty [06 §9.4] C26")
-	}
-}
-
 func TestNoExplodeSuppressionScope(t *testing.T) {
 	// C28: noexplode refinements [06 §13.2] C28
 	// In ordinary impact branch, noexplode gates ONLY retirement block, not damage etc.
@@ -349,8 +314,6 @@ func TestHealingBypass(t *testing.T) {
 		t.Fatalf("paralyzer uses ordinary scaling [06 §9.2] C20")
 	}
 }
-
-func numericFromInt(v int64) numeric.Fixed { return numeric.Fixed(v * 65536) }
 
 // --- WU-19-13: the armored bit and the control-byte gates [06 R-DMG-01 §8] ---
 

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/platform/ebitenapp"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
@@ -37,28 +36,6 @@ func (g *gameShell) windowOptions() ebitenapp.RunOptions {
 		}
 	}
 	return options
-}
-
-func directWindowOptions(opts Options, preferences settings.Settings) ebitenapp.RunOptions {
-	options := windowRunOptions(opts)
-	options.Fullscreen = startupFullscreen(opts, preferences.Fullscreen)
-	options.WindowSize = func() (int, int) {
-		return preferences.Display.Width, preferences.Display.Height
-	}
-	options.FullscreenChanged = saveFullscreenSetting
-	return options
-}
-
-// Direct entry and restart have no shell adoption pass to square the camera
-// with the selected logical surface [07 "The loading screen"]. Do this before
-// applying view scale, so centering and clamp bounds use the battle viewport.
-func fitDirectBattleViewport(cl *client.Client, b *battleSession) {
-	if cl == nil || b == nil || b.cam == nil {
-		return
-	}
-	w, h := cl.Size()
-	b.cam.ViewW, b.cam.ViewH = int32(w), int32(h)
-	b.cam.Clamp()
 }
 
 // commitWindowSize applies the chosen resolution after the options root closes

@@ -3,6 +3,8 @@ package camera
 import (
 	"fmt"
 	"strings"
+
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // ViewScale is the presentation record scale [F-P1-008], encoded as twice
@@ -38,7 +40,7 @@ func (s ViewScale) Project(v int32) int32 { return v * int32(s.Norm()/2) }
 // Inverse maps a screen-relative offset back to the world pixel drawn there,
 // flooring negative offsets too [I3][03 §2.1].
 func (s ViewScale) Inverse(v int32) int32 {
-	return int32(floorDiv(int64(v), int64(s.Norm()/2)))
+	return int32(numeric.FloorDiv(int64(v), int64(s.Norm()/2)))
 }
 
 // Px scales an extent or authored offset at the record scale.

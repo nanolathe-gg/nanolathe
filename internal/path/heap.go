@@ -56,18 +56,6 @@ type NodeStore struct {
 	scale int32 // h scale quantum for F computation (see Scale)
 }
 
-// NewNodeStore returns an empty store with the given h scale.
-// Scale is the per-player quantum used as (h*scale)>>16 [04 §7.2] C6.
-// Pass 65536 for unweighted (1.0) when no scheduler is present.
-func NewNodeStore(scale int32) *NodeStore {
-	index := newMapIndex()
-	return &NodeStore{
-		nodes: make([]Node, 1), // reserve 0
-		index: &index,
-		scale: scale,
-	}
-}
-
 // newSessionNodeStore binds node lookup to the search's existing per-cell
 // entry table. The table already carries status, direction and node identity,
 // so a second Cell-keyed index would duplicate every touched coordinate.

@@ -13,14 +13,14 @@ func TestLoadDefaultFocusUsesExactGadgetName(t *testing.T) {
 		want int
 	}{{"OK", 1}, {"ok", 2}, {"Ok", -1}, {"HEADER", -1}, {"1234567890abcdefZ", 4}} {
 		t.Run(tc.name, func(t *testing.T) {
-			window, err := Load(guiRecordStoreFS(t, fmt.Sprintf(`
+			window, err := LoadWithTranslation(guiRecordStoreFS(t, fmt.Sprintf(`
 [GADGET0] { defaultfocus=%s; [COMMON] { id=0; name=HEADER; width=640; height=480; } }
 [GADGET1] { [COMMON] { id=1; name=OK; } }
 [GADGET2] { [COMMON] { id=1; name=ok; } }
 [GADGET3] { [COMMON] { id=1; name=OK; } }
 [GADGET4] { [COMMON] { id=1; name=1234567890abcdefA; } }
 [GADGET5] { [COMMON] { id=1; name=1234567890abcdefB; } }
-`, tc.name)), "panel.gui")
+`, tc.name)), "panel.gui", nil)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -664,46 +664,6 @@ func applySchemaStrict(terrain *world.Terrain, cat *content.Catalog, m *mission.
 	return nil
 }
 
-// newSlicedWorld creates the retail sliced unit pool using the catalog
-// definition count. [01 §6.1][P0-16] Use units.NewSliced, never New(600).
-func newSlicedWorld(cat *content.Catalog) (*units.World, error) {
-	if cat == nil {
-		return nil, fmt.Errorf("session: nil catalog for unit pool")
-	}
-	n := len(cat.UnitRecords())
-	if n <= 0 {
-		return nil, fmt.Errorf("session: catalog has no unit definitions [02 §5]")
-	}
-	w := units.NewSliced(n, cat)
-	if w == nil {
-		return nil, fmt.Errorf("session: failed to create sliced pool")
-	}
-	if !w.IsSliced() {
-		return nil, fmt.Errorf("session: pool not sliced [P0-16]")
-	}
-	return w, nil
-}
-
-// newSlicedWorldWithCOB creates the sliced pool and installs the COB loader [04 §4.1][P1-I01].
-func newSlicedWorldWithCOB(cat *content.Catalog, fs vfs.FSOps) (*units.World, error) {
-	return newBattleSlicedWorldWithCOB(cat, fs, 0, [pool.PlayerCount]uint32{})
-}
-
-// newBattleSlicedWorldWithCOB computes the complete player order once at
-// battle entry and injects it into the sliced pool. The sort-key array is an
-// explicit seam for the mode-3 player records; mode 0 is the identity wrapper
-// used by fixture-only construction [R-P0-16-A].
-//
-// It sizes the pool from Nanolathe's default unit limit. Every
-// battle-entry site that knows its own limit — a skirmish's configured
-// `UnitLimit`, a campaign's OTA `maxunits` — calls the Sized form instead.
-func newBattleSlicedWorldWithCOB(cat *content.Catalog, fs vfs.FSOps, mode int, sortKeys [pool.PlayerCount]uint32) (*units.World, error) {
-	if cat == nil {
-		return nil, fmt.Errorf("session: nil catalog for unit pool")
-	}
-	return newBattleSlicedWorldWithCOBSized(cat, fs, mode, sortKeys, SkirmishDefaultUnitLimit)
-}
-
 // newBattleSlicedWorldWithCOBSized is newBattleSlicedWorldWithCOB with the
 // session's per-player unit limit stated explicitly.
 //
@@ -2269,25 +2229,6 @@ func (s *Session) RecalcLocalOwner() {
 	if s.Skirmish.NumPlayers > 0 {
 		s.LocalOwner = uint8(LocalOwnerForConfig(s.Skirmish))
 	}
-}
-
-// heightByteFor returns the observer height byte clamped 0..255 [03 §3.2] C5.
-// It is the world Y high word (map pixel height) truncated to byte; negative clamps to 0.
-// heightByteFor forms the LOS observer's emitter height byte [03 §3.2].
-//
-// Retail builds it as `clamp(worldY_high + modelTopHigh, 0, 255)`,
-// where worldY has already been clamped to `(SeaLevel+1)<<16` by the caller
-// and modelTopHigh is the model's top extent in whole world units
-// [03 §3.2].
-//
-// The addend is what makes the terrain-ray raster work at all: the horizon test
-// admits a step only when its slope STRICTLY exceeds the retained horizon, so
-// an observer whose height equals the ground under it retains a zero slope
-// after its first step and every later step ties and is rejected. Sighting from
-// the model's top gives the ray a negative slope to spend, which is also why a
-// laser tower outranges a peewee at equal sightdistance.
-func heightByteFor(u *units.Unit) uint8 {
-	return heightByteAt(u, 0)
 }
 
 // ensureMovementForAll ensures per-unit movement state for every live unit.

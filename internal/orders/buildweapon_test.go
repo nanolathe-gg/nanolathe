@@ -81,11 +81,6 @@ func TestBuildWeaponStockpileQueue(t *testing.T) {
 			}
 		}
 	}
-	// UI counts: after completion, ammo 1, queued 0.
-	ammo, queued := StockpileCounts(u)
-	if ammo[0] != 1 || queued[0] != 0 {
-		t.Fatalf("StockpileCounts ammo %v queued %v want 1,0", ammo, queued)
-	}
 	// Launch should decrement ammo (stockpile launch does not write reload).
 	// Simulate launch via direct slot decrement (as weapon tick would).
 	if u.Slots[0].Ammo != 1 {
@@ -145,9 +140,4 @@ func TestBuildWeaponCoalesceAndUI(t *testing.T) {
 	if q.Secondary()[0].Param2 != 2 {
 		t.Fatalf("coalesced count %d want 2", q.Secondary()[0].Param2)
 	}
-	ammo, queued := StockpileCounts(u)
-	if queued[0] != 2 {
-		t.Fatalf("queued UI %d want 2", queued[0])
-	}
-	_ = ammo
 }

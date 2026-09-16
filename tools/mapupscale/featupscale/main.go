@@ -26,6 +26,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/formats"
 	retailpalette "github.com/nanolathe-gg/nanolathe/internal/palette"
 	"github.com/nanolathe-gg/nanolathe/internal/upscale"
+	"github.com/nanolathe-gg/nanolathe/tools/mapupscale/internal/mapassets"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
@@ -35,7 +36,7 @@ const colorKey = 9
 
 func main() {
 	defaults := upscale.DefaultSpriteParams()
-	root := flag.String("root", defaultAssetRoot(), "asset root")
+	root := flag.String("root", mapassets.DefaultRoot(), "asset root")
 	gafDir := flag.String("dir", "anims", "VFS directory the GAF files live in (anims for features, textures for model textures)")
 	gafList := flag.String("gaf", "trees", "comma-separated GAF names; the first holds the query entries, all supply examples")
 	seq := flag.String("seq", "leaf1", "entry name, comma-separated names, or 'all' for every entry of the first GAF")
@@ -226,15 +227,6 @@ func readIndexedSprite(path string) (*upscale.Sprite, error) {
 	return s, nil
 }
 
-func defaultAssetRoot() string {
-	if v := os.Getenv("NANOLATHE_TA_ROOT"); v != "" {
-		return v
-	}
-	home, _ := os.UserHomeDir()
-	return home + "/TotalAnnihilation"
-}
-
 func fatalf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "featupscale: "+format+"\n", args...)
-	os.Exit(1)
+	mapassets.Fatalf("featupscale: ", format, args...)
 }

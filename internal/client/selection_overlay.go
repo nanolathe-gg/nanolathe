@@ -160,7 +160,7 @@ func drawIndexedFrameInclusive(dst []uint8, width, height int, r Rect, idx uint8
 		if y < clip.MinY || y > clip.MaxY {
 			return
 		}
-		left, right := maxInt32(r.MinX, clip.MinX), minInt32(r.MaxX, clip.MaxX)
+		left, right := max(r.MinX, clip.MinX), min(r.MaxX, clip.MaxX)
 		for x := left; x <= right; x++ {
 			write(x, y)
 		}
@@ -169,7 +169,7 @@ func drawIndexedFrameInclusive(dst []uint8, width, height int, r Rect, idx uint8
 		if x < clip.MinX || x > clip.MaxX {
 			return
 		}
-		top, bottom := maxInt32(r.MinY, clip.MinY), minInt32(r.MaxY, clip.MaxY)
+		top, bottom := max(r.MinY, clip.MinY), min(r.MaxY, clip.MaxY)
 		for y := top; y <= bottom; y++ {
 			write(x, y)
 		}
@@ -182,18 +182,4 @@ func drawIndexedFrameInclusive(dst []uint8, width, height int, r Rect, idx uint8
 	if r.MaxX != r.MinX {
 		vertical(r.MaxX)
 	}
-}
-
-func maxInt32(a, b int32) int32 {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func minInt32(a, b int32) int32 {
-	if a < b {
-		return a
-	}
-	return b
 }

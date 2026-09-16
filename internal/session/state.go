@@ -18,16 +18,6 @@ const (
 	StateLoading        State = 5 // loading UI/thread and readiness barrier [08 "Session states"]
 	StateBattle         State = 6 // live battle loop [08 "Session states"]
 	StatePostBattle     State = 7 // post-battle handling [08 "Session states"]
-
-	// Numeric aliases for direct indexing.
-	State0 = StateTeardownA
-	State1 = StateTeardownB
-	State2 = StateRouter
-	State3 = StateNetworkPreload
-	State4 = StateLocalPreload
-	State5 = StateLoading
-	State6 = StateBattle
-	State7 = StatePostBattle
 )
 
 // Gametype wire values used by save/load routing [08 "Session states"].
@@ -78,26 +68,6 @@ func CanTransition(from, to State) bool {
 	return transitionMatrix[from][to]
 }
 
-// AdmissionMaskForState returns the single bit that admits the given state
-// per [08 "Admission masks"] C4: bit0 admits states other than 5 and 6, bit1
-// admits state 5, bit2 admits state 6.
-func AdmissionMaskForState(s State) uint8 {
-	switch s {
-	case StateLoading:
-		return MaskLoading
-	case StateBattle:
-		return MaskBattle
-	default:
-		return MaskOther
-	}
-}
-
-// IsAdmitted reports whether the given packet admission mask admits the
-// session state [08 "Admission masks"] C4.
-func IsAdmitted(s State, mask uint8) bool {
-	return mask&AdmissionMaskForState(s) != 0
-}
-
 // StateForGametype maps a save Gametype to the initial state that save/load
 // rides unchanged [08 "Session states"] C3. Gametype-2 selects state 5
 // directly; Gametype-1 selects state 4 first which configures two campaign
@@ -117,14 +87,6 @@ func StateForGametype(gametype int) (State, bool) {
 // API). This file implements the eight-state machine [08 "Session states"] and
 // transition helpers C1-C4; state-machine methods remain here while the
 // complete field set is kept with the type definition.
-
-// New creates a session in teardown state 0. Callers normally transition to
-// StateRouter (2) before use.
-func New() *Session {
-	s := &Session{State: StateTeardownA}
-	s.ensurePublicationState()
-	return s
-}
 
 // CanTransitionTo reports whether s.State can transition to next state per C1.
 func (s *Session) CanTransitionTo(next State) bool { return CanTransition(s.State, next) }

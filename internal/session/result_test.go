@@ -423,7 +423,7 @@ func TestResult_AIProfileLoadFailure(t *testing.T) {
 	cfg := SkirmishConfig{MapName: "test", NumPlayers: 2}
 	cfg.ApplyDefaults()
 	cfg.Players[1].Controller = 1 // computer
-	_, err := NewSkirmishWithFS(fs, cat, cfg)
+	_, err := NewSkirmishWithProgress(fs, cat, cfg, nil)
 	if err == nil {
 		t.Fatalf("expected AI profile load failure error for computer player without profile")
 	}

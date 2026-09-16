@@ -82,9 +82,10 @@ func TestFeatureReadUsesParserByteBudget(t *testing.T) {
 }
 
 // Established discovery preserves the mismatched identity [02 R-CAT-01 §5].
-// The host reports it and refuses required preflight use instead of inventing
-// gameplay fields from the discovery record (DESIGN_CONTENT_VFS §2.3).
-func TestSecondaryNameMismatchWarnsAndRefusesRequiredPreflight(t *testing.T) {
+// The host reports it and leaves the record with no gameplay fields, rather
+// than inventing them from the discovery record; a unit created from such a
+// definition is refused where it is created (DESIGN_CONTENT_VFS §2.3).
+func TestSecondaryNameMismatchWarnsAndLeavesGameplayFieldsUninitialized(t *testing.T) {
 	fs := newFixtureFS(t, fixtureFile{path: "units/download.fbi", data: "[UNITINFO]{UnitName=missing; Name=Download; MaxDamage=100;}"})
 	result, err := compileUnitsWithLanguage(fs, "")
 	if err != nil {
@@ -99,16 +100,9 @@ func TestSecondaryNameMismatchWarnsAndRefusesRequiredPreflight(t *testing.T) {
 			t.Fatalf("warning %q lacks %q", result.warnings[0], text)
 		}
 	}
-	for _, required := range []bool{false, true} {
-		p := skirmishPreflight{fs: fs, catalog: &Catalog{Units: result.units}}
-		p.unit("commander", u, required)
-		if len(p.diags) != 1 {
-			t.Fatalf("incomplete definition produced unrelated missing-art errors: %+v", p.diags)
-		}
-		for _, d := range p.diags {
-			if d.Code != "incomplete-unit-definition" || d.Fatal != required || d.Logical != "units/missing.fbi" {
-				t.Fatalf("preflight diagnostic = %+v, required=%t", d, required)
-			}
-		}
+	// The warning is the one the secondary reader composes, naming the logical
+	// path the record would have been read from.
+	if got := unitSecondaryDiagnostic(fs, u, "secondary gameplay fields were not initialized"); !strings.Contains(got, "units/missing.fbi") {
+		t.Fatalf("secondary diagnostic = %q, want the mismatched logical path", got)
 	}
 }

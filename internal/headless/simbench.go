@@ -261,7 +261,7 @@ func RunSimBenchmark(opts SimBenchOptions) (SimBenchReport, error) {
 
 	catalog, err := content.Compile(fs)
 	if err != nil {
-		return SimBenchReport{}, diagnostic("catalog compile failed: "+err.Error(), opts.Map, providerNames(fs), "a complete compiled catalog")
+		return SimBenchReport{}, diagnostic("catalog compile failed: "+err.Error(), opts.Map, fs.ProviderIDs(), "a complete compiled catalog")
 	}
 	return runSimBenchmarkWithContent(opts, fs, catalog, log)
 }

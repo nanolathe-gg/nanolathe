@@ -160,9 +160,7 @@ const (
 	// animation [§5 step 5]. A resting sprite feature takes no slot at all:
 	// step 5 writes the anchor's ordinal, a zero in the slot word and a cleared
 	// instance bit. See arenaOccupies.
-	FeatureAnimSlots     = 0x800  // 2048 live-instance arena slots [05 R-FEAT-01 §2]
-	PlotCellStride       = 0x0D   // 13 bytes per cell [P1-15]
-	FeatureSuccessorNone = 0xFFFF // sentinel no successor [P1-10][P1-15]
+	FeatureAnimSlots = 0x800 // 2048 live-instance arena slots [05 R-FEAT-01 §2]
 )
 
 // Service is the features runtime [PLAN_08 WU-08-6].

@@ -741,6 +741,15 @@ func Load(fs vfs.FSOps, cat *content.Catalog, mapKey string) (*Terrain, error) {
 	return t, nil
 }
 
+// PlayInsets returns a map's playable extents from its cell counts:
+// PlayRight = Wpix − 32 and PlayBottom = Hpix − 128, with Wpix = cellW·16 and
+// Hpix = cellH·16 [03 §3.4][P0-17]. They are the camera clamp's map size and
+// the minimap lens's divisors, not the raw pixel dimensions. applyVoidFixup
+// writes them onto the terrain as rule 1 of its sweep.
+func PlayInsets(cellW, cellH int32) (playRight, playBottom int32) {
+	return cellW*16 - 32, cellH*16 - 128
+}
+
 // applyVoidFixup is the loader's edge/lava void sweep [03 R-TERR-01 §2].
 //
 // It runs once, after the derived floor pair exists (ExpandPlot's
@@ -794,8 +803,7 @@ func (t *Terrain) applyVoidFixup(mh *content.MapHeader) {
 		return
 	}
 	// Rule 1, play insets [03 R-TERR-01 §2]: Wpix = CellW*16, Hpix = CellH*16.
-	t.PlayRight = t.CellW*16 - 32
-	t.PlayBottom = t.CellH*16 - 128
+	t.PlayRight, t.PlayBottom = PlayInsets(t.CellW, t.CellH)
 	// The sweep's one conversion gate, shared by all four rules
 	// [03 R-TERR-01 §2].
 	voidIfConvertible := func(cell *PlotCell) {

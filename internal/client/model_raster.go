@@ -105,26 +105,6 @@ type screenPoly struct {
 	frameState RendererValueState
 }
 
-// newScreenPoly allocates one face's corner lanes out of a single backing
-// array, so a model with a few hundred primitives costs a few hundred
-// allocations rather than a few thousand.
-func newScreenPoly(n int) screenPoly {
-	buf := make([]int32, n*(polyLanes+spanAttrs))
-	p := screenPoly{
-		x:         buf[0:n:n],
-		y:         buf[n : 2*n : 2*n],
-		x2:        buf[2*n : 3*n : 3*n],
-		y2:        buf[3*n : 4*n : 4*n],
-		oddHeight: make([]bool, n),
-		heights:   make([]float32, n),
-	}
-	for k := 0; k < spanAttrs; k++ {
-		lo := (polyLanes + k) * n
-		p.attr[k] = buf[lo : lo+n : lo+n]
-	}
-	return p
-}
-
 // polyLanes is the count of coordinate lanes a corner carries before its
 // attribute lanes: x, y and the doubled x2, y2.
 const polyLanes = 4
@@ -189,10 +169,6 @@ const transparentModelIndex uint8 = 1
 // modelTargetMargin is retail's two-pixel border on every side of the measured
 // extent [R-REN-03A §1].
 const modelTargetMargin int32 = 2
-
-func newModelTarget(width, height int) *modelTarget {
-	return newModelImage(width, height, 0, 0, 0, 0, true, 1)
-}
 
 // newModelImage allocates a composition image. keyPlane follows the unit's
 // ZBuffer authoring [R-REN-03A §2].

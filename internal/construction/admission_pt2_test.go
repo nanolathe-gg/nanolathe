@@ -37,7 +37,7 @@ func TestDeniedBuildStepStillRecordsBothRequests(t *testing.T) {
 	buckets[economy.Energy].Carry = 1
 
 	// The same expression the build step feeds the helper.
-	_, _, wantEnergy, wantMetal := ConstructionStep(product.Remaining, WorkerQuantum(facDef.WorkerTime),
+	_, _, wantEnergy, wantMetal := constructionStep(product.Remaining, WorkerQuantum(facDef.WorkerTime),
 		prodDef.BuildTime, product.MaxHealth, prodDef.BuildCostEnergy, prodDef.BuildCostMetal)
 	if wantEnergy <= 0 || wantMetal <= 0 {
 		t.Fatalf("fixture produced no demand: energy=%v metal=%v", wantEnergy, wantMetal)

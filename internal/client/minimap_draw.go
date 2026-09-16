@@ -5,13 +5,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/hud"
 	"github.com/nanolathe-gg/nanolathe/internal/render"
-	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
-
-// PlaySizeForMinimap returns the playable map extents used by the radar lens.
-func PlaySizeForMinimap(t *world.Terrain) (int32, int32) {
-	return hud.PlaySizeForMinimap(t)
-}
 
 // appendMinimapPoint appends one framebuffer-clipped single-pixel write to the
 // point arena, applying the same [0,width)x[0,height) guard the former putIndexed
@@ -177,6 +171,25 @@ type CameraIntent struct {
 //
 // ok is false unless the pointer is inside the fitted radar rectangle; the
 // letterbox bars are part of the canvas but not of the lens.
+//
+// The camera latch recenters on this point: the clicked map point becomes the
+// **centre** of the view [07 R-CAM-01 §11], traced as
+//
+//	cameraX = (ptrX − padX) · PlayRight  / RadarW − trunc(viewWidth  / 2)
+//	cameraZ = (ptrY − padY) · PlayBottom / RadarH − trunc(viewHeight / 2)
+//
+// which corrects the superseded reading — "the lens writes the projected world
+// point directly as the camera origin" — that doc 03 §3.11's matching sentence
+// also carries, and that would put the clicked point at the view's top-left.
+// The recenter-free form is the *pointer's* world position this returns, not
+// the camera; Camera.JumpToBattleViewCenter owns the recenter for this build's
+// framebuffer-origin camera, so there is one recenter, in one place, and it
+// stays right when the clamp's floor changes.
+//
+// The minimap has no drag branch of its own [07 R-CAM-01 §11]: while the latch
+// is held every host frame re-runs this same jump from the pointer record, so
+// dragging across the minimap pans continuously. The world view's Ctrl+right
+// cursor-warp drag-scroll never fires over the minimap.
 func MinimapPointerWorld(layout camera.Minimap, dst hud.Rect, playW, playH int32, mouseX, mouseY int32) (int32, int32, bool) {
 	dl, dt, dr, db := dst.Ordered()
 	dw, dh := dr-dl+1, db-dt+1
@@ -189,38 +202,6 @@ func MinimapPointerWorld(layout camera.Minimap, dst hud.Rect, playW, playH int32
 	}
 	wx, wz := layout.ToWorldPlay(canvasX, canvasY, playW, playH)
 	return wx, wz, true
-}
-
-// MinimapCameraIntent computes the minimap latch's camera origin: the clicked
-// map point becomes the **centre** of the view [07 R-CAM-01 §11].
-//
-// Corrects the superseded reading this function used to implement — "the lens
-// writes the projected world point directly as the camera origin", which put
-// the clicked point at the view's top-left corner. [07 R-CAM-01 §11] traces the
-// camera write as
-//
-//	cameraX = (ptrX − padX) · PlayRight  / RadarW − trunc(viewWidth  / 2)
-//	cameraZ = (ptrY − padY) · PlayBottom / RadarH − trunc(viewHeight / 2)
-//
-// and names doc 03 §3.11's matching sentence as carrying the same error; the
-// recenter-free form is the *pointer's* world position above, not the camera.
-// Camera.JumpToBattleViewCenter owns that conversion for this build's
-// framebuffer-origin camera, so this returns the world point and the caller
-// hands it to the canonical camera writer — there is one recenter, in one
-// place, and it stays right when the clamp's floor changes.
-//
-// The former drag arm and its marker are gone. [07 R-CAM-01 §11]
-// establishes that the minimap has no drag branch of its own: while the latch
-// is held every host frame re-runs this same jump from the pointer record, so
-// dragging across the minimap pans continuously. The "alternate drag branch"
-// that TODO preserved is the world view's Ctrl+right cursor-warp drag-scroll,
-// which never fires over the minimap.
-func MinimapCameraIntent(layout camera.Minimap, dst hud.Rect, playW, playH int32, mouseX, mouseY int32) (CameraIntent, bool) {
-	wx, wz, ok := MinimapPointerWorld(layout, dst, playW, playH, mouseX, mouseY)
-	if !ok {
-		return CameraIntent{}, false
-	}
-	return CameraIntent{X: wx, Z: wz}, true
 }
 
 // MinimapCameraCaptureIntent converts a pointer record owned by an already

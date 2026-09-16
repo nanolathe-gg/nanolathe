@@ -75,16 +75,6 @@ const (
 	DirRight = DirectionRight
 	DirUp    = DirectionUp
 	DirDown  = DirectionDown
-
-	Left  = DirectionLeft
-	Right = DirectionRight
-	Up    = DirectionUp
-	Down  = DirectionDown
-
-	DirectionWest  = DirectionLeft
-	DirectionEast  = DirectionRight
-	DirectionNorth = DirectionUp
-	DirectionSouth = DirectionDown
 )
 
 // clampAxis implements the per-axis retail camera clamp [07 §10], expressed in
@@ -463,17 +453,6 @@ func (c *Camera) setZoomAboutRaw(mx, my int32, newZ Zoom) {
 		view.Z = float64(c.Z)
 	}
 	c.zoomView, c.zoomViewX, c.zoomViewZ, c.zoomViewFactor = view, c.X, c.Z, newZ
-}
-
-// floorDiv is the floor division of [I3]: the screen-to-world inverse must
-// floor so a beam offset left of the origin maps to the world pixel that
-// covers it rather than to the one after it [03 §2.1].
-func floorDiv(a, b int64) int64 {
-	q := a / b
-	if a%b != 0 && (a < 0) != (b < 0) {
-		q--
-	}
-	return q
 }
 
 // NewFromTerrain creates a camera whose map extents are the playable insets [P1-15].

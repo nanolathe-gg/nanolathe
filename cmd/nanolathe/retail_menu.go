@@ -10,6 +10,8 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/mission"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/ui"
+
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // ensureRetailSkirmishControllers mirrors the state that the retail implementation and
@@ -767,7 +769,7 @@ func (g *gameShell) fallbackButtonArtResolution(entry *formats.GAFEntry, gad gui
 		if f == nil {
 			continue
 		}
-		score := absInt(int(f.Width)-int(gad.Rect.W)) + absInt(int(f.Height)-int(gad.Rect.H))
+		score := numeric.Abs(int(f.Width)-int(gad.Rect.W)) + numeric.Abs(int(f.Height)-int(gad.Rect.H))
 		if score < bestScore {
 			bestFrame, bestScore = i, score
 		}

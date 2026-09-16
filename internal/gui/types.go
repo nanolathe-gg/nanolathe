@@ -209,7 +209,7 @@ type ArtSource struct {
 // entry in the window's own art GAF, then that same entry in the
 // side-specific interface GAF, then the built-in fallback [07 §4]. This is
 // the same three-link chain — page, then side intGAF, then common — that
-// cmd/nanolathe/battle_hud.go's gadgetArtEntry and modalGadgetFrame walk in
+// cmd/nanolathe's gadgetArtEntry and modalGadgetFrameState walk in
 // production (landed under WU-19-37); this function mirrors their file
 // order for callers that want it without a battle-HUD instance.
 //

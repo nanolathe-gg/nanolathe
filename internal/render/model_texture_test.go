@@ -80,20 +80,3 @@ func TestShadeRowForNormalUsesUnnormalizedAverage(t *testing.T) {
 		t.Fatalf("wrapped negative row %d", got)
 	}
 }
-
-func TestModelShadowGatesAndInclusiveClip(t *testing.T) {
-	options := ShadowMaster | ShadowVehicles
-	if !ModelShadowEnabled(options, false, true) {
-		t.Fatal("enabled model shadow rejected")
-	}
-	if ModelShadowEnabled(options, true, true) || ModelShadowEnabled(options, false, false) {
-		t.Fatal("suppressed model shadow admitted")
-	}
-	if !ShadowDepthVisible(10, 10, 0) || ShadowDepthVisible(11, 10, 0) {
-		t.Fatal("depth comparison")
-	}
-	minX, minY, maxX, maxY, ok := ShadowClipInclusive(-1, 2, 9, 8, 8, 8)
-	if !ok || minX != 0 || minY != 2 || maxX != 7 || maxY != 7 {
-		t.Fatalf("clip %d,%d..%d,%d,%v", minX, minY, maxX, maxY, ok)
-	}
-}

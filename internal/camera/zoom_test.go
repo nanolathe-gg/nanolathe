@@ -1,6 +1,10 @@
 package camera
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+)
 
 // The free factor generalizes the two record steps: at each of them Project,
 // Inverse and Px must answer exactly what ViewScale's own arithmetic answers,
@@ -44,7 +48,7 @@ func TestPickingIsTheExactInverseAtRestAndFloorsInFlight(t *testing.T) {
 	cam.Zoom, cam.Scale = ZoomUnit*7/10, ViewScaleNative
 	for sx := int32(0); sx < 400; sx++ {
 		x, _ := cam.ScreenToWorld(sx+OriginX, OriginY)
-		want := cam.X + int32(floorDiv(int64(sx)*int64(ZoomUnit), int64(cam.Zoom)))
+		want := cam.X + int32(numeric.FloorDiv(int64(sx)*int64(ZoomUnit), int64(cam.Zoom)))
 		if got := int32(x >> 16); got != want {
 			t.Fatalf("in flight ScreenToWorld(%d) = %d, want %d", sx, got, want)
 		}

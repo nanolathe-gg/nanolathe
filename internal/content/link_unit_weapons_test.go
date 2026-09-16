@@ -42,7 +42,7 @@ func TestLinkUnitWeaponsMissResolvesToRecord0Sentinel(t *testing.T) {
 	weapons := map[string]*WeaponDef{"noweapon": noweapon, "bigbertha": bertha}
 
 	units := newLinkFixtureUnits("BigBertha", "Medium_Unitex", "Missing_Three", "MEDIUM_UNITEX", "BIG_BUILDING")
-	LinkUnitWeapons(units, weapons)
+	linkUnitWeapons(units, weapons)
 	u := units["linkme"]
 
 	// Hit: case-insensitive first match, the named record itself.
@@ -77,7 +77,7 @@ func TestLinkUnitWeaponsUnarmedResolvesAllFiveToRecord0Sentinel(t *testing.T) {
 	weapons := map[string]*WeaponDef{"noweapon": noweapon}
 
 	units := newLinkFixtureUnits("", "", "", "", "")
-	LinkUnitWeapons(units, weapons)
+	linkUnitWeapons(units, weapons)
 	u := units["linkme"]
 
 	for _, link := range []struct {
@@ -134,7 +134,7 @@ func TestLinkUnitWeaponsMissWithoutRecord0NilInactive(t *testing.T) {
 	weapons := map[string]*WeaponDef{"bigbertha": bertha}
 
 	units := newLinkFixtureUnits("BigBertha", "", "MEDIUM_UNITEX", "MEDIUM_UNITEX", "")
-	LinkUnitWeapons(units, weapons)
+	linkUnitWeapons(units, weapons)
 	u := units["linkme"]
 
 	if u.Weapon1Def != bertha {
@@ -163,7 +163,7 @@ func TestLinkUnitWeaponsNamingRecord0DirectlyIsInactive(t *testing.T) {
 	weapons := map[string]*WeaponDef{"noweapon": noweapon}
 
 	units := newLinkFixtureUnits("NoWeapon", "", "", "", "")
-	LinkUnitWeapons(units, weapons)
+	linkUnitWeapons(units, weapons)
 
 	if units["linkme"].Weapon1Def != noweapon {
 		t.Fatalf("weapon1 NoWeapon = %v, want the record-0 [noweapon] def", units["linkme"].Weapon1Def)
@@ -186,7 +186,7 @@ func TestClonePreservesRecord0SentinelLinks(t *testing.T) {
 	weapons := map[string]*WeaponDef{"noweapon": noweapon, "bigbertha": bertha}
 
 	units := newLinkFixtureUnits("BigBertha", "Medium_Unitex", "", "Medium_Unitex", "")
-	LinkUnitWeapons(units, weapons)
+	linkUnitWeapons(units, weapons)
 	if units["linkme"].Weapon2Def != noweapon || units["linkme"].ExplodeAsDef != noweapon {
 		t.Fatalf("fixture precondition: sentinel links not produced (%v, %v)", units["linkme"].Weapon2Def, units["linkme"].ExplodeAsDef)
 	}

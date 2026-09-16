@@ -673,21 +673,7 @@ func ComposeInto(m *Model, st []PieceState, piece int, previous Transform, scrat
 			node.cy, node.sy = cached.cy, cached.sy
 			node.cz, node.sz = cached.cz, cached.sz
 		} else {
-			if az != 0 {
-				theta := float64(az) * 2 * math.Pi / 65536
-				node.cz = math.Cos(theta)
-				node.sz = math.Sin(theta)
-			}
-			if ax != 0 {
-				theta := float64(ax) * 2 * math.Pi / 65536
-				node.cx = math.Cos(theta)
-				node.sx = math.Sin(theta)
-			}
-			if ay != 0 {
-				theta := float64(ay) * 2 * math.Pi / 65536
-				node.cy = math.Cos(theta)
-				node.sy = math.Sin(theta)
-			}
+			node.evaluateRotation()
 			if cached != nil {
 				*cached = trigNode{cx: node.cx, sx: node.sx, cy: node.cy, sy: node.sy, cz: node.cz, sz: node.sz, ax: ax, ay: ay, az: az, gen: scratch.gen}
 			}
@@ -705,6 +691,36 @@ func (s *ComposeScratch) trigFor(idx int) *trigNode {
 		return nil
 	}
 	return &s.trig[idx]
+}
+
+// RotatePoints rotates model-space points in place by unit orientation alone.
+// Selection bounds already include the root translation [03 R-WATER-01 §1];
+// sharing the piece rotation preserves Z, X, Y order and per-axis rounding
+// [03 §2.4] C21/C24 without allocating a model pose or a transform chain.
+func RotatePoints(points [][3]numeric.Fixed, heading, pitch, bank uint16) {
+	nodes := [1]xformNode{{ax: pitch, ay: heading, az: bank}}
+	nodes[0].evaluateRotation()
+	for i := range points {
+		points[i] = applyChain(points[i], [3]numeric.Fixed{}, nodes[:])
+	}
+}
+
+func (n *xformNode) evaluateRotation() {
+	if n.az != 0 {
+		theta := float64(n.az) * 2 * math.Pi / 65536
+		n.cz = math.Cos(theta)
+		n.sz = math.Sin(theta)
+	}
+	if n.ax != 0 {
+		theta := float64(n.ax) * 2 * math.Pi / 65536
+		n.cx = math.Cos(theta)
+		n.sx = math.Sin(theta)
+	}
+	if n.ay != 0 {
+		theta := float64(n.ay) * 2 * math.Pi / 65536
+		n.cy = math.Cos(theta)
+		n.sy = math.Sin(theta)
+	}
 }
 
 func applyChain(p, pre [3]numeric.Fixed, nodes []xformNode) [3]numeric.Fixed {

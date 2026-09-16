@@ -457,9 +457,8 @@ func (b *battleSession) handleBattleShortcuts(in *input.State, cl *client.Client
 		// separate character token and the dispatcher has no case for it, so
 		// Shift+n does nothing: the stockpile round is enqueued only by the
 		// palette's `MAKENUKE`/`MAKEANTI` gadgets [07 R-CAM-01 §14 item 3]
-		// [07 §6]. The Shift+N stand-in that used to call stockpileSelected
-		// here is gone; stockpileSelected keeps its one authored caller, the
-		// gadget dispatch of DispatchStockpile.
+		// [07 §6]. The Shift+N stand-in that used to enqueue a round here is
+		// gone; DispatchStockpileGadget keeps the one authored caller.
 		if kbd.KeyDown(input.KeyN) && !kbd.HasShift() {
 			b.cycleNextUnvisitedUnit()
 		}

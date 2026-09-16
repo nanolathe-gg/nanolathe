@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 
@@ -355,23 +356,11 @@ type resultPresentation struct {
 	current     [10][7]int
 }
 
-func sameResultRows(a, b []frame.ResultScore) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
 func (h *retailBattleHUD) ensureResultPresentation(view frame.ResultView, b *battleSession) {
 	if h == nil {
 		return
 	}
-	if h.resultState.initialized && h.resultState.tick == view.Tick && h.resultState.kind == view.Kind && sameResultRows(h.resultState.rows, view.Scores) && h.resultState.max == view.ColumnMaxima {
+	if h.resultState.initialized && h.resultState.tick == view.Tick && h.resultState.kind == view.Kind && slices.Equal(h.resultState.rows, view.Scores) && h.resultState.max == view.ColumnMaxima {
 		return
 	}
 	h.resultState = resultPresentation{

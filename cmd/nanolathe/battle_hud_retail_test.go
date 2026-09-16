@@ -102,12 +102,12 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 	// maps through the canonical camera adapter and remains bounded.
 	mx := dst.X1 + (dst.X2-dst.X1)/2
 	my := dst.Y1 + (dst.Y2-dst.Y1)/2
-	intent, ok := client.MinimapCameraIntent(layout, dst, sess.World.PlayRight, sess.World.PlayBottom, mx, my)
+	wx, wz, ok := client.MinimapPointerWorld(layout, dst, sess.World.PlayRight, sess.World.PlayBottom, mx, my)
 	if !ok {
 		t.Fatal("production minimap center input was not consumed")
 	}
 	// The clicked map point becomes the view centre [07 R-CAM-01 §11].
-	b.cam.JumpToBattleViewCenter(intent.X, intent.Z)
+	b.cam.JumpToBattleViewCenter(wx, wz)
 	// The same destination and layout drive the viewport rectangle the player
 	// sees, so a click and the marker cannot disagree [03 R-MM-01 §1].
 	if _, ok := hud.MinimapViewportRect(b.cam, layout, sess.World.PlayRight, sess.World.PlayBottom, dst); !ok {
@@ -187,7 +187,7 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 				continue
 			}
 			r := window.PlacedRect(i)
-			if !b.hud.consumeClick(b, r.X+r.W/2, r.Y+r.H/2) {
+			if !hudConsumeClick(b.hud, b, r.X+r.W/2, r.Y+r.H/2) {
 				t.Fatalf("%s click was not consumed", suffix)
 			}
 			for end := step + 4; step <= end; step++ {
@@ -278,7 +278,7 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 	if clicked == "" {
 		t.Fatalf("commander page has no authored product button: builder=%s menu=%v gadgets=%v", commanderName, menu.Buttons, buttonNames)
 	}
-	if !b.hud.sameButton(b, clickX, clickY, clickX, clickY) || !b.hud.consumeClick(b, clickX, clickY) {
+	if !b.hud.sameButton(b, clickX, clickY, clickX, clickY) || !hudConsumeClick(b.hud, b, clickX, clickY) {
 		t.Fatalf("authored product %q did not activate on release-inside", clicked)
 	}
 	if b.battleState().Input.BuildDef != content.CanonicalKey(clicked) || b.battleState().Input.Latch != input.LatchMobileBuild {

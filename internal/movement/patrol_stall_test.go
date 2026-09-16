@@ -63,7 +63,7 @@ func TestPatrollingSquadDoesNotFreezeWhileWalking(t *testing.T) {
 	cfg.ApplyDefaults()
 	cfg.Players[0] = session.SkirmishPlayer{Nickname: "human", Controller: 0, Metal: 1000, Energy: 1000}
 	cfg.Players[1] = session.SkirmishPlayer{Nickname: "cpu", Controller: 1, Side: 1, Color: 1, AllyGroup: 1, Metal: 1000, Energy: 1000}
-	sess, err := session.NewSkirmishWithFS(fs, cat, cfg)
+	sess, err := session.NewSkirmishWithProgress(fs, cat, cfg, nil)
 	if err != nil {
 		t.Skipf("skirmish: %v", err)
 	}

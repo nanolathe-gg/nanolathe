@@ -48,13 +48,6 @@ func RouteForProducer(producer StripProducer) Strip {
 	}
 }
 
-// RouteForKind deliberately leaves generic event kinds unresolved. They do
-// not identify which strip painter owns the event [03 §1][I9].
-func RouteForKind(kind Kind) Strip {
-	_ = kind
-	return StripUnknown
-}
-
 // RouteEvent applies the explicit producer route and preserves an existing
 // route, including the unresolved sentinel.
 func RouteEvent(e *Event) {

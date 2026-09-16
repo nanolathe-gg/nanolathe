@@ -233,7 +233,7 @@ func TestAStarSharesHardBlockPredicate(t *testing.T) {
 		t.Fatalf("unmapped cell passability = %d, want traversable value %d", got, LayerUnmapped)
 	}
 	layer.mapping = nil
-	search := path.Search(path.SearchConfig{
+	search := oneShotSearch(path.SearchConfig{
 		Start: path.Cell{X: 0, Z: 0},
 		Goal:  path.PointGoal(path.Cell{X: 2, Z: 2}, 0),
 		PassableValue: func(c path.Cell) uint8 {

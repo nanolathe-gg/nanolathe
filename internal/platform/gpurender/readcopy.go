@@ -40,8 +40,8 @@ func (rr *readRect) add(x0, y0, x1, y1 float32) {
 		rr.x0, rr.y0, rr.x1, rr.y1, rr.any = ix0, iy0, ix1, iy1, true
 		return
 	}
-	rr.x0, rr.y0 = minInt(rr.x0, ix0), minInt(rr.y0, iy0)
-	rr.x1, rr.y1 = maxInt(rr.x1, ix1), maxInt(rr.y1, iy1)
+	rr.x0, rr.y0 = min(rr.x0, ix0), min(rr.y0, iy0)
+	rr.x1, rr.y1 = max(rr.x1, ix1), max(rr.y1, iy1)
 }
 
 // drawOverComposite submits the schedule, copies rr out of the composite into

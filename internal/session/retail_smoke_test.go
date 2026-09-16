@@ -57,7 +57,7 @@ func (f meteorStageOverrideFS) ReadFileLimit(name string, limit int64) ([]byte, 
 // a test failure, so content regressions are not hidden by substitution.
 //
 // The catalog comes from retailcat.Shared: every caller below only reads it
-// (unit/side/map lookups, NewSkirmishWithFS's own read-only catalog use), so
+// (unit/side/map lookups, NewSkirmishWithProgress's own read-only catalog use), so
 // one compile per package binary is enough rather than one per test
 // [internal/testsupport/retailcat]. The shared filesystem is kept alive for
 // the process lifetime by that cache, so this fixture must not close it.
@@ -101,7 +101,7 @@ func loadRetailFixture(t *testing.T) *retailFixture {
 
 func (f *retailFixture) session(t *testing.T) *Session {
 	t.Helper()
-	s, err := NewSkirmishWithFS(f.fs, f.cat, f.cfg)
+	s, err := NewSkirmishWithProgress(f.fs, f.cat, f.cfg, nil)
 	if err != nil {
 		t.Fatalf("construct retail %q: %v", retailMap, err)
 	}

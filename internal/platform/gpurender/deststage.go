@@ -66,10 +66,10 @@ func (r *Renderer) drawLit(f *formats.GAFFrame, x, y, row, clipX, clipY, clipW, 
 		return
 	}
 	fw, fh := int(f.Width), int(f.Height)
-	minX, minY := maxInt(clipX, 0), maxInt(clipY, 0)
-	maxX, maxY := minInt(clipX+clipW, r.clipW()), minInt(clipY+clipH, r.clipH())
-	col0, col1 := maxInt(0, minX-x), minInt(fw, maxX-x)
-	row0, row1 := maxInt(0, minY-y), minInt(fh, maxY-y)
+	minX, minY := max(clipX, 0), max(clipY, 0)
+	maxX, maxY := min(clipX+clipW, r.clipW()), min(clipY+clipH, r.clipH())
+	col0, col1 := max(0, minX-x), min(fw, maxX-x)
+	row0, row1 := max(0, minY-y), min(fh, maxY-y)
 	if col0 >= col1 || row0 >= row1 {
 		return
 	}
@@ -92,10 +92,10 @@ func (r *Renderer) drawLit(f *formats.GAFFrame, x, y, row, clipX, clipY, clipW, 
 func (r *Renderer) drawRawGlyph(f *formats.GAFFrame, x, y int, mode byte, clipX, clipY, clipW, clipH int) {
 	var points [256]drawlist.Point
 	n := 0
-	minX, minY := maxInt(clipX, 0), maxInt(clipY, 0)
-	maxX, maxY := minInt(clipX+clipW, r.clipW()), minInt(clipY+clipH, r.clipH())
-	for row := maxInt(0, minY-y); row < minInt(int(f.Height), maxY-y); row++ {
-		for col := maxInt(0, minX-x); col < minInt(int(f.Width), maxX-x); col++ {
+	minX, minY := max(clipX, 0), max(clipY, 0)
+	maxX, maxY := min(clipX+clipW, r.clipW()), min(clipY+clipH, r.clipH())
+	for row := max(0, minY-y); row < min(int(f.Height), maxY-y); row++ {
+		for col := max(0, minX-x); col < min(int(f.Width), maxX-x); col++ {
 			i := row*int(f.Width) + col
 			if i >= len(f.Pixels) {
 				continue
@@ -139,10 +139,10 @@ func (r *Renderer) drawTintLight(f *formats.GAFFrame, x, y, clipX, clipY, clipW,
 	x -= int(f.XOffset)
 	y -= int(f.YOffset)
 	fw, fh := int(f.Width), int(f.Height)
-	minX, minY := maxInt(clipX, 0), maxInt(clipY, 0)
-	maxX, maxY := minInt(clipX+clipW, r.clipW()), minInt(clipY+clipH, r.clipH())
-	col0, col1 := maxInt(0, minX-x), minInt(fw, maxX-x)
-	row0, row1 := maxInt(0, minY-y), minInt(fh, maxY-y)
+	minX, minY := max(clipX, 0), max(clipY, 0)
+	maxX, maxY := min(clipX+clipW, r.clipW()), min(clipY+clipH, r.clipH())
+	col0, col1 := max(0, minX-x), min(fw, maxX-x)
+	row0, row1 := max(0, minY-y), min(fh, maxY-y)
 	if col0 >= col1 || row0 >= row1 {
 		return
 	}
@@ -224,8 +224,8 @@ func (r *Renderer) drawDestRect(x, y, w, h int, k float32) {
 	if r.sceneDest == nil || r.tables.atlas == nil || w <= 0 || h <= 0 {
 		return
 	}
-	x0, y0 := maxInt(x, 0), maxInt(y, 0)
-	x1, y1 := minInt(x+w, r.clipW()), minInt(y+h, r.clipH())
+	x0, y0 := max(x, 0), max(y, 0)
+	x1, y1 := min(x+w, r.clipW()), min(y+h, r.clipH())
 	if x0 >= x1 || y0 >= y1 {
 		return
 	}

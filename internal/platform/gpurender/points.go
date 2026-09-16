@@ -215,7 +215,7 @@ func (p *pointPlane) flush() {
 	if p.dirtyY1 <= p.dirtyY0 || p.img == nil {
 		return
 	}
-	y0, y1 := p.dirtyY0, minInt(p.dirtyY1, p.h)
+	y0, y1 := p.dirtyY0, min(p.dirtyY1, p.h)
 	if y1 > y0 {
 		rect := image.Rect(0, y0, p.w, y1)
 		p.img.SubImage(rect).(*ebiten.Image).WritePixels(p.buf[y0*p.w*4 : y1*p.w*4])

@@ -140,13 +140,9 @@ func TestSnapHalfExtentBias(t *testing.T) {
 		{2, 4, world.CellToWorld(-1), world.CellToWorld(-1), -2, -3}, // negative: WorldToCell(-1) = -1, minus bias
 	}
 	for _, c := range cases {
-		got := SnapWorldToCell(c.worldX, c.worldZ, c.footX, c.footZ)
+		got := snapAnchorCell(t, c.worldX, c.worldZ, int32(c.footX), int32(c.footZ))
 		if got.X != c.wantX || got.Z != c.wantZ {
-			t.Fatalf("SnapWorldToCell foot %dx%d world (%d,%d) => (%d,%d) want (%d,%d)", c.footX, c.footZ, c.worldX.Raw(), c.worldZ.Raw(), got.X, got.Z, c.wantX, c.wantZ)
-		}
-		bx, bz := snapBias(c.footX, c.footZ)
-		if bx != int32(c.footX/2) || bz != int32(c.footZ/2) {
-			t.Fatalf("snapBias mismatch")
+			t.Fatalf("snap foot %dx%d world (%d,%d) => (%d,%d) want (%d,%d)", c.footX, c.footZ, c.worldX.Raw(), c.worldZ.Raw(), got.X, got.Z, c.wantX, c.wantZ)
 		}
 	}
 	// Also test QueryBuildInfo path with model piece offset.
@@ -174,10 +170,6 @@ func TestSnapHalfExtentBias(t *testing.T) {
 	// Factory at 5,5 with foot 2x2 bias 1 => 4,4 regardless of piece offset fallback 0
 	if cell.X != 4 || cell.Z != 4 {
 		t.Fatalf("QueryBuildInfo cell (%d,%d) want (4,4)", cell.X, cell.Z)
-	}
-	// Verify half-extent bias explicitly
-	if bx, _ := snapBias(2, 2); bx != 1 {
-		t.Fatalf("bias 2=>1")
 	}
 	position, ok := svc.QueryBuildWorldPosition(factory, m)
 	if !ok || position.X() != factory.X || position.Y() != factory.Y || position.Z() != factory.Z {
@@ -632,7 +624,7 @@ func TestFactoryProductSaveRestoreCompletesGetBuilt(t *testing.T) {
 	}
 	stable := map[pool.Handle]uint16{factoryH: 1, productH: 2}
 	resolve := func(h pool.Handle) (uint16, bool) { id, ok := stable[h]; return id, ok }
-	image, err := orders.RetailOrderImages(product, resolve, func(h pool.Handle) bool { return source.Unit(h) != nil })
+	image, err := orders.RetailOrderImagesWithPayload(product, resolve, func(h pool.Handle) bool { return source.Unit(h) != nil }, nil)
 	if err != nil {
 		t.Fatalf("save product orders: %v", err)
 	}
@@ -665,7 +657,7 @@ func TestFactoryProductSaveRestoreCompletesGetBuilt(t *testing.T) {
 			if tc.deadBuilder {
 				w.FreeImmediate(freshFactoryH)
 			}
-			if err := orders.RetailRestoreOrders(freshProduct, records, map[uint16]pool.Handle{1: freshFactoryH, 2: freshProductH}, nil); err != nil {
+			if err := orders.RetailRestoreOrdersAtTick(freshProduct, records, map[uint16]pool.Handle{1: freshFactoryH, 2: freshProductH}, nil, 0); err != nil {
 				t.Fatalf("restore product orders: %v", err)
 			}
 			var restoredGetBuilt *orders.Node
@@ -1169,10 +1161,10 @@ func TestConstructionArithmeticCarry(t *testing.T) {
 		t.Fatalf("WorkerQuantum -1 => %d want unsigned 65535/30 = 2184", got)
 	}
 	// The live construction remaining-fraction path
-	if got, _, _, _ := ConstructionStep(1.0, 3, 30, 0, 0, 0); got != 0.9 {
+	if got, _, _, _ := constructionStep(1.0, 3, 30, 0, 0, 0); got != 0.9 {
 		t.Fatalf("ConstructionStep 1-3/30 => %v want 0.9", got)
 	}
-	if got, _, _, _ := ConstructionStep(0.1, 10, 10, 0, 0, 0); got != 0 {
+	if got, _, _, _ := constructionStep(0.1, 10, 10, 0, 0, 0); got != 0 {
 		t.Fatalf("clamp to 0 got %v", got)
 	}
 	// Construction health difference-of-truncations preserves sub-health progress
@@ -1186,7 +1178,7 @@ func TestConstructionArithmeticCarry(t *testing.T) {
 	old := float32(1.0)
 	totalGain := int32(0)
 	for i := 0; i < 3; i++ {
-		nv, hg, _, _ := ConstructionStep(old, worker, buildTime, maxDamage, 0, 0)
+		nv, hg, _, _ := constructionStep(old, worker, buildTime, maxDamage, 0, 0)
 		totalGain += hg
 		old = nv
 		if i == 0 && hg != 4 {
@@ -1208,8 +1200,8 @@ func TestConstructionArithmeticCarry(t *testing.T) {
 	totalOld := float32(1.0)
 	worker1 := WorkerQuantum(45) // 1
 	worker2 := WorkerQuantum(45)
-	nv1, _, _, _ := ConstructionStep(totalOld, worker1, 30, 100, 100, 100)
-	nv2, _, _, _ := ConstructionStep(nv1, worker2, 30, 100, 100, 100)
+	nv1, _, _, _ := constructionStep(totalOld, worker1, 30, 100, 100, 100)
+	nv2, _, _, _ := constructionStep(nv1, worker2, 30, 100, 100, 100)
 	expected := 1.0 - float32(2)/30.0
 	if nv2 != expected {
 		// Allow float32 epsilon
@@ -1220,7 +1212,7 @@ func TestConstructionArithmeticCarry(t *testing.T) {
 	}
 	// Test resource demands proportional to delta
 	oldR := float32(1.0)
-	_, _, eDem, mDem := ConstructionStep(oldR, 3, 30, 100, 300, 200)
+	_, _, eDem, mDem := constructionStep(oldR, 3, 30, 100, 300, 200)
 	// delta 0.1 => eDem 30, mDem 20 (float32 epsilon)
 	if diff := eDem - 30; diff < -0.001 || diff > 0.001 {
 		t.Fatalf("demands e %v want 30", eDem)
@@ -1233,7 +1225,7 @@ func TestConstructionArithmeticCarry(t *testing.T) {
 
 func TestConstructionStepUsesExtendedWorkingPrecision(t *testing.T) {
 	old := math.Float32frombits(0x3b036f7f)
-	nv, _, _, _ := ConstructionStep(old, 1, 499, 100, 0, 0)
+	nv, _, _, _ := constructionStep(old, 1, 499, 100, 0, 0)
 	want := float32(float64(old) - 1.0/499.0)
 	early := float32(old - float32(1)/float32(499))
 	if nv != want {
@@ -1364,7 +1356,7 @@ func TestStateGates(t *testing.T) {
 func TestConstructionCostStorePrecedesMultiplication(t *testing.T) {
 	source := int32(16777217)
 	def := &content.UnitDef{BuildCostEnergy: float32(source), BuildCostMetal: float32(source)}
-	_, _, energy, metal := ConstructionStep(1, 3, 4, 100, def.BuildCostEnergy, def.BuildCostMetal)
+	_, _, energy, metal := constructionStep(1, 3, 4, 100, def.BuildCostEnergy, def.BuildCostMetal)
 	if energy != 12582912 || metal != 12582912 {
 		t.Fatalf("demands = %v/%v, want stored-cost demand 12582912", energy, metal)
 	}

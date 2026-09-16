@@ -65,25 +65,6 @@ func ValidateBuildProduct(cat *content.Catalog, builderKey, product string) bool
 	return false
 }
 
-// NextPage returns flags with page incremented data-driven with guard [07 §9] C10.
-// It is the NEXT gadget's move, which never returns to page 0
-// [07 R-HUD-03 §6]. count <=1 means no paging.
-func NextPage(flags uint32, count int) uint32 {
-	if count <= 1 {
-		return flags
-	}
-	return EncodePageBits(flags, NextPageButton(DecodePage(flags), count))
-}
-
-// PrevPage returns flags with page decremented — the PREV gadget's move
-// [07 §9][07 R-HUD-03 §6].
-func PrevPage(flags uint32, count int) uint32 {
-	if count <= 1 {
-		return flags
-	}
-	return EncodePageBits(flags, PrevPageButton(DecodePage(flags), count))
-}
-
 // The page cycle [07 R-HUD-03 §6]. Page 0 is the orders state and pages
 // 1..count-1 are the authored build pages, so the producers below are three
 // different walks over the same range:
@@ -226,9 +207,10 @@ func ProductsForPage(all []string, page, perPage int) []string {
 // builder's primary list and then its secondary list into one running total,
 // which is what gets formatted "+%d". A queue of five in the primary list and
 // two in the secondary shows "+7", never "5 +2" — the two-number form is not
-// a retail shape. `cmd/nanolathe/battle_hud.go`'s `productQueueCountLabel`
-// already implements this corrected shape for the live battle HUD; this
-// export now agrees with it instead of diverging.
+// a retail shape.
+//
+// The battle HUD's productQueueCountLabel selects the committed command page's
+// builder and calls this; there is one implementation of the sum.
 func QueueCountLabel(queues []frame.OrderQueueView, product string) string {
 	key := content.CanonicalKey(product)
 	if key == "" {

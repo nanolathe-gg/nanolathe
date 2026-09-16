@@ -33,23 +33,10 @@ func TestCoordsNegative(t *testing.T) {
 	if got := WorldToCell(-cellWU - 1); got != -2 {
 		t.Fatalf("WorldToCell just past -one cell = %d, want -2", got)
 	}
-	// Tile conversion: one tile covers 32 map pixels.
-	if got := WorldToTile(numeric.Fixed(-1)); got != -1 {
-		t.Fatalf("WorldToTile(-1) = %d, want -1", got)
-	}
-	if got := WorldToTile(-32 * pixel); got != -1 {
-		t.Fatalf("WorldToTile(-32 pixels) = %d, want -1", got)
-	}
-	if got := WorldToTile(-32*pixel - 1); got != -2 {
-		t.Fatalf("WorldToTile just past -32 pixels = %d, want -2", got)
-	}
 	// Round trips: cell origins.
 	for _, c := range []int32{-3, -1, 0, 1, 7} {
 		if back := WorldToCell(CellToWorld(c)); back != c {
 			t.Fatalf("cell round trip %d became %d", c, back)
-		}
-		if back := WorldToTile(TileToWorld(c)); back != c {
-			t.Fatalf("tile round trip %d became %d", c, back)
 		}
 	}
 	// A point half a cell into cell -1 stays in cell -1.

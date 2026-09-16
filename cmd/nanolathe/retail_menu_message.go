@@ -230,7 +230,7 @@ func splitRetailMessageLines(text string) []string {
 func (g *gameShell) retailMessageError(logical, expected string) error {
 	var providers []string
 	if g != nil && g.cs != nil && g.cs.fs != nil {
-		providers = providerNames(g.cs.fs)
+		providers = g.cs.fs.ProviderIDs()
 	}
 	return &missingProductError{what: "retail message box cannot be constructed", logical: logical, providers: providers, expected: expected}
 }

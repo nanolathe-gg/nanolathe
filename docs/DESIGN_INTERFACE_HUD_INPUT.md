@@ -300,9 +300,9 @@ desired origin written by the glide `[07 R-CAM-01 §12]`.
 **The minimap** (`minimap.go`). `LayoutMinimap` is the letterbox: the longer map
 dimension occupies `MinimapLongSide = 126` pixels, the other is scaled by
 integer division, and the unused axis is centred by truncating the half
-padding. `PlayRight`/`PlayBottom`/`PlaySize` are the playable extents the radar
-lens is built on `[03 §3.4]`. `WorldToRadar` and `RadarToWorld` are the lens
-conversions, `WorldToRadarWithY` the one that carries the height term
+padding. `world.PlayInsets` derives the playable extents the radar lens is
+built on, and map loading writes them onto the terrain `[03 §3.4]`.
+`WorldToRadar` and `RadarToWorld` are the lens conversions, `WorldToRadarWithY` the one that carries the height term
 `[03 §3.9]` `[03 §3.11]`. `ToWorldPlay` is the pointer conversion the click
 path uses: `worldX = (ptrX − padX) · PlayRight / RadarW`, a signed multiply and
 a truncating divide with no half-viewport term `[07 R-CAM-01 §11]`.
@@ -591,15 +591,14 @@ screen's control vocabulary.
 
 ### 2.5 `internal/hud` — battle geometry and verdicts
 
-**Anchors and bars** (`anchors.go`, `bars.go`). `Anchors [30]Rect` is the side's
-mandatory anchor block, stored verbatim as authored `x1,y1,x2,y2` corners and
-never normalised `[02 §6]`. `AnchorNames` is the fixed name list and
-`AnchorIndex` its reverse. The bar helpers fill horizontally or vertically from
-an anchor and a fraction; `HealthFraction` and `ResourceFraction` are the two
-clamped ratios `[07 R-HUD-03 §4]`. Neither the top-strip stock bars nor the
-footer damage bar goes through them: both are inclusive fills with their own
-arithmetic — `FooterBarFill`'s truncating integer divide `[07 R-HUD-03 §2]` and
-the composer's single-precision `drawResourceBar` `[07 R-HUD-03 §4]`.
+**Anchors** (`anchors.go`). `Anchors [30]Rect` is the side's mandatory anchor
+block, stored verbatim as authored `x1,y1,x2,y2` corners and never normalised
+`[02 §6]`. `AnchorNames` is the fixed name list and `AnchorIndex` its reverse.
+There is no shared bar-fill helper: the top-strip stock bars and the footer
+damage bar are inclusive fills with their own arithmetic — `FooterBarFill`'s
+truncating integer divide `[07 R-HUD-03 §2]` and the composer's
+single-precision `drawResourceBar` `[07 R-HUD-03 §4]` — and a third, clamped
+fraction helper would only be a fourth statement of neither.
 
 **Chrome** (`chrome.go`). The layout rules for a surface larger than the design
 space: `ChromeRailX = 129` is the x origin of both horizontal strips,
@@ -611,16 +610,17 @@ and `ModalPlacement` centres a modal in the surface width to the right of the
 the live size `[07 R-HUD-05]` `[03 §4.1]`.
 
 **Selection and pages** (`selection.go`, `build.go`). `NormalizeDragRect` and
-`DragRect.Contains` are the rubber band. `NextSelected`/`NextFlags` are the
-modifier truth table; `ApplyDragSelection` and `ApplyDragSelectionFlags` apply
-it over the owner's slots in stable ascending order with the membership bit and
-the GUI dirty bit `[07 §9]`. `AssignGroup`, `RecallGroup` and
-`TypeFilterPasses` are the control groups and the `CTRL_F` filter.
+`DragRect.Contains` are the rubber band. The drag's membership writes are not
+here: `client.SnapshotUnitHandlesInRect` walks the committed frame and the
+session's `HumanSelectionReplace`/`Toggle`/`Clear` commands own the modifier
+truth table, which is the one path a shipped build takes `[07 §9]`.
+`AssignGroup`, `RecallGroup` and `TypeFilterPasses` are the control groups and
+the `CTRL_F` filter.
 `EncodePageBits`/`DecodePage`/`IsPaged`/`RememberedPage` are the page bits 23–25
-with bit 22 marking paged. `RoutesToPage`, `DigitToPage`, `DigitToGroup` and
-`HandleDigit` are the digit gate. `BuildProductsFor`, `ProductsForPage`,
-`BuilderPageCount`, `NextPage`/`PrevPage` and the button/key variants are the
-page cycle; `RetailBuildButtonsPerPage = 6` is the authored full-page size, and
+with bit 22 marking paged. `RoutesToPage` and `DigitToPage` are the digit gate,
+which `battleSession.routeDigit` drives — the group arm takes the digit itself. `BuildProductsFor`, `ProductsForPage`,
+`BuilderPageCount` and the button/key variants `NextPageButton`/`PrevPageButton`
+and `NextPageKey`/`PrevPageKey` are the page cycle; `RetailBuildButtonsPerPage = 6` is the authored full-page size, and
 no runtime path may infer a different grid `[07 R-HUD-03 §6]`.
 
 **The command latch** (`commands.go`). `ParseButtonLatch` is the button parse
@@ -656,15 +656,21 @@ damage bar, logo, metal and energy rates, kills line and secondary field
 raw or logical — so the composer performs the palette lookup and this package
 performs none.
 
-**The minimap** (`minimap.go`). `MinimapHUD` binds the camera layout to the
-side's anchor rectangle; `ViewportRect`/`MinimapViewportRect` are the
+**The minimap** (`minimap.go`). The compiled-in radar canvas the camera layout
+letterboxes inside is `camera.LayoutMinimap`, with `camera.Minimap.HitTest` as
+its inclusive hit test; this package adds `MinimapViewportRect`, the
 camera-to-radar rectangle stroked as a one-pixel outline in colour-map entry
 `ViewportMarkerLogicalColor = 14` `[03 R-MM-01 §1]`.
 
-**Status and the score panel** (`status.go`, `scorepanel.go`). `SnapshotStatus`
-reduces a committed frame to the values the rails display: resources with their
-formatted strings, the construction and factory readouts, the current order and
-the selection summary. `ScoreShowing` is the Space-held panel's gate — the
+**Resource text and the score panel** (`status.go`, `scorepanel.go`).
+`status.go` holds the resource strip's text: `FormatEnergyRate` with its
+truncated `K` suffix outside the inclusive `-99999..99999` window, the
+`FormatMetalRate` single fractional digit, and the produced/consumed pairs whose
+consumed arm is a magnitude because the panel artwork owns the minus glyph
+`[07 §6]`, alongside the `PaletteNormal`/`PaletteProduction`/`PaletteConsumption`
+logical entries. The readouts themselves are read out of the committed frame by
+the composer in `cmd/nanolathe`, not reduced into a second status model here.
+`ScoreShowing` is the Space-held panel's gate — the
 interface bit, Space held, and no focused text editor; `ScoreSlide.Step` is its
 slide with its cues; `ScoreRowOrder` compacts the qualifying slots; `ScoreFlash`
 is the kill/loss flash, armed only while the interface bit is set
@@ -738,8 +744,9 @@ value to the campaign/session selector, including the Hard-to-Easy wrap
 does not make every preference load or NEWGAME write update both fields.
 
 `activateGadget`,
-`activateEscape`, `activateSkirmishGadget` and `activateDynamicSkirmishGadget`
-are the callbacks; `openMissionMenu`, `retailSkirmishStartError` and
+`activateSkirmishGadget` and `activateDynamicSkirmishGadget`
+are the callbacks — the authored escape default is resolved by the widget
+service's key-navigation frame, not by a separate front-end handler; `openMissionMenu`, `retailSkirmishStartError` and
 `retailAllPlayersSameAlliedGroup` are the `SKIRMISH` start preflight
 `[07 R-FE-01 §5]`. `retail_menu.go` owns the panel refreshes and the authored
 data flow (campaign options, map data, skirmish rows, ally icons, hover help);
@@ -953,8 +960,8 @@ and the painted rectangle is `[x1..fill] × [y1..y2]`. A bar therefore covers
 `ftol(w·S/C)+1` columns and `y2−y1+1` rows, a zero stock still paints the one
 column at `x1`, a full stock paints `w+1` columns, and a capacity at or below
 zero paints nothing because retail's fill sits inside the `C > 0` branch.
-`drawResourceBar` takes the stock pair rather than `hud.ResourceFraction`,
-whose clamped ratio divides before multiplying by `w`.
+`drawResourceBar` takes the stock pair rather than any clamped ratio, which
+would divide before multiplying by `w`.
 `drawShareMarker` then runs in the same `C > 0` branch, painting the player's
 automatic-sharing threshold `T` `[05 R-SHARE-01 §3]` as the three columns
 `[m..m+2] × [y1..y2]` in `dcb[12]` at `m = ftol(x1 + w·T/C)`, but only while

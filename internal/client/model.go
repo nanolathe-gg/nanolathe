@@ -84,7 +84,7 @@ func (c *Client) unitModelFor(name string) *unitModel {
 // their authored polygon rings and textured faces draw only as quads
 // [03 §2.4.1]. A face is dropped when its projected corner
 // ring runs counter-clockwise, which is what retail's two-chain edge walk does
-// to a back face [R-RAST-01 §1] step 7 — see modelFacePaints. (This comment
+// to a back face [R-RAST-01 §1] step 7 — see facePaints. (This comment
 // previously said faces draw double-sided with no backface cull, citing
 // [03 §2.4.1]; that sentence predates the scan converter's closure and is
 // wrong — the cull is not a separate test, it is the span comparison.)
@@ -167,42 +167,6 @@ func (c *Client) modelStates(m *unitModel, pieces []frame.PieceView) []compiledm
 		idx := pv.Index
 		if pv.Name != "" {
 			found, ok := m.pieceByName[c.modelNameKey(pv.Name)]
-			if !ok {
-				continue
-			}
-			idx = found
-		}
-		if idx < 0 || idx >= len(states) {
-			continue
-		}
-		states[idx] = compiledmodel.PieceState{
-			RotX: pv.RotX, RotY: pv.RotY, RotZ: pv.RotZ,
-			Trans:     [3]numeric.Fixed{pv.Tx, pv.Ty, pv.Tz},
-			DontShade: pv.DontShade, Hidden: pv.Hidden, DontShadow: pv.DontShadow, DontCache: pv.DontCache,
-		}
-	}
-	return states
-}
-
-// modelStatesForCompiled adapts the committed piece lanes for every model
-// presentation consumer. Keeping name/index resolution here makes selection
-// geometry and body drawing consume the same immutable hierarchy and pose
-// [03 §2.4][03 §5.2].
-func modelStatesForCompiled(m *compiledmodel.Model, pieces []frame.PieceView) []compiledmodel.PieceState {
-	if m == nil {
-		return nil
-	}
-	states := make([]compiledmodel.PieceState, len(m.Pieces))
-	byName := make(map[string]int, len(m.Pieces))
-	for i, piece := range m.Pieces {
-		if piece.Name != "" {
-			byName[strings.ToLower(piece.Name)] = i
-		}
-	}
-	for _, pv := range pieces {
-		idx := pv.Index
-		if pv.Name != "" {
-			found, ok := byName[strings.ToLower(pv.Name)]
 			if !ok {
 				continue
 			}

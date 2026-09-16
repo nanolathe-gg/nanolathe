@@ -246,177 +246,88 @@ func TestStockpileCountLifecycle(t *testing.T) {
 // Interceptor detonation set vs ordinary enumeration ordering [06 §11.2] [06 §9.3] C29
 // ---------------------------------------------------------------------------
 
-func TestInterceptorDetonationOrdering(t *testing.T) {
-	// Interceptor force-detonation of alive non-self projectiles inside its
-	// UNHALVED areaofeffect after ordinary area enumeration [06 §11.2] [06 §9.3] C29
-	var svc Service
-	interceptorWeapon := weaponForStockpile(200, 30, 16, 0, false, true, false, 0, 0, 0) // area 16 => unhalved 16, halved for ordinary would be 8
-	// Place exploder at origin
-	exploderPos := Vec3{X: fixedI(0), Y: fixedI(0), Z: fixedI(0)}
+// TestInterceptorSweepMembershipAndOrdering locks the interceptor sweep on the
+// live central-impact path [06 §11.2] [06 §9.3] C29: ordinary area recipients
+// are settled first, and only then does the interceptor force-detonate alive
+// non-self projectiles inside its UNHALVED areaofeffect. The sweep consults no
+// side, alliance or targetable state, so a friendly round inside the blast is
+// removed too [06 §11.2].
+func TestInterceptorSweepMembershipAndOrdering(t *testing.T) {
+	svc, w, terrain := splashFixture(t)
+	// Area 16 unhalved reaches 16 world units; the ordinary unit sweep uses the
+	// halved radius, which is why a victim at 12 proves the value is unhalved.
+	interceptor := &content.WeaponDef{ID: 5100, AreaOfEffect: 16, DamageDefault: 10, Interceptor: true}
+	// The swept rounds carry a harmless weapon so their forced central impact
+	// is visible in the event stream without splashing anything itself.
+	incoming := &content.WeaponDef{ID: 5101, AreaOfEffect: 0, DamageDefault: 0}
+	cat := interceptorTestCatalog(t, interceptor, incoming)
+
+	origin := Vec3{X: fixedI(64), Z: fixedI(64)}
 	hExpl, ok := svc.Reserve()
 	if !ok {
-		t.Fatalf("reserve exploder")
+		t.Fatal("reserve exploder")
 	}
-	svc.Records[int(hExpl)-1] = Projectile{
-		WeaponID:    interceptorWeapon.ID,
-		Pos:         exploderPos,
-		TargetPos:   Vec3{X: fixedI(0), Y: fixedI(0), Z: fixedI(0)},
-		ShooterSide: 1,
-	}
-	// Ordinary area victims? We'll create projectile victims at distances:
-	// v1 at distance 5 (inside both halved 8 and unhalved 16) => should be detonated
-	// v2 at distance 12 (outside halved 8, inside unhalved 16) => should be detonated only via unhalved test, proving unhalved vs halved
-	// v3 at distance 20 (outside both) => not detonated
-	v1Pos := Vec3{X: fixedI(5), Y: fixedI(0), Z: fixedI(0)}
-	h1, _ := svc.Reserve()
-	svc.Records[int(h1)-1] = Projectile{WeaponID: 99, Pos: v1Pos, TargetPos: Vec3{X: fixedI(100)}, ShooterSide: 2}
-	v2Pos := Vec3{X: fixedI(12), Y: fixedI(0), Z: fixedI(0)}
-	h2, _ := svc.Reserve()
-	svc.Records[int(h2)-1] = Projectile{WeaponID: 99, Pos: v2Pos, TargetPos: Vec3{X: fixedI(200)}, ShooterSide: 2}
-	v3Pos := Vec3{X: fixedI(20), Y: fixedI(0), Z: fixedI(0)}
-	h3, _ := svc.Reserve()
-	svc.Records[int(h3)-1] = Projectile{WeaponID: 99, Pos: v3Pos, TargetPos: Vec3{X: fixedI(300)}, ShooterSide: 2}
-	// Also create a dead projectile inside radius: should not be returned (alive only) [06 §11.2]
-	hDead, _ := svc.Reserve()
-	svc.Records[int(hDead)-1] = Projectile{WeaponID: 99, Pos: Vec3{X: fixedI(3)}, ShooterSide: 2}
-	svc.MarkDead(hDead)
-	// Also create self (exploder) should not be included (non-self) [06 §11.2]
+	svc.Records[int(hExpl)-1] = Projectile{WeaponID: interceptor.ID, Pos: origin, ShooterSide: 1}
 
-	order := []string{}
-	ordinary := func() {
-		order = append(order, "ordinary")
+	round := func(offset int, side uint8) pool.Handle {
+		h, ok := svc.Reserve()
+		if !ok {
+			t.Fatal("reserve victim")
+		}
+		svc.Records[int(h)-1] = Projectile{WeaponID: incoming.ID, Pos: Vec3{X: fixedI(64 + offset), Z: fixedI(64)}, ShooterSide: side}
+		return h
 	}
-	var victims []pool.Handle
-	onVictims := func(v []pool.Handle, vs []VictimSig, es []VictimSig) {
-		order = append(order, "projectiles")
-		victims = v
-	}
-	ApplyInterceptorExplosion(&svc, hExpl, exploderPos, interceptorWeapon, ordinary, onVictims)
-	// Verify ordering: ordinary before projectiles [06 §9.3] [06 §11.2] C29
-	if len(order) != 2 || order[0] != "ordinary" || order[1] != "projectiles" {
-		t.Fatalf("detonation ordering %v want [ordinary projectiles] [06 §11.2] [06 §9.3] C29", order)
-	}
-	// Verify victim set uses UNHALVED area: 16, not halved 8
-	// v1 (5) and v2 (12) should be victims, v3 (20) not, dead not, self not
-	found := make(map[pool.Handle]bool)
-	for _, v := range victims {
-		found[v] = true
-	}
-	if !found[h1] {
-		t.Fatalf("v1 distance 5 should be victim (inside unhalved 16) [06 §11.2] C29")
-	}
-	if !found[h2] {
-		t.Fatalf("v2 distance 12 should be victim (inside unhalved 16 but outside halved 8) proving unhalved [06 §11.2] C29")
-	}
-	if found[h3] {
-		t.Fatalf("v3 distance 20 should NOT be victim (outside unhalved 16) [06 §11.2]")
-	}
-	if found[hDead] {
-		t.Fatalf("dead projectile should not be victim (alive only) [06 §11.2]")
-	}
-	if found[hExpl] {
-		t.Fatalf("exploder self should not be victim (non-self) [06 §11.2]")
-	}
-	// Ensure friendly projectiles can be removed: spec says does not filter by side/alliance/targetable, friendly can be removed [06 §11.2]
-	// Create friendly victim same side as exploder but inside radius -> should also be victim (we didn't filter side)
-	vFriendPos := Vec3{X: fixedI(4)}
-	hFriend, _ := svc.Reserve()
-	svc.Records[int(hFriend)-1] = Projectile{WeaponID: 99, Pos: vFriendPos, TargetPos: Vec3{X: fixedI(400)}, ShooterSide: 1} // same side as exploder
-	victims2 := CollectInterceptorVictims(&svc, hExpl, exploderPos, interceptorWeapon)
-	foundFriend := false
-	for _, v := range victims2 {
-		if v == hFriend {
-			foundFriend = true
+	near := round(5, 2)     // inside halved and unhalved
+	mid := round(12, 2)     // outside halved 8, inside unhalved 16
+	far := round(20, 2)     // outside both
+	friendly := round(4, 1) // same side as the exploder
+	dead := round(3, 2)
+	svc.MarkDead(dead)
+
+	// An ordinary unit recipient of the same blast, so the two settlement
+	// stages are distinguishable in the event stream [06 §9.3].
+	bystander := splashUnit(t, w, &content.UnitDef{UnitName: "bystander", MaxDamage: 100, Limit: -1}, 2, 64, 0, 64)
+	stampGroundOccupancy(t, terrain, bystander)
+
+	var order []string
+	svc.Events = func(ev Event) {
+		switch ev.Kind {
+		case EventDamageFlash:
+			order = append(order, "unit")
+		case EventProjectileImpact:
+			order = append(order, "projectile")
 		}
 	}
-	if !foundFriend {
-		t.Fatalf("friendly projectile inside unhalved area should be victim (no side filter) [06 §11.2] C29")
-	}
-}
+	p := &Projectile{Pos: origin, ShooterSide: 1}
+	handleProjectileImpact(svc, hExpl, p, interceptor, w, terrain, nil, nil, cat, 100, Vec3{}, nil, 0)
 
-// ---------------------------------------------------------------------------
-// Signature exact-match removal (and non-match survival) [06 §11.2] C29
-// ---------------------------------------------------------------------------
+	// The outer impact opens the stream, the ordinary unit recipient settles
+	// next, and only then does the projectile sweep force its three victims
+	// through central impact [06 §9.3] [06 §11.2] C29.
+	want := []string{"projectile", "unit", "projectile", "projectile", "projectile"}
+	if len(order) != len(want) {
+		t.Fatalf("event order %v want %v [06 §9.3] [06 §11.2] C29", order, want)
+	}
+	for i := range want {
+		if order[i] != want[i] {
+			t.Fatalf("event order %v want %v: ordinary area settlement precedes the projectile sweep [06 §9.3] [06 §11.2] C29", order, want)
+		}
+	}
+	if bystander.Health != 90 {
+		t.Fatalf("ordinary area recipient health %d want 90 [06 §9.3]", bystander.Health)
+	}
 
-func TestSignatureExactMatchRemoval(t *testing.T) {
-	var svc Service
-	// Create two projectiles with same pos & weapon but different handle order
-	posA := Vec3{X: fixedI(123), Y: fixedI(45), Z: fixedI(67)}
-	widA := int32(77)
-	hA, _ := svc.Reserve()
-	svc.Records[int(hA)-1] = Projectile{WeaponID: widA, Pos: Vec3{X: fixedI(0)}, TargetPos: posA, ShooterSide: 1}
-	posB := Vec3{X: fixedI(124)} // slightly different
-	hB, _ := svc.Reserve()
-	svc.Records[int(hB)-1] = Projectile{WeaponID: widA, Pos: Vec3{X: fixedI(0)}, TargetPos: posB, ShooterSide: 1}
-	hC, _ := svc.Reserve()
-	svc.Records[int(hC)-1] = Projectile{WeaponID: 78, Pos: Vec3{X: fixedI(0)}, TargetPos: posA, ShooterSide: 1} // same pos as A but different weapon idx
-	hD, _ := svc.Reserve()
-	svc.Records[int(hD)-1] = Projectile{WeaponID: widA, Pos: Vec3{X: fixedI(0)}, TargetPos: posA, ShooterSide: 1} // duplicate of A (same sig) to test first-match wins
-
-	// Publish victim signature for A's exact signature [06 §11.2]
-	sigA := VictimSig{TargetPos: posA, WeaponIdx: uint8(widA & 0xFF)} // [06 §11.2]
-	// Exact-match should find first record with that signature, which is hA (ascending order) [06 §11.2] I1
-	found, ok := FindVictimBySignature(&svc, sigA)
-	if !ok {
-		t.Fatalf("exact match should be found [06 §11.2] C29")
+	if svc.Alive(near) {
+		t.Fatalf("a round 5 units away is inside the blast [06 §11.2] C29")
 	}
-	if found != hA {
-		t.Fatalf("exact match should return first in pool order [06 §11.2] C29, got %d want %d", found, hA)
+	if svc.Alive(mid) {
+		t.Fatalf("a round 12 units away proves the UNHALVED area 16, not the halved 8 [06 §11.2] C29")
 	}
-	// Non-match: same pos different weapon
-	sigWrongWeapon := VictimSig{TargetPos: posA, WeaponIdx: uint8(78 & 0xFF)}
-	found2, ok2 := FindVictimBySignature(&svc, sigWrongWeapon)
-	if !ok2 || found2 != hC {
-		t.Fatalf("same pos diff weapon should match hC, got %d ok %v want %d [06 §11.2]", found2, ok2, hC)
+	if !svc.Alive(far) {
+		t.Fatalf("a round 20 units away is outside the unhalved area 16 [06 §11.2]")
 	}
-	// Non-match survival: different pos same weapon should find hB, not A
-	sigB := VictimSig{TargetPos: posB, WeaponIdx: uint8(widA & 0xFF)}
-	foundB, okB := FindVictimBySignature(&svc, sigB)
-	if !okB || foundB != hB {
-		t.Fatalf("diff pos should match hB, got %d ok %v want %d", foundB, okB, hB)
-	}
-	// Completely novel signature should not match (non-match survival) [06 §11.2]
-	sigNovel := VictimSig{TargetPos: Vec3{X: fixedI(999), Y: fixedI(999), Z: fixedI(999)}, WeaponIdx: 255}
-	_, okNovel := FindVictimBySignature(&svc, sigNovel)
-	if okNovel {
-		t.Fatalf("novel signature should not match (non-match survival) [06 §11.2] C29")
-	}
-	// Signature includes all components: Y differences must prevent match
-	sigWrongY := VictimSig{TargetPos: Vec3{X: fixedI(123), Y: fixedI(46), Z: fixedI(67)}, WeaponIdx: uint8(widA & 0xFF)}
-	_, okWrongY := FindVictimBySignature(&svc, sigWrongY)
-	if okWrongY {
-		t.Fatalf("Y mismatch should not match (exact-match requires all fields) [06 §11.2] C29")
-	}
-	// Test VictimSigEqual helper directly
-	if !VictimSigEqual(sigA, VictimSig{TargetPos: posA, WeaponIdx: uint8(widA & 0xFF)}) {
-		t.Fatalf("VictimSigEqual true case failed")
-	}
-	if VictimSigEqual(sigA, sigWrongWeapon) {
-		t.Fatalf("VictimSigEqual false case failed (weapon idx)")
-	}
-	// Ensure PublishVictimSig roundtrip
-	rec := Projectile{WeaponID: widA, TargetPos: posA}
-	pub := PublishVictimSig(rec)
-	if !VictimSigEqual(pub, sigA) {
-		t.Fatalf("PublishVictimSig mismatch [06 §11.2]")
-	}
-	// Verify that interceptor explosion's victim signature loop would use exact-match to remove
-	// Simulate removal: find then mark dead
-	foundToRemove, _ := FindVictimBySignature(&svc, sigA)
-	svc.MarkDead(foundToRemove)
-	if svc.Alive(foundToRemove) {
-		t.Fatalf("victim should be dead after signature removal")
-	}
-	// Next find with same sig should now find hD (the duplicate) — second occurrence after first removed still matches? But dead skipped, so next alive duplicate should be found
-	foundNext, okNext := FindVictimBySignature(&svc, sigA)
-	if !okNext || foundNext != hD {
-		t.Fatalf("after removing first, next exact match should be hD duplicate, got %d ok %v want %d", foundNext, okNext, hD)
-	}
-	// dead record with same signature should be ignored (alive only)
-	svc.MarkDead(hD)
-	_, okDead := FindVictimBySignature(&svc, sigA)
-	if okDead {
-		t.Fatalf("dead records should not be matched (alive only) [06 §11.2]")
+	if svc.Alive(friendly) {
+		t.Fatalf("the sweep consults no side, alliance or targetable state, so a friendly round is removed [06 §11.2] C29")
 	}
 }
 
@@ -655,24 +566,11 @@ func TestStockpileVerticalSlice(t *testing.T) {
 	if antiRec.TargetPos.X.Raw() != nukeRec.Pos.X.Raw() {
 		t.Fatalf("interceptor guidance failed to track [06 §11.2]")
 	}
-	// Interceptor detonation: within unhalved area 64, nuke at distance 10 should be victim.
-	// Place anti projectile at nuke's pos for blast.
+	// Interceptor detonation: within unhalved area 64, the nuke at distance 10
+	// is inside the blast the sweep measures [06 §11.2][06 §9.3].
 	antiRec.Pos = nukeRec.Pos
-	victims := CollectInterceptorVictims(&svc, hAnti, antiRec.Pos, antiWeapon)
-	foundVictim := false
-	for _, v := range victims {
-		if v == hNuke {
-			foundVictim = true
-		}
-	}
-	if !foundVictim {
-		t.Fatalf("interceptor blast should victim nuke within unhalved area [06 §11.2][06 §9.3]")
-	}
-	// Exact-match signature path: publish and find victim by signature.
-	sig := PublishVictimSig(*nukeRec)
-	fh, ok := FindVictimBySignature(&svc, sig)
-	if !ok || fh != hNuke {
-		t.Fatalf("signature exact-match should find nuke [06 §11.2], got %d ok %v", fh, ok)
+	if !ProjectileInInterceptorBlast(nukeRec.Pos, antiRec.Pos, antiWeapon.AreaOfEffect) {
+		t.Fatalf("interceptor blast should reach the nuke within the unhalved area [06 §11.2][06 §9.3]")
 	}
 }
 

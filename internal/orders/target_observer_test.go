@@ -94,7 +94,7 @@ func TestRestoredGuardTargetObserver(t *testing.T) {
 	data[8], data[9] = byte(Lookup("Guard_NoMove")), 2
 	binary.LittleEndian.PutUint32(data[0x0a:], 0x7008)
 	binary.LittleEndian.PutUint32(data[0x32:], DescriptorFor(Lookup("Guard_NoMove")).StaticGate)
-	err := RetailRestoreOrders(guard, []save.OrderRecord{{ParentStableID: 1, Main: data}}, map[uint16]pool.Handle{1: guard.Handle, 2: target.Handle}, nil)
+	err := RetailRestoreOrdersAtTick(guard, []save.OrderRecord{{ParentStableID: 1, Main: data}}, map[uint16]pool.Handle{1: guard.Handle, 2: target.Handle}, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

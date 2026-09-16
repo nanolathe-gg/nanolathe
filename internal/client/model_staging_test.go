@@ -31,7 +31,7 @@ func TestStagingBoxIsTheUnionOfCarrierAndChildren(t *testing.T) {
 	// A child four pixels right and three up of the carrier's own origin.
 	child := stagingBody(4, 4, 104, 97, 20, 60)
 
-	staging := newStagingImage(body, []stagingChild{{model: composedModel{image: child}}})
+	staging := stagingImage(body, []stagingChild{{model: composedModel{image: child}}}, newModelImage)
 	if staging == nil {
 		t.Fatal("no staging image")
 	}
@@ -63,7 +63,7 @@ func TestStagingBoxIsTheUnionOfCarrierAndChildren(t *testing.T) {
 // resolve against, which is the painter path of [R-REN-03A §4].
 func TestStagingCarrierWithoutAKeyPlaneStagesWithoutOne(t *testing.T) {
 	body := newModelImage(4, 4, 0, 0, 100, 100, false, 1)
-	staging := newStagingImage(body, nil)
+	staging := stagingImage(body, nil, newModelImage)
 	if staging.height != nil {
 		t.Fatal("a keyless carrier must not stage a key plane")
 	}
@@ -93,7 +93,7 @@ func TestCompositeChildResolvesOnTheKeyTest(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			body := stagingBody(2, 2, 100, 100, 10, tc.carrierKey)
 			child := stagingBody(2, 2, 100, 100, 20, tc.childKey)
-			staging := newStagingImage(body, []stagingChild{{model: composedModel{image: child}, keyDelta: tc.delta}})
+			staging := stagingImage(body, []stagingChild{{model: composedModel{image: child}, keyDelta: tc.delta}}, newModelImage)
 			staging.compositeChild(child, tc.delta)
 
 			i := int(staging.imageY(100))*staging.width + int(staging.imageX(100))
@@ -117,7 +117,7 @@ func TestCompositeChildResolvesOnTheKeyTest(t *testing.T) {
 func TestCompositeChildWritesWhereTheCarrierIsTransparent(t *testing.T) {
 	body := stagingBody(2, 2, 100, 100, 10, 200)
 	child := stagingBody(2, 2, 104, 100, 20, 30) // no overlap with the carrier
-	staging := newStagingImage(body, []stagingChild{{model: composedModel{image: child}}})
+	staging := stagingImage(body, []stagingChild{{model: composedModel{image: child}}}, newModelImage)
 	staging.compositeChild(child, 0)
 
 	i := int(staging.imageY(100))*staging.width + int(staging.imageX(104))
@@ -132,7 +132,7 @@ func TestCompositeChildWritesWhereTheCarrierIsTransparent(t *testing.T) {
 func TestCompositeChildSkipsTheChildBackground(t *testing.T) {
 	body := stagingBody(2, 2, 100, 100, 10, 60)
 	child := newModelImage(2, 2, 0, 0, 100, 100, true, 1) // all background
-	staging := newStagingImage(body, []stagingChild{{model: composedModel{image: child}}})
+	staging := stagingImage(body, []stagingChild{{model: composedModel{image: child}}}, newModelImage)
 	staging.compositeChild(child, 0)
 
 	i := int(staging.imageY(100))*staging.width + int(staging.imageX(100))
@@ -152,7 +152,7 @@ func TestCompositeChildSkipsTheChildBackground(t *testing.T) {
 func TestCompositeChildKeyStoreWraps(t *testing.T) {
 	body := stagingBody(2, 2, 100, 100, 10, 100)
 	child := stagingBody(2, 2, 100, 100, 20, 200)
-	staging := newStagingImage(body, []stagingChild{{model: composedModel{image: child}}})
+	staging := stagingImage(body, []stagingChild{{model: composedModel{image: child}}}, newModelImage)
 	staging.compositeChild(child, 100) // shifted key 300: admitted over 100, stored as 300 mod 256
 
 	i := int(staging.imageY(100))*staging.width + int(staging.imageX(100))

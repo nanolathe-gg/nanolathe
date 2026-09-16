@@ -65,8 +65,8 @@ func TestCargoCascadeCommonIntake(t *testing.T) {
 				}
 			}}
 			system.HandleDeath(w, carrier.Handle, attacker, 37)
-			if cargo.Health != wantHealth || cargo.Dying != wantDeath || IsCarried(w, cargo.Handle) {
-				t.Fatalf("health/death/carried = %d/%v/%v", cargo.Health, cargo.Dying, IsCarried(w, cargo.Handle))
+			if cargo.Health != wantHealth || cargo.Dying != wantDeath || isCarried(w, cargo.Handle) {
+				t.Fatalf("health/death/carried = %d/%v/%v", cargo.Health, cargo.Dying, isCarried(w, cargo.Handle))
 			}
 			if state == "dead latch" {
 				if flashes != 0 || observations != 0 || cargo.LastDamageCause != 5 {

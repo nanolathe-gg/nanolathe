@@ -47,12 +47,12 @@ func TestGoalFamiliesWiring(t *testing.T) {
 	goalCell := path.Cell{X: 10, Z: 10}
 
 	// Attack_Chase installs its own payload through the record's goal
-	// installers [04 R-ORD-01 §3], so goalForOrder must return whatever the
+	// installers [04 R-ORD-01 §3], so the goal selector must return whatever the
 	// handler bound and must invent nothing when nothing is bound. A record
 	// with no payload therefore falls to the ordinary point goal, not to an
 	// annulus with a made-up radius.
 	nAttack := &orders.Node{ID: orders.Lookup("Attack_Chase"), Target: hTgt, Param2: 0}
-	if _, _, _, ok := path.IsAnnulusGoal(sys.goalForOrder(goalCell, nAttack)); ok {
+	if _, _, _, ok := asAnnulusGoal(sys.goalForOrderWithFootprint(nil, goalCell, nAttack, 1, 1)); ok {
 		t.Fatalf("Attack_Chase with no bound payload must not fabricate an annulus goal")
 	}
 	// With a banded payload installed — substate 7's (outer d, inner d/2) —
@@ -65,7 +65,7 @@ func TestGoalFamiliesWiring(t *testing.T) {
 	}) {
 		t.Fatal("InstallAnnulusGoal refused the chase payload")
 	}
-	if cent, inner, outer, ok := path.IsAnnulusGoal(sys.goalForOrder(goalCell, nAttack)); !ok {
+	if cent, inner, outer, ok := asAnnulusGoal(sys.goalForOrderWithFootprint(nil, goalCell, nAttack, 1, 1)); !ok {
 		t.Fatalf("Attack_Chase want the installed AnnulusGoal")
 	} else if inner != 90 || outer != 180 {
 		t.Fatalf("Attack annulus radii want 90/180 got %d/%d", inner, outer)
@@ -82,11 +82,11 @@ func TestGoalFamiliesWiring(t *testing.T) {
 	// encoded invented values.
 	offset := numeric.Fixed(64 << 16)
 	nGuard := &orders.Node{ID: orders.Lookup("Follow_Ground"), Target: hTgt, Param1: 64, GoalX: offset, GoalZ: -offset, GoalSupplied: true}
-	gGuard := sys.goalForOrder(goalCell, nGuard)
-	if _, _, _, ok := path.IsAnnulusGoal(gGuard); ok {
+	gGuard := sys.goalForOrderWithFootprint(nil, goalCell, nGuard, 1, 1)
+	if _, _, _, ok := asAnnulusGoal(gGuard); ok {
 		t.Fatalf("Follow_Ground must not be an annulus goal [04 R-ORD-01 §8]")
 	}
-	if cent, radius, ok := path.IsPointGoal(gGuard); !ok {
+	if cent, radius, ok := asPointGoal(gGuard); !ok {
 		t.Fatalf("Follow_Ground want PointGoal got %T", gGuard)
 	} else {
 		wantX := goalCellForWorld(uTgt.X+offset, 1)
@@ -101,8 +101,8 @@ func TestGoalFamiliesWiring(t *testing.T) {
 	// With no resolvable ward the offset has nothing to be added to: the goal
 	// is the ordinary point goal, never a fabricated radius.
 	nGuard2 := &orders.Node{ID: orders.Lookup("Follow_Ground"), Target: 0, Param1: 64, GoalX: offset, GoalSupplied: true}
-	gGuard2 := sys.goalForOrder(goalCell, nGuard2)
-	if cent, radius, ok := path.IsPointGoal(gGuard2); !ok {
+	gGuard2 := sys.goalForOrderWithFootprint(nil, goalCell, nGuard2, 1, 1)
+	if cent, radius, ok := asPointGoal(gGuard2); !ok {
 		t.Fatalf("wardless guard want PointGoal got %T", gGuard2)
 	} else if radius != 0 || cent != goalCell {
 		t.Fatalf("wardless guard want PointGoal(goalCell, 0) got %v/%d", cent, radius)
@@ -112,33 +112,33 @@ func TestGoalFamiliesWiring(t *testing.T) {
 	// [04 R-ORD-01 §8 point 5][04 R-UNIT-06 §1].
 	for _, name := range []string{"Guard_NoMove", "VTOL_Follow"} {
 		nOther := &orders.Node{ID: orders.Lookup(name), Target: hTgt, Param1: 64, GoalX: offset, GoalSupplied: true}
-		gOther := sys.goalForOrder(goalCell, nOther)
-		if _, _, _, ok := path.IsAnnulusGoal(gOther); ok {
+		gOther := sys.goalForOrderWithFootprint(nil, goalCell, nOther, 1, 1)
+		if _, _, _, ok := asAnnulusGoal(gOther); ok {
 			t.Fatalf("%s must not produce an annulus goal", name)
 		}
-		if cent, radius, ok := path.IsPointGoal(gOther); !ok || radius != 0 || cent != goalCell {
+		if cent, radius, ok := asPointGoal(gOther); !ok || radius != 0 || cent != goalCell {
 			t.Fatalf("%s want the default PointGoal(goalCell, 0) got %T %v/%d", name, gOther, cent, radius)
 		}
 	}
 
 	// Move_Ground should remain PointGoal [04 §7.2] C8
 	nMove := &orders.Node{ID: orders.Lookup("Move_Ground")}
-	gMove := sys.goalForOrder(goalCell, nMove)
-	if _, _, ok := path.IsPointGoal(gMove); !ok {
+	gMove := sys.goalForOrderWithFootprint(nil, goalCell, nMove, 1, 1)
+	if _, _, ok := asPointGoal(gMove); !ok {
 		t.Fatalf("Move_Ground want PointGoal got %T", gMove)
 	}
-	if _, _, _, ok := path.IsAnnulusGoal(gMove); ok {
+	if _, _, _, ok := asAnnulusGoal(gMove); ok {
 		t.Fatalf("Move_Ground should not be Annulus")
 	}
 
 	// Patrol remains PointGoal; no rectangle or air-goal producer is established [04 §7.2][04 §10.3][OW-3-P]
 	for _, name := range []string{"Patrol", "QPatrol", "VTOL_Patrol"} {
 		nPat := &orders.Node{ID: orders.Lookup(name)}
-		gPat := sys.goalForOrder(goalCell, nPat)
-		if _, _, ok := path.IsPointGoal(gPat); !ok {
+		gPat := sys.goalForOrderWithFootprint(nil, goalCell, nPat, 1, 1)
+		if _, _, ok := asPointGoal(gPat); !ok {
 			t.Fatalf("%s want PointGoal (Rect/Saved unwired) got %T [OW-3-P][04 §7.2][04 §10.3]", name, gPat)
 		}
-		if _, _, _, ok := path.IsAnnulusGoal(gPat); ok {
+		if _, _, _, ok := asAnnulusGoal(gPat); ok {
 			t.Fatalf("%s should not be Annulus", name)
 		}
 		if _, ok := path.IsRectGoal(gPat); ok {
@@ -182,7 +182,7 @@ func TestActivateMoveWiresAnnulus(t *testing.T) {
 	// No payload was installed for this record, so the submitted goal is the
 	// ordinary point goal — the chase's own installers are what put a shaped
 	// payload on a record [04 R-ORD-01 §3].
-	if _, _, _, ok := path.IsAnnulusGoal(req.Goal); ok {
+	if _, _, _, ok := asAnnulusGoal(req.Goal); ok {
 		t.Fatalf("ActivateMove Attack_Chase fabricated an annulus goal with no payload bound")
 	}
 	// Verify RT search still succeeds (schedule tick publishes)
@@ -204,7 +204,7 @@ func TestActivateMoveWiresAnnulus(t *testing.T) {
 	foundMove := false
 	for _, r := range pending2 {
 		if r.Unit == h2 {
-			if _, _, ok := path.IsPointGoal(r.Goal); !ok {
+			if _, _, ok := asPointGoal(r.Goal); !ok {
 				t.Fatalf("Move_Ground pending want PointGoal got %T", r.Goal)
 			}
 			foundMove = true
@@ -259,7 +259,7 @@ func TestInstallingASecondGoalResubmitsTheMover(t *testing.T) {
 	if len(pendingFirst) != 1 {
 		t.Fatalf("first activation submitted %d requests, want 1", len(pendingFirst))
 	}
-	if c, r, ok := path.IsPointGoal(pendingFirst[0].Goal); !ok || r != 180 || c != (path.Cell{X: 8, Z: 8}) {
+	if c, r, ok := asPointGoal(pendingFirst[0].Goal); !ok || r != 180 || c != (path.Cell{X: 8, Z: 8}) {
 		t.Fatalf("first request goal = %v radius %d ok=%v, want the cell (8,8) point goal of radius 180", c, r, ok)
 	}
 	// Re-activating without a new goal must NOT submit again: one submission
@@ -281,7 +281,7 @@ func TestInstallingASecondGoalResubmitsTheMover(t *testing.T) {
 	if len(pendingSecond) != 1 {
 		t.Fatalf("after the second install %d requests are outstanding, want the one replacement", len(pendingSecond))
 	}
-	c, r, ok := path.IsPointGoal(pendingSecond[0].Goal)
+	c, r, ok := asPointGoal(pendingSecond[0].Goal)
 	if !ok || c != (path.Cell{X: 2, Z: 9}) || r != 45 {
 		t.Fatalf("the mover is still aimed at %v radius %d; the second install must re-aim it at cell (2,9) radius 45", c, r)
 	}
@@ -460,4 +460,18 @@ func TestRectangleGoalIsTheTargetFootprintGrownByTheMover(t *testing.T) {
 			}
 		})
 	}
+}
+
+// asPointGoal and asAnnulusGoal read a goal's family and parameters through
+// path.DescribeGoal, the descriptor the scheduler's own diagnostics use
+// [04 §7.2]. Reading the shipped call keeps these assertions on production
+// code instead of on an accessor that exists for the test.
+func asPointGoal(g path.Goal) (center path.Cell, radius int32, ok bool) {
+	tr := path.DescribeGoal(g)
+	return tr.Center, tr.A, tr.Kind == 1
+}
+
+func asAnnulusGoal(g path.Goal) (center path.Cell, inner, outer int32, ok bool) {
+	tr := path.DescribeGoal(g)
+	return tr.Center, tr.A, tr.B, tr.Kind == 2
 }

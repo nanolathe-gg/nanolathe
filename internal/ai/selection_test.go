@@ -68,10 +68,10 @@ func TestScoreFormula(t *testing.T) {
 		CurEnergy: 0, CapEnergy: 1000, NetEnergy: 0, ProdEnergy: 0,
 		CurMetal: 0, CapMetal: 500, NetMetal: 0, ProdMetal: 0,
 	}
-	if got := EnergyRaw(in); got != 245 {
+	if got := energyRaw(in); got != 245 {
 		t.Fatalf("energyRaw starved = %d want 245 (125+20+100) [PLAN 11 Tests]", got)
 	}
-	if got := MetalRaw(in); got != 245 {
+	if got := metalRaw(in); got != 245 {
 		t.Fatalf("metalRaw starved = %d want 245 (125+20+100) [PLAN 11 Tests]", got)
 	}
 	mMix, eMix, oMix := ComputeMix(in)
@@ -80,10 +80,10 @@ func TestScoreFormula(t *testing.T) {
 	}
 	// calm case from openta-go: energy 800 cap1000 metal400 cap500 net5 prod 300/10
 	inCalm := ScoreInputs{CurEnergy: 800, CapEnergy: 1000, CurMetal: 400, CapMetal: 500, NetEnergy: 5, NetMetal: 5, ProdEnergy: 300, ProdMetal: 10}
-	if got := EnergyRaw(inCalm); got != 25 {
+	if got := energyRaw(inCalm); got != 25 {
 		t.Fatalf("energyRaw calm = %d want 25", got)
 	}
-	if got := MetalRaw(inCalm); got != 25 {
+	if got := metalRaw(inCalm); got != 25 {
 		t.Fatalf("metalRaw calm = %d want 25", got)
 	}
 	mMix, eMix, oMix = ComputeMix(inCalm)
@@ -500,7 +500,7 @@ func TestFloat32Narrowing(t *testing.T) {
 	curF32 := math.Float32frombits(0x43f00001) // 480.0000305175781
 	capF32 := float32(1000)
 	in := ScoreInputs{CurEnergy: curF32, CapEnergy: capF32, NetEnergy: 5, ProdEnergy: 300, CurMetal: 500, CapMetal: 500, NetMetal: 5, ProdMetal: 10}
-	f32val := EnergyRaw(in)
+	f32val := energyRaw(in)
 	// float64 reference promoted from same float32 values but computed in float64
 	diffF64 := float64(capF32) - float64(curF32)
 	scaledF64 := diffF64 * 0.125
@@ -521,12 +521,12 @@ func TestFloat32Narrowing(t *testing.T) {
 	t.Logf("float32 narrowing divergence confirmed: cap %v cur bits %08x f32 %d f64 %d", capF32, math.Float32bits(curF32), f32val, f64val)
 	// Additional check: ensure metalRaw also float32
 	in2 := ScoreInputs{CurEnergy: 1000, CapEnergy: 1000, NetEnergy: 2, ProdEnergy: 300, CurMetal: 0, CapMetal: 500, NetMetal: 2, ProdMetal: 10}
-	if got := MetalRaw(in2); got != int32(125) {
+	if got := metalRaw(in2); got != int32(125) {
 		t.Fatalf("metalRaw 500*0.25=125 got %d", got)
 	}
 	// Verify mixed: energyRaw/metalRaw use float32 narrow at trunc
 	inStarved := ScoreInputs{CurEnergy: 0, CapEnergy: 1000, NetEnergy: 0, ProdEnergy: 0, CurMetal: 0, CapMetal: 500, NetMetal: 0, ProdMetal: 0}
-	if got := EnergyRaw(inStarved); got != 245 {
+	if got := energyRaw(inStarved); got != 245 {
 		t.Fatalf("starved energyRaw via float32 should be 245 got %d", got)
 	}
 }

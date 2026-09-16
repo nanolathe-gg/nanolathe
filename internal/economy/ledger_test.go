@@ -9,6 +9,27 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
+// initPlayerRecord is the ledger reset these tests start from: cleared mirror
+// and per-pass aggregates with the control countdown at -1, which is what a
+// battle-entry registration leaves behind before the first settlement
+// [05 "Authoritative settlement order"] [05 "Stocks, counters, and waste"].
+func initPlayerRecord(p *Player) {
+	if p == nil {
+		return
+	}
+	for _, r := range [...]Res{Energy, Metal} {
+		p.Mirror[r] = Bucket{}
+		p.ArchivedMirror[r] = ArchivedBucket{}
+		p.AIProduction[r] = 0
+		p.AIConsumption[r] = 0
+		p.PassProduced[r] = 0
+		p.PassConsumed[r] = 0
+	}
+	p.aiAggregatesPrepared = false
+	p.EndGameCountdown = -1
+	p.GameEnded = false
+}
+
 func TestArchivedBucketHasOnlyReportSlots(t *testing.T) {
 	if got, want := reflect.TypeOf(ArchivedBucket{}).NumField(), 2; got != want {
 		t.Fatalf("archived bucket fields = %d, want %d", got, want)
@@ -19,12 +40,14 @@ func TestArchivedBucketHasOnlyReportSlots(t *testing.T) {
 // not multiplied by the tick rate. An authored 5 stays 5 per pass, not 150.
 func TestAuthoredIsPerPass(t *testing.T) {
 	var b Bucket
-	AddProduction(&b, 5)
+	// The ledger accumulates the authored per-pass value verbatim: no division
+	// or multiplication by the tick rate anywhere in it.
+	b.Production += 5
 	if b.Production != 5 {
 		t.Fatalf("C1: authored 5 accumulated as %v, want 5", b.Production)
 	}
 	// Add again simulates second pass accumulation verbatim.
-	AddProduction(&b, 5)
+	b.Production += 5
 	if b.Production != 10 {
 		t.Fatalf("C1: two passes of 5 should be 10, got %v", b.Production)
 	}
@@ -318,7 +341,7 @@ func TestMirrorClosedWriterSurface(t *testing.T) {
 	var svc Service
 	p := &svc.Players[0]
 	// Record init
-	InitPlayer(p)
+	initPlayerRecord(p)
 	// Per-pass clear through the assembled settlement pass.
 	p.Mirror[Metal].Production = 5
 	svc.Settle(0, 0, nil)
@@ -349,8 +372,8 @@ func TestMirrorClosedWriterSurface(t *testing.T) {
 	if b2[Energy].Accepted != 5 {
 		t.Fatal("AdmitOneResource should deny when carry positive")
 	}
-	AdmitTwoResourceToMirror(p, 2, 2)
-	AdmitOneResourceToMirror(p, 2)
+	AdmitTwoResource(&p.Mirror, 2, 2)
+	AdmitOneResource(&p.Mirror, 2)
 	// Immediate debit path
 	p.Stock[Energy] = 10
 	p.Stock[Metal] = 10
@@ -365,22 +388,6 @@ func TestMirrorClosedWriterSurface(t *testing.T) {
 	CreditSpawn(&sp, Metal, 100)
 	if sp.Stock[Metal] != 100 {
 		t.Fatal("CreditSpawn failed")
-	}
-	// Construction termination credit with special scales -0.5 and -0.7
-	var ct Player
-	CreditConstructionTermination(&ct, 0.5, 100, -1) // normal add
-	if ct.Mirror[Metal].Production != 50 {
-		t.Fatalf("normal termination credit = %v want 50", ct.Mirror[Metal].Production)
-	}
-	ct.Mirror[Metal].Production = 0
-	CreditConstructionTermination(&ct, 0.5, 100, 0) // credit 0.5
-	if ct.Mirror[Metal].Production != 25 {
-		t.Fatalf("special 0 credit = %v want 25", ct.Mirror[Metal].Production)
-	}
-	ct.Mirror[Metal].Production = 0
-	CreditConstructionTermination(&ct, 0.5, 100, 1) // credit 0.7
-	if ct.Mirror[Metal].Production != 35 {
-		t.Fatalf("special 1 credit = %v want 35", ct.Mirror[Metal].Production)
 	}
 	// There is NO factory queue-draw writer — this comment is the contract.
 	// If a future helper named FactoryQueueDraw existed, this test would fail via vet

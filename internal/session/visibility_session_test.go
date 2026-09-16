@@ -120,7 +120,7 @@ func TestSessionVisibility(t *testing.T) {
 	// Refresh visibility for moved unit (simulates movement-refresh phase).
 	cx := world.WorldToCell(u1.X) / 2
 	cz := world.WorldToCell(u1.Z) / 2
-	s.Vis.Refresh(visibility.ObserverID(u1.Handle), visibility.Observer{Owner: visibility.PlayerID(u1.Owner), CX: cx, CZ: cz, HeightByte: heightByteFor(u1), Radius: radiusFor(u1)})
+	s.Vis.Refresh(visibility.ObserverID(u1.Handle), visibility.Observer{Owner: visibility.PlayerID(u1.Owner), CX: cx, CZ: cz, HeightByte: heightByteAt(u1, 0), Radius: radiusFor(u1)})
 	if !s.IsUnitVisible(0, u1) {
 		t.Fatalf("enemy after moving inside LOS should be visible")
 	}
@@ -280,14 +280,14 @@ func TestMovementRefreshViaTick(t *testing.T) {
 		t.Fatalf("moving 8 pixels should stay within same visibility tile, got %d vs %d", cx, beforeCX)
 	}
 	// Refresh should be throttled (no extra publish). Check byte grid unchanged.
-	s.Vis.Refresh(visibility.ObserverID(u.Handle), visibility.Observer{Owner: visibility.PlayerID(u.Owner), CX: cx, CZ: cz, HeightByte: heightByteFor(u), Radius: radiusFor(u)})
+	s.Vis.Refresh(visibility.ObserverID(u.Handle), visibility.Observer{Owner: visibility.PlayerID(u.Owner), CX: cx, CZ: cz, HeightByte: heightByteAt(u, 0), Radius: radiusFor(u)})
 	// Now move to next visibility tile (32 pixels = 2,097,152 = 32*65536).
 	u.X = numeric.Fixed(int64(origX) + 40*65536) // 40 pixels > 32
 	cx2 := world.WorldToCell(u.X) / 2
 	if cx2 == beforeCX {
 		t.Fatalf("far move should change CX")
 	}
-	s.Vis.Refresh(visibility.ObserverID(u.Handle), visibility.Observer{Owner: visibility.PlayerID(u.Owner), CX: cx2, CZ: cz, HeightByte: heightByteFor(u), Radius: radiusFor(u)})
+	s.Vis.Refresh(visibility.ObserverID(u.Handle), visibility.Observer{Owner: visibility.PlayerID(u.Owner), CX: cx2, CZ: cz, HeightByte: heightByteAt(u, 0), Radius: radiusFor(u)})
 	// After move, new tile should be visible.
 	if !s.Vis.IsVisible(0, visibility.Target{Owner: 1, X: u.X, Z: u.Z}) {
 		t.Fatalf("after far move, new position should be visible to owner")
@@ -322,7 +322,7 @@ func TestSaveLoadRebuild(t *testing.T) {
 	var observers []visibility.Observer
 	for _, uu := range s.Units.IterSliced() {
 		observers = append(observers, visibility.Observer{
-			Owner: visibility.PlayerID(uu.Owner), CX: world.WorldToCell(uu.X) / 2, CZ: world.WorldToCell(uu.Z) / 2, HeightByte: heightByteFor(uu), Radius: radiusFor(uu),
+			Owner: visibility.PlayerID(uu.Owner), CX: world.WorldToCell(uu.X) / 2, CZ: world.WorldToCell(uu.Z) / 2, HeightByte: heightByteAt(uu, 0), Radius: radiusFor(uu),
 		})
 	}
 	// Simulate load into new session with same terrain but fresh Vis.

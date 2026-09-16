@@ -41,7 +41,6 @@ type ProjectileDraw struct {
 	Color                int32
 	Color2               int32
 	Suppressed           bool
-	Aborted              bool
 	OrientationLow       uint16
 	OrientationHigh      uint16
 	HasDirectOrientation bool
@@ -128,9 +127,9 @@ func SnapshotSegmentedPointPasses(v frame.ProjectileView, random CRTRandomSource
 }
 
 // DispatchProjectileView selects the established rendertype branch using a
-// snapshot record.  It mirrors DispatchRendertype's selector and lifetime
-// arithmetic while avoiding a conversion back to mutable combat.Projectile.
-// The returned instruction is presentation-only [I6].
+// snapshot record [03 §5.4] C6. It is the only projectile dispatch: the
+// selector and lifetime arithmetic reads the committed view, never the mutable
+// combat record. The returned instruction is presentation-only [I6].
 func DispatchProjectileView(v frame.ProjectileView, now uint32, opts ProjectileDispatchOptions) ProjectileDraw {
 	d := ProjectileDraw{
 		Handle:               uint16(v.Handle),
@@ -304,17 +303,12 @@ func projectileFrameCount(v frame.ProjectileView, opts ProjectileDispatchOptions
 	return opts.FrameCount(v)
 }
 
-// BuildProjectileDraws dispatches an already stable snapshot slice in order
-// (I1). The visibility callback runs before rendertype dispatch [03 §5.4]. A
-// global-GAF admission failure aborts the batch, preserving the researched
-// whole-renderer abort behavior.
-func BuildProjectileDraws(projectiles []frame.ProjectileView, now uint32, visible func(frame.ProjectileView) bool, admitGlobalGAF func(frame.ProjectileView) bool, opts ProjectileDispatchOptions) ([]ProjectileDraw, bool) {
-	return BuildProjectileDrawsInto(nil, projectiles, now, visible, admitGlobalGAF, opts)
-}
-
-// BuildProjectileDrawsInto is BuildProjectileDraws over a caller-retained
-// buffer. dst is rewound, never read; the result aliases it, so a caller that
-// keeps the buffer across frames stops allocating the dispatch list.
+// BuildProjectileDrawsInto dispatches an already stable snapshot slice in order
+// (I1) over a caller-retained buffer. The visibility callback runs before
+// rendertype dispatch [03 §5.4], and a global-GAF admission failure aborts the
+// batch, preserving the researched whole-renderer abort behavior. dst is
+// rewound, never read; the result aliases it, so a caller that keeps the buffer
+// across frames stops allocating the dispatch list.
 func BuildProjectileDrawsInto(dst []ProjectileDraw, projectiles []frame.ProjectileView, now uint32, visible func(frame.ProjectileView) bool, admitGlobalGAF func(frame.ProjectileView) bool, opts ProjectileDispatchOptions) ([]ProjectileDraw, bool) {
 	out := dst[:0]
 	for _, v := range projectiles {

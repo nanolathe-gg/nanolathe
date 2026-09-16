@@ -14,7 +14,7 @@ import (
 // [04 R-PATH-01 §6]. Exercise the same player adapter as battle staging.
 func TestDecodedSparsePlayersComposePathService(t *testing.T) {
 	b := save.NewBuilder()
-	save.WriteGameTime(b, &clock.State{})
+	save.WriteGameTime(b, (&clock.State{}).SaveBox())
 	save.WritePlayerSlot(b, save.PlayerSlot{Index: 0, Controller: 1})
 	save.WritePlayerSlot(b, save.PlayerSlot{Index: 3, Controller: 2})
 	bank, err := save.OpenBytes(b.Bytes())
@@ -27,7 +27,13 @@ func TestDecodedSparsePlayersComposePathService(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range save.ReadAllPlayerSlots(bank) {
+	// The decoder's own walk: the GameTime box gates it, and each present
+	// Player%i account keeps its authored index [08 "Player records"].
+	for i := 0; i < 10; i++ {
+		p, ok := save.ReadPlayerSlot(bank, i)
+		if !ok {
+			continue
+		}
 		p.ApplyToEconomy(&s.Econ.Players[p.Index])
 		s.Econ.Players[p.Index].Exists = true
 	}

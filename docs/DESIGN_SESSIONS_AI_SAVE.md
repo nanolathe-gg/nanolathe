@@ -160,9 +160,11 @@ return `[08 "Session states"]`. Single-player takes `2→5`; state 3, the networ
 pre-load, is present and unreachable. Completion of the loading state installs
 state 6 whose *first run happens on the next dispatch*, never inline — the
 session exposes that pending flag so the deferral is testable rather than
-implied. `AdmissionMaskForState` is the three-bit packet admission rule: one
-bit admits the loading state, one the battle state, one everything else
-`[08 "Admission masks"]`.
+implied. The three-bit packet admission rule — one bit admits the
+loading state, one the battle state, one everything else — is recorded by
+`MaskLoading`, `MaskBattle` and `MaskOther` and its state mapping is pinned by
+the state-machine test; no shipped path consumes it, because there is no
+packet transport `[08 "Admission masks"]`.
 
 State names for `0..4` are this package's own descriptive labels. The trace is
 a bounded negative: the state word is one dword written by a setter with an

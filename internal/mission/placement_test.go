@@ -97,19 +97,6 @@ func TestUnitPlacementRoundTrip(t *testing.T) {
 	if u.BuildPriority != 5 {
 		t.Fatalf("BuildPriority retain: got %d", u.BuildPriority)
 	}
-	// Binary 36-byte round-trip via heap pointers [GAP T14] [C6]
-	var heap []byte
-	rec := MarshalUnit(u, &heap)
-	decoded := UnmarshalUnit(rec, heap)
-	if decoded.UnitName != u.UnitName || decoded.Ident != u.Ident || decoded.InitialMission != u.InitialMission {
-		t.Fatalf("heap strings round-trip mismatch: %+v vs %+v", u, decoded)
-	}
-	if decoded.X != u.X || decoded.Z != u.Z || decoded.Y != u.Y || decoded.Angle != u.Angle {
-		t.Fatalf("coords/angle round-trip mismatch: %+v vs %+v", u, decoded)
-	}
-	if decoded.RawFlags != u.RawFlags {
-		t.Fatalf("flags round-trip: got %02x want %02x", decoded.RawFlags, u.RawFlags)
-	}
 }
 
 func TestSpecialRecordIdentity(t *testing.T) {
@@ -162,12 +149,6 @@ func TestSpecialRecordIdentity(t *testing.T) {
 	// it, so 1, stored as 0 [08 R-TRIG-01 §12].
 	if specials[2].Kind != 1 || specials[2].ID != 0 {
 		t.Fatalf("alphabetic suffix: %+v, want Kind 1 and stored number 0", specials[2])
-	}
-	// 12-byte binary round-trip [C6]
-	rec := MarshalSpecial(specials[0])
-	decoded := UnmarshalSpecial(rec)
-	if decoded.Kind != specials[0].Kind || decoded.ID != specials[0].ID || decoded.X != specials[0].X || decoded.Z != specials[0].Z {
-		t.Fatalf("special binary round-trip mismatch: %+v vs %+v", specials[0], decoded)
 	}
 }
 
@@ -227,16 +208,6 @@ func TestFeatureNegativeClearing(t *testing.T) {
 	// Missing defaults to -1 cleared [GAP T14]
 	if features[2].X != -1 || features[2].Z != -1 {
 		t.Fatalf("feature2 default -1 clearing: got %d,%d", features[2].X, features[2].Z)
-	}
-	// 136-byte round-trip: 128-byte name buffer + X/Z [C6]
-	rec := MarshalFeature(features[0])
-	decoded := UnmarshalFeature(rec)
-	if decoded.Name != "WaterAquaOre3" || decoded.X != 362 || decoded.Z != 427 {
-		t.Fatalf("feature binary round-trip: %+v", decoded)
-	}
-	// Ensure 128-byte buffer is null-padded correctly
-	if rec[0] != 'W' || rec[127] != 0 {
-		t.Fatalf("feature 128-byte buffer not padded")
 	}
 }
 
@@ -562,18 +533,6 @@ func TestStartPosCounterAdvancesOnlyOnNonNumericLabels(t *testing.T) {
 		if specials[i].Kind != 1 || specials[i].ID != want {
 			t.Fatalf("special%d %q decoded Kind %d ID %d, want Kind 1 ID %d [08 R-TRIG-01 §12]",
 				i, specials[i].Name, specials[i].Kind, specials[i].ID, want)
-		}
-	}
-}
-
-// The synthetic codec retains the authored accessor's low nibble; it is not
-// evidence for a separate retail file layout [08 R-TRIG-01 §9].
-func TestPlacementCodecRetainsWrappedInitialGroup(t *testing.T) {
-	for _, text := range []string{"18446744073709551617tail", "17suffix"} {
-		var heap []byte
-		record := MarshalUnit(UnitPlacement{InitialGroup: text}, &heap)
-		if got := UnmarshalUnit(record, heap).InitialGroup; got != "1" {
-			t.Fatalf("group %q decoded as %q, want 1", text, got)
 		}
 	}
 }

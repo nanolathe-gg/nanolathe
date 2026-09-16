@@ -72,13 +72,18 @@ func TestBattleButtonVerdictUsesInstalledArtAndLowGreyBit(t *testing.T) {
 	}
 }
 
-func TestBattleButtonCaptionPenMatchesQueueCaption(t *testing.T) {
+// The build-product queue caption uses the shared pen: attribute bit 0x20
+// selects the build variant and no left/right/centre bit is set
+// [03 R-FONT-01 §6][07 R-P0-11 §2].
+func TestBattleButtonCaptionPenSelectsBuildVariant(t *testing.T) {
 	gad := gui.Gadget{Kind: gui.KindButton, Attribs: 0x20, Stages: 1}
 	r := gui.Rect{X: 11, Y: 17, W: 64, H: 64}
-	x, y := queueCountLabelPen(gad, r, 13, 14)
-	wantX, wantY, build, centred := retailButtonCaptionPen(gad, r, 13, 14)
-	if x != wantX || y != wantY || !build || centred {
-		t.Fatalf("queue pen=(%d,%d), common=(%d,%d), build=%v centred=%v", x, y, wantX, wantY, build, centred)
+	x, y, build, centred := retailButtonCaptionPen(gad, r, 13, 14)
+	if !build || centred {
+		t.Fatalf("pen=(%d,%d), build=%v centred=%v", x, y, build, centred)
+	}
+	if wantY := int(r.Y+r.H-1) - 4 - 14 + 1; y != wantY {
+		t.Fatalf("build-variant pen y=%d, want %d", y, wantY)
 	}
 }
 

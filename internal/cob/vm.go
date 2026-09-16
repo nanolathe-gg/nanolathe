@@ -2289,7 +2289,7 @@ func (v *VM) runThread(idx int) {
 // (composition.go and cob_query_ports.go), so only VM fixtures built directly
 // by tests can observe this default.
 func (v *VM) readPortDefault(id int32, args []int32) int32 {
-	if id < 1 || id > 20 {
+	if !IsEnginePort(id) {
 		return 0 // [04 §4.4] outside range reads zero
 	}
 	// Without WU-06-7 binding, reads are 0; writes only set marker.
@@ -2298,10 +2298,9 @@ func (v *VM) readPortDefault(id int32, args []int32) int32 {
 
 // writePortDefault is the default engine write when no handler bound.
 func (v *VM) writePortDefault(id, val int32) {
-	if id < 1 || id > 20 {
-		return
-	}
-	// No-op beyond marker [04 §4.4]
+	// Nothing is written on either side of IsEnginePort's range: an unbound
+	// in-range port sets only the touched marker, which the caller has already
+	// done, and an out-of-range id is ignored entirely [04 §4.4].
 }
 
 // helpers for Program id mapping.

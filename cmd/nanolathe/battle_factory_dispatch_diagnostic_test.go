@@ -76,7 +76,7 @@ func factoryClickFixture(t *testing.T) (*retailBattleHUD, *battleSession, string
 // locked below at the level where an error can actually arise.
 func TestFactoryProductClickDispatchesAndSynthesizesNoStatusText(t *testing.T) {
 	battleHUD, b, _ := factoryClickFixture(t)
-	if !battleHUD.consumeClick(b, 10, 10) {
+	if !hudConsumeClick(battleHUD, b, 10, 10) {
 		t.Fatal("factory product click was not consumed")
 	}
 	if err := battleHUD.LastDispatchError(); err != nil {

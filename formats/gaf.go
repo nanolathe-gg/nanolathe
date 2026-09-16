@@ -133,31 +133,7 @@ func (g *GAF) Find(name string) (*GAFEntry, bool) {
 	if g == nil {
 		return nil, false
 	}
-	for i := range g.Entries {
-		if gafASCIIEqual(g.Entries[i].Name, name) {
-			return &g.Entries[i], true
-		}
-	}
-	return nil, false
-}
-
-func gafASCIIEqual(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := 0; i < len(a); i++ {
-		if gafASCIIFold(a[i]) != gafASCIIFold(b[i]) {
-			return false
-		}
-	}
-	return true
-}
-
-func gafASCIIFold(b byte) byte {
-	if b >= 'A' && b <= 'Z' {
-		return b + ('a' - 'A')
-	}
-	return b
+	return findByFoldedName(g.Entries, name, func(e *GAFEntry) string { return e.Name })
 }
 
 // At returns the palette index at (x, y) and whether that pixel is opaque.

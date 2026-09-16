@@ -349,13 +349,12 @@ type FeatureView struct {
 	ShadowEnabled bool
 	// EventSeqVisit is that cursor's visit count: frame i of the entry holds
 	// for max(delay, 1) visits [05 R-FEAT-01 §10].
-	EventSeqVisit      int32
-	Animating          bool
-	AnimationStartTick uint32
-	AnimTrans          bool
-	ShadTrans          bool
-	Blocking           bool
-	Reclaimable        bool
+	EventSeqVisit int32
+	Animating     bool
+	AnimTrans     bool
+	ShadTrans     bool
+	Blocking      bool
+	Reclaimable   bool
 	// NoDrawUnderGray is the authored nodrawundergray gate. It is copied into
 	// the committed frame so the feature passes can apply the memory/LOS
 	// predicate without consulting the mutable catalog [02 "Feature record"]
@@ -365,15 +364,10 @@ type FeatureView struct {
 	Geothermal      bool
 }
 
-// SFXClass is the typed COB sound/effect class carried by a cue.
+// SFXClass is the typed COB sound/effect class carried by a cue. Its values
+// are the classifier's, carried across the publication boundary unchanged; the
+// named classes live with the classifier in internal/cob.
 type SFXClass uint8
-
-const (
-	SFXVector SFXClass = iota + 1
-	SFXWhiteSmoke
-	SFXBlackSmoke
-	SFXSubBubbles
-)
 
 // EffectView is a committed view of an active fixed effect or strip object
 // [03 §1].  Effect lifecycle remains presentation-owned, but the renderer
@@ -517,7 +511,6 @@ type SelectionView struct {
 	Handles     []pool.Handle
 	Primary     pool.Handle
 	Count       uint16
-	CommandMask uint32
 }
 
 // CommandPageView describes the selected builder's authored command page and
@@ -626,17 +619,23 @@ type GeneratedProductPlacement struct {
 
 // BuildProgressView carries construction progress in its authored float32
 // domain [05 "Construction target state"].
+//
+// There is no stall bit here. A `Stalled bool` stood in this record with no
+// producer: nothing ever wrote it, so a reader could only have taken its zero
+// value as an asserted "not stalled", which is a guess rather than a
+// publication. A stalled readout needs a real producer first.
+// TODO(question): which committed value tells a HUD that a build is stalled on
+// resources? Settled by a producer in the economy settlement that records the
+// stall on the build link, rather than by inferring it from a rate.
 type BuildProgressView struct {
 	Builder      pool.Handle
 	Product      pool.Handle
 	ProductKey   string
 	Remaining    float32
-	AcceptedWork float32
 	Health       int32
 	MaxHealth    int32
 	QueueIndex   int32
 	Factory      bool
-	Stalled      bool
 	FootX, FootZ int8
 }
 

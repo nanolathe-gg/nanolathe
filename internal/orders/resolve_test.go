@@ -1003,7 +1003,7 @@ func TestGuardHandlerMissingWard(t *testing.T) {
 }
 
 func TestResolveHandlerRegistration(t *testing.T) {
-	EnsureHandlers()
+	ensureHandlers()
 	chaseID := Lookup("Attack_Chase")
 	if chaseID == 0 {
 		t.Fatalf("Attack_Chase lookup failed")
@@ -1055,26 +1055,26 @@ func TestResolveAirAttackVariants(t *testing.T) {
 	// A dropped primary is the AirStrike fork; against a flying target the same
 	// primary rejects outright ("a `dropped` *W1* against a flying target →
 	// reject").
-	if got := resolveAttack(mkFlyer(bomb, false), ground); got != "AirStrike" {
+	if got := resolveAttackAt(mkFlyer(bomb, false), ground, nil); got != "AirStrike" {
 		t.Fatalf("dropped vs ground gave %q, want AirStrike [04 R-ORD-02 §1]", got)
 	}
-	if got := resolveAttack(mkFlyer(bomb, false), flying); got != "" {
+	if got := resolveAttackAt(mkFlyer(bomb, false), flying, nil); got != "" {
 		t.Fatalf("dropped vs flying gave %q, want reject [04 R-ORD-02 §1]", got)
 	}
 	// A non-dropped primary against a flyer is AirToAir; against ground the
 	// hover fork is the ACTOR's hoverattack, not any property of the target.
-	if got := resolveAttack(mkFlyer(gun, false), flying); got != "AirToAir" {
+	if got := resolveAttackAt(mkFlyer(gun, false), flying, nil); got != "AirToAir" {
 		t.Fatalf("gun vs flying gave %q, want AirToAir [04 R-ORD-02 §1]", got)
 	}
-	if got := resolveAttack(mkFlyer(gun, false), ground); got != "AirToGround" {
+	if got := resolveAttackAt(mkFlyer(gun, false), ground, nil); got != "AirToGround" {
 		t.Fatalf("gun vs ground gave %q, want AirToGround [04 R-ORD-02 §1]", got)
 	}
-	if got := resolveAttack(mkFlyer(gun, true), ground); got != "AirToGroundHover" {
+	if got := resolveAttackAt(mkFlyer(gun, true), ground, nil); got != "AirToGroundHover" {
 		t.Fatalf("hoverattack vs ground gave %q, want AirToGroundHover [04 R-ORD-02 §1]", got)
 	}
 	// The inactive sentinel is not a dropped weapon, so it takes the ordinary
 	// ground run rather than the bombing run.
-	if got := resolveAttack(mkFlyer(sentinelDropped, false), ground); got != "AirToGround" {
+	if got := resolveAttackAt(mkFlyer(sentinelDropped, false), ground, nil); got != "AirToGround" {
 		t.Fatalf("sentinel weapon1 gave %q, want AirToGround [02 §5 R-CONTENT-02]", got)
 	}
 }

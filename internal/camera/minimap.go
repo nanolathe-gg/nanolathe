@@ -76,30 +76,6 @@ func (m Minimap) DisplayToCanvas(x, y, left, top, width, height int32) (int32, i
 	return cx, cy, true
 }
 
-// PlayRight returns the playable width PlayRight = Wpix-32 [03 §3.4].
-// Wpix = Wcells*16, Hpix = Hcells*16. The minimap divisors are PlayRight/Bottom,
-// not raw Wpix/Hpix — camera.MapW/MapH are already PlayRight/Bottom when created
-// via NewFromTerrain [03 §3.4].
-func PlayRight(wPix int32) int32 { // [03 §3.4]
-	return wPix - 32
-}
-
-// PlayBottom returns the playable height PlayBottom = Hpix-128 [03 §3.4].
-func PlayBottom(hPix int32) int32 { // [03 §3.4]
-	return hPix - 128
-}
-
-// PlaySize returns PlayRight, PlayBottom from pixel dimensions [03 §3.4].
-func PlaySize(wPix, hPix int32) (int32, int32) {
-	return PlayRight(wPix), PlayBottom(hPix)
-}
-
-// PlaySizeFromCells returns PlayRight, PlayBottom from cell counts [03 §3.4].
-// Wpix = Wcells*16, Hpix = Hcells*16, then PlayRight = Wpix-32, PlayBottom = Hpix-128.
-func PlaySizeFromCells(wCells, hCells int32) (int32, int32) {
-	return PlayRight(wCells * 16), PlayBottom(hCells * 16)
-}
-
 // HitTest reports whether (x,y) lies inside the inclusive radar rectangle
 // [07 §10][03 §3.11].
 // The rectangle is PadX..PadX+W-1 by PadY..PadY+H-1 inclusive.

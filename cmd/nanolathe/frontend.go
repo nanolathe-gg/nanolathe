@@ -571,7 +571,7 @@ func loadRetailPanelStrict(cs *contentSet, guiName, pcxName, gafName, expected s
 func retailFrontendAssetError(cs *contentSet, what, logical, expected string, cause error) error {
 	providers := []string(nil)
 	if cs != nil && cs.fs != nil {
-		providers = providerNames(cs.fs)
+		providers = cs.fs.ProviderIDs()
 	}
 	base := &missingProductError{what: what, logical: logical, providers: providers, expected: expected}
 	if cause == nil {

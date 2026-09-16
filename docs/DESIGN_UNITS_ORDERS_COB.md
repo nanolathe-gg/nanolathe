@@ -129,8 +129,8 @@ receive this refresh, including the health-sample roll consumed by `Killed`;
 compiled program, the model piece list linked against the script's piece table,
 the per-unit port handlers, the callback bridge and the simulation stream. A
 definition whose program is unavailable remains in the catalog with a warning.
-Preflight refuses a required missing program, and all creation paths (including
-nanoframes, capture and forced-slot save reconstruction) reject it before pool
+Unit creation refuses a required missing program: every creation path (including
+nanoframes, capture and forced-slot save reconstruction) rejects it before pool
 allocation or creation RNG draws. This diagnostic refusal is Nanolathe host
 policy: retail faults during creation `[04 R-COB-04 §8]` `[04 R-COB-01 §3]`.
 Unrelated definitions remain usable; no scriptless instance is created.
@@ -396,7 +396,7 @@ marker `[04 R-COB-03 §3]` `[04 R-COB-03 §4]`.
 
 **The binding** (`binding.go`). `BindingRequest` is the strict production bind:
 program, model, piece list, required entry points, streams and sinks. Its
-diagnostics are coded, not prose-matched, so composition and asset preflight can
+diagnostics are coded, not prose-matched, so composition and unit creation can
 classify a missing program, a piece-count mismatch or a failed `Create` start
 without parsing text.
 Duplicate model-piece names remain valid: every COB name maps to the first
@@ -616,7 +616,7 @@ until the producer clears the aim state and re-issues. This is retail
 PLAN 06 listed "an absent script" as a third zero case; that case cannot arise.
 Every creator runs the synchronous primary-weapon query through the VM reference
 with no null test, so retail faults at unit creation instead. Nanolathe rejects
-required use during preflight or creation with the standard diagnostic shape,
+required use at unit creation with the standard diagnostic shape,
 while retaining the definition with a catalog warning (§2.1). It never creates
 a scriptless unit `[04 R-COB-04 §8]` `[04 R-COB-01 §3]`.
 

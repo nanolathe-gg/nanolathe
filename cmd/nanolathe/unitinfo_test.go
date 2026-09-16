@@ -219,7 +219,7 @@ func TestUnitInfoAuthoredWindowCarriesTheGadgetsTheSectionNames(t *testing.T) {
 		t.Skipf("retail content unavailable: %v", err)
 	}
 	defer cs.Close()
-	window, err := gui.Load(cs.fs, retailUnitInfoGUI)
+	window, err := gui.LoadWithTranslation(cs.fs, retailUnitInfoGUI, nil)
 	if err != nil {
 		t.Fatalf("load %s: %v", retailUnitInfoGUI, err)
 	}

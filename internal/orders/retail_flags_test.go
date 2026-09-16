@@ -13,12 +13,12 @@ func retailRecordForNode(t *testing.T, node *Node) (save.OrderRecord, uint32) {
 	t.Helper()
 	owner := &units.Unit{Handle: 100, Alive: true}
 	BindQueue(owner, NewQueueWith([]*Node{node}, nil))
-	images, err := RetailOrderImages(owner, func(h pool.Handle) (uint16, bool) {
+	images, err := RetailOrderImagesWithPayload(owner, func(h pool.Handle) (uint16, bool) {
 		if h == owner.Handle {
 			return 9, true
 		}
 		return 0, false
-	})
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func restoreSingleRetailNode(t *testing.T, node *Node) (*units.Unit, *Node, uint
 	t.Helper()
 	record, word := retailRecordForNode(t, node)
 	restoredOwner := &units.Unit{Handle: 200, Alive: true}
-	if err := RetailRestoreOrders(restoredOwner, []save.OrderRecord{record}, map[uint16]pool.Handle{9: restoredOwner.Handle}, nil); err != nil {
+	if err := RetailRestoreOrdersAtTick(restoredOwner, []save.OrderRecord{record}, map[uint16]pool.Handle{9: restoredOwner.Handle}, nil, 0); err != nil {
 		t.Fatal(err)
 	}
 	return restoredOwner, QueueOfUnit(restoredOwner).Head(), word
@@ -142,7 +142,7 @@ func TestRetailOrderFlagRoundTripKeepsOneShotCallbacks(t *testing.T) {
 			Flags: FlagActive | FlagStopBuildingPending, CaptionPending: true,
 		})
 		firstQueue, firstOwner, status := arrivedFixture(nil)
-		if err := RetailRestoreOrders(firstOwner, []save.OrderRecord{record}, map[uint16]pool.Handle{9: firstOwner.Handle}, firstQueue.Binding()); err != nil {
+		if err := RetailRestoreOrdersAtTick(firstOwner, []save.OrderRecord{record}, map[uint16]pool.Handle{9: firstOwner.Handle}, firstQueue.Binding(), 0); err != nil {
 			t.Fatal(err)
 		}
 		first := QueueOfUnit(firstOwner).Head()
@@ -155,18 +155,18 @@ func TestRetailOrderFlagRoundTripKeepsOneShotCallbacks(t *testing.T) {
 			t.Fatalf("caption clears=%d pending=%v, want one clear and consumed state", got, first.CaptionPending)
 		}
 
-		images, err := RetailOrderImages(firstOwner, func(h pool.Handle) (uint16, bool) {
+		images, err := RetailOrderImagesWithPayload(firstOwner, func(h pool.Handle) (uint16, bool) {
 			if h == firstOwner.Handle {
 				return 9, true
 			}
 			return 0, false
-		})
+		}, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		secondRecord := save.OrderRecord{ParentStableID: 9, Main: images[0].Main, DescriptorName: images[0].DescriptorName}
 		cleanup := newCleanupCase(t)
-		if err := RetailRestoreOrders(cleanup.u, []save.OrderRecord{secondRecord}, map[uint16]pool.Handle{9: cleanup.u.Handle}, cleanup.q.Binding()); err != nil {
+		if err := RetailRestoreOrdersAtTick(cleanup.u, []save.OrderRecord{secondRecord}, map[uint16]pool.Handle{9: cleanup.u.Handle}, cleanup.q.Binding(), 0); err != nil {
 			t.Fatal(err)
 		}
 		secondQueue := QueueOfUnit(cleanup.u)
@@ -183,7 +183,7 @@ func TestRetailOrderFlagRoundTripKeepsOneShotCallbacks(t *testing.T) {
 	t.Run("Patrol removal remains free of StopBuilding", func(t *testing.T) {
 		record, _ := retailRecordForNode(t, &Node{ID: patrolID, Owner: 100, StaticGate: DescriptorFor(patrolID).StaticGate, Flags: FlagActive})
 		cleanup := newCleanupCase(t)
-		if err := RetailRestoreOrders(cleanup.u, []save.OrderRecord{record}, map[uint16]pool.Handle{9: cleanup.u.Handle}, cleanup.q.Binding()); err != nil {
+		if err := RetailRestoreOrdersAtTick(cleanup.u, []save.OrderRecord{record}, map[uint16]pool.Handle{9: cleanup.u.Handle}, cleanup.q.Binding(), 0); err != nil {
 			t.Fatal(err)
 		}
 		QueueOfUnit(cleanup.u).RemoveHead()

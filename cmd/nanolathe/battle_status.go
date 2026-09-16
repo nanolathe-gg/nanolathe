@@ -4,8 +4,6 @@ package main
 // [07 §11] [07 R-CAM-01 §3].
 
 import (
-	"strings"
-
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
@@ -72,10 +70,6 @@ func (b *battleSession) doResultAction(kind ui.ResultAction, cl *client.Client) 
 			b.routePostBattleStart(cl)
 		}
 	}
-}
-
-func resultContinuesCampaign(view frame.ResultView) bool {
-	return view.Ended && !view.Draw && strings.EqualFold(view.Kind, "victory")
 }
 
 // adjustGameSpeed emits a concrete UI scheduling intent; Session performs the

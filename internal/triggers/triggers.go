@@ -2,7 +2,6 @@ package triggers
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 )
 
@@ -187,8 +186,7 @@ type Trigger struct {
 func SecondsToTicks(seconds int32) int32 { return int32(int64(seconds) * 30) }
 
 // New constructs a trigger of the given kind with type and up to three args.
-// For timer kinds, pass seconds; the caller should convert via SecondsToTicks
-// or let NewTimer do it.
+// For timer kinds, pass seconds converted through SecondsToTicks.
 func New(kind Kind, typ string, args ...int32) *Trigger {
 	t := &Trigger{Kind: kind, Type: typ}
 	for i := 0; i < len(args) && i < 3; i++ {
@@ -200,12 +198,6 @@ func New(kind Kind, typ string, args ...int32) *Trigger {
 		t.Type = ""
 	}
 	return t
-}
-
-// NewTimer constructs a timer trigger storing seconds×30 ticks
-// [08 "Trigger object"] [08 "Evaluation"].
-func NewTimer(kind Kind, seconds int32) *Trigger {
-	return New(kind, "", SecondsToTicks(seconds))
 }
 
 // DefaultVictory returns the injected default victory condition when no
@@ -234,88 +226,4 @@ func EnsureDefaults(victory []*Trigger, defeat []*Trigger) ([]*Trigger, []*Trigg
 		defeat = append(defeat, DefaultDefeat())
 	}
 	return victory, defeat
-}
-
-// ParseArgs parses the two authored argument formats [C14] [08 "Victory and defeat triggers"]:
-//
-//	<name>,<int>
-//	<name>,<int>,<int>,<int>
-//
-// The literal ANYTYPE is accepted wherever a unit type is expected [C14].
-// Boundary conditions are recognized by their <type or ANYTYPE, boundary> shape.
-// Returns the type string, up to three ints, and whether the parse hit the
-// four-argument form.
-func ParseArgs(s string) (typ string, args [3]int32, isFour bool, err error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return "", args, false, fmt.Errorf("triggers: empty args")
-	}
-	// Split on comma. Retail uses scan format %[a-zA-Z],%i and %[a-zA-Z],%i,%i,%i [08 "Victory and defeat triggers"].
-	parts := strings.Split(s, ",")
-	for i := range parts {
-		parts[i] = strings.TrimSpace(parts[i])
-	}
-	if len(parts) == 2 {
-		// <name>,<int>
-		typ = parts[0]
-		v, err2 := strconv.ParseInt(parts[1], 10, 32)
-		if err2 != nil {
-			return "", args, false, fmt.Errorf("triggers: parse int %q: %w", parts[1], err2)
-		}
-		args[0] = int32(v)
-		return typ, args, false, nil
-	}
-	if len(parts) == 4 {
-		// <name>,<int>,<int>,<int>
-		typ = parts[0]
-		for i := 0; i < 3; i++ {
-			v, err2 := strconv.ParseInt(parts[1+i], 10, 32)
-			if err2 != nil {
-				return "", args, false, fmt.Errorf("triggers: parse int %q: %w", parts[1+i], err2)
-			}
-			args[i] = int32(v)
-		}
-		return typ, args, true, nil
-	}
-	// Single int boundary case for AnyUnitPassesX/Z: "<int>" without name
-	if len(parts) == 1 {
-		v, err2 := strconv.ParseInt(parts[0], 10, 32)
-		if err2 != nil {
-			return "", args, false, fmt.Errorf("triggers: expected <name>,<int> or <name>,<int>,<int>,<int> got %q", s)
-		}
-		args[0] = int32(v)
-		return "", args, false, nil
-	}
-	return "", args, false, fmt.Errorf("triggers: expected <name>,<int> or <name>,<int>,<int>,<int> got %q", s)
-}
-
-// ParseLine parses a full authored line like "KillUnitType=CORLAB, 1" or
-// "AnyUnitPassesX=4500" into a Trigger, handling the condition name,
-// ANYTYPE wildcard, and seconds×30 for timer kinds [C14][C15][C17].
-func ParseLine(line string) (*Trigger, error) {
-	line = strings.TrimSpace(line)
-	if line == "" {
-		return nil, fmt.Errorf("triggers: empty line")
-	}
-	// Split at first '=' as TDF assignment would [08 "Victory and defeat triggers"].
-	eq := strings.IndexByte(line, '=')
-	var key, rest string
-	if eq >= 0 {
-		key = strings.TrimSpace(line[:eq])
-		rest = strings.TrimSpace(line[eq+1:])
-		// Strip trailing ';' as TDF does [fmt tdf].
-		rest = strings.TrimSuffix(rest, ";")
-		rest = strings.TrimSpace(rest)
-	} else {
-		// No '=', treat whole line as key with no args (flag-only)
-		key = strings.TrimSpace(line)
-	}
-	if _, ok := KindByName[strings.ToLower(key)]; !ok {
-		return nil, fmt.Errorf("triggers: unknown condition %q", key)
-	}
-	t, present := ParseCondition(key, rest)
-	if !present {
-		return nil, fmt.Errorf("triggers: condition %q is not present for value %q", key, rest)
-	}
-	return t, nil
 }

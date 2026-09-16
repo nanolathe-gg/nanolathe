@@ -13,26 +13,28 @@ import (
 )
 
 // TestResurrectionDelay_Sole03 locks sole 0.3 use and floor(work/30) [P0-15].
+// The arithmetic is internal/orders' — the row's owner — reached from here
+// because this package implements the create step that consumes the delay.
 func TestResurrectionDelay_Sole03(t *testing.T) {
 	// buildTime 5000, workerTime 60 => floor 2 => 5000*0.3/2=750
-	if got := ResurrectionDelay(5000, 60); got != 750 {
+	if got := orders.ResurrectionDelay(5000, 60); got != 750 {
 		t.Fatalf("resur delay 5000/60 => %d want 750", got)
 	}
 	// worker 30 => floor1 => 3000*0.3/1=900
-	if got := ResurrectionDelay(3000, 30); got != 900 {
+	if got := orders.ResurrectionDelay(3000, 30); got != 900 {
 		t.Fatalf("resur delay 3000/30 => %d want 900", got)
 	}
 	// work <30 => q 0 => infinity => indefinite integer, low 32 bits zero =>
 	// delay 0, immediate completion [05 R-WORK-01 §7 "the width of the stored
 	// delay"]. Zero buildtime with q 0 (a NaN) lands on the same zero.
-	if got := ResurrectionDelay(3000, 20); got != 0 {
+	if got := orders.ResurrectionDelay(3000, 20); got != 0 {
 		t.Fatalf("resur delay work20 => %d want 0", got)
 	}
-	if got := ResurrectionDelay(0, 20); got != 0 {
+	if got := orders.ResurrectionDelay(0, 20); got != 0 {
 		t.Fatalf("resur delay 0/20 => %d want 0", got)
 	}
 	// A negative buildtime gives a negative delay, never zero.
-	if got := ResurrectionDelay(-3000, 30); got != -900 {
+	if got := orders.ResurrectionDelay(-3000, 30); got != -900 {
 		t.Fatalf("resur delay -3000/30 => %d want -900", got)
 	}
 	// Check '_' truncation sole use: FeatureNameToDef via '_' truncation
@@ -42,18 +44,9 @@ func TestResurrectionDelay_Sole03(t *testing.T) {
 	if got := FeatureNameToDefName("corsomething"); got != "corsomething" {
 		t.Fatalf("no '_' => same")
 	}
-	// 1 RNG jitter draw per start [P0-15][I4]
-	sim := rng.NewSimulation(1)
-	before := sim.Draws()
-	_ = ResurrectionJitter(&sim, 10)
-	if sim.Draws()-before != 1 {
-		t.Fatalf("resurrection jitter should consume exactly 1 RNG draw, got %d", sim.Draws()-before)
-	}
-	before2 := sim.Draws()
-	_ = ResurrectionJitter(&sim, 0)
-	if sim.Draws()-before2 != 0 {
-		t.Fatalf("jitter spread 0 should consume 0 draws")
-	}
+	// The order's sole simulation draw is internal/orders' approach-phase term,
+	// taken through the queue's stream helper; internal/sim/rng pins the bound
+	// and draw-count contract it relies on [05 R-WORK-01 §7 phase 1][I4].
 }
 
 // TestResurrectionRemovesFeatureAfterAllocation locks phase 5's successful
@@ -232,13 +225,13 @@ func TestWorkClampAndHealthDiff(t *testing.T) {
 	old := float32(1.0)
 	worker := int32(1) // floor(30/30)=1
 	buildTime := int32(3000)
-	nv, _, _, _ := ConstructionStep(old, worker, buildTime, 0, 0, 0)
+	nv, _, _, _ := constructionStep(old, worker, buildTime, 0, 0, 0)
 	if nv != 1.0-float32(1)/3000.0 {
 		t.Fatalf("remaining step %v", nv)
 	}
 	// Health diff-of-trunc preserves fraction: max 10, 3 steps total 10 as in factory_test
 	maxD := int32(10)
-	_, hg1, _, _ := ConstructionStep(1, 1, 3, maxD, 0, 0) // trunc10 - trunc6 =4
+	_, hg1, _, _ := constructionStep(1, 1, 3, maxD, 0, 0) // trunc10 - trunc6 =4
 	if hg1 != 4 {
 		t.Fatalf("hg1 %d want 4", hg1)
 	}

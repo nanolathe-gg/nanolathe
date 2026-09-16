@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
@@ -89,13 +90,13 @@ func TestFeatureIdentityDistinguishesCorpseFromReclaimable(t *testing.T) {
 	cat.Features[unknown.CanonicalKey] = unknown
 	b := newTestBattle(cat, testWorldON05(10, 10))
 	ordinary := cat.Features[content.CanonicalKey("armrock")]
-	if b.isCorpseFeature(ordinary) {
+	if b.isCorpseName(ordinary.CanonicalKey) {
 		t.Fatal("ordinary reclaimable feature classified as wreck")
 	}
-	if !b.isCorpseFeature(corpse) {
+	if !b.isCorpseName(corpse.CanonicalKey) {
 		t.Fatal("suffixed corpse feature did not resolve its truncated unit key")
 	}
-	if b.isCorpseFeature(unknown) {
+	if b.isCorpseName(unknown.CanonicalKey) {
 		t.Fatal("unknown corpse prefix classified as wreck")
 	}
 }
@@ -148,11 +149,15 @@ func TestBuildPageUsesCompiledCatalogDefinitionIdentity(t *testing.T) {
 	if !ok || want == 0 {
 		t.Fatalf("catalog index missing for %q", u.Def.CanonicalKey)
 	}
-	if got := b.catalogDefID(u); uint32(got) != want {
-		t.Fatalf("page definition identity=%d, want compiled catalog index %d", got, want)
+	// The page guard resolves the published identity through the compiled
+	// catalog, so it is the catalog position and not the allocation order of
+	// the live unit pool [02 §5][07 §9] C10.
+	h := &retailBattleHUD{cat: b.cat}
+	if def, ok := h.defFor(&frame.UnitView{DefID: uint16(want)}); !ok || def != u.Def {
+		t.Fatalf("page definition identity %d resolved to %v, want the placed definition", want, def)
 	}
-	if got := b.catalogDefID(nil); got != 0 {
-		t.Fatalf("nil builder identity=%d, want null sentinel", got)
+	if def, ok := h.defFor(&frame.UnitView{}); ok {
+		t.Fatalf("the null sentinel resolved to %v, want no definition", def)
 	}
 }
 

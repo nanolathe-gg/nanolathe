@@ -43,15 +43,11 @@ type RetailOrderPayload struct {
 // RetailPayloadSource projects retained objects without mutating live orders.
 type RetailPayloadSource func(*Node) (RetailOrderPayload, error)
 
-// RetailOrderImages walks the primary segment then the secondary segment,
-// preserving traversal order and continuing sequence numbers across both
-// [08 R-SAVE-02 §6; R-SAVE-ORDER-01].
-func RetailOrderImages(u *units.Unit, stableID RetailStableID, targetLive ...RetailTargetLive) ([]RetailOrderImage, error) {
-	return RetailOrderImagesWithPayload(u, stableID, firstRetailTargetLive(targetLive), nil)
-}
-
-// RetailOrderImagesWithPayload uses live object state when a source is supplied;
-// the detached writer otherwise preserves its staged input [08 R-SAVE-02 §10].
+// RetailOrderImagesWithPayload walks the primary segment then the secondary
+// segment, preserving traversal order and continuing sequence numbers across
+// both [08 R-SAVE-02 §6; R-SAVE-ORDER-01]. It uses live object state when a
+// source is supplied; the detached writer otherwise preserves its staged input
+// [08 R-SAVE-02 §10].
 func RetailOrderImagesWithPayload(u *units.Unit, stableID RetailStableID, targetLive RetailTargetLive, source RetailPayloadSource) ([]RetailOrderImage, error) {
 	if u == nil {
 		return nil, fmt.Errorf("orders: retail save: nil owner")
@@ -98,13 +94,6 @@ func RetailOrderImagesWithPayload(u *units.Unit, stableID RetailStableID, target
 		return nil, err
 	}
 	return out, nil
-}
-
-func firstRetailTargetLive(live []RetailTargetLive) RetailTargetLive {
-	if len(live) == 0 {
-		return nil
-	}
-	return live[0]
 }
 
 func retailOrderImage(n *Node, ownerID uint16, sequence uint32, rear bool, stableID RetailStableID, targetLive RetailTargetLive) (RetailOrderImage, error) {

@@ -85,15 +85,6 @@ func CapacityForDefs(maxDefs int) int {
 	return maxDefs*10 + 1
 }
 
-// UsableCapacityForDefs returns the usable slot count excluding the null
-// sentinel: maxDefs*10 [P0-16].
-func UsableCapacityForDefs(maxDefs int) int {
-	if maxDefs < 0 {
-		maxDefs = 0
-	}
-	return maxDefs * 10
-}
-
 // Units is the fixed pool of unit records [01 §6.1] [P0-16]. The pool is
 // always sliced per player: capacity is the game value derived from the
 // definition count (maxDefs*10+1 records), each player owning maxDefs slots
@@ -402,28 +393,15 @@ func (p *Units) Capacity() int {
 }
 
 // Used returns the number of currently allocated slots. It is the maintained
-// count, not a scan; countUsed is the scan the count mirrors and exists so a
-// test can hold the two against each other.
+// count, not a scan: Alloc and Free are the only writers of alive/defID and
+// each sets or clears both together, so the count is exactly what a scan would
+// answer. pool_fixture_test.go carries that scan so a test can hold the two
+// against each other.
 func (p *Units) Used() int {
 	if p == nil || p.alive == nil {
 		return 0
 	}
 	return p.used
-}
-
-// countUsed recomputes the allocated-slot count by scanning. Production reads
-// Used; this is the reference the maintained count is tested against.
-func (p *Units) countUsed() int {
-	if p == nil || p.alive == nil {
-		return 0
-	}
-	n := 0
-	for i := 1; i < len(p.alive); i++ {
-		if p.alive[i] && p.defID[i] != 0 {
-			n++
-		}
-	}
-	return n
 }
 
 // TotalRecords returns the total record count including slot 0 [P0-16 §3.1].

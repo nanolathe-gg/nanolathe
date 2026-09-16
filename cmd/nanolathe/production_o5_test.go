@@ -93,9 +93,12 @@ func TestBattleCommandsPublishQueueAndShiftOverlay(t *testing.T) {
 	// node. It is dispatched directly rather than through a key edge: the
 	// stockpile round has no hotkey — `N` (0x4E) has no case at the dispatcher
 	// and the round is enqueued only from the palette's `MAKENUKE`/`MAKEANTI`
-	// gadgets [07 R-CAM-01 §14 item 3][07 §6]. stockpileSelected is the same
-	// entry point those gadgets reach.
-	b.stockpileSelected(true)
+	// gadgets [07 R-CAM-01 §14 item 3][07 §6]. DispatchStockpileGadget is the
+	// click body those gadgets reach; it names the unit on the committed
+	// command page, which the selection assertion above pinned.
+	if err := b.DispatchStockpileGadget(true); err != nil {
+		t.Fatalf("stockpile gadget dispatch failed: %v", err)
+	}
 	controller.Step(BattleInputFrame{HeldKeys: []input.Key{input.KeyShift}, Modifiers: BattleModifiers{Shift: true}, Elapsed: 1.0 / 30.0}, nil)
 	advanceQueueFixture(t, s)
 

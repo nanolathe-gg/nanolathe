@@ -284,10 +284,10 @@ func (r *Renderer) glowSprite(f *formats.GAFFrame, x, y, clipX, clipY, clipW, cl
 	}
 	r.noteGlowViewScale()
 	fw, fh := int(f.Width), int(f.Height)
-	minX, minY := maxInt(clipX, 0), maxInt(clipY, 0)
-	maxX, maxY := minInt(clipX+clipW, r.clipW()), minInt(clipY+clipH, r.clipH())
-	col0, col1 := maxInt(0, minX-x), minInt(fw, maxX-x)
-	row0, row1 := maxInt(0, minY-y), minInt(fh, maxY-y)
+	minX, minY := max(clipX, 0), max(clipY, 0)
+	maxX, maxY := min(clipX+clipW, r.clipW()), min(clipY+clipH, r.clipH())
+	col0, col1 := max(0, minX-x), min(fw, maxX-x)
+	row0, row1 := max(0, minY-y), min(fh, maxY-y)
 	if col0 >= col1 || row0 >= row1 {
 		return
 	}

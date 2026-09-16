@@ -11,7 +11,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 )
 
@@ -81,13 +80,13 @@ func (o ArchiveOptions) withDefaults() ArchiveOptions {
 // Archive is an indexed HPI-family provider. It supports .hpi, .ufo, .ccx,
 // .gp3 and other files with the same HAPI container layout.
 type Archive struct {
-	name           string
-	reader         io.ReaderAt
-	size           int64
-	closer         io.Closer
-	options        ArchiveOptions
-	key            uint32
-	entries        map[string]*providerEntry
+	name    string
+	reader  io.ReaderAt
+	size    int64
+	closer  io.Closer
+	options ArchiveOptions
+	key     uint32
+	providerIndex
 	indexedEntries []EntryInfo
 	// Enumeration retains source order, but only beneath reachable directories.
 	retailEntryIndices []int
@@ -129,7 +128,7 @@ func NewArchive(name string, reader io.ReaderAt, size int64, options ArchiveOpti
 	if size < hpiHeaderSize {
 		return nil, fmt.Errorf("%w: archive is too small", ErrRejectedArchive)
 	}
-	a := &Archive{name: name, reader: reader, size: size, options: options.withDefaults(), entries: make(map[string]*providerEntry)}
+	a := &Archive{name: name, reader: reader, size: size, options: options.withDefaults(), providerIndex: newProviderIndex()}
 	if err := a.index(); err != nil {
 		return nil, err
 	}
@@ -145,29 +144,6 @@ func (a *Archive) Close() error {
 	err := a.closer.Close()
 	a.closer = nil
 	return err
-}
-
-func (a *Archive) lookup(name string) (*providerEntry, bool) {
-	entry, ok := a.entries[name]
-	return entry, ok
-}
-
-func (a *Archive) children(parent string) []*providerEntry {
-	result := make([]*providerEntry, 0)
-	prefix := parent
-	if prefix != "" {
-		prefix += "/"
-	}
-	for name, entry := range a.entries {
-		if name == "" || !strings.HasPrefix(name, prefix) {
-			continue
-		}
-		rest := strings.TrimPrefix(name, prefix)
-		if rest != "" && !strings.Contains(rest, "/") {
-			result = append(result, entry)
-		}
-	}
-	return result
 }
 
 func (a *Archive) close() error { return a.Close() }

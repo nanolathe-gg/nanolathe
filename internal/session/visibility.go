@@ -50,6 +50,17 @@ func raisedHeightWord(u *units.Unit, seaLevel uint8) int32 {
 // height and the immutable model-top extent [03 §3.2, §3.5]. It is the
 // terrain-ray branch's stored coverage byte; the sprite-mask branch stores the
 // quantized shape index instead [03 R-VIS-01 §2].
+//
+// Retail builds it as `clamp(worldY_high + modelTopHigh, 0, 255)`, where
+// worldY has already been clamped to `(SeaLevel+1)<<16` by raisedHeightWord
+// [03 §3.2].
+//
+// The model-top addend is what makes the terrain-ray raster work at all: the
+// horizon test admits a step only when its slope STRICTLY exceeds the retained
+// horizon, so an observer whose height equals the ground under it retains a
+// zero slope after its first step and every later step ties and is rejected.
+// Sighting from the model's top gives the ray a negative slope to spend, which
+// is also why a laser tower outranges a peewee at equal sightdistance.
 func heightByteAt(u *units.Unit, seaLevel uint8) uint8 {
 	if u == nil {
 		return 0

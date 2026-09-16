@@ -80,19 +80,6 @@ type Sink interface {
 	Report(string)
 }
 
-// CollectSink collects diagnostics for tests and presentation draining. [ORCH §7]
-type CollectSink struct {
-	Messages []string
-}
-
-// Report implements Sink.
-func (c *CollectSink) Report(s string) {
-	if c == nil {
-		return
-	}
-	c.Messages = append(c.Messages, s)
-}
-
 // Verbatim mission-file diagnostics — six exact strings; five report through
 // the status pane, the sixth (No suitable schema, defined in schema.go) uses
 // a different channel [02 "Mission-file diagnostics"] [08 "Mission type
@@ -152,46 +139,8 @@ func errOldTED() error { return fmt.Errorf("%s", verbatimOldTED) }
 // [02 "Mission-file diagnostics"] [C2].
 func errNoGlobalHeader() error { return fmt.Errorf("%s", verbatimNoGlobalHeader) }
 
-// Load is the PLAN_10 public API entry point. [PLAN_10 Public API]
-// It matches the sketch: Load(fs, cat, path). For campaign paths containing a
-// colon (camps/...tdf:MISSIONn) it dispatches as TypeCampaign (C2); otherwise
-// it treats the path as a direct OTA for TypeSkirmish/2. Difficulty and player
-// count default to 0/0 so skirmish fallback (player count zero accepts first
-// candidate) is exercised; callers needing explicit difficulty should use
-// LoadWithType. Wind bounds are retained with no RNG draws [C5]; UseOnlyUnits
-// is routed into camps/useonly [C8]; schema selection precedes placement [C4].
-func Load(fs vfs.FSOps, cat *content.Catalog, path string) (*Mission, error) {
-	_ = cat // catalog not required for header-only load; phase 14 owns full world build
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return nil, errDoesNotExist(path)
-	}
-	// Heuristic dispatch: colon separates campaign file and mission index for Type 1.
-	if strings.Contains(path, ":") {
-		parts := strings.SplitN(path, ":", 2)
-		campaignPath := strings.TrimSpace(parts[0])
-		missionPart := strings.TrimSpace(parts[1])
-		// missionPart is like MISSION0 or 0
-		var idx int
-		if strings.HasPrefix(strings.ToLower(missionPart), "mission") {
-			// parse numeric suffix
-			num := strings.TrimSpace(missionPart[len("mission"):])
-			// also handle case like "MISSION0"
-			// formats.ParseTDFInteger handles prefix; do quick parse
-			var v int
-			_, _ = fmt.Sscanf(num, "%d", &v)
-			idx = v
-		} else {
-			_, _ = fmt.Sscanf(missionPart, "%d", &idx)
-		}
-		return LoadCampaignWithSink(fs, campaignPath, idx, 0, 0, nil)
-	}
-	// Default to skirmish direct OTA (Type 2) [08 "Mission type dispatch"].
-	return LoadWithType(fs, TypeSkirmish, path, 0, 0, nil)
-}
-
 // LoadWithType loads a mission with explicit type discriminant. [08 "Mission
-// type dispatch"] [C2] Type 1 requires a campaign wrapper (use LoadCampaign);
+// type dispatch"] [C2] Type 1 requires a campaign wrapper (use LoadCampaignWithSink);
 // this entry treats logicalPath as a direct OTA path even for TypeCampaign,
 // with no translated-name retry (strict). Types 2 and 3 read maps/<name>.ota
 // with the translated-name retry [08 R-CAMP-01 §11]. Schema selection happens
@@ -201,14 +150,11 @@ func LoadWithType(fs vfs.FSOps, typ Type, logicalPath string, difficulty, player
 	return loadWithTypeInternal(fs, typ, logicalPath, difficulty, playerCount, sink)
 }
 
-// LoadCampaign loads a campaign mission by campaign file and mission index (MISSION%d).
-// It builds the MISSION%d section name and requires the mission file's GlobalHeader
-// block plus missionfile/missionname with the four distinct verbatim diagnostics. [C2] [08 "Mission type dispatch"]
-func LoadCampaign(fs vfs.FSOps, campaignPath string, missionIndex int, difficulty, playerCount int) (*Mission, error) {
-	return LoadCampaignWithSink(fs, campaignPath, missionIndex, difficulty, playerCount, nil)
-}
-
-// LoadCampaignWithSink is LoadCampaign with a diagnostic sink. [ORCH §7]
+// LoadCampaignWithSink loads a campaign mission by campaign file and mission
+// index (MISSION%d), reporting through an optional diagnostic sink. It builds
+// the MISSION%d section name and requires the mission file's GlobalHeader
+// block plus missionfile/missionname with the four distinct verbatim
+// diagnostics. [C2] [08 "Mission type dispatch"] [ORCH §7]
 func LoadCampaignWithSink(fs vfs.FSOps, campaignPath string, missionIndex int, difficulty, playerCount int, sink Sink) (*Mission, error) {
 	if fs == nil {
 		return nil, fmt.Errorf("mission: nil filesystem")

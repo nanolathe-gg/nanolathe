@@ -307,7 +307,7 @@ func (s *Service) shareResource(ref int, res Res, w *units.World) {
 	if transfer <= 0 {
 		return
 	}
-	s.transfer(src, dst, res, transfer, true)
+	s.transfer(src, dst, res, transfer)
 }
 
 func (s *Service) shareSensors(ref int, w *units.World) {
@@ -336,32 +336,10 @@ func (s *Service) shareSensors(ref int, w *units.World) {
 			// TODO(networking): emit the mapping-share packet here when the
 			// deferred network transport is implemented [05 R-SHARE-01 §3].
 			// This counter records eligibility only; it publishes no mapping.
+			// The receive half is equally unbuilt: nothing decodes a resource
+			// packet's no-debit credit [05 R-SHARE-01 §4] or merges a received
+			// mapping grid [05 R-SHARE-01 §5-§6].
 			s.SensorShareCalls++
 		}
 	}
-}
-
-// ApplySharePacket applies a received sharing transfer. Receipt does not redo
-// source thresholds or capacity checks; it credits the destination production
-// bucket exactly once [R-SHARE-01 §4].
-func ApplySharePacket(s *Service, subtype int, amount float32, srcIdx, dstIdx int) {
-	if s == nil || srcIdx < 0 || srcIdx >= 10 || dstIdx < 0 || dstIdx >= 10 {
-		return
-	}
-	var res Res
-	switch subtype {
-	case 1:
-		res = Energy
-	case 2:
-		res = Metal
-	case 3:
-		// TODO(networking): bind the visibility-owned mapping-grid merge
-		// [05 R-SHARE-01 §6]. This unimplemented receive seam changes no grid.
-		return
-	default:
-		return
-	}
-	src := &s.Players[srcIdx]
-	dst := &s.Players[dstIdx]
-	s.transfer(src, dst, res, amount, false)
 }

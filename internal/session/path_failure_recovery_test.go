@@ -13,7 +13,7 @@ import (
 )
 
 // TestPathFailureRecovery_ImpasseGoalKeepsPollingUntilReplaced is read-only
-// against the catalog — it only feeds it to NewSkirmishWithFS, it never
+// against the catalog — it only feeds it to NewSkirmishWithProgress, it never
 // writes into it, so it shares the process-wide compile
 // [internal/testsupport/retailcat].
 func TestPathFailureRecovery_ImpasseGoalKeepsPollingUntilReplaced(t *testing.T) {
@@ -21,11 +21,11 @@ func TestPathFailureRecovery_ImpasseGoalKeepsPollingUntilReplaced(t *testing.T) 
 	rng.SeedGlobal(100, 200)
 	cfg := SkirmishConfig{MapName: "coast to coast", NumPlayers: 2}
 	cfg.ApplyDefaults()
-	sess, err := NewSkirmishWithFS(fs, cat, cfg)
+	sess, err := NewSkirmishWithProgress(fs, cat, cfg, nil)
 	if err != nil {
 		cfg2 := SkirmishConfig{MapName: "ashap plateau", NumPlayers: 2}
 		cfg2.ApplyDefaults()
-		sess, err = NewSkirmishWithFS(fs, cat, cfg2)
+		sess, err = NewSkirmishWithProgress(fs, cat, cfg2, nil)
 		if err != nil {
 			t.Skipf("NewSkirmish coast/ashap: %v", err)
 		}

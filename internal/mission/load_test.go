@@ -219,7 +219,7 @@ func TestTypeDispatchMatrix(t *testing.T) {
 			"maps/Valid.ota":         validOTA,
 			"camps/TestCampaign.tdf": campaignTDF,
 		})
-		m, err := LoadCampaign(fs, "camps/TestCampaign.tdf", 0, 0, 1)
+		m, err := LoadCampaignWithSink(fs, "camps/TestCampaign.tdf", 0, 0, 1, nil)
 		if err != nil {
 			t.Fatalf("Type 1 campaign load: %v", err)
 		}
@@ -519,4 +519,18 @@ func TestImmunityFlagRetention(t *testing.T) {
 	if !IsImmuneFromFlags(0x80) || IsImmuneFromFlags(0x20) || IsImmuneFromFlags(0x40) {
 		t.Fatalf("IsImmuneFromFlags only high bit C7")
 	}
+}
+
+// CollectSink is the Sink double these tests drain; no shipped consumer
+// collects diagnostics this way [AGENTS.md "Diagnostics"].
+type CollectSink struct {
+	Messages []string
+}
+
+// Report implements Sink.
+func (c *CollectSink) Report(s string) {
+	if c == nil {
+		return
+	}
+	c.Messages = append(c.Messages, s)
 }

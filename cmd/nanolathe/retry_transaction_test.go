@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/gui"
+
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
@@ -61,4 +64,13 @@ func TestBuilderPageProbeDoesNotPoisonRequiredLoad(t *testing.T) {
 	} else if !strings.Contains(err.Error(), "logical path guis/arm3.gui") || !strings.Contains(err.Error(), "providers searched") {
 		t.Fatalf("selected page GUI error lacks provider-aware logical path: %v", err)
 	}
+}
+
+// loadWindowProbe resolves a numbered builder page without building it, which
+// is how these tests ask whether the page exists. The first absent page is the
+// established terminator and must not become a construction error; the shipped
+// loaders are loadWindow and loadWindowRequired [07 §9].
+func (h *retailBattleHUD) loadWindowProbe(name string) (*gui.Window, *formats.GAF) {
+	window, page, _ := h.loadWindowInternal(name, false)
+	return window, page
 }

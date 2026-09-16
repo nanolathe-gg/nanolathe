@@ -7,13 +7,14 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/testsupport"
+	"github.com/nanolathe-gg/nanolathe/internal/testsupport/retailcat"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // TestRetailMorningChainPlacementProfiles is asset-gated: the real ARM
 // morning skirmish chain must carry a compiled movement/fallback profile for
-// every definition that construction can validate. This deliberately uses
-// PreflightSkirmish's authored selections rather than hard-coding a different
+// every definition that construction can validate. This deliberately uses the
+// side's authored build-menu selections rather than hard-coding a different
 // product list [R-P0-08][05 "Factory production lifecycle"].
 func TestRetailMorningChainPlacementProfiles(t *testing.T) {
 	root := testsupport.RetailRoot(t)
@@ -25,17 +26,14 @@ func TestRetailMorningChainPlacementProfiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compile retail catalog: %v", err)
 	}
-	manifest, err := content.PreflightSkirmish(fs, catalog, "Ashap Plateau", 0)
-	if err != nil {
-		t.Fatalf("preflight ARM morning chain: %v\ndiagnostics=%+v", err, manifest.Diagnostics)
-	}
+	chain := retailcat.SelectOpeningChain(t, catalog, 0)
 
-	keys := []string{manifest.Commander, manifest.Solar, manifest.Mex, manifest.KbotLab, manifest.LabProduct}
+	keys := []string{chain.Commander, chain.Solar, chain.Mex, chain.KbotLab, chain.LabProduct}
 	var blockers []string
 	for _, key := range keys {
 		def, ok := catalog.Unit(key)
 		if !ok || def == nil {
-			t.Fatalf("preflight-selected definition %q is absent from catalog", key)
+			t.Fatalf("selected definition %q is absent from catalog", key)
 		}
 		rules, err := placementRules(&Service{Catalog: catalog}, def)
 		if err != nil {

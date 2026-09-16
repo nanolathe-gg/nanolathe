@@ -44,8 +44,8 @@ func TestCampaignResultUsesScoreTeamIdentity(t *testing.T) {
 						winSeconds, loseSeconds = loseSeconds, winSeconds
 						wantKind, wantMark, winnerOwner = "defeat", 'L', 1-local
 					}
-					s.Mission.Victory = []*triggers.Trigger{triggers.NewTimer(triggers.KindVictoryTimerRunsOut, winSeconds)}
-					s.Mission.Defeat = []*triggers.Trigger{triggers.NewTimer(triggers.KindDeathTimerRunsOut, loseSeconds)}
+					s.Mission.Victory = []*triggers.Trigger{triggers.New(triggers.KindVictoryTimerRunsOut, "", triggers.SecondsToTicks(winSeconds))}
+					s.Mission.Defeat = []*triggers.Trigger{triggers.New(triggers.KindDeathTimerRunsOut, "", triggers.SecondsToTicks(loseSeconds))}
 					for tick := uint32(0); tick <= 180 && s.State == StateBattle; tick += 30 {
 						s.pollMissionTriggers(tick)
 					}

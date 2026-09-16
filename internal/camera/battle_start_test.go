@@ -1,6 +1,10 @@
 package camera
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/nanolathe-gg/nanolathe/internal/world"
+)
 
 // The battle viewport is the framebuffer minus the chrome the viewport subrect
 // excludes: left 128, top 32, bottom 32, so W-128 by H-64 [03 §4.1].
@@ -101,7 +105,7 @@ func TestJumpClampsLikeEveryOtherOriginWriter(t *testing.T) {
 func TestEveryPlayablePixelIsReachable(t *testing.T) {
 	// Great Divide: 160x256 cells, so 2560x4096 map pixels and playable
 	// extents PlayRight = 2528, PlayBottom = 3968 [03 §3.4].
-	playW, playH := PlaySizeFromCells(160, 256)
+	playW, playH := world.PlayInsets(160, 256)
 	if playW != 2528 || playH != 3968 {
 		t.Fatalf("play extents = %dx%d, want 2528x3968", playW, playH)
 	}

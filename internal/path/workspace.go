@@ -110,16 +110,6 @@ type cellIndex struct {
 	overflow map[Cell]entry
 }
 
-// len reports how many cells the table holds. The map answers with its own
-// length; the dense table counts what this lending wrote, because its slots
-// outlive the search that wrote them.
-func (ix *cellIndex) len() int {
-	if ix.ws == nil {
-		return len(ix.m)
-	}
-	return ix.n + len(ix.overflow)
-}
-
 // newMapIndex is the storage a search keeps when it has no workspace.
 func newMapIndex() cellIndex { return cellIndex{m: make(map[Cell]entry)} }
 

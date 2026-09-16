@@ -1,14 +1,22 @@
 package render
 
 import (
-	"github.com/nanolathe-gg/nanolathe/formats"
 	"reflect"
 	"testing"
 
+	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
+	"github.com/nanolathe-gg/nanolathe/internal/palette"
+	"github.com/nanolathe-gg/nanolathe/internal/visibility"
 )
 
-// TestFogWindowMatchesClippedFullBuild locks BuildFogOpsWindowInto against the
+// buildFogOpsWindowIntoNoArt is the windowed walk with no authored art extents,
+// the shape BuildFogOpsWindowWithArtInto takes when a family resolves nothing.
+func buildFogOpsWindowIntoNoArt(out []FogOp, cache *visibility.FogCache, cam *camera.Camera, surfW, surfH int32, tables *palette.Tables, dither bool) []FogOp {
+	return buildFogOpsWindowInto(out, cache, cam, surfW, surfH, tables, dither, nil)
+}
+
+// TestFogWindowMatchesClippedFullBuild locks the windowed builder against the
 // map-wide builder: without art extents every GAF op must survive, while the
 // fills are culled to the surface, in the same order.
 //
@@ -41,7 +49,7 @@ func TestFogWindowMatchesClippedFullBuild(t *testing.T) {
 		{X: 5000, Z: 5000, ViewW: surfW, ViewH: surfH},
 	} {
 		for _, dither := range []bool{false, true} {
-			full := BuildFogOpsInto(nil, cache, cam, cam.ViewW, cam.ViewH, gw, gh, nil, dither)
+			full := buildFogOpsMapWide(nil, cache, cam, nil, dither)
 			var want []FogOp
 			for _, op := range full {
 				x0 := op.ScreenX0 - camera.OriginX
@@ -65,7 +73,7 @@ func TestFogWindowMatchesClippedFullBuild(t *testing.T) {
 				}
 				want = append(want, op)
 			}
-			got := BuildFogOpsWindowInto(nil, cache, cam, surfW, surfH, nil, dither)
+			got := buildFogOpsWindowIntoNoArt(nil, cache, cam, surfW, surfH, nil, dither)
 			if len(got) != len(want) {
 				t.Fatalf("camera (%d,%d) dither=%v: windowed build has %d ops, the clipped map-wide build has %d",
 					cam.X, cam.Z, dither, len(got), len(want))
@@ -88,7 +96,7 @@ func TestFogWindowRejectsEmptySurface(t *testing.T) {
 	cache.SetChannel(0, 0, 15, 0)
 	cam := &camera.Camera{X: 0, Z: 0, ViewW: 320, ViewH: 200}
 	for _, size := range [][2]int32{{0, 200}, {320, 0}, {-1, -1}} {
-		if ops := BuildFogOpsWindowInto(nil, cache, cam, size[0], size[1], nil, false); len(ops) != 0 {
+		if ops := buildFogOpsWindowIntoNoArt(nil, cache, cam, size[0], size[1], nil, false); len(ops) != 0 {
 			t.Fatalf("surface %dx%d produced %d ops, want none", size[0], size[1], len(ops))
 		}
 	}
@@ -105,12 +113,12 @@ func TestFogWindowReusesScratch(t *testing.T) {
 		}
 	}
 	cam := &camera.Camera{X: 0, Z: 0, ViewW: 320, ViewH: 200}
-	scratch := BuildFogOpsWindowInto(nil, cache, cam, 320, 200, nil, false)
+	scratch := buildFogOpsWindowIntoNoArt(nil, cache, cam, 320, 200, nil, false)
 	if len(scratch) == 0 {
 		t.Fatal("scene produces no fog ops; the reuse check would prove nothing")
 	}
 	grown := scratch[:cap(scratch)]
-	again := BuildFogOpsWindowInto(scratch, cache, cam, 320, 200, nil, false)
+	again := buildFogOpsWindowIntoNoArt(scratch, cache, cam, 320, 200, nil, false)
 	if cap(again) != cap(grown) || &again[:1][0] != &grown[:1][0] {
 		t.Fatal("windowed build reallocated the scratch slice instead of refilling it")
 	}
@@ -134,7 +142,7 @@ func TestFogWindowWithArtMatchesFullBuild(t *testing.T) {
 	for _, scale := range []camera.ViewScale{camera.ViewScaleNative, camera.ViewScaleDetail} {
 		for _, pan := range [][2]int32{{48, 48}, {17, 3}, {511, 511}, {5000, 5000}, {-32, -32}} {
 			cam := &camera.Camera{X: pan[0], Z: pan[1], Scale: scale}
-			full := BuildFogOpsInto(nil, cache, cam, 64, 64, 24, 24, nil, false)
+			full := buildFogOpsMapWide(nil, cache, cam, nil, false)
 			var want []FogOp
 			for _, op := range full {
 				edge := scale.Px(32)

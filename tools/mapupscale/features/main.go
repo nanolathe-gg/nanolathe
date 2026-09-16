@@ -18,11 +18,12 @@ import (
 	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	retailpalette "github.com/nanolathe-gg/nanolathe/internal/palette"
+	"github.com/nanolathe-gg/nanolathe/tools/mapupscale/internal/mapassets"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 func main() {
-	root := flag.String("root", defaultAssetRoot(), "Total Annihilation asset root")
+	root := flag.String("root", mapassets.DefaultRoot(), "Total Annihilation asset root")
 	mapName := flag.String("map", "Great Divide", "map name, with or without maps/ and .tnt")
 	out := flag.String("out", "/tmp/features", "output directory")
 	census := flag.Bool("census", false, "print a size histogram over every sprite feature definition")
@@ -70,7 +71,7 @@ func main() {
 		runCensus(defs, loadGAF)
 		return
 	}
-	logical, err := findMap(fs, *mapName)
+	logical, err := mapassets.FindMap(fs, *mapName)
 	if err != nil {
 		fatalf("%v", err)
 	}
@@ -251,33 +252,6 @@ func runCensus(defs map[string]*content.FeatureDef, loadGAF func(string) *format
 		rows[len(rows)-1].name, rows[len(rows)-1].w, rows[len(rows)-1].h, rows[0].name, rows[0].w, rows[0].h)
 }
 
-func defaultAssetRoot() string {
-	if configured := os.Getenv("NANOLATHE_TA_ROOT"); configured != "" {
-		return configured
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "TotalAnnihilation"
-	}
-	return filepath.Join(home, "TotalAnnihilation")
-}
-
-func findMap(fs *vfs.FS, requested string) (string, error) {
-	wanted := strings.ToLower(strings.TrimSpace(requested))
-	wanted = strings.TrimSuffix(strings.TrimPrefix(wanted, "maps/"), ".tnt")
-	for _, entry := range fs.Entries() {
-		logical := strings.ToLower(filepath.ToSlash(entry.Path))
-		if entry.IsDir || !strings.HasPrefix(logical, "maps/") || !strings.HasSuffix(logical, ".tnt") {
-			continue
-		}
-		if strings.TrimSuffix(strings.TrimPrefix(logical, "maps/"), ".tnt") == wanted {
-			return entry.Path, nil
-		}
-	}
-	return "", fmt.Errorf("map %q not found", requested)
-}
-
 func fatalf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "features: "+format+"\n", args...)
-	os.Exit(1)
+	mapassets.Fatalf("features: ", format, args...)
 }

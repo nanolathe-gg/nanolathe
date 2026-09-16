@@ -301,8 +301,8 @@ func writeCachedLiveContentZoom(t *testing.T, c *Client, path string) {
 		t.Fatal("capture had no model pixels to zoom")
 	}
 	const padding, scale = 8, 8
-	minX, minY = maxInt(0, minX-padding), maxInt(0, minY-padding)
-	maxX, maxY = minInt(c.width-1, maxX+padding), minInt(c.height-1, maxY+padding)
+	minX, minY = max(0, minX-padding), max(0, minY-padding)
+	maxX, maxY = min(c.width-1, maxX+padding), min(c.height-1, maxY+padding)
 	w, h := maxX-minX+1, maxY-minY+1
 	img := image.NewGray(image.Rect(0, 0, w*scale, h*scale))
 	for y := 0; y < h*scale; y++ {
@@ -318,20 +318,6 @@ func writeCachedLiveContentZoom(t *testing.T, c *Client, path string) {
 	if err := png.Encode(f, img); err != nil {
 		t.Fatal(err)
 	}
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 // The modern executor keeps a model slot until the retained cached lane behind

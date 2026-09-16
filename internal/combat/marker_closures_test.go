@@ -96,19 +96,29 @@ func TestTargetingUpgradeGate(t *testing.T) {
 		mk(0, up, 0.5, true), // still building
 		mk(0, up, 0, false),  // deactivated
 	}
-	if TargetingUpgradeGate(list, 0) {
+	// The rebuild walk sets the boolean on the first unit that opens the gate,
+	// so the whole-list answer is "any" over the per-unit predicate [06 §3.1].
+	gate := func(list []*units.Unit, owner uint8) bool {
+		for _, u := range list {
+			if unitOpensTargetingUpgradeGate(u, owner) {
+				return true
+			}
+		}
+		return false
+	}
+	if gate(list, 0) {
 		t.Fatal("no own complete activated upgrade: gate must be clear")
 	}
-	if !TargetingUpgradeGate(list, 1) {
+	if !gate(list, 1) {
 		t.Fatal("player 1 owns one: gate set")
 	}
 	list = append(list, mk(0, up, 0, true))
-	if !TargetingUpgradeGate(list, 0) {
+	if !gate(list, 0) {
 		t.Fatal("own complete activated upgrade: gate set")
 	}
 	dying := mk(0, up, 0, true)
 	dying.Dying = true
-	if TargetingUpgradeGate([]*units.Unit{dying}, 0) {
+	if gate([]*units.Unit{dying}, 0) {
 		t.Fatal("a dying upgrade does not count")
 	}
 }

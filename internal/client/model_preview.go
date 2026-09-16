@@ -105,17 +105,6 @@ func NewModelPreviewRenderer(fs *vfs.FS) (*ModelPreviewRenderer, error) {
 	return &ModelPreviewRenderer{client: c, palette: tables}, nil
 }
 
-// RenderModel renders one model at one heading through the production unit
-// hierarchy and raster path. Every call starts with the requested palette
-// background and centers the unit origin in an identically sized frame.
-func (r *ModelPreviewRenderer) RenderModel(opts ModelPreviewOptions) (*image.RGBA, error) {
-	record, err := r.RecordModel(opts)
-	if err != nil {
-		return nil, err
-	}
-	return record.Image, nil
-}
-
 // RecordModel produces both the classic reference image and the immutable
 // model packet which P3 can replay without a client, camera or model cache.
 // It is a static pose renderer: PiecePoses represent supplied committed lanes,

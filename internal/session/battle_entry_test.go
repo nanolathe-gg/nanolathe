@@ -120,7 +120,7 @@ func TestRebuildCapacityBonusInclusive(t *testing.T) {
 }
 
 // TestSkirmishStorageBonusPreservesOpeningStock locks P1 acceptance: both players stock >=900 at tick 60 without fixture credit [OX P1].
-// It uses production NewSkirmishWithFS on a tiny catalog (or retail if available) and steps 60 ticks.
+// It uses production NewSkirmishWithProgress on a tiny catalog (or retail if available) and steps 60 ticks.
 func TestSkirmishStorageBonusPreservesOpeningStock(t *testing.T) {
 	rng.SeedGlobal(11, 12)
 	cat := minimalCatalogForStrict()

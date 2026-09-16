@@ -8,10 +8,10 @@ import (
 // The FNT text family for the modern executor (docs/DESIGN_GPU_RENDERER.md §2.3,
 // C-G4). Text is keyed, not destination-reading: a glyph's set bits write the
 // run's single colour index and its clear bits leave the destination untouched,
-// exactly as internal/client drawText writes `frame[index] = color` over the set
+// exactly as internal/client drawTextClipped writes `frame[index] = color` over the set
 // bits [03 §7.1]. The layout — the truncate-to-width, the descender baseline, the
 // offset-0 absent-glyph skip, the newline/NUL terminator, the per-glyph advance
-// and first-character table bias — is reproduced from drawText/MeasureText/
+// and first-character table bias — is reproduced from drawTextClipped/MeasureText/
 // TruncateToWidth so the covered pixel set matches the byte writer [fmt fnt][07 §7].
 //
 // One glyph strip per *formats.FNT packs every present glyph horizontally into
@@ -190,12 +190,12 @@ func glyphClipBounds(g drawlist.Glyphs, width, height int) (x0, y0, x1, y1 int) 
 	if !g.HasClip {
 		return
 	}
-	x0, y0 = maxInt(int(g.Clip.X), 0), maxInt(int(g.Clip.Y), 0)
-	x1, y1 = minInt(int(g.Clip.X+g.Clip.W), width), minInt(int(g.Clip.Y+g.Clip.H), height)
+	x0, y0 = max(int(g.Clip.X), 0), max(int(g.Clip.Y), 0)
+	x1, y1 = min(int(g.Clip.X+g.Clip.W), width), min(int(g.Clip.Y+g.Clip.H), height)
 	return
 }
 
-// Glyphs replays one FNT text run, reproducing drawText's layout exactly: the
+// Glyphs replays one FNT text run, reproducing drawTextClipped's layout exactly: the
 // truncate-to-width before clipping, the descender baseline, the offset-0 skip,
 // the per-glyph advance and the newline/NUL terminator (docs/DESIGN_GPU_RENDERER.md
 // §2.3)[02 §7][03 §7.1][07 §7]. Each glyph is a keyed quad from the font atlas to
@@ -211,7 +211,7 @@ func (r *Renderer) Glyphs(g drawlist.Glyphs) {
 		return
 	}
 	text := g.Text
-	// Truncate-to-width happens before clipping, exactly as drawText does [07 §7].
+	// Truncate-to-width happens before clipping, exactly as drawTextClipped does [07 §7].
 	if int(g.MaxWidth) > 0 {
 		text = truncateToWidth(fnt, text, int(g.MaxWidth))
 		if len(text) == 0 {
@@ -236,9 +236,9 @@ func (r *Renderer) Glyphs(g drawlist.Glyphs) {
 	curX := int(g.X)
 	gh := atlas.height
 	// The scheduler bounds cover the baseline-adjusted pixels.
-	bx0, by0 := maxInt(curX, clipX0), maxInt(top, clipY0)
-	bx1 := minInt(curX+measureText(fnt, text), clipX1)
-	by1 := minInt(top+gh, clipY1)
+	bx0, by0 := max(curX, clipX0), max(top, clipY0)
+	bx1 := min(curX+measureText(fnt, text), clipX1)
+	by1 := min(top+gh, clipY1)
 	if !r.sched.begin(schedOpaque, bx0, by0, bx1, by1, r.sceneImages(atlas.entry)) {
 		return
 	}
@@ -256,11 +256,11 @@ func (r *Renderer) Glyphs(g drawlist.Glyphs) {
 		if gw > 0 {
 			xoff := int(atlas.xOffset[code])
 			yoff := int(atlas.entry.y)
-			// The glyph is a rectangle, so drawText's per-pixel framebuffer clip is
+			// The glyph is a rectangle, so drawTextClipped's per-pixel framebuffer clip is
 			// the rectangular intersection of [curX,curX+gw)×[top,top+gh) with the
 			// framebuffer; the source sub-rect shifts to match.
-			c0, c1 := maxInt(clipX0-curX, 0), minInt(gw, clipX1-curX)
-			r0, r1 := maxInt(clipY0-top, 0), minInt(gh, clipY1-top)
+			c0, c1 := max(clipX0-curX, 0), min(gw, clipX1-curX)
+			r0, r1 := max(clipY0-top, 0), min(gh, clipY1-top)
 			if c0 < c1 && r0 < r1 {
 				r.sched.quad(schedOpaque,
 					float32(curX+c0), float32(top+r0), float32(curX+c1), float32(top+r1),

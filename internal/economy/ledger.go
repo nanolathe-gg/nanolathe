@@ -392,17 +392,6 @@ func ForEachUnitOrdered(w *units.World, player int, fn func(*units.Unit)) {
 	})
 }
 
-// AddProduction verbatim accumulates authored per-pass production without time conversion
-// per [05 "Authoritative settlement order"] C1. There is no division or multiplication
-// by the tick rate in the ledger; the only floating constants in the whole ledger are
-// -0.7 and -0.5 per [05 "Authoritative settlement order"] C1.
-func AddProduction(b *Bucket, amount float32) {
-	if b == nil {
-		return
-	}
-	b.Production += amount
-}
-
 // InstallStorageBonus installs the retail storage bonus [05 "Storage capacity"]
 // [OX P1]: sets the enable flag and stores max(value, 200) for each resource as
 // the bonus. In Go the bonus is kept as float32 with integer value; the retail
@@ -602,26 +591,6 @@ func (p *Player) commitCapacityWaste() {
 // There is NO factory queue-draw writer — the player mirror bucket has no such writer
 // per [05 "Stocks, counters, and waste"].
 
-// InitPlayer initializes the player mirror bucket and ledger state per C11.
-func InitPlayer(p *Player) {
-	if p == nil {
-		return
-	}
-	for _, r := range [...]Res{Energy, Metal} {
-		p.Mirror[r] = Bucket{}
-		p.ArchivedMirror[r] = ArchivedBucket{}
-		p.AIProduction[r] = 0
-		p.AIConsumption[r] = 0
-		p.PassProduced[r] = 0
-		p.PassConsumed[r] = 0
-	}
-	p.aiAggregatesPrepared = false
-	// Stock, Capacity, Waste, totals are zeroed by caller as needed; no float constants here.
-	// Initialize control countdown to -1 so gate starts satisfied per [05 "Authoritative settlement order"].
-	p.EndGameCountdown = -1
-	p.GameEnded = false
-}
-
 // AdmitTwoResource admits energy and metal demands as one transaction per [05 "Two-resource admission"].
 // It records both requests before testing either carry. Positive carry denies;
 // unordered carry admits [05 R-ECO-01 §1][05 R-ECO-01 §7].
@@ -659,23 +628,6 @@ func AdmitOneResource(buckets *[2]Bucket, energy float32) bool {
 // carryAdmits preserves the carry gate's unordered branch: only an ordered
 // positive value denies. Go's carry <= 0 would reject NaN [05 R-ECO-01 §1, §7].
 func carryAdmits(carry float32) bool { return !(carry > 0) }
-
-// AdmitTwoResourceToMirror is the mirror-bucket two-resource admission helper per C11.
-// Body arrives with WU-08-3 for settlement ratios; this records admission per C11.
-func AdmitTwoResourceToMirror(p *Player, energy, metal float32) {
-	if p == nil {
-		return
-	}
-	AdmitTwoResource(&p.Mirror, energy, metal)
-}
-
-// AdmitOneResourceToMirror is the mirror-bucket one-resource admission helper per C11.
-func AdmitOneResourceToMirror(p *Player, energy float32) {
-	if p == nil {
-		return
-	}
-	AdmitOneResource(&p.Mirror, energy)
-}
 
 // ImmediateDebit is the direct two-resource payment of [05 R-ECO-01 §7], the
 // helper weapon fire and other immediate operations use:
@@ -739,28 +691,26 @@ func (s *Service) Transfer(source, destination uint8, res Res, amount float32) {
 	if s == nil || source >= 10 || destination >= 10 || res < Metal || res > Energy {
 		return
 	}
-	s.transfer(&s.Players[source], &s.Players[destination], res, amount, true)
+	s.transfer(&s.Players[source], &s.Players[destination], res, amount)
 }
 
-// transfer is the sharing helper used by the dispatcher and packet drain.
-// Debit is local-only; received packets credit the destination without
-// debiting again. Credits land in mirror production and are settled later
-// [R-SHARE-01 §2, §4]. A network emitter, when wired by the session layer,
-// encodes Energy as subtype 1 and Metal as subtype 2 [R-SHARE-01 §2].
-func (s *Service) transfer(src, dst *Player, res Res, amount float32, debit bool) {
+// transfer is the local sharing helper: it debits the source's live stock and
+// stages the recipient's credit in mirror production, which settlement applies
+// later [05 R-SHARE-01 §2]. Retail's receive half — a network packet that
+// credits the destination WITHOUT repeating the debit [05 R-SHARE-01 §4] — has
+// no transport in a single-player build and no caller here.
+func (s *Service) transfer(src, dst *Player, res Res, amount float32) {
 	if s == nil || src == nil || dst == nil || amount == 0 {
 		return
 	}
-	if debit {
-		if amount > src.Stock[res] {
-			amount = src.Stock[res]
-		}
-		if amount > src.Stock[res] {
-			return
-		}
-		src.Stock[res] = float32(float64(src.Stock[res]) - float64(amount))
-		src.Mirror[res].Requested = float32(float64(src.Mirror[res].Requested) + float64(amount))
+	if amount > src.Stock[res] {
+		amount = src.Stock[res]
 	}
+	if amount > src.Stock[res] {
+		return
+	}
+	src.Stock[res] = float32(float64(src.Stock[res]) - float64(amount))
+	src.Mirror[res].Requested = float32(float64(src.Mirror[res].Requested) + float64(amount))
 	addContribution(s, dst, &dst.Mirror[res], float64(amount))
 }
 
@@ -771,27 +721,4 @@ func CreditSpawn(p *Player, res Res, amount float32) {
 		return
 	}
 	p.Stock[res] += amount
-}
-
-// CreditConstructionTermination credits metal spent on an unfinished build per C11.
-// Refund is trunc((1 - remaining) × metalBuildCost) per [05 "Cancel-current and stop interrupts"] C21.
-// Normally adds to builder's metal bucket; special player modes add the
-// difficulty-scaled credit [R-ECO-01 §3].
-// The only floating constants in the whole ledger are -0.7 and -0.5 per C1.
-func CreditConstructionTermination(p *Player, remaining float32, metalBuildCost int32, specialMode int) {
-	if p == nil {
-		return
-	}
-	// Truncation toward zero per I3.
-	refund := float32(numeric.TruncateFloat32ToLow32((1 - remaining) * float32(metalBuildCost)))
-	switch specialMode {
-	case 0:
-		// selector value 0 credits one half through the negative-factor form.
-		p.Mirror[Metal].Production = float32(float64(p.Mirror[Metal].Production) - float64(refund)*-0.5)
-	case 1:
-		// selector value 1 credits seven tenths through the negative-factor form.
-		p.Mirror[Metal].Production = float32(float64(p.Mirror[Metal].Production) - float64(refund)*-0.7)
-	default:
-		p.Mirror[Metal].Production = float32(float64(p.Mirror[Metal].Production) + float64(refund))
-	}
 }

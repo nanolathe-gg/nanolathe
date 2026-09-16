@@ -16,9 +16,9 @@ func TestFlashTableGeometryMatchesTheDrawCensus(t *testing.T) {
 	want := []int{23456, 107335, 260815}
 	for table := 0; table < flashTableCount; table++ {
 		crt := flashRand{state: 1}
-		before := crt.Draws()
+		before := crt.drawn
 		frames := buildFlashTable(table, &crt)
-		if got := crt.Draws() - before; got != want[table] {
+		if got := crt.drawn - before; got != want[table] {
 			t.Fatalf("table %d spent %d CRT draws, want %d [06 R-WFX-01 §2]", table, got, want[table])
 		}
 		wantFrames := []int{12, 15, 15}[table]

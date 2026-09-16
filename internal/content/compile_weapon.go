@@ -148,37 +148,12 @@ func (w *WeaponDef) DamageKeysSorted() []string {
 	if w.damageOrder != nil {
 		return append([]string(nil), w.damageOrder...)
 	}
-	keys := make([]string, 0, len(w.Damage))
-	for k := range w.Damage {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		li, lj := CanonicalKey(keys[i]), CanonicalKey(keys[j])
-		if li != lj {
-			return li < lj
-		}
-		return keys[i] < keys[j]
-	})
-	return keys
+	return sortedFoldedKeys(w.Damage, CanonicalKey)
 }
 
 // UnknownKeysSorted returns inert keys sorted for hash stability (I1).
 func (w *WeaponDef) UnknownKeysSorted() []string {
-	if w.Unknown == nil {
-		return nil
-	}
-	keys := make([]string, 0, len(w.Unknown))
-	for k := range w.Unknown {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		li, lj := CanonicalKey(keys[i]), CanonicalKey(keys[j])
-		if li != lj {
-			return li < lj
-		}
-		return keys[i] < keys[j]
-	})
-	return keys
+	return sortedFoldedKeys(w.Unknown, CanonicalKey)
 }
 
 // knownWeaponKeys is the set of lower-cased weapon-level keys that have a typed reader [02 "Weapon record"].
@@ -196,19 +171,15 @@ var knownWeaponKeys = map[string]struct{}{
 	"model": {}, "explosiongaf": {}, "explosionart": {}, "waterexplosiongaf": {}, "waterexplosionart": {}, "lavaexplosiongaf": {}, "lavaexplosionart": {}, "soundstart": {}, "soundhit": {}, "soundwater": {},
 }
 
-// compileWeaponSection compiles a single top-level weapon section into a WeaponDef.
-// It reads ID first with default -1 to select the record [02 "Weapon record"] C2, then
-// applies conversions exactly as tabulated each truncated after multiply [02 "Weapon record"] C3.
+// compileWeaponSectionWithPrior compiles a single top-level weapon section
+// into a WeaponDef. It reads ID first with default -1 to select the record
+// [02 "Weapon record"] C2, then applies conversions exactly as tabulated, each
+// truncated after multiply [02 "Weapon record"] C3.
 //
-// This entry starts a fresh record. Re-parsing an existing ID uses
-// compileWeaponSectionWithPrior so its damage overrides survive while scalar
-// fields and the catalog name are replaced [02 R-CONTENT-02].
-func compileWeaponSection(section *formats.Section, sectionName string, prov Provenance) *WeaponDef {
-	return compileWeaponSectionWithPrior(section, sectionName, prov, nil)
-}
-
-// Scalar fields replace authored-or-default on every parse, while DAMAGE
-// overrides append to the existing table [02 R-CONTENT-02][06 R-DMG-01 §1].
+// A nil prior starts a fresh record. Re-parsing an existing ID passes that
+// slot's record so its damage overrides survive: scalar fields replace
+// authored-or-default on every parse, while DAMAGE overrides append to the
+// existing table [02 R-CONTENT-02][06 R-DMG-01 §1].
 func compileWeaponSectionWithPrior(section *formats.Section, sectionName string, prov Provenance, prior *WeaponDef) *WeaponDef {
 	// C2 weapon identity: read ID first, default -1, use to select record; section name is catalog key; name is display string [02 "Weapon record"]
 	id := section.IntValue("ID", -1)

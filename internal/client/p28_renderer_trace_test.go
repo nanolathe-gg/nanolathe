@@ -334,3 +334,13 @@ func TestP28RendererTraceCapPreservesPixels(t *testing.T) {
 		t.Fatalf("capture cap changed indexed pixels: traced=%v nil=%v", traced, c.indexed)
 	}
 }
+
+// stats reduces a trace to the bounded-capture report RendererTraceStats
+// describes. The capture itself is the diagnostic the renderer trace exists
+// for; this reduction is only how the tests below read its bounds back.
+func (r *rendererTrace) stats() RendererTraceStats {
+	if r == nil {
+		return RendererTraceStats{}
+	}
+	return RendererTraceStats{Capacity: rendererTraceEventCap, Captured: len(r.events), Dropped: r.dropped, Overflowed: r.overflowed}
+}

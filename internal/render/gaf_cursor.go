@@ -3,8 +3,6 @@ package render
 // GAF cursor playback [03 §4.4][07 §8] (C8).
 
 import (
-	"strings"
-
 	"github.com/nanolathe-gg/nanolathe/formats"
 )
 
@@ -81,19 +79,6 @@ func CursorName(idx int) string {
 // Slot 0 is unused and returns false [07 §8].
 func IsValidCursorIndex(idx int) bool {
 	return idx >= 1 && idx <= CursorCount-1
-}
-
-// CursorIndexFromName returns the cursor index for a GAF entry name [07 §8].
-// Lookup is case-insensitive, matching formats.GAF's case-insensitive entry map [fmt gaf].
-// Returns 0 when not found; note slot 0 is the unused sentinel [07 §8].
-func CursorIndexFromName(name string) int {
-	lower := strings.ToLower(name)
-	for i, n := range cursorIndexToName {
-		if n != "" && strings.ToLower(n) == lower {
-			return i
-		}
-	}
-	return 0
 }
 
 // ResolveCursorEntry resolves a cursor index to its GAF entry through formats.GAF [fmt gaf][07 §8].

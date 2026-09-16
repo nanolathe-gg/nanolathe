@@ -200,7 +200,7 @@ func (c *Client) strategicViewAtZoom(z camera.Zoom) bool {
 	return z <= strategicModelCut || (c.enhanced && c.cam.TacticalAtFloor() && z <= c.cam.MinZoom())
 }
 
-// markerAlpha is the strategic layer's fade: zero at and above
+// markerAlphaAtZoom is the strategic layer's fade: zero at and above
 // strategicMarkerOn, full at and below strategicModelCut, linear between
 // (§16.11).
 //
@@ -210,8 +210,6 @@ func (c *Client) strategicViewAtZoom(z camera.Zoom) bool {
 // coverage share, and its only opacity lane is the cloak's fixed half
 // (docs/DESIGN_GPU_RENDERER.md §22, §33). A cross-fade is a follow-up on that
 // lane.
-func (c *Client) markerAlpha() uint8 { return c.markerAlphaAtZoom(c.liveZoom()) }
-
 func (c *Client) markerAlphaAtZoom(z camera.Zoom) uint8 {
 	if c.strategicViewAtZoom(z) {
 		return 255

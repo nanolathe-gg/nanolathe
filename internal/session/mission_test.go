@@ -77,8 +77,8 @@ func fsFromMap(t *testing.T, files map[string]string) *vfs.FS {
 
 func TestMissionGametypeRouting(t *testing.T) {
 	s := &Session{}
-	if err := RouteForGametype(s, GametypeCampaign); err != nil {
-		t.Fatalf("RouteForGametype campaign: %v", err)
+	if err := s.SelectForGametype(GametypeCampaign); err != nil {
+		t.Fatalf("SelectForGametype campaign: %v", err)
 	}
 	if s.State != StateLocalPreload {
 		t.Fatalf("Gametype 1 should select StateLocalPreload(4) [08 \"Session states\"] got %v", s.State)
@@ -87,15 +87,15 @@ func TestMissionGametypeRouting(t *testing.T) {
 		t.Fatal("campaign 4->5 must be allowed")
 	}
 	s2 := &Session{}
-	if err := RouteForGametype(s2, GametypeMultiplayer); err != nil {
-		t.Fatalf("RouteForGametype multiplayer: %v", err)
+	if err := s2.SelectForGametype(GametypeMultiplayer); err != nil {
+		t.Fatalf("SelectForGametype multiplayer: %v", err)
 	}
 	if s2.State != StateLoading {
 		t.Fatalf("Gametype 2 should select StateLoading(5) directly [08 \"Session states\"] got %v", s2.State)
 	}
 	// Invalid gametype must error.
 	s3 := &Session{}
-	if err := RouteForGametype(s3, 99); err == nil {
+	if err := s3.SelectForGametype(99); err == nil {
 		t.Fatal("invalid gametype should error")
 	}
 	// Campaign path takes same state-5 path after 4->5.
@@ -123,7 +123,7 @@ func TestNewMissionUsesWindBoundsWithoutDraws(t *testing.T) {
 	}
 	s, err := NewSyntheticMissionForTest(fs, cat, "test.ota", 0)
 	if err != nil {
-		t.Fatalf("NewMissionWithFS: %v", err)
+		t.Fatalf("NewMissionWithEntryOptions: %v", err)
 	}
 	if s.Mission == nil {
 		t.Fatal("mission nil after load")
@@ -152,7 +152,7 @@ func TestNewMissionUsesWindBoundsWithoutDraws(t *testing.T) {
 	}
 }
 
-func TestNewMissionWithFSKeepsCampaignLoadStrict(t *testing.T) {
+func TestNewMissionEntryKeepsCampaignLoadStrict(t *testing.T) {
 	// A direct Type 1 load must not use the Type 2/3 fuzzy resolver when the
 	// requested mission is absent. Supplying a different valid OTA makes the
 	// old fallback observable without requiring terrain or retail assets. The
@@ -163,7 +163,7 @@ func TestNewMissionWithFSKeepsCampaignLoadStrict(t *testing.T) {
 		"maps/Available.ota": "[GlobalHeader]\n{\nmissionname=Available;\n[Schema 0]\n{\nType=Easy;\n}\n}\n",
 	})
 	cat := minimalCatalogForStrict()
-	_, err := NewMissionWithFS(fs, cat, "Missing.ota", 0)
+	_, err := NewMissionWithEntryOptions(fs, cat, "Missing.ota", 0, 0, 0, MissionEntryOptions{}, nil)
 	if err == nil {
 		t.Fatal("strict campaign load must fail when the requested mission is absent")
 	}

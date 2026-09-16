@@ -83,7 +83,7 @@ func TestRetailARMLabGeneratedSecondPageQueuesWarriorAndFlea(t *testing.T) {
 				continue
 			}
 			r := w.PlacedRect(i)
-			if !b.hud.consumeClick(b, r.X+r.W/2, r.Y+r.H/2) {
+			if !hudConsumeClick(b.hud, b, r.X+r.W/2, r.Y+r.H/2) {
 				t.Fatalf("%s click was not consumed", suffix)
 			}
 			stepOnce()
@@ -122,7 +122,7 @@ func TestRetailARMLabGeneratedSecondPageQueuesWarriorAndFlea(t *testing.T) {
 			t.Fatalf("%s generated gadget art = %#v, want three frames", product, entry)
 		}
 		r := generated.PlacedRect(button + 4)
-		if !b.hud.consumeClick(b, r.X+r.W/2, r.Y+r.H/2) {
+		if !hudConsumeClick(b.hud, b, r.X+r.W/2, r.Y+r.H/2) {
 			t.Fatalf("%s generated product click was not consumed", product)
 		}
 		stepOnce()

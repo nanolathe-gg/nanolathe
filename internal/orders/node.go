@@ -35,8 +35,11 @@ import (
 // and those commands — the activation, cloak, standing, wait, paralyze, pickup,
 // carried, stockpile and factory-product rows — are exactly the rows whose
 // authored mask carries no bit 10 to clear (table.go), so the flag is
-// unobservable for them. The one wrapper here that is not a positional command,
-// NewFactoryBuildNode, states the absence explicitly anyway.
+// unobservable for them. The factory product is the clearest case: it leaves
+// through the factory's own exit and `BuildingBuild` ignores the goal triple
+// [05 "Factory production lifecycle"], and its authored mask carries no bit 10
+// either, so the queue that builds that record passes zeros through this same
+// door.
 func NewNodeForOrder(id ID, target pool.Handle, goalX, goalY, goalZ numeric.Fixed, tick uint32, owner pool.Handle, queued bool) Node {
 	n := Node{
 		ID:           id,
@@ -58,31 +61,6 @@ func NewMoveNode(id ID, goalX, goalZ numeric.Fixed, tick uint32, owner pool.Hand
 	return NewNodeForOrder(id, 0, goalX, 0, goalZ, tick, owner, queued)
 }
 
-// NewFactoryBuildNode constructs a factory product node with catalog-index payload [05 "Factory production lifecycle"][P0-I05].
-// Factory product lives as typed payload on Node in PRIMARY segment: definition catalog index in Param1,
-// remaining count in Param2, factory state/progress in Phase, BuildDefKey for stable identity [05][P0-I05].
-// ID must be BuildingBuild (primary) [04 §3.1][GAP T3].
-func NewFactoryBuildNode(cat *content.Catalog, defKey string, count uint32, tick uint32, owner pool.Handle, queued bool) Node {
-	ck := content.CanonicalKey(defKey)
-	idx, _ := catalogIndex(cat, ck)
-	// `BuildingBuild` or nothing: the two build rows are separate descriptors
-	// with separate bodies [04 §3.1][04 R-ORD-01 §5], so substituting the
-	// mobile row would hand a factory product to the site-bound machine.
-	id := rowBuildingBuild
-	n := NewNodeForOrder(id, 0, 0, 0, 0, tick, owner, queued)
-	// A factory product has no position payload — the product leaves through the
-	// factory's own exit, and `BuildingBuild` ignores the goal triple [05
-	// "Factory production lifecycle"] — so the record is constructed with NO
-	// goal and newNode clears static bit 10 [04 R-MOV-03 §7]. (The authored mask
-	// 0x10010c carries no bit 10 either, so the clear is a no-op on stock; the
-	// statement is here so the record does not claim a goal it never had.)
-	n.GoalSupplied = false
-	n.BuildDefKey = ck
-	n.Param1 = idx
-	n.Param2 = count
-	return n
-}
-
 // NewMobileBuildNode constructs a mobile build node with site anchor payload [05 "Construction arithmetic"][P0-I05].
 // Mobile build payload: definition catalog index in Param1, site world anchor in GoalX/Z,
 // builder relation is Owner, remaining count in Param2 [05][P0-I05].
@@ -97,18 +75,6 @@ func NewMobileBuildNode(cat *content.Catalog, defKey string, siteX, siteZ numeri
 	idx, _ := catalogIndex(cat, ck)
 	id := rowMobileBuild
 	// Caller may override ID for VTOL; keep MobileBuild default if not VTOL.
-	n := NewNodeForOrder(id, 0, siteX, 0, siteZ, tick, owner, queued)
-	n.BuildDefKey = ck
-	n.Param1 = idx
-	n.Param2 = count
-	return n
-}
-
-// NewMobileBuildNodeWithID constructs a mobile build node with explicit descriptor ID [P0-I05].
-// Param3 is the blocked-area retry counter [04 §3.2][R-ORDER-02 §1]; see NewMobileBuildNode.
-func NewMobileBuildNodeWithID(id ID, cat *content.Catalog, defKey string, siteX, siteZ numeric.Fixed, orientation uint16, count uint32, tick uint32, owner pool.Handle, queued bool) Node {
-	ck := content.CanonicalKey(defKey)
-	idx, _ := catalogIndex(cat, ck)
 	n := NewNodeForOrder(id, 0, siteX, 0, siteZ, tick, owner, queued)
 	n.BuildDefKey = ck
 	n.Param1 = idx

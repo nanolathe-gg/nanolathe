@@ -147,7 +147,7 @@ func TestRetailFooterHoverShots(t *testing.T) {
 	if commander == nil {
 		t.Fatal("local commander is not in the committed frame")
 	}
-	p := client.NewViewportTransform(cam, nil, 0, 0).WorldToSurface(commander.X, commander.Y, commander.Z)
+	p := client.NewViewportTransform(cam, 0, 0).WorldToSurface(commander.X, commander.Y, commander.Z)
 	footerComposeShot(t, b, cs, cam, pal, p.X, p.Y, prefix+"-unit.png")
 	t.Logf("unit hover at (%d,%d): handle=%d kills=%d archived M+%v E+%v M-%v E-%v",
 		p.X, p.Y, b.footerHoverUnit, commander.Kills,
@@ -191,7 +191,7 @@ func TestRetailFooterHoverShots(t *testing.T) {
 		if fd == nil || fd.Metal == 0 || fd.NoDisplayInfo {
 			continue
 		}
-		q := client.NewViewportTransform(cam, nil, 0, 0).WorldToSurface(fv.X, fv.Y, fv.Z)
+		q := client.NewViewportTransform(cam, 0, 0).WorldToSurface(fv.X, fv.Y, fv.Z)
 		if !b.hud.overWorld(q.X, q.Y) {
 			continue
 		}

@@ -4,6 +4,8 @@ import (
 	"math"
 	"math/big"
 	"testing"
+
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // Work ranges truncate their magnitudes [05 R-WORK-01 §2]. Exercise the
@@ -11,8 +13,8 @@ import (
 func TestWorkRangeSquareRootBoundaries(t *testing.T) {
 	for _, v := range []int64{0, 1, 2, 15, 16, 17, 1<<62 - 1, 1 << 62, 1<<62 + 1, math.MaxInt64} {
 		want := new(big.Int).Sqrt(big.NewInt(v)).Int64()
-		if got := isqrt64(v); got != want {
-			t.Errorf("isqrt64(%d) = %d, want %d", v, got, want)
+		if got := numeric.ISqrt64(v); got != want {
+			t.Errorf("numeric.ISqrt64(%d) = %d, want %d", v, got, want)
 		}
 	}
 }

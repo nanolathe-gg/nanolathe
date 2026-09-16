@@ -156,6 +156,18 @@ func (f *FS) Providers() []ProviderInfo {
 	return infos
 }
 
+// ProviderIDs lists the mounted provider identities in precedence order. It is
+// what a "providers searched" diagnostic means, and deliberately not per-entry
+// source paths: for a loose mount those are individual files.
+func (f *FS) ProviderIDs() []string {
+	providers := f.Providers()
+	names := make([]string, 0, len(providers))
+	for _, provider := range providers {
+		names = append(names, provider.ID)
+	}
+	return names
+}
+
 // Notes returns mount-time observations a caller should surface: suppressed
 // duplicate mounts, rejected archive candidates, and the archive-count remark described in
 // docs/SPEC_CONFLICTS.md SC1.
@@ -170,11 +182,10 @@ type MountTier uint8
 // MountPlan is the per-extension mount tier policy: the tier each archive
 // family joins, and the revision string that identifies the policy itself.
 type MountPlan struct {
-	Revision    string
-	Provisional bool
-	HPI, CCX    MountTier
-	GP3, UFO    MountTier
-	Loose       MountTier
+	Revision string
+	HPI, CCX MountTier
+	GP3, UFO MountTier
+	Loose    MountTier
 }
 
 // DefaultRetailMountPlan is a deliberate catalog policy difference, not a
@@ -855,8 +866,8 @@ func newOSFile(filename string, info EntryInfo) (File, error) {
 }
 
 type looseProvider struct {
-	root           string
-	entries        map[string]*providerEntry
+	root string
+	providerIndex
 	indexedEntries []EntryInfo
 }
 
@@ -872,7 +883,7 @@ func newLooseProvider(root string, priority, order int) (*looseProvider, error) 
 	if !stat.IsDir() {
 		return nil, fmt.Errorf("vfs: %s is not a directory", root)
 	}
-	p := &looseProvider{root: absolute, entries: make(map[string]*providerEntry)}
+	p := &looseProvider{root: absolute, providerIndex: newProviderIndex()}
 	rootInfo := EntryInfo{Path: "", Name: "", IsDir: true, OriginalPath: "", Source: Provenance{ProviderType: "directory", SourcePath: absolute, MountRoot: absolute, Priority: priority, MountOrder: order}}
 	p.entries[""] = &providerEntry{info: rootInfo}
 	if err := p.indexDir(absolute, "", priority, order); err != nil {
@@ -947,29 +958,6 @@ func readFileRangeOS(path string, offset int64, length int) ([]byte, error) {
 		return nil, err
 	}
 	return data[:read], nil
-}
-
-func (p *looseProvider) lookup(name string) (*providerEntry, bool) {
-	entry, ok := p.entries[name]
-	return entry, ok
-}
-
-func (p *looseProvider) children(parent string) []*providerEntry {
-	result := make([]*providerEntry, 0)
-	prefix := parent
-	if prefix != "" {
-		prefix += "/"
-	}
-	for name, entry := range p.entries {
-		if name == "" || !strings.HasPrefix(name, prefix) {
-			continue
-		}
-		rest := strings.TrimPrefix(name, prefix)
-		if rest != "" && !strings.Contains(rest, "/") {
-			result = append(result, entry)
-		}
-	}
-	return result
 }
 
 func (p *looseProvider) close() error { return nil }

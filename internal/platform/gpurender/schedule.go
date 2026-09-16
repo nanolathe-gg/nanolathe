@@ -680,52 +680,6 @@ func (s *scheduler) place(x0, y0, x1, y1 int, stream uint8) int32 {
 	return phase
 }
 
-// placePoint is place for one pixel of a lit point batch: an earlier point
-// conflicts only when it wrote this very pixel, while a rectangle command is
-// tested exactly, as a one-pixel rectangle. It also records the point: both
-// halves read the same cell, so they share one cell lookup.
-//
-// The answer is exactly what place plus the point pixel table gave: the cell's
-// floor, the largest contribution of an owner whose rectangle contains the
-// pixel, and one phase past any earlier point of the segment at that pixel.
-//
-// The executor no longer calls it — a batch is placed run by run through
-// placePointSpan — but it remains the DEFINITION that placement is checked
-// against, pixel by pixel, in schedule_point_span_test.go.
-func (s *scheduler) placePoint(x, y int) int32 {
-	cx, cy, _, _, ok := s.cellRange(x, y, x+1, y+1)
-	if !ok {
-		return 0
-	}
-	at := cy*s.cols + cx
-	if at != s.ptCellAt {
-		s.loadPointCell(at)
-	}
-	phase := s.ptFloor
-	for k := 0; k < s.ptOwnerN; k++ {
-		own := &s.ptOwners[k]
-		if !own.overlaps(x, y, x+1, y+1) {
-			continue
-		}
-		if c := own.contributionTo(schedStreamRow); c > phase {
-			phase = c
-		}
-	}
-	pixel := at<<schedPointCellShift | (y&schedCellMask)<<schedGridShift | x&schedCellMask
-	if v := s.pointPhase[pixel]; uint32(v>>32) == s.serial {
-		if prev := int32(uint32(v)); prev+1 > phase {
-			phase = prev + 1
-		}
-	}
-	// The point's own record: its cell keeps the largest point phase it has seen,
-	// for the rectangle commands that follow it, and its pixel the exact phase.
-	if phase > s.cellPoint[at] {
-		s.cellPoint[at] = phase
-	}
-	s.pointPhase[pixel] = uint64(s.serial)<<32 | uint64(uint32(phase))
-	return phase
-}
-
 // placePointSpan is placePoint for a RUN of consecutive pixels on one screen row,
 // which is how a lit point batch actually arrives: a flash disc is recorded row by
 // row [03 R-FX-01 §4], so its pixels come in contiguous horizontal runs and a
@@ -747,8 +701,10 @@ func (s *scheduler) placePoint(x, y int) int32 {
 //     one of the run's pixels.
 //
 // The stamp pass then writes that phase to every pixel and raises each covered
-// cell's point phase, which is what placePoint's own record does
-// (docs/DESIGN_GPU_RENDERER.md §11.2 "The scheduler", §13.7).
+// cell's point phase, which is the per-pixel record placePoint keeps — the
+// per-pixel definition this span form is checked against in
+// schedule_point_span_test.go (docs/DESIGN_GPU_RENDERER.md §11.2 "The
+// scheduler", §13.7).
 func (s *scheduler) placePointSpan(x0, x1, y int) int32 {
 	cx0, cy, cx1, _, ok := s.cellRange(x0, y, x1, y+1)
 	if !ok {
@@ -762,7 +718,7 @@ func (s *scheduler) placePointSpan(x0, x1, y int) int32 {
 		if at != s.ptCellAt {
 			s.loadPointCell(at)
 		}
-		px0, px1 := maxInt(x0, cx<<schedGridShift), minInt(x1, (cx+1)<<schedGridShift)
+		px0, px1 := max(x0, cx<<schedGridShift), min(x1, (cx+1)<<schedGridShift)
 		if s.ptFloor > phase {
 			phase = s.ptFloor
 		}
@@ -793,7 +749,7 @@ func (s *scheduler) placePointSpan(x0, x1, y int) int32 {
 		if phase > s.cellPoint[at] {
 			s.cellPoint[at] = phase
 		}
-		px0, px1 := maxInt(x0, cx<<schedGridShift), minInt(x1, (cx+1)<<schedGridShift)
+		px0, px1 := max(x0, cx<<schedGridShift), min(x1, (cx+1)<<schedGridShift)
 		base := (at << schedPointCellShift) | yOff | (px0 & schedCellMask)
 		p := s.pointPhase[base : base+(px1-px0)]
 		for i := range p {
@@ -970,8 +926,8 @@ func (s *scheduler) growDest(p *schedPhase, x0, y0, x1, y1 int) {
 		p.hasDest = true
 		return
 	}
-	p.x0, p.y0 = int32(minInt(int(p.x0), x0)), int32(minInt(int(p.y0), y0))
-	p.x1, p.y1 = int32(maxInt(int(p.x1), x1)), int32(maxInt(int(p.y1), y1))
+	p.x0, p.y0 = int32(min(int(p.x0), x0)), int32(min(int(p.y0), y0))
+	p.x1, p.y1 = int32(max(int(p.x1), x1)), int32(max(int(p.y1), y1))
 }
 
 // quad appends one axis-aligned quad to the open run of the phase the last begin
@@ -1017,7 +973,7 @@ func (s *scheduler) quad(class int, dx0, dy0, dx1, dy1, sx0, sy0, sx1, sy1 float
 	// these quads (docs/DESIGN_GPU_RENDERER.md §13 "CPU/allocation policy").
 	nv := len(b.verts)
 	if nv+quadVertices > cap(b.verts) {
-		b.verts = s.growVerts(b.verts, maxInt(nv+quadVertices, int(b.vHint)))
+		b.verts = s.growVerts(b.verts, max(nv+quadVertices, int(b.vHint)))
 	}
 	b.verts = b.verts[:nv+quadVertices]
 	v := b.verts[nv : nv+quadVertices : nv+quadVertices]
@@ -1035,7 +991,7 @@ func (s *scheduler) quad(class int, dx0, dy0, dx1, dy1, sx0, sy0, sx1, sy1 float
 		Custom0: custom[0], Custom1: custom[1], Custom2: custom[2], Custom3: custom[3]}
 	ni := len(b.idx)
 	if ni+6 > cap(b.idx) {
-		b.idx = s.growIdx(b.idx, maxInt(ni+6, int(b.iHint)))
+		b.idx = s.growIdx(b.idx, max(ni+6, int(b.iHint)))
 	}
 	b.idx = b.idx[:ni+6]
 	i := b.idx[ni : ni+6 : ni+6]
@@ -1066,7 +1022,7 @@ func (s *scheduler) quadCorners(class int, xs, ys [4]float32, col [4]float32, cu
 	base := uint32(run.vLen)
 	nv := len(b.verts)
 	if nv+quadVertices > cap(b.verts) {
-		b.verts = s.growVerts(b.verts, maxInt(nv+quadVertices, int(b.vHint)))
+		b.verts = s.growVerts(b.verts, max(nv+quadVertices, int(b.vHint)))
 	}
 	b.verts = b.verts[:nv+quadVertices]
 	v := b.verts[nv : nv+quadVertices : nv+quadVertices]
@@ -1077,7 +1033,7 @@ func (s *scheduler) quadCorners(class int, xs, ys [4]float32, col [4]float32, cu
 	}
 	ni := len(b.idx)
 	if ni+6 > cap(b.idx) {
-		b.idx = s.growIdx(b.idx, maxInt(ni+6, int(b.iHint)))
+		b.idx = s.growIdx(b.idx, max(ni+6, int(b.iHint)))
 	}
 	b.idx = b.idx[:ni+6]
 	i := b.idx[ni : ni+6 : ni+6]
@@ -1192,8 +1148,8 @@ func (r *Renderer) copyComposite(dst, src *ebiten.Image, x0, y0, x1, y1 int) {
 	if dst == nil || src == nil || r.scene2D == nil {
 		return
 	}
-	x0, y0 = maxInt(x0, 0), maxInt(y0, 0)
-	x1, y1 = minInt(x1, r.w), minInt(y1, r.h)
+	x0, y0 = max(x0, 0), max(y0, 0)
+	x1, y1 = min(x1, r.w), min(y1, r.h)
 	if x0 >= x1 || y0 >= y1 {
 		return
 	}
@@ -1260,7 +1216,7 @@ func (s *scheduler) tris(class int, verts []ebiten.Vertex, idx []uint32) {
 	base := uint32(run.vLen)
 	nv := len(b.verts)
 	if nv+len(verts) > cap(b.verts) {
-		b.verts = s.growVerts(b.verts, maxInt(nv+len(verts), int(b.vHint)))
+		b.verts = s.growVerts(b.verts, max(nv+len(verts), int(b.vHint)))
 	}
 	b.verts = b.verts[:nv+len(verts)]
 	v := b.verts[nv : nv+len(verts) : nv+len(verts)]
@@ -1270,7 +1226,7 @@ func (s *scheduler) tris(class int, verts []ebiten.Vertex, idx []uint32) {
 	}
 	ni := len(b.idx)
 	if ni+len(idx) > cap(b.idx) {
-		b.idx = s.growIdx(b.idx, maxInt(ni+len(idx), int(b.iHint)))
+		b.idx = s.growIdx(b.idx, max(ni+len(idx), int(b.iHint)))
 	}
 	b.idx = b.idx[:ni+len(idx)]
 	out := b.idx[ni : ni+len(idx) : ni+len(idx)]

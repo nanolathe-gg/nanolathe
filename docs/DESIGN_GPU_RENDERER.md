@@ -115,7 +115,7 @@ Command families, each a plain struct carrying **physical palette indices**
 | `Points` | a capped sub-slice of the recorder's point arena, `PointPlain` or `PointLit` | nanolathe particles `[03 §5.5]`, sprinkle fills |
 | `Flash`, `Halo` | one lit disc or ground halo as a command (§13.11), each with an `Expand` that emits the points it stands for | the points `Expand` emits |
 | `Model` | the classic packet and/or the geometry packet of one composed subject | the model rasterizer and its commit |
-| `Fog` | the op list `render.BuildFogOpsWindowInto` produced, already clipped, plus the gray and black GAF entries | the three fog fills and the fog GAF blit `[03 §3.3]` |
+| `Fog` | the op list `render.BuildFogOpsWindowWithArtInto` produced, already clipped, plus the gray and black GAF entries | the three fog fills and the fog GAF blit `[03 §3.3]` |
 | `Surface` | an indexed byte surface (minimap, radar), destination rect, optional identity/revision | `UIBlitIndexed` |
 | `Cursor` | GAF frame reference, hot spot | `drawCursor` `[07 §8]` |
 | `Lens` | projected center, view scale, viewport clip, transparent key | ordered snapshot refraction through the generated displacement map |
@@ -2701,7 +2701,7 @@ Enhanced team colour; it remains the contract for unidentified contacts. Below
 * **The fade** is linear from alpha 0 at 0.625× to 255 at 0.5×, with full opacity
   at the clamped Enhanced tactical stop. Models are hard-cut at 0.5×; a model
   cross-fade needs an alpha lane on the model commit, whose fragment is opaque
-  today, and is a follow-up (`TODO(question)` at `Client.markerAlpha`).
+  today, and is a follow-up (`TODO(question)` at `Client.markerAlphaAtZoom`).
 * **No projectile markers.** A shot is an event, not a thing on the map.
 * Markers are recorded **outside** the world region, already positioned through
   the live factor, because a fixed-pixel mark must not be scaled by the world
@@ -4673,7 +4673,7 @@ back should be heard before the lane becomes permanent.
   antialiased sprite edge, which is a look to approve (`TODO(question)` in
   `schedule.go`).
 - A model cross-fade at the strategic cut needs an alpha lane on the model
-  commit (`TODO(question)` at `Client.markerAlpha`, §16.11).
+  commit (`TODO(question)` at `Client.markerAlphaAtZoom`, §16.11).
 - Aircraft soft shadows on one page now compile into one device run (§34), but
   dense overlapping formations and non-Metal backends are unmeasured, and the
   5×5 kernel's hundred bilinear taps per pixel over the expanded rectangle are

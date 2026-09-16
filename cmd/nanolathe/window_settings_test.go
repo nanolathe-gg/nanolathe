@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
-	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
 )
 
@@ -71,12 +70,11 @@ func TestWindowPreferencesPreserveShellAndDirectSettings(t *testing.T) {
 	if saved.Display.Width != 800 || saved.Display.Height != 600 {
 		t.Fatal("committed resolution was not saved")
 	}
-	direct := directWindowOptions(Options{}, saved)
 	saved.ScrollSpeed = 42
 	if err := saved.Save(); err != nil {
 		t.Fatal(err)
 	}
-	direct.FullscreenChanged(true)
+	saveFullscreenSetting(true)
 	saved, err = settings.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -86,19 +84,11 @@ func TestWindowPreferencesPreserveShellAndDirectSettings(t *testing.T) {
 	}
 }
 
-func TestDirectBattleViewportMatchesSelectedCanvasBeforeZoom(t *testing.T) {
-	cl, err := client.New(client.Options{Width: 1024, Height: 768})
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestEntryZoomAppliesToTheSelectedCanvas(t *testing.T) {
 	for i := 0; i < 2; i++ {
-		// A fresh camera is constructed at the authored size on both startup
-		// and restart. The host must adopt the selected canvas before zoom.
-		b := &battleSession{cam: &camera.Camera{ViewW: 640, ViewH: 480, MapW: 4096, MapH: 4096}}
-		fitDirectBattleViewport(cl, b)
-		if b.cam.ViewW != 1024 || b.cam.ViewH != 768 {
-			t.Fatal("direct camera retained authored viewport")
-		}
+		// The entry camera has already adopted the selected canvas by the time
+		// the start-up zoom factor is applied [07 "The loading screen"].
+		b := &battleSession{cam: &camera.Camera{ViewW: 1024, ViewH: 768, MapW: 4096, MapH: 4096}}
 		applyEntryZoom(Options{Zoom: camera.ZoomMax}, b)
 		if w, h := b.cam.EffectiveView(); w != 512 || h != 384 {
 			t.Fatalf("zoom viewport = %dx%d", w, h)

@@ -1495,21 +1495,10 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 		// [06 §5.1] has no top-of-visit dead filter. A record retired earlier
 		// in this tick still takes its ordinary branch before tail compaction.
 		preMotionY := int16(p.Pos.Y.Raw() >> 16)
-		var res AdvanceResult
-		switch MotionFamilyForWeapon(weapon) {
-		case MotionDirect:
-			res = AdvanceDirect(p, weapon, tick)
-		case MotionBallistic:
-			res = AdvanceBallistic(p, weapon, tick, windVec, gravity)
-		case MotionDropped:
-			res = AdvanceDropped(p, weapon, tick, windVec, gravity)
-		case MotionMeteor:
-			res = AdvanceMeteor(p, weapon, tick)
-		case MotionSelfProp:
-			res = AdvanceSelfProp(p, weapon, tick, gravity, seaLevel, guidance)
-		default:
-			res = AdvanceRetire
-		}
+		// The family dispatch of [06 §6.2] lives in Advance, which is this
+		// switch and nothing else; keeping one copy keeps the phase and the
+		// terrain-admission preview reading the same ladder.
+		res := Advance(p, weapon, tick, windVec, gravity, seaLevel, guidance)
 		if res == AdvanceRetire {
 			// Timer expiry without burn-blow emits exactly ONE trail-style
 			// puff and then retires silently — no sound, no shake, no

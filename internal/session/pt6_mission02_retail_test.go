@@ -36,7 +36,7 @@ const (
 
 func TestRetailArmMission02StartingResourcesAndBuildPage(t *testing.T) {
 	f := loadRetailFixture(t)
-	s, err := NewMissionWithProgressSeeds(f.fs, f.cat, pt6Mission, 0, 7, 7, nil)
+	s, err := NewMissionWithEntryOptions(f.fs, f.cat, pt6Mission, 0, 7, 7, MissionEntryOptions{}, nil)
 	if err != nil {
 		t.Skipf("stock campaign %q is unavailable: %v", pt6Mission, err)
 	}

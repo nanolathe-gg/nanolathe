@@ -60,7 +60,7 @@ func TestCommandDragBuildReleaseAndGrid(t *testing.T) {
 						t.Fatalf("order %d intent: %+v", i, c)
 					}
 					for _, prior := range got[:i] {
-						if absInt32(int32((c.WX-prior.WX).Floor())) < 32 && absInt32(int32((c.WZ-prior.WZ).Floor())) < 32 {
+						if numeric.Abs(int32((c.WX-prior.WX).Floor())) < 32 && numeric.Abs(int32((c.WZ-prior.WZ).Floor())) < 32 {
 							t.Fatal("overlapping footprints")
 						}
 					}

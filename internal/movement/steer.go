@@ -217,26 +217,6 @@ func (s *SteerState) UpdateFollowerSpeed(cap int32, hasWaypoint, accelerate bool
 	}
 }
 
-// ClampSpeed is a helper that returns the capped speed without mutating state.
-// It is useful for tests that want to check the asymmetric table and halving
-// without constructing a full SteerState tick.
-func ClampSpeed(target int32, pitchDelta int32, maxVelocity int32, heightWord int16, seaLevel uint8, defFlags uint32) int32 { // [04 §8.1] C20 C21
-	s := &SteerState{
-		MaxVelocity: maxVelocity,
-		HeightWord:  heightWord,
-		SeaLevel:    seaLevel,
-		DefFlags:    defFlags,
-	}
-	cap := s.SpeedCap(pitchDelta)
-	if target < 0 {
-		target = 0 // no reverse [04 §8.1] C20
-	}
-	if target > cap {
-		target = cap
-	}
-	return target
-}
-
 // Integrate commits the pending heading and advances position [04 §8.1] C20.
 // It must be called AFTER UpdateHeading so that pending/Dirty are set before
 // position integration, satisfying the BEFORE ordering [04 §8.1] C20.

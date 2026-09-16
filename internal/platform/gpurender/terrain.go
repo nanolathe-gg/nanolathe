@@ -4,6 +4,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
@@ -355,10 +356,10 @@ func (r *Renderer) Terrain(c drawlist.Terrain) {
 	// bounds only bound the loop; the per-tile clip below decides the covered
 	// pixels, so a one-tile pad on each side (harmless, its clipped rect is
 	// empty) guards against any off-by-one in the range itself.
-	startTX := floorDivInt(originX, terrainTileSize) - 1
-	startTY := floorDivInt(originY, terrainTileSize) - 1
-	endTX := floorDivInt(originX+int(scale.Inverse(int32(dstW-1))), terrainTileSize) + 1
-	endTY := floorDivInt(originY+int(scale.Inverse(int32(dstH-1))), terrainTileSize) + 1
+	startTX := numeric.FloorDiv(originX, terrainTileSize) - 1
+	startTY := numeric.FloorDiv(originY, terrainTileSize) - 1
+	endTX := numeric.FloorDiv(originX+int(scale.Inverse(int32(dstW-1))), terrainTileSize) + 1
+	endTY := numeric.FloorDiv(originY+int(scale.Inverse(int32(dstH-1))), terrainTileSize) + 1
 	if startTX < 0 {
 		startTX = 0
 	}
@@ -442,14 +443,4 @@ func (r *Renderer) Terrain(c drawlist.Terrain) {
 	// The battle lights reach the ground last in the terrain pass, so the copy
 	// they read carries the resolved water surface too (§31).
 	r.drawGroundLighting()
-}
-
-// floorDivInt is floor division for int, correct for negative numerators
-// [INVARIANTS I3]. Terrain projection uses it for the visible-tile range.
-func floorDivInt(a, b int) int {
-	q := a / b
-	if a%b != 0 && (a < 0) != (b < 0) {
-		q--
-	}
-	return q
 }

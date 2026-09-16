@@ -45,29 +45,6 @@ func projectileVisible(v frame.VisibilityView, localPlayer uint8) func(frame.Pro
 	}
 }
 
-// fogUnexploredFeature reports whether a feature's anchor cell maps to an unexplored fog tile [03 §3.3][03 §3.3].
-// Feature CX/CZ are cell coordinates; fog is per visibility tile (2x2 cells) so tile = cell>>1 [03 §2.1][03 §3.1]. Invalid fog is treated as unexplored so an incomplete publication cannot expose content.
-func fogUnexploredFeature(fog frame.FogView, f frame.FeatureView) bool {
-	if !fog.Valid {
-		// Retail has no pre-first-frame state to ask about: battle entry builds
-		// the world, and with it the fog cache, before anything is presented
-		// [03 §3.3]. An invalid view here is our own composition ordering, and
-		// treating it as unexplored fails closed rather than revealing units the
-		// local player has not seen.
-		return true
-	}
-	if _, ok := visibilityGridSize(fog.W, fog.H, len(fog.Ch0)); !ok {
-		return true
-	}
-	tx := (f.CX >> 1) - fog.OriginX
-	tz := (f.CZ >> 1) - fog.OriginZ
-	if tx < 0 || tz < 0 || tx >= fog.W || tz >= fog.H {
-		return true
-	}
-	idx := int(tz*fog.W + tx)
-	return fog.Ch0[idx] == 15
-}
-
 // unitVisibleForFrame is the enemy-visibility predicate for the painter [03 §3.2] C8.
 // Own units always pass (owner bypass) [03 §3.2] step1; invalid visibility
 // rejects foreign units; otherwise it delegates to SnapshotVisible, preserving

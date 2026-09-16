@@ -9,20 +9,6 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
-// The feature fixture helper identifies the solid unexplored fog cell.
-func TestOW1G_FogUnexploredFeature(t *testing.T) {
-	fog := frame.FogView{W: 2, H: 2, Valid: true, Ch0: []uint8{15, 0, 0, 0}, Ch1: []uint8{0, 0, 0, 0}}
-	// Feature at CX=0 (tile 0) unexplored, CX=2 (tile1) explored.
-	f0 := frame.FeatureView{CX: 0, CZ: 0}
-	if !fogUnexploredFeature(fog, f0) {
-		t.Fatal("feature at (0,0) should be unexplored")
-	}
-	f1 := frame.FeatureView{CX: 2, CZ: 0}
-	if fogUnexploredFeature(fog, f1) {
-		t.Fatal("feature at (2,0) should be explored")
-	}
-}
-
 func TestOW1G_VisibilityAdmission_OwnAlwaysEnemySuppressed(t *testing.T) {
 	// Visibility grid 4x4, only 32-pixel tile (1,1) visible (index 5). Unit
 	// coordinates are authored in 16-pixel cells and must map through the

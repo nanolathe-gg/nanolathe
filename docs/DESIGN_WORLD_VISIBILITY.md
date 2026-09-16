@@ -55,9 +55,10 @@ never the height data, and therefore never the line-of-sight height table.
 
 **Coordinates** (`coords.go`). One map pixel is 65,536 world units; one cell is
 16 map pixels (`1 << 20`); one tile is 32 map pixels (`1 << 21`) covering 2×2
-cells `[03 §2.1]`. `WorldToCell`, `WorldToTile`, `CellToWorld` and `TileToWorld`
-are the only conversions in the codebase, and they floor with a sign correction
-so world unit −1 lands in cell −1, not cell 0 [I3].
+cells `[03 §2.1]`. `WorldToCell` and `CellToWorld` are the only conversions in
+the codebase, and they floor with a sign correction so world unit −1 lands in
+cell −1, not cell 0 [I3]. The tile is a presentation quantum — the terrain and
+fog renderers walk it in map pixels — so no world↔tile conversion lives here.
 
 **Terrain** (`terrain.go`). `Load` resolves the map key through the catalog to a
 logical `maps/<key>.tnt` path, reads it through the VFS, and hands the bytes to
@@ -675,11 +676,13 @@ rebuild fills and underneath the observer publication `[03 §3.3]`
 
 ### 3.3 Not implemented
 
-* **C14, the plot-flag never-explored marker.** The set/clear helpers exist and
-  the flag byte round-trips, but no production path writes it: presentation
-  answers "never explored" from the fog cache's channel-zero solid value at the
-  object's tile instead, and an invalid or missing fog view fails closed. The
-  tall-feature immediate case has no writer at all `[03 §3.3]`.
+* **C14, the plot-flag never-explored marker.** The flag byte round-trips and
+  `PlotCell.IsUnexplored` reads it, but nothing writes it: presentation answers
+  "never explored" from the fog cache's channel-zero solid value at the object's
+  tile instead, and an invalid or missing fog view fails closed. The
+  tall-feature immediate case has no writer at all, and the set/clear pair that
+  once stood beside the fog cache — reached by nothing but its own test — has
+  been removed rather than left looking wired `[03 §3.3]`.
 * **Terrain-ray group 0.** A sight distance below 32 selects a record whose
   content is Unknown; the implementation admits the origin cell and no spoke.
   Every stock definition authors a sight distance of at least 55, so no shipped

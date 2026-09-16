@@ -195,7 +195,7 @@ func (c *Client) drawGroupDigit(sx, y int32, group uint8) {
 	// (foreground = entry 15, background = the skip colour) once, immediately
 	// before the strip walks and so before this walk, and none of the strip
 	// drawers between installs another [03 R-FX-01 §6A][03 R-FONT-01 §6].
-	// Record then execute inline: classicSink.Glyphs runs the same drawText
+	// Record then execute inline: classicSink.Glyphs runs the same drawTextClipped
 	// rasterizer with the same pen and no foreground install of its own, exactly
 	// as this call did directly [03 R-FX-01 §6A][03 §7.1].
 	c.emitGlyphs(drawlist.Glyphs{

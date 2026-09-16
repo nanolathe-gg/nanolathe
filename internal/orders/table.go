@@ -407,8 +407,8 @@ var handlerInstallers = []func(){
 // installHandlers runs every family installer in list order. buildTable is its
 // only caller, and calls it so the table is complete before the first pump; the
 // pump does not re-run it. One family has a lazy retry of its own: Resolve calls
-// ensureHandlers on every resolution, and EnsureHandlers exposes it, which is
-// what covers a fixture whose init order ran before table.go's.
+// ensureHandlers on every resolution, which is what covers a fixture whose init
+// order ran before table.go's.
 //
 // Handlers a subsystem owns rather than this package are not installed here.
 // They bind per queue through the registration seam in queue_handlers.go:

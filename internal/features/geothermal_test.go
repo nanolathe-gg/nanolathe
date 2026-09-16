@@ -5,10 +5,12 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
-// VentPersistsAfterBuildingRemoval is the persistence invariant: after a building that required geothermal is removed,
-// the vent's Plot feature remains at its anchor cell with the geothermal flag still set [05 "Geothermal requirement"] [P1-10].
-// This helper asserts that invariant for tests without mutating state.
-func VentPersistsAfterBuildingRemoval(t *world.Terrain, cx, cz int, ventDef *content.FeatureDef) bool {
+// ventPersistsAfterBuildingRemoval is the persistence invariant this package's
+// tests assert: after a building that required geothermal is removed, the
+// vent's Plot feature remains at its anchor cell with the geothermal flag still
+// set [05 "Geothermal requirement"] [P1-10]. It reads the terrain and mutates
+// nothing.
+func ventPersistsAfterBuildingRemoval(t *world.Terrain, cx, cz int, ventDef *content.FeatureDef) bool {
 	if t == nil || ventDef == nil || !ventDef.Geothermal {
 		return false
 	}

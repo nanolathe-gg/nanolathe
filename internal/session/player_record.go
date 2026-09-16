@@ -95,18 +95,6 @@ func (s *Session) sideForOwner(owner int) (int, bool) {
 	return 0, false
 }
 
-// controllerForOwner is the slot's control byte — 1 a locally controlled human,
-// 2 a computer player, 3 a remote peer, 0 an inactive slot
-// [05 R-SHARE-01 §1][08 R-SKIR-01 §2]. It is the byte registration stores and
-// the `Player%i` account persists.
-func (s *Session) controllerForOwner(owner int) uint8 {
-	p := s.playerRecord(owner)
-	if p == nil || !p.Exists {
-		return 0
-	}
-	return p.ControllerState
-}
-
 // ownerIsObserver reports the record's observer byte, which excludes a slot
 // from settlement [05 "Authoritative settlement order"] and from a result row.
 //

@@ -309,8 +309,8 @@ func Load(data []byte) (*Program, error) {
 
 // LoadFromFS loads a compiled script for unitName via VFS [fmt cob] [04 §4.1].
 // It tries logical paths scripts/<unitName>.cob case-insensitively (VFS cleanPath is case-folded).
-// Returns (nil, false, nil) when no COB exists; preflight and creation refuse
-// required null programs [04 R-COB-04 §8]. An empty name still probes scripts/.cob
+// Returns (nil, false, nil) when no COB exists; unit creation refuses a
+// required null program [04 R-COB-04 §8]. An empty name still probes scripts/.cob
 // [02 R-CAT-01 §5].
 // An existing file that fails to parse returns (nil, true, error).
 func LoadFromFS(fs vfs.FSOps, unitName string) (*Program, bool, error) {

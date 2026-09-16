@@ -87,7 +87,7 @@ func TestVTOLMoveClimbsCruisesAndBanks(t *testing.T) {
 		t.Fatal("the aircraft's position does not link into the air sector grid [04 R-AIR-01 §5]")
 	}
 	wantY := numeric.Fixed((int64(u.Def.CruiseAlt) + int64(sector)) << 16)
-	if dy := absFixed(u.Y - wantY); dy > numeric.Fixed(2<<16) {
+	if dy := numeric.Abs(u.Y - wantY); dy > numeric.Fixed(2<<16) {
 		t.Fatalf("cruise altitude %d, want the sector rule's %d [04 R-AIR-01 §1 step 4]", u.Y, wantY)
 	}
 	if int64(u.X) <= int64(world.CellToWorld(8)) {
@@ -145,13 +145,6 @@ func bankMagnitude(b uint16) uint16 {
 		return uint16(-s)
 	}
 	return b
-}
-
-func absFixed(v numeric.Fixed) numeric.Fixed {
-	if v < 0 {
-		return -v
-	}
-	return v
 }
 
 func orderQueueOf(t *testing.T, u *units.Unit) *orders.Queue {
@@ -395,7 +388,7 @@ func TestAirConstructionOrbitRecurrence(t *testing.T) {
 		m := installedMarker(t, sys, u)
 
 		// The station's distance from the target is the authored build reach.
-		if d := airPlanarDistance(m.goal.X, m.goal.Z, target.X, target.Z); absInt64(d-int64(radius)) > 1<<12 {
+		if d := airPlanarDistance(m.goal.X, m.goal.Z, target.X, target.Z); numeric.Abs(d-int64(radius)) > 1<<12 {
 			t.Fatalf("station %d sits %d from the target, want builddistance %d [04 §10.3]", station, d, int64(radius))
 		}
 		// The marker's explicit heading points from the station back at the
@@ -477,7 +470,7 @@ func TestAirBuildTakesOffAndOrbits(t *testing.T) {
 	}
 	radius := int64(u.Def.BuildDistance) << 16
 	for i, st := range stations {
-		if d := airPlanarDistance(st.X, st.Z, target.X, target.Z); absInt64(d-radius) > 1<<12 {
+		if d := airPlanarDistance(st.X, st.Z, target.X, target.Z); numeric.Abs(d-radius) > 1<<12 {
 			t.Fatalf("station %d is %d from the target, want %d [04 §10.3]", i, d, radius)
 		}
 		if i > 0 && stations[i-1] == st {
@@ -510,7 +503,7 @@ func TestVTOLLandIfCanSettlesOnTheTerrain(t *testing.T) {
 	if u.Move.Mode&0x3 != 1 {
 		t.Fatalf("the aircraft never touched down: mover mode %d [04 R-AIR-01 §6]", u.Move.Mode)
 	}
-	if absFixed(u.Y-terrain) > numeric.Fixed(1<<16) {
+	if numeric.Abs(u.Y-terrain) > numeric.Fixed(1<<16) {
 		t.Fatalf("landed at Y=%d with terrain at %d [04 R-AIR-01 §6]", u.Y, terrain)
 	}
 }
@@ -534,13 +527,6 @@ func TestAirOffsetSignFamilies(t *testing.T) {
 	if along := numeric.Fixed(0) - oz; along >= 0 {
 		t.Fatalf("pos − offset at heading 0 moved to %d, want the negative Z the travel direction gives", along)
 	}
-}
-
-func absInt64(v int64) int64 {
-	if v < 0 {
-		return -v
-	}
-	return v
 }
 
 // angleDelta is the unsigned separation of two 16-bit angles on the shorter arc.

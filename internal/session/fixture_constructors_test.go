@@ -18,6 +18,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/mission"
 	"github.com/nanolathe-gg/nanolathe/internal/movement"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
@@ -143,7 +144,7 @@ func createAndBindServicesForTest(t *testing.T, s *Session) error {
 
 // NewSyntheticMissionForTest is a test-only fixture constructor. It accepts
 // deliberately incomplete authored test inputs; production composition uses
-// NewMissionWithFS and never reaches this file.
+// NewMissionWithEntryOptions and never reaches this file.
 func NewSyntheticMissionForTest(fs vfs.FSOps, cat *content.Catalog, path string, difficulty int) (*Session, error) {
 	restoreRNG := scopeTestRNGStreams()
 	defer restoreRNG()
@@ -170,7 +171,7 @@ func NewSyntheticMissionForTest(fs vfs.FSOps, cat *content.Catalog, path string,
 	} else {
 		m, err = mission.LoadWithType(fs, mission.TypeCampaign, path, difficulty, 0, nil)
 		if err != nil {
-			m2, err2 := mission.Load(fs, cat, path)
+			m2, err2 := mission.LoadWithType(fs, mission.TypeSkirmish, path, 0, 0, nil)
 			if err2 != nil {
 				return nil, err
 			}
@@ -289,7 +290,7 @@ func reconstructUnitsFixture(s *Session, m *mission.Mission) error {
 
 // NewSyntheticSkirmishForTest is a test-only fixture constructor. It accepts
 // deliberately incomplete authored test inputs; production composition uses
-// NewSkirmishWithFS and never reaches this file.
+// NewSkirmishWithProgress and never reaches this file.
 func NewSyntheticSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig) (*Session, error) {
 	restoreRNG := scopeTestRNGStreams()
 	defer restoreRNG()
@@ -556,4 +557,49 @@ func NewSyntheticSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg Skirmis
 	// Victory evaluation runs inside authoritativeTick [RX-08].
 	_ = s.SelectForGametype(GametypeMultiplayer)
 	return s, nil
+}
+
+// The three constructors below build a sliced unit pool for fixtures only.
+// Every battle-entry site — skirmish, campaign and retail staging — calls
+// newBattleSlicedWorldWithCOBSized with the limit it owns [05 R-SHARE-01 §7]
+// [08 R-SKIR-01 §6].
+
+// newSlicedWorld creates the retail sliced unit pool using the catalog
+// definition count. [01 §6.1][P0-16] Use units.NewSliced, never New(600).
+func newSlicedWorld(cat *content.Catalog) (*units.World, error) {
+	if cat == nil {
+		return nil, fmt.Errorf("session: nil catalog for unit pool")
+	}
+	n := len(cat.UnitRecords())
+	if n <= 0 {
+		return nil, fmt.Errorf("session: catalog has no unit definitions [02 §5]")
+	}
+	w := units.NewSliced(n, cat)
+	if w == nil {
+		return nil, fmt.Errorf("session: failed to create sliced pool")
+	}
+	if !w.IsSliced() {
+		return nil, fmt.Errorf("session: pool not sliced [P0-16]")
+	}
+	return w, nil
+}
+
+// newSlicedWorldWithCOB creates the sliced pool and installs the COB loader [04 §4.1][P1-I01].
+func newSlicedWorldWithCOB(cat *content.Catalog, fs vfs.FSOps) (*units.World, error) {
+	return newBattleSlicedWorldWithCOB(cat, fs, 0, [pool.PlayerCount]uint32{})
+}
+
+// newBattleSlicedWorldWithCOB computes the complete player order once at
+// battle entry and injects it into the sliced pool. The sort-key array is an
+// explicit seam for the mode-3 player records; mode 0 is the identity wrapper
+// used by fixture-only construction [R-P0-16-A].
+//
+// It sizes the pool from Nanolathe's default unit limit. Every
+// battle-entry site that knows its own limit — a skirmish's configured
+// `UnitLimit`, a campaign's OTA `maxunits` — calls the Sized form instead.
+func newBattleSlicedWorldWithCOB(cat *content.Catalog, fs vfs.FSOps, mode int, sortKeys [pool.PlayerCount]uint32) (*units.World, error) {
+	if cat == nil {
+		return nil, fmt.Errorf("session: nil catalog for unit pool")
+	}
+	return newBattleSlicedWorldWithCOBSized(cat, fs, mode, sortKeys, SkirmishDefaultUnitLimit)
 }

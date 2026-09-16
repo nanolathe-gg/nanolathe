@@ -1,0 +1,62 @@
+# Functions no shipped binary can reach, from
+#   deadcode -tags retail ./...   (tests are NOT roots)
+#
+# Shrink-only ratchet enforced by tools/lint. An entry here is reachable
+# from tests but from no main package: test infrastructure, a superseded
+# wrapper a test still pins, or code that was never wired up. Adding one
+# is a deliberate act whose reason belongs in the commit message; wiring
+# or deleting one means dropping its row in the same commit.
+#
+# Regenerate with: tools/lint --update-baseline
+github.com/nanolathe-gg/nanolathe/formats EncodeGAF
+github.com/nanolathe-gg/nanolathe/formats EncodeThreeDO
+github.com/nanolathe-gg/nanolathe/formats EncodeWAV
+github.com/nanolathe-gg/nanolathe/formats encodeGAFRLE
+github.com/nanolathe-gg/nanolathe/internal/airdiag Harness.Close
+github.com/nanolathe-gg/nanolathe/internal/airdiag Harness.Observe
+github.com/nanolathe-gg/nanolathe/internal/airdiag Harness.Order
+github.com/nanolathe-gg/nanolathe/internal/airdiag Harness.Spawn
+github.com/nanolathe-gg/nanolathe/internal/airdiag Harness.Step
+github.com/nanolathe-gg/nanolathe/internal/airdiag Harness.Trace
+github.com/nanolathe-gg/nanolathe/internal/airdiag Harness.Unit
+github.com/nanolathe-gg/nanolathe/internal/airdiag New
+github.com/nanolathe-gg/nanolathe/internal/airdiag Row.Format
+github.com/nanolathe-gg/nanolathe/internal/airdiag fx
+github.com/nanolathe-gg/nanolathe/internal/combat ComputeScaledAmount
+github.com/nanolathe-gg/nanolathe/internal/content ApplyDownloadMenus
+github.com/nanolathe-gg/nanolathe/internal/content ApplyMovementFootprints
+github.com/nanolathe-gg/nanolathe/internal/content CompileCategories
+github.com/nanolathe-gg/nanolathe/internal/content CompileMaps
+github.com/nanolathe-gg/nanolathe/internal/content CompileUnits
+github.com/nanolathe-gg/nanolathe/internal/content canonicalUnitMap
+github.com/nanolathe-gg/nanolathe/internal/docs Citation.String
+github.com/nanolathe-gg/nanolathe/internal/docs CitingFiles
+github.com/nanolathe-gg/nanolathe/internal/docs Dangling
+github.com/nanolathe-gg/nanolathe/internal/docs DanglingInGo
+github.com/nanolathe-gg/nanolathe/internal/docs Finding.String
+github.com/nanolathe-gg/nanolathe/internal/docs ReadBaseline
+github.com/nanolathe-gg/nanolathe/internal/docs UncitedFindings
+github.com/nanolathe-gg/nanolathe/internal/docs commentPart
+github.com/nanolathe-gg/nanolathe/internal/docs hasGitEntry
+github.com/nanolathe-gg/nanolathe/internal/docs headingKeys
+github.com/nanolathe-gg/nanolathe/internal/docs indexResearch
+github.com/nanolathe-gg/nanolathe/internal/docs normHeading
+github.com/nanolathe-gg/nanolathe/internal/docs resolve
+github.com/nanolathe-gg/nanolathe/internal/docs scanGoFile
+github.com/nanolathe-gg/nanolathe/internal/pool NewUnitsSliced
+github.com/nanolathe-gg/nanolathe/internal/sim/numeric FixedFromRaw
+github.com/nanolathe-gg/nanolathe/internal/sim/rng CRTFromState
+github.com/nanolathe-gg/nanolathe/internal/sim/rng SeedGlobal
+github.com/nanolathe-gg/nanolathe/internal/sim/rng SimulationFromState
+github.com/nanolathe-gg/nanolathe/internal/testsupport RetailRoot
+github.com/nanolathe-gg/nanolathe/internal/testsupport/retailcat SelectOpeningChain
+github.com/nanolathe-gg/nanolathe/internal/testsupport/retailcat Shared
+github.com/nanolathe-gg/nanolathe/internal/testsupport/retailcat firstButton
+github.com/nanolathe-gg/nanolathe/internal/testsupport/retailcat isMetalExtractor
+github.com/nanolathe-gg/nanolathe/internal/testsupport/retailcat isMobileKbot
+github.com/nanolathe-gg/nanolathe/internal/testsupport/retailcat isSolar
+github.com/nanolathe-gg/nanolathe/internal/testsupport/retailcat producesKbot
+github.com/nanolathe-gg/nanolathe/internal/units BindCOBWithPorts
+github.com/nanolathe-gg/nanolathe/internal/units NewSliced
+github.com/nanolathe-gg/nanolathe/vfs WriteArchive
+github.com/nanolathe-gg/nanolathe/vfs zlibChunks

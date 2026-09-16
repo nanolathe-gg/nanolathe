@@ -18,7 +18,7 @@ func TestHoverFactoryContinuesPastConstructorRetail(t *testing.T) {
 	cfg.ApplyDefaults()
 	cfg.Players[0].Controller = 0
 	cfg.Players[1].Controller = 1
-	s, err := NewSkirmishWithFS(fs, cat, cfg)
+	s, err := NewSkirmishWithProgress(fs, cat, cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

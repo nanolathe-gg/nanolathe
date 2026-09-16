@@ -3,6 +3,7 @@ package content
 import (
 	"testing"
 
+	"github.com/nanolathe-gg/nanolathe/internal/testsupport"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
@@ -122,7 +123,7 @@ func TestUnitPlacementProfileAuthoredAndDefaults(t *testing.T) {
 }
 
 func TestRetailClasslessExtractorScratchProfiles(t *testing.T) {
-	root := skirmishAssetRoot(t)
+	root := testsupport.RetailRoot(t)
 	fs := vfs.New()
 	if err := fs.MountGameDirectory(root); err != nil {
 		t.Fatalf("mount retail assets: %v", err)

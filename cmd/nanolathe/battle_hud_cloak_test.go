@@ -56,7 +56,7 @@ func TestCloakButtonSendsTheDescriptorTheCommittedPairNames(t *testing.T) {
 		want bool
 	}{{0, true}, {1, false}, {2, false}} {
 		b := newSession(tc.pair)
-		if !b.hud.consumeClick(b, 5, 5) {
+		if !hudConsumeClick(b.hud, b, 5, 5) {
 			t.Fatalf("pair %d: the CLOAK button did not consume its click", tc.pair)
 		}
 		pending := b.sess.PendingHumanCommands()
@@ -71,7 +71,7 @@ func TestCloakButtonSendsTheDescriptorTheCommittedPairNames(t *testing.T) {
 	// The not-applicable pair greys the gadget, and a greyed button takes no
 	// capture and fires nothing [07 R-WGT-01 §3].
 	grey := newSession(3)
-	if grey.hud.consumeClick(grey, 5, 5) {
+	if hudConsumeClick(grey.hud, grey, 5, 5) {
 		t.Fatal("a greyed CLOAK button consumed its click")
 	}
 	if pending := grey.sess.PendingHumanCommands(); len(pending) != 0 {

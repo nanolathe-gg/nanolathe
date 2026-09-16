@@ -76,21 +76,7 @@ type FeatureDef struct {
 
 // UnknownKeysSorted returns inert keys sorted for hash stability (I1).
 func (f *FeatureDef) UnknownKeysSorted() []string {
-	if f.Unknown == nil {
-		return nil
-	}
-	keys := make([]string, 0, len(f.Unknown))
-	for k := range f.Unknown {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		li, lj := CanonicalKey(keys[i]), CanonicalKey(keys[j])
-		if li != lj {
-			return li < lj
-		}
-		return keys[i] < keys[j]
-	})
-	return keys
+	return sortedFoldedKeys(f.Unknown, CanonicalKey)
 }
 
 // knownFeatureKeys is the set of lower-cased keys that have a typed reader [02 "Feature record"].

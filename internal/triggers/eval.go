@@ -7,15 +7,12 @@ import (
 )
 
 // PollContext supplies session-owned state to the trigger dispatch slots.
-// Mission trigger owner predicates are the literal slots 0 and 1; the two
-// owner fields remain for source compatibility and are not consulted by the
-// canonical kind-1 evaluator [08 R-TRIG-01 §3].
+// Mission trigger owner predicates are the literal slots 0 and 1, so the
+// context carries no owner identities of its own [08 R-TRIG-01 §3].
 type PollContext struct {
 	Tick  uint32
 	World *units.World
 
-	LocalOwner uint8
-	EnemyOwner uint8
 	// NotificationOwner carries the pre-transfer owner at the capture slot.
 	// Removal and creation notifications leave the valid flag clear and read
 	// the subject record directly [08 R-TRIG-01 §7].
@@ -335,24 +332,6 @@ func (t *Trigger) Notify(c PollContext, ev NotifyEvent, u *units.Unit) bool {
 		}
 	}
 	return t.Completed
-}
-
-// Evaluate evaluates detached trigger queues. Production mission polling uses
-// EvaluateOwned so an empty queue receives a persistent default record. This
-// value-slice form retains the historical detached fallback for isolated
-// condition consumers that cannot install a record on their owner [08
-// "Default triggers"] [08 R-TRIG-01 §6].
-func Evaluate(victory, defeat []*Trigger, c PollContext) (victoryDone, defeatDone bool) {
-	if !c.MissionArmed {
-		return false, false
-	}
-	if len(victory) == 0 {
-		victory = []*Trigger{DefaultVictory()}
-	}
-	if len(defeat) == 0 {
-		defeat = []*Trigger{DefaultDefeat()}
-	}
-	return evaluateQueues(victory, defeat, c)
 }
 
 // EvaluateOwned evaluates a mission's trigger queues. Its empty-queue fallback

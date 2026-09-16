@@ -276,7 +276,7 @@ func TestSkirmishWindSinglePath(t *testing.T) {
 	cfg := SkirmishConfig{MapName: "wind", NumPlayers: 2}
 	sS, err := NewSyntheticSkirmishForTest(fsSkirmish, cat, cfg)
 	if err != nil {
-		t.Fatalf("NewSkirmishWithFS: %v", err)
+		t.Fatalf("NewSkirmishWithProgress: %v", err)
 	}
 	skirmishDraws := rng.Global.Crt.Draws() - before2
 	if skirmishDraws != 0 {

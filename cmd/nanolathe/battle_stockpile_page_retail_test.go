@@ -93,7 +93,7 @@ func TestRetailSiloPageCarriesTheStockpileToy(t *testing.T) {
 	// consumed by the stockpile arm and reach the session as one BUILDWEAPON
 	// round against the unit the committed page names [06 §11.1].
 	r := window.PlacedRect(toy)
-	if !battleHUD.consumeClick(b, r.X+r.W/2, r.Y+r.H/2) {
+	if !hudConsumeClick(battleHUD, b, r.X+r.W/2, r.Y+r.H/2) {
 		t.Fatalf("a click on %s was not consumed", window.Gadgets[toy].Name)
 	}
 	pending := sess.PendingHumanCommands()

@@ -121,12 +121,12 @@ func (r *Renderer) Markers(m drawlist.Markers) {
 		x0, y0 := int(mk.X-half), int(mk.Y-half)
 		x1, y1 := x0+int(mk.Size), y0+int(mk.Size)
 		if mk.HasClip {
-			x0, y0 = maxInt(x0, int(mk.Clip.X)), maxInt(y0, int(mk.Clip.Y))
-			x1 = minInt(x1, int(mk.Clip.X+mk.Clip.W))
-			y1 = minInt(y1, int(mk.Clip.Y+mk.Clip.H))
+			x0, y0 = max(x0, int(mk.Clip.X)), max(y0, int(mk.Clip.Y))
+			x1 = min(x1, int(mk.Clip.X+mk.Clip.W))
+			y1 = min(y1, int(mk.Clip.Y+mk.Clip.H))
 		}
-		x0, y0 = maxInt(x0, 0), maxInt(y0, 0)
-		x1, y1 = minInt(x1, r.w), minInt(y1, r.h)
+		x0, y0 = max(x0, 0), max(y0, 0)
+		x1, y1 = min(x1, r.w), min(y1, r.h)
 		if x0 >= x1 || y0 >= y1 {
 			continue
 		}

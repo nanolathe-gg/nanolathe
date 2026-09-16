@@ -202,18 +202,11 @@ func LoadTDF(fs vfs.FSOps, name string) (*Document, error) {
 // foldName uses only the established byte domain. High-byte code-page folding
 // remains untraced, so those bytes intentionally compare literally.
 // TODO(question): trace retail's active code-page comparison for bytes >= 0x80.
-func foldName(name string) string { return asciiFold(trimTDFSemantic(name)) }
+func foldName(name string) string { return FoldASCII(trimTDFSemantic(name)) }
 
-func trimTDFSemantic(value string) string {
-	start, end := 0, len(value)
-	for start < end && isTDFSemanticSpace(value[start]) {
-		start++
-	}
-	for end > start && isTDFSemanticSpace(value[end-1]) {
-		end--
-	}
-	return value[start:end]
-}
+// trimTDFSemantic strips only the four whitespace bytes the TDF parser
+// recognises around a section name, key or value [02 R-CAT-01 §3].
+func trimTDFSemantic(value string) string { return TrimASCIIFunc(value, isTDFSemanticSpace) }
 
 func isTDFSemanticSpace(value byte) bool {
 	switch value {
@@ -222,21 +215,6 @@ func isTDFSemanticSpace(value byte) bool {
 	default:
 		return false
 	}
-}
-
-func asciiFold(value string) string {
-	for i := 0; i < len(value); i++ {
-		if value[i] >= 'A' && value[i] <= 'Z' {
-			out := []byte(value)
-			for j := i; j < len(out); j++ {
-				if out[j] >= 'A' && out[j] <= 'Z' {
-					out[j] += 'a' - 'A'
-				}
-			}
-			return string(out)
-		}
-	}
-	return value
 }
 
 // Sections returns the section's nested sections in source order.

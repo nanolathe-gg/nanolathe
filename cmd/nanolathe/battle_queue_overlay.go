@@ -263,8 +263,8 @@ func drawQueueIcon(c *client.Client, entry *formats.GAFEntry, op hud.QueuePrimit
 // drawQueueLine is the indexed-framebuffer equivalent of retail's integer
 // line primitive.  UIFillRect clips every pixel to the client viewport.
 func drawQueueLine(c *client.Client, a, b hud.QueuePoint, color uint8) {
-	dx := absInt32(b.X - a.X)
-	dy := absInt32(b.Y - a.Y)
+	dx := numeric.Abs(b.X - a.X)
+	dy := numeric.Abs(b.Y - a.Y)
 	sx, sy := int32(1), int32(1)
 	if a.X > b.X {
 		sx = -1
@@ -288,11 +288,4 @@ func drawQueueLine(c *client.Client, a, b hud.QueuePoint, color uint8) {
 			a.Y += sy
 		}
 	}
-}
-
-func absInt32(v int32) int32 {
-	if v < 0 {
-		return -v
-	}
-	return v
 }

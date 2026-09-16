@@ -4,156 +4,6 @@ import (
 	"testing"
 )
 
-// TestTruthTableMatrix verifies the [07 §9] C9 truth table for drag selection
-// via the HUD wrapper (duplicated from client primitive).
-func TestTruthTableMatrix(t *testing.T) {
-	cases := []struct {
-		old, inside, additive bool
-		want                  bool
-	}{
-		{false, false, false, false},
-		{false, true, false, true},
-		{true, false, false, false},
-		{true, true, false, true},
-		{false, false, true, false},
-		{false, true, true, true},
-		{true, false, true, true},
-		{true, true, true, false},
-	}
-	for _, c := range cases {
-		got := NextSelected(c.old, c.inside, c.additive)
-		if got != c.want {
-			t.Fatalf("NextSelected old=%t inside=%t additive=%t got %t want %t [07 §9] C9", c.old, c.inside, c.additive, got, c.want)
-		}
-	}
-	// Exhaustive via flags.
-	for _, old := range []bool{false, true} {
-		for _, ins := range []bool{false, true} {
-			for _, add := range []bool{false, true} {
-				flags := uint32(0)
-				if old {
-					flags |= SelectionFlag
-				}
-				next := NextFlags(flags, ins, add)
-				want := NextSelected(old, ins, add)
-				if IsSelected(next) != want {
-					t.Fatalf("NextFlags table mismatch old %t ins %t add %t", old, ins, add)
-				}
-			}
-		}
-	}
-}
-
-// TestDragSelectionMembershipAndDirty checks membership bit 0x10 and dirty bit
-// observation plus stable ascending iteration [07 §9] C9.
-func TestDragSelectionMembershipAndDirty(t *testing.T) {
-	// Three units at distinct presentation positions, ascending iteration 0..2 [07 §9] I1.
-	u0 := &SelectUnit{Flags: 0, DefID: 1}
-	u1 := &SelectUnit{Flags: SelectionFlag, DefID: 2} // initially selected
-	u2 := &SelectUnit{Flags: 0, DefID: 3}
-	units := []*SelectUnit{u0, u1, u2}
-	getPos := func(u *SelectUnit) (int32, int32) {
-		switch u {
-		case u0:
-			return 10, 10 // inside
-		case u1:
-			return 200, 200 // outside
-		case u2:
-			return 15, 15 // inside
-		default:
-			return 999, 999
-		}
-	}
-	rect := NormalizeDragRect(0, 0, 20, 20) // contains u0 and u2 only
-	var dirty uint32
-	// Modifier clear: inside set, outside clear (bulk pre-clear) [07 §9] C9.
-	changed, cnt := ApplyDragSelection(units, rect, false, &dirty, getPos, nil)
-	if !changed {
-		t.Fatalf("expected changed on clear modifier")
-	}
-	if dirty&InterfaceDirtyBit == 0 {
-		t.Fatalf("dirty bit 0x10 not set after change [07 §9] C9")
-	}
-	if cnt != 2 {
-		t.Fatalf("selected count after clear = %d want 2", cnt)
-	}
-	if !IsSelected(u0.Flags) || IsSelected(u1.Flags) || !IsSelected(u2.Flags) {
-		t.Fatalf("clear table failed: u0 %v u1 %v u2 %v", IsSelected(u0.Flags), IsSelected(u1.Flags), IsSelected(u2.Flags))
-	}
-	// Companion bits 0x40 and 0x80 must be cleared on eligible units when modifier clear [07 §9] BulkClearMask.
-	uComp := &SelectUnit{Flags: SelectionFlag | 0x40 | 0x80, DefID: 4}
-	units2 := []*SelectUnit{uComp}
-	getPos2 := func(u *SelectUnit) (int32, int32) { return 999, 999 } // outside
-	var d2 uint32
-	rect2 := NormalizeDragRect(0, 0, 10, 10)
-	ApplyDragSelection(units2, rect2, false, &d2, getPos2, nil)
-	if uComp.Flags&0x40 != 0 || uComp.Flags&0x80 != 0 {
-		t.Fatalf("bulk clear mask 0xFFFFFF2F not applied: flags %08x [07 §9] C9", uComp.Flags)
-	}
-	if IsSelected(uComp.Flags) {
-		t.Fatalf("outside with clear should be deselected")
-	}
-	// Modifier set: toggle inside, preserve outside [07 §9] C9.
-	u0.Flags = SelectionFlag // selected inside will toggle off
-	u1.Flags = 0             // outside preserved (was cleared)
-	u2.Flags = 0             // inside not selected will toggle on
-	units = []*SelectUnit{u0, u1, u2}
-	var d3 uint32
-	changed, cnt = ApplyDragSelection(units, rect, true, &d3, getPos, nil)
-	if !changed {
-		t.Fatalf("expected toggle change")
-	}
-	if IsSelected(u0.Flags) {
-		t.Fatalf("toggle inside selected should clear")
-	}
-	if IsSelected(u1.Flags) {
-		t.Fatalf("outside with additive should preserve deselected")
-	}
-	if !IsSelected(u2.Flags) {
-		t.Fatalf("toggle inside deselected should set")
-	}
-	if cnt != 1 {
-		t.Fatalf("toggle count %d want 1", cnt)
-	}
-	// Stable ascending iteration: mutation order must not affect stability.
-	flags := []uint32{0, SelectionFlag, 0}
-	xs := []int32{10, 200, 15}
-	ys := []int32{10, 200, 15}
-	var d4 uint32
-	ch, sc := ApplyDragSelectionFlags(flags, xs, ys, rect, false, nil, &d4)
-	if !ch || sc != 2 || flags[0]&SelectionFlag == 0 || flags[1]&SelectionFlag != 0 || flags[2]&SelectionFlag == 0 {
-		t.Fatalf("ApplyDragSelectionFlags iteration or truth table wrong: %08x %08x %08x ch %v sc %d", flags[0], flags[1], flags[2], ch, sc)
-	}
-	// Dirty not set when no change.
-	uA := &SelectUnit{Flags: SelectionFlag, DefID: 5}
-	unitsA := []*SelectUnit{uA}
-	getPosA := func(u *SelectUnit) (int32, int32) { return 5, 5 } // inside, already selected, clear modifier would keep selected
-	rectA := NormalizeDragRect(0, 0, 10, 10)
-	var dNo uint32
-	chNo, countNo := ApplyDragSelection(unitsA, rectA, false, &dNo, getPosA, nil)
-	if chNo {
-		t.Fatalf("no-change should not report changed")
-	}
-	if dNo != 0 {
-		t.Fatalf("dirty set without change")
-	}
-	if !IsSelected(uA.Flags) || countNo != 1 {
-		t.Fatal("replacement must retain an already-selected inside unit [07 §9]")
-	}
-	retained := []uint32{SelectionFlag | 0xc0}
-	changedRetained, countRetained := ApplyDragSelectionFlags(retained, []int32{5}, []int32{5}, rectA, false, nil, &dNo)
-	if retained[0] != SelectionFlag || changedRetained || countRetained != 1 || dNo != 0 {
-		t.Fatalf("replacement pre-clear lost membership: flags=%x changed=%v count=%d dirty=%x", retained[0], changedRetained, countRetained, dNo)
-	}
-	// Ineligible units preserve regardless of rect/modifier.
-	uInelig := &SelectUnit{Flags: SelectionFlag, DefID: 6}
-	var d5 uint32
-	ApplyDragSelection([]*SelectUnit{uInelig}, rect, false, &d5, func(u *SelectUnit) (int32, int32) { return 999, 999 }, func(u *SelectUnit) bool { return false })
-	if !IsSelected(uInelig.Flags) {
-		t.Fatalf("ineligible should be preserved")
-	}
-}
-
 // TestGroupAssignRecallTogglePreserve covers group assignment and recall
 // preserve/toggle semantics [07 §9] C9 stable ascending and nonzero DefID scan.
 func TestGroupAssignRecallTogglePreserve(t *testing.T) {
@@ -206,8 +56,8 @@ func TestGroupAssignRecallTogglePreserve(t *testing.T) {
 	if cnt != 2 {
 		t.Fatalf("recall preserve false count %d want 2", cnt)
 	}
-	if !IsSelected(units[0].Flags) || IsSelected(units[1].Flags) || !IsSelected(units[2].Flags) || IsSelected(units[3].Flags) {
-		t.Fatalf("preserve false recall failed: %v %v %v %v", IsSelected(units[0].Flags), IsSelected(units[1].Flags), IsSelected(units[2].Flags), IsSelected(units[3].Flags))
+	if !isSelected(units[0].Flags) || isSelected(units[1].Flags) || !isSelected(units[2].Flags) || isSelected(units[3].Flags) {
+		t.Fatalf("preserve false recall failed: %v %v %v %v", isSelected(units[0].Flags), isSelected(units[1].Flags), isSelected(units[2].Flags), isSelected(units[3].Flags))
 	}
 	if d2&InterfaceDirtyBit == 0 {
 		t.Fatalf("recall should set dirty")
@@ -224,16 +74,16 @@ func TestGroupAssignRecallTogglePreserve(t *testing.T) {
 	if !changed {
 		t.Fatalf("preserve true toggle should change")
 	}
-	if IsSelected(units[0].Flags) {
+	if isSelected(units[0].Flags) {
 		t.Fatalf("toggle should clear already selected match")
 	}
-	if !IsSelected(units[1].Flags) {
+	if !isSelected(units[1].Flags) {
 		t.Fatalf("toggle should set deselected match")
 	}
-	if !IsSelected(units[2].Flags) {
+	if !isSelected(units[2].Flags) {
 		t.Fatalf("nonmatch should preserve selected")
 	}
-	if IsSelected(units[3].Flags) {
+	if isSelected(units[3].Flags) {
 		t.Fatalf("nonmatch should preserve deselected")
 	}
 	if cnt != 2 { // 1 toggled on + preserved selected nonmember =2
@@ -245,7 +95,7 @@ func TestGroupAssignRecallTogglePreserve(t *testing.T) {
 		{Flags: 0, Group: 1, DefID: 1},
 	}
 	RecallGroup(units, 1, false, [32]byte{}, nil)
-	if !IsSelected(units[0].Flags) {
+	if !isSelected(units[0].Flags) {
 		t.Fatalf("ineligible DefID 0 should be preserved even though group matches")
 	}
 }
@@ -271,7 +121,7 @@ func TestCtrlFFilter(t *testing.T) {
 	if !changed || cnt != 3 {
 		t.Fatalf("filter inactive should select all 3, got cnt %d changed %v", cnt, changed)
 	}
-	if !IsSelected(units[0].Flags) || !IsSelected(units[1].Flags) || !IsSelected(units[2].Flags) {
+	if !isSelected(units[0].Flags) || !isSelected(units[1].Flags) || !isSelected(units[2].Flags) {
 		t.Fatalf("unfiltered recall should select all")
 	}
 	// Activate filter: set 0x80000000 on one matching unit. Now mask should filter.
@@ -287,8 +137,8 @@ func TestCtrlFFilter(t *testing.T) {
 	if cnt != 2 {
 		t.Fatalf("filtered recall count %d want 2 (only DefID 5 matches)", cnt)
 	}
-	if !IsSelected(units[0].Flags) || IsSelected(units[1].Flags) || !IsSelected(units[2].Flags) || IsSelected(units[3].Flags) {
-		t.Fatalf("filtered recall failed: %v %v %v %v", IsSelected(units[0].Flags), IsSelected(units[1].Flags), IsSelected(units[2].Flags), IsSelected(units[3].Flags))
+	if !isSelected(units[0].Flags) || isSelected(units[1].Flags) || !isSelected(units[2].Flags) || isSelected(units[3].Flags) {
+		t.Fatalf("filtered recall failed: %v %v %v %v", isSelected(units[0].Flags), isSelected(units[1].Flags), isSelected(units[2].Flags), isSelected(units[3].Flags))
 	}
 	// Filter with preserve true: filtered-out matches are considered nonmembers and thus preserved, not toggled.
 	units = []*SelectUnit{
@@ -300,13 +150,13 @@ func TestCtrlFFilter(t *testing.T) {
 	mask = [32]byte{}
 	setTypeMaskBit(&mask, 5) // only 5 admitted
 	RecallGroup(units, 3, true, mask, nil)
-	if IsSelected(units[0].Flags) {
+	if isSelected(units[0].Flags) {
 		t.Fatalf("preserve true filtered passing should toggle off")
 	}
-	if !IsSelected(units[1].Flags) {
+	if !isSelected(units[1].Flags) {
 		t.Fatalf("filtered nonmember should preserve selected")
 	}
-	if IsSelected(units[2].Flags) {
+	if isSelected(units[2].Flags) {
 		t.Fatalf("filtered deselected should preserve deselected")
 	}
 	// TypeFilterPasses helper directly.
@@ -340,50 +190,10 @@ func TestDigitRoutingGate(t *testing.T) {
 			t.Fatalf("RoutesToPage mode %d alt %v got %v want %v [07 §9] C10", c.mode, c.alt, got, c.wantPage)
 		}
 	}
-	// Digit conversion.
+	// Digit conversion. The group arm of the gate takes the digit itself:
+	// battleSession.routeDigit hands it straight to DispatchGroupRecall.
 	if DigitToPage(1) != 0 || DigitToPage(9) != 8 || DigitToPage(0) != 0 || DigitToPage(10) != 0 {
 		t.Fatalf("DigitToPage wrong")
-	}
-	if DigitToGroup(5) != 5 || DigitToGroup(0) != 0 {
-		t.Fatalf("DigitToGroup wrong")
-	}
-	// HandleDigit end-to-end routing.
-	builder := &SelectUnit{Flags: 0, DefID: 100}
-	units := []*SelectUnit{
-		{Flags: 0, Group: 2, DefID: 1},
-		{Flags: 0, Group: 2, DefID: 2},
-	}
-	var d uint32
-	var mask [32]byte
-	// mode 0 alt false => page path. digit 3 => page 2.
-	isPage, changed := HandleDigit(0, false, false, 3, builder, 4, units, mask, &d)
-	if !isPage {
-		t.Fatalf("HandleDigit should route to page")
-	}
-	if !changed || DecodePage(builder.Flags) != 2 {
-		t.Fatalf("HandleDigit page not set: flags %08x decode %d changed %v", builder.Flags, DecodePage(builder.Flags), changed)
-	}
-	if d&InterfaceDirtyBit == 0 {
-		t.Fatalf("page switch should set dirty")
-	}
-	// mode 0 alt true => group recall path.
-	builder2 := &SelectUnit{Flags: 0, DefID: 101}
-	units2 := []*SelectUnit{
-		{Flags: 0, Group: 2, DefID: 1},
-		{Flags: 0, Group: 2, DefID: 2},
-	}
-	var d2 uint32
-	isPage, changed = HandleDigit(0, true, false, 2, builder2, 4, units2, mask, &d2)
-	if isPage {
-		t.Fatalf("HandleDigit should route to group")
-	}
-	if !changed || !IsSelected(units2[0].Flags) || !IsSelected(units2[1].Flags) {
-		t.Fatalf("HandleDigit group recall failed")
-	}
-	// Invalid digit no handling.
-	isPage, changed = HandleDigit(0, false, false, 10, builder, 4, units, mask, nil)
-	if isPage || changed {
-		t.Fatalf("invalid digit should not handle")
 	}
 }
 
@@ -471,14 +281,18 @@ func TestPageClampAndEncoding(t *testing.T) {
 	}
 	// Wrap via digit.
 	builder.Flags = 0
-	SetBuildPageForDigit(builder, 9, 10, nil) // digit 9 => page 8 => 8&7=0? Actually ClampPage caps to 7, then Encode wraps? Wait Clamp caps to 7 then Encode page&7 => 7. So digit 9 with large count should be page 8 clamped to 7.
+	SetBuildPage(builder, DigitToPage(9), 10, nil) // digit 9 => page 8 => 8&7=0? Actually ClampPage caps to 7, then Encode wraps? Wait Clamp caps to 7 then Encode page&7 => 7. So digit 9 with large count should be page 8 clamped to 7.
 	if DecodePage(builder.Flags) != 7 {
 		t.Fatalf("digit 9 large count page want 7 got %d", DecodePage(builder.Flags))
 	}
 	// Digit 1 with count 1 => page 0 => paged clear.
 	builder.Flags = PagePagedBit | (3 << 23)
-	SetBuildPageForDigit(builder, 1, 1, nil)
+	SetBuildPage(builder, DigitToPage(1), 1, nil)
 	if IsPaged(builder.Flags) {
 		t.Fatalf("page 0 should clear paged")
 	}
 }
+
+// isSelected is the test's readability form of the membership-bit test that
+// production inlines at its call sites [07 §9] C9.
+func isSelected(flags uint32) bool { return flags&SelectionFlag != 0 }

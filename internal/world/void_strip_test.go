@@ -261,3 +261,23 @@ func TestVoidStripCellsBlockAFootprint(t *testing.T) {
 		t.Fatalf("footprint at (0,2) is blocked; it covers no void cell")
 	}
 }
+
+// PlayInsets is the arithmetic of rule 1 on its own, so the camera clamp and
+// the minimap lens can derive the same extents without a loaded terrain
+// [03 §3.4][P0-17]. The three cases were locked in internal/camera before the
+// helper moved here.
+func TestPlayInsets(t *testing.T) {
+	for _, c := range []struct {
+		cellW, cellH int32
+		wantR, wantB int32
+	}{
+		{40, 30, 608, 352}, // a 640x480-pixel map
+		{64, 48, 992, 640},
+		{64, 64, 992, 896}, // 1024-32, 1024-128
+	} {
+		gotR, gotB := world.PlayInsets(c.cellW, c.cellH)
+		if gotR != c.wantR || gotB != c.wantB {
+			t.Errorf("world.PlayInsets(%d,%d) = %d/%d, want %d/%d", c.cellW, c.cellH, gotR, gotB, c.wantR, c.wantB)
+		}
+	}
+}

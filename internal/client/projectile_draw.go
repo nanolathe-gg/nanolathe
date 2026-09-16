@@ -198,19 +198,7 @@ func (c *Client) drawProjectileBeam(d render.ProjectileDraw, v frame.ProjectileV
 }
 
 func (c *Client) drawProjectileSegments(d render.ProjectileDraw) int {
-	count := 0
-	for i := 1; i < len(d.Segments); i++ {
-		a := d.Segments[i-1]
-		b := d.Segments[i]
-		ax, ay := c.cam.WorldToScreen(a.X, a.Y, a.Z)
-		bx, by := c.cam.WorldToScreen(b.X, b.Y, b.Z)
-		line := drawlist.Line{X0: ax - 128, Y0: ay - 32, X1: bx - 128, Y1: by - 32, Index: c.paletteIndex(indexedColor(d.Color)), Emissive: true}
-		c.setLineHeights(&line, a.Y, b.Y)
-		c.setLineReflection(&line, a, b)
-		c.emitLine(line)
-		count++
-	}
-	return count
+	return c.drawProjectileSegmentTrail(d.Segments, d.Color)
 }
 
 // setLineHeights carries the committed endpoint heights, in recording view-scale
@@ -224,13 +212,21 @@ func (c *Client) setLineHeights(line *drawlist.Line, y0, y1 numeric.Fixed) {
 }
 
 func (c *Client) drawProjectileSegmentsSecond(d render.ProjectileDraw) int {
+	return c.drawProjectileSegmentTrail(d.Segments2, d.Color)
+}
+
+// drawProjectileSegmentTrail draws one polyline of projectile segments, shared
+// by drawProjectileSegments and drawProjectileSegmentsSecond: the two differ
+// only in which segment slice they pass (d.Segments vs d.Segments2), both
+// colored from d.Color.
+func (c *Client) drawProjectileSegmentTrail(segments []render.ProjectilePoint, color int32) int {
 	count := 0
-	for i := 1; i < len(d.Segments2); i++ {
-		a := d.Segments2[i-1]
-		b := d.Segments2[i]
+	for i := 1; i < len(segments); i++ {
+		a := segments[i-1]
+		b := segments[i]
 		ax, ay := c.cam.WorldToScreen(a.X, a.Y, a.Z)
 		bx, by := c.cam.WorldToScreen(b.X, b.Y, b.Z)
-		line := drawlist.Line{X0: ax - 128, Y0: ay - 32, X1: bx - 128, Y1: by - 32, Index: c.paletteIndex(indexedColor(d.Color)), Emissive: true}
+		line := drawlist.Line{X0: ax - 128, Y0: ay - 32, X1: bx - 128, Y1: by - 32, Index: c.paletteIndex(indexedColor(color)), Emissive: true}
 		c.setLineHeights(&line, a.Y, b.Y)
 		c.setLineReflection(&line, a, b)
 		c.emitLine(line)

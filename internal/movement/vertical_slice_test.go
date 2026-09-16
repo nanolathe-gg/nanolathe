@@ -318,16 +318,6 @@ func TestTransportAirHoverNaval(t *testing.T) {
 	if gunship.CanFly && gunship.IsAirBase {
 		t.Fatalf("gunship should not be pad")
 	}
-	// Check CanLoad/CantBeTransported/IsAirBase wiring
-	if !CanLoadForOrders(padDefUnit(trans)) {
-		t.Fatalf("CanLoad helper [04 §10.2]")
-	}
-	if !IsTransportableForOrders(defCargoForTest()) {
-		t.Fatalf("IsTransportable helper")
-	}
-	if !IsAirBaseForOrders(padDefUnit(padDef)) {
-		t.Fatalf("IsAirBase helper")
-	}
 	_ = bomber
 	_ = fighter
 	_ = hoverDef
@@ -346,22 +336,14 @@ func TestTransportAirHoverNaval(t *testing.T) {
 	terWake := syntheticWaterTer(16, 16, 10)
 	surfaceHover := &units.Unit{Def: hoverDef, Y: numeric.Fixed(int64(10) * 65536), X: world.CellToWorld(12), Z: world.CellToWorld(5)}
 	surfaceHover.Move.Mode = 1
-	if !ShouldEmitWake(terWake, surfaceHover, 0) {
-		t.Fatalf("hover at surface draft should emit wake band 2 [04 §9.1]")
+	if got := MediumBand(terWake, surfaceHover, 0); got != 2 {
+		t.Fatalf("hover at surface draft band = %d, want the wake band 2 [04 §9.1]", got)
 	}
 	landHover := &units.Unit{Def: hoverDef, Y: numeric.Fixed(int64(15) * 65536), X: world.CellToWorld(2), Z: world.CellToWorld(2)}
 	landHover.Move.Mode = 1
-	if ShouldEmitWake(terWake, landHover, 0) {
-		t.Fatalf("hover on land should not emit wake")
-	}
 	if got := MediumBand(terWake, landHover, 0); got != 4 {
 		t.Fatalf("hover on land band = %d, want 4 [04 §9.1]", got)
 	}
-}
-
-func padDefUnit(def *content.UnitDef) *units.Unit { return &units.Unit{Def: def} }
-func defCargoForTest() *units.Unit {
-	return &units.Unit{Def: &content.UnitDef{CantBeTransported: false}}
 }
 
 // TestVerticalSlice_TransportLoadMoveUnload validates complete transport slice [04 §10.2] P1-I02 acceptance.
@@ -396,12 +378,6 @@ func TestVerticalSlice_TransportLoadMoveUnload(t *testing.T) {
 	if !res.Allowed {
 		t.Fatalf("admission rejected: %s [04 §10.2]", res.Reason)
 	}
-	// Boarding range check [04 §10.2] should be 16 fallback or weapon range
-	if br := BoardingRange(w.Unit(th)); br != 16 {
-		// Transport unarmed fallback 16; if weapon not set fallback 16
-		// Allow any
-		_ = br
-	}
 	// Attach via cargo helper (simulates load executor phase 4 attach) [04 §10.2]
 	if !AttachCargo(w, th, ch, 0) {
 		t.Fatalf("attach failed")
@@ -409,8 +385,8 @@ func TestVerticalSlice_TransportLoadMoveUnload(t *testing.T) {
 	if w.Unit(ch).Attachment.Carrier != th {
 		t.Fatalf("cargo carrier link not set [04 §10.2]")
 	}
-	if CargoCount(w, th) != 1 {
-		t.Fatalf("cargo count want 1 got %d [04 §10.2]", CargoCount(w, th))
+	if cargoCount(w, th) != 1 {
+		t.Fatalf("cargo count want 1 got %d [04 §10.2]", cargoCount(w, th))
 	}
 	// Transport moves: submit ground/air move via scheduler/route.
 	// For air transport, use SubmitAirMove (direct) [04 §10.1] can-fly bypass.
@@ -474,7 +450,7 @@ func TestVerticalSlice_TransportLoadMoveUnload(t *testing.T) {
 			t.Fatalf("cruise altitude mismatch: got %d want %d [04 §10.1] cap 0x1FF0000", ct.Y, expectedAlt)
 		}
 	}
-	if IsCruiseClamped(ct.Y) && int32(ct.Y.Raw()) > MaxCruiseAltitude {
+	if int32(ct.Y.Raw()) > MaxCruiseAltitude {
 		t.Fatalf("altitude over cap 0x1FF0000 [04 §10.1]")
 	}
 	// Unload validation: site near carrier should be valid (flat, no overlap, footprint clear) [04 §10.2]
@@ -492,7 +468,7 @@ func TestVerticalSlice_TransportLoadMoveUnload(t *testing.T) {
 	if w.Unit(ch).Attachment.Carrier != 0 {
 		t.Fatalf("cargo still attached after unload [04 §10.2] event 13")
 	}
-	if CargoCount(w, th) != 0 {
+	if cargoCount(w, th) != 0 {
 		t.Fatalf("carrier cargo not empty after unload [04 §10.2]")
 	}
 	// Cargo should be at drop site
@@ -520,7 +496,7 @@ func TestVerticalSlice_TransportLoadMoveUnload(t *testing.T) {
 			t.Fatalf("cargo should have taken 30000 cascade damage on carrier death [04 §10.2] cargo death branch")
 		}
 	}
-	if IsCarried(w, ch) {
+	if isCarried(w, ch) {
 		t.Fatalf("cargo should be detached after carrier death [04 §10.2]")
 	}
 }
@@ -660,11 +636,6 @@ func TestVerticalSlice_GunshipTakeoffMoveLand(t *testing.T) {
 	if gun.Health != 100 {
 		t.Fatalf("parking on a pad healed %d points: the mover tick has no healing producer [04 R-AIR-01 §6][05 R-WORK-01 §3]", gun.Health-100)
 	}
-	// Verify boarding range for fighter/bomber still 16 fallback
-	fighter := defForFighter("arm_fig")
-	_ = fighter
-	bomber := defForBomber("arm_phoenix")
-	_ = bomber
 }
 
 // TestProfileMediums validates per-medium passability predicates used by orders [04 §6.1][04 §9.1] for hover/ship/ground via Profile.

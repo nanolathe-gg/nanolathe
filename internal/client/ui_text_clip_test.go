@@ -22,7 +22,7 @@ func TestDrawTextWholeStringAdmission(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			frame := make([]byte, 8*8)
-			drawTextClipped(frame, 8, 8, testFont(), tc.text, tc.x, tc.y, tc.maxWidth, 7, 2, 2, 5, 4, nil)
+			drawTextClipped(frame, 8, 8, testFont(), tc.text, tc.x, tc.y, tc.maxWidth, 7, 2, 2, 5, 4)
 			writes := 0
 			for _, p := range frame {
 				if p != 0 {
@@ -42,7 +42,7 @@ func TestDrawTextWholeStringAdmission(t *testing.T) {
 func TestDrawTextBaselineOverrunBoundsHostStorage(t *testing.T) {
 	f := testFont()
 	frame := make([]byte, 8*4)
-	DrawText(frame, 8, 4, f, "A", 1, 0, 0, 7)
+	drawTextClipped(frame, 8, 4, f, "A", 1, 0, 0, 7, 0, 0, 8, 4)
 	// The top glyph row lies outside storage; the second retains its original
 	// row rather than shifting the glyph down as a whole [03 R-FONT-01 §3][03 R-FONT-01 §4].
 	if frame[1] != 0 || frame[2] != 7 || frame[3] != 7 {

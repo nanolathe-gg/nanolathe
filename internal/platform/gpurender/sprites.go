@@ -210,8 +210,8 @@ func (r *Renderer) Surface(sf drawlist.Surface) {
 	// Dst: sx = dx*srcW/w and sy = dy*srcH/h (size over size, not span over
 	// span). Resizing Dst to the clipped extent would shift the minimap pixels.
 	clipX, clipY, clipW, clipH := r.spriteClip(sf.HasClip, sf.Clip)
-	qx0, qy0 := maxInt(maxInt(x, clipX), 0), maxInt(maxInt(y, clipY), 0)
-	qx1, qy1 := minInt(minInt(x+w, clipX+clipW), r.clipW()), minInt(minInt(y+h, clipY+clipH), r.clipH())
+	qx0, qy0 := max(max(x, clipX), 0), max(max(y, clipY), 0)
+	qx1, qy1 := min(min(x+w, clipX+clipW), r.clipW()), min(min(y+h, clipY+clipH), r.clipH())
 	if qx0 >= qx1 || qy0 >= qy1 {
 		return
 	}
@@ -253,10 +253,10 @@ func (r *Renderer) drawKeyed(f *formats.GAFFrame, x, y, clipX, clipY, clipW, cli
 		return
 	}
 	fw, fh := int(f.Width), int(f.Height)
-	minX, minY := maxInt(clipX, 0), maxInt(clipY, 0)
-	maxX, maxY := minInt(clipX+clipW, r.clipW()), minInt(clipY+clipH, r.clipH())
-	col0, col1 := maxInt(0, minX-x), minInt(fw, maxX-x)
-	row0, row1 := maxInt(0, minY-y), minInt(fh, maxY-y)
+	minX, minY := max(clipX, 0), max(clipY, 0)
+	maxX, maxY := min(clipX+clipW, r.clipW()), min(clipY+clipH, r.clipH())
+	col0, col1 := max(0, minX-x), min(fw, maxX-x)
+	row0, row1 := max(0, minY-y), min(fh, maxY-y)
 	if col0 >= col1 || row0 >= row1 {
 		return
 	}
@@ -281,10 +281,10 @@ func (r *Renderer) drawPCX(p *formats.PCX, x, y, clipX, clipY, clipW, clipH int)
 		return
 	}
 	pw, ph := int(p.Width), int(p.Height)
-	minX, minY := maxInt(clipX, 0), maxInt(clipY, 0)
-	maxX, maxY := minInt(clipX+clipW, r.clipW()), minInt(clipY+clipH, r.clipH())
-	col0, col1 := maxInt(0, minX-x), minInt(pw, maxX-x)
-	row0, row1 := maxInt(0, minY-y), minInt(ph, maxY-y)
+	minX, minY := max(clipX, 0), max(clipY, 0)
+	maxX, maxY := min(clipX+clipW, r.clipW()), min(clipY+clipH, r.clipH())
+	col0, col1 := max(0, minX-x), min(pw, maxX-x)
+	row0, row1 := max(0, minY-y), min(ph, maxY-y)
 	if col0 >= col1 || row0 >= row1 {
 		return
 	}
@@ -311,10 +311,10 @@ func (r *Renderer) drawScaled(f *formats.GAFFrame, srcX, srcY, srcW, srcH, x, y,
 	if !e.ok {
 		return
 	}
-	minX, minY := maxInt(clipX, 0), maxInt(clipY, 0)
-	maxX, maxY := minInt(clipX+clipW, r.clipW()), minInt(clipY+clipH, r.clipH())
-	qx0, qy0 := maxInt(x, minX), maxInt(y, minY)
-	qx1, qy1 := minInt(x+w, maxX), minInt(y+h, maxY)
+	minX, minY := max(clipX, 0), max(clipY, 0)
+	maxX, maxY := min(clipX+clipW, r.clipW()), min(clipY+clipH, r.clipH())
+	qx0, qy0 := max(x, minX), max(y, minY)
+	qx1, qy1 := min(x+w, maxX), min(y+h, maxY)
 	if qx0 >= qx1 || qy0 >= qy1 {
 		return
 	}

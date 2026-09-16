@@ -485,55 +485,6 @@ func TestSettlementGateIsTheEliminationTest(t *testing.T) {
 	}
 }
 
-// TestPacketOverwriteSync locks receipt's no-recheck credit [R-SHARE-01 §4].
-func TestPacketOverwriteSync(t *testing.T) {
-	var svc Service
-	svc.Players[0].Exists = true
-	svc.Players[0].ControllerState = 1
-	svc.Players[0].EndGameCountdown = -1
-	svc.Players[0].Capacity[Metal] = 1000
-	svc.Players[0].Stock[Metal] = 500
-	svc.Players[1].Exists = true
-	svc.Players[1].ControllerState = 3
-	svc.Players[1].OptionKind = 1
-	svc.Players[1].EndGameCountdown = -1
-	svc.Players[1].Capacity[Metal] = 1000
-	svc.Players[1].Stock[Metal] = 500
-	ApplySharePacket(&svc, 2, 100, 0, 1)
-	if svc.Players[0].Stock[Metal] != 500 || svc.Players[1].Mirror[Metal].Production != 100 {
-		t.Fatalf("packet receipt failed stock=%v production=%v", svc.Players[0].Stock[Metal], svc.Players[1].Mirror[Metal].Production)
-	}
-	// Over-cap clamp via packet
-	svc.Players[1].Stock[Metal] = 995
-	svc.Players[1].Capacity[Metal] = 1000
-	ApplySharePacket(&svc, 2, 100, 0, 1)
-	if svc.Players[1].Mirror[Metal].Production != 200 {
-		t.Fatalf("packet should defer capacity clamp, production=%v", svc.Players[1].Mirror[Metal].Production)
-	}
-}
-
-func TestSharePacketSubtypeMapping(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		code int
-		res  Res
-	}{
-		{name: "energy", code: 1, res: Energy},
-		{name: "metal", code: 2, res: Metal},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var svc Service
-			ApplySharePacket(&svc, tc.code, 7, 0, 1)
-			if got := svc.Players[1].Mirror[tc.res].Production; got != 7 {
-				t.Fatalf("subtype %d credited resource %d production %v, want 7", tc.code, tc.res, got)
-			}
-			if got := svc.Players[1].Mirror[1-tc.res].Production; got != 0 {
-				t.Fatalf("subtype %d also credited other resource %v", tc.code, got)
-			}
-		})
-	}
-}
-
 // TestPreGameSpawnOutsideLedger locks setup settlement and direct spawn credit [05 "Authoritative settlement order"].
 func TestPreGameSpawnOutsideLedger(t *testing.T) {
 	var svc Service

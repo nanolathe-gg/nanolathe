@@ -377,19 +377,17 @@ func (c *Client) drawChildModel(v frame.UnitView) {
 	c.drawUnitModel(v, sx-camera.OriginX, sy-camera.OriginY)
 }
 
-// newStagingImage allocates the staging image and copies the carrier's cached
+// stagingImage allocates the staging image and copies the carrier's cached
 // image into it, both planes [R-REN-03A §4].
 //
 // The box is the union in composition raster space, anchored at the carrier.
 // Each stagingTarget carries the child's relative raster displacement: at native
 // scale this is already its screen-anchor offset; magnified classic composition
 // normalizes that offset before the completed union is scaled on the blit.
-func newStagingImage(body *modelTarget, children []stagingChild) *modelTarget {
-	return stagingImage(body, children, newModelImage)
-}
-
-// Recording uses a distinct frame-owned image slot; standalone callers keep
-// independently allocated storage. Both use the same union and composition.
+//
+// Recording passes a frame-owned image slot as allocate; standalone callers pass
+// newModelImage for independently allocated storage. Both use the same union and
+// composition.
 func stagingImage(body *modelTarget, children []stagingChild, allocate func(int, int, int32, int32, int32, int32, bool, int32) *modelTarget) *modelTarget {
 	if body == nil {
 		return nil

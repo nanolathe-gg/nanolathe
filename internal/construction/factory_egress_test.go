@@ -354,7 +354,10 @@ func TestAircraftProductTakesOffAndFreesTheYard(t *testing.T) {
 		t.Fatal("product queue is empty after rally inheritance")
 	}
 
-	wantClimb := movement.CruiseAltitudeForCarrier(terrain, prod.X, prod.Z, prod, true)
+	// The takeoff preamble's own expression for the initial-climb marker: the
+	// 16-bit narrowing of cruisealt halved, resolved against
+	// max(sea level, terrain height) [04 R-AIR-01 §6][04 §10.1].
+	wantClimb := movement.CruiseAltitudeForOffset(terrain, prod.X, prod.Z, int32(movement.HalfCruiseAlt(prod.Def.CruiseAlt)))
 	sawMode2 := false
 	for tick := uint32(61); tick <= 400; tick++ {
 		sys.Scheduler.Tick(tick)

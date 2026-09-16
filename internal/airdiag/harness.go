@@ -44,7 +44,7 @@ func New(root, mapName string, simSeed, crtSeed uint32) (*Harness, error) {
 	cfg.Players[0].Side, cfg.Players[0].Controller = 0, session.SkirmishControllerHuman
 	cfg.Players[1].Side, cfg.Players[1].Controller = 1, session.SkirmishControllerComputer
 	cfg.Players[0].AllyGroup, cfg.Players[1].AllyGroup = 5, 5
-	sess, err := session.NewSkirmishWithFS(fs, cat, cfg)
+	sess, err := session.NewSkirmishWithProgress(fs, cat, cfg, nil)
 	if err != nil {
 		_ = fs.Close()
 		return nil, err

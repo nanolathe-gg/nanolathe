@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // Zoom is the LIVE presentation zoom factor [F-P1-008], in 1/ZoomUnit units —
@@ -89,7 +91,7 @@ func (z Zoom) Project(v int32) int32 {
 // rest factors and the obvious floor in flight (§16.4).
 func (z Zoom) Inverse(v int32) int32 {
 	n := int64(z.Norm())
-	return int32(floorDiv(int64(v)*int64(ZoomUnit), n))
+	return int32(numeric.FloorDiv(int64(v)*int64(ZoomUnit), n))
 }
 
 // Px scales a screen extent or authored offset — a radius, a half-width — and

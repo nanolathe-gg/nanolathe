@@ -45,21 +45,14 @@ func HealQuantum(healTime int32) int32 {
 	return int32(uint16(healTime)) * 8 / 30
 }
 
-// ConstructionStep performs one construction helper step [05 "Construction arithmetic"].
-// Returns newRemaining, healthGain, energyDemand, metalDemand.
-func ConstructionStep(old float32, worker int32, buildTime int32, maxDamage int32, energyCost, metalCost float32) (float32, int32, float32, float32) {
-	return wideConstructionStep(old, worker, buildTime, maxDamage, energyCost, metalCost)
-}
-
-func wideConstructionStep(old float32, worker int32, buildTime int32, maxDamage int32, energyCost, metalCost float32) (float32, int32, float32, float32) {
-	return wideConstructionStepQuantum(old, float32(worker), buildTime, maxDamage, energyCost, metalCost)
-}
-
-// wideConstructionStepQuantum is the same arithmetic with the quantum in its
-// retail type. Every ordinary caller's quantum is an integer converted to
-// float, but the decay wrapper's is not, and its infinities and NaNs have to
-// survive the division and the clamp exactly as x87 leaves them
-// [05 R-WORK-01 §1][05 R-WORK-01 §11].
+// wideConstructionStepQuantum performs one construction helper step
+// [05 "Construction arithmetic"], returning newRemaining, healthGain,
+// energyDemand and metalDemand.
+//
+// The quantum is in its retail type. Every ordinary caller's quantum is an
+// integer converted to float, but the decay wrapper's is not, and its
+// infinities and NaNs have to survive the division and the clamp exactly as
+// x87 leaves them [05 R-WORK-01 §1][05 R-WORK-01 §11].
 func wideConstructionStepQuantum(old float32, quantum float32, buildTime int32, maxDamage int32, energyCost, metalCost float32) (float32, int32, float32, float32) {
 	old80 := float64(old)
 	new80 := old80 - float64(quantum)/float64(buildTime)

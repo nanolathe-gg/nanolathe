@@ -151,7 +151,7 @@ func TestDynamicBlockCommitScenarios(t *testing.T) {
 			FootPrintZ: 1, Mode: 1, CachedAnchor: Cell{0, 0},
 			CachedMode: 1, OldAnchor: Cell{0, 0}, MaxVelocity: 65536,
 		}
-		CommitSweep([]*CollisionState{mover}, grid, occupancyValidator(grid), nil)
+		commitSweep([]*CollisionState{mover}, grid, occupancyValidator(grid), nil)
 		if !mover.Blocked {
 			t.Fatal("proposal into stationary occupant was not blocked")
 		}
@@ -166,7 +166,7 @@ func TestDynamicBlockCommitScenarios(t *testing.T) {
 		}
 		first := dynamicMover(1, Cell{0, 0}, int32(worldUnitsPerCell))
 		second := dynamicMover(2, Cell{2, 0}, -int32(worldUnitsPerCell))
-		CommitSweep([]*CollisionState{second, first}, grid, occupancyValidator(grid), nil)
+		commitSweep([]*CollisionState{second, first}, grid, occupancyValidator(grid), nil)
 		if first.Blocked {
 			t.Fatal("lower-slot first claimant was blocked")
 		}
@@ -184,7 +184,7 @@ func TestDynamicBlockCommitScenarios(t *testing.T) {
 		}
 		first := dynamicMover(1, Cell{0, 0}, int32(worldUnitsPerCell))
 		second := dynamicMover(2, Cell{1, 0}, -int32(worldUnitsPerCell))
-		CommitSweep([]*CollisionState{first, second}, grid, occupancyValidator(grid), nil)
+		commitSweep([]*CollisionState{first, second}, grid, occupancyValidator(grid), nil)
 		if !first.Blocked || !second.Blocked {
 			t.Fatal("head-on swap did not block both proposals")
 		}

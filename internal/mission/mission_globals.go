@@ -11,8 +11,6 @@
 package mission
 
 import (
-	"strings"
-
 	"github.com/nanolathe-gg/nanolathe/formats"
 )
 
@@ -159,36 +157,6 @@ var PlanetRotateKeys = [15]string{
 	"WetDesertRotate", "AcidRotate", "CrystalRotate", "DesertRotate", "UrbanRotate",
 }
 
-// IsAuthoritative reports whether key is authoritative (simulation) [P1-02 §2.1].
-func IsAuthoritative(key string) bool {
-	for _, e := range MissionGlobalCensus {
-		if strings.EqualFold(e.Key, key) && e.Class == GlobalAuthoritative {
-			return true
-		}
-	}
-	return false
-}
-
-// IsPresentation reports whether key is presentation-only [P1-02 §2.1].
-func IsPresentation(key string) bool {
-	for _, e := range MissionGlobalCensus {
-		if strings.EqualFold(e.Key, key) && e.Class == GlobalPresentation {
-			return true
-		}
-	}
-	return false
-}
-
-// IsInert reports whether key is inert (no tick reader) [P1-02 §2.1].
-func IsInert(key string) bool {
-	for _, e := range MissionGlobalCensus {
-		if strings.EqualFold(e.Key, key) && e.Class == GlobalInert {
-			return true
-		}
-	}
-	return false
-}
-
 // MissionGlobals is the decoded authoritative mission-global block for battle
 // setup [P1-02 §2.1]. Presentation/inert fields are retained for menu but not
 // simulation. Field defaults are the accessor defaults of the map-global key
@@ -325,54 +293,4 @@ func DecodeMissionGlobals(global *formats.Section) *MissionGlobals {
 	mg.WinLoseTime = global.IntValue("WinLoseTime", 0)   // i32 0 [08 player records]
 	mg.DisplayTimer = global.IntValue("DisplayTimer", 0) // i32 0 [08 player records]
 	return mg
-}
-
-// PlanetIndex returns the planet-table index for the planet string, matched
-// case-insensitively [P1-02 §2.1], or -1 when unknown → presentation leaves
-// empty but game still loads degraded not fatal [P1-02 §2.2].
-func PlanetIndex(planet string) int {
-	planet = strings.TrimSpace(planet)
-	for i, name := range PlanetNames {
-		if strings.EqualFold(name, planet) {
-			return i
-		}
-	}
-	return -1 // unknown → no pan/rotate fetched, no abort [P1-02 §2.2]
-}
-
-// ResolvePlanetMedia resolves brief/pan/rotate GAF keys for planet enum [P1-02 §2.1]
-// via the planet-table triple. Returns empty when planet unknown (degrade) [P1-02 §2.2].
-func ResolvePlanetMedia(planet string) (briefKey, panKey, rotateKey string, ok bool) {
-	idx := PlanetIndex(planet)
-	if idx < 0 {
-		return "", "", "", false // unknown planet → no GAF, degraded not fatal [P1-02 §2.2]
-	}
-	return PlanetBriefKeys[idx], PlanetPanKeys[idx], PlanetRotateKeys[idx], true
-}
-
-// MediaFatal reports whether missing media for key is fatal [P1-02 §2.2].
-func MediaFatal(key string) FatalKind {
-	lower := strings.ToLower(strings.TrimSpace(key))
-	switch lower {
-	case "tnt", "version", "idversion":
-		return FatalKindFatal // mandatory TNT version 0x2000/0x1020 fatal [P1-02 §2.2][fmt tnt]
-	case "moveinfo", "moveinfo.tdf":
-		return FatalKindFatal // Can't load MOVEINFO.TDF fatal [P1-02 §2.2]
-	case "translate.tdf":
-		return FatalKindNotFatal // empty fallback not fatal byte-exact [P1-02 §2.2][02 §3]
-	case "gamedata.tdf":
-		return FatalKindNotFatal // SC2 not fatal, no file anywhere [P1-02 §2.2][SPEC_CONFLICTS SC2]
-	case "panorama", "brief", "pan", "rotate", "glamour":
-		return FatalKindDegrade // optional media leaves visual absent [P1-02 §2.2] G1 §4
-	case "sound", "soundcategory":
-		return FatalKindDegrade // SC7 diverge muted not fatal [P1-02 §2.2][SPEC_CONFLICTS SC7]
-	default:
-		// Check global census entry
-		for _, e := range MissionGlobalCensus {
-			if strings.EqualFold(e.Key, key) {
-				return e.Fatal
-			}
-		}
-		return FatalKindDegrade
-	}
 }

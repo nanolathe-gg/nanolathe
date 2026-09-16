@@ -172,54 +172,19 @@ func (l *EndLatch) SettlementFrozen() bool {
 	return false
 }
 
-// Registry holds difficulty and flags that persist via HKCU registry
-// via the installed software registry path [P0-05].
-// AllMissions uses bit 0, Games uses bit 1 under the DisplaymodeDepth guard,
-// and Difficulty stores the selected difficulty [P0-05].
-//
-// The registry is *not* where campaign progress lives. The mission index, the
-// 25-byte Thumbs mark array and the difficulty word are three in-memory items;
-// they persist only through a save bank's Summary account, written by the
-// save screen reached from the results panel or from the in-battle options
-// menu [08 R-CAMP-01 §8 "Progress write"]. ContinuationSummary below is that
-// projection; WriteRetailContinuationSave in retail_save.go is the writer.
-// DisplaymodeDepth guard: Games bit1 only when DisplaymodeDepth==0x100 [P0-05].
-type Registry struct {
-	Difficulty         int // 0/1/2 else fail [P0-05]
-	Games              int // bit1 under DisplaymodeDepth==0x100 guard [P0-05]
-	AllMissions        int // bit0 [P0-05]
-	NumSkirmishPlayers int // no-op validation: both branches store raw [P0-05]
-}
-
 // BankProgress holds BetweenMissions and allied persistence via HAPIBANK
 // Summary/BetweenMissions=1 and Players/Alliances/W/L boxes [P0-05][P1-01].
 // BetweenMissions 1 selects campaign continuation while the other route
 // restores battle state [P1-13]; Summary timing is post-battle after latch,
 // before returning to the router [P1-01 §2.4].
 type BankProgress struct {
-	BetweenMissions int // 1 outside live battle [P0-05][P1-01] — Summary/BetweenMissions
-	Alliances       [11]byte
+	BetweenMissions int      // 1 outside live battle [P0-05][P1-01] — Summary/BetweenMissions
 	WL              [10]byte // compatibility view of the first ten marks [P0-05][P1-01 §2.3]
 	// Thumbs is the 25-slot campaign mark array.  The older WL view is kept for
 	// callers that only model the ten-player result table; campaign progression
 	// writes both views at the same one-byte site [08 R-CAMP-01 §8].
 	Thumbs [25]byte // 'U', 'W', or 'L' by campaign mission slot
 }
-
-// TeardownOrder documents the final-tick order per [P1-01 §2.4] and
-// [01 §4.4] via the 12-phase tree with globalTick incremented before phase 1.
-// Order: network→units→projectiles→player/economy/triggers→sharing→features etc
-// [P1-01 §2.4]. Projectile phase captures count at entry; trigger poll sits
-// inside player phase after settlement gate [P1-01 §3]. Latch freezes
-// settlement same tick; network drain still runs at next tick top [P1-01 §3].
-// WinLoseTime and DisplayTimer's UI consumers are closed, not open: the save
-// record's `WinLoseTime` has no reader anywhere in the image beyond the save
-// writer itself (persisted verbatim for compatibility, otherwise inert), and
-// `DisplayTimer` is the HUD resource-rate refresh deadline — a presentation
-// consumer, not a sim phase — advanced on a strict compare one tick ahead of
-// the settlement deadline [08 "Player records"][05 R-ECO-01 §6]. Neither
-// belongs in this teardown order.
-const TeardownOrder = "network→units→projectiles→player/economy/triggers→sharing→features→visibility→wind→cleanup→barrier→cadence"
 
 // ApplyCampaignResult writes the single 'W'/'L' mark at the mission slot.
 // Session's score-teardown path owns this write before the post-battle handler
@@ -298,26 +263,3 @@ func ContinuationSummary(p PostBattleSummary, meta ContinuationSaveMetadata) sav
 		IsBattle:        false,
 	}
 }
-
-// Retry semantics: RETRY path reloads same mission via state 5 directly
-// without rewriting campaign progress beyond current slot, while CONTINUE
-// or RETURN routes via post-battle handler that writes W/L and unlocks next
-// mission before returning to the front-end router [P1-01 §7.5].
-// Persistence location and write timing are closed, not open [08 R-CAMP-01
-// §6–§8]: campaign progress is exactly three in-memory items (the mission
-// index, the 25-byte Thumbs mark array, and the difficulty word); they are
-// never written to the registry (which holds only the difficulty/games/
-// all-missions mirrors), and persist only through the save bank's own
-// Summary account. The single W/L mark is written once per battle, by the
-// score helper, at the battle-teardown end transition — before the results
-// handler is installed. Session.pollMissionTriggers matches that timing: it
-// calls CommitCampaignTeardown when the latch crosses into its ending state,
-// before the post-battle result is reported. Manual battle teardown uses the
-// same mark writer, including an unfinished mission's L [08 R-CAMP-01 §7–8].
-type CampaignTransition int
-
-const (
-	TransitionRetry    CampaignTransition = iota // reload same mission via state 5 directly [P1-01 §7.5]
-	TransitionContinue                           // next mission via post-battle W/L [P1-01 §7.5]
-	TransitionReturn                             // return to front-end [P1-01 §7.5]
-)

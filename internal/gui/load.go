@@ -44,23 +44,21 @@ const fontDirectory = "fonts"
 // [07 R-WGT-01 §5].
 const sliderArtEntry = "SLIDERS"
 
-// Load parses a .gui panel file from VFS and applies the window builder's
-// per-kind arms [02 §6][07 R-WGT-01 §11][07 R-WGT-01 §12].
+// LoadWithTranslation parses a .gui panel file from VFS using the
+// already-selected caption table and applies the window builder's per-kind
+// arms [02 §6][07 R-WGT-01 §11][07 R-WGT-01 §12]. Retail localizes text for
+// kinds 1, 3, 4 and 5 before window build, so accelerators inspect the
+// localized bytes [07 R-WGT-01 §3][§11]; a nil table leaves the authored
+// captions alone.
 //
 // Every record survives: the parser rejects no kind, and the builder's
-// fourteen-entry switch only decides whether build work follows. What Load does
-// is the parse ([COMMON] keys with their documented accessors and defaults, the
-// per-kind key table), the rect sentinels and header clamp, the art resolution
-// order, and the build arms that need no GAF handle. The arms that resolve
-// frames — panel, listbox, text input, button, picture and the kind-4 synthesis
-// of BuildSlider — are finished by the presentation layer, which holds the GAF.
-func Load(fs vfs.FSOps, name string) (*Window, error) {
-	return LoadWithTranslation(fs, name, nil)
-}
-
-// LoadWithTranslation parses a .GUI panel using the already-selected caption
-// table. Retail localizes text for kinds 1, 3, 4 and 5 before window build,
-// so accelerators inspect the localized bytes [07 R-WGT-01 §3][§11].
+// fourteen-entry switch only decides whether build work follows. What this
+// does is the parse ([COMMON] keys with their documented accessors and
+// defaults, the per-kind key table), the rect sentinels and header clamp, the
+// art resolution order, and the build arms that need no GAF handle. The arms
+// that resolve frames — panel, listbox, text input, button, picture and the
+// kind-4 synthesis of BuildSlider — are finished by the presentation layer,
+// which holds the GAF.
 func LoadWithTranslation(fs vfs.FSOps, name string, captions CaptionTranslator) (*Window, error) {
 	if fs == nil {
 		return nil, fmt.Errorf("gui: nil VFS")

@@ -449,7 +449,6 @@ var mapRangeExceptions = map[string]string{
 	"internal/features/debug_capture.go *Service.DebugSnapshot 0de7ab9b2ba8a95d0ba037338b670b09c17a342ce8e777aad0040ba750b1ddb8":   "host-only read gathers private keys and sorts them before copying feature values; it does not refresh the live key cache or change feature state",
 	"internal/cob/binding.go BindStrict 86205b5f7e2c831877392e584559b68dedd881a5fa3fae0d7563637ac5276a20":                          "installs distinct handlers by port key; it does not invoke them",
 	"internal/cob/binding.go BindStrict 4a375074326b6563496b3c5ce6f1f0f10af85196815ffe7d2b50a5eb84ba217c":                          "installs distinct bindings by port key; it does not invoke them",
-	"internal/units/cob_binding.go unitPortHandlers 6f9be44a1a39cdd937708274fffb8e5d4542be70b6a94e0a4562db9d462860b8":              "constructs independent port closures before the VM dispatches any callback",
 	"internal/units/cob_binding.go bindUnitPortHandlers a4d09a5b9e3de58069318e1f534101f632a5819ec42cc2a8410811523b9fdb89":          "installs bindings only; no handler is run during this map walk",
 	"internal/units/cob_binding.go bindCOBWithPortsAndVisibility 8cdbf0ee30106974865028c642794614f67004c7467ebdd5035d1da25e593c4f": "installs bindings only; no handler is run during this map walk",
 	"internal/features/service.go *Service.sortedInstanceKeys 0de7ab9b2ba8a95d0ba037338b670b09c17a342ce8e777aad0040ba750b1ddb8":    "gathers keys and sorts them before every consumer sees the slice",
@@ -511,7 +510,6 @@ var mapFunctionHashes = map[string]string{
 	"internal/session/mission.go pruneRestrictedBuildMenus":       "83d3b5133ab38d04122d1387192dfc78679578f581c1a7abc6719332765b642e",
 	"internal/units/cob_binding.go bindUnitPortHandlers":          "31dfa18e2683e5bec165669f55e4f5dad260588513831504622f3b1596ba5548",
 	"internal/units/cob_binding.go bindCOBWithPortsAndVisibility": "68a25d9937cf032996d5feb8d96ce60224e51e9aa8e1bc13808fd2eff2ecfe75",
-	"internal/units/cob_binding.go unitPortHandlers":              "ed1da08f150ac374a3080d3174206b3b216154ae932e1730d048cc99582d77e1",
 }
 
 func checkAuthoritativeTypedMapRanges(t *testing.T) {
@@ -606,8 +604,8 @@ var float64FieldAllowances = map[string]string{
 // names the precise retail operation that needs binary64; all other float64
 // occurrences still use the shrink-only per-file baseline.
 var float64ScopeAllowances = map[string]float64Allowance{
-	"internal/model/model.go func ComposeInto": {3, "I2 per-axis model rotation trigonometry [03 §2.4]"},
-	"internal/model/model.go func applyChain":  {6, "I2 model vertex working precision; round after each axis then narrow geometry [03 §2.4]"},
+	"internal/model/model.go func *xformNode.evaluateRotation": {3, "I2 per-axis model rotation trigonometry [03 §2.4]"},
+	"internal/model/model.go func applyChain":                  {6, "I2 model vertex working precision; round after each axis then narrow geometry [03 §2.4]"},
 
 	"internal/combat/meteor.go func MeteorDelay":               {2, "I2 meteor source float32, working quotient and signed64/low32 conversion [06 §6.5][01 R-DET-01 §1]"},
 	"internal/combat/meteor.go func MeteorDurationTicks":       {2, "I2 meteor source float32, working product and signed64/low32 conversion [06 §6.5][01 R-DET-01 §1]"},
@@ -626,7 +624,6 @@ var float64ScopeAllowances = map[string]float64Allowance{
 	"internal/economy/ledger.go func *Player.commitCapacityWaste":     {2, "I2 waste counter [05 \"Stocks, counters, and waste\"]"},
 	"internal/economy/ledger.go func ImmediateDebit":                  {8, "I2 economy working precision [05 R-ECO-01 §1]"},
 	"internal/economy/ledger.go func *Service.transfer":               {5, "I2 economy working precision [05 R-ECO-01 §1]"},
-	"internal/economy/ledger.go func CreditConstructionTermination":   {8, "I2 economy construction termination accounting [05 R-ECO-01 §11]"},
 	"internal/economy/maker.go func addContribution":                  {7, "I2 production contributions and discounts [05 R-ECO-01 §1][05 R-ECO-01 §3]"},
 	"internal/economy/maker.go func *Service.PerUnitProductionFills":  {9, "I2 production contributions [05 R-ECO-01 §1][05 R-ECO-01 §3]"},
 	"internal/economy/maker.go func creditReclaimedMaterial":          {6, "I2 reclaimed-material accounting [05 R-ECO-01 §1]"},

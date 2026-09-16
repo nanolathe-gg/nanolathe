@@ -467,7 +467,7 @@ type Model struct {
 }
 
 // Fog records the already-clipped fog op list the client built with
-// render.BuildFogOpsWindowInto (docs/DESIGN_GPU_RENDERER.md §2.1). Carrying
+// render.BuildFogOpsWindowWithArtInto (docs/DESIGN_GPU_RENDERER.md §2.1). Carrying
 // render.FogOp directly introduces no import cycle: internal/render does not
 // import internal/drawlist [03 §3.3].
 type Fog struct {

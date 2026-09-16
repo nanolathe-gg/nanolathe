@@ -37,16 +37,16 @@ func TestGroundMoveRadiusFollowsArgumentWord(t *testing.T) {
 	// Ordinary interface point moves leave the parameter 0, which is the
 	// familiar radius 4 and handle threshold floor(4/16)² = 0 — arrival on the
 	// exact goal cell only.
-	if got := goalRadiusParamFor(def, nodeNamed(t, "Move_Ground", 0)); got != 4 || ThresholdSqFromRadius(got) != 0 {
-		t.Fatalf("argument 0 = radius %d threshold %d, want 4 and 0 [04 R-ORD-01 §4][R-P0-01]", got, ThresholdSqFromRadius(got))
+	if got := goalRadiusParamFor(def, nodeNamed(t, "Move_Ground", 0)); got != 4 || thresholdSqFromRadius(got) != 0 {
+		t.Fatalf("argument 0 = radius %d threshold %d, want 4 and 0 [04 R-ORD-01 §4][R-P0-01]", got, thresholdSqFromRadius(got))
 	}
 	// A wave gather forwards 160, so its arrival radius is strictly wider than
 	// a plain move's and its threshold is no longer the exact goal cell.
 	gather := goalRadiusParamFor(def, nodeNamed(t, "Move_Ground", 160))
 	plain := goalRadiusParamFor(def, nodeNamed(t, "Move_Ground", 0))
-	if gather != 164 || gather <= plain || ThresholdSqFromRadius(gather) <= ThresholdSqFromRadius(plain) {
+	if gather != 164 || gather <= plain || thresholdSqFromRadius(gather) <= thresholdSqFromRadius(plain) {
 		t.Fatalf("gather radius %d (threshold %d) must exceed plain radius %d (threshold %d) [08 R-AI-01 §19][04 R-ORD-01 §4]",
-			gather, ThresholdSqFromRadius(gather), plain, ThresholdSqFromRadius(plain))
+			gather, thresholdSqFromRadius(gather), plain, thresholdSqFromRadius(plain))
 	}
 
 	// The high half participates in both the value and its sign. Bit 15
@@ -111,7 +111,7 @@ func TestPatrolFamilyGoalRadiiBySubstate(t *testing.T) {
 			if got != tc.radius {
 				t.Fatalf("%s radius (argument %d) = %d, want %d [04 R-ORD-01 §4]", tc.name, arg, got, tc.radius)
 			}
-			if th := ThresholdSqFromRadius(got); th != tc.threshold {
+			if th := thresholdSqFromRadius(got); th != tc.threshold {
 				t.Fatalf("%s threshold = %d, want floor(%d/16)² = %d [R-P0-01 corrected]",
 					tc.name, th, tc.radius, tc.threshold)
 			}
@@ -122,9 +122,9 @@ func TestPatrolFamilyGoalRadiiBySubstate(t *testing.T) {
 	// behavioural content of the correction.
 	patrol := goalRadiusParamFor(def, nodeNamed(t, "Patrol", 0))
 	repair := goalRadiusParamFor(def, nodeNamed(t, "RepairPatrol", 0))
-	if !(ThresholdSqFromRadius(repair) > ThresholdSqFromRadius(patrol)) {
+	if !(thresholdSqFromRadius(repair) > thresholdSqFromRadius(patrol)) {
 		t.Fatalf("RepairPatrol threshold %d must exceed Patrol's %d [04 R-ORD-01 §4]",
-			ThresholdSqFromRadius(repair), ThresholdSqFromRadius(patrol))
+			thresholdSqFromRadius(repair), thresholdSqFromRadius(patrol))
 	}
 
 	// The accessor is the single statement of both values, and it claims only

@@ -11,6 +11,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 	"github.com/nanolathe-gg/nanolathe/internal/testsupport"
+	"github.com/nanolathe-gg/nanolathe/internal/testsupport/retailcat"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 	"github.com/nanolathe-gg/nanolathe/vfs"
@@ -258,12 +259,9 @@ func TestModernInstalledFactoryExitYield(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := content.PreflightSkirmish(fs, cat, "Ashap Plateau", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	factoryDef, _ := cat.Unit(manifest.KbotLab)
-	product, _ := cat.Unit(manifest.LabProduct)
+	chain := retailcat.SelectOpeningChain(t, cat, 0)
+	factoryDef, _ := cat.Unit(chain.KbotLab)
+	product, _ := cat.Unit(chain.LabProduct)
 	svc, factory, u, node := yieldFixtureCatalog(t, cat, factoryDef, product)
 	// The installed definitions retain authored footprints and movement. This
 	// fixture supplies a deterministic center build piece and open stance.
@@ -278,7 +276,7 @@ func TestModernInstalledFactoryExitYield(t *testing.T) {
 		advanceFactoryEgressTick(t, svc, svc.World, svc.Movement, pump, &ctx, tick, func(pool.Handle) { completed = true })
 	}
 	if !completed {
-		t.Fatalf("installed factory did not resume: %s/%s, node=%+v, blocker=(%d,%d)", manifest.KbotLab, manifest.LabProduct, node, numeric.Fixed(u.X), numeric.Fixed(u.Z))
+		t.Fatalf("installed factory did not resume: %s/%s, node=%+v, blocker=(%d,%d)", chain.KbotLab, chain.LabProduct, node, numeric.Fixed(u.X), numeric.Fixed(u.Z))
 	}
 }
 

@@ -142,3 +142,49 @@ func (s *scheduler) restampPointForTest(x, y int, phase int32) {
 		s.cellPoint[at] = phase
 	}
 }
+
+// placePoint is place for one pixel of a lit point batch: an earlier point
+// conflicts only when it wrote this very pixel, while a rectangle command is
+// tested exactly, as a one-pixel rectangle. It also records the point: both
+// halves read the same cell, so they share one cell lookup.
+//
+// The answer is exactly what place plus the point pixel table gave: the cell's
+// floor, the largest contribution of an owner whose rectangle contains the
+// pixel, and one phase past any earlier point of the segment at that pixel.
+//
+// The executor does not call it — a batch is placed run by run through
+// placePointSpan — so it lives here, as the per-pixel DEFINITION the span form
+// is checked against pixel by pixel below.
+func (s *scheduler) placePoint(x, y int) int32 {
+	cx, cy, _, _, ok := s.cellRange(x, y, x+1, y+1)
+	if !ok {
+		return 0
+	}
+	at := cy*s.cols + cx
+	if at != s.ptCellAt {
+		s.loadPointCell(at)
+	}
+	phase := s.ptFloor
+	for k := 0; k < s.ptOwnerN; k++ {
+		own := &s.ptOwners[k]
+		if !own.overlaps(x, y, x+1, y+1) {
+			continue
+		}
+		if c := own.contributionTo(schedStreamRow); c > phase {
+			phase = c
+		}
+	}
+	pixel := at<<schedPointCellShift | (y&schedCellMask)<<schedGridShift | x&schedCellMask
+	if v := s.pointPhase[pixel]; uint32(v>>32) == s.serial {
+		if prev := int32(uint32(v)); prev+1 > phase {
+			phase = prev + 1
+		}
+	}
+	// The point's own record: its cell keeps the largest point phase it has seen,
+	// for the rectangle commands that follow it, and its pixel the exact phase.
+	if phase > s.cellPoint[at] {
+		s.cellPoint[at] = phase
+	}
+	s.pointPhase[pixel] = uint64(s.serial)<<32 | uint64(uint32(phase))
+	return phase
+}

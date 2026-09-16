@@ -6,6 +6,8 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	presentationrender "github.com/nanolathe-gg/nanolathe/internal/render"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
 )
 
 // Contract locked here: every client path that turns a composed model-space
@@ -25,16 +27,17 @@ import (
 //   - the outline projecting the composed vertices through the camera's
 //     world-space helper, which both mirrored the wireframe and folded the
 //     unit's own height into the model's half-height shear;
-//   - the selection plate passing composed vertices to
-//     render.ModelProjectToScreen, the world-point projection, which mirrored
-//     every plate against the body it belongs to.
+//   - the world-object projection passing composed vertices to the world-point
+//     projection, which mirrored every projected object against the body it
+//     belongs to.
 //
-// The plate takes the world-object form of [R-WATER-01 §1] item 3 rather than
-// the composition image's anchor-plus-local form, and [R-RAST-01 §2] requires
-// those two to stay separate: floor(a) + floor(b) is floor(a+b) or one less, so
-// the same vertex can land a pixel apart under the two. The cross-site
-// assertion below is therefore "agrees to within one pixel", which is still
-// decisive against a mirror — that moves a vertex by twice its model Z.
+// Client.worldObjectScreen takes the world-object form of [R-WATER-01 §1]
+// item 3 rather than the composition image's anchor-plus-local form, and
+// [R-RAST-01 §2] requires those two to stay separate: floor(a) + floor(b) is
+// floor(a+b) or one less, so the same vertex can land a pixel apart under the
+// two. The cross-site assertion below is therefore "agrees to within one
+// pixel", which is still decisive against a mirror — that moves a vertex by
+// twice its model Z.
 
 // orientationHeadings covers the four cardinal facings. A Z mirror is invisible
 // on a model that is symmetric about its origin, so the test model below is
@@ -75,7 +78,8 @@ func orientationClient() *Client {
 func orientationDraw(heading uint16) *presentationrender.UnitDraw {
 	m := orientationModel()
 	worldPos := [3]numeric.Fixed{orientationFixed(30), orientationFixed(12), orientationFixed(30)}
-	draw := presentationrender.BuildUnitDrawSimple(m.compiled, nil, heading, 0, 0, worldPos)
+	draw := presentationrender.BuildUnitDrawInto(m.compiled, nil, heading, 0, 0,
+		frame.UnitView{X: worldPos[0], Y: worldPos[1], Z: worldPos[2]}, nil, &presentationrender.DrawScratch{})
 	draw.GroundY = orientationFixed(4)
 	return draw
 }
@@ -280,35 +284,39 @@ func TestNanoframeOutlineIsKeyTested(t *testing.T) {
 	}
 }
 
-// TestSelectionPlateProjectionAgreesWithTheBody locks the fourth projection
-// site to the other three. The selection plate projects composed model vertices
-// through render.ModelVertexToScreen, the world-object form of
-// [R-WATER-01 §1] item 3; measured against the unit's own projected position it
-// must reproduce the body composition's model-relative offset, up to the
+// TestWorldObjectProjectionAgreesWithTheBody locks Client.worldObjectScreen,
+// the projection the drawn selection quad places its four corners with, to the
+// body composition. It projects model-relative offsets in the world-object form
+// of [R-WATER-01 §1] item 3; measured against the unit's own projected position
+// it must reproduce the body composition's model-relative offset, up to the
 // one-pixel sum-before-floor difference [R-RAST-01 §2] names.
 //
-// Dropping the handedness flip at that site moves a vertex by twice its model
-// Z, which this catches at every heading.
-func TestSelectionPlateProjectionAgreesWithTheBody(t *testing.T) {
+// Dropping the handedness flip at that site moves a corner by twice its model
+// Z, which this catches at every heading — TestSelectionQuadProjectsRootBounds
+// pins the unrotated case only.
+func TestWorldObjectProjectionAgreesWithTheBody(t *testing.T) {
 	c := orientationClient()
 	for _, heading := range orientationHeadings {
 		draw := orientationDraw(heading)
-		// The plate's own frame is anchored on the unit's true world position.
-		plateAnchorX, plateAnchorY := presentationrender.ModelProjectToScreen(c.cam, draw.WorldPos)
+		// The world-object frame is anchored on the unit's true world position.
+		objectAnchorX, objectAnchorY := c.modelAnchor(draw)
 		spread := int32(0)
 		for pi := range draw.Pieces {
 			for _, v := range draw.Pieces[pi].WorldVertices {
 				lx, ly, _ := modelLocalVertex(v, draw.WorldPos)
-				px, py := presentationrender.ModelVertexToScreen(c.cam, draw.WorldPos, v)
-				if d := absInt32(px - plateAnchorX - lx); d > 1 {
-					t.Fatalf("heading %d: plate X offset %d, body offset %d, differ by %d",
-						heading, px-plateAnchorX, lx, d)
+				rel := [3]numeric.Fixed{
+					v[0].Sub(draw.WorldPos[0]), v[1].Sub(draw.WorldPos[1]), v[2].Sub(draw.WorldPos[2]),
 				}
-				if d := absInt32(py - plateAnchorY - ly); d > 1 {
-					t.Fatalf("heading %d: plate Y offset %d, body offset %d, differ by %d",
-						heading, py-plateAnchorY, ly, d)
+				px, py := c.worldObjectScreen(draw.WorldPos, rel)
+				if d := numeric.Abs(px - objectAnchorX - lx); d > 1 {
+					t.Fatalf("heading %d: object X offset %d, body offset %d, differ by %d",
+						heading, px-objectAnchorX, lx, d)
 				}
-				if a := absInt32(ly); a > spread {
+				if d := numeric.Abs(py - objectAnchorY - ly); d > 1 {
+					t.Fatalf("heading %d: object Y offset %d, body offset %d, differ by %d",
+						heading, py-objectAnchorY, ly, d)
+				}
+				if a := numeric.Abs(ly); a > spread {
 					spread = a
 				}
 			}
@@ -318,11 +326,4 @@ func TestSelectionPlateProjectionAgreesWithTheBody(t *testing.T) {
 			t.Fatalf("heading %d: every vertex projects within a pixel of the anchor row, so a mirror would not show", heading)
 		}
 	}
-}
-
-func absInt32(v int32) int32 {
-	if v < 0 {
-		return -v
-	}
-	return v
 }

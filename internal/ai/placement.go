@@ -80,35 +80,6 @@ func placementWorldCoordinate(outputCell, footprint int32) numeric.Fixed {
 	return numeric.Fixed(word << 19)
 }
 
-// stepTowardCenter is the two-axis fixture adapter for the three-axis root.
-// Production passes the builder and strategic-center Y through
-// retailPlacementOrigin [08 R-AI-03 §2].
-func stepTowardCenter(originX, originZ, centerX, centerZ, radius numeric.Fixed) (numeric.Fixed, numeric.Fixed) {
-	p := retailPlacementOrigin(
-		retailPlacementPoint{x: originX, z: originZ},
-		retailPlacementPoint{x: centerX, z: centerZ},
-		int32(radius.Int()),
-	)
-	return p.x, p.z
-}
-
-func placementMetalScore(terrain *world.Terrain, rect world.FootprintRect) (int64, error) {
-	if terrain == nil {
-		return 0, fmt.Errorf("ai: terrain unavailable")
-	}
-	var score int64
-	for z := rect.MinZ(); z < rect.MaxZ(); z++ {
-		for x := rect.MinX(); x < rect.MaxX(); x++ {
-			cell := terrain.PlotAt(x, z)
-			if cell == nil {
-				return 0, fmt.Errorf("ai: terrain cell %d,%d unavailable", x, z)
-			}
-			score += int64(cell.Metal())
-		}
-	}
-	return score, nil
-}
-
 // queueExactResult queues the exact validated site through the ordinary mobile build producer [P0-07][RS-11].
 // It is the only path that mutates the order queue; no privileged write occurs.
 func queueExactResult(m *Manager, defKey string, res PlacementResult) error {
@@ -137,45 +108,11 @@ func queueExactResult(m *Manager, defKey string, res PlacementResult) error {
 	return nil
 }
 
-// PlaceWithResult is the exact, typed placement entry [RS-11][P0-03].
-// It returns a PlacementResult containing the exact world/cell site, footprint,
-// score and helper path, and queues exactly that site via the ordinary
-// construction queue. The origin movement and radius growth follow the fixed-
-// point 16.16 interpolation and 160-world-unit growth [08 R-AI-03 §2].
-//
-// The validator's mode argument is the caller's movement mode, not a placement
-// policy, and its off-map acceptance is the mode-2 (active locomotion) branch.
-// No computer-player path can observe it: the scatter helper, the mobile-build
-// site check, the skirmish spawn scan and the remaining order-handler site
-// checks all pass the literal 1, and only the mover commit step can pass 2
-// [08 R-AI-03 §7.2]. Nothing here needs a mode-2 arm.
-func PlaceWithResult(m *Manager, defKey string, w *world.Terrain) PlacementResult {
-	res := PlaceCandidate(m, defKey, w)
-	if !res.Valid {
-		return res
-	}
-	// The submitted request carries X and Z only. Retail's construction task
-	// submits a stack-residue Y that nothing reads: the order node stores the
-	// triple verbatim, the MobileBuild handler copies Y into a local it never
-	// uses, and immediately before the nanoframe is created it rewrites
-	// `y := siteHeight(def, cell) << 16` from the same height-under-footprint
-	// query the blocker's tail computes [08 R-AI-03 §7.3]. Our handler already
-	// derives the height that way (internal/construction/factory.go's mobile
-	// build step takes result.SiteHeight), so there is no residue to carry.
-	if err := queueExactResult(m, defKey, res); err != nil {
-		res.Valid = false
-		res.Reason = ReasonQueueFailed
-		res.Proof = err
-	}
-	return res
-}
-
 // PlaceCandidate is the placement root's search half: it moves the origin,
 // selects and runs a helper, and returns the validated site without
 // submitting anything. The root itself never issues the build order — the
 // construction task applies its distance cap to the returned site and submits
-// afterwards [08 R-AI-03 §5][08 R-AI-01 §3]. PlaceWithResult keeps the
-// combined search-and-submit shape for callers that do not apply a cap.
+// afterwards [08 R-AI-03 §5][08 R-AI-01 §3].
 func PlaceCandidate(m *Manager, defKey string, w *world.Terrain) PlacementResult {
 	if m == nil {
 		return placementFailure(HelperNone, ReasonNilManager, "nil manager")

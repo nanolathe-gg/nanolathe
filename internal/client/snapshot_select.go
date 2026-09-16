@@ -164,7 +164,7 @@ func SnapshotUnitHandlesInRect(f *frame.Frame, cam *camera.Camera, rect Rect, vi
 		if v.Slot == 0 || !SnapshotVisible(f, v, viewer) {
 			continue
 		}
-		p := NewViewportTransform(cam, nil, 0, 0).WorldToSurface(v.X, v.Y, v.Z)
+		p := NewViewportTransform(cam, 0, 0).WorldToSurface(v.X, v.Y, v.Z)
 		if rect.Contains(p.X, p.Y) {
 			out = append(out, v.Slot)
 		}

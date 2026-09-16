@@ -21,7 +21,7 @@ import (
 // the classic/modern comparison of the M1-M8 capture matrix.
 
 // fogOpAt builds one recorded fog op for grid cell (gx,gy) at camera (camX,camZ),
-// exactly as render.BuildFogOpsWindowInto's producer places it, so the tests
+// exactly as render.BuildFogOpsWindowWithArtInto's producer places it, so the tests
 // exercise the real screen arithmetic rather than a restatement of it.
 func fogOpAt(gx, gy, camX, camZ int32, kind render.FogKind) render.FogOp {
 	return fogOpAtScale(gx, gy, camX, camZ, camera.ViewScaleNative, kind)
@@ -322,8 +322,8 @@ func TestFogAtlasFitsRetail(t *testing.T) {
 						name, i, ref.Frame.Width, ref.Frame.Height, ox, oy, fogAtlasNativeTile)
 				}
 				frames++
-				maxX = maxInt(maxX, ox+int(ref.Frame.Width))
-				maxY = maxInt(maxY, oy+int(ref.Frame.Height))
+				maxX = max(maxX, ox+int(ref.Frame.Width))
+				maxY = max(maxY, oy+int(ref.Frame.Height))
 			}
 		}
 	}

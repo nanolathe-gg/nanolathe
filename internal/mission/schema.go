@@ -51,34 +51,6 @@ func SelectSchemaForType(o *formats.OTA, typ Type, difficulty, players int) (Sch
 	return SelectNetworkSchema(o, players)
 }
 
-// SelectSchema selects a schema without a mission type, inferring the mode
-// from which schema families the OTA carries.
-//
-// This is a diagnostic convenience for tools that hold an OTA and no session:
-// the load path calls SelectSchemaForType, because the mode is what retail
-// dispatches on. Prefer SelectSchemaForType wherever the type is known.
-func SelectSchema(o *formats.OTA, difficulty, players int) (Schema, error) {
-	if o == nil || o.Global == nil {
-		return Schema{}, ErrNoGlobalHeader
-	}
-	hasCampaign, hasNetwork := detectKinds(o)
-	switch {
-	case hasCampaign && !hasNetwork:
-		return SelectCampaignSchema(o, difficulty)
-	case hasNetwork && !hasCampaign:
-		return SelectNetworkSchema(o, players)
-	case hasCampaign && hasNetwork:
-		if difficulty >= 0 && difficulty <= 2 {
-			if s, err := SelectCampaignSchema(o, difficulty); err == nil {
-				return s, nil
-			}
-		}
-		return SelectNetworkSchema(o, players)
-	default:
-		return Schema{}, ErrNoSuitableSchema
-	}
-}
-
 // SelectCampaignSchema selects a campaign schema by difficulty [08 "Schema choice"].
 // Difficulty 0 tries Easy,Medium,Hard; 1 tries Medium,Easy,Hard; 2 tries Hard,Medium,Easy.
 // Comparison of Type is case-insensitive [08 "Schema choice"].
@@ -206,20 +178,6 @@ func (m *Mission) StartingResources() StartingResources {
 		ComputerMetal:  read("ComputerMetal"),
 		ComputerEnergy: read("ComputerEnergy"),
 	}
-}
-
-func detectKinds(o *formats.OTA) (hasCampaign, hasNetwork bool) {
-	for _, s := range o.Schemas {
-		if formats.NetworkSchemaRank(s.Type) != 0 {
-			hasNetwork = true
-		}
-		t := strings.ToLower(s.Type)
-		switch t {
-		case "easy", "medium", "hard":
-			hasCampaign = true
-		}
-	}
-	return
 }
 
 func countStartPositions(sec *formats.Section) int {

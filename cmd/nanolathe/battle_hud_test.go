@@ -8,10 +8,28 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
+	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/palette"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
+
+// hudConsumeClick is the tests' plain left-click form of the production
+// consumeClickWithModifiers pass, reading Shift from the committed battle
+// state the way the input dispatcher does.
+// It applies the retail order-button latch parser and data-driven build
+// product binding to a visible authored side-panel button [R-P0-03][07 §9].
+// Build products are validated against cat.BuildMenus (no invention) and
+// dispatched via injected callbacks: mobile builders arm placement (definition
+// retained, cursorfindsite [07 §8] 0xE), factories queue immediately [F-P1-008].
+// Order buttons are bound via ParseButtonLatch and handleHudOrderButton which
+// routes through the injected command dispatch [R-P0-03]. Any HUD gadget hit
+// is consumed to prevent leak into world drag [07 §3][F-P0-003]. Page next/prev
+// are data-driven with count guard [R-P0-03][07 §9] C10.
+func hudConsumeClick(h *retailBattleHUD, b *battleSession, x, y int32) bool {
+	shift := b != nil && b.battleState() != nil && b.battleState().Input.ShiftHeld
+	return h.consumeClickWithModifiers(b, x, y, input.Modifiers{Shift: shift})
+}
 
 // TestEmptySelectionClosesCommandWindows locks [07 §6] "Command-window switch
 // is closed": while the selected-unit count is zero the switch closes the
@@ -92,7 +110,7 @@ func TestQueueCountLabelPenBuildVariant(t *testing.T) {
 	// gx=10, gy=20, w=40, h=30 -> right=49, bottom=49. metric=11, tw=8.
 	gad := gui.Gadget{Attribs: 0x20}
 	r := gui.Rect{X: 10, Y: 20, W: 40, H: 30}
-	x, y := queueCountLabelPen(gad, r, 8, 11)
+	x, y, _, _ := retailButtonCaptionPen(gad, r, 8, 11)
 	wantX := 10 + (49-8-10)/2 + 0 + 1 // centred formula, s=0
 	wantY := 49 - 4 - 11 + 0          // bottom - 4 - metric + s
 	if x != wantX || y != wantY {
@@ -105,7 +123,7 @@ func TestQueueCountLabelPenBuildVariant(t *testing.T) {
 	}
 
 	gad.Stages = 1
-	x2, y2 := queueCountLabelPen(gad, r, 8, 11)
+	x2, y2, _, _ := retailButtonCaptionPen(gad, r, 8, 11)
 	if x2 != wantX+1 || y2 != wantY+1 {
 		t.Fatalf("staged build-variant pen = (%d,%d), want (%d,%d)", x2, y2, wantX+1, wantY+1)
 	}
@@ -118,14 +136,14 @@ func TestQueueCountLabelPenLeftRightCentre(t *testing.T) {
 	r := gui.Rect{X: 10, Y: 20, W: 40, H: 30}
 	wantY := r.Y + (r.H-1-11)/2
 
-	if x, y := queueCountLabelPen(gui.Gadget{Attribs: 1}, r, 8, 11); x != int(r.X)+3 || y != int(wantY) {
+	if x, y, _, _ := retailButtonCaptionPen(gui.Gadget{Attribs: 1}, r, 8, 11); x != int(r.X)+3 || y != int(wantY) {
 		t.Fatalf("left pen = (%d,%d), want (%d,%d)", x, y, int(r.X)+3, wantY)
 	}
-	if x, y := queueCountLabelPen(gui.Gadget{Attribs: 4}, r, 8, 11); x != int(r.X+r.W-1)-3-8 || y != int(wantY) {
+	if x, y, _, _ := retailButtonCaptionPen(gui.Gadget{Attribs: 4}, r, 8, 11); x != int(r.X+r.W-1)-3-8 || y != int(wantY) {
 		t.Fatalf("right pen = (%d,%d), want (%d,%d)", x, y, int(r.X+r.W-1)-3-8, wantY)
 	}
 	wantCentreX := int(r.X) + (int(r.X+r.W-1)-8-int(r.X))/2 + 1
-	if x, y := queueCountLabelPen(gui.Gadget{Attribs: 2}, r, 8, 11); x != wantCentreX || y != int(wantY) {
+	if x, y, _, _ := retailButtonCaptionPen(gui.Gadget{Attribs: 2}, r, 8, 11); x != wantCentreX || y != int(wantY) {
 		t.Fatalf("centre pen = (%d,%d), want (%d,%d)", x, y, wantCentreX, wantY)
 	}
 }
@@ -255,7 +273,8 @@ type productCaptionStage struct {
 }
 
 func (s productCaptionStage) DrawUI(c *client.Client, _ client.UIFrame) {
-	s.hud.drawProductButtonCaption(c, s.gad, s.rect, s.text)
+	w, height := c.Size()
+	s.hud.drawProductButtonCaptionSelected(c, s.gad, s.rect, gui.Rect{W: int32(w), H: int32(height)}, s.text, nil)
 }
 
 // TestProductButtonCaptionDrawsThroughGAFPen locks the family the side page's
@@ -279,18 +298,18 @@ func TestProductButtonCaptionDrawsThroughGAFPen(t *testing.T) {
 	r := gui.Rect{X: 8, Y: 12, W: 64, H: 64}
 	const text = "+3"
 
-	x, y, used := h.productButtonCaptionLayout(gad, r, text)
+	x, y, used, _ := h.productButtonCaptionLayoutSelected(gad, r, text, nil)
 	if used != font {
 		t.Fatalf("caption family = %v, want the GAF-font slot", used)
 	}
 	// Measured by the GAF width (frame widths summed) and placed by the GAF
 	// line metric (capital-I height + 2), not by the FNT's advance or header
 	// height [03 R-FONT-01 §6].
-	wantX, wantY := queueCountLabelPen(gad, r, retailGAFTextWidth(font, text), retailGAFTextHeight(font))
+	wantX, wantY, _, _ := retailButtonCaptionPen(gad, r, retailGAFTextWidth(font, text), retailGAFTextHeight(font))
 	if x != wantX || y != wantY {
 		t.Fatalf("GAF pen = (%d,%d), want (%d,%d)", x, y, wantX, wantY)
 	}
-	fntX, fntY := queueCountLabelPen(gad, r, client.MeasureText(fnt, text), int(fnt.Height))
+	fntX, fntY, _, _ := retailButtonCaptionPen(gad, r, client.MeasureText(fnt, text), int(fnt.Height))
 	if x == fntX && y == fntY {
 		t.Fatalf("GAF pen (%d,%d) is indistinguishable from the FNT pen; the fixture cannot tell the families apart", x, y)
 	}
@@ -337,11 +356,11 @@ func TestProductButtonCaptionNullSlotFallsBackToFNT(t *testing.T) {
 	gad := gui.Gadget{Kind: gui.KindButton, Attribs: 0x20, CommonAttribs: 4}
 	r := gui.Rect{X: 8, Y: 12, W: 64, H: 64}
 
-	x, y, used := h.productButtonCaptionLayout(gad, r, "+3")
+	x, y, used, _ := h.productButtonCaptionLayoutSelected(gad, r, "+3", nil)
 	if used != nil {
 		t.Fatalf("null slot returned a GAF font %v", used)
 	}
-	wantX, wantY := queueCountLabelPen(gad, r, client.MeasureText(fnt, "+3"), int(fnt.Height))
+	wantX, wantY, _, _ := retailButtonCaptionPen(gad, r, client.MeasureText(fnt, "+3"), int(fnt.Height))
 	if x != wantX || y != wantY {
 		t.Fatalf("FNT fallback pen = (%d,%d), want (%d,%d)", x, y, wantX, wantY)
 	}

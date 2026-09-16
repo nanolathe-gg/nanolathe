@@ -256,7 +256,7 @@ func chaseManeuver(u *units.Unit, n *Node) Code {
 		installPointGoal(u, n, tgt.X, tgt.Y, tgt.Z, d)
 		n.Param2++
 	case 1, 2, 3, 4:
-		if absFixed(u.Y.Raw()-tgt.Y.Raw()) > chaseVerticalJump {
+		if numeric.Abs(u.Y.Raw()-tgt.Y.Raw()) > chaseVerticalJump {
 			installPointGoal(u, n, tgt.X, tgt.Y, tgt.Z, truncHalf(d))
 			n.Param2 = 6
 			break
@@ -313,13 +313,6 @@ func chaseStrafePoint(u, tgt *units.Unit, d int32) (x, y, z numeric.Fixed, radiu
 // Go's `/` already truncates toward zero, so these only name the contract.
 func truncHalf(d int32) int32    { return d / 2 }
 func truncQuarter(d int32) int32 { return d / 4 }
-
-func absFixed(v int64) int64 {
-	if v < 0 {
-		return -v
-	}
-	return v
-}
 
 // ---------------------------------------------------------------------------
 // Guard assistance triggers [04 §3.5] Follow_Ground / VTOL_Follow / Guard_NoMove
@@ -1139,9 +1132,6 @@ func init() {
 		}
 	}
 }
-
-// EnsureHandlers forces handler registration for fixtures where init ordering placed this file before table.go.
-func EnsureHandlers() { ensureHandlers() }
 
 func registerChaseGuardHandlers() {
 	if id := rowAttackChase; id != 0 {

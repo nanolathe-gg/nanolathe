@@ -96,7 +96,7 @@ func TestClassLayerAvoidsStaleMover(t *testing.T) {
 		HasBounds:  true,
 		Bounds:     bounds,
 	}
-	ref := path.Search(cfg)
+	ref := oneShotSearch(cfg)
 	if len(ref.Points) == 0 || ref.Status != 0 {
 		t.Fatalf("reference static route should succeed")
 	}

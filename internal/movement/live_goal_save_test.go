@@ -74,7 +74,7 @@ func TestRestoredDisplacedGoalOwnsReleaseAndSave(t *testing.T) {
 		records := saveGoalOrders(t, s, u)
 		next := NewSystem(s.Terrain, Profile{}, NewOccupancyGrid())
 		next.BindWorld(w)
-		if err := orders.RetailRestoreOrders(u, records, map[uint16]pool.Handle{uint16(h): h}, nil); err != nil {
+		if err := orders.RetailRestoreOrdersAtTick(u, records, map[uint16]pool.Handle{uint16(h): h}, nil, 0); err != nil {
 			t.Fatal(err)
 		}
 		if err := next.RestoreHeadGoal(u); err != nil {

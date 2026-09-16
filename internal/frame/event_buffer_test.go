@@ -45,7 +45,7 @@ func TestEventBufferBoundsResetAndDiagnostics(t *testing.T) {
 }
 
 func TestEventBufferRoutesAndBuildsNanolatheSegments(t *testing.T) {
-	if RouteForProducer(ProducerBeam) != StripBeam || RouteForKind(KindImpact) != StripUnknown {
+	if RouteForProducer(ProducerBeam) != StripBeam || RouteForProducer(ProducerUnknown) != StripUnknown {
 		t.Fatal("strip routing contract changed")
 	}
 	e := Event{Mode: uint8(NanolatheBuild), Producer: ProducerBeam, X: numeric.Fixed(3), TargetX: numeric.Fixed(9)}

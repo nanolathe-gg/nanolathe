@@ -1,0 +1,23 @@
+# Exported objects whose name occurs nowhere in the module outside their
+# own declaration, as found by TestNoUnreferencedExported.
+#
+# Shrink-only: a new unreferenced object fails the guard, and an entry that
+# gains a reference or is deleted must be removed here in the same commit.
+# An entry kept on purpose carries its reason after a `#` — an iota anchor
+# whose removal would renumber its siblings, or a constant that is the
+# code's only record of a retail table.
+#
+# Regenerate with:
+#   NANOLATHE_UPDATE_ALLOWLIST=1 go test ./internal/architecture -run TestNoUnreferencedExported
+cmd/nanolathe.BriefingActionNone  # iota anchor of BriefingAction; removal renumbers the siblings
+formats.ThreeDOModel  # unreferenced type alias; delete candidate once its comment mention is settled
+internal/ai.ReasonNone  # iota anchor of ReasonCode
+internal/client.RendererUnavailableFog  # iota member; removal renumbers RendererUnavailableTraceOverflow
+internal/client.RendererUnavailableHUD  # iota member; removal renumbers RendererUnavailableTraceOverflow
+internal/client.RendererUnavailableLaterWorld  # iota member; removal renumbers RendererUnavailableTraceOverflow
+internal/client.RendererUnavailableSelection  # iota member; removal renumbers RendererUnavailableTraceOverflow
+internal/cob.WeaponSecondary  # iota member; removal moves WeaponTertiary, which bridge.go compares against
+internal/frame.EventKindInvalid  # iota anchor of the event kind enum
+internal/render.FogKindNone  # iota anchor of FogKind
+internal/session.PostBattleControlNone  # iota anchor of PostBattleControl
+internal/sim/numeric.AngleUnitsTurn  # documents the 65,536-per-turn angle scale [04 §5.1]

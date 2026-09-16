@@ -2,6 +2,8 @@ package path
 
 import (
 	"testing"
+
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // TestStepCosts locks [04 §7.2] C4 constants: cardinal 16, diagonal 22, turn table, neighbor 30, short-run 75.
@@ -978,8 +980,8 @@ func TestRayWalkValueSemantics(t *testing.T) {
 type twoCellGoal struct{ near, far Cell }
 
 func (g *twoCellGoal) H(c Cell) int32 {
-	hn := octInflated(abs32(c.X-g.near.X), abs32(c.Z-g.near.Z))
-	hf := octInflated(abs32(c.X-g.far.X), abs32(c.Z-g.far.Z))
+	hn := octInflated(numeric.Abs(c.X-g.near.X), numeric.Abs(c.Z-g.near.Z))
+	hf := octInflated(numeric.Abs(c.X-g.far.X), numeric.Abs(c.Z-g.far.Z))
 	if hf < hn {
 		return hf
 	}

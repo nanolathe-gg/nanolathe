@@ -72,7 +72,7 @@ func TestRetailAdvancedKbotAmbusherClick(t *testing.T) {
 			}
 			r := w.PlacedRect(i)
 			t.Logf("page=%d gadget=%d name=%s rect=%+v published=%v generated=%v", page, i, gad.Name, r, cur.CommandPage.ProductKeys, cur.CommandPage.GeneratedProducts)
-			if !b.hud.consumeClick(b, r.X+r.W/2, r.Y+r.H/2) {
+			if !hudConsumeClick(b.hud, b, r.X+r.W/2, r.Y+r.H/2) {
 				t.Fatal("Ambusher click not consumed")
 			}
 			if got := b.PlacementProduct(); got != "armamb" {

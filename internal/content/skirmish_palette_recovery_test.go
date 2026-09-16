@@ -5,10 +5,15 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/nanolathe-gg/nanolathe/internal/palette"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
-func TestSkirmishPalettePreflightAdmitsPCXRecovery(t *testing.T) {
+// A PCX-only palette installation loads: the loader's recovery policy accepts
+// it rather than demanding the PAL files [02 R-MALF-01 §9]. internal/palette
+// owns the per-file recovery vectors; this pins the whole-install case the
+// content pipeline depends on.
+func TestPCXOnlyInstallLoadsPalette(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "palettes"), 0700); err != nil {
 		t.Fatal(err)
@@ -25,13 +30,7 @@ func TestSkirmishPalettePreflightAdmitsPCXRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer fs.Close()
-	p := &skirmishPreflight{fs: fs, manifest: &SkirmishManifest{}}
-	p.paletteBundle()
-	result := p.finish()
-	if err := result.Error(); err != nil {
-		t.Fatal(err)
-	}
-	if len(result.Assets) != 2 || result.Assets[0].Logical != "palettes/guipal.pcx" || result.Assets[1].Logical != "palettes/palette.pcx" {
-		t.Fatalf("recovery manifest retained unavailable PAL/table files: %+v", result.Assets)
+	if _, err := palette.Load(fs); err != nil {
+		t.Fatalf("PCX-only installation refused: %v", err)
 	}
 }

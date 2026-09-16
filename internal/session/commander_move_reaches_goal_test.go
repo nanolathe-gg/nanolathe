@@ -15,14 +15,14 @@ import (
 )
 
 func TestCommanderMoveReachesGoalCell(t *testing.T) {
-	// Read-only: this test only walks a commander with NewSkirmishWithFS and
+	// Read-only: this test only walks a commander with NewSkirmishWithProgress and
 	// never writes back into the catalog, so it shares the process-wide
 	// compile [internal/testsupport/retailcat].
 	cat, fs := retailcat.Shared(t)
 	rng.SeedGlobal(100, 200)
 	cfg := SkirmishConfig{MapName: "coast to coast", NumPlayers: 2}
 	cfg.ApplyDefaults()
-	sess, err := NewSkirmishWithFS(fs, cat, cfg)
+	sess, err := NewSkirmishWithProgress(fs, cat, cfg, nil)
 	if err != nil {
 		t.Skipf("skirmish: %v", err)
 	}

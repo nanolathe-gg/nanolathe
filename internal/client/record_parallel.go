@@ -118,16 +118,6 @@ func (p *recordPool) drain(c *Client) {
 	}
 }
 
-// close stops the workers. A client that never recorded a parallel frame never
-// started any.
-func (p *recordPool) close() {
-	if p == nil {
-		return
-	}
-	close(p.quit)
-	p.workers, p.wake = nil, nil
-}
-
 // parallelUnitFloor is the job count below which stage one stays on the
 // recording goroutine. It is a timing threshold, not a behavioural one.
 const parallelUnitFloor = 8

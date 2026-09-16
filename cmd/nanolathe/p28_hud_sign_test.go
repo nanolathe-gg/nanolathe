@@ -107,8 +107,7 @@ func TestRetailResourceConsumptionUsesAuthoredPanelMinus(t *testing.T) {
 				t.Fatalf("retail %s anchor is missing", tc.anchorName)
 			}
 			want := cloneRGBA(panelOnly)
-			mask := make([]byte, 640*480)
-			client.DrawText(mask, 640, 480, h.console, tc.text, int(anchor.X1), int(anchor.Y1), 0, 1)
+			mask := rasterizeUIText(t, h.console, tc.text, int(anchor.X1), int(anchor.Y1), 1)
 			// guiColor already resolves the semantic entry through the
 			// logical→physical map; present time then reads PALETTE.PAL alone
 			// [03 §4.3][07 "Retail palette contract"]. Applying the map a

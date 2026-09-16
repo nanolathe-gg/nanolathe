@@ -103,11 +103,11 @@ func TestOptionsSlidersKeepFiredRecordIdentity(t *testing.T) {
 	if optionsState.sliders[1].knob != 2 || optionsState.sliders[4].knob != 1 || shell.audioPrefs.FXVol != 16 {
 		t.Fatalf("duplicate FXVOL did not retain record identity: first=%d duplicate=%d value=%d", optionsState.sliders[1].knob, optionsState.sliders[4].knob, shell.audioPrefs.FXVol)
 	}
-	// The legacy scrollbar-arrow path receives the fired record index too. A
+	// The synthesised arrow and track steps reach the same indexed mover. A
 	// duplicate must move only its own state rather than re-resolving FXVOL.
-	shell.adjustRetailSlider(4, 1)
+	shell.moveRetailSliderAt(4, optionsState.sliders[4], optionsState.sliders[4].knob+1)
 	if optionsState.sliders[1].knob != 2 || optionsState.sliders[4].knob != 2 {
-		t.Fatalf("legacy duplicate slider arrow changed first=%d duplicate=%d", optionsState.sliders[1].knob, optionsState.sliders[4].knob)
+		t.Fatalf("duplicate slider step changed first=%d duplicate=%d", optionsState.sliders[1].knob, optionsState.sliders[4].knob)
 	}
 }
 

@@ -4,23 +4,17 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	presentationrender "github.com/nanolathe-gg/nanolathe/internal/render"
+
+	"slices"
 )
 
-// modelGeometryPacket makes the durable P3 input from the already-resolved
+// modelGeometryPacketAt makes the durable P3 input from the already-resolved
 // composition polygons. The composition walk has selected texture frames,
 // converted every corner to the subject-local image coordinates and retained
 // the load-fixed face order. Copying here makes the packet independent of the
-// raster scratch and of the next recording [03 R-REN-03A §1–§3].
-func modelGeometryPacket(polys []screenPoly, target *modelTarget, scale int32, fallback drawlist.ModelFallbackReason) *drawlist.ModelGeometry {
-	if target == nil {
-		return nil
-	}
-	return modelGeometryPacketAt(polys, int32(target.width), int32(target.heightPx), target.originX, target.originY, target.anchorX, target.anchorY, scale, target.height != nil, fallback)
-}
-
-// modelGeometryPacketAt constructs the device packet without a modelTarget.
-// Modern recording uses it so geometry preparation never creates colour,
-// coverage, or height planes.
+// raster scratch and of the next recording [03 R-REN-03A §1–§3]. It takes the
+// image geometry directly, so Modern recording never creates colour, coverage,
+// or height planes.
 func modelGeometryPacketAt(polys []screenPoly, width, height, originX, originY, anchorX, anchorY, scale int32, keyPlane bool, fallback drawlist.ModelFallbackReason) *drawlist.ModelGeometry {
 	return fillModelPacket(&drawlist.ModelGeometry{}, nil, polys, width, height, originX, originY, anchorX, anchorY, scale, keyPlane, fallback, nil)
 }
@@ -358,7 +352,7 @@ func (c *Client) featureGeometry(draw *presentationrender.UnitDraw, selector tea
 	key := featureBodyID(id, draw.WorldPos[0], draw.WorldPos[2])
 	body := c.cachedBody(key)
 	in := c.featureBodyInputs(draw, selector)
-	if body == nil || body.geometry == nil || body.featureInputs != in || !samePieceStates(body.featurePose, draw.PieceStates) {
+	if body == nil || body.geometry == nil || body.featureInputs != in || !slices.Equal(body.featurePose, draw.PieceStates) {
 		w, h, ox, oy, visible := c.projectedModelExtent(draw, presentationrender.PieceLaneAll, false)
 		if !visible {
 			return nil, true

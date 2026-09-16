@@ -121,7 +121,7 @@ func otaValue(section *Section, key string) string {
 // unrecognized type. Input is an already resolved OTA string; extra whitespace
 // is not removed here [02 R-MAP-01 §4].
 func NetworkSchemaRank(typ string) int {
-	switch asciiFold(typ) {
+	switch FoldASCII(typ) {
 	case "network 1":
 		return 1
 	case "network 2":

@@ -22,64 +22,11 @@ const CaptureDeathCause uint8 = 4
 // `internal/construction` imports `internal/orders`, so the surviving copy is on
 // the side that can be shared.
 
-// CaptureEligible is the capture executor's phase-0 admission ladder
-// [05 R-WORK-01 §6]. It has exactly five predicates, tested in this order and
-// stopping at the first failure:
-//
-//  1. the order's target handle is non-null — `Capture failed`;
-//  2. the builder is still linked — a silent terminal;
-//  3. the BUILDER's definition carries `cancapture` — a silent terminal;
-//  4. the TARGET's definition does NOT carry `cancapture` —
-//     `That unit cannot be captured`. The same bit gates both ends, so
-//     anything that can capture cannot be captured;
-//  5. the target's remaining construction fraction compares equal to zero —
-//     `That unit is a cloud of vapor and cannot be captured`.
-//
-// Predicate 5 is a float32 compare against a literal zero whose only accepted
-// outcome is equal [05 R-WORK-01 §10]: negative zero is accepted, every other
-// value including NaN is rejected. Go's `== 0` on a float32 has exactly those
-// semantics, so `Remaining == 0` is the retail test itself, not a proxy for an
-// idleness sentinel — there is no idleness, health or order-state test here,
-// and a moving or firing finished unit is captured normally.
-//
-// Predicate 4 is what an earlier reading of this function could not locate and
-// called "victim immunity": it is the target's own `cancapture` bit
-// [05 R-WORK-01 §10]. The same bit also blocks reclaim [05 R-WORK-01 §4].
-//
-// The same-owner and dying-victim rejects this function used to add are NOT in
-// the ladder — [05 R-WORK-01 §10] states it has exactly these five — so they
-// are gone. [05 R-WORK-01 §15] says where each one does live, and the answer is
-// two different layers:
-//
-//   - the SAME-OWNER exclusion is the command resolver's code 13, whose whole
-//     test is "the actor's `cancapture`, a target, and the target's owner
-//     record differing from the actor's — a same-owner target never becomes a
-//     `Capture` order" [05 R-WORK-01 §15][04 R-ORD-02 §1]. It is implemented
-//     there, in internal/orders/resolve.go's code-13 arm;
-//   - the DEATH LATCH is the ownership transfer's own entry gate, and only
-//     there. The resolver rejects a target lacking the alive bit but "does not
-//     read the death latch", and neither does the issue helper that queues the
-//     resolved order, so a target killed this tick — latch set, alive bit still
-//     set until the next sweep's finalizer — passes both and passes this
-//     five-predicate ladder, which tests none of owner, latch or health. It is
-//     refused at TransferOwnership below, silently.
-func CaptureEligible(builder *units.Unit, victim *units.Unit) bool {
-	if victim == nil { // 1: the target handle is non-null
-		return false
-	}
-	if builder == nil || builder.Def == nil { // 2: the builder is still linked
-		return false
-	}
-	if !builder.Def.CanCapture { // 3: the builder can capture
-		return false
-	}
-	if victim.Def == nil || victim.Def.CanCapture { // 4: the target cannot
-		return false
-	}
-	// 5: the remaining-build fraction compares equal to literal zero
-	// [05 R-WORK-01 §10]. A nanoframe carries 1.0 and is rejected.
-	return victim.Remaining == 0
-}
+// The phase-0 admission ladder of [05 R-WORK-01 §6] used to have a second,
+// caller-less copy here under the name `CaptureEligible`. The live
+// implementation is the capture executor's own phase 0 in
+// internal/orders/work.go, and its ten vectors — including the negative-zero
+// case of [05 R-WORK-01 §10] — now drive that handler directly.
 
 // TransferOwnership performs the central narrow ownership transfer
 // [05 R-WORK-01 §15]. Its exact copy list is in that section; perDefLimit below
@@ -244,10 +191,6 @@ func (s *Service) TransferOwnership(victim *units.Unit, newOwner uint8) (*units.
 	// order"] — do not walk victim Orders.
 	return repl, true
 }
-
-// CaptureTickRate is 2 ticks per progress step: the progress phase
-// reschedules itself 2 ticks later on every qualifying visit [05 R-WORK-01 §6].
-const CaptureTickRate = 2
 
 // UnitLimitUnlimited is the sentinel -1 the definition parser writes for no
 // limit [05 R-SHARE-01 §9].

@@ -25,7 +25,7 @@ func TestBuildUnitDrawDoesNotAdvanceOrientationBeforeBodyRebuild(t *testing.T) {
 	m := &model.Model{Pieces: []model.Piece{{Name: "cached", Parent: -1}, {Name: "live", Parent: -1}}, Root: 0, Name: "lanes"}
 	base := []model.PieceState{{}, {DontCache: true}}
 	cache := &OrientationCache{}
-	draw := BuildUnitDraw(m, base, 0, 0, 0, frame.UnitView{}, cache)
+	draw := BuildUnitDrawInto(m, base, 0, 0, 0, frame.UnitView{}, cache, &DrawScratch{})
 	if cache.Valid {
 		t.Fatal("pose construction advanced the retained orientation reference")
 	}
@@ -33,14 +33,14 @@ func TestBuildUnitDrawDoesNotAdvanceOrientationBeforeBodyRebuild(t *testing.T) {
 		t.Fatalf("published cache lanes = %#v", draw.Pieces)
 	}
 	cache.UpdateKey(m.Name, 0, 0, 0)
-	draw = BuildUnitDraw(m, base, 7, 0, 0, frame.UnitView{}, cache)
+	draw = BuildUnitDrawInto(m, base, 7, 0, 0, frame.UnitView{}, cache, &DrawScratch{})
 	if draw.PieceStates[0].RotY != 0 {
 		t.Fatal("sub-threshold unit rotation reached the piece transform")
 	}
 	if draw.NeedsRebuild {
 		t.Fatal("exactly seven scheduled a cached-body rebuild")
 	}
-	draw = BuildUnitDraw(m, base, 8, 0, 0, frame.UnitView{}, cache)
+	draw = BuildUnitDrawInto(m, base, 8, 0, 0, frame.UnitView{}, cache, &DrawScratch{})
 	if draw.PieceStates[0].RotY != 8 {
 		t.Fatal("threshold-crossing unit rotation did not reach the piece transform")
 	}

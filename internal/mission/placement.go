@@ -1,9 +1,7 @@
 package mission
 
 import (
-	"encoding/binary"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/formats"
@@ -290,9 +288,9 @@ func decodeUnitSection(sec *formats.Section) UnitPlacement {
 	}
 	if sec.IntValue("Immunity", 0) != 0 {
 		flags |= 1 << 7 // high bit 0x80 [C7] [08 "Mission placement record"]
-		u.Immune = true
 	}
 	u.RawFlags = flags
+	u.Immune = IsImmuneFromFlags(flags)
 
 	u.InitialGroup, _ = sec.StringValue("InitialGroup", "") // parsed but never read [C7]
 	return u
@@ -449,141 +447,4 @@ func HeadingFromDegrees(deg int32) uint16 {
 		quotient++ // the sign-bit add: truncate toward zero, not floor
 	}
 	return uint16(int16(quotient))
-}
-
-// --- Binary 36/12/136 identity helpers ---
-//
-// SYNTHETIC round-trip codecs, not retail wire formats: no retail file ever
-// stores these records, so the offsets below are this codec's own and are
-// deliberately NOT the executable's field identities (I13). The 36/12/136
-// byte sizes remain record identity for contract cross-references.
-
-// MarshalUnit encodes a UnitPlacement into a 36-byte record plus
-// a tail heap. Name pointers are offsets into the heap. X/Z/Y are fixed
-// dwords <<16, Angle is heading, flags packed. [GAP T14] [02 "Map files"] [C6]
-// Synthetic codec — see the block comment above; offsets are not retail's.
-func MarshalUnit(u UnitPlacement, heap *[]byte) [36]byte {
-	var rec [36]byte
-	heapBase := len(*heap)
-	// Append strings to heap with NUL terminator to mimic retail tail heap.
-	unitOff := appendHeapString(heap, u.UnitName)
-	identOff := appendHeapString(heap, u.Ident)
-	missionOff := appendHeapString(heap, u.InitialMission)
-	binary.LittleEndian.PutUint32(rec[0:4], uint32(heapBase+unitOff))
-	binary.LittleEndian.PutUint32(rec[4:8], uint32(heapBase+identOff))
-	binary.LittleEndian.PutUint32(rec[8:12], uint32(heapBase+missionOff))
-	binary.LittleEndian.PutUint32(rec[12:16], uint32(u.X))
-	binary.LittleEndian.PutUint32(rec[16:20], uint32(u.Z))
-	binary.LittleEndian.PutUint32(rec[20:24], uint32(u.Y))
-	binary.LittleEndian.PutUint16(rec[24:26], u.Angle)
-	binary.LittleEndian.PutUint16(rec[26:28], uint16(u.Player))
-	binary.LittleEndian.PutUint16(rec[28:30], uint16(u.HealthPercentage))
-	binary.LittleEndian.PutUint16(rec[30:32], uint16(u.BuildPriority))
-	binary.LittleEndian.PutUint16(rec[32:34], uint16(u.CreationCountdown))
-	rec[34] = u.RawFlags
-	// Retain the ordinary integer accessor before the low-nibble store, as
-	// in the authored placement record [08 R-TRIG-01 §9].
-	rec[35] = byte(formats.ParseTDFInteger(u.InitialGroup) & 0x0f)
-	return rec
-}
-
-// UnmarshalUnit decodes a 36-byte unit record plus heap into a UnitPlacement.
-// It reverses MarshalUnit's heap pointer encoding.
-func UnmarshalUnit(rec [36]byte, heap []byte) UnitPlacement {
-	var u UnitPlacement
-	unitOff := binary.LittleEndian.Uint32(rec[0:4])
-	identOff := binary.LittleEndian.Uint32(rec[4:8])
-	missionOff := binary.LittleEndian.Uint32(rec[8:12])
-	u.UnitName = readHeapString(heap, int(unitOff))
-	u.Ident = readHeapString(heap, int(identOff))
-	u.InitialMission = readHeapString(heap, int(missionOff))
-	u.X = int32(binary.LittleEndian.Uint32(rec[12:16]))
-	u.Z = int32(binary.LittleEndian.Uint32(rec[16:20]))
-	u.Y = int32(binary.LittleEndian.Uint32(rec[20:24]))
-	u.Angle = binary.LittleEndian.Uint16(rec[24:26])
-	u.Player = int32(int16(binary.LittleEndian.Uint16(rec[26:28])))
-	u.HealthPercentage = int32(int16(binary.LittleEndian.Uint16(rec[28:30])))
-	u.BuildPriority = int32(int16(binary.LittleEndian.Uint16(rec[30:32])))
-	u.CreationCountdown = int32(int16(binary.LittleEndian.Uint16(rec[32:34])))
-	u.RawFlags = rec[34]
-	u.Immune = IsImmuneFromFlags(u.RawFlags)
-	u.AiIgnore = u.RawFlags&(1<<5) != 0
-	u.AiPriorityTarget = u.RawFlags&(1<<6) != 0
-	u.MissionCriticalUnit = u.RawFlags&(1<<0) != 0
-	nib := rec[35] & 0x0F
-	if nib != 0 {
-		u.InitialGroup = strconv.Itoa(int(nib))
-	}
-	return u
-}
-
-// MarshalSpecial encodes a Special into the 12-byte retail identity.
-// [GAP T14] [02 "Map files"] [C6]
-func MarshalSpecial(s Special) [12]byte {
-	var rec [12]byte
-	binary.LittleEndian.PutUint32(rec[0:4], uint32(s.Kind))
-	binary.LittleEndian.PutUint32(rec[4:8], uint32(s.ID))
-	binary.LittleEndian.PutUint16(rec[8:10], uint16(s.X))
-	binary.LittleEndian.PutUint16(rec[10:12], uint16(s.Z))
-	return rec
-}
-
-// UnmarshalSpecial decodes a 12-byte special record.
-func UnmarshalSpecial(rec [12]byte) Special {
-	return Special{
-		Kind: int32(binary.LittleEndian.Uint32(rec[0:4])),
-		ID:   int32(binary.LittleEndian.Uint32(rec[4:8])),
-		X:    int16(binary.LittleEndian.Uint16(rec[8:10])),
-		Z:    int16(binary.LittleEndian.Uint16(rec[10:12])),
-	}
-}
-
-// MarshalFeature encodes a FeaturePlacement into the 136-byte retail identity.
-// Featurename is a 128-byte buffer; X/Z follow. Negative coordinates were
-// already cleared to -1 by decode. [GAP T14] [02 "Map files"] [C6]
-func MarshalFeature(f FeaturePlacement) [136]byte {
-	var rec [136]byte
-	// 128-byte name buffer, null-padded [GAP T14]
-	copy(rec[0:128], f.Name)
-	binary.LittleEndian.PutUint32(rec[128:132], uint32(f.X))
-	binary.LittleEndian.PutUint32(rec[132:136], uint32(f.Z))
-	return rec
-}
-
-// UnmarshalFeature decodes a 136-byte feature record.
-func UnmarshalFeature(rec [136]byte) FeaturePlacement {
-	name := string(rec[0:128])
-	// Trim at first NUL as retail buffer is nul-terminated.
-	if idx := strings.IndexByte(name, 0); idx >= 0 {
-		name = name[:idx]
-	}
-	// Trim spaces as TDF does? Keep as raw.
-	name = strings.TrimSpace(name)
-	x := int32(binary.LittleEndian.Uint32(rec[128:132]))
-	z := int32(binary.LittleEndian.Uint32(rec[132:136]))
-	return FeaturePlacement{
-		Name: name,
-		X:    x,
-		Z:    z,
-		RawX: x,
-		RawZ: z,
-	}
-}
-
-func appendHeapString(heap *[]byte, s string) int {
-	off := len(*heap)
-	*heap = append(*heap, s...)
-	*heap = append(*heap, 0)
-	return off
-}
-
-func readHeapString(heap []byte, off int) string {
-	if off < 0 || off >= len(heap) {
-		return ""
-	}
-	end := off
-	for end < len(heap) && heap[end] != 0 {
-		end++
-	}
-	return string(heap[off:end])
 }

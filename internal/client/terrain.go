@@ -33,15 +33,6 @@ const (
 	detailTilePixels = drawlist.DetailTilePixels
 )
 
-// floorDiv returns floor(a/b) with sign correction [INVARIANTS I3] [03 §2.1].
-func terrainFloorDiv(a, b int64) int64 {
-	q := a / b
-	if a%b != 0 && (a < 0) != (b < 0) {
-		q--
-	}
-	return q
-}
-
 // DrawTerrain draws terrain into the client's indexed framebuffer [03 §2.2] C1.
 //
 // It blits the world Terrain's TileIndices/TileSet through the camera pan,
@@ -163,10 +154,10 @@ func blitTerrain(dst []uint8, dstW, dstH int, t *world.Terrain, cam *camera.Came
 	mx1 := int64(camX) + int64(scale.Inverse(int32(dstW-1)-originX))
 	my1 := int64(camZ) + int64(scale.Inverse(int32(dstH-1)-originY))
 	// Inclusive tile indices covering [mx0,mx1] etc.
-	startTX := terrainFloorDiv(mx0, terrainTileSize)
-	startTY := terrainFloorDiv(my0, terrainTileSize)
-	endTX := terrainFloorDiv(mx1, terrainTileSize)
-	endTY := terrainFloorDiv(my1, terrainTileSize)
+	startTX := numeric.FloorDiv(mx0, terrainTileSize)
+	startTY := numeric.FloorDiv(my0, terrainTileSize)
+	endTX := numeric.FloorDiv(mx1, terrainTileSize)
+	endTY := numeric.FloorDiv(my1, terrainTileSize)
 
 	// Stable iteration over intersecting tiles in row-major order (determinism
 	// per I1 is preserved — no map iteration).

@@ -630,7 +630,7 @@ func TestApproachPhaseSurvivesTheSaveRoundTrip(t *testing.T) {
 	resolve := func(h pool.Handle) (uint16, bool) { id, ok := stable[h]; return id, ok }
 	roundTrip := func() *orders.Node {
 		t.Helper()
-		images, err := orders.RetailOrderImages(builder, resolve)
+		images, err := orders.RetailOrderImagesWithPayload(builder, resolve, nil, nil)
 		if err != nil {
 			t.Fatalf("project orders: %v", err)
 		}
@@ -642,7 +642,7 @@ func TestApproachPhaseSurvivesTheSaveRoundTrip(t *testing.T) {
 				DescriptorName: image.DescriptorName, BuildTypeName: image.BuildTypeName,
 			}
 		}
-		if err := orders.RetailRestoreOrders(builder, records, map[uint16]pool.Handle{9: builder.Handle}, nil); err != nil {
+		if err := orders.RetailRestoreOrdersAtTick(builder, records, map[uint16]pool.Handle{9: builder.Handle}, nil, 0); err != nil {
 			t.Fatalf("restore orders: %v", err)
 		}
 		return orders.QueueOfUnit(builder).Primary()[0]

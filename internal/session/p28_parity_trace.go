@@ -109,20 +109,6 @@ type ThreadTrace struct {
 	Sleep, WaitPiece, WaitAxis, WaitThread, SignalMask int
 }
 
-type FeatureTrace struct {
-	Key                                    string
-	CX, CZ                                 int
-	DamageAccumulator                      uint16
-	ReclaimProgress                        int32
-	IsBurning                              bool
-	BurnCountdown, BurnTicks, BurnDuration int32
-	RemoteSuppressed                       bool
-	Y, Vy, X, Z                            int64
-	IsSinking, Settled                     bool
-	Status                                 uint8
-	FootprintX, FootprintZ                 int32
-}
-
 // ParityCallbackEvents returns actual queue/VM lifecycle events in arrival
 // order. It never derives events from pending state or thread snapshots.
 func (s *Session) ParityCallbackEvents() []cob.LifecycleEvent {

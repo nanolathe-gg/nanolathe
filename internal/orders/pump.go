@@ -53,10 +53,9 @@ const (
 )
 
 // The record's movement state, as the movement outcome bits of
-// [04 R-ORD-01 §0] leave it: nothing asked for, a route is being followed, the
-// goal was reached, or the follower reported it cannot get there.
+// [04 R-ORD-01 §0] leave it: zero is nothing asked for, then a route is being
+// followed, the goal was reached, or the follower reported it cannot get there.
 const (
-	MoveNone    uint8 = 0
 	MoveEnRoute uint8 = 1
 	MoveArrived uint8 = 2
 	MoveBlocked uint8 = 3

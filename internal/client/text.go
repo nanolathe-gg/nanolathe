@@ -123,7 +123,9 @@ func TruncateToWidth(fnt *formats.FNT, text string, maxWidth int) string { // [0
 	return src
 }
 
-// DrawText draws text into the indexed framebuffer using FNT glyphs [02 §7][03 §7.1] C8.
+// drawTextClipped is the FNT rasterizer [02 §7][03 §7.1] C8. It admits the
+// entire unadjusted string rectangle against the private clip before applying
+// the baseline [03 R-FONT-01 §3].
 //
 //   - frame is row-major width×height indexed pixels (physical palette indices).
 //   - fnt is the bitmap font (*formats.FNT); nil is a no-op.
@@ -140,20 +142,7 @@ func TruncateToWidth(fnt *formats.FNT, text string, maxWidth int) string { // [0
 //
 // The caller has already resolved semantic colors through the logical map
 // (C7). No simulation state is touched (I6).
-func DrawText(frame []uint8, width, height int, fnt *formats.FNT, text string, x, y, maxWidth int, color byte) { // [02 §7][03 §7.1][07 §7]
-	drawText(frame, width, height, fnt, text, x, y, maxWidth, color, nil)
-}
-
-// drawText is the common FNT rasterizer. onWrite is retained for the generic
-// helper shape used by the text tests; retail GUI callers pass nil because
-// glyph colors are already active palette indices.
-func drawText(frame []uint8, width, height int, fnt *formats.FNT, text string, x, y, maxWidth int, color byte, onWrite func(int)) { // [02 §7][03 §7.1][07 §7]
-	drawTextClipped(frame, width, height, fnt, text, x, y, maxWidth, color, 0, 0, width, height, onWrite)
-}
-
-// drawTextClipped admits the entire unadjusted string rectangle against the
-// private surface before applying the baseline [03 R-FONT-01 §3].
-func drawTextClipped(frame []uint8, width, height int, fnt *formats.FNT, text string, x, y, maxWidth int, color byte, clipX, clipY, clipW, clipH int, onWrite func(int)) {
+func drawTextClipped(frame []uint8, width, height int, fnt *formats.FNT, text string, x, y, maxWidth int, color byte, clipX, clipY, clipW, clipH int) {
 	if len(frame) < width*height || fnt == nil || width <= 0 || height <= 0 || len(text) == 0 {
 		return
 	}
@@ -202,11 +191,7 @@ func drawTextClipped(frame []uint8, width, height int, fnt *formats.FNT, text st
 				if dx < 0 || dx >= width {
 					continue
 				}
-				index := rowBase + dx
-				frame[index] = color
-				if onWrite != nil {
-					onWrite(index)
-				}
+				frame[rowBase+dx] = color
 			}
 		}
 		curX += int(g.Width) // advance; space advances 7 via its glyph [03 §7.1]

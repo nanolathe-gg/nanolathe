@@ -178,14 +178,11 @@ func (r *Renderer) drawFogRemap(fr *formats.GAFFrame, x0, y0, x1, y1 int, mode f
 	r.fog.draws++
 }
 
-// fogRemapScreenRect admits exactly the screen pixels whose floor(screen/k)
-// record sample lies in the clipped leaf. A conservative floor at the left
-// edge could sample outside the leaf and into another scene atlas entry when
-// zooming out; the stock fog shader rejects those samples in its cell test.
-func fogRemapScreenRect(x0, y0, x1, y1 int, k float32) (int, int, int, int) {
-	return fogRemapScreenRectOffset(x0, y0, x1, y1, k, 0, 0)
-}
-
+// fogRemapScreenRectOffset admits exactly the screen pixels whose
+// floor(screen/k) record sample lies in the clipped leaf, with the scene's own
+// translation folded in. A conservative floor at the left edge could sample
+// outside the leaf and into another scene atlas entry when zooming out; the
+// stock fog shader rejects those samples in its cell test.
 func fogRemapScreenRectOffset(x0, y0, x1, y1 int, k, ox, oy float32) (int, int, int, int) {
 	scale := float64(k)
 	return int(math.Ceil(float64(x0)*scale + float64(ox))), int(math.Ceil(float64(y0)*scale + float64(oy))),

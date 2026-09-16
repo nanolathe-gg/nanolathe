@@ -43,27 +43,15 @@ type EffectDraw struct {
 	NanolatheIndex            int32
 	NanolatheCount            int32
 	NanolatheGeometryKnown    bool
-	NanolatheTargetBoxKnown   bool
-	NanolatheTargetMin        [3]numeric.Fixed
-	NanolatheTargetMax        [3]numeric.Fixed
 }
 
-// BuildEffectDraws copies effect metadata in admission order.  The source is
-// already a bounded immutable snapshot; no effect is synthesized when the
-// producer emitted none [F-P0-034][I6].
-func BuildEffectDraws(effects []frame.EffectView) []EffectDraw {
-	if len(effects) == 0 {
-		return nil
-	}
-	return BuildEffectDrawsInto(make([]EffectDraw, 0, len(effects)), effects)
-}
-
-// BuildEffectDrawsInto is BuildEffectDraws over a caller-owned buffer. The
+// BuildEffectDrawsInto copies effect metadata in admission order into a
+// caller-owned buffer. The source is already a bounded immutable snapshot; no
+// effect is synthesized when the producer emitted none [F-P0-034][I6]. The
 // records are values with no pointer fields beyond their interned strings, so
 // the recorder can keep one buffer for the life of the client and refill it
-// every frame instead of allocating one draw list per effect pass; the returned
-// slice is the same sequence BuildEffectDraws produces. The caller must not
-// retain the result past its next call [I6].
+// every frame instead of allocating one draw list per effect pass. The caller
+// must not retain the result past its next call [I6].
 func BuildEffectDrawsInto(dst []EffectDraw, effects []frame.EffectView) []EffectDraw {
 	out := dst[:0]
 	for _, e := range effects {

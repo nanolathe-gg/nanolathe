@@ -209,10 +209,10 @@ func (r *Renderer) drawFrameInclusive(rMinX, rMinY, rMaxX, rMaxY, clipMinX, clip
 	// The intersection of the frame, the clip rectangle and the framebuffer, as
 	// inclusive bounds. It is both the command's screen rectangle and the extent
 	// every edge run is clamped to.
-	left := maxInt(maxInt(rMinX, clipMinX), 0)
-	top := maxInt(maxInt(rMinY, clipMinY), 0)
-	right := minInt(minInt(rMaxX, clipMaxX), r.clipW()-1)
-	bottom := minInt(minInt(rMaxY, clipMaxY), r.clipH()-1)
+	left := max(max(rMinX, clipMinX), 0)
+	top := max(max(rMinY, clipMinY), 0)
+	right := min(min(rMaxX, clipMaxX), r.clipW()-1)
+	bottom := min(min(rMaxY, clipMaxY), r.clipH()-1)
 	if !r.beginSolid(left, top, right+1, bottom+1) {
 		return
 	}
@@ -251,10 +251,10 @@ func (r *Renderer) Line(l drawlist.Line) {
 		// A beam or lightning stroke is a light source for the glow layer (§19).
 		r.glowLine(l)
 	}
-	bx0 := maxInt(minInt(int(l.X0), int(l.X1)), 0)
-	by0 := maxInt(minInt(int(l.Y0), int(l.Y1)), 0)
-	bx1 := minInt(maxInt(int(l.X0), int(l.X1))+1, r.clipW())
-	by1 := minInt(maxInt(int(l.Y0), int(l.Y1))+1, r.clipH())
+	bx0 := max(min(int(l.X0), int(l.X1)), 0)
+	by0 := max(min(int(l.Y0), int(l.Y1)), 0)
+	bx1 := min(max(int(l.X0), int(l.X1))+1, r.clipW())
+	by1 := min(max(int(l.Y0), int(l.Y1))+1, r.clipH())
 	if !r.beginSolid(bx0, by0, bx1, by1) {
 		return
 	}
@@ -283,7 +283,7 @@ func (r *Renderer) Line(l drawlist.Line) {
 	for {
 		if x0 >= 0 && x0 < cw && y0 >= 0 && y0 < ch {
 			if open && y0 == runY {
-				runLo, runHi = minInt32(runLo, x0), maxInt32(runHi, x0)
+				runLo, runHi = min(runLo, x0), max(runHi, x0)
 			} else {
 				if open {
 					r.appendSolidRunX(int(runLo), int(runHi), int(runY), l.Index)
@@ -352,22 +352,8 @@ func (r *Renderer) pointBounds(points []drawlist.Point) (x0, y0, x1, y1 int, ok 
 			x0, y0, x1, y1, ok = x, y, x+1, y+1, true
 			continue
 		}
-		x0, y0 = minInt(x0, x), minInt(y0, y)
-		x1, y1 = maxInt(x1, x+1), maxInt(y1, y+1)
+		x0, y0 = min(x0, x), min(y0, y)
+		x1, y1 = max(x1, x+1), max(y1, y+1)
 	}
 	return x0, y0, x1, y1, ok
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

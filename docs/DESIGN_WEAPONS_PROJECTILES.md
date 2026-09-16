@@ -116,10 +116,11 @@ starts precede a later slot's query or Aim preparation. The session owns the
 one normal drain after all three slots [04 R-MOV-03 §1]. A missing script or an
 exhausted thread pool never authorizes a shot `[06 §3.3]` `[06 §3.4]`.
 
-`TickSlot` and its unit-level wrapper `TickWeapons` run the same step order over
-a slot in isolation, with no production caller: they exist so a test can drive
-one slot's gates directly. Neither is authoritative, and a behavior change to
-the pipeline belongs in `StepWeaponsForUnit` first.
+`TickSlot` and its unit-level wrapper `TickUnitSlots` run the same step order
+over a slot in isolation, with no production caller: they are fixtures in
+`pipeline_fixture_test.go` so a test can drive one slot's gates directly.
+Neither is authoritative, and a behavior change to the pipeline belongs in
+`StepWeaponsForUnit` first.
 
 ### 2.2 Acquisition and the per-side target registry
 
@@ -484,8 +485,8 @@ remainders while airborne pellets continue.
 Live unit fire selects turret → vertical launch → LOS/self-propelled → dropped,
 otherwise no executor. The turret selects the ordinary creator for LOS/self-propelled,
 otherwise ballistic for ballistic, otherwise no creator. `TryFire` carries this
-selection through allocation and initialization. `InitProjectile` retains the
-separate event-reconstruction order: meteor → ballistic → vertical launch →
+selection through allocation and initialization. `CreationFamilyForWeapon`
+retains the separate event-reconstruction order: meteor → ballistic → vertical launch →
 LOS/self-propelled → dropped. Active motion independently selects self-propelled →
 LOS → ballistic → dropped → meteor `[06 §6.2]`. `motion.go` carries one `Init*`
 per creation family and one `Advance*` per motion family, plus the shared common

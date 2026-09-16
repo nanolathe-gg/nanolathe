@@ -6,6 +6,8 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
+
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 // Coastal water is an Enhanced presentation treatment (GPU design §26).
@@ -269,10 +271,10 @@ func (st *waterLayer) visibleWater(c drawlist.Terrain) bool {
 	// dry ground beside the water, so a coast just past the viewport edge still
 	// has to run the pass for the band to reach the visible strip.
 	scale := c.Scale.Norm()
-	x0 := max(floorDivInt(int(c.OriginX), waterBlockSize)-1, 0)
-	y0 := max(floorDivInt(int(c.OriginY), waterBlockSize)-1, 0)
-	x1 := min(floorDivInt(int(c.OriginX+scale.Inverse(c.DstW)), waterBlockSize)+1, st.blockW-1)
-	y1 := min(floorDivInt(int(c.OriginY+scale.Inverse(c.DstH)), waterBlockSize)+1, st.blockH-1)
+	x0 := max(numeric.FloorDiv(int(c.OriginX), waterBlockSize)-1, 0)
+	y0 := max(numeric.FloorDiv(int(c.OriginY), waterBlockSize)-1, 0)
+	x1 := min(numeric.FloorDiv(int(c.OriginX+scale.Inverse(c.DstW)), waterBlockSize)+1, st.blockW-1)
+	y1 := min(numeric.FloorDiv(int(c.OriginY+scale.Inverse(c.DstH)), waterBlockSize)+1, st.blockH-1)
 	for y := y0; y <= y1; y++ {
 		for x := x0; x <= x1; x++ {
 			if st.blocks[y*st.blockW+x] {
