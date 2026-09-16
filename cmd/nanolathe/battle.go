@@ -108,6 +108,8 @@ type battleSession struct {
 	postBattleEffectPos  int
 	postBattleGlamour    *formats.PCX
 	postBattleNormalPal  *palette.Tables
+	postBattleGamma      float32
+	postBattleGammaSaved bool
 	postBattleFadePal    palette.Tables
 	postBattleFadeCur    [1024]byte
 	postBattleFadeDst    [1024]byte
@@ -631,6 +633,11 @@ func bindBattleMessageRetirement(sess *session.Session, cl *client.Client) {
 func (b *battleSession) teardown(cl *client.Client) {
 	if b == nil {
 		return
+	}
+	// LoadGame can leave ENDMSN through replacement rather than its Start or
+	// MainMenu routes. Retire the same temporary display state on every exit.
+	if b.postBattle != nil {
+		b.restorePostBattlePalette(cl)
 	}
 	b.endDragScroll(cl)
 	if b.sess != nil {

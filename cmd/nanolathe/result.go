@@ -10,6 +10,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/mission"
+	"github.com/nanolathe-gg/nanolathe/internal/render"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/ui"
 	"github.com/nanolathe-gg/nanolathe/vfs"
@@ -435,6 +436,23 @@ func (h *retailBattleHUD) advanceResultReveal(now uint32, c *client.Client, b *b
 	}
 }
 
+// Results become interactive once every bar is visible and has reached its
+// target. Exact equality completes even if the gadget's animation flag remains
+// set; keyboard reveal can activate all groups early [08 R-CAMP-01 §6].
+func (h *retailBattleHUD) resultBarsComplete() bool {
+	if h == nil || !h.resultState.initialized {
+		return false
+	}
+	for row, score := range h.resultState.rows {
+		for column := range resultBars {
+			if !h.resultState.active[column] || h.resultState.current[row][column] < resultBarValue(score, column) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func (h *retailBattleHUD) advanceResultBars(now uint32) {
 	if h == nil || !h.resultState.initialized || h.resultState.group < 0 {
 		return
@@ -549,6 +567,10 @@ func (h *retailBattleHUD) drawResultStats(c *client.Client, b *battleSession, vi
 	}
 	h.advanceResultReveal(now, c, b)
 	h.advanceResultBars(now)
+	if h.resultBarsComplete() && c.Cursors() != nil {
+		c.Cursors().Hidden = false
+		c.Cursors().SetIndex(render.CursorNormal)
+	}
 	for rowIndex, row := range h.resultState.rows {
 		playerColor := resultPlayerColorRect(rowIndex)
 		if h.logos != nil {

@@ -382,6 +382,16 @@ PAL atlas row consume those same output colours. The logical and physical
 index-remap tables do not change, and no gamma value reaches simulation state
 `[07 R-FE-01 §11]` [I6].
 
+Results retain the battle palette and gamma throughout darkening, then save
+the current factor and force neutral gamma for outcome art. The glamour
+entry installs its black palette before the first image composition; later
+steps change only its display entries. Cleanup restores the saved factor.
+The software cursor is hidden while darkening, displaying glamour and
+revealing statistics, then returns as the normal arrow once every bar is
+active and has reached its target.
+The CD-check dialog explicitly restores visibility earlier
+`[08 R-CAMP-01 §6]`.
+
 ### 2.6 `internal/audio` and `internal/audiobackend`
 
 `Service` is the single audio owner: `Queue` (eight slots), `Registry` (the

@@ -7689,6 +7689,24 @@ presentation "unit" below is one tick of the presentation clock of §2.
 | 7 | `ENDMSN.GUI` is up; the statistic bars are revealed in seven groups (§7). |
 | 8 | Idle with the panel up (used by the CD-check dialog). |
 
+**Cursor visibility (Established).** Arming the darkening countdown hides the
+software cursor. It remains hidden through the darkening, glamour fade,
+glamour wait and statistics reveal. Once every statistics bar is active and
+its current value is at least its target, the controller shows the cursor
+again and selects the normal arrow. An exact target hit completes even if a
+bar's animation flag remains set. Keyboard reveal may activate all groups
+before the timed group counter reaches the final column; an empty set of
+bars completes immediately. The campaign CD-check dialog
+explicitly shows it earlier so its controls have a visible pointer. These
+are presentation visibility writes, not palette remaps of cursor artwork
+[07 R-FE-02 §2].
+
+**Darkening palette (Established).** The signed rectangle level selects
+`SHD[level + 32]`, so the ten countdown steps apply rows 13 through 4,
+successively, to the retained indexed picture. The display palette does not
+change during this darkening. The gamma override belongs to the later
+outcome-art preparation below.
+
 **Outcome-art preparer.** Allocates three 1024-byte palette buffers
 (`currentPalette`, `desiredPalette`, `FadeTable`) and a 1024-byte `Palette`,
 saves the display's gamma word and forces it to 1.0. Then, only for kind 1

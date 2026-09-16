@@ -260,7 +260,16 @@ func (b *battleSession) consumePostBattleEffects(now uint32, cl *client.Client) 
 			if b.sess != nil && b.sess.Audio != nil {
 				b.sess.Audio.StartStream(effect.Resource, 0, 60, now)
 			}
+		case session.PostBattleEffectCampaignCDCheck:
+			if cl != nil && cl.Cursors() != nil {
+				cl.Cursors().Hidden = false
+			}
 		case session.PostBattleEffectOutcomeArt:
+			if cl != nil && !b.postBattleGammaSaved {
+				b.postBattleGamma = cl.GammaFactor()
+				b.postBattleGammaSaved = true
+				cl.SetGammaFactor(1)
+			}
 			// Outcome1/Outcome0 are ENDMSN's own background bitmaps: the
 			// preparer only pre-caches them, and the population step below is
 			// what installs one. Only a glamour resource is decoded here
@@ -269,6 +278,10 @@ func (b *battleSession) consumePostBattleEffects(now uint32, cl *client.Client) 
 				if image, ok := b.loadPostBattleImage(effect.Resource); ok {
 					b.postBattleGlamour = image
 				}
+				// The first glamour paint already belongs to the black starting
+				// palette; waiting for its first fade step exposes the picture
+				// through the battlefield palette for one frame [08 R-CAMP-01 §6].
+				b.initPostBattleGlamourFade(cl)
 			}
 		case session.PostBattleEffectPopulateEndMission:
 			b.prepareResultPanel()
@@ -289,6 +302,12 @@ func (b *battleSession) consumePostBattleEffects(now uint32, cl *client.Client) 
 			}
 			return
 		}
+	}
+	// Results hide the software pointer when the darkening fade is armed.
+	// It stays hidden through glamour and the statistics reveal, whose completion
+	// restores it [08 R-CAMP-01 §6].
+	if b.postBattle.State() == session.PostBattleFade && cl != nil && cl.Cursors() != nil {
+		cl.Cursors().Hidden = true
 	}
 	if b.sess != nil && b.sess.Audio != nil {
 		b.sess.Audio.TickStream(now)
@@ -517,6 +536,13 @@ func (b *battleSession) restorePostBattlePalette(cl *client.Client) {
 	}
 	if b.shell != nil {
 		b.shell.resultBackground = nil
+	}
+	if cl != nil && cl.Cursors() != nil {
+		cl.Cursors().Hidden = false
+	}
+	if cl != nil && b.postBattleGammaSaved {
+		cl.SetGammaFactor(b.postBattleGamma)
+		b.postBattleGammaSaved = false
 	}
 	if cl == nil || b.postBattleNormalPal == nil {
 		return

@@ -630,6 +630,10 @@ func (c *Client) SetGammaFactor(factor float32) {
 	c.rebuildDisplayPalette()
 }
 
+// GammaFactor returns the current output factor so temporary results art can
+// save and restore it without reinterpreting a settings value [08 R-CAMP-01 §6].
+func (c *Client) GammaFactor() float32 { return c.gammaFactor }
+
 // DisplayPalette is the final physical-index-to-colour table for both backends.
 // Indexed lighting, blending and semantic colour tables remain immutable.
 func (c *Client) DisplayPalette() [256][4]byte { return c.base }

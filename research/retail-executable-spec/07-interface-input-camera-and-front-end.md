@@ -2498,9 +2498,11 @@ destination index. The GUI draw routine uses this lookup for color fields
 before it stores primitive colors or FNT foreground/background values in the
 indexed surface. The GAF blitter instead copies opaque frame bytes directly through the frame
 decode-and-copy path, and PCX backgrounds/TNT minimap pixels also remain direct
-active palette indices. No frontend path substitutes
-`GUIPAL.PAL` or a PCX trailer palette for the active `PALETTE.PAL` table, and
-no GUI lookup is performed again during indexed-to-RGB presentation. [03 §4.3]
+active palette indices. `GUIPAL.PAL` is never substituted as a second physical
+UI palette, and no GUI lookup is performed again during indexed-to-RGB presentation.
+**Established exception:** the results sequence replaces the active display
+palette with the glamour image's decoded palette and then with the ENDMSN
+background's palette [08 R-CAMP-01 §6]. [03 §4.3]
 [fmt pal] [fmt pcx] [fmt gaf]
 
 ### Retail frontend control activation and raster rules
@@ -3596,7 +3598,10 @@ carries a cursor-visible word tested by the cursor blitter (the cursor is
 composed only when it is nonzero). The controller writes 0 in phase 0
 (startup) so the logo/intro movies play without a cursor, and 1 when phase 2
 substate 0 opens `MAINMENU`; the `ENDMSN` `MainMenu` button and the movie
-player write it the same way. No other writer exists in the front end.
+player write it the same way. The post-battle controller also hides it when
+arming the darkening fade and shows it at the completion of the statistics
+reveal; the campaign CD-check dialog explicitly shows it earlier
+[08 R-CAMP-01 §6].
 
 **Established fact — 640×480 enforcement.** The shell loader ([R-FE-01 §3]),
 the post-battle controller ([R-FE-01 §10]) and the multiplayer join path
