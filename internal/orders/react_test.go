@@ -180,28 +180,34 @@ func TestRetaliationOrderRespectsNoChaseAndBadTarget(t *testing.T) {
 	}
 }
 
-// TestStopCurrentOrderIssuesTheOrdinaryStop locks the throttle's second half
-// [08 R-AI-01 §11]: after writing the manager throttle deadline the engine
-// clears the damaged unit's current order through the ordinary stop path.
-func TestStopCurrentOrderIssuesTheOrdinaryStop(t *testing.T) {
-	cat := &content.Catalog{}
-	w := newOrdersFixtureWorld(8, cat)
-	def := &content.UnitDef{UnitName: "reactbuilder", CanMove: true, CanCapture: true, MaxDamage: 100}
-	h, _ := w.Create(def, 0, 0, 0, 0)
+// Damage purges only unprotected primary records. It cannot insert Stop or
+// clear already-autonomous weapon targets [08 R-AI-01 §11][04 R-MOV-03 §6].
+func TestPurgeOrdersOnDamagePreservesProtectedOrdersAndAutonomousTargets(t *testing.T) {
+	w := newOrdersFixtureWorld(8, &content.Catalog{})
+	h, _ := w.Create(&content.UnitDef{UnitName: "reactbuilder", CanMove: true, CanCapture: true, MaxDamage: 100}, 0, 0, 0, 0)
 	u := w.Unit(h)
-	move := Lookup("Move_Ground")
-	QueueForUnit(u).Push(move, Node{Owner: h})
+	u.InstallWeapon(0, &content.WeaponDef{ID: 1, Range: 400})
+	slot := u.SlotAt(0)
+	slot.Target = units.Target{Kind: units.TargetUnit, Unit: h}
+	slot.Aim.IssueBit, slot.Aim.Ready = true, true
+	q := QueueForUnit(u)
+	q.Push(Lookup("Move_Ground"), Node{Owner: h})
+	protected := &Node{ID: Lookup("Wait"), Owner: h, Flags: FlagPurgeSurvivor | FlagAutoOp}
+	rear := &Node{ID: Lookup("BuildWeapon"), Owner: h}
+	q.SetPrimary(append(q.Primary(), protected))
+	q.SetSecondary([]*Node{rear})
 
-	StopCurrentOrder(u, 11)
-	primary := QueueForUnit(u).Primary()
-	if len(primary) == 0 {
-		t.Fatal("the stop path inserted no record")
+	PurgeOrdersOnDamage(u)
+	if len(q.Primary()) != 1 || q.Primary()[0] != protected || len(q.Secondary()) != 1 || q.Secondary()[0] != rear {
+		t.Fatal("damage changed protected primary or rear records")
 	}
-	if got := DescriptorFor(primary[0].ID).Name; got != "Stop" {
-		t.Fatalf("front primary order after the stop = %q, want Stop [04 R-ORD-01 §2]", got)
+	if slot.Target.Unit != h || !slot.Aim.IssueBit || !slot.Aim.Ready {
+		t.Fatalf("damage cleared an autonomous target or aim: %+v", slot)
 	}
-	if primary[0].CreationTick != 11 {
-		t.Fatalf("stop record creation tick = %d, want 11 [04 §3.2]", primary[0].CreationTick)
+	q.SetPrimary(nil)
+	PurgeOrdersOnDamage(u)
+	if len(q.Primary()) != 0 || slot.Target.Unit != h {
+		t.Fatal("damage with no primary order inserted Stop or cleared target")
 	}
 }
 

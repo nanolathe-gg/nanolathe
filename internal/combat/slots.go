@@ -320,7 +320,6 @@ func TickSlot(slot *Slot, idx int, tick uint32, spy *PipelineSpy, env PipelineEn
 		// Every writer preserves the latch on replacement, but stale
 		// resolution DOES clear it.
 		slot.Aim.IssueBit = false
-		slot.Aim.Ready = false
 		slot.Flags &^= FlagAimLatch
 		// Keep Target as None for Go; caller may re-latch next tick. Emitting
 		// the TargetCleared callback itself is a presentation/COB concern

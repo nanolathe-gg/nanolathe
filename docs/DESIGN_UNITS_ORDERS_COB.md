@@ -1113,3 +1113,25 @@ would settle it:
   observes `Create` before it starts, so its normal return survives same-drain
   thread-slot reuse; this closes the former abnormal-finish question without
   settling publication timing `[04 R-P28-COB-01R]`.
+
+### State-machine audit follow-up (2026-09-16)
+
+The following established contracts remain incorrectly implemented; these are
+repair work, not Modern gameplay policies:
+
+* Both guard variants' slot-retarget fallback must remain inside the hostile
+  recorded-attacker, damage-wake and no-chase gates, after forced attack
+  insertion fails. Existing-target retention needs full shot admission, not
+  only distance `[04 R-UNIT-06 §1]`.
+* An invalid opcode releases its thread without waking call-script waiters;
+  the scheduler must not resume those waiters merely because the callee is
+  idle `[04 §4.2]`. This concerns malformed or unsupported scripts; no stock
+  gameplay symptom was established in the audit.
+* `TransportDrop` needs logical arity one with four physical argument cells;
+  cleanup's `StopBuilding` needs logical arity zero with four physical zeros.
+  The adapters currently conflate physical input length with logical arity
+  and use the name-form zero-argument starter for cleanup respectively
+  `[04 R-CB-01 §2]`. No visible stock symptom was established for either shape.
+
+The audit did not implement these repairs. Tests should distinguish each
+branch and callback shape rather than assert only eventual order completion.

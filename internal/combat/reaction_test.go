@@ -53,7 +53,7 @@ func newReactionFixture(t *testing.T) *reactionFixture {
 		ObserverNotice:          func(*units.Unit) { f.observed++ },
 		Allied:                  func(a, b uint8) bool { return a == b },
 		ArmConstructionThrottle: func(uint8, uint32) { f.throttle++ },
-		StopCurrentOrder:        func(*units.Unit, uint32) { f.stops++ },
+		PurgeOrdersOnDamage:     func(*units.Unit) { f.stops++ },
 		RetaliationOrder:        func(*units.Unit, *units.Unit) bool { f.orders++; return false },
 		SlotAcquisitionAdmits: func(u *units.Unit, idx int, cand *units.Unit) bool {
 			return f.admits(u, idx, cand)

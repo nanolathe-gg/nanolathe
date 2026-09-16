@@ -78,14 +78,10 @@ func TestReactionThrottleUsesConstructedManagerRNG(t *testing.T) {
 	if got := mgr.UnitLossDeadline(); got != wantDeadline {
 		t.Fatalf("unit-loss deadline=%d, want %d", got, wantDeadline)
 	}
-	// The same hit stops the damaged unit where it stands, through the ordinary
-	// stop path [08 R-AI-01 §11].
-	q := orders.QueueForUnit(u)
-	if q == nil || len(q.Primary()) == 0 {
-		t.Fatal("the throttle did not issue the stop the reaction site names [08 R-AI-01 §11]")
-	}
-	if got := orders.DescriptorFor(q.Primary()[0].ID).Name; got != "Stop" {
-		t.Fatalf("front primary order after the throttle = %q, want \"Stop\"", got)
+	// Damage selectively purges primary orders; an empty queue remains empty
+	// rather than receiving Stop and clearing autonomous weapon targets.
+	if q := orders.QueueForUnit(u); q == nil || len(q.Primary()) != 0 {
+		t.Fatal("damage inserted an order into the empty primary queue [08 R-AI-01 §11]")
 	}
 }
 

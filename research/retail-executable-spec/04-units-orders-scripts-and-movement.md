@@ -2026,16 +2026,22 @@ which the same pump cascade re-enters immediately.
    still joins; the ward's owner's rows are never read; and the command
    resolver the join then runs (code 3, with force) applies its own,
    opposite-direction test on top.
-2. **Slot re-target (auto-fire support).** Skipped entirely when the guard's
+2. **Slot re-target (auto-fire support).** This is the fallback inside leg 1:
+   it runs only when the recorded-attacker, hostility, damage-wake and no-chase
+   gates above all pass, but forced attack insertion fails. An ordinary
+   maintenance deadline does not enter this fallback. Skipped when the guard's
    standing-fire field (bits 20–21 of the status word) is zero; the
    standing-move field is not read in either guard handler
    ([R-STANCE-01 §3]). Per slot 0..2, requiring the slot assigned bit, the
    slot tracking bit, and a weapon whose command-fire-only definition bit is
    clear: resolve the slot's stored target; when the slot has **no target**,
-   that target is **out of range**, or the target's definition **is** in the
+   that target fails the **full unit-to-unit shot-admission predicate**
+   (including range, medium, air restrictions and ballistic feasibility), or
+   the target's definition **is** in the
    guard's per-slot bad-target-category bit array, the slot is **rebound onto
    the ward's engagement target** (the same unit branch 1 attacks). Slots
-   already holding a legal in-range target are left alone. There is no
+   already holding a target admitted by that predicate and outside the bad-target
+   category are left alone. There is no
    acquisition and no dedup latch.
 3. **Repair/assist the ward.** When the ward's health (signed word) compares
    below its definition's maximum-damage word and the guard's definition has
@@ -5522,7 +5528,7 @@ field that save restoration clears rather than reconstructs
 
 **Established fact:** Thread states include idle, running, waiting for turn, waiting for move, sleeping, and waiting for a called script. Signal masks can terminate or suppress matching threads. Calls block the caller until the callee returns.
 
-**Established fact:** `SET_SIGNAL_MASK` (`0x10068000`) replaces the current thread's mask with the popped value. Engine-created root threads begin with mask `1`. `SIGNAL` (`0x10067000`) pops a mask and scans all eight slots; every active thread whose mask intersects it is released, including the signalling thread itself, each decrementing the active count and waking every thread waiting for that slot. Signal termination never invokes a completion receiver; if the signalling thread is among the victims its interpretation stops. An explicit script `return` (`0x10065000`) pops the top value, delivers it to the thread's completion receiver when one is set, releases the slot, and wakes threads waiting for that slot. An invalid-opcode kill clears status and decrements active count but does not invoke a receiver.
+**Established fact:** `SET_SIGNAL_MASK` (`0x10068000`) replaces the current thread's mask with the popped value. Engine-created root threads begin with mask `1`. `SIGNAL` (`0x10067000`) pops a mask and scans all eight slots; every active thread whose mask intersects it is released, including the signalling thread itself, each decrementing the active count and waking every thread waiting for that slot. Signal termination never invokes a completion receiver; if the signalling thread is among the victims its interpretation stops. An explicit script `return` (`0x10065000`) pops the top value, delivers it to the thread's completion receiver when one is set, releases the slot, and wakes threads waiting for that slot. An invalid-opcode kill clears status and decrements active count but neither invokes a receiver nor wakes call-script waiters. The ordinary scheduler does not poll a callee's liveness to release those waits; only the explicit return and signal wake paths do so.
 
 **Established fact:** Synchronous query helpers execute script logic without an ordinary tick delta and do not advance piece interpolation. Asynchronous callbacks allocate one of the eight thread slots and return if no slot is available. Section 4.3 gives the exact failure edge for every starter, including the two cases where arguments are left on the caller's stack.
 

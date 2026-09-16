@@ -2495,9 +2495,9 @@ func (s *Session) bindDamageReaction() {
 				mgr.RecordUnitLoss(tick)
 			}
 		},
-		StopCurrentOrder: func(victim *units.Unit, tick uint32) {
+		PurgeOrdersOnDamage: func(victim *units.Unit) {
 			s.bindOrderQueue(victim)
-			orders.StopCurrentOrder(victim, tick)
+			orders.PurgeOrdersOnDamage(victim)
 		},
 		RetaliationOrder: func(victim, attacker *units.Unit) bool {
 			s.bindOrderQueue(victim)

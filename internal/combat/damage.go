@@ -436,9 +436,9 @@ type ReactionSeams struct {
 	// deadline — the one simulation draw of bound 300 in the whole damage-intake
 	// path — for a computer player [08 R-AI-01 §11].
 	ArmConstructionThrottle func(owner uint8, tick uint32)
-	// StopCurrentOrder clears the damaged unit's current order through the
-	// ordinary stop path, the throttle's second half [08 R-AI-01 §11].
-	StopCurrentOrder func(victim *units.Unit, tick uint32)
+	// PurgeOrdersOnDamage selectively removes unprotected primary orders;
+	// it does not issue Stop [08 R-AI-01 §11][04 R-MOV-03 §6].
+	PurgeOrdersOnDamage func(victim *units.Unit)
 	// RetaliationOrder is the retaliation's order branch: the shared auto-engage
 	// issuer with force = 0, behind the front-order and category admissions
 	// [08 R-AI-01 §11][04 R-STANCE-01 §3]. It reports whether a record was
@@ -536,8 +536,8 @@ func (s *Service) ReactToDamage(w *units.World, victim, attacker *units.Unit, ti
 // damaged unit's definition has the authored `cancapture` flag, its owning
 // player record exists and that player's control byte is 2, the engine draws
 // RNG(300) and writes the owning player's manager throttle deadline to
-// tick + 30 + draw, then clears the damaged unit's current order through the
-// ordinary stop path. It is computer-players-only, and the draw is the only
+// tick + 30 + draw, then selectively purges its primary orders. It is
+// computer-players-only, and the draw is the only
 // simulation draw anywhere in the damage-intake path.
 //
 // Retail arms it from DAMAGE to a `cancapture` unit. Before this routine
@@ -557,8 +557,8 @@ func (s *Service) reactionThrottle(victim *units.Unit, tick uint32) {
 	if r.ArmConstructionThrottle != nil {
 		r.ArmConstructionThrottle(victim.Owner, tick)
 	}
-	if r.StopCurrentOrder != nil {
-		r.StopCurrentOrder(victim, tick)
+	if r.PurgeOrdersOnDamage != nil {
+		r.PurgeOrdersOnDamage(victim)
 	}
 }
 

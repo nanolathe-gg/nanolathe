@@ -753,7 +753,10 @@ the family ordering of §6.2 and both must be reproduced independently.
   for neither, the dispatch is skipped entirely. On success it writes the
   solved yaw and pitch into the slot, zeroes the four-byte Aim receiver,
   dispatches the deferred Aim callback with those two angles as arguments, and
-  then sets the latch.
+  then sets the latch. If the fresh solve fails, it skips dispatch, preserves
+  the stored angles and receiver, and continues to the ordinary reload/fire
+  gates. It does not set the could-not-fire event at this dispatch site; the
+  admitted ready executor has its separate failure behavior below.
 * The **vertical-launch** executor's slot dispatches the same callback with
   both arguments **zero**, gated only on the latch being clear and — for a
   `stockpile` weapon — on nonzero ammunition. It solves no angles at aim time.
@@ -1091,7 +1094,7 @@ byte**, and names the rest of it:
 
 | Bit | Meaning | Writers | Readers |
 |---:|---|---|---|
-| 0 | **Aim-request latch** | set by the slot pipeline when it dispatches `Aim*`; cleared by the pipeline on target loss, by the turret executor on no-solution, on drift-gate failure and on a successful shot, and by the vertical-launch executor on a successful shot (§3.3) | the pipeline's dispatch gate; the turret executor's ready gate |
+| 0 | **Aim-request latch** | set by the slot pipeline when it dispatches `Aim*`; cleared by the pipeline on every failed target resolution (including an empty target), by the turret executor on no-solution, on drift-gate failure and on a successful shot, and by the vertical-launch executor on a successful shot (§3.3) | the pipeline's dispatch gate; the turret executor's ready gate |
 | 1 | **slot enabled** — the slot's weapon definition is active (the definition-side active byte of `[08 R-SAVE-WEAPON-01]` is nonzero) | the **slot initializer**, run once from unit construction; save load restores it wholesale | the pipeline's slot visit, the target resolver, the enabled-slot tests of `[04 R-ORD-01 §7]` and the HUD/AI readers |
 | 2–3 | **the slot's own index** (0, 1, 2) | the slot initializer | every muzzle query made through a slot record (the index is the query's slot argument), the three creators (to select `FirePrimary`/`FireSecondary`/`FireTertiary` and to read *that slot's* stored yaw for `RockUnit`), the line-of-sight executor, and the fire packet |
 | 4 | **autonomy** (doc 06's "tracking flag", `[04 R-ORD-01 §7]`'s "inhibit latch") | the slot initializer **sets** it, so every slot starts autonomous; thereafter only the two order verbs | the autonomous scan (§3.2), the retaliation offer, the guards, the fire-stance handler (`[04 §5.4]`) |
@@ -1690,6 +1693,14 @@ encoded target (§1.2), in this order:
 * **Live unit target:** the point is the `SweetSpot` transform below, then the
   pre-fire lead of §3.3 when its five gates pass. Success.
 
+**Established — failed resolution resets only the request latch.** After any
+resolver failure, the caller clears the Aim-request latch, including when the
+target was already empty. It preserves readiness, desired angles and outstanding
+Aim callbacks. An empty target emits no `TargetCleared`; a freed target emits
+it as described above. This per-visit reset allows a later target to request
+another Aim after the old script was cancelled; it is not a timeout or a
+readiness grant [04 R-CB-01 §3].
+
 **Established — `SweetSpot`'s piece-to-world transform is the piece's vertex
 bounding-box centre, untransformed.** `SweetSpot` is dispatched synchronously
 on the **target's** script with cell 0 seeded zero (`[R-WPN-03 §6]`); the
@@ -1830,10 +1841,12 @@ different contract for any future path that could interleave `[R-WPN-01 §7]`. A
 `stockpile` weapon takes neither path: it decrements ammunition and performs no
 per-launch resource debit.
 
-**Established fact:** On a successful non-stockpile shot the unit's "fired this
-tick" status word receives bit `0x800` when `commandfire` is authored and bit
-`0x400` otherwise, and the slot's reload timer is written with integer
-truncation in this order (all divisions truncate toward zero; `reloadtime` is
+**Established fact:** Every successful shot, including a stockpile launch,
+raises the unit's fired event: `0x800` when `commandfire` is authored and
+`0x400` otherwise. This follows either ammunition decrement or the ordinary
+reload store, and precedes the non-stockpile resource debit. A failed launch
+raises neither event. Only non-stockpile shots write the reload timer, with
+integer truncation in this order (all divisions truncate toward zero; `reloadtime` is
 already `trunc(authored seconds × 30)` stored as a signed 16-bit tick count):
 
 ```

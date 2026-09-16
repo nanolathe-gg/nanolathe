@@ -287,6 +287,17 @@ readiness; each later nonzero return grants it, while a zero return leaves its
 current value unchanged `[04 R-CB-01 §6]`. Retargeting can overlap those
 callbacks, so the completion adapter cannot assign readiness from every return.
 
+A slot with no resolvable target clears only its request latch on that visit.
+It retains readiness and outstanding callbacks; an already-empty target emits
+no callback. This lets a later acquisition start another Aim after script
+cancellation `[06 R-WPN-04 §1]`. The AI damage reaction selectively purges
+primary orders, preserving protected records and the rear queue. It does not
+issue a full Stop or unconditionally clear weapon targets
+`[08 R-AI-01 §11]`. Retail commander fixtures exercise both original laser scripts during repeated
+damage in both gameplay modes. Their tertiary slot is disabled to isolate this
+contract from the authored D-gun/laser mutual exclusion; energy alone does not
+prevent D-gun aiming.
+
 Aim-origin queries belong only to a turret's fresh Aim dispatch and its admitted,
 ready fire attempt. A held turret blocked by reload, physical admission, costs,
 or readiness performs no aim-origin query. Fixed LOS/self-propelled weapons
@@ -350,8 +361,8 @@ ordinary creator continues to solve its flight from muzzle and target. Neither
 path applies spread a second time [06 R-WPN-03 §4][06 R-WPN-05 §4][06 R-WPN-05 §5][06 R-WPN-05 §11].
 
 The aim handshake itself is a latch: a new receiver clears readiness before
-dispatch; an explicit nonzero return grants it, while every delivered zero
-clears it. The request latch is set immediately after dispatch, and there is no timeout
+dispatch; an explicit nonzero return grants it, while a delivered zero
+leaves the current receiver unchanged. The request latch is set immediately after dispatch, and there is no timeout
 `[06 §3.3]` `[06 §3.4]`. Which of the three readiness ladders a weapon takes is
 decided by its executor flags alone — a turret needs the latch and a nonzero
 result, vertical launch needs the result only, and the line-of-sight,
@@ -1264,3 +1275,18 @@ Open items the contracts above carry:
   because neither scan tests the dead bit; only coverage and claim state
   prevent a shot. That is the established behaviour, not a gap
   `[06 §11.2]` `[06 R-WPN-05 §10]`.
+
+### State-machine audit follow-up (2026-09-16)
+
+The commander investigation corrected damage's selective purge and failed-target
+Aim reset. Two additional established contracts remain incorrectly implemented:
+
+* `firePreparedSlot` currently emits the fired order event only for ordinary
+  shots. Stockpile launches need the same command-fire-selected event after
+  ammunition decrement, without a resource debit `[06 §4.2]`.
+* Fresh turret Aim-solve failure currently overwrites angles and emits firing
+  failure before reload admission. It should preserve the stored state and
+  continue to the ordinary firing gates `[06 §3.3]`.
+
+These are confirmed implementation defects, not Modern policies. Their repairs
+need focused transition tests; this audit has not implemented those repairs.

@@ -205,19 +205,11 @@ func categoryAdmitsChase(victim, attacker *content.UnitDef) bool {
 	return !cat.Intersects(victim.BadTargetCategoryWPRIMask)
 }
 
-// StopCurrentOrder is the second half of the construction throttle of
-// [08 R-AI-01 §11]: after writing the owning player's manager throttle
-// deadline, the executable "clears the damaged unit's current order through the
-// ordinary stop path". That path is the `Stop` command's ordinary issue — purge
-// the unprotected records, drop the leading auto operations, then push the
-// `Stop` record, whose own row clears the three weapon-slot targets and lands a
-// stopped aircraft [04 R-ORD-01 §2].
-func StopCurrentOrder(u *units.Unit, tick uint32) {
+// PurgeOrdersOnDamage applies the construction throttle's selective primary
+// purge [08 R-AI-01 §11][04 R-MOV-03 §6]. A full Stop would additionally clear
+// autonomous targets and cancel the commander's weapon aiming scripts.
+func PurgeOrdersOnDamage(u *units.Unit) {
 	if u == nil {
-		return
-	}
-	id := rowStop
-	if id == 0 {
 		return
 	}
 	q := QueueOfUnit(u)
@@ -225,6 +217,4 @@ func StopCurrentOrder(u *units.Unit, tick uint32) {
 		return
 	}
 	q.PurgeUnprotected()
-	q.DropLeadingAutoOps()
-	q.Push(id, NewNodeForOrder(id, 0, 0, 0, 0, tick, u.Handle, false))
 }

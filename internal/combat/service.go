@@ -215,20 +215,14 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 	// economy settlement, cloak/upkeep ... are outside the blocked task
 	// runner").
 	bridge := s.callbackBridgeForUnit(u)
-	// Target resolution in the weapon pipeline clears its Aim state when the
-	// installed target has become stale [06 R-WPN-04 §1][06 R-WPN-05 §3].
+	// Failed target resolution clears only the request latch, including an
+	// already-empty target [06 R-WPN-04 §1][06 R-WPN-05 §3].
 	// The phase-5 scanner has a separate target-word-only clear [06 §3.2].
 	clearSlotTarget := func(slot *units.Slot, idx int) {
-		clearedHeading := slot.DesiredYaw != 0
-		clearedPitch := slot.DesiredPitch != 0x8000
 		slot.Target = units.Target{Kind: units.TargetNone}
 		slot.Aim.IssueBit = false
-		slot.Aim.Ready = false
 		slot.Flags &^= 0x01
-		if s.pendingAims != nil {
-			delete(s.pendingAims, pendingKey{Unit: u.Handle, Slot: idx})
-		}
-		if (clearedHeading || clearedPitch) && bridge != nil {
+		if bridge != nil {
 			bridge.TargetCleared(int32(idx))
 		}
 	}
@@ -262,6 +256,8 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 			}
 		}
 		if slot.Target.Kind == units.TargetNone {
+			slot.Aim.IssueBit = false
+			slot.Flags &^= units.SlotFlagAimLatch
 			continue
 		}
 		weapon := slot.Weapon

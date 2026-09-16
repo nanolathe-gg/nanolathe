@@ -3760,11 +3760,17 @@ damaged unit, and it does two independent things.
 definition has the authored `cancapture` flag, its owning player record exists,
 and that player's control byte is `2`, the executable draws `RNG(300)` and
 writes the owning player's manager throttle deadline to
-`tick + 30 + draw`, then clears the damaged unit's current order through the
-ordinary stop path. Pass 1 of the construction task (§3) refuses to start a new
+`tick + 30 + draw`, then selectively purges the damaged unit's primary queue
+[04 R-MOV-03 §6]. Primary records carrying the purge-survivor flag remain,
+and the rear queue is untouched. This invokes ordinary record cleanup
+[04 R-ORDER-02 §2]; it does not issue a Stop command, remove leading automatic
+operations separately, or clear all weapon targets unconditionally. Cleanup
+can clear a nonempty target when it restores autonomy to an enabled,
+non-autonomous slot; an already-autonomous slot retains its target. An empty
+primary queue causes no target clearing. Pass 1 of the construction task (§3) refuses to start a new
 building from any `cancapture` builder while `tick < throttleDeadline`. So the
 computer player's response to its commander or construction units taking fire is
-to stop that unit where it stands and suspend commander-led construction for
+to interrupt its unprotected orders and suspend commander-led construction for
 between 30 and 329 ticks — one to eleven seconds — re-armed by every further
 hit. There is no relocation, no escort, no counter-attack task, and no effect on
 factory production or on the non-`cancapture` builders' repositioning pass.
