@@ -1,11 +1,17 @@
 package main
 
 import (
+	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
+	"github.com/nanolathe-gg/nanolathe/internal/client"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/mission"
+	"github.com/nanolathe-gg/nanolathe/internal/save"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
+	"github.com/nanolathe-gg/nanolathe/internal/settings"
 )
 
 // battleStartCameraFixture is the reset camera a world rebuild leaves behind on
@@ -116,5 +122,71 @@ func TestSkirmishCameraWithoutAResolvableCommanderDoesNotGuess(t *testing.T) {
 	}
 	if _, ok := localCommanderUnit(sess); ok {
 		t.Error("localCommanderUnit resolved a commander from a session with no units")
+	}
+}
+
+// Exercise the production installation seam: the detached candidate starts at
+// the menu size, but the entry jump belongs to the final battle viewport
+// [07 "The loading screen"][08 "Campaign camera"].
+func TestCampaignCameraInstallationUsesBattleSurface(t *testing.T) {
+	t.Setenv(settings.EnvPath, filepath.Join(t.TempDir(), "settings.json"))
+	for _, size := range [][2]int{{640, 480}, {800, 600}, {1280, 720}, {1920, 1080}, {1281, 721}} {
+		t.Run(fmt.Sprintf("%dx%d", size[0], size[1]), func(t *testing.T) {
+			cam := battleStartCameraFixture()
+			sess := campaignSession(mission.Special{Kind: 1, ID: 0, X: 2000, Z: 2000})
+			sess.Snapshot = frame.NewBuffer()
+			centerBattleStartCamera(sess, cam)
+			b := &battleSession{sess: sess, cam: cam, hud: &retailBattleHUD{}}
+			cl, err := client.New(client.Options{Width: size[0], Height: size[1]})
+			if err != nil {
+				t.Fatal(err)
+			}
+			installBattleClient(cl, b)
+			// Insets are asymmetric on X and symmetric on Z. Odd spans
+			// truncate before the inset is added [07 R-CAM-01 §13].
+			wantX := int32(128 + (size[0]-128)/2)
+			wantY := int32(32 + (size[1]-64)/2)
+			if gotX, gotY := 2000-cam.X, 2000-cam.Z; gotX != wantX || gotY != wantY {
+				t.Fatalf("start on screen = (%d,%d), want (%d,%d)", gotX, gotY, wantX, wantY)
+			}
+			if cam.Follow.Desired != (camera.Origin{X: cam.X, Z: cam.Z}) {
+				t.Fatal("entry retained a glide toward the provisional origin")
+			}
+			// A later display edit must not jump back to the mission start.
+			cam.JumpTo(500, 600)
+			shell := &gameShell{cam: cam, battle: b}
+			shell.applyDisplaySize(cl, size[0]+100, size[1]+100)
+			if cam.X != 500 || cam.Z != 600 {
+				t.Fatalf("later resize replayed entry: (%d,%d)", cam.X, cam.Z)
+			}
+		})
+	}
+}
+
+func TestBattleEntryCameraClampsJumpAndPreservesSave(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		start *mission.Special
+		saved *save.Camera
+		want  camera.Origin
+	}{
+		{"northwest start", &mission.Special{Kind: 1, ID: 0, X: 10, Z: 10}, nil, camera.Origin{X: -128, Z: -32}},
+		{"southeast start", &mission.Special{Kind: 1, ID: 0, X: 4000, Z: 4000}, nil, camera.Origin{X: 2816, Z: 3408}},
+		{"missing start", nil, nil, camera.Origin{}},
+		{"saved origin", &mission.Special{Kind: 1, ID: 0, X: 2000, Z: 2000}, &save.Camera{XPosition: 317, ZPosition: 419}, camera.Origin{X: 317, Z: 419}},
+		{"saved origin at edge", &mission.Special{Kind: 1, ID: 0, X: 2000, Z: 2000}, &save.Camera{XPosition: 3400, ZPosition: 3800}, camera.Origin{X: 2816, Z: 3408}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sess := campaignSession()
+			if tc.start != nil {
+				sess.Mission.Specials = append(sess.Mission.Specials, *tc.start)
+			}
+			b := &battleSession{sess: sess, cam: battleStartCameraFixture(), entrySavedCamera: tc.saved}
+			b.placeEntryCamera(640, 480)
+			b.placeEntryCamera(1280, 720)
+			if b.cam.X != tc.want.X || b.cam.Z != tc.want.Z || b.cam.Follow.Desired != tc.want {
+				t.Fatalf("current = (%d,%d), desired = %+v, want %+v", b.cam.X, b.cam.Z, b.cam.Follow.Desired, tc.want)
+			}
+		})
 	}
 }

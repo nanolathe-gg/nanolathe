@@ -41,6 +41,10 @@ type battleSession struct {
 	fs    vfs.FSOps
 	shell *gameShell
 
+	// Retain the original saved origin until installation knows the battle
+	// surface size; clamping a provisional viewport must not lose it.
+	entrySavedCamera *save.Camera
+
 	millisSource clock.MillisSource // host millisecond source for Session.Step [01 §4.1]
 	// lastTickFraction is the Enhanced blend fraction last produced while the
 	// battle was running. A paused battle runs no budget, so tickFraction
@@ -458,6 +462,10 @@ func composeBattleEntryDetached(sess *session.Session, cat *content.Catalog, cs 
 		sess: sess, cat: cat, cam: cam, hud: hud, fs: cs.fs, shell: shell,
 		millisSource: newMonotonicMillisSource(), battleUI: ui.NewProductionBattleState(),
 	}
+	if savedCamera != nil {
+		saved := *savedCamera
+		b.entrySavedCamera = &saved
+	}
 	restoreStart := len(sess.World.FeatureDefs)
 	if sess.Features != nil {
 		restoreStart = sess.Features.DefinitionRestoreStart()
@@ -511,6 +519,7 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 		return
 	}
 	b.cl = cl
+	b.placeEntryCamera(cl.Size())
 	// Every successful battle rebuild, including a load, empties the visible
 	// message span before old source handles can be reused [08 R-ENTRY-01 §3].
 	cl.MessageRing().Clear()

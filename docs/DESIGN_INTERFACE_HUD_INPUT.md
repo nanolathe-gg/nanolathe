@@ -216,6 +216,16 @@ origin so no glide survives it `[07 R-CAM-01 §12]`. `WorldToScreen` applies the
 half-height shear `wz − (wy >> 1)` with arithmetic shifts; `ScreenToWorld`
 inverts it at ground height for pixel-level questions only.
 
+Battle installation applies the entry jump after adopting the client's actual
+surface dimensions. Detached preparation uses the authored 640×480 size, but
+its origin is provisional: fresh missions must center their authored start
+position in the installed battle viewport, and skirmishes center their local
+commander there. A loaded battle instead reapplies the original saved origin
+and clamps it against the installed viewport; it never takes the fresh-entry
+center. Both current and desired origins are written by the jump. Later
+display changes use ordinary resizing, without replaying battle entry
+`[07 "The loading screen"]` `[07 R-CAM-01 §12–§14]`.
+
 **I03 command-palette service (implemented).** Ordinary
 ARMOPT/EXITMENU/YESORNO/RESTART/ENDMSN children and each command-window
 identity use retained `Panel.ServiceFrame` state with zero token mode. The

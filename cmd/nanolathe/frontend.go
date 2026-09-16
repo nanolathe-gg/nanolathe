@@ -881,17 +881,6 @@ func (g *gameShell) commitBattleCandidate(battle *battleSession) {
 	g.pendingDetail = nil
 	installBattleClient(clPtr, battle)
 	g.cam = battle.cam
-	// The battle viewport is the presentation surface. Battle composition
-	// builds the camera at the authored 640x480 design size; the surface may
-	// already be at the chosen display mode, so the viewport is squared with
-	// it here, at the one render-thread installation point that sees both
-	// [07 "The loading screen"].
-	if clPtr != nil && g.cam != nil {
-		if w, h := clPtr.Size(); w > 0 && h > 0 {
-			g.cam.ViewW, g.cam.ViewH = int32(w), int32(h)
-			g.cam.Clamp()
-		}
-	}
 	// `--zoom` is a start-up view scale, so it is applied once the viewport is
 	// the surface's, about the battle viewport's centre (§14.6).
 	applyEntryZoom(g.opts, battle)

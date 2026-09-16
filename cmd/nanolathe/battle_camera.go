@@ -16,6 +16,25 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
+// placeEntryCamera resolves the entry jump against the installed surface,
+// after the loading screen has yielded its authored size [07 "The loading
+// screen"]. Repeating the original placement, rather than clamping the
+// provisional 640x480 origin, preserves the campaign/skirmish center and the
+// saved-origin jump contracts [07 R-CAM-01 §12–§14]. Later display changes do
+// not call this entry-only writer.
+func (b *battleSession) placeEntryCamera(width, height int) {
+	if b == nil || b.cam == nil || width <= 0 || height <= 0 {
+		return
+	}
+	b.cam.ViewW, b.cam.ViewH = int32(width), int32(height)
+	b.cam.JumpTo(0, 0)
+	if b.entrySavedCamera != nil {
+		applyRetailSavedCamera(b.cam, b.entrySavedCamera)
+	} else {
+		centerBattleStartCamera(b.sess, b.cam)
+	}
+}
+
 // centerBattleStartCamera is the retail battle-start camera placement: the one
 // camera writer between the world rebuild's camera reset and the first composed
 // frame, and a *jump* rather than a glide [07 R-CAM-01 §12 "Battle-start
