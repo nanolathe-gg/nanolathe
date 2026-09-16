@@ -478,7 +478,9 @@ cannot crash startup.
 developer probe overlays read a display-object word through an accessor and
 display it as the frame counter. Its only setter has no caller in the
 recovered image, and the display object is static zero-initialised data, so
-the overlays show a constant 0 in retail.
+the probe painters would format a constant 0 if called. Their rendering entry
+points have no located incoming references in this retail image; hotkey arming
+and painter reachability are separate facts [07 R-CAM-01 §9].
 
 ## 3. Configuration, installation, and compatibility runtime
 
@@ -1302,10 +1304,11 @@ up to 21 × 100 ms for the thread to acknowledge before freeing the surfaces
 and the ring. It touches no game state and draws no random numbers.
 
 **3. The diagnostic helper thread** — never created in normal startup (§5.1);
-its body sets `THREAD_PRIORITY_ABOVE_NORMAL` while it opens the
-`-memorystatus` / `-performancestatus` dialogs (each only when its switch is
-present), restores the previous priority, then runs a `GetMessage` loop with
-a dialog filter.
+its body sets `THREAD_PRIORITY_ABOVE_NORMAL` while it creates the memory and
+performance dialog objects, showing each only when its corresponding
+`-memorystatus` / `-performancestatus` switch is present. It restores the
+previous priority, then runs a `GetMessage` loop with a dialog filter. The
+dialogs and their reachability boundary are detailed in [R-PLAT-01 §9].
 
 **Bounded negative.** No other `CreateThread`/`_beginthread` caller exists in
 the recovered game code; the remaining creators are library (Smacker, the
@@ -1859,7 +1862,7 @@ functions; the ones not already placed in the tick table above are:
 | briefing wind display | 2 | [R-CORE-02] |
 | sound-variant picker | `(crt() · variantCount) ÷ 32768` per play, gated by the sound-category record's variant count and the options flags | doc 03 §8 / doc 02 sound category |
 | CD audio track choice | 2 sites | random track mode |
-| minimap/radar preparation | 1 | presentation |
+| developer terrain display mode 1 | one per visited acceptable-terminal search cell, before glyph clipping | randomized `G` color; [03 §3.12] |
 | fire-effect spawn from debris | 4 (three −1..+1 position jitters and one more) | [04 R-COB-04 §2] |
 | lightning renderer | per rendered frame, two passes, three draws per point: `(crt()·11) ÷ 32768 − 5` on each axis | [06 R-WFX-01 §6]; 6 per point per frame, matching the lane |
 | multiplayer host lobby shuffle | as the skirmish shuffle | out of scope |
@@ -1883,7 +1886,7 @@ thread root.
 
 | Thread | Consumers | Seed history of the block they read |
 |---|---|---|
-| Main thread (pump → mode frame function → battle host pump → tick, host frame, composer) | camera shake, feature fire effects, meteor scheduler, victory-timer arm, wind interval, the eleven strip families, the sound-variant picker, the elimination-line pickers (skirmish `mod 3`, multiplayer `& 7`), fire-effect spawn, lightning renderer, minimap preparation, the spark shimmer, briefing wind display, CD track choice | seeded **once** at process startup from the time-of-day helper; never reseeded; advanced by every front-end and battle draw in program order |
+| Main thread (pump → mode frame function → battle host pump → tick, host frame, composer) | camera shake, feature fire effects, meteor scheduler, victory-timer arm, wind interval, the eleven strip families, the sound-variant picker, the elimination-line pickers (skirmish `mod 3`, multiplayer `& 7`), fire-effect spawn, lightning renderer, developer terrain terminal-marker colors, the spark shimmer, briefing wind display, CD track choice | seeded **once** at process startup from the time-of-day helper; never reseeded; advanced by every front-end and battle draw in program order |
 | Loading thread (battle-entry orchestrator) | the skirmish slot shuffle and its gate draw; the explosion-frame builder (391,606) | fresh block (`rand` state 1 at thread start) seeded by the orchestrator's `srand` from the time-of-day helper; discarded with the thread |
 | Cursor thread, helper thread | none | — |
 
@@ -2197,7 +2200,7 @@ image. The generic fatal modal (message box then exit code 1 — [08 R-ENTRY-01
 
 The console vocabulary itself is [07 R-CAM-01 §6] and the developer bit's
 writers are [07 R-CAM-01 §9] (the registry `Games` value at settings load, and
-the five-word `Now` phrase).
+the `Now` command followed by five case-sensitive password arguments).
 
 **`DebugBreak [1|2|3]`** — requires the developer bit **and** film mode:
 
@@ -2229,6 +2232,69 @@ install, so the path is inert in stock configurations.
 `0x7E` token before the dispatcher sees it and restores the desktop display
 mode ([R-PLAT-01 §1]); without the bit the token reaches the battle dispatcher
 as one of the "label every unit" toggles ([07 R-CAM-01 §2]).
+
+#### Command stubs versus working tools
+
+**Established (direct-static, command-table targets checked).** The presence
+of a command name does not imply a complete tool. The developer table routes
+`Mem`, `Assert`, and `DPrint` to immediate-return handlers: these commands have
+no effect in this image. `MemDump` creates or truncates `memdump.txt` in the
+current working directory and closes the handle; it writes no contents. It is
+an empty-file stub, not a memory dump. `Profile` toggles the battle profiler's
+display boolean; the nine timing bars are [03 R-COMP-01 §5]. These table-bound
+handlers must not be classified as unreachable merely because a direct-call
+census finds no callers.
+
+#### Separate Cavedog library diagnostic windows
+
+**Established (direct-static, bounded reachability).** `Memory Status` and
+`Performance status` are native Windows library dialogs, separate from the
+in-battle profiler and unit probes. Their constructors run from the diagnostic
+helper thread. Normal application startup disables that thread; the other
+initializer wrapper that would permit it has no located incoming reference.
+The `-memorystatus` and `-performancestatus` switches select initial visibility
+*after* dialog construction; they do not override the thread gate. Therefore
+their existence, resources and hotkeys do not establish that supplying those
+switches exposes them in ordinary retail startup. The independently optional
+`DebugHelper.dll` path is not evidence that a shipped DLL reconnects them.
+
+**Established — dormant window controls.** If constructed, the memory dialog
+registers **Alt+End**, and the performance dialog **Alt+Home**, to toggle their
+visibility. Showing a window enables/focuses it, restores its saved placement
+and starts a 200 ms timer; hiding it kills the timer and saves placement. Both
+use the Cavedog library window-position preferences described in
+[07 R-FE-01 §11]. These are operating-system hotkeys, not battle input tokens,
+and do not require the game's developer password in the dialog handlers.
+
+**Established — memory display.** The memory window formats current and peak
+allocation counts, total allocation requests, allocations per second, current
+and peak allocated bytes, cumulative bytes requested, the next allocation
+location, and current/peak bytes including allocator padding. The rate averages a
+ring of ten samples of allocation-count change divided by elapsed host time;
+the ring starts zeroed and the accumulated sum is multiplied by 0.1 for display. Its optional **Working set** checkbox persists a
+library preference and appends total/peak working-set bytes and shared,
+private and system-page totals when the operating-system query is available.
+The working-set query is throttled to every ten refresh attempts after a
+successful query; hiding the window releases its working-set helper. The
+window updates its text control only when the newly formatted text differs
+from the previous text. No unit, order or battle state is edited by these
+readouts.
+
+**Established — performance window boundary.** The separate performance
+window has two counter selectors, settings checkboxes, refresh/reset controls,
+and its own periodic sampling/display path. This is distinct from `+Profile`
+and its nine game-phase bars. **Unknown:** the complete counter catalog,
+platform capability gates and interpretation of every checkbox; settle by
+tracing the library's counter registration and dialog resource bindings before
+specifying a portable equivalent.
+
+**Unknown — why the tools are disconnected.** The static image establishes
+the disabled startup path and unused probe rendering entries, not whether a
+build define, source edit or another development configuration caused them.
+Source/build evidence or a second executable with connected call sites would
+settle that history. A manual retail observation is still needed for the
+visible layout of any reachable diagnostic; no retail executable was automated
+for this investigation.
 
 ### The directive tokeniser and the screenshot writer [R-PLAT-02 §6]
 
@@ -2436,6 +2502,12 @@ stated in the body, not here.
   device control, the console handler, environment, locale, and the module
   loader; each facility has exactly one recovered wrapper site, but its callers
   are not enumerated · §3.2 · static trace.
+
+- The complete library performance-counter catalog and checkbox semantics
+  [R-PLAT-01 §9] · trace counter registration and dialog resource bindings.
+- Why diagnostic windows and unit-probe painters were disconnected in the
+  studied image [R-PLAT-01 §9] · source/build evidence or a comparative binary;
+  current static evidence establishes reachability, not development intent.
 
 ### Clock, network, and determinism
 

@@ -323,12 +323,13 @@ unlike generic strip objects.
 
 These are the helpers the frame composer calls under its developer-mode
 predicates (the toggles and the overlay text itself are document 07's;
-[07 R-FE-02] owns the developer overlay). They read no
-simulation state, draw no RNG, and are presentation-only. **Established
-(direct-static)** unless marked.
+[07 R-FE-02] owns the developer overlay). The counters measure host activity;
+the selected-unit hook reads movement state for presentation. The terrain
+diagnostics are specified separately in §3.12, including their CRT draw.
+**Established (direct-static)** unless marked.
 
-**Frame-rate counter.** One call per composed frame while the film-mode
-developer bit is set, over three words held beside the display descriptor
+**Frame-rate counter.** One call per rendering-enabled composed frame while
+film mode is on, over three words held beside the display descriptor
 (an accumulator in milliseconds, a frame count, and the published figure):
 
 ```
@@ -338,24 +339,29 @@ if acc > 1000 : published = frames ; acc −= 1000 ; frames = 0
 return published                                // the "FRATE %d" figure
 ```
 
-The published figure is therefore the number of composed frames in the last
-whole second, refreshed once per second; after a stall the first reading is
-the post-stall count.
+The strict comparisons matter: exactly 1000 accumulated milliseconds does
+not publish. A stall that raises the accumulator above 2000 resets it to
+1000 without publishing on that call; the next positive elapsed interval
+crosses the publication threshold.
 
 **Profile buckets.** Nine wall-clock buckets accumulate `GetTickCount()`
 deltas between stamps (`bucket[i] += now − last; last = now`); the composer
 stamps bucket 3 as its last act of every frame. Under the profile-display
 flag the composer draws, before the options slide and the present, nine rows
 labelled `Network`, `Units`, `Logic`, `Render Static`, `Render Stuff`,
-`Render Fog`, (unread label), `Weapon`, (unread label): row `i` writes its
+`Render Fog`, `SFX`, `Weapon`, `Misc`: row `i` writes its
 label at `(screenW − 85, 40 + i × fontHeight)` in the default text colour and
 a bar from `screenW − 90 − 2 × (bucket[i] × 100 / total)` to `screenW − 90`
-(integer percent, two pixels per percent, growing leftward), `fontHeight`
-tall, filled with raw palette index `i + 1`; each row call also redraws the
-enclosing frame `[screenW − 290, 38] .. [639, 9 × fontHeight + 41]` in index
+(integer percent, two pixels per percent, growing leftward), with inclusive
+vertical bounds `y .. y + fontHeight`, filled with raw palette index `i + 1`;
+each row call also redraws the enclosing frame
+`[screenW − 290, 38] .. [639, 9 × fontHeight + 41]` in index
 255. Which pump sites stamp buckets 0–2 and 4–8 is document 01's territory
-(the frame-end stamp of bucket 3 is the only one established here). The two
-unread labels are **Unknown** (decider: read the two label pointers).
+(the frame-end stamp of bucket 3 is the only one established here). These
+rows also require the composer's rendering-enabled argument. They follow
+the GUI painter and the restoration of the full-surface clip, so their
+coordinates are not clipped to the game viewport. The options slide,
+cursor restoration and optional presentation follow them.
 
 **Packet-rate line.** Under film mode together with one session-flag bit,
 the developer text block gains a line formatted
@@ -377,14 +383,30 @@ its low half and zero in its high half — read as a double that is a denormal,
 so the text most likely reads `0.0`; a retail multiplayer capture would settle
 it.
 
-**Developer draw hook.** With both developer bits set and a rendering pass,
-the composer, just before the fog overlay, takes the first selected unit of
-the local player's slice (the first unit whose selected bit is set, walking
-from the slice start) and invokes a draw entry on the object at the head of
-that unit's record with the framebuffer. **Unknown:** which object and entry
-that is (decider: resolve the class whose pointer sits at the head of the unit
-record and read its eleventh virtual slot); nothing in the battle path
-depends on it.
+**Selected-unit movement overlay.** Film mode and its `i` information toggle
+must both be on, and the composer must be rendering. Just before fog, after
+the ordinary world objects and unit labels, it takes the first selected unit
+in the local player's slice and asks that unit's first movement follower to
+draw. A missing unit, controller or follower draws nothing; the search does
+not continue to a later selected unit. This is separate from the `m` display
+selector of §3.12. The ground follower draws:
+
+1. Its owner's **committed footprint**, not the requested goal rectangle,
+   outlined in logical colour 15. The top-left is the committed cell origin
+   multiplied by 16, projected with the terrain height sampled at that origin;
+   the right and bottom add `16 × FootPrintX/Z`. All four corners use that
+   single anchor height rather than conforming individually to terrain.
+2. Consecutive stored route points, producing `pointCount − 1` segments when
+   there are at least two points. Each endpoint gets its own terrain-height
+   query and ordinary world projection. The line colour is logical entry 9
+   when **has-waypoint** is set, and entry 12 otherwise. The point sequence
+   and flag are the follower's existing state [04 R-PATH-01 §8]; this draw
+   neither requests nor recomputes a route.
+
+The base follower and the other recovered controller families inherit an
+empty draw method. All these primitives clip to the game viewport and remain
+under the subsequent fog painter. The dormant probe painters of
+[07 R-CAM-01 §9] are separate from this ground-follower overlay.
 
 ## 2. World coordinates, terrain grids, and projection
 
@@ -4710,24 +4732,137 @@ selector**, and its complete writer set is three sites.
   key dispatcher runs after the first, on the same token, and only while film
   mode is on — the `m` case of the film-mode key set enumerated in
   `[07 R-CAM-01 §9]`.
-* **Leaving film mode** stores zero again, which `[07 R-CAM-01 §9]` already
-  records ("on exit also clears that word's bit 0, zeroes the minimap mode byte
-  and re-shows the HUD").
+* **Leaving film mode** stores zero again and clears its information toggle
+  `[07 R-CAM-01 §9]`.
 
 Film mode is reached only by F11, F11 only in developer mode, and developer mode
 only through the six-word `+Now` password of `[07 R-CAM-01 §6]` or the registry
-pair `DisplaymodeDepth = 256` with `Games = 1` `[07 R-CAM-01 §9]`. **None of it
-is reachable in a stock configuration**, so in ordinary play the byte holds zero
-from battle entry to battle exit and neither the crosshair above nor the debug
-grid below is ever drawn. A player who remembers a camera indicator on TA's
+pair `DisplaymodeDepth = 256` with `Games = 1` `[07 R-CAM-01 §9]`. These
+controls are disabled until explicitly activated; the password can be entered
+through ordinary chat in a stock installation. In ordinary play the byte holds
+zero from battle entry to battle exit and neither the crosshair above nor the
+mode-specific grid below is drawn. A player who remembers a camera indicator on TA's
 minimap is remembering the viewport rectangle of `[R-MM-01 §1]`, not this
 figure.
 
-The other two readers of the same byte, for completeness: the debug terrain-grid
-overlay draws its wireframe whenever the byte is nonzero and takes an extra
-per-cell pass at mode 1, and one unit-drawing gate admits only while the byte is
-zero. Both are film-mode diagnostics on the same selector; neither is specified
-further here because neither is reachable in a stock configuration.
+#### The five displays, terrain cells and body blending
+
+**Established (direct-static).** The display names below describe their
+observed inputs; they are not retail menu labels. The terrain pass runs when
+the selector is nonzero **or** contour spacing is nonzero. It runs immediately
+after the TNT tile pass, using the same game-viewport clip, before features,
+units and fog. The mode-2 pick cross follows the whole terrain diagnostic
+pass. Within each terrain cell, mode-specific marks precede contours
+[07 R-FE-02 §11]. Neither the terrain pass nor the pick cross tests the
+compositor's rendering-enabled argument; the later movement overlay and film
+text do [R-COMP-01 §5].
+
+| Mode | Terrain diagnostic |
+|---|---|
+| 0 | No mode-specific marks. Contours still draw if their spacing is nonzero. |
+| 1 | Selected unit's movement-class tier crosses, plus the session's shared path-search cells, terminal markers and direction arrows. |
+| 2 | Height grid, ground occupancy or feature fills, air-occupancy crosses and building-footprint diamonds; also the ground-pick cross described above. |
+| 3 | Height grid and the unsigned per-cell metal byte printed in decimal. |
+| 4 | Grid and square markers wherever the local player's current-coverage byte is nonzero. |
+
+**Cell walk and geometry.** With the ordinary clamped camera, start at
+`x0 = trunc(camX / 16)`, `z0 = trunc(camZ / 16)`. Visit columns in increasing
+order up to, but excluding,
+`min(x0 + trunc(viewportWidth / 16) + 1, mapCellWidth − 1)`. Visit rows in
+increasing order while `z < mapCellHeight − 1`. Finish each row, then stop
+if every visited cell's projected northwest corner has
+`screenY >= screenHeight`; otherwise advance to the next row. The stop test
+uses the full screen height, while the line and text primitives still clip
+against the game viewport. There is no per-cell LOS or mapped-memory gate.
+
+For each quad, read the four height bytes in northwest, northeast,
+southeast, southwest order. Project each corner independently:
+
+```
+screenX = 16 × cornerCellX − camX + 128
+screenY = 16 × cornerCellZ − floor(heightByte / 2) − camZ + 32
+```
+
+The following logical colours use the logical-to-physical colour map of
+§4.3; colours explicitly called **raw** bypass it. Ordinary strokes are
+one-pixel clipped lines [R-COMP-01 §2].
+
+**Mode 1: class and search.** Once at pass entry, find the first selected
+local unit and its movement class. When present, read the class's packed
+two-bit tier for each cell [04 R-DOC04-B]. Values 0, 1 and 2 draw both quad
+diagonals, northwest-to-southeast first, in logical entries 4, 14 and 10
+respectively; value 3 draws no cross. The classifier ordinarily produces
+0, 1 and 3, but the painter has a defined branch for 2.
+
+The search marks read the **single shared working set** [04 R-PATH-01 §1],
+even when no unit is selected. They do not establish that the displayed
+search belongs to the unit whose class crosses are shown. For each cell:
+
+* If its acceptable-terminal flag is set, select `SMLFONT`,
+  consume **one CRT random value**, use its low byte as a raw foreground
+  colour, and print `G` at the northwest corner. The draw consumes the value
+  before text clipping, so even a clipped marker advances this stream.
+* Remove only the acceptable-terminal flag from the status byte. If the
+  result is neither 0 nor 3, draw a direction arrow. Exact original status
+  1 selects logical entry 15; exact original status 2 selects entry 4.
+  **Unknown:** a stable colour for other admitted statuses. The painter
+  does not assign a colour on those branches: a previous cell's colour or
+  uninitialized scratch can be used. A particular frame's stack history
+  would settle its pixels; assigning all open or terminal cells one colour
+  would be a new tooling policy, not an established retail rule.
+
+For the arrow, let `C = northwest + (8, 8)` and let the cell's direction
+index choose `D` from
+`[(0,−1), (−1,−1), (−1,0), (−1,1), (0,1), (1,1), (1,0), (1,−1)]`.
+Draw `C − 14 × D[d]` to `C`, then `C − 4 × D[(d+1) mod 8]` to `C`, then
+`C − 4 × D[(d−1) mod 8]` to `C`. These screen-space arrows are anchored
+to the northwest corner's height; their tips are not a separately sampled
+terrain point. Search state meanings and producer bounds remain owned by
+[04 R-PATH-01 §1].
+
+**Mode 2: terrain and occupancy.** Draw the north and west edges first,
+in logical entry 15 when the northwest height is **strictly greater** than
+sea level, otherwise entry 13. Then, in order:
+
+1. If the ground-occupant identity is nonzero, flat-fill the projected quad
+   with its low byte as a raw colour. Otherwise, if the feature word differs
+   from the no-feature sentinel, flat-fill with
+   `(featureWord − 56) modulo 256`, also raw. This tests the stored word
+   directly; it does not resolve a feature definition, and special feature
+   sentinels other than no-feature take this branch too. The fill follows
+   the edges and can overwrite their pixels.
+2. If the air-occupant identity is nonzero, draw the two diagonals in its
+   low byte as a raw colour.
+3. If the building-occupied flag is set, draw an inset diamond in logical
+   entry 15. Its vertices are the north edge midpoint plus `(0,2)`, east
+   midpoint plus `(−2,0)`, south midpoint plus `(0,−2)`, and west midpoint
+   plus `(2,0)`, joined cyclically in that order. Each midpoint coordinate
+   uses signed division of the endpoint sum by two, truncated toward zero.
+
+Plot-cell identities and flags are those of §2.2; the diagnostic does not
+perform a collision or placement query of its own.
+
+**Mode 3: metal.** Draw the same north/west height grid as mode 2, then
+select `SMLFONT` and logical foreground 15. Print the cell's unsigned metal
+byte at `northwest + (2,2)`, in base ten. It is the
+raw source byte, before the extractor's `+1` and multiplier (§2.2).
+
+**Mode 4: coverage.** Draw north/west edges in logical entry 0. Read the
+local player's coverage byte at `(trunc(x/2), trunc(z/2))`. If nonzero,
+fill an inclusive rectangle from `northwest − (5,5)` to
+`northwest + (5,5)` in logical entry 15: an 11-by-11-pixel square. This is
+the current-coverage reference-count grid (§3.1), sampled directly;
+the painter does not combine it with sensor contacts or unit visibility.
+Four neighboring attribute-cell anchors can therefore display the same
+coarser coverage cell.
+
+**Unit bodies remain present.** Every nonzero mode forces the unit image
+commit through the **tinted** blitter, the same family used by cloak
+[R-RAST-01 §7], in both composition-image branches. Mode zero uses the
+ordinary keyed body blit when the unit is not cloaked. The alternate branch
+still draws the body. This selector alone neither skips the unit list nor suppresses its shadows,
+features, effects or the later fog pass. No general model wireframe mode
+is established by these five displays.
 
 Nanolathe keeps the byte as an explicit authoritative session input
 (`Session.DebugDisplayMode`) with the two established producers — a reset to
@@ -8014,7 +8149,7 @@ handle. Its callers, by the handle they pass:
 | the window FNT (`COMIX`) | 21 sites: every GUI screen painter restores it after a per-gadget font, the shell entry, the report/end-mission screens | shell text drawn through the FNT fallback of the GAF-font path (§6) and the label/button painters when the gadget's `fontnumber` selects no font record |
 | a per-gadget FNT | the GUI label, button, list and text-input painters, the shared select-font-by-gadget helper and its callers (the text-input focus paths, the text-region wrapper, the message box) | the FNT of the **font record** (kind 7) the gadget's `fontnumber` selects from the same window — the n-th kind-7 record counting from 0, so `fontnumber` 0 is the window's first record (the walk is below); that record's FNT is loaded at GUI parse from the window's font directory plus the record's `filename` through the same raw file loader (missing file → null handle → the setter ignores it and the previously active font stays) |
 | the local player's **side font** (`font=` of `sidedata.tdf`, [02 §6], one handle per side record) | the battle frame composer (twice) and the unit-panel painter | every HUD number and string drawn with the FNT drawer in battle — resource counters, `FRATE`, the unit-panel readout, the group digit of [R-FX-01 §6] |
-| `SMLFONT` | the minimap overlay pass inside the frame composer (two sites) | the single-character marker `G` it stamps on flagged minimap entries; the flag's meaning belongs to §3.9 |
+| `SMLFONT` | the developer terrain pass inside the frame composer (two sites) | mode 1's `G` markers on acceptable path-search terminal cells, and mode 3's decimal per-cell metal values (§3.12); neither is a minimap label |
 | `COMIX` directly | the main-menu screen and the front-end state machine; in battle, the frame composer's diagnostic overlay, the unit-state and unit-builder probes, the unit panel's debug readout, and the status footer | `FRATE`, `Release`, `MODE`, `Game Time` and the profile labels; the probe dumps; the footer, which then draws through the GAF-font path of §6 |
 
 **The per-gadget font walk (Established).** The four gadget painters that
@@ -9764,12 +9899,12 @@ body — most under `R-<id>` headings — and are not restated here.
 - Which stock GAF sub-frames set the alternate-blitter flag that routes a
   sub-frame through the tinted blitter · [R-COMP-01 §2] · asset census over
   every sub-frame header settles it.
-- The developer draw hook's target: the class at the head of the unit record
-  and its eleventh virtual slot · [R-COMP-01 §5] · resolve the pointer's
-  writer at unit creation.
-- The two unread profile-row labels and whether the `Send/Receive K/s` text
-  prints the rate or `0.0` · [R-COMP-01 §5] · read the two label pointers; a
-  retail multiplayer capture for the text.
+- A stable colour for mode-1 search arrows whose original status is neither
+  exactly open nor exactly closed · §3.12 · the draw has no colour assignment
+  for those admitted statuses; the prior cell and stack history settle an
+  individual frame, not a portable default.
+- Whether the `Send/Receive K/s` text prints the rate or `0.0` ·
+  [R-COMP-01 §5] · a retail multiplayer capture for the text.
 - Windowed/fullscreen mode transitions, DirectDraw surface flags, palette-loss
   recovery, and the exact blit/flip error policy; lost-surface recovery at the
   blit wrappers is established · §4.2 · static trace.

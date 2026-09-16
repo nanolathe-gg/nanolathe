@@ -9643,9 +9643,11 @@ those two hold is released through the order record's payload release
 ([R-ORD-01 §1]), not by the controller. The controller method table ends in a
 presentation hook: only the ground follower's entry has a body (a walk of the
 stored route points that draws through the raster layer); the base
-controller's and every flight block's entry is empty. **Unknown:** what the
-ground entry draws and which developer overlay calls it · decider: a read of
-that entry against [03 R-COMP-01 §5].
+controller's and every flight block's entry is empty. The ground entry draws
+the committed footprint and consecutive route segments. The composer calls
+it for the first selected local unit when film mode and film information are
+both on and rendering is enabled; projection, palette choices and pass order
+are established in [03 R-COMP-01 §5].
 
 **Cited, not restated.** The annulus-goal installer used by the order case
 bodies and by `HelpBuild` is [R-ORD-01 §1]'s (it installs an *annulus*, not a
@@ -10043,7 +10045,7 @@ record's pending word before detaching.
 | *needs republication* | Returns true when the dirty flag is set, or when the mover's blocked flag differs from the copy the follower cached at its last serialization. |
 | *serialize* | Writes, into a bit stream: **one bit** = the mover's blocked flag; then a **2-bit count** = `has-waypoint ? min(pointCount, 3) : 0`; then, for each of those points, a 16-bit X and a 16-bit Z. It then clears the dirty flag and refreshes the cached blocked bit. The leading blocked bit is only *set* when blocked — the stream word is zeroed on allocation, so an unset bit relies on that pre-zeroing. This is the writer behind §7.3's save representation. |
 | *(unnamed fourth)* | An empty method. It exists to fill the slot; no behavior. |
-| *debug draw* | Draws the route as `pointCount − 1` line segments between consecutive points, in one of two palette entries chosen by the has-waypoint flag, under the developer overlay only. |
+| *debug draw* | Draws the committed footprint and `pointCount − 1` route segments; has-waypoint selects logical colour 9, otherwise 12. Film mode plus film information selects the first local selected unit during rendering [03 R-COMP-01 §5]. |
 
 **The acceptance rule belongs to the goal installer alone (Established,
 [05 R-EGRESS-02]).** The ground follower has two entry points and the
@@ -14221,9 +14223,6 @@ and the decider that would close it.
 - Whether the goal class code `1` (the abstract base) can reach a save
   (Supported inference: never) · [R-MOV-03 §9] · constructor census of the
   base table.
-- What the ground follower's presentation hook draws, and which developer
-  overlay calls it · [R-MOV-03 §9] · a read of that entry against
-  [03 R-COMP-01 §5].
 - Construction and economy carry, and worktime-under-one-tick behavior
   · doc 05 · static trace.
 

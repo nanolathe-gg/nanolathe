@@ -1540,7 +1540,8 @@ clears the selection unless Shift requests an additive selection. Camera
 capture still services a queued shortcut after its pointer work. Modern command
 gestures treat a queued token as superseding input even when there is no new
 physical edge. The plain F9/F10 presentation extensions leave their Ctrl
-compositions to the excluded retail developer paths.
+compositions to the currently unimplemented retail developer paths; their
+planned activation is owned by DESIGN_DEVELOPER_TOOLS.
 
 ### 3.7 The command dispatch boundary
 
@@ -1772,7 +1773,7 @@ These commands are partial I10. Shell and direct-map entry use the same live
 display bits, including the persisted low bit that selects dithered fog; a
 later direct-entry settings write includes deferred shadow preferences. The remaining ordinary local
 single-player command families stay in the parent I10 scope. The mask-4
-developer table and default unit-spawn handler remain excluded with developer
+developer table and default unit-spawn handler remain unimplemented with developer
 mode; multiplayer `TALK2.GUI`, recipient controls and network chat remain
 excluded with multiplayer `[07 R-CAM-01 §6]` `[07 R-FE-02 §12]`.
 
@@ -1787,7 +1788,8 @@ excluded with multiplayer `[07 R-CAM-01 §6]` `[07 R-FE-02 §12]`.
   startup policy plays the logo on every normal launch, including windowed
   launches; it does not add retail's one-install `PlayMovie` preference or
   automatically append the full intro. Holding Shift at startup does not
-  request repeat. Capture and the `CDCHECK` gate remain excluded.
+  request repeat. The `CDCHECK` gate remains excluded; developer frame capture
+  is planned in DESIGN_DEVELOPER_TOOLS and remains unimplemented.
   The authored main-menu `Credits` callback plays `Data/5.zrb` once.
   Campaign victory with no next authored mission and `nomovie=0` routes after
   the results fade to `Data/3.zrb` for local side zero (Arm), otherwise
@@ -1820,8 +1822,11 @@ excluded with multiplayer `[07 R-CAM-01 §6]` `[07 R-FE-02 §12]`.
 * **`SHARE.GUI` and `CONTROL.GUI`.** The resource transfer dialog and the
   host-only player control panel are multiplayer surfaces
   `[07 R-HUD-03 §9]` `[07 R-FE-01 §7]`.
-* **Developer mode.** The `\` console, the contour overlay, the in-battle
-  screenshot and the Unit State/Builder Probes are not implemented
+* **Developer mode.** The repeated-command binding, contour overlay, in-battle
+  screenshot and Unit State/Builder Probes are not implemented. They are now
+  planned in [DESIGN_DEVELOPER_TOOLS](DESIGN_DEVELOPER_TOOLS.md), including the
+  user-authorized connection of dormant probe painters. Research distinguishes
+  hotkey state from actual painter reachability
   `[07 R-CAM-01 §9]` `[07 R-FE-02 §11]`.
   The front-end `DRDEATH` cheat sequence also lacks its token-history consumer
   `[07 R-FE-02 §10]`.

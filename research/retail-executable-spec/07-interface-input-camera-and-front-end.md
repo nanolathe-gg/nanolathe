@@ -242,7 +242,7 @@ the named sound cue played through the interface sound path.
 | Token | Key | Action |
 |---|---|---|
 | `0x09` | Tab | In battle mode (mission-mode word `3`) with chat inactive: toggle `TABMENU.GUI` (§11). In any other mode Tab falls through to the F2 case below. |
-| `0xE3` | F2 | Shift not held: if the options window is not open, open `ARMOPT.GUI` and set the ESC bit (§11). Shift held: arm the **Unit Builder Probe** diagnostic overlay on the hovered unit (clears it when nothing is hovered). |
+| `0xE3` | F2 | Shift not held: if the options window is not open, open `ARMOPT.GUI` and set the ESC bit (§11). Shift held: retain the hovered unit for the **Unit Builder Probe**, or disable that probe when no unit is hovered. This arming path has no developer gate; drawing is a separate, unrooted path ([R-CAM-01 §9]). |
 | `0x0D` | Enter | `SmallButton` cue; open chat (§5 "Chat"). |
 | `0x1B` | Escape | Options window open: close it and clear the ESC bit. Otherwise, if the armed-order latch is idle (`1`): deselect everything (the `deselect all` path also runs the selection-changed refresh); if a latch is armed: return it to idle, clear the Shift-latch persistence bit, and reset the palette's default control. |
 | `0x21` `0x23` `0x2A` `0x60` `0x7E` | `!` `#` `*` `` ` `` `~` | Toggle the persistent "label every unit" bit (interface-flags byte bit 0) and write all settings to the registry. The composer reads it: with the bit set every on-screen own unit gets its unit marker and its group digit; with it clear only grouped units get the digit. |
@@ -266,7 +266,7 @@ the named sound cue played through the interface sound path.
 | `0xE6..0xE9` | F5..F8 | Recall bookmark `0..3` ([R-CAM-01 §12]); `SelectSquad` cue. Recalling an unwritten bookmark loads whatever the (zero-initialised) slot holds. |
 | `0xD6` | Ctrl+F9 | Screenshot — consumed by the input pass before the dispatcher (§2 "Input ordering"). |
 | `0xD7` | Ctrl+F10 | Developer mode only: start/stop the movie capture series ([R-CAM-01 §8]). |
-| `0xE2` | F1 | Shift not held: open `UNITINFOx.GUI` for the hovered unit (or the build button's product when a build button is hovered) — the unit-info panel of §6. Shift held: arm the **Unit State Probe** diagnostic overlay on the hovered unit. |
+| `0xE2` | F1 | Shift not held: open `UNITINFOx.GUI` for the hovered unit (or the build button's product when a build button is hovered) — the unit-info panel of §6. Shift held: retain the hovered unit for the **Unit State Probe**, or disable that probe when no unit is hovered. This arming path has no developer gate; drawing is a separate, unrooted path ([R-CAM-01 §9]). |
 | `0xE4` | F3 | Clear the "last jumped-to" bit (`0x20`) on all thirty message-ring records, then glide the camera to the first message whose source unit is alive and whose visited bit (`0x10`) is clear, setting both bits on it; if none, clear the visited bits and retry once ([R-CAM-01 §12], [R-CAM-01 §14]). |
 | `0xE5` | F4 | Toggle interface-flags bit `0x80`. Its two readers are presentation: the HUD side-panel slide treats the bit as "Space held" (the panel stays extended while it is set), and the kill announcement path arms two 30-frame counters (killer's player index, victim's side) on each kill only while the bit is set. The counters' visible effect is closed in [R-CAM-01 §14] (the killer's `Kills` and the victim's `Losses` number flash bright and fade to row 0 over half a second on the pinned panel). **Unknown:** the user-facing name alone — no string in the image names the bit, and nothing observable turns on it. |
 | `0xEC` | F11 | Developer mode only: toggle film mode ([R-CAM-01 §9]). |
@@ -413,9 +413,8 @@ otherwise `0`. The chat route word carries bit 1 always, bit 2 when the
 entry-time cheat word is set — skirmish `1`, campaign `0`, multiplayer the
 host's `Cheat Codes` bit ([08 R-OOS-01 §2] for the word's one writer and one
 reader, [08 R-OOS-01 §5] for the gate stated per kind; `Cheat Codes` as a
-game option is a multiplayer lobby word [08 R-SKIR-01 §11]) — and bit 4 in
-developer
-mode ([R-CAM-01 §9]). Mask-1 commands are therefore live in every session
+game option is a multiplayer lobby word [08 R-SKIR-01 §11]) — and **both
+bits 2 and 4** in developer mode (route word `7`, [R-CAM-01 §9]). Mask-1 commands are therefore live in every session
 kind; mask-2 commands do **not** dispatch in campaign outside developer
 mode. After dispatch the line — including the `+` — is still sent as
 ordinary chat; when the returned mask has bit 2 the outgoing recipient mode
@@ -460,7 +459,7 @@ controller kind is `1..3` and its side byte is not `10`.
 | `Sing` | toggle the "sing" flag read by the unit-chat voice path ([R-CAM-01 §7]) |
 | `NoMetal` / `NoEnergy`; `NoMetal p n` / `NoEnergy p n` | command-only form writes `0` to the local player's metal / energy stock; otherwise the first argument is player `p` (low byte) and the second is integer `n`, converted to a float for the stock assignment |
 | `BigBrother` | toggle a camera-flags bit; when set, write `1` to a companion camera word; when cleared, cancel the follow target ([R-CAM-01 §12]). The companion word is the 90-tick cycle counter of the unit sweep tail, paused while Shift is held ([R-CAM-01 §12], [04 R-MOV-03 §1]). |
-| `Now Film Chris Include Reload Assert` | exactly six words with these exact (case-sensitive) spellings: set the developer bit; any other `+Now …` clears it ([R-CAM-01 §9]) |
+| `Now Film Chris Include Reload Assert` | exactly six words: command name matched case-insensitively, the five arguments matched case-sensitively as shown; set the developer bit on a match, otherwise clear it ([R-CAM-01 §9]) |
 | `Drop n` | flags bit 0 = (`n == 0`) |
 | `ShootAll` | toggle flags bit 10 |
 | `ShareMetal` `ShareEnergy` `ShareMapping` `ShareRadar` | network mode only: toggle the local player's share bits (`2`, `4`, `0x20`, `0x40`), post `Toggled ShareX to: ON/OFF`, resend the player record (doc 05 [R-SHARE-01]) |
@@ -567,13 +566,13 @@ state.
 **Mask 4 — developer (30, plus the default handler):** `AI p` (toggle slot
 `p` between AI and human control), `Control p q` (viewing/controlling
 indices), `Kill [p]`, `IWin`, `ILose` (set the outcome bits and end the
-battle), `Film name` (film recording flag and name), `FilmSpeed n`, `Assert`,
+battle), `Film name` (film recording flag and name), `FilmSpeed n`, `Assert` (no-op),
 `Assign order x y` (issue a named order at a point), `BurnAll`, `BurnOne`,
-`DebugBreak [1|2|3]` (allocation-exhaustion / divide-by-zero / break), `DPrint`,
+`DebugBreak [1|2|3]` (allocation-exhaustion / divide-by-zero / break), `DPrint` (no-op),
 `Edge w h` (play-area extents), `Include name` (run `debugdat\name.txt` as a
-command script, one command per line), `Mem`, `MemDump` (creates
-`memdump.txt`), `Move x y` (camera-jump family), `PrintWeights p file`,
-`Profile`, `Reload unit` (reload one unit definition), `ReloadAIProfiles`,
+command script, one command per line), `Mem` (no-op), `MemDump` (creates or
+truncates and closes an empty `memdump.txt`), `Move x y` (camera-jump family), `PrintWeights p file`,
+`Profile` (toggle profiler display), `Reload unit` (reload one unit definition), `ReloadAIProfiles`,
 `Save name` (write `savegame\name.sav` with the description `Generic Game
 Description`), `SeaLevel n`, `Search x y r`, `SelBoxes` (flags bit 2),
 `TreeDeath` (flags bit 3), `Feature name` (spawn a feature at the pointer),
@@ -582,8 +581,10 @@ as a unit definition name and spawns one unit per matching definition for the
 viewing player at the pointer's world position, stepping the spawn point by
 32 world units per unit and wrapping at the play-area edge. `+syncerr` is a
 separate string with a network-only reader. None of these run outside
-developer mode. Their deeper effects are not part of the single-player
-contract and are recorded here only so the vocabulary is complete.
+developer mode. The release-build stubs and profiler routing are detailed in
+[01 R-PLAT-01 §9]; a registered name does not establish that its advertised
+diagnostic exists. The remaining commands above are a vocabulary census,
+not a complete implementation contract for their deeper effects.
 
 ### Interface options (`SPEEDS.GUI`) and their consumers [R-CAM-01 §7]
 
@@ -684,21 +685,156 @@ the capture time does not enter the next raw delta. `<screenshotDir>` is the
 
 ### Developer mode [R-CAM-01 §9]
 
-**Established fact.** The developer bit (mode-flags bit 1) is set by the
-six-word `+Now` password of [R-CAM-01 §6] and by the registry pair
-`DisplaymodeDepth = 256` with `Games = 1` at load; it is cleared by any other
-`+Now …` line and by the loader otherwise. It gates: the mask-4 command table
-and default spawn handler; `\` (re-dispatch the last `+` line with every
-route bit); Ctrl+F10 (movie series); F11 — toggle **film mode** (mode-flags
-bit 1 of the second flags word), which on exit also clears that word's bit 0,
-zeroes the minimap mode byte and re-shows the HUD (on entry hides it). In
-film mode the dispatcher runs a second switch after the first on the same
-token: `=` copies every valid player's storage capacities into their stocks,
-`P`/`p` capture/release the pointer to the window, `]` sets the hovered
-unit's order-state byte to `10`, clears its order word and sets status bit
-`0x4000`, `i` toggles the second word's bit 0, `m` cycles the minimap mode
-byte `0..4`. Speed hotkeys are refused in film mode. `DebugBreak` additionally
-requires film mode. None of this is reachable in a stock configuration.
+**Established — activation is independent of film mode.** Developer access is
+set by either the settings loader finding `DisplaymodeDepth = 256` and
+`Games = 1`, or the ordinary mask-1 `Now` command accepting exactly six
+parsed words. The command lookup is case-insensitive, so `+now Film Chris
+Include Reload Assert` succeeds. The five arguments must have precisely the
+shown case. Additional words, missing words, or changed argument case clear
+developer access. Tokenisation happens first ([R-CAM-01 §6]): extra whitespace
+is immaterial, a trailing `#` comment is ignored, and a semicolon is ordinary
+word content. The settings loader clears access when its pair does not match;
+the command changes only the live access flag and does not write settings.
+The password is accepted through ordinary TALK in a stock installation;
+there is no prerequisite developer registry edit.
+
+**Established — three separate controls.** Developer access gates mask-4
+commands, the default unit-spawn handler, `\` command replay, Ctrl+F10 capture,
+and the F11 toggle. Film mode is a separate flag toggled by F11. The film
+information flag is a third flag, toggled by lowercase `i` while film mode is
+active. F11 entry disables GUI quickkeys. F11 exit enables them, clears film
+information, and resets the viewport diagnostic mode to zero. The quickkey setter does
+not hide or show the HUD. The battle-screen initializer clears film mode and
+film information; the password handler changes neither of them. Consequently,
+clearing developer access while film mode is active leaves the film controls
+and their display gates active, but prevents F11 exit until access is enabled
+again. Other dialog close paths can re-enable quickkeys [R-WGT-01 §3].
+
+**Established — film input is a second dispatch.** After the ordinary battle
+hotkey switch finishes, the same token is passed through this table if the
+film flag is still set; developer access is not re-tested. A token is not
+consumed exclusively by the film switch. In particular `=` is rejected by
+the speed handler first, then performs the film action; `+` has no film action.
+F11 entry reaches the second switch, which has no F11 action; F11 exit skips
+it because film mode has just been cleared.
+
+| Token | Film action |
+|---|---|
+| `=` | Visit player slots 0 through 9; for each occupied slot with controller kind 1, 2 or 3 and side other than 10, replace metal and energy stock with that player's respective storage capacities. |
+| `P` / `p` | Request pointer capture / release respectively. |
+| `]` | If the hovered unit is present, set its recorded attacker-side snapshot to 10 (no attacker), clear its recorded-attacker reference, and mark it dying ([06 R-WPN-04 §2]). This is a direct diagnostic mutation, not an ordinary queued order. |
+| `i` | Toggle film information. Uppercase `I` has no case. |
+| `m` | Increment viewport diagnostic mode and wrap exactly 5 to 0. Uppercase `M` has no case. The viewport presentations are [03 §3.12]. |
+
+`DebugBreak` additionally requires both developer access and film mode.
+The runnable display gates, including film information, are described in
+[03 §2.4] and [R-HUD-03 §1]; film mode is not synonymous with either probe.
+
+**Established — replay is not another console window.** `\` re-tokenises
+and dispatches the retained last-command text with every route bit enabled.
+The text excludes the leading `+`. Replaying does not submit another TALK
+message and does not replace the retained command. The mask-8 AI-profile
+commands are therefore eligible through replay although ordinary developer
+TALK uses route 7. The dispatcher does not fall back when tokenisation yields
+zero words. For a missing command, or a registered command excluded by the
+route, the mask-4 default handler is eligible; command existence alone does
+not suppress the default handler ([R-CAM-01 §6]).
+
+#### Unit probes: retained targets and dormant painters
+
+**Established — hotkey state.** Shift+F1 and Shift+F2 maintain independent
+State and Builder probe enable flags and retained unit references. With a
+nonzero hovered-unit reference the respective hotkey enables its probe and
+copies that reference. With no hover it clears only the enable flag, leaving
+the old reference stored but inactive. Repeating a hotkey over the same unit
+does not toggle it off. Moving the pointer does not retarget an armed probe.
+Neither arming path tests developer access, film mode, selection, ownership,
+controller type, completion, or build capability. Escape and ordinary F1/F2
+do not explicitly clear these flags.
+
+**Established — reachability boundary.** The retail image contains separate
+State and Builder painting routines. The recovered call/reference census
+has no incoming reference to either, a full-image pointer search finds no
+stored reference to either, and the battle composer calls neither. The
+hotkeys and painting routines must not be conflated with the rooted
+diagnostic footer. **Supported inference:** these are dormant diagnostic
+painters in the examined release, rather than accessible overlays awaiting
+another ordinary toggle. **Unknown:** a reachable indirect invocation or
+other retail-build wiring; a rooted caller or manual observation identifying
+the exact build and activation sequence would settle this. The contracts
+below describe the dormant routines' actual behavior, not proof of display
+in an unmodified retail session.
+
+**Established — painter lifetime and invalidation.** Each painter returns
+without drawing unless its own enable flag and retained reference are both
+nonzero. State checks that its retained unit is live and not dying; on
+failure it clears its own enable flag and reference, but still completes the
+current draw from the already resolved unit. Builder also rejects a unit
+whose definition has no build-option list. Its failure branch instead clears
+**State's** enable flag and reference, leaving Builder armed, and likewise
+continues its current draw. This cross-probe clear is an observed retail
+quirk. There is no owner or visibility check in either painter. A retained
+reference identifies a pool slot; the painters do not verify a generation
+number. **Unknown:** the cross-battle lifetime of these retained references
+and the shared panel-bottom cache; the hotkey and painter writers alone do
+not establish a battle reset. A bounded reset/save-load ownership trace is
+the decider.
+
+**Established — shared layout.** Both painters select `COMIX`, set text to
+`dcb[15]`, and use line pitch `p = fontHeight + 3`. State begins at
+`(134, 7*p+3)`; Builder begins at `(134, 3*p+3)`. Before drawing text, each
+shades a rectangle from x 131 to 401 using the darken operation with argument
+−24 (shade row 8), then outlines it in `dcb[5]` with its right and bottom
+edges extended by one. Its top is `7*p` for State and `3*p` for Builder; its
+bottom is a **shared retained** previous text-end y, or `20*p` when that
+cache is zero. At draw completion it overwrites that same cache with the
+new text-end y. Text and backdrops therefore need not have matching heights
+on the first draw or after switching probes. This is a shared cache, not
+independent automatic panel sizing. Each explicit line advances by one
+pitch; format strings retain their authored newline bytes. Neither routine
+provides scrolling or pagination.
+
+**Established — State fields, in draw order.** Quoted formats below are the
+retail diagnostic text; `\n` denotes an authored newline.
+
+| Line | Source and formatting |
+|---|---|
+| Title, rule | `Unit State Probe`, then `================` |
+| Identity | `uid: %03d/%04x '%s'\n`: the same unit identity in decimal and lowercase hex, then the definition display name. Widths are minima. |
+| Owner | `playerno: %d '%s' %s - %s\n`: owner slot, registered player name, `LOCAL` when that player is occupied with controller kind 1 or 2 and `REMOTE` otherwise, then `BUILDING` when definition `bmcode` is zero or `MOBILE` otherwise. |
+| Controller | `controller: %d\n`: the owner's controller kind. |
+| Construction | `buildtimeleft: %1.3f\n`: current remaining construction fraction, not seconds. |
+| Health | `damage: %d\n`: current signed hit points, despite the label. |
+| Occupancy | `occupy: %s\n`: `NONE`, `GROUND`, or `AIR` for occupancy classes 0, 1, or 2. No valid label is defined for class 3. |
+
+Only an occupied owner with controller kind 1 or 2 gets the remaining lines:
+`autotarget w[pri:sec:spe]: w[%c:%c:%c]\n` in primary/secondary/special order,
+using `X` for a set per-weapon autotarget flag and `-` for a clear flag. Then
+print `Mission Q:` only if the primary order queue is nonempty, visit it in
+linked queue order, and do the same for `Background Mission Q:` and the
+secondary queue. Each order uses its descriptor name and state:
+`    '%s' state: %d\n`, or `    '%s' state: %d  tgt: '%s'\n` when it has a
+unit target, appending that target's definition display name. No coordinates,
+queue count or summary replaces those per-order lines.
+
+**Established — Builder fields and score bars.** Its title and rule are
+`Unit Builder Probe` and `==================`. It uses `uid: %03d '%s'\n`,
+the same owner line as State, then `controller: %d\n\n`. Only an occupied
+owner with controller kind 1 or 2 gets `Units I can build, and the
+probabilities:\n` followed by one row per authored build option, in build-list
+order. Each row obtains the ordinary candidate score for the **unit's owning
+player** ([08 R-P0-05 §3], [08 R-P0-05 §4]), and formats the raw result as
+`       %3d %% - '%s'\n` with the product's internal definition identifier
+(the name used for unit lookup), rather than its display name. These are
+individual AI scores displayed with a percent sign; they are not normalized
+probabilities, and the painter does not run the random weighted selection.
+
+At each row's y, outline `(136,y+1)..(162,y+p−5)` in `dcb[15]`. Let
+`q = min(score,100)`. When `q > 0`, fill inclusively from x 136 through
+`136 + trunc(26*q/100)` over the same y range, also in `dcb[15]`.
+A score above 100 retains its full numeric text but saturates the bar;
+a nonpositive score has only the outline. The title's claim of probabilities
+must not be used to normalize or clamp the numeric readout.
 
 ### Supported inference
 
@@ -3704,18 +3840,39 @@ options page exposes it. (`AnyMsn` opens the play-any layout of `NEWGAME`,
 
 ### The developer contour overlay [R-FE-02 §11]
 
-**Established fact.** The `+Contour a b` command ([R-CAM-01 §6]) stores two
-16.16 words, *spacing* and *offset*; while spacing is nonzero the composer's
-minimap-lens pass draws height contours over each visible terrain quad. A
-quad is split into four triangles around its centroid (the mean of the four
-corner heights ×64 as the centroid height, corner heights ×256); for each
-triangle the vertices are sorted by height and, for every level
-`L = offset + k × spacing` between the middle and top vertex and then between
-the bottom and middle vertex (stepping down from the highest level not
-above the top), the two edge intersections are found by linear
-interpolation `(p1 × (d − t) + p2 × t) / d` per axis and joined with a
-Bresenham line whose colour is `contourColour[((L >> 8) − seaLevel + 256) >> 4]`
-from a 32-entry table. Developer tooling; Nanolathe does not need it.
+**Established.** `+Contour spacing offset` is a mask-1 settings command and
+does not require developer activation. Each argument is parsed as a float,
+multiplied by 256 and truncated into a signed integer: these are
+**1/256-height** units, not 16.16 world positions. Zero spacing disables the
+overlay. Nonzero spacing causes the main viewport composer to draw contours
+immediately after terrain tiles; this is not a minimap lens. Negative spacing
+is not rejected and can make the descending-level loop fail to terminate.
+
+Each visible terrain quad is split into four clockwise triangles about its
+centroid. Corner heights are multiplied by 256; centroid height is the sum of
+the four unscaled heights multiplied by 64. Its screen position is the
+componentwise truncated `(sum of four projected coordinates + 2)/4`.
+For each triangle, sort vertices by height. Starting at
+`L = trunc(top/spacing)*spacing + offset`, subtract spacing while `L > top`,
+then draw while `L > middle` and afterwards while `L > bottom`, subtracting
+spacing after each line. The offset is not normalized upward: a negative
+offset can skip upper contour levels. The middle-height equality belongs to
+the lower segment, and the bottom equality is excluded. Edge interpolation
+truncates `(p1*(d−t) + p2*t)/d` per screen coordinate.
+
+The line uses the fixed 32-colour lookup indexed by
+`((L >> 8) − seaLevel + 256) >> 4`, followed by the ordinary clipped line
+primitive. These are raw palette entries, in index order:
+
+```
+0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 111, 110, 109, 108, 107, 106,
+88, 87, 86, 85, 84, 83, 82, 81, 80, 255, 255, 255, 255, 255, 255, 255
+```
+
+The complete projection, visible-cell iteration and painter ordering are
+owned by [03 §3.12]. This section establishes the
+command's activation and units; it makes no Nanolathe implementation-policy
+exclusion.
 
 ### The chat line composer [R-FE-02 §12]
 
@@ -3892,9 +4049,9 @@ the side `DAMAGEBAR` anchor, whose placement remains data-authored.
 
 The bottom/status readout's sources, priority, redraw and formatting are
 [R-HUD-03 §1]–[R-HUD-03 §3]; this subsection keeps the boundary facts they
-build on. The battle composer has a diagnostic path whose visible strings
-include `Unit State Probe`; that path is an optional debug overlay — the
-leading branch of the footer routine ([R-HUD-03 §1]) — not the ordinary
+build on. The footer has a rooted film-information diagnostic branch
+([R-HUD-03 §1]). The separate `Unit State Probe` painter has no established draw invocation
+in the examined release ([R-CAM-01 §9]); it is neither that branch nor the ordinary
 unit-information footer.
 
 **Established (direct-static).** Selection and world hover are separate state.
@@ -3948,8 +4105,33 @@ step 1) — and entry 15 otherwise, with inner entry 0.
 composer calls immediately after the top resource strip and before the
 minimap, once per host frame. Its leading branch is the developer overlay
 that prints `PFSTATE`, `DELTATIME`, `GAMETIME`, `PACKETS` and friends when
-both low bits of the developer flag word are set; the ordinary footer is the
-remainder of the same routine.
+film mode and film information are both enabled; developer access itself
+is not re-tested. The ordinary footer is the remainder of the same routine.
+
+**Established — diagnostic footer layout and data.** This branch repaints
+the side's `PANELBOT` backdrop every call, selects `COMIX`, uses palette
+index 83, and returns after its diagnostic lines; it does not update or
+consult the ordinary footer's change-detection snapshot. Let
+`lower = H − fontHeight − 1` and `upper = lower − 16`. All formats below
+end with an authored newline.
+
+| Position | Format | Values |
+|---|---|---|
+| `(130,lower)` | `PFSTATE %d, PFABLE %d` | A display-state flag and display-availability word; precise platform meanings remain Unknown below. |
+| `(264,lower)` | `MOVEORD: %d FIREORD: %d` | Hovered unit's movement and fire stance values, each a two-bit field; omitted when no unit is hovered. |
+| `(400,lower)` | `DELTATIME: %d` | Current runnable tick budget, not elapsed wall-clock milliseconds. |
+| `(520,lower)` | `GAMETIME: %d` | Current absolute simulation tick. |
+| `(130,upper)` | `X: %d  Y: %d` | Camera origin in map pixels. |
+| `(264,upper)` | `UNITS %d\%d` | Current live-unit sweep count and on-screen unit count, separated by one literal backslash. |
+| `(400,upper)` | `PACKETS: %d %d %d` | Three fixed counters associated with player slots 1, 2 and 3; their producer semantics remain Unknown. |
+| `(520,upper)` | `XYH: %d %d %d` | Pointer terrain-cell x and z, followed by that cell's unsigned height byte. |
+
+**Unknown — footer platform fields.** The exact meaning and update cadence of
+`PFSTATE`/`PFABLE`, and whether the three `PACKETS` counters represent received,
+queued or processed data, require their producer traces. Their labels do not
+justify substituting pathfinding state, packet rates, aggregate network totals
+or the current viewing player. The painter reads the indicated current values
+without smoothing or unit conversion.
 
 **Established — the three sources and their fixed priority.** The footer
 reads exactly three inputs, in this order, and the first that applies wins
@@ -7993,6 +8175,13 @@ and the decider that would close it.
 - Focus traversal for windows with more than 49 controls depends on incompletely initialized canonical-coordinate scratch · [R-WGT-01 §2] · bounded initialization/lifetime trace or manual custom-window observation.
 
 ### Input and text
+
+- A rooted invocation of the State/Builder probe painters and the cross-battle
+  lifetime of their retained targets/shared panel cache · [R-CAM-01 §9] ·
+  indirect-call and reset ownership trace, or manual observation identifying
+  the exact retail build and activation sequence.
+- Producer semantics of diagnostic footer `PFSTATE`, `PFABLE`, and the three
+  `PACKETS` counters · [R-HUD-03 §1] · bounded producer/update trace.
 
 - Which front-end screen paths handle which key tokens (the battle census is
   [R-CAM-01 §2]), and the unsupported-device census · §2, §5 · static trace.

@@ -22,6 +22,7 @@ has its own design document; this one only says where the boundaries are.
 | [DESIGN_INTERFACE_HUD_INPUT](DESIGN_INTERFACE_HUD_INPUT.md) | GUI files and screens, the battle HUD, input, camera, selection and command dispatch |
 | [DESIGN_SESSIONS_AI_SAVE](DESIGN_SESSIONS_AI_SAVE.md) | session states, campaign and mission loading, triggers, the computer player, saves, the headless runner |
 | [DESIGN_PRESENTATION_CLIENT](DESIGN_PRESENTATION_CLIENT.md) | window and frame loop, the frame composer, model rasterizer, effects, palette, audio |
+| [DESIGN_DEVELOPER_TOOLS](DESIGN_DEVELOPER_TOOLS.md) | planned developer views, reconnected dormant probes, diagnostic publication and portable host tooling |
 | [DESIGN_GPU_RENDERER](DESIGN_GPU_RENDERER.md) | the recorded frame draw list, the classic (software) and modern (GPU) executors, the renderer switch, visual parity policy and prototype gates |
 
 Rules that cut across every package are in [INVARIANTS.md](INVARIANTS.md);
@@ -58,6 +59,11 @@ Nanolathe options page (DESIGN_INTERFACE_HUD_INPUT §3.4.1). It uses GPU drawing
 software model bodies/shadows are not a fallback, and unimplemented GPU stages
 remain explicitly omitted (DESIGN_GPU_RENDERER §9).
 
+Developer views and the recovered dormant unit probes are now planned scope
+under [DESIGN_DEVELOPER_TOOLS](DESIGN_DEVELOPER_TOOLS.md). Reconnecting diagnostic
+UI is user-authorized tooling in both gameplay modes. The research still records
+which paths were disconnected in the studied retail binary.
+
 ### Deliberately out of scope
 
 Every research section is either cited by a design document or listed here.
@@ -68,7 +74,7 @@ changing this table first.
 
 | Research section | Why it is out |
 |---|---|
-| `[03 §9]` Smacker cinematics and movie capture | Capture and the `CDCHECK` gate remain excluded. Startup logo (`Data/1.zrb`), main-menu Intro (`Data/2.zrb`), campaign endings (`Data/3.zrb`, `Data/4.zrb`) and credits (`Data/5.zrb`) are implemented with an independently authored Smacker 2 decoder and portable PCM output; see DESIGN_INTERFACE_HUD_INPUT §3.9 and `[07 R-FE-01 §3]`. |
+| `[03 §9]` Smacker cinematics and movie capture | The `CDCHECK` gate remains excluded. Developer frame capture is planned in DESIGN_DEVELOPER_TOOLS; it is not implemented. Startup logo (`Data/1.zrb`), main-menu Intro (`Data/2.zrb`), campaign endings (`Data/3.zrb`, `Data/4.zrb`) and credits (`Data/5.zrb`) are implemented with an independently authored Smacker 2 decoder and portable PCM output; see DESIGN_INTERFACE_HUD_INPUT §3.9 and `[07 R-FE-01 §3]`. |
 | `[07 §12]` Lobby and session shell | The multiplayer lobby. The single-player skirmish setup screen is a different surface, owned by DESIGN_INTERFACE_HUD_INPUT and DESIGN_SESSIONS_AI_SAVE through `[07 R-FE-01 §5]` and `[08 R-SKIR-01]`. |
 | `[08 "DirectPlay transport"]`, `[08 "Packet framing and dispatch"]`, `[08 "Send pacing and batching"]`, `[08 "Receive buffering"]`, `[08 "Ping and adaptive timing"]`, `[08 "Lockstep advancement"]`, `[08 "Synchronization and integrity checks"]`, `[08 "Disconnect, resign, and peer loss"]` | Networking. `[08 R-OOS-01 §1]` names the packets the *local* path still constructs; those are in scope and DESIGN_SESSIONS_AI_SAVE cites them. |
 | `[08 "Multiplayer saves"]` | Follows from the above. Single-player save/load is DESIGN_SESSIONS_AI_SAVE (`[08 "Save-file organization"]`, `[08 "Load process"]`). |
