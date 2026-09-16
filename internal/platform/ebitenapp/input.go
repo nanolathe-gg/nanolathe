@@ -1,6 +1,8 @@
 package ebitenapp
 
 import (
+	"runtime"
+
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 )
@@ -19,6 +21,8 @@ type sampledInput struct {
 	pinches    []input.PinchEvent
 	keys       [input.KeyCount]bool
 	characters []rune
+	command    bool
+	clipboard  func() input.ClipboardText
 	timestamp  uint32
 }
 
@@ -40,6 +44,8 @@ func readInput(timestamp uint32) sampledInput {
 			Alt:   ebiten.IsKeyPressed(ebiten.KeyAltLeft) || ebiten.IsKeyPressed(ebiten.KeyAltRight),
 		},
 		characters: ebiten.AppendInputChars(nil),
+		command:    runtime.GOOS == "darwin" && (ebiten.IsKeyPressed(ebiten.KeyMetaLeft) || ebiten.IsKeyPressed(ebiten.KeyMetaRight)),
+		clipboard:  readHostClipboard,
 	}
 	wx, wy := ebiten.Wheel()
 	scroll := nativeScroll.take(wx, wy)
@@ -80,9 +86,15 @@ func applyInput(in *input.State, sample sampledInput) {
 	for key := input.Key(1); key < input.KeyCount; key++ {
 		wasHeld := k.KeyHeld(key)
 		down := sample.keys[key]
+		if sample.command && key != input.KeyV && key != input.KeyShift && key != input.KeyCtrl && key != input.KeyAlt {
+			down = false
+		}
 		k.SetKey(key, down)
 		if down && !wasHeld {
-			if token, ok := translatedKeyToken(key, sample.modifiers); ok {
+			if token, ok := sampledKeyToken(key, sample); ok {
+				if isPasteToken(token) && sample.clipboard != nil {
+					token.Clipboard = portableClipboardText(sample.clipboard())
+				}
 				in.EnqueueToken(token)
 			}
 		}
@@ -128,12 +140,33 @@ func applyInput(in *input.State, sample sampledInput) {
 	// does not order that batch against the polled physical transitions above.
 	// Alt system-key translation supplies its own raw character token and
 	// has no character-message companion in retail [07 R-CAM-01 §14].
-	if sample.modifiers.Alt {
+	if sample.modifiers.Alt || sample.command {
 		return
 	}
 	for _, r := range sample.characters {
+		// Some hosts deliver a printable companion to Ctrl+V. The composed
+		// paste token already owns that input; never append a stray v.
+		if sample.modifiers.Ctrl && sample.keys[input.KeyV] && (r == 'v' || r == 'V' || r == '\x16') {
+			continue
+		}
 		in.EnqueueToken(input.Token{Kind: input.TokenText, Rune: r})
 	}
+}
+
+// Cmd+V is a host alias for the retail Ctrl+V token, not a Ctrl held-state
+// alias. Other Cmd combinations produce no game keyboard tokens.
+func sampledKeyToken(key input.Key, sample sampledInput) (input.Token, bool) {
+	if sample.command {
+		if key == input.KeyV && !sample.modifiers.Alt {
+			return input.Token{Kind: input.TokenEdit, Key: input.KeyV, Ctrl: true}, true
+		}
+		return input.Token{}, false
+	}
+	return translatedKeyToken(key, sample.modifiers)
+}
+
+func isPasteToken(token input.Token) bool {
+	return token.Kind == input.TokenEdit && (token.Key == input.KeyInsert || token.Key == input.KeyV && token.Ctrl)
 }
 
 func keyboardTokenKey(key input.Key) bool {

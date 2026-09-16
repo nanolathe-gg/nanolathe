@@ -145,7 +145,12 @@ first, the copy length is the smaller of the clipboard allocation size and
 `maxchars - 1` (the authored maximum capped at 128), the copy proceeds in dword
 then byte steps, and the clipboard is unlocked and closed. After pasting, if
 the rendered width exceeds the control width, trailing bytes are removed one
-at a time — re-measuring each iteration — until the text fits.
+at a time — re-measuring each iteration — until the text fits or only one byte
+remains. **Established:** that final byte remains even when its glyph is wider
+than the control. Paste does not change the caret index; a shorter replacement
+can therefore leave it beyond the new visible text. The subsequent widget
+repaint measures the caret prefix but does not relocate the index. This differs
+from focus setup, which places the caret at the text end [R-WGT-01 §12].
 
 GUI quick keys are stored as character values in gadget data. Front-end
 buttons can therefore be activated by their quick key as well as by a mouse
@@ -1160,7 +1165,8 @@ subject to the gadget's input-filter attribute bit `0x02`, an
 allowed-character-set test with exceptions for space, underscore, and
 apostrophe, and the rendered-width rule `currentLen + newLen <= controlWidth
 - 4`. Paste copies at most `maxchars - 1` bytes, maintains termination, then
-removes trailing bytes until the rendered width fits the control.
+removes trailing bytes until the rendered width fits the control or only one
+byte remains (the exact paste behavior is in §2).
 
 Each interface has a name, logical rectangle, default focus, escape/default
 actions, declared gadget count, and optional background/panel artwork. Each

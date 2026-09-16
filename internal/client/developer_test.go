@@ -313,4 +313,13 @@ func TestDeveloperPickCrossUsesDetachedHeightAndRingInk(t *testing.T) {
 	if lines[0] != (drawlist.Line{X0: 143, Y0: 61, X1: 147, Y1: 61, Index: c.paletteIndex(15)}) || lines[1] != (drawlist.Line{X0: 145, Y0: 59, X1: 145, Y1: 63, Index: c.paletteIndex(15)}) {
 		t.Fatalf("five-pixel detached pick cross: %v", lines)
 	}
+	d.SeaLevel = 60
+	c.list.Reset()
+	c.drawDeveloperTerrain(&frame.Frame{Developer: d})
+	spy = &scaleCapture{}
+	c.list.Replay(spy)
+	lines = spy.lines[len(spy.lines)-2:]
+	if lines[0].Y0 != 51 || lines[1].Y0 != 49 || lines[1].Y1 != 53 {
+		t.Fatalf("pick cross projected the seabed instead of the water surface: %v", lines)
+	}
 }

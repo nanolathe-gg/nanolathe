@@ -54,6 +54,32 @@ func enqueueText(in *input.State, text string) {
 	}
 }
 
+func TestTalkPasteCarriesWholeCommandThroughFocusedService(t *testing.T) {
+	b := newTestBattle(testCatalogON05(), testWorldON05(100, 100))
+	b.sess.Econ = &economy.Service{}
+	b.hud = &retailBattleHUD{talkWin: testTalkWindow()}
+	b.millisSource = &fakeMillisSource{}
+	b.controller = NewBattleController(b, b.millisSource)
+	cl := b.cl
+	cl.SetFocused(true)
+	in := cl.Input()
+	in.EnqueueToken(input.Token{Kind: input.TokenEdit, Key: input.KeyEnter})
+	b.viewerStep(0, cl)
+	// This password exceeds the keyboard ring's capacity in individual runes.
+	// Clipboard payloads must survive the widget service as one event.
+	const command = "+Now Film Chris Include Reload Assert"
+	in.EnqueueToken(input.Token{Kind: input.TokenEdit, Key: input.KeyV, Ctrl: true, Clipboard: input.ClipboardText{Text: command, Available: true}})
+	b.viewerStep(0, cl)
+	if !b.chat.active || b.hud.talkPanel.TextOf("TALK") != command || b.developer.authorized {
+		t.Fatal("paste did not remain whole in the focused TALK editor")
+	}
+	in.EnqueueToken(input.Token{Kind: input.TokenEdit, Key: input.KeyEnter})
+	b.viewerStep(0, cl)
+	if b.chat.active || !b.developer.authorized {
+		t.Fatal("pasted command did not submit through TALK")
+	}
+}
+
 func TestTalkProductionFlowComposeCancelAndOwnInput(t *testing.T) {
 	b := newTestBattle(testCatalogON05(), testWorldON05(100, 100))
 	b.sess.Econ = &economy.Service{}

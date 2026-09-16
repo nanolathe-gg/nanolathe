@@ -54,3 +54,24 @@ func TestStatePeekAndDiscardPreserveUnconsumedTail(t *testing.T) {
 		t.Fatalf("post-Escape tail=%#v", peek)
 	}
 }
+
+func TestPastePayloadSurvivesQueueCopiesAndIsReleased(t *testing.T) {
+	var q TokenRing
+	token := Token{Kind: TokenEdit, Key: KeyV, Ctrl: true, Clipboard: ClipboardText{Text: "+showranges", Available: true}}
+	q.Enqueue(token)
+	token.Clipboard.Text = "later clipboard"
+	peek := q.Peek()
+	if len(peek) != 1 || peek[0].Clipboard.Text != "+showranges" {
+		t.Fatalf("queued clipboard changed: %v", peek)
+	}
+	peek[0].Clipboard.Text = "changed peek"
+	got, ok := q.Dequeue()
+	if !ok || got.Clipboard.Text != "+showranges" || q.items[0] != (Token{}) {
+		t.Fatalf("dequeued clipboard=%+v retained slot=%+v", got, q.items[0])
+	}
+	q.Enqueue(token)
+	q.Discard(1)
+	if q.items[1] != (Token{}) {
+		t.Fatal("discarded token retained clipboard text")
+	}
+}

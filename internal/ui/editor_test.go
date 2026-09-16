@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
@@ -107,5 +108,70 @@ func TestEditorDuplicateNamesKeepTextAndCaretIndependent(t *testing.T) {
 	p.ApplyEditorTokens([]input.Token{{Kind: input.TokenText, Rune: 'b'}}, nil)
 	if p.TextAt(1) != "first" || p.TextAt(2) != "ab" || p.EditorCaret() != 2 {
 		t.Fatal("captured editor shared duplicate text")
+	}
+}
+
+func TestEditorPasteReplacementBoundsAndFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		clipboard input.ClipboardText
+		maximum   int16
+		width     int32
+		want      string
+	}{
+		{"replace-filter-bypass", input.ClipboardText{Text: "a-+\t", Available: true}, 12, 40, "a-+\t"},
+		{"empty-clears", input.ClipboardText{Available: true}, 12, 40, ""},
+		{"failed-preserves", input.ClipboardText{}, 12, 40, "old"},
+		{"capacity-reserves-terminator", input.ClipboardText{Text: "abcdef", Available: true}, 4, 40, "abc"},
+		{"full-width-and-strict-comparison", input.ClipboardText{Text: "abcde", Available: true}, 12, 8, "abcd"},
+		{"nul-terminates", input.ClipboardText{Text: "ab\x00cd", Available: true}, 12, 40, "ab"},
+		{"one-too-wide-glyph", input.ClipboardText{Text: "abc", Available: true}, 12, 1, "a"},
+		{"zero-capacity", input.ClipboardText{Text: "abc", Available: true}, 0, 40, ""},
+		{"buffer-limit", input.ClipboardText{Text: strings.Repeat("x", 140), Available: true}, 200, 400, strings.Repeat("x", 127)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := editorPanel()
+			p.Window.Gadgets[1].Attribs = 0x02
+			p.Window.Gadgets[1].MaxChars = tc.maximum
+			p.Window.Gadgets[1].Rect.W = tc.width
+			p.SetTextAt(1, "old")
+			p.FocusEditor(1)
+			p.ApplyEditorTokens([]input.Token{{Kind: input.TokenEdit, Key: input.KeyHome}, {Kind: input.TokenEdit, Key: input.KeyV, Ctrl: true, Clipboard: tc.clipboard}}, func(s string) int { return len(s) * 2 })
+			wantCaret := 0 // Home precedes paste; replacement retains its index.
+			if p.TextAt(1) != tc.want || p.EditorCaret() != wantCaret || !p.EditorCaptured() {
+				t.Fatalf("paste text=%q caret=%d captured=%t; want %q/%d/true [07 §2]", p.TextAt(1), p.EditorCaret(), p.EditorCaptured(), tc.want, wantCaret)
+			}
+		})
+	}
+}
+
+func TestEditorPasteRetainsCaretUntilFollowingEditBoundsIt(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		text      string
+		available bool
+		tail      []input.Token
+		want      string
+		caret     int
+	}{
+		{"longer-keeps-middle", "replacement", true, nil, "replacement", 3},
+		{"shorter-keeps-stale", "x", true, nil, "x", 3},
+		{"empty-keeps-stale", "", true, nil, "", 3},
+		{"failed-keeps-original", "", false, nil, "old", 3},
+		{"shorter-then-type", "x", true, []input.Token{{Kind: input.TokenText, Rune: '!'}}, "x!", 2},
+		{"shorter-then-backspace", "x", true, []input.Token{{Kind: input.TokenEdit, Key: input.KeyBackspace}}, "", 0},
+		{"empty-then-type", "", true, []input.Token{{Kind: input.TokenText, Rune: '!'}}, "!", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := editorPanel()
+			p.SetTextAt(1, "old")
+			p.FocusEditor(1)
+			tokens := []input.Token{{Kind: input.TokenEdit, Key: input.KeyInsert, Clipboard: input.ClipboardText{Text: tc.text, Available: tc.available}}}
+			tokens = append(tokens, tc.tail...)
+			p.ApplyEditorTokens(tokens, nil)
+			if p.TextAt(1) != tc.want || p.EditorCaret() != tc.caret {
+				t.Fatalf("paste/edit = %q/%d, want %q/%d", p.TextAt(1), p.EditorCaret(), tc.want, tc.caret)
+			}
+		})
 	}
 }

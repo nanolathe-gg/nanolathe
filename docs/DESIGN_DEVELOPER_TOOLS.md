@@ -35,6 +35,14 @@ and the Modern `+spawn` command keep their own documented contracts.
 
 ### 2.1 Reconnect dormant tools
 
+**Nanolathe Modern policy — developer shortcut.** `+dev` grants developer
+authorization in the central `gameplay.Modern` mode; it is case-insensitive,
+takes no arguments and is idempotent. It does not enter film controls or
+change a battle command, resource, or RNG. Strict 3.1 ignores the shortcut.
+The historical `+Now Film Chris Include Reload Assert` remains available in
+both modes with its original argument case and authorization behavior. Tests
+cover the Modern shortcut, Strict bypass, repeated use and historical access.
+
 **User-authorized Nanolathe developer tooling policy.** Make the recovered
 State and Builder Probes accessible even where the researched retail image
 retains their hotkey state but never calls their painters. Likewise, a portable
@@ -200,8 +208,10 @@ state isolation, not a test census of every label. Required acceptance:
 
 ### Controls
 
-In TALK enter `+Now Film Chris Include Reload Assert`. The command name is
-case-insensitive; the five arguments must match exactly. Then:
+In Modern mode, enter `+dev` in TALK. The historical
+`+Now Film Chris Include Reload Assert` also works in either gameplay mode:
+the command name is case-insensitive; the five arguments must match exactly.
+Both grant access; press F11 to enter film controls. Then:
 
 | Control | Effect |
 |---|---|
@@ -246,6 +256,12 @@ are connected. Goal colors follow the deterministic presentation policy above.
 An unallocated movement-class layer or uninitialized search table is reported
 unavailable; inspection does not allocate/revise an authoritative path layer.
 Undefined combined-status arrow colors are omitted as documented in [03 §3.12].
+
+The occupancy cross and footer pick accept framebuffer mouse coordinates,
+restore the camera's beam origin before the live-zoom inverse, and resolve the
+detached heightfield. The cross uses the resolver's sea-level floor over water.
+It marks the resolved ground point [03 §3.12], so steep terrain can retain the
+ground resolver's interpolation residue rather than matching every cursor pixel.
 
 Builder options preserve authored order. **Candidate scores are currently
 unavailable**: the inspection publication does not yet provide the candidate

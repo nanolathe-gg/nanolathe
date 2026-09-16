@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"unicode"
 
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
@@ -84,21 +85,32 @@ func (p *Panel) ApplyEditorTokens(tokens []input.Token, measure func(string) int
 		measure = func(s string) int { return len(s) }
 	}
 	text := p.TextAt(index)
-	if p.editor.caret < 0 {
-		p.editor.caret = 0
-	}
-	if p.editor.caret > len(text) {
-		p.editor.caret = len(text)
-	}
+	p.editor.caret = min(max(p.editor.caret, 0), len(text))
 	result := EditorResult{Action: Action{Kind: ActionNone, Index: -1}}
 	for i, token := range tokens {
+		// Nanolathe safety policy: bound a stale insertion index before the
+		// next edit. Retail paste retains the caret even when replacement is
+		// shorter [07 §2]; Go strings must never be sliced beyond their length.
+		p.editor.caret = min(max(p.editor.caret, 0), len(text))
 		result.Consumed = i + 1
 		if token.Kind == input.TokenEdit {
 			switch token.Key {
 			case input.KeyInsert, input.KeyV:
-				// TODO(T25): wire the host clipboard to the established paste
-				// operation for Insert and Ctrl+V. Until the host byte/codepage
-				// mapping is settled, leave text unchanged [07 §2].
+				if (token.Key == input.KeyInsert || token.Ctrl) && token.Clipboard.Available {
+					// Paste replaces the buffer, bypasses printable admission, and
+					// fits the full control width, unlike typing [07 §2].
+					text = token.Clipboard.Text
+					if end := strings.IndexByte(text, 0); end >= 0 {
+						text = text[:end]
+					}
+					limit := max(0, min(editorCapacity(gadget), 128)-1)
+					if len(text) > limit {
+						text = text[:limit]
+					}
+					for len(text) > 1 && measure(text) > int(gadget.Rect.W) {
+						text = text[:len(text)-1]
+					}
+				}
 			case input.KeyEscape:
 				text = ""
 				p.editor.caret = 0

@@ -3,6 +3,9 @@ package ebitenapp
 import (
 	"testing"
 
+	"github.com/nanolathe-gg/nanolathe/internal/gui"
+	"github.com/nanolathe-gg/nanolathe/internal/ui"
+
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 )
 
@@ -150,5 +153,64 @@ func TestCtrlPunctuationKeepsPlainTokenIdentity(t *testing.T) {
 		if !ok || token != (input.Token{Kind: input.TokenText, Rune: tc.text}) {
 			t.Fatalf("Ctrl punctuation %v = %+v, want plain %q [07 §2]", tc.key, token, tc.text)
 		}
+	}
+}
+
+// Use the production adapter and common editor together, so TALK receives the
+// same paste as any other captured textbox without screen-specific wiring.
+func TestPasteInputReplacesCapturedEditorOnce(t *testing.T) {
+	for _, shortcut := range []string{"command-v", "control-v", "insert"} {
+		t.Run(shortcut, func(t *testing.T) {
+			reads := 0
+			sample := sampledInput{clipboard: func() input.ClipboardText {
+				reads++
+				return input.ClipboardText{Text: "+showranges", Available: true}
+			}}
+			switch shortcut {
+			case "command-v":
+				sample.command = true
+				sample.keys[input.KeyV] = true
+				sample.characters = []rune{'v'}
+			case "control-v":
+				sample.modifiers.Ctrl = true
+				sample.keys[input.KeyCtrl], sample.keys[input.KeyV] = true, true
+				sample.characters = []rune{'V', '\x16'}
+			case "insert":
+				sample.keys[input.KeyInsert] = true
+			}
+			in := input.NewState()
+			applyInput(in, sample)
+			tokens := in.DrainTokens()
+			if len(tokens) != 1 || !isPasteToken(tokens[0]) || reads != 1 {
+				t.Fatalf("paste tokens=%+v reads=%d", tokens, reads)
+			}
+			p := ui.NewPanel(&gui.Window{Gadgets: []gui.Gadget{{Kind: gui.KindTextBox, Name: "TALK", Active: 1, MaxChars: 127, Rect: gui.Rect{W: 200}}}})
+			p.SetTextAt(0, "old")
+			p.FocusEditor(0)
+			p.ApplyEditorTokens(tokens, nil)
+			if p.TextAt(0) != "+showranges" || p.EditorCaret() != len("old") {
+				t.Fatalf("paste text=%q caret=%d", p.TextAt(0), p.EditorCaret())
+			}
+			if shortcut == "command-v" && in.Kbd.KeyHeld(input.KeyCtrl) {
+				t.Fatal("Cmd alias synthesized Ctrl held state")
+			}
+			applyInput(in, sample)
+			if reads != 1 || in.PendingTokens() != 0 {
+				t.Fatalf("held paste repeated: reads=%d tokens=%v", reads, in.PeekTokens())
+			}
+		})
+	}
+}
+
+func TestCommandShortcutsDoNotBecomeGameKeys(t *testing.T) {
+	in := input.NewState()
+	sample := sampledInput{command: true, characters: []rune{'a'}, clipboard: func() input.ClipboardText {
+		t.Fatal("clipboard read without paste request")
+		return input.ClipboardText{}
+	}}
+	sample.keys[input.KeyA], sample.keys[input.KeyLeft] = true, true
+	applyInput(in, sample)
+	if in.PendingTokens() != 0 || in.Kbd.KeyHeld(input.KeyCtrl) || in.Kbd.KeyDown(input.KeyA) || in.Kbd.KeyHeld(input.KeyLeft) {
+		t.Fatalf("Cmd shortcut escaped to game keys: tokens=%v", in.PeekTokens())
 	}
 }

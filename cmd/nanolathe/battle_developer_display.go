@@ -9,15 +9,17 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 )
 
-// developerPick applies the ordinary terrain inverse to the detached grid.
+// developerPick resolves a framebuffer pointer against the detached grid.
 // Sampling and bracketing follow [03 §2.3][07 §8]; no live terrain is consulted.
 func developerPick(b *battleSession, d *frame.DeveloperView, sx, sy int32) (int32, int32, bool) {
 	if b == nil || b.cam == nil || d == nil || d.Width <= 0 || d.Height <= 0 || int64(len(d.Cells)) < int64(d.Width)*int64(d.Height) {
 		return 0, 0, false
 	}
-	sx, sy = b.cam.ScreenToRecord(sx, sy)
-	px := b.cam.X + b.cam.Scale.Inverse(sx-camera.OriginX)
-	pz := b.cam.Z + b.cam.Scale.Inverse(sy-camera.OriginY)
+	// As in cursorWorld, restore the beam origin removed by the world recorder
+	// before applying the live camera inverse [03 §2.5]. PointerSample is in
+	// framebuffer coordinates, not beam coordinates.
+	fx, fz := b.cam.ScreenToWorld(sx+camera.OriginX, sy+camera.OriginY)
+	px, pz := int32(fx>>16), int32(fz>>16)
 	px = min(max(px, 0), d.Width*16-1)
 	pz = min(max(pz, 0), d.Height*16-1)
 	height := func(x, z int32) int32 {

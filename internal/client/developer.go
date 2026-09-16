@@ -206,6 +206,9 @@ func (c *Client) drawDeveloperTerrain(f *frame.Frame) {
 	}
 	if c.developer.Mode == 2 && c.developer.PickValid {
 		y, _ := developerGroundHeight(d, c.developer.PickX, c.developer.PickZ)
+		// The cursor resolver picks the water surface above submerged terrain
+		// [07 §8]; keep that same height when projecting its diagnostic cross.
+		y = max(y, int32(d.SeaLevel))
 		p := c.developerProject(c.developer.PickX, y, c.developer.PickZ)
 		ink := c.paletteIndex(15) // ring/viewport ink [03 §3.12][03 R-MM-01 §1]
 		c.developerLine(Point{p.X - 2, p.Y}, Point{p.X + 2, p.Y}, ink, clip)

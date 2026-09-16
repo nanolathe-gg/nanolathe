@@ -1,14 +1,17 @@
 package main
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
+	"github.com/nanolathe-gg/nanolathe/internal/economy"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
 func developerToken(r rune) *input.State {
@@ -52,6 +55,32 @@ func TestDeveloperAuthorizationAndFilmLifetimes(t *testing.T) {
 		b.handleDeveloperShortcuts(developerFunction(input.KeyF11, false), nil)
 		if b.developer.film || b.developer.information || b.developer.quickkeysDisabled || b.sess.DebugDisplayMode != 0 {
 			t.Fatal("film exit failed")
+		}
+	}
+}
+
+func TestModernDevShortcutPreservesHistoricalAccessAndBattleState(t *testing.T) {
+	for _, mode := range []gameplay.Mode{gameplay.Modern, gameplay.Strict31} {
+		b := &battleSession{sess: &session.Session{Gameplay: mode, Econ: &economy.Service{}}}
+		b.sess.SeedSessionRNG(7, 11)
+		b.sess.Econ.Players[0].Stock = [2]float32{123, 456}
+		simBefore, crtBefore, econBefore := *b.sess.SimRNG(), *b.sess.CrtRNG(), *b.sess.Econ
+		b.dispatchLocalCommand("+dev extra")
+		if b.developer.authorized {
+			t.Fatal("shortcut accepted arguments")
+		}
+		for _, command := range []string{"+dev", "+DEV"} {
+			b.dispatchLocalCommand(command)
+			if b.developer.authorized != (mode == gameplay.Modern) || b.developer.film {
+				t.Fatalf("shortcut authorization/film state in %v: %+v", mode, b.developer)
+			}
+		}
+		if *b.sess.SimRNG() != simBefore || *b.sess.CrtRNG() != crtBefore || !reflect.DeepEqual(*b.sess.Econ, econBefore) {
+			t.Fatal("developer shortcut changed RNG or economy")
+		}
+		b.dispatchLocalCommand("+Now Film Chris Include Reload Assert")
+		if !b.developer.authorized {
+			t.Fatalf("historical access failed in %v", mode)
 		}
 	}
 }
@@ -132,18 +161,39 @@ func TestDeveloperPickMatchesTerrainInverse(t *testing.T) {
 		}
 	}
 	b := &battleSession{cam: &camera.Camera{X: 32, Z: 48, ViewW: 640, ViewH: 480}}
-	for _, scale := range []camera.ViewScale{camera.ViewScale(2), camera.ViewScale(4)} {
-		b.cam.Scale = scale
+	for _, zoom := range []camera.Zoom{camera.ZoomUnit, camera.ZoomUnit * 2, camera.ZoomUnit * 3 / 2} {
+		b.cam.Zoom, b.cam.Scale = zoom, zoom.Step()
 		for _, p := range [][2]int32{{128, 32}, {174, 66}, {211, 231}, {640, 448}} {
 			x, z, ok := developerPick(b, d, p[0], p[1])
 			if !ok {
 				t.Fatal("pick unavailable")
 			}
-			px := b.cam.X + scale.Inverse(p[0]-camera.OriginX)
-			pz := b.cam.Z + scale.Inverse(p[1]-camera.OriginY)
+			px := b.cam.X + zoom.Inverse(p[0])
+			pz := b.cam.Z + zoom.Inverse(p[1])
 			wx, _, wz := terrain.CursorToWorld(px, pz)
 			if x != int32(wx>>16) || z != int32(wz>>16) {
-				t.Fatalf("point %v scale %v got %d,%d want %d,%d", p, scale, x, z, wx>>16, wz>>16)
+				t.Fatalf("point %v zoom %v got %d,%d want %d,%d", p, zoom, x, z, wx>>16, wz>>16)
+			}
+		}
+	}
+}
+
+func TestDeveloperPickProjectsBackToFramebufferPointer(t *testing.T) {
+	d := &frame.DeveloperView{Width: 128, Height: 128, Cells: make([]frame.DeveloperCell, 128*128)}
+	for i := range d.Cells {
+		d.Cells[i].Height = 40
+	}
+	b := &battleSession{cam: &camera.Camera{X: -64, Z: -16, ViewW: 640, ViewH: 480}}
+	for _, scale := range []camera.ViewScale{camera.ViewScaleNative, camera.ViewScaleDetail} {
+		b.cam.Scale = scale
+		for _, p := range [][2]int32{{160, 96}, {384, 240}, {600, 400}} {
+			x, z, ok := developerPick(b, d, p[0], p[1])
+			if !ok {
+				t.Fatal("pick unavailable")
+			}
+			sx, sy := b.cam.WorldToScreen(numeric.Fixed(x)<<16, numeric.Fixed(40)<<16, numeric.Fixed(z)<<16)
+			if sx-camera.OriginX != p[0] || sy-camera.OriginY != p[1] {
+				t.Fatalf("framebuffer pointer %v projected to %d,%d at scale %v", p, sx-camera.OriginX, sy-camera.OriginY, scale)
 			}
 		}
 	}

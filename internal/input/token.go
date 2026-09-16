@@ -10,6 +10,14 @@ const (
 	TokenEdit
 )
 
+// ClipboardText is an immutable clipboard snapshot attached to a paste token.
+// Available distinguishes successful empty text from an unavailable format or
+// failed read; only the former clears the editor [07 §2].
+type ClipboardText struct {
+	Text      string
+	Available bool
+}
+
 // Token is one platform-neutral keyboard event. Text carries the platform's
 // translated rune unchanged. The kind-3 editor accepts only its established
 // byte domain; it performs no Unicode-to-legacy mapping [07 §2][07 R-WGT-01 §6].
@@ -20,6 +28,8 @@ type Token struct {
 	// Ctrl distinguishes translated Ctrl-letter, digit and function-key tokens
 	// from their plain counterparts, independently of later held state [07 §2].
 	Ctrl bool
+	// Clipboard accompanies Insert and Ctrl+V, without a screen-specific host call.
+	Clipboard ClipboardText
 }
 
 const tokenRingSlots = 30
@@ -53,6 +63,7 @@ func (q *TokenRing) Dequeue() (Token, bool) {
 		return Token{}, false
 	}
 	token := q.items[q.read]
+	q.items[q.read] = Token{}
 	q.read = (q.read + 1) % tokenRingSlots
 	return token, true
 }
@@ -104,6 +115,7 @@ func (q *TokenRing) Discard(n int) int {
 	}
 	removed := 0
 	for removed < n && q.read != q.write {
+		q.items[q.read] = Token{}
 		q.read = (q.read + 1) % tokenRingSlots
 		removed++
 	}

@@ -1051,6 +1051,32 @@ underscore and apostrophe, and the width rule
 bytes, keeps termination, then trims trailing bytes until the rendered width
 fits `[07 §4]` `[07 R-WGT-01 §6]`.
 
+The shared editor receives paste as an immutable `input.ClipboardText` on the
+Insert or Ctrl+V token. A successful read replaces the entire text, including
+successful empty text, bypasses ordinary printable/filter admission, and trims
+to the full control width, stopping when only one byte remains even if that glyph
+is still too wide. Paste retains the previous caret index, including when the
+replacement is shorter. A failed read leaves text and caret unchanged
+`[07 §2]` `[07 R-WGT-01 §12]`. As **Nanolathe safety policy**, the editor bounds
+that retained index to the current string before each subsequent token, so an
+edit following a shorter paste cannot slice beyond Go string storage. The
+painter bounds its local prefix separately. This is host safety handling, not a
+claim about retail's later edits with an index beyond the visible text.
+macOS reads the native AppKit pasteboard only on the initial paste key transition;
+queued tokens retain
+that snapshot. Cmd+V is an authorized host shortcut alias in both gameplay modes,
+with no synthetic Ctrl held state and no other Cmd shortcuts translated into
+game keyboard tokens. The host removes any companion V character from paste.
+
+The portable text boundary currently accepts ASCII bytes unchanged, including
+control bytes, and stops at the first NUL. It rejects an entire non-ASCII payload
+rather than guessing replacement characters. `TODO(T25): establish the host
+Unicode-to-retail-codepage conversion` remains the research gap in `[07 §2]`.
+Tests cover replacement, empty success versus failure, copy and rendered-width
+bounds, retained caret and safe subsequent edits, filter bypass, native
+private-pasteboard reads, queued snapshot ownership, and Cmd/Ctrl/Insert
+translation through the common editor.
+
 **C5 — hit tests and greying.** Hit tests are inclusive on both edges and run
 after runtime window placement. Hidden gadgets are skipped before the hit test,
 so one neither acts nor shields what lies behind it; a greyed gadget is
@@ -1830,10 +1856,11 @@ excluded with multiplayer `[07 R-CAM-01 §6]` `[07 R-FE-02 §12]`.
   `[07 R-CAM-01 §9]` `[07 R-FE-02 §11]`.
   The front-end `DRDEATH` cheat sequence also lacks its token-history consumer
   `[07 R-FE-02 §10]`.
-* **Clipboard paste.** Insert and Ctrl+V reach the editor, but the portable host
-  has no clipboard byte bridge. They leave the current text unchanged. Retail's
-  bounded `CF_TEXT` replacement operation is established; translating a host
-  Unicode clipboard into the retail code page remains unresolved `[07 §2]`.
+* **Clipboard portability.** macOS Insert, Ctrl+V and the host Cmd+V alias read
+  AppKit plain text on the initial paste key transition. Other native hosts and
+  VM guests still lack a clipboard bridge. Translating non-ASCII Unicode text
+  into the retail code page remains unresolved; an unavailable format, failed
+  read or unmapped text preserves the current editor `[07 §2]`.
 * **Never-opened GUIs.** The windows retail's own code never opens are not
   implemented, and implementing one would be inventing a screen
   `[07 R-FE-01 §12]`.
@@ -2317,8 +2344,8 @@ about maximum-size drag latency.
 
 ## 7. Not implemented and open
 
-Native event history, text code pages and the clipboard bridge remain marked
-platform gaps in the input and editor paths (§2.2 and §3.9). The other open
+Native event history, text code pages and clipboard bridges outside macOS remain
+marked platform gaps in the input and editor paths (§2.2 and §3.9). The other open
 questions these contracts carry follow, with the observation that would settle
 each one.
 

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/internal/client"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 )
 
@@ -25,6 +26,13 @@ func (b *battleSession) developerCommand(words []string) bool {
 		return false
 	}
 	switch strings.ToLower(words[0]) {
+	case "dev":
+		// Modern host convenience; the historical password remains available
+		// in both modes (DESIGN_DEVELOPER_TOOLS §2.1).
+		if b.sess == nil || b.sess.Gameplay.Normalize() != gameplay.Modern || len(words) != 1 {
+			return true
+		}
+		b.developer.authorized = true
 	case "now":
 		b.developer.authorized = len(words) == 6 && words[1] == "Film" && words[2] == "Chris" && words[3] == "Include" && words[4] == "Reload" && words[5] == "Assert"
 	case "hostprofile":
