@@ -397,7 +397,7 @@ func TestDebrisTrailsMakeOneContainerPerSetBit(t *testing.T) {
 				t.Fatalf("%s: container %d holds %d sub-records at init, want 1: every family spawns once from its init [03 R-FX-01 §3]",
 					tc.name, i, c.Count)
 			}
-			views = c.AppendViews(views)
+			views = c.AppendViews(0, views)
 		}
 		for i := range views {
 			if views[i].Strip != 9 {
@@ -624,5 +624,58 @@ func TestDebrisTrailWindMatchesThePublishedWords(t *testing.T) {
 	}
 	if z != -2*numeric.MulRound(50, numeric.Cos(numeric.Angle(0))) {
 		t.Fatalf("wind Z word %d at heading 0, want the −2·speed·cos term", z)
+	}
+}
+
+// A presentation-owned trail container carries the same remaining-life hint the
+// session's own strip views carry, so a burning piece's terrain pool leaves with
+// its flame instead of switching off with the particle
+// (DESIGN_GPU_RENDERER §31.7). Without it every burning piece reads as spent.
+func TestDebrisTrailViewsCarryRemainingLife(t *testing.T) {
+	c := DebrisTrailContainer{
+		Family:   frame.StripFamilyFlameTrail,
+		Entry:    DebrisFlameTrailEntry,
+		Born:     10,
+		Deadline: 13,
+	}
+	c.laySegment()
+	// A sub-record with no deadline of its own falls back to the container's,
+	// which is the case the smoke class reaches.
+	c.Particles[c.Count] = DebrisTrailParticle{}
+	c.Count++
+
+	for _, tc := range []struct {
+		tick    uint32
+		want    uint32
+		present bool
+	}{
+		{tick: 10, want: 3, present: true},
+		{tick: 12, want: 1, present: true},
+		// The last drawn tick: no ticks left, but the record still HAS a
+		// deadline, which is what the fade's presence flag reads.
+		{tick: 13, want: 0, present: true},
+		{tick: 99, want: 0, present: true},
+	} {
+		views := c.AppendViews(tc.tick, nil)
+		if len(views) != 2 {
+			t.Fatalf("tick %d: %d views, want 2", tc.tick, len(views))
+		}
+		for i, v := range views {
+			if v.HasRemaining != tc.present || v.Remaining != tc.want {
+				t.Fatalf("tick %d view %d: remaining %d present %v, want %d present %v",
+					tc.tick, i, v.Remaining, v.HasRemaining, tc.want, tc.present)
+			}
+		}
+	}
+
+	// A container with no deadline at all claims none, rather than publishing a
+	// zero that would read as expiring.
+	none := DebrisTrailContainer{Family: frame.StripFamilyFlameTrail, Entry: DebrisFlameTrailEntry}
+	none.Particles[0] = DebrisTrailParticle{}
+	none.Count = 1
+	for _, v := range none.AppendViews(5, nil) {
+		if v.HasRemaining {
+			t.Fatalf("a container with no deadline published %d ticks remaining", v.Remaining)
+		}
 	}
 }

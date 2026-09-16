@@ -930,14 +930,15 @@ func (c *Client) drawFeature(f *frame.FeatureView) {
 		}
 		scale := float32(c.viewScale().Float())
 		lightingKind := drawlist.SpriteLightingNone
-		var lightingTime, lightingHeight float32
+		var lightingTime, lightingHeight, lightingGround float32
 		if burning {
 			lightingKind = drawlist.SpriteLightingFire
 			lightingTime = c.lightingTime()
 			lightingHeight = float32(f.Y.Raw()) / 65536 * scale
+			lightingGround = c.lightingGround(f.X, f.Z, scale)
 		}
 		c.emitSprite(drawlist.Sprite{
-			HeatSource: heat, HeatTime: heatTime, LightingScale: scale,
+			HeatSource: heat, HeatTime: heatTime, LightingScale: scale, LightingGround: lightingGround,
 			LightingKind: lightingKind, LightingTime: lightingTime, WorldHeight: lightingHeight,
 			Frame: normalFrame,
 			X:     sx - int32(normalFrame.XOffset),

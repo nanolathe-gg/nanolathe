@@ -141,6 +141,10 @@ func run(opts Options, out *os.File) error {
 	defer content.Close()
 	opts.Root, opts.Roots = content.root, content.roots
 
+	if opts.ShotDebris != "" {
+		return runDebrisShot(opts, content)
+	}
+
 	if opts.Shot != "" {
 		return runShot(opts, content)
 	}

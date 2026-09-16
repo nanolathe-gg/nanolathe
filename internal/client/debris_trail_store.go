@@ -190,7 +190,7 @@ func (c *Client) drawDebrisTrails(cur *frame.Frame) StripDrawStats {
 	s := &c.debrisTrails
 	s.views = s.views[:0]
 	for i := range s.live {
-		s.views = s.live[i].AppendViews(s.views)
+		s.views = s.live[i].AppendViews(cur.Tick, s.views)
 	}
 	stats = c.drawStripViews(cur, s.views)
 	c.addStripStats(stats)

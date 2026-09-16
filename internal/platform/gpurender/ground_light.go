@@ -1,6 +1,7 @@
 package gpurender
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -24,11 +25,30 @@ import (
 // Explosion receivers now apply their separate lower gain and short fade (§31.6).
 const groundLightGain = 2.0
 
+// groundKindScale is each family's share of groundLightGain at the TERRAIN
+// receiver; model and smoke receivers keep the full colour they always had
+// (§31.6, §31.7). Terrain is the receiver that reads as a shape — a pool on
+// open ground is a circle the eye finds — so the families that stand for a
+// small, moving, short-lived source are held well below the standing ones.
+//
+// Every value is an authored presentation choice, not retail arithmetic. Fire
+// and spark were tuned AFTER the receiver height of §31.7 landed: measured from
+// the sea datum a pool on high ground carried a large standing attenuation, and
+// a share picked against that reads bleached once the attenuation is gone.
+var groundKindScale = [lightKindCount]float32{
+	lightExplosion:  0.75 / groundLightGain, // §31.6's peak, before its envelope
+	lightNano:       1,
+	lightFire:       0.3, // a burning place still lights the ground it stands on
+	lightProjectile: 1,
+	lightWreck:      1,
+	lightSpark:      0.15, // a burning fragment lights almost nothing
+}
+
 // explosionGroundScale multiplies only the terrain receiver's emission.
 // Authored presentation tuning: 0.75 peak gain instead of 2, two ticks of
 // peak followed by squared decay to zero at twelve ticks (GPU design §31.6).
 func explosionGroundScale(age float32, known bool) float32 {
-	const peak = float32(0.75 / groundLightGain)
+	peak := groundKindScale[lightExplosion]
 	if !known {
 		return peak
 	}
@@ -37,6 +57,24 @@ func explosionGroundScale(age float32, known bool) float32 {
 	}
 	tail := 1 - max(age-2, 0)/10
 	return peak * tail * tail
+}
+
+// groundScale is the terrain receiver's whole per-source multiplier: the
+// family's share, the explosion's own envelope, and the source's own remaining
+// emission where its producer carried one (§31.7).
+func groundScale(light *battleLight) float32 {
+	// add() rejects any kind at or past lightKindCount, so the table index is
+	// always in range and needs no bound of its own.
+	scale := groundKindScale[light.kind]
+	if light.kind == lightExplosion {
+		// The explosion's share is the table's entry as well, taken through the
+		// envelope §31.6 wraps around it.
+		scale = explosionGroundScale(light.age, light.ageKnown)
+	}
+	if light.fadeKnown {
+		scale *= light.fade
+	}
+	return scale
 }
 
 type groundLighting struct {
@@ -87,19 +125,21 @@ func (r *Renderer) appendGroundLights() {
 	k := r.sched.txf(1)
 	for i := range l.lights {
 		light := &l.lights[i]
-		gain := float32(1)
-		if light.kind == lightExplosion {
-			gain = explosionGroundScale(light.age, light.ageKnown)
-			if gain <= 0 {
-				continue
-			}
+		gain := groundScale(light)
+		if gain <= 0 {
+			continue
 		}
 		// This pass overlays the painted terrain without a receiver height.
 		// Centre its pool on the projected source, as the visible art is, rather
 		// than treating the unsheared world row as a terrain pixel (SC20).
 		// Physical model/smoke distances still use the unsheared source (§23.2).
 		gx, gy := r.sched.txx(light.position[0]), r.sched.txy(light.position[1]-light.position[2]*0.5)
-		height := light.position[2] * k
+		// The source's height ABOVE THE GROUND under it. Measured from the sea
+		// datum instead — as this pass had to before the producers carried a
+		// receiver height — every pool narrower than the map's own elevation is
+		// discarded outright by the reach test below, which is what suppressed
+		// a spark's pool anywhere the ground rises (§31.5, §31.7).
+		height := max(light.position[2]-light.ground, 0) * k
 		radius := light.radius * k
 		if radius <= 0 || height >= radius {
 			// Every ground point is already past the radius; the disc is empty.
@@ -138,12 +178,37 @@ func newGroundLightShader() (*ebiten.Shader, error) {
 // stays darker than the sand beside it — and the per-channel clamp against
 // 1 − base is what stops a bright source from flattening the ground to white.
 //
+// Pure base × light is a coloured FILTER, though, and a filter amplifies
+// whatever the surface already is: a warm fire over saturated grass multiplies
+// the one channel that is already high, drives it into the clamp, and the pool
+// reads as poison green rather than as firelight. The physical answer is that a
+// lit surface returns the LIGHT's spectrum scaled by its own reflectance, so the
+// fragment mixes the albedo product with luma(base) × light — the same quantity
+// on a neutral surface, and the light's own hue on a coloured one. At
+// groundHueMix the pool keeps the map's painted structure (luma varies pixel to
+// pixel exactly as the albedo does) and stops inheriting its hue (§31.7).
+//
 // The falloff is the model faces' radial law of §23.2 with the square dropped:
 // a face is a small target and wants a tight core, while a ground pool is read
 // as a shape and wants a body. Squared, the pool was a bright point inside a
 // wide invisible skirt; linear in d²/r² it carries light out to most of its
 // radius and still reaches zero at the edge. Distance stays three-dimensional.
-const groundLightShaderSource = `//kage:unit pixels
+//
+// That linear law reaches zero with a slope, and a brightening that stops at a
+// slope is a rim: the eye reads the termination as the outline of a disc, which
+// is what made a pool on open ground look like a drawn circle. Smoothstepping
+// it — f²(3 − 2f) — lands at zero with zero slope at the rim and at full with
+// zero slope at the core, so the pool ends in nothing at all while keeping the
+// body the linear law was chosen for (§31.7). Two multiplies and a subtract.
+// The source is BUILT from the Go constants rather than carrying literals that
+// restate them. A coupling assertion can only constrain the side it names, so a
+// pair of hand-written numbers lets the shader ship a value the design document
+// does not describe; formatting them once at package init removes the second
+// copy entirely. It is one allocation for the life of the process, not per
+// frame, so §13's CPU/allocation policy is unaffected.
+var groundLightShaderSource = fmt.Sprintf(groundLightShaderTemplate, groundHueMix, groundLightGain)
+
+const groundLightShaderTemplate = `//kage:unit pixels
 package main
 
 func Fragment(dst vec4, src vec2, color vec4, light vec4) vec4 {
@@ -153,16 +218,17 @@ func Fragment(dst vec4, src vec2, color vec4, light vec4) vec4 {
  d2 := dot(d,d)+light.z*light.z
  if d2 >= r*r { discard() }
  falloff := 1.0-d2/(r*r)
+ falloff = falloff*falloff*(3.0-2.0*falloff)
  base := imageSrc0At(p+imageSrc0Origin()).rgb
- return vec4(min(base*color.rgb*(falloff*` + groundLightGainLiteral + `), vec3(1.0)-base), 0.0)
+ lit := mix(base, vec3(dot(base,vec3(0.299,0.587,0.114))), %[1]v)*color.rgb
+ return vec4(min(lit*(falloff*%[2]v), vec3(1.0)-base), 0.0)
 }
 `
 
-// The gain reaches the shader as a literal rather than a uniform: this pass
-// compiles once and submits one batch, so a uniform map would allocate per
-// frame for a constant (§13 "CPU/allocation policy").
-const groundLightGainLiteral = "2.0"
-
-// The literal and the Go constant are the same number; this fails to compile if
-// one is edited without the other.
-const _ = uint(int32(groundLightGain*1000) - 2000)
+// groundHueMix is how far the fragment moves from the albedo filter toward the
+// neutral-surface response: 0 is the pure base × light of §31.3, 1 discards the
+// surface's hue entirely and keeps only its brightness. It is an artistic
+// choice. Both it and the gain reach the shader through the template above
+// rather than as a uniform: this pass compiles once and submits one batch, so a
+// uniform map would allocate per frame for a constant (§13).
+const groundHueMix = 0.75

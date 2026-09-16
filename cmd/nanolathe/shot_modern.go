@@ -78,9 +78,11 @@ func captureModernShot(cl *client.Client, w, h int, mapName string, profileFrame
 	fmt.Fprintf(os.Stderr, "nanolathe: modern model route: scene=%q gpu=%d skipped=%d shadows=%d shadows-omitted=%d no-body=%d lane-subjects=%d lane-shadows=%d lane-faces=%d lane-overflow=%d lane-pages=%d lane-rows=%d\n", mapName, ms.GPU, ms.Skipped, ms.Shadows, ms.ShadowsOmitted, ms.NoBody, ms.DirectSubjects, ms.DirectShadows, ms.DirectFaces, ms.DirectOverflow, ms.DirectPages, ms.DirectAtlasRows)
 	// The Enhanced lighting census: the selected sources by family and the
 	// ground discs they batched (DESIGN_GPU_RENDERER §31).
-	fmt.Fprintf(os.Stderr, "nanolathe: modern lighting: sources=%d explosion=%d nano=%d fire=%d projectile=%d wreck=%d ground=%d lit-faces=%d lit-smoke=%d\n",
+	// Every family the budget holds, so the printed rows sum to sources; a
+	// census that silently drops one reads as lights having gone missing.
+	fmt.Fprintf(os.Stderr, "nanolathe: modern lighting: sources=%d explosion=%d nano=%d fire=%d projectile=%d wreck=%d spark=%d ground=%d lit-faces=%d lit-smoke=%d\n",
 		ms.BattleLights, ms.BattleLightKinds[0], ms.BattleLightKinds[1], ms.BattleLightKinds[2],
-		ms.BattleLightKinds[3], ms.BattleLightKinds[4], ms.GroundLights, ms.LitModelFaces, ms.LitSmokeSprites)
+		ms.BattleLightKinds[3], ms.BattleLightKinds[4], ms.BattleLightKinds[5], ms.GroundLights, ms.LitModelFaces, ms.LitSmokeSprites)
 	if game.profileFrames > 0 {
 		got := 0
 		if game.profileStats != nil {

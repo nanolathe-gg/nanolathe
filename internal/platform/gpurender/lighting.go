@@ -23,6 +23,10 @@ const (
 	lightFire
 	lightProjectile
 	lightWreck
+	// lightSpark is a flame-stream TRAIL particle: the flame a burning debris
+	// piece drags behind it. It is a spark in flight, not a burning place, so
+	// it is its own family with its own reach, energy and budget (§31.7).
+	lightSpark
 	lightKindCount
 )
 
@@ -34,15 +38,34 @@ const (
 // pre-existing behaviour of competing for the whole budget.
 var lightKindCap = [lightKindCount]int{
 	lightExplosion: battleLightLimit, lightNano: battleLightLimit,
-	lightFire: 24, lightProjectile: 24, lightWreck: 16,
+	lightFire: 16, lightProjectile: 24, lightWreck: 16, lightSpark: 16,
 }
 
+// One unit's death throws dozens of burning pieces, so sparks take their own
+// small reserve rather than sharing the standing fire's: a debris shower can no
+// longer take fire below eight slots, where it could previously take it below
+// twelve and could fill fire's whole cap (§31.7).
+//
+// The reserves are named constants and the array is built from those names, so
+// the partition assertion below constrains the same symbols the table uses. It
+// restated its own literals before, and an edit to the table alone compiled.
+const (
+	reserveExplosion = 24
+	reserveNano      = 12
+	reserveFire      = 8
+	reserveProj      = 12
+	reserveWreck     = 4
+	reserveSpark     = 4
+)
+
 var lightKindReserve = [lightKindCount]int{
-	lightExplosion: 24, lightNano: 12, lightFire: 12, lightProjectile: 12, lightWreck: 4,
+	lightExplosion: reserveExplosion, lightNano: reserveNano, lightFire: reserveFire,
+	lightProjectile: reserveProj, lightWreck: reserveWreck, lightSpark: reserveSpark,
 }
 
 // The reserves are a partition of the budget; this fails to compile otherwise.
-const _ = uint(battleLightLimit - (24 + 12 + 12 + 12 + 4))
+const _ = uint(battleLightLimit - (reserveExplosion + reserveNano + reserveFire + reserveProj + reserveWreck + reserveSpark))
+const _ = uint(reserveExplosion + reserveNano + reserveFire + reserveProj + reserveWreck + reserveSpark - battleLightLimit)
 
 // Artistic constants for the added emitter families (§31). Radii are world
 // pixels at record scale; the record scale multiplies them at gather time.
@@ -55,7 +78,14 @@ const (
 	// the prototype was tuned for. Burning art measures 0.39-0.51 peak on the
 	// reference install, well under an explosion's, so without this a fire's
 	// light is technically present and visually unreadable (§31.1).
-	fireEnergy         = 1.6
+	fireEnergy = 1.6
+	// A spark is measured from its own art with a narrow clamp: it stands for
+	// a burning fragment, not a burning place, so it never takes the standing
+	// fire's wide floor. sparkEnergy stays well under fireEnergy for the same
+	// reason (§31.7).
+	sparkRadiusMin     = 20
+	sparkRadiusMax     = 56
+	sparkEnergy        = 0.9
 	projRadiusMin      = 56
 	projRadiusMax      = 96
 	strokeRadiusMin    = 48
@@ -77,7 +107,18 @@ type battleLight struct {
 	// Receiver-specific terrain flash timing; model/smoke color stays intact (§31.6).
 	age      float32
 	ageKnown bool
-	kind     lightKind
+	// ground is the terrain height under the source, in the same units as
+	// position[2]. ONLY the ground pass reads it: it attenuates by the source's
+	// height above the GROUND rather than above the sea datum, which is the
+	// receiver height §31.3 had to do without (§31.7). Model and smoke
+	// receivers keep the physical source of §23.2 untouched.
+	ground float32
+	// fade is the source's own remaining emission and fadeKnown whether its
+	// producer carried one at all, so a spent source's zero is distinct from a
+	// family that never fades. Only the terrain receiver applies it (§31.7).
+	fade      float32
+	fadeKnown bool
+	kind      lightKind
 }
 
 type battleLighting struct {
@@ -101,9 +142,9 @@ func (r *Renderer) setBattleLighting(on bool) { r.lighting.disabled = !on }
 // before any model is rasterized. Smoke and generic bloom flags are never
 // sources. Coordinates stay in RECORD space until the ordinary world commit.
 //
-// Five families reach the budget: named explosion art, nanolathe clusters
-// (§23.5), burning flame strips, emissive projectile bodies and emissive
-// strokes, and cooling fresh wrecks (§31). Every one of them is already
+// Six families reach the budget: named explosion art, nanolathe clusters
+// (§23.5), standing flame strips, flame-stream TRAIL sparks (§31.7), emissive
+// projectile bodies and emissive strokes, and cooling fresh wrecks (§31). Every one of them is already
 // visibility-admitted by its producer, and the player's Lighting switch gates
 // the whole gather.
 func (r *Renderer) prepareBattleLighting(list *drawlist.List) {
@@ -145,6 +186,8 @@ func (r *Renderer) addSpriteLight(sp drawlist.Sprite) {
 		kind = lightFire
 	case drawlist.SpriteLightingProjectile:
 		kind = lightProjectile
+	case drawlist.SpriteLightingSpark:
+		kind = lightSpark
 	default:
 		return
 	}
@@ -189,6 +232,18 @@ func (r *Renderer) addSpriteLight(sp drawlist.Sprite) {
 		for j := range color {
 			color[j] *= strength
 		}
+	case lightSpark:
+		radius = min(max(art*1.4, sparkRadiusMin*scale), sparkRadiusMax*scale)
+		// A spark's art measures as dim as a standing flame's, so it takes the
+		// same warm fallback — at the spark family's own lower energy, and with
+		// no flicker, whose phase hash is a position hash and so re-rolls every
+		// frame under anything that moves (§31.5, §31.7).
+		if peak < fireDimPeak {
+			color = [3]float32{fireWarmFallback[0] * peak, fireWarmFallback[1] * peak, fireWarmFallback[2] * peak}
+		}
+		for j := range color {
+			color[j] *= sparkEnergy
+		}
 	case lightProjectile:
 		radius = min(max(art*1.4, projRadiusMin*scale), projRadiusMax*scale)
 	default:
@@ -212,6 +267,8 @@ func (r *Renderer) addSpriteLight(sp drawlist.Sprite) {
 	l.add(battleLight{
 		position: [3]float32{ax, ay + sp.WorldHeight*0.5, sp.WorldHeight + float32(sp.Frame.Height)*0.25},
 		color:    color, radius: radius, kind: kind, age: sp.LightingAge, ageKnown: sp.HasLightingAge,
+		ground: max(sp.LightingGround, 0),
+		fade:   min(max(sp.LightingFade, 0), 1), fadeKnown: sp.HasLightingFade,
 	})
 }
 

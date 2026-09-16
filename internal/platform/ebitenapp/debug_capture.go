@@ -14,11 +14,19 @@ import (
 
 func (a *app) writeDebugDeviceCapture(directory string) error {
 	a.c.JoinPreRecord()
+	// Read backing texture capacity before screenshot readback can allocate.
+	var info ebiten.DebugInfo
+	ebiten.ReadDebugInfo(&info)
 	var last *ebiten.Image
 	metadata := map[string]any{"renderer": a.mode,
 		"presented_tick":    "unavailable: adapter does not retain tick identity; current committed tick must not be substituted",
 		"last_presented_at": a.presentedAt,
 		"update_bodies":     a.bodies}
+	metadata["ebitengine"] = map[string]any{
+		"graphics_library":             info.GraphicsLibrary.String(),
+		"total_gpu_image_memory_bytes": info.TotalGPUImageMemoryUsageInBytes,
+		"note":                         "Estimated RGBA bytes of Ebitengine backing textures, including shared atlas capacity, for both renderers. Excludes native geometry buffers, upload temporaries and driver overhead; not total GPU memory or process footprint.",
+	}
 	metadata["paused_world"] = map[string]any{"valid": a.paused.valid, "recordings": a.paused.records, "reuses": a.paused.reuses}
 	metadata["record_pipeline"] = map[string]any{"hits": a.pipe.hits, "misses": a.pipe.misses, "synchronous": a.pipe.synchronous}
 	if a.paused.image != nil {

@@ -4403,9 +4403,10 @@ unit between a light and the ground casts no shadow into the pool. Terrain has n
 normals here, so a hillside takes the same light as flat ground — the pool is a
 screen-space disc, not a projection onto relief. The ground pass reads one copy of
 the composite, so a light applies to whatever the terrain pass has already drawn,
-water surface included, and never to the objects over it. The absolute-height
-approximation can still suppress an entire small explosion on high ground, and
-supplies no missing terrain receiver height. A fresh wreck's light borrows the §28
+water surface included, and never to the objects over it. Terrain receiver height
+reaches this pass from the producers as of §31.7, so a source resting on high ground
+is no longer suppressed by the sea datum; a producer that carries none still is.
+A fresh wreck's light borrows the §28
 cooling emission, which the Distortion switch owns: with Distortion off a wreck
 emits no light even when Lighting is on. The flicker's phase hash is a position
 hash, so two fires at one recorded position pulse together and a moving fire
@@ -4421,8 +4422,8 @@ and the whole terrain flash ends at 400 ms; at age seven ticks one quarter of th
 new peak remains. Current-art colour still modulates this envelope, so it cannot
 invent light from dark pixels. Radius, position, radial falloff and the albedo law
 are unchanged, and water receives the same short flash through the existing pass.
-Nearby models and smoke retain the prior full-colour response; fire, projectile,
-nanolathe and wreck terrain lights keep their prior gain and timing.
+Nearby models and smoke retain the prior full-colour response. The other
+families' terrain gain and timing are §31.7's.
 
 The recorder supplies an independent, presence-tagged `LightingAge`: committed tick
 minus published effect `StartTick` plus the presentation fraction when enabled,
@@ -4432,6 +4433,131 @@ expired or newly restarted explosion, and the main production explosion recorder
 always publishes age. Hidden or finished primary art still stops contributing
 immediately. There is no new shader, texture, pass, clock, simulation state or RNG
 consumer. This short flash is the one terrain response.
+
+### 31.7 Sparks, the family share of the terrain gain, and the rim
+
+Modern presentation tuning, not retail behavior. §31.6 gave the explosion source
+its own terrain response and left every other family at the full gain with no
+timing, on the reasoning that a fire is a standing thing. Three consequences of
+that showed up in play, all on open ground, and all of them read as a drawn
+circle rather than as light:
+
+1. **A burning fragment was treated as a burning place.** Both flame families —
+   the standing flame-stream segment and the flame-stream TRAIL a burning debris
+   piece drags behind it — classified as fire, so a spark the size of a few
+   pixels took the standing fire's radius FLOOR of 128 record pixels, times the
+   view scale. A death shower also filled the fire reserve, evicting the
+   treeline it landed in.
+2. **Terrain took the full gain from every family but one**, so a fire's pool was
+   `base × colour × 2` where an explosion's was `× 0.75`, and on saturated
+   ground the clamp against `1 − base` drove one channel to its ceiling.
+3. **The radial law reached zero with a slope**, and a brightening that stops at a
+   slope is a rim the eye reads as the outline of a disc.
+
+The response is three changes and no new pass:
+
+**The spark family.** `SpriteLightingSpark` is the flame-stream trail, split out
+of `SpriteLightingFire` at the producer, and `lightSpark` is its executor family.
+The trail is not only debris: the strips-7/9 family also carries the COB
+`emit-sfx` 0/1 VTOL and thrust wakes [03 R-FX-01 §3], so every flying unit's
+exhaust flame moves with it, from the standing fire's reach and energy to the
+spark's. That is intended — a thrust flame is a moving fragment of fire, not a
+place that is burning — but it is a visible change to aircraft, not only to
+deaths.
+Its reach comes from its own art clamped to 20..56 record pixels — its widest is
+inside the standing fire's floor, which a test holds — at `sparkEnergy` 0.9
+rather than fire's 1.6, and it takes no flicker at all: §31.5's flicker phase is
+a POSITION hash, so a moving source re-rolls it every frame. Its budget is its
+own: the reserves are re-partitioned to explosion 24, nano 12, fire 8,
+projectile 12, wreck 4, spark 4, still a partition of the 64, with caps fire 16
+and spark 16. Eviction takes from whichever kind is furthest over its reserve, so
+this does not make a standing fire un-evictable: it means a death shower can no
+longer take fire below EIGHT slots where it could previously take it below twelve,
+and can no longer fill fire's cap at all. Standing fire pays for that — its
+reserve falls 12 → 8 and its cap 24 → 16 — so a forest fire with no debris
+anywhere now lights sixteen fires where it lit twenty-four. The reserves are
+named constants that the table is built from, so the partition assertion
+constrains the same symbols the table uses.
+
+**The family share.** `groundKindScale` declares every family's share of the
+terrain gain in one table: explosion keeps §31.6's 0.375 and its envelope, fire
+takes 0.3, spark 0.15, and nanolathe, projectile and wreck stay at 1. Fire and
+spark were tuned AFTER the receiver height below landed — measured from the sea
+datum a pool on high ground carried a large standing attenuation, and a share
+chosen against that reads bleached once the attenuation is gone. Model and
+smoke receivers are untouched and still read the source's own colour, exactly as
+§31.6 left them.
+
+**The source's own fade.** A strip sub-record now publishes `Remaining`, the
+committed ticks left before its expiry, as presentation metadata at the ordinary
+publication boundary; no phase reads it back [I6]. The presentation-owned debris
+trail containers carry the same hint from their own particles. The producer turns
+it into a presence-tagged `LightingFade` over a THREE-tick tail and the terrain
+receiver multiplies its family share by it, so a pool leaves with its flame
+instead of switching off with the particle. The animation cursor cannot serve as
+the clock: the flame families take it modulo their frame count, so it is a
+looping phase and not a lifetime [03 R-FX-01 §3][03 R-FX-02 §2].
+
+The tail is short, and a record's LAST drawn tick still emits a third of its
+pool, because these records are short: a burning debris piece lays flame segments
+that live one to three ticks, and a longer tail — or counting the final tick as
+spent — takes the pool to nothing while the flame is still on screen. Sources
+whose producer carries no fade are unaffected, which today includes the burning
+FEATURE: its light comes from the feature blit, not from a strip, so its pool
+still ends with its art rather than ahead of it.
+
+**The hue.** Pure `base × light` is a coloured filter, and a filter amplifies
+whatever the surface already is: warm light over saturated grass multiplies the
+one channel that is already high, meets the `1 − base` clamp there first, and the
+pool reads as poison green rather than as firelight. A lit surface physically
+returns the LIGHT's spectrum scaled by its own reflectance, so the fragment mixes
+the albedo product with `luma(base) × light` — the same quantity on a neutral
+surface, the light's own hue on a coloured one — at `groundHueMix` 0.75. Luma
+varies pixel to pixel exactly as the albedo does, so the map's painted structure
+survives; only its hue stops being amplified. The `1 − base` clamp is unchanged
+and still measured against the true albedo.
+
+**The receiver height.** §31.3 attenuated a pool by the source's height above the
+SEA DATUM, because the pass has no terrain receiver height, and §31.5 recorded the
+consequence: a small pool on high ground is suppressed outright. A spark's reach is
+small by construction, so that limit discarded every spark pool on any map that
+rises — on Great Divide, ground at 80 and pieces at 245, the family's terrain share
+would never have been seen. The producers that own a world position now carry
+`LightingGround`, the terrain height under the source, and the ground pass
+attenuates by the difference. A source at rest on a plateau is at height zero to
+this pass, as it always should have been; one lifted above it still attenuates, and
+air bursts are unchanged in kind. Model and smoke receivers keep the physical
+source of §23.2 exactly as before.
+
+Three producers carry it: effect art (`effect_draw.go`), every strip family
+(`strip_draw.go`) and the burning feature (`world_draw.go`), and each takes the
+sample only for a kind that emits, so the terrain is not sampled for smoke, for a
+non-emitting effect, on the classic executor's behalf, or with the Lighting switch
+off. Four do NOT carry it and still measure from the datum: projectile body
+sprites, emissive strokes (`drawlist.Line` has no such field), cooling wrecks and
+nanolathe clusters. A plasma shell over a plateau is therefore still suppressed —
+the projectile clamp is 56..96 record pixels, the same order as the elevation that
+suppresses it. Closing that is the obvious follow-up; it needs the field on
+`drawlist.Line` and a world position at the wreck and nano gather sites.
+
+**The rim.** The ground fragment smoothsteps its falloff — `f²(3 − 2f)` over the
+same `1 − d²/r²` — which lands at zero with zero slope at the rim and at full
+with zero slope at the core. The pool keeps the body the linear law of §31.3 was
+chosen for and ends in nothing at all. One multiply-add per fragment; no change
+to radius, position, the albedo law, or the distance term.
+
+Every constant here is artistic, and both the gain and the hue mix reach the
+fragment by formatting the Go constants into the shader source once at package
+init, so there is no second hand-written copy of either number to drift. The
+classic executor composes identical pixels — no field it reads changed value — the
+player's Lighting switch still gates the whole gather and pass, and there is no new
+shader, texture, pass, clock, RNG consumer or authoritative state.
+
+One wording caution, since the paragraphs above are read separately: "model and
+smoke receivers are untouched" is a statement about the family SHARE, which is a
+terrain-only multiplier. A source that was reclassified from fire to spark does
+reach those receivers differently — a smaller radius, a lower energy, no flicker —
+because it is a different family now, not because the receivers changed.
 
 ## 32. Reflected explosions, shoreline band, and the removed sun glitter
 

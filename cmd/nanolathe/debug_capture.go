@@ -132,6 +132,6 @@ func (b *battleSession) writeDebugCapture(cl *client.Client, pausedBefore bool) 
 		"Private scheduler pending/slew/flags, mission trigger state, visibility grids and path-search internal heaps are not captured.",
 		"Orders retain primary/secondary queues and scalar payloads; route geometry is in movement.json. Existing snapshot bounds/truncation flags apply. Callback closures are represented only by presence, never serialized.",
 		"Feature snapshot omits animation cursors and active-event order. Combat snapshot omits pending aim registry and target registries. Construction admission history is bounded; historical occupancy grids and AI selection/placement decisions are not retained. AI omits per-definition strategic vectors and profiles.",
-		"Renderer captures the last retained offscreen composition. Exact presented tick and historical storage peaks are unavailable. GPU image bytes are logical estimates, not total driver memory.")
+		"Renderer captures the last retained offscreen composition. Exact presented tick and historical storage peaks are unavailable. Listed image bytes are logical estimates; Ebitengine's separate backing-texture estimate includes atlas capacity but excludes native geometry buffers, upload temporaries and driver overhead.")
 	return capture.Directory, capture.Finish()
 }

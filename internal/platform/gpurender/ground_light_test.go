@@ -137,8 +137,10 @@ func checkProjectedGroundLightDevicePixels() error {
 	return nil
 }
 
-// User-authored terrain flash policy (§31.6), independent of source emission.
-func TestExplosionGroundFlashLeavesOtherReceiversIntact(t *testing.T) {
+// User-authored terrain policy (§31.6, §31.7), independent of source emission:
+// every family declares its own share of the terrain gain, and none of it may
+// reach the model or smoke receivers, which read the light itself.
+func TestGroundReceiverAppliesTheFamilyShareOnly(t *testing.T) {
 	r := &Renderer{w: 400, h: 300}
 	for kind := lightKind(0); kind < lightKindCount; kind++ {
 		source := battleLight{position: [3]float32{100, 100, 10}, color: [3]float32{1, .5, .2}, radius: 100, kind: kind, ageKnown: true}
@@ -158,8 +160,8 @@ func TestExplosionGroundFlashLeavesOtherReceiversIntact(t *testing.T) {
 					t.Fatal("active light lost terrain receiver")
 				}
 				gain := r.ground.verts[0].ColorR
-				if kind != lightExplosion && gain != 1 {
-					t.Fatal("another source family changed")
+				if kind != lightExplosion && gain != groundKindScale[kind] {
+					t.Fatalf("family %d terrain gain = %v, want its declared share %v", kind, gain, groundKindScale[kind])
 				}
 				if kind == lightExplosion && (gain <= 0 || gain >= 1) {
 					t.Fatal("terrain flash did not soften")
@@ -257,5 +259,92 @@ func TestGroundLightReadRegionIsTheDiscUnion(t *testing.T) {
 	r.appendGroundLights()
 	if r.ground.read.any {
 		t.Fatal("a frame with no light still asked for a copy")
+	}
+}
+
+// A spark is the burning fragment a death throws, and the terrain receiver has
+// to treat it as one: a reach taken from its own art rather than the standing
+// fire's wide floor, a small share of the gain, and a pool that leaves with the
+// flame rather than switching off with the particle (§31.7).
+func TestSparkGroundPoolIsSmallAndLeavesWithTheFlame(t *testing.T) {
+	if groundKindScale[lightSpark] >= groundKindScale[lightFire] {
+		t.Fatal("a spark in flight must light the ground less than a place that is burning")
+	}
+	if sparkRadiusMax >= fireRadiusMin {
+		t.Fatal("a spark's widest reach must stay inside the standing fire's floor")
+	}
+	r := &Renderer{w: 400, h: 300}
+	source := battleLight{position: [3]float32{100, 100, 10}, color: [3]float32{1, .5, .2}, radius: 40, kind: lightSpark}
+	// No producer fade: the pool stands at the family's own share.
+	r.lighting.lights = []battleLight{source}
+	r.appendGroundLights()
+	if len(r.ground.verts) != 4 || r.ground.verts[0].ColorR != groundKindScale[lightSpark] {
+		t.Fatalf("unfaded spark gain = %+v", r.ground.verts)
+	}
+	// Half a tail left halves it, and a spent source draws no quad at all.
+	for _, c := range []struct {
+		fade float32
+		want float32
+	}{{1, groundKindScale[lightSpark]}, {0.5, groundKindScale[lightSpark] / 2}, {0, 0}} {
+		faded := source
+		faded.fade, faded.fadeKnown = c.fade, true
+		r.lighting.lights = []battleLight{faded}
+		r.appendGroundLights()
+		if c.want == 0 {
+			if len(r.ground.indices) != 0 {
+				t.Fatal("a spent source kept its terrain quad")
+			}
+			continue
+		}
+		if len(r.ground.verts) != 4 || r.ground.verts[0].ColorR != c.want {
+			t.Fatalf("fade %v gain = %+v, want %v", c.fade, r.ground.verts, c.want)
+		}
+	}
+	// The reserves stay a partition of the budget with the added family.
+	total := 0
+	for _, n := range lightKindReserve {
+		total += n
+	}
+	if total != battleLightLimit {
+		t.Fatalf("reserves sum to %d, want the budget %d", total, battleLightLimit)
+	}
+}
+
+// The terrain receiver attenuates by the source's height above the GROUND, not
+// above the sea datum. Without it a pool narrower than the map's elevation is
+// discarded outright, which is what suppressed every spark on rising ground
+// (§31.5, §31.7).
+func TestGroundPoolMeasuresHeightAboveTheGroundUnderIt(t *testing.T) {
+	r := &Renderer{w: 400, h: 300}
+	// A spark-sized pool standing on ground a hundred units up: from the datum
+	// its height is past its own reach and the quad vanishes.
+	source := battleLight{position: [3]float32{100, 100, 104}, color: [3]float32{1, .5, .2}, radius: 40, kind: lightSpark}
+	r.lighting.lights = []battleLight{source}
+	r.appendGroundLights()
+	if len(r.ground.indices) != 0 {
+		t.Fatal("the datum measurement is what this test contrasts with; it must still discard")
+	}
+	// Told what the ground under it is, the same source is at rest on it.
+	standing := source
+	standing.ground = 104
+	r.lighting.lights = []battleLight{standing}
+	r.appendGroundLights()
+	if len(r.ground.verts) != 4 {
+		t.Fatal("a source resting on high ground lost its pool")
+	}
+	if h := r.ground.verts[0].Custom2; h != 0 {
+		t.Fatalf("height above ground = %v, want 0 for a source at rest on it", h)
+	}
+	// Lifted above that ground it attenuates again, and the physical source the
+	// model and smoke receivers read is never touched.
+	lifted := standing
+	lifted.position[2] = 104 + 30
+	r.lighting.lights = []battleLight{lifted}
+	r.appendGroundLights()
+	if len(r.ground.verts) != 4 || r.ground.verts[0].Custom2 != 30 {
+		t.Fatalf("lifted source operands %+v", r.ground.verts)
+	}
+	if r.lighting.lights[0] != lifted {
+		t.Fatal("the ground measurement mutated the physical source")
 	}
 }

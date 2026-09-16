@@ -30,6 +30,9 @@ func TestAddedLightKindsAdmittedAndRejected(t *testing.T) {
 		radius float32
 	}{
 		{drawlist.SpriteLightingFire, lightFire, true, fireRadiusMin},
+		// A spark takes its reach from its own art, so the 4x4 fixture lands on
+		// the family's own floor and never the standing fire's (§31.7).
+		{drawlist.SpriteLightingSpark, lightSpark, true, sparkRadiusMin},
 		{drawlist.SpriteLightingProjectile, lightProjectile, true, projRadiusMin},
 		{drawlist.SpriteLightingSmoke, 0, false, 0},
 		{drawlist.SpriteLightingNone, 0, false, 0},
@@ -461,5 +464,42 @@ func TestBurningFeatureLightUsesFrameAnchor(t *testing.T) {
 	got := r.lighting.lights[0].position
 	if got[0] != 100 || got[1] != 58+3 {
 		t.Fatalf("feature light at %v, want the anchor (100, 58) unsheared by its height", got)
+	}
+}
+
+// The spark family is the standing fire's opposite number: the same warm
+// fallback for art too dim to carry a hue, at a lower energy, with no flicker
+// clock at all, because §31.5's flicker phase is a position hash and a spark
+// moves (§31.7).
+func TestSparkEnergyAndFlickerDifferFromStandingFire(t *testing.T) {
+	r := &Renderer{}
+	art := warmArt(r)
+	var fire, spark battleLight
+	for _, tc := range []struct {
+		kind drawlist.SpriteLightingKind
+		out  *battleLight
+	}{{drawlist.SpriteLightingFire, &fire}, {drawlist.SpriteLightingSpark, &spark}} {
+		var list drawlist.List
+		// A committed time that a flickering family would phase on.
+		list.RecordSprite(drawlist.Sprite{Frame: art, X: 40, Y: 40, LightingKind: tc.kind, LightingScale: 1, LightingTime: 7})
+		r.prepareBattleLighting(&list)
+		if len(r.lighting.lights) != 1 {
+			t.Fatalf("kind %d emitted %d lights", tc.kind, len(r.lighting.lights))
+		}
+		*tc.out = r.lighting.lights[0]
+	}
+	if spark.radius >= fire.radius {
+		t.Fatalf("spark radius %v is not under the standing fire's %v", spark.radius, fire.radius)
+	}
+	if lightPower(spark) >= lightPower(fire) {
+		t.Fatalf("spark energy %v is not under the standing fire's %v", lightPower(spark), lightPower(fire))
+	}
+	// The same source at a different committed time: the flickering family
+	// changes and the spark does not.
+	var list drawlist.List
+	list.RecordSprite(drawlist.Sprite{Frame: art, X: 40, Y: 40, LightingKind: drawlist.SpriteLightingSpark, LightingScale: 1, LightingTime: 7 + fireFlickerTicks/2})
+	r.prepareBattleLighting(&list)
+	if r.lighting.lights[0].color != spark.color {
+		t.Fatal("a spark's emission moved with the clock: the flicker phase is a position hash and a spark moves")
 	}
 }

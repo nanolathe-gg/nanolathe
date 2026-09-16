@@ -824,20 +824,35 @@ func (c *DebrisTrailContainer) laySegment() {
 // AppendViews appends this container's live sub-records as barrier-9 strip
 // views, in vector order — the composer's own walk order within an object
 // [03 §1][03 R-FX-02 §1].
-func (c *DebrisTrailContainer) AppendViews(out []frame.StripView) []frame.StripView {
+func (c *DebrisTrailContainer) AppendViews(tick uint32, out []frame.StripView) []frame.StripView {
 	if c == nil {
 		return out
 	}
 	for i := 0; i < c.Count; i++ {
 		p := c.Particles[i]
-		out = append(out, frame.StripView{
+		view := frame.StripView{
 			Strip:  debrisTrailStrip,
 			Family: c.Family,
 			Bank:   DebrisTrailBank,
 			Entry:  c.Entry,
 			Frame:  p.Frame,
 			X:      p.X, Y: p.Y, Z: p.Z,
-		})
+		}
+		// The same remaining-life hint the session's own strip views carry, so
+		// a presentation-owned container's flame takes its ground pool out the
+		// way a simulation-owned one does (DESIGN_GPU_RENDERER §31.7). A
+		// sub-record with no deadline of its own reports the container's.
+		deadline := p.Expiry
+		if deadline == 0 {
+			deadline = c.Deadline
+		}
+		if deadline != 0 {
+			view.HasRemaining = true
+			if deadline > tick {
+				view.Remaining = deadline - tick
+			}
+		}
+		out = append(out, view)
 	}
 	return out
 }

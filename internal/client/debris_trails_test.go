@@ -345,7 +345,7 @@ func TestDebrisTrailPersistenceCapture(t *testing.T) {
 	// tick, not just the newest one.
 	var views []frame.StripView
 	for i := range c.debrisTrails.live {
-		views = c.debrisTrails.live[i].AppendViews(views)
+		views = c.debrisTrails.live[i].AppendViews(0, views)
 	}
 	if len(views) < 10 {
 		t.Fatalf("barrier 9 saw %d sub-records on the last tick, want at least ten: ten ticks of a burning piece", len(views))

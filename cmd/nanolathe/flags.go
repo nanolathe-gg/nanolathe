@@ -52,6 +52,13 @@ type Options struct {
 	ShotContour        string      // contour spacing and optional offset in captures
 	ShotSelect         bool        // run the Ctrl+A select-all before --shot captures, so the command page is open
 	ShotSize           string      // "WxH" surface size for --shot; empty composes at the authored 640x480
+	ShotDebris         string      // directory for the --shot-debris tick sequence; empty runs no debris capture
+	ShotDebrisUnit     string      // unit blown up by --shot-debris
+	ShotDebrisCount    int         // how many of them
+	ShotDebrisFrames   int         // ticks captured from the kill onward
+	ShotDebrisBurn     int         // features ignited near the site instead of killing units
+	ShotDebrisLighting bool        // Enhanced Lighting switch for the capture
+	ShotDebrisGlow     bool        // Enhanced glow layer for the capture
 	ShotModal          string      // battle modal to open before --shot captures: "options", "exit", "confirm", "settings", "help" or "briefing"
 	ShotSpace          bool        // hold Space for --shot captures, so the bottom slide strip is fully raised
 	RendererSet        bool        // explicit command-line override
@@ -159,6 +166,13 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.IntVar(&opts.BenchmarkPreTicks, "benchmark-pre-ticks", 300, "simulation ticks before opening the battle benchmark window (30 ticks per second)")
 	set.IntVar(&opts.BenchmarkTPS, "benchmark-tps", 30, "battle benchmark presentation rate: 30, 60 or 120 FPS, with 30 simulation ticks per second")
 	set.StringVar(&opts.ShotSize, "shot-size", "", "surface size \"WxH\" for --shot, one of the display modes (default 640x480)")
+	set.StringVar(&opts.ShotDebris, "shot-debris", "", "prototype: kill a cluster of units and write one modern PNG per tick to this directory")
+	set.StringVar(&opts.ShotDebrisUnit, "shot-debris-unit", "armstump", "unit the --shot-debris capture blows up")
+	set.IntVar(&opts.ShotDebrisCount, "shot-debris-count", 6, "how many units --shot-debris blows up")
+	set.IntVar(&opts.ShotDebrisFrames, "shot-debris-frames", 24, "ticks --shot-debris captures from the kill onward")
+	set.IntVar(&opts.ShotDebrisBurn, "shot-debris-burn", 0, "ignite this many features near the site instead of killing units, for a standing-fire capture")
+	set.BoolVar(&opts.ShotDebrisLighting, "shot-debris-lighting", true, "Enhanced battle lighting during a --shot-debris capture")
+	set.BoolVar(&opts.ShotDebrisGlow, "shot-debris-glow", true, "Enhanced glow layer during a --shot-debris capture")
 	set.StringVar(&opts.ShotModal, "shot-modal", "", "open a battle modal before --shot captures: \"options\" (Tab), \"exit\", \"confirm\", \"settings\", \"help\", or \"briefing\" (needs --mission)")
 	set.BoolVar(&opts.ShotSpace, "shot-space", false, "hold Space for --shot captures, so the bottom slide strip (Game Time / Total Units / Game Speed) is fully raised")
 	set.StringVar(&opts.CPUProfile, "cpuprofile", "", "write a pprof CPU profile of the --shot compose path to this file")

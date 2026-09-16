@@ -10,6 +10,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/palette"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // stripTestBankName is the bank every strip family's identity pair names
@@ -405,5 +406,87 @@ func TestNanolatheCommittedParticleUsesTheCoverageGate(t *testing.T) {
 	c.replayForTest()
 	if painted := stripPainted(c); painted != 0 {
 		t.Fatalf("unseen nano particle painted %d pixels", painted)
+	}
+}
+
+// A flame-stream trail is a spark in flight and a standing flame is a burning
+// place: the producer family alone separates them, and each carries the
+// remaining life the terrain receiver takes its pool out on (§31.7).
+func TestFlameFamiliesCarryTheirOwnLightingIdentityAndFade(t *testing.T) {
+	c := stripTestClient(t)
+	for _, v := range []frame.StripView{
+		{Family: frame.StripFamilyFlame, Bank: "fx", Entry: "flamestream", Remaining: 30, HasRemaining: true},
+		{Family: frame.StripFamilyFlameTrail, Bank: "fx", Entry: "flamestream", Remaining: 30, HasRemaining: true},
+		{Family: frame.StripFamilyFlameTrail, Bank: "fx", Entry: "flamestream", Remaining: 1, HasRemaining: true},
+		{Family: frame.StripFamilyFlameTrail, Bank: "fx", Entry: "flamestream", Remaining: 0, HasRemaining: true},
+		// No deadline at all: the sweep treats this particle as immortal, so it
+		// must not be read as one expiring this tick.
+		{Family: frame.StripFamilyFlameTrail, Bank: "fx", Entry: "flamestream"},
+	} {
+		c.blitStripFrame(v)
+	}
+	var got []drawlist.Sprite
+	c.list.VisitSprites(func(s drawlist.Sprite) { got = append(got, s) })
+	if len(got) != 5 {
+		t.Fatalf("emitted %d sprites, want 5", len(got))
+	}
+	if got[0].LightingKind != drawlist.SpriteLightingFire {
+		t.Fatalf("standing flame kind = %v", got[0].LightingKind)
+	}
+	for _, s := range got[1:] {
+		if s.LightingKind != drawlist.SpriteLightingSpark {
+			t.Fatalf("trail kind = %v, want a spark", s.LightingKind)
+		}
+	}
+	// A source with life to spare emits fully; one tick from expiry it is two
+	// thirds; on its last drawn tick it is still a third, because it is still
+	// drawn. The presence flag separates all of those from a record that
+	// carries no deadline, which must claim no fade at all.
+	for i, want := range []float32{1, 1, 2.0 / 3, 1.0 / 3} {
+		if !got[i].HasLightingFade || got[i].LightingFade != want {
+			t.Fatalf("sprite %d fade = %v (present %v), want %v", i, got[i].LightingFade, got[i].HasLightingFade, want)
+		}
+	}
+	if got[4].HasLightingFade {
+		t.Fatalf("a record with no deadline claimed a fade of %v", got[4].LightingFade)
+	}
+	// The flicker clock belongs to the standing flame: a trail moves, and the
+	// flicker phase is a position hash that re-rolls under anything that does.
+	if got[1].LightingTime != 0 {
+		t.Fatal("a spark took the standing flame's flicker clock")
+	}
+}
+
+// The receiver height the Enhanced ground pass subtracts: the terrain under the
+// source, in the recording units WorldHeight uses. Off the map the terrain
+// returns its raw −1 sentinel, which is a marker and not a height, and with no
+// terrain bound there is nothing to report; both leave the pass on the sea datum
+// it used before (DESIGN_GPU_RENDERER §31.7).
+func TestLightingGroundReportsTerrainHeightAndRefusesTheSentinel(t *testing.T) {
+	c := &Client{}
+	if got := c.lightingGround(numeric.FixedFromInt(32), numeric.FixedFromInt(32), 1); got != 0 {
+		t.Fatalf("no terrain bound reported %v, want 0", got)
+	}
+	// A four-by-four plot at a uniform height byte. HeightAt needs cx+1 and
+	// cz+1 in range, so the last row and column are the sentinel's territory.
+	const cells = 4
+	terrain := &world.Terrain{CellW: cells, CellH: cells, Plot: make([]world.PlotCell, cells*cells)}
+	for i := range terrain.Plot {
+		terrain.Plot[i][4] = 20
+	}
+	c.SetTerrain(terrain)
+	inside := c.lightingGround(numeric.FixedFromInt(32), numeric.FixedFromInt(32), 1)
+	if inside <= 0 {
+		t.Fatalf("a source over flat terrain reported %v, want its height", inside)
+	}
+	// The view scale multiplies it, exactly as it multiplies WorldHeight.
+	if doubled := c.lightingGround(numeric.FixedFromInt(32), numeric.FixedFromInt(32), 2); doubled != inside*2 {
+		t.Fatalf("scaled height %v, want %v", doubled, inside*2)
+	}
+	// Off the map: the sentinel must never reach the pass as a height.
+	for _, p := range [][2]int64{{-64, -64}, {4096, 32}, {32, 4096}} {
+		if got := c.lightingGround(numeric.FixedFromInt(p[0]), numeric.FixedFromInt(p[1]), 1); got != 0 {
+			t.Fatalf("off-map (%d,%d) reported %v, want 0", p[0], p[1], got)
+		}
 	}
 }

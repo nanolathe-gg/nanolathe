@@ -192,20 +192,40 @@ func (c *Client) blitStripFrame(v frame.StripView) bool {
 	}
 	sx, sy := c.cam.WorldToScreen(v.X, v.Y, v.Z)
 	lightingKind := drawlist.SpriteLightingNone
-	var lightingTime float32
+	var lightingTime, lightingFade float32
+	hasLightingFade := false
 	switch v.Family {
 	case frame.StripFamilySmokePuff, frame.StripFamilyVentSteam:
 		lightingKind = drawlist.SpriteLightingSmoke
-	case frame.StripFamilyFlame, frame.StripFamilyFlameTrail:
-		// The flame families are the burning world's own light: a feature on
-		// fire, a flame-stream segment and its trail. They reach here only
-		// through the one-point coverage gate above, so an unseen fire never
-		// lights a visible receiver (§31). Emission flickers, so the record
-		// carries the committed time the executor phases it by.
+	case frame.StripFamilyFlame:
+		// The strip-5 flame-stream segment [03 R-FX-02 §2]: the burning world's
+		// own standing light. It reaches here only through the one-point
+		// coverage gate above, so an unseen fire never lights a visible
+		// receiver (§31). Emission flickers, so the record carries the
+		// committed time the executor phases it by. A burning FEATURE is not
+		// this family — its light comes from the feature blit (world_draw.go).
 		lightingKind = drawlist.SpriteLightingFire
 		lightingTime = c.lightingTime()
+		lightingFade, hasLightingFade = stripLightingFade(v.Remaining), v.HasRemaining
+	case frame.StripFamilyFlameTrail:
+		// A trail particle is a spark in flight, not a place that is burning:
+		// the flame a burning debris piece drags behind it, and equally the COB
+		// emit-sfx 0/1 VTOL and thrust wakes, which are the same strips-7/9
+		// family [03 R-FX-01 §3]. Both take the spark family's own reach and
+		// carry no flicker, whose phase hash is a position hash and so re-rolls
+		// under anything that moves (§31.5, §31.7).
+		lightingKind = drawlist.SpriteLightingSpark
+		lightingFade, hasLightingFade = stripLightingFade(v.Remaining), v.HasRemaining
 	}
 	scale := float32(c.viewScale().Float())
+	// Only an emitter has a use for the receiver height, and this runs for every
+	// strip blit in the frame — the smoke puffs included — on both executors and
+	// with the Lighting switch off, so the terrain sample is taken only when
+	// something will read it (§31.7).
+	var lightingGround float32
+	if lightingKind.Emitter() {
+		lightingGround = c.lightingGround(v.X, v.Z, scale)
+	}
 	// Emit the translucent frame blit; the sink runs the raw tintedBlitAnchor, so
 	// this is the blit's only execution [03 R-COMP-01 §2][03 R-FX-02 §2]. The
 	// returned bool mirrors tintedBlitAnchor's own gate (ALP table and surface
@@ -221,11 +241,14 @@ func (c *Client) blitStripFrame(v frame.StripView) bool {
 		Kind:  drawlist.BlitTinted,
 		// Strip art is fire, smoke and explosion animation: a light source for the
 		// Enhanced glow layer, which keeps only its bright texels (§19).
-		Emissive:      true,
-		LightingKind:  lightingKind,
-		LightingTime:  lightingTime,
-		WorldHeight:   float32(v.Y.Raw()) / 65536 * scale,
-		LightingScale: scale,
+		Emissive:        true,
+		LightingKind:    lightingKind,
+		LightingTime:    lightingTime,
+		LightingFade:    lightingFade,
+		HasLightingFade: hasLightingFade,
+		WorldHeight:     float32(v.Y.Raw()) / 65536 * scale,
+		LightingGround:  lightingGround,
+		LightingScale:   scale,
 	})
 	return c.pal != nil && len(c.indexed) != 0
 }
@@ -300,4 +323,30 @@ func stripBarrierRun(views []frame.StripView, strip int8) []frame.StripView {
 		return nil
 	}
 	return views[lo:hi]
+}
+
+// stripLightingFadeTicks is the tail a flame's ground pool is taken out over,
+// in committed ticks. It is SHORT because these records are: a burning debris
+// piece lays flame segments that live one to three ticks, so a tail longer than
+// that takes a pool to nothing while its flame is still on screen — which the
+// first six-tick tail did. The animation cursor cannot serve as the clock: the
+// flame families take it modulo their frame count, so it is a looping phase and
+// not a lifetime [03 R-FX-01 §3][03 R-FX-02 §2].
+const stripLightingFadeTicks = 3
+
+// stripLightingFade is a strip particle's remaining emission for the terrain
+// receiver: full while it has a tail's worth of life left, ramping down as its
+// expiry arrives, so a pool leaves with the flame instead of switching off with
+// the particle (DESIGN_GPU_RENDERER §31.7).
+//
+// The record's LAST drawn tick has zero ticks remaining and still emits a third
+// of the pool, because it is still drawn. Counting it as spent is what made a
+// visibly burning piece lay no light at all.
+func stripLightingFade(remaining uint32) float32 {
+	// Compared without the increment, so a remaining count near the width of
+	// its type cannot wrap to zero and switch a live flame's light off.
+	if remaining >= stripLightingFadeTicks-1 {
+		return 1
+	}
+	return float32(remaining+1) / stripLightingFadeTicks
 }

@@ -298,6 +298,12 @@ func (c *Client) DrawEffectViews(effects []frame.EffectView, options EffectDrawO
 			}
 		}
 		scale := float32(c.viewScale().Float())
+		// Only an emitter reads the receiver height, and this runs for every
+		// effect sprite on both executors (§31.7).
+		var effectLightingGround float32
+		if lightingKind.Emitter() {
+			effectLightingGround = c.lightingGround(d.X, d.Z, scale)
+		}
 		// Enhanced water reflection for effect art (§32): a fireball over water
 		// mirrors about its own anchor's water-plane projection, so a surface
 		// impact throws its upper half back into the sea. reflectionWaterAt
@@ -306,7 +312,7 @@ func (c *Client) DrawEffectViews(effects []frame.EffectView, options EffectDrawO
 			BlastAge: blastAge, BlastSize: blastSize,
 			HasBlastProfile: view.HasBlastProfile, BlastAreaOfEffect: view.BlastAreaOfEffect, BlastDamage: view.BlastDamage,
 			ReflectWater: c.reflectionWaterAt(d.X, d.Z), ReflectionHeight: c.reflectionHeight(d.Y),
-			LightingKind: lightingKind, LightingSize: lightingSize, LightingAge: lightingAge, HasLightingAge: hasLightingAge, WorldHeight: float32(d.Y.Raw()) / 65536 * scale, LightingScale: scale})
+			LightingKind: lightingKind, LightingSize: lightingSize, LightingAge: lightingAge, HasLightingAge: hasLightingAge, WorldHeight: float32(d.Y.Raw()) / 65536 * scale, LightingGround: effectLightingGround, LightingScale: scale})
 		stats.Sprites++
 	}
 	return stats

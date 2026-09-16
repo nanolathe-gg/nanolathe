@@ -75,4 +75,15 @@ type StripView struct {
 	// X, Y and Z are the sub-record's own 16.16 world position. The draw
 	// projects them with the ordinary half-height shear [03 R-FX-01 §3].
 	X, Y, Z numeric.Fixed
+	// HasRemaining reports whether this sub-record has a deadline at all. A
+	// particle with no expiry is IMMORTAL to the sweep, not expiring now, and
+	// the two cannot share a zero: read as expiring, an immortal flame would
+	// sit for ever at the bottom of its fade (DESIGN_GPU_RENDERER §31.7).
+	HasRemaining bool
+	// Remaining is committed ticks left before this sub-record's own expiry,
+	// clamped at zero, and meaningful only when HasRemaining is set. It is presentation metadata: nothing about the retail
+	// draw reads it, and the classic executor ignores it. The Enhanced ground
+	// pass uses it to take a flame's light out with the flame rather than
+	// switching it off with the particle (DESIGN_GPU_RENDERER §31.7).
+	Remaining uint32
 }

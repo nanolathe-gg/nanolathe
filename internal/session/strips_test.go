@@ -745,7 +745,7 @@ func TestEveryStripFamilyMirrorsItsOwnDrawForm(t *testing.T) {
 		[3]numeric.Fixed{numeric.FixedFromInt(40), 0, numeric.FixedFromInt(40)},
 	)
 
-	views := s.appendStripViews(nil)
+	views := s.appendStripViews(0, nil)
 	if len(views) == 0 {
 		t.Fatal("no strip particle reached the committed frame")
 	}
@@ -1721,5 +1721,50 @@ func TestStripSpanNarrowsBeforeDividing(t *testing.T) {
 	}
 	if got := nanoLifetimeTicks(0, 0, 0, numeric.FixedFromInt(1<<32), 0, 0); got != 0 {
 		t.Fatalf("nano lifetime = %d", got)
+	}
+}
+
+// The committed strip channel carries each sub-record's own remaining life, and
+// carries ABSENCE distinctly from zero: the sweep treats a zero expiry as
+// immortal (`p.expiry != 0` guards its removal), so publishing that as
+// "expiring now" would leave a flame's terrain pool permanently at the bottom
+// of its fade (DESIGN_GPU_RENDERER §31.7). Presentation metadata only — no
+// phase reads it back [I6].
+func TestStripViewsPublishRemainingLifeAndItsAbsence(t *testing.T) {
+	s, _ := newStripTestSession(22, 22)
+	s.Clock.GlobalTick = 0
+	// A flame-stream trail with a lifetime: every particle takes a deadline.
+	s.appendStripFlameTrail(7,
+		[3]numeric.Fixed{}, [3]numeric.Fixed{numeric.FixedFromInt(40), 0, numeric.FixedFromInt(40)}, 1, 6)
+	// The same producer with no lifetime at all leaves its particles immortal.
+	s.appendStripFlameTrail(9, [3]numeric.Fixed{}, [3]numeric.Fixed{}, 1, 0)
+
+	var withDeadline, immortal int
+	for _, v := range s.appendStripViews(2, nil) {
+		if v.Family != frame.StripFamilyFlameTrail {
+			continue
+		}
+		if !v.HasRemaining {
+			immortal++
+			if v.Remaining != 0 {
+				t.Fatalf("a record with no deadline published %d ticks remaining", v.Remaining)
+			}
+			continue
+		}
+		withDeadline++
+		// The container's window closes at tick 6 and this is tick 2.
+		if v.Remaining != 4 {
+			t.Fatalf("remaining = %d at tick 2 of a six-tick window, want 4", v.Remaining)
+		}
+	}
+	if withDeadline == 0 || immortal == 0 {
+		t.Fatalf("wanted both forms published, got %d with a deadline and %d without", withDeadline, immortal)
+	}
+	// Past the deadline the count floors at zero rather than wrapping, and the
+	// record still reports that it HAS one.
+	for _, v := range s.appendStripViews(99, nil) {
+		if v.Family == frame.StripFamilyFlameTrail && v.HasRemaining && v.Remaining != 0 {
+			t.Fatalf("remaining = %d past the deadline, want 0", v.Remaining)
+		}
 	}
 }

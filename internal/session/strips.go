@@ -1386,7 +1386,7 @@ const (
 // with NO coverage gate while the flame and sprinkle families gate, and the
 // sprinkle and nanolathe colour bytes must reach the framebuffer unremapped —
 // so the mirror has its own committed channel and its own draw.
-func (s *Session) appendStripViews(out []frame.StripView) []frame.StripView {
+func (s *Session) appendStripViews(tick uint32, out []frame.StripView) []frame.StripView {
 	if s == nil || s.strips == nil {
 		return out
 	}
@@ -1407,6 +1407,17 @@ func (s *Session) appendStripViews(out []frame.StripView) []frame.StripView {
 					X:      p.x,
 					Y:      p.y,
 					Z:      p.z,
+				}
+				// Ticks left before expireParticles removes this sub-record.
+				// Presentation metadata only; no phase reads it back [I6]. A
+				// zero expiry is the sweep's own "no deadline" (it guards on
+				// `p.expiry != 0`), so it publishes ABSENCE rather than a zero
+				// that would read as expiring this tick.
+				if p.expiry != 0 {
+					view.HasRemaining = true
+					if p.expiry > tick {
+						view.Remaining = p.expiry - tick
+					}
 				}
 				if entry == "" {
 					// The sprinkle and nanolathe families carry their own ramp

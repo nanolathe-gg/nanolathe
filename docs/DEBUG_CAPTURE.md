@@ -36,7 +36,7 @@ files were written successfully; it does not erase the documented omissions.
 | `construction.json`, `ai.json` | Builder/product links and AI scheduling/group/rally projections |
 | `construction-admissions.json` | Bounded recent factory admission outcomes, rejection reasons, attempted footprints, existing builder identities, total and evicted counts |
 | `client.json`, `battle.json` | Camera/zoom, viewport/input/modal state, interpolation, recorder counters, cache sizes, main and individual worker model scratch, cached body/shadow storage |
-| `renderer.json`, `last-frame.png` | Device counters, actual triangle submission totals and peak Execute, paused-world reuse counts and retained image size, and one readback of the retained last composition; no additional render pass |
+| `renderer.json`, `last-frame.png` | Device counters, Ebitengine backend and backing-texture memory estimate, actual triangle submission totals and peak Execute, paused-world reuse counts and retained image size, and one readback of the retained last composition; no additional render pass |
 
 Units use raw signed 16.16 fixed point and 65536 angle units per circle. A
 publication identity of zero means this exact unit occupant has not been
@@ -91,9 +91,17 @@ Historical callback events exist only if tracing was already enabled. No save
 projection is attempted because transient state and callbacks do not have a
 complete faithful restore contract.
 
-Storage estimates describe explicitly listed backing arrays and logical RGBA
-images. They exclude maps, pointed-to objects, allocator overhead, Ebitengine
-internal textures and driver allocations. GPU arena offsets reset after
+The `ebitengine` object in `renderer.json` records `graphics_library` and
+`total_gpu_image_memory_bytes` for both classic and modern renderers, sampled
+before screenshot readback. The latter is Ebitengine's estimate of RGBA bytes
+across its backing textures, including shared atlas capacity beyond the logical
+image sizes. It excludes native geometry buffers, upload temporaries and driver
+overhead, so it is not total GPU memory or process footprint. It overlaps the
+logical image estimates below; do not add them together.
+
+Other storage estimates describe explicitly listed backing arrays and logical
+RGBA images. They exclude maps, pointed-to objects, allocator overhead,
+Ebitengine internal textures and driver allocations. GPU arena offsets reset after
 execution and can rewind during growth; they are **not last-frame peaks**.
 Client worker scratch is listed separately because each recorder owns its own
 arenas. Retained obsolete references and raw-versus-clipped outline row spans

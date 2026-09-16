@@ -54,20 +54,26 @@ const (
 	SpriteLightingNone SpriteLightingKind = iota
 	SpriteLightingExplosion
 	SpriteLightingSmoke
-	// SpriteLightingFire is a burning feature's flame strip art: the flame and
-	// flame-trail families, which the producer has already admitted through the
+	// SpriteLightingFire is a burning feature's flame strip art: the standing
+	// flame family, which the producer has already admitted through the
 	// one-point coverage gate (§31).
 	SpriteLightingFire
 	// SpriteLightingProjectile is a bright projectile body sprite — a plasma
 	// shell or flare — never its ground shadow and never muzzle-flash effect
 	// art, which the explosion path already carries (§31).
 	SpriteLightingProjectile
+	// SpriteLightingSpark is a flame-stream TRAIL particle: the flame a burning
+	// debris piece or a flame-stream segment drags behind it. It stands for a
+	// spark in flight rather than a burning place, so it takes its reach from
+	// its own art and never the standing fire's wide floor (§31.7).
+	SpriteLightingSpark
 )
 
 // Emitter reports whether the kind is a light SOURCE rather than a receiver.
 // Smoke is a receiver and is never promoted (§23.1 BL1, §31).
 func (k SpriteLightingKind) Emitter() bool {
-	return k == SpriteLightingExplosion || k == SpriteLightingFire || k == SpriteLightingProjectile
+	return k == SpriteLightingExplosion || k == SpriteLightingFire ||
+		k == SpriteLightingProjectile || k == SpriteLightingSpark
 }
 
 // Sprite records one GAF-frame blit (docs/DESIGN_GPU_RENDERER.md §2.1). The
@@ -124,6 +130,12 @@ type Sprite struct {
 	// LightingScale is recording pixels per world pixel. Neither includes
 	// supersampling or a subsequent executor world transform.
 	WorldHeight, LightingScale float32
+	// LightingGround is the terrain height UNDER the source, in the same units
+	// as WorldHeight. The ground pass attenuates by the source's height above
+	// it rather than above the sea datum, which is the receiver height §31.3
+	// had to do without. Zero leaves the datum measurement every producer that
+	// does not carry one keeps (§31.7).
+	LightingGround float32
 	// LightingSize is an explosion sequence's maximum authored extent in native
 	// world pixels, independent of the current animation frame or Distortion.
 	// Zero retains frame-sized fallback for sources without sequence metadata.
@@ -137,6 +149,13 @@ type Sprite struct {
 	// timing in detached sources (GPU design §31.6).
 	LightingAge    float32
 	HasLightingAge bool
+	// LightingFade is the source's own remaining emission, 1 while it has life
+	// to spare and falling to 0 as its art retires. It lets a terrain pool
+	// follow the art out instead of switching off with the particle (§31.7).
+	// Presence distinguishes a spent source from one that carries no fade at
+	// all, exactly as HasLightingAge does above.
+	LightingFade    float32
+	HasLightingFade bool
 	// ReflectionHeight is the projectile body anchor above sea in recording
 	// pixels. Ground shadows never ReflectWater (GPU design §26).
 	ReflectWater     bool

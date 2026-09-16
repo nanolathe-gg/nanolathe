@@ -32,3 +32,21 @@ func (c *Client) setLineReflection(line *drawlist.Line, a, b render.ProjectilePo
 	line.ReflectionHeight0 = c.reflectionHeight(a.Y)
 	line.ReflectionHeight1 = c.reflectionHeight(b.Y)
 }
+
+// lightingGround is the terrain height under a light source, in the recording
+// units WorldHeight uses. The Enhanced ground pass subtracts it, so a pool is
+// attenuated by the source's height above the GROUND rather than above the sea
+// datum — the missing receiver height of DESIGN_GPU_RENDERER §31.3, without
+// which a small pool is suppressed outright anywhere the map rises
+// (§31.5, §31.7). Off-map or unknown terrain reports zero, which leaves the
+// datum measurement in place.
+func (c *Client) lightingGround(x, z numeric.Fixed, scale float32) float32 {
+	// groundHeightUnder is the one presentation terrain sampler; it returns the
+	// terrain's own out-of-bounds sentinel, which is negative, and zero when no
+	// terrain is bound. Both mean "no receiver height" here.
+	h := c.groundHeightUnder(x, z)
+	if h <= 0 {
+		return 0
+	}
+	return float32(h.Raw()) / 65536 * scale
+}
