@@ -467,6 +467,15 @@ start/stop lifetime. The stream opener has no ordinary MODE play gate
 `[03 R-AUD-01 §1]` `[03 R-AUD-01 §2]` `[03 R-AUD-02 §1]`. Ebitengine player
 gain stands in for the retail system wave-output mixer; no host-wide volume
 setting is changed.
+
+Opening a briefing initializes the narration toggle to stage 1 and resets
+that visit's presentation clock before arming its delayed stream. The
+MSNBRIEF adapter consumes the shared widget service's fired callback once;
+the down edge only captures the button. Its painter uses the same independent
+down and stage values as other frontend buttons, so the visible selection
+agrees with the stop/restart request `[07 R-FE-01 §4]` `[07 R-WGT-01 §3]`
+`[03 R-AUD-02 §1]`.
+
 The shell's common presentation step pumps the backend in menus, loading and
 paused battles. At intervals of at least 100 ms of monotonic wall time, it
 releases finished cues and streams, including the final batch with no later

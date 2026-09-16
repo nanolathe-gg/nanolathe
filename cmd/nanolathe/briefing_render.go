@@ -52,6 +52,10 @@ func (g *gameShell) openCampaignBriefing() {
 		return
 	}
 	g.briefing, g.briefingPanel = briefing, panel
+	panel.SetStageAt(panel.Index("SHUTUP"), 1)
+	// Schedule against this visit's clock, not the elapsed time retained from
+	// the last briefing [08 R-CAMP-01 §2].
+	g.briefingNowMS = 0
 	if clPtr != nil && clPtr.Input() != nil {
 		clPtr.Input().DrainTokens()
 	}
@@ -72,7 +76,6 @@ func (g *gameShell) openCampaignBriefing() {
 		g.briefing.text = readBriefingText(g.cs, globals.Brief)
 	}
 	g.installBriefingTextRegion()
-	g.briefingNowMS = 0
 }
 
 // installBriefingTextRegion resolves the TextRegion gadget's font and hands the
@@ -309,19 +312,8 @@ func (g *gameShell) briefingInput(cl *client.Client) {
 	if mouse.Pressed(input.MouseButtonLeft) && g.briefingPanel != nil && g.briefingPanel.Window != nil {
 		window := g.briefingPanel.Window
 		x, y := int32(mouse.X), int32(mouse.Y)
-		// A press takes the capture, and a greyed gadget never captures
-		// [07 R-WGT-01 §1 "Capture"][07 R-WGT-01 §13].
-		if idx := g.briefingPanel.PressTest(x, y); idx >= 0 {
-			switch gui.CallbackName(window.Gadgets[idx].Name) {
-			case "Start":
-				g.dispatchBriefing(BriefingActionStart)
-			case "PrevMenu":
-				g.dispatchBriefing(BriefingActionPrev)
-			case "SHUTUP":
-				g.dispatchBriefing(BriefingActionShutup)
-			}
-			return
-		}
+		// Buttons are owned by ServiceFrame above. Dispatching them again on
+		// press would toggle narration both on down and on release [07 R-WGT-01 §3].
 		// MSNBRIEF's stock `TextRegion` and `MOREBAR` are authored as inert
 		// kind-5 labels (attribute 0x10, no quickkey), so the generic
 		// label/button capture above never selects them [07 R-WGT-01 §7] — a
@@ -474,9 +466,13 @@ func (g *gameShell) drawBriefingGadget(c *client.Client, p *ui.Panel, index int,
 	if g == nil || g.briefing == nil || g.assets == nil || g.assets.briefing == nil {
 		return
 	}
+	if gad.Kind == gui.KindButton {
+		// The staged narration button has separate pressed and selected
+		// words, shared with ordinary frontend buttons [07 R-WGT-01 §3].
+		g.drawRetailButton(c, p, index, gad, r)
+		return
+	}
 	if f := briefingFrame(g.assets.briefing.art, gad.Art, p.StatusAt(index)); f != nil {
-		blitRetailFrame(c, f, int(r.X), int(r.Y))
-	} else if f := g.retailButtonFrame(gad, p.StatusAt(index), false); f != nil && gad.Kind == gui.KindButton {
 		blitRetailFrame(c, f, int(r.X), int(r.Y))
 	}
 	g.drawRetailTextState(c, p, index, gad, r)

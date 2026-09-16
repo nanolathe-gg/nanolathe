@@ -208,21 +208,6 @@ func (g *gameShell) drawRetailButton(c *client.Client, p *ui.Panel, index int, g
 	g.drawRetailText(c, p, index, gad, r)
 }
 
-func (g *gameShell) retailButtonFrame(gad gui.Gadget, status int, pressed bool) *formats.GAFFrame {
-	// The compatibility callers predate the separate stage word. Resolve first
-	// so their staged special cases use the builder's effective stages.
-	resolved := g.resolveRetailButtonArt(gad)
-	gad = resolved.gadget
-	down, stage := status, 0
-	if gad.Stages != 0 {
-		down, stage = 0, status
-	}
-	if pressed {
-		down = 1
-	}
-	return g.retailButtonArt(gad, down, stage, false)
-}
-
 func (g *gameShell) drawRetailText(c *client.Client, p *ui.Panel, index int, gad gui.Gadget, r gui.Rect) {
 	g.drawRetailTextState(c, p, index, gad, r)
 }

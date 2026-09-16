@@ -174,7 +174,9 @@ func NewCampaignBriefingController(m *mission.Mission, localSide int, crt briefi
 	} else {
 		b.planet, b.planetIdx = ResolveBriefingPlanet("", localSide)
 	}
-	b.narrationOn = b.narrationPath != ""
+	// MSNBRIEF opens with SHUTUP at stage 1, even if optional narration
+	// media is absent. This is the toggle state, not playback status [07 R-FE-01 §4].
+	b.narrationOn = true
 	b.entryWind()
 	return b
 }
