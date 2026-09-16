@@ -4833,7 +4833,7 @@ sea level, otherwise entry 13. Then, in order:
    the edges and can overwrite their pixels.
 2. If the air-occupant identity is nonzero, draw the two diagonals in its
    low byte as a raw colour.
-3. If the building-occupied flag is set, draw an inset diamond in logical
+3. If the completed-building yard flag is set, draw an inset diamond in logical
    entry 15. Its vertices are the north edge midpoint plus `(0,2)`, east
    midpoint plus `(−2,0)`, south midpoint plus `(0,−2)`, and west midpoint
    plus `(2,0)`, joined cyclically in that order. Each midpoint coordinate

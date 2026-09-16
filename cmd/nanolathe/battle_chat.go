@@ -58,6 +58,7 @@ func (b *battleSession) closeTalk() {
 	b.hud.talkPanel.SetText("TALK", "")
 	b.hud.talkPanel.ResetPress()
 	b.chat.active = false
+	b.developer.quickkeysDisabled = false
 }
 
 func (b *battleSession) talkMeasure(index int, text string) int {
@@ -84,6 +85,7 @@ func (b *battleSession) serviceTalk(in *input.State) {
 	}
 	b.chat.ownsFrame = true
 	frame := pointerFrame(in, in.PeekTokens(), false)
+	frame.DisableQuickKeys = b.developer.quickkeysDisabled
 	result := b.hud.talkPanel.ServiceFrame(frame, ui.WidgetHooks{Measure: b.talkMeasure})
 	if result.Fired && result.FiredIndex == b.hud.talkPanel.Index("TALK") {
 		text := b.hud.talkPanel.TextOf("TALK")

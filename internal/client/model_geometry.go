@@ -415,7 +415,7 @@ func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (arrival
 	if id == 0 || !c.modelScratch.active {
 		g := c.prepareModelGeometry(draw, v.Owner, unitTeamColor(v), id, modelCursorUnit, reveal, outline)
 		if g != nil {
-			g.Cloaked = v.Cloaked
+			g.Cloaked = v.Cloaked || c.developer.Mode != 0
 		}
 		return g, nil
 	}
@@ -492,9 +492,9 @@ func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (arrival
 	// and takes a new revision then; between those, the faces are the same
 	// and the reveal band rides the verdict entry.
 	g.Cache = body.cacheKey(hx, hy)
-	// Cloak changes the final image blit, not the retained raster or its key
+	// Cloak and developer modes [03 §3.12] change the final image blit, not the retained raster or its key
 	// [03 R-RAST-01 §7]. Direct live packets below keep their opaque fill.
-	g.Cloaked = v.Cloaked
+	g.Cloaked = v.Cloaked || c.developer.Mode != 0
 	// The shadow is a lane of the same retained object and keeps its own slot
 	// identity: it is projected from the current pose, which the body's frozen
 	// cached lane is not, so a reveal or a live lane here does not disturb it

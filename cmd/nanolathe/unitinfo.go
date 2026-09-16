@@ -202,13 +202,14 @@ func (b *battleSession) serviceUnitInfoKeyboard(in *input.State) {
 	if b == nil || in == nil || unitInfoUI == nil || unitInfoUI.panel == nil {
 		return
 	}
-	frame := ui.WidgetFrame{Tokens: in.PeekTokens()}
+	frame := ui.WidgetFrame{Tokens: in.PeekTokens(), DisableQuickKeys: b.developer.quickkeysDisabled}
 	if in.Kbd != nil {
 		frame.AltHeld = in.Kbd.KeyHeld(input.KeyAlt)
 	}
 	result := unitInfoUI.panel.ServiceFrame(frame, ui.WidgetHooks{})
 	in.DiscardTokens(result.ConsumedTokens)
 	if result.Fired && result.FiredIndex == unitInfoUI.doneIndex() {
+		b.developer.quickkeysDisabled = false
 		closeUnitInfo()
 	}
 }

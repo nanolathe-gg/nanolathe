@@ -235,8 +235,9 @@ func (c *Client) composeUnitModel(v frame.UnitView) (composedModel, bool) {
 // until attached children have joined it [03 R-REN-03A §4].
 func (c *Client) composeUnitModelState(v frame.UnitView, child, finalPasses bool) (result composedModel, valid bool) {
 	// Retail tints the cached/staged image blit; direct polygons remain their
-	// ordinary lane [03 R-RAST-01 §7]. Do not put cloak into retained pixels.
-	defer func() { result.cloaked = v.Cloaked && !result.direct }()
+	// ordinary lane [03 R-RAST-01 §7]. Developer modes take the same image
+	// branch [03 §3.12]; neither belongs in retained pixels.
+	defer func() { result.cloaked = (v.Cloaked || c.developer.Mode != 0) && !result.direct }()
 	draw, ok := c.unitDrawFor(v)
 	if !ok {
 		return composedModel{}, false

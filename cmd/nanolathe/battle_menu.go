@@ -53,6 +53,7 @@ func (b *battleSession) closeBattleMenu() {
 	if b == nil {
 		return
 	}
+	b.developer.quickkeysDisabled = false
 	if state := b.battleState(); state != nil {
 		b.applyBattleSchedule(state.CloseOptions())
 	}
@@ -61,6 +62,27 @@ func (b *battleSession) closeBattleMenu() {
 // handleBattleMenuInput routes each open battle modal to its input owner.
 // Preferences uses the shared attribute-driven widget service [07 R-WGT-01 §3].
 func (b *battleSession) handleBattleMenuInput(in *input.State, cl *client.Client) {
+	if b != nil {
+		before := b.battleState().Modal()
+		prefs := b.battlePrefsActive()
+		save := b.shell != nil && b.shell.saveLoadPanelActive()
+		var modal *ui.Panel
+		if b.shell != nil {
+			modal = b.shell.frontend.Panels.Modal()
+		}
+		defer func() {
+			after := b.battleState().Modal()
+			closed := before != after && (after == ui.BattleModalClosed || after == ui.BattleModalOptions)
+			closed = closed || prefs && !b.battlePrefsActive() || save && !b.shell.saveLoadPanelActive()
+			if modal != nil && b.shell.frontend.Panels.Modal() != modal {
+				closed = true
+			}
+			if closed {
+				b.developer.quickkeysDisabled = false
+			}
+		}()
+	}
+
 	if b != nil && b.shell != nil && (b.shell.saveLoadPanelActive() || b.shell.frontend.Panels.Modal() != nil) {
 		// The dialog is a child window of the frontend panel stack, so the
 		// frontend's own pump owns it while it is up [07 R-FE-01 §8].
@@ -141,6 +163,7 @@ func (b *battleSession) activateBattleMenuButton(name string, cl *client.Client)
 	// Only root close emits the resume intent. All child transitions keep the
 	// single-player pause anchor unchanged [07 §11].
 	if before == ui.BattleModalOptions && state.Modal() == ui.BattleModalClosed {
+		b.developer.quickkeysDisabled = false
 		b.applyBattleSchedule(ui.BattleScheduleIntent{PauseSet: true, Pause: false})
 	}
 	if before == ui.BattleModalExit && state.Modal() == ui.BattleModalRestart {

@@ -130,6 +130,7 @@ type Session struct {
 	Gameplay                 gameplay.Mode
 	bigBrother               bigBrotherState
 	publicationObserver      func(*frame.Frame)
+	developerDiagnostics     bool
 	fragmentMaterialResolver func(uint16, int, int, uint8) render.FrozenFragmentMaterial
 
 	State         State
@@ -367,18 +368,11 @@ type Session struct {
 	// The sensor phase's sliced live-unit walk, players then slots ascending.
 	sensorSlicedScratch []*units.Unit
 
-	// DebugDisplayMode is the world composer's debug display mode byte
-	// [03 §3.12]. Its writers are now traced and there are exactly three: the
-	// battle interface initializer zeroes it, film mode's `m` key cycles it
-	// `0..4` wrapping at 5, and leaving film mode zeroes it again
-	// [07 R-CAM-01 §9]. Mode 1 draws the terrain-grid wireframe and mode 2 the
-	// five-pixel ground-pick crosshair; both are film-mode diagnostics and
-	// neither is reachable without the developer password, so zero is the value
-	// ordinary play holds throughout.
-	//
-	// It is published unchanged through the frame as Radar.MarkerMode, which is
-	// a misnomer retained only because internal/frame is not this file's to
-	// rename: nothing about this byte concerns the radar.
+	// DebugDisplayMode selects the five viewport diagnostic states [03 §3.12].
+	// The host calls the reset/cycle helpers for film entry/exit and lowercase
+	// m [07 R-CAM-01 §9], then mirrors this value to client options for paused
+	// inspection without a simulation tick. Radar.MarkerMode retains the
+	// committed copy under its historical field name; this is not a radar mode.
 	DebugDisplayMode uint8
 
 	// Audio is a reference to the concrete internal/audio owner. Queue/cache/
@@ -1405,11 +1399,8 @@ func (s *Session) ContinueCampaign() bool {
 //     increment reaches 5, so the cycle is 0,1,2,3,4,0 (CycleDebugDisplayMode);
 //   - leaving film mode stores zero again (ResetDebugDisplayMode).
 //
-// Nanolathe implements neither developer mode nor film mode, so nothing calls
-// the cycle yet and the byte holds zero for the whole of ordinary play — which
-// is what retail does too: developer mode needs the six-word `+Now` password or
-// the registry pair, and film mode needs developer mode, so none of it is
-// reachable in a stock configuration [07 R-CAM-01 §9].
+// The battle host now routes the recovered password and film controls here.
+// The selector is presentation state; it does not change gameplay or RNGs.
 
 // ResetDebugDisplayMode is the battle-entry and film-mode-exit writer.
 func (s *Session) ResetDebugDisplayMode() {

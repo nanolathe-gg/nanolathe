@@ -169,6 +169,9 @@ func runShot(opts Options, cs *contentSet) error {
 		b.cam.ViewW, b.cam.ViewH = int32(shotW), int32(shotH)
 		b.cam.Clamp()
 	}
+	if err := b.configureDeveloperShot(opts); err != nil {
+		return err
+	}
 	if opts.BattleBenchmark != "" {
 		return runBattleBenchmark(opts, b, cl)
 	}
@@ -220,6 +223,8 @@ func runShot(opts Options, cs *contentSet) error {
 		millis.step = uint32(opts.ShotTicks) + 1
 		b.viewerStep(tickSeconds, cl)
 	}
+
+	b.selectDeveloperShotProbes(opts.ShotProbe)
 
 	// `--shot-modal` drives the same activation path the pointer drives, so a
 	// capture can show the pause/exit modal stack the composer places at the

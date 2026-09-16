@@ -427,6 +427,7 @@ func (c *Client) drawCommittedWorld(cur *frame.Frame, ok bool) {
 	// Terrain/static preparation, radar preparation, and viewport clipping are
 	// unconditional. Radar and clip have no concrete frame input yet.
 	c.drawTerrainPrep()
+	c.drawDeveloperTerrain(cur)
 	// The ground marks and the water layers are the player's Marks and Water
 	// switches (§30); each is gated here rather than inside its producer so the
 	// recording is identical to the one a build without the effect would make.
@@ -503,6 +504,7 @@ func (c *Client) drawCommittedWorld(cur *frame.Frame, ok bool) {
 	// owner equalling the local player slot [03 §1][03 R-FX-01 §6].
 	c.drawUnitLabels(cur, ok)
 	c.drawStripSlot(cur, 9)
+	c.drawDeveloperMovement(cur)
 	c.drawFog(cur)
 	// The world region ends here: everything after it is positioned in
 	// FRAMEBUFFER pixels and is never scaled (§16.3).

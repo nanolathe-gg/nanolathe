@@ -22,8 +22,10 @@ type WidgetFrame struct {
 	// Tokens is the input ring's producer-ordered snapshot.  The service
 	// consumes only the prefix it reports, so a later token stays available to
 	// the next GUI pass.
-	Tokens             []input.Token
-	TokenMode          bool
+	Tokens    []input.Token
+	TokenMode bool
+	// DisableQuickKeys leaves editor and navigation tokens available [07 R-CAM-01 §9].
+	DisableQuickKeys   bool
 	KeyNavigation      bool
 	ShiftHeld, AltHeld bool
 	TimerAdvanced      bool
@@ -143,7 +145,7 @@ func (p *Panel) ServiceFrame(frame WidgetFrame, hooks WidgetHooks) ServiceResult
 				return finish()
 			}
 		}
-		if len(frame.Tokens) != 0 && !matrixConsumed && !suppressedPeekToken(frame.TokenMode, frame.Tokens[0]) && p.keyboardQuickKeyAt(i, frame.Tokens[0], frame.AltHeld, &result) {
+		if !frame.DisableQuickKeys && len(frame.Tokens) != 0 && !matrixConsumed && !suppressedPeekToken(frame.TokenMode, frame.Tokens[0]) && p.keyboardQuickKeyAt(i, frame.Tokens[0], frame.AltHeld, &result) {
 			result.ConsumedTokens = 1
 			matrixConsumed = true
 			if result.Fired {

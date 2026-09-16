@@ -59,7 +59,7 @@ func (b *battleSession) syncSelectionDrag(cl *client.Client) {
 //
 //	token                  key            state
 //	0x09                   Tab            done — opens/closes the options window (viewerStep)
-//	0xE3                   F2             done — same window; Shift+F2's Unit Builder Probe is a developer overlay, out of scope
+//	0xE3                   F2             done — same window; Shift+F2 pins the restored Unit Builder Probe
 //	0x0D                   Enter          done — opens single-player `TALK.GUI`; local text and the bounded `+` command set enter the shared message ring [07 §5 "Chat"]
 //	0x1B                   Escape         done — options close, latch cancel, else deselect all
 //	0x21 0x23 0x2A         ! # *          done — Shift+1/3/8, the same "label every unit" bit as ` and ~ [07 R-CAM-01 §14]
@@ -70,7 +70,7 @@ func (b *battleSession) syncSelectionDrag(cl *client.Client) {
 //	0x2E                   .              done — next build page, `nextbuildmenu`
 //	0x31..0x39             1..9           done — SwitchAlt mux; group recall plays `SelectSquad`; reached by an unshifted digit or Alt+digit, so additive recall is Shift+Alt+digit [07 R-CAM-01 §14]
 //	0x54 0x74              T t            done — follow camera, previous/next selected unit
-//	0x5C                   \              out of scope — developer mode only
+//	0x5C                   \              done — replay the supported retained local command with developer access
 //	0x68                   h              out of scope — `SHARE.GUI` is multiplayer
 //	0x6E                   n              done — next unvisited own unit, camera glide, no selection change; `N` (0x4E) has no case [07 R-CAM-01 §14]
 //	0xAA                   Ctrl+A         done — select every own selectable unit, additive
@@ -85,10 +85,10 @@ func (b *battleSession) syncSelectionDrag(cl *client.Client) {
 //	0xE6..0xE9             F5..F8         done — recall bookmark 0..3, `SelectSquad`
 //	0xD6                   Ctrl+F9        out of scope — screenshot; the battle shell has no in-battle capture writer
 //	0xD7                   Ctrl+F10       out of scope — developer mode only
-//	0xE2                   F1             done — opens `UNITINFOx.GUI` for the hovered unit or the hovered build button's product [07 R-HUD-03 §8]
+//	0xE2                   F1             done — opens `UNITINFOx.GUI` for the hovered unit or the hovered build button's product; Shift+F1 pins the restored State Probe [07 R-HUD-03 §8]
 //	0xE4                   F3             done — message-source glide
 //	0xE5                   F4             done — interface-flags bit 0x80
-//	0xEC                   F11            out of scope — developer mode only
+//	0xEC                   F11            done — authorized film toggle; second dispatch owns i/m/P/p
 //	0xED                   F12            done — clear the message ring
 //	0xF8                   Pause          done — pause toggle
 //	0x20, 0xC4, 0xF0..0xF7 Space, arrows… no case — the arrows are the scroll pass's held-key queries, not ring tokens
@@ -444,7 +444,9 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 }
 
 // handleBattleShortcuts reports whether Escape owns the remaining input pass.
+// The developer film table runs second over the same residual token [07 R-CAM-01 §9].
 func (b *battleSession) handleBattleShortcuts(in *input.State, cl *client.Client) bool {
+	defer b.handleDeveloperShortcuts(in, cl)
 	// Ctrl composition belongs to the selected token. The decoder gives the
 	// letter, digit and function-key arms that identity even if live Ctrl has
 	// since changed [07 R-CAM-01 §2].
@@ -484,10 +486,10 @@ func (b *battleSession) handleBattleShortcuts(in *input.State, cl *client.Client
 	if kbd.KeyDown(input.KeyPause) {
 		b.togglePause()
 	}
-	if kbd.KeyDown(input.KeyEqual) || kbd.KeyDown(input.KeyNumpadAdd) {
+	if !b.developer.film && (kbd.KeyDown(input.KeyEqual) || kbd.KeyDown(input.KeyNumpadAdd)) {
 		b.adjustGameSpeed(1)
 	}
-	if kbd.KeyDown(input.KeyMinus) || kbd.KeyDown(input.KeyNumpadSubtract) {
+	if !b.developer.film && (kbd.KeyDown(input.KeyMinus) || kbd.KeyDown(input.KeyNumpadSubtract)) {
 		b.adjustGameSpeed(-1)
 	}
 	// F9 and F10 are Nanolathe bindings, not retail's: retail's dispatcher has

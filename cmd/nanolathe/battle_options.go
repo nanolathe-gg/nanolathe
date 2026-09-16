@@ -137,6 +137,7 @@ func (b *battleSession) serviceBattleOptionsWidgets(p *ui.Panel, in *input.State
 		}
 	}
 	frame := pointerFrame(in, widgetTokens(in), false)
+	frame.DisableQuickKeys = b.developer.quickkeysDisabled
 	frame.TokenMode = true
 	// TODO(question): options-close/page transition coverage for this word is
 	// unfinished; the open root explicitly enables it [07 R-WGT-01 §2].

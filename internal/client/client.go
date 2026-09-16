@@ -203,7 +203,10 @@ type Client struct {
 	// messageFNT is the primary COMIX face selected by the later message pass;
 	// the group-digit walk retains the side font in fnt [07 R-HUD-03 §14.4]
 	// [03 R-FX-01 §6A].
-	messageFNT *formats.FNT
+	messageFNT    *formats.FNT
+	developer     DeveloperOptions
+	developerFont *formats.FNT
+	developerScan modelTarget
 	// messageLogos is the loaded LOGOS bank's player-colour entry, shared
 	// with the battle HUD [07 R-HUD-03 §14.4][07 R-HUD-04 §4].
 	messageLogos *formats.GAFEntry

@@ -2,11 +2,12 @@
 
 ## 1. Status, scope and evidence
 
-**Status: researched and planned; the developer UI is not implemented.** The
-2026-09-15 user request brings retail developer views into Nanolathe's planned
+**Status: first inspection delivery implemented; validation is described below.** The
+2026-09-15 user request brings retail developer views into Nanolathe's
 scope and explicitly authorizes enabling tools whose painters survive in the
 executable but whose activation/rendering paths are disconnected. This document
-is the implementation contract, not evidence that any UI has shipped.
+is the implementation contract; the delivery boundaries below distinguish
+working inspection from deferred capture and command work.
 
 Retail behavior belongs to the owning research sections below. In particular,
 an existing handler, a reachable hotkey and a reachable painter are different
@@ -122,6 +123,40 @@ stepping the simulation. Reusing a pool slot must not silently make a pinned
 inspector describe a different published occupant. Historical searches may be
 unavailable; avoid retaining every expansion solely for the UI.
 
+### 3.1 First delivery API
+
+- `frame.Frame.Developer *frame.DeveloperView` is nil unless diagnostics were
+  requested for that publication. The value and every nested slice belong to
+  the frame slot. `Tick` identifies the captured observation; no request forces
+  a tick while paused. `internal/frame/developer.go` defines the shared fields.
+- `Session.SetDeveloperDiagnostics(bool)` opts in to the next ordinary
+  publication. Publish map attributes/occupancy, the first selected local
+  movement class, available shared search state, true-local current coverage,
+  and supplemental unit/probe/follower fields. Existing `UnitView`, `Players`
+  and `OrderQueues` remain the source for their already published fields.
+  Unavailable search history or builder scores remain unavailable.
+- `client.DeveloperOptions` carries `Mode uint8`, `Information bool`,
+  `ContourSpacing, ContourOffset int32` in 1/256 height units, and
+  `PickX, PickZ int32`, `PickValid bool` in whole world coordinates.
+  `Client.SetDeveloperOptions(DeveloperOptions)` invalidates retained
+  presentation when these options change. The existing session mode helpers
+  remain the sole mode writer; the host mirrors their result to the client so
+  a paused display can change without another simulation publication.
+- `developerProbeTarget { Slot pool.Handle; InstanceID uint64; Enabled bool }` and
+  `developerProbeSelection` with `State, Builder developerProbeTarget`, a COMIX
+  `Font`, and shared previous-bottom `Layout` live in
+  `cmd/nanolathe/battle_developer_probe.go`.
+  `drawDeveloperProbes(c *client.Client, f *frame.Frame, selection
+  developerProbeSelection)` draws only these detached observations and reports
+  missing or stale subjects. The host owns hotkeys and target changes.
+
+Nanolathe presentation policy uses a deterministic tick/cell-based goal color
+sequence instead of advancing any random-number generator. This keeps repeated
+rendering and paused-frame caching stable while retaining varied goal colors.
+Reject malformed/non-finite parameters or negative contour spacing and spacing outside signed 32-bit
+conversion range. Zero disables contours. This host input policy avoids retail's
+nonterminating negative-spacing case; it does not redefine retail arithmetic.
+
 ## 4. Implementation sequence and acceptance
 
 1. **Input and snapshot boundary.** Add developer state and recovered controls;
@@ -159,10 +194,126 @@ state isolation, not a test census of every label. Required acceptance:
 - Run `tools/check`, `tools/check-retail`, the owning design gates, and the
   sequential classic/modern live battle performance check for renderer or
   snapshot-storage changes. Keep benchmark and capture artifacts outside the
-  repository. This documentation-only research pass does not claim these
-  future visual/performance acceptance checks have run.
+  repository. Record the checks actually completed in the delivery section below.
 
-## 5. Later extensions
+## 5. First inspection delivery
+
+### Controls
+
+In TALK enter `+Now Film Chris Include Reload Assert`. The command name is
+case-insensitive; the five arguments must match exactly. Then:
+
+| Control | Effect |
+|---|---|
+| F11 | Enter/leave film controls; leaving clears information and mode |
+| lowercase `m` | Cycle normal, movement/search, occupancy, metal, local coverage |
+| lowercase `i` | Toggle the diagnostic footer and selected ground-follower route |
+| uppercase `P` / lowercase `p` | Capture/release the pointer |
+| Shift+F1 / Shift+F2 | Pin State / Builder Probe to the hovered unit; no hover disables it |
+| `\` | Replay the retained supported local command without another TALK message |
+| `+Contour spacing offset` | Independent terrain contours, no authorization needed; spacing 0 disables |
+| `+HostProfile` | Toggle explicitly named Nanolathe Go memory/battle-update counters after authorization |
+
+The ordinary HUD remains visible. Film entry disables GUI accelerators while
+pointer controls and text editors continue working. F11 exit and ordinary
+implemented TALK/options close paths re-enable accelerators. Speed changes are
+blocked during film controls. Ctrl+Shift+F11 retains its existing diagnostic
+bundle capture, and F9/F10 retain their view-scale/renderer controls.
+
+Both probes are restored dormant tools, independently accessible without the
+password, film mode, selection or ownership gates. A pin keeps its publication
+identity across ticks. Missing, dying, reused or mixed-tick subjects show an
+explicit unavailable/stale message; Nanolathe does not reproduce the dormant
+Builder painter's erroneous clearing of the State enable flag. The shared
+previous-bottom panel layout is retained across observations. Re-recording the
+same observation and target pair reuses its starting bottom, so paused redraws
+and the two executors do not progressively change the panel. This is the authorized restoration
+lifetime policy, not a claim that retail used safe identities.
+
+### Available data and current limits
+
+Snapshots are requested when authorization, film, contours or either probe is
+active. The next ordinary committed tick supplies them; enabling a view while
+paused displays an awaiting-observation message until normal play publishes
+one. Already captured observations remain inspectable while paused. The
+existing session mode writer is mirrored to client options for immediate
+paused mode changes, and the renderer invalidates its retained world accordingly.
+
+Terrain modes, contour arithmetic, current true-local coverage, occupancy,
+raw metal values, available shared path-search status, cached movement-class
+tiers, committed follower footprints/routes, unit state and both order queues
+are connected. Goal colors follow the deterministic presentation policy above.
+An unallocated movement-class layer or uninitialized search table is reported
+unavailable; inspection does not allocate/revise an authoritative path layer.
+Undefined combined-status arrow colors are omitted as documented in [03 §3.12].
+
+Builder options preserve authored order. **Candidate scores are currently
+unavailable**: the inspection publication does not yet provide the candidate
+scorer's owning-player context, including for human-controlled builders. The
+painter supports the researched raw score and saturated bar when a future
+producer supplies them; it does not normalize or manufacture probabilities.
+
+The footer exposes committed tick, camera origin, available hovered stances,
+live-unit count and picked cell/height. A dash means unavailable for the
+unresolved platform/packet fields and the not-yet-published runnable budget and
+on-screen sweep count. The host profile separately names Go heap allocation,
+objects, cumulative allocation, GC cycles, goroutines and battle-update time;
+it does not claim retail allocator statistics or nine-bucket timing parity.
+
+The existing diagnostic bundle and PNG capture route remain available. Retail
+movie-series controls, portable dedicated memory windows, full nine-bucket
+profiling, mask-specific AI console routes and mutating developer commands
+remain separate later work. Replay here only reaches already implemented
+local commands; it is not a complete mask-15 developer console.
+
+### Reproducible visual checks
+
+The normal `--shot` route accepts `--shot-developer=0..4`,
+`--shot-probe=state|builder|both`, and `--shot-contour="16 0"`.
+`--shot-select` supplies the usual selected-unit context. These are host capture
+options: they request observation before the configured warmup ticks and pin
+probes to the first committed local unit afterwards. Use the existing
+`--shot-renderer=both` route to inspect both executors. Captures and performance
+artifacts stay outside the repository.
+
+### Validation recorded for the first delivery
+
+Focused publication tests compare both gameplay modes with observation off/on,
+including both RNG states/draw counts, resources, terrain, visibility, movement,
+wind and shake. They also verify detached storage and allocation-free warm
+publication. Input tests cover password/case/lifetimes, quickkey ownership and
+close paths, tiny negative contour spacing, replay, probe identity, and terrain
+picking. Renderer fixtures cover mode markers, contour boundaries, palette
+rules, pass ordering, paused invalidation and tint-cache reuse. Repeated probe
+recordings produce identical indexed output.
+
+`tools/check` and `tools/check-retail` passed on the integrated implementation,
+including the real GPU fixtures. A separate input/lifetime review found and
+verified fixes for dialog quickkeys and sub-quantum negative spacing. Classic
+and modern real-asset captures of all four diagnostic modes, contours and both
+probes were inspected, alongside authored contour fixtures.
+
+Sequential live-battle runs used the same scene metadata: Great Divide, seed 7,
+300 pre-window ticks, 180 measured draws at 30 Hz, native scale, Modern gameplay,
+and factories enabled. Each run had 329–340 live units, 153–195 moving units,
+8 active builds, and 9–17 burning features. End-state diagnostic bundles were
+byte-identical between the base branch, diagnostics-off implementation and
+occupancy-mode implementation, separately for each renderer.
+
+| Mean host draw work | Base | Tools off | Occupancy + information |
+|---|---:|---:|---:|
+| Classic | 15.52 ms | 15.60 ms | 16.86 ms |
+| Modern | 10.28 ms | 10.28 ms | 16.91 ms |
+
+These are single-run host measurements, not GPU execution or scanout timing.
+The disabled path showed no material regression in this sample; enabled
+occupancy drawing has an explicit presentation cost. Both executors' battle
+captures and feature censuses were inspected. Artifacts remain outside the
+repository under `/private/tmp/devtools-bench-*`; each enabled run has a
+`developer-options.json` sidecar because the existing benchmark scene metadata
+does not include these new capture options.
+
+## 6. Later extensions
 
 Potential later work includes richer path-search inspection, unit-order and COB
 views, construction-admission explanations, pinned comparisons and exporting a

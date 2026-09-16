@@ -169,7 +169,9 @@ func (b *battleSession) applyPublishedCamera(cur *frame.Frame) {
 		// TODO(question): map the force-zero page-close deferral bits and current
 		// page owner to this shell before replacing its existing unit-info-only
 		// close [07 R-HUD-04 §3].
-		closeUnitInfo()
+		if closeUnitInfo() {
+			b.developer.quickkeysDisabled = false
+		}
 	}
 	if cur.BigBrotherCycle {
 		b.cycleFollowTargetFrom(false, b.cam.LatchedTracked())

@@ -218,7 +218,9 @@ func (b *battleSession) stockpileSelected(queued bool) {
 // publish, so the close here is unconditional. With no menu open the two
 // agree.
 func (b *battleSession) enqueueSelectionCommand(c session.HumanCommand) error {
-	closeUnitInfo()
+	if closeUnitInfo() {
+		b.developer.quickkeysDisabled = false
+	}
 	return b.enqueueHumanCommand(c)
 }
 

@@ -744,9 +744,9 @@ type RadarView struct {
 	// or surface dirty flags; presentation consumes only this scalar
 	// [R-CORE-03][03 §3.6].
 	BlinkPhase uint8
-	// MarkerMode is the authoritative minimap composer mode. Zero is the
-	// explicit mode-off value until a simulation-owned source is available;
-	// presentation must not force the viewport marker on [03 §3.12][I6].
+	// MarkerMode retains the historical field name for the committed viewport
+	// developer selector [03 §3.12]. Host client options mirror its source for
+	// paused inspection; it is not a minimap mode (DESIGN_DEVELOPER_TOOLS §3.1).
 	MarkerMode uint8
 }
 
@@ -985,6 +985,8 @@ type Frame struct {
 
 	Tick uint32
 	Wind WindView
+	// Developer is an opt-in, detached diagnostic observation [I6].
+	Developer *DeveloperView
 	// ViewingPlayer is the observer for this committed frame; selection keeps
 	// its separate true-local owner [03 R-VIS-01 §4].
 	ViewingPlayer uint8
@@ -1037,6 +1039,7 @@ type Frame struct {
 	// immutable presentation copies while Reset restores the public zero-value
 	// shape expected by ordinary frame writers. The retained observer is part
 	// of the coverage-copy key: View changes grids without dirtying caches.
+	retainedDeveloper     *DeveloperView
 	retainedViewingPlayer uint8
 	retainedVisibility    VisibilityView
 	retainedFog           FogView
@@ -1159,6 +1162,7 @@ func (f *Frame) Reset() {
 	f.Builds = f.Builds[:0]
 	f.Events = f.Events[:0]
 	f.Tick = 0
+	f.Developer = nil
 	f.Wind = WindView{}
 	f.Paused = false
 	f.BigBrotherCycle, f.BigBrotherResetVisited, f.BigBrotherCancelFollow = false, false, false

@@ -120,6 +120,7 @@ func (h *retailBattleHUD) servicePaletteFrame(b *battleSession, in *input.State,
 	defer restore()
 
 	frame := pointerFrame(in, nil, false)
+	frame.DisableQuickKeys = b != nil && b.developer.quickkeysDisabled
 	// The earlier GUI fetch consumes an inside down before it tests gadgets.
 	// Blank, hidden and greyed window space therefore also owns that down;
 	// only an unconsumed record reaches battlefield cancellation [07 §3].

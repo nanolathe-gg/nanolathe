@@ -116,6 +116,9 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 	// services the release before the command page does, and a release inside
 	// it never reaches a side-panel control [07 §3][07 R-WGT-01 §1].
 	if h.unitInfoConsumeClick(x, y) {
+		if !unitInfoOpen() {
+			b.developer.quickkeysDisabled = false
+		}
 		return true
 	}
 	// A committed frame is required for every HUD action [I6]. A frame with a

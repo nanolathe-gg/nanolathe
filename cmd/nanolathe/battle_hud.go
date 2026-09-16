@@ -46,8 +46,9 @@ type retailBattleHUD struct {
 	// uses it after the ordinary message-column selector has run; the side
 	// console remains separately bound for the selector-inheritance edge
 	// [07 R-CAM-01 §6][07 R-HUD-03 §14.4].
-	primaryFont *formats.FNT
-	pal         *palette.Tables
+	primaryFont   *formats.FNT
+	developerFont *formats.FNT
+	pal           *palette.Tables
 
 	panelTop    *formats.GAFFrame
 	panelSide   *formats.GAFFrame
@@ -257,6 +258,10 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 			return nil, hudAssetError(fs, logicalPrimary, "the primary COMIX FNT [03 R-FONT-01 §5]", err)
 		}
 	}
+	developerFont, err := formats.LoadFNTFile(fs, "fonts/smlfont.fnt")
+	if err != nil {
+		return nil, hudAssetError(fs, "fonts/smlfont.fnt", "developer terrain font", err)
+	}
 	// Mandatory side intgaf [02 §6][07 §6].
 	logicalIntGAF := "anims/" + strings.ToLower(side.IntGAF) + ".gaf"
 	intGAF, err := formats.LoadGAFFile(fs, logicalIntGAF)
@@ -350,7 +355,7 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 	var resultPanel *ui.Panel
 	h := &retailBattleHUD{
 		shell: shell, windowContext: windowContext, optionsRelabel: optionsRelabel,
-		side: side, cat: cat, owner: sess.LocalOwner, anchors: anchors, console: console, guiFont: guiFont, primaryFont: primaryFont, pal: pal,
+		side: side, cat: cat, owner: sess.LocalOwner, anchors: anchors, console: console, guiFont: guiFont, primaryFont: primaryFont, developerFont: developerFont, pal: pal,
 		panelTop: panelTop, panelSide: panelSide, panelBottom: panelBottom,
 		intGAF: intGAF, common: common, oldMain: oldMain, share: share, logos: logos,
 		optionsGAF: optionsGAF, optionsWin: optionsWin, talkWin: talkWin, exitWin: exitWin, confirmWin: confirmWin, restartWin: restartWin,
@@ -889,6 +894,13 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	// from the Space-held LIGHTBAR readout above and remains below every linked
 	// battle window [07 R-CAM-01 §6][07 R-HUD-04 §4].
 	h.drawClock(c, b, cur)
+	if b != nil {
+		b.developer.probes.Font = h.primaryFont
+		b.developer.probes.Layout = &b.developer.probeLayout
+		drawDeveloperProbes(c, cur, b.developer.probes)
+		b.drawDeveloperStatus(c, cur, h.primaryFont)
+		b.drawDeveloperHost(c, h.primaryFont)
+	}
 	h.drawBattleMenu(c, b)
 	// The unit information screen is a child window over the battle
 	// [07 R-HUD-03 §8].

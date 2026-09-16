@@ -18,6 +18,7 @@ func (b *battleSession) serviceBattleChildPanel(panel *ui.Panel, window *gui.Win
 		return result
 	}
 	frame := pointerFrame(in, in.PeekTokens(), false)
+	frame.DisableQuickKeys = b != nil && b.developer.quickkeysDisabled
 	if in.Kbd != nil {
 		frame.AltHeld = in.Kbd.KeyHeld(input.KeyAlt)
 	}

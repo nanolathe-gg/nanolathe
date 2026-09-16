@@ -67,6 +67,9 @@ func (g *gameShell) serviceMenuWidgets(p *ui.Panel, in *input.State) bool {
 	}
 	editorIndex := p.EditorIndex()
 	frame := pointerFrame(in, widgetTokens(in), g.widgetTimerAdvanced(p))
+	if g.battle != nil {
+		frame.DisableQuickKeys = g.battle.developer.quickkeysDisabled
+	}
 	frame.TokenMode = true
 	// TODO(question): census every front-end transition which disables this
 	// independently initialized navigation word; the shell's enabled state is
@@ -183,6 +186,9 @@ func (g *gameShell) modalInput(cl *client.Client) {
 	}
 	in := cl.Input()
 	frame := pointerFrame(in, widgetTokens(in), false)
+	if g.battle != nil {
+		frame.DisableQuickKeys = g.battle.developer.quickkeysDisabled
+	}
 	frame.TokenMode = true
 	// TODO(question): modal transition ownership for the navigation word is
 	// not yet fully traced [07 R-WGT-01 §2].

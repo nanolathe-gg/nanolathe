@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/audio"
@@ -26,6 +27,7 @@ import (
 // the integrated session (all twelve kernel phases) and the interaction state:
 // selection, order latch, and build placement.
 type battleSession struct {
+	developer battleDeveloperState
 	// Host diagnostic request/result state; synchronous writes serialize captures.
 	debugCaptureBusy  bool
 	debugCaptureBase  string // empty uses the per-user diagnostics directory
@@ -532,6 +534,8 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 	// The later message column selects COMIX; group digits retain the side
 	// console face [07 R-HUD-03 §14.4][03 R-FX-01 §6A].
 	cl.SetMessageFNT(b.hud.primaryFont)
+	cl.SetDeveloperFont(b.hud.developerFont)
+	b.syncDeveloperView()
 	cl.SetMessageLogos(b.hud.logos)
 	// Strategic icons use the HUD team logos; generic contacts retain the radar
 	// art/options bindings (DESIGN_GPU_RENDERER §18.4).
@@ -871,6 +875,11 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 			b.gestures = battleGestures{}
 		}
 	}()
+	if b.developer.host.enabled {
+		started := time.Now()
+		defer b.sampleDeveloperHost(started)
+	}
+	defer b.syncDeveloperView()
 	if b.handleDebugCapture(cl) {
 		return
 	}

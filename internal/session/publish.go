@@ -876,6 +876,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 	} else {
 		published.Events = published.Events[:0]
 	}
+	s.publishDeveloper(published)
 	if err := s.Snapshot.Publish(tick); err != nil {
 		panic(fmt.Sprintf("session: committed frame publication failed at tick %d: %v", tick, err))
 	}

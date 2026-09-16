@@ -47,6 +47,9 @@ type Options struct {
 	ShotFocus          string      // "x,y" screen point kept fixed while scaling; default the screen centre
 	ShotShift          bool        // hold Shift for strategic range captures
 	ShotBuild          string      // preview a named product at the capture pointer
+	ShotDeveloper      string      // capture mode 0..4; empty leaves developer views off
+	ShotProbe          string      // restored state or builder probe in captures
+	ShotContour        string      // contour spacing and optional offset in captures
 	ShotSelect         bool        // run the Ctrl+A select-all before --shot captures, so the command page is open
 	ShotSize           string      // "WxH" surface size for --shot; empty composes at the authored 640x480
 	ShotModal          string      // battle modal to open before --shot captures: "options", "exit" or "confirm"
@@ -129,6 +132,9 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.StringVar(&opts.LoadSave, "load-save", "", "load an existing retail .SAV in the windowed shell")
 	set.StringVar(&opts.Report, "report", "", "write the headless JSON summary to this file (default stdout)")
 	set.StringVar(&opts.Shot, "shot", "", "compose one battle frame to this PNG and exit, opening no window")
+	set.StringVar(&opts.ShotDeveloper, "shot-developer", "", "capture developer terrain mode 0..4 with information enabled")
+	set.StringVar(&opts.ShotProbe, "shot-probe", "", "capture a restored state, builder, or both probes for the first local unit")
+	set.StringVar(&opts.ShotContour, "shot-contour", "", "capture contours: spacing and optional offset, in height units")
 	set.IntVar(&opts.ShotTicks, "shot-ticks", 90, "authoritative ticks to advance before --shot captures the frame")
 	set.StringVar(&opts.Remaster, "remaster", "", "remastered-art override: a loose directory or .hpi mounted above every retail archive")
 	set.Func("zoom", "presentation view scale: any factor in 0.0625..2 with --renderer=modern, or 1 or 2 with classic; defaults to 1 for windows, captures and benchmarks", func(text string) error {

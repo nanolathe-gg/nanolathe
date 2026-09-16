@@ -159,6 +159,9 @@ func (b *battleSession) dispatchLocalCommand(text string) {
 	if len(words) == 0 {
 		return
 	}
+	if b.developerCommand(words) {
+		return
+	}
 	switch strings.ToLower(words[0]) {
 	case "light":
 		render.SetModelLight(int32(localCommandInt(words, 1)), int32(localCommandInt(words, 2)), int32(localCommandInt(words, 3)))
