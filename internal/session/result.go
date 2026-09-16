@@ -44,10 +44,6 @@ type Result struct {
 	ColumnMaxima [7]int              `json:"column_maxima,omitempty"`
 }
 
-// TeamForOwner maps an owner slot to its team identifier [RS-05][08].
-// It is the exported form of teamForOwner for presentation (I6) and tests.
-func (s *Session) TeamForOwner(owner int) int { return s.teamForOwner(owner) }
-
 // teamForOwner maps an owner slot to its team identifier: the lowest slot in
 // the owner's alliance, offset by 100 so the identifier is never confused with
 // a slot index. A slot allied with nobody is its own team, which is what makes

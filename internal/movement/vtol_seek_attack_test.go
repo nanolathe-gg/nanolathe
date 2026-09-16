@@ -119,7 +119,7 @@ func TestVTOLSeekAttackSearchIssuesBeforeCompleting(t *testing.T) {
 					return target.Handle, true
 				},
 			}
-			q.Push(orders.Lookup("VTOL_SeekAttack"), orders.Node{Owner: u.Handle, Phase: 1, GoalX: u.X, GoalY: u.Y, GoalZ: u.Z})
+			q.Push(orders.Lookup("VTOL_SeekAttack"), orders.Node{Owner: u.Handle, Phase: 1, GoalX: u.X, GoalY: u.Y, GoalZ: u.Z, GoalSupplied: true})
 			n := q.Primary()[0]
 			draws := b.SimRNG.Draws()
 			code := sys.legVTOLSeekAttack(u, n, 0, 100)

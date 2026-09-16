@@ -35,9 +35,18 @@ func (s *cobExplosionSink) AdmitWholePiece(request cob.WholePieceExplosion) bool
 	if piece < 0 || piece >= len(binding.Model.Pieces) {
 		return false
 	}
-	// TODO(question): retain the source render-piece translation at admission.
-	// This adapter currently recomposes the COB locator; retail copies the last
-	// materialized translation without forcing a rebuild [04 R-COB-04 §2, §3].
+	// Admission position is the CURRENT recomposed piece pose, not retail's
+	// last retained translation: the approved unconditional departure C27.1 of
+	// docs/DESIGN_UNITS_ORDERS_COB.md, authorized 2026-09-16 and matching the
+	// shatter adapter's 2026-09-09 approval in the same section. Retail's
+	// retained value is written by model drawing and by the viewing-player
+	// -visible refresh visit `[04 R-COB-04 §2]` `[04 R-COB-04 §3]`, so reading
+	// it would put render cadence and the viewer's identity inside the
+	// authoritative tick, where this position feeds the bounce, the impact sink
+	// and the effect admissions those produce [I4] [I6]. Strict 3.1 samples the
+	// current pose for the same reason — there is no tick-ordered retail value
+	// to reproduce. Position only: the six draws, the seed built from them, the
+	// lifetime and the four flags are unchanged.
 	position, ok := presentation.pieceWorldPos(cobPiece)
 	if !ok {
 		return false

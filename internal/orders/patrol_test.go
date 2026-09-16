@@ -24,7 +24,8 @@ func TestPatrolCyclesRatherThanCompletingAtItsFirstPoint(t *testing.T) {
 		t.Fatalf("Patrol has no handler after every installer ran [PLAN 18 gate 10]")
 	}
 	q.Push(id, Node{Owner: unit.Handle,
-		GoalX: numeric.Fixed(200 << 16), GoalZ: numeric.Fixed(200 << 16)})
+		GoalSupplied: true,
+		GoalX:        numeric.Fixed(200 << 16), GoalZ: numeric.Fixed(200 << 16)})
 	patrol := q.Primary()[0]
 
 	// Phase 0: the patrol-chain setup appends the return-to-start waypoint, so
@@ -78,7 +79,7 @@ func TestQueuedMoveRotatesOnItsSixtyTickDeadline(t *testing.T) {
 		if id == 0 || DescriptorFor(id).Handler == nil {
 			t.Fatalf("%s has no handler after every installer ran", name)
 		}
-		q.Push(id, Node{Owner: unit.Handle, GoalX: numeric.Fixed(200 << 16)})
+		q.Push(id, Node{Owner: unit.Handle, GoalX: numeric.Fixed(200 << 16), GoalSupplied: true})
 		marker := q.Primary()[0]
 
 		q.Pump(unit, 5)
@@ -109,7 +110,8 @@ func TestVTOLRepairPatrolInstallsThroughThePump(t *testing.T) {
 		t.Fatalf("VTOL_RepairPatrol has no handler after every installer ran")
 	}
 	q.Push(id, Node{Owner: builder.Handle,
-		GoalX: numeric.Fixed(200 << 16), GoalZ: numeric.Fixed(200 << 16)})
+		GoalSupplied: true,
+		GoalX:        numeric.Fixed(200 << 16), GoalZ: numeric.Fixed(200 << 16)})
 	head := q.Primary()[0]
 
 	q.Pump(builder, 100)
@@ -193,7 +195,7 @@ func TestAirPatrolInstallsItsMarker(t *testing.T) {
 	}})
 
 	// Waypoint due +X of the aircraft at the same Z.
-	n := &Node{Owner: u.Handle, GoalX: numeric.Fixed(900 << 16), GoalZ: numeric.Fixed(500 << 16)}
+	n := &Node{Owner: u.Handle, GoalX: numeric.Fixed(900 << 16), GoalZ: numeric.Fixed(500 << 16), GoalSupplied: true}
 	installAirPatrolMarker(u, n)
 
 	if len(got) != 1 {
@@ -263,7 +265,8 @@ func TestVTOLPatrolSeeksAPadOnlyWhenHurt(t *testing.T) {
 
 	id := Lookup("VTOL_Patrol")
 	q.Push(id, Node{Owner: flier.Handle, Deadline: -1,
-		GoalX: numeric.Fixed(400 << 16), GoalZ: numeric.Fixed(400 << 16)})
+		GoalSupplied: true,
+		GoalX:        numeric.Fixed(400 << 16), GoalZ: numeric.Fixed(400 << 16)})
 	n := q.Primary()[0]
 	n.Phase = 2
 

@@ -361,7 +361,7 @@ func TestLoop_MoveArrival(t *testing.T) {
 	q := orders.QueueForUnit(u)
 	goalX := numeric.Fixed(25 * 65536)
 	goalZ := numeric.Fixed(25 * 65536)
-	q.Push(id, orders.Node{GoalX: goalX, GoalZ: goalZ})
+	q.Push(id, orders.Node{GoalX: goalX, GoalZ: goalZ, GoalSupplied: true})
 	s.Clock.ScaledAnchor = 0
 	// Run ticks until arrival or max
 	arrived := false

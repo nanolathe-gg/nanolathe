@@ -2875,6 +2875,34 @@ func (s *System) emitMovementCallbacks(u *units.Unit, speed int32) {
 	}
 }
 
+// seedRestoredMoveTier makes the movement-side move-rate cache agree with the
+// tier the save restored into the unit record.
+//
+// The tier the save carries is the classifier's cached category: [04 §5.2]
+// caches the verdict and [08 R-SAVE-02 §6] persists it in the packed status
+// word (move-rate tier at word bits 6–7), which the unit reader restores
+// without recomputing it. We keep the emitter's copy on the movement side in a
+// per-handle row instead of on the unit record, so nothing would
+// otherwise carry the restored tier across the load, and the first post-load
+// mover tick would see a zero cache, read a category change that did not
+// happen, and wake StartMoving + MoveRateN. [04 §5.2] is explicit that an
+// unchanged category emits nothing, so a load that lands in the same category
+// must emit nothing.
+//
+// TODO(question): whether retail persists the setSFXoccupy band cache is
+// Unknown, so prevSFXBand is deliberately left at its allocator value here.
+// [04 §9.1] names the cached prior band as a classifier input but not where it
+// is stored, and neither the closed unit-record word list [08 R-SAVE-02 §6] nor
+// the closed 35-byte mover record [08 R-SAVE-02 §8] names a band word. Tracing
+// the band cache's storage and testing it against those two saved records would
+// settle it; until then seeding it would be a guess in either direction.
+func (s *System) seedRestoredMoveTier(u *units.Unit) {
+	if s == nil || u == nil {
+		return
+	}
+	setHandleRow(&s.prevMoveTier, u.Handle, int(u.MoveTier&3))
+}
+
 // BeginTick starts the per-tick transaction [04 §8.2] C22.
 // The occupancy grid itself is synchronous; clear-then-stamp finishes before the
 // next slot [04 §8.2] C22, so later StepUnit calls immediately observe earlier

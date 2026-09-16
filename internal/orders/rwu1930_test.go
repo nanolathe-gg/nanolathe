@@ -47,7 +47,7 @@ func TestAirEntryStep1SeekReplacement(t *testing.T) {
 		q, u := gateFixture()
 		u.Flags = u.Flags&^(units.StandingFieldMask<<units.StandingFireShift) | tc.stance<<units.StandingFireShift
 		q.SetBinding(&QueueBinding{SimRNG: q.binding.SimRNG, Lookup: func(pool.Handle) *units.Unit { return u }})
-		q.Push(Lookup("AirToGround"), Node{Owner: u.Handle, Target: 7, GoalX: 11 << 16, GoalY: 12 << 16, GoalZ: 13 << 16})
+		q.Push(Lookup("AirToGround"), Node{Owner: u.Handle, Target: 7, GoalX: 11 << 16, GoalY: 12 << 16, GoalZ: 13 << 16, GoalSupplied: true})
 		if tc.successor {
 			q.Push(Lookup("Wait"), Node{Owner: u.Handle})
 		}

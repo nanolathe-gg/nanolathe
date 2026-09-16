@@ -472,23 +472,6 @@ func rebuildCapacityPlayer(s *Service, player int, w *units.World) {
 	}
 }
 
-// DebitCloak applies a single cloak upkeep debit with truncation toward zero
-// per [05 "Cloak debit"] C13. Cost is converted to integer via truncation (I3), compared
-// with owner's live energy stock, and if affordable subtracted immediately with an energy
-// request recorded. Units are visited in slot order by the caller.
-func DebitCloak(p *Player, cost float32) bool {
-	if p == nil {
-		return false
-	}
-	need := float32(numeric.TruncateFloat32ToLow32(cost)) // truncation toward zero per [01 §8] and I3
-	if need > p.Stock[Energy] {
-		return false
-	}
-	p.Stock[Energy] = float32(float64(p.Stock[Energy]) - float64(need))
-	p.Mirror[Energy].Requested = float32(float64(p.Mirror[Energy].Requested) + float64(need))
-	return true
-}
-
 // ApplyCloakDebits sequentially debits eligible cloak costs for all units of
 // player in slot order per [05 "Cloak debit"] C13. Earlier slots consume live
 // stock before later slots are tested. CloakDue is required because economy

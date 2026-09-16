@@ -112,7 +112,7 @@ func TestLocomotionAccelBrakeRamp(t *testing.T) {
 	sys.SubmitMove(h, 0, path.Cell{X: 0, Z: 0}, path.Cell{X: 3, Z: 0})
 	id := orders.Lookup("Move_Ground")
 	q := orders.QueueForUnit(u)
-	q.Push(id, orders.Node{GoalX: world.CellToWorld(3), GoalZ: world.CellToWorld(0)})
+	q.Push(id, orders.Node{GoalX: world.CellToWorld(3), GoalZ: world.CellToWorld(0), GoalSupplied: true})
 	sys.Scheduler.Tick(1)
 	var lastDist numeric.Fixed
 	var arrived bool

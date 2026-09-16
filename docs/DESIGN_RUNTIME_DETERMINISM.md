@@ -341,10 +341,16 @@ plus the unit limit. Nothing presents between phases.
 `Buffer` is two `Frame` slots and an atomic committed index. `BeginWrite`
 returns and resets the slot that is not committed; `Publish(tick)` requires
 strictly increasing ticks and makes the slot readable; `Current` returns the
-committed frame or nil before the first publication. There is no third slot, no
-clone on publish, no retained previous frame, no `alpha`, and no interpolation
-— retail's draw path samples the accumulators exactly as committed at the
-current tick `[03 §2.4]` [I6]. A five-tick catch-up burst publishes five
+committed frame or nil before the first publication, and `Previous` returns the
+other slot — the tick committed before it. There is no third slot and no clone
+on publish. The buffer itself holds no `alpha` and interpolates nothing, and
+Original presentation samples `Current` alone: retail's draw path reads the
+accumulators exactly as committed at the current tick `[03 §2.4]` [I6].
+Enhanced presentation is the one sanctioned reader of the pair — it blends the
+two most recent committed ticks in its own retained presentation buffers,
+consumes no simulation RNG and writes nothing back (DESIGN_GPU_RENDERER §13.5)
+[I6]; the live battle benchmark's census also reads `Previous`, only to count
+which units moved between two committed ticks. A five-tick catch-up burst publishes five
 committed frames in order; a render frame that ran zero sub-ticks samples the
 last committed tick.
 
@@ -458,7 +464,11 @@ Both exist `[01 §4.3]`.
 keepalive `[01 §4.3]`.
 
 **C6 — the tick increments first.** The global tick increments before phase 1
-of each sub-tick, and `clock.BeginSubTick` is its only writer `[01 §4.4]`.
+of each sub-tick, and `clock.BeginSubTick` is the only code that advances it
+`[01 §4.4]`. The one other writer is the battle-entry seeding step, which zeroes
+the counter so every battle entry — including save re-entry, whose RNG state is
+never restored — starts at tick zero before any setup-owned draw
+`[01 R-CORE-02]`. Nothing else writes the field.
 
 **C7 — the phase order is the twelve entries of §2.5, every sub-tick.** One
 named method per phase, one call site and one implementation each, in one
@@ -516,9 +526,13 @@ Nanolathe-authored continuation format
 committed frames in order; a render frame that ran zero sub-ticks samples the
 last committed tick `[03 §2.4]` [I6].
 
-**C16 — there is no `alpha`.** Presentation does not interpolate between ticks
-and no simulation package computes or observes an interpolation fraction
-`[03 §2.4]` [I6].
+**C16 — no simulation package observes an interpolation fraction.** Original
+presentation does not interpolate between ticks, and nothing on the simulation
+side of the boundary computes or reads a fraction `[03 §2.4]` [I6]. Enhanced
+presentation is the one exception and it lives entirely on the presentation
+side: it blends the two most recent committed ticks and the clock's carry in
+its own retained buffers (DESIGN_GPU_RENDERER §13.5), consuming no simulation
+RNG and writing nothing back [I6].
 
 **C17 — one sine table.** 512 entries, entry `i` is
 `round(8192 · sin(i·2π/512))`, indexed with the pre-add of 32, cosine a quarter
@@ -792,9 +806,10 @@ streams, the pools, the tick or the committed frame.
 
 No `TODO(question)`, `TODO(T23)` or `TODO(T25)` marker remains in
 `internal/clock`, `internal/sim/rng`, `internal/sim/numeric`, `internal/pool`,
-`internal/frame`, `internal/version` or the two commands' boot paths. Three
-markers in `internal/session` belong to families other documents own, and are
-listed here because the file is here:
+`internal/frame`, `internal/version` or the two commands' boot paths. Nine
+markers stand in non-test `internal/session` files — eight `TODO(question)` and
+one `TODO(T23)`. Every one belongs to a family another document owns, and they
+are listed here because the file is here:
 
 * `TODO(T23)` in the effect-strip flame spawner — a span under five world units
   (including a degenerate zero-length teleport) makes the segment life zero, and
@@ -807,6 +822,36 @@ listed here because the file is here:
   panel's non-world-click issues run the same duplicate test. Both need a trace
   of the interface's call into the producer; they belong to
   DESIGN_INTERFACE_HUD_INPUT `[07 §9]`.
+* `TODO(question)` at the kill-credit step — whether retail runs the leader
+  announcement unconditionally on every full-credit death rather than only where
+  a kill counter moved. The two readings differ only in re-evaluating an
+  already-consistent ranking, which posts no line, so nothing observable turns
+  on it; tracing the announcement's call edge settles it
+  `[06 §12.1]` `[08 R-CAMP-01 §9]`. DESIGN_WEAPONS_PROJECTILES owns the family.
+* *No longer open (2026-09-16).* The COB explosion adapter recomposes the locator
+  where retail copies the last materialized render-piece translation without
+  forcing a rebuild `[04 R-COB-04 §2]`. That is now the approved unconditional
+  departure DESIGN_UNITS_ORDERS_COB C27.1, not a gap: retail's value is written
+  by drawing and by a viewing-player-dependent refresh, so it cannot enter the
+  authoritative tick. DESIGN_UNITS_ORDERS_COB owns it.
+* `TODO(question)` on the meteor default-loader path — the source's numeric-lane
+  initialization when the weapon name is empty and no default record is selected
+  is not established; the placeholder is an all-zero disabled record, which is
+  host policy and not a retail default `[06 §6.5]`.
+* `TODO(question)` at the observer byte — a save's `Player%i` account carries no
+  observer or watcher item, so a restored slot reads back as an ordinary
+  participant. The state may be unrepresentable in a retail save rather than
+  lost by this reader; the lobby record's watcher bit traced to a save item or
+  to nothing settles it `[08 "Player records"]` `[08 R-SKIR-01 §1]`.
+  DESIGN_SESSIONS_AI_SAVE owns the save form.
+* `TODO(question)` at the elimination announcement strings — whether the three
+  stored tails carry a leading possessive marker. Reading them out of the retail
+  string table settles it; the draw, its stream and its position are unaffected
+  either way `[08 R-CAMP-01 §9]`.
+* `TODO(question)` at the resurrection producer — whether phase 5's
+  post-allocation terrain re-read also identifies a same-tick
+  successor/replacement feature, beyond rejecting an absent one
+  `[06 R-DMG-01 §4]`. DESIGN_ECONOMY_CONSTRUCTION owns the order.
 
 Open questions carried by the contracts above rather than by a marker:
 

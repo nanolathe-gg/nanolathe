@@ -42,8 +42,9 @@ func exitCatalog(defs ...*content.UnitDef) *content.Catalog {
 	for _, d := range defs {
 		cat.Units[d.CanonicalKey] = d
 	}
-	// thresholds mirror a stock tank-class profile; values asserted by
-	// TestExitQuerySkipsAggregatesSiteKeepsThem, not here.
+	// Thresholds mirror a stock tank-class profile; no test in this file
+	// asserts the values themselves. A test that needs a gate NOT to fire
+	// overrides the field it cares about on this record.
 	cat.Movement["exitmove"] = &content.MovementClass{
 		FootprintX: 1, FootprintZ: 1,
 		MaxSlope: 15, BadSlope: 7,
@@ -279,17 +280,30 @@ func TestForeignOccupantStillBlocksExitSilently(t *testing.T) {
 	}
 }
 
-// TestExitQueryKeepsAggregates locks [04 R-FAC-02 §4]: the factory exit-spot
-// query runs in the inline terrain-check mode (mode 1, like a chosen site),
-// so the aggregate slope gate rejects a steep exit cell. The skip flag only
-// exists for domain-level callers and must not be what the exit path uses.
-func TestExitQueryKeepsAggregates(t *testing.T) {
+// TestExitQueryKeepsTerrainGates locks [04 R-FAC-02 §4]: the factory exit-spot
+// query runs in the inline terrain-check mode (mode 1, like a chosen site), so
+// the INLINE PER-CELL terrain gates reject a steep exit cell. The product is
+// mobile, and a mobile product has no rectangle aggregate at all — each covered
+// cell is judged on its own derived pair, against its own slope pair
+// [04 R-P0-08 "mobile terrain validator"][04 R-COLL-01 §2 "the mode-1 scan"].
+// The skip flag only exists for domain-level callers and must not be what the
+// exit path uses.
+//
+// The cliff below therefore carries a slope of 23 in ONE cell, above the
+// class's MaxSlope 15. It used to carry a slope of 8 — legal for that cell, and
+// rejected only through the rectangle span the mobile path wrongly applied
+// (DS-WV-02). The class also takes the land MinWaterDepth template value
+// -10000 so the shallow gate, which [04 R-COLL-01 §2] orders ahead of the slope
+// test, cannot pre-empt the rejection under test: this fixture's terrain stands
+// at height 10 above a sea level of 0 [04 R-DOC04-A].
+func TestExitQueryKeepsTerrainGates(t *testing.T) {
 	lab := newFactoryDef("exitlab", 4, 4, 300)
 	mob := exitMobileDef("exitmob", 2, 2)
 	cat := exitCatalog(lab, mob)
+	cat.Movement["exitmove"].MinWaterDepth = -10000
 	terrain := exitTerrain(24, 24)
 	cliff := terrain.PlotAt(11, 11)
-	cliff.SetMaxHeight(90)
+	cliff.SetMaxHeight(105)
 	cliff.SetMinHeight(82)
 	svc, _ := exitService(t, terrain, cat)
 
@@ -299,7 +313,7 @@ func TestExitQueryKeepsAggregates(t *testing.T) {
 		yard[i] = 0x06
 	}
 	if _, err := svc.validatePlacement(999, rect, mob, yard, false); err == nil || !strings.Contains(err.Error(), "slope") {
-		t.Fatalf("exit query accepted steep slope, want aggregate rejection [04 R-FAC-02 §4]; got %v", err)
+		t.Fatalf("exit query accepted steep slope, want a per-cell slope rejection [04 R-FAC-02 §4][04 R-P0-08]; got %v", err)
 	}
 	if _, err := svc.validatePlacement(999, rect, mob, yard, true); err != nil {
 		t.Fatalf("domain-skip query rejected on sloped yard: %v", err)

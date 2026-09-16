@@ -69,7 +69,7 @@ func TestAttackSpecialOnGroundBecomesSuppressOnSlotTwo(t *testing.T) {
 		t.Fatalf("code 4 on a candgun unit = %q, want AttackSpecial [04 R-ORD-02 §1]", got)
 	}
 	goalX, goalZ := numeric.Fixed(120<<16), numeric.Fixed(64<<16)
-	q.Push(id, Node{Owner: u.Handle, GoalX: goalX, GoalZ: goalZ})
+	q.Push(id, Node{Owner: u.Handle, GoalX: goalX, GoalZ: goalZ, GoalSupplied: true})
 	q.Pump(u, 40)
 
 	if q.LenPrimary() == 0 {

@@ -105,7 +105,7 @@ func TestGoalReplacementPreservesRecentPollTick(t *testing.T) {
 		t.Run(fmt.Sprintf("age_%d", age), func(t *testing.T) {
 			s, w, h := releaseFixture(t, wiringDef(), 2)
 			u := w.Unit(h)
-			n := &orders.Node{Owner: h, ID: orders.Lookup("Move_Ground"), GoalX: numeric.Fixed(96 << 16), GoalZ: numeric.Fixed(96 << 16)}
+			n := &orders.Node{Owner: h, ID: orders.Lookup("Move_Ground"), GoalX: numeric.Fixed(96 << 16), GoalZ: numeric.Fixed(96 << 16), GoalSupplied: true}
 			install := func() {
 				s.InstallPointGoal(orders.PointGoalRequest{Owner: h, Node: n, X: n.GoalX, Z: n.GoalZ})
 				s.ActivateMove(u, n)

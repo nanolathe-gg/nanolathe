@@ -48,7 +48,7 @@ func carriedVisitFixture(t *testing.T, carrierFirst bool) (*System, *units.World
 
 func installCarrierRoute(s *System, carrier *units.Unit) {
 	q := orders.QueueForUnit(carrier)
-	q.Push(orders.Lookup("Move_Ground"), orders.Node{GoalX: world.CellToWorld(20), GoalZ: carrier.Z})
+	q.Push(orders.Lookup("Move_Ground"), orders.Node{GoalX: world.CellToWorld(20), GoalZ: carrier.Z, GoalSupplied: true})
 	setHandleRow(&s.Routes, carrier.Handle, &Route{Active: true, Count: 2, Points: [20]Point{
 		{X: int32(carrier.X.Raw() >> 16), Z: int32(carrier.Z.Raw() >> 16)},
 		{X: 320, Z: int32(carrier.Z.Raw() >> 16)},
@@ -165,7 +165,7 @@ func TestAttachmentChangesAfterBeginTickUseLiveMembership(t *testing.T) {
 				}
 			}
 			q := orders.QueueForUnit(cargo)
-			q.Push(orders.Lookup("Move_Ground"), orders.Node{GoalX: world.CellToWorld(12), GoalZ: world.CellToWorld(2)})
+			q.Push(orders.Lookup("Move_Ground"), orders.Node{GoalX: world.CellToWorld(12), GoalZ: world.CellToWorld(2), GoalSupplied: true})
 			setHandleRow(&s.Routes, cargo.Handle, &Route{Active: true, Count: 2, Points: [20]Point{{X: 32, Z: 32}, {X: 64, Z: 32}}})
 			s.BeginTick(1)
 			if !tt.detach(w, cargo) {

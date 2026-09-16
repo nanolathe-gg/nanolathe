@@ -63,6 +63,7 @@ func TestAttackKamikazeArrivalRaisesTheSatisfiedBit(t *testing.T) {
 	sys, w, u, q := combatArrivalFixture(t)
 	q.Push(orders.Lookup("Attack_Kamikaze"), orders.Node{
 		Owner: u.Handle, GoalX: u.X, GoalY: u.Y, GoalZ: u.Z, Deadline: -1,
+		GoalSupplied: true,
 	})
 	head := q.Head()
 	if head == nil {
@@ -118,6 +119,7 @@ func TestSuppressArrivalRaisesTheSatisfiedBit(t *testing.T) {
 	u.InstallWeapon(0, &content.WeaponDef{Range: 96})
 	q.Push(orders.Lookup("Suppress"), orders.Node{
 		Owner: u.Handle, GoalX: u.X, GoalY: u.Y, GoalZ: u.Z, Deadline: -1,
+		GoalSupplied: true,
 	})
 	head := q.Head()
 	if head == nil {

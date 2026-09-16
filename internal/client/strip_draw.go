@@ -79,8 +79,16 @@ func (c *Client) drawStripBarrier(cur *frame.Frame, strip int8) StripDrawStats {
 	if c == nil || cur == nil || c.cam == nil || len(c.indexed) == 0 {
 		return stats
 	}
-	views := stripBarrierRun(cur.Strips, strip)
-	if len(views) == 0 {
+	return c.drawStripViews(cur, stripBarrierRun(cur.Strips, strip))
+}
+
+// drawStripViews draws one run of strip sub-records: the published objects of
+// one barrier, or the presentation-owned debris-trail store's own containers at
+// barrier 9 (debris_trail_store.go). Both sources reach the same per-family
+// draw, because retail has only one — the strip's object vector.
+func (c *Client) drawStripViews(cur *frame.Frame, views []frame.StripView) StripDrawStats {
+	var stats StripDrawStats
+	if c == nil || cur == nil || c.cam == nil || len(c.indexed) == 0 || len(views) == 0 {
 		return stats
 	}
 	// The gate reads the same published coverage every world-space

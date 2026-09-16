@@ -281,7 +281,12 @@ so a live pending-death passenger remains loadable. Attachment takes its saved
 unit-side mode explicitly; ordinary live admission remains unchanged. The writer
 also projects current `Move.ModeMirror` and cached `MoveTier` into the packed movement
 nibble, and the reader restores both without recomputing the tier
-`[08 R-SAVE-02 §6]` `[04 R-MOV-01 §6]`.
+`[08 R-SAVE-02 §6]` `[04 R-MOV-01 §6]`. Restoring the tier is only half of it:
+the movement package keeps the classifier's edge cache in a row of its own, and
+`movement.RestoreMover` seeds that row from the restored tier, so a load that
+lands in the same category emits no `StartMoving`/`MoveRateN` at all
+`[04 §5.2]` — see [DESIGN_MOVEMENT_PATH.md](DESIGN_MOVEMENT_PATH.md) "Save
+boxes" for the cache and the open `setSFXoccupy` band question.
 
 The script image preserves draw, cache and shade flags per COB piece through
 its binding to model pieces [08 R-SAVE-02 §9]. Earlier Nanolathe saves wrote
@@ -528,13 +533,23 @@ partially applied session.
 `Summary` is the account the load screen reads without constructing anything:
 the description and game identity, the gametype, the between-missions flag, the
 campaign and mission identity, difficulty, side, player count and the five rule
-words. `PlayerSlot` is one `Player%i` account — the slot's scalars, its side
+words. Its one binary box is the live-battle-only
+[`Radar Image` preview](#the-radar-image-preview-box).
+
+`PlayerSlot` is one `Player%i` account — the slot's scalars, its side
 and logo bytes, and, as that account's last item, its eleven-byte alliance row
 with the forced self-alliance `[08 "Summary"]` `[08 "Player records"]`. Its two
 storage items are the storage-bonus **operands** and its storage flag the
 bonus enable bit; the derived capacities are not persisted — a restored
 player's capacity is rebuilt from its units plus the restored bonus at its
 first settlement pass `[08 "Player records"]` `[05 R-ECO-01 §4]`.
+
+`PlayersMeta` is the rest of the `Players` account: the `Human Player` integer
+and the `GameTime` box. **The load default for `Human Player` is `10`, no
+human** `[08 R-SAVE-02 §12]` — our writer always emits the item, so the default
+is the malformed-input path, and it matters because the restore adopts the
+value as the local and viewing identity only while it is in `0..9`. Defaulting
+to the zero value instead would hand a save that lost the item to slot 0.
 
 **Which limit a save persists, and which battle a load can affect.** In Strict
 3.1 (and for campaign saves in both modes), the
@@ -601,6 +616,36 @@ has no record to overwrite `[08 R-SAVE-FEATURE-01]` `[05 R-FEAT-01 §5]`
 `[05 R-FEAT-01 §9]` `[05 R-FEAT-01 §10]`. The writer skips a cell whose
 attached bit has no live record behind it, as the retail writer skips a
 sequence pointer matching no family `[08 R-SESS-01 §4]`.
+
+#### The `Radar Image` preview box
+
+The Summary's one binary box is written on **live-battle** saves only: an
+8-byte header of a `u32` width and a `u32` height, then `height` rows of
+`width` palette bytes. It is never restored — the load dispatcher treats it as
+presentation for the list — and the load screen's `RADAR` gadget is its only
+consumer `[08 "Summary"]` `[08 "Account inventory"]` `[08 R-SAVE-02 §3]`.
+
+Its raster is the radar surface the battle rail composes, which presentation
+owns and a session may not reach `[I6]`. The box is therefore the **caller's**
+half of the summary: `cmd/nanolathe` encodes the rail's composed FINAL surface
+(`save.EncodeRadarImage`) into `save.Summary.RadarImage` before handing the
+summary to `RetailBattleSaveInputs`, and `RetailBattleSummary` itself leaves
+the field alone. A caller with no radar — a headless save, a continuation —
+writes no box, which the panel treats exactly as it treats a short box: it
+shows nothing.
+
+The save list does **not** carry preview rasters: `save.ReadSummaryFile` keeps
+dropping every box payload, and the panel reads the box of the one selected
+file through `save.ReadSummaryFileWithBoxes` `[08 R-SAVE-02 §1]`
+`[08 R-SAVE-02 §3]`.
+
+Two extents are unestablished and carry `TODO(question)` at their sites: what
+retail's writer puts in the box (this build writes the aspect-fitted radar
+picture, contacts included, as the rail last composed it, rather than the
+126x126 canvas with its letterbox padding), and how the panel places the box
+inside the authored 121x113 `RADAR` rectangle (this build resamples it with its
+aspect preserved and centres it). Only the header and row layout are
+established.
 
 `compression.go` decodes the single-chunk `SQSH` framing the pools and account
 bodies use; the archive LZ77 variant is what the retail writer selects, and the
@@ -858,6 +903,20 @@ path, the lose bit with the first win bit cleared on the lost path. A rule-2
 session can never reach the latch write: an exhausted respawn search simply
 leaves the countdown below zero and the next true due re-arms it
 `[08 R-TRIG-01 §6]` `[08 R-SKIR-01 §3]`.
+
+**C21a — respawn and watch-mode entry both call the full visibility rebuild.**
+The rebuild retail calls with the full argument at battle entry is called again
+at every commander respawn and at watch-mode entry, so neither is a matter of
+republishing live observers: both stores are refilled from the mode word first
+`[08 R-ENTRY-01 §7]` `[08 R-SKIR-01 §3]`. Under the default Unmapped mode a
+deathmatch respawn therefore loses the dead player's map memory along with its
+byte refcounts, rather than inheriting the pre-death grids, and the watcher
+clear's Mapped + Permanent bits reach the grids as an all-visible fill instead
+of leaving a watcher in unexplored fog `[03 R-VIS-01 §4]` pass 1. Both sites go
+through one session helper (`rebuildVisibilityForEntry`), which supplies the
+per-slot eligibility of step 2 and the current-raster observer records of step
+3; the save-restore seam keeps its own narrower order, because it must install
+the saved `Mapping` box between the fills and the observer publication.
 
 **C22 — the score and the campaign mark.** The end-of-battle score is
 `trunc(float(ticks / 60) × timemul) + trunc(kills × killmul)`, each product
@@ -1189,9 +1248,6 @@ transfer shortcut `[04 R-ORD-02 §1]` `[08 R-AI-01 §7]`.
 * **Session kind 3 is never built.** The pool's player-slice comparator
   switches on the session kind, and only kind 3 consults the peer-identity sort
   key; campaign and skirmish both order by slot `[08 R-SESS-01 §7]`.
-* **The `Radar Image` account is not produced.** It is a presentation preview
-  the load dispatcher never restores; no box is written and the load screen
-  shows no preview `[08 "Account inventory"]`.
 * **The computer player builds no transports and orders no repair, reclaim,
   guard or capture directly.** No transport producer exists: the manager passes
   only four command codes and never a target unit with the load code, and the

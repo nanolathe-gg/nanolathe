@@ -1,6 +1,7 @@
 package client
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/formats"
@@ -41,6 +42,28 @@ func TestFNTTextTruncatesBeforeClipping(t *testing.T) {
 	}
 	if got := TruncateToWidth(f, "AB\nignored", 20); got != "AB\nignored" {
 		t.Fatalf("newline suffix changed when no truncation was needed: %q", got)
+	}
+}
+
+// The bounded copy keeps 299 bytes, not the 300 the buffer holds: a string
+// longer than 299 bytes is cut to 299 before the width loop begins [03
+// R-FONT-01 §3]. A 300-byte label whose full advance would still fit therefore
+// draws 299 glyphs, one fewer than an unbounded copy would.
+func TestFNTTextBoundedCopyKeeps299Bytes(t *testing.T) {
+	f := testFont()
+	// The literal 299 is the contract, not TextBufferBytes: spelling the
+	// constant here would move the expectation with the code.
+	const wide = 300 // 'B' advances one column, so 300 bytes measure 300
+	label := strings.Repeat("B", 300)
+	got := TruncateToWidth(f, label, wide)
+	if len(got) != 299 || MeasureText(f, got) != 299 {
+		t.Fatalf("300-byte label truncated to %d bytes measuring %d, want 299 and 299",
+			len(got), MeasureText(f, got))
+	}
+	// A string the bounded copy holds whole is not shortened by it.
+	fits := strings.Repeat("B", 299)
+	if got := TruncateToWidth(f, fits, wide); got != fits {
+		t.Fatalf("299-byte label lost %d bytes to the bounded copy", len(fits)-len(got))
 	}
 }
 

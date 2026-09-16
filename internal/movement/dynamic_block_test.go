@@ -46,7 +46,7 @@ func TestStepUnitBlockedCommitKeepsOrderAndRequest(t *testing.T) {
 		t.Fatal("Move_Ground order is unavailable")
 	}
 	queue := orders.QueueForUnit(w.Unit(moverHandle))
-	queue.Push(moveID, orders.Node{Owner: moverHandle, GoalX: world.CellToWorld(3), GoalZ: world.CellToWorld(0)})
+	queue.Push(moveID, orders.Node{Owner: moverHandle, GoalX: world.CellToWorld(3), GoalZ: world.CellToWorld(0), GoalSupplied: true})
 	head := queue.Head()
 	// `Move_Ground` phase 0 installs a point goal [04 R-ORD-01 §4]; the
 	// follower's repath arm runs only "with a payload installed"

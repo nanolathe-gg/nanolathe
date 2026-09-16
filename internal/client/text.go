@@ -79,12 +79,20 @@ func MeasureText(fnt *formats.FNT, text string) int { // [02 §7][03 §7.1]
 	return width
 }
 
-// TruncateToWidth implements the retail truncate-to-width contract [07 §7][GAP T22] C8.
+// TextBufferBytes is the most bytes the retail truncate-to-width step keeps:
+// the 300-byte stack buffer is filled by a bounded copy of at most 299 bytes,
+// and a longer string is cut to 299 before the width loop begins [03
+// R-FONT-01 §3]. gpurender mirrors the value; the packages do not import one
+// another, and text_test.go there cross-checks the two truncators agree.
+const TextBufferBytes = 299
+
+// TruncateToWidth implements the retail truncate-to-width contract [07 §7][03
+// R-FONT-01 §3][GAP T22] C8.
 //
 // When maxWidth <= 0 the input is returned unchanged (no limit). Otherwise the
-// string is copied through a bounded 300-byte buffer and trailing bytes are
-// removed until MeasureText fits within maxWidth. This happens before any
-// clipping test [07 §7][GAP T22].
+// string is copied through a bounded copy of at most TextBufferBytes bytes and
+// trailing bytes are removed until MeasureText fits within maxWidth. This
+// happens before any clipping test [07 §7][03 R-FONT-01 §3].
 //
 // The input is treated as bytes (Windows-1252), not runes; byte 0x0A or NUL
 // terminates the measured prefix [02 §7].
@@ -92,14 +100,15 @@ func TruncateToWidth(fnt *formats.FNT, text string, maxWidth int) string { // [0
 	if maxWidth <= 0 || fnt == nil || len(text) == 0 {
 		return text
 	}
-	const limit = 300 // retail bounded buffer [07 §7]
-	// Bounded copy into the 300-byte buffer. The measured prefix ends at the
-	// first newline/NUL, but the bytes after that terminator remain harmless
-	// data in the bounded text buffer when no width truncation is needed; the
-	// draw and measure loops stop at the terminator [02 §7].
+	// Bounded copy into the 300-byte stack buffer, which is filled by a copy of
+	// at most 299 bytes: a longer string is cut to 299 before the width loop
+	// begins [03 R-FONT-01 §3]. The measured prefix ends at the first
+	// newline/NUL, but the bytes after that terminator remain harmless data in
+	// the bounded text buffer when no width truncation is needed; the draw and
+	// measure loops stop at the terminator [02 §7].
 	src := text
-	if len(src) > limit {
-		src = src[:limit]
+	if len(src) > TextBufferBytes {
+		src = src[:TextBufferBytes]
 	}
 	// If it already fits, return the bounded copy unchanged; drawing and
 	// measurement still stop at the first terminator.

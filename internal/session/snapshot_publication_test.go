@@ -653,11 +653,12 @@ func TestSnapshotQueuePublishesBuildFootprint(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{product.CanonicalKey: product}}
 	owner := pool.Handle(4)
 	queue := orders.NewQueueWith([]*orders.Node{{
-		ID:          orders.Lookup("MobileBuild"),
-		Owner:       owner,
-		GoalX:       numeric.Fixed(16 << 16),
-		GoalZ:       numeric.Fixed(24 << 16),
-		BuildDefKey: product.CanonicalKey,
+		ID:           orders.Lookup("MobileBuild"),
+		Owner:        owner,
+		GoalX:        numeric.Fixed(16 << 16),
+		GoalZ:        numeric.Fixed(24 << 16),
+		BuildDefKey:  product.CanonicalKey,
+		GoalSupplied: true,
 	}}, nil)
 	views := appendOrderQueueView(nil, orders.SnapshotQueueOf(queue, owner, nil), cat)
 	view := views[0]

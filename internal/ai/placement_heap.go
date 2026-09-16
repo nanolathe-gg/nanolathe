@@ -24,12 +24,6 @@ const (
 	metalFeatureLimit    = uint16(0xfffb)
 )
 
-// BuildMetalSpots scans feature anchors in row-major order. It is called by
-// the battle-entry tail, not by strategic refresh [08 R-AI-03 §1].
-func BuildMetalSpots(terrain *world.Terrain) []MetalSpot {
-	return appendMetalSpots(nil, terrain)
-}
-
 func appendMetalSpots(spots []MetalSpot, terrain *world.Terrain) []MetalSpot {
 	if terrain == nil {
 		return spots

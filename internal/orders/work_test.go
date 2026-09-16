@@ -654,7 +654,7 @@ func TestFeatureReclaimRemovesTheFeatureAndCreditsItsPools(t *testing.T) {
 	q, builder, econ := reclaimFixture([]*content.FeatureDef{tree})
 
 	id := Lookup("Reclaim")
-	q.Push(id, Node{Owner: builder.Handle, GoalX: numeric.Fixed(70 << 16), GoalZ: numeric.Fixed(90 << 16)})
+	q.Push(id, Node{Owner: builder.Handle, GoalX: numeric.Fixed(70 << 16), GoalZ: numeric.Fixed(90 << 16), GoalSupplied: true})
 
 	if ticks := pumpUntilEmpty(t, q, builder, 4000); q.LenPrimary() != 0 {
 		head := q.Primary()[0]
@@ -682,7 +682,7 @@ func TestFeatureReclaimRemovesTheFeatureAndCreditsItsPools(t *testing.T) {
 func TestFeatureReclaimIsNotAPerTickDrip(t *testing.T) {
 	tree, _ := retailShapedTree()
 	q, builder, econ := reclaimFixture([]*content.FeatureDef{tree})
-	q.Push(Lookup("Reclaim"), Node{Owner: builder.Handle, GoalX: numeric.Fixed(70 << 16), GoalZ: numeric.Fixed(90 << 16)})
+	q.Push(Lookup("Reclaim"), Node{Owner: builder.Handle, GoalX: numeric.Fixed(70 << 16), GoalZ: numeric.Fixed(90 << 16), GoalSupplied: true})
 
 	for tick := uint32(1); tick <= 40; tick++ {
 		q.Pump(builder, tick)
@@ -728,7 +728,7 @@ func TestFeatureReclaimAbandonsWithoutAFeature(t *testing.T) {
 	tree, _ := retailShapedTree()
 	q, builder, _ := reclaimFixture([]*content.FeatureDef{tree})
 	// A goal three cells away from the stamped feature.
-	q.Push(Lookup("Reclaim"), Node{Owner: builder.Handle, GoalX: numeric.Fixed(150 << 16), GoalZ: numeric.Fixed(150 << 16)})
+	q.Push(Lookup("Reclaim"), Node{Owner: builder.Handle, GoalX: numeric.Fixed(150 << 16), GoalZ: numeric.Fixed(150 << 16), GoalSupplied: true})
 	q.Pump(builder, 1)
 	if q.LenPrimary() != 0 {
 		t.Fatalf("an empty cell left the record queued at phase %d", q.Primary()[0].Phase)
@@ -763,7 +763,7 @@ func TestFeatureReclaimCreditsTheComputerPlayersDiscountedShare(t *testing.T) {
 		sel := c.selector
 		econ.EconomySelector = &sel
 
-		q.Push(Lookup("Reclaim"), Node{Owner: builder.Handle, GoalX: numeric.Fixed(70 << 16), GoalZ: numeric.Fixed(90 << 16)})
+		q.Push(Lookup("Reclaim"), Node{Owner: builder.Handle, GoalX: numeric.Fixed(70 << 16), GoalZ: numeric.Fixed(90 << 16), GoalSupplied: true})
 		if ticks := pumpUntilEmpty(t, q, builder, 4000); q.LenPrimary() != 0 {
 			t.Fatalf("selector %d: the reclaim never completed in %d ticks", c.selector, ticks)
 		}
@@ -781,7 +781,7 @@ func TestFeatureReclaimCreditsTheComputerPlayersDiscountedShare(t *testing.T) {
 	econ.Players[2] = economy.Player{Exists: true, ControllerState: 1} // an ordinary human slot
 	sel := 0
 	econ.EconomySelector = &sel
-	q.Push(Lookup("Reclaim"), Node{Owner: builder.Handle, GoalX: numeric.Fixed(70 << 16), GoalZ: numeric.Fixed(90 << 16)})
+	q.Push(Lookup("Reclaim"), Node{Owner: builder.Handle, GoalX: numeric.Fixed(70 << 16), GoalZ: numeric.Fixed(90 << 16), GoalSupplied: true})
 	if ticks := pumpUntilEmpty(t, q, builder, 4000); q.LenPrimary() != 0 {
 		t.Fatalf("the human-owned reclaim never completed in %d ticks", ticks)
 	}

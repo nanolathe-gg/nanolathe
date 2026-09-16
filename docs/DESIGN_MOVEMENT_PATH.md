@@ -420,6 +420,18 @@ is the fixed record the save format defines; the route, the follower and the
 proposal are derived state and are absent from the boundary and cleared on
 restore `[08 R-SAVE-02 §8]`.
 
+The **move-rate cache is not derived state**, and `RestoreMover` seeds it from
+the restored unit record. The emitter keeps the classifier's last category in a
+per-handle row of its own, while the save carries that category inside the
+packed unit word `[08 R-SAVE-02 §6]`; with nothing seeding the row, the first
+mover tick after a load would read a zero cache, see a category change that did
+not happen, and wake `StartMoving` plus `MoveRateN` on every restored mover,
+although `[04 §5.2]` emits only on a change. The `setSFXoccupy` band cache
+beside it is deliberately *not* seeded: whether retail persists that band is
+Unknown — `[04 §9.1]` does not say where the cached band lives, and neither
+`[08 R-SAVE-02 §6]` nor `[08 R-SAVE-02 §8]` names a band word — so the code
+carries a `TODO(question)` there rather than a guess.
+
 **Diagnostics** (`audit.go`, `p28_parity_trace.go`, `airdiag_export.go`).
 `AuditVerdict` and `AuditFinding` classify evidence at a cell and deliberately
 choose no gameplay response; an unexplained case stays unexplained.
@@ -927,6 +939,20 @@ this wiring can be asserted without inventing a public kind on `Goal`.
   the key to zero, so the bound is unreachable on shipped content and a
   substituted default gravity would be invented behaviour
   `[04 R-AIR-01 §8]` `[fmt ota]`.
+* **The ground steering's zero-divisor fallback — a recorded divergence.** The
+  two distance gates that choose acceleration over braking divide the heading
+  error by `TurnRate` and the squared speed by twice `BrakeRate`, and retail
+  tests neither divisor for zero: a mobile definition that authors zero for
+  either key, or omits it, divides by zero and terminates retail. The research
+  states this as a fault and permits bounding it only as a **sanctioned,
+  recorded** divergence `[04 R-MOV-01 §4]`. Nanolathe takes that permission:
+  when either divisor is zero, `followerAccelerates` returns "accelerate"
+  without evaluating the gates, which keeps a partial or synthetic definition
+  making forward progress instead of faulting. Valid mobile content authors both
+  keys, so the substitution is not expected to be reachable there; it is not a
+  claim about what retail does. No census of the stock corpus has been run to
+  bound reachability, which is what would let the entry move from recorded
+  divergence to unreachable — as SC23 above did for gravity.
 
 The hover-bob animation counter is the one place these packages depart from
 retail's arithmetic on purpose. Retail derives it from the wall clock the

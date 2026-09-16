@@ -13,10 +13,13 @@ import (
 // dirty-checked — but the dirty check is the visibility service's refresh
 // throttle [03 R-VIS-01 §2], not a session-side cache, so a unit that moved in
 // phase 2 is re-stamped in the same tick's phase 5 and an unchanged unit
-// writes nothing. Bulk wipe-and-rebuild happens ONLY at battle entry
-// (publishVisibilityForAll) and in the phase-5 commander spawn/defeat
-// branches — never per tick. There is no post-phase-12 visibility pass: the
-// phase-5 sweep is the final publisher.
+// writes nothing. The bulk wipe-and-rebuild of [08 R-ENTRY-01 §7]
+// (rebuildVisibilityForEntry) happens ONLY at battle entry, at a commander
+// respawn and at watch-mode entry — never per tick. publishVisibilityForAll is
+// the weaker companion: it republishes every live observer without touching the
+// stores, which is what the entry and restore seams want once the stores are
+// already correct. There is no post-phase-12 visibility pass: the phase-5 sweep
+// is the final publisher.
 
 // visStamp records the cell and sight range last handed to the visibility
 // service for one unit. It is diagnostic and save-restore state, NOT a
@@ -192,6 +195,61 @@ func publishVisibilityForAll(s *Session) {
 			publishOne(s, u)
 		}
 	}
+}
+
+// rebuildVisibilityForEntry is retail's bulk visibility-and-mapping rebuild
+// called with the FULL argument: once at battle entry, and again at every
+// commander respawn and watch-mode entry [08 R-ENTRY-01 §7][08 R-SKIR-01 §3].
+// It is what separates a respawn from an ordinary republication: step 1 refills
+// the whole mapped word grid from mode bit 0, so a deathmatch respawn under the
+// default Unmapped mode loses the dead player's map memory instead of keeping
+// it, and step 2 refills each eligible slot's byte grid from mode bit 1, so the
+// pre-death refcounts cannot survive either.
+//
+// The observer records are built with the CURRENT raster, exactly as the
+// per-tick sweep builds them, and the session's diagnostic stamps are replaced
+// with what was actually stamped [03 R-VIS-01 §2].
+func rebuildVisibilityForEntry(s *Session) {
+	if s == nil || s.Vis == nil {
+		return
+	}
+	var eligible [10]bool
+	if s.Econ != nil {
+		for i := range s.Econ.Players {
+			if i >= len(eligible) {
+				break
+			}
+			p := &s.Econ.Players[i]
+			// Step 2's eligibility: the record is live, its controller is
+			// human/computer/remote, and its side is not the unassigned
+			// sentinel 10 [08 R-ENTRY-01 §7][03 R-VIS-01 §1].
+			eligible[i] = p.Exists && p.ControllerState >= 1 && p.ControllerState <= 3 && p.Side != 10
+		}
+	}
+	var observers []visibility.ModeRefreshObserver
+	stamps := make(map[int]visStamp)
+	if s.Units != nil {
+		// IterSliced is the established player-ascending, slot-ascending record
+		// order step 3 walks [01 §6.2].
+		for _, u := range s.Units.IterSliced() {
+			if u == nil || !u.Alive {
+				continue
+			}
+			hb := heightByteAt(u, seaLevelFor(s))
+			cx, cz := observerCell(s, u, hb)
+			r := radiusFor(u)
+			observers = append(observers, visibility.ModeRefreshObserver{
+				ID: visibility.ObserverID(u.Handle),
+				Observer: visibility.Observer{
+					Owner: visibility.PlayerID(u.Owner), CX: cx, CZ: cz,
+					HeightByte: hb, Radius: r,
+				},
+			})
+			stamps[int(u.Handle)] = visStamp{cx: cx, cz: cz, radius: r}
+		}
+	}
+	s.Vis.RebuildEntry(eligible, observers)
+	s.visStamps = stamps
 }
 
 // stampPlayerSlice is the phase-5 per-player stamp sweep [R-CORE-01 §4.4.1]:

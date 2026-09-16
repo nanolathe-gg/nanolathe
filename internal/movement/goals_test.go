@@ -81,7 +81,7 @@ func TestGoalFamiliesWiring(t *testing.T) {
 	// guard record never carries a caller-supplied radius, so both assertions
 	// encoded invented values.
 	offset := numeric.Fixed(64 << 16)
-	nGuard := &orders.Node{ID: orders.Lookup("Follow_Ground"), Target: hTgt, Param1: 64, GoalX: offset, GoalZ: -offset}
+	nGuard := &orders.Node{ID: orders.Lookup("Follow_Ground"), Target: hTgt, Param1: 64, GoalX: offset, GoalZ: -offset, GoalSupplied: true}
 	gGuard := sys.goalForOrder(goalCell, nGuard)
 	if _, _, _, ok := path.IsAnnulusGoal(gGuard); ok {
 		t.Fatalf("Follow_Ground must not be an annulus goal [04 R-ORD-01 §8]")
@@ -100,7 +100,7 @@ func TestGoalFamiliesWiring(t *testing.T) {
 	}
 	// With no resolvable ward the offset has nothing to be added to: the goal
 	// is the ordinary point goal, never a fabricated radius.
-	nGuard2 := &orders.Node{ID: orders.Lookup("Follow_Ground"), Target: 0, Param1: 64, GoalX: offset}
+	nGuard2 := &orders.Node{ID: orders.Lookup("Follow_Ground"), Target: 0, Param1: 64, GoalX: offset, GoalSupplied: true}
 	gGuard2 := sys.goalForOrder(goalCell, nGuard2)
 	if cent, radius, ok := path.IsPointGoal(gGuard2); !ok {
 		t.Fatalf("wardless guard want PointGoal got %T", gGuard2)
@@ -111,7 +111,7 @@ func TestGoalFamiliesWiring(t *testing.T) {
 	// circles in airspace; neither takes the ground follow's arm
 	// [04 R-ORD-01 §8 point 5][04 R-UNIT-06 §1].
 	for _, name := range []string{"Guard_NoMove", "VTOL_Follow"} {
-		nOther := &orders.Node{ID: orders.Lookup(name), Target: hTgt, Param1: 64, GoalX: offset}
+		nOther := &orders.Node{ID: orders.Lookup(name), Target: hTgt, Param1: 64, GoalX: offset, GoalSupplied: true}
 		gOther := sys.goalForOrder(goalCell, nOther)
 		if _, _, _, ok := path.IsAnnulusGoal(gOther); ok {
 			t.Fatalf("%s must not produce an annulus goal", name)
@@ -163,7 +163,7 @@ func TestActivateMoveWiresAnnulus(t *testing.T) {
 	sys.EnsureUnit(u)
 	hTgt, _ := w.Create(def, 1, world.CellToWorld(8), numeric.Fixed(0), world.CellToWorld(8))
 	// Attack head
-	n := &orders.Node{ID: orders.Lookup("Attack_Chase"), Target: hTgt, GoalX: world.CellToWorld(8), GoalZ: world.CellToWorld(8), Param2: 2}
+	n := &orders.Node{ID: orders.Lookup("Attack_Chase"), Target: hTgt, GoalX: world.CellToWorld(8), GoalZ: world.CellToWorld(8), Param2: 2, GoalSupplied: true}
 	q := orders.QueueForUnit(u)
 	q.Push(n.ID, *n)
 	head := q.Head()
@@ -193,7 +193,7 @@ func TestActivateMoveWiresAnnulus(t *testing.T) {
 	h2, _ := w.Create(u2def, 0, world.CellToWorld(1), numeric.Fixed(0), world.CellToWorld(1))
 	u2 := w.Unit(h2)
 	sys.EnsureUnit(u2)
-	nMove := &orders.Node{ID: orders.Lookup("Move_Ground"), GoalX: world.CellToWorld(5), GoalZ: world.CellToWorld(5)}
+	nMove := &orders.Node{ID: orders.Lookup("Move_Ground"), GoalX: world.CellToWorld(5), GoalZ: world.CellToWorld(5), GoalSupplied: true}
 	q2 := orders.QueueForUnit(u2)
 	q2.Push(nMove.ID, *nMove)
 	head2 := q2.Head()
@@ -341,7 +341,7 @@ func TestFeatureWorkGoalIsTheFootprintRectangle(t *testing.T) {
 	q.SetBinding(binding)
 
 	for _, name := range []string{"Reclaim", "Resurrect"} {
-		n := &orders.Node{ID: orders.Lookup(name), Owner: h, GoalX: world.CellToWorld(13), GoalZ: world.CellToWorld(10)}
+		n := &orders.Node{ID: orders.Lookup(name), Owner: h, GoalX: world.CellToWorld(13), GoalZ: world.CellToWorld(10), GoalSupplied: true}
 		goal, ok := sys.workApproachGoal(u, path.Cell{X: 13, Z: 10}, n, 1, 1)
 		if !ok {
 			t.Fatalf("%s: the feature rows must produce a goal once a footprint is readable", name)
@@ -375,7 +375,7 @@ func TestFeatureWorkGoalIsTheFootprintRectangle(t *testing.T) {
 
 	// A record whose goal resolves to no feature produces nothing, rather than
 	// a rectangle around an empty cell.
-	n := &orders.Node{ID: orders.Lookup("Reclaim"), Owner: h, GoalX: world.CellToWorld(2), GoalZ: world.CellToWorld(2)}
+	n := &orders.Node{ID: orders.Lookup("Reclaim"), Owner: h, GoalX: world.CellToWorld(2), GoalZ: world.CellToWorld(2), GoalSupplied: true}
 	if _, ok := sys.workApproachGoal(u, path.Cell{X: 2, Z: 2}, n, 1, 1); ok {
 		t.Fatalf("an empty cell produced a feature rectangle")
 	}

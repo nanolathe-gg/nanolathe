@@ -149,9 +149,11 @@ const (
 
 // The four static batches below are transcribed verbatim in their compiled
 // registration order [R-DOC04-C]. buildTable appends them batch by batch and
-// re-sorts the whole table after every batch with a case-sensitive byte
-// comparison, so an order's identity is its index in the final sorted table
-// [04 §3.1] C4.
+// re-sorts the whole table after every batch with foldCompare, the C runtime's
+// case-insensitive compare — the same comparator Lookup searches with
+// [04 R-STANCE-01 §9] — so an order's identity is its index in the final sorted
+// table [04 §3.1] C4. buildTable records why that comparator, and not a
+// case-sensitive byte compare, is the one retail registers with.
 
 // batch1 is registration batch 1: 23 records [R-DOC04-C].
 var batch1 = []Descriptor{
@@ -324,29 +326,31 @@ func buildTable() {
 // spelled as an explicit `!= 0` guard; a zero row can never equal a live
 // node's id, so those guards keep their meaning unchanged.
 var (
-	rowSelfDestruct   ID
-	rowVTOLSeekAttack ID
-	rowMobileBuild    ID
-	rowBuildingBuild  ID
-	rowHelpBuild      ID
-	rowVTOLSeekGuard  ID
-	rowAttackChase    ID
-	rowFollowGround   ID
-	rowVTOLFollow     ID
-	rowVTOLMove       ID
-	rowPark           ID
-	rowMoveGround     ID
-	rowStop           ID
-	rowVTOLLanding    ID
-	rowParalyze       ID
-	rowVTOLLandIfCan  ID
-	rowBuildWeapon    ID
+	rowSelfDestruct    ID
+	rowVTOLSeekAttack  ID
+	rowMobileBuild     ID
+	rowVTOLMobileBuild ID
+	rowBuildingBuild   ID
+	rowHelpBuild       ID
+	rowVTOLSeekGuard   ID
+	rowAttackChase     ID
+	rowFollowGround    ID
+	rowVTOLFollow      ID
+	rowVTOLMove        ID
+	rowPark            ID
+	rowMoveGround      ID
+	rowStop            ID
+	rowVTOLLanding     ID
+	rowParalyze        ID
+	rowVTOLLandIfCan   ID
+	rowBuildWeapon     ID
 )
 
 func resolveRows() {
 	rowSelfDestruct = Lookup("SelfDestruct")
 	rowVTOLSeekAttack = Lookup("VTOL_SeekAttack")
 	rowMobileBuild = Lookup("MobileBuild")
+	rowVTOLMobileBuild = Lookup("VTOL_MobileBuild")
 	rowBuildingBuild = Lookup("BuildingBuild")
 	rowHelpBuild = Lookup("HelpBuild")
 	rowVTOLSeekGuard = Lookup("VTOL_SeekGuard")
@@ -374,9 +378,14 @@ func resolveRows() {
 //
 // The list is a slice, not a map: registration order is source order, and map
 // iteration would make "which family claimed a descriptor first" vary per run
-// (I1). Every installer is idempotent — each assigns only where the
-// descriptor's Handler is still nil — so running the list again is a no-op,
-// which is what lets the pump re-run it after a fixture has cleared a handler.
+// (I1). Every installer is idempotent, and all but one reach that by assigning
+// only where the descriptor's Handler is still nil. The exception is
+// ensureHandlers (resolve.go), whose registerChaseGuardHandlers assigns its
+// three rows — `Attack_Chase`, `Follow_Ground`, `VTOL_Follow` — unconditionally;
+// it is idempotent because the installer itself returns early once the family
+// has registered, which it decides by testing whether `Attack_Chase` already
+// carries a handler. Nothing re-runs this list after buildTable: installHandlers
+// has exactly one caller.
 //
 // Adding a family: write internal/orders/<family>.go with an ensure<Family>
 // function shaped like ensureStopHandler, then add exactly one line below.
@@ -391,13 +400,15 @@ var handlerInstallers = []func(){
 	ensureWorkHandlers,         // work.go — capture, reclaim, resurrect, assist, the repair trio
 	ensureVTOLWorkHandlers,     // vtolwork.go — the VTOL work twins of [04 R-ORD-01 §7]
 	ensureHandlers,             // resolve.go — Attack_Chase and the three guards
-	ensureVTOLAirHandlers,      // vtolair.go — the air executors of [04 R-AIR-01 §7, §8]; ahead of combat.go, whose four air-attack rows are its documented placeholder
+	ensureVTOLAirHandlers,      // vtolair.go — the air executors of [04 R-AIR-01 §7, §8] and the four air-attack rows
 	ensureCombatHandlers,       // combat.go — the combat handlers of [04 R-ORD-01 §3]
 }
 
-// installHandlers runs every family installer in list order. buildTable calls
-// it so the table is complete before the first pump, and the pump's walk calls
-// it again, which is what restores a handler a fixture cleared.
+// installHandlers runs every family installer in list order. buildTable is its
+// only caller, and calls it so the table is complete before the first pump; the
+// pump does not re-run it. One family has a lazy retry of its own: Resolve calls
+// ensureHandlers on every resolution, and EnsureHandlers exposes it, which is
+// what covers a fixture whose init order ran before table.go's.
 //
 // Handlers a subsystem owns rather than this package are not installed here.
 // They bind per queue through the registration seam in queue_handlers.go:

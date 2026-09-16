@@ -3253,6 +3253,49 @@ labels selected by the session's two LOS bits), then in multiplayer
 *Starting Energy* (lobby words × 100 in multiplayer, the skirmish record
 otherwise) and *Max Units*; `EXIT` → `EXITMENU.GUI`; `OK` → close.
 
+**Established fact — every `ARMOPT` button plays the `Options` cue** before it
+runs its route, `OK` included, and the four child openers above run after that
+cue.
+
+**Established fact — the three children's own rows and closes.**
+
+* `GAMEOPTIONS.GUI` authors only `OK`; every row is a pair of appended labels
+  ([R-FE-02 §5]): the name in a column at x 18 of width 110 and the value in a
+  column at x 140 of width 120, the first pair at y 90 and each next pair 18
+  lower, in the row order listed above. Each name and each named value is
+  localised; *Starting Metal*, *Starting Energy* and *Max Units* are radix-10
+  conversions and are not. The rows are read once at open — the overlay never
+  refreshes them. **The opener rewrites every appended record's attribute word
+  to 1 after the last row, overwriting the 2 the append helper stored**, so the
+  rows are *left-aligned at their column x*, not centred; the append helper had
+  already marked each record active. Its callback is only the `Options` cue and
+  the default close.
+* The `HELP.GUI` filler saves the window's gadget count when the window opens
+  and writes that count back before each page is laid, so a page change drops
+  the previous page's labels and keeps the authored records, `Page` and its
+  selected stage included. Within a page, a `Line<n>` key the section does not
+  hold consumes no row and does not advance y; a value whose first byte is `|`
+  has its whole buffer replaced by a single space, so the key column prints
+  that space and the description column prints what followed the `|`. The
+  filler performs the **same attribute-word rewrite to 1**, per appended
+  record as it is added, so both columns are left-aligned at their column x.
+* Both windows author no kind-7 font record, so their rows take the label
+  painter's GAF-pen branch of [03 R-FONT-01 §6]: pen at the column x with no
+  inset and no vertical centring (`penY` is the label's own y), and the width
+  limit set to the column width, which **truncates** a row whose text is wider
+  than its column — the pen stops at the first glyph that does not fit and
+  appends nothing. The stock longest `help.tdf` descriptions are cut this way.
+* `BRIEFING.GUI` opens with **no** flags, so it keeps its authored origin, and
+  its opener clears the inert-label attribute bit `0x10` on `MOREBAR` and
+  `TextRegion`: unlike `MSNBRIEF`, where the screen hit-tests those two
+  rectangles itself ([R-FE-01 §2]), here they are ordinary fired gadgets and
+  either one pages the text. Its text install is the same shared routine
+  `MSNBRIEF` uses — text-region font number `localSide + 1`, the wrapper of
+  [R-FE-02 §6], the blink pre-pass and the pager of [R-HUD-03 §10] — and that
+  routine's narration request is skipped under the in-battle host mode word
+  ([R-FE-02 §2]), so opening the briefing inside a battle starts no narration.
+  `OK` closes it.
+
 #### Tab options menu and manual exit
 
 `TABMENU.GUI` (Tab; the in-battle menu bar of §11): its `OPTIONS`

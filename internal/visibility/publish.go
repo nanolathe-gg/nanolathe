@@ -81,9 +81,11 @@ func (s *Service) spriteShapeIndex(radius int32) int {
 // rayTableIndex quantizes a sight radius to the terrain-ray table GROUP
 // g = clamp(floor(radius/32), 0, numtables-1) [03 §3.2] C2 [P0-18][SC9].
 //
-// g is the refresh-throttle key, not the table walked: retail's table-by-index
-// accessor is one-based against a zero-based store, so group g walks TABLE g-1
-// [03 R-COMP-02 §1]. rayTableRecord does that translation.
+// The table-by-index accessor is one-based, so the record read for group g is
+// g-1 — and that record was filled from the section named TABLE g, because the
+// loader builds each slot's section name from the slot plus one. The two
+// off-by-ones cancel: group g walks TABLE g [03 R-COMP-02 §1]. walkTerrainRay
+// hands g-1 to raySpokes, which indexes the compiled slot list.
 func (s *Service) rayTableIndex(radius int32) int {
 	n := s.rayTableCount()
 	if n == 0 {
@@ -168,8 +170,13 @@ func (s *Service) walkTerrainRay(cx, cz int32, heightByte uint8, radius int32, v
 	if g < 0 {
 		return
 	}
-	// Group g walks TABLE g-1 [03 R-COMP-02 §1]: sight in [32(k+1), 32(k+2))
-	// walks TABLE k, and TABLE numtables-1 is unreachable.
+	// Group g reads slot g-1, which the loader filled from the section named
+	// TABLE g, so group g walks TABLE g and covers exactly g cells — the same
+	// extent the sprite-mask raster's index bias produces [03 R-COMP-02 §1].
+	// The surviving off-by-one is at the top: the clamp stops at numtables-1
+	// while the one-based accessor would need numtables, so the last loaded
+	// table (TABLE 9 with the reference install's declared nine) is unreachable,
+	// as are its three undeclared sections (SC9).
 	//
 	// Group 0 (sightdistance < 32) reads the record 16 bytes BEFORE the table
 	// list's storage in retail, and what those bytes hold at run time is still

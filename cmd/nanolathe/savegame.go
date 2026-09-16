@@ -157,6 +157,12 @@ type saveLoadScreen struct {
 	// name is the `GAMENAME` edit's text: the file stem a save writes under,
 	// and the description a selection copies into the edit [08 R-SAVE-02 §1].
 	name string
+	// radarPath is the file whose `Radar Image` box the decoded preview below
+	// belongs to. The panel reads the box of the SELECTED file only, so the
+	// list's own enumeration stays free of preview rasters [08 R-SAVE-02 §3].
+	radarPath      string
+	radarPixels    []byte
+	radarW, radarH int
 	// source records which surface opened the screen. Retail reaches both
 	// directions from `SINGLE`, from the in-battle options menu and from the
 	// results panel, and what a save writes differs between them
@@ -194,6 +200,8 @@ func (s *saveLoadScreen) Refresh() {
 	if s == nil {
 		return
 	}
+	// A rebuilt list may reuse a path whose bytes changed under it.
+	s.radarPath, s.radarPixels, s.radarW, s.radarH = "", nil, 0, 0
 	s.entries = enumerateRetailSaves(s.dir)
 	if s.selected >= len(s.entries) {
 		s.selected = len(s.entries) - 1
@@ -236,6 +244,40 @@ func (s *saveLoadScreen) SelectedEntry() (saveGameEntry, bool) {
 		return saveGameEntry{}, false
 	}
 	return s.entries[s.selected], true
+}
+
+// loadRadarPreview decodes the selected file's `Radar Image` box: an 8-byte
+// width/height header and then the rows of palette bytes. The panel shows it
+// when present, and a short box or a save written without one (a continuation,
+// or any save this engine wrote before the box had a producer) leaves nothing
+// to show [08 R-SAVE-02 §3].
+//
+// The panel refresh calls this, so the file is read when the selection changes
+// and never while painting; the slot-list enumeration cannot supply the box
+// because it deliberately drops every box payload [08 R-SAVE-02 §1].
+func (s *saveLoadScreen) loadRadarPreview() {
+	entry, ok := s.SelectedEntry()
+	if !ok {
+		s.radarPath, s.radarPixels, s.radarW, s.radarH = "", nil, 0, 0
+		return
+	}
+	if s.radarPath == entry.Path {
+		return
+	}
+	s.radarPath, s.radarPixels, s.radarW, s.radarH = entry.Path, nil, 0, 0
+	if summary, ok, err := save.ReadSummaryFileWithBoxes(entry.Path); err == nil && ok {
+		if w, h, pixels, ok := save.DecodeRadarImage(summary.RadarImage); ok {
+			s.radarPixels, s.radarW, s.radarH = pixels, w, h
+		}
+	}
+}
+
+// radarPreview is the painter's read of the decoded preview.
+func (s *saveLoadScreen) radarPreview() ([]byte, int, int, bool) {
+	if s == nil || len(s.radarPixels) == 0 {
+		return nil, 0, 0, false
+	}
+	return s.radarPixels, s.radarW, s.radarH, true
 }
 
 // Select refreshes the summary panel and copies the entry's description into

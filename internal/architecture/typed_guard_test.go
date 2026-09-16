@@ -621,7 +621,6 @@ var float64ScopeAllowances = map[string]float64Allowance{
 	"internal/economy/admission.go func settlePure":                   {12, "I2 settlement working precision [05 R-ECO-01 §1][05 R-ECO-01 §5]"},
 	"internal/economy/admission.go func *Service.settleOneResource":   {12, "I2 settlement working precision [05 R-ECO-01 §1][05 R-ECO-01 §5]"},
 	"internal/economy/ledger.go func rebuildCapacityPlayer":           {4, "I2 economy capacity working precision [05 R-ECO-01 §1]"},
-	"internal/economy/ledger.go func DebitCloak":                      {4, "I2 economy working precision [05 R-ECO-01 §1]"},
 	"internal/economy/ledger.go func debitCloakToBucket":              {4, "I2 economy working precision [05 R-ECO-01 §1]"},
 	"internal/economy/ledger.go func *Player.commitPassCounters":      {2, "I2 cumulative counters [05 \"Stocks, counters, and waste\"]"},
 	"internal/economy/ledger.go func *Player.commitCapacityWaste":     {2, "I2 waste counter [05 \"Stocks, counters, and waste\"]"},

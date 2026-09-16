@@ -136,6 +136,11 @@ func New(t *world.Terrain, mode Mode) *Service {
 	return s
 }
 
+// allSlotsEligible is the eligibility vector a caller with no player table
+// supplies: retail's step-2 test needs the player records, and a caller that
+// holds none cannot narrow it [08 R-ENTRY-01 §7] step 2.
+var allSlotsEligible = [10]bool{true, true, true, true, true, true, true, true, true, true}
+
 // rebuildFills fills grids per C7 before publishing [03 §3.2].
 // With history disabled word fills all-bits-set, otherwise zero.
 // With current coverage disabled every eligible player's byte grid fills with 1, otherwise zero.
@@ -143,27 +148,8 @@ func (s *Service) rebuildFills() {
 	if s.wordMask == nil {
 		return
 	}
-	if s.mode&ModeHistoryEnabled == 0 {
-		for i := range s.wordMask {
-			s.wordMask[i] = 0x03FF // ten usable bits set [03 §3.1] C1
-		}
-	} else {
-		for i := range s.wordMask {
-			s.wordMask[i] = 0
-		}
-	}
-	fillByte := uint8(0)
-	if s.mode&ModeCurrentEnabled == 0 {
-		fillByte = 1
-	}
-	for p := range s.byteGrids {
-		if s.byteGrids[p] == nil {
-			continue
-		}
-		for i := range s.byteGrids[p] {
-			s.byteGrids[p][i] = fillByte
-		}
-	}
+	s.fillWordGrid()
+	s.fillEligibleByteGrids(allSlotsEligible)
 }
 
 // WordMask returns the word grid for diagnostics; callers must not mutate.
@@ -324,9 +310,17 @@ func (s *Service) decByteGrid(idx int, owner PlayerID) bool {
 	return true
 }
 
-// RebuildAll rebuilds both stores from scratch per C7 and republishes supplied observers [03 §3.2] [PLAN_05].
-// With history disabled word fills all-bits-set else zero; with current disabled byte grids fill 1 else zero.
-// Then all active footprints republish.
+// RebuildAll is the restore seam's store wipe: it refills both stores per C7 and
+// republishes the supplied observers [03 §3.2] [PLAN_05]. With history disabled
+// the word grid fills all-bits-set, else zero; with current coverage disabled
+// every byte grid fills with 1, else zero.
+//
+// It is NOT the entry rebuild. The caller here holds no player table, so every
+// slot is refilled, and it publishes unconditionally because the restore seam
+// drives it with no observers and then republishes through the ordinary
+// throttled path. Battle entry, commander respawn and watch-mode entry use
+// RebuildEntry, which carries retail's step-2 eligibility and step-3 bit-1 gate
+// [08 R-ENTRY-01 §7].
 func (s *Service) RebuildAll(observers []Observer) {
 	if s == nil {
 		return

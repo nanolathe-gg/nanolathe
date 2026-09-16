@@ -60,7 +60,7 @@ func drainTestUnitCOB(t *testing.T, u *units.Unit) {
 func weaponTurret(id int32) *content.WeaponDef {
 	return &content.WeaponDef{
 		ID:             id,
-		Range:          1000 * 65536, // large
+		Range:          1000, // whole world units [02 "Weapon record"]
 		Turret:         true,
 		WeaponVelocity: 100 * 65536 / 30,
 		LineOfSight:    true,
@@ -69,7 +69,7 @@ func weaponTurret(id int32) *content.WeaponDef {
 func weaponNonTurret(id int32) *content.WeaponDef {
 	return &content.WeaponDef{
 		ID:          id,
-		Range:       1000 * 65536,
+		Range:       1000,
 		Turret:      false,
 		LineOfSight: true,
 		Tolerance:   wideDriftTolerance,
@@ -398,7 +398,7 @@ func TestON04_TwoSeededRuns_Identical(t *testing.T) {
 		// Use non-turret weapon to avoid Aim gating, with spread and start events
 		// so both RNG-sensitive state and event order are observed.
 		weapon := &content.WeaponDef{
-			ID: 1, Range: 1000 * 65536, WeaponVelocity: int32(numeric.FixedFromInt(4)),
+			ID: 1, Range: 1000, WeaponVelocity: int32(numeric.FixedFromInt(4)),
 			SprayAngle: 10, Burst: 0, LineOfSight: true, SoundStart: "seeded-start", StartSmoke: true,
 			Tolerance: wideDriftTolerance,
 		}
@@ -470,7 +470,7 @@ func TestON04_BallisticSentinel_SuppressesAim(t *testing.T) {
 	// We can directly test that StepWeaponsForUnit with ballistic weapon and target that yields sentinel
 	// does not dispatch Aim but goes to admission (which will fail due to no ballistic solution)
 	// For this test, we use a ballistic weapon with zero velocity to trigger goto admission without Aim
-	weapon := &content.WeaponDef{ID: 9, Ballistic: true, WeaponVelocity: 0, Range: 1000 * 65536}
+	weapon := &content.WeaponDef{ID: 9, Ballistic: true, WeaponVelocity: 0, Range: 1000}
 	shooter.InstallWeapon(0, weapon)
 	shooter.SlotAt(0).Target = units.Target{Kind: units.TargetUnit, Unit: target.Handle}
 	shooter.SlotAt(0).Flags |= 0x02

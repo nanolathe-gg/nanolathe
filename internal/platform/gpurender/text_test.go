@@ -1,6 +1,7 @@
 package gpurender
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/formats"
@@ -26,6 +27,17 @@ func TestFNTLayoutMatchesSoftwareAfterFirstCodeTableBias(t *testing.T) {
 	}
 	if got, want := truncateToWidth(f, "AAA", 4), client.TruncateToWidth(f, "AAA", 4); got != want {
 		t.Fatalf("GPU truncate = %q, software = %q", got, want)
+	}
+	// The bounded copy keeps 299 bytes, not 300 [03 R-FONT-01 §3]: a 300-byte
+	// label whose full advance would fit still loses its last byte, and the two
+	// truncators agree on it.
+	label := strings.Repeat("A", 300)
+	got, want := truncateToWidth(f, label, 600), client.TruncateToWidth(f, label, 600)
+	if got != want {
+		t.Fatalf("GPU truncate kept %d bytes, software kept %d", len(got), len(want))
+	}
+	if len(got) != 299 { // the literal is the contract [03 R-FONT-01 §3]
+		t.Fatalf("300-byte label truncated to %d bytes, want 299", len(got))
 	}
 }
 

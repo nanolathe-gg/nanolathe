@@ -75,17 +75,22 @@ func measureText(fnt *formats.FNT, text string) int {
 	return width
 }
 
-// truncateToWidth removes trailing bytes until the advance fits maxWidth, through
-// the retail bounded 300-byte buffer, mirroring internal/client TruncateToWidth
-// [07 §7][GAP T22]. maxWidth <= 0 returns the input unchanged.
+// truncateToWidth removes trailing bytes until the advance fits maxWidth,
+// through the retail bounded copy, mirroring internal/client TruncateToWidth
+// [07 §7][03 R-FONT-01 §3][GAP T22]. maxWidth <= 0 returns the input unchanged.
 func truncateToWidth(fnt *formats.FNT, text string, maxWidth int) string {
 	if maxWidth <= 0 || fnt == nil || len(text) == 0 {
 		return text
 	}
-	const limit = 300
+	// The 300-byte stack buffer is filled by a bounded copy of at most 299
+	// bytes, so a longer string is cut to 299 before the width loop begins
+	// [03 R-FONT-01 §3]. This mirrors internal/client.TextBufferBytes; the
+	// modern executor does not import the software renderer, and text_test.go
+	// cross-checks the two truncators against each other.
+	const textBufferBytes = 299
 	src := text
-	if len(src) > limit {
-		src = src[:limit]
+	if len(src) > textBufferBytes {
+		src = src[:textBufferBytes]
 	}
 	if measureText(fnt, src) <= maxWidth {
 		return src

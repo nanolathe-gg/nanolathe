@@ -160,6 +160,7 @@ func (s *System) RestoreMover(h pool.Handle, data []byte) error {
 	if c == nil {
 		return fmt.Errorf("movement: retail restore mover: unit %d has no collision state", h)
 	}
+	s.seedRestoredMoveTier(u)
 	word := func(off int) int32 { return int32(binary.LittleEndian.Uint32(data[off : off+4])) }
 	c.VX, c.VY, c.VZ = word(0), word(4), word(8)
 	c.LeanX, c.LeanY, c.LeanZ = word(12), word(16), word(20)

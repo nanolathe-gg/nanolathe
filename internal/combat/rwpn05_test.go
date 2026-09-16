@@ -59,7 +59,7 @@ func TestRetailYawShiftIsItsOwnInverse(t *testing.T) {
 func spreadFamilyWeapon(id int32, ballistic bool) *content.WeaponDef {
 	return &content.WeaponDef{
 		ID:             id,
-		Range:          1000 * 65536,
+		Range:          1000,
 		Turret:         true,
 		LineOfSight:    !ballistic,
 		Ballistic:      ballistic,
@@ -144,7 +144,7 @@ func TestCouldNotFireBitSetOnGateFailure(t *testing.T) {
 
 	// The bit is latched — a second refusal leaves it standing — and it gates
 	// nothing: widen the range and the same slot fires with the bit still set.
-	weapon.Range = 1000 * 65536
+	weapon.Range = 1000
 	slot.Reload = 0
 	shooter.Move.Heading = retailYawFromGo(uint16(YawFromDelta(target.X.Sub(shooter.X), target.Z.Sub(shooter.Z))))
 	if sum := svc.StepWeaponsForUnit(shooter, 2, w, nil, terrain, nil, cat, &r, nil); sum.Fired != 1 {
@@ -174,7 +174,7 @@ func TestTurretStoresRelativeYawAndCarriesTheHullTurn(t *testing.T) {
 		w, terrain, shooter, target := newTestWorldAndUnits(t)
 		shooter.Move.Heading = heading
 		weapon := &content.WeaponDef{
-			ID: 31, Range: 1000 * 65536, Turret: true, LineOfSight: true,
+			ID: 31, Range: 1000, Turret: true, LineOfSight: true,
 			WeaponVelocity: 100 * 65536 / 30, Tolerance: tolerance,
 		}
 		shooter.InstallWeapon(0, weapon)

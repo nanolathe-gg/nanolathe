@@ -704,10 +704,10 @@ func autoEngage(u *units.Unit, target *units.Unit, force bool) bool {
 	if q == nil {
 		return false
 	}
-	node := Node{Owner: u.Handle, Target: target.Handle, GoalX: target.X, GoalY: target.Y, GoalZ: target.Z}
+	node := Node{Owner: u.Handle, Target: target.Handle, GoalX: target.X, GoalY: target.Y, GoalZ: target.Z, GoalSupplied: true}
 	if !force && u.Flags>>stanceMoveShift&stanceFieldMask == 1 {
 		if moveID := Resolve(2, u, nil, &ResolvePos{X: u.X, Y: u.Y, Z: u.Z}); moveID != 0 {
-			q.PushHead(moveID, Node{Owner: u.Handle, GoalX: u.X, GoalY: u.Y, GoalZ: u.Z})
+			q.PushHead(moveID, Node{Owner: u.Handle, GoalX: u.X, GoalY: u.Y, GoalZ: u.Z, GoalSupplied: true})
 		}
 		node.Param3 = uint32(uint16(u.Def.ManeuverLeashLength))
 		node.GuardX, node.GuardY = int16(u.X.Raw()>>16), int16(u.Z.Raw()>>16)

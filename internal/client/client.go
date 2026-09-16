@@ -316,6 +316,10 @@ type Client struct {
 	// trails is the Enhanced trail layer's retained state (DESIGN_GPU_RENDERER
 	// §15): presentation only, reset with the model registry and the terrain.
 	trails trailState
+	// debrisTrails is the presentation-owned strip-9 container store the debris
+	// draw's two producers feed [04 R-COB-04 §2][03 R-FX-01 §3]; see
+	// debris_trail_store.go.
+	debrisTrails debrisTrailStore
 	// wakes retains Enhanced land hover particles (GPU design §26).
 	wakes       surfaceWakeState
 	scorch      scorchState

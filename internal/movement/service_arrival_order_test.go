@@ -45,7 +45,7 @@ func TestServiceAsksArrivalBeforeSteering(t *testing.T) {
 	sys.EnsureUnit(u)
 
 	q := orders.QueueForUnit(u)
-	q.Push(orders.Lookup("Attack_Chase"), orders.Node{GoalX: x, GoalZ: z})
+	q.Push(orders.Lookup("Attack_Chase"), orders.Node{GoalX: x, GoalZ: z, GoalSupplied: true})
 	head := q.Head()
 	if head == nil {
 		t.Fatal("no head record")
@@ -95,7 +95,7 @@ func TestArrivalWithoutWaypointBrakesAndIntegrates(t *testing.T) {
 	sys, w, h := releaseFixture(t, def, 5)
 	u := w.Unit(h)
 	q := orders.QueueForUnit(u)
-	q.Push(orders.Lookup("Move_Ground"), orders.Node{Owner: h, GoalX: u.X, GoalZ: u.Z})
+	q.Push(orders.Lookup("Move_Ground"), orders.Node{Owner: h, GoalX: u.X, GoalZ: u.Z, GoalSupplied: true})
 	head := q.Head()
 	sys.InstallPointGoal(orders.PointGoalRequest{Owner: h, Node: head, X: u.X, Y: u.Y, Z: u.Z, Radius: 4})
 	sys.ActivateMove(u, head)

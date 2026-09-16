@@ -287,6 +287,11 @@ type PipelineEnv struct {
 
 // TickSlot runs the established per-slot pipeline for slot idx in fixed order [06 §4.1] C1 P0-10.
 // It returns true if charge/fire completed (spawner succeeded, reload stored, debit performed) [06 §4.2] C6.
+//
+// TEST-ONLY. It has no production caller: the live entry is Service.StepWeaponsForUnit,
+// which the session's slot visit calls (DESIGN_WEAPONS_PROJECTILES §2.1). This helper exists so a
+// test can drive one slot's gates in isolation and observe the order through the spy. A pipeline
+// behavior change belongs in StepWeaponsForUnit first, and this must be kept in step with it.
 // Pipeline order for test observability (spy) is recorded as:
 //
 //	StepDecrement → StepTargetValidate → StepAimDispatch → StepAdmission → StepSpawner → StepStoreReload → StepDebit
@@ -439,6 +444,8 @@ func TickSlot(slot *Slot, idx int, tick uint32, spy *PipelineSpy, env PipelineEn
 
 // TickUnitSlots runs the per-unit slot pipeline for all three slots in numeric order [06 §1.2] C1 (I1) P0-10.
 // It is the unit-level wrapper that visits slots 0..NumSlots-1 ascending and calls TickSlot for each.
+// TEST-ONLY, like TickSlot above: no production caller, and the live per-unit entry is
+// Service.StepWeaponsForUnit (DESIGN_WEAPONS_PROJECTILES §2.1).
 // Determinism: iteration order is fixed ascending (I1); no map iteration.
 // Returns the count of slots that fired this tick.
 func TickUnitSlots(slots *[NumSlots]Slot, tick uint32, spy *PipelineSpy, env PipelineEnv, health, maxHealth, kills int32) int {

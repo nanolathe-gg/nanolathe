@@ -1705,10 +1705,23 @@ settlement's "cost of zero debits nothing" path is reachable only through
 moving unit then cloaks for free while its stationary cost is positive.
 
 **Established — the selection, and why the conversion is a no-op in practice.**
-The cost is `cloakcostmoving` when the unit's movement-mode bits are non-zero
-and `cloakcost` otherwise; the test is on the two runtime movement-mode bits of
-the status word, not on a definition flag, so the same unit switches between
-the two costs as it starts and stops. Both keys are parsed by the **integer**
+The cost is `cloakcostmoving` when the unit's cached **movement-rate tier** is
+non-zero (tier 1, 2 or 3) and `cloakcost` when that tier is zero. The test is
+on the two runtime tier bits of the status word that the movement-rate
+classifier of [04 R-MOV-01 §6] maintains — not on a definition flag, and not on
+the movement-mode bits, which are a different field and play no part — so the
+same unit switches between the two costs as it starts and stops. The
+consequences follow from the classifier's own rule, since it is the field's
+only runtime writer (the save restore replays the persisted value): a building
+has no mover, so its tier is never written and it always pays `cloakcost`; a
+parked ground unit and a landed aircraft pay `cloakcost`; a unit turning in
+place at zero speed pays `cloakcostmoving`, because the classifier counts the
+turn residual as well as the scalar speed; and a mover whose blocked flag is
+set, or a unit being carried by a transport, pays `cloakcost` even with
+residual speed, because the classifier forces tier 0 in both cases. The
+per-unit sweep runs the mover — and therefore the classifier — before the
+settlement pass of the same tick [01 §4.4], so the block reads the tier this
+tick produced. Both keys are parsed by the **integer**
 reader and only then converted to single precision ([R-PROD-01 §1]), and
 `cloakcostmoving` defaults to the parsed `cloakcost` rather than to zero. The
 settlement's truncation toward zero ([R-ECO-01 §9]) therefore cannot change any
@@ -1840,7 +1853,16 @@ build-completion service write the status word or the deadline and never the
 operational byte.
 
 **Established — cost selection and conversion.** The cost is `cloakcostmoving`
-when the unit's movement-mode bits are non-zero and `cloakcost` otherwise.
+when the unit's cached **movement-rate tier** — the two status-word bits the
+movement-rate classifier of [04 R-MOV-01 §6] maintains — is non-zero, and
+`cloakcost` when that tier is zero, so the same unit switches between the two
+costs as it starts and stops. The selector reads those tier bits, not the
+movement-mode bits and not a speed word: a building, whose tier is never
+written because it has no mover, always pays `cloakcost`, and so do a blocked
+mover and a unit carried by a transport, both of which the classifier forces to
+tier 0 whatever their residual speed; a unit turning in place at zero speed
+pays `cloakcostmoving`. The unit sweep runs the classifier before this pass in
+the same tick [01 §4.4], so the selection reads the current tick's tier.
 That single-precision cost is passed through the CRT integer-conversion helper
 — save control word, set rounding to truncate toward zero, 64-bit integer
 store, restore control word — and then converted **back** to floating point

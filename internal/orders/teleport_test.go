@@ -128,6 +128,7 @@ func TestTeleportMovesEnclosedUnitsByTheGoalDelta(t *testing.T) {
 	q.Push(Lookup("Teleport"), Node{
 		Owner: teleporter.Handle,
 		GoalX: 200 * tpFx, GoalY: 50 * tpFx, GoalZ: 300 * tpFx,
+		GoalSupplied: true,
 	})
 	q.Pump(teleporter, 0)
 
@@ -198,7 +199,7 @@ func TestTeleportWithoutASeamStillCompletes(t *testing.T) {
 	q.binding.Movement.PlaceUnit = nil
 	q.binding.Presentation.Teleport = nil
 
-	q.Push(Lookup("Teleport"), Node{Owner: teleporter.Handle, GoalX: 200 * tpFx, GoalY: 50 * tpFx, GoalZ: 300 * tpFx})
+	q.Push(Lookup("Teleport"), Node{Owner: teleporter.Handle, GoalX: 200 * tpFx, GoalY: 50 * tpFx, GoalZ: 300 * tpFx, GoalSupplied: true})
 	q.Pump(teleporter, 0)
 
 	if q.LenPrimary() != 0 {

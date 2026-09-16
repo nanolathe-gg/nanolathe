@@ -199,11 +199,17 @@ func InitCommon(p *Projectile, now uint32, muzzle Vec3, aim *Vec3, targetUnit po
 	p.BeamLatch = false    // [06 §4.1] clears beam latch
 	p.TwoPhase = false     // [06 §4.1] clears the two-phase state bits
 	p.Dead = false
+	// [06 §4.1] the initializer seeds the smoke deadline to the CREATION TICK,
+	// not to creation plus the delay. With the strict `smokeDeadline <
+	// currentTick` trail test of [06 §7.3] that makes the first puff due on the
+	// first tick after creation, and the additive advance spaces the rest by
+	// `smokedelay`. Seeding it to `now + smokedelay` instead delayed the first
+	// puff by one whole interval and silenced any projectile living at most
+	// `smokedelay` ticks.
+	p.SmokeDeadline = now
 	if w != nil {
-		p.SmokeDeadline = now + uint32(w.SmokeDelay) // [06 §4.1] seeds smoke deadline [02 "Weapon record"] smokedelay*30
-		p.WeaponID = w.ID                            // [06 §4.1] store the definition
+		p.WeaponID = w.ID // [06 §4.1] store the definition
 	} else {
-		p.SmokeDeadline = now
 		p.WeaponID = 0 // [06 §4.1] a null definition is stored as null, not retained
 	}
 	p.Shooter = shooter // [06 §4.1] the shooter reference, or a null one
@@ -300,7 +306,9 @@ func PitchFromDelta(dx, dy, dz numeric.Fixed) numeric.Angle {
 
 // OrdinaryExpiry computes expiry for ordinary/vertical/selfProp creation per
 // [06 §6.3]: when weaponvelocity is zero or noautorange enabled, expiry = now+weapontimer;
-// otherwise expiry = now + ( range<<16 / weaponvelocity ) trunc toward zero [01 §8] I3.
+// otherwise expiry = now + (uint32)(range << 16) / weaponvelocity, truncated
+// toward zero [01 §8] I3. The zero-velocity branch is taken first, so the
+// unsigned division here is never reached with a zero divisor.
 func OrdinaryExpiry(now uint32, w *content.WeaponDef) uint32 {
 	if w == nil {
 		return now
@@ -308,14 +316,20 @@ func OrdinaryExpiry(now uint32, w *content.WeaponDef) uint32 {
 	if w.WeaponVelocity == 0 || w.NoAutoRange { // [06 §6.3]
 		return now + uint32(w.WeaponTimer) // [02 "Weapon record"] weapontimer*30
 	}
-	// [06 §6.3] integer range shifted by fixed-point fraction / weapon velocity
-	// Range is integer world units default 32767 [02 "Weapon record"]; shift left 16 to Fixed.
-	// Truncate toward zero per [01 §8] I3.
-	r := int64(w.Range)
-	v := int64(w.WeaponVelocity) // Fixed raw 16.16 per tick
-	ticks := (r * 65536) / v     // trunc toward zero; a zero velocity divides by zero exactly as retail raises after reservation [06 §6.4][GAP T5] I11
-	// Wrap modulo 2^32 via uint32 conversion [06 §6.4] burn-blow deadlines wrap
-	return now + uint32(ticks)
+	// [06 §6.3] `expiry = now + (uint32)(range << 16) / weaponvelocity`. The
+	// shift is a THIRTY-TWO-BIT SIGNED shift of the authored integer range —
+	// bits above bit 15 of the range fall out of the word — and the result is
+	// reinterpreted unsigned for the division, whose divisor is the 16.16
+	// velocity per tick [R-WPN-01 §10]. Widening the shift to sixty-four bits
+	// keeps bits retail discards, so an authored |range| >= 32,768 or a
+	// negative range diverges; stock content authors neither (§6.3 names the
+	// wrap explicitly as unreached by stock).
+	numerator := uint32(w.Range << 16)  // 32-bit signed shift, reinterpreted unsigned
+	divisor := uint32(w.WeaponVelocity) // Fixed raw 16.16 per tick, unsigned divide
+	ticks := numerator / divisor        // whole tick count, truncated [01 §8] I3
+	// Wrap modulo 2^32 [06 §7.3]: expiry deadlines wrap and the later
+	// `currentTick < expiry` compare is unsigned.
+	return now + ticks
 }
 
 // BallisticBurnBlowExpiry computes burn-blow deadline per [06 §6.4]:

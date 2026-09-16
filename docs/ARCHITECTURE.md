@@ -292,9 +292,11 @@ then the session **publishes** the committed frame. Publication is outside
 the phase registry and follows every completed sub-tick; nothing presents
 between phases. Original presentation samples the committed tick without
 interpolation `[03 §2.4]`; Enhanced may blend the last two committed ticks
-under DESIGN_GPU_RENDERER §13.5 [I6]. After the last runnable sub-tick of a pump the
-executor tail runs once — the temporary-sight expiry sweep, the deadline-ring
-slide and the barrier routines `[03 R-COMP-02 §2]` `[01 R-PLAT-02 §7]`.
+under DESIGN_GPU_RENDERER §13.5 [I6]. The executor tail runs once per host pump
+after the whole catch-up batch, including a pump that ran zero sub-ticks, and in
+this order: the three barrier routines, then the message-ring retire, then the
+temporary-sight expiry sweep as its last step
+`[03 R-COMP-02 §2]` `[01 R-PLAT-02 §7]` `[01 R-PLAT-02 §8]`.
 Authoritative ticks run only in the battle state of the session state machine
 `[08 "Session states"]`.
 

@@ -136,10 +136,11 @@ func reclaimBeyondRangeWalksAndPays(t *testing.T, blocking bool) {
 	startX, startZ := builder.X, builder.Z
 	q := orders.QueueForUnit(builder)
 	q.Push(orders.Lookup("Reclaim"), orders.Node{
-		Owner: builder.Handle,
-		GoalX: world.CellToWorld(int32(anchorX)),
-		GoalY: builder.Y,
-		GoalZ: world.CellToWorld(int32(anchorZ)),
+		Owner:        builder.Handle,
+		GoalX:        world.CellToWorld(int32(anchorX)),
+		GoalY:        builder.Y,
+		GoalZ:        world.CellToWorld(int32(anchorZ)),
+		GoalSupplied: true,
 	})
 	record := q.Primary()[0]
 	lastPhase := record.Phase

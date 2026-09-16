@@ -82,7 +82,11 @@ constants in the ledger are the two special-player scales [I2].
 
 `Service` holds the ten slots, the reference player, the economy mode selector
 and two seams the package cannot import: `CloakCost` (the per-unit cloak upkeep
-cost) and `EndCondition` (the local slot's victory/defeat block, which rides
+cost, which the units package selects from the unit's cached movement-rate tier
+— tier zero pays `cloakcost`, tiers 1..3 pay `cloakcostmoving`, so a structure,
+a blocked mover and carried cargo all pay the stationary cost while a unit
+turning in place pays the moving one `[05 R-PROD-01 §7]` `[04 R-MOV-01 §6]`)
+and `EndCondition` (the local slot's victory/defeat block, which rides
 this same deadline `[08 R-TRIG-01 §6]`). Per-unit buckets live in a slice
 indexed by pool handle with slot 0 null `[01 §6.1]`.
 
@@ -914,9 +918,15 @@ active-list order `[05 R-FEAT-01 §10]` [I1].
   local SHARE screen `MAPINFO` binding `[05 R-SHARE-01 §5–§6]`. The established
   operation copies mapped memory only; it does not transfer LOS or radar.
   These are explicit scope limits, not a claim that all sharing is complete.
-* **The cloak gate's second status bit is inert.** The gate requires it clear and
-  nothing anywhere sets it, so the term is unobservable and is implemented as
-  always satisfied `[05 R-ECO-01 §9]`.
+* **The cloak gate's second status bit is the decloak-forced latch, and it is
+  implemented.** The gate requires the bit clear `[05 R-ECO-01 §9]`, and the
+  entry that once stood here called the term inert. It is not: the visibility
+  sensor pass owns the bit, clearing it for every live unit at the start of the
+  pass and setting it on a cloaked unit whose proximity breach fires
+  (`internal/visibility` `Service.SensorTick`, the decloak bit of
+  `[03 R-VIS-01 §4]`), and the gate the economy reads is bound in
+  `internal/session` `createAndBindServices`, which refuses the debit while the
+  bit is set. Do not delete either side as dead code.
 * **Stockpile production is a cost helper here, not a state machine.** The
   per-tick cost delta is computed in the ledger; the stockpile counter and its
   weapon coupling belong to `internal/combat`
@@ -1125,8 +1135,9 @@ still carry are these, each with the observation that would settle it:
 * Whether any reader of the per-unit archived economy snapshots exists outside
   the ledger's own redistribution. Bounded negative in the reviewed image
   `[05 "Authoritative settlement order"]`.
-* What the cloak gate's second status bit means: it has no writer anywhere, so
-  the term is inert and the behaviour unobservable `[05 R-ECO-01 §9]`.
+* What the cloak gate's second status bit means is **closed**: it is the
+  decloak-forced latch the visibility sensor pass writes `[03 R-VIS-01 §4]`, and
+  the gate of `[05 R-ECO-01 §9]` reads it live. See §3.5.
 * Whether any settlement intermediate can reach the range where the wider
   exponent of retail's precision control differs from a double's: no economy
   magnitude was found that does `[05 R-ECO-01 §1]` `[05 R-ECO-01 §5]`.

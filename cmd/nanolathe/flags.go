@@ -52,7 +52,7 @@ type Options struct {
 	ShotContour        string      // contour spacing and optional offset in captures
 	ShotSelect         bool        // run the Ctrl+A select-all before --shot captures, so the command page is open
 	ShotSize           string      // "WxH" surface size for --shot; empty composes at the authored 640x480
-	ShotModal          string      // battle modal to open before --shot captures: "options", "exit" or "confirm"
+	ShotModal          string      // battle modal to open before --shot captures: "options", "exit", "confirm", "settings", "help" or "briefing"
 	ShotSpace          bool        // hold Space for --shot captures, so the bottom slide strip is fully raised
 	RendererSet        bool        // explicit command-line override
 	FPSSet             bool        // explicit command-line override
@@ -159,7 +159,7 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.IntVar(&opts.BenchmarkPreTicks, "benchmark-pre-ticks", 300, "simulation ticks before opening the battle benchmark window (30 ticks per second)")
 	set.IntVar(&opts.BenchmarkTPS, "benchmark-tps", 30, "battle benchmark presentation rate: 30, 60 or 120 FPS, with 30 simulation ticks per second")
 	set.StringVar(&opts.ShotSize, "shot-size", "", "surface size \"WxH\" for --shot, one of the display modes (default 640x480)")
-	set.StringVar(&opts.ShotModal, "shot-modal", "", "open a battle modal before --shot captures: \"options\" (Tab), \"exit\" or \"confirm\"")
+	set.StringVar(&opts.ShotModal, "shot-modal", "", "open a battle modal before --shot captures: \"options\" (Tab), \"exit\", \"confirm\", \"settings\", \"help\", or \"briefing\" (needs --mission)")
 	set.BoolVar(&opts.ShotSpace, "shot-space", false, "hold Space for --shot captures, so the bottom slide strip (Game Time / Total Units / Game Speed) is fully raised")
 	set.StringVar(&opts.CPUProfile, "cpuprofile", "", "write a pprof CPU profile of the --shot compose path to this file")
 	set.StringVar(&opts.MemProfile, "memprofile", "", "write a pprof allocation profile of the --shot compose path to this file")

@@ -214,11 +214,21 @@ func finishBattleEntry(s *Session, overwriteResources func() error) error {
 // clearWatcherVisibilityMasks applies the world-rebuild tail's watcher clear
 // once, after initial unit construction [07 R-CAM-01 §14]. Later commands may
 // change these same live bits.
+//
+// Clearing mode bits 0 and 1 is Mapped + Permanent, and retail does not leave
+// the stores as they were: it "forces one bulk rebuild", which refills the word
+// grid all-ones and every eligible slot's byte grid with 1 so the watcher sees
+// the unmasked map [03 R-VIS-01 §4] pass 1, [03 R-VIS-01 §1], [08 R-SKIR-01 §3].
+// The rebuild is the entry rebuild called with the full argument, not the live
+// chat-command refresh of [07 R-CAM-01 §6]: watch-mode entry is named in
+// [08 R-ENTRY-01 §7] as one of that call's three sites.
 func (s *Session) clearWatcherVisibilityMasks() {
 	p := s.playerRecord(int(s.LocalOwner))
-	if p != nil && (p.Watcher || p.IsObserver) && s.Vis != nil {
-		s.Vis.SetMode(s.Vis.Mode() &^ (visibility.ModeHistoryEnabled | visibility.ModeCurrentEnabled))
+	if p == nil || !(p.Watcher || p.IsObserver) || s.Vis == nil {
+		return
 	}
+	s.Vis.SetMode(s.Vis.Mode() &^ (visibility.ModeHistoryEnabled | visibility.ModeCurrentEnabled))
+	rebuildVisibilityForEntry(s)
 }
 
 func clearLiveResourceStocks(s *Session) {

@@ -460,7 +460,9 @@ func (s *Service) firePreparedSlot(u *units.Unit, slot *units.Slot, idx int, pre
 
 // TickWeapons runs the integrated per-unit weapon pipeline [06 §3][06 §4][04 §5.3][GAP T15].
 // Compatibility wrapper: loops over units in deterministic order and delegates to StepWeaponsForUnit ON-04.
-// Documented non-authoritative: authoritative behavior is per-unit StepWeaponsForUnit.
+// TEST-ONLY and non-authoritative: no production caller, because the session's own unit visit calls
+// StepWeaponsForUnit directly (DESIGN_WEAPONS_PROJECTILES §2.1). The authoritative behavior — including
+// the unit iteration order — is the session's, not this loop's.
 func (s *Service) TickWeapons(tick uint32, w *units.World, vis *visibility.Service, terrain *world.Terrain, econ *economy.Service, catalog *content.Catalog, simRNG *rng.Simulation, crtRNG *rng.CRT) {
 	if s == nil || w == nil {
 		return

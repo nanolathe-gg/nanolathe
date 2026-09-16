@@ -116,16 +116,26 @@ func TestRS06_GlobalInventory(t *testing.T) {
 		desc string
 	}{
 		{"internal/session/result.go", "var results sync.Map", "package-level result storage must be per-Session [RS-P0-018]"},
-		{"internal/combat/visibility_hook.go", "var VisibilityHook", "package-global visibility hook must be per-Service [RS-P0-018]"},
+		// The visibility hook moved off the package global and onto the per-Service
+		// field that internal/combat/pool.go declares, and the file the old row named
+		// was deleted with it. The row watches the file that now holds the inventory,
+		// so reintroducing the global there fails again [RS-P0-018].
+		{"internal/combat/pool.go", "var VisibilityHook", "package-global visibility hook must be per-Service [RS-P0-018]"},
 		{"internal/orders/zbuildweapon.go", "var stockpileEconomy", "stockpile economy bridge must be per-Queue [RS-P0-018]"},
 		{"internal/orders/zbuildweapon.go", "var currentSecondaryTick", "secondary tick state must be per-Queue [RS-P0-018]"},
-		{"internal/session/loop.go", "map[pool.Handle]int32", "beforeHealth must be slice not map [RS-P0-014]"},
+		// The pre-impact health snapshot this row was written for is gone along with
+		// the file that held it; the tick it lived in is now internal/session/step.go.
+		// The contract survives it: a per-handle map iterated to notify anything is
+		// random-order and therefore not authoritative [RS-P0-014][I1].
+		{"internal/session/step.go", "map[pool.Handle]int32", "per-handle keyed state in the tick must be a slot-ordered slice, not a map [RS-P0-014]"},
 	}
 	for _, f := range forbidden {
 		path := f.file
 		b, err := os.ReadFile(root + "/" + path)
 		if err != nil {
-			continue
+			// A row that names a file which no longer exists checks nothing. Fail
+			// rather than skip, so a rename has to re-point the row.
+			t.Fatalf("global-inventory row names an unreadable file %s: %v", path, err)
 		}
 		content := string(b)
 		lines := strings.Split(content, "\n")

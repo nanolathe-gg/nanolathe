@@ -175,7 +175,7 @@ func (s *Service) rallyInheritance(factory *units.Unit, product *units.Unit, tic
 		}
 		if n.ID == qMoveID {
 			if moveID != 0 {
-				rec := productRecord(product, tick, orders.Node{ID: moveID, GoalX: n.GoalX, GoalY: n.GoalY, GoalZ: n.GoalZ, DynamicGate: 0, Deadline: -1, StaticGate: orders.DescriptorFor(moveID).StaticGate, Flags: 0})
+				rec := productRecord(product, tick, orders.Node{ID: moveID, GoalX: n.GoalX, GoalY: n.GoalY, GoalZ: n.GoalZ, DynamicGate: 0, Deadline: -1, StaticGate: orders.DescriptorFor(moveID).StaticGate, Flags: 0, GoalSupplied: true})
 				nn := &rec
 				// Ensure deadline -1 for new node [04 §3.2]
 				if nn.Deadline == 0 {
@@ -186,7 +186,7 @@ func (s *Service) rallyInheritance(factory *units.Unit, product *units.Unit, tic
 			}
 		} else if n.ID == qPatrolID {
 			if patrolID != 0 {
-				rec := productRecord(product, tick, orders.Node{ID: patrolID, GoalX: n.GoalX, GoalY: n.GoalY, GoalZ: n.GoalZ, DynamicGate: 0, Deadline: -1, StaticGate: orders.DescriptorFor(patrolID).StaticGate})
+				rec := productRecord(product, tick, orders.Node{ID: patrolID, GoalX: n.GoalX, GoalY: n.GoalY, GoalZ: n.GoalZ, DynamicGate: 0, Deadline: -1, StaticGate: orders.DescriptorFor(patrolID).StaticGate, GoalSupplied: true})
 				nn := &rec
 				if nn.Deadline == 0 {
 					nn.Deadline = -1

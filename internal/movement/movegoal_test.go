@@ -19,8 +19,8 @@ import (
 func TestMoveGoalHandleIdentityAndLifetime(t *testing.T) {
 	s := NewSystem(nil, Profile{FootPrintX: 1, FootPrintZ: 1}, NewOccupancyGrid())
 	h := pool.Handle(3)
-	site := &orders.Node{GoalX: numeric.Fixed(100 << 16), GoalZ: numeric.Fixed(200 << 16)}
-	other := &orders.Node{GoalX: numeric.Fixed(900 << 16), GoalZ: numeric.Fixed(900 << 16)}
+	site := &orders.Node{GoalX: numeric.Fixed(100 << 16), GoalZ: numeric.Fixed(200 << 16), GoalSupplied: true}
+	other := &orders.Node{GoalX: numeric.Fixed(900 << 16), GoalZ: numeric.Fixed(900 << 16), GoalSupplied: true}
 
 	// With no binding the order's stored position is the goal — the ordinary
 	// ground-move case [04 §8.3].
@@ -52,7 +52,7 @@ func TestMoveGoalHandleIdentityAndLifetime(t *testing.T) {
 func TestMoveGoalClear(t *testing.T) {
 	s := NewSystem(nil, Profile{FootPrintX: 1, FootPrintZ: 1}, NewOccupancyGrid())
 	h := pool.Handle(1)
-	n := &orders.Node{GoalX: numeric.Fixed(10 << 16), GoalZ: numeric.Fixed(20 << 16)}
+	n := &orders.Node{GoalX: numeric.Fixed(10 << 16), GoalZ: numeric.Fixed(20 << 16), GoalSupplied: true}
 	s.BindMoveGoal(h, n, numeric.Fixed(50<<16), numeric.Fixed(60<<16))
 	s.ClearMoveGoal(h)
 	if x, z, ok := s.MoveGoalFor(h, n); !ok || x != n.GoalX || z != n.GoalZ {
@@ -62,8 +62,8 @@ func TestMoveGoalClear(t *testing.T) {
 
 func TestBoundGoalShapesReplaceAndReleaseByNode(t *testing.T) {
 	s := NewSystem(nil, Profile{FootPrintX: 1, FootPrintZ: 1}, NewOccupancyGrid())
-	n1 := &orders.Node{Owner: 1, GoalX: numeric.Fixed(16 << 16), GoalZ: numeric.Fixed(16 << 16)}
-	n2 := &orders.Node{Owner: 1, GoalX: numeric.Fixed(32 << 16), GoalZ: numeric.Fixed(32 << 16)}
+	n1 := &orders.Node{Owner: 1, GoalX: numeric.Fixed(16 << 16), GoalZ: numeric.Fixed(16 << 16), GoalSupplied: true}
+	n2 := &orders.Node{Owner: 1, GoalX: numeric.Fixed(32 << 16), GoalZ: numeric.Fixed(32 << 16), GoalSupplied: true}
 	if !s.InstallAnnulusGoal(orders.AnnulusGoalRequest{Owner: 1, Node: n1, X: n1.GoalX, Z: n1.GoalZ, InnerRadius: 2, OuterRadius: 8}) {
 		t.Fatal("annulus payload was rejected")
 	}

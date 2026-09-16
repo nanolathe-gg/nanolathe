@@ -27,6 +27,16 @@ import (
 // newNode applies it at insertion [04 §3.3][04 R-MOV-03 §6].
 // StaticGate/DynamicGate/Deadline are filled later by newNode from the descriptor;
 // caller may set Param1..3 for command-specific fields before Push.
+//
+// The goal triple is the command's position payload, so a record built here is
+// constructed WITH a goal and GoalSupplied says so; newNode then keeps static
+// bit 10 on the record's static-mask copy [04 §3.1][04 R-MOV-03 §7]. A producer
+// whose command has no position payload passes zeros through this same door,
+// and those commands — the activation, cloak, standing, wait, paralyze, pickup,
+// carried, stockpile and factory-product rows — are exactly the rows whose
+// authored mask carries no bit 10 to clear (table.go), so the flag is
+// unobservable for them. The one wrapper here that is not a positional command,
+// NewFactoryBuildNode, states the absence explicitly anyway.
 func NewNodeForOrder(id ID, target pool.Handle, goalX, goalY, goalZ numeric.Fixed, tick uint32, owner pool.Handle, queued bool) Node {
 	n := Node{
 		ID:           id,
@@ -36,8 +46,10 @@ func NewNodeForOrder(id ID, target pool.Handle, goalX, goalY, goalZ numeric.Fixe
 		GoalZ:        goalZ,
 		CreationTick: tick,
 		Owner:        owner,
+		GoalSupplied: true,
 	}
 	n.QueuedIssue = queued // the producer insertion's queued/non-queued argument [04 R-ORD-01 §13]
+	n.GoalSupplied = true  // the position payload above is the constructor's goal argument [04 R-MOV-03 §7]
 	return n
 }
 
@@ -58,6 +70,13 @@ func NewFactoryBuildNode(cat *content.Catalog, defKey string, count uint32, tick
 	// mobile row would hand a factory product to the site-bound machine.
 	id := rowBuildingBuild
 	n := NewNodeForOrder(id, 0, 0, 0, 0, tick, owner, queued)
+	// A factory product has no position payload — the product leaves through the
+	// factory's own exit, and `BuildingBuild` ignores the goal triple [05
+	// "Factory production lifecycle"] — so the record is constructed with NO
+	// goal and newNode clears static bit 10 [04 R-MOV-03 §7]. (The authored mask
+	// 0x10010c carries no bit 10 either, so the clear is a no-op on stock; the
+	// statement is here so the record does not claim a goal it never had.)
+	n.GoalSupplied = false
 	n.BuildDefKey = ck
 	n.Param1 = idx
 	n.Param2 = count

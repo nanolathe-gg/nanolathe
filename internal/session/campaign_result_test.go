@@ -50,7 +50,7 @@ func TestCampaignResultUsesScoreTeamIdentity(t *testing.T) {
 						s.pollMissionTriggers(tick)
 					}
 					r := s.GetResult()
-					winner, loser := s.TeamForOwner(winnerOwner), s.TeamForOwner(1-winnerOwner)
+					winner, loser := s.teamForOwner(winnerOwner), s.teamForOwner(1-winnerOwner)
 					if !r.Ended || r.Kind != wantKind || r.WinnerTeam != winner || !slices.Equal(r.Winners, []int{winner}) || !slices.Equal(r.Losers, []int{loser}) {
 						t.Fatalf("result=%+v, want %s winner team %d loser team %d", r, wantKind, winner, loser)
 					}
@@ -62,7 +62,7 @@ func TestCampaignResultUsesScoreTeamIdentity(t *testing.T) {
 						if row.Player == winnerOwner {
 							want = "win"
 						}
-						if row.Team != s.TeamForOwner(row.Player) || row.Kind != want {
+						if row.Team != s.teamForOwner(row.Player) || row.Kind != want {
 							t.Errorf("score row=%+v, want %s in its player's team", row, want)
 						}
 					}

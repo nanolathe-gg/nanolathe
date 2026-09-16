@@ -614,6 +614,25 @@ Three independent gates replace a single tolerance gate:
    difference cluster to an edge, and no threshold derived as automatic
    approval. `tools/gpu-compare` is the runner; `--shot-renderer both` and
    `tools/framediff` are what it drives.
+
+   **Known gap — `both` records twice, from the same CRT.** "Record once" is
+   the requirement, not today's behavior. The `both` route composes the classic
+   image and then calls the modern recorder, so the frozen committed frame is
+   walked twice. The pair is deliberate today: the classic-inclusive list omits
+   the geometry-only model packets the GPU consumes, so a single list cannot yet
+   feed both executors. Closing the gap properly means one list both executors
+   can replay.
+
+   What the two walks no longer differ in is the presentation RNG. The classic
+   compose is wrapped in the pre-record path's CRT save/restore
+   (`Client.SnapshotPresentationCRT`), so the modern recording starts from the
+   stream state the classic compose found rather than the state it left. Before
+   that, a scene with segmented lightning projectiles gave `both` a modern half
+   that differed from `--shot-renderer modern` at the same seed, and `framediff`
+   attributed presentation RNG jitter to executor divergence; the segmented
+   pass of [03 §5.4] draws from that stream in both walks [I4]. The two modern
+   halves are now byte-identical, which is what makes `both` usable as the
+   parity tool while the double walk stands.
 3. **Performance.** Repeated device-backed replay of one frozen list after
    warm-up, or the live battle benchmark of
    [BATTLE_BENCHMARK.md](BATTLE_BENCHMARK.md). Do not re-record a frozen list in

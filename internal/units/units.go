@@ -937,11 +937,26 @@ func (u *Unit) raiseStatusCue(code uint8) {
 // the cost inside the gated block and the gate's first term is the request bit
 // [05 R-ECO-01 §9]; a unit that is merely hidden from a previous pass without
 // a live request never reaches the selection.
+//
+// Correction: the selector tested scalar speed, on a reading of doc 05 that
+// named the movement-MODE bits. Both were wrong. Retail selects on the cached
+// movement-rate tier — the two status-word bits the classifier of
+// [04 R-MOV-01 §6] writes — and doc 05 has been corrected in place
+// [05 R-PROD-01 §7] [05 R-ECO-01 §9]. Tier 0 pays `cloakcost`, tiers 1..3 pay
+// `cloakcostmoving`. Because the classifier forces tier 0 for a blocked mover
+// and for carried cargo and counts the turn residual as well as speed, this is
+// not a speed test: a blocked or carried unit with residual speed pays the
+// stationary cost, a unit turning in place at zero speed pays the moving cost,
+// and a building — which never runs a mover, so MoveTier keeps its seed 0 —
+// always pays `cloakcost`. The per-unit sweep (phase 2) runs the movement
+// integrator, and hence the classifier, before the settlement pass reaches
+// this seam in phase 5 of the same tick [01 §4.4], so the value read is the
+// current tick's tier.
 func (u *Unit) CloakCost() float32 {
 	if u == nil || u.Def == nil || !u.IsCloaked {
 		return 0
 	}
-	if u.Move.Speed != 0 {
+	if u.MoveTier != 0 {
 		return float32(u.Def.CloakCostMoving)
 	}
 	return float32(u.Def.CloakCost)

@@ -619,8 +619,19 @@ type PlacementResult struct {
 
 // CheckPlacement is the one canonical, read-only placement legality function
 // for preview, commit, AI, and factory exits. It checks the typed half-open
-// rectangle before walking cells in row-major order, then applies class-
-// specific feature/occupancy/yard and aggregate terrain gates [R-P0-08].
+// rectangle before walking cells in row-major order, then applies the gates of
+// the product's CLASS [04 R-P0-08 "class split"]:
+//
+//   - a building walks its compiled yard bytes and ends on the rectangle
+//     aggregate — one slope span against MaxSlope with no water pair, the
+//     bit-4 height peak, and the two water-depth gates;
+//   - a mobile product has no yard map and no rectangle aggregate anywhere:
+//     feature blocking and ground occupancy apply to every covered cell, and
+//     terrain legality is decided cell by cell on that cell's own derived pair
+//     (mobileCellLegal).
+//
+// Both classes run the terrain half only in the inline terrain-check mode; the
+// site height is published either way.
 func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 	if t == nil {
 		return PlacementResult{}, fmt.Errorf("world: nil terrain")
@@ -658,6 +669,14 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 		}
 	}
 
+	sea := int32(t.SeaLevel)
+	// Terrain legality applies only when the caller requests the inline
+	// terrain-check mode (the recovered mode value 1); other modes add no
+	// second terrain-legality rule after the bounds check [04 §6.4]
+	// [04 R-COLL-01 §2 "class dispatch"]. Queries outside it keep siteHeight
+	// from the plain bounds pass for allocation height.
+	skipTerrain := q.SkipTerrainAggregates || q.Rules.Domain == content.MobilityAircraft || !q.Rules.ProfileResolved
+
 	minLow, maxHigh, bit4Max := int32(255), int32(0), int32(0)
 	geothermalNeeded, geothermalFound := false, false
 	for dz := int32(0); dz < q.Rect.Depth(); dz++ {
@@ -665,9 +684,15 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 			idx := int(dz*q.Rect.Width() + dx)
 			yard := YardCell(0)
 			if q.Mobile {
-				// Mobile placement checks occupancy/features and samples the
-				// complete footprint, not an authored yard map [04 §6.1].
-				yard = 0x2e // occupancy + blocking feature + slope + height
+				// A mobile product has no yard map: the inline footprint loop
+				// checks feature blocking and unit occupancy on every covered
+				// cell [04 R-P0-08 "mobile terrain validator"]. The synthesized
+				// byte carries those two gates only — bits 1-2 occupancy and
+				// bit 5 blocking-feature. Bit 3 rides along to collect the
+				// published site height below; it is NOT a legality aggregate
+				// on this path, and bit 4's separate height maximum is a yard
+				// participation a yardless mobile product never contributes to.
+				yard = 0x2e
 			} else {
 				yard = q.Yard[idx]
 			}
@@ -738,8 +763,21 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 				}
 			}
 
-			// Building yards select the aggregate samples with bits 3/4;
-			// mobile products sample every covered cell [R-P0-08].
+			// The mobile class's terrain legality is PER CELL and has no
+			// rectangle aggregate at all [04 R-P0-08 "mobile terrain
+			// validator"][04 R-SLOPE-01 §3]. Each covered cell is judged on
+			// its own derived pair, in the order of [04 R-COLL-01 §2]
+			// steps 3-5, so a footprint whose cells are each legal is legal
+			// however far apart their heights lie.
+			if q.Mobile && !skipTerrain {
+				if err := mobileCellLegal(cell, sea, q.Rules); err != nil {
+					return PlacementResult{}, fmt.Errorf("world: cell %d,%d %w", cx, cz, err)
+				}
+			}
+
+			// Building yards select the aggregate samples with bit 3; a mobile
+			// product samples every covered cell for the published site height
+			// alone [04 R-P0-08].
 			if q.Mobile || yard&0x08 != 0 {
 				if h := int32(cell.MinHeight()); h < minLow {
 					minLow = h
@@ -765,31 +803,33 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 		return PlacementResult{}, fmt.Errorf("world: geothermal requirement not satisfied [05 %q]", "Geothermal requirement")
 	}
 
-	sea := int32(t.SeaLevel)
-	// Aggregate terrain legality only applies when the caller requests the
-	// inline terrain-check mode [04 §6.4]; queries outside it (factory exit
-	// spots) keep siteHeight from the plain bounds pass for allocation height.
-	skipAggregates := q.SkipTerrainAggregates || q.Rules.Domain == content.MobilityAircraft || !q.Rules.ProfileResolved
+	// With no sampled cell at all the published height is the definition's
+	// waterline against sea level, rather than an invented terrain sample
+	// [04 R-P0-08].
 	siteHeight := sea - q.Rules.Waterline
 	if maxHigh >= minLow {
 		siteHeight = minLow
-		if !skipAggregates {
-			water := sea > minLow
-			limit := q.Rules.MaxSlope
-			// Building yards use MaxSlope. Only the inline mobile path selects
-			// MaxWaterSlope from the complete footprint's water state [04 §6.1].
-			if q.Mobile && water {
-				limit = q.Rules.MaxWaterSlope
-			}
-			if maxHigh-minLow > limit {
-				return PlacementResult{}, fmt.Errorf("world: placement slope %d exceeds limit %d [04 §6.1]", maxHigh-minLow, limit)
-			}
-		}
 	}
-	if !skipAggregates && bit4Max > siteHeight {
+	// Everything below is the BUILDING class's rectangle aggregate. It is the
+	// structure placement validator's yard-map walk and exists nowhere else in
+	// the engine [04 R-P0-08 "footprint aggregates and strict comparisons"]
+	// [04 R-SLOPE-01 §3 "Bounded census"]: a mobile product's terrain legality
+	// was already decided cell by cell inside the walk above, and the mobile
+	// path publishes only siteHeight from here.
+	if q.Mobile || skipTerrain {
+		return PlacementResult{Rect: q.Rect, SiteHeight: siteHeight}, nil
+	}
+	// The yard walk compares the rectangle span against the land MaxSlope
+	// alone — there is no water pair on this path [04 R-SLOPE-01 §3 "Bounded
+	// census"] — and the comparison is strict, so a span exactly equal to the
+	// limit passes [04 R-P0-08].
+	if maxHigh >= minLow && maxHigh-minLow > q.Rules.MaxSlope {
+		return PlacementResult{}, fmt.Errorf("world: placement slope %d exceeds limit %d [04 §6.4]", maxHigh-minLow, q.Rules.MaxSlope)
+	}
+	if bit4Max > siteHeight {
 		return PlacementResult{}, fmt.Errorf("world: placement height peak %d exceeds site height %d [05 %q]", bit4Max, siteHeight, "Geothermal requirement")
 	}
-	if !skipAggregates && minLow < sea-q.Rules.MaxWaterDepth {
+	if minLow < sea-q.Rules.MaxWaterDepth {
 		return PlacementResult{}, fmt.Errorf("world: placement water depth exceeds %d [05 %q]", q.Rules.MaxWaterDepth, "Geothermal requirement")
 	}
 	maxSample := maxHigh
@@ -799,10 +839,49 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 	// The upper waterline band is unconditional, including when the authored
 	// value is zero. Land profiles use the established -10000 template value
 	// to disable this gate [04 §6.1, §6.4][05 "Geothermal requirement"].
-	if !skipAggregates && maxSample > sea-q.Rules.MinWaterDepth {
+	if maxSample > sea-q.Rules.MinWaterDepth {
 		return PlacementResult{}, fmt.Errorf("world: placement is deeper than minimum water depth %d [05 %q]", q.Rules.MinWaterDepth, "Geothermal requirement")
 	}
 	return PlacementResult{Rect: q.Rect, SiteHeight: siteHeight}, nil
+}
+
+// mobileCellLegal is the mobile class's terrain test for ONE covered cell,
+// [04 R-COLL-01 §2] "the mode-1 scan" steps 3-5, in that order:
+//
+//  3. deep:    hmin < seaLevel − MaxWaterDepth  → reject
+//  4. shallow: hmax > seaLevel − MinWaterDepth  → reject
+//  5. slope:   slope = hmax − hmin; when slope > MaxSlope, a land cell
+//     (hmin >= seaLevel) rejects, otherwise slope > MaxWaterSlope
+//     rejects
+//
+// Every comparison is signed and STRICT, so a slope or a depth exactly at the
+// limit is legal. `hmin`/`hmax` are this cell's own derived pair, never a
+// rectangle aggregate [04 R-SLOPE-01 §3]. Step 5's branch is the per-cell pair
+// selection of [04 R-P0-08] — the land pair when the cell's `hmin >= SeaLevel`,
+// the water pair otherwise — because the compiled class clamps MaxSlope down to
+// MaxWaterSlope before either reaches the definition [04 §6.1].
+//
+// This is the same arithmetic as movement's commit-cell validator
+// (internal/movement/profile_footprint.go, IsPassableCommitCell). The two
+// cannot share code: movement depends on world, so the dependency may not run
+// the other way.
+func mobileCellLegal(cell *PlotCell, sea int32, rules PlacementRules) error {
+	low, high := int32(cell.MinHeight()), int32(cell.MaxHeight())
+	if low < sea-rules.MaxWaterDepth {
+		return fmt.Errorf("water depth exceeds %d [04 R-COLL-01 §2]", rules.MaxWaterDepth)
+	}
+	if high > sea-rules.MinWaterDepth {
+		return fmt.Errorf("is deeper than minimum water depth %d [04 R-COLL-01 §2]", rules.MinWaterDepth)
+	}
+	if slope := high - low; slope > rules.MaxSlope {
+		if low >= sea {
+			return fmt.Errorf("slope %d exceeds limit %d [04 R-COLL-01 §2]", slope, rules.MaxSlope)
+		}
+		if slope > rules.MaxWaterSlope {
+			return fmt.Errorf("slope %d exceeds water limit %d [04 R-COLL-01 §2]", slope, rules.MaxWaterSlope)
+		}
+	}
+	return nil
 }
 
 // knownSiteGate is the build-cursor preview's half of the footprint blocker

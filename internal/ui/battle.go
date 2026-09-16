@@ -34,6 +34,13 @@ const (
 	// child is open. ARMOPT remains the pause-owning root underneath it
 	// [07 R-FE-01 §7][08 R-CAMP-01 §8].
 	BattleModalRestart
+	// ARMOPT's two read-only children. `MISSION` opens BRIEFING.GUI in a
+	// campaign and GAMEOPTIONS.GUI otherwise; `HELP` opens HELP.GUI. Each one
+	// opens over the surviving options root, which keeps the pause bit it set,
+	// and its `OK` returns to that root [07 R-FE-01 §7][07 R-WGT-01 §1].
+	BattleModalBriefing
+	BattleModalGameOptions
+	BattleModalHelp
 )
 
 // BattleModalAction is the concrete result of activating a modal control.
@@ -61,6 +68,19 @@ const (
 	// consumes the request because both cross the session boundary.
 	BattleModalActionRestartDifficulty
 	BattleModalActionRestart
+	// ARMOPT's `MISSION` and `HELP` each open a read-only child window whose
+	// rows the composition root fills from the running session and from
+	// `gamedata\help.tdf`. The modal transition has already happened when the
+	// action is reported; the action is the request to build that content
+	// [07 R-FE-01 §7][08 R-SKIR-01 §11].
+	BattleModalActionMission
+	BattleModalActionHelp
+	// HELP.GUI's three-stage `Page` button refills the window with page `p`,
+	// and a click on BRIEFING.GUI's `TextRegion` or `MOREBAR` advances its
+	// pager. Both are content requests on an already-open child
+	// [07 R-FE-01 §7][07 R-HUD-03 §10].
+	BattleModalActionHelpPage
+	BattleModalActionBriefingPage
 )
 
 // BattleScheduleIntent is a plain presentation value. Session applies it at
@@ -131,6 +151,10 @@ type BattleState struct {
 	// [07 §11].
 	paused              bool
 	pauseScheduleIssued bool
+	// campaign is doc 08's session kind reduced to the one distinction ARMOPT
+	// makes: kind 1 (a campaign mission) sends `MISSION` to BRIEFING.GUI, and
+	// every other kind sends it to GAMEOPTIONS.GUI [07 R-FE-01 §7].
+	campaign bool
 
 	// Input is intentionally public as a plain value so the cmd adapter can
 	// render and update it without introducing another state bridge. No mutable
@@ -179,12 +203,23 @@ func NewProductionBattleState() *BattleState {
 	return NewBattleState(BattleEntryMode)
 }
 
-// SetPanelCue installs the optional authored cue sink. UI owns when a detent
-// transition occurs; the composition root owns how the cue is played.
+// SetPanelCue installs the optional authored cue sink. UI owns when a cue is
+// due — a rail detent transition, or an `ARMOPT` button press — and the
+// composition root owns how the alias is played, so no interface sound is
+// reached from this layer [07 §6][07 R-WGT-01 §3].
 func (s *BattleState) SetPanelCue(cue func(string)) {
 	if s != nil {
 		s.panelCue = cue
 	}
+}
+
+// playCue hands one authored alias to the installed sink. A state composed
+// without a sink is silent, as a battle composed without audio is.
+func (s *BattleState) playCue(alias string) {
+	if s == nil || s.panelCue == nil || alias == "" {
+		return
+	}
+	s.panelCue(alias)
 }
 
 // SetPanelTarget applies the retail Space/editor polarity [07 §6] C14.
@@ -384,12 +419,48 @@ func (s *BattleState) Back() BattleScheduleIntent {
 	switch s.modal {
 	case BattleModalOptions:
 		return s.CloseOptions()
-	case BattleModalConfirmMain, BattleModalConfirmExit, BattleModalRestart:
+	case BattleModalConfirmMain, BattleModalConfirmExit, BattleModalRestart,
+		BattleModalBriefing, BattleModalGameOptions, BattleModalHelp:
 		s.modal = BattleModalOptions
 	case BattleModalExit:
 		s.modal = BattleModalOptions
 	}
 	return BattleScheduleIntent{}
+}
+
+// SetCampaign records whether the running battle is a campaign mission. It is
+// the one session fact ARMOPT's `MISSION` branch reads, and the same fact its
+// opener reads to relabel the button `Settings` [07 R-FE-01 §7].
+func (s *BattleState) SetCampaign(campaign bool) {
+	if s != nil {
+		s.campaign = campaign
+	}
+}
+
+// Campaign reports the recorded session kind distinction.
+func (s *BattleState) Campaign() bool { return s != nil && s.campaign }
+
+// ShowBriefing, ShowGameOptions and ShowHelp push ARMOPT's read-only children
+// over the surviving options root [07 R-FE-01 §7].
+func (s *BattleState) ShowBriefing() {
+	if s != nil && s.modal == BattleModalOptions {
+		s.modal = BattleModalBriefing
+		s.ClearModalPress()
+	}
+}
+
+func (s *BattleState) ShowGameOptions() {
+	if s != nil && s.modal == BattleModalOptions {
+		s.modal = BattleModalGameOptions
+		s.ClearModalPress()
+	}
+}
+
+func (s *BattleState) ShowHelp() {
+	if s != nil && s.modal == BattleModalOptions {
+		s.modal = BattleModalHelp
+		s.ClearModalPress()
+	}
 }
 
 // ShowExit pushes EXITMENU over ARMOPT.
@@ -434,6 +505,14 @@ func (s *BattleState) Activate(name string) BattleModalAction {
 	name = gui.CallbackName(name)
 	switch s.modal {
 	case BattleModalOptions:
+		// Every `ARMOPT` button plays the `Options` cue before it runs its
+		// route, `OK` included, and the child openers run after that cue
+		// [07 R-FE-01 §7]. A name the window does not author reaches no route
+		// and so plays nothing.
+		switch name {
+		case "OK", "CANCEL", "EXIT", "SAVEGAME", "LOADGAME", "PREFS", "MISSION", "HELP":
+			s.playCue("Options")
+		}
 		switch name {
 		case "OK", "CANCEL":
 			s.CloseOptions()
@@ -449,6 +528,19 @@ func (s *BattleState) Activate(name string) BattleModalAction {
 			// The options root opens over ARMOPT, which stays on the modal
 			// chain [07 R-FE-01 §6][07 R-FE-01 §7].
 			return BattleModalActionPrefs
+		case "MISSION":
+			// The branch is the session kind: a campaign mission reaches the
+			// in-battle briefing, every other kind the read-only game-settings
+			// overlay [07 R-FE-01 §7][08 R-SKIR-01 §11].
+			if s.campaign {
+				s.ShowBriefing()
+			} else {
+				s.ShowGameOptions()
+			}
+			return BattleModalActionMission
+		case "HELP":
+			s.ShowHelp()
+			return BattleModalActionHelp
 		}
 	case BattleModalExit:
 		switch name {
@@ -470,6 +562,30 @@ func (s *BattleState) Activate(name string) BattleModalAction {
 				return BattleModalActionMainMenu
 			}
 			return BattleModalActionExitGame
+		}
+	case BattleModalBriefing:
+		switch name {
+		case "OK":
+			s.modal = BattleModalOptions
+			s.ClearModalPress()
+		case "TextRegion", "MOREBAR":
+			// The in-battle briefing clears the inert-label attribute bit on
+			// both, so unlike MSNBRIEF they are ordinary fired gadgets here;
+			// either one pages the text [07 R-FE-01 §7][07 R-HUD-03 §10].
+			return BattleModalActionBriefingPage
+		}
+	case BattleModalGameOptions:
+		if name == "OK" {
+			s.modal = BattleModalOptions
+			s.ClearModalPress()
+		}
+	case BattleModalHelp:
+		switch name {
+		case "OK":
+			s.modal = BattleModalOptions
+			s.ClearModalPress()
+		case "Page":
+			return BattleModalActionHelpPage
 		}
 	case BattleModalRestart:
 		switch name {

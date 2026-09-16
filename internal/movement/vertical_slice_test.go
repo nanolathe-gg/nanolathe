@@ -423,7 +423,7 @@ func TestVerticalSlice_TransportLoadMoveUnload(t *testing.T) {
 		id = orders.Lookup("Move_Ground")
 	}
 	q := orders.QueueForUnit(w.Unit(th))
-	q.Push(id, orders.Node{GoalX: targetX, GoalZ: targetZ})
+	q.Push(id, orders.Node{GoalX: targetX, GoalZ: targetZ, GoalSupplied: true})
 	// Tick movement + sync carried
 	for tick := uint32(1); tick < 250; tick++ {
 		sys.Scheduler.Tick(tick)
@@ -583,7 +583,7 @@ func TestVerticalSlice_GunshipTakeoffMoveLand(t *testing.T) {
 		id = orders.Lookup("Move_Ground")
 	}
 	q := orders.QueueForUnit(w.Unit(gh))
-	q.Push(id, orders.Node{GoalX: targetX, GoalZ: targetZ})
+	q.Push(id, orders.Node{GoalX: targetX, GoalZ: targetZ, GoalSupplied: true})
 	// Tick flight to pad vicinity; flight integrator should climb to cruisealt and move horizontally [04 §10.1]
 	for tick := uint32(1); tick < 250; tick++ {
 		sys.Scheduler.Tick(tick)
@@ -731,7 +731,7 @@ func TestSchedulerForNaval(t *testing.T) {
 	sys.SubmitMove(sh, 0, startCell, goalCell)
 	id := orders.Lookup("Move_Ground")
 	q := orders.QueueForUnit(w.Unit(sh))
-	q.Push(id, orders.Node{GoalX: world.CellToWorld(28), GoalZ: world.CellToWorld(10)})
+	q.Push(id, orders.Node{GoalX: world.CellToWorld(28), GoalZ: world.CellToWorld(10), GoalSupplied: true})
 	sys.Scheduler.Tick(60)
 	route := handleRow(sys.Routes, sh)
 	if route == nil || !route.Active {
@@ -774,7 +774,7 @@ func TestDeterminism_TransportSlice(t *testing.T) {
 		sys.SubmitAirMove(handles[0], targetX, targetZ, w)
 		id := orders.Lookup("VTOL_Move")
 		q := orders.QueueForUnit(w.Unit(handles[0]))
-		q.Push(id, orders.Node{GoalX: targetX, GoalZ: targetZ})
+		q.Push(id, orders.Node{GoalX: targetX, GoalZ: targetZ, GoalSupplied: true})
 		for tick := uint32(1); tick < 10; tick++ {
 			sys.Scheduler.Tick(tick)
 			runMovementTick(sys, tick, w)

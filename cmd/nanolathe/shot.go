@@ -232,15 +232,9 @@ func runShot(opts Options, cs *contentSet) error {
 	// Without it no capture can review those windows: they open only from
 	// input the capture path has none of.
 	if opts.ShotModal != "" {
-		var route []string
-		switch opts.ShotModal {
-		case "options":
-		case "exit":
-			route = []string{"EXIT"}
-		case "confirm":
-			route = []string{"EXIT", "MAINMENU"}
-		default:
-			return fmt.Errorf("nanolathe: shot: --shot-modal wants \"options\", \"exit\" or \"confirm\", got %q", opts.ShotModal)
+		route, err := shotModalRoute(opts.ShotModal, battleSessionKind(b) == 1)
+		if err != nil {
+			return err
 		}
 		b.openBattleMenu()
 		for _, button := range route {
@@ -388,6 +382,41 @@ func runShot(opts Options, cs *contentSet) error {
 	return writeMemProfile(opts.MemProfile)
 }
 
+// shotModalRoute is the `--shot-modal` table: the authored button names the
+// capture presses on the open options root, in order, to reach the named
+// window. Every route goes through `ui.BattleState.Activate`, so a capture
+// opens these windows by the one transition the pointer uses and no capture
+// path can compose a window the game cannot [07 R-FE-01 §7].
+//
+// `MISSION` is one button whose child is chosen by the session kind — a
+// campaign mission opens `BRIEFING.GUI` and every other kind
+// `GAMEOPTIONS.GUI` — so `settings` and `briefing` name the same button and a
+// session that would open the other child is refused rather than silently
+// captured.
+func shotModalRoute(modal string, campaign bool) ([]string, error) {
+	switch modal {
+	case "options":
+		return nil, nil
+	case "exit":
+		return []string{"EXIT"}, nil
+	case "confirm":
+		return []string{"EXIT", "MAINMENU"}, nil
+	case "help":
+		return []string{"HELP"}, nil
+	case "settings":
+		if campaign {
+			return nil, fmt.Errorf("nanolathe: shot: --shot-modal settings is MISSION's skirmish child, but this session is a campaign mission, whose MISSION opens the briefing: drop --mission or capture --shot-modal briefing")
+		}
+		return []string{"MISSION"}, nil
+	case "briefing":
+		if !campaign {
+			return nil, fmt.Errorf("nanolathe: shot: --shot-modal briefing is MISSION's campaign child, but this session is a skirmish, whose MISSION opens the settings overlay: pass --mission <selector> or capture --shot-modal settings")
+		}
+		return []string{"MISSION"}, nil
+	}
+	return nil, fmt.Errorf("nanolathe: shot: --shot-modal wants \"options\", \"exit\", \"confirm\", \"settings\", \"help\" or \"briefing\", got %q", modal)
+}
+
 // effectiveShotRenderer applies the one routing rule for battle and model
 // captures. An omitted shot renderer follows the requested presentation
 // renderer, but only the exact modern value selects the GPU path; every other
@@ -477,7 +506,16 @@ func runShotBoth(opts Options, cl *client.Client, shotW, shotH int) error {
 	// captureModernShot calls RecordModernFrame to retain the geometry-only model
 	// packets the GPU consumes. Reusing the classic-inclusive list here would
 	// omit models from the modern replay after cached/live composition.
+	// Both recordings draw the segmented-projectile passes from the client's
+	// private presentation CRT, which is a stream [03 §5.4][I4]. Without the
+	// rollback the modern half of `both` would start where the classic compose
+	// left the stream and so differ from `--shot-renderer modern` for the same
+	// seed, and the diff below would report presentation RNG jitter as executor
+	// divergence. The restore puts the stream back where the classic compose
+	// found it, so each executor sees the state a single recording would.
+	restoreCRT := cl.SnapshotPresentationCRT()
 	classic := cl.ComposeFrame()
+	restoreCRT()
 	modern, err := captureModernShot(cl, shotW, shotH, shotSceneLabel(opts), opts.ShotGPUProfileFrames)
 	if err != nil {
 		return err

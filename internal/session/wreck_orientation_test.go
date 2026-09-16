@@ -164,6 +164,7 @@ func TestWreckKeepsItsOrientationThroughDeathAndResurrection(t *testing.T) {
 	orders.QueueForUnit(con).Push(id, orders.Node{
 		Owner: hCon,
 		GoalX: world.CellToWorld(victimCellX), GoalZ: world.CellToWorld(victimCellZ),
+		GoalSupplied: true,
 	})
 
 	var product *units.Unit

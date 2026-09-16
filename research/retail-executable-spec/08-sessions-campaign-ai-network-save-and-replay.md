@@ -6890,6 +6890,32 @@ been characterized. A bounded table-constructor and index-reader trace over
 those inputs would settle it. Nanolathe currently retains an empty entry for
 an empty name as explicit host policy.
 
+**Unknown — what the writer puts in the `Radar Image` box.** The header and
+the row layout above are established from the reader; the extent the *writer*
+declares is not. The two candidates are the aspect-fitted radar picture — the
+`radarWidth x radarHeight` rectangle the minimap layout of [07 §10] fits inside
+its square canvas — and the whole `126x126` canvas including the letterbox
+padding that centres that rectangle, and it is equally unsettled whether the
+dumped surface is the fogged picture alone or the composed one carrying the
+contacts pass. A trace of the summary writer's radar dump — the extent words it
+writes and which composed surface it copies from — would settle it. Nanolathe
+writes the aspect-fitted picture as the battle rail last composed it, contacts
+included, as explicit host policy; the site is `battleRadarPreviewBox` in
+`cmd/nanolathe/loadgame.go`, which carries the matching `TODO(question)`.
+
+**Unknown — how the panel places the box in `RADAR`.** The authored `RADAR`
+surface of `LOADGAME.GUI` is `121x113`, which is smaller than the `126`-pixel
+canvas the box can declare, and the panel's own placement rule is not
+characterized: the picture may be stamped at the gadget origin and clipped, or
+resampled into the rectangle the way the map-selection preview resamples its
+TNT radar image ([07 §5]). The two differ visibly for every
+stock map, so this is not a cosmetic residual. A trace of the summary panel's
+radar blit — the destination rectangle and whether a resampler is entered —
+would settle it. Nanolathe resamples the picture with its own aspect preserved
+and centres it in the authored rectangle, so no part of the saved battle is cut
+away; the site is `drawSaveLoadRadarPreview` in `cmd/nanolathe/loadgame.go`,
+which carries the matching `TODO(question)`.
+
 **The out-of-range `Difficulty`.** There is no fourth row and no clamp. The three labels are
 not a table in the image at all: the panel writer stores the three string
 pointers into three consecutive **stack** slots immediately before reading the

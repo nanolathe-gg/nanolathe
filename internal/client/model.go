@@ -316,6 +316,17 @@ func (c *Client) drawFeatureModel(f frame.FeatureView) bool {
 	// structure class bit and the height-plane bit unconditionally at
 	// construction, so 3DO wrecks anti-alias like buildings [R-REN-03A §2].
 	draw.Structure, draw.KeyPlane = true, true
+	// A structure-class pseudo-unit reaches the structure shadow branch, which
+	// re-rasterizes the model and caches the punched result. Its gate is the
+	// master shadow bit plus the branch's own ordinal-0 waterline suppression,
+	// so a wreck at or above the waterline casts a building-shaped shadow and a
+	// submerged one casts none [03 R-REN-03D §1][03 R-RAST-01 §4].
+	draw.CastsShadow = c.featureCastsModelShadow(f.Y)
+	// The shadow shears by the terrain height under the subject rather than by
+	// the subject's own height, which is what slides it across a slope
+	// [03 R-REN-03D §3]. Without this the feature shadow would shear against
+	// world height zero, as the unit path's own GroundY assignment avoids.
+	draw.GroundY = c.groundHeightUnder(f.X, f.Z)
 	// The nanoframe reveal is a construction-fraction contract; a sinking
 	// feature is not an unfinished unit and takes the ordinary model path.
 	// The cleared pseudo-unit retains owner slot zero through each feature
@@ -388,6 +399,7 @@ func (c *Client) drawDebrisModel(v frame.DebrisView) bool {
 			return false
 		}
 		c.list.RecordModel(drawlist.Model{Geometry: g})
+		c.emitDebrisTrails(v)
 		return true
 	}
 	direct, ok := c.composeDirectDebrisModel(draw, selector, uint64(v.Slot))
@@ -395,8 +407,14 @@ func (c *Client) drawDebrisModel(v frame.DebrisView) bool {
 		return false
 	}
 	c.finishModel(direct, nil)
-	// TODO(RT08): whole-debris smoke and flame are per-render-frame CRT trail
-	// producers; presentation CRT ownership is not established at this seam.
+	// This frame drew the piece, so its two producers run: one strip-9
+	// smoke-puff container under the record's SMOKE bit and/or one flame-stream
+	// trail container under its FIRE bit, both at the piece and both from the
+	// presentation CRT copy [04 R-COB-04 §2][03 R-FX-01 §3]. The containers go
+	// to the presentation store, which steps them on the committed tick and
+	// draws them at barrier 9 — see debris_trail_store.go and
+	// docs/DESIGN_PRESENTATION_CLIENT.md C2.2.
+	c.emitDebrisTrails(v)
 	return true
 }
 

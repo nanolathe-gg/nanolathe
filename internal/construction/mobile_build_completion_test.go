@@ -38,13 +38,14 @@ func mobileBuildCompletionFixture(t *testing.T, count uint32) (*Service, *units.
 	q := orders.QueueForUnit(builder)
 	q.SetBinding(&orders.QueueBinding{Lookup: func(h pool.Handle) *units.Unit { return w.Unit(h) }})
 	q.Push(orders.Lookup(MobileBuildOrder), orders.Node{
-		BuildDefKey: productDef.CanonicalKey,
-		Param2:      count,
-		Phase:       uint8(State4),
-		GoalX:       111,
-		GoalY:       222,
-		GoalZ:       333,
-		Owner:       builder.Handle,
+		BuildDefKey:  productDef.CanonicalKey,
+		Param2:       count,
+		Phase:        uint8(State4),
+		GoalX:        111,
+		GoalY:        222,
+		GoalZ:        333,
+		Owner:        builder.Handle,
+		GoalSupplied: true,
 	})
 	q.Primary()[0].BindTarget(product.Handle) // stage the runtime product relink [04 R-ORD-01 §6]
 	node := q.Primary()[0]

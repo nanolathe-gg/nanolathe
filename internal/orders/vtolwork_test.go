@@ -115,7 +115,8 @@ func TestVTOLWorkTwinsDispatchAndReachTheirTerminal(t *testing.T) {
 		// feature at its goal before it looks at anything else, and the other
 		// two twins overwrite the goal from their target [04 R-ORD-01 §5, §7].
 		q.Push(id, Node{Owner: builder.Handle, Target: target.Handle,
-			GoalX: numeric.Fixed(70 << 16), GoalY: numeric.Fixed(40 << 16), GoalZ: numeric.Fixed(90 << 16)})
+			GoalSupplied: true,
+			GoalX:        numeric.Fixed(70 << 16), GoalY: numeric.Fixed(40 << 16), GoalZ: numeric.Fixed(90 << 16)})
 		head := q.Primary()[0]
 		if head.DynamicGate != 0 {
 			t.Fatalf("%s: fresh record waits on %#x [04 R-ORD-01 §1]", name, head.DynamicGate)
@@ -150,7 +151,7 @@ func TestVTOLHelpBuildPassesTheAbsoluteBearing(t *testing.T) {
 	u.X, u.Z = 0, 0
 	u.Move.Heading = 49152 // already facing the target
 	target := &units.Unit{Handle: 2, X: numeric.Fixed(64 << 16)}
-	n := &Node{ID: Lookup("VTOL_HelpBuild"), Owner: u.Handle, Deadline: -1, GoalX: numeric.Fixed(64 << 16)}
+	n := &Node{ID: Lookup("VTOL_HelpBuild"), Owner: u.Handle, Deadline: -1, GoalX: numeric.Fixed(64 << 16), GoalSupplied: true}
 
 	emitStartBuildingAbsolute(u, n, target)
 
@@ -166,7 +167,7 @@ func TestVTOLHelpBuildPassesTheAbsoluteBearing(t *testing.T) {
 	u2, vm2 := cbUnit(cbProgram("StartBuilding"))
 	u2.X, u2.Z = 0, 0
 	u2.Move.Heading = 49152
-	n2 := &Node{ID: Lookup("HelpBuild"), Owner: u2.Handle, Deadline: -1, GoalX: numeric.Fixed(64 << 16)}
+	n2 := &Node{ID: Lookup("HelpBuild"), Owner: u2.Handle, Deadline: -1, GoalX: numeric.Fixed(64 << 16), GoalSupplied: true}
 	EmitStartBuilding(u2, n2)
 	if args2 := startedArgs(vm2); len(args2) != 1 || !argsEqual(args2[0], []int32{0}) {
 		t.Fatalf("ground HelpBuild arrange %v, want [0]: eight of nine sites subtract the heading", args2)
@@ -250,7 +251,8 @@ func TestVTOLReclaimCountdownUsesThirty(t *testing.T) {
 
 	visits := func(seed uint32) int {
 		n := &Node{ID: Lookup("VTOL_Reclaim"), Owner: builder.Handle, Phase: 3, Param1: seed, Deadline: -1,
-			GoalX: numeric.Fixed(70 << 16), GoalZ: numeric.Fixed(90 << 16)}
+			GoalSupplied: true,
+			GoalX:        numeric.Fixed(70 << 16), GoalZ: numeric.Fixed(90 << 16)}
 		count := 0
 		for n.Phase == 3 && count < 200 {
 			code := vtolReclaimHandler(builder, n, 0, uint32(count))
@@ -305,7 +307,8 @@ func TestVTOLReclaimEmitsTheNanolatheSpray(t *testing.T) {
 	// the bound adapter is the two-segment producer, not this handler
 	// [05 R-WORK-01 §8].
 	n := &Node{ID: Lookup("VTOL_Reclaim"), Owner: builder.Handle, Phase: 3, Param1: 40, Deadline: -1,
-		GoalX: numeric.Fixed(70 << 16), GoalZ: numeric.Fixed(90 << 16)}
+		GoalSupplied: true,
+		GoalX:        numeric.Fixed(70 << 16), GoalZ: numeric.Fixed(90 << 16)}
 	if code := vtolReclaimHandler(builder, n, 0, 1); code == 8 {
 		t.Fatalf("the visit abandoned instead of holding on its countdown")
 	}
@@ -317,7 +320,8 @@ func TestVTOLReclaimEmitsTheNanolatheSpray(t *testing.T) {
 	// as the ground row's own `<= 15` visits.
 	segments = 0
 	n = &Node{ID: Lookup("VTOL_Reclaim"), Owner: builder.Handle, Phase: 3, Param1: 32, Deadline: -1,
-		GoalX: numeric.Fixed(70 << 16), GoalZ: numeric.Fixed(90 << 16)}
+		GoalSupplied: true,
+		GoalX:        numeric.Fixed(70 << 16), GoalZ: numeric.Fixed(90 << 16)}
 	if code := vtolReclaimHandler(builder, n, 0, 1); code == 8 {
 		t.Fatalf("the visit abandoned instead of holding on its countdown")
 	}
@@ -342,7 +346,8 @@ func TestVTOLRepairPatrolHoldsOnItsOwnDeadline(t *testing.T) {
 		t.Fatalf("VTOL_RepairPatrol has no handler at all: it would park [PLAN 18 gate 10]")
 	}
 	n := &Node{ID: id, Owner: builder.Handle, Deadline: -1,
-		GoalX: numeric.Fixed(200 << 16), GoalZ: numeric.Fixed(200 << 16)}
+		GoalSupplied: true,
+		GoalX:        numeric.Fixed(200 << 16), GoalZ: numeric.Fixed(200 << 16)}
 	q.Push(id, *n)
 	n = q.Primary()[0]
 

@@ -203,7 +203,7 @@ func TestMobileBuildRequestsStartAtCommittedAnchor(t *testing.T) {
 		t.Fatal("MobileBuild order unavailable")
 	}
 	q := orders.QueueForUnit(u)
-	q.Push(id, orders.Node{GoalX: world.CellToWorld(10), GoalZ: world.CellToWorld(15)})
+	q.Push(id, orders.Node{GoalX: world.CellToWorld(10), GoalZ: world.CellToWorld(15), GoalSupplied: true})
 	head := q.Head()
 	selected := path.Cell{X: 8, Z: 13}
 	sys.BindMoveGoal(h, head, world.CellToWorld(selected.X), world.CellToWorld(selected.Z))
@@ -297,7 +297,7 @@ func TestOccupancyCommitNotesRevisionLayers(t *testing.T) {
 		t.Fatalf("Move_Ground not found")
 	}
 	q := orders.QueueForUnit(w.Unit(h))
-	q.Push(id, orders.Node{GoalX: world.CellToWorld(12), GoalZ: world.CellToWorld(2)})
+	q.Push(id, orders.Node{GoalX: world.CellToWorld(12), GoalZ: world.CellToWorld(2), GoalSupplied: true})
 
 	startPoint := Point{X: int32(w.Unit(h).X.Raw() >> 16), Z: int32(w.Unit(h).Z.Raw() >> 16)}
 	handleRow(sys.Routes, h).PublishAtRevision([]Point{startPoint, {X: 192, Z: startPoint.Z}}, sys.staticObstacleRevision())

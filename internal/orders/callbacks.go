@@ -161,8 +161,10 @@ func bearingOffset(heading uint16, radius numeric.Fixed) (numeric.Fixed, numeric
 //
 // Eight of retail's nine sites subtract the builder's own heading; the ninth,
 // `VTOL_HelpBuild`, passes the absolute bearing so an air builder's script
-// receives a world heading [04 R-CB-01 §3]. This build has no VTOL_HelpBuild
-// emitter yet; when one is added it must skip the subtraction below.
+// receives a world heading [04 R-CB-01 §3]. That ninth site is
+// emitStartBuildingAbsolute in vtolwork.go, which is this emitter without the
+// subtraction below and takes its bearing against the live target rather than
+// the record goal.
 func EmitStartBuilding(u *units.Unit, n *Node) {
 	if u == nil || n == nil {
 		return

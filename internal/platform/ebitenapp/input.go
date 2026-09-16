@@ -74,6 +74,12 @@ func readInput(timestamp uint32) sampledInput {
 // a polling API; it does not claim to restore native message chronology
 // [07 §2][01 R-PLAT-01 §6].
 func applyInput(in *input.State, sample sampledInput) {
+	applyInputWith(in, sample, &nativeDoubleClick)
+}
+
+// applyInputWith is applyInput against a caller-supplied double-click
+// recognizer, so a test can drive a press pair without the process-wide one.
+func applyInputWith(in *input.State, sample sampledInput, clicks *doubleClickRecognizer) {
 	if in == nil || in.Mouse == nil || in.Kbd == nil {
 		return
 	}
@@ -118,7 +124,16 @@ func applyInput(in *input.State, sample sampledInput) {
 	in.UpdatePointerMotion(event)
 	if wasLeft != sample.buttons.Left {
 		if sample.buttons.Left {
+			// The second press of a pair carries the double-click identity
+			// instead of a plain press, the way the operating system replaced
+			// the second press message in retail. One transition stays one
+			// record: publication takes a single record per host service, and
+			// the widget pass treats the double-click as a press that also
+			// fires [07 R-WGT-01 §4]. See doubleclick.go for the host policy.
 			event.Kind = input.LeftDown
+			if clicks != nil && clicks.press(sample.x, sample.y, sample.timestamp) {
+				event.Kind = input.LeftDoubleClick
+			}
 		} else {
 			event.Kind = input.LeftUp
 		}
@@ -132,8 +147,11 @@ func applyInput(in *input.State, sample sampledInput) {
 		}
 		in.EnqueuePointer(event)
 	}
-	// TODO(T25): Ebiten polling exposes no native message order, key-repeat
-	// history, or double-click identity. Do not synthesize those details here.
+	// TODO(T25): Ebiten polling exposes no native message order and no
+	// key-repeat history. Do not synthesize those details here. The left
+	// double-click above is the one reconstruction, and only because its
+	// inputs — interval and rectangle — are host settings rather than retail
+	// behaviour.
 	in.PublishPointer()
 
 	// AppendInputChars preserves character order within its own batch. Ebiten

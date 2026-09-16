@@ -110,7 +110,7 @@ func TestAirToGroundOffMapForcesPhaseTwo(t *testing.T) {
 	target := airTargetFor(t, sys, w, 40, 16)
 
 	q := orderQueueOf(t, u)
-	q.Push(orders.Lookup("AirToGround"), orders.Node{Owner: u.Handle, Target: target.Handle, GoalX: target.X, GoalY: target.Y, GoalZ: target.Z})
+	q.Push(orders.Lookup("AirToGround"), orders.Node{Owner: u.Handle, Target: target.Handle, GoalX: target.X, GoalY: target.Y, GoalZ: target.Z, GoalSupplied: true})
 	n := q.Primary()[0]
 	n.Phase = 4 // the break leg, where a fly-through of three ranges leaves the map
 

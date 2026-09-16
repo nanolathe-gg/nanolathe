@@ -841,7 +841,7 @@ func TestGuardAssistOrdering(t *testing.T) {
 	// The ward's own front order is a nanolathe-class build elsewhere, which is
 	// leg 4's precondition.
 	wardQ := QueueForUnit(ward)
-	wardQ.Push(Lookup("HelpBuild"), Node{Target: 99, GoalX: ward.X, GoalY: ward.Y, GoalZ: ward.Z})
+	wardQ.Push(Lookup("HelpBuild"), Node{Target: 99, GoalX: ward.X, GoalY: ward.Y, GoalZ: ward.Z, GoalSupplied: true})
 	setTestLookup(actor, func(h pool.Handle) *units.Unit {
 		if h == 20 {
 			return ward

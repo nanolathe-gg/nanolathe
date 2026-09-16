@@ -497,3 +497,48 @@ func TestPlayerSlotStorageItemsAreTheBonusOperands(t *testing.T) {
 		t.Fatalf("reader wrote capacity %v; capacity is rebuilt at the first settlement, never restored", dst.Capacity)
 	}
 }
+
+// TestPlayersMetaHumanPlayerLoadDefault locks the item's load default: a
+// Players account that carries no "Human Player" integer reads back 10, no
+// human [08 R-SAVE-02 §12]. Ten is outside the 0..9 slot range the restore
+// accepts, so the zero value this replaces silently named slot 0 as the local
+// and viewing player on a save that lost the item.
+func TestPlayersMetaHumanPlayerLoadDefault(t *testing.T) {
+	clk := &clock.State{Requested: 10, Active: 10, GlobalTick: 100}
+	// WriteGameTime creates the Players account with the GameTime box alone, so
+	// the account is present and the item is not.
+	b := NewBuilder()
+	WriteGameTime(b, clk)
+	bank, err := OpenBytes(b.Bytes())
+	if err != nil {
+		t.Fatalf("OpenBytes: %v", err)
+	}
+	meta, present := ReadPlayersMeta(bank)
+	if !present {
+		t.Fatal("the Players account is present; ReadPlayersMeta reported it missing")
+	}
+	if meta.HumanPlayer != 10 {
+		t.Fatalf("Human Player absent reads %d, want the load default 10 [08 R-SAVE-02 §12]", meta.HumanPlayer)
+	}
+
+	// A bank with no Players account at all answers the same default, so no
+	// caller can read a fabricated slot 0 out of an absent account either.
+	empty, err := OpenBytes(NewBuilder().Bytes())
+	if err != nil {
+		t.Fatalf("OpenBytes empty: %v", err)
+	}
+	if meta, present := ReadPlayersMeta(empty); present || meta.HumanPlayer != 10 {
+		t.Fatalf("absent Players account reads (%d,%v), want (10,false) [08 R-SAVE-02 §12]", meta.HumanPlayer, present)
+	}
+
+	// A written item still wins, including slot 0.
+	b2 := NewBuilder()
+	WritePlayersMeta(b2, PlayersMeta{HumanPlayer: 0}, clk)
+	bank2, err := OpenBytes(b2.Bytes())
+	if err != nil {
+		t.Fatalf("OpenBytes written: %v", err)
+	}
+	if meta, present := ReadPlayersMeta(bank2); !present || meta.HumanPlayer != 0 {
+		t.Fatalf("written Human Player 0 reads (%d,%v), want (0,true)", meta.HumanPlayer, present)
+	}
+}

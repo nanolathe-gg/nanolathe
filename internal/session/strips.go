@@ -4,6 +4,7 @@ import (
 	"math"
 
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/render"
 
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
@@ -572,7 +573,7 @@ func (o *stripObject) advanceParticles(tick uint32, crt *rng.CRT, wind *world.Wi
 				p.frameDelay--
 				if p.frameDelay == 0 && o.frameDelayParam > 0 {
 					p.frame++
-					p.frameDelay = halfToFullDelay(o.frameDelayParam, crt)
+					p.frameDelay = render.SmokeFrameHold(o.frameDelayParam, crt.Rand())
 				}
 			}
 			// "it is removed when its frame index REACHES its last frame"
@@ -818,7 +819,7 @@ func (o *stripObject) spawnOnce(tick uint32, crt *rng.CRT) {
 		// the puff's last frame is finished later from this same draw, never
 		// from a second one.
 		p.lastFrameDraw, p.lastFrameDrawn = crt.Rand(), true
-		p.lastFrame = smokeLastFrame(o.frameCountBase, p.lastFrameDraw)
+		p.lastFrame = render.SmokeLastFrame(o.frameCountBase, p.lastFrameDraw)
 		// No tick deadline: a puff's only exit is its frame cursor reaching its
 		// own drawn last frame [06 R-WFX-01 §5][03 R-FX-02 §6]. The container's
 		// lifetime — the producer's literal — lives in windowEnd and bounds the
@@ -907,9 +908,9 @@ func (o *stripObject) spawnOnce(tick uint32, crt *rng.CRT) {
 			// 9362/65536 at 7, not 1/6 and 1/7 [03 R-FX-01 §3]. Corrected
 			// 2026-09-02; this used the exact quotient and overshot the target
 			// by a fraction of a unit per tick.
-			p.vx = trailStep(o.dst[0].Sub(o.src[0]), o.particleLife)
-			p.vy = trailStep(o.dst[1].Sub(o.src[1]), o.particleLife)
-			p.vz = trailStep(o.dst[2].Sub(o.src[2]), o.particleLife)
+			p.vx = render.FlameTrailStep(o.dst[0].Sub(o.src[0]), o.particleLife)
+			p.vy = render.FlameTrailStep(o.dst[1].Sub(o.src[1]), o.particleLife)
+			p.vz = render.FlameTrailStep(o.dst[2].Sub(o.src[2]), o.particleLife)
 		}
 		o.particles = append(o.particles, p)
 	}
@@ -926,14 +927,6 @@ func scaleExtent(extent numeric.Fixed, crt *rng.CRT) numeric.Fixed {
 // rand×7/0x8000 − 3, signed truncating [R-STRIP-01 §1 strip 2].
 func crtJitter7(crt *rng.CRT) int64 {
 	return int64(crt.Rand())*7/0x8000 - 3
-}
-
-// halfToFullDelay draws one CRT value for a smoke animation-frame advance:
-// the next frame's delay as half to full of the authored delay
-// [R-STRIP-01 §3].
-func halfToFullDelay(authored int32, crt *rng.CRT) int32 {
-	half := authored / 2 // signed truncating [I3]
-	return half + int32(int64(crt.Rand())*int64(half)/0x8000)
 }
 
 // nanoLifetimeTicks is trunc(distance/4) taken from the floating-point
@@ -1013,17 +1006,6 @@ func flameStartFrame(frameCountBase int32, draw int32) int32 {
 		return 0
 	}
 	return int32(int64(draw) * int64(frameCountBase) / 0x8000)
-}
-
-// trailStep is the flame-stream trail's per-axis step,
-// `((B − A) · trunc(65536 / lifetime)) >> 16` [03 R-FX-01 §3]. The truncated
-// reciprocal is what makes it fall slightly short of the exact quotient.
-func trailStep(delta numeric.Fixed, lifetime int32) numeric.Fixed {
-	if lifetime <= 0 {
-		return 0
-	}
-	recip := int64(65536) / int64(lifetime) // truncating [I3]
-	return numeric.Fixed((delta.Raw() * recip) >> 16)
 }
 
 // narrowBox narrows one producer box per axis to the span between its 4/11
@@ -1556,19 +1538,6 @@ func (s *Session) effectEntryFrameCountBase(entry string) int32 {
 	return int32(n - 1)
 }
 
-// smokeLastFrame folds one retained CRT draw against a bound entry's frame
-// count into a smoke puff's own final animation frame:
-// `crtRand·(frameCount − 3)/0x8000 + 2`, expressed here against the container's
-// stored `frameCount − 1` [03 R-FX-01 §3][06 R-WFX-01 §5]. A container with no
-// bound count yields 0, which means "not finished yet" and is finished by
-// resolveSmokeFrameCounts.
-func smokeLastFrame(frameCountBase int32, draw int32) int32 {
-	if frameCountBase <= 2 {
-		return 0
-	}
-	return int32(int64(draw)*int64(frameCountBase-2)/0x8000) + 2
-}
-
 // resolveSmokeFrameCounts finishes every live smoke container that was built
 // before the frame-count seam was filled, and every puff those containers had
 // already spawned.
@@ -1608,7 +1577,7 @@ func (s *Session) resolveSmokeFrameCounts() {
 				if p.lastFrame != 0 || !p.lastFrameDrawn {
 					continue
 				}
-				p.lastFrame = smokeLastFrame(o.frameCountBase, p.lastFrameDraw)
+				p.lastFrame = render.SmokeLastFrame(o.frameCountBase, p.lastFrameDraw)
 			}
 		}
 	}

@@ -68,7 +68,7 @@ func TestMoveGroundPhaseZeroInstallsItsPointGoal(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			q, u, installs, _ := moveGoalFixture()
 			goalX, goalZ := numeric.Fixed(300<<16), numeric.Fixed(420<<16)
-			q.Push(id, Node{Owner: u.Handle, Param1: tc.param1, GoalX: goalX, GoalZ: goalZ})
+			q.Push(id, Node{Owner: u.Handle, Param1: tc.param1, GoalX: goalX, GoalZ: goalZ, GoalSupplied: true})
 			q.Pump(u, 40)
 
 			if len(*installs) != 1 {
@@ -120,7 +120,7 @@ func TestMoveGroundArrivalCompletesAfterTheInstall(t *testing.T) {
 		InstallPoint: func(req PointGoalRequest) bool { installs = append(installs, req); return true },
 		Release:      func(*Node) bool { return true },
 	}
-	q.Push(id, Node{Owner: u.Handle, GoalX: numeric.Fixed(300 << 16), GoalZ: numeric.Fixed(420 << 16)})
+	q.Push(id, Node{Owner: u.Handle, GoalX: numeric.Fixed(300 << 16), GoalZ: numeric.Fixed(420 << 16), GoalSupplied: true})
 	q.Pump(u, 40)
 	if len(installs) != 1 {
 		t.Fatalf("phase 0 ran %d installs, want 1", len(installs))
@@ -160,7 +160,8 @@ func TestGroundMoveFamilyInstallsAPayload(t *testing.T) {
 			q, u, installs, _ := moveGoalFixture()
 			u.Def.SightDistance = 200
 			n := q.PushHead(id, Node{Owner: u.Handle, Phase: tc.phase, Deadline: -1,
-				GoalX: numeric.Fixed(300 << 16), GoalZ: numeric.Fixed(420 << 16)})
+				GoalSupplied: true,
+				GoalX:        numeric.Fixed(300 << 16), GoalZ: numeric.Fixed(420 << 16)})
 			if n == nil {
 				t.Fatal("push failed")
 			}

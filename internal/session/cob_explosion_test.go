@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/clock"
+	"github.com/nanolathe-gg/nanolathe/internal/cob"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/economy"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
@@ -311,4 +312,77 @@ func TestCOBBitmapExplosionPoolAndSeaBoundary(t *testing.T) {
 			t.Fatalf("refused bitmap requests built %d land-dust emitters", got)
 		}
 	})
+}
+
+// TestWholePieceAdmissionUsesCurrentPiecePoseNotRetainedTranslation locks the
+// approved unconditional departure C27.1 of docs/DESIGN_UNITS_ORDERS_COB.md
+// (authorized 2026-09-16), in exactly the case where retail differs: a piece
+// the script has translated since it was last composed. Retail admits the unit
+// position plus the piece's LAST RETAINED translation, a value written by model
+// drawing and by the viewing-player-visible refresh visit `[04 R-COB-04 §2]`
+// `[04 R-COB-04 §3]`, so a second admission after a script translation would
+// reuse the first admission's point. This build recomposes the live pose, so the
+// second admission moves by exactly the script's translation — render cadence
+// and the viewing player stay out of the authoritative tick [I4] [I6] [I11].
+//
+// Admission consumes no simulation draws either way: the departure is the
+// position only, never the six-draw seed.
+func TestWholePieceAdmissionUsesCurrentPiecePoseNotRetainedTranslation(t *testing.T) {
+	// Bitmap-only Create leaves the arena empty, so both admissions below are
+	// this test's own and their order is the only thing under test.
+	s, u := bitmapExplosionFixture(t, bitmapOnlyFlag, numeric.FixedFromInt(30))
+	binding := u.COBBinding()
+	u.Move.Heading, u.Move.Pitch, u.Move.Bank = 0, 0, 0
+	binding.Model.Pieces[1].Translate = [3]numeric.Fixed{}
+	binding.Model.Pieces[binding.Model.Root].Translate = [3]numeric.Fixed{}
+	binding.VM.Pieces[1].Trans = [3]numeric.Fixed{}
+
+	sink := &cobExplosionSink{presentation: &cobPresentationSink{session: s, publication: s.publication, source: u.Handle}}
+	request := cob.WholePieceExplosion{PhysicalExplosion: cob.PhysicalExplosion{
+		Source: cob.ExplosionSource{Identity: cob.ExplosionPieceIdentity{COBPiece: 1}},
+	}}
+
+	before := s.SimRNG().Draws()
+	if !sink.AdmitWholePiece(request) {
+		t.Fatal("whole-piece admission refused an unposed piece")
+	}
+	parts := s.debris.SnapshotInto(nil)
+	if len(parts) != 1 {
+		t.Fatalf("debris slots after first admission = %d, want 1", len(parts))
+	}
+	spawnPose := parts[0].Position
+	if want := ([3]numeric.Fixed{u.X, u.Y, u.Z}); spawnPose != want {
+		t.Fatalf("unposed admission = %v, want the unit point %v", spawnPose, want)
+	}
+
+	// The script now translates the piece. Nothing draws the unit and no
+	// refresh visit runs, so retail's retained translation would still be the
+	// zero pose above and its second admission would land on spawnPose.
+	const dx, dy, dz = 7, 3, 2
+	binding.VM.Pieces[1].Trans = [3]numeric.Fixed{dx << 16, dy << 16, dz << 16}
+	if !sink.AdmitWholePiece(request) {
+		t.Fatal("whole-piece admission refused a script-translated piece")
+	}
+	parts = s.debris.SnapshotInto(parts)
+	if len(parts) != 2 {
+		t.Fatalf("debris slots after second admission = %d, want 2", len(parts))
+	}
+	// ComposePiece already returns (x, y, −z), and pieceWorldPos adds it.
+	want := [3]numeric.Fixed{
+		u.X.Add(numeric.FixedFromInt(dx)),
+		u.Y.Add(numeric.FixedFromInt(dy)),
+		u.Z.Sub(numeric.FixedFromInt(dz)),
+	}
+	if parts[1].Position != want {
+		t.Fatalf("translated admission = %v, want the live pose %v [C27.1]", parts[1].Position, want)
+	}
+	if parts[1].Position == spawnPose {
+		t.Fatal("translated admission reused the earlier point: that is retail's retained translation, which C27.1 departs from")
+	}
+	if parts[0].Position != spawnPose {
+		t.Fatalf("first debris record followed the live pose: admission must copy, not alias [I6]")
+	}
+	if got := s.SimRNG().Draws() - before; got != 0 {
+		t.Fatalf("whole-piece admission consumed %d simulation draws, want 0: C27.1 moves the position only", got)
+	}
 }

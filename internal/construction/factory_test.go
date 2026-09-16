@@ -660,7 +660,7 @@ func TestFactoryProductSaveRestoreCompletesGetBuilt(t *testing.T) {
 			freshFactory, freshProduct := w.Unit(freshFactoryH), w.Unit(freshProductH)
 			freshProduct.Remaining = 0
 			if tc.rally {
-				orders.QueueForUnit(freshFactory).Push(orders.Lookup("QMove"), orders.Node{GoalX: world.CellToWorld(2), GoalZ: world.CellToWorld(3)})
+				orders.QueueForUnit(freshFactory).Push(orders.Lookup("QMove"), orders.Node{GoalX: world.CellToWorld(2), GoalZ: world.CellToWorld(3), GoalSupplied: true})
 			}
 			if tc.deadBuilder {
 				w.FreeImmediate(freshFactoryH)
@@ -813,9 +813,9 @@ func TestRallyInheritanceOrdering(t *testing.T) {
 	// head is building
 	q.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 1, Phase: uint8(State3)})
 	// Now add rally nodes after head (they will be after active marker)
-	q.Push(qMoveID, orders.Node{GoalX: world.CellToWorld(1), GoalZ: world.CellToWorld(1)})
-	q.Push(qPatrolID, orders.Node{GoalX: world.CellToWorld(2), GoalZ: world.CellToWorld(2)})
-	q.Push(qMoveID, orders.Node{GoalX: world.CellToWorld(3), GoalZ: world.CellToWorld(3)})
+	q.Push(qMoveID, orders.Node{GoalX: world.CellToWorld(1), GoalZ: world.CellToWorld(1), GoalSupplied: true})
+	q.Push(qPatrolID, orders.Node{GoalX: world.CellToWorld(2), GoalZ: world.CellToWorld(2), GoalSupplied: true})
+	q.Push(qMoveID, orders.Node{GoalX: world.CellToWorld(3), GoalZ: world.CellToWorld(3), GoalSupplied: true})
 	// Verify queue order: head BuildingBuild then QMove(1) QPatrol(2) QMove(3) in traversal order?
 	prim := q.Primary()
 	if len(prim) != 4 {

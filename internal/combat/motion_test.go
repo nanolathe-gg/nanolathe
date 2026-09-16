@@ -6,6 +6,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 )
 
 func fix(v int64) numeric.Fixed { return numeric.Fixed(v) }
@@ -860,5 +861,117 @@ func TestDroppedLaunchIsTheDroppingUnitsRun(t *testing.T) {
 	InitProjectile(&p, w, 100, Vec3{}, Vec3{}, 0, 0, 0, nil, 0, 0, 0x2000, 0)
 	if p.Velocity != (Vec3{}) {
 		t.Fatalf("velocity %+v, want all three components zero at zero mover speed [06 §6.4]", p.Velocity)
+	}
+}
+
+// TestInitCommonSeedsSmokeDeadlineToCreationTick locks [06 §4.1]: the common
+// initializer seeds the trail-smoke deadline to the CREATION TICK, whatever the
+// weapon's smokedelay. [06 §7.3] then gives the cadence — a strict
+// `smokeDeadline < currentTick` test with an ADDITIVE `+= smokedelay` advance —
+// so for a creation at tick T with delay D the first puff falls on T+1 and the
+// second on T+1+D. Seeding to `T + D` instead pushed the first puff a whole
+// interval late and silenced any projectile living at most D ticks.
+func TestInitCommonSeedsSmokeDeadlineToCreationTick(t *testing.T) {
+	const creation = uint32(100)
+	for _, delay := range []int32{0, 3, 30} {
+		w := &content.WeaponDef{ID: 1, SmokeDelay: delay, SmokeTrail: true}
+		var p Projectile
+		p.SmokeDeadline = 0xDEAD // prove the initializer writes it, not the reuse
+		InitCommon(&p, creation, Vec3{}, nil, 0, 0, 0, -1, w)
+		if p.SmokeDeadline != creation {
+			t.Fatalf("smokedelay %d: smoke deadline %d, want the creation tick %d [06 §4.1]", delay, p.SmokeDeadline, creation)
+		}
+	}
+	// A null definition seeds the same way [06 §4.1].
+	var np Projectile
+	np.SmokeDeadline = 0xDEAD
+	InitCommon(&np, creation, Vec3{}, nil, 0, 0, 0, -1, nil)
+	if np.SmokeDeadline != creation {
+		t.Fatalf("null definition: smoke deadline %d, want %d [06 §4.1]", np.SmokeDeadline, creation)
+	}
+}
+
+// TestSeededTrailCadence drives the seeded deadline through the projectile
+// phase and pins the emitted ticks: creation at T with delay D puffs on T+1,
+// T+1+D, T+1+2D [06 §4.1][06 §7.3]. The short-life case is the defect this
+// locks — a record living exactly D ticks past creation still puffs once.
+func TestSeededTrailCadence(t *testing.T) {
+	const creation = uint32(10)
+	weapon := &content.WeaponDef{ID: 7, WeaponVelocity: 65536, Range: 32767, LineOfSight: true, SmokeTrail: true, SmokeDelay: 4}
+	cat := &content.Catalog{Weapons: map[string]*content.WeaponDef{"w": weapon}}
+	cat.RebuildWeaponIndex()
+
+	run := func(expiry uint32, last uint32) []uint32 {
+		svc := &Service{}
+		h, ok := svc.Reserve()
+		if !ok {
+			t.Fatal("projectile reservation failed")
+		}
+		p := &svc.Records[int(h)-1]
+		InitCommon(p, creation, Vec3{}, nil, 0, 0, 0, -1, weapon)
+		p.ExpiryTick = expiry
+		var ticks []uint32
+		svc.Events = func(ev Event) {
+			if ev.Kind == EventTrailSmoke {
+				ticks = append(ticks, ev.Tick)
+			}
+		}
+		sim := rng.NewSimulation(1)
+		for tick := creation + 1; tick <= last; tick++ {
+			svc.TickProjectiles(tick, nil, nil, nil, nil, nil, nil, cat, &sim, nil)
+		}
+		return ticks
+	}
+
+	// Long-lived: first puff on T+1, then every D ticks.
+	got := run(creation+100, creation+12)
+	want := []uint32{creation + 1, creation + 5, creation + 9}
+	if len(got) != len(want) {
+		t.Fatalf("trail puffs at %v, want %v [06 §7.3]", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("trail puffs at %v, want %v [06 §7.3]", got, want)
+		}
+	}
+
+	// A record that lives exactly smokedelay ticks past creation still puffs
+	// once, on T+1: this is what the late seed suppressed entirely.
+	short := run(creation+uint32(weapon.SmokeDelay), creation+uint32(weapon.SmokeDelay))
+	if len(short) != 1 || short[0] != creation+1 {
+		t.Fatalf("short-lived record puffed at %v, want exactly [%d] [06 §4.1][06 §7.3]", short, creation+1)
+	}
+}
+
+// TestOrdinaryExpiryThirtyTwoBitShift locks the WIDTH of [06 §6.3]'s
+// `(uint32)(range << 16)`: a thirty-two-bit signed shift of the authored
+// integer range, reinterpreted unsigned. Bits at or above bit 16 of the range
+// leave the word, and a negative range reinterprets enormous. Stock content
+// authors neither edge — §6.3 says so explicitly — so this pins the arithmetic
+// against a sixty-four-bit widening, not an observable stock behavior.
+func TestOrdinaryExpiryThirtyTwoBitShift(t *testing.T) {
+	// range 65536: the whole shifted value falls out of the 32-bit word, so
+	// the numerator is zero and the projectile expires on its creation tick.
+	// A 64-bit widening would give 65536 ticks instead.
+	w := &content.WeaponDef{Range: 65536, WeaponVelocity: 65536}
+	if got := OrdinaryExpiry(1000, w); got != 1000 {
+		t.Fatalf("range 65536 expiry %d, want 1000 (shift discards the word) [06 §6.3]", got)
+	}
+	// range 32768: the shift makes the word negative; reinterpreted unsigned
+	// the numerator is 0x80000000, so the quotient at unit velocity is
+	// 0x8000 ticks and the deadline wraps modulo 2^32 with `now`.
+	w = &content.WeaponDef{Range: 32768, WeaponVelocity: 65536}
+	if got := OrdinaryExpiry(0, w); got != 0x8000 {
+		t.Fatalf("range 32768 expiry %#x, want 0x8000 [06 §6.3]", got)
+	}
+	// A negative range reinterprets as an enormous unsigned numerator:
+	// -1 << 16 is 0xFFFF0000, which at unit velocity is 0xFFFF ticks.
+	w = &content.WeaponDef{Range: -1, WeaponVelocity: 65536}
+	if got := OrdinaryExpiry(0, w); got != 0xFFFF {
+		t.Fatalf("range -1 expiry %#x, want 0xFFFF [06 §6.3]", got)
+	}
+	// Wrap edge: the sum with `now` wraps modulo 2^32 [06 §7.3].
+	if got := OrdinaryExpiry(0xFFFFFFFF, w); got != 0xFFFE {
+		t.Fatalf("wrapped expiry %#x, want 0xFFFE [06 §7.3]", got)
 	}
 }

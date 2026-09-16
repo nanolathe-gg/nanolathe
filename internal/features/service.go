@@ -168,7 +168,7 @@ const (
 // Service is the features runtime [PLAN_08 WU-08-6].
 type Service struct {
 	Terrain                     *world.Terrain
-	Sim                         *rng.Simulation // nil => rng.Global.Sim (I4)
+	Sim                         *rng.Simulation // injected; nil means no draws, never a global fallback (DET-01) (I4)
 	Crt                         *rng.CRT        // for smoke jitter, not sim draws [05 "Feature burning"]
 	Wind                        *world.Wind
 	definitionAdmissionObserver func(*content.FeatureDef)

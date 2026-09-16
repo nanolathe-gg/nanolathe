@@ -127,8 +127,8 @@ func TestActivateMoveBindsOnlyThePrimaryHead(t *testing.T) {
 
 	moveID := orders.Lookup("Move_Ground")
 	q := orders.QueueForUnit(u)
-	q.Push(moveID, orders.Node{GoalX: world.CellToWorld(10), GoalZ: world.CellToWorld(2), Deadline: -1})
-	q.Push(moveID, orders.Node{GoalX: world.CellToWorld(20), GoalZ: world.CellToWorld(2), Deadline: -1})
+	q.Push(moveID, orders.Node{GoalX: world.CellToWorld(10), GoalZ: world.CellToWorld(2), Deadline: -1, GoalSupplied: true})
+	q.Push(moveID, orders.Node{GoalX: world.CellToWorld(20), GoalZ: world.CellToWorld(2), Deadline: -1, GoalSupplied: true})
 	prim := q.Primary()
 	if len(prim) != 2 {
 		t.Fatalf("primary length %d, want 2", len(prim))
@@ -210,7 +210,7 @@ func TestHelpBuildInstallsAnnulusAndArrivesBesideTarget(t *testing.T) {
 	}
 	site := w.Unit(siteH)
 	q := orders.QueueForUnit(builder)
-	q.Push(helpID, orders.Node{Target: siteH, GoalX: site.X, GoalY: site.Y, GoalZ: site.Z, Deadline: -1})
+	q.Push(helpID, orders.Node{Target: siteH, GoalX: site.X, GoalY: site.Y, GoalZ: site.Z, Deadline: -1, GoalSupplied: true})
 	head := q.Head()
 
 	if !sys.ActivateMove(builder, head) {

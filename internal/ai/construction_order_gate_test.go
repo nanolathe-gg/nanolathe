@@ -7,6 +7,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/economy"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
@@ -138,7 +139,15 @@ func TestConstructionWithoutCurrentOrderRemainsEligible(t *testing.T) {
 func TestConstructionMobileBuildMaskSuppressesSelection(t *testing.T) {
 	m, w, builder, econ, sim, submissions := constructionOrderGateFixture(t)
 	q := orders.QueueForUnit(builder)
-	q.Push(orders.Lookup("MobileBuild"), orders.Node{})
+	// A mobile build carries its build SITE in the goal triple, so the record is
+	// constructed WITH a goal and keeps static bit 10; a site-less fixture would
+	// take the constructor's goal clear [04 §3.1][04 R-MOV-03 §7] and no longer
+	// show the authored mask this test names.
+	q.Push(orders.Lookup("MobileBuild"), orders.Node{
+		GoalX:        numeric.Fixed(16 << 16),
+		GoalZ:        numeric.Fixed(16 << 16),
+		GoalSupplied: true,
+	})
 	current := q.Head()
 	if current == nil {
 		t.Fatal("MobileBuild fixture has no current primary order")

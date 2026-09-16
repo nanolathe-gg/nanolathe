@@ -749,6 +749,84 @@ document carries them.
   not create, seed, advance, expire, or recolour nanolathe particles from
   events, so any client renders the same committed snapshot identically
   `[03 R-STRIP-01 §2]` `[03 R-STRIP-01 §3]` `[03 §5.5]` [I6].
+* **C2.2 The debris draw's own two producers.** A whole-piece debris record
+  carries two engine bits the simulation never reads: SMOKE and FIRE are draw
+  inputs, and a frame that draws the piece makes one strip-9 smoke-puff
+  container and/or one flame-stream trail container at it `[04 R-COB-04 §2]`.
+  They ride the publication boundary as `frame.DebrisView.Smoke`/`.Fire`,
+  because the arena that holds them is simulation state [I6].
+  `internal/render.DebrisTrails` builds the pair — the strips-5/9 smoke puffer's
+  init `(0, 1, 0, 0, 0)` on `smoke 1` at the piece, whose one spawn draw is the
+  puff's own last frame `crtRand·(frameCount − 3)/0x8000 + 2`, and the
+  flame-stream trail class on `flamestream` at the piece jittered per axis by
+  `crtRand·3/0x8000 − 1` whole units with a container life of
+  `crtRand·3/0x8000 + 1` ticks, four draws spent before the pool is consulted
+  `[03 R-FX-01 §3]` `[06 R-WFX-01 §5]`. All five values come from the client's
+  **private presentation CRT copy**, never the session stream (DET-01, §5), so
+  frame cadence cannot reach the tick [I4]; with no stream bound neither
+  container is built, rather than one being built with a substituted value [I9].
+  **Persistence, and the barrier.** Both producers make CONTAINERS, and both
+  reductions RT08 carried are now closed. `internal/client`'s debris trail store
+  (`debris_trail_store.go`) holds them: the smoke container's one puff drifts by
+  `windX·8` / `windZ·8` on the raw X and Z words and rises by
+  `authoredGravity·4` on the raw Y word, walks its animation cursor after each
+  authored hold (one presentation draw per advance) and retires when the cursor
+  reaches its own drawn last frame; the fire container lays `lifetime + 1`
+  coincident segments, one per tick, whose cursors advance every tick modulo
+  `frameCount − 1`, and all of them go together the tick after its deadline
+  `[03 R-FX-01 §3]` `[03 R-STRIP-01 §2]` `[06 R-WFX-01 §5]`. There is exactly ONE
+  implementation of each of those expressions and it is not in this package:
+  the puff's drawn last frame, its half-to-full animation hold and the flame
+  trail's per-axis step are `internal/render`'s `SmokeLastFrame`,
+  `SmokeFrameHold` and `FlameTrailStep`, called by BOTH the simulation's
+  phase-11 strip table and this store. Each takes the already-drawn CRT value
+  rather than a stream, so the session keeps spending the simulation stream and
+  the store its private copy, in the same order and count as before [I4]. The
+  two drift words are likewise the simulation's own derivation read back from
+  the committed heading and strength (`world.WindVectors`, the FIRST word to
+  world X and the SECOND to world Z), not a second copy of that trig
+  `[R-WIND-01]`. The store draws at
+  **barrier 9**, after strip 7, the airborne unit pass and the unit labels,
+  following the published strip-9 objects — the order a later object in one
+  vector has over an earlier one `[03 §1]`. Its records go through the same
+  one-point coverage gate every other strip-9 smoke and flame record passes: a
+  three-tick-old puff has drifted away from the point that produced it, so the
+  producing frame's own admission no longer stands for it `[03 R-FX-01 §3]`.
+  The store is a SEPARATE list from the simulation's published strip objects,
+  because the producer is the draw pass: the simulation never makes these
+  containers and has nothing to publish [I6].
+
+  **Committed-tick keying (the pre-record and interpolation rule).** The store's
+  sweep is keyed on the committed tick number, and so is its admission. This
+  build composes the same committed tick more than once — every interpolated
+  frame between two ticks, the pre-record's re-record after a miss (§13.10,
+  `prerecord.go`, which rolls the presentation CRT back for exactly this class
+  of hazard), and the `--shot-renderer both` route through
+  `SnapshotPresentationCRT` — so a store stepped per rendered frame would
+  animate and drift at the host's refresh rate instead of the tick rate. A
+  repeat of a tick already stepped therefore does nothing, and a tick that moves
+  backwards or forwards by more than the catch-up bound clears the store, the
+  way the other retained presentation histories are retired when their
+  producer's continuity breaks.
+
+  **One stated divergence: the admission cadence.** Retail's producer runs per
+  RENDERED FRAME — "one container is created per frame per burning piece, all
+  overlapping" `[03 R-FX-01 §3]`. Admitting one per rendered frame here would
+  scale smoke density with the host's refresh rate and with whether a pre-record
+  hit, because this build renders several frames per committed tick while the
+  containers are stepped by the tick. The producers therefore run once per
+  burning piece per committed tick, stamped per debris slot. That is retail's
+  density at a frame rate equal to its tick rate; at a higher frame rate retail's
+  smoke is denser than ours. This is a presentation-rate decision, not a claim
+  about retail.
+
+  **Bound.** The store evicts its oldest container when a pre-insert count
+  exceeds 400, so it holds at most 401 `[03 "Strip storage and lifecycle"]`
+  `[03 R-STRIP-01 §1]`. Retail's strip 9 is one vector and its 1000-slot
+  container pool is shared between these containers and every simulation-side
+  strip-9 producer `[03 R-FX-02 §4]`; this build splits the two lists, so each
+  carries the per-strip bound on its own and they cannot crowd each other out
+  the way retail's single vector does.
 * **C3 Buckets.** The plot-cell window is a pure function of the committed
   camera and the map extent, so the feature passes and the bucket build derive
   the same window; the bucket row is measured from the unclipped window origin
@@ -769,6 +847,23 @@ document carries them.
   `drawUnitModel` uses for a unit. Only a corpse carries a nonzero triple
   `[05 "Feature instance and terrain cell"]`, so a wreck lies the way its unit
   fell and every map-authored 3DO feature draws at three zeros as before.
+* **C3.1.1 A 3DO feature casts the structure shadow.** The pseudo-unit sets the
+  structure class bit, so it takes the structure branch of `[03 R-REN-03D §1]` —
+  the separate quarter-sheared rasterization, punched by the body and cached —
+  and not a silhouette copy. Its gate is the master shadow bit alone: a feature
+  definition authors no `noshadow` key, so that term of the common gate is
+  false, and Digger, `canhover` and `floater` are clear for every feature draw,
+  none of which the structure branch reads anyway. The branch's one extra
+  predicate is the pseudo-unit's own — it is skipped when the definition ordinal
+  is `0` **and** `hi16(unitY) < seaLevel` — and ordinal `0` is the feature
+  pseudo-unit, so a 3DO wreck at or above the waterline casts a building-shaped
+  shadow five pixels right of its body and a submerged one casts none
+  `[03 R-REN-03D §1]` `[03 R-RAST-01 §4]`. That the ordinal is reserved for the
+  pseudo-unit is the **Supported inference** stated in `[03 R-REN-03D §1]`; the
+  branch and its predicate are Established. The shadow shears by the terrain
+  height under the feature, as a unit's does `[03 R-REN-03D §3]`, so the feature
+  draw supplies that ground height alongside the gate. Both executors read the
+  one `CastsShadow` verdict, so classic and modern gain the shadow together.
 * **C4 Strip lifecycle.** The update dispatcher evaluates removal **before**
   update for every object and stably compacts on a positive verdict, so
   survivors keep order; a terminal condition created during an update is noticed

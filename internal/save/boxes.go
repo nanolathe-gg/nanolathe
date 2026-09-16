@@ -700,6 +700,13 @@ type PlayersMeta struct {
 	HumanPlayer int32 // "Human Player" [08 "Account inventory"]
 }
 
+// HumanPlayerLoadDefault is the value a load gives "Human Player" when the
+// Players account does not carry the item: `10`, meaning no human
+// [08 R-SAVE-02 §12]. It is outside the 0..9 slot range on purpose, so a save
+// that lost the item leaves the local and viewing identities alone instead of
+// handing them to slot 0.
+const HumanPlayerLoadDefault int32 = 10
+
 // WritePlayersMeta writes Players-account meta: Human Player and the 28-byte
 // GameTime box via WriteGameTime (C15) [08 "Account inventory"] [08 "Scheduler and random state in saves"].
 func WritePlayersMeta(b *Builder, meta PlayersMeta, clk *clock.State) {
@@ -719,11 +726,15 @@ func WritePlayersMeta(b *Builder, meta PlayersMeta, clk *clock.State) {
 // ReadPlayersMeta reads Human Player (always) and GameTime gating is handled by
 // callers that need Player%i; it returns the meta even if GameTime is short.
 func ReadPlayersMeta(bank *Bank) (PlayersMeta, bool) {
+	// The item's load default is 10, no human [08 R-SAVE-02 §12]; a reader that
+	// left the zero value here would name slot 0 as the local player on any save
+	// that lost the item. Our own writer always emits it, so this is the
+	// malformed-input path only.
+	m := PlayersMeta{HumanPlayer: HumanPlayerLoadDefault}
 	ac, ok := bank.Account(PlayersAccount)
 	if !ok {
-		return PlayersMeta{}, false
+		return m, false
 	}
-	var m PlayersMeta
 	if v, ok := ac.Int("Human Player"); ok {
 		m.HumanPlayer = v
 	}

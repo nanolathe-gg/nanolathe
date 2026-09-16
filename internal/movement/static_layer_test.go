@@ -53,7 +53,7 @@ func TestClassLayerAvoidsStaleMover(t *testing.T) {
 	goalX := world.CellToWorld(8)
 	goalZ := world.CellToWorld(8)
 	q := orders.QueueForUnit(w.Unit(hReq))
-	q.Push(id, orders.Node{GoalX: goalX, GoalZ: goalZ})
+	q.Push(id, orders.Node{GoalX: goalX, GoalZ: goalZ, GoalSupplied: true})
 	head := q.Head()
 	if head == nil {
 		t.Fatalf("head nil")
@@ -132,7 +132,7 @@ func TestStaticLayerDeterministicFixture(t *testing.T) {
 		sys.EnsureUnit(w.Unit(hReq))
 		id := orders.Lookup("Move_Ground")
 		q := orders.QueueForUnit(w.Unit(hReq))
-		q.Push(id, orders.Node{GoalX: world.CellToWorld(8), GoalZ: world.CellToWorld(8)})
+		q.Push(id, orders.Node{GoalX: world.CellToWorld(8), GoalZ: world.CellToWorld(8), GoalSupplied: true})
 		sys.ActivateMove(w.Unit(hReq), q.Head())
 		sys.Scheduler.Tick(60)
 		route := handleRow(sys.Routes, hReq)

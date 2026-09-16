@@ -386,7 +386,7 @@ func TestGroundUnloadHoverRadiusIsTwentyFourTimesFootprintZ(t *testing.T) {
 // — an ADDITION, so a negative Z integer part borrows from the X half instead
 // of smearing into it the way an OR of truncated halves would.
 func TestPackedDropPointAddsRatherThanOrs(t *testing.T) {
-	n := &Node{GoalX: numeric.Fixed(300 * 65536), GoalZ: numeric.Fixed(72 * 65536)}
+	n := &Node{GoalX: numeric.Fixed(300 * 65536), GoalZ: numeric.Fixed(72 * 65536), GoalSupplied: true}
 	if got, want := packedDropPoint(n), int32(300<<16|72); got != want {
 		t.Fatalf("packed drop point = %#x, want %#x [04 R-UNIT-06 §3]", got, want)
 	}

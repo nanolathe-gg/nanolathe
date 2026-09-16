@@ -201,7 +201,7 @@ presentation buffers; it writes nothing back, consumes no simulation RNG, and
 the simulation still publishes only after the complete phase sequence
 [01 §4.4]. `--shot` and Original never blend.
 
-**Check.** `grep -rn "time.Now\|time.Since" internal/{clock,units,orders,cob,movement,path,economy,construction,features,combat,visibility,ai,mission,triggers}` returns nothing. `internal/client` imports sim packages; no sim package imports `internal/client`. Outside `internal/client/interpolate.go` the frame path has no `Lerp`, `alpha`, or previous-frame read; `frame.Buffer.Previous` has no caller outside that file and its tests.
+**Check.** `grep -rn "time.Now\|time.Since" internal/{clock,units,orders,cob,movement,path,economy,construction,features,combat,visibility,ai,mission,triggers}` returns nothing. `internal/client` imports sim packages; no sim package imports `internal/client`. Outside `internal/client/interpolate.go` the frame path has no `Lerp`, `alpha`, or previous-frame blend. `frame.Buffer.Previous` has exactly two production callers: that file, which performs the Enhanced blend, and the live battle benchmark's census in `cmd/nanolathe`, which only counts which units moved between two committed ticks and feeds nothing back.
 
 ## I7 — Tick phase order
 

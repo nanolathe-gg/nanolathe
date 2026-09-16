@@ -94,7 +94,8 @@ record, which is why `weapon_adapter.go` exists at all: it is the seam that
 lets an order handler release, inhibit, retarget or stop a slot without
 reaching into slot internals.
 
-`PipelineStep` names the fixed per-slot order, and `TickSlot` runs it:
+`PipelineStep` names the fixed per-slot order, which the live path
+`Service.StepWeaponsForUnit` runs for each of a unit's slots:
 decrement a nonzero reload → validate or resolve the target → executor aim-time
 work → reload-zero shot admission → applicable resource/ammunition precheck →
 executor readiness and fire-time work → store reload and ammunition → debit
@@ -114,6 +115,11 @@ firing decision before visiting the next slot, so an earlier slot's Fire/Rock
 starts precede a later slot's query or Aim preparation. The session owns the
 one normal drain after all three slots [04 R-MOV-03 §1]. A missing script or an
 exhausted thread pool never authorizes a shot `[06 §3.3]` `[06 §3.4]`.
+
+`TickSlot` and its unit-level wrapper `TickWeapons` run the same step order over
+a slot in isolation, with no production caller: they exist so a test can drive
+one slot's gates directly. Neither is authoritative, and a behavior change to
+the pipeline belongs in `StepWeaponsForUnit` first.
 
 ### 2.2 Acquisition and the per-side target registry
 
@@ -417,6 +423,16 @@ stamped, at the current tick plus 600, written outright with no maximum. Its
 one gameplay reader is the cloak upkeep gate, so a cloaked unit that fires
 stops paying — and stays visible — for the next 600 ticks
 `[06 §4.1]` `[03 R-VIS-01 §6]` `[05 R-ECO-01 §9]`.
+
+The same initializer seeds the **trail-smoke deadline to the creation tick**,
+never to the creation tick plus `smokedelay`. With the strict
+`smokeDeadline < currentTick` trail test and its additive `+= smokedelay`
+advance, that puts the first puff on the first tick after creation and spaces
+the rest by the delay `[06 §4.1]` `[06 §7.3]`. The seed is stock-reachable, not
+an edge: of the 198 weapons in the compiled retail catalog, 50 author
+`smoketrail` and every one of them authors `smokedelay = 3` ticks (min = max =
+3), so seeding late cost every stock trailing weapon its first three ticks of
+trail and silenced any such projectile that lived three ticks or fewer.
 
 `AdvanceBursts` advances burst anchors. A burst weapon spawns its pellets from
 a parked anchor record: while the anchor's remaining count is above zero it
@@ -968,7 +984,14 @@ dropped → meteor. Carry the live selection through initialization `[06 §6.2]`
 its own timer; dropped has no expiry; self-propelled expiry advances a phase.
 Timer expiry without burn-blow emits exactly one trail-style puff and retires
 silently — no sound, no shake, no explosion art, no damage `[06 §6.3]`
-`[06 §6.4]` `[06 §7.3]`.
+`[06 §6.4]` `[06 §7.3]`. Ordinary expiry is computed at the retail **width**:
+`range << 16` is a thirty-two-bit signed shift of the authored integer range,
+reinterpreted unsigned and divided unsigned by the 16.16 `weaponvelocity`, so a
+range at or above 32,768 wraps and a negative one reinterprets enormous.
+Computing the numerator in sixty-four bits keeps bits retail discards; stock
+content authors no range outside `0..32767`, so the difference is visible only
+on third-party weapons `[06 §6.3]`. The zero-velocity/`noautorange` branch is
+taken first, so the unsigned division is never reached with a zero divisor.
 
 **C17 — the meteor shower.** Session startup reads only the selected schema;
 it chooses enabled from the original weapon's emptiness and then, if that name

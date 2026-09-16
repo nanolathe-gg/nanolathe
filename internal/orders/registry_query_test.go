@@ -58,7 +58,7 @@ func registryOrderFixture(t *testing.T) (*units.Unit, *units.Unit, *rng.Simulati
 // [04 R-ORD-01 §3][04 R-SPEC-01 §8].
 func TestStationaryGuardRescanUsesTargetRegistry(t *testing.T) {
 	u, enemy, sim, upgrade := registryOrderFixture(t)
-	n := &Node{ID: Lookup("Guard_NoMove"), Owner: u.Handle, Phase: 3, GoalX: enemy.X, GoalZ: enemy.Z}
+	n := &Node{ID: Lookup("Guard_NoMove"), Owner: u.Handle, Phase: 3, GoalX: enemy.X, GoalZ: enemy.Z, GoalSupplied: true}
 	before := sim.Draws()
 	if code := guardNoMoveHandler(u, n, 0, 30); code != Code(0) || n.Target != 0 || u.SlotAt(0).Target.Kind != units.TargetNone {
 		t.Fatal("guard acquired an unseen enemy without a targeting upgrade")

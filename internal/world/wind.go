@@ -189,7 +189,7 @@ func (w *Wind) Jitter(tick uint32, crt *rng.CRT, sim *rng.Simulation) bool {
 // and marks the change tick. The change is instant [05 "Wind generation"].
 func (w *Wind) publish(tick uint32) {
 	w.Scalar = windScalar(w.Strength)
-	w.DirX, w.DirZ = windVectors(w.Strength, w.Heading)
+	w.DirX, w.DirZ = WindVectors(w.Strength, w.Heading)
 	w.LastChange = tick
 	w.Changed = true
 }
@@ -215,7 +215,7 @@ func windInterval(crt *rng.CRT) uint32 {
 	return uint32((d*10/0x8000 + 5) * 30)
 }
 
-// windVectors recomputes the world X/Z wind vectors from strength and heading
+// WindVectors recomputes the world X/Z wind vectors from strength and heading
 // using the shared simulation trig table [04 §5.1]. The direction vector pair
 // is −2 times the rounded fixed-point trig component at the speed magnitude
 // [01 §4.4]. [R-WIND-01] closes the axis question this function once left
@@ -232,9 +232,9 @@ func windInterval(crt *rng.CRT) uint32 {
 // sensitive way while the old cos→X / sin→Z assignment stood. The only
 // readers — phase-3 ballistic/dropped drift [06 §6.4] and the feature
 // fire-spread probe [03 §5.1.2] — predate the finding, and both of their tests
-// author DirX/DirZ directly rather than through windVectors, so the swap
+// author DirX/DirZ directly rather than through WindVectors, so the swap
 // changes which table feeds each axis for those consumers but no test outcome.
-func windVectors(strength int32, heading uint16) (int32, int32) {
+func WindVectors(strength int32, heading uint16) (int32, int32) {
 	if strength == 0 {
 		return 0, 0
 	}

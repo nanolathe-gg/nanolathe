@@ -23,7 +23,10 @@ import (
 // frozen; this loop never calls Client.Step, so the simulation does not advance
 // while the frame is drawn. It records geometry once and replays that cloned
 // list (C-G1). The explicit both route first composes its classic image, then
-// uses this same geometry recording path from the unchanged committed state.
+// uses this same geometry recording path from the unchanged committed state —
+// with the presentation CRT rolled back to where the classic compose found it,
+// so this recording draws the segmented-projectile points a single recording
+// would have drawn [03 §5.4][I4].
 func captureModernShot(cl *client.Client, w, h int, mapName string, profileFrames int) (*image.RGBA, error) {
 	if cl == nil {
 		return nil, fmt.Errorf("nanolathe: shot: modern capture has no client")

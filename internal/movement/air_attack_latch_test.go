@@ -22,7 +22,7 @@ func TestAirAttackPreparationUsesSlotVerbs(t *testing.T) {
 				combat.ReleaseWeaponSlot(u, i)
 				combat.SetManualWeaponTarget(u, i, target.Handle)
 			}
-			q.Push(orders.Lookup(name), orders.Node{Owner: u.Handle, Target: target.Handle, Phase: 1, GoalX: target.X, GoalY: target.Y, GoalZ: target.Z})
+			q.Push(orders.Lookup(name), orders.Node{Owner: u.Handle, Target: target.Handle, Phase: 1, GoalX: target.X, GoalY: target.Y, GoalZ: target.Z, GoalSupplied: true})
 			n := q.Head()
 			switch name {
 			case "AirStrike":
@@ -81,7 +81,7 @@ func TestAirStrikeFiresOnlyAfterRelease(t *testing.T) {
 	}
 	q := orders.QueueForUnit(u)
 	q.Binding().Weapons = &orders.WeaponAdapter{InhibitSlot: combat.InhibitWeaponSlot, ReleaseSlot: combat.ReleaseWeaponSlot, SetManualTarget: combat.SetManualWeaponTarget, FireTarget: combat.FireWeaponTarget, FirePoint: combat.FireWeaponPoint, StopFiring: combat.StopWeaponFiring}
-	q.Push(orders.Lookup("AirStrike"), orders.Node{Owner: u.Handle, Target: target.Handle, Phase: 1, GoalX: target.X, GoalY: target.Y, GoalZ: target.Z})
+	q.Push(orders.Lookup("AirStrike"), orders.Node{Owner: u.Handle, Target: target.Handle, Phase: 1, GoalX: target.X, GoalY: target.Y, GoalZ: target.Z, GoalSupplied: true})
 	n := q.Head()
 	sys.legAirStrike(u, n, 0, 100)
 	cat := &content.Catalog{Weapons: map[string]*content.WeaponDef{"bomb": weapon}}

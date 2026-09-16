@@ -413,6 +413,12 @@ func (c *Client) drawCommittedWorld(cur *frame.Frame, ok bool) {
 	if cur != nil {
 		c.frameTick = cur.Tick
 	}
+	// The presentation-owned debris-trail containers are swept here, once per
+	// committed tick, BEFORE the debris pass makes this frame's containers —
+	// retail's phase-11 sweep first sees a container on the tick after the
+	// draw pass created it [03 R-STRIP-01 §2][04 R-COB-04 §2]. See
+	// debris_trail_store.go.
+	c.stepDebrisTrails(cur)
 	// A missing terrain source is an empty indexed surface. No synthetic art is
 	// emitted when the frontend has no world attachment [I9]. The clear is the
 	// first recorded command of the frame, so replaying the list zeroes the
@@ -504,6 +510,12 @@ func (c *Client) drawCommittedWorld(cur *frame.Frame, ok bool) {
 	// owner equalling the local player slot [03 §1][03 R-FX-01 §6].
 	c.drawUnitLabels(cur, ok)
 	c.drawStripSlot(cur, 9)
+	// Barrier 9's second source: the containers the debris draw's own two
+	// producers made, which live on the presentation store because the
+	// simulation never makes them and has nothing to publish [04 R-COB-04 §2]
+	// [03 R-FX-01 §3]. They follow the published strip-9 objects, the order a
+	// later object in one vector has over an earlier one [03 §1].
+	c.drawDebrisTrails(cur)
 	c.drawDeveloperMovement(cur)
 	c.drawFog(cur)
 	// The world region ends here: everything after it is positioned in

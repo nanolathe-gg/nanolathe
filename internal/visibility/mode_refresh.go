@@ -1,12 +1,86 @@
 package visibility
 
 // ModeRefreshObserver is one defined sight source supplied in deterministic
-// unit order for a live visibility-mode command [03 R-VIS-01 §1]. Observer
-// coordinates are already expressed for the target raster: a sprite observer
-// cell and a terrain-ray tile are deliberately different coordinate spaces.
+// unit order to a bulk visibility rebuild: the live visibility-mode command
+// refresh of [03 R-VIS-01 §1] and the entry rebuild of [08 R-ENTRY-01 §7].
+// Observer coordinates are already expressed for the target raster: a sprite
+// observer cell and a terrain-ray tile are deliberately different coordinate
+// spaces.
 type ModeRefreshObserver struct {
 	ID       ObserverID
 	Observer Observer
+}
+
+// RebuildEntry is the bulk visibility-and-mapping rebuild retail calls with the
+// full argument at battle entry and again at every commander respawn and
+// watch-mode entry [08 R-ENTRY-01 §7][08 R-SKIR-01 §3][03 R-VIS-01 §4] pass 1.
+// It is not the live-command refresh: RefreshMode keeps mapping history unless
+// its caller asks for a reset, while the entry rebuild always refills both
+// stores from the mode word.
+//
+//  1. the whole word grid is refilled from mode bit 0;
+//  2. every eligible slot's byte grid is refilled from mode bit 1 — a slot that
+//     fails the live/controller/side test keeps its stale bytes;
+//  3. with mode bit 1 set, every supplied active unit is stamped in record
+//     order through the bit-2 raster, with no refresh throttle; with bit 1
+//     clear no unit is visited at all and every saved observer record is left
+//     alone [03 R-VIS-01 §1] item 1;
+//  4. the minimap/fog presentation is invalidated.
+//
+// Skipping step 3 cannot leak coverage: the refilled byte grids hold the
+// all-visible fill, and both retirement and the byte half of publication are
+// themselves gated on mode bit 1, so a retained record contributes nothing
+// until a later command refills the grids for it.
+func (s *Service) RebuildEntry(eligible [10]bool, observers []ModeRefreshObserver) {
+	if s == nil || s.wordMask == nil {
+		return
+	}
+	s.fillWordGrid()
+	s.fillEligibleByteGrids(eligible)
+	if s.mode.CurrentEnabled() {
+		// The stamps replace every stored record, so no pre-rebuild footprint
+		// may survive to throttle a republication or a later retirement.
+		s.footprints = make(map[ObserverID]footprint, len(observers))
+		s.rebuildingPresentation = true
+		for _, stamped := range observers {
+			s.stampEntryObserver(stamped.ID, stamped.Observer)
+		}
+		s.rebuildingPresentation = false
+	}
+	s.invalidatePresentation()
+}
+
+// stampEntryObserver is step 3's direct stamp. The entry rebuild forms the
+// observer record from the unit's current state and calls the selected raster's
+// stamper outright: there is no stored record left to compare against, so the
+// ordinary refresh throttle of [03 R-VIS-01 §2] must not be entered here.
+func (s *Service) stampEntryObserver(id ObserverID, ob Observer) {
+	if !validPlayer(ob.Owner) {
+		return
+	}
+	ray := s.mode.TerrainRay()
+	quantized := int32(s.spriteShapeIndex(ob.Radius))
+	storedCX, storedCZ := s.spriteStoredOrigin(ob.CX, ob.CZ, ob.Radius)
+	storedByte := uint8(quantized)
+	if ray {
+		quantized = int32(s.rayTableIndex(ob.Radius))
+		storedCX, storedCZ = ob.CX, ob.CZ
+		storedByte = ob.HeightByte
+	}
+	next := footprint{
+		owner: ob.Owner, cx: ob.CX, cz: ob.CZ, heightByte: ob.HeightByte,
+		radius: ob.Radius, quantized: quantized,
+		storedCX: storedCX, storedCZ: storedCZ, storedByte: storedByte,
+	}
+	// Only the ray branch rejects an off-map observer cell; circular masks still
+	// publish their clipped overlap [03 R-VIS-01 §2].
+	if ray && (uint32(ob.CX) >= uint32(s.W) || uint32(ob.CZ) >= uint32(s.H)) {
+		s.footprints[id] = next
+		return
+	}
+	next.live = true
+	s.footprints[id] = next
+	s.Publish(ob.Owner, ob.CX, ob.CZ, ob.HeightByte, ob.Radius)
 }
 
 // RefreshMode applies retail's live visibility-command refresh [03 R-VIS-01

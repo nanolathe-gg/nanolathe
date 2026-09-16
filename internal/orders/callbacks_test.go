@@ -379,7 +379,8 @@ func TestEmitStartBuildingSetsPendingFlagAndArgs(t *testing.T) {
 		u.X, u.Z = 0, 0
 		u.Move.Heading = 0
 		n := &Node{ID: Lookup("MobileBuild"), Owner: u.Handle, Deadline: -1, CreationTick: 0x12345678,
-			GoalX: numeric.Fixed(64 << 16)}
+			GoalSupplied: true,
+			GoalX:        numeric.Fixed(64 << 16)}
 		EmitStartBuilding(u, n)
 		args := startedArgs(vm)
 		if len(args) != 1 || !argsEqual(args[0], []int32{49152}) {
@@ -394,7 +395,8 @@ func TestEmitStartBuildingSetsPendingFlagAndArgs(t *testing.T) {
 		u.X, u.Z = 0, 0
 		u.Move.Heading = 49152 // already facing the target
 		n := &Node{ID: Lookup("MobileBuild"), Owner: u.Handle, Deadline: -1,
-			GoalX: numeric.Fixed(64 << 16)}
+			GoalSupplied: true,
+			GoalX:        numeric.Fixed(64 << 16)}
 		EmitStartBuilding(u, n)
 		args := startedArgs(vm)
 		if len(args) != 1 || !argsEqual(args[0], []int32{0}) {

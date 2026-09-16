@@ -89,17 +89,19 @@ func newNode(id ID, n Node) *Node {
 	// entry's step 2 [04 R-AIR-01 §16].
 	//
 	// The same established fact lists a second constructor clear — bit 10
-	// (0x400) when no goal position was supplied — but this build's Node has
-	// no field distinguishing "no goal was supplied" from "goal supplied at
-	// the fixed-point origin", and every caller that constructs a record
-	// setting GoalX/Y/Z lives outside this file (combat.go, work.go,
-	// resolve.go, vtolwork.go, transport.go, park.go, patrol.go, standing.go
-	// — none owned by this work unit). Applying it here would mean guessing a
-	// "supplied" signal this build does not track, which is the invented
-	// behavior CLAUDE.md rule 1 forbids. Left open for whichever unit adds a
-	// goal-supplied signal at the construction call sites.
+	// (0x400, staticGoalObserver) when no goal position was supplied. Retail
+	// reads presence off an optional argument; this build passes the goal by
+	// value, so the producer states presence in Node.GoalSupplied and the clear
+	// reads that, never the coordinates. A zero-coordinate test would be a
+	// guess, and a wrong one: the fixed-point origin is a legal map position,
+	// so it would strip the bit from a record whose goal really is (0,0,0).
+	// The bit's one reader is the guard's leg-4 copy arm in guard.go, which
+	// takes "this record has a goal" from it [04 R-ORD-01 §13].
 	if nn.Target == 0 {
 		nn.StaticGate &^= staticTargetObserver
+	}
+	if !nn.GoalSupplied {
+		nn.StaticGate &^= staticGoalObserver
 	}
 	if nn.StaticGate&staticTargetObserver == 0 {
 		nn.BindTarget(0) // constructor unlinks the reference [04 R-MOV-03 §7]
@@ -123,8 +125,11 @@ func newNode(id ID, n Node) *Node {
 	// producer-side insertion helper, which is Push / PushSecondary below.
 	//
 	// The queue modifier is an argument to that helper, not a record field
-	// [04 §3.2], so the stored record never carries it.
+	// [04 §3.2], so the stored record never carries it. The goal-presence
+	// argument is the same shape: it has been consumed into the static-mask
+	// copy above, and retail's record has no field for it [04 §3.2].
 	nn.QueuedIssue = false
+	nn.GoalSupplied = false
 	node := &Node{}
 	*node = nn
 	return node

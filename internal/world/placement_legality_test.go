@@ -55,22 +55,40 @@ func TestCheckPlacementAggregatesAndStrictSlope(t *testing.T) {
 	}
 }
 
+// TestCheckPlacementBuildingAndMobileWaterSlopeSelection locks the class split
+// of [04 R-P0-08]: the building yard walk compares its rectangle aggregate
+// against the land MaxSlope alone — it has no water pair
+// [04 R-SLOPE-01 §3 "Bounded census"] — while the mobile validator selects the
+// pair PER CELL from that cell's own `hmin >= SeaLevel`
+// [04 R-COLL-01 §2 step 5].
+//
+// The limits below are clamp-consistent: MaxWaterSlope caps MaxSlope at
+// compile time [04 §6.1], so the water pair is the looser of the two. This
+// test used to assert the opposite, with the mobile pair chosen from the
+// rectangle's aggregate water state (DS-WV-02).
 func TestCheckPlacementBuildingAndMobileWaterSlopeSelection(t *testing.T) {
-	ter := legalityTerrain(t, 3, 1, 100)
-	ter.PlotAt(0, 0).SetMinHeight(90)
-	ter.PlotAt(0, 0).SetMaxHeight(95)
+	ter := legalityTerrain(t, 4, 1, 100)
+	// A land cell: hmin at sea level, slope 8.
+	ter.PlotAt(0, 0).SetMinHeight(100)
+	ter.PlotAt(0, 0).SetMaxHeight(108)
+	// A water cell: hmin below sea level, the same slope 8.
 	ter.PlotAt(1, 0).SetMinHeight(92)
 	ter.PlotAt(1, 0).SetMaxHeight(100)
-	extent, _ := NewFootprintExtent(2, 1)
-	rect, _ := NewFootprintRect(NewFootprintAnchor(0, 0), extent)
-	rules := PlacementRules{ProfileResolved: true, MaxSlope: 10, MaxWaterSlope: 5, MaxWaterDepth: 255}
-	// The building aggregate uses MaxSlope even when the footprint is over
-	// water; only mobile placement selects MaxWaterSlope.
-	if _, err := ter.CheckPlacement(PlacementQuery{Rect: rect, Yard: []YardCell{0x08, 0x08}, Rules: rules}); err != nil {
-		t.Fatalf("building MaxSlope path rejected: %v", err)
+	one, _ := NewFootprintExtent(1, 1)
+	land, _ := NewFootprintRect(NewFootprintAnchor(0, 0), one)
+	water, _ := NewFootprintRect(NewFootprintAnchor(1, 0), one)
+	rules := PlacementRules{ProfileResolved: true, MaxSlope: 5, MaxWaterSlope: 12, MaxWaterDepth: 255, MinWaterDepth: -10000}
+
+	if _, err := ter.CheckPlacement(PlacementQuery{Rect: land, Mobile: true, Rules: rules}); err == nil {
+		t.Fatal("mobile land cell accepted a slope above MaxSlope")
 	}
-	if _, err := ter.CheckPlacement(PlacementQuery{Rect: rect, Mobile: true, Rules: rules}); err == nil {
-		t.Fatal("mobile MaxWaterSlope path accepted the stricter water slope")
+	if _, err := ter.CheckPlacement(PlacementQuery{Rect: water, Mobile: true, Rules: rules}); err != nil {
+		t.Fatalf("mobile water cell rejected a slope inside MaxWaterSlope: %v", err)
+	}
+	// The building walk has no water pair, so the same water cell is judged
+	// against MaxSlope and rejects.
+	if _, err := ter.CheckPlacement(PlacementQuery{Rect: water, Yard: []YardCell{0x08}, Rules: rules}); err == nil {
+		t.Fatal("building yard walk selected a water slope pair")
 	}
 }
 

@@ -62,6 +62,7 @@ func spawnLandIfCan(u *units.Unit, tick uint32) {
 		GoalY:        u.Y,
 		GoalZ:        u.Z,
 		CreationTick: tick,
+		GoalSupplied: true, // "goal = own position" [04 R-ORD-01 §2]
 	})
 }
 

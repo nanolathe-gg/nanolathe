@@ -250,7 +250,13 @@ and the three undeclared tables are unreachable authoring residue — the larges
 declared table already saturates every stock `sightdistance` (the biggest, 450,
 quantizes to 14 and clamps to 8). `Catalog.LOS` keeps all twelve parsed
 sections so nothing is lost, and `internal/visibility` reads `NumTables` and
-never `len(Tables)`. The sprite-mask path keeps its own, unrelated count from
+never `len(Tables)`. `LOSTables.Tables` mirrors the loader's storage rather than
+the file's section order: slot `d` holds the section the loader *names*
+`TABLE d + 1`, an absent section leaves that slot's empty line list, and the
+undeclared sections are kept after the declared slots. Group `g` therefore walks
+`TABLE g` — the accessor's `−1` and the loader's `+1` cancel — and the clamp's
+own off-by-one leaves the last loaded table, `TABLE9`, unreachable as well
+`[03 R-COMP-02 §1]`. The sprite-mask path keeps its own, unrelated count from
 the ten frames of the visibility-mask GAF; the two counts must not be shared.
 
 **Contract:** `[03 §3.2]`, `[03 R-COMP-02 §1]`; DESIGN_WORLD_VISIBILITY §4.

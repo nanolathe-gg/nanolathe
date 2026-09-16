@@ -141,7 +141,7 @@ func TestSuppressBindsTheGroundSlotsToItsGoalPoint(t *testing.T) {
 	q, u := gateFixture()
 	goalX := numeric.Fixed(120<<16) + numeric.Fixed(0x8000) // 120.5 world units
 	goalZ := numeric.Fixed(64 << 16)
-	q.Push(id, Node{Owner: u.Handle, GoalX: goalX, GoalZ: goalZ})
+	q.Push(id, Node{Owner: u.Handle, GoalX: goalX, GoalZ: goalZ, GoalSupplied: true})
 	q.Pump(u, 40)
 
 	n := q.Primary()[0]
@@ -180,7 +180,7 @@ func TestSuppressBindsTheGroundSlotsToItsGoalPoint(t *testing.T) {
 func TestKamikazeArrivalSpawnsTheImmediateSelfDestruct(t *testing.T) {
 	id := Lookup("Attack_Kamikaze")
 	q, u := gateFixture()
-	q.Push(id, Node{Owner: u.Handle, GoalX: u.X, GoalZ: u.Z})
+	q.Push(id, Node{Owner: u.Handle, GoalX: u.X, GoalZ: u.Z, GoalSupplied: true})
 	q.Pump(u, 40)
 
 	n := q.Primary()[0]

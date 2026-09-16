@@ -40,7 +40,7 @@ func TestStepOrderPathPublicationAfterMovement(t *testing.T) {
 		t.Fatal("Move_Ground lookup failed")
 	}
 	q := orders.QueueForUnit(u)
-	q.Push(id, orders.Node{GoalX: 25 * 65536, GoalZ: 25 * 65536})
+	q.Push(id, orders.Node{GoalX: 25 * 65536, GoalZ: 25 * 65536, GoalSupplied: true})
 	startX, startZ := u.X, u.Z
 	s.Clock.ScaledAnchor = 0
 	s.Step(1)

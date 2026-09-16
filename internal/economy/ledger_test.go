@@ -176,26 +176,40 @@ func TestCloakSequentialDebitTruncation(t *testing.T) {
 	if got := svc.UnitBuckets(h1)[Energy].Requested; got != 6 {
 		t.Fatalf("C13: unit requested should be 6 (only first), got %v", got)
 	}
-	// Single debit helper truncation test.
-	var p Player
-	p.Stock[Energy] = 10
-	if !DebitCloak(&p, 5.9) {
-		t.Fatal("DebitCloak 5.9 should succeed")
-	}
-	if p.Stock[Energy] != 5 {
-		t.Fatalf("DebitCloak stock = %v want 5 (trunc 5.9->5)", p.Stock[Energy])
-	}
-	if DebitCloak(&p, 5.1) {
-		// 5.1 trunc 5, stock 5 -> should succeed (equal)
-	}
-	// Reset and test failure.
-	p.Stock[Energy] = 4
-	if DebitCloak(&p, 4.9) {
-		// trunc 4, stock 4 -> succeed
-	}
-	p.Stock[Energy] = 4
-	if DebitCloak(&p, 5.9) {
-		t.Fatal("DebitCloak should fail when need 5 > stock 4")
+	// The single-unit debit helper truncates the cost toward zero before the
+	// affordability compare, and the compare is strict: need > stock fails, so
+	// need == stock succeeds and spends the last of it [05 "Cloak debit"] C13,
+	// [01 §8] and I3. debitCloakToBucket is the one the live pass uses; it
+	// credits the unit's own subrecord, never the player mirror [05 R-ECO-01 §7].
+	for _, tc := range []struct {
+		name          string
+		stock, cost   float32
+		want          bool
+		wantStock     float32
+		wantRequested float32
+	}{
+		{"truncates 5.9 to 5", 10, 5.9, true, 5, 5},
+		{"equal need and stock still spends", 5, 5.1, true, 0, 5},
+		{"truncated need fits exactly", 4, 4.9, true, 0, 4},
+		{"need above stock refuses and spends nothing", 4, 5.9, false, 4, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var p Player
+			p.Stock[Energy] = tc.stock
+			var b Bucket
+			if got := debitCloakToBucket(&p, &b, tc.cost); got != tc.want {
+				t.Fatalf("debitCloakToBucket = %v want %v", got, tc.want)
+			}
+			if p.Stock[Energy] != tc.wantStock {
+				t.Fatalf("stock = %v want %v", p.Stock[Energy], tc.wantStock)
+			}
+			if b.Requested != tc.wantRequested {
+				t.Fatalf("bucket requested = %v want %v", b.Requested, tc.wantRequested)
+			}
+			if p.Mirror[Energy].Requested != 0 {
+				t.Fatalf("player mirror must not be credited, got %v", p.Mirror[Energy].Requested)
+			}
+		})
 	}
 }
 

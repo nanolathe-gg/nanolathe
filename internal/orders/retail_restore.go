@@ -77,6 +77,7 @@ func RetailRestoreOrdersAtTick(u *units.Unit, records []save.OrderRecord, stable
 			BuildDefKey: record.BuildTypeName, CreationTick: tick,
 			RetailSubtypeCode: record.SubtypeCode,
 			RetailSubtype:     append([]byte(nil), record.Subtype...),
+			GoalSupplied:      true,
 		}
 		// The reader relinks the saved target independently of the restored
 		// issued-target bit; it does not repeat the constructor's unlink

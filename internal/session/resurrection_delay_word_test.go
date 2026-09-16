@@ -28,7 +28,7 @@ func TestResurrectionWrappedWorkerRetainsCorpseDuringDelay(t *testing.T) {
 	builder.InBuildStance = true
 	q := orders.QueueForUnit(builder)
 	s.bindExistingOrderQueue(builder)
-	q.Push(orders.Lookup("Resurrect"), orders.Node{Owner: h, Phase: 3, GoalX: world.CellToWorld(12), GoalZ: world.CellToWorld(12)})
+	q.Push(orders.Lookup("Resurrect"), orders.Node{Owner: h, Phase: 3, GoalX: world.CellToWorld(12), GoalZ: world.CellToWorld(12), GoalSupplied: true})
 	n := q.Primary()[0]
 	q.Pump(builder, 100)
 	// Word 65535 yields quantum 2184 and delay four; the first phase-4 visit

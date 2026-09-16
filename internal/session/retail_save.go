@@ -604,8 +604,12 @@ func RetailBattleSummary(s *Session, description, gameID string, configuredUnitL
 		summary.Side = int32(side)
 	}
 	// The `Radar Image` box is a presentation preview the load dispatcher never
-	// restores [08 "Account inventory"]. This build has no producer for it, so
-	// no box is written and the load screen simply shows no preview.
+	// restores [08 "Account inventory"]. Its raster is the radar surface the
+	// side rail composes, which a session neither owns nor may reach [I6], so
+	// the box is the caller's half of this summary: the host fills
+	// Summary.RadarImage before handing it to RetailBattleSaveInputs, and a
+	// caller with no radar (a headless save) writes no box — the panel then
+	// shows no preview, exactly as a short box does [08 R-SAVE-02 §3].
 	return summary
 }
 

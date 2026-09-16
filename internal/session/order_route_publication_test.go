@@ -17,8 +17,8 @@ func TestOrderRoutePublicationPreservesWorldCoordinates(t *testing.T) {
 	q := orders.QueueForUnit(u)
 	q.CancelAll()
 	id := orders.Lookup("Move_Ground")
-	q.Push(id, orders.Node{Owner: u.Handle, GoalX: 120 << 16, GoalZ: 88 << 16})
-	q.Push(id, orders.Node{Owner: u.Handle, GoalX: 152 << 16, GoalZ: 104 << 16})
+	q.Push(id, orders.Node{Owner: u.Handle, GoalX: 120 << 16, GoalZ: 88 << 16, GoalSupplied: true})
+	q.Push(id, orders.Node{Owner: u.Handle, GoalX: 152 << 16, GoalZ: 104 << 16, GoalSupplied: true})
 	route := &movement.Route{}
 	s.Movement.Routes[u.Handle] = route
 	for tick, points := range [][]movement.Point{

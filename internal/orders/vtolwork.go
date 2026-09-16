@@ -524,6 +524,7 @@ func patrolChainSetup(u *units.Unit, n *Node) {
 			GoalY:        u.Y,
 			GoalZ:        u.Z,
 			CreationTick: n.CreationTick,
+			GoalSupplied: true, // the chain's first waypoint is the unit's own position
 		})
 	}
 	n.StaticGate |= patrolChainMember

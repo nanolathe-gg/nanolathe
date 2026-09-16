@@ -119,7 +119,7 @@ func TestFeatureReclaimBeyondRangeInstallsTheFootprintRectangle(t *testing.T) {
 
 	// The goal is the feature's cell, five cells from the builder and far
 	// outside its one-unit `builddistance`.
-	f.q.Push(Lookup("Reclaim"), Node{Owner: f.builder.Handle, GoalX: world.CellToWorld(9), GoalZ: world.CellToWorld(11)})
+	f.q.Push(Lookup("Reclaim"), Node{Owner: f.builder.Handle, GoalX: world.CellToWorld(9), GoalZ: world.CellToWorld(11), GoalSupplied: true})
 	head := f.q.Primary()[0]
 	f.q.Pump(f.builder, 1)
 
@@ -150,7 +150,7 @@ func TestFeatureWorkOutOfRangeAdvancesAndWaitsOnTheGate(t *testing.T) {
 	for _, name := range []string{"Reclaim", "Resurrect"} {
 		tree, _ := retailShapedTree()
 		f := newFeatureWorkFixture(t, []*content.FeatureDef{tree}, 9, 11)
-		f.q.Push(Lookup(name), Node{Owner: f.builder.Handle, GoalX: world.CellToWorld(9), GoalZ: world.CellToWorld(11)})
+		f.q.Push(Lookup(name), Node{Owner: f.builder.Handle, GoalX: world.CellToWorld(9), GoalZ: world.CellToWorld(11), GoalSupplied: true})
 		head := f.q.Primary()[0]
 
 		f.q.Pump(f.builder, 1)
@@ -211,7 +211,7 @@ func TestFeatureReclaimEmitsOncePerVisitOnlyWhileAboveFifteen(t *testing.T) {
 	// phases without a mover; the approach is the previous test's subject.
 	f.builder.X, f.builder.Z = world.CellToWorld(4), world.CellToWorld(5)
 
-	f.q.Push(Lookup("Reclaim"), Node{Owner: f.builder.Handle, GoalX: world.CellToWorld(4), GoalZ: world.CellToWorld(5)})
+	f.q.Push(Lookup("Reclaim"), Node{Owner: f.builder.Handle, GoalX: world.CellToWorld(4), GoalZ: world.CellToWorld(5), GoalSupplied: true})
 	head := f.q.Primary()[0]
 
 	emittingVisits, silentVisits := 0, 0
@@ -272,7 +272,7 @@ func TestFeatureReclaimTakesOneHeightDrawAndTheAirTwinNone(t *testing.T) {
 			t.Skip("the fixture binds no simulation stream")
 		}
 		before := sim.Draws()
-		f.q.Push(Lookup("Reclaim"), Node{Owner: f.builder.Handle, GoalX: world.CellToWorld(4), GoalZ: world.CellToWorld(5)})
+		f.q.Push(Lookup("Reclaim"), Node{Owner: f.builder.Handle, GoalX: world.CellToWorld(4), GoalZ: world.CellToWorld(5), GoalSupplied: true})
 		for tick := uint32(1); tick <= 400 && f.q.LenPrimary() > 0; tick++ {
 			f.q.Pump(f.builder, tick)
 		}
@@ -355,7 +355,7 @@ func TestResurrectionProducesTheUnitAndRemovesTheCorpse(t *testing.T) {
 	}
 	bindResurrectSeam(f, productDef, func() *units.Unit { return product })
 
-	f.q.Push(Lookup("Resurrect"), Node{Owner: f.builder.Handle, GoalX: world.CellToWorld(4), GoalZ: world.CellToWorld(5)})
+	f.q.Push(Lookup("Resurrect"), Node{Owner: f.builder.Handle, GoalX: world.CellToWorld(4), GoalZ: world.CellToWorld(5), GoalSupplied: true})
 	var captions []string
 	f.q.Binding().Presentation.Status = func(_ *units.Unit, kind uint8, text string) bool {
 		captions = append(captions, text)
@@ -431,7 +431,7 @@ func TestResurrectionOfAnUnresolvableCorpseUsesRetailsMisspelling(t *testing.T) 
 			return true
 		},
 	}
-	f.q.Push(Lookup("Resurrect"), Node{Owner: f.builder.Handle, GoalX: world.CellToWorld(4), GoalZ: world.CellToWorld(5)})
+	f.q.Push(Lookup("Resurrect"), Node{Owner: f.builder.Handle, GoalX: world.CellToWorld(4), GoalZ: world.CellToWorld(5), GoalSupplied: true})
 	for tick := uint32(1); tick <= 50 && f.q.LenPrimary() > 0; tick++ {
 		f.q.Pump(f.builder, tick)
 	}
@@ -452,7 +452,7 @@ func TestResurrectionOfAnUnresolvableCorpseUsesRetailsMisspelling(t *testing.T) 
 	g.q.Binding().Presentation = &PresentationAdapter{
 		Status: func(_ *units.Unit, _ uint8, text string) bool { other = append(other, text); return true },
 	}
-	g.q.Push(Lookup("Resurrect"), Node{Owner: g.builder.Handle, GoalX: world.CellToWorld(12), GoalZ: world.CellToWorld(12)})
+	g.q.Push(Lookup("Resurrect"), Node{Owner: g.builder.Handle, GoalX: world.CellToWorld(12), GoalZ: world.CellToWorld(12), GoalSupplied: true})
 	g.q.Pump(g.builder, 1)
 	if len(other) != 1 || other[0] != "Resurrection failed" {
 		t.Fatalf("an empty cell raised %q, want the single-s `Resurrection failed`", other)

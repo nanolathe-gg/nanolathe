@@ -232,7 +232,7 @@ func TestStepUnit_DistinctDescriptors(t *testing.T) {
 		t.Skip("MobileBuild not found")
 	}
 	q2 := orders.QueueForUnit(factory)
-	q2.Push(mobileID, orders.Node{BuildDefKey: "armllt", Param1: 1, Param2: 1, Phase: uint8(State0), GoalX: world.CellToWorld(5), GoalZ: world.CellToWorld(5)})
+	q2.Push(mobileID, orders.Node{BuildDefKey: "armllt", Param1: 1, Param2: 1, Phase: uint8(State0), GoalX: world.CellToWorld(5), GoalZ: world.CellToWorld(5), GoalSupplied: true})
 	svc2 := NewService(exitTerrain(12, 12), cat, w2, &economy.Service{})
 	bindConstructionCombat(svc2)
 	res2 := svc2.StepUnit(TickContext{Tick: 0, World: w2, Economy: svc2.Economy, Catalog: cat}, hf)

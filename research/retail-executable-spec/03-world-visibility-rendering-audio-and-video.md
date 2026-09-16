@@ -2900,8 +2900,9 @@ over the parsed LOS.TDF tables, and the spokes walked for that group are that
 table's authored line list — line counts grow with the table index (a radius-9
 table carries fourteen lines, radius-10 sixteen). LOS.TDF declares
 `numtables = 9` but ships twelve table sections; the clamp uses the declared
-nine and the three excess tables are unreachable authoring residue (the
-one-based accessor of `[R-COMP-02 §1]` leaves `TABLE 8` unreachable too).
+nine and the three excess tables are unreachable authoring residue (the clamp's
+own off-by-one of `[R-COMP-02 §1]` leaves `TABLE9`, the last loaded table,
+unreachable too).
 Neither raster uses a synthesized circle or a fixed spoke set.
 
 **Terrain height word for the ray.** The LOS reader does not use the per-cell
@@ -3218,10 +3219,12 @@ diagonal.
 **Table selection.** The group index is `min(max(floorDiv(sightdistance, 32),
 0), numtables − 1)`, using the **declared** `numtables`, which is why
 `los.tdf`'s twelve shipped `TABLE%d` sections with `numtables = 9` leave three
-unreachable. The table-by-index accessor is **one-based**, so the table
-walked for group `g` is record `g − 1` — `[R-COMP-02 §1]` states the skew and
-its consequences (the highest reachable table is `TABLE numtables − 2`, and
-group 0 reads before the list's storage).
+unreachable. The table-by-index accessor is **one-based**, so the table walked
+for group `g` is record `g − 1` — and the loader filled record `d` from the
+section it names `TABLE d + 1`, so that record *is* `TABLE g`. `[R-COMP-02 §1]`
+states both halves and their consequences (the highest reachable table is
+`TABLE numtables − 1`, the last loaded table is unreachable, and group 0 reads
+before the list's storage).
 
 **The walk**, per observer, after the origin cell has been admitted
 unconditionally:
@@ -4016,11 +4019,11 @@ and their authored range is dead data **in retail**. This is the behavior
 Nanolathe reproduces; widening the gate for them would assert a writer that
 does not exist. **Established.**
 
-#### The LOS table accessors are one-based: the raster reads table `g − 1` [R-COMP-02 §1]
+#### Both the LOS table accessor and the loader's table names are one-based: group `g` walks `TABLE g` [R-COMP-02 §1]
 
-**Established** (instruction-level read of the six table accessors,
-the `los.tdf` loader's per-table store, and all three LOS publishers' table
-selection).
+**Established** (instruction-level read of the six table accessors, the
+`los.tdf` loader's per-slot section lookup, and all three LOS publishers' table
+selection; re-read 2026-09-16, which settled the loader half).
 
 The loaded `los.tdf` lives in three nested dynamic arrays with six trivial
 accessors: the table list (16-byte table records; *count* = `(end − begin) /
@@ -4029,9 +4032,18 @@ count form), and a line's point list (4-byte records holding one `(dx, dz)`
 signed 16-bit pair; count = `(end − begin) / 4`; the point accessor returns
 the pair at `begin + 4 × index`). The line-by-index accessor returns
 `begin + 16 × index`. The **table-by-index accessor returns `begin + 16 ×
-(index − 1)`** — it is one-based — while the loader stores `TABLE%d` at
-`begin + 16 × d`, zero-based, after resizing the list to exactly the declared
-`numtables` records.
+(index − 1)`** — it is one-based.
+
+**The loader's slot fill is one-based too.** It reads `numtables`, resizes the
+table list to exactly that many records, and then, for each zero-based slot
+`d`, *synthesizes* the section name `TABLE` followed by `d + 1` and looks that
+name up in the parsed file. Slot `d` therefore holds `TABLE d + 1`. File order
+is irrelevant; a section whose synthesized name is never generated
+(`TABLE10`…`TABLE12` with the shipped `numtables = 9`) is never read, and a
+requested name that is absent leaves that slot's default empty line list — an
+observer selecting it walks no spoke and sees only its own tile. Line keys are
+formed the same way: authored `line1`…`lineN` fill zero-based line slots
+`0`…`N − 1`.
 
 All three publishers (the ray-walk stamper, the byte-grid increment and the
 byte-grid decrement) select the table identically:
@@ -4040,24 +4052,31 @@ byte-grid decrement) select the table identically:
 g = floorDiv(sightdistance, 32)          ; signed 16-bit sightdistance
 if g < count − 1 : g = max(g, 0)
 else             : g = count − 1
-table = tableByIndex(g)                  ; = record g − 1
+table = tableByIndex(g)                  ; = record g − 1 = TABLE g
 ```
 
-So the table actually walked for a sight distance in `[32(k+1), 32(k+2))` is
-`TABLE k`, the highest table any unit can reach is `TABLE numtables − 2`
-(`TABLE 7` with the shipped `numtables = 9`, leaving `TABLE 8` unreachable as
-well as the three undeclared sections), and a sight distance below 32 selects
+The two one-based conventions cancel: record `g − 1` is the section named
+`TABLE g`. So the table actually walked for a sight distance in
+`[32k, 32(k+1))` is `TABLE k`, whose authored extent is exactly `k` cells
+(stock `TABLE k` has maximum coordinate magnitude `k` and is commented "Radius
+of k"), matching the sprite-mask raster's `floor(sightdistance / 32)` cells for
+the same observer. The surviving off-by-one is at the top: the clamp stops at
+`count − 1` where the one-based accessor would accept `count`, so the highest
+table any unit can reach is `TABLE numtables − 1` (`TABLE8` with the shipped
+`numtables = 9`), the last loaded table `TABLE9` is unreachable, and so are the
+three undeclared sections. A sight distance below 32 selects
 `g = 0`, whose record lies **16 bytes before the table list's storage**. What
 those bytes hold at run time — and therefore how many "lines" such an
 observer walks — is **Unknown** (decider: the tagged allocator's block header
 layout, or a retail capture of a unit with `sightdistance < 32`). A clone must
-reproduce the skew for `g ≥ 1`; for `g = 0` it may substitute an empty line
-list as a sanctioned divergence, stated as such.
+reproduce this selection for `g ≥ 1` — including the unreachable top table; for
+`g = 0` it may substitute an empty line list as a sanctioned divergence, stated
+as such.
 
 **No stock definition reaches group 0 (Established, catalog census over the
 reference install).** All 278 stock
 `.fbi` definitions author a `sightdistance`, and the minimum over the corpus is
-**55** (the seven mines), giving `g = floor(55/32) = 1` and `TABLE 0`. So the
+**55** (the seven mines), giving `g = floor(55/32) = 1` and `TABLE1`. So the
 group-0 record is never selected in stock play, and the sanctioned empty-line
 substitution above is unobservable there — it becomes reachable only under a
 mod that authors a sight distance below 32.

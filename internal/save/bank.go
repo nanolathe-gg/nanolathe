@@ -299,6 +299,20 @@ func Open(path string) (*Bank, error) {
 // scalar-prefix sizes rather than treating them as retail behavior [08
 // R-SAVE-02 §1].
 func ReadSummaryFile(path string) (Summary, bool, error) {
+	return readSummaryFile(path, false)
+}
+
+// ReadSummaryFileWithBoxes is the same filtered read with the Summary account's
+// binary boxes retained, which is what the summary panel needs for the one
+// **selected** file: the panel "reads only the `Summary` account of the
+// selected file" and shows its `Radar Image` box there [08 R-SAVE-02 §3]. The
+// slot list keeps using ReadSummaryFile, so enumerating a directory never
+// carries one preview raster per file.
+func ReadSummaryFileWithBoxes(path string) (Summary, bool, error) {
+	return readSummaryFile(path, true)
+}
+
+func readSummaryFile(path string, withBoxes bool) (Summary, bool, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return Summary{}, false, err
@@ -384,21 +398,30 @@ func ReadSummaryFile(path string) (Summary, bool, error) {
 			if err != nil {
 				return Summary{}, false, ErrFormat
 			}
+			boxCount := int32(0)
+			want := prefix
+			if withBoxes {
+				// The selected file's panel needs the box descriptors and the
+				// payloads that follow them, so the whole account body is kept
+				// — still under the same host decode cap.
+				boxCount = int32(binary.LittleEndian.Uint32(head[0x14:]))
+				want = maxSummaryDecodedBytes
+			}
 			compressed := binary.LittleEndian.Uint32(head[0x18:]) != 0
 			bodySize := int(span) - AccountHeaderSize
 			if bodySize > maxSummaryStoredBytes {
 				return Summary{}, false, ErrFormat
 			}
 			readSize := bodySize
-			if !compressed && prefix < readSize {
-				readSize = prefix
+			if !compressed && want < readSize {
+				readSize = want
 			}
 			body := make([]byte, readSize)
 			if _, err := file.ReadAt(body, cursor+AccountHeaderSize); err != nil {
 				return Summary{}, false, err
 			}
 			if compressed {
-				body, err = decodeSummaryPrefix(body, prefix)
+				body, err = decodeSummaryPrefix(body, want)
 				if err != nil {
 					if errors.Is(err, errSummaryBudget) {
 						return Summary{}, false, ErrFormat
@@ -408,7 +431,7 @@ func ReadSummaryFile(path string) (Summary, bool, error) {
 				}
 			}
 			account := parseSummaryAccount(pool, body, span, uint32(cursor), nameOffset,
-				intCount, doubleCount, stringCount)
+				intCount, doubleCount, stringCount, boxCount)
 			if summary == nil {
 				summary = account
 			} else {
@@ -589,10 +612,12 @@ func decodeSummaryLZPrefix(payload []byte, want, total int) ([]byte, error) {
 	return out, nil
 }
 
-// parseSummaryAccount decodes only scalar rows needed by ReadSummary. Boxes
-// are deliberately skipped: Summary's optional radar image is irrelevant to
-// save-list metadata and can be as large as a map [08 R-SAVE-02 §1].
-func parseSummaryAccount(pool, body []byte, span, accountOffset, nameOffset uint32, intCount, doubleCount, stringCount int32) *Account {
+// parseSummaryAccount decodes the scalar rows ReadSummary needs, and the box
+// descriptors only when the caller asked for them (boxCount > 0). The save
+// list passes zero: Summary's optional radar image is irrelevant to list
+// metadata and can be as large as a map, while the summary panel of the one
+// selected file wants exactly that box [08 R-SAVE-02 §1] [08 R-SAVE-02 §3].
+func parseSummaryAccount(pool, body []byte, span, accountOffset, nameOffset uint32, intCount, doubleCount, stringCount, boxCount int32) *Account {
 	account := &Account{Name: SummaryAccount, Span: span, NameOffset: nameOffset, Offset: accountOffset}
 	if intCount < 0 {
 		intCount = 0
@@ -616,6 +641,35 @@ func parseSummaryAccount(pool, body []byte, span, accountOffset, nameOffset uint
 	for i := int32(0); i < stringCount && read+8 <= len(body); i++ {
 		account.Strings = append(account.Strings, StringItem{Name: readPoolString(pool, binary.LittleEndian.Uint32(body[read:])), Value: readPoolString(pool, binary.LittleEndian.Uint32(body[read+4:]))})
 		read += 8
+	}
+	if boxCount < 0 {
+		boxCount = 0
+	}
+	for i := int32(0); i < boxCount && read+16 <= len(body); i++ {
+		marker := int32(binary.LittleEndian.Uint32(body[read:]))
+		number := int32(binary.LittleEndian.Uint32(body[read+4:]))
+		payloadOffset := binary.LittleEndian.Uint32(body[read+8:])
+		length := binary.LittleEndian.Uint32(body[read+12:])
+		read += 16
+		box := &Box{Number: number}
+		if marker >= 0 {
+			box.Name = readPoolString(pool, uint32(marker))
+		} else if marker < -1 {
+			box.Number = marker
+		}
+		// A descriptor offset is an absolute offset into the pre-compression
+		// image, so subtracting the account body base gives the same
+		// body-relative position whether or not the body was stored packed
+		// [08 R-ENTRY-02 §3]. A payload outside this body is dropped; the
+		// panel then has no image, which is the short-read outcome.
+		base := uint64(accountOffset) + AccountHeaderSize
+		if uint64(payloadOffset) >= base {
+			start := uint64(payloadOffset) - base
+			if start+uint64(length) <= uint64(len(body)) {
+				box.Data = append([]byte(nil), body[start:start+uint64(length)]...)
+			}
+		}
+		account.Boxes = append(account.Boxes, box)
 	}
 	return account
 }

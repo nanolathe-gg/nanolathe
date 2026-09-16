@@ -21,9 +21,12 @@ package frame
 // retainedEventCapacity bounds the retained queue. It is a Nanolathe safety
 // bound with no retail counterpart — retail raises its cues inside the
 // simulation and has no committed-event queue at all. Overflow drops the
-// newest submission and is reported, matching EventBuffer's admission policy
-// rather than silently rewriting history. Its appropriate capacity requires a
-// measured event-rate budget before it is changed.
+// newest submission rather than silently rewriting history, matching
+// EventBuffer's admission policy, and counts the drop on the buffer. The count
+// is only surfaced by the headless report, which reads RetainedEventsDropped;
+// the windowed path never drains it, so a windowed overflow is silent today.
+// Its appropriate capacity requires a measured event-rate budget before it is
+// changed.
 const retainedEventCapacity = 4096
 
 // retainCommittedEvents appends one committed tick's events to the retained

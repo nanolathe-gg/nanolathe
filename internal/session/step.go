@@ -1130,11 +1130,14 @@ func (s *Session) pollMissionTriggers(tick uint32) {
 			// in the score rows' team domain, including after a player restore.
 			winner, losers := s.resultTeams(win)
 			scores := s.collectScores(winner, false)
-			reason := "campaign"
-			if win && len(s.Mission.Victory) > 0 {
+			// Nanolathe-only report provenance; retail writes no such string.
+			// This block runs only when the latch advanced this poll, which
+			// happens only when a queue entry fired, and both queues always
+			// carry a default entry [08 "Default triggers"] — so the outcome
+			// names the queue that produced it and there is no third case.
+			reason := "defeat_trigger"
+			if win {
 				reason = "victory_trigger"
-			} else if !win && len(s.Mission.Defeat) > 0 {
-				reason = "defeat_trigger"
 			}
 			s.result = Result{Ended: true, Draw: false, Kind: kind, WinnerTeam: winner, Winners: resultWinnersFor(winner, false), Losers: losers, Reason: reason, Tick: tick, ArmedTick: tick, Countdown: s.Latch.Countdown, Scores: scores, ColumnMaxima: resultColumnMaxima(scores)}
 		}

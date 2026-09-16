@@ -12,7 +12,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
-func TestBuildMetalSpotsRowMajorAndFilters(t *testing.T) {
+func TestInitializeMetalSpotsRowMajorAndFilters(t *testing.T) {
 	terrain := placementTerrain(4, 3, 0)
 	terrain.FeatureDefs = []*content.FeatureDef{
 		{Metal: 0x10001, Indestructible: true},
@@ -24,7 +24,11 @@ func TestBuildMetalSpotsRowMajorAndFilters(t *testing.T) {
 	terrain.PlotAt(1, 1).SetFeature(world.PlotFeatureFringe)
 	terrain.PlotAt(2, 1).SetFeature(2)
 	terrain.PlotAt(1, 2).SetFeature(0)
-	got := BuildMetalSpots(terrain)
+	// Through the production entry: battle entry and the save restore both
+	// reach the scan this way [08 R-AI-03 §1].
+	var strategic Strategic
+	strategic.InitializeMetalSpots(terrain)
+	got := strategic.MetalSpots
 	want := []MetalSpot{{CellX: 3, CellZ: 0, Metal: 1}, {CellX: 1, CellZ: 2, Metal: 1}}
 	if len(got) != len(want) {
 		t.Fatalf("spots=%v, want %v", got, want)

@@ -251,13 +251,13 @@ func TestScheduledRedrawCadence(t *testing.T) {
 // 65536) reads sin 8192 / cos 0. MulRound's add-half form is exact on these
 // products, so heading 0 must give X = 0, Z = −2·speed.
 func TestWindVectorAxes(t *testing.T) {
-	if x, z := windVectors(500, 0); x != 0 || z != -1000 {
+	if x, z := WindVectors(500, 0); x != 0 || z != -1000 {
 		t.Fatalf("heading 0: vectors = (%d, %d), want X = 0 (sin) and Z = -2*speed (cos) [R-WIND-01]", x, z)
 	}
-	if x, z := windVectors(500, 16384); x != -1000 || z != 0 {
+	if x, z := WindVectors(500, 16384); x != -1000 || z != 0 {
 		t.Fatalf("quarter-circle heading: vectors = (%d, %d), want X = -2*speed (sin peak) and Z = 0 (cos zero) [R-WIND-01]", x, z)
 	}
-	if x, z := windVectors(0, 12345); x != 0 || z != 0 {
+	if x, z := WindVectors(0, 12345); x != 0 || z != 0 {
 		t.Fatalf("zero strength: vectors = (%d, %d), want zeroed", x, z)
 	}
 }
@@ -267,7 +267,7 @@ func TestWindVectorAxes(t *testing.T) {
 // components, not one rounded product with a negative doubled amplitude
 // [05 R-PROD-01 §3].
 func TestWindVectorsRoundBeforeNegativeScale(t *testing.T) {
-	x, _ := windVectors(5000, 128)
+	x, _ := WindVectors(5000, 128)
 	if x != -124 {
 		t.Fatalf("heading 128 X vector = %d, want -124", x)
 	}

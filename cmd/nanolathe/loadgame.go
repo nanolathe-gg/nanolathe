@@ -6,9 +6,11 @@ import (
 	"time"
 
 	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
+	"github.com/nanolathe-gg/nanolathe/internal/render"
 	"github.com/nanolathe-gg/nanolathe/internal/save"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/ui"
@@ -187,9 +189,86 @@ func (g *gameShell) refreshSaveLoadPanel() {
 	if entry, has := saveLoadUI.SelectedEntry(); has {
 		summary, ok = entry.Summary, true
 	}
+	// `RADAR` is refreshed with the rest of the panel: the selected file's box
+	// is read here, not while painting [08 R-SAVE-02 §3].
+	saveLoadUI.loadRadarPreview()
 	for name, value := range retailSummaryPanelFields(summary, ok, g.retailSideNames()) {
 		panel.SetText(name, value)
 	}
+}
+
+// drawSaveLoadRadarPreview paints the selected file's `Radar Image` box into
+// the authored `RADAR` surface. The panel shows it when the box is present; a
+// short or absent box shows nothing, which is what an older save or a
+// continuation (no box at all) produces [08 R-SAVE-02 §3] [08 "Summary"].
+//
+// TODO(question): retail's placement of the box inside the 121x113 `RADAR`
+// rectangle is unestablished — whether the picture is stamped at the gadget
+// origin and clipped, or resampled into the rectangle as the map-select
+// preview is. Settle by tracing the summary panel's radar blit. Until then the
+// picture is resampled with its own aspect preserved and centred, so no part
+// of the saved battle is cut away.
+func (g *gameShell) drawSaveLoadRadarPreview(c *client.Client, r gui.Rect) {
+	if c == nil || saveLoadUI == nil || r.W <= 0 || r.H <= 0 {
+		return
+	}
+	pixels, w, h, ok := saveLoadUI.radarPreview()
+	if !ok {
+		return
+	}
+	dstW, dstH := int(r.W), int(r.H)
+	if int64(w)*int64(r.H) < int64(h)*int64(r.W) {
+		dstW = int(int64(w) * int64(r.H) / int64(h))
+	} else {
+		dstH = int(int64(h) * int64(r.W) / int64(w))
+	}
+	if dstW <= 0 || dstH <= 0 {
+		return
+	}
+	c.UIBlitIndexed(pixels, w, h, int(r.X)+(int(r.W)-dstW)/2, int(r.Y)+(int(r.H)-dstH)/2, dstW, dstH)
+}
+
+// battleRadarPreviewBox is the producer of the Summary's live-battle-only
+// `Radar Image` box: the radar surface the side rail is already showing,
+// encoded as a width, a height and its rows of palette bytes
+// [08 "Summary"] [08 R-SAVE-02 §3].
+//
+// The raster belongs to presentation — the session owns no minimap surface and
+// must not — so the host composes the box here and hands it to the writer
+// through the Summary it already supplies [I6]. A battle whose radar has not
+// been composed yet (no frame drawn) falls back to the source picture, and a
+// battle with no radar at all writes no box.
+//
+// TODO(question): retail's written extent is unestablished — whether the box
+// carries the aspect-fitted picture (what this writes), the whole 126x126
+// canvas including its letterbox padding, and whether the contacts pass is
+// included. The reader establishes only the header and the row bytes
+// [08 R-SAVE-02 §3]. Settle by tracing the summary writer's radar dump.
+func (g *gameShell) battleRadarPreviewBox() []byte {
+	if g == nil || g.battle == nil || g.battle.hud == nil {
+		return nil
+	}
+	h := g.battle.hud
+	// FINAL as the rail last drew it — the fogged picture with its contacts —
+	// is the image the player is looking at when the save screen opens.
+	surface := &h.radarFinal
+	if len(surface.Bits) == 0 {
+		surface = h.radar.Picture()
+	}
+	if surface == nil || surface.W <= 0 || surface.H <= 0 {
+		return nil
+	}
+	return save.EncodeRadarImage(surface.W, surface.H, surface.Bits, radarSurfaceRowPitch(surface))
+}
+
+// radarSurfaceRowPitch is the distance between radar-surface rows in its Bits
+// slice. RadarSurface stores w*h bytes and indexes them by y*W+x; its Pitch
+// field is the DWORD-aligned surface pitch, which the storage does not use.
+func radarSurfaceRowPitch(s *render.RadarSurface) int {
+	if s == nil {
+		return 0
+	}
+	return s.W
 }
 
 // retailSideNames returns the dialog-owned display table [08 R-SAVE-02 §3].
@@ -454,8 +533,9 @@ func (g *gameShell) betweenMissionsMetadata(description string) session.Continua
 }
 
 // writeBattleSave writes the live-battle bank through the existing projection
-// and writer. The bulk families are whatever that writer already supports; no
-// box is extended here [08 "Save-file organization"].
+// and writer. The bulk families are whatever that writer already supports; the
+// only box this arm adds is the Summary's presentation-owned `Radar Image`
+// [08 "Save-file organization"] [08 "Summary"].
 func (g *gameShell) writeBattleSave(path, description string) error {
 	if g == nil || g.battle == nil || g.battle.sess == nil {
 		return fmt.Errorf("nanolathe: battle save: no live battle: logical path save, providers searched [shell], expected a composed battle")
@@ -467,6 +547,10 @@ func (g *gameShell) writeBattleSave(path, description string) error {
 	// [08 R-SESS-01 §9] [08 R-SKIR-01 §6]. This shell's configured word is the
 	// setup record's, the same word that sizes a fresh or restored battle.
 	summary := session.RetailBattleSummary(sess, description, retailSaveGameID(), g.setup.UnitLimit)
+	// The `Radar Image` box is written on live-battle saves only, and its
+	// raster is presentation's [08 "Summary"]; the session's summary carries
+	// whatever the host supplies here.
+	summary.RadarImage = g.battleRadarPreviewBox()
 	camera := save.Camera{}
 	if g.cam != nil {
 		camera.XPosition = g.cam.X

@@ -515,6 +515,12 @@ func boolInt(value bool) int {
 }
 
 func (g *gameShell) drawRetailSurface(c *client.Client, p *ui.Panel, index int, gad gui.Gadget, r gui.Rect) {
+	if p != nil && p == saveLoadPanel && gui.CallbackName(gad.Name) == "RADAR" {
+		// The save/load summary panel's own surface: the selected file's
+		// `Radar Image` box, drawn by the dialog [08 R-SAVE-02 §3].
+		g.drawSaveLoadRadarPreview(c, r)
+		return
+	}
 	if p != nil && p.Window != nil && p.Window.GadgetIndex("MAPPIC") == index && len(g.maps) != 0 && g.mapIdx >= 0 && g.mapIdx < len(g.maps) {
 		if d := g.mapDataFor(g.maps[g.mapIdx]); d != nil && d.tnt != nil {
 			// Crop the authored padding, then map the usable terrain into a

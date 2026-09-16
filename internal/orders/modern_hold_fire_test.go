@@ -92,7 +92,7 @@ func TestModernManualAttackIssuedWhileHeldRemainsQueued(t *testing.T) {
 			for i := 0; i < units.NumSlots; i++ {
 				u.SlotAt(i).Weapon.LineOfSight = true
 			}
-			q.Push(Lookup(order), Node{Owner: u.Handle, Target: 7, GoalX: u.X, GoalZ: u.Z})
+			q.Push(Lookup(order), Node{Owner: u.Handle, Target: 7, GoalX: u.X, GoalZ: u.Z, GoalSupplied: true})
 			q.Pump(u, 1)
 			if q.LenPrimary() != 1 {
 				t.Fatal("held explicit attack was rejected")

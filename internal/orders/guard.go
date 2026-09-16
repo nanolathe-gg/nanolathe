@@ -570,12 +570,17 @@ func wardIsDamaged(ward *units.Unit) bool {
 
 // staticGoalObserver is bit 10 of a descriptor's static gate mask — "this
 // record was issued with a goal position", the twin of react.go's
-// staticTargetObserver. The record constructor clears it when no goal was
-// supplied [04 §3.1]; this build cannot apply that clear (see newNode), so the
-// bit reads as the descriptor's authored value. Its one reader here is the
-// guard's leg-4 copy arm, where every admissible descriptor but `MobileBuild`
-// has it clear anyway and `MobileBuild` takes the other arm — so the gap
-// [04 R-ORD-01 §13] records does not reach this site.
+// staticTargetObserver. The record constructor clears it on the record's own
+// static-mask copy when no goal was supplied [04 §3.1][04 R-MOV-03 §7]; newNode
+// applies that clear from the producer's Node.GoalSupplied statement, never
+// from the coordinates.
+//
+// Its one reader is the guard's leg-4 copy arm below, which takes the bit as
+// "this record has a goal to copy". The arm is reached only for a ward whose
+// front record carries bit 20 (the nanolathe/build-site class), and of those
+// rows only `MobileBuild` and `VTOL_MobileBuild` also carry bit 10;
+// `MobileBuild` is taken by the arm above, so `VTOL_MobileBuild` is the row
+// whose bit this test actually decides.
 const staticGoalObserver uint32 = 0x400
 
 func wardHasBuildOrder(ward *units.Unit) bool {
@@ -749,7 +754,7 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 			// [04 R-ORD-01 §8 point 2], so zeroing it would destroy the guard's
 			// own follow position.
 			releaseGoalPayload(u, n)
-			q.PushHead(repID, Node{Owner: u.Handle, Target: n.Target, GoalX: ward.X, GoalY: ward.Y, GoalZ: ward.Z})
+			q.PushHead(repID, Node{Owner: u.Handle, Target: n.Target, GoalX: ward.X, GoalY: ward.Y, GoalZ: ward.Z, GoalSupplied: true})
 			n.DynamicGate = 0
 			return Code(3) // *wait* [04 §3.3]
 		}
@@ -803,7 +808,14 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 			if spawnID != 0 {
 				q := QueueForUnit(u)
 				releaseGoalPayload(u, n)
-				q.PushHead(spawnID, Node{Owner: u.Handle, Target: head.Target, GoalX: head.GoalX, GoalY: head.GoalY, GoalZ: head.GoalZ})
+				// "same descriptor, same target, same goal": the spawn is
+				// constructed with a goal exactly when the ward's record was,
+				// which its own bit 10 states [04 R-ORD-01 §13]. Asserting a
+				// goal unconditionally here would hand bit 10 to a copy taken
+				// through the target arm of the switch above, where the ward's
+				// record carries no goal at all.
+				goalSupplied := head.StaticGate&staticGoalObserver != 0
+				q.PushHead(spawnID, Node{Owner: u.Handle, Target: head.Target, GoalX: head.GoalX, GoalY: head.GoalY, GoalZ: head.GoalZ, GoalSupplied: goalSupplied})
 				n.DynamicGate = 0
 				return Code(3) // *wait* [04 §3.3]
 			}
@@ -984,6 +996,7 @@ func vtolFollowHandOff(u *units.Unit, n *Node, satisfied uint32) (Code, bool) {
 				GoalY:        n.GoalY,
 				GoalZ:        n.GoalZ,
 				CreationTick: n.CreationTick,
+				GoalSupplied: true, // the hand-off carries the guard's stored anchor [04 R-ORD-02 §3]
 			})
 		}
 	}

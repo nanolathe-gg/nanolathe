@@ -30,7 +30,7 @@ func proposalFixture(t *testing.T, def *content.UnitDef, withRoute bool) (*Syste
 			t.Fatal("Move_Ground order is unavailable")
 		}
 		q := orders.QueueForUnit(w.Unit(h))
-		q.Push(moveID, orders.Node{GoalX: world.CellToWorld(6), GoalZ: world.CellToWorld(0)})
+		q.Push(moveID, orders.Node{GoalX: world.CellToWorld(6), GoalZ: world.CellToWorld(0), GoalSupplied: true})
 		head := q.Head()
 		// Route points are whole world units, six cells of sixteen.
 		handleRow(system.Routes, h).PublishAtRevision([]Point{{X: 0, Z: 0}, {X: 96, Z: 0}}, system.staticObstacleRevision())

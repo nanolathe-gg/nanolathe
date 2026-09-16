@@ -231,7 +231,7 @@ func QueueMobileBuild(builder *units.Unit, defKey string, siteX, siteZ numeric.F
 	// Mobile builds do not coalesce across different sites: the tail must carry
 	// the same product AND the same site, which is CoalesceTail's rule
 	// [05 "Queue insertion"][P0-I05].
-	q.CoalesceTail(bid, orders.Node{Owner: builder.Handle, Param1: pid, Param2: uint32(count), BuildDefKey: ck, GoalX: siteX, GoalZ: siteZ})
+	q.CoalesceTail(bid, orders.Node{Owner: builder.Handle, Param1: pid, Param2: uint32(count), BuildDefKey: ck, GoalX: siteX, GoalZ: siteZ, GoalSupplied: true})
 	return nil
 }
 

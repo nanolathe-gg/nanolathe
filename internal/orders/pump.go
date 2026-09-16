@@ -44,8 +44,10 @@ const (
 	// goal it cannot occupy instead of lurching at it once per re-arm. The
 	// reader belongs to internal/movement's goal installer, not to this file.
 	FlagRetryMark
-	// FlagStopBuildingPending marks a record whose StartBuilding emitter ran
-	// (EmitStartBuilding, the flag's only writer [R-ORDER-02 §2]); cleanup
+	// FlagStopBuildingPending marks a record whose StartBuilding emitter ran —
+	// EmitStartBuilding in callbacks.go, and its air twin
+	// emitStartBuildingAbsolute in vtolwork.go, which are the flag's two writers
+	// and the one emitter of [R-ORDER-02 §2] in its two bearing forms; cleanup
 	// emits the StopBuilding counterpart on every removal path.
 	FlagStopBuildingPending
 )
@@ -169,6 +171,23 @@ type Node struct {
 	// internal/construction/queue.go, the mission spawner and the AI planner —
 	// keep the non-queued default, which is what they issue today.
 	QueuedIssue bool
+	// GoalSupplied is the constructor's goal-presence argument, the twin of the
+	// target handle's own presence. Retail's record constructor takes the goal
+	// as an optional argument and clears static bit 10 (0x400) from the
+	// static-mask copy when none was passed, exactly as it clears bit 9 (0x200)
+	// when no target unit was passed [04 §3.1][04 R-MOV-03 §7]. This build
+	// passes the goal by value as three fixed-point words, so presence cannot be
+	// recovered from the triple: the fixed-point origin is a legal map position,
+	// and a zero-coordinate test would clear the bit on a record whose goal
+	// genuinely is (0,0,0).
+	//
+	// So the producer states it. Every construction site that supplies a goal
+	// sets this flag; a site that constructs a record with no position payload
+	// leaves it false and newNode clears bit 10. Like QueuedIssue it is an
+	// INSERTION-TIME INPUT rather than record state — retail's record has no
+	// such field, the static-mask copy is where the answer is kept — so newNode
+	// clears it on the stored record once it has been consumed.
+	GoalSupplied bool
 	// HumanMoveSequence is a transient, unsaved Enhanced gesture receipt. It
 	// identifies only the move issued by the first Shift click so the second
 	// can replace that move with a build (DESIGN_INTERFACE_HUD_INPUT §3.10).

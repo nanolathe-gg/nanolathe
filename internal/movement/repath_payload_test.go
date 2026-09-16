@@ -52,7 +52,7 @@ func TestFollowerRepathArmNeedsAnInstalledPayload(t *testing.T) {
 				t.Skip("Move_Ground order is unavailable")
 			}
 			q := orders.QueueForUnit(u)
-			q.Push(moveID, orders.Node{Owner: h, GoalX: world.CellToWorld(8), GoalZ: world.CellToWorld(1)})
+			q.Push(moveID, orders.Node{Owner: h, GoalX: world.CellToWorld(8), GoalZ: world.CellToWorld(1), GoalSupplied: true})
 			head := q.Head()
 			if tc.install {
 				// Exactly what `Move_Ground` phase 0 hands the controller

@@ -42,10 +42,11 @@ func gateFixture() (*Queue, *units.Unit) {
 //
 // The relationship asserted is per descriptor, over the table's own slice
 // order (I1): the static mask survives on the record's own copy field
-// [04 §3.2], except that the constructor clears bit 9 (0x200) when the push
-// below supplies no target — [04 §3.1]'s "constructed without a target unit
-// clears it", applied by newNode [04 R-MOV-03 §7] (WU-19-110) — and the
-// dynamic gate is empty.
+// [04 §3.2], except for the constructor's two presence clears — bit 9 (0x200)
+// when the push below supplies no target and bit 10 (0x400) when it supplies no
+// goal, [04 §3.1]'s "constructed without a target unit clears it" / "0x400
+// cleared when constructed without a goal position", applied by newNode
+// [04 R-MOV-03 §7] — and the dynamic gate is empty.
 func TestFreshRecordAwaitsNothing(t *testing.T) {
 	masked := 0
 	for id := range Table() {
@@ -54,7 +55,7 @@ func TestFreshRecordAwaitsNothing(t *testing.T) {
 			continue // the reject sentinel is never inserted [04 §3.1]
 		}
 		q, u := gateFixture()
-		q.Push(ID(id), Node{Owner: u.Handle}) // no target supplied
+		q.Push(ID(id), Node{Owner: u.Handle}) // no target and no goal supplied
 		if q.LenPrimary()+q.LenSecondary() != 1 {
 			t.Fatalf("%s: push queued %d records, want one", desc.Name, q.LenPrimary()+q.LenSecondary())
 		}
@@ -67,9 +68,10 @@ func TestFreshRecordAwaitsNothing(t *testing.T) {
 		if n.DynamicGate != 0 {
 			t.Fatalf("%s: fresh dynamic gate = %#x, want 0 [04 R-ORD-01 §1]", desc.Name, n.DynamicGate)
 		}
-		wantStatic := desc.StaticGate &^ staticTargetObserver // no target supplied [04 §3.1][04 R-MOV-03 §7]
+		// neither a target nor a goal was supplied [04 §3.1][04 R-MOV-03 §7]
+		wantStatic := desc.StaticGate &^ (staticTargetObserver | staticGoalObserver)
 		if n.StaticGate != wantStatic {
-			t.Fatalf("%s: static-mask copy = %#x, want the descriptor's %#x with bit 9 cleared (no target supplied) [04 §3.1][04 R-MOV-03 §7]", desc.Name, n.StaticGate, wantStatic)
+			t.Fatalf("%s: static-mask copy = %#x, want the descriptor's %#x with bits 9 and 10 cleared (no target, no goal supplied) [04 §3.1][04 R-MOV-03 §7]", desc.Name, n.StaticGate, wantStatic)
 		}
 		if n.Satisfied != 0 {
 			t.Fatalf("%s: fresh pending word = %#x, want 0 [04 R-ORD-01 §1]", desc.Name, n.Satisfied)

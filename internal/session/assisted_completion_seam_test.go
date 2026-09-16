@@ -136,6 +136,7 @@ func TestFrameFinishedByAHelperJoinsTheWorld(t *testing.T) {
 	orders.QueueForUnit(frame).Push(orders.Lookup("Move_Ground"), orders.Node{
 		Owner: hFrame,
 		GoalX: world.CellToWorld(20), GoalZ: world.CellToWorld(20),
+		GoalSupplied: true,
 	})
 	for tick := uint32(61); tick <= 130; tick++ {
 		s.Clock.GlobalTick = tick

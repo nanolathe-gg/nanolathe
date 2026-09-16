@@ -65,6 +65,15 @@ type DebrisView struct {
 	RenderFlags     uint8
 	OwnerColor      uint8
 	OwnerColorKnown bool
+	// Smoke and Fire are the record's engine bits 1 and 0. They are read only
+	// by the DRAW pass: every rendered frame that draws this piece emits one
+	// smoke puff (Smoke) and/or one fire particle (Fire) at the piece. Neither
+	// touches simulation state or the simulation stream, and their cadence is
+	// the frame rate, not the tick, so a headless simulation emits none
+	// [04 R-COB-04 §2][03 R-FX-01 §3]. They travel here because the arena that
+	// holds them is simulation state presentation must not read [I6].
+	Smoke bool
+	Fire  bool
 }
 
 // PieceView carries one committed COB piece transform [03 §2.4].
@@ -644,7 +653,13 @@ type EconomyView struct {
 	EnergyProduced float32
 	EnergyConsumed float32
 	DisplayTimer   uint32 // saved presentation deadline, seeded at battle entry [05 R-ECO-01 §1]
-	Active         bool
+	// MetalShareThreshold and EnergyShareThreshold are the player's automatic
+	// sharing thresholds [05 R-SHARE-01 §3]. The top strip marks each one on
+	// its bar [07 R-HUD-03 §4]; presentation reads the committed copy rather
+	// than the mutable ledger [I6].
+	MetalShareThreshold  float32
+	EnergyShareThreshold float32
+	Active               bool
 }
 
 // VisibilityView contains the masks consumed by current-frame picking and

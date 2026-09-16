@@ -36,7 +36,7 @@ func pushAirOrder(t *testing.T, u *units.Unit, name string, goalX, goalZ numeric
 		t.Fatalf("descriptor %s missing from the order table", name)
 	}
 	q := orders.QueueForUnit(u)
-	q.Push(id, orders.Node{Owner: u.Handle, GoalX: goalX, GoalZ: goalZ})
+	q.Push(id, orders.Node{Owner: u.Handle, GoalX: goalX, GoalZ: goalZ, GoalSupplied: true})
 	return q.Primary()[q.LenPrimary()-1]
 }
 

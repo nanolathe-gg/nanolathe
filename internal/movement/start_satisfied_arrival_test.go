@@ -48,7 +48,7 @@ func TestStartSatisfiedRequestArrivesThroughTheFollower(t *testing.T) {
 	sys.EnsureUnit(u)
 
 	q := orders.QueueForUnit(u)
-	q.Push(orders.Lookup("Attack_Chase"), orders.Node{GoalX: x, GoalZ: z})
+	q.Push(orders.Lookup("Attack_Chase"), orders.Node{GoalX: x, GoalZ: z, GoalSupplied: true})
 	head := q.Head()
 	if head == nil {
 		t.Fatal("no head record")
@@ -121,7 +121,7 @@ func TestArrivalHandleIsNotBoundWithoutAnInstalledPayload(t *testing.T) {
 	sys.EnsureUnit(u)
 
 	q := orders.QueueForUnit(u)
-	q.Push(orders.Lookup("Attack_Chase"), orders.Node{GoalX: x, GoalZ: z})
+	q.Push(orders.Lookup("Attack_Chase"), orders.Node{GoalX: x, GoalZ: z, GoalSupplied: true})
 	head := q.Head()
 	if head == nil {
 		t.Fatal("no head record")

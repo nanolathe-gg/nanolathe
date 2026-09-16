@@ -310,13 +310,19 @@ func decodeBox(b [28]byte) (State, error) {
 }
 
 // BeginSubTick increments the global simulation tick and returns its new
-// value. It is the single writer of GlobalTick.
+// value. It is the only code that ADVANCES GlobalTick.
 //
 // [01 §4.4]: "each sub-tick increments the global tick before any phase runs"
 // (C6). The kernel calls this once per sub-tick, before phase 1; nothing else
 // may advance the counter. Keeping it here rather than in the kernel means the
 // value SaveBox persists is the same value the phases observed
 // [08 "Scheduler and random state in saves"] (C14).
+//
+// The one other writer of the field is the battle-entry seeding step,
+// session.Session.SeedSessionRNG, which zeroes it so every battle entry —
+// including save re-entry, whose RNG state is never restored — starts at tick
+// zero before any setup-owned draw [01 R-CORE-02]. That is a reset, not an
+// advance, and nothing else writes the field (DESIGN_RUNTIME_DETERMINISM C6).
 func (s *State) BeginSubTick() uint32 {
 	s.GlobalTick++
 	return s.GlobalTick

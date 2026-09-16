@@ -116,14 +116,23 @@ derives all of them from a picked point; `FactoryPlacement` keeps the authored
 exit transform verbatim as the model position while snapping an independent
 validation rectangle from it.
 
-`CheckPlacement` is the single legality predicate. It validates the rectangle,
-runs the known-site gate when a viewer record is supplied, then walks the
-rectangle in row-major order applying the per-cell yard bits — structure-yard
-mark, ground occupancy, blocking feature, indestructible feature, geothermal —
-while accumulating the slope and height aggregates, and finally applies the
-slope, site-height, and two water-depth gates. `ValidatePlacement` and
-`SiteHeight` remain as cell-coordinate entry points for fixtures; production
-callers construct a `PlacementQuery`.
+`CheckPlacement` is the single legality predicate, and it is **split by product
+class** exactly as retail's shared entry is `[04 R-P0-08]` "class split". It
+validates the rectangle, runs the known-site gate when a viewer record is
+supplied, then walks the rectangle in row-major order. A **building** applies
+its compiled yard bits per cell — structure-yard mark, ground occupancy,
+blocking feature, indestructible feature, geothermal — accumulates the bit-3
+slope and bit-4 height samples, and ends on the rectangle aggregate: one
+`maxHigh − minLow > MaxSlope` comparison (the land pair alone; the yard walk has
+no water pair), the site-height peak gate, and the two water-depth gates. A
+**mobile** product has no yard map and no rectangle aggregate anywhere: the walk
+applies feature blocking and ground occupancy to every covered cell and decides
+terrain legality cell by cell, on that cell's own derived pair, per W7. Both
+classes run the terrain half only in the inline terrain-check mode (mode 1);
+outside it the bounds, feature and occupancy gates still apply and the query
+still publishes a site height. `ValidatePlacement` and `SiteHeight` remain as
+cell-coordinate entry points for fixtures; production callers construct a
+`PlacementQuery`.
 
 **Occupancy.** Retail has one ground-occupancy word per cell, written by ground
 movers and by building-class units alike `[04 R-COLL-01 §4]`. Nanolathe stores
@@ -214,8 +223,9 @@ same byte refcount; the mode bit selects only the shape.
   negative origins skipped to `max(0, −origin)`, unsigned bounds compares, and
   only opaque mask bytes touching the grids.
 * *Terrain-ray*: `g = clamp(q, 0, numtables − 1)` into the declared `LOS.TDF`
-  tables, walking `TABLE g − 1` because the table accessor is one-based against
-  a zero-based store `[03 R-COMP-02 §1]`. Each authored line is a spoke of
+  tables, reading record `g − 1` because the table accessor is one-based — and
+  the loader filled record `d` from the section it names `TABLE d + 1`, so
+  group `g` walks `TABLE g` `[03 R-COMP-02 §1]`. Each authored line is a spoke of
   absolute offsets from the observer, expanded by four 90-degree rotations; step
   distances count from one; the origin cell is admitted unconditionally; each
   step bounds-checks unsigned *before* any terrain read; admission is the strict
@@ -240,6 +250,30 @@ saved pair is a sprite frame origin after a Circular transition, while a ray
 record holds its terrain tile. The cleared current grids dispose of old coverage
 without attempting a retirement through the new raster `[03 R-VIS-01 §1]`
 `[03 R-VIS-01 §2]` `[07 R-CAM-01 §6]`.
+
+`RebuildEntry` is the *other* bulk call, and it is not interchangeable with
+either `RefreshMode` or a republication sweep. Retail invokes it with the full
+argument at three sites — battle entry, every commander respawn, and watch-mode
+entry — and it always refills both stores: step 1 the whole word grid from mode
+bit 0, step 2 each eligible slot's byte grid from mode bit 1, step 3 a direct
+unthrottled stamp of every active unit in record order, step 4 the minimap/fog
+invalidation `[08 R-ENTRY-01 §7]` `[08 R-SKIR-01 §3]`. Step 2's eligibility is
+the live record / controller in {1,2,3} / side ≠ 10 test; a slot that fails it
+keeps its stale bytes, so the service takes the per-slot vector from the caller
+rather than filling all ten. Step 3 is gated on mode bit 1: with current
+coverage disabled no unit is visited and every saved observer record survives
+untouched, which is safe because retirement and the byte half of publication are
+gated on the same bit `[03 R-VIS-01 §1]`. `RebuildAll` remains the restore
+seam's narrower wipe — it holds no player table, and the seam installs the saved
+`Mapping` box on top of the fills before republishing through the ordinary
+throttled path.
+
+The watcher/observer clear is one of those sites. Clearing mode bits 0 and 1 is
+Mapped + Permanent, and retail does not stop at the mode word: it forces one
+bulk rebuild so the word grid fills with every usable player bit and each
+eligible byte grid with 1. Without the rebuild the fog window seeds an unset
+word bit as unexplored and a watcher sees solid black `[03 R-VIS-01 §4]` pass 1
+`[03 R-VIS-01 §1]`.
 
 The observer record itself is built session-side: the unit's world height raised
 to at least one above sea level and narrowed to a signed word, plus the model
@@ -424,11 +458,22 @@ structure-yard, never-seen and residual bits `[03 §2.2]` `[03 R-TERR-01 §1]`
 **W7 — height and slope.** `HeightAt` is integer bilinear over four neighbouring
 heights using the low four bits of each cell-space coordinate with the signed
 right-shift bias — never a float lerp — and reproduces retail's guard, returning
-the raw −1 sentinel on the last row or column instead of clamping. The footprint
-validator aggregates the minimum of the cells' low bytes and the maximum of
-their high bytes over the sampled cells, selects the movement class's slope or
-water-slope limit by the site's water state, and compares strictly so equality
-passes `[03 §2.3]` `[04 §6.1]` `[04 R-SLOPE-01 §1]`.
+the raw −1 sentinel on the last row or column instead of clamping.
+
+The slope rule is **per class**. For a **building**, the yard walk aggregates the
+minimum of the bit-3 cells' low bytes and the maximum of their high bytes and
+makes one comparison of that span against the movement class's `MaxSlope`: this
+rectangle aggregate is the structure placement validator's alone, and it has no
+water pair `[04 R-P0-08]` `[04 R-SLOPE-01 §3]`. For a **mobile** product there is
+no aggregate at all: each covered cell is judged on its own derived pair, with
+the pair selected from that cell's own water state — `MaxSlope` when the cell's
+`hmin >= SeaLevel`, `MaxWaterSlope` otherwise — and the two water-depth gates
+applied to the same cell's pair, in the order deep, shallow, slope
+`[04 R-COLL-01 §2]`. Every comparison in both classes is strict, so a slope or a
+depth exactly equal to its limit passes. A footprint whose cells are each legal
+is legal for a mobile product however far apart their heights lie; judging it on
+the aggregate is strictly harsher, and the gap grows with the footprint
+`[03 §2.3]` `[04 §6.1]` `[04 R-SLOPE-01 §1]`.
 
 **W8 — three queries, not one.** `CoarseHeightAt` and `LOSHeightWord` are
 separate queries and must not be substituted for `HeightAt`; a tall feature does
@@ -486,11 +531,17 @@ distance to the observer's signed 16-bit word, preserving zero and negative
 values for both live units and temporary death sight `[03 R-VIS-01 §2]`. Both
 start from `q = floor(radius/32)` by signed floor division. Sprite-mask forms `idx = clamp(q − 5, 0, 9)` into the ten
 authored visibility-mask frames; terrain-ray forms `g = clamp(q, 0,
-numtables − 1)` into the **declared** table count and then walks `TABLE g − 1`,
-so a sight distance in `[32(k+1), 32(k+2))` walks `TABLE k`, the highest
-reachable table is `numtables − 2`, and group 0 reads a record whose content is
-Unknown — an empty line list there is the sanctioned divergence `[03 §3.2]`
-`[03 R-COMP-02 §1]` (SC9).
+numtables − 1)` into the **declared** table count and then reads record
+`g − 1`. Both conventions are one-based and cancel: the loader sizes its list
+to `numtables` and fills zero-based slot `d` from the section it *names*
+`TABLE d + 1`, so record `g − 1` is `TABLE g`. A sight distance in
+`[32k, 32(k+1))` therefore walks `TABLE k`, whose authored extent is exactly
+`k` cells. Two consequences survive: the clamp stops one short of the accessor's
+range, so the last loaded table `TABLE numtables` is unreachable, and group 0
+reads a record whose content is Unknown — an empty line list there is the
+sanctioned divergence `[03 §3.2]` `[03 R-COMP-02 §1]` (SC9). A declared slot
+whose section is absent keeps its empty line list; it never pulls a
+higher-numbered table down into it.
 
 **C3** Sprite-mask publication clips start-inclusive/end-exclusive, skips
 negative origins to `max(0, −origin)`, compares bounds unsigned so a signed
@@ -646,9 +697,12 @@ rebuild fills and underneath the observer publication `[03 §3.3]`
   signed-offset reading is what `ResolveFeature` follows, and overlapping stamps
   are last-write-wins.
 * **SC9 — `LOS.TDF` declares nine tables and supplies twelve.** The terrain-ray
-  clamp uses the **declared** count, never the number of parsed sections; the
-  catalog keeps all twelve so nothing is lost, and the sprite-mask path keeps
-  its own, unrelated count from the visibility-mask GAF.
+  clamp uses the **declared** count, never the number of parsed sections. The
+  compiled list is the loader's storage — slot `d` holds the section named
+  `TABLE d + 1`, empty where that section is absent — with the undeclared
+  sections kept after the slots so nothing is lost; `TABLE9`, the last loaded
+  table, is unreachable because the clamp stops at `numtables − 1`. The
+  sprite-mask path keeps its own, unrelated count from the visibility-mask GAF.
 * **SC19 — yard-map parsing and the bit 5/6 flag identities.** Forty-six stock
   yard maps disagree with their own footprint, so the parser fills by retail's
   character loop and returns no length error; bit 5 blocks on the feature

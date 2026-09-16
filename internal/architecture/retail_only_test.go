@@ -22,6 +22,12 @@ import (
 // Client, HUD, presentation, and audio are host/device edges and are
 // intentionally outside this list.  The list follows the ownership boundaries
 // in [01 §1] and the package graph in the repository architecture summary.
+//
+// internal/headless is deliberately NOT here even though it drives the session.
+// It is a host/report edge: its report builder ranges a map to name packages,
+// and the simulation benchmark's scene and timing records hold float64s that
+// never reach simulation state.  Admitting it would mean allowlisting all of
+// that, which buys a weaker guard than leaving the edge outside the boundary.
 var authoritativeDirs = []string{
 	"internal/ai",
 	"internal/clock",
@@ -42,6 +48,7 @@ var authoritativeDirs = []string{
 	"internal/sim",
 	"internal/triggers",
 	"internal/units",
+	"internal/version",
 	"internal/visibility",
 	"internal/world",
 }

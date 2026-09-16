@@ -824,7 +824,11 @@ func (s *Session) publishSnapshot(tick uint32) {
 				EnergyProduced: pl.PassProduced[economy.Energy],
 				EnergyConsumed: pl.PassConsumed[economy.Energy],
 				DisplayTimer:   pl.DisplayTimer,
-				Active:         pl.Exists && !pl.IsObserver,
+				// The top strip marks each automatic-sharing threshold on its
+				// bar [07 R-HUD-03 §4][05 R-SHARE-01 §3].
+				MetalShareThreshold:  pl.MetalShareThreshold,
+				EnergyShareThreshold: pl.EnergyShareThreshold,
+				Active:               pl.Exists && !pl.IsObserver,
 			})
 		}
 	} else {

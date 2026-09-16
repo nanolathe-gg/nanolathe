@@ -341,3 +341,97 @@ func TestAdvancePanelNowStepsOnceFromTheHostClock(t *testing.T) {
 		t.Fatalf("held Space with an editor focused target=%d, want %d", s.PanelTarget, PanelVisible)
 	}
 }
+
+// Every `ARMOPT` button plays the `Options` cue before its route runs, `OK`
+// included, and the child openers run after that cue [07 R-FE-01 §7]. The cue
+// belongs to the button, not to the transition: `OK` closes and `SAVEGAME`
+// only reports, and both are preceded by exactly one cue.
+func TestBattleOptionsButtonsPlayTheOptionsCueBeforeTheirRoute(t *testing.T) {
+	for _, tc := range []struct {
+		button string
+		want   BattleModal
+	}{
+		{button: "OK", want: BattleModalClosed},
+		{button: "CANCEL", want: BattleModalClosed},
+		{button: "EXIT", want: BattleModalExit},
+		{button: "SAVEGAME", want: BattleModalOptions},
+		{button: "LOADGAME", want: BattleModalOptions},
+		{button: "PREFS", want: BattleModalOptions},
+		{button: "MISSION", want: BattleModalGameOptions},
+		{button: "HELP", want: BattleModalHelp},
+	} {
+		t.Run(tc.button, func(t *testing.T) {
+			var cues []string
+			s := NewBattleState(0x04)
+			// The sink records the modal the cue was played under, which is
+			// what proves the cue precedes the route rather than following it.
+			var at []BattleModal
+			s.SetPanelCue(func(cue string) {
+				cues = append(cues, cue)
+				at = append(at, s.Modal())
+			})
+			s.OpenOptions()
+			s.Activate(tc.button)
+			if len(cues) != 1 || cues[0] != "Options" {
+				t.Fatalf("%s played cues %v, want exactly one Options cue", tc.button, cues)
+			}
+			if at[0] != BattleModalOptions {
+				t.Fatalf("%s played its cue under modal %d, want the options root %d", tc.button, at[0], BattleModalOptions)
+			}
+			if s.Modal() != tc.want {
+				t.Fatalf("%s left modal %d, want %d", tc.button, s.Modal(), tc.want)
+			}
+		})
+	}
+}
+
+// A campaign session sends `MISSION` to the briefing, and the cue is the same
+// one button cue either way [07 R-FE-01 §7].
+func TestBattleOptionsMissionCueIsOneCueInACampaignToo(t *testing.T) {
+	var cues []string
+	s := NewBattleState(0x04)
+	s.SetPanelCue(func(cue string) { cues = append(cues, cue) })
+	s.SetCampaign(true)
+	s.OpenOptions()
+	if got := s.Activate("MISSION"); got != BattleModalActionMission {
+		t.Fatalf("campaign MISSION reported action %d", got)
+	}
+	if s.Modal() != BattleModalBriefing {
+		t.Fatalf("campaign MISSION left modal %d, want %d", s.Modal(), BattleModalBriefing)
+	}
+	if len(cues) != 1 || cues[0] != "Options" {
+		t.Fatalf("campaign MISSION played cues %v, want exactly one Options cue", cues)
+	}
+}
+
+// Only `ARMOPT`'s own buttons carry the cue: a name the window does not author,
+// a gadget on one of its children, and the exit family's own rows all reach
+// their route without one [07 R-FE-01 §7].
+func TestBattleNonOptionsGadgetsPlayNoCue(t *testing.T) {
+	var cues []string
+	s := NewBattleState(0x04)
+	s.SetPanelCue(func(cue string) { cues = append(cues, cue) })
+	s.OpenOptions()
+	// An unauthored name on the root itself.
+	s.Activate("MOREBAR")
+	// The exit chain: EXITMENU's rows and YESORNO's.
+	s.Activate("EXIT")
+	before := len(cues)
+	s.Activate("MAINMENU")
+	s.Activate("CHOICE2")
+	s.Activate("CANCEL")
+	// A child window's OK returns to the root and plays nothing.
+	s.Activate("HELP")
+	after := len(cues)
+	s.Activate("Page")
+	s.Activate("OK")
+	if got := len(cues) - after; got != 0 {
+		t.Fatalf("HELP.GUI's own rows played %d cues, want none", got)
+	}
+	if got := after - before; got != 1 {
+		t.Fatalf("the exit family and the root's HELP played %d cues, want the one HELP cue", got)
+	}
+	if before != 1 {
+		t.Fatalf("an unauthored root name plus EXIT played %d cues, want the one EXIT cue", before)
+	}
+}

@@ -571,7 +571,8 @@ func spawnImmediateSelfDestruct(u *units.Unit, n *Node) {
 		GoalX:        n.GoalX,
 		GoalY:        n.GoalY,
 		GoalZ:        n.GoalZ,
-		Param1:       1, // p1 = 1: immediate, no countdown [04 R-ORD-01 §2]
+		GoalSupplied: true, // the arrival point the kamikaze record carried
+		Param1:       1,    // p1 = 1: immediate, no countdown [04 R-ORD-01 §2]
 		CreationTick: n.CreationTick,
 	}
 	if isSecondary(id) {

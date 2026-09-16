@@ -73,7 +73,7 @@ func TestStepUnitMobileBuildStopsOnMoveArrived(t *testing.T) {
 
 	drive := func(moveState uint8) StepResult {
 		q := orders.QueueForUnit(u)
-		q.Push(mid, orders.Node{GoalX: goalX, GoalZ: goalZ, MoveState: moveState})
+		q.Push(mid, orders.Node{GoalX: goalX, GoalZ: goalZ, MoveState: moveState, GoalSupplied: true})
 		route := handleRow(system.Routes, h)
 		route.Active = false
 		if moveState == orders.MoveEnRoute {
@@ -136,7 +136,7 @@ func TestStepUnitGroundArrival(t *testing.T) {
 	// Use ground radiusParam 4 → threshold 0 cells [R-P0-01 corrected] so start
 	// delta 14 is far from arrived.
 	q := orders.QueueForUnit(u)
-	q.Push(id, orders.Node{GoalX: world.CellToWorld(15), GoalZ: world.CellToWorld(1)})
+	q.Push(id, orders.Node{GoalX: world.CellToWorld(15), GoalZ: world.CellToWorld(1), GoalSupplied: true})
 	system.ActivateMove(u, q.Head())
 	// Scheduler must tick to publish route
 	system.Scheduler.Tick(60)
@@ -224,7 +224,7 @@ func TestStepUnitEmptyRouteDoesNotArrive(t *testing.T) {
 	// Push a move order but make goal unreachable by blocking terrain? Simpler: keep route empty.
 	id := orders.Lookup("Move_Ground")
 	q := orders.QueueForUnit(u)
-	q.Push(id, orders.Node{GoalX: world.CellToWorld(15), GoalZ: world.CellToWorld(15)})
+	q.Push(id, orders.Node{GoalX: world.CellToWorld(15), GoalZ: world.CellToWorld(15), GoalSupplied: true})
 	system.BeginTick(1)
 	res := system.StepUnit(h, 1)
 	system.EndTick(1)
@@ -258,7 +258,7 @@ func TestStepUnitEmptyRouteDoesNotArrive(t *testing.T) {
 	goalCell := path.Cell{X: 15, Z: 15}
 	system2.SubmitMove(h2, 0, startCell, goalCell)
 	q2 := orders.QueueForUnit(u2)
-	q2.Push(id, orders.Node{GoalX: world.CellToWorld(15), GoalZ: world.CellToWorld(15)})
+	q2.Push(id, orders.Node{GoalX: world.CellToWorld(15), GoalZ: world.CellToWorld(15), GoalSupplied: true})
 	system2.Scheduler.Tick(1)
 	system2.Scheduler.Tick(2)
 	// Even after scheduler, if passability blocks goal, search should publish empty (0 points) and stay inactive
@@ -303,8 +303,8 @@ func TestStepUnitOrderIndependence(t *testing.T) {
 		system.SubmitMove(hB, 0, path.Cell{X: 10, Z: 10}, path.Cell{X: 14, Z: 10})
 		qA := orders.QueueForUnit(uA)
 		qB := orders.QueueForUnit(uB)
-		qA.Push(id, orders.Node{GoalX: world.CellToWorld(5), GoalZ: world.CellToWorld(1)})
-		qB.Push(id, orders.Node{GoalX: world.CellToWorld(14), GoalZ: world.CellToWorld(10)})
+		qA.Push(id, orders.Node{GoalX: world.CellToWorld(5), GoalZ: world.CellToWorld(1), GoalSupplied: true})
+		qB.Push(id, orders.Node{GoalX: world.CellToWorld(14), GoalZ: world.CellToWorld(10), GoalSupplied: true})
 		system.Scheduler.Tick(1)
 		// Do one tick with chosen order
 		system.BeginTick(2)
@@ -349,8 +349,8 @@ func TestStepUnitOrderIndependence(t *testing.T) {
 		system.SubmitMove(hB, 0, path.Cell{X: 4, Z: 2}, path.Cell{X: 3, Z: 2})
 		qA := orders.QueueForUnit(uA)
 		qB := orders.QueueForUnit(uB)
-		qA.Push(id, orders.Node{GoalX: world.CellToWorld(3), GoalZ: world.CellToWorld(2)})
-		qB.Push(id, orders.Node{GoalX: world.CellToWorld(3), GoalZ: world.CellToWorld(2)})
+		qA.Push(id, orders.Node{GoalX: world.CellToWorld(3), GoalZ: world.CellToWorld(2), GoalSupplied: true})
+		qB.Push(id, orders.Node{GoalX: world.CellToWorld(3), GoalZ: world.CellToWorld(2), GoalSupplied: true})
 		system.Scheduler.Tick(1)
 		system.BeginTick(2)
 		if orderAB {
@@ -440,7 +440,7 @@ func TestStepUnitAircraftAndTransportRegression(t *testing.T) {
 		idAir = orders.Lookup("Move_Ground")
 	}
 	qAir := orders.QueueForUnit(uAir)
-	qAir.Push(idAir, orders.Node{GoalX: world.CellToWorld(10), GoalZ: world.CellToWorld(10)})
+	qAir.Push(idAir, orders.Node{GoalX: world.CellToWorld(10), GoalZ: world.CellToWorld(10), GoalSupplied: true})
 	system.SubmitMove(hAir, 0, path.Cell{X: 2, Z: 2}, path.Cell{X: 10, Z: 10})
 	// Transport + cargo
 	transDef := &content.UnitDef{UnitName: "armatlas", MaxVelocity: 2 * 65536, Acceleration: 1 * 65536, BrakeRate: 1 * 65536, TurnRate: 300, CruiseAlt: 80}
@@ -466,7 +466,7 @@ func TestStepUnitAircraftAndTransportRegression(t *testing.T) {
 	idMove := orders.Lookup("Move_Ground")
 	system.SubmitMove(hTrans, 0, path.Cell{X: 5, Z: 5}, path.Cell{X: 12, Z: 5})
 	qTrans := orders.QueueForUnit(uTrans)
-	qTrans.Push(idMove, orders.Node{GoalX: world.CellToWorld(12), GoalZ: world.CellToWorld(5)})
+	qTrans.Push(idMove, orders.Node{GoalX: world.CellToWorld(12), GoalZ: world.CellToWorld(5), GoalSupplied: true})
 	system.Scheduler.Tick(60)
 	startAirX := uAir.X
 	startCargoX := w.Unit(hCargo).X
@@ -521,7 +521,7 @@ func TestStepUnitDeterminism(t *testing.T) {
 		system.SubmitMove(h, 0, path.Cell{X: 0, Z: 0}, path.Cell{X: 5, Z: 5})
 		id := orders.Lookup("Move_Ground")
 		q := orders.QueueForUnit(u)
-		q.Push(id, orders.Node{GoalX: world.CellToWorld(5), GoalZ: world.CellToWorld(5)})
+		q.Push(id, orders.Node{GoalX: world.CellToWorld(5), GoalZ: world.CellToWorld(5), GoalSupplied: true})
 		system.Scheduler.Tick(1)
 		for tick := uint32(2); tick < 20; tick++ {
 			system.Scheduler.Tick(tick)
@@ -564,7 +564,7 @@ func TestStepUnitLoopParity(t *testing.T) {
 		system.SubmitMove(h, 0, path.Cell{X: 0, Z: 0}, path.Cell{X: 4, Z: 0})
 		id := orders.Lookup("Move_Ground")
 		q := orders.QueueForUnit(u)
-		q.Push(id, orders.Node{GoalX: world.CellToWorld(4), GoalZ: world.CellToWorld(0)})
+		q.Push(id, orders.Node{GoalX: world.CellToWorld(4), GoalZ: world.CellToWorld(0), GoalSupplied: true})
 		system.Scheduler.Tick(1)
 		for tick := uint32(2); tick < 15; tick++ {
 			system.Scheduler.Tick(tick)
@@ -588,7 +588,7 @@ func TestStepUnitLoopParity(t *testing.T) {
 		system.SubmitMove(h, 0, path.Cell{X: 0, Z: 0}, path.Cell{X: 4, Z: 0})
 		id := orders.Lookup("Move_Ground")
 		q := orders.QueueForUnit(u)
-		q.Push(id, orders.Node{GoalX: world.CellToWorld(4), GoalZ: world.CellToWorld(0)})
+		q.Push(id, orders.Node{GoalX: world.CellToWorld(4), GoalZ: world.CellToWorld(0), GoalSupplied: true})
 		system.Scheduler.Tick(1)
 		for tick := uint32(2); tick < 15; tick++ {
 			system.Scheduler.Tick(tick)
@@ -624,7 +624,7 @@ func TestStepUnitPublishedRouteNoDuplicate(t *testing.T) {
 	system.SubmitMove(h, 0, start, goal)
 	id := orders.Lookup("Move_Ground")
 	q := orders.QueueForUnit(u)
-	q.Push(id, orders.Node{GoalX: world.CellToWorld(3), GoalZ: world.CellToWorld(3)})
+	q.Push(id, orders.Node{GoalX: world.CellToWorld(3), GoalZ: world.CellToWorld(3), GoalSupplied: true})
 	if system.pathProvider.pending(0) != 1 {
 		t.Fatalf("pending should be 1 after submit")
 	}
@@ -699,7 +699,7 @@ func TestArrivalInclusiveBoundary(t *testing.T) {
 	goalZ := world.CellToWorld(1)
 	id := orders.Lookup("Move_Ground")
 	q := orders.QueueForUnit(u)
-	q.Push(id, orders.Node{GoalX: goalX, GoalZ: goalZ})
+	q.Push(id, orders.Node{GoalX: goalX, GoalZ: goalZ, GoalSupplied: true})
 	system.ActivateMove(u, q.Head())
 	system.Scheduler.Tick(1)
 	// Move unit to start tile 5, then check arrival from tile 5 vs goal 7: dx=-2 → 4 > 0 not arrived
@@ -724,7 +724,7 @@ func TestArrivalInclusiveBoundary(t *testing.T) {
 	system1.BindWorld(w1)
 	system1.EnsureUnit(u1)
 	q1 := orders.QueueForUnit(u1)
-	q1.Push(id, orders.Node{GoalX: world.CellToWorld(5), GoalZ: world.CellToWorld(1)})
+	q1.Push(id, orders.Node{GoalX: world.CellToWorld(5), GoalZ: world.CellToWorld(1), GoalSupplied: true})
 	system1.ActivateMove(u1, q1.Head())
 	system1.Scheduler.Tick(1)
 	system1.BeginTick(2)
@@ -743,7 +743,7 @@ func TestArrivalInclusiveBoundary(t *testing.T) {
 	system2.BindWorld(w2)
 	system2.EnsureUnit(u2)
 	q2 := orders.QueueForUnit(u2)
-	q2.Push(id, orders.Node{GoalX: world.CellToWorld(6), GoalZ: world.CellToWorld(1)})
+	q2.Push(id, orders.Node{GoalX: world.CellToWorld(6), GoalZ: world.CellToWorld(1), GoalSupplied: true})
 	system2.ActivateMove(u2, q2.Head())
 	system2.Scheduler.Tick(1)
 	system2.BeginTick(2)
@@ -771,7 +771,7 @@ func TestArrivalIsPlanarNoYHeading(t *testing.T) {
 	system.EnsureUnit(u)
 	q := orders.QueueForUnit(u)
 	id := orders.Lookup("Move_Ground")
-	q.Push(id, orders.Node{GoalX: world.CellToWorld(0), GoalZ: world.CellToWorld(0)})
+	q.Push(id, orders.Node{GoalX: world.CellToWorld(0), GoalZ: world.CellToWorld(0), GoalSupplied: true})
 	system.ActivateMove(u, q.Head())
 	system.Scheduler.Tick(1)
 	system.BeginTick(2)

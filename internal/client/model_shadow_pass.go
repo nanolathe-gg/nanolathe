@@ -351,3 +351,28 @@ func (t *modelTarget) eraseAtOrBelow(threshold uint8) {
 		}
 	}
 }
+
+// featureCastsModelShadow is the model-shadow gate for a 3DO feature — a wreck
+// or a map-authored model feature — drawn through the feature pseudo-unit
+// [03 R-RAST-01 §6].
+//
+// The pseudo-unit has no FBI to read: a feature definition authors no
+// `noshadow` key at all, so that term of the common gate is simply false, and
+// Digger, `canhover` and `floater` are clear for every feature draw. The
+// pseudo-unit sets the structure class bit, so the structure branch is
+// selected, and that branch tests neither the vehicle-shadow bit nor
+// `canhover`/`floater` — it reduces to the master shadow bit
+// [03 R-REN-03D §1].
+//
+// The structure branch carries one extra predicate: it is skipped when the
+// definition ordinal is 0 and `hi16(unitY) < seaLevel`. Ordinal 0 is the
+// feature pseudo-unit — a Supported inference stated in [03 R-REN-03D §1] —
+// so every feature draw satisfies the first term, and a 3DO wreck casts its
+// structure shadow exactly while it sits at or above the waterline
+// [03 R-REN-03D §1][03 R-RAST-01 §4].
+func (c *Client) featureCastsModelShadow(y numeric.Fixed) bool {
+	if !c.castsModelShadow(false, false, false, true) {
+		return false
+	}
+	return y.Floor() >= c.seaLevel().Floor()
+}

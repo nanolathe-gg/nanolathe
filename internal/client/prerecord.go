@@ -359,6 +359,27 @@ func (c *Client) dropPreRecord() {
 	c.pre.crtSaved = false
 }
 
+// SnapshotPresentationCRT copies the presentation CRT and returns the function
+// that puts the copy back. It is the pre-recorder's rollback made available to
+// a host that composes the same committed frame twice — the `--shot-renderer
+// both` route, whose two recordings must each start from the CRT state a
+// single recording would have seen, or the segmented-projectile pass of [03
+// §5.4] draws different points in the second one [I4].
+//
+// The returned function is idempotent and safe to call once per snapshot; a
+// client with no bound stream returns a no-op. Like the pair below, it infers
+// the generator from the bound pointer and never names it (DET-01). It does
+// not touch the pre-recorder's own snapshot slot, so a host may hold one of
+// these across a launch without disturbing dropPreRecord.
+func (c *Client) SnapshotPresentationCRT() func() {
+	if c == nil || c.crt == nil {
+		return func() {}
+	}
+	p := c.crt
+	v := *p
+	return func() { *p = v }
+}
+
 // savePresentationCRT copies the presentation CRT into the snapshot pair's
 // shared slot, building the pair the first time and again whenever a different
 // stream has been bound. The pair is written here rather than in audio.go so

@@ -29,7 +29,7 @@ func TestAirStrikeTargetRemovalAcrossMovementGates(t *testing.T) {
 			actor.Flags = actor.Flags&^(units.StandingFieldMask<<units.StandingFireShift) | tc.stance<<units.StandingFireShift
 			q := QueueForUnit(actor)
 			q.SetBinding(&QueueBinding{Lookup: w.Unit})
-			q.Push(Lookup("AirStrike"), Node{Owner: actor.Handle, Target: target.Handle, GoalX: 11 << 16, GoalY: 12 << 16, GoalZ: 13 << 16})
+			q.Push(Lookup("AirStrike"), Node{Owner: actor.Handle, Target: target.Handle, GoalX: 11 << 16, GoalY: 12 << 16, GoalZ: 13 << 16, GoalSupplied: true})
 			n := q.Primary()[0]
 			n.Phase, n.DynamicGate = 5, tc.gate
 			// Leave the resulting seek available for inspection; its air runner

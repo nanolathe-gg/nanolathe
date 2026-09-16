@@ -169,6 +169,19 @@ mission spawner, COB, rally inheritance and factory completion — so the queue
 modifier, the goal payload and the build product identity are formed in one
 place `[04 §3.4]`.
 
+Constructor admission applies both presence clears of `[04 §3.1]` on the
+record's own static-mask copy: bit 9 when no target unit was supplied, bit 10
+when no goal position was supplied `[04 R-MOV-03 §7]`. Retail reads presence off
+two optional constructor arguments. The target handle carries its own answer —
+the null handle is "no target" — but the goal is passed here by value as three
+fixed-point words, and the fixed-point origin is a legal map position, so
+presence cannot be recovered from the triple. The producer therefore states it:
+`Node.GoalSupplied` is an insertion-time input alongside the queue modifier,
+set by every construction site that supplies a position payload, consumed by the
+constructor into the mask copy and cleared on the stored record. Bit 10's one
+reader is the guard's leg-4 copy arm, which takes it as "this record has a goal
+to copy" `[04 R-ORD-01 §13]`.
+
 The target handle is the record's observer link. Constructor admission clears
 it when the issued-target bit is clear; later `BindTarget` calls relink it
 independently of that bit, including the stationary guard's acquired target.
@@ -223,8 +236,14 @@ handler into every static descriptor. This build assembles the same table from
 files that cannot all initialise before the table does, so each family owns an
 installer and `handlerInstallers` is the single ordered list that runs them — a
 slice, not a map, because registration order is a contract [I1]. Every installer
-assigns only where a descriptor's handler is still nil, so the list is
-idempotent and its order is what settles a row two families both name.
+is idempotent, and all but one reach that by assigning only where a descriptor's
+handler is still nil, so the list's order is what settles a row two families
+both name. The chase/guard installer is the exception: it assigns its three rows
+unconditionally and is made idempotent by a one-shot latch on whether
+`Attack_Chase` already carries a handler. `installHandlers` runs once, from
+`buildTable`; the pump does not re-run it, and the chase/guard family's own
+lazy retry inside `Resolve` is what covers an init order that ran before the
+table existed.
 
 **Order registry queries.** `WeaponAdapter.TargetsInRadius` connects `Wait`
 and the stationary `Guard_NoMove` scan to
@@ -649,9 +668,71 @@ for either physical kind even on refusal. Bitmap requests consume no simulation
 draws and do not hide a bitmap-only source. The sink runs synchronously and
 retains no record; session owns all bounded arena storage and effect-phase
 updates. Smoke/fire select the established strip-9 smoke and flame-stream
-classes, but their per-render-frame CRT producer remains `TODO(RT08)` at the
-client draw boundary; the stale claimed-effect case remains open
-`[04 R-COB-04 §1]`–`[04 R-COB-04 §4]` [I4] [I5] [I6].
+classes, and the draw-side producer is wired end to end: the two engine bits
+publish on `frame.DebrisView`, and the client makes the two CONTAINERS at the
+piece, taking the smoke puff's last frame and the fire particle's four values
+from its private presentation CRT copy — never the session stream — so frame
+cadence cannot reach the tick. Their **persistence** is now reproduced: the
+containers live on a presentation-owned store that steps them on the committed
+tick (the puff's animation clock and its wind and gravity drift, the fire
+container's `lifetime + 1` coincident segments) and draws them at barrier 9, so
+a falling piece leaves the smoke and flame trail behind it that retail's
+surviving containers draw. Both reductions `TODO(RT08)` carried are closed. One
+divergence remains and is stated rather than hidden: retail admits one container
+per RENDERED frame and this build admits one per burning piece per COMMITTED
+tick, because it renders several frames per tick while the containers step by
+the tick. All of it is owned by `DESIGN_PRESENTATION_CLIENT.md` C2.2. The stale
+claimed-effect case remains open `[04 R-COB-04 §1]`–`[04 R-COB-04 §4]`
+[I4] [I5] [I6].
+
+**C27.1 — whole-piece admission position. Approved departure (2026-09-16).**
+
+*Retail.* `[04 R-COB-04 §2]` requires the source unit's position plus the
+piece's **last retained** translation, and explicitly forbids recomposing the
+current pose at admission. `[04 R-COB-04 §3]` names the writers of that retained
+value: allocation, and the deferred rebuild performed by **model drawing** and by
+the **viewing-player-visible** effect-opcode refresh visit; COB transform setters
+only request the rebuild. Both refresh sites are presentation events, so retail's
+retained translation is as stale as the last time that unit was drawn or looked
+at, and the admitted debris position is a function of render cadence and of which
+player is viewing. That research stands as written and is not restated here.
+
+*This build.* The adapter samples the **current recomposed piece pose** at
+admission: `cob.Binding.ComposePiece` from live VM state, through the same
+`pieceWorldPos` locator the bitmap and emit-sfx ports use. The admitted position
+feeds the bounce, the impact sink and the effect admissions those produce, so
+importing retail's value would put render cadence and the viewing player's
+identity inside the authoritative tick [I4] [I6]. The user authorized this on
+**2026-09-16** for that reason — "Don't put render cadence into the
+authoritative tick" — extending to whole-piece debris the current-pose sampling
+already approved for the **shatter** adapter in this section (2026-09-09).
+
+*Gating.* Unconditional, in the shatter departure's exact form: it is **not**
+selected through the central `gameplay.Mode`, and no new mechanism is introduced.
+**Strict 3.1 samples the current pose too.** Retail's retained value is written
+by drawing and by a viewing-player-dependent refresh, so no tick-ordered value
+reproduces it; a Strict-only path could only invent a rebuild cadence, which
+rule 1 forbids. This is a layering departure — where a value is read from — not
+a gameplay rule, which is why it takes the shatter form rather than a
+`gameplay.Mode` policy and is not listed among CLAUDE.md's gameplay policies
+[I11].
+
+*Boundary.* Admission **position** only. The six physical draws and their
+3000/3000/3000/40/10/40 order, the velocity and angle-rate seed built from them,
+the added source mover velocity, the lifetime, the four fall/on-hit/smoke/fire
+flags, the source hide, the pool's allocation charge and every step rule are
+unchanged, and both readings consume identical simulation draws. Nanolathe keeps
+no materialized point list at all, so nothing else in the tick reads a retained
+translation.
+
+*Tests.* `TestWholePieceAdmissionUsesCurrentPiecePoseNotRetainedTranslation` in
+`internal/session` locks the case where retail would differ — a piece a script
+translated after spawn is admitted at the recomposed pose, not at the pose the
+unit had when it was last composed — and asserts the six-draw census across the
+admission. `TestCOBWholePieceExplosionPublishesDetachedSlot` continues to lock
+the copied pose, source slot and publication. The shatter counterpart is
+`TestShatterSamplesSimulationPoseAndPublishesDetachedGeometry`
+`[04 R-COB-04 §2]` `[04 R-COB-04 §3]` [I4] [I6] [I11].
 
 **DebrisPool API — whole-piece prerequisite.** `internal/render.NewDebrisPool`
 owns a fixed 100-slot, 100,000-charge arena. `Admit(DebrisRequest) bool` takes
@@ -696,7 +777,8 @@ the current simulation pose when COB explodes the piece. It remaps live COB
 states to model pieces, folds unit orientation into the root, and uses the
 existing model transform for every eligible quad and the piece origin.
 This replaces retail's retained drawing/effect-refresh history deliberately:
-rendering never feeds fragment physics. The half mover velocity, paired pool
+rendering never feeds fragment physics. C27.1 extends the same reasoning, in the
+same unconditional form, to whole-piece debris admission. The half mover velocity, paired pool
 admission, eight draws, contacts and frozen material rules remain unchanged.
 The battle-owned phase-7 texture registry supplies only scalar material identity;
 it advances independently of rendering. The frame publishes detached vertices,
@@ -737,8 +819,10 @@ renderer paths. Shatter session admission, publication and drawing now use the a
 simulation-pose source described above. A shatter during initial battle `Create`
 can precede registry binding and therefore retains invalid material while its
 physics still runs; no later drawing pass retries or changes that admission.
-Ordinary in-battle creation uses the already bound registry. Per-frame smoke/fire trails retain the explicit RT08
-ownership boundary.
+Ordinary in-battle creation uses the already bound registry. The
+smoke/fire producers are wired at the client draw, from the presentation CRT
+copy, and their containers persist on the presentation store and draw at
+barrier 9; RT08 is closed — see C27 and `DESIGN_PRESENTATION_CLIENT.md` C2.2.
 
 **Shatter production validation.** Sequential classic and modern runs of the
 same scene-version-3 Ashap Plateau benchmark (seed 7, factories, 1920×1080,

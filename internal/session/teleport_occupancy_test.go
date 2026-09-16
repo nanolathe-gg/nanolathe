@@ -121,6 +121,7 @@ func TestTeleportReleasesTheVacatedFootprintCells(t *testing.T) {
 	q.Push(orders.Lookup("Teleport"), orders.Node{
 		Owner: gateHandle,
 		GoalX: goal, GoalY: 0, GoalZ: goal,
+		GoalSupplied: true,
 	})
 	q.Pump(teleporter, 0)
 

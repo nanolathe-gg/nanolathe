@@ -49,7 +49,7 @@ func TestRS08_ThreeAimSlotsOneDrain(t *testing.T) {
 	attachTestCOB(shooter, vm)
 	for i := 0; i < 3; i++ {
 		wdef := weaponTurret(int32(10 + i))
-		wdef.Range = 1000 * 65536
+		wdef.Range = 1000
 		shooter.InstallWeapon(i, wdef)
 		slot := shooter.SlotAt(i)
 		slot.Target = units.Target{Kind: units.TargetUnit, Unit: target.Handle}

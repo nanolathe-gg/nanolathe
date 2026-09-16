@@ -40,6 +40,9 @@ func (b *battleSession) openBattleMenu() {
 	if b.hud != nil {
 		b.hud.openOptionsWindow()
 	}
+	// `MISSION`'s branch is the session kind, read where the opener reads the
+	// same fact to relabel the button [07 R-FE-01 §7].
+	b.battleState().SetCampaign(battleSessionKind(b) == 1)
 	before := b.battleState().Modal()
 	b.applyBattleSchedule(b.battleState().OpenOptions())
 	if b.battleState().Modal() != before {
@@ -97,6 +100,13 @@ func (b *battleSession) handleBattleMenuInput(in *input.State, cl *client.Client
 	}
 	if b != nil && b.battleState() != nil && b.battleState().Modal() == ui.BattleModalRestart {
 		b.handleBattleRestartInput(in, cl)
+		return
+	}
+	// ARMOPT's read-only children own the pass while they are open. An event
+	// their indexed service does not claim falls through to the battle
+	// caller's modal rows below, which is where Escape closes them back to the
+	// surviving options root [07 R-FE-01 §7][07 R-WGT-01 §1].
+	if b != nil && b.battleInfoWindowActive() && b.handleBattleInfoWindowInput(in, cl) {
 		return
 	}
 	state := b.battleState()
@@ -157,6 +167,10 @@ func (b *battleSession) activateBattleMenuButton(name string, cl *client.Client)
 			b.hud.openConfirmWindow()
 		}
 	}
+	if before == ui.BattleModalOptions && b.battleInfoWindowActive() {
+		b.openBattleInfoWindow()
+		flushWindowTokens(cl)
+	}
 	if state.Modal() != before && (state.Modal() == ui.BattleModalExit || state.Modal() == ui.BattleModalRestart || state.Modal() == ui.BattleModalConfirmMain || state.Modal() == ui.BattleModalConfirmExit) {
 		flushWindowTokens(cl)
 	}
@@ -190,6 +204,10 @@ func (b *battleSession) activateBattleMenuButton(name string, cl *client.Client)
 		b.openBattlePrefs()
 	case ui.BattleModalActionRestart:
 		b.acceptBattleRestart(cl)
+	case ui.BattleModalActionHelpPage:
+		b.refillBattleHelpPage()
+	case ui.BattleModalActionBriefingPage:
+		b.pageBattleBriefing()
 	}
 }
 

@@ -77,7 +77,7 @@ func TestMoveGroundArrivalRaisesTheArrivedAcknowledgement(t *testing.T) {
 		t.Fatal("Move_Ground descriptor unavailable")
 	}
 	q, u, spy := arrivedFixture(nil)
-	q.Push(id, Node{Owner: u.Handle, GoalX: u.X, GoalZ: u.Z})
+	q.Push(id, Node{Owner: u.Handle, GoalX: u.X, GoalZ: u.Z, GoalSupplied: true})
 	q.Pump(u, 40)
 
 	n := q.Primary()[0]
@@ -112,7 +112,7 @@ func TestMoveGroundWithoutArrivalRaisesNoAcknowledgement(t *testing.T) {
 		t.Fatal("Move_Ground descriptor unavailable")
 	}
 	q, u, spy := arrivedFixture(nil)
-	q.Push(id, Node{Owner: u.Handle, GoalX: u.X, GoalZ: u.Z})
+	q.Push(id, Node{Owner: u.Handle, GoalX: u.X, GoalZ: u.Z, GoalSupplied: true})
 	q.Pump(u, 40)
 	n := q.Primary()[0]
 	n.Satisfied |= 0x40 // the no-route bit, not arrival [04 R-ORD-01 §0]
@@ -132,7 +132,7 @@ func TestKamikazeArrivalRaisesTheArrivedAcknowledgement(t *testing.T) {
 		t.Fatal("Attack_Kamikaze descriptor unavailable")
 	}
 	q, u, spy := arrivedFixture(nil)
-	q.Push(id, Node{Owner: u.Handle, GoalX: u.X, GoalZ: u.Z})
+	q.Push(id, Node{Owner: u.Handle, GoalX: u.X, GoalZ: u.Z, GoalSupplied: true})
 	q.Pump(u, 40)
 	n := q.Primary()[0]
 	if spy.count(statusArrived) != 0 {
@@ -164,9 +164,9 @@ func TestVTOLMoveLastOnSegmentRaisesTheArrivedAcknowledgement(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			q, u, spy := arrivedFixture(&content.UnitDef{BMCode: 1, CanFly: true})
-			q.Push(id, Node{Owner: u.Handle, Phase: 2, GoalX: u.X, GoalZ: u.Z})
+			q.Push(id, Node{Owner: u.Handle, Phase: 2, GoalX: u.X, GoalZ: u.Z, GoalSupplied: true})
 			for i := 0; i < tc.successors; i++ {
-				q.Push(id, Node{Owner: u.Handle, GoalX: u.X, GoalZ: u.Z})
+				q.Push(id, Node{Owner: u.Handle, GoalX: u.X, GoalZ: u.Z, GoalSupplied: true})
 			}
 			n := q.Primary()[0]
 			n.Phase, n.DynamicGate, n.Deadline = 2, 0, -1
@@ -188,7 +188,7 @@ func TestArrivedAcknowledgementCarriesTheRowsText(t *testing.T) {
 		t.Fatal("Move_Ground descriptor unavailable")
 	}
 	q, u, spy := arrivedFixture(nil)
-	q.Push(id, Node{Owner: u.Handle, GoalX: u.X, GoalZ: u.Z})
+	q.Push(id, Node{Owner: u.Handle, GoalX: u.X, GoalZ: u.Z, GoalSupplied: true})
 	q.Pump(u, 40)
 	q.Primary()[0].Satisfied |= 0x20
 	q.pumpPrimary(u, 41)

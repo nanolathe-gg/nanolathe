@@ -22,7 +22,7 @@ func newGroundPathStatusFixture(t *testing.T, start, goal path.Cell) (*System, *
 	u := w.Unit(h)
 	sys.EnsureUnit(u)
 	q := orders.QueueForUnit(u)
-	q.Push(orders.Lookup("Move_Ground"), orders.Node{GoalX: world.CellToWorld(goal.X), GoalZ: world.CellToWorld(goal.Z)})
+	q.Push(orders.Lookup("Move_Ground"), orders.Node{GoalX: world.CellToWorld(goal.X), GoalZ: world.CellToWorld(goal.Z), GoalSupplied: true})
 	head := q.Head()
 	if head == nil || !sys.ActivateMove(u, head) {
 		t.Fatal("activate move")
@@ -113,7 +113,7 @@ func TestGroundPathStatusSink(t *testing.T) {
 	t.Run("stale activation cannot wake replacement", func(t *testing.T) {
 		sys, u, q, oldHead, stale := newGroundPathStatusFixture(t, path.Cell{X: 2, Z: 2}, path.Cell{X: 5, Z: 2})
 		q.RemoveHead()
-		q.Push(orders.Lookup("Move_Ground"), orders.Node{GoalX: world.CellToWorld(7), GoalZ: world.CellToWorld(2)})
+		q.Push(orders.Lookup("Move_Ground"), orders.Node{GoalX: world.CellToWorld(7), GoalZ: world.CellToWorld(2), GoalSupplied: true})
 		newHead := q.Head()
 		if newHead == nil || !sys.ActivateMove(u, newHead) {
 			t.Fatal("activate replacement")
@@ -130,7 +130,7 @@ func TestGroundPathStatusSink(t *testing.T) {
 	t.Run("stale queue head cannot wake successor", func(t *testing.T) {
 		sys, _, q, oldHead, stale := newGroundPathStatusFixture(t, path.Cell{X: 2, Z: 2}, path.Cell{X: 5, Z: 2})
 		q.RemoveHead()
-		q.Push(orders.Lookup("Move_Ground"), orders.Node{GoalX: world.CellToWorld(7), GoalZ: world.CellToWorld(2)})
+		q.Push(orders.Lookup("Move_Ground"), orders.Node{GoalX: world.CellToWorld(7), GoalZ: world.CellToWorld(2), GoalSupplied: true})
 		newHead := q.Head()
 		oldHead.Satisfied, newHead.Satisfied = 0, 0
 		stale.Goal = path.PointGoal(stale.Start, 0)

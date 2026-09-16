@@ -61,10 +61,11 @@ func TestResurrectionPoolRefusalRetainsCorpseForRetry(t *testing.T) {
 		t.Fatal("missing Resurrect row")
 	}
 	q.Push(resurrect, orders.Node{
-		Owner: hBuilder,
-		Phase: 5,
-		GoalX: world.CellToWorld(corpseX),
-		GoalZ: world.CellToWorld(corpseZ),
+		Owner:        hBuilder,
+		Phase:        5,
+		GoalX:        world.CellToWorld(corpseX),
+		GoalZ:        world.CellToWorld(corpseZ),
+		GoalSupplied: true,
 	})
 	n := q.Primary()[0]
 	q.Pump(builder, 100)
@@ -139,7 +140,7 @@ func TestResurrectionImmediatelyReturnsFeatureCapacity(t *testing.T) {
 	builder.InBuildStance = true
 	q := orders.QueueForUnit(builder)
 	s.bindExistingOrderQueue(builder)
-	q.Push(orders.Lookup("Resurrect"), orders.Node{Owner: h, Phase: 5, GoalX: world.CellToWorld(12), GoalZ: world.CellToWorld(12)})
+	q.Push(orders.Lookup("Resurrect"), orders.Node{Owner: h, Phase: 5, GoalX: world.CellToWorld(12), GoalZ: world.CellToWorld(12), GoalSupplied: true})
 	q.Pump(builder, 100)
 	if !terrain.PlotAt(12, 12).IsEmpty() {
 		t.Fatal("resurrection did not consume corpse")

@@ -21,7 +21,7 @@ func TestCaptionClearIsOneShotAcrossReArms(t *testing.T) {
 		t.Fatal("Move_Ground descriptor unavailable")
 	}
 	q, u, spy := arrivedFixture(nil)
-	q.Push(id, Node{Owner: u.Handle, GoalX: u.X, GoalZ: u.Z})
+	q.Push(id, Node{Owner: u.Handle, GoalX: u.X, GoalZ: u.Z, GoalSupplied: true})
 
 	// Phase 0: the record is fresh, so the caption clear speaks once.
 	q.Pump(u, 40)
@@ -67,10 +67,10 @@ func TestFreshRecordAcknowledgesAgain(t *testing.T) {
 		t.Fatal("Move_Ground descriptor unavailable")
 	}
 	q, u, spy := arrivedFixture(nil)
-	q.Push(id, Node{Owner: u.Handle, GoalX: u.X, GoalZ: u.Z})
+	q.Push(id, Node{Owner: u.Handle, GoalX: u.X, GoalZ: u.Z, GoalSupplied: true})
 	q.Pump(u, 40)
 	q.PurgeUnprotected()
-	q.Push(id, Node{Owner: u.Handle, GoalX: u.X, GoalZ: u.Z})
+	q.Push(id, Node{Owner: u.Handle, GoalX: u.X, GoalZ: u.Z, GoalSupplied: true})
 	q.Pump(u, 80)
 	if got := spy.count(statusOK); got != 2 {
 		t.Fatalf("kind 5 raised %d times for two issued orders, want 2 [04 R-ORD-01 §1]", got)

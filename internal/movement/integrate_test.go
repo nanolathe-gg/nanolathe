@@ -80,7 +80,7 @@ func TestSchedulerRouteSteerArrival(t *testing.T) {
 		t.Fatalf("Move_Ground not found")
 	}
 	q := orders.QueueForUnit(u)
-	q.Push(id, orders.Node{GoalX: world.CellToWorld(8), GoalZ: world.CellToWorld(8)})
+	q.Push(id, orders.Node{GoalX: world.CellToWorld(8), GoalZ: world.CellToWorld(8), GoalSupplied: true})
 
 	// Tick scheduler once to publish route (search needs 1 tick)
 	system.Scheduler.Tick(60)
@@ -168,7 +168,7 @@ func TestIntegrateDeterminism(t *testing.T) {
 		system.SubmitMove(h, 0, start, goal)
 		id := orders.Lookup("Move_Ground")
 		q := orders.QueueForUnit(u)
-		q.Push(id, orders.Node{GoalX: world.CellToWorld(5), GoalZ: world.CellToWorld(5)})
+		q.Push(id, orders.Node{GoalX: world.CellToWorld(5), GoalZ: world.CellToWorld(5), GoalSupplied: true})
 		system.Scheduler.Tick(1)
 		for tick := uint32(2); tick < 20; tick++ {
 			system.Scheduler.Tick(tick)
@@ -279,7 +279,7 @@ func TestBigRequestStaysActiveAcrossTicks(t *testing.T) {
 		t.Fatalf("Move_Ground not found")
 	}
 	q := orders.QueueForUnit(u)
-	q.Push(id, orders.Node{GoalX: world.CellToWorld(150), GoalZ: world.CellToWorld(1)})
+	q.Push(id, orders.Node{GoalX: world.CellToWorld(150), GoalZ: world.CellToWorld(1), GoalSupplied: true})
 
 	// One-shot expected via direct path search with same passability/bias/bounds.
 	isPassable := func(c path.Cell) bool {
@@ -375,7 +375,7 @@ func TestActivateMoveExactlyOnceAndRejectsStalePublication(t *testing.T) {
 	system.EnsureUnit(u)
 	id := orders.Lookup("Move_Ground")
 	q := orders.QueueForUnit(u)
-	q.Push(id, orders.Node{GoalX: world.CellToWorld(3), GoalZ: world.CellToWorld(3)})
+	q.Push(id, orders.Node{GoalX: world.CellToWorld(3), GoalZ: world.CellToWorld(3), GoalSupplied: true})
 	first := q.Head()
 	if first == nil || !system.ActivateMove(u, first) {
 		t.Fatal("first active order was not submitted")
@@ -392,7 +392,7 @@ func TestActivateMoveExactlyOnceAndRejectsStalePublication(t *testing.T) {
 	firstRequest := path.Request{Unit: h, Activation: handleRow(system.activeOrders, h).token}
 
 	q.RemoveHead()
-	q.Push(id, orders.Node{GoalX: world.CellToWorld(6), GoalZ: world.CellToWorld(6)})
+	q.Push(id, orders.Node{GoalX: world.CellToWorld(6), GoalZ: world.CellToWorld(6), GoalSupplied: true})
 	second := q.Head()
 	if second == nil || !system.ActivateMove(u, second) {
 		t.Fatal("replacement active order was not submitted")

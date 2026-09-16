@@ -16,7 +16,7 @@ func TestAirPointAttackKeepsGoal(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			q, u := gateFixture()
 			x, y, z := numeric.FixedFromInt(123), numeric.FixedFromInt(17), numeric.FixedFromInt(456)
-			q.Push(Lookup(name), Node{Owner: u.Handle, GoalX: x, GoalY: y, GoalZ: z})
+			q.Push(Lookup(name), Node{Owner: u.Handle, GoalX: x, GoalY: y, GoalZ: z, GoalSupplied: true})
 			n := q.Head()
 			if n.Target != 0 || n.StaticGate&staticTargetObserver != 0 {
 				t.Fatal("point attack acquired a unit observer")

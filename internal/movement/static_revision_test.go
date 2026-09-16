@@ -104,7 +104,7 @@ func TestFeatureChangePreservesGroundRoute(t *testing.T) {
 		u := w.Unit(h)
 		last := points[len(points)-1]
 		q := orders.QueueForUnit(u)
-		q.Push(orders.Lookup("Move_Ground"), orders.Node{Owner: h, GoalX: numeric.Fixed(last.X) << 16, GoalZ: numeric.Fixed(last.Z) << 16})
+		q.Push(orders.Lookup("Move_Ground"), orders.Node{Owner: h, GoalX: numeric.Fixed(last.X) << 16, GoalZ: numeric.Fixed(last.Z) << 16, GoalSupplied: true})
 		head := q.Head()
 		sys.InstallPointGoal(orders.PointGoalRequest{Owner: h, Node: head, X: head.GoalX, Z: head.GoalZ, Radius: 4})
 		sys.ActivateMove(u, head)
@@ -145,7 +145,7 @@ func TestFeatureBlockUsesFollowerRepathPoll(t *testing.T) {
 	sys, w, h := releaseFixture(t, def, 2)
 	u := w.Unit(h)
 	q := orders.QueueForUnit(u)
-	q.Push(orders.Lookup("Move_Ground"), orders.Node{Owner: h, GoalX: 160 << 16, GoalZ: u.Z})
+	q.Push(orders.Lookup("Move_Ground"), orders.Node{Owner: h, GoalX: 160 << 16, GoalZ: u.Z, GoalSupplied: true})
 	head := q.Head()
 	sys.InstallPointGoal(orders.PointGoalRequest{Owner: h, Node: head, X: head.GoalX, Z: head.GoalZ, Radius: 4})
 	sys.ActivateMove(u, head)
@@ -196,7 +196,7 @@ func TestStaticRevisionDoesNotInvalidateAircraftRoute(t *testing.T) {
 		t.Fatal("Move_Ground not found")
 	}
 	q := orders.QueueForUnit(u)
-	q.Push(moveID, orders.Node{GoalX: world.CellToWorld(4), GoalZ: world.CellToWorld(4)})
+	q.Push(moveID, orders.Node{GoalX: world.CellToWorld(4), GoalZ: world.CellToWorld(4), GoalSupplied: true})
 	route := &Route{}
 	route.PublishAtRevision([]Point{{X: 5, Z: 5}, {X: 6, Z: 6}, {X: 7, Z: 7}}, 0)
 	setHandleRow(&sys.Routes, h, route)

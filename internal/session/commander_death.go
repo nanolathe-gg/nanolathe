@@ -227,10 +227,14 @@ func (s *Session) respawnLocalCommander() bool {
 			if s.Movement != nil {
 				s.Movement.EnsureUnit(u)
 			}
-			// Respawn rebuilds the observer table after the new unit has its
-			// movement/occupancy identity; this also repairs any stale owner
-			// visibility left by the death path [08 R-SKIR-01 §3][R-ENTRY-01 §7].
-			publishVisibilityForAll(s)
+			// Respawn calls the visibility rebuild with the FULL argument, the
+			// same call battle entry makes [08 R-SKIR-01 §3][08 R-ENTRY-01 §7]:
+			// both stores are refilled from the mode word before every active
+			// unit is re-stamped. Republishing live observers alone is not the
+			// same thing — it would keep the dead player's mapped word grid and
+			// its byte refcounts, so a deathmatch respawn under the default
+			// Unmapped mode would retain map memory retail has just zeroed.
+			rebuildVisibilityForEntry(s)
 		}
 		return true
 	}

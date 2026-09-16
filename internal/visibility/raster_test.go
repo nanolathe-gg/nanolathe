@@ -94,15 +94,16 @@ func TestRayUsesAuthoredSpokes(t *testing.T) {
 	terrain := flatTerrain(64, 10)
 	s := New(terrain, ModeHistoryEnabled|ModeCurrentEnabled|ModeTerrainRay)
 	s.SetRayTables(&content.LOSTables{
-		// Two declared tables: radius 32 is group 1, which walks TABLE 0
-		// under the one-based accessor skew [03 R-COMP-02 §1].
+		// Two declared tables: radius 32 is group 1, which reads slot 0 — the
+		// slot the loader fills from the section named TABLE1, so group 1
+		// walks TABLE1 [03 R-COMP-02 §1].
 		NumTables: 2,
 		Tables: []content.LOSTable{{
-			TableNum: 0, NumLines: 1,
+			TableNum: 1, NumLines: 1,
 			// One line: two steps due north.
 			Lines: [][]int32{{2, 0, 1, 0, 2}},
 		}, {
-			TableNum: 1, NumLines: 1,
+			TableNum: 2, NumLines: 1,
 			Lines: [][]int32{{3, 0, 1, 0, 2, 0, 3}},
 		}},
 	})
@@ -143,14 +144,14 @@ func TestRayStrictTieNeverAdmits(t *testing.T) {
 
 	s := New(terrain, ModeHistoryEnabled|ModeCurrentEnabled|ModeTerrainRay)
 	s.SetRayTables(&content.LOSTables{
-		// Radius 32 is group 1, which walks TABLE 0 [03 R-COMP-02 §1]; a
-		// second declared table makes group 1 reachable.
+		// Radius 32 is group 1, which reads slot 0 = TABLE1 [03 R-COMP-02 §1];
+		// a second declared table makes group 1 reachable.
 		NumTables: 2,
 		Tables: []content.LOSTable{{
-			TableNum: 0, NumLines: 1,
+			TableNum: 1, NumLines: 1,
 			Lines: [][]int32{{3, 0, 1, 0, 2, 0, 3}},
 		}, {
-			TableNum: 1, NumLines: 1, Lines: [][]int32{{1, 0, 1}},
+			TableNum: 2, NumLines: 1, Lines: [][]int32{{1, 0, 1}},
 		}},
 	})
 	s.Publish(0, 10, 10, 0, 32)
@@ -179,14 +180,14 @@ func TestRayExactEqualityTie(t *testing.T) {
 	terrain.SetLOSHeightWord(10, 13, 61, 61) // 20*3 < 61*1 — strictly greater
 	s := New(terrain, ModeHistoryEnabled|ModeCurrentEnabled|ModeTerrainRay)
 	s.SetRayTables(&content.LOSTables{
-		// Radius 32 is group 1, which walks TABLE 0 [03 R-COMP-02 §1]; a
-		// second declared table makes group 1 reachable.
+		// Radius 32 is group 1, which reads slot 0 = TABLE1 [03 R-COMP-02 §1];
+		// a second declared table makes group 1 reachable.
 		NumTables: 2,
 		Tables: []content.LOSTable{{
-			TableNum: 0, NumLines: 1,
+			TableNum: 1, NumLines: 1,
 			Lines: [][]int32{{3, 0, 1, 0, 2, 0, 3}},
 		}, {
-			TableNum: 1, NumLines: 1, Lines: [][]int32{{1, 0, 1}},
+			TableNum: 2, NumLines: 1, Lines: [][]int32{{1, 0, 1}},
 		}},
 	})
 	s.Publish(0, 10, 10, 0, 32)
@@ -220,14 +221,14 @@ func TestRayHighByteGatesHorizonUpdate(t *testing.T) {
 
 	s := New(terrain, ModeHistoryEnabled|ModeCurrentEnabled|ModeTerrainRay)
 	s.SetRayTables(&content.LOSTables{
-		// Radius 32 is group 1, which walks TABLE 0 [03 R-COMP-02 §1]; a
-		// second declared table makes group 1 reachable.
+		// Radius 32 is group 1, which reads slot 0 = TABLE1 [03 R-COMP-02 §1];
+		// a second declared table makes group 1 reachable.
 		NumTables: 2,
 		Tables: []content.LOSTable{{
-			TableNum: 0, NumLines: 1,
+			TableNum: 1, NumLines: 1,
 			Lines: [][]int32{{2, 0, 1, 0, 2}},
 		}, {
-			TableNum: 1, NumLines: 1, Lines: [][]int32{{1, 0, 1}},
+			TableNum: 2, NumLines: 1, Lines: [][]int32{{1, 0, 1}},
 		}},
 	})
 	s.Publish(0, 10, 10, 0, 32)
@@ -281,18 +282,24 @@ func TestRefreshThrottle(t *testing.T) {
 	}
 }
 
-// TestRayTableSkew locks the one-based table accessor of [03 R-COMP-02 §1]:
-// group g = clamp(floor(radius/32), 0, numtables-1) walks TABLE g-1, so the
-// top declared table is unreachable and group 0 walks no line at all (the
-// retail record there is unknown; only the origin is admitted).
+// TestRayTableSkew locks the terrain-ray table selection of [03 R-COMP-02 §1]:
+// group g = clamp(floor(radius/32), 0, numtables-1) reads record g-1, and the
+// loader filled record d from the section it names TABLE d+1, so the two
+// off-by-ones cancel and group g walks TABLE g — covering exactly g cells.
+//
+// The surviving off-by-one is at the top: the clamp stops one short of the
+// one-based accessor's range, so the last loaded table (TABLE numtables) is
+// unreachable. Group 0 walks no line at all — the retail record there is
+// Unknown and an empty line list is the sanctioned divergence.
 func TestRayTableSkew(t *testing.T) {
 	terrain := flatTerrain(64, 10)
+	// Slot d holds TABLE d+1, the shape the compiler emits.
 	tables := &content.LOSTables{
 		NumTables: 3,
 		Tables: []content.LOSTable{
-			{TableNum: 0, NumLines: 1, Lines: [][]int32{{1, 0, 1}}},
-			{TableNum: 1, NumLines: 1, Lines: [][]int32{{2, 0, 1, 0, 2}}},
-			{TableNum: 2, NumLines: 1, Lines: [][]int32{{5, 0, 1, 0, 2, 0, 3, 0, 4, 0, 5}}},
+			{TableNum: 1, NumLines: 1, Lines: [][]int32{{1, 0, 1}}},
+			{TableNum: 2, NumLines: 1, Lines: [][]int32{{2, 0, 1, 0, 2}}},
+			{TableNum: 3, NumLines: 1, Lines: [][]int32{{5, 0, 1, 0, 2, 0, 3, 0, 4, 0, 5}}},
 		},
 	}
 	cases := []struct {
@@ -300,9 +307,9 @@ func TestRayTableSkew(t *testing.T) {
 		want   int
 	}{
 		{16, 1},        // group 0: origin only
-		{32, 1 + 4*1},  // group 1 -> TABLE 0
-		{64, 1 + 4*2},  // group 2 -> TABLE 1
-		{200, 1 + 4*2}, // clamped to group 2 -> TABLE 1; TABLE 2 unreachable
+		{32, 1 + 4*1},  // group 1 -> TABLE1, one cell of extent
+		{64, 1 + 4*2},  // group 2 -> TABLE2, two cells
+		{200, 1 + 4*2}, // clamped to group 2; TABLE3 is the last loaded table
 	}
 	for _, c := range cases {
 		s := New(terrain, ModeHistoryEnabled|ModeCurrentEnabled|ModeTerrainRay)
@@ -311,5 +318,45 @@ func TestRayTableSkew(t *testing.T) {
 		if got := coveredTiles(s, 0); got != c.want {
 			t.Fatalf("radius %d covered %d tiles, want %d", c.radius, got, c.want)
 		}
+	}
+}
+
+// TestRayTableSkewAcrossANumberingGap locks the slot rule against a gap in the
+// authored numbering [03 R-COMP-02 §1]: the loader asks slot d for the section
+// named TABLE d+1, so an absent TABLE3 leaves slot 2 with its empty line list
+// instead of pulling TABLE4 down into it.
+//
+// The fixture is the list internal/content compiles from an authored file
+// declaring numtables=4 with TABLE1, TABLE2 and TABLE4 — see
+// TestLOSTablesFillSlotsByGeneratedName, which locks that shape.
+func TestRayTableSkewAcrossANumberingGap(t *testing.T) {
+	terrain := flatTerrain(64, 10)
+	tables := &content.LOSTables{
+		NumTables: 4,
+		Tables: []content.LOSTable{
+			{TableNum: 1, NumLines: 1, Lines: [][]int32{{1, 0, 1}}},
+			{TableNum: 2, NumLines: 1, Lines: [][]int32{{2, 0, 1, 0, 2}}},
+			{TableNum: 3}, // no [TABLE3] was authored
+			{TableNum: 4, NumLines: 1, Lines: [][]int32{{5, 0, 1, 0, 2, 0, 3, 0, 4, 0, 5}}},
+		},
+	}
+	cases := []struct {
+		name   string
+		radius int32
+		want   int
+	}{
+		{"group2-walks-TABLE2", 64, 1 + 4*2},
+		{"group3-finds-the-gap", 96, 1},
+		{"clamped-cannot-reach-TABLE4", 400, 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := New(terrain, ModeHistoryEnabled|ModeCurrentEnabled|ModeTerrainRay)
+			s.SetRayTables(tables)
+			s.Publish(0, 10, 10, 20, c.radius)
+			if got := coveredTiles(s, 0); got != c.want {
+				t.Fatalf("radius %d covered %d tiles, want %d", c.radius, got, c.want)
+			}
+		})
 	}
 }

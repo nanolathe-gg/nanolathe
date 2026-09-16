@@ -252,8 +252,8 @@ func TestGetBuiltCompletionRebindsAndConsumesWatcher(t *testing.T) {
 	if moveID == 0 || patrolID == 0 {
 		t.Skip("rally descriptors unavailable")
 	}
-	fq.Push(moveID, orders.Node{GoalX: world.CellToWorld(2), GoalZ: world.CellToWorld(3)})
-	fq.Push(patrolID, orders.Node{GoalX: world.CellToWorld(4), GoalZ: world.CellToWorld(5)})
+	fq.Push(moveID, orders.Node{GoalX: world.CellToWorld(2), GoalZ: world.CellToWorld(3), GoalSupplied: true})
+	fq.Push(patrolID, orders.Node{GoalX: world.CellToWorld(4), GoalZ: world.CellToWorld(5), GoalSupplied: true})
 	pq := orders.QueueForUnit(product)
 	pq.Push(orders.Lookup("GetBuilt"), orders.Node{Target: factory.Handle, Phase: uint8(State2), DynamicGate: 0, Deadline: -1})
 	pq.Primary()[0].DynamicGate = 0
@@ -287,7 +287,7 @@ func TestBuildingClassGetBuiltCompletesWithoutRallyOrPark(t *testing.T) {
 	fh, _ := w.Create(factoryDef, 0, 0, 0, 0)
 	ph, _ := w.Create(buildingDef, 0, 0, 0, 0)
 	factory, product := w.Unit(fh), w.Unit(ph)
-	orders.QueueForUnit(factory).Push(orders.Lookup("QMove"), orders.Node{GoalX: world.CellToWorld(3), GoalZ: world.CellToWorld(4)})
+	orders.QueueForUnit(factory).Push(orders.Lookup("QMove"), orders.Node{GoalX: world.CellToWorld(3), GoalZ: world.CellToWorld(4), GoalSupplied: true})
 	pq := orders.QueueForUnit(product)
 	pq.Push(orders.Lookup("GetBuilt"), orders.Node{Target: factory.Handle, Phase: uint8(State2), Deadline: -1})
 	pq.Primary()[0].DynamicGate = 0

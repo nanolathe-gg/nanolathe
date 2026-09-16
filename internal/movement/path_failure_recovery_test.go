@@ -37,7 +37,7 @@ func TestPathFailureRecoveryRearmsEverySixtyTicks(t *testing.T) {
 		t.Fatal("Move_Ground order is unavailable")
 	}
 	q := orders.QueueForUnit(u)
-	q.Push(moveID, orders.Node{Owner: h, GoalX: world.CellToWorld(8), GoalZ: world.CellToWorld(1)})
+	q.Push(moveID, orders.Node{Owner: h, GoalX: world.CellToWorld(8), GoalZ: world.CellToWorld(1), GoalSupplied: true})
 	head := q.Head()
 	if head == nil {
 		t.Fatal("no head")
@@ -112,7 +112,7 @@ func TestPathFailureRecoveryRearmsEverySixtyTicks(t *testing.T) {
 	oldToken := handleRow(system.activeOrders, h).token
 	system.CancelPathRequest(h)
 	q.RemoveHead()
-	q.Push(moveID, orders.Node{Owner: h, GoalX: world.CellToWorld(9), GoalZ: world.CellToWorld(1)})
+	q.Push(moveID, orders.Node{Owner: h, GoalX: world.CellToWorld(9), GoalZ: world.CellToWorld(1), GoalSupplied: true})
 	newHead := q.Head()
 	if newHead == nil || !system.ActivateMove(u, newHead) {
 		t.Fatal("activate replacement")

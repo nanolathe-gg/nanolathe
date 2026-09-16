@@ -445,9 +445,10 @@ func handleM(token string, ctx *interpCtx) {
 		return
 	}
 	node := orders.Node{
-		GoalX: floatToFixed(fx), // [04 §3.6] coordinates×65536 [C10]
-		GoalZ: floatToFixed(fy),
-		GoalY: 0, // [08 R-ENTRY-01 §6] the authored position has no altitude
+		GoalX:        floatToFixed(fx), // [04 §3.6] coordinates×65536 [C10]
+		GoalZ:        floatToFixed(fy),
+		GoalY:        0, // [08 R-ENTRY-01 §6] the authored position has no altitude
+		GoalSupplied: true,
 	}
 	ctx.push(id, node)
 }
@@ -466,9 +467,10 @@ func handleA(token string, ctx *interpCtx) {
 			return
 		}
 		node := orders.Node{
-			GoalX: floatToFixed(fx), // [04 §3.6] coordinates×65536
-			GoalZ: floatToFixed(fy),
-			GoalY: 0, // [08 R-ENTRY-01 §6] the authored position has no altitude
+			GoalX:        floatToFixed(fx), // [04 §3.6] coordinates×65536
+			GoalZ:        floatToFixed(fy),
+			GoalY:        0, // [08 R-ENTRY-01 §6] the authored position has no altitude
+			GoalSupplied: true,
 		}
 		ctx.push(id, node)
 		ctx.suppressTail = true // numeric-form a suppresses [04 §3.6] C12
@@ -540,11 +542,14 @@ func handleB(token string, ctx *interpCtx) {
 		Param1:      idx,       // catalog index fallback [04 §3.2]
 		Param2:      uint32(n), // count n [04 §3.6]
 	}
-	// BuildingBuild supplies no position, so its entire goal stays zero;
-	// only MobileBuild receives the authored X/Z [08 R-ENTRY-01 §6].
+	// BuildingBuild supplies no position, so its entire goal stays zero and the
+	// record is constructed with NO goal; only MobileBuild receives the authored
+	// X/Z, and states that it supplied one so the constructor keeps static bit
+	// 10 [08 R-ENTRY-01 §6][04 R-MOV-03 §7].
 	if !building {
 		node.GoalX = floatToFixed(fx)
 		node.GoalZ = floatToFixed(fy)
+		node.GoalSupplied = true
 	}
 	ctx.push(id, node)
 }
@@ -678,10 +683,11 @@ func handleP(token string, ctx *interpCtx) {
 		return
 	}
 	node := orders.Node{
-		GoalX:  floatToFixed(fx), // [04 §3.6] coordinates×65536
-		GoalZ:  floatToFixed(fy),
-		GoalY:  0,             // [08 R-ENTRY-01 §6] the authored position has no altitude
-		Param1: uint32(ticks), // timeout ticks [04 §3.6] C10
+		GoalX:        floatToFixed(fx), // [04 §3.6] coordinates×65536
+		GoalZ:        floatToFixed(fy),
+		GoalY:        0,             // [08 R-ENTRY-01 §6] the authored position has no altitude
+		Param1:       uint32(ticks), // timeout ticks [04 §3.6] C10
+		GoalSupplied: true,
 	}
 	ctx.push(id, node)
 	ctx.suppressTail = true // p suppresses [04 §3.6] C12
@@ -708,9 +714,10 @@ func handleU(token string, ctx *interpCtx) {
 		return
 	}
 	node := orders.Node{
-		GoalX: floatToFixed(fx), // [04 §3.6] coordinates×65536
-		GoalZ: floatToFixed(fy),
-		GoalY: 0, // [08 R-ENTRY-01 §6] the authored position has no altitude
+		GoalX:        floatToFixed(fx), // [04 §3.6] coordinates×65536
+		GoalZ:        floatToFixed(fy),
+		GoalY:        0, // [08 R-ENTRY-01 §6] the authored position has no altitude
+		GoalSupplied: true,
 	}
 	ctx.push(id, node)
 }

@@ -179,11 +179,21 @@ button states before it constructs one snapshot, retains observed left/right
 transitions without representing their retention order as native chronology,
 updates the motion fallback, and publishes once before `Client.Step`. Its
 timestamp is the existing scaled 30-Hz host-clock value. Polling does not
-recover native ordering among changes that arrived between polls, native key
-repeat/history, or double-click identity; it does not derive a double-click
-timing heuristic.
-`TODO(T25): establish an Ebiten event source that exposes native ordering,
-repeat, and double-click identity without a heuristic.` [07 §2] [01 R-PLAT-01 §6]
+recover native ordering among changes that arrived between polls, nor native
+key repeat/history.
+`TODO(T25): establish an Ebiten event source that exposes native ordering and
+repeat.` [07 §2] [01 R-PLAT-01 §6]
+
+The one identity the producer does reconstruct is the **left double-click**,
+because its inputs are host settings rather than retail behaviour: retail read
+the operating system's double-click message, whose interval and rectangle were
+the user's OS settings. `internal/platform/ebitenapp/doubleclick.go` owns that
+policy and both constants; §5 records the values and the rationale. The second
+press of a pair carries `LeftDoubleClick` **instead of** `LeftDown`, the way
+the operating system replaced the second press message — one observed
+transition stays one record, publication still takes a single record per host
+service, and the widget pass acts on a left double-click as a press that also
+fires `[07 R-WGT-01 §4]`. Right presses never pair.
 
 `cmd/nanolathe` uses one `pointerFrame` adapter whenever it services a
 `ui.Panel`. It projects the already-published record into the frame and passes
@@ -586,7 +596,10 @@ mandatory anchor block, stored verbatim as authored `x1,y1,x2,y2` corners and
 never normalised `[02 §6]`. `AnchorNames` is the fixed name list and
 `AnchorIndex` its reverse. The bar helpers fill horizontally or vertically from
 an anchor and a fraction; `HealthFraction` and `ResourceFraction` are the two
-clamped ratios `[07 R-HUD-03 §4]`.
+clamped ratios `[07 R-HUD-03 §4]`. Neither the top-strip stock bars nor the
+footer damage bar goes through them: both are inclusive fills with their own
+arithmetic — `FooterBarFill`'s truncating integer divide `[07 R-HUD-03 §2]` and
+the composer's single-precision `drawResourceBar` `[07 R-HUD-03 §4]`.
 
 **Chrome** (`chrome.go`). The layout rules for a surface larger than the design
 space: `ChromeRailX = 129` is the x origin of both horizontal strips,
@@ -764,9 +777,24 @@ panorama and rotation frames, paged text, the wind line and the narration
 effects `[07 R-FE-01 §4]` `[08 R-CAMP-01 §2]`; `loading.go` is the loading
 screen and the loader goroutine, whose progress and result the render goroutine
 alone reads `[07 "The loading screen"]`; `loadgame.go` is the one
-`LOADGAME.GUI` serving both save and load, with the summary field mapping
-`[07 R-FE-01 §8]`; `postbattle.go` and `result.go` are the post-battle machine,
-its glamour fade and the score bars `[07 R-FE-01 §10]`.
+`LOADGAME.GUI` serving both save and load, with the summary field mapping and
+the `RADAR` preview `[07 R-FE-01 §8]`; `postbattle.go` and `result.go` are the
+post-battle machine, its glamour fade and the score bars `[07 R-FE-01 §10]`.
+
+Selecting a row fills the summary panel's text fields and its `RADAR` surface.
+`RADAR` shows the selected file's Summary `Radar Image` box — an 8-byte
+width/height header and then the rows of palette bytes — and nothing at all
+when the box is absent or short, which covers a continuation save, a save
+written before the box had a producer, and a truncated file
+`[08 R-SAVE-02 §3]`. The box is read once per selection, from the selected file
+only: the slot-list enumeration deliberately drops box payloads, so a directory
+of saves is listed without carrying one raster per file. The producer is the
+battle save arm of the same file, which encodes the rail's composed radar
+surface (docs/DESIGN_SESSIONS_AI_SAVE.md, "The `Radar Image` preview box").
+Retail's placement of the picture inside the authored 121x113 rectangle is
+unestablished and carries a `TODO(question)`; this build resamples it with its
+own aspect preserved and centres it, so nothing of the saved battle is cut
+away.
 
 The GAF-font text path is `retail_font.go`. Retail's interface text has two
 pens: the side `.FNT` and the GAF fonts loaded as window font slots.
@@ -919,6 +947,21 @@ the command page does `[07 R-HUD-03 §8]`.
 passes them by value in `UIFrame.Resources`. `BeginPresentationFrame` advances
 them once per host presented frame using `[05 R-ECO-01 §6]`; both stock bars
 and current numbers consume this pair, while capacities remain live.
+Each bar's fill is inclusive on both spans `[07 R-HUD-03 §4]` `[03 R-P0-19-P]`:
+`fill = ftol(x1 + w·S/C)` with the product and quotient in single precision,
+and the painted rectangle is `[x1..fill] × [y1..y2]`. A bar therefore covers
+`ftol(w·S/C)+1` columns and `y2−y1+1` rows, a zero stock still paints the one
+column at `x1`, a full stock paints `w+1` columns, and a capacity at or below
+zero paints nothing because retail's fill sits inside the `C > 0` branch.
+`drawResourceBar` takes the stock pair rather than `hud.ResourceFraction`,
+whose clamped ratio divides before multiplying by `w`.
+`drawShareMarker` then runs in the same `C > 0` branch, painting the player's
+automatic-sharing threshold `T` `[05 R-SHARE-01 §3]` as the three columns
+`[m..m+2] × [y1..y2]` in `dcb[12]` at `m = ftol(x1 + w·T/C)`, but only while
+`0 < T < live stock` — both bounds strict, and the gate reads the committed
+live stock, not the eased displayed stock the fill uses `[07 R-HUD-03 §4]`.
+`EconomyView` carries both thresholds so presentation never reaches into the
+economy ledger for them.
 `UIFrame.Resources` also carries the four unscaled settlement-rate latches.
 `Client` binds each viewed player's saved `EconomyView.DisplayTimer` once per
 battle buffer. On each presented frame, unsigned `deadline < tick` samples
@@ -969,6 +1012,25 @@ while the offset is non-zero `[07 R-HUD-04 §4]` `[07 §6]`.
 slide strip is raised, `--zoom` and `--shot-focus` stage the presentation
 zoom of §3.5, and `--shot-size` composes at a surface other than the authored
 640×480. A capture is the evidence for any visual change in these packages.
+
+`--shot-modal` takes a window name and presses the authored buttons that reach
+it, in order, through the same `ui.BattleState.Activate` the pointer drives, so
+a capture can open no window the game cannot: `options` (`ARMOPT` itself),
+`exit` (`EXITMENU`), `confirm` (`YESORNO`), `settings` (`GAMEOPTIONS.GUI`),
+`help` (`HELP.GUI`) and `briefing` (`BRIEFING.GUI`). The last three are the
+read-only children of C18.1. `settings` and `briefing` press the same
+`MISSION` button, whose child is the session kind's, so `briefing` needs a
+campaign session (`--mission <selector>`) and `settings` a skirmish; the other
+session is refused rather than captured as the window the reviewer did not ask
+for.
+
+Two capture-path facts are worth knowing before reading one of those pictures.
+A single composed frame samples the briefing's blink pre-pass once, and that
+first step always lands on phase B — palette index 94 — so an `&`-coded run
+prints in the blink colour rather than the letter's own `[07 R-FE-02 §7]`; the
+window alternates it, a capture cannot. And the rows are read at open, so a
+`GAMEOPTIONS` capture shows the session the capture composed, not a fixed set
+of words `[08 R-SKIR-01 §11]`.
 
 ## 3. Contracts
 
@@ -1349,8 +1411,8 @@ and commit only on `CHOICE1`, with both Enter and Escape bound to `CHOICE2` and
 focus on it. The options window keeps its authored origin, while the `0x1000`
 modal flag centres Exit and Yes/No in the playfield to the right of the
 128-pixel rail. The `MISSION` gadget is **relabelled** to the translated
-`Settings` for a skirmish and opens `GAMEOPTIONS.GUI`; it is never hidden or
-greyed. `PREFS` opens the options root as a child window over `ARMOPT`, which
+`Settings` for a skirmish; it is never hidden or greyed. It and `HELP` open the
+three read-only children of C18.1. `PREFS` opens the options root as a child window over `ARMOPT`, which
 stays on the chain underneath with its pause bit still set; the root's `PREV`
 ("OK") saves the whole preference block and `CANCEL` restores the entry
 snapshot, and either one returns to `ARMOPT` rather than to the battle. Escape
@@ -1359,6 +1421,62 @@ renders into an exactly sized clipped surface whose background resolves through
 the common `BackTile` as a nine-slice fill, and labels use the primary GAF font
 rather than the side FNT `[07 R-FE-01 §6]` `[07 R-FE-01 §7]` `[07 R-FE-02 §4]`
 `[08 R-SKIR-01 §11]`.
+
+**C18.1 — `MISSION` and `HELP`, the options window's read-only children.**
+`MISSION` opens `BRIEFING.GUI` in a campaign mission and `GAMEOPTIONS.GUI` in
+every other session kind; `HELP` opens `HELP.GUI`. All three take the same
+place on the chain `PREFS` takes: they open over the surviving options root,
+which keeps the pause bit it set, and each one's `OK` — and Escape, the chain's
+back transition — returns to that root rather than to the battle
+`[07 R-FE-01 §7]` `[07 R-WGT-01 §1]`. `ui.BattleState` owns the branch: the
+composition root records the session kind on the state when the options window
+opens, and `Activate("MISSION")` selects the child from it, so the routing is
+testable without any asset.
+
+`battle_info_window.go` owns the shared half — the parsed records, the
+retained widget state, the indexed pointer service and the painter — and the
+three per-window files own their content. The windows print their rows as
+appended kind-5 labels at the authored geometry of `[07 R-FE-01 §7]`, and each
+refill first truncates the record set back to the authored count the loader
+produced, which is what the `HELP` page filler's saved gadget count does. The
+`Page` three-stage button advances its own stage and the window then reloads at
+the page that stage names; `GAMEOPTIONS` reads its nine session words once, at
+open, because the overlay never refreshes them `[08 R-SKIR-01 §11]`. The
+in-battle briefing reuses the campaign briefing screen's own controller — the
+wrapper, the blink pre-pass and the pager — over the same mission text, and
+clears the inert-label attribute bit on `MOREBAR` and `TextRegion` so either
+one pages it; it starts no narration, because the shared text installer's
+narration request is gated on the host mode word a battle runs under
+`[07 R-FE-01 §4]` `[07 R-FE-02 §2]`.
+
+These three are the only battle children that install an authored background
+bitmap — `igmbrief`, `GameSettings`, `dhelp` — which replaces the window's
+panel fill, so they have their own painter rather than the shared modal one.
+It blits the bitmap at the window origin clipped to the window rectangle and
+otherwise uses the battle modal family's art chain.
+
+That painter also carries the **kind-5 label pen** the shared modal painter
+does not separate from the button pen: a label has no 3-pixel inset and no
+vertical centring — its pen y is the gadget's own y — and its width limit is
+decided by whether the `fontnumber` walk *matched* a kind-7 record, not by
+whether that record's file loaded. A match draws through the FNT drawer with
+the limit dropped; no match draws through the GAF pen with the limit set to
+the gadget width `[03 R-FONT-01 §6]`. Neither `GAMEOPTIONS.GUI` nor `HELP.GUI`
+authors a font record, so every printed row takes the GAF branch, and a row
+wider than its column is truncated at the column edge. Their rows are
+**left-aligned**: both openers rewrite every appended record's attribute word
+to 1 after the append helper stored 2, and this build's helper stores the
+value that survives that rewrite. Getting this wrong is visible — a centred
+row overruns its column on the left and then loses its tail to the same width
+limit — so a test locks the attribute word.
+
+Both of this section's gaps are closed. Every `ARMOPT` button now plays the
+`Options` cue before its route runs, `OK` included `[07 R-FE-01 §7]`:
+`ui.BattleState` emits the alias from the one authored-state owner, before the
+route, through the same cue sink the rail detents use, and the composition root
+turns it into the ordinary interface cue request — no sound is reached from the
+UI layer `[07 R-WGT-01 §3]`. And `--shot-modal` opens all three children
+(§2.9), so a capture no longer needs the tests' own composition path.
 
 The in-battle options window has its own pointer pass (`battle_options.go`)
 rather than borrowing the front end's. The reason is the capture rule of
@@ -1525,7 +1643,8 @@ The rows below are the battle hotkey census
 
 | Keys | Effect |
 |---|---|
-| Tab, F2 | open and close the options window |
+| F2 | open and close the options window |
+| Tab | the same, except on an already paused battle with no modal open, where host policy resumes it directly instead — see §5, "Tab resumes an already paused battle" |
 | Escape | close the options window, else cancel the latch, else deselect all |
 | `` ` `` `~` and Shift+1/3/8 (`!` `#` `*`) | flip the "label every unit" bit `[07 R-HUD-03 §7]` |
 | `+` `=` / `-` `_` | game speed up and down, with the ring announcement `[07 R-CAM-01 §3]` |
@@ -2250,6 +2369,27 @@ about maximum-size drag latency.
 * **Modern resource construction shortcut** is the user-requested input policy
   in §3.10. It produces ordinary typed commands, with no alternate simulation
   or placement rules.
+
+* **The double-click interval and rectangle are host policy.** Retail never
+  recognized a double-click: the operating system did, and the window procedure
+  received the resulting message, so the interval and the rectangle were the
+  user's own OS settings `[07 R-WGT-01 §4]` `[01 R-PLAT-01 §6]`. Ebiten polls
+  devices and delivers no such message, so
+  `internal/platform/ebitenapp/doubleclick.go` reconstructs the pair from the
+  timestamps and positions the pointer records already publish, and holds both
+  constants in that one place. The recorded values are the Windows defaults
+  the OS shipped with: **500 ms**, expressed as **15** units of the scaled
+  30-Hz host clock the pointer timestamp already carries (`500 × 30 / 1000`),
+  and a **4×4 pixel** rectangle, applied as **±2 surface pixels** about the
+  first press. Both bounds are inclusive. The clock unit quantizes the
+  interval to roughly a thirtieth of a second; the edge deliberately does not
+  invent a finer host time than it publishes. A second left press inside both
+  bounds is published as `LeftDoubleClick` in place of its `LeftDown`; a press
+  outside either bound becomes the new candidate, and a completed pair is
+  consumed, so a third press starts a fresh pair instead of producing a
+  triple. Only the left button pairs, because the list open action is the left
+  double-click. This is host input policy, not a retail behavior claim: no
+  number here was measured from the executable.
 
 * **SC15 — the cursor index table.** The previously published twenty-entry table
   was off by one from slot 10 up. The reference install's `anims/cursors.gaf`

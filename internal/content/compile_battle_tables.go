@@ -19,7 +19,7 @@ import (
 // but the compiler preserves the full integer list verbatim so Phase 5
 // can apply the terrain-ray clamping [03 §3.2] C2 without re-parsing (I8).
 type LOSTable struct {
-	TableNum int       // 1 for TABLE1 etc [PLAN_02]
+	TableNum int       // 1 for TABLE1 etc; TABLE d+1 fills zero-based slot d [03 R-COMP-02 §1]
 	NumLines int32     // numlines integer default 0 [02 §6]
 	Lines    [][]int32 // each lineN parsed as []int32 in authored order
 }
@@ -29,8 +29,13 @@ type LOSTable struct {
 // Provenance is the winning gamedata/los.tdf provider.
 type LOSTables struct {
 	DefinitionHeader
-	NumTables int32      // TABLEINFO numtables integer default 0, retains source precision [PLAN_02 C15]
-	Tables    []LOSTable // sorted by TableNum ascending (I1) [02 §5]
+	NumTables int32 // TABLEINFO numtables integer default 0, retains source precision [PLAN_02 C15]
+	// Tables is the loader's zero-based table list: slot d holds the section
+	// named TABLE d+1, with an empty record where that section is absent
+	// [03 R-COMP-02 §1]. Sections outside the declared range are appended
+	// after the slots in ascending order so nothing authored is lost (SC9);
+	// no reader addresses them. The clamp bound is NumTables, never len (I1).
+	Tables []LOSTable
 }
 
 // MeteorDefaults is the compiled gamedata/meteor.tdf [02 §6] [PLAN_02 C15].
@@ -71,12 +76,55 @@ func parseLOSLine(value string) []int32 {
 	return out
 }
 
+// compileLOSTable compiles one [TABLE<n>] section [02 §6] [fmt tdf].
+//
+// line1..lineN are collected in numeric order for determinism (I1); an authored
+// numlines may disagree with the discovered line count, and every discovered
+// line is preserved so the catalog hash stays faithful to the authored bytes.
+func compileLOSTable(sec *formats.Section, num int) LOSTable {
+	t := LOSTable{TableNum: num}
+	t.NumLines = sec.IntValue("numlines", 0)
+	type lineEntry struct {
+		idx   int
+		value string
+	}
+	var lines []lineEntry
+	for _, it := range sec.Items {
+		if it.Kind != formats.Assignment {
+			continue
+		}
+		lk := CanonicalKey(it.Key)
+		if !strings.HasPrefix(lk, "line") {
+			continue
+		}
+		suf := trimTDFSemantic(it.Key[len("line"):])
+		idx := int(formats.ParseTDFInteger(suf))
+		if idx <= 0 {
+			continue
+		}
+		lines = append(lines, lineEntry{idx: idx, value: it.Value})
+	}
+	sort.SliceStable(lines, func(i, j int) bool { return lines[i].idx < lines[j].idx })
+	t.Lines = make([][]int32, 0, len(lines))
+	for _, le := range lines {
+		t.Lines = append(t.Lines, parseLOSLine(le.value))
+	}
+	return t
+}
+
 // CompileLOSTables compiles gamedata/los.tdf into LOSTables [02 §6] [PLAN_02 C15].
 // The file is an ordinary TDF with [TABLEINFO] { numtables=9 } and [TABLE1]...
 // sections each with numlines and line1..lineN [research/formats/tdf.md LOS.TDF].
-// Retail declares 9 but contains 12; the compiler preserves all discovered TABLE
-// sections sorted by numeric suffix (I1) so downstream can clamp into the parsed
-// range [03 §3.2] C2. Phases 5 consumes this compiled form and does not re-parse (I8).
+//
+// The compiled list reproduces the loader's storage: it sizes the list to the
+// declared numtables and fills zero-based slot d from the section it names by
+// building "TABLE" followed by d+1, so slot d holds TABLE d+1 and a name the
+// loader never builds is never read [03 R-COMP-02 §1]. File order carries no
+// meaning, and a numbering gap leaves that slot's empty line list rather than
+// shifting later tables down. The reference install declares nine and ships
+// twelve, so its TABLE10..TABLE12 are unreachable residue; they are kept after
+// the slots, in ascending order, so nothing authored is lost (SC9). Phase 5
+// consumes this compiled form and does not re-parse (I8) [03 §3.2] C2.
 //
 // The authored LOS table is required by the terrain-ray visibility path. A
 // missing or malformed file is therefore returned as a provenance-rich content
@@ -101,13 +149,14 @@ func CompileLOSTables(fs vfs.FSOps) (*LOSTables, error) {
 	if sec := doc.Root.Section("TABLEINFO"); sec != nil {
 		numTables = sec.IntValue("numtables", 0) // typed accessor only [02 §4]
 	}
-	// Collect all TABLE<N> sections; discovery is via file-order sections,
-	// then sort by numeric suffix for determinism (I1) [02 §5].
+	// Discover every TABLE<N> section for the residue pass below; the slots
+	// themselves are filled by name, the way the loader builds them.
 	type rawTbl struct {
 		num     int
 		section *formats.Section
 	}
 	var raws []rawTbl
+	highest := 0
 	for _, sec := range doc.Root.Sections() {
 		lower := CanonicalKey(sec.Name)
 		if !strings.HasPrefix(lower, "table") {
@@ -123,45 +172,46 @@ func CompileLOSTables(fs vfs.FSOps) (*LOSTables, error) {
 			// Non-numeric TABLE suffix — skip; not part of LOS family.
 			continue
 		}
+		if n > highest {
+			highest = n
+		}
 		raws = append(raws, rawTbl{num: n, section: sec})
 	}
-	sort.Slice(raws, func(i, j int) bool { return raws[i].num < raws[j].num })
-	tables := make([]LOSTable, 0, len(raws))
-	for _, r := range raws {
-		t := LOSTable{TableNum: r.num}
-		t.NumLines = r.section.IntValue("numlines", 0)
-		// line1..lineN in numeric order for determinism (I1); authored numlines
-		// may disagree with actual line count, so collect by scanning keys.
-		// Gather lineN values by integer suffix.
-		type lineEntry struct {
-			idx   int
-			value string
-		}
-		var lines []lineEntry
-		for _, it := range r.section.Items {
-			if it.Kind != formats.Assignment {
-				continue
-			}
-			lk := CanonicalKey(it.Key)
-			if !strings.HasPrefix(lk, "line") {
-				continue
-			}
-			suf := trimTDFSemantic(it.Key[len("line"):])
-			idx := int(formats.ParseTDFInteger(suf))
-			if idx <= 0 {
-				continue
-			}
-			lines = append(lines, lineEntry{idx: idx, value: it.Value})
-		}
-		sort.Slice(lines, func(i, j int) bool { return lines[i].idx < lines[j].idx })
-		// Build Lines slice; if numlines is smaller than discovered lines,
-		// preserve all discovered lines so hash is faithful to bytes; if
-		// numlines larger, pad with nil lines — downstream clamps into table range anyway.
-		t.Lines = make([][]int32, 0, len(lines))
-		for _, le := range lines {
-			t.Lines = append(t.Lines, parseLOSLine(le.value))
+	// Stable so two sections carrying the same number keep file order (I1).
+	sort.SliceStable(raws, func(i, j int) bool { return raws[i].num < raws[j].num })
+
+	slots := int(numTables)
+	if slots < 0 {
+		slots = 0
+	}
+	if slots > highest {
+		// A declared slot no section fills reads as the empty line list whether
+		// or not a record is materialized, so the list stops at the highest
+		// authored number: a mistyped numtables cannot force an unbounded
+		// allocation here. The clamp bound stays the declared NumTables.
+		slots = highest
+	}
+	tables := make([]LOSTable, 0, slots+len(raws))
+	filled := make(map[*formats.Section]bool, slots) // build-time only, never ranged (I1)
+	for d := 0; d < slots; d++ {
+		// The loader builds the section name from the slot: slot d asks for
+		// TABLE d+1 [03 R-COMP-02 §1]. An absent section leaves the slot's
+		// empty line list.
+		t := LOSTable{TableNum: d + 1}
+		if sec := doc.Root.Section(fmt.Sprintf("TABLE%d", d+1)); sec != nil {
+			t = compileLOSTable(sec, d+1)
+			filled[sec] = true
 		}
 		tables = append(tables, t)
+	}
+	// Sections the loader never names — numbers past the declared count, and
+	// any duplicate the name lookup skipped — are retained after the slots so
+	// nothing authored is lost (SC9). No reader addresses them.
+	for _, r := range raws {
+		if filled[r.section] {
+			continue
+		}
+		tables = append(tables, compileLOSTable(r.section, r.num))
 	}
 	lt := &LOSTables{
 		DefinitionHeader: DefinitionHeader{

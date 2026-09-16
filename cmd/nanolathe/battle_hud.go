@@ -66,6 +66,10 @@ type retailBattleHUD struct {
 	exitWin     *gui.Window
 	confirmWin  *gui.Window
 	restartWin  *gui.Window
+	// info holds the three read-only children ARMOPT's `MISSION` and `HELP`
+	// reach — BRIEFING.GUI, GAMEOPTIONS.GUI and HELP.GUI — with their parsed
+	// records, retained widget state and printed rows [07 R-FE-01 §7].
+	info battleInfoWindows
 	// Each ordinary battle child retains its indexed widget state from open
 	// through close.  The panels are deliberately not rebuilt by composition:
 	// a child close leaves its surviving parent and its input state intact
@@ -301,6 +305,7 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 	exitWin := loadGUIOptional(fs, "guis/exitmenu.gui", "exitmenu.gui [07 \"Tab options menu and manual exit\"]", captions)
 	confirmWin := loadGUIOptional(fs, "guis/yesorno.gui", "yesorno.gui [07 \"Tab options menu and manual exit\"]", captions)
 	restartWin := loadGUIOptional(fs, "guis/restart.gui", "restart.gui [07 R-FE-01 §7]", captions)
+	info := loadBattleInfoWindows(fs, captions)
 	// Optional modal fonts — degradable [07 §4]. Startup hands the GUI window
 	// slot 0 = hattfont12 and slot 1 = hattfont11; a missing GAF font is a null
 	// slot, not fatal [03 R-FONT-01 §5].
@@ -319,8 +324,9 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 	}
 	// The options opener relabels `MISSION` to the translated `Settings`
 	// whenever the session kind is skirmish or multiplayer; only a campaign
-	// mission keeps the authored `Briefing` (and reaches BRIEFING.GUI from it;
-	// the other kinds reach GAMEOPTIONS.GUI) [07 R-FE-01 §7]. The button is
+	// mission keeps the authored `Briefing`. The button's two routes — the
+	// in-battle briefing in a campaign, the read-only game-settings overlay
+	// otherwise — are battle_info_window.go's [07 R-FE-01 §7]. The button is
 	// relabelled, never hidden or greyed. With no translation table loaded
 	// the key is returned verbatim [02 "Translation table"].
 	optionsRelabel := optionsWin != nil && !(sess.Mission != nil && sess.Mission.Type == mission.TypeCampaign)
@@ -359,6 +365,7 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 		panelTop: panelTop, panelSide: panelSide, panelBottom: panelBottom,
 		intGAF: intGAF, common: common, oldMain: oldMain, share: share, logos: logos,
 		optionsGAF: optionsGAF, optionsWin: optionsWin, talkWin: talkWin, exitWin: exitWin, confirmWin: confirmWin, restartWin: restartWin,
+		info:      info,
 		modalFont: modalFont, modalFontSmall: modalFontSmall, stripArt: stripArt,
 		pausedFrame: pausedFrame, victoryFrame: victoryFrame, defeatFrame: defeatFrame,
 		resultWin: resultWin, resultGAF: resultGAF, resultPanel: resultPanel,
@@ -496,6 +503,11 @@ func (h *retailBattleHUD) applyDisplaySize(w, height int) {
 	placeBattleModal(h.exitWin, w, height)
 	placeBattleModal(h.confirmWin, w, height)
 	placeBattleModal(h.restartWin, w, height)
+	// GAMEOPTIONS and HELP carry the same centring flag; the in-battle
+	// briefing opens with no flags and keeps its authored origin
+	// [07 R-FE-01 §7].
+	placeBattleModal(h.info.gameOptionsWin, w, height)
+	placeBattleModal(h.info.helpWin, w, height)
 	h.placeTalkWindow(w, height)
 }
 
@@ -902,6 +914,9 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 		b.drawDeveloperHost(c, h.primaryFont)
 	}
 	h.drawBattleMenu(c, b)
+	// ARMOPT's read-only children paint above the surviving options root they
+	// were opened from [07 R-FE-01 §7][07 R-WGT-01 §1].
+	h.drawBattleInfoWindow(c, b)
 	// The unit information screen is a child window over the battle
 	// [07 R-HUD-03 §8].
 	h.drawUnitInfo(c)

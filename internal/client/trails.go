@@ -218,6 +218,7 @@ func (c *Client) resetTrails() {
 		c.wakes = surfaceWakeState{}
 		c.waterMotion = waterMotionState{}
 		c.scorch = scorchState{}
+		c.debrisTrails.reset()
 	}
 }
 

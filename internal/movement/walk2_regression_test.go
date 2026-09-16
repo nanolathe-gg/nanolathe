@@ -48,7 +48,7 @@ func TestFollowerRequestsContinuationAtSixtyTicks(t *testing.T) {
 	system.BindWorld(w)
 	system.EnsureUnit(w.Unit(h))
 	q := orders.QueueForUnit(w.Unit(h))
-	q.Push(orders.Lookup("Move_Ground"), orders.Node{Owner: h, GoalX: world.CellToWorld(20), GoalZ: world.CellToWorld(22)})
+	q.Push(orders.Lookup("Move_Ground"), orders.Node{Owner: h, GoalX: world.CellToWorld(20), GoalZ: world.CellToWorld(22), GoalSupplied: true})
 	head := q.Head()
 	// `Move_Ground` phase 0 installs its point goal [04 R-ORD-01 §4], and the
 	// follower's repath arm runs only "with a payload installed"
@@ -206,7 +206,7 @@ func TestActivateMoveInstallsImmediateSyntheticRoute(t *testing.T) {
 	u := w.Unit(h)
 	system.EnsureUnit(u)
 	q := orders.QueueForUnit(u)
-	q.Push(orders.Lookup("Move_Ground"), orders.Node{GoalX: world.CellToWorld(9), GoalZ: world.CellToWorld(7)})
+	q.Push(orders.Lookup("Move_Ground"), orders.Node{GoalX: world.CellToWorld(9), GoalZ: world.CellToWorld(7), GoalSupplied: true})
 	if !system.ActivateMove(u, q.Head()) {
 		t.Fatal("move did not activate")
 	}

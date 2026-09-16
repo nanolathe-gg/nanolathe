@@ -18,7 +18,7 @@ func TestCancelFrontMostRemovesTheOldestMatch(t *testing.T) {
 	build := func() *Queue {
 		q := &Queue{}
 		for _, g := range []int32{10, 20, 30} {
-			q.Push(id, Node{GoalX: numeric.Fixed(g) << 16, Param1: uint32(g)})
+			q.Push(id, Node{GoalX: numeric.Fixed(g) << 16, Param1: uint32(g), GoalSupplied: true})
 		}
 		return q
 	}
@@ -53,7 +53,7 @@ func TestCancelFrontMostIgnoresTheCountField(t *testing.T) {
 		t.Skip("Move_Ground descriptor unavailable")
 	}
 	q := &Queue{}
-	q.Push(id, Node{GoalX: numeric.Fixed(10) << 16, Param2: 5})
+	q.Push(id, Node{GoalX: numeric.Fixed(10) << 16, Param2: 5, GoalSupplied: true})
 	if !q.CancelFrontMost(func(n Node) bool { return n.GoalX == numeric.Fixed(10)<<16 }) {
 		t.Fatal("CancelFrontMost removed nothing")
 	}
@@ -68,7 +68,7 @@ func TestCancelFrontMostNoMatch(t *testing.T) {
 		t.Skip("Move_Ground descriptor unavailable")
 	}
 	q := &Queue{}
-	q.Push(id, Node{GoalX: numeric.Fixed(10) << 16})
+	q.Push(id, Node{GoalX: numeric.Fixed(10) << 16, GoalSupplied: true})
 	if q.CancelFrontMost(func(n Node) bool { return false }) {
 		t.Fatal("CancelFrontMost reported a removal with no match")
 	}

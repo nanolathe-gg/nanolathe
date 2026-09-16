@@ -1617,7 +1617,7 @@ func spawnResurrectionRepair(u *units.Unit, n *Node) {
 	// [04 R-ORD-01 §1]: the resolver returns a repair descriptor today, and the
 	// routing is the head insert's rule rather than this caller's knowledge of
 	// which descriptor came back.
-	spawnAtSegmentHead(q, id, Node{Owner: n.Owner, Target: n.Target, GoalX: product.X, GoalY: product.Y, GoalZ: product.Z})
+	spawnAtSegmentHead(q, id, Node{Owner: n.Owner, Target: n.Target, GoalX: product.X, GoalY: product.Y, GoalZ: product.Z, GoalSupplied: true})
 }
 
 // ---------------------------------------------------------------------------

@@ -134,7 +134,7 @@ func TestMoveTierCacheHoldsStaleVerdictUntilNextCrossCellProposal(t *testing.T) 
 	}
 	mover := w.Unit(moverHandle)
 	queue := orders.QueueForUnit(mover)
-	queue.Push(moveID, orders.Node{GoalX: world.CellToWorld(3), GoalZ: world.CellToWorld(0)})
+	queue.Push(moveID, orders.Node{GoalX: world.CellToWorld(3), GoalZ: world.CellToWorld(0), GoalSupplied: true})
 	head := queue.Head()
 	handleRow(system.Routes, moverHandle).PublishAtRevision([]Point{{X: 0, Z: 0}, {X: 48, Z: 0}}, system.staticObstacleRevision())
 	setHandleRow(&system.activeOrders, moverHandle, &activeMove{order: head, token: 41})
@@ -195,7 +195,7 @@ func TestGroundTurnPublishesResidualBeforeCallbacks(t *testing.T) {
 	u.Move.Heading, coll.Heading = 0, 0
 	handleRow(system.Steers, u.Handle).Heading = 0
 	queue := orders.QueueForUnit(u)
-	queue.Push(orders.Lookup("Move_Ground"), orders.Node{GoalX: world.CellToWorld(3)})
+	queue.Push(orders.Lookup("Move_Ground"), orders.Node{GoalX: world.CellToWorld(3), GoalSupplied: true})
 	head := queue.Head()
 	handleRow(system.Routes, u.Handle).Publish([]Point{{X: 0, Z: 0}, {X: 48, Z: 0}})
 	setHandleRow(&system.activeOrders, u.Handle, &activeMove{order: head, token: 41})
@@ -225,7 +225,7 @@ func TestCoincidentWaypointUpdatesTurnAndSpeedBeforeCallbacks(t *testing.T) {
 	steer.Heading, steer.Speed = 0, 1
 	coll.Speed, coll.TurnResidual = 1, -475
 	queue := orders.QueueForUnit(u)
-	queue.Push(orders.Lookup("Move_Ground"), orders.Node{GoalX: world.CellToWorld(3)})
+	queue.Push(orders.Lookup("Move_Ground"), orders.Node{GoalX: world.CellToWorld(3), GoalSupplied: true})
 	head := queue.Head()
 	route := handleRow(system.Routes, u.Handle)
 	route.Publish([]Point{{}, {}, {}, {X: 48}})

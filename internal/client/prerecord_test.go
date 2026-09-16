@@ -1,9 +1,12 @@
 package client
 
 import (
+	"reflect"
 	"testing"
 
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/render"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 )
@@ -237,5 +240,73 @@ func TestRecordWithoutThePipelineResolvesFromTheProducer(t *testing.T) {
 	}
 	if calls != len(fractions) {
 		t.Fatalf("the producer was read %d times over %d records, want one per record", calls, len(fractions))
+	}
+}
+
+// segmentedProjectileClient publishes one committed tick holding a single
+// rendertype-7 projectile, the one family whose presentation draws from the
+// private CRT: its two point passes consume that stream [03 §5.4][I4]. Every
+// other published family resolves without it, so this is the smallest frame on
+// which a repeated recording is observable at all.
+func segmentedProjectileClient(t *testing.T) *Client {
+	t.Helper()
+	buf := frame.NewBuffer()
+	f := buf.BeginWrite()
+	f.Visibility = frame.VisibilityView{Valid: true, W: 8, H: 8, CoverageBytes: true, Visible: make([]uint8, 64)}
+	for i := range f.Visibility.Visible {
+		f.Visibility.Visible[i] = 1
+	}
+	f.Projectiles = append(f.Projectiles, frame.ProjectileView{
+		Handle: 1, RenderType: render.RenderTypeSegmented, HasPrimaryColor: true, PrimaryColor: 7,
+		X: wu(100), Y: wu(20), Z: wu(100), TailX: wu(140), TailY: wu(20), TailZ: wu(140),
+	})
+	if err := buf.Publish(1); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	return &Client{
+		buffer: buf, width: 320, height: 240,
+		indexed: make([]uint8, 320*240), rgba: make([]byte, 320*240*4),
+		cam: &camera.Camera{},
+	}
+}
+
+// The `--shot-renderer both` route walks the same frozen committed frame twice:
+// ComposeFrame makes the classic image and RecordModernFrame retains the
+// geometry the GPU consumes (docs/DESIGN_GPU_RENDERER.md §6). Both walks draw
+// the segmented pass from the presentation CRT, so without a rollback between
+// them the modern half of `both` would differ from `--shot-renderer modern` at
+// the same seed and framediff would report presentation RNG jitter as executor
+// divergence. SnapshotPresentationCRT is what cmd/nanolathe wraps the classic
+// compose in; this locks that the second walk sees the first walk's starting
+// state, and the control at the end proves the fixture can tell the difference.
+func TestBothShotRouteRecordsFromOneCRTState(t *testing.T) {
+	c := segmentedProjectileClient(t)
+	const seed = 4242
+	reset := func() {
+		crt := rng.NewCRT(seed)
+		c.SetPresentationCRT(&crt)
+	}
+
+	// --shot-renderer modern: one recording from the seeded stream.
+	reset()
+	modernOnly := c.RecordModernFrame().Clone()
+
+	// --shot-renderer both, as runShotBoth runs it.
+	reset()
+	restore := c.SnapshotPresentationCRT()
+	c.ComposeFrame()
+	restore()
+	both := c.RecordModernFrame().Clone()
+	if !reflect.DeepEqual(both, modernOnly) {
+		t.Fatal("the both route's modern recording differs from the modern-only recording")
+	}
+
+	// Control: the same pair without the rollback. If this ever matches, the
+	// fixture stopped drawing from the CRT and the assertion above is vacuous.
+	reset()
+	c.ComposeFrame()
+	unrolled := c.RecordModernFrame().Clone()
+	if reflect.DeepEqual(unrolled, modernOnly) {
+		t.Fatal("the fixture no longer consumes the presentation CRT, so the rollback assertion proves nothing")
 	}
 }

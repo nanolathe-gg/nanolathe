@@ -456,7 +456,7 @@ func (c *PostBattleController) Step(now uint32, dialogOpen bool) {
 			c.emit(PostBattleEffect{Kind: PostBattleEffectGlamourFadeStep})
 			return
 		}
-		if !c.glamourDone || now <= c.glamourDue {
+		if now <= c.glamourDue {
 			return
 		}
 		if !c.glamourSoundDone {

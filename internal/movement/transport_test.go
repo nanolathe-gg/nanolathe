@@ -206,7 +206,7 @@ func TestAtlasLoadsCarriesAndUnloadsAPeewee(t *testing.T) {
 	if unload == 0 {
 		t.Fatal("VTOL_Unload missing from the order table")
 	}
-	q.Push(unload, orders.Node{Owner: carrier.Handle, GoalX: dropX, GoalY: carrier.Y, GoalZ: dropZ, Deadline: -1})
+	q.Push(unload, orders.Node{Owner: carrier.Handle, GoalX: dropX, GoalY: carrier.Y, GoalZ: dropZ, Deadline: -1, GoalSupplied: true})
 	// The hang point the cargo holds going INTO the tick that releases it. The
 	// carried branch slaves the cargo every tick while it is aboard, so this is
 	// what "the cargo keeps its hang position" has to mean at the release.
@@ -326,7 +326,7 @@ func TestUnloadRefusesASiteThePlacementValidatorRejects(t *testing.T) {
 
 	q := orders.QueueForUnit(carrier)
 	unload := orders.Lookup("VTOL_Unload")
-	q.Push(unload, orders.Node{Owner: carrier.Handle, GoalX: dropX, GoalY: carrier.Y, GoalZ: dropZ, Deadline: -1})
+	q.Push(unload, orders.Node{Owner: carrier.Handle, GoalX: dropX, GoalY: carrier.Y, GoalZ: dropZ, Deadline: -1, GoalSupplied: true})
 	head := q.Primary()[0]
 	for tick := uint32(1); tick <= 2000 && transportCountKind(*kinds, 7) == 0; tick++ {
 		q.Pump(carrier, tick)
@@ -423,7 +423,7 @@ func TestUnloadGateWordsAndTheCannotGetThereInterrupt(t *testing.T) {
 		fl.Mode = 2
 	}
 	dropX, dropZ := world.CellToWorld(44), world.CellToWorld(20)
-	n := &orders.Node{Owner: carrier.Handle, GoalX: dropX, GoalY: carrier.Y, GoalZ: dropZ, Deadline: -1}
+	n := &orders.Node{Owner: carrier.Handle, GoalX: dropX, GoalY: carrier.Y, GoalZ: dropZ, Deadline: -1, GoalSupplied: true}
 
 	for _, row := range []struct {
 		phase uint8
@@ -454,7 +454,7 @@ func TestUnloadGateWordsAndTheCannotGetThereInterrupt(t *testing.T) {
 		t.Fatalf("drop cell %d,%d off the fixture map", cellX, cellZ)
 	}
 	cell.SetFeature(0xFFFB)
-	n2 := &orders.Node{Owner: carrier2.Handle, Phase: 2, Param1: uint32(cargo2.Handle), GoalX: dropX, GoalY: carrier2.Y, GoalZ: dropZ, Deadline: -1}
+	n2 := &orders.Node{Owner: carrier2.Handle, Phase: 2, Param1: uint32(cargo2.Handle), GoalX: dropX, GoalY: carrier2.Y, GoalZ: dropZ, Deadline: -1, GoalSupplied: true}
 	*kinds2 = (*kinds2)[:0]
 	if code := sys2.legVTOLUnload(carrier2, n2, transportUnloadInterruptMask, 1); code != 9 {
 		t.Fatalf("the `cannot get there` interrupt gave result %d, want 9 [04 R-AIR-01 §10]", code)
@@ -625,7 +625,7 @@ func TestMultiCargoUnloadReleasesOneAndEmitsEventThirteen(t *testing.T) {
 				fl.Mode = 2
 			}
 
-			n := &orders.Node{Owner: carrier.Handle, Phase: 2, GoalX: dropX, GoalY: carrier.Y, GoalZ: dropZ, Deadline: -1}
+			n := &orders.Node{Owner: carrier.Handle, Phase: 2, GoalX: dropX, GoalY: carrier.Y, GoalZ: dropZ, Deadline: -1, GoalSupplied: true}
 			n.BindTarget(carrier.Attachment.Cargo[0]) // the phase-0 observer retained into release
 			*kinds = (*kinds)[:0]
 			if code := sys.legVTOLUnload(carrier, n, 0, 1); code != 1 {

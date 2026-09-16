@@ -113,7 +113,7 @@ func TestAccuracySpreadBound(t *testing.T) {
 func turretSpreadWeapon(id int32, accuracy int32) *content.WeaponDef {
 	return &content.WeaponDef{
 		ID:             id,
-		Range:          1000 * 65536,
+		Range:          1000,
 		Turret:         true,
 		LineOfSight:    true,
 		WeaponVelocity: 100 * 65536 / 30,
@@ -184,7 +184,7 @@ func TestNonTurretShotDrawsNothing(t *testing.T) {
 	shooter.Health = 50
 	shooter.MaxHealth = 100
 	weapon := &content.WeaponDef{
-		ID: 2, Range: 1000 * 65536, LineOfSight: true, Accuracy: 4096,
+		ID: 2, Range: 1000, LineOfSight: true, Accuracy: 4096,
 		Tolerance: wideDriftTolerance,
 	}
 	shooter.InstallWeapon(0, weapon)
@@ -256,7 +256,7 @@ func TestTurretDriftGateRefusesAndLeavesTheSlotAiming(t *testing.T) {
 // the shooter is stationary.
 func TestFixedForwardGateUsesTheUnitHeading(t *testing.T) {
 	w, terrain, shooter, target := newTestWorldAndUnits(t)
-	weapon := &content.WeaponDef{ID: 4, Range: 1000 * 65536, LineOfSight: true}
+	weapon := &content.WeaponDef{ID: 4, Range: 1000, LineOfSight: true}
 	shooter.InstallWeapon(0, weapon)
 	slot := shooter.SlotAt(0)
 	slot.Target = units.Target{Kind: units.TargetUnit, Unit: target.Handle}
@@ -301,7 +301,7 @@ func TestFixedForwardGateUsesTheUnitHeading(t *testing.T) {
 // its own moves nothing here.
 func TestFixedForwardGateWidensWhileMoving(t *testing.T) {
 	w, terrain, shooter, target := newTestWorldAndUnits(t)
-	weapon := &content.WeaponDef{ID: 5, Range: 1000 * 65536, LineOfSight: true}
+	weapon := &content.WeaponDef{ID: 5, Range: 1000, LineOfSight: true}
 	shooter.InstallWeapon(0, weapon)
 	slot := shooter.SlotAt(0)
 	slot.Target = units.Target{Kind: units.TargetUnit, Unit: target.Handle}

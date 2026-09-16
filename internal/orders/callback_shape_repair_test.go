@@ -48,7 +48,7 @@ func TestTransportDropHasOneLogicalArgumentAndFourPhysicalCells(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		vm.Threads[0].Stack[i] = int32(91 + i)
 	}
-	n := &Node{GoalX: numeric.FixedFromInt(300), GoalZ: numeric.FixedFromInt(72)}
+	n := &Node{GoalX: numeric.FixedFromInt(300), GoalZ: numeric.FixedFromInt(72), GoalSupplied: true}
 	starts := 0
 	carrier.ScriptState.Binding.Callbacks.SetLifecycleSink(func(e cob.LifecycleEvent) {
 		if e.Name != "TransportDrop" || e.Phase != "start" {
