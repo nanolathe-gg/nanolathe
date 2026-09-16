@@ -30,8 +30,7 @@ func (c *Client) drawBuildingFoam(cur *frame.Frame) {
 	}
 	phase := (float32(cur.Tick%240) + fraction) / 240
 	for _, u := range cur.Units {
-		if !u.IsBuilding || u.BuildRemaining > 0 || isCarried(u) || !unitVisibleForFrame(cur, u, cur.ViewingPlayer) ||
-			(u.Owner != cur.ViewingPlayer && fogUnexploredUnit(cur.Fog, u)) {
+		if !u.IsBuilding || u.BuildRemaining > 0 || isCarried(u) || !unitVisibleForFrame(cur, u, cur.ViewingPlayer) {
 			continue
 		}
 		ground := t.HeightAt(u.X, u.Z)

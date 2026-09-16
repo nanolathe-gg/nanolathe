@@ -205,8 +205,8 @@ func (c *Client) layoutStrategicMarkers(f *frame.Frame, viewer uint8, dst *strat
 	}
 }
 
-// strategicUnitVisible mirrors the painter's independent fog-anchor and hull
-// visibility gates [03 §3.2][03 §3.3], including the owner's bypass.
+// strategicUnitVisible mirrors the painter's hull visibility gate
+// [03 §3.2][03 R-RAST-01 §7], including the owner's bypass.
 func strategicUnitVisible(f *frame.Frame, u frame.UnitView, viewer uint8, slots []int) bool {
 	// Attached models inherit their carrier's admission [03 R-RAST-01 §7].
 	// Only direct children of an uncarried model are composed; nested cargo
@@ -231,7 +231,7 @@ func strategicUnitVisible(f *frame.Frame, u frame.UnitView, viewer uint8, slots 
 		}
 		u = carrier
 	}
-	return unitVisibleForFrame(f, u, viewer) && (u.Owner == viewer || !fogUnexploredUnit(f.Fog, u))
+	return unitVisibleForFrame(f, u, viewer)
 }
 
 // StrategicIconsActive reports whether typed icons replace model hulls in the

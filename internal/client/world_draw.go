@@ -634,10 +634,11 @@ func (c *Client) drawWorldPass(cur *frame.Frame, ok bool) {
 	// ascending unit slot in both passes [03 R-RAST-01 §7].
 	for i := range cur.Units {
 		u := &cur.Units[i]
-		if u.Owner != viewer {
-			if fogUnexploredUnit(cur.Fog, *u) || !unitVisibleForFrame(cur, *u, viewer) {
-				continue
-			}
+		// Hull admission already selects visible units [03 R-RAST-01 §7].
+		// Fog masks their pixels later; testing an unsheared ground anchor
+		// here hides visible hulls at the edge of sight [03 §3.2][03 §3.3].
+		if !unitVisibleForFrame(cur, *u, viewer) {
+			continue
 		}
 		row := unitBucketRow(u.Z, camZ)
 		if row < 0 || row >= win.bucketRows {

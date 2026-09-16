@@ -7,7 +7,6 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/render"
 	"github.com/nanolathe-gg/nanolathe/internal/visibility"
-	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // visibilityGridSize validates a published mask before a projected cell is
@@ -44,32 +43,6 @@ func projectileVisible(v frame.VisibilityView, localPlayer uint8) func(frame.Pro
 		}
 		return ProjectileVisible(v, p, mode, localPlayer)
 	}
-}
-
-// fogUnexploredUnit reports whether a unit's anchor visibility tile is never-explored [03 §3.3][03 §3.3].
-// It checks Fog Ch0 ==15 (solid dark, all four neighbours fogged) via the
-// immutable FogView, which is the presentation equivalent of the plot flag
-// 0x04 [03 §3.3]. Invalid or missing fog is treated as unexplored so foreign
-// content cannot be exposed by an incomplete publication.
-func fogUnexploredUnit(fog frame.FogView, u frame.UnitView) bool {
-	if !fog.Valid {
-		// Retail has no pre-first-frame state to ask about: battle entry builds
-		// the world, and with it the fog cache, before anything is presented
-		// [03 §3.3]. An invalid view here is our own composition ordering, and
-		// treating it as unexplored fails closed rather than revealing units the
-		// local player has not seen.
-		return true
-	}
-	if _, ok := visibilityGridSize(fog.W, fog.H, len(fog.Ch0)); !ok {
-		return true
-	}
-	tx := world.WorldToTile(u.X) - fog.OriginX
-	tz := world.WorldToTile(u.Z) - fog.OriginZ
-	if tx < 0 || tz < 0 || tx >= fog.W || tz >= fog.H {
-		return true
-	}
-	idx := int(tz*fog.W + tx)
-	return fog.Ch0[idx] == 15
 }
 
 // fogUnexploredFeature reports whether a feature's anchor cell maps to an unexplored fog tile [03 §3.3][03 §3.3].

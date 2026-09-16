@@ -9,24 +9,9 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
-// TestOW1G_FogUnexploredUnit locks the binary hard edge [03 §3.3] via Fog Ch0==15.
-// Unexplored tiles (Ch0==15) must suppress world objects; own units bypass after.
-func TestOW1G_FogUnexploredUnit(t *testing.T) {
+// The feature fixture helper identifies the solid unexplored fog cell.
+func TestOW1G_FogUnexploredFeature(t *testing.T) {
 	fog := frame.FogView{W: 2, H: 2, Valid: true, Ch0: []uint8{15, 0, 0, 0}, Ch1: []uint8{0, 0, 0, 0}}
-	// Unit at tile (0,0) -> cell 0, tile 0 -> Ch0[0]==15 -> unexplored.
-	u0 := frame.UnitView{X: world.CellToWorld(0), Z: world.CellToWorld(0), Owner: 1}
-	if !fogUnexploredUnit(fog, u0) {
-		t.Fatalf("tile (0,0) with Ch0==15 should be unexplored")
-	}
-	// Unit at tile (1,0) -> cell 2 -> Ch0[1]==0 -> explored.
-	u1 := frame.UnitView{X: world.CellToWorld(2), Z: world.CellToWorld(0), Owner: 1}
-	if fogUnexploredUnit(fog, u1) {
-		t.Fatalf("tile (1,0) with Ch0==0 should be explored")
-	}
-	// An invalid fog publication is fail-closed.
-	if !fogUnexploredUnit(frame.FogView{}, u0) {
-		t.Fatalf("invalid fog must be treated as unexplored")
-	}
 	// Feature at CX=0 (tile 0) unexplored, CX=2 (tile1) explored.
 	f0 := frame.FeatureView{CX: 0, CZ: 0}
 	if !fogUnexploredFeature(fog, f0) {
@@ -67,17 +52,6 @@ func TestOW1G_VisibilityAdmission_OwnAlwaysEnemySuppressed(t *testing.T) {
 	frameInvalid := &frame.Frame{Visibility: frame.VisibilityView{}, Fog: fog, Selection: frame.SelectionView{LocalPlayer: 0}}
 	if unitVisibleForFrame(frameInvalid, enemyHidden, 0) {
 		t.Fatalf("invalid visibility must cull foreign units")
-	}
-	// Fog unexplored still suppresses enemy even if visibility says visible.
-	// Fog tile (1,1) corresponds to cells (2..3,2..3); cell (2,2) -> tile (1,1) index 5.
-	fogUnexplored := frame.FogView{W: 4, H: 4, Valid: true, Ch0: make([]uint8, 16), Ch1: make([]uint8, 16)}
-	fogUnexplored.Ch0[5] = 15 // tile (1,1)
-	if !fogUnexploredUnit(fogUnexplored, enemyVisible) {
-		t.Fatalf("enemy at tile (1,1) with Ch0==15 should be unexplored, tile=%d", world.WorldToTile(enemyVisible.X))
-	}
-	// Own bypass of fog is handled at painter level, not here; helper alone reports true but painter keeps own.
-	if !fogUnexploredUnit(fogUnexplored, enemyVisible) {
-		t.Fatal("fog helper should report unexplored")
 	}
 }
 

@@ -237,10 +237,9 @@ func TestStrategicIconsStayVisibleWithoutRadarAdmission(t *testing.T) {
 	}
 	f.Fog.Ch0[12*32+18] = 15
 	c.drawStrategicMarkers(f)
-	if len(c.markerArena) != 0 {
-		t.Fatal("enemy icon revealed an unexplored anchor")
+	if len(c.markerArena) != 1 {
+		t.Fatal("fog anchor suppressed an enemy admitted by hull visibility")
 	}
-	f.Fog.Ch0[12*32+18] = 0
 	clear(f.Visibility.Visible)
 	c.drawStrategicMarkers(f)
 	if len(c.markerArena) != 0 {

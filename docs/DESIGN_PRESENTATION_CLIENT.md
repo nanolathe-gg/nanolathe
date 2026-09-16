@@ -728,6 +728,12 @@ document carries them.
   units of each window row; pass B draws the units whose committed mode mirror
   is not "grounded" — airborne aircraft, attached cargo, save-installed — at the
   end of strip 7 `[03 R-RAST-01 §6]` `[03 R-RAST-01 §7]`.
+  Admission uses the committed hull visibility predicate, including ownership,
+  cloak and submerged-unit rules `[03 §3.2]`. A unit's unsheared ground anchor
+  must not add an unexplored-fog rejection: its hull may already reach sight,
+  especially on elevated terrain. The later fog overlay obscures the covered
+  pixels `[03 §3.3]`. Strategic icons and Enhanced building foam and hovercraft
+  dust share this hull admission; nano particles keep their own point gate.
 * **C3.1 A 3DO feature draws as a pseudo-unit.** The per-cell dispatcher fills
   it with "model pointer, position and the slot's orientation words" and hands
   it to the ordinary per-unit present `[03 R-RAST-01 §6]`, so `drawFeatureModel`

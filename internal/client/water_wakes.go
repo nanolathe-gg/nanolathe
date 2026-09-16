@@ -88,8 +88,7 @@ func (c *Client) placeSurfaceWakes(cur *frame.Frame) {
 		// snapshots without it cannot safely retain a movement history.
 		if u.InstanceID == 0 || u.IsBuilding || !u.CanHover ||
 			u.MoverMode != moverModeGrounded || isCarried(*u) || u.BuildRemaining > 0 ||
-			!unitVisibleForFrame(cur, *u, cur.ViewingPlayer) ||
-			(u.Owner != cur.ViewingPlayer && fogUnexploredUnit(cur.Fog, *u)) {
+			!unitVisibleForFrame(cur, *u, cur.ViewingPlayer) {
 			continue
 		}
 		if _, ok := c.dustSurface(u.X, u.Z); !ok {
