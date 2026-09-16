@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
+	"math"
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/internal/clock"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/economy"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/mission"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/save"
@@ -28,13 +29,11 @@ type RetailLoadDeps struct {
 	Catalog  *content.Catalog
 	SimSeed  uint32
 	CRTSeed  uint32
-	// UnitLimit is the configured `[Preferences] UnitLimit` as it stands when
-	// the load starts. A restored battle's pool is sized from the limit word
-	// as it was *before* the restore — the save's own Summary `maxunits` is
-	// written into the configured limit and only reaches the next battle
-	// [08 R-ENTRY-01 §6] — so this, not the save, is what sizes the pool of a
-	// non-campaign restore. Zero takes the missing-value default through the
-	// same clamp the setup record uses [08 R-SKIR-01 §6].
+	// UnitLimit is the configured limit before loading. Strict 3.1 uses it
+	// for skirmish pool sizing [08 R-ENTRY-01 §6]. Modern prefers a present
+	// Summary.maxunits; see DESIGN_SESSIONS_AI_SAVE "Modern save unit limits".
+	// A missing or zero saved value falls back to this word, with zero selecting the
+	// ordinary startup default. Campaign pools use the mission's limit.
 	UnitLimit int
 }
 
@@ -93,21 +92,9 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 	if image.Summary.Gametype == GametypeMultiplayer {
 		sessionKind = sessionKindSkirmish
 	}
-	// The pool is `limit × 10 + 1` records, `limit` per slot
-	// [05 R-SHARE-01 §7]. The limit is the session word as it stands at the
-	// world rebuild, which is before the restoration dispatcher runs: a
-	// campaign restore therefore keeps the OTA `maxunits` the mission loader
-	// just decoded, and a non-campaign restore keeps the configured
-	// `[Preferences] UnitLimit` [08 R-SKIR-01 §6][08 R-ENTRY-01 §6]. The
-	// save's Summary `maxunits` is deliberately not read here: it is written
-	// into the configured limit and only reaches the *next* battle
-	// [08 R-ENTRY-01 §6].
-	poolRecords := int(campaignUnitLimit(m))
-	if sessionKind == sessionKindSkirmish {
-		// Verbatim: the configured word was clamped when the profile was
-		// read, and a value a previous restore carried into it is used as it
-		// stands [08 R-SESS-01 §9].
-		poolRecords = unitLimitOrDefault(deps.UnitLimit)
+	poolRecords, err := retailStageUnitLimit(image.Summary, deps, m)
+	if err != nil {
+		return nil, err
 	}
 	// A restored campaign runs under the same unit restriction a fresh one
 	// does. Battle entry's unit-restriction loader is kind 1 only, and it runs
@@ -220,6 +207,26 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 		return nil, err
 	}
 	return &RetailBattleStage{Image: image, Session: s, StableUnit: stable}, nil
+}
+
+// retailStageUnitLimit selects the layout before any allocation or RNG draw.
+// Strict keeps the pre-restore word [08 R-ENTRY-01 §6]; Modern preserves the
+// saved skirmish layout (DESIGN_SESSIONS_AI_SAVE "Modern save unit limits").
+func retailStageUnitLimit(summary save.Summary, deps RetailLoadDeps, m *mission.Mission) (int, error) {
+	if summary.Gametype == GametypeCampaign {
+		return int(campaignUnitLimit(m)), nil
+	}
+	if deps.Gameplay.Normalize() == gameplay.Strict31 || !summary.HasMaxUnits || summary.MaxUnits == 0 {
+		return unitLimitOrDefault(deps.UnitLimit), nil
+	}
+	// Ten slices must fit positive signed occupancy identities, the same
+	// bound as configured limits (DESIGN_CONTENT_VFS §5). Do not clamp a
+	// saved layout: that would silently move the player-slice boundaries.
+	const maxSavedLimit = math.MaxInt16 / pool.PlayerCount
+	if summary.MaxUnits < 1 || summary.MaxUnits > maxSavedLimit {
+		return 0, fmt.Errorf("nanolathe: invalid saved unit limit %d: logical path save/Summary/maxunits, providers searched [save], expected 1..%d units per player", summary.MaxUnits, maxSavedLimit)
+	}
+	return int(summary.MaxUnits), nil
 }
 
 func loadRetailStageMission(fs vfs.FSOps, summary save.Summary) (*mission.Mission, error) {

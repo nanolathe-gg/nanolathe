@@ -234,8 +234,9 @@ func (g *gameShell) loadRetailSavePath(path string) error {
 		return fmt.Errorf("nanolathe: retail save load requires mounted content")
 	}
 	sim, crt := seedsFor(g.opts)
-	// A restored non-campaign battle sizes its unit pool from the configured
-	// `[Preferences] UnitLimit`, as a fresh skirmish does [05 R-SHARE-01 §7].
+	// Strict sizes a restored skirmish from the configured limit [05 R-SHARE-01 §7].
+	// Modern uses the saved limit when available (DESIGN_SESSIONS_AI_SAVE
+	// "Modern save unit limits").
 	loaded, err := session.LoadRetailSavePath(path, session.RetailLoadDeps{
 		FS: g.cs.fs, SimSeed: sim, CRTSeed: crt, UnitLimit: g.setup.UnitLimit, Gameplay: g.gameplay,
 	})
@@ -275,14 +276,10 @@ func (g *gameShell) loadRetailSavePath(path string) error {
 	// §14.4 "When"). It is handed over through pendingDetail exactly as the
 	// loading screen's goroutine hands its result to commitBattleCandidate.
 	g.pendingDetail = detailArtFor(g.opts, g.cs, sess.World, nil)
-	// Retail's battle-restoration dispatcher runs as part of the staging
-	// above and, as its first step, carries the save's own `Summary.maxunits`
-	// into the process-wide configured unit-limit word — never into the
-	// battle just restored, whose pool was already sized from that word as it
-	// stood before the restore [08 R-ENTRY-01 §6][08 R-SESS-01 §9]. That
-	// configured word is this application's `g.setup.UnitLimit`
-	// (internal/session/composition.go's sessionUnitLimit names it), so the
-	// carry is the one write below, not a session change.
+	// Carry the saved word into the configured limit after successful detached
+	// preparation [08 R-SESS-01 §9]. Pool sizing is already complete: Strict
+	// used the pre-load setting; Modern selected the saved skirmish layout
+	// (DESIGN_SESSIONS_AI_SAVE "Modern save unit limits").
 	g.applyRestoredUnitLimit(loaded.Battle.Image)
 	// `LOADGAME`'s `LOAD` reaches the battle through the loading transition, so
 	// the restored battle gets the same second-half resize a fresh one does:
@@ -317,10 +314,9 @@ func (g *gameShell) loadRetailSavePath(path string) error {
 // configured word (20..500), so a stock save never stores a zero here — that
 // case is a fidelity seam, not a path a retail bank reaches.
 //
-// The word carried in is the configured one; the battle just restored keeps the
-// pool it was given, which was sized from that word as it stood before the
-// restore (see loadRetailSavePath's RetailLoadDeps.UnitLimit above)
-// [08 R-ENTRY-01 §6] [08 R-SESS-01 §9].
+// Strict keeps the pool sized from the pre-restore configured word
+// [08 R-ENTRY-01 §6] [08 R-SESS-01 §9]. Modern has already selected its saved
+// skirmish layout (DESIGN_SESSIONS_AI_SAVE "Modern save unit limits").
 func (g *gameShell) applyRestoredUnitLimit(image *save.BattleImage) {
 	if g == nil || image == nil || !image.Summary.HasMaxUnits {
 		return

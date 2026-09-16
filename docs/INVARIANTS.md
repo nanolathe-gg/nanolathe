@@ -268,7 +268,8 @@ contract tests, including resource and RNG effects. An unknown retail mechanic
 is still an unknown; the Modern setting does not authorize invented evidence.
 Current contracts are DESIGN_WEAPONS_PROJECTILES §2.3.1 (terrain admission),
 DESIGN_UNITS_ORDERS_COB "Modern Hold Fire", and
-DESIGN_ECONOMY_CONSTRUCTION "Modern factory-exit yielding" and "Modern construction-site yielding". The service and
+DESIGN_ECONOMY_CONSTRUCTION "Modern factory-exit yielding" and "Modern construction-site yielding", and DESIGN_SESSIONS_AI_SAVE
+"Modern save unit limits". The service and
 queue booleans are projections of the central session mode, not independently
 configurable flags; new and restored queues inherit the same mode.
 

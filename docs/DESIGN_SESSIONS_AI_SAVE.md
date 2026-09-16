@@ -533,7 +533,8 @@ bonus enable bit; the derived capacities are not persisted — a restored
 player's capacity is rebuilt from its units plus the restored bonus at its
 first settlement pass `[08 "Player records"]` `[05 R-ECO-01 §4]`.
 
-**Which limit a save persists, and which battle a load can affect.** The
+**Which limit a save persists, and which battle a load can affect.** In Strict
+3.1 (and for campaign saves in both modes), the
 `maxunits` item is the **configured** unit-limit word — this build's copy of
 `[Preferences] UnitLimit`, held by `cmd/nanolathe`'s setup record — and never
 the battle's own session limit, which in a campaign comes from the mission OTA
@@ -543,10 +544,11 @@ parameter rather than reading a setting; the continuation writer takes it on
 `ContinuationSaveMetadata`. On the way back in, `applyRestoredUnitLimit` stores
 the saved word, unclamped, into that same configured record — and only when the
 account carried the item, which is why `save.Summary` reports presence
-(`HasMaxUnits`) separately from value. The battle being restored is unaffected:
-its pool was already sized from the configured word as it stood before the
-restore (`RetailLoadDeps.UnitLimit`), so a restored limit reaches the *next*
-battle entry, not this one `[08 R-ENTRY-01 §6]`.
+(`HasMaxUnits`) separately from value. Strict skirmish pools use the configured
+word as it stood before restore (`RetailLoadDeps.UnitLimit`); campaign pools
+use the mission OTA. In those cases, a restored configured limit reaches the
+*next* skirmish battle entry `[08 R-ENTRY-01 §6]`. Modern skirmish saves and
+loads use [Modern save unit limits](#modern-save-unit-limits).
 
 `bulk.go` holds the established raw box sizes — the two accepted unit-box
 lengths, the order box and its five subtype lengths, the script snapshot's base
@@ -1325,6 +1327,42 @@ No other entry in [SPEC_CONFLICTS.md](SPEC_CONFLICTS.md) originates in these
 packages. SC21's building-versus-factory identity reaches the computer player's
 placement path through the definition selector it shares with construction, and
 is owned by DESIGN_ECONOMY_CONSTRUCTION `[08 R-AI-03 §7.4]`.
+
+### Modern save unit limits
+
+**Nanolathe Modern policy (user-authorized).** For a skirmish battle load,
+read a present, nonzero `Summary.maxunits` before constructing the pool and
+use it for both the player-slice width and the session limit. This preserves
+saved slot identities when the current preference differs, including saves
+made at 250 before the default became 1000. The new Modern skirmish writer
+records the actual session limit in that same existing item so subsequent
+saves remain consistent even if the caller's configured word differs.
+
+**Strict baseline.** Strict 3.1 retains the configured-word writer and sizes
+skirmish pools from the pre-load setting; the saved word only affects the
+next battle `[08 R-SESS-01 §9]`. Both modes retain the existing successful-load
+update of the host's configured word. Campaign pools still use the mission
+OTA and campaign writers still record the configured word; continuation saves
+have no battle pool.
+
+**Boundaries.** Missing or zero saved limits retain the pre-load setting
+(zero cannot describe a usable player slice; early Nanolathe writers emitted
+it). A nonzero saved limit must be 1..3276, so ten slices fit positive signed
+16-bit occupancy identities. Reject out-of-range values rather than clamp
+and change slot boundaries. Existing unit reservation still rejects any
+owner/slot disagreement with the selected layout. Retail can write a configured
+word different from its live pool after an earlier load; such files cannot
+always establish their original width from this item. Do not infer a width
+from the largest surviving unit slot or retry guessed limits.
+
+**Verification.** `TestModernSaveUnitLimitSelection` locks presence, bounds,
+campaign exclusion and the Strict bypass. `TestModernSaveLoadsAcrossUnitLimits`
+writes both 250- and 1000-unit layouts with a deliberately different configured
+word, then loads each under the other preference. It checks saved identities
+and the initial committed frame, compares resources, both RNG streams and the
+scheduler against a Strict load at the matching limit, and rejects the
+mismatched Strict load. These
+run with the session package in `tools/check` and `tools/check-retail`.
 
 ## 6. Research map
 

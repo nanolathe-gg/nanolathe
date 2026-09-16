@@ -2112,28 +2112,12 @@ func sessionUnitLimit(s *Session) int32 {
 	if s != nil && s.Mission != nil && s.Mission.Type == mission.TypeCampaign {
 		return campaignUnitLimit(s.Mission)
 	}
-	// Skirmish battle entry copies the configured `[Preferences] UnitLimit`
-	// over the session word verbatim — the entry copy has no clamp; the
-	// 20..500 clamp is the start-up profile read's alone [08 R-SKIR-01 §6]
-	// [08 R-SESS-01 §9]. It reaches the session on the setup record; a
-	// session composed without one (a fixture) reads the missing-value
-	// default.
-	//
-	// Closed (WU-19-214): the restored `Summary.maxunits` now reaches a
-	// second battle in one process. Retail's destination is traced exactly
-	// [08 R-ENTRY-01 §6][08 R-SESS-01 §9]: the battle-restoration dispatcher
-	// stores the item, when present and unclamped, into the **configured**
-	// unit-limit word — the process-wide `[Preferences] UnitLimit` copy the
-	// start-up read clamps 20..500 — and the next skirmish battle entry copies
-	// that word verbatim into its session limit. The battle being restored is
-	// unaffected (its pool was sized before the restore, RetailLoadDeps).
-	// Nanolathe's configured word is the application's setup record in
-	// cmd/nanolathe (`g.setup.UnitLimit`, which feeds SkirmishConfig.UnitLimit
-	// and RetailLoadDeps.UnitLimit); this package holds only the per-battle
-	// copy read here, so the carry is one application-level write outside it
-	// — `cmd/nanolathe/loading.go`'s `applyRestoredUnitLimit`, called from
-	// `loadRetailSavePath` right after the save is staged and restored, so it
-	// lands before the setup record can feed a second battle entry.
+	// Fresh skirmishes copy the configured limit. Strict restores retain the
+	// pre-load word [08 R-ENTRY-01 §6][08 R-SESS-01 §9]; Modern restores use
+	// the saved layout (DESIGN_SESSIONS_AI_SAVE "Modern save unit limits").
+	// Both paths store the pool's width in Skirmish.UnitLimit so AI and path
+	// budgets read the same limit. Host preference updates remain owned by
+	// cmd/nanolathe's applyRestoredUnitLimit, outside this per-battle copy.
 	if s == nil {
 		return int32(unitLimitOrDefault(0))
 	}

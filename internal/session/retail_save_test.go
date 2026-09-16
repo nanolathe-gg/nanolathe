@@ -11,6 +11,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/cob"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/economy"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/mission"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
@@ -280,7 +281,7 @@ func TestRetailBattleSummaryRecordsTheConfiguredUnitLimit(t *testing.T) {
 		t.Fatalf("campaign session limit = %d, want the fixture's OTA 200; the test cannot tell the two words apart otherwise", got)
 	}
 
-	skirmish := &Session{}
+	skirmish := &Session{Gameplay: gameplay.Strict31}
 	skirmish.Skirmish.MapName = "Coast to Coast"
 	skirmish.Skirmish.NumPlayers = 2
 	skirmish.Skirmish.UnitLimit = 300 // a session word unequal to the configured one

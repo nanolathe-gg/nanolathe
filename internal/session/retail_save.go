@@ -9,6 +9,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/cob"
 	"github.com/nanolathe-gg/nanolathe/internal/economy"
 	"github.com/nanolathe-gg/nanolathe/internal/features"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/mission"
 	"github.com/nanolathe-gg/nanolathe/internal/movement"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
@@ -546,23 +547,17 @@ func retailMeteorScalars(m MeteorState) save.MeteorScalars {
 // R-SAVE-02 §1] [I6]. The multiplayer rule integers are emitted only for
 // game type 2 [08 "Summary"].
 //
-// `configuredUnitLimit` is the fourth caller-owned value and becomes
-// `Summary.maxunits`. It is the **configured** unit-limit word — the
-// process-wide `[Preferences] UnitLimit` copy — and not the session's own
-// limit: "the save writer records the configured word (not the session word)"
-// [08 R-SESS-01 §9]. That distinction is visible in campaign, where the session
-// word comes from the mission's OTA `maxunits` and the configured word does
-// not [08 R-SKIR-01 §6], so both routes below take the caller's word. This
-// package holds only the per-battle copy, which is why the configured word
-// arrives as a parameter rather than being read here; the application's word
-// is `cmd/nanolathe`'s setup record.
+// Strict 3.1 and campaign saves write configuredUnitLimit as Summary.maxunits
+// [08 R-SESS-01 §9]. Modern skirmish saves write the actual battle limit so a
+// later load can reconstruct its player slices even after settings change
+// (DESIGN_SESSIONS_AI_SAVE "Modern save unit limits").
 func RetailBattleSummary(s *Session, description, gameID string, configuredUnitLimit int) save.Summary {
 	if s == nil {
 		return save.Summary{}
 	}
 	summary := save.Summary{
 		// Retail's writer always emits `maxunits` [08 "Summary"]. The word it
-		// records is the caller's configured limit; the reader's low-16-bit
+		// initially records is the configured limit; the reader's low-16-bit
 		// truncation is a read-side rule, so the word is stored whole here.
 		MaxUnits:    int32(configuredUnitLimit),
 		HasMaxUnits: true,
@@ -585,6 +580,9 @@ func RetailBattleSummary(s *Session, description, gameID string, configuredUnitL
 	} else {
 		// Skirmish is session kind 2, the same game type the summary panel
 		// renders as `Skirmish (%d players)` [08 R-SAVE-02 §3] [08 R-SAVE-02 §4].
+		if s.Gameplay.Normalize() == gameplay.Modern {
+			summary.MaxUnits = int32(sessionUnitLimit(s))
+		}
 		summary.Gametype = GametypeMultiplayer
 		summary.IsMultiplayer = true
 		summary.MapName = s.Skirmish.MapName

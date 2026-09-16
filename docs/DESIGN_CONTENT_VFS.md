@@ -627,7 +627,8 @@ behaviour.
   are rejected. Ten player slices at 3276 fit positive signed 16-bit occupancy
   identities (movement's `occupancyWord` rejects larger IDs). This replaces only
   the configured default/range in `[08 R-SKIR-01 §6]`; campaign OTA `maxunits`
-  and save-restoration semantics retain their own sources. The simulation
+  retains its own source; Modern save-limit selection is documented in
+  DESIGN_SESSIONS_AI_SAVE "Modern save unit limits". The simulation
   benchmark keeps its explicit default of 400 for workload comparability.
 * **SC1 — the ten-archive cap.** The spec states a cap of ten local archives;
   the reference install has thirteen and plays. The cap is real but

@@ -31,9 +31,10 @@ type Summary struct {
 	BuildDateKey string // e.g. "BUILD DATE:Aug 23 2026" — prefix BUILD DATE:
 	BuildTimeKey string // e.g. "BUILD TIME:12:00:00" — prefix BUILD TIME:
 
-	// MaxUnits is the configured unit-limit word the writer records — the
-	// process-configured `[Preferences] UnitLimit` copy, never the battle's own
-	// session limit [08 R-SESS-01 §9]. A read takes the item's low 16 bits.
+	// MaxUnits is the saved unit-limit word. Retail records the configured
+	// limit [08 R-SESS-01 §9]; Modern skirmish producers record their actual
+	// session limit (DESIGN_SESSIONS_AI_SAVE "Modern save unit limits").
+	// A read takes the item's low 16 bits.
 	//
 	// HasMaxUnits is the item's presence witness, and it is not redundant with a
 	// nonzero MaxUnits: the restore step reads the word "only when present" and
@@ -128,8 +129,8 @@ func WriteSummary(b *Builder, s Summary) {
 	ac.SetInt(bd, 0)
 	ac.SetInt(bt, 0)
 	// The item is emitted unconditionally: retail's writer always emits
-	// `maxunits`, and every producer in this build supplies the configured
-	// unit-limit word [08 "Summary"] [08 R-SESS-01 §9]. HasMaxUnits is therefore
+	// `maxunits` [08 "Summary"] [08 R-SESS-01 §9]. The session producer selects
+	// its value, including Modern's actual skirmish limit; HasMaxUnits is therefore
 	// a read-side witness only — omitting the item here would write a file
 	// retail never writes.
 	ac.SetInt("maxunits", s.MaxUnits)
