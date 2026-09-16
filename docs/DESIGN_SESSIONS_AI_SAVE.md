@@ -127,6 +127,9 @@ mirrors and economy side words are installed before entry priming, and entering
 local preload preserves that primed economy state. Constructors without an
 explicit selection retain authored-side resolution. Full battle restores also
 restore the shell campaign identity, side and difficulty before continuation.
+Fresh mission entry sets the two live player colours before publication,
+independently of side selection or authored-side resolution
+[08 R-CAMP-01 §3] [08 R-SKIR-01 §8].
 
 The ENDMSN list uses authored mission indices and includes the whole campaign
 with completion marks. Its selection survives repaint; Start resolves the chosen

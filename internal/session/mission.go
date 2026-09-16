@@ -166,6 +166,9 @@ func NewMissionWithEntryOptions(fs vfs.FSOps, cat *content.Catalog, path string,
 	for i := 0; i < 2 && i < 10; i++ {
 		p := &s.Econ.Players[i]
 		p.Exists = true
+		// Campaign start fixes colours to (0, 1), independently of the
+		// selected sides [08 R-CAMP-01 §3][08 R-SKIR-01 §8].
+		p.Logo = uint8(i)
 		if i == 0 {
 			p.ControllerState = 1
 			p.Name = "Player"
