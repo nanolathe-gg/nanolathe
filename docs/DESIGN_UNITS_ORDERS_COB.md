@@ -536,7 +536,10 @@ except by push and pop, where the low three are the addressing mode `[04 §4.3]`
 
 **C11 — the dispatch set.** Exactly 57 dispatched values. An unmatched key takes
 the kill path: clear the thread's status, decrement the instance's active thread
-count, yield the drain. There is no default handler and no retail diagnostic
+count, and yield without waking call-script waiters or invoking a completion
+receiver. The scheduler does not poll callee liveness to release those waits;
+explicit return and signal supply the wake events `[04 §4.2]`.
+There is no default handler and no retail diagnostic
 `[04 §4.3]` `[04 R-COB-01 §1]`. Nanolathe implements this set with one
 switch whose default enters that kill path; it does not keep a second lookup
 table before executing the handler.
@@ -1114,24 +1117,25 @@ would settle it:
   thread-slot reuse; this closes the former abnormal-finish question without
   settling publication timing `[04 R-P28-COB-01R]`.
 
-### State-machine audit follow-up (2026-09-16)
+## 8. State-machine transition regressions
 
-The following established contracts remain incorrectly implemented; these are
-repair work, not Modern gameplay policies:
+These retail contracts apply in both gameplay modes:
 
-* Both guard variants' slot-retarget fallback must remain inside the hostile
-  recorded-attacker, damage-wake and no-chase gates, after forced attack
-  insertion fails. Existing-target retention needs full shot admission, not
-  only distance `[04 R-UNIT-06 §1]`.
-* An invalid opcode releases its thread without waking call-script waiters;
-  the scheduler must not resume those waiters merely because the callee is
-  idle `[04 §4.2]`. This concerns malformed or unsupported scripts; no stock
-  gameplay symptom was established in the audit.
-* `TransportDrop` needs logical arity one with four physical argument cells;
-  cleanup's `StopBuilding` needs logical arity zero with four physical zeros.
-  The adapters currently conflate physical input length with logical arity
-  and use the name-form zero-argument starter for cleanup respectively
-  `[04 R-CB-01 §2]`. No visible stock symptom was established for either shape.
+* Both guard variants retarget slots only inside the hostile recorded-attacker,
+  damage-wake and no-chase gates, after forced attack insertion fails. Retaining
+  an existing target requires full shot admission, including medium, air and
+  ballistic restrictions `[04 R-UNIT-06 §1]`. Tests distinguish each gate and
+  preserve admitted targets; Modern Hold Fire retains its separate policy.
+* Invalid-opcode termination leaves call-script waiters blocked across later
+  drains and slot reuse until an explicit return or signal supplies a wake
+  event `[04 §4.2]`. Tests cover both abnormal termination and real wake events.
+* The callback bridge exposes `DeferredArgs` and `DeferredWakeArgs` for logical
+  arity separate from four physical argument cells. `TransportDrop` uses arity
+  one with cargo identity, packed drop point and two zeros. Cleanup's
+  `StopBuilding` uses arity zero with four zeros, while the name-form edge
+  callback preserves stale cells `[04 R-CB-01 §2]`. Producer tests inspect entry
+  state before interpretation can overwrite the cells and check the immediate
+  wake barrier separately.
 
-The audit did not implement these repairs. Tests should distinguish each
-branch and callback shape rather than assert only eventual order completion.
+The COB corrections address exact execution and argument contracts; the audit
+did not establish visible stock-unit symptoms for those three discrepancies.

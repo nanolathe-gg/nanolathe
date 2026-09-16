@@ -10,9 +10,8 @@ import (
 )
 
 // Legs 1 and 2 of the guard's phase 1 [04 R-UNIT-06 §1], with the standing-fire
-// correction of [04 R-STANCE-01 §3]. Every gate asserted here is one of those
-// sections' terms; nothing about the RE-ARM BIT PRODUCERS is asserted, because
-// §1 records them as Unknown and nothing in this build raises `0x10`.
+// correction of [04 R-STANCE-01 §3]. The damage-wake bit is supplied as the
+// pump would deliver it after an observer notice [04 R-UNIT-06 §5].
 
 // guardLegsFixture extends the ground-guard fixture with a third unit that
 // stands in for the ward's engagement target.
@@ -187,11 +186,12 @@ func TestGuardSlotRetargetGatesOnTheFireFieldAlone(t *testing.T) {
 	f := newGuardLegsFixture(t)
 	n := guardNode(f.guardFixture)
 	n.Phase = 1
+	f.guard.Def.CanAttack = false // failed forced join reaches slot support
 	armSlotAutonomous(f.guard, 0, &content.WeaponDef{Name: "gun", Range: 1000})
 
 	// Hold fire with hold position: no rebind.
 	f.guard.Flags &^= (stanceFieldMask << stanceFireShift) | (stanceFieldMask << stanceMoveShift)
-	guardHandler(f.guard, n, 0, 100)
+	guardHandler(f.guard, n, guardCombatJoinBit, 100)
 	if f.guard.Slots[0].Target.Kind == units.TargetUnit {
 		t.Fatalf("a hold-fire guard must not rebind a slot, got %+v", f.guard.Slots[0].Target)
 	}
@@ -200,7 +200,7 @@ func TestGuardSlotRetargetGatesOnTheFireFieldAlone(t *testing.T) {
 	// rebind still happens. This is the correction; the superseded wording
 	// would have skipped the leg because the move field is zero.
 	f.guard.Flags |= 1 << stanceFireShift
-	guardHandler(f.guard, n, 0, 100)
+	guardHandler(f.guard, n, guardCombatJoinBit, 100)
 	if f.guard.Slots[0].Target.Kind != units.TargetUnit || f.guard.Slots[0].Target.Unit != f.enemy.Handle {
 		t.Fatalf("the fire field alone must admit the rebind, got %+v", f.guard.Slots[0].Target)
 	}
@@ -212,6 +212,7 @@ func TestGuardSlotRetargetRebindConditions(t *testing.T) {
 	f := newGuardLegsFixture(t)
 	n := guardNode(f.guardFixture)
 	n.Phase = 1
+	f.guard.Def.CanAttack = false         // failed forced join reaches slot support
 	f.guard.Flags |= 2 << stanceFireShift // fire at will
 
 	// A fourth unit, in range of slot 0 and out of range of slot 1.
@@ -229,6 +230,9 @@ func TestGuardSlotRetargetRebindConditions(t *testing.T) {
 		}
 		return prev(h)
 	}
+	b.Weapons = &WeaponAdapter{CanEngage: func(_ *units.Unit, target pool.Handle, slot int) bool {
+		return target == near.Handle && slot == 0
+	}}
 	QueueForUnit(f.guard).SetBinding(b)
 
 	armSlotAutonomous(f.guard, 0, &content.WeaponDef{Name: "long", Range: 1000})
@@ -240,7 +244,7 @@ func TestGuardSlotRetargetRebindConditions(t *testing.T) {
 	f.guard.Slots[1].Target = held
 	f.guard.Slots[2].Target = held
 
-	guardHandler(f.guard, n, 0, 100)
+	guardHandler(f.guard, n, guardCombatJoinBit, 100)
 
 	// Slot 0 holds a legal in-range target that no bad-target array excludes,
 	// so it is left alone.
@@ -261,7 +265,7 @@ func TestGuardSlotRetargetRebindConditions(t *testing.T) {
 	// acquisition [04 R-UNIT-06 §5 part 3]. This is the term WU-19-35 skipped.
 	f.guard.Slots[1].Target = held
 	f.guard.Slots[1].Flags &^= units.SlotFlagAutonomous
-	guardHandler(f.guard, n, 0, 100)
+	guardHandler(f.guard, n, guardCombatJoinBit, 100)
 	if f.guard.Slots[1].Target != held {
 		t.Fatalf("a slot held by an order must be skipped, got %+v", f.guard.Slots[1].Target)
 	}
@@ -271,7 +275,7 @@ func TestGuardSlotRetargetRebindConditions(t *testing.T) {
 	f.guard.Slots[0].Target = held
 	near.Def.UnitMask.Words[0] = 1 << 3
 	f.guard.Def.BadTargetCategoryWPRIMask.Words[0] = 1 << 3
-	guardHandler(f.guard, n, 0, 100)
+	guardHandler(f.guard, n, guardCombatJoinBit, 100)
 	if f.guard.Slots[0].Target.Unit != f.enemy.Handle {
 		t.Fatalf("a bad-target-categorised slot target must be rebound, got %+v", f.guard.Slots[0].Target)
 	}

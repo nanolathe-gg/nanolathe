@@ -216,7 +216,7 @@ func groundUnloadHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) 
 			// Cell 0 = the cargo's identity, cell 1 = the packed drop point;
 			// the position cell is physically present even though the arity
 			// byte says one argument [04 R-UNIT-06 §3].
-			bridge.DeferredWake("TransportDrop", []int32{int32(n.Target), packedDropPoint(n)}, nil)
+			bridge.DeferredWakeArgs("TransportDrop", 1, [4]int32{int32(n.Target), packedDropPoint(n), 0, 0}, nil)
 		}
 		n.Param2++
 		n.Deadline = int32(tick + 15)

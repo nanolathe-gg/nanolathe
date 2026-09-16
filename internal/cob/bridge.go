@@ -268,26 +268,14 @@ func (b *CallbackBridge) Drain(delta int) {
 // identity, and thread exhaustion deliver zero to receiver immediately; no
 // receiver is called for an omitted receiver [04 §4.2][04 §4.3].
 func (b *CallbackBridge) Deferred(name string, args []int32, receiver CallbackReceiver) CallbackResult {
-	result := CallbackResult{Name: name, Mode: ModeDeferred, Thread: -1}
-	if b == nil || b.VM == nil {
-		b.lifecycleEvent(name, ModeDeferred, -1, "start-failed")
-		if receiver != nil {
-			receiver(CallbackReturn{Name: name, Mode: ModeDeferred, Thread: -1, Value: 0})
-		}
-		return result
-	}
-	if !b.VM.StartByName(name, args) {
-		b.lifecycleEvent(name, ModeDeferred, -1, "start-failed")
-		if receiver != nil {
-			receiver(CallbackReturn{Name: name, Mode: ModeDeferred, Thread: -1, Value: 0})
-		}
-		return result
-	}
-	thread := b.VM.LastStartedThread()
-	result.Started, result.Thread = true, thread
-	b.lifecycleEvent(name, ModeDeferred, thread, "start")
-	b.arm(thread, name, ModeDeferred, receiver)
-	return result
+	return b.deferred(name, len(args), args, receiver, false)
+}
+
+// DeferredArgs starts an argument-form D callback, writing all four physical
+// cells even at logical arity zero. Words beyond the logical arguments remain
+// visible as locals; the logical top is arity−1 [04 §4.2][R-COB-01 §1].
+func (b *CallbackBridge) DeferredArgs(name string, arity int, args [4]int32, receiver CallbackReceiver) CallbackResult {
+	return b.deferred(name, arity, args[:], receiver, false)
 }
 
 // DeferredWake starts a deferred callback and immediately performs the
@@ -295,15 +283,22 @@ func (b *CallbackBridge) Deferred(name string, args []int32, receiver CallbackRe
 // start is deferred in mode, while the all-slot delta-zero drain runs before
 // the producer continues [04 §4.2][R-CB-01 §2].
 func (b *CallbackBridge) DeferredWake(name string, args []int32, receiver CallbackReceiver) CallbackResult {
+	return b.deferred(name, len(args), args, receiver, true)
+}
+
+// DeferredWakeArgs combines the explicit logical arity and four physical cells
+// of DeferredArgs with DeferredWake's all-slot wake barrier [R-CB-01 §2].
+func (b *CallbackBridge) DeferredWakeArgs(name string, arity int, args [4]int32, receiver CallbackReceiver) CallbackResult {
+	return b.deferred(name, arity, args[:], receiver, true)
+}
+
+func (b *CallbackBridge) deferred(name string, arity int, args []int32, receiver CallbackReceiver, wake bool) CallbackResult {
 	result := CallbackResult{Name: name, Mode: ModeDeferred, Thread: -1}
-	if b == nil || b.VM == nil {
-		b.lifecycleEvent(name, ModeDeferred, -1, "start-failed")
-		if receiver != nil {
-			receiver(CallbackReturn{Name: name, Mode: ModeDeferred, Thread: -1, Value: 0})
-		}
-		return result
+	pc, found := 0, false
+	if b != nil && b.VM != nil {
+		pc, found = b.VM.ScriptPC(name)
 	}
-	if !b.VM.StartByName(name, args) {
+	if !found || !b.VM.start(pc, args, arity) {
 		b.lifecycleEvent(name, ModeDeferred, -1, "start-failed")
 		if receiver != nil {
 			receiver(CallbackReturn{Name: name, Mode: ModeDeferred, Thread: -1, Value: 0})
@@ -311,16 +306,16 @@ func (b *CallbackBridge) DeferredWake(name string, args []int32, receiver Callba
 		return result
 	}
 	thread := b.VM.LastStartedThread()
-	result.Started, result.Wake, result.Thread = true, true, thread
+	result.Started, result.Wake, result.Thread = true, wake, thread
 	b.lifecycleEvent(name, ModeDeferred, thread, "start")
 	identity := b.arm(thread, name, ModeDeferred, receiver)
-	b.VM.Drain(0)
-	b.collectReturns()
-	// Completion is asked of the allocation that was started, not of the slot:
-	// the wake barrier can end this callback and hand the slot to a child in
-	// the same pass, and that child is not this callback still running
-	// [04 §4.2].
-	result.Completed = !b.VM.ThreadAliveAs(thread, identity)
+	if wake {
+		b.VM.Drain(0)
+		b.collectReturns()
+		// A wake drain can release and reuse the slot. Completion belongs to
+		// the original allocation, not its later occupant [04 §4.2].
+		result.Completed = !b.VM.ThreadAliveAs(thread, identity)
+	}
 	return result
 }
 

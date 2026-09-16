@@ -7,7 +7,6 @@
 package orders
 
 import (
-	"github.com/nanolathe-gg/nanolathe/internal/combat"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
@@ -109,8 +108,9 @@ func GuardFollowPoint(n *Node, wardX, wardY, wardZ numeric.Fixed) (x, y, z numer
 // world units, so it is strict and exact, not a whole-unit truncation.
 const chaseVerticalJump int64 = 8 << 16
 
-// canEngageSlot is the shot-admission gate `Attack_Chase` phases 1 and 3 ask
-// before they bind a slot [04 R-ORD-01 §3]. It routes to the combat owner
+// canEngageSlot is the shot-admission gate used before `Attack_Chase` binds
+// a slot [04 R-ORD-01 §3] and before a guard retains a target
+// [04 R-UNIT-06 §1]. It routes to the combat owner
 // through the queue binding; a queue with no weapon adapter, or an adapter that
 // does not supply the gate, refuses — which sends the handler down its own
 // established "gate failed" arm rather than binding a slot the weapon layer
@@ -470,11 +470,9 @@ func guardSlotBadTargetMask(def *content.UnitDef, idx int) content.CategoryMask 
 	return content.CategoryMask{}
 }
 
-// guardSlotKeepsTarget is leg 2's "slots already holding a legal in-range
-// target are left alone" [04 R-UNIT-06 §1]. A slot keeps its target when all
-// three of the rebind conditions fail: it HAS a target that resolves to a unit,
-// that unit is in range, and that unit's definition is absent from this slot's
-// bad-target array.
+// guardSlotKeepsTarget retains a slot target only when the full shot-admission
+// predicate accepts it and its definition is absent from the slot's bad-target
+// array [04 R-UNIT-06 §1]. Distance alone does not establish a legal shot.
 //
 // "Resolve the slot's stored target" is the read of [04 R-ORD-01 §1], which
 // "yields the unit only while the companion carries the unit marker and the id
@@ -491,10 +489,10 @@ func guardSlotKeepsTarget(u *units.Unit, s *units.Slot, idx int) bool {
 	if held == nil || held.Def == nil {
 		return false
 	}
-	// The ordinary planar range test of [06 §3.3], inclusive, against the
-	// slot's own weapon range — the same helper every other range gate uses.
-	if !combat.WithinRange(u.X, u.Z, held.X, held.Z, s.Weapon.Range) {
-		return false // "that target is out of range"
+	// Retention uses the combat owner's complete admission predicate, including
+	// range, medium, air restrictions and ballistic feasibility [04 R-UNIT-06 §1].
+	if !canEngageSlot(u, held.Handle, idx) {
+		return false
 	}
 	// "the target's definition **is** in the guard's per-slot
 	// bad-target-category bit array".
@@ -506,7 +504,9 @@ func guardSlotKeepsTarget(u *units.Unit, s *units.Slot, idx int) bool {
 //
 // It is NOT an acquisition and it keeps no latch: it walks slots 0..2 in
 // numeric order and rebinds onto the ward's engagement target exactly those
-// slots whose own target is missing, out of range, or bad-target-categorised.
+// slots whose own target is missing, fails shot admission, or is in its
+// bad-target category. The caller reaches this fallback only after the
+// damage-join gates pass and forced attack insertion fails.
 // It returns no result code; the handler falls through to legs 3, 4 and 5.
 //
 // The step is "skipped when the guard's standing fire field is zero" — the
@@ -717,14 +717,16 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	if wardTarget != nil &&
 		attackerHostileToGuard(u, wardTarget) &&
 		satisfied&guardCombatJoinBit != 0 &&
-		guardWillChase(u, wardTarget) &&
-		guardCombatJoin(u, wardTarget) {
-		n.DynamicGate = 0
-		return Code(3) // *wait* [04 §3.3]
+		guardWillChase(u, wardTarget) {
+		if guardCombatJoin(u, wardTarget) {
+			n.DynamicGate = 0
+			return Code(3) // *wait* [04 §3.3]
+		}
+		// Leg 2 is the failed-join fallback inside these same four gates.
+		// Maintenance alone must not offer a stale attacker to the slots
+		// [04 R-UNIT-06 §1][04 R-ORD-02 §3].
+		guardRetargetSlots(u, wardTarget)
 	}
-
-	// Leg 2 — the slot re-target. No result code: it falls through.
-	guardRetargetSlots(u, wardTarget)
 
 	// Leg 3 — repair/assist the ward [04 R-UNIT-06 §1]: "when the ward's health
 	// compares below its definition's maximum-damage word and the guard's

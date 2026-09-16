@@ -777,19 +777,26 @@ func (v *VM) claimThread(idx int) uint64 {
 //
 // Argument-area contract [R-COB-01 §1]: with at least one argument this is
 // the argument-carrying starter — it always writes FOUR physical cells
-// (window words 0..3) and only then sets the logical top to arity−1. The
-// traced engine producers pass explicit zeros beyond the arity, so cells
-// arity..3 receive zeros here; window words above word 3 stay untouched stale
-// slot memory. With no arguments this is the zero-argument name-form start:
+// (window words 0..3) and only then sets the logical top to arity−1. This
+// convenience wrapper uses the input length as arity and zero-fills missing
+// cells through word 3; the bridge's explicit-arity adapters also allow payload
+// beyond the logical top [R-CB-01 §2]. Words above the supplied inputs and word
+// 3 stay stale. With no arguments this is the zero-argument name-form start:
 // no window word is written and every window word stays stale.
 // Engine-started threads start with mask 1 [R-P0-10].
 func (v *VM) Start(script int, args []int32) bool {
+	return v.start(script, args, len(args))
+}
+
+// start keeps logical arity separate from physical input cells. Argument-form
+// engine adapters supply all four cells even at arity zero [R-COB-01 §1].
+func (v *VM) start(script int, args []int32, arity int) bool {
 	if v.prog == nil {
 		return false
 	}
 	// The native thread record has a fixed physical window. This is a host
 	// boundary for malformed callers, not a claim about native overflow.
-	if len(args) > threadWindowWords {
+	if len(args) > threadWindowWords || arity < 0 || arity > threadWindowWords {
 		return false
 	}
 	if script < 0 || script >= len(v.prog.Code) {
@@ -836,9 +843,9 @@ func (v *VM) Start(script int, args []int32) bool {
 	// the starter writes them [R-COB-01 §1].
 	t.SP = 0
 	if n := len(args); n > 0 {
-		// Four unconditional physical writes, producer filler zeros beyond the
-		// arity [R-COB-01 §1]. Engine producers pass at most four arguments;
-		// an authored fixture can fill the remaining physical window.
+		// Preserve all supplied physical cells independently of logical arity,
+		// filling missing cells through word 3 with zero [R-COB-01 §1]. Engine
+		// adapters supply four cells; fixtures may fill the remaining window.
 		for i := 0; i < 4 && i < n; i++ {
 			t.Stack[i] = args[i]
 		}
@@ -848,7 +855,7 @@ func (v *VM) Start(script int, args []int32) bool {
 		for i := 4; i < n; i++ {
 			t.Stack[i] = args[i]
 		}
-		t.SP = n
+		t.SP = arity
 	}
 	// ON-04 Aim dispatch records thread relationship [06 §3.3]. The stale
 	// return and receiver for this slot were cleared by claimThread above.
@@ -994,20 +1001,9 @@ func (v *VM) Drain(delta int) {
 			}
 			t.Status = ThreadRunning
 		} else if t.Status == ThreadWaitCall {
-			if t.WaitThread == -1 {
-				continue // leaked wait, never wakes [04 §4.3] C14
-			}
-			if t.WaitThread < 0 || t.WaitThread >= 8 {
-				t.Status = ThreadRunning
-				t.WaitThread = -1
-			} else {
-				other := &v.Threads[t.WaitThread]
-				if other.Status != ThreadIdle {
-					continue // callee still alive
-				}
-				t.Status = ThreadRunning
-				t.WaitThread = -1
-			}
+			// Only return and signal wake a call waiter. An idle callee may
+			// have been killed by an invalid opcode [04 §4.2].
+			continue
 		}
 		if t.Status != ThreadRunning {
 			continue
@@ -1052,8 +1048,8 @@ func (v *VM) allocThread() (int, bool) {
 }
 
 // killThread clears the thread status, decrements the instance active count
-// (via status), and wakes any thread blocked on it, transitively within the
-// same scan [04 §4.2] [04 §4.3] C11 kill path.
+// without waking callers. Return and signal explicitly wake their waiters;
+// invalid-opcode termination does not [04 §4.2][04 §4.3].
 func (v *VM) killThread(idx int) {
 	if idx < 0 || idx >= 8 {
 		return
@@ -1078,7 +1074,12 @@ func (v *VM) killThread(idx int) {
 	v.onReturn[idx] = nil
 	// The signal mask is left as it stands: an idle thread ignores it, and
 	// retail clears nothing here [04 §4.3].
-	//
+	t.WaitThread = -1
+}
+
+// wakeCallers implements the explicit return/signal wake, including waiters
+// left behind by an earlier occupant of this slot [04 §4.2].
+func (v *VM) wakeCallers(idx int) {
 	// Wake: any WaitCall parked on idx flips to Running immediately and can run
 	// later in this same drain scan [04 §4.2]. One pass over the eight slots is
 	// enough, because idx is a single thread identity — a waiter that is itself
@@ -1091,7 +1092,6 @@ func (v *VM) killThread(idx int) {
 			ot.WaitThread = -1
 		}
 	}
-	t.WaitThread = -1
 }
 
 // signalMask kills every thread whose mask intersects mask and wakes waiters.
@@ -1111,6 +1111,7 @@ func (v *VM) signalMask(mask int32) {
 			}
 			if t.SignalMask&mask != 0 {
 				v.killThread(i)
+				v.wakeCallers(i)
 				killedAny = true
 			}
 		}
@@ -2135,6 +2136,7 @@ func (v *VM) runThread(idx int) {
 			}
 			// Free thread and wake blocked callers [04 §4.2]
 			v.killThread(idx)
+			v.wakeCallers(idx)
 			return
 		case 0x10066000: // jump-if-false [04 §4.3] D
 			if t.PC+1 >= len(v.prog.Code) {
@@ -2176,6 +2178,7 @@ func (v *VM) runThread(idx int) {
 					selfKilled = true
 				}
 				v.killThread(k)
+				v.wakeCallers(k)
 			}
 			if selfKilled {
 				return // only when it kills itself does it suspend [04 §4.3]
@@ -2264,7 +2267,7 @@ func (v *VM) runThread(idx int) {
 			}
 			t.PC += 1
 		default:
-			// Unmatched keys clear the thread and wake its waiters [04 §4.3].
+			// Unmatched keys release the thread without waking callers [04 §4.2][04 §4.3].
 			v.killThread(idx)
 			return
 		}

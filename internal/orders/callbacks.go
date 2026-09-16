@@ -76,10 +76,8 @@ func clearWeaponBuildTargets(u *units.Unit) {
 
 // emitStopBuilding is the cleanup-side StopBuilding emission [R-ORDER-02 §2]:
 // resolve StopBuilding by name in the owner's script and arrange it with an
-// empty argument vector (retail pushes arity 0 with four zero cells; the
-// window words above the logical top then read zero in retail versus stale
-// here — unobservable unless a stock body reads above-top arguments, which
-// the [R-UNIT-06 §4] census pattern argues against), and clear the record's pending flag. It runs on EVERY
+// argument-bearing start with logical arity zero and four physical zero cells
+// [04 R-CB-01 §2], and clear the record's pending flag. It runs on EVERY
 // removal path and is NOT tombstone-gated; it always precedes the
 // tombstone-gated TargetCleared step. A code-9 last-record re-arm keeps the
 // record, so cleanup never runs for it and a running StartBuilding keeps
@@ -89,7 +87,9 @@ func emitStopBuilding(u *units.Unit, n *Node) {
 	if n == nil || n.Flags&FlagStopBuildingPending == 0 {
 		return
 	}
-	arrangeDeferred(callbackBridgeFor(u), "StopBuilding", nil)
+	if bridge := callbackBridgeFor(u); bridge != nil {
+		bridge.DeferredArgs("StopBuilding", 0, [4]int32{}, nil)
+	}
 	n.Flags &^= FlagStopBuildingPending
 }
 

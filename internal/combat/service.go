@@ -307,15 +307,12 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		case weapon.Turret:
 			if !slot.Aim.IssueBit && (weapon.Ballistic || weapon.LineOfSight) {
 				yaw, pitch, ok := turretAimGeometry(u, weapon, idx, bridge, tgtPos, terrain)
-				if !ok {
-					slot.DesiredYaw, slot.DesiredPitch = yaw, 0x8000
-					u.Pending |= units.PendingCouldNotFire
-					slot.Aim.IssueBit = false
-					slot.Flags &^= units.SlotFlagAimLatch
-					continue
+				// A failed fresh solve preserves angles and readiness, then
+				// continues to the ordinary reload/fire gates [06 §3.3].
+				if ok {
+					slot.DesiredYaw, slot.DesiredPitch = yaw, pitch
+					s.dispatchSlotAim(u, slot, idx, tick, bridge, yaw, pitch, &sum)
 				}
-				slot.DesiredYaw, slot.DesiredPitch = yaw, pitch
-				s.dispatchSlotAim(u, slot, idx, tick, bridge, yaw, pitch, &sum)
 			}
 		case weapon.VLaunch:
 			if !slot.Aim.IssueBit && (!weapon.Stockpile || slot.Ammo != 0) {
@@ -446,18 +443,17 @@ func (s *Service) firePreparedSlot(u *units.Unit, slot *units.Slot, idx int, pre
 			slot.Ammo--
 		}
 	} else {
-		// The successful executor wakes the order that owns this shot. The
-		// event precedes reload/debit and excludes stockpile launches
-		// [06 §4.2][06 R-WPN-05 §6].
-		if weapon.CommandFire {
-			u.Pending |= 0x800
-		} else {
-			u.Pending |= 0x400
-		}
 		slot.Reload = int32(int16(ComputeStoredReload(u.Health, u.MaxHealth, u.Kills, weapon.ReloadTime)))
-		if econ != nil && (weapon.EnergyPerShot != 0 || weapon.MetalPerShot != 0) {
-			economy.ImmediateDebit(&econ.Players[u.Owner], econ.UnitBuckets(u.Handle), float32(weapon.EnergyPerShot), float32(weapon.MetalPerShot))
-		}
+	}
+	// Every successful launch wakes its owning order after ammunition/reload
+	// storage and before any ordinary resource debit [06 §4.2][06 R-WPN-05 §6].
+	if weapon.CommandFire {
+		u.Pending |= 0x800
+	} else {
+		u.Pending |= 0x400
+	}
+	if !weapon.Stockpile && econ != nil && (weapon.EnergyPerShot != 0 || weapon.MetalPerShot != 0) {
+		economy.ImmediateDebit(&econ.Players[u.Owner], econ.UnitBuckets(u.Handle), float32(weapon.EnergyPerShot), float32(weapon.MetalPerShot))
 	}
 	sum.Fired++
 }

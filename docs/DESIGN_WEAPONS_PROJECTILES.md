@@ -1276,17 +1276,21 @@ Open items the contracts above carry:
   prevent a shot. That is the established behaviour, not a gap
   `[06 §11.2]` `[06 R-WPN-05 §10]`.
 
-### State-machine audit follow-up (2026-09-16)
+## 8. State-machine transition regressions
 
-The commander investigation corrected damage's selective purge and failed-target
-Aim reset. Two additional established contracts remain incorrectly implemented:
+In addition to the commander damage-purge and failed-target Aim regressions in
+§2.4, two weapon contracts have focused transition tests in both gameplay modes:
 
-* `firePreparedSlot` currently emits the fired order event only for ordinary
-  shots. Stockpile launches need the same command-fire-selected event after
-  ammunition decrement, without a resource debit `[06 §4.2]`.
-* Fresh turret Aim-solve failure currently overwrites angles and emits firing
-  failure before reload admission. It should preserve the stored state and
-  continue to the ordinary firing gates `[06 §3.3]`.
+* Every successful launch emits the command-fire-selected fired event. The
+  event follows ammunition decrement for stockpiles or the reload store for
+  ordinary shots, and precedes any ordinary resource debit. Stockpiles perform
+  no launch-time resource debit `[06 §4.2]`. Tests check the event, ammunition,
+  reload and resource/RNG effects, including failed launches.
+* A fresh turret Aim-solve failure preserves stored angles and readiness,
+  skips callback dispatch and continues through the ordinary firing gates.
+  Failure at this dispatch site alone emits no firing-failure event
+  `[06 §3.3]`. Tests distinguish a pending reload, failed physical admission
+  and an admitted attempt.
 
-These are confirmed implementation defects, not Modern policies. Their repairs
-need focused transition tests; this audit has not implemented those repairs.
+These are retail corrections shared by Strict 3.1 and Modern, with no new
+gameplay policy.

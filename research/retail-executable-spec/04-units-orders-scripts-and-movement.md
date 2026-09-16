@@ -5532,7 +5532,7 @@ field that save restoration clears rather than reconstructs
 
 **Established fact:** Synchronous query helpers execute script logic without an ordinary tick delta and do not advance piece interpolation. Asynchronous callbacks allocate one of the eight thread slots and return if no slot is available. Section 4.3 gives the exact failure edge for every starter, including the two cases where arguments are left on the caller's stack.
 
-**Established fact:** An engine callback started with the wake flag runs its new thread to its first yield inside the caller's context with a tick delta of zero, so no time passes and no interpolation happens for it.
+**Established fact:** An engine callback started with the wake flag performs the immediate VM-wide drain described above before its producer continues: all eight thread slots in order, followed by one piece pass, all with delta zero. Previously queued callbacks can therefore run at this barrier too. This differs from a synchronous query, which interprets only its own newly allocated slot and performs no piece pass.
 
 ### 4.3 Opcode encoding
 
@@ -7678,9 +7678,12 @@ interface vocabulary — neither appears at a callback starter.
 ### The complete callback table [R-CB-01 §2]
 
 **Established.** One row per callback name. "Mode" is section 4.2's letter;
-"wake" is the immediate-drain flag. Cells not listed are written as `0`
-(all four physical cells are always written, whatever the arity, so a cell
-beyond the arity is still physically visible to the script). "Receiver none"
+"wake" is the immediate-drain flag. For argument-carrying starts, cells not
+listed are written as `0`: all four physical cells are written, whatever the
+logical arity, so a cell beyond that arity is still physically visible to the
+script. Zero-argument name-form starts instead preserve the physical window;
+the arity-zero slot-form `StopBuilding` is an argument-carrying start and writes
+four zeros [R-COB-01 §1]. "Receiver none"
 means the starter is given a null completion receiver, so nothing consumes the
 script's return value. Failure behavior is uniform and is section 4.2's: a name
 miss or a full eight-slot pool fails the start; the zero-argument name-form
@@ -7719,7 +7722,7 @@ difference.
 | `BeginTransport` | transport load | step 4 | D + **wake 1** | 1: the cargo definition's model total height | [R-UNIT-06 §3]; a network mirror follows |
 | `EndTransport` | five producer sites in the load/unload/landing executors | step 4 | D; **wake 1 at two of the five sites**, wake 0 at the other three | none | [R-UNIT-06 §3]; [R-AIR-01 §6] places the landing executor's pair — phase 1 immediate, phase 6 deferred |
 | `TransportPickup` | sea/hover pickup | step 4 | D + wake 1 | 1: the cargo's pool slot identity; engine notification 12 follows | [R-UNIT-06 §3] |
-| `TransportDrop` | sea/hover drop | step 4 | D + wake 1 | arity 1, but **two** cells written: cell 0 the cargo identity, cell 1 the packed drop point | [R-UNIT-06 §3] |
+| `TransportDrop` | sea/hover drop | step 4 | D + wake 1 | logical arity 1; four physical cells: cargo identity, packed drop point, `0`, `0` | [R-UNIT-06 §3] |
 | `QueryLandingPad` | five sites: one shared pad selector plus four in-line copies in the landing executors | step 4 | Q | 4 outputs, all seeded `−1` | see below |
 | (no name) | the run-script network packet | event ingress | D, started by slot index | four dwords from the packet; the byte arity sets the logical top | section 5.3 |
 
