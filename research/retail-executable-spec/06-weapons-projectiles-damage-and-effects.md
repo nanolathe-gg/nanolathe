@@ -3243,7 +3243,7 @@ world units, and integration is family-specific rather than universal:
 | family | per tick |
 |---|---|
 | direct (`lineofsight`) | `point += velocity`; beam second point advances too once latched |
-| meteor | `point += velocity`; two visual accumulators advance from the velocity high halves |
+| meteor | `point += velocity`; two visual accumulators advance by the corresponding velocity component's high half **shifted left by 8** |
 | ballistic, dropped | `point += velocity`; then `point += (windX, windY, windZ)`; then `velocityY -= gravity` |
 | self-propelled, eligible | rebuild all three velocity components from scalar speed, yaw and pitch; then `point += velocity` |
 | self-propelled, at medium or expiry | `velocityY -= gravity` (and `pitch = 0` at the medium gate); then `point += velocity` |
@@ -4385,8 +4385,10 @@ single-precision falloff and truncated before attacker veterancy (§9.2).
 Otherwise the cell's fringe deltas resolve the anchor cell exactly as in §8.1,
 the anchor's feature word must be below `0xFFFB`, and the reference point is
 either the static feature point helper's result (when the cell's flag byte
-shows no live instance, or the instance index is zero) or the live animated
-instance's position. The distance uses the same truncate-and-narrow form and
+shows no live instance, or when the **computed instance address** — the
+instance array's base plus the record stride times the index — is null, which
+happens only before that array exists, not on an index of zero) or the live
+animated instance's position. The distance uses the same truncate-and-narrow form and
 the same strict `< R` test, and — unlike units — the **distance is tested
 before deduplication** against a memory of at most 64 anchor-cell pointers with
 the same never-remembered-when-full behavior. Accepted features enter feature
@@ -4541,8 +4543,9 @@ victim's primary command list — is exactly:
 if (credit == 0) { clear the stunned activation bit; complete the task }
 if (credit > 1800) credit = 1800          ; SIGNED compare: a 32-bit wrap to a
                                           ; negative credit is NOT capped
-stop the unit's current motion
+release all three weapon slots            ; the slot release verb
 clear all three weapon-slot targets       ; the ordinary TargetCleared path
+stop the unit's current motion            ; release the order node's goal payload
 set the task's wait flag and its absolute resume tick = currentTick + credit
 credit = 0
 set the stunned activation bit
@@ -5615,19 +5618,27 @@ The static accumulator is the plot cell's anchor-delta byte pair reused as
 accumulated blast damage while no live instance is attached
 (`[03 §2.2]`), so a feature that is ignited or animated stops
 accumulating there. The comparison against the definition's damage capacity is
-`<` for "survives" and therefore `>=` for destruction. Ignition takes
+`<` for "survives" and therefore `>=` for destruction. **The two arms compare
+differently.** The static arm is a 32-bit **signed** compare of two
+zero-extended 16-bit words, which cannot go negative and cannot wrap. The
+instance arm is a 16-bit **unsigned** compare of the accumulated word against
+the capacity, made after a 16-bit add — so an accumulator that wrapped would
+read as a large unsigned value and destroy the feature rather than survive.
+No stock content reaches that edge. Ignition takes
 precedence over damage: a flammable feature hit by a weapon with a nonzero
 firestarter never accumulates damage on that hit.
 
-**Established fact:** Ignition allocates burn state, selects a random spark deadline through one draw of `simulationRandom(half) + half` where `half = sparktimeTicks >> 1` and `sparktimeTicks` is the parsed `sparktime` **seconds × 30, truncated to a 16-bit integer** — the stock value 5 gives 75..149 visits ([05 R-FEAT-01 §9]) — and emits a treeburn/fire event. The feature phase runs every simulation tick; animation advance and burn countdown decrement run every tick; only smoke emission is gated on `globalTick % 3 == 0`.
+**Established fact:** Ignition allocates burn state, selects a random spark deadline through one draw of `simulationRandom(half) + half` where `half = sparktimeTicks >> 1` and `sparktimeTicks` is the parsed `sparktime` **seconds × 30, truncated to a 16-bit integer** — the stock value 5 gives 75..149 visits ([05 R-FEAT-01 §9]) — and emits a treeburn/fire event. The sum is added and stored as a **byte**, so a `sparktime` past roughly 8.5 seconds wraps modulo 256 instead of producing a long countdown; every shipped feature is far below that. The feature phase runs every simulation tick; animation advance and burn countdown decrement run every tick; only smoke emission is gated on `globalTick % 3 == 0`.
 
-**Established fact:** Fire spread uses the candidate's spread chance and simulation RNG, scans at most 48 candidates in a 7 by 7 window excluding the origin in row-major order, and makes five cumulative wind-direction attempts that collapse to no draws at zero wind. Drawing occurs only after every cheap legality check (off-map, empty, already attached, not flammable). Spread consults the candidate's own `spreadchance`, never the burning feature's. Burn weapons route back through the ordinary projectile and area-damage subsystem after both spread passes: the burn weapon's impact is built as a synthetic projectile-shaped record with a NULL shooter and a zeroed side byte and pushed through the ordinary area enumeration, so burn-weapon damage awards no veterancy and no kill credit; the friendly/enemy damage-sum classification compares side zero against each recipient.
+**Established fact:** Fire spread uses the candidate's spread chance and simulation RNG, scans at most 48 candidates in a 7 by 7 window excluding the origin in row-major order, and makes five cumulative wind-direction attempts that collapse to no draws at zero wind. Drawing occurs only after every cheap legality check (off-map, empty, already attached, not flammable). Spread consults the candidate's own `spreadchance`, never the burning feature's. Burn weapons route back through the ordinary projectile and area-damage subsystem after both spread passes: the burn weapon's impact is built as a synthetic projectile-shaped record — 107 zeroed bytes carrying the weapon definition, the burning cell's point, a **NULL shooter** and the **neutral side value 10**, the same value the common initializer gives a shooterless projectile — and pushed through the ordinary area enumeration. Three consequences follow, all per `[R-DMG-01 §9]`: its damage gate indexes the never-occupied eleventh player row, whose zero occupancy word is the branch that always routes damage, so a burn weapon is never gated out; the friendly/enemy damage-sum classification compares side 10, which matches no owner byte, so **every** recipient classifies as enemy; and the null shooter means no veterancy and no kill credit, and no feedback event either. Encoding the side as 0 instead would select a real player row — one that skips damage when its control byte says remote — and would classify player 0's units as friendly.
 
 **Established fact:** A burn ends only when the burn animation finishes. Advancing past the last frame of a non-looping sequence clears the animation pointer, and the same feature visit clears the burning cell and stamps the `featureburnt` successor when one is linked. The countdown fires one spread and burn-weapon event and then stays at zero; it does not end the burn. A looping sequence would burn forever, but the loader forces the runtime loop byte to zero for every shipped burn sequence, so all 79 shipped `seqnameburn` features have finite lifetimes (46-282 visits). Burning filename-based features cannot be reclaimed and are immune to further blast-damage accumulation.
 
 **Established fact:** Document 05 owns feature lifecycle; the reproduction
 consumer is recorded here because its draws come from the simulation RNG. The
-walker sits at the TOP of the feature phase and visits exactly one cell per
+walker is the feature phase's **second** block — the phase opens with a loop
+over feature *definitions* that advances two animation cursors each and draws
+nothing — and it visits exactly one cell per
 tick in descending order; on wrap its cursor stores width×height−1 and skips
 evaluation, so the LAST cell is never scanned. Eligibility requires the
 feature anchor index below the reserved sentinel and the cell's animation/status
@@ -5695,9 +5706,15 @@ trail-style puff and then retires silently — a flags-only removal with no
 sound, no shake, no explosion art, and no damage. Burn-blow expiry routes into
 the full central impact instead.
 
-**Established fact:** End puff (end-smoke) is LAND-BRANCH-ONLY in the central
-impact and REPLACES the explosion GAF art; sound and damage are unaffected.
-Water-branch deaths ignore end smoke entirely.
+**Established fact:** End puff (end-smoke) is tested only on the central
+impact's **land arm**, and there it REPLACES the explosion GAF art; sound and
+damage are unaffected. "Land arm" here is the *sound* predicate, not the cell
+alone: the arm is selected by `water cell AND no direct unit target`, and the
+art-holder choice rides the same predicate. So a direct hit on a unit standing
+in water takes the land arm — hit sound, end smoke honoured, land art holder —
+while the explosion allocator still receives the water flag computed from the
+cell, so that impact spawns no land dust (`[R-WFX-01 §2]`). Only a
+terrain-only water impact ignores end smoke.
 
 **Established fact:** Central-impact event order is fixed: (1) camera shake;
 (2) impact-sound selection — the weapon hit sound for land and direct-target

@@ -61,6 +61,7 @@ func constructionOrderGateFixture(t *testing.T) (*Manager, *units.World, *units.
 		Profile:           &Profile{Weight: map[string]int32{productDef.CanonicalKey: 100}, Limit: map[string]int32{}},
 		Catalog:           cat,
 		Terrain:           terrain,
+		OrderBinding:      aiFixtureOrderBinding(cat, &sim),
 		RNG:               &sim,
 		GroupConstruction: []pool.Handle{h},
 		QueueBuildTyped: func(BuildRequest) error {

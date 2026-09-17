@@ -97,12 +97,17 @@ func ScoreInputsFromEconomy(econ *economy.Service, player uint8) ScoreInputs {
 // Evaluate in float32, trunc toward zero [01 §8] [INVARIANTS I3]; the x87
 // control-word residual is the file-level platform-residual marker.
 func energyRaw(in ScoreInputs) int32 {
-	capped := in.CapEnergy
-	if capped > 1000 {
-		capped = float32(1000) // [08] min(cap,1000) [PLAN 11 C6]
+	// The capacity is truncated toward zero to an INTEGER before the clamp, and
+	// the clamped integer is converted back to a float for the subtraction; the
+	// clamp is an integer compare, not a float one [08 R-P0-05 §3][I3]. A
+	// fractional capacity therefore loses its fraction before the difference is
+	// taken — clamping the float and subtracting can differ by one.
+	cappedUnits := numeric.TruncateFloat32ToLow32(in.CapEnergy)
+	if cappedUnits > 1000 {
+		cappedUnits = 1000 // [08 R-P0-05 §3] min(trunc(cap),1000)
 	}
-	diff := capped - in.CurEnergy   // float32
-	scaled := diff * float32(0.125) // float32
+	diff := float32(cappedUnits) - in.CurEnergy // float32
+	scaled := diff * float32(0.125)             // float32
 	if scaled < 0 {
 		scaled = 0
 	}
@@ -120,11 +125,12 @@ func energyRaw(in ScoreInputs) int32 {
 
 // metalRaw computes the metalRaw term exactly as written [PLAN 11 C6] [08].
 func metalRaw(in ScoreInputs) int32 {
-	capped := in.CapMetal
-	if capped > 500 {
-		capped = float32(500) // [08] min(cap,500) [PLAN 11 C6]
+	// Same truncate-then-clamp order as energyRaw [08 R-P0-05 §3][I3].
+	cappedUnits := numeric.TruncateFloat32ToLow32(in.CapMetal)
+	if cappedUnits > 500 {
+		cappedUnits = 500 // [08 R-P0-05 §3] min(trunc(cap),500)
 	}
-	diff := capped - in.CurMetal
+	diff := float32(cappedUnits) - in.CurMetal
 	scaled := diff * float32(0.25)
 	if scaled < 0 {
 		scaled = 0

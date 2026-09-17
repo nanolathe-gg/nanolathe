@@ -1211,6 +1211,19 @@ the published offset to the camera.
   unit while the lower plate cannot overwrite its higher surfaces. This policy
   applies to both executors and uses no depth bias.
 
+* **The burning-debris fire effect is stepped by the tick, not by the frame.**
+  Retail creates one fire container per rendered frame per burning piece, four
+  CRT draws each `[03 R-FX-01 §3]`, and those draws come out of the one
+  main-thread CRT stream that retail's wind interval, meteor scheduler and
+  skirmish victory timer also read `[01 §7.5]` `[01 §7.6]`. Retail's own
+  wind changes, meteor strikes and victory instant are therefore a function of
+  its frame rate. Nanolathe does not clone that: the session steps debris once
+  per committed tick, and the visual trail family that would follow retail's
+  per-frame cadence lives in the client on a private CRT copy. This is
+  a deliberate departure — cloning it would make our own runs unreproducible
+  from their seed pair — and it is the determinism half of the admission-cadence
+  divergence §3.2's debris-trail store states in density terms [I4] [I6].
+
 * **One window backend replaces two.** Retail has a GDI windowed path and a
   DirectDraw fullscreen path `[03 §4.1]` `[03 §4.2]`; Nanolathe has one
   Ebitengine loop presenting a software framebuffer. The fixed logical size and

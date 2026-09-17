@@ -184,8 +184,18 @@ draw per animation-frame advance (the next frame's delay, drawn as half to
 full of the authored delay); the flame-stream segments spend one draw per
 segment (random start frame); the impact sprinkle spends three draws per spawn
 (per-axis jitter); the strip-7 trail spends none. The composer-time draw
-entries consume no draws. All of this randomness is presentation-stream only;
-the simulation Park–Miller stream is never touched by phase 11.
+entries consume no draws. All of this randomness is **CRT-stream only**; the
+simulation Park–Miller stream is never touched by phase 11.
+
+The drawn *values* are presentation, but the draw *count* is not. The CRT
+stream is one per-thread state, and the wind interval, the meteor scheduler
+and the skirmish victory-timer arm read that same state (`[01 §7.5]`,
+`[01 §7.6]`). Phase 11 of one tick advances the stream before phase 5 of the
+next, so a container or sub-record that lives one tick longer — or one the
+1000-slot shared pool of `[R-FX-02 §4]` refuses, which spends no draws at all —
+moves every later wind change, meteor strike and victory instant. Anything
+that decides a strip lifetime is therefore a determinism input even though
+nothing it produces is ever read by the simulation.
 
 #### R-LAYER §3 — the wreck-smoke trigger is the corpse finalizer's land path
 
@@ -2690,13 +2700,17 @@ it.** The tested bit is the requesting player's mapping bit; hard building
 blocking happens at the movement commit validator, as [R-DOC04-B] itself
 states.
 
-**Complete writer census.** Exactly three write sites exist:
+**Writer census.** Four write sites exist:
 
 1. **Map load.** The terrain loader allocates the array and zero-fills it
    (before any battle state exists).
 2. **The bulk wipe-and-rebuild.** At battle entry (after mode setup) and —
    inside phase 5 — only in the commander-spawn and commander-defeat branches
-   ([01 §4.4]), never per tick. It fills the whole grid from mode-word bit 0
+   ([01 §4.4]), never per tick. **Its word-grid fill is conditional**: the
+   routine takes a history-reset argument and skips the whole-grid fill when
+   that argument is zero (see [R-VIS-01 §1]); the per-player byte-grid refill
+   below it runs on every invocation. When it does run it
+   fills the whole grid from mode-word bit 0
    (all-zero when the history/mapping mode is enabled — nothing explored yet —
    all-ones when disabled, the always-visible mode), refills every active
    player's per-player byte grid from mode-word bit 1 (one everywhere when the
@@ -2710,9 +2724,20 @@ states.
    dirty-checked: a unit whose stored stamp cell and sight range are unchanged
    writes nothing; otherwise the change path first unpublishes the old
    byte-grid coverage, then re-stamps the new coverage, and the stamp ORs the
-   unit's **owner player's** bit into each covered tile's word. The word grid
+   unit's **owner player's** bit into each covered tile's word. The coverage
+   raster is one routine carrying **three** separate 16-bit store sites, not
+   one. The word grid
    is never decremented — bits persist until a bulk rebuild (mapping memory,
    not current sight; current sight lives in the per-player byte grids).
+4. **The two-slot mapping-share routine.** It walks the whole grid tile by
+   tile and, for every tile already carrying a **source** player slot's bit,
+   ORs a **destination** player slot's bit in — an idempotent copy of one
+   player's explored memory into another's, with no sight, unit or feature
+   input. It has exactly two static callers and no data reference: the
+   in-battle `MAPINFO` console command (which passes the local player's slot
+   and the command's argument slot) and one arm of the in-battle
+   message/command dispatcher. Neither is on an ordinary single-player path,
+   and Nanolathe implements no mapping-share path.
 
 **What does not write it.** Unit creation, death/wreck conversion,
 construction completion, and feature spawn/remove/reclaim have **no write
@@ -2720,10 +2745,23 @@ site**: a newly created unit stamps at its first sweep that reaches it (a
 building completed during the unit phase shows up in the next tick's phase-5
 sweep); a dead unit merely stops being swept and its already-mapped bits
 persist, which is the explored-memory behavior the idempotent-OR rule
-produces; features never touch the grid at all. A bounded image-wide census
-backs the closure: the raster that publishes bits is reached only from the
-per-unit stamp and the bulk rebuild, and no other function in the image
-writes through the grid's base pointer.
+produces; features never touch the grid at all. The defensible closure is
+therefore **no unit, feature, construction or occupancy path writes the
+grid** — which is what the paragraph above needs — rather than "no other
+function writes it at all": the raster that publishes bits is reached only
+from the per-unit stamp and the bulk rebuild, and the only further writer is
+the command-driven mapping share of site 4.
+
+**Unknown — whether the writer census is closed at four.** The scan behind it
+is exhaustive for accesses that name the grid pointer's own displacement, but
+a routine holding the map record's address in a register reaches the same
+field through a register-relative offset, which is how the loader's zero fill
+(site 1) is itself spelled. A targeted scan of that form found one further
+site, and it is a **read** inside the class-layer stamp. So the count is at
+least four and no unit/feature path is among the extras. *Decider:* a full
+enumeration of the register-relative accesses to the map record's grid
+pointer, classifying each as read or write. The same enumeration would close
+[R-TERR-01 §7]'s read side.
 
 **Same-tick ordering.** The path scheduler runs first in phase 5, before any
 player's stamp sweep, so a tick's path requests consume the previous tick's
@@ -2789,8 +2827,12 @@ only its three visibility fields are named here.
 **Polarity, pinned by the bulk rebuild's fill constants.** The wipe-and-
 rebuild (`[R-LAYER §1]` write site 2) fills the mapping word grid with the byte
 `((-((mode & 1) != 0)) & 1) - 1` and every eligible player's current-sight byte
-grid with `(~(mode >> 1)) & 1`. Both are unconditional, so they read the
-polarity out directly:
+grid with `(~(mode >> 1)) & 1`. The **byte-grid refill is unconditional**; the
+**word-grid fill is not** — it is skipped entirely unless the refresh's
+history-reset argument is non-zero, which is why `LOS` and `LOSType` leave
+explored history intact while `Mapping` and `NowISee` wipe it (the paragraph
+below states which command passes what). Both fills are plain byte fills over
+the whole allocation, so they still read the polarity out directly:
 
 | Bit | Value | Grid fill at rebuild | Meaning |
 |---|---|---|---|
@@ -2887,8 +2929,12 @@ The mode-dependent word grid of §3.1 item 2 **is** the per-player mapping
 memory: allocated at map load as `Width × Height / 2` bytes and zeroed,
 serialized under the save section name `Mapping` (`[R-PATH-01 §2]`), filled
 at the bulk rebuild with all-ones when the session's *Mapping* option bit is
-clear and left at zero when it is set (`[R-VIS-01 §1]`), and OR'd with the
-viewing player's slot bit by exactly one writer as tiles become seen. Its
+clear and left at zero when it is set (`[R-VIS-01 §1]`, whose word-grid fill
+is itself gated on the refresh's history-reset argument), and OR'd with a
+player's slot bit as tiles become seen by the per-unit coverage raster — the
+only runtime bit writer in ordinary play, but not the array's only writer:
+`[R-LAYER §1]` carries the four-site census, including the command-driven
+mapping-share routine that copies one player slot's bits into another's. Its
 only simulation readers are the per-player gates of `[R-LAYER §1]` and the
 path search's passability probe, which returns its "unexplored" value 2 —
 treated as passable by every consumer — when the requesting player's bit is
@@ -2917,7 +2963,7 @@ call in it, and nothing in the loader deletes registry values. Doc 08's
 
 Sight distance quantizes differently in the two raster algorithms selected by
 mode-word bit 2. In sprite-mask mode the sight radius quantizes to
-`floor(radius / 32) - 5`, clamped into the authored visibility-mask shape
+`trunc(radius / 32) - 5`, clamped into the authored visibility-mask shape
 range; the selected shape supplies width, height, anchor offsets, a
 transparent palette sentinel, and row-major mask bytes. In terrain-ray mode
 the radius quantizes by signed division by 32 **without** the -5 offset and
@@ -2941,8 +2987,10 @@ counts; its frame counts (22 entries, varying opacity) do not match the counted
 ten-frame table.
 
 **Quantization is common, then biased differently.** Both rasters start from
-the same floor `q = floor(sightdistance / 32)` computed with signed floor
-division. Sprite-mask mode then forms `idx = clamp(q - 5, 0, nsMask-1)` where
+the same quotient `q = sightdistance / 32`, computed as a signed divide that
+**truncates toward zero** (the sign-bias-then-shift form, not an arithmetic
+shift), so it is floor division only for the non-negative ranges stock content
+authors and rounds the other way for a negative one. Sprite-mask mode then forms `idx = clamp(q - 5, 0, nsMask-1)` where
 `nsMask` is the ten-frame count; terrain-ray mode forms `g = clamp(q, 0,
 nsRay-1)` where `nsRay` is the declared LOS.TDF table count. The `-5` bias is
 therefore sprite-only.
@@ -2950,7 +2998,7 @@ therefore sprite-only.
 **The -5 is an index bias, not a radius reduction.** Shape *k* has radius
 `k + 5` tiles, so the subtraction that selects the frame is undone by the frame
 geometry: a unit whose `sightdistance` quantizes to index *k* covers `k + 5`
-tiles, i.e. `floor(radius / 32)` tiles. Reading the index as the radius shrinks
+tiles, i.e. `trunc(radius / 32)` tiles. Reading the index as the radius shrinks
 every unit's sight by five tiles. The clamp is into `0 .. ns-1` where `ns` is the
 shape count carried by the resource, and radii below the first shape clamp up to
 index 0 rather than publishing nothing.
@@ -3127,9 +3175,10 @@ path shares grids by other means.
 **Cloak is a predicate early-out, not a mask edit.** Cloaking does not erase or
 dim the LOS mask; the visibility predicate returns not-visible for cloaked
 units until an exception applies — most notably proximity breach within the
-cloaking unit's authored minimum-cloak distance (`mincloakdistance`, the
-definition field whose stock-typical values compare squared horizontal distance
-against it). Stealth and init-cloaked definition flags feed the same predicate
+cloaking unit's **compiled** minimum-cloak distance (`mincloakdistance`, the
+definition field whose squared value the horizontal distance is compared
+against; the compiler substitutes 80 when a cloak-capable definition leaves it
+at 0, `[R-VIS-01 §4]` pass 4). Stealth and init-cloaked definition flags feed the same predicate
 state.
 
 Radar, sonar, and jammers never author this mask: the sensor phase rasterizes
@@ -3689,9 +3738,12 @@ breach test is "an enemy I could see up to a second ago is within
 `mincloakdistance`", not "an enemy is within `mincloakdistance`". The
 definition flag is not an authored key: it is derived at parse time as
 `cloakcost > 0.0` (strict, on the parsed float). The distance is a plain 32-bit
-signed square of the authored integer, so an unauthored `mincloakdistance` of
-0 makes the test `d² <= 0` and effectively never fires. The pass does not test
-whether the unit is currently cloaked.
+signed square of the **compiled** value — and for a cloak-capable definition
+that value is never 0: the unit compiler substitutes **80** whenever the
+can-cloak bit is set and `mincloakdistance` compiled to 0
+(`[02 §5]` "Three derived fields the key table does not show"). So a
+cloak-capable definition that omits the key breaches at 80 world units, not
+never. The pass does not test whether the unit is currently cloaked.
 
 **Pass 5 — the seen probe.** Over every unit slot from 1 to the end of the
 pool, for units that are alive, whose seen bit is **clear**, and whose
@@ -3852,12 +3904,15 @@ per-tick cost arithmetic is doc 05's.
 | `init_cloaked` | definition flag word bit | absent → 0 | seeds the runtime cloak-wanted status bit at unit construction |
 | `cloakcost` | 32-bit float | absent → 0 | the per-tick cloak upkeep charge; **also** derives the can-cloak flag |
 | `cloakcostmoving` | 32-bit float | absent → the truncated `cloakcost` | the moving-unit upkeep charge |
-| `mincloakdistance` | signed 16-bit | absent → 0 | the proximity breach radius of `[R-VIS-01 §4]` pass 4 |
+| `mincloakdistance` | signed 16-bit | absent or 0 → **80** on a cloak-capable definition, by the compiler's substitution (`[02 §5]`); 0 otherwise | the proximity breach radius of `[R-VIS-01 §4]` pass 4 |
 
 The can-cloak flag is **derived, not authored**: the parser sets a bit of the
 second definition flag word exactly when the parsed `cloakcost` is strictly
 greater than `0.0`. That bit is the gate on pass 4, so a definition with
-`mincloakdistance` but no `cloakcost` is never scanned.
+`mincloakdistance` but no `cloakcost` is never scanned. It is also the gate on
+the compiler's `mincloakdistance` substitution above, which runs at startup and
+again at every battle entry, so the compiled radius a clone must reproduce is
+80 for every cloak-capable definition that leaves the key at 0.
 
 **The init-cloak spawn writer is a single site, not a walk.** The unit
 constructor copies the `init_cloaked` definition bit into the runtime
@@ -6949,8 +7004,12 @@ is what gives the spray its cone.
 Every tick, a record spawns **five particles**, each costing **six CRT draws** —
 three to pick a point in the source box and three to pick a point in the target
 box, each as `origin + rand()×extent/0x8000`. The draws come from the **CRT
-presentation stream**, never the simulation stream, so nano presentation cannot
-perturb lockstep. A particle's lifetime is `trunc(distance/4)` ticks, taken as a
+stream**, never the simulation stream, so nano presentation cannot perturb
+lockstep. It does move the CRT stream's *position*: a record whose five
+particles are all discarded as zero-length has an empty list at its next
+update, so it is destroyed before its second spawn tick and that spawn's
+thirty draws are never spent — and the wind interval, meteor scheduler and
+victory-timer arm inherit the shift (`[01 §7.5]`). A particle's lifetime is `trunc(distance/4)` ticks, taken as a
 signed sixteen-bit count from a floating-point distance: it travels four whole
 world units per tick, and a zero-length hop is discarded before the particle is
 written. Its colour is `0xa0 | nibble`, the nibble starting at `1 + (spawn index

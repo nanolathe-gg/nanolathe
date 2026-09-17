@@ -1154,10 +1154,13 @@ runtime's float parser, with that tokenizer's comment rule
 fragment with kinds unfiltered, folding into the types the file did not lock
 `[08 R-AI-01 §18]`.
 
-**C5 — the candidate gates.** Applied before scoring: an energy stock below 50,
-a metal stock below 25, the per-definition gate bit, and the profile limit —
-which rejects type index zero and any index at or above the catalog count
-before it reads the limit vector. The base-menu compiler preserves authored
+**C5 — the candidate gates.** Three run before any of the score arithmetic: an
+energy stock below 50, a metal stock below 25, and the per-definition gate bit.
+The profile limit is the fourth and runs **after** the two pressure terms and
+their ladders, before the mix — it rejects type index zero and any index at or
+above the catalog count before it reads the limit vector. The pressure block
+between them draws nothing and writes nothing, so the placement is an ordering
+to keep rather than an observable `[08 R-P0-05 §3]`. The base-menu compiler preserves authored
 names, so selection skips unresolved products individually without a draw;
 resolved definitions still require initialized class vectors. A third hard gate
 rejects a downloadable candidate when the manager received authoritative session kind one at battle
@@ -1173,10 +1176,10 @@ mismatch: no re-draw, no runner-up, and the draw is still spent
 resource inputs in their established single-precision representation:
 
 ```
-energyRaw = trunc(max(0, (min(cap, 1000) - curEnergy) * 0.125))
+energyRaw = trunc(max(0, (min(trunc(cap), 1000) - curEnergy) * 0.125))
           + (netEnergy < 1 ? 20 : 0)
           + (prodEnergy < 50 ? 100 : prodEnergy < 200 ? 10 : 0)
-metalRaw  = trunc(max(0, (min(cap, 500) - curMetal) * 0.25))
+metalRaw  = trunc(max(0, (min(trunc(cap), 500) - curMetal) * 0.25))
           + (netMetal < 1 ? 20 : 0)
           + (prodMetal < 3 ? 100 : prodMetal < 5 ? 20 : 0)
 metalMix  = clamp(metalRaw, 0, 100)
@@ -1184,6 +1187,12 @@ energyMix = clamp(energyRaw - metalMix, 0, 100)
 otherMix  = max(0, 100 - metalMix - energyMix)
 score     = trunc((class0*otherMix + class1*metalMix + class2*energyMix) * weight / 10000)
 ```
+
+Each capacity is truncated toward zero to an integer **before** the 1000/500
+clamp, and the clamped integer is converted back to a float for the
+subtraction — clamping the float and truncating only the product differs by one
+whenever a capacity carries a fraction, and the difference reaches the reservoir
+draw bound through the score `[08 R-P0-05 §3]` [I3].
 
 The signed net-energy query reads the live wind scalar and the immutable map
 tidal strength, so a gated recompute observes the current wind rather than a
@@ -1219,7 +1228,9 @@ by the contract's slack; a failure does **not** fall through to scatter. The sca
 helper attempts up to 30 trials around the origin, drawing up to four values
 per trial, selecting its lattice region by the definition's water-depth sign,
 and comparing the footprint's per-cell metal sum against surface metal ×
-footprint X × footprint Z × 2. Success requires the yard and occupancy
+footprint X × footprint Z × 2 — a trial is **accepted at or below** that limit
+and retried above it, which is what keeps ordinary buildings off metal patches.
+Success requires the yard and occupancy
 validator to report placeable `[08 R-AI-03 §2]` `[08 R-AI-03 §3]`
 `[08 R-AI-03 §4]` `[08 R-AI-03 §4-A]` `[08 R-AI-03 §5]` `[08 R-AI-03 §7.4]`
 `[08 "Placement root and search helpers"]`.
@@ -1250,6 +1261,30 @@ manager mapping is established by direct caller tracing
 through the command resolver and the order descriptor registry. There is no
 privileged mutation path into unit or economy state, and no stockpile or
 transfer shortcut `[04 R-ORD-02 §1]` `[08 R-AI-01 §7]`.
+
+The construction task's mobile build is one of those resolved orders, not a
+queue call that bypasses resolution: it is command code 14 issued **without**
+the queue modifier, so code 14's gate applies — a non-empty compiled build list
+and a live mover — and the issue replaces rather than appends. Only the rally
+task branches on the resolver's answer. The other three task submissions and
+the group broadcast do not, so a member whose definition fails the issued code's
+capability gate has its unprotected front-segment records purged and is left
+idle; a queued issue appends the sentinel and leaves the records alone.
+
+A rejected resolution is therefore not a special case in the submission helper:
+the sentinel is inserted through the same producer insertion, with the same
+unit, target, position and trailing pair, because retail's insertion call does
+not change when the resolver writes zero. The identity is simply descriptor row
+zero, whose handler returns complete while reading nothing, writing nothing and
+drawing nothing, so the record is freed on the pump pass that reaches the head
+and the purge is what lasts `[04 §3.4]` `[04 R-ORD-01 §12]` `[08 R-AI-01 §3]`
+`[08 R-AI-01 §9]`.
+
+**Pass two's centre is mutable within the pass.** A capture-capable member
+writes its own height into the shared strategic-centre local, not into the
+per-member target copy, and the write survives to every later member of the same
+pass — where it can flip the three-way distance branch and with it the pass's
+random-draw count `[08 R-AI-01 §3]`.
 
 ### 3.4 Not implemented
 

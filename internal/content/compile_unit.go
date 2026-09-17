@@ -106,10 +106,10 @@ type UnitDef struct {
 	TidalGenerator  float64 // tidalgenerator floating default 0 [02 "Unit record"]
 	EnergyStorage   float64 // energystorage floating default 0 [02 "Unit record"]
 	MetalStorage    float64 // metalstorage floating default 0 [02 "Unit record"]
-	MakesMetal      int32   // makesmetal integer default 0 [02 "Unit record"]
+	MakesMetal      int32   // makesmetal integer default 0, wrapped to an unsigned 8-bit store [02 R-KEYS-01 §5]
 	BuildTime       int32   // buildtime integer default 0 [02 "Unit record"]
-	WorkerTime      int32   // workertime integer default 0 [02 "Unit record"]
-	HealTime        int32   // healtime integer default 0 [02 "Unit record"]
+	WorkerTime      int32   // workertime integer default 0, wrapped to an unsigned 16-bit store [02 R-KEYS-01 §5]
+	HealTime        int32   // healtime integer default 0, wrapped to an unsigned 16-bit store [02 R-KEYS-01 §5]
 	CloakCost       int32   // cloakcost integer stored as floating default 0 [02 "Unit record"]
 	CloakCostMoving int32   // cloakcostmoving integer stored as floating default cloakcost just read [02 "Unit record"]
 
@@ -122,34 +122,34 @@ type UnitDef struct {
 	DamageModifier      int32 // damagemodifier fixed default 65536 (1.0) [02 "Unit record"]
 	MoveRate1           int32 // moverate1 fixed default twice maxvelocity just read [02 "Unit record"]
 	MoveRate2           int32 // moverate2 fixed default twice maxvelocity just read [02 "Unit record"]
-	TurnRate            int32 // turnrate integer default 0 [02 "Unit record"]
-	Waterline           int32 // waterline integer default 0 [02 "Unit record"]
+	TurnRate            int32 // turnrate integer default 0, wrapped to an unsigned 16-bit store [02 R-KEYS-01 §5]
+	Waterline           int32 // waterline integer default 0, wrapped to an unsigned 8-bit store [02 R-KEYS-01 §5]
 	MinWaterDepth       int32 // scratch-profile signed-16 minimum depth; template −10000 [02 §5 "Movement class record"][04 §6.1 R-DOC04-A]
 	MaxWaterDepth       int32 // scratch-profile signed-16 maximum depth; template 10000 [02 §5 "Movement class record"][04 §6.1 R-DOC04-A]
 	MaxSlope            int32 // scratch-profile byte slope after the ordered clamps [02 §5 "Movement class record"]
 	BadSlope            int32 // scratch-profile byte soft land-slope threshold [02 §5 "Movement class record"]
 	MaxWaterSlope       int32 // scratch-profile byte water slope copied with MaxSlope [02 §5 "Movement class record"]
 	BadWaterSlope       int32 // scratch-profile byte soft water-slope threshold [02 §5 "Movement class record"]
-	CruiseAlt           int32 // cruisealt integer default 0 [02 "Unit record"]
-	TransportSize       int32 // transportsize integer default 0 [02 "Unit record"]
-	TransportCapacity   int32 // transportcapacity integer default 0 [02 "Unit record"]
-	BuildAngle          int32 // buildangle integer default 0 [02 "Unit record"]
-	BuildDistance       int32 // builddistance integer default 0 [02 "Unit record"]
-	SortBias            int32 // sortbias integer default 0 [02 "Unit record"]
-	ManeuverLeashLength int32 // maneuverleashlength integer default 0 [02 "Unit record"]
-	AttackRunLength     int32 // attackrunlength integer default 0 [02 "Unit record"]
-	KamikazeDistance    int32 // kamikazedistance integer default 0 [02 "Unit record"]
+	CruiseAlt           int32 // cruisealt integer default 0, wrapped to a signed 16-bit store [02 R-KEYS-01 §5]
+	TransportSize       int32 // transportsize integer default 0, wrapped to an unsigned 8-bit store [02 R-KEYS-01 §5]
+	TransportCapacity   int32 // transportcapacity integer default 0, wrapped to an unsigned 8-bit store [02 R-KEYS-01 §5]
+	BuildAngle          int32 // buildangle integer default 0, wrapped to an unsigned 16-bit store [02 R-P28-ANG-01R §1]
+	BuildDistance       int32 // builddistance integer default 0, wrapped to an unsigned 16-bit store [02 R-KEYS-01 §5]
+	SortBias            int32 // sortbias integer default 0, wrapped to a 16-bit store [02 R-KEYS-01 §5]
+	ManeuverLeashLength int32 // maneuverleashlength integer default 0, wrapped to an unsigned 16-bit store [02 R-KEYS-01 §5]
+	AttackRunLength     int32 // attackrunlength integer default 0, wrapped to an unsigned 16-bit store [02 R-KEYS-01 §5]
+	KamikazeDistance    int32 // kamikazedistance integer default 0, wrapped to an unsigned 16-bit store [02 R-KEYS-01 §5]
 	FootprintX          int32 // footprintx integer default 0 — occupancy size in cells [fmt fbi]
 	FootprintZ          int32 // footprintz integer default 0 [fmt fbi]
 
 	// Combat and sensors [02 "Unit record"].
 	MaxDamage        int32 // maxdamage integer default 0 [02 "Unit record"]
-	SightDistance    int32 // sightdistance integer default 0 [02 "Unit record"]
-	RadarDistance    int32 // radardistance integer default 0 [02 "Unit record"]
-	SonarDistance    int32 // sonardistance integer default 0 [02 "Unit record"]
-	RadarDistanceJam int32 // radardistancejam integer default 0 [02 "Unit record"]
-	SonarDistanceJam int32 // sonardistancejam integer default 0 [02 "Unit record"]
-	MinCloakDistance int32 // mincloakdistance integer default 0 [02 "Unit record"]
+	SightDistance    int32 // sightdistance integer default 0, wrapped to a signed 16-bit store [02 R-KEYS-01 §5]
+	RadarDistance    int32 // radardistance integer default 0, wrapped to a signed 16-bit store [02 R-KEYS-01 §5]
+	SonarDistance    int32 // sonardistance integer default 0, wrapped to a signed 16-bit store [02 R-KEYS-01 §5]
+	RadarDistanceJam int32 // radardistancejam integer default 0, wrapped to a signed 16-bit store [02 R-KEYS-01 §5]
+	SonarDistanceJam int32 // sonardistancejam integer default 0, wrapped to a signed 16-bit store [02 R-KEYS-01 §5]
+	MinCloakDistance int32 // mincloakdistance integer default 0, wrapped to a signed 16-bit store; a cloak-capable definition that compiles it to 0 gets the derived 80 [02 "Unit record"]
 
 	// ModelTop is the model's top extent in whole world units, derived from
 	// objects3d/<ObjectName>.3do rather than the FBI. The visibility builder
@@ -455,10 +455,23 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 	tidalGenerator := section.FloatValue("tidalgenerator", 0)
 	energyStorage := section.FloatValue("energystorage", 0)
 	metalStorage := section.FloatValue("metalstorage", 0)
-	makesMetal := section.IntValue("makesmetal", 0)
-	buildTime := section.IntValue("buildtime", 0)
-	workerTime := section.IntValue("workertime", 0)
-	healTime := section.IntValue("healtime", 0)
+	// The record's integer fields are not uniformly 32 bits, and a narrow store
+	// is wrapped here once so the compiled definition already holds the value
+	// retail's readers see — the same rule the weapon compiler follows. The
+	// widening back to int32 is the extension that key's own readers apply, and
+	// each is named below; widths and extensions are tabulated per key in
+	// [02 R-KEYS-01 §5]. No stock definition authors a value outside its
+	// field's range, so this is what third-party content sees, not a change to
+	// the shipped catalog.
+	makesMetal := int32(uint8(section.IntValue("makesmetal", 0))) // 8-bit store, read zero-extended [05 R-PROD-01 §1]
+	buildTime := section.IntValue("buildtime", 0)                 // 32-bit store [02 R-KEYS-01 §5]
+	// workertime is a 16-bit store its readers zero-extend before the
+	// build-rate divide [05 "Construction arithmetic"].
+	workerTime := int32(uint16(section.IntValue("workertime", 0)))
+	// healtime is a 16-bit store its one reader zero-extends explicitly before
+	// scaling it and dividing by the tick rate; the same reader first tests the
+	// bare word for zero [02 R-KEYS-01 §5].
+	healTime := int32(uint16(section.IntValue("healtime", 0)))
 	cloakCost := section.IntValue("cloakcost", 0)
 	// cloakcostmoving default is the value just read for cloakcost [02 "Unit record"].
 	cloakCostMoving := section.IntValue("cloakcostmoving", cloakCost)
@@ -472,8 +485,12 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 	damageModifier := section.FixedValue("damagemodifier", 65536) // 1.0 [02 "Unit record"]
 	moveRate1 := section.FixedValue("moverate1", maxVelocity*2)   // twice maxvelocity just read [02 "Unit record"]
 	moveRate2 := section.FixedValue("moverate2", maxVelocity*2)   // [02 "Unit record"]
-	turnRate := section.IntValue("turnrate", 0)
-	waterline := section.IntValue("waterline", 0)
+	// turnrate is a 16-bit store its reader zero-extends before the turn
+	// arithmetic [04 R-MOV-01 §2].
+	turnRate := int32(uint16(section.IntValue("turnrate", 0)))
+	// waterline is an 8-bit store; every reader zero-extends it or masks the
+	// result of byte arithmetic on it back to a byte [04 R-MOV-01 §9].
+	waterline := int32(uint8(section.IntValue("waterline", 0)))
 	// Unit discovery precedes movement-class linking, so compile the per-unit
 	// scratch record now; linking replaces it when the authored class resolves,
 	// while an absent or unresolved name retains it. Reuse the CLASS reader so
@@ -487,26 +504,44 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 	badSlope := scratchMovement.BadSlope
 	maxWaterSlope := scratchMovement.MaxWaterSlope
 	badWaterSlope := scratchMovement.BadWaterSlope
-	cruiseAlt := section.IntValue("cruisealt", 0)
-	transportSize := section.IntValue("transportsize", 0)
-	transportCapacity := section.IntValue("transportcapacity", 0)
-	buildAngle := section.IntValue("buildangle", 0)
-	buildDistance := section.IntValue("builddistance", 0)
-	sortBias := section.IntValue("sortbias", 0)
-	maneuverLeashLength := section.IntValue("maneuverleashlength", 0)
-	attackRunLength := section.IntValue("attackrunlength", 0)
-	kamikazeDistance := section.IntValue("kamikazedistance", 0)
+	// cruisealt is a 16-bit store, and it is the one in this group whose
+	// readers SIGN-extend it — every flight-height reader does [04 R-AIR-01 §1].
+	cruiseAlt := int32(int16(section.IntValue("cruisealt", 0)))
+	// transportsize and transportcapacity are 8-bit stores; the capacity's
+	// reader zero-extends it before the signed load-count compare [04 §10.2].
+	transportSize := int32(uint8(section.IntValue("transportsize", 0)))
+	transportCapacity := int32(uint8(section.IntValue("transportcapacity", 0)))
+	// buildangle is a 16-bit store used as an UNSIGNED bound: its readers hand
+	// the 16-bit word straight to the simulation-RNG sampler and halve it with
+	// a logical shift [02 R-P28-ANG-01R §1].
+	buildAngle := int32(uint16(section.IntValue("buildangle", 0)))
+	// builddistance is a 16-bit store its reach test zero-extends
+	// [05 "Construction arithmetic"].
+	buildDistance := int32(uint16(section.IntValue("builddistance", 0)))
+	// sortbias is a 16-bit store with no reader in the export beyond the
+	// record copy, so only the store width is observable; the extension is
+	// taken as unsigned with the rest of this group [02 R-KEYS-01 §5].
+	sortBias := int32(uint16(section.IntValue("sortbias", 0)))
+	// maneuverleashlength, attackrunlength and kamikazedistance are 16-bit
+	// stores every reader zero-extends; the kamikaze one is additionally
+	// compared unsigned against its floor [04 R-AIR-01 §9][04 R-SPEC-01 §1].
+	maneuverLeashLength := int32(uint16(section.IntValue("maneuverleashlength", 0)))
+	attackRunLength := int32(uint16(section.IntValue("attackrunlength", 0)))
+	kamikazeDistance := int32(uint16(section.IntValue("kamikazedistance", 0)))
 	footprintX := scratchMovement.FootprintX
 	footprintZ := scratchMovement.FootprintZ
 
 	// Combat and sensors [02 "Unit record"].
-	maxDamage := section.IntValue("maxdamage", 0)
-	sightDistance := section.IntValue("sightdistance", 0)
-	radarDistance := section.IntValue("radardistance", 0)
-	sonarDistance := section.IntValue("sonardistance", 0)
-	radarDistanceJam := section.IntValue("radardistancejam", 0)
-	sonarDistanceJam := section.IntValue("sonardistancejam", 0)
-	minCloakDistance := section.IntValue("mincloakdistance", 0)
+	maxDamage := section.IntValue("maxdamage", 0) // 32-bit store [02 R-KEYS-01 §5]
+	// The three sensor ranges, both jammer ranges and the cloak radius are
+	// six 16-bit stores, and every one of their readers SIGN-extends the word
+	// before squaring or scaling it [03 R-VIS-01 §4][02 R-KEYS-01 §5].
+	sightDistance := int32(int16(section.IntValue("sightdistance", 0)))
+	radarDistance := int32(int16(section.IntValue("radardistance", 0)))
+	sonarDistance := int32(int16(section.IntValue("sonardistance", 0)))
+	radarDistanceJam := int32(int16(section.IntValue("radardistancejam", 0)))
+	sonarDistanceJam := int32(int16(section.IntValue("sonardistancejam", 0)))
+	minCloakDistance := int32(int16(section.IntValue("mincloakdistance", 0)))
 
 	// Flags and postures — integer accessor default 0 booleans except standing orders default 2 [02 "Unit record"].
 	standingMoveOrder := section.IntValue("standingmoveorder", 2)
@@ -554,6 +589,22 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 	commander := storedFlag(section, "commander", false)
 	cantBeTransported := storedFlag(section, "cantbetransported", false)
 	wacky := storedFlag(section, "wacky", false) // bit 16 same word as norestrict bit15 [02 "Unit record"]
+
+	// Derived field, applied where retail applies it — in the tail of the
+	// record compiler, after every key has been read, so the compiled
+	// definition is what every consumer sees [02 "Unit record"] ("Two derived
+	// fields the key table does not show"). The gate is the derived
+	// cloak-capable bit, `cloakcost > 0` — strictly greater, so an authored
+	// zero or negative clears it — and the substitution fires only when the
+	// *stored* mincloakdistance is zero.
+	//
+	// One stock definition depends on it: a cloakable construction structure
+	// authors `cloakcost` and omits `mincloakdistance`, so retail gives it a
+	// proximity breach radius of 80 world units while an unsubstituted 0
+	// leaves a `d² <= 0` test that never breaches [03 R-VIS-01 §4] pass 4.
+	if cloakCost > 0 && minCloakDistance == 0 {
+		minCloakDistance = 80
+	}
 
 	// Raw accessor for selfdestructcountdown so we can tell authored vs absent [02 "Unit record"].
 	selfDestructCountdown, selfDestructCountdownPresent := section.RawValue("selfdestructcountdown")

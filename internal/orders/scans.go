@@ -276,9 +276,15 @@ func chooseReclaimFeature(u *units.Unit, diameter int32) (FeatureView, bool) {
 		if hasMetal && resourceFits(resources.Stock[0], resources.Capacity[0], metal.Metal) {
 			return metal, true
 		}
-		if !hasMetal {
-			return FeatureView{}, false
-		}
+		// Past the metal arm the ladder's two remaining tests are both on the
+		// ENERGY feature: no energy feature holds, an energy value that would
+		// overflow energy storage holds, and anything else reclaims the energy
+		// feature. A missing metal feature is never itself a reason to hold
+		// [04 R-ORD-01 §4]. The two readings differ exactly when there is no
+		// metal feature, an energy feature exists whose value fits, and energy
+		// is at or above 20 % of storage; on energy-rich, metal-poor maps that
+		// also moves the authoritative stream, because the spawned reclaim
+		// draws where a hold does not (I4).
 		if hasEnergy && resourceFits(resources.Stock[1], resources.Capacity[1], energy.Energy) {
 			return energy, true
 		}
@@ -309,26 +315,32 @@ func pickFeatureTournament(u *units.Unit, list []FeatureView, metal bool) (Featu
 	return list[best], true
 }
 
-// spawnPatrolRepair is the repair issuer's force-zero entry: both patrol
+// issuePatrolRepair is the repair issuer's force-zero entry: both patrol
 // callers use that form, while the researched nonzero-force form refuses
 // outright. Hold position and maneuver insert a return move beneath the
 // assist, roam inserts the assist alone, and stance 3 refuses
 // [04 R-STANCE-01 §4].
-func spawnPatrolRepair(u *units.Unit, target *units.Unit, tick uint32) bool {
+//
+// It reports the two outcomes retail keeps apart, because they end the visit
+// differently [04 R-ORD-01 §4]: whether command code 8 RESOLVED against the
+// target at all, and — only when it did — whether the issue helper accepted it.
+// An unresolvable code never reaches the helper, so the handler stays in the
+// visit and goes on to the feature pairing; a refusal by the helper ends it.
+func issuePatrolRepair(u *units.Unit, target *units.Unit, tick uint32) (resolved, accepted bool) {
 	if u == nil || target == nil {
-		return false
+		return false, false
 	}
 	id := Resolve(8, u, target, nil)
 	if id == 0 {
-		return false
+		return false, false
 	}
 	q := QueueOfUnit(u)
 	if q == nil {
-		return false
+		return true, false
 	}
 	move := u.Flags >> stanceMoveShift & stanceFieldMask
 	if move == 3 {
-		return false
+		return true, false
 	}
 	node := NewNodeForOrder(id, target.Handle, target.X, target.Y, target.Z, tick, u.Handle, false)
 	if move < 2 {
@@ -345,7 +357,14 @@ func spawnPatrolRepair(u *units.Unit, target *units.Unit, tick uint32) bool {
 		node.GuardX, node.GuardY = int16(u.X.Raw()>>16), int16(u.Z.Raw()>>16)
 	}
 	q.PushHead(id, node)
-	return true
+	return true, true
+}
+
+// spawnPatrolRepair is issuePatrolRepair for the callers that only need the
+// accepted/not-accepted verdict.
+func spawnPatrolRepair(u *units.Unit, target *units.Unit, tick uint32) bool {
+	resolved, accepted := issuePatrolRepair(u, target, tick)
+	return resolved && accepted
 }
 
 func spawnPatrolLanding(u *units.Unit, pad *units.Unit, tick uint32) bool {

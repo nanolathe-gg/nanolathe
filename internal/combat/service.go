@@ -1897,10 +1897,17 @@ func handleProjectileImpact(s *Service, h pool.Handle, p *Projectile, weapon *co
 	} else if weapon.SoundWater != "" {
 		s.emitEvent(Event{Kind: EventWaterSound, Tick: tick, Source: p.Shooter, Position: p.Pos, Sound: weapon.SoundWater})
 	}
-	if weapon.EndSmoke && !isWaterTerrain {
+	// One predicate selects the arm, and the end-smoke flag is tested INSIDE the
+	// land/direct arm, where the end puff replaces the explosion art outright
+	// [06 §13.2][06 R-WFX-01 §2]. "Land branch" in §13.2 names that arm — the
+	// same hit-sound arm selected just above — not the cell class: a direct hit
+	// on a unit standing in a water cell takes the land/direct arm, so an
+	// end-smoke weapon emits the end puff and no explosion art there, and a
+	// weapon without the flag takes the LAND art holder over water.
+	isWaterExplosion := isWaterTerrain && !hasDirectTarget
+	if weapon.EndSmoke && !isWaterExplosion {
 		s.emitEvent(Event{Kind: EventEndSmoke, Tick: tick, Source: p.Shooter, Position: p.Pos})
 	} else {
-		isWaterExplosion := isWaterTerrain && !hasDirectTarget
 		bank, graphic := impactArt(weapon, isWaterExplosion, terrain)
 		// The explosion-pool allocation does not depend on the art. Every
 		// impact allocates a record with calculated table 0 as its secondary

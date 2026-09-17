@@ -82,6 +82,10 @@ func placementWorldCoordinate(outputCell, footprint int32) numeric.Fixed {
 
 // queueExactResult queues the exact validated site through the ordinary mobile build producer [P0-07][RS-11].
 // It is the only path that mutates the order queue; no privileged write occurs.
+//
+// It is the insertion half alone. Command code 14's capability gate and the
+// non-queued issue's replacement purge belong to the construction task's issue
+// site, which runs them first — see issueMobileBuild.
 func queueExactResult(m *Manager, defKey string, res PlacementResult) error {
 	if !res.Valid {
 		return fmt.Errorf("ai: placement result is invalid")

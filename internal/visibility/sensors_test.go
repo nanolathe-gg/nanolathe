@@ -437,3 +437,36 @@ func TestProximitySourceGates(t *testing.T) {
 		t.Fatalf("a dead source is skipped, got %d", got)
 	}
 }
+
+// TestProximityDecloakUsesTheDerivedRadius is the consequence half of the
+// `mincloakdistance` derived default: a cloak-capable definition that omits the
+// key compiles to 80, not 0, so pass 4 breaches at 80 world units and only
+// there. With the old compiled 0 the `d² <= 0` test never fired and such a unit
+// never decloaked [03 R-VIS-01 §4] pass 4 [02 "Unit record"].
+func TestProximityDecloakUsesTheDerivedRadius(t *testing.T) {
+	px := func(p int64) numeric.Fixed { return numeric.Fixed(p * 65536) }
+	for _, tc := range []struct {
+		name       string
+		radius     int32
+		enemyX     int64
+		wantBreach bool
+	}{
+		{"derived radius breaches at 80", 80, 180, true},
+		{"derived radius does not breach at 81", 80, 181, false},
+		{"a compiled zero does not breach at one unit", 0, 101, false},
+	} {
+		s := newTestService(&world.Terrain{CellW: 64, CellH: 64}, ModeHistoryEnabled|ModeCurrentEnabled)
+		var cloakedStatus, enemyStatus uint32
+		var cloakedDeadline uint32
+		units := []SensorUnit{
+			{Owner: 1, Status: &cloakedStatus, Alive: true,
+				CanCloak: true, OwnerLocallySimulated: true,
+				X: px(100), Z: px(100), MinCloakDistance: tc.radius, DecloakDeadline: &cloakedDeadline},
+			{Owner: 0, Status: &enemyStatus, Alive: true, PrimaryCandidateOf: 1 << 1, X: px(tc.enemyX), Z: px(100)},
+		}
+		s.SensorTick(1000, 2, units)
+		if got := cloakedStatus&DecloakBit != 0; got != tc.wantBreach {
+			t.Fatalf("%s: decloak bit %v, want %v", tc.name, got, tc.wantBreach)
+		}
+	}
+}

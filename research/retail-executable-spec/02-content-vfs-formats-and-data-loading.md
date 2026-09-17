@@ -1355,13 +1355,35 @@ an empty `YardMap` is the terminator case at once. For a mobile unit
 (`bmcode` ≠ 0) the map pointer is null. The meaning of the cell values is
 document 05's.
 
-**Two derived fields the key table does not show.** The record's
+**Three derived fields the key table does not show.** The record's
 `maxvelocity ÷ (MaxSlope + 1)` quotient — computed in 64 bits as
 `(maxvelocity << 16) / ((MaxSlope + 1) << 16)`, truncating toward zero, so
 the result is the 16.16 velocity divided by the class's `MaxSlope` byte plus
-one and is still 16.16 — is stored beside the velocity;
-and when the cloak-capable bit (`cloakcost > 0`) is set and
+one and is still 16.16 — is stored beside the velocity. **Its only reader is
+the unit-information panel's text formatter** (`[07 §6]`), which prints it
+next to `maxvelocity`: a displacement census over the image finds the store,
+the two halves of the record-copy helper the catalog compaction uses, and that
+one reader. No simulation path reads it, so a reimplementation that never
+computes it loses nothing but the panel line (Established).
+
+Second, when the cloak-capable bit (`cloakcost > 0`, a **strict**
+single-precision compare) is set and
 `mincloakdistance` compiled to 0, the compiler stores **80** in its place.
+This runs for every definition the compiler parses, at startup and again at
+every battle entry, so a cloak-capable definition that omits the key — or
+authors it as 0 — carries a compiled breach radius of 80, never 0.
+
+Third, a **word-A flag bit (bit 16)** is set when any of `weapon1`, `weapon2`
+or `weapon3` resolved to a weapon record other than the inactive record-0
+sentinel, and cleared when all three resolved to it; `explodeas` and
+`selfdestructas` do not participate. It is the definition's "carries a real
+weapon" bit. The one located reader tests it together with the `kamikaze` bit
+(word A bit 28) as a single mask — a "this definition can do damage" gate —
+before a single-precision comparison; docs 04 and 06 own that gate's
+behaviour. **Unknown:** whether that site is its only consumer (an indirect
+call cannot be seen by a static census; the decider is a reader census of
+word-A bit 16 across the export).
+
 `selfdestructcountdown`: absent → 5 in the 3-bit field (bits 20–22 of the
 second flags word); present → its decimal value masked to 3 bits.
 
@@ -1513,7 +1535,16 @@ system is converted to ticks and 16.16 world units. The conversions are exact:
 | `weaponacceleration` | floating | 0.0 | multiplied by 65,536/900, truncated — 16.16 world units per tick squared |
 | `reloadtime`, `weapontimer`, `burstrate`, `duration`, `randomdecay`, `smokedelay`, `flighttime`, `holdtime`, `shakeduration` | floating | 0.0 | multiplied by 30, truncated — whole ticks; an authored value below 1/30 second becomes zero |
 | `turnrate` | floating | 0.0 | multiplied by 1/30, truncated — per tick |
-| `minbarrelangle` | floating | -11.25 | multiplied by pi/180 — radians |
+| `minbarrelangle` | floating | -11.25 | multiplied by the image's own degrees-to-radians constant, then stored **single precision** — radians |
+
+The degrees-to-radians constant is a stored double, and it is **not** the
+correctly rounded value: it is `0.017453292519943278`, **five** units in the
+last place below the correctly rounded `pi/180`
+(`0.017453292519943295`) — a relative error of about `1e-15`. The
+product is then narrowed by a single-precision store, so a clone that
+multiplies by its own `math.Pi/180` in double precision and keeps the double
+carries a different bound. The field is a launch-angle admission bound
+(`[06 §3.3]`), so the difference only shows on a tie inside that band.
 
 **Remaining scalar fields**
 
@@ -1599,7 +1630,7 @@ Feature files are TDF; each top-level section is one feature type.
 | `seqnameburn`, `seqnameburnshad` | string | empty | burning animation and shadow |
 | `seqnamedie`, `seqnamedieshad` | string | empty | death animation and shadow |
 | `seqnamereclamate`, `seqnamereclamateshad` | string | empty | reclaim animation and shadow |
-| `metal`, `energy` | integer | 0 | reclaim yield |
+| `metal`, `energy` | integer | 0 | reclaim yield; the conversion result is **masked to its low sixteen bits** before the single-precision store — `float(uint16(value))`, as `[05 R-FEAT-01 §1]` states |
 | `damage` | integer | 0 | hit points |
 | `spreadchance`, `reproduce`, `reproducearea` | integer | 0 | fire spread and regrowth |
 | `sparktime` | floating | 0.0 | multiplied by 30, truncated — ticks |
@@ -1608,7 +1639,25 @@ Feature files are TDF; each top-level section is one feature type.
 | `flamable` | integer | 0 | spelled with one `m` |
 | `geothermal`, `blocking`, `reclaimable` | integer | 0 | `geothermal` has no registry: the requirement is enforced by the building footprint validator, which requires at least one covered terrain cell to hold a feature whose catalog entry carries this flag |
 | `autoreclaimable` | integer | **1** | the only feature flag that defaults on |
-| `indestructible`, `nodisplayinfo`, `nodrawundergray` | integer | 0 | |
+| `indestructible`, `nodisplayinfo`, `nodrawundergray` | integer | 0 | `nodrawundergray` is **also forced on** by section name (below) |
+
+**The sixteen-bit yield mask (Established).** `metal` and `energy` are the
+only feature keys whose stored value is not the accessor's result: the parser
+narrows the 32-bit conversion to its low sixteen bits, zero-extends it and
+converts *that* to the record's single-precision field. An authored value
+above 65,535 therefore **wraps**, and an authored negative value becomes a
+large positive yield. The stock content reaches it: four sections in the
+reference install author a `metal` above 65,535 — the Arm and Core Gate wreck
+and heap features — so reclaiming an Arm Gate wreck pays the wrapped
+remainder, not the authored figure. No stock `energy` or `damage` value is
+outside its field's range. `[05 R-WORK-01 §5]` owns what the payout then does
+with it.
+
+**Four section names force `nodrawundergray` (Established).** After the flag
+is stored the parser compares the section name case-insensitively against
+`DragonsTeeth`, `DragonsTeeth_Core`, `Fortification` and `Fortification_Core`
+and ORs the bit **on** for any match, whatever the section authored.
+`[05 R-FEAT-01 §1]` owns the rule and its effect.
 
 A second pass resolves `featuredead`, `featurereclamate`, and `featureburnt`
 — all string, default empty — to catalog identities, creating a late record
@@ -2124,7 +2173,16 @@ typed accessor of §4 "Typed accessors" (`integer`, `floating`, `fixed`,
 `string`, `lang-string` = language-prefixed string, `raw` = bare value
 pointer); *stored width* is the field the parser writes (a `flag bit n` row
 stores `(value & 1) << n` into that record's packed word — an authored `2`
-stores as 0). *Default* is the accessor's default argument, already in
+stores as 0). The **unit** definition carries **two** 32-bit packed flag
+words and thirteen bit numbers are claimed by a key in each, so every unit
+flag row names its word — `flag word A, bit n` or `flag word B, bit n`. Word A
+is the first definition-flags word (the one whose bit 23 is the compatible bit
+of `[R-CAT-01 §4]`), word B the second. Each unit row's word was read from the
+store the parser makes for that key, so the column is **Established** for all
+of them, `wacky` included (its store is in the catalog loader rather than the
+unit-record compiler). The weapon, feature and movement-class records carry a
+single packed word each, so their rows stay `flag bit n`.
+*Default* is the accessor's default argument, already in
 stored units. *Consumer* is the section that states the reader's contract,
 or `inert (reader census: none)` when a whole-export reader census found no
 load of the stored field, or `unknown:` with the decider. Rows whose
@@ -2140,13 +2198,11 @@ string in the image at all (`aimrate`, `movingaccuracy`, `noselfdamage`,
 `size`, `solarstrength`, and the FBI editor keys listed in `[fmt fbi]`) are
 not rows: they are not read, so they have no reader to census.
 
-**Regeneration.** The table is emitted by the generator kept beside the raw
-corpus (`$HOME/ta-decompile/scripts/key_consumers.py`, with its curated
-consumer map `key_consumers_overrides.py`); run it with `--md` and replace
-everything between the generated-marker comment and the end of the last
-record's table. Do not hand-edit rows — change the generator's data and
-regenerate, so the table and the raw trail
-(`$HOME/ta-decompile/notes/content/rwu-02-1.md`) stay in step.
+**Maintenance.** The table's first form was emitted by a generator kept beside
+the raw corpus; that generator is no longer part of the corpus, so the table is
+now maintained in place. Correct a row only against a re-read of the parser
+store that writes the field, and keep the raw trail for the change in
+`$HOME/ta-decompile/notes/`.
 
 #### Unit-record consumers not stated elsewhere [R-KEYS-01 §1]
 
@@ -2322,12 +2378,12 @@ change the accepted bit.
 | `radardistancejam` | integer · 16-bit | 0 | `[03 §3.4]`, `[03 §3.10]`, `[06 §3.1]` | Established (cited) |
 | `sonardistancejam` | integer · 16-bit | 0 | `[03 §3.4]`, `[03 §3.10]` | Established (cited) |
 | `bmcode` | integer · 8-bit | 0 | `[03 R-RND-02A]`, `[04 R-COLL-01 §2]` | Established |
-| `standingmoveorder` | integer · flag bits 0-1 | 2 | `[04 R-STANCE-01 §6]` | Established |
-| `standingfireorder` | integer · flag bits 2-3 | 2 | `[04 R-STANCE-01 §6]` | Established |
-| `init_cloaked` | integer · flag bit 4 | 0 | `[04 R-ORD-01 §2]`, `[05 R-ECO-01]`, `[03 §3.4]` | Established (cited) |
-| `downloadable` | integer · flag bit 5 | 0 | `[02 §5]` (downloadable enforcement), `[08 R-AI-01]` | Established |
-| `builder` | integer · flag bit 6 | 0 | `[04 R-ORD-01 §5]`, `[04 R-ORD-01 §2]`, `[04 R-ORD-01 §7]` | Established (cited) |
-| `stealth` | integer · flag bit 8 | 0 | `[03 §3.4]`, `[03 §3.9]` | Established (cited) |
+| `standingmoveorder` | integer · flag word A, bits 0-1 | 2 | `[04 R-STANCE-01 §6]` | Established |
+| `standingfireorder` | integer · flag word A, bits 2-3 | 2 | `[04 R-STANCE-01 §6]` | Established |
+| `init_cloaked` | integer · flag word A, bit 4 | 0 | `[04 R-ORD-01 §2]`, `[05 R-ECO-01]`, `[03 §3.4]` | Established (cited) |
+| `downloadable` | integer · flag word A, bit 5 | 0 | `[02 §5]` (downloadable enforcement), `[08 R-AI-01]` | Established |
+| `builder` | integer · flag word A, bit 6 | 0 | `[04 R-ORD-01 §5]`, `[04 R-ORD-01 §2]`, `[04 R-ORD-01 §7]` | Established (cited) |
+| `stealth` | integer · flag word A, bit 8 | 0 | `[03 §3.4]`, `[03 §3.9]` | Established (cited) |
 | `cloakcost` | integer · single float | 0 | `[04 R-SPEC-01 §10]`, `[03 §3.4]` | Established |
 | `cloakcostmoving` | integer · single float | the `cloakcost` value just read | `[04 R-SPEC-01 §10]` | Established |
 | `mincloakdistance` | integer · 16-bit | 0 | `[03 §3.4]`, `[03 §3.2]` | Established (cited) |
@@ -2335,47 +2391,47 @@ change the accepted bit.
 | `builddistance` | integer · 16-bit | 0 | `[04 R-ORD-01 §7]`, `[04 R-ORD-01 §1]`, `[04 §10.3]` | Established (cited) |
 | `sortbias` | integer · 16-bit | 0 | inert (reader census: none) — `[04 R-SPEC-01 §7]` | Established |
 | `cruisealt` | integer · 16-bit | 0 | `[04 §10.2]`, `[04 R-ORD-01 §7]`, `[04 §10.1]` | Established (cited) |
-| `zbuffer` | integer · flag bit 7 | 0 | `[03 R-REN-03A]` | Established |
-| `isairbase` | integer · flag bit 9 | 0 | `[04 R-ORD-01 §7]`, `[04 R-UNIT-06 §3]`, `[04 R-AIR-01 §6]` | Established (cited) |
-| `istargetingupgrade` | integer · flag bit 10 | 0 | `[04 R-SPEC-01 §8]` | Established |
-| `teleporter` | integer · flag bit 13 | 0 | inert (reader census: none) — `[04 R-SPEC-01 §2]` | Established |
-| `hidedamage` | integer · flag bit 14 | 0 | `[04 R-SPEC-01 §6]` | Established |
-| `shootme` | integer · flag bit 15 | 0 | `[04 R-SPEC-01 §5]`, `[06 §3.2]` (the option bit that bypasses it is the `ShootAll` chat toggle: `[02 R-KEYS-01 §4]`) | Established |
-| `armoredstate` | integer · flag bit 17 | 0 | `[06 R-DMG-01 §2]` | Established |
-| `activatewhenbuilt` | integer · flag bit 18 | 0 | `[04 R-SPEC-01 §12]` | Established |
-| `canfly` | integer · flag bit 11 | 0 | `[04 R-ORD-01 §7]`, `[04 §10.2]`, `[04 R-AIR-01 §7]` | Established (cited) |
-| `canhover` | integer · flag bit 12 | 0 | `[04 R-SPEC-01 §15]`, `[04 R-MOV-01 §8a]` | Established |
-| `upright` | integer · flag bit 20 | 0 | `[04 R-MOV-01 §9]`, `[04 R-MOV-01 §5]`, `[04 R-MOV-01 §8a]` | Established (cited) |
-| `floater` | integer · flag bit 19 | 0 | `[04 R-SPEC-01 §15]`, `[04 R-MOV-01 §8a]` | Established |
-| `amphibious` | integer · flag bit 21 | 0 | `[04 R-SPEC-01 §15]` | Established |
-| `isfeature` | integer · flag bit 24 | 0 | `[04 R-SPEC-01 §12]`, `[05 R-FEAT-01]`, `[06 §12.2]` | Established (cited) |
-| `noshadow` | integer · flag bit 25 | 0 | `[03 §5.3]`, `[03 §2.4]`, `[03 §10]` | Established (cited) |
-| `immunetoparalyzer` | integer · flag bit 26 | 0 | `[04 R-SPEC-01 §9]`, `[06 §10]` | Established |
-| `hoverattack` | integer · flag bit 27 | 0 | `[04 R-AIR-01 §8]`, `[04 §9.2]`, `[04 R-MOV-01 §9]` | Established (cited) |
-| `antiweapons` | integer · flag bit 29 | 0 | `[02 R-KEYS-01 §1]` (range-ring overlay only) | Established |
-| `digger` | integer · flag bit 30 | 0 | `[03 R-REN-03A]`, `[04 R-SPEC-01 §3]` | Established |
-| `onoffable` | integer · flag bit 2 | 0 | `[04 R-SPEC-01 §11]`, `[03 §3.9]` | Established |
-| `mobilestandorders` | integer · flag bit 0 | 0 | `[04 R-STANCE-01 §5]`, `[04 R-STANCE-01 §6]`, `[04 R-STANCE-01 §8]` | Established (cited) |
-| `firestandorders` | integer · flag bit 1 | 0 | `[04 R-STANCE-01 §5]`, `[04 R-STANCE-01 §6]`, `[04 R-STANCE-01 §8]` | Established (cited) |
-| `canstop` | integer · flag bit 3 | 0 | `[04 R-STANCE-01 §8]`, `[04 R-STANCE-01 §6]` | Established (cited) |
-| `canattack` | integer · flag bit 4 | 0 | `[04 R-ORD-01 §3]`, `[07 §8]` | Established (cited) |
-| `canguard` | integer · flag bit 5 | 0 | `[07 §8]` | Established (cited) |
-| `canpatrol` | integer · flag bit 6 | 0 | `[07 §8]` | Established (cited) |
-| `canmove` | integer · flag bit 7 | 0 | `[03 R-RND-02A]`, `[07 §8]`, `[08 R-TRIG-01 §3]` | Established (cited) |
-| `canload` | integer · flag bit 8 | 0 | `[04 R-AIR-01 §9]`, `[04 §10.2]`, `[07 §8]` | Established (cited) |
-| `canreclamate` | integer · flag bit 10 | 0 | `[04 R-ORD-01 §5]`, `[05 R-WORK-01]` (capability bit 9 is a copy, `[02 R-KEYS-01 §1]`) | Established |
-| `canresurrect` | integer · flag bit 11 | 0 | `[04 R-ORD-01 §5]`, `[05 R-WORK-01]` | Established |
-| `cancapture` | integer · flag bit 12 | 0 | `[04 R-ORD-01 §5]`, `[04 R-STANCE-01 §6]`, `[05 R-WORK-01]` | Established (cited) |
-| `candgun` | integer · flag bit 14 | 0 | `[07 §8]` | Established (cited) |
+| `zbuffer` | integer · flag word A, bit 7 | 0 | `[03 R-REN-03A]` | Established |
+| `isairbase` | integer · flag word A, bit 9 | 0 | `[04 R-ORD-01 §7]`, `[04 R-UNIT-06 §3]`, `[04 R-AIR-01 §6]` | Established (cited) |
+| `istargetingupgrade` | integer · flag word A, bit 10 | 0 | `[04 R-SPEC-01 §8]` | Established |
+| `teleporter` | integer · flag word A, bit 13 | 0 | inert (reader census: none) — `[04 R-SPEC-01 §2]` | Established |
+| `hidedamage` | integer · flag word A, bit 14 | 0 | `[04 R-SPEC-01 §6]` | Established |
+| `shootme` | integer · flag word A, bit 15 | 0 | `[04 R-SPEC-01 §5]`, `[06 §3.2]` (the option bit that bypasses it is the `ShootAll` chat toggle: `[02 R-KEYS-01 §4]`) | Established |
+| `armoredstate` | integer · flag word A, bit 17 | 0 | `[06 R-DMG-01 §2]` | Established |
+| `activatewhenbuilt` | integer · flag word A, bit 18 | 0 | `[04 R-SPEC-01 §12]` | Established |
+| `canfly` | integer · flag word A, bit 11 | 0 | `[04 R-ORD-01 §7]`, `[04 §10.2]`, `[04 R-AIR-01 §7]` | Established (cited) |
+| `canhover` | integer · flag word A, bit 12 | 0 | `[04 R-SPEC-01 §15]`, `[04 R-MOV-01 §8a]` | Established |
+| `upright` | integer · flag word A, bit 20 | 0 | `[04 R-MOV-01 §9]`, `[04 R-MOV-01 §5]`, `[04 R-MOV-01 §8a]` | Established (cited) |
+| `floater` | integer · flag word A, bit 19 | 0 | `[04 R-SPEC-01 §15]`, `[04 R-MOV-01 §8a]` | Established |
+| `amphibious` | integer · flag word A, bit 21 | 0 | `[04 R-SPEC-01 §15]` | Established |
+| `isfeature` | integer · flag word A, bit 24 | 0 | `[04 R-SPEC-01 §12]`, `[05 R-FEAT-01]`, `[06 §12.2]` | Established (cited) |
+| `noshadow` | integer · flag word A, bit 25 | 0 | `[03 §5.3]`, `[03 §2.4]`, `[03 §10]` | Established (cited) |
+| `immunetoparalyzer` | integer · flag word A, bit 26 | 0 | `[04 R-SPEC-01 §9]`, `[06 §10]` | Established |
+| `hoverattack` | integer · flag word A, bit 27 | 0 | `[04 R-AIR-01 §8]`, `[04 §9.2]`, `[04 R-MOV-01 §9]` | Established (cited) |
+| `antiweapons` | integer · flag word A, bit 29 | 0 | `[02 R-KEYS-01 §1]` (range-ring overlay only) | Established |
+| `digger` | integer · flag word A, bit 30 | 0 | `[03 R-REN-03A]`, `[04 R-SPEC-01 §3]` | Established |
+| `onoffable` | integer · flag word B, bit 2 | 0 | `[04 R-SPEC-01 §11]`, `[03 §3.9]` | Established |
+| `mobilestandorders` | integer · flag word B, bit 0 | 0 | `[04 R-STANCE-01 §5]`, `[04 R-STANCE-01 §6]`, `[04 R-STANCE-01 §8]` | Established (cited) |
+| `firestandorders` | integer · flag word B, bit 1 | 0 | `[04 R-STANCE-01 §5]`, `[04 R-STANCE-01 §6]`, `[04 R-STANCE-01 §8]` | Established (cited) |
+| `canstop` | integer · flag word B, bit 3 | 0 | `[04 R-STANCE-01 §8]`, `[04 R-STANCE-01 §6]` | Established (cited) |
+| `canattack` | integer · flag word B, bit 4 | 0 | `[04 R-ORD-01 §3]`, `[07 §8]` | Established (cited) |
+| `canguard` | integer · flag word B, bit 5 | 0 | `[07 §8]` | Established (cited) |
+| `canpatrol` | integer · flag word B, bit 6 | 0 | `[07 §8]` | Established (cited) |
+| `canmove` | integer · flag word B, bit 7 | 0 | `[03 R-RND-02A]`, `[07 §8]`, `[08 R-TRIG-01 §3]` | Established (cited) |
+| `canload` | integer · flag word B, bit 8 | 0 | `[04 R-AIR-01 §9]`, `[04 §10.2]`, `[07 §8]` | Established (cited) |
+| `canreclamate` | integer · flag word B, bit 10 | 0 | `[04 R-ORD-01 §5]`, `[05 R-WORK-01]` (capability bit 9 is a copy, `[02 R-KEYS-01 §1]`) | Established |
+| `canresurrect` | integer · flag word B, bit 11 | 0 | `[04 R-ORD-01 §5]`, `[05 R-WORK-01]` | Established |
+| `cancapture` | integer · flag word B, bit 12 | 0 | `[04 R-ORD-01 §5]`, `[04 R-STANCE-01 §6]`, `[05 R-WORK-01]` | Established (cited) |
+| `candgun` | integer · flag word B, bit 14 | 0 | `[07 §8]` | Established (cited) |
 | `maneuverleashlength` | integer · 16-bit | 0 | `[04 R-STANCE-01 §4]`, `[04 R-STANCE-01 §1]`, `[04 R-STANCE-01 §6]` | Established (cited) |
 | `attackrunlength` | integer · 16-bit | 0 | `[04 R-STANCE-01 §4]`, `[04 R-STANCE-01 §6]`, `[04 R-AIR-01 §8]` | Established (cited) |
-| `kamikaze` | integer · flag bit 28 | 0 | `[04 R-SPEC-01 §1]` | Established |
+| `kamikaze` | integer · flag word A, bit 28 | 0 | `[04 R-SPEC-01 §1]` | Established |
 | `kamikazedistance` | integer · 16-bit | 0 | `[04 R-SPEC-01 §1]` | Established |
-| `norestrict` | integer · flag bit 15 | 0 | `[05 R-SHARE-01]`, `[08 R-SKIR-01 §10]` | Established |
-| `showplayername` | integer · flag bit 17 | 0 | inert (reader census: none) — `[04 R-SPEC-01 §14]` | Established |
-| `commander` | integer · flag bit 18 | 0 | `[08 R-TRIG-01 §3]`, `[05 R-SHARE-01]` | Established |
-| `cantbetransported` | integer · flag bit 19 | 0 | `[04 §10.2]` | Established (cited) |
-| `selfdestructcountdown` | raw · flag bits 20-22 | absent → 5 in the field (the raw accessor itself returns null) | `[04 R-SPEC-01 §13]` | Established |
+| `norestrict` | integer · flag word B, bit 15 | 0 | `[05 R-SHARE-01]`, `[08 R-SKIR-01 §10]` | Established |
+| `showplayername` | integer · flag word B, bit 17 | 0 | inert (reader census: none) — `[04 R-SPEC-01 §14]` | Established |
+| `commander` | integer · flag word B, bit 18 | 0 | `[08 R-TRIG-01 §3]`, `[05 R-SHARE-01]` | Established |
+| `cantbetransported` | integer · flag word B, bit 19 | 0 | `[04 §10.2]` | Established (cited) |
+| `selfdestructcountdown` | raw · flag word B, bits 20-22 | absent → 5 in the field (the raw accessor itself returns null) | `[04 R-SPEC-01 §13]` | Established |
 | `category` | string · 100 bytes | empty | `[02 R-P0-03]` | Established |
 | `soundcategory` | string · 100 bytes | empty | `[03 §8.3]` | Established |
 | `corpse` | string · 100 bytes | empty | `[06 R-DMG-01 §5]`, `[05 R-FEAT-01]` | Established |
@@ -2389,7 +2445,7 @@ change the accepted bit.
 | `side` | string · 30 bytes | empty | `[02 §5]` (AI build-pick roulette filter) | Established |
 | `ai_weight` | string · 64 bytes | empty | `[08 R-AI-01]` | Established |
 | `ai_limit` | string · 64 bytes | empty | inert (reader census: none) — `[02 §5]` | Established |
-| `wacky` | integer · flag bit 16 | 0 | multiplayer restriction defaults/reset `[05 R-SHARE-01 §9]`, `[08 R-SKIR-01 §10]` | Established |
+| `wacky` | integer · flag word B, bit 16 | 0 | multiplayer restriction defaults/reset `[05 R-SHARE-01 §9]`, `[08 R-SKIR-01 §10]` | Established |
 
 **weapon (`Weapons\*.tdf` section)**
 
@@ -2496,8 +2552,8 @@ change the accepted bit.
 | `spreadchance` | integer · 8-bit | 0 | `[05 R-FEAT-01]`, `[05 "Feature burning"]`, `[03 §5.1]` | Established (cited) |
 | `reproduce` | integer · 8-bit | 0 | `[05 R-FEAT-01]`, `[05 "Feature reproduction"]`, `[05 "Required implementation invariants"]` | Established (cited) |
 | `reproducearea` | integer · 8-bit | 0 | `[05 R-FEAT-01]`, `[03 §5.1]` | Established (cited) |
-| `metal` | integer · single float | 0 | `[05 R-SHARE-01]`, `[05 R-WORK-01]`, `[05 R-FEAT-01]` | Established (cited) |
-| `energy` | integer · single float | 0 | `[05 R-SHARE-01]`, `[05 R-WORK-01]`, `[05 R-FEAT-01]` | Established (cited) |
+| `metal` | integer · masked to 16 bits, then single float | 0 | `[05 R-SHARE-01]`, `[05 R-WORK-01]`, `[05 R-FEAT-01 §1]` | Established (cited) |
+| `energy` | integer · masked to 16 bits, then single float | 0 | `[05 R-SHARE-01]`, `[05 R-WORK-01]`, `[05 R-FEAT-01 §1]` | Established (cited) |
 | `damage` | integer · 16-bit | 0 | `[05 R-FEAT-01]`, `[05 "Feature catalog and placement"]`, `[03 §5.1]` | Established (cited) |
 | `animating` | integer · flag bit 1 | 0 | `[05 R-FEAT-01]`, `[03 §5.1]` | Established (cited) |
 | `animtrans` | integer · flag bit 2 | 0 | `[05 R-FEAT-01]`, `[03 §5.1]` | Established (cited) |
@@ -2509,7 +2565,7 @@ change the accepted bit.
 | `autoreclaimable` | integer · flag bit 8 | 1 | `[05 R-FEAT-01]`, `[05 "Feature catalog and placement"]`, `[03 §5.1]` | Established (cited) |
 | `indestructible` | integer · flag bit 9 | 0 | `[05 R-FEAT-01]`, `[05 "Prerequisite structures"]`, `[05 "Feature catalog and placement"]` | Established (cited) |
 | `nodisplayinfo` | integer · flag bit 10 | 0 | `[05 R-FEAT-01]` | Established (cited) |
-| `nodrawundergray` | integer · flag bit 11 | 0 | `[05 R-FEAT-01]`, `[03 §5.1]` | Established (cited) |
+| `nodrawundergray` | integer · flag bit 11, also forced set by four section names | 0 | `[05 R-FEAT-01 §1]`, `[03 §5.1]` | Established (cited) |
 | `sparktime` | floating · 16-bit | 0.0 | `[05 R-FEAT-01]`, `[05 "Prerequisite structures"]`, `[03 §5.1]` | Established (cited) |
 | `burnweapon` | string · 256 bytes | empty | `[05 R-FEAT-01]`, `[05 "Feature burning"]`, `[03 §5.1]` | Established (cited) |
 

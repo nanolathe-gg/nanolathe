@@ -562,3 +562,44 @@ func TestSelectDeterminism(t *testing.T) {
 		t.Fatalf("determinism failed: %v/%v vs %v/%v", a, okA, b, okB)
 	}
 }
+
+// TestCapacityTruncatesBeforeTheClamp locks the order of the two narrowing
+// steps in the pressure terms: the capacity is truncated toward zero to an
+// integer FIRST, and the 1000/500 clamp is an integer compare on that truncated
+// value [08 R-P0-05 §3][I3]. Clamping the float and subtracting afterwards —
+// what this build used to do — differs by one whenever the capacity carries a
+// fraction, and that difference propagates into the mix, the candidate score
+// and therefore the reservoir draw bound.
+func TestCapacityTruncatesBeforeTheClamp(t *testing.T) {
+	// Energy: capacity 100.9, stock 92.1. Retail (100 − 92.1)·0.125 = 0.9875 →
+	// 0; clamping the float gives (100.9 − 92.1)·0.125 = 1.1 → 1.
+	inE := ScoreInputs{
+		CurEnergy: 92.1, CapEnergy: 100.9, NetEnergy: 5, ProdEnergy: 300,
+		CurMetal: 500, CapMetal: 500, NetMetal: 5, ProdMetal: 10,
+	}
+	if got := energyRaw(inE); got != 0 {
+		t.Fatalf("energyRaw with fractional capacity = %d, want 0: the capacity truncates before the clamp [08 R-P0-05 §3]", got)
+	}
+	// Metal's 0.25 multiplier makes the same divergence twice as likely:
+	// (200 − 195.5)·0.25 = 1.125 → 1, against (200.9 − 195.5)·0.25 = 1.35 → 1;
+	// use a fraction that crosses an integer instead.
+	inM := ScoreInputs{
+		CurEnergy: 1000, CapEnergy: 1000, NetEnergy: 5, ProdEnergy: 300,
+		CurMetal: 196.1, CapMetal: 200.9, NetMetal: 5, ProdMetal: 10,
+	}
+	if got := metalRaw(inM); got != 0 {
+		t.Fatalf("metalRaw with fractional capacity = %d, want 0: the capacity truncates before the clamp [08 R-P0-05 §3]", got)
+	}
+	// The clamp itself is unchanged: a capacity above the literal still clamps,
+	// and an integral capacity is unaffected by the added truncation.
+	inClamp := ScoreInputs{
+		CurEnergy: 0, CapEnergy: 4000.5, NetEnergy: 5, ProdEnergy: 300,
+		CurMetal: 0, CapMetal: 2000.5, NetMetal: 5, ProdMetal: 10,
+	}
+	if got := energyRaw(inClamp); got != 125 {
+		t.Fatalf("energyRaw clamped = %d, want 125 (1000·0.125)", got)
+	}
+	if got := metalRaw(inClamp); got != 125 {
+		t.Fatalf("metalRaw clamped = %d, want 125 (500·0.25)", got)
+	}
+}

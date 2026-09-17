@@ -1572,10 +1572,9 @@ func airBelowThreeQuarters(u *units.Unit) bool { return combat.AirBelowThreeQuar
 // airBaseCandidates is the "collect the base candidates within `0xF00` for my
 // side" scan of [04 R-AIR-01 §11], which `VTOL_SeekAttack` phase 1,
 // `VTOL_SeekGuard` phase 1, `AirStrike` phase 6, `AirToGroundHover` phase 3,
-// `VTOL_Patrol` phase 2 and `VTOL_RepairPatrol` phase 1 run when the aircraft
-// is below three quarters health, and whose non-empty result pushes a
-// `VTOL_Landing` order at one candidate drawn from it. `AirToGround` runs the
-// same scan and frees the result unused.
+// `VTOL_Patrol` phase 2, `VTOL_RepairPatrol` phase 1 and `AirToGround` phase 4
+// run when the aircraft is below three quarters health, and whose non-empty
+// result pushes a `VTOL_Landing` order at one candidate drawn from it.
 //
 // It is not a sector visitor: the candidate set is the per-side target
 // registry's **third list** [06 §3.1 "the third list"], held on this system and
@@ -2089,16 +2088,17 @@ func (s *System) legAirStrike(u *units.Unit, n *orders.Node, satisfied uint32, t
 // --- AirToGround and AirToGroundHover [04 R-AIR-01 §8] ---
 
 // airFindBaseAndLand is the "find a base and land" branch `AirStrike` phase 6,
-// `AirToGroundHover` phase 3, `VTOL_SeekAttack` phase 1 and `VTOL_SeekGuard`
-// phase 1 share: collect the third-list candidates within 0xF00, and if any
+// `AirToGround` phase 4, `AirToGroundHover` phase 3, `VTOL_SeekAttack` phase 1
+// and `VTOL_SeekGuard` phase 1 share: collect the third-list candidates within
+// 0xF00, and if any
 // exist clear the goal payload, draw one random index, push a `VTOL_Landing`
 // order at that candidate and clear the gate word. It reports whether it took
 // the branch [04 R-AIR-01 §11].
 //
 // The draw is one simulation `RNG(count)` and is taken **only** on a non-empty
 // list, so an aircraft with no pad in reach advances no random state; a count
-// of one draws nothing at all [01 §7.1][I4]. `AirToGround` deliberately does
-// not come through here — it runs the scan and frees the result.
+// of one draws nothing at all [01 §7.1][I4]. A caller whose list is empty
+// continues in the same visit — none of them treats "no pad" as an outcome.
 //
 // The payload clear is the record-level release helper of [04 R-ORD-01 §1],
 // ReleaseGoalPayload — the seam WU-19-62 landed — so the release runs the
@@ -2145,7 +2145,9 @@ func (s *System) airJitteredApproach(u *units.Unit, n *orders.Node, sim *rng.Sim
 //	3 — the fly-through: `h = atan2(unitX − goalX, unitZ − goalZ)`; point marker
 //	    at `goalPos − offset(h, Range · 3)` with horizontal arrival radius
 //	    `0x80 + random below 0x80`; gate = 0x100EA.
-//	4 — health below three quarters → the find-a-base-and-land branch; otherwise
+//	4 — health below three quarters → the find-a-base-and-land branch, which
+//	    *restarts* only when it found a pad; with no pad in reach, and when the
+//	    aircraft is healthy, the break leg:
 //	    draw `random below 2` and add `0xC000` on 0 or `0x4000` otherwise
 //	    from the unit's own heading, at radius `Range`, horizontal arrival radius
 //	    0x80; gate = 0x100EA.
@@ -2217,17 +2219,16 @@ func (s *System) legAirToGround(u *units.Unit, n *orders.Node, tick uint32) orde
 		if sim == nil {
 			return airLegUnbound(n, tick)
 		}
-		if airBelowThreeQuarters(u) {
-			// `AirToGround` runs the base scan under the same health test and
-			// **frees the result unused** — it never lands a damaged attacker,
-			// and the sections implying it does are corrected by
-			// [04 R-AIR-01 §11]. The walk is kept because it is the behavior;
-			// only the pick is absent, and the pick is the sole step that draws
-			// (I4), so a damaged strafer consumes no random state here.
-			//
-			// Corrected 2026-09-02 (WU-19-60): this called the land branch.
-			_ = s.airBaseCandidates(u)
-			return 0 // *restart*, with or without candidates [04 R-AIR-01 §8]
+		// Below three quarters health this leg is an ordinary pad-seeking
+		// caller, exactly like `AirStrike` phase 6 and `VTOL_Patrol` phase 2:
+		// it collects the base candidates within 0xF00 and, when any exist,
+		// releases the goal payload, draws one bounded value over the count,
+		// head-inserts a `VTOL_Landing` at the drawn pad, clears the gate word
+		// and *restarts*. With NO candidates it falls into the break leg below
+		// and returns 1 — the health test alone never ends the visit
+		// [04 R-AIR-01 §8][04 R-AIR-01 §11].
+		if airBelowThreeQuarters(u) && s.airFindBaseAndLand(u, n, sim, tick) {
+			return 0 // *restart* behind the spawned landing order
 		}
 		turn := uint16(0x4000)
 		if sim.Uint32n(2) == 0 {
@@ -2259,7 +2260,7 @@ func (s *System) legAirToGround(u *units.Unit, n *orders.Node, tick uint32) orde
 // `targetPos + offset(h', (Range · 2) / 3)` — note the plus — with horizontal
 // arrival radius 0x10; and, when the unit has failed to engage more than once,
 // a random full-circle reposition at `targetPos − offset(bearing, Range)`
-// instead.
+// which retail builds and then never installs, so it commands nothing.
 //
 // The weapon layer supplies the engagement result; a failed query increments
 // the miss counter before selecting the recovery orbit.
@@ -2323,11 +2324,17 @@ func (s *System) legAirToGroundHover(u *units.Unit, n *orders.Node, tick uint32)
 		}
 		if n.Param2 > 1 {
 			n.Param2 = 0
-			b := uint16(sim.Uint32n(0x10000))
-			ox, oz := offsetAtBearing(b, numeric.Fixed(rangeUnits<<16))
-			m := s.newPointMarker(u, Vec3{X: targetX - ox, Y: targetY, Z: targetZ - oz})
-			m.setArrivalRadius(0x80)
-			s.installAirGoal(u, n, m)
+			// Retail allocates a point marker at `targetPos − offset(bearing,
+			// Range)` and sets its arrival radius, then returns without ever
+			// INSTALLING it: this arm has no payload release and no install
+			// call, where the alternation arm below has both. The marker is
+			// dropped, so the aircraft keeps whatever payload it was already
+			// bound to and is not sent anywhere new — only the draw, the
+			// counter reset and the gate OR outlive the visit
+			// [04 R-AIR-01 §8]. The draw is still spent, so the stream is
+			// unaffected either way (I4); it is the only part of the arm the
+			// dropped marker's arithmetic can be observed through.
+			_ = sim.Uint32n(0x10000)
 			n.DynamicGate |= airLegGateHoverMiss
 			return 2
 		}
@@ -2509,9 +2516,10 @@ func (s *System) installAirPayload(u *units.Unit, rec *orders.Node, p GoalPayloa
 //   - arrival bits clear and the scratch counter below 0x5A → recompute the
 //     dot, add 0x2D to the counter if it is not positive and zero it otherwise;
 //     then, with the range to the target above 0xA0 world units, command a lead
-//     intercept: position `targetPos + targetVelocity · 45`, velocity derived
-//     from the target's heading at half the target's `MaxVelocity`; deadline
-//     `tick + 45`; gate `|= 0x100E8`; hold.
+//     intercept: position `targetPos + targetVelocity · 45`, velocity
+//     `targetVelocity` plus the direction of the target's heading at half the
+//     target's `MaxVelocity` — componentwise on X and Z, with Y the target's
+//     own velocity Y; deadline `tick + 45`; gate `|= 0x100E8`; hold.
 //   - otherwise the leg gives up: [04 R-ORD-02 §5] corrects §8's "re-issues a
 //     seek order" — the traced arm releases the payload, spawns `VTOL_Evade`
 //     with the same target at the head, zeroes the counter and the gate, and
@@ -2589,7 +2597,7 @@ func (s *System) legAirToAir(u *units.Unit, n *orders.Node, satisfied uint32, ti
 				n.Param1 += 0x2D
 			}
 			if airPlanarDistance(targetX, targetZ, u.X, u.Z) > int64(0xA0)<<16 {
-				tvx, tvz := airUnitVelocity(t)
+				tvx, tvy, tvz := airUnitVelocity(t)
 				tHeading := uint16(0)
 				tMax := int64(0)
 				if t != nil {
@@ -2599,11 +2607,20 @@ func (s *System) legAirToAir(u *units.Unit, n *orders.Node, satisfied uint32, ti
 					}
 				}
 				vx, vz := offsetAtBearing(tHeading, numeric.Fixed(tMax/2))
+				// The commanded velocity is the TARGET'S OWN velocity triple
+				// plus the direction of its heading at half its `MaxVelocity`:
+				// the horizontal terms are summed componentwise and the
+				// vertical one is the target's velocity Y, untouched by the
+				// heading term. The marker advances its goal by this velocity
+				// every tick, so dropping the target's own velocity made the
+				// commanded lead point drift at the wrong rate whenever the
+				// target was moving [04 R-AIR-01 §8]. The halving truncates
+				// toward zero, as the signed halving in the image does.
 				m := &airVelocityMarker{
 					sys:  s,
 					unit: u,
 					pos:  Vec3{X: targetX + tvx*45, Y: targetY, Z: targetZ + tvz*45},
-					vel:  Vec3{X: -vx, Z: -vz},
+					vel:  Vec3{X: tvx - vx, Y: tvy, Z: tvz - vz},
 				}
 				s.installAirPayload(u, n, m)
 				airDeadline(n, tick, 45)
@@ -2638,12 +2655,15 @@ func airFacingDot(u *units.Unit, targetX, targetZ numeric.Fixed) int64 {
 	return (int64(ax)*int64(bx) + int64(az)*int64(bz)) >> 16
 }
 
-// airUnitVelocity is a unit's per-tick velocity vector: its scalar speed along
-// the travel axis of [04 R-MOV-01 §4], which is `−offset(heading, speed)`.
-func airUnitVelocity(t *units.Unit) (numeric.Fixed, numeric.Fixed) {
+// airUnitVelocity is the mover's VELOCITY TRIPLE [04 R-MOV-01 §1] — the words
+// the lead intercept reads for both its position and its velocity term, not a
+// reconstruction from heading and scalar speed. The two agree on the ground
+// path, where the triple is exactly `−offset(heading, speed)` with a zero Y,
+// and part company in flight, where the integrator writes all three
+// [04 §10.1][04 R-AIR-01 §1].
+func airUnitVelocity(t *units.Unit) (x, y, z numeric.Fixed) {
 	if t == nil {
-		return 0, 0
+		return 0, 0, 0
 	}
-	ox, oz := offsetAtBearing(t.Move.Heading, t.Move.Speed)
-	return -ox, -oz
+	return t.Move.VelX, t.Move.VelY, t.Move.VelZ
 }

@@ -706,10 +706,77 @@ func (m *Manager) constructionPlacePass(tick uint32, w *units.World, econ *econo
 			placed = false
 		}
 		if placed {
-			_ = queueExactResult(m, cand.DefKey, res)
+			m.issueMobileBuild(u, cand.DefKey, res, tick)
 		}
 		m.Factory = origFactory
 	}
+}
+
+// issueMobileBuild is pass one's order submission. Retail issues it through the
+// ordinary command resolver as command code 14 and hands the result to the
+// producer insertion with the NON-QUEUED modifier, without testing for the
+// reject sentinel [04 §3.4][08 R-AI-01 §3]. Two things follow that a coalescing
+// tail append does not have:
+//
+//   - code 14's capability gate applies — the builder's compiled build list must
+//     be non-empty AND the builder must carry a live mover, so an immobile
+//     builder that reached the construction group rejects [04 R-ORD-02 §1];
+//   - the issue is a replacement, so the builder's unprotected front-segment
+//     records are freed first, whether the command resolved or not. A rejected
+//     one therefore leaves the builder idle rather than leaving its queue alone.
+//
+// The resolver reads the compiled build list through the queue binding, so the
+// queue is bound before the command is resolved — the same order the group
+// broadcast uses. The record the insertion then constructs carries the
+// resolver's own product: the mobile-build descriptor is chosen by the
+// builder's `canfly` flag on both sides of this call.
+//
+// On a rejection the insertion still runs, on descriptor row 0 and with the
+// same site and trailing pair; row 0's handler returns complete without reading
+// or writing anything, so the record is freed on the pump pass that reaches it
+// and the purge is what lasts [04 R-ORD-01 §12].
+func (m *Manager) issueMobileBuild(builder *units.Unit, defKey string, res PlacementResult, tick uint32) {
+	if m == nil || builder == nil {
+		return
+	}
+	q := orders.BindQueueBinding(builder, m.OrderBinding)
+	if q == nil {
+		return
+	}
+	id := orders.Resolve(14, builder, nil, &orders.ResolvePos{X: res.WorldX, Z: res.WorldZ})
+	// The purge belongs to the insertion, which runs on whatever the resolver
+	// wrote; it is not conditional on the command having resolved.
+	q.PurgeUnprotected()
+	q.DropLeadingAutoOps()
+	if id == 0 {
+		// The insertion's arguments do not change when the resolver rejects:
+		// the same site, the chosen definition's type index in the argument
+		// word and the literal count beside it [08 R-AI-01 §3].
+		node := orders.NewNodeForOrder(0, 0, res.WorldX, 0, res.WorldZ, tick, builder.Handle, false)
+		node.Param1 = m.definitionIndex(defKey)
+		node.Param2 = 1
+		q.Push(0, node)
+		return
+	}
+	_ = queueExactResult(m, defKey, res)
+}
+
+// definitionIndex is the catalog type index the construction task passes as the
+// build insertion's argument word [08 R-AI-01 §3]. A key the catalog cannot
+// answer keeps index zero, the same value the ordinary build producer stores.
+func (m *Manager) definitionIndex(defKey string) uint32 {
+	cat := m.Catalog
+	if cat == nil {
+		cat = m.Strategic.Catalog
+	}
+	if cat == nil {
+		return 0
+	}
+	idx, ok := cat.UnitDefIndex(content.CanonicalKey(defKey))
+	if !ok {
+		return 0
+	}
+	return idx
 }
 
 // withinConstructionCap applies the `cancapture` distance cap of
@@ -737,6 +804,14 @@ func withinConstructionCap(terrain *world.Terrain, siteX, siteZ, centreX, centre
 // around the strategic centre [08 R-AI-01 §3]. A member whose current order
 // does not carry static gate-mask bit 14 is skipped, so a builder already
 // carrying a build order keeps it; only an order-free builder is repositioned.
+//
+// `centreY` is deliberately a mutable local: the capture-capable arm writes the
+// member's own height into the SHARED centre, not into the per-member target
+// copy, and never undoes it, so every later member of the same pass measures
+// its distance to a centre carrying the previous capture-capable member's
+// height [08 R-AI-01 §3]. The mutation dies with the pass — the task re-reads
+// the strategic centre on its next invocation — which is why it is a parameter
+// here and not manager state.
 func (m *Manager) constructionRepositionPass(tick uint32, w *units.World, centreX, centreY, centreZ numeric.Fixed, buildCapable int32) {
 	for _, h := range m.GroupConstruction {
 		u := w.Unit(h)
@@ -752,8 +827,12 @@ func (m *Manager) constructionRepositionPass(tick uint32, w *units.World, centre
 			if buildCapable < 5 {
 				continue
 			}
-			// The working copy of the centre takes the unit's own height; the
-			// distance forces its vertical term to zero [08 R-AI-01 §3].
+			// The shared centre's height is overwritten with this member's own,
+			// and stays overwritten for the rest of the pass. This member's own
+			// distance is unaffected (its vertical term is forced to zero), but
+			// the patrol destination submitted below carries the new height and
+			// so does every later member's distance [08 R-AI-01 §3].
+			centreY = u.Y
 			dx := int64(fixedWordDelta(centreX, u.X))
 			dz := int64(fixedWordDelta(centreZ, u.Z))
 			d := int64(placementIntegerSqrt(uint64(dx*dx) + uint64(dz*dz)))
@@ -772,8 +851,12 @@ func (m *Manager) constructionRepositionPass(tick uint32, w *units.World, centre
 				tx = numeric.Fixed(2*int32(centreX) - int32(u.X))
 				tz = numeric.Fixed(2*int32(centreZ) - int32(u.Z))
 			}
-			m.submitResolvedOrder(u, resolveAIIntent(2, u, nil, tx, u.Y, tz), nil, tx, u.Y, tz, tick, 0, 0)
-			m.submitResolvedOrder(u, resolveAIIntent(9, u, nil, centreX, u.Y, centreZ), nil, centreX, u.Y, centreZ, tick, 1, 0)
+			// Both destinations read the centre's height, which the write above
+			// has just made this member's own: the move target is the centre's
+			// height plus a zero vertical offset, and the patrol destination is
+			// the centre local itself [08 R-AI-01 §3].
+			m.submitResolvedOrder(u, resolveAIIntent(2, u, nil, tx, centreY, tz), nil, tx, centreY, tz, tick, 0, 0)
+			m.submitResolvedOrder(u, resolveAIIntent(9, u, nil, centreX, centreY, centreZ), nil, centreX, centreY, centreZ, tick, 1, 0)
 			continue
 		}
 		dx := int64(fixedWordDelta(centreX, u.X))
@@ -1159,17 +1242,28 @@ func resolveAIIntent(intent int, actor, target *units.Unit, x, y, z numeric.Fixe
 // the ground move handler reads it as `argument + 4`, its phase-0 arrival
 // radius [08 R-AI-01 §19][04 R-ORD-01 §4]. Every task that submits directly
 // passes 0, which is the radius-4 default.
+//
+// It deliberately does NOT skip a rejected resolution. The computer player's
+// construction/positioning task and its group-order broadcast hand the
+// resolver's result straight to the producer insertion without testing for the
+// reject sentinel, and the insertion receives the same unit, target, position
+// and trailing pair whatever the resolver wrote [04 §3.4]. So `id == 0` is not
+// a special case here: the identity is simply descriptor row 0, whose static
+// mask is zero, so it carries neither the purge exception nor the rear-segment
+// or head-insert bits. A non-queued issue therefore purges first and then
+// inserts the sentinel at the marker, and the sentinel completes on the first
+// pump pass in which it heads — row 0's handler returns complete, reads
+// nothing, writes nothing and draws nothing [04 R-ORD-01 §12]. The lasting
+// effect is the purge: the member's unprotected front-segment records are freed
+// and it goes idle. A queued issue skips the purge, so its sentinel is only a
+// silent record that completes when it heads.
+//
+// Only the rally task tests the result, and it tests it at its own call site.
 func (m *Manager) submitResolvedOrder(u *units.Unit, id orders.ID, target *units.Unit, x, y, z numeric.Fixed, tick uint32, modifier uint8, argument int32) {
-	if m == nil || u == nil || id == 0 {
+	if m == nil || u == nil {
 		return
 	}
-	var targetHandle pool.Handle
-	if target != nil {
-		targetHandle = target.Handle
-	}
 	queued := modifier != 0
-	node := orders.NewNodeForOrder(id, targetHandle, x, y, z, tick, u.Handle, queued)
-	node.Param1 = uint32(argument)
 	q := orders.BindQueueBinding(u, m.OrderBinding)
 	if q == nil {
 		return
@@ -1178,6 +1272,12 @@ func (m *Manager) submitResolvedOrder(u *units.Unit, id orders.ID, target *units
 		q.PurgeUnprotected()
 		q.DropLeadingAutoOps()
 	}
+	var targetHandle pool.Handle
+	if target != nil {
+		targetHandle = target.Handle
+	}
+	node := orders.NewNodeForOrder(id, targetHandle, x, y, z, tick, u.Handle, queued)
+	node.Param1 = uint32(argument)
 	q.Push(id, node)
 }
 
@@ -1488,6 +1588,13 @@ func (m *Manager) doRally(tick uint32, w *units.World, econ *economy.Service) {
 			}
 		}
 		id := resolveAIIntent(3, u, nil, m.rallyBestX, m.rallyBestY, m.rallyBestZ)
+		if id == 0 {
+			// The rally is the one computer-player issue site that branches on
+			// the resolver's result: a member whose definition fails the
+			// can-attack gate is skipped entirely, with no insertion and so no
+			// replacement purge [04 §3.4][08 R-AI-01 §7].
+			continue
+		}
 		m.submitResolvedOrder(u, id, nil, m.rallyBestX, m.rallyBestY, m.rallyBestZ, tick, 0, 0)
 	}
 }

@@ -38,10 +38,11 @@ func stampFor(t *testing.T, def *content.FeatureDef, cx, cz int) (*world.Terrain
 }
 
 // TestSpriteWithLiveInstanceRefusesTheReclaimPayout is the payout guard of
-// [05 R-FEAT-01 §15]: the transition refuses when the anchor's
-// instance-attached bit and the definition's sprite bit are both set — "a
-// sprite feature that currently has a live animation instance", which is what
-// "burning blocks reclaim" means.
+// [05 R-FEAT-01 §15]: the transition refuses when the instance-attached bit of
+// the cell the recorded position resolves to and the definition's sprite bit
+// are both set — "a sprite feature that currently has a live animation
+// instance", which is what "burning blocks reclaim" means. Here the recorded
+// position is the anchor; TestReclaimGuardReadsTheRecordedCell separates them.
 func TestSpriteWithLiveInstanceRefusesTheReclaimPayout(t *testing.T) {
 	terrain, _ := stampFor(t, spriteTree("tree1"), 1, 1)
 
@@ -77,6 +78,46 @@ func TestThreeDWreckStaysReclaimableWithItsInstanceBitSet(t *testing.T) {
 	metal, energy, ok := ReclaimTransition(terrain, 1, 1)
 	if !ok || metal != 1768 || energy != 0 {
 		t.Fatalf("3D wreck: (%v, %v, %v), want the metal pool paid [05 R-FEAT-01 §15]", metal, energy, ok)
+	}
+}
+
+// TestReclaimGuardReadsTheRecordedCell locks which cell each of the guard's two
+// bits comes from [05 R-FEAT-01 §15]: the cell bit is read from the cell the
+// order's recorded position resolves to, BEFORE the hop to the anchor, while
+// the definition bit comes from the anchor's catalog entry. A multi-cell sprite
+// definition reclaimed from one of its fringe cells therefore reads that fringe
+// cell's bit, which the stamp leaves clear, and is paid out even while the
+// anchor carries a live animation instance. Reading the anchor for both bits
+// refuses instead, which is the divergence this locks.
+func TestReclaimGuardReadsTheRecordedCell(t *testing.T) {
+	multiCell := func() *content.FeatureDef {
+		def := spriteTree("grove")
+		def.FootprintX, def.FootprintZ = 2, 2
+		return def
+	}
+
+	// From the anchor cell the recorded position IS the anchor, so a live
+	// instance refuses, exactly as it does for a one-cell tree.
+	terrain, _ := stampFor(t, multiCell(), 1, 1)
+	terrain.PlotAt(1, 1).SetOccupied(true)
+	if metal, energy, ok := ReclaimTransition(terrain, 1, 1); ok || metal != 0 || energy != 0 {
+		t.Fatalf("anchor cell: (%v, %v, %v), want a refusal with nothing paid [05 R-FEAT-01 §15]", metal, energy, ok)
+	}
+
+	// From a fringe cell of the same feature the guard reads the fringe cell's
+	// clear bit and pays; everything after the guard is still the anchor's, so
+	// the whole footprint is cleared.
+	terrain, _ = stampFor(t, multiCell(), 1, 1)
+	terrain.PlotAt(1, 1).SetOccupied(true)
+	if !terrain.PlotAt(2, 1).IsFringe() {
+		t.Fatal("the stamp did not make (2,1) a fringe member of the (1,1) anchor")
+	}
+	metal, energy, ok := ReclaimTransition(terrain, 2, 1)
+	if !ok || energy != 250 || metal != 0 {
+		t.Fatalf("fringe cell: (%v, %v, %v), want the whole pool paid once [05 R-FEAT-01 §15]", metal, energy, ok)
+	}
+	if terrain.PlotAt(1, 1).IsRealFeature() || terrain.PlotAt(2, 2).IsFringe() {
+		t.Fatal("the payout must clear the ANCHOR's footprint, not the recorded cell's")
 	}
 }
 

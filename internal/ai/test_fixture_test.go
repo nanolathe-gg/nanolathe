@@ -6,6 +6,8 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/cob"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
@@ -66,4 +68,26 @@ func newAIFixtureWorld(maxDefs int, cat *content.Catalog) *units.World {
 	w := units.NewSliced(maxDefs, cat)
 	w.SetCOBSource(aiFixtureCOBFS{}, cob.NewCachedLoader())
 	return w
+}
+
+// aiFixtureOrderBinding is the queue binding a package-local fixture needs so
+// that the command resolver can answer code 14's build-list gate, which reads
+// the compiled `CANBUILD` page through the binding rather than from a catalog
+// handle the order package does not hold [04 R-ORD-02 §1]. Production binds the
+// session's own [internal/session/composition.go].
+//
+// The simulation stream goes in too, so that a fixture which pumps the queue
+// sees the pump's own jitter draws instead of panicking on an uninjected
+// stream [I4].
+func aiFixtureOrderBinding(cat *content.Catalog, sim *rng.Simulation) *orders.QueueBinding {
+	return &orders.QueueBinding{
+		SimRNG: sim,
+		BuildList: func(def *content.UnitDef) bool {
+			if def == nil || cat == nil || cat.BuildMenus == nil {
+				return false
+			}
+			page := cat.BuildMenus[content.CanonicalKey(def.CanonicalKey)]
+			return page != nil && len(page.Buttons) > 0
+		},
+	}
 }

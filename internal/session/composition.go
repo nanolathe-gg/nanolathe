@@ -2602,10 +2602,17 @@ func (s *Session) bindFeatureStripProducers() {
 	// height and owned by the dummy feature unit of [05 R-FEAT-01 §2]. In this
 	// build that request is the shared splash entry combat.ExplodeWeaponAt
 	// with a null shooter — [06 §13.1]: the impact is built as a synthetic
-	// projectile-shaped record with a NULL shooter and a zeroed side byte and
+	// projectile-shaped record with a NULL shooter and the NEUTRAL side value,
+	// the same value the common initializer gives a shooterless projectile, and
 	// pushed through the ordinary area enumeration, so it awards no veterancy
-	// and no kill credit. The death explosion takes the same path for the same
-	// reason [06 R-WPN-02 §5]. The name is resolved with the catalog's link
+	// and no kill credit. The side matters twice: the neutral value indexes the
+	// never-occupied player row, which is the damage gate's "always passes"
+	// case, and it matches no owner byte, so every recipient of the
+	// friendly/enemy split counts as an enemy [06 R-DMG-01 §9]. A shooterless
+	// handle is what ExplodeWeaponAt turns into that side. The death explosion
+	// takes the same path for the same reason [06 R-WPN-02 §5]. A real side
+	// zero would be player 0's own row, which is a different gate and a
+	// different split. The name is resolved with the catalog's link
 	// policy: a miss is record 0, the inactive sentinel, and fires nothing.
 	if s.Features.BurnWeapon == nil {
 		s.Features.BurnWeapon = func(name string, pos [3]numeric.Fixed) {

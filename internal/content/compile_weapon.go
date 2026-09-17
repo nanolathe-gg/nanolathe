@@ -4,7 +4,6 @@ package content
 
 import (
 	"fmt"
-	"math"
 	"sort"
 	"strings"
 
@@ -12,6 +11,14 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
+
+// degreesToRadians is the image's own degrees-to-radians constant, the
+// multiplier the weapon parser applies to `minbarrelangle` [02 "Weapon
+// record"]. It is not Go's `math.Pi / 180`: the shipped binary64 constant sits
+// five units in the last place below the correctly rounded quotient, and the
+// authored angle is multiplied by this value, not by a recomputed one. The
+// literal below is the shortest decimal that round-trips to that constant.
+const degreesToRadians = 0.017453292519943278
 
 // WeaponDef is a compiled weapon definition [02 "Weapon record"].
 // DefinitionHeader must be the first field per catalog convention [02 §5].
@@ -59,7 +66,7 @@ type WeaponDef struct {
 	HoldTime           int32   // holdtime *30 truncated, wrapped to a signed 16-bit store [07 "in-flight camera move"]
 	ShakeDuration      int32   // shakeduration *30 truncated; established as a 32-bit store, no further truncation [02 R-KEYS-01 §2]
 	TurnRate           int32   // turnrate *1/30 truncated per tick, wrapped to an unsigned 16-bit store [06 §6.7]
-	MinBarrelAngle     float64 // minbarrelangle *pi/180 radians default -11.25 [02 "Weapon record"]
+	MinBarrelAngle     float64 // minbarrelangle * the image degreesToRadians constant, narrowed by a single-precision store; default -11.25 degrees [02 "Weapon record"]
 
 	// Remaining scalar fields [02 "Weapon record"]
 	Range             int32   // range integer default 32767, 32-bit store [02 R-KEYS-01 §5]
@@ -226,9 +233,16 @@ func compileWeaponSectionWithPrior(section *formats.Section, sectionName string,
 	shakeDuration := numeric.TruncateFloat64ToLow32(section.FloatValue("shakeduration", 0) * 30.0)            // established 32-bit store [02 R-KEYS-01 §2], no further truncation
 	// turnrate *1/30 truncated per tick, wrapped to an unsigned 16-bit store [06 §6.7] ("zero-extended from its 16-bit store")
 	turnRate := int32(uint16(numeric.TruncateFloat64ToLow32(section.FloatValue("turnrate", 0) * (1.0 / 30.0))))
-	// minbarrelangle *pi/180 radians default -11.25 — composed exactly as
-	// tabulated, value times the pi/180 constant [02 "Weapon record"] C3.
-	minBarrelAngle := section.FloatValue("minbarrelangle", -11.25) * (math.Pi / 180.0)
+	// minbarrelangle radians, default -11.25 degrees [02 "Weapon record"] C3.
+	//
+	// Two details the obvious spelling gets wrong. The multiplier is the
+	// image's own degrees-to-radians constant, five units in the last place
+	// below the correctly rounded binary64 pi/180 (degreesToRadians above), and
+	// the product is narrowed by a SINGLE-precision store before anything reads
+	// it. The field stays float64 so the ballistic admission bound keeps its
+	// working-precision signature; what changes is that the value it holds is
+	// the stored single, exactly as retail's launch-angle gate sees it.
+	minBarrelAngle := float64(float32(section.FloatValue("minbarrelangle", -11.25) * degreesToRadians))
 
 	// Remaining scalars [02 "Weapon record"].
 	//

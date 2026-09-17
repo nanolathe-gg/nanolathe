@@ -1318,7 +1318,14 @@ func reclaimHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 		}
 		return code
 	case 5:
-		finishFeatureReclaim(u, cx, cz)
+		// The payout takes the position the ORDER recorded, not the anchor this
+		// row already resolved: retail's helper resolves that position twice
+		// and reads its guard's cell bit from the first, unhopped cell
+		// [05 R-FEAT-01 §15][05 R-WORK-01 §5]. Installing the approach goal does
+		// not rewrite the record's position, so for a multi-cell feature that
+		// position is whichever cell the producer recorded — the clicked cell, or
+		// the footprint centre a spawning row passes — often a fringe cell.
+		finishFeatureReclaim(u, int(world.WorldToCell(n.GoalX)), int(world.WorldToCell(n.GoalZ)))
 		return 5 // complete
 	default:
 		return 7 // cancel-all
@@ -1340,6 +1347,10 @@ func reclaimHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 // the builder's own player record — the slot must exist and its control byte
 // must be 2 [05 R-ECO-01 §11]. The ledger holds the records, so the owner index
 // is all it needs from here.
+//
+// cx, cz are the position the order recorded, which is what retail's payout
+// helper receives and resolves itself; an already-resolved anchor is the same
+// position for every single-cell feature.
 func finishFeatureReclaim(u *units.Unit, cx, cz int) {
 	q := QueueForUnit(u)
 	econ := queueEconomy(q)
@@ -1358,7 +1369,15 @@ func finishFeatureReclaim(u *units.Unit, cx, cz int) {
 	// fixture that does not compose a session gets.
 	reclaim := features.ReclaimTransition
 	if binding := q.Binding(); binding != nil && binding.ReclaimFeature != nil {
-		reclaim = func(_ *world.Terrain, cx, cz int) (float32, float32, bool) {
+		// The service twin's entry is the ANCHOR cell (binding.go), so the hop
+		// the terrain-only helper makes for itself happens here instead.
+		reclaim = func(t *world.Terrain, cx, cz int) (float32, float32, bool) {
+			if t != nil {
+				if cell := t.PlotAt(int32(cx), int32(cz)); cell != nil && cell.IsFringe() {
+					cx += int(cell.AnchorDXSigned())
+					cz += int(cell.AnchorDZSigned())
+				}
+			}
 			return binding.ReclaimFeature(cx, cz)
 		}
 	}

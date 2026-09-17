@@ -409,9 +409,11 @@ func (s *Service) SensorTick(tick uint32, playerCount int, units []SensorUnit) {
 		if int(src.Owner) >= primaryCandidateSlots {
 			continue // outside the registry's slot range: no list to search
 		}
-		// A plain 32-bit signed square of the authored integer: an unauthored
-		// mincloakdistance of 0 leaves the test `d² <= 0`, which effectively
-		// never fires [R-VIS-01 §4] pass 4.
+		// A plain 32-bit signed square of the compiled radius [R-VIS-01 §4]
+		// pass 4. The radius is whatever the unit compiler stored: an
+		// unauthored key on a cloak-capable definition is not 0 there, it is
+		// the derived 80 [02 "Unit record"], so this pass never has to reason
+		// about an absent key.
 		mc := src.MinCloakDistance
 		r2 := radiusSquared(mc)
 		member := uint16(1) << uint(src.Owner)

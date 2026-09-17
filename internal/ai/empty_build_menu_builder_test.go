@@ -93,11 +93,12 @@ func emptyMenuConstructionFixture(t *testing.T) (*Manager, *units.World, *units.
 	sim := rng.NewSimulation(7)
 	var submitted []pool.Handle
 	m := &Manager{
-		Player:  1,
-		Profile: &Profile{Weight: map[string]int32{productDef.CanonicalKey: 100}, Limit: map[string]int32{}},
-		Catalog: cat,
-		Terrain: placementTerrain(64, 64, 0),
-		RNG:     &sim,
+		Player:       1,
+		Profile:      &Profile{Weight: map[string]int32{productDef.CanonicalKey: 100}, Limit: map[string]int32{}},
+		Catalog:      cat,
+		Terrain:      placementTerrain(64, 64, 0),
+		OrderBinding: aiFixtureOrderBinding(cat, &sim),
+		RNG:          &sim,
 		QueueBuildTyped: func(req BuildRequest) error {
 			submitted = append(submitted, req.Builder)
 			return nil

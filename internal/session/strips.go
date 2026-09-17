@@ -930,8 +930,13 @@ func crtJitter7(crt *rng.CRT) int64 {
 }
 
 // nanoLifetimeTicks is trunc(distance/4) taken from the floating-point
-// distance, as a signed count [03 §5.5]. The float64 distance is the I2
-// allowlisted presentation temporary and is never stored.
+// distance, as a signed count [03 §5.5]. The float64 distance is an I2
+// allowlisted transient and is never stored, but it is NOT presentation: this
+// is an authoritative-side computation, and the lifetime it returns decides
+// whether the emitter still holds a particle on the next tick. An emitter whose
+// list has emptied is destroyed before its second spawn — thirty CRT draws that
+// are then never spent — and the CRT stream times the wind interval, the meteor
+// scheduler and the victory-timer arm [01 §7.5][I2][I4].
 func nanoLifetimeTicks(ax, ay, az, bx, by, bz numeric.Fixed) int32 {
 	const fractionOne = 65536.0
 	dx := float64(bx.Raw()-ax.Raw()) / fractionOne

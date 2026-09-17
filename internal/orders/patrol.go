@@ -239,11 +239,12 @@ func patrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 // advance. Phase 1: satisfied ∩ 0xE0 -> rotate. Point goal at the goal radius
 // 16; deadline 60; gate |= 0xE0. Then, only when the player's energy is at
 // least 20 % of energy storage, the repair-candidate scan: a picked candidate
-// that is still nonhostile ends the visit either way -- the accepted issue
-// rotates, an unresolvable code 8 or a refusing issuer WAITS. Only an empty
-// pick or a post-pick hostile verdict continues: when both energy and metal are
-// at least 20 % of their storages, hold; otherwise the feature pairing and its
-// reclaim-spawn decision tree; none -> hold. Other phase: cancel-all.
+// that is still nonhostile and whose command code 8 resolves ends the visit --
+// the accepted issue rotates, a refusing issuer WAITS. An empty pick, a
+// post-pick hostile verdict and an UNRESOLVABLE code 8 all continue in the same
+// visit: when both energy and metal are at least 20 % of their storages, hold;
+// otherwise the feature pairing and its reclaim-spawn decision tree; none ->
+// hold. Other phase: cancel-all.
 //
 // The gate here is ORed, not assigned, so the 60-tick deadline survives it and
 // the row re-runs its scan every 60 ticks whether or not the leg has finished.
@@ -267,23 +268,26 @@ func repairPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) 
 		n.DynamicGate |= gateMoveOutcomes // ORed: the 60-tick deadline survives
 		if resources, ok := playerResources(u); ok && resourceAtLeastTwenty(resources.Stock[1], resources.Capacity[1]) {
 			candidates := scanRepairCandidates(u, u.Def.SightDistance)
-			// "Ground repair repeats that same diplomacy check after the pick;
-			// when it remains nonhostile, resolve command code 8 (assist or
-			// repair) against the target; when resolvable and the issue helper
-			// accepts it → *rotate*, else *wait*" [04 R-ORD-01 §4]. Three arms,
-			// not one conjunction: only an empty pick or a post-pick hostile
-			// verdict leaves that sentence for the resource gates below. A
-			// nonhostile candidate whose code 8 does not resolve, or whose
-			// issue helper refuses (stance 3, [04 R-STANCE-01 §4]), *waits* —
-			// so a refused repair never reaches the feature pairing and never
-			// draws its six bounded picks [01 §7.5], which would shift the
-			// authoritative stream for the rest of the session (I4).
+			// Ground repair repeats the diplomacy check after the pick; when the
+			// candidate remains nonhostile it resolves command code 8 (assist
+			// or repair) against it and, only if that RESOLVES, puts it to the
+			// issue helper: acceptance *rotates*, refusal (stance 3,
+			// [04 R-STANCE-01 §4]) *waits* [04 R-ORD-01 §4].
+			//
+			// An unresolvable code 8 never reaches the helper. It frees the
+			// candidate vector and falls through to the 20 %-of-storage gates
+			// and the feature pairing in the SAME visit, so retail spends up to
+			// six more bounded picks there [01 §7.5] where a wait spends none;
+			// only the helper's refusal ends the visit early (I4).
 			if target := pickRepairCandidate(u, candidates); target != nil && !scanHostile(bindingFor(u), u, target) {
-				if spawnPatrolRepair(u, target, tick) {
+				resolved, accepted := issuePatrolRepair(u, target, tick)
+				switch {
+				case accepted:
 					n.DynamicGate = 0
 					return 6 // rotate after the accepted repair issue
+				case resolved:
+					return 3 // *wait*: the issue helper refused
 				}
-				return 3 // *wait*: unresolvable code 8, or a refusing issuer
 			}
 		}
 		if resources, ok := playerResources(u); ok && resourceAtLeastTwenty(resources.Stock[1], resources.Capacity[1]) && resourceAtLeastTwenty(resources.Stock[0], resources.Capacity[0]) {
@@ -421,8 +425,16 @@ func vtolPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Co
 		inhibitSlot(u, slotAll)
 		return 1 // advance
 	case 1:
-		n.Satisfied &^= pendingMovement // the five movement bits 0x20..0x200
-		return 1                        // advance
+		// This row clears only the THREE movement-outcome bits 0x20, 0x40 and
+		// 0x80: its write to the pending word is byte-wide, so the
+		// payload-release and rebind bits 0x100/0x200 survive it. The payload
+		// installer really does clear all five [04 R-AIR-01 §4], and the goal
+		// installers keep the wider 0x3E0 clear for that reason; only this row
+		// is narrow [04 R-ORD-02 §2]. The bits normally get cleared anyway by
+		// phase 2's install — except on the path where the marker allocation
+		// fails, which is where the two masks part company.
+		n.Satisfied &^= gateMoveOutcomes
+		return 1 // advance
 	case 2:
 		if satisfied&gateMoveOutcomes != 0 {
 			return 6 // *rotate*, phase left at 2: the next visit re-arms the leg

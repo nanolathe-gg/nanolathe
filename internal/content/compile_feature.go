@@ -19,9 +19,9 @@ type FeatureDef struct {
 	// Description — string, default empty [02 "Feature record"].
 	Description string // Description string empty [02 "Feature record"]
 	// Footprint in cells [02 "Feature record"].
-	FootprintX int32 // footprintx integer default 0 [02 "Feature record"]
-	FootprintZ int32 // footprintz integer default 0 [02 "Feature record"]
-	Height     int32 // height integer default 0 [02 "Feature record"]
+	FootprintX int32 // footprintx integer default 0, wrapped to a signed 16-bit store [02 R-KEYS-01 §5]
+	FootprintZ int32 // footprintz integer default 0, wrapped to a signed 16-bit store [02 R-KEYS-01 §5]
+	Height     int32 // height integer default 0, wrapped to an unsigned 8-bit store [02 R-KEYS-01 §5]
 	// Asset names [02 "Feature record"].
 	Object   string // object string empty — 3DO model name [02 "Feature record"]
 	Filename string // filename string empty — sprite source, used when no model [02 "Feature record"]
@@ -35,13 +35,13 @@ type FeatureDef struct {
 	SeqNameReclamate     string // seqnamereclamate string empty [02 "Feature record"]
 	SeqNameReclamateShad string // seqnamereclamateshad string empty [02 "Feature record"]
 	// Economy / combat [02 "Feature record"].
-	Metal  int32 // metal integer default 0 [02 "Feature record"]
-	Energy int32 // energy integer default 0 [02 "Feature record"]
-	Damage int32 // damage integer default 0 [02 "Feature record"]
+	Metal  int32 // metal integer default 0, masked to an unsigned 16-bit value before the single-float store [05 "Feature catalog and placement"]
+	Energy int32 // energy integer default 0, masked to an unsigned 16-bit value before the single-float store [05 "Feature catalog and placement"]
+	Damage int32 // damage integer default 0, wrapped to an unsigned 16-bit store [02 R-KEYS-01 §5]
 	// Fire / regrowth [02 "Feature record"] [03 §5.1.2].
-	SpreadChance  int32  // spreadchance integer default 0 [02 "Feature record"]
-	Reproduce     int32  // reproduce integer default 0 [02 "Feature record"] [GAP T14]
-	ReproduceArea int32  // reproducearea integer default 0 [02 "Feature record"] [GAP T14]
+	SpreadChance  int32  // spreadchance integer default 0, wrapped to an unsigned 8-bit store [02 R-KEYS-01 §5]
+	Reproduce     int32  // reproduce integer default 0, wrapped to an unsigned 8-bit store [02 R-KEYS-01 §5] [GAP T14]
+	ReproduceArea int32  // reproducearea integer default 0, wrapped to an unsigned 8-bit store [02 R-KEYS-01 §5] [GAP T14]
 	SparkTime     int32  // sparktime floating default 0.0 *30 truncated ticks [02 "Feature record"]
 	BurnWeapon    string // burnweapon string empty [02 "Feature record"]
 	// Animation flags [02 "Feature record"].
@@ -124,15 +124,45 @@ func compileFeatureSection(section *formats.Section, featureName string, prov Pr
 	burnweapon = boundedString(burnweapon, 255)
 
 	// Numeric scalars — integer accessor default 0 [02 "Feature record"].
-	footprintx := section.IntValue("footprintx", 0)
-	footprintz := section.IntValue("footprintz", 0)
-	height := section.IntValue("height", 0)
-	metal := section.IntValue("metal", 0)
-	energy := section.IntValue("energy", 0)
-	damage := section.IntValue("damage", 0)
-	spreadchance := section.IntValue("spreadchance", 0)
-	reproduce := section.IntValue("reproduce", 0)
-	reproducearea := section.IntValue("reproducearea", 0)
+	//
+	// The record's fields are narrower than the accessor's 32-bit conversion
+	// result, and each is wrapped here once, so the compiled definition already
+	// holds the value retail's readers see. The widening back to int32 is the
+	// extension that field's own readers apply, named per key
+	// [02 R-KEYS-01 §5][05 R-FEAT-01 §1].
+	//
+	// The footprint pair is a 16-bit store that every occupancy reader
+	// sign-extends. Everything else in the group is a store that its readers
+	// zero-extend.
+	footprintx := int32(int16(section.IntValue("footprintx", 0)))
+	footprintz := int32(int16(section.IntValue("footprintz", 0)))
+	// height is an 8-bit store read zero-extended. It is load-bearing for the
+	// simulation: it is the bound of the reclaim/resurrect approach-point draw
+	// (see the note below), so the byte, not the authored integer, is what the
+	// simulation RNG is handed. 27 stock decorations author 260..490
+	// [05 R-FEAT-01 §1][03 R-TERR-01 §4].
+	height := int32(uint8(section.IntValue("height", 0)))
+	// metal and energy are not stored as the authored integer. The conversion
+	// result is masked to its low sixteen bits and that unsigned value is what
+	// is converted into the record's single-precision yield, so an authored
+	// value above 65,535 wraps and an authored negative becomes a large
+	// positive yield [05 "Feature catalog and placement"] ("float(uint16(value))")
+	// [02 "Feature record"]. Four stock sections depend on it — the two Gate
+	// wreck/heap pairs author six-figure metal — so the mask belongs here, at
+	// the compile step, where every consumer (reclaim payout, area reclaim and
+	// the reclaim work budget) already reads the compiled field.
+	metal := int32(uint16(section.IntValue("metal", 0)))
+	energy := int32(uint16(section.IntValue("energy", 0)))
+	// damage is a 16-bit store; the fire-damage accumulator compares it
+	// zero-extended [05 R-FEAT-01 §1].
+	damage := int32(uint16(section.IntValue("damage", 0)))
+	// spreadchance, reproduce and reproducearea are byte stores, each read
+	// zero-extended: spreadchance and reproduce are compared against a
+	// simulation-RNG draw and reproducearea bounds one [05 R-FEAT-01 §1]
+	// [03 §5.1.2].
+	spreadchance := int32(uint8(section.IntValue("spreadchance", 0)))
+	reproduce := int32(uint8(section.IntValue("reproduce", 0)))
+	reproducearea := int32(uint8(section.IntValue("reproducearea", 0)))
 	animating := section.IntValue("animating", 0) & 1
 	animtrans := section.IntValue("animtrans", 0) & 1
 	shadtrans := section.IntValue("shadtrans", 0) & 1

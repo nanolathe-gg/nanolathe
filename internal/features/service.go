@@ -1621,18 +1621,38 @@ func is3DDef(def *content.FeatureDef) bool {
 }
 
 // The third refusal is the payout guard of [05 R-FEAT-01 §15]: the helper
-// refuses outright when the anchor cell's instance-attached bit AND the
-// definition's sprite bit are both set. The conjunction means "a sprite feature
-// that currently has a live animation instance" — one that is burning, or
-// already playing its death or reclaim animation — which is what "burning
-// blocks reclaim" describes. It never applies to a 3D wreck: the stamp sets a
-// 3D definition's instance bit always, but its definition bit is clear, so a
-// sinking wreck stays reclaimable throughout.
+// refuses outright when an instance-attached bit AND the definition's sprite
+// bit are both set. The conjunction means "a sprite feature that currently has
+// a live animation instance" — one that is burning, or already playing its
+// death or reclaim animation — which is what "burning blocks reclaim"
+// describes. It never applies to a 3D wreck: the stamp sets a 3D definition's
+// instance bit always, but its definition bit is clear, so a sinking wreck
+// stays reclaimable throughout.
+//
+// The two bits come from DIFFERENT cells. Retail's payout helper resolves the
+// order's recorded position twice and keeps the FIRST, unhopped result for the
+// cell bit, while the definition bit comes from the anchor's catalog entry
+// [05 R-FEAT-01 §15]. cx, cz are therefore the recorded position, not a
+// pre-resolved anchor: for a single-cell feature the two cells coincide, but a
+// multi-cell sprite definition reclaimed from one of its fringe cells reads
+// that fringe cell's instance-attached bit, which the stamp leaves clear, so
+// the payout is not refused even while the anchor carries a live instance.
 func ReclaimTransition(t *world.Terrain, cx, cz int) (metal, energy float32, ok bool) {
 	if t == nil {
 		return 0, 0, false
 	}
-	cell := t.PlotAt(int32(cx), int32(cz))
+	recorded := t.PlotAt(int32(cx), int32(cz))
+	if recorded == nil {
+		return 0, 0, false
+	}
+	// The second resolution is the hop to the anchor, exactly as FeatureAt
+	// makes it [05 R-ECO-02 §2]; everything below the guard is the anchor's.
+	ax, az := cx, cz
+	if recorded.IsFringe() {
+		ax += int(recorded.AnchorDXSigned())
+		az += int(recorded.AnchorDZSigned())
+	}
+	cell := t.PlotAt(int32(ax), int32(az))
 	if cell == nil || !cell.IsRealFeature() {
 		return 0, 0, false
 	}
@@ -1643,18 +1663,18 @@ func ReclaimTransition(t *world.Terrain, cx, cz int) (metal, energy float32, ok 
 	if !def.Reclaimable || def.Indestructible {
 		return 0, 0, false
 	}
-	if isSpriteDef(def) && cell.Occupied() {
+	if isSpriteDef(def) && recorded.Occupied() {
 		return 0, 0, false // the payout guard's two bits [05 R-FEAT-01 §15]
 	}
 	// I2 allowlist: the pools cross into the economy ledger as float32
 	// contributions [05 "Feature reclaim"][05 R-ECO-01 §2].
 	metal = float32(def.Metal)
 	energy = float32(def.Energy)
-	clearFeatureRect(t, cx, cz, def)
+	clearFeatureRect(t, ax, az, def)
 	successor := def.FeatureReclamateDef
 	placed := false
 	if successor != nil {
-		placed = stampFeatureDef(t, cx, cz, successor, nil)
+		placed = stampFeatureDef(t, ax, az, successor, nil)
 	}
 	// One revision bump for the whole replacement: a blocking successor bumps
 	// inside the stamp, so this covers only the case where the blocking

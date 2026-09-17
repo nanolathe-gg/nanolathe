@@ -1285,6 +1285,19 @@ the two index resets and the two drawers.
   reset to zero by three routines: the skirmish/multiplayer battle-entry
   path, one further set-up routine, and the battle state's own exit path;
   the F12 key clears them in play ([07 R-CAM-01 §2]).
+- **The poster's three gates (Established).** Before anything is written the
+  poster returns on an empty text line, and then returns on a zero
+  `textlines` interface option — with `textlines` 0 **no line is ever posted**,
+  so the ring stays empty and the retire has nothing to do. Fullness is tested
+  as `(producer index + 1) mod textlines == display index`, i.e. **modulo the
+  option**, while both index advances wrap at **30**; the two therefore
+  disagree for every `textlines` below 30, and the ring behaves as a window of
+  `textlines` entries inside a 30-slot array. On a full ring the poster
+  **drops the oldest** — it advances the display index one slot (wrapping at
+  30) and then writes the new record at the producer index. It never refuses a
+  line. The text copy is a bounded 64-byte copy with a forced terminator, the
+  class byte takes only its low nibble (the high nibble is preserved), and the
+  `MessageArrived` cue is played unless the silence byte is `'\n'`.
 - **No network path touches it.** The send helper, the receive dispatch and
   the receive-frame window never read or write the ring or its indices
   (bounded negative over the recovered export).
@@ -1427,9 +1440,9 @@ following contracts are Established.
 | Pool | Capacity/record contract | Allocation and retirement |
 | --- | --- | --- |
 | Unit instances | 280-byte records; capacity is the session's per-player unit limit multiplied by ten plus one, yielding roughly two thousand to five thousand stock slots rather than the 500 folklore; the pool is sliced per player by sorted player order, each slice holding exactly as many records as that same limit — never a definition count — with slot zero reserved as null. Doc 05 [R-SHARE-01 §7] owns the sizing contract: the limit's three producers (the mission's `maxunits`, default 200; the `UnitLimit` preference, default 250, clamped to 20..500; the host's synchronized limit word), the slice bounds, the absence of a clamp at the sizing site, and the two side tables the same word sizes. Allocation scans the owning player's slice for the lowest free record and reuses it immediately: a record is free when its stored **definition-index word is zero**, which is exactly what teardown clears, and that word is the allocator's only free test — the alive mask marks a live slot for every other reader, but the allocator never reads it. Doc 05 [R-SHARE-01 §8] steps 2–4 own the admission gates and their order; they are two independent mechanisms, not one. The definition's creatable bit is a mandatory admission bit (the `Version`-admission flag of [02 R-CAT-01 §4], not a per-definition limit switch) and refuses outright when clear; the per-definition limit is a separate field, minus one meaning unlimited, otherwise compared with a signed compare against a census of the slice. The canonical allocator is the sole allocation site for every creation path and the reconstructor validates a forced slot against slice bounds and occupancy, with every limit, slice-full, out-of-bounds, or occupied case returning a null handle and consuming no RNG; freeing clears alive masks, heaps, order queues, and attachments but retains the stored slot index; saving uses forced-slot reconstruction and a stale 16-bit packet that validates only slot nonzero and alive, so it aliases a reused occupant silently |
-| Projectiles | Exactly 300 records, 107 bytes each | Allocation appends at the active-span tail. Retirement sets a dead flag without changing the count. Stable compaction runs at the projectile-phase tail every sub-tick (reading the current post-append count), and again immediately after the unit-owner projectile purge when a unit dies; it removes dead records, preserves survivor order, and repairs the affected projectile and follow-camera links. The post-loop pass is a different structure (see §6.2). |
-| Feature definitions | Each type has a 128-byte copy; type table records use a 256-byte stride | Preallocated at map/catalog load; type IDs are stable for the loaded catalog. |
-| Live features | A 48-byte live record plus a 13-byte plot cell per map attribute cell | Plot cells point to feature anchors; removal returns the cell to the free sentinel and releases the live record. Map-row order is deterministic. |
+| Projectiles | Exactly 300 records, 107 bytes each | Allocation appends at the active-span tail. Retirement sets a dead flag without changing the count. Stable compaction runs at the projectile-phase tail every sub-tick (reading the current post-append count), and again **inside** the scan a dying unit makes over the pool — once per matching record, not once after the sweep: the match tests the record's remaining **burst count** (so pellets already in flight do not match) and the scan's cursor advances over the slot the compaction just refilled. [06 §5.2] owns that sweep; it removes dead records, preserves survivor order, and repairs the affected projectile and follow-camera links. The post-loop pass is a different structure (see §6.2). |
+| Feature definitions | Each type's **name** is kept as a 128-byte block (the save walk copies it out of the type record with a bounded 128-byte string copy into a 128-strided buffer); type table records use a 256-byte stride | Preallocated at map/catalog load; type IDs are stable for the loaded catalog. |
+| Live features | A 48-byte live record plus a 13-byte plot cell per map attribute cell; the live-record arena is a hard-capped **2048 slots** ([05 R-FEAT-01 §2] owns the capacity and the free-list threading) | Plot cells point to feature anchors; removal returns the cell to the free sentinel and releases the live record. Map-row order is deterministic. |
 | COB threads | Eight 164-byte thread records per unit ([04 §4.2] owns the contract; the eight is fixed at VM construction and every walker — allocation, signal, the wake scan, save and restore — is bounded by it) | Lowest clear thread-mask bit is selected. Ending/sleeping a thread clears its active bit; the scan is fixed order. |
 | Construction nodes | A 86-byte node; factories use separate tail/head links selected by a flag | Nodes append to a per-factory chain, coalesce matching build types where applicable, and are freed on cancellation/completion. |
 | Effect/sequence strips | Variable vectors of segment records drawn from one process-lifetime pool of **1000 slots × 76 bytes**, built by a static constructor and never grown | Append in event order; a compaction/drain pass moves/removes old entries, and each strip evicts its oldest object when its pre-insert count exceeds 400. Every producer call site is enumerated by strip literal in doc 03 [R-FX-02 §5] (strips 0, 1, 3 and 8 have none). |
@@ -1454,21 +1467,32 @@ later occupant after reuse.
 - The network future-frame window is 30 frames. A sequence outside the accepted
   window, a duplicate below the base, or an unauthorized host frame is dropped.
   The outbound packet queue is 1024 entries and per-peer future storage is 512
-  entries; a datagram can carry about 1,066 bytes. Network queues are not saved.
+  entries; a datagram carries exactly 1,066 bytes (the same constant appears as
+  the buffer size, as a stored field and as the size limit the send path
+  compares against). Network queues are not saved. The outbound queue's
+  overflow policy is **drop-newest** (Established): the push compares the live
+  entry count against 1024 with a signed compare and, when it is at or above
+  capacity, returns failure **before** touching the write index — nothing is
+  overwritten and neither index moves.
 - Path requests are per-player linked queues. A search drains at most 100 nodes
   per pass; a 150-tick deadline is also recorded. Duplicate goals can overwrite
   an existing request.
 - The post-loop ring is the in-battle **message ring**: a 30-entry circular
   window of 72-byte records, each a 64-byte text line plus its post tick,
-  source unit, silence byte and class nibble. After the tick body, while the
+  source unit, silence byte and class nibble. After the tick body, **when** the
   head entry's deadline — its post tick plus `(textscroll + 1) × 30` ticks,
   `textscroll` being the interface option in seconds — has passed, the head
-  advances one slot with wraparound.
+  advances one slot with wraparound. The retire is a straight-line step with no
+  back edge and the sub-tick tail calls it exactly once, so **at most one line
+  retires per tick**; a clone that loops here drains a backlog in one tick
+  where retail takes one tick per line. The producer's `textlines` gate, its
+  modulo-`textlines` fullness test and its drop-oldest overflow are stated in
+  [R-PLAT-02 §8].
   It is presentation state, no network path touches it, and it is not a
   generic timer queue ([R-PLAT-02 §8]).
 - A separate post-loop pass compacts the temporary-sight observer list of
-  [R-PLAT-02 §5] — 36-byte records with expiry fields — invoking each expired
-  record's expiry callback and removing it in place; its producer is the
+  [R-PLAT-02 §5] — **20** records of 36 bytes with expiry fields — invoking
+  each expired record's expiry callback and removing it in place; its producer is the
   central unit-death handler, reached directly in single player
   ([08 R-SESS-01 §3]). It is distinct from the projectile-pool compactor of
   §6.1.
@@ -1807,7 +1831,12 @@ fails the scheduler restore without partial application). The layout is:
 | 0x1A | 2 | pause/lag/pending bits |
 
 RNG state (Park–Miller process-wide and CRT TLS state) is outside this block
-and is absent from the bounded save-writer graph. Load re-enters the battle-entry
+and is absent from the save path — for the simulation stream this is a
+**whole-image closure**, not a bounded one: the Park–Miller state word has
+exactly three accesses in the entire image — the sampler's read, the sampler's
+write-back and the seed setter's store — so no save, load, packet or teardown
+path can read or write it. The CRT state lives in the per-thread runtime block
+and is likewise never serialized. Load re-enters the battle-entry
 orchestrator, reseeding simulation and the loading-thread CRT block; the
 main-thread CRT continues its current process history [R-CORE-02]
 [R-PLAT-01 §7]. A resumed game therefore does not restore the pre-save random
@@ -1903,7 +1932,7 @@ phase-2 pump; a handler that returns before the draw consumes nothing.
 | 2 — weapon update, line-of-sight executor | — | 0 | [06 R-WPN-03 §2] |
 | 2 — COB drain | sim | `random` opcode: `sim(high − low + 1)`; `explode` opcode: `sim(3000)`×3, `sim(40)`, `sim(10)`, `sim(40)` unless the bitmap-only flag is set | [04 R-COB-01 §2] |
 | 2 — primary and secondary order pumps | sim | `sim(15)` once per pump visit that lands on disposition case 3 (the wait dispositions) | [04 R-P0-01] |
-| 2 — order handlers (ground) | sim | `Wait` `sim(30)` (+150 ticks); `AttackUType` `sim(90)` then `sim(x ÷ 2)`; `SelfDestruct` `sim(15)` when the countdown reaches zero; `Patrol` `sim(30)`; `Suppress` `sim(d ÷ 3)`; `RepairUnit` `sim(30)` (+30) in the out-of-range retry; `Follow_Ground` `sim(65536)`; `Reclaim`/`Resurrect` approach `sim(featureHeight)`; `RepairPatrol` — **unit scan/pick**: one ordered candidate gather and one bounded `sim(count)` pick, followed only when the handler reaches feature pairing by three energy-list draws and then three metal-list draws (each triple conditional on a nonempty sampled list) | [04 R-ORD-01 §2–§5], [05 R-WORK-01 §8], [R-DET-01 §6] |
+| 2 — order handlers (ground) | sim | `Wait` `sim(30)` (+150 ticks); `AttackUType` `sim(90)` then `sim(x ÷ 2)`; `Attack_Chase` `sim(32768)`, consumed as `bearing + draw − 16384` — a ±16,384 spread about a bearing the handler computes immediately before the draw; `SelfDestruct` `sim(15)` when the countdown reaches zero; `Patrol` `sim(30)`; `Suppress` `sim(d ÷ 3)`; `RepairUnit` `sim(30)` (+30) in the out-of-range retry; `Follow_Ground` `sim(65536)`; `Reclaim`/`Resurrect` approach `sim(featureHeight)`; `RepairPatrol` — **unit scan/pick**: one ordered candidate gather and one bounded `sim(count)` pick, followed only when the handler reaches feature pairing by three energy-list draws and then three metal-list draws (each triple conditional on a nonempty sampled list) | [04 R-ORD-01 §2–§5], [05 R-WORK-01 §8], [R-DET-01 §6] |
 | 2 — order handlers (air) | sim | `VTOL_Standby` `sim(30)`, then `sim(65536)` bearing and `sim(32)` radius (+8), then `sim(15)` (+30) delay; `VTOL_SeekAttack`/`VTOL_SeekGuard`/`VTOL_Follow` `sim(65536)` bearing, `sim(count)` for the damaged-retreat pad, `sim(8192)` orbit angle only when the interrupt bits are set, `sim(30)` deadline; `VTOL_Patrol` `sim(count)`; `AirStrike`-family case bodies `sim(16384)`; `VTOL_Evade` `sim(2)`; further air case bodies `sim(128)`, `sim(2)`, `sim(30)` | [04 R-AIR-01 §7, §8], [04 §10.3] |
 | 2 — movement integration, route follower, path search | — | 0 | [04 R-MOV-01], [04 R-PATH-01 §11] |
 | 2 — death handling | CRT | 1 when the victim's owner's live-unit count reaches zero: skirmish `crt() mod 3`, multiplayer `crt() & 7` (announcement line choice; presentation text, but the draw is inside the tick) | [08 R-CAMP-01 §9], [R-DET-01 §6] |
@@ -1947,7 +1976,7 @@ functions; the ones not already placed in the tick table above are:
 | sound-variant picker | `(crt() · variantCount) ÷ 32768` per play, gated by the sound-category record's variant count and the options flags | doc 03 §8 / doc 02 sound category |
 | CD audio track choice | 2 sites | random track mode |
 | developer terrain display mode 1 | one per visited acceptable-terminal search cell, before glyph clipping | randomized `G` color; [03 §3.12] |
-| fire-effect spawn from debris | 4 (three −1..+1 position jitters and one more) | [04 R-COB-04 §2] |
+| fire-effect spawn from debris | 4, all four identical: `trunc((crt()·3) ÷ 32768) − 1`, a −1..+1 offset added into a different 16-bit field of the spawn record each time | [04 R-COB-04 §2] |
 | lightning renderer | per rendered frame, two passes, three draws per point: `(crt()·11) ÷ 32768 − 5` on each axis | [06 R-WFX-01 §6]; 6 per point per frame, matching the lane |
 | multiplayer host lobby shuffle | as the skirmish shuffle | out of scope |
 | a packet-path gate `(crt()·101) ÷ 32768 ≤ setting` | 1 | its callers are dead or multiplayer-only; out of scope |
@@ -2640,9 +2669,9 @@ stated in the body, not here.
   sites whose operand the owning document does not spell out; the site list
   itself is complete · §8, docs 04 and 06 · static trace of the x87 stack at
   each site.
-- The exact per-object CRT draw count of the effect-strip objects and of the
-  fire-effect spawn's fourth draw; doc 03 owns the object bodies, this census
-  records the sites · §7.5, §7.6 [R-DET-01 §5], doc 03 · static trace.
+- The exact per-object CRT draw count of the effect-strip objects; doc 03 owns
+  the object bodies, this census records the sites · §7.5, §7.6
+  [R-DET-01 §5], doc 03 · static trace.
 
 ### Memory and queues
 

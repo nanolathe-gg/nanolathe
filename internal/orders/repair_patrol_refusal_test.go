@@ -137,14 +137,21 @@ func TestRepairPatrolWaitsWhenTheRepairIssueIsRefused(t *testing.T) {
 	}
 }
 
-// TestRepairPatrolWaitsWhenCodeEightDoesNotResolve is the sentence's other
-// refusal arm: the candidate passes the scan's filter and the ground twin's
+// TestRepairPatrolFallsThroughWhenCodeEightDoesNotResolve is the arm that is
+// NOT a refusal: the candidate passes the scan's filter and the ground twin's
 // post-pick diplomacy recheck, but command code 8 does not resolve against it,
-// so there is nothing for the issue helper to accept. A submerged candidate is
-// the reachable case — the candidate filter carries no water term while
-// nano-reach's water clause does ([04 R-ORD-01 §7]: "it will not repair a unit
-// whose top is under water").
-func TestRepairPatrolWaitsWhenCodeEightDoesNotResolve(t *testing.T) {
+// so the issue helper is never asked. Retail frees the candidate vector and
+// falls through to the 20 %-of-storage gates and the feature pairing in the
+// same visit [04 R-ORD-01 §4]; only the helper's own refusal waits.
+//
+// A submerged candidate is the reachable unresolvable case — the candidate
+// filter carries no water term while nano-reach's water clause does
+// ([04 R-ORD-01 §7]: "it will not repair a unit whose top is under water").
+//
+// The draw count is the contract: one for the candidate pick, then six for the
+// two feature tournaments. A visit that stopped at the unresolvable code would
+// spend one, and every later draw in the session would shift (I4).
+func TestRepairPatrolFallsThroughWhenCodeEightDoesNotResolve(t *testing.T) {
 	actor, candidates, sim, q := repairPatrolRefusalFixture(t, false)
 	actor.Def.MaxWaterDepth = 0 // wade half becomes sea 20 <= targetTop
 	for _, c := range candidates {
@@ -153,13 +160,14 @@ func TestRepairPatrolWaitsWhenCodeEightDoesNotResolve(t *testing.T) {
 	n := &Node{Owner: actor.Handle, Phase: 1}
 
 	if got := repairPatrolHandler(actor, n, 0, 100); got != 3 {
-		t.Fatalf("unresolvable code 8 returned %d, want 3 (*wait*)", got)
+		t.Fatalf("unresolvable code 8 returned %d, want 3 (the spawned reclaim waits)", got)
 	}
-	if draws := sim.Draws(); draws != 1 {
-		t.Fatalf("unresolvable code 8 drew %d simulation values, want 1 [01 §7.5][I4]", draws)
+	if draws := sim.Draws(); draws != 7 {
+		t.Fatalf("unresolvable code 8 drew %d simulation values, want 7 — the candidate pick plus "+
+			"the feature pairing's six bounded picks [01 §7.5][I4]", draws)
 	}
-	if q.LenPrimary() != 0 {
-		t.Fatalf("unresolvable code 8 inserted %d records", q.LenPrimary())
+	if q.LenPrimary() != 1 || q.Primary()[0].ID != Lookup("Reclaim") {
+		t.Fatalf("unresolvable code 8 did not fall through to the patrol reclaim: %d records", q.LenPrimary())
 	}
 }
 

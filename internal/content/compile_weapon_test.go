@@ -2,6 +2,7 @@ package content
 
 import (
 	"fmt"
+	"math"
 	"testing"
 )
 
@@ -67,10 +68,19 @@ func TestWeaponConversions(t *testing.T) {
 	if wd.Range != 100 {
 		t.Fatalf("range = %d, want 100", wd.Range)
 	}
-	// minbarrelangle default -11.25 degrees composed with the pi/180 constant.
-	wantAngle := -11.25 * (piOver180())
+	// minbarrelangle default -11.25 degrees times the image's own
+	// degrees-to-radians constant, then narrowed by a single-precision store
+	// [02 "Weapon record"]. Both halves matter: the constant is five units in
+	// the last place below math.Pi/180, and the stored value is a float32.
+	wantAngle := float64(float32(-11.25 * piOver180()))
 	if wd.MinBarrelAngle != wantAngle {
 		t.Fatalf("minbarrelangle = %v, want %v", wd.MinBarrelAngle, wantAngle)
+	}
+	if piOver180() == math.Pi/180.0 {
+		t.Fatal("the image's degrees-to-radians constant must not be math.Pi/180")
+	}
+	if wd.MinBarrelAngle == -11.25*piOver180() {
+		t.Fatal("minbarrelangle was not narrowed by the single-precision store")
 	}
 	// DAMAGE: default fallback plus every other key interned by name [02 "Weapon record"] C4.
 	if wd.DamageDefault != 55 {

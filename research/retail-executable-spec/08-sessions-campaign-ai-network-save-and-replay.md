@@ -1512,8 +1512,12 @@ anchor of [07 §9]; its contract:
   `waterline` byte [fmt fbi].
 - **Guards.** The probe returns `0` — and the unit is spawned at `y = 0`
   with no diagnostic — unless `cx > 0`, `cz ≥ 1`, `cx + fw < cellWidth` and
-  `cz + fh < cellHeight` (signed 16-bit arithmetic on the halves; the `cz`
-  test is the unsigned test "packed pair > 0xFFFF").
+  `cz + fh < cellHeight`. Both halves of the packed cell pair are tested
+  **separately, as signed 16-bit values against 1**, so a negative `cz` is
+  rejected. The unsigned "packed pair exceeds `0xFFFF`" form belongs to the
+  footprint blocker, a different routine, where it is stated correctly
+  ([R-AI-03 §7.1]); reproducing it here would admit negative rows and with
+  them the blocker's out-of-bounds walk, which this routine does not have.
 - **Aggregates.** Walking the footprint row-major, a yard byte with **bit 3**
   set folds that cell into `minLow = min(minLow, hmin)` (start 255) and
   `maxHigh = max(maxHigh, hmax)` (start 0); a yard byte with **bit 4** set
@@ -2995,13 +2999,13 @@ The placement root is called by the construction task after a candidate has been
 
 Helper selection for extractor candidates is strict. When the candidate's extracts-metal flag compares equal to floating zero, the root calls the statistical scatter helper directly without drawing. Otherwise it draws once with bound 255 and calls the exhaustive patch helper when the mission's uniform surface metal value is strictly less than the draw; otherwise it calls the scatter helper. The test is strictly less-than, so equality chooses the scatter path.
 
-The exhaustive patch helper scans a precomputed metal-patch record vector within the search disc whose radius is scaled by four, filters by squared cell distance, orders the qualifying patches nearest first through a binary heap, and then validates each candidate in that order with the footprint blocker and the metal score. The score is the **sum of the per-cell metal bytes across the footprint** (the blocker accumulates each footprint cell's metal byte; the score getter is a trivial read of that accumulator). The exhaustive helper keeps the candidate with the highest accumulated metal sum (strict greater-than; ties keep the earlier entry). It stops early when a candidate's squared cell distance exceeds that of the first accepted candidate by more than 160 ([R-AI-03 §3]). The statistical scatter helper attempts up to 30 trials around the origin, quantizing each trial to the map grid and to per-region bounds selected by the sign of the candidate's `MinWaterDepth`; each trial draws up to four values (a radius-scaled offset, a direction, and region-cell offsets) and validates with the placement validator and a comparison of the same metal-byte-sum score against a limit computed as surface metal times footprint X times footprint Z times two ([R-AI-03 §4]). The scatter path writes the chosen placement as fixed-point world coordinates derived from the quantized grid, scaling the grid index by a fixed factor that corresponds to half-tile increments.
+The exhaustive patch helper scans a precomputed metal-patch record vector within the search disc whose radius is scaled by four, filters by squared cell distance, orders the qualifying patches nearest first through a binary heap, and then validates each candidate in that order with the footprint blocker and the metal score. The score is the **sum of the per-cell metal bytes across the footprint** (the blocker accumulates each footprint cell's metal byte; the score getter is a trivial read of that accumulator). The exhaustive helper keeps the candidate with the highest accumulated metal sum (strict greater-than; ties keep the earlier entry). It stops early when a candidate's squared cell distance exceeds that of the first accepted candidate by more than 160 ([R-AI-03 §3]). The statistical scatter helper attempts up to 30 trials around the origin, quantizing each trial to the map grid and to per-region bounds selected by the sign of the candidate's `MinWaterDepth`; each trial draws up to four values (a radius-scaled offset, a direction, and region-cell offsets) and validates with the placement validator and a comparison of the same metal-byte-sum score against a limit computed as surface metal times footprint X times footprint Z times two; the trial is **accepted when the accumulated metal sum is at or below that limit** and retried when it exceeds it, so the rule keeps ordinary buildings off metal patches ([R-AI-03 §4]). The scatter path writes the chosen placement as fixed-point world coordinates derived from the quantized grid, scaling the grid index by a fixed factor that corresponds to half-tile increments.
 
 Water legality is per cell, with the definition's own depth fields: the footprint blocker — used by the exhaustive helper and by the validator's building branch — applies the waterline band to the footprint's yard-bit heights, and the validator's mobile branch tests every cell's low and high height against the same band ([R-AI-03 §3], [R-AI-03 §4]). There is no water-only extractor filter.
 
 Failed exhaustive helper does not fall through to the scatter helper; it returns failure for the entire placement attempt. Success requires the yard and occupancy validator to report placeable; missing yard data is not treated as permissive. The scatter helper's limit check is established as the product above, and the exhaustive helper contributes no random draws while the scatter helper contributes only the draws counted per trial. Candidate selection consumes the per-positive-option draws of [R-AI-01 §8]. The separate extractor/scatter choice and each scatter trial consume their own draws as described above. [P0-03] [lane 08 placement score and water]
 
-RNG sites for AI planning are the outer 30 gate, the cumulative weighted reservoir, the extractor selector with bound 255, the positioning scatter with bounds up to the current radius and 65536, the unit-loss throttle (deadline is current tick plus 30 plus a draw bounded 300), the strategic-state constructor (eight draws at setup, in order: 10, 3, then the two land-set offset draws bounded by the drawn region widths, then 20, 3, then the two water-set offset draws — these seed the region and offset words the scatter helper later reads, [R-AI-03 §4]), the eco toggle with bound five, the explore task (deadline draw bounded 900, plus body draws bounded 2 and the map-dimension fractions), and the rally task (deadline draw bounded 150, drift-seed gate bounded 10, two drift draws bounded 65536, and score-comparison draws bounded by the score values). The wave, regroup, and merge bodies draw nothing; the throttle, constructor, and task-body draws above complete the inventory. Separately, the session package's skirmish commander-respawn path (commander-death rule value two) draws twice per placement trial (map-width and map-height bounds) with up to 9999 trials. [P0-01] [P0-02] [P0-03] [lane 08 RNG inventory]
+RNG sites for AI planning are the outer 30 gate, the cumulative weighted reservoir, the extractor selector with bound 255, the positioning scatter with bounds up to the current radius and 65536, the unit-loss throttle (deadline is current tick plus 30 plus a draw bounded 300), the strategic-state constructor (eight draws at setup, in order: 10, 3, then the two land-set offset draws bounded by the drawn region widths, then 20, 3, then the two water-set offset draws — these seed the region and offset words the scatter helper later reads, [R-AI-03 §4]), the eco toggle with bound five, the explore task (deadline draw bounded 900, plus body draws bounded 2 and the map-dimension fractions), and the rally task (deadline draw bounded 150, drift-seed gate bounded 10, two drift draws bounded 65536, and score-comparison draws bounded by the score values). The wave, regroup, and merge bodies draw nothing; the throttle, constructor, and task-body draws above complete the inventory. Separately, the session package's skirmish commander-respawn path (commander-death rule value two) draws twice per placement trial, bounded `mapWidth − 2·(mapWidth / 10)` and `mapHeight − 2·(mapHeight / 10)` — the map extent less a tenth on each side, as [R-SKIR-01 §3] states — with up to 9999 trials. The bound is what advances the Park–Miller stream, so a reimplementation that draws against the bare map extents desynchronises it. [P0-01] [P0-02] [P0-03] [lane 08 RNG inventory]
 
 **Per-branch draw counts.** The exact counts are stated at each site in
 [R-AI-01 §2] through [R-AI-01 §7]. The **positioning** draws are two `RNG(65536)` angle draws in
@@ -3031,19 +3035,34 @@ The strategic state contributes, per definition type: a three-byte class triple 
 
 #### Hard gates and economy pressure — Established [R-P0-05 §3]
 
-For each candidate the hard gates run first:
+For each candidate three hard gates run first:
 
 - reject when current energy is strictly below `50.0`;
 - reject when current metal is strictly below `25.0`;
-- reject when the session mode word equals `1` and the candidate's definition carries the authored `downloadable` flag ([R-AI-01 §8]);
-- reject when the candidate's completed count reaches its profile limit — `count < limit` is required, and `-1` means unlimited.
+- reject when the session mode word equals `1` and the candidate's definition carries the authored `downloadable` flag ([R-AI-01 §8]).
 
 The pressure values then use the player fields:
 
 ```text
-energyRaw = trunc(max(0, (min(energyCapacity, 1000) - currentEnergy) * 0.125))
-metalRaw  = trunc(max(0, (min(metalCapacity,  500) - currentMetal)  * 0.25))
+energyRaw = trunc(max(0, (min(trunc(energyCapacity), 1000) - currentEnergy) * 0.125))
+metalRaw  = trunc(max(0, (min(trunc(metalCapacity),   500) - currentMetal)  * 0.25))
 ```
+
+Each capacity is read as a float and **truncated toward zero to an integer
+before the clamp**; the clamp is an integer comparison against the literal, and
+the clamped integer is converted back to a float for the subtraction. A
+fractional capacity therefore loses its fraction before the difference is taken,
+which is what makes the two narrowing steps distinguishable — capacity `100.9`
+against stock `92.1` gives `0`, not `1`. Capacities are ordinarily integral,
+because stock content sums integer `energystorage`/`metalstorage` values.
+
+A fourth hard gate runs **after** the two pressure terms, their net-resource
+adjustments and their production ladders, and before the mix: reject when the
+candidate's completed count reaches its profile limit — `count < limit` is
+required, and `-1` means unlimited. The pressure block between the third gate
+and this one reads only the player aggregates and the truncation helper; it
+consumes no random numbers and writes nothing, so the placement of the limit
+test is not observable, only the order a reimplementation should keep.
 
 Adjustments are applied in this order:
 
@@ -3499,7 +3518,7 @@ for unit in group vector order:
         d  = trunc(sqrt(float(dx)*float(dx) + 0.0 + float(dz)*float(dz)))
         if d > ((playfieldWidth + playfieldHeight) / 3) << 16: placed = false
     if placed:
-        submit intent 14 (MobileBuild) for `chosen` at `out`, queue modifier 1
+        submit intent 14 (MobileBuild) for `chosen` at `out`, queue modifier 0
 ```
 
 `playfieldWidth` and `playfieldHeight` are the map's world-unit extents **less
@@ -3516,15 +3535,27 @@ The order-queue test uses the current order's static gate mask, not its command
 identity [04 "Order descriptor table"]; the semantic name of mask bit 3 is
 open (§17).
 
+The mobile build is issued through the ordinary command resolver, so command
+code 14's own gate applies on top of the membership test above: the acting
+unit's compiled build list must be non-empty **and** the unit must carry a live
+mover, and the `canfly` flag then picks the air twin of the descriptor
+([04 §3.4], [04 R-ORD-02 §1]). An immobile builder that reached this vector
+therefore resolves the reject sentinel. The submission does **not** test for
+it — see "Rejected commands at the computer player's issue sites" below.
+
+**Trailing words.** The insertion receives the chosen definition's type index in
+the order node's argument word and the literal `1` in its companion, the same
+pair the group broadcast forwards verbatim (§9, §19).
+
 **Pass 2 — reposition.**
 
 ```text
 for unit in group vector order:
     if unit.currentOrder != none and (order.gateMask & 0x4000) == 0: continue
     if unit.def.cancapture and buildCapableCount < 5: continue
-    target = centre                                   # working copy
+    target = centre                                   # a second buffer, per member
     if unit.def.cancapture:
-        centre.y := unit.y                            # in the working copy
+        centre.y := unit.y                            # the SHARED centre, not the copy
         d = trunc(sqrt(dx*dx + 0 + dz*dz))            # centre - unit, dy forced 0
         if d > 640 << 16:
             a = RNG(65536)
@@ -3563,9 +3594,51 @@ centre whenever the unit is nearer than 320. Each axis is scaled independently
 by the same 64-bit quotient, so the result is exact only up to the per-axis
 `>> 16` truncation.
 
+**The `cancapture` arm's height write lands in the shared centre and is never
+undone** (Established). Before the loop the task copies the strategic centre
+into a local triple; each member then copies that triple into a *second* buffer,
+which is the one the computed target is written into and the one the move
+submission points at. The `centre.y := unit.y` store above writes the **first**
+triple — the shared centre — not the per-member copy. Three consequences:
+
+* the member's own distance is unaffected, because its vertical term is forced
+  to zero either way;
+* the patrol destination submitted for it is the address of that shared triple,
+  so it carries the member's own height;
+* **every later member of the same pass reads the mutated height.** The
+  non-`cancapture` arm's `dy` is `centre.y − unit.y` in a full three-dimensional
+  distance, and its middle branch scales that `dy` into the target, so after any
+  `cancapture` member is repositioned the rest of the pass measures against the
+  previous builder's height. Because `d` selects between the three branches and
+  one of them draws, the carry-over can change how many random numbers the tick
+  consumes. The write dies with the invocation: the task re-reads the strategic
+  centre at its next entry.
+
 The two passes never draw when `cancapture` is set and the distance test keeps
 the mirrored target; the only draws are the two `RNG(65536)` angle draws above,
 plus whatever §8 and the placement root consume.
+
+**Rejected commands at the computer player's issue sites — Established.** None
+of this task's four submissions branches on the command resolver's result; each
+hands the written index straight to the producer insertion ([04 §3.4]). Nothing
+else about the insertion changes either: the acting unit, the target, the goal
+position, the queue modifier and the two trailing words are the same whether the
+resolver wrote an identity or the sentinel, because each submission is
+straight-line code with no branch between the two calls. The reject sentinel's
+static mask is zero, so it carries neither the purge exception of
+[04 R-ORD-01 §13] nor the head-insert or rear-segment bits. Three of the four
+— pass 1's mobile build, and pass 2's move and patrol for the non-`cancapture`
+arm — are issued **without** the queue modifier, so on a rejection the
+replacement purge runs first (the acting unit's front-segment records lacking
+the purge-survivor bit are unlinked and freed, [04 R-MOV-03 §6]) and the
+sentinel is then inserted and completes on the first pump pass in which it
+heads, drawing nothing and writing nothing. The net effect is that **a member
+whose definition fails the issued command's capability gate has its queue wiped
+and goes idle**, rather than keeping the orders it had. The fourth — pass 2's
+patrol in the `cancapture` arm — carries the modifier, so a rejection there only
+appends the silent sentinel and leaves the queue alone. The rally task (§7) is
+the computer player's one issue site that does test the result and issues
+nothing when it is the sentinel.
 
 #### Attack-wave task body: engagement hysteresis and target selection — Established [R-AI-01 §4]
 
@@ -3879,6 +3952,18 @@ never reads the two trailing words; it forwards them verbatim into every
 member's order submission, where they become the order node's **argument
 word** and its companion (§19) — there is no spacing and no per-member
 transform.
+
+The broadcast does **not** test the command resolver's result: it hands the
+written index straight to the producer insertion along with the queue modifier
+its caller passed ([04 §3.4]). Four of the six broadcasts in this document — the
+wave gather and wave attack (§4), the regroup (§5) and the explore task's final
+map-edge patrol (§6) — pass the **non-queued** modifier, and the explore task's
+two earlier patrol legs pass the queued one. So for those four, every group
+member whose definition fails the issued code's capability gate (can-move for
+intent 2, can-attack for 3, can-patrol for 9) has its unprotected front-segment
+records purged and is left idle, for the reasons set out under "Rejected
+commands at the computer player's issue sites" in §3; for the queued two, a
+rejecting member merely receives the silent sentinel and keeps its queue.
 
 #### The classifier also writes standing orders — Established [R-AI-01 §10]
 

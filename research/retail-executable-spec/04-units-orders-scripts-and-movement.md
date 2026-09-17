@@ -1367,32 +1367,42 @@ script argument, arity 1, receiver none — the cell map of `[R-UNIT-06 §4]`.
 ### 3.4 Command resolution
 
 **Established fact:** Player and network commands do not name descriptors
-directly. A resolver takes a **command code from 1 to 14**, the acting unit,
-an optional target, and an optional ground position, and yields a **descriptor
-index**. There are two forms. The identity-form resolver returns the index in
-its return value. The name-form resolver selects the canonical command name for
-the resolved case and performs the case-insensitive binary search over the
-sorted descriptor table ([R-STANCE-01 §9]) **itself**, writing the matched
-row's index as a single byte into the caller's out parameter; the name never
-leaves the resolver, and there is no second entry point that takes a name. A
-lookup miss or a failed capability gate writes index 0, the reject sentinel.
+directly. There is **one** command resolver. It takes a **command code from 1
+to 14**, the acting unit, an optional target, and an optional ground position,
+and yields a **descriptor index**: it selects the canonical command name for
+the resolved case, performs the case-insensitive binary search over the sorted
+descriptor table ([R-STANCE-01 §9]) **itself**, and writes the matched row's
+index as a single byte into the caller's out parameter. The name never leaves
+the resolver, and there is no second entry point that takes a name. A lookup
+miss or a failed capability gate writes index 0, the reject sentinel.
+
+A second routine shares the resolver's command-code dispatch, its hostility
+preamble and its capability gates, but its product is the **pointer shape**,
+not an order identity: every one of its exits returns a cursor handle index,
+and its shared default is `cursornormal`. It is the front end's cursor
+chooser, and [07 §8] and [03 R-FX-01 §5] own those indices and their
+meanings. Its only caller is the front-end pointer update, which takes the
+**minimum** of its result over the current selection; it constructs no record
+and inserts nothing anywhere. The numeric coincidence between its default and
+`GetBuilt`'s sorted index is an accident of table offsets and carries no
+meaning — [07 §8] states the same warning for the armed-order latch.
 
 | Code | Meaning | Capability gate | Resolves to |
 |---:|---|---|---|
-| 1 | contextual, from a left-click with idle latch (the default left-button action when a selection exists) | delegates to the codes below | hostile and able to attack becomes an attack order; a damaged or unfinished friendly becomes repair or build assistance; a transportable target becomes a pickup; a followable target becomes follow; a feature at the position becomes resurrect when eligible, otherwise reclaim; otherwise a move |
+| 1 | contextual, from a left-click with idle latch (the default left-button action when a selection exists) | delegates to the codes below | **the arm's first act is to read the `Interface Type` registry option ([07 R-CAM-01 §5]); it selects one of two differently ordered case lists, both given in full by [R-ORD-02 §1].** Both open with: hostile and able to attack → the attack order. **A hostile target the actor can reclaim is then its own case, tested before any feature clause** — one list delegates it to code 12, the other chooses the unit reclaim directly. Beyond that the lists diverge; between them a nanolathe-reachable target becomes build assistance or repair, a transportable target a pickup, a followable target a follow, a feature at the position resurrect when eligible and otherwise reclaim, and anything else a move |
 | 2 | move | can-move | an actor with no live mover gets `QMove` whatever the target; a hostile target with the capture or reclaim capability becomes capture or unit-reclaim; a friendly build target becomes build assistance or repair; a landing pad becomes landing; a carriable target becomes pickup; a followable target becomes follow; otherwise ground or air move |
-| 3 | attack a unit | can-attack | suppression for a non-hostile target or a bare position from a ground unit; the four air-attack variants chosen by weapon and target class; the kamikaze variant for a unit flagged for it; the no-move variant for a structure; otherwise the chase attack |
+| 3 | attack a unit | can-attack | suppression for a non-hostile target or a bare position from a ground unit; the four air-attack variants chosen by weapon and target class; the kamikaze variant for a unit flagged for it; the no-move variant when the actor has **no mover and** state bit 29 (immobile) — an actor with no mover that lacks bit 29 falls into the kamikaze arm instead and is rejected unless flagged for it ([R-ORD-02 §1]); otherwise the chase attack |
 | 4 | special attack | special-attack capability | the special attack |
 | 5 | unload | can-unload | ground or air unload; a pad target becomes landing |
 | 6 | load or pick up | target passes the carriable test | ground or air pickup |
 | 7 | guard or follow | can-guard, target friendly | ground or air follow |
 | 8 | assist or repair | target is reachable by a nanolathe | build assistance while the target is unfinished, otherwise repair |
-| 9 | patrol | can-patrol | an actor with no live mover gets `QPatrol`; a builder with the repair-patrol capability becomes the repair patrol; otherwise ground or air patrol |
-| 10 | internal | — | the two resolvers differ: the **identity-form** resolver has no code-10 arm and falls to its shared default, returning the `GetBuilt`-shaped identity 0x13; the **name-form** resolver does have a code-10 arm, which resolves the canonical name `Stop` case-insensitively through the descriptor lookup and yields that descriptor's identity, reaching the empty-name reject only on a lookup miss. No caller inside the bounded census emits code 10 [P0-R02] |
+| 9 | patrol | can-patrol | an actor with no live mover gets `QPatrol`; a definition carrying the repair-patrol capability bit becomes the repair patrol — that single bit is the whole test, with no separate builder check; otherwise ground or air patrol |
+| 10 | internal | — | the resolver's code-10 arm resolves the canonical name `Stop` case-insensitively through the descriptor lookup and yields that descriptor's identity, reaching the empty-name reject only on a lookup miss. No caller emits code 10 [P0-R02]. (The cursor chooser has no code-10 arm and falls to its shared default, `cursornormal` — a pointer shape, not a descriptor) |
 | 11 | teleport | none | teleport |
 | 12 | reclaim or resurrect | can-reclaim | a wreck feature with the resurrect capability becomes resurrect; otherwise feature reclaim or unit reclaim, in the ground or air variant |
 | 13 | capture | can-capture, target differently owned (hostility is not tested) | capture |
-| 14 | mobile build | the unit's build list is non-empty | ground or air mobile build |
+| 14 | mobile build | the unit's build list is non-empty **and** the acting unit has a live mover — an immobile builder is rejected here | ground or air mobile build |
 
 Hostility comes from the **acting player's record**: its outbound alliance row,
 indexed by the **target player's** slot/ally index. A zero byte is hostile, any
@@ -1404,6 +1414,42 @@ chosen by the canfly flag on the acting unit's definition; construction work
 uses the standard builder gates and stockpile `BuildWeapon` is capped at its
 buildTime with cost deltas applied via the two-resource versus energy-only
 gates [P0-07].
+
+**Established — callers do not uniformly test the reject sentinel.**
+Twenty-eight sites call the resolver, and no indirect reference to it exists
+anywhere in the image, so that census is complete. They fall into four
+classes.
+
+* **Sites that test the written byte and issue nothing when it is zero.** The
+  human and network command applier ([R-STANCE-01 §5]), the computer player's
+  rally issue ([08 R-AI-01 §7]), the factory product-order inheritance
+  ([R-FAC-02 §4]) and most order handlers that re-issue a resolved command.
+  A rejected mouse click, network packet or rally therefore does nothing.
+* **Sites that insert at the head without testing.** Several attack and seek
+  handlers construct a record from the returned index and head-insert it. The
+  head insert never purges, and a descriptor-0 record completes on the pump
+  pass that reaches it ([R-ORD-01 §12]), so its lifetime is zero ticks and
+  the rejection is unobservable.
+* **Sites that append a silent sentinel behind the existing records.** The
+  mission spawner's queued verbs (§3.6) and one leg of the computer player's
+  construction task reach the producer insertion with the **queued** modifier,
+  so a rejected command merely appends a descriptor-0 record that completes
+  silently when it heads.
+* **Four computer-player sites that insert a rejected result non-queued,
+  without testing:** the construction/positioning task's mobile-build, move
+  and patrol legs ([08 R-AI-01 §3]) and the group-order broadcast
+  ([08 R-AI-01 §9]), which forwards its caller's modifier and receives a
+  non-queued one from the wave-gather, wave-attack, regroup and explore-final
+  tasks. Descriptor 0's static mask is zero, so the sentinel does not carry
+  the purge-survivor bit of [R-ORD-01 §13]: the replacement purge runs first
+  and unlinks and frees every front-segment record of the acting unit that
+  lacks that bit ([R-MOV-03 §6]), the sentinel is then inserted, and it
+  completes on its first visit. **A computer player therefore empties the
+  queue of any task or group member whose definition fails the issued
+  command's capability gate**, rather than leaving that member's existing
+  orders alone; the member goes idle. The reachable cases are an immobile
+  builder against code 14, a definition without can-move against code 2, and
+  one without can-patrol against code 9.
 
 **Mouse-button assignment is closed.** Every world command — selection, move, attack, and the contextual delegation above (code 1) — is issued with the **left** mouse button; the **right** button never issues an order. A right click cancels the armed command latch (returning it to idle) or, when the latch is already idle, clears the current selection. The battle input pump routes left-button press and release through the single-click and drag-rectangle selection paths and the order dispatcher, while right-button press is routed exclusively to the cancellation path that returns the latch to idle and, when idle, performs the deselection branch. The cursor contract shows the same polarity: every latched shape's advertised action fires on left-click; the right-click column is empty or a transition back to the normal cursor [07 §8][07 §9].
 
@@ -1432,8 +1478,9 @@ fixes the order of the `Attack*` and `Build*` clusters:
 | 13 | `BuildWeapon` |
 
 The empty name sorts to index 0 and is the reject sentinel, and `GetBuilt` is
-index `0x13`, so the `GetBuilt`-shaped default identity of code 10 above
-follows. §3.1's table carries this order.
+index `0x13`. §3.1's table carries this order. That `GetBuilt` and the cursor
+chooser's default shape share the number `0x13` is a coincidence of two
+unrelated tables and means nothing (§3.4, [07 §8]).
 
 **Established — the lookup itself.** Given a canonical name the engine runs an
 ordinary `lower_bound` binary search over the sorted table with that same
@@ -3411,7 +3458,12 @@ reclaim family is, in whole world units, `trunc(hypot(dx, dz)) −
 trunc(8·hypot(myFootX, myFootZ)) − trunc(8·hypot(theirFootX, theirFootZ))`
 compared with the definition's `builddistance`; `dx`/`dz` are the 16.16
 centre differences, the hypot is computed in double precision and truncated
-toward zero, and the whole-unit part of the first term is taken by shifting.
+toward zero, and the whole-unit part of the first term is a **sign-extended
+16-bit read of the high half** of that truncated 16.16 value — equal to a
+`>> 16` only while the separation is under 32768 world units, and wrapping
+beyond it. Each footprint term is truncated *after* scaling (`trunc(8·h)`, not
+`8·trunc(h)`), and the second is formed by multiplying the hypot by `−8.0` and
+adding, so a transcription that loses that sign inverts it.
 "In reach" is `≤ builddistance`; the two footprint terms are the units'
 (for a mobile build, the product definition's) footprint sizes. `ReclaimUnit`
 uses a different test, given in its contract.
@@ -3474,8 +3526,12 @@ stroke, and no handler reads it back.
 **The work-amount seed** used by the reclaim family with a scale `k` is
 `max(1, trunc(workertime · ((experience + 5) / 5) · targetMaxDamage · k /
 (max(targetBuildCostMetal, 10) · 300)))` with the division and the `/ 5`
-integer, the product formed in 64-bit, and the final quotient a float
-truncated toward zero.
+integer and the final quotient a float truncated toward zero. `workertime`
+and `experience` come from the **worker**, `maxdamage` and `buildcostmetal`
+from the **target**. The numerator is formed by three **32-bit** multiplies
+and then widened with a zero high half, so it wraps at 32 bits and a negative
+wrap is read back as a large positive; only extreme third-party content can
+reach that.
 
 ### The trivial, standing, and wait handlers [R-ORD-01 §2]
 
@@ -3581,7 +3637,10 @@ draw `RNG(100)`: below 80 → p1 = 0, advance (to the scan); else *restart*.
 Phase 3: enumerate the target registry within 640 world units of the
 record's goal for my side; a hit → pick index `RNG(count)`, bind the
 smart-reference and slot 0 to it, phase = 1, hold; none → *restart*. Other:
-cancel-all. Two draws per wake at most, three per scan.
+cancel-all. Each phase makes at most one draw, but a code-1 advance re-enters
+the handler in the same pump pass (§3.3), so a cascade that runs phases
+1 → 2 → 3 in one wake takes three draws — `RNG(3)`, then `RNG(100)`, then
+`RNG(count)` — and one starting at phase 2 takes two.
 
 **Established — the stationary guard's scan uses the shared registry area
 enumeration of [R-SPEC-01 §8], also used by `Wait`.** The centre is the
@@ -3711,9 +3770,16 @@ uses the scanning player's outbound diplomacy row toward the candidate owner,
 grounded mover mode, damaged-or-unfinished state, and the last-damage reclaim
 exclusion. Ground repair repeats that same diplomacy check after the pick;
 when it remains nonhostile, resolve command code 8 (assist or repair) against
-the target; when resolvable and the issue helper accepts it → *rotate*, else
-*wait*. Then when both energy and metal are at least 20 % of their storages →
-hold. Otherwise feature pairing samples a square lattice at 48-world-unit
+the target. Only a **resolved** command that the issue helper then **refuses**
+returns *wait*; acceptance returns *rotate*. An **unresolvable** code 8 does
+not wait — it falls straight through to the storage gates and the feature
+pairing below **in the same visit**, exactly as a hostile post-pick verdict or
+an empty gather does, and therefore still spends that visit's feature
+tournament draws. (An implementation that merges the unresolvable and refused
+cases into one *wait* consumes the wrong number of simulation draws on the
+unresolvable path and desynchronises every later draw in the session.) Then
+when both energy and metal are at least 20 % of their storages → hold.
+Otherwise feature pairing samples a square lattice at 48-world-unit
 steps; the helper argument is the diameter (`sightdistance`, hence ±half the
 value). Each sampled point resolves independently and appends its sample
 coordinates and authored resource values to the energy and/or metal list when
@@ -3723,11 +3789,18 @@ three bounded picks with replacement retain the greatest value using strict
 nearest-feature score or deduplication. None → hold. In order: a metal feature
 exists and metal < 20 % of storage → spawn `Reclaim` on it; else if no energy
 feature or energy ≥ 20 %: a metal feature whose value fits under storage →
-spawn `Reclaim` on it, no metal feature → hold, otherwise the energy feature's
-value does not fit → hold, else spawn `Reclaim` on the energy feature; else
-(energy feature and energy < 20 %) spawn `Reclaim` on the energy feature. Every
+spawn `Reclaim` on it; **a missing metal feature is never itself a reason to
+hold** — it falls through to the energy feature, as does a metal feature whose
+value would overflow metal storage. There the ladder holds when there is **no
+energy feature**, holds when the energy feature's value would overflow energy
+storage, and otherwise spawns `Reclaim` on the energy feature; else
+(energy feature and energy < 20 %) spawn `Reclaim` on the energy feature. Both
+"fits" tests are inclusive: `stock + value ≤ storage` admits. Every
 spawn releases this record's payload, inserts the reclaim (goal = the sampled
-feature position) at the head, clears this record's gate, and returns *wait*.
+feature position) at the head, clears this record's gate, and returns *wait*
+(the first arm releases the payload twice — once before the allocation and
+once after the head insert — where the other three release it once; the second
+release is idempotent).
 Other phase: cancel-all. The player resource fields are identified by the
 pairing of the energy gate with the repair scan and of the metal gate with the
 metal-feature reclaim (**Supported inference** for the labels; the arithmetic
@@ -3735,7 +3808,15 @@ is Established). The draw sequence of one visit is therefore: one bounded
 pick over the ordered unit gather, then at feature pairing three bounded
 picks for the energy list and three for the metal list ([01 §7.5]);
 tournaments belong only to qualifying 48-unit lattice samples, in traversal
-order, with duplicates retained.
+order, with duplicates retained. Of the unit scan's own outcomes only the
+accepted issue (*rotate*) and the refused issue (*wait*) end the visit; an
+empty gather, a hostile post-pick verdict and an unresolvable code 8 all
+continue into the storage gates, and past them into the tournaments, so those
+visits spend one draw plus up to six rather than one. The bounded sampler's
+short-circuit
+applies throughout: a bound below 2 returns zero without advancing the seed,
+so a one-entry list still makes its three calls and advances the seed on none
+of them.
 
 ### The work handlers [R-ORD-01 §5]
 
@@ -3818,7 +3899,10 @@ arrived → advance. Phase 2: satisfied `0x40` → *re-arm*; else `StartBuilding
 advance. Phase 3: `INBUILDSTANCE` wait, extra `0x10008`. Phase 4: status 11
 (`working`, no text); advance. Phase 5: reach test `dx² + dz² ≤ (builddistance
 + targetModelRadius)²` in whole units, with the target's model radius the
-whole part of the definition's `(Xextent + Zextent)/3` word, and the
+whole part of the definition's `(Xextent + Zextent)/3` word. The two operands
+are read with different widths: `builddistance` is a **zero-extended**
+(unsigned) 16-bit word and the model radius a **sign-extended** (signed) one;
+their sum is squared as a signed 32-bit product. Then the
 admission test again: both pass → if p2 > 14 apply p1 damage to the target
 with cause 5 and p2 = 0; stamp `tick + 900`; spray; deadline 2; p2 += 2; hold
 — one reclaim bite every 16 ticks. Either fails → deadline 15,
@@ -3851,7 +3935,12 @@ toward the same random-height centre as `Reclaim`; advance. Phase 2:
 `INBUILDSTANCE` wait, extra 0. Phase 3: copy the feature's name up to its
 first `_` and look the unit definition up by that name; found → p1 = its
 index, `p2 = trunc(0.3 · buildtime / (workertime / 30))` with the inner
-division integer (the resurrection spray ticks), status 11; advance. Not
+division integer (the resurrection spray ticks), status 11; advance. The
+divisor is **unguarded**: `workertime / 30` is a signed integer division taken
+before the floating divide, so a definition with `workertime < 30` divides by
+zero in the FPU and the shared truncating conversion consumes the result. The
+name lookup's result is zero-tested, so a name that resolved to catalog index
+0 would take the failure arm below. Not
 found → status 7 `Ressurection failed` (retail's spelling), abandon. Phase 4:
 `p2 −= 1`; when it was nonzero: spray to the feature box, stamp `tick + 300`,
 deadline 1, hold; else advance. Phase 5: create the unit (definition p1 at
@@ -4844,7 +4933,7 @@ marker's radius is `128 + random below 128` from one simulation draw.
 §3.4's table names the outcomes of the command resolver; this block gives
 the tests in the order the resolver runs them, so an implementer chooses
 nothing. Everything here is **Established** by direct trace of the
-name-form resolver unless a sentence says otherwise. The
+command resolver unless a sentence says otherwise. The
 resolver takes a command code 1–14, the acting unit, an optional target
 unit, and an optional world position; it writes a canonical order name
 (looked up by §3.4's case-insensitive search) or the empty name, which is the
@@ -5029,9 +5118,14 @@ returns 9.
 
 **`VTOL_Patrol`.** Phase 0: mover and `canfly` (else cancel-all); the
 patrol-chain setup of [R-ORD-01 §4]; caption clear with `Patrolling`; the
-preamble; then inhibit all three slots; advance. Phase 1: clear the five
-movement pending bits `0x20`–`0x200` from the record's pending word;
-advance. Phase 2, in order: satisfied ∩ `0xE0` → *rotate* (the record moves
+preamble; then inhibit all three slots; advance. Phase 1: clear the **three**
+movement-outcome bits `0x20`, `0x40` and `0x80` from the record's pending word
+— the write is byte-wide, so the payload-release and rebind bits `0x100` and
+`0x200` (and everything above) survive it. This is **not** the installers'
+five-bit clear of [R-ORD-01 §0]; only this row has the narrow mask, and the
+difference is observable only when phase 2's marker allocation fails, since a
+successful install clears all five. Advance. Phase 2, in order: satisfied ∩
+`0xE0` → *rotate* (the record moves
 to the tail with its phase left at 2, so the next visit re-arms the leg);
 build a point marker at the waypoint displaced 320 world units **along** the
 bearing from the aircraft to it — the goal plus the negated component pair at
@@ -6069,7 +6163,13 @@ authoritative stream and their order is fixed**: three draws bounded at 3,000
 for the debris piece's per-tick angular rates, one bounded at 40 for its X
 velocity, one bounded at 10 for its upward velocity, and a second draw
 bounded at 40 for its Z velocity ([R-COB-04 §1]). An implementation must make
-all six draws in that order to stay in step.
+all six draws in that order to stay in step. Those six are the opcode
+adapter's own draws. The adapter then calls the debris spawner
+**synchronously**, so when the flags select the shatter path that spawner's
+per-fragment draws also belong to this opcode execution: eight more from the
+same simulation sampler for every admitted fragment ([R-COB-04 §3]). An
+implementation that counts only six on a shattering explosion loses the
+stream.
 
 Independently of that branch, each set bitmap flag spawns one effect from a
 fixed six-entry table, in ascending bit order, so multiple flags produce
@@ -7216,7 +7316,7 @@ projectile spray are outside it and carry their own draw order).
 | Opcode | Draws | Stream | Bound and order |
 |---|---|---|---|
 | `0x10041000` random | 0 or 1 | simulation | one draw bounded by `high − low + 1`; **a bound below 2 consumes no draw** and the result is the low value unchanged — `random(x, x)` is draw-free |
-| `0x10071000` explode | 0 or 6 | simulation | six draws in fixed order bounded 3000, 3000, 3000, 40, 10, 40 — three angular rates, then the X, upward and Z velocities ([R-COB-04 §1]); **zero draws when the flags word requests bitmap-only** |
+| `0x10071000` explode | 0, 6, or 6 + 8 per admitted fragment | simulation | six draws in fixed order bounded 3000, 3000, 3000, 40, 10, 40 — three angular rates, then the X, upward and Z velocities ([R-COB-04 §1]); **zero draws when the flags word requests bitmap-only**; **eight more per admitted fragment** when the flags set `SHATTER`, because the adapter calls the debris spawner synchronously and its shatter path draws from the same sampler ([R-COB-04 §3]) |
 
 The random opcode's zero-bound short-circuit: the simulation stream's bounded sampler returns zero without advancing its
 seed whenever the bound is below 2, so a script looping over `random(x, x)`
@@ -7227,7 +7327,10 @@ of the entire unit-adapter surface the opcodes can reach — every engine-port
 read and write arm including the activation edge machine, attach and detach,
 the one-argument effect dispatcher, the piece position/angle getters and
 setters, and the piece-flag adapters — found no call into either random stream.
-The CRT stream is never touched from opcode execution. Re-entrant callbacks
+This census covers the adapter bodies only; the debris spawner that `explode`'s
+adapter calls synchronously is not an adapter and does draw, as the row above
+records. The CRT stream is never touched from opcode execution. Re-entrant
+callbacks
 fired by a port write (the activation edge family) are deferred starts that
 allocate without interpreting, so they consume nothing either.
 
@@ -9834,7 +9937,8 @@ are established in [03 R-COMP-01 §5].
 **Cited, not restated.** The annulus-goal installer used by the order case
 bodies and by `HelpBuild` is [R-ORD-01 §1]'s (it installs an *annulus*, not a
 rectangle); the pad-landing phase that
-builds a follow-unit marker with the reserved no-piece index and horizontal
+builds a follow-unit-piece marker with the reserved no-piece index and
+horizontal
 arrival radius 160 is [R-AIR-01 §6]'s phase 2; the flight block's input fetch
 (command position, command velocity, command heading) is [R-AIR-01 §1]'s; the
 observer node's unlink-on-destroy is [R-MOV-03 §7]'s.
@@ -12769,7 +12873,7 @@ until it re-enters.
 **Established fact:** Transport service lifecycle is exact for admission, carry,
 unload, pads, and death:
 
-*Admission.* `carrier, candidate` is admitted only if, in this order, none of these nine rejects fires: 1) candidate `cantbetransported` set; 2) carrier lacks `canload`; 3) carried-count (entries in the carrier cargo list whose parent equals the carrier) reaches carrier `transportcapacity` (count, not summed sizes; unauthored `0` therefore blocks loading); 4) carrier `transportsize` below candidate `FootPrintX` (signed compare, FootPrintX is the movement class footprint width); 5) candidate has no mover; 6) candidate committed mover mode is `2` — airborne ([R-MOV-01 §8]); 7) ground carrier (`canfly` clear) with candidate `MinWaterDepth >= 0`; 8) candidate `Y + modelTop` at or below `sea level × 65536` (submerged); 9) candidate landed-float field not exactly `0.0` (still under construction). Missing `transportcapacity` and `transportsize` default to `0`. The effective boarding range is the first enabled weapon slot's `range` (scanned via the weapon-slot enabled flag); shipped unarmed fallback is weapon record `0` (`NOWEAPON`, Range 16), so shipped unarmed pickup range is `16`. No owner or alliance test exists anywhere on the load path — neither in this predicate nor in the two command resolvers ([R-AIR-01 §12], which also states gate 7's word and its signed `>= 0` compare).
+*Admission.* `carrier, candidate` is admitted only if, in this order, none of these nine rejects fires: 1) candidate `cantbetransported` set; 2) carrier lacks `canload`; 3) carried-count (entries in the carrier cargo list whose parent equals the carrier) reaches carrier `transportcapacity` (count, not summed sizes; unauthored `0` therefore blocks loading); 4) carrier `transportsize` below candidate `FootPrintX` (signed compare, FootPrintX is the movement class footprint width); 5) candidate has no mover; 6) candidate committed mover mode is `2` — airborne ([R-MOV-01 §8]); 7) ground carrier (`canfly` clear) with candidate `MinWaterDepth >= 0`; 8) candidate `Y + modelTop` at or below `sea level × 65536` (submerged); 9) candidate landed-float field not exactly `0.0` (still under construction). Missing `transportcapacity` and `transportsize` default to `0`. The effective boarding range is the first enabled weapon slot's `range` (scanned via the weapon-slot enabled flag); shipped unarmed fallback is weapon record `0` (`NOWEAPON`, Range 16), so shipped unarmed pickup range is `16`. No owner or alliance test exists anywhere on the load path — neither in this predicate nor in the command resolution of §3.4 ([R-AIR-01 §12], which also states gate 7's word and its signed `>= 0` compare).
 
 *Load executor entry gates.* Independent of admission, every phase of the
 canonical load executor re-checks four gates in order before doing work: the
@@ -12786,7 +12890,7 @@ also code 8; gate four returns code 8 with NO message.
 
 | Phase | Operations | Result |
 |---:|---|---:|
-| 0 | Require a live carrier mover and `canfly` (else 7). Size gate: the target's cached footprint-X WORD, compared signed, must be at or below the carrier definition's `transportsize` BYTE zero-extended; otherwise emit `Unit is too heavy to transport` and return 8. Set status message `Loading`; notify carrier state 3; detach the carrier from ITS own parent when carried; raise Activate; force mover mode 2 from mode 1; queue a point command at the carrier's current X/Z with altitude `cruisealt/2` (signed, round toward zero) and NO arrival radius; status bits `|= 0xE0`. | 1 |
+| 0 | Require a live carrier mover and `canfly` (else 7). Size gate: the target's cached footprint-X WORD, compared signed, must be at or below the carrier definition's `transportsize` BYTE zero-extended; otherwise emit `Unit is too heavy to transport` and return 8. Set status message `Loading`; release the manual-target latch on all three weapon slots (the `3` is the all-slots index, not a state code — step 1 of the shared takeoff preamble, [R-AIR-01 §6]); detach the carrier from ITS own parent when carried; raise Activate — its edge is what emits notification 3, one step later ([R-AIR-01 §6] step 3, [R-UNIT-06 §2]); force mover mode 2 from mode 1; queue a point command at the carrier's current X/Z with altitude `cruisealt/2` (signed, round toward zero) and NO arrival radius; status bits `|= 0xE0`. | 1 |
 | 1 | Queue the follow command toward the target with the full `cruisealt` altitude offset and horizontal arrival radius `0x30`; status `= 0x100E8`. | 1 |
 | 2 | Status `Preparing for transport`. Pre-seed the first `QueryTransport` output to `-1` and run the synchronous four-output query (unanswered outputs read 0, so the observed seed is `[-1, 0, 0, 0]`; a missing script leaves `-1`, the root-piece fallback). Retain output 0 as the attach piece; status `= 0x100E8`. | 1 |
 | 3 | Start asynchronous one-argument `BeginTransport` with the exact 32-bit value of the target definition's model total-height dword — the height dword the engine derives from the 3DO bounds at definition load, not an authored FBI key ([R-UNIT-06 §3]) — mirrored through the network forwarder; evaluate the attach piece's Y in the **carrier's model frame** (the piece-hierarchy evaluator without the unit-origin addition, [R-REV-02]); construct a follow-unit marker on the **cargo** as the carrier's goal with altitude offset = the NEGATED signed 16-bit integer part of that Y — lowering the carrier until its attach piece meets the cargo ([R-AIR-01 §9]); status `= 0x100EA`. | 1 |
@@ -12994,10 +13098,10 @@ cue slot 7 `Landing aborted` and returns 8.
 |---:|---|---:|
 | 0 | Require a live mover and `canfly` (else 7). Status caption `Landing` (slot 5, announced once). Run the shared takeoff preamble. Then draw one simulation random value below `0x10000` and store it as the loiter bearing. | 1 |
 | 1 | Run `QueryLandingPad` on the **target's** script, four outputs all pre-seeded `-1`; take the first candidate `0..3` that is not `-1` and is free (below). Re-test the winner; if it is `-1` or no longer free, run `QueryLandingPad` a **second** time into a fresh four-cell buffer and scan again. If a pad is found, set phase 2 and return 2. If not: build a point marker at the target's position offset by the loiter bearing at a radius equal to the unit's **first weapon slot's `Range`**, give it horizontal arrival radius `0x80` (128), install it, set the gate word to `0xE8`, advance the loiter bearing by `0x4000` (a quarter turn), keep phase 1. | 2 |
-| 2 | Build a follow-unit marker on the target with the reserved no-piece index and horizontal arrival radius `0xA0` (160); install; gate `0xE8`. | 1 |
+| 2 | Build a **follow-unit-PIECE** marker on the target with the reserved no-piece index (piece `−1`) — not the plain follow-unit marker — and horizontal arrival radius `0xA0` (160); install; gate `0xE8`. The distinction matters: the follow-piece flags carry the bit that makes the marker supply the **target's own heading** to the command producer ([R-AIR-01 §4]), where a plain follow-unit marker supplies none. (The explicit radius keeps that bit out of the arrival test here.) | 1 |
 | 3 | `QueryLandingPad` once, same scan. Store the winner in the record's scratch word. If none: status cue slot 7 `Landing failed`, return 0 (reset the phase to zero). Otherwise build a follow-unit-**piece** marker on the target's chosen pad piece with horizontal arrival radius `0x30` (48); install; gate `0xE8`. | 1 |
 | 4 | No work. | 1 |
-| 5 | If the satisfied set contains the movement-arrival bit `0x20` — the approach marker has been reached — return 1, which advances to phase 6 and does nothing else this visit. Otherwise revalidate the stored pad and, if it is stale, re-query and rescan; if still none, status cue slot 7 `Landing aborted: all pads are occupied`, return 0. Otherwise build the follow-piece marker again with altitude offset `0` when the lander carries nothing, or the **integer part of the cargo definition's model total-height dword** when it does; start the deferred `EndTransport` with the wake flag set; install; set the record's deadline to the current tick plus 15; gate `\|= 0xE8`. | 2 |
+| 5 | If the satisfied set contains the movement-arrival bit `0x20` — the approach marker has been reached — return 1, which advances to phase 6 and does nothing else this visit. Otherwise revalidate the stored pad and, if it is stale, re-query and rescan; if still none, status cue slot 7 `Landing aborted: all pads are occupied`, return 0. Otherwise build the follow-piece marker again with altitude offset `0` when the lander carries nothing, or the **integer part of the cargo definition's model total-height dword** when it does; start the deferred `EndTransport` with the wake flag set; install; set the record's deadline to the current tick plus 15; gate `\|= 0xE8`. (It also writes its own phase byte back to 5 — a no-op.) | 2 |
 | 6 | If the satisfied set contains the route-failure bit `0x40`, return 8. Revalidate the stored pad once; if it is not free, status cue slot 7 `Landing aborted: no pads available`, return 0. Otherwise: **empty lander** — attach the lander itself to the target on the pad piece with request mode `0`, and, when the lander's health is below its definition's `MaxDamage` **and** the pad owner's definition has both `isairbase` and `builder` set **and** the pad owner is not under construction, clear the goal payload and push a `SELFREPAIR` order record on the lander. **Loaded lander** — issue the deferred `EndTransport` (no wake) and attach the **cargo** to the target on the pad piece with request mode `0`. | 5 |
 | other | — | 7 |
 
@@ -13289,7 +13393,9 @@ Phase 2 is the idle decision:
   aircraft therefore always tries to land; only a loaded one loiters.
 
 **Established — `VTOL_SeekAttack` is a randomized search orbit.** Entry: a
-satisfied goal-release bit `0x40` returns 5, and the off-map recovery of [R-AIR-01 §5]
+satisfied **route-failure** bit `0x40` — the empty-route signal of
+[R-ORD-01 §0], not payload release, which is `0x80` — returns 5, and the
+off-map recovery of [R-AIR-01 §5]
 pre-empts. Phase 0 requires a live mover and `canfly`. With a target already
 bound, it calls the shared autonomous attack issuer with force clear
 ([R-STANCE-01 §3], [R-STANCE-01 §4]). Success inserts the resolved attack
@@ -13457,11 +13563,16 @@ truncates to 111 rather than 112 `[03 §2.2]`.
 * 3 — the fly-through. `h = atan2(unitX − goalX, unitZ − goalZ)`; build a point
   marker at `goalPos − offset(h, Range · 3)` with horizontal arrival radius
   `0x80 + random below 0x80` (128 to 255); gate `= 0x100EA`.
-* 4 — if health is below three quarters of `MaxDamage`, run the base scan of
-  [R-AIR-01 §11] but **free the result unused** — a damaged strafer never
-  lands from this leg. Otherwise draw `random below 2` and break `+0xC000` on `0` or `+0x4000`
+* 4 — if health is below three quarters of `MaxDamage`, collect the base
+  candidates within 3840 world units ([R-AIR-01 §11]). With at least one
+  candidate: release the goal payload, draw one bounded simulation value over
+  the candidate count, head-insert a `VTOL_Landing` order at the drawn base,
+  clear the gate word and *restart* (return 0). With **no** candidates the leg
+  falls through into the break below — it does not return early. This is an
+  ordinary pad-seeking caller; a damaged strafer does land from this leg.
+  Otherwise (healthy) draw `random below 2` and break `+0xC000` on `0` or `+0x4000`
   otherwise from the unit's own heading, at radius `Range` world units,
-  horizontal arrival radius `0x80`; gate `= 0x100EA`.
+  horizontal arrival radius `0x80`; gate `= 0x100EA`; return 1.
 * 5 — set the phase to 2 and return 2, closing the loop.
 
 **Established — `AirToGroundHover`: the `hoverattack` standoff.** Phases 0 and 1
@@ -13474,8 +13585,14 @@ miss counter). Phase 3 is the orbit:
   increment the miss counter.
 * If the miss counter exceeds `1`, reset it, draw a full-circle bearing
   (random below `0x10000`), build a point marker at
-  `targetPos − offset(bearing, Range)` with horizontal arrival radius `0x80`,
-  gate `|= 0x110E8`, return 2.
+  `targetPos − offset(bearing, Range)` with horizontal arrival radius `0x80`
+  — and then **never install it**: the arm ORs `0x110E8` into the gate and
+  returns 2 with the marker still unbound, so the previously bound payload
+  (the frozen standoff marker, or phase 2's marker) keeps driving the
+  aircraft. The random draw is still spent and the gate is still re-armed;
+  only the commanded position does not change. The alternation arm below
+  *does* install. This is the same allocate-and-leak shape the load
+  executor's phase-4 climb-away has ([R-AIR-01 §10] item 3).
 * Otherwise alternate sides: `h = headingToTarget`, and `h' = h − 0x2000` with
   the side flag set to 1 when the flag was 0, or `h' = h + 0x2000` with the flag
   cleared when it was 1 — a deterministic ±45-degree left/right alternation, no
@@ -13523,7 +13640,9 @@ target to slot 0 and then:
 
 * When the arrival bits `0xE0` are set and the dot product of the
   unit→target bearing vector and the unit's own facing vector (both taken at
-  20 world units) is positive, command "straight ahead": position
+  20 world units, on their **whole-world-unit** parts, the sum tested as a
+  signed 16-bit value — with components bounded by 20 it cannot overflow, so
+  "is positive" is exact) is positive, command "straight ahead": position
   `unitPos − offset(unitHeading, MaxVelocity · 30)`, velocity
   `−offset(unitHeading, MaxVelocity)`; deadline `tick + 60 + random below 30`;
   reset the scratch counter; return 2.
@@ -13531,8 +13650,13 @@ target to slot 0 and then:
   same dot product, add `0x2D` to the counter if it is not positive and zero it
   otherwise; then, if the range to the target exceeds `0xA0` world units,
   command a lead intercept: position `targetPos + targetVelocity · 45`,
-  velocity derived from the target's heading at half the target's
-  `MaxVelocity`. Deadline `tick + 45`; gate `|= 0x100E8`; return 2. At or
+  velocity **`targetVelocity` plus** the direction of the target's heading at
+  half the target's `MaxVelocity` — that is, X = `targetVelocityX − sin(h,
+  MaxVelocity/2)` and Z = `targetVelocityZ − cos(h, MaxVelocity/2)` under the
+  negations of §10.3's component convention, with **Y the target's own
+  velocity Y, unchanged**. `MaxVelocity/2` is a signed halving. Both velocity
+  components read the same mover velocity triple the position arm multiplies
+  by 45. Deadline `tick + 45`; gate `|= 0x100E8`; return 2. At or
   below `0xA0` the leg installs no new payload and takes the same tail
   ([R-AIR-01 §14]).
 * Otherwise — arrival bits set with a non-positive dot, or arrival bits clear
@@ -13628,9 +13752,11 @@ all; the band-3 test of [R-MOV-01 §8b] reads this same total-height word.
 
 **The `becarried` re-arm is gated on the owner's control byte, and the detach
 writes the mode directly (Established).** The re-arm's predicate is: the
-child's **owner's control byte is `1` or `2`** (the locally simulated
-players, [05 R-SHARE-01 §1]) **and** the parent's definition does **not**
-carry `isairbase`. Two further details of the attachment helper: it also
+child's **owner record is occupied**, its **control byte is `1` or `2`** (the
+locally simulated players, [05 R-SHARE-01 §1]) **and** the parent's definition
+does **not** carry `isairbase`. The occupancy test is read first and makes no
+difference for a live unit. Two further details of the attachment helper: it
+also
 refuses a child that has cargo of its own (a loaded transport cannot itself be
 loaded), and the mover-mode write is a **direct** write of the request's low two
 bits into the committed mover-mode pair — it does **not** go through the
@@ -13855,9 +13981,11 @@ quarters of `MaxDamage` computed with a truncating shift, strict. The scan
 runs at: `VTOL_SeekAttack` phase 1 and `VTOL_SeekGuard` phase 1 ([§7],
 [R-ORD-02 §3]); `VTOL_Patrol` phase 2 ([R-ORD-02 §2]); `AirStrike` phase 6
 and `AirToGroundHover` phase 3 ([§8]); `VTOL_RepairPatrol` phase 1
-([R-ORD-01 §7]). `AirToGround`'s phase-3/4 body also runs the scan under the
-same health test but **frees the result unused** — it never lands a damaged
-attacker. No visitor runs and no bucket is walked; allied players' pads are
+([R-ORD-01 §7]); and `AirToGround` phase 4 ([§8]), which is an ordinary
+pad-seeking caller like the rest — with candidates it releases the payload,
+draws the index, head-inserts the landing order and *restarts*; with none it
+continues into its own break leg. No visitor runs and no bucket is walked;
+allied players' pads are
 included only insofar as the registry of the owner's ally-group index files
 them as friendly.
 

@@ -209,37 +209,70 @@ func TestAirBaseSeekDrawsOncePerSuccessfulScan(t *testing.T) {
 	})
 }
 
-// TestAirToGroundRunsTheScanAndDiscardsIt locks [04 R-AIR-01 §11]'s correction:
-// `AirToGround` runs the base scan under the same health test but frees the
-// result unused. It never lands a damaged attacker, and because the pick is the
-// only step that draws, it consumes no random state either [I4].
-func TestAirToGroundRunsTheScanAndDiscardsIt(t *testing.T) {
-	sys, w, u, sim := airBaseSeekFixture(t)
-	spawnAirBasePad(t, w, sys.Terrain, "padclose", u.X+numeric.Fixed(300<<16), u.Z)
-	spawnAirBasePad(t, w, sys.Terrain, "padclose2", u.X+numeric.Fixed(600<<16), u.Z)
-	rebuildAirBases(sys, 30)
+// TestAirToGroundPhaseFourSeeksAPad locks `AirToGround` phase 4 as an ordinary
+// pad-seeking caller [04 R-AIR-01 §8][04 R-AIR-01 §11]. Below three quarters
+// health it runs the base scan and, when the scan offers anything, releases the
+// payload, draws one bounded value, head-inserts a `VTOL_Landing` at the drawn
+// pad, clears the gate word and *restarts*. With no pad in reach it falls into
+// the break leg instead, which spends its own `random below 2` and returns 1 —
+// the health test alone never ends the visit.
+func TestAirToGroundPhaseFourSeeksAPad(t *testing.T) {
+	t.Run("a damaged strafer with pads in reach lands", func(t *testing.T) {
+		sys, w, u, sim := airBaseSeekFixture(t)
+		spawnAirBasePad(t, w, sys.Terrain, "padclose", u.X+numeric.Fixed(300<<16), u.Z)
+		spawnAirBasePad(t, w, sys.Terrain, "padclose2", u.X+numeric.Fixed(600<<16), u.Z)
+		rebuildAirBases(sys, 30)
+		if got := sys.airBaseCandidates(u); len(got) != 2 {
+			t.Fatalf("fixture: the scan offers %d candidates, want 2 [04 R-AIR-01 §11]", len(got))
+		}
 
-	// The scan itself would offer both: this is a discard, not an empty list.
-	if got := sys.airBaseCandidates(u); len(got) != 2 {
-		t.Fatalf("fixture: the scan offers %d candidates, want 2 [04 R-AIR-01 §11]", len(got))
-	}
+		u.Health = (u.Def.MaxDamage >> 2) * 3 // one above the strict threshold...
+		u.Health--                            // ...and now below it
+		n := pushAirOrder(t, u, "AirToGround", u.X+numeric.Fixed(1<<16), u.Z)
+		n.Phase = 4
+		before := sim.Draws()
+		code := sys.legAirToGround(u, n, 1)
 
-	u.Health = (u.Def.MaxDamage >> 2) * 3 // one above the strict threshold...
-	u.Health--                            // ...and now below it
-	n := pushAirOrder(t, u, "AirToGround", u.X+numeric.Fixed(1<<16), u.Z)
-	n.Phase = 4
-	before := sim.Draws()
-	code := sys.legAirToGround(u, n, 1)
+		if code != 0 {
+			t.Fatalf("phase 4 with pads in reach returned %d, want 0 (*restart*) [04 R-AIR-01 §8]", code)
+		}
+		if d := sim.Draws() - before; d != 1 {
+			t.Fatalf("the land branch drew %d times, want exactly 1 — the bounded pick over the "+
+				"candidate count, and no break-leg draw [04 R-AIR-01 §11][I4]", d)
+		}
+		if !headIsLanding(u) {
+			t.Fatal("the land branch head-inserts a VTOL_Landing record [04 R-AIR-01 §11]")
+		}
+		if n.DynamicGate != 0 {
+			t.Fatalf("the land branch clears the gate word, got %#x [04 R-AIR-01 §11]", n.DynamicGate)
+		}
+	})
 
-	if code != 0 {
-		t.Fatalf("AirToGround phase 4 under the health test returned %d, want 0 (*restart*) [04 R-AIR-01 §8]", code)
-	}
-	if d := sim.Draws() - before; d != 0 {
-		t.Fatalf("AirToGround drew %d times, want 0 — it frees the scan result and never picks [04 R-AIR-01 §11][I4]", d)
-	}
-	if headIsLanding(u) {
-		t.Fatal("AirToGround must not land a damaged attacker [04 R-AIR-01 §11]")
-	}
+	t.Run("a damaged strafer with no pad breaks away", func(t *testing.T) {
+		sys, _, u, sim := airBaseSeekFixture(t)
+		rebuildAirBases(sys, 30)
+		if got := sys.airBaseCandidates(u); len(got) != 0 {
+			t.Fatalf("fixture: the scan offers %d candidates, want none [04 R-AIR-01 §11]", len(got))
+		}
+
+		u.Health = (u.Def.MaxDamage>>2)*3 - 1
+		n := pushAirOrder(t, u, "AirToGround", u.X+numeric.Fixed(1<<16), u.Z)
+		n.Phase = 4
+		before := sim.Draws()
+		code := sys.legAirToGround(u, n, 1)
+
+		if code != 1 {
+			t.Fatalf("phase 4 with no pad returned %d, want 1 — it falls into the break leg "+
+				"[04 R-AIR-01 §8]", code)
+		}
+		if d := sim.Draws() - before; d != 1 {
+			t.Fatalf("the break leg drew %d times, want exactly 1 (its `random below 2`); the empty "+
+				"scan spends nothing [04 R-AIR-01 §11][I4]", d)
+		}
+		if headIsLanding(u) {
+			t.Fatal("an empty scan must not land the attacker [04 R-AIR-01 §11]")
+		}
+	})
 }
 
 // TestAirBaseRegistryIsStaleBetweenRebuilds locks the cadence and the two

@@ -83,9 +83,11 @@ by direct index — it is the row a projectile's neutral side byte `10` selects
 (`[06 R-DMG-01 §9]`) — and **nothing ever occupies it**: every walk of the
 table that can *write* an occupied row's state during setup, battle, join and
 save restore covers ten rows (the row-10 base serves two of those loops as
-their end sentinel). One battle-time reader iterates all **eleven** rows
-inclusively and is safe only because row 10's occupancy word is zero, which
-makes it skip the row's body. The network join's free-slot
+their end sentinel). One battle-time pass iterates all **eleven** rows
+inclusively. Row 10's zero occupancy word does not make it skip the row: it
+sends the pass down the arm that **writes** the "no group" value `10` into the
+ally-group byte — the value the constructor already left there — so the row is
+written on every pass and the write is a no-op in value. The network join's free-slot
 search scans rows `0..9` and, finding none, uses `10` as its "no free slot"
 result and refuses rather than writing row 10; the seat-setup writer is only
 called with lobby seat indices and with `0`/`1` for the two-seat mission
@@ -127,8 +129,15 @@ only to ordinary single-precision rounding. Cumulative totals and cumulative
 waste are doubles. Capacity is recomputed from zero every pass by accumulating
 each idle unit's authored storage, plus a bonus term when a player flag is set.
 The two sharing thresholds are zeroed at battle setup and, in single-player,
-never written again — their only other writers are network-gated chat commands
-— and the automatic-sharing dispatcher is their only reader ([R-SHARE-01 §3]).
+never written again — their only other writers are network-gated chat commands,
+which is Established by a whole-image census of the two single-precision
+stores. That **the automatic-sharing dispatcher is their only reader**
+([R-SHARE-01 §3]) is a **Supported inference**: the dispatcher's four reads
+reproduce, but five further single-precision reads at the same two record
+offsets were not resolved to a base object, so they may be player rows or a
+different record that shares the offsets. *Decider:* trace the base register
+at those five sites back to its load. The thresholds are zero in single-player
+whatever reads them.
 
 ### Unit definition
 
@@ -2160,13 +2169,13 @@ The full alphabetical list, including the orders outside doc 05's scope, is
 `VTOL_Patrol` 56, `VTOL_Pickup` 57, `VTOL_SeekAttack` 62, `VTOL_SeekGuard` 63,
 `VTOL_Standby` 64, `VTOL_Unload` 65, `Wait` 66, `WaitForAttack` 67.
 
-**Supported inference — index 0.** The one descriptor appended before the
+**Established — index 0.** The one descriptor appended before the
 three blocks carries the `Ready` caption and a name pointer into a
 statically-zero data slot, i.e. the empty string, which sorts first under the
-comparator. Nothing was found that writes a name there before the sort, so
-index 0 is the default/idle descriptor. Open branch: a runtime writer of that
-name slot ahead of the sort would shift every other index by one. Decider:
-static trace of that slot's writer set.
+comparator, so index 0 is the default/idle descriptor. A whole-image census of
+that slot resolves every reference to it as an address-taken load or a read;
+**no instruction anywhere in the image stores to it**, so no runtime writer
+can rename it ahead of the sort and shift the other indices.
 
 **Established — a distinct byte, not to be confused with this one.** The
 unit-reclaim handler contains its own six-way switch on a **phase** byte
@@ -4954,11 +4963,14 @@ reschedule 2 ticks
 counter += 2
 ```
 
-The pulse test precedes the increment, so from a zeroed counter the sequence of
-pre-check values is 2, 4, … 16 and the pulse fires on the visit that sees 16;
-after the reset the counter is immediately raised to 2 again, so the steady
-period is **eight qualifying visits = sixteen ticks**. The nano cadence is
-one segment every two ticks regardless.
+Phase 1 arms the counter to **0**, and the pulse test precedes the increment,
+so from a freshly armed order the pre-check values are 0, 2, 4, … 16: the first
+damage pulse lands on the **ninth** qualifying work visit, eighteen ticks after
+the first. Only then does the described period begin — the reset is followed
+immediately by the `+= 2` on the same visit, so every later pulse is **eight
+qualifying visits = sixteen ticks** after the one before. An implementation
+that starts the counter at 2 lands its first bite one visit early on every
+reclaim order. The nano cadence is one segment every two ticks regardless.
 
 **Established — the pulse, instruction-exact.**
 
@@ -4989,6 +5001,15 @@ predicates but raises only one caption each: `Reclamation failed` for the
 missing capability, `That unit cannot be reclaimed` for the failed target
 predicate. That accounts for all three `Reclamation failed` sites and both
 `That unit cannot be reclaimed` sites in the image.
+
+The two arms do not terminate the same way. The **target**-predicate failure
+returns result code **8** — unlink and free this node only — while the
+**builder-capability** failure returns result code **7**, which cancels every
+primary node and removes the secondary ones (`[04 §3.3]`, restated under
+"Queue pumping and result codes"). Feature reclaim splits the same way: the
+"no feature here" and non-reclaimable arms return 8, the phase-0 capability
+arm returns 7. A builder that cannot reclaim therefore loses its whole queue,
+while one told to reclaim an ineligible target loses only that order.
 
 **Established — what a partially reclaimed unit is left as.** Nothing is
 restored and nothing is paid. The pulses are ordinary kind-5 damage packets, so
@@ -5059,8 +5080,8 @@ back to a terrain cell using the rounding fixup `v + ((v >> 31) & 0xfffff)`
 before the shift, follows the multi-cell anchor link when the cell stores the
 "linked" sentinel, and then:
 
-1. refuses outright — returning without paying — when the anchor's
-   instance-attached bit **and** the feature definition's sprite bit are both
+1. refuses outright — returning without paying — when the **clicked cell's**
+   instance-attached bit **and** the anchor definition's sprite bit are both
    set ([R-FEAT-01 §15]);
 2. adds the feature definition's whole `energy` value to the builder's
    **energy production** accumulator;
@@ -5086,11 +5107,18 @@ nothing.
 
 #### The payout guard's two bits, named [R-FEAT-01 §15]
 
-**Established.** The two bits the payout's step 1 tests are: the cell bit is
-the anchor's **instance-attached** bit (set by the stamp for 3D definitions
-and by ignition and the die/reclaim transitions for sprite definitions,
-§3/§5/§9), and the definition bit is flag bit 0, **sprite (filename-based)
-definition**. The conjunction therefore means "a sprite feature that
+**Established.** The two bits the payout's step 1 tests come from **different
+cells**. The helper resolves the order's recorded position twice and keeps the
+first, **unhopped** result for the cell bit: the cell bit is that cell's
+**instance-attached** bit (set by the stamp for 3D definitions and by ignition
+and the die/reclaim transitions for sprite definitions, §3/§5/§9), while the
+definition bit — flag bit 0, **sprite (filename-based) definition** — is read
+from the catalog entry of the *anchor* the fringe hop reaches. For a
+single-cell feature the two cells coincide. For a multi-cell **sprite**
+definition reclaimed from one of its fringe cells they do not: the guard reads
+the fringe cell's instance-attached bit, which the stamp leaves clear, so the
+payout is **not** refused even while the anchor carries a live animation
+instance. The conjunction therefore means "a sprite feature whose clicked cell
 currently has a live animation instance" — one that is burning, or already
 playing its death or reclaim animation. The refusal is what "burning blocks
 reclaim" under "Feature burning" describes; it never applies to a 3D wreck
@@ -5528,6 +5556,7 @@ phase 2  move    : shared approach step
 phase 3  resolve : copy the feature record's 64-byte name, truncate it at the
                    first '_' (0x5f), look the result up in the unit catalogue.
                    Index 0 -> `Ressurection failed` on slot 7, terminate.
+                   (Index 0 is an unambiguous miss: see the note below.)
                    Otherwise store the index and compute the delay below;
                    raise cue slot 11 with no text.
 phase 4  wait    : v = delay ; delay = v - 1
@@ -5601,6 +5630,16 @@ faces heading 0 with no bank or pitch.
 **Established — the caption ordering.** `Resurrection complete` is raised in
 phase 6, i.e. **after** phase 5 has already allocated the replacement unit and
 removed the feature, and **before** phase 6 allocates the successor order node.
+
+**Established — why index 0 means "not found".** Retail's unit catalog
+reserves index 0: the compiler stores a count of *entries + 1*, the first
+compiled definition lands at index 1, and the by-name resolver searches the
+half-open range of indices `1 .. count-1`, never comparing index 0. Slot 0
+stays as the allocation left it. A zero result from the resolver is therefore
+an unambiguous miss and cannot be a real definition — which is what makes this
+phase's `index == 0` test, and the same test at the download-menu append
+(`[02 R-CAT-01 §8]`), safe. Nanolathe's own "slot 0 = null" pool rule
+reproduces it.
 
 **Established — the two spellings.** The image contains two distinct failure
 strings for this order: `Resurrection failed` for "there is no feature at the
@@ -5807,7 +5846,15 @@ and returning the live-instance record or 0. In order:
    on the same cell do not coexist; the later one wins.
 4. **3D definitions (flag bit 0 clear) take a live slot.** Pop the free list
    head; if the free list is empty (`-1`) the stamp returns 0 — **after** step
-   3 already tore down whatever was under it. The popped slot is moved to the
+   3 already tore down whatever was under it. It does not return early: on the
+   empty sentinel it substitutes the index **2048** (one past the pool's last
+   slot), passes that index to the free-to-active list helper, clears the mode
+   byte's bit 0 at that index, and only then tests the index against 2048 and
+   returns 0. An implementation reproduces the return value, not the sentinel
+   arithmetic. **Unknown:** whether the instance pool is allocated with a spare
+   slot, i.e. whether that mode-byte write lands inside the allocation.
+   *Decider:* the element count at the site that fills the pool base during
+   session start. The popped slot is moved to the
    active list and its burning bit cleared. The slot receives: the ordinal;
    accumulated damage `:= 0`; anchor `(x, z)`; position — the supplied triple
    verbatim, or when null the footprint centre with the terrain height snapped
@@ -6378,8 +6425,10 @@ called with the **anchor** cell and anchor coordinates. A weapon with
    + uint32(cell.word)` — both operands zero-extended 16-bit words, the sum
    held in 32 bits — where `cell.word` is the anchor's accumulator (the same
    16-bit field that holds the slot index when an instance is attached; the
-   stamp zeroes it). If `sum < uint32(damage)` (a 32-bit unsigned compare
-   against the zero-extended 16-bit `damage`) store `uint16(sum)`; else
+   stamp zeroes it). If `sum < damage` (a **signed** 32-bit compare of two
+   zero-extended 16-bit quantities — value-identical to an unsigned compare
+   over the whole reachable domain, since the sum cannot exceed `0x1FFFE`)
+   store `uint16(sum)`; else
    death transition `(x, z, 0)`, code `0xFD`. So this branch never wraps: a
    sum past 65535 always dies, and a negative `default` counts as its
    unsigned word. `damage = 0` therefore dies on the first hit of any

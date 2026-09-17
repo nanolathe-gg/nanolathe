@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"math"
 	"sort"
 	"strings"
 	"testing"
@@ -17,9 +16,10 @@ import (
 // live in catalog_retail_test.go; everything here is fixture-only and always
 // runs.
 
-// piOver180 is the composed constant of [02 "Weapon record"]'s minbarrelangle
-// conversion; used by tests to assert the exact composition.
-func piOver180() float64 { return math.Pi / 180.0 }
+// piOver180 is the image's degrees-to-radians constant, the multiplier of
+// [02 "Weapon record"]'s minbarrelangle conversion; used by tests to assert
+// the exact composition. It is deliberately not math.Pi/180.
+func piOver180() float64 { return degreesToRadians }
 
 // mustParseTDF parses TDF bytes or fails the test.
 func mustParseTDF(t *testing.T, body string) *formats.Document {

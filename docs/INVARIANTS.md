@@ -61,7 +61,8 @@ Allowed floating point, exhaustively:
 | Model piece rotation trig in the draw path and admission-time shatter pose | `float64`, round-to-nearest; geometry narrows back to fixed point | `[03 §2.4]`; approved current-simulation-pose departure in DESIGN_UNITS_ORDERS_COB §3.3 |
 | Queued-order range-ring adaptive chord count `trunc(radius × 2π × 1/8)` | `float64` presentation transient, narrowed immediately to the integer chord count | `[07 R-P0-11 §3]` |
 | Shatter-fragment normal construction — each reciprocal-65535 vertex conversion, vector difference, cross-product component, and normalized component narrows at its named binary32 result; square, sum, square-root and division use working precision until that component store | `float64` transient, `float32` named stores | `[04 R-COB-04 §3]` |
-| Nanolathe particle travel distance (`sqrt`, truncated to the tick count) and the nanoframe reveal's barycentric interpolants | `float64` presentation temporaries, never stored | `[03 §5.5]`, `[03 §5.2]` |
+| Nanolathe particle travel distance (`sqrt`, truncated to the tick count) — the strip-6 emitter's particle lifetime, computed in `internal/session` | `float64` transient, never stored; the lifetime it produces is **authoritative-side**, for the reason the strip-object span row below gives | `[03 §5.5]` |
+| Nanoframe reveal's barycentric interpolants (`internal/client/model_raster.go`) | `float64` presentation-only, never stored | `[03 §5.2]` |
 | Startup lens displacement-map radius and coordinate divisions (`internal/drawlist/lens.go`) | `float64` presentation temporaries; each coordinate truncates before immutable signed-16 displacement storage | `[03 R-FX-01 §4]` |
 | Load-time 2× art synthesis (`internal/upscale`: PCA basis, feature distances, tone terms) | `float32`/`float64` presentation-only; runs on the loader goroutine, its output is index art the simulation never reads | DESIGN_GPU_RENDERER §14.4 |
 | Enhanced glow layer geometry and kernel (`internal/platform/gpurender/glow.go`: stroke length `sqrt`, Gaussian weights) | `float32`/`float64` presentation-only; device-side executor state built from the recorded list, never read by the simulation | DESIGN_GPU_RENDERER §19 |
@@ -70,7 +71,7 @@ Allowed floating point, exhaustively:
 | Enhanced coastal surface and particle geometry (`internal/client/water_wakes.go`, `water_motion.go`, `water_buildings.go`, `internal/platform/gpurender/water.go`, `water_reflections.go`) | `float32`/`float64` presentation-only screen geometry, drift, fades and shader operands; never simulation inputs | DESIGN_GPU_RENDERER §26 |
 | Tactical range segment clipping (`internal/client/tactical_ranges.go`) | `float64` presentation-only clipping ratios; narrowed to viewport-clipped integer lines, never simulation inputs | Enhanced design policy, DESIGN_GPU_RENDERER §20 |
 | Load-time strategic-icon coverage synthesis (`internal/client/strategic_icon_art.go`) and offline review-sheet filtering | `float64` presentation-only geometry/filter intermediates; immutable mask bytes are never simulation inputs | Enhanced design policy, DESIGN_GPU_RENDERER §18.5 and §18.7 |
-| Strip-object span `sqrt` — the sprinkle's `len` and the flame segment's span, over raw 16.16 deltas, truncated before the fixed-point step is formed | `float64` transient, never stored | `[03 R-FX-01 §3]`, `[03 R-FX-02 §2]` |
+| Strip-object span `sqrt` — the nanolathe particle's travel distance, the sprinkle's `len` and the flame segment's span, over raw 16.16 deltas, truncated before the fixed-point step or tick count is formed | `float64` transient, never stored — and **authoritative-side, not presentation**: these run in `internal/session` and set strip-container and sub-record lifetimes, and a lifetime decides how many CRT draws phase 11 spends, which is the stream three authoritative consumers read. The no-fusion rule below binds all three sites. | `[03 §5.5]`, `[03 R-FX-01 §3]`, `[03 R-FX-02 §2]`, `[01 §7.5]` |
 | AI strategic-centre weighted accumulators and per-unit weight (weighted centroid of complete own units, truncated into three 16.16 words) | `float32` transients, never stored | `[08 R-P0-05 §10]`, `[08 R-AI-01 §16]` |
 
 Everything else is integer. Simulation velocity integration uses the fixed-point
@@ -165,6 +166,16 @@ Which stream: gameplay normally uses the simulation stream; meteor geometry
 wind's next-change interval `[01 §7.3]` use the CRT recurrence. Audio advances
 its private copy; briefing wind advances the private front-end stream. Later
 battle wind strength and 16-bit heading use the simulation stream.
+
+The CRT stream's draw **count** is behavior even where the drawn **value** is
+only presentation. Phase 11's effect strips, phase 10's shake, phase 6's
+burning-feature smoke and the phase-2 elimination line all paint pixels or
+text, but every draw they spend displaces the one stream that the phase-8 wind
+interval, the phase-9 meteor scheduler and the phase-5 victory-timer arm read
+on later ticks `[01 §7.5]`. Anything that changes how long a strip container
+or sub-record lives — a span, a lifetime, a pool-occupancy decision — is
+therefore a determinism input, and the arithmetic that produces it is
+authoritative-side even when its product is only ever drawn `[03 R-STRIP-01 §3]`.
 
 **Check.** Identical seeded session setups have stable simulation and CRT draw
 counts; setup and briefing draws leave the retained battle CRT fresh; the
