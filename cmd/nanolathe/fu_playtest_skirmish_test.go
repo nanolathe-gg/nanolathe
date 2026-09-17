@@ -131,8 +131,19 @@ func fuRunSkirmishCensus(t *testing.T, name string, cfg session.SkirmishConfig, 
 // TestFUPlaytestSkirmishSeed7Census is the displayless run the reviewer asked
 // about, with the per-tick detail the JSON report does not carry: unit class
 // counts, factory queues and AI group membership every 3000 ticks.
+//
+// The 108000-tick budget was raised from 54000 with the class-vector correction
+// of [08 R-P0-05 §5]: that routine folds a clamped copy of the definition's
+// passive `energymake` into the other-mix coefficient, which the previous
+// arithmetic omitted altogether, so a passive energy producer now carries a
+// non-zero other-mix weight instead of zero. The computer player builds economy
+// before it builds an army, and the measured elimination on this map and seed
+// moved from tick 32640 to 79650 by the same commander-death path. The cap is a
+// test budget, not a contract, and the two assertions below are unchanged. The
+// sibling three-player and mapped runs keep their 54000 budget: they assert no
+// terminal state, so the shift does not reach them.
 func TestFUPlaytestSkirmishSeed7Census(t *testing.T) {
-	report := fuRunSkirmishCensus(t, "skirmish-seed7-census", session.DirectSkirmishConfig(fuSkirmishMap), 7, 54000)
+	report := fuRunSkirmishCensus(t, "skirmish-seed7-census", session.DirectSkirmishConfig(fuSkirmishMap), 7, 108000)
 	if report.State != session.StatePostBattle.String() {
 		t.Fatalf("seed 7 did not reach the post-battle state by tick %d: state %s", report.Tick, report.State)
 	}

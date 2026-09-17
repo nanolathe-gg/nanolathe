@@ -68,15 +68,23 @@ func TestHalfCapacityComparisonIsUnsignedAtTheExactEdge(t *testing.T) {
 // signed byte divided by two, truncating toward zero — joins the other-mix
 // accumulator after its multipliers and before the zeroing branches.
 func TestHalfCapacityAddsHalfTheSingleCoefficient(t *testing.T) {
-	// A definition with no weapons, no build list and no metal or energy role:
-	// the other-mix accumulator is zero before the multipliers, so the whole
-	// difference between the two runs is the addend. The metal build cost is
-	// chosen so the single coefficient lands on an odd negative value, which is
-	// where halving truncates toward zero rather than toward minus infinity.
+	// A definition with no weapons, no build list and no metal or energy role.
+	// The other-mix accumulator is the start value 1 times four for the zero
+	// count, so the whole difference between the two runs is the addend.
+	//
+	// Because retail ADDS the two cost terms [08 R-P0-05 §5], the single
+	// coefficient is negative only for a negative authored cost; this fixture
+	// authors one to reach the odd-negative case, which is where halving
+	// truncates toward zero rather than toward minus infinity.
+	// 1 + 0.01*(-1150) = -10.4999997, truncated toward zero gives -10, plus the
+	// unarmed weapon budget 1, gives -9. The cost is deliberately not a multiple
+	// of 100: those are the costs where the single-precision hundredth's deficit
+	// moves the byte, and this fixture is about the halving, not the precision
+	// [08 "Arithmetic and clamping"].
 	newDef := func() *content.UnitDef {
 		return &content.UnitDef{
 			UnitName:       "halfcap",
-			BuildCostMetal: 1100,
+			BuildCostMetal: -1150,
 			MinWaterDepth:  -1, // negative: no multiply-by-three [08 R-AI-03 §6]
 		}
 	}
@@ -87,19 +95,25 @@ func TestHalfCapacityAddsHalfTheSingleCoefficient(t *testing.T) {
 	if single >= 0 || single%2 == 0 {
 		t.Fatalf("fixture sanity: the single coefficient must be odd and negative, got %d", single)
 	}
-	if got := base.ClassVectors[key].C0; got != 0 {
-		t.Fatalf("fixture sanity: other-mix without the addend = %d, want 0", got)
+	baseC0 := int32(base.ClassVectors[key].C0)
+	if baseC0 != 4 {
+		t.Fatalf("fixture sanity: other-mix without the addend = %d, want 4 (start value 1, times four for a zero count) [08 R-P0-05 §5]", baseC0)
 	}
 
 	// The count is zero on a fresh state, so the accumulator is multiplied by
-	// four before the addend joins it; the accumulator is still zero.
+	// four before the addend joins it.
 	fired := halfCapacityStrategic(t, newDef())
 	fired.SetUnitLimit(10)
 	fired.liveUnitCount = 6 // 10>>1 = 5 < 6
 	fired.recomputeClassVectors()
-	want := int32(single) / 2 // truncation toward zero on a negative value [I3]
+	want := baseC0 + int32(single)/2 // truncation toward zero on a negative value [I3]
 	if got := int32(fired.ClassVectors[key].C0); got != want {
 		t.Fatalf("other-mix with the addend = %d, want %d (single %d halved, truncating)", got, want, single)
+	}
+	// A floor-dividing implementation would land one lower; prove the two are
+	// distinguishable on this fixture.
+	if floored := baseC0 + (int32(single)-1)/2; floored == want {
+		t.Fatalf("fixture sanity: truncation and floor agree at single %d", single)
 	}
 
 	// At exactly half the cap the branch does not fire.
@@ -107,8 +121,8 @@ func TestHalfCapacityAddsHalfTheSingleCoefficient(t *testing.T) {
 	edge.SetUnitLimit(10)
 	edge.liveUnitCount = 5
 	edge.recomputeClassVectors()
-	if got := edge.ClassVectors[key].C0; got != 0 {
-		t.Fatalf("other-mix at exactly half the cap = %d, want 0", got)
+	if got := int32(edge.ClassVectors[key].C0); got != baseC0 {
+		t.Fatalf("other-mix at exactly half the cap = %d, want %d", got, baseC0)
 	}
 }
 

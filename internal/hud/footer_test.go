@@ -5,6 +5,7 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 )
 
@@ -172,6 +173,92 @@ func TestFooterFeatureLineSeparatorIsTwoSpaces(t *testing.T) {
 		if line.Color != (FooterColor{Value: FooterTextColor}) {
 			t.Errorf("feature %q colour = %+v, want raw index 83", tc.key, line.Color)
 		}
+	}
+}
+
+// The order caption is the state label of the descriptor of the unit's
+// FRONT-segment head order record, and descriptor 0's state label — `Ready` —
+// when there is no head record [07 R-HUD-03 §2][04 §3.1][04 R-ORD-01 §12].
+//
+// The two cases this locks in both directions are the ones the port had
+// backwards: an idle unit drew no caption at all, and a unit whose only record
+// is a rear-segment one (a weapon build, a self-destruct) drew that record's
+// label. Retail's accessor reads the front-segment head link and nothing else,
+// so both read `Ready`.
+func TestFooterOrderCaption(t *testing.T) {
+	const idle = "Ready" // orders row 0's state label
+	unit := func(owner uint8) frame.UnitView {
+		return frame.UnitView{Slot: 7, Owner: owner, DefName: "testsolar", Health: 100, MaxHealth: 100}
+	}
+	visible := func(*frame.UnitView) bool { return true }
+	for _, tc := range []struct {
+		name   string
+		queues []frame.OrderQueueView
+		owner  uint8
+		want   string // "" means the caption is not drawn at all
+	}{
+		{name: "no queue at all", owner: 2, want: idle},
+		{
+			name:   "empty queue",
+			owner:  2,
+			queues: []frame.OrderQueueView{{Unit: 7}},
+			want:   idle,
+		},
+		{
+			// The rear segment is not the front segment: a self-destructing or
+			// stockpiling unit with an empty front segment still reads `Ready`.
+			name:   "rear-segment record only",
+			owner:  2,
+			queues: []frame.OrderQueueView{{Unit: 7, Secondary: []frame.OrderView{{Unit: 7, Kind: "BuildWeapon", StateLabel: "Nanolathing"}}}},
+			want:   idle,
+		},
+		{
+			name:  "front-segment head",
+			owner: 2,
+			queues: []frame.OrderQueueView{{Unit: 7, Primary: []frame.OrderView{
+				{Unit: 7, Kind: "Attack_Chase", StateLabel: "Attacking"},
+				{Unit: 7, Kind: "Move_Ground", StateLabel: "Moving"},
+			}}},
+			want: "Attacking",
+		},
+		{
+			// Drawn only inside the own-or-overlay block, so an enemy's order
+			// is never shown — not even the idle caption.
+			name:   "identified enemy",
+			owner:  5,
+			queues: []frame.OrderQueueView{{Unit: 7, Primary: []frame.OrderView{{Unit: 7, StateLabel: "Attacking"}}}},
+			want:   "",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &frame.Frame{Units: []frame.UnitView{unit(tc.owner)}, OrderQueues: tc.queues}
+			got := BuildFooter(f, footerCatalog(), 2, FooterHover{Gadget: NoGadget, Unit: 7, Visible: visible}, false)
+			caption, ok := footerTextAt(got, AnchorMissionText)
+			if tc.want == "" {
+				if ok {
+					t.Fatalf("MISSIONTEXT = %q, want no caption", caption.Text)
+				}
+				return
+			}
+			if !ok {
+				t.Fatalf("MISSIONTEXT drew nothing, want %q", tc.want)
+			}
+			if caption.Text != tc.want {
+				t.Errorf("MISSIONTEXT = %q, want %q", caption.Text, tc.want)
+			}
+			if !caption.Centered || caption.Color != (FooterColor{Value: FooterTextColor}) {
+				t.Errorf("MISSIONTEXT centred=%v colour=%+v, want centred at raw index 83", caption.Centered, caption.Color)
+			}
+		})
+	}
+}
+
+// The idle caption is the descriptor table's row 0, not a string this package
+// spells for itself: the table is the single source and `Ready` is what it
+// holds [04 §3.1][04 R-ORD-01 §12].
+func TestFooterIdleCaptionComesFromDescriptorZero(t *testing.T) {
+	if got := orders.DescriptorFor(0).StateLabel; got != "Ready" {
+		t.Fatalf("descriptor 0 state label = %q, want %q", got, "Ready")
 	}
 }
 

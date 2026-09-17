@@ -121,7 +121,7 @@ func BallisticSolve(dx, dy, dz numeric.Fixed, vel, grav numeric.Fixed, minBarrel
 
 	// [06 §6.4] h = hypot(double(dx), double(dz))
 	h := math.Hypot(float64(dx32), float64(dz32))
-	h2 := h * h
+	h2 := float64(h * h)
 	// Retail's solver operands are `source - target` on all three axes, not
 	// `target - source` [06 §6.4] (ordering corrected there 2026-09-16 after a
 	// call-site census; the section previously said the other way round). The
@@ -136,19 +136,25 @@ func BallisticSolve(dx, dy, dz numeric.Fixed, vel, grav numeric.Fixed, minBarrel
 	g := float64(g32)
 
 	// [06 §6.4] s = y*y + h2
-	s := y*y + h2
+	//
+	// Every explicit float64 conversion of a product in this solver is a
+	// rounding barrier, not a width change: retail's x87 rounds each product
+	// to working precision before it enters a sum or a difference, and a
+	// backend with a fused multiply-add would round the two together and
+	// produce a different discriminant [06 §6.4] (I2's no-fusion rule).
+	s := float64(y*y) + h2
 
 	// [GAP T5] g2 = i32(g*g) wraps as signed 32-bit integer multiply before double conversion.
 	g2raw := int32(int64(g32) * int64(g32))
 	g2 := float64(g2raw)
 
-	v2 := v * v
+	v2 := float64(v * v)
 
 	// [06 §6.4] discriminant construction transcribed verbatim from [GAP T5] / orchestration-research-combat-effects §2.1:
 	// disc = ( y*y*g2 + (v*v - g*y*(-2.0))*v*v ) * h2*h2 - h2*h2*g2*s
 	// The -2.0 is a literal in the discriminant expression; subtracting the
 	// negative makes the term additive: v*v + 2*g*y.
-	disc := (y*y*g2+(v2-g*y*(-2.0))*v2)*h2*h2 - h2*h2*g2*s
+	disc := float64((float64(y*y*g2)+float64((v2-float64(g*y*(-2.0)))*v2))*h2*h2) - float64(h2*h2*g2*s)
 
 	// [06 §6.4] discriminant is tested against exactly 0.0 with no positive epsilon guard.
 	// Negative or unordered (NaN) returns the no-solution sentinel 0x8000.
@@ -160,7 +166,9 @@ func BallisticSolve(dx, dy, dz numeric.Fixed, vel, grav numeric.Fixed, minBarrel
 	sqrtDisc := math.Sqrt(disc)
 
 	// [06 §6.4] base = (v*v + g*y) * h2 ; den = 2.0 * s
-	base := (v2 + g*y) * h2
+	// The outer conversion also keeps the `* h2` out of the two divisions
+	// below, which the compiler would otherwise fuse into their numerators.
+	base := float64((v2 + float64(g*y)) * h2)
 	den := 2.0 * s
 	if den == 0.0 || math.IsNaN(den) || math.IsInf(den, 0) {
 		return 0, false
@@ -237,5 +245,10 @@ func BallisticSolve(dx, dy, dz numeric.Fixed, vel, grav numeric.Fixed, minBarrel
 // a transient and is never stored.
 func distance3DRaw(dx, dy, dz int32) int64 {
 	fx, fy, fz := float64(dx), float64(dy), float64(dz)
-	return int64(numeric.TruncateFloat64ToLow32(math.Sqrt((fx*fx + fy*fy) + fz*fz)))
+	// Full-range raw deltas reach 2³¹, so each square exceeds 53 bits and is
+	// inexact. The explicit conversions round each square before it is summed,
+	// which is what retail's x87 does and what a fused multiply-add would not;
+	// the truncated distance below was measured to differ otherwise.
+	x2, y2, z2 := float64(fx*fx), float64(fy*fy), float64(fz*fz)
+	return int64(numeric.TruncateFloat64ToLow32(math.Sqrt((x2 + y2) + z2)))
 }

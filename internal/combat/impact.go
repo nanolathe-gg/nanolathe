@@ -167,8 +167,14 @@ func DistanceToBox(impact Vec3, u UnitForArea) int32 {
 	// alongside the ballistic discriminant. The shared narrowing retains the
 	// signed low word before the arithmetic shift [01 R-DET-01 §1]; the deltas
 	// are non-negative here, so the root itself truncates toward zero [01 §8] I3.
+	// Each square is rounded before it is summed, as retail's separate x87
+	// operations do. Every separation stock content produces keeps the squares
+	// inside 53 bits, so the barrier changes no shipped value; it is what holds
+	// the association across backends with a fused multiply-add, and near the
+	// wrap boundary below the squares are inexact and it is load-bearing.
 	fx, fy, fz := float64(cx), float64(cy), float64(cz)
-	whole := int64(numeric.TruncateFloat64ToLow32(math.Sqrt(fx*fx+fy*fy+fz*fz))) >> 16
+	x2, y2, z2 := float64(fx*fx), float64(fy*fy), float64(fz*fz)
+	whole := int64(numeric.TruncateFloat64ToLow32(math.Sqrt(x2+y2+z2))) >> 16
 	// The reduction to sixteen bits is a truncating narrowing and therefore
 	// WRAPS: [06 §9.3] states that "a distance at or above 32,768 world units
 	// wraps negative and passes the acceptance test", which is the whole reason

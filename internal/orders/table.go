@@ -242,14 +242,17 @@ var batch3 = []Descriptor{
 // way: every batch append re-sorts the whole table, and the empty name sorts
 // to index 0, the reject sentinel [04 §3.1] C4.
 //
-// The acknowledgement group is transcribed. The state label deliberately is
-// not: no production path reads a descriptor's AckGroup (the queue overlay's
-// icon census in internal/hud skips the sentinel), so the group is inert,
-// whereas the HUD footer prints a descriptor's state label verbatim and
-// treats an empty one as "no state text". Copying `Ready` onto the sentinel
-// would be a presentation change rather than a transcription fix.
+// Every field is transcribed, the state label included. This row's label used
+// to be held empty on the argument that the footer prints a state label
+// verbatim and reads an empty one as "no state text", so copying `Ready` here
+// would be a presentation change. That premise is falsified: the footer's
+// state-label accessor reads the unit's front-segment head order record and,
+// when there is no head record, returns THIS row's label — so `Ready` is
+// retail's caption for a unit with no order, not an inert string
+// [04 §3.1][04 R-ORD-01 §12][07 R-HUD-03 §2]. The sentinel's label is load
+// bearing; holding it empty is what suppressed the caption.
 var batch4 = []Descriptor{
-	{Name: "", StateLabel: "", Class: 0x00, AckGroup: 15, StaticGate: 0x0, Presentation: HelperNone},
+	{Name: "", StateLabel: "Ready", Class: 0x00, AckGroup: 15, StaticGate: 0x0, Presentation: HelperNone},
 }
 
 var table []Descriptor
@@ -401,6 +404,7 @@ func resolveRows() {
 // Adding a family: write internal/orders/<family>.go with an ensure<Family>
 // function shaped like ensureStopHandler, then add exactly one line below.
 var handlerInstallers = []func(){
+	ensureSentinelHandler,      // pump.go — row 0, the reject sentinel
 	ensureMoveHandlers,         // pump.go — Move_Ground, and only that row
 	ensurePatrolHandlers,       // patrol.go — the queued-move pair, both ground patrols, the two air moves
 	ensureTransportHandlers,    // transport.go — pickup, unload, landing, BeCarried

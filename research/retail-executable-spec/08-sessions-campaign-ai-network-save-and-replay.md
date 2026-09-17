@@ -22,9 +22,8 @@ task-group writer, wave bootstrap/merge, task deadlines and dispatch gates,
 economy-mixed scoring and profile handling, placement selection and its two
 helpers, and the transport, naval, air, repair, reclaim and scouting policy
 [P0-01] [P0-02] [P0-03] [R-P0-04] [R-P0-05] [R-AI-01] [R-AI-03] [R-AI-04].
-Its remaining residuals — the semantic name of the classification helper and
-any additional indirect task-vector writer — are Unknown below and must not
-be filled by inference.
+Its remaining residual — whether any additional indirect writer mutates the
+manager task vectors — is Unknown below and must not be filled by inference.
 
 Evidence terms:
 
@@ -615,8 +614,21 @@ literals, and the TDF accessor that filled the record copy folds only the
 *key* it searches for, storing the value as authored [fmt tdf]. A
 differently-cased spelling such as `planet=lunar` therefore matches nothing.
 When the walk reaches the null terminator without a match the index is
-**0**. The stock OTA census shows one `planet=Urban` and nine empty values,
-all of which therefore brief as Green planet. Spelling asymmetries
+**0**. Asset census over the reference install (275 OTA files, every one of
+them under `maps\`; base plus Core Contingency plus Battle Tactics, plus two
+third-party `.ufo` packs): 265 author one of the table's spellings byte for
+byte with identical case, and ten match no row — one `planet=Urban` and nine
+empty values — so all ten brief as Green planet. Counting the stock archives
+alone it is one `Urban` and seven empties, the two remaining empties coming
+from the `.ufo` packs. Eight of the ten carry a network schema and so are
+multiplayer maps, which never reach the briefing screen; of the other two,
+one is the Battle Tactics mission *T26, Krocark Firebase Complex*, whose
+`planet=Urban` briefs as Green planet, and one is a third-party map with a
+mission schema and an empty value. No installed OTA authors a spelling that
+differs from a table row **by case alone**, so shipped content never
+exercises the case-sensitivity rule — it decides only third-party authoring.
+No installed OTA authors `Lunar2`; row 8 is reachable only through the
+Core-side `Lunar` rewrite below. Spelling asymmetries
 (`WDesertbrief`/`WDesPan`/`WDesertRotate`, `Desertbrief`/`DDesPan`/`DDesRotate`,
 `Crystalbrief`/`CrystPan`/`CrystalRotate`) are retail's and must be
 reproduced. The stock install carries `anims\<x>brief.gaf` for every row
@@ -1534,13 +1546,21 @@ settled on the way:
 - The per-slot **profile passes** of [R-AI-01 §12] open the `plan` gate by
   calling the same setter the `plan` directive itself uses, before walking
   the catalog; there is no separate "fragment mode" flag.
-- The strategic state constructor's `+20` term ("build-option list is
-  non-empty", "Strategic state construction and refresh") tests the
-  definition's **download-menu build list pointer** — the list the world
-  rebuild's step 14 compiles from the `download` directory, capped at 31
-  entries per definition — not the `canbuild` page table. Whether the
-  pointer is allocated only for definitions with at least one entry (so that
-  "non-null" and "non-empty" coincide) is left in the tail.
+- The strategic state constructor's `+20` term ("Strategic state
+  construction and refresh", [R-P0-05 §5], [R-P0-05 §9]) tests the
+  definition's **compiled `CANBUILD` list pointer** — the 60-byte block of
+  thirty word entries the catalog compiler allocates in its
+  `gamedata\sidedata.TDF` pass ([02 R-CAT-01 §5] step 6) — and it tests only
+  whether that pointer is non-null. The pointer is allocated for **every**
+  definition carrying the authored `builder` flag, including one whose
+  `CANBUILD` top-level or per-unit child section is missing, in which case
+  the entry count stays zero; a non-builder definition keeps a null pointer
+  and a zero count. So "non-null" is *not* the same as "non-empty", and the
+  `+20` term, like the refresh's build-capable counter ([R-AI-01 §16]),
+  fires for every builder. The **download**-directory compile is a separate
+  routine that only appends into that already-allocated block, which is where
+  its capacity limit comes from ([02 R-CAT-01 §8] step 4); it does not own
+  the pointer. The earlier question about this allocation is closed.
 
 
 ## Victory and defeat triggers
@@ -2761,11 +2781,11 @@ The strategic planner is a distinct object from the scenario unit loader.
 
 #### Strategic state construction and refresh — Established [P0-01]
 
-Each computer-capable player owns a fixed-size strategic state that holds counts, a map center, and two per-type coefficient families. One family is a single-byte per-type weight used only at initialization; the other is a three-byte per-type triple recomputed during play. The two families live in different vectors within the same state object and are not aliases.
+Each computer-capable player owns a fixed-size strategic state that holds counts, a map center, and **three** per-type coefficient vectors, each a separate array in the same state object and none an alias of another: the three-byte per-type class triple and the single-byte first-pass coefficient, both written only by the class routine, and a single-byte **initialization-only** vector written once at construction and never recomputed. The state also holds the per-type completed-owner count word, the per-type profile weight byte and the per-type profile limit dword ([R-P0-05 §2] lists all three vectors correctly).
 
-Construction builds the state, zeroes the vectors, establishes the center at half-map, ensures per-type capacity, and writes the single-byte vector once: the value starts at zero, adds 40 when a per-definition category flag is clear, and adds 20 when that definition's build-option list is non-empty. The triple vector is zeroed at construction and not written by that initializer.
+Construction builds the state, zeroes the containers, establishes the center at half-map, and runs the initialization pass, which sizes and seeds the count, initialization-only, weight and limit arrays. That pass writes the initialization-only vector once: the value starts at zero, adds 40 when a per-definition category flag is clear (`bmcode`, §9), and adds 20 when that definition's compiled build-option list **exists** — which is exactly when the definition carries the authored `builder` flag, because the list is allocated for every builder even when its `CANBUILD` section is missing and its entry count stays zero ([02 R-CAT-01 §5] step 6, [R-ENTRY-02 §2]). No clamp is applied; 60 is the maximum reachable value. The class routine's own prologue, not this pass, sizes the first-pass byte vector and the class triple to one entry per definition, filling new entries with zero, which is why those two track a catalog that grew after construction. The triple is zeroed there and not written by the initialization pass.
 
-Refresh runs every 30 ticks. It clears and rebuilds per-type completed counts and the weighted center from live units. The single-byte vector written at construction is never touched again by the recomputation routine. The triple is recomputed only when an outer random gate succeeds and once unconditionally at state creation; otherwise the refresh leaves the triple unchanged. [P0-01]
+Refresh runs every 30 ticks. It clears and rebuilds per-type completed counts and the weighted center from live units. The initialization-only vector is never touched again by the recomputation routine. The triple is recomputed only when an outer random gate succeeds and once unconditionally at state creation; otherwise the refresh leaves the triple unchanged. [P0-01]
 
 #### Class-vector recomputation loop and inputs — Established [P0-01]
 
@@ -2775,20 +2795,29 @@ Per-definition inputs consumed in plain terms are:
 
 - per-definition economy cost fields for metal and energy;
 - the extracts-metal flag as a floating-point zero versus non-zero test;
-- category and movement-class flag bits that contribute fixed integer addends and select weapon-budget bases;
-- footprint and yard-related size flags that contribute small constants and gate multipliers;
+- the definition's passive `energymake` float, clamped to `0..30` and added in floating point to the other-mix accumulator before that accumulator's single truncation (§5);
+- the `makesmetal` byte, and the `canattack`, `builder`, `canfly`, `canload` and `isfeature` flag bits, which contribute fixed integer addends, select weapon-budget bases or zero an accumulator;
+- the definition's `radardistance` and `sonardistance` words as plain non-zero tests;
 - the definition's `MinWaterDepth` word (copied from its movement class), which triples one accumulator when non-negative ([R-AI-03 §6]);
-- a weapon-related floating field that can zero one accumulator when combined with a global half-compare;
+- the definition's `windgenerator` float, which zeroes the other-mix accumulator when it is not equal to floating zero **and** the map's maximum wind word is strictly below half the compiled-in wind divisor (§9 states this branch exactly);
 - the weapon table entries themselves, where active weapons contribute damage divided by 40 plus **range** divided by 100 plus small constants — the weapon parser stores the `DAMAGE` section's `default` key into the damage word (the /40 read) and the `range` key into the range word (the /100 read); `reloadtime` is stored elsewhere (scaled by thirty) and is not read by this routine;
-- a global helper that returns a signed classification value compared against zero;
-- per-type completed counts from the strategic state that double or quadruple one accumulator and gate halving from the previously computed single-byte coefficient;
-- a player-wide flag that gates halving of one accumulator.
+- the definition's **net-energy query**, compared strictly against zero — a negative result means net energy producer. It is the shared helper doc 05 names, reading `energyuse`, else negated wind or tidal production, else zero ([05 R-PROD-01 §1] gives its branch order and strictness); the class routine invokes it six times;
+- per-type completed counts from the strategic state, which double or quadruple the other-mix value and also gate the `builder` addend;
+- the owning player's live unit count against the session per-player unit limit shifted right one — an unsigned compare — which is the sole gate on the half-addition of the first-pass coefficient ([R-AI-01 §13]). It is neither a completed count nor a player-wide flag.
 
-All weapon-slot contributions are bounded by clamps before they are summed with cost-derived terms. [P0-01]
+No footprint field, no yard map, no build-option list, no profile weight and no profile limit is read inside this routine; the only size-like input is `MinWaterDepth` above. All weapon-slot contributions are bounded by clamps before they are summed with cost-derived terms. [P0-01]
 
 #### Arithmetic and clamping — Established [P0-01]
 
-The routine performs its floating work with the retail x87 pattern: integer addends are loaded, economy costs are multiplied by constants, differences are taken in floating point, and each result is narrowed to 32-bit float at invocation boundaries before the next operation. The constants that appear are zero, minus one hundredth, minus two thousandths, thirty, minus two and a half thousandths, five, one hundred, minus two hundredths, and small integer addends such as one, ten, eleven, twenty, twenty-one, twenty-five, thirty, forty, fifty and one hundred. Every floating-to-integer conversion truncates toward zero, matching the retail helper's behavior, and the final per-type results are clamped to minus one hundred to plus one hundred before they are stored as signed bytes. No 80-bit retention crosses a helper invocation; the store to float32 is the truncation boundary. [P0-01]
+The routine performs its floating work with the retail x87 pattern: integer addends are loaded, economy costs are multiplied by constants, and the terms are combined in floating point. The constants that appear are zero, minus one hundredth, minus two thousandths, thirty, minus two and a half thousandths, five, one hundred, minus two hundredths, and small integer addends such as one, ten, eleven, twenty, twenty-one, twenty-five, thirty, forty, fifty and one hundred. Every floating-to-integer conversion truncates toward zero, matching the retail helper's behavior, and there are exactly **five** such conversions per definition (§5).
+
+**Narrowing to single precision happens in two places only.** The first pass and the other-mix accumulation run wholly at the x87 working precision, with the truncation as their only boundary: two truncations and no narrowing in the first pass, one truncation and no narrowing in the other-mix. The energy coefficient narrows its **cost product** through a single-precision store, while the five-times net-energy term and the difference stay at working precision; the metal coefficient narrows its **cost product plus the makes-metal term** through a single-precision store, while the addition of the integer base stays at working precision.
+
+**The working precision is 53-bit — Established, and it is material.** The C runtime's floating-point initialiser explicitly selects the 53-bit mantissa through the runtime's precision-control helper at startup, and so does the runtime's floating-point reset after it re-initializes the unit; every other caller of that helper passes a mask covering exception bits alone, so nothing reachable from the simulation changes the precision field, and the truncating helper sets only the rounding-control field before restoring the saved word ([01 §8], [01 R-DET-01 §3]). The routine's intermediates therefore behave exactly as IEEE binary64. All five constants are **single-precision** multiply operands; the definition fields the routine reads are single precision too, so only the products and the sums are wider.
+
+That width changes stored bytes. The single-precision hundredth is slightly **below** one hundredth, so a metal cost that is a non-zero multiple of 100 makes the exact product land just under an integer: the wider accumulator keeps the deficit and truncates down, while a single-precision sum rounds onto the integer and truncates one higher. An offline sweep of the reference install over every definition and every state the routine can see found exactly five such definitions — precisely the five whose metal cost is a non-zero multiple of 100 — each one byte high under single-precision accumulation, an error that also reaches `base` through the half-capacity addend. The other truncations do not diverge for shipped content: the single-precision two-thousandth is **above** two thousandths, so an energy cost that is a multiple of 500 lands just above an integer where both widths agree, authored `energymake` values are integral or far from a boundary, and the energy and metal coefficients' clamped results never cross an integer. A reimplementation must accumulate the first pass at binary64 width with single-precision constants; single-precision accumulation is not equivalent.
+
+**Each coefficient has its own clamp, and they differ.** Only the first-pass single coefficient is clamped to minus one hundred through plus one hundred, as a signed-integer clamp after its truncation (its weapon budget is clamped the same way first). The other-mix coefficient has an **upper clamp at 100 only** — there is no lower clamp, so the half-addition can leave it negative and a negative value does reach the candidate score. The energy and metal coefficients are clamped to **zero through one hundred in floating point before** their single truncation. Every clamp keeps its own bound value: only values strictly beyond a bound are replaced. [P0-01]
 
 #### Random gate — Established [P0-01]
 
@@ -2998,7 +3027,7 @@ The score has two layers: dynamic economy pressure read from the player record a
 
 The player economy fields consumed by the score are: current energy stock, current metal stock, energy capacity, metal capacity, and four aggregates — energy production, energy usage, metal production, and metal usage. The production accessors are not per-pass produced values; the ledger folds per-unit production and request buckets and leftover stock into the aggregates.
 
-The strategic state contributes, per definition type: a three-byte class triple holding signed coefficients for the other, metal, and energy mixes; a completed-owner count; a single-byte coefficient used by the class path and the conditional half-addition; and an initialization-only single-byte vector written once at construction and never recomputed. The state also holds the last 30-tick refresh tick and the placement search radius. The three-byte class vector and the single-byte vectors are distinct arrays; the initialization-only vector is not an alias of the refresh-written families. [08 "Strategic state construction and refresh"]
+The strategic state contributes, per definition type: a three-byte class triple holding signed coefficients for the other, metal, and energy mixes — retail's own names for its three bytes, in stored order, are `base`, `baseML` and `baseEL` ([R-P0-05 §5]); a completed-owner count; a single-byte coefficient used by the class path and the conditional half-addition; and an initialization-only single-byte vector written once at construction and never recomputed. The state also holds the last 30-tick refresh tick and the placement search radius. The three-byte class vector and the single-byte vectors are distinct arrays; the initialization-only vector is not an alias of the refresh-written families. [08 "Strategic state construction and refresh"]
 
 #### Hard gates and economy pressure — Established [R-P0-05 §3]
 
@@ -3055,9 +3084,11 @@ A post-selection filter then compares the **selected** definition's authored `si
 
 #### Class-vector compilation and refresh — Established [R-P0-05 §5]
 
-The class routine walks definition IDs in strict ascending type order, skips the zero sentinel, and draws no random numbers itself. All float-to-integer conversions truncate toward zero; float32 narrowing occurs at the recovered helper boundaries. Final signed-byte coefficients clamp to `[-100, 100]`.
+The class routine walks definition IDs in strict ascending type order, skips the zero sentinel, and draws no random numbers itself. It performs exactly five float-to-integer conversions per definition, all truncating toward zero; where single-precision narrowing does and does not occur is in [08 "Arithmetic and clamping"]. **The four coefficients have four different clamps** — `[-100, 100]` for the first pass, an upper bound of 100 alone for the other mix, and `[0, 100]` applied before the truncation for energy and metal — set out with each formula below.
 
-The initialization-only single-byte vector is written once at construction — zero, plus 40 when the definition's authored `bmcode` byte is zero (every **building**, §9), plus 20 when the build-option list is non-empty — and is never rewritten by the refresh routine. [08 "Strategic state construction and refresh"]
+Retail's own names for the three bytes of the class triple, in stored order, are **`base`** (the other mix), **`baseML`** (metal) and **`baseEL`** (energy). They are the executable's labels, taken from the per-type debug dump's column header, which prints them beside the per-type profile limit and profile weight ([R-AI-02 §2]).
+
+The initialization-only single-byte vector is written once at construction — zero, plus 40 when the definition's authored `bmcode` byte is zero (every **building**, §9), plus 20 when the compiled build-option list **exists**, that is when the definition carries the authored `builder` flag ([02 R-CAT-01 §5] step 6) — and is never rewritten by the refresh routine. [08 "Strategic state construction and refresh"]
 
 The single coefficient (first pass):
 
@@ -3067,8 +3098,8 @@ if ExtractsMetal != 0.0: acc = 11
 if MakesMetal != 0:      acc += 10
 if Classify(def) < 0:    acc += 10
 
-t0 = trunc(float32(acc) - BuildCostMetal  * 0.01)
-t1 = trunc(float32(t0) - BuildCostEnergy * 0.002)
+t0 = trunc(acc + 0.01  * BuildCostMetal)
+t1 = trunc(t0  + 0.002 * BuildCostEnergy)
 
 weaponBase = 11 if CanAttack else 1
 weaponSum = weaponBase
@@ -3079,39 +3110,112 @@ weaponSum = clamp(weaponSum, -100, 100)
 coefficient = clamp(weaponSum + t1, -100, 100)
 ```
 
+**The two cost terms are added, not subtracted.** The executable multiplies each
+cost by a *negative* constant — one hundredth and two thousandths, both negative
+— and subtracts that product from the accumulator, so the net effect is plus one
+hundredth of the metal cost and plus two thousandths of the energy cost. The
+first-pass coefficient therefore behaves as a unit-value score that rises with
+cost, which is consistent with its extractor, metal-maker, energy-producer and
+weapon addends; under the subtracting reading every definition costing more than
+ten thousand metal would pin at −100. The addition was re-derived twice
+independently and cross-checked against the energy coefficient below, which
+performs the same subtraction on its own operands and agrees. **Established.**
+
+Both clamps are signed-integer and keep their own bound values: `+100` and `−100`
+survive, only values strictly beyond are replaced. The `ExtractsMetal` test
+selects equality, so `acc = 11` requires a value that is neither zero nor NaN;
+the net-energy test selects "below" alone, so an unordered comparison — a NaN
+result — takes the `+10` arm. The whole first pass accumulates at the 53-bit
+working precision with no intermediate narrowing, and that width is
+reproducible arithmetic rather than a residual: it decides the stored byte for
+every definition whose metal cost is a non-zero multiple of 100
+([08 "Arithmetic and clamping"]).
+
 The damage and range field identities, widths, and divisions are established
 (the `DAMAGE/default` word and the `range` word of the weapon parser). The
 half-capacity compare reads the owning **player record's live unit count**,
 reached through the strategic state's back-pointer, against the session's
 per-player unit limit ([R-AI-01 §13]).
 
-The triple class coefficients — the other-mix accumulator starts at zero and receives these addends:
+The other-mix coefficient `base` — the accumulator starts at **one**, and
+`CanAttack` **replaces** it with 21 rather than adding to it:
 
 ```text
-if CanAttack:                 acc = 21
+acc = 1
+if CanAttack:                acc = 21
 if Builder && count < 3:     acc += 30
-if Classify(def) < 0:         acc += 50
+if Classify(def) < 0:        acc += 50
 if ExtractsMetal != 0.0:     acc += 50
 if MakesMetal != 0:          acc += 25
-if CanFly:                    acc += 40
-if SonarDistance != 0:        acc += 15
+if CanFly:                   acc += 40
+if SonarDistance != 0:       acc += 15
 if RadarDistance != 0:       acc += 5
+
+v   = min(max(EnergyMake, 0.0), 30.0)
+val = trunc(acc + v)
 ```
 
-Then `count == 0` multiplies the accumulator by four, `count == 1` by two, and `MinWaterDepth >= 0` by three (the movement-class value the FBI compile copies into the definition, [04 R-DOC04-A] — so definitions that may stand in water, [R-AI-03 §6]). When `(unitLimit >> 1) < player.liveUnitCount` — an unsigned compare of the session's per-player unit limit against the owning player's live unit count — half of the single coefficient is added; the branch is reachable in ordinary late-game state ([R-AI-01 §13]). The coefficient is then zeroed when `CanLoad` is set, when `IsFeature` is set, or when the wind-generator/global-wind comparison is true, and is clamped to the signed-byte range.
+The passive **`energymake`** float is a real input of this accumulator and was
+missing from the earlier text: it is clamped
+below at zero and above at **thirty**, added to the integer accumulator in
+floating point, and the sum is then truncated **once** — this is the only
+truncation of the other-mix value. A solar collector authoring `energymake 20`
+gains 20; a fusion plant authoring 1000 gains 30. The field identity is
+Established from the unit-record compiler's store for that authored key
+([05 R-PROD-01 §1] lists this routine as its second reader). Both clamp edges are
+immaterial at the boundary but are as the instructions have them: the lower test
+selects "below or equal", so a value at or below zero yields 0.0 and a NaN yields
+0.0; the upper test selects "below" alone, so a value strictly under thirty is
+kept and anything else, thirty included, selects the literal thirty.
 
-The energy coefficient: `clamp(trunc(BuildCostEnergy * -0.0025 - Classify(def) * 5.0), -100, 100)`.
+Then `count == 0` multiplies the **truncated sum** by four, `count == 1` by two, and `MinWaterDepth >= 0` by three (the movement-class value the FBI compile copies into the definition, [04 R-DOC04-A] — so definitions that may stand in water, [R-AI-03 §6]); the multipliers apply after the `energymake` term is folded in, not to the raw integer accumulator. When `(unitLimit >> 1) < player.liveUnitCount` — an unsigned compare of the session's per-player unit limit against the owning player's live unit count — half of **this iteration's own freshly stored** single coefficient is added, truncated toward zero; the branch is reachable in ordinary late-game state ([R-AI-01 §13]). The value is then zeroed when `CanLoad` is set, when `IsFeature` is set, or when the wind-generator/global-wind comparison of §9 is true, and finally `base = min(val, 100)`.
 
-The metal coefficient:
+**There is no lower clamp on `base`.** Only the maximum is applied, at 100. The
+one route to a negative value is the half-capacity addend, whose range is
+`[-50, +50]`, so the signed-byte store never truncates in practice — but a
+negative `base` does reach the candidate score of §4, and "clamped to the
+signed-byte range" is not what the routine does. Strictness in this block:
+`count < 3` is a signed strict compare on the completed-count word; the
+net-energy test selects "below" alone (so a NaN result takes the `+50` arm);
+`ExtractsMetal != 0.0` selects equality (so a NaN gives no `+50`);
+`SonarDistance`/`RadarDistance` are plain non-zero word tests; `MinWaterDepth`'s
+`×3` applies when the signed word is **not** negative, and the movement-class
+default is −10000, so only definitions that author a non-negative
+`minwaterdepth` — the ones that require water — are tripled. The whole
+accumulation runs at working precision; the truncation is its only boundary.
+
+The energy coefficient `baseEL`:
+
+```text
+raw = float32(BuildCostEnergy * -0.0025) - 5.0 * Classify(def)
+baseEL = trunc(clamp(raw, 0, 100))
+```
+
+The clamp bounds are **zero and one hundred**, and the clamp is applied in
+floating point **before** the single truncation. Both comparisons are strict, so
+`0.0` and `100.0` themselves are kept. This subtraction's operand order is
+recovered independently of the first pass's and corroborates it. The
+upper-bound comparison is unordered-sensitive and its condition selects
+"below", which NaN also sets, so a NaN `raw` — reachable only from a NaN authored
+cost or a NaN net-energy result — becomes **100**, not 0.
+
+The metal coefficient `baseML`:
 
 ```text
 metalBase = 100 if ExtractsMetal != 0.0 else 0
-metal = clamp(trunc(metalBase
-                    - BuildCostMetal * 0.02
-                    - (25 if MakesMetal != 0 else 0)), -100, 100)
+sum       = float32(BuildCostMetal * -0.02 + (25 if MakesMetal != 0 else 0))
+baseML    = trunc(clamp(metalBase + sum, 0, 100))
 ```
 
-The definition inputs consumed by the routine — extracts-metal, makes-metal, metal and energy build costs, can-attack, builder, can-fly, can-load, is-feature, `MinWaterDepth`, radar and sonar distance, and wind-generator — are recovered runtime field mappings, not guesses based on similarly named proxies. Confidence is high for the comparisons, constants, cadence, and field mappings; medium for the classification helper's semantic name.
+The `MakesMetal` term is **plus** twenty-five: the executable forms the positive
+constant from the byte's non-zeroness and adds it. With the `[0, 100]` clamp
+applied before the truncation, a metal maker scores `max(0, 25 − 0.02 × metal
+cost)` and can never be negative, and an extractor scores `100 − 0.02 × cost`
+clamped into `[0, 100]`. `ExtractsMetal`'s test selects equality, so `metalBase`
+is 100 only when the field is neither zero nor NaN; as for `baseEL`, a NaN sum
+becomes **100**.
+
+The definition inputs consumed by the routine — extracts-metal, makes-metal, metal and energy build costs, `energymake`, can-attack, builder, can-fly, can-load, is-feature, `MinWaterDepth`, radar and sonar distance, and wind-generator, plus `energyuse`, wind-generator and tidal-generator through the net-energy query — are recovered runtime field mappings, not guesses based on similarly named proxies. Confidence is high for the comparisons, constants, cadence, and field mappings. The signed classification helper is the definition's **net-energy query**, the shared helper doc 05 specifies ([05 R-PROD-01 §1]); a strictly negative result means net energy producer. Its identity is settled, so nothing in this section is below high confidence.
 
 #### Cadence and same-tick ordering — Established [R-P0-05 §6]
 
@@ -3152,9 +3256,13 @@ zeroing tail, and the weapon catalog loader).
 IDs in ascending type order and writes the single-byte vector as: `0`, `+40`
 when the definition's authored `bmcode` byte is **zero** (the building class
 — the same byte the placement validator dispatches on, [R-AI-03 §7.4]),
-`+20` when its compiled build-option list is non-empty. So a plain building
-initializes to 40, a factory or construction building to 60, a mobile unit
-to 0 or 20 (a mobile builder). The same pass seeds the per-type completed
+`+20` when its compiled build-option list **exists** — which, because that
+list is allocated for every `builder`-flagged definition and for no other
+([02 R-CAT-01 §5] step 6), is exactly when the definition carries the
+authored `builder` flag; the list's entry count is not consulted and may be
+zero. So a plain building initializes to 40, any builder-flagged building to
+60, and a mobile definition to 0 or 20 (20 for any builder-flagged mobile
+definition). The same pass seeds the per-type completed
 count to 0 and the other per-type vectors to their constants; none of that
 is rewritten by the refresh.
 
@@ -3361,7 +3469,9 @@ builders. A member can be acted on by both passes in the same invocation.
 Two per-player inputs gate both passes:
 
 * the **build-capable count** — the number of the player's own live, completed
-  units whose definition has a non-empty build-option list. It is recomputed by
+  units whose definition carries the authored `builder` flag (equivalently,
+  whose compiled build-option list exists; the entry count is not consulted,
+  [02 R-CAT-01 §5] step 6). It is recomputed by
   the 30-tick strategic refresh, not by this task ([R-P0-05 §5]; the refresh
   clears it and increments it once per qualifying unit during its live-pool
   scan).
@@ -4035,7 +4145,9 @@ The 30-tick strategic refresh ([08 "Strategic state construction and refresh"],
 
 * the **build-capable count** used by the construction task's two gates (§3):
   cleared at the top of the refresh and incremented once for every own live,
-  completed unit whose definition has a non-empty build-option list;
+  completed unit whose definition carries the authored `builder` flag — the
+  increment tests whether the definition's compiled build-option list
+  **exists**, never whether it holds entries ([02 R-CAT-01 §5] step 6);
 * a **targeting-upgrade present** flag, set when any own unit whose definition
   carries `istargetingupgrade` is active. Its reader is [04 R-SPEC-01 §8]: the
   target-registry rebuild sets a per-player flag from it, and the registry's
@@ -4263,11 +4375,17 @@ the grammar matters only for third-party profiles.
   its other bit cleared. The writes happen before the ungrouped test, so an
   already-grouped unit still gets both fields rewritten every 30 manager
   entries.
-* **The AI status dump is dead.** The image contains a writer that prints a
-  computer slot's game time, name, controller (`HUMAN`/`AI`/`INVALID`),
-  terrain and profile names, difficulty, and one `<limit> <base:baseML:baseEL>`
-  row per definition to a text file. Its only caller is a debug entry that no
-  code, table or callback references; no retail path produces the file.
+* **The AI status dump is developer-only.** The image contains a writer that
+  prints a computer slot's game time, name, controller (`HUMAN`/`AI`/`INVALID`),
+  terrain and profile names, difficulty, and one `<limit> - <base:baseML:baseEL>
+  : <profile weight> - <unit name>` row per definition to a text file — the
+  source of retail's own names for the class triple's three bytes
+  ([R-P0-05 §5]) and for the profile weight byte. Its only caller is the
+  developer console command `PrintWeights <slot>` ([07 R-CAM-01 §6]), which
+  validates the slot (below ten, occupied, controller human/computer/invalid,
+  side byte not ten) and opens the file before calling it. No ordinary-play
+  path produces the file, but the routine is reachable and its dispatch-table
+  entry is real.
 * **The target pick's vector removal.** The candidate picker of [06 §3.2]
   that the computer player's order dispatch also uses draws a random index
   into a temporary candidate vector, reads the entry, and then removes it by
@@ -4917,7 +5035,7 @@ same. That is the retail behavior, not a gap.
 elsewhere).** The image-wide
 census of "owner is a computer player" tests finds, outside the manager and
 its already-documented sites (the damage throttle [R-AI-01 §11], the profile
-passes [R-AI-01 §12], the dead status dump [R-AI-02 §2], the nearest-hostile
+passes [R-AI-01 §12], the developer-only status dump [R-AI-02 §2], the nearest-hostile
 helper's controller test [R-AI-01 §9]), only two families: the difficulty
 economy ladder of [05 R-ECO-01 §3] and [05 R-ECO-01 §11] (settlement, build
 credit, construction arithmetic, feature-reclaim credit) and the
@@ -4935,7 +5053,7 @@ computer-player question.
 
 ### What remains not established — Supported inference and unknown [P0-01] [P0-02] [P0-03]
 
-The class routine's per-definition inputs have recovered field identities — extracts-metal, makes-metal, can-attack, builder, can-fly, can-load, is-feature, `MinWaterDepth`, radar and sonar distance, and wind-generator — as runtime field mappings (R-P0-05 §5), and the weapon reads are the `DAMAGE/default` word (damage divided by 40) and the `range` word (range divided by 100). The one residual of the class routine is the semantic name of its signed classification helper. The population of the nine manager task group vectors is positive-static for the direct writer and the six classifier destinations; no additional distinct writer is located in the whole-image direct-store/xref census, and no capture-specific caller of the direct manager-group writer was found. The x87 control-word edge beyond the established narrowing to float32 at every helper invocation boundary remains an unknown of platform residual class; the default rounding mode is assumed. What is still not established for the computer player is the short list in [R-AI-01 §17] and the two items of [R-AI-03 §6]. [P0-02] [P0-03] [R-P0-04] [R-AI-01]
+The class routine's per-definition inputs have recovered field identities — extracts-metal, makes-metal, `energymake`, can-attack, builder, can-fly, can-load, is-feature, `MinWaterDepth`, radar and sonar distance, and wind-generator — as runtime field mappings (R-P0-05 §5), and the weapon reads are the `DAMAGE/default` word (damage divided by 40) and the `range` word (range divided by 100). Its signed classification helper is the definition's net-energy query ([05 R-PROD-01 §1]), so the class routine has no residual of its own. The population of the nine manager task group vectors is positive-static for the direct writer and the six classifier destinations; no additional distinct writer is located in the whole-image direct-store/xref census, and no capture-specific caller of the direct manager-group writer was found. The x87 control-word edge beyond the established narrowing points is closed: the working precision in force throughout the routine is 53-bit with round-to-nearest, Established from the runtime's startup precision-control install and the census of every other writer of the control word, and the consequences for the stored bytes are set out under [08 "Arithmetic and clamping"] ([01 §8], [01 R-DET-01 §3]). What is still not established for the computer player is the short list in [R-AI-01 §17] and the two items of [R-AI-03 §6]. [P0-02] [P0-03] [R-P0-04] [R-AI-01]
 
 The four inert mission placement fields and the definition `ai_limit` field remain closed as bounded negative and must not be treated as strategic inputs; there is no weighted-random loader.
 
@@ -8322,11 +8440,6 @@ body and are not restated here.
   commander's battle-start jump applies the half-height shear ·
   [R-ENTRY-01 §6] · static trace of the camera-block reset and of the stamp
   helper's camera write.
-- Whether the strategic-state constructor's `+20` term sees a null pointer
-  or an empty list for a definition with no download-menu entries — i.e.
-  whether the download-menu list is allocated for every definition ·
-  [R-ENTRY-02 §2], "Strategic state construction and refresh" · static trace
-  of the download-menu compile's per-definition allocation.
 - The authored FBI key behind the definition height field whose low byte
   the death-eyeball record copies · [R-SESS-01 §3], [04 R-SPEC-01 §15] ·
   static trace of the FBI reader's key table (doc 04 / doc 02 own the key).
@@ -8348,8 +8461,6 @@ body and are not restated here.
 - Whether any reader other than the class routine, the classifier and the
   scatter helper consumes the definition's `MinWaterDepth` word ·
   [R-AI-03 §6] · static trace of the word's readers.
-- Semantic name of the class routine's signed classification helper · "Class-vector
-  recomputation loop and inputs" · static trace.
 - Semantic names of the order gate-mask bits the construction task tests
   (bit 3 in its build pass, bit 14 in its repositioning pass) · [R-AI-01 §3],
   doc 04 "Order descriptor table" · static trace.

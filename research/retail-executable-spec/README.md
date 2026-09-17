@@ -445,14 +445,16 @@ not proof that every field, edge, caller or implementation is settled. Read the
 section's claim-level confidence and its current "Missing and unknown" list.
 Implementation progress is tracked separately in REVIEW.md.
 
-**Established — current ledger check:** the current external ledger has
-2,044 covered rows, all with citation text. The existing citation checker
-reports unresolved tokens in 74 of those rows (45 distinct tokens) in its
-default lane-strict mode, where an anchor must resolve inside the row's own
-lane document; a lane-relaxed run reports 7 rows (3 distinct tokens), and a
-run over every classification rather than the covered rows alone reports 83
-rows (54 distinct tokens). The mode matters — the three differ by an order of
-magnitude — so a count without its mode means nothing.
+**Established — current ledger check (2026-09-17):** the current external
+ledger has 2,044 covered rows, all with citation text. In the citation
+checker's **default lane-strict mode**, where an anchor must resolve inside
+the row's own lane document and with the checker's widened anchor pattern,
+every one of those 2,044 rows resolves: **zero rows with an unresolved token,
+zero distinct unresolved tokens**. A lane-relaxed run over the covered rows
+reports zero as well. Widening the run to every classification rather than
+the covered rows alone reports 8 rows (9 distinct tokens) lane-strict and
+4 rows (6 distinct tokens) lane-relaxed, all in rows outside the covered set.
+The mode still matters, so a count without its mode means nothing.
 No rows currently carry the partial or uncovered classification; one row has
 an empty classification. Those labels therefore cannot support a blanket
 completeness claim. The checker validates heading/anchor resolution within its
@@ -460,9 +462,10 @@ supported syntax; it does not establish semantic agreement or a complete
 function-recovery census.
 
 **Unknown:** whether every recovered function's classification and citation
-still match the current behavioral contract. The decider is reconciliation of
-the unresolved rows, followed by a per-row contract review and recovery-boundary
-census. Raw row identities and analysis stay outside this repository. Citation
+still match the current behavioral contract. Resolution is now complete for
+the covered rows, and resolution is not truth: the decider is a per-row
+contract review and a recovery-boundary census, plus reconciliation of the
+rows outside the covered set. Raw row identities and analysis stay outside this repository. Citation
 checks must be run explicitly after relevant document changes; `internal/docs`
 checks repository citations but does not validate this external ledger.
 

@@ -313,8 +313,6 @@ func TestHandlersAreInstalledBeforeTheFirstPump(t *testing.T) {
 	}
 	for id, desc := range Table() {
 		switch {
-		case desc.Name == "":
-			continue // the reject sentinel has no handler
 		case registeredByAnOwner(desc.Name):
 			// The owning subsystem registers this row on the queue
 			// (queue_handlers.go), so the descriptor carries no handler.

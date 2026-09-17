@@ -458,10 +458,10 @@ func appendAttackRanges(out []QueuePrimitive, base QueuePrimitive, center QueueW
 			continue
 		}
 		if weapon.AreaOfEffect != 0 {
-			out = appendRangeRing(out, base, center, weapon.AreaOfEffect, color, fmt.Sprintf("weapon %d: area of effect", slot), 0, opt)
+			out = appendRangeRing(out, base, center, weapon.AreaOfEffect, color, fmt.Sprintf("weapon %d - area of effect", slot), 0, opt)
 		}
 		if weapon.Coverage != 0 {
-			out = appendRangeRing(out, base, center, weapon.Coverage, color, fmt.Sprintf("weapon %d: coverage", slot), 1, opt)
+			out = appendRangeRing(out, base, center, weapon.Coverage, color, fmt.Sprintf("weapon %d - coverage", slot), 1, opt)
 		}
 	}
 	if set.AttackRunLength != 0 {

@@ -371,6 +371,15 @@ would report their targets as unused. A retail diagnostic string that trips
 `ST1005` carries `//lint:ignore ST1005 retail text` with its citation. `internal/testsupport.RetailRoot` is
 the single place a test consults those variables and skips.
 
+**Fusion guard.** `internal/architecture.TestAuthoritativeArithmeticIsNotFused`
+is the one fast-tier test that runs the compiler itself: it builds the
+authoritative packages with the assembly listing enabled, for `GOARCH=arm64` and
+again for `GOAMD64=v3` whatever the host is, and fails on a fused multiply-add
+outside its shrink-only allowlist [I2]. It reads the generated code rather than
+the source because the backend fuses across statements and through inlining. It
+streams the listing, writes nothing into the repository, skips when the `go`
+tool is absent, and costs about two seconds warm.
+
 **Unused-code ratchets.** The `-test` deadcode run above says only that some
 test reaches a function, so a production surface nothing ships can grow
 indefinitely without a gate going red. Two shrink-only lists close that.

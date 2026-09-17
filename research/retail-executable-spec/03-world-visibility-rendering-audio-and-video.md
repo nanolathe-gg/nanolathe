@@ -910,8 +910,11 @@ doc 03 owns the input.
 * Cell side 128 world units (8 attribute cells). Columns and rows are
   `((extent · 65536) + 0x7FFFFF) >> 23` where `extent` is the pixel width or
   height — a round-up to whole 128-pixel cells. Record count is that product
-  rounded up to a multiple of 8; the padding records receive the sea-level
-  byte and edge bits like any other but are never swept.
+  rounded up to a multiple of 8. The padding records take the sea-level byte
+  like every other record — the sea-level pass walks the whole allocation —
+  but **no edge bits**: the four edge passes are bounded by the column and row
+  counts, so a padding record's edge word keeps the zero initialisation left
+  there. They are never swept and never indexed.
 * Edge bits `1` top row, `2` bottom row, `4` left column, `8` right column,
   OR'd in that order; the sentinel record carries `0x1F`.
 * **The swept byte.** The sweep reads the cell's
@@ -3723,10 +3726,15 @@ whenever the word-grid predicate is selected (`[06 §3.1]`, "In word-mask mode
 every probe tests the local player's bit").
 
 **Ordering and outputs.** The five passes run in the order above, once per
-tick, inside the viewing player's iteration of the per-player pass
-(`[R-SENSOR-01]`). Pass 3 runs after pass 2, so a jam circle overwrites a radar
-contact from the same tick; pass 5 runs after pass 3, so line of sight restores
-a jammed unit's seen bit within the same tick if the unit is in the viewing
+**due** entry of the viewing player's settlement-deadline block inside the
+per-player pass — the 30-tick cadence of `[R-SENSOR-01]`, not once per
+simulation tick — and the deadline advance precedes them, so a due entry
+reaches the sensor tail even when the later settlement gates refuse
+settlement. (The per-tick work in the same per-player pass is the LOS stamp
+sweep, which sits before the cadence block; `[R-LAYER §1]` write site 3 owns
+it.) Pass 3 runs after pass 2, so a jam circle overwrites a radar
+contact from the same pass; pass 5 runs after pass 3, so line of sight restores
+a jammed unit's seen bit within the same pass if the unit is in the viewing
 player's visibility state. The phase writes **only** the three status bits, the
 decloak-timer bit and the cloak-suppression deadline. It writes neither
 visibility grid, does not touch the fog cache, and raises no presentation
@@ -4073,7 +4081,8 @@ without bit 0 (cloak, building, the two interface bits).
 mover-mode setter's airborne arm), and its script writes no port 1
 (a census of all 278 stock scripts). Writer 7
 only propagates a byte another writer produced. So for their entire life the
-bit holds the constructor's zero, the sensor gate rejects them every tick,
+bit holds the constructor's zero, the sensor gate rejects them on every due
+sensor pass,
 and their authored range is dead data **in retail**. This is the behavior
 Nanolathe reproduces; widening the gate for them would assert a writer that
 does not exist. **Established.**
@@ -4258,8 +4267,10 @@ if (value < high) high = value
 
 A 0-seeded accumulator that keeps the larger is a **maximum**; a 255-seeded
 one that keeps the smaller is a **minimum**. So: **low byte = MAXIMUM, high
-byte = MINIMUM**, with strictly-greater values replacing low and strictly-
-smaller values replacing high.
+byte = MINIMUM**. Retail writes the complementary non-strict form — it
+replaces low whenever `low <= value` and high whenever `high >= value` — so
+on equality it stores the value it already holds; the outcome is identical to
+the strict form above, and only a write census would see the difference.
 
 The pair is not symmetric in the horizon rule of §3.2: admission tests
 `retainedNum * stepDist < candidateDiff * retainedDen` with
@@ -4285,7 +4296,12 @@ if (tileZ <= -1) skip the projection
 ```
 
 — the same height shear the observer's own coverage tile uses. The cell
-projects onto tile columns `(x-1) >> 1` and `x >> 1` at row `tileZ`.
+projects onto tile columns `(x-1) >> 1` and `x >> 1` at row `tileZ`. The two
+columns **coincide for odd `x`**, and retail tests for that and skips the
+second resolution, leaving the second element of the pair empty for that
+column: "the two tiles" below is one tile on every odd column. Scattering
+twice into one word would be idempotent, but the skip is what the carried
+pair's bookkeeping records.
 
 Two values reach the table per cell. First the perspective-scaled
 

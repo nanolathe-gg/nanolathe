@@ -717,7 +717,16 @@ Newly armed later slots can therefore be visited in that enclosing walk;
 a replacement in an already visited slot waits for a later walk. There is
 no armed-slot snapshot, fixed callback-kind ordering, or catch-up loop.
 Removal only marks the indexed slot's period negative; it does not service
-the table. The two CD timer IDs identify registrations independently, and
+the table. Its bound on the index is **not** the ten-slot table size: it
+admits any index from zero up to, but excluding, a monotonic count of
+successful registrations, which the timebase installer resets to zero and
+which registration only ever increments. After eleven successful
+registrations that count exceeds the table, so an index of ten or more would
+mark memory past the last slot. No caller can produce one — identifiers come
+only from registration, which returns `−1` when the table is full — so this
+is latent, not reachable; an implementation may bound removal by the table
+instead without any observable difference. The two CD timer IDs identify
+registrations independently, and
 one callback kind can have more than one outstanding registration if a new
 ID replaces the stored reference without removing an older timer.
 
@@ -1417,11 +1426,11 @@ following contracts are Established.
 
 | Pool | Capacity/record contract | Allocation and retirement |
 | --- | --- | --- |
-| Unit instances | 280-byte records; capacity is the session's per-player unit limit multiplied by ten plus one, yielding roughly two thousand to five thousand stock slots rather than the 500 folklore; the pool is sliced per player by sorted player order, each slice holding exactly as many records as that same limit — never a definition count — with slot zero reserved as null. Doc 05 [R-SHARE-01 §7] owns the sizing contract: the limit's three producers (the mission's `maxunits`, default 200; the `UnitLimit` preference, default 250, clamped to 20..500; the host's synchronized limit word), the slice bounds, the absence of a clamp at the sizing site, and the two side tables the same word sizes. Allocation scans the owning player's slice for the lowest free flag and reuses it immediately, and an alive mask marks a live slot; per-definition limits are enforced by a flag and a value of minus one meaning unlimited, counted by scanning the slice; the canonical allocator is the sole allocation site for every creation path and the reconstructor validates a forced slot against slice bounds and occupancy, with every limit, slice-full, out-of-bounds, or occupied case returning a null handle and consuming no RNG; freeing clears alive masks, heaps, order queues, and attachments but retains the stored slot index; saving uses forced-slot reconstruction and a stale 16-bit packet that validates only slot nonzero and alive, so it aliases a reused occupant silently |
+| Unit instances | 280-byte records; capacity is the session's per-player unit limit multiplied by ten plus one, yielding roughly two thousand to five thousand stock slots rather than the 500 folklore; the pool is sliced per player by sorted player order, each slice holding exactly as many records as that same limit — never a definition count — with slot zero reserved as null. Doc 05 [R-SHARE-01 §7] owns the sizing contract: the limit's three producers (the mission's `maxunits`, default 200; the `UnitLimit` preference, default 250, clamped to 20..500; the host's synchronized limit word), the slice bounds, the absence of a clamp at the sizing site, and the two side tables the same word sizes. Allocation scans the owning player's slice for the lowest free record and reuses it immediately: a record is free when its stored **definition-index word is zero**, which is exactly what teardown clears, and that word is the allocator's only free test — the alive mask marks a live slot for every other reader, but the allocator never reads it. Doc 05 [R-SHARE-01 §8] steps 2–4 own the admission gates and their order; they are two independent mechanisms, not one. The definition's creatable bit is a mandatory admission bit (the `Version`-admission flag of [02 R-CAT-01 §4], not a per-definition limit switch) and refuses outright when clear; the per-definition limit is a separate field, minus one meaning unlimited, otherwise compared with a signed compare against a census of the slice. The canonical allocator is the sole allocation site for every creation path and the reconstructor validates a forced slot against slice bounds and occupancy, with every limit, slice-full, out-of-bounds, or occupied case returning a null handle and consuming no RNG; freeing clears alive masks, heaps, order queues, and attachments but retains the stored slot index; saving uses forced-slot reconstruction and a stale 16-bit packet that validates only slot nonzero and alive, so it aliases a reused occupant silently |
 | Projectiles | Exactly 300 records, 107 bytes each | Allocation appends at the active-span tail. Retirement sets a dead flag without changing the count. Stable compaction runs at the projectile-phase tail every sub-tick (reading the current post-append count), and again immediately after the unit-owner projectile purge when a unit dies; it removes dead records, preserves survivor order, and repairs the affected projectile and follow-camera links. The post-loop pass is a different structure (see §6.2). |
 | Feature definitions | Each type has a 128-byte copy; type table records use a 256-byte stride | Preallocated at map/catalog load; type IDs are stable for the loaded catalog. |
 | Live features | A 48-byte live record plus a 13-byte plot cell per map attribute cell | Plot cells point to feature anchors; removal returns the cell to the free sentinel and releases the live record. Map-row order is deterministic. |
-| COB threads | Eight 164-byte thread records per unit | Lowest clear thread-mask bit is selected. Ending/sleeping a thread clears its active bit; the scan is fixed order. |
+| COB threads | Eight 164-byte thread records per unit ([04 §4.2] owns the contract; the eight is fixed at VM construction and every walker — allocation, signal, the wake scan, save and restore — is bounded by it) | Lowest clear thread-mask bit is selected. Ending/sleeping a thread clears its active bit; the scan is fixed order. |
 | Construction nodes | A 86-byte node; factories use separate tail/head links selected by a flag | Nodes append to a per-factory chain, coalesce matching build types where applicable, and are freed on cancellation/completion. |
 | Effect/sequence strips | Variable vectors of segment records drawn from one process-lifetime pool of **1000 slots × 76 bytes**, built by a static constructor and never grown | Append in event order; a compaction/drain pass moves/removes old entries, and each strip evicts its oldest object when its pre-insert count exceeds 400. Every producer call site is enumerated by strip literal in doc 03 [R-FX-02 §5] (strips 0, 1, 3 and 8 have none). |
 
@@ -2007,8 +2016,23 @@ is live, not dead data.
 ## 8. x87 floating point and integer conversion
 
 The executable uses x87 arithmetic; no SSE simulation path is established.
-The default control word is the Microsoft/CRT 53-bit precision, round-to-nearest,
-masked-exception environment. The FPU setup helper always runs at startup;
+The working environment is the Microsoft/CRT 53-bit precision (IEEE binary64
+mantissa), round-to-nearest, masked-exception one. **Established — it is
+installed, not merely inherited.** The C runtime's floating-point initialiser
+calls the control-word helper at startup with the precision-control mask and
+the 53-bit selector, so whatever the hardware's power-on default was, startup
+forces 53-bit; the runtime's floating-point reset performs the same call
+immediately after re-initialising the unit, so a reset lands back on 53-bit
+rather than the hardware extended default. A census of the control-word
+helper's six call sites shows only that startup pair naming the
+precision-control field at all: the other five pass masks covering only the
+invalid and zero-divide exception bits, and the truncating helper of
+`[R-DET-01 §1]` changes the rounding-control field alone and restores the
+saved word. **No game routine writes the control word** — the one apparent
+in-game site is the jump-table data word mis-decoded as an instruction that
+`[R-DET-01 §3]` records. A clone may therefore compute every authoritative
+double expression at binary64 precision without emulating an 80-bit mantissa.
+The FPU setup helper always runs at startup;
 with `-fpufussy` absent it re-masks the invalid and zero-divide exceptions
 (no change from the runtime default), with it present it unmasks them; the
 switch changes the helper's argument, not whether it runs ([R-PLAT-01 §2]).
@@ -2172,7 +2196,8 @@ Non-default control words are therefore reachable from the simulation **only
 transiently inside a runtime call**
 (`hypot`, the binary64 floor wrapper), and every such call
 restores the word before returning. No game routine changes precision or
-rounding and leaves it changed; the default (53-bit, nearest) holds outside
+rounding and leaves it changed; the startup-installed environment (53-bit,
+nearest, §8) holds outside
 those helpers, and the truncating helper remains the only rounding-mode change
 at a game-visible integer store. The optional `-fpufussy`/`-fpunofussy`
 switches of §8 are unaffected by this census.
@@ -2481,7 +2506,8 @@ byte `0x0C` and the 768-byte palette.
   when full, "nothing" on empty ([R-PLAT-01 §6]).
 - Fixed unit/projectile/feature/COB/construction pools and documented queue
   capacities/order where the ledger is explicit.
-- One global Park–Miller stream, one CRT TLS stream, x87 53-bit default, and
+- One global Park–Miller stream, one CRT TLS stream, the x87 53-bit precision
+  the runtime installs at startup (§8), and
   truncating `__ftol` conversion. Battle entry seeds simulation and the separate
   loading-thread CRT; the main-thread CRT continues from process startup
   ([R-PLAT-01 §7]). Wind draws span simulation and main-thread CRT with the

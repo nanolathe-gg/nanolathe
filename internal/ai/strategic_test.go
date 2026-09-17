@@ -266,9 +266,9 @@ func TestClassVectors_RetailVectors(t *testing.T) {
 	s := &Strategic{Catalog: cat}
 	s.Init(types)
 	// Check InitVectors: 40 for the building class (`bmcode == 0`, which every
-	// definition in this fixture authors) plus 20 for a non-empty build list
-	// [08 R-P0-05 §9]. The earlier form of these assertions expected the
-	// category addend to be absent, which that section withdrew.
+	// definition in this fixture authors) plus 20 when the compiled build-option
+	// list exists — the authored `builder` flag, whatever the menu holds
+	// [08 R-P0-05 §9].
 	if v := s.InitVectors[content.CanonicalKey("armlab")]; v != 60 {
 		t.Fatalf("armlab init %d want 60 (building 40 + build list 20) [08 R-P0-05 §9]", v)
 	}
@@ -278,8 +278,13 @@ func TestClassVectors_RetailVectors(t *testing.T) {
 	if v := s.InitVectors[content.CanonicalKey("armcom")]; v != 60 {
 		t.Fatalf("armcom init %d want 60", v)
 	}
+	// corcom is builder-flagged but authors no build menu in this fixture; the
+	// list exists for every builder, so it still gets the +20 [08 R-ENTRY-02 §2].
+	if v := s.InitVectors[content.CanonicalKey("corcom")]; v != 60 {
+		t.Fatalf("corcom init %d want 60 (builder with no compiled menu) [08 R-ENTRY-02 §2]", v)
+	}
 	if v := s.InitVectors[content.CanonicalKey("armex")]; v != 40 {
-		t.Fatalf("armex init %d want 40 (building, no build list)", v)
+		t.Fatalf("armex init %d want 40 (building, not a builder)", v)
 	}
 	if v := s.InitVectors[content.CanonicalKey("armsolar")]; v != 40 {
 		t.Fatalf("armsolar init %d want 40", v)

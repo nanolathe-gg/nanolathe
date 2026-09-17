@@ -76,8 +76,12 @@ func wideConstructionStepQuantum(old float32, quantum float32, buildTime int32, 
 func repairTerms(maxDamage int32, energyCost float32, worker, buildTime int32) (int32, int32) {
 	// The shared low-word conversion also handles zero build time and other
 	// exceptional results [05 R-WORK-01 §3][01 R-DET-01 §1].
-	heal := numeric.TruncateFloat64ToLow32(1 + (float64(maxDamage)*float64(worker)-1)/float64(buildTime))
-	energy := numeric.TruncateFloat64ToLow32(1 + (float64(energyCost)*float64(worker)-1)/float64(buildTime))
+	// Each product rounds before the subtraction of one, as retail's separate
+	// multiply and subtract do. Stock `maxdamage`, `workertime` and build-time
+	// values keep both products inside 53 bits, so the barrier changes no
+	// shipped value; a third-party definition past that bound is where it bites.
+	heal := numeric.TruncateFloat64ToLow32(1 + (float64(float64(maxDamage)*float64(worker))-1)/float64(buildTime))
+	energy := numeric.TruncateFloat64ToLow32(1 + (float64(float64(energyCost)*float64(worker))-1)/float64(buildTime))
 	if heal >= 1 {
 		heal = 1
 	}

@@ -490,6 +490,18 @@ class routine reads — the per-player unit limit and the map's maximum wind —
 each with an explicit *bound* flag, so an unwired fixture cannot read a zero as
 a real cap and fire an addend everywhere `[08 R-AI-01 §13]` `[08 R-P0-05 §9]`.
 
+The recomputation's first pass accumulates in `float64` because retail's
+working precision is Established at 53 bits and the width decides the stored
+byte: for a metal cost that is a non-zero multiple of 100 the exact product
+lands just under an integer, which a `float32` sum rounds away, and five
+shipped definitions carry such a cost. The constants stay single precision,
+the two coefficients retail narrows keep their `float32` stores, and each sum
+truncates immediately, which is how the allowlist row reads
+`[08 "Arithmetic and clamping"]` `[08 R-P0-05 §5]` [I2]. Every
+multiply-then-add in the routine wraps its product in an explicit conversion:
+the Go specification permits fusing them into one rounding, and some backends
+do, which would make the same source round differently per host [I1].
+
 `ClassVector`, `ScoreInputs`, `ComputeMix` and `ComputeScore` are the candidate
 score as a pure function, testable before it is wired to anything.
 `MetalSpot`, `PlacementRegion` and `PlacementResult` are the placement root's
@@ -1096,10 +1108,14 @@ gates are required `[08 "Established AI-facing data and rooted planner"]`
 **C2 — the strategic state and its 30-tick refresh.** A fixed-size per-player
 object, named fields here [I13], refreshed every 30 ticks: the per-type
 completed counts, the build-capable count and the strategic centre are rebuilt
-each window. Two per-type coefficient families exist. The single byte written
+each window. Three per-type coefficient vectors exist: the initialization-only
+byte, the first-pass single byte and the three-byte triple, the latter two
+written only by the recomputation routine. The initialization-only byte written
 once at construction starts at zero, gains 40 when a per-definition category
-flag is clear and 20 when that definition's build-option list is non-empty, and
-is **never** written by the recomputation routine. The three-byte triple is
+flag is clear and 20 when that definition's compiled build-option list exists —
+which is exactly when it carries the authored `builder` flag, the entry count
+never being consulted — and is **never** written by the recomputation routine.
+The three-byte triple is
 zeroed at construction, computed once unconditionally there, and thereafter
 recomputed only when the outer gate's draw with bound 30 yields zero at a
 refresh `[08 "Strategic state construction and refresh"]` `[08 R-P0-05 §5]`
@@ -1534,12 +1550,6 @@ run with the session package in `tools/check` and `tools/check-retail`.
 
 Markers in these packages, one line each.
 
-* `TODO(T23)` in `internal/ai`'s class-vector recomputation — the narrowing to
-  single precision at every helper invocation boundary is established and
-  reproduced; the control word in force *between* those points is not, and the
-  research classifies it as a platform residual with the default rounding mode
-  assumed. It can change a result only if retail's word differs from the
-  default `[08 "What remains not established"]`.
 * `TODO(T23)` in `internal/ai`'s candidate score — the same residual, at the
   named energy and metal expressions, which are evaluated in single precision
   and narrowed at the truncations §3.3 C6 shows
@@ -1572,10 +1582,6 @@ or `cmd/nanolathe-headless`.
 Open questions carried by the contracts above rather than by a marker, each
 with the observation that would settle it:
 
-* **The classification helper's semantic name.** The bit positions, the
-  zero-versus-nonzero tests and the recovered field identities are established;
-  only the design-level name is not. Naming, no behaviour
-  `[08 R-P0-05 §5]` `[08 "What remains not established"]`.
 * **The exhaustive placement helper's negative-row outcome.** The loop geometry
   and row test are established; whether an out-of-grid read faults or returns
   a garbage verdict depends on allocator placement. A retail probe with a

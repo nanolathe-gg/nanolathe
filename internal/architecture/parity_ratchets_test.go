@@ -166,9 +166,12 @@ func TestAuthoritativeMapIterationDoesNotGrow(t *testing.T) {
 // fixes the world as 16.16 fixed point with an exhaustive float allowlist;
 // new float64 sites outside that list are parity drift.
 var float64Baseline = map[string]int{
-	"internal/ai/placement.go":     1,
-	"internal/ai/selection.go":     2,
-	"internal/ai/strategic.go":     5,
+	"internal/ai/placement.go": 1,
+	"internal/ai/selection.go": 2,
+	// The class routine's first pass accumulates at retail's 53-bit working
+	// precision and truncates immediately, the allowlisted transient of
+	// INVARIANTS I2 [08 "Arithmetic and clamping"][08 R-P0-05 §5].
+	"internal/ai/strategic.go":     14,
 	"internal/cob/ports.go":        6,
 	"internal/combat/motion.go":    4,
 	"internal/combat/service.go":   2,
@@ -176,13 +179,13 @@ var float64Baseline = map[string]int{
 	// Construction arithmetic follows [05 "Construction arithmetic"] and
 	// [05 R-WORK-01 §3]. The refund sites share the final-store discount in
 	// reverse.go [05 R-ECO-01 §3][05 R-ECO-01 §11].
-	"internal/construction/arithmetic.go":   16,
+	"internal/construction/arithmetic.go":   18,
 	"internal/construction/inheritance.go":  0,
 	"internal/construction/resurrection.go": 3,
-	"internal/construction/reverse.go":      6, // shared refund final-store precision [05 R-ECO-01 §3][05 R-ECO-01 §11]
+	"internal/construction/reverse.go":      8, // shared refund final-store precision [05 R-ECO-01 §3][05 R-ECO-01 §11]
 	"internal/economy/tick.go":              2,
 	"internal/mission/initial_mission.go":   2,
-	"internal/movement/altitude.go":         6,
+	"internal/movement/altitude.go":         8,
 	"internal/world/terrain.go":             2, // two single-precision tidal defaults [03 R-TERR-01 §6]
 	"internal/world/wind.go":                2,
 }

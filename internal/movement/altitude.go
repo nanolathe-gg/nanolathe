@@ -83,8 +83,10 @@ func AirArrival(ax, az, bx, bz numeric.Fixed, explicitRadius int32, ay, by numer
 			return false
 		}
 	} else {
-		// dx²+dz² ≤0.25 (0.5 wu) [04 §10.1]
-		if dx*dx+dz*dz > 0.25 {
+		// dx²+dz² ≤0.25 (0.5 wu) [04 §10.1]. Each square rounds before the sum,
+		// as retail's separate multiply and add do: the one-ulp difference a
+		// fused multiply-add leaves decides an order's completion here.
+		if float64(dx*dx)+float64(dz*dz) > 0.25 {
 			return false
 		}
 	}

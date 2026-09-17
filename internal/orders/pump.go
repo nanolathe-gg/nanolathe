@@ -557,6 +557,31 @@ func init() {
 	ensureMoveHandlers()
 }
 
+// sentinelHandler is descriptor row 0's handler: return complete (5), touch
+// nothing, draw nothing [04 R-ORD-01 §12]. Retail's body is exactly that —
+// it reads nothing, writes nothing and emits no caption — so a record that
+// carries the reject sentinel's identity is freed on the head reload of the
+// pass that reaches it, never at a tick boundary.
+//
+// No production path here builds a row-0 record: every producer tests the
+// resolved identity and skips on 0. The handler is installed anyway because
+// the alternative is worse than unreachable. Without it the dispatch falls to
+// the no-handler arm below, which parks the record for 30..44 ticks and draws
+// RNG(15) to do it — the opposite of "complete, free, no draw", and a
+// simulation RNG draw that retail never makes. A guard against a producer that
+// stops testing costs one line; a divergence in the simulation stream costs a
+// desync.
+func sentinelHandler(*units.Unit, *Node, uint32, uint32) Code { return 5 }
+
+// ensureSentinelHandler installs it on the reject sentinel, identified by its
+// empty canonical name rather than by the bare index so a table that has not
+// been built yet cannot be written through [04 §3.1].
+func ensureSentinelHandler() {
+	if len(table) != 0 && table[0].Name == "" && table[0].Handler == nil {
+		table[0].Handler = sentinelHandler
+	}
+}
+
 func findActive(q *Queue) int {
 	if q == nil {
 		return -1

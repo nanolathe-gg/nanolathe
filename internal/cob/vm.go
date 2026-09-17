@@ -2148,12 +2148,17 @@ func (v *VM) runThread(idx int) {
 				v.killThread(idx)
 				return
 			}
-			argc := int(v.prog.Code[t.PC+2])
+			// The operand is a SIGNED count: retail decrements it and takes the
+			// sign, so zero and every negative count pop nothing and simply
+			// advance past the three words [R-COB-04 §6].
+			argc := int(int32(v.prog.Code[t.PC+2]))
 			// Retail uses a four-word temporary for this reserved form. Counts
 			// above four or above the current logical window are malformed; stop
 			// the thread at Nanolathe's bounds-check boundary rather than writing
-			// outside Go state [R-COB-04 §6].
-			if argc < 0 || argc > 4 || argc > t.SP {
+			// outside Go state [R-COB-04 §6]. That kill is Nanolathe's sanctioned
+			// divergence and applies only above the bound — never at or below
+			// zero, where retail has a defined behavior to match.
+			if argc > 4 || argc > t.SP {
 				v.recordDiagnostic("cob: reserved pop count outside four-word window")
 				v.killThread(idx)
 				return

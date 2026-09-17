@@ -67,9 +67,10 @@ func footerShotSession(t *testing.T) (*battleSession, *contentSet, *camera.Camer
 	for ; step <= 60; step++ {
 		sess.Step(step)
 	}
-	// Give the commander a current order so the caption anchor has something
-	// to show: with no order the footer draws the order table's row-0 caption,
-	// which is the empty sentinel [07 R-HUD-03 §2][04 §3.1].
+	// Give the commander a current order so the caption anchor shows an order's
+	// own state label. With no head order record the footer falls back to the
+	// order table's row-0 label, which is `Ready` — retail's caption for an
+	// order-free unit, not an empty string [07 R-HUD-03 §2][04 §3.1].
 	for _, u := range sess.Units.Iter() {
 		if u == nil || u.Owner != sess.LocalOwner || u.Flags&hud.SelectionFlag == 0 {
 			continue

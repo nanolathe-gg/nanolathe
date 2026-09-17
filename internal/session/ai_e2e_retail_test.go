@@ -16,10 +16,21 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
-// aiE2ETickCap bounds the battle at the retail bound for this proof: thirty
-// minutes of authoritative time, 54000 ticks.
+// aiE2ETickCap bounds the battle for this proof: sixty minutes of
+// authoritative time, 108000 ticks.
 //
-// Raised from 48000 by WU-19-26. That value was a cheapness margin around a
+// Raised from 54000 with the class-vector correction of [08 R-P0-05 §5]. That
+// routine folds a clamped copy of the definition's passive `energymake` into
+// the other-mix coefficient, which the previous arithmetic omitted altogether,
+// so a passive energy producer now carries a non-zero other-mix weight instead
+// of zero. The computer player therefore builds economy before it builds an
+// army, and the measured seed-7 elimination on this map moved from tick 32640
+// to 79650 — later, but by the same commander-death path, with the same defeat
+// result and the same non-empty computer force. The cap is a test budget, not a
+// contract: what this test asserts is that an idle human is eventually
+// eliminated.
+//
+// The previous budget was raised from 48000 by WU-19-26. That value was a cheapness margin around a
 // seed-7 elimination at tick 36939, taken when the idle human never shot back:
 // [06 §9.1] step 4's reaction routine did not exist, so a commander under fire
 // answered nothing. With the routine in place its laser is offered its
@@ -30,7 +41,7 @@ import (
 // outside the old margin, so the margin goes rather than the contract.
 // RWU-19-1's timed retail capture, not any of these numbers, is the bar for how
 // soon retail's own computer player attacks [08 R-AI-01 §4].
-const aiE2ETickCap = uint32(54000)
+const aiE2ETickCap = uint32(108000)
 
 // aiE2ESeed is the seed both this test and the displayless runs use.
 const aiE2ESeed = uint32(7)

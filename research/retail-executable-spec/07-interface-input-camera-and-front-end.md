@@ -4261,7 +4261,9 @@ never reads the selection**: neither the primary selected unit nor the group
 is a footer source.
 
 **Established — redraw and clearing.** The routine builds a fifteen-word
-snapshot every frame — the current order caption pointer, the hovered unit id
+snapshot every frame — the current order caption pointer (word 0: the state
+label of the hovered unit's front-segment head order record, or descriptor 0's
+label when it has none, [R-HUD-03 §2]), the hovered unit id
 and its health word, its kill count, three per-weapon reload words (below),
 its four archived rate values, the secondary unit id and health
 ([R-HUD-03 §2]), the hovered feature id, the hovered gadget index, the panel
@@ -4373,12 +4375,22 @@ the form is `"%d %s - %s"` with the localized `Veteran` appended. Drawn at
 `(DAMAGEBAR.x1, DAMAGEBAR.y2 + 2 + dy)` in `dcb[15]`. Only the single word
 `Veteran` exists; the experience tiers of [04] are not shown.
 
-**Established — the order caption (`MISSIONTEXT`).** The current order's
-caption is the localized caption column of the order-kind table
-([R-ORD-01 §1]) for the unit's current order kind, or the table's row-0
-caption when the unit has no current order; centred at `MISSIONTEXT`,
-colour 83. It is drawn only inside the own-or-overlay block, so an enemy's
-order is never shown.
+**Established — the order caption (`MISSIONTEXT`).** The caption is the
+**state label of the descriptor of the unit's front-segment head order
+record** ([04 §3.1]), looked up through the translation table and drawn
+centred at `MISSIONTEXT` in colour 83. A dedicated accessor — the image's
+only reader of a descriptor's state label, with this footer as its only
+caller — reads the **front** segment's head link and, **when the unit has no
+head record there, returns descriptor 0's state label instead**, so an idle
+unit's caption is the reject sentinel's own label, `Ready`
+([04 §3.1], [04 R-ORD-01 §12]). It reads the front segment only: a unit whose
+sole record is a rear-segment one (`BuildWeapon`, `SelfDestruct`) still reads
+`Ready`. It is drawn only inside the own-or-overlay block, so an enemy's
+order is never shown, and only when the returned pointer is non-null — with
+the table registered it always is, since all 68 rows carry a label. The
+shipped translation table files `Ready` alongside the other order state
+labels and, like them, carries no English column, so the English build shows
+the label verbatim ([02 "Translation table"]).
 
 **Established — the secondary field (`UNITNAME2` / `DAMAGEBAR2`).** Two
 mutually exclusive uses, decided after the caption:
@@ -6809,8 +6821,9 @@ own. Definition activity is not an additional gate.
 
 With the switch on, each attack icon (descriptor icon 1 or 2) first draws each
 enabled weapon slot's nonzero unsigned-16 area of effect and authored coverage,
-then the unit's nonzero unsigned-16 attack length. The labels are
-`weapon N: area of effect`, `weapon N: coverage` (zero-based slot N), and
+then the unit's nonzero unsigned-16 attack length. The labels are formatted
+verbatim as `weapon %d - area of effect` and `weapon %d - coverage` (a hyphen
+between spaces, not a colon; the slot number is zero-based) and the literal
 `attack length`; their ordinals are 0, 1, and 2 respectively. The line colour
 uses the same even/odd tick pair.
 

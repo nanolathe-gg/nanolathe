@@ -511,7 +511,7 @@ func TestQueueOverlayRangeOrderingAndLatch(t *testing.T) {
 		}
 	}
 	want := []string{
-		"weapon 0: area of effect", "weapon 0: coverage", "attack length", "icon",
+		"weapon 0 - area of effect", "weapon 0 - coverage", "attack length", "icon",
 		"sight", "weapon1 range", "weapon3 range", "icon",
 	}
 	if len(sequence) != len(want) {

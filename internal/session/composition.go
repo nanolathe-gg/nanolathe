@@ -1196,7 +1196,11 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 				// The status request is presentation-only, but its admission gate is
 				// authoritative unit ownership/state: dead or dying units and other
 				// players never reach the local message line [04 R-ORD-01 §1][07
-				// R-HUD-03 §14]. Unit.Alive/Dying are this model's live/death state.
+				// R-HUD-03 §14]. The gate itself belongs to the emitter, whose
+				// section owns all three terms — the owner slot equalling the
+				// presented view slot, the live bit, and the absence of the
+				// death-pending latch [03 R-AUD-01 §7]. Unit.Alive/Dying are this
+				// model's live/death state.
 				if u.Owner != s.ViewingOwner || !u.Alive || u.Dying {
 					return false
 				}

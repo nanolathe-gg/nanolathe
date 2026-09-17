@@ -823,10 +823,13 @@ the family ordering of §6.2 and both must be reproduced independently.
   angle), and the pitch is the ballistic solver's result, rejected when it
   returns the sentinel; for a `lineofsight` weapon, the direct solver below;
   for neither, the dispatch is skipped entirely. On success it writes the
-  solved yaw and pitch into the slot, zeroes the four-byte Aim receiver,
+  solved yaw and pitch into the slot, zeroes the slot's four-byte
+  **aim-ready word** (withdrawing permission until the completion entry
+  re-grants it, `[R-WPN-03 §6]` — not the receiver word, which is written once
+  at unit creation and never cleared),
   dispatches the deferred Aim callback with those two angles as arguments, and
   then sets the latch. If the fresh solve fails, it skips dispatch, preserves
-  the stored angles and receiver, and continues to the ordinary reload/fire
+  the stored angles and the aim-ready word, and continues to the ordinary reload/fire
   gates. It does not set the could-not-fire event at this dispatch site; the
   admitted ready executor has its separate failure behavior below.
 * The **vertical-launch** executor's slot dispatches the same callback with
@@ -1800,14 +1803,24 @@ encoded target (§1.2), in this order:
   promoted to 16.16 (`word << 16`); Y is
   `max(bilinearTerrainHeight(X, Z), seaLevelByte) << 16` — the bilinear
   interpolation of §12.2 at that point, floored at the sea-level byte, so a
-  ground point below the water plane is aimed at the surface. Success, and no
+  ground point below the water plane is aimed at the surface. (Retail
+  evaluates the height helper twice on the above-sea arm, once to compare and
+  once to store; the helper is pure, so evaluating it once is exactly
+  equivalent — but only because it is pure.) Success, and no
   lead is ever applied to a point target.
-* **Unit target, slot index zero:** failure (no target).
+* **Unit target whose stored target-unit index is zero** (the empty target
+  encoding): failure (no target). The word tested is the slot's *stored unit
+  index*, not the slot index — the slot index is the resolver's own argument,
+  and zero there is the ordinary first slot.
 * **Unit target whose unit's definition index is now zero** (a freed slot):
   the slot's target words are rewritten to the empty encoding (index zero with
-  the unit sentinel) — only when they are not already that — and the deferred
+  the unit sentinel) and the deferred
   `TargetCleared` callback is started with one argument, the slot index. The
-  resolver then returns failure. (It also performs a name lookup of
+  resolver then returns failure. (Retail guards the rewrite with a test for the
+  words already being that pair, but the guard cannot decide anything on this
+  arm: it is reached only after the sentinel word has matched and the index
+  word has been proved nonzero, so the rewrite and the `TargetCleared` post
+  always happen. It also performs a name lookup of
   `StartBuilding` in the shooter's script and discards the result: a lookup
   with no dispatch and no observable effect, recorded so that a clone does not
   look for a missing callback.)
@@ -2923,7 +2936,10 @@ and the scalar speed by the same `startvelocity` / `weaponacceleration` /
 `weaponvelocity` hierarchy as the ordinary creator. It uses the same
 timer-versus-range expiry choice as §6.3, retains the unit target and, when the
 interceptor rescan supplied one, the matched-projectile link. It copies the
-authored burst count and clears the slot's Aim receiver.
+authored burst count and clears the slot's **aim-ready word** — the same word
+the Aim-completion entry writes `1` into (`[R-WPN-03 §6]`), and the word the
+vertical-launch executor reads alone. The slot's *receiver* word is a
+different field, written once at unit creation and never cleared.
 
 **Established fact:** There is no hard-coded eight-tick vertical-launch delay. A
 vertical two-phase projectile can remain at the launch point because its
@@ -3032,11 +3048,25 @@ aim solver (§3.3), then processes **yaw first, then pitch**, each as:
 
 ```
 e = (int16)(wanted - current)
-m = |e|                                   ; 16-bit absolute value
-if (m > 27000 && burnblow)  return failure
+m = (int16)|e|                            ; absolute value formed at full
+                                          ; width, then carried as a SIGNED
+                                          ; 16-bit quantity
+if ((int32)m > 27000 && burnblow)  return failure
 if ((int32)m < (int32)(uint16)turnrate)  current = wanted
 else                                     current += (e < 0 ? -turnrate : +turnrate)
 ```
+
+The absolute value is narrowed to sixteen bits and **sign-extended before both
+comparisons**, so it is signed, not unsigned. For every error from 0 to 32,767
+the two readings are the same number; they diverge at an error of **exactly a
+half turn**, which a guided record reaches whenever it points exactly away
+from its pursuit point. Retail then reads `m` as **−32,768**, so on that tick
+it (a) never trips the burn-blow failure test, whatever the error, and
+(b) always satisfies the snap test, whatever the turn rate — the angle snaps
+straight to the wanted value instead of stepping by one `turnrate`. A clone
+that carries the absolute value unsigned diverges on that one angle per axis
+per guidance tick, and a `burnblow` weapon fails a steer there that retail
+completes.
 
 The snap test is **strict**, so an error exactly equal to `turnrate` takes the
 step branch; the step is exactly one `turnrate`, never a fraction. `turnrate` is
@@ -3068,6 +3098,7 @@ if ((int16)(d >> 16) > 1024) {                  ; SIGNED short, strict greater-t
 } else {
     second point = storedTarget, with Y replaced by
                    max(terrainHeight(storedTarget), seaLevel) << 16
+                   ; the height helper is evaluated twice here too (§3.4)
     steer toward the second point
 }
 ```
@@ -4742,7 +4773,8 @@ slot initializer (0 at unit creation), the production handler's phase 2
 (+1), the successful stockpile launch (−1), and save restoration
 ([08 "Save-file organization"]). Readers: the handler's phase-0 gate
 (`> 199`), the vertical-launch aim gate, the fire gate, and the interceptor
-aim scan and fire-time rescan (`≠ 0`, §11.2). Bounded census over the slot
+scan (`≠ 0`, §11.2) at each of its **three** call sites — the two aim-time
+acquisition arms of §3.2 and the fire-time rescan. Bounded census over the slot
 pipeline, the production handler, the slot initializer and the interceptor
 scan.
 
@@ -4841,9 +4873,13 @@ first record whose stored target position and weapon index byte all match.
 The spawner path then performs no ammunition, reload, firing-state, or
 resource mutation, matching the ordinary slot pipeline's failure path.
 
-**Established fact:** Neither interceptor scan tests liveness. A
+**Established fact:** The interceptor scan tests liveness at none of its
+**three** call sites — the two aim-time acquisition arms of §3.2, which
+differ only in their caller, and the fire-time rescan; the scan body is one
+routine and its behaviour is identical at all three, and a census of the
+image finds no fourth caller and no data reference. A
 dead-but-uncompacted targetable enemy projectile within coverage and unclaimed
-is still selected by the aim-time scan and by the fire-time rescan, and its
+is still selected at aim time and by the fire-time rescan, and its
 frozen current point is still tracked and proximally impacted. The scans cannot
 distinguish dead from live candidates; "both dead" prevents a shot only through
 the coverage and claim state, never through a dead-bit test.
@@ -5364,10 +5400,13 @@ byte:
 
 * `interpolatedHeight > seaLevelByte` — land: place, and keep the caller's
   ground-notification request;
-* otherwise — water: place, and when the placement succeeded and the **dying
-  unit's** definition does not carry `isfeature`, patch the placed animation
-  state's first two motion words to `-11468` and `0`, which is the fixed
-  sinking rate; then force the ground notification off.
+* otherwise — water: place, and **when the placement succeeded**: patch the
+  placed animation state's first two motion values — two 32-bit fields — to
+  `-11468` and `0`, the fixed sinking rate, unless the **dying unit's**
+  definition carries `isfeature`; and force the ground notification off. Both
+  the patch and the notification clear sit inside the placement-success arm,
+  so a water placement the stamper refuses returns with the notification still
+  armed and the wreck ground effect fires over open water.
 
 The ground notification, when it survives, is the ordinary ground effect event
 with the wreck effect id and parameter 900. The caller passes it as false for

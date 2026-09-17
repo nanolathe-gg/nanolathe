@@ -57,14 +57,16 @@ func TestClassVectorUsesRuntimeDefinitionFields(t *testing.T) {
 	s := &Strategic{Catalog: cat, Counts: map[string]int32{def.CanonicalKey: 0}, ClassVectors: map[string]ClassVector{def.CanonicalKey: {}}, SingleVectors: map[string]int8{def.CanonicalKey: 0}}
 	s.recomputeClassVectors()
 
-	// single: (11 base + makesmetal 10) + weapon budget 11 + 10 + 5 + 6 = 43.
-	// other: (21 + 30 + 25 + 40 + 15 + 5) * 4 * 3 clamps to 100.
-	// metal: 0 - makesmetal 25 = -25; energy is zero.
+	// single: start value 1 + makesmetal 10 + weapon budget (11 + 10 + 5 + 6)
+	// = 43; the costs are zero, so the two cost terms contribute nothing here.
+	// other: can-attack REPLACES the start value 1 with 21, then + 30 + 25 + 40
+	// + 15 + 5 = 136, times four for a zero count, clamped at the upper bound.
+	// metal: base 0 plus the makesmetal term +25, inside [0, 100]; energy zero.
 	if got, want := s.SingleVectors[def.CanonicalKey], int8(43); got != want {
 		t.Fatalf("single vector = %d, want %d", got, want)
 	}
-	if got, want := s.ClassVectors[def.CanonicalKey], (ClassVector{C0: 100, C1: -25, C2: 0}); got != want {
-		t.Fatalf("class vector = %+v, want %+v", got, want)
+	if got, want := s.ClassVectors[def.CanonicalKey], (ClassVector{C0: 100, C1: 25, C2: 0}); got != want {
+		t.Fatalf("class vector = %+v, want %+v [08 R-P0-05 §5]", got, want)
 	}
 }
 
@@ -86,10 +88,15 @@ func TestGuardedSolarAndExtractorEnergyVectorsAndScores(t *testing.T) {
 	s.BindEnergyEnvironment(func() (float32, float32) { return 0, 0 })
 	s.Init([]string{solar.CanonicalKey, mex.CanonicalKey})
 
-	if got, want := s.ClassVectors[solar.CanonicalKey], (ClassVector{C0: 100, C1: -2, C2: 98}); got != want {
+	// The solar collector's metal coefficient is 0 - 0.02*141 = -2.82, which the
+	// metal clamp's lower bound of ZERO raises to 0 before the truncation; the
+	// extractor's energy coefficient is -1.285 - 5*3 = -16.285, which the energy
+	// clamp's lower bound of ZERO raises to 0. Neither is negative in retail
+	// [08 R-P0-05 §5].
+	if got, want := s.ClassVectors[solar.CanonicalKey], (ClassVector{C0: 100, C1: 0, C2: 98}); got != want {
 		t.Fatalf("CORSOLAR class vector = %+v, want %+v [05 R-PROD-01 §1][08 R-P0-05 §5]", got, want)
 	}
-	if got, want := s.ClassVectors[mex.CanonicalKey], (ClassVector{C0: 100, C1: 98, C2: -16}); got != want {
+	if got, want := s.ClassVectors[mex.CanonicalKey], (ClassVector{C0: 100, C1: 98, C2: 0}); got != want {
 		t.Fatalf("CORMEX class vector = %+v, want %+v [05 R-PROD-01 §1][08 R-P0-05 §5]", got, want)
 	}
 
@@ -102,11 +109,15 @@ func TestGuardedSolarAndExtractorEnergyVectorsAndScores(t *testing.T) {
 	if metal, energy, other := ComputeMix(in); metal != 50 || energy != 50 || other != 0 {
 		t.Fatalf("mix = (%d,%d,%d), want (50,50,0)", metal, energy, other)
 	}
-	if got := ComputeScore(in, s.ClassVectors[solar.CanonicalKey], 100); got != 48 {
-		t.Fatalf("CORSOLAR score = %d, want 48", got)
+	// With the metal and energy coefficients clamped at zero below, neither
+	// definition contributes a negative term: the collector scores its energy
+	// coefficient alone and the extractor its metal coefficient alone
+	// [08 R-P0-05 §5].
+	if got := ComputeScore(in, s.ClassVectors[solar.CanonicalKey], 100); got != 49 {
+		t.Fatalf("CORSOLAR score = %d, want 49", got)
 	}
-	if got := ComputeScore(in, s.ClassVectors[mex.CanonicalKey], 100); got != 41 {
-		t.Fatalf("CORMEX score = %d, want 41", got)
+	if got := ComputeScore(in, s.ClassVectors[mex.CanonicalKey], 100); got != 49 {
+		t.Fatalf("CORMEX score = %d, want 49", got)
 	}
 }
 
@@ -141,30 +152,41 @@ func TestClassVectorOldProxiesCannotAffectChoice(t *testing.T) {
 // TestInitVectorCategoryFlagIsBMCode locks [08 R-P0-05 §9]: the initialization
 // pass adds 40 when the authored `bmcode` byte is zero — the building class,
 // the same byte the placement validator dispatches on [08 R-AI-03 §7.4] — and
-// 20 for a non-empty build list. A plain building is 40, a factory or
-// construction building 60, a mobile unit 0 or 20.
+// 20 when the definition's compiled build-option list EXISTS, which is exactly
+// when it carries the authored `builder` flag. A plain building is 40, a
+// builder-flagged building 60, a mobile definition 0 or 20.
+//
+// `emptybuilder` is the case that was wrong before: a builder whose compiled
+// menu resolves to no entries still receives the list, so it still gets +20
+// [08 R-ENTRY-02 §2][02 R-CAT-01 §5].
 func TestInitVectorCategoryFlagIsBMCode(t *testing.T) {
 	building := o6Def("building")
 	factory := o6Def("factory")
+	factory.Builder = true
 	mobile := o6Def("mobile")
 	mobile.BMCode = 1
 	mobileBuilder := o6Def("mobilebuilder")
 	mobileBuilder.BMCode = 1
+	mobileBuilder.Builder = true
+	emptyBuilder := o6Def("emptybuilder")
+	emptyBuilder.Builder = true
 	cat := &content.Catalog{
 		Units: map[string]*content.UnitDef{
-			"building": building, "factory": factory, "mobile": mobile, "mobilebuilder": mobileBuilder,
+			"building": building, "factory": factory, "mobile": mobile,
+			"mobilebuilder": mobileBuilder, "emptybuilder": emptyBuilder,
 		},
 		BuildMenus: map[string]*content.BuildMenuPage{
 			"factory":       {Buttons: []string{"mobile"}},
 			"mobilebuilder": {Buttons: []string{"building"}},
+			"emptybuilder":  {Buttons: nil},
 		},
 	}
 	s := &Strategic{Catalog: cat}
-	s.Init([]string{"building", "factory", "mobile", "mobilebuilder"})
+	s.Init([]string{"building", "factory", "mobile", "mobilebuilder", "emptybuilder"})
 	for _, tt := range []struct {
 		key  string
 		want int8
-	}{{"building", 40}, {"factory", 60}, {"mobile", 0}, {"mobilebuilder", 20}} {
+	}{{"building", 40}, {"factory", 60}, {"mobile", 0}, {"mobilebuilder", 20}, {"emptybuilder", 60}} {
 		if got := s.InitVectors[tt.key]; got != tt.want {
 			t.Fatalf("init vector %q = %d, want %d [08 R-P0-05 §9]", tt.key, got, tt.want)
 		}

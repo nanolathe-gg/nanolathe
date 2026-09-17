@@ -844,42 +844,58 @@ func CruiseTargetPoint(p *Projectile, terrain *world.Terrain) Vec3 {
 
 // steerToward implements [06 §6.7] guidance: pure pursuit of the pursuit
 // point, desired yaw and pitch in the signed 16-bit circle, yaw processed
-// before pitch. On each axis it snaps only when |err| is STRICTLY less than
-// the unsigned turn rate; otherwise (equality included) it steps by exactly
-// one turn rate. With burn-blow an error greater than 27,000 fails; a pitch
-// failure may occur after yaw was already updated. The caller invokes central
-// impact on failure and continues through visible motion.
+// before pitch. On each axis it snaps only when the absolute error is STRICTLY
+// less than the zero-extended turn rate; otherwise (equality included) it steps
+// by exactly one turn rate. With burn-blow an error greater than 27,000 fails;
+// a pitch failure may occur after yaw was already updated. The caller invokes
+// central impact on failure and continues through visible motion.
+//
+// The absolute error is carried as a SIGNED 16-bit quantity before BOTH of its
+// uses [06 §6.7]. For every error from 0 to 32,767 that is indistinguishable
+// from an unsigned magnitude, but an error of exactly a half turn — the record
+// pointing exactly away from its pursuit point — carries as −32,768, so it can
+// never trip the burn-blow threshold and always takes the snap arm whatever the
+// turn rate. Reproducing the narrowing is what makes a burn-blow weapon steer
+// rather than fail at that one error.
 func steerToward(p *Projectile, w *content.WeaponDef, point Vec3) bool {
-	turn := uint32(w.TurnRate) // unsigned turn rate [06 §6.7]
+	turn := int32(uint16(w.TurnRate)) // zero-extended 16-bit turn rate [06 §6.7]
 	// Yaw first.
 	desiredYaw := YawFromDelta(point.X.Sub(p.Pos.X), point.Z.Sub(p.Pos.Z))
 	errYaw := int16(desiredYaw - p.Yaw)
-	absYaw := uint32(absU16(uint16(errYaw)))
+	absYaw := signedAbsErr(errYaw)
 	if w.BurnBlow && absYaw > 27000 {
 		return true // steering failure [06 §6.7]
 	}
 	if absYaw < turn {
 		p.Yaw = desiredYaw // snap strictly inside the rate
 	} else if errYaw >= 0 {
-		p.Yaw = numeric.Angle(uint16(int32(p.Yaw) + int32(turn)))
+		p.Yaw = numeric.Angle(uint16(int32(p.Yaw) + turn))
 	} else {
-		p.Yaw = numeric.Angle(uint16(int32(p.Yaw) - int32(turn)))
+		p.Yaw = numeric.Angle(uint16(int32(p.Yaw) - turn))
 	}
 	// Pitch second; a failure here may follow an applied yaw update.
 	desiredPitch := PitchFromDelta(point.X.Sub(p.Pos.X), point.Y.Sub(p.Pos.Y), point.Z.Sub(p.Pos.Z))
 	errPitch := int16(desiredPitch - p.Pitch)
-	absPitch := uint32(absU16(uint16(errPitch)))
+	absPitch := signedAbsErr(errPitch)
 	if w.BurnBlow && absPitch > 27000 {
 		return true
 	}
 	if absPitch < turn {
 		p.Pitch = desiredPitch
 	} else if errPitch >= 0 {
-		p.Pitch = numeric.Angle(uint16(int32(p.Pitch) + int32(turn)))
+		p.Pitch = numeric.Angle(uint16(int32(p.Pitch) + turn))
 	} else {
-		p.Pitch = numeric.Angle(uint16(int32(p.Pitch) - int32(turn)))
+		p.Pitch = numeric.Angle(uint16(int32(p.Pitch) - turn))
 	}
 	return false
+}
+
+// signedAbsErr is the steering block's absolute angular error [06 §6.7]: the
+// magnitude of a signed 16-bit error, re-narrowed and sign-extended before it
+// is compared. A half-turn error negates to itself and therefore stays
+// negative — retail's behavior, not a saturation.
+func signedAbsErr(err int16) int32 {
+	return int32(int16(absU16(uint16(err))))
 }
 
 func absU16(v uint16) uint16 {

@@ -70,11 +70,14 @@ type wantRow struct {
 // compare, under which the underscore sorts below every letter. Per-row
 // payloads are untouched — only the order of those seven names moved.
 //
-// Row 0 is the reject sentinel. Its acknowledgement group is 15, as the
-// static image and [04 §3.1] both give it; its state label is held empty on
-// purpose, which batch4 in table.go explains.
+// Row 0 is the reject sentinel. Its acknowledgement group is 15 and its state
+// label is `Ready`, as the static image gives them [04 §3.1][04 R-ORD-01 §12].
+// The label is not decoration: it is the caption the unit-information footer
+// shows for a unit with no front-segment head order record [07 R-HUD-03 §2],
+// which is why holding it empty here was a defect and not a transcription
+// choice. batch4 in table.go carries the reasoning.
 var researchRows = []wantRow{
-	{"", "", 0x00, 15, 0x0000000, HelperNone},
+	{"", "Ready", 0x00, 15, 0x0000000, HelperNone},
 	{"Activate", "Activate", 0x00, 19, 0x10060, HelperNone},
 	{"AirStrike", "Airstrike", 0x08, 2, 0x600, HelperGoalResolveAck},
 	{"AirToAir", "Engaging target", 0x08, 1, 0x200, HelperGoalResolveAck},

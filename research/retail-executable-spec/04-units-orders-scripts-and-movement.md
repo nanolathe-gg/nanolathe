@@ -475,6 +475,14 @@ One record carries the empty canonical name. It sorts to index zero, which is
 also the identity the command resolver returns when a command is rejected, so
 index zero is the reject sentinel.
 
+Its state label `Ready` is **not** inert. It is the string the
+unit-information footer shows for a unit with **no** front-segment head order
+record: the footer's state-label accessor reads the front-segment head link
+and, when that link is null, returns row 0's label instead of nothing
+([07 R-HUD-03 §2]). So the reject sentinel's label is retail's idle caption,
+and an implementation that leaves row 0's label empty draws nothing where
+retail draws `Ready`.
+
 **The class parameter's reader (Established).** The class parameter is read
 by the order-queue overlay walker of [07 R-P0-11 §3], which forms
 `descriptor.class & callerMask` per order node and dispatches five helpers off
@@ -4446,6 +4454,18 @@ acknowledgement group 15, gate mask 0. Net behaviour of a rejected
 spawned record of identity 0 (`VTOL_SeekGuard`'s unchecked code-7 spawn,
 [R-ORD-02 §3]) likewise runs once and completes.
 
+**A descriptor-0 record is never the head at a tick boundary.** Both arms
+that reach it continue the same pump pass rather than ending it: *hold* (2)
+reloads the head and re-dispatches, and *wait* (3) arms a deadline and then
+reloads the head too. A record that has just become identity 0 carries no
+gate — the re-identifier keeps only the record's own `0x600` bits and a
+freshly constructed record's gate is zero — so the walk cannot stop on it,
+and it is dispatched and unlinked before the pass returns. Presentation,
+which samples committed ticks ([03 §2.4]), therefore never sees a unit whose
+head record carries descriptor 0. This matters only because the caption a
+unit with no head record shows is that same row's label
+([07 R-HUD-03 §2]): the two cases are indistinguishable by construction.
+
 **`SelfRepair` phase 0 reads one field on the target and one on itself.**
 The activation read is on the **unit running the order — the patient**, not
 on the target: the phase admits when the target's (the repairer's)
@@ -5631,7 +5651,7 @@ field that save restoration clears rather than reconstructs
 
 **Established fact:** Thread states include idle, running, waiting for turn, waiting for move, sleeping, and waiting for a called script. Signal masks can terminate or suppress matching threads. Calls block the caller until the callee returns.
 
-**Established fact:** `SET_SIGNAL_MASK` (`0x10068000`) replaces the current thread's mask with the popped value. Engine-created root threads begin with mask `1`. `SIGNAL` (`0x10067000`) pops a mask and scans all eight slots; every active thread whose mask intersects it is released, including the signalling thread itself, each decrementing the active count and waking every thread waiting for that slot. Signal termination never invokes a completion receiver; if the signalling thread is among the victims its interpretation stops. An explicit script `return` (`0x10065000`) pops the top value, delivers it to the thread's completion receiver when one is set, releases the slot, and wakes threads waiting for that slot. An invalid-opcode kill clears status and decrements active count but neither invokes a receiver nor wakes call-script waiters. The ordinary scheduler does not poll a callee's liveness to release those waits; only the explicit return and signal wake paths do so.
+**Established fact:** `SET_SIGNAL_MASK` (`0x10068000`) replaces the current thread's mask with the popped value. Engine-created root threads begin with mask `1`. `SIGNAL` (`0x10067000`) pops a mask and scans all eight slots; every active thread whose mask intersects it is released, including the signalling thread itself, each decrementing the active count and waking every thread waiting for that slot. Signal termination never invokes a completion receiver; if the signalling thread is among the victims its interpretation stops. An explicit script `return` (`0x10065000`) delivers the top value to the thread's completion receiver when one is set, releases the slot, and wakes threads waiting for that slot. The pop happens **inside** the receiver branch: with no receiver the logical top is never touched. That is unobservable, because the slot is freed immediately and the next root thread on it starts with top −1, so an implementation may pop unconditionally. An invalid-opcode kill clears status and decrements active count but neither invokes a receiver nor wakes call-script waiters. The ordinary scheduler does not poll a callee's liveness to release those waits; only the explicit return and signal wake paths do so.
 
 **Established fact:** Synchronous query helpers execute script logic without an ordinary tick delta and do not advance piece interpolation. Asynchronous callbacks allocate one of the eight thread slots and return if no slot is available. Section 4.3 gives the exact failure edge for every starter, including the two cases where arguments are left on the caller's stack.
 
@@ -5645,9 +5665,12 @@ ignored except by the push and pop families, where the low three bits are an
 addressing mode. The dispatch key is the instruction word masked with
 `0x100FF000`.
 
-Dispatch is a compiler-generated binary search over signed ranges with equality
-leaves, not a jump table. The range sentinels it compares against are never
-themselves opcodes. A key matching none of the **57 dispatched values** falls
+Dispatch is a compiler-generated binary search with equality leaves, not a
+jump table: each comparison both splits the remaining range **and** serves as
+the equality test for its own key, so every value the search compares against
+is itself one of the dispatched opcodes — the search performs exactly 57
+comparisons against exactly the 57 dispatched values, with no separate range
+sentinel anywhere in it. A key matching none of the **57 dispatched values** falls
 into the kill path: the thread's status is cleared, the instance's active
 thread count is decremented, and the drain yields. There is no default handler
 and no diagnostic.
@@ -5802,10 +5825,13 @@ temporary in the interpreter's own stack frame**, filling it from the highest
 index downward, and advances the program counter by three. A count of zero or
 less pops nothing. The pops do not test the logical top, so a count above the
 thread's current depth reads window words below the base (stale slot memory,
-[R-COB-01 §1]) and lowers the top below −1; a count above **four** writes
-past the temporary into the interpreter's other locals — undefined behavior
-in retail, not a thread kill and not a fault the engine detects. The bound
-is four, and beyond it retail's behavior is unspecified. Nanolathe should treat
+[R-COB-01 §1]) and lowers the top below −1. The bound is **four**, and the
+storage immediately past the temporary is not "other locals": a count of five
+overwrites the interpreter's own **return address**, and six and seven the
+interpreter's two incoming arguments (the thread index the drain loop
+re-reads, and the drain-continue flag). Retail's behavior for such a count is
+therefore a script-controlled transfer of control when the drain returns —
+undefined, not a thread kill and not a fault the engine detects. Nanolathe should treat
 a count above four (or above the depth) as a script fault and stop the
 thread, recorded as a sanctioned divergence. No shipped script emits the
 opcode (`[fmt cob]`, "Reserved / unassigned slots").
@@ -6322,7 +6348,7 @@ definitions would be inventing content.
 
 **Established fact — angle domain and spin marker:** Each piece has independent per-axis move, turn, spin and acceleration state addressed as `axis + piece*19` words (see §4.3), plus per-piece busy and global dirty flags. Valid angles are 16-bit, `0x10000` per circle (`0x8000` is 180°); every angular store masks `&0xffff` and every lerp commit masks and wraps `&0xffff` with `+0x10000` wrap. The value `0xffffffff` is an out-of-band sentinel meaning continuous spin, never a valid angle, written only by `spin` (`0x10003000`) and tested by the interpolator's rotation block.
 
-**Established fact — tick denominator:** The VM tick denominator is the constant 30, read at VM zero-init from the engine's tick-rate global and written once at process startup from the fixed 30-tick configuration. It is copied to the VM's own tick-denominator field and immutable after. It is not derived per-tick from the wall-clock or game-speed budget. A bounded scan finds no zero guard before the four divide sites (move, turn, spin, stop-spin); a synthetic zero denominator would raise the processor divide fault. Sleep uses multiply `denom*ms` not divide and is not affected.
+**Established fact — tick denominator:** The VM tick denominator is the constant 30, read at VM zero-init from the engine's tick-rate global and written once at process startup from the fixed 30-tick configuration. It is copied to the VM's own tick-denominator field and immutable after. It is not derived per-tick from the wall-clock or game-speed budget. A bounded scan finds no zero guard before any of the divisions by it: four opcodes divide (move, turn, spin, stop-spin) but there are **five** divisions, because spin divides both its operands — its speed and its acceleration. A synthetic zero denominator would raise the processor divide fault. Sleep uses multiply `denom*ms` not divide and is not affected.
 
 **Established fact — division and remainder:** Every `speed/denom`, `accel/denom` and `decel/denom` uses signed division truncating toward zero (positive denominator); remainder is discarded with no carry between ticks. Thus `−100/30` is `−3`, not `−4`. Sleep timer is `(denom * ms)/1000` trunc toward zero, denominator positive, also discarding remainder.
 

@@ -131,8 +131,12 @@ func rotateLeanPair(x, z int32, heading uint16) (int32, int32) {
 		return x, z
 	}
 	sin, cos := math.Sincos(float64(heading) * 2 * math.Pi / 65536.0)
-	px := int32(math.RoundToEven(float64(x)*cos - float64(z)*sin))
-	pz := int32(math.RoundToEven(float64(x)*sin + float64(z)*cos))
+	// Retail forms each product as its own multiply and rounds it before the
+	// difference or the sum. The explicit conversions hold that shape on a
+	// backend with a fused multiply-add; what they feed is the authoritative
+	// bank and pitch pair (I2's [04 R-AIR-01 §2] row), not presentation.
+	px := int32(math.RoundToEven(float64(float64(x)*cos) - float64(float64(z)*sin)))
+	pz := int32(math.RoundToEven(float64(float64(x)*sin) + float64(float64(z)*cos)))
 	return px, pz
 }
 
@@ -291,8 +295,12 @@ func IntegrateFlight(s *FlightState) {
 	var ax, az float64
 	if d != 0 && a != 0 {
 		k := -math.Sqrt((2 * a) / d)
-		ax = (dxRaw*k - dvxRaw) / 65536.0
-		az = (dzRaw*k - dvzRaw) / 65536.0
+		// Each product is rounded before the subtraction, as retail's separate
+		// multiply and subtract do; the results truncate straight into the
+		// 16.16 velocity words, so a fused multiply-add here would move
+		// authoritative state on every tick of every aircraft [04 §10.1] C29.
+		ax = (float64(dxRaw*k) - dvxRaw) / 65536.0
+		az = (float64(dzRaw*k) - dvzRaw) / 65536.0
 		if hypot := math.Hypot(ax, az); hypot > a && hypot != 0 {
 			scale := a / hypot
 			ax *= scale
@@ -311,7 +319,9 @@ func IntegrateFlight(s *FlightState) {
 	s.VZ += numeric.TruncateFloat64ToLow32(az * 65536.0)
 
 	// Scalar speed recomputed as FULL 3-D magnitude trunc(sqrt(vx²+vy²+vz²)) [04 §10.1].
-	s.Speed = numeric.TruncateFloat64ToLow32(math.Sqrt(float64(s.VX)*float64(s.VX) + float64(s.VY)*float64(s.VY) + float64(s.VZ)*float64(s.VZ)))
+	// Each square is rounded before it is summed, as retail's x87 does.
+	vx2, vy2, vz2 := float64(float64(s.VX)*float64(s.VX)), float64(float64(s.VY)*float64(s.VY)), float64(float64(s.VZ)*float64(s.VZ))
+	s.Speed = numeric.TruncateFloat64ToLow32(math.Sqrt(vx2 + vy2 + vz2))
 
 	// Commit position via velocity [04 §10.1] shared mover position commit; flight branch shares final position commit with ground [04 §10.1].
 	s.X += s.VX

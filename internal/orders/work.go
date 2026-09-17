@@ -910,8 +910,13 @@ const (
 func captureBudget(energyCost, metalCost float32, health, maxDamage, kills int32) int32 {
 	// Each cost term is scaled twice, the metal term is carried negative and the
 	// bias is carried negative, so both fold in through subtractions.
-	energyTerm := float64(energyCost) * float64(captureCostScale) * float64(captureEnergyUnit)
-	metalTerm := float64(metalCost) * float64(captureCostScale) * float64(captureMetalUnit)
+	// Each term's last multiply rounds before it enters the difference, as
+	// retail's separate multiply and subtract do. A fused multiply-add would
+	// round the metal term's final scale and the subtraction together, and the
+	// single truncation below turns that into a different integer budget — a
+	// directly observable capture timer [05 R-WORK-01 §6].
+	energyTerm := float64(float64(energyCost) * float64(captureCostScale) * float64(captureEnergyUnit))
+	metalTerm := float64(float64(metalCost) * float64(captureCostScale) * float64(captureMetalUnit))
 	base := numeric.TruncateFloat64ToLow32((energyTerm - metalTerm) - float64(captureBias)) // one truncation [01 §8]
 	if base >= captureClampMax {
 		base = captureClampMax // the only clamp: signed, upper, and `>=`

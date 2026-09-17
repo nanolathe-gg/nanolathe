@@ -273,7 +273,14 @@ func Falloff(d, r float32, edgeEffectiveness float32) float32 {
 	}
 	f := float64(d)/float64(r) - 1
 	edge := float64(edgeEffectiveness)
-	return float32(f*f*(1-edge) + edge) // [06 §9.3] one single-precision store
+	// The explicit conversion of the product is the rounding retail's x87
+	// performs before the final add: three separate working-precision
+	// roundings (the square, the scale by one-minus-edge, then the add), and
+	// only then the one narrowing store. Without it a backend that has a fused
+	// multiply-add — every arm64 build, and amd64 under GOAMD64=v3 — rounds
+	// the scale and the add together and stores a different float32
+	// [06 §9.3] (I2, the area-damage falloff row and its no-fusion rule).
+	return float32(float64(f*f*(1-edge)) + edge) // [06 §9.3] one single-precision store
 }
 
 // ComputeScaledAmount implements the arithmetic order for a projectile

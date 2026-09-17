@@ -62,7 +62,10 @@ type Strategic struct {
 	Counts map[string]int32
 
 	// BuildCapable is the owning player's count of live, completed units whose
-	// definition carries a non-empty build-option list. The 30-tick refresh
+	// definition carries the authored `builder` flag — retail tests whether the
+	// compiled build-option list exists, never whether it holds entries, and
+	// that list exists for exactly the builder-flagged definitions
+	// [08 R-AI-01 §16][08 R-P0-05 §9]. The 30-tick refresh
 	// clears it and increments it once per qualifying unit during its live-pool
 	// scan; the construction task reads it and never recomputes it
 	// [08 R-AI-01 §3][08 R-P0-05 §5].
@@ -352,7 +355,7 @@ func (s *Strategic) Init(types []string) {
 
 // InitClassVectors writes the initialization-only vector [P0-01]: zero, plus
 // 40 when the definition's authored `bmcode` byte is zero (the building class)
-// and plus 20 when its compiled build-option list is non-empty
+// and plus 20 when its compiled build-option list **exists**
 // [08 R-P0-05 §5][08 R-P0-05 §9]. The refresh never rewrites it.
 //
 // The earlier caution here — that the category flag had no recovered key and
@@ -362,8 +365,8 @@ func (s *Strategic) Init(types []string) {
 // These weights are live, not inert: they are the per-unit weight the strategic
 // centre applies in refreshCountsAndCenter [08 R-P0-05 §10].
 //
-// Build-option list non-empty is checked only via the compiled catalog's
-// authored BuildMenus entry [P0-01 §2.2] [R-P0-05].
+// Retail applies no clamp here; 60 is the maximum reachable value
+// [08 "Strategic state construction and refresh"].
 func (s *Strategic) InitClassVectors() {
 	if s.InitVectors == nil {
 		s.InitVectors = make(map[string]int8)
@@ -399,16 +402,10 @@ func (s *Strategic) InitClassVectors() {
 		if def := s.lookupDef(ck); def != nil && def.BMCode == 0 {
 			c += 40
 		}
-		// A non-empty authored build menu contributes 20 [P0-01].
-		hasBuild := s.hasBuildOptions(ck)
-		if hasBuild {
+		// The presence of a compiled build-option list contributes 20 — not its
+		// contents [08 R-P0-05 §9].
+		if s.hasBuildOptions(ck) {
 			c += 20
-		}
-		if c > 127 {
-			c = 127
-		}
-		if c < -128 {
-			c = -128
 		}
 		s.InitVectors[ck] = int8(c)
 		// Ensure ClassVectors and SingleVectors have entries for this key (zero-initialized already by Init).
@@ -626,17 +623,20 @@ func (s *Strategic) lookupDef(ck string) *content.UnitDef {
 	return nil
 }
 
-// hasBuildOptions reports whether the compiled catalog has a non-empty
-// authored build-option list for ck. The compiled build-menu catalog is the only authoritative
-// adapter. A Builder flag without a resolved list is not a substitute for the
-// runtime count [R-P0-05] [I9].
+// hasBuildOptions reports whether the definition's compiled build-option list
+// **exists**, which is the test both consumers make — the initialization
+// vector's +20 term and the refresh's build-capable count. Retail's catalog
+// compiler allocates that list for every definition carrying the authored
+// `builder` flag, including one whose `CANBUILD` section is missing (the entry
+// count then stays zero), and for no other definition, so a non-null pointer is
+// exactly the authored flag and the entry count is never consulted
+// [08 R-P0-05 §9][08 R-ENTRY-02 §2][02 R-CAT-01 §5].
+//
+// Testing the flag rather than the compiled menu keeps the predicate
+// independent of how our catalog represents an empty menu.
 func (s *Strategic) hasBuildOptions(ck string) bool {
-	if s != nil && s.Catalog != nil && s.Catalog.BuildMenus != nil {
-		if page, ok := s.Catalog.BuildMenus[ck]; ok && page != nil && len(page.Buttons) > 0 {
-			return true
-		}
-	}
-	return false
+	def := s.lookupDef(ck)
+	return def != nil && def.Builder
 }
 
 // classify evaluates the established signed net-energy query used by the
@@ -683,7 +683,17 @@ func ftol(v float32) int32 {
 	return numeric.TruncateFloat32ToLow32(v)
 }
 
-// clamp100 clamps to [-100,100] before i8 store [P0-01 §4].
+// ftol64 is the same runtime truncation for the sums retail accumulates at its
+// 53-bit working precision with no intervening single-precision store — the
+// class routine's first pass [08 "Arithmetic and clamping"; 01 §8; I2; I3].
+func ftol64(v float64) int32 {
+	return numeric.TruncateFloat64ToLow32(v)
+}
+
+// clamp100 clamps to [-100,100] before an i8 store. This is the FIRST-PASS
+// coefficient's clamp and its weapon budget's clamp, and nothing else: `base`
+// has an upper bound of 100 alone, and the energy and metal coefficients clamp
+// to [0,100] in floating point before their truncation [08 R-P0-05 §5].
 func clamp100(v int32) int32 {
 	if v > 100 {
 		return 100
@@ -700,13 +710,10 @@ func clamp100(v int32) int32 {
 // -0.01, -0.002, 30, -0.0025, 5, 100, and -0.02.
 // Every float→int via __ftol trunc toward zero with narrow to float32 at each CALL (FSTP) [P0-01 §4].
 // Clamps to [-100,100] before i8 store. Zero RNG inside routine [P0-01 §5].
-// TODO(T23): platform residual, not a gap in this routine. The narrowing to
-// float32 at every helper invocation boundary is established and reproduced
-// above; what is not established is the x87 control word in force between those
-// points, and doc 08 records it as exactly this class — "an unknown of platform
-// residual class; the default rounding mode is assumed"
-// [08 "What remains not established"][P0-01 §8]. It can only change a result if
-// the retail word differs from the default; nothing here depends on the answer.
+// The working precision in force between the truncation points is Established
+// and is 53-bit, so the sums retail accumulates without a single-precision
+// store are float64 here and the two it narrows keep their single-precision
+// stores [01 §8][01 R-DET-01 §3][08 "Arithmetic and clamping"][I2].
 func (s *Strategic) recomputeClassVectors() {
 	if s.ClassVectors == nil {
 		s.ClassVectors = make(map[string]ClassVector)
@@ -771,10 +778,41 @@ func (s *Strategic) recomputeClassVectors() {
 			costMetal = def.BuildCostMetal
 			costEnergy = def.BuildCostEnergy
 		}
-		t0f := float32(acc0) + costMetal*float32(-0.01)
-		t0 := ftol(t0f) // narrow to float32 at CALL then ftol [P0-01 §4]; platform-residual control-word marker above
-		t1f := float32(t0) + costEnergy*float32(-0.002)
-		t1 := ftol(t1f)
+		// The two cost terms are ADDED: retail multiplies each cost by a
+		// negative constant and subtracts that product, so the net effect is
+		// +0.01 x metal cost and +0.002 x energy cost, and the coefficient rises
+		// with cost like its extractor, maker, producer and weapon addends
+		// [08 R-P0-05 §5].
+		//
+		// The accumulation is float64 because that is what retail's
+		// accumulator is: the C runtime installs 53-bit precision control at
+		// startup, no routine reachable from the simulation changes it, and the
+		// truncating helper alters only the rounding-control field before
+		// restoring the word [01 §8][01 R-DET-01 §3]. The constants stay single
+		// precision — retail's multiply operands are the 32-bit hundredth and
+		// two-thousandth — and the costs are already single-precision
+		// definition fields; only the product and the sum are held at working
+		// precision, and each is truncated immediately
+		// [08 "Arithmetic and clamping"][I2].
+		//
+		// This is not a cosmetic fidelity point. The single-precision hundredth
+		// is slightly below 1/100, so a metal cost that is a non-zero multiple
+		// of 100 makes the exact product land just under an integer: retail
+		// keeps that deficit and truncates down, while a float32 sum rounds up
+		// onto the integer and truncates one higher. An offline sweep of the
+		// reference install over every definition and every state this routine
+		// can see found exactly five such definitions — every definition whose
+		// metal cost is a non-zero multiple of 100 — each one byte high, an
+		// error that also carries into `base` through the half-capacity addend.
+		//
+		// Each product is wrapped in an explicit conversion: the Go
+		// specification lets an implementation fuse a multiply and a following
+		// add into a single rounding, and some backends do, so without the
+		// conversion the same source would round differently per host [I1].
+		metalTerm := float64(float64(costMetal) * float64(float32(0.01)))
+		t0 := ftol64(float64(acc0) + metalTerm) // one of the routine's five truncations [08 R-P0-05 §5]
+		energyTerm := float64(float64(costEnergy) * float64(float32(0.002)))
+		t1 := ftol64(float64(t0) + energyTerm)
 
 		// weapon budget
 		wBase := int32(1)
@@ -814,8 +852,9 @@ func (s *Strategic) recomputeClassVectors() {
 		acc0Final = clamp100(acc0Final)
 		s.SingleVectors[ck] = int8(acc0Final)
 
-		// Other-mix coefficient [P0-01 §3].
-		acc1 := int32(0)
+		// Other-mix coefficient `base` [08 R-P0-05 §5]. The accumulator starts
+		// at ONE and CanAttack REPLACES it with 21; it is not an addend.
+		acc1 := int32(1)
 		if def != nil && def.CanAttack { // [P0-01 §2.2; R-P0-05]
 			acc1 = 21
 		}
@@ -840,12 +879,38 @@ func (s *Strategic) recomputeClassVectors() {
 		if def != nil && def.RadarDistance != 0 { // [P0-01 §2.2; R-P0-05]
 			acc1 += 5
 		}
-		// The eight addends above are the whole other-mix accumulator:
-		// [08 R-P0-05 §5] enumerates it exhaustively and lists the routine's
-		// definition inputs, and neither carries an energy-make term. The
-		// earlier "unresolved energy-make sentinel path" marker is retired.
-		tmp := acc1
-		val := tmp // ftol via FILD
+		// The routine's ninth input, and the only truncation of this value: the
+		// definition's passive `energymake`, clamped below at zero and above at
+		// THIRTY, added to the integer accumulator in floating point, and the
+		// sum truncated once [08 R-P0-05 §5]. A solar collector authoring
+		// `energymake 20` gains 20; a fusion plant authoring 1000 gains 30.
+		// Retail's lower test selects "below or equal", so a value at or below
+		// zero and a NaN both yield zero; the upper test selects "below" alone,
+		// so exactly thirty selects the literal thirty. Both edges are
+		// immaterial because the two arms agree there.
+		//
+		// Retail folds this addition at the same 53-bit working precision as
+		// the first pass, with the truncation as its only boundary
+		// [08 "Arithmetic and clamping"]. The sweep that settled the first pass
+		// compared both forms here too, over every definition and every state,
+		// and found no stored byte that differs: authored `energymake` values
+		// are integral or far from a boundary, so the single-precision and
+		// working-precision sums truncate alike. The form below therefore
+		// matches retail for the shipped catalog; it is the contract, not the
+		// arithmetic width, that this comment records.
+		energyMake := float32(0)
+		if def != nil {
+			energyMake = float32(def.EnergyMake)
+		}
+		// NaN takes the lower arm, matching retail's unordered path.
+		if !(energyMake > 0) {
+			energyMake = 0
+		} else if !(energyMake < 30) {
+			energyMake = 30
+		}
+		val := ftol(float32(acc1) + energyMake)
+		// The count and MinWaterDepth multipliers apply to the TRUNCATED sum
+		// above, not to the raw integer accumulator [08 R-P0-05 §5].
 		if count == 0 {
 			val = val << 2 // *4
 		} else if count == 1 {
@@ -858,9 +923,10 @@ func (s *Strategic) recomputeClassVectors() {
 		}
 		// The half-capacity addend: when the session's per-player unit limit
 		// shifted right one is unsigned-less-than the owning player's live unit
-		// count, half of the single coefficient — the signed byte divided by
-		// two, truncating toward zero — is added [08 R-AI-01 §13][I3]. It is
-		// ordinary late-game state, not an unreachable branch.
+		// count, half of THIS iteration's own freshly stored single coefficient
+		// — the signed byte divided by two, truncating toward zero — is added
+		// [08 R-AI-01 §13][I3]. It is ordinary late-game state, not an
+		// unreachable branch, and it is the only route to a negative `base`.
 		if s.halfCapacity() {
 			val += int32(int8(acc0Final)) / 2
 		}
@@ -877,44 +943,64 @@ func (s *Strategic) recomputeClassVectors() {
 		if s.windGeneratorSuppressed(def) {
 			val = 0
 		}
-		val = clamp100(val) // clamp to 100 max, negative kept [P0-01 §3]
+		// `base` has an UPPER clamp only, at 100. There is no lower clamp, so
+		// the half-capacity addend can leave it negative and a negative value
+		// does reach the candidate score [08 R-P0-05 §5].
+		if val > 100 {
+			val = 100
+		}
 		// store to C0
 		cv := s.ClassVectors[ck]
 		cv.C0 = int8(val)
 
-		// Energy-mix coefficient [P0-01 §3].
-		fE := costEnergy * float32(-0.0025)
-		g := fval * float32(5.0)
+		// Energy-mix coefficient `baseEL` [08 R-P0-05 §5]: the clamp bounds are
+		// [0, 100], applied in floating point BEFORE the single truncation, and
+		// both comparisons are strict so each bound value survives. Retail
+		// narrows only the cost product to single precision; the five-times
+		// net-energy term and the difference stay at working precision. The
+		// sweep behind the first pass's note compared both widths here over
+		// every definition and every state and found no stored byte that
+		// differs, so the single-precision form below is retail's result for
+		// the shipped catalog [08 "Arithmetic and clamping"].
+		// Both products carry the explicit conversion the first pass explains:
+		// no host may fuse them into the difference [I1].
+		fE := float32(costEnergy * float32(-0.0025))
+		g := float32(fval * float32(5.0))
 		diff := fE - g
-		if diff > 100 {
+		// NaN takes retail's upper arm: its unordered compare sets the bit the
+		// ">100" branch selects, so a NaN coefficient becomes 100, not 0.
+		if diff > 100 || diff != diff {
 			diff = 100
+		} else if diff < 0 {
+			diff = 0
 		}
-		if diff < -100 {
-			diff = -100
-		}
-		val2 := ftol(diff)
-		val2 = clamp100(val2)
-		cv.C2 = int8(val2)
+		cv.C2 = int8(ftol(diff))
 
-		// Metal-mix coefficient [P0-01 §3].
+		// Metal-mix coefficient `baseML` [08 R-P0-05 §5]: the `makesmetal` term
+		// is PLUS 25 and the clamp is [0, 100] in floating point before the
+		// truncation, so a metal maker scores max(0, 25 - 0.02*cost) and can
+		// never be negative, and an extractor scores 100 - 0.02*cost clamped
+		// into [0, 100].
 		baseVal := int32(0)
 		if def != nil && def.ExtractsMetal != 0 {
 			baseVal = 100
 		}
 		metalAdj := int32(0)
 		if def != nil && def.MakesMetal != 0 { // [P0-01 §2.2; R-P0-05]
-			metalAdj = -25 // [P0-01 §3]
+			metalAdj = 25 // [08 R-P0-05 §5]
 		}
-		adjf := costMetal*float32(-0.02) + float32(metalAdj)
+		// Retail narrows this sum to single precision through one store and
+		// then adds the integer base at working precision; the same sweep found
+		// the two widths agree on every stored byte here
+		// [08 "Arithmetic and clamping"].
+		adjf := float32(costMetal*float32(-0.02)) + float32(metalAdj)
 		sumf := float32(baseVal) + adjf
-		if sumf > 100 {
+		if sumf > 100 || sumf != sumf {
 			sumf = 100
-		}
-		if sumf < -100 {
-			sumf = -100
+		} else if sumf < 0 {
+			sumf = 0
 		}
 		val3 := ftol(sumf)
-		val3 = clamp100(val3)
 		cv.C1 = int8(val3)
 
 		s.ClassVectors[ck] = cv

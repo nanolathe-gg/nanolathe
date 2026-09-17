@@ -55,6 +55,7 @@ Allowed floating point, exhaustively:
 | Ground follower goal-point bearing and route-distance/lookahead `hypot` temporaries | `float64`, narrowed at the named angle and fixed-point boundaries | `[04 R-MOV-01 §2]`, `[04 R-MOV-01 §3]`, `[04 R-MOV-03 §2]`, `[04 R-PATH-01 §8]` |
 | `StartBuilding` first-argument bearing — `atan2` of the builder-minus-target delta, the compiled `65536/2π` scale, and its round-half-even store | `float64` transient, narrowed at the `uint16` script-argument boundary | `[04 R-CB-01 §3]` |
 | AI resource-score expressions (`energyRaw`, `metalRaw`) | `float32` temporaries and inputs; `TODO(question)` on exact x87 spills | `[08 "Established AI-facing data and rooted planner"]` |
+| AI class-vector first-pass accumulator — the two cost products and their sums, at the 53-bit working precision retail runs with; the two coefficients that narrow keep their single-precision stores | `float64` transient, never stored; each sum truncates toward zero into the integer coefficient immediately, and the constants stay `float32` | `[08 "Arithmetic and clamping"]`, `[08 R-P0-05 §5]` |
 | AI metal-spot records and exhaustive-placement heap keys | authored feature-metal copy and helper-local negative squared-distance key, both `float32` | `[08 R-AI-03 §1]`, `[08 R-AI-03 §3]` |
 | Simulation trig-table construction at initialization | `float64` transient; authoritative table entries are integers | `[04 §5.1]` |
 | Model piece rotation trig in the draw path and admission-time shatter pose | `float64`, round-to-nearest; geometry narrows back to fixed point | `[03 §2.4]`; approved current-simulation-pose departure in DESIGN_UNITS_ORDERS_COB §3.3 |
@@ -75,8 +76,24 @@ Allowed floating point, exhaustively:
 Everything else is integer. Simulation velocity integration uses the fixed-point
 trig tables, **not** the float path `[03 §2.4]`.
 
+**No fused multiply-add.** The rows above fix widths and narrowing points; this
+one fixes the number of roundings. The Go specification lets a compiler combine
+`x*y + z` into one operation that rounds once instead of twice, possibly across
+statements — `gc` does on arm64 and on amd64 under `GOAMD64=v3`, and not on
+default amd64, so one source has three answers. Retail has no fused
+multiply-add: every product is rounded to the working precision before it is
+added, which is what rows like "narrowed by **one** store at the end" and
+"combined and truncated **once**" already describe. So in an authoritative
+package every product that feeds an add or a subtract — including one formed in
+an earlier statement — carries an explicit floating-point conversion, the
+specification's rounding barrier. It changes no operand width, no constant, no
+evaluation order and no narrowing point. Presentation packages are exempt.
+
 **Check.** `grep -rn "float64\|float32" internal/` — every hit maps to a row
-above or is presentation-only.
+above or is presentation-only. `internal/architecture`'s
+`TestAuthoritativeArithmeticIsNotFused` compiles the authoritative packages for
+arm64 and for `GOAMD64=v3` and fails on a fused instruction outside its
+shrink-only allowlist, each entry of which argues that its product is exact.
 
 ## I3 — Truncation toward zero
 

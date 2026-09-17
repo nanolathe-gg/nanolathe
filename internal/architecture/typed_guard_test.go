@@ -494,12 +494,15 @@ var mapFunctionHashes = map[string]string{
 	"internal/ai/profile.go cloneWeightTable":                    "c24030e7c8fcd13b14aeae9ef333f94c571fd0b0b98e59b14a3d7db12c86636e",
 	"internal/ai/profile.go *Profile.Difficulties":               "6ebccbe5fdec25f142139476db16d2e8dc5a6ca6df55bbfbf4a21842b8fc10bd",
 	"internal/ai/profile.go LoadProfile":                         "119b5500c827867e150450327bd13e543b91f5a0711b8b9df6f7a4eb7fc4708f",
-	"internal/ai/strategic.go *Strategic.InitClassVectors":       "c29060aff4a8a006af87ba9dfc48e82fab977928d358cafabb2711da03490644",
+	"internal/ai/strategic.go *Strategic.InitClassVectors":       "22eab29d4bc94cc0442920275dd3e5613c324a5349d32f9880093cf0b854f64f",
 	"internal/ai/strategic.go *Strategic.refreshCountsAndCenter": "27025603520a216e18ea26c811992220b05173da9fe49ce7ec544913f7eb2b40",
-	"internal/ai/strategic.go *Strategic.recomputeClassVectors":  "ece3bb681f8272a5632f68a5280a0d014b168b07d4fa8bf42bc168cbd4a2bf0b",
-	"internal/cob/binding.go BindStrict":                         "833dd320728882053831252fe1cf9315c0a42c67042b3f2ae9d510bb912ef0f4",
-	"internal/construction/placement.go *Service.BuilderLinks":   "ab64326b5234a8e82416673727052e72d47df694047af752dba5b34341f3c0bf",
-	"internal/construction/placement.go *Service.SnapshotLinks":  "c001891b664d5693829dc524e5c7bad19b8a14c4341d396557013d6a5c1b40ca",
+	// Re-audited: the first pass now accumulates at retail's 53-bit working
+	// precision [08 "Arithmetic and clamping"]. The key union, its sort and the
+	// order every consumer sees are unchanged (I1).
+	"internal/ai/strategic.go *Strategic.recomputeClassVectors": "5d879af01880139d273155d9a616fbd7256484085ee699ffb0d8e22e7f9bb9f3",
+	"internal/cob/binding.go BindStrict":                        "833dd320728882053831252fe1cf9315c0a42c67042b3f2ae9d510bb912ef0f4",
+	"internal/construction/placement.go *Service.BuilderLinks":  "ab64326b5234a8e82416673727052e72d47df694047af752dba5b34341f3c0bf",
+	"internal/construction/placement.go *Service.SnapshotLinks": "c001891b664d5693829dc524e5c7bad19b8a14c4341d396557013d6a5c1b40ca",
 	// Re-audited: the rebuild now also fills the parallel value row the two
 	// per-tick walks read, so the map is walked once and hashed once instead
 	// of being hashed again per key at every walk. The range body, the sort
@@ -605,7 +608,7 @@ var float64FieldAllowances = map[string]string{
 // occurrences still use the shrink-only per-file baseline.
 var float64ScopeAllowances = map[string]float64Allowance{
 	"internal/model/model.go func *xformNode.evaluateRotation": {3, "I2 per-axis model rotation trigonometry [03 §2.4]"},
-	"internal/model/model.go func applyChain":                  {6, "I2 model vertex working precision; round after each axis then narrow geometry [03 §2.4]"},
+	"internal/model/model.go func applyChain":                  {18, "I2 model vertex working precision; round after each axis then narrow geometry [03 §2.4]"},
 
 	"internal/combat/meteor.go func MeteorDelay":               {2, "I2 meteor source float32, working quotient and signed64/low32 conversion [06 §6.5][01 R-DET-01 §1]"},
 	"internal/combat/meteor.go func MeteorDurationTicks":       {2, "I2 meteor source float32, working product and signed64/low32 conversion [06 §6.5][01 R-DET-01 §1]"},
@@ -624,23 +627,23 @@ var float64ScopeAllowances = map[string]float64Allowance{
 	"internal/economy/ledger.go func *Player.commitCapacityWaste":     {2, "I2 waste counter [05 \"Stocks, counters, and waste\"]"},
 	"internal/economy/ledger.go func ImmediateDebit":                  {8, "I2 economy working precision [05 R-ECO-01 §1]"},
 	"internal/economy/ledger.go func *Service.transfer":               {5, "I2 economy working precision [05 R-ECO-01 §1]"},
-	"internal/economy/maker.go func addContribution":                  {7, "I2 production contributions and discounts [05 R-ECO-01 §1][05 R-ECO-01 §3]"},
+	"internal/economy/maker.go func addContribution":                  {9, "I2 production contributions and discounts [05 R-ECO-01 §1][05 R-ECO-01 §3]"},
 	"internal/economy/maker.go func *Service.PerUnitProductionFills":  {9, "I2 production contributions [05 R-ECO-01 §1][05 R-ECO-01 §3]"},
-	"internal/economy/maker.go func creditReclaimedMaterial":          {6, "I2 reclaimed-material accounting [05 R-ECO-01 §1]"},
+	"internal/economy/maker.go func creditReclaimedMaterial":          {9, "I2 reclaimed-material accounting [05 R-ECO-01 §1]"},
 	"internal/economy/maker.go func *Service.CreditFeatureReclaim":    {2, "I2 reclaimed-material accounting [05 R-ECO-01 §1]"},
 	"internal/economy/maker.go func *Service.CreditUnitReclaimRefund": {2, "I2 construction refund [05 R-ECO-01 §11]"},
 
 	"internal/movement/airorders.go func airReleaseLead":  {5, "I2 AirStrike release lead [04 R-AIR-01 §8]"},
 	"internal/movement/flight.go func flightGoalDistance": {2, "I2 flight goal distance [04 R-AIR-01 §1]"},
-	"internal/movement/flight.go func rotateLeanPair":     {6, "I2 lean rotation [04 R-AIR-01 §2]"},
-	"internal/movement/flight.go func IntegrateFlight":    {29, "I2 flight braking and integration temporaries [04 §10.1]"},
+	"internal/movement/flight.go func rotateLeanPair":     {10, "I2 lean rotation [04 R-AIR-01 §2]"},
+	"internal/movement/flight.go func IntegrateFlight":    {34, "I2 flight braking and integration temporaries [04 §10.1]"},
 	"internal/movement/integrate.go func groundHypotRaw":  {2, "I2 ground follower route distance [04 R-MOV-01 §3]"},
 
 	"internal/combat/motion.go func InitOrdinary":            {2, "I2 ordinary creator stored planar distance [06 §6.3][06 §4.3]"},
-	"internal/combat/aim.go func BallisticSolve":             {14, "I2 ballistic discriminant, acos and sqrt [06 §3.3]"},
-	"internal/combat/aim.go func distance3DRaw":              {3, "I2 pre-fire lead distance [06 §3.3]"},
-	"internal/combat/impact.go func DistanceToBox":           {3, "I2 area-damage range [06 §9.3]"},
-	"internal/combat/damage.go func Falloff":                 {3, "I2 area-damage falloff [06 §9.3]"},
+	"internal/combat/aim.go func BallisticSolve":             {24, "I2 ballistic discriminant, acos and sqrt [06 §3.3]"},
+	"internal/combat/aim.go func distance3DRaw":              {6, "I2 pre-fire lead distance [06 §3.3]"},
+	"internal/combat/impact.go func DistanceToBox":           {6, "I2 area-damage range [06 §9.3]"},
+	"internal/combat/damage.go func Falloff":                 {4, "I2 area-damage falloff [06 §9.3]"},
 	"internal/combat/damage.go func weaponNominal":           {2, "I2 area-damage amount product [06 §9.2]"},
 	"internal/construction/reclaim.go func UnitReclaimPulse": {2, "I2 unit-reclaim pulse divide [05 R-WORK-01 §4]"},
 
@@ -655,12 +658,12 @@ var float64ScopeAllowances = map[string]float64Allowance{
 	"internal/save/bank.go func *Account.SetDouble": {1, "I13 HAPIBANK account record double"},
 	"internal/save/bank.go func *Account.Double":    {1, "I13 HAPIBANK account record double"},
 
-	"internal/session/strips.go func nanoLifetimeTicks": {4, "I2 nanolathe particle travel distance [03 §5.5]"},
-	"internal/session/strips.go func sprinkleStep":      {6, "I2 strip-object span [03 R-FX-01 §3]"},
-	"internal/session/strips.go func flameSegLife":      {6, "I2 strip-object span [03 R-FX-02 §2]"},
+	"internal/session/strips.go func nanoLifetimeTicks": {7, "I2 nanolathe particle travel distance [03 §5.5]"},
+	"internal/session/strips.go func sprinkleStep":      {9, "I2 strip-object span [03 R-FX-01 §3]"},
+	"internal/session/strips.go func flameSegLife":      {9, "I2 strip-object span [03 R-FX-02 §2]"},
 
 	"internal/orders/work.go const captureCostScale,captureEnergyUnit,captureMetalUnit,captureBias,captureClampMax": {4, "I2 capture timer constants [05 R-WORK-01 §6]"},
-	"internal/orders/work.go func captureBudget":     {7, "I2 capture timer base sum [05 R-WORK-01 §6]"},
+	"internal/orders/work.go func captureBudget":     {9, "I2 capture timer base sum [05 R-WORK-01 §6]"},
 	"internal/orders/work.go func resurrectionDelay": {3, "I2 resurrection delay [05 R-WORK-01 §7]"},
 }
 

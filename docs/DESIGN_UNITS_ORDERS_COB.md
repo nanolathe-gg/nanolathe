@@ -975,7 +975,13 @@ their first order [04 R-ORD-02 §1] [07 R-CAM-01 §5].
 * **The empty-name descriptor's handler is the reject sentinel, and nothing
   else.** Retail's row 0 has a handler; its body is not a behavior any producer
   can reach, because `Lookup` returns 0 exactly on a miss `[04 §3.1]`
-  `[04 R-ORD-01 §12]`.
+  `[04 R-ORD-01 §12]`. We nevertheless install retail's trivial
+  complete-and-free handler on row 0 as a guard, so that if a row-0 node ever
+  did reach the pump it would complete silently as retail does rather than
+  fall into the nil-handler park, which draws RNG and would be a determinism
+  divergence. Row 0's state label is not inert either: `Ready` is the idle
+  footer caption a unit with no head order record shows
+  `[07 R-HUD-03 §2]`, so the label is carried, not blanked.
 * **The stock ARMCK lifecycle diagnostic observes normal `Create` completion.**
   `internal/units/p28_cob_pose_trace_test.go` installs its observer before
   `Create` starts, so a child reusing the completed thread's slot cannot erase

@@ -725,6 +725,12 @@ func (n *xformNode) evaluateRotation() {
 
 func applyChain(p, pre [3]numeric.Fixed, nodes []xformNode) [3]numeric.Fixed {
 	// Work in float64 on raw Fixed values then round per [03 §2.4] C21 (I2).
+	//
+	// Each rotation product below carries an explicit conversion: retail forms
+	// the two products separately and rounds each before the difference or the
+	// sum, so a backend with a fused multiply-add computes a different pair.
+	// These positions are piece world positions that combat and cob read, not
+	// only draw geometry, so the rounding structure is authoritative.
 	x := float64(p[0].Raw() + pre[0].Raw())
 	y := float64(p[1].Raw() + pre[1].Raw())
 	z := float64(p[2].Raw() + pre[2].Raw())
@@ -732,20 +738,20 @@ func applyChain(p, pre [3]numeric.Fixed, nodes []xformNode) [3]numeric.Fixed {
 		n := &nodes[i]
 		if n.az != 0 {
 			c, s := n.cz, n.sz
-			nx := math.Round(c*x - s*y) // Rz: x' = c*x - s*y ; y' = s*x + c*y [03 §2.4] C21
-			ny := math.Round(s*x + c*y)
+			nx := math.Round(float64(c*x) - float64(s*y)) // Rz: x' = c*x - s*y ; y' = s*x + c*y [03 §2.4] C21
+			ny := math.Round(float64(s*x) + float64(c*y))
 			x, y = nx, ny
 		}
 		if n.ax != 0 {
 			c, s := n.cx, n.sx
-			ny := math.Round(c*y - s*z) // Rx: y' = c*y - s*z ; z' = s*y + c*z [03 §2.4] C21
-			nz := math.Round(s*y + c*z)
+			ny := math.Round(float64(c*y) - float64(s*z)) // Rx: y' = c*y - s*z ; z' = s*y + c*z [03 §2.4] C21
+			nz := math.Round(float64(s*y) + float64(c*z))
 			y, z = ny, nz
 		}
 		if n.ay != 0 {
 			c, s := n.cy, n.sy
-			nx := math.Round(c*x - s*z) // Ry: x' = c*x - s*z ; z' = s*x + c*z [03 §2.4] C21
-			nz := math.Round(s*x + c*z)
+			nx := math.Round(float64(c*x) - float64(s*z)) // Ry: x' = c*x - s*z ; z' = s*x + c*z [03 §2.4] C21
+			nz := math.Round(float64(s*x) + float64(c*z))
 			x, z = nx, nz
 		}
 		x += float64(n.t[0].Raw())

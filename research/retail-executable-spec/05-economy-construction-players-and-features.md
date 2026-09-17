@@ -81,8 +81,11 @@ every ally-group test excludes), and allocates a zeroed side-definition record
 for the row. Rows `0..9` are the ten slots above. Row `10` is reachable only
 by direct index — it is the row a projectile's neutral side byte `10` selects
 (`[06 R-DMG-01 §9]`) — and **nothing ever occupies it**: every walk of the
-table during setup, battle, join and save restore covers ten rows (the row-10
-base serves two loops as their end sentinel); the network join's free-slot
+table that can *write* an occupied row's state during setup, battle, join and
+save restore covers ten rows (the row-10 base serves two of those loops as
+their end sentinel). One battle-time reader iterates all **eleven** rows
+inclusively and is safe only because row 10's occupancy word is zero, which
+makes it skip the row's body. The network join's free-slot
 search scans rows `0..9` and, finding none, uses `10` as its "no free slot"
 result and refuses rather than writing row 10; the seat-setup writer is only
 called with lobby seat indices and with `0`/`1` for the two-seat mission
@@ -702,8 +705,9 @@ above, which is where the geothermal rule applies. Mobile products instead run
 an inline terrain loop — feature blocking, unit occupancy, water and
 min-height, max-height, slope limits — only when the caller's mode requests
 terrain checking; other modes accept immediately. Factory production state 2
-passes its own class/state flag pair as the mode and a null self identity, so
-any foreign occupant rejects the spot. Net effect: the geothermal yard-map rule
+passes its own flags-word **mover-mode mirror** as the mode — the two bits
+[04 R-MOV-01 §8] owns and [04 R-FAC-02 §5] names at this call — and a null
+self identity, so any foreign occupant rejects the spot. Net effect: the geothermal yard-map rule
 gates building placement, while factory-produced mobile units are
 terrain-checked only.
 
@@ -894,11 +898,17 @@ The high-level pass is:
 9. let later tick phases observe the new economic and operational state.
 
 Periodic allied sharing is not part of each player's settlement call. The
-sharing dispatcher is invoked once per tick after the player phase returns,
-for the reference player only, and self-gates its work: metal/energy
-transfers run only when the global tick is a multiple of sixty and sensor
-sharing when it is a multiple of 450. Sharing therefore mutates live stocks
-between settlement passes and affects subsequent passes.
+sharing dispatcher runs in the sub-tick tail **after all twelve phases** —
+not straight after the player phase, which is phase 5 — immediately before
+the packet-transport flush, for the reference player only, and **only in a
+networked session**: the whole tail is skipped when the session's networked
+bit is clear, and the dispatcher gates itself on the same bit
+([R-SHARE-01 §3], [01 §4.4]). When it does run it self-gates its work:
+metal/energy transfers run only when the global tick is a multiple of sixty
+and sensor sharing when it is a multiple of 450. In a networked session
+sharing therefore mutates live stocks between settlement passes and affects
+subsequent passes; in single-player it never fires at all, which is what
+makes [R-SHARE-01 §3]'s "multiplayer-only" framing true.
 
 Construction handlers may add requests and accepted work before the
 settlement pass that pays them. The precise same-pass relationship varies by
@@ -3178,8 +3188,8 @@ wake bit 2 before state 1.
 
 #### Silent blocked revalidation before allocation
 
-The snapped rectangle is area-validated with the factory's class/state flag
-pair as the mode and a null self identity. On failure the node schedules a
+The snapped rectangle is area-validated with the factory's flags-word
+mover-mode mirror as the mode ([04 R-FAC-02 §5]) and a null self identity. On failure the node schedules a
 retry in **exactly 15 ticks**, sets wake bit 2, and stays: no product exists
 yet, so the retry is silent — no message, no sound, no allocation — and
 repeats every 15 ticks for as long as the footprint is obstructed. There is
@@ -4001,9 +4011,14 @@ step(builder, target, worker):                       // worker is float32
   else                   newStored = (float32)new80  // narrowed here
 
   delta32   = (float32)(old - newStored)             // narrowed, then re-read
-  energyDemand = (float32)(def.buildcostenergy * delta32)
-  metalDemand  = (float32)(def.buildcostmetal  * delta32)   // metal multiplied
-                                                            // second, stored first
+  energyDemand = (float32)(def.buildcostenergy * delta32)   // energy is
+  metalDemand  = (float32)(def.buildcostmetal  * delta32)   // multiplied and
+                                                            // stored first,
+                                                            // metal second in
+                                                            // both. Each is
+                                                            // narrowed by its
+                                                            // own store before
+                                                            // admission reads it
   gain      = trunc(maxDamageF * old) - trunc(maxDamageF * newStored)
               // maxDamageF is def.maxdamage widened through a 64-bit integer
               // load whose high word is zero, so a negative authored maxdamage

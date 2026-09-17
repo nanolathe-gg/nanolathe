@@ -34,13 +34,18 @@ func ReverseRefund(targetBucket *float32, refund float32, isSpecial bool, modeSe
 // float32 [05 R-ECO-01 §3][05 R-ECO-01 §11]. Each caller owns its admission and
 // account selection: cancel credits the builder; reverse work credits the target.
 func creditConstructionRefund(bucket *float32, refund float32, isSpecial bool, modeSelector int) {
+	// The explicit conversion of each product is retail's rounding of that
+	// product before the subtraction — two roundings, not the single one a
+	// fused multiply-add performs. The seven-tenths constant is a full
+	// binary64 value, so its product is inexact and the difference survives
+	// into the float32 refund store.
 	if isSpecial {
 		switch modeSelector {
 		case 0:
-			*bucket = float32(float64(*bucket) - float64(refund)*-0.5)
+			*bucket = float32(float64(*bucket) - float64(float64(refund)*-0.5))
 			return
 		case 1:
-			*bucket = float32(float64(*bucket) - float64(refund)*-0.7)
+			*bucket = float32(float64(*bucket) - float64(float64(refund)*-0.7))
 			return
 		}
 	}

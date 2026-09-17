@@ -87,11 +87,16 @@ func addContribution(s *Service, p *Player, b *Bucket, contribution float64) {
 	if s != nil && s.EconomySelector != nil {
 		selector = *s.EconomySelector
 	}
+	// The explicit conversion of each discount product is retail's rounding of
+	// that product before the subtraction, two roundings rather than the one a
+	// fused multiply-add would perform [05 R-ECO-01 §3][05 R-ECO-01 §11]. The
+	// seven-tenths constant is a full binary64 value, so its product is inexact
+	// and the difference reaches the settled float32 production store.
 	switch selector {
 	case 0:
-		b.Production = float32(float64(b.Production) - contribution*-0.5)
+		b.Production = float32(float64(b.Production) - float64(contribution*-0.5))
 	case 1:
-		b.Production = float32(float64(b.Production) - contribution*-0.7)
+		b.Production = float32(float64(b.Production) - float64(contribution*-0.7))
 	default:
 		b.Production = float32(float64(b.Production) + contribution)
 	}
@@ -231,17 +236,22 @@ func creditReclaimedMaterial(s *Service, b *Bucket, contribution float64, discou
 	if s != nil && s.EconomySelector != nil {
 		selector = *s.EconomySelector
 	}
+	// Each discount product rounds before the subtraction, as in
+	// addContribution above [05 R-ECO-01 §3][05 R-ECO-01 §11].
 	if discounted {
 		switch selector {
 		case 0:
-			b.Production = float32(float64(b.Production) - contribution*-0.5)
+			b.Production = float32(float64(b.Production) - float64(contribution*-0.5))
 			return
 		case 1:
-			b.Production = float32(float64(b.Production) - contribution*-0.7)
+			b.Production = float32(float64(b.Production) - float64(contribution*-0.7))
 			return
 		}
 	}
-	b.Production = float32(float64(b.Production) + contribution)
+	// The conversion of an already-binary64 argument is a rounding barrier, not
+	// a width change: callers that form `contribution` as a product would
+	// otherwise have that product fused into this addition.
+	b.Production = float32(float64(b.Production) + float64(contribution))
 }
 
 // specialPlayerSlot reports whether a player slot takes the difficulty-scaled

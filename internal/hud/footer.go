@@ -18,6 +18,7 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
@@ -271,12 +272,24 @@ func unitReadout(out *Footer, f *frame.Frame, cat *content.Catalog, viewer uint8
 	if text := KillsLine(view.Flags, view.Kills); text != "" {
 		out.Texts = append(out.Texts, FooterText{Anchor: AnchorDamageBar, Text: text, Color: dcb(PaletteNormal), FromY2: true, OffsetY: 2})
 	}
-	// The order caption is the caption column of the order-kind table for the
-	// unit's current order, or the table's row-0 caption — the empty sentinel
-	// name — when it has none [07 R-HUD-03 §2][04 R-ORD-01 §1].
+	// The caption is the state label of the descriptor of the unit's
+	// front-segment head order record, and descriptor 0's state label —
+	// `Ready` — when there is no head record. The fallback is explicit in the
+	// accessor, not an empty queue resolving to identity 0, but the observable
+	// result is the same: an idle unit's caption is the reject sentinel's
+	// label [07 R-HUD-03 §2][04 §3.1][04 R-ORD-01 §12].
+	//
+	// State labels are drawn verbatim here, with no second lookup, so `Ready`
+	// takes the same route to the screen as every other label. The empty-label
+	// guard stands for retail's "skip the draw on a null label pointer"; with
+	// the table transcribed no row reaches it.
 	order := footerCurrentOrder(f, hover.Unit)
-	if order != nil && order.StateLabel != "" {
-		out.Texts = append(out.Texts, FooterText{Anchor: AnchorMissionText, Text: order.StateLabel, Color: rawColor(FooterTextColor), Centered: true})
+	label := orders.DescriptorFor(0).StateLabel
+	if order != nil {
+		label = order.StateLabel
+	}
+	if label != "" {
+		out.Texts = append(out.Texts, FooterText{Anchor: AnchorMissionText, Text: label, Color: rawColor(FooterTextColor), Centered: true})
 	}
 	secondaryField(out, f, cat, viewer, hover, order, own)
 }
@@ -393,8 +406,17 @@ func footerUnitDef(cat *content.Catalog, v *frame.UnitView) *content.UnitDef {
 	return def
 }
 
-// footerCurrentOrder returns the unit's current order record, primary queue
-// first, or nil when it has none.
+// footerCurrentOrder returns the unit's FRONT-segment head order record, or
+// nil when it has none. Both footer readers that need "the unit's current
+// order" — the caption and the secondary field's order target — read that one
+// link, so both live off this helper [07 R-HUD-03 §2][04 §3.1].
+//
+// There is no rear-segment fallback. A unit whose only record is a
+// rear-segment one — a weapon build, a self-destruct — reads as having no
+// current order: its caption is `Ready` and its secondary field shows no
+// target. The fallback to the secondary queue's head that stood here showed
+// `Nanolathing` or `SELF DESTRUCT ENGAGED` instead, which is not a caption
+// retail can produce.
 func footerCurrentOrder(f *frame.Frame, handle pool.Handle) *frame.OrderView {
 	if f == nil || handle == 0 {
 		return nil
@@ -406,9 +428,6 @@ func footerCurrentOrder(f *frame.Frame, handle pool.Handle) *frame.OrderView {
 		}
 		if len(q.Primary) != 0 {
 			return &q.Primary[0]
-		}
-		if len(q.Secondary) != 0 {
-			return &q.Secondary[0]
 		}
 		return nil
 	}

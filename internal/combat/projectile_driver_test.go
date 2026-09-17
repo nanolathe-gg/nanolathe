@@ -530,9 +530,13 @@ func TestTickProjectilesSteeringFailureRebuildsAfterImpact(t *testing.T) {
 	p.Speed = numeric.FixedFromInt(1)
 	p.Velocity = Vec3{X: numeric.FixedFromInt(3)}
 	p.TargetPos = Vec3{X: numeric.FixedFromInt(-100)}
-	p.Yaw = 16384
+	// A yaw error strictly inside the half turn. An error of exactly a half
+	// turn carries as −32,768 through both steering compares, so it never
+	// trips the burn-blow threshold and takes the snap arm instead of the
+	// failure this test needs [06 §6.7].
+	p.Yaw = 19152
 	p.ExpiryTick = 10
-	if desired := YawFromDelta(p.TargetPos.X, p.TargetPos.Z); absU16(uint16(int16(desired-p.Yaw))) <= 27000 {
+	if desired := YawFromDelta(p.TargetPos.X, p.TargetPos.Z); signedAbsErr(int16(desired-p.Yaw)) <= 27000 {
 		t.Fatalf("fixture target yaw %d does not take the established burn-blow steering-failure branch", desired)
 	}
 	oldYaw, oldPitch := p.Yaw, p.Pitch
