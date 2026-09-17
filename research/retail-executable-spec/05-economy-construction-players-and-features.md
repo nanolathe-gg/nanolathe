@@ -61,8 +61,9 @@ contains at least:
 - two alliance rows (own declarations, and others' declarations toward
   this slot) indexed by player slot [R-SHARE-01 §1];
 - automatic energy, metal, and mapping-sharing option bits;
-- two per-resource sharing thresholds, zeroed at battle setup and never
-  written again in the reachable image [R-SHARE-01 §3];
+- two per-resource sharing thresholds, zeroed at battle setup and rewritten
+  only by the network-gated `SetShare*` chat commands, so zero in every
+  single-player session [R-SHARE-01 §3];
 - a contiguous range of unit slots owned by the player;
 - an auxiliary player-level economy bucket;
 - unit-limit accounting enforced only at nanoframe creation; queued products
@@ -122,8 +123,9 @@ addition, so **fractional production survives across ticks exactly**, subject
 only to ordinary single-precision rounding. Cumulative totals and cumulative
 waste are doubles. Capacity is recomputed from zero every pass by accumulating
 each idle unit's authored storage, plus a bonus term when a player flag is set.
-The two sharing thresholds are zeroed at battle setup and never written again;
-the automatic-sharing dispatcher is their only reader ([R-SHARE-01 §3]).
+The two sharing thresholds are zeroed at battle setup and, in single-player,
+never written again — their only other writers are network-gated chat commands
+— and the automatic-sharing dispatcher is their only reader ([R-SHARE-01 §3]).
 
 ### Unit definition
 
@@ -230,11 +232,14 @@ Other economy-relevant unit state includes:
 #### The per-unit gather, exactly [R-ECO-01 §2]
 
 **Established.** A unit is visited only when its status word carries the alive
-bit. The visit then takes **one of two mutually exclusive branches**, chosen by
-a status bit that is written once at spawn as *"the definition's `bmcode` byte
-is zero"* — that is, buildings take the first branch and mobile units the
-second. The branch bit is the spawned-in `bmcode`-is-zero bit, and it is never
-rewritten during play.
+bit. The visit then takes **one of two mutually exclusive branches**. The
+settlement never re-reads the definition here: it tests a **status-word bit**,
+and the unit constructor writes that bit once, as the truth value of *"the
+definition's `bmcode` byte is zero"* — so the bit is a spawn-time mirror of the
+definition fact, set for buildings and clear for mobile units. Bit set takes
+the first branch, bit clear the second. No play-time path rewrites it; the
+save-restore path that rebuilds the status word one bit at a time reconstructs
+a run of lower bits that stops well short of it.
 
 *Branch A — `bmcode` zero (buildings).* Runs only when the unit's **activated**
 bit is set; otherwise the visit falls straight through to the idle block below.
@@ -265,9 +270,18 @@ It performs, in this order:
    intermediate narrowing ([R-ECO-01 §1]).
 
 *Branch B — `bmcode` non-zero (mobile units).* Runs when the activated bit is
-set **or** the unit's movement-mode bits are non-zero, and performs step 1
-only. A mobile unit therefore never contributes extraction, maker, wind or
-tidal output from the settlement, whatever it authors.
+set **or** the unit's **cached movement-rate tier** is non-zero — that is,
+while the unit is moving under its own mover this tick ([04 R-MOV-01 §6] owns
+the tier and its writer) — and performs step 1 only. A mobile unit therefore
+never contributes extraction, maker, wind or tidal output from the settlement,
+whatever it authors.
+
+The second term is the tier, **not** the movement-mode mirror. The mirror is
+non-zero for any parked ground unit, so reading it here would run Branch B for
+essentially every mobile unit on every tick; retail runs it only for an
+activated unit or one that is actually moving. For a mobile definition with
+non-zero `energyuse` — including the negative-`energyuse` refund arm — that is
+a permanent difference in the energy ledger.
 
 *Then, for every alive unit regardless of branch:* the idle block runs when the
 remaining construction fraction **compares equal to zero** (a floating-point
@@ -381,18 +395,22 @@ Exactly five of the fourteen are production-gather sites. The fourteen are:
 | 2 | the feature-reclaim payout ([R-WORK-01 §5] step 4) | the feature definition's two adjacent authored pool values, energy first then metal, each through its own copy of the ladder, gated on the BUILDER's player record | the builder's two accumulators |
 | 1 | the reverse-construction refund | a value **negated immediately before the gate** | the metal accumulator |
 | 1 | the factory build-cancel handler | `(1 - remaining) × buildcostmetal`, truncated to an integer, then the cause-9 kill packet | the builder's metal accumulator |
-| 1 | an order handler | an integer amount converted from a 64-bit integer | the metal accumulator |
+| 1 | the unit-death handler's reclaim refund | `(1 - remaining) × buildcostmetal` again, but formed and discounted **wholly in floating point with no truncation** | the killing unit's metal accumulator |
 
 The two player-indexed sites are the metal and energy sharing-transfer credits
 of [R-SHARE-01 §2]. They are transfer credits rather than production-gather
 members, which is why no member of [R-ECO-01 §3]'s named list matches them.
 
-**Supported inference — the order handler's site.** That the single
-order-handler site is the **unit-reclaim pulse credit** of [05 "Unit reclaim"]
-rather than another integer refund: it forms its amount from a 64-bit integer,
-which is the reclaim pulse's shape ([R-WORK-01 §4]), but its callers were not
-walked. *Decider:* walk that handler's callers to the order kind that reaches
-it.
+**Established — the fourteenth site is the death-side reclaim refund.** It is
+not an order handler: the routine that owns it is the unit-death handler, it is
+reached only by direct call, and its arm runs only when the death record's
+damage kind is the reclaim kind and the record names an attacker. The refund is
+the one [R-WORK-01 §4] already describes — the whole refund is a death-side
+event on the lethal pulse — and the discount ladder is entered on the
+**attacker's** player record, so the credit belongs to the killing unit and not
+to the victim's owner. The two build-cost refunds are therefore the pair to
+compare: the build-cancel site truncates its amount to an integer before the
+ladder, this one never leaves floating point.
 
 **Established — neither reclaim site tests the sign of the contribution.** The
 ladder is entered on the player gate alone, and the negative-`energyuse` site
@@ -1044,10 +1062,10 @@ nothing else gates a contribution:
    activated bit and the remaining fraction are read.
 2. **Branch gate (Established).** The building/mobile branch is chosen by the
    spawn-time `bmcode`-is-zero status bit, and the chosen branch additionally
-   requires the **activated** bit (buildings) or the activated bit **or**
-   non-zero movement-mode bits (mobile units). This gates upkeep, the refund
-   arm and all four generators — never the passive block. [R-ECO-01 §2] owns
-   the branch bodies.
+   requires the **activated** bit (buildings) or the activated bit **or** a
+   non-zero movement-rate tier (mobile units, [04 R-MOV-01 §6] — the tier, not
+   the movement-mode mirror). This gates upkeep, the refund arm and all four
+   generators — never the passive block. [R-ECO-01 §2] owns the branch bodies.
 3. **Completion gate (Established).** The passive-make and storage block runs
    for every alive unit, on either branch and whatever its activated bit,
    when its remaining construction fraction **compares equal to zero**. The
@@ -1107,7 +1125,8 @@ structures at coincident positions and are excluded.
 
 | Field | Gameplay readers |
 |---|---|
-| `energymake`, `metalmake`, `energystorage`, `metalstorage`, `cloakcost`, `cloakcostmoving` | the settlement pass, and nothing else |
+| `metalmake`, `energystorage`, `metalstorage`, `cloakcost`, `cloakcostmoving` | the settlement pass, and nothing else |
+| `energymake` | the settlement pass; the computer player's per-definition class-vector builder, which folds a clamped copy of it into the other-mix coefficient ([08 R-P0-05 §5] owns the clamp and the arithmetic) |
 | `energyuse` | the settlement pass; the computer player's net-energy query (below) |
 | `windgenerator` | the settlement pass; the wind-generator script notifier ([R-PROD-01 §3]); the net-energy query; the computer player's build-desirability table |
 | `tidalgenerator` | the settlement pass; the net-energy query |
@@ -1411,10 +1430,11 @@ conversion ratio. The engine has no metal-per-energy constant.
 `energyuse` is read exactly once per settlement pass of the owning player —
 at the player's own deadline, once per ~30 ticks under ordinary play, in the
 stable unit-slot order of [R-ECO-01 §2] — and only for a unit on its branch
-gate: an activated building, or a mobile unit that is activated **or** has
-non-zero movement-mode bits. The amount is added to the unit's energy
-*requested* accumulator, and to its *accepted* accumulator only when its energy
-carry is not positive; the arithmetic, the negative-`energyuse` refund arm, and
+gate: an activated building, or a mobile unit that is activated **or** carries
+a non-zero movement-rate tier ([04 R-MOV-01 §6]). The amount is added to the
+unit's energy *requested* accumulator, and to its *accepted* accumulator only
+when its energy carry is not positive; the arithmetic, the
+negative-`energyuse` refund arm, and
 the carry semantics are [R-ECO-01 §2]'s and [05 "Resource admission and
 carry"]'s. Nothing is prorated: a unit that is activated for one tick of a
 thirty-tick window pays the whole `energyuse` if it happens to be activated on
@@ -1970,8 +1990,8 @@ It does not address the metal subrecord. The reversed-argument variant is the
 
 ### Direct two-resource payment
 
-Weapon fire and some immediate operations use a different helper that compares
-live player stock with an energy amount and a metal amount. It either debits
+Weapon fire uses a different helper that compares live player stock with an
+energy amount and a metal amount. It either debits
 both in full or debits neither. It also records both amounts in the
 subrecord's requested accumulators. This path does not create proportional
 carry.
@@ -1998,18 +2018,20 @@ admitted:
 ```
 energyRequested = float32( e + energyRequested )
 metalRequested  = float32( m + metalRequested )
-if (energyCarry <= 0 && metalCarry <= 0) {
-    energyAccepted = float32( e + energyAccepted )
-    metalAccepted  = float32( m + metalAccepted )
-    return admitted
-}
-return denied
+if (energyCarry > 0) return denied        // ordered compare; NaN falls through
+if (metalCarry  > 0) return denied        // second compare, after the first
+energyAccepted = float32( e + energyAccepted )
+metalAccepted  = float32( m + metalAccepted )
+return admitted
 ```
 
 Both requests are recorded **before** the gate and unconditionally, so a
 denied transaction still shows up in the pass's requested counter and hence on
-the HUD. The gate is `<= 0` on both carries, evaluated as two separate
-compares with energy first.
+the HUD. Both gates are written as `> 0` **denies**, as two separate compares
+with energy first — the same shape as the one-resource helper below. Written
+as `carry <= 0` they would deny an unordered (NaN) carry; retail's compare is
+ordered, so a NaN carry falls through and **admits**, on both resources. A NaN
+carry is reachable through the `−inf` debt ratio of [R-ECO-01 §5] item 3.
 
 *One-resource admission* (the repair family). Returns whether the work was
 admitted:
@@ -2047,7 +2069,9 @@ leaves zero. The requested accumulator is credited, the accepted accumulator
 is not, so an immediate payment appears in the pass's requested counter but
 never becomes carry.
 
-*Direct two-resource payment* (weapon fire and other immediate operations):
+*Direct two-resource payment* (the per-shot weapon cost — its only consumer in
+the image is the per-slot weapon fire routine, reached by direct call and by no
+other route, so no other cost may be routed through it):
 
 ```
 if (e <= playerEnergyStock && m <= playerMetalStock) {
@@ -2558,12 +2582,16 @@ Every sixty authoritative ticks, the automatic-sharing dispatcher considers
 metal and energy independently for the local player. The corresponding
 option-word bit must be set and the local player's current stock must strictly
 exceed its per-resource sharing threshold. The thresholds are separate fields
-from capacity; the per-player battle initializer stores zero in both, nothing
-in the reachable image writes them afterwards (the only stores that derive a
-threshold from capacity sit in a console command handler region that no
-reachable code references — the `SetShareMetal` / `SetShareEnergy` family,
-whose strings are also unreferenced), so in play the condition is simply
-"stock strictly greater than zero".
+from capacity. They have exactly two writers: the per-player battle
+initializer, which stores zero in both, and the ordinary `SetShareMetal` /
+`SetShareEnergy` chat commands — registered route-mask-1 records like any
+other, whose first act is to test the network-mode bit and return with nothing
+written when it is clear ([07 R-CAM-01 §6] owns the handlers, including the
+substitution of the storage capacity for an argument above it). They therefore
+never fire in a single-player skirmish or mission, so in single-player play
+the condition is simply "stock strictly greater than zero". That conclusion
+rests on the network gate, not on the handlers being unreachable: they are
+reachable and their name strings are ordinary table entries.
 
 The dispatcher scans player slots from zero through nine. Every eligible
 allied candidate with lower current stock replaces the previous candidate, so
@@ -2910,8 +2938,13 @@ lists *are* the `UseOnlyUnits` files; no mission script, trigger,
 progression record, AI routine or save item writes the bit, and the save
 file does not persist it.
 
-*Readers.* The two compactions, this allocator's step 2, and one
-per-definition re-parse helper that nothing calls. The build menus, the
+*Readers.* The two compactions, this allocator's step 2, and the
+per-definition re-parse the developer console's `Reload <unitname>` command
+performs ([07 R-CAM-01 §6]): it resolves the name to a definition index,
+releases the record, then tests this bit and re-reads that record's
+`units\<unitname>.FBI` through the TDF machinery only when the bit is set. So
+the bit does have a live reader outside the compactions, but only on a
+developer-console path. The build menus, the
 side `CANBUILD` lists, the download-menu compile, the computer player's
 class routine and the mission spawner do not read it — they see only the
 compacted table.
@@ -2922,7 +2955,8 @@ step 4) and compacts bit-clear records out, a kind-1 restriction manifests
 as absence from the catalog — no unit index, no menu button, no spawn by
 name — and step 2 never sees a clear bit for a non-zero index in any
 single-player battle; it is reachable only for a bit cleared after the
-compile, and no single-player writer does that. The table is rebuilt from
+compile, and no single-player writer does that — the one reader added above
+is a developer command and writes nothing. The table is rebuilt from
 the FBI files by the front end's pre-load state before every battle, so
 the removal lasts one battle. An implementation should therefore apply
 `UseOnlyUnits` as a catalog filter at battle entry — remove, re-sort,
@@ -3612,7 +3646,10 @@ census of the second state byte's bit 3 finds only the COB get and set port
 arms, the creation clear of that byte's low nibble, and the save writer. The
 assertion above is therefore entirely script-internal bookkeeping — the flag
 tells the engine nothing, and clearing it on the successful branch changes no
-engine state beyond the interface-refresh bit the set-port arm raises. A
+engine state beyond the script-touched order-event bit `0x4` that every arm of
+the COB engine-write dispatch raises and the order pump consumes
+([04 R-COB-06]) — that bit is an order wake, not an interface or HUD refresh,
+and a reimplementation must not drop it. A
 reimplementation must attach no movement, collision, scatter or crowd
 behavior to the flag. The observable "units in the way of a factory exit"
 behavior is owned by the state-2 exit retry, the yard-close admission gate,
@@ -4034,14 +4071,14 @@ arithmetic above. All are raised on the builder.
 
 | Caption | Slot | Producer and predicate |
 |---|---:|---|
-| `Starting construction` | 9 | `MobileBuild` and `BuildingBuild`, once the site test passed and the nanoframe was allocated |
-| `Building complete` | 8 | `MobileBuild`'s terminal phase |
-| `Construction stopped` | 7 | `BuildingBuild` when the order pump raises the terminate/interrupt executor-flag bit; it also decrements the factory queue count |
-| `Construction terminated` | 7 | `HelpBuild` when the order's target handle is null |
+| `Starting construction` | 9 | `MobileBuild`, `BuildingBuild` and `VTOL_MobileBuild`, once the site test passed and the nanoframe was allocated |
+| `Building complete` | 8 | the terminal phase of `MobileBuild`, of `HelpBuild` and of `VTOL_MobileBuild` |
+| `Construction stopped` | 7 | `BuildingBuild` when the order pump raises the terminate/interrupt executor-flag bit (satisfied bit 3): it emits the caption, decrements the record's remaining-count parameter p2 by one — unconditionally, and the same field the terminal phase decrements per finished unit — refreshes the interface panel, and **restarts** the record rather than completing it ([04 §3.8], [04 R-P0-09]) |
+| `Construction terminated` | 7 | three producers: `HelpBuild` when the order's target handle is null, and `MobileBuild` and `VTOL_MobileBuild` at their entry when the order pump raises the terminate/interrupt executor-flag bit — the same bit `BuildingBuild` answers with `Construction stopped` |
 | `Construction terminated by hostile action` | 7 | `VTOL_HelpBuild` for **either** a null target handle **or** the terminate/interrupt executor-flag bit — the air twin merges the two ground terminals under one caption |
 | `Unable to create any more units` | 7 | `MobileBuild`, `BuildingBuild` and `Resurrect` when the unit allocation fails; each then reschedules exactly 300 ticks without advancing. `VTOL_MobileBuild` raises the same caption and abandons with no wait ([R-ECO-02 §4]) |
-| `Waiting for target area to clear` | 7 | `MobileBuild`'s site test failing with a retry count of zero; the retry is 30 ticks |
-| `Target area was blocked` | 7 | the same site test once the retry count exceeds 10; terminal |
+| `Waiting for target area to clear` | 7 | the site test of `MobileBuild` and of `VTOL_MobileBuild` failing with a retry count of zero; the retry is 30 ticks |
+| `Target area was blocked` | 7 | the same two site tests once the retry count exceeds 10; terminal |
 | `I can't reach the construction site` | 7 | `MobileBuild`'s approach phase when the arrival-failure executor-flag bit is set and the range test of [R-WORK-01 §2] still fails |
 
 **Established — what the `Slot` column is, and where these captions go**
@@ -6100,11 +6137,14 @@ of cells `centre ± radius/2`, resolves each cell's feature through the fringe
 hop, and lists the cell as an **energy** candidate when the definition has
 `reclaimable=1` **and** `autoreclaimable=1` and `energy ≠ 0`, and as a
 **metal** candidate under the same two flags when `metal ≠ 0` (a feature with
-both pools appears in both lists). The two lists are consumed by the two
-handlers that own area reclaim — the builder's area-reclaim order body and
-the computer player's — whose identities are a Supported inference (they are
-table-dispatched with no direct caller); the predicate itself is
-established. `autoreclaimable=0` therefore only hides a feature from area
+both pools appears in both lists). The two lists are consumed by the
+`RepairPatrol` order handler and its air twin `VTOL_RepairPatrol`, each of
+which calls the scan **directly** from its own body. Those are its only two
+call sites: the scan is never reached through a descriptor table, a vtable or
+any other function pointer, so no indirect dispatch and no computer-player task
+reaches it, and there is no distinct "area-reclaim order" — the behavior
+belongs to repair patrol, which is where [R-WORK-01 §3] already places the
+feature pairing. `autoreclaimable=0` therefore only hides a feature from area
 reclaim; a direct reclaim order on it still works, and it is still cleared
 by a colliding stamp.
 
@@ -6998,11 +7038,6 @@ body and are not restated here.
   reserved band but at or above the compiled table count; no stock map was
   checked for one · "Placement", [R-FEAT-01 §17] · static trace of the
   stamp's ordinal test, or a census of the shipped TNT corpus.
-- Identities of the two table-dispatched handlers that consume the
-  area-reclaim candidate scan (the builder's area-reclaim order body and the
-  computer player's) — the scan's predicate is established, the consumers
-  are a Supported inference · [R-FEAT-01 §6] · static trace of the order
-  descriptor table (doc 04 §3.1) and the AI task table (doc 08).
 - The reader of the copy of the reclaim flag the death/reclaim transition
   stores in the instance's bit 4 — none found · [R-FEAT-01 §5] · static
   trace over the unrecovered regions.

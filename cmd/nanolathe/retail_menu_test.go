@@ -95,6 +95,51 @@ func TestMissionMenuShowsMissionListRegardlessOfEntryButton(t *testing.T) {
 	}
 }
 
+// TestCampaignSideAdmissionIsByteExact locks [08 "Enumeration of campaigns"]:
+// a campaign is admitted only when its authored HEADER campaignside matches
+// BYTE FOR BYTE either the local side's authored name (stock ARM / CORE) or
+// the literal ALL. Neither operand is case-normalized, so a lower-case or
+// mixed-case value is rejected. Nanolathe used to upper-case and trim the
+// authored value before comparing, which admitted `campaignside=arm`.
+//
+// The whitespace row is the parser's contract, not the compare's: retail's TDF
+// parser strips space, tab, CR and LF from both ends of every value [fmt tdf],
+// so ` ARM ` is authored-equivalent to `ARM` and IS admitted. The compare adds
+// no trimming of its own.
+func TestCampaignSideAdmissionIsByteExact(t *testing.T) {
+	cases := []struct {
+		authored string
+		side     int
+		admitted bool
+	}{
+		{authored: "ARM", side: 0, admitted: true},
+		{authored: "ALL", side: 0, admitted: true},
+		{authored: "ALL", side: 1, admitted: true},
+		{authored: "CORE", side: 1, admitted: true},
+		{authored: " ARM ", side: 0, admitted: true}, // parser trims, not the compare
+		{authored: "arm", side: 0, admitted: false},
+		{authored: "Arm", side: 0, admitted: false},
+		{authored: "all", side: 0, admitted: false},
+		{authored: "All", side: 0, admitted: false},
+		{authored: "core", side: 1, admitted: false},
+		{authored: "CORE", side: 0, admitted: false},
+		{authored: "ARM", side: 1, admitted: false},
+	}
+	for _, tc := range cases {
+		shell := &gameShell{
+			missionSide: tc.side,
+			campaigns: []mission.Campaign{{
+				Name:     "Fixture",
+				Document: mustParseCampaignHeader(t, tc.authored),
+			}},
+		}
+		got := len(shell.retailCampaignOptions()) == 1
+		if got != tc.admitted {
+			t.Fatalf("campaignside=%q side=%d: admitted=%v, want %v", tc.authored, tc.side, got, tc.admitted)
+		}
+	}
+}
+
 // mustParseCampaignHeader builds a minimal parsed TDF document carrying only
 // the HEADER campaignside key the side filter reads [08 "Enumeration of
 // campaigns"].

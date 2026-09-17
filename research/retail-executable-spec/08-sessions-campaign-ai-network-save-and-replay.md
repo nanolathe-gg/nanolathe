@@ -472,8 +472,12 @@ enumerating `camps\*.TDF` through the VFS (mount order and first-win as in
 "Campaign discovery" above). Two 256-byte-per-entry name arrays are
 allocated for the count; every enumerated file is opened as TDF and admitted
 to the visible list only when it has a `[HEADER]` block whose `campaignside`
-equals, case-insensitively, the local player's side name **or** the literal
-`ALL`. Files without `[HEADER]` are skipped silently. The returned count is
+matches **byte for byte** either the local player's side `name` as authored
+in `SIDEDATA` (stock `ARM` / `CORE`) **or** the literal `ALL`. The compare is
+case-sensitive: neither the stored side name nor the authored value is
+case-normalized, so `campaignside=arm` or `=all` is rejected — the accessor
+that read the value folds case only on the key it searches for [fmt tdf].
+Files without `[HEADER]` are skipped silently. The returned count is
 the number admitted; the list order is the enumeration order.
 
 **`campaignside` filters, it does not assign.** The direction matters to anything that wants a campaign battle's local side. The
@@ -556,9 +560,19 @@ mission's session-option words, the two companion option words are forced to
 empty) are copied verbatim into the record. `nomovie` (default 0) is stored
 in the session's outro-suppression word. `missiondescription` (default `No
 description available`) is stored once, as the translation-table entry for
-its upper-cased text when one exists, else as the raw text. Wind, gravity, tidal,
-lava, sea-level, water-damage, `killmul` and `timemul` (floats, default 0.0)
-follow, then the schema selection of [08 "Schema choice"]; its failure path
+its upper-cased text when one exists, else as the raw text. The environment
+keys follow, read in this order: `minwindspeed`, `maxwindspeed`, `gravity`,
+`tidalstrength`, `lavaworld`, `nosealeveltrigger`, `waterdoesdamage`,
+`waterdamage`, `killmul`, `timemul`. Only `tidalstrength`, `killmul` and
+`timemul` are **floating-point** reads (default 0.0); the other seven are
+**decimal-integer** reads (default 0) stored as integers, so an authored
+fractional value truncates at its first non-digit — `gravity=112.5` stores
+112, and the same for the wind bounds and the three flags. The trigger
+builder of [R-TRIG-01 §2] runs inside this sequence, between the `waterdamage`
+and the `killmul` read; the interleaving is not observable, because the
+builder reads none of the mission record's environment values — it takes
+only the parsed mission file and its own condition vocabulary. Then comes
+the schema selection of [08 "Schema choice"]; its failure path
 is a single message box `No suitable schema type in mission file!` (the
 `Map error` text the string census lists is pushed beside it and never read
 — the box helper takes one argument). The schema branch also reads
@@ -575,7 +589,7 @@ are read directly from the code.
 **Planet table.** The briefing screen builder holds four parallel 15-entry
 tables (plus a terminating null). Index order and contents:
 
-| # | `Planet` value (case-insensitive) | briefing GAF | panorama sequence | rotation sequence |
+| # | `Planet` value (exact spelling) | briefing GAF | panorama sequence | rotation sequence |
 |---|---|---|---|---|
 | 0 | `Green planet` | `Greenbrief` | `GreenPan` | `GreenRotate` |
 | 1 | `Archipelago` | `Archibrief` | `ArchiPan` | `ArchiRotate` |
@@ -594,7 +608,12 @@ tables (plus a terminating null). Index order and contents:
 | 14 | `Crystal` | `Crystalbrief` | `CrystPan` | `CrystalRotate` |
 
 The lookup walks the name column from 0 comparing the mission's `Planet`
-text (the 128-byte record copy) case-insensitively; the first match wins.
+text (the 128-byte record copy) **byte for byte, case-sensitively**; the
+first match wins. Only the exact spellings in the table match: the screen
+never folds case on either operand — the table entries are mixed-case
+literals, and the TDF accessor that filled the record copy folds only the
+*key* it searches for, storing the value as authored [fmt tdf]. A
+differently-cased spelling such as `planet=lunar` therefore matches nothing.
 When the walk reaches the null terminator without a match the index is
 **0**. The stock OTA census shows one `planet=Urban` and nine empty values,
 all of which therefore brief as Green planet. Spelling asymmetries
@@ -603,10 +622,12 @@ all of which therefore brief as Green planet. Spelling asymmetries
 reproduced. The stock install carries `anims\<x>brief.gaf` for every row
 (asset census).
 
-**Lunar rewrite.** Before the walk, if the `Planet` text equals `Lunar` and
-the local player's side index (0 Arm, 1 Core) is non-zero, the character `2`
+**Lunar rewrite.** Before the walk, if the `Planet` text equals `Lunar` —
+the same byte-for-byte, case-sensitive compare as the walk itself — and the
+local player's side index (0 Arm, 1 Core) is non-zero, the character `2`
 is appended in place, so a Core player on a `Lunar` mission briefs with row 8
-(`Lunar2`). Nothing else rewrites the planet text.
+(`Lunar2`). `planet=LUNAR` gets nothing appended. Nothing else rewrites the
+planet text.
 
 **What the tables drive.** The briefing GAF (`<x>brief`, resolved by the
 window's animation-directory prefix with extension `GAF`) is loaded as the
@@ -1982,10 +2003,18 @@ to once per record. Defeat conditions and the timers never play it.
 **Established — save and load (kind 1 only).** The mission's save writer
 and loader call slots 4 and 5 of every record; each condition uses an
 account named `VictoryCondition_<Name>` / `DefeatCondition_<Name>` with
-integer items `Satisfied` and `Celebrated`, and `KillUnitType`/
-`UnitTypeKilled` add `NumLeftToKill`. Nothing else persists: the resolved
-definition indices, scratch counts, timer deadlines (rebuilt from the OTA at
-load) and the de-projected `MoveUnitToRadius` centre are all re-derived.
+integer items `Satisfied` and `Celebrated`. Two conditions add a third
+item: `KillUnitType`/`UnitTypeKilled` write `NumLeftToKill`, and
+`KillAllMobileUnits` writes `NumUnits` — written **first**, before
+`Satisfied` and `Celebrated`, and restored with default 0. `NumUnits` holds
+that condition's scratch count of surviving mobile enemy units; because its
+notification zeroes the field and recounts the slice before reading it (§4),
+the restored value can never be observed — the round trip changes the
+account's item list and nothing else. No other condition persists anything
+beyond `Satisfied` and `Celebrated`: the resolved
+definition indices, the other scratch counts, timer deadlines (rebuilt from
+the OTA at load) and the de-projected `MoveUnitToRadius` centre are all
+re-derived.
 Because the account name is the condition name, two records of one
 condition would share an account; the builder's one-per-key rule makes
 that unreachable.
@@ -2049,14 +2078,29 @@ for skirmish starts" applies to slot assignment before this lookup, not to a
 lookup failure.)
 
 **Established — the start barrier text.** The multiplayer barrier screen
-draws one bar per active, non-eliminated slot and a caption formatted
-`%s.  %i %s` from the localized `Waiting for other players`, the count of
-slots that have reached the barrier, and the localized `player ready`
-(count exactly one) or `players ready` (any other count); once the barrier
-releases the caption is `Synchronization complete`. Which slot flag the
-count reads is a Supported inference (a per-slot ready byte beside the
-controller byte); the text is multiplayer-only presentation and never
-drives a tick.
+walks the ten session slots once and keeps **two** counts. The looser
+one admits a slot whose record exists, whose controller byte is human,
+computer or remote, and whose side byte is not the eliminated sentinel; it
+is the bar count — one bar per admitted slot, each bar's width the fixed
+strip width divided by that count. The stricter one — the *ready* count —
+adds two further tests to the same three: the slot's **load-progress
+percentage byte has reached 100**, and the loading state's per-slot
+participation entry for that slot is non-zero.
+
+The progress byte is the same byte that fills the slot's own progress bar
+(`percent × (barWidth − 2) / 100`). For the local human and computer slots
+it is published as the truncated average of the six load sub-stage
+percentages; for a remote slot the network message handler writes it. The
+participation table is rebuilt when the loading state is entered: 1 for an
+existing slot whose controller is human or computer, 0 otherwise, and the
+network handler sets a peer's entry to 1. So a slot is "ready" exactly when
+it is loaded to 100% *and* taking part.
+
+The caption is formatted `%s.  %i %s` from the localized `Waiting for other
+players`, the **ready** count, and the localized `player ready` (ready count
+exactly one) or `players ready` (any other count); once the barrier releases
+the caption is `Synchronization complete`. The text is multiplayer-only
+presentation and never drives a tick.
 
 ### The trigger contract in one paragraph [R-TRIG-01 §10]
 
@@ -8251,8 +8295,6 @@ body and are not restated here.
   `Commander`-flagged unit is reachable in stock content (stock agrees; the
   table is the authority) · [R-TRIG-01 §3] · asset census over non-stock
   content.
-- Which per-slot flag the start barrier's `player(s) ready` count reads ·
-  [R-TRIG-01 §9] · static trace of the barrier screen's slot walk.
 - What the 3DO texture frame lookup returns for the `-1` colour the
   controller-cycle quirk can store · [R-SKIR-01 §8] · static trace of the
   frame-array accessor's bound handling.

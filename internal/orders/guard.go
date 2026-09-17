@@ -292,13 +292,13 @@ func chaseManeuver(u *units.Unit, n *Node) Code {
 // The offset is subtracted from the target on X and Z and the target's own Y is
 // kept, so the goal stays in the target's horizontal plane.
 //
-// The scaled sine and cosine are numeric's shared table helpers. [06 §3.3]
-// states retail's index arithmetic as `((int16)angle + 32) >> 6` over even byte
-// offsets — a half-step rounding bias numeric.Sin and numeric.Cos do not apply,
-// since they index `angle >> 7` directly. Adding it belongs in numeric, where
-// it would move every trig consumer in the simulation at once; it is not made
-// inside this unit, and the difference here is at most one table entry of a
-// randomly drawn bearing.
+// The scaled sine and cosine are numeric's shared table helpers, which are
+// retail's: [06 §3.3] states the index arithmetic as `((int16)angle + 32) >> 6`
+// over the even byte offsets of a 512-entry table, i.e. one entry per 128 angle
+// units, and numeric.Sin and numeric.Cos apply that same pre-add before their
+// shift — `((angle + 32) >> 7) & 511` over entries, with the quarter turn added
+// first for the cosine [04 R-MOV-01 §4]. The component product is numeric's
+// `(entry * magnitude + 0x1000) >> 13`. Nothing is compensated for here.
 func chaseStrafePoint(u, tgt *units.Unit, d int32) (x, y, z numeric.Fixed, radius int32) {
 	bearing := numeric.AngleFromAtan2(int64(tgt.X.Raw()-u.X.Raw()), int64(tgt.Z.Raw()-u.Z.Raw()))
 	angle := numeric.Angle(uint16(bearing) - 0x4000 + uint16(drawBelow(u, 0x8000)))

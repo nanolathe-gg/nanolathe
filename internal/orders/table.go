@@ -234,13 +234,22 @@ var batch3 = []Descriptor{
 	{Name: "VTOL_LandIfCan", StateLabel: "Seeking to land", Class: 0x00, AckGroup: 19, StaticGate: 0x400, Presentation: HelperNone},
 }
 
-// batch4 is registration batch 4: the single empty-name record. It has no
-// static image in the read-only data; that it is appended at registration
-// rather than compiled in is Supported inference [R-DOC04-C]. Ordering is
-// unaffected either way — every batch append re-sorts the whole table, and
-// the empty name sorts to index 0, the reject sentinel [04 §3.1] C4.
+// batch4 is registration batch 4: the single empty-name record. It does have
+// a static image in the read-only data — a one-record batch carrying state
+// label `Ready`, acknowledgement group 15, static mask 0 and a canonical-name
+// pointer aimed at an empty string — which the registrar appends after the
+// three named batches [04 §3.1][R-DOC04-C]. Ordering is unaffected either
+// way: every batch append re-sorts the whole table, and the empty name sorts
+// to index 0, the reject sentinel [04 §3.1] C4.
+//
+// The acknowledgement group is transcribed. The state label deliberately is
+// not: no production path reads a descriptor's AckGroup (the queue overlay's
+// icon census in internal/hud skips the sentinel), so the group is inert,
+// whereas the HUD footer prints a descriptor's state label verbatim and
+// treats an empty one as "no state text". Copying `Ready` onto the sentinel
+// would be a presentation change rather than a transcription fix.
 var batch4 = []Descriptor{
-	{Name: "", StateLabel: "", Class: 0x00, AckGroup: 0, StaticGate: 0x0, Presentation: HelperNone},
+	{Name: "", StateLabel: "", Class: 0x00, AckGroup: 15, StaticGate: 0x0, Presentation: HelperNone},
 }
 
 var table []Descriptor

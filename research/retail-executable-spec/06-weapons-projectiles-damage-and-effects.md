@@ -651,7 +651,15 @@ reduces to
 admit = candidate definition authors `shootme` || shooter's owning player control byte == 2
 ```
 
-and, because every stock computer opponent carries control byte 2, it is a
+The second disjunct is an existence test as well as a value test: it admits
+only when the shooter's owning player **record exists** — the same
+first-field test the per-player walk of §3.1 uses — and that record's control
+byte reads `2`. The acquisition routine evaluates it once, from the shooter,
+before the candidate loop begins, and every candidate tests the retained
+one-or-zero result; a clone that re-reads the controller per candidate is
+equivalent only because nothing in the loop can change it.
+
+Because every stock computer opponent carries control byte 2, this is a
 restriction on **human**-owned units only: a human player's unit does not
 autonomously acquire a candidate whose definition omits `shootme` — 91 of the
 278 stock definitions — through this path. Those 91 are not a scattering:
@@ -992,10 +1000,27 @@ than", so a NaN discriminant also returns the sentinel. The lower gate is
 **strict** and the upper gate at π/4 is **inclusive**; the plus root is always
 tested first. `r1` or `r2` at or below zero substitutes π/2, which then fails
 the π/4 gate — this is how an unreachable target is rejected rather than by an
-arithmetic error. **Unknown:** whether `sqrt(r) / V` can exceed one on
+arithmetic error.
+
+**Established fact:** The two angle constants above are written `pi/2` and
+`pi/4` for readability, but the constants the image actually carries are
+slightly low: each is a few units in the last place below the correctly
+rounded double, `1.570796326794895` for the substitute a non-positive root
+takes and `0.7853981633974475` for the upper gate. Both spellings of the
+substitute — the one the plus root assembles inline and the one the minus root
+loads — carry the same low value. A port that computes either bound from its
+own `π` therefore sits about `8e-16` radians above retail's, which can matter
+only for an accepted angle landing inside that window on the **inclusive**
+upper edge; no other step of the solve is sensitive to it.
+
+**Unknown:** whether `sqrt(r) / V` can exceed one on
 malformed input and, if so, what the runtime's `acos` returns and how the
-unordered compares then behave; the surviving evidence shows the gates would
-treat an unordered result as acceptable and serialize `trunc(NaN)`. *Decider:*
+unordered compares then behave. The gates' behaviour on an unordered result is
+itself Established and asymmetric: an unordered `a1` passes both plus-root
+gates and is serialized as `trunc(NaN)`, while an unordered `a2` is rejected by
+the **minus root's lower gate** — its condition-code mask sends an unordered
+compare to the no-solution sentinel before the upper gate can see it. So only
+the plus root can serialize a NaN. *Decider:*
 static trace of the runtime `acos` domain path plus a reachability argument over
 the root expression.
 
@@ -1622,9 +1647,15 @@ MuzzlePiece(k, piece):            // the SPAWN POINT — every fire-time executo
 The two are separate routines with separate callers, and an implementation
 that collapses them spawns every shot at the aim origin.
 
-**Established fact:** The mode-Q dispatcher runs the script synchronously and
-copies back only cell 0; cells 1 through 3 are seeded zero by the dispatcher
-but are not copied to the caller. A script that sleeps or waits leaves the
+**Established fact:** The mode-Q dispatcher runs the script synchronously,
+seeds each of its four cells from the caller's pointer — a literal zero where
+the caller supplied none — and copies back **every** cell whose pointer the
+caller supplied; it gives cell 0 no privilege. The weapon query wrappers each
+supply one pointer for cell 0 and nulls for cells 1 through 3, which is why
+only cell 0 ever reaches them, and the constraint belongs to those wrappers
+rather than to the dispatcher: an implementation that builds one shared
+dispatcher and then wires a multi-cell caller to it must copy all the supplied
+cells back. A script that sleeps or waits leaves the
 partial cell-0 value in the host while the Q thread remains live; the engine
 does not invent a second piece or retry the query within that call. [04 §4.4]
 
@@ -1936,8 +1967,11 @@ raises the unit's fired event: `0x800` when `commandfire` is authored and
 `0x400` otherwise. This follows either ammunition decrement or the ordinary
 reload store, and precedes the non-stockpile resource debit. A failed launch
 raises neither event. Only non-stockpile shots write the reload timer, with
-integer truncation in this order (all divisions truncate toward zero; `reloadtime` is
-already `trunc(authored seconds × 30)` stored as a signed 16-bit tick count):
+integer truncation in this order (all divisions truncate toward zero;
+`reloadtime` is the weapon record's reload word — a plain 16-bit store of
+`trunc(authored seconds × 30)` — widened **without sign** to `0..65535` before
+it enters the multiply, as every reader of that word does; §11.1 carries the
+reader census):
 
 ```
 veteran tier   = min(unsigned kills / 5, 5)
@@ -2022,9 +2056,11 @@ attempt the engine, in order:
    otherwise `now + (storedPlanarDistance + 0x100000) / scalarSpeed` — an
    unsigned division of the root's stored muzzle-to-aim planar distance plus one
    cell (16 world units in 16.16) by the root's scalar speed;
-7. applies the random-decay and spray draws above;
+7. applies the random-decay draw above to the clone's expiry;
 8. clears the clone's own remaining burst count, so it is an ordinary moving
-   projectile on the next projectile phase.
+   projectile on the next projectile phase — this clear sits **between** the
+   two draws, not after both;
+9. applies the spray draw above to the parent/template velocity.
 
 **Established fact:** The first attempt becomes due when
 `(uint32)(creationTick + burstrate) <= currentTick`. An interval of zero can
@@ -2125,9 +2161,9 @@ spellings occur nowhere in the executable's string data at all — a whole-image
 search, not a bounded reader census `[R-WPN-01 §9]`. There is no key, so there
 is no field, so no reader can exist: nothing in the firing, readiness, spread,
 drift or projectile-motion paths can consume them, and the impulse question of
-§9.4 is closed from the parser side. `holdtime` is parsed and is read by
-exactly five sites, all of them the follow-camera hand-off described in §7.3;
-it has no effect on firing, motion, or damage.
+§9.4 is closed from the parser side. `holdtime` is parsed and is read by six
+live sites, all of them the follow-camera hand-off described in §7.3; it has no
+effect on firing, motion, or damage.
 
 #### The accuracy spread at implementable precision [R-WPN-03 §4]
 
@@ -2229,14 +2265,17 @@ the next record, but the dead bit by itself is not an iteration filter.
 The exact packed record layout is intentionally not part of this specification.
 
 **Established fact:** Two of those cached values are collision scratch, both
-written by the collision gate (§8.1) on every in-map tick and neither read by
-the simulation:
+written by the collision gate (§8.1) but on different conditions, and only one
+of them is free of simulation readers:
 
 * the **quantized cell pair** — the impact cell's X and Z as
   `(v + (v >> 31 & 0xF)) >> 4` of the current point's high words — is written
-  only when a feature contact is *selected*, and is read only by the same test
-  on a later tick to suppress a repeated contact with the same feature cell;
-* the **floor scratch** is overwritten unconditionally with the plot cell's
+  only on a **resolved feature contact** that also passes the height test and
+  whose new pair **differs** from the stored one, all three conditions
+  required; and it **is** read by the simulation, by that same test on a later
+  tick, whose match cancels the feature impact and so suppresses a repeated
+  contact with the same feature cell;
+* the **floor scratch** is overwritten on every in-map tick, with the plot cell's
   `(neighbourhoodMax + neighbourhoodMin) / 2`, an unsigned byte average, and
   its only reader anywhere in the corpus is the projectile draw pass, which
   subtracts half of it from the projectile's screen position `[R-WPN-02 §7]`.
@@ -3254,11 +3293,18 @@ the central impact's water arm (§13.2) `[R-WFX-01 §2]`.
 `smokedelay`, `randomdecay` and `weapontimer` are consumed as raw logical tick
 counts after catalog truncation; they are not multiplied by 30 again at
 projectile tick time. Of these, `holdtime` has **no projectile reader at all**:
-it is read at exactly five sites — the direct-expiry retirement, the two central
-impact retirement paths, the collision retirement path, and the shooter-death
-anchor sweep — each of which, when the retiring record is the followed
-projectile, freezes the camera's target at that record's last point and loads
-`holdtime` into the follow-camera hold counter. The camera update then
+it is loaded into the follow-camera hold counter at six live sites in the
+weapon and projectile code — the expiry retirement, which serves **two**
+retirement paths (the direct family's, which retires with no art, and the
+ballistic family's, which emits its puff first), the central impact's two
+retirement blocks, the off-map collision retirement, the burst anchor's
+count-reaches-zero completion (§4.3), and the shooter-death anchor sweep —
+each of which, when the retiring record is the followed projectile, freezes the
+camera's target at that record's last point and loads `holdtime` into the
+follow-camera hold counter. A seventh copy of the same block exists in the
+image and is unreachable: nothing calls it, and no copy of its entry point
+appears anywhere in the image, so no computed call can reach it either. The
+camera update then
 decrements that counter once per update while it is nonzero and centres on the
 frozen point, resuming normal following at zero. `holdtime` is therefore a
 **camera** parameter measured in ticks `[R-WPN-01 §8]`; doc 07 owns the camera
@@ -3375,8 +3421,10 @@ and an implementation must reproduce both the order and the early returns:
    terrain, or water — is reachable WITHOUT no-explode; the flag additionally
    keeps the record available on future ticks.
 2. **Cached floor value.** The record's cached floor scratch is overwritten
-   with `(cell.maxHeight + cell.minHeight) / 2` (unsigned division of two
-   bytes). It is **not** used by any later test in this ladder: the projectile
+   with `(cell.maxHeight + cell.minHeight) / 2`. Both bytes are zero-extended,
+   so the sum lies in `0..510`; the halving itself is a **signed** truncating
+   divide by two, which agrees with an unsigned shift on every reachable value.
+   It is **not** used by any later test in this ladder: the projectile
    draw pass is its only reader, which subtracts half of it from the screen
    position, so the scratch is presentation-only `[R-WPN-02 §7]`.
 3. **Unit slot zero.** Requires a nonzero cell occupant, an owning-player byte
@@ -3415,8 +3463,11 @@ feature damage.
   feature count; otherwise no feature.
 * `f == 0xFFFE` (fringe) resolves through the anchor cell reached by stepping
   back `cell.anchorDeltaZ` rows and `cell.anchorDeltaX` columns — the same
-  signed deltas `[03 §2.2]` defines — and takes that cell's
-  feature word under the same `< 0xFFFB` test.
+  anchor-offset bytes `[03 §2.2]` defines, **zero-extended**, not sign-extended
+  — and takes that cell's feature word under the same `< 0xFFFB` test. This is
+  the pointer-form reader of `[03 §2.2]`: the step is taken as a byte offset
+  from the fringe cell's own address, with **no bounds check** on the anchor,
+  so the `< 0xFFFB` test on the word found there is the only guard.
 * every other value resolves to no feature.
 
 A feature hit requires
@@ -3566,8 +3617,8 @@ a one-tick memory that can never suppress across a gap.
 **Established** (direct static read of the collision gate).
 
 Step 2 above states the value — `(cell.maxHeight + cell.minHeight) /
-2`, an unsigned division of the plot cell's neighbourhood-maximum and
-neighbourhood-minimum bytes — and that the projectile draw pass is its only
+2`, a truncating halving of the zero-extended plot-cell neighbourhood-maximum
+and neighbourhood-minimum bytes — and that the projectile draw pass is its only
 reader. Its write position matters to an implementation whose gate and
 publisher are separate: the gate first resolves the post-motion
 point's plot cell and, when there is none (off-map), freezes the follow
@@ -4561,7 +4612,7 @@ cap below is a full round.
 **Established fact:** Each stockpile work visit advances a per-node progress
 value by five, capped at the selected weapon's compiled reload-time value.
 **Established (direct static trace):** this production reader zero-extends the
-stored 16-bit reload word, unlike the firing reader's signed interpretation.
+stored 16-bit reload word, as every reader of that word does (census below).
 A stored all-ones reload word therefore means a production build time of
 65535. Both cumulative cost expressions use the stored single-precision cost
 at working precision, then retain the low 32 bits of signed-64 truncation
@@ -4694,6 +4745,26 @@ slot initializer (0 at unit creation), the production handler's phase 2
 aim scan and fire-time rescan (`≠ 0`, §11.2). Bounded census over the slot
 pipeline, the production handler, the slot initializer and the interceptor
 scan.
+
+**Established — every reader of the weapon record's reload word, and not one
+of them signed.** The word is the plain 16-bit store of §4.2, and every load
+of it in the image either zeroes its destination register first or compares
+the word unsigned; no sign-extending load of the field exists anywhere
+(bounded negative over the whole image). The readers are the firing path's
+reload recomputation (§4.2), the slot initializer's largest-of-three
+`SetMaxReloadTime` notification (`[R-WPN-05 §3]`), this section's production
+progress cap `min(progress + 5, reloadtime)` and its `next < reloadtime`
+completion test, the build-page percentage `progress · 100 / reloadtime`
+above, and one further **interface** reader: the information panel's per-frame
+state builder, which for each of the three slots compares the word **unsigned
+against 30** and emits that slot's own countdown word, zero-extended, only
+when the word is greater than 30 **and** the slot's enabled bit is set,
+emitting the sentinel −1 otherwise — so a weapon that reloads in a second or
+less carries no reload readout. The builder writes only that display block,
+which is redrawn only when it differs from the retained copy; it touches no
+simulation state. A stored all-ones word therefore means 65,535 ticks at every
+one of these readers, never −1, and the only signed 16-bit reload quantity in
+the engine is the **slot's computed countdown** of §4.2, a different field.
 
 **Established — the byte cannot overflow or wrap.** It is unsigned, the launch
 path cannot take it below zero, and the handler cannot take it past 200 — a
@@ -4906,9 +4977,12 @@ severity = clamp( ( (uint32)((int16)health * -100) / (uint32)maxHealth
 ```
 
 The multiply is a signed 16-to-32 multiply by -100; the divide by maximum
-health and the halving are **unsigned**; the clamp bounds are applied with
-signed compares. `previousSamplePercent` is the health percentage retained from
-the previous 30-tick sampling boundary, not necessarily the health immediately
+health is **unsigned**; the halving is a **signed** truncating divide by two,
+on an operand that is provably non-negative here (health is below zero on this
+path, so the product is positive and the added percentage byte is unsigned),
+so it agrees with an unsigned shift on every reachable input; the clamp bounds
+are applied with signed compares. `previousSamplePercent` is the health
+percentage retained from the previous 30-tick sampling boundary, not necessarily the health immediately
 before the lethal packet.
 
 **Established fact:** The severity/variant bypass map is exact, tested in this
@@ -6059,10 +6133,10 @@ body and are not restated here.
 - Acquisition bypasses and category behavior for non-unit target types · §3.3
   · static trace.
 - Whether the ballistic solver's `acos` argument can exceed one on malformed
-  authored or network input, what the runtime returns then, and whether the
-  resulting unordered angle comparisons really accept and serialize it · §3.3
+  authored or network input, and what the runtime returns then · §3.3
   · static trace of the runtime `acos` domain path plus a reachability argument
-  over the root expression.
+  over the root expression. (What the four acceptance gates do with an
+  unordered angle is no longer open: §3.3 states it.)
 - Malformed-state interactions around the closed family readiness gates ·
   §3.4 · static trace. Target replacement during an outstanding Aim is closed
   by [04 R-CB-01 §6]: the aim issue clears the slot's aim-state word and

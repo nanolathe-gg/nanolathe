@@ -7,6 +7,11 @@
 add an outer container. This page owns their bytes; the shell sequencing
 contract remains [08 R-OOS-01 §4], and [03 §9] owns the cinematic boundary.
 
+**Established (import inspection):** the retail executable carries no Smacker
+decoder of its own; it imports RAD's `smackw32.dll` playback library by
+ordinal. Decoder internals are therefore outside the analysed executable
+corpus, and nothing on this page can be settled by tracing the executable.
+
 The decoding description was independently written from the public
 [Smacker format description](https://wiki.multimedia.cx/index.php/Smacker),
 asset inspection, and authored-file experiments with the installed FFmpeg
@@ -37,7 +42,7 @@ little-endian. The fixed header occupies 104 bytes:
 | 72 | seven u32 | audio track descriptions |
 | 100 | u32 | reserved |
 
-**Established (retail library examination, [03 §9]):** a zero interval remains
+**Established (authored-file experiment, [03 §9]):** a zero interval remains
 zero. The public format description claims a 100 ms fallback, but an authored
 zero-interval file also produces an invalid-timebase diagnostic from the
 installed FFmpeg. Nanolathe rejects zero cadence explicitly as unsupported

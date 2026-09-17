@@ -216,10 +216,16 @@ insets `(128, 32)`; this build's origin is the world point drawn at the
 `maximum = mapSize − viewportSpan − leading`, with the floor test before the
 maximum test exactly as retail orders them `[07 §10]` `[07 R-CAM-01 §13]`
 `[03 §4.1]`. `BattleView` is the one definition of the visible span;
-`clampInsets` is the one definition of the insets. `Scroll` is the scroll pass:
-`magnitude = setting × rawDelta` capped at 128, a signed comparison with no
-absolute value, zero delta meaning no movement, where `rawDelta` is thirtieths
-of a second and not milliseconds `[07 §10]`. `Pan`, `Clamp`, `JumpTo`,
+`clampInsets` is the one definition of the insets. `Scroll` is the scroll
+pass's magnitude arithmetic only: `magnitude = setting × rawDelta` capped at
+128, a signed comparison with no absolute value, zero delta meaning no
+movement, where `rawDelta` is thirtieths of a second and not milliseconds
+`[07 §10]`. The pass's *shape* — one exclusive direction test per axis (Left
+before Right, Up before Down), a single origin commit after both axes, and the
+jointly gated beyond-edge forced strip — lives at the caller in
+`cmd/nanolathe`, and is C2's contract `[07 §10]` `[07 R-CRD-006 §1]`; the
+caller's extra focus, modal and minimap gating of the edge disjuncts is host
+behaviour retail's pass does not have (C2). `Pan`, `Clamp`, `JumpTo`,
 `BattleViewCenterOrigin` and `JumpToBattleViewCenter` are the jump family; a
 jump writes the origin, clamps, and copies the clamped result into the desired
 origin so no glide survives it `[07 R-CAM-01 §12]`. `WorldToScreen` applies the
@@ -1063,6 +1069,25 @@ signed comparison with no absolute value, so a negative delta keeps its sign.
 The delta is thirtieths of a second, so at the default setting byte 32 the
 sustained rate is 960 map pixels per second at any frame rate and the cap is a
 low-frame-rate limiter `[07 §10]` `[07 R-CAM-01 §10]`.
+
+Magnitude is only half the contract; the pass is also a **shape**. It makes
+one exclusive test per axis, Left before Right and Up before Down, so a
+satisfied Left (or Up) predicate skips its opposite entirely and two opposing
+directions move the camera once toward Left/Up rather than twice or not at
+all; and it commits the origin **once**, after both axes
+`[07 §10]` `[07 R-CRD-006 §1]`. This build applies each axis as its own
+clamped pan, which lands on the same origin because the clamp is per axis.
+The beyond-edge forced strip that extends edge scrolling past the window is
+gated **jointly**, not per axis: the pointer must be inside both the
+horizontal and the vertical bound, with the window focused, before either axis
+is forced onto its edge `[07 §10]`.
+
+Retail's pass has no minimap-region test and no modal test, and it consults
+window focus only inside that forced strip. This build additionally suppresses
+the **edge** disjuncts when the window is unfocused, when a modal is open, or
+when the pointer is over the minimap. That is host behaviour, not a retail
+contract; it is recorded here so the divergence is not mistaken for the traced
+pass, and it remains an open decision this document does not resolve.
 
 **C3 — clamp.** Per axis, compute the maximum from the map size and the battle
 viewport's own span, clamp the negative side first, then clamp above the

@@ -44,7 +44,7 @@ func (s *Service) StepAutonomousForPlayer(player uint8, w *units.World, vis *vis
 		return
 	}
 	limit := end - start + 1
-	for visit := 0; visit < autonomousScanBudget(w.MaxDefs()); visit++ {
+	for visit := 0; visit < autonomousScanBudget(w.UnitLimit()); visit++ {
 		record := s.scanCursor.nextRecord(player, limit)
 		u := w.Unit(pool.Handle(start + record))
 		if !autonomousScanAdmitsUnit(u) {

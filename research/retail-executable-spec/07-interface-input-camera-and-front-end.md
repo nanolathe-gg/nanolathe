@@ -1197,8 +1197,6 @@ ordering.
 
 ### Unknown
 
-- Who fills a listbox's `maxTop` word for each screen (the widget code only
-  reads it) · §4 [R-WGT-01 §4] · per-screen static trace.
 - The record-list (`0x20`/`0x80`) item structures beyond the height word the
   hit test and knob arithmetic read · §4 [R-WGT-01 §4, §5] · static trace of
   the save/load screens.
@@ -2260,30 +2258,49 @@ spawn position (if `life` odd the choice branches on `y` parity, otherwise on
 `x` parity; exactly one axis is zero). No pixel is drawn in the spawn frame;
 the spark becomes visible on its next active pass.
 
-3. If active after erase: decrement `life` — if already zero deactivate
-(the particle lives for `life` additional frames after spawn); advance
-`x += dx, y += dy` with signed 8-bit steps; if `x<0 or >=640 or y<0 or
->=480` deactivate; integrate `off += dx` and if `dy != 0` add `dy*640`; test
-the dest pixel at the new offset `& 0xF >= 0xD` else deactivate (sparks that
-wander onto dark art die); otherwise write palette index `0xAA` (170) at
-`off` as the sparkle.
+3. If active after erase, in this order: advance `x += dx, y += dy` with
+signed 8-bit steps; if `x<0 or >=640 or y<0 or >=480` deactivate; then
+decrement `life` — if already zero deactivate (the particle lives for `life`
+additional frames after spawn); then integrate `off += dx` and if `dy != 0`
+add `dy*640`; test the dest pixel at the new offset `& 0xF >= 0xD` else
+deactivate (sparks that wander onto dark art die); otherwise write palette
+index `0xAA` (170) at `off` as the sparkle. Moving before the life test is
+outcome-equivalent to testing first — a record that fails either test is
+deactivated and its `x`/`y` are overwritten at the next spawn — but a
+reimplementation that reproduces the stream should keep retail's order.
 
 4. Twinkle timer: if `timer != 0` then `--timer` and go to the next record.
-If zero, pick a new orthogonal direction `±3` by parity of the current
-coordinate (`x & 1` when previously moving horizontally, `y & 1` when
-vertically; the other axis zeroed) and reset `timer = (rand() & 0xF)+1`
-(1..16). The just-drawn `0xAA` remains for this frame.
+If zero, the spark turns onto the other axis, and the two arms use opposite
+sign conventions:
+
+   - Previously moving **horizontally** (the vertical step is zero): the new
+     vertical step is `+3` when the current `y` is **odd** and `−3` when `y`
+     is even; the horizontal step is zeroed.
+   - Previously moving **vertically** (the vertical step is non-zero): the
+     new horizontal step is `+3` when the current `x` is **even** and `−3`
+     when `x` is odd; the vertical step is zeroed.
+
+   In both arms the parity read is that of the coordinate on the axis the
+   spark is turning *onto*, not the one it was travelling along, and the
+   timer is then reset to `(rand() & 0xF)+1` (1..16). The just-drawn `0xAA`
+   remains for this frame. (The spawn-time direction choice in step 2 uses
+   the opposite sign convention on its `y`-parity arm — spawn gives `−3` for
+   odd `y` where the turn gives `+3` — so the two sites must not be folded
+   into one rule.)
 
 After all 100 records the tick marks the menu window dirty so the next
 present copies the modified offscreen to the display.
 
 The shimmer is therefore presentation-only. A reimplementation must isolate
 it to a CRT-style `rand()` stream (do not consume the simulation RNG), use
-pitch 640, threshold low-nibble `>= 0xD` against the *background* (not the
-previously drawn spark), orthogonal steps `±3` with exactly one zero axis,
-life/timer ranges as above, and must restore the background byte before each
-move. Spawning over dark `MAINMENU` art (low nibble `<= 0xC`) must remain
-suppressed — retail never sparkles over the grey menu bar.
+pitch 640, threshold low-nibble `>= 0xD` against the *destination* surface
+as it stands at that moment — both the spawn test and the move test sample
+the dest, not the pristine background backup, so a spark that another record
+has already drawn this pass counts as bright — orthogonal steps `±3` with
+exactly one zero axis, life/timer ranges as above, and must restore the
+background byte before each move. Spawning over dark `MAINMENU` art (low
+nibble `<= 0xC`) must remain suppressed — retail never sparkles over the grey
+menu bar.
 
 #### Single-player and campaign
 
@@ -3504,12 +3521,24 @@ evaluate.
 **Established fact — who persists.** The preference saver (every DWORD and
 string name of [02 R-KEYS-01 §5], plus `FixedLocations`, which the loader
 never reads and no screen writes — inert) runs at: the logo-movie pass
-(after clearing `PlayMovie`), options `PREV`/"OK", `NEWGAME` `Start`,
-`SKIRMISH` `Start`, the lobby `START` (out of scope), and shutdown. No
-screen writes a value directly; every screen edits the global and relies on
-one of those saves. Consequently `CANCEL` on the options root discards
-unsaved edits made on any page, while edits made on the in-battle pages and
-left by `PREV` persist at the next save point.
+(right after `PlayMovie` is cleared), options `PREV`/"OK", `NEWGAME` `Start`,
+`SKIRMISH` `Start`, the `SKIRMISH` player-count cheat ([R-FE-02 §10]), the
+lobby `START` (out of scope), the in-battle hotkey and chat-command toggles,
+the `+`-command handlers that change a stored preference, and the loading
+transition's one-time entry block whenever the mission type is not 2 (that
+block raises its own once-only bit as it finishes, so the save is not
+repeated on a later entry). The saver has twenty-seven direct call sites and
+no indirect reference anywhere in the image: sixteen of them are the
+`+`-command handlers, and three more sit in a routine that has no caller at
+all. **No shutdown save exists** — the only
+registry write on the process exit path restores the system AudioCD shell
+handler that startup swapped out, and the front end's `EXIT` substate posts
+the quit message without saving. A reimplementation must therefore not
+persist preferences at exit, and must persist them when a non-skirmish battle
+is entered. No screen writes a value directly; every screen edits the global
+and relies on one of those saves. Consequently `CANCEL` on the options root
+discards unsaved edits made on any page, while edits made on the in-battle
+pages and left by `PREV` persist at the next save point.
 
 **Established fact — screen → value → reader**, for the rows [02 R-KEYS-01
 §5] lists as Unknown:
@@ -3758,9 +3787,11 @@ below `m + 1` becomes `m + 1`. It resets `top`, selection and the associated
 knob to zero. It initializes `maxTop` to `count − 1`, then walks backward from
 that row while subtracting the row height from the gadget height; it replaces
 the candidate only while the remainder is non-negative. Thus a row ending
-exactly at the bottom is retained. An active list with overflow activates its
-same-association kind-4 control and its synthesized arrows; a fresh fill with
-no overflow leaves those controls inactive. A row flag value exactly `1`, as
+exactly at the bottom is retained. The record-list filler writes the same
+word the same way, so `maxTop` is always set by widget code — no screen
+fills it. An active list with overflow activates its same-association kind-4
+control and its synthesized arrows; a fresh fill with no overflow leaves
+those controls inactive. A row flag value exactly `1`, as
 well as the text prefix `&G`, marks a heading; the flagged form leaves its
 text bytes intact. The variable record-list payload remains unknown
 ([R-WGT-01 §4], §5).
@@ -3892,6 +3923,20 @@ state the first match set. This is the only way to set `AllMissions`; no
 options page exposes it. (`AnyMsn` opens the play-any layout of `NEWGAME`,
 [R-FE-01 §4].)
 
+**Established fact — the `SKIRMISH` player-count cheat.** `SKIRMISH.GUI`
+installs a per-frame hook of exactly the same shape, against the same key
+history, and it is a second front-end preference save point. Its ladder is
+eight literals — `*III`, `*IV`, `*V`, `*VI`, `*VII`, `*VIII`, `*IX`, `*X`,
+each compared over its own length — and a match sets `NumSkirmishPlayers` to
+3 through 10. The hook then writes the whole preference block (one of the
+save points of [R-FE-01 §11]), stores that one value to the registry
+separately, and re-runs the settings loader, so the new count is persisted
+and immediately reloaded into the live globals. The screen's own response —
+which matches clear the typed-key buffer, the row rebuild, the cue — is
+[08 "The hidden player-count selector"]. This matters here because the
+skirmish player table's row count is read from `NumSkirmishPlayers` (§5,
+[R-FE-02 §8]) and no options page exposes the value.
+
 ### The developer contour overlay [R-FE-02 §11]
 
 **Established.** `+Contour spacing offset` is a mask-1 settings command and
@@ -3948,9 +3993,6 @@ validation, and endgame continuation.
 
 ### Unknown
 
-- Whether the label under a briefing blink word also draws the run (so the
-  blink overdraws it) or elides it · §5 [R-FE-02 §7] · static trace of the
-  pager's copy loop.
 - Process-level outcome of malformed HATTFONT and malformed GAF payloads
   whose decoders return null · §5 "Frontend asset failure boundaries" ·
   static trace.
@@ -4498,25 +4540,39 @@ and when the file is **absent** opens the window `"%sDL"` with the side's
 `IGPATCH` product slots the generated-page assembly of §9 then patches with
 every build-menu entry whose builder matches and whose authored `PAGE` byte
 minus one equals the page number. The definition's page-count byte is the
-maximum authored page plus one, so valid pages are `0 .. count−1`.
+maximum authored page plus one, or the largest `MENU` byte of a download item
+naming that definition when that is larger (next paragraph), so valid pages
+are `0 .. count−1`.
 
-**Where the page-count byte comes from (Established).** It is the
-probe of `guis/<internal name>N.GUI` the catalog compiler runs per record,
-[02 R-CAT-01 §5] step 5 — not the length of the builder's `CANBUILD` list
-divided by the six product gadgets a full stock page carries. The two agree
-for 39 of the reference install's 45 builders and disagree for six:
+**Where the page-count byte comes from (Established).** It has two writers:
+the probe of `guis/<internal name>N.GUI` the catalog compiler runs per record
+([02 R-CAT-01 §5] step 5), which sets the initial value, and the download-menu
+pass ([02 R-CAT-01 §8] step 2), which can only raise it. It is never the
+length of the builder's `CANBUILD` list divided by the six product gadgets a
+full stock page carries. Probe and division agree for 39 of the reference
+install's 45 builders and disagree for six:
 `ARMCA`/`ARMCK`/`ARMCV` author nineteen `CANBUILD` products and
 `CORCA`/`CORCK`/`CORCV` twenty, while all six author only three page windows,
-so the division claims a fourth page that no window backs. Retail cannot
-select it — its count byte is 4, not 5 — and those builders' last one or two
-authored products are simply unreachable, which is the data's own state, not a
-defect to repair. This is what §9's "generated `<unit>N.GUI` pages are
+so the division claims a fourth page that no window backs. The probe writes
+count `4` for all six. That is not where their count byte ends up: the
+download-menu pass ([02 R-CAT-01 §8] step 2) then **raises** it to `5`,
+because each of the six receives a build-menu item whose authored `MENU` byte
+is 5. The comparison there is an unsigned one against the stored count and
+the store happens only when the stored count is the smaller, so the byte can
+only rise, never fall. Page 4 is therefore selectable, and because no
+`guis/<name>4.GUI` exists it opens as the side's generated `%sDL` download
+page, carrying the download items rather than the builder's nineteenth or
+twentieth `CANBUILD` product. Those last one or two
+authored products remain unreachable, which is the data's own state, not a
+defect to repair, and the count still does not come from dividing the
+`CANBUILD` list by six. This is what §9's "generated `<unit>N.GUI` pages are
 authoritative for page existence and placement" means in arithmetic. A count
 of 0 (no numbered window and no `<n>0.GUI`) is a valid state and not malformed
 state: the switch opens the side's `%sGEN.GUI` and the stage/grey table below
-greys `BUILD` and `ORDERS` on its own "page count 0" arm. Eight stock builders
-are in it — `ARMASP`/`CORASP`, `ARMCARRY`/`CORCARRY`, `ARMDECOM`/`CORDECOM`,
-`ARMFARK` and `CORNECRO`.
+greys `BUILD` and `ORDERS` on its own "page count 0" arm. Six stock builders
+are in it — `ARMASP`/`CORASP`, `ARMCARRY`/`CORCARRY`, `ARMDECOM`/`CORDECOM`;
+the reference install adds `ARMFARK` and `CORNECRO` from add-on archives, for
+eight in that mount.
 
 **The state a builder is first selected in (Established — manual retail
 observation).** Selecting a builder that has not yet had a page
@@ -5959,9 +6015,9 @@ interior or vertex — is outside. There is no tolerance, widening, saturation,
 alternate edge path, or overflow guard, and the index wrap is signed integer
 division and remainder.
 
-**5. `HOT UNITS` producer and consumer — Established (direct-static), with
-the caller context a Supported inference.** The list is rebuilt from scratch
-by one producer: it takes the stored list base, zeroes its running count,
+**5. `HOT UNITS` producer and consumer — Established (direct-static), caller
+context included.** The list is rebuilt from scratch by one producer: it
+takes the stored list base, zeroes its running count,
 walks unit memory from its lower to its upper bound inclusive at the fixed
 unit stride, and appends the stable unit identity of each accepted candidate
 in that ascending order, writing the final count when the walk ends. There is
@@ -6007,12 +6063,18 @@ earlier producer member. The minimap branch reads a separate radar-contact
 list and is not part of this record.
 
 That this producer runs in the frame/presentation update rather than in the
-sensor phase is **Supported inference**: the producer reads only unit memory,
-camera, viewport, and coverage state, and holds no sensor list, but the
-bounded caller census that places it in the frame update was not re-derived
-here. What would settle it is a caller census of the producer taken from the
-frame-update and front-end refresh roots. Either way no sensor product is
-read.
+sensor phase is **Established**. It is reached from exactly four call sites in
+three routines, all on the host-frame/front-end path: once per host frame in
+the battle pump, immediately after the hotkey dispatch and the scroll pass and
+before the composer — on the arm that skips both of those while the in-battle
+options window is open, too, so it runs every host frame either way; once in
+the "cycle to the next own unit" hotkey handler, after that handler points the
+camera at the chosen unit; and twice in the screenshot capture routine, once
+per captured view tile and once more after the camera is restored. Its address
+appears in no function-pointer, descriptor or jump table, so there is no
+indirect caller, and no simulation or sensor-phase caller exists. The producer
+body reads only unit memory, camera, viewport and coverage state and holds no
+sensor list; no sensor product is read.
 
 **6. Remaining boundary — Unknown.** The committed `frame.UnitView` cannot
 represent this result: its `Units` slice is the published unit set, not the
@@ -6202,10 +6264,6 @@ uses.
 - Feature-versus-unit pointer priority; features are absent from the unit
   hover list, and reclaim families resolve features separately at the pointer
   · §8 · static trace.
-- Whether the `HOT UNITS` producer runs in the frame/presentation update
-  rather than the sensor phase (Supported inference) · §8 [R-REV-01 §5] · a
-  caller census of the producer from the frame-update and front-end refresh
-  roots.
 - Whether the two low status bits the producer tests before its terrain
   clamp are the movement-mode bits of doc 04 (Supported inference) · §8
   [R-REV-01 §5] · a writer census of that status word.
@@ -7203,16 +7261,46 @@ Left: `(Left held AND TALK.GUI absent) OR (x == 0 AND y < H)`,
 Right: `(Right held AND TALK.GUI absent) OR x == W-1`,
 Up: `(Up held AND TALK.GUI absent) OR (y == 0 AND x < W)`,
 Down: `(Down held AND TALK.GUI absent) OR y == H-1`.
-Opposite held directions are evaluated sequentially. When the screen-cursor
-branch is selected, a pointer outside the right/bottom edge but less than 100
-pixels beyond it, with focus held, is forced to `W-1`/`H-1`, extending edge
-scroll into that strip. `TALK.GUI` suppresses only held-arrow movement, not
+The two predicates of an axis are **exclusive**, not sequential. The Left
+predicate is evaluated first; when it holds, the magnitude is subtracted and
+the pass moves straight to the vertical axis without evaluating the Right
+predicate at all. Only when Left fails is Right evaluated, adding the
+magnitude. The vertical axis has the same shape, Up before Down. The origin
+is written once, after both axes, and only if it changed. So when both
+directions of a pair are satisfied — two opposing arrows held, or the pointer
+resting on the left edge while Right is held, or Left held while the pointer
+sits on the right edge — the camera moves **once**, in the Left/Up direction:
+not twice, and not zero times as a summed vector would give. The priority is
+per predicate, not "keyboard over edge": whichever of the two disjuncts
+satisfies the Left (or Up) predicate wins the axis.
+
+When the screen-cursor branch is selected, the pointer coordinates are taken
+from the cursor and forced to `W-1`/`H-1` only under one **joint** gate: the
+pointer must be outside on at least one axis (`x >= W` or `y >= H`), and
+`x < W+100`, **and** `y < H+100`, **and** the window must hold focus. Failing
+any one of those leaves **both** axes as the pointer-state helper reported
+them — a pointer 10 pixels right of the window but 300 pixels below it forces
+neither axis, because the vertical bound is part of the same gate. When the
+gate passes, both coordinates are taken from the cursor, each clamped down to
+`W-1`/`H-1` when it reaches that extent. This is what extends edge scroll
+into that strip. `TALK.GUI` suppresses only held-arrow movement, not
 pointer-edge movement.
 
-Edge scrolling checks window focus and a small edge/minimap interaction region.
-When a modal GUI such as chat or a message box is active, edge scrolling is
-suppressed. Camera movement marks the world/fog/view state dirty so dependent
-surfaces are rebuilt.
+The scroll pass contains **no** minimap-region test and **no** modal-window
+test. Its only suppressions are the ones above and inside it: the host frame
+skips the hotkey dispatch and the whole scroll pass while the in-battle
+options window is open (the battle-interface ESC bit, §1 and §11) — and, as
+§1 also states, runs the GUI pump instead of the whole battle frame body
+while a modal front-end window holds focus — and `TALK.GUI`'s presence
+disables the held-arrow disjunct of each predicate while leaving the
+pointer-edge disjunct live. Window focus is consulted only
+inside the beyond-edge forced clamp described above, never as a general gate
+on edge scrolling. The pass is also the only writer of the camera origin that
+reads the pointer at all: of the routines that write the origin words, no
+other one reads the pointer position, the asynchronous key state or the
+application object, so there is no second edge-scroll writer that could add a
+minimap or modal test. Camera movement marks the world/fog/view state dirty
+so dependent surfaces are rebuilt.
 
 The camera transform is consumed by:
 
@@ -7238,9 +7326,13 @@ origin directly. Its state is a current map-pixel origin (`cameraX` and
 host-frame raw-delta value used to calculate one movement magnitude. For each
 matching direction, the magnitude is `scrollSetting * rawDelta`, made
 non-negative and capped at `128`; a zero magnitude performs no movement. The
-direction tests run in the order Left, Right, Up, Down, so opposing held
-directions can write the same origin sequentially. The input writer marks the
-camera/view state dirty and wakes the normal clamp/refresh path. This is a
+direction tests are **one exclusive test per axis**: Left is tried before
+Right and, if its predicate holds, Right is never evaluated; likewise Up
+before Down. Both axes accumulate into working registers and the origin is
+stored once at the end, so opposing held directions do not write the same
+origin twice and do not cancel — the Left/Up side wins the axis. The input
+writer marks the camera/view state dirty and wakes the normal clamp/refresh
+path. This is a
 host-frame presentation/input cadence; it is not a phase-10 keyboard-target
 step. [07 §10]
 
@@ -7377,15 +7469,18 @@ single invocation of the input writer; “phase pass” is one phase-10 callback
 |---|---|---|
 | 0 phase passes | A host pass may still apply one direct delta if the outer frame ran; no phase-10 movement or CRT draws occur. | No target step and no shake consumption. |
 | 1 phase pass | The same one host pass is not multiplied by the phase count. | One follow step, then one shake consumption/draw pair when active. |
-| 5 phase passes | One host pass still applies one direct delta, with Left→Right→Up→Down ordering. | Five independent follow steps and five shake consumption/draw pairs when the counter remains active. |
+| 5 phase passes | One host pass still applies one direct delta, with Left-before-Right and Up-before-Down exclusivity per axis. | Five independent follow steps and five shake consumption/draw pairs when the counter remains active. |
 | Held direction | `scrollSetting * rawDelta`, capped at 128, is recalculated only when the host writer is invoked. | No retail held-arrow read occurs. A deterministic Nanolathe seam may hold the sampled intent for the next pump and apply it once per phase pass; this is explicitly non-retail behavior. |
 
 For the follow step, test `d = 0, ±1, ±2, ±319, ±320, ±321` and verify
 respectively `0, 0, ±1, ±159, ±160, ±320` movement, with the sign preserved.
 For input, test raw delta zero, a product below the cap, exactly the cap, and
-above the cap; test both opposing pairs and verify the sequential order rather
-than collapsing them into a single vector. For shake, test an active counter
-of one (two draws, then zero) and the following invocation (no draws). These
+above the cap; test both opposing pairs and assert the per-axis priority
+rather than collapsing them into a single vector: Left and Right held
+together must move left by exactly one magnitude, Up and Down together must
+move up by one, and the pointer on the left edge with Right held must still
+move left. For shake, test an active counter of one (two draws, then zero)
+and the following invocation (no draws). These
 tests assert arithmetic and ordering without depending on executable layout.
 
 **Established fact — save ownership.** The `Camera` save account owns only
@@ -7497,8 +7592,9 @@ product is a signed 32-bit multiply of the zero-extended byte and the raw
 delta; a negative delta (a wrapped tick count) yields a negative magnitude
 that the `> 128` test does not cap (it is a signed comparison) and the
 `!= 0` test does not skip, so it
-scrolls the opposite way for one frame. The direction tests and the
-sequential opposing-direction behaviour are as [R-CRD-006 §1] states.
+scrolls the opposite way for one frame. The direction tests and their
+per-axis exclusivity — Left before Right, Up before Down, one commit — are as
+[R-CRD-006 §1] states.
 
 **Established fact — the raw delta is thirtieths of a second, not
 milliseconds.** The scroll pass and the tick-budget step read the same stored
@@ -7567,9 +7663,12 @@ zeroing the delta on pause would be a divergence, not a fix.
 **Established fact — what a scroll cancels.** When the pass changes either
 origin coordinate it: writes the origin, sets the view-dirty bit, runs the
 per-axis clamp, copies the origin into the phase-10 **desired** origin (so
-the follow step has nothing to close), clears the render-flags minimap cache
-bit (*Supported inference* on that bit's role: it is the bit every camera
-writer clears and the minimap composer re-tests), and
+the follow step has nothing to close), clears the render-flags word's
+**terrain/mapping view-cache bit** (bit 3 — its only reader in the whole
+image is the per-view mask builder the battle composer calls, which rebuilds
+the view-space mapping/LOS mask from the camera origin whenever the bit is
+clear and then sets it again; no minimap code reads it, which is why every
+camera writer clears it — §14 states the same role), and
 **zeroes the hold count, the tracked object and the followed projectile**.
 Any keyboard or edge scroll therefore ends `t`/Ctrl+C tracking and a
 `holdtime` hold ([06 §7.3]; the hold's own statement is in §10 above). The
@@ -7615,7 +7714,7 @@ cameraZ = (ptrY − padY) · PlayBottom / RadarH − trunc(viewHeight / 2)
 
 (signed truncating divisions, the half-viewport terms signed), then sets the
 view-dirty bit, clamps per axis, copies current to desired, clears the
-minimap cache bit, and clears the hold count, tracked object and
+terrain/mapping view-cache bit, and clears the hold count, tracked object and
 followed projectile. The clicked map point becomes the **centre** of the
 view. The latch is released by the matching button-up message, and the
 pointer record's coordinates — not `GetCursorPos` — are used, so dragging
@@ -7636,7 +7735,7 @@ mode dword is set the frame handler runs, instead of any click path:
 dx = ptrX − centreX ; dz = ptrY − centreY               (pointer record)
 cameraX = (trunc(dx / 4) + anchorX) · 16
 cameraZ = (trunc(dz / 4) + anchorZ) · 16
-dirty; clamp; desired = current; clear the minimap cache bit; (hold/tracked/followed untouched here)
+dirty; clamp; desired = current; clear the view-cache bit; (hold/tracked/followed untouched here)
 anchorX = trunc(cameraX / 16) ; anchorZ = trunc(cameraZ / 16)
 warp the cursor back to the centre
 if the record's right-button key-state bit (0x02) is clear:
@@ -7668,7 +7767,7 @@ reference, four bookmark origins with valid bytes, and the camera-flags
 byte whose bit 1 is the view-dirty bit. Phase 10 ([01 §4.4]; the hold
 arithmetic in §10 above, its writers in [06 §7.3]) is the only stepper.
 "Glide" below means writing only the **desired** origin (clamped per axis,
-minimap cache bit cleared) so that phase 10 closes the gap at the 320-per-tick /
+view-cache bit cleared) so that phase 10 closes the gap at the 320-per-tick /
 half-remaining rate of §10; "jump" means writing the current origin and
 copying it to the desired origin. Every writer:
 
@@ -8273,8 +8372,6 @@ and the decider that would close it.
   screen · §3 · per-screen static trace.
 - The record-list item structures beyond their known height path · §4
   [R-WGT-01 §4, §5] · static trace.
-- Whether the label under a briefing blink word also draws the run, or
-  elides it · §5 [R-FE-02 §7] · static trace of the pager's copy loop.
 - The per-window census of authored gadget association ids · §4, §9, doc 02 §6
   · asset census.
 - Process-level outcome of malformed HATTFONT or malformed GAF payloads whose
@@ -8312,10 +8409,9 @@ and the decider that would close it.
 - Whether a stock aircraft always outscores the stock buildings it can fly
   over (Supported inference) · §8 [R-REV-01 §9] · a census of
   `FootprintX`/`FootprintZ` and model heights over the stock definitions.
-- Whether the `HOT UNITS` producer runs in the frame/presentation update, and
-  whether the two low status bits it tests are the movement-mode bits
-  (Supported inferences) · §8 [R-REV-01 §5] · a caller census of the
-  producer; a writer census of that status word.
+- Whether the two low status bits the `HOT UNITS` producer tests before its
+  terrain clamp are the movement-mode bits (Supported inference) · §8
+  [R-REV-01 §5] · a writer census of that status word.
 - The selection rectangle's clip-left value for every visible/hidden-panel
   state · §8 [R-SEL-02A] · a focused mode/panel capture recording the surface
   descriptor at the selection draw.

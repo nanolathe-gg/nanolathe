@@ -31,8 +31,16 @@ type RetailTriggerAccount struct {
 
 // RetailTriggerImage returns trigger save accounts in the retail traversal:
 // victory records first, then defeat records; within each queue the supplied
-// live record order is preserved. Each record emits Satisfied, Celebrated,
-// and, for the two counted death families, NumLeftToKill [08 R-TRIG-01 §8].
+// live record order is preserved. Each record emits Satisfied and Celebrated;
+// the two counted death families append NumLeftToKill, and KillAllMobileUnits
+// writes NumUnits *before* Satisfied and Celebrated [08 R-TRIG-01 §8].
+//
+// NumUnits is retail's scratch count of surviving mobile enemy units. This
+// port keeps no such scratch: the KillAllMobileUnits notification recounts the
+// player's records inline on every death, exactly as retail's does before it
+// reads the field, so there is nothing to carry and the item is written as 0.
+// The item exists here for the account's item list, not for its value — the
+// restored value can never be observed on either side [08 R-TRIG-01 §8].
 func RetailTriggerImage(victory, defeat []*Trigger) ([]RetailTriggerAccount, error) {
 	accounts := make([]RetailTriggerAccount, 0, len(victory)+len(defeat))
 	appendQueue := func(list []*Trigger, prefix string) error {
@@ -50,6 +58,9 @@ func RetailTriggerImage(victory, defeat []*Trigger) ([]RetailTriggerAccount, err
 			}
 			if trigger.Celebrated {
 				celebrated = 1
+			}
+			if trigger.Kind == KindKillAllMobileUnits {
+				account.Ints = append(account.Ints, RetailTriggerInt{Name: "NumUnits", Value: 0})
 			}
 			account.Ints = append(account.Ints,
 				RetailTriggerInt{Name: "Satisfied", Value: satisfied},

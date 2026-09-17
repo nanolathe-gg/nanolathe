@@ -110,37 +110,85 @@ The evidence is the C-runtime initializer table, the game constructors it
 names, and the engine-block allocator called by the process entry.
 
 **Static initialisers (Established).** Before the process entry runs, the C
-runtime walks a seventeen-entry table of game constructors in table order.
-Every constructor ends by registering its matching destructor with `atexit`,
-so these globals are torn down by the runtime at process exit, in reverse
-registration order, after the pump has returned and after the game-state and
-display teardown of [R-PLAT-02 §2]. The thirteen constructors owned by this
-document (the other four are a network buffer object, a runtime red-black tree
-helper, and a surface-setup record — lanes 08, 07 and 03) do the following,
-in table order:
+runtime walks a **nineteen-slot** table of game constructors in table order.
+The first slot is null and is skipped; the other **eighteen** are called, each
+exactly once, in ascending table order. (A second, separate range of four
+runtime initialisers belongs to the C runtime itself and holds no game
+constructors.)
+
+**Most** of the eighteen end by registering a matching destructor with
+`atexit`, so those globals are torn down by the runtime at process exit, in
+reverse registration order, after the pump has returned and after the
+game-state and display teardown of [R-PLAT-02 §2]. **Fifteen register;
+three do not** — the developer-console spawn-pointer initialiser and the two
+process lock-event initialisers (positions 14, 16 and 17 below), none of which
+owns a resource a teardown would release. One of the fifteen registers nothing
+in its own body and instead reaches `atexit` through seven one-line helpers
+(position 18).
+
+All eighteen, in table order — what each initialises and whether it registers
+an exit handler:
 
 1. construct the fixed effect pool's static object (its tick is doc 04
-   `R-COB-04 §4/§5`);
+   `R-COB-04 §4/§5`) — registers;
 2. construct an empty vector for the map/resource identity list of the lobby
-   screen (doc 07);
+   screen (doc 07) — registers;
 3. construct the **order descriptor table** as an empty vector — the four
-   template batches of [04 §3.1] append to it at initialisation;
+   template batches of [04 §3.1] append to it at initialisation — registers;
 4. fill the 32-record movement-class scratch table with the template priors:
    maximum water depth 10000, minimum water depth −10000, all four slope
-   bytes 255, every other field zero ([02 R-CONTENT-01] owns the record);
+   bytes 255, every other field zero ([02 R-CONTENT-01] owns the record) —
+   registers;
 5. and 6. allocate two identical network receive objects, each a 28,000-byte
-   buffer plus three 2,800-byte buffers (out of scope, [08 R-OOS-01]);
-7. set bit 0 of a C-runtime option word (its only reader is the runtime);
-8. allocate a pool of 1,000 records of 76 bytes for the effects family (doc
-   03);
-9. construct an empty vector for the vismask shape list of the LOS raster
-   ([03 R-VIS-01 §2]);
-10. construct an empty vector of the movement class and model catalog
-    ([02 R-P0-03]);
-11. construct a zeroed three-word movement-class record (doc 02);
-12. zero the developer console's two spawn pointer words ([R-PLAT-01 §9]);
-13. construct an empty vector consumed by the `+` command handlers
-    ([07 R-CAM-01 §6]).
+   buffer plus three 2,800-byte buffers (out of scope, [08 R-OOS-01]) — both
+   register;
+7. construct the networked packet-pool object: set the default send pacing to
+   **200 milliseconds**, then initialise eleven per-peer packet-buffer records
+   (4,164 bytes each), giving each a minimum packet-retain time of 4,000
+   milliseconds — clamped to the range 4,000..60,000 — and that same 200 ms
+   pacing, both stored as 30 Hz scaled units by `ceil(ms × 30 ÷ 1000)`; then
+   run a per-element constructor over a second array of ten 52-byte records.
+   Out of scope, [08 R-OOS-01] — registers;
+8. raise bit 0 of a once-flag byte — the same byte position 18 raises — and
+   register a destructor whose body is a bare return, i.e. a **no-op**
+   teardown;
+9. allocate a pool of 1,000 records of 76 bytes for the effects family (doc
+   03) — registers;
+10. construct an empty vector for the vismask shape list of the LOS raster
+    ([03 R-VIS-01 §2]) — registers;
+11. construct an empty vector of the movement class and model catalog
+    ([02 R-P0-03]) — registers;
+12. construct a zeroed three-word movement-class record (doc 02) — registers;
+13. construct, under the runtime's own lock, the empty state of an ordered
+    associative container: a head node flagged as the nil leaf, a second node
+    whose two child links point at itself, and a zero element count (the
+    runtime's red-black-tree helper). Its registered destructor empties the
+    container and releases both nodes. *Supported inference:* the container is
+    the process-wide cache of loaded, relocated script blocks — the only
+    routines that insert into and erase from it are the loader that reads a
+    `scripts\<name>.COB` payload and rebases its internal offset arrays, and
+    the matching release that a unit definition's script handle passes through
+    (doc 04 owns the scripts, doc 02 the load path) — registers;
+14. zero the developer console's two spawn pointer words ([R-PLAT-01 §9]) —
+    **does not register**;
+15. construct an empty vector consumed by the `+` command handlers
+    ([07 R-CAM-01 §6]) — registers;
+16. initialise the process's **named-region lock**: zero its owner slot and,
+    if no event handle is stored yet, create an unnamed auto-reset event
+    initially unsignalled and store it, otherwise reset the existing one. This
+    is the lock whose owner marker is a four-character region name — `MAIN`
+    for the renderer's global region of §2.2, `MOUS` for the cursor thread of
+    §5.1 — and whose contention path waits on that event indefinitely.
+    **Does not register**;
+17. initialise the second process lock the same way (owner slot zeroed, event
+    created or reset), the one whose owner marker is the current thread id and
+    which guards the archive **decompression scratch buffers** — the
+    decompression window and the compression tree of doc 02. **Does not
+    register**;
+18. raise bit 0 of seven once-flag bytes (one of them the byte position 8 also
+    raises), each immediately followed by a one-line helper that registers one
+    exit handler — so this entry registers seven. All seven registered
+    handlers are bare returns: **no-op** teardowns.
 
 Five of these are the same "empty vector" constructor: three zero words
 (begin, end, capacity) and a tag byte that is written from an **uninitialised
@@ -736,7 +784,10 @@ on normal (<6) work and increments on capped (>=6) work:
   toward the requested value;
 - after more than 10 capped observations, effective speed may fall one step,
   with a lower bound of 1;
-- the counter resets after a step.
+- the counter resets whenever the threshold is crossed, whether or not a step
+  is possible: the reset store precedes the test of the active speed, so a
+  capped run already at speed 1, or a normal run already at the requested
+  speed, still zeroes the counter although no step occurs.
 
 The common setter can set requested and active values together, while the budget
 can subsequently regulate active speed under sustained load. A pending-speed
@@ -1103,9 +1154,13 @@ a temporary-sight observer list, not a missile or interceptor structure:
   pointer to the record's own inline coverage byte, the world X, Y (raised to
   `(SeaLevel + 1) << 16` when lower) and Z, and an **expiry tick**. It is a
   temporary sight source that is not a unit — an "eyeball".
-- The expiry callback is the throttled LOS refresh of [03 R-VIS-01 §2]
-  itself, invoked with the record; what the refresh publishes or removes for
-  an expiring record is doc 03's contract.
+- The expiry callback is the byte-grid **decrement** publisher of
+  [03 R-VIS-01 §2], invoked directly with the record — not the throttled
+  refresh. What an expiring record removes is doc 03's contract and is stated
+  there in full ([03 R-COMP-02 §2]): the record's own stored tile pair and
+  coverage byte are decremented with no "stored byte nonzero" guard, the
+  history/word-grid footprint is never removed, and the pass draws no random
+  numbers.
 - **The producer is the central unit-death handler**: it appends when the
   victim is owned by the local slot, LOS mode bit 1 is set (`Circular` or
   `True`) and the count is below 20 (silently dropped at 20). The handler of
@@ -1130,7 +1185,7 @@ image, are called on the paths named, and do nothing:
 | Caller | Stubs |
 |---|---|
 | process entry, after the audio device | one empty routine |
-| process entry, before the timebase | one routine returning 0 |
+| process entry, after the timebase installer and the provider mount scan, immediately before language resolution | one routine that takes a fixed name string and returns 0 |
 | sub-tick executor, after the loop | the "three empty barrier functions" of §4.4 — three empty routines, before the message-ring retire |
 | battle host pump, networked branch (§4.3 / [R-PLAT-01 §1] step 3) | three routines returning 1, then the start barrier, then three empty routines |
 | display teardown, first call | one empty routine |
@@ -1175,7 +1230,8 @@ The tail, in order, is:
    This is presentation state;
 3. the **temporary-sight expiry pass** over the "eyeball" observer list of
    [R-PLAT-02 §5]: every record whose expiry tick is **strictly below** the
-   global tick (unsigned compare) invokes the throttled LOS refresh, followed
+   global tick (unsigned compare) invokes the byte-grid decrement publisher of
+   [03 R-VIS-01 §2] directly ([03 R-COMP-02 §2]), followed
    by the in-place compaction that section describes.
 
 **What a zero-runnable pump changes, exactly.** Nothing in simulation state.
@@ -1294,12 +1350,24 @@ machine). Consequences:
 the display flags word into the display object's cursor-thread bit; startup
 always sets bit 9 ([R-PLAT-01 §1]), so retail always creates this thread
 (stack 0x8000 bytes, `THREAD_PRIORITY_HIGHEST`) together with the twenty-record
-button ring and three save-under surfaces of 0x640 bytes. Its loop: acquire
+**mouse-event ring** (24 bytes per record, allocated under its own
+`MOUSE EVENTS` tag — it is the mouse-event buffer, not a button ring) and the
+three cursor save-under surfaces, each allocated once with a **fixed
+1600-byte** pixel block and described at construction as 1600 wide by 1 tall
+with a pitch of 1600. Every redraw re-describes all three in place — width,
+height and pitch taken from the current cursor frame's header ([03 R-FX-01
+§5]) — and never rewrites the pixel pointer or allocates again, so the block
+is an arena rather than a per-frame allocation: a cursor frame is admissible
+only while `width × height` fits in 1600 bytes, and retail performs no such
+check. Stock cursor frames are well inside it. Its loop: acquire
 the display lock (exchange the owner marker with the four-byte value
 "MOUS", event wait on contention), redraw the cursor when the "cursor
 dirty/visible" word is set (a `GetCursorPos` read and blit), release, then
 sleep until 33 ms after the iteration started (minimum 1 ms) — a
-presentation-only 30 Hz cursor updater. Shutdown sets its stop word and polls
+presentation-only 30 Hz cursor updater. What that redraw blits, and the roles
+of the three save-under surfaces, are doc 03's contract and are stated there
+in full ([03 R-FX-01 §5]): the capture/overlay/compose/restore/present
+sequence and the fullscreen variant. Shutdown sets its stop word and polls
 up to 21 × 100 ms for the thread to acknowledge before freeing the surfaces
 and the ring. It touches no game state and draws no random numbers.
 
@@ -1349,7 +1417,7 @@ following contracts are Established.
 
 | Pool | Capacity/record contract | Allocation and retirement |
 | --- | --- | --- |
-| Unit instances | 280-byte records; capacity is a game value derived from setup multiplied by ten plus one, yielding roughly two thousand to five thousand stock slots rather than the 500 folklore; the pool is sliced per player by sorted player order, each slice holding as many records as there are definition types, with slot zero reserved as null; allocation scans the owning player's slice for the lowest free flag and reuses it immediately, and an alive mask marks a live slot; per-definition limits are enforced by a flag and a value of minus one meaning unlimited, counted by scanning the slice; the canonical allocator is the sole allocation site for every creation path and the reconstructor validates a forced slot against slice bounds and occupancy, with every limit, slice-full, out-of-bounds, or occupied case returning a null handle and consuming no RNG; freeing clears alive masks, heaps, order queues, and attachments but retains the stored slot index; saving uses forced-slot reconstruction and a stale 16-bit packet that validates only slot nonzero and alive, so it aliases a reused occupant silently |
+| Unit instances | 280-byte records; capacity is the session's per-player unit limit multiplied by ten plus one, yielding roughly two thousand to five thousand stock slots rather than the 500 folklore; the pool is sliced per player by sorted player order, each slice holding exactly as many records as that same limit — never a definition count — with slot zero reserved as null. Doc 05 [R-SHARE-01 §7] owns the sizing contract: the limit's three producers (the mission's `maxunits`, default 200; the `UnitLimit` preference, default 250, clamped to 20..500; the host's synchronized limit word), the slice bounds, the absence of a clamp at the sizing site, and the two side tables the same word sizes. Allocation scans the owning player's slice for the lowest free flag and reuses it immediately, and an alive mask marks a live slot; per-definition limits are enforced by a flag and a value of minus one meaning unlimited, counted by scanning the slice; the canonical allocator is the sole allocation site for every creation path and the reconstructor validates a forced slot against slice bounds and occupancy, with every limit, slice-full, out-of-bounds, or occupied case returning a null handle and consuming no RNG; freeing clears alive masks, heaps, order queues, and attachments but retains the stored slot index; saving uses forced-slot reconstruction and a stale 16-bit packet that validates only slot nonzero and alive, so it aliases a reused occupant silently |
 | Projectiles | Exactly 300 records, 107 bytes each | Allocation appends at the active-span tail. Retirement sets a dead flag without changing the count. Stable compaction runs at the projectile-phase tail every sub-tick (reading the current post-append count), and again immediately after the unit-owner projectile purge when a unit dies; it removes dead records, preserves survivor order, and repairs the affected projectile and follow-camera links. The post-loop pass is a different structure (see §6.2). |
 | Feature definitions | Each type has a 128-byte copy; type table records use a 256-byte stride | Preallocated at map/catalog load; type IDs are stable for the loaded catalog. |
 | Live features | A 48-byte live record plus a 13-byte plot cell per map attribute cell | Plot cells point to feature anchors; removal returns the cell to the free sentinel and releases the live record. Map-row order is deterministic. |
@@ -1357,8 +1425,9 @@ following contracts are Established.
 | Construction nodes | A 86-byte node; factories use separate tail/head links selected by a flag | Nodes append to a per-factory chain, coalesce matching build types where applicable, and are freed on cancellation/completion. |
 | Effect/sequence strips | Variable vectors of segment records drawn from one process-lifetime pool of **1000 slots × 76 bytes**, built by a static constructor and never grown | Append in event order; a compaction/drain pass moves/removes old entries, and each strip evicts its oldest object when its pre-insert count exceeds 400. Every producer call site is enumerated by strip literal in doc 03 [R-FX-02 §5] (strips 0, 1, 3 and 8 have none). |
 
-The unit maximum is the game value described above, not a universal
-500 constant. The 300-projectile capacity, packed record size, append
+The unit maximum is the session's per-player unit limit described above, not a
+universal 500 constant and not the number of unit definitions. The
+300-projectile capacity, packed record size, append
 allocation, deferred retirement, and compaction behavior are direct
 observations. Freeing a unit clears its alive masks, heaps, queues, and
 attachments but leaves its stored slot index intact; the reconstructor and
@@ -1512,13 +1581,15 @@ the no-advance property is load-bearing for every draw census in this
 document (see [R-DET-01 §4]). The Lehmer step itself is computed in wrapping 32-bit
 arithmetic as `s × 16807 − (s ÷ 127773) × 2147483647`, which is the Schrage
 form and never leaves the signed range, so the "add the modulus when
-nonpositive" branch is the only correction needed. Startup seeds this stream from the sum of the low and high parts
-of `QueryPerformanceCounter`, XORed with a fixed constant and forced odd; the
-seed setter has exactly one call site in the recovered image — the
-battle-entry orchestrator — so neither startup, loading, nor any packet
-handler reseeds it elsewhere. A single state is shared by placement, wind,
-effects, combat, and other callers; call order, not entity identity, isolates
-consumers.
+nonpositive" branch is the only correction needed. **Battle entry** seeds this
+stream from the sum of the low and high parts of `QueryPerformanceCounter`,
+XORed with a fixed constant and forced odd; the seed setter has exactly one
+call site in the recovered image — the battle-entry orchestrator — and its
+address appears nowhere in the image as data, so there is no indirect reseed
+either: neither process startup, nor loading, nor any packet handler touches
+this stream's state. Process startup seeds only the CRT pair (§2.1, §7.2).
+A single state is shared by placement, wind, effects, combat, and other
+callers; call order, not entity identity, isolates consumers.
 
 ### 7.2 Microsoft CRT stream
 
@@ -1783,9 +1854,13 @@ in `[04 R-MOV-01 §5b]`. The leak is script-visible, not merely theoretical.
 ### 7.5 The per-phase random draw table [R-DET-01 §4]
 
 **Established** by a whole-image census: every call site of the simulation
-sampler (143 static sites in 59 functions) and of the CRT draw (66 sites in 29
-functions) was read and placed in the phase order of §4.4. This is the one
-table every lane's "draws N" claim is checked against; the sections cited in
+sampler (**129** static sites in 59 functions) and of the CRT draw (**61**
+sites in 29 functions) was read and placed in the phase order of §4.4. Both
+site counts were re-derived twice — by a linear disassembly sweep and by an
+unaligned byte scan of every section for direct calls — with the two methods
+agreeing exactly; neither target is reached by a jump or referenced as data
+anywhere in the image, so there are no indirect draws. This is the one table
+every lane's "draws N" claim is checked against; the sections cited in
 the right-hand column own the surrounding arithmetic and are not restated
 here. The cross-check against them is [R-DET-01 §6].
 
@@ -1799,7 +1874,7 @@ phase-2 pump; a handler that returns before the draw consumes nothing.
 
 | When | Stream | Draws | Consumer and anchor |
 |---|---|---|---|
-| Battle entry, world rebuild (loading thread) | CRT (loading thread) | 391,606 — one draw per generated pixel, `trunc((crt()·10)/32768)`, over three strips (doc 06's count; the strips were not recounted here) | procedural explosion frames [06 R-WFX-01 §6]; the builder's only caller is the orchestrator on the loading thread, whose block is discarded with the thread ([R-PLAT-01 §4]) |
+| Battle entry, world rebuild (loading thread) | CRT (loading thread) | 391,606 — one draw per generated pixel, `trunc((crt()·10)/32768)`, over three strips; the split is 23,456 + 107,335 + 260,815, each strip's term being the sum of its frames' squared side lengths, and the count is exact | procedural explosion frames [06 R-WFX-01 §6]; the builder's only caller is the orchestrator on the loading thread, whose block is discarded with the thread ([R-PLAT-01 §4]) |
 | Front end | CRT (main thread) | unbounded | main-menu spark shimmer (`crt() mod 640` and companions), briefing wind display (2), sound variants, CD track choice — see [R-DET-01 §5]. **Not wiped**: the main-thread block is never reseeded ([R-PLAT-01 §4]) |
 | Battle entry | sim; loading-thread CRT | reseed only | [R-CORE-02] |
 | Battle entry, skirmish | CRT (loading thread) | `count − 1` swap draws, plus one 50/50 gate when fewer than three qualifying players | slot shuffle [08 R-SKIR-01 §2] |
@@ -1867,7 +1942,7 @@ functions; the ones not already placed in the tick table above are:
 | lightning renderer | per rendered frame, two passes, three draws per point: `(crt()·11) ÷ 32768 − 5` on each axis | [06 R-WFX-01 §6]; 6 per point per frame, matching the lane |
 | multiplayer host lobby shuffle | as the skirmish shuffle | out of scope |
 | a packet-path gate `(crt()·101) ÷ 32768 ≤ setting` | 1 | its callers are dead or multiplayer-only; out of scope |
-| a second meteor-scheduler body without the per-hit loop | 4 | unreferenced — dead code |
+| a second meteor-scheduler body without the per-hit loop | 4 | not dead: its one caller is the `Meteor` cheat command ([07 R-CAM-01 §6]), which enters this body when the command's first argument is at or below one and one of the two ordinary scheduler entries otherwise — so the CRT stream does advance by these four draws whenever the cheat runs with a small argument |
 
 **Established — the statement of what is sim-visible.** The CRT stream is
 per-thread state seeded from wall-clock time; nothing in the save box
@@ -1875,7 +1950,8 @@ restores it ([R-CORE-02]), and the block the tick reads is the main thread's,
 seeded at process start and advanced by every front-end draw since
 ([R-PLAT-01 §4], [R-PLAT-01 §7]). Its only authoritative consumers are the three
 named in §7.5. Everything else it feeds is presentation, front end, audio,
-or a message-string choice. Nanolathe therefore needs a CRT-compatible
+a message-string choice, or — for the meteor row above — a cheat command that
+no ordinary-play path reaches. Nanolathe therefore needs a CRT-compatible
 stream only for those three consumers' *positions in the tick*, not for the
 front end.
 
@@ -1987,8 +2063,10 @@ magnitude between 2³¹ and 2⁶³ does **not** saturate — it wraps through th
 32 bits; a magnitude at or beyond 2⁶³ (or a NaN) produces the x87 indefinite
 integer, whose low 32 bits are zero. No caller range-checks first.
 
-**Site census.** 283 static call sites in 120 functions. The authoritative
-ones — reached from the tick, from battle entry, or from a definition parser
+**Site census.** **272** static call sites in 120 functions (re-derived by the
+two independent methods of §7.5; no jump or data reference to the helper
+exists). The authoritative ones — reached from the tick, from battle entry, or
+from a definition parser
 whose output the tick reads — are listed by subsystem; each row names the
 converted quantity as far as the lane's section states it, and the lane
 anchor that owns the arithmetic. Presentation-only clusters are summarised.
@@ -2355,10 +2433,14 @@ directory and `FRAM`; the movie series its `MOVIE%03i` directory):
 
 **The PCX encoder (Established; the reader is [fmt pcx]).** Header of 128
 bytes: manufacturer 10, version 5, encoding 1, 8 bits per pixel, `xmin 0`,
-`ymin 0`, `xmax = width − 1`, `ymax = height − 1`, both DPI words 0, the
-48-byte EGA palette field = the **first 48 bytes of the converted
-palette**, reserved 0, planes 1, bytes per line = `width`, palette-info 0,
-the rest zero. Each scanline is run-length encoded left to right: a run of
+`ymin 0`, `xmax = width − 1`, `ymax = height − 1`, the two resolution words at
+header offsets 12 and 14 = the image **width** and **height** respectively
+(not zero), the 48-byte EGA palette field = the **first 48 bytes of the
+converted palette**, reserved 0, planes 1, bytes per line = `width`,
+palette-info 0, the unused tail zero. Only palette-info, reserved and that
+tail are zero; the whole 128-byte header is zero-filled first, so every field
+not listed here is zero by that fill. Each scanline is run-length encoded
+left to right: a run of
 `n` equal bytes is emitted as chunks of at most 63 — each chunk `0xC0 | len`
 followed by the value; a single byte below `0xC0` is emitted literally; a
 single byte at or above `0xC0` (both top bits set) is emitted as a run of one
@@ -2414,8 +2496,10 @@ byte `0x0C` and the 768-byte palette.
 - 28-byte `Players/GameTime` scheduler block is saved/restored with the field
   layout above; RNG state is not saved. Load reseeds simulation and the
   loading-thread CRT, while main-thread CRT history continues [R-CORE-02].
-- Seventeen static initialisers run before the entry; the engine block
-  floats at a wall-clock skew of `(GetTickCount mod 1000) × 7` bytes; one
+- Eighteen static initialisers run before the entry, from a nineteen-slot
+  table whose first slot is null, and fifteen of them register an exit
+  handler; the engine block floats at a wall-clock skew of
+  `(GetTickCount mod 1000) × 7` bytes; one
   quit-request routine sets the quit bit and posts `WM_DESTROY`; the
   game-state teardown runs only on a requested quit ([R-PLAT-02 §1], §2).
 - A ten-slot scaled-clock timer table is serviced once per busy pump
@@ -2483,15 +2567,9 @@ stated in the body, not here.
   crashed process long enough to block an immediate relaunch is an OS
   question, not an executable one · §2.3 · manual test on the reference
   install.
-- What the throttled LOS refresh publishes or removes when the post-loop pass
-  hands it an **expiring** temporary-sight record · §4.4 [R-PLAT-02 §5],
-  doc 03 [R-VIS-01 §2] · static trace.
 - Whether a writer of the display object's frame-presented word exists
   beyond the two found (present sets it, surface restore clears it) · §2.2
   [R-PLAT-02 §6] · static trace over the unrecovered regions.
-- The cursor thread's redraw internals (what the 33 ms redraw blits, and the
-  three save-under surfaces' roles) — presentation only · §5.1 [R-PLAT-01 §4],
-  doc 07 · static trace.
 - The purpose of the ten `-B` words that the parser compares and never acts on
   (`deathends` … `watching`); they are inert in retail and have no
   implementation impact · §3.1 [R-PLAT-01 §2] · none needed.
@@ -2539,10 +2617,6 @@ stated in the body, not here.
 - The exact per-object CRT draw count of the effect-strip objects and of the
   fire-effect spawn's fourth draw; doc 03 owns the object bodies, this census
   records the sites · §7.5, §7.6 [R-DET-01 §5], doc 03 · static trace.
-- Whether the 391,606 battle-entry CRT draws of the procedural explosion
-  frames ([06 R-WFX-01 §6]) are exact; the site and the one-draw-per-pixel
-  rule are established, the three strips were not recounted · §7.5 · static
-  recount of the strip parameter sets.
 
 ### Memory and queues
 

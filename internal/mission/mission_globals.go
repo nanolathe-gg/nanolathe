@@ -107,7 +107,7 @@ var MissionGlobalCensus = []CensusEntry{
 	{Key: "MeteorDuration", VA: "", Offset: "selected-schema storm record", Type: "float32", Default: "0.0 (decode)", Clamp: "zero selects the whole Default record", Consumer: "meteor scheduler source single store, then working-precision duration conversion [06 §6.5][01 R-DET-01 §1]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 	{Key: "MeteorInterval", VA: "", Offset: "selected-schema storm record", Type: "float32", Default: "0.0 (decode)", Clamp: "zero selects the whole Default record", Consumer: "meteor scheduler source single store, then working-precision interval conversion [06 §6.5][01 R-DET-01 §1]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 	// Presentation — briefing/panorama only [P1-02 §2.1].
-	{Key: "Planet", VA: "", Offset: "fixed-size string slot", Type: "string", Default: "empty 15-value enum Green…Crystal", Clamp: "enum via the planet-table triple", Consumer: "planet selects parallel brief/pan/rotate tables [P0-05]", Class: GlobalPresentation, Fatal: FatalKindDegrade},
+	{Key: "Planet", VA: "", Offset: "fixed-size string slot", Type: "string", Default: "empty", Clamp: "no clamp — the text is carried verbatim", Consumer: "the briefing screen alone: it compares this text BYTE FOR BYTE against its own fifteen-row name column and selects row 0 (Green planet) on any miss, so an unknown or differently-cased spelling briefs as Green planet rather than degrading [08 R-CAMP-01 §2]", Class: GlobalPresentation, Fatal: FatalKindDegrade},
 	{Key: "brief", VA: "", Offset: "briefing text", Type: "string", Default: "empty", Clamp: "—", Consumer: "briefing text from camps\\briefs", Class: GlobalPresentation, Fatal: FatalKindDegrade},
 	{Key: "narration", VA: "", Offset: "narration", Type: "string", Default: "empty", Clamp: "—", Consumer: "camps\\briefs speech alias", Class: GlobalPresentation, Fatal: FatalKindDegrade},
 	{Key: "missionhint", VA: "", Offset: "hint", Type: "string", Default: "empty", Clamp: "—", Consumer: "camps\\hints WAV [P1-02 §2.1]", Class: GlobalPresentation, Fatal: FatalKindDegrade},
@@ -127,35 +127,11 @@ var MissionGlobalCensus = []CensusEntry{
 	{Key: "EndCountdown", VA: "runtime countdown, not a save key", Offset: "countdown + end-latch word", Type: "i16/byte", Default: "armed at four, decremented on the ~30-tick cadence; latch written at end", Clamp: "not persisted", Consumer: "settlement gate + front-end latch", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 }
 
-// PlanetNames is the 15-value planet enum behind the parallel planet tables [P1-02 §2.1].
-// Green planet … Crystal, plus the Lunar special-case briefing rewrite when the
-// display flag is set [P0-05].
-var PlanetNames = [15]string{
-	"Green planet", "Red planet", "Lava", "Metal", "Ice",
-	"Lush", "Archipelago", "Slate", "Lunar", "Water World",
-	"Wet Desert", "Acid", "Crystal", "Desert", "Urban",
-}
-
-// PlanetBriefKeys is the briefing-key parallel table, Greenbrief…Crystalbrief [P1-02 §2.1].
-var PlanetBriefKeys = [15]string{
-	"Greenbrief", "Redbrief", "Lavabrief", "Metalbrief", "Icebrief",
-	"Lushbrief", "Archipelagobrief", "Slatebrief", "Lunarbrief", "Waterbrief",
-	"WetDesertbrief", "Acidbrief", "Crystalbrief", "Desertbrief", "Urbanbrief",
-}
-
-// PlanetPanKeys is the panorama GAF key table, GreenPan…CrystalPan [P1-02 §2.1].
-var PlanetPanKeys = [15]string{
-	"GreenPan", "RedPan", "LavaPan", "MetalPan", "IcePan",
-	"LushPan", "ArchipelagoPan", "SlatePan", "LunarPan", "WaterPan",
-	"WetDesertPan", "AcidPan", "CrystalPan", "DesertPan", "UrbanPan",
-}
-
-// PlanetRotateKeys is GreenRotate… [P1-02 §2.1].
-var PlanetRotateKeys = [15]string{
-	"GreenRotate", "RedRotate", "LavaRotate", "MetalRotate", "IceRotate",
-	"LushRotate", "ArchipelagoRotate", "SlateRotate", "LunarRotate", "WaterRotate",
-	"WetDesertRotate", "AcidRotate", "CrystalRotate", "DesertRotate", "UrbanRotate",
-}
+// This package does not carry the briefing screen's parallel planet tables,
+// deliberately. Their lookup is spelling-exact [08 R-CAMP-01 §2], so a second
+// transcription is a second contract that can disagree in order or spelling
+// while both look plausible; the front end owns the one table, and `Planet`
+// decodes here as the authored text and nothing else.
 
 // MissionGlobals is the decoded authoritative mission-global block for battle
 // setup [P1-02 §2.1]. Presentation/inert fields are retained for menu but not

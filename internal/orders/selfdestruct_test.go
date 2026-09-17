@@ -5,6 +5,7 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/combat"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
@@ -166,6 +167,142 @@ func TestSelfDestructCountdownFieldFollowsTheParser(t *testing.T) {
 		def := &content.UnitDef{SelfDestructCountdown: row.authored, SelfDestructCountdownPresent: true}
 		if got := selfDestructCountdownField(def); got != row.want {
 			t.Fatalf("selfdestructcountdown=%s yielded %d, want %d [04 R-SPEC-01 §13]", row.authored, got, row.want)
+		}
+	}
+}
+
+// selfDestructVisit is one counting visit of a countdown run: the tick the
+// handler ran on, the remaining count it saw, and the status-cue kinds that
+// visit published.
+type selfDestructVisit struct {
+	tick  uint32
+	count uint32
+	cues  []uint8
+}
+
+// runSelfDestructCountdown drives one whole countdown for an authored
+// `selfdestructcountdown`, waking the record exactly on each deadline it arms,
+// and returns the counting visits plus the final wait the count-0 step drew.
+// The queue carries no damage callback, so the terminal visit is observable
+// without the unit dying.
+func runSelfDestructCountdown(t *testing.T, authored string) ([]selfDestructVisit, uint32) {
+	t.Helper()
+	rng.SeedGlobal(1, 0) // same stream position for every run, so draws compare
+	def := &content.UnitDef{SelfDestructCountdown: authored, SelfDestructCountdownPresent: true}
+	u := &units.Unit{Handle: 1, Alive: true, Def: def, Health: 3000, MaxHealth: 3000}
+	var cues []uint8
+	q := &Queue{binding: &QueueBinding{
+		SimRNG: rng.Global.Sim,
+		Presentation: &PresentationAdapter{
+			Ready:  func() bool { return true },
+			Status: func(_ *units.Unit, kind uint8, _ string) bool { cues = append(cues, kind); return true },
+		},
+	}}
+	BindQueue(u, q)
+	q.Push(Lookup("SelfDestructFG"), Node{Owner: u.Handle})
+
+	var visits []selfDestructVisit
+	var finalWait uint32
+	tick := uint32(0)
+	for step := 0; q.LenPrimary() > 0 && step < 24; step++ {
+		n := q.Primary()[0]
+		count := selfDestructCountdownField(def)
+		if n.Param2&selfDestructMarkerMask != 0 {
+			count = n.Param2 & selfDestructCountField
+		}
+		counting := n.Param1 == 0
+		before := len(cues)
+		q.Pump(u, tick)
+		if !counting {
+			break // the damage visit; it completes and frees the record
+		}
+		visits = append(visits, selfDestructVisit{tick: tick, count: count, cues: append([]uint8(nil), cues[before:]...)})
+		if q.LenPrimary() == 0 {
+			break
+		}
+		next := uint32(q.Primary()[0].Deadline)
+		if count == 0 {
+			finalWait = next - tick
+		}
+		tick = next
+	}
+	return visits, finalWait
+}
+
+// TestSelfDestructCountdownAnnouncesOnlyTheSixTabulatedCounts locks the
+// handling of the one part of this row retail leaves undefined.
+//
+// Retail's announce is a six-entry table built in the handler's own stack
+// frame, holding the status kinds 22, 21, 20, 19, 18 and 17 for the remaining
+// counts 0 through 5, and the read is not bounds-checked above the table
+// [04 R-ORD-01 §14]. Counts 6 and 7 are reachable — the authored
+// `selfdestructcountdown` is masked to three bits with no clamp — and retail
+// then passes a word from outside the table to the cue emitter as a kind, which
+// is undefined behaviour rather than an announcement of any defined kind
+// [04 R-SPEC-01 §13]. This port announces nothing for those two counts, which
+// is also what retail's local-owner-gated emitter already does for every unit
+// the local player does not own.
+//
+// The contract this locks is narrow and easy to regress in either direction:
+// counts 0..5 keep their exact kinds and order, counts 6 and 7 publish no cue
+// at all, and nothing else about the countdown — the number of visits, the
+// 30-tick spacing, the remaining-count sequence, or the single draw the count-0
+// step makes — varies with the authored value.
+func TestSelfDestructCountdownAnnouncesOnlyTheSixTabulatedCounts(t *testing.T) {
+	tabulated := []uint8{17, 18, 19, 20, 21, 22} // counts 5,4,3,2,1,0
+
+	var waits []uint32
+	for _, row := range []struct {
+		authored string
+		start    uint32
+		want     [][]uint8 // cues per counting visit, in visit order
+	}{
+		{authored: "5", start: 5, want: [][]uint8{{17}, {18}, {19}, {20}, {21}, {22}}},
+		{authored: "6", start: 6, want: [][]uint8{nil, {17}, {18}, {19}, {20}, {21}, {22}}},
+		{authored: "7", start: 7, want: [][]uint8{nil, nil, {17}, {18}, {19}, {20}, {21}, {22}}},
+	} {
+		visits, finalWait := runSelfDestructCountdown(t, row.authored)
+		waits = append(waits, finalWait)
+
+		if len(visits) != int(row.start)+1 {
+			t.Fatalf("countdown %s ran %d counting visits, want %d: one per remaining count %d..0 [04 R-SPEC-01 §13]", row.authored, len(visits), row.start+1, row.start)
+		}
+		for i, visit := range visits {
+			wantCount := row.start - uint32(i)
+			if visit.count != wantCount {
+				t.Fatalf("countdown %s visit %d saw remaining count %d, want %d", row.authored, i, visit.count, wantCount)
+			}
+			if wantCount > 0 && visit.tick != uint32(i)*selfDestructStep {
+				t.Fatalf("countdown %s visit %d ran on tick %d, want %d: every step but the last waits one 30-tick step [04 R-ORD-01 §2]", row.authored, i, visit.tick, uint32(i)*selfDestructStep)
+			}
+			if len(visit.cues) != len(row.want[i]) {
+				t.Fatalf("countdown %s remaining count %d published cues %v, want %v [04 R-ORD-01 §14][04 R-SPEC-01 §13]", row.authored, wantCount, visit.cues, row.want[i])
+			}
+			for k, kind := range visit.cues {
+				if kind != row.want[i][k] {
+					t.Fatalf("countdown %s remaining count %d published cue kind %d, want %d [04 R-ORD-01 §14]", row.authored, wantCount, kind, row.want[i][k])
+				}
+			}
+			// The tabulated kinds are exactly 22 − count, and only there.
+			if wantCount < 6 && (len(visit.cues) != 1 || visit.cues[0] != tabulated[5-wantCount]) {
+				t.Fatalf("countdown %s remaining count %d must announce kind %d [04 R-ORD-01 §14]", row.authored, wantCount, 22-wantCount)
+			}
+			if wantCount >= 6 && len(visit.cues) != 0 {
+				t.Fatalf("countdown %s remaining count %d announced %v; no cue kind is defined past the six-entry table [04 R-SPEC-01 §13]", row.authored, wantCount, visit.cues)
+			}
+		}
+	}
+
+	// One draw, at the count-0 step, in every run. Identical seeds give an
+	// identical wait only if counts 6 and 7 consumed no extra randomness and
+	// took no extra step, so this is the RNG half of "the countdown itself is
+	// unchanged" [04 R-SPEC-01 §13].
+	for i, wait := range waits {
+		if wait == 0 || wait >= 15 {
+			t.Fatalf("run %d drew a final wait of %d, want the RNG(15) arm of the count-0 step [04 R-SPEC-01 §13]", i, wait)
+		}
+		if wait != waits[0] {
+			t.Fatalf("run %d drew a final wait of %d, want %d: a 6 or 7 countdown must not perturb the simulation stream", i, wait, waits[0])
 		}
 	}
 }

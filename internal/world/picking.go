@@ -26,9 +26,20 @@ import "github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 // Exhausting the nine probes returns the last candidate unrefined. The returned
 // triple is 16.16 world (X, Y, Z), Y being the ground height under the result.
 //
-// The one deliberate divergence: retail divides by the difference of the two
-// projected rows without guarding it, so a degenerate pair faults. Here a zero
-// difference keeps the unrefined first candidate.
+// The one deliberate divergence, and it is wider than a zero guard. Retail's
+// interpolation gate is a plain disjunction: interpolate when the next row
+// south projects strictly further south than the stopping row, OR when the
+// clicked row is at or north of that next row's projection — even when that
+// projection is not further south [03 §2.3]. The second arm admits a
+// non-positive denominator, and retail interpolates anyway: it faults on an
+// equal pair and steps the row north on a decreasing one. This build requires
+// both an increasing pair and a clicked row at or north of the far bracket, so
+// it suppresses that whole arm — the zero-denominator fault and the
+// negative-denominator northward step alike — and keeps the unrefined
+// candidate. That is a deliberate refusal to reproduce an unsafe retail path,
+// not the retail contract. The suppressed case needs the column one cell south
+// to stand at least 32 world units higher and is reachable only when the
+// search stopped on its first probe.
 func (t *Terrain) CursorToWorld(px, pz int32) (x, y, z numeric.Fixed) {
 	if t == nil || t.CellW <= 0 || t.CellH <= 0 {
 		return numeric.Fixed(int64(px) * worldUnitsPerPixel), 0, numeric.Fixed(int64(pz) * worldUnitsPerPixel)
@@ -81,8 +92,11 @@ func (t *Terrain) CursorToWorld(px, pz int32) (x, y, z numeric.Fixed) {
 	h2 := t.groundLevel(xf, z2, sea)
 	projSouth := int32(int16(z2>>16)) - int32(int16(h2))>>1
 
-	// Retail's two guards: a non-increasing pair, or a click south of the far
-	// bracket, both keep the unrefined candidate.
+	// Retail interpolates on `projNorth < projSouth` OR `pz <= projSouth`
+	// [03 §2.3]. This build requires both, which is strictly more conservative:
+	// it keeps the unrefined candidate wherever retail would divide by a
+	// non-positive denominator (fault on equal, step north on decreasing). See
+	// the divergence note on CursorToWorld.
 	if projNorth >= projSouth || pz > projSouth {
 		return xf, hf, zf
 	}

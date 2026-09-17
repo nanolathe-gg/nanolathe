@@ -461,33 +461,59 @@ table. In plain terms, each 13-byte cell holds:
 * metal byte at offset 7, seeded uniformly from the mission `SurfaceMetal`
   scalar — every cell receives the same signed byte, no per-cell raster;
 * feature word at offset 8 with sentinels: `0xFFFF` empty, `0xFFFE`
-  fringe (follow signed offsets), `< 0xFFFB` live feature index, and two void
+  fringe (follow the anchor offsets below), `< 0xFFFB` live feature index, and two void
   codes with two writers — `0xFFFC` from the stamp service for every
   TNT-authored void cell, `0xFFFD` from the edge/lava sweep; no reader compares
   the word with either void value (every consumer classifies `== 0xFFFF` empty,
   `< 0xFFFB` live, `== 0xFFFE` fringe, anything else blocked/void), and
   `0xFFFB` has no writer;
-* signed anchor offsets at offsets 10 and 11: the Z delta is the width-scaled
-  byte and the X delta is the unscaled byte, both `int8` `-128..127` from fringe
-  toward anchor; out-of-range stays zero and leaves the fringe unresolved; at
-  the anchor the same two bytes hold the live instance slot index while attached
-  or the accumulated blast damage otherwise — never simultaneous;
+* anchor offsets at offsets 10 and 11: the Z delta is the width-scaled byte and
+  the X delta is the unscaled byte, both counted from fringe toward anchor and
+  **subtracted**, so the anchor always lies at or north-west of the fringe cell.
+  Every reader in the fringe role **zero-extends** both bytes — none of them
+  sign-extends — so the effective range is `0..255` and a value of 128 or more
+  is a large positive displacement, not a negative one. Stamped values are
+  `0..footX-1` / `0..footZ-1` (below), well inside the byte, so the distinction
+  never bites on stamped data; out-of-range stays zero and leaves the fringe
+  unresolved. At the anchor the same two bytes hold the live instance slot index
+  while attached or the accumulated blast damage otherwise — never simultaneous;
 * flag byte at offset 12, stamped at load as `flags = (flags & 0xD7) | 0x50`
   (preserve bits 0,1,2,7; clear bits 3 and 5; set bits 4 and 6), carrying bit 0
   live instance present, bit 1 building occupied, bit 2 never-seen fog, bits
   3–6 placer nibble (map load passes 10), and bit 7 preserved with no isolated
   reader (`TODO(T23)`).
 
-Fringe-anchor offsets are signed, not absolute coordinates. The retail corpus
+Fringe-anchor offsets are offsets, not absolute coordinates. The retail corpus
 contains maps up to 402×408 cells, which needs 9 bits to name an absolute
-coordinate, so an 8-bit absolute field could not address the board — only signed
+coordinate, so an 8-bit absolute field could not address the board — only
 offsets fit. The Z byte is scaled by map width when forming the anchor address
-(the row stride multiplies it); the X byte is not. The resolver follows the
-signed offsets when the feature is `0xFFFE`, bounds-checks the anchor, and only
-returns the anchor's feature when that anchor word is `< 0xFFFB`; otherwise the
-fringe remains not-found (blocking for yard-occupancy bit 5, non-satisfying for
-geothermal bit 7). No hidden map sections or separate flood-fill geometry exists
-beyond this array — a bounded writer census found only the expansion zero and the
+(the row stride multiplies it); the X byte is not.
+
+**Two reader shapes, and only one of them bounds-checks the anchor
+(Established, whole-image census of the readers of these two bytes in the
+fringe role).** Every reader first requires the feature word to be `0xFFFE`
+and finally requires the anchor's own feature word to be `< 0xFFFB`, otherwise
+the fringe remains not-found (blocking for yard-occupancy bit 5,
+non-satisfying for geothermal bit 7). They differ in how they reach the anchor:
+
+* the **coordinate form** — four sites, one of them the standalone
+  fringe-following cell-pointer helper of §2.3 — subtracts the two bytes from
+  the fringe cell's own map-cell coordinates and bounds-checks the result
+  against zero and the map extents on both axes, yielding no anchor at all
+  when it leaves the board (either inline or through the shared
+  cell-pointer-by-coordinates helper, which returns null off-map);
+* the **pointer form** — the large majority, twenty-two sites, including the
+  projectile collision gate of `[06 §8.1]` — instead forms
+  `zByte · mapWidth + xByte` cell strides and subtracts that byte count
+  directly from the fringe cell's own address. It performs **no** coordinate
+  bounds check: a byte pair that walks off the board reads whatever attribute
+  cell the arithmetic lands on, and the only guard is the `< 0xFFFB` test on
+  the word found there.
+
+Both forms are safe for stamped data, whose offsets can only address a cell
+inside the stamping feature's own footprint rectangle.
+
+No hidden map sections or separate flood-fill geometry exists beyond this array — a bounded writer census found only the expansion zero and the
 derived stamp. **Fringe partition is the placement order, not a heuristic.** The
 feature stamper writes every `0xFFFE` cell at stamp time with its anchor→fringe
 offset (`0..footX-1` in the X byte, `0..footZ-1` in the width-scaled Z byte) as it
@@ -841,15 +867,35 @@ outcome is derivable:
 lens and the radius trigger share; owned here because it is the only caller
 that solves *for* the height). Input `(X, targetZ)` in map pixels, already
 clamped as above. Start at `z = (targetZ & ~0xF) + 128` and probe at most
-nine rows downward in steps of 16 pixels: at each row take `hz =
-max(seaLevel, bilinear(X, z))` and `screen = z − (hz >> 1)`; stop at the
+nine rows northward in steps of 16 pixels (`z` decreasing): at each row take
+`hz = max(seaLevel, bilinear(X, z))` and `screen = z − (hz >> 1)`; stop at the
 first row with `screen ≤ targetZ`. If nine rows are exhausted the last row's
-position is returned as is. Otherwise probe one more row `z + 16` to get
-`screen'`; when `screen < screen'` and `screen ≤ targetZ ≤ screen'`, or when
-`targetZ ≤ screen'` regardless, interpolate `z += ((targetZ − screen) << 20)
-/ (screen' − screen)` (a 16.16 result, truncating division) and re-sample
-the height at the interpolated point, again floored at sea level; the
-returned Y is that height `<< 16`.
+position is returned as is. Otherwise probe the next row south, `z + 16`, to
+get `screen'`. The interpolation gate is a **plain disjunction** of two arms,
+in this order:
+
+```
+interpolate iff  screen < screen'            (and screen <= targetZ, which the
+                                              stopping condition guarantees)
+             or  targetZ <= screen'
+```
+
+— that is, interpolate when the next row south projects strictly further
+south than the stopping row, **or** when the clicked row is at or north of
+that next row's projection. The first arm carries a redundant test that
+`targetZ` is at or south of `screen`, which the loop's own exit condition has
+already established; there is no upper bound `targetZ ≤ screen'` on that arm.
+Only the second arm is reachable with a non-positive denominator, and retail
+interpolates there anyway: `screen' == screen` faults the divide, and
+`screen' < screen` steps the row *north*. That case needs the column one cell
+south to stand at least 32 world units higher, and it is reachable on steep
+terrain; it is also only reachable when the loop stopped on its **first**
+probe, which needs a column height of roughly 226 or more.
+
+Interpolation is `z += ((targetZ − screen) << 20) / (screen' − screen)` (a
+16.16 result, signed truncating division), then the height is re-sampled at
+the interpolated point, again floored at sea level; the returned Y is that
+height `<< 16`.
 
 #### The air sector grid [R-TERR-01 §5]
 
@@ -2072,13 +2118,16 @@ reproduce every edge pixel. Everything here is **Established (direct-static)**
 unless a paragraph says otherwise. There are two filler families — the **flat
 polygon filler** (explicit vertex count, one colour byte) and the **textured
 quad mapper** (exactly four corners, one texture frame, an optional UV table
-that no model caller ever supplies) — and each family exists twice: a
-**composition-image** variant that writes into a unit's private image with the
-key test, and a **framebuffer** variant used by the live-piece fallback of
-[R-REN-03A §4] and by the projectile/debris model paths, which clips against
-the surface clip rectangle and has no key plane. All four share one edge walk;
-the differences are only in clipping bounds and in what the span writer
-stores.
+that no model caller ever supplies) — and each family exists three times: an
+**unshaded** and a **shaded composition-image** variant, one per renderer,
+each writing into a unit's private image with the key test and bounded by that
+image's own dimensions, and a **framebuffer** variant used by the live-piece
+fallback of [R-REN-03A §4] and by the projectile/debris model paths, which
+clips against the surface clip rectangle and has no key plane. Those six
+clipping fillers share one edge walk; the differences are only in clipping
+bounds and in what the span writer stores. A seventh routine repeats the flat
+filler with **no bounds reject at all** and has exactly one caller; which
+drawing path uses it is **Unknown** (its caller was not traced).
 
 **Inputs.** Per corner: integer pixel `x`, integer pixel `y` (already
 projected and origin-biased per §2 below), an integer `key`, and — shaded
@@ -2096,8 +2145,16 @@ the first corner attaining it (strict `>`), `minX` and `maxX`. Sentinels are
 variants use `L = 0`, `T = 0`, `R = w-1`, `B = h-1` of the target image; the
 framebuffer variants read the surface clip rectangle, whose right and bottom
 are the inclusive last column and row ([R-FX-01 §6], [03 §4]) — the polygon
-is dropped when `maxX < L`, `minX > R`, `maxY < T` or `minY > B`. Otherwise
-`yStart = max(minY, T)` and `yEnd = min(maxY, B)`, and when `yStart == yEnd`
+is dropped when `maxX < L`, `minX > R`, `maxY < T` or `minY > B`. The two
+**flat composition** fillers are the one exception: both the shaded and the
+unshaded one compute `maxX` and never compare it, so they reject only on
+`minX > R`, `maxY < T` and `minY > B`. Both textured composition mappers and
+both framebuffer variants test all four. The omission is not observable: an
+entirely off-left polygon reaches the row loop, but a span is offered only
+where `right > left`, and the span writer clamps a negative left endpoint to
+`0` while every right endpoint is still negative, so no pixel is written.
+Otherwise `yStart = max(minY, T)` and `yEnd = min(maxY, B)`, and when
+`yStart == yEnd`
 nothing is drawn. Because `yEnd` is clamped to `B` and the fill loop below is
 exclusive of `yEnd`, **the row `B` itself is never written by a polygon** —
 the clip rectangle's inclusive bottom row and the image's last row are dead
@@ -2977,8 +3034,9 @@ counted from one: admit iff
 retainedNumerator * stepDistance < candidateDiff * retainedDistance
 ```
 
-(the implementation tests inequality-from-zero first, so an exact tie never
-admits). After admission, the HIGH byte of the same terrain word is tested
+(the comparison is the loop's only test — there is no separate compare of the
+difference against zero — and it is strict, so an exact tie never admits).
+After admission, the HIGH byte of the same terrain word is tested
 with the identical strict comparison against the same retained pair; only
 then does the pair become that high-byte difference and step distance.
 
@@ -3256,9 +3314,10 @@ Four details that a summary loses and an implementer needs:
    unconditionally: `-1 × 1 < lowDiff × 0 = 0` for every terrain height.
 4. The horizon advance is tested against the **same** retained pair as the
    admission, before the pair is updated — not against the newly admitted
-   value. Both comparisons are the identical strict form, and the
-   implementation tests the difference against zero first, so an exact tie
-   never admits and never advances the horizon.
+   value. Both comparisons are the identical strict form — the loop contains
+   no other test, in particular no separate comparison of the difference
+   against zero — so an exact tie fails both and therefore never admits and
+   never advances the horizon.
 
 All products are signed 32-bit. `emitter` is the clamped 0–255 byte; the two
 height bytes are unsigned, so both differences lie in −255 … 255.
@@ -4594,10 +4653,11 @@ while any bit in that mask takes the feature-marker path. **Established.**
 
 **HOT list.** Every unit visited in pool (ascending-slot) order appends a
 10-byte entry — id, originX + rx, originY + ry, and two pad shorts — to the
-HOT RADAR list. The list allocation is 100 bytes per scenario unit-definition
-(10-byte stride, so capacity is maxDefs·10 entries; stock maxDefs ≈ 250 gives
-2,500). **Bounded-negative.** No capacity check precedes the append; retail
-relies on the active unit count never reaching capacity by construction. A
+HOT RADAR list. The list allocation is 100 bytes per entry of the session
+**per-player unit limit** ([05 R-SHARE-01 §7]) — not per unit definition —
+so with the 10-byte stride the capacity is `limit · 10` entries, 2,500 at the
+stock skirmish limit of 250. **Bounded-negative.** No capacity check precedes
+the append; retail relies on the active unit count never reaching capacity by construction. A
 reimplementation must enforce the cap itself rather than reproduce the
 unbounded write.
 
@@ -5273,9 +5333,11 @@ RLE-compressed. RLE rows use a command bit for transparent skip, a repeat-byte
 command, and a literal-copy command. Palette index zero is not inherently
 transparent; transparency comes from skip commands.
 
-Subframes are placed at their offsets relative to a parent canvas, clipped, and
-composited in order, with later opaque pixels overwriting earlier pixels. The
-loader wires named entries for smoke, fire, explosions, water/lava impacts,
+Subframes are placed at their own signed offsets from the parent frame's pen
+and composited in order, clipped against the destination surface and not
+against the parent's dimensions ([R-COMP-01 §2]), with later opaque pixels
+overwriting earlier pixels.
+The loader wires named entries for smoke, fire, explosions, water/lava impacts,
 shadows, cursors, victory/defeat/pause art, logos, and GUI panels. Optional
 entry lookup failure leaves the relevant visual absent rather than inventing a
 replacement.
@@ -5551,14 +5613,25 @@ implementation does not need them.
 **Established (direct-static)** unless marked. These are the raster
 helpers [R-COMP-01 §2] listed by name but did not spell out.
 
-**The sin/cos helper pair.** One 512-entry signed 16-bit table holds
-`8192 × sin(2π k / 512)` ([R-WIND-01]). The *sine* helper of a `uint16` angle
-`a` and radius `r` computes `t = table[((a + 0x20) >> 6) & 0x1ff]` — the
-angle rounded to the nearest of 512 steps — and returns `(t × r + 0x1000) >>
-13` (64-bit product, arithmetic shift: round-to-nearest of `r × sin`). The
-*cosine* helper is the same with `a + 0x4020` (a quarter turn added before
-the rounding). Both are the helpers the minimap circles and the flash disc
-spokes use.
+**The sin/cos helper pair.** These are not private raster helpers: they are
+the shared simulation trig component routines that [04 R-MOV-01 §4] owns and
+[06 §3.3] restates, called from roughly fifty sites across the image,
+of which the minimap circles and the flash disc spokes below are only two
+families. Read the arithmetic there rather than here; the only facts this
+section needs are that the *sine* helper of a `uint16` angle `a` and radius
+`r` reads the shared 8192-scaled sine table at **word index
+`((a + 0x20) >> 7) & 0x1ff`** — one of 512 steps of 128 angle units — and
+returns `(t × r + 0x1000) >> 13` as a 64-bit product with an arithmetic
+shift, and that the *cosine* helper is the same with `a + 0x4020`, a quarter
+turn (128 entries) ahead. The `+0x20` biases each entry boundary a **quarter
+step** early; it is not round-to-nearest, which would be `+0x40`. The
+`+0x1000` in the tail *is* round-to-nearest at the table's 8192 scale.
+The addressable circle is 512 entries ([R-WIND-01]); the table object
+physically carries 640 signed words, entries 512..639 repeating 0..127 so
+that a second, radius-less accessor pair can address a full circle from a
+base of entry 128 without running off the end. That second pair applies no
+`+0x20` bias — its word index is simply `a >> 7`, and it returns the raw
+table entry — and no section of this document describes its callers.
 
 **The solid circle** (centre `(cx, cy)`, radius `r`, colour byte, target
 image or null = screen) draws **32 chords**: starting from `p₀ = (cx + r,
@@ -5840,9 +5913,18 @@ Two visual families exist:
   Divide's initially-placed features use this path; corpses and later wrecks
   do.
 
-Missing assets do not crash: a null GAF handle or null object pointer causes
-the per-cell dispatch to return without drawing. Stock GAFs are valid; only a
-malformed install exercises the early-out.
+A missing **sprite** asset does not crash: when a feature definition's main
+GAF handle is null the per-cell dispatch returns without drawing, and a null
+shadow handle skips only the shadow. The **3DO class behaves differently**:
+when an `object` name fails to resolve under the object directory — missing
+and unreadable are the same failure — the feature definition loader raises a
+system-modal message box naming the path and terminates the process. No
+build, debug or quiet predicate guards that path; it is the image's generic
+fatal-asset handler, shared with dozens of other load sites. The dispatcher is
+therefore never reached with a null model, and its 3DO branch has no
+null-model test: it stores the pointer into the shared placeholder and
+dereferences it immediately. Stock GAFs are valid, and stock `object` names
+resolve; only a malformed install exercises either path.
 
 #### 5.1.2 Placement sources and the single stamper
 
@@ -5850,9 +5932,9 @@ Retail funnels every feature placement through a single stamping service. It
 validates the anchor rectangle against map bounds (`anchorX + footX ≤ mapW`,
 and the same for Z), checks footprint collision by attempting a conditional
 teardown of any overlapping occupant (guarded by `indestructible`), stamps the
-anchor `feature = featureId` and the fringe cells `0xFFFE` with signed anchor
-deltas, and notifies derived occupancy. That service is the only writer of the
-plotted footprint; the invoking paths are responsible for ordering. Both the
+anchor `feature = featureId` and the fringe cells `0xFFFE` with their
+anchor-offset bytes (§2.2), and notifies derived occupancy. That service is
+the only writer of the plotted footprint; the invoking paths are responsible for ordering. Both the
 stamping service and the footprint teardown helper it uses for collision end
 by restamping every named movement class over the footprint rectangle —
 [R-LAYER §2] below.
@@ -5883,10 +5965,20 @@ Four sources feed the stamper:
   animation slot. Sinking wrecks pass their submerged descent velocity to the
   successor.
 
-**Reproduction** uses a global cursor descending from `mapW*mapH-1`, visiting
-one cell per sim tick; each visited cell draws one simulation-RNG value even at
-probability zero. Stock maps are inert because every shipped definition
-authors `reproduce=0`.
+**Reproduction** uses a global cursor descending one cell per sim tick. The
+decrement happens **before** the range test and the wrap returns immediately,
+so the tick that resets the cursor to `mapW*mapH-1` visits no cell at all and
+the cell at that index is never scanned; the sweep covers `mapW*mapH-2 … 0`
+and then spends one tick wrapping. A visited cell consumes one simulation-RNG
+draw **only** when its feature word is a live index (`< 0xFFFB`) **and** its
+plot cell carries no animation-instance record; empty, fringe, void and
+already-instanced cells consume none. On that qualifying cell the draw is
+taken **before** the comparison against the definition's `reproduce` byte, so
+a `reproduce=0` definition still spends it. Document 05 owns the walk, the two
+further offset draws a passing roll spends, and the target arithmetic
+([05 "Feature reproduction"], [05 R-FEAT-01 §12]). Stock maps are inert
+because every shipped definition authors `reproduce=0` — inert as placement,
+not as RNG.
 
 #### R-LAYER §2 — feature changes restamp every movement class directly; they bypass the request revision pass
 
@@ -6030,10 +6122,14 @@ are the authors of the per-cell never-seen bit.
   (one Park-Miller draw of `sparktime/2` plus `sparktime/2`), owned by
   document 05's fire contract (`[05 "Feature burning"]`, mirrored in `[06]`
   weapon firestarter handling).
-- **Clipping and transparency** — GAF drawing composes subframes clipped to
-  the parent canvas; later opaque pixels overwrite earlier ones; skip commands
-  are the sole transparency mechanism. Shadow drawing may select the
-  translucent blitter when `shadtrans` is set.
+- **Clipping and transparency** — GAF drawing composes subframes in table
+  order at the same pen, each at its own signed offsets, clipped **only**
+  against the destination surface's clip rectangle ([R-COMP-01 §2]); the
+  parent frame's dimensions bound nothing, so a child may extend beyond the
+  parent's nominal rectangle unless the destination is itself a parent-sized
+  raster. Later opaque pixels overwrite earlier ones; skip commands are the
+  sole transparency mechanism. Shadow drawing may select the translucent
+  blitter when `shadtrans` is set.
 
 #### 5.1.7 Great Divide reference world
 
@@ -6491,9 +6587,15 @@ argument ([04 §10] `BuildingBuild`).
   hidden behind the building it is completing is a defect, not the retail
   order.
 
-Pass A's per-unit work is itself inside the render-mode gate — a zero render-mode argument suppresses
-pass A, pass B and strips 5–7 alike, leaving only strips 0–4, the feature
-pass and strip 8.
+Pass A's per-unit work is itself inside the render-mode gate. A zero
+render-mode argument suppresses strips 6 and 7, the projectile pass, the fixed
+effect pool, pass A's per-unit work (both the selected-footprint quad and the
+per-unit present), pass B in full, the health-bar/label walk and strip 9.
+Strips 0–5 and 8, the terrain tile pass, the feature pass and pass A's
+interleaved tall features still draw — matching the numbered composer order of
+§1. Only the movie-capture frame passes zero; the ordinary frame and the
+large-screenshot tile renderer both pass a nonzero argument, so a large
+screenshot is a full frame.
 
 **The per-unit present.** For the unit and then each attached child that is
 not carried piece-less ([04 R-UNIT-06 §3]): if
@@ -6602,11 +6704,13 @@ established:**
   projection of [R-REN-03D §2]. All three are placed at
   `screenX = trunc(worldX - camX) + 133` and
   `screenY = trunc(worldZ - camZ) - (terrainHeight >> 1) + 32`, five pixels
-  right of the body and sheared by ground height. Feature sprite shadows
-  sample the terrain height under the anchor: the four plot height bytes (current cell, its
-  +X neighbour, the anchor cell, the anchor's +X neighbour) are averaged with
-  `>> 3` (the sum of four bytes divided by 8 — the half-height shear at
-  map-pixel scale) and subtracted into the screen Y.
+  right of the body and sheared by ground height. Feature cells sample the
+  terrain height under the anchor: the four plot height bytes (the anchor
+  cell, its +X neighbour, its +Z neighbour and the +X/+Z diagonal — the same
+  four §5.1.4 gives) are averaged with `>> 3` (the sum of four bytes divided
+  by 8 — the half-height shear at map-pixel scale) and subtracted into the
+  screen Y. The average is computed once per feature cell and shears the body
+  blit and the shadow alike, not by the shadow path on its own.
 - **Shadow raster families.** (A) GAF sprite shadows (features) blit the shadow
   frame through the opaque or the tinted blitter (the tinted path selected by
   the definition's translucent flag and gated on the window's alpha-blend
@@ -7126,9 +7230,15 @@ shared fixed pool".
 The strip pool is a **LIFO free list of fixed-size slots**: a slot array, a
 pointer stack of free slots, a capacity and a stack top. *Take* returns null
 when the top has reached the capacity, else pops the next pointer and
-advances the top; *return* pushes the pointer back one below the top. Every
-producer zeroes the taken slot (13 dwords, the largest container) before
-running the family constructor. The base constructor stores the vtable and
+advances the top; *return* pushes the pointer back one below the top. *Take*
+ignores the size its caller hands it and yields a whole slot or null. Every
+producer then zeroes **exactly its own class's record** before running the
+family constructor — 13, 14, 17, 18 or 19 dwords by family. 13 dwords is the
+**smallest** of those, not the largest; the largest is the strip-6 nano
+family's 19 dwords, which is the slot size itself. Because the pool recycles
+slots LIFO, zeroing a fixed 13 dwords for every family would leave a 19-dword
+container holding the previous tenant's values in its last six dwords.
+The base constructor stores the vtable and
 zeroes the deadline word; the base *init* sets `deadline = tick +
 lifetime`; the pooled **destructor** re-installs the base vtable and, when
 its delete flag bit 0 is set (as the sweep's eviction and removal always
@@ -7245,8 +7355,9 @@ runtime's exit list. It is not rebuilt at battle entry: the ten-descriptor
 strip table is allocated at battle entry and freed at battle exit
 ([R-CORE-01 §4.4.1]), but the slot pool outlives every battle. The
 constructor asks for **1000 slots of 76 bytes** — 76 is the largest container
-record (19 dwords, the count every producer zeroes after taking a slot,
-[R-FX-02 §1]). The pool's growth routine reallocates the free-pointer stack,
+record (19 dwords; each producer zeroes its own class's count, 13 through 19
+dwords, [R-FX-02 §1]). The pool's growth routine reallocates the
+free-pointer stack,
 allocates the new slots as one block and pushes them; it has exactly **one
 caller, the constructor**, and the *take* entry has no growth path — so 1000
 is the hard capacity for the whole process life, not an initial size.
@@ -7506,9 +7617,11 @@ normal 10 (1 frame each — never stepped), hourglass 5 (8), pathicon 3 (1).
 Every stock cursor entry's loop byte is 1 (looping).
 
 **Save-under and presentation (Established, direct-static).** The window
-layer owns the drawn cursor: the current frame header, three `w × h` scratch
-surfaces sized from it, and the last drawn origin. Each cursor present, in
-order: read the OS cursor position; compute the new origin (position minus
+layer owns the drawn cursor: the current frame header, three scratch surfaces
+— each holding the fixed 1600-byte pixel block allocated once with the layer
+([01 §5.1]) and re-described in place on every redraw as `width × height` with
+pitch `width` from that frame header, never reallocated — and the last drawn
+origin. Each cursor present, in order: read the OS cursor position; compute the new origin (position minus
 hotspot); capture the framebuffer under the new rectangle into the *fresh
 background* surface; copy the *old background* surface into it where the two
 rectangles overlap (so the fresh capture holds true background, not the old
@@ -7642,9 +7755,13 @@ mouse save-under rectangles are the old-background, fresh-background and
 composition surfaces of [R-FX-01 §5]. The "blue table" is the 256-byte `BLUE
 TABLE` slot of §4.3's five-table roster — the submerged tint of [R-REN-03D],
 already closed there. The "lens frame" is render type 2's displacement map,
-[R-FX-01 §4]. The mouse-event buffer and the "loaded surface wrapper" were
-not traced in this pass: **Unknown** (owner doc 07 for the event buffer, §4.1
-for the wrapper; decider: static trace of their allocation sites).
+[R-FX-01 §4]. The **mouse-event buffer is closed (Established)**: the same
+cursor-layer constructor that builds the three save-under surfaces allocates
+it, `count × 24` bytes under its own `MOUSE EVENTS` tag, with the record count
+(twenty) supplied by the display creator and stored beside the pointer — so it
+is the twenty-record mouse-event ring of [01 §5.1], and doc 07 owns only what
+reads it. The "loaded surface wrapper" was not traced in this pass:
+**Unknown** (owner §4.1; decider: static trace of its allocation site).
 
 **Residuals closed by citation.** The "derivation of the second effect vertex
 used by the swapped pair" ([R-STRIP-01 §1] `TODO(question)`) is [04 R-COB-03
@@ -8686,10 +8803,13 @@ declares 120 categories. When a variant's authored caption is absent, the
 caption falls back to the slot's static default speech caption.
 
 **Alias registration.** Aliases are registered into a flat, session-lifetime
-table of 256 slots, each holding a 32-byte name and a 64-byte path: the
-registry is deduplicated (a new alias whose name matches an existing entry,
-case-insensitive, up to 32 bytes, returns the existing identity); the cap is
-255 entries, and the 256th registration is rejected without eviction and
+table of 256 slots, each holding a 32-byte name and a 32-byte path — both
+written with a 32-byte bounded copy, both tables laid out at a 32-byte stride,
+with a parallel array of one sample handle per slot; an authored path longer
+than 32 characters truncates. The registry is deduplicated (a new alias whose
+name matches an existing entry, case-insensitive, up to 32 bytes, returns the
+existing identity); the cap is 255 entries, and the 256th registration is
+rejected without eviction and
 returns the zero identity; each alias is probe-loaded at registration time
 through the VFS and the WAV decode path (8.2) with the `sounds/` prefix and the
 canonical candidate tries; the resulting handle, name, and path are stored and
@@ -8698,8 +8818,12 @@ returns the sentinel id 0xFFFF, which silences the cue. A 33-byte authored
 alias truncates to its stored 32 bytes; lookups stay case-insensitive over the
 32-byte field. **Precedence is VFS mount order — first provider wins** (loose
 directory, then GP3/CCX, then UFO/HPI, then CD-ROM); the archive flag does not
-alter precedence, and duplicate aliases on a later mount are suppressed by the
-case-insensitive canonical full-path compare. A separate global alias loader
+alter precedence, and a duplicate alias on a later mount is suppressed by the
+**name** compare above, because an ordinary registration carries a name and
+dedups on it alone. The case-insensitive canonical full-path compare exists
+but runs **only** on the anonymous branch — the one taken when the alias-name
+argument is null, which also stores the empty string as the slot's name.
+A separate global alias loader
 enumerates the children of `gamedata/allsound` and registers each child's
 `sound` key as an alias through the same registry. Unit definitions map their
 category names to category identities, with numeric fallback when a name is
@@ -8724,8 +8848,9 @@ closed:
   network replay.
 - **Named positional** (feature ignition): one site.
 - **Underattack**: one site, on the damage path — emitted once per
-  non-paralyzer normal damage event to a unit owned by the local player, gated
-  on selection state, fixed category 2.
+  non-paralyzer normal damage event to a unit owned by the **view slot**
+  ([R-AUD-01 §7], which owns the sink's gate and distinguishes the view slot
+  from the local human's slot), gated on selection state, fixed category 2.
 - **Unit voice**: 82 sites across orders, AI, and selection — category mapping:
   1 select, 2 underattack, 3/4 activate/deactivate, 5 ok (about thirty
   order-acceptance sites, gated on a runtime status bit 0x2000), 6 arrived,
@@ -9781,9 +9906,13 @@ Alt+F4 path also remain unresolved; menu restoration is established above.
 **Established — capture boundary.** Configuration contains `PlayMovie`,
 `nomovie`, and `Movie Output Rate`. The separate capture path writes names
 `MOVIE%03i` under the configured image output directory; a wall-clock
-dispatcher gates it at a 30 Hz base divided by the output-rate setting.
-**Unknown:** capture encoding, numbering and failure behavior remain outside
-the requested Intro playback implementation.
+dispatcher gates it at a 30 Hz base divided by the output-rate setting. The
+capture is the image's **only** caller that passes a zero render-mode
+argument, so a captured frame carries the reduced world layer set of
+[R-RAST-01 §7] — no strips 6/7, projectiles, fixed effects, per-unit pass A
+work, pass B, health bars, labels or strip 9. **Unknown:** capture encoding,
+numbering and failure behavior remain outside the requested Intro playback
+implementation.
 
 ## 10. Established facts, supported inference, and confidence
 
@@ -9988,19 +10117,18 @@ body — most under `R-<id>` headings — and are not restated here.
   ordinal `0`) — if a stock unit type could occupy it, that type's structure
   shadow would be suppressed below sea level · [R-RAST-01 §4] · static trace
   of the catalog allocator and every ordinal writer.
-- The name and authored source of the display-mode byte that forces every
-  unit body through the tinted blitter (cleared by the film/HUD-hide key
-  family) · [R-RAST-01 §7] · static trace of its writers (doc 07 owns the key).
-- The player-colour selector, if any, supplied when the feature draw dispatcher
-  constructs its pseudo-unit for a team-textured 3DO face; the bounded trace
-  resolves model, position and orientation but not that selector · [R-RAST-01
-  §3] · static trace of the pseudo-unit initialization and the renderer's team
-  selector reader.
+- Whether retail carries any name for the display-mode byte that forces every
+  unit body through the tinted blitter. Its role, its complete three-site
+  writer set, its `0,1,2,3,4,0` cycle and the absence of any authored,
+  session, mission or map source are settled in §3.12 "Debug display mode";
+  [R-RAST-01 §7] owns the body-blend reader. Only the name is open, and no
+  static trace can settle it · §3.12 · manual retail observation of a
+  developer build or of film mode's own text.
 - The identical-model six-variant shading matrix predicted by [R-RND-02A] has
   not been run · §5 · manual retail observation.
-- The mouse-event buffer and the "loaded surface wrapper" named beside the
-  cursor save-under surfaces · [R-FX-01 §7] · static trace of their
-  allocation sites (doc 07 owns the event buffer).
+- The "loaded surface wrapper" named beside the cursor save-under surfaces ·
+  [R-FX-01 §7] · static trace of its allocation site. (The mouse-event buffer
+  named with it is closed in [R-FX-01 §7].)
 - The follow-camera assignment writer, and the retail tracking command or
   producer behind it · §5.6.1 · static trace over a whole-image reference
   census, or manual retail observation. Marked `TODO(CRD-006)` at two sites.
@@ -10081,5 +10209,6 @@ interpretations; the menu's separate full-screen requirement remains.
 - Native window restoration and quit/close handling beyond Alt+F4, and movie
   message-loop ownership of the main renderer lock · §9 · static trace.
 - `Movie Output Rate` exact units, capture frame numbering, file format and
-  encoder, capture failure behavior, and whether captured frames include
-  GUI/cursor or only the world framebuffer · §9 · static trace.
+  encoder, capture failure behavior, and whether the cursor and interface
+  layers reach the capture surface · §9 · static trace. The **world** content
+  of a captured frame is settled in [R-RAST-01 §7].

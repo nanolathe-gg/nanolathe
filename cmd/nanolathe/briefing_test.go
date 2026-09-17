@@ -75,6 +75,38 @@ func TestBriefingPlanetLookupAndFallback(t *testing.T) {
 	if idx != 8 || lunar.Name != "Lunar2" {
 		t.Fatalf("Core Lunar rewrite = %#v, %d", lunar, idx)
 	}
+	arm, idx := ResolveBriefingPlanet("Lunar", 0)
+	if idx != 6 || arm.Name != "Lunar" {
+		t.Fatalf("Arm Lunar must not be rewritten = %#v, %d", arm, idx)
+	}
+}
+
+// TestBriefingPlanetLookupIsCaseSensitive locks the comparison strictness of
+// the two retail compares: the name-column walk and the `Lunar` rewrite test
+// are byte-for-byte, so a differently-cased authored spelling matches nothing
+// and falls to row 0 [08 R-CAMP-01 §2]. Only third-party content can reach it:
+// every stock `Planet` value is either an exact table spelling, empty, or
+// `Urban`, and the last two miss the table under either strictness.
+func TestBriefingPlanetLookupIsCaseSensitive(t *testing.T) {
+	for _, spelling := range []string{"lunar", "LUNAR", "archipelago", "GREEN PLANET", "wet desert"} {
+		row, idx := ResolveBriefingPlanet(spelling, 0)
+		if idx != 0 || row.Name != "Green planet" {
+			t.Fatalf("case-mismatched %q must fall to row 0, got %#v, %d", spelling, row, idx)
+		}
+	}
+	// The rewrite is the same compare, so a Core player on a lower-cased
+	// `lunar` gets no `2` appended and therefore no Lunar2 row either.
+	row, idx := ResolveBriefingPlanet("lunar", 1)
+	if idx != 0 || row.Name != "Green planet" {
+		t.Fatalf("case-mismatched Lunar rewrite = %#v, %d", row, idx)
+	}
+	// Every exact spelling still selects its own row, in the authored order.
+	for want, authored := range briefingPlanets {
+		got, idx := ResolveBriefingPlanet(authored.Name, 0)
+		if idx != want || got != authored {
+			t.Fatalf("exact %q = %#v, %d, want row %d", authored.Name, got, idx, want)
+		}
+	}
 }
 
 func TestBriefingPresentationTick(t *testing.T) {

@@ -21,7 +21,14 @@ func TestShadeRowCount(t *testing.T) {
 	}
 }
 
-// TestGAFSubframeClipAndOverwrite locks A25: later subframes overwrite earlier where opaque, clipped to parent canvas [fmt gaf][03 §4.4].
+// TestGAFSubframeClipAndOverwrite locks A25 for the parent-sized
+// compatibility raster: later subframes overwrite earlier ones where opaque,
+// and a subframe is clipped to that raster's own bounds [fmt gaf]. That is the
+// rule formats' compositeGAFPlain implements for readers that need a single
+// raster, and it is what the body below reproduces. It is not retail's general
+// composition rule: there a subframe is clipped only against the destination
+// surface's clip rectangle and may extend past the parent frame's nominal
+// rectangle [03 R-COMP-01 §2].
 func TestGAFSubframeClipAndOverwrite(t *testing.T) {
 	// Build synthetic parent 4x4 canvas and two subframes manually via the same composition rule
 	// as formats/gaf.go (dx = parent.XOff - child.XOff, clipped, later overwrites).

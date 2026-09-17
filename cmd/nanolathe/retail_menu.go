@@ -310,6 +310,11 @@ func (g *gameShell) refreshMissionPanel() {
 	}
 }
 
+// retailCampaignSide returns the campaign record's authored HEADER
+// campaignside value as the TDF parser stored it — no case folding and no
+// trimming of its own. The parser already strips space, tab, CR and LF from
+// both ends of every value, in retail as here [fmt tdf], so the admission
+// compare below sees the same bytes retail's does.
 func retailCampaignSide(c mission.Campaign) string {
 	if c.Document == nil || c.Document.Root == nil {
 		return ""
@@ -319,15 +324,29 @@ func retailCampaignSide(c mission.Campaign) string {
 		return ""
 	}
 	side, _ := header.StringValue("campaignside", "")
-	return strings.ToUpper(strings.TrimSpace(side))
+	return side
 }
 
 // retailCampaignOptions rebuilds the campaign list for the selected side,
-// admitting only records whose HEADER campaignside matches the selected
-// side or the literal ALL [08 "Enumeration of campaigns"]. The campaign-only
-// layout that instead selects "Arm Campaign"/"Core Campaign" directly and
-// hides this list has no reachable caller [07 §4 (R-FE-01 §4)], so this is
-// unconditional.
+// admitting only records whose HEADER campaignside matches, BYTE FOR BYTE,
+// either the local player's side name or the literal ALL
+// [08 "Enumeration of campaigns"]. The compare is case-sensitive: retail runs
+// the plain string compare over the authored value and over the side name as
+// SIDEDATA authored it, and neither operand is case-normalized, so
+// `campaignside=arm` or `=all` is rejected. (Only the key search folds case,
+// and that is the parser's business [fmt tdf].)
+//
+// The campaign-only layout that instead selects "Arm Campaign"/"Core Campaign"
+// directly and hides this list has no reachable caller [07 §4 (R-FE-01 §4)],
+// so this is unconditional.
+//
+// TODO(question): retail's left operand is the local player's side `name` as
+// authored in SIDEDATA, not a literal. The stock sides author ARM and CORE, so
+// these names match the reference install, but a non-stock SIDEDATA naming its
+// sides otherwise would filter differently here. The frontend shell carries no
+// compiled side table to read the name from (the save dialog compiles one on
+// demand instead), so closing this needs a side table on the shell — a change
+// outside this unit's files.
 func (g *gameShell) retailCampaignOptions() []mission.Campaign {
 	if g == nil {
 		return nil

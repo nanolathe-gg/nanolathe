@@ -118,8 +118,14 @@ func (s *Service) PerUnitProductionFills(player int, w *units.World) {
 		// branch. Buildings require activation; mobile upkeep runs while
 		// activated or moving, but mobile units never reach a generator arm
 		// [R-ECO-01 §2].
+		//
+		// "Moving" is the cached movement-rate tier, non-zero only while the
+		// unit is under way on its own mover [04 R-MOV-01 §6] — not the mode
+		// mirror, which is non-zero for every parked ground unit and so would
+		// bill every mobile definition with an authored `energyuse` for every
+		// tick of its life.
 		buildingActive := def.BMCode == 0 && u.Activated
-		branchActive := buildingActive || (def.BMCode != 0 && (u.Activated || u.Move.Mode != 0))
+		branchActive := buildingActive || (def.BMCode != 0 && (u.Activated || u.MoveTier != 0))
 		upkeepAdmitted := false
 		if branchActive {
 			switch {

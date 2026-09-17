@@ -105,7 +105,7 @@ reloadtime=143165577;
 		t.Fatalf("duration = %d, want 14 after low32 then uint16 store", weapon.Duration)
 	}
 	if weapon.ReloadTime != 14 {
-		t.Fatalf("reloadtime = %d, want 14 after low32 then int16 store", weapon.ReloadTime)
+		t.Fatalf("reloadtime = %d, want 14 after low32 then uint16 store", weapon.ReloadTime)
 	}
 }
 
@@ -492,12 +492,15 @@ func TestWeaponDurationKeysWrapTo16Bits(t *testing.T) {
 		t.Fatalf("turnrate(-40) = %d, want 65535 [06 §6.7]", wd.TurnRate)
 	}
 
-	// Signed 16-bit stores: trunc(-1200*30) = -36000, which is outside the
-	// int16 range and wraps (sign-extended back) to 29,536 rather than
-	// staying at -36000.
+	// reloadtime is an unsigned 16-bit store too: no reader of the weapon
+	// record's reload word sign-extends it [06 §4.2][06 §11.1]. trunc(-1200*30)
+	// = -36,000 wraps to 29,536, which is below 32,768 and so does not separate
+	// the two extensions; the 1100 case below does.
 	if wd.ReloadTime != 29536 {
 		t.Fatalf("reloadtime(-1200) = %d, want 29536 [06 §4.2]", wd.ReloadTime)
 	}
+	// holdtime is the one signed 16-bit store of the nine: trunc(-1200*30) is
+	// outside the int16 range and wraps (sign-extended back) to 29,536.
 	if wd.HoldTime != 29536 {
 		t.Fatalf("holdtime(-1200) = %d, want 29536 [07 \"in-flight camera move\"]", wd.HoldTime)
 	}
@@ -517,7 +520,8 @@ func TestWeaponDurationKeysWrapTo16Bits(t *testing.T) {
 	// The case that separates zero- from sign-extension: 1100 s is 33,000
 	// ticks, above 32,767 and below 65,536. A sign-extending reader would see
 	// -32,536; the zero-extending readers see 33,000 [06 R-WPN-05 §12]. The
-	// same authored value wraps the signed reloadtime store to -32,536.
+	// reload word takes the same unsigned reading [06 §4.2][06 §11.1], so such
+	// a weapon reloads for 33,000 ticks rather than being handed a negative.
 	above := mustParseTDF(t, `[ABOVE]
 {
 	ID=2;
@@ -525,19 +529,21 @@ func TestWeaponDurationKeysWrapTo16Bits(t *testing.T) {
 	duration=1100;
 	smokedelay=1100;
 	reloadtime=1100;
+	holdtime=1100;
 }
 `)
 	wa := compileWeaponSection(above.Root.Sections()[0], "ABOVE", Provenance{})
 	for _, c := range []struct {
 		name string
 		got  int32
-	}{{"burstrate", wa.BurstRate}, {"duration", wa.Duration}, {"smokedelay", wa.SmokeDelay}} {
+	}{{"burstrate", wa.BurstRate}, {"duration", wa.Duration}, {"smokedelay", wa.SmokeDelay}, {"reloadtime", wa.ReloadTime}} {
 		if c.got != 33000 {
-			t.Fatalf("%s(1100) = %d, want 33000 (zero-extended) [06 R-WPN-05 §12]", c.name, c.got)
+			t.Fatalf("%s(1100) = %d, want 33000 (zero-extended) [06 R-WPN-05 §12][06 §4.2]", c.name, c.got)
 		}
 	}
-	if wa.ReloadTime != -32536 {
-		t.Fatalf("reloadtime(1100) = %d, want -32536 (sign-extended) [06 §4.2]", wa.ReloadTime)
+	// holdtime keeps the signed reading, which is what tells it apart.
+	if wa.HoldTime != -32536 {
+		t.Fatalf("holdtime(1100) = %d, want -32536 (sign-extended) [07 \"in-flight camera move\"]", wa.HoldTime)
 	}
 }
 

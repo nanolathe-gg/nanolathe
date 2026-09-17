@@ -49,7 +49,7 @@ type WeaponDef struct {
 	WeaponVelocity     int32   // weaponvelocity *65536/30 truncated [02 "Weapon record"]
 	StartVelocity      int32   // startvelocity *65536/30 truncated [02 "Weapon record"]
 	WeaponAcceleration int32   // weaponacceleration *65536/900 truncated [02 "Weapon record"]
-	ReloadTime         int32   // reloadtime *30 truncated ticks, wrapped to a signed 16-bit store [06 §4.2]
+	ReloadTime         int32   // reloadtime *30 truncated ticks, wrapped to an unsigned 16-bit store [06 §4.2] [06 §11.1]
 	WeaponTimer        int32   // weapontimer *30 truncated, wrapped to an unsigned 16-bit store [06 §7.3]
 	BurstRate          int32   // burstrate *30 truncated, wrapped to an unsigned 16-bit store [02 R-KEYS-01 §6] [06 R-WPN-05 §12]
 	Duration           int32   // duration *30 truncated, wrapped to an unsigned 16-bit store [02 R-KEYS-01 §6] [06 R-WPN-05 §12]
@@ -200,7 +200,10 @@ func compileWeaponSectionWithPrior(section *formats.Section, sectionName string,
 	// whole [06 §7.3]. What is established per key is the *extension* the
 	// reader applies to that stored word, and six keys name theirs — wrapped
 	// here with `int32(int16(...))` (sign-extended back) or
-	// `int32(uint16(...))` (zero-extended back).
+	// `int32(uint16(...))` (zero-extended back). `holdtime` is the only one of
+	// the nine whose readers sign-extend [07 "in-flight camera move"]; the
+	// signed word in the firing path is the SLOT's computed countdown, which is
+	// a different field and is stored by the combat service, not here.
 	//
 	// The remaining three (burstrate, duration, smokedelay) used to be left as
 	// a plain *30 truncation because no reader extension was written up. It
@@ -212,7 +215,7 @@ func compileWeaponSectionWithPrior(section *formats.Section, sectionName string,
 	// census of the stock weapon family (77 files, 198 sections) finds every
 	// one of the nine keys inside that range in every section, so nothing
 	// shipped distinguishes them (WU-19-167); third-party content can.
-	reloadTime := int32(int16(numeric.TruncateFloat64ToLow32(section.FloatValue("reloadtime", 0) * 30.0)))    // signed 16-bit store [06 §4.2]
+	reloadTime := int32(uint16(numeric.TruncateFloat64ToLow32(section.FloatValue("reloadtime", 0) * 30.0)))   // unsigned 16-bit store, zero-extended by every reader [06 §4.2][06 §11.1]
 	weaponTimer := int32(uint16(numeric.TruncateFloat64ToLow32(section.FloatValue("weapontimer", 0) * 30.0))) // unsigned 16-bit store [06 §7.3]
 	burstRate := int32(uint16(numeric.TruncateFloat64ToLow32(section.FloatValue("burstrate", 0) * 30.0)))     // unsigned 16-bit store, zero-extended by all three burst-scheduler loads [06 R-WPN-05 §12]
 	duration := int32(uint16(numeric.TruncateFloat64ToLow32(section.FloatValue("duration", 0) * 30.0)))       // unsigned 16-bit store, zero-extended by the beam latch [06 R-WPN-05 §12]

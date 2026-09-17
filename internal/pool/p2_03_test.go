@@ -43,11 +43,11 @@ func TestAllocatorFailureZeroFill(t *testing.T) {
 }
 
 func TestCapacityFormula(t *testing.T) {
-	// P2-03: cap = maxDefs*10+1 not 500 folklore, stock ~2000-5001
-	if got := CapacityForDefs(200); got != 2001 {
-		t.Fatalf("CapacityForDefs 200 = %d want 2001 [P0-16]", got)
+	// P2-03: cap = limit*10+1 not 500 folklore, stock ~2000-5001
+	if got := CapacityForLimit(200); got != 2001 {
+		t.Fatalf("CapacityForLimit 200 = %d want 2001 [P0-16]", got)
 	}
-	if got := UsableCapacityForDefs(200); got != 2000 {
+	if got := UsableCapacityForLimit(200); got != 2000 {
 		t.Fatalf("Usable 200 = %d want 2000", got)
 	}
 	// Ensure TotalRecords includes slot 0

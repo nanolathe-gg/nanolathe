@@ -307,12 +307,11 @@ the row's document is authoritative, not the citing one.
 | `R-PROD-01` | 05 | §1–§8 | the economy fields with widths, defaults and reader census; the activated bit; the wind phase and its draws; tidal strength; upkeep timing; the metal byte and footprint sampling |
 | `R-RAST-01` | 03 | §1–§8 | the polygon raster: edge walk, span inclusion, the winding cull, the fixed-point steps, and SHD-only lighting in the model path |
 | `R-REN-02R` | 03 | — | red/purple fringe provenance |
-| `R-REN-03A` | 03 | — | the per-unit composition image, the height key, and structure anti-aliasing |
-| `R-REN-03D` | 03 | — | model shadows: projection, fill, tinting, and cache |
+| `R-REN-03A` | 03 | §1–§9 | the per-unit composition image, the height key, and structure anti-aliasing |
+| `R-REN-03D` | 03 | §1–§6 | model shadows: projection, fill, tinting, and cache |
 | `R-REV-01` | 07 | §7, §10 | hover hull extrema, corner mapping, projection sign, the polygon predicate, and the HOT UNITS producer |
 | `R-REV-02` | 04 | — | the exit-piece locator transform |
 | `R-RND-02A` | 03 | — | model-path shading and stock reachability |
-| `R-RND-02A` | 04 | — | the script-side shading census |
 | `R-RR16-A` | 03 | §1 | gray table construction |
 | `R-SAVE-02` | 08 | §1–§15 | the Save Game screen: file naming, the slot list, overwrite and delete |
 | `R-SAVE-FEATURE-01` | 08 | — | feature record maps and staged reconstruction |
@@ -333,7 +332,7 @@ the row's document is authoritative, not the citing one.
 | `R-STRIP-01` | 03 | §1–§3 | the effect strips: producer census and per-strip events, object families and terminal state, and the sweep's CRT draws |
 | `R-TERR-01` | 03 | §1–§8 | the two terrain attribute encodings and the header slot map, the void strips, the height queries and their sentinels, the air sector grid, the map-global block, and the absence of deformation |
 | `R-TRIG-01` | 08 | §1–§12 | trigger authority, record shape and construction, the shared predicates, every condition, `MoveUnitToRadius` geometry, and the tick site's cadence and latch |
-| `R-UNIT-06` | 04 | §1–§6 | guard assistance retargeted and sized, the guard's wake and re-target producers, and the attachment and transport callback encoding |
+| `R-UNIT-06` | 04 | §1–§7 | guard assistance retargeted and sized, the guard's wake and re-target producers, the attachment and transport callback encoding, and the constructor initialization boundary |
 | `R-VIS-01` | 03 | §1–§9 | the visibility mode word's provenance and polarity, and the LOS mask's per-source-slot bits |
 | `R-WATER-01` | 03 | §1, §2 | wakes are the script-emitted strip-2 sprinkles; there is no wake rectangle |
 | `R-WFX-01` | 06 | §1–§6 | the weapon presentation keys: parse, storage, art binding, and the loop byte |
@@ -447,8 +446,13 @@ section's claim-level confidence and its current "Missing and unknown" list.
 Implementation progress is tracked separately in REVIEW.md.
 
 **Established — current ledger check:** the current external ledger has
-2,044 covered rows, all with citation text. The existing strict citation
-checker reports unresolved tokens in 81 of those rows (51 distinct tokens).
+2,044 covered rows, all with citation text. The existing citation checker
+reports unresolved tokens in 74 of those rows (45 distinct tokens) in its
+default lane-strict mode, where an anchor must resolve inside the row's own
+lane document; a lane-relaxed run reports 7 rows (3 distinct tokens), and a
+run over every classification rather than the covered rows alone reports 83
+rows (54 distinct tokens). The mode matters — the three differ by an order of
+magnitude — so a count without its mode means nothing.
 No rows currently carry the partial or uncovered classification; one row has
 an empty classification. Those labels therefore cannot support a blanket
 completeness claim. The checker validates heading/anchor resolution within its

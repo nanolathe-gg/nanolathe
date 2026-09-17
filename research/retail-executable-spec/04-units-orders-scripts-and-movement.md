@@ -273,13 +273,20 @@ reconstructed. A failed unit allocation can cause the saved record to be
 skipped.
 
 **Established fact — pool capacity [P0-16]:** The physical pool capacity is
-`(u16)catalogDefCount · 10 + 1` records of 0x118 bytes, allocated at battle
-entry. The pool is laid out as per-player slices of `catalogDefCount`
-records; slot 0 is the null sentinel. Allocation scans each player's slice
-lowest-free and enforces the per-definition limit gate (the definition's
-limit-enable bit plus its limit field). The mission `maxunits` field is NOT
-read by the allocator — it does not bound allocation (bounded-negative,
-2641-TU census) — and save restore verifies the forced slot [P0-16].
+`(u16)unitLimit · 10 + 1` records of 0x118 bytes, allocated at battle entry,
+where `unitLimit` is the session's per-player unit limit word. The pool is
+laid out as per-player slices of exactly `unitLimit` records; slot 0 is the
+null sentinel. No writer of that word stores a catalog definition count; its
+producers are the mission `maxunits` global (default 200), the clamped
+`UnitLimit` profile value (default 250, clamped to 20..500) and the host's
+synchronized limit word — doc [05 R-SHARE-01 §7] owns the sizing contract and
+its arithmetic. Allocation scans each player's slice lowest-free and enforces
+the per-definition limit gate (the definition's limit-enable bit plus its
+limit field). The allocator itself does not read `maxunits`: it bounds
+allocation only through the slice it was already given (bounded-negative,
+2641-TU census), so in a mission `maxunits` reaches allocation solely as one
+producer of the limit word that sized that slice. Save restore verifies the
+forced slot [P0-16].
 
 ### Constructor initialization boundary [R-UNIT-06 §7]
 
@@ -301,8 +308,9 @@ paths; do not infer zero values from allocator policy [01 R-PLAT-01 §5].
 ### 2.3a Player-slice order at battle entry [R-P0-16-A]
 
 **Established fact:** The pool initializer first forms a ten-element list in
-logical player-slot order `0..9`, then assigns contiguous definition-count
-sized slices to that list's resulting order. The comparator is mode-gated: in
+logical player-slot order `0..9`, then assigns contiguous slices of the
+session's per-player unit limit to that list's resulting order. The comparator
+is mode-gated: in
 mission mode `3`, it orders records by their unsigned 32-bit
 `PlayerSortKey` in strict ascending order; in every other mission mode it
 orders by the original logical player slot. Equal mode-3 keys retain the
@@ -310,8 +318,9 @@ original slot order. This is the complete comparator and gate; it runs once
 before pool construction and is never re-applied during a running battle.
 
 The element at sorted position `i` receives the slice
-`1 + i·catalogDefCount` through `(i+1)·catalogDefCount`, while the logical
-player named by that element owns the range. Slot zero remains the null
+`1 + i·unitLimit` through `(i+1)·unitLimit` — the session per-player unit
+limit of [05 R-SHARE-01 §7], not a catalog definition count — while the
+logical player named by that element owns the range. Slot zero remains the null
 sentinel. A valid order is therefore a total permutation of `0..9`; malformed
 or duplicate values are rejected before allocation. `PlayerSortKey` is the
 setup record's per-slot sort key, owned by [08 R-SESS-01 §7]; its provenance
@@ -556,8 +565,11 @@ The remaining 67 records, in sorted order, are:
 
 **Established fact:** Named bits of the gate mask are: 0x200 cleared when the
 order is constructed without a target unit; 0x400 cleared when constructed
-without a goal position; 0x4000 inherited from the current tail record on
-enqueue; 0x40000 marks a record that belongs in the rear queue segment;
+without a goal position; 0x4000 copied, when the link is non-null, from the
+record the new node is linked **before** — on every head-insert path the
+displaced head of the selected segment, as §3.9 states; the marker-insert and
+plain tail-append paths copy nothing; 0x40000 marks a record that belongs in
+the rear queue segment;
 0x100000 marks the nanolathe/build-site class, tested by the guard-assist
 branch; and 0x200000 marks a valid cached target position, written by the
 goal-resolution helper. Four further bits have located readers — bit 2 (the
@@ -649,10 +661,12 @@ bit 3 (0x8 — the build family: `BuildingBuild`, `HelpBuild`, `MobileBuild`, `V
 replacement purge, [R-ORD-01 §13]); bit 7 (0x80 — `Attack_NoMove`, `Attack_Chase`, `AttackSpecial`;
 **located:** the damage dispatcher's under-attack notice reads it on the victim's front
 primary order and stays silent while it is set, [06 R-WPN-04 §2]); bit 8
-(0x100 — the cloak/standing family, `BuildingBuild`, `BuildWeapon`, `MobileBuild`,
-`VTOL_MobileBuild`); bit 11 (0x800 — `Reclaim`); bit 16 (0x10000 — the cloak/standing
-family, `BuildWeapon`); bit 17 (0x20000 — `Standby`, `Standby_Mine`); bit 19 (0x80000 —
-`BuildWeapon` only, alongside its bit 18); bit 24 (0x1000000 — `Standby_Mine` only).
+(0x100 — the four build descriptors only: `BuildingBuild`, `BuildWeapon`, `MobileBuild`,
+`VTOL_MobileBuild`); bit 11 (0x800 — `Reclaim` and `VTOL_Reclaim`); bit 16 (0x10000 —
+the six activation/cloak/standing descriptors only, **not** `BuildWeapon`); bit 17
+(0x20000 — `Standby`, `Standby_Mine` and `VTOL_Standby`); bit 19 (0x80000 —
+`BuildWeapon` only, alongside its bit 18); bit 24 (0x1000000 — `Standby_Mine` and
+`SelfRepair`).
 
 ### 3.2 Order record
 
@@ -1057,8 +1071,11 @@ carrier, the air move handler when the unit is dead or cannot fly, both move
 handlers when the record's phase byte is outside the machine (a corrupt phase
 cancels the whole queue), the ground patrol handler when the unit is dead,
 and the attack/guard machines documented in section 3.5 (disengaged stance,
-orbit-substate overrun, out-of-range phase). Abandon (8) is produced by the
-attack-chase leash/disengage family and by the mobile-build give-up below.
+orbit-substate overrun, out-of-range phase). Abandon (8) is produced by
+`Suppress` when the acting unit's own definition carries `canfly`, by
+`Attack_Kamikaze`'s phase-1 arm, by the ground guard's flying-ward removal,
+and by the mobile-build give-up below. `Attack_Chase` never returns 8 — all
+four of its pre-check exits return complete (5), §3.5.
 The traced rejection sites are these; the closure of ORD-04 does not depend
 on the set being exhaustive, because the pump maps both codes to queue
 effects (7 cancel-all, 8 plain removal) regardless of which handler emits
@@ -1111,8 +1128,9 @@ the composition is the following.
    self-identity term. A mover's cells become `0` at the first same-class
    request init whose new watermark `max(tick, 30) − 30` exceeds its stamp
    tick — the revision pass restamps every live unit whose tick lies in the
-   window just crossed — that is, between 30 ticks and 30 ticks plus one
-   request gap after it last committed a cell change. They return to terrain
+   window just crossed — that is, at the first such request at a tick at or
+   after `commitTick + 31`, so 31 ticks plus one request gap after it last
+   committed a cell change. They return to terrain
    when it leaves (the clear's maintenance, which reads the stamp tick
    **before** the following stamp rewrites it) or, for a requester, at its own
    request's release (the correction in [R-PATH-01 §14]). The goal cell is
@@ -1342,9 +1360,14 @@ script argument, arity 1, receiver none — the cell map of `[R-UNIT-06 §4]`.
 
 **Established fact:** Player and network commands do not name descriptors
 directly. A resolver takes a **command code from 1 to 14**, the acting unit,
-an optional target, and an optional ground position, and produces a canonical
-command *name*, which is then looked up to obtain the descriptor identity. A
-failed capability gate produces the reject identity.
+an optional target, and an optional ground position, and yields a **descriptor
+index**. There are two forms. The identity-form resolver returns the index in
+its return value. The name-form resolver selects the canonical command name for
+the resolved case and performs the case-insensitive binary search over the
+sorted descriptor table ([R-STANCE-01 §9]) **itself**, writing the matched
+row's index as a single byte into the caller's out parameter; the name never
+leaves the resolver, and there is no second entry point that takes a name. A
+lookup miss or a failed capability gate writes index 0, the reject sentinel.
 
 | Code | Meaning | Capability gate | Resolves to |
 |---:|---|---|---|
@@ -1357,14 +1380,18 @@ failed capability gate produces the reject identity.
 | 7 | guard or follow | can-guard, target friendly | ground or air follow |
 | 8 | assist or repair | target is reachable by a nanolathe | build assistance while the target is unfinished, otherwise repair |
 | 9 | patrol | can-patrol | an actor with no live mover gets `QPatrol`; a builder with the repair-patrol capability becomes the repair patrol; otherwise ground or air patrol |
-| 10 | internal | — | **no resolver case exists**: neither resolver has a code-10 arm; both fall to their defaults — the identity-form resolver returns the `GetBuilt`-shaped identity 0x13, the name-form resolver writes an empty name (reject) — and no caller inside the bounded census emits code 10 [P0-R02] |
+| 10 | internal | — | the two resolvers differ: the **identity-form** resolver has no code-10 arm and falls to its shared default, returning the `GetBuilt`-shaped identity 0x13; the **name-form** resolver does have a code-10 arm, which resolves the canonical name `Stop` case-insensitively through the descriptor lookup and yields that descriptor's identity, reaching the empty-name reject only on a lookup miss. No caller inside the bounded census emits code 10 [P0-R02] |
 | 11 | teleport | none | teleport |
 | 12 | reclaim or resurrect | can-reclaim | a wreck feature with the resurrect capability becomes resurrect; otherwise feature reclaim or unit reclaim, in the ground or air variant |
 | 13 | capture | can-capture, target differently owned (hostility is not tested) | capture |
 | 14 | mobile build | the unit's build list is non-empty | ground or air mobile build |
 
-Hostility comes from a per-side diplomacy byte on the acting unit's
-definition, indexed by the target's side. VTOL versus ground variants are
+Hostility comes from the **acting player's record**: its outbound alliance row,
+indexed by the **target player's** slot/ally index. A zero byte is hostile, any
+non-zero byte friendly, and with no target neither flag is set. No field of the
+unit definition takes part in the test; the acting unit's definition is loaded
+only afterwards, for the capability words (§2.1, [R-ORD-02 §1]). VTOL versus
+ground variants are
 chosen by the canfly flag on the acting unit's definition; construction work
 uses the standard builder gates and stockpile `BuildWeapon` is capped at its
 buildTime with cost deltas applied via the two-resource versus energy-only
@@ -1706,14 +1733,17 @@ reading or writing a standing-order field.
 
 **Established — but the stance changes the draw *order*.** Five idle handlers
 run the opportunity scan of [R-STANCE-01 §3] and take a different exit
-depending on whether it issued an order; three of the no-issue exits draw:
+depending on whether it issued an order. Three of the no-issue exits draw in
+the handler body itself; a fourth, `VTOL_Standby`, draws nothing of its own but
+returns advance, which re-dispatches the record in the same pump pass, so its
+idle decision draws on the same tick in every case but one:
 
 | Handler | Scan issued an order | Scan issued nothing |
 |---|---|---|
 | `Patrol` | clear the gate, set phase 1, return the retry code; no draw | one draw of bound 30, deadline `tick + draw + 30` |
 | `Standby` | complete the record (code 5); no draw | one draw of bound 30, deadline `tick + draw + 30` |
 | `VTOL_Patrol` | clear the gate, return the retry code; no draw | deadline `tick + 30` **fixed**, no draw |
-| `VTOL_Standby` | clear the gate, set phase 0, return the retry code; no draw | return the wait code with no deadline write and no draw |
+| `VTOL_Standby` | clear the gate, set phase 0, return the retry code; no draw | return **advance**, with no deadline write and no draw of its own; the advance re-dispatches the record in the same pass, so the phase-2 idle decision of §10 [R-AIR-01 §7] runs on the same tick and draws there: one draw of bound 30 when the unit is not `canfly` or is not airborne; a full-circle bearing, a radius `8 + below 0x20` and a delay below 15 when it is airborne with cargo; no draw at all when it is airborne and empty, where it head-inserts `VTOL_LandIfCan` and completes |
 | `VTOL_SeekAttack` | complete the record; no draw | builds its orbit waypoint (one conditional draw of bound `0x2000` for the orbit angle when the interrupt bits are set), then one draw of bound 30, deadline `tick + draw + 30` |
 
 A stance that admits the scan therefore both consumes the acquisition draws of
@@ -1955,9 +1985,13 @@ the unit definition, with no stance test [07 R-P0-11 §3].
 **Attack-chase state machine [P0-07][P0-08].** Before its phase switch, the
 chase-attack handler runs admission pre-checks in order: satisfied bits
 indicating abandonment, a missing target, or a disengage bit combination return
-the abandon code; and when a pursuit leash is authored, a horizontal distance
-from the order's guard/fight anchor at or beyond the leash also abandons — this
-leash is what makes the *Fight* command return to its post. The phases are:
+**complete (5)**; and when a pursuit leash is authored, a horizontal distance
+from the order's guard/fight anchor at or beyond the leash returns the same
+code — this leash is what makes the *Fight* command return to its post. All
+four exits share one epilogue and `Attack_Chase` never returns 8 (§3.3;
+[R-STANCE-01 §4] states the leash exit the same way). The pump's arm for 8 is
+the arm for 5, so the distinction is a contract point, not an observable one.
+The phases are:
 admit (require ground unit, reset goal to own position, pick a weapon slot if
 none stored), engage setup (range-gate, bind fire slots, single tick),
 combat-maneuver orbit cycle, and re-engage (rebind on range or release the fire
@@ -2309,9 +2343,11 @@ Standing-move bits (18–19) and standing-fire bits (20–21) copy from builder
 to product only when both units carry the in-game bit 28 ([R-ORD-01 §12])
 and NEITHER carries bit 14 (the death latch the kill service sets
 beside the cause byte, which the completion transition also sets for an
-`isfeature` product — [R-SPEC-01 §12]); the
-experience word copies only for computer-player-owned builders (owner control
-byte `2`) [R-P0-09].
+`isfeature` product — [R-SPEC-01 §12]); as the last step of that same guarded
+block the builder's experience word copies to the product only when the
+**product's** owning player record is present and its controller value is
+exactly `1` — the human-controlled seat ([05 R-SHARE-01 §1]) — and is skipped
+for every other controller value [R-P0-09].
 The full production lifecycle, refund arithmetic, and completion transition
 belong to document 05. The complete GetBuilt state gates, retry timing,
 completion-transition order, and same-tick publication windows are in section
@@ -2567,13 +2603,17 @@ edge. The factory state machine then re-enters its completion state in the
 same primary-pump pass.
 
 The completion state follows the helper's product completion transition (and
-any possible product `Activate`) with a strict callback/mutation order: the
-factory `StopBuilding` falling edge is lowered first in state 4, then the
-product completion transition is invoked idempotently again (its unchanged
-edges do not re-fire), followed by clearing the presentation payload,
-decrementing the queued product count once, refreshing the builder interface,
-and restarting the factory node at state 0 — or freeing it when the count is
-exhausted. The edge helper fires `StopBuilding` only on the falling edge;
+any possible product `Activate`) with a strict callback/mutation order: state 4
+first emits the factory's `unitcomplete` status/announce (kind 8), then lowers
+the factory `StopBuilding` falling edge — so the announce precedes the edge,
+and both precede the transition — then invokes the product completion
+transition idempotently again (its unchanged edges do not re-fire), then
+**unbinds the build record's target smart-reference** (the link to the finished
+product), decrements the queued product count once, refreshes the builder
+interface, and restarts the factory node at state 0 — or frees it when the
+count is exhausted. The record's goal payload is not touched here; releasing
+that payload belongs to record cleanup.
+The edge helper fires `StopBuilding` only on the falling edge;
 unchanged state does not re-fire. The shared helper's zero-remaining call
 precedes the factory edge and the state-4 bookkeeping.
 
@@ -2617,9 +2657,14 @@ copy is allowed only when BOTH the product and the builder carry the
 in-game bit 28 and NEITHER carries bit 14 (the
 death latch — neither unit is dying). When the guard
 passes, standing-move bits 18–19 and standing-fire bits 20–21 copy from the
-builder's state word to the product's; for a computer-owned builder (owner
-control byte `2` — the computer player, [05 R-SHARE-01 §1],
-[05 R-ECO-01 §3], [R-SPEC-01 §5]) the builder's experience word also copies.
+builder's state word to the product's; and then, when the **product's** owning
+player record is present and that record's controller value is exactly `1` —
+the human-controlled seat, as against `2` for the computer player
+([05 R-SHARE-01 §1], [05 R-ECO-01 §3], [R-SPEC-01 §5]) — the builder's
+experience word also copies. Any other controller value skips the experience
+copy while leaving the standing-bit copy in place. Because a factory product
+is allocated into its builder's own owner slice, product and builder always
+share an owner, so the gate is observable only through the required value.
 The
 state-2 epilogue's own standing-field merge is the initial product-state copy;
 the guarded GetBuilt block is the post-build gate — keep both stages distinct
@@ -2927,7 +2972,8 @@ the front: a record whose name is `QMove` is resolved as command 2 (move) and
 one named `QPatrol` as command 9 (patrol) against the product with the
 record's goal triple and inserted **queued** on the product, in walk order;
 then the standing-bit copy under the bit-28 / bit-14 guard of §3.8 (with the
-experience word for a computer-owned builder); then, if nothing was inserted,
+experience word when the product's owner row is present and its controller
+value is `1`); then, if nothing was inserted,
 `Park` is inserted queued. It returns complete (5). A product without a mover
 (a building-class product) gets nothing.
 
@@ -3268,9 +3314,12 @@ no text ("caption clear") or with a state text ("caption clear with
 *Repairing*").
 
 **The status emitter** takes the unit, a status kind, and an optional text. It
-does nothing unless the unit belongs to the local player, carries the
-in-game bit 28 (constructed and not yet torn down, [R-ORD-01 §12]), and does
-**not** carry the auto flag bit 14. When
+does nothing unless the unit belongs to the **view slot** (a session-global
+distinct from the local human's slot; [03 R-AUD-01 §7] owns this gate and
+states it in full), carries the in-game bit 28 (constructed and not yet torn
+down, [R-ORD-01 §12]), and does **not** carry the **death-pending bit 14** of
+the unit state word ([R-SPEC-01 §12]) — not the order record's auto flag,
+which is a different bit 14 on a different word. When
 no text is given it substitutes the kind's default display text from a fixed
 table of 23 kinds; kinds with no default text emit no caption (the kind still
 reaches presentation, which owns the sound side — doc 07). The table, kind →
@@ -3435,7 +3484,7 @@ truncated toward zero.
 | `BeCarried` | If the unit's carrier link is null → complete. Phase 0: release all slots; advance. Phase 1: deadline 10; hold. Other: cancel-all. A carried unit therefore re-checks its carrier link every ~10 ticks. |
 | `Paralyze` | p1 is the stun credit in ticks. p1 = 0 → lower edge bit 4 of the edge byte (stun off); complete. Else clamp p1 to 1800, release all slots, clear the three slot targets unconditionally, release the goal payload, deadline = p1, p1 = 0, raise edge bit 4 (stun on); advance. Phase 1 on expiry sees p1 = 0 and completes. Later paralyzer hits add to p1 of the waiting head record (§2.4; doc 06 owns the packet arithmetic). |
 | `Wait` | p1 = timeout budget in ticks, p2 = scan radius. With p2 ≠ 0 (every phase): enumerate the target registry within p2 of the unit for the unit's side (inclusive `d² ≤ r²` in whole units); any hit → complete; else if p1 < 1 → complete; else draw `r = RNG(30)`, `p1 −= r + 150`, deadline `r + 150`, hold. With p2 = 0: phase 0 deadline = p1, advance; phase 1 complete; other cancel-all. |
-| `SelfDestruct` / `SelfDestructFG` | Shared body. p2's high nibble marks initialisation: when clear, p2 = the definition's `selfdestructcountdown` (3-bit field, default 5) with the marker. If p1 = 0 and the countdown field is nonzero: with the satisfied set lacking bit 1 (cancel-current), let `n` = the remaining count; if n = 0 set p1 = 1 else store n − 1; emit status kind `22 − n` (`five` … `zero`; n ≥ 6 indexes past the six-entry table — the parser stores authored 6 and 7 as stored, and they announce kinds 16 and 15 first, [R-SPEC-01 §13]); deadline `RNG(15)` when n was 0, else 30; gate |= `0x2`; advance. With bit 1 present (cancelled): if the unit lacks auto flag 14 emit status 23 (`Self destruct terminated`); complete. Otherwise (countdown finished, or the definition has no countdown): apply 30000 damage to itself with damage cause 3; complete. The record lives on the rear segment ([R-ORDER-02 §1]), so only its own deadline and the cancel path drive it. |
+| `SelfDestruct` / `SelfDestructFG` | Shared body. p2's high nibble marks initialisation: when clear, p2 = the definition's `selfdestructcountdown` (3-bit field, default 5) with the marker. If p1 = 0 and the countdown field is nonzero: with the satisfied set lacking bit 1 (cancel-current), let `n` = the remaining count; if n = 0 set p1 = 1 else store n − 1; announce the kind held at index `n` of a six-entry table the handler builds in its own stack frame, `{22, 21, 20, 19, 18, 17}` — equal to `22 − n` for every `n` in 0..5, so a countdown from 5 announces `five` … `zero`. The index is unbounded: `n ≥ 6` reads past the frame table and announces a word that is not a status kind at all, with undefined results, [R-SPEC-01 §13]; deadline `RNG(15)` when n was 0, else 30; gate |= `0x2`; advance. With bit 1 present (cancelled): if the unit is not death-latched — state-word bit 14 clear, [R-SPEC-01 §12] — emit status 23 (`Self destruct terminated`); complete. Otherwise (countdown finished, or the definition has no countdown): apply 30000 damage to itself with damage cause 3; complete. The record lives on the rear segment ([R-ORDER-02 §1]), so only its own deadline and the cancel path drive it. |
 | `SelfRepair` | Target (the repairer) null → status 7 with `Repair aborted.`; abandon. Phase 0: target definition must have `builder` (else cancel-all); target must be complete (remaining fraction 0.0) and **this unit** (the patient) activated (edge bit 0, [R-ORD-01 §12]) → release all slots, advance; else abandon. Phase 1: if own health ≥ own `maxdamage` → advance; else stamp nanolathe-active `tick + 150` on itself, run the repair step (doc 05: the repairer's per-tick heal against this unit); when it did work, draw the spray from the **target's** nano piece to **this unit's** box; deadline 1; gate |= `0x8`; hold. Phase 2: status 10 with `Unit repaired`; complete. Other: cancel-all. |
 | `Teleport` | Single visit. For every live unit other than itself whose position lies inside this unit's model bounding box (position plus the definition's min/max triple, inclusive on all three axes): its new position is `goal + (its position − my position)`; emit the teleport effect (kind 5, duration 30) from old to new, then place it there through the position setter (re-registers occupancy when the footprint cell changes). Complete. The teleporter itself never moves. Three terms it uses are owned elsewhere. (1) The min/max triple is the bounding record of `[02 R-CAT-01 §7]`: X and Z come from the **footprint**, not the model — `±(FootprintX << 20) / 2` and `±(FootprintZ << 20) / 2` in 16.16 — and Y is the model-top walk stored as the upper bound with the lower bound zeroed, so the Y span is `[y, y + modelTop]`. (2) "Kind 5" is **strip** 5, the flame-stream container of `[03 R-LAYER §4]`: a 30-tick object laying one animated segment every 10 ticks between the moved unit's old and new position, spawned at the old position and BEFORE the position commit; that section's producer census names this handler as strip 5's only caller besides burning-feature smoke. (3) The position setter is the carried-position setter of `[R-COLL-01 §4]`: same cell and mode writes XYZ only, otherwise clear the old footprint, write XYZ, the cell pair and the mode, stamp under the overlap protocol, publish LOS — dirty either way. |
 | `Park` | Phase 0: no mover reference → cancel-all. With `canfly`: goal = own position, re-identify the record as `VTOL_Move`, *restart* (the air move runs in the same cascade). Else `s = FootPrintX` (+3 when the movement class's `MinWaterDepth` word is non-negative — template default −10000, so land classes get no `+3`); install a rectangle goal with origin `(cellX − 4s, cellZ − 3s)` and size `(8s, 6s)` in cells, where cellX/Z are the unit's whole-unit position shifted to cells; gate = `0xE0`; advance. Phase 1: satisfied `0x20` → complete; a record behind it exists → complete; else deadline 30, *restart*. Other: cancel-all. |
@@ -3815,10 +3864,12 @@ but at 1 health, and the resurrector immediately starts repairing it.
 cancel-all); target's definition has `cancapture` → status 7 `That unit
 cannot be captured`, abandon; target unfinished → status 7 `That unit is a
 cloud of vapor and cannot be captured`, abandon; caption clear with
-`Capturing`; the capture budget `p2 = trunc(0.015 · buildcostenergy +
-(30/140) · buildcostmetal + 150)` from the target definition, clamped to
-1800, then `p2 = p2 · (targetHealth + maxdamage) / (2 · maxdamage)`, then
-`p2 = ((targetExperience / 5 + 10) · p2 · 10) / 100`, all integer; release
+`Capturing`; `p2` is the capture timer of [05 R-WORK-01 §6], which owns the
+traced arithmetic: four single-precision constants with the metal term and the
+bias carried negative, an **upper clamp only** at 1800, then the **unsigned**
+health scaling and the experience factor. Do not re-derive it from decimal
+simplifications — a float32 evaluation of the simplified decimals lands one
+low at most stock energy costs. Release
 all slots; rectangle goal on the target footprint; gate = `0x100E8`; advance.
 Phase 1: `0x40` → abandon (no caption); reach test; in reach →
 `StartBuilding`, advance; else *restart*. Phase 2: `INBUILDSTANCE` wait,
@@ -3873,22 +3924,28 @@ i.e. the nanoframe **decays** by `11 / buildcostenergy` of its remaining
 fraction, with the refund arithmetic of doc 05 (the work helper's negative
 arm). A builder standing at its site therefore never sees it decay, however
 its resources stand. **(b)** the standing-bit copy runs only under the
-double bit-28 / bit-14 guard of §3.8 and copies the experience word only for
-a computer-owned builder.
+double bit-28 / bit-14 guard of §3.8 and copies the experience word only when
+the product's owning player record is present and its controller value is
+exactly `1` (human).
 
 ### Two gate-bit producers, located [R-ORD-01 §6]
 
 The producers of pending bits `0x8`, `0x10000` and `0x10`:
 
 * **`0x8` — target removed.** A record's target smart-reference is a small
-  header whose first method raises bits into the record's pending word. When
-  a unit is destroyed, the removal path walks every reference registered on
-  that unit and calls the method with `0x8`, then unlinks the reference. This
+  **observer node** embedded in the record, carrying a handler reference back
+  to the record itself. The method that raises bits into the pending word is
+  the **record's** own first method, not the node's — [R-MOV-03 §7] states
+  both, and the node's separate method table has its destructor as its first
+  entry. When a unit is destroyed, the removal path walks every observer node
+  registered on that unit, invokes each node's registered handler's first
+  method with `0x8`, and then unlinks the node. This
   is why the attack, guard, work, and wait pre-checks all treat `0x8` as
   "target lost".
 * **`0x10000` — target cloaked.** The unit edge machine's bit 2 is the cloak
-  state: on its rising edge it emits status 14 (`Cloaked`) and calls the same
-  method with `0x10000` on every reference registered on the cloaking unit;
+  state: on its rising edge it emits status 14 (`Cloaked`) and invokes the same
+  registered handler method with `0x10000` on every node registered on the
+  cloaking unit;
   on its falling edge it emits status 15 (`Visible`). A record whose target
   cloaks therefore wakes with `0x10000`, and the pump's three unconditional
   slot clears ([R-ORDER-02 §2]) run for it. The unit-side word of §3.3 step
@@ -4475,9 +4532,11 @@ inheritance and factory completion all enter through (§3.3's Replace/Append) �
 and it arms the bit in the same statement that unconditionally sets bit 0,
 **guarded by the helper's queued/non-queued argument**: a non-queued (Replace)
 issue arms it, a queued (Append / Shift-queue) issue does not. So retail speaks
-the acknowledgement once for a plain order and stays silent for a Shift-queued
-one. Nothing else in the code sections writes the bit. In particular the
-handler head insert, the insert-before-a-record helper used by the patrol-chain
+the acknowledgement once for a plain order **on a unit the view slot owns**
+— the emitter's own gate, [03 R-AUD-01 §7], which is why the same helper is
+silent when the AI enters it for a computer player's unit — and stays silent
+for a Shift-queued one. Nothing else in the code sections writes the bit. In
+particular the handler head insert, the insert-before-a-record helper used by the patrol-chain
 append, and the pump's own internal-auto creator all leave it clear, which is
 why a spawned order and an idle refill are silent.
 
@@ -4597,19 +4656,27 @@ word is:
   merge into a narrow field. An implementation that preserves other bits of p2
   across a step is preserving bits retail discards.
 
-The announce is a **six-entry local table** of status kinds
-`{22, 21, 20, 19, 18, 17}` indexed by the remaining count, which equals
-`22 − count` for every in-range value. The table is why §2's "n ≥ 6 indexes
-past the six-entry table" is a real out-of-range read rather than an
-arithmetic underflow: the subtraction form and the table agree on 0..5 and part
-company above it (authored countdowns 6 and 7 read kinds 16 and 15,
-[R-SPEC-01 §13]).
+The announce is a **six-entry table built in the handler's own stack frame** —
+status kinds `{22, 21, 20, 19, 18, 17}` stored into six consecutive local words
+on every visit, not a static array — indexed by the remaining count, which
+equals `22 − count` for every in-range value. Both forms agree on counts 0..5
+and part company above them, and the table, not the subtraction, is what the
+handler executes. **The index is not bounds-checked**: the only guard is a test
+for a negative index, which the 28-bit mask makes unreachable. A remaining
+count of 6 or 7 therefore reads the two words immediately above the local area
+— the handler's own return address and its first argument — and passes that
+word to the cue emitter as a status kind. The emitter scales the kind by the
+cue-record size and loads a caption pointer from the result, which for either
+of those words lies far outside the cue table, so the outcome is undefined and
+**no kind-16 or kind-15 announcement exists for these countdowns**
+([R-SPEC-01 §13]).
 
 Everything else in §2's row is confirmed unchanged by the same read: the
 counting branch is entered on `p1 = 0` **and the DEFINITION's** three-bit field
 being non-zero (not the remaining count); the zero step arms one `RNG(15)` draw
 and every other step 30; the gate OR is bit 1; the cancelled arm emits status 23
-only when the unit lacks auto flag 14 and applies no damage in either case; and
+only when the unit is not death-latched (state-word bit 14, [R-SPEC-01 §12])
+and applies no damage in either case; and
 the terminal arm calls the **packet builder** directly with attacker and victim
 both this unit, amount 30,000, kind 3.
 
@@ -5322,10 +5389,13 @@ integer reader and a default argument of zero; stock definitions author
 `ShootMe=1` explicitly, which is why the absence is never observed on stock
 content.
 
-**Unknown — the option bit.** The third admission is a bit of a session option
-byte that no located writer sets; whether a front-end setting or a mission
-key produces it is *Unknown* — *decider:* xrefs on the option byte's writers
-(the options loader).
+**Established — the option bit is the `+ShootAll` chat toggle.** The third
+admission reads bit 10 of the session mode-flags word. That bit has exactly one
+writer in the image — the `+ShootAll` chat command, which pure-toggles it — and
+exactly one reader, this admission. No front-end setting, options loader or
+mission key writes it, and the word is zero-filled before any field
+initializer runs, so the bit is clear in a stock session until the command is
+typed. Doc [06 §3.2] owns the census.
 
 ### `hidedamage` hides the health bar from other players [R-SPEC-01 §6]
 
@@ -5445,22 +5515,44 @@ the parser stores `value & 7` in word B bits 20–22, and writes 5 only when the
 key is **absent**. So `selfdestructcountdown=0` is stored as 0 (immediate),
 `8` stores as 0, `9` as 1, and 6 and 7 are stored as authored.
 
-**Established — what 6 and 7 do.** The handler emits status kind `22 − n` for
-the remaining count `n`. Kinds 17…22 carry the captions `five`…`zero` with
-their `count5`…`count0` sounds. Kind 16 is the *capture* status: no caption
-text in the table, the capture sound (what the emitter shows for a textless
-kind is not traced here). Kind 15 is the *Visible* status: the caption
-`Visible` with the uncloak sound. A countdown of 7 therefore announces
-`Visible` (uncloak sound), then plays the capture sound with no caption, then
-`five`…`zero`; a countdown of 6 starts at the capture sound. Each step is 30
-ticks; nothing else differs.
+**Established — what 6 and 7 do.** The handler does not compute `22 − n`. It
+builds a six-entry table of status kinds `{22, 21, 20, 19, 18, 17}` in its own
+stack frame on every visit and announces the entry at index `n`, the remaining
+count. Entries 0…5 are kinds 22…17, carrying the captions `zero`…`five` with
+their `count0`…`count5` sounds. The index is **not** bounds-checked — the
+handler's only guard rejects a negative index, which the 28-bit count mask
+makes unreachable — so counts 6 and 7, both reachable because the parser masks
+the authored value to three bits without clamping, read the two words
+immediately above the table's local area: the handler's own return address and
+its first argument. That word is handed to the cue emitter as a status kind;
+the emitter multiplies it by the cue-record size and loads a caption pointer
+from the result, an address far outside the cue table in either case. **There
+is no kind-16 or kind-15 announcement on this path.** Kind 16 (the *capture*
+status: the capture sound, no caption text) and kind 15 (the *Visible* status:
+the caption `Visible` with the uncloak sound) are real kinds reached by their
+own producers, not by any self-destruct countdown. Each in-range step is 30
+ticks; nothing else differs between countdown values.
+
+**Supported inference — the runtime symptom.** Because the computed caption
+address derives from a code address or a heap pointer scaled by the record
+size, it is essentially certain to be unmapped, so retail most likely faults
+rather than showing anything. This has not been observed, only derived from
+the addresses involved. The cue emitter is gated on the unit's owner slot
+matching the local player's, so the question arises only for a locally-owned
+unit; another player's unit counts down with no announcement at all and is
+unaffected. Confirming the symptom needs a retail observation with a
+definition that authors such a countdown.
 
 **Established — the timeline, end to end.** Issue (`d` button → `SelfDestructFG`
 on the front segment; script/AI → `SelfDestruct` on the rear segment;
 [R-ORD-01 §0], [R-ORDER-02 §1]). Visit 1: p2 initialised from the field; with
 p1 = 0 and a non-zero field, the caption for `n` = the field, deadline 30.
 Every 30 ticks the count falls by one and the next caption is emitted; at
-`n = 0` the caption is `zero`, the deadline is `RNG(15)` (0–14 ticks, one
+`n = 0` the caption is `zero`. Every one of those captions passes the status
+emitter's own gate (§3.2), so the countdown is audible only on a unit the
+**view slot** owns and only while the unit is not death-latched
+([03 R-AUD-01 §7]): a script or AI `SelfDestruct` on a computer player's unit
+runs the same timeline silently. The deadline is `RNG(15)` (0–14 ticks, one
 simulation draw) and p1 becomes 1. The next visit — p1 = 1, or the field was
 0 from the start, or the record was spawned with p1 = 1 by `Attack_Kamikaze`
 or `Standby_Mine` — applies 30000 self-damage with cause 3 (§1 above for the
@@ -5468,7 +5560,8 @@ funnel arithmetic) and completes. The death path resolves `selfdestructas`
 for cause 3 and `explodeas` for every other cause ([R-DMG-01 §5]); the corpse
 and score consequences are doc 06's. Re-issuing the order while it counts
 sets the cancel-current bit; the next visit emits `Self destruct terminated`
-(status 23) unless the record carries auto flag 14, and completes without
+(status 23) unless the unit is death-latched (state-word bit 14,
+[R-SPEC-01 §12]), and completes without
 damage. A cancelled countdown cannot be resumed; a new order starts from the
 field's value. The unit keeps moving, firing and building throughout — the
 record blocks nothing on the front segment (rear-segment `SelfDestruct`) or
@@ -5732,7 +5825,12 @@ Shipped scripts write every static before reading it, so stock behavior is
 unaffected; Nanolathe zeroes statics at bind and records that as a
 determinism divergence ([R-COB-01 §1]).
 
-### Script-side shading census [R-RND-02A]
+### Script-side shading census
+
+The anchor `R-RND-02A` has a single defining home, doc 03's
+"OTA-RND-02A — model-path shading and stock reachability" ([03 R-RND-02A]),
+which owns the renderer selection this census feeds; this section is the
+script side of the same contract and cites it rather than re-defining it.
 
 **Established.** The load-time fill and the unit adapters settle the
 contract: bit 2 set
@@ -5791,9 +5889,14 @@ while transitively waking anything blocked on it within the same scan.
   count`**, the count being the compiled program's own header word (document 02,
   "Compiled script archive (COB)"). On success the starter scans the eight slots
   in ascending order for the first whose status word is zero and writes that
-  slot: status *running*, program counter taken from the **script entry-point
-  table indexed by the id**, waited-on-callee slot `-1`, sleep timer 0, signal
-  mask 1, and the VM's active-thread count incremented; with no free slot it
+  slot, and writes exactly five fields: status *running*, program counter taken
+  from the **script entry-point table indexed by the id**, logical stack top
+  `-1` (an empty stack), completion receiver cleared, signal mask 1 — plus the
+  VM's active-thread count incremented. It does **not** write the waited-on
+  callee slot or the sleep timer; those keep the recycled record's bytes, and
+  are written only by the call-script and sleep opcodes and read only in the
+  states those opcodes produce, so a fresh *running* thread never observes
+  them (§4.2 states the same list). With no free slot it
   returns the same failure as an out-of-range id. There is **no membership test
   on entry-point values** anywhere in the starter — an implementation that
   validates a program counter against the set of entry offsets is checking
@@ -6530,10 +6633,15 @@ transport handshake, whose wake comes from port 6.
 The shared edge machine computes the old and new state, writes back, and on a
 change fires: Activate plus the code-3 notification on bit-0 rising;
 Deactivate plus code 4 on falling; StartBuilding/StopBuilding on the
-building-bit edges; cargo release plus presentation codes 0xe/0xf around the
-bit-2 edges; always the interface refresh, and — when the owner player state
-byte is 1 or 2 — a network event carrying the state byte and the unit
-identifier. Callbacks run re-entrantly, but the diff is computed before they
+building-bit edges; on the cloak bit's (bit 2) **rising** edge status kind 14
+followed by the *target cloaked* pending-bit notification on every reference
+registered on the cloaking unit, and on its **falling** edge status kind 15 and
+nothing else — the registered owner is always an order record whose
+notification method only ORs the bit into that record's pending word, and no
+cargo or attachment is released by this machine ([R-ORD-01 §6]); always the
+interface refresh, and — when the owner player state byte is 1 or 2 — a network
+event carrying the state byte and the unit identifier.
+Callbacks run re-entrantly, but the diff is computed before they
 fire, so a callback that writes port 1 terminates immediately: its own edge is
 now a no-op. The engine itself raises and lowers activation — scripts are not
 the only writers: a non-empty production queue raises it and an empty one
@@ -7204,7 +7312,7 @@ deferred (mode D, arity 2, receiver null) with two arguments `(cos(dir)·400, si
 is the packet direction byte shifted left by eight into the 65536-domain (`dir = byte << 8`), resolved through the shared 512-entry sine table with round-to-nearest (same helpers as `RockUnit` but positive signs, radius 400), and
 `TakeDamage` starts independently immediately after (mode D, arity 1, receiver null) with one argument, the
 post-hit health percentage `clamp(health·100/maxHealth, 0, 100)` (health signed 16-bit, maxHealth the definition's maximum-damage field, an unsigned division of the product with explicit `<0→0`, `>100→100` clamps) computed as
-an unsigned division of the product. Either starter can fail separately (invalid name or full pool). Heal (`0`) and paralyze (`2`) and non-normal kinds skip this pair entirely (the paralyze kind builds a paralyze order instead); lethal damage against a movement-category-1/2 victim sets the death latch (OR `0x4000` into the unit's death-latch word) and returns without any callbacks.
+an unsigned division of the product. Either starter can fail separately (invalid name or full pool). **Every** kind other than `1` skips this pair — heal is kind `10` and takes an early exit that adds health instead of subtracting it, paralyze (`2`) branches away to build a paralyze order, and kind `0` has no test of its own at all and falls through the generic damage tail; document 06 owns the dispatcher's order. Lethal damage — a non-positive **signed** health result — reads the **victim owner's** player record and, when that record is present and its controller value is `1` or `2` (the locally simulated human and computer controllers), sets the death latch (OR `0x4000` into the unit's death-latch word) and returns without any callbacks, leaving the modular health value in place; otherwise it clamps health to zero and continues. No movement category, unit class or structure flag takes part in that gate, and the paralyzer branch uses the same one — doc [06 R-WPN-02 §2] owns it.
 
 **Established fact:** Local authoritative death runs a synchronous four-cell
 `Killed` query with outputs severity and variant before the death packet is
@@ -8334,7 +8442,9 @@ request init revises the bound class record and its shared layer: the class reco
 watermark is set to `max(tick, 30) − 30` (the first revision arms it; later revisions advance
 it in 30-tick steps), every unit carrying the in-game bit 28 whose
 last occupancy-commit tick falls in the previous watermark window has its footprint rectangle
-re-stamped into the layer, and the requesting unit's own commit tick is refreshed. Because
+re-stamped into the layer, and the requesting unit's own rectangle is re-stamped when its
+previous commit tick predates the old watermark — its commit-tick field being written to the
+current tick for the duration of the pass and restored afterwards ([R-MOV-03 §3]). Because
 the record and layer are shared by all requests of the class, one request's revision is
 observed by the next. Combined with the classifier's occupant-age gate (step 2 above), the
 effect is: units that committed occupancy within the last 30 ticks do not block the layer
@@ -8551,7 +8661,12 @@ it, is the §4 divergence — for cost as well as for passability.
   its classifier ring reads the changed occupant cells and may demote clear
   to steep. The next anchor beyond that border is not rewritten. A complete
   call-site and callee trace settles both the subtraction and the inclusive
-  upper endpoint;
+  upper endpoint. **No minimum-size clamp is applied to the occupant size
+  (Established).** The `+ 1` on the exclusive upper bound is the only thing
+  that keeps a zero-sized occupant's rectangle non-empty, so an occupant size
+  of 0 rewrites the inclusive rectangle `[ox-rw .. ox] × [oz-rh .. oz]` and
+  not one cell more; a reimplementation that raises the size to 1 first
+  rewrites one extra column and row on each axis;
 * the **request revision pass** temporarily writes the current tick into the
   requester's commit-tick field while it restamps, restamps the requester's
   own rectangle when its previous commit tick predates the old watermark,
@@ -9140,14 +9255,26 @@ reads the attribute cell's occupant slot index — the same field the movement
 commit stamps (§8.2) — and blocks the cell when an occupant is present and
 either it has no mover or its mover's last occupancy-commit tick is
 **before** the class record's revision watermark ([R-PATH-01 §14]). The
-request-init revision pass advances that watermark to `max(tick, 31) − 30`
-and restamps the footprint of every live unit whose commit tick falls in the
-window just crossed, plus the requester's own footprint. A building has no
-mover, so its footprint cells classify to **0 and hard-block the A\*** from
-the first classification that finds it in the occupant word; a parked mobile
-unit blocks through the same channel once its commit tick predates the
-watermark, with a lag of at most 30 ticks plus one request. No building-state
-byte exists and none is needed; the coarse word is not the channel. The
+request-init revision pass sets that watermark to the current tick clamped up
+to 30 and then reduced by 30 — `max(tick, 30) − 30`, an unsigned strict
+comparison, so it is **0 for every tick up to and including 30** and `tick − 30`
+after that — and restamps the footprint of every live unit whose commit tick
+falls in the half-open window between the old and the new watermark. The
+requester's own footprint is restamped too, but **conditionally**: only when its
+previous commit tick predates the *old* watermark, and that test runs before the
+pass checks whether the watermark moved at all ([R-MOV-03 §3] states the cohort
+and the restore of the requester's own commit tick exactly).
+A building has no mover, so its footprint cells classify
+to **0 and hard-block the A\*** from the first classification that finds it in
+the occupant word; a parked mobile unit blocks through the same channel once
+its commit tick predates the watermark. Exactly: a unit last committed at tick
+`c` becomes a wall at the **first same-class request at a tick ≥ `c + 31`** —
+because `c < max(tick, 30) − 30` is `tick > c + 30` — so the lag is 31 ticks
+plus one request gap, not 30. And because the watermark is 0 for ticks 0
+through 30 inclusive, nothing blocks by occupant age at all during that opening
+window: for the first 31 ticks of a battle only buildings, terrain and features
+block.
+No building-state byte exists and none is needed; the coarse word is not the channel. The
 commit validator of §8.2 remains a second, independent gate for the same
 footprints.
 
@@ -9696,10 +9823,10 @@ There is no settings string and no shipped asset involved.
 * the **heuristic base** = `0x18000`, i.e. **1.5** in 16.16.
 
 The only code that overwrites either is the in-game developer console command
-named `Search`, one entry in a table of sixteen console commands (`DPrint`,
-`Edge`, `Include`, `Mem`, `MemDump`, `Move`, `PrintWeights`, `Profile`,
-`Reload`, `ReloadAIProfiles`, `Save`, `SeaLevel`, `Search`, `SelBoxes`,
-`Senderror`, `TreeDeath`). Its first argument is read as an integer and, when
+named `Search`, one entry in the developer (route-mask-4) command table of
+**thirty** commands — one of the three registered tables doc 07
+[R-CAM-01 §6] enumerates, which is the census to consult rather than a list
+restated here. Its first argument is read as an integer and, when
 nonzero, replaces the step allowance. When the command has exactly three tokens
 its second argument is read with the C runtime's `atof`, multiplied by
 `65536.0` as a double, and truncated toward zero into the heuristic base. No
@@ -9930,8 +10057,10 @@ scale when it admits a request. Nothing else reads it. Work slices come from a
 different array entirely, and that array is topped up with an **equal share**
 per eligible player.
 
-**The scheduler call, exactly.** Per scheduler call — and the
-scheduler is called once per tick, first, before the per-player unit sweeps:
+**The scheduler call, exactly.** Per scheduler call — and the scheduler runs
+once per tick as the **first step of the per-player orders, path, economy and
+occupancy phase**, after the per-unit sweep phase of the same tick and before
+this phase's own per-player loop ([01 §4.4] owns the absolute phase order):
 
 1. If the session's player count is zero, do nothing.
 2. Increment a call counter. When it exceeds 150, zero it and, for each of the
@@ -10211,7 +10340,10 @@ compare is as stated: block when its mover's commit tick is older than the
 watermark.
 
 **Writers of the mover's commit tick.** The footprint stamp writes it to the
-current tick as its first action (guarded on the mover existing), and the
+current tick as its first action (guarded only on the mover existing), and
+that write happens **before** the stamp's own bounds test — so a stamp whose
+rectangle lies off the map writes no cell but still advances the tick
+(Established). The
 stamp is reached from: the occupancy commit (every non-stationary proposal,
 `[R-COLL-01 §1]`); **unit creation** — the creator stamps the new unit's
 footprint after the initializer returns, so the creation-time stamp does
@@ -10787,7 +10919,7 @@ r  = animationCounter & 0x1f
 angle = (int16)( ((r + 8*i) << 11) + unit.bobPhase )
 v   = min(speed, MaxVelocity / 2)                  // MaxVelocity/2 truncates toward zero
 amp = 2 - ( ((v << 16) / (MaxVelocity / 2)) * 2 >> 16 )      // 2, 1 or 0
-age = min((unsigned)(currentTick - mover.lastCommitTick), 60)
+age = min((unsigned)(currentTick - mover.lastProposalTick), 60)
 amp = amp - (amp * age) / 60                       // unsigned divide
 height[i] = hh + component(angle, amp)             // the §4 trig-table form
 ```
@@ -10795,9 +10927,14 @@ height[i] = hh + component(angle, amp)             // the §4 trig-table form
 `unit.bobPhase` is a per-unit signed 16-bit phase word; the `8*i` term puts the
 four corners a quarter circle apart, so the unit rocks rather than heaves. The
 amplitude is at most two height units, falls to zero at half `MaxVelocity`, and
-fades linearly to zero over the 60 ticks after the mover last committed a
-position. `MaxVelocity / 2` is an **unguarded divisor**: a `canhover`
-definition with `MaxVelocity` below `2` faults, the same class of edge as §4's.
+fades linearly to zero over the 60 ticks after the last tick on which the unit
+*tried* to change position or mode, blocked ticks included. The word read here
+is the mover's **last-proposal** tick of [R-COLL-01 §1], written by the commit
+step before the cell test and before the validator — **not** the
+occupancy-commit (stamp) tick of [R-PATH-01 §14], which a blocked proposal
+never refreshes; the two must not be merged. `MaxVelocity / 2` is an
+**unguarded divisor**: a `canhover` definition with `MaxVelocity` below `2`
+faults, the same class of edge as §4's.
 
 `animationCounter` is **not** a simulation random draw and not the tick
 counter: it is `GetTickCount()` scaled by the boot-time rate 30 and divided by
@@ -11399,7 +11536,8 @@ bucket touching the rectangle whose own rectangle intersects it is passed to
 the *restamp* below. Which buckets, in what order, and where in a bucket the
 stamp files a unit are [R-COLL-01 §4A]. Finally the class-layer maintenance:
 for a unit with a
-mover, each of the sixteen class-layer records whose watermark exceeds the
+mover, each of the **thirty-two** class-layer records (the full array the
+startup template fills, §6.1 [R-DOC04-A]) whose watermark exceeds the
 mover's *last-stamp tick* reclassifies the rectangle ([R-PATH-01 §2]'s
 footprint-aware classifier over the rectangle), and the last-stamp tick is
 set to the current tick; for a unit without a mover every active layer
@@ -14221,20 +14359,20 @@ and the decider that would close it.
   the intermediate converter remains untraced `[fmt ota]`. No further scan
   trace can derive untouched temporary contents from authored text alone.
 
-- Which front-end setting or mission key writes the session option bit that
-  admits every candidate in the shared target search regardless of `shootme`
-  · §3.9 [R-SPEC-01 §5], [06 §3.2] · static trace over the option byte's
-  writers. Until then Nanolathe treats the bit as clear.
 - Meaning of the one definition byte that gates the creation notification in
-  the pre-built creation path, and what the emitter shows for a status kind
-  whose caption text is empty (`selfdestructcountdown` 6 and 7) · §3.9
-  [R-SPEC-01 §12], [R-SPEC-01 §13] · static trace.
+  the pre-built creation path · §3.9 [R-SPEC-01 §12] · static trace.
+- The runtime symptom of a `selfdestructcountdown` of 6 or 7 on a
+  locally-owned unit — the announce index reads past its six-entry frame table
+  and hands the cue emitter a word that is a code address or a heap pointer,
+  so a fault is only a *Supported inference* · §3.9 [R-ORD-01 §14],
+  [R-SPEC-01 §13] · decider: observing retail with a definition that authors
+  such a countdown, which a static read cannot settle.
 - Per-phase operation-byte values inside the construction/factory handler
   family; the 68-descriptor handler set itself is closed · §3.1 · static
   trace.
-- Consumers of the unnamed static gate-mask bits (1, 3, 4, 8, 11, 16, 19,
-  24; bits 2, 5, 6, 7 and 17 have located readers) · §3.1 [R-DOC04-C] · static
-  trace; store the bytes opaque.
+- Consumers of the unnamed static gate-mask bits (3, 4, 8, 11, 16, 17, 19,
+  24; bits 1, 2, 5, 6 and 7 have located readers, as §3.1's census notes
+  inline) · §3.1 [R-DOC04-C] · static trace; store the bytes opaque.
 - Where the interface and network layers replace or cancel the front order
   · §3.3, doc 07 · static trace. The queue pump itself never does it.
 - The TDF key behind the feature definition byte that bounds the reclaim and

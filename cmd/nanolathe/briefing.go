@@ -32,7 +32,9 @@ const (
 
 // BriefingPlanet is one row of the authored 15-entry parallel planet table
 // [08 R-CAMP-01 §2]. The spellings are intentionally retained, including the
-// asymmetrical Wet Desert and Crystal names.
+// asymmetrical Wet Desert and Crystal names. This is the only planet table in
+// the tree: the lookup is spelling-exact, so a second transcription with a
+// different order or different spellings is a second, disagreeing contract.
 type BriefingPlanet struct {
 	Name     string
 	Brief    string
@@ -58,16 +60,22 @@ var briefingPlanets = [...]BriefingPlanet{
 	{Name: "Crystal", Brief: "Crystalbrief", Panorama: "CrystPan", Rotate: "CrystalRotate"},
 }
 
-// ResolveBriefingPlanet performs the retail walk. Unknown values select row 0
-// rather than suppressing the art [08 R-CAMP-01 §2]. Core's Lunar briefing is
-// rewritten to Lunar2 before lookup.
+// ResolveBriefingPlanet performs the retail walk. Both comparisons — the
+// `Lunar` rewrite test and the name-column walk — are byte-for-byte and
+// therefore case-SENSITIVE: the screen builder compares the mission's authored
+// `Planet` text against fixed mixed-case literals with a plain string compare,
+// and neither operand is case-folded anywhere on the way in. The TDF accessor
+// that produced the text folds only the key it searched for, never the value
+// it copies out [08 R-CAMP-01 §2][fmt tdf]. So only the exact table spellings
+// select a row; anything else, a differently-cased spelling included, walks off
+// the end of the table and selects row 0 rather than suppressing the art.
 func ResolveBriefingPlanet(planet string, localSide int) (BriefingPlanet, int) {
 	lookup := planet
-	if strings.EqualFold(lookup, "Lunar") && localSide != 0 {
+	if lookup == "Lunar" && localSide != 0 {
 		lookup += "2"
 	}
 	for i := range briefingPlanets {
-		if strings.EqualFold(briefingPlanets[i].Name, lookup) {
+		if briefingPlanets[i].Name == lookup {
 			return briefingPlanets[i], i
 		}
 	}

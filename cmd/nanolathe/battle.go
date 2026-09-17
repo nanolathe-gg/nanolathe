@@ -1043,7 +1043,8 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	}
 	// Camera pan: exact predicates per [07 §10] C2/C3; presentation-only [I6].
 	// - delta = scrollSettingByte * rawTimeDelta capped at 128 [07 §10] (C2)
-	// - direction predicates: exact-edge bands plus less-than-100px beyond-edge forced strip with focus [07 §10]
+	// - one exclusive test per axis, Left before Right and Up before Down [07 §10][07 R-CRD-006 §1]
+	// - direction predicates: exact-edge bands plus the jointly gated beyond-edge forced strip [07 §10]
 	// - held-arrow gated on TALK.GUI suppression, edge never suppressed by TALK [07 §10]
 	// - minimap interaction region suppresses edge [07 §10]
 	// - modal GUI suppresses edge [07 §10]
@@ -1059,13 +1060,20 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		w, h := cl.Size()
 		wi, hi := int32(w), int32(h)
 		mx, my := int32(mouse.X), int32(mouse.Y)
-		// Beyond-edge forced strip: pointer outside right/bottom <100px beyond with focus is forced to edge [07 §10].
+		// Beyond-edge forced strip [07 §10]: the strip is gated jointly, not per
+		// axis. The pointer must be less than 100 pixels beyond the right edge
+		// AND less than 100 pixels beyond the bottom edge, with the window
+		// focused, before EITHER axis is forced onto its edge; a pointer ten
+		// pixels right of the window but three hundred below it forces nothing.
+		// Each axis is then forced only when the pointer is at or past that
+		// edge, so a pointer beyond one edge keeps its real coordinate on the
+		// other axis.
 		effX, effY := mx, my
-		if focused {
-			if mx >= wi && mx < wi+100 {
+		if focused && mx < wi+100 && my < hi+100 {
+			if mx >= wi {
 				effX = wi - 1
 			}
-			if my >= hi && my < hi+100 {
+			if my >= hi {
 				effY = hi - 1
 			}
 		}
@@ -1083,30 +1091,36 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 			b.cam.ClearFollow()
 			b.pendingFollowInput = nil
 		}
-		// Held-arrow branches gated on TALK absence [07 §10]; edge branches gated on focus, modal, and minimap.
-		// Left: (Left held && !talk) OR (x==0 && y<H) [07 §10]
-		if kbd.KeyHeld(input.KeyLeft) && !talkActive {
-			scroll(camera.DirLeft, true)
-		} else if focused && !modalActive && !overMinimap && effX == 0 && effY < hi {
-			scroll(camera.DirLeft, false)
+		// One exclusive test per axis, not four independent ones
+		// [07 §10][07 R-CRD-006 §1]. The horizontal axis evaluates the Left
+		// predicate first and, when it holds, subtracts the magnitude and moves
+		// straight to the vertical axis without evaluating the Right predicate
+		// at all; only a failed Left predicate reaches Right. The vertical axis
+		// has the same shape with Up before Down. So with both directions of a
+		// pair satisfied — opposing arrows, or one screen edge plus the
+		// opposite arrow — the camera moves once, toward Left/Up, rather than
+		// twice or (as a summed vector would give) not at all.
+		//
+		// Each predicate is its arrow held with TALK.GUI absent, OR its edge
+		// band [07 §10]. The held arm wins the magnitude form when both arms of
+		// one predicate hold, as the keyboard arm is tested first. The edge arm
+		// additionally requires focus, no modal and a pointer off the minimap.
+		heldLeft := kbd.KeyHeld(input.KeyLeft) && !talkActive
+		heldRight := kbd.KeyHeld(input.KeyRight) && !talkActive
+		heldUp := kbd.KeyHeld(input.KeyUp) && !talkActive
+		heldDown := kbd.KeyHeld(input.KeyDown) && !talkActive
+		edgeReady := focused && !modalActive && !overMinimap
+		switch { // horizontal: Left predicate, then Right only if it failed
+		case heldLeft || (edgeReady && effX == 0 && effY < hi):
+			scroll(camera.DirLeft, heldLeft)
+		case heldRight || (edgeReady && effX == wi-1):
+			scroll(camera.DirRight, heldRight)
 		}
-		// Right: (Right held && !talk) OR x==W-1 [07 §10]
-		if kbd.KeyHeld(input.KeyRight) && !talkActive {
-			scroll(camera.DirRight, true)
-		} else if focused && !modalActive && !overMinimap && effX == wi-1 {
-			scroll(camera.DirRight, false)
-		}
-		// Up: (Up held && !talk) OR (y==0 && x<W) [07 §10]
-		if kbd.KeyHeld(input.KeyUp) && !talkActive {
-			scroll(camera.DirUp, true)
-		} else if focused && !modalActive && !overMinimap && effY == 0 && effX < wi {
-			scroll(camera.DirUp, false)
-		}
-		// Down: (Down held && !talk) OR y==H-1 [07 §10]
-		if kbd.KeyHeld(input.KeyDown) && !talkActive {
-			scroll(camera.DirDown, true)
-		} else if focused && !modalActive && !overMinimap && effY == hi-1 {
-			scroll(camera.DirDown, false)
+		switch { // vertical: Up predicate, then Down only if it failed
+		case heldUp || (edgeReady && effY == 0 && effX < wi):
+			scroll(camera.DirUp, heldUp)
+		case heldDown || (edgeReady && effY == hi-1):
+			scroll(camera.DirDown, heldDown)
 		}
 		// Middle-drag camera pan [F-P1-008]: presentation-only, uses mouse delta / scale.
 		if !talkActive && mouse.Held(input.MouseButtonMiddle) && mouse.Moved() {

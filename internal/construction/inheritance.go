@@ -54,49 +54,50 @@ func (s *Service) copyStandingFlags(builder, product *units.Unit) {
 	copyStandingFlags(builder, product)
 }
 
-// controlByteComputer is the player slot's control byte for a computer player:
-// `1` is a locally controlled human, `2` a computer player, `3` a remote peer
+// controlByteHuman is the player slot's control byte for a human-controlled
+// seat: `1` is human, `2` a computer player, `3` a remote peer
 // [05 R-SHARE-01 §1].
 //
-// [04 §3.8] parenthesises the experience-word gate as "owner player state byte
-// value 1". That parenthetical is the same mislabel [04 §3.6]'s 2026-08-31
-// correction retired for the idle-queue refill — it read the pair {1,2} as two
-// computer-player states — and three Established traces disagree with it:
-// [05 R-SHARE-01 §1] (skirmish setup writes 1 for the human seat and 2 for each
-// computer seat), [05 R-ECO-01 §3] (the difficulty discount runs for control
-// byte 2), and [04 R-SPEC-01 §5] ("the searching unit's owning player has
-// controller type 2 (a computer player)"). The gate is control byte 2.
-const controlByteComputer uint8 = 2
+// `GetBuilt`'s experience-word gate compares the control byte against 1 — the
+// human seat — so only a human-owned product inherits its builder's experience
+// [04 §3.5][04 §3.8]. The neighbouring gates that do read 2 are different sites
+// and are unaffected: the difficulty discount [05 R-ECO-01 §3] and the mobile
+// builder's assistance search [04 R-SPEC-01 §5].
+const controlByteHuman uint8 = 1
 
-// ownerControlByte reads the owning player row's control byte through the
-// economy ledger, which is where the session writes it [05 R-SHARE-01 §1]. A
-// row this service cannot see reads as 0 — not a control-byte value, so it
-// never satisfies the computer-player gate.
-func (s *Service) ownerControlByte(owner uint8) uint8 {
+// ownerPlayerIsHuman reports whether the owning player row is occupied AND its
+// control byte is exactly the human seat value. Retail tests occupancy first
+// and the control byte second, both on the product's own owner row
+// [04 §3.8]. The row is read through the economy ledger, which is where the
+// session writes it [05 R-SHARE-01 §1]; a row this service cannot see fails
+// the occupancy half.
+func (s *Service) ownerPlayerIsHuman(owner uint8) bool {
 	if s == nil || s.Economy == nil || int(owner) >= len(s.Economy.Players) {
-		return 0
+		return false
 	}
-	return s.Economy.Players[owner].ControllerState
+	p := &s.Economy.Players[owner]
+	return p.Exists && p.ControllerState == controlByteHuman
 }
 
 // inheritStandingFields is `GetBuilt`'s post-build standing merge, the second
 // of the two stages [04 §3.8] keeps distinct. Under the same alive/death-latch
 // guard as the state-2 copy it moves standing-move bits 18-19 and standing-fire
 // bits 20-21 from builder to product, and the experience word rides the same
-// guarded block under one further gate — the OWNER's control byte reading as a
-// computer player [04 §3.8][04 R-FAC-02 §4].
+// guarded block under one further gate — the PRODUCT's owner row being occupied
+// and human-controlled [04 §3.5][04 §3.8][04 R-FAC-02 §4].
 //
 // `units.Unit.Kills` is the experience word: it is the field the capture timer's
 // divide-by-five reads and the field the account record saves [05 "Unit
 // capture"][08 R-SAVE-02 §6]. A product and its builder always share an owner,
-// so the control byte is read once, off the builder.
+// so which of the two the row is read off is not observable; retail reads the
+// product's, and so does this.
 func (s *Service) inheritStandingFields(builder, product *units.Unit) {
 	if !standingMergeAdmits(builder, product) {
 		return
 	}
 	product.Flags = (product.Flags &^ (StandingMoveMask | StandingFireMask)) |
 		(builder.Flags & (StandingMoveMask | StandingFireMask))
-	if s.ownerControlByte(builder.Owner) == controlByteComputer {
+	if s.ownerPlayerIsHuman(product.Owner) {
 		product.Kills = builder.Kills
 	}
 }

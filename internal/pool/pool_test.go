@@ -150,18 +150,19 @@ func TestProjectileAppendDeadCompaction(t *testing.T) {
 	}
 }
 
-// TestP016_CapacityFormula validates the physical cap = maxDefs*10+1
-// [P0-16 §3.1] [01 §6.1]. Stock capacity is roughly 2000–5000, not 500.
+// TestP016_CapacityFormula validates the physical cap = limit*10+1 for the
+// session per-player unit limit [05 R-SHARE-01 §7] [P0-16 §3.1]. Stock
+// capacity is roughly 2000–5000, not 500.
 func TestP016_CapacityFormula(t *testing.T) {
-	if got := CapacityForDefs(200); got != 2001 {
-		t.Fatalf("CapacityForDefs(200)=%d want 2001", got)
+	if got := CapacityForLimit(200); got != 2001 {
+		t.Fatalf("CapacityForLimit(200)=%d want 2001", got)
 	}
-	if got := UsableCapacityForDefs(200); got != 2000 {
+	if got := UsableCapacityForLimit(200); got != 2000 {
 		t.Fatalf("Usable 200=%d want 2000", got)
 	}
-	// Stock maxunits folklore 500 vs sliced: 500 usable would be maxDefs=50 total 501
-	if got := CapacityForDefs(50); got != 501 {
-		t.Fatalf("50 defs cap %d", got)
+	// Stock maxunits folklore 500 vs sliced: 500 usable would be limit=50 total 501
+	if got := CapacityForLimit(50); got != 501 {
+		t.Fatalf("50-limit cap %d", got)
 	}
 	p := NewUnitsSliced(200)
 	if p.Capacity() != 2000 {

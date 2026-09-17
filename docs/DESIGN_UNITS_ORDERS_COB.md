@@ -1095,6 +1095,51 @@ their first order [04 R-ORD-02 §1] [07 R-CAM-01 §5].
   here, named as I11 divergences rather than traced behavior `[04 §5.1]`
   `[04 §4.3]`.
 
+### Self-destruct countdowns 6 and 7
+
+**A deliberate handling of undefined retail behaviour — not a Modern gameplay
+policy.** It does not go through `gameplay.Mode` and does not vary by mode:
+Strict 3.1 and Modern behave identically here, because there is no retail
+behaviour to be strict about.
+
+Retail's countdown announce is a six-entry table built in the handler's own
+stack frame, holding the status kinds 22, 21, 20, 19, 18 and 17 for the
+remaining counts 0 through 5, indexed directly by the remaining count with no
+upper bounds check `[04 R-ORD-01 §14]`. Remaining counts of 6 and 7 are
+reachable, because the authored `selfdestructcountdown` is masked to three bits
+with no clamp, and retail then reads a word from beyond the table and passes it
+to the cue emitter as a kind. No cue kind is defined for those two counts; the
+result is undefined `[04 R-SPEC-01 §13]`. The emitter is gated on the unit
+belonging to the local player, so on any other player's unit those counts
+already pass silently in retail.
+
+**This port publishes no status cue for remaining counts 6 and 7.** Counts 0
+through 5 keep the tabulated kinds unchanged, and the countdown itself is
+untouched at 6 and 7: the same number of visits, the same 30-tick spacing, the
+same remaining-count sequence, the same gate bit, and the same single draw at
+the count-0 step. Nothing else in the retail handler varies with the count
+beyond its zero test, so silence is the whole of the difference.
+`internal/orders/selfdestruct_test.go` locks all three halves of that — the six
+tabulated kinds, the silence above them, and the unchanged timing and draw.
+
+Three reasons for silence rather than an invented cue. A Go port cannot
+reproduce memory unsafety, so retail's actual outcome is not available to copy;
+continuing the arithmetic past the table (the port's earlier `22 − count`, which
+produced the `Visible` and the caption-less capture kinds) was extrapolation
+presented as retail behaviour, and is exactly what `[04 R-SPEC-01 §13]` retracts;
+and silence is already an outcome retail itself produces for these counts, on
+every unit the local player does not own.
+
+The edge is unreachable from shipped content. A census of the reference install
+— 821 unit FBI sections across every mounted archive, shadowed copies included —
+finds twelve sections authoring the key at all, all of them mines in the Core
+Contingency data archive, with the values 1 and 2; nothing authors 6 or 7, and
+nothing authors a value that wraps onto them. The remaining sections leave the
+key absent, which stores the default field value 5. Only third-party content can
+reach this path. The runtime symptom on retail — a fault, or a garbage caption —
+remains **Unknown**, and settling it needs one manual retail observation with an
+authored unit; the choice above does not depend on which it turns out to be.
+
 ## 6. Research map
 
 | Behaviour | Owning research |

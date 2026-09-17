@@ -143,6 +143,14 @@ func aimRequirement(w *content.WeaponDef) (needLatch, needResult bool) {
 }
 
 // ComputeStoredReload implements the integer-truncated reload computation [06 §4.2] C7 (I3) [01 §8].
+//
+// `authoredReload` is the weapon record's reload word, which every reader in
+// retail reads zero-extended — this recomputation, the maximum-reload
+// notification, the stockpile production visit and the interface percentage —
+// so it arrives in 0..65535 and is never negative [06 §4.2][06 §11.1]. The
+// signed 16-bit word in this path is the caller's store of the RESULT into the
+// slot, which is a different field.
+//
 // Order is exact per [06 §4.2]:
 //
 //	tier           = min(floor(unsigned kills/5), 5)           // unsigned [06 §4.2]

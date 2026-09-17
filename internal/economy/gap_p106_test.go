@@ -111,7 +111,7 @@ func TestGeneratorAndMobileBranchGates(t *testing.T) {
 
 	def.BMCode = 1
 	b[Energy] = Bucket{}
-	u.Move.Mode = 1
+	u.MoveTier = 1 // under way, so the mobile branch runs [05 R-ECO-01 §2]
 	svc.PerUnitProductionFills(0, w)
 	if b[Energy].Production != 0 {
 		t.Fatalf("mobile unit must not reach generator branch, got %v", b[Energy].Production)

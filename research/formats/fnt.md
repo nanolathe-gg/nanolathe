@@ -55,10 +55,14 @@ contract.
 **Established (layout consequence):** a nonzero glyph-record start is
 addressable only at offsets 1 through 65,535. This does not impose a 64 KiB
 file-size limit: a bitmap can extend beyond its starting offset, and trailing
-bytes need not be referenced. Retail fonts are a
-few KiB (`SMLFONT.FNT` is 2713 bytes in the installed `totala1.hpi`, height
-11, offset 1, 223 glyphs present covering 0x20 through the Windows-1252 high
-range; most retail fonts carry only the 94 printable ASCII glyphs).
+bytes need not be referenced. Retail fonts are a few KiB. The winning
+`fonts/SMLFONT.FNT` in a patched install is the `rev31.gp3` copy — the same
+bytes also ship in `ccdata.ccx` and `btdata.ccx` — at 2713 bytes, height 11,
+offset 1, 223 glyphs present covering 0x20 through the Windows-1252 high
+range. `totala1.hpi` carries its own copy of that logical path at 2704 bytes
+with 222 glyphs: it lacks 0xA0, which the patch copy inserts. Neither copy
+carries 0xFF, so both run 0x20 through 0xFE. Most retail fonts carry only the
+94 printable ASCII glyphs.
 
 ### Glyph record
 
@@ -67,7 +71,8 @@ range; most retail fonts carry only the 94 printable ASCII glyphs).
 | +0 | 1 | u8 glyph advance in pixels — the pen moves by exactly this amount and the bitmap is exactly this wide; there is no separate bearing or spacing |
 | +1 | ceil(advance × height / 8) | bitmap: `advance × height` bits, row-major top-to-bottom, left-to-right, most-significant bit first, packed continuously across rows (rows are **not** byte-aligned) |
 
-Real example — from `fonts/SMLFONT.FNT` (`totala1.hpi`), header
+Real example — from `fonts/SMLFONT.FNT` (both copies agree here: `A` and the
+space glyph precede the point where the two diverge), header
 `0B 00 01 00` (height 11), the offset table entry for `A` (code 65) is
 `0x0340` (832). The record there is width 8 followed by 11 bytes, which
 decode to:

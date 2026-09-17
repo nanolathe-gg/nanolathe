@@ -243,21 +243,12 @@ func TestMissionGlobalsAuthoritativeDecoding(t *testing.T) {
 }
 
 // TestPlanetPanoramaFallback verifies optional-media fallback degraded not fatal [P1-02 §2.2].
+//
+// The planet name→art lookup is not asserted here and must not be: it belongs
+// to the briefing screen, which owns the single table and compares against it
+// byte for byte [08 R-CAMP-01 §2]. This package's only duty for `Planet` is to
+// carry the authored text through unchanged, which is what is asserted below.
 func TestPlanetPanoramaFallback(t *testing.T) {
-	// Known planet
-	if idx := planetIndex("Green planet"); idx != 0 {
-		t.Fatalf("Green planet index 0 got %d", idx)
-	}
-	if _, _, _, ok := resolvePlanetMedia("Green planet"); !ok {
-		t.Fatalf("Green planet should resolve [P1-02 §2.1]")
-	}
-	// Unknown planet → -1 and no GAF, degraded not fatal [P1-02 §2.2].
-	if idx := planetIndex("UnknownPlanet42"); idx != -1 {
-		t.Fatalf("unknown planet should be -1 [P1-02 §2.2] got %d", idx)
-	}
-	if _, _, _, ok := resolvePlanetMedia("UnknownPlanet42"); ok {
-		t.Fatalf("unknown planet should not resolve [P1-02 §2.2]")
-	}
 	if mediaFatal("panorama") != FatalKindDegrade {
 		t.Fatalf("panorama miss degraded not fatal [P1-02 §2.2]")
 	}
@@ -373,29 +364,6 @@ func isInertKey(key string) bool {
 		}
 	}
 	return false
-}
-
-// planetIndex returns the planet-table index for the planet string, matched
-// case-insensitively [P1-02 §2.1], or -1 when unknown → presentation leaves
-// empty but game still loads degraded not fatal [P1-02 §2.2].
-func planetIndex(planet string) int {
-	planet = strings.TrimSpace(planet)
-	for i, name := range PlanetNames {
-		if strings.EqualFold(name, planet) {
-			return i
-		}
-	}
-	return -1 // unknown → no pan/rotate fetched, no abort [P1-02 §2.2]
-}
-
-// resolvePlanetMedia resolves brief/pan/rotate GAF keys for planet enum [P1-02 §2.1]
-// via the planet-table triple. Returns empty when planet unknown (degrade) [P1-02 §2.2].
-func resolvePlanetMedia(planet string) (briefKey, panKey, rotateKey string, ok bool) {
-	idx := planetIndex(planet)
-	if idx < 0 {
-		return "", "", "", false // unknown planet → no GAF, degraded not fatal [P1-02 §2.2]
-	}
-	return PlanetBriefKeys[idx], PlanetPanKeys[idx], PlanetRotateKeys[idx], true
 }
 
 // mediaFatal reports whether missing media for key is fatal [P1-02 §2.2].

@@ -91,9 +91,9 @@ type ClassLayer struct {
 	movers MoverSource
 
 	// watermark is the class record's revision watermark. Zero until the
-	// first request revision arms it; the map-load stamp therefore never
-	// blocks on occupants — the static layer is terrain and features only
-	// [04 §6.1 R-DOC04-B].
+	// first request revision at a tick past 30 arms it; the map-load stamp
+	// therefore never blocks on occupants — the static layer is terrain and
+	// features only [04 §6.1 R-DOC04-B].
 	watermark uint32
 
 	// commits records each unit's last occupancy-commit tick, the unit
@@ -199,10 +199,11 @@ func (l *ClassLayer) classifyRect(x1, z1, x2, z2 int32) uint8 {
 // Retail runs the occupant-age gate as step 2, between the feature gate and
 // the deep gate; both it and the terrain gates only ever return blocked, so
 // testing it after the terrain chain yields the same tier. The watermark is
-// zero until the first request revision arms it, so the map-load stamp never
-// blocks on a MOBILE occupant — for movers the static layer is terrain and
-// features only. A building takes the mover-null arm below and blocks at every
-// watermark, map load included [04 R-PATH-01 §14].
+// zero until the first request revision at a tick past 30 arms it, so the
+// map-load stamp never blocks on a MOBILE occupant, and neither does any
+// classification during the opening 31 ticks — for movers the static layer is
+// terrain and features only. A building takes the mover-null arm below and
+// blocks at every watermark, map load included [04 R-PATH-01 §14].
 func (l *ClassLayer) classifyCell(x, z int32) uint8 {
 	tier := LayerClear
 	switch l.Profile.classifyCell(l.Terrain, x, z) {
@@ -367,14 +368,23 @@ func (l *ClassLayer) ForgetCommit(h pool.Handle) {
 	delete(l.commits, h)
 }
 
-// revisionWatermark is the request revision pass's corrected watermark
-// arithmetic: max(tick, 31) − 30 [04 R-PATH-01 §2]. The first revision
-// therefore arms the class layer at 1, so a frozen creation stamp at tick zero
-// enters the first crossed window instead of remaining permanently invisible
-// to path search.
+// revisionWatermark is the request revision pass's watermark arithmetic: the
+// current tick clamped UP to 30 and then reduced by 30 — zero for every tick up
+// to and including 30, tick−30 after that, the clamp being an unsigned strict
+// comparison against 30 [04 §6.1 R-DOC04-B][04 R-PATH-01 §2].
+//
+// So no mobile occupant blocks by occupant age during the opening 31 ticks of a
+// battle, and nothing is lost by that: a unit whose commit tick is frozen at
+// zero is still caught exactly once, by the first revision that moves the
+// watermark off zero, because the crossed window [old, new) is INCLUSIVE at its
+// lower bound and [0, new) therefore contains a zero stamp. (This function used
+// to return 1 below tick 31 and call that a correction, on the argument that a
+// frozen zero stamp would otherwise stay permanently invisible to path search.
+// That argument belonged to an earlier one-sided cohort test, not to the
+// two-sided window Revise implements.)
 func revisionWatermark(tick uint32) uint32 {
-	if tick < 31 {
-		return 1
+	if tick < 30 {
+		return 0
 	}
 	return tick - 30
 }
@@ -395,6 +405,29 @@ type AnchorSource interface {
 // CollisionState and distinguishes the two by its Building flag.
 type MoverSource interface {
 	HasMover(h pool.Handle) bool
+}
+
+// CommitTickSource resolves a unit's last occupancy-commit tick. Retail keeps
+// ONE such word, on the mover structure, read by every class record
+// [04 R-PATH-01 §14]; this build mirrors it per layer, so a layer allocated
+// after units have already committed needs the real word to start from.
+type CommitTickSource interface {
+	LastCommitTick(h pool.Handle) (uint32, bool)
+}
+
+// LastCommitTick adapts the System's collision states to CommitTickSource: the
+// collision record is where this build keeps the mover's one occupant-age clock
+// [04 R-PATH-01 §14]. A handle with no record has no clock, which is what a
+// finalised or never-created unit is.
+func (s *System) LastCommitTick(h pool.Handle) (uint32, bool) {
+	if s == nil {
+		return 0, false
+	}
+	coll := handleRow(s.Collisions, h)
+	if coll == nil {
+		return 0, false
+	}
+	return coll.LastStampTick, true
 }
 
 // HasMover adapts the System's collision states to MoverSource: a live
@@ -507,6 +540,7 @@ type ClassLayers struct {
 	world   *units.World
 	anchors AnchorSource
 	movers  MoverSource
+	ticks   CommitTickSource
 	mapping MappingWordSource
 
 	byName map[string]*ClassLayer // lookup only; never iterated [I1]
@@ -523,11 +557,14 @@ func NewClassLayers(t *world.Terrain, grid *OccupancyGrid, w *units.World, ancho
 		anchors: anchors,
 		byName:  make(map[string]*ClassLayer),
 	}
-	// The committed-anchor adapter and the mover predicate are the same
-	// System object in production; take the second port from it when it
-	// implements one [04 R-PATH-01 §14].
+	// The committed-anchor adapter, the mover predicate and the occupant-age
+	// clock are the same System object in production; take the other ports from
+	// it when it implements them [04 R-PATH-01 §14].
 	if m, ok := anchors.(MoverSource); ok {
 		c.movers = m
+	}
+	if t, ok := anchors.(CommitTickSource); ok {
+		c.ticks = t
 	}
 	return c
 }
@@ -577,12 +614,38 @@ func (c *ClassLayers) For(name string, p Profile) *ClassLayer {
 	// so its map-load stamp already sees buildings [04 R-PATH-01 §14].
 	l.movers = c.movers
 	l.mapping = c.mapping
+	c.seedCommits(l)
 	if c.movers != nil {
 		l.stampAll()
 	}
 	c.byName[name] = l
 	c.names = append(c.names, name)
 	return l
+}
+
+// seedCommits gives a freshly allocated layer the occupant-age clocks the units
+// already carry. Retail has no equivalent step because it has no equivalent
+// state: its thirty-two class records are all created with the map and every one
+// of them reads the SAME word, the one on each mover [04 R-PATH-01 §14]
+// [04 R-COLL-01 §4]. This build mirrors that word per layer, and layers are
+// allocated at the first path request of their class, so without this a class
+// whose first request comes at tick T starts with an empty mirror and reads
+// every unit that has ever committed as carrying tick zero: its first revision
+// then walls and restamps units that committed within the last 30 ticks, which
+// retail's shared word leaves passable.
+//
+// The walk is the unit pool slot-ascending, never a map range [I1]. Handles with
+// no collision record have no clock, and a clock of zero is exactly what an
+// absent entry already means, so neither is written.
+func (c *ClassLayers) seedCommits(l *ClassLayer) {
+	if c == nil || l == nil || c.ticks == nil || c.world == nil {
+		return
+	}
+	for h := pool.Handle(1); int(h) <= c.world.Capacity(); h++ {
+		if tick, ok := c.ticks.LastCommitTick(h); ok && tick != 0 {
+			l.NoteCommit(h, tick)
+		}
+	}
 }
 
 // Existing returns the layer already allocated for one movement class, or nil.

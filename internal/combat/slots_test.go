@@ -227,3 +227,20 @@ func TestReloadTruncationVectors(t *testing.T) {
 		t.Fatalf("negative kills unsigned tier veteran %d, want 70 [06 §4.2]", got)
 	}
 }
+
+// TestComputeStoredReloadTakesTheWordUnsigned locks the input side of [06 §4.2]
+// against a sign-extending regression at the compile site: the weapon record's
+// reload word is read zero-extended by every retail reader [06 §11.1], so a
+// word above 32,767 arrives here as a large positive tick count, not a
+// negative one. At full health and tier 0 the two truncating divides are
+// identities, so the result is the authored word itself.
+func TestComputeStoredReloadTakesTheWordUnsigned(t *testing.T) {
+	const wordAbove15Bits = 33000 // reloadtime=1100 s, the case that separates the two extensions
+	got := ComputeStoredReload(100, 100, 0, wordAbove15Bits)
+	if got != wordAbove15Bits {
+		t.Fatalf("stored reload = %d, want %d: the reload word is zero-extended [06 §4.2][06 §11.1]", got, wordAbove15Bits)
+	}
+	if got < 0 {
+		t.Fatalf("stored reload = %d: a sign-extended reload word reached the computation", got)
+	}
+}

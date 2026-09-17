@@ -29,31 +29,14 @@ func standingFixture(t *testing.T, controlByte uint8) (*Service, *units.Unit, *u
 	return svc, w.Unit(fh), w.Unit(ph)
 }
 
-// The post-build merge of [04 §3.8] / [04 R-FAC-02 §4]: standing-move bits
-// 18-19 and standing-fire bits 20-21 copy from builder to product under the
-// alive / death-latch guard, and the experience word rides the same block only
-// when the owner's control byte reads as a computer player — 2, not 1
-// [05 R-SHARE-01 §1].
+// The post-build merge of [04 §3.5] / [04 §3.8] / [04 R-FAC-02 §4]:
+// standing-move bits 18-19 and standing-fire bits 20-21 copy from builder to
+// product under the alive / death-latch guard, and the experience word rides
+// the same block only when the product's owner row is occupied AND its control
+// byte is exactly the human seat value — 1, not 2 [05 R-SHARE-01 §1].
 func TestRallyInheritanceMergesStandingFields(t *testing.T) {
-	t.Run("human owner copies the bits but not the experience word", func(t *testing.T) {
-		svc, factory, product := standingFixture(t, 1)
-		factory.Flags |= StandingMoveMask | StandingFireMask
-		factory.Kills = 7
-		product.Flags &^= StandingMoveMask | StandingFireMask
-		product.Kills = 0
-
-		svc.rallyInheritance(factory, product, 10)
-
-		if got := product.Flags & (StandingMoveMask | StandingFireMask); got != StandingMoveMask|StandingFireMask {
-			t.Fatalf("standing bits = %#x, want %#x", got, StandingMoveMask|StandingFireMask)
-		}
-		if product.Kills != 0 {
-			t.Fatalf("experience word = %d, want it untouched for a human-owned builder", product.Kills)
-		}
-	})
-
-	t.Run("computer owner also copies the experience word", func(t *testing.T) {
-		svc, factory, product := standingFixture(t, controlByteComputer)
+	t.Run("human owner also copies the experience word", func(t *testing.T) {
+		svc, factory, product := standingFixture(t, controlByteHuman)
 		factory.Flags |= StandingMoveMask | StandingFireMask
 		factory.Kills = 7
 		product.Flags &^= StandingMoveMask | StandingFireMask
@@ -69,8 +52,50 @@ func TestRallyInheritanceMergesStandingFields(t *testing.T) {
 		}
 	})
 
+	t.Run("computer owner copies the bits but not the experience word", func(t *testing.T) {
+		svc, factory, product := standingFixture(t, 2)
+		factory.Flags |= StandingMoveMask | StandingFireMask
+		factory.Kills = 7
+		product.Flags &^= StandingMoveMask | StandingFireMask
+		product.Kills = 0
+
+		svc.rallyInheritance(factory, product, 10)
+
+		if got := product.Flags & (StandingMoveMask | StandingFireMask); got != StandingMoveMask|StandingFireMask {
+			t.Fatalf("standing bits = %#x, want %#x", got, StandingMoveMask|StandingFireMask)
+		}
+		if product.Kills != 0 {
+			t.Fatalf("experience word = %d, want it untouched for a computer-owned product", product.Kills)
+		}
+	})
+
+	t.Run("a remote-peer control byte does not inherit either", func(t *testing.T) {
+		svc, factory, product := standingFixture(t, 3)
+		factory.Kills = 7
+		product.Kills = 0
+
+		svc.rallyInheritance(factory, product, 10)
+
+		if product.Kills != 0 {
+			t.Fatalf("experience word = %d, want it untouched: the gate is an equality against 1", product.Kills)
+		}
+	})
+
+	t.Run("an unoccupied owner row does not inherit", func(t *testing.T) {
+		svc, factory, product := standingFixture(t, controlByteHuman)
+		svc.Economy.Players[product.Owner].Exists = false
+		factory.Kills = 7
+		product.Kills = 0
+
+		svc.rallyInheritance(factory, product, 10)
+
+		if product.Kills != 0 {
+			t.Fatalf("experience word = %d, want it untouched: the occupancy test precedes the control byte", product.Kills)
+		}
+	})
+
 	t.Run("the death latch blocks both copies", func(t *testing.T) {
-		svc, factory, product := standingFixture(t, controlByteComputer)
+		svc, factory, product := standingFixture(t, controlByteHuman)
 		factory.Flags |= StandingMoveMask | StandingFireMask
 		factory.Kills = 7
 		product.Flags &^= StandingMoveMask | StandingFireMask

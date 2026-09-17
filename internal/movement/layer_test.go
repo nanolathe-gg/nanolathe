@@ -252,18 +252,71 @@ func TestLayerFootprintAggregateAndRing(t *testing.T) {
 	}
 }
 
-// TestRevisionWatermarkArithmetic locks max(tick, 31) − 30
-// [04 R-PATH-01 §2].
+// TestRevisionWatermarkArithmetic locks max(tick, 30) − 30: zero for every tick
+// up to and including 30, tick−30 after that
+// [04 §6.1 R-DOC04-B][04 R-PATH-01 §2]. The 30/31 pair is the boundary that
+// locks the clamp's strictness.
 func TestRevisionWatermarkArithmetic(t *testing.T) {
 	cases := []struct {
 		tick, want uint32
 	}{
-		{0, 1}, {1, 1}, {29, 1}, {30, 1}, {31, 1}, {32, 2}, {45, 15}, {60, 30}, {61, 31},
+		{0, 0}, {1, 0}, {29, 0}, {30, 0}, {31, 1}, {32, 2}, {45, 15}, {60, 30}, {61, 31},
 	}
 	for _, c := range cases {
 		if got := revisionWatermark(c.tick); got != c.want {
 			t.Fatalf("revisionWatermark(%d) want %d got %d", c.tick, c.want, got)
 		}
+	}
+}
+
+// TestRevisionOpeningWindowAdmitsTickZeroStamp locks the behavioral consequence
+// of the clamp [04 §6.1 R-DOC04-B][04 R-PATH-01 §2]. A unit whose
+// occupancy-commit tick is frozen at zero — stamped by its creation at tick zero
+// and never moved since — is NOT blocked by occupant age while the layer is
+// revised at every tick through 30, because the watermark is still zero and the
+// gate's comparison is strict; and it IS restamped blocked by the first revision
+// at tick 31, whose crossed window [0, 1) is inclusive at its lower bound. So
+// the zero stamp is never lost, which is what the old max(tick, 31) − 30 form
+// was wrongly introduced to guarantee.
+func TestRevisionOpeningWindowAdmitsTickZeroStamp(t *testing.T) {
+	tr := layerTerrain(16, 16, 20)
+	grid := NewOccupancyGrid()
+	w := newMovementFixtureWorld(8)
+	def := &content.UnitDef{UnitName: "armflea", MaxDamage: 100, CanMove: true, BMCode: 1}
+	h, err := w.Create(def, 0, world.CellToWorld(6), 30*65536, world.CellToWorld(6))
+	if err != nil {
+		t.Fatalf("create parked occupant: %v", err)
+	}
+	anchors := testAnchors{h: {anchor: Cell{X: 6, Z: 6}, fx: 1, fz: 1}}
+	l := NewClassLayer(kbotsSS2, tr, grid)
+	l.movers = stubMovers{h: true}
+	if !grid.Stamp(Cell{X: 6, Z: 6}, 1, 1, int(h)) {
+		t.Fatal("occupant stamp failed")
+	}
+	l.NoteCommit(h, 0) // the creation stamp's tick
+
+	for tick := uint32(1); tick <= 30; tick++ {
+		l.Revise(tick, 0, w, anchors)
+		if got := l.Watermark(); got != 0 {
+			t.Fatalf("revision at tick %d armed the watermark at %d, want 0", tick, got)
+		}
+		if got := l.classify(6, 6); got == LayerBlocked {
+			t.Fatalf("tick-zero stamp blocked by occupant age at tick %d", tick)
+		}
+		if got := l.Value(6, 6); got == LayerBlocked {
+			t.Fatalf("revision at tick %d restamped the tick-zero occupant blocked", tick)
+		}
+	}
+
+	l.Revise(31, 0, w, anchors)
+	if got := l.Watermark(); got != 1 {
+		t.Fatalf("watermark after the tick-31 revision = %d, want 1", got)
+	}
+	if got := l.classify(6, 6); got != LayerBlocked {
+		t.Fatalf("occupant-age gate past the zero stamp = %d, want blocked", got)
+	}
+	if got := l.Value(6, 6); got != LayerBlocked {
+		t.Fatalf("crossed [0,1) window must restamp the occupant blocked, got %d", got)
 	}
 }
 
@@ -694,5 +747,67 @@ func TestSlopeCostReadsTheTierNotTheFootprintAggregate(t *testing.T) {
 	steepLayer := NewClassLayer(kbotsSS2, tr, nil)
 	if got := steepLayer.Value(anchorX, anchorZ); got > 1 {
 		t.Fatalf("a per-cell steep anchor stamped %d; want a tier the search charges %d for", got, path.SteepCost)
+	}
+}
+
+// TestLateAllocatedLayerSeedsOccupantClocks locks the mirrored occupant-age
+// clock against the one word retail keeps. Retail's thirty-two class records are
+// all created with the map and every one of them reads the mover's single
+// last-stamp word [04 R-PATH-01 §14][04 R-COLL-01 §4]; this build mirrors that
+// word per class layer, and a layer is allocated at the first path request of
+// its class. A layer allocated after units have already committed therefore has
+// to start from the clocks they carry: otherwise "absent means tick zero" makes
+// every one of them look like a frozen zero stamp, and the layer's first
+// revision walls and restamps even the units that committed moments ago.
+//
+// Both directions are locked: the unit that committed five ticks before the
+// revision stays passable, and the unit that committed a hundred ticks before it
+// is still walled by the same revision.
+func TestLateAllocatedLayerSeedsOccupantClocks(t *testing.T) {
+	terrain := syntheticTerrainFlat()
+	grid := NewOccupancyGrid()
+	sys := NewSystem(terrain, wiringProfile, grid)
+	w := newMovementFixtureWorld(8)
+	sys.BindWorld(w)
+
+	// One unit's occupancy commit is long past, the other's is recent.
+	sys.BeginTick(100)
+	stale := world.CellToWorld(12)
+	hStale, err := w.Create(wiringDef(), 0, stale, terrain.HeightAt(stale, stale), stale)
+	if err != nil {
+		t.Fatalf("create stale occupant: %v", err)
+	}
+	sys.EnsureUnit(w.Unit(hStale))
+
+	sys.BeginTick(195)
+	fresh := world.CellToWorld(6)
+	hFresh, err := w.Create(wiringDef(), 0, fresh, terrain.HeightAt(fresh, fresh), fresh)
+	if err != nil {
+		t.Fatalf("create fresh occupant: %v", err)
+	}
+	sys.EnsureUnit(w.Unit(hFresh))
+
+	// A movement class whose first path request comes only now allocates its
+	// layer here.
+	layer := sys.ensureLayerRegistry().For("late-class", wiringProfile)
+	if got, ok := layer.CommitTick(hFresh); !ok || got != 195 {
+		t.Fatalf("late-allocated layer's clock for the fresh occupant = %d/%v, want 195/true", got, ok)
+	}
+	if got, ok := layer.CommitTick(hStale); !ok || got != 100 {
+		t.Fatalf("late-allocated layer's clock for the stale occupant = %d/%v, want 100/true", got, ok)
+	}
+
+	layer.Revise(200, 0, w, sys)
+	if got := layer.Watermark(); got != 170 {
+		t.Fatalf("watermark after the tick-200 revision = %d, want 170", got)
+	}
+	if got := layer.classify(6, 6); got == LayerBlocked {
+		t.Fatalf("a unit that committed at tick 195 must not be walled at watermark 170, got %d", got)
+	}
+	if got := layer.classify(12, 12); got != LayerBlocked {
+		t.Fatalf("a unit that committed at tick 100 must be walled at watermark 170, got %d", got)
+	}
+	if got := layer.Value(12, 12); got != LayerBlocked {
+		t.Fatalf("the crossed window must restamp the stale occupant blocked, got %d", got)
 	}
 }

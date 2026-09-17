@@ -1003,8 +1003,9 @@ type COBBinder func(*Unit) error
 // World is the unit world [PLAN_06 Public API].
 // Pool is slot-indexed parallel to world state; iteration is players 0..9
 // then slots ascending [01 §6.2] C2 [P0-16]. The pool is the retail sliced
-// shape via NewSliced: physical cap = maxDefs*10+1, sliced per-player maxDefs
-// each [P0-16 §3.1]; the canonical allocator is the sole allocation site,
+// shape via NewSliced: physical cap = limit*10+1 for the session per-player
+// unit limit, sliced per-player limit each [05 R-SHARE-01 §7] [P0-16 §3.1];
+// the canonical allocator is the sole allocation site,
 // scanning the owning player's slice for the lowest free slot with immediate
 // reuse [P0-16 §3.2] [01 §6.1]; per-def limits are enforced per slice
 // [P0-16 §3.2]; forcedSlot reconstruction verifies slice bounds and
@@ -1073,22 +1074,23 @@ type World struct {
 	simulationRNG *rng.Simulation
 }
 
-// NewSliced creates the unit world over a retail sliced pool for maxDefs
-// catalog definitions: physical cap = maxDefs*10+1 records, sliced per-player
-// maxDefs each [P0-16 §3.1]. Stock ~2000-5001 [P0-16]. Slot 0 null,
-// lowest-free allocation with immediate reuse, no generation tags [01 §6.1].
-// This is the only production world constructor; tests build the same slices
-// at smaller fixture sizes by passing a small maxDefs.
-func NewSliced(maxDefs int, cat *content.Catalog) *World {
-	p := pool.NewUnitsSliced(maxDefs)
+// NewSliced creates the unit world over a retail sliced pool sized from the
+// session per-player unit limit: physical cap = limit*10+1 records, sliced
+// per-player limit each [05 R-SHARE-01 §7] [P0-16 §3.1]. Stock ~2000-5001
+// [P0-16]. Slot 0 null, lowest-free allocation with immediate reuse, no
+// generation tags [01 §6.1]. This is the only production world constructor;
+// tests build the same slices at smaller fixture sizes by passing a small
+// limit.
+func NewSliced(limit int, cat *content.Catalog) *World {
+	p := pool.NewUnitsSliced(limit)
 	return newSlicedWorld(p, cat)
 }
 
 // NewSlicedWithOrder creates a production unit world with the battle-entry
 // player permutation already computed by session setup. Invalid permutations
 // are rejected before any pool state is allocated [R-P0-16-A].
-func NewSlicedWithOrder(maxDefs int, cat *content.Catalog, order pool.PlayerPermutation) (*World, error) {
-	p, err := pool.NewUnitsSlicedWithOrder(maxDefs, order)
+func NewSlicedWithOrder(limit int, cat *content.Catalog, order pool.PlayerPermutation) (*World, error) {
+	p, err := pool.NewUnitsSlicedWithOrder(limit, order)
 	if err != nil {
 		return nil, err
 	}
@@ -1455,12 +1457,14 @@ func (w *World) IsSliced() bool {
 	return w.pool.IsSliced()
 }
 
-// MaxDefs returns the catalog maxDefs used for slicing [P0-16 §3.1].
-func (w *World) MaxDefs() int {
+// UnitLimit returns the session per-player unit limit the pool slices were
+// sized from — never a catalog definition count [05 R-SHARE-01 §7]
+// [P0-16 §3.1]. It forwards pool.Units.UnitLimit under the same name.
+func (w *World) UnitLimit() int {
 	if w == nil || w.pool == nil {
 		return 0
 	}
-	return w.pool.MaxDefs()
+	return w.pool.UnitLimit()
 }
 
 // SliceForPlayer returns the inclusive bounds for the player's slice [P0-16 §3.1].

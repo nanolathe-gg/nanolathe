@@ -64,6 +64,11 @@ const (
 	// per-count wait, both from [04 R-ORD-01 §2] / [04 R-SPEC-01 §13].
 	selfDestructDamage int32  = 30000
 	selfDestructStep   uint32 = 30
+
+	// selfDestructAnnounceEntries is the height of the announce table: six
+	// kinds, for the remaining counts 0..5 [04 R-ORD-01 §14]. Counts above it
+	// have no defined cue — see the handler.
+	selfDestructAnnounceEntries uint32 = 6
 )
 
 // selfDestructCountdownField reads the definition's `selfdestructcountdown`
@@ -122,11 +127,24 @@ func selfDestructHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) 
 				// [04 R-ORD-01 §14].
 				n.Param2 = (count - 1) | selfDestructInitialised
 			}
-			// The announce is a six-entry table of kinds {22..17} indexed by
-			// the remaining count, which is 22 − count for every in-range one
-			// [04 R-ORD-01 §14]. Counts 6 and 7 index past it — the Unknown
-			// [04 R-ORD-01 §2] records.
-			workStatus(u, uint8(22-count), "")
+			// The announce is a six-entry table of kinds {22, 21, 20, 19, 18,
+			// 17} built in the handler's own stack frame and indexed by the
+			// remaining count, so it is 22 − count for the counts 0..5 the
+			// table covers [04 R-ORD-01 §14]. The index is not bounds-checked
+			// above, and counts 6 and 7 are reachable because the authored
+			// `selfdestructcountdown` is masked to three bits with no clamp:
+			// retail then reads a word from beyond the table and hands it to
+			// the cue emitter as a kind. That is undefined behaviour, not an
+			// announcement — no cue kind is defined for these two counts
+			// [04 R-SPEC-01 §13]. We cannot reproduce a crash in a Go port, and
+			// silence is already retail's own outcome for these counts on every
+			// unit the local player does not own, because the cue emitter is
+			// local-owner gated. So 6 and 7 announce nothing; everything else
+			// about the step is unchanged, since nothing else in the retail
+			// handler varies with the count beyond its zero test.
+			if count < selfDestructAnnounceEntries {
+				workStatus(u, uint8(22-count), "")
+			}
 			if count == 0 {
 				armDeadline(n, tick, drawBelow(u, 15)) // the one draw of the timeline [04 R-SPEC-01 §13]
 			} else {

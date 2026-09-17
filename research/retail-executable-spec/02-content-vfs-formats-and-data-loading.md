@@ -673,10 +673,12 @@ Mode` only**: `MixingBuffers`, `RestoreVolume`, `musicmode`, `cdmode`,
 defaults in memory without a write; they reach the registry only through
 the settings saver, which writes every audio value unconditionally
 (`WaveOutVolume`/`CDAudioVolume` only when bit 3 is set, from the *current*
-device levels). A bounded census of the loader finds exactly thirty names
-written back, and none of the audio names except `Sound Mode` is among
-them; the other twenty-nine are display, LOS/mapping, skirmish-scalar and
-interface values.
+device levels). A bounded census of the loader finds exactly thirty-two
+names written back on absence — thirty-one DWORD-valued names plus the
+`SkirmishMap` string, whose default is synthesised rather than a constant —
+and none of the audio names except `Sound Mode` is among them; the other
+thirty-one are display, LOS/mapping, skirmish-scalar and interface values
+(including `side`).
 
 **Established fact (bounded negative) — not registry.** `NoDirectSound` and
 `UseWindowsSound` are **not** registry values. They are integers read from
@@ -692,9 +694,14 @@ three levels `Software` → `Cavedog Entertainment` → `<subkey>` under the
 current-user hive with the *create-key* call, so a missing path is created
 on the way down even for a read. The access mask is
 `STANDARD_RIGHTS_WRITE | KEY_SET_VALUE | KEY_CREATE_SUB_KEY` for a write and
-that mask plus `KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS | KEY_NOTIFY` (i.e.
-`KEY_READ`) for a read. A read that fails with `ERROR_MORE_DATA` (the
-caller's buffer is too small) reports **success**, with the buffer left as
+exactly `KEY_READ` (`STANDARD_RIGHTS_READ | KEY_QUERY_VALUE |
+KEY_ENUMERATE_SUB_KEYS | KEY_NOTIFY`) for a read. The read mask is formed by
+**adding** `KEY_QUERY_VALUE | KEY_SET_VALUE | KEY_NOTIFY` to the write mask
+rather than taking a union with it: the carry out of the shared
+`KEY_SET_VALUE` bit is what clears the write-only rights and turns the sum
+into `KEY_READ`, so a reimplementation that ORs the two masks together asks
+for more access than retail does. A read that fails with `ERROR_MORE_DATA`
+(the caller's buffer is too small) reports **success**, with the buffer left as
 the API filled it; every other failure reports failure. Handles are closed
 in reverse order. The typed wrappers (integer, string, binary) sit on this
 one helper.
@@ -1159,9 +1166,13 @@ record's index word is provisionally *i*):
    from an archive and the executable is an installed (hard-disk) build — a
    constant that is 1 in this image — or when the CD-content-drive flag is
    set (unreachable in this build, since the installed constant short-circuits
-   the CD path). **Consequence: loose `units\*.FBI` files are enumerated,
-   parsed, and then always dropped silently; loose `weapons\*.tdf` files are
-   never parsed into the checksum trees.** Retail unit content must come from
+   the CD path). The installed constant has no writer anywhere in the image —
+   it is loaded from four sites and no code or data reference stores to it —
+   so it is 1 for the whole run. **Consequence: loose `units\*.FBI` files are
+   enumerated, parsed, and then always dropped silently; loose `weapons\*.tdf`
+   files are opened and read but never parsed — neither into the checksum
+   trees here nor into weapon records by the weapon-record compiler
+   (`[R-CONTENT-02]`).** Retail unit content must come from
    a mounted archive. The community rule that units "must be packed" is thus
    the executable's rule, not a packaging convention.
 9. One four-byte field of the record is set to −1 (its reader is not traced
@@ -1420,8 +1431,17 @@ host's unsorted directory order within one provider's directory (§2, SC3),
 with duplicate logical paths resolved first-provider-wins. Two independent
 passes walk it — their relative call order does not affect either result:
 
-* The **weapon-record compiler** parses every file and feeds **every
-  top-level section, in file order**, to the record parser.
+* The **weapon-record compiler** opens every file in the family, but feeds
+  its **top-level sections, in file order**, to the record parser only when
+  that file was opened **from a mounted archive**. It applies the same
+  archive/installed-build gate `[R-CAT-01 §4]` step 8 applies to `units\*.FBI`
+  (and the unit-catalog loader applies to its own weapon trees), so in an
+  installed build a file resolved from a loose host directory is opened, read
+  and then discarded with none of its sections reaching the record parser: a
+  loose weapon TDF can neither add nor overwrite a weapon record. Because the
+  overlay resolves a loose host file **before** any archive (§2), a loose
+  `weapons\foo.tdf` that shadows an archived one also suppresses the archived
+  copy — the loose file wins the open and is then skipped.
 * The **unit-catalog loader** re-parses the same family into its own document
   set and resolves the unit record's `weapon1..3`, `explodeas`, and
   `selfdestructas` names against those documents (see below).
@@ -2189,9 +2209,12 @@ regenerate, so the table and the raw trail
   save-account restore, i.e. it is the last chosen player side (0/1) that
   the campaign-side filter of `[08 R-CAMP-01 §2]` compares against.
 * **`Games` and the session option word — Established.** The loader reads
-  `NumSkirmishPlayers`; when it is exactly 256 it also reads `Games`, and
-  when that is 1 it sets bit 1 of the 16-bit *session option word*; any other
-  outcome clears bit 1. It then unconditionally sets bits 2 and 3, clears
+  the registry display-depth value `DisplaymodeDepth`; only when it is
+  exactly 256 does it also read `Games`, and when that is 1 it sets bit 1 of
+  the 16-bit *session option word*; any other outcome clears bit 1. (The
+  skirmish player count is read much earlier in the same loader and plays no
+  part in this gate.) That pair is the settings-loader route to developer
+  access, `[07 R-CAM-01 §9]`. It then unconditionally sets bits 2 and 3, clears
   bit 4, and copies `clock` into bit 6. Three in-game toggles flip bits 7, 8
   and 9 of the same word. This word is distinct from the two packed display
   and sound option words §3 describes. The `clock` copy retains only the
@@ -2202,17 +2225,18 @@ regenerate, so the table and the raw trail
 
 #### The `shootme` option bit: writer census [R-KEYS-01 §4]
 
-`[04 R-SPEC-01 §5]` left open which setting produces the session option bit
-that admits any target to a human player's autonomous target search. That
-bit is **bit 10 of the session option word** of §3 above. A whole-export
-census of every store to that word finds writers of bits 1, 2, 3, 4, 6
-(the preferences loader) and 7, 8, 9 (the in-game toggles) and **no writer
-of bit 10** — no preference, no toggle, no whole-word store. The
-preferences loader is therefore ruled out as the source. The residual
-stays **Unknown**, narrowed: a writer would have to reach the word through a
-pointer the decompiler lost (a block copy from a save or lobby record) —
-*decider:* a runtime watch on the word while loading a save and joining a
-lobby, or a trace of every block copy into the session globals.
+`[04 R-SPEC-01 §5]` asked which setting produces the session option bit that
+admits any target to a human player's autonomous target search. That bit is
+**bit 10 of the session option word** of §3 above, and it is **not** a
+setting: **Established**, its only writer in the image is the chat command
+`ShootAll`, whose handler toggles the bit and touches nothing else. The
+command is registered in the chat-command table with route mask 1, so it is
+available in every session kind. The preferences loader writes bits 1, 2, 3,
+4 and 6 of the word and the in-game toggles write bits 7, 8 and 9; none of
+them touches bit 10, and the word is zero-filled before any initializer runs,
+so the bit is clear until a player types the command. Its only reader is the
+acquisition admission of `[06 §3.2]`, which owns the contract; `[07 R-CAM-01
+§6]` owns the command table.
 
 #### `burstrate`, `duration` and `smokedelay` are unsigned 16-bit tick words [R-KEYS-01 §6]
 
@@ -2299,7 +2323,7 @@ change the accepted bit.
 | `sonardistancejam` | integer · 16-bit | 0 | `[03 §3.4]`, `[03 §3.10]` | Established (cited) |
 | `bmcode` | integer · 8-bit | 0 | `[03 R-RND-02A]`, `[04 R-COLL-01 §2]` | Established |
 | `standingmoveorder` | integer · flag bits 0-1 | 2 | `[04 R-STANCE-01 §6]` | Established |
-| `standingfireorder` | integer · 32-bit | 2 | `[04 R-STANCE-01 §6]` | Established |
+| `standingfireorder` | integer · flag bits 2-3 | 2 | `[04 R-STANCE-01 §6]` | Established |
 | `init_cloaked` | integer · flag bit 4 | 0 | `[04 R-ORD-01 §2]`, `[05 R-ECO-01]`, `[03 §3.4]` | Established (cited) |
 | `downloadable` | integer · flag bit 5 | 0 | `[02 §5]` (downloadable enforcement), `[08 R-AI-01]` | Established |
 | `builder` | integer · flag bit 6 | 0 | `[04 R-ORD-01 §5]`, `[04 R-ORD-01 §2]`, `[04 R-ORD-01 §7]` | Established (cited) |
@@ -2316,7 +2340,7 @@ change the accepted bit.
 | `istargetingupgrade` | integer · flag bit 10 | 0 | `[04 R-SPEC-01 §8]` | Established |
 | `teleporter` | integer · flag bit 13 | 0 | inert (reader census: none) — `[04 R-SPEC-01 §2]` | Established |
 | `hidedamage` | integer · flag bit 14 | 0 | `[04 R-SPEC-01 §6]` | Established |
-| `shootme` | integer · flag bit 15 | 0 | `[04 R-SPEC-01 §5]`, `[06 §3.2]` (option-bit residual: `[02 R-KEYS-01 §4]`) | Established |
+| `shootme` | integer · flag bit 15 | 0 | `[04 R-SPEC-01 §5]`, `[06 §3.2]` (the option bit that bypasses it is the `ShootAll` chat toggle: `[02 R-KEYS-01 §4]`) | Established |
 | `armoredstate` | integer · flag bit 17 | 0 | `[06 R-DMG-01 §2]` | Established |
 | `activatewhenbuilt` | integer · flag bit 18 | 0 | `[04 R-SPEC-01 §12]` | Established |
 | `canfly` | integer · flag bit 11 | 0 | `[04 R-ORD-01 §7]`, `[04 §10.2]`, `[04 R-AIR-01 §7]` | Established (cited) |
@@ -2351,7 +2375,7 @@ change the accepted bit.
 | `showplayername` | integer · flag bit 17 | 0 | inert (reader census: none) — `[04 R-SPEC-01 §14]` | Established |
 | `commander` | integer · flag bit 18 | 0 | `[08 R-TRIG-01 §3]`, `[05 R-SHARE-01]` | Established |
 | `cantbetransported` | integer · flag bit 19 | 0 | `[04 §10.2]` | Established (cited) |
-| `selfdestructcountdown` | raw · 32-bit | absent → null | `[04 R-SPEC-01 §13]` | Established |
+| `selfdestructcountdown` | raw · flag bits 20-22 | absent → 5 in the field (the raw accessor itself returns null) | `[04 R-SPEC-01 §13]` | Established |
 | `category` | string · 100 bytes | empty | `[02 R-P0-03]` | Established |
 | `soundcategory` | string · 100 bytes | empty | `[03 §8.3]` | Established |
 | `corpse` | string · 100 bytes | empty | `[06 R-DMG-01 §5]`, `[05 R-FEAT-01]` | Established |
@@ -2498,9 +2522,9 @@ change the accepted bit.
 | `maxwaterdepth` | integer · 16-bit | the record's own prior value (template pre-fill, `[04 §6.1]`) | `[04 §6.1]`, `[04 R-COLL-01 §2]` | Established |
 | `minwaterdepth` | integer · 16-bit | the record's own prior value (template pre-fill, `[04 §6.1]`) | `[04 §6.1]`, `[04 R-COLL-01 §2]` | Established |
 | `maxslope` | integer · 8-bit | the record's own prior value (template pre-fill, `[04 §6.1]`) | `[04 §6.1]`, `[04 R-COLL-01 §2]` | Established |
-| `badslope` | integer · 8-bit | the record's own prior value (template pre-fill, `[04 §6.1]`) | `[04 §6.1]` | Established |
+| `badslope` | integer · 8-bit | half (`>>1`, logical) of the `maxslope` value read immediately before it — **not** the record's prior value (`[04 §6.1]`) | `[04 §6.1]` | Established |
 | `maxwaterslope` | integer · 8-bit | the record's own prior value (template pre-fill, `[04 §6.1]`) | `[04 §6.1]` | Established |
-| `badwaterslope` | integer · 8-bit | the record's own prior value (template pre-fill, `[04 §6.1]`) | `[04 §6.1]` | Established |
+| `badwaterslope` | integer · 8-bit | half (`>>1`, logical) of the `maxwaterslope` value read immediately before it — **not** the record's prior value (`[04 §6.1]`) | `[04 §6.1]` | Established |
 
 **campaign file `[MISSION<n>]` (read on the campaign path only; `maxunits` is then read from the OTA `[GlobalHeader]`)**
 
@@ -2722,8 +2746,8 @@ change the accepted bit.
 | Key | Accessor · stored width | Default | Consumer | Evidence |
 |---|---|---|---|---|
 | `PlayMovie` | DWORD · 32-bit | 1 | `[03 §9]` | Established (cited) |
-| `DisplaymodeDepth` | DWORD · 32-bit | no default installed | unknown: no doc cites the display-mode reader — decider: static trace of the mode-set path (doc 07/01) | Unknown |
-| `Games` | DWORD · 32-bit | bit set (1) | `[02 R-KEYS-01 §3]` (sets option-word bit 1 when `NumSkirmishPlayers` is 256 and `Games` is 1) | Established |
+| `DisplaymodeDepth` | DWORD · 32-bit | no default installed | `[R-KEYS-01 §3]`, `[07 R-CAM-01 §9]` (its only established use: equality with 256 gates the `Games` read) | Established |
+| `Games` | DWORD · 32-bit | bit set (1) | `[02 R-KEYS-01 §3]` (sets option-word bit 1 when `DisplaymodeDepth` is 256 and `Games` is 1) | Established |
 | `AllMissions` | DWORD · 32-bit | bit clear (0) | `[08 R-CAMP-01 §3]` | Established |
 
 ## 6. Interface, side, map, animation, model, and script files
@@ -3999,7 +4023,7 @@ the exact comparisons are in the numbered sections that follow.
 | **FBI unit record** (§5) | as TDF | n/a | *skip*: the catalog loader reads `Version` and `Copyright` from every unit section; a version newer than the executable's (3.1) or a copyright line that does not match the template drops the unit from the catalog — with the `Error` box `Incompatible units found.  They will be ignored.  Please download the latest version of the game.` for the version case, silently for the copyright case | as TDF | weapon miss → record 0 (inactive); corpse miss → no wreck; movement class miss → scratch record; **model miss → fatal, the box shows the path `objects3d\<objectname>.3DO`** (corrects the cross-reference table's "slot stays empty"); script miss → null script, crash at the first creation `[04 R-COB-04 §8]`; sound category miss → index 0, or the decimal value of the authored text (`[R-CAT-01 §5]`) | as TDF (an empty FBI compiles a unit with every default and no name) | as TDF |
 | **OTA map / mission** (§5, `[R-MAP-01]`) | as TDF | n/a | no magic; a parsed file without `GlobalHeader` → status-pane message and failure (`[R-MAP-01 §2]`), battle entry proceeds on the prologue sentinels | as TDF; `Schema <n>` probed by index, a gap ends the probe (`[R-MAP-01 §4]`) | `[units]` name that is no unit → *skip* (slot 0, nothing spawned); `Player` outside 1..10 or a slot without a controller → **fatal** `Player number %d invalid for unit %s`; `[features]` name → **fatal** `Record "%s" missing from feature files`; the TNT named by the OTA missing → **fatal** (path as message); `aiprofile` miss → `ai\default.txt` (`[R-MAP-01 §5]`) | as TDF | as TDF |
 | **Catalog TDFs** — weapons, features, `moveinfo`, `sidedata`, `sound`, `meteor` (§5) | as TDF | n/a | `moveinfo.tdf` absent → **fatal** `Can't load MOVEINFO.TDF`; `sidedata.tdf` absent → **fatal**, and the box reads `Can't load GAMEDATA.TDF` (the text names the wrong file; nothing named `gamedata.tdf` is ever opened — this settles `docs/SPEC_CONFLICTS.md` SC2); `sound.tdf` absent → no categories, silent; `meteor.tdf` absent or without `[Default]` → record untouched (§6) | weapon: a second section with the same `ID` replaces the record (R-CONTENT-02); `CLASS<n>` gaps skipped; feature duplicates: first parsed document wins the name scan | weapon `ID` is **not range-checked**: `table + ID × 277` for any ID, so an ID above 255 or below −1 writes outside the 256-record table (*accept-with-garbage*, into neighbouring session state); weapon `model` miss → **fatal** (path); feature `object` miss → **fatal** (path); feature `filename` GAF miss → null root, every sequence null, silent; `seqname*` entry absent from the GAF → null sequence, silent; side `font` miss → **fatal**; side anchor subsection miss → **fatal** (§6) | as TDF | as TDF |
-| **GUI panel** (§5) | as TDF | n/a | none; a file that is not a panel yields gadgets with default fields | sections are visited **by index in file order**, whatever their names; `totalgadgets` is read and then **overwritten** by the section census (inert) | `[COMMON]` absent → the gadget's common fields are **not written** (whatever the window record held); a kind byte other than 0–8 and 10 reads only `[COMMON]`; art names that resolve to no GAF entry follow the fallback chain of §6 | as TDF (loader returns 0 to its caller; doc 07 owns what a screen does without its panel) | *accept-with-garbage*: gadget records (347 bytes) are written into a fixed 69,463-byte window record with **no count check**; a panel with more than about 199 gadget sections writes past it |
+| **GUI panel** (§5) | as TDF | n/a | none; a file that is not a panel yields gadgets with default fields | sections are visited **by index in file order**, whatever their names; `totalgadgets` is read and then **overwritten** by the section census (inert) | `[COMMON]` absent → the gadget's common fields are **not written** (whatever the window record held); a kind byte other than 0–8 and 10 reads only `[COMMON]`; art names that resolve to no GAF entry follow the fallback chain of §6 | as TDF (loader returns 0 to its caller; doc 07 owns what a screen does without its panel) | *accept-with-garbage*: gadget records (347 bytes) are written into a fixed 69,463-byte window record with **no count check**; the array holds exactly 200 records, of which the first is the panel's own, so a panel with more than 199 gadget sections writes past it |
 | **GAF** (§6) | *garbage or fault*: no size is checked; the loader biases every entry, frame, data and subframe offset it finds and **writes the biased values back**, so offsets that leave the block fault at load | same as truncated (offset table, frame count, data offset all trusted) | none: the version word is **never read** | entry names: linear scan, **first** match wins | entry name absent → null (the anims cache makes a missing **file** fatal with the path; a feature `filename` root or a `seqname` that is absent is a silent null) | *skip*: null, treated as missing (fatal or silent per caller as above) | entry count is a **signed 16-bit** field (≥ 0x8000 → no entries); frame count is 16-bit; the subframe count field is 16 bits wide but **only its low byte is read** (a count of 300 composes 44 subframes); a composite canvas of `width × height + 24` bytes and the 16 MiB-class raw frames are allocations, so absurd dimensions fault as out-of-memory |
 | **TNT terrain** (§7) | *garbage or fault*: the file is read whole (counts summed, not checked) and every header pointer is biased without a bound; the tile map, attribute array, feature-name table and tile set are copied by their declared counts | same | **fatal** `Unknown TNT version:  0x%08x` for any header word other than `0x1020` / `0x2000`; the TNT file missing → **fatal** with the path as the whole message | n/a | feature-name table entry that no feature TDF defines → **fatal** `Record "%s" missing from feature files`; a cell feature word below the void threshold but **at or beyond the table count** indexes past the catalog (*garbage*, no bound) | *fault (fatal box)*: a 0-byte allocation's first word is read as the version — the `Unknown TNT version` box for any value but the two accepted ones | `Width × Height × 13`, tile count × 1,024, minimap `w × h` are allocations (out-of-memory fault); negative dimensions skip the per-cell loops (signed tests) |
 | **3DO model** (§8) | *garbage or fault*: whole-load, then unconditional relocation of the name, vertex, primitive, sibling and child offsets and each primitive's three offsets; nothing is bounded | same | none: the version signature is **never read** | piece names: the script's piece-name lookup takes the first match (doc 04) | texture name that no texture GAF holds → the primitive becomes flat colour index 209 (`[03 §2.4]`); the model file missing → **fatal** (path) at unit compile, weapon compile and feature compile alike | *skip*: null → fatal as above | counts drive signed loops; a huge vertex count only walks memory |
@@ -4163,11 +4187,14 @@ contract; this closure does not change intermediate floating-point stores.
   number of sections minus one. Each gadget's `[COMMON]` is read only when
   present; the kind byte selects extra keys for kinds 0–8 and 10 (a text
   box's `maxchars` is capped at 128); any other kind reads nothing more.
-  Gadget records are 347 bytes inside a 69,463-byte window record with no
-  count test, so about 199 gadgets fit before the loader writes past the
-  record (*Supported inference* for the exact capacity — decider: the
-  gadget array's base offset within the window record; *Established* that
-  no count is checked).
+  Gadget records are 347 bytes inside a 69,463-byte window record, and the
+  record array begins 63 bytes into that allocation, so it holds exactly
+  200 records and fills the allocation to its last byte
+  (63 + 200 × 347 = 69,463). The loader writes one record per section, and
+  section 0 is the panel's own record — the one whose `totalgadgets` field
+  the section census overwrites — so **199 gadget sections** fit. No count is
+  tested anywhere, so the 201st section (the 200th gadget) is written past
+  the end of the allocation.
 
 #### GAF: what the loader and the blitter check [R-MALF-01 §6]
 
@@ -4410,10 +4437,6 @@ questions do not supersede those consumer contracts.
   PCM parameter combinations · `[R-MALF-01 §10]`, [03 §8.2] · inspect or
   manually observe the target backend. The wrapper passes these requests
   without a local repair; streaming capacity is independent of payload size.
-* Exact GUI gadget capacity of the fixed window record (about 199 by the
-  allocation size and record stride; the loader checks no count) · §6
-  `[R-MALF-01 §5]` · static trace of the gadget array's base offset in the
-  window record.
 * Reader for plot-mask bit 7 · §6 "Map files" · static trace over the
   unrecovered regions. Marked `TODO(T23)` at the site; the mask preserves the
   bit and no isolated reader exists in the bounded census.
@@ -4441,11 +4464,6 @@ questions do not supersede those consumer contracts.
   corpus, so it is retained-and-inert.
 * Consumer list for document 06's category mask helper · doc 06 · static
   trace.
-* Writer of session-option-word bit 10 (the `shootme` bypass) · §5
-  `[R-KEYS-01 §4]` · runtime watch on the word during save load and lobby
-  join, or a trace of every block copy into the session globals. Bounded
-  negative in the export: no preference, toggle or whole-word store writes
-  it.
 * Reader of the side record's `nameprefix` field · §5 `[R-KEYS-01 §5]` ·
   reader census on the 4-byte prefix field of the side record.
 * Remaining presentation-setting reader gaps marked **Unknown** in

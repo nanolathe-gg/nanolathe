@@ -75,20 +75,24 @@ func PlayerPermutationForMode(mode int, sortKeys [PlayerCount]uint32) PlayerPerm
 	return order
 }
 
-// CapacityForDefs returns the total record count including slot 0 for a
-// catalog with maxDefs definitions: maxDefs*10+1 [P0-16] [01 §6.1].
-// For maxDefs=200 the result is 2001 records (2000 usable + slot 0).
-func CapacityForDefs(maxDefs int) int {
-	if maxDefs < 0 {
-		maxDefs = 0
+// CapacityForLimit returns the total record count including slot 0 for a
+// session whose per-player unit limit is limit: limit*10+1 [P0-16]
+// [05 R-SHARE-01 §7]. The sizing input is the session's unit limit — the
+// mission's maxunits, the clamped UnitLimit profile value, or the host's
+// synchronized limit — never a catalog definition count. For limit=200 the
+// result is 2001 records (2000 usable + slot 0).
+func CapacityForLimit(limit int) int {
+	if limit < 0 {
+		limit = 0
 	}
-	return maxDefs*10 + 1
+	return limit*10 + 1
 }
 
 // Units is the fixed pool of unit records [01 §6.1] [P0-16]. The pool is
-// always sliced per player: capacity is the game value derived from the
-// definition count (maxDefs*10+1 records), each player owning maxDefs slots
-// via the sorted player order [P0-16 §3.1]. Allocation scans the owning
+// always sliced per player: capacity is limit*10+1 records for the session's
+// per-player unit limit, each player owning exactly limit slots regardless of
+// how many players are in play, via the sorted player order
+// [05 R-SHARE-01 §7] [P0-16 §3.1]. Allocation scans the owning
 // player's slice for the lowest free slot with slot 0 reserved as null
 // [04 §2.3], [01 §6.1], and reuses it immediately [P0-16 §3.2]. Freed slots
 // carry no generation tag; stale handles alias the new occupant [P0-16]
@@ -114,59 +118,60 @@ type Units struct {
 	defID     []uint16 // occupancy identity per slot, 0 = free [P0-16 §2.1]
 	slotIndex []uint16 // slot number stamped at init, retained stale after free [P0-16 §3.4]
 	// used mirrors the count Used() would compute by scanning. The pool is
-	// sized at maxDefs*10+1 records — several thousand for a retail catalog —
-	// so the scan cost is set by the catalog, not by how many units exist, and
-	// the per-tick caller paid it in full on a battle with fifty units. Alloc
-	// and Free are the only writers of alive/defID, and each sets or clears
-	// both together, so the maintained count is exactly the scan's answer.
-	used    int
-	maxDefs int
-	slices  [10]struct{ start, end int } // inclusive per-player bounds [P0-16 §3.1]
-	sliced  bool
+	// sized at limit*10+1 records — several thousand at a stock unit limit —
+	// so the scan cost is set by the session's unit limit, not by how many
+	// units exist, and the per-tick caller paid it in full on a battle with
+	// fifty units. Alloc and Free are the only writers of alive/defID, and each
+	// sets or clears both together, so the maintained count is exactly the
+	// scan's answer.
+	used   int
+	limit  int                          // per-player unit limit [05 R-SHARE-01 §7]
+	slices [10]struct{ start, end int } // inclusive per-player bounds [P0-16 §3.1]
+	sliced bool
 }
 
-// NewUnitsSliced creates a sliced retail pool for maxDefs catalog
-// definitions: total records = maxDefs*10+1, per-player slices of maxDefs
-// each via sorted player order [P0-16 §3.1] [01 §6.1]. This is the only
+// NewUnitsSliced creates a sliced retail pool for a session per-player unit
+// limit: total records = limit*10+1, per-player slices of limit each via
+// sorted player order [05 R-SHARE-01 §7] [P0-16 §3.1]. This is the only
 // production shape: retail's unit pool is always sliced per player, and
 // slot 0 is the null sentinel.
-func NewUnitsSliced(maxDefs int) *Units {
+func NewUnitsSliced(limit int) *Units {
 	u := &Units{}
-	_ = u.InitSlicedWithOrder(maxDefs, IdentityPlayerPermutation())
+	_ = u.InitSlicedWithOrder(limit, IdentityPlayerPermutation())
 	return u
 }
 
 // NewUnitsSlicedWithOrder creates a sliced unit pool after validating the
 // battle-entry player permutation [R-P0-16-A].
-func NewUnitsSlicedWithOrder(maxDefs int, order PlayerPermutation) (*Units, error) {
+func NewUnitsSlicedWithOrder(limit int, order PlayerPermutation) (*Units, error) {
 	u := &Units{}
-	if err := u.InitSlicedWithOrder(maxDefs, order); err != nil {
+	if err := u.InitSlicedWithOrder(limit, order); err != nil {
 		return nil, err
 	}
 	return u, nil
 }
 
-// InitSliced configures a retail-sliced pool for maxDefs definitions.
-// It allocates total = maxDefs*10+1 records (including slot 0). Per-player
-// slices hold maxDefs each; allocation scans for the lowest free slot per
+// InitSliced configures a retail-sliced pool for a per-player unit limit.
+// It allocates total = limit*10+1 records (including slot 0). Per-player
+// slices hold limit each; allocation scans for the lowest free slot per
 // slice with immediate reuse [P0-16 §3.2]. This identity wrapper uses
 // identity order; production battle entry calls InitSlicedWithOrder after
 // applying the retail mode comparator [R-P0-16-A].
-func (p *Units) InitSliced(maxDefs int) {
-	_ = p.InitSlicedWithOrder(maxDefs, IdentityPlayerPermutation())
+func (p *Units) InitSliced(limit int) {
+	_ = p.InitSlicedWithOrder(limit, IdentityPlayerPermutation())
 }
 
 // InitSlicedWithOrder configures a retail-sliced pool using the already
 // computed battle-entry player order. It validates before changing receiver
 // state, and never sorts or remaps slices after initialization [R-P0-16-A].
-func (p *Units) InitSlicedWithOrder(maxDefs int, order PlayerPermutation) error {
+func (p *Units) InitSlicedWithOrder(limit int, order PlayerPermutation) error {
 	if err := ValidatePlayerPermutation(order); err != nil {
 		return err
 	}
-	if maxDefs < 0 {
-		maxDefs = 0
+	if limit < 0 {
+		limit = 0
 	}
-	total := CapacityForDefs(maxDefs) // includes slot 0
+	total := CapacityForLimit(limit) // includes slot 0
 	if total < 1 {
 		total = 1
 	}
@@ -177,15 +182,15 @@ func (p *Units) InitSlicedWithOrder(maxDefs int, order PlayerPermutation) error 
 	for i := 0; i < total; i++ {
 		p.slotIndex[i] = uint16(i) // slot index stamped at init, retained after free [P0-16 §3.4]
 	}
-	p.maxDefs = maxDefs
-	p.sliced = maxDefs > 0
+	p.limit = limit
+	p.sliced = limit > 0
 	if p.sliced {
 		for sortedIdx, playerValue := range order {
 			player := int(playerValue)
-			start := maxDefs*sortedIdx + 1
-			end := maxDefs * (sortedIdx + 1)
-			// start 1..maxDefs for player 0, etc.; covers 10*maxDefs usable
-			if maxDefs == 0 {
+			start := limit*sortedIdx + 1
+			end := limit * (sortedIdx + 1)
+			// start 1..limit for player 0, etc.; covers 10*limit usable
+			if limit == 0 {
 				start = 0
 				end = -1
 			}
@@ -208,13 +213,13 @@ func (p *Units) IsSliced() bool {
 	return p.sliced
 }
 
-// MaxDefs returns the catalog definition count used for slicing, or 0 if
-// unsliced [P0-16 §3.1].
-func (p *Units) MaxDefs() int {
+// UnitLimit returns the session per-player unit limit the slices were sized
+// from, or 0 if unsliced [05 R-SHARE-01 §7] [P0-16 §3.1].
+func (p *Units) UnitLimit() int {
 	if p == nil {
 		return 0
 	}
-	return p.maxDefs
+	return p.limit
 }
 
 // SliceForPlayer returns the inclusive handle bounds for the player's slice

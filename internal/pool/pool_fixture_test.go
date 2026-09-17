@@ -1,18 +1,18 @@
 // Test-only pool helpers.
 //
-// Neither form ships. Production sizes the pool through CapacityForDefs and
+// Neither form ships. Production sizes the pool through CapacityForLimit and
 // reads the maintained Used count; these are the reference forms the pool's own
 // tests hold those against [P0-16].
 
 package pool
 
-// UsableCapacityForDefs returns the usable slot count excluding the null
-// sentinel: maxDefs*10 [P0-16].
-func UsableCapacityForDefs(maxDefs int) int {
-	if maxDefs < 0 {
-		maxDefs = 0
+// UsableCapacityForLimit returns the usable slot count excluding the null
+// sentinel: limit*10 [P0-16].
+func UsableCapacityForLimit(limit int) int {
+	if limit < 0 {
+		limit = 0
 	}
-	return maxDefs * 10
+	return limit * 10
 }
 
 // countUsed recomputes the allocated-slot count by scanning. Production reads

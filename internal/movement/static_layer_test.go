@@ -62,6 +62,13 @@ func TestClassLayerAvoidsStaleMover(t *testing.T) {
 	if !sys.ActivateMove(w.Unit(hReq), head) {
 		t.Fatalf("ActivateMove failed")
 	}
+	// The request revision pass reads the SYSTEM tick, and the watermark it
+	// arms is max(tick, 30) − 30 [04 §6.1 R-DOC04-B][04 R-PATH-01 §2]: at a
+	// system tick of 30 or below it is still zero and no mover blocks by
+	// occupant age at all. Both units carry the creation stamp's tick 0, so the
+	// request has to be made past tick 30 for the parked mover to be stale —
+	// the crossed window [0, 30) is what restamps it.
+	sys.BeginTick(60)
 	// Scheduler tick should publish a successful route even though (5,5) is occupied [04 §8.2]
 	sys.Scheduler.Tick(60)
 	route := handleRow(sys.Routes, hReq)

@@ -9,8 +9,15 @@ import (
 
 // RestoreSaveAccounts applies the typed trigger state emitted by the battle
 // save callbacks.  Definition arguments and timer deadlines remain authored
-// mission state; only the three established persisted items are accepted
+// mission state; only the four established persisted items are accepted
 // [08 R-TRIG-01 §8].
+//
+// NumUnits — KillAllMobileUnits' scratch count of surviving mobile enemy
+// units — is accepted and discarded. Retail restores it with a default of 0
+// into a field its notification zeroes and recounts before ever reading, so
+// the value carries nothing; this port keeps no scratch field for it at all
+// [08 R-TRIG-01 §8]. It is read here so that a retail-written account is not
+// rejected and so that the item is still duplicate-checked.
 func RestoreSaveAccounts(victory, defeat []*Trigger, records []save.RawAccount) error {
 	seen := make(map[string]bool)
 	apply := func(list []*Trigger, prefix string) error {
@@ -37,10 +44,15 @@ func RestoreSaveAccounts(victory, defeat []*Trigger, records []save.RawAccount) 
 			}
 			items := make(map[string]bool)
 			for _, item := range raw.Ints {
-				if item.Name != "Satisfied" && item.Name != "Celebrated" && item.Name != "NumLeftToKill" {
+				switch item.Name {
+				case "Satisfied", "Celebrated", "NumLeftToKill", "NumUnits":
+				default:
 					continue
 				}
 				if item.Name == "NumLeftToKill" && match.Kind != KindKillUnitType && match.Kind != KindUnitTypeKilled {
+					continue
+				}
+				if item.Name == "NumUnits" && match.Kind != KindKillAllMobileUnits {
 					continue
 				}
 				if items[item.Name] {
@@ -54,6 +66,8 @@ func RestoreSaveAccounts(victory, defeat []*Trigger, records []save.RawAccount) 
 					match.Celebrated = item.Value != 0
 				case "NumLeftToKill":
 					match.Args[0] = item.Value
+				case "NumUnits":
+					// Accepted and dropped: see the doc comment above.
 				}
 			}
 		}
