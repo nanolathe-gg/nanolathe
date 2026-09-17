@@ -1,6 +1,7 @@
 package features
 
 import (
+	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 	"testing"
@@ -125,5 +126,59 @@ func TestReproductionDrawBelongsToLifecycle(t *testing.T) {
 	svc.TickLifecycle(1)
 	if sim.State != expected.State || sim.Draws() != expected.Draws() || svc.LastReproIdx != 5 {
 		t.Fatal("lifecycle did not consume exactly the following zero-rate draw")
+	}
+}
+
+// A map-authored 3D anchor is stamped, and step 4 of the one stamp routine
+// "sets its instance-attached bit" [05 R-FEAT-01 §3]. The reproduction sweep
+// reads that bit and skips the anchor before its bounded draw, so a map tree
+// modelled in 3DO must cost the shared stream nothing — the draw is taken even
+// when the rate is zero, so a missing bit shifts the stream on every stock map
+// (I4) [05 R-FEAT-01 §12].
+func TestPopulateFromTerrainSets3DAnchorInstanceBit(t *testing.T) {
+	cases := []struct {
+		name      string
+		object    string
+		filename  string
+		wantBit   bool
+		wantDraws uint64
+	}{
+		// An authored model and no sprite source: the anchor carries the bit
+		// and the sweep passes over it without drawing.
+		{name: "3d", object: "tree.3do", wantBit: true, wantDraws: 0},
+		// The sprite arm of step 5 leaves the bit clear, so the sweep still
+		// draws. Without it the 3D case above would pass under any change that
+		// merely stopped the sweep from drawing at all.
+		{name: "sprite", filename: "trees", wantBit: false, wantDraws: 1},
+	}
+	for _, tc := range cases {
+		terrain := newEmptyTerrain(6, 4)
+		def := featureDef("map-authored-"+tc.name, 0, 0, 10)
+		def.Object = tc.object
+		def.Filename = tc.filename
+		// Stock content: every definition's reproduction rate is zero, and the
+		// draw happens anyway.
+		def.Reproduce = 0
+		terrain.FeatureDefs = []*content.FeatureDef{def}
+		// The map loader writes the plot grid directly; the service builds the
+		// animation side from it afterwards.
+		terrain.PlotAt(2, 1).SetFeature(0)
+		sim := rng.SimulationFromState(42)
+		svc := NewService(terrain, &sim, nil, nil)
+		if n := svc.PopulateFromTerrain(); n != 1 {
+			t.Fatalf("%s: populate placed %d anchors, want 1", tc.name, n)
+		}
+		if got := terrain.PlotAt(2, 1).Occupied(); got != tc.wantBit {
+			t.Fatalf("%s: anchor instance bit %t, want %t", tc.name, got, tc.wantBit)
+		}
+		svc.SetCursor(9) // the descending cursor lands on index 8, cell (2,1)
+		before := sim.Draws()
+		svc.reproduceTick()
+		if svc.LastReproIdx != 8 {
+			t.Fatalf("%s: sweep visited index %d, want 8", tc.name, svc.LastReproIdx)
+		}
+		if got := sim.Draws() - before; got != tc.wantDraws {
+			t.Fatalf("%s: sweep took %d simulation draws, want %d", tc.name, got, tc.wantDraws)
+		}
 	}
 }

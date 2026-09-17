@@ -841,10 +841,17 @@ type EventView struct {
 	FlashRadius               int32
 	FlashLevel                int32
 	HasFlashDisc              bool
-	Strip                     int8
-	NanolatheIndex            int32
-	NanolatheCount            int32
-	NanolatheGeometryKnown    bool
+	// HasCalculatedFlash and CalculatedTable are the explosion pool's
+	// SECONDARY cursor over a procedurally generated disc [06 R-WFX-01 §2],
+	// the same pair EffectView carries. Producers set them on the staged
+	// event, so the committed event has to carry them too; the table index is
+	// 0..2 and the flag is separate so a zero value cannot read as table 0.
+	HasCalculatedFlash     bool
+	CalculatedTable        uint8
+	Strip                  int8
+	NanolatheIndex         int32
+	NanolatheCount         int32
+	NanolatheGeometryKnown bool
 	// NanolatheActiveUntil is the committed unit-caption/work highlight stamp;
 	// zero means the producer supplied no stamp [04 R-ORD-01 §1].
 	NanolatheActiveUntil    uint32

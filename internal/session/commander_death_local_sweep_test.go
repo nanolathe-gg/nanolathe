@@ -19,13 +19,16 @@ func lobbyOrdinaryUnit(t *testing.T, s *Session) *content.UnitDef {
 	return def
 }
 
+// spawnLocalUnits places n ordinary units for the session's LOCAL player. Both
+// rows of the lobby fixture are human, so that slot is the last human row
+// [08 R-SKIR-01 §2] "Battle entry: what the record becomes", not slot 0.
 func spawnLocalUnits(t *testing.T, s *Session, n int) []pool.Handle {
 	t.Helper()
 	def := lobbyOrdinaryUnit(t, s)
 	out := make([]pool.Handle, 0, n)
 	for i := 0; i < n; i++ {
 		x := numeric.Fixed(int64(20+8*i) << 16)
-		h, err := s.Units.Create(def, 0, x, 0, numeric.Fixed(20<<16))
+		h, err := s.Units.Create(def, s.LocalOwner, x, 0, numeric.Fixed(20<<16))
 		if err != nil {
 			t.Fatalf("create local unit %d: %v", i, err)
 		}
@@ -47,16 +50,15 @@ func spawnLocalUnits(t *testing.T, s *Session, n int) []pool.Handle {
 // end reads `Frame.Result`, never the authoritative record [I6][03 §2.4].
 func TestCommanderDeathSweepsTheLocalPlayerAndPublishesTheEnd(t *testing.T) {
 	s, _ := newLobbyEndRuleSession(t, 1, false)
+	// The lobby fixture's two rows are both human, so the local player is the
+	// last of them [08 R-SKIR-01 §2] "Battle entry: what the record becomes".
 	local := int(s.LocalOwner)
-	if local != 0 {
-		t.Fatalf("lobby fixture resolved local owner %d, want slot 0", local)
-	}
 	handles := spawnLocalUnits(t, s, 2)
-	if live := s.Units.LiveCountForPlayer(0); live != len(handles)+1 {
+	if live := s.Units.LiveCountForPlayer(local); live != len(handles)+1 {
 		t.Fatalf("local live count %d before the kill, want commander plus %d units", live, len(handles))
 	}
 
-	killCommander(t, s, 0)
+	killCommander(t, s, local)
 	stepLobbyThrough(t, s, 0, 400)
 
 	for i, h := range handles {
@@ -64,7 +66,7 @@ func TestCommanderDeathSweepsTheLocalPlayerAndPublishesTheEnd(t *testing.T) {
 			t.Fatalf("local unit %d survived the commander owner sweep [08 R-SKIR-01 §3]", i)
 		}
 	}
-	if live := s.Units.LiveCountForPlayer(0); live != 0 {
+	if live := s.Units.LiveCountForPlayer(local); live != 0 {
 		t.Fatalf("local live count %d after the sweep, want zero — the sweep is what the defeat predicate reads [08 R-SKIR-01 §3]", live)
 	}
 	res := s.GetResult()
@@ -99,7 +101,7 @@ func TestCommanderDeathRuleZeroKeepsTheLocalPlayerAlive(t *testing.T) {
 	s, _ := newLobbyEndRuleSession(t, 0, false)
 	handles := spawnLocalUnits(t, s, 2)
 
-	killCommander(t, s, 0)
+	killCommander(t, s, int(s.LocalOwner))
 	stepLobbyThrough(t, s, 0, 400)
 
 	for i, h := range handles {

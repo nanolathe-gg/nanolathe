@@ -483,6 +483,16 @@ func appendRangeRing(out []QueuePrimitive, base QueuePrimitive, center QueueWorl
 		// at the host boundary rather than panicking the application.
 		return out
 	}
+	if chords > maxRangeRingChords {
+		// The same host bounds rejection at the other end, not a retail
+		// contract: radius is a raw authored dword, the walk appends one
+		// primitive per chord, and a modded or corrupted range would append
+		// billions. The cap is the angle domain itself — a chord count above
+		// the number of representable angles cannot produce another distinct
+		// point, and the divisor below would reach zero — so no authored range
+		// that draws a ring at all is drawn differently.
+		chords = maxRangeRingChords
+	}
 	step := int32(65536 / chords)
 	angle := int32(0)
 	a := rangeRingPoint(center, numeric.Angle(uint16(angle)), radius, opt)
@@ -515,6 +525,10 @@ func appendRangeRing(out []QueuePrimitive, base QueuePrimitive, center QueueWorl
 	}
 	return out
 }
+
+// maxRangeRingChords bounds the ring walk at one chord per representable
+// angle. Host bound, not a retail contract: see appendRangeRing.
+const maxRangeRingChords = int32(65536)
 
 func rangeChordCount(radius int32) int32 {
 	if radius <= 0 {

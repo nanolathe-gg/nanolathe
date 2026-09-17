@@ -18,7 +18,9 @@ func TestPatrolScansKeepSlotOrderAndDrawOnlyAfterGates(t *testing.T) {
 	hostile := &units.Unit{Handle: 3, Owner: 1, Def: def, Alive: true, X: numeric.Fixed(40 << 16), Z: numeric.Fixed(0), Health: 50}
 	wrongDef := &units.Unit{Handle: 4, Owner: 1, Def: &content.UnitDef{UnitDefID: 10, MaxDamage: 100}, Alive: true, X: numeric.Fixed(60 << 16), Health: 50}
 	dead := &units.Unit{Handle: 5, Owner: 1, Def: def, Alive: false, X: numeric.Fixed(80 << 16), Health: 50}
-	friendly.Move.Mode, hostile.Move.Mode, wrongDef.Move.Mode, dead.Move.Mode = 1, 1, 1, 1
+	for _, c := range []*units.Unit{friendly, hostile, wrongDef, dead} {
+		c.Move.Mode, c.Move.ModeMirror = 1, 1
+	}
 	order := []pool.Handle{actor.Handle, friendly.Handle, hostile.Handle, wrongDef.Handle, dead.Handle}
 	seen := make([]pool.Handle, 0, len(order))
 	sim := rng.SimulationFromState(1)
@@ -152,7 +154,7 @@ func TestLiveUnitEnumeratorAnswersTheStopQuestion(t *testing.T) {
 	second := &units.Unit{Handle: 3, Owner: 0, Def: plain, Alive: true, X: numeric.Fixed(20 << 16), Health: 50}
 	last := &units.Unit{Handle: 4, Owner: 0, Def: plain, Alive: true, X: numeric.Fixed(30 << 16), Health: 50}
 	for _, u := range []*units.Unit{first, second, last} {
-		u.Move.Mode = 1 // the repair filter's committed mover mode [04 R-ORD-02 §4]
+		u.Move.Mode, u.Move.ModeMirror = 1, 1 // the repair filter's committed mover mode [04 R-ORD-02 §4]
 	}
 	pool4 := []*units.Unit{actor, first, second, last}
 

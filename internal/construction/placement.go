@@ -52,6 +52,12 @@ func (s *Service) PlacementForProduct(product pool.Handle) (world.FootprintRect,
 	return r.rect, ok
 }
 
+// recordPlacement files a product's occupancy rectangle and its immutable
+// definition. It carries no yard state: the clear pass releases every cell in
+// the rectangle whose ground word equals the leaving identity, reading no yard
+// state at all [04 R-COLL-01 §4 "clear, in order"]. Only the stamp and the
+// restamp select cells by yard byte, and both read the unit's live port-18
+// state rather than anything filed here.
 func (s *Service) recordPlacement(product pool.Handle, def *content.UnitDef, rect world.FootprintRect) {
 	if s.placements == nil {
 		s.placements = make(map[pool.Handle]placementRecord)
@@ -107,9 +113,18 @@ func (s *Service) reservePlacement(product pool.Handle, def *content.UnitDef, re
 				open = u.YardOpen
 			}
 		}
+		// Record BEFORE the stamp, the order RegisterBuildingPlacement already
+		// uses. The record is the rectangle and the definition; the release
+		// pass needs no yard state because the clear reads none — it releases
+		// every cell in the rectangle whose ground word equals the leaving
+		// identity [04 R-COLL-01 §4 "clear, in order"]. The stamp below is the
+		// one pass that selects by yard byte, and it reads the unit's live
+		// port-18 state [04 §4.7].
+		s.recordPlacement(product, def, rect)
 		s.stampBuilding(product, placementRecord{rect: rect, def: def}, open)
 		return nil
 	}
+	s.recordPlacement(product, def, rect)
 	for z := rect.MinZ(); z < rect.MaxZ(); z++ {
 		for x := rect.MinX(); x < rect.MaxX(); x++ {
 			cell := s.Terrain.PlotAt(x, z)
@@ -193,10 +208,6 @@ func (s *Service) stampBuilding(product pool.Handle, record placementRecord, ope
 		grid = s.Movement.Grid // nil-safe: every OccupancyGrid method tolerates a nil receiver
 	}
 	gridID := int(product)
-	if current, ok := s.placements[product]; ok {
-		current.yardOpen = open
-		s.placements[product] = current
-	}
 	// Keep movement's teardown state in lockstep with this accepted yard state.
 	if s.Movement != nil {
 		s.Movement.SetBuildingYardState(product, open)
@@ -477,15 +488,15 @@ func (s *Service) releaseFrameStamps(product pool.Handle) bool {
 				if cell == nil {
 					continue
 				}
-				if len(yard) != 0 {
-					y := yard[int((z-record.rect.MinZ())*record.rect.Width()+(x-record.rect.MinX()))]
-					if !y.Selects(record.yardOpen) {
-						if y&0x01 != 0 {
-							cell.SetStructureYard(false)
-						}
-						continue
-					}
-				}
+				// The clear reads no yard state: "building class — ground
+				// word equal to self -> 0, yard bit 0 -> clear the cell's
+				// flag-byte bit 1" [04 R-COLL-01 §4 "clear, in order"]. The
+				// yard map selects cells for the stamp and for the restamp,
+				// never for the clear, so every cell the rectangle covers is
+				// visited and the self-identity test decides it. A cell the
+				// current state does not select cannot hold this identity
+				// anyway; one stamped under the other state does, and gating
+				// the clear on a state read here stranded it.
 				if cell.OccupantA() == id {
 					cell.SetOccupantA(0)
 				}

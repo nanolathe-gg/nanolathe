@@ -1526,12 +1526,23 @@ type CollisionState struct {
 
 	Blocked        bool  // mover blocked bit 2 at mover+? [04 §8.2] C23 C24 — rewritten by validator result
 	SavedStateByte uint8 // complete saved state byte; only low mode/blocked groups are consumed [08 R-SAVE-02 §8]
-	// These saved mover words have no live consumer in the ground integrator,
-	// but are retained verbatim so a restore does not silently discard them.
+	// The lean triple and the turn residual have no live consumer in the ground
+	// integrator, but are retained verbatim so a restore does not silently
+	// discard them.
 	LeanX, LeanY, LeanZ int32
 	TurnResidual        int16
-	LastStampTick       uint32
-	LastProposalTick    uint32
+	// LastStampTick is the mover's occupant-age clock, not an inert saved word:
+	// the footprint stamp "sets it to the current tick as its first action"
+	// and the clear's class-layer maintenance refreshes it to the current tick
+	// [04 R-COLL-01 §4], while the blocked branch leaves it untouched
+	// [04 R-COLL-01 §1]. It is also the mover box's one unnamed 32-bit word
+	// [04 R-COLL-01 §5 "the save bit"], so a save that reads zero here hands
+	// the restore an occupant clock the first request revision window admits.
+	// The occupant-age gate consumes it through the per-layer mirror this build
+	// keeps [04 R-PATH-01 §14]; noteOccupancyCommit writes this word and that
+	// mirror together, and is this word's only writer outside the save restore.
+	LastStampTick    uint32
+	LastProposalTick uint32
 	// BlockerID is the dynamic occupant that rejected the last proposal, or -1
 	// for static/terrain rejection. It never causes pushing or displacement.
 	BlockerID int

@@ -76,7 +76,10 @@ func reclaimVisits(s *Service, builder *units.Unit, n *orders.Node, ticks ...uin
 
 func TestUnitReclaimPulseIsAuthoredOnceAndClamped(t *testing.T) {
 	builder := &units.Unit{Def: &content.UnitDef{WorkerTime: 30}, Kills: 0}
-	target := &units.Unit{MaxHealth: 100, Def: &content.UnitDef{BuildCostMetal: 100}}
+	// The third pulse operand is the DEFINITION's `maxdamage`
+	// [05 R-WORK-01 §4]. The live maximum health beside it is deliberately a
+	// different number, and nothing in the pulse may read it.
+	target := &units.Unit{MaxHealth: 7000, Def: &content.UnitDef{BuildCostMetal: 100, MaxDamage: 100}}
 	if got := UnitReclaimPulse(builder, target); got != 1 {
 		t.Fatalf("pulse=%d want 1", got)
 	}
@@ -87,6 +90,25 @@ func TestUnitReclaimPulseIsAuthoredOnceAndClamped(t *testing.T) {
 	target.Def.BuildCostMetal = 0
 	if got := UnitReclaimPulse(builder, target); got != 150 {
 		t.Fatalf("zero-metal clamp pulse=%d want 150", got)
+	}
+}
+
+// TestUnitReclaimPulseReadsTheDefinitionMaxDamageOnly locks the removal of an
+// invented fallback: a target whose definition authors no `maxdamage` used to
+// have its live `MaxHealth` substituted for the word. [05 R-WORK-01 §4] reads
+// `(int32)target.definition.maxdamage` and nothing else, and it needs no
+// fallback arm — a zero word zeroes the product, and the section's own
+// `(v <= 1) ? 1 : v` is the established answer for that.
+func TestUnitReclaimPulseReadsTheDefinitionMaxDamageOnly(t *testing.T) {
+	builder := &units.Unit{Def: &content.UnitDef{WorkerTime: 300}, Kills: 0}
+	target := &units.Unit{MaxHealth: 100, Def: &content.UnitDef{BuildCostMetal: 100}}
+	if got := UnitReclaimPulse(builder, target); got != 1 {
+		t.Fatalf("unauthored maxdamage pulse=%d, want the clamp 1 [05 R-WORK-01 §4]", got)
+	}
+	// The same builder and target with the word authored gives §4's arithmetic.
+	target.Def.MaxDamage = 100
+	if got := UnitReclaimPulse(builder, target); got != 15 {
+		t.Fatalf("authored maxdamage pulse=%d want 15", got)
 	}
 }
 

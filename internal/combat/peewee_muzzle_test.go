@@ -66,9 +66,14 @@ func TestPeeweeFiresFromItsFlaresAtTheTargetsSweetSpot(t *testing.T) {
 		t.Skip("skirmish composed without a human commander")
 	}
 	shooterDef := sess.Catalog.Units[content.CanonicalKey("armpw")]
-	victimDef := sess.Catalog.Units[content.CanonicalKey("armsolar")]
+	// The victim authors `ShootMe=1`, check 2 of the picked-candidate order
+	// [06 §3.2]: a HUMAN-owned Peewee never autonomously acquires a candidate
+	// whose definition omits the key, which is every non-combat building
+	// including the solar collector this fixture used to place. The Core radar
+	// silo authors it, does not move and fires nothing without a stockpile.
+	victimDef := sess.Catalog.Units[content.CanonicalKey("corsilo")]
 	if shooterDef == nil || victimDef == nil {
-		t.Skip("stock armpw/armsolar absent from the catalog")
+		t.Skip("stock armpw/corsilo absent from the catalog")
 	}
 	shooterH, err := sess.Units.Create(shooterDef, 0, com.X.Add(numeric.FixedFromInt(96)), com.Y, com.Z)
 	if err != nil {
@@ -100,11 +105,11 @@ func TestPeeweeFiresFromItsFlaresAtTheTargetsSweetSpot(t *testing.T) {
 	// assertion does not lean on the resolver it locks.
 	vb := victim.COBBinding()
 	if vb == nil || vb.Model == nil {
-		t.Fatal("the solar collector has no bound model")
+		t.Fatal("the nuclear silo has no bound model")
 	}
 	sweet := vb.Callbacks.SweetSpot().QueryValue()
 	if sweet < 0 || int(sweet) >= len(vb.PieceMap) {
-		t.Fatalf("armsolar SweetSpot answered %d, outside its %d pieces", sweet, len(vb.PieceMap))
+		t.Fatalf("corsilo SweetSpot answered %d, outside its %d pieces", sweet, len(vb.PieceMap))
 	}
 	var lo, hi [3]int64
 	for _, v := range vb.Model.Pieces[vb.PieceMap[sweet]].Vertices {
@@ -122,7 +127,7 @@ func TestPeeweeFiresFromItsFlaresAtTheTargetsSweetSpot(t *testing.T) {
 		Z: victim.Z.Add(numeric.Fixed((hi[2] + lo[2]) / 2)),
 	}
 	if wantAim.Y.Raw() <= victim.Y.Raw() {
-		t.Fatalf("armsolar's SweetSpot piece box has no height (%v); the scenario cannot tell base from body", wantAim)
+		t.Fatalf("corsilo's SweetSpot piece box has no height (%v); the scenario cannot tell base from body", wantAim)
 	}
 
 	roots := 0

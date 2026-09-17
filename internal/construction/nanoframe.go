@@ -126,7 +126,9 @@ func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, r
 				s.freeNeverExistedProduct(prod)
 				return nil, err
 			}
-			s.recordPlacement(prod.Handle, def, rect)
+			// reservePlacement files the placement record itself, before it
+			// stamps, so record and stamp agree on the yard state
+			// [04 R-COLL-01 §4].
 			s.ensureProductMover(prod)
 		}
 		return prod, nil
@@ -154,7 +156,8 @@ func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, r
 		s.freeNeverExistedProduct(prod)
 		return nil, err
 	}
-	s.recordPlacement(prod.Handle, def, rect)
+	// reservePlacement files the placement record itself, before it stamps, so
+	// record and stamp agree on the yard state [04 R-COLL-01 §4].
 	initializeNanoframe(prod, def)
 	s.ensureProductMover(prod)
 	return prod, nil

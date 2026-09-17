@@ -42,7 +42,7 @@ func workFixture() (*Queue, *units.Unit, *units.Unit) {
 		Health: 100, MaxHealth: 100,
 		X: numeric.Fixed(70 << 16), Y: numeric.Fixed(40 << 16), Z: numeric.Fixed(90 << 16),
 	}
-	target.Move.Mode = 1 // grounded: RepairUnit refuses any other mover mode [04 R-ORD-01 §5]
+	target.Move.Mode, target.Move.ModeMirror = 1, 1 // grounded: RepairUnit refuses any other mover mode [04 R-ORD-01 §5]
 	q := &Queue{binding: &QueueBinding{
 		SimRNG:  rng.Global.Sim,
 		Economy: &economy.Service{},

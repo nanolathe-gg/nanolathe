@@ -1502,6 +1502,21 @@ func (s *Service) PopulateFromTerrain() int {
 			inst.Z = world.CellToWorld(int32(cz)).Add(numeric.Fixed(int64(footZ) * 1048576 / 2))
 			inst.Y = s.Terrain.HeightAt(inst.X, inst.Z) // map stamp [05 R-FEAT-01 §3]
 			s.setInstance(idx, inst)
+			if is3DDef(def) {
+				// Step 4's last clause: a 3D definition takes a live slot and
+				// "the anchor cell stores the ordinal, the slot index, and sets
+				// its instance-attached bit" [05 R-FEAT-01 §3]. The map loader
+				// writes the plot grid directly and this walk builds the
+				// animation side from it, so the bit has to be set here or a
+				// map-authored 3D anchor would carry a live record with the bit
+				// clear — a state retail's single stamp cannot produce. The
+				// reproduction sweep reads exactly that bit to decide whether
+				// to draw, so leaving it clear spent one simulation draw per
+				// map-authored 3D anchor per sweep (I4). A sprite anchor keeps
+				// the bit it has: step 5 leaves it clear, and on a re-run after
+				// a load an ignited sprite's event bit must survive.
+				s.Terrain.Plot[idx].SetOccupied(true)
+			}
 			// A map-authored vent reaches its instance here rather than through
 			// spawnFeatureAt, because the map loader writes the plot grid
 			// directly and this walk builds the animation side from it. Retail

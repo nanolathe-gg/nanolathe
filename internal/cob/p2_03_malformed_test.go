@@ -74,3 +74,43 @@ func TestCorruptSaveOffsetBoundsVsRetail(t *testing.T) {
 		t.Fatalf("truncated header should be rejected [P2-03]")
 	}
 }
+
+// A callback that faults every tick used to append to the diagnostic buffer
+// forever: nothing in a battle drains it, so a long game grew it by tens of
+// megabytes. The buffer keeps the first entries — those carry the fault — and
+// counts the rest, and the steady state allocates nothing [P2-03].
+func TestFallbackDiagnosticsStopGrowing(t *testing.T) {
+	// Divide by zero, the cheapest repeatable fallback.
+	prog := synthProg([]uint32{
+		0x10021001, 10,
+		0x10021001, 0,
+		0x10034000,
+		0x10065000,
+	}, []string{"base"}, 0, []int{0})
+	vm := NewVM(prog)
+	faults := maxDiagnostics * 4
+	for i := 0; i < faults; i++ {
+		vm.Threads[0].Status = ThreadRunning
+		vm.Threads[0].PC = 0
+		vm.Threads[0].SP = 0
+		vm.Drain(1)
+	}
+	if len(vm.Diagnostics()) != maxDiagnostics {
+		t.Fatalf("buffer holds %d entries after %d faults, want the %d cap", len(vm.Diagnostics()), faults, maxDiagnostics)
+	}
+	if vm.DroppedDiagnostics() == 0 {
+		t.Fatal("the discarded faults were not counted")
+	}
+	if int(vm.DroppedDiagnostics())+len(vm.Diagnostics()) != faults {
+		t.Fatalf("kept %d + dropped %d, want %d faults accounted for",
+			len(vm.Diagnostics()), vm.DroppedDiagnostics(), faults)
+	}
+	// Past the cap the recorder must not allocate.
+	if n := testing.AllocsPerRun(100, func() { vm.recordDiagnostic("cob: divide by zero or overflow") }); n != 0 {
+		t.Fatalf("a dropped diagnostic allocated %v times per call", n)
+	}
+	vm.ClearDiagnostics()
+	if len(vm.Diagnostics()) != 0 || vm.DroppedDiagnostics() != 0 {
+		t.Fatalf("clear left %d entries and %d dropped", len(vm.Diagnostics()), vm.DroppedDiagnostics())
+	}
+}

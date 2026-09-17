@@ -603,15 +603,79 @@ RNG-driven; the filtered order is never preserved.
 2. one definition flag of the candidate, **or** the shooter's owning player is
    a computer controller, **or** one global option bit — any of the three
    admits the candidate. The definition flag is **`shootme`**, default 0
-   ([04 R-SPEC-01 §5]).
-   **Unknown:** the authored key or writer behind the option bit; *decider:*
-   the options loader;
+   ([04 R-SPEC-01 §5]). The option bit is **bit 10 of the session mode-flags
+   word** — the same word whose bit 1 is the developer bit, bit 4 the
+   camera-shake suppression and bit 6 the clock display — and the chat command
+   **`+ShootAll`**, which toggles that bit, is its only writer
+   ([07 R-CAM-01 §6]). See "The option bit of check 2" below;
 3. one definition flag of the **shooter** bypasses the §3.1 physical gate
    entirely; otherwise that gate must accept. The bypass flag is
    **`kamikaze`** ([04 R-SPEC-01 §1]);
 4. for the sight-distance caller only, the candidate's definition index must be
    clear of the `nochasecategory` mask;
 5. a paralyzer weapon rejects a candidate already carrying the stunned bit.
+
+##### The option bit of check 2 is the `+ShootAll` chat toggle, clear in a stock game — Established
+
+The third disjunct of check 2 is a single bit of the **session mode-flags
+word**, the interface-wide option word of [07 R-CAM-01 §6] whose other bits
+that section already names: bit 0 the `Drop` flag, bit 1 the developer bit
+that widens the `+` command route word, bit 4 camera-shake suppression, bit 6
+the clock display. Check 2 reads **bit 10**, and three whole-image censuses
+settle what writes it:
+
+* **One writer.** The only instruction anywhere in the image that changes bit
+  10 of that word is the handler of the chat command **`+ShootAll`**, which
+  *toggles* it and does nothing else — no message, no settings write, no
+  further state. `ShootAll` is a route-mask-1 command, so it dispatches in
+  every session kind, campaign included, with no cheat gate
+  ([07 R-CAM-01 §6]).
+* **One reader.** The only instruction anywhere in the image that tests bit 10
+  is this acquisition admission. The bit is not damage immunity, not a
+  visibility or sensor state, and no other gate in combat, orders, AI or
+  presentation consults it.
+* **No loader.** The object that carries the mode-flags word is allocated and
+  **zero-filled in full** before any field initializer runs, so the word — and
+  with it bit 10 — reads zero at process start. The registry settings loader
+  writes bits 1, 2, 3, 4 and 6 of that word and no others; the settings writer
+  persists bit 6 alone; the session-settings block that is copied out for
+  transmission spans the word but is never copied back over it; and no save
+  restore, mission or campaign entry path, or command-line switch writes the
+  word at all ([01 R-PLAT-01 §2] lists the recognised switches, none of
+  which reaches it).
+
+**Contract.** In any session in which no player has typed `+ShootAll`, check 2
+reduces to
+
+```
+admit = candidate definition authors `shootme` || shooter's owning player control byte == 2
+```
+
+and, because every stock computer opponent carries control byte 2, it is a
+restriction on **human**-owned units only: a human player's unit does not
+autonomously acquire a candidate whose definition omits `shootme` — 91 of the
+278 stock definitions — through this path. Those 91 are not a scattering:
+by census of the reference install's unit definitions they are exactly the
+non-combat buildings — factories and plants, power, metal extraction and
+makers, storage, radar and sonar, mines, walls and dragon's teeth,
+geothermals, targeting facilities, beacons — while every combat unit and
+every weapons platform authors the key. (`CORRAD` authors it and `ARMRAD`
+does not, so the rule is authored per definition, not derived from a class.)
+The behaviour the check produces is therefore "a human's units engage
+threats and ignore the enemy's economy until ordered onto it". Manual attack
+orders, the Guard
+replacement path and the damage-reaction offer install their targets directly
+and never reach check 2 (the order-handler admission policies above, and
+[08 R-AI-01 §11]); autonomous acquisition and the sight-distance caller are its
+only sites. Typing `+ShootAll` makes the check vacuous for everyone and typing
+it again restores it.
+
+*Draw consequence.* Check 2 sits **before** the scoring draw of the next
+paragraph, which only a candidate that survives all five checks takes. A
+check-2 rejection therefore removes that candidate's scoring draw from the
+simulation stream, while leaving its sampling draw and its place in the
+fifty-pick limit intact. Toggling the bit mid-session changes the draw
+sequence from the next acquisition onward.
 
 **Established fact:** Every surviving candidate then receives one score. The
 bound for the draw is the sum of the high 32-bit halves of the squared
@@ -5898,13 +5962,6 @@ body and are not restated here.
   [06 §3.2] · trace all free/finalizer stores affecting owner, definition index
   and stunned state before extending retained storage.
 
-- The authored key or writer behind the one global option bit of the
-  acquisition filter's second admission (the third disjunct beside `shootme`
-  and the computer-controller term) · §3.2 · static trace of the options
-  loader. The other keys that bullet asked for are named:
-  `istargetingupgrade` arms the secondary-list gate ([04 R-SPEC-01 §8]),
-  `shootme` is the candidate flag ([04 R-SPEC-01 §5]) and `kamikaze` the
-  shooter's bypass ([04 R-SPEC-01 §1]).
 - Whether any writer of the runtime *seen* status bit exists outside the
   recovered five-pass sensor phase (`[03 R-VIS-01 §4]`), and the complete
   sonar and jammer interactions on the presentation surfaces · §3.1,

@@ -11,6 +11,11 @@ import (
 	"strings"
 )
 
+// maxInt is the largest value an int holds on this platform; a loose range
+// whose remaining length exceeds it cannot be addressed by one slice, the same
+// ceiling the archive reader applies to a record size.
+const maxInt = int(^uint(0) >> 1)
+
 var (
 	ErrNotFound = errors.New("vfs: file not found")
 	ErrIsDir    = errors.New("vfs: path is a directory")
@@ -676,9 +681,12 @@ type RangeReader interface {
 
 // ReadFileRange returns length bytes of name starting at offset. length < 0
 // means "to the end of the file", and a length that runs past the end is
-// clamped to it. A provider that can decode part of a file does so; otherwise
-// the file is read whole and sliced, which is what the caller would have had
-// to do anyway.
+// clamped to it — so the allocation follows the file, never the caller's word.
+// An offset exactly at the end is an empty read; an offset past it is refused.
+// Every provider answers the same way, because the caller cannot tell whether
+// the winning entry is loose or archived. A provider that can decode part of a
+// file does so; otherwise the file is read whole and sliced, which is what the
+// caller would have had to do anyway.
 func (f *FS) ReadFileRange(name string, offset int64, length int) ([]byte, error) {
 	if offset < 0 {
 		return nil, fmt.Errorf("%w: negative offset %d", ErrNotFound, offset)
@@ -934,22 +942,32 @@ func (p *looseProvider) indexDir(dirname, parent string, priority, order int) er
 }
 
 // readFileRangeOS reads a byte range from a loose file without reading the
-// rest of it. length < 0 means "to the end".
+// rest of it, under the same contract the archive reader follows: a negative
+// or past-the-end offset is refused, length < 0 means "to the end", and any
+// other length is clamped to what remains. The clamp is not a nicety — it is
+// what keeps the allocation proportional to the file rather than to the
+// caller's word, so the same "read the rest" sentinel costs the same for a
+// loose file and for an archived one. The two differ only in their sentinel
+// error, each naming its own provider.
 func readFileRangeOS(path string, offset int64, length int) ([]byte, error) {
 	handle, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer handle.Close()
-	if length < 0 {
-		stat, statErr := handle.Stat()
-		if statErr != nil {
-			return nil, statErr
-		}
-		remaining := stat.Size() - offset
-		if remaining < 0 {
-			return nil, fmt.Errorf("%w: range offset %d outside %d-byte file", ErrNotFound, offset, stat.Size())
-		}
+	stat, statErr := handle.Stat()
+	if statErr != nil {
+		return nil, statErr
+	}
+	size := stat.Size()
+	if offset < 0 || offset > size {
+		return nil, fmt.Errorf("%w: range offset %d outside %d-byte file", ErrNotFound, offset, size)
+	}
+	remaining := size - offset
+	if remaining > int64(maxInt) {
+		return nil, fmt.Errorf("%w: %s exceeds %d bytes", ErrTooLarge, path, int64(maxInt))
+	}
+	if length < 0 || int64(length) > remaining {
 		length = int(remaining)
 	}
 	data := make([]byte, length)

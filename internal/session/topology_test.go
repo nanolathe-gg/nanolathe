@@ -170,8 +170,11 @@ func TestTopologyAlliedHumansHostileAI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSkirmish allied: %v", err)
 	}
-	if s.LocalOwner != 0 {
-		t.Fatalf("local owner want 0 got %d", s.LocalOwner)
+	// Rows 0 and 1 are both human: the row-to-player conversion overwrites the
+	// local-player indices as it walks, so the LAST human row is the local
+	// player [08 R-SKIR-01 §2] "Battle entry: what the record becomes".
+	if s.LocalOwner != 1 {
+		t.Fatalf("local owner want 1 (the last human row) got %d", s.LocalOwner)
 	}
 	// Local alliance: human0 allied with human1, hostile with AI2.
 	if !s.Econ.Players[0].Allies[1] {

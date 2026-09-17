@@ -398,8 +398,8 @@ func ProjectileInInterceptorBlast(victimPos, exploderPos Vec3, unhalvedArea int3
 	// 64-bit signed squares, arithmetic shift right 32, summed as int32
 	// [06 R-WPN-05 §10].
 	sum := int32((dx*dx)>>32) + int32((dy*dy)>>32) + int32((dz*dz)>>32)
-	area := int32(uint16(unhalvedArea)) // unhalved 16-bit areaofeffect [06 R-WPN-05 §10]
-	return sum < area*area              // signed low-word square, strict < [06 R-WPN-05 §10]
+	area := StoredArea(unhalvedArea) // unhalved 16-bit areaofeffect [06 R-WPN-05 §10]
+	return sum < area*area           // signed low-word square, strict < [06 R-WPN-05 §10]
 }
 
 // ---------------------------------------------------------------------------

@@ -457,7 +457,13 @@ func DirectSkirmishConfig(mapName string) SkirmishConfig {
 	return cfg
 }
 
-// LocalOwnerForConfig derives LocalOwner from the configured human row, not zero default [08 "Skirmish configuration"].
+// LocalOwnerForConfig derives LocalOwner from the configured human row, not
+// zero default [08 "Skirmish configuration"]. The row-to-player conversion
+// walks the rows in ascending order and each human row overwrites both
+// local-player indices, so the LAST human row wins [08 R-SKIR-01 §2] "Battle
+// entry: what the record becomes". With the single human row the lobby
+// normally emits, first and last are the same row; they differ only for a
+// composition that carries more than one.
 func LocalOwnerForConfig(cfg SkirmishConfig) int {
 	n := cfg.NumPlayers
 	if n < 0 {
@@ -466,12 +472,13 @@ func LocalOwnerForConfig(cfg SkirmishConfig) int {
 	if n > 10 {
 		n = 10
 	}
+	local := 0
 	for i := 0; i < n; i++ {
 		if cfg.Players[i].Controller == SkirmishControllerHuman {
-			return i
+			local = i
 		}
 	}
-	return 0
+	return local
 }
 
 // skirmishPlayersAllied is the battle-entry alliance predicate. The frontend

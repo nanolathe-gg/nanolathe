@@ -836,6 +836,30 @@ func (s *Service) acquireTargetForSlotRange(u *units.Unit, slot *units.Slot, idx
 	// same for every slot of every unit that player owns — so they are read
 	// here, by owner, and never from the shooter's own definition.
 	acq.HasUpgrade = s.targetingUpgradeGateFor(u.Owner)
+	// Check 3 of the picked-candidate order [06 §3.2]: the SHOOTER's `kamikaze`
+	// flag bypasses the §3.1 physical gate for every picked candidate. This is
+	// the shared unit-level target search both callers of §3.2 reach — the
+	// autonomous per-slot scan and the order-facing sight-distance form — and
+	// the check belongs to it, not to the gate routine, so slotAcquisition does
+	// not set the field and the reaction offer's §3.1-only admission keeps its
+	// gate [06 R-WPN-04 §2 part 3].
+	//
+	// It is stock-inert today: every stock `kamikaze` definition (the twelve
+	// mines, armvader and corroach) authors no weapon at all, and this search
+	// is entered only through a slot that holds a resolved weapon.
+	acq.KamikazeShooter = u.Def != nil && u.Def.Kamikaze
+	// Check 2's two shooter-side disjuncts [06 §3.2]. Like check 3 they belong
+	// to the picked-candidate order, not to the §3.1 gate routine, so
+	// slotAcquisition does not set them and the reaction offer's §3.1-only
+	// admission is unaffected [06 R-WPN-04 §2 part 3].
+	acq.ShooterControlByte = s.PlayerControlByteFor(u.Owner)
+	// acq.ShootAll stays false: it is the session mode-flags word's bit 10,
+	// whose only retail writer is the `+ShootAll` chat command, and the word is
+	// zero-filled with no loader, settings writer or save restore touching that
+	// bit — so a stock session runs with it clear
+	// [06 §3.2 "The option bit of check 2"][07 R-CAM-01 §6]. Nanolathe has no
+	// `+shootall` typed command; when one is added it writes a session flag
+	// that arrives here.
 	if len(candidates) == 0 && acq.HasUpgrade {
 		candidates = s.secondaryCandidates(u, w, seaLevel, vis, econ, catalog, acq.Range)
 	}
@@ -941,6 +965,10 @@ func acquisitionCandidate(u *units.Unit, cand *units.Unit, seaLevel numeric.Fixe
 		// The stunned mark travels with the candidate; only a paralyzer slot
 		// reads it [06 §3.2] check 5 [06 R-DMG-01 §11].
 		Stunned: cand.Stunned,
+		// Check 2's candidate-side disjunct [06 §3.2][04 R-SPEC-01 §5]. A
+		// candidate with no definition reads as not authoring the flag, which
+		// is the same answer the absent key gives.
+		ShootMe: cand.Def != nil && cand.Def.ShootMe,
 	}
 }
 
@@ -1778,6 +1806,32 @@ func contactBand(u *units.Unit) (lower, upper int32) {
 // impactProjectile is the live central-impact boundary. The direct recipient is
 // a collision result, not the projectile's retained guidance reference.
 func impactProjectile(s *Service, h pool.Handle, p *Projectile, weapon *content.WeaponDef, w *units.World, terrain *world.Terrain, featSvc *features.Service, econ *economy.Service, catalog *content.Catalog, tick uint32, wind Vec3, simRNG *rng.Simulation, directUnit pool.Handle) {
+	// Cycle cut. The interceptor sweep in handleProjectileImpact deliberately
+	// re-reads the live pool, and the pre-sweep retirement below is what
+	// normally stops a sweep from selecting its own exploder again — but a
+	// `noexplode` weapon is NOT retired there [06 §13.2] C28, so two records
+	// whose weapons are both `interceptor` and `noexplode` and which lie in
+	// each other's unhalved area of effect sweep one another without end and
+	// exhaust the stack.
+	//
+	// This admits a record only once per impact stack, which cuts exactly those
+	// cycles: a re-entry of a record whose own impact is still running below us
+	// on this stack. It is neither a depth cap nor a visited set — a record
+	// that has already impacted and returned is still eligible for a later
+	// sibling sweep — so the visit set, the event order and the RNG draw order
+	// are unchanged for every case that does not re-enter. A case that DOES
+	// re-enter needs the re-entered record to still be alive while a sweep runs
+	// over it, which needs its weapon to be both `interceptor` (to sweep at
+	// all) and `noexplode` (to have survived its own impact): the same pair the
+	// runaway recursion needs. No stock weapon authors both — stock has four
+	// `interceptor` weapons, all `noexplode=0`, and two `noexplode` weapons,
+	// neither an interceptor — so no stock impact reaches this guard [06 §11.2].
+	if s != nil && h != 0 {
+		if !s.beginImpact(h) {
+			return
+		}
+		defer s.endImpact()
+	}
 	// Central impact sets the ordinary dead bit before effects and the
 	// interceptor sweep. That makes a nested interceptor scan observe this
 	// exploder as retired, rather than recursively selecting it again.

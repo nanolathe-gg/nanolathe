@@ -254,7 +254,17 @@ type PieceDraw struct {
 
 // UnitDraw is the per-unit model draw result presentation only (I6).
 type UnitDraw struct {
-	Model        *model.Model
+	Model *model.Model
+	// SourceModel is the LOADED model a standalone piece was copied from, and
+	// is nil for an ordinary unit or feature draw (where Model is already the
+	// loaded model). A bounded projectile or debris call rebuilds one piece
+	// into a per-call scratch model, and retail resolves that piece's animated
+	// texture through the cursor stored in the LOADED model's primitive record
+	// -- the same record and the same read the unit renderer uses, so a
+	// detached piece animates in lockstep with its living parent
+	// [03 R-COMP-02 §6]. Carrying the loaded model here is what lets the
+	// compose walk reach that cursor.
+	SourceModel  *model.Model
 	PieceStates  []model.PieceState // presentation copy with folded angles [03 §5.2]
 	Transforms   []model.Transform  // per piece in stable order [03 §2.4] C21 (I1)
 	Pieces       []PieceDraw        // per piece draw lists in stable order (I1) primitives in load-fixed order [03 §2.4] C20
@@ -665,6 +675,7 @@ func buildProjectileStandalonePiece(m *model.Model, piece int, roll, yaw, pitch 
 	}
 	s.result = UnitDraw{
 		Model:       single,
+		SourceModel: m,
 		PieceStates: states,
 		Transforms:  transforms,
 		Pieces:      pieces,

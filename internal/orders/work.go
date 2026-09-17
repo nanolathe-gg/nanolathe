@@ -577,7 +577,16 @@ func repairUnitHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Co
 	if leashBroken(u, n) {
 		return 5 // complete
 	}
-	if target.Move.Mode&0x3 != 1 {
+	// "The movement-mode mirror is bits 0-1, tested separately before the phase
+	// switch (`!= 1` -> `Repairs unsuccessful.`); the re-approach arm reads bits
+	// 2-3" [04 R-ORD-01 §12]. The mirror is the COMMITTED mode, not `Move.Mode`,
+	// which is the request byte the mover-mode setter writes and the position
+	// commit later publishes [04 R-AIR-01 §3][04 R-COLL-01 §1]. The two words
+	// differ between a takeoff or landing request and its commit, and a restored
+	// save can carry them apart by design [08 R-SAVE-02 §6, §8]; reading the
+	// request made this row disagree with the repair admission test and the
+	// patrol candidate filter, which are both already on the mirror.
+	if moverMode(target) != 1 {
 		workStatus(u, statusCant, "Repairs unsuccessful.")
 		return 5 // complete
 	}

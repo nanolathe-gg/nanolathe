@@ -343,6 +343,7 @@ var (
 	rowVTOLLanding     ID
 	rowParalyze        ID
 	rowVTOLLandIfCan   ID
+	rowVTOLHelpBuild   ID
 	rowBuildWeapon     ID
 )
 
@@ -364,6 +365,7 @@ func resolveRows() {
 	rowVTOLLanding = Lookup("VTOL_Landing")
 	rowParalyze = Lookup("Paralyze")
 	rowVTOLLandIfCan = Lookup("VTOL_LandIfCan")
+	rowVTOLHelpBuild = Lookup("VTOL_HelpBuild")
 	rowBuildWeapon = Lookup("BuildWeapon")
 }
 

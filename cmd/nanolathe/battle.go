@@ -557,9 +557,16 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 	}
 	attachBattleAudio(cl, b.sess, b.fs)
 	prefs := s.Audio
+	unitChatText := s.Messages.UnitChatText
 	if b.shell != nil {
 		prefs = b.shell.audioPrefs
+		unitChatText = b.shell.messages.UnitChatText
 	}
+	// The eight-entry voice queue arbitrates with the persisted `speechfx` bit
+	// and the two acknowledgement levels, so battle setup installs them on the
+	// session's own service — the direct map/capture path has no shell to have
+	// done it already [03 §8.3][03 R-AUD-01 §2][07 R-CAM-01 §7].
+	applyRetailVoiceGates(b.sess.Audio, prefs, unitChatText)
 	music := b.sess.Audio.Music
 	music.SetVolume(prefs.MusicVol)
 	music.SetEnabled(prefs.MusicMode != 0)
@@ -602,6 +609,12 @@ func (b *battleSession) teardown(cl *client.Client) {
 		b.restorePostBattlePalette(cl)
 	}
 	b.endDragScroll(cl)
+	// The unit information screen is a battle child window held in one package
+	// global, so a battle left through RESTART, a campaign continuation or a
+	// load would otherwise hand the next battle a window built from the old
+	// battle's definition and art — one that keeps swallowing pointer input
+	// under its rectangle until `DONE` is clicked [07 §3][07 R-HUD-04 §3].
+	closeUnitInfo()
 	if b.sess != nil {
 		// The score teardown also runs for manual exits [08 R-CAMP-01 §7].
 		b.sess.CommitCampaignTeardown()
@@ -633,6 +646,12 @@ func (b *battleSession) teardown(cl *client.Client) {
 		if in := cl.Input(); in != nil {
 			*in = *input.NewState()
 		}
+		// The parallel record pool is the one thing in the client that owns
+		// goroutines, and each worker holds a clone of the whole client with
+		// its grown scratch arenas. Retiring it with the rest of the battle
+		// state releases those between battles; the next recorded frame starts
+		// a fresh pool. Safe here because teardown never runs beside a frame.
+		cl.Close()
 	}
 	detachBattleAudio(cl, b.sess)
 	if b.shell == nil && b.sess != nil && b.sess.Audio != nil {

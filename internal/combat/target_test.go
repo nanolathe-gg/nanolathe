@@ -14,11 +14,17 @@ func fixed(v int) numeric.Fixed { return numeric.Fixed(int64(v) * 65536) }
 // level is zero and every candidate sits at height 1, so the [06 §3.1]
 // above-sea-level requirement passes and the test is about selection, not
 // admission. Tests that need a different visibility result override Visible.
+//
+// The shooter's owner is a computer player, which is check 2's second disjunct
+// [06 §3.2]: these fixtures are about sampling, scoring and the physical gate,
+// so check 2 is opened once here rather than authoring `shootme` on every
+// candidate literal below.
 func acq(sx, sz numeric.Fixed, weaponRange int32, badMask uint32, r *rng.Simulation) Acquisition {
 	return Acquisition{
 		ShooterX: sx, ShooterZ: sz, ShooterY: fixed(1),
 		SeaLevel: 0, Range: weaponRange, BadMask: badMask, RNG: r,
-		Visible: func(Candidate) bool { return true },
+		ShooterControlByte: ControlByteComputer, // check 2 [06 §3.2]
+		Visible:            func(Candidate) bool { return true },
 	}
 }
 

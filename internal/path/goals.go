@@ -254,7 +254,6 @@ func (g *rectGoal) H(c Cell) int32 {
 
 func (g *rectGoal) Enumerate(out []Cell) []Cell {
 	r := g.rect
-	// Count border cells: 2*width + 2*height -4, with degenerate handling.
 	width := r.Max.X - r.Min.X + 1
 	height := r.Max.Z - r.Min.Z + 1
 	if width <= 0 || height <= 0 {
@@ -263,46 +262,31 @@ func (g *rectGoal) Enumerate(out []Cell) []Cell {
 		}
 		return out[:0]
 	}
-	// Single cell case.
-	if width == 1 && height == 1 {
-		if out == nil {
-			return []Cell{r.Min}
-		}
-		out = out[:0]
-		out = append(out, r.Min)
-		return out
-	}
 	if out != nil {
 		out = out[:0]
 	} else {
-		// Preallocate exact border size.
-		var n int32
-		if width == 1 {
-			n = height
-		} else if height == 1 {
-			n = width
-		} else {
-			n = 2*width + 2*height - 4
+		// Two words per column, plus two per interior row [04 R-MOV-03 §9].
+		n := 2 * width
+		if height > 2 {
+			n += 2 * (height - 2)
 		}
 		out = make([]Cell, 0, n)
 	}
-	// Deterministic order: top row, bottom row, then sides.
-	// Top edge Z=Min.Z
+	// The enumeration order is the contract, not a convenience: request setup
+	// keeps the FIRST enumerated cell on a squared-distance tie and aims the
+	// pre-search ray at it, so the sequence decides the ray target, the
+	// acceptance threshold, and with it the published route and the boundary
+	// verdict [04 R-PATH-01 §4 step 5][04 R-PATH-01 §13]. Interleave per
+	// column — (x, z1) then (x, z2) — then the side pairs, and do not
+	// de-duplicate: a degenerate rectangle lists its cells twice, which the
+	// marking absorbs but the sequence must still show [04 R-MOV-03 §9].
 	for x := r.Min.X; x <= r.Max.X; x++ {
 		out = append(out, Cell{X: x, Z: r.Min.Z})
+		out = append(out, Cell{X: x, Z: r.Max.Z})
 	}
-	// Bottom edge if distinct.
-	if r.Max.Z != r.Min.Z {
-		for x := r.Min.X; x <= r.Max.X; x++ {
-			out = append(out, Cell{X: x, Z: r.Max.Z})
-		}
-	}
-	// Sides between top and bottom, excluding corners already emitted.
 	for z := r.Min.Z + 1; z <= r.Max.Z-1; z++ {
 		out = append(out, Cell{X: r.Min.X, Z: z})
-		if r.Max.X != r.Min.X {
-			out = append(out, Cell{X: r.Max.X, Z: z})
-		}
+		out = append(out, Cell{X: r.Max.X, Z: z})
 	}
 	return out
 }

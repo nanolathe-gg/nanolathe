@@ -93,7 +93,7 @@ func TestCode8NanoReachTerms(t *testing.T) {
 		}))
 		// Whole-unit top = floor(Y) + ModelTop = 30 + 4, clear of sea level 20.
 		target.Y = numeric.Fixed(int64(30) << 16)
-		target.Move.Mode = 1
+		target.Move.Mode, target.Move.ModeMirror = 1, 1
 		setTestHostility(actor, func(*units.Unit, *units.Unit) bool { return false })
 		setTestSeaLevel(actor, seaLevel)
 		if mutate != nil {
@@ -113,7 +113,7 @@ func TestCode8NanoReachTerms(t *testing.T) {
 	}{
 		{"canreclamate mirror bit clear", func(a, _ *units.Unit) { a.Def.CanReclamate = false }},
 		{"health equals maxdamage", func(_, tg *units.Unit) { tg.Health = tg.Def.MaxDamage }},
-		{"target airborne (mover mode 2)", func(_, tg *units.Unit) { tg.Move.Mode = 2 }},
+		{"target airborne (mover mode 2)", func(_, tg *units.Unit) { tg.Move.ModeMirror = 2 }},
 		{"water clause: target top below my reach", func(_, tg *units.Unit) {
 			// sea − MaxWaterDepth = 20 − 12 = 8; a top of 7 is out of reach.
 			tg.Y = numeric.Fixed(int64(3) << 16)

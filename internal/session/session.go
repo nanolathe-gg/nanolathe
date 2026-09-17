@@ -1237,10 +1237,19 @@ func (s *Session) RegisterAll() {
 						}
 					}
 					if corpseDef != nil {
-						// Movement owns the live committed pair. Before its
-						// initialization (and for types without that surface),
-						// the allocator/save record already retains the same
-						// origin [05 R-FEAT-01 §13][04 R-ORD-01 §1].
+						// The corpse anchor is the dying unit's committed
+						// footprint cell pair [05 R-FEAT-01 §13]; retail keeps
+						// that pair on the unit and the commit step writes the
+						// new pair into it as the unit moves
+						// [04 R-COLL-01 §1]. Movement owns the
+						// live pair here. Before its initialization, and for
+						// types that never take a collision record, the pair
+						// the COMMON INITIALIZER retained at allocation is the
+						// unit's last stamped origin and is the live source
+						// read below — units.initializeAllocationFootprint is
+						// its only live writer, and the save path no longer
+						// writes it (see RetailUnitMirrors): a save used to
+						// overwrite this word and move the wreck.
 						anchor := world.Cell{X: int32(u.CachedOccupancyX), Z: int32(u.CachedOccupancyZ)}
 						if committed, _, _, ok := s.Movement.CommittedFootprint(h); ok {
 							anchor = world.Cell{X: committed.X, Z: committed.Z}

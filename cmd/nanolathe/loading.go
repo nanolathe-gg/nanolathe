@@ -317,6 +317,12 @@ func (g *gameShell) loadRetailSavePath(path string) error {
 // Strict keeps the pool sized from the pre-restore configured word
 // [08 R-ENTRY-01 §6] [08 R-SESS-01 §9]. Modern has already selected its saved
 // skirmish layout (DESIGN_SESSIONS_AI_SAVE "Modern save unit limits").
+//
+// The word stays unclamped here, so a crafted save can leave a value far past
+// the start-up 20..500 clamp in the configured word — exactly as retail does.
+// The next battle entry is where that word is refused if it would size a pool
+// beyond the slot indices a pool handle can address; see the sizing gate in
+// session composition. Clamping here instead would break the documented carry.
 func (g *gameShell) applyRestoredUnitLimit(image *save.BattleImage) {
 	if g == nil || image == nil || !image.Summary.HasMaxUnits {
 		return

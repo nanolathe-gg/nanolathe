@@ -606,9 +606,19 @@ func reconstructUnits(s *Session, m *mission.Mission) error {
 			u.PlacementIdx = idx
 			u.PlacementIdent = up.Ident
 			u.PlacementUnitName = up.UnitName
-			if up.HealthPercentage != 0 && up.HealthPercentage != 100 {
-				u.Health = int32(int64(u.MaxHealth) * int64(up.HealthPercentage) / 100)
-			}
+			// "health <- maxHealth x HealthPercentage / 100", restated in the
+			// same section as "Created health is MaxDamage x HealthPercentage /
+			// 100 with integer truncation" [08 R-TRIG-01 §9]. The formula is
+			// UNCONDITIONAL. A guard here used to skip it for an authored 0,
+			// treating that value as "absent" -- but absent is what the decoder
+			// already resolves to 100 (internal/mission/placement.go,
+			// [02 "Map files"]), so an authored 0 reached this arm meaning zero
+			// and left the unit at full health. No stock content exercises it:
+			// a census of all 275 stock .ota files found 57,485 HealthPercentage
+			// keys and not one authored 0. The 100 case is the same arithmetic
+			// either way, so dropping both arms costs nothing and removes a
+			// reading the contract does not have.
+			u.Health = missionPlacementHealth(u.MaxHealth, up.HealthPercentage)
 			if up.IsImmune() {
 				u.Flags |= units.ImmunityStatus
 			}
@@ -620,6 +630,12 @@ func reconstructUnits(s *Session, m *mission.Mission) error {
 		}
 	}
 	return nil
+}
+
+// missionPlacementHealth is the spawner's created-health arithmetic:
+// `maxHealth x HealthPercentage / 100`, truncating toward zero [01 §8].
+func missionPlacementHealth(maxHealth, percent int32) int32 {
+	return int32(int64(maxHealth) * int64(percent) / 100)
 }
 
 // missionPlacementPosition is the spawner's position fixup helper

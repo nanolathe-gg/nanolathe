@@ -36,7 +36,9 @@ func vtolWorkFixture() (*Queue, *units.Unit, *units.Unit) {
 		Health: 100, MaxHealth: 100,
 		X: numeric.Fixed(70 << 16), Y: numeric.Fixed(40 << 16), Z: numeric.Fixed(90 << 16),
 	}
-	builder.Move.Mode = 1 // grounded: the preamble's takeoff arm [04 R-MOV-01 §8]
+	// Grounded: the preamble's takeoff arm reads the COMMITTED mode
+	// [04 R-AIR-01 §6], so both words carry it [04 R-MOV-01 §8].
+	builder.Move.Mode, builder.Move.ModeMirror = 1, 1
 	// The target is damaged: `VTOL_RepairUnit`'s admission test refuses a target
 	// whose 16-bit health equals its `maxdamage` [04 R-ORD-01 §7], so a
 	// full-health fixture would never reach that row's phases at all.
@@ -45,7 +47,7 @@ func vtolWorkFixture() (*Queue, *units.Unit, *units.Unit) {
 		Health: 50, MaxHealth: 100,
 		X: numeric.Fixed(70 << 16), Y: numeric.Fixed(40 << 16), Z: numeric.Fixed(90 << 16),
 	}
-	target.Move.Mode = 1 // grounded: VTOL_RepairUnit refuses any other mode
+	target.Move.Mode, target.Move.ModeMirror = 1, 1 // grounded: VTOL_RepairUnit refuses any other mode
 	// The air feature-reclaim row resolves a feature at its goal on every visit
 	// [04 R-ORD-01 §5], through the terrain the session's economy service
 	// carries. One stock-shaped tree stands on the builder's own cell.
@@ -402,7 +404,7 @@ func TestRepairWaterClause(t *testing.T) {
 	hurt := func(y int32) *units.Unit {
 		u := mk(targetDef, y)
 		u.Health = 50
-		u.Move.Mode = 1
+		u.Move.Mode, u.Move.ModeMirror = 1, 1
 		return u
 	}
 
@@ -429,7 +431,7 @@ func TestRepairWaterClause(t *testing.T) {
 	// No world adapter: the clause passes rather than abandoning the repair.
 	loose := &units.Unit{Def: air}
 	tgt := &units.Unit{Def: targetDef, Health: 50}
-	tgt.Move.Mode = 1
+	tgt.Move.Mode, tgt.Move.ModeMirror = 1, 1
 	if !nanoReach(loose, tgt) {
 		t.Fatalf("unbound queue should not fail the water clause")
 	}

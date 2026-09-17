@@ -52,6 +52,12 @@ func (s *System) ForgetUnit(h pool.Handle) {
 	// Unit finalisation unlinks, so a reused pool slot never inherits a dead
 	// unit's place in a sector bucket [04 R-COLL-01 §11] item 1.
 	s.Grid.ForgetFiling(int(h))
+	// The same inheritance rule for the occupant-age clock: retail frees the
+	// MOVER with the unit and the clock is a word on it [04 R-PATH-01 §14], so
+	// the next unit in this slot reads a zero-initialized tick. It must run
+	// AFTER noteFootprintClear above, whose watermark gate compares the tick
+	// the dying unit held while it stood on the rectangle it is releasing.
+	s.forgetOccupancyCommit(h)
 	setHandleRow(&s.Collisions, h, nil)
 	setHandleRow(&s.Routes, h, nil)
 	setHandleRow(&s.Steers, h, nil)

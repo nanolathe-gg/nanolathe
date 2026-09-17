@@ -20,7 +20,10 @@ func airReclaimFixture(t *testing.T, mode uint8) (*Service, *units.Unit, *units.
 	b.Def.CruiseAlt, b.Def.MaxVelocity, b.Def.Acceleration, b.Def.BrakeRate, b.Def.TurnRate = 60, 4*65536, 65536/4, 65536/8, 500
 	b.Def.BankScale = 65536
 	b.InBuildStance, b.Activated = false, false
-	b.Move.Mode = mode
+	// The air preamble's takeoff arm gates on the COMMITTED mover mode — the
+	// unit flags word's mirror, not the mover's request byte [04 R-AIR-01 §6]
+	// [04 R-AIR-01 §12] — so the fixture's starting mode is in both words.
+	b.Move.Mode, b.Move.ModeMirror = mode, mode
 	b.X, b.Z = world.CellToWorld(8), world.CellToWorld(8)
 	target.X, target.Z = world.CellToWorld(26), b.Z
 	terrain := &world.Terrain{CellW: 32, CellH: 32, Gravity: 0x1fdb, Plot: make([]world.PlotCell, 1024)}
@@ -31,7 +34,10 @@ func airReclaimFixture(t *testing.T, mode uint8) (*Service, *units.Unit, *units.
 	s.Movement = movement.NewSystem(terrain, movement.Profile{FootPrintX: 1, FootPrintZ: 1, MinWaterDepth: -10000, MaxWaterDepth: 12, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 255, BadWaterSlope: 127}, movement.NewOccupancyGrid())
 	s.Movement.BindWorld(s.World)
 	s.Movement.EnsureUnit(b)
-	b.Move.Mode = mode
+	// The air preamble's takeoff arm gates on the COMMITTED mover mode — the
+	// unit flags word's mirror, not the mover's request byte [04 R-AIR-01 §6]
+	// [04 R-AIR-01 §12] — so the fixture's starting mode is in both words.
+	b.Move.Mode, b.Move.ModeMirror = mode, mode
 	q := orders.QueueForUnit(b)
 	q.RemoveHead()
 	sim := rng.NewSimulation(1)

@@ -638,3 +638,34 @@ func TestFalloffIsEvaluatedAtWorkingPrecisionAndStoredOnce(t *testing.T) {
 		t.Fatalf("falloff(edge=1) = %v, want exactly 1 [06 §9.3]", got)
 	}
 }
+
+// TestBlastConsumersReadOneAreaWord locks that the area sweep's radius and the
+// interceptor blast read the SAME areaofeffect word. Retail stores the key as
+// an unsigned 16-bit field and both readers zero-extend it — the radius is
+// that word shifted right once [06 §9.3], the interceptor blast squares it
+// unhalved [06 R-WPN-05 §10] — so a value above the store's width must give
+// both the wrapped size, never one the wrapped size and the other the raw
+// authored integer. The content compiler wraps the key too
+// ([02 R-KEYS-01 §5]), which makes this the identity for a compiled
+// definition; the test uses out-of-width inputs because that is the only case
+// that tells a 32-bit reading from the 16-bit one.
+func TestBlastConsumersReadOneAreaWord(t *testing.T) {
+	for _, authored := range []int32{0, 1, 16, 65535, 65536, 70000, -1} {
+		word := StoredArea(authored)
+		if got, want := BlastRadius(authored), word>>1; got != want {
+			t.Errorf("BlastRadius(%d) = %d, want the stored word %d shifted once = %d", authored, got, word, want)
+		}
+		// The interceptor blast accepts exactly inside the unhalved word: a
+		// victim at radius `word - 1` on one axis is in, `word` is out.
+		if word > 0 {
+			in := Vec3{X: numeric.FixedFromInt(int64(word) - 1)}
+			out := Vec3{X: numeric.FixedFromInt(int64(word))}
+			if !ProjectileInInterceptorBlast(in, Vec3{}, authored) {
+				t.Errorf("areaofeffect=%d: victim at %d world units should be inside the unhalved stored word %d", authored, word-1, word)
+			}
+			if ProjectileInInterceptorBlast(out, Vec3{}, authored) {
+				t.Errorf("areaofeffect=%d: victim at %d world units should be outside the unhalved stored word %d", authored, word, word)
+			}
+		}
+	}
+}

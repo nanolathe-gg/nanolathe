@@ -94,7 +94,12 @@ func newTestWorldAndUnits(t *testing.T) (*units.World, *world.Terrain, *units.Un
 	// [04 R-STANCE-01 §1]. The autonomous scan visits a unit only at that value
 	// [06 §3.2], so a fixture built from a literal definition (field zero, HOLD
 	// FIRE) would never scan.
-	def := &content.UnitDef{UnitName: "combatfixture", MaxDamage: 100, Limit: -1, StandingFireOrder: 2, ModelTopFixed: 16 << 16}
+	// `shootme` is check 2 of the picked-candidate order [06 §3.2]: without it a
+	// candidate is acquirable only by a computer-owned shooter. Every stock
+	// COMBAT definition authors it — the 91 that omit it are the non-combat
+	// buildings — so a fixture unit that stands in for an armed definition
+	// authors it too, and the tests below stay about what they name.
+	def := &content.UnitDef{UnitName: "combatfixture", MaxDamage: 100, Limit: -1, StandingFireOrder: 2, ModelTopFixed: 16 << 16, ShootMe: true}
 	shooterH, err := w.Create(def, 0, numeric.FixedFromInt(10), numeric.FixedFromInt(10), numeric.FixedFromInt(10))
 	if err != nil {
 		t.Fatalf("create shooter: %v", err)

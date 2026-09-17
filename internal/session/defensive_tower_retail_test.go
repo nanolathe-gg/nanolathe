@@ -11,6 +11,14 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
+// The hostile in both scenarios below authors `ShootMe=1`, check 2 of the
+// picked-candidate order [06 §3.2]: these towers belong to a HUMAN player,
+// and a human's unit never autonomously acquires a candidate whose
+// definition omits the key — every non-combat building, the Kbot lab these
+// tests used to place among them. The Core nuclear silo authors it, is
+// tough enough to sit through the ground-fire phase, and fires nothing
+// without a missile in its stockpile.
+//
 // A stationary guard must leave its wait when the observed target dies, then
 // engage another enemy [04 R-ORD-01 §3][04 R-ORD-01 §6]. Previously the weapon
 // forgot the dead target while Guard_NoMove kept ownership of an empty slot.
@@ -27,7 +35,7 @@ func TestRetailDefensiveTowerReacquiresAfterTargetDeath(t *testing.T) {
 				s := f.session(t)
 				stepRetail(s, 2)
 				tower := placeCompleteRetailUnit(t, s, name, 0, numeric.FixedFromInt(600), numeric.FixedFromInt(600))
-				first := placeCompleteRetailUnit(t, s, "CORLAB", 1, numeric.FixedFromInt(600), numeric.FixedFromInt(800))
+				first := placeCompleteRetailUnit(t, s, "CORSILO", 1, numeric.FixedFromInt(600), numeric.FixedFromInt(800))
 				var second *units.Unit
 				if !outsideSight {
 					// Let the real projectile perform removal.
@@ -53,7 +61,7 @@ func TestRetailDefensiveTowerReacquiresAfterTargetDeath(t *testing.T) {
 					}
 					if !arrived && !first.Alive {
 						arrived = true
-						second = placeCompleteRetailUnit(t, s, "CORLAB", 1, numeric.FixedFromInt(800), numeric.FixedFromInt(800))
+						second = placeCompleteRetailUnit(t, s, "CORSILO", 1, numeric.FixedFromInt(800), numeric.FixedFromInt(800))
 						before = second.Health
 					}
 				}
@@ -78,7 +86,7 @@ func TestRetailDefensiveTowerStopAfterGroundFire(t *testing.T) {
 			s := f.session(t)
 			stepRetail(s, 2)
 			tower := placeCompleteRetailUnit(t, s, name, 0, numeric.FixedFromInt(600), numeric.FixedFromInt(600))
-			enemy := placeCompleteRetailUnit(t, s, "CORLAB", 1, numeric.FixedFromInt(600), numeric.FixedFromInt(800))
+			enemy := placeCompleteRetailUnit(t, s, "CORSILO", 1, numeric.FixedFromInt(600), numeric.FixedFromInt(800))
 			step := func(n int) {
 				for i := 0; i < n; i++ {
 					s.Econ.Players[0].Stock[economy.Energy] = 10000

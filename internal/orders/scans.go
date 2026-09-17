@@ -364,6 +364,30 @@ func spawnPatrolLanding(u *units.Unit, pad *units.Unit, tick uint32) bool {
 	return true
 }
 
+// spawnPatrolHelpBuild is `VTOL_RepairPatrol`'s unfinished-target spawn. The
+// row states it as its own step, not as an issue: "An unfinished `u` releases
+// the payload, explicitly spawns `VTOL_HelpBuild` on `u` at the head, gate = 0,
+// and returns *wait*" [04 R-ORD-01 §7]. **Explicitly** is the operative word —
+// the record is named by the row, so this path takes none of the issue helper's
+// three additions (its command-code-8 resolution, its stance-3 refusal, and its
+// hold-position/maneuver return move, [04 R-STANCE-01 §4]). It is the same
+// shape as the pad seek's `VTOL_Landing` spawn one step above it.
+func spawnPatrolHelpBuild(u *units.Unit, target *units.Unit, tick uint32) bool {
+	if u == nil || target == nil {
+		return false
+	}
+	id := rowVTOLHelpBuild
+	if id == 0 {
+		return false
+	}
+	q := QueueOfUnit(u)
+	if q == nil {
+		return false
+	}
+	q.PushHead(id, NewNodeForOrder(id, target.Handle, target.X, target.Y, target.Z, tick, u.Handle, false))
+	return true
+}
+
 func spawnPatrolReclaim(u *units.Unit, feature FeatureView, air bool, tick uint32) bool {
 	if u == nil {
 		return false

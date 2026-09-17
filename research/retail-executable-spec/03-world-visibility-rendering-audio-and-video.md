@@ -5634,19 +5634,54 @@ from 0** (the primitive count and the "first primitive is the selection
 box" marker come from the model piece). Per 32-byte primitive: gather its
 vertex indices into the point array; if the coloured flag is set, the flat
 polygon filler; else if the vertex count is exactly 4, resolve the texture
-(the resolve-at-draw-time bit → the entry cursor's current frame; the **debris**
-entry additionally honours the team bit by taking the `LOGOS` frame selected by
-the owning player's colour index) and run the textured quad mapper; else draw
-nothing.
+(the resolve-at-draw-time bit → the current frame of the cursor stored in that
+same primitive record of the loaded model — see "Which cursor a detached piece
+reads" below; the **debris** entry additionally honours the team bit by taking
+the `LOGOS` frame selected by the owning player's colour index) and run the
+textured quad mapper; else draw nothing.
 
 **Established (direct-static).** The model binder initializes every
 multi-frame entry cursor at frame zero. Only after primary texture-bank lookup
 fails does it search the fallback LOGOS bank; an exactly-ten-frame entry found
 there becomes team-colour and is excluded from the advancement registry. A
 ten-frame primary-bank entry remains an ordinary registered animation. The
-effect/projectile entry has no team-colour branch, so its ordinary resolver
-reads that still-initial frame zero; it neither creates a hole nor borrows an
-owning player's colour.
+effect/projectile entry has no team-colour branch, so for a **team** entry —
+which is bound but never registered, and therefore never advanced — its
+ordinary resolver reads that still-initial frame zero; it neither creates a
+hole nor borrows an owning player's colour. For an ordinary registered
+animation the same resolver reads the advancing frame, as the next paragraph
+states.
+
+**Which cursor a detached piece reads (Established, direct-static).** There is
+exactly **one** playback cursor per *(loaded model, piece, primitive)*, and it
+lives inside the loaded model's own primitive record — the same record the
+piece's colour index, vertex indices and flags live in ([R-COMP-02 §4]). No
+per-unit, per-debris, per-projectile or per-call copy of it exists anywhere.
+Both standalone entries are handed the **loaded model piece itself** — a debris
+record names the loaded piece it was thrown from, and the effect entry is
+likewise given a loaded model's piece — and they reach the frame through the
+identical read the unit composition renderer performs, the same accessor on the
+same primitive record. What is per-instance is only the *point workspace* —
+the debris record rebuilds its own rotated copy from the loaded piece's original
+vertices — never the cursor.
+
+Consequently a piece **detached** from a unit, whether by death debris or by a
+standalone effect draw, shares the living unit's cursor and shows the same
+animation frame at the same time; it does not restart, rest at frame zero, or
+run on a cadence of its own. The phase-7 walk reinforces this: the registry is
+populated at **model load** ([R-COMP-02 §4]), one append per multi-frame
+non-team primitive of each loaded model, and the walk steps every registered
+cursor with no reference to instances, visibility, ownership, or whether
+anything is drawing that model at all. A cursor nothing currently owns still
+advances. The one way a cursor stops is the advance's own detach: when a
+non-looping sequence runs off its last frame the advance clears the cursor's
+entry link, after which every reader — unit, debris and effect alike — resolves
+nothing for that primitive ([06 R-WFX-01 §1]).
+
+Two definitions that name the same `3DO` do **not** share a cursor: each model
+bind loads a fresh instance of the file (the authored half-turn is applied to
+that instance once) and then registers that instance's own cursors, so cursor
+identity follows the *load*, not the file name (Established, direct-static).
 
 The **effect/projectile entry** (3DO projectiles and the pooled explosion
 models) first rotates each vertex by the object's three angle words through

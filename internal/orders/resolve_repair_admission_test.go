@@ -34,7 +34,7 @@ func repairAdmissionPair(t *testing.T, health int32) (*units.Unit, *units.Unit) 
 	// case is testing.
 	target.Health = health
 	target.Y = numeric.Fixed(int64(30) << 16) // top 34, clear of sea level 20
-	target.Move.Mode = 1
+	target.Move.Mode, target.Move.ModeMirror = 1, 1
 	setTestHostility(actor, func(*units.Unit, *units.Unit) bool { return false })
 	setTestSeaLevel(actor, seaLevel)
 	return actor, target
@@ -181,11 +181,11 @@ func TestNanoReachIsTheOnlyRepairAdmission(t *testing.T) {
 	}
 	// The airborne term, which the collapsed function reads through moverMode's
 	// low two bits [04 R-MOV-01 §8].
-	target.Move.Mode = 2
+	target.Move.ModeMirror = 2
 	if nanoReach(actor, target) {
 		t.Fatal("an airborne target must fail the admission [04 R-ORD-01 §7]")
 	}
-	target.Move.Mode = 0x06 // mode 2 with a high bit set: still airborne
+	target.Move.ModeMirror = 0x06 // mode 2 with a high bit set: still airborne
 	if nanoReach(actor, target) {
 		t.Fatal("the airborne test reads the mover mode's low two bits [04 R-MOV-01 §8]")
 	}

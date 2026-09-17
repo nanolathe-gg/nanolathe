@@ -550,21 +550,39 @@ func (s *Session) resultTeams(victory bool) (int, []int) {
 		}
 	}
 	winner := -1
+	local := int(s.LocalOwner)
+	localTeam := s.teamForOwner(local)
 	if victory {
-		winner = s.teamForOwner(int(s.LocalOwner))
+		winner = localTeam
 	} else {
-		// Local defeat names the lowest-numbered surviving opponent's team so
-		// the post-battle screen has a winner to print. When nothing survives
-		// there is no team to name and the result stays a local defeat with no
-		// winner — retail writes only the latch bits there [08 R-TRIG-01 §6].
+		// Local defeat names the lowest-numbered surviving OPPONENT's team so
+		// the post-battle screen has a winner to print. The candidate set is
+		// the victory sweep's: every slot but the local one and the slots
+		// whose byte is set in the local player's first alliance row
+		// [08 R-TRIG-01 §6] "The kind-2 victory sweep". A surviving team-mate
+		// is not a winner to print — naming its team here made the local team
+		// the winner and resultKindFor then returned "victory" for a session
+		// the latch had recorded as a loss. The team compare is the same skip
+		// read the other way, so an alliance row that is not symmetric still
+		// cannot name the local team. When nothing survives outside the local
+		// alliance there is no team to name and the result stays a local
+		// defeat with no winner — retail writes only the latch bits there
+		// [08 R-TRIG-01 §6].
 		for owner := 0; owner < 10; owner++ {
-			if owner == int(s.LocalOwner) || !s.resultOwnerEligible(owner) {
+			if owner == local || !s.resultOwnerEligible(owner) {
+				continue
+			}
+			if s.ownersAllied(local, owner) {
 				continue
 			}
 			if s.Units.LiveCountForPlayer(owner) == 0 {
 				continue
 			}
-			winner = s.teamForOwner(owner)
+			team := s.teamForOwner(owner)
+			if team == localTeam {
+				continue
+			}
+			winner = team
 			break
 		}
 	}

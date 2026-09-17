@@ -36,7 +36,7 @@ func newGuardLegsFixture(t *testing.T) *guardLegsFixture {
 	// state word's armed bit [04 R-ORD-02 §1].
 	f.guard.Def.CanAttack = true
 	f.guard.Def.CanMove = true
-	f.guard.Move.Mode = 1
+	f.guard.Move.Mode, f.guard.Move.ModeMirror = 1, 1 // committed mover mode [04 R-MOV-01 §8]
 	f.guard.Flags |= units.ArmedStatus
 	b := QueueForUnit(f.guard).Binding()
 	b.Lookup = func(h pool.Handle) *units.Unit {

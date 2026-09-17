@@ -11,6 +11,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	compiledmodel "github.com/nanolathe-gg/nanolathe/internal/model"
 	presentationrender "github.com/nanolathe-gg/nanolathe/internal/render"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
@@ -232,8 +233,24 @@ func (c *Client) collectDrawPolysLaneProjected(draw *presentationrender.UnitDraw
 			if mode == modelPrimitiveTexture {
 				switch ref.kind {
 				case texAnimated:
-					if c.modelTextures != nil {
-						texFrame = c.modelTextures.animatedFrame(draw.Model, pi, pri, ref)
+					// Retail keeps exactly one playback cursor per loaded-model
+					// primitive and resolves every draw of that primitive
+					// through it: the unit renderer and both standalone entries
+					// perform the identical read on the same record, so a piece
+					// detached as debris shows the frame its living parent
+					// shows [R-COMP-02 §6]. Our binder is keyed on the loaded
+					// model, so it can answer only for a draw that carries one;
+					// the piece's immutable loaded-model index is the cursor's
+					// identity, so a parent and the child it selects do not
+					// alias [03 §5.2].
+					//
+					// A standalone draw carries the per-call scratch model in
+					// Model and the LOADED model it copied the piece from in
+					// SourceModel, which is the one the binder holds; an
+					// ordinary unit or feature draw leaves SourceModel nil
+					// because Model is already that model.
+					if bound := modelTextureCursorModel(c.modelTextures, draw); bound != nil {
+						texFrame = c.modelTextures.animatedFrame(bound, piece.SourceIndex, pri, ref)
 						if texFrame == nil {
 							continue
 						}
@@ -245,6 +262,19 @@ func (c *Client) collectDrawPolysLaneProjected(draw *presentationrender.UnitDraw
 						// animated model texture would share cursor zero
 						// across every feature. Suppressed, not shared.
 						continue
+					}
+					if c.modelTextures != nil {
+						// A battle draw whose model the binder does not hold at
+						// all: no cursor exists for it anywhere, and a
+						// per-subject one could never advance, because the
+						// battle registry IS the session's phase-7 service. It
+						// would sit on this first frame while allocating one
+						// player per subject on a draw path, so read the first
+						// frame plainly [R-COMP-02 §6].
+						if ref.entry != nil && len(ref.entry.Frames) > 0 {
+							texFrame = ref.entry.Frames[0].Frame
+						}
+						break
 					}
 					texFrame = c.modelAnimatedFrameAt(ref, kind, id, piece.SourceIndex, pri)
 				case texTeam:
@@ -411,6 +441,42 @@ func (c *Client) resolveModelTexture(name string) (texRef, bool) {
 	return ref, ok
 }
 
+// modelTextureBinderHolds reports whether the battle's animated-texture binder
+// was given this exact compiled model. Unit and feature draws carry the loaded
+// model the binder holds cursors for; a projectile or debris draw carries the
+// one-piece scratch model the standalone builder fills per call, which no
+// binder ever sees [03 §5.2][R-COMP-02 §6].
+//
+// modelTextureCursorModel returns the loaded model whose primitive records hold
+// this draw's animated-texture cursors, or nil when the binder holds none.
+//
+// Retail hands its standalone entries the loaded model piece itself and
+// resolves the frame through the cursor stored in that loaded primitive
+// record — the same record and the same read the unit renderer uses — and the
+// phase-7 walk advances that cursor from model load onwards whether or not
+// anything is drawing the model. So a debris piece animates in lockstep with
+// the unit it came off, rather than resting at its first frame
+// [R-COMP-02 §6].
+//
+// A standalone draw's own Model is the per-call scratch model, which no binder
+// ever sees; its SourceModel is the loaded model it copied the piece from, and
+// that is the one to ask. An ordinary unit or feature draw leaves SourceModel
+// nil, because its Model already IS the loaded model.
+func modelTextureCursorModel(r *ModelTextureRegistry, draw *presentationrender.UnitDraw) *compiledmodel.Model {
+	if r == nil || draw == nil {
+		return nil
+	}
+	for _, m := range [...]*compiledmodel.Model{draw.SourceModel, draw.Model} {
+		if m == nil {
+			continue
+		}
+		if _, ok := r.byCompiled[m]; ok {
+			return m
+		}
+	}
+	return nil
+}
+
 // projectedModelExtent measures every visible piece vertex before material
 // dispatch, including selection and unreferenced vertices [03 R-REN-03A §1].
 // Hidden pieces publish no vertices. A shadow uses its own quarter shear.
@@ -559,6 +625,11 @@ func (c *Client) composeDirectLiveModel(draw *presentationrender.UnitDraw, selec
 	}
 	recW, recH := c.recordExtent()
 	target := c.borrowModelImage(recW, recH, 0, 0, 0, 0, false, 1)
+	// Every corner above came from the camera at the current step, so this
+	// framebuffer-sized target already holds framebuffer coordinates. Original's
+	// detail view must not scale the committed image a second time — the direct
+	// debris and fragment targets declare the same (DESIGN_GPU_RENDERER §14.2).
+	target.blit = camera.ViewScaleNative
 	for i := range polys {
 		if polys[i].frame != nil {
 			c.blitTexturedPolyTarget(target, &polys[i], polys[i].frame, id)

@@ -243,8 +243,16 @@ func (q *Queue) CRTRandom() *rng.CRT {
 }
 
 // ConfigureBackendGates supplies the effects-volume, sound-flags, and device
-// gates applied after queue crowding thresholds. Flags bits 0..2 are the
-// established master sound gate; exact secondary meanings remain unknown.
+// gates applied after queue crowding thresholds.
+//
+// The flags word is the packed sound-flags byte of [03 R-AUD-01 §2], composed
+// from the persisted audio block rather than assumed: bits 0..2 are the
+// `Sound Mode` the master play gate requires to be nonzero, bit 3 is
+// `RestoreVolume`, bits 4 and 5 are `ackfx` and `buildfx` (persisted and
+// displayed, gating nothing — a bounded negative), and bit 6 is `speechfx`,
+// the audible gate of the voice-cue resolver. With bit 6 clear no unit voice
+// line plays; captions are unaffected, which is why the caption arm of
+// `resolve` does not consult it.
 func (q *Queue) ConfigureBackendGates(effectsVolume float32, soundFlags uint8, backendEnabled bool) {
 	if q == nil {
 		return
@@ -253,22 +261,20 @@ func (q *Queue) ConfigureBackendGates(effectsVolume float32, soundFlags uint8, b
 	q.gateInitialized = true
 }
 
-// ConfigureThresholdGauges converts the 0..10 menu gauges to their byte
-// thresholds (five units per gauge step) [03 §8.3].
-func (q *Queue) ConfigureThresholdGauges(audioGauge, speechGauge uint8) {
-	if q == nil {
-		return
-	}
-	if audioGauge > 10 {
-		audioGauge = 10
-	}
-	if speechGauge > 10 {
-		speechGauge = 10
-	}
-	q.audioThreshold, q.speechThreshold = audioGauge*5, speechGauge*5
-}
-
 // Configure sets the crowding thresholds and enable flags [03 §8.3] (C17).
+//
+// The two thresholds are the stored acknowledgement levels: the voice level
+// `unitchat`, which the `SPEECH` gauge writes as its stage times five, and the
+// caption level `unitchattext`, which the interface page's `UNITCHAT` control
+// writes the same way [03 R-AUD-01 §2][07 R-CAM-01 §7]. The gates below
+// subtract them from 10, so they are levels, not gauge stages, and nothing is
+// multiplied here; the caller bounds them to the gauge's own 0..10.
+//
+// A `ConfigureThresholdGauges` helper used to sit beside this one and multiply
+// its arguments by five before storing them, which turned a stored level of 10
+// into a threshold of 50 and opened every crowding gate. It had no non-test
+// caller and the stored block already holds the multiplied level, so it is
+// gone rather than corrected.
 func (q *Queue) Configure(audioThreshold, speechThreshold uint8, soundEnabled, speechEnabled bool) {
 	if q == nil {
 		return

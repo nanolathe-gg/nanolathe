@@ -36,6 +36,9 @@ func TestSecondaryListGetsNoVisibilityRetest(t *testing.T) {
 			ShooterY: numeric.FixedFromInt(100),
 			SeaLevel: numeric.FixedFromInt(0),
 			Range:    1000,
+			// A computer owner opens check 2 [06 §3.2]; this fixture is about
+			// the secondary list, not the target-marking admission.
+			ShooterControlByte: ControlByteComputer,
 			// The predicate that gates the primary list rejects everything, so
 			// any hit can only have come through the secondary list.
 			Visible: func(Candidate) bool { return false },
@@ -113,7 +116,11 @@ func newRegistryFixture(t *testing.T, enemyHidden bool) *registryFixture {
 	// player's own active units, and its contact callback applies no cloak test,
 	// so a hidden hostile inside the circle still gets the seen bit.
 	defShooter := &content.UnitDef{UnitName: "shooter", MaxDamage: 100, Limit: -1, FootprintX: 1, FootprintZ: 1, RadarDistance: 500}
-	defEnemy := &content.UnitDef{UnitName: "enemy", MaxDamage: 100, Limit: -1, FootprintX: 1, FootprintZ: 1}
+	// The hostile authors `shootme`, check 2's first disjunct [06 §3.2]: this
+	// fixture has no player table bound, so its shooter reads as "not a
+	// computer" and an unmarked candidate would be refused before the list
+	// questions these tests are about are ever reached.
+	defEnemy := &content.UnitDef{UnitName: "enemy", MaxDamage: 100, Limit: -1, FootprintX: 1, FootprintZ: 1, ShootMe: true}
 	sh, _ := w.Create(defShooter, 0, numeric.FixedFromInt(10), numeric.FixedFromInt(100), numeric.FixedFromInt(10))
 	en, _ := w.Create(defEnemy, 2, numeric.FixedFromInt(30), numeric.FixedFromInt(100), numeric.FixedFromInt(10))
 

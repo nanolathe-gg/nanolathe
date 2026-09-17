@@ -238,10 +238,12 @@ func patrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 // Row: phase 0: with a target, goal = its position; the patrol-chain setup;
 // advance. Phase 1: satisfied ∩ 0xE0 -> rotate. Point goal at the goal radius
 // 16; deadline 60; gate |= 0xE0. Then, only when the player's energy is at
-// least 20 % of energy storage, the repair-candidate scan; then, when both
-// energy and metal are at least 20 % of their storages, hold; otherwise the
-// feature pairing and its reclaim-spawn decision tree; none -> hold. Other
-// phase: cancel-all.
+// least 20 % of energy storage, the repair-candidate scan: a picked candidate
+// that is still nonhostile ends the visit either way -- the accepted issue
+// rotates, an unresolvable code 8 or a refusing issuer WAITS. Only an empty
+// pick or a post-pick hostile verdict continues: when both energy and metal are
+// at least 20 % of their storages, hold; otherwise the feature pairing and its
+// reclaim-spawn decision tree; none -> hold. Other phase: cancel-all.
 //
 // The gate here is ORed, not assigned, so the 60-tick deadline survives it and
 // the row re-runs its scan every 60 ticks whether or not the leg has finished.
@@ -265,9 +267,23 @@ func repairPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) 
 		n.DynamicGate |= gateMoveOutcomes // ORed: the 60-tick deadline survives
 		if resources, ok := playerResources(u); ok && resourceAtLeastTwenty(resources.Stock[1], resources.Capacity[1]) {
 			candidates := scanRepairCandidates(u, u.Def.SightDistance)
-			if target := pickRepairCandidate(u, candidates); target != nil && !scanHostile(bindingFor(u), u, target) && spawnPatrolRepair(u, target, tick) {
-				n.DynamicGate = 0
-				return 6 // rotate after the accepted repair issue
+			// "Ground repair repeats that same diplomacy check after the pick;
+			// when it remains nonhostile, resolve command code 8 (assist or
+			// repair) against the target; when resolvable and the issue helper
+			// accepts it → *rotate*, else *wait*" [04 R-ORD-01 §4]. Three arms,
+			// not one conjunction: only an empty pick or a post-pick hostile
+			// verdict leaves that sentence for the resource gates below. A
+			// nonhostile candidate whose code 8 does not resolve, or whose
+			// issue helper refuses (stance 3, [04 R-STANCE-01 §4]), *waits* —
+			// so a refused repair never reaches the feature pairing and never
+			// draws its six bounded picks [01 §7.5], which would shift the
+			// authoritative stream for the rest of the session (I4).
+			if target := pickRepairCandidate(u, candidates); target != nil && !scanHostile(bindingFor(u), u, target) {
+				if spawnPatrolRepair(u, target, tick) {
+					n.DynamicGate = 0
+					return 6 // rotate after the accepted repair issue
+				}
+				return 3 // *wait*: unresolvable code 8, or a refusing issuer
 			}
 		}
 		if resources, ok := playerResources(u); ok && resourceAtLeastTwenty(resources.Stock[1], resources.Capacity[1]) && resourceAtLeastTwenty(resources.Stock[0], resources.Capacity[0]) {
@@ -321,8 +337,18 @@ func vtolMoveHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code
 		if code, handled := vtolMoveLeg(u, n, satisfied, tick); handled {
 			return code
 		}
-		// Isolated order fixtures have no marker service.
-		if u.Move.Mode&0x3 == 1 {
+		// Isolated order fixtures have no marker service. The gate this
+		// stands in for is the takeoff preamble's, and its condition is the
+		// preamble's own: "**Only if** the committed mover mode is `1`
+		// (grounded) ... OR `0xE0` into the record's dynamic gate word"
+		// [04 R-AIR-01 §6]. Committed means the mirror the position commit
+		// publishes, not `Move.Mode`, the request byte the mover-mode setter
+		// writes [04 R-AIR-01 §3][04 R-COLL-01 §1] — the same read
+		// airWorkPreamble makes for the same step. A fallback that tested the
+		// request byte disagreed with the preamble it substitutes for whenever
+		// the two words differ, which is the state a restored save can be in
+		// [08 R-SAVE-02 §6, §8].
+		if moverMode(u) == 1 {
 			n.DynamicGate |= gateMoveOutcomes
 		}
 		return 1 // advance

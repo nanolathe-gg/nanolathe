@@ -124,7 +124,47 @@ preview retains its explicit absent-model wrapper. The `--headless` composition
 adapter installs the same registry before its session begins, without creating a
 client. Replacing or removing a client therefore cannot pause phase 7, and
 battle teardown clears the observer and resets the whole registry once `[03
-R-CRD-005 §1]`. **Wind** is read by the simulation's strip
+R-CRD-005 §1]`.
+
+**Standalone draws and the binder.** A cursor is keyed on the loaded model, so
+the binder can only answer for a draw that carries one. Projectile and debris
+draws carry the one-piece scratch model the standalone builder fills per call,
+which no binder ever sees, so the walk asks about the loaded model the
+scratch piece was copied from instead (`SourceModel`, below), keyed on the
+piece's immutable loaded-model index so a parent and its child do not alias. That fallback used to be
+unreachable whenever a registry was installed — which is every battle client —
+and the primitive was dropped instead, so an animated-texture piece thrown off
+one of the 39 stock unit models that reference a multi-frame entry (commanders,
+metal makers and stores, air and vehicle plants, shipyards, radars, targeting
+facilities, beacons) was simply missing. No stock weapon model references one,
+so projectiles are unaffected in practice.
+
+Which cursor a *detached* piece shares is now **settled** and is not the
+per-subject one: retail hands the standalone entry the loaded model piece
+itself and resolves the frame through the cursor living in that loaded
+primitive record — the identical read the unit renderer performs, at the same
+offset of the same record. A detached piece therefore shows the same frame as
+the living unit at every instant, and the phase-7 walk advances that cursor
+from model load onwards whether or not anything is drawing the model
+`[03 R-COMP-02 §6]` "Which cursor a detached piece reads". The per-subject
+standalone cursor is a *substitute*, not the contract: in a battle it is never
+advanced, so it holds the loaded cursor's initial frame instead of its current
+one.
+
+**Resolved.** `UnitDraw.SourceModel` carries the loaded model across the
+per-call scratch model: `buildProjectileStandalonePiece` records the model it
+copied the piece out of, and the compose walk asks the binder about that model
+rather than about the scratch one, resolving
+`animatedFrame(SourceModel, piece.SourceIndex, primitive, ref)`. An ordinary
+unit or feature draw leaves the field nil, because its `Model` already is the
+loaded model. A battle standalone draw therefore follows the loaded primitive's
+cursor and shows the frame its living parent shows. The per-subject cursor
+survives only for standalone preview, where no registry exists and so no loaded
+cursor is available to share; a battle draw whose model the binder does not hold
+at all reads the entry's first frame, since no cursor for it exists anywhere and
+a per-subject one could never advance.
+
+**Wind** is read by the simulation's strip
 producers, not by any draw here; `[03 R-WIND-01]` belongs to
 [DESIGN_WORLD_VISIBILITY](DESIGN_WORLD_VISIBILITY.md).
 

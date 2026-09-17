@@ -646,7 +646,14 @@ func standbyMineHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code {
 		return Code(1) // *advance*
 	case 1:
 		target := opportunityScan(u)
-		if target != nil && target.Move.Mode&0x3 == 1 && u.Flags>>stanceFireShift&stanceFieldMask != 0 {
+		// "phase 1 requires the scanned target's committed mover mode to be
+		// **grounded** (`1`) and my own fire stance nonzero" [04 R-ORD-01 §3].
+		// The trace in [R-STANCE-01 §3] states the same test as "a target whose
+		// state-word low two bits equal `1`", and [04 R-ORD-01 §12] identifies
+		// those two bits: "The movement-mode mirror is bits 0-1". So the read is
+		// the committed mirror, not `Move.Mode`, which is the request byte
+		// [04 R-AIR-01 §3][04 R-COLL-01 §1][08 R-SAVE-02 §6, §8].
+		if target != nil && moverMode(target) == 1 && u.Flags>>stanceFireShift&stanceFieldMask != 0 {
 			spawnImmediateSelfDestruct(u, n)
 			return Code(5) // *complete* [04 R-ORD-01 §2]
 		}

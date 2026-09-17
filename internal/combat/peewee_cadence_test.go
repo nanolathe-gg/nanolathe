@@ -77,9 +77,16 @@ func TestPeeweeFiringCadenceAndProjectilePublication(t *testing.T) {
 		t.Skip("skirmish composed without a human commander")
 	}
 	shooterDef := sess.Catalog.Units[content.CanonicalKey("armpw")]
-	victimDef := sess.Catalog.Units[content.CanonicalKey("armsolar")]
+	// The victim authors `ShootMe=1`, check 2 of the picked-candidate order
+	// [06 §3.2]: the Peewee is HUMAN-owned here, and a human's unit does not
+	// autonomously acquire the 91 stock definitions that omit the key — the
+	// non-combat buildings, the solar collector this fixture used to place
+	// among them. The Core radar tower is the stock unarmed, stationary
+	// definition that does author it, so the scenario still measures cadence
+	// against a target that cannot shoot back.
+	victimDef := sess.Catalog.Units[content.CanonicalKey("corsilo")]
 	if shooterDef == nil || victimDef == nil {
-		t.Skip("stock armpw/armsolar absent from the catalog")
+		t.Skip("stock armpw/corsilo absent from the catalog")
 	}
 	shooterH, err := sess.Units.Create(shooterDef, 0, com.X.Add(numeric.FixedFromInt(96)), com.Y, com.Z)
 	if err != nil {
@@ -92,7 +99,7 @@ func TestPeeweeFiringCadenceAndProjectilePublication(t *testing.T) {
 	victim := sess.Units.Unit(victimH)
 
 	// The target is held alive so the scenario measures cadence rather than how
-	// quickly a solar collector dies.
+	// quickly a nuclear silo dies.
 	var rootTicks, pelletTicks []uint32
 	var selector, renderType int32
 	selector = -2

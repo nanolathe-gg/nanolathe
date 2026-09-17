@@ -1203,7 +1203,7 @@ func TestContextualDefaultVariantRows(t *testing.T) {
 		d.Side = "CORE"
 		d.CanMove = true
 	}))
-	enemy.Move.Mode = 1
+	enemy.Move.Mode, enemy.Move.ModeMirror = 1, 1
 	if got := name(newActor(6), enemy, nil); got != "Attack_Chase" {
 		t.Fatalf("hostile target = %q, want Attack_Chase [04 R-ORD-02 §1] code 1 step 1", got)
 	}

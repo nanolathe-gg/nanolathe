@@ -33,12 +33,15 @@ func TestDeathmatchRespawnRefillsTheMappedWordGrid(t *testing.T) {
 	remembered := len(word) - 1
 	word[remembered] |= 1 << uint(s.LocalOwner)
 
-	h := poolHandle(commanderHandles(s)[0][0])
+	// Both rows of this fixture are human, so the local player is the last of
+	// them [08 R-SKIR-01 §2] "Battle entry: what the record becomes".
+	local := int(s.LocalOwner)
+	h := poolHandle(commanderHandles(s)[local][0])
 	s.Units.Destroy(h, units.DeathKilled)
 	if result := s.Units.FinalizeDeath(h, 0); !result.Freed {
 		t.Fatal("commander was not finalized")
 	}
-	s.NotifyDeathFinalized(0, 0)
+	s.NotifyDeathFinalized(local, 0)
 	// Six dues: the first arms the shared countdown, the sixth selects the
 	// respawn [08 R-TRIG-01 §6][08 R-SKIR-01 §3].
 	for tick := uint32(30); tick <= 180; tick += 30 {
@@ -46,7 +49,7 @@ func TestDeathmatchRespawnRefillsTheMappedWordGrid(t *testing.T) {
 	}
 	respawned := false
 	for _, u := range s.Units.IterSliced() {
-		if u != nil && u.Alive && s.isCommanderForOwner(u) {
+		if u != nil && u.Alive && int(u.Owner) == local && s.isCommanderForOwner(u) {
 			respawned = true
 			break
 		}

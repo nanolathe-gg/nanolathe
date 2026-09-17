@@ -741,6 +741,24 @@ func (c *Client) Resize(width, height int) {
 	c.rgba = make([]byte, width*height*4)
 }
 
+// Close releases what this client owns beyond its own memory: the parallel
+// record pool's worker goroutines and the clone of the client each of them
+// holds, scratch arenas included (docs/DESIGN_GPU_RENDERER.md §13.9).
+//
+// A host that creates one client per battle must call it when it drops that
+// client. Nothing else in the client starts a goroutine, so this is the whole
+// of its teardown. It is idempotent, safe on a client that never recorded a
+// frame, and safe on a nil client; a client used again after it would simply
+// start a fresh pool. Do not call it while a frame is being recorded — stage
+// one waits on the very workers it stops.
+func (c *Client) Close() {
+	if c == nil {
+		return
+	}
+	c.recordPool.close()
+	c.recordPool = nil
+}
+
 // IsFocused reports the platform window focus sampled at the client edge.
 // Battle camera predicates consume this value without importing Ebitengine;
 // focus is checked before edge scrolling, and an unfocused window suppresses

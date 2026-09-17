@@ -1015,6 +1015,7 @@ func (g *gameShell) applyRetailAudioOptions() {
 	if c := g.retailMusicController(); c != nil {
 		c.SetVolume(g.audioPrefs.MusicVol)
 	}
+	g.applyRetailVoiceGates()
 }
 
 // applyRetailAudioOptions is the shell-free half, so the startup read can push
@@ -1027,6 +1028,73 @@ func applyRetailAudioOptions(a settings.Audio) {
 		SoundMode:     audio.SpatialModeFromPreference(a.SoundMode),
 		MixingBuffers: a.MixingBuffers,
 	})
+}
+
+// retailSoundFlags composes the packed sound-flags byte from the persisted
+// audio block [03 R-AUD-01 §2]: bits 0..2 `Sound Mode`, bit 3 `RestoreVolume`,
+// bit 4 `ackfx`, bit 5 `buildfx`, bit 6 `speechfx`.
+//
+// `ackfx` and `buildfx` gate no sound in retail — a bounded negative over the
+// whole corpus — so they are carried here for the same reason the settings
+// block carries them: the word is composed from the stored preferences rather
+// than assumed, and the voice resolver reads only the bits it owns.
+func retailSoundFlags(a settings.Audio) uint8 {
+	flags := uint8(a.SoundMode & settings.MaxSoundMode)
+	for _, bit := range []struct {
+		value int
+		mask  uint8
+	}{
+		{a.RestoreVolume, 1 << 3},
+		{a.AckFX, 1 << 4},
+		{a.BuildFX, 1 << 5},
+		{a.SpeechFX, 1 << 6},
+	} {
+		if bit.value != 0 {
+			flags |= bit.mask
+		}
+	}
+	return flags
+}
+
+// applyRetailVoiceGates pushes the persisted preferences the eight-entry voice
+// queue arbitrates with into whichever audio service the shell currently owns —
+// the frontend's, which the battle adopts.
+//
+// Two of them had no route into the queue at all before this: the `SPEECH`
+// gadget's bit 6, which is the voice resolver's audible gate (with it clear no
+// unit voice line plays, and captions are unaffected), and the two
+// acknowledgement levels the crowding gates subtract from 10, which stayed at
+// the service's construction defaults whatever the player chose
+// [03 §8.3][03 R-AUD-01 §2][07 R-CAM-01 §7].
+func (g *gameShell) applyRetailVoiceGates() {
+	if g == nil || g.audioOwner == nil {
+		return
+	}
+	applyRetailVoiceGates(g.audioOwner, g.audioPrefs, g.messages.UnitChatText)
+}
+
+// applyRetailVoiceGates is the service-taking half, so battle installation can
+// reach a session's own queue on the direct map/capture path that has no shell.
+func applyRetailVoiceGates(svc *audio.Service, a settings.Audio, unitChatText int) {
+	if svc == nil || svc.Queue == nil {
+		return
+	}
+	svc.Queue.Configure(clampVoiceLevel(a.UnitChat), clampVoiceLevel(unitChatText), a.SoundEnabled(), true)
+	// The device gate is the output configuration's `MasterEnabled`; what the
+	// queue holds is the preference half of the same test.
+	svc.Queue.ConfigureBackendGates(float32(retailWaveVolumeScale(a.FXVol)), retailSoundFlags(a), true)
+}
+
+// clampVoiceLevel bounds a stored acknowledgement level to the gauge's own
+// 0..10 range [03 R-AUD-01 §2].
+func clampVoiceLevel(level int) uint8 {
+	if level < 0 {
+		return 0
+	}
+	if level > settings.MaxUnitChat {
+		return settings.MaxUnitChat
+	}
+	return uint8(level)
 }
 
 // retailCycleStage advances one staged button by a stage, wrapping.
@@ -1079,8 +1147,15 @@ func (g *gameShell) applyRetailMusicMode() {
 	for i, category := range optionsState.categories {
 		c.SetTrackCategory(i+1, category)
 	}
-	if g.audioPrefs.CDMode == 3 && optionsState.track > 0 {
-		c.Play(optionsState.track)
+	if g.audioPrefs.CDMode == 3 {
+		// The copy is the arm's whole effect on the object's track state; the
+		// play below is the "and applies it" half [03 R-AUD-01 §4]. Before the
+		// requested track was a field of its own, the copy had nowhere to go
+		// and Repeat outside this screen played nothing.
+		c.SetRequestedTrack(optionsState.track)
+		if optionsState.track > 0 {
+			c.Play(optionsState.track)
+		}
 	}
 }
 
@@ -1391,6 +1466,9 @@ func (g *gameShell) activateRetailOptionsGadget(name string) bool {
 		stage := g.retailOptionsStage("SPEECH", 3, speech)
 		g.audioPrefs.SpeechFX = boolInt(stage != 0)
 		g.audioPrefs.UnitChat = stage * 5
+		// Both halves are gates the voice queue reads, so the change reaches
+		// it here rather than waiting for the next battle [03 §8.3].
+		g.applyRetailVoiceGates()
 		g.syncRetailSoundPage()
 		return true
 	case "TEST":
@@ -1437,6 +1515,8 @@ func (g *gameShell) activateRetailOptionsGadget(name string) bool {
 		stage := g.retailOptionsStage("UNITCHAT", 3, g.messages.UnitChatText/5)
 		g.messages.UnitChatText = stage * 5
 		optionsPanel.SetStageAt(optionsPanel.Index("UNITCHAT"), stage)
+		// The caption level is the queue's second crowding gate [03 §8.3].
+		g.applyRetailVoiceGates()
 		return true
 	}
 	// Every remaining control on the open page belongs to the options window,

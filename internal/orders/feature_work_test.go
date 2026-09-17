@@ -345,7 +345,7 @@ func TestResurrectionProducesTheUnitAndRemovesTheCorpse(t *testing.T) {
 	product := &units.Unit{Handle: 2, Def: productDef, Alive: true, Health: 500, MaxHealth: 500, Remaining: 1}
 	// The successor `RepairUnit` refuses any target whose mover mode is not
 	// grounded [04 R-ORD-01 §5]; a resurrected building is grounded.
-	product.Move.Mode = 1
+	product.Move.Mode, product.Move.ModeMirror = 1, 1 // committed mover mode [04 R-MOV-01 §8]
 	prior := f.q.Binding().Lookup
 	f.q.Binding().Lookup = func(h pool.Handle) *units.Unit {
 		if h == product.Handle {

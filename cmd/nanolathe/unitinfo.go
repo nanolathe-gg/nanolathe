@@ -296,9 +296,30 @@ func unitInfoCovers(x, y int32) bool {
 	return guiRectContains(unitInfoUI.window.Rect, x, y)
 }
 
+// unitInfoDoneCaptures reports whether a pointer position lies in the open
+// screen's `DONE` button. Exactly one gadget holds the pointer capture: a press
+// inside a gadget takes it, and only a release inside that same gadget fires
+// the control [07 R-WGT-01 §1 "Capture"]. Both endpoints of a click are tested
+// with this, so a drag that starts on the unit picture and ends on `DONE`
+// identifies two different gadgets and fires neither.
+func (h *retailBattleHUD) unitInfoDoneCaptures(x, y int32) bool {
+	if h == nil || unitInfoUI == nil || unitInfoUI.window == nil {
+		return false
+	}
+	index := unitInfoUI.doneIndex()
+	if index < 0 {
+		return false
+	}
+	return guiRectContains(h.modalGadgetRect(unitInfoUI.window, index, nil), x, y)
+}
+
 // unitInfoConsumeClick services one release inside the open screen: a release
 // on `DONE` closes it, and any other release inside the window is consumed by
 // the window rather than reaching the world [07 §3][07 R-WGT-01 §1].
+//
+// The press that paired with this release is identified by `sameButton`, which
+// refuses a pair whose two endpoints are not the same gadget, so reaching the
+// `DONE` arm here means the press was captured by `DONE` as well.
 func (h *retailBattleHUD) unitInfoConsumeClick(x, y int32) bool {
 	if unitInfoUI == nil || unitInfoUI.window == nil {
 		return false
@@ -306,11 +327,9 @@ func (h *retailBattleHUD) unitInfoConsumeClick(x, y int32) bool {
 	if !unitInfoCovers(x, y) {
 		return false
 	}
-	if index := unitInfoUI.doneIndex(); index >= 0 {
-		if guiRectContains(h.modalGadgetRect(unitInfoUI.window, index, nil), x, y) {
-			closeUnitInfo()
-			return true
-		}
+	if h.unitInfoDoneCaptures(x, y) {
+		closeUnitInfo()
+		return true
 	}
 	return true
 }

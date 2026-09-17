@@ -24,7 +24,12 @@ import "github.com/nanolathe-gg/nanolathe/internal/units"
 func stopHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code {
 	captionClear(u, n)
 	clearWeaponTargetsUnconditional(u)
-	if u != nil && u.Def != nil && u.Def.CanFly && u.Move.Mode&0x3 == 2 {
+	// "if the unit's **committed** mover mode is airborne (`2`, [R-MOV-01 §8])
+	// and its definition has `canfly`" [04 §3.4]. Committed means the flags-word
+	// mirror, which the position commit publishes, not `Move.Mode`, which is the
+	// request byte the mover-mode setter writes [04 R-AIR-01 §3][04 R-COLL-01 §1].
+	// A restored save can carry the two apart by design [08 R-SAVE-02 §6, §8].
+	if u != nil && u.Def != nil && u.Def.CanFly && moverMode(u) == 2 {
 		spawnLandIfCan(u, tick)
 	}
 	return Code(5) // *complete* [04 R-ORD-01 §1]

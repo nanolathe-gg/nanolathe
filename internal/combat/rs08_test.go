@@ -204,9 +204,9 @@ func TestRS08_CandidateFacts(t *testing.T) {
 	terrain.Plot = make([]world.PlotCell, 100*100)
 	terrain.SeaLevel = 10 // sea level 10
 	defShooter := &content.UnitDef{UnitName: "shooter", MaxDamage: 100, Category: "ARM TANK", BadTargetCategoryWPRI: "VTOL", Limit: -1, FootprintX: 1, FootprintZ: 1}
-	defAlly := &content.UnitDef{UnitName: "ally", MaxDamage: 100, Category: "ARM TANK", Limit: -1, FootprintX: 1, FootprintZ: 1}
-	defEnemy := &content.UnitDef{UnitName: "enemy", MaxDamage: 100, Category: "VTOL", Limit: -1, FootprintX: 1, FootprintZ: 1}
-	defEnemy2 := &content.UnitDef{UnitName: "enemy2", MaxDamage: 100, Category: "ARM TANK", Limit: -1, FootprintX: 1, FootprintZ: 1}
+	defAlly := &content.UnitDef{UnitName: "ally", MaxDamage: 100, Category: "ARM TANK", Limit: -1, FootprintX: 1, FootprintZ: 1, ShootMe: true}
+	defEnemy := &content.UnitDef{UnitName: "enemy", MaxDamage: 100, Category: "VTOL", Limit: -1, FootprintX: 1, FootprintZ: 1, ShootMe: true}
+	defEnemy2 := &content.UnitDef{UnitName: "enemy2", MaxDamage: 100, Category: "ARM TANK", Limit: -1, FootprintX: 1, FootprintZ: 1, ShootMe: true}
 	shooterH, _ := w.Create(defShooter, 0, numeric.FixedFromInt(int64(10)), numeric.FixedFromInt(int64(20)), numeric.FixedFromInt(int64(10)))
 	allyH, _ := w.Create(defAlly, 1, numeric.FixedFromInt(int64(15)), numeric.FixedFromInt(int64(20)), numeric.FixedFromInt(int64(15)))
 	enemyH, _ := w.Create(defEnemy, 2, numeric.FixedFromInt(int64(20)), numeric.FixedFromInt(int64(20)), numeric.FixedFromInt(int64(20)))
@@ -245,7 +245,7 @@ func TestRS08_CandidateFacts(t *testing.T) {
 	// Underwater enemy2 at (25) should be excluded (enemy underwater without 0x200)
 	// So no candidates? But we have also maybe other enemy? Let's make a valid enemy not cloaked/underwater
 	// Create a valid enemy at (30,30)
-	defValid := &content.UnitDef{UnitName: "valid", MaxDamage: 100, Category: "ARM TANK", Limit: -1, FootprintX: 1, FootprintZ: 1}
+	defValid := &content.UnitDef{UnitName: "valid", MaxDamage: 100, Category: "ARM TANK", Limit: -1, FootprintX: 1, FootprintZ: 1, ShootMe: true}
 	validH, _ := w.Create(defValid, 2, numeric.FixedFromInt(int64(30)), numeric.FixedFromInt(int64(20)), numeric.FixedFromInt(int64(30)))
 	validUnit := w.Unit(validH)
 	_ = validUnit
@@ -278,8 +278,8 @@ func TestRS08_CandidateFacts(t *testing.T) {
 	sh2 := w2.Unit(sh2H)
 	sh2.InstallWeapon(0, wdef)
 	sh2.SlotAt(0).Flags |= 0x02
-	defPref := &content.UnitDef{UnitName: "pref", MaxDamage: 100, Category: "ARM TANK", Limit: -1}
-	defFall := &content.UnitDef{UnitName: "fall", MaxDamage: 100, Category: "VTOL", Limit: -1}
+	defPref := &content.UnitDef{UnitName: "pref", MaxDamage: 100, Category: "ARM TANK", Limit: -1, ShootMe: true}
+	defFall := &content.UnitDef{UnitName: "fall", MaxDamage: 100, Category: "VTOL", Limit: -1, ShootMe: true}
 	// Place pref farther (distance 100) but preferred, fall closer (distance 10) but fallback
 	prefH, _ := w2.Create(defPref, 2, numeric.FixedFromInt(int64(110)), numeric.FixedFromInt(int64(20)), numeric.FixedFromInt(int64(10)))
 	fallH, _ := w2.Create(defFall, 2, numeric.FixedFromInt(int64(20)), numeric.FixedFromInt(int64(20)), numeric.FixedFromInt(int64(10)))
@@ -308,6 +308,10 @@ func TestRS08_SamplingBoundary50_51(t *testing.T) {
 				Z:        numeric.FixedFromInt(int64(0)),
 				Y:        numeric.FixedFromInt(int64(10)),
 				Category: 0, Hostile: true,
+				// Check 2's first disjunct [06 §3.2]: this fixture counts
+				// draws, and the scoring draw is taken only by a candidate
+				// that survives all five checks.
+				ShootMe: true,
 			}
 		}
 		return cands
@@ -360,7 +364,7 @@ func TestRS08_NaturalFireImpactDeath(t *testing.T) {
 	terrain.Plot = make([]world.PlotCell, 100*100)
 	terrain.SeaLevel = 0
 	defShooter := &content.UnitDef{UnitName: "shooter", MaxDamage: 100, Category: "ARM", Limit: -1, FootprintX: 1, FootprintZ: 1}
-	defTarget := &content.UnitDef{UnitName: "target", MaxDamage: 10, Category: "ARM", Limit: -1, FootprintX: 1, FootprintZ: 1, ModelTopFixed: 16 << 16}
+	defTarget := &content.UnitDef{UnitName: "target", MaxDamage: 10, Category: "ARM", Limit: -1, FootprintX: 1, FootprintZ: 1, ModelTopFixed: 16 << 16, ShootMe: true}
 	shooterH, _ := w.Create(defShooter, 0, numeric.FixedFromInt(int64(10)), numeric.FixedFromInt(int64(10)), numeric.FixedFromInt(int64(10)))
 	targetH, _ := w.Create(defTarget, 1, numeric.FixedFromInt(int64(20)), numeric.FixedFromInt(int64(10)), numeric.FixedFromInt(int64(20)))
 	target := w.Unit(targetH)
@@ -429,7 +433,7 @@ func TestRS08_VisibilityCanonical(t *testing.T) {
 	terrain := &world.Terrain{CellW: 64, CellH: 64, Gravity: numeric.Fixed(0), SeaLevel: 0}
 	terrain.Plot = make([]world.PlotCell, 64*64)
 	defShooter := &content.UnitDef{UnitName: "shooter", MaxDamage: 100, Category: "ARM", SightDistance: 300, Limit: -1, FootprintX: 1, FootprintZ: 1}
-	defEnemy := &content.UnitDef{UnitName: "enemy", MaxDamage: 100, Category: "ARM", Limit: -1, FootprintX: 1, FootprintZ: 1}
+	defEnemy := &content.UnitDef{UnitName: "enemy", MaxDamage: 100, Category: "ARM", Limit: -1, FootprintX: 1, FootprintZ: 1, ShootMe: true}
 	shooterH, _ := w.Create(defShooter, 0, numeric.FixedFromInt(int64(10)), numeric.FixedFromInt(int64(10)), numeric.FixedFromInt(int64(10)))
 	enemyVisibleH, _ := w.Create(defEnemy, 1, numeric.FixedFromInt(int64(12)), numeric.FixedFromInt(int64(10)), numeric.FixedFromInt(int64(12)))
 	_, _ = w.Create(defEnemy, 1, numeric.FixedFromInt(int64(100)), numeric.FixedFromInt(int64(10)), numeric.FixedFromInt(int64(100)))

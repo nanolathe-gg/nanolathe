@@ -15,6 +15,13 @@ import (
 func TestLandIfCanWakesEndTransportBeforeDeactivate(t *testing.T) {
 	sys, w, u := airFixture(t)
 	sys.SetMoverMode(u, 2)
+	// The setter writes the mover's request byte; the unit-side mirror changes
+	// only at the ordinary position commit [04 R-AIR-01 §3][04 R-COLL-01 §1],
+	// and runLandingTick pumps orders BEFORE the movement tick, so no commit
+	// has run when `Stop` is dispatched. `Stop` spawns its landing child on the
+	// COMMITTED mover mode [04 §3.4], and an aircraft that is already flying —
+	// which is the subject of this test — carries 2 in both words.
+	u.Move.ModeMirror = 2
 	u.Y += numeric.Fixed(100 << 16)
 	u.Activated = true
 	vm := cob.NewVM(&cob.Program{

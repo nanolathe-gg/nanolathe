@@ -253,6 +253,21 @@ type Candidate struct {
 	// note ON the victim for other units' scans and disables nothing on the
 	// victim itself [06 R-DMG-01 §11].
 	Stunned bool
+
+	// ShootMe is the candidate definition's `shootme` flag, the FIRST disjunct
+	// of check 2 of the picked-candidate order [06 §3.2]: "one definition flag
+	// of the candidate, or the shooter's owning player is a computer
+	// controller, or one global option bit — any of the three admits the
+	// candidate. The definition flag is `shootme`, default 0"
+	// [04 R-SPEC-01 §5].
+	//
+	// Its stock distribution is what makes the check matter: the 91 stock
+	// definitions that omit it are the non-combat buildings — factories, power,
+	// metal, storage, radar/sonar, mines, walls and dragon's teeth — so a HUMAN
+	// player's units autonomously acquire threats and leave the enemy's economy
+	// alone, while a computer player's units acquire everything through the
+	// second disjunct.
+	ShootMe bool
 }
 
 // IsPreferredCategory reports whether candidate's category is clear of the slot's bad-target-category mask,
@@ -302,6 +317,44 @@ type Acquisition struct {
 	BadMask       uint32
 	BadTargetMask content.CategoryMask
 	MaskResolved  bool
+
+	// KamikazeShooter is check 3 of the picked-candidate order [06 §3.2]: "one
+	// definition flag of the SHOOTER bypasses the §3.1 physical gate entirely;
+	// otherwise that gate must accept. The bypass flag is `kamikaze`". [04
+	// "`kamikaze` and `kamikazedistance`"] states the same fact from the other
+	// side and names what the bypass costs: "a kamikaze definition bypasses the
+	// §3.1 physical gate (range, arc, minimum range) for every candidate".
+	//
+	// The clause belongs to the picked-candidate order, not to the gate
+	// routine, so only the shared unit-level target search sets it. The
+	// reaction offer's admission is the §3.1 gate alone [06 R-WPN-04 §2 part
+	// 3], which is why slotAcquisition leaves this clear and
+	// SlotAcquisitionAdmits therefore bypasses nothing.
+	KamikazeShooter bool
+
+	// ShooterControlByte is the SECOND disjunct of check 2 [06 §3.2]: "the
+	// shooter's owning player is a computer controller". It is the owning
+	// player row's control byte — 1 human, 2 computer, 3 remote peer, 0 an
+	// unoccupied row [05 R-SHARE-01 §1] — read through
+	// Service.PlayerControlByteFor, the same operand and the same reader
+	// AutonomousScanAdmitsSlot takes. Only the exact value 2 admits, so an
+	// unoccupied row (a fixture with no player table bound) reads as "not a
+	// computer" and the candidate must then author `shootme`.
+	ShooterControlByte uint8
+
+	// ShootAll is the THIRD disjunct of check 2 [06 §3.2]: the session
+	// mode-flags word's bit 10. Retail's one writer of that bit is the chat
+	// command `+ShootAll`, which toggles it; the word is zero-filled at
+	// allocation, no settings loader or save restore writes bit 10, and the
+	// settings writer never persists it, so it is CLEAR in every stock session
+	// until someone types the command [06 §3.2 "The option bit of check 2"]
+	// [07 R-CAM-01 §6].
+	//
+	// Service.ShootAll is the only producer and nothing sets it yet: nanolathe
+	// has no `+shootall` typed command. The field is the seam that command
+	// would write, and it is what makes check 2 testable as the contract states
+	// it rather than as two thirds of itself.
+	ShootAll bool
 
 	// Paralyzer marks the slot's weapon as a paralyzer, which is the only thing
 	// that makes a candidate's stunned mark matter: "a paralyzer weapon rejects
@@ -419,6 +472,15 @@ func unitOpensTargetingUpgradeGate(u *units.Unit, owner uint8) bool {
 // unitToUnitAdmitsBeforeRange is shared with CanEngageSlotTarget so the gate
 // has exactly one body [06 R-WPN-05 §9].
 func (a *Acquisition) admits(c Candidate) bool {
+	// Check 3 of the picked-candidate order runs before the gate, not inside
+	// it: "one definition flag of the shooter bypasses the §3.1 physical gate
+	// ENTIRELY; otherwise that gate must accept" [06 §3.2], and the flag is
+	// `kamikaze` [04 "`kamikaze` and `kamikazedistance`"]. Entirely means every
+	// clause below, range included. Only the shared unit-level target search
+	// sets the field; the reaction offer's §3.1-only admission leaves it clear.
+	if a.KamikazeShooter {
+		return true
+	}
 	shooter := unitGateEnd{Y: wholeYWord(a.ShooterY), ModelTop: a.ShooterModelTop}
 	target := unitGateEnd{
 		Y:         wholeYWord(c.Y),
@@ -453,6 +515,28 @@ func (a *Acquisition) rejectsStunned(c Candidate) bool {
 	return a.Paralyzer && c.Stunned
 }
 
+// admitsAsTarget is check 2 of the picked-candidate order [06 §3.2]: "one
+// definition flag of the candidate, or the shooter's owning player is a
+// computer controller, or one global option bit — any of the three admits the
+// candidate".
+//
+// All three disjuncts are settled. The definition flag is `shootme`
+// ([04 R-SPEC-01 §5]); the controller term is the owning player row's control
+// byte reading exactly 2 ([05 R-SHARE-01 §1]); the option bit is the session
+// mode-flags word's bit 10, whose only writer is the `+ShootAll` chat command
+// and which is clear in every stock session
+// ([06 §3.2 "The option bit of check 2"][07 R-CAM-01 §6]).
+//
+// The stock consequence is a human-side restriction: the 91 stock definitions
+// that omit `shootme` are the non-combat buildings, so a human player's units
+// never autonomously pick the enemy's factories, power, metal, radar, storage,
+// mines or walls, while a computer player's units pick everything. Manual
+// attack orders, the Guard replacement path and the damage-reaction offer
+// install their targets directly and never reach this check [06 §3.2].
+func (a *Acquisition) admitsAsTarget(c Candidate) bool {
+	return c.ShootMe || a.ShooterControlByte == ControlByteComputer || a.ShootAll
+}
+
 // acquireFilteredTarget samples an already materialized query population. Its
 // caller owns candidates: swap-last removal deliberately mutates the slice, so
 // the caller must pass a snapshot it does not need afterwards. Service builds
@@ -473,7 +557,21 @@ func acquireFilteredTarget(candidates []Candidate, a Acquisition) (pool.Handle, 
 		candidates = candidates[:len(candidates)-1]
 		// Rejected picks still spent their sampling draw and count toward
 		// the fifty-pick limit. They cannot open secondary fallback.
-		if !a.admits(c) || a.rejectsStunned(c) {
+		//
+		// The picked-candidate order of [06 §3.2] is five checks, applied here
+		// in that order. Check 1 (alive, death latch clear) is applied where
+		// the candidate array is materialized; check 2 (`shootme`, computer
+		// controller, or the `+ShootAll` option bit) is admitsAsTarget; check 3
+		// (the §3.1 physical gate, or the shooter's `kamikaze` bypass of it) is
+		// admits; check 5 (a paralyzer rejects an already-stunned candidate) is
+		// rejectsStunned. Check 4 belongs to the sight-distance caller's
+		// `nochasecategory` mask alone.
+		//
+		// The order is load-bearing for the stream, not only for the verdict:
+		// the scoring draw below is taken ONLY by a candidate that survives all
+		// five checks, so each rejection here removes one scoring draw
+		// [06 §3.2 "Draw consequence"].
+		if !a.admitsAsTarget(c) || !a.admits(c) || a.rejectsStunned(c) {
 			continue
 		}
 		preferred := IsPreferredCategory(c.Category, a.BadMask)

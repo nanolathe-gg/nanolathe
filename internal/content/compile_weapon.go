@@ -62,22 +62,22 @@ type WeaponDef struct {
 	MinBarrelAngle     float64 // minbarrelangle *pi/180 radians default -11.25 [02 "Weapon record"]
 
 	// Remaining scalar fields [02 "Weapon record"]
-	Range             int32   // range integer default 32767 [02 "Weapon record"]
-	Coverage          int32   // coverage integer default 0 [02 "Weapon record"]
-	AreaOfEffect      int32   // areaofeffect integer default 0 [02 "Weapon record"]
+	Range             int32   // range integer default 32767, 32-bit store [02 R-KEYS-01 §5]
+	Coverage          int32   // coverage integer default 0, 32-bit store [02 R-KEYS-01 §5]
+	AreaOfEffect      int32   // areaofeffect integer default 0, wrapped to an unsigned 16-bit store [02 R-KEYS-01 §5] [06 §9.3]
 	EdgeEffectiveness float64 // edgeeffectiveness floating default 0 [02 "Weapon record"]
 	EnergyPerShot     float64 // energypershot floating default 0 [02 "Weapon record"]
 	MetalPerShot      float64 // metalpershot floating default 0 [02 "Weapon record"]
-	Burst             int32   // burst integer default 0 [02 "Weapon record"]
-	SprayAngle        int32   // sprayangle integer default 0 [02 "Weapon record"]
-	Accuracy          int32   // accuracy integer default 0 inert [02 "Weapon record"], [06 §4.1]
-	Tolerance         int32   // tolerance integer default 0 inert [02 "Weapon record"], [06 §4.1]
-	PitchTolerance    int32   // pitchtolerance integer default 0 inert [02 "Weapon record"], [06 §4.1]
-	ShakeMagnitude    int32   // shakemagnitude integer default 0 [02 "Weapon record"]
-	Firestarter       int32   // firestarter integer default 0, truncated to the loader's low byte at compile time [02 "Weapon record"] [06 R-WPN-05 §10]
-	RenderType        int32   // rendertype integer default 0 [02 "Weapon record"]
-	Color             int32   // color integer default 0 [02 "Weapon record"]
-	Color2            int32   // color2 integer default 0 [02 "Weapon record"]
+	Burst             int32   // burst integer default 0, wrapped to a signed 16-bit store [02 R-KEYS-01 §5] [06 §4.3]
+	SprayAngle        int32   // sprayangle integer default 0, wrapped to a signed 16-bit store [02 R-KEYS-01 §5] [06 R-WPN-03 §1]
+	Accuracy          int32   // accuracy integer default 0, wrapped to a signed 16-bit store [02 R-KEYS-01 §5] [06 R-WPN-03 §1]
+	Tolerance         int32   // tolerance integer default 0, wrapped to an unsigned 16-bit store [02 R-KEYS-01 §5] [06 R-WPN-03 §1]
+	PitchTolerance    int32   // pitchtolerance integer default 0, wrapped to an unsigned 16-bit store [02 R-KEYS-01 §5] [06 R-WPN-03 §1]
+	ShakeMagnitude    int32   // shakemagnitude integer default 0, 32-bit store [02 R-KEYS-01 §5]
+	Firestarter       int32   // firestarter integer default 0, truncated to the loader's low byte at compile time [02 R-KEYS-01 §5] [06 R-WPN-05 §10]
+	RenderType        int32   // rendertype integer default 0, byte store [02 R-KEYS-01 §5] [06 R-WFX-01 §1]
+	Color             int32   // color integer default 0, byte store; the render-type-4 selector reads the same byte signed [06 R-WFX-01 §1]
+	Color2            int32   // color2 integer default 0, byte store [02 R-KEYS-01 §5] [06 R-WFX-01 §1]
 
 	// Behavior flags [02 "Weapon record"] — integer accessor default 0 consumed as bool.
 	NoAutoRange  bool // noautorange
@@ -227,19 +227,39 @@ func compileWeaponSectionWithPrior(section *formats.Section, sectionName string,
 	// tabulated, value times the pi/180 constant [02 "Weapon record"] C3.
 	minBarrelAngle := section.FloatValue("minbarrelangle", -11.25) * (math.Pi / 180.0)
 
-	// Remaining scalars [02 "Weapon record"]
-	rng := section.IntValue("range", 32767)
-	coverage := section.IntValue("coverage", 0)
-	areaOfEffect := section.IntValue("areaofeffect", 0)
+	// Remaining scalars [02 "Weapon record"].
+	//
+	// Their stored widths are tabulated per key in [02 R-KEYS-01 §5] and are
+	// NOT uniform: `range`, `coverage`, `shakemagnitude` and `shakeduration`
+	// are genuinely 32-bit stores, while the rest of this group is narrower.
+	// A narrow store is wrapped here, once, so the compiled definition already
+	// holds the value retail's readers see and no consumer has to remember a
+	// mask of its own — the `firestarter` note below is the older instance of
+	// the same rule. The widening back to int32 is the extension that key's own
+	// readers apply, stated per key below.
+	rng := section.IntValue("range", 32767)                 // 32-bit store [02 R-KEYS-01 §5]
+	coverage := section.IntValue("coverage", 0)             // 32-bit store [02 R-KEYS-01 §5]
+	shakeMagnitude := section.IntValue("shakemagnitude", 0) // 32-bit store [02 R-KEYS-01 §5]
+	// areaofeffect is a 16-bit store and every blast reader zero-extends it:
+	// the authoritative radius is the unsigned word shifted right once
+	// [06 §9.3], the interceptor blast squares the same unsigned word unhalved
+	// [06 R-WPN-05 §10], and the kamikaze ring helper reads it as the unsigned
+	// 16-bit value [04 R-SPEC-01 §1].
+	areaOfEffect := int32(uint16(section.IntValue("areaofeffect", 0)))
 	edgeEffectiveness := section.FloatValue("edgeeffectiveness", 0)
 	energyPerShot := section.FloatValue("energypershot", 0)
 	metalPerShot := section.FloatValue("metalpershot", 0)
-	burst := section.IntValue("burst", 0)
-	sprayAngle := section.IntValue("sprayangle", 0)
-	accuracy := section.IntValue("accuracy", 0)
-	tolerance := section.IntValue("tolerance", 0)
-	pitchTolerance := section.IntValue("pitchtolerance", 0)
-	shakeMagnitude := section.IntValue("shakemagnitude", 0)
+	// burst is a 16-bit store, copied into the root projectile as a signed
+	// 16-bit remaining count [06 §4.3][02 R-KEYS-01 §5].
+	burst := int32(int16(section.IntValue("burst", 0)))
+	// sprayangle is a signed 16-bit store whose one reader is the burst
+	// scheduler's spray draw [06 R-WPN-03 §1][02 R-KEYS-01 §5].
+	sprayAngle := int32(int16(section.IntValue("sprayangle", 0)))
+	// accuracy is a signed 16-bit store; tolerance and pitchtolerance are
+	// 16-bit stores their one reader reads zero-extended [06 R-WPN-03 §1].
+	accuracy := int32(int16(section.IntValue("accuracy", 0)))
+	tolerance := int32(uint16(section.IntValue("tolerance", 0)))
+	pitchTolerance := int32(uint16(section.IntValue("pitchtolerance", 0)))
 	// firestarter is stored as the loader's low byte, not the full authored
 	// integer: the loader stores only the low 8 bits of the authored value
 	// ([02 "Weapon record"] lists the field as 8-bit), and the sole reader is
@@ -249,9 +269,16 @@ func compileWeaponSectionWithPrior(section *formats.Section, sectionName string,
 	// — already sees the byte retail would test, with no truncation left for
 	// callers to remember. The field keeps its int32 type to avoid churn.
 	fireStarter := int32(uint8(section.IntValue("firestarter", 0)))
-	renderType := section.IntValue("rendertype", 0)
-	color := section.IntValue("color", 0)
-	color2 := section.IntValue("color2", 0)
+	// rendertype, color and color2 are byte stores alongside firestarter
+	// [06 R-WFX-01 §1][02 R-KEYS-01 §5]. The byte matters: an authored
+	// rendertype outside 0..7 matches no draw case, and an authored color of
+	// 255 is the value the render-type-4 selector reads back as -1 and
+	// suppresses. Store the raw byte; the selector's signed reading stays at
+	// the one reader that documents it, while the palette readers take the
+	// same byte unsigned.
+	renderType := int32(uint8(section.IntValue("rendertype", 0)))
+	color := int32(uint8(section.IntValue("color", 0)))
+	color2 := int32(uint8(section.IntValue("color2", 0)))
 
 	// Behavior flags — integer accessor default 0 consumed as bool [02 "Weapon record"]
 	noAutoRange := storedFlag(section, "noautorange", false)

@@ -40,6 +40,12 @@ type RetailSaveInputs struct {
 	// UnitWriterScratch supplies the three packed status bits whose values are
 	// transient writer state rather than retained Unit fields [08 R-SAVE-02 §6].
 	UnitWriterScratch map[pool.Handle]units.RetailUnitWriterScratch
+	// UnitMirrors supplies the base-record words whose runtime owner is a
+	// service rather than the Unit, for the handles that have one. The
+	// projection applies them to a DETACHED copy of the unit; a handle with no
+	// entry writes the unit's own retained words [08 R-SAVE-02 §6].
+	// RetailBattleSaveInputs fills this from the live services.
+	UnitMirrors map[pool.Handle]RetailUnitMirrors
 
 	// Mapping is required for a live save and copied as supplied [08
 	// R-SAVE-02 §12]. RetailMappingImage below is the runtime source; a caller
@@ -180,6 +186,17 @@ func projectUnitImage(w *units.World, econ *economy.Service, movement *movement.
 		if u == nil {
 			continue
 		}
+		// The words below belong to a service, not to the Unit, and the save
+		// is the only consumer. They are applied to a DETACHED copy so that
+		// taking a save cannot change live state: the committed cell pair has
+		// a live simulation reader (the corpse anchor of the death hook) and
+		// writing it from here moved later wrecks [05 R-FEAT-01 §13].
+		record := u
+		if mirrors, ok := in.UnitMirrors[h]; ok {
+			mirrored := *u
+			mirrors.applyTo(&mirrored)
+			record = &mirrored
+		}
 		scratch, ok := in.UnitWriterScratch[h]
 		if !ok {
 			return save.UnitImage{}, fmt.Errorf("nanolathe: retail save projection: missing unit packed scratch: logical path save/Units/u%04x, providers searched [caller], expected RetailUnitWriterScratch", h)
@@ -203,7 +220,7 @@ func projectUnitImage(w *units.World, econ *economy.Service, movement *movement.
 			return save.UnitImage{}, fmt.Errorf("nanolathe: retail save projection: unit %04x Script%d: %w", h, len(image.Records), err)
 		}
 		var mover []byte
-		if u.HasMover {
+		if record.HasMover {
 			if movement == nil {
 				return save.UnitImage{}, fmt.Errorf("nanolathe: retail save projection: unit %04x mover is unavailable: logical path save/Units/u%04xmob, providers searched [Session.Movement], expected live mover", h, h)
 			}
@@ -219,7 +236,7 @@ func projectUnitImage(w *units.World, econ *economy.Service, movement *movement.
 		if err != nil {
 			return save.UnitImage{}, fmt.Errorf("nanolathe: retail save projection: unit %04x economy: %w", h, err)
 		}
-		base, err := units.RetailUnitImage(u, uint32(len(ordersImage)), resolve, func(target pool.Handle) (uint16, bool) {
+		base, err := units.RetailUnitImage(record, uint32(len(ordersImage)), resolve, func(target pool.Handle) (uint16, bool) {
 			if target == 0 || int(target) >= w.TotalRecords() {
 				return 0, false
 			}
@@ -449,67 +466,104 @@ func (s *Session) RetailBattleSaveInputs(summary save.Summary, camera save.Camer
 		}
 		in.UnitWriterScratch[h] = units.RetailUnitWriterScratch{}
 	}
-	refreshRetailUnitMirrors(s)
+	in.UnitMirrors = retailUnitMirrors(s)
 	return in, nil
 }
 
-// refreshRetailUnitMirrors brings the base-record words whose runtime owner is
-// some other service, not the Unit, up to date before the projection reads
-// them: the has-mover flag, the committed occupancy cell pair, the footprint
-// size pair and the AI group index [08 R-SAVE-02 §6].
+// RetailUnitMirrors carries the base-record words whose runtime owner is some
+// other service, not the Unit: the has-mover flag, the committed occupancy
+// cell pair, the footprint size pair and the AI group index [08 R-SAVE-02 §6].
 //
 // Retail keeps all four on the unit itself — the occupancy stamp refreshes the
-// cell pair every time the unit moves [08 R-TRIG-01 §4 "boundary coordinate"].
-// This build keeps the first three on the movement system's collision record
-// or construction's retained placement, and the fourth on the unit's live
-// group field, while the four Unit words the writer reads are written only
-// by the save RESTORE. Left alone they are all
-// zero in a live session, and the consequences are not cosmetic: no unit would
-// ever emit a `u%04xmob` box, so every restored mover would lose its velocity,
-// speed, lean and mode; every unit would save the cell (0,0), which this
-// engine's own loader then refuses to re-anchor; and every AI unit would come
-// back ungrouped. The values are copied from their actual runtime owners here.
-// None of these four words has a simulation reader — nothing but the save
-// consumes them — so the refresh cannot affect a tick. Making the stamp, the
-// mover allocation and the group writer write them directly, as retail does,
-// would remove the need for this pass entirely.
-func refreshRetailUnitMirrors(s *Session) {
-	if s == nil || s.Units == nil || s.Movement == nil {
+// cell pair every time the unit moves [04 R-COLL-01 §1] "the cached cell pair
+// is the unit's committed footprint anchor". This build keeps the first three
+// on the movement system's collision record or construction's retained
+// placement, and the fourth on the unit's live group field, while the common
+// initializer seeds the Unit's own copies at allocation and the save RESTORE
+// is the only later writer.
+//
+// **Correction.** These values used to be written back onto the LIVE unit
+// records just before a projection read them, under a comment claiming that
+// nothing but the save consumes them. That claim was false: the death hook's
+// corpse stamp reads the committed cell pair as the wreck anchor whenever the
+// movement system has no committed footprint for the handle
+// [05 R-FEAT-01 §13], so taking a save — or an autosave — moved where a later
+// corpse was stamped and reclaimed. The words are now projected into this
+// detached structure and applied to a copy of the unit, and the live record is
+// never written by the save path. Making the stamp, the mover allocation and
+// the group writer write the Unit words directly, as retail does, would remove
+// the need for this projection entirely.
+type RetailUnitMirrors struct {
+	HasMover     bool
+	AIGroup      int32
+	OccupancyX   int16
+	OccupancyZ   int16
+	FootprintX   int16
+	FootprintZ   int16
+	hasFootprint bool
+}
+
+// applyTo writes the projected words onto a detached unit copy. The occupancy
+// and footprint pairs are written only when a service owned them; otherwise
+// the copy keeps the allocation origin the common initializer retained
+// [04 R-ORD-01 §1][05 R-FEAT-01 §13].
+func (m RetailUnitMirrors) applyTo(u *units.Unit) {
+	if u == nil {
 		return
 	}
+	u.HasMover = m.HasMover
+	u.RestoredAIGroup = m.AIGroup
+	if !m.hasFootprint {
+		return
+	}
+	u.CachedOccupancyX, u.CachedOccupancyZ = m.OccupancyX, m.OccupancyZ
+	u.FootprintSizeX, u.FootprintSizeZ = m.FootprintX, m.FootprintZ
+}
+
+// retailUnitMirrors projects the service-owned base-record words for every
+// live unit. It reads the live services and writes nothing [08 R-SAVE-02 §6].
+func retailUnitMirrors(s *Session) map[pool.Handle]RetailUnitMirrors {
+	if s == nil || s.Units == nil || s.Movement == nil {
+		return nil
+	}
+	out := make(map[pool.Handle]RetailUnitMirrors)
 	for slot := 1; slot < s.Units.TotalRecords(); slot++ {
 		h := pool.Handle(slot)
 		u := s.Units.Unit(h)
 		if u == nil {
 			continue
 		}
-		// A live non-building collision record is the mover [04 R-PATH-01 §14],
-		// which is exactly what the record's has-mover word selects.
-		u.HasMover = s.Movement.HasMover(h)
-		// The AI group index at 0x9F is -1 for none [08 R-SAVE-02 §6]. Its
-		// runtime authority is Unit.Group, the 0..9 manager/control-group field
-		// the group writer stores [R-P0-04 §3]; group 0 is the ungrouped record
-		// and is what the file's -1 means.
-		u.RestoredAIGroup = -1
-		if u.Group != 0 {
-			u.RestoredAIGroup = int32(u.Group)
+		m := RetailUnitMirrors{
+			// A live non-building collision record is the mover
+			// [04 R-PATH-01 §14], which is exactly what the record's has-mover
+			// word selects.
+			HasMover: s.Movement.HasMover(h),
+			// The AI group index is -1 for none [08 R-SAVE-02 §6]. Its runtime
+			// authority is Unit.Group, the 0..9 manager/control-group field the
+			// group writer stores [R-P0-04 §3]; group 0 is the ungrouped record
+			// and is what the file's -1 means.
+			AIGroup: -1,
 		}
-		anchor, footX, footZ, ok := s.Movement.OverlapRect(slot)
-		if !ok {
+		if u.Group != 0 {
+			m.AIGroup = int32(u.Group)
+		}
+		if anchor, footX, footZ, ok := s.Movement.OverlapRect(slot); ok {
+			m.OccupancyX, m.OccupancyZ = int16(anchor.X), int16(anchor.Z)
+			m.FootprintX, m.FootprintZ = footX, footZ
+			m.hasFootprint = true
+		} else if rect, held := s.Build.PlacementForProduct(h); held {
 			// An unfinished structure can own a construction placement without
 			// a movement collision record. Its retained rectangle supplies the
 			// same committed cell pair the loader uses to rebuild its yard;
 			// resnapping its position would lose that saved ownership
 			// [08 R-SAVE-02 §6, §11][04 R-COLL-01 §4].
-			if rect, held := s.Build.PlacementForProduct(h); held {
-				u.CachedOccupancyX, u.CachedOccupancyZ = int16(rect.MinX()), int16(rect.MinZ())
-				u.FootprintSizeX, u.FootprintSizeZ = int16(rect.Width()), int16(rect.Depth())
-			}
-			continue
+			m.OccupancyX, m.OccupancyZ = int16(rect.MinX()), int16(rect.MinZ())
+			m.FootprintX, m.FootprintZ = int16(rect.Width()), int16(rect.Depth())
+			m.hasFootprint = true
 		}
-		u.CachedOccupancyX, u.CachedOccupancyZ = int16(anchor.X), int16(anchor.Z)
-		u.FootprintSizeX, u.FootprintSizeZ = footX, footZ
+		out[h] = m
 	}
+	return out
 }
 
 // retailMeteorScalars projects the live shower into the nine integer items of

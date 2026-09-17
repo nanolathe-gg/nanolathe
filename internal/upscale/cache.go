@@ -345,6 +345,15 @@ func encodeBank(bank *formats.GAF) []byte {
 	return out
 }
 
+const (
+	// The fewest bytes encodeBank can spend on one record, used to reject a
+	// count the rest of the file cannot possibly satisfy. An entry is an empty
+	// name chunk plus its four words; a frame reference is at least its
+	// one-word present flag.
+	minEncodedEntryBytes = 4 + 4*4
+	minEncodedFrameBytes = 4
+)
+
 func decodeBank(payload []byte) (*formats.GAF, bool) {
 	cursor := 0
 	number := func() (uint32, bool) {
@@ -364,11 +373,19 @@ func decodeBank(payload []byte) (*formats.GAF, bool) {
 		cursor += int(length)
 		return value, true
 	}
+	// A count read from the file is only ever used to size a slice after the
+	// remaining bytes are shown to be able to hold that many records, the way
+	// decodeTiles checks its length first. The cache is a file under the user's
+	// cache directory: a corrupt or tampered count must land on the caller's
+	// recompute path, not on a multi-gigabyte reservation.
+	fits := func(count uint32, minBytesEach int) bool {
+		return int64(count)*int64(minBytesEach) <= int64(len(payload)-cursor)
+	}
 	version, ok1 := number()
 	entryCount, ok2 := number()
 	unknown, ok3 := number()
 	entries, ok4 := number()
-	if !ok1 || !ok2 || !ok3 || !ok4 {
+	if !ok1 || !ok2 || !ok3 || !ok4 || !fits(entries, minEncodedEntryBytes) {
 		return nil, false
 	}
 	bank := &formats.GAF{Version: version, EntryCount: entryCount, Unknown: unknown,
@@ -382,7 +399,7 @@ func decodeBank(payload []byte) (*formats.GAF, bool) {
 		unknown1, ok2 := number()
 		unknown2, ok3 := number()
 		frames, ok4 := number()
-		if !ok1 || !ok2 || !ok3 || !ok4 {
+		if !ok1 || !ok2 || !ok3 || !ok4 || !fits(frames, minEncodedFrameBytes) {
 			return nil, false
 		}
 		entry := &bank.Entries[entryIndex]

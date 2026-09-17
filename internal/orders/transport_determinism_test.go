@@ -83,6 +83,7 @@ func transportFixture(t *testing.T, carrierDef, cargoDef *content.UnitDef) (*uni
 	}
 	carrier, cargo := w.Unit(hC), w.Unit(hCargo)
 	carrier.Move.Mode, cargo.Move.Mode = 1, 1
+	carrier.Move.ModeMirror, cargo.Move.ModeMirror = 1, 1
 	kinds := &[]uint8{}
 	binding := &QueueBinding{
 		Lookup: w.Unit,
@@ -285,8 +286,8 @@ func TestTransportLanding(t *testing.T) {
 	hPad, _ := w2.Create(defPad, 0, numeric.Fixed(10*65536), numeric.Fixed(0), numeric.Fixed(10*65536))
 	uVTOL := w2.Unit(hVTOL)
 	uPad := w2.Unit(hPad)
-	uVTOL.Move.Mode = 2
-	uPad.Move.Mode = 1
+	uVTOL.Move.Mode, uVTOL.Move.ModeMirror = 2, 2
+	uPad.Move.Mode, uPad.Move.ModeMirror = 1, 1
 	startX, startY, startZ := uVTOL.X, uVTOL.Y, uVTOL.Z
 	qVTOL := QueueForUnit(uVTOL)
 	qVTOL.SetBinding(&QueueBinding{Lookup: func(h pool.Handle) *units.Unit { return w2.Unit(h) }})

@@ -533,3 +533,68 @@ func TestCompositionGate(t *testing.T) {
 		t.Fatalf("Validate before tick failed: %v", err)
 	}
 }
+
+// TestBattlePoolSizingRejectsUnaddressableUnitLimit locks both ends of the
+// sizing gate in newBattleSlicedWorldWithCOBSized.
+//
+// A save's `Summary.maxunits` reaches the configured unit-limit word unclamped,
+// and "skirmish and multiplayer battle entry then copy that word into the
+// session limit word verbatim" [08 R-SESS-01 §9], so a 16-bit word far past the
+// start-up 20..500 clamp can arrive here. Retail sizes `limit × 10 + 1` records
+// from it and overruns [05 R-SHARE-01 §7]; Nanolathe cannot reproduce that,
+// because the record past the last slot index a pool.Handle addresses aliases a
+// live slot — index 65536 aliases the null handle 0 [I5]. The sizing refuses it
+// with a diagnostic, exactly as it already refuses the zero and negative cases,
+// and the restore keeps carrying the saved word verbatim.
+func TestBattlePoolSizingRejectsUnaddressableUnitLimit(t *testing.T) {
+	def := &content.UnitDef{
+		DefinitionHeader: content.DefinitionHeader{CanonicalKey: "poolsize"},
+		UnitName:         "poolsize",
+		MaxDamage:        10,
+		Limit:            -1,
+		BMCode:           1,
+	}
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{def.CanonicalKey: def}}
+	fs := vfs.New()
+	defer fs.Close()
+	var sortKeys [pool.PlayerCount]uint32
+
+	// The bound is the largest per-player limit whose highest slot index,
+	// limit x 10, a handle still addresses.
+	if want := int(^pool.Handle(0)) / 10; maxPerPlayerRecords != want {
+		t.Fatalf("maxPerPlayerRecords = %d, want %d", maxPerPlayerRecords, want)
+	}
+	if maxPerPlayerRecords*10 > int(^pool.Handle(0)) {
+		t.Fatalf("the accepted bound %d already exceeds the handle range", maxPerPlayerRecords)
+	}
+
+	for _, limit := range []int{0, -1, maxPerPlayerRecords + 1, int(^uint16(0))} {
+		w, err := newBattleSlicedWorldWithCOBSized(cat, fs, 0, sortKeys, limit)
+		if err == nil {
+			t.Fatalf("unit limit %d was accepted, want a sizing refusal", limit)
+		}
+		if w != nil {
+			t.Fatalf("unit limit %d returned a world alongside its error", limit)
+		}
+		if !strings.HasPrefix(err.Error(), "nanolathe: unit pool sizing failed: logical path <battle entry>, providers searched [session unit limit], expected ") {
+			t.Fatalf("unit limit %d diagnostic lost its provenance shape: %v", limit, err)
+		}
+	}
+
+	// The largest addressable limit is still accepted, and every slot it sizes
+	// round-trips through the handle type.
+	w, err := newBattleSlicedWorldWithCOBSized(cat, fs, 0, sortKeys, maxPerPlayerRecords)
+	if err != nil {
+		t.Fatalf("the largest addressable unit limit was refused: %v", err)
+	}
+	if w == nil {
+		t.Fatal("the largest addressable unit limit produced no world")
+	}
+	start, end, ok := w.SliceForPlayer(pool.PlayerCount - 1)
+	if !ok {
+		t.Fatal("the last player slice is missing")
+	}
+	if end != maxPerPlayerRecords*10 || int(pool.Handle(end)) != end || end <= start {
+		t.Fatalf("last slice %d..%d does not round-trip through the handle type", start, end)
+	}
+}

@@ -237,7 +237,14 @@ func (h *retailBattleHUD) sameButton(b *battleSession, x0, y0, x1, y1 int32) boo
 	// press/release pair is identified against it, not against the command
 	// page underneath [07 §3][07 R-WGT-01 §1].
 	if unitInfoOpen() {
-		return unitInfoCovers(x0, y0) && unitInfoCovers(x1, y1)
+		if !unitInfoCovers(x0, y0) || !unitInfoCovers(x1, y1) {
+			return false
+		}
+		// Inside the window the capture still belongs to one gadget: `DONE`
+		// fires only when the release lands in the gadget the press was
+		// captured by [07 R-WGT-01 §1 "Capture"]. A drag between `DONE` and the
+		// rest of the window is therefore not one click on either.
+		return h.unitInfoDoneCaptures(x0, y0) == h.unitInfoDoneCaptures(x1, y1)
 	}
 	pressed := h.buttonAt(b, x0, y0)
 	return pressed >= 0 && pressed == h.buttonAt(b, x1, y1)

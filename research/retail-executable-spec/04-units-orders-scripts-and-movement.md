@@ -3551,6 +3551,16 @@ place; phase 1 requires the scanned target's committed mover mode to be
 **grounded** (`1`) and my own fire stance nonzero, and then spawns
 `SelfDestruct` with p1 = 1 (immediate) at the head and completes.
 
+The two state-word bits this compares are **Established** as the movement-mode
+mirror: [R-STANCE-01 §3] phrases the same test as "a target whose state-word
+low two bits equal `1`", [R-ORD-01 §12] names those bits ("The movement-mode
+mirror is bits 0-1"), and [R-MOV-01 §8] gives the encoding (none `0`, grounded
+`1`, airborne `2`). The mirror is the committed mode the position commit
+publishes, not the mover-mode setter's request byte, which a restored save can
+carry apart from it by design ([R-AIR-01 §3], [R-COLL-01 §1],
+[08 R-SAVE-02 §6, §8]). This closes the former Unknown that asked what those
+two bits mean.
+
 **`Follow_Ground`** is [R-UNIT-06 §1] (with the standing-fire gate of
 [R-STANCE-01 §3]); the trace here agrees with every gate, the follow-radius
 arithmetic (both terms are the footprint-size words), the one `RNG(65536)`
@@ -9637,8 +9647,18 @@ then for `z = z1 + 1 … z2 − 1` (inclusive) appends `(x1, z)` and then
 high half. There is no de-duplication: a rectangle with `z1 == z2` lists
 every top-row cell twice, and one with `x1 == x2` lists every column cell
 twice. The vector grows by the doubling rule of the shared vector helpers.
-The border is therefore exactly [R-PATH-01 §9]'s; the order matters only to
-the search's goal-cell marking, which is order-insensitive.
+The border is therefore exactly [R-PATH-01 §9]'s.
+
+**Correction.** An earlier revision of this paragraph ended "the order matters
+only to the search's goal-cell marking, which is order-insensitive". The first
+half of that is wrong: marking is indeed order-insensitive, but the marking is
+not the only consumer. [R-PATH-01 §4] step 5 compares each enumerated cell's
+squared distance from the start "keeping the first on a tie", and the winner is
+the pre-search ray's target; [R-PATH-01 §13] names the enumeration order as
+"the tie among equal keys". The order therefore decides the ray target, the
+acceptance threshold, and with them the published route and the boundary
+verdict whenever two enumerated cells tie. A reimplementation must emit this
+sequence, not merely this set.
 
 **Controller teardown and the overlay slot — Established.** The ground route
 follower's deleting destructor first hands itself to the path scheduler's
@@ -14219,9 +14239,6 @@ and the decider that would close it.
   · §3.3, doc 07 · static trace. The queue pump itself never does it.
 - The TDF key behind the feature definition byte that bounds the reclaim and
   resurrect spray height draw · [R-ORD-01 §5] · the feature parser's key list.
-- Meaning of the unit state word's low two bits, which `Standby_Mine` compares
-  against `1` on the scanned target before it self-destructs · §2.4,
-  [R-STANCE-01 §3] · static trace of the writers of those two bits.
 - Which renderer path selects frames 4 and 5 of the stance buttons' GAF
   entries; the panel writes only values 0–3 into the gadget status word and
   takes a separate gray path for 4 · [R-STANCE-01 §1], doc 07 §4 · static

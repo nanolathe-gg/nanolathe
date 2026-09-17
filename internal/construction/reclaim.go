@@ -75,14 +75,17 @@ func UnitReclaimPulse(builder, target *units.Unit) int32 {
 	// The kill divisor is a signed integer division by five over an unsigned
 	// 16-bit read of the kill count [05 R-WORK-01 §4].
 	killsFactor := (int32(uint16(builder.Kills)) + 5) / 5
-	maxDamage := target.Def.MaxDamage
-	if maxDamage <= 0 {
-		maxDamage = target.MaxHealth
-	}
 	// The 32-bit signed product. Go's int32 multiply wraps, which IS the retail
 	// multiply; the re-read as uint32 is the zero-high-word widening.
+	//
+	// The third operand is `(int32)target.definition.maxdamage` — the
+	// DEFINITION word and nothing else [05 R-WORK-01 §4]. A substitution of the
+	// target's live maximum health for a non-positive `maxdamage` used to sit
+	// here; it was ours, not §4's, and §4 needs no such arm: a zero definition
+	// word zeroes the product, and the pulse's own `(v <= 1) ? 1 : v` clamp
+	// below is the established answer for it.
 	n := int32(uint16(builder.Def.WorkerTime)) * killsFactor
-	n *= maxDamage
+	n *= target.Def.MaxDamage
 	n *= reclaimPulseFactor
 	v := float64(uint32(n)) / float64(metalCost*300)
 	pulse := int32(v) // [01 §8] truncation toward zero

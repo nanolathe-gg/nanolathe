@@ -622,12 +622,23 @@ func briefingLayLine(raw string, measure func(string) int, open *bool, budget in
 					// The run's text is the bytes up to the closing `&`, at
 					// most 127; its pen is the label's own x plus the width of
 					// the label text laid so far [07 R-FE-02 §7].
-					end := i + 2
-					for end < len(raw) && raw[end] != '&' && end-(i+2) < 127 {
+					//
+					// The opening marker is two bytes — `&` and the colour
+					// letter — so a line whose final byte is an unmatched `&`
+					// carries neither a letter nor any run text. The start is
+					// clamped to the end of the line for that case: the run is
+					// registered empty, and the marker state still advances
+					// past both bytes, because the pager consumes the marker
+					// whether or not a closing one follows [07 R-FE-02 §7].
+					// Stock briefs are balanced; third-party or badly wrapped
+					// text is the only source of an unterminated run.
+					start := min(i+2, len(raw))
+					end := start
+					for end < len(raw) && raw[end] != '&' && end-start < 127 {
 						end++
 					}
 					runs = append(runs, briefingTextRun{
-						Text:  raw[i+2 : end],
+						Text:  raw[start:end],
 						X:     measure(string(out)),
 						Entry: briefingRunColorEntry(letter),
 					})

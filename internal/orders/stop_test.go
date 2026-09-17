@@ -11,6 +11,12 @@ import (
 
 // stopFixture is one unit with a bound queue carrying a seeded simulation
 // stream, so any handler that draws does so from a stream the test owns [I4].
+//
+// `mode` is written to BOTH mover-mode words: the request byte and the
+// committed mirror the position commit publishes [04 R-AIR-01 §3]. A fixture
+// that set only the request byte would have passed whichever word the row read.
+// TestStopReadsTheCommittedMoverModeNotTheRequest below is the row that pulls
+// them apart.
 func stopFixture(canFly bool, mode uint8) (*Queue, *units.Unit) {
 	rng.SeedGlobal(1, 0)
 	u := &units.Unit{
@@ -20,7 +26,7 @@ func stopFixture(canFly bool, mode uint8) (*Queue, *units.Unit) {
 		Y:      numeric.Fixed(40 << 16),
 		Z:      numeric.Fixed(90 << 16),
 	}
-	u.Move.Mode = mode
+	u.Move.Mode, u.Move.ModeMirror = mode, mode
 	q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 	BindQueue(u, q)
 	return q, u
@@ -136,5 +142,51 @@ func TestPushHeadInheritsTheDisplacedHeadsAutoFlag(t *testing.T) {
 	}
 	if spawned.DynamicGate != 0 {
 		t.Fatalf("spawned gate = %#x, want the caller's value: a fresh record awaits nothing [04 §3.2]", spawned.DynamicGate)
+	}
+}
+
+// TestStopReadsTheCommittedMoverModeNotTheRequest pins the word the `Stop` row
+// names: "if the unit's **committed** mover mode is airborne (`2`,
+// [R-MOV-01 §8]) and its definition has `canfly`, spawn `VTOL_LandIfCan` ... at
+// the head" [04 §3.4].
+//
+// The committed mode is the flags-word mirror the position commit publishes,
+// not `Move.Mode`, which is the request byte the mover-mode setter writes
+// [04 R-AIR-01 §3][04 R-COLL-01 §1]. The setter writes the request the instant
+// it is called and the mirror only at the ordinary commit, so an aircraft that
+// has just asked to take off, or one whose save was restored with the two words
+// apart [08 R-SAVE-02 §6, §8], reads one value in each. Both rows here would
+// have passed against either word before this fixture pulled them apart.
+func TestStopReadsTheCommittedMoverModeNotTheRequest(t *testing.T) {
+	// A fixed slice, not a map: the rows run in one order (I1).
+	for _, tc := range []struct {
+		name    string
+		request uint8
+		mirror  uint8
+		spawn   bool
+	}{
+		{"takeoff requested, not yet committed", 2, 1, false},
+		{"landing requested, still committed airborne", 1, 2, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q, u := stopFixture(true, tc.mirror)
+			u.Move.Mode = tc.request
+			q.Push(Lookup("Stop"), Node{Owner: u.Handle})
+			clearGates(q)
+
+			q.Pump(u, 40)
+
+			if tc.spawn {
+				if q.LenPrimary() != 1 || DescriptorFor(q.Primary()[0].ID).Name != "VTOL_LandIfCan" {
+					t.Fatalf("committed mode %d with request %d spawned %d records; the row reads the committed mirror [04 §3.4]",
+						tc.mirror, tc.request, q.LenPrimary())
+				}
+				return
+			}
+			if q.LenPrimary() != 0 {
+				t.Fatalf("committed mode %d with request %d spawned %d records; the row reads the committed mirror, not the request byte [04 §3.4]",
+					tc.mirror, tc.request, q.LenPrimary())
+			}
+		})
 	}
 }

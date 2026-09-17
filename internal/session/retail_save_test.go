@@ -322,3 +322,100 @@ func TestRetailBattleSummaryRecordsTheConfiguredUnitLimit(t *testing.T) {
 		})
 	}
 }
+
+// liveUnitMirrorWords is the census of the four base-record words whose
+// runtime owner is a service rather than the Unit. The save projects them; the
+// live records must come back from a save exactly as they went in, because one
+// of them — the committed cell pair — is read by the death hook as the corpse
+// anchor whenever the movement system has no committed footprint for the
+// handle [05 R-FEAT-01 §13][04 R-ORD-01 §1].
+func liveUnitMirrorWords(s *Session) map[pool.Handle][6]int32 {
+	out := make(map[pool.Handle][6]int32)
+	for slot := 1; slot < s.Units.TotalRecords(); slot++ {
+		h := pool.Handle(slot)
+		u := s.Units.Unit(h)
+		if u == nil {
+			continue
+		}
+		mover := int32(0)
+		if u.HasMover {
+			mover = 1
+		}
+		out[h] = [6]int32{mover, u.RestoredAIGroup, int32(u.CachedOccupancyX), int32(u.CachedOccupancyZ), int32(u.FootprintSizeX), int32(u.FootprintSizeZ)}
+	}
+	return out
+}
+
+// TestRetailSaveLeavesLiveUnitRecordsUntouched locks the save projection out of
+// live state. The projection fills the service-owned base-record words on a
+// DETACHED copy of each unit [08 R-SAVE-02 §6]; writing them onto the live
+// record — which is what this build used to do — changed the corpse anchor the
+// death hook reads for every unit whose committed footprint is missing
+// [05 R-FEAT-01 §13], so taking a save moved a later wreck.
+func TestRetailSaveLeavesLiveUnitRecordsUntouched(t *testing.T) {
+	s := newLoopTestSession(t, 4)
+	// The projection requires a per-unit account and a bound script for every
+	// live unit; this fixture composes neither.
+	for slot := 1; slot < s.Units.TotalRecords(); slot++ {
+		h := pool.Handle(slot)
+		u := s.Units.Unit(h)
+		if u == nil {
+			continue
+		}
+		s.Econ.UnitBuckets(h)
+		if u.GetScript() == nil {
+			u.SetScript(cob.NewVM(&cob.Program{}))
+		}
+	}
+	before := liveUnitMirrorWords(s)
+	if len(before) == 0 {
+		t.Fatal("fixture has no live units")
+	}
+	in, err := s.RetailBattleSaveInputs(RetailBattleSummary(s, "mirrors", "0", SkirmishDefaultUnitLimit), save.Camera{})
+	if err != nil {
+		t.Fatalf("battle save inputs: %v", err)
+	}
+	p, err := ProjectRetailSession(s, in)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	if _, err := p.Bytes(); err != nil {
+		t.Fatalf("bank bytes: %v", err)
+	}
+	after := liveUnitMirrorWords(s)
+	for h, want := range before {
+		got, ok := after[h]
+		if !ok {
+			t.Fatalf("unit %04x disappeared across the save", h)
+		}
+		if got != want {
+			t.Fatalf("unit %04x service-owned words changed across the save: before %v after %v — the save must not write live records [08 R-SAVE-02 §6]", h, want, got)
+		}
+	}
+
+	// The projection must still CARRY those words, or the assertion above
+	// would pass for a save that simply dropped them. At least one fixture
+	// unit owns a mover, and the live record does not say so.
+	var carried bool
+	for h, m := range in.UnitMirrors {
+		if !m.HasMover {
+			continue
+		}
+		carried = true
+		if u := s.Units.Unit(h); u != nil && u.HasMover {
+			t.Fatalf("unit %04x has-mover was written onto the live record", h)
+		}
+	}
+	if !carried {
+		t.Fatal("no projected mirror carried a mover; the fixture cannot discriminate")
+	}
+	var moverBoxes int
+	for _, rec := range p.Units.Records {
+		if binary.LittleEndian.Uint32(rec.Data[0x27:]) != 0 {
+			moverBoxes++
+		}
+	}
+	if moverBoxes == 0 {
+		t.Fatal("no saved base record carries the has-mover word; the projection lost the service-owned words [08 R-SAVE-02 §6]")
+	}
+}

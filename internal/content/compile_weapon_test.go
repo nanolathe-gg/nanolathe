@@ -650,3 +650,60 @@ func TestWeaponLookupRetainsSlotOrderWithoutSharingMutableSlice(t *testing.T) {
 		t.Fatal("cloned index references original catalog")
 	}
 }
+
+// TestWeaponIntegerStoreWidths locks the per-key stored widths of the weapon
+// record's remaining integer scalars [02 R-KEYS-01 §5]. The widths are not
+// uniform, and the point of the test is that they stay non-uniform: `range`,
+// `coverage` and `shakemagnitude` are 32-bit stores and must NOT be wrapped,
+// while `areaofeffect`, `burst`, `sprayangle`, `accuracy`, `tolerance` and
+// `pitchtolerance` are 16-bit and `rendertype`, `color` and `color2` are
+// bytes. Each narrow field also carries the extension its readers apply —
+// unsigned for `areaofeffect` [06 §9.3], `tolerance` and `pitchtolerance`
+// [06 R-WPN-03 §1], signed for `burst` [06 §4.3], `sprayangle` and `accuracy`
+// [06 R-WPN-03 §1], the raw byte for the three presentation keys
+// [06 R-WFX-01 §1] — so an authored value outside the width is the case that
+// tells a sign-extending store from a zero-extending one.
+func TestWeaponIntegerStoreWidths(t *testing.T) {
+	body := `[WIDTHTEST]
+{
+	ID=1;
+	range=100000;
+	coverage=100000;
+	shakemagnitude=100000;
+	areaofeffect=70000;
+	burst=40000;
+	sprayangle=40000;
+	accuracy=40000;
+	tolerance=40000;
+	pitchtolerance=40000;
+	rendertype=260;
+	color=255;
+	color2=511;
+}
+`
+	doc := mustParseTDF(t, body)
+	wd := compileWeaponSection(doc.Root.Sections()[0], "WIDTHTEST", Provenance{})
+	cases := []struct {
+		key  string
+		got  int32
+		want int32
+	}{
+		{"range", wd.Range, 100000},                   // 32-bit store, unwrapped
+		{"coverage", wd.Coverage, 100000},             // 32-bit store, unwrapped
+		{"shakemagnitude", wd.ShakeMagnitude, 100000}, // 32-bit store, unwrapped
+		{"areaofeffect", wd.AreaOfEffect, 4464},       // 70000 & 0xFFFF, zero-extended
+		{"burst", wd.Burst, -25536},                   // 40000 wrapped signed 16-bit
+		{"sprayangle", wd.SprayAngle, -25536},         // 40000 wrapped signed 16-bit
+		{"accuracy", wd.Accuracy, -25536},             // 40000 wrapped signed 16-bit
+		{"tolerance", wd.Tolerance, 40000},            // 16-bit, zero-extended
+		{"pitchtolerance", wd.PitchTolerance, 40000},  // 16-bit, zero-extended
+		{"rendertype", wd.RenderType, 4},              // 260 & 0xFF
+		{"color", wd.Color, 255},                      // the byte the selector reads back as -1
+		{"color2", wd.Color2, 255},                    // 511 & 0xFF
+	}
+	for _, tc := range cases {
+		if tc.got != tc.want {
+			t.Errorf("%s compiled to %d, want %d", tc.key, tc.got, tc.want)
+		}
+	}
+}

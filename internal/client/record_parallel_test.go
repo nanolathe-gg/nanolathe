@@ -231,15 +231,3 @@ func TestParallelUnitRecordIsWorkerCountIndependent(t *testing.T) {
 		t.Fatalf("sequential digest %016x, two-stage digest %016x", got, one[0])
 	}
 }
-
-// close stops the workers. Nothing on the presentation path tears a record pool
-// down — a client owns one for its lifetime and the process outlives it — so
-// this is the tests' teardown, keeping repeated pool fixtures from leaving
-// worker goroutines behind.
-func (p *recordPool) close() {
-	if p == nil {
-		return
-	}
-	close(p.quit)
-	p.workers, p.wake = nil, nil
-}

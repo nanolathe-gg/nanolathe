@@ -140,6 +140,11 @@ func (g *gameShell) ensureFrontendAudio() *audio.Service {
 		g.audioOwner.Music.Configure(audio.PlayMode(g.audioPrefs.CDMode), 4)
 		g.audioOwner.Music.SetVolume(g.audioPrefs.MusicVol)
 		g.audioOwner.Music.SetEnabled(g.audioPrefs.MusicMode != 0)
+		// The voice queue's gates are persisted preferences too. Without this
+		// the service's construction defaults stood in for the `SPEECH` bit
+		// and both acknowledgement levels for the whole session
+		// [03 §8.3][03 R-AUD-01 §2].
+		g.applyRetailVoiceGates()
 	}
 	if !g.frontendAliasesBound && g.audioOwner.Registry != nil {
 		// Interface cue names are mode-0 alias registrations, so they resolve

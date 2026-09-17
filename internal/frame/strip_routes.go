@@ -71,14 +71,27 @@ func RoutedEvent(e Event) Event {
 	return e
 }
 
-// NanolatheMode is which nanolathe beam a builder is drawing: build, reclaim
-// or capture [03 R-STRIP-01].
+// NanolatheMode is which nanolathe beam a builder is drawing [03 R-STRIP-01].
+// The producer census of [05 R-WORK-01 §8] separates feature reclaim from the
+// rest: it is the only producer that submits two segments on one accepted work
+// visit, so it is its own mode rather than a label borrowed from build.
 type NanolatheMode uint8
 
 const (
-	NanolatheBuild   NanolatheMode = 1
+	// NanolatheBuild covers every one-segment builder→target producer: mobile
+	// and building/factory build, build assist, the VTOL twins, all four
+	// repair executors and the resurrection wait [05 R-WORK-01 §8].
+	NanolatheBuild NanolatheMode = 1
+	// NanolatheReclaim is UNIT reclaim — one segment, target box → builder
+	// nano piece [05 R-WORK-01 §8].
 	NanolatheReclaim NanolatheMode = 2
+	// NanolatheCapture is capture — one segment, target box → builder nano
+	// piece [05 R-WORK-01 §8].
 	NanolatheCapture NanolatheMode = 3
+	// NanolatheFeatureReclaim is feature reclaim, the engine's only
+	// two-segment producer, and only while the order node's countdown exceeds
+	// its threshold [05 R-WORK-01 §8][05 R-WORK-01 §5].
+	NanolatheFeatureReclaim NanolatheMode = 4
 )
 
 // NanolatheSegment is one drawn beam segment: its index in the beam, its two
@@ -90,17 +103,24 @@ type NanolatheSegment struct {
 	Color               uint8
 }
 
-// NanolatheSegmentCount is how many segments a mode draws on a tick: build
-// draws two every tick, reclaim and capture draw one on even ticks and none on
-// odd ones.
-func NanolatheSegmentCount(mode NanolatheMode, tick uint32) int {
+// NanolatheSegmentCount is how many segments a mode submits on one ACCEPTED
+// work visit: every ordinary producer submits one, and feature reclaim — the
+// only two-segment producer in the engine — submits two [05 R-WORK-01 §8].
+//
+// The count is not a function of the tick. What varies per producer is the
+// retry interval after a refused visit (one tick for the build and repair
+// family, two for unit reclaim, capture and feature reclaim), and that belongs
+// to the executor that decides whether a visit happens at all, never to the
+// emission the visit produces. This helper used to fold a tick parity in —
+// "build draws two per tick, reclaim and capture one on even ticks" — which
+// contradicted the census in both directions and forced its one production
+// caller to label feature reclaim as build to obtain the two.
+func NanolatheSegmentCount(mode NanolatheMode) int {
 	switch mode {
-	case NanolatheBuild:
+	case NanolatheFeatureReclaim:
 		return 2
-	case NanolatheReclaim, NanolatheCapture:
-		if tick&1 == 0 {
-			return 1
-		}
+	case NanolatheBuild, NanolatheReclaim, NanolatheCapture:
+		return 1
 	}
 	return 0
 }
@@ -108,8 +128,8 @@ func NanolatheSegmentCount(mode NanolatheMode, tick uint32) int {
 // BuildNanolatheSegments preserves producer endpoints. Exact footprint
 // offsets are not established by the retail contract, so no offsets are
 // invented here [03 §5.5][I9].
-func BuildNanolatheSegments(e Event, tick uint32) []NanolatheSegment {
-	n := NanolatheSegmentCount(NanolatheMode(e.Mode), tick)
+func BuildNanolatheSegments(e Event) []NanolatheSegment {
+	n := NanolatheSegmentCount(NanolatheMode(e.Mode))
 	if n == 0 {
 		return nil
 	}
@@ -131,7 +151,7 @@ func (c *EventBuffer) EmitNanolatheSegments(e Event, tick uint32) int {
 	if c == nil {
 		return 0
 	}
-	segments := BuildNanolatheSegments(e, tick)
+	segments := BuildNanolatheSegments(e)
 	count := 0
 	for _, segment := range segments {
 		segmentEvent := e

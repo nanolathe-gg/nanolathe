@@ -421,8 +421,15 @@ func (s *System) legVTOLUnload(u *units.Unit, n *orders.Node, satisfied uint32, 
 		// The lowering marker copies the goal triple again — a second
 		// re-derivation from the record, not a stored snapped point
 		// [04 R-AIR-01 §10] item 1.
+		//
+		// The operand is ModelTopFixed's high word, as at the sibling
+		// VTOL_Landing phase-5 site that takes "the same word, on the same
+		// definition" [04 R-AIR-01 §9]. UnitDef.ModelTop is that word masked to
+		// its low byte for the LOS height, so it is NOT interchangeable here: a
+		// model 256 world units or taller would lower the carrier to
+		// terrain + (height & 0xFF).
 		m := s.newPointMarker(u, Vec3{X: dropX, Y: n.GoalY, Z: dropZ})
-		m.setAltitudeOffset(int16(cargo.Def.ModelTop))
+		m.setAltitudeOffset(int16(cargo.Def.ModelTopFixed >> 16))
 		s.installAirGoal(u, n, m)
 		n.DynamicGate = transportUnloadApproachGate
 		return 1

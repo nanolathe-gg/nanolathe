@@ -78,9 +78,17 @@ func (w *World) VisitActiveSlots(fn func(SlotVisit)) {
 			if u == nil || !u.Alive {
 				continue
 			}
-			if int(u.Owner) != player {
-				continue
-			}
+			// No runtime-owner test. "Within the slot every unit record of the
+			// player's slice is visited in ascending pool order; a record whose
+			// definition index is zero is skipped" — the sweep visits the
+			// physical slot, and the per-unit controller test that follows is
+			// "re-evaluated per unit from the owner record, not from the slot
+			// being swept" [04 R-MOV-03 §1 "the player gate"]. A record whose
+			// owner moved without moving slices therefore stays visited; an
+			// owner-equality filter here dropped it in both directions — never
+			// stepped and never death-finalised — because no slice holds it
+			// under its new owner either. Callers that care about the runtime
+			// owner test it themselves, as ForEachPlayerSliceLive documents.
 			fn(SlotVisit{Handle: pool.Handle(slot), Unit: u, Slot: uint16(slot)})
 		}
 	}

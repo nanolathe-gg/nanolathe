@@ -349,6 +349,24 @@ func (l *ClassLayer) NoteCommit(h pool.Handle, tick uint32) {
 	l.commits[h] = tick
 }
 
+// ForgetCommit drops a unit's mirrored occupancy-commit tick. Retail holds the
+// clock in one word on the mover structure [04 R-PATH-01 §14], which
+// finalisation frees with the mover; the next unit allocated into the slot gets
+// a zero-initialized word, which is what an absent entry means here (the
+// revision pass reads "absent is the unit record's zero-initialized tick").
+// Retaining the entry would hand a reused pool slot the previous occupant's
+// clock, exactly the inheritance finalisation's unlink prevents for the sector
+// filing [04 R-COLL-01 §11 item 1]; a unit whose creation stamps normally
+// overwrites it at once, but a creation path that stamps no cell does not, and
+// that unit would then read FRESH to the occupant-age gate on someone else's
+// clock. It also keeps the map from growing for the length of a battle.
+func (l *ClassLayer) ForgetCommit(h pool.Handle) {
+	if l == nil || h == 0 {
+		return
+	}
+	delete(l.commits, h)
+}
+
 // revisionWatermark is the request revision pass's corrected watermark
 // arithmetic: max(tick, 31) − 30 [04 R-PATH-01 §2]. The first revision
 // therefore arms the class layer at 1, so a frozen creation stamp at tick zero

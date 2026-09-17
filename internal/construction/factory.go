@@ -308,10 +308,12 @@ func (s *Service) registerGetBuilt(q *orders.Queue) {
 	q.SetOwnedHandler(s.getBuiltRow, s.boundGetBuilt)
 }
 
+// placementRecord is the occupancy rectangle and definition retained for a
+// stamped product. It holds no yard state: the clear pass reads none
+// [04 R-COLL-01 §4 "clear, in order"].
 type placementRecord struct {
-	rect     world.FootprintRect
-	def      *content.UnitDef
-	yardOpen bool
+	rect world.FootprintRect
+	def  *content.UnitDef
 }
 
 // queueForUnit is the construction-owned queue admission point. Factory

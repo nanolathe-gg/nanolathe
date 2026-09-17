@@ -398,3 +398,58 @@ func TestVisitActiveSlotsFreedSlotReusable(t *testing.T) {
 		t.Fatalf("h1 should appear exactly once per traversal, count %d", countH1)
 	}
 }
+
+// TestVisitActiveSlotsVisitsCapturedRecordInPlace locks the sweep's player gate
+// against [04 R-MOV-03 §1 "the player gate"]: "within the slot every unit
+// record of the player's slice is visited in ascending pool order; a record
+// whose definition index is zero is skipped". The gate tests the player row,
+// never the record's runtime owner — the controller test that follows is
+// "re-evaluated per unit from the owner record, not from the slot being swept",
+// which is only meaningful because the record is visited either way.
+//
+// A runtime-owner filter here drops a record whose owner moved without moving
+// pool slices in BOTH directions: the slice that holds it is swept under the
+// old player and rejects it, and the new owner's slice never holds it. Such a
+// unit is never stepped and its slot-end death finalization never runs.
+func TestVisitActiveSlotsVisitsCapturedRecordInPlace(t *testing.T) {
+	world := newFixtureWorld(5, nil)
+	def := &content.UnitDef{UnitName: "captured", MaxDamage: 100, Limit: -1}
+	h, err := world.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	u := world.Unit(h)
+	if u == nil {
+		t.Fatal("created unit has no record")
+	}
+	// An in-place ownership write, the shape Session.CaptureUnit takes: the
+	// record stays in player 0's slice and reports player 3 as its owner.
+	u.Owner = 3
+
+	visits := 0
+	world.VisitActiveSlots(func(v SlotVisit) {
+		if v.Handle == h {
+			visits++
+			if v.Unit == nil || v.Unit.Owner != 3 {
+				t.Fatalf("visited record owner=%v, want the captured owner 3", v.Unit)
+			}
+		}
+	})
+	if visits != 1 {
+		t.Fatalf("captured record visited %d times, want exactly one [04 R-MOV-03 §1]", visits)
+	}
+
+	// The slot-end death finalization the sweep owns must still reach it.
+	u.Dying = true
+	if !world.NeedsDeathFinalization(h) {
+		t.Fatal("captured record does not report needing death finalization")
+	}
+	world.VisitActiveSlots(func(v SlotVisit) {
+		if v.Handle == h && world.NeedsDeathFinalization(v.Handle) {
+			world.FinalizeDeath(v.Handle, 0)
+		}
+	})
+	if world.Unit(h) != nil && world.Unit(h).Alive {
+		t.Fatal("captured record survived its slot-end death finalization")
+	}
+}

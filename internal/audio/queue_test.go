@@ -376,7 +376,7 @@ func TestAudioOneVoicePer30(t *testing.T) {
 func TestQueueSignedGaugeGateAndBitSix(t *testing.T) {
 	q := NewQueue()
 	q.Register(1, categoryFixture(), "Unit", true)
-	q.ConfigureThresholdGauges(10, 10)
+	q.Configure(10, 10, true, true)
 	q.ConfigureBackendGates(1, 0x40, true) // audible bit set, master bits absent
 	var plays int
 	q.OnPlay(func(string, Slot, pool.Handle) { plays++ })
@@ -598,5 +598,59 @@ func TestCrowdGate(t *testing.T) {
 	q.Drain(2035)
 	if len(plays) != 1 || plays[0] != "cant" {
 		t.Fatalf("crowd cant %v", plays)
+	}
+}
+
+// The `SPEECH` gadget writes bit 6 of the sound-flags byte as `gauge != 0`, and
+// bit 6 is read by the voice resolver's audible gate only: with it clear no
+// unit voice line plays, and captions are unaffected [03 R-AUD-01 §2].
+//
+// The same gadget writes the acknowledgement voice level as `stage × 5`, so
+// `Off` also drops the level to 0 and the crowding gate `10 − level < priority`
+// admits nothing. Both halves are locked here because the shell composes the
+// flags word and the level from the same preference block.
+func TestQueueSpeechPreferenceGatesVoiceNotCaptions(t *testing.T) {
+	newQueue := func() (*Queue, *int, *int) {
+		q := NewQueue()
+		q.Register(1, categoryFixture(), "Peewee", true)
+		plays, captions := 0, 0
+		q.OnPlay(func(string, Slot, pool.Handle) { plays++ })
+		q.OnCaption(func(string, Slot, pool.Handle) { captions++ })
+		return q, &plays, &captions
+	}
+
+	// `Full`: speechfx set, voice level 10, caption level 5.
+	q, plays, captions := newQueue()
+	q.Configure(10, 5, true, true)
+	q.ConfigureBackendGates(1, 0x01|0x40, true) // Sound Mode 1, speechfx set
+	q.InsertAt(100, 2, 1, "")
+	q.Drain(100)
+	if *plays != 1 || *captions != 1 {
+		t.Fatalf("SPEECH Full: plays=%d captions=%d, want 1 and 1", *plays, *captions)
+	}
+
+	// `Off`: speechfx clear and voice level 0. The caption still posts, because
+	// the caption gate reads `unitchattext`, which this gauge does not write.
+	q, plays, captions = newQueue()
+	q.Configure(0, 5, true, true)
+	q.ConfigureBackendGates(1, 0x01, true) // Sound Mode 1, speechfx clear
+	q.InsertAt(100, 2, 1, "")
+	q.Drain(100)
+	if *plays != 0 {
+		t.Fatalf("SPEECH Off still played %d voice lines", *plays)
+	}
+	if *captions != 1 {
+		t.Fatalf("SPEECH Off suppressed the caption: captions=%d", *captions)
+	}
+
+	// Bit 6 alone suppresses the voice line, whatever the level: the two halves
+	// are separate gates on the same arm.
+	q, plays, captions = newQueue()
+	q.Configure(10, 5, true, true)
+	q.ConfigureBackendGates(1, 0x01, true) // Sound Mode 1, speechfx clear
+	q.InsertAt(100, 2, 1, "")
+	q.Drain(100)
+	if *plays != 0 || *captions != 1 {
+		t.Fatalf("bit 6 clear: plays=%d captions=%d, want 0 and 1", *plays, *captions)
 	}
 }

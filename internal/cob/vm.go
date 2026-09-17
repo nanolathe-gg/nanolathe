@@ -91,6 +91,7 @@ type VM struct {
 	sfxVisible    func(piece int, sfxType int32) bool // visibility gate for emit-sfx [GAP T15] C19; nil fails closed
 	explosionSink ExplosionSink                       // immediate session arena admission [04 R-COB-04 §1]; nil is pending U13
 	diagnostics   []string                            // [P2-03] fallback diagnostics (divide, overflow, corrupt) not fatal
+	diagsDropped  uint32                              // fallback diagnostics discarded once the buffer is full
 
 	// The two transport query opcodes read the owning unit's cargo linkage
 	// [04 §4.4][04 R-COB-03 §5]. They are not engine ports and carry no port
@@ -209,7 +210,7 @@ type PortBinding struct {
 func NewVM(prog *Program) *VM {
 	v := &VM{}
 	if err := v.SetProgramChecked(prog); err != nil {
-		v.diagnostics = append(v.diagnostics, err.Error())
+		v.recordDiagnostic(err.Error())
 	}
 	return v
 }
@@ -228,7 +229,7 @@ func NewVM(prog *Program) *VM {
 // unobservable except through the physical window words.
 func (v *VM) SetProgram(prog *Program) {
 	if err := v.SetProgramChecked(prog); err != nil {
-		v.diagnostics = append(v.diagnostics, err.Error())
+		v.recordDiagnostic(err.Error())
 	}
 }
 
@@ -630,8 +631,32 @@ func (v *VM) SimulationRNG() *rng.Simulation {
 	return v.simRng
 }
 
+// maxDiagnostics caps the fallback diagnostic buffer. A faulting callback can
+// re-fault on every tick, and nothing in a battle drains this buffer, so an
+// unbounded slice grows for as long as the unit lives. The first entries carry
+// the fault, and later ones only repeat it, so the buffer keeps the first
+// maxDiagnostics and counts the rest. This is a host bound on a diagnostic
+// buffer, not a retail contract: retail's fallbacks are silent [P2-03].
+const maxDiagnostics = 64
+
+// recordDiagnostic files one fallback diagnostic. Past the cap it only
+// increments a counter, so a per-tick fault allocates nothing in the steady
+// state. It is never a log: this runs inside the authoritative tick.
+func (v *VM) recordDiagnostic(text string) {
+	if v == nil {
+		return
+	}
+	if len(v.diagnostics) >= maxDiagnostics {
+		v.diagsDropped++
+		return
+	}
+	v.diagnostics = append(v.diagnostics, text)
+}
+
 // Diagnostics returns fallback diagnostics collected for malformed COB paths
-// [P2-03] (divide, corrupt input, stack overflow guard). Not fatal.
+// [P2-03] (divide, corrupt input, stack overflow guard). Not fatal. The
+// buffer holds at most maxDiagnostics entries; DroppedDiagnostics reports how
+// many further faults were counted but not kept.
 func (v *VM) Diagnostics() []string {
 	if v == nil {
 		return nil
@@ -639,10 +664,20 @@ func (v *VM) Diagnostics() []string {
 	return append([]string(nil), v.diagnostics...)
 }
 
-// ClearDiagnostics drops fallback diagnostics [P2-03].
+// DroppedDiagnostics returns the number of fallback diagnostics discarded
+// because the buffer was full since the last ClearDiagnostics [P2-03].
+func (v *VM) DroppedDiagnostics() uint32 {
+	if v == nil {
+		return 0
+	}
+	return v.diagsDropped
+}
+
+// ClearDiagnostics drops fallback diagnostics and the discarded count [P2-03].
 func (v *VM) ClearDiagnostics() {
 	if v != nil {
 		v.diagnostics = nil
+		v.diagsDropped = 0
 	}
 }
 
@@ -1747,7 +1782,7 @@ func (v *VM) runThread(idx int) {
 			// divergence (INVARIANTS I11's bounds-check exception): the thread
 			// dies and a diagnostic is recorded, nothing is pushed.
 			if b == 0 || (a == -2147483648 && b == -1) {
-				v.diagnostics = append(v.diagnostics, "cob: divide by zero or overflow") // [P2-03] fallback diagnostic
+				v.recordDiagnostic("cob: divide by zero or overflow") // [P2-03] fallback diagnostic
 				v.killThread(idx)
 				return
 			}
@@ -2096,7 +2131,7 @@ func (v *VM) runThread(idx int) {
 			// the thread at Nanolathe's bounds-check boundary rather than writing
 			// outside Go state [R-COB-04 §6].
 			if argc < 0 || argc > 4 || argc > t.SP {
-				v.diagnostics = append(v.diagnostics, "cob: reserved pop count outside four-word window")
+				v.recordDiagnostic("cob: reserved pop count outside four-word window")
 				v.killThread(idx)
 				return
 			}

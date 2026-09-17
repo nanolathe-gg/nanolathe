@@ -78,9 +78,17 @@ func retailUnitCensus(s *Session) map[uint16]string {
 		if u.Def != nil {
 			name = u.Def.UnitName
 		}
+		// The mover column reads the MOVEMENT system, not the unit's own
+		// has-mover word. That word is a save-image mirror [08 R-SAVE-02 §6]:
+		// the restore writes it, and on a live source it stays at its
+		// allocation value. This census used to read it and compared the
+		// restored mirror against a live source word that only the save path
+		// had written — which is the write that moved corpse anchors and is
+		// gone. The live property both sides can be held to is whether the
+		// movement system owns a mover for the handle.
 		out[uint16(slot)] = fmt.Sprintf("%s owner=%d x=%d y=%d z=%d h=%d heading=%d remaining=%.4f mover=%t",
 			name, u.Owner, int64(u.X.Raw()), int64(u.Y.Raw()), int64(u.Z.Raw()),
-			u.Health, u.Move.Heading, u.Remaining, u.HasMover)
+			u.Health, u.Move.Heading, u.Remaining, s.Movement != nil && s.Movement.HasMover(pool.Handle(slot)))
 	}
 	return out
 }

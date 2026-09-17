@@ -69,6 +69,10 @@ func (g *gameShell) applySettings(s settings.Settings) {
 		music.SetEnabled(g.audioPrefs.MusicMode != 0)
 		music.Configure(audio.PlayMode(g.audioPrefs.CDMode), music.DesiredCategory())
 	}
+	// `speechfx` and the two acknowledgement levels are voice-queue gates. A
+	// service that already exists takes the loaded block now; one created later
+	// takes it at construction [03 §8.3][03 R-AUD-01 §2].
+	g.applyRetailVoiceGates()
 	g.gameSpeed = s.GameSpeed
 	g.interfaceType = s.InterfaceType
 	g.switchAlt = s.SwitchAltEnabled()

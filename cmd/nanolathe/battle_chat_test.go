@@ -223,9 +223,12 @@ func TestLocalCommandParserAndSessionMasks(t *testing.T) {
 	if got := campaign.sess.Audio.Music.CurTrack(); got != 0 || campaign.sess.Audio.Music.Status() != audio.StatusIdle {
 		t.Fatalf("campaign CDStop track/status = %d/%v, want 0/idle", got, campaign.sess.Audio.Music.Status())
 	}
+	// Argument zero runs the tick instead of playing. The preceding `CDStop`
+	// re-armed *next* to track 1 [03 R-AUD-01 §4 step 2] and the sequential
+	// arm is "next + 1" [03 R-AUD-01 §4 step 5, mode 1], so the tick selects 2.
 	campaign.dispatchLocalCommand("+CDPlay 0")
-	if got := campaign.sess.Audio.Music.CurTrack(); got != 1 || !campaign.sess.Audio.Music.IsPlaying() {
-		t.Fatalf("CDPlay argument zero track/status = %d/%v, want tick-selected 1/playing", got, campaign.sess.Audio.Music.Status())
+	if got := campaign.sess.Audio.Music.CurTrack(); got != 2 || !campaign.sess.Audio.Music.IsPlaying() {
+		t.Fatalf("CDPlay argument zero track/status = %d/%v, want tick-selected 2/playing", got, campaign.sess.Audio.Music.Status())
 	}
 	campaign.sess.Audio = audio.NewService(nil)
 	campaign.dispatchLocalCommand("+CDPlay 2")

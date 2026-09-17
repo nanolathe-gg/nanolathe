@@ -654,3 +654,52 @@ func TestMultiCargoUnloadReleasesOneAndEmitsEventThirteen(t *testing.T) {
 		})
 	}
 }
+
+// TestUnloadLoweringUsesTheModelTotalHeightWord locks the operand of the
+// `VTOL_Unload` phase-1 lowering marker [04 R-AIR-01 §9]: "the word read is the
+// high half of the definition's model total-height dword ... the model's height
+// in whole world units", and "the same word, on the same definition, supplies
+// the altitude offset of VTOL_Landing phase 5 when the lander is carrying
+// something".
+//
+// content compiles UnitDef.ModelTop as (raw >> 16) & 0xFF — the LOS height byte
+// — beside the unmasked ModelTopFixed. The unload site read the byte while its
+// VTOL_Landing sibling read the word, so a cargo model 256 world units or
+// taller lowered the carrier to terrain + (height & 0xFF): far too low, and
+// only ever visible on content taller than the stock models.
+func TestUnloadLoweringUsesTheModelTotalHeightWord(t *testing.T) {
+	sys, w, carrier, cargo, _, _ := transportFixture(t)
+	// A cargo model taller than a byte, so the word and the masked byte differ.
+	const tall = 300
+	tallDef := *cargo.Def
+	tallDef.ModelTopFixed = tall << 16
+	tallDef.ModelTop = (tallDef.ModelTopFixed >> 16) & 0xFF // what content compiles
+	cargo.Def = &tallDef
+	if tallDef.ModelTop == tall {
+		t.Fatal("fixture must make the masked byte and the word differ")
+	}
+
+	if !AttachCargoMode(w, carrier.Handle, cargo.Handle, -1, 0) {
+		t.Fatal("fixture attach failed")
+	}
+	carrier.Move.Mode = 2
+	if fl := handleRow(sys.Flights, carrier.Handle); fl != nil {
+		fl.Mode = 2
+	}
+	dropX, dropZ := world.CellToWorld(44), world.CellToWorld(20)
+	n := &orders.Node{
+		Owner: carrier.Handle, Phase: 1, Target: cargo.Handle,
+		GoalX: dropX, GoalY: carrier.Y, GoalZ: dropZ, Deadline: -1, GoalSupplied: true,
+	}
+	if code := sys.legVTOLUnload(carrier, n, 0, 1); code != 1 {
+		t.Fatalf("unload phase 1 gave result %d, want 1 [04 §10.2]", code)
+	}
+	m, ok := sys.AirGoalPayload(carrier.Handle).(*airMarker)
+	if !ok {
+		t.Fatalf("phase 1 installed no lowering marker (payload %T)", sys.AirGoalPayload(carrier.Handle))
+	}
+	if m.altOffset != tall {
+		t.Errorf("lowering offset = %d, want the model total-height word %d; the masked "+
+			"LOS byte is %d [04 R-AIR-01 §9]", m.altOffset, tall, tallDef.ModelTop)
+	}
+}

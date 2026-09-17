@@ -664,6 +664,14 @@ func applySchemaStrict(terrain *world.Terrain, cat *content.Catalog, m *mission.
 	return nil
 }
 
+// maxPerPlayerRecords is the largest per-player unit limit whose pool — the
+// `limit × 10 + 1` records of [05 R-SHARE-01 §7], record 0 being the null
+// identity — still fits inside the slot indices a pool.Handle can address.
+// The highest index such a pool uses is `limit × 10`, so the bound is the
+// largest handle value divided by ten. It is derived from the handle type
+// rather than written out, so widening the handle widens this with it.
+const maxPerPlayerRecords = int(^pool.Handle(0)) / 10
+
 // newBattleSlicedWorldWithCOBSized is newBattleSlicedWorldWithCOB with the
 // session's per-player unit limit stated explicitly.
 //
@@ -701,6 +709,23 @@ func newBattleSlicedWorldWithCOBSized(cat *content.Catalog, fs vfs.FSOps, mode i
 		// §6]. Nanolathe deliberately refuses both cases at entry with a
 		// diagnostic instead of reproducing an empty pool or an overrun.
 		return nil, fmt.Errorf("nanolathe: unit pool sizing failed: logical path <battle entry>, providers searched [session unit limit], expected a per-player unit limit of at least 1, got %d", perPlayerRecords)
+	}
+	if perPlayerRecords > maxPerPlayerRecords {
+		// The other end of the same sizing gate. Retail applies no clamp here
+		// either: a save's `Summary.maxunits` reaches the configured word
+		// unclamped and "skirmish and multiplayer battle entry then copy that
+		// word into the session limit word verbatim", so a 16-bit word well
+		// past the start-up 20..500 clamp can arrive [08 R-SESS-01 §9].
+		//
+		// Retail sizes the pool from it regardless and overruns; Nanolathe
+		// cannot reproduce that, because a pool.Handle is a slot index and
+		// every record past the last one the handle type addresses would alias
+		// a live slot — the record at index 65536 aliases the null handle 0,
+		// which no null test can then distinguish [P0-16 §3.1] [I5]. That is
+		// silent corruption, not a contract, so the sizing refuses it the way
+		// the zero and negative cases are already refused, and the restore
+		// keeps carrying the saved word verbatim.
+		return nil, fmt.Errorf("nanolathe: unit pool sizing failed: logical path <battle entry>, providers searched [session unit limit], expected a per-player unit limit of at most %d, got %d", maxPerPlayerRecords, perPlayerRecords)
 	}
 	order := pool.PlayerPermutationForMode(mode, sortKeys)
 	w, err := units.NewSlicedWithOrder(perPlayerRecords, cat, order)
@@ -1319,10 +1344,16 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 					// destination in both directions, so every particle of a
 					// tree reclaim was born and died inside the tree's own cell
 					// and no spray ever reached the commander.
-					e.Mode = uint8(frame.NanolatheBuild)
+					//
+					// The mode is feature reclaim's own, not build's: feature
+					// reclaim is the only two-segment producer in the census
+					// [05 R-WORK-01 §8], and this call used to borrow the
+					// build label because the helper's mapping had the two
+					// counts the wrong way round.
+					e.Mode = uint8(frame.NanolatheFeatureReclaim)
 					e.NanolatheGeometryKnown = true
 					e.NanolatheBoxAtSource = true
-					segments := frame.BuildNanolatheSegments(e, tick)
+					segments := frame.BuildNanolatheSegments(e)
 					if len(segments) != 2 {
 						return false
 					}
@@ -1346,8 +1377,11 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 					// The resurrection wait sprays the ordinary way round —
 					// builder nano piece into the feature box [05 R-WORK-01 §8]
 					// — so the emitting end is the nano piece and the box is the
-					// destination.
-					e.Mode = uint8(frame.NanolatheReclaim)
+					// destination. That is the one-segment builder→target
+					// family, which is what the build mode names; the reclaim
+					// mode names UNIT reclaim, whose direction is the reverse,
+					// so it was the wrong label for this arm.
+					e.Mode = uint8(frame.NanolatheBuild)
 					e.NanolatheGeometryKnown = true
 					e.X, e.Y, e.Z = nanoPiece[0], nanoPiece[1], nanoPiece[2]
 					e.TargetX, e.TargetY, e.TargetZ = minX, minY, minZ

@@ -57,6 +57,12 @@ type recordPool struct {
 	quit    chan struct{}
 	done    sync.WaitGroup
 
+	// closeOnce guards the quit close so a second shutdown is a no-op rather
+	// than a panic, and exited is released by each worker as it returns, so
+	// close can prove the goroutines are gone before it drops their clones.
+	closeOnce sync.Once
+	exited    sync.WaitGroup
+
 	// cursor hands out job indices. Per-unit cost varies by an order of
 	// magnitude (a commander against a solar collector), so a shared cursor
 	// balances better than a fixed stripe.
@@ -86,12 +92,14 @@ func newRecordPool(n int) *recordPool {
 		wake := make(chan struct{}, 1)
 		p.workers = append(p.workers, w)
 		p.wake = append(p.wake, wake)
+		p.exited.Add(1)
 		go p.serve(w, wake)
 	}
 	return p
 }
 
 func (p *recordPool) serve(w *recordWorker, wake chan struct{}) {
+	defer p.exited.Done()
 	for {
 		select {
 		case <-p.quit:
@@ -101,6 +109,31 @@ func (p *recordPool) serve(w *recordWorker, wake chan struct{}) {
 			p.done.Done()
 		}
 	}
+}
+
+// close stops every worker and releases what the pool retains: each worker's
+// clone of the whole recording client, that clone's grown scratch arena, and
+// this frame's job and slot arrays.
+//
+// A pool lives as long as the client that made it, so this belongs to teardown,
+// not to the presentation path: the host calls Client.Close when it drops a
+// battle client, and without it each client recreation would strand one worker
+// goroutine per hardware thread together with everything its clone reaches.
+// It is idempotent and safe on a pool that was never started, and it returns
+// only once every worker has actually left its loop — the caller must not run
+// it beside a frame, because stage one waits on those same workers.
+func (p *recordPool) close() {
+	if p == nil {
+		return
+	}
+	p.closeOnce.Do(func() {
+		if p.quit != nil {
+			close(p.quit)
+		}
+	})
+	p.exited.Wait()
+	p.workers, p.wake = nil, nil
+	p.jobs, p.units, p.pairs = nil, nil, nil
 }
 
 // drain takes job indices until the list is exhausted. Each job writes only its

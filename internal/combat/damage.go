@@ -200,10 +200,22 @@ func veteranTier(kills int32) int32 {
 
 // Blast radius helpers [06 §9.3].
 
-// BlastRadius returns authoritative blast radius in world units: unsigned
-// authored area value shifted right once [06 §9.3] C26.
+// StoredArea reads the weapon record's areaofeffect word the way every retail
+// blast reader does: zero-extended from its 16-bit store
+// [02 R-KEYS-01 §5][06 §9.3]. The content compiler already wraps the authored
+// key to that width, so this is the identity for a compiled definition; it is
+// kept as the single named reading so the two blast consumers — the area
+// sweep's radius here and the interceptor blast of [06 R-WPN-05 §10] — cannot
+// drift apart again, which is what a 32-bit shift on one side and a 16-bit
+// mask on the other had already done.
+func StoredArea(authoredArea int32) int32 {
+	return int32(uint16(authoredArea))
+}
+
+// BlastRadius returns authoritative blast radius in world units: the unsigned
+// 16-bit area word shifted right once [06 §9.3] C26.
 func BlastRadius(authoredArea int32) int32 {
-	return int32(uint32(authoredArea) >> 1) // [06 §9.3] unsigned shift
+	return StoredArea(authoredArea) >> 1 // [06 §9.3] unsigned word, shifted once
 }
 
 // BroadPhaseRadiusCells returns (radius/16)+1 terrain cells around impact
@@ -576,11 +588,26 @@ func (s *Service) offerAttackerToSlots(w *units.World, victim, attacker *units.U
 	}
 	for idx := 0; idx < units.NumSlots; idx++ { // numeric slot order [06 §3.2]
 		slot := victim.SlotAt(idx)
-		if slot == nil || !slot.IsPopulated() {
+		// "for each slot whose armed and tracking bits are set" — the armed
+		// half is the control byte's ENABLED bit (bit 1), which
+		// [06 R-WPN-05 §3] names and [08 R-AI-01 §11] writes out as "each of
+		// the victim's three weapon slots that is enabled and autonomous". The
+		// offer used to test only that the slot held a resolved weapon. For a
+		// unit built in this process the initializer sets the bit for exactly
+		// the slots whose weapon link resolved, so the two agree; after a save
+		// load the persisted byte is authoritative on its own
+		// [08 R-SAVE-WEAPON-01], and a restored-disabled slot with a live
+		// weapon link was still being handed the attacker.
+		//
+		// The resolved-weapon test stays beside it because the `commandfire`
+		// clause below dereferences the link: it is this implementation's nil
+		// guard, not a retail clause. The slot pipeline's own visits carry the
+		// same pair.
+		if slot == nil || !slot.IsEnabled() || !slot.IsPopulated() {
 			continue
 		}
-		// "for each slot whose armed and tracking bits are set" — the tracking
-		// half is the control byte's autonomy bit [04 R-UNIT-06 §5 part 3], and
+		// The tracking half is the control byte's autonomy bit
+		// [06 R-WPN-05 §3][04 R-UNIT-06 §5 part 3], and
 		// the test is load bearing: a slot an attack order currently holds must
 		// not be handed the attacker, and becomes eligible again the moment the
 		// record destructor returns it. It was skipped while §1 left the bit's

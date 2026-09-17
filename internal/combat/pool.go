@@ -296,6 +296,34 @@ type Service struct {
 	// are kept here rather than re-formed each tick.
 	weaponByIDCatalog *content.Catalog
 	weaponByID        func(id int32) (*content.WeaponDef, bool)
+
+	// impactStack holds the pooled records whose central impact is running on
+	// the current call stack, outermost first. Its only reader is the cycle cut
+	// in impactProjectile; see the contract note there. It is transient
+	// within one impact and empty between them, so it is not session state and
+	// is never serialized.
+	impactStack []pool.Handle
+}
+
+// beginImpact marks one pooled record as having its central impact in progress,
+// reporting false when that record's impact is already running further down
+// this call stack. See impactProjectile for why the re-entry is refused and why
+// refusing it changes no terminating case [06 §11.2][06 §13.2] C28.
+func (s *Service) beginImpact(h pool.Handle) bool {
+	for _, active := range s.impactStack { // stack order, never a map range [I1]
+		if active == h {
+			return false
+		}
+	}
+	s.impactStack = append(s.impactStack, h)
+	return true
+}
+
+// endImpact pops the record beginImpact pushed.
+func (s *Service) endImpact() {
+	if n := len(s.impactStack); n != 0 {
+		s.impactStack = s.impactStack[:n-1]
+	}
 }
 
 // ToggleDoubleShot flips the battle-local double-damage gate. A fresh combat

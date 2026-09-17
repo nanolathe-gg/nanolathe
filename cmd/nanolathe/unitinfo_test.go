@@ -268,3 +268,58 @@ func TestUnitInfoCostsUseStoredSingles(t *testing.T) {
 		t.Fatalf("cost rows = %q/%q, want stored value and truncation low word", got[1], got[2])
 	}
 }
+
+// A drag is not a click on `DONE`: the capture belongs to the gadget the press
+// landed in, and only a release inside that same gadget fires the control
+// [07 R-WGT-01 §1 "Capture"].
+func TestUnitInfoDoneNeedsThePressInsideIt(t *testing.T) {
+	resetUnitInfoState(t)
+	window := &gui.Window{
+		Rect:    gui.Rect{X: 200, Y: 100, W: 100, H: 100},
+		OriginX: 200, OriginY: 100,
+		Gadgets: []gui.Gadget{
+			{Name: "HEADER", Kind: gui.KindPanel, Active: 1, Rect: gui.Rect{X: 200, Y: 100, W: 100, H: 100}},
+			{Name: "DONE", Kind: gui.KindButton, Active: 1, Rect: gui.Rect{X: 10, Y: 70, W: 40, H: 20}},
+		},
+	}
+	unitInfoUI = &unitInfoScreen{window: window, def: &content.UnitDef{}}
+	h := &retailBattleHUD{}
+
+	const pictureX, pictureY = 250, 120 // inside the window, off DONE
+	const doneX, doneY = 215, 175       // inside DONE
+	if h.unitInfoDoneCaptures(pictureX, pictureY) || !h.unitInfoDoneCaptures(doneX, doneY) {
+		t.Fatal("the DONE capture rectangle does not follow the gadget")
+	}
+	// A drag from the picture to DONE, and the reverse, are neither of them one
+	// click on a single gadget.
+	if h.sameButton(nil, pictureX, pictureY, doneX, doneY) {
+		t.Fatal("a drag onto DONE was accepted as a click on it")
+	}
+	if h.sameButton(nil, doneX, doneY, pictureX, pictureY) {
+		t.Fatal("a drag off DONE was accepted as a click")
+	}
+	// Both endpoints on the same gadget remain one click, on either gadget.
+	if !h.sameButton(nil, pictureX, pictureY, pictureX+2, pictureY+2) {
+		t.Fatal("a click inside the window was refused")
+	}
+	if !h.sameButton(nil, doneX, doneY, doneX+1, doneY+1) {
+		t.Fatal("a click on DONE was refused")
+	}
+	if h.sameButton(nil, 10, 10, doneX, doneY) {
+		t.Fatal("a press outside the window was paired with a release on DONE")
+	}
+}
+
+// Battle teardown retires the screen: the next battle must not inherit a window
+// built from the old battle's definition and art [07 §3][08 R-ENTRY-01 §8].
+func TestUnitInfoClearedByBattleTeardown(t *testing.T) {
+	resetUnitInfoState(t)
+	unitInfoUI = &unitInfoScreen{
+		window: &gui.Window{Rect: gui.Rect{X: 200, Y: 100, W: 100, H: 100}},
+		def:    &content.UnitDef{},
+	}
+	(&battleSession{}).teardown(nil)
+	if unitInfoOpen() {
+		t.Fatal("battle teardown left the unit information screen open")
+	}
+}

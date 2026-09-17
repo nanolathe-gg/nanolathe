@@ -335,17 +335,31 @@ func (s *Service) mobilePlacementVisit(builder *units.Unit, node *orders.Node, t
 			node.MoveState = orders.MoveArrived
 		}
 	}
+	// Resolve and classify before arming any retry, exactly as the factory twin
+	// in handleState2 does. A product the catalog cannot resolve is a content
+	// failure, not a crowded site: retail has no arm to copy here, because its
+	// record carries a product definition INDEX and the `MobileBuild` body
+	// indexes the definition table with it without a bounds test, so the load
+	// cannot yield nothing [04 R-ORD-01 §5][04 R-ORD-01 §18]. The only
+	// handler-level refusals that row describes are the blocked-area budget
+	// ([R-ORDER-02 §1]) and the allocator's `Unable to create any more units`
+	// hold — neither is this case. So the retention is the whole of the
+	// response: a permanent-definition admission diagnostic, no caption, and no
+	// invented queue transition. The 15-tick retry this replaces was an
+	// invented transition AND silent, which left a catalog mismatch spinning
+	// the record forever with nothing for the player or a log to see.
 	def := s.getProductDefForNode(node)
-	footX, footZ := 1, 1
-	if def != nil {
-		footX = int(def.FootprintX)
-		footZ = int(def.FootprintZ)
-		if footX <= 0 {
-			footX = 1
-		}
-		if footZ <= 0 {
-			footZ = 1
-		}
+	if def == nil {
+		s.rejectPermanent(builder, node, tick,
+			fmt.Errorf("%w: product %q", world.ErrMissingPlacementDefinition, node.BuildDefKey))
+		return 2
+	}
+	footX, footZ := int(def.FootprintX), int(def.FootprintZ)
+	if footX <= 0 {
+		footX = 1
+	}
+	if footZ <= 0 {
+		footZ = 1
 	}
 	// Site anchor is authoritative Goal from QueueMobileBuild [P0-I05].
 	extent, err := world.NewFootprintExtent(int32(footX), int32(footZ))
@@ -366,11 +380,6 @@ func (s *Service) mobilePlacementVisit(builder *units.Unit, node *orders.Node, t
 	cell := anchor.Cell()
 	// Do not overwrite Goal: keep original clicked site for determinism and tests that assert Goal equals clicked site [P0-I05].
 	// Validation at snapped cell [05 C17] with null self identity (mobile builders place at site).
-	if def == nil {
-		node.DynamicGate = WakeBit2
-		node.Deadline = int32(tick + 15)
-		return 2
-	}
 	var yard []world.YardCell
 	if def.YardMap != "" {
 		y, err := world.ParseYardMap(def.YardMap, footX, footZ)

@@ -61,33 +61,39 @@ const (
 // without requiring MCI. For Nanolathe the track list comes from a directory scan or is
 // injected; for retail it would be Red Book tracks via mciSendStringA.
 type Controller struct {
-	initialized   bool
-	musicEnabled  bool
-	numTracks     int
-	curTrack      int // 1-based, 0 = none
-	nextTrack     int // requested / next to play (0 means none)
-	status        StatusMode
-	playMode      PlayMode
-	desiredCat    int        // for mode 4: 0..4, Building|Battle|Victory|Defeat|Unused [03 R-AUD-01 §4]
-	trackCategory [100]uint8 // (i%4)+1 cycle, retail builds 100 entries
-	crtState      uint32     // last drawn presentation-CRT state for isolated tests
-	presCRT       *presentationCRT
-	position      int
-	volume        int
-	volumeApplied int
-	baseVolume    int32
-	outputVolume  int32
-	fadeLevel     int32
-	fadeStep      int32
-	fadeTimer     int
-	delayTimer    int
-	timers        [10]musicTimer
-	clock         func() uint32
-	lastService   uint32
-	playbackPoll  func() bool
-	openTrack     func(int) (MusicPlayer, error)
-	player        MusicPlayer
-	mediaError    error
+	initialized  bool
+	musicEnabled bool
+	numTracks    int
+	curTrack     int // 1-based, 0 = none
+	nextTrack    int // next to play (0 means none)
+	// requestedTrack is the CD object's *requested track*, a field of its own
+	// alongside current/next [03 R-AUD-01 §4 "the CD object"]. Only Repeat
+	// reads it: the MUSIC screen's `TRACKMODE` copies the selected track into
+	// it when the stage is `Repeat`, and the tick's mode-3 arm defaults it to
+	// track 1 when it is still 0. `PlayTrack` writes *next*, never this.
+	requestedTrack int
+	status         StatusMode
+	playMode       PlayMode
+	desiredCat     int        // for mode 4: 0..4, Building|Battle|Victory|Defeat|Unused [03 R-AUD-01 §4]
+	trackCategory  [100]uint8 // (i%4)+1 cycle, retail builds 100 entries
+	crtState       uint32     // last drawn presentation-CRT state for isolated tests
+	presCRT        *presentationCRT
+	position       int
+	volume         int
+	volumeApplied  int
+	baseVolume     int32
+	outputVolume   int32
+	fadeLevel      int32
+	fadeStep       int32
+	fadeTimer      int
+	delayTimer     int
+	timers         [10]musicTimer
+	clock          func() uint32
+	lastService    uint32
+	playbackPoll   func() bool
+	openTrack      func(int) (MusicPlayer, error)
+	player         MusicPlayer
+	mediaError     error
 }
 
 // NewMusicController starts without a CD device: the raw queried volume is
@@ -188,12 +194,32 @@ func (c *Controller) CurTrack() int {
 	return c.curTrack
 }
 
-// NextTrack returns the next requested track.
+// NextTrack returns the next track to play.
 func (c *Controller) NextTrack() int {
 	if c == nil {
 		return 0
 	}
 	return c.nextTrack
+}
+
+// RequestedTrack returns the CD object's requested track, which only Repeat
+// reads [03 R-AUD-01 §4].
+func (c *Controller) RequestedTrack() int {
+	if c == nil {
+		return 0
+	}
+	return c.requestedTrack
+}
+
+// SetRequestedTrack is the MUSIC screen's `TRACKMODE` arm: selecting `Repeat`
+// copies the selected track into the requested track [03 R-AUD-01 §4]. A zero
+// selection ("NO DISC") is copied as authored; the tick's Repeat arm is what
+// defaults it to track 1.
+func (c *Controller) SetRequestedTrack(track int) {
+	if c == nil || track < 0 {
+		return
+	}
+	c.requestedTrack = track
 }
 
 // Status returns the current status.
@@ -455,8 +481,13 @@ func (c *Controller) Close() {
 	c.nextTrack = 0
 }
 
-// Stop halts playback and resets nextTrack:
-// next = 0 when media is present, status=idle.
+// Stop is retail's stop-and-reset: status idle, fade step zero, both music
+// timers cancelled, and *next* re-armed to track 1 — or 0 only when the disc
+// carries no audio tracks [03 R-AUD-01 §4 step 2]. The MUSIC screen's `CDSTOP`
+// is the same primitive and likewise re-selects track 1 [03 R-AUD-01 §4 "the
+// MUSIC screen"]. Re-arming to 1 rather than 0 is load-bearing for the
+// sequential mode, whose arm is `next < 1 ? 1 : next + 1`: a reset disc
+// resumes at track 2, not track 1 [03 R-AUD-01 §4 step 5, mode 1].
 func (c *Controller) Stop() {
 	if c == nil {
 		return
@@ -468,7 +499,7 @@ func (c *Controller) Stop() {
 	if c.numTracks == 0 {
 		c.nextTrack = 0
 	} else {
-		c.nextTrack = 0
+		c.nextTrack = 1
 	}
 	c.curTrack = 0
 }
@@ -643,22 +674,25 @@ func (c *Controller) playRandom() {
 	c.Play(track)
 }
 
-// playSingle implements mode 3: cur != requested or not playing → jump to requested.
+// playSingle is the tick's Repeat arm [03 R-AUD-01 §4 step 5, mode 3]: "not
+// `playing` **or** `next ≠ requested` → `requested = 1` when it was 0;
+// `PlayTrack(requested)`".
+//
+// Correction: this used to read the *next* track as the requested one and
+// **stop** when it was 0, so a battle entered with `cdmode=3` and nothing
+// requested played no music at all until the MUSIC screen was used. The
+// contract names *requested* as its own field of the CD object, separate from
+// current/next, and the arm's only response to a zero is to default it to
+// track 1. The redundant play guard is gone too: `PlayTrack` already
+// deduplicates a request for the track that is playing.
 func (c *Controller) playSingle() {
 	if c.numTracks == 0 {
 		return
 	}
-	req := c.nextTrack
-	if req == 0 {
-		c.Stop()
-		return
+	if c.requestedTrack == 0 {
+		c.requestedTrack = 1
 	}
-	if req > c.numTracks {
-		req = c.numTracks
-	}
-	if c.curTrack != req || c.status != StatusPlaying || !c.pollPlaying() {
-		c.Play(req)
-	}
+	c.Play(c.requestedTrack)
 }
 
 // categoryBranch is the tick's category branch [03 R-AUD-01 §4 step 6]
@@ -754,6 +788,13 @@ func (c *Controller) Tick(isPlaying bool) {
 		return
 	}
 	if isPlaying {
+		// Repeat is the one mode whose arm also runs while the drive reports
+		// playing: its condition is "not `playing` **or** `next ≠ requested`"
+		// [03 R-AUD-01 §4 step 5, mode 3], so a selection made during playback
+		// switches tracks instead of waiting for the current one to end.
+		if c.playMode == ModeSingle && c.nextTrack != c.requestedTrack {
+			c.playSingle()
+		}
 		c.applyVolume()
 		c.status = StatusPlaying
 		// retail polls and if playing does nothing except ensure nextTrack in bounds for seq etc.

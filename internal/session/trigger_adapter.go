@@ -7,19 +7,23 @@ import (
 )
 
 // triggerLocalPlayer resolves the local human from the authoritative player
-// table in ascending slot order. Campaign and direct-OTA sessions do not
-// require a skirmish-lobby adapter to establish this identity [08 R-TRIG-01 §6].
+// table. Campaign and direct-OTA sessions do not require a skirmish-lobby
+// adapter to establish this identity [08 R-TRIG-01 §6]. The walk is ascending
+// and the LAST human row wins, which is what the row-to-player conversion
+// leaves in the local-player indices when a composition carries more than one
+// human row [08 R-SKIR-01 §2] "Battle entry: what the record becomes".
 func (s *Session) triggerLocalPlayer() (int, bool) {
 	if s == nil || s.Econ == nil {
 		return 0, false
 	}
+	local, found := 0, false
 	for i := 0; i < len(s.Econ.Players); i++ {
 		p := &s.Econ.Players[i]
 		if p.Exists && p.ControllerState == 1 && !p.IsObserver {
-			return i, true
+			local, found = i, true
 		}
 	}
-	return 0, false
+	return local, found
 }
 
 func (s *Session) missionTriggerContext(tick uint32) triggers.PollContext {

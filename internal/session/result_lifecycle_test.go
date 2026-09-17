@@ -192,9 +192,12 @@ func TestResult_LocalWinLossViaSnapshot(t *testing.T) {
 	s, _ := NewSyntheticSkirmishForTest(fs, cat, cfg)
 	s.RegisterAll()
 	s.State = StateBattle
-	s.LocalOwner = 0
-	s.EnemyOwner = 1
-	s.Units.Destroy(poolHandle(commanderHandles(s)[1][0]), 1)
+	// Both rows of this fixture are human, so the local player is the LAST of
+	// them [08 R-SKIR-01 §2] "Battle entry: what the record becomes"; the
+	// enemy is the other row.
+	enemy := 1 - int(s.LocalOwner)
+	s.EnemyOwner = uint8(enemy)
+	s.Units.Destroy(poolHandle(commanderHandles(s)[enemy][0]), 1)
 	for tick := uint32(1); tick < 300; tick++ {
 		s.Step(int32(tick))
 		if s.GetResult().Ended {
@@ -218,9 +221,8 @@ func TestResult_LocalWinLossViaSnapshot(t *testing.T) {
 	s2, _ := NewSyntheticSkirmishForTest(fs, cat, cfg)
 	s2.RegisterAll()
 	s2.State = StateBattle
-	s2.LocalOwner = 0
-	s2.EnemyOwner = 1
-	s2.Units.Destroy(poolHandle(commanderHandles(s2)[0][0]), 1)
+	s2.EnemyOwner = uint8(1 - int(s2.LocalOwner))
+	s2.Units.Destroy(poolHandle(commanderHandles(s2)[int(s2.LocalOwner)][0]), 1)
 	for tick := uint32(1); tick < 300; tick++ {
 		s2.Step(int32(tick))
 		if s2.GetResult().Ended {

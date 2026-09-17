@@ -206,6 +206,36 @@ func TestBriefingBlinkRunPreSplitAndLay(t *testing.T) {
 	}
 }
 
+// TestBriefingLayLineUnterminatedRun locks the pager against a line whose last
+// byte opens a run that never closes. The pager consumes the two marker bytes
+// either way [07 R-FE-02 §7], so the run scan has to clamp to the end of the
+// line rather than start past it. Stock briefs are balanced; third-party or
+// badly wrapped text is the source of an unbalanced one.
+func TestBriefingLayLineUnterminatedRun(t *testing.T) {
+	measure := func(s string) int { return len(s) }
+	for _, tc := range []struct {
+		raw  string
+		text string
+		runs int
+	}{
+		{"abc&", "abc", 1},  // `&` is the final byte: no letter, no run text
+		{"abc&Y", "abc", 1}, // the letter is the final byte: no run text
+		{"&Yab", "ab", 1},   // the run reaches the end of the line unclosed
+	} {
+		open := true
+		line := briefingLayLine(tc.raw, measure, &open, briefingBlinkWordCap)
+		if line.Text != tc.text {
+			t.Fatalf("%q: laid label = %q, want %q", tc.raw, line.Text, tc.text)
+		}
+		if len(line.Runs) != tc.runs {
+			t.Fatalf("%q: laid runs = %+v, want %d", tc.raw, line.Runs, tc.runs)
+		}
+		if open {
+			t.Fatalf("%q: the opening marker must close the pager's marker state", tc.raw)
+		}
+	}
+}
+
 // TestBriefingPagerLinesAndCaption locks the lines-per-page divide, the page
 // wrap and the three MOREBAR captions [07 R-HUD-03 §10].
 func TestBriefingPagerLinesAndCaption(t *testing.T) {

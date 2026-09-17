@@ -64,13 +64,28 @@ const (
 	patrolChainMember uint32 = 0x8000
 )
 
-// moverMode reads the committed mover mode's low two bits: 0 none, 1 grounded,
-// 2 airborne [04 R-MOV-01 §8].
+// moverMode reads the COMMITTED mover mode's low two bits: 0 attached/parked,
+// 1 grounded, 2 airborne [04 R-MOV-01 §8].
+//
+// The committed mode is the unit flags word's mode mirror, not the mover's own
+// state byte: the setter writes the request byte and "the unit-side accepted
+// mode mirror changes only at the ordinary commit" [04 R-AIR-01 §3]
+// [04 R-COLL-01 §1]. Every order-side reader named in the research is on the
+// mirror — "The movement-mode mirror is bits 0-1, tested separately before the
+// phase switch (!= 1 -> `Repairs unsuccessful.`)" for the repair rows
+// [04 R-ORD-01 §12]; "**Only if** the committed mover mode is `1` (grounded)"
+// for the takeoff preamble [04 R-AIR-01 §6]; and the transport predicate reads
+// "the flags-word mirror (the committed mode)" rather than the mover's own
+// state byte [04 R-AIR-01 §12]. Reading the request byte instead let the
+// nano-reach repair admission, the repair-patrol candidate filter and the air
+// repair row disagree with attack targeting (resolve.go's slot-zero anti-air
+// gate) and with a restored save, whose two words differ by design
+// [08 R-SAVE-02 §6, §8].
 func moverMode(u *units.Unit) uint8 {
 	if u == nil {
 		return 0
 	}
-	return u.Move.Mode & 0x3
+	return u.Move.ModeMirror & 0x3
 }
 
 // health16 reads a unit's health as the 16-bit field retail stores it in,
@@ -545,7 +560,8 @@ func patrolChainSetup(u *units.Unit, n *Node) {
 // The divergences from the ground `RepairPatrol` are steps 3 to 5: the pad seek
 // exists only here, step 4 uses the shared scanner-owner-to-candidate-owner
 // diplomacy test once (the ground twin repeats that check) and its
-// unfinished-target arm spawns `VTOL_HelpBuild` rather than issuing code 8, and
+// unfinished-target arm releases the payload and spawns `VTOL_HelpBuild`
+// directly rather than issuing code 8, and
 // step 5's search radius is a fixed ±120 world units where the ground twin
 // passes `sightdistance`. Draws occur only at reached sites: the pad pick, the
 // unit pick, and the conditional feature tournaments.
@@ -591,11 +607,37 @@ func vtolRepairPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint
 		}
 		if resources, ok := playerResources(u); ok && resourceAtLeastTwenty(resources.Stock[1], resources.Capacity[1]) {
 			candidates := scanRepairCandidates(u, u.Def.SightDistance)
-			if target := pickRepairCandidate(u, candidates); target != nil && spawnPatrolRepair(u, target, tick) {
-				n.DynamicGate = 0
+			// "A complete `u` reaches the issue helper for command code 8:
+			// acceptance → *rotate*, refusal → *wait*. An unfinished `u`
+			// releases the payload, explicitly spawns `VTOL_HelpBuild` on `u`
+			// at the head, gate = 0, and returns *wait*" [04 R-ORD-01 §7].
+			// Step 4 therefore ENDS the visit whenever the bounded pick
+			// returned a candidate; only an empty list falls through to step
+			// 5's feature pairing. A refusal that fell through would draw that
+			// pairing's six bounded picks [01 §7.5] and shift the authoritative
+			// stream permanently (I4). Unlike the ground twin, this path does
+			// not repeat the scanner-to-candidate diplomacy read.
+			//
+			// The two arms are different routes, not one route with two return
+			// codes. The unfinished arm names its own record, so it does not
+			// reach the issue helper at all and takes none of the helper's
+			// three additions — the code-8 resolution, the stance-3 refusal,
+			// and the hold-position/maneuver return move ([04 R-STANCE-01 §4])
+			// — and it is the only one of the two that releases the payload.
+			// Routing it through the helper made a stance-3 flyer refuse an
+			// assist the row issues unconditionally, and left the old goal
+			// payload bound under the spawned record.
+			if target := pickRepairCandidate(u, candidates); target != nil {
 				if target.Remaining != 0 {
-					return 3 // unfinished targets explicitly spawn VTOL_HelpBuild
+					releaseGoalPayload(u, n)
+					spawnPatrolHelpBuild(u, target, tick)
+					n.DynamicGate = 0
+					return 3 // *wait* beneath the explicit VTOL_HelpBuild
 				}
+				if !spawnPatrolRepair(u, target, tick) {
+					return 3 // *wait*: the code-8 issue was refused
+				}
+				n.DynamicGate = 0
 				return 6 // accepted complete target repair rotates
 			}
 		}

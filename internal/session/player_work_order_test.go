@@ -18,6 +18,12 @@ func TestPlayerMaintenanceUsesPreviousRegistryAfterWeaponPhase(t *testing.T) {
 	def := s.Catalog.Units["armcom"]
 	def.Weapon1Def = weapon
 	def.StandingFireOrder = 2
+	// Check 2 of the picked-candidate order [06 §3.2]: a HUMAN-owned shooter
+	// acquires only candidates whose definition authors `shootme`, and the
+	// shooter below is human. The stock commander authors it — the stock
+	// definitions that omit it are the non-combat buildings — so the fixture
+	// definition authors it too and this test stays about phase order.
+	def.ShootMe = true
 	shooter, err := s.Units.Create(def, 0, numeric.FixedFromInt(128), numeric.FixedFromInt(10), numeric.FixedFromInt(128))
 	if err != nil {
 		t.Fatal(err)

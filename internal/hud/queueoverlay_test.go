@@ -1,6 +1,7 @@
 package hud
 
 import (
+	"math"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
@@ -594,5 +595,42 @@ func TestRangeRingAdaptiveTerrainAndBounds(t *testing.T) {
 	}
 	if got := appendRangeRing(nil, QueuePrimitive{}, center, 1, 14, "bad", 0, opt); len(got) != 0 {
 		t.Fatalf("sub-chord malformed radius emitted %d primitives, want rejection", len(got))
+	}
+}
+
+// The chord count is derived from a raw authored dword and the walk appends
+// one primitive per chord, so a modded or corrupted range asked for billions
+// of primitives. The upper bound is a host bounds rejection like the
+// nonpositive one, not a retail contract [07 R-P0-11 §3][I11]: it is the
+// number of representable angles, above which the walk's divisor reaches zero
+// and no further distinct point exists.
+func TestRangeRingChordCountIsBoundedAbove(t *testing.T) {
+	project := func(x, y, z numeric.Fixed) QueuePoint {
+		return QueuePoint{X: int32(x >> 16), Y: int32(y >> 16)}
+	}
+	opt := QueueOverlayOptions{
+		Project:      project,
+		GroundHeight: func(numeric.Fixed, numeric.Fixed) numeric.Fixed { return 0 },
+	}
+	center := QueueWorldPoint{}
+	for _, radius := range []int32{313027116, math.MaxInt32, 100000} {
+		if rangeChordCount(radius) <= maxRangeRingChords {
+			t.Fatalf("radius %d asks for %d chords, which the cap would not exercise", radius, rangeChordCount(radius))
+		}
+		out := appendRangeRing(nil, QueuePrimitive{}, center, radius, 14, "absurd", 0, opt)
+		// The inclusive walk emits chords+1 lines, then one label.
+		if len(out) != int(maxRangeRingChords)+2 {
+			t.Fatalf("radius %d emitted %d primitives, want the %d-chord cap", radius, len(out), maxRangeRingChords)
+		}
+	}
+	// A range just under the cap is untouched, so nothing that draws a real
+	// ring is drawn differently.
+	under := int32(1000)
+	chords := rangeChordCount(under)
+	if chords >= maxRangeRingChords {
+		t.Fatalf("radius %d is not below the cap", under)
+	}
+	if got := appendRangeRing(nil, QueuePrimitive{}, center, under, 14, "", 0, opt); len(got) != int(chords)+1 {
+		t.Fatalf("radius %d emitted %d primitives, want %d", under, len(got), chords+1)
 	}
 }

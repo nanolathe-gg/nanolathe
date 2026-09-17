@@ -1487,22 +1487,47 @@ func (s *System) classKeyFor(h pool.Handle) string {
 	return handleRow(s.profileNames, h)
 }
 
-// noteOccupancyCommit records a unit's occupancy-commit tick on every
-// allocated class layer [04 §6.1 R-DOC04-B]. The commit tick is one field of
-// the unit record, read by every class's per-cell classifier and request
-// revision pass; the frozen registry represents it as a per-layer map, so the
-// tick is noted on each. The walk is the allocation-order slice, never a map
-// range [I1]. A layer allocated later misses pre-allocation ticks; the unit's
-// next commit refreshes it.
+// noteOccupancyCommit records a unit's occupancy-commit tick [04 §6.1
+// R-DOC04-B]. Retail keeps ONE such word, on the mover structure
+// [04 R-PATH-01 §14]; this build keeps that word on the collision record as
+// LastStampTick and mirrors it into every allocated class layer, because the
+// frozen registry represents the occupant-age gate per layer. Both halves are
+// written here so they cannot drift: the mover word is what the save box
+// carries [04 R-COLL-01 §5 "the save bit"] and what the restore hands back to
+// the layers, and the mirrors are what the classifier and the request revision
+// pass read.
+//
+// The mover word is written before the registry lookup: retail's stamp sets it
+// "as its first action (guarded on the mover existing)" [04 R-PATH-01 §14], so
+// it does not depend on any class layer having been allocated. The layer walk
+// is the allocation-order slice, never a map range [I1]. A layer allocated
+// later misses pre-allocation ticks; the unit's next commit refreshes it.
 func (s *System) noteOccupancyCommit(h pool.Handle, tick uint32) {
 	if s == nil || h == 0 {
 		return
+	}
+	if coll := handleRow(s.Collisions, h); coll != nil {
+		coll.LastStampTick = tick
 	}
 	reg := s.ensureLayerRegistry()
 	if reg == nil {
 		return
 	}
 	reg.forEachLayer(func(l *ClassLayer) { l.NoteCommit(h, tick) })
+}
+
+// forgetOccupancyCommit is the finalisation half of noteOccupancyCommit: retail
+// frees the mover with the unit, so its occupant-age clock goes with it and the
+// next unit allocated into the slot starts from a zero word [04 R-PATH-01 §14]
+// [04 R-COLL-01 §11 item 1]. ForgetUnit drops the collision record that holds
+// this build's copy of the word, so the per-layer mirrors have to go too or the
+// two drift. Existing layers only — a registry that has never been built has
+// nothing to forget, and building one here would allocate on the death path.
+func (s *System) forgetOccupancyCommit(h pool.Handle) {
+	if s == nil || h == 0 || s.layerRegistry == nil {
+		return
+	}
+	s.layerRegistry.forEachLayer(func(l *ClassLayer) { l.ForgetCommit(h) })
 }
 
 // ProfileFor returns the profile resolved for a unit handle. A handle with no

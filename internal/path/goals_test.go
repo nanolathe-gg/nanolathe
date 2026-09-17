@@ -1,6 +1,9 @@
 package path
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestPointGoalHeuristic(t *testing.T) {
 	// [04 §7.2] point/radius inflated octile 18*max+7*min, clamped.
@@ -300,12 +303,15 @@ func TestGoalEnumerate(t *testing.T) {
 		rect Rect
 		n    int
 	}{
-		{Rect{Cell{5, 5}, Cell{5, 5}}, 1},
+		// Counts are 2 per column plus 2 per interior row, with no
+		// de-duplication: a degenerate rectangle lists its cells twice
+		// [04 R-MOV-03 §9].
+		{Rect{Cell{5, 5}, Cell{5, 5}}, 2}, // width1 height1 => (5,5) twice
 		{Rect{Cell{0, 0}, Cell{1, 1}}, 4},
 		{Rect{Cell{0, 0}, Cell{2, 2}}, 8},
-		{Rect{Cell{0, 0}, Cell{1, 2}}, 6}, // width2 height3 => 4+6-4=6
-		{Rect{Cell{0, 0}, Cell{2, 0}}, 3}, // width3 height1
-		{Rect{Cell{0, 0}, Cell{0, 4}}, 5}, // width1 height5
+		{Rect{Cell{0, 0}, Cell{1, 2}}, 6}, // width2 height3 => 4+2
+		{Rect{Cell{0, 0}, Cell{2, 0}}, 6}, // width3 height1 => each column twice
+		{Rect{Cell{0, 0}, Cell{0, 4}}, 8}, // width1 height5 => 2+6, sides doubled
 	}
 	for _, tc := range tests {
 		g := RectPerimeterGoal(tc.rect)
@@ -465,5 +471,153 @@ func TestAnnulusBiasEnumeration(t *testing.T) {
 		if cells[0] != want {
 			t.Fatalf("annulus bias inner %d outer %d want %v got %v", tc.inner, tc.outer, want, cells[0])
 		}
+	}
+}
+
+// TestRectEnumerationOrder pins the emission SEQUENCE, not the set: the
+// enumerator interleaves per column — (x, z1) then (x, z2) for x ascending —
+// and only then walks the interior rows appending (x1, z) then (x2, z), with
+// no de-duplication [04 R-MOV-03 §9].
+func TestRectEnumerationOrder(t *testing.T) {
+	cases := []struct {
+		name string
+		rect Rect
+		want []Cell
+	}{
+		{
+			// The review's worked rectangle: x 2..8, z 2..6.
+			name: "7x5",
+			rect: Rect{Min: Cell{2, 2}, Max: Cell{8, 6}},
+			want: []Cell{
+				{2, 2}, {2, 6}, {3, 2}, {3, 6}, {4, 2}, {4, 6}, {5, 2}, {5, 6},
+				{6, 2}, {6, 6}, {7, 2}, {7, 6}, {8, 2}, {8, 6},
+				{2, 3}, {8, 3}, {2, 4}, {8, 4}, {2, 5}, {8, 5},
+			},
+		},
+		{
+			name: "3x3",
+			rect: Rect{Min: Cell{0, 0}, Max: Cell{2, 2}},
+			want: []Cell{
+				{0, 0}, {0, 2}, {1, 0}, {1, 2}, {2, 0}, {2, 2},
+				{0, 1}, {2, 1},
+			},
+		},
+		{
+			// Height 2 has no interior row: the column pass is the whole border.
+			name: "3x2",
+			rect: Rect{Min: Cell{4, 7}, Max: Cell{6, 8}},
+			want: []Cell{{4, 7}, {4, 8}, {5, 7}, {5, 8}, {6, 7}, {6, 8}},
+		},
+		{
+			// z1 == z2: every column cell is listed twice, with no removal.
+			name: "flat row",
+			rect: Rect{Min: Cell{0, 3}, Max: Cell{2, 3}},
+			want: []Cell{{0, 3}, {0, 3}, {1, 3}, {1, 3}, {2, 3}, {2, 3}},
+		},
+		{
+			// x1 == x2: the two side entries of each interior row coincide.
+			name: "flat column",
+			rect: Rect{Min: Cell{5, 0}, Max: Cell{5, 3}},
+			want: []Cell{{5, 0}, {5, 3}, {5, 1}, {5, 1}, {5, 2}, {5, 2}},
+		},
+		{
+			name: "single cell",
+			rect: Rect{Min: Cell{9, 9}, Max: Cell{9, 9}},
+			want: []Cell{{9, 9}, {9, 9}},
+		},
+	}
+	for _, tc := range cases {
+		g := RectPerimeterGoal(tc.rect)
+		got := g.Enumerate(nil)
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("%s enumerate sequence\n got %v\nwant %v", tc.name, got, tc.want)
+		}
+		// The reused-buffer path must emit the same sequence, not merely the
+		// same set.
+		buf := make([]Cell, 0, 2)
+		buf = append(buf, Cell{-1, -1})
+		if got2 := g.Enumerate(buf); !reflect.DeepEqual(got2, tc.want) {
+			t.Fatalf("%s enumerate sequence with buffer\n got %v\nwant %v", tc.name, got2, tc.want)
+		}
+	}
+}
+
+// TestRectGoalNearestTieTakesFirstEnumerated builds deliberate squared-distance
+// ties among goal cells and asserts the ray target is the EARLIEST cell of the
+// contract's sequence that attains the minimum: request setup keeps the first
+// on a tie [04 R-PATH-01 §4 step 5], and the enumeration order of
+// [04 R-MOV-03 §9] is therefore the tie among equal keys that aims the ray
+// [04 R-PATH-01 §13].
+//
+// The winner these cases pin is the contract's, and it is also the winner the
+// earlier row-then-row order happened to produce: a tie between two row cells
+// at the global minimum forces the start to be equidistant from both rows, so
+// the attaining set is symmetric and both orders reach the same smallest
+// column first, while side cells follow the rows in either order. The
+// correction is therefore to the emitted sequence, which
+// TestRectEnumerationOrder pins; no start makes the two orders aim the ray
+// differently.
+func TestRectGoalNearestTieTakesFirstEnumerated(t *testing.T) {
+	cases := []struct {
+		name  string
+		rect  Rect
+		start Cell
+		want  Cell
+	}{
+		{
+			// Centre of an odd square: all four edge midpoints sit at 4. The
+			// column pass reaches (2,0) before the bottom entry of the same
+			// column and long before the side pass.
+			name:  "four-way edge tie from the centre",
+			rect:  Rect{Min: Cell{0, 0}, Max: Cell{4, 4}},
+			start: Cell{2, 2},
+			want:  Cell{2, 0},
+		},
+		{
+			// A top-row cell and a side cell both at 1. Rows are enumerated
+			// before the interior rows, so the row cell wins.
+			name:  "row cell beats the side cell it ties with",
+			rect:  Rect{Min: Cell{0, 0}, Max: Cell{4, 4}},
+			start: Cell{1, 1},
+			want:  Cell{1, 0},
+		},
+		{
+			// Both side cells of one interior row at 4: the side pass appends
+			// (x1,z) before (x2,z).
+			name:  "west side beats east side on the same row",
+			rect:  Rect{Min: Cell{0, 0}, Max: Cell{4, 6}},
+			start: Cell{2, 3},
+			want:  Cell{0, 3},
+		},
+	}
+	for _, tc := range cases {
+		g := RectPerimeterGoal(tc.rect)
+		cells := g.Enumerate(nil)
+		// Prove the tie is real: at least two distinct cells attain the
+		// minimum squared distance. A case with a unique nearest cell would
+		// pass under any enumeration order and is not evidence.
+		best := int64(-1)
+		attainers := map[Cell]bool{}
+		var first Cell
+		for _, c := range cells {
+			dx, dz := int64(c.X)-int64(tc.start.X), int64(c.Z)-int64(tc.start.Z)
+			d := dx*dx + dz*dz
+			if best < 0 || d < best {
+				best, first, attainers = d, c, map[Cell]bool{c: true}
+			} else if d == best {
+				attainers[c] = true
+			}
+		}
+		if len(attainers) < 2 {
+			t.Fatalf("%s: no tie to resolve, %d cell(s) at squared distance %d", tc.name, len(attainers), best)
+		}
+		if first != tc.want {
+			t.Fatalf("%s: first enumerated minimum %v, want %v", tc.name, first, tc.want)
+		}
+		s := NewSession(SearchConfig{Start: tc.start, Goal: g, PassableValue: func(Cell) uint8 { return 1 }})
+		if !s.haveNearest || s.nearest != tc.want {
+			t.Fatalf("%s: ray target %v (have %v), want %v", tc.name, s.nearest, s.haveNearest, tc.want)
+		}
+		s.Release()
 	}
 }

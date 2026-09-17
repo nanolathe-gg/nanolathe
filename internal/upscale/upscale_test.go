@@ -2,7 +2,9 @@ package upscale
 
 import (
 	"bytes"
+	"encoding/binary"
 	"os"
+	"runtime"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/formats"
@@ -290,4 +292,45 @@ func TestUnparsableCacheFileIsRecomputed(t *testing.T) {
 
 func writeTruncated(path string) error {
 	return os.WriteFile(path, []byte(cacheMagic+"\x01"), 0o644)
+}
+
+// The cache is an untrusted file. A mutated record count must be rejected
+// from the remaining length, before it sizes a slice: the reported case is a
+// small mutated file whose counts reserved hundreds of megabytes, and
+// 0xFFFFFFFF would have asked for roughly 200 GB. A rejected decode already
+// fell through to recompute, so what this locks is the reservation, not the
+// verdict.
+func TestMutatedBankCountsAreRejectedNotAllocated(t *testing.T) {
+	sound := encodeBank(&formats.GAF{Version: 0x10100, EntryCount: 1, Entries: []formats.GAFEntry{{
+		Name: "e", FrameCount: 1, Frames: []formats.GAFFrameRef{{Frame: &formats.GAFFrame{
+			Width: 2, Height: 2, Pixels: []byte{1, 2, 3, 4}, Transparent: make([]bool, 4),
+		}}},
+	}}})
+	if _, ok := decodeBank(sound); !ok {
+		t.Fatal("a well-formed bank did not decode")
+	}
+	// Word 3 is the entry count; the first frame count follows the entry's
+	// name chunk (4 length bytes, one name byte) and its three other words.
+	for _, field := range []struct {
+		name   string
+		offset int
+	}{{"entries", 12}, {"frames", 16 + 4 + 1 + 4*3}} {
+		name, offset := field.name, field.offset
+		for _, count := range []uint32{0xFFFFFFFF, 1 << 24, 0x00C00000} {
+			mutated := append([]byte(nil), sound...)
+			binary.LittleEndian.PutUint32(mutated[offset:], count)
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			_, ok := decodeBank(mutated)
+			runtime.ReadMemStats(&after)
+			if ok {
+				t.Fatalf("%s = %#x in a %d-byte payload was accepted", name, count, len(mutated))
+			}
+			// Before the length check the same three counts reserved 201 MB,
+			// 604 MB and more from these 74 bytes.
+			if grew := after.TotalAlloc - before.TotalAlloc; grew > 1<<20 {
+				t.Fatalf("%s = %#x allocated %d bytes from a %d-byte payload", name, count, grew, len(mutated))
+			}
+		}
+	}
 }

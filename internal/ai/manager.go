@@ -1291,8 +1291,10 @@ func (m *Manager) InitializeBattleState(terrain *world.Terrain, bindings RallyBa
 }
 
 // refreshRallyTargets rebuilds the strategic state's first vector only on its
-// 30-tick refresh. The visibility predicate is supplied by session composition;
-// nil remains empty instead of becoming omniscient [08 R-AI-01 §16].
+// 30-tick refresh: non-allied live units that pass the ordinary visibility
+// predicate and whose mission Immunity bit is clear [08 R-AI-01 §16]. The
+// visibility predicate is supplied by session composition; nil remains empty
+// instead of becoming omniscient.
 func (m *Manager) refreshRallyTargets(w *units.World, econ *economy.Service) {
 	if m == nil {
 		return
@@ -1303,7 +1305,16 @@ func (m *Manager) refreshRallyTargets(w *units.World, econ *economy.Service) {
 	}
 	m.rallyWalk = w.AppendLiveSliced(m.rallyWalk[:0]) // players then slots ascending (I1)
 	for _, u := range m.rallyWalk {
-		if u == nil || !u.Alive || u.Dying || !m.hostileOwner(u.Owner, econ) || !m.RallyVisible(m.Player, u) {
+		if u == nil || !u.Alive || u.Dying || !m.hostileOwner(u.Owner, econ) {
+			continue
+		}
+		if u.Flags&units.ImmunityStatus != 0 {
+			// A mission-immune unit is not in the first vector, so the rally
+			// probe never scores it [08 R-AI-01 §16]. This is the same test the
+			// target registry's build of the vector applies [06 §3.1].
+			continue
+		}
+		if !m.RallyVisible(m.Player, u) {
 			continue
 		}
 		m.rallyTargets = append(m.rallyTargets, u.Handle)

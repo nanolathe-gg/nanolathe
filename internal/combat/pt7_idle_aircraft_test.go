@@ -67,9 +67,14 @@ func TestPT7_IdleAircraftEngagesOnItsOwn(t *testing.T) {
 		t.Skip("skirmish composed with no local units")
 	}
 	gunship, ok := sess.Catalog.Unit("ARMBRAWL")
-	target, ok2 := sess.Catalog.Unit("ARMSOLAR")
+	// The hostile authors `ShootMe=1`, check 2 of the picked-candidate order
+	// [06 §3.2]: the gunship is HUMAN-owned, and a human's unit does not
+	// autonomously acquire a candidate whose definition omits the key — every
+	// non-combat building, the solar collector included. The Core radar tower
+	// authors it and carries no weapon of its own.
+	target, ok2 := sess.Catalog.Unit("CORRAD")
 	if !ok || !ok2 || gunship == nil || target == nil {
-		t.Skip("stock gunship or solar collector absent")
+		t.Skip("stock gunship or radar tower absent")
 	}
 	// Inside the aircraft's line of sight. The LOS radius saturates well below
 	// the authored `sightdistance` for every long-sighted unit, because retail

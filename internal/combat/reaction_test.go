@@ -456,3 +456,32 @@ func TestDeathWritesTheDeathPacketsAttacker(t *testing.T) {
 		}
 	})
 }
+
+// TestReactionOfferSkipsADisabledSlot locks the armed half of the per-slot
+// offer's admission [06 R-WPN-04 §2 part 3]: "for each slot whose armed and
+// tracking bits are set", which [08 R-AI-01 §11] writes out as "each of the
+// victim's three weapon slots that is enabled and autonomous".
+//
+// Armed is the control byte's ENABLED bit [06 R-WPN-05 §3]. Its writers are the
+// slot initializer, which sets it for exactly the slots whose weapon link
+// resolved, and save restore, which copies the persisted byte back wholesale
+// [08 R-SAVE-WEAPON-01]. That is where the two can disagree: a restored slot
+// with a live weapon link and a clear enabled bit must not be handed the
+// attacker.
+func TestReactionOfferSkipsADisabledSlot(t *testing.T) {
+	f := newReactionFixture(t)
+	installSlotWeapon(f.victim, 0, &content.WeaponDef{ID: 1, Range: 400})
+	installSlotWeapon(f.victim, 1, &content.WeaponDef{ID: 2, Range: 400})
+	// Slot 0 keeps its resolved weapon and its autonomy bit; only the enabled
+	// bit is cleared, the way a save restore can hand it back.
+	f.victim.SlotAt(0).Flags &^= units.SlotFlagEnabled
+
+	f.svc.ReactToDamage(f.w, f.victim, f.attacker, 5)
+
+	if got := f.victim.SlotAt(0).Target; got.Kind != units.TargetNone {
+		t.Fatalf("a populated but DISABLED slot was offered the attacker (%+v); the offer's admission is the enabled bit, not the weapon link [06 R-WPN-04 §2 part 3][08 R-AI-01 §11]", got)
+	}
+	if got := f.victim.SlotAt(1).Target; got.Kind != units.TargetUnit || got.Unit != f.attacker.Handle {
+		t.Fatalf("the enabled slot targets %+v, want the attacker: the offer re-tests each slot on its own terms [08 R-AI-01 §11]", got)
+	}
+}

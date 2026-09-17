@@ -15,7 +15,10 @@ import (
 func base(r *rng.Simulation) Acquisition {
 	return Acquisition{
 		ShooterX: 0, ShooterZ: 0, ShooterY: fixed(10), SeaLevel: fixed(5), Range: 1000, RNG: r,
-		Visible: func(Candidate) bool { return true },
+		// A computer owner opens check 2 for every candidate [06 §3.2]; these
+		// fixtures are about the §3.1 physical gate, check 3.
+		ShooterControlByte: ControlByteComputer,
+		Visible:            func(Candidate) bool { return true },
 	}
 }
 

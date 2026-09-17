@@ -45,7 +45,7 @@ func newAirGuardFixture(t *testing.T) *airGuardFixture {
 	f.guard.MaxHealth, f.guard.Health = 100, 100
 	// Committed airborne (mode 2): the preamble's takeoff arm is a phase-0
 	// concern of [04 R-AIR-01 §6] and not this row's subject.
-	f.guard.Move.Mode = 2
+	f.guard.Move.Mode, f.guard.Move.ModeMirror = 2, 2 // committed mover mode [04 R-MOV-01 §8]
 	f.ward = &units.Unit{
 		Handle: 2,
 		Def:    &content.UnitDef{UnitName: "ward", FootprintX: 1, FootprintZ: 1, MaxDamage: 100},

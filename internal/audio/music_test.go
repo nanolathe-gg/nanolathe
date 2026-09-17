@@ -10,29 +10,76 @@ func TestMusic_SequentialWrap(t *testing.T) {
 	if m.CurTrack() != 3 {
 		t.Fatalf("cur %d want 3", m.CurTrack())
 	}
-	// not playing → tick should increment to 1 wrap via playSequential that uses nextTrack
+	// The stop/reset re-arms *next* to track 1 with a disc present
+	// [03 R-AUD-01 §4 step 2], and the sequential arm is "next + 1"
+	// [03 R-AUD-01 §4 step 5, mode 1], so the resumed disc starts at 2.
 	m.Stop()
 	m.SetNumTracks(3)
 	m.Configure(ModeSequential, 0)
-	// after stop next=1, cur=0 idle
-	m.Tick(false) // not playing → seq plays 1
-	if m.CurTrack() != 1 {
-		t.Fatalf("seq first %d want 1", m.CurTrack())
+	if m.NextTrack() != 1 {
+		t.Fatalf("next after stop %d want 1", m.NextTrack())
+	}
+	m.Tick(false) // not playing → seq plays next+1 = 2
+	if m.CurTrack() != 2 {
+		t.Fatalf("seq first %d want 2", m.CurTrack())
 	}
 	m.NotifyTrackEnd() // track ends
-	m.Tick(false)      // should advance to 2
-	if m.CurTrack() != 2 {
-		t.Fatalf("seq second %d want 2", m.CurTrack())
-	}
-	m.NotifyTrackEnd()
-	m.Tick(false) // 3
+	m.Tick(false)      // should advance to 3
 	if m.CurTrack() != 3 {
-		t.Fatalf("seq third %d want 3", m.CurTrack())
+		t.Fatalf("seq second %d want 3", m.CurTrack())
 	}
 	m.NotifyTrackEnd()
 	m.Tick(false) // wrap to 1
 	if m.CurTrack() != 1 {
 		t.Fatalf("seq wrap %d want 1", m.CurTrack())
+	}
+	m.NotifyTrackEnd()
+	m.Tick(false) // 2
+	if m.CurTrack() != 2 {
+		t.Fatalf("seq fourth %d want 2", m.CurTrack())
+	}
+}
+
+// TestMusic_StopResetsNextToOne locks the stop/reset contract: status idle,
+// fade step zero, timers cancelled, and *next* re-armed to track 1 — or 0 only
+// when the disc carries no audio tracks [03 R-AUD-01 §4 step 2]. The MUSIC
+// screen's `CDSTOP` is the same primitive and likewise re-selects track 1
+// [03 R-AUD-01 §4 "the MUSIC screen"].
+func TestMusic_StopResetsNextToOne(t *testing.T) {
+	m := NewMusicController()
+	m.Open(16)
+	m.Play(7)
+	if m.NextTrack() != 7 {
+		t.Fatalf("next while playing %d want 7", m.NextTrack())
+	}
+	m.Stop()
+	if got := m.NextTrack(); got != 1 {
+		t.Fatalf("next after stop %d want 1", got)
+	}
+	if m.Status() != StatusIdle {
+		t.Fatalf("status after stop %v want idle", m.Status())
+	}
+
+	// No audio tracks → the reset leaves next at 0.
+	empty := NewMusicController()
+	empty.SetNumTracks(0)
+	empty.Stop()
+	if got := empty.NextTrack(); got != 0 {
+		t.Fatalf("next after stop with no tracks %d want 0", got)
+	}
+
+	// The silence category runs the same stop/reset through the tick
+	// [03 R-AUD-01 §4 step 2].
+	sil := NewMusicController()
+	sil.Open(16)
+	sil.Play(5)
+	sil.Configure(ModeSequential, 4)
+	sil.Tick(true)
+	if got := sil.NextTrack(); got != 1 {
+		t.Fatalf("next after silence tick %d want 1", got)
+	}
+	if sil.Status() != StatusIdle {
+		t.Fatalf("status after silence tick %v want idle", sil.Status())
 	}
 }
 
@@ -182,27 +229,45 @@ func TestMusic_FailureFallback(t *testing.T) {
 	}
 }
 
+// Repeat's arm is "not `playing` **or** `next ≠ requested` → `requested = 1`
+// when it was 0; `PlayTrack(requested)`" [03 R-AUD-01 §4 step 5, mode 3]. The
+// requested track is a field of the CD object in its own right, written by the
+// MUSIC screen's `Repeat` stage; `PlayTrack` writes *next*. This test used to
+// read the two as one word, which is what let a Repeat battle start silent.
 func TestMusic_SingleRepeat(t *testing.T) {
 	m := NewMusicController()
 	m.Open(5)
 	m.Configure(ModeSingle, 0)
+	m.SetRequestedTrack(3) // the `TRACKMODE` `Repeat` arm's copy
 	m.Play(3)
-	// while playing, tick with isPlaying true should not change
+	// While the requested track plays, both halves of the condition are false
+	// and the tick leaves the selection alone.
 	m.Tick(true)
 	if m.CurTrack() != 3 {
 		t.Fatalf("single while playing should stay 3")
 	}
 	m.NotifyTrackEnd()
-	m.Tick(false) // not playing, single should re-play requested (nextTrack 3)
+	m.Tick(false) // not playing → replay the requested track
 	if m.CurTrack() != 3 {
 		t.Fatalf("single repeat %d want 3", m.CurTrack())
 	}
+	// A next track that is not the requested one is pulled back even while the
+	// drive reports playing — the `next ≠ requested` half.
+	m.Play(5)
+	m.Tick(true)
+	if m.CurTrack() != 3 || m.NextTrack() != 3 {
+		t.Fatalf("repeat did not pull back to the requested track: cur=%d next=%d", m.CurTrack(), m.NextTrack())
+	}
 }
 
-func TestMusic_SingleZeroStopsAndResumeReappliesVolume(t *testing.T) {
+// A Repeat tick with nothing requested defaults the requested track to 1 and
+// plays it [03 R-AUD-01 §4 step 5, mode 3]. It does not stop: that reading is
+// what left `cdmode=3` battles with no music until the MUSIC screen was used.
+func TestMusic_SingleZeroPlaysTrackOneAndResumeReappliesVolume(t *testing.T) {
 	m := NewMusicController()
 	m.Open(5)
 	m.Configure(ModeSingle, 0)
+	m.SetRequestedTrack(3)
 	m.Play(3)
 	m.SetPosition(1234)
 	m.SetVolume(17)
@@ -216,9 +281,11 @@ func TestMusic_SingleZeroStopsAndResumeReappliesVolume(t *testing.T) {
 		t.Fatalf("resume should reapply volume: %d -> %d", before, m.VolumeApplications())
 	}
 	m.Stop()
+	m.SetRequestedTrack(0)
 	m.Tick(false)
-	if m.CurTrack() != 0 || m.Status() != StatusIdle {
-		t.Fatalf("single requested zero must stop, cur=%d status=%d", m.CurTrack(), m.Status())
+	if m.RequestedTrack() != 1 || m.CurTrack() != 1 || m.Status() != StatusPlaying {
+		t.Fatalf("repeat with nothing requested: requested=%d cur=%d status=%d",
+			m.RequestedTrack(), m.CurTrack(), m.Status())
 	}
 }
 
@@ -423,5 +490,19 @@ func TestMusicFadeCancellationAndCompletionPolling(t *testing.T) {
 	m.NotifySuccessfulCompletion()
 	if m.CurTrack() != 2 || polls != 3 {
 		t.Fatal("successful completion did not freshly poll and advance stopped media")
+	}
+}
+
+// A battle entered with `cdmode=3` and nothing requested must start playing.
+// The tick's Repeat arm supplies track 1 [03 R-AUD-01 §4 step 5, mode 3]; it
+// used to read *next*, find it 0, and stop, which left the battle silent until
+// the MUSIC screen was opened.
+func TestMusic_RepeatBattleEntryStartsWithoutARequestedTrack(t *testing.T) {
+	m := NewMusicController()
+	m.Open(16)
+	m.Configure(ModeSingle, 0)
+	m.Tick(false)
+	if m.Status() != StatusPlaying || m.CurTrack() != 1 {
+		t.Fatalf("repeat entry status=%d cur=%d, want playing on track 1", m.Status(), m.CurTrack())
 	}
 }

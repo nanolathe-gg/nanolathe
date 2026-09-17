@@ -276,9 +276,11 @@ func TestResult_LocalDefeat(t *testing.T) {
 	}
 	s.State = StateBattle
 	s.RegisterAll()
-	// LocalOwner is 0 by default (first human)
+	// Both rows are human, so the local player is the LAST of them
+	// [08 R-SKIR-01 §2] "Battle entry: what the record becomes".
+	local := int(s.LocalOwner)
 	// Kill local commander
-	h := poolHandle(commanderHandles(s)[0][0])
+	h := poolHandle(commanderHandles(s)[local][0])
 	s.Units.Destroy(h, units.DeathKilled)
 	if result := s.Units.FinalizeDeath(h, 0); !result.Freed {
 		t.Fatal("local commander was not finalized")
@@ -294,7 +296,7 @@ func TestResult_LocalDefeat(t *testing.T) {
 		t.Fatalf("local defeat should latch")
 	}
 	res := s.GetResult()
-	wantWinner := s.teamForOwner(1)
+	wantWinner := s.teamForOwner(1 - local)
 	if res.WinnerTeam != wantWinner {
 		t.Fatalf("local defeat winner want %d got %d", wantWinner, res.WinnerTeam)
 	}
@@ -516,14 +518,18 @@ func TestSkirmishDeathmatchRespawnDrawsXThenZ(t *testing.T) {
 	// This test isolates commander placement and draw order; production
 	// composition supplies movement for occupancy and rebinding.
 	s.Movement = nil
-	h := poolHandle(commanderHandles(s)[0][0])
+	// The respawn rides the LOCAL slot's settlement due, and both rows of this
+	// fixture are human, so the local player is the last of them
+	// [08 R-SKIR-01 §2] "Battle entry: what the record becomes".
+	local := int(s.LocalOwner)
+	h := poolHandle(commanderHandles(s)[local][0])
 	simState := s.SimRNG().State
 	simDraws := s.SimRNG().Draws()
 	s.Units.Destroy(h, units.DeathKilled)
 	if result := s.Units.FinalizeDeath(h, 0); !result.Freed {
 		t.Fatal("commander was not finalized")
 	}
-	s.NotifyDeathFinalized(0, 0)
+	s.NotifyDeathFinalized(local, 0)
 	// **Correction (WU-19-116).** This used to assert that the commander's death
 	// armed a deathmatch countdown of 4 on the spot. It does not: rule 2 runs
 	// the same owner sweep as rule 1 and arms nothing. The respawn rides the one
@@ -555,13 +561,13 @@ func TestSkirmishDeathmatchRespawnDrawsXThenZ(t *testing.T) {
 	}
 	var commander *units.Unit
 	for _, u := range s.Units.IterSliced() {
-		if u != nil && u.Alive && s.isCommanderForOwner(u) {
+		if u != nil && u.Alive && int(u.Owner) == local && s.isCommanderForOwner(u) {
 			commander = u
 			break
 		}
 	}
 	if commander == nil {
-		t.Fatal("deathmatch did not create a commander")
+		t.Fatal("deathmatch did not create a commander for the local player")
 	}
 	if commander.X != wantX || commander.Z != wantZ {
 		t.Fatalf("respawn position = (%v,%v), want (%v,%v)", commander.X, commander.Z, wantX, wantZ)
@@ -602,4 +608,101 @@ var _ = vfs.FS{}
 
 func init() {
 	// Ensure commander flag for helper
+}
+
+// TestResult_AlliedLocalWipedNamesTheOpponent pins the defeat branch of
+// resultTeams against the victory sweep's candidate set [08 R-TRIG-01 §6]
+// "The kind-2 victory sweep": the slots that are skipped are the local one and
+// the slots whose byte is set in the local player's first alliance row. A
+// surviving TEAM-MATE is therefore not a winner the post-battle screen may
+// name. Before this test the defeat branch skipped only the local slot, so an
+// allied local wipe named the local team as the winner and resultKindFor
+// returned "victory" for a session whose latch carried the lost bit.
+func TestResult_AlliedLocalWipedNamesTheOpponent(t *testing.T) {
+	rng.SeedGlobal(7, 7)
+	cat := minimalCatalogForStrict()
+	for _, u := range cat.Units {
+		u.Commander = true
+	}
+	fs := fsFromMapSkirmish(t, map[string]string{
+		"maps/test.ota":  "[GlobalHeader]\n{\n[Schema 0]\n{\nType=Network 1;\n[specials]\n{\n[special0]\n{\nspecialwhat=StartPos1;\nXPos=0;\nZPos=0;\n}\n[special1]\n{\nspecialwhat=StartPos2;\nXPos=10;\nZPos=10;\n}\n[special2]\n{\nspecialwhat=StartPos3;\nXPos=20;\nZPos=20;\n}\n}\n}\n}\n",
+		"ai/default.txt": "plan any\nweight FALLBACK 0.5\n",
+	})
+	cfg := SkirmishConfig{MapName: "test", NumPlayers: 3}
+	cfg.ApplyDefaults()
+	// Slot 0 is the local player's ALLY and slot 2 the opponent, so the ally is
+	// the lower-numbered survivor: a defeat branch that skipped only the local
+	// slot would name the ally's team — which is the local team — first. The
+	// opponent is a computer row so that the local player is the last HUMAN row
+	// [08 R-SKIR-01 §2] "Battle entry: what the record becomes".
+	cfg.Players[0].Controller = SkirmishControllerHuman
+	cfg.Players[1].Controller = SkirmishControllerHuman
+	cfg.Players[2].Controller = SkirmishControllerComputer
+	cfg.Players[0].AllyGroup = 1
+	cfg.Players[1].AllyGroup = 1
+	cfg.Players[2].AllyGroup = 2
+	s, err := NewSyntheticSkirmishForTest(fs, cat, cfg)
+	if err != nil {
+		t.Fatalf("NewSyntheticSkirmishForTest: %v", err)
+	}
+	s.State = StateBattle
+	s.RegisterAll()
+	const localSlot, allySlot, enemySlot = 1, 0, 2
+	if int(s.LocalOwner) != localSlot {
+		t.Fatalf("this fixture expects the local owner at the last human row (slot %d), got %d", localSlot, s.LocalOwner)
+	}
+	if !s.ownersAllied(localSlot, allySlot) || s.ownersAllied(localSlot, enemySlot) {
+		t.Fatalf("fixture alliance rows are wrong: ally %v enemy %v", s.ownersAllied(localSlot, allySlot), s.ownersAllied(localSlot, enemySlot))
+	}
+	// Wipe the local player only: the ally and the opponent keep their
+	// commanders.
+	h := poolHandle(commanderHandles(s)[localSlot][0])
+	s.Units.Destroy(h, units.DeathKilled)
+	if result := s.Units.FinalizeDeath(h, 0); !result.Freed {
+		t.Fatal("local commander was not finalized")
+	}
+	var latched bool
+	for tick := uint32(0); tick < 200; tick++ {
+		if s.EvaluateResult(tick) {
+			latched = true
+			break
+		}
+	}
+	if !latched {
+		t.Fatalf("a local live count of zero must latch [08 R-TRIG-01 §6], got %+v latch %+v", s.GetResult(), s.Latch)
+	}
+	if s.Units.LiveCountForPlayer(allySlot) == 0 || s.Units.LiveCountForPlayer(enemySlot) == 0 {
+		t.Fatalf("fixture must leave the ally and the opponent alive: ally %d enemy %d", s.Units.LiveCountForPlayer(allySlot), s.Units.LiveCountForPlayer(enemySlot))
+	}
+	if !s.Latch.IsLose() {
+		t.Fatalf("a wiped local player latches the lost bit [08 R-TRIG-01 §6]")
+	}
+	res := s.GetResult()
+	localTeam := s.teamForOwner(localSlot)
+	if res.Kind != "defeat" {
+		t.Fatalf("kind must agree with the latch: want defeat got %q (winner %d, local team %d)", res.Kind, res.WinnerTeam, localTeam)
+	}
+	if res.WinnerTeam == localTeam {
+		t.Fatalf("the named winner must not be the local team %d (the ally at slot %d shares it)", localTeam, allySlot)
+	}
+	if want := s.teamForOwner(enemySlot); res.WinnerTeam != want {
+		t.Fatalf("defeat winner want the surviving opponent's team %d got %d", want, res.WinnerTeam)
+	}
+	for _, loser := range res.Losers {
+		if loser == res.WinnerTeam {
+			t.Fatalf("the winning team %d must not also appear in the loser list %v", res.WinnerTeam, res.Losers)
+		}
+	}
+	if !containsInt(res.Losers, localTeam) {
+		t.Fatalf("the wiped local team %d must be a loser, losers %v", localTeam, res.Losers)
+	}
+}
+
+func containsInt(list []int, want int) bool {
+	for _, v := range list {
+		if v == want {
+			return true
+		}
+	}
+	return false
 }

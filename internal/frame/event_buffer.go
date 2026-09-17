@@ -374,6 +374,7 @@ func (c *EventBuffer) SnapshotEventsInto(dst []EventView) []EventView {
 			DurationsA: append(a[:0], e.DurationsA...), DurationsB: append(b[:0], e.DurationsB...),
 			LoopA: e.LoopA, LoopB: e.LoopB,
 			FlashRadius: e.FlashRadius, FlashLevel: e.FlashLevel, HasFlashDisc: e.HasFlashDisc,
+			HasCalculatedFlash: e.HasCalculatedFlash, CalculatedTable: e.CalculatedTable,
 			Strip: e.Strip, NanolatheIndex: e.NanolatheIndex, NanolatheCount: e.NanolatheCount,
 			NanolatheGeometryKnown:  e.NanolatheGeometryKnown,
 			NanolatheActiveUntil:    e.NanolatheActiveUntil,
