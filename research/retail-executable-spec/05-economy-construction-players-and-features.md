@@ -609,12 +609,49 @@ for a class-less building, from a profile built out of the definition's own
 authored keys — the same copy that supplies the footprint the placement anchor
 uses. `waterline` is the definition's own.
 
-The published `siteHeight` is a global the build ghost and the MOBILEBUILD order
-both read [07 §9]; it is what makes the placement rectangle sit flat on the
-ground the structure will stand on. The `maxHigh < minLow` branch is reachable:
-a yard map made only of characters without bit 3 leaves both aggregates at their
+The published `siteHeight` makes the placement rectangle sit flat on the ground
+the structure will stand on. The `maxHigh < minLow` branch is reachable: a yard
+map made only of characters without bit 3 leaves both aggregates at their
 initial values, and the site is then referred to the water surface instead of to
 the terrain.
+
+**Established fact — the same height is computed twice, and the published global
+is only the ghost's.** Corrected 2026-09-17, replacing this section's earlier
+claim that the build ghost and the MOBILEBUILD order both read the published
+global. The global has exactly one reader, a one-line getter whose only call
+site is the build ghost's draw; the value reaches the screen halved and
+camera-relative, and no other site consumes it. A structure's stored Y comes
+instead from a **standalone footprint-height query** that recomputes the same
+aggregate and returns it directly: it walks the same footprint from the same
+yard map, keeps the same bit-3 minimum of the cell low height seeded at 255 and
+bit-3 maximum of the cell high height seeded at 0, and answers `SeaLevel -
+waterline` when no cell carried bit 3 and the minimum otherwise. It performs no
+gate and rejects nothing — it is the height alone. Both producers therefore
+agree by construction, so the arithmetic above is the site height wherever it
+is used; only the plumbing differed from what this section said.
+
+**Established fact — the placement helper that writes a structure's Y.** One
+helper takes a definition and a world position triple and, *only* when the
+definition is of the immobile class (the same discriminant that routes a
+placement check to the footprint validator rather than to the per-cell mobile
+walk), does two things in order:
+
+1. **Snaps the origin to the build grid.** Per horizontal axis, with `foot` the
+   definition's footprint extent on that axis in cells, it takes
+   `cell = (world - foot·halfCell + halfCell) >> cellShift` and writes back
+   `world = (foot + 2·cell)·halfCell`, where `halfCell` is half a terrain cell
+   in 16.16 and `cellShift` is the two-cell build step. This is the parity snap
+   that puts an odd footprint on cell centres and an even one on cell corners.
+2. **Writes the Y.** It calls the standalone footprint-height query at the
+   snapped cell pair and stores the returned byte, shifted into 16.16, as the
+   triple's Y.
+
+So a structure stands at the **minimum** low height under its bit-3 footprint
+cells, not at the terrain height under its origin. A structure that straddles a
+plateau edge is therefore partly buried, and its origin can sit well below the
+ground at its own centre; that is retail's, and it is what makes an aim point
+resolved from a structure's origin lie inside the hill it stands on. A mobile
+definition is left untouched by this helper, origin and Y alike.
 
 Feature references on covered cells resolve through the signed-offset
 resolver. **Established:** the empty sentinel `0xFFFF` resolves empty;
@@ -714,9 +751,9 @@ with the `siteHeight` of the gate above. The metal sum has exactly two
 readers, both one-line getters, and both are read by the computer player's
 extractor placement only after a successful verdict ([08 "Placement root
 and search helpers"]: "the blocker accumulates each footprint cell's metal
-byte"); the site height is the value the build ghost and `MobileBuild`
-read, as the section above already says. Neither global is reset anywhere
-else: the last validation's values persist until the next call.
+byte"); the site height global is the build ghost's alone, per the
+correction in the section above. Neither global is reset anywhere else: the
+last validation's values persist until the next call.
 
 **The visibility gate is a map-object argument, not a mode number.** The
 "mode" of [04 §6.4] is the presence of a map-object pointer: when one is

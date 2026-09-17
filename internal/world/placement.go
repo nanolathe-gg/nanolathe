@@ -980,7 +980,15 @@ func (t *Terrain) ValidatePlacement(cx, cz int32, yard []YardCell, footX, footZ 
 }
 
 // SiteHeight returns the ground height retail draws a build site at and stores
-// as the MOBILEBUILD order's Y [07 §9][04 §6.2].
+// as a structure's Y [05 "Established fact — the placement helper that writes a
+// structure's Y"][07 §9][04 §6.2].
+//
+// A structure therefore stands at the MINIMUM height under its footprint, not
+// at the terrain height under its origin, so one straddling a plateau edge is
+// partly buried and its origin can sit well below its own centre's ground. That
+// is retail's, confirmed against two independent producers of the aggregate; do
+// not "correct" a buried structure by raising it to the terrain under its
+// origin.
 //
 // The footprint validator tracks two aggregates while it walks the yard map,
 // over exactly those cells whose yard byte carries bit 3 — the bit research

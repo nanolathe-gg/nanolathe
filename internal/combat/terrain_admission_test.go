@@ -228,3 +228,66 @@ func TestModernAnnihilatorTerrainAdmissionRetail(t *testing.T) {
 		t.Fatalf("installed Annihilator admission=%v want blocked", got)
 	}
 }
+
+// guidedTerrainWeapon is a stock-shaped guided self-propelled missile: the
+// Swatter's family (selfprop + guidance + tracks, a turret, no two-phase).
+func guidedTerrainWeapon() *content.WeaponDef {
+	return &content.WeaponDef{ID: 9, SelfProp: true, Guidance: true, Tracks: true, Turret: true,
+		Range: 400, WeaponVelocity: 16 << 16, TurnRate: 1666, WeaponTimer: 150,
+		Tolerance: wideDriftTolerance, AreaOfEffect: 8}
+}
+
+func immobileTerrainTarget(aim Vec3) *units.Unit {
+	return &units.Unit{Handle: 2, Alive: true,
+		Def: &content.UnitDef{ModelTopFixed: 16 << 16, FootprintX: 2, FootprintZ: 2, MaxVelocity: 0},
+		X:   aim.X, Y: aim.Y, Z: aim.Z}
+}
+
+// TestModernGuidedPursuitReachesBeyondTheFirstTick locks the Modern extension
+// of DESIGN_WEAPONS_PROJECTILES §2.3.1 "Guided pursuit against an immobile
+// target": a ridge several ticks downrange is provable when the target cannot
+// move, and is still admitted for every other target, which is the one-step
+// proof this extension does not replace.
+func TestModernGuidedPursuitReachesBeyondTheFirstTick(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		ridgeCell   int32
+		ridgeFloor  uint8
+		maxVelocity int32
+		burnBlow    bool
+		noTarget    bool
+		want        terrainShotResult
+	}{
+		{name: "distant ridge blocks for an immobile target", ridgeCell: 6, ridgeFloor: 32, want: terrainShotBlocked},
+		{name: "clear path admits", ridgeCell: 6, ridgeFloor: 8, want: terrainShotClear},
+		{name: "mobile target keeps the one-step proof", ridgeCell: 6, ridgeFloor: 32, maxVelocity: 2, want: terrainShotUnknown},
+		{name: "no unit target keeps the one-step proof", ridgeCell: 6, ridgeFloor: 32, noTarget: true, want: terrainShotUnknown},
+		{name: "burn-blow is excluded", ridgeCell: 6, ridgeFloor: 32, burnBlow: true, want: terrainShotUnknown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, terrain := newContactFixture(t)
+			terrain.PlotAt(tc.ridgeCell, 1).SetMinHeight(tc.ridgeFloor)
+			weapon := guidedTerrainWeapon()
+			weapon.BurnBlow = tc.burnBlow
+			muzzle, aim := modernTerrainPoints()
+			var target *units.Unit
+			if !tc.noTarget {
+				target = immobileTerrainTarget(aim)
+				target.Def.MaxVelocity = tc.maxVelocity
+			}
+			got := modernTerrainAdmission(Slot{Weapon: weapon}, muzzle, aim, 10, terrain, target, nil)
+			if got != tc.want {
+				t.Fatalf("admission=%v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestModernGuidedPursuitIsModernOnly proves the extension stays behind the
+// central gameplay mode: Strict 3.1 never reaches the preview at all.
+func TestModernGuidedPursuitIsModernOnly(t *testing.T) {
+	svc := &Service{}
+	if svc.ModernTerrainAdmission {
+		t.Fatal("terrain admission must default off; Strict 3.1 keeps retail's path [I11]")
+	}
+}

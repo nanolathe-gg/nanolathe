@@ -2,6 +2,7 @@ package combat
 
 import (
 	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
@@ -82,6 +83,11 @@ func modernTerrainAdmission(launch Slot, muzzle, aim Vec3, tick uint32, terrain 
 		return terrainShotUnknown
 	}
 	if motion == MotionSelfProp && weapon.Guidance && !weapon.TwoPhase && weapon.TurnRate != 0 {
+		// An immobile target makes the pursuit deterministic, so the whole
+		// flight is provable. Fall back to the one-step superset otherwise.
+		if result := guidedPursuitTerrainAdmission(weapon, tick, terrain, sample, target, muzzle, aim); result != terrainShotUnknown {
+			return result
+		}
 		return guidedLaunchTerrainAdmission(preview, weapon, tick, terrain, sample)
 	}
 	// With burn-blow even a zero turn rate can impact on a target-dependent
@@ -209,6 +215,70 @@ func terrainBoxDistanceValid(point Vec3, box UnitForArea) bool {
 		remaining -= distance * distance
 	}
 	return true
+}
+
+// guidedPursuitTerrainAdmission previews a guided self-propelled shot for its
+// WHOLE flight, which guidedLaunchTerrainAdmission below cannot: that proof
+// spans one tick, so a missile whose launch clears the ground and buries itself
+// in a rising slope several ticks later is never provably blocked, and the
+// shooter re-fires into the same hill forever.
+//
+// The extra reach is sound only because an immobile target removes the
+// uncertainty the one-step proof exists to cover. Steering pursues the point
+// [06 §6.7] resolves each tick, so a target that cannot move makes every later
+// tick a function of the launch alone and the preview EXACT rather than a
+// superset. A target's death does not perturb it either: the retained unit
+// point and the record's stored point are the same point for something that
+// never moved, so [06 §6.7]'s fallback follows the same path.
+//
+// Like the rest of this policy it reasons about terrain and the resolved target
+// only. A shot refused here might have struck some third unit standing in the
+// path; the one-step proof has always had that property, and a shooter with an
+// engageable target that close would ordinarily have acquired it instead.
+func guidedPursuitTerrainAdmission(weapon *content.WeaponDef, tick uint32, terrain *world.Terrain, sample terrainAdmissionSample, target *units.Unit, muzzle, aim Vec3) terrainShotResult {
+	// Burn-blow detonates on a steering failure rather than flying on, so its
+	// flight is not a function of the launch [06 §6.6].
+	if weapon.BurnBlow || target == nil || target.Def == nil || target.Handle == 0 || !target.Alive || target.Dying {
+		return terrainShotUnknown
+	}
+	// The same discriminant presentation uses for a building [05 "Construction
+	// target state"]: a definition with no velocity has no mover to move it.
+	if target.Def.MaxVelocity != 0 {
+		return terrainShotUnknown
+	}
+	var preview Projectile
+	InitOrdinary(&preview, weapon, tick, muzzle, aim, target.Handle)
+	env := GuidanceEnv{
+		Unit: func(h pool.Handle) *units.Unit {
+			if h == target.Handle {
+				return target
+			}
+			return nil
+		},
+		Terrain: terrain,
+	}
+	seaLevel := numeric.FixedFromInt(int64(terrain.SeaLevel))
+	for n := 0; n < modernTerrainSampleBudget; n++ {
+		// Stop at expiry exactly as the generic self-propelled preview does:
+		// past it the record's behaviour is no longer the launch's [06 §6.6].
+		if tick >= preview.ExpiryTick {
+			return terrainShotUnknown
+		}
+		if AdvanceSelfProp(&preview, weapon, tick, terrain.Gravity, seaLevel, env) != AdvanceAlive {
+			return terrainShotUnknown
+		}
+		if !terrainPointValid(preview.Velocity) {
+			return terrainShotUnknown
+		}
+		if result, done := sample.contact(preview.Pos); done {
+			return result
+		}
+		if tick == ^uint32(0) {
+			return terrainShotUnknown
+		}
+		tick++
+	}
+	return terrainShotUnknown
 }
 
 // guidedLaunchTerrainAdmission considers EVERY possible first-step steering

@@ -2541,11 +2541,42 @@ barrel level, and is a **planar** Z difference rather than a distance along the
 elevated barrel, it also over-states the head start by the cosine of the firing
 elevation. What is **Unknown** is therefore whether retail's shells land on the
 aim point at all, or whether a stock ballistic weapon genuinely groups short of
-it. *Decider:* a manual retail observation — a stationary stock light cannon
-firing on a stationary target on level ground at a known planar range,
-comparing the impact point with the target's footprint at short, middling and
-maximum range. Where the group lands settles both the geometric meaning and the
-apex against the literal expression.
+it.
+
+**Established fact (2026-09-17) — the solver and the launch share one gravity.**
+The obvious alternative explanation is ruled out. The ballistic solver takes
+five arguments: the three source-minus-target deltas, the weapon velocity, and
+a float from the weapon definition. That float is **not** a per-weapon gravity —
+it is the minimum barrel angle, and its only use is the lower half of the
+acceptance gate that brackets each recovered angle between it and a quarter
+turn. The solver reads gravity from the same map-wide global the launch's
+pre-decrement multiplies by `T0`. There is therefore no mismatch between the
+gravity the trajectory was solved for and the gravity the shot flies under, and
+the shortfall cannot be attributed to one.
+
+**Established fact (2026-09-17) — how much of the corpus this reaches.** Over
+the stock corpus, 36 of the 40 ballistic weapon slots carry a nonzero stored
+word and so take a pre-decrement; `T0` ranges from 1 to 5 ticks. The four
+exceptions, whose word divides to zero and which therefore launch on the bare
+solved vector, are all flak cannons. The largest `T0` values are the stock light
+cannon and the level-1 plasma cannons.
+
+*Decider:* a manual retail observation, which the arithmetic above makes a sharp
+prediction for. Take a stationary stock light-cannon vehicle on level ground and
+have it fire on a stationary target at a known planar range. Reproducing this
+engine's launch arithmetic, the group centre falls **short of the aim point by
+roughly 34 to 40 world units — a little over two terrain cells — at every range
+from half to full**, with a spread of about one world unit: the offset is nearly
+constant in range rather than proportional to it, which is the signature of a
+launch-time velocity error rather than a solver error. The blast radius of that
+weapon is about sixteen world units, so the prediction is also visible without
+measuring anything: a target whose footprint half-width is under about
+twenty-four world units should take **no** damage at all. If retail's group
+instead centres on the aim point, the pre-decrement is compensated somewhere
+this analysis has not reached and the port has a defect; if it centres short by
+about that much, retail groups short and this engine is faithful. Either
+outcome settles the geometric meaning and the apex against the literal
+expression.
 
 **Established fact:** Non-burn-blow ballistic lifetime is timer based:
 `expiry = currentTick + weapontimer`. Burn-blow lifetime is not gravity-derived;

@@ -211,7 +211,8 @@ remain behind the same mode and preserve Strict 3.1's path.
 |---|---|---|
 | Ordinary direct, including Annihilator | Retail range/medium/aim admission, no terrain preflight | Preview actual launch and discrete movement; reject proven terrain obstruction before the resolved target |
 | Ballistic | Retail feasibility solution, no hill clearance check | Preview the actual spread-adjusted launch, slot distance word, gravity and known wind; allow clear arcs and potentially useful splash |
-| Guided ordinary launch | Retail pursuit steering, no launch clearance check | Reject only when every possible first-step turn endpoint is blocked before the resolved target |
+| Guided ordinary launch, immobile target | Retail pursuit steering, no clearance check | Preview the whole pursuit with the real guidance kernel; reject proven terrain obstruction before the resolved target |
+| Guided ordinary launch, any other target | Retail pursuit steering, no launch clearance check | Reject only when every possible first-step turn endpoint is blocked before the resolved target |
 | Target-independent self-propelled launch | Retail motion and phase transition | Preview only the deterministically known launch portion; stop before guidance or uncertain transition |
 
 All previews use the actual firing muzzle from the existing single Query
@@ -219,6 +220,31 @@ call, existing launch/motion kernels, and discrete post-motion collision
 samples. Unit contact precedes terrain in the same sample. Equality at the
 terrain floor passes, and splash that can reach the resolved target remains
 admissible. No continuous visibility ray replaces projectile geometry.
+
+**Guided pursuit against an immobile target.** The one-step guided proof is
+sound but very weak: it can only refuse a shot whose *first* tick already ends
+in the ground, so a missile that launches with clearance and buries itself in a
+rising slope eight ticks later is admitted, and the shooter re-fires into the
+same hill indefinitely. That is the Swatter-into-a-hillside case, and it is the
+common one — a shore unit engaging a structure on a plateau above it.
+
+Modern therefore previews the whole flight when the resolved target **cannot
+move** (no authored velocity, the same discriminant presentation uses for a
+structure). Immobility is what makes the longer preview sound rather than
+speculative: guidance pursues the point resolved each tick, so a target that
+cannot move makes every later tick a function of the launch alone, and the
+preview is exact rather than a superset. The target's death does not perturb it
+either, because the retained unit point and the record's stored point are the
+same point for something that never moved. The preview runs the real guidance
+kernel with the real target, stops at expiry, and uses the same contact sampler
+as every other family. Burn-blow is excluded, since it detonates on a steering
+failure rather than flying on. Any other target — anything with a mover, or no
+unit target at all — keeps the one-step proof unchanged.
+
+Like the rest of this policy the proof covers terrain and the resolved target
+only, so a refused shot might have struck a third unit standing in the path.
+The one-step proof has always had that property; a shooter with an engageable
+target that close would ordinarily have acquired it instead.
 
 **Spread and side effects.** Ballistic creation consumes the stored yaw and
 pitch after accuracy spread. Modern computes those same draws on a temporary
