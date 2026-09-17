@@ -76,6 +76,10 @@ type Port int
 // execution and animation state this package owns. Other packages compile
 // against the two exported fields only.
 type VM struct {
+	// Only isolated presentation VMs opt into a host instruction bound.
+	// Authoritative NewVM instances retain retail's uncapped execution.
+	presentationInstructionLimit int
+
 	Threads [8]Thread
 	Pieces  []model.PieceState // len == len(Program.Pieces) [04 §4.1]
 
@@ -212,6 +216,16 @@ func NewVM(prog *Program) *VM {
 	if err := v.SetProgramChecked(prog); err != nil {
 		v.recordDiagnostic(err.Error())
 	}
+	return v
+}
+
+// NewPresentationVM creates an isolated visual interpreter with a per-thread
+// execution bound. This host policy is used only by the modern hover spray
+// (GPU design §26.3); NewVM retains uncapped retail execution [04 §4.2].
+// No simulation RNG or engine bindings are installed.
+func NewPresentationVM(prog *Program, instructionLimit int) *VM {
+	v := NewVM(prog)
+	v.presentationInstructionLimit = max(instructionLimit, 1)
 	return v
 }
 
@@ -1352,14 +1366,23 @@ func (v *VM) runThreadSync(idx int) {
 // or is killed. It assumes the thread's pre-guards have already been handled
 // by Drain.
 //
-// There is no per-visit iteration cap: retail has none either, and a tight
+// Authoritative VMs have no per-visit iteration cap: retail has none, and a tight
 // non-yielding script loop wedges the drain exactly as it wedges retail
 // [04 §4.2] (PLAN_06 C14 reproduce-don't-defend).
 func (v *VM) runThread(idx int) {
 	t := &v.Threads[idx]
+	remaining := v.presentationInstructionLimit
 	for {
 		if t.Status != ThreadRunning {
 			return
+		}
+		if v.presentationInstructionLimit > 0 {
+			if remaining == 0 {
+				v.killThread(idx)
+				v.recordDiagnostic("isolated presentation script exceeded instruction limit")
+				return
+			}
+			remaining--
 		}
 		if v.prog == nil || t.PC < 0 || t.PC >= len(v.prog.Code) {
 			v.killThread(idx)

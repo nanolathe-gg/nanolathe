@@ -489,11 +489,9 @@ func Fragment(dst vec4, src vec2, color vec4, custom vec4) vec4 {
  coverage := 0.0
  tint := vec3(1.0)
  if !foam {
-  age-=2.0
-  // Several soft lobes make each expanding particle less like a stamped oval.
-  r := length(vec2(u,v))
-  lobes := 0.78+0.22*sin(u*7.0+age*2.0)*sin(v*6.0-age*1.5)
-  coverage = pow(max(0.0,1.0-r*r),2.0)*lobes*smoothstep(0.8,1.0,mask.b)
+  // Small white sprinkle quads lighten the existing terrain, clipped to
+  // dry ground. Their size and drift come from the COB-driven recorder.
+  coverage = smoothstep(0.8,1.0,mask.b)
  } else {
   age-=4.0
   // Loose elliptical arcs suggest water displaced around the base without

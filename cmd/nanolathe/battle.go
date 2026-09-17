@@ -504,6 +504,7 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 	// Strategic icons use the HUD team logos; generic contacts retain the radar
 	// art/options bindings (DESIGN_GPU_RENDERER §18.4).
 	cl.SetStrategicIconCatalog(client.NewStrategicIconCatalog(b.cat))
+	cl.SetHoverScripts(b.cat)
 	cl.SetStrategicBlipArt(b.hud.radarBlipGAF)
 	if b.hud.logos != nil {
 		teamArt, _ := b.hud.logos.Find(sideLogoEntry)
@@ -632,6 +633,7 @@ func (b *battleSession) teardown(cl *client.Client) {
 	}
 	if cl != nil {
 		cl.SetStrategicIconCatalog(nil)
+		cl.SetHoverScripts(nil)
 		cl.SetStrategicBlipArt(nil)
 		cl.SetStrategicTeamArt(nil)
 		cl.SetModelTextureRegistry(nil)

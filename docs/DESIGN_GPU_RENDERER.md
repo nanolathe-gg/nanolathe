@@ -3876,11 +3876,14 @@ Client wake ownership is `water_wakes.go`, hooked from `world_draw.go` and
 `trails.go`. The hooks observe every committed tick through the session
 publication observer, **including catch-up ticks**, reset with trails at battle,
 source and renderer changes, and record the batch immediately after terrain. The
-producer uses authored `CanHover`, footprint and committed movement; hidden,
-carried, airborne, unfinished and teleported units must not bridge wake history;
+producer uses authored `CanHover`, COB wake routines and committed piece poses; hidden,
+carried, airborne and unfinished units have no active visual wake script;
 every emitted mark starts at a player-visible position, and existing fog
-composites cover the batch. A bounded ring holds the recent path and zero movement
-emits nothing. Grounded mode admits hovercraft without comparing model Y to the
+composites cover the batch. A bounded ring holds the recent spray. Land emissions
+require changed X/Z positions across consecutive eligible committed observations;
+stationary hovercraft emit nothing, while previously emitted specks finish fading.
+Hover bob and turning in place do not count as travel. Grounded mode admits
+hovercraft without comparing model Y to the
 centre terrain height, because the four-corner conform can differ from that sample
 [04 R-MOV-01 §5]. Hot or damaging liquid receives no water foam.
 
@@ -3956,14 +3959,52 @@ time itself would make the pattern jump; the resulting tile is thousands of worl
 pixels across, wider than any viewport.
 
 **Particles.** History is bounded to 8,192 marks and 4,096 tracked unit
-identities. Hover-dust age and building-foam ring phase both add the presentation
+identities. Hover-spray age and building-foam ring phase both add the presentation
 fraction, as scorch and blast ages do, so they advance at display rate rather than
 stepping at 30 Hz on a faster display.
 
 | Mark | Admission | Emission and life |
 |---|---|---|
-| land hover dust | the producer rules of §26.1 | every six travelled world pixels, alternating around the rear skirt from near its outer edge; 45 ticks from initial opacity 0.45, spreading and drifting sideways with quadratic opacity decay; the soft lobed profile composites white at low opacity, so it brightens terrain without darkening it or needing another copy |
+| land hover spray | the producer rules of §26.1 | authored COB wake timing and two-vertex emitter directions; two scattered 2×2 white specks per emission, half a world pixel of travel per tick, 48–64 ticks from opacity 0.45 with quadratic decay; each sample projects onto its current dry terrain height, and the shader clips fragments to dry ground |
 | building foam (`water_buildings.go`) | a visible completed floating building on wet terrain, its model top reaching the surface, its committed base height equal to sea minus authored waterline [05 "Geothermal requirement"] — **not** the FBI `Floater` flag, which stock water-yard buildings such as tidal generators do not set | broken elliptical ripples, bounded to 1,024 visible rings; two staggered rings expand and dissolve inside each quad so the footprint is not outlined as a square. This approximates displacement around the base, not the model's waterline intersection, and the shared mask clips it to water |
+
+**Nanolathe Modern renderer policy — land air cushion.** The stock scripts
+suppress wake emissions in land occupancy band 4; retail water sprinkles also die
+on land [03 R-WATER-01 §1][04 §9.1]. `SetHoverScripts` installs immutable catalog
+programs at battle binding. Each visible, complete grounded hovercraft on dry
+terrain gets an isolated presentation VM, capped at 4,096 instances. It invokes
+only `setSFXoccupy(2)` and `StartMoving`, then advances once per committed tick.
+It runs neither `Create` nor other engine callbacks and binds no gameplay ports,
+explosion sink, transport mutations or simulation RNG. Only SFX 2–5 are collected
+(up to 256 cues per VM visit); all other output is discarded. The isolated
+`NewPresentationVM` also stops a thread after 4,096 instructions without yielding,
+so a mod routine awaiting `Create` initialization cannot block the renderer.
+Authoritative VMs keep their established uncapped execution [04 §4.2]. Script timing,
+emitter identity and reversed types 4/5 remain authored. The twelve ordinary
+installed hover scripts sleep 300 ms between wake bursts; ARMAMPH sleeps 250 ms.
+This narrow visual use does not claim to reproduce arbitrary mod wake routines
+that depend on `Create`, random values or gameplay queries.
+
+The committed unit pose supplies each emitting piece's two transformed vertices;
+the visual VM's transforms never alter the displayed unit. The two endpoints
+follow [04 R-COB-03 §6], including model-Z negation. A zero-length segment or
+missing script/model/piece produces nothing. The isolated wake routine starts
+on first eligible observation to establish its position and authored cadence;
+that first observation emits nothing. Subsequent cues are admitted only on ticks
+with actual horizontal movement. At rest, cues are discarded rather than queued
+for a later burst; the routine retains its cadence, since stock `StopMoving`
+callbacks do not necessarily stop it. It retires when hidden,
+carried, airborne, incomplete or over water. Viewer/source changes and tick
+discontinuities clear all history. No distance-based fallback remains. Scatter,
+life and opacity are artistic constants; variation uses only a cue-local integer
+pattern. Existing Water and renderer controls apply, independently of gameplay
+Mode, so selecting Strict 3.1 does not change this renderer preference. Neither
+simulation stream, live COB state, resources nor retail water particles change.
+
+Verification covers script timing, moving/stopped/resumed output, authored/reversed emitter
+geometry, eligibility and reset boundaries, bounded storage, and fractional fade.
+The device water fixture checks that land specks never darken terrain or cross
+onto water. Installed-script fixtures exercise both hover script families.
 
 ### 26.4 Above-water screen-space reflections
 

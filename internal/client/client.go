@@ -10,6 +10,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/audio"
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
+	"github.com/nanolathe-gg/nanolathe/internal/cob"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
@@ -321,10 +322,11 @@ type Client struct {
 	// debris_trail_store.go.
 	debrisTrails debrisTrailStore
 	// wakes retains Enhanced land hover particles (GPU design §26).
-	wakes       surfaceWakeState
-	scorch      scorchState
-	waterMotion waterMotionState
-	waterFoam   []drawlist.SurfaceWake
+	hoverScripts map[uint16]*cob.Program
+	wakes        surfaceWakeState
+	scorch       scorchState
+	waterMotion  waterMotionState
+	waterFoam    []drawlist.SurfaceWake
 	// featureSeqs memoises the compiled animation sequences the SIMULATION
 	// reads through Client.FeatureSequence — the burn frame geometry and the
 	// die/reclaim/burn lifetimes of [05 R-FEAT-01 §10]. A nil value is a
