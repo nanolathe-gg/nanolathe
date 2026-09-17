@@ -951,10 +951,20 @@ point.Y += ...velocityY...   point.Z += ...velocityZ...
 The 0.8 factor and the six-kill threshold are read from the image, not chosen.
 The distance here is three-dimensional, unlike the range test.
 
-**Established fact:** The ballistic solver takes the three signed 32-bit deltas
-`(dx, dy, dz)` from the aim source to the target, the 16.16 `weaponvelocity`
-`V`, and the single-precision `minbarrelangle` `m` in radians, and reads the
-gravity global `g`. Every step below is IEEE double except where noted:
+**Established fact (ordering corrected 2026-09-16):** The ballistic solver takes
+the three signed 32-bit deltas `(dx, dy, dz)` from **the target to the aim
+source** — `source − target` on every axis, not the other way round — the 16.16
+`weaponvelocity` `V`, and the single-precision `minbarrelangle` `m` in radians,
+and reads the gravity global `g`. This section previously said "from the aim
+source to the target"; all three call sites (the reachability predicate, the
+unit-to-unit admission and the turret executor) form the deltas in the
+`source − target` sense, and the turret executor forms its yaw from the same
+pair. The `X` and `Z` operands reach the solver only through a hypotenuse and
+are therefore sign-insensitive, but `dy` is not: the discriminant's `+2·g·dy`
+term is the physical `−2·g·(target − source)`, so an implementation that hands
+the solver `target − source` for `dy` mirrors every sloped firing solution —
+aiming high at a target below and low at a target above. Every step below is
+IEEE double except where noted:
 
 ```
 D    = hypot((double)dx, (double)dz)             ; the 80-bit register value
@@ -988,6 +998,22 @@ unordered compares then behave; the surviving evidence shows the gates would
 treat an unordered result as acceptable and serialize `trunc(NaN)`. *Decider:*
 static trace of the runtime `acos` domain path plus a reachability argument over
 the root expression.
+
+**Established fact (added 2026-09-16):** The accepted angle is the arc cosine of
+a magnitude, so it is **never negative** and the solver cannot express a
+depressed-barrel solution. `r` is `V²cos²θ`, which carries no sign, and the two
+candidate angles are recovered from it alone. For a target *below* the aim
+source the trajectory that actually reaches it has a negative elevation
+whenever the drop exceeds `g·h² / (2·V²)` (`h` the planar distance), and the
+solver answers the mirror-image *positive* angle of the same magnitude instead.
+The shot is therefore lofted over a target that is far enough below, and the
+overshoot grows as the planar distance shrinks — it is largest at close range
+down a steep slope, and vanishes once `h` is large enough that the correct
+elevation is positive again. A steeper drop yet pushes the mirrored angle past
+the π/4 upper gate, at which point the solver returns the no-solution sentinel
+and the weapon reports that it cannot fire rather than missing. Neither is a
+port defect: the lower gate against a **negative** authored `minbarrelangle`
+(which most stock ballistic weapons author) is vacuous for exactly this reason.
 
 **Established fact:** When `weaponvelocity` is zero and the ballistic creator is
 reached, the pool record has already been reserved and the live count already
@@ -2496,9 +2522,30 @@ The pre-decrement of
 the vertical component by one flight-time's worth of gravity is part of the
 launch, not an integrator artefact, and must be reproduced. **Unknown:** the
 intended geometric meaning of that pre-decrement, and therefore whether an
-implementation may simplify it; the arithmetic itself is Established. *Decider:*
-a manual retail observation of a stock ballistic weapon's apex against the
-literal expression, run as an authored `probes/` scenario.
+implementation may simplify it; the arithmetic itself is Established.
+
+The shape of that open question is narrower than it was (2026-09-16). The aim
+solve measures from the `AimFrom*` origin while the shot spawns at the `Query*`
+muzzle, and on stock models the muzzle sits forward of the aim origin by very
+nearly `T0` ticks of flight — for the stock light cannon, thud and hammer the
+stored word divides out to a head start within a couple of world units of the
+measured piece separation. That makes the pre-decrement read as the velocity
+half of a "resume the solved arc at the muzzle" correction: the spawn point is
+already `T0` ticks along the solved trajectory, so its vertical component is
+decremented by `T0` ticks of gravity. The correction is only complete if the
+muzzle is also at the solved arc's *height* at `T0`, which on a stock model
+means the aiming script has elevated the barrel; the flare of a level barrel is
+several world units below that point, and the whole of that difference lands
+short. Because the stored word is taken once at the spawn heading with the
+barrel level, and is a **planar** Z difference rather than a distance along the
+elevated barrel, it also over-states the head start by the cosine of the firing
+elevation. What is **Unknown** is therefore whether retail's shells land on the
+aim point at all, or whether a stock ballistic weapon genuinely groups short of
+it. *Decider:* a manual retail observation — a stationary stock light cannon
+firing on a stationary target on level ground at a known planar range,
+comparing the impact point with the target's footprint at short, middling and
+maximum range. Where the group lands settles both the geometric meaning and the
+apex against the literal expression.
 
 **Established fact:** Non-burn-blow ballistic lifetime is timer based:
 `expiry = currentTick + weapontimer`. Burn-blow lifetime is not gravity-derived;

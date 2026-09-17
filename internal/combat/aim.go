@@ -122,11 +122,15 @@ func BallisticSolve(dx, dy, dz numeric.Fixed, vel, grav numeric.Fixed, minBarrel
 	// [06 §6.4] h = hypot(double(dx), double(dz))
 	h := math.Hypot(float64(dx32), float64(dz32))
 	h2 := h * h
-	// Retail delta is muzzle - target for Y [orchestration-research-combat-effects §2.1 notes
-	// "x,y,z be signed 32-bit source/target deltas" without ordering; the
-	// +2*g*y term matches the physical -2*g*dy only when y = -(target-muzzle).
-	// The caller supplies dy = target - muzzle, so we negate to match retail's
-	// internal ordering.
+	// Retail's solver operands are `source - target` on all three axes, not
+	// `target - source` [06 §6.4] (ordering corrected there 2026-09-16 after a
+	// call-site census; the section previously said the other way round). The
+	// planar pair reaches the discriminant only through a hypotenuse, so only
+	// the vertical sign is observable — and it is very observable: the
+	// discriminant's +2*g*y term is the physical -2*g*(target-source), so the
+	// wrong sign mirrors every sloped firing solution, aiming high at a target
+	// below and low at one above. Callers here supply target-minus-muzzle
+	// deltas, so negate the vertical one.
 	y := -float64(dy32)
 	v := float64(v32)
 	g := float64(g32)
@@ -167,6 +171,14 @@ func BallisticSolve(dx, dy, dz numeric.Fixed, vel, grav numeric.Fixed, minBarrel
 
 	// [06 §6.4] aPlus = pi/2 if rPlus <= 0 else acos(sqrt(rPlus)/v)
 	// aMinus similarly. This is the acos(sqrt(r)/v) construction.
+	//
+	// r is V*V*cos(theta)^2 and carries no sign, so the recovered angle is
+	// never negative and a depressed-barrel solution is unreachable. A target
+	// below the aim origin by more than g*h*h/(2*V*V) is therefore engaged
+	// with the mirror-image UPWARD arc and overshot, and a steeper drop is
+	// rejected by the quarter-turn gate below. That is retail's, which is also
+	// why the lower gate against a negative authored minbarrelangle is vacuous
+	// [06 §6.4] [I11]. Do not "fix" it by restoring the sign.
 	var aPlus, aMinus float64
 	if rPlus <= 0.0 || math.IsNaN(rPlus) {
 		aPlus = math.Pi / 2

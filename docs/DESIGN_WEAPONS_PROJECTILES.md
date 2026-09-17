@@ -328,7 +328,16 @@ bound is computed from the shooter's own health, maximum health and credited
 kills; nothing about the target enters it, and it steers ballistic trajectories
 only `[06 R-WPN-03 §4]` `[06 R-WPN-05 §5]` `[06 R-WPN-01 §3]`.
 `BallisticSolve` is the trajectory solver: the discriminant, the two candidate
-angles, and the conversion into the 16-bit angle word.
+angles, and the conversion into the 16-bit angle word. It is handed
+`target − source` deltas by every caller and negates the vertical one itself,
+because the retail solver's operands are `source − target` on all three axes
+`[06 §6.4]`; the planar pair reaches the discriminant only through a
+hypotenuse, so only the vertical sign is observable, and getting it wrong
+mirrors every sloped firing solution. The accepted angle is an arc cosine and
+is therefore never negative: a target far enough below the aim origin is
+engaged with the mirror-image upward arc and overshot, and a steeper drop is
+rejected outright by the quarter-turn upper gate. Both are retail's, not ours
+`[06 §6.4]`.
 
 The **pre-fire lead** is the one place in the whole weapon pipeline where the
 target's motion enters the firing solution `[06 R-WPN-03 §3]`. It is applied to
@@ -497,7 +506,19 @@ Ballistic and dropped records take the map's three global wind words as raw
 `−2 · sin(heading) · speed` and the Z word `−2 · cos(heading) · speed`, and the
 integrators add them with no shift `[06 §6.4]` `[06 R-WPN-05 §8]`. The
 ballistic launch pre-decrements the vertical component by one flight time's
-worth of gravity as part of the launch, not as an integrator artefact.
+worth of gravity as part of the launch, not as an integrator artefact. That
+pre-decrement dominates where a ballistic shell lands. Measured on this build
+against the retail corpus, on level ground, with the whole live pipeline —
+`armstump` shells group roughly 30 world units short of a stationary target at
+every range, and the isolated launch reproduces it at −24 to −47 world units;
+removing the pre-decrement alone moves the same shots to +23 to +24 long, and
+solving from the spawn muzzle instead of the aim origin puts them within +1 to
++8. The engine reproduces retail's arithmetic at every step that has been
+traced — the solver operands, the aim origin being `AimFrom*` while the spawn
+point is `Query*`, the distance word, the unsigned divide and the
+pre-decrement itself — so this is not a port defect to fix by reasoning. It is
+the open question in `[06 §6.4]`, and the decider named there is a retail
+observation of where a stock light cannon's group actually falls.
 
 A guided self-propelled record does not steer at the point its aim solve stored
 at launch. `GuidanceTargetPoint` is the guidance target-point helper: for a
@@ -1294,7 +1315,9 @@ Open items the contracts above carry:
   divide without defending against it `[06 §6.4]` [I11].
 * **The geometric meaning of the ballistic launch's gravity pre-decrement.**
   Reproduced as written; whether an implementation may simplify it is Unknown
-  `[06 §6.4]`.
+  `[06 §6.4]`. It is the reason ballistic shells group short of their aim point
+  on this build (§4), and the decider is a retail observation of a stock light
+  cannon's group on level ground — not a change to the launch arithmetic.
 * **The interceptor scans cannot distinguish a dead candidate from a live one**
   because neither scan tests the dead bit; only coverage and claim state
   prevent a shot. That is the established behaviour, not a gap
