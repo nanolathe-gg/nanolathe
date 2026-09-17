@@ -82,11 +82,11 @@ func resolve(explicit []string, h host) ([]string, error) {
 		}
 	case "darwin":
 		for _, root := range h.systemRoots {
-			d.collection(root)
+			d.macApplications(root)
 		}
 		if h.home != "" {
 			d.steam(filepath.Join(h.home, "Library/Application Support/Steam"))
-			d.collection(filepath.Join(h.home, "Applications"))
+			d.macApplications(filepath.Join(h.home, "Applications"))
 			d.prefixCollection(filepath.Join(h.home, "Library/Application Support/CrossOver/Bottles"))
 			d.prefixCollection(filepath.Join(h.home, "Library/Containers/com.isaacmarovitz.Whisky/Bottles"))
 		}
@@ -227,6 +227,55 @@ func (d *discovery) collection(base string) {
 	d.near(base)
 	for _, child := range directories(base) {
 		d.game(child)
+	}
+}
+
+// macApplications also opens app wrappers, which keep the Windows content
+// below the directory Finder presents as the installed game. Only the named
+// wrapper locations are followed; Applications is not recursively scanned.
+func (d *discovery) macApplications(base string) {
+	d.collection(base)
+	for _, child := range directories(base) {
+		if strings.EqualFold(filepath.Ext(child), ".app") {
+			d.macBundle(child)
+			continue
+		}
+		for _, name := range gameNames {
+			if !strings.EqualFold(filepath.Base(child), name) {
+				continue
+			}
+			d.macBundle(child)
+			// GOG may put the app inside a game-named enclosing folder.
+			for _, app := range directories(child) {
+				if strings.EqualFold(filepath.Ext(app), ".app") {
+					d.macBundle(app)
+				}
+			}
+			break
+		}
+	}
+}
+
+func (d *discovery) macBundle(base string) {
+	d.macWrapper(base)
+	// A GOG launcher can contain the Wine app under Resources/game.
+	game := childPath(base, "Contents/Resources/game")
+	d.macWrapper(game)
+	for _, app := range directories(game) {
+		if strings.EqualFold(filepath.Ext(app), ".app") {
+			d.macWrapper(app)
+		}
+	}
+}
+
+func (d *discovery) macWrapper(base string) {
+	for _, prefix := range []string{base, childPath(base, "Contents/Resources")} {
+		for _, name := range []string{"drive_c", "c_drive"} {
+			drive := childPath(prefix, name)
+			if info, err := os.Stat(drive); err == nil && info.IsDir() {
+				d.windowsDrive(drive)
+			}
+		}
 	}
 }
 

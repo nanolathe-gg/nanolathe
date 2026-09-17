@@ -107,6 +107,76 @@ func TestDiscoveryWineAndCrossOver(t *testing.T) {
 	}
 }
 
+func TestDiscoveryMacAppWrappers(t *testing.T) {
+	for _, layout := range []string{
+		"Total Annihilation Commander Pack.app/Contents/Resources/drive_c/Program Files/GOG.com/Total Annihilation",
+		"Total Annihilation Commander Pack/Total Annihilation.app/drive_c/GOG Games/Total Annihilation",
+		"Total Annihilation Commander Pack/Contents/Resources/c_drive/Program Files/GOG.com/Total Annihilation",
+		"Renamed.app/Contents/Resources/game/Total Annihilation.app/Contents/Resources/drive_c/Program Files/GOG.com/Total Annihilation",
+		"Renamed.app/Contents/Resources/game/Total Annihilation.app/drive_c/Program Files/GOG.com/Total Annihilation",
+		"Renamed.app/Contents/Resources/game/c_drive/program files/gog.com/total annihilation",
+	} {
+		t.Run(layout, func(t *testing.T) {
+			for _, location := range []string{"system", "user"} {
+				t.Run(location, func(t *testing.T) {
+					h := fixtureHost(t, "darwin")
+					applications := filepath.Join(t.TempDir(), "Applications")
+					h.systemRoots = []string{applications}
+					if location == "user" {
+						applications = filepath.Join(h.home, "Applications")
+					}
+					root := marker(t, filepath.Join(applications, layout), "ToTaLa1.HpI")
+					got, err := resolve(nil, h)
+					if err != nil || !reflect.DeepEqual(got, []string{root}) {
+						t.Fatalf("resolve = %v, %v; want %v", got, err, root)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestDiscoveryMacAppAliasesAndPrecedence(t *testing.T) {
+	h := fixtureHost(t, "darwin")
+	applications := filepath.Join(t.TempDir(), "Applications")
+	h.systemRoots = []string{applications}
+	app := filepath.Join(applications, "Total Annihilation Commander Pack.app")
+	first := marker(t, filepath.Join(app, "Contents/Resources/drive_c/GOG Games/Total Annihilation"), "totala1.hpi")
+	if err := os.Symlink(filepath.Join(app, "Contents/Resources/drive_c"), filepath.Join(app, "drive_c")); err != nil {
+		t.Skipf("symlink alias unavailable on this host: %v", err)
+	}
+	second := marker(t, filepath.Join(h.home, "Applications/TA.app/drive_c/Cavedog/TotalA"), "totala1.hpi")
+	portable := marker(t, h.cwd, "totala1.hpi")
+	want := []string{first, second, portable}
+	for range 2 {
+		got, err := resolve(nil, h)
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("resolve = %v, %v; want %v", got, err, want)
+		}
+	}
+}
+
+func TestDiscoveryMacAppSearchIsBounded(t *testing.T) {
+	h := fixtureHost(t, "darwin")
+	applications := filepath.Join(h.home, "Applications")
+	for _, layout := range []string{
+		"Unrelated/deep/TA.app/drive_c/TotalA",
+		"Unrelated/TA.app/drive_c/TotalA",
+		"TA.app/Contents/Resources/unrelated/drive_c/TotalA",
+		"TA.app/Contents/Resources/game/Nested.app/Contents/Resources/game/Deep.app/drive_c/TotalA",
+	} {
+		marker(t, filepath.Join(applications, layout), "totala1.hpi")
+	}
+	// Empty Wine wrappers and directories named like the archive are not games.
+	if err := os.MkdirAll(filepath.Join(applications, "Empty.app/drive_c/TotalA/totala1.hpi"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := resolve(nil, h)
+	if got != nil || err == nil {
+		t.Fatalf("resolve = %v, %v; want no installation", got, err)
+	}
+}
+
 func TestDiscoveryDoesNotRecurseAndExplainsMissingInstall(t *testing.T) {
 	h := fixtureHost(t, "linux")
 	marker(t, filepath.Join(h.home, "Games", "unrelated", "deep install"), "totala1.hpi")

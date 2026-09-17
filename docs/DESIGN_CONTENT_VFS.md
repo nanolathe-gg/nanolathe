@@ -697,8 +697,17 @@ to select one installation or control the order yourself.
 |---|---|
 | Windows | Conventional game, Cavedog, GOG and Steam folders on fixed drives; Program Files variants; registered Steam and game installation paths |
 | Linux | Steam defaults, XDG and Flatpak Steam directories, configured Steam libraries, Proton prefixes, Lutris and Bottles locations, CrossOver bottles |
-| macOS | Steam and configured libraries, system/user Applications folders, CrossOver and Whisky bottles |
+| macOS | Steam and configured libraries, system/user Applications folders (including GOG app wrappers), CrossOver and Whisky bottles |
 | Wine hosts | `WINEPREFIX`, `~/.wine`, prefixes under home Games directories and `CX_BOTTLE_PATH`; conventional Windows game folders within each prefix |
+
+The macOS Applications search checks `.app` children and recognized game-named
+folders, including apps immediately inside those folders. For each wrapper it
+checks `drive_c` and `c_drive` at the wrapper root and under `Contents/Resources`,
+then applies the conventional Windows game-folder search. A launcher's
+`Contents/Resources/game` can itself hold the drive or one level of embedded
+`.app` wrappers. These are bounded host-discovery rules, not a recursive search
+through arbitrary package contents. Existing archive-marker validation,
+physical-directory deduplication, and explicit-root precedence still apply.
 
 
 **Installer diagnostics (Nanolathe host policy).** `nanolathe --list-installs`
