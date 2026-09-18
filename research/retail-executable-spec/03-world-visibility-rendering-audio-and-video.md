@@ -2700,7 +2700,7 @@ it.** The tested bit is the requesting player's mapping bit; hard building
 blocking happens at the movement commit validator, as [R-DOC04-B] itself
 states.
 
-**Writer census.** Four write sites exist:
+**Writer census.** Five write sites exist:
 
 1. **Map load.** The terrain loader allocates the array and zero-fills it
    (before any battle state exists).
@@ -2738,6 +2738,20 @@ states.
    and the command's argument slot) and one arm of the in-battle
    message/command dispatcher. Neither is on an ordinary single-player path,
    and Nanolathe implements no mapping-share path.
+5. **The saved-game restore — Established.** The battle-restore chain's
+   mapping step selects the save's `Mapping` section and its `Data` box,
+   computes the expected byte count as attribute width × attribute height ÷ 2
+   — half a byte per attribute cell, the allocation geometry above — and
+   copies the box straight into the grid through the generic chunk reader,
+   but only when the stored length equals that count **exactly**; a missing
+   section, a missing box, or any other length leaves the grid untouched. Its
+   mirror is the saver, which emits the same section, box and byte count out
+   of the same array. Each has exactly one static caller and no data
+   reference, both on the single-player save/restore path, so reloading a
+   saved battle restores explored memory rather than rebuilding it. This
+   writer is invisible to a scan that looks for a store through the loaded
+   pointer, because the store lives inside the generic chunk copy the pointer
+   is *passed* to.
 
 **What does not write it.** Unit creation, death/wreck conversion,
 construction completion, and feature spawn/remove/reclaim have **no write
@@ -2749,18 +2763,22 @@ produces; features never touch the grid at all. The defensible closure is
 therefore **no unit, feature, construction or occupancy path writes the
 grid** — which is what the paragraph above needs — rather than "no other
 function writes it at all": the raster that publishes bits is reached only
-from the per-unit stamp and the bulk rebuild, and the only further writer is
-the command-driven mapping share of site 4.
+from the per-unit stamp and the bulk rebuild, and the only further writers are
+the command-driven mapping share of site 4 and the saved-game restore of
+site 5, neither of which derives anything from unit, feature or occupancy
+state.
 
-**Unknown — whether the writer census is closed at four.** The scan behind it
-is exhaustive for accesses that name the grid pointer's own displacement, but
-a routine holding the map record's address in a register reaches the same
-field through a register-relative offset, which is how the loader's zero fill
-(site 1) is itself spelled. A targeted scan of that form found one further
-site, and it is a **read** inside the class-layer stamp. So the count is at
-least four and no unit/feature path is among the extras. *Decider:* a full
-enumeration of the register-relative accesses to the map record's grid
-pointer, classifying each as read or write. The same enumeration would close
+**The register-relative route, enumerated — Established.** The displacement
+scan behind the census is exhaustive for accesses that name the grid
+pointer's own displacement, but a routine holding the map record's address in
+a register reaches the same field through a register-relative offset, which is
+how the loader's zero fill (site 1) is itself spelled. That form is now
+enumerated in full: the map record's address is taken into a register at four
+places image-wide and none of them passes it to a callee, so the pointer never
+escapes those routines; and across the whole image the only register-indexed
+word-array dereference of the grid pointer is a **read**, inside the
+class-layer stamp. The register-relative route therefore contributes exactly
+site 1 and that one reader, and no further writer. The same enumeration closes
 [R-TERR-01 §7]'s read side.
 
 **Same-tick ordering.** The path scheduler runs first in phase 5, before any
@@ -2779,7 +2797,7 @@ the semantic naming hedge of section 3.1 item 2 stands.
 
 **The occupancy commit has no write site either.** The occupancy commit,
 the footprint stamp and clear, unit creation and building completion do not
-reference the grid; the three writers above are the complete set, and the
+reference the grid; the five writers above are the complete set, and the
 runtime bit writer is the phase-5 LOS sweep alone. The grid the path search,
 the landing-legality accept (`[04 R-AIR-01 §6a]`) and the placement
 validators read is this one — a movement-side "owner mask" is an alias of
@@ -2933,9 +2951,11 @@ clear and left at zero when it is set (`[R-VIS-01 §1]`, whose word-grid fill
 is itself gated on the refresh's history-reset argument), and OR'd with a
 player's slot bit as tiles become seen by the per-unit coverage raster — the
 only runtime bit writer in ordinary play, but not the array's only writer:
-`[R-LAYER §1]` carries the four-site census, including the command-driven
-mapping-share routine that copies one player slot's bits into another's. Its
-only simulation readers are the per-player gates of `[R-LAYER §1]` and the
+`[R-LAYER §1]` carries the five-site census, including the command-driven
+mapping-share routine that copies one player slot's bits into another's and
+the saved-game restore that copies the save's `Mapping` box back into the
+array. Its only simulation readers are the per-player gates of `[R-LAYER §1]`
+and the
 path search's passability probe, which returns its "unexplored" value 2 —
 treated as passable by every consumer — when the requesting player's bit is
 absent (`[R-PATH-01 §2]`). No building state is written to it.

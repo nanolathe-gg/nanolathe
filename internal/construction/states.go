@@ -406,12 +406,15 @@ func (s *Service) mobilePlacementVisit(builder *units.Unit, node *orders.Node, t
 			s.yieldConstructionSite(builder, rect, tick)
 		}
 		text, code := orders.MobileBuildBlockedVisit(node, tick)
-		s.notifyStatus(text)
 		// The same two captions are status kind 7 on the builder
-		// [04 R-ORD-01 §5][05 "the build-order caption census"]. The visit helper
-		// already applies §5's correction that only the first blocked attempt and
-		// the over-limit one produce text, so an empty text is a silent attempt.
-		s.raiseStatus(builder, statusCant, text)
+		// [04 R-ORD-01 §5][05 "the build-order caption census"]. Only the first
+		// blocked visit and the over-limit one carry text; a silent visit
+		// raises nothing, because an empty kind-7 status would resolve to the
+		// slot's static speech and replay the cue every retry.
+		if text != "" {
+			s.notifyStatus(text)
+			s.raiseStatus(builder, statusCant, text)
+		}
 		return code
 	}
 	siteY := builder.Y

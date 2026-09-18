@@ -131,12 +131,16 @@ each idle unit's authored storage, plus a bonus term when a player flag is set.
 The two sharing thresholds are zeroed at battle setup and, in single-player,
 never written again — their only other writers are network-gated chat commands,
 which is Established by a whole-image census of the two single-precision
-stores. That **the automatic-sharing dispatcher is their only reader**
-([R-SHARE-01 §3]) is a **Supported inference**: the dispatcher's four reads
-reproduce, but five further single-precision reads at the same two record
-offsets were not resolved to a base object, so they may be player rows or a
-different record that shares the offsets. *Decider:* trace the base register
-at those five sites back to its load. The thresholds are zero in single-player
+stores. That **the automatic-sharing dispatcher is their only simulation
+reader** ([R-SHARE-01 §3]) is **Established**: every remaining single-precision
+read at the two offsets has been resolved to its base object. Four belong to
+the in-battle interface's resource-bar draw, which marks each threshold's
+proportional position on the metal and energy bars with a two-pixel rectangle
+— drawn only when the threshold is strictly greater than zero **and** the
+current stock is strictly greater than the threshold, so in single-player,
+where both thresholds stay zero, the mark never appears. The fifth belongs to
+the unit instance record, a different structure that happens to place unrelated
+fields at the same two offsets. The thresholds are zero in single-player
 whatever reads them.
 
 ### Unit definition
@@ -5846,19 +5850,18 @@ and returning the live-instance record or 0. In order:
    on the same cell do not coexist; the later one wins.
 4. **3D definitions (flag bit 0 clear) take a live slot.** Pop the free list
    head; if the free list is empty (`-1`) the stamp returns 0 — **after** step
-   3 already tore down whatever was under it. It does not return early: on the
-   empty sentinel it substitutes the index **2048** (one past the pool's last
-   slot), passes that index to the free-to-active list helper, clears the mode
-   byte's bit 0 at that index, and only then tests the index against 2048 and
-   returns 0. An implementation reproduces the return value, not the sentinel
-   arithmetic. **Unknown:** whether the instance pool is allocated with a spare
-   slot, i.e. whether that mode-byte write lands inside the allocation.
-   *Decider:* the element count at the site that fills the pool base during
-   session start. The popped slot is moved to the
-   active list and its burning bit cleared. The slot receives: the ordinal;
-   accumulated damage `:= 0`; anchor `(x, z)`; position — the supplied triple
-   verbatim, or when null the footprint centre with the terrain height snapped
-   under it:
+   3 already tore down whatever was under it. On the empty sentinel it
+   substitutes the index **2048** and branches **directly** to the bound test
+   `index < 2048` (a signed compare), which fails; the free-to-active list
+   helper and the mode-byte clear sit on the other side of that branch and
+   never run, so an exhausted pool reads and writes no pool memory at all.
+   The arena is exactly 2048 slots with no spare ([R-FEAT-01 §2]), so the
+   substituted index never addresses anything — it is internal, and an
+   implementation reproduces the return value only. The popped slot is moved
+   to the active list and its burning bit cleared. The slot receives: the
+   ordinal; accumulated damage `:= 0`; anchor `(x, z)`; position — the
+   supplied triple verbatim, or when null the footprint centre with the
+   terrain height snapped under it:
 
    ```
    worldX = ((footprintx + 2·x) · 8) << 16          ; 16.16, i.e. (x + footprintx/2) · 16 world units

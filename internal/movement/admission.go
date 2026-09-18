@@ -17,16 +17,21 @@ type AdmissionResult struct {
 
 // CanTransport checks the nine admission rejects in order [04 §10.2].
 //
-// Order (verbatim [04 §10.2]):
+// Order ([04 §10.2], with rejects 4 and 5 in the executable's order — the
+// mover test precedes the size compare [04 R-AIR-01 §12]):
 //  1. candidate cantbetransported set
 //  2. carrier lacks canload
 //  3. carried-count reaches transportcapacity (count, not summed sizes; unauthored 0 therefore blocks loading)
-//  4. carrier transportsize below candidate FootPrintX (signed compare, FootPrintX is movement class footprint width)
-//  5. candidate has no mover
+//  4. candidate has no mover
+//  5. carrier transportsize below candidate FootPrintX (signed compare, FootPrintX is movement class footprint width)
 //  6. candidate committed mover mode is active locomotion (mode 2, moving)
 //  7. ground carrier (canfly clear) with candidate MinWaterDepth >=0
 //  8. candidate Y + modelTop at or below sea level ×65536 (submerged)
 //  9. candidate landed-float field not exactly 0.0 (still under construction)
+//
+// The result of the pair is the same either way — both arms reject — so the
+// order is observable only through the reported Reason, which a reimplementation
+// uses to say why a pickup was refused.
 //
 // Missing transportcapacity and transportsize default to 0 [04 §10.2].
 //
@@ -77,7 +82,23 @@ func (s *System) CanTransport(carrierHandle, candidateHandle pool.Handle, w *uni
 	if count >= capacity {
 		return AdmissionResult{Allowed: false, Reason: "capacity"}
 	}
-	// 4) carrier transportsize below candidate FootPrintX signed [04 §10.2]
+	// 4) candidate has no mover [04 §10.2][04 R-AIR-01 §12]. The executable
+	// tests the candidate's mover reference itself, and does so BEFORE the size
+	// compare, so a moverless candidate is refused as such rather than as too
+	// heavy.
+	//
+	// The extra bmcode test is not redundant here. Retail allocates a mover
+	// exactly for a definition whose bmcode is 1 [04 §5][08 R-AI-03 §7.4], while
+	// this build's HasMover answers "a live collision record that is not a
+	// building", and the record's building flag is derived from bmcode == 0. The
+	// two predicates therefore agree for bmcode 0 and 1 and part for an authored
+	// bmcode above 1, where retail has no mover and HasMover alone would say it
+	// does. Testing the byte restores retail's exactly-one gate; definition
+	// capabilities are never a substitute for it.
+	if candidate.Def.BMCode != 1 || !s.HasMover(candidateHandle) {
+		return AdmissionResult{Allowed: false, Reason: "no mover"}
+	}
+	// 5) carrier transportsize below candidate FootPrintX signed [04 §10.2]
 	// FootPrintX is the movement class footprint width WORD signed [04 §10.2] phase-0 heavy gate.
 	// Use profile FotPrintX when available, else def FootprintX.
 	candidateFootX := int16(candidate.Def.FootprintX)
@@ -96,12 +117,6 @@ func (s *System) CanTransport(carrierHandle, candidateHandle pool.Handle, w *uni
 	carrierSize := int32(carrier.Def.TransportSize) // BYTE zero-extended in executor; here int32 [02 "Unit record"]
 	if int32(candidateFootX) > carrierSize {
 		return AdmissionResult{Allowed: false, Reason: "too heavy"}
-	}
-	// A pickup candidate must own a mover. Definition capabilities are not
-	// substitutes for the creator's exactly-one byte gate [04 §10.2]
-	// [08 R-AI-03 §7.4].
-	if candidate.Def.BMCode != 1 || !s.HasMover(candidateHandle) {
-		return AdmissionResult{Allowed: false, Reason: "no mover"}
 	}
 	// 6) Admission reads the committed unit mirror, which can differ from a
 	// pending takeoff, touchdown or detach request [04 R-AIR-01 §12].
@@ -154,6 +169,13 @@ func (s *System) CanTransport(carrierHandle, candidateHandle pool.Handle, w *uni
 	}
 	// 9) candidate landed-float field not exactly 0.0 (still under construction) [04 §10.2]
 	// Nanolathe stores Remaining 1→0 float32 [04 §2.3]; mirror as landed-float non-zero when Remaining !=0.
+	//
+	// Retail compares the float against zero and continues only on the equal
+	// condition, which an UNORDERED result also raises: a NaN in that field would
+	// be admitted, not rejected, where this ordered `!= 0` refuses it. Remaining
+	// is written only by the construction settlement as a value in 1→0, so no
+	// path in this build can put a NaN there; the difference is recorded because
+	// it is the one input on which the two forms disagree [04 R-AIR-01 §12].
 	if candidate.Remaining != 0 {
 		return AdmissionResult{Allowed: false, Reason: "under construction"}
 	}

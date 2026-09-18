@@ -4962,15 +4962,22 @@ beside its feature-damage accumulator, not beside its interceptor code.
 
 ### 11.3 No-radar presentation
 
-**Established fact:** The weapon `noradar` flag is presentation-only in the
-bounded census. Its sole located gameplay-adjacent reader is the minimap
+**Established fact:** The weapon `noradar` flag is presentation-only. Its sole
+located gameplay-adjacent reader is the minimap
 projectile-dot builder, which suppresses the ordinary dot path for `noradar`
 projectiles. Non-`noradar` projectiles draw when their cell is mapped for the
 viewer or was fired by the viewer's own side; `noradar` projectiles satisfy
 neither condition through that path. Targetable and interceptor projectiles use
 a separate classified minimap branch. No gameplay, acquisition, guidance,
-collision, or damage reader for `noradar` was found in the reviewed 862-function
-corpus plus the flag-mask immediate census. The retail stock reach is one
+collision, or damage reader for `noradar` was found. The census behind that
+negative is **image-wide over the behaviour word itself**, not a function
+sample: every memory-form mask test on the field was enumerated (no immediate
+selects bit 6), and every register-form load of the field was enumerated and
+followed forward to its mask tests, which yields exactly one reader of bit 6 —
+the minimap dot builder named above; the two other `0x40` tests in that set are
+high-byte forms, i.e. bit 14. The only residual a static census cannot see is
+indirect addressing (a pointer to the weapon definition plus a constant, then
+dereferenced at the complementary displacement). The retail stock reach is one
 definition, `EARTHQUAKE`.
 
 ## 12. Death, kill credit, corpses, and feature conversion
@@ -5927,10 +5934,33 @@ displacement ("lens") frame is built beside them for render type 2
 
 **Established — update cadence and drawing.** The explosion pool advances in
 phase 4 of the tick (`[01 §4.4]`: the "general effects" sweep, immediately
-after the projectile phase): per record, the debris physics when the record
-carries a piece (`[04 R-COB-04 §2]`), then the primary cursor advance, then
-the secondary cursor advance; afterwards one stable compaction pass removes
-every record whose piece pointer **and** both cursor entry pointers are null.
+after the projectile phase; the phase routine has exactly one caller and no
+indirect entry, so the update is strictly once per tick). Phase 4 first
+services a **second container**, before it touches the pool: a fixed table of
+**100 scheduled-emitter slots**. Each non-null slot is polled; the poll
+decrements the entry's counter and returns the pre-decrement value, so an
+entry whose counter was already zero returns zero and the slot is cleared.
+Otherwise the entry is stepped, and an entry that has descended **to or below**
+the sea-level height also releases its slot — first allocating an
+explosion-pool record at its own point, with one of two holders chosen by a
+global selector, when its emit flag is set and a further global gate is clear.
+The free-slot finder scans the same table and fails
+when all 100 are taken, so this container drops on full exactly as the pool
+does. **Unknown:** which producer fills a slot, and hence what the container
+should be named (decider: a writer census of that table).
+
+Then, per pool record: the debris physics when the record carries a piece
+(`[04 R-COB-04 §2]`), then the primary cursor advance, then the secondary
+cursor advance. The sweep's bound is **live**, unlike the projectile phase's
+captured span (`[01 §6.2]`): the record count is re-read on every iteration,
+so a record appended **during** the sweep is visited in the same sweep — which
+is reachable, because a debris landing inside this very loop calls the
+explosion allocator and it appends at the tail. The sweep then compacts,
+repeatedly rescanning from the first record and removing one dead record per
+scan — a record is dead when its piece pointer **and** both cursor entry
+pointers are null — until a scan finds none; survivors shift down one slot, so
+the surviving set and its order are identical to a single stable pass and an
+implementation may fuse the two.
 A record therefore lives for the longer of its two sequences. The draw pass
 (frame composer, after the strip-5 and strip-6 draws and the projectile
 renderer, `[03 §1]`) makes two walks over the pool: first every record's
@@ -5941,23 +5971,64 @@ The only admission test is the screen rectangle (inclusive on all four
 edges) at the projected point `(Xword − viewX + 128, (Zword − Yword/2) −
 viewZ + 32)`: **explosion art is drawn with no line-of-sight or coverage
 gate**, unlike projectiles, puffs, and sounds. The blitters themselves are doc
-03's (`[03 §5.5]`).
+03's (`[03 §5.5]`). The draw half of this paragraph is the section's one
+unconfirmed reading: a re-derivation from the pool side cannot reach it,
+because the composer forms the pool base somewhere other than the update and
+allocation sites. **Decider:** start from the composer's draw order in
+`[03 §1]` and walk forward to the two blitter calls, confirming (a) that the
+calculated cursor is drawn in the first walk and the named art in the second,
+and (b) the four-edge inclusivity of the screen-rectangle test and the absence
+of a coverage gate.
 
 #### Impact and fire sounds: registry, selection, and the emitter gates [R-WFX-01 §3]
 
 **Established — the sound registry.** A sound name resolves through a
-process-wide registry of up to **255** entries: a 32-byte name per entry
-compared with a 32-character bounded compare (names longer than 31 characters
-alias), a device handle per entry loaded from `sounds\<name>` on first use,
-and a parallel 32-byte alias column used by the sound-alias loader (`[03
-§8.3]`; the weapon parser passes no alias). A name not yet registered is appended
-and its index returned; when the registry already holds 255 entries the
-lookup returns **0** — the 256th distinct sound name in a session plays
-whatever sound registered first. An absent key stores `0xFFFF`. An authored
-but empty name registers the empty string (the file `sounds\` fails to load
-and the handle is null); what the device layer does with a null handle is
-**Unknown** (decider: static trace of the device play routine with a null
-handle) — no stock weapon authors it.
+process-wide registry of up to **255** entries. Each entry carries **two**
+32-byte text columns and one device handle, and the two columns have distinct
+roles:
+
+* the **logical name** — the column the play-by-name entry points scan, filled
+  from the sound-alias file's section name (`[03 §8.3]`);
+* the **file name** — the column every registration fills, the name the device
+  handle is loaded from, and the name the registration dedup compares when no
+  logical name is supplied.
+
+Registration takes `(logicalName, fileName)`. The alias loader passes both (the
+section name and the section's `sound` value). The weapon parser passes **no
+logical name** — only the authored `soundstart` / `soundhit` / `soundwater`
+value as the file name — so the dedup scan compares file names for weapon
+sounds. Registration and its dedup use a **32-character bounded**
+case-insensitive compare (names longer than 31 characters alias, and the
+32-byte store leaves an over-long name unterminated); the three play-by-name
+entry points instead use an **unbounded** case-insensitive compare and, on a
+miss, resolve the id to the all-ones sentinel and call the emitter, which
+returns immediately — a name miss at play time plays nothing and registers
+nothing.
+
+A name not yet registered is appended and its index returned. The handle is
+loaded from the file-name column, from `sounds\<name>` with the extension
+`WAV` appended by the path builder, so authored values carry no extension.
+When a weapon registration supplies no logical name, that entry's logical-name
+column is filled from a zero-initialised shared scratch string, and the
+play-by-name scan **skips entries whose logical name is empty** — weapon
+sounds are therefore normally unreachable by name and are only ever played by
+index. The capacity test compares `count + 1` against 256, so entries occupy
+indices 0 through 254 and the 256th distinct registration returns **0** — a
+real entry, the first sound registered in the session, not a null slot. An
+absent key stores `0xFFFF`. An authored but empty name registers the empty
+string (the composed path is `sounds\.WAV`, which fails to load, and the handle
+is null); what the device layer does with a null handle is **Unknown**
+(decider: static trace of the device play routine with a null handle) — no
+stock weapon authors it.
+
+**Established — the registry carries no priority and no volume.** An entry is
+a logical name, a file name and a device handle; there is no priority, volume
+or cooldown field, and the emitter's two arms both pass the same compiled-in
+attenuation constant with no per-sound volume and no pan (the positional arm
+adds a listener-relative position, the flat arm passes none). The only volume
+input on this path is the effects-volume gate in step 3 below, which is a
+pass/fail test rather than a scale. Per-slot priority and cooldown belong to
+the speech/category path of `[03 §8.3]`, not to this registry.
 
 **Established — the emitter, in order.** `play(id, point, broadcast)`:
 
@@ -6310,3 +6381,12 @@ body and are not restated here.
 - Pixel rules of the lens (render type 2), flash, and frame blitters, and 3DO
   orientation from the angle blocks · doc 03 §4.4, §5.2, §5.5 · doc 03's
   scope; `[R-WFX-01]` closes what each weapon event passes to them.
+- The explosion pool's two draw walks — their order, the four-edge inclusivity
+  of the screen-rectangle admission and the absence of a coverage gate; the
+  update half is closed · `[R-WFX-01 §2]`, doc 03 §1 · walk the composer's
+  draw order forward to the two blitter calls (the pool base is not formed at
+  the update or allocation sites, so a pool-side trace cannot reach it).
+- The producer that fills a slot in the 100-slot scheduled-emitter table phase 4
+  services before the explosion pool; the table's service, release and
+  drop-on-full behaviour is closed · `[R-WFX-01 §2]` · writer census of that
+  table.

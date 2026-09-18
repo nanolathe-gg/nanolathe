@@ -20,8 +20,33 @@ func TestSlideStripLineFormats(t *testing.T) {
 	if got, want := "Game Speed "+slideStripSpeedText(frame.StripReadout{RequestedSpeed: 10, ActiveSpeed: 10}), "Game Speed Normal"; got != want {
 		t.Fatalf("speed line = %q, want %q", got, want)
 	}
-	if got, want := "Game Speed "+slideStripSpeedText(frame.StripReadout{RequestedSpeed: 13, ActiveSpeed: 8}), "Game Speed +3 (-2)"; got != want {
-		t.Fatalf("speed line = %q, want %q", got, want)
+}
+
+// The speed line's two words in their retail positions: the `Normal`-versus-
+// `%+d` branch and the leading offset read the ADAPTED CURRENT word, while the
+// ` (%+d)` suffix carries the TARGET word and is appended only while the two
+// differ [07 R-CAM-01 §3]. This replaces a case that locked the two words the
+// other way round.
+func TestSlideStripSpeedWordPositions(t *testing.T) {
+	for _, tc := range []struct {
+		active, requested int32
+		want              string
+	}{
+		// Adaptation 11 under a target of 13: the branch word leads.
+		{11, 13, "+1 (+3)"},
+		// The `Normal` branch joins before the suffix test, so an adaptation
+		// settled at normal under a raised target still takes the suffix.
+		{10, 12, "Normal (+2)"},
+		// No suffix once the adaptation has reached the target.
+		{13, 13, "+3"},
+		{10, 10, "Normal"},
+		// Both words below normal: the suffix's own sign is the target's
+		// offset from normal, not the difference of the two words.
+		{8, 3, "-2 (-7)"},
+	} {
+		if got := slideStripSpeedText(frame.StripReadout{ActiveSpeed: tc.active, RequestedSpeed: tc.requested}); got != tc.want {
+			t.Errorf("speed line for adapted %d target %d = %q, want %q", tc.active, tc.requested, got, tc.want)
+		}
 	}
 }
 

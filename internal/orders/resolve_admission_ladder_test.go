@@ -138,14 +138,19 @@ func TestCarriableLadderIsTheNineRejectsInOrder(t *testing.T) {
 		{1, "cantbetransported", func() { candidate.Def.CantBeTransported = false }},
 		{2, "canload", func() { carrier.Def.CanLoad = true }},
 		{3, "capacity", func() { carrier.Def.TransportCapacity = 1 }},
-		{4, "too heavy", func() { carrier.Def.TransportSize = 4 }},
-		{5, "no mover", func() {
+		// Rejects 4 and 5 are the mover test and the size compare, in that
+		// order: the executable tests the candidate's mover reference before it
+		// compares transportsize against FootPrintX [04 R-AIR-01 §12]. A
+		// candidate that is both moverless and too heavy is refused as
+		// moverless.
+		{4, "no mover", func() {
 			candidate.Def.MovementClass = "ship3x3"
 			candidate.Def.BMCode = 1
 			sys.EnsureUnit(candidate)
 			candidate.Move.Mode = 2
 			candidate.Move.ModeMirror = 2 // reject 6 next
 		}},
+		{5, "too heavy", func() { carrier.Def.TransportSize = 4 }},
 		{6, "moving", func() {
 			candidate.Move.Mode = 1
 			candidate.Move.ModeMirror = 1

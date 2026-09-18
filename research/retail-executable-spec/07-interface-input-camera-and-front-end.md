@@ -322,14 +322,18 @@ the adapted current speed differs from the target — no colon follows the key
 arguments are the **offset from normal**, formed the same way the
 announcement forms its own: the 16-bit speed word is widened without sign
 extension and 10 is subtracted, and the 32-bit difference is the argument.
-So `Game Speed +3` at target 13 and `Game Speed -2` at target 8, never
-`+13`/`+8`. The two words are read separately — the `Normal`-versus-`%+d`
-branch tests the **target** word against 10, and the suffix tests the
-**adapted current** word against the target and, when they differ, appends
-` (%+d)` of the current word minus 10 to the string the branch already
-produced. The suffix is appended after the `Normal` branch joins, so
-`Game Speed Normal (+2)` is a reachable string while the adaptation is above
-a target of 10.
+So `Game Speed +3` while the word it prints reads 13 and `Game Speed -2`
+while it reads 8, never `+13`/`+8`. The two words are read separately — the
+`Normal`-versus-`%+d` branch tests the **adapted current** word against 10
+and prints that same word minus 10, and the suffix then compares the adapted
+current word with the **target** word and, when they differ, appends
+` (%+d)` of the **target** word minus 10 to the string the branch already
+produced. The leading number is therefore what the tick-budget adaptation has
+settled at and the parenthesised number is what was asked for: an adaptation
+holding at 11 under a target of 13 reads `Game Speed +1 (+3)`. The suffix is
+appended after the `Normal` branch joins, so `Game Speed Normal (+2)` is a
+reachable string, and it means the adaptation has settled at 10 under a
+target of 12.
 
 ### `SwitchAlt` [R-CAM-01 §4]
 
@@ -4191,9 +4195,10 @@ with a separate producer: a rectangle outline one pixel wide, in color-map
 entry 14, stroked by the HUD's minimap-presentation routine onto the
 destination surface after the radar picture is copied there ([03 R-MM-01 §1]
 is the owning statement). The drag-selection rectangle's outer color-map
-entry is 6 or 4 while the armed latch is MOBILEBUILD — chosen by the
-pointer-flags *site-valid* bit, 6 when set and 4 when clear ([R-CAM-01 §14]
-step 1) — and entry 15 otherwise, with inner entry 0.
+entry is 10 or 4 while the armed latch is MOBILEBUILD — chosen by the
+*site-valid* bit, 10 when set and 4 when clear ([R-CAM-01 §14]
+step 1) — with the inner frame repeating that same entry; otherwise the outer
+entry is 15 and the inner entry 0.
 
 ### The ordinary footer: sources, priority, redraw and clearing [R-HUD-03 §1]
 
@@ -4311,9 +4316,18 @@ held.
 **Established — admission.** The hovered unit must be alive (its definition
 index word nonzero). Then the viewing player's direct-visibility predicate
 [03 §3.2] is queried with the viewing player's record: when it returns false
-the footer draws the localized caption `Unidentified object`, centred at
-`UNITNAME`, and **nothing else** ([03 R-VIS-01 §4] owns the predicate; own
-units always pass it).
+the footer composes `"%s%s"` of a three-character unlocalized prefix and the
+localized caption `Unidentified object`, centres the composed string at
+`UNITNAME` in colour 83 with no maximum width, and draws **nothing else**
+([03 R-VIS-01 §4] owns the predicate; own units always pass it). The prefix
+is `"S: "` when the hovered unit's runtime status word carries the
+sonar-contact bit (`0x200`, bit 9) of [03 R-VIS-01 §4] and `"R: "` when that
+bit is clear; both prefixes are literal ASCII and neither goes through the
+translation table, so the drawn string is `R: Unidentified object` or
+`S: Unidentified object` and never the bare caption. **Unknown:** what the
+two letters mean to the player — they are consistent with a radar-versus-sonar
+contact distinction, but no string in the image names them. *Decider:* a
+retail capture of a sonar-only contact.
 
 **Established — the name (`UNITNAME`).** The string is the owning
 **player's name** (the 30-byte lobby name in the player record) when the
@@ -4688,14 +4702,18 @@ header rows): `%d` of `buildcostenergy` (truncated), `%d` of
 
 ```
 tps      := 30                                  // the runtime's ticks-per-second word
-velocity := f32(maxvelocity16.16 × 2^-16) × tps × 0.4          "%.1f m/s"
-accel    := f32(acceleration16.16 × 2^-16) × tps × 0.4         "%.2f m/s/s"
-turn     := turnrate16 × tps × 0.0054931640625                 "%.0f deg/s"
+velocity := f32(maxvelocity16.16 × 2^-16) × tps × 0.4          "%.1f %s "   (m/s)
+accel    := f32(acceleration16.16 × 2^-16) × tps × 0.4         "%.2f %s"    (m/s/s)
+turn     := turnrate16 × tps × 0.0054931640625                 "%.0f %s"    (deg/s)
 ```
 
 `0.4` and `0.0054931640625` (= `360 / 65536`) are literal double constants;
 the first two products narrow to single after the `2^-16` scale and are then
-widened; the unit words `m/s`, `m/s/s`, `deg/s` are localized. The `0.4`
+widened; the unit words `m/s`, `m/s/s`, `deg/s` are localized and are the
+`%s` argument of each format. The **velocity** format alone carries a
+trailing space after that argument; the other two do not. The space is
+invisible in a left-aligned single-line draw, but a test that compares the
+composed string byte for byte must reproduce it. The `0.4`
 factor is retail's world-unit-to-metre convention for this screen only; no
 other reader uses it.
 
@@ -5510,6 +5528,10 @@ apply the same letterbox inside that canvas [07 §6][07 §10].
 - The authored width of the in-battle `PREFS` window, which decides whether
   the options unfold's second quad form and `LIGHTBAR` stamp are reachable ·
   §6 [R-HUD-04 §2] · asset census.
+- What the `R: ` / `S: ` prefixes on the unidentified-contact caption mean to
+  the player; the bit that picks between them is the sonar-contact bit of
+  [03 R-VIS-01 §4], but no string in the image names either letter · §6
+  [R-HUD-03 §2] · a retail capture of a sonar-only contact.
 
 
 ## 7. Fonts, text, palette, and localization use
@@ -5608,8 +5630,10 @@ contextual order and left click to select or clear selection ([R-CAM-01 §5]).
 **The shape chooser is closed.** One pointer update resolves the shape in four
 steps. First, two region bits record whether the pointer is over the world
 viewport or over the minimap; when neither is set the index is forced to
-`cursornormal` and nothing else is consulted. Second, the mobile-build latch
-with a live placement ghost takes the site-validity branch above. Third, the
+`cursornormal` and nothing else is consulted. Second, the site-validity
+branch above is taken **only** for the mobile-build latch with a live
+placement ghost; with the latch armed but no ghost the pass falls through to
+the per-actor rows. Third, the
 selected units of the local player — walked over the owner's inclusive range at
 the fixed 280-byte stride, admitted by the membership bit `0x10` — together
 with the hovered unit are
@@ -5641,14 +5665,31 @@ also apply unchanged to Type 1:
   versus `canreclamate`, `cursormove` for a `canmove` unit, and
   `cursornormal` otherwise.
 * MOVE (latch 2) requires `canmove` and then yields, in order, `cursorrevive`
-  over a reclaimable feature for a `canresurrect` unit, `cursorcapture` over a
+  over a reclaimable feature for a `canresurrect` unit, then — **only for an
+  actor that also has a live mover**, the whole target block being gated on
+  a present target *and* a live mover reference — `cursorcapture` over a
   hostile target for a `cancapture` unit, `cursorreclamate` over a hostile
   target for a `canreclamate` unit, `cursorrepair` over a friendly target
   needing assistance, `cursorunload` when a flyer targets an `isairbase` unit,
-  the transport pair below over a carriable target, `cursordefend` over a
-  friendly target for a `canguard` unit, and `cursormove` otherwise.
-* ATTACK (latch 3) requires `canattack` and yields `cursorairstrike` when the
-  unit's primary weapon is authored `dropped`, `cursorattack` otherwise.
+  the transport pair below over a carriable target, and `cursordefend` over a
+  friendly target for a `canguard` unit; anything that fails, including the
+  mover gate itself, yields `cursormove`. The `cursorrevive` arm sits before
+  the gate and is not mover-gated. Because the row already requires `canmove`,
+  the gate bites only for a `canmove` definition whose mover is absent.
+* ATTACK (latch 3) requires `canattack`, and yields `cursorairstrike` when the
+  **definition's** primary weapon is authored `dropped`. Otherwise an actor
+  that has a live mover yields `cursorattack` with no further test — a mobile
+  attacker is never shown out of range. An actor with **no** mover is instead
+  range-tested against its **runtime weapon slot 0**: over a unit target the
+  slot's admission predicate (the water/altitude gates, the ballistic
+  solver's no-solution sentinel, and an inclusive planar squared distance
+  against the slot's authored range) gives `cursorattack` when it admits and
+  `cursortoofar` when it does not; with no unit target the same predicate is
+  applied to the resolved ground point, and a slot carrying the target-class
+  restriction flag — the same bit the unit-target predicate reads to require
+  a particular target movement class — yields `cursortoofar` even for a point
+  in range. The `cursortoofar` arms are therefore reachable only for an
+  immobile attacker: a gun tower, a missile tower, an LRPC.
 * BLAST (latch 4) requires `candgun` and is gated on **affordability, not
   range**: the command-fire weapon's `energypershot` and `metalpershot` are
   compared against the owner's stocks, giving `cursorattack` when both are
@@ -5664,8 +5705,14 @@ also apply unchanged to Type 1:
 * RECLAIM (latch 0xC) requires `canreclamate` and a reclaimable feature or a
   hostile target, and gives `cursorreclamate`; CAPTURE (latch 0xD) requires
   `cancapture` and a target of another owner, and gives `cursorcapture`;
-  MOBILEBUILD (latch 0xE) requires a non-empty build list and gives
-  `cursorfindsite`.
+  MOBILEBUILD (latch 0xE) requires the actor's compiled build-option list to
+  **exist** — which the catalog compiler allocates as one fixed-size block for
+  every `builder`-flagged definition, empty or not, the entry count being a
+  separate word — **and** the actor to have a live mover, and only then gives
+  `cursorfindsite`. That is the same pair the command resolver's code-14 arm
+  tests [04 R-ORD-02 §1]. A structure builder, having no mover, falls through
+  to `cursornormal`; so does a mobile builder with no compiled list at all,
+  which stock content does not produce.
 * Any gate that fails yields `cursornormal`, which is also the value the
   reduction starts from.
 
@@ -5800,16 +5847,18 @@ mode/panel capture records the descriptor at the selection draw. Neither
 tuple may be used as a universal canonical value.
 
 **Established palette/remap.** The rectangular outline's outer color is
-logical map entry **15** for an ordinary drag-selection rectangle; the 6/4 pair
-replaces it only while the armed latch is MOBILEBUILD — entry 6 when the
-site-valid bit is set, entry 4 when it is clear. Its inner frame is entry 0.
-Each is looked up once through the logical-to-physical palette map before the
-solid indexed writer. The outline is neither fog-remapped nor blended; raw GAF
-image bytes and this semantic map path must not be conflated. The
-conditioning term is the armed latch, never the existence of a drag (logical
-4 resolves to a dark red, so the ordinary case is visibly entry 15), and the
-bit that picks 6 over 4 is the pointer-flags site-valid bit of
-[R-CAM-01 §14] step 1, not the latch-flags helptext bit.
+logical map entry **15** for an ordinary drag-selection rectangle, and its
+inner frame is entry 0. The 10/4 pair replaces the outer entry only while the
+armed latch is MOBILEBUILD — entry 10 when the site-valid bit is set, entry 4
+when it is clear — and in that case the inner frame takes the **same resolved
+colour as the outer**, not entry 0. Each is looked up once through the
+logical-to-physical palette map before the solid indexed writer. The outline
+is neither fog-remapped nor blended; raw GAF image bytes and this semantic map
+path must not be conflated. The conditioning term is the armed latch, never
+the existence of a drag (logical 4 resolves to a dark red, so the ordinary
+case is visibly entry 15), and the bit that picks 10 over 4 is the site-valid
+bit of [R-CAM-01 §14] step 1 — bit 6 of the one interface flags byte §9
+enumerates.
 
 **Unknown.** The static evidence does not show a per-selected-unit plate
 pass, an extra primary-selection wireframe/chrome rule, or an authored plate
@@ -6053,8 +6102,11 @@ exactly three tests, in this order:
    bits described in [04] is a **Supported inference**; what would settle it
    is a writer census of that status word.
 3. **Ownership or foreign visibility.** A candidate whose owner byte equals
-   the local player's owner byte is appended without any visibility query.
-   Otherwise the shared foreign-visibility helper decides: it returns true
+   the **viewing** player's owner byte is appended without any visibility
+   query — the viewing slot, not the local one, and the two differ in a
+   watcher session ([03 R-VIS-01 §4] carries the same distinction).
+   Otherwise the shared foreign-visibility helper decides, queried against the
+   player record built from that same viewing byte: it returns true
    immediately for a candidate owned by the queried player record; returns
    false when the candidate's hidden/cloak bit is set; returns false when the
    candidate's movement flags lack the exempting bit and its derived vertical
@@ -6234,7 +6286,9 @@ cell, minimap, or GUI control consumes the action.
 
 The idle-latch branch is closed. The interface-type option (a runtime word the
 options and settings loaders write from the `Interface Type` registry value,
-clamped to 0/1) selects the two rows established above: value `0` uses the
+clamped **above at 1 only** — the settings loader has no lower clamp, and an
+absent registry value stores `0` and writes it back) selects the two rows
+established above: value `0` uses the
 action-shaped contextual table, while value `1` uses the relationship-coloured
 `cursorselect`/`cursorred`/`cursorgrn` row with its feature-capability gate and
 plain-normal fallback. The option word's writers are the option loaders, and the
@@ -6308,10 +6362,16 @@ interface dirty bit `0x10` (a different field that coincidentally shares the
 value). Selection and hover use separate state so the footer can report a
 hovered unit while retaining the selected group.
 
-**Drag-rectangle conversion is closed.** Drag endpoints recorded in world
-coordinates are converted to presentation coordinates by subtracting the
-camera position and adding the fixed view-pane origin offsets (128
-horizontally, 32 vertically); each axis is then sorted independently
+**Drag-rectangle conversion is closed.** Drag endpoints are recorded as whole
+three-component world points, and each is converted to presentation
+coordinates by the ordinary projection [03 §2.5] — the horizontal coordinate
+is `x − cameraX + 128` and the vertical coordinate is
+`z − (y >> 1) − cameraZ + 32`, where `y` is **that endpoint's own** recorded
+height and the shift is arithmetic. The unit point tested against the
+rectangle is built by the same formula from the unit's own position, so both
+sides of the comparison carry the half-height shear; on sloped ground a
+rectangle converted without it would select the wrong band of units. Each
+axis is then sorted independently
 (`if right < left swap`, `if bottom < top swap`) and both boundaries are
 tested inclusively (`min <= x <= max && min <= y <= max`). The toggle
 modifier is bit 2 of the drag parameter word, giving this truth table for
@@ -6323,9 +6383,14 @@ eligible units:
 | Set (`1`) | Toggle selected (`flags ^= 0x10`) | Preserve prior selected state (no write) |
 
 When the modifier is clear, the pre-clear also runs the single-select reset.
-After selection, one selected unit takes the single-unit presentation path
-and multiple units take the multiple-unit path; any change sets the dirty bit
-above and plays `SelectMultipleUnits` or the single select cue.
+Two different gates follow the walk. The dirty bit above is raised only when
+some unit inside the rectangle was actually written. The cue is chosen from
+the **count of selected units accumulated over the whole walked range**: a
+count of zero plays nothing and returns "nothing selected", a count of one
+takes the single-unit presentation path with the remembered unit, and a count
+above one plays `SelectMultipleUnits`. Because the cue reads the resulting
+count rather than the change flag, a toggle drag that changed nothing still
+replays a cue.
 
 **Mouse-button assignment is closed (for `Interface Type 0`; the `1` polarity is [R-CAM-01 §5]).** Every world action — single-unit picking, rectangle drag selection, building placement, and issuing every order including the contextual code 1 — is performed with the **left** mouse button. The **right** mouse button performs only deselection and cancellation: it cancels an armed order or build placement (returning the command latch to idle) or, when the latch is already idle, clears the current selection. The battle input pump routes left-button press and release through the single-click and drag-rectangle paths and the order dispatcher, while a right-button press left available by the earlier GUI service (§3) is routed exclusively to the cancellation path that returns the latch to idle and, when idle, clears selection; no battlefield right-button path queues an order. The cursor table shows the same polarity: every latch shape fires its order on left-click; the right-click column is empty or a transition back to the normal cursor [04 §3.4][07 §8].
 
@@ -6351,8 +6416,12 @@ where `shiftHeld = held-key query for token 0xF9` (Shift) is the preserve/
 toggle argument. Recall selects eligible members whose stored group matches
 and clears nonmembers when that argument is clear; a secondary branch keys on
 a matching unit that also carries runtime flag `0x80000000`, where the
-authored `CTRL_F` type-filter bitset — a 256-bit category mask indexed by
-definition id — changes which matching units remain selected. The flag has
+authored `CTRL_F` type-filter bitset — a **512-bit** category mask (sixteen
+32-bit words, allocated and zero-filled as one 64-byte block when the
+case-sensitive binary search over the sorted category name/value table
+misses) indexed by definition id and tested
+`mask[id >> 5] & (1 << (id & 31))` — changes which matching units remain
+selected. The flag has
 readers (the recall filter branch, the unit-info panel, and an AI-side path)
 but **no writer anywhere in the image** — the filter branch is unreachable
 from retail's own code; a save file or external write is the only way to arm
@@ -6385,6 +6454,10 @@ value minus one):
 | `0xC` | RECLAIM/RESURRECT |
 | `0xD` | CAPTURE |
 | `0xE` | MOBILEBUILD |
+
+The table has fourteen entries and the list above has thirteen rows because
+value `0xA` has no order family of its own; like `0xB` it is a consumer-only
+switch key that no writer in the image ever stores.
 
 The GUI order-button dispatcher arms the latch by parsing the button name in
 a fixed chain, writing the parsed value only when the button's runtime gate
@@ -6426,21 +6499,48 @@ aliases resolve to the same sample (`immediateorders` and `specialorders` are
 both authored as `button5` in `allsound.tdf`), so the distinction is
 inaudible in the shipped install and audible only under replaced sound data.
 
-Latch-flag bit `0x40` selects immediate-versus-special helptext, bit `0x20`
-marks placement-valid pending, and bit `0x08` additionally gates placement
-drawing; the dispatcher clears bit `0x08` while the Escape cancel path clears
-bit `0x20`. This word is not the one the drag rectangle's colour reads: the
-bit that picks the drag box's outer entry is bit 6 of the **pointer-flags**
-byte — the site-valid bit of [R-CAM-01 §14] step 1 — a different byte whose
-bit is also written `0x40`; nothing in the build-button handler touches the
-helptext word. The latch writers, census-complete: the order-button
+**One interface flags byte carries the latch's own flags, the placement
+verdict and the pointer's region bits together** — what §8 calls the
+placement flag byte and what [R-CAM-01 §14] step 1 calls the pointer-flags
+byte are the same storage, and a whole-image census of that byte's references
+finds a single address with no second copy. Its bits, by role:
+
+* bits 0–2 — the pointer-region bits of §8 (minimap branch, inside-viewport,
+  their OR), rewritten each pointer update;
+* bit 3 (`0x08`) — cleared by every matched order-button arm, on both its
+  gate-nonzero and its gate-zero path. Its two recovered readers are the
+  shared rectangle drawer's "is there anything to draw" predicate, which
+  answers yes while the bit is set and otherwise only while the armed latch
+  is MOBILEBUILD, and the pointer classification of §8, which skips its
+  minimap-region branch while the bit is set;
+* bit 5 (`0x20`) — placement-valid pending: set by the world-click commit
+  when Shift was held at the click, cleared by the per-frame release closer
+  and by the Escape cancel path;
+* bit 6 (`0x40`) — the **site-valid** bit: the placement validator writes it
+  from the footprint verdict on each pointer update
+  (`byte = (byte & ~0x40) | ((valid & 1) << 6)`), the validator itself then
+  tests it to choose between the cached site height and a second height
+  scan, the world-click commit tests it before issuing a build order, and
+  the shared rectangle drawer tests it to choose the ghost's colour.
+
+There is no separate byte behind the drag box's outer entry: that is this
+same bit 6. **Unknown:** whether any site reads bit 6 as an
+immediate-versus-special helptext selector — the three readers recovered here
+are the validator's cached-height branch, the commit's validity gate and the
+ghost's colour. *Decider:* classifying the roughly twenty sites that load the
+whole byte into a register and mask it later.
+
+The latch writers, census-complete: the order-button
 dispatcher arms `1..9`, `0xC`, `0xD`; the battle-HUD build-button handler arms
 `0xE` (MOBILEBUILD) when the product's `BMcode` byte is zero, storing the
 product id in the pending-build word and playing `addbuild` — the click arms
-it, not the ghost show; idle resets write `1`. **Latch value `0xB` (TELEPORT)
-has no writer anywhere in the image** — it is a consumer-only switch key
-(order dispatch, shape table) — MOBILEBUILD is armed by the build-button
-click, TELEPORT never by retail's own code.
+it, not the ghost show; idle resets write `1`. **Latch values `0xA` and `0xB`
+(TELEPORT) have no writer anywhere in the image** — they are consumer-only
+switch keys (order dispatch, shape table) — MOBILEBUILD is armed by the
+build-button click, TELEPORT never by retail's own code. The one store of
+the latch byte from a register rather than an immediate sits in a small
+helper that clears bit 3 of the flags byte above and has no call site and no
+data reference anywhere in the image, so it arms nothing.
 
 **The stance buttons are a separate producer from the order latch.** The
 `MOVEORD` and `FIREORD` gadgets do **not** arm the command latch above: they
@@ -6685,9 +6785,16 @@ Shift axis scales the count, not the queue mode.
 
 The counted-add routine plays the `addbuild`/`subbuild` cue (below), routes
 the stockpile buttons `MAKENUKE`/`MAKEANTI` to the
-`BUILDWEAPON` order descriptor and everything else to the
-`MOBILEBUILD`/`BUILDINGBUILD` descriptors from the product definition, then
-coalesces the signed count into the queue:
+`BUILDWEAPON` order descriptor and everything else to `MOBILEBUILD` when the
+**acting builder** has a live mover and to `BUILDINGBUILD` when it has none,
+then coalesces the signed count into the queue. The discriminant is the
+acting unit's mover reference — the same field the command resolver's
+mobile-build arm tests as its second gate [04 R-ORD-02 §1] — and **not** the
+product: the product definition contributes only the id operand the
+descriptor carries. (The product's `BMcode` has already been consumed one
+level up, to decide whether this routine is reached at all.) An
+implementation that switched on the product would invert the rule for a
+mobile builder producing a mobile product.
 
 * Positive count: the queue head is chosen by a descriptor flag that selects
   the secondary order list when set and the primary order list otherwise. If
@@ -6707,10 +6814,11 @@ Counted nodes keep their descriptor flags, including the counted-production
 flag the button counter filters on; the world-order shift-chain flag does not
 participate on this path.
 
-**The cue's gate.** The routine's first statement is the local-player
-test — the selected builder's owning-player byte against the local-player
-byte — and inside it a **single signed test on the count**: one or more plays
-`addbuild`, anything else plays `subbuild`. There is no third arm and no
+**The cue's gate.** The routine's first statement is an ownership test — the
+selected builder's owning-player byte against the **viewing** player's byte,
+the same byte [R-REV-01 §5] test 3 compares and not the local-player byte the
+selection walk uses — and inside it a **single signed test on the count**:
+one or more plays `addbuild`, anything else plays `subbuild`. There is no third arm and no
 silent case; the cue runs before the descriptor routing and before the queue
 coalesce, so a click that ends up changing nothing is still audible. Zero is
 not reachable from a click (the count is always ±1 or ±5) but it is on the
@@ -6718,8 +6826,17 @@ not reachable from a click (the count is always ±1 or ±5) but it is on the
 
 #### Queue-count display [R-P0-11 §2]
 
-**Established.** After every enqueue or cancel the click handler runs the
-count-label writer over the page's toys; for each build-product toy it sums
+**Established.** After an enqueue or cancel the click handler runs the
+count-label writer over the page's toys, but the call is **conditional**: it
+runs when the selected builder's runtime status word carries bit 29 or, that
+failing, when the record its link field points at carries bit 28 of its own
+flag word. A builder carrying neither leaves the labels as they were until
+the next full page repaint. **Unknown:** what those two bits mean — neither
+has a name in the image. *Decider:* a writer census of each bit. (An
+implementation that always rewrites the labels can only show a count sooner
+than retail would, never a wrong one.)
+
+For each build-product toy the writer sums
 the count fields of nodes in **both** the primary and secondary order lists
 whose kind/id matches the product id and which carry the counted-production
 flag. The toy's flag bits select the format: bit `0x04` gives `+%d` (for
@@ -7038,8 +7155,11 @@ definition id is zero draws nothing.
 
 **Established.** The world-order commit handles every armed latch on
 left-click: it issues the order (MOBILEBUILD via the build-order issuer plus
-the `oktobuild` cue; every other latch via the general order issuer reading the
-resolved ground point), then tests the click record's key-state word for the
+the `oktobuild` cue; **every other latch** via the general order issuer, to
+which it hands the frame's resolved ground point — the triple §8's
+cursor-to-ground conversion stores — as the goal argument alongside the click
+record and the target handle, so a target-click order carries both), then
+tests the click record's key-state word for the
 Shift bit — the message-time modifier, not the live key state. When Shift was
 held at the click, latch-flag bit `0x20` is set and the latch stays armed;
 otherwise the armed-latch byte is written back to `1` (idle) and bit `0x20` is
@@ -7067,8 +7187,11 @@ whose natural home is the COB VM contract of doc 04; recorded here as well.)
 through one producer that takes the order's canonical kind, the click's
 **queue flag** (the Shift bit of the click record's key-state word, [R-P0-11
 §4]), the acting unit, an optional target handle, and an optional goal point.
-Its first act is a **duplicate test that runs only when the queue flag is
-set**:
+A world click supplies **both** of the last two for every latch except
+MOBILEBUILD ([R-P0-11 §4]), so the goal term below does participate in the
+match for an ordinary target-click order; it is not absent just because a
+unit was clicked. Its first act is a **duplicate test that runs only when the
+queue flag is set**:
 
 * Walk the acting unit's **primary** order list from the front.
 * A node matches when *all* of these hold:
@@ -7107,7 +7230,8 @@ because they are easy to get wrong:
 The build-placement click ("*The click*" above) reaches this producer once
 per selected builder, so one repeat click clears the queued site from every
 selected builder that has one there. The queue-count label writer of
-[R-P0-11 §2] runs after cancels as well as enqueues, and the Shift-gated
+[R-P0-11 §2] is reached after cancels as well as enqueues, under the same two
+runtime-flag gate that section states, and the Shift-gated
 overlay walker of [R-P0-11 §3] redraws from the live queues every frame, so
 the removed site stops being drawn on the next frame with no separate
 invalidation.
@@ -7441,14 +7565,20 @@ the presentation extents. The desired origin is then clamped per axis in this
 order: a value below zero becomes zero, otherwise a value above
 `mapPixelExtent - viewportExtent` becomes that limit. Because the low clamp is
 tested first, a viewport wider than the map clamps to zero rather than to the
-negative limit. Selecting a point also clears the view-dirty bit that the step
-below re-tests.
+negative limit. Selecting a point also clears the **render-flags word's
+terrain/mapping view-cache bit**, the bit every camera writer clears
+([R-CAM-01 §14]); it does not touch the view-dirty bit, which the
+current-origin step below *sets*. Nothing in phase 10 re-tests either bit.
 
 The phase-10 current-to-desired step is exact. For each axis let
 `d = desired - current`: if `|d| > 320`, add `sign(d) * 320`; otherwise add
 `trunc(d / 2)` with signed integer truncation toward zero. Thus `d = ±320`
 uses a half-step of `±160`, `d = ±321` uses `±320`, and `d = ±1` stalls one
-pixel short. A nonzero step marks the camera/view state dirty. The phase-10
+pixel short. An axis whose current origin **differs from** its desired origin
+marks the camera/view state dirty and clears the terrain/mapping view-cache
+bit — the compare is against the desired value and happens before the
+magnitude is computed, so the `|d| = 1` case where the half-step rounds to
+zero and the origin does not move still marks it dirty. The phase-10
 order is target selection (including in-flight-count consumption), desired
 origin calculation and clamp, current-origin step, shake consumption, then
 the final current-origin clamp and view invalidation. [01 §4.4][03 §5.6]
@@ -7529,9 +7659,14 @@ ring in entry 15 ([03 R-MM-01 §2]) — and
 the radar surface is wiped and rebuilt each tick while the picture persists.
 
 Per-axis camera clamp order is:
-`maximum = mapSize - viewSize; if camera < 0 then 0 else if camera > maximum then maximum`,
-giving inclusive `[0, mapSize-viewSize]` in the normal `viewSize <= mapSize`
-domain; ordered form controls negative-maximum domains. The clamp refreshes the
+`maximum = playExtent - viewSize; if camera < 0 then 0 else if camera > maximum then maximum`,
+giving inclusive `[0, playExtent-viewSize]` in the normal
+`viewSize <= playExtent` domain; ordered form controls negative-maximum
+domains. The extent operand is the **play** extent — `PlayRight = Width·16 −
+32` on X and `PlayBottom = Height·16 − 128` on Z, each the full map pixel
+extent less an OTA-overridable margin ([R-CAM-01 §13], [03 §1]) — not the full
+`Width·16` / `Height·16`. The ground resolver's own clamp (§8 step 1) is the
+one that uses the full extents. The clamp refreshes the
 camera-to-radar rectangle. Camera persistence uses `Camera` `X_Position` /
 `Z_Position` and reapplies the clamp on load. **`viewSize` here is the battle
 viewport subrect's span and the bounds are in retail's own camera frame, whose
@@ -7567,8 +7702,8 @@ hotkey dispatch ([R-CAM-01 §1]). Its inputs, with their sources:
   [R-CAM-01 §7]), the chat command `+ScrollSpeed n` (low byte of `n`), and
   `RESTORE` (`32`). It is the only settings byte preserved across the camera
   block reset at battle entry (the reset zeroes the tracked object, follow
-  target, bookmarks, hold state and both origins, and restores the byte —
-  [R-CAM-01 §14]).
+  target, bookmarks, hold state, the shake state and both origins, and
+  restores the byte — [R-CAM-01 §14]).
 * **Raw delta** — a signed 32-bit host value: this frame's scaled
   `GetTickCount()` reading minus the previous frame's, as stored by the
   tick-budget step ([R-CAM-01 §1]). The scale is the presentation object's
@@ -7846,7 +7981,9 @@ coordinates, which is the definition of the frame: the camera origin is drawn
 at framebuffer pixel `(128, 32)`, and the 128 columns of command panel and the
 32 rows of resource bar above it are *not* part of what the origin measures.
 Every camera arithmetic in this section is expressed in that frame: the clamp's
-`0` floor, the clamp's `mapSize - viewSize` maximum, the half-viewport
+`0` floor, the clamp's `mapSize - viewSize` maximum (`mapSize` throughout this
+section being the **play** extent `PlayRight` / `PlayBottom` of §10, not
+`Width·16` / `Height·16`), the half-viewport
 recenters of [R-CAM-01 §11] and [R-CAM-01 §12], and phase 10's desired origin
 ([R-CRD-006 §1], which names the same quantity `viewportExtent`).
 
@@ -7933,8 +8070,10 @@ reset the world rebuild runs ([08 R-ENTRY-01 §3] step 12) zeroes
 twenty-three consecutive 32-bit words of the camera block and writes the
 scroll-setting byte back. The block spans the tracked-object and
 followed-projectile references, the four bookmark origins with their valid
-bytes, the **current origin**, the **desired origin**, and the hold count
-with its anchor — so after the reset `current = desired = (0, 0)`. The
+bytes, the **current origin**, the **desired origin**, the **whole shake
+state** (duration, remaining count, both amplitudes and the active flag), and
+the hold count with its anchor — so after the reset `current = desired =
+(0, 0)` and no shake survives into the new battle. The
 camera-flags byte (view-dirty bit 1) and the render-flags word lie outside
 the block. A campaign without a start-position special therefore keeps
 `(0, 0)` as both origins ([08 "Campaign camera"]).
@@ -8437,6 +8576,16 @@ and the decider that would close it.
 - Whether any retail path draws the sweeping build-site lines with Shift up
   (a play observation contradicts the traced Shift gate) · §9 [R-P0-11 §3] ·
   a retail session with the Shift key state observed, not recalled.
+- Whether any site reads bit 6 of the interface flags byte as an
+  immediate-versus-special helptext selector; the three readers recovered are
+  the placement validator's cached-height branch, the world-click commit's
+  validity gate and the ghost's colour · §9 · classifying the roughly twenty
+  sites that load the whole byte into a register and mask it later.
+- What the two runtime flags that gate the queue-count label writer mean (bit
+  29 of the selected builder's status word, bit 28 of the record its link
+  field points at) · §9 [R-P0-11 §2] · a writer census of each bit.
+- What the `R: ` / `S: ` prefixes on the unidentified-contact caption mean to
+  the player · §6 [R-HUD-03 §2] · a retail capture of a sonar-only contact.
 
 ### Camera, minimap, and session UI
 

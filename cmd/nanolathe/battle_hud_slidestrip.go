@@ -41,8 +41,9 @@ const (
 	slideStripUnitsX       = 190
 	slideStripSpeedX       = 380
 	slideStripTextY        = 10
-	// slideStripNormalSpeed is the speed word at which the line prints the
-	// localized normal word instead of an offset [07 §6][07 R-CAM-01 §3].
+	// slideStripNormalSpeed is the value at which the adapted current speed
+	// word prints the localized normal word instead of an offset, and the
+	// value both `%+d` arguments are measured from [07 §6][07 R-CAM-01 §3].
 	slideStripNormalSpeed = 10
 )
 
@@ -123,23 +124,33 @@ func slideStripUnitsText(live int, limit int32) string {
 }
 
 // slideStripSpeedText is the composer's own speed formatter, which is separate
-// from the message-ring announcement of [07 R-CAM-01 §3]: `Normal` at the
-// target word 10, otherwise `%+d`, with ` (%+d)` appended while the adapted
-// current speed differs from the target [07 §6].
+// from the message-ring announcement of [07 R-CAM-01 §3]: `Normal` when the
+// ADAPTED CURRENT speed word is 10, otherwise `%+d` of that same word's offset
+// from normal, with ` (%+d)` of the TARGET word's offset appended while the two
+// words differ [07 §6][07 R-CAM-01 §3].
+//
+// Which word goes where is the part that is easy to get backwards, and this
+// code had it backwards. Both the `Normal` test and the leading `%+d` read the
+// adapted current word — the one the tick-budget adaptation of [01 §4.3] steps
+// toward the target — and only the parenthesised suffix carries the target word
+// the speed keys set. So an adaptation of 11 under a target of 13 reads
+// `Game Speed +1 (+3)`, and `Game Speed Normal (+2)` means the adaptation has
+// settled at 10 under a target of 12.
 //
 // Both `%+d` arguments are the **offset from normal**, not the raw speed word:
 // each speed word is widened from 16 bits without sign extension and 10 is
 // subtracted before it is formatted [07 R-CAM-01 §3]. The suffix test is a
-// plain inequality of the two words and runs
-// after the `Normal` branch has joined, so `Normal (+2)` is reachable.
+// plain inequality of the two words and runs after the `Normal` branch has
+// joined, so `Normal (+2)` is reachable.
 func slideStripSpeedText(strip frame.StripReadout) string {
-	target := strip.RequestedSpeed
-	text := fmt.Sprintf("%+d", target-slideStripNormalSpeed)
-	if target == slideStripNormalSpeed {
+	// ActiveSpeed is the adapted current word, RequestedSpeed the target
+	// [07 R-CAM-01 §3].
+	text := fmt.Sprintf("%+d", strip.ActiveSpeed-slideStripNormalSpeed)
+	if strip.ActiveSpeed == slideStripNormalSpeed {
 		text = "Normal"
 	}
-	if strip.ActiveSpeed != target {
-		text += fmt.Sprintf(" (%+d)", strip.ActiveSpeed-slideStripNormalSpeed)
+	if strip.ActiveSpeed != strip.RequestedSpeed {
+		text += fmt.Sprintf(" (%+d)", strip.RequestedSpeed-slideStripNormalSpeed)
 	}
 	return text
 }

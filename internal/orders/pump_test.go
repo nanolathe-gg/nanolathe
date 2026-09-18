@@ -1010,12 +1010,13 @@ func TestPumpWritesNoEligibilityWord(t *testing.T) {
 }
 
 // TestMobileBuildBlockedAreaBudget locks the blocked-area retry budget of the
-// MobileBuild/VTOL_MobileBuild handlers [R-ORDER-02 §1]: each blocked visit
-// notifies "Waiting for target area to clear", increments the record's third
-// parameter, and waits EXACTLY 30 ticks with no random draw while the counter
-// is at most 10; the first blocked visit with the counter already above 10
-// notifies "Target area was blocked" and returns 8 (remove). Eleven 30-tick
-// waits, then give-up on visit twelve.
+// MobileBuild/VTOL_MobileBuild handlers [04 §5 MobileBuild][R-ORDER-02 §1]:
+// the FIRST blocked visit notifies "Waiting for target area to clear" and
+// visits 2..11 run silent, while every one of them increments the record's
+// third parameter and waits EXACTLY 30 ticks with no random draw as long as
+// the counter is at most 10; the first blocked visit with the counter already
+// above 10 notifies "Target area was blocked" and returns 8 (remove). Eleven
+// 30-tick waits, then give-up on visit twelve.
 func TestMobileBuildBlockedAreaBudget(t *testing.T) {
 	buildID := Lookup("MobileBuild")
 	if buildID == 0 {
@@ -1069,8 +1070,14 @@ func TestMobileBuildBlockedAreaBudget(t *testing.T) {
 			t.Fatalf("visit %d at tick %d, want %d (exact 30-tick cadence)", i+1, v.tick, wantTick)
 		}
 		if i < 11 {
-			if v.text != MobileBuildWaitingText || v.code != 2 {
-				t.Fatalf("visit %d: text %q code %d, want %q and 2", i+1, v.text, v.code, MobileBuildWaitingText)
+			// Only the counter-is-zero arm reaches the caption; the retry tail
+			// every later visit enters directly is silent [04 §5 MobileBuild].
+			wantText := ""
+			if i == 0 {
+				wantText = MobileBuildWaitingText
+			}
+			if v.text != wantText || v.code != 2 {
+				t.Fatalf("visit %d: text %q code %d, want %q and 2", i+1, v.text, v.code, wantText)
 			}
 			if v.counter != uint32(i+1) {
 				t.Fatalf("visit %d counter %d, want %d", i+1, v.counter, i+1)
@@ -1090,13 +1097,26 @@ func TestMobileBuildBlockedAreaBudget(t *testing.T) {
 }
 
 // TestMobileBuildBlockedBudgetBoundary pins the counter arithmetic at the
-// boundary and the nil-record behavior [R-ORDER-02 §1].
+// boundary, the caption-once rule and the nil-record behavior
+// [04 §5 MobileBuild][R-ORDER-02 §1].
 func TestMobileBuildBlockedBudgetBoundary(t *testing.T) {
 	n := &Node{ID: Lookup("MobileBuild")}
+	// The phase-0 approach gate the record carries into a blocked visit: the
+	// retry tail's only gate write is the shared deadline setter's OR of the
+	// lowest bit, so the approach bits must survive [04 R-ORD-01 §1].
+	const approachGate = uint32(0xE0)
+	n.DynamicGate = approachGate
 	for i := 0; i < 11; i++ {
+		wantText := ""
+		if i == 0 {
+			wantText = MobileBuildWaitingText
+		}
 		text, code := MobileBuildBlockedVisit(n, 500)
-		if text != MobileBuildWaitingText || code != 2 {
-			t.Fatalf("counter %d: text %q code %d, want waiting/2", n.Param3, text, code)
+		if text != wantText || code != 2 {
+			t.Fatalf("counter %d: text %q code %d, want %q/2", n.Param3, text, code, wantText)
+		}
+		if n.DynamicGate != approachGate|1 {
+			t.Fatalf("visit %d gate %#x, want the approach gate with the deadline bit ORed in", i+1, n.DynamicGate)
 		}
 	}
 	if n.Param3 != 11 {

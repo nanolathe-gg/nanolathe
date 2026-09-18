@@ -284,23 +284,24 @@ func (s *Session) localDefeated() bool {
 // skip any slot with a zero live-unit count; if any slot survives the skips
 // there is no victory; after all ten, victory.
 //
-// The one test before the walk is the rule word: [08 R-SKIR-01 §3] "Victory
-// detection" opens with "the elimination sweep run from the same due returns
-// false immediately when the rule word is 2" — deathmatch never ends by
-// elimination, because the local player's own elimination is what arms the
-// respawn.
+// There is no test before the walk. The kind dispatch reaches the local slot
+// byte and the ten-slot loop directly: [08 R-TRIG-01 §6] "The kind-2 victory
+// sweep" gives the sweep "no shared-victory bit, no controller or elimination
+// test, and no rule-word test". The rule-word early-out — return false when
+// the commander-death rule word is 2 — is the FIRST step of the kind-3
+// alliance-aware sweep of [08 R-SKIR-01 §3] "Victory detection" and belongs
+// only there; this engine never builds a kind-3 session, so it has no site
+// here. A deathmatch (rule 2) skirmish that eliminates every opponent
+// therefore wins, exactly as it does in retail; rule 2 selects the respawn
+// only on the terminal due of the LOST path (see EvaluateResult).
 //
 // Inside the walk there is no shared-victory bit and no controller or
-// elimination test: those belong to the kind-3 sweep that [08 R-SKIR-01 §3]
-// "Victory detection" describes, and that section's closing "allies included"
-// sentence is explicitly wrong for kind 2 — allied players are excluded by the
-// first alliance row, which battle entry fills from the setup screen's team
-// groups [08 R-SKIR-01 §2].
+// elimination test: those belong to the same kind-3 sweep, and that section's
+// closing "allies included" sentence is explicitly wrong for kind 2 — allied
+// players are excluded by the first alliance row, which battle entry fills
+// from the setup screen's team groups [08 R-SKIR-01 §2].
 func (s *Session) victorySweep() bool {
 	if s == nil || s.Units == nil {
-		return false
-	}
-	if CommanderDeathMode(s.Skirmish.CommanderDeath) == CommanderDeathDeathmatch {
 		return false
 	}
 	local := int(s.LocalOwner)
@@ -363,9 +364,9 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 	// The two predicates, in the order [08 R-TRIG-01 §6] establishes for
 	// session kinds 2/3: the defeat predicate first and, if true, the lost
 	// path; otherwise the victory sweep and, if true, the won path. At most one
-	// predicate steps the shared countdown per due. victorySweep already
-	// answers false under rule 2, where deathmatch never ends by elimination
-	// [08 R-SKIR-01 §3] "Victory detection".
+	// predicate steps the shared countdown per due. The rule word qualifies
+	// neither predicate: the sweep reads it nowhere [08 R-TRIG-01 §6] "The
+	// kind-2 victory sweep", and it is consulted only at the crossing below.
 	localDefeated := s.localDefeated()
 	victory := false
 	if !localDefeated {
@@ -392,7 +393,7 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 		s.resultPendingReason = ReasonCommanderDeath
 	}
 	s.resultPendingWinner, s.resultPendingLosers = s.resultTeams(victory)
-	s.deathmatchActive = rule == CommanderDeathDeathmatch
+	s.deathmatchActive = !victory && rule == CommanderDeathDeathmatch
 
 	terminal := s.advanceSharedCountdown(victory)
 	s.publishEndCountdown()
@@ -401,8 +402,12 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 		return false
 	}
 	// The rule word alone selects the terminal due's arm [08 R-SKIR-01 §3]
-	// "Defeat detection"; no exhaustion or attempt state qualifies it.
-	if rule == CommanderDeathDeathmatch {
+	// "Defeat detection"; no exhaustion or attempt state qualifies it. The
+	// crossing exists on the LOST path only: the won path of the kinds-2/3
+	// block runs the countdown straight into the won latch and never reads the
+	// rule word, so an elimination victory under rule 2 ends the battle instead
+	// of respawning the local commander [08 R-TRIG-01 §6] "Countdown and latch".
+	if !victory && rule == CommanderDeathDeathmatch {
 		s.deathmatchActive = false
 		s.settleDeathmatchRespawn()
 		return false

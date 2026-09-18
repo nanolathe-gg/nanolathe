@@ -988,17 +988,16 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 			}
 			return s.Features.ReclaimAt(cx, cz)
 		},
-		// Command code 14's gate: the definition's compiled build list is
-		// non-empty [04 R-ORD-02 §1]. The pages are the `CANBUILD` sections of
-		// gamedata/sidedata.tdf, keyed by the builder's canonical unit name
-		// [02 "Build-menu catalog keys"]; a definition with no page has no
-		// build list, which is a reject, not an error.
+		// Command code 14's first gate: the definition's compiled build-option
+		// list is present [04 R-ORD-02 §1]. Retail's catalog compiler allocates
+		// that one fixed-size block for every definition whose authored `builder`
+		// key is set — on the no-`CANBUILD`-section path and the no-matching-entry
+		// path as well as the populated one — and leaves it null otherwise
+		// [07 §8], so presence is the `builder` flag and nothing else. Reading the
+		// compiled `CANBUILD` page instead would refuse the eight shipped builders
+		// whose menu compiles empty.
 		BuildList: func(def *content.UnitDef) bool {
-			if def == nil || s.Catalog == nil || s.Catalog.BuildMenus == nil {
-				return false
-			}
-			page := s.Catalog.BuildMenus[content.CanonicalKey(def.CanonicalKey)]
-			return page != nil && len(page.Buttons) > 0
+			return def != nil && def.Builder
 		},
 		// The carriable test of codes 1, 2 and 6 is §10.2's nine-reject
 		// admission, which internal/movement owns [04 §10.2][04 R-ORD-02 §1].
@@ -2018,14 +2017,19 @@ func createAndBindServices(s *Session) error {
 			s.appendStripSmokePuffer(9, [3]numeric.Fixed{ev.Position.X, ev.Position.Y, ev.Position.Z}, SmokePuffTrail)
 			s.publication.events.EmitSmokeStart(pe)
 		case combat.EventExplosion, combat.EventWaterExplosion:
-			// Strip-9 smoke [R-STRIP-01 §1 strip 9, the land/water/lava
-			// impact effect variants under a second weapon flag]: the
-			// explosion GAF variant functions each carry a strip-9 smoke
-			// producer gated on the weapon's start-smoke flag, which the
-			// event carries as Smoke.
-			if ev.Smoke {
-				// The land dust of an above-sea explosion: three particles,
-				// seven ticks apart [06 R-WFX-01 §5][06 R-WFX-01 §2 step 4].
+			// Strip-9 smoke [R-STRIP-01 §1 strip 9, the parameterised smoke
+			// producer]: the land dust belongs to the explosion-pool
+			// allocator itself, and its gate is the allocator's own, with no
+			// weapon flag anywhere in it [06 R-WFX-01 §2 step 4]
+			// [06 R-WFX-01 §5]. Three particles, seven ticks apart, over a
+			// fifteen-tick window.
+			//
+			// This was gated on the weapon's start-smoke flag, which the event
+			// still carries as Smoke. That flag gates a different producer —
+			// the muzzle puff of [06 §4.1], emitted here from EventStartSmoke
+			// above — so weapons without it raised no dust at all and the
+			// weapons with it raised dust over water.
+			if s.explosionRaisesLandDust(ev.Position.X, ev.Position.Y, ev.Position.Z) {
 				s.appendStripSmokePuffer(9, [3]numeric.Fixed{ev.Position.X, ev.Position.Y, ev.Position.Z}, SmokePuffLandDust)
 			}
 			if ev.Kind == combat.EventExplosion {
@@ -2411,6 +2415,34 @@ func (s *Session) resurrectStep(builder *units.Unit, n *orders.Node, lookupFeatu
 		return true
 	}
 	return false
+}
+
+// explosionRaisesLandDust is the explosion-pool allocator's land-dust gate
+// [06 R-WFX-01 §2 step 4]: the allocator appends the strip-9 dust puffer only
+// when the water flag it was handed is CLEAR and the point's whole Y word is
+// STRICTLY above the zero-extended sea-level byte. No weapon flag takes part.
+//
+// The water flag is the water-CELL flag the central impact computes once, from
+// the impact cell alone [06 §13.2]. It is NOT the land/water event kind: a
+// direct hit on a unit standing in a water cell takes the land art holder and
+// the hit sound, yet the allocator still receives a raised flag and raises no
+// dust. The event kind cannot express that, so the cell test is made here
+// against the same authoritative terrain the impact read, at the moment it
+// emitted — the drain runs inside the combat phase.
+//
+// The strict compare on the whole word is the same one the COB bitmap-explosion
+// and debris sinks already make [04 R-COB-04 §4]: a fractional part above the
+// plane does not reach the land-dust arm.
+func (s *Session) explosionRaisesLandDust(x, y, z numeric.Fixed) bool {
+	if s == nil || s.World == nil {
+		return false
+	}
+	// A cell off the map is not a water cell, which is how the impact's own
+	// test reads it.
+	if cell := s.World.PlotAt(world.WorldToCell(x), world.WorldToCell(z)); cell != nil && cell.MaxHeight() < s.World.SeaLevel {
+		return false
+	}
+	return int32(y.Raw())>>numeric.FractionBits > int32(s.World.SeaLevel)
 }
 
 // bindDamageReaction installs the damage-intake reaction routine's seams

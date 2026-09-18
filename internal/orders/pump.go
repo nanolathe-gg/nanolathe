@@ -1293,16 +1293,22 @@ func (q *Queue) removeSecondaryRecord(n *Node) {
 	q.spliceOutSecondary(n) // by identity after the cleanup
 }
 
-// Mobile-build blocked-area retry budget [R-ORDER-02 §1]. The record's third
-// parameter is the blocked-area retry counter [04 §3.2] (the record's
-// progress field, reused; the handler's setup path zeroes it, so a fresh or
-// re-armed record starts the budget at zero). On a blocked approach visit the
-// mobile-build handler notifies "Waiting for target area to clear",
-// increments the counter, and waits EXACTLY 30 ticks — a fixed wait with no
-// random draw — while the counter is at most 10; the first blocked visit
-// whose counter is already above 10 notifies "Target area was blocked" and
-// abandons (code 8, remove). Eleven 30-tick waits, then give-up on visit
-// twelve.
+// Mobile-build blocked-area retry budget [04 §5 MobileBuild][R-ORDER-02 §1].
+// The record's third parameter is the blocked-area retry counter [04 §3.2]
+// (the record's progress field, reused; the handler's setup path zeroes it, so
+// a fresh or re-armed record starts the budget at zero). The caption is
+// emitted on the FIRST blocked visit only — the counter-is-zero arm notifies
+// "Waiting for target area to clear" and then falls into the shared retry
+// tail, which visits 2..11 enter directly and therefore run silent. The tail
+// increments the counter and waits EXACTLY 30 ticks — a fixed wait with no
+// random draw — while the counter is at most 10; the first blocked visit whose
+// counter is already above 10 notifies "Target area was blocked" and abandons
+// (code 8, remove). Eleven 30-tick waits, then give-up on visit twelve.
+//
+// The tail's only record writes are the counter and the shared deadline
+// setter's, and that setter ORs the lowest gate bit into the record's gate word
+// rather than replacing it [04 R-ORD-01 §1] — so the gate the phase-0 approach
+// installed survives a blocked visit.
 const (
 	// MobileBuildBlockedWaitTicks is the fixed blocked-visit wait; the traced
 	// arm draws no random value, unlike the pump's code-3 wait.
@@ -1349,11 +1355,13 @@ func MobileBuildUnreachableVisit(satisfied uint32, outOfReach bool) (statusText 
 // MobileBuildBlockedVisit is one blocked-visit step of the mobile-build
 // budget for the record n at tick. It returns the verbatim status text to
 // notify and the pump result code the caller returns: code 2 (continue) with
-// the wait armed — lowest gate bit plus deadline tick+30 exactly, the pump's
-// blocked-head stall re-dispatching on deadline arrival — or code 8
+// the wait armed — lowest gate bit ORed in plus deadline tick+30 exactly, the
+// pump's blocked-head stall re-dispatching on deadline arrival — or code 8
 // (abandon/remove) once the counter has passed its budget. The counter lives
-// in n.Param3 [04 §3.2]; the caller notifies the returned text through its
-// own status surface. A nil record gives up without touching anything.
+// in n.Param3 [04 §3.2]; the caller notifies the returned text through its own
+// status surface, and an EMPTY text is a silent retry, which every blocked
+// visit after the first one is [04 §5 MobileBuild]. A nil record gives up
+// without touching anything.
 func MobileBuildBlockedVisit(n *Node, tick uint32) (statusText string, code Code) {
 	if n == nil {
 		return MobileBuildBlockedText, 8
@@ -1361,12 +1369,20 @@ func MobileBuildBlockedVisit(n *Node, tick uint32) (statusText string, code Code
 	if n.Param3 > MobileBuildBlockedGiveUpAbove {
 		return MobileBuildBlockedText, 8
 	}
+	// Only the counter-is-zero arm reaches the caption; the retry tail it falls
+	// into is shared with every later visit [04 §5 MobileBuild].
+	first := n.Param3 == 0
 	n.Param3++
 	// Arm the exact 30-tick wait: lowest gate bit stalls the head, and the
 	// pump's deadline expiry sets that bit as satisfied on arrival [04 §3.3].
-	// The wait draws no random value [R-ORDER-02 §1].
-	n.DynamicGate = 1
+	// The wait draws no random value [R-ORDER-02 §1]. The shared deadline
+	// setter ORs that bit in, leaving the approach gate the phase-0 arm
+	// installed in place [04 R-ORD-01 §1].
+	n.DynamicGate |= gateDeadline
 	n.Deadline = int32(tick + MobileBuildBlockedWaitTicks)
+	if !first {
+		return "", 2
+	}
 	return MobileBuildWaitingText, 2
 }
 

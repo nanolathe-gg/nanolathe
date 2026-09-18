@@ -1,6 +1,7 @@
 package features
 
 import (
+	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
@@ -81,15 +82,64 @@ func (s *Service) AreaCandidateAt(cx, cz int) (AreaCandidate, bool) {
 	return cand, true
 }
 
+// reclaimPayoutTarget is the reclaim payout's admission, shared by the two
+// entries that carry it: it takes the position the ORDER recorded, resolves it,
+// applies the payout guard of [05 R-FEAT-01 §15] and reports the ANCHOR cell
+// everything after the guard operates on.
+//
+// The two cells are deliberately separate. Retail's payout helper resolves the
+// recorded position twice and keeps the FIRST, unhopped result for the guard's
+// instance-attached cell bit, while the guard's definition bit comes from the
+// anchor's catalog entry [05 R-FEAT-01 §15][05 R-WORK-01 §5]. For a single-cell
+// feature the two coincide; a multi-cell sprite definition reclaimed from one of
+// its fringe cells reads that fringe cell's bit, which the stamp leaves clear,
+// so the payout is not refused even while the anchor carries a live instance.
+//
+// The conjunction means "a sprite feature that currently has a live animation
+// instance" — burning, or already playing its death or reclaim sequence — which
+// is what "burning blocks reclaim" describes, and is also what keeps a second
+// visit of the executor from crediting the pools twice while the sequence runs.
+// It never applies to a 3D wreck: the stamp sets a 3D definition's instance bit
+// always, but its definition bit is clear, so a sinking wreck stays reclaimable
+// throughout.
+func reclaimPayoutTarget(t *world.Terrain, cx, cz int) (ax, az int, def *content.FeatureDef, ok bool) {
+	recorded := t.PlotAt(int32(cx), int32(cz))
+	if recorded == nil {
+		return 0, 0, nil, false
+	}
+	// The second resolution is the hop to the anchor, exactly as FeatureAt
+	// makes it [05 R-ECO-02 §2]; everything below the guard is the anchor's.
+	ax, az = cx, cz
+	if recorded.IsFringe() {
+		ax += int(recorded.AnchorDXSigned())
+		az += int(recorded.AnchorDZSigned())
+	}
+	cell := t.PlotAt(int32(ax), int32(az))
+	if cell == nil || !cell.IsRealFeature() {
+		return 0, 0, nil, false
+	}
+	def, bound := t.FeatureDefAt(cell.Feature())
+	if !bound || def == nil {
+		return 0, 0, nil, false
+	}
+	if !def.Reclaimable || def.Indestructible {
+		return 0, 0, nil, false
+	}
+	if isSpriteDef(def) && recorded.Occupied() {
+		return 0, 0, nil, false // the payout guard's two bits [05 R-FEAT-01 §15]
+	}
+	return ax, az, def, true
+}
+
 // ReclaimAt is the reclaim payout's cell entry [05 R-WORK-01 §5]: it reports
 // the pools the builder is credited with and settles the cell, or reports false
 // and changes nothing.
 //
 // It is the service-owned twin of the package-level ReclaimTransition, and its
-// gates and pool arithmetic are that function's, unchanged — the cell must hold
-// a real feature whose definition is `reclaimable` and not `indestructible`,
-// and the credit is the definition's own metal and energy pools crossing into
-// the ledger as float32 [05 "Feature reclaim"][05 R-ECO-01 §2] (I2 allowlist).
+// gates and pool arithmetic are that function's, unchanged — cx, cz are the
+// position the ORDER recorded, admission is reclaimPayoutTarget's, and the
+// credit is the definition's own metal and energy pools crossing into the
+// ledger as float32 [05 "Feature reclaim"][05 R-ECO-01 §2] (I2 allowlist).
 //
 // What differs is the cell's fate. ReclaimTransition clears the footprint and
 // stamps `featurereclamate` unconditionally; this routes through the transition
@@ -101,27 +151,14 @@ func (s *Service) ReclaimAt(cx, cz int) (metal, energy float32, ok bool) {
 	if s == nil || s.Terrain == nil {
 		return 0, 0, false
 	}
-	cell := s.Terrain.PlotAt(int32(cx), int32(cz))
-	if cell == nil || !cell.IsRealFeature() {
-		return 0, 0, false
-	}
-	def, bound := s.Terrain.FeatureDefAt(cell.Feature())
-	if !bound || def == nil {
-		return 0, 0, false
-	}
-	if !def.Reclaimable || def.Indestructible {
-		return 0, 0, false
-	}
-	// A cell already carrying an event record — burning, dying or reclaiming —
-	// is inert to every further cause, the reclaim executor's payout included
-	// [05 R-FEAT-01 §5 "same-tick precedence"][05 R-FEAT-01 §15].
-	if inst := s.instances[cz*int(s.Terrain.CellW)+cx]; inst != nil && (inst.IsBurning || inst.IsAnimating) {
+	ax, az, def, ok := reclaimPayoutTarget(s.Terrain, cx, cz)
+	if !ok {
 		return 0, 0, false
 	}
 	metal = float32(def.Metal)
 	energy = float32(def.Energy)
-	if !s.transitionFeatureAt(cx, cz, def, true) {
-		s.replaceFeatureAt(cx, cz, def.FeatureReclamateDef)
+	if !s.transitionFeatureAt(ax, az, def, true) {
+		s.replaceFeatureAt(ax, az, def.FeatureReclamateDef)
 	}
 	return metal, energy, true
 }

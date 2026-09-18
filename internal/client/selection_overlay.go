@@ -4,7 +4,10 @@ package client
 // selection state. It is composed after world/fog and before the UI stage
 // [03 §1][R-SEL-02A].
 
-import "github.com/nanolathe-gg/nanolathe/internal/drawlist"
+import (
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
+	"github.com/nanolathe-gg/nanolathe/internal/hud"
+)
 
 // SelectionDrag is the current input-owned drag gesture in logical framebuffer
 // coordinates. The caller supplies the latch state because the renderer does
@@ -17,26 +20,26 @@ type SelectionDrag struct {
 	EndY   int32
 
 	// MobileBuildLatch is true while the armed order latch is MOBILEBUILD
-	// (latch value 0xE) [07 §9]. Only then does the outer frame take the 6/4
-	// pair; an ordinary selection drag takes logical entry 15
-	// [07 R-P0-11 §1 "The drawing."][07 §6 "Frame composition passes"].
+	// (latch value 0xE) [07 §9]. Only then is the rectangle a build ghost,
+	// which takes the site-validity colour on both of its frames; an ordinary
+	// selection drag takes logical entry 15 outer and entry 0 inner
+	// [07 §9 "Build placement is closed"].
 	MobileBuildLatch bool
-	// SpecialLatchFlag mirrors latch-flag bit 0x40, which picks outer entry 6
-	// over entry 4 while MOBILEBUILD is armed [07 §6].
+	// SpecialLatchFlag is the site-valid verdict for the armed placement, and
+	// it picks which validity colour the ghost takes
+	// [07 §9 "Build placement is closed"].
 	//
-	// The bit has a writer, and one only: it is the pointer-flags byte's
-	// **site-valid bit**, written by the in-view placement preview — which the
-	// frame handler runs only while the pointer is over the view and the latch
-	// is MOBILEBUILD — and cleared by the world rebuild
-	// [07 R-CAM-01 §14 step 1]. That section says so in as many words: "This
-	// bit is also the 'special latch flag' that picks the drag-box colour in
-	// §9." So the armed drag box is green-lit exactly when the build click
-	// would be accepted, and the caller passes the same placement verdict the
-	// cursor and the click read. This previously carried an open-question marker,
-	// "what writes latch-flag bit 0x40 while the MOBILEBUILD latch is armed is
-	// unknown", which was wrong twice over — it hunted the helptext role of the
-	// bit, and it looked in the order-button dispatcher's arming chain, which
-	// is not where the write lives.
+	// Retail keeps it in one interface flags byte — not two. That byte's bit 3
+	// is the button gate every order-button arm clears, and its bit 6 is the
+	// site-valid bit: the in-view placement preview writes it from the
+	// footprint verdict on each pointer update, the world click tests it before
+	// issuing the build order, and the shared rectangle drawer tests it to pick
+	// the ghost's colour [07 R-CAM-01 §14]. A single boolean here is therefore
+	// the retail storage model, and the armed drag box is green-lit exactly
+	// when the build click would be accepted: the caller passes the same
+	// placement verdict the cursor and the click read. Descriptions of a
+	// separate "pointer-flags byte" holding bit 6 apart from a "latch-flag
+	// word" describe one byte twice.
 	SpecialLatchFlag bool
 
 	// VisiblePanel says the rail is at its visible detent. It no longer gates
@@ -99,23 +102,28 @@ func (c *Client) drawSelectionDrag() {
 	// mid-slide invisible for the whole gesture.
 	r := NormalizeRect(d.StartX, d.StartY, d.EndX, d.EndY)
 	// The ordinary drag-selection rectangle is white: outer logical entry 15,
-	// inner entry 0 [07 R-P0-11 §1 "The drawing."]. The 6/4 pair belongs to the
-	// armed MOBILEBUILD latch alone — entry 6 when latch-flag bit 0x40 is set,
-	// 4 when it is clear [07 §6 "Frame composition passes"]. An earlier reading
-	// had this inverted, taking entry 4 for every drag and reaching 15 only on
-	// a branch the caller could not select, which painted the selection box
-	// dark red (logical 4 resolves to a dark red physical index).
-	logicalOuter := byte(15)
+	// inner entry 0. The armed MOBILEBUILD latch draws the build ghost instead,
+	// and there validity is a colour change and not a shape change: both the
+	// outer frame and the one-pixel inset inner frame take the same resolved
+	// GUI semantic index — 10 when the site is legal, 4 when it is not
+	// [07 §9 "Build placement is closed"]. Entry 0 is the inner frame of the
+	// ordinary drag box alone. This previously painted the legal ghost in
+	// entry 6 with a black inner frame, following doc 07 §6's account of the
+	// pair rather than §9's; 6 and 10 are different colours in GUIPAL's first
+	// sixteen entries. The pair is taken from the HUD's ghost constants so this
+	// drawer and the battle screen's own ghost cannot drift apart.
+	logicalOuter, logicalInner := byte(15), byte(0)
 	if d.MobileBuildLatch {
-		logicalOuter = 4
+		logicalOuter = hud.GhostColorIllegal
 		if d.SpecialLatchFlag {
-			logicalOuter = 6
+			logicalOuter = hud.GhostColorLegal
 		}
+		logicalInner = logicalOuter
 	}
 	// Resolve each logical entry once before the indexed writer; the frame
 	// itself performs no palette lookup or per-pixel remap [R-SEL-02A].
 	outer := c.paletteIndex(logicalOuter)
-	inner := c.paletteIndex(0)
+	inner := c.paletteIndex(logicalInner)
 	clip := c.selectionClip()
 	// Record then execute inline: classicSink.Fill's FillFrameInclusive style
 	// runs the same drawIndexedFrameInclusive writer with the same inclusive clip

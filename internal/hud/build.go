@@ -17,7 +17,11 @@ const RetailBuildButtonsPerPage = 6
 // Build pages driven by CANBUILD + per-builder GUI files; button name and unit
 // definition stay data-driven; GUI may not invent products absent from authored
 // build list; page encoding (page&7)<<23 bits 23-25 with bit 22 paged indicator;
-// MOBILEBUILD (0xE) requires non-empty build list.
+// MOBILEBUILD (0xE) requires the actor's compiled build-option list to EXIST —
+// the catalog compiler allocates one for every `builder`-flagged definition,
+// empty or not, so an authored zero-product builder still qualifies — and the
+// acting unit to have a live mover, which a structure builder does not, so a
+// factory falls through to the plain cursor [07 §8][04 R-ORD-02 §1].
 
 // ProductArmsPlacement reports whether clicking this product's build gadget arms
 // the placement latch rather than queueing the product immediately [07 §9].

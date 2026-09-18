@@ -171,8 +171,13 @@ func TestGroundPickupFiresTransportPickupAndEvent12(t *testing.T) {
 	if got := countKind(*kinds, statusLoadEvent); got != 1 {
 		t.Fatalf("notification event 12 published %d times, want exactly one [04 R-AIR-01 §9]", got)
 	}
-	if head.Param2 != 1 {
-		t.Fatalf("attempt counter = %d after one callback, want 1 [04 R-AIR-01 §9]", head.Param2)
+	// The counter is the record's FIRST progress parameter, and neither ground
+	// executor writes the second or third [04 R-AIR-01 §9].
+	if head.Param1 != 1 {
+		t.Fatalf("attempt counter = %d after one callback, want 1 in the first parameter [04 R-AIR-01 §9]", head.Param1)
+	}
+	if head.Param2 != 0 || head.Param3 != 0 {
+		t.Fatalf("ground load wrote parameters 2/3 = %d/%d, want both untouched [04 R-AIR-01 §9]", head.Param2, head.Param3)
 	}
 	if cargo.Attachment.Carrier != 0 {
 		t.Fatal("the ground executor attached the cargo itself; the SCRIPT performs the attach [04 R-COB-03 §5]")

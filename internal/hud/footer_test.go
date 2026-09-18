@@ -95,24 +95,39 @@ func TestFooterIdleOwnUnitShowsSignedZeroRates(t *testing.T) {
 	}
 }
 
-// A hovered unit that fails the visibility predicate draws the caption alone
-// [07 R-HUD-03 §2][03 R-VIS-01 §4].
+// A hovered unit that fails the visibility predicate draws the contact prefix
+// and the caption, centred, and nothing else. The prefix is `S: ` when the
+// unit's published sonar-contact bit is set and `R: ` when it is clear; the
+// caption is never drawn bare [07 R-HUD-03 §2][03 R-VIS-01 §4]. This case used
+// to assert the bare caption.
 func TestFooterNonVisibleEnemyIsUnidentified(t *testing.T) {
 	f := &frame.Frame{Units: []frame.UnitView{{
 		Slot: 9, Owner: 5, DefName: "testsolar", Health: 40, MaxHealth: 100,
 	}}}
 	got := BuildFooter(f, footerCatalog(), 2, FooterHover{Gadget: NoGadget, Unit: 9}, false)
 	name, ok := footerTextAt(got, AnchorUnitName)
-	if !ok || name.Text != UnidentifiedObject {
-		t.Fatalf("UNITNAME = %q/%v, want %q", name.Text, ok, UnidentifiedObject)
+	if want := RadarContactPrefix + UnidentifiedObject; !ok || name.Text != want {
+		t.Fatalf("UNITNAME = %q/%v, want %q", name.Text, ok, want)
 	}
 	if !name.Centered {
-		t.Error("Unidentified object is centred at UNITNAME")
+		t.Error("the composed unidentified caption is centred at UNITNAME")
 	}
 	if len(got.Texts) != 1 || len(got.Bars) != 0 || len(got.Logos) != 0 {
 		t.Errorf("unidentified readout drew %d texts, %d bars, %d logos; want the caption and nothing else",
 			len(got.Texts), len(got.Bars), len(got.Logos))
 	}
+	// The sonar-contact bit selects the other prefix and changes nothing else.
+	f.Units[0].UnderwaterExempt = true
+	sonar := BuildFooter(f, footerCatalog(), 2, FooterHover{Gadget: NoGadget, Unit: 9}, false)
+	name, ok = footerTextAt(sonar, AnchorUnitName)
+	if want := SonarContactPrefix + UnidentifiedObject; !ok || name.Text != want {
+		t.Fatalf("sonar UNITNAME = %q/%v, want %q", name.Text, ok, want)
+	}
+	if len(sonar.Texts) != 1 || len(sonar.Bars) != 0 || len(sonar.Logos) != 0 {
+		t.Errorf("sonar unidentified readout drew %d texts, %d bars, %d logos; want the caption and nothing else",
+			len(sonar.Texts), len(sonar.Bars), len(sonar.Logos))
+	}
+	f.Units[0].UnderwaterExempt = false
 	// The same unit passes the predicate once the composer's mask admits it.
 	visible := func(*frame.UnitView) bool { return true }
 	got = BuildFooter(f, footerCatalog(), 2, FooterHover{Gadget: NoGadget, Unit: 9, Visible: visible}, false)

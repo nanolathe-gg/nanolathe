@@ -92,6 +92,17 @@ func ChooseCursor(latch input.Latch, sel CursorSelection, h CursorHover) int {
 	}
 	// Mobile-build placement is decided by site validity, not by the per-unit
 	// table; the ghost overlay uses cursorred/cursorgrn alongside it [07 §8].
+	//
+	// Retail takes this branch for the mobile-build latch only while a live
+	// placement ghost exists, and otherwise falls through to the per-actor rows
+	// [07 §8]. The second disjunct below is therefore wider than retail's test
+	// in principle — but not in this port: the only writers of the mobile-build
+	// latch are the placement arm, which stores the product key in the same
+	// step, and the placement clear, which returns the latch to idle. The
+	// button-name parse chain never yields this latch at all. So `Placing` is
+	// false with this latch armed only for a caller that assembles the two
+	// inputs by hand, and the disjunct stays as the honest statement that this
+	// port's latch and ghost are armed together.
 	if h.Placing || latch == input.LatchMobileBuild {
 		return cursorForBuildSite(h.PlacementValid)
 	}
@@ -202,7 +213,13 @@ func cursorForActor(latch input.Latch, u *units.Unit, h CursorHover, sel CursorS
 		if def.CanResurrect && reclaimableFeature(h) {
 			return render.CursorRevive
 		}
-		if t != nil {
+		// Every target-dependent arm below is gated on the actor owning a live
+		// mover as well as on there being a target [07 §8]; without one the row
+		// answers cursormove. The revive arm above sits ahead of that gate.
+		// Because the row already required `canmove`, the gate only bites for a
+		// `canmove` definition of building class — a factory, which authors
+		// `canmove` for its rally point [04 R-ORD-02 §1].
+		if t != nil && hasLiveMover(u) {
 			if def.CanCapture && hostile {
 				return render.CursorCapture
 			}
@@ -234,6 +251,32 @@ func cursorForActor(latch input.Latch, u *units.Unit, h CursorHover, sel CursorS
 		if dropsBombs(def) {
 			return render.CursorAirstrike
 		}
+		// An actor with a live mover answers cursorattack with no range test at
+		// all: a mobile attacker is never shown out of range, because it would
+		// drive into range [07 §8].
+		if hasLiveMover(u) {
+			return render.CursorAttack
+		}
+		// An actor with no mover — a gun tower, a missile tower, a long-range
+		// battery — is instead range-tested against its *runtime* weapon slot 0
+		// (not the definition's primary weapon record the bomb-sight gate above
+		// reads): water/altitude admission, the ballistic solver's no-solution
+		// sentinel, and an inclusive planar squared distance against the slot's
+		// range, applied to the hovered unit or, with no unit under the pointer,
+		// to the resolved ground point; a slot carrying the target-class
+		// restriction flag answers cursortoofar even in range [07 §8].
+		//
+		// TODO(question): the chooser cannot run that test from its present
+		// inputs. CursorHover carries no resolved world point (only Target and
+		// Feature), and the battle shell's selection copies rebuild each actor
+		// from a committed unit view, which carries the status word and position
+		// but no runtime weapon slots — so slot 0's range, its water/ballistic
+		// flags and its target-class restriction flag are all absent, and there
+		// is no admission helper reachable from these inputs. Settling it needs
+		// either the hovered world point plus slot 0's range and flag word on
+		// the chooser's inputs, or a combat-side admission predicate published
+		// across the frame boundary. Until then an immobile attacker keeps
+		// cursorattack, which is the in-range answer.
 		return render.CursorAttack
 
 	case input.LatchBlast:
@@ -300,7 +343,13 @@ func cursorForActor(latch input.Latch, u *units.Unit, h CursorHover, sel CursorS
 		return render.CursorCapture
 
 	case input.LatchMobileBuild:
-		if !def.Builder {
+		// Two gates, the same pair command code 14 issues on [04 R-ORD-02 §1]:
+		// the actor's compiled build-option list must exist — the catalog
+		// compiler allocates one for every `builder`-flagged definition, empty
+		// or not, so the authored `builder` key is the whole test — and the
+		// actor must own a live mover. A structure builder, having no mover,
+		// answers cursornormal rather than cursorfindsite [07 §8].
+		if !def.Builder || !hasLiveMover(u) {
 			return render.CursorNormal
 		}
 		return render.CursorFindSite
@@ -395,6 +444,22 @@ func transportCursor(def *content.UnitDef) int {
 // [07 §8][05 "Feature reclaim"].
 func reclaimableFeature(h CursorHover) bool {
 	return h.Feature != nil && h.Feature.Reclaimable
+}
+
+// hasLiveMover is the shape table's "live mover" gate: three of its rows ask
+// whether the acting unit owns a locomotion controller at all, which a
+// building-class unit does not [07 §8]. It is the same test the order resolver
+// makes — command code 14's second clause — so an advertised shape and the
+// order behind it cannot disagree [04 R-ORD-02 §1][04 §3.4].
+//
+// Status bit 29 is written at creation from the definition's authored `bmcode`
+// being zero [04 R-COLL-01 §2], and it crosses the publication boundary in the
+// unit view's status word, so the chooser can read it from a presentation copy.
+// It is deliberately not `def.CanMove`: stock factories author `canmove` on a
+// building-class definition for their rally point, and it is exactly those that
+// the gate must reject.
+func hasLiveMover(u *units.Unit) bool {
+	return u != nil && u.Flags&units.BuildingClassStatus == 0
 }
 
 // canAssist is the repair/help-build capability gate. The authored record has

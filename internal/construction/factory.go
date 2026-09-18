@@ -442,14 +442,34 @@ func (s *Service) constructionWakeVisit(builder *units.Unit, node *orders.Node, 
 // mobileBuildInterrupt keeps the ground and air mobile rows' terminal wakes
 // separate from the factory refund/kill and counted restart bodies
 // [04 R-ORD-01 §5][04 R-ORD-02 §2]. Their abandoned nanoframes remain for GetBuilt.
+//
+// The two rows do not test the pre-check bits in the same order. `MobileBuild`
+// tests bit 3 (stop) first and bit 1 (cancel-current) second — the OPPOSITE of
+// `BuildingBuild`, whose per-visit tree above tests cancel-current first — so
+// bit 3 wins a visit carrying both and the row abandons with
+// `Construction terminated` without reaching the cancel-current arm.
+// `VTOL_MobileBuild` follows `BuildingBuild` rather than its own ground twin
+// and tests bit 1 first, so the same visit completes silently there
+// [04 §5][04 R-ORD-02 §2].
+//
+// TODO(question): whether the two bits can be satisfied on one visit is
+// unsettled — it needs a census of the producers that arm the pending word's
+// bits 1 and 3 between two pumps of the same record [04 R-ORD-01 §0]. The
+// orders themselves are Established and cost nothing if they never co-occur.
 func (s *Service) mobileBuildInterrupt(builder *units.Unit, node *orders.Node, satisfied uint32) (orders.Code, bool) {
-	code := orders.Code(5)
-	if satisfied&InterruptCancel == 0 {
-		if satisfied&InterruptStop == 0 {
-			return 0, false
-		}
+	stopWins := satisfied&InterruptStop != 0
+	if node.ID == vtolMobileBuildRow && satisfied&InterruptCancel != 0 {
+		stopWins = false // the air row reaches bit 1 first [04 §5]
+	}
+	var code orders.Code
+	switch {
+	case stopWins:
 		s.raiseStatus(builder, statusCant, "Construction terminated")
 		code = 8
+	case satisfied&InterruptCancel != 0:
+		code = 5
+	default:
+		return 0, false
 	}
 	if s.OnRefresh != nil {
 		s.OnRefresh(builder)
@@ -485,12 +505,22 @@ type WorkResult struct {
 
 // isMobileBuilder reports whether the builder is a mobile builder [04 §3.1][P0-I05].
 // Mobile builders use MobileBuild/VTOL_MobileBuild descriptors; factories use
-// BuildingBuild. The distinction is the runtime building-class status bit the
-// allocator initializer derives from the definition's authored bmcode [05
-// "Factory production lifecycle"]; mobility is not the contract — stock
-// buildings (kbot lab, factories) author CanMove=1, so a mobility heuristic
-// classifies them as mobile and rejects every factory order [08 "Classifier
-// eligibility, destinations, and order"].
+// BuildingBuild. Retail's own discriminant is the acting builder's live mover
+// reference — MOBILEBUILD when the builder has one, BUILDINGBUILD when it does
+// not; the product definition contributes only the queued id [04 §5]. This
+// build tests the runtime building-class status bit the allocator initializer
+// derives from the definition's authored bmcode instead [05 "Factory production
+// lifecycle"]. The two read the same authored byte: the creator allocates a
+// mover exactly for a `bmcode 1` definition [04 §5] and the class bit is set
+// from `bmcode == 0`, so mover-present and class-bit-clear name the same
+// builders for every definition authoring 0 or 1 — which is all stock content.
+// They could part only for an authored `bmcode` above 1, whose lifecycle doc 04
+// still lists as Unknown.
+//
+// What is NOT the contract either way is mobility: stock buildings (kbot lab,
+// factories) author CanMove=1, so a mobility heuristic classifies them as
+// mobile and rejects every factory order [08 "Classifier eligibility,
+// destinations, and order"].
 func isMobileBuilder(u *units.Unit) bool {
 	if u == nil {
 		return false

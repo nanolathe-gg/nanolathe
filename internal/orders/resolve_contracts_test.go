@@ -5,65 +5,56 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/economy"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
-// TestCode14ReadsTheBuildList locks command code 14's gate: "the definition's
-// build list is non-empty and a live mover exists → MobileBuild or air twin;
-// else reject" [04 R-ORD-02 §1]. The list is the compiled CANBUILD page of
-// content.Catalog.BuildMenus [02 "Build-menu catalog keys"], reached through
-// the queue binding, and the authored `builder` key is not read at all.
-func TestCode14ReadsTheBuildList(t *testing.T) {
-	// An authored fixture catalog: one builder with a page of one button, one
-	// with a page carrying no buttons. Both definitions author `builder=1`, so
-	// only the list can separate them.
-	cat := &content.Catalog{BuildMenus: map[string]*content.BuildMenuPage{
-		content.CanonicalKey("stocked"): {Builder: "STOCKED", Buttons: []string{"ARMSOLAR"}},
-		content.CanonicalKey("empty"):   {Builder: "EMPTY"},
-	}}
-	buildList := func(def *content.UnitDef) bool {
-		if def == nil {
-			return false
-		}
-		page := cat.BuildMenus[content.CanonicalKey(def.CanonicalKey)]
-		return page != nil && len(page.Buttons) > 0
+// TestCode14ReadsTheBuildListPresence locks command code 14's gate: "the
+// definition's compiled build-option list is present and a live mover exists
+// → MobileBuild or air twin; else reject" [04 R-ORD-02 §1]. The first term is an
+// existence test on the list block, and retail's catalog compiler allocates
+// that block for every definition whose authored `builder` key is set — with no
+// CANBUILD section, with no entry naming the builder, or with a populated page
+// alike [07 §8]. So a builder whose compiled menu is empty resolves, and only a
+// non-builder definition is rejected by this term.
+func TestCode14ReadsTheBuildListPresence(t *testing.T) {
+	mkBuilder := func(id pool.Handle, builder bool) *units.Unit {
+		return mkUnit(id, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
+			d.CanonicalKey = content.CanonicalKey("fixture")
+			d.Builder = builder
+		}))
 	}
 
-	stocked := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
-		d.CanonicalKey = content.CanonicalKey("stocked")
-		d.Builder = true
-	}))
-	empty := mkUnit(2, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
-		d.CanonicalKey = content.CanonicalKey("empty")
-		d.Builder = true
-	}))
-	absent := mkUnit(3, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
-		d.CanonicalKey = content.CanonicalKey("nopageatall")
-		d.Builder = true
-	}))
-	for _, u := range []*units.Unit{stocked, empty, absent} {
-		setTestBuildList(u, buildList)
+	// The eight shipped builders with an empty menu (ARMASP, CORASP, ARMCARRY,
+	// CORCARRY, ARMDECOM, CORDECOM, ARMFARK, CORNECRO) are this case: `builder=1`
+	// and no compiled buttons. Retail resolves them.
+	emptyMenu := mkBuilder(1, true)
+	setTestBuildList(emptyMenu, func(def *content.UnitDef) bool { return def != nil && def.Builder })
+	if got := DescriptorFor(Resolve(14, emptyMenu, nil, nil)).Name; got != "MobileBuild" {
+		t.Fatalf("builder with an empty compiled menu = %q, want MobileBuild [04 R-ORD-02 §1][07 §8]", got)
 	}
 
-	if got := DescriptorFor(Resolve(14, stocked, nil, nil)).Name; got != "MobileBuild" {
-		t.Fatalf("non-empty build list = %q, want MobileBuild [04 R-ORD-02 §1]", got)
+	// A definition without the `builder` key has no list block at all.
+	notBuilder := mkBuilder(2, false)
+	setTestBuildList(notBuilder, func(def *content.UnitDef) bool { return def != nil && def.Builder })
+	if id := Resolve(14, notBuilder, nil, nil); id != 0 {
+		t.Fatalf("non-builder definition = %q, want reject [04 R-ORD-02 §1]", DescriptorFor(id).Name)
 	}
-	if id := Resolve(14, empty, nil, nil); id != 0 {
-		t.Fatalf("empty build list = %q, want reject [04 R-ORD-02 §1]", DescriptorFor(id).Name)
+
+	// With no binding the definition answers for itself: the question is the
+	// `builder` flag, not a catalog lookup.
+	unbound := mkBuilder(3, true)
+	if got := DescriptorFor(Resolve(14, unbound, nil, nil)).Name; got != "MobileBuild" {
+		t.Fatalf("unbound builder = %q, want MobileBuild [04 R-ORD-02 §1]", got)
 	}
-	if id := Resolve(14, absent, nil, nil); id != 0 {
-		t.Fatalf("definition with no CANBUILD page = %q, want reject [02 \"Build-menu catalog keys\"]", DescriptorFor(id).Name)
-	}
+
 	// The mover term of the same sentence: a factory authors CanMove on a
-	// building-class definition and owns a page, and still rejects.
-	factory := mkUnit(4, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) {
-		d.CanonicalKey = content.CanonicalKey("stocked")
-		d.Builder = true
-	}))
+	// building-class definition and is itself `builder`, and still rejects.
+	factory := mkBuilder(4, true)
 	factory.Flags |= units.BuildingClassStatus
-	setTestBuildList(factory, buildList)
+	setTestBuildList(factory, func(def *content.UnitDef) bool { return def != nil && def.Builder })
 	if id := Resolve(14, factory, nil, nil); id != 0 {
 		t.Fatalf("building-class builder = %q, want reject [04 R-ORD-02 §1]", DescriptorFor(id).Name)
 	}

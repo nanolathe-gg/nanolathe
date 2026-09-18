@@ -8,45 +8,6 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 )
 
-// TestExplosionEventCarriesStartSmokeFlag locks the event payload the strip-9
-// impact-effect-variant producers need [R-STRIP-01 §1 strip 9]: the
-// land/water explosion events carry the weapon's start-smoke flag, which
-// gates the session-side smoke append.
-func TestExplosionEventCarriesStartSmokeFlag(t *testing.T) {
-	weapon := &content.WeaponDef{ExplosionGaf: "boom", ExplosionArt: "boomart", StartSmoke: true}
-	var events []Event
-	svc := &Service{}
-	svc.Events = func(ev Event) { events = append(events, ev) }
-	p := &Projectile{Pos: Vec3{X: numeric.FixedFromInt(1), Y: numeric.FixedFromInt(2), Z: numeric.FixedFromInt(3)}}
-	handleProjectileImpact(svc, 1, p, weapon, nil, nil, nil, nil, nil, 5, Vec3{}, nil, 0)
-
-	found := false
-	for _, ev := range events {
-		if ev.Kind == EventExplosion {
-			found = true
-			if !ev.Smoke {
-				t.Fatal("explosion event dropped the weapon's start-smoke flag")
-			}
-			if ev.Position != p.Pos {
-				t.Fatal("explosion event position diverged from the impact point")
-			}
-		}
-	}
-	if !found {
-		t.Fatal("no explosion event emitted")
-	}
-
-	// Without the flag the payload stays clear — the session must not append.
-	events = nil
-	weapon.StartSmoke = false
-	handleProjectileImpact(svc, 1, p, weapon, nil, nil, nil, nil, nil, 5, Vec3{}, nil, 0)
-	for _, ev := range events {
-		if ev.Kind == EventExplosion && ev.Smoke {
-			t.Fatal("smoke flag set on a weapon without startsmoke")
-		}
-	}
-}
-
 // TestTrailPuffAdditiveDeadlineAndExpiryPuff locks the projectile phase's
 // trail-style puff sites [06 §13.2][R-STRIP-01 §1 strip 9]: a smoke-trail
 // weapon puffs past its next-trail deadline with the deadline advanced

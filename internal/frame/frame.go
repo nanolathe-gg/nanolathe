@@ -1074,9 +1074,12 @@ type StripReadout struct {
 	// of `Total Units: %d (Max %d)`. The count half is the viewing slot's live
 	// unit count, which Players already carries [07 R-HUD-03 §12].
 	UnitLimit int32
-	// ActiveSpeed and RequestedSpeed are the scheduler's two speed words. The
-	// strip prints the active one and appends a `(+/-n)` suffix when the
-	// requested value differs [07 §6].
+	// ActiveSpeed and RequestedSpeed are the scheduler's two speed words:
+	// ActiveSpeed is the adapted current speed the tick-budget adaptation
+	// steps, RequestedSpeed the target the speed keys set. The strip's
+	// `Normal`-versus-`%+d` branch reads the ACTIVE word, and the `(+/-n)`
+	// suffix carries the REQUESTED word, appended only while the two differ
+	// [07 §6][07 R-CAM-01 §3].
 	ActiveSpeed    int32
 	RequestedSpeed int32
 }

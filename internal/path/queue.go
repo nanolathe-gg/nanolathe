@@ -9,7 +9,7 @@ const DefaultBase int32 = 0x18000
 
 const (
 	popsPerRequest    = 100 // [04 §7.3] C11 each active request limited to 100 heap pops per scheduler call
-	replenishInterval = 150 // [04 §7.3] C11 global scheduler counter replenishes every 150 ticks
+	replenishInterval = 150 // [04 §7.3] C11 the global scheduler counter rebuilds the quanta every 150 scheduler calls
 )
 
 // Request is a pathfinding request [plan Public API].
@@ -452,7 +452,10 @@ func (s *Scheduler) Tick(tick uint32) {
 		p.SetPathTick(tick)
 	}
 	s.callCount++
-	if s.callCount > replenishInterval {
+	// The counter is incremented first and the rebuild fires on the call whose
+	// incremented value REACHES the interval, so the period is exactly
+	// replenishInterval calls [04 §7.3]. A strict `>` here made it 151.
+	if s.callCount >= replenishInterval {
 		s.callCount = 0
 		if !s.replenish() {
 			return

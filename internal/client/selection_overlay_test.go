@@ -26,38 +26,45 @@ func TestSelectionDragUsesNormalizedInclusiveFramesAndPaletteMap(t *testing.T) {
 	}
 }
 
-// TestSelectionDragOuterEntryFollowsTheArmedLatch locks the three outer
-// entries and which state selects each: an ordinary drag is white (logical 15),
-// an armed MOBILEBUILD latch is 4, and 6 only with latch-flag bit 0x40 set
-// [07 R-P0-11 §1 "The drawing."][07 §6 "Frame composition passes"]. A build
-// that read the box-selection flag instead painted every drag in entry 4.
-func TestSelectionDragOuterEntryFollowsTheArmedLatch(t *testing.T) {
+// TestSelectionDragFramePairFollowsTheArmedLatch locks both frames of all three
+// states: an ordinary drag is outer logical 15 over inner logical 0, while an
+// armed MOBILEBUILD latch paints the ghost's outer *and* inset inner frame in
+// one validity colour — 10 when the site is valid, 4 when it is not
+// [07 §9 "Build placement is closed"]. It is deliberately a pair assertion:
+// an earlier build took entry 6 for the valid ghost and left the inner frame
+// on entry 0, and both halves have to stay locked for the ghost to read as
+// retail's single-colour double outline.
+func TestSelectionDragFramePairFollowsTheArmedLatch(t *testing.T) {
 	cases := []struct {
-		name  string
-		drag  SelectionDrag
-		outer int
-		want  uint8
+		name         string
+		drag         SelectionDrag
+		outer, inner int
 	}{
-		{"ordinary drag", SelectionDrag{}, 15, 155},
-		{"mobilebuild armed", SelectionDrag{MobileBuildLatch: true}, 4, 44},
-		{"mobilebuild armed, latch bit 0x40", SelectionDrag{MobileBuildLatch: true, SpecialLatchFlag: true}, 6, 66},
+		{"ordinary drag", SelectionDrag{}, 15, 0},
+		{"mobilebuild armed, site invalid", SelectionDrag{MobileBuildLatch: true}, 4, 4},
+		{"mobilebuild armed, site valid", SelectionDrag{MobileBuildLatch: true, SpecialLatchFlag: true}, 10, 10},
 	}
+	// Every logical entry the cases can select maps to a distinct physical
+	// index, so a wrong logical pick cannot pass by aliasing onto the right
+	// physical byte. Entry 6 is seeded too: it is the value the old build
+	// picked for a valid site, and it must not be what comes back.
+	var physical [16]uint8
+	physical[0], physical[4], physical[6], physical[10], physical[15] = 100, 44, 66, 110, 155
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c := &Client{width: 200, height: 100, indexed: make([]uint8, 200*100), pal: &palette.Tables{}}
-			c.pal.Logical[tc.outer] = tc.want
-			c.pal.Logical[0] = 100
+			copy(c.pal.Logical[:], physical[:])
 			d := tc.drag
 			d.Active, d.VisiblePanel = true, true
 			d.StartX, d.StartY, d.EndX, d.EndY = 140, 40, 144, 44
 			c.SetSelectionDrag(d)
 			c.drawSelectionStage()
 			c.replayForTest()
-			if got := c.indexed[40*c.width+140]; got != tc.want {
-				t.Fatalf("outer edge = %d, want mapped logical %d -> %d", got, tc.outer, tc.want)
+			if got, want := c.indexed[40*c.width+140], physical[tc.outer]; got != want {
+				t.Fatalf("outer edge = %d, want mapped logical %d -> %d", got, tc.outer, want)
 			}
-			if got := c.indexed[41*c.width+141]; got != 100 {
-				t.Fatalf("inner edge = %d, want mapped logical 0 -> 100", got)
+			if got, want := c.indexed[41*c.width+141], physical[tc.inner]; got != want {
+				t.Fatalf("inner edge = %d, want mapped logical %d -> %d", got, tc.inner, want)
 			}
 		})
 	}

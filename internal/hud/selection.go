@@ -1,5 +1,7 @@
 package hud
 
+import "github.com/nanolathe-gg/nanolathe/internal/content"
+
 // Selection, control groups, and build pages [07 §9] C9, C10 [GAP T22].
 //
 // This package implements the HUD-side of retail selection semantics that the
@@ -22,6 +24,16 @@ const (
 	PageClearBits  uint32 = 0xFC7FFFFF // clears bits 23-25 [07 §9]
 	PageClearPaged uint32 = 0xFFBFFFFF // clears bit 22 [07 §9]
 )
+
+// CategoryMaskBytes is the width of the authored CTRL_F type-filter bitset in
+// bytes. Retail's registry entry is sixteen 32-bit words — 512 bits — indexed
+// by the zero-extended definition id, and the recall filter tests
+// word[id>>5] & (1<<(id&31)) [07 §9]. That is the same width the catalog
+// compiler builds (content.CategoryMaskWords), so the two packages must agree
+// or a definition id above 255 falls outside the filter here while the catalog
+// still carries its bit. Byte indexing (byte id>>3, bit id&7) selects exactly
+// the same bit as the word form under the little-endian word layout.
+const CategoryMaskBytes = content.CategoryMaskWords * 4
 
 // DragRect is an inclusive presentation-space rectangle [07 §9] C9.
 // Construct via NormalizeDragRect so MinX<=MaxX, MinY<=MaxY holds.
@@ -91,11 +103,11 @@ func RememberedPage(flags uint32) int { return int((flags & PageBitsMask) >> 23)
 // and CtrlFFlag (0x80000000). Group is a single stored value 0..9 (0 = none)
 // rather than membership in several groups [07 §9]. DefID is the catalog
 // definition id (0 = none, scanned as nonzero for group assignment); it also
-// indexes the 256-bit CTRL_F category mask [07 §9].
+// indexes the 512-bit CTRL_F category mask [07 §9].
 type SelectUnit struct {
 	Flags uint32
 	Group uint8
-	DefID uint16 // 0 = no definition, 1..255 valid for CTRL_F mask
+	DefID uint16 // 0 = no definition, 1..511 valid for CTRL_F mask
 }
 
 // AssignGroup implements Ctrl+digit group assignment [07 §9] C9.
@@ -133,12 +145,28 @@ func AssignGroup(units []*SelectUnit, group int, dirty *uint32) bool { // [07 §
 	return changed
 }
 
-// TypeFilterPasses reports whether a definition id passes the authored 256-bit
-// CTRL_F category mask [07 §9] C9. Definitions beyond 255 are unfilterable and
-// always pass (retail byte-wide mask space).
-func TypeFilterPasses(defID uint16, mask [32]byte) bool { // [07 §9] C9
-	if defID == 0 || defID >= 256 {
+// TypeFilterPasses reports whether a definition id passes the authored 512-bit
+// CTRL_F category mask [07 §9] C9. Definition id 0 is the catalog's null
+// sentinel and is never a member, so it is admitted unfiltered.
+//
+// Retail has no bound test on the far side: it indexes the sixteen-word entry
+// with the zero-extended definition id and would read past the entry for an id
+// of 512 or more, so the executable defines no outcome there. This build
+// rejects instead of inventing one, because admitting would silently widen a
+// filtered recall.
+//
+// TODO(question): what a definition id of 512 or more should do. The decider is
+// the catalog's maximum definition count: internal/content's category compiler
+// refuses to compile a catalog with 512 or more definitions (the mask domain is
+// 1..511), so no id this function can be handed today reaches the branch. If a
+// future catalog raises that ceiling, retail offers no answer and the choice
+// here must be revisited rather than read as an established contract.
+func TypeFilterPasses(defID uint16, mask [CategoryMaskBytes]byte) bool { // [07 §9] C9
+	if defID == 0 {
 		return true
+	}
+	if int(defID) >= CategoryMaskBytes*8 {
+		return false
 	}
 	return mask[defID/8]&(1<<(defID%8)) != 0
 }
@@ -149,9 +177,9 @@ func TypeFilterPasses(defID uint16, mask [32]byte) bool { // [07 §9] C9
 // definition id). When preserve is clear, nonmembers are cleared; when set,
 // nonmembers are preserved and matching members are toggled (additive toggle
 // table) [07 §9] C9. If any matching member carries CtrlFFlag, the authored
-// 256-bit mask filters which matching units remain selected [07 §9] C9.
+// 512-bit mask filters which matching units remain selected [07 §9] C9.
 // Returns whether selection changed and the post count.
-func RecallGroup(units []*SelectUnit, group int, preserve bool, mask [32]byte, dirty *uint32) (changed bool, selectedCount int) { // [07 §9] C9
+func RecallGroup(units []*SelectUnit, group int, preserve bool, mask [CategoryMaskBytes]byte, dirty *uint32) (changed bool, selectedCount int) { // [07 §9] C9
 	if group < 1 || group > 9 {
 		// Count existing selection for return value even when group invalid.
 		for i := 0; i < len(units); i++ {

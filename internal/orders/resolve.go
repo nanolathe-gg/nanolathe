@@ -148,25 +148,32 @@ func canPatrol(u *units.Unit) bool {
 	return u.Def.CanPatrol
 }
 
-// hasBuildList is command code 14's gate: "the definition's build list is
-// non-empty" [04 R-ORD-02 §1]. It is NOT the authored `builder` key — retail
-// tests the compiled `CANBUILD` page, and the two are independent authorings
-// [02 "Build-menu catalog keys"].
+// hasBuildList is command code 14's first half: the acting definition's
+// compiled build-option list is **present** [04 R-ORD-02 §1]. It is an
+// existence test on the list block, not a test of how many entries it holds —
+// the entry count is a separate word the arm never reads.
 //
-// The page lives in the catalog, which this package holds no handle to, so the
-// question is asked through the queue's session-owned binding. A queue with no
-// build-list query refuses, the same way canEngageSlot refuses without a weapon
-// adapter: the alternative is answering a catalog question from a different
-// key and calling the answer retail's.
+// That makes the gate exactly the authored `builder` key. The catalog compiler
+// allocates one fixed-size list block for every definition whose `builder` flag
+// is set and leaves the pointer null for every definition without it, and it
+// takes the allocation on all three paths: no `CANBUILD` section at all, a
+// section with no entry matching the builder's name, and a populated page
+// [07 §8]. So the eight shipped builders whose compiled menu is empty (ARMASP,
+// CORASP, ARMCARRY, CORCARRY, ARMDECOM, CORDECOM, ARMFARK, CORNECRO) do resolve
+// code 14; only a non-`builder` definition is rejected here.
+//
+// The session binds the query so one composition-owned answer serves the
+// resolver and the air work handler; with none bound the definition answers for
+// itself, which it can now that the question is a definition flag rather than a
+// catalog lookup.
 func hasBuildList(u *units.Unit) bool {
 	if u == nil || u.Def == nil {
 		return false
 	}
-	b := bindingOfUnit(u)
-	if b == nil || b.BuildList == nil {
-		return false
+	if b := bindingOfUnit(u); b != nil && b.BuildList != nil {
+		return b.BuildList(u.Def)
 	}
-	return b.BuildList(u.Def)
+	return u.Def.Builder
 }
 
 // isCarriable is the carriable test of [04 R-ORD-02 §1] codes 1, 2 and 6:
@@ -561,11 +568,11 @@ func resolveName(code int, actor *units.Unit, target *units.Unit, pos *ResolvePo
 		}
 		return "Capture"
 	case 14:
-		// "The definition's build list is non-empty **and a live mover exists**
-		// → `MobileBuild` or air twin; else reject" [04 R-ORD-02 §1]. The mover
-		// term is why a factory — which authors `CanMove=1` on a `BMcode=0`
-		// definition and owns a build list — does not resolve a mobile build
-		// from its own build page.
+		// "The definition's compiled build-option list is present **and a live
+		// mover exists** → `MobileBuild` or air twin; else reject"
+		// [04 R-ORD-02 §1]. The mover term is why a factory — which authors
+		// `CanMove=1` on a `BMcode=0` definition and is itself `builder` — does
+		// not resolve a mobile build from its own build page.
 		if !hasBuildList(actor) || !hasLiveMover(actor) {
 			return ""
 		}

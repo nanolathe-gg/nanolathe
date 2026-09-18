@@ -4,11 +4,16 @@ package client
 //
 // Retail contract [07 §9] C6:
 //
-//   - Drag endpoints recorded in world coordinates are converted to presentation
-//     coordinates by subtracting the camera position and adding the fixed
-//     view-pane origin offsets (128 horizontally, 32 vertically); each axis is
-//     then sorted independently (if right < left swap, if bottom < top swap) and
-//     both boundaries are tested inclusively (min <= x <= max && min <= y <= max).
+//   - Drag endpoints are recorded as whole world points and converted to
+//     presentation coordinates by the ordinary projection: the horizontal
+//     coordinate is `x - cameraX + 128`, the vertical one
+//     `z - (y >> 1) - cameraZ + 32`, where `y` is *that endpoint's own*
+//     recorded height and the shift is arithmetic. The unit point tested
+//     against the rectangle is built by the same formula from the unit's own
+//     position, so both sides of the comparison carry the half-height shear
+//     [03 §2.5]. Each axis is then sorted independently (if right < left swap,
+//     if bottom < top swap) and both boundaries are tested inclusively
+//     (min <= x <= max && min <= y <= max).
 //
 //   - Selection membership is bit 0x10 of unit runtime flags.
 //
@@ -22,8 +27,12 @@ package client
 //     | set 1    | toggle (flags ^= 0x10) | preserve                                    |
 //
 //   - Eligibility predicate tests authoritative fields: active-state bit 0x20,
-//     exact single-precision value == 1.0, no disqualifying state reference
-//     (zero), and either no parent or parent flags carry 0x40000000 [07 §9].
+//     the remaining-build fraction compared against exact single-precision
+//     0.0 — a unit still under construction carries a nonzero remainder and is
+//     not eligible — no disqualifying state reference (zero), and either no
+//     parent or parent flags carry 0x40000000 [07 §9]. The implementation of
+//     that term is cmd/nanolathe/battle_selection.go's `BuildRemaining != 0`
+//     rejection.
 //     Bulk changes also clear the selected-builder single-select id, refresh
 //     aggregate command/UI state, and set battle-interface dirty bit 0x10.
 //

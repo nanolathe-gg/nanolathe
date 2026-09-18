@@ -130,7 +130,8 @@ The VFS has a singleton context containing an ordered provider list. The
 observed mount/search sequence, established by the mount append order, is:
 
 1. Loose host files (tried first on every open via `fopen`).
-2. The revision/patch archive `rev<name>.GP3` with keep-open flag 1.
+2. The revision/patch archive — one fixed name, `rev31.GP3` — with keep-open
+   flag 1.
 3. Every `*.CCX` with keep-open flag 1.
 4. Every `*.UFO` with flag 0.
 5. Local `*.HPI` with flag 0. The mount loop carries a ten-valued budget
@@ -146,8 +147,13 @@ observed mount/search sequence, established by the mount append order, is:
    every local HPI in one pass reproduces the converged retail state.
 6. `*.hpi` discovered on each `DRIVE_CDROM` drive with flag 0.
 
-The exact mounted revision and base archive names are installation-dependent
-and discovered through wildcard enumeration. The observed open path tries a
+Only tiers 3 to 6 — `*.CCX`, `*.UFO`, local `*.HPI`, and the per-CD-drive
+`*.hpi` — are genuine wildcard enumerations, so only those names are
+installation-dependent. The revision/patch tier is **not** a wildcard: the
+orchestrator formats its pattern from a compiled revision token and hands the
+enumerator the resulting literal `rev31.GP3`, which contains no `?` and no `*`,
+so the matcher can accept exactly that one name and the enumeration only
+discovers whether that file is present. The observed open path tries a
 loose host file first, then scans mounted archive providers from index 0
 upwards and returns the first matching provider; the keep-open flag does not
 alter precedence. A provider flagged 0 is closed immediately after validation
@@ -178,10 +184,17 @@ loop's CD tier mounts `%c:\*.hpi` from every CD-ROM drive it finds.
 
 The VFS supports both single-file reads and union enumeration. Enumeration
 is used for catalogs, maps, campaigns, GUI files, save slots, and sound
-aliases; its results deduplicate by canonical entry name under
-case-insensitive equality — the first physical backing wins — and filter the
-host filesystem's internal pseudo-entry names and directory entries. A
-`flag & 1` marks a subdirectory. **Flag census (established):** the union
+aliases; it yields the host sequence first and then each archive in mount
+order, and it performs no name filtering of its own. The host filesystem's
+current- and parent-directory pseudo-entries are skipped by every **caller**,
+not by the enumerator, and directory records are deliberately yielded — an
+archive directory as `read-only | subdirectory` with size 0 — because the
+shadow-marking pass recurses on exactly those records [R-CAT-01 §1].
+Deduplication is likewise not performed inside the enumerator: a path is
+enumerable from exactly one provider — the first physical backing wins —
+because the shadow pass has already set the enumeration-visibility bit on
+every later copy of that path. A `flag & 1` marks a subdirectory.
+**Flag census (established):** the union
 enumerator skips every entry whose flag byte has bit 1 (`0x02`) set — the
 mutable enumeration-visibility bit, recursively cleared before union rebuild —
 and classifies the surviving entries by bit 0 (set → directory, clear →
@@ -217,9 +230,10 @@ finds `0000` within the template `Copyright 0000 Cavedog Entertainment`,
 overwrites the corresponding four footer bytes with literal `0000`, and then
 requires the normalized footer to equal the template. The accepted shape is
 therefore `Copyright <any four bytes> Cavedog Entertainment` with no digit
-check. **Mount-time validation is exactly three checks.** The reader requires: fopen
-success; the four magic bytes `HAPI`; the version bytes `00 00 01 00` at
-offset 4; and the normalized footer. Nothing else is validated at mount: the
+check. **Mount-time validation is the open plus exactly three content
+checks.** The reader requires `fopen` success, and then tests, in order: the
+four magic bytes `HAPI`; the version bytes `00 00 01 00` at offset 4; and the
+normalized footer. Nothing else is validated at mount: the
 directory-blob size is not bounded against the file, relocated offsets are not
 checked against the blob, and entry counts are trusted. A structurally
 malformed but header-valid archive therefore **mounts** and its failures
@@ -420,8 +434,9 @@ ordering; the result does not depend on that order.
 prose). *Mounting one archive*: the candidate's full path is resolved with
 `GetFullPathNameA`, compared case-insensitively against the stored full
 path of every mounted provider, and rejected on a match; otherwise the
-provider is opened and validated (the three checks of §2) and appended to
-the provider array, which is reallocated by one slot per mount. *The
+provider is opened and validated (the three content checks of §2) and
+appended to the provider array, which is reallocated by one slot per mount.
+*The
 validation pass*: for every provider whose handle is closed, the file is
 reopened read-only; on failure the provider record and its directory blob
 are freed and the array is compacted **preserving order**; on success the
@@ -1377,12 +1392,20 @@ Third, a **word-A flag bit (bit 16)** is set when any of `weapon1`, `weapon2`
 or `weapon3` resolved to a weapon record other than the inactive record-0
 sentinel, and cleared when all three resolved to it; `explodeas` and
 `selfdestructas` do not participate. It is the definition's "carries a real
-weapon" bit. The one located reader tests it together with the `kamikaze` bit
-(word A bit 28) as a single mask — a "this definition can do damage" gate —
-before a single-precision comparison; docs 04 and 06 own that gate's
-behaviour. **Unknown:** whether that site is its only consumer (an indirect
-call cannot be seen by a static census; the decider is a reader census of
-word-A bit 16 across the export).
+weapon" bit, and a whole-image census over every mask and every shift applied
+to word A closes its reader set at **two** (Established).
+
+The first reader is the initializer that binds a definition to a new unit: it
+keeps word A's upper half, shifts it left by fifteen — so bit 16 is the only
+bit that survives — and installs the result as the **top bit (bit 31) of the
+unit's status word**, clearing that bit first. That is the "armed" / "has an
+aimable weapon" status bit of `[04 R-ORD-01 §3]` and `[04 R-SPEC-01 §1]`, so
+every consumer of the status bit is an indirect consumer of this definition
+bit; the two are the same fact one step apart. The second reader tests it
+together with the `kamikaze` bit (word A bit 28) as a single mask — a "this
+definition can do damage" gate — in front of the order-time weapon-retarget
+body, before a single-precision comparison; docs 04 and 06 own that gate's
+behaviour.
 
 `selfdestructcountdown`: absent → 5 in the 3-bit field (bits 20–22 of the
 second flags word); present → its decimal value masked to 3 bits.
@@ -3097,8 +3120,10 @@ cells in row-major order (west to east, north to south).
 loader-zeroed marker whose nonzero meaning remains open (feature reproduction
 requires zero), the authored height, derived maximum and minimum neighbourhood
 heights, metal content, a feature reference, unsigned anchor-to-fringe deltas,
-and flags. The allocation loop does not initialize the derived minimum height;
-it clears the lowest two flag bits. The feature deltas record positive
+and flags. The allocation loop writes the empty-feature sentinel `0xFFFF` and
+the metal byte and clears the lowest two flag bits; it initializes **neither**
+derived neighbourhood height — not the minimum and not the maximum. The
+feature deltas record positive
 anchor-to-fringe distances and are subtracted to recover the anchor.
 
 The pass that derives neighbourhood heights takes the minimum and maximum over
@@ -3514,7 +3539,10 @@ spaces; the value in hexadecimal). The slot maps of both versions are
 `[03 R-TERR-01 §1]` and `[fmt tnt]`.
 
 **Map-global block — the defaults as they really are.** The block is written
-in this order, before any plot memory exists:
+in this order, before any plot memory exists. "Canonical" in the table is a
+**signed `≥ 0x2000`** test on the header's version slot, not an equality test;
+because the version gate above has already rejected every value but `0x1020`
+and `0x2000`, the two are equivalent here.
 
 | Value | Rule | What a retail OTA that *omits* the key gets |
 |---|---|---|
@@ -4100,8 +4128,9 @@ section.
 
 #### HPI: what the mount validates, and what the read path does after [R-MALF-01 §3]
 
-Mount-time validation is the three checks §2 states. The details that decide
-the malformed cells: the header read (20 bytes), the footer read (36 bytes)
+Mount-time validation is the three content checks §2 states. The details
+that decide the malformed cells: the header read (20 bytes), the footer
+read (36 bytes)
 and the directory-blob read all **ignore their return counts**, so a short
 file is validated on whatever the stack or heap held; the working key is
 derived and the blob deciphered from byte 20 up to the blob size (a signed
@@ -4393,7 +4422,13 @@ rasterizer reads whatever follows.
 The classifier seeks to 0 and reads four bytes, then — **each time into the
 same buffer, so a failed read keeps the previous bytes** — tests `DIGI` at
 0, `HSHD` at 8 and `SDAT` at 32 (legacy), else `RIFF` at 0 and `WAVE` at 8,
-else raw. Three details behind §7 "WAV": (1) the legacy payload is the
+else raw. The `RIFF` test in particular performs **no fresh read**: it compares
+whatever four bytes the last read left in that buffer. For every reachable
+input this is indistinguishable from testing offset 0, because a file that is
+not `DIGI` fails the first test and leaves the offset-0 bytes in the buffer; it
+differs only for a malformed file that begins with `DIGI` but lacks `HSHD` at
+8, where the `RIFF` comparison sees the bytes at offset 8. Three details
+behind §7 "WAV": (1) the legacy payload is the
 loader's seek to byte 40 and **file size − 40** bytes as the sample, i.e.
 everything after the 8-byte `SDAT` chunk header, whose size field is never
 read; the rate is the 32-bit word at 22, remapped 11,000 → 11,025; (2) the

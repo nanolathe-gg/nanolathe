@@ -1402,7 +1402,7 @@ meaning — [07 §8] states the same warning for the armed-order latch.
 | 11 | teleport | none | teleport |
 | 12 | reclaim or resurrect | can-reclaim | a wreck feature with the resurrect capability becomes resurrect; otherwise feature reclaim or unit reclaim, in the ground or air variant |
 | 13 | capture | can-capture, target differently owned (hostility is not tested) | capture |
-| 14 | mobile build | the unit's build list is non-empty **and** the acting unit has a live mover — an immobile builder is rejected here | ground or air mobile build |
+| 14 | mobile build | the definition's compiled build-option list is **present** — the catalog compiler allocates one for every `builder`-flagged definition, empty or not, so this is an existence test and not an entry count — **and** the acting unit has a live mover; an immobile builder is rejected here | ground or air mobile build |
 
 Hostility comes from the **acting player's record**: its outbound alliance row,
 indexed by the **target player's** slot/ally index. A zero byte is hostile, any
@@ -2894,7 +2894,9 @@ locally at once:
    carrier pointer to the factory, and it is pushed onto the front of the
    factory's cargo list;
 3. flags bit 17 is set iff the piece byte is `0xff` (the detach sentinel) —
-   so it is **clear** for a factory product;
+   so it is **clear** for a factory whose script answered `QueryBuildInfo`
+   and **set** for one that did not, the seeded −1 truncating to exactly that
+   byte ([R-ORD-01 §5] phase 2, [R-UNIT-06 §3]);
 4. the cargo mover's mode bits (state byte bits 0–1) are set to the event's
    mode, i.e. **1, grounded**, for every product including aircraft;
 5. if the owner is in player state 1 or 2 and the carrier's definition lacks
@@ -3499,10 +3501,13 @@ script next touches an engine port, and not otherwise.
 
 **The `StartBuilding` emitter** is [R-ORDER-02 §2]'s: it arranges
 `StartBuilding(0, 0, 1, value16, 0, 0, 0)` and sets the StopBuilding-pending
-flag. Every call site passes `value16 = bearing(unit → target) − unit
-heading` as a 16-bit angle — the build heading relative to the unit — which
-is the value the 49 stock scripts consume as an angle ([R-UNIT-06 §4]); the
-record identity is not involved.
+flag. It has nine call sites. **Eight** pass `value16 = bearing(unit →
+target) − unit heading` as a 16-bit angle — the build heading relative to the
+unit — which is the value the 49 stock scripts consume as an angle
+([R-UNIT-06 §4]); the record identity is not involved. The ninth,
+`VTOL_HelpBuild` phase 2, passes the **absolute** bearing with no heading
+subtraction ([R-ORD-01 §7]), so an air assist hands its script a world angle
+where every other builder hands it a relative one.
 
 **The spray effect.** Work handlers draw the nanolathe spray from the
 owner's `QueryNanoPiece` result (the piece's world position, resolved
@@ -3820,12 +3825,20 @@ of them.
 
 ### The work handlers [R-ORD-01 §5]
 
-The build family shares one pre-check pair: satisfied bit 1 (cancel-current,
-[R-ORDER-02 §2]) refreshes the builder interface and completes; for
-`MobileBuild` satisfied bit 3 (`0x8`) instead emits status 7 with
-`Construction terminated`, refreshes, and abandons. The work step every build
-handler runs is the shared helper of §3.8 / doc 05 with a quantum of
-`workertime / 30` (integer division, then float). Every handler below emits
+The build family shares one pre-check pair, and the two bits are **not
+tested in the same order by every handler**. Satisfied bit 1 (cancel-current,
+[R-ORDER-02 §2]) refreshes the builder interface and completes; satisfied
+bit 3 (`0x8`) emits status 7 with `Construction terminated`, refreshes, and
+abandons. `MobileBuild` tests **bit 3 first and bit 1 second**, so a visit
+carrying both bits abandons with the caption and never reaches the
+cancel-current arm; `BuildingBuild` tests them the other way round (below)
+and `VTOL_MobileBuild` follows `BuildingBuild`, not its own ground twin
+([R-ORD-02 §2]). Whether a single visit can present both bits at once is
+**Unknown** — their producers are different paths (§3.3 cleanup for bit 1,
+the record's target smart-reference for bit 3, [R-ORD-01 §0]) and no
+interleaving that arms both between two pumps of one record has been traced.
+The work step every build handler runs is the shared helper of §3.8 / doc 05
+with a quantum of `workertime / 30` (integer division, then float). Every handler below emits
 `StartBuilding` exactly once per pass through its in-reach phase; it is
 re-emitted only after a *restart* (code 0) sends the record back through that
 phase, which the out-of-reach arms of `ReclaimUnit`, `RepairUnit`, and
@@ -3839,17 +3852,41 @@ cell with the product's footprint size; gate = `0xE0`; advance. Phase 1:
 when satisfied has `0x40`, run the reach test against the product footprint;
 out of reach → status 7 `I can't reach the construction site`, abandon.
 Then validate placement of the product footprint at the snapped cell
-(§6.4): legal → release all slots, prepare the site, create the product as a
+(§6.4): legal → release all slots, **prepare the site** (below), create the
+product as a
 nanoframe (owner = mine, remaining fraction 1.0), bind it as the target;
 created → status 9 with `Starting construction`, refresh the interface,
 insert `GetBuilt` on the product in queued mode, emit `StartBuilding(bearing
 − heading)`, advance; not created → status 7 `Unable to create any more
-units`, deadline 300, hold. Illegal → p3 = 0: status 7 `Waiting for target
-area to clear`; p3 > 10: status 7 `Target area was blocked`, abandon; then
-p3 += 1, deadline 30, hold. Phase 2: `INBUILDSTANCE` wait, extra `0xA`.
+units`, deadline 300, hold — with **no** gate write, unlike `BuildingBuild`'s
+same branch. Illegal → the blocked ladder, in this order: `p3 == 0` → status
+7 `Waiting for target area to clear`, then the shared retry tail; `p3 > 10`
+(signed) → status 7 `Target area was blocked`, abandon; otherwise straight to
+the shared retry tail. The retry tail is `p3 += 1`, deadline `tick + 30`,
+hold — and it writes **no caption and no gate**, leaving the record's gate at
+the `0xE0` phase 0 assigned. The caption therefore fires on the **first**
+blocked visit only; visits 2 through 11 wait silently, and visit 12 abandons.
+Phase 2: `INBUILDSTANCE` wait, extra `0xA`.
 Phase 3: work step; when it did work draw the spray; stamp `tick + 300`;
 product unfinished → deadline 1, gate |= `0xA`, hold; finished → advance.
 Phase 4: status 8 with `Building complete`; complete. Other: cancel-all.
+
+**"Prepare the site" is the snap-and-site-height writer — Established.** The
+step both build handlers run between the placement check and the creation
+call takes the product definition and a pointer to the record's goal triple,
+and it is **skipped in its entirety** when the product definition's `bmcode`
+byte is non-zero — so it runs for a building-class product and does nothing
+for a mobile one ([08 R-AI-03 §7.4] censuses that byte's readers). When it
+does run it does two things in order: it re-snaps the goal's X and Z onto the
+product's footprint with the same `(foot + 2·cell)·2^19` expression phase 0
+already applied (§1), and it then **overwrites the goal's Y** with the site
+height the structure will stand at — the whole-world-unit value shifted into
+16.16, doc 05 owning the height query itself
+([05 "Control-byte bit roles in the footprint validator"], "the placement
+helper that writes a structure's Y"). Because the product is created at the
+record's goal triple, that Y **is** the new structure's Y: a reimplementation
+that treats the step as a no-op places nanoframes at the clicked Y.
+`VTOL_MobileBuild` runs the same step ([R-ORD-02 §2]).
 
 **`HelpBuild`.** Target null → status 7 `Construction terminated`, abandon.
 Phase 0: mover and `builder` required (else cancel-all); `half = trunc(16 ·
@@ -3858,8 +3895,9 @@ sqrt(FootPrintX² + 2·FootPrintZ)) / 2` (signed halving) from the
 radicand is what retail computes; annulus goal at
 the target's position with outer `builddistance + half`, inner `half`; gate
 = `0xE8`; advance. Phase 1: satisfied `0x40` → status 7 `I can't get there`,
-abandon; target complete → complete; release all slots, emit `StartBuilding`,
-refresh; advance. Phase 2: `INBUILDSTANCE` wait, extra `0xA`. Phase 3: work
+abandon; target complete → complete; release all slots, emit
+`StartBuilding(bearing − heading)`, refresh; advance. Phase 2:
+`INBUILDSTANCE` wait, extra `0xA`. Phase 3: work
 step, spray, stamp `tick + 300`; unfinished → deadline 1, gate |= `0xA`,
 hold; else advance. Phase 4: status 8 `Building complete`; gate |= `0x2`;
 complete — the gate bit makes cleanup deliver the cancel-current wake through
@@ -3978,17 +4016,26 @@ transfer the target to my player (doc 05 owns the transfer), status 16
 (doc 05).
 
 **`BuildingBuild`** is the factory machine of §3.8 [R-P0-09]; the trace
-agrees with it. Per visit: satisfied bit 3 → status 7 `Construction stopped`,
-p2 −= 1, refresh, *restart*; satisfied bit 1 → the cancel-current refund and
+agrees with it. Per visit, and in this tested order — **bit 1 first**, the
+reverse of `MobileBuild`'s: satisfied bit 1 → the cancel-current refund and
 cause-9 kill of §3.3 (skipped when no product is bound), lower edge bits 0
-and 3 together, refresh, complete. Phase 0:
+and 3 together, refresh, complete; satisfied bit 3 → status 7
+`Construction stopped`, p2 −= 1, refresh, *restart*. A factory visit carrying
+both bits therefore refunds and kills its product and never emits
+`Construction stopped`. Phase 0:
 clear the smart-reference; state bit 29 required (else cancel-all); p2 > 0 →
 raise edge bit 0, advance; else lower it, complete. Phase 1: `INBUILDSTANCE`
-wait, extra `0x2`. Phase 2: `QueryBuildInfo` (cell 0 seeded −1) → exit
+wait, extra `0x2`. Phase 2: `QueryBuildInfo` — a **one-output** synchronous
+query whose single output cell is seeded −1, the other three output pointers
+being null so that nothing else is seeded or read back — → exit
 transform → goal; snap to the product footprint; validate with my mover
 mode as the medium argument; illegal → deadline 15, gate |= `0x2`, hold;
 create the nanoframe at the goal; created → status 9 `Starting
-construction`, attach it as cargo-style carried product, copy my standing
+construction`, attach it as cargo-style carried product **on that same
+output cell as the hang piece** ([R-FAC-02 §1]) — so a factory whose script
+never answers `QueryBuildInfo` attaches the product on the seeded −1, the
+reserved no-piece index, which is what raises the "carried without a piece
+link" status bit of [R-UNIT-06 §3] — copy my standing
 bits 18–21 onto it, insert `GetBuilt` queued, raise edge bit 3
 (`StartBuilding`), refresh, advance; else status 7 `Unable to create any
 more units`, deadline 300, gate |= `0x2`, hold. Phase 3: with a target, work
@@ -4112,8 +4159,8 @@ wait between arrival and work.
 **`VTOL_HelpBuild`.** Pre-check: target null or satisfied `0x8` → status 7
 `Construction terminated by hostile action`, refresh the builder interface,
 abandon; satisfied `0x2` → refresh, complete. Phase 0: three tests, each
-failing to cancel-all — a live mover, `canfly`, and a non-empty definition
-build list ([R-ORD-01 §17]) — then the preamble with `Building`. Phase 1:
+failing to cancel-all — a live mover, `canfly`, and a present definition
+build-option list ([R-ORD-01 §17]) — then the preamble with `Building`. Phase 1:
 p3 = 0; air marker at the **target's**
 position with horizontal arrival radius `builddistance` (the radius-flag
 setter, so arrival is `dist < builddistance` in whole units); install; gate
@@ -4877,9 +4924,11 @@ each failing to **cancel-all** with no caption:
    the same "live mover" the command resolver's code 14 requires, [R-ORD-02
    §1]);
 2. the definition's `canfly` capability bit is set;
-3. the definition's **build list is non-empty** — the compiled per-definition
-   `CANBUILD` list head ([02 R-CAT-01 §5]), the identical word the resolver's
-   code 14 tests ("the definition's build list is non-empty and a live mover
+3. the definition's **build-option list is present** — the compiled
+   per-definition `CANBUILD` list head ([02 R-CAT-01 §5]), allocated for every
+   `builder`-flagged definition whether or not any entry names it, so an
+   empty menu still passes; it is the identical word the resolver's code 14
+   tests ("the definition's build-option list is present and a live mover
    exists", [R-ORD-02 §1]) and the queue overlay's builder-context gate reads
    ([07 R-P0-11 §3]).
 
@@ -5070,8 +5119,17 @@ target → `ReclaimUnit` or air twin; else reject. **Code 13 — capture.**
 `cancapture`, a target, and the target's owner differing from mine →
 `Capture`; hostility is **not** tested, so an allied unit of another player
 is capturable by this code. **Code 14 — mobile build.** The
-definition's build list is non-empty and a live mover exists →
-`MobileBuild` or air twin; else reject.
+definition's compiled build-option list is **present** and a live mover
+exists → `MobileBuild` or air twin; else reject. The first term is an
+existence test on the list block, not a count: the catalog compiler
+allocates that one fixed-size block for every `builder`-flagged definition
+— with no `CANBUILD` section, with no section entry naming the builder, and
+with a populated page alike — and leaves the pointer null for every
+definition without the key, the entry total being a separate word the arm
+never reads ([07 §8] traces the same pair for the MOBILEBUILD cursor). So
+the term is exactly the authored `builder` key, and the eight shipped
+builders whose compiled menu is empty (ARMASP, CORASP, ARMCARRY, CORCARRY,
+ARMDECOM, CORDECOM, ARMFARK, CORNECRO) resolve code 14. **Established.**
 
 **The queued-move and queued-patrol condition is the live-mover test.**
 `QMove` and `QPatrol` are what an actor with **no mover** gets after its
@@ -5152,8 +5210,9 @@ aircraft flies essentially the whole leg and aims through the corner rather
 than braking into it, and a patrol whose waypoints are closer together than
 about 336 units still rotates every visit.
 
-**`VTOL_MobileBuild`.** Pre-checks as the ground twin: satisfied bit 1 →
-refresh the builder interface, complete; satisfied `0x8` → status 7
+**`VTOL_MobileBuild`.** The same two pre-checks as the ground twin but in the
+**opposite tested order** (`BuildingBuild`'s, [R-ORD-01 §5]): satisfied bit 1
+→ refresh the builder interface, complete; then satisfied `0x8` → status 7
 `Construction terminated`, refresh, abandon. Phase 0: mover and `canfly`
 (else cancel-all); caption clear with `Building`; the preamble; advance.
 Phase 1: p3 = 0; snap the goal onto the **product's** footprint (definition
@@ -5161,9 +5220,12 @@ p1); point marker at the snapped goal with horizontal arrival radius
 `builddistance` (strict `<`), no altitude setter; install; gate `= 0xE0`;
 advance. Phase 2: satisfied `0x40` → abandon; validate placement of the
 product footprint at the snapped cell (§6.4, medium argument 1); illegal →
-p3 = 0: status 7 `Waiting for target area to clear`; p3 > 10: status 7
-`Target area was blocked`, abandon; p3 += 1, deadline 30, hold. Legal →
-prepare the site, create the product as a nanoframe (owner mine), bind it;
+the ground twin's blocked ladder verbatim ([R-ORD-01 §5]: the
+`Waiting for target area to clear` caption on the **first** blocked visit
+only, `Target area was blocked` and abandon above 10, and a silent
+`p3 += 1` / deadline 30 / hold tail that writes no gate). Legal →
+prepare the site ([R-ORD-01 §5]), create the product as a nanoframe (owner
+mine), bind it;
 not created → status 7 `Unable to create any more units`, **abandon** (the
 ground twin waits 300 ticks and holds); created → status 9 `Starting
 construction`, insert `GetBuilt` on the product in queued mode, emit
@@ -5266,9 +5328,14 @@ phase: cancel-all.
   unit `u` when: `u` is not the scanning unit; the scanning player's outbound
   diplomacy byte toward `u`'s owner is nonzero; `u`'s mover mode is grounded (`1`); `u`'s
   16-bit health is below its `maxdamage` (unsigned) **or** `u` is
-  unfinished; and **not** (`u`'s last-damage side byte equals my side and
+  unfinished — "unfinished" being `u`'s build-progress float compared against
+  `0.0f`, with equality REJECTING, so only a nonzero remainder admits; and
+  **not** (`u`'s last-damage side byte equals my side and
   its last-damage cause byte is 5) — a unit my side is currently reclaiming
   (cause 5 is the reclaim bite, [R-ORD-01 §5]) is never offered for repair.
+  The visitor has **no static call site**: the handler plants a pointer to it
+  in the gather descriptor it builds on its own frame, through a one-entry
+  function-pointer table, so a call census cannot see it.
 * **The guard-candidate visitor** (`VTOL_SeekGuard` phase 1) admits `u`
   when `u`'s owner's diplomacy byte toward my side is nonzero, `u` is not
   `canfly`, and `u` is not the seeker. The list is in enumeration order; the
@@ -9374,10 +9441,14 @@ the bound movement-class record and a cell, in order:
 So value **2 means "this block is unexplored by the requesting player"**, and
 every consumer treats it as passable. Retail units path optimistically straight
 through fog; the terrain layer is consulted only where the player has already
-mapped the ground. Map-edge handling is the pair of unsigned bound tests above
+mapped the ground. Map-edge handling is the **two** pairs of bound tests above
 plus the expansion's own unsigned bound test against the working set's map
 width and height — an out-of-range neighbour is skipped without being touched,
-marked, or costed.
+marked, or costed. The two pairs differ in strictness: step 1's class-extent
+pair is **unsigned**, step 2's half-resolution mapping-block pair is
+**signed**. The difference is unobservable — `x` and `z` have already passed
+the unsigned pair, so they are non-negative, and both quarter-footprint terms
+are non-negative, so `bx` and `bz` can never be negative.
 
 **Established — where a BUILDING blocks.** The class layer's classifier
 reads the attribute cell's occupant slot index — the same field the movement
@@ -10115,7 +10186,7 @@ centre-minus-pads form.
 
 ### 7.3 Scheduler budget, publication, and route storage
 
-**Established fact:** Path work is budgeted. A global scheduler counter replenishes every 150 ticks. Per-player quanta use six-times, three-times, and one-times weighting based on scheduler state. Each active request is limited to 100 heap pops per scheduler call. [R-PATH-01 §6] states the exact counters, the admission walk, and what each charge buys.
+**Established fact:** Path work is budgeted. A global scheduler counter replenishes on every 150th scheduler call — the scheduler runs once per tick, so every 150 ticks. Per-player quanta use six-times, three-times, and one-times weighting based on scheduler state. Each expansion **iteration** is limited to 100 heap pops; a scheduler call re-enters the same latched request for as many iterations as its step budget allows, so one call can drive several 100-pop slices of one search. [R-PATH-01 §6] states the exact counters, the admission walk, and what each charge buys.
 
 **Established — what admits a unit to the scheduler ([R-MOV-01 §7]).** The
 scheduler walks players round-robin and, for each unit it reaches, calls the
@@ -10193,7 +10264,9 @@ occupancy phase**, after the per-unit sweep phase of the same tick and before
 this phase's own per-player loop ([01 §4.4] owns the absolute phase order):
 
 1. If the session's player count is zero, do nothing.
-2. Increment a call counter. When it exceeds 150, zero it and, for each of the
+2. Increment a call counter. When the incremented value **reaches** 150 —
+   `>= 150`, so the period is exactly 150 calls and the counter never holds
+   150 — zero it and, for each of the
    ten player slots, compute `tier = serviceCount[p] / divisor` and set
    `quantum[p] = base × (tier < 1 ? 6 : tier < 2 ? 3 : 1)`, then zero
    `serviceCount[p]`. The **divisor is the session's per-player unit limit**,
@@ -12873,7 +12946,7 @@ until it re-enters.
 **Established fact:** Transport service lifecycle is exact for admission, carry,
 unload, pads, and death:
 
-*Admission.* `carrier, candidate` is admitted only if, in this order, none of these nine rejects fires: 1) candidate `cantbetransported` set; 2) carrier lacks `canload`; 3) carried-count (entries in the carrier cargo list whose parent equals the carrier) reaches carrier `transportcapacity` (count, not summed sizes; unauthored `0` therefore blocks loading); 4) carrier `transportsize` below candidate `FootPrintX` (signed compare, FootPrintX is the movement class footprint width); 5) candidate has no mover; 6) candidate committed mover mode is `2` — airborne ([R-MOV-01 §8]); 7) ground carrier (`canfly` clear) with candidate `MinWaterDepth >= 0`; 8) candidate `Y + modelTop` at or below `sea level × 65536` (submerged); 9) candidate landed-float field not exactly `0.0` (still under construction). Missing `transportcapacity` and `transportsize` default to `0`. The effective boarding range is the first enabled weapon slot's `range` (scanned via the weapon-slot enabled flag); shipped unarmed fallback is weapon record `0` (`NOWEAPON`, Range 16), so shipped unarmed pickup range is `16`. No owner or alliance test exists anywhere on the load path — neither in this predicate nor in the command resolution of §3.4 ([R-AIR-01 §12], which also states gate 7's word and its signed `>= 0` compare).
+*Admission.* `carrier, candidate` is admitted only if, in this order, none of these nine rejects fires: 1) candidate `cantbetransported` set; 2) carrier lacks `canload`; 3) carried-count (entries in the carrier cargo list whose parent equals the carrier) reaches carrier `transportcapacity` (count, not summed sizes; unauthored `0` therefore blocks loading); 4) candidate has no mover; 5) carrier `transportsize` below candidate `FootPrintX` (signed compare, FootPrintX is the movement class footprint width); 6) candidate committed mover mode is `2` — airborne ([R-MOV-01 §8]); 7) ground carrier (`canfly` clear) with candidate `MinWaterDepth >= 0`; 8) candidate `Y + modelTop` at or below `sea level × 65536` (submerged); 9) candidate landed-float field neither exactly `0.0` nor unordered (still under construction) — the predicate continues on the *equal* condition alone, and an unordered compare raises it too, so a NaN in that field is ADMITTED rather than rejected. Missing `transportcapacity` and `transportsize` default to `0`. The effective boarding range is the first enabled weapon slot's `range` (scanned via the weapon-slot enabled flag); shipped unarmed fallback is weapon record `0` (`NOWEAPON`, Range 16), so shipped unarmed pickup range is `16`. No owner or alliance test exists anywhere on the load path — neither in this predicate nor in the command resolution of §3.4 ([R-AIR-01 §12], which also states gate 7's word and its signed `>= 0` compare).
 
 *Load executor entry gates.* Independent of admission, every phase of the
 canonical load executor re-checks four gates in order before doing work: the
@@ -12890,7 +12963,7 @@ also code 8; gate four returns code 8 with NO message.
 
 | Phase | Operations | Result |
 |---:|---|---:|
-| 0 | Require a live carrier mover and `canfly` (else 7). Size gate: the target's cached footprint-X WORD, compared signed, must be at or below the carrier definition's `transportsize` BYTE zero-extended; otherwise emit `Unit is too heavy to transport` and return 8. Set status message `Loading`; release the manual-target latch on all three weapon slots (the `3` is the all-slots index, not a state code — step 1 of the shared takeoff preamble, [R-AIR-01 §6]); detach the carrier from ITS own parent when carried; raise Activate — its edge is what emits notification 3, one step later ([R-AIR-01 §6] step 3, [R-UNIT-06 §2]); force mover mode 2 from mode 1; queue a point command at the carrier's current X/Z with altitude `cruisealt/2` (signed, round toward zero) and NO arrival radius; status bits `|= 0xE0`. | 1 |
+| 0 | Require a live carrier mover and `canfly` (else 7). Size gate: the target's cached footprint-X WORD, compared signed, must be at or below the carrier definition's `transportsize` BYTE zero-extended; otherwise emit `Unit is too heavy to transport` and return 8. Set status message `Loading`; release the manual-target latch on all three weapon slots (the `3` is the all-slots index, not a state code — step 1 of the shared takeoff preamble, [R-AIR-01 §6]); detach the carrier from ITS own parent when carried; raise Activate — its edge is what emits notification 3, one step later ([R-AIR-01 §6] step 3, [R-UNIT-06 §2]). The phase's last three acts are ONE block guarded by "the committed mover mode is `1`, grounded": force mover mode 2, queue a point command at the carrier's current X/Z with altitude `cruisealt/2` (signed, round toward zero) and NO arrival radius, and OR `0xE0` into the record's gate. A carrier already airborne takes none of the three and advances with the record's gate UNTOUCHED and no goal installed — phase 1's `0x100E8` assignment is what first arms it. | 1 |
 | 1 | Queue the follow command toward the target with the full `cruisealt` altitude offset and horizontal arrival radius `0x30`; status `= 0x100E8`. | 1 |
 | 2 | Status `Preparing for transport`. Pre-seed the first `QueryTransport` output to `-1` and run the synchronous four-output query (unanswered outputs read 0, so the observed seed is `[-1, 0, 0, 0]`; a missing script leaves `-1`, the root-piece fallback). Retain output 0 as the attach piece; status `= 0x100E8`. | 1 |
 | 3 | Start asynchronous one-argument `BeginTransport` with the exact 32-bit value of the target definition's model total-height dword — the height dword the engine derives from the 3DO bounds at definition load, not an authored FBI key ([R-UNIT-06 §3]) — mirrored through the network forwarder; evaluate the attach piece's Y in the **carrier's model frame** (the piece-hierarchy evaluator without the unit-origin addition, [R-REV-02]); construct a follow-unit marker on the **cargo** as the carrier's goal with altitude offset = the NEGATED signed 16-bit integer part of that Y — lowering the carrier until its attach piece meets the cargo ([R-AIR-01 §9]); status `= 0x100EA`. | 1 |
@@ -13040,8 +13113,11 @@ present to the script. Applied to the transport family:
   unit identity (its pool slot id), fillers 0, wake flag set; the engine also
   emits notification event 12 right after.
 - `TransportDrop` (sea/hover drop): arity 1, cell 0 = the cargo's stable unit
-  identity, cell 1 = the packed drop point (destination X truncated to whole
-  world units in the high half, destination Z integer part in the low half),
+  identity, cell 1 = the packed drop point (destination X **floored** to whole
+  world units in the high half, destination Z's floored integer part in the
+  low half — both halves come from a mask and an arithmetic shift, so they
+  floor rather than truncate toward zero, and the two are combined by
+  ADDITION, [R-AIR-01 §10] item 1),
   remaining cells 0 — the position cell is physically present even though the
   arity byte says one argument.
 - The network mirror of a script-call emission carries (unit, callback
@@ -13693,7 +13769,7 @@ returns 7.
 |---:|---|---:|
 | 0 | Require a live mover (else 7) and the carrier definition's `canload` bit (else 7). Size gate: the target's cached footprint-X word, compared **signed**, must be at or below the carrier definition's `transportsize` byte zero-extended; otherwise status cue slot 7 `Unit is too large to transport` and return 8. Otherwise set the status caption `Loading unit` (slot 5). | 1 |
 | 1, 3 | The shared short-move helper: when the unit's second state byte has bit `0x2` (`BUSY`, port 6) set, write gate `0x8 \| 0x4` and return 2; otherwise return 1 ([R-AIR-01 §10]). | 1 or 2 |
-| 2 | Start the asynchronous one-argument `TransportPickup` on the **carrier's** script with cell 0 = the cargo's stable unit identity; emit notification event 12; increment the record's attempt counter; set the deadline to the current tick plus 15. | 1 |
+| 2 | Start the asynchronous one-argument `TransportPickup` on the **carrier's** script with cell 0 = the cargo's stable unit identity; emit notification event 12; increment the record's attempt counter — **the record's FIRST progress parameter**, the same one `VTOL_Pickup` retains its queried attach piece in and `MobileBuild` holds the product definition index in; neither ground executor writes the second or third; set the deadline to the current tick plus 15. | 1 |
 | 4 | If the target now has a carrier, return 5 (the script did the attach). Else if the attempt counter has reached `3`, return 9. Else install a ground goal handle at the target's current position with radius parameter `0`, gate `= 0xE8`. | 1, 5 or 9 |
 | 5 | Clear the goal payload. | 0 |
 
@@ -13714,9 +13790,11 @@ a live mover and `canload`, binds the record's target handle to the carrier's
 cargo-list head, returns 5 if that head is null, sets the caption `Unloading`,
 and starts the asynchronous one-argument `TransportDrop` on the carrier's script
 with cell 0 = the cargo's identity and cell 1 = the packed drop point (the
-record's goal X truncated to whole world units in the high half, the goal Z
-integer part in the low half); it then increments the attempt counter and sets
-the deadline to the current tick plus 15. Phase 1 is the same short-move helper.
+record's goal X **floored** to whole world units in the high half — a mask of
+the low 16 bits, not a truncation toward zero — plus the goal Z's floored
+integer part in the low half); it then increments the same first progress
+parameter and sets the deadline to the current tick plus 15. Phase 1 is the
+same short-move helper.
 Phase 2 emits notification event 13 and returns 5 as soon as the cargo's carrier
 reference is no longer this carrier; otherwise it returns 9 once the attempt
 counter reaches `3`, and otherwise installs a ground goal handle at the record's
@@ -13801,8 +13879,10 @@ stored triple — every phase re-derives what it needs from the raw goal:
   climb-away does not use the goal at all (see (3)).
 * **Ground, phase 0** packs `(goalX & 0xFFFF0000) + (goalZ >> 16)` for the
   `TransportDrop` cell 1 of [R-UNIT-06 §3] — an **addition**, not an OR, so a
-  negative Z integer part borrows from the X half. **Ground, phase 2** hands
-  the goal triple to the ground goal-handle installer, which reads only the X
+  negative Z integer part borrows from the X half. Both halves **floor**: the
+  mask and the arithmetic shift round toward negative infinity, not toward
+  zero, and the two differ for a negative goal coordinate. **Ground, phase 2**
+  hands the goal triple to the ground goal-handle installer, which reads only the X
   and Z words (and builds no handle at all for a `canfly` unit).
 
 The two executors therefore store the drop point "the same way" in the only
@@ -14037,9 +14117,13 @@ entries whose parent is the carrier), the candidate's mover pointer, the
 candidate's flags-word mode mirror, the candidate's Y, the map's sea-level
 byte, and the candidate's landed float. **No player, owner, side or
 diplomacy word is read**, and the nine rejects stand in the order §10.2
-lists them, with reject 6 reading the
+lists them: in particular the candidate's **mover pointer is tested before**
+the `transportsize`/`FootPrintX` compare, so rejects 4 and 5 are the
+mover-presence test and then the size test. Reject 6 reads the
 flags-word mirror (the committed mode, [R-MOV-01 §8]) rather than the
-mover's own state byte.
+mover's own state byte. The order is not observable through the boolean
+result — both arms reject — but a reimplementation that reports *why*
+admission failed must use it.
 
 **Gate 7's word.** The value compared is the definition's own 16-bit signed
 copy of the movement class's `MinWaterDepth` — the same copy the mobile
@@ -14513,6 +14597,13 @@ and the decider that would close it.
   the intermediate converter remains untraced `[fmt ota]`. No further scan
   trace can derive untouched temporary contents from authored text alone.
 
+- Whether a single handler visit can present satisfied bits 1 and 3 together.
+  The two build handlers test them in opposite orders ([R-ORD-01 §5]), so the
+  difference is observable only when both are armed between two pumps of one
+  record · §3.9 [R-ORD-01 §5], [R-ORD-01 §0] · decider: a writer census of the
+  pending word's bits 1 and 3 showing whether their two producers — the
+  cleanup path and the target smart-reference — can fire into one record
+  without an intervening pump.
 - Meaning of the one definition byte that gates the creation notification in
   the pre-built creation path · §3.9 [R-SPEC-01 §12] · static trace.
 - The runtime symptom of a `selfdestructcountdown` of 6 or 7 on a

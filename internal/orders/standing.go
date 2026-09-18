@@ -32,12 +32,15 @@ const (
 //
 //	0x8  interrupt/abandon      0x10    guard re-arm / second interrupt bit
 //	0x2  cancel-current         0x10000 the pump's three unconditional slot clears
+//
+// The five pending movement/path bits, 0x20..0x200, have no name here: the
+// three goal installers that clear them spell 0x3E0 at their own sites, and
+// `VTOL_Patrol` phase 1 clears its own three-bit subset.
 const (
-	gateInterrupt   uint32 = 0x8
-	gateReArm       uint32 = 0x10
-	gateSlotClear   uint32 = 0x10000
-	gateCancelBit   uint32 = 0x2
-	pendingMovement uint32 = 0x3e0 // the five movement/path bits 0x20..0x200 [04 R-ORD-01 §0]
+	gateInterrupt uint32 = 0x8
+	gateReArm     uint32 = 0x10
+	gateSlotClear uint32 = 0x10000
+	gateCancelBit uint32 = 0x2
 )
 
 // armDeadline is the shared deadline setter of [04 R-ORD-01 §1]: it stores

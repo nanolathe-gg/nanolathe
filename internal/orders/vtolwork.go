@@ -47,6 +47,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // Gate combinations these rows arm, beyond work.go's named set
@@ -250,9 +251,9 @@ func vtolHelpBuildHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32)
 	case 0:
 		// Three preconditions precede every side effect of the preamble, each
 		// failing to cancel-all with no caption [04 R-ORD-01 §17]: a live mover
-		// and `canfly` — the preamble's own pair — and a NON-EMPTY BUILD LIST,
-		// the same compiled CANBUILD test command code 14 makes
-		// [04 R-ORD-02 §1]. [04 R-ORD-01 §7]'s row called the third "the
+		// and `canfly` — the preamble's own pair — and a PRESENT build-option
+		// list (allocated for every `builder` definition, empty or not), the
+		// same presence test command code 14 makes [04 R-ORD-02 §1]. [04 R-ORD-01 §7]'s row called the third "the
 		// definition's builder-specific script slot"; no such slot exists, the
 		// word retail tests is the build-list head. The ground `HelpBuild`
 		// makes none of the three. The three refusals are order-free: none has
@@ -500,7 +501,16 @@ func vtolReclaimHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) C
 		}
 		return code
 	case 4:
-		finishFeatureReclaim(u, cx, cz)
+		// The air row's payout takes the position the ORDER recorded, exactly
+		// as the ground row's does: retail's two handlers both hold a pointer
+		// to the record's own position from their entry and hand THAT to the
+		// shared payout helper, which resolves it twice and reads its guard's
+		// cell bit from the first, unhopped cell [05 R-FEAT-01 §15]
+		// [05 R-WORK-01 §5][04 R-ORD-01 §7]. The anchor this row resolved per
+		// visit is the same cell for every single-cell feature; for a
+		// multi-cell one it is not, and installing the air marker on the
+		// feature box centre does not rewrite the record's position.
+		finishFeatureReclaim(u, int(world.WorldToCell(n.GoalX)), int(world.WorldToCell(n.GoalZ)))
 		return 5 // complete
 	default:
 		return 7 // cancel-all

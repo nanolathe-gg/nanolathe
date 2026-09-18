@@ -194,9 +194,14 @@ type MountPlan struct {
 }
 
 // DefaultRetailMountPlan is a deliberate catalog policy difference, not a
-// reproduction of retail's loader. Retail mounts loose data, then rev*.GP3,
-// CCX, UFO, HPI and the CD HPI, and resolves a lookup against Windows
-// directory enumeration order. Nanolathe sorts archives lexically inside each
+// reproduction of retail's loader. Retail mounts loose data, then the literal
+// name rev31.GP3, then CCX, UFO, HPI and the CD HPI, and resolves a lookup
+// against Windows directory enumeration order. The revision tier is the one
+// tier retail does not enumerate by pattern: it formats a fixed revision token
+// into a compiled name and asks only whether that single file is present, so
+// only the CCX/UFO/HPI names are installation-dependent [02 §2]. Nanolathe
+// mounts every .gp3/.gp4/.gpf/.swx file at that tier instead — a superset that
+// contains retail's one revision archive. Nanolathe sorts archives lexically inside each
 // tier so the equal-tier winner is stable across filesystems, and every shadowed
 // mount is recorded in manifest identity (content.ManifestRecord.Shadowed) so a
 // differing winner can be named rather than silently used.

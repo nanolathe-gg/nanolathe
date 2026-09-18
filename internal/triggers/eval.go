@@ -219,9 +219,13 @@ func (t *Trigger) Poll(c PollContext) bool {
 		return t.Completed // recomputed every poll [08 R-TRIG-01 §4].
 
 	case KindMoveUnitToRadius:
-		if t.Completed {
-			return true
-		}
+		// There is no Satisfied guard here. The poll's first step is the centre
+		// sentinel, and the partition scan then re-runs on every poll whether or
+		// not the condition is already satisfied [08 R-TRIG-01 §4]. The latch
+		// still holds because nothing ever clears Satisfied, and the cue cannot
+		// replay because Celebrated guards it, so the rescan has no observable
+		// effect — this poll is written the way retail runs it rather than
+		// short-circuited on Completed.
 		if !t.CenterReady {
 			if c.Deproject == nil {
 				return false

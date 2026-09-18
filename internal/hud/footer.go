@@ -34,10 +34,39 @@ const FooterTextColor uint8 = 83
 // bar's rule [03 R-FX-01 §6].
 const FooterBarRemainder uint8 = 4
 
-// UnidentifiedObject is the caption drawn, centred at UNITNAME and alone,
-// when the hovered unit fails the viewing player's direct-visibility
-// predicate [07 R-HUD-03 §2][03 R-VIS-01 §4].
+// UnidentifiedObject is the localized caption for a hovered unit that fails
+// the viewing player's direct-visibility predicate [07 R-HUD-03 §2]
+// [03 R-VIS-01 §4]. It is NOT drawn alone: the footer composes `"%s%s"` of a
+// contact prefix and this caption, centres the composed string at UNITNAME in
+// the footer text colour with no width limit, and draws nothing else.
 const UnidentifiedObject = "Unidentified object"
+
+// SonarContactPrefix and RadarContactPrefix are the two literal prefixes that
+// composition takes: `S: ` when the hovered unit's sonar-contact status bit is
+// set and `R: ` when it is clear. Both are literal ASCII and are not
+// localized — only the caption is [07 R-HUD-03 §2][03 R-VIS-01 §4].
+const (
+	SonarContactPrefix = "S: "
+	RadarContactPrefix = "R: "
+)
+
+// UnidentifiedCaption composes the unidentified-contact line. sonar is the
+// hovered unit's sonar-contact status bit, which the frame publishes on the
+// unit view as UnderwaterExempt — the same bit visibility.SonarBit names, and
+// the same bit that exempts a unit from the below-sea-level rejection
+// [03 R-VIS-01 §4]. The prefix is three characters wide, so a contact's caption
+// also sits three glyph widths left of an identified unit's name
+// [07 R-HUD-03 §2].
+//
+// Unknown: the user-facing name of the bit behind the two letters. They read as
+// a sonar-versus-radar contact distinction, and the bit we bind is the one the
+// sensor phase sets for sonar, but no string in the retail image names it.
+func UnidentifiedCaption(sonar bool) string {
+	if sonar {
+		return SonarContactPrefix + UnidentifiedObject
+	}
+	return RadarContactPrefix + UnidentifiedObject
+}
 
 // StockpileWord is the secondary-field caption for a unit with a nonzero
 // stockpile percentage [07 R-HUD-03 §2].
@@ -238,7 +267,10 @@ func unitReadout(out *Footer, f *frame.Frame, cat *content.Catalog, viewer uint8
 	}
 	own := view.Owner == viewer
 	if !hover.visible(view, viewer) {
-		out.Texts = append(out.Texts, FooterText{Anchor: AnchorUnitName, Text: UnidentifiedObject, Color: rawColor(FooterTextColor), Centered: true})
+		// The contact prefix comes from the unit view's own published
+		// sonar-contact bit, so no extra frame state is needed for it
+		// [07 R-HUD-03 §2][03 R-VIS-01 §4].
+		out.Texts = append(out.Texts, FooterText{Anchor: AnchorUnitName, Text: UnidentifiedCaption(view.UnderwaterExempt), Color: rawColor(FooterTextColor), Centered: true})
 		return
 	}
 	def := footerUnitDef(cat, view)

@@ -35,6 +35,14 @@ const transportEntryInterrupt = pendTargetRemoved
 // groundTransportAttempts is the attempt counter's terminal value: phase 4 of
 // `Ground_Pickup` and phase 2 of `Ground_Unload` both give up at 3
 // [04 R-AIR-01 §9].
+//
+// Both ground executors keep that count in the record's FIRST progress
+// parameter — the same parameter `VTOL_Pickup` retains its queried attach
+// piece in and `MobileBuild` holds the product definition index in — and
+// neither writes the second or third [04 R-AIR-01 §9]. Nothing else on a
+// ground transport record reads or writes the first parameter, so the choice
+// is observable only through the record's published parameters and a
+// save/restore round trip.
 const groundTransportAttempts = 3
 
 // groundTransportApproachGate is the `0xE8` both ground executors write when
@@ -151,7 +159,7 @@ func groundPickupHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) 
 			bridge.DeferredWake("TransportPickup", []int32{int32(n.Target)}, nil)
 		}
 		workStatus(u, statusLoadEvent, "")
-		n.Param2++
+		n.Param1++ // the attempt counter is the record's first progress parameter [04 R-AIR-01 §9]
 		n.Deadline = int32(tick + 15)
 		n.DynamicGate |= gateDeadline // the deadline setter's bit [04 R-ORD-01 §1]
 		return 1
@@ -159,7 +167,7 @@ func groundPickupHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) 
 		if target.Attachment.Carrier != 0 {
 			return 5 // the script did the attach [04 R-AIR-01 §9]
 		}
-		if n.Param2 >= groundTransportAttempts {
+		if n.Param1 >= groundTransportAttempts {
 			return 9 // *retry* [04 R-AIR-01 §9]
 		}
 		installGroundGoal(u, n, target.X, target.Y, target.Z, 0)
@@ -218,7 +226,7 @@ func groundUnloadHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) 
 			// byte says one argument [04 R-UNIT-06 §3].
 			bridge.DeferredWakeArgs("TransportDrop", 1, [4]int32{int32(n.Target), packedDropPoint(n), 0, 0}, nil)
 		}
-		n.Param2++
+		n.Param1++ // the attempt counter is the record's first progress parameter [04 R-AIR-01 §9]
 		n.Deadline = int32(tick + 15)
 		n.DynamicGate |= gateDeadline
 		return 1
@@ -229,7 +237,7 @@ func groundUnloadHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) 
 			workStatus(u, statusUnloadEvent, "")
 			return 5 // the script did the drop [04 R-AIR-01 §9]
 		}
-		if n.Param2 >= groundTransportAttempts {
+		if n.Param1 >= groundTransportAttempts {
 			return 9
 		}
 		// The drop point is the record's goal triple, written once when the

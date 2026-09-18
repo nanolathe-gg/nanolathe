@@ -206,7 +206,7 @@ type HumanBuildPageCommand struct {
 type HumanGroupCommand struct {
 	Group    int
 	Preserve bool
-	Mask     [32]byte
+	Mask     [hud.CategoryMaskBytes]byte
 }
 
 // HumanCommand is an immutable-at-boundary command value. EnqueueHumanCommand
@@ -285,7 +285,9 @@ func (s *Session) EnqueueHumanCommandWithSequence(c HumanCommand) (uint64, error
 	// is applied locally: the receiver tags each decoded record with its own
 	// simulation tick at parse time and withholds entries tagged 1..30 ticks
 	// ahead [08 "Receive buffering"] — the sender never names a target frame, and
-	// that 31-tick window "is not proof of a universal 30-tick input delay". So
+	// that 30-tick window "is not proof of a universal 30-tick input delay". An
+	// entry tagged for the current tick is delivered, not withheld, so the
+	// window counts the thirty future deltas only. So
 	// the next session tick is the contract, not a placeholder for one. The
 	// receive path itself is multiplayer-only and out of scope [08 R-OOS-01 §3].
 	s.nextHumanSequence++
@@ -463,7 +465,7 @@ func (s *Session) applyHumanGroup(c HumanGroupCommand, assign bool) {
 		hud.AssignGroup(views, c.Group, nil)
 	} else {
 		mask := c.Mask
-		if mask == [32]byte{} {
+		if mask == ([hud.CategoryMaskBytes]byte{}) {
 			// No CTRL_F mask producer is part of the current immutable frame.
 			// Treat absent filter state as no filter; the authored mask producer
 			// remains an explicit TODO rather than a guessed category mask [07 §9].
@@ -611,16 +613,12 @@ func mobileBuildKind(builder *units.Unit) orders.ID {
 //     `VTOL_MOBILEBUILD` — and equally the ground and air forms of a move or
 //     an attack — are distinct and do not match each other.
 //
-// TODO(question): whether the world-click producer receives a goal point
-// alongside a target handle. [07 R-P0-11 §6] states the match rule with both
-// arguments optional but does not say which the click supplies for a
-// target-click order; [07 §9] step 3 says the click issues "at the pointer's
-// world point", so this boundary supplies both and the goal term therefore
-// participates in a target-click match. If retail passes no goal there, a
-// repeat Shift-attack-click on a target that has moved more than one cell
-// since the order was queued would remove it where this build re-queues.
-// Deciding it needs a trace of the world-click handler's call into the
-// producer.
+// The world click supplies both terms (Established): outside the MOBILEBUILD
+// placement arm, which has its own commit, the world-click commit hands the
+// duplicate-testing producer the resolved ground point under the pointer
+// alongside the target handle for every latch. The goal term therefore
+// participates in a target-click match, exactly as this build assumes
+// [07 §9][07 R-P0-11 §6].
 //
 // TODO(question): whether the interface's non-world-click queued issues share
 // this producer. [07 R-P0-11 §6] scopes the test to "every world order the

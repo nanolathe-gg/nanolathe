@@ -61,6 +61,30 @@ func TestScoreTruncatesEachProductSeparately(t *testing.T) {
 	}
 }
 
+// TestWonLatchOnlySetsBitsAndLostLatchClearsTheFirstWinBit locks the two
+// terminal latch writes of [08 R-TRIG-01 §6] "Countdown and latch". The won
+// latch is three ORs — ending, 0x10, 0x20 — and clears nothing, so it leaves a
+// lose bit standing; the lost latch ORs 0x40 and clears 0x10 only, leaving
+// 0x20 wherever a prior win set it. The direction that used to be wrong is the
+// won one: it also cleared 0x40.
+func TestWonLatchOnlySetsBitsAndLostLatchClearsTheFirstWinBit(t *testing.T) {
+	l := NewEndLatch()
+	l.Bits = LatchBitLose
+	l.Win()
+	if l.Bits != LatchBitLose|LatchBitWin1|LatchBitWin2 {
+		t.Fatalf("won latch bits = %#x, want %#x — the won path clears nothing",
+			l.Bits, LatchBitLose|LatchBitWin1|LatchBitWin2)
+	}
+
+	l = NewEndLatch()
+	l.Bits = LatchBitWin1 | LatchBitWin2
+	l.Lose()
+	if l.Bits != LatchBitWin2|LatchBitLose {
+		t.Fatalf("lost latch bits = %#x, want %#x — the lost path clears 0x10 only",
+			l.Bits, LatchBitWin2|LatchBitLose)
+	}
+}
+
 // TestScoreClampsNegativeToZero locks the `< 0 → 0` clamp [08 R-CAMP-01 §7].
 func TestScoreClampsNegativeToZero(t *testing.T) {
 	if got := Score(0, -5, 600, 0); got != 0 {

@@ -398,6 +398,37 @@ func TestSchedulerZeroPlayersDoesNotAdvanceCadence(t *testing.T) {
 	}
 }
 
+// TestSchedulerReplenishPeriodIsExactlyTheInterval locks the period at the
+// boundary [04 §7.3]: the counter is incremented first and the quantum rebuild
+// fires on the call whose incremented value REACHES the interval, so every
+// 150th call rebuilds and zeroes the counter. A strict `>` made it every 151st.
+func TestSchedulerReplenishPeriodIsExactlyTheInterval(t *testing.T) {
+	s := newTestScheduler(nil, nil)
+	s.SetUnitLimit(1)
+	s.SetPlayerCount(1)
+	s.SetBase(1000)
+
+	// Call 149 of the period: the counter advances and nothing is rebuilt.
+	s.callCount = replenishInterval - 2
+	s.scales[0] = 0
+	s.Tick(0)
+	if s.callCount != replenishInterval-1 {
+		t.Fatalf("call %d left the counter at %d, want %d", replenishInterval-1, s.callCount, replenishInterval-1)
+	}
+	if s.scales[0] != 0 {
+		t.Fatalf("call %d rebuilt the quanta early (scale %d)", replenishInterval-1, s.scales[0])
+	}
+
+	// Call 150: the rebuild fires and the counter restarts at zero.
+	s.Tick(1)
+	if s.callCount != 0 {
+		t.Fatalf("call %d left the counter at %d, want 0", replenishInterval, s.callCount)
+	}
+	if s.scales[0] != 6000 {
+		t.Fatalf("call %d did not rebuild the quanta (scale %d, want 6000)", replenishInterval, s.scales[0])
+	}
+}
+
 func TestSchedulerActiveRequestKeepsReceivingPlayerShare(t *testing.T) {
 	calls := 0
 	s := newTestScheduler(func(Request, int32, int) WorkResult {

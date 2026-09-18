@@ -52,16 +52,20 @@ func ValidateSubtypeSize(code, sz int) bool {
 // UnitsAccount holds the unit and script records [08 "Unit and script records"].
 const UnitsAccount = "Units"
 
-// WriteUnitsHeader writes the Units account Version and Number of Units
-// scalars [P1-13 §3.4]. Version must be 0x11 for retail load to consider
-// units; other values skip whole Units non-transactionally [P1-13 §3.4].
+// WriteUnitsHeader writes the Units account's two deferred integer scalars in
+// the order retail's unit writer creates them: Number of Units first, then
+// Version [08 R-SAVE-02 §6]. The account writer emits its integer items in
+// array order, so the creation order is the emitted order. Version must be
+// 0x11 for retail load to consider units; other values skip whole Units
+// non-transactionally [P1-13 §3.4]. A load is unaffected either way — both
+// readers key by item name.
 func WriteUnitsHeader(b *Builder, count int) {
 	if b == nil {
 		return
 	}
 	ac := builderAccount(b, UnitsAccount)
-	ac.SetInt("Version", UnitsVersionRetail)
 	ac.SetInt("Number of Units", int32(count))
+	ac.SetInt("Version", UnitsVersionRetail)
 }
 
 // ReadUnitsHeader reads Version and Number of Units from the Units account

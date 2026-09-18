@@ -82,12 +82,10 @@ func newAIFixtureWorld(maxDefs int, cat *content.Catalog) *units.World {
 func aiFixtureOrderBinding(cat *content.Catalog, sim *rng.Simulation) *orders.QueueBinding {
 	return &orders.QueueBinding{
 		SimRNG: sim,
+		// Code 14's gate is list presence — the `builder` flag — not the
+		// entry count [04 R-ORD-02 §1]; the production binding answers the same.
 		BuildList: func(def *content.UnitDef) bool {
-			if def == nil || cat == nil || cat.BuildMenus == nil {
-				return false
-			}
-			page := cat.BuildMenus[content.CanonicalKey(def.CanonicalKey)]
-			return page != nil && len(page.Buttons) > 0
+			return def != nil && def.Builder
 		},
 	}
 }

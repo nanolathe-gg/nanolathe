@@ -1927,7 +1927,7 @@ func handleProjectileImpact(s *Service, h pool.Handle, p *Projectile, weapon *co
 			// under that second weapon flag [R-STRIP-01 §1 strip 9].
 			s.emitEvent(Event{
 				Kind: kind, Tick: tick, Source: p.Shooter, Position: p.Pos,
-				Graphic: graphic, Bank: bank, Smoke: weapon.StartSmoke,
+				Graphic: graphic, Bank: bank,
 				HasBlastProfile: true, BlastAreaOfEffect: weapon.AreaOfEffect, BlastDamage: weapon.DamageDefault,
 				// "the central impact passes (point, land or water holder, 0,
 				// waterCell) — so EVERY projectile impact, land or water, draws
@@ -2028,7 +2028,7 @@ func emitWaterCrossing(s *Service, h pool.Handle, p *Projectile, weapon *content
 		return
 	}
 	bank, graphic := impactArt(weapon, true, terrain)
-	s.emitEvent(Event{Kind: EventWaterExplosion, Tick: tick, Source: p.Shooter, Target: h, Position: p.Pos, Graphic: graphic, Bank: bank, HasCalculatedFlash: true, CalculatedTable: impactFlashTable, Smoke: weapon.StartSmoke})
+	s.emitEvent(Event{Kind: EventWaterExplosion, Tick: tick, Source: p.Shooter, Target: h, Position: p.Pos, Graphic: graphic, Bank: bank, HasCalculatedFlash: true, CalculatedTable: impactFlashTable})
 }
 
 // impactFeedback accumulates signed nominal amounts before packet narrowing

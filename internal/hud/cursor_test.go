@@ -333,3 +333,76 @@ func TestIdleCursorMatchesTheDefaultResolverRows(t *testing.T) {
 		}
 	}
 }
+
+// TestLiveMoverGatedRows locks the three shape-table rows that ask whether the
+// acting unit owns a locomotion controller, not merely whether its definition
+// authors `canmove` [07 §8]. The predicate is status bit 29, the same clause
+// command code 14 issues on [04 R-ORD-02 §1].
+//
+// The fixture pairs each definition with two actors: a mobile one (bit 29
+// clear) and a building-class one (bit 29 set), so each row is asserted in both
+// directions.
+func TestLiveMoverGatedRows(t *testing.T) {
+	// A factory authors `canmove` for its rally point and owns a build list,
+	// yet is building class; a construction vehicle is the mobile twin.
+	builderDef := &content.UnitDef{UnitName: "ARMCV", CanMove: true, Builder: true, CanReclamate: true}
+	towerDef := &content.UnitDef{UnitName: "ARMLLT", CanAttack: true}
+	gunshipDef := &content.UnitDef{UnitName: "ARMBRAWL", CanMove: true, CanAttack: true}
+
+	immobile := func(def *content.UnitDef) *units.Unit {
+		u := unit(0, def)
+		u.Flags |= units.BuildingClassStatus
+		return u
+	}
+	sel := func(us ...*units.Unit) CursorSelection {
+		return CursorSelection{Viewer: 0, Units: us}
+	}
+	friendFrame := unit(0, builderDef)
+	friendFrame.Remaining = 0.5
+
+	// Row 1 — MOBILEBUILD. ChooseCursor's placement branch owns this latch
+	// whenever the ghost is live, so the per-actor row is exercised directly.
+	if got := cursorForActor(input.LatchMobileBuild, unit(0, builderDef), CursorHover{OverWorld: true}, sel()); got != render.CursorFindSite {
+		t.Errorf("mobile builder = %d (%s), want cursorfindsite [07 §8]", got, render.CursorName(got))
+	}
+	if got := cursorForActor(input.LatchMobileBuild, immobile(builderDef), CursorHover{OverWorld: true}, sel()); got != render.CursorNormal {
+		t.Errorf("structure builder = %d (%s), want cursornormal [07 §8][04 R-ORD-02 §1]", got, render.CursorName(got))
+	}
+
+	// Row 2 — MOVE. The target arms need a live mover; the row's fallback is
+	// cursormove either way, so assert the arm that would otherwise fire.
+	h := CursorHover{OverWorld: true, Target: friendFrame}
+	if got := ChooseCursor(input.LatchMove, sel(unit(0, builderDef)), h); got != render.CursorRepair {
+		t.Errorf("mobile builder over an unfinished friend = %d (%s), want cursorrepair [07 §8]", got, render.CursorName(got))
+	}
+	if got := ChooseCursor(input.LatchMove, sel(immobile(builderDef)), h); got != render.CursorMove {
+		t.Errorf("factory over an unfinished friend = %d (%s), want cursormove [07 §8]", got, render.CursorName(got))
+	}
+	// The revive arm sits ahead of the gate, so it fires for either actor.
+	reviver := &content.UnitDef{UnitName: "ARMRECL", CanMove: true, CanResurrect: true}
+	wreck := CursorHover{OverWorld: true, Feature: &content.FeatureDef{Reclaimable: true}}
+	for _, actor := range []*units.Unit{unit(0, reviver), immobile(reviver)} {
+		if got := ChooseCursor(input.LatchMove, sel(actor), wreck); got != render.CursorRevive {
+			t.Errorf("revive over a wreck = %d (%s), want cursorrevive — the arm precedes the mover gate [07 §8]", got, render.CursorName(got))
+		}
+	}
+
+	// Row 3 — ATTACK. A live mover short-circuits to cursorattack with no range
+	// test; an immobile attacker takes the range-tested path, which this port
+	// cannot yet evaluate and so also answers cursorattack (the in-range
+	// answer). Both directions are locked so the gate is not silently dropped.
+	enemy := unit(1, gunshipDef)
+	attackHover := CursorHover{OverWorld: true, Target: enemy}
+	if !hasLiveMover(unit(0, gunshipDef)) {
+		t.Errorf("a gunship has no live mover [04 R-ORD-02 §1]")
+	}
+	if hasLiveMover(immobile(towerDef)) {
+		t.Errorf("a tower has a live mover [04 R-ORD-02 §1]")
+	}
+	if got := ChooseCursor(input.LatchAttack, sel(unit(0, gunshipDef)), attackHover); got != render.CursorAttack {
+		t.Errorf("mobile attacker = %d (%s), want cursorattack [07 §8]", got, render.CursorName(got))
+	}
+	if got := ChooseCursor(input.LatchAttack, sel(immobile(towerDef)), attackHover); got != render.CursorAttack {
+		t.Errorf("tower = %d (%s), want cursorattack pending the slot-0 range test [07 §8]", got, render.CursorName(got))
+	}
+}

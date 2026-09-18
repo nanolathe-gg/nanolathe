@@ -147,6 +147,64 @@ func TestKind2VictorySweepSkipsZeroLiveCountSlots(t *testing.T) {
 	}
 }
 
+// TestKind2VictorySweepIgnoresTheCommanderDeathRuleWord locks the missing
+// rule-word test of [08 R-TRIG-01 §6] "The kind-2 victory sweep": the sweep
+// has "no rule-word test", so a deathmatch (commander-death rule 2) skirmish
+// that eliminates every opponent wins. The early-out that returns false when
+// the rule word is 2 is the first step of the kind-3 alliance-aware sweep
+// [08 R-SKIR-01 §3] "Victory detection" and has no kind-2 site.
+//
+// The terminal due is the second half of the contract: rule 2 selects the
+// commander respawn only on the LOST path, so the won path latches the win
+// [08 R-TRIG-01 §6] "Countdown and latch".
+func TestKind2VictorySweepIgnoresTheCommanderDeathRuleWord(t *testing.T) {
+	w, def := eliminationFixtureWorld(t)
+	cfg := SkirmishConfig{MapName: "test", NumPlayers: 2}
+	cfg.ApplyDefaults()
+	cfg.CommanderDeath = int(CommanderDeathDeathmatch)
+	s := &Session{Units: w, Skirmish: cfg, State: StateBattle, Latch: NewEndLatch()}
+
+	if _, err := w.Create(def, 0, 0, 0, 0); err != nil {
+		t.Fatalf("create for owner 0: %v", err)
+	}
+	h, err := w.Create(def, 1, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create for owner 1: %v", err)
+	}
+	if s.EvaluateResult(1) || s.resultPending {
+		t.Fatalf("two live owners must not arm a result under rule 2")
+	}
+
+	w.Unit(h).Dying = true
+	if res := w.FinalizeDeath(h, 2); !res.Freed {
+		t.Fatalf("owner 1's unit was not finalized")
+	}
+	if s.EvaluateResult(2) {
+		t.Fatalf("the latch is not visible on the arming tick [08 R-TRIG-01 §6]")
+	}
+	if !s.resultPending {
+		t.Fatalf("rule 2 must not suppress the kind-2 elimination sweep")
+	}
+	if s.Latch.Pending != 1 {
+		t.Fatalf("latch pending = %d, want the won path [08 R-TRIG-01 §6]", s.Latch.Pending)
+	}
+	// Five more true dues take the shared countdown below zero; the won latch
+	// is written there and the rule word does not divert it to a respawn.
+	var latched bool
+	for tick := uint32(3); tick <= 2+150; tick++ {
+		if s.EvaluateResult(tick) {
+			latched = true
+			break
+		}
+	}
+	if !latched {
+		t.Fatalf("rule 2 victory did not latch within five dues, latch %+v", s.Latch)
+	}
+	if !s.Latch.IsWin() || s.GetResult().Kind != "victory" {
+		t.Fatalf("latched result = %+v, latch %+v, want a victory", s.GetResult(), s.Latch)
+	}
+}
+
 // TestLocalDefeatDoesNotWaitForTheLastOpponent is the defeat predicate of
 // [08 R-SKIR-01 §3] "Defeat detection" in the shape the old single-count fold
 // could not express: the local player is eliminated while two other players

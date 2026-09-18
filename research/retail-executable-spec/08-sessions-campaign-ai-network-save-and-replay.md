@@ -1011,7 +1011,7 @@ Commander fallback placement exists only on the multiplayer path (kind 3): two s
 
 #### Mission-unit creation
 
-Mission-unit creation during battle entry uses a two-pass sparse array. The loader allocates a created array sized by the unit count and zeroes it. Pass one walks the unit records in placement order from zero upward: it validates the unit type name exists, adjusts the authored player number from one-based to zero-based with a zero-to-one fixup, checks the same eligibility predicate used for start positions — a failure formats `Player number %d invalid for unit %s` into the modal fatal channel and terminates the process ([R-TRIG-01 §9]) — then runs a position fixup helper and the normal unit allocator. The allocator scans for the lowest free pool slot in the owning player's slice and can fail; on failure the entry stays null and no unit is created. Successful creation copies the immunity high bit into a runtime status bit, scales health by percentage, and copies the authored **facing angle** into the unit's heading word (build priority is parsed but never copied or read). Pass two walks the same order again and invokes the InitialMission interpreter only when the record carries a non-null script string and the corresponding created entry is non-null; the interpreter tokenizes the string and queues orders. A per-record creation countdown field is parsed but has no reader in the image; no delayed queue, cargo loop, or separate attachment pass exists beyond the immediate attach verb. Recursive reconstruction for linked or carried units uses the same allocator path for saves but not for fresh mission spawns. [P0-04] [P0-06] [lane 08 facing angle]
+Mission-unit creation during battle entry uses a two-pass sparse array. The loader allocates a created array sized by the unit count and zeroes it. Pass one walks the unit records in placement order from zero upward: it looks the unit type name up, adjusts the authored player number from one-based to zero-based with a zero-to-one fixup, checks the same eligibility predicate used for start positions — a failure formats `Player number %d invalid for unit %s` into the modal fatal channel and terminates the process ([R-TRIG-01 §9]) — then runs a position fixup helper and the normal unit allocator. An **unknown type name is not fatal**: the lookup returning nothing stores a null created-array entry and the walk moves to the next record, so only the player-number/eligibility failure terminates the process. The allocator scans for the lowest free pool slot in the owning player's slice and can fail; on failure the entry stays null and no unit is created. Successful creation copies the immunity high bit into a runtime status bit, stores the scaled health, and copies the authored **facing angle** into the unit's heading word (build priority is parsed but never copied or read). The stored health is `((maxHealth × healthPercent) unsigned-divided by 100) narrowed to 16 bits`: the multiply is **signed** on the sign-extended authored percentage word, the divide by 100 is **unsigned**, and only the low 16 bits are kept — so a negative authored percentage wraps to a large value instead of clamping. Those three writes plus the created-array entry are **all** this pass writes to a created unit: nothing at battle entry writes an experience value, a kill count or an order, and orders reach a mission unit only through pass two's `InitialMission` interpreter. Pass two walks the same order again and invokes the InitialMission interpreter only when the record carries a non-null script string and the corresponding created entry is non-null; the interpreter tokenizes the string and queues orders. A per-record creation countdown field is parsed but has no reader in the image; no delayed queue, cargo loop, or separate attachment pass exists beyond the immediate attach verb. Recursive reconstruction for linked or carried units uses the same allocator path for saves but not for fresh mission spawns. [P0-04] [P0-06] [lane 08 facing angle]
 
 Timing is fixed ([R-ENTRY-01 §1]–[R-ENTRY-01 §9] give every step): the mission loader's common tail runs, then the world rebuild, then for multiplayer a barrier pumps network state and sleeps fifty milliseconds until peers arrive, then start-position assignment stamps slots and commanders are created (with the kind-3 jitter described above) and resources are granted as floating-point metal and energy, then visibility and mapping are rebuilt, then the sparse two-pass spawner runs and the campaign camera is placed, then the main GUI is loaded, the per-player phase is primed once at tick 0, the grant is written again and the metal-spot lists are built, and only then does the first authoritative tick run. The InitialMission strings are therefore interpreted after every mission unit exists at its fixed-point position but before any creation script, movement, or visibility publication for that tick, and they never take a tick of their own. BetweenMissions handling for saves uses a bank account named Summary that carries a BetweenMissions flag; **the polarity is settled by the battle-entry save-blob gate: when the flag is absent (the in-battle marker) the loader runs the battle restoration dispatcher and skips the fresh spawner; when the flag is present the loader skips battle restoration and runs the fresh spawner — the campaign continuation rebuilds the mission from the authored mission file.** A BetweenMissions save contains only the Summary account, so the flag-present route could not restore a battle. [P0-04] [P0-05] [lane 08 BetweenMissions polarity]
 
@@ -1859,9 +1859,15 @@ nothing on poll except return S.
   and keeps going) and set S when the result is `< 1`.
 
 **One-shot versus repeating.** Every notification condition and the three
-`S`-guarded polls (`BuildUnitType`, `UnitTypePasses`, `AnyUnitPasses`,
-`MoveUnitToRadius`) latch: once S is set it is never cleared except by a
-save/load. `DestroyAllUnits`, `AllUnitsKilled` and the two timers are pure
+`S`-guarded poll families (`BuildUnitType`, `UnitTypePasses`, `AnyUnitPasses`)
+latch: once S is set it is never cleared except by a save/load.
+`MoveUnitToRadius` latches for the same reason — nothing clears its satisfied
+record — but it carries **no Satisfied guard**: the poll opens with the
+de-projection sentinel test and re-runs the whole partition scan on every poll,
+satisfied or not; its cue cannot replay only because the Celebrated flag guards
+it. An implementation may short-circuit on the satisfied flag, since the
+observable result is identical and only the rescan work differs.
+`DestroyAllUnits`, `AllUnitsKilled` and the two timers are pure
 predicates re-evaluated at every poll; if the enemy gains a unit after the
 count hit zero, `DestroyAllUnits` is false again until the next
 annihilation. Because victory is an AND across the queue and the shared
@@ -2575,8 +2581,10 @@ Every consumer of both counters is on the **kind-3** (multiplayer) branch of
 the block: the first decides between `You're out!  Continue Watching?` and
 the "hosting AI players" message and gates the whole watch-mode path together
 with the lobby's *watching allowed* bit; the second posts the watch-mode
-placement line and, at the top of the kind-3 block, steps the shared
-countdown toward the end latch when no human is left playing. Kinds 1 and 2
+placement line and steps the shared countdown toward the end latch when no
+human is left playing. That countdown step runs **after** the ten-slot
+per-player loop has finished, not at the top of the kind-3 block, and it is
+additionally skipped when the commander-death rule word is `2`. Kinds 1 and 2
 never call either counter, so a single-player engine needs neither; they are
 recorded so the boundary is explicit ([R-OOS-01]).
 
@@ -5461,7 +5469,9 @@ Directly observed custom state includes:
 A malformed custom payload has a hang path in the retail decoder (retail
 defect preserved).
 
-The 31-tick future window is not proof of a universal 30-tick input delay. A
+The future window is **30** ticks, not 31: the withheld deltas are 1 through
+30 inclusive, and delta 0 is delivered ([01 §6.2]). That window is not proof of
+a universal 30-tick input delay. A
 separate value of thirty appears in delayed gameplay queues and in the tick-tag
 cadence. Until header and scheduler fields are fully closed, command delay and
 retention window must remain distinct concepts.
@@ -6004,7 +6014,7 @@ The account and entry names below come from the save writers themselves.
 | `Summary` | dynamic `BUILD DATE:`/`BUILD TIME:` keys (integer 0), `maxunits`, `Campaign`, `Mission`, `Map`, `Difficulty`, `Side`, `Players`, `Gametype`, `Thumbs`, multiplayer-only `CommanderDeath`, `Location`, `Mapping`, `LineOfSight`, `LineOfSightType`, `BetweenMissions` (=1 on non-battle saves), `Description`, `Game ID`, `Game Time`, and the live-battle-only `Radar Image` box |
 | `Camera` | `X Position`, `Z Position` |
 | `Players` | `Human Player`, `GameTime`, and per slot `Player%i` with `Controller`, `Energy`, `Metal`, `TotalEnergyProduced`, `TotalMetalProduced`, `TotalEnergyConsumed`, `TotalMetalConsumed` |
-| `Units` | `Version`, `Number of Units`, per-unit records, per-unit `Script%i` script state, and a per-unit key formatted as `u%04xm%04x` |
+| `Units` | `Number of Units`, `Version` (in that emission order, [R-SAVE-02 §6]), per-unit records, per-unit `Script%i` script state, and a per-unit key formatted as `u%04xm%04x` |
 | `Features` | `Feature Type Names`, then three parallel groups: `Number of Normal Features` with `Normal Features`, `Number of Animating Features` with `Animating Features`, and `Number of 3D Features` with `3D Features` |
 | `Metal` | `Plotmap` |
 | `PlayerFeatures` | `Plotmap` |
@@ -6197,7 +6207,7 @@ whose semantics an implementation does not consume are preserved verbatim.
 
 | Save bytes | Wire form | Meaning and restore disposition |
 |---|---|---|
-| `0x00..0x1F` | 32-byte NUL-padded text | Unit definition name. It is the definition lookup key. [Established] |
+| `0x00..0x1F` | 32-byte field holding NUL-**terminated** text | Unit definition name. It is the definition lookup key, and the reader treats the field as a C string. The writer assembles the record in a stack frame it never zeroes and copies the name plus its terminator, so in a retail file the bytes **after** the terminator are writer-frame residue — for every unit after the first, the tail of the previous unit's name. An implementation may zero-fill them, but must not expect retail files to, and must not hash the raw field. [Established] |
 | `0x20` | `u8` | Source owner/player byte. It is part of the base identity and must be validated against the player slice used for the forced allocation. [Established for the wire field; exact malformed-value policy is Unknown] |
 | `0x21..0x22` | `u16` | Stable unit ID and forced pool slot. Zero is the null sentinel; a live unit may not use slot zero. [Established] |
 | `0x23..0x26` | `u32` | Count of order/build records associated with this unit. The records themselves are restored by the later order pass. [Established] |
@@ -7215,7 +7225,10 @@ base. Per unit, in this order: the `Script%i` box
 list, sequence numbers continuing across both — then `u%04xmob` (§8) when
 the unit owns a mover, `u%04xacc` (§7), and finally the 184-byte base
 record as numbered box `i`. `Number of Units` and `Version` (= `0x11`) are
-written **after** the loop and **only when at least one unit was written**;
+written **after** the loop and **only when at least one unit was written**,
+and in that order — `Number of Units` is created first, and because the
+account writer emits integer items in creation order, that is also the order
+they occupy in the account body (load is unaffected, the items are name-keyed);
 a battle with no live unit therefore produces a `Units` account with no
 `Version`, and the loader's version gate skips it. `Script%i` is numbered by
 `i` (the numbered-box index), while the three `u%04x…` keys are numbered by
@@ -7723,6 +7736,13 @@ is **greater than zero** (empty boxes leave nothing), then the box payloads in
 descriptor order; finally it rewrites the account header with the counts and
 the stored span. The string pool begins with the bank tag
 (`Total Annihilation 3.0`), so the header's tag offset is always 0.
+
+**Established — bounded negative: no checksum.** The writer computes and
+stores no checksum, and the 34-byte header carries no checksum field: between
+the first header write and the close there is no accumulation, no rolling sum,
+no CRC table read and no second pass over the payload. A clone must not add
+one, and a reader must not expect to validate a retail bank by anything but
+the magic, the tag and the version.
 
 **Established — compression.** After an account body is written, and again
 for the string pool, the writer runs the archive compressor on it as one

@@ -718,8 +718,9 @@ func (m *Manager) constructionPlacePass(tick uint32, w *units.World, econ *econo
 // reject sentinel [04 §3.4][08 R-AI-01 §3]. Two things follow that a coalescing
 // tail append does not have:
 //
-//   - code 14's capability gate applies — the builder's compiled build list must
-//     be non-empty AND the builder must carry a live mover, so an immobile
+//   - code 14's capability gate applies — the builder's compiled build-option
+//     list must be present (every `builder` definition has one) AND the
+//     builder must carry a live mover, so an immobile
 //     builder that reached the construction group rejects [04 R-ORD-02 §1];
 //   - the issue is a replacement, so the builder's unprotected front-segment
 //     records are freed first, whether the command resolved or not. A rejected

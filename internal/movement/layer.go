@@ -48,13 +48,16 @@ const (
 // [03 R-LAYER §1]. ok is false when no grid is bound or the index falls outside
 // the allocation.
 //
-// The grid belongs to the visibility publisher, not to this package: it has
-// exactly three writers — the map-load zero (or all-ones) fill, the bulk
-// wipe-and-rebuild and the phase-5 per-player LOS stamp — and NO
-// occupancy-commit writer, so a movement-side copy would stay all-zero forever
-// and the search's bit-miss value would never occur [04 R-PATH-01 §14]
-// [03 R-LAYER §1]. The class layer therefore holds a VIEW of the publisher's
-// array through this port, never an array of its own.
+// The grid belongs to the visibility publisher, not to this package: its
+// closed writer census is five — the map loader's allocate-and-zero (or
+// all-ones) fill, the bulk wipe-and-rebuild, the phase-5 per-player LOS
+// stamp sweep, the two-slot mapping-share routine (not on a single-player
+// path) and the saved-game restore, which copies the save's `Mapping` box
+// straight into the array — and NO occupancy, unit, feature or construction
+// writer, so a movement-side copy would stay all-zero forever and the search's
+// bit-miss value would never occur [04 R-PATH-01 §14][03 R-LAYER §1]. The class
+// layer therefore holds a VIEW of the publisher's array through this port,
+// never an array of its own.
 type MappingWordSource func(tileX, tileZ int32) (uint16, bool)
 
 // ClassLayer is one movement class's stamped layer: the class record (the

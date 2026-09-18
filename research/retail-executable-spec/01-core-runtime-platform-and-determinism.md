@@ -1459,13 +1459,22 @@ later occupant after reuse.
 
 ### 6.2 Established queues
 
-- Per-unit local order nodes are 86 bytes and attach to a per-unit chain. A
-  ten-slot delayed order ring is used by the order path. Same-type/target
-  duplicates can replace or coalesce; cancellation splices and frees nodes.
-  Orders are serialized inside unit records rather than as a separate saved
-  queue.
-- The network future-frame window is 30 frames. A sequence outside the accepted
-  window, a duplicate below the base, or an unauthorized host frame is dropped.
+- Per-unit local order nodes are 86 bytes and attach to a per-unit chain.
+  Same-type/target duplicates can replace or coalesce; cancellation splices and
+  frees nodes. Orders are serialized inside unit records rather than as a
+  separate saved queue. Whether the order path also owns a ten-slot delayed
+  ring is **Unknown**: no such structure was located, and every ten-way
+  comparison in the order module resolves to the ten **player slots**. The
+  delayed order-side mechanisms that are Established are the deadlines stored
+  on the order node itself ([04 §3.3]) and the network future ring below.
+- The network future-frame window is 30 frames, and an entry inside it is
+  **withheld, not dropped**: when the head entry's tick tag is 1 to 30 ticks
+  ahead of the current tick the drain leaves the record in place with both ring
+  indices untouched and skips that peer for this drain, and the entry is
+  re-examined on later ticks; it is applied on the first tick where
+  `tag − tick ≤ 0`, so the stamped tick and every tick after it deliver (a
+  non-strict test from the tick's side). Tick 0 withholds nothing. A duplicate
+  below the base, or an unauthorized host frame, is dropped.
   The outbound packet queue is 1024 entries and per-peer future storage is 512
   entries; a datagram carries exactly 1,066 bytes (the same constant appears as
   the buffer size, as a stored field and as the size limit the send path
@@ -1473,10 +1482,35 @@ later occupant after reuse.
   overflow policy is **drop-newest** (Established): the push compares the live
   entry count against 1024 with a signed compare and, when it is at or above
   capacity, returns failure **before** touching the write index — nothing is
-  overwritten and neither index moves.
-- Path requests are per-player linked queues. A search drains at most 100 nodes
-  per pass; a 150-tick deadline is also recorded. Duplicate goals can overwrite
-  an existing request.
+  overwritten and neither index moves. The per-peer receive ring is
+  **drop-newest** on the same shape (Established): entries are twelve bytes,
+  the push compares the live entry count against 512 with a signed compare and
+  returns without storing when it is at or above capacity, the count is
+  incremented only after an entry is stored, and both the read and the write
+  index wrap at 512. Neither capacity is observable in a peerless session: the
+  drain walks at most ten peer slots and stops at the first slot whose peer
+  identity word is −1, so a session with no registered peers exits on its first
+  iteration and never reaches a ring.
+- Path search is a single global **working set**, not a queue. One search is
+  latched at a time, and a second unit's request cannot start until the latched
+  one publishes, exhausts its heap or is released. When nothing is latched the
+  scheduler visits the ten player slots round-robin, skipping any slot whose
+  step accumulator is not positive, advances that player's unit cursor by
+  exactly one unit with wraparound (from a player's last record back to its
+  first), and polls that unit's route follower; [04 §7.3] and
+  [04 R-PATH-01 §6] own the algorithm and its charges. The 100-node bound is
+  per scheduler **iteration** — an iteration keeps popping while its step
+  charge is below 100 — and the outer loop re-enters the **same** latched
+  request while the call-local step total stays positive, so one search can
+  take several consecutive 100-node slices inside one scheduler call. No
+  request carries a deadline: the scheduler keeps one call counter, and when
+  the incremented counter **reaches** 150 the counter is zeroed and the ten
+  per-player heuristic quanta are rebuilt; a latched search is never expired,
+  and a search that outlives its tick stays latched with its heap intact.
+  Whether any site overwrites an existing request on a duplicate goal is
+  **Unknown**: with one latched request and no request queue there is no such
+  site, and the nearest Established behaviour is the follower's own goal
+  rebinding ([04 §3.3]).
 - The post-loop ring is the in-battle **message ring**: a 30-entry circular
   window of 72-byte records, each a 64-byte text line plus its post tick,
   source unit, silence byte and class nibble. After the tick body, **when** the
@@ -2695,7 +2729,17 @@ stated in the body, not here.
 - Overflow and linked-list cycle defence of the **simulation** queue families
   (order chains, path requests, the network window), and whether same-tick
   inserts are drained immediately or deferred, per family · §6.2, §6.3,
-  docs 04 and 08 · static trace.
+  docs 04 and 08 · static trace. The two network rings' overflow policies are
+  now established in §6.2 and are excluded from this item.
+- Whether the order path owns a ten-slot delayed ring at all: no such structure
+  was located and every ten-way comparison in the order module resolves to the
+  ten player slots · §6.2, doc 04 · enumerate the stores of the global tick
+  plus a constant into a ten-element table in the order module, or confirm the
+  claim was a transcription of the player slots and drop it.
+- Which site, if any, the "duplicate goal overwrites an existing request"
+  reading described; the scheduler holds one latched request and no queue
+  · §6.2, doc 04 · name the routine, or repoint the reading at the follower's
+  goal rebinding in [04 §3.3].
 - Remaining save box-level field maps beyond the order/task nodes, feature
   records, stockpile state, meteor globals and player economy stock already
   established as serialized · §7.3 "Scheduler persistence", doc 08 · static

@@ -2530,9 +2530,11 @@ func (s *System) searchFunc(r path.Request, scale int32, budget int) path.WorkRe
 			// the visibility publisher's per-player grid through the
 			// MappingWord port, which is the only array retail has: the
 			// mapping grid's complete writer set is the map-load fill, the
-			// bulk rebuild and the phase-5 LOS stamp, and no occupancy commit
-			// writes it, so a movement-side copy would stay all-zero and the
-			// unmapped value 2 would never occur [04 R-PATH-01 §14]
+			// bulk rebuild, the phase-5 LOS stamp sweep, the two-slot
+			// mapping-share routine (not on a single-player path) and the
+			// saved-game restore, and no occupancy commit writes it, so a
+			// movement-side copy would stay all-zero and the unmapped value 2
+			// would never occur [04 R-PATH-01 §14]
 			// [03 R-LAYER §1]. With the real grid bound, ground the requesting
 			// player has never mapped returns 2 and expands without the
 			// terrain layer being read at all — retail's optimistic pathing
@@ -3275,9 +3277,10 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	// [04 §6.1 R-DOC04-B] sees it. The same-cell fast path commits the
 	// transform without restamping occupancy [04 §8.2] C23, so it writes
 	// no commit tick.
-	// The path search reads the visibility mapping grid, whose writers are
-	// map loading, bulk rebuilding and phase-5 LOS stamping; occupancy does
-	// not write that grid [04 R-PATH-01 §14].
+	// The path search reads the visibility mapping grid, whose five writers are
+	// map loading, bulk rebuilding, the phase-5 LOS stamp sweep, the
+	// two-slot mapping-share routine and the saved-game restore; occupancy does
+	// not write that grid [04 R-PATH-01 §14][03 R-LAYER §1].
 	if !isBlocked && !fastPath {
 		// Step (1) of the success branch is a footprint clear, so it owes
 		// the class-layer maintenance of [04 R-COLL-01 §4] on the rectangle

@@ -78,13 +78,14 @@ func TestRS10_MobileBuildLegalSite(t *testing.T) {
 }
 
 // TestRS10_MobileBuildBlockedAreaBudget verifies the mobile-build blocked-area
-// budget at the construction layer [RS-10][R-ORDER-02 §1]: each blocked visit
-// notifies "Waiting for target area to clear" through the status sink,
+// budget at the construction layer [RS-10][04 §5 MobileBuild][R-ORDER-02 §1]:
+// the FIRST blocked visit notifies "Waiting for target area to clear" through
+// the status sink and visits 2..11 are silent, while every one of them
 // increments the record's third parameter ([04 §3.2] assigns it to the retry
-// counter), and waits EXACTLY 30 ticks with no random draw while the counter
-// is at most 10; the first blocked visit with the counter above 10 notifies
-// "Target area was blocked" and abandons the order. Eleven 30-tick waits,
-// then give-up on visit twelve.
+// counter) and waits EXACTLY 30 ticks with no random draw as long as the
+// counter is at most 10; the first blocked visit with the counter above 10
+// notifies "Target area was blocked" and abandons the order. Eleven 30-tick
+// waits, then give-up on visit twelve.
 func TestRS10_MobileBuildBlockedAreaBudget(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	builderDef := &content.UnitDef{UnitName: "armck", FootprintX: 2, FootprintZ: 2, YardMap: "oooo", Builder: true, MaxDamage: 100, WorkerTime: 30, CanMove: true}
@@ -149,7 +150,9 @@ func TestRS10_MobileBuildBlockedAreaBudget(t *testing.T) {
 	if node.Param3 != 1 || node.Deadline != int32(130) || len(sinkTexts) != 1 {
 		t.Fatalf("wait was not honored: counter %d deadline %d sink %d", node.Param3, node.Deadline, len(sinkTexts))
 	}
-	// Visits 2..11 at the exact 30-tick cadence, each waiting again.
+	// Visits 2..11 at the exact 30-tick cadence, each waiting again and each
+	// SILENT: only the counter-is-zero arm reaches the caption, and these
+	// visits enter the shared retry tail directly [04 §5 MobileBuild].
 	for visit := 2; visit <= 11; visit++ {
 		tick := uint32(100 + (visit-1)*30)
 		svc.Pump(builder, tick)
@@ -159,8 +162,8 @@ func TestRS10_MobileBuildBlockedAreaBudget(t *testing.T) {
 		if node.Deadline != int32(tick+30) {
 			t.Fatalf("visit %d deadline %d, want %d", visit, node.Deadline, tick+30)
 		}
-		if len(sinkTexts) != visit || sinkTexts[len(sinkTexts)-1] != orders.MobileBuildWaitingText {
-			t.Fatalf("visit %d sink %v", visit, sinkTexts)
+		if len(sinkTexts) != 1 {
+			t.Fatalf("visit %d sink %v, want the first visit's caption only", visit, sinkTexts)
 		}
 	}
 	if len(svc.BuilderLinks()) != 0 {
@@ -171,8 +174,8 @@ func TestRS10_MobileBuildBlockedAreaBudget(t *testing.T) {
 	if q.LenPrimary() != 0 {
 		t.Fatalf("give-up must abandon the order, %d records remain", q.LenPrimary())
 	}
-	if len(sinkTexts) != 12 || sinkTexts[11] != orders.MobileBuildBlockedText {
-		t.Fatalf("visit 12 sink %v, want the give-up text last", sinkTexts)
+	if len(sinkTexts) != 2 || sinkTexts[1] != orders.MobileBuildBlockedText {
+		t.Fatalf("visit 12 sink %v, want the first caption then the give-up text", sinkTexts)
 	}
 	if len(svc.Messages()) != 0 {
 		t.Fatalf("give-up must not log diagnostics, got %v", svc.Messages())

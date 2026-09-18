@@ -625,13 +625,15 @@ func TestResolveFullTable(t *testing.T) {
 	}
 	setTestHostility(actor, nil)
 
-	// Code 14 gates on the definition's compiled build list being non-empty,
-	// never on the authored `builder` key [04 R-ORD-02 §1]. The query is the
-	// session-owned catalog seam; an empty page is a reject.
-	actorEmptyList := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.Builder = true }))
-	setTestBuildList(actorEmptyList, func(*content.UnitDef) bool { return false })
-	if id := Resolve(14, actorEmptyList, nil, nil); id != 0 {
-		t.Fatalf("code14 with an empty build list should reject, got %q", DescriptorFor(id).Name)
+	// Code 14 gates on the definition's compiled build-option list being
+	// PRESENT, which is the authored `builder` key: the compiler allocates the
+	// block for every `builder` definition, empty menu or not [04 R-ORD-02 §1]
+	// [07 §8]. A definition without the key has no block and is rejected;
+	// TestCode14ReadsTheBuildListPresence carries the empty-menu half.
+	actorNoList := mkUnit(1, 0, "ARM", 100, 100, true, 0, mkDef(func(d *content.UnitDef) { d.Builder = false }))
+	setTestBuildList(actorNoList, func(def *content.UnitDef) bool { return def != nil && def.Builder })
+	if id := Resolve(14, actorNoList, nil, nil); id != 0 {
+		t.Fatalf("code14 without a build-option list should reject, got %q", DescriptorFor(id).Name)
 	}
 	setTestBuildList(actor, func(*content.UnitDef) bool { return true })
 	id = Resolve(14, actor, nil, nil)

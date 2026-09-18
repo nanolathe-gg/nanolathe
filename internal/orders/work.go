@@ -1369,15 +1369,10 @@ func finishFeatureReclaim(u *units.Unit, cx, cz int) {
 	// fixture that does not compose a session gets.
 	reclaim := features.ReclaimTransition
 	if binding := q.Binding(); binding != nil && binding.ReclaimFeature != nil {
-		// The service twin's entry is the ANCHOR cell (binding.go), so the hop
-		// the terrain-only helper makes for itself happens here instead.
-		reclaim = func(t *world.Terrain, cx, cz int) (float32, float32, bool) {
-			if t != nil {
-				if cell := t.PlotAt(int32(cx), int32(cz)); cell != nil && cell.IsFringe() {
-					cx += int(cell.AnchorDXSigned())
-					cz += int(cell.AnchorDZSigned())
-				}
-			}
+		// The service twin now takes the recorded position and makes the hop for
+		// itself, exactly as the terrain-only helper does, so both payouts read
+		// the guard's cell bit from the same cell [05 R-FEAT-01 §15].
+		reclaim = func(_ *world.Terrain, cx, cz int) (float32, float32, bool) {
 			return binding.ReclaimFeature(cx, cz)
 		}
 	}

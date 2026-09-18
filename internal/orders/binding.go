@@ -59,8 +59,10 @@ type QueueBinding struct {
 	// owner of these values [04 R-ORD-01 §4][05 "Player slot"].
 	Resources func(uint8) (ResourceView, bool)
 
-	// ReclaimFeature settles a finished feature reclaim at an anchor cell: it
-	// reports the pools to credit and rewrites the cell [05 R-WORK-01 §5]. The
+	// ReclaimFeature settles a finished feature reclaim at the cell the order
+	// recorded (the payout guard reads that cell's bit before hopping to the
+	// anchor [05 R-FEAT-01 §15]): it reports the pools to credit and rewrites
+	// the anchor [05 R-WORK-01 §5]. The
 	// session binds it to the feature service, whose transition plays a
 	// `seqnamereclamate` sequence out before the successor is stamped
 	// [05 R-FEAT-01 §5]; the order package holds no service handle, so this is
@@ -69,13 +71,15 @@ type QueueBinding struct {
 	// one — see finishFeatureReclaim.
 	ReclaimFeature func(cx, cz int) (metal, energy float32, ok bool)
 
-	// BuildList reports whether a definition's compiled build list holds at
-	// least one entry. It is command code 14's whole gate: "the definition's
-	// build list is non-empty and a live mover exists" [04 R-ORD-02 §1], NOT
-	// the authored `builder` key. The list is the `CANBUILD` page of
-	// gamedata/sidedata.tdf, compiled into content.Catalog.BuildMenus
-	// [02 "Build-menu catalog keys"]; the order package holds no catalog
-	// handle, so the session supplies the query.
+	// BuildList reports whether a definition carries a compiled build-option
+	// list at all. It is the first half of command code 14's gate — "the
+	// definition's compiled build-option list is present and a live mover
+	// exists" [04 R-ORD-02 §1] — an existence test on the list block and not a
+	// test of its entry count. The catalog compiler allocates that block for
+	// exactly the definitions whose authored `builder` key is set, whether or
+	// not any `CANBUILD` entry names them [07 §8], so the answer a composition
+	// supplies here is the `builder` flag. A builder whose compiled menu is
+	// empty still passes.
 	BuildList func(*content.UnitDef) bool
 
 	// TransportAdmission is the carriable test — §10.2's nine-reject transport

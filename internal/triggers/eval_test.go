@@ -347,6 +347,43 @@ func TestMoveUnitToRadius(t *testing.T) {
 	}
 }
 
+// TestMoveUnitToRadiusRescansWithoutReplaying locks the poll shape of
+// [08 R-TRIG-01 §4]: MoveUnitToRadius has no Satisfied guard, so the partition
+// scan re-runs on every poll. What stays observable across that rescan is the
+// latch (nothing clears Satisfied, so a unit that leaves the radius does not
+// un-satisfy the condition), the one-shot cue (Celebrated guards it) and the
+// one-shot de-projection (the centre sentinel guards it).
+func TestMoveUnitToRadiusRescansWithoutReplaying(t *testing.T) {
+	w := triggerWorld(t)
+	u := spawn(t, w, "ARMCOM", 0, 105, 200)
+	cues, deprojections := 0, 0
+	c := pollCtx(w, 0)
+	c.Celebrate = func() { cues++ }
+	inner := c.Deproject
+	c.Deproject = func(x, z int32) (int32, int32, int32) {
+		deprojections++
+		return inner(x, z)
+	}
+
+	tr := New(KindMoveUnitToRadius, "ARMCOM", 100, 200, 10)
+	if !tr.Poll(c) {
+		t.Fatal("unit inside the radius should satisfy the condition")
+	}
+	// Move the unit far outside the radius, then keep polling.
+	u.X = numeric.Fixed(int64(9000) << 16)
+	for i := 0; i < 4; i++ {
+		if !tr.Poll(c) {
+			t.Fatalf("poll %d un-satisfied a latched condition", i+2)
+		}
+	}
+	if cues != 1 {
+		t.Fatalf("cue fired %d times, want exactly 1 — Celebrated guards the replay", cues)
+	}
+	if deprojections != 1 {
+		t.Fatalf("centre de-projected %d times, want exactly 1 — the sentinel guards it", deprojections)
+	}
+}
+
 // TestEvaluateCombination locks victory-AND, defeat-OR and victory-first
 // [08 "Evaluation"].
 func TestEvaluateCombination(t *testing.T) {

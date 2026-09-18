@@ -25,12 +25,13 @@ func (b *battleSession) syncSelectionDrag(cl *client.Client) {
 	}
 	state := b.battleState()
 	in := state.Input
-	// The outer colour is chosen by the armed latch, not by the fact that a
-	// drag is running: an ordinary selection drag is white (logical entry 15),
-	// and only an armed MOBILEBUILD latch takes the 6/4 pair
-	// [07 R-P0-11 §1 "The drawing."][07 §6 "Frame composition passes"].
-	// Passing DragActive as the box-mode selector made every drag take entry 4
-	// — a dark red — and left the entry-15 branch unreachable.
+	// The colour is chosen by the armed latch, not by the fact that a drag is
+	// running: an ordinary selection drag is white (logical entry 15 outer over
+	// entry 0 inner), and only an armed MOBILEBUILD latch takes the validity
+	// pair, 10 for a legal site and 4 for an illegal one on both of its frames
+	// [07 §9 "Build placement is closed"]. Passing DragActive as the box-mode
+	// selector made every drag take entry 4 — a dark red — and left the
+	// entry-15 branch unreachable.
 	cl.SetSelectionDrag(client.SelectionDrag{
 		Active:           in.DragActive,
 		StartX:           in.DragStartX,
@@ -38,12 +39,13 @@ func (b *battleSession) syncSelectionDrag(cl *client.Client) {
 		EndX:             in.DragEndX,
 		EndY:             in.DragEndY,
 		MobileBuildLatch: in.Latch == input.LatchMobileBuild,
-		// Latch-flag bit 0x40 is the pointer-flags byte's **site-valid** bit,
-		// and it has exactly one writer: the in-view placement preview, which
-		// the frame handler runs only when the pointer is over the view and
-		// the latch is MOBILEBUILD; the world rebuild clears it
-		// [07 R-CAM-01 §14 step 1]. This build's placement verdict is that
-		// bit, so the drag box's colour follows the same word the placement
+		// Retail holds this in one interface flags byte, not two: bit 3 of
+		// that byte is the button gate every order-button arm clears, and
+		// bit 6 is the **site-valid** bit written by the in-view placement
+		// preview — which the frame handler runs only when the pointer is
+		// over the view and the latch is MOBILEBUILD — and cleared by the
+		// world rebuild [07 R-CAM-01 §14]. This build's placement verdict is
+		// that bit, so the ghost's colour follows the same byte the placement
 		// cursor and the build click read [07 §9].
 		SpecialLatchFlag: in.BuildOK,
 		VisiblePanel:     state.PanelOffset == ui.PanelVisible,

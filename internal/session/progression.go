@@ -113,10 +113,14 @@ func (l *EndLatch) AdvanceLose(isDeadlineDue bool) bool {
 	return false
 }
 
-// Win sets win bits 0x10|0x20 and clears lose [P0-05][P1-01].
+// Win sets the two win bits and clears nothing [P0-05][P1-01]. The won latch
+// of the kinds-2/3 end-condition block is three ORs — ending, 0x10, 0x20 —
+// with no AND anywhere on the path [08 R-TRIG-01 §6] "Countdown and latch",
+// unlike Lose below, which does clear 0x10. The lose bit is written only by
+// the terminal lost latch, so the clear that used to stand here was
+// unreachable as well as wrong.
 func (l *EndLatch) Win() {
 	l.Bits |= LatchBitWin1 | LatchBitWin2
-	l.Bits &^= LatchBitLose
 }
 
 // Lose sets lose bit 0x40 and clears win bit 0x10 [P0-05][P1-01][08 "Evaluation"].

@@ -112,8 +112,12 @@ func TestRetailProjectionUnitsEmitPerUnitAndDeferHeader(t *testing.T) {
 	if ac == nil {
 		t.Fatal("Units account missing")
 	}
-	if len(ac.Ints) != 2 || ac.Ints[0].Name != "Version" || ac.Ints[1].Name != "Number of Units" {
-		t.Fatalf("Units header items = %+v, want deferred Version then Number of Units", ac.Ints)
+	// Retail's unit writer creates Number of Units first and Version second,
+	// after the per-unit loop and only when at least one unit was written
+	// [08 R-SAVE-02 §6]; the account writer emits integer items in array
+	// order, so that is the emitted order too.
+	if len(ac.Ints) != 2 || ac.Ints[0].Name != "Number of Units" || ac.Ints[1].Name != "Version" {
+		t.Fatalf("Units header items = %+v, want deferred Number of Units then Version", ac.Ints)
 	}
 	wantBoxes := []string{"Script0", "u0007m0000", "u0007mob", "u0007acc", "", "Script1", "u0009acc", ""}
 	if len(ac.Boxes) != len(wantBoxes) {
