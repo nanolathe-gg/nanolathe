@@ -31,6 +31,11 @@ type QueueBinding struct {
 	// Nanolathe Modern policy: DESIGN_MOVEMENT_PATH §3.4.1.
 	ModernBomberPass bool
 
+	// ModernGuardAssistance enables aircraft pad visits and nearby builder work.
+	// Projected from gameplay.Mode; false preserves Strict 3.1.
+	// Nanolathe Modern policy: DESIGN_UNITS_ORDERS_COB "Modern guard assistance".
+	ModernGuardAssistance bool
+
 	Economy interface {
 		UnitBuckets(pool.Handle) *[2]economy.Bucket
 	}
@@ -273,6 +278,10 @@ type WorkAdapter struct {
 	Repair    func(builder, patient *units.Unit, node *Node, tick uint32) bool
 	Capture   func(*units.Unit, *Node, uint32) bool
 	Resurrect func(*units.Unit, *Node, uint32) bool
+	// CanResurrectFeature is a read-only reclaimable-feature and corpse-name
+	// catalog query. Modern guard scans use it before issuing work; allocation
+	// and feature removal remain exclusively in Resurrect.
+	CanResurrectFeature func(FeatureView) bool
 	// CancelNotice is the receiver for the cleanup cancel notification of
 	// [R-ORDER-02 §2] on behalf of the records this package does not hold a
 	// handler for. cleanupNode's guard — the record's dynamic gate still holding

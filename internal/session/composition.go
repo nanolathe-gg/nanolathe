@@ -964,13 +964,14 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 		}
 	}
 	return &orders.QueueBinding{
-		ModernHoldFire:   s.Gameplay.Normalize() == gameplay.Modern,
-		ModernBomberPass: s.Gameplay.Normalize() == gameplay.Modern,
-		Damage:           s.acceptDamage,
-		Economy:          s.Econ,
-		Lookup:           worldQueries.LookupUnit,
-		Hostility:        worldQueries.Hostile,
-		SimRNG:           s.SimRNG(),
+		ModernHoldFire:        s.Gameplay.Normalize() == gameplay.Modern,
+		ModernBomberPass:      s.Gameplay.Normalize() == gameplay.Modern,
+		ModernGuardAssistance: s.Gameplay.Normalize() == gameplay.Modern,
+		Damage:                s.acceptDamage,
+		Economy:               s.Econ,
+		Lookup:                worldQueries.LookupUnit,
+		Hostility:             worldQueries.Hostile,
+		SimRNG:                s.SimRNG(),
 		CurrentTick: func() uint32 {
 			if s.Clock == nil {
 				return 0
@@ -1127,6 +1128,16 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 			},
 			Resurrect: func(builder *units.Unit, n *orders.Node, _ uint32) bool {
 				return s.resurrectStep(builder, n, worldQueries.LookupFeature)
+			},
+			// Modern guard searches must skip scenery that cannot resolve to
+			// a resurrectable unit, before installing a work order. This is a
+			// read-only version of resurrectStep's corpse-name lookup.
+			CanResurrectFeature: func(view orders.FeatureView) bool {
+				if !view.Reclaimable || s.Catalog == nil {
+					return false
+				}
+				def, found := s.Catalog.Unit(construction.FeatureNameToDefName(view.DefinitionKey))
+				return found && def != nil
 			},
 			// Interrupt mask 2's producer. The record-removal cleanup delivers
 			// the cancel-current notification to the operation handler when the

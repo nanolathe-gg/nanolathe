@@ -15,6 +15,7 @@ func (s *Session) SetGameplay(mode gameplay.Mode) {
 		if s.Build.OrderBinding != nil {
 			s.Build.OrderBinding.ModernHoldFire = s.Gameplay == gameplay.Modern
 			s.Build.OrderBinding.ModernBomberPass = s.Gameplay == gameplay.Modern
+			s.Build.OrderBinding.ModernGuardAssistance = s.Gameplay == gameplay.Modern
 		}
 	}
 }

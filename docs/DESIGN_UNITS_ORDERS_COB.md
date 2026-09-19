@@ -325,6 +325,65 @@ owned by [DESIGN_WEAPONS_PROJECTILES.md §2.6.1](DESIGN_WEAPONS_PROJECTILES.md#2
 Tests preserve queued attack/guard records, verify ground and aircraft guard
 combat-join suppression, and cover Strict bypass and Return Fire.
 
+### Modern guard assistance
+
+**Nanolathe Modern policy (user-authorized).** The central `gameplay.Mode`
+projects `orders.QueueBinding.ModernGuardAssistance`; false preserves Strict
+3.1. This applies to the unit executing `Follow_Ground` or `VTOL_Follow`,
+with its original Guard record and queued successors retained. It does not
+turn the guarded unit into an area-work command. The stationary
+`Guard_NoMove` keeps its existing behavior.
+
+Strict 3.1 defends and assists the ward, copies its work, then follows or
+orbits; it does not scan surrounding allies or wrecks, and `VTOL_Follow` does
+not seek pads `[04 R-UNIT-06 §1]` `[04 R-ORD-02 §3]`.
+
+Modern adds these branches at the existing guard maintenance cadence:
+
+* Aircraft below the patrol repair threshold first try the existing allied
+  air-base registry, range, activation and builder admission. This includes
+  carrier pads. Selection and landing use the patrol helpers unchanged
+  `[04 R-AIR-01 §11]`; the landing executor decides whether a pad piece is
+  available. A successful selection temporarily prepends `VTOL_Landing`.
+* After combat support and direct ward assistance, mobile builders scan for
+  nearby work. Repair requires energy at least one fifth of storage, as in
+  repair patrol. Candidates use the patrol visitor's inclusive sight radius,
+  friendship, grounded state, damage/build progress and active-reclaim
+  exclusions `[04 R-ORD-01 §4]` `[04 R-ORD-02 §4]`. The first candidate in
+  unit-slot order that resolves command 8 receives the ordinary repair or
+  build-assist order. Its existing water and capability admission still apply.
+* If no repair is issued, a `canresurrect` builder selects the first reclaimable
+  feature in the feature service's stable anchor order within the same
+  inclusive sight radius whose corpse-name prefix resolves to a unit. The
+  read-only `WorkAdapter.CanResurrectFeature` query uses the same catalog
+  resolution as resurrection `[05 R-WORK-01 §7]`. This scan adds no energy or
+  metal requirement: resurrection itself has no ledger cost. It issues the
+  existing `Resurrect` order, including its subsequent repair of the revived
+  unit. It does not reclaim trees or infer wreck ownership.
+
+Each branch releases the guard's movement payload, arms the ordinary 30-tick
+maintenance deadline and prepends one ordinary work order. An immediately
+failed or unreachable job therefore cannot be selected repeatedly in one pump
+visit. Resumption waits at most that maintenance interval. Its ward identity,
+follow offset/orbit parameters and queued successors survive; the same guard
+resumes when the
+work completes or abandons. Aircraft detach from an air-base attachment through
+the existing takeoff preamble when Guard resumes, preserving their orbit
+parameters rather than repeating the initial bearing draw. Ordinary transport
+cargo retains the carried-guard rejection. There is no extra return-move record
+or standing move gate, matching the guard's direct ward-assistance behavior. The guard
+can select another nearby job on resumption before following again.
+
+Selection changes neither resources, health, feature state nor worker state.
+Nearby repair and resurrection selection consume no RNG; pad selection keeps
+patrol's one bounded pick (no draw for fewer than two candidates). Existing
+landing, repair, construction and resurrection executors retain their resource
+admission, costs, effects and RNG. Strict bypass returns before any added
+query or draw. `guard_modern_test.go` covers mode bypass, range and resource
+boundaries, carrier selection, stable work priority, retained queue identity
+and resumption; the session composition tests exercise the central mode and
+catalog-query wiring.
+
 ### 2.3 `internal/cob`
 
 **The program** (`load.go`). `Program` is the immutable compiled script: the

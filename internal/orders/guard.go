@@ -631,7 +631,15 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 		return Code(5)
 	}
 	if u != nil && u.Attachment.Carrier != 0 {
-		return Code(7) // a carried guard cancels its whole queue [04 R-UNIT-06 §1]
+		if modernGuardOnRepairPad(u) {
+			// Resume the retained orbit after pad work without re-running the
+			// admission draw. The normal preamble releases the pad attachment.
+			if code := airWorkPreamble(u, n, "Guarding"); code != Code(1) {
+				return code
+			}
+		} else {
+			return Code(7) // a carried guard cancels its whole queue [04 R-UNIT-06 §1]
+		}
 	}
 	// The flying-ward gate is stated for the GROUND guard ("a ground guard
 	// follows only ground wards"); [04 R-UNIT-06 §1]'s air paragraph lists the
@@ -681,6 +689,9 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	// legs cannot address such a guard, so it falls straight to maintenance.
 	if u.Handle == 0 {
 		return guardFollowMaintenance(u, n, ward, satisfied, tick)
+	}
+	if modernGuardSeekPad(u, n, tick) {
+		return Code(2) // reload the landing head without resetting this guard
 	}
 	// The ward's recorded-attacker link, resolved once: legs 1 and 2 share it
 	// [04 R-UNIT-06 §1]. RWU-19-13 closes what §1 recorded as Unknown and
@@ -813,6 +824,9 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 				return Code(3) // *wait* [04 §3.3]
 			}
 		}
+	}
+	if modernGuardNearbyWork(u, n, tick) {
+		return Code(2) // reload temporary work without resetting this guard
 	}
 	// Leg 5, the follow maintenance, on every visit that falls through the
 	// legs above [04 R-UNIT-06 §1][04 R-ORD-01 §8 point 3]; for the air twin it
