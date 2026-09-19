@@ -541,6 +541,7 @@ func (s *Session) stepUnitPhase(tick uint32) {
 				if orders.QueueOfUnit(u) != nil {
 					s.bindExistingOrderQueue(u)
 				}
+				orders.StepDangerResponse(u, tick)
 				ordersPump.PumpUnit(h, tick)
 			}
 			// Pumping can advance the primary head in this same visit.  Reconcile

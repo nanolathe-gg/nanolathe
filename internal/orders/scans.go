@@ -338,14 +338,20 @@ func issuePatrolRepair(u *units.Unit, target *units.Unit, tick uint32) (resolved
 	if q == nil {
 		return true, false
 	}
+	if !rulesOfUnit(u).AllowAutomaticRepair(u, tick) {
+		return true, false
+	}
 	move := u.Flags >> stanceMoveShift & stanceFieldMask
 	if move == 3 {
 		return true, false
 	}
 	node := NewNodeForOrder(id, target.Handle, target.X, target.Y, target.Z, tick, u.Handle, false)
+	node.automaticWork = true
 	if move < 2 {
 		if moveID := Resolve(2, u, nil, &ResolvePos{X: u.X, Y: u.Y, Z: u.Z}); moveID != 0 {
-			q.PushHead(moveID, NewNodeForOrder(moveID, 0, u.X, u.Y, u.Z, tick, u.Handle, false))
+			back := NewNodeForOrder(moveID, 0, u.X, u.Y, u.Z, tick, u.Handle, false)
+			back.automaticWork = true
+			q.PushHead(moveID, back)
 		}
 		// The two source fields deliberately have different extension rules
 		// before storage in the general parameter [04 R-STANCE-01 §4].

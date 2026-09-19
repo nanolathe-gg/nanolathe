@@ -123,7 +123,9 @@ func releaseSlot(u *units.Unit, k int) {
 			return
 		}
 		s.Flags &^= units.SlotFlagAutonomous
-		clearSlotTarget(u, idx)
+		if !rulesOfUnit(u).PreserveAutomaticTarget(u, idx) {
+			clearSlotTarget(u, idx)
+		}
 	})
 }
 
@@ -815,12 +817,18 @@ func guardNoMoveHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) C
 			n.DynamicGate |= 0x7008
 			return Code(2) // *hold*
 		}
+		if result, handled := guardRuleScan(u, n, tick); handled {
+			return result
+		}
 		if drawBelow(u, 100) < 80 {
 			n.Param1 = 0
 			return Code(1) // *advance* to the scan
 		}
 		return Code(0) // *restart*
 	case 3:
+		if result, handled := guardRuleScan(u, n, tick); handled {
+			return result
+		}
 		list := scanRegistryAroundPoint(u, n.GoalX, n.GoalZ, guardNoMoveScanRadius)
 		if len(list) == 0 {
 			return Code(0) // *restart*
@@ -833,6 +841,27 @@ func guardNoMoveHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) C
 	default:
 		return Code(7) // *cancel-all* [04 R-ORD-01 §3]
 	}
+}
+
+// The policy scan preserves an unchanged target without entering a restart
+// that would clear it and cancel its outstanding Aim callback.
+func guardRuleScan(u *units.Unit, n *Node, tick uint32) (Code, bool) {
+	pick, handled := rulesOfUnit(u).GuardTarget(u, n)
+	if !handled {
+		return 0, false
+	}
+	if pick == 0 {
+		return Code(0), true
+	}
+	s := u.SlotAt(0)
+	if pick == n.Target && s != nil && s.Target.Kind == units.TargetUnit && s.Target.Unit == pick {
+		armDeadline(n, tick, 30)
+		return Code(2), true
+	}
+	n.BindTarget(pick)
+	bindSlotToUnit(u, 0, pick)
+	n.Phase = 1
+	return Code(2), true
 }
 
 // guardNoMoveScanRadius is the stationary guard's scan radius in whole world

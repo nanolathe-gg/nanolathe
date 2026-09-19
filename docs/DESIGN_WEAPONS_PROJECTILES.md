@@ -299,8 +299,9 @@ interceptor/cruise cases, burn-blow guided steering, uncertain phase/expiry
 effects, prior water contact, malformed geometry,
 arithmetic wrap and work-budget exhaustion remain admitted. Guided turn
 coverage and flight sampling use a bounded Modern work budget of 4,096;
-incomplete proof always admits. Existing target selection and retention are
-unchanged, so a rejected target can be retried as geometry changes.
+incomplete proof always admits. The terrain policy itself does not choose or retain targets, so a rejected
+target can be retried as geometry changes. The additional targeting policy
+below owns replacement decisions.
 
 **Verification.** Lock clear ballistic arcs versus ridges, exact spread and
 RNG commit/abandon, raw wind drift and phase-8 cutoff, target contact/splash,
@@ -322,6 +323,167 @@ The Nanolathe options page previews mode changes through `HumanGameplay` at
 the next authoritative input boundary. Cancel/Undo enqueue the restored
 choice; a paused match consumes the final queued choice when it resumes.
 Strict mode does not undo shots or state changes made earlier in Modern.
+
+### Modern threat targeting and incoming fire
+
+**Nanolathe Modern policy — authorized prototype.** This section defines an
+intentional departure, not retail evidence. Strict and unbound services retain
+sampled acquisition, the autonomous retention shortcut, controller-specific
+`shootme`/command-fire admission, and uncoordinated firing [06 §3.1][06 §3.2].
+Modern uses the existing `combat.Rules` seam for selection, autonomous slot
+admission and retention, launch admission, launch observation, damage
+observation and the supplied tick boundary. Rule implementations hold no state.
+
+Automatic maintenance keeps its existing per-player scan budget and registry
+cadence. It still requires Fire at Will, a completed armed unit and an enabled
+autonomous slot. Explicitly released/bound slots and ground targets are not
+retargeted by this maintenance. Modern scans every contact in the selected
+registry query, refreshes liveness, alliance and current visibility, and retains
+the existing medium, range and trajectory gates. It admits factories and other
+opportunities regardless of `shootme` or human/computer controller, provided the
+weapon can cause positive effective damage. Both controllers exclude dropped
+and command-fire weapons from automatic maintenance; an explicit command still
+uses the ordinary firing pipeline. Paralyzer immunity and existing stun reject
+paralyzer targets. Compiled bad-target categories remain a scoring preference.
+
+Threat is derived from enabled authored weapons, never unit names or a tower
+list. An enemy receives a base score of 1. A completed, unstunned enemy with an
+available non-command-fire, non-interceptor weapon able to engage the shooter
+receives `1000 + min(10000, effectiveDamage * 300 / max(1, reloadTicks))`.
+If that enemy slot instead targets a friendly/allied unit within 256 world
+units of the shooter and can engage it, use damage against that ally and add
+1000. Empty stockpiles do not threaten. The strongest of the three slots wins.
+This looks up only the slot's actual allied target; it does not search the whole
+army for hypothetical ally-only threats. Current range and physical suitability
+matter; future movement, enemy resources, reload progress and script readiness
+are not forecast. The scoring constants and 256-unit neighborhood are prototype
+tuning, not historical constants.
+
+Add 100 for a preferred category. If reliable incoming damage plus this weapon's
+shot exceeds 120% of remaining health, multiply the score by four fifths. That
+is a **soft overage preference**, never a requirement to reach 120%, and never a
+ban on an indivisible finishing shot. Equal scores choose nearest planar
+whole-world distance, then the lowest unit handle, independently of registry
+order. A still-eligible current target remains until another score is more
+than 25% higher. When the best alternative avoids the current target's
+excessive overage, it bypasses that retention margin; otherwise the 20%
+penalty could be exactly cancelled by the 25% margin. Every selection query is an automatic request, including a
+danger response whose attack order temporarily owns a nonautonomous slot;
+the same margin applies there. Selection returns a choice without installing
+it. Explicit commands remain protected by the maintenance scan admission and
+the order policy's provenance checks. Thus a factory is a usable opportunity
+until a real threat enters range, and equivalent threats do not cause aim churn. Modern acquisition
+consumes no sampling or scoring RNG; Strict keeps the exact retail draw order.
+
+**Incoming confidence boundary.** Aim reserves nothing. A successful projectile
+creation immediately records its target/shooter allocation pointers and weapon
+in service-owned storage, before fire callbacks can reenter. Acquisition and
+the post-muzzle launch gate inspect live shots from the shooter's own/allied
+side. The current allocation pointers must still match. For the ordinary
+six-sample family, a copied direct projectile must reach the intended stationary
+unit as its first collision, no later than a predicted near-term arrival of the
+proposed shot. A prospective direct shot with no proved arrival inside the horizon uses
+the six-sample window: a distant shooter still waits for an already-certain
+near-impact kill. This does not turn the prospective shot into a promise. The proof invokes only existing motion/contact arithmetic on a copy;
+it never advances a live simulation, damage, event or RNG path. Expiry and the
+already-completed projectile phase bound the earliest next sample.
+
+Ordinary straight direct fire uses the six-sample horizon above, with positive
+velocity/range and area at most 16 (the full-damage direct-hit route [06 §9.1]).
+Its target must have no mover, carrier or current speed.
+
+**Precise beam extension — Modern confidence policy.** Retiring ordinary/direct
+beams with zero authored accuracy and spray, no acceleration or start-velocity
+override, and speed of at least 16 world units per tick instead use up to **60
+motion samples (two seconds)**. They retain the small-area and family exclusions.
+This covers the installed Annihilator's 1,200-unit range at 33⅓ units per tick;
+its 2,500 nominal damage and 2,000 energy cost make redundant shots consequential.
+These thresholds are prototype tuning, not retail behavior or a hitscan claim.
+
+The longer estimate accepts stationary buildings and ordinary grounded mobile
+units, including stopped movers. Mobile targets require a complete, matching
+current ground stamp, no carrier, and an authored footprint no larger than 8×8.
+Aircraft, hovercraft, floaters and submerged ground footprints remain unsupported.
+The target follows its current horizontal velocity; its launch-time heading,
+scalar speed, velocity triple and movement mode are stored with the incoming shot.
+An observed change permanently cancels that shot's mobile coverage. No future
+orders, steering, RNG, callbacks or live movement are simulated.
+
+Every sample tests the actual projectile head endpoint against the predicted
+quantized footprint [04 R-COLL-01 §1], using the existing contact ladder and
+vertical gate [06 §8.1]. Both possible initial movement offsets (target window
+before or after the shooter) must overlap that endpoint. Present ground blockers
+or features in the predicted footprint reject constant-motion confidence. The
+lowest terrain height under that footprint, bounded by the current unit height,
+provides a conservative vertical band without duplicating ground conform. Other
+unit occupants, features, terrain, water, expiry and off-map contacts retain their
+ordinary precedence. The target must be the first predicted contact; merely
+crossing its plane or pointing at its current position is insufficient. The
+prospective beam's comparison window also extends to 60 samples when it has no
+predicted earlier arrival, so near-impact coverage can withhold a later shot.
+
+This is an explicitly fallible confidence estimate. A unit may turn or stop after
+another shooter has already waited; an unrelated unit may cross the beam later.
+Revalidation on every acquisition and launch releases coverage when the target's
+motion changes or the live projectile no longer reaches it. Beam travel remains
+physical, and unled shots at transverse moving targets often promise nothing.
+The ordinary lead gates and arithmetic remain unchanged [06 §3.3]. Bursts,
+ballistic/guided shots, paralyzers, water weapons, interceptors, persistent effects,
+bounces, flights beyond the relevant horizon, missing terrain and invalid geometry
+still fail open. Acquisition uses the shooter origin as an approximation; launch
+uses its queried muzzle and aim point and remains the authoritative hold gate.
+
+Damage uses the existing armor override, attacker/victim veterancy, armored
+state and battle damage modifiers. Health-damage estimates also run the pure
+receiver subtraction against current signed-word health [06 §9.1]. A packed
+amount that increases health, wraps the mathematical result, or starts from
+nonpositive/out-of-word health promises nothing; for example, amount 65535
+against 100 health produces 101 health and cannot promise a kill. Ordinary
+lethal subtraction remains eligible. Paralyzer credit retains its separate
+non-health meaning and never contributes incoming kill coverage.
+Unrepresentable or nonpositive estimates promise nothing. Coverage at **100% of current health** withholds a redundant
+launch; two 60-damage shots may launch against 100 health, the third waits, and
+one 300-damage shot is always allowed to finish an uncovered 100-health target.
+A held launch spends no firing RNG, energy, metal, ammo or reload, produces no
+Fire/RockUnit callbacks, and never raises physical-blocked movement feedback.
+The existing synchronous muzzle query may have run. Normal countdown recovery
+and physical/aim gates retain their positions in the pipeline.
+
+**Danger and lifecycle.** Every successful Modern unit-target launch, including
+an uncertain shot or one that later misses, offers `Service.DangerNotice` for
+its hostile victim. Accepted hostile non-heal damage does the same before the
+retail armed-victim retaliation restriction, including damage whose kind skips
+retail reaction. Session owns visibility filtering and forwarding to orders;
+combat does not issue movement or cancel work. Existing retail reaction still
+runs and must pass the order policy's protected-work admissions. Friendly or
+allied attacks and an absent alliance binding do not raise notices. Strict
+observation methods do nothing.
+
+The incoming array follows projectile compaction, clears on reservation, and
+is not copied into burst children. Dead records and dead/reused unit slots
+cannot promise damage. Switching to Strict stops policy decisions and new
+observations without undoing existing shots or targets. Switching back can use
+still-live Modern launch metadata after revalidating it; shots created during
+Strict have no such evidence. A restored service has no incoming metadata or
+danger observations; restored projectiles initially promise nothing. No save
+bytes, global identities, presentation IDs or separate gameplay flags are added.
+
+**Verification.** `modern_beam_test.go` checks stationary and steadily moving
+installed Flash targets at 600 and 1,000 units from actual Annihilator definitions:
+the first beam spends 2,000 energy, the second waits without firing RNG/reload or
+physical-blocked feedback, an uncovered alternative can be selected, and the live
+projectile phase actually kills the target. Strict launches both. Synthetic cases
+lock motion-change invalidation, unled misses, blockers, expiry and the 60-sample
+boundary. `modern_targeting_test.go` locks opportunities and actual
+threat replacement, stable ties and switching margin, nearby-ally attacks,
+explicit bindings, current visibility, acquisition versus launch coverage,
+finishing shots and soft overage, miss release, compaction, allocation identity,
+veterancy, phase/expiry limits, mode/load behavior, unarmed and missed-shot
+danger, friendly exclusions, resources and Strict RNG bypass. The existing
+acquisition draw-vector tests remain unchanged. Repository integration and
+retail-content gates plus simulation-cost and classic/modern live battle
+benchmarks apply; Modern fingerprints and battle census may intentionally
+change, while Strict fingerprints must not.
 
 ### 2.4 Aiming
 

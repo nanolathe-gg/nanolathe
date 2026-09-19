@@ -483,6 +483,10 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 		}
 	}
 
+	if ports.Shot != nil {
+		svc.rules().Launched(svc, h, ports.Shot)
+	}
+
 	// C2 fixed callback order [06 §4.1]: root allocation → start sound →
 	// FirePrimary/Secondary/Tertiary → RockUnit → start smoke.
 	// The start sound is emitted by the common initializer so it precedes Fire.

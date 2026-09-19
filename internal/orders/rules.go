@@ -5,12 +5,15 @@
 
 package orders
 
-import "github.com/nanolathe-gg/nanolathe/internal/units"
+import (
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
+)
 
 // Rules is the set of gameplay decisions the order package defers rather than
-// deciding itself. One method per decision, each answered at the exact site
-// the corresponding mode projection was read before: no order logic lives in
-// an implementation that did not already live behind that projection.
+// deciding itself. Each policy owns its concrete decision site; transient
+// observations and response state belong to Queue, never cached rule objects.
 //
 // Every method takes the concrete state its answer needs — the unit, the order
 // record, the authoritative tick — and never a closure or a retained slice, so
@@ -18,6 +21,33 @@ import "github.com/nanolathe-gg/nanolathe/internal/units"
 // implementation is either zero-size or a pointer to session-lifetime state.
 // Strict 3.1 draws no randomness in any of them.
 type Rules interface {
+	// CrowdedMoveArrival admits bounded Modern completion near a friendly crowd.
+	CrowdedMoveArrival(u *units.Unit, n *Node, tick uint32) bool
+	// MarkAutomaticAttack records producer provenance only for Modern.
+	MarkAutomaticAttack(n *Node)
+	// PreserveAutomaticTarget avoids cancelling a same-target automatic handoff.
+	PreserveAutomaticTarget(u *units.Unit, slot int) bool
+	// GuardTarget replaces the stationary guard scan when handled is true.
+	GuardTarget(u *units.Unit, n *Node) (target pool.Handle, handled bool)
+	// RetaliationOrder is retail's immediate damage edge; Modern defers order
+	// changes to its normal per-unit danger step.
+	RetaliationOrder(victim, attacker *units.Unit) bool
+	// ObserveDanger and StepDangerResponse own bounded, locally observed Modern
+	// danger memory and response. Strict leaves all state untouched.
+	ObserveDanger(victim, attacker *units.Unit, tick uint32)
+	// ObserveImpact remembers an anonymous impact side, never an attacker identity.
+	ObserveImpact(u *units.Unit, bearing numeric.Angle, tick uint32)
+	StepDangerResponse(u *units.Unit, tick uint32)
+	// ProtectWorkOnDamage preserves active construction/manual repair and the
+	// original assignment behind a Modern autonomous response.
+	ProtectWorkOnDamage(u *units.Unit) bool
+	// AllowAutomaticRepair prevents repeated repair/resume cycles under fire.
+	AllowAutomaticRepair(u *units.Unit, tick uint32) bool
+	// ReactionResult bounds a Modern reaction failure to its own record.
+	ReactionResult(q *Queue, n *Node, code Code, tick uint32) Code
+	// BeforeCommand lets a new producer command supersede a Modern response.
+	BeforeCommand(q *Queue)
+
 	// HoldsFire reports whether the shooter's standing Hold Fire suppresses a
 	// combat join, including the guard's forced join whose force flag bypasses
 	// both retail standing-order fields [04 R-STANCE-01 §3][04 R-UNIT-06 §1].
@@ -102,3 +132,25 @@ func modernGuardSeekPad(u *units.Unit, n *Node, tick uint32) bool {
 func modernGuardNearbyWork(u *units.Unit, n *Node, tick uint32) bool {
 	return rulesOfUnit(u).GuardWorksNearby(u, n, tick)
 }
+
+// Strict keeps damage responses event-driven and never touches danger memory.
+func (StrictRules) ObserveDanger(*units.Unit, *units.Unit, uint32) {}
+func (StrictRules) StepDangerResponse(*units.Unit, uint32)         {}
+func (StrictRules) ProtectWorkOnDamage(*units.Unit) bool           { return false }
+func (StrictRules) AllowAutomaticRepair(*units.Unit, uint32) bool  { return true }
+func (StrictRules) BeforeCommand(*Queue)                           {}
+
+func (StrictRules) RetaliationOrder(victim, attacker *units.Unit) bool {
+	return strictRetaliationOrder(victim, attacker)
+}
+
+func (StrictRules) ReactionResult(_ *Queue, _ *Node, code Code, _ uint32) Code { return code }
+
+func (StrictRules) PreserveAutomaticTarget(*units.Unit, int) bool      { return false }
+func (StrictRules) GuardTarget(*units.Unit, *Node) (pool.Handle, bool) { return 0, false }
+
+func (StrictRules) MarkAutomaticAttack(*Node) {}
+
+func (StrictRules) ObserveImpact(*units.Unit, numeric.Angle, uint32) {}
+
+func (StrictRules) CrowdedMoveArrival(*units.Unit, *Node, uint32) bool { return false }

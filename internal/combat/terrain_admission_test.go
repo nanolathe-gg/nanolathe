@@ -296,6 +296,7 @@ func TestModernGuidedPursuitIsModernOnly(t *testing.T) {
 // both inspect what the spawner hands the seam and choose the verdict. It
 // previews, which is what makes the spawner run the spread on value copies.
 type terrainSpyRules struct {
+	StrictRules
 	admit func(q *ShotQuery) bool
 }
 

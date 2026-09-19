@@ -715,6 +715,7 @@ func autoEngage(u *units.Unit, target *units.Unit, force bool) bool {
 		return false
 	}
 	node := Node{Owner: u.Handle, Target: target.Handle, GoalX: target.X, GoalY: target.Y, GoalZ: target.Z, GoalSupplied: true}
+	rulesOfUnit(u).MarkAutomaticAttack(&node)
 	if !force && u.Flags>>stanceMoveShift&stanceFieldMask == 1 {
 		if moveID := Resolve(2, u, nil, &ResolvePos{X: u.X, Y: u.Y, Z: u.Z}); moveID != 0 {
 			q.PushHead(moveID, Node{Owner: u.Handle, GoalX: u.X, GoalY: u.Y, GoalZ: u.Z, GoalSupplied: true})

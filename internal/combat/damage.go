@@ -127,10 +127,13 @@ const (
 // Victim and Attacker are raw pool slots: the attacker is deliberately not
 // validated, while zero remains the null attacker [06 §9.1] C18.
 type DamageInput struct {
-	Victim, Attacker pool.Handle
-	Nominal          int32
-	Direction        uint8
-	Kind             uint8
+	// Modern can observe the incoming projectile at impact without learning
+	// its unseen shooter's position. Zero means no horizontal motion cue.
+	ImpactVelocityX, ImpactVelocityZ numeric.Fixed
+	Victim, Attacker                 pool.Handle
+	Nominal                          int32
+	Direction                        uint8
+	Kind                             uint8
 }
 
 // DamageResult reports the receiver's acceptance and packed post-defender

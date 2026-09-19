@@ -2218,6 +2218,15 @@ func (s *System) serviceGroundFollower(u *units.Unit, head *orders.Node, route *
 	if s == nil || u == nil || head == nil || (u.Def != nil && u.Def.CanFly) {
 		return false
 	}
+	// Modern can finish a terminal point move at a stable local crowd frontier,
+	// including an inactive rejected route waiting in its phase-zero retry.
+	// Its rule owns eligibility/dwell; ordinary arrival still owns the release.
+	if orders.CrowdedMoveArrival(u, head, tick) {
+		head.Phase = 1
+		head.DynamicGate |= arrivalSatisfiedBit
+		s.raiseArrival(u, &arrivalHandle{order: head})
+		return true
+	}
 	// Step (1). Its condition is "with a payload installed" — the arrival
 	// handle finalGoalReached asks through — not the presence of a published
 	// route, so it precedes the route-nil exit below.

@@ -191,6 +191,7 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 	if !u.Alive || u.Dying {
 		return sum
 	}
+	s.rules().CombatTick(s, tick, false)
 	// The stunned mark is neither raised nor lowered here any more (WU-19-80).
 	// Its one setter is the stun task's first visit and its one clearer is that
 	// task's re-activation with a zero credit — the Paralyze row of
@@ -672,6 +673,9 @@ func (s *Service) PrimaryTargets(slot uint8) []pool.Handle {
 // It reports whether it rebuilt. It consumes NO random draw; see
 // rebuildTargetRegistry.
 func (s *Service) RebuildTargetRegistryIfDue(tick uint32, slot uint8, w *units.World, vis *visibility.Service, terrain *world.Terrain, econ *economy.Service) bool {
+	if s != nil {
+		s.rules().CombatTick(s, tick, false)
+	}
 	if s == nil || w == nil || int(slot) >= combatPlayerSlots {
 		return false
 	}
@@ -863,7 +867,8 @@ func (s *Service) acquireTargetForSlotRange(u *units.Unit, slot *units.Slot, idx
 	if len(candidates) == 0 && acq.HasUpgrade {
 		candidates = s.secondaryCandidates(u, w, seaLevel, vis, econ, catalog, acq.Range)
 	}
-	return acquireFilteredTarget(candidates, acq)
+	s.targetQuery = TargetQuery{Candidates: candidates, Acquisition: acq, Shooter: u, Slot: slot, Index: idx, World: w, Terrain: terrain, Visibility: vis, Economy: econ, Catalog: catalog}
+	return s.rules().SelectTarget(s, &s.targetQuery)
 }
 
 // primaryCandidates materializes the cached primary registry's preliminary
@@ -1283,7 +1288,7 @@ func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terra
 			target = w.Unit(tgt.Unit)
 		}
 		savedQuery = svc.shotQuery
-		svc.shotQuery = ShotQuery{Tick: tick, Terrain: terrain, Target: target, Wind: svc.ProjectileWind}
+		svc.shotQuery = ShotQuery{Service: svc, World: w, Shooter: u, Tick: tick, Terrain: terrain, Target: target, Wind: svc.ProjectileWind}
 		ports.Shot = &svc.shotQuery
 	}
 	cSlot = Slot{
@@ -1308,7 +1313,7 @@ func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terra
 	_, ok := TryFire(svc, &cSlot, idx, tgt, tick, ports)
 	blocked := false
 	if ports.Shot != nil {
-		blocked, svc.shotQuery = ports.Shot.Blocked, savedQuery
+		blocked, svc.shotQuery = ports.Shot.Blocked || ports.Shot.Covered, savedQuery
 	}
 	if blocked {
 		// Modern policy: a refused launch keeps the relative Aim pair. The
@@ -1626,6 +1631,7 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 		}
 	}
 	s.Compact(nil)
+	s.rules().CombatTick(s, tick, true)
 }
 
 func projectileProximityContact(s *Service, p *Projectile, weapon *content.WeaponDef) bool {
@@ -1647,6 +1653,15 @@ func projectileOffMap(p *Projectile, terrain *world.Terrain) bool {
 }
 
 func checkCollision(p *Projectile, weapon *content.WeaponDef, w *units.World, terrain *world.Terrain, featSvc *features.Service, opaqueLiquid bool) (hitUnit pool.Handle, hitFeature *features.Instance, isWaterTerrain bool, isOffMap bool, terrainContact bool, bounce bool) {
+	return checkCollisionWithContact(p, weapon, w, terrain, featSvc, opaqueLiquid, nil)
+}
+
+// Modern forecasts replace only unit occupancy on copied projectile state;
+// terrain, features and the contact ordering remain the same [06 §8.1].
+func checkCollisionWithContact(p *Projectile, weapon *content.WeaponDef, w *units.World, terrain *world.Terrain, featSvc *features.Service, opaqueLiquid bool, contact func(*Projectile, *units.World, *world.Terrain, int32, int32) pool.Handle) (hitUnit pool.Handle, hitFeature *features.Instance, isWaterTerrain bool, isOffMap bool, terrainContact bool, bounce bool) {
+	if contact == nil {
+		contact = contactUnitInCell
+	}
 	if terrain != nil {
 		if projectileOffMap(p, terrain) {
 			isOffMap = true
@@ -1668,7 +1683,7 @@ func checkCollision(p *Projectile, weapon *content.WeaponDef, w *units.World, te
 		// build used to resolve feature/terrain/water first, which made a unit
 		// standing on a feature cell — or wading — unreachable by a shell that
 		// arrived in the same cell.
-		if hit := contactUnitInCell(p, w, terrain, cx, cz); hit != 0 {
+		if hit := contact(p, w, terrain, cx, cz); hit != 0 {
 			hitUnit = hit
 			return
 		}
@@ -2016,7 +2031,7 @@ func applyProjectileDamage(service *Service, p *Projectile, weapon *content.Weap
 	}
 	// Shared area splash: EnumerateArea→DistanceToBox→Falloff→ApplyDamage [06 §9.3]
 	// Extracted to ExplodeWeaponAt for death DoExplosion reuse [06 §12.1] C22–C25 (I1, I2)
-	return service.explodeWeaponAt(w, terrain, weapon, p.Pos, p.Shooter, p.ShooterSide, tick)
+	return service.explodeWeaponAt(w, terrain, weapon, p.Pos, p.Shooter, p.ShooterSide, tick, p.Velocity)
 }
 
 // impactCellIsWater uses the contacted plot's neighbourhood maximum byte, the
@@ -2084,7 +2099,7 @@ func (s *Service) ExplodeWeaponAt(w *units.World, terrain *world.Terrain, weapon
 	if attacker := w.Unit(shooter); attacker != nil {
 		shooterSide = attacker.Owner
 	}
-	feedback := s.explodeWeaponAt(w, terrain, weapon, impact, shooter, shooterSide, tick)
+	feedback := s.explodeWeaponAt(w, terrain, weapon, impact, shooter, shooterSide, tick, Vec3{})
 	feedback.publish(w)
 }
 
@@ -2092,7 +2107,7 @@ func (s *Service) ExplodeWeaponAt(w *units.World, terrain *world.Terrain, weapon
 // record carries the shooter-side byte separately from the shooter identity,
 // so a stack death record can route with its dying owner's side while retaining
 // its null shooter provenance [06 §12.2][06 §9.1].
-func (s *Service) explodeWeaponAt(w *units.World, terrain *world.Terrain, weapon *content.WeaponDef, impact Vec3, shooter pool.Handle, shooterSide uint8, tick uint32) impactFeedback {
+func (s *Service) explodeWeaponAt(w *units.World, terrain *world.Terrain, weapon *content.WeaponDef, impact Vec3, shooter pool.Handle, shooterSide uint8, tick uint32, observedVelocity Vec3) impactFeedback {
 	if w == nil || weapon == nil {
 		return impactFeedback{}
 	}
@@ -2204,7 +2219,7 @@ func (s *Service) explodeWeaponAt(w *units.World, terrain *world.Terrain, weapon
 				if dist != 0 {
 					falloff = Falloff(float32(dist), float32(radius), float32(weapon.EdgeEffectiveness)) // [06 §9.3] float32
 				}
-				p := &Projectile{Pos: impact, Shooter: shooter, ShooterSide: shooterSide}
+				p := &Projectile{Pos: impact, Shooter: shooter, ShooterSide: shooterSide, Velocity: observedVelocity}
 				feedback.add(applyDamageToUnit(s, u, p, weapon, falloff, dist, w, tick), shooterSide == u.Owner)
 			}
 		}
@@ -2254,7 +2269,7 @@ func (s *Service) explodeWeaponAt(w *units.World, terrain *world.Terrain, weapon
 			if dist2 >= int64(radius)*int64(radius) {
 				continue
 			}
-			p := &Projectile{Pos: impact, Shooter: shooter, ShooterSide: shooterSide}
+			p := &Projectile{Pos: impact, Shooter: shooter, ShooterSide: shooterSide, Velocity: observedVelocity}
 			feedback.add(applyDamageToUnit(s, u, p, weapon, 1, 0, w, tick), shooterSide == u.Owner)
 		}
 	}
@@ -2323,6 +2338,10 @@ func (s *Service) AcceptDamage(w *units.World, tick uint32, in DamageInput) Dama
 	// observes the prior packet state [06 §9.1][06 R-WPN-04 §2].
 	SetDamageFlash(victim)
 	s.emitEvent(Event{Kind: EventDamageFlash, Tick: tick, Source: in.Attacker, Target: victim.Handle, Position: Vec3{X: victim.X, Y: victim.Y, Z: victim.Z}, Duration: DamageFlashTicks})
+	s.rules().ObserveDanger(s, victim, w.Unit(in.Attacker), tick)
+	if amount != 0 && in.Kind != KindNoReaction {
+		s.rules().ObserveImpact(s, victim, w.Unit(in.Attacker), in, tick)
+	}
 	if in.Kind != KindNoReaction {
 		s.ReactToDamage(w, victim, w.Unit(in.Attacker), tick)
 	}
@@ -2407,6 +2426,7 @@ func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weap
 		Victim: victim.Handle, Attacker: p.Shooter,
 		Nominal:   nominal,
 		Direction: hitDirectionByte(p, victim), Kind: cause,
+		ImpactVelocityX: p.Velocity.X, ImpactVelocityZ: p.Velocity.Z,
 	})
 	_ = distance
 	return nominal

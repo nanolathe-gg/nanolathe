@@ -29,6 +29,14 @@ type QueueBinding struct {
 	// docs/INVARIANTS.md I11.
 	Rules Rules
 
+	// Danger queries are read-only Modern policy inputs. Visibility is checked
+	// before consulting a remembered contact's live position. Suitability
+	// ignores range; local feasibility belongs to the movement owner.
+	DangerVisible       func(observer, target *units.Unit) bool
+	DangerCanRespond    func(observer, target *units.Unit, slot int) bool
+	DangerStepFeasible  func(u *units.Unit, x, z numeric.Fixed) bool
+	DangerRouteFeasible func(u *units.Unit, x, z numeric.Fixed) bool
+
 	Economy interface {
 		UnitBuckets(pool.Handle) *[2]economy.Bucket
 	}
@@ -162,12 +170,15 @@ type PlaceRequest struct {
 // callback itself is responsible for publishing the pending word at the
 // movement boundary; the order package does not duplicate that state machine.
 type MovementGoalAdapter struct {
-	Ready            func() bool
-	InstallPoint     func(PointGoalRequest) bool
-	InstallAnnulus   func(AnnulusGoalRequest) bool
-	InstallRectangle func(RectangleGoalRequest) bool
-	InstallAir       func(AirGoalRequest) bool
-	Release          func(*Node) bool
+	// CrowdedMoveBlocked reports local crowd admission and the committed anchor.
+	// It is a pure movement-owned query; orders owns the dwell and completion.
+	CrowdedMoveBlocked func(*units.Unit, *Node) (anchorX, anchorZ int32, blocked bool)
+	Ready              func() bool
+	InstallPoint       func(PointGoalRequest) bool
+	InstallAnnulus     func(AnnulusGoalRequest) bool
+	InstallRectangle   func(RectangleGoalRequest) bool
+	InstallAir         func(AirGoalRequest) bool
+	Release            func(*Node) bool
 	// RunAir is the queue-local air executor. Keeping it on the binding avoids
 	// a process-global runner when more than one session exists [04 §3.3].
 	RunAir AirLegRunner

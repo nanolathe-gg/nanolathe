@@ -392,6 +392,9 @@ func (q *Queue) Push(id ID, n Node) {
 	if q == nil {
 		return
 	}
+	if DescriptorFor(id).StaticGate&staticRearSegment == 0 {
+		q.Binding().rules().BeforeCommand(q)
+	}
 	queued := n.QueuedIssue // the modifier is an argument, never record state [04 R-ORD-01 §13]
 	node := newNode(id, n)  // [04 §3.3][05 "Queue insertion"] C9
 	segment := &q.primary

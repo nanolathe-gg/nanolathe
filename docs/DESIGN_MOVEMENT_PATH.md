@@ -1130,3 +1130,89 @@ simulation steps (ticks 179 and 202) from about 8 ms to about 5 ms. CPU captures
 were unchanged; repeated GPU controls established the same small nanoframe
 pixel variation observed in the optimized run. These observations do not
 establish stutter-free gameplay or GPU completion timing.
+
+### Modern danger escape
+
+**Nanolathe Modern policy (user-authorized prototype).** Orders own the decision
+and work/stance protection described in DESIGN_UNITS_ORDERS_COB "Modern danger
+response". Movement exposes straight and detour feasibility as pure queries
+through the session's order binding. Orders first ranks all straight candidates
+and only calls `System.DangerRouteFeasible` if none is admitted. This preserves
+an available direct escape even when a detour endpoint has greater separation.
+Strict never requests this escape mechanism.
+
+Its first check, `DangerStepFeasible`, admits a short straight corridor, at most sixteen terrain
+cells along either axis. It uses the mover's existing packed footprint bias,
+footprint size and profile, rejects off-map footprints and other occupants,
+and checks every crossed anchor with a supercover walk. Diagonal crossings
+also check their two orthogonal neighbours. Ground candidates use the existing
+terrain/feature classifier; aircraft candidates use the air occupancy plane
+and map bounds, leaving altitude and takeoff to ordinary flight execution.
+If the straight ground corridor is blocked, a bounded local probe can admit a
+detour to a destination within 64 world units. It visits a fixed 16-unit lattice
+inside that radius in breadth-first east/south/west/north order, using at most
+five cardinal edges and a final corridor whose components are each at most 16
+units. The disk contains at most 49 lattice positions. Every edge uses the same
+footprint and supercover checks; copied unit positions supply hypothetical
+starts without changing the real mover or occupancy. Intermediate positions
+need not increase threat separation. This allows a unit to step around a crowd
+before moving away, while orders still requires a safer destination. The probe
+does not publish a route or invoke a second path kernel; ordinary scheduled
+pathfinding chooses and executes the actual route. Aircraft retain the straight
+check only. The bounds and traversal are Modern prototype tuning. This is
+local admission, not proof of an arbitrary global escape route. A fully trapped
+unit receives no fabricated movement solution.
+
+The query writes no state, allocates no route, draws no RNG and changes no
+speed or movement scheduler budget. Accepted goals still use ordinary order
+activation, path scheduling, movement and collision; moving obstacles may
+invalidate an initially clear corridor. The order's retry and expiry policy
+owns subsequent choices. No new movement state is saved or carried through a
+mode switch. Tests cover blocked corridors despite clear destinations,
+diagonal corners, footprint bounds, the different ground/air planes, bounded
+detour admission and execution around the friendly crowd observed in an F11
+capture on Great Divide.
+
+### Modern crowded arrival
+
+**Nanolathe Modern policy (user-authorized prototype).** The ground follower
+asks `orders.Rules.CrowdedMoveArrival` on its ordinary visit before the existing
+arrival check, including when its route is inactive or rejected. Orders owns
+terminal-move eligibility, the 96-world-unit radius and the 90-tick dwell:
+[Modern crowded arrival](DESIGN_UNITS_ORDERS_COB.md#modern-crowded-arrival).
+Strict returns false without writes or random draws and retains its researched
+arrival/retry behavior [04 R-PATH-01 §9][04 R-ORD-01 §4].
+
+`System.CrowdedMoveBlocked`, bound through the existing movement adapter, is a
+pure local query over the mover's committed ground footprint and current
+profile. The order must still own the active movement binding, and a route
+with multiple active points remains ineligible. The requested goal is
+quantized with the mover's half-footprint bias. Its footprint must overlap at
+least one same-owner stationary mobile; structures, enemies, incomplete or
+carried units and moving occupants are never relaxed.
+
+The short corridor spans at most six cells per axis. Every footprint along a
+supercover walk must be in bounds and statically passable for this movement
+profile. Occupied footprints may contain only the admitted friendly mobiles;
+diagonal crossings check both orthogonal neighbors. The eight adjacent
+anchors are then tested in a fixed order: if any strictly reduces squared cell
+distance to the destination and has a free, statically passable footprint and
+crossing, the mover must continue trying. A crowded destination alone is not
+enough. No global closest-point search, global route reachability promise or
+interpretation of stale route point bytes is involved. Existing search
+frontier tolerance remains separate [04 R-PATH-01 §5][04 R-PATH-01 §9].
+
+Once orders admits completion, the follower raises arrival through its normal
+arrival/release helper and returns before repath service can rearm the old
+payload. Ordinary movement braking and order cleanup continue afterward. The
+query changes no terrain, occupancy, search budgets, RNG or resources. Tests
+retain the captured two-by-two Flash rally layout on flat terrain, including
+an inactive rejected route and an unexpired phase-zero retry deadline; they
+also reject static obstructions, wrong or moving occupants, active routes and
+an available closer anchor. Terrain and live crowd changes are revalidated
+throughout the dwell; no fresh route result is required after loading a save.
+The composed session regression also uses Great Divide's authored terrain and
+the captured fourteen-unit crowd, restoring five nearby tree footprints that
+were already cleared in the diagnostic. It drives an ordinary point move
+through live path rejection and verifies Modern idle/cleanup versus Strict
+retry. Decorative ground marks do not participate in its collision fixture.

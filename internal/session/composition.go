@@ -938,6 +938,7 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 			}
 			return s.Movement.InstallPointGoal(req)
 		}
+		movementGoals.CrowdedMoveBlocked = s.Movement.CrowdedMoveBlocked
 		// The record-level payload release of [04 R-ORD-01 §1], in the form
 		// RWU-19-18 spells out: mover-less no-op, a NULL goal handed to the
 		// controller (cancel the in-flight search, `0x80` on the previous
@@ -971,12 +972,16 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 		}
 	}
 	return &orders.QueueBinding{
-		Rules:     s.orderRules(),
-		Damage:    s.acceptDamage,
-		Economy:   s.Econ,
-		Lookup:    worldQueries.LookupUnit,
-		Hostility: worldQueries.Hostile,
-		SimRNG:    s.SimRNG(),
+		Rules:               s.orderRules(),
+		DangerVisible:       s.dangerVisible,
+		DangerCanRespond:    s.dangerCanRespond,
+		DangerStepFeasible:  s.dangerStepFeasible,
+		DangerRouteFeasible: s.dangerRouteFeasible,
+		Damage:              s.acceptDamage,
+		Economy:             s.Econ,
+		Lookup:              worldQueries.LookupUnit,
+		Hostility:           worldQueries.Hostile,
+		SimRNG:              s.SimRNG(),
 		CurrentTick: func() uint32 {
 			if s.Clock == nil {
 				return 0
@@ -2482,6 +2487,8 @@ func (s *Session) bindDamageReaction() {
 	if s == nil || s.Combat == nil {
 		return
 	}
+	s.Combat.DangerNotice = s.noticeModernDanger
+	s.Combat.ImpactNotice = s.noticeModernImpact
 	s.Combat.DamageActivity = func(victim, attacker *units.Unit, tick uint32) {
 		// The intake has already excluded healing and null attackers. Either
 		// participant may belong to the local player [03 R-AUD-01 §5].

@@ -192,12 +192,22 @@ type Node struct {
 	// can replace that move with a build (DESIGN_INTERFACE_HUD_INPUT §3.10).
 	// It is implementation policy, not retail order state.
 	HumanMoveSequence uint64
+
+	// crowdedArrival is transient local dwell; retail saves carry no new bytes.
+	crowdedArrival crowdedArrivalState
+	// automaticWork identifies a patrol/guard producer, never inherited flags.
+	// It is transient: unknown/direct/restored repairs are protected by default.
+	automaticWork bool
+	// Only autoEngage marks an attack; restored or direct attacks stay explicit.
+	automaticAttack         bool
+	nextAutomaticTargetTick uint32
 }
 
 // Queue holds the two segments [04 §3.2] C5.
 type Queue struct {
 	primary   []*Node
 	secondary []*Node
+	danger    dangerState
 
 	// diagnostics records dispatch failures for this unit's queue. It is per
 	// queue rather than package-global so two worlds in one process cannot
@@ -1099,6 +1109,9 @@ func (q *Queue) unlinkPrimary(n *Node) {
 // that the current head is blocked: the handler may have inserted another
 // record ahead of n. The caller reloads the head [04 R-ORD-01 §10].
 func (q *Queue) applyPrimaryResultCode(n *Node, code Code, tick uint32) bool {
+	if code == 7 {
+		code = q.Binding().rules().ReactionResult(q, n, code, tick)
+	}
 	switch code {
 	case 0:
 		n.Phase = 0 // [04 §3.3]

@@ -294,8 +294,10 @@ state its retail baseline, Modern rule, conservative limits and verification;
 retail research continues to describe the executable. Both branches need
 contract tests, including resource and RNG effects. An unknown retail mechanic
 is still an unknown; the Modern setting does not authorize invented evidence.
-Current contracts are DESIGN_WEAPONS_PROJECTILES §2.3.1 (terrain admission),
-DESIGN_UNITS_ORDERS_COB "Modern Hold Fire", and
+Current contracts are DESIGN_WEAPONS_PROJECTILES §2.3.1 (terrain admission) and
+"Modern threat targeting and incoming fire", DESIGN_UNITS_ORDERS_COB
+"Modern Hold Fire" and "Modern danger response", DESIGN_MOVEMENT_PATH
+"Modern danger escape", and
 DESIGN_ECONOMY_CONSTRUCTION "Modern factory-exit yielding", "Modern construction-site yielding" and
 "Modern authored build membership", and DESIGN_SESSIONS_AI_SAVE
 "Modern save unit limits". Each departure reaches its algorithm through the

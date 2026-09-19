@@ -1,6 +1,8 @@
 package combat
 
 import (
+	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
@@ -8,13 +10,29 @@ import (
 // Rules is the gameplay policy seam of the combat service. Strict 3.1 answers
 // exactly as retail; Modern carries the approved Nanolathe policies of
 // docs/DESIGN_WEAPONS_PROJECTILES.md §2.3.1 and §2.6.1. Each method is asked at
-// the same retail call site the policy's projected boolean used to guard, so
-// binding a rule set moves no pipeline logic; it only changes who answers.
+// the decision boundary owned by the affected request;
+// binding a rule set chooses the owning package's documented algorithms.
 //
 // An implementation is either zero size or used by pointer, and no answer may
 // draw from a stream it was not handed, so a bound rule set costs one indirect
 // call and no allocation per question [I4].
 type Rules interface {
+	// AutonomousSlot applies the policy to the existing maintenance admission.
+	AutonomousSlot(weapon *content.WeaponDef, ownerControlByte uint8) bool
+	// SelectTarget chooses among the existing registry query's contacts.
+	SelectTarget(s *Service, q *TargetQuery) (pool.Handle, bool)
+	// ReconsiderTarget bypasses only the autonomous maintenance retention shortcut.
+	ReconsiderTarget() bool
+	// CombatTick supplies the time of a decision without a second clock.
+	CombatTick(s *Service, tick uint32, afterProjectiles bool)
+	// ObserveDanger forwards a hostile launch or accepted damage observation.
+	ObserveDanger(s *Service, victim, attacker *units.Unit, tick uint32)
+	// ObserveImpact also carries the victim's observed hit direction. It does
+	// not grant knowledge of an unseen attacker's location.
+	ObserveImpact(s *Service, victim, attacker *units.Unit, in DamageInput, tick uint32)
+	// Launched records only a successfully created projectile, never an aim.
+	Launched(s *Service, h pool.Handle, q *ShotQuery)
+
 	// AdmitShot reports whether one resolved fire attempt may launch.
 	// StrictRules returns true without work: retail admits the shot and never
 	// samples terrain [06 R-WPN-05 §1]. ModernRules runs the
@@ -42,6 +60,12 @@ type Rules interface {
 // spawner once the muzzle query and accuracy spread have run [06 §4.4]; Blocked
 // is the answer's output, read by the caller after the attempt returns.
 type ShotQuery struct {
+	Service *Service
+	World   *units.World
+	Shooter *units.Unit
+	// Covered is a tactical hold, distinct from physical obstruction.
+	Covered bool
+
 	// Launch is the pipeline's per-shot slot copy, carrying the spread-adjusted
 	// angles and the ballistic distance word the preview re-solves from.
 	Launch Slot
@@ -55,8 +79,7 @@ type ShotQuery struct {
 
 	Terrain *world.Terrain
 	// Target is the resolved unit target, or nil for a point target. Only its
-	// current geometry is protected; the policy promises nothing about future
-	// movement.
+	// current geometry and motion feed Modern's bounded hit-confidence estimate.
 	Target *units.Unit
 	Wind   *world.Wind
 
@@ -112,4 +135,18 @@ type shotPreviewer interface {
 func previewsShot(r Rules) bool {
 	p, ok := r.(shotPreviewer)
 	return ok && p.previewsShot()
+}
+
+func (StrictRules) SelectTarget(_ *Service, q *TargetQuery) (pool.Handle, bool) {
+	return acquireFilteredTarget(q.Candidates, q.Acquisition)
+}
+func (StrictRules) ReconsiderTarget() bool                                   { return false }
+func (StrictRules) CombatTick(*Service, uint32, bool)                        {}
+func (StrictRules) ObserveDanger(*Service, *units.Unit, *units.Unit, uint32) {}
+
+func (StrictRules) ObserveImpact(*Service, *units.Unit, *units.Unit, DamageInput, uint32) {}
+func (StrictRules) Launched(*Service, pool.Handle, *ShotQuery)                            {}
+
+func (StrictRules) AutonomousSlot(w *content.WeaponDef, owner uint8) bool {
+	return AutonomousScanAdmitsSlot(w, owner)
 }

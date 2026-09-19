@@ -211,6 +211,15 @@ type Service struct {
 	// docs/DESIGN_WEAPONS_PROJECTILES.md §2.3.1 and §2.6.1. A nil field is
 	// Strict 3.1, so a fixture built without rules keeps the retail path.
 	Rules Rules
+	// Modern transient predictions follow projectile compaction; saves omit them.
+	incoming                 [ProjectileCapacity]incomingShot
+	modernTick               uint32
+	modernNextProjectileTick uint32
+	targetQuery              TargetQuery
+	// DangerNotice is composed by session, which owns contact filtering and orders.
+	DangerNotice func(victim, attacker *units.Unit, tick uint32) `json:"-"`
+	// ImpactNotice carries accepted hostile damage, including its local bearing.
+	ImpactNotice func(victim, attacker *units.Unit, bearing numeric.Angle, tick uint32) `json:"-"`
 
 	// ProjectileWind is the session-owned wind used by ballistic admission.
 	// Its phase-8 deadline bounds future wind knowledge [01 §7.3].
@@ -405,6 +414,7 @@ func (s *Service) Reserve() (pool.Handle, bool) {
 		// field it reads — see the audit block above InitCommon in motion.go.
 		// The dead bit is authoritative in Slots (I5), which Slots.Reserve
 		// already cleared; the shadow copy is kept in step here.
+		s.incoming[idx] = incomingShot{}
 		s.Records[idx].Dead = false   // [06 §4.1] clear the record's dead bit
 		s.Records[idx].TargetUnit = 0 // [06 §4.1] clear its retained unit target
 	}
@@ -584,6 +594,7 @@ func (s *Service) Compact(follow *pool.Handle) {
 		if dest >= 0 && dest != old {
 			s.Records[dest] = s.Records[old]
 			s.presentationIDs[dest] = s.presentationIDs[old]
+			s.incoming[dest] = s.incoming[old]
 		}
 	}
 

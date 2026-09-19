@@ -48,6 +48,15 @@ piece pose/animation and program names/checksum; it excludes bytecode and
 callback closures. Existing order snapshot bounds and truncation flags apply;
 route geometry is separately in `movement.json`.
 
+Order diagnostics also copy Modern danger contacts and anonymous impact points,
+their observation/deadline ticks, retained response/resume/return order identities,
+the original movement anchor, and current work-protection/head-eligibility checks.
+Contact visibility is queried only after confirming the same unit still occupies
+the remembered slot; separate checked flags distinguish unavailable queries from
+false answers. These fields retain even expired state until an ordinary order
+visit ages it. Capture never selects a response or changes that state. They are
+diagnostic observations, not additional save data or a record of past decisions.
+
 Callback `Recorded` means the bridge retains bookkeeping for that execution;
 `Active` additionally requires that exact execution identity to remain live in
 the VM. A recorded but inactive callback is historical, even if its slot now

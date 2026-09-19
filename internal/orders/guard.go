@@ -748,7 +748,7 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	// retired it would have left a guard unable to assist a nanoframe at all.
 	// Code 8 carries its own nano-reach admission [04 R-ORD-02 §1], so a guard
 	// with no nanolathe resolves no name and falls through to leg 4.
-	if wardIsDamaged(ward) && canRepairGuard(u) {
+	if wardIsDamaged(ward) && canRepairGuard(u) && rulesOfUnit(u).AllowAutomaticRepair(u, tick) {
 		if repID := Resolve(8, u, ward, nil); repID != 0 {
 			q := QueueForUnit(u)
 			// "clear the record's goal payload" before the insert, then head
@@ -758,7 +758,7 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 			// [04 R-ORD-01 §8 point 2], so zeroing it would destroy the guard's
 			// own follow position.
 			releaseGoalPayload(u, n)
-			q.PushHead(repID, Node{Owner: u.Handle, Target: n.Target, GoalX: ward.X, GoalY: ward.Y, GoalZ: ward.Z, GoalSupplied: true})
+			q.PushHead(repID, Node{Owner: u.Handle, Target: n.Target, GoalX: ward.X, GoalY: ward.Y, GoalZ: ward.Z, GoalSupplied: true, automaticWork: true})
 			n.DynamicGate = 0
 			return Code(3) // *wait* [04 §3.3]
 		}
@@ -790,7 +790,7 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	// Both arms construct the spawned record with the ward's front record's
 	// target AND goal triple, release the guard record's payload first, clear
 	// the dynamic gate and return the wait code.
-	if wardHasBuildOrder(ward) && canRepairGuard(u) && canRepairGuard(ward) {
+	if wardHasBuildOrder(ward) && canRepairGuard(u) && canRepairGuard(ward) && rulesOfUnit(u).AllowAutomaticRepair(u, tick) {
 		var head *Node
 		if wq := QueueForUnit(ward); wq != nil && len(wq.primary) > 0 {
 			head = wq.primary[0]
@@ -819,7 +819,7 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 				// through the target arm of the switch above, where the ward's
 				// record carries no goal at all.
 				goalSupplied := head.StaticGate&staticGoalObserver != 0
-				q.PushHead(spawnID, Node{Owner: u.Handle, Target: head.Target, GoalX: head.GoalX, GoalY: head.GoalY, GoalZ: head.GoalZ, GoalSupplied: goalSupplied})
+				q.PushHead(spawnID, Node{Owner: u.Handle, Target: head.Target, GoalX: head.GoalX, GoalY: head.GoalY, GoalZ: head.GoalZ, GoalSupplied: goalSupplied, automaticWork: true})
 				n.DynamicGate = 0
 				return Code(3) // *wait* [04 §3.3]
 			}

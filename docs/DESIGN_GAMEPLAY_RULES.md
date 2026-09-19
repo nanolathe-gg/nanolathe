@@ -70,8 +70,8 @@ as a second way to select a policy: a composed session always binds.
 
 | Seam | Owner | Carries |
 |---|---|---|
-| `combat.Rules` | `internal/combat` | terrain admission ([DESIGN_WEAPONS_PROJECTILES §2.3.1](DESIGN_WEAPONS_PROJECTILES.md#231-modern-terrain-admission)) and the launch-gate half of Hold Fire (§2.6.1) |
-| `orders.Rules` | `internal/orders` | [Hold Fire](DESIGN_UNITS_ORDERS_COB.md#modern-hold-fire) at a combat join, the deferred bomber leash ([DESIGN_MOVEMENT_PATH §3.4.1](DESIGN_MOVEMENT_PATH.md#341-modern-bomber-pass-completion)), and the three guard-assistance legs |
+| `combat.Rules` | `internal/combat` | terrain admission ([DESIGN_WEAPONS_PROJECTILES §2.3.1](DESIGN_WEAPONS_PROJECTILES.md#231-modern-terrain-admission)) the launch-gate half of Hold Fire (§2.6.1), and Modern threat targeting/incoming-fire coordination |
+| `orders.Rules` | `internal/orders` | [Hold Fire](DESIGN_UNITS_ORDERS_COB.md#modern-hold-fire) at a combat join, the deferred bomber leash ([DESIGN_MOVEMENT_PATH §3.4.1](DESIGN_MOVEMENT_PATH.md#341-modern-bomber-pass-completion)), the three guard-assistance legs, and Modern danger response/protected work |
 | `construction.Rules` | `internal/construction` | [factory-exit](DESIGN_ECONOMY_CONSTRUCTION.md#modern-factory-exit-yielding) and [construction-site](DESIGN_ECONOMY_CONSTRUCTION.md#modern-construction-site-yielding) clearance; [authored build membership](DESIGN_ECONOMY_CONSTRUCTION.md#modern-authored-build-membership) |
 | `session.UnitLimitRules` | `internal/session` | [Modern save unit limits](DESIGN_SESSIONS_AI_SAVE.md#modern-save-unit-limits) |
 | `path.Kernel` | `internal/path` | the search a route request is opened with ("The path search kernel" below); both reserved sets bind `path.RetailKernel` |
@@ -468,3 +468,27 @@ implemented. Record unresolved behavior as `TODO(question)` at its code site
 and in its owning research contract; record Nanolathe design decisions in the
 owning design document. The existence of a seam or an extension reference does
 not authorize changing either reserved set's behavior.
+
+### Modern combat prototype composition
+
+The user-authorized combat prototype extends the existing `combat.Rules` and
+`orders.Rules` selections. Its owning contracts are
+[weapons and targeting](DESIGN_WEAPONS_PROJECTILES.md#modern-threat-targeting-and-incoming-fire) and
+[danger response and protected work](DESIGN_UNITS_ORDERS_COB.md#modern-danger-response).
+The session forwards combat danger observations only when the victim's owner
+currently sees a live hostile attacker. This uses authoritative visibility,
+not the local viewer or published frame. Orders revalidate that contact while
+responding. Accepted hostile impacts can additionally supply an anonymous
+incoming bearing from observed projectile motion (or the packet's local impact
+direction when horizontal motion is unavailable). The existing combat and
+orders rule interfaces carry this cue; Strict hooks are inert. It supports
+local withdrawal without conveying a hidden attacker identity or position.
+
+The existing phase-2 unit visit asks orders for its danger response immediately
+before the ordinary order pump, after the normal weapon update and COB drain.
+That visit also maintains proven automatic ground/guard target ownership even
+without a danger notice; direct and unknown attack provenance stays protected.
+Thus an observation never runs a nested order pump or a second weapon visit.
+Strict's response method is inert. The movement-owned local-corridor query is
+composed on the same queue binding, and the existing path kernel and scheduler
+remain unchanged. There is no additional rule registry or per-unit mode flag.

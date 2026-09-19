@@ -1209,3 +1209,23 @@ rebinding for human/AI consumers without immediate RNG or stock changes.
 Installed-mod GUI checks must also activate a factory and submit a legal build
 placement, because catalog and simulation-only smoke tests cannot establish
 that a menu is usable.
+
+### Modern crowded arrival
+
+**Nanolathe Modern policy (user-authorized prototype).** Factory rally
+inheritance still creates ordinary resolved move/patrol orders in its existing
+order [05 "Rally inheritance"][04 R-FAC-02 §4]. A final inherited positional
+ground move may now complete within 96 world units of a waypoint after 90 ticks
+at the same committed anchor, when a same-owner stationary mobile crowd fills
+the goal and no immediately closer free anchor exists along a statically clear
+local approach. This also applies to ordinary terminal user moves; inherited
+flags do not serve as factory provenance.
+
+The decision belongs to [orders' Modern crowded-arrival
+rule](DESIGN_UNITS_ORDERS_COB.md#modern-crowded-arrival), with footprint proof
+owned by movement. Construction, assistance and repair approaches with queued
+work remain excluded, as do moves with later waypoints. Factory production,
+costs, activation, exit-clearance ordering and rally inheritance are unchanged.
+Strict 3.1 retains ordinary arrival and retry behavior. Captured crowd tests
+exercise terminal rally-shaped moves and normal cleanup; eligibility tests
+keep queued construction and repair intact and preserve Strict RNG/state.

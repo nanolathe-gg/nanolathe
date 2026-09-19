@@ -31,9 +31,10 @@ import (
 // approved-policy change and needs its design-document section. Updating a
 // value with "fingerprint moved" as the whole explanation defeats the guard.
 //
-// PROVENANCE. Every value was recorded on 2026-09-17 on branch
-// u6-fingerprint-lock, branched from main 7dfa50d9, on an arm64 host. The two
-// ashap values are the ones docs/ARCHITECTURE.md §6 calls the reference run.
+// PROVENANCE. Strict and ashap values were recorded on 2026-09-17 on
+// u6-fingerprint-lock, branched from main 7dfa50d9, on an arm64 host. Modern
+// benchmark values were updated for the authorized combat prototype described
+// below. The ashap values remain the reference run of ARCHITECTURE §6.
 const (
 	// The reference run of docs/ARCHITECTURE.md §6 and
 	// docs/DESIGN_RUNTIME_DETERMINISM.md §4: one human slot, one computer
@@ -61,43 +62,39 @@ const (
 
 // The combat-bearing scene is the simulation benchmark's own composition
 // (tools/sim-bench, docs/SIM_BENCHMARK.md): three computer armies of 250 units
-// each on one map, with queued factory production and scripted orders. It is
-// the scene that discriminates the rule sets. Strict and Modern agree at
-// composition and through the march, then part company at authoritative tick
-// 1258, when the Modern obstruction-yielding policy first makes a request that
-// reaches fingerprinted state. The call was the non-urgent arm, so it was a
-// blocked product exit or a refused yard close rather than a build site
-// (docs/DESIGN_ECONOMY_CONSTRUCTION.md "Modern factory-exit yielding"); the
-// Modern terrain preview refuses its first shots five ticks later
-// (docs/DESIGN_WEAPONS_PROJECTILES.md §2.3.1), and Modern Hold Fire answers
-// from tick 1 without moving the digest at all.
-//
-// That attribution was measured, not assumed: with the three Modern rule sets
-// wrapped in counting delegates whose run reproduces the Modern digest exactly,
-// the yielding policy is asked from tick 76 onwards, and the ask at tick 1258
-// is the first one whose delegate observes the fingerprint change across the
-// call while every earlier ask leaves it unchanged.
+// each on one map, with queued factory production and scripted orders.
+// Composition remains shared. Modern now diverges during the march because
+// deterministic threat selection replaces sampled acquisition, and then uses
+// coordinated incoming fire and observed danger responses. These intentional
+// policies are documented in DESIGN_WEAPONS_PROJECTILES "Modern threat targeting
+// and incoming fire" and DESIGN_UNITS_ORDERS_COB "Modern danger response".
+// Hidden projectile impacts now cause anonymous withdrawal, and precise beams
+// coordinate against predictable ground movers. These approved follow-up
+// policies change the combat outcome after 1500 ticks; the initial and warm
+// states still agree with the preceding prototype. Strict constants retain
+// their original recorded values.
 const (
 	lockBenchSeed        uint32 = 7
 	lockBenchWarmupTicks        = 600
 	lockBenchTotalTicks         = 1500
 	lockBenchInitialBoth        = "partial-v1:3e1cbf1c074f060d"
-	lockBenchWarmBoth           = "partial-v1:dce20f30bcdeef34"
+	lockBenchStrictWarm         = "partial-v1:dce20f30bcdeef34"
+	lockBenchModernWarm         = "partial-v1:7a75ebe138eebade"
 	lockBenchStrictFinal        = "partial-v1:df0bcee56a98af34"
-	lockBenchModernFinal        = "partial-v1:fbf5f7dd9e8e66c5"
+	lockBenchModernFinal        = "partial-v1:f5a87151c1c89a5c"
 )
 
 // TestStrictFingerprintIsLocked holds the retail baseline. Nothing in a Modern
 // rule set may move any value here.
 func TestStrictFingerprintIsLocked(t *testing.T) {
-	runFingerprintLock(t, gameplay.Strict31, lockAshapStrict6000, lockAshapStrict54000, lockBenchStrictFinal)
+	runFingerprintLock(t, gameplay.Strict31, lockAshapStrict6000, lockAshapStrict54000, lockBenchStrictWarm, lockBenchStrictFinal)
 }
 
 // TestModernFingerprintIsLocked holds the approved Modern policy set the same
 // way, so an unintended change to a Modern rule is as loud as a change to the
 // retail path [I11].
 func TestModernFingerprintIsLocked(t *testing.T) {
-	runFingerprintLock(t, gameplay.Modern, lockAshapModern6000, lockAshapModern54000, lockBenchModernFinal)
+	runFingerprintLock(t, gameplay.Modern, lockAshapModern6000, lockAshapModern54000, lockBenchModernWarm, lockBenchModernFinal)
 }
 
 // TestLockedScenesDiscriminateTheRuleSets records what the two locks are worth
@@ -116,7 +113,7 @@ func TestLockedScenesDiscriminateTheRuleSets(t *testing.T) {
 // runFingerprintLock runs both locked scenes under mode and compares each
 // fingerprint with its constant. Elapsed times are logged, never asserted: the
 // test is a value comparison and must pass identically on a loaded machine.
-func runFingerprintLock(t *testing.T, mode gameplay.Mode, want6000, want54000, wantBenchFinal string) {
+func runFingerprintLock(t *testing.T, mode gameplay.Mode, want6000, want54000, wantBenchWarm, wantBenchFinal string) {
 	catalog, fs := retailcat.Shared(t)
 
 	for _, scene := range []struct {
@@ -184,7 +181,7 @@ func runFingerprintLock(t *testing.T, mode gameplay.Mode, want6000, want54000, w
 		if hashErr != nil {
 			t.Fatalf("%s benchmark fingerprint at step %d: %v", mode, tick, hashErr)
 		}
-		want := lockBenchWarmBoth
+		want := wantBenchWarm
 		if tick == lockBenchTotalTicks {
 			want = wantBenchFinal
 		}

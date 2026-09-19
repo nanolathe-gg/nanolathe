@@ -57,7 +57,7 @@ func (*ModernRules) GuardSeeksPad(u *units.Unit, n *Node, tick uint32) bool {
 // the ordinary work rows retain their own resource admission and RNG effects.
 func (*ModernRules) GuardWorksNearby(u *units.Unit, n *Node, tick uint32) bool {
 	b := bindingFor(u)
-	if b == nil || !canRepairGuard(u) || !hasMover(u) {
+	if b == nil || !canRepairGuard(u) || !hasMover(u) || !rulesOfUnit(u).AllowAutomaticRepair(u, tick) {
 		return false
 	}
 	q := QueueOfUnit(u)
@@ -65,7 +65,9 @@ func (*ModernRules) GuardWorksNearby(u *units.Unit, n *Node, tick uint32) bool {
 		for _, target := range scanRepairCandidates(u, u.Def.SightDistance) {
 			if id := Resolve(8, u, target, nil); id != 0 {
 				releaseGoalPayload(u, n)
-				q.PushHead(id, NewNodeForOrder(id, target.Handle, target.X, target.Y, target.Z, tick, u.Handle, false))
+				work := NewNodeForOrder(id, target.Handle, target.X, target.Y, target.Z, tick, u.Handle, false)
+				work.automaticWork = true
+				q.PushHead(id, work)
 				modernGuardWorkRetry(n, tick)
 				return true
 			}

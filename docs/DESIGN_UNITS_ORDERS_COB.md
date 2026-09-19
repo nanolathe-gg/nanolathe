@@ -327,6 +327,201 @@ owned by [DESIGN_WEAPONS_PROJECTILES.md §2.6.1](DESIGN_WEAPONS_PROJECTILES.md#2
 Tests preserve queued attack/guard records, verify ground and aircraft guard
 combat-join suppression, and cover Strict bypass and Return Fire.
 
+### Modern danger response
+
+**Nanolathe Modern policy (user-authorized prototype).** `orders.Rules` owns
+observed danger, response visits, the damage-purge protection, automatic repair
+admission and command precedence. The reserved Strict implementation leaves
+new danger state untouched and retains retail's immediate damage retaliation.
+Modern defers that order insertion until the next ordinary per-unit order visit;
+the damage path may still offer the attacker to autonomous weapon slots.
+Retail's baseline is a damage-event edge with no retaliation memory or timer
+[04 R-STANCE-01 §3], and maneuver's existing attack/return pair and inclusive
+leash remain [04 R-STANCE-01 §4]. The following memory and decisions are
+approved policy, not historical claims.
+
+An identified hostile launch or damage notice is accepted only with current
+observer contact visibility. Each victim queue remembers at most four attacker
+identities and last observed positions for 180 ticks (six seconds). Another
+notice refreshes that attacker's age; when full, the oldest observation is
+replaced, with array order breaking ties. Continuing visibility may refresh
+position but never extends the age. A lost contact supplies only its frozen
+position to withdrawal scoring, never a live pursuit target. Identity includes
+the unit object as well as its handle so slot reuse cannot inherit danger.
+There is no global danger grid or shared hidden-target tracker.
+
+A received projectile hit can also establish anonymous danger when its attacker
+is unseen. `ObserveImpact(unit, bearing, tick)` receives only the victim and
+world direction opposite the projectile's horizontal motion at impact. This
+uses the locally received projectile, never the unseen shooter's position. A
+direct projectile can collide past the victim center, so the packet's impact
+point bearing alone could send withdrawal toward the shooter. If horizontal
+motion is zero or the packet has no projectile observation, combat instead
+combines the packet's quantized impact direction with the victim heading
+[06 §9.1]. That fallback is an impact-side heuristic, not an inferred shooter
+location; a centered stationary explosion carries no useful source direction.
+The original packet direction and COB callbacks remain unchanged. Only
+nonzero accepted hostile damage other than the no-reaction kind supplies the
+anonymous cue. Orders receives no attacker identity or position. Modern places a frozen hazard point 256 world units along
+that direction from the victim's position at impact, using the shared integer
+trig (zero bearing is +Z). This distance is prototype tuning, not an estimate
+of the attacker's range. At most four anonymous points are retained separately
+from identified contacts. Repeated hits in the same of eight compass sectors
+refresh that sector's point; an empty or expired entry is reused first,
+otherwise the oldest is replaced, with array order breaking ties. Sector
+boundaries lie halfway between compass directions. Each point expires after
+180 ticks; later victim motion and hidden-unit motion, death or slot reuse
+cannot update it. These bounds and grouping are Modern prototype policy.
+
+Anonymous points count as danger for withdrawal scoring and automatic repair
+suspension. A suitable visible remembered threat can still be answered first;
+an anonymous point can never supply an attack target or ground-fire order.
+An eligible Roam or Maneuver unit with no effective response uses the existing
+locally feasible withdrawal, while Hold Position, active construction, manual
+repair, control tasks, carried units and progressing explicit movement retain
+their existing protection. Expiry resumes the retained assignment and Maneuver
+returns to its anchor. New commands and load clear anonymous points along with
+other danger state; switching to Strict leaves already staged ordinary orders
+to finish and the Strict observation hook writes no state or RNG. No new save
+bytes or resource charges are introduced. `danger_impact_test.go` checks ordinary
+movement installation without any attacker lookup/acquisition, bounded frozen
+points, stance and work protection, repair resumption, expiry and Strict bypass.
+Combat tests cover direct impacts centered on and beyond the victim at different
+hull headings; session tests exercise the composed movement response, unchanged
+RNG/resources and an authored Flash under an out-of-sight rocket tower's fire.
+
+The normal session order sweep calls `StepDangerResponse` before `PumpUnit`.
+New decisions run at most once per 30 ticks, while current response visibility,
+expiry, path failure and stance are checked every visit. Movement failure reads
+the order record's published no-route event, including when diagnostic movement
+state remains en route [04 R-PATH-01 §7][04 R-PATH-01 §9][04 R-COLL-01 §6].
+Arrival, payload release and search-setup status alone do not establish failure.
+Suspension and resumption clear consumed movement notifications and diagnostics
+while preserving the assignment's destination. The queue retains a
+stable visible response instead of replacing it on every launch. At Fire at
+Will, each 30-tick visit asks the existing combat acquisition port for its best
+currently engageable candidate; a changed answer replaces only the automatic
+reaction. Combat owns threat ranking. Return Fire does not perform that
+opportunity acquisition. Explicit attack orders and explicit/scripted weapon
+targets are retained. A progressing manual move is also retained; a blocked
+manual move may suspend and later restart with its original destination.
+Every new primary producer command, including a queued command or stance
+change, clears danger memory and supersedes the automatic reaction. A response
+displaced by a temporary control/task head, especially `Paralyze`, cannot
+retarget or insert another response ahead of that head; a stunned unit likewise
+cannot begin a new response. Contact timers still expire and expired reactions
+are removed. A maneuver return after expiry waits until the controlling head
+has released the unit.
+
+Modern also reconsiders already owned automatic ground targets without requiring
+an incoming danger notice. The same 30-tick visit queries combat for stationary
+`Guard_NoMove` and ground `Attack_Chase`/`Attack_NoMove` records explicitly tagged
+by the automatic engagement producer. Patrol and guard joins use that producer;
+direct attacks, restored unknown attacks and type-constrained `AttackUType`
+children do not. Only Fire at Will permits opportunity acquisition. The current
+head and stun checks apply, and a chase's original maneuver anchor, leash,
+return record and queued assignment survive retargeting. A candidate outside the
+chase leash is rejected for both ordinary automatic attacks and danger
+reaction retargets, including equality at the boundary. Automatically issued aircraft attacks retain their
+existing pass behavior; this periodic extension covers grounded attacks only.
+
+The stationary guard's own scan also asks combat rather than choosing a random
+registry entry, and a retained target does not take a random restart that would
+clear the weapon. Strict keeps its scan, restart draws and slot release behavior
+[04 R-ORD-01 §3]. In Modern, changing a grounded automatic target rebinds the
+same record and restarts its targeting phase without cancelling its Aim script.
+Retaining the target leaves its phase and Aim unchanged. Taking ownership of an
+already targeted slot likewise omits `TargetCleared` only for the exact current
+automatic/danger/guard head and its selected slot. It still clears autonomy.
+This prevents cancellation of the outstanding script while its request latch
+remains set. A changed target uses the normal setter's asynchronous Aim
+semantics; combat's drift check requests a fresh aim when the new geometry
+requires it [06 R-WPN-05 §3][06 R-WPN-05 §4]. Explicit orders keep their release
+callbacks. Producer tags and reconsideration timers add no retail save bytes;
+Strict neither marks these producers nor visits the new periodic policy.
+
+Current construction, factories, construction assistance and direct repair
+are protected from both reaction insertion and the AI damage purge. Temporary
+control records and an approach child cannot conceal an already started work
+parent. Future queued construction/repair behind a patrol or guard does not
+protect the unrelated current assignment. Repair provenance is an explicit
+transient producer tag set by patrol and guard repair issuers, including the
+guard's copied repair and Modern nearby-repair leg. `FlagAutoOp` is never used
+as evidence of repair origin: direct and restored repairs can inherit it.
+Unmarked/unknown repairs are protected. Construction assistance is protected
+even when an automatic producer selected it.
+
+An automatic repair may end while retaining the exact patrol/guard assignment
+and successors underneath it; its automatically inserted return move ends with
+that repair. The suspended assignment releases its owned movement payload and
+resets its handler to admission so no lost arrival wake can strand it. Automatic
+repair producers remain inhibited while danger is remembered or a reaction is
+active. This avoids repair/retreat oscillation. Resumption selects work through
+the original assignment; it does not force the old patient to remain valid.
+
+Response first chooses a visible remembered attacker with a suitable weapon,
+using nearest distance and then lower handle for ties. Suitability comes from
+combat, per slot, without a range requirement; the unit's no-chase category
+still applies. A currently engageable primary weapon can use `Attack_NoMove`,
+including Hold Position and stationary structures. Other grounded slots use
+`Attack_Chase`'s existing selected-slot parameter; air attack executors use the
+primary slot. Hold Fire never creates an attack. Maneuver pursuit keeps the
+initial response anchor and authored leash, inserts the ordinary return move,
+and does not pursue a target outside that leash; Roam permits ordinary pursuit.
+The existing chase/flight handlers own route execution and their own combat
+maneuvers. If the exact tracked reaction returns cancel-all, Modern converts
+that result to removal of the reaction alone, preserving the retained assignment
+and excluding that failed target for 90 ticks. Explicit orders keep their normal
+failure results, and Strict returns every result unchanged. This policy adds no
+general kiting controller.
+
+Only when no effective response is available does a mobile unit consider
+withdrawal. It evaluates eight fixed directions at 64, 32 and 16 world units,
+with diagonal components 45, 22 and 11 respectively, maximizing minimum separation from all
+remembered threat positions. Ties retain traversal order, and a candidate must
+strictly improve that minimum. All candidates first use the movement-owned
+`DangerStepFeasible` straight-corridor query. Any admitted direct escape wins
+over every detour. Only when no safer straight choice exists are the same
+candidates ranked again using `DangerRouteFeasible`, which can admit a bounded
+local ground detour, described in DESIGN_MOVEMENT_PATH
+"Modern danger escape". Intermediate motion may approach a hazard to get around
+a friendly crowd; the destination must still improve separation. Ordinary
+ground/air movement owns route requests, collision and completion. Maneuver
+bounds the withdrawal destination by the original leash; the ordinary route can
+detour on its way there. Hold Position never withdraws. A blocked pursuit is
+excluded for 90 ticks before retry. Once withdrawal has begun, a lack of further
+safe progress uses an ordinary 30-tick `Wait` instead of resuming the assignment
+into remembered fire. When memory expires, Maneuver returns to the original
+post and the retained assignment resumes. These constants are prototype tuning,
+not retail constants; the policy does not promise a globally safe route.
+
+Selection, memory and protection draw no RNG and debit no resources. Executing
+an inserted ordinary order retains that handler's established RNG behavior and
+any resulting combat costs. Suspended repair stops making its ordinary repair
+charges. Strict's new hooks draw nothing and write no danger state. Rule
+objects remain zero-size; all mutable state belongs to the victim queue.
+
+No retail save bytes are added. Loading creates empty danger memory and unknown,
+protected repair provenance. Already issued reaction orders save as their
+ordinary attack/move/wait rows, with the retained assignment already reset to a
+restartable phase. Switching to Strict likewise leaves ordinary staged orders
+to finish under normal handlers, so the Modern memory timeout no longer cancels
+an existing attack; that attack completes on its normal target/route conditions.
+Switching back revalidates retained observations and expires old ones. New
+Modern commands remove the queue's tracked reaction and return move. No handler
+requires a transient provenance bit to complete after loading or switching.
+
+`automatic_target_modern_test.go` locks producer provenance, ground/guard
+opportunity retargeting, the retained leash and assignment, same-target Aim and
+callback preservation, control/stun/explicit/Strict bypasses and guard scan
+selection. `danger_modern_test.go` locks Strict no-write/no-draw behavior, active work
+protection despite inherited auto flags, future queued work, automatic producer
+provenance, blocked manual-move resumption, contact loss and slot reuse,
+multi-threat and short-corridor withdrawal, maneuver return, secondary weapons,
+Fire at Will reconsideration versus Return Fire, queue isolation, mode switching
+and retail save restoration. The session owns visibility/feasibility composition
+and the integration, visual and performance gates.
+
 ### Modern guard assistance
 
 **Nanolathe Modern policy (user-authorized).** The central `gameplay.Mode`
@@ -1337,3 +1532,44 @@ These retail contracts apply in both gameplay modes:
 
 The COB corrections address exact execution and argument contracts; the audit
 did not establish visible stock-unit symptoms for those three discrepancies.
+
+### Modern crowded arrival
+
+**Nanolathe Modern policy (user-authorized prototype).** A terminal ground
+positional move may finish near its destination when a stationary friendly
+crowd prevents further local progress. Strict 3.1 retains the ordinary point
+arrival predicate and retry machine [04 R-ORD-01 §4][04 R-PATH-01 §9]. A failed
+search, exhausted route or nearby unit alone does not establish arrival.
+
+The existing `orders.Rules.CrowdedMoveArrival` decision admits only a sole
+primary `Move_Ground`, without a target or automatic work/danger provenance.
+The mover must be alive, complete, unstunned, uncarried, stationary and within
+96 world units of its stored destination. Movement must confirm same-owner,
+stationary mobile occupancy of the destination footprint, a statically clear
+local corridor, and no immediately closer free footprint anchor. The same
+committed anchor and destination must satisfy those conditions for 90 ticks
+(three seconds). These limits are prototype tuning, not retail constants.
+
+Completion raises ordinary arrival and releases the controller goal, route
+and pending search. A phase-zero retry is advanced to the existing phase-one
+arrival branch and its arrival gate is armed, so an unexpired retry deadline
+cannot swallow the notification or reinstall the old destination. The normal
+primary pump removes the move and performs its ordinary idle refill. No new
+queue teardown, teleport, route search or resource/RNG operation is introduced.
+
+Construction and repair approaches with a queued parent, explicit attacks,
+Patrol/Guard chains, control heads, danger escape/return moves and all moves
+with successors are excluded. The policy covers both ordinary terminal user
+moves and inherited factory waypoints; retail rally inheritance leaves no
+persistent factory provenance [05 "Rally inheritance"]. It does not claim a
+globally closest reachable point or finish a distant blocked route.
+
+Dwell is private transient node state, with no new retail save bytes. Restored
+moves can qualify after a fresh 90-tick dwell, without a newly published path.
+Progress, changed goals, cleared occupancy or a gap in eligible observations
+restart the dwell. Strict calls are pure no-ops, including RNG and node state;
+returning from Strict after an unobserved tick therefore starts a fresh dwell.
+Tests cover the captured Flash crowd and inactive status-512 phase-zero retry,
+ordinary cleanup, Strict bypass, protected assignments, local free steps,
+invalid blockers, extreme coordinates and save restoration. Movement owns the
+[local footprint proof](DESIGN_MOVEMENT_PATH.md#modern-crowded-arrival).

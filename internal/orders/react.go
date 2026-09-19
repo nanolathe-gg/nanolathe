@@ -166,6 +166,10 @@ const staticStandbyInterruptible uint32 = 1 << 17
 // It reports whether a record was inserted; the caller falls through to the
 // per-slot offer when it did not.
 func RetaliationOrder(victim, attacker *units.Unit) bool {
+	return rulesOfUnit(victim).RetaliationOrder(victim, attacker)
+}
+
+func strictRetaliationOrder(victim, attacker *units.Unit) bool {
 	if victim == nil || attacker == nil || victim == attacker {
 		return false
 	}
@@ -214,6 +218,9 @@ func PurgeOrdersOnDamage(u *units.Unit) {
 	}
 	q := QueueOfUnit(u)
 	if q == nil {
+		return
+	}
+	if rulesOfUnit(u).ProtectWorkOnDamage(u) {
 		return
 	}
 	q.PurgeUnprotected()
