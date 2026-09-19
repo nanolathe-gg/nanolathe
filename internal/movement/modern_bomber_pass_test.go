@@ -27,7 +27,9 @@ func TestModernBomberCompletesCloseTargetPass(t *testing.T) {
 		u.Flags = (u.Flags & ^uint32((3<<units.StandingMoveShift)|(3<<units.StandingFireShift))) | 1<<units.StandingMoveShift | 2<<units.StandingFireShift
 		q := orders.QueueForUnit(u)
 		q.Binding().World = &orders.WorldQueryAdapter{SeaLevel: func() uint8 { return 0 }}
-		q.Binding().ModernBomberPass = modern
+		if modern {
+			q.Binding().Rules = &orders.ModernRules{}
+		}
 		ledger := &economy.Service{}
 		ledger.Players[0].Stock = [2]float32{10000, 10000}
 		catalog := &content.Catalog{Weapons: map[string]*content.WeaponDef{"bomb": u.Def.Weapon1Def}}

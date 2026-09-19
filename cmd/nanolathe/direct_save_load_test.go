@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/client"
+	"github.com/nanolathe-gg/nanolathe/internal/combat"
 	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
@@ -48,7 +49,8 @@ func TestDirectBattleSaveLoadThroughWindowInput(t *testing.T) {
 		t.Fatal("direct battle retained the pending main-menu music cue")
 	}
 	b := shell.battle
-	if shell.gameplay != gameplay.Strict31 || b.sess.Gameplay != gameplay.Strict31 || b.sess.Combat.ModernTerrainAdmission {
+	_, modernCombat := b.sess.Combat.Rules.(*combat.ModernRules)
+	if shell.gameplay != gameplay.Strict31 || b.sess.Gameplay != gameplay.Strict31 || modernCombat {
 		t.Fatal("direct entry ignored saved strict gameplay")
 	}
 	if b.shell != shell {

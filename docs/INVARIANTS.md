@@ -297,9 +297,20 @@ is still an unknown; the Modern setting does not authorize invented evidence.
 Current contracts are DESIGN_WEAPONS_PROJECTILES §2.3.1 (terrain admission),
 DESIGN_UNITS_ORDERS_COB "Modern Hold Fire", and
 DESIGN_ECONOMY_CONSTRUCTION "Modern factory-exit yielding" and "Modern construction-site yielding", and DESIGN_SESSIONS_AI_SAVE
-"Modern save unit limits". The service and
-queue booleans are projections of the central session mode, not independently
-configurable flags; new and restored queues inherit the same mode.
+"Modern save unit limits". Each departure reaches its algorithm through the
+owning package's rule interface, bound once from the central session mode as
+one named rule set — not through independently configurable flags; new and
+restored queues inherit the same set, and an unbound seam answers as retail.
+
+The mode word also selects a **registered** set by name: a third-party set is
+compiled in through `mods/`, which only a command may import, and it composes
+the shipped implementations rather than reimplementing a policy. Such a set
+declares the reserved set it derives from, and that base — not its name — is
+what the session persists and what every strict-versus-modern question reads,
+so Strict 3.1 remains the retail baseline and no registered name can shadow
+either reserved set. The seam list, the registry, the allocation and
+granularity rules, the switch timing and what a save knows about a set are in
+[DESIGN_GAMEPLAY_RULES](DESIGN_GAMEPLAY_RULES.md).
 
 Strict 3.1 retains the retail firing pipeline, including documented faults.
 Outside an explicitly approved Modern contract, reproduce retail bugs

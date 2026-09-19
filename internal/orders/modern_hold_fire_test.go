@@ -24,7 +24,7 @@ func TestModernHoldFireKeepsGuardFollowing(t *testing.T) {
 				f.guard.Flags = (f.guard.Flags &^ (units.StandingFieldMask << units.StandingFireShift)) | tc.stance<<units.StandingFireShift
 				q := QueueForUnit(f.guard)
 				b := q.Binding()
-				b.ModernHoldFire = tc.modern
+				b.Rules = modeRules(tc.modern)
 				airInstalls := 0
 				b.Movement.InstallAir = func(AirGoalRequest) bool { airInstalls++; return true }
 				q.SetBinding(b)
@@ -63,7 +63,7 @@ func TestModernStandingFirePreservesExplicitAttackOrder(t *testing.T) {
 		f := newGuardLegsFixture(t)
 		q := QueueForUnit(f.guard)
 		b := q.Binding()
-		b.ModernHoldFire = modern
+		b.Rules = modeRules(modern)
 		q.SetBinding(b)
 		f.guard.InstallWeapon(0, &content.WeaponDef{ID: 1, LineOfSight: true})
 		slot := f.guard.SlotAt(0)
@@ -86,7 +86,7 @@ func TestModernManualAttackIssuedWhileHeldRemainsQueued(t *testing.T) {
 	for _, order := range []string{"Attack_NoMove", "Suppress"} {
 		t.Run(order, func(t *testing.T) {
 			q, u := gateFixture()
-			q.Binding().ModernHoldFire = true
+			q.Binding().Rules = &ModernRules{}
 			u.Alive = true
 			u.Flags &^= units.StandingFieldMask << units.StandingFireShift
 			for i := 0; i < units.NumSlots; i++ {
@@ -102,7 +102,7 @@ func TestModernManualAttackIssuedWhileHeldRemainsQueued(t *testing.T) {
 			if target.Kind == units.TargetNone {
 				t.Fatal("held order did not install target")
 			}
-			svc := &combat.Service{ModernHoldFire: true}
+			svc := &combat.Service{Rules: &combat.ModernRules{}}
 			for tick := uint32(2); tick < 100; tick++ {
 				sum := svc.StepWeaponsForUnit(u, tick, nil, nil, nil, nil, nil, nil, nil)
 				if sum.Fired != 0 || u.Pending&units.PendingCouldNotFire != 0 {

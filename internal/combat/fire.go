@@ -121,11 +121,13 @@ type FirePorts struct {
 	// [06 §6.3], so a unit target has no trajectory without it.
 	TargetWorld func(h pool.Handle) (Vec3, bool)
 
-	// AdmitTerrain is the Modern policy's optional preflight. It receives the
-	// already queried muzzle, resolved aim and post-spread slot copy before
-	// allocation and fire callbacks. Its RNG draws commit only on admission.
-	// Nil preserves retail's admission [06 R-WPN-05 §1].
-	AdmitTerrain func(muzzle, aim Vec3, launch Slot) bool
+	// Shot is the caller's fire-attempt query, set when the bound rule set
+	// previews the launch. The spawner fills in the already queried muzzle,
+	// the resolved aim and the post-spread slot copy, puts it to
+	// Rules.AdmitShot before allocation and fire callbacks, and commits the
+	// spread's RNG draws only on admission. Nil preserves retail's admission
+	// [06 R-WPN-05 §1].
+	Shot *ShotQuery
 
 	// Gravity is the map's gravity, consumed by the ballistic solver
 	// [06 §3.3] [06 §6.4].
@@ -281,7 +283,7 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 	var trialSlot Slot
 	var trialRNG rng.Simulation
 	shotRNG := ports.RNG
-	if ports.AdmitTerrain != nil {
+	if ports.Shot != nil {
 		trialSlot = *slot
 		slot = &trialSlot
 		if shotRNG != nil {
@@ -326,8 +328,9 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 		}
 	}
 
-	if ports.AdmitTerrain != nil {
-		if !ports.AdmitTerrain(muzzle, target, *slot) {
+	if q := ports.Shot; q != nil {
+		q.Launch, q.Muzzle, q.Aim = *slot, muzzle, target
+		if !svc.rules().AdmitShot(q) {
 			return 0, false
 		}
 		if shotRNG != nil {
@@ -778,9 +781,10 @@ func (s *Service) SweepBurstAnchorsForShooter(shooter pool.Handle) int {
 	return killed
 }
 
-// holdsFire applies only the central mode's projected Modern policy. It does
-// not add a liveness or generation check to retail shooter references.
-// Nanolathe Modern policy: docs/DESIGN_WEAPONS_PROJECTILES.md §2.6.1.
+// holdsFire puts the shooter to the bound rule set. Strict 3.1 answers false at
+// every site; the Modern answer is the policy of
+// docs/DESIGN_WEAPONS_PROJECTILES.md §2.6.1. Neither adds a liveness or
+// generation check to retail shooter references.
 func (s *Service) holdsFire(u *units.Unit) bool {
-	return s != nil && s.ModernHoldFire && u != nil && u.Flags>>units.StandingFireShift&units.StandingFieldMask == 0
+	return s != nil && s.rules().HoldsFire(u)
 }

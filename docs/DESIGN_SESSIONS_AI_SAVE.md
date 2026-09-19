@@ -1467,8 +1467,14 @@ word different from its live pool after an earlier load; such files cannot
 always establish their original width from this item. Do not infer a width
 from the largest surviving unit slot or retry guessed limits.
 
-**Verification.** `TestModernSaveUnitLimitSelection` locks presence, bounds,
-campaign exclusion and the Strict bypass. `TestModernSaveLoadsAcrossUnitLimits`
+**Verification.** Both decisions — whether the writer records the live limit
+and whether a load may size its pool from a saved one — are asked through the
+session's `UnitLimitRules` seam, so the policy is selected once with the rest
+of the rule set ([DESIGN_GAMEPLAY_RULES](DESIGN_GAMEPLAY_RULES.md)) rather
+than by testing the mode word at each site. `TestModernSaveUnitLimitSelection`
+locks presence, bounds, campaign exclusion and the Strict bypass at the load
+site, and `TestReservedRuleSetsMatchTheModeVocabulary` locks the two answers
+each reserved set gives. `TestModernSaveLoadsAcrossUnitLimits`
 writes both 250- and 1000-unit layouts with a deliberately different configured
 word, then loads each under the other preference. It checks saved identities
 and the initial committed frame, compares resources, both RNG streams and the

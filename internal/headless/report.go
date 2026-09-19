@@ -62,7 +62,10 @@ type PlayerReport struct {
 // Session.PartialStateFingerprint, whose intentionally partial coverage is listed
 // in docs/DESIGN_RUNTIME_DETERMINISM.md §4; it is not a whole-session parity gate.
 type Report struct {
-	Gameplay                  gameplay.Mode    `json:"gameplay"`
+	Gameplay gameplay.Mode `json:"gameplay"`
+	// Rules is the bound rule set's name. Gameplay reports only the reserved
+	// base word, so a registered third-party set is visible only here.
+	Rules                     string           `json:"rules"`
 	ScenarioKind              ScenarioKind     `json:"scenario_kind"`
 	ScenarioIdentity          string           `json:"scenario_identity"`
 	SimulationSeed            uint32           `json:"simulation_seed"`
@@ -170,6 +173,7 @@ func buildReport(request Request, kind ScenarioKind, identity string, sess *sess
 	report := Report{
 		ScenarioKind:     kind,
 		Gameplay:         sess.Gameplay.Normalize(),
+		Rules:            sess.Rules.Name,
 		ScenarioIdentity: identity,
 		SimulationSeed:   request.SimulationSeed,
 		CRTSeed:          request.CRTSeed,

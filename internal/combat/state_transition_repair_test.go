@@ -55,7 +55,7 @@ func TestFreshTurretAimFailurePreservesStateAndVisitsFireGates(t *testing.T) {
 					beforePlayer := econ.Players[shooter.Owner]
 					random := rng.NewSimulation(77)
 					beforeRandom := random
-					svc := Service{ModernTerrainAdmission: mode == gameplay.Modern, ModernHoldFire: mode == gameplay.Modern}
+					svc := Service{Rules: rulesForModern(mode == gameplay.Modern)}
 					sum := svc.StepWeaponsForUnit(shooter, 1, w, nil, terrain, econ, nil, &random, nil)
 					if sum.Dispatched || sum.Fired != 0 || svc.Count() != 0 || slot.DesiredYaw != 123 || slot.DesiredPitch != 456 || slot.Aim != beforeAim || slot.Flags != beforeFlags {
 						t.Errorf("fresh failed solve changed stored state: summary=%+v angles=(%d,%d) aim=%+v flags=%#x", sum, slot.DesiredYaw, slot.DesiredPitch, slot.Aim, slot.Flags)

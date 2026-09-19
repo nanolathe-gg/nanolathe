@@ -225,7 +225,10 @@ func (g *gameShell) syncNanolatheOptions() {
 	if optionsState == nil || optionsState.page != "nanolathe" || optionsPanel == nil {
 		return
 	}
-	optionsPanel.SetStageAt(optionsPanel.Index("NGAMEPLAY"), boolInt(g.gameplay.Normalize() == gameplay.Modern))
+	// The panel is a two-stage control, so a third-party rule set shows the
+	// reserved set it derives from; selecting a set by name is a command-line
+	// or settings-file choice (docs/DESIGN_GAMEPLAY_RULES.md §8).
+	optionsPanel.SetStageAt(optionsPanel.Index("NGAMEPLAY"), boolInt(session.BaseModeOf(g.gameplay) == gameplay.Modern))
 	optionsPanel.SetStageAt(optionsPanel.Index("NRENDER"), boolInt(g.presentation.Renderer == "modern"))
 	g.syncNanolatheFPSStage()
 	// The six Enhanced switches. Glow reads the display block; the other five
@@ -259,8 +262,10 @@ func (g *gameShell) activateNanolatheOption(name string) bool {
 	p := g.presentation
 	switch name {
 	case "NGAMEPLAY":
+		// Toggling selects one of the two reserved sets, so it also replaces a
+		// third-party selection with the reserved set on the chosen side.
 		mode := gameplay.Strict31
-		if g.retailOptionsStage(name, 2, boolInt(g.gameplay.Normalize() == gameplay.Modern)) == 1 {
+		if g.retailOptionsStage(name, 2, boolInt(session.BaseModeOf(g.gameplay) == gameplay.Modern)) == 1 {
 			mode = gameplay.Modern
 		}
 		g.setGameplay(mode)

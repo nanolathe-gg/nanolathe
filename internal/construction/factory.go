@@ -141,10 +141,11 @@ const (
 
 // Service holds the factory lifecycle dependencies [PLAN_08].
 type Service struct {
-	// ModernConstructionClearance projects gameplay.Mode; false preserves Strict 3.1.
-	// Contracts: DESIGN_ECONOMY_CONSTRUCTION, "Modern factory-exit yielding"
+	// Rules is the gameplay seam the session binds once per rule set; a nil
+	// field is the Strict 3.1 baseline. See rules.go for the decision and its
+	// contracts: DESIGN_ECONOMY_CONSTRUCTION, "Modern factory-exit yielding"
 	// and "Modern construction-site yielding".
-	ModernConstructionClearance bool
+	Rules Rules
 
 	Terrain *world.Terrain
 	Catalog *content.Catalog

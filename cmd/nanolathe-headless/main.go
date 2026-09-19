@@ -16,6 +16,11 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/headless"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
+
+	// The rule sets this build can select beyond the two reserved ones, so a
+	// displayless run can reproduce a third-party set's session
+	// (docs/DESIGN_GAMEPLAY_RULES.md §8).
+	_ "github.com/nanolathe-gg/nanolathe/mods"
 )
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -154,7 +159,7 @@ func parse(args []string, output io.Writer) (headless.Request, string, profileOp
 		}
 		return nil
 	})
-	flags.Func("gameplay", "gameplay rules: modern (default) or strict-3.1", func(text string) error {
+	flags.Func("gameplay", "gameplay rule set: modern (default), strict-3.1, or a registered set's name (see mods/)", func(text string) error {
 		mode, err := gameplay.Parse(text)
 		request.Gameplay = mode
 		bench.Gameplay = mode

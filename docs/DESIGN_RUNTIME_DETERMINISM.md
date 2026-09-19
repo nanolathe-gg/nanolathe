@@ -691,6 +691,14 @@ the difference; changes outside the listed coverage need direct contract
 checks. Both draw counts must also agree for identical seeded setups [I4].
 Neither a matching digest nor matching draw counts certify omitted state.
 
+**The one consumer that records values.** The retail-tier fingerprint lock in
+`internal/headless` holds this run's digest, and the simulation benchmark
+scene's, as checked-in constants for both gameplay rule sets, so an unintended
+change to a Modern rule cannot move the Strict 3.1 baseline unnoticed. The
+constants, their provenance and the rule for changing one live with that test;
+ARCHITECTURE §6 states the gate. Every other consumer compares two runs of its
+own and writes nothing down.
+
 **Guards that read source, not runtime.** `internal/architecture` inspects the
 tree with the Go parser and, for map ranges, Go type information over the
 authoritative package graph: the three DET-01 stream guards, the PROC-03

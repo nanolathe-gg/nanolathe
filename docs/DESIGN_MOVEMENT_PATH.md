@@ -46,8 +46,9 @@ and must not be removed as a parity defect.
 
 **Nanolathe Modern policy.** Construction may supply `StageModernClearance`
 with a new idle blocker's `Move_Ground` record and a locally proven cardinal
-path. Only the central Modern policy produces these requests; Strict produces
-none. Eligibility, proof and work limits belong to
+path. Only `construction.ModernRules` produces these requests, through the
+central `construction.Rules` seam; `construction.StrictRules` produces none.
+Eligibility, proof and work limits belong to
 [Modern construction-site yielding](DESIGN_ECONOMY_CONSTRUCTION.md#modern-construction-site-yielding).
 
 Staging writes no position, occupancy, speed, RNG or scheduler state. The hint
@@ -732,8 +733,10 @@ runs ground and feature orders through bomb release in both modes.
 ### 3.4.1 Modern bomber pass completion
 
 **Nanolathe Modern policy.** An accepted bombing pass may finish before its
-maneuver leash makes it return to post. The central `gameplay.Mode` projects
-this policy into the session's shared order binding; Strict 3.1 disables it.
+maneuver leash makes it return to post. The central `gameplay.Mode` selects the
+order package's rule set, `orders.Rules`, carried on the session's shared order
+binding; the air entry asks it `DeferBomberLeash` before the leash comparison,
+and `orders.StrictRules` answers no, which is Strict 3.1.
 
 **Strict baseline (Established).** Autonomous Maneuver inserts a leashed
 attack followed by a return move [04 R-STANCE-01 §4]. Air attacks test that

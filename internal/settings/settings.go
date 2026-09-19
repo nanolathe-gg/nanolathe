@@ -317,6 +317,12 @@ type Skirmish struct {
 
 // Settings is the whole persisted block.
 type Settings struct {
+	// Gameplay is the selected rule set: `modern`, `strict-3.1`, or the name
+	// of a set this build registered. Normalize keeps a name this build can
+	// select and falls back to Modern otherwise, so a file written by a build
+	// that linked a set the running one does not — or a hand-edited typo —
+	// starts under the default instead of failing to load
+	// (docs/DESIGN_GAMEPLAY_RULES.md §8).
 	Gameplay gameplay.Mode `json:"gameplay"`
 	Version  int           `json:"version"`
 	// Fullscreen is Nanolathe's desktop presentation preference, independent of

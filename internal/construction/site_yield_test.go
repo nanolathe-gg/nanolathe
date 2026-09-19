@@ -14,7 +14,7 @@ import (
 func siteYieldFixture(t *testing.T) (*Service, *units.Unit, *units.Unit, *orders.Node) {
 	t.Helper()
 	s, b, n := approachFixtureAt(t, 10, 10, world.CellToWorld(5), world.CellToWorld(10))
-	s.ModernConstructionClearance = true
+	s.Rules = &ModernRules{}
 	s.Economy = &economy.Service{}
 	bindConstructionCombat(s)
 	sim := rng.NewSimulation(17)
@@ -41,7 +41,7 @@ func TestModernSiteClearanceBeatsBuildTimeoutWithoutScheduler(t *testing.T) {
 	for _, modern := range []bool{false, true} {
 		t.Run(map[bool]string{false: "Strict", true: "Modern"}[modern], func(t *testing.T) {
 			s, b, u, n := siteYieldFixture(t)
-			s.ModernConstructionClearance = modern
+			s.Rules = clearanceRules(modern)
 			startX, startZ := u.X, u.Z
 			draws := s.OrderBinding.SimRNG.Draws()
 			s.mobilePlacementVisit(b, n, 1)

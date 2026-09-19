@@ -174,17 +174,19 @@ func TestModernTerrainSpreadTransaction(t *testing.T) {
 			}
 			calls := 0
 			ports := FirePorts{Origin: muzzle, RNG: &random, ShooterHealth: 100, ShooterMaxHealth: 100}
+			var shot ShotQuery
 			if tc.modern {
-				ports.AdmitTerrain = func(m, a Vec3, got Slot) bool {
+				ports.Shot = &shot
+				svc.Rules = &terrainSpyRules{admit: func(q *ShotQuery) bool {
 					calls++
-					if m != muzzle || a != aim || got.DesiredYaw != want.DesiredYaw || got.DesiredPitch != want.DesiredPitch {
-						t.Fatalf("preview did not receive exact spread: got=%+v want=%+v", got, want)
+					if q.Muzzle != muzzle || q.Aim != aim || q.Launch.DesiredYaw != want.DesiredYaw || q.Launch.DesiredPitch != want.DesiredPitch {
+						t.Fatalf("preview did not receive exact spread: got=%+v want=%+v", q.Launch, want)
 					}
 					if random != before {
 						t.Fatal("preview consumed shared RNG")
 					}
 					return tc.admit
-				}
+				}}
 			}
 			old := launch
 			_, fired := TryFire(svc, &launch, 0, Target{Kind: TargetPoint, X: aim.X, Y: aim.Y, Z: aim.Z}, 10, ports)
@@ -231,7 +233,9 @@ func TestModernTerrainCommitsSpreadBeforeScriptRandomness(t *testing.T) {
 	wantFire, wantRock := expected.Uint32n(65536), expected.Uint32n(65536)
 	script := &terrainAdmissionRandomScript{random: &random}
 	muzzle, aim := modernTerrainPoints()
-	if _, ok := TryFire(&Service{}, &launch, 0, Target{Kind: TargetPoint, X: aim.X, Y: aim.Y, Z: aim.Z}, 10, FirePorts{Origin: muzzle, RNG: &random, Script: script, ShooterHealth: 100, ShooterMaxHealth: 100, AdmitTerrain: func(Vec3, Vec3, Slot) bool { return true }}); !ok {
+	svc := &Service{Rules: &terrainSpyRules{admit: func(*ShotQuery) bool { return true }}}
+	var shot ShotQuery
+	if _, ok := TryFire(svc, &launch, 0, Target{Kind: TargetPoint, X: aim.X, Y: aim.Y, Z: aim.Z}, 10, FirePorts{Origin: muzzle, RNG: &random, Script: script, ShooterHealth: 100, ShooterMaxHealth: 100, Shot: &shot}); !ok {
 		t.Fatal("admitted shot failed")
 	}
 	if script.fire != wantFire || script.rock != wantRock || random != expected {
@@ -302,14 +306,16 @@ func TestModernBallisticAdmissionUsesSpreadAdjustedArc(t *testing.T) {
 		t.Fatalf("nominal arc=%v want blocked", got)
 	}
 	random := rng.NewSimulation(77)
-	ports := FirePorts{Origin: muzzle, Gravity: terrain.Gravity, RNG: &random, ShooterHealth: 100, ShooterMaxHealth: 100, AdmitTerrain: func(m, a Vec3, actual Slot) bool {
-		got := modernTerrainAdmission(actual, m, a, 10, terrain, nil, &world.Wind{})
+	var shot ShotQuery
+	ports := FirePorts{Origin: muzzle, Gravity: terrain.Gravity, RNG: &random, ShooterHealth: 100, ShooterMaxHealth: 100, Shot: &shot}
+	svc := &Service{Rules: &terrainSpyRules{admit: func(q *ShotQuery) bool {
+		got := modernTerrainAdmission(q.Launch, q.Muzzle, q.Aim, 10, terrain, nil, &world.Wind{})
 		if got == terrainShotBlocked {
 			t.Fatal("spread-adjusted arc should clear nominal obstruction")
 		}
 		return got != terrainShotBlocked
-	}}
-	if _, ok := TryFire(&Service{}, &launch, 0, Target{Kind: TargetPoint, X: aim.X, Y: aim.Y, Z: aim.Z}, 10, ports); !ok {
+	}}}
+	if _, ok := TryFire(svc, &launch, 0, Target{Kind: TargetPoint, X: aim.X, Y: aim.Y, Z: aim.Z}, 10, ports); !ok {
 		t.Fatal("spread-adjusted clear shot rejected")
 	}
 }

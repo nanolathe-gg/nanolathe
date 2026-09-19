@@ -764,8 +764,10 @@ owned by the factory's player to walk away when they obstruct production or
 a yard close. This is independent of that script flag and of retail's normal
 product parking [05 R-EGRESS-02].
 
-`construction.Service.ModernConstructionClearance` is a session projection of the central
-`gameplay.Mode`. Its zero value is Strict behavior. When enabled:
+`construction.Service.Rules` is the seam the session binds from the central
+`gameplay.Mode`: `construction.StrictRules` for Strict 3.1 and
+`construction.ModernRules` for Modern. A nil field is Strict behavior, so a
+fixture that binds nothing keeps retail outcomes. Under `ModernRules`:
 
 1. A failed state-2 placement examines the exact product exit rectangle; a
    refused close examines only the yard cells selected by the closed state.
@@ -800,8 +802,8 @@ product parking [05 R-EGRESS-02].
    A close is still refused until the cells actually clear. Never teleport,
    push, stack, reserve world occupancy, spend resources, or draw RNG during
    clearance. Resource admission and allocation run only on a later successful
-   placement attempt. Disabling Modern stops new clearance requests; an already
-   issued ordinary move completes as normal.
+   placement attempt. Rebinding the seam to `StrictRules` stops new clearance
+   requests; an already issued ordinary move completes as normal.
 
 **Boundaries and checks.** This policy clears direct exit/closing-yard blockers;
 there is no general traffic yield for a product blocked farther along its route,
@@ -815,9 +817,9 @@ factory/product definitions. Strict fixtures preserve all existing outcomes.
 ### Modern construction-site yielding
 
 **Nanolathe Modern policy (user-authorized), not retail evidence.** The same
-central `gameplay.Mode` projection, `ModernConstructionClearance`, covers
-factory exits and mobile-builder construction sites. Strict 3.1 retains the
-blocked-site counter, eleven 30-tick waits, removal and queue advancement
+central `gameplay.Mode` seam, `construction.Rules`, covers factory exits and
+mobile-builder construction sites. Strict 3.1 retains the blocked-site
+counter, eleven 30-tick waits, removal and queue advancement
 [04 R-ORDER-02 §1]. Modern keeps that exact budget too.
 
 On the first failed placement visit, and each nonterminal retry, inspect the

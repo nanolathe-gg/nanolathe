@@ -127,7 +127,11 @@ func (s *Session) ensurePublicationState() *publicationState {
 // services owned centrally by this package C5.
 // Go allows methods in any file, but the struct is defined once here.
 type Session struct {
-	Gameplay                 gameplay.Mode
+	Gameplay gameplay.Mode
+	// Rules is the bound gameplay rule set, one implementation per seam.
+	// Gameplay stays the persisted vocabulary; this is what the phases
+	// actually ask (docs/DESIGN_GAMEPLAY_RULES.md, INVARIANTS I11).
+	Rules                    RuleSet
 	bigBrother               bigBrotherState
 	publicationObserver      func(*frame.Frame)
 	developerDiagnostics     bool

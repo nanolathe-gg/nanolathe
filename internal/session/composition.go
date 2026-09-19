@@ -14,7 +14,6 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/economy"
 	"github.com/nanolathe-gg/nanolathe/internal/features"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
-	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/mission"
 	"github.com/nanolathe-gg/nanolathe/internal/model"
 	"github.com/nanolathe-gg/nanolathe/internal/movement"
@@ -964,14 +963,12 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 		}
 	}
 	return &orders.QueueBinding{
-		ModernHoldFire:        s.Gameplay.Normalize() == gameplay.Modern,
-		ModernBomberPass:      s.Gameplay.Normalize() == gameplay.Modern,
-		ModernGuardAssistance: s.Gameplay.Normalize() == gameplay.Modern,
-		Damage:                s.acceptDamage,
-		Economy:               s.Econ,
-		Lookup:                worldQueries.LookupUnit,
-		Hostility:             worldQueries.Hostile,
-		SimRNG:                s.SimRNG(),
+		Rules:     s.orderRules(),
+		Damage:    s.acceptDamage,
+		Economy:   s.Econ,
+		Lookup:    worldQueries.LookupUnit,
+		Hostility: worldQueries.Hostile,
+		SimRNG:    s.SimRNG(),
 		CurrentTick: func() uint32 {
 			if s.Clock == nil {
 				return 0
@@ -1467,7 +1464,17 @@ func (s *Session) bindOrderQueue(u *units.Unit) {
 	if s.Combat == nil {
 		s.Combat = &combat.Service{}
 	}
-	s.SetGameplay(s.Gameplay)
+	// Project the selected rule set onto the services just created. This runs
+	// on every allocation, so it re-projects what is bound instead of
+	// re-selecting from the mode word: the word is the bound set's base, and
+	// re-deriving from it would replace a selected third-party set with its
+	// base set the first time a unit is created.
+	// Project the selected rule set onto the services just created. This runs
+	// on every allocation, so it re-projects what is bound instead of
+	// re-selecting from the mode word: the word is the bound set's base, and
+	// re-deriving from it would replace a selected third-party set with its
+	// base set the first time a unit is created.
+	s.RebindRules()
 	s.Combat.ProjectileWind = s.Wind
 	s.Build.Combat = s.Combat
 	s.Build.World = s.Units
@@ -1853,7 +1860,9 @@ func createAndBindServices(s *Session) error {
 	if s.Combat == nil {
 		s.Combat = &combat.Service{}
 	}
-	s.SetGameplay(s.Gameplay)
+	// The composer selects the session's rule set here, from the word its
+	// constructor carried, and projects it onto the services above.
+	s.RebindRules()
 	s.Combat.ProjectileWind = s.Wind
 	s.Build.Combat = s.Combat
 	// The area walk of [06 §9.3] offers a feature candidate in every covered

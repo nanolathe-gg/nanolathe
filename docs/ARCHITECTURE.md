@@ -23,6 +23,7 @@ has its own design document; this one only says where the boundaries are.
 | [DESIGN_SESSIONS_AI_SAVE](DESIGN_SESSIONS_AI_SAVE.md) | session states, campaign and mission loading, triggers, the computer player, saves, the headless runner |
 | [DESIGN_PRESENTATION_CLIENT](DESIGN_PRESENTATION_CLIENT.md) | window and frame loop, the frame composer, model rasterizer, effects, palette, audio |
 | [DESIGN_DEVELOPER_TOOLS](DESIGN_DEVELOPER_TOOLS.md) | planned developer views, reconnected dormant probes, diagnostic publication and portable host tooling |
+| [DESIGN_GAMEPLAY_RULES](DESIGN_GAMEPLAY_RULES.md) | the gameplay rule seams, how a Modern or Strict 3.1 rule set is bound, and what it may cost |
 | [DESIGN_GPU_RENDERER](DESIGN_GPU_RENDERER.md) | the recorded frame draw list, the classic (software) and modern (GPU) executors, the renderer switch, visual parity policy and prototype gates |
 
 Rules that cut across every package are in [INVARIANTS.md](INVARIANTS.md);
@@ -111,7 +112,7 @@ package implements.
 | `internal/pool` | Fixed-capacity pools with slot 0 null, lowest-free allocation and immediate reuse | DESIGN_RUNTIME_DETERMINISM |
 | `internal/frame` | The committed frame: what the simulation publishes at the end of each sub-tick and what presentation samples | DESIGN_RUNTIME_DETERMINISM (publication), DESIGN_PRESENTATION_CLIENT (consumption) |
 | `internal/session` | The authoritative session: state machine, battle entry for skirmish and mission, the twelve-phase tick, publication, results, save staging and restore, effect strips, eyeballs, status cues | DESIGN_RUNTIME_DETERMINISM (tick, publication), DESIGN_SESSIONS_AI_SAVE (states, entry, results, saves) |
-| `internal/gameplay` | Central Modern / Strict 3.1 policy vocabulary shared by settings and session; no simulation or presentation dependencies | DESIGN_WEAPONS_PROJECTILES |
+| `internal/gameplay` | Central gameplay policy vocabulary shared by settings and session: the two reserved words and, through a registry view the session installs, the name of any rule set the build links; no simulation or presentation dependencies | DESIGN_GAMEPLAY_RULES |
 | `internal/version` | Build identity | DESIGN_RUNTIME_DETERMINISM |
 
 ### World
@@ -174,6 +175,7 @@ package implements.
 |---|---|---|
 | `cmd/nanolathe` | The game: front-end screens, briefing, battle composition and dispatch, the battle HUD wiring, load/save screens, post-battle, `--shot` captures, `--headless` | DESIGN_INTERFACE_HUD_INPUT (screens, dispatch), DESIGN_SESSIONS_AI_SAVE (composition, headless) |
 | `cmd/nanolathe-headless` | The displayless runner: one authoritative session to a tick limit or result, JSON report | DESIGN_SESSIONS_AI_SAVE |
+| `mods`, `mods/example` | The gameplay rule sets a build links beyond the two reserved ones: each registers itself from an init and is selected by name; imported only by the two commands | DESIGN_GAMEPLAY_RULES |
 
 ### Hygiene, probes and tools
 
@@ -194,7 +196,8 @@ build order. Arrows point from importer to imported; a package may import
 anything in a lower layer and nothing in a higher one.
 
 ```
-platform      cmd/nanolathe ─► platform/ebitenapp ─► client, audiobackend
+platform      cmd/nanolathe, cmd/nanolathe-headless ─► mods ─► session   (linked rule sets, DESIGN_GAMEPLAY_RULES §8)
+              cmd/nanolathe ─► platform/ebitenapp ─► client, audiobackend
               cmd/nanolathe ─► upscale ─► formats, palette   (load-time 2× art, DESIGN_GPU_RENDERER §14)
               cmd/nanolathe-headless ─► headless
 
@@ -230,7 +233,7 @@ leaves        vfs, clock, pool, frame(pool, numeric), camera(pool, numeric), inp
               settings, version, sim/numeric, sim/rng
 ```
 
-Three boundaries in this graph are enforced by tests in `internal/architecture`
+Four boundaries in this graph are enforced by tests in `internal/architecture`
 rather than by convention:
 
 * **Only the platform adapter reaches Ebitengine.** `internal/platform/ebitenapp`,
@@ -248,6 +251,12 @@ rather than by convention:
   sub-tick, and none of them owns a window, a device or a clock. The
   committed frame is the only channel from simulation to presentation
   `[03 §2.4]` [I6].
+* **Only a command imports the mod list.** `mods` is the list of gameplay rule
+  sets a build links, so a package under `internal/` that imported it would
+  make its behavior depend on which sets happen to be in the tree, and a set
+  composing that package's own implementations would close the loop into an
+  import cycle. The direction is cmd → mods → session → simulation
+  (DESIGN_GAMEPLAY_RULES §8).
 * **Presentation does not own a random stream.** The presentation packages
   (`client`, `render`, `audio`, `hud`, `gui`, `ui`, `camera`) do not import
   `internal/sim/rng` except through a shrink-only allowlist of files that copy
@@ -440,6 +449,26 @@ fingerprint and both RNG draw counts [I4], but changes outside its coverage
 need their own contract tests. A change to an included value must explain the
 difference. Compare only the same fingerprint version; changing its field set
 or encoding requires a new version.
+
+**The rule-set fingerprint lock.** `internal/headless`'s
+`TestStrictFingerprintIsLocked` and `TestModernFingerprintIsLocked` are the
+retail-tier guard that keeps a gameplay rule change honest: each runs two fixed
+scenes under one mode and compares the digests with constants checked into
+`rules_lock_retail_test.go`. The scenes are the reference run above at 6,000
+and 54,000 ticks, where Strict 3.1 and Modern agree, and the simulation
+benchmark's own three-army composition at 600 and 1,500 steps, where they do
+not — a third test asserts that separation, so a Modern policy that quietly
+stopped applying fails instead of passing on plausible-looking constants. Both
+scenes pin their per-player unit limit explicitly, because the displayless
+command otherwise takes an unset `-unit-limit` from the host profile and the
+digest would follow the machine rather than the change. The whole lock costs
+about fifteen seconds. To update a constant, run the failing subtest, take the
+reported value, and say in the commit message which behaviour changed: a Strict
+constant moving is a retail-baseline change and needs the research citation
+that justifies it, and a Modern constant moving is an approved-policy change
+and needs its design section [I11]. "The fingerprint moved" is not an
+explanation, and re-recording a value without one is how this guard would be
+lost.
 
 **Visual evidence.** `nanolathe --shot` renders a frame headlessly; a
 screenshot is reviewed, an assertion that it should look right is not. Retail

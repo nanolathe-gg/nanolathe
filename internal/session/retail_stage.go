@@ -216,7 +216,7 @@ func retailStageUnitLimit(summary save.Summary, deps RetailLoadDeps, m *mission.
 	if summary.Gametype == GametypeCampaign {
 		return int(campaignUnitLimit(m)), nil
 	}
-	if deps.Gameplay.Normalize() == gameplay.Strict31 || !summary.HasMaxUnits || summary.MaxUnits == 0 {
+	if !unitLimitRulesForMode(deps.Gameplay).RestoresSavedUnitLimit() || !summary.HasMaxUnits || summary.MaxUnits == 0 {
 		return unitLimitOrDefault(deps.UnitLimit), nil
 	}
 	// Ten slices must fit positive signed occupancy identities, the same

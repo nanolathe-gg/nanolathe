@@ -1,9 +1,19 @@
 // Package gameplay names Nanolathe's explicit simulation policy choices.
 package gameplay
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Mode is independent of the presentation renderer. The zero value selects Modern.
+//
+// A mode word has three forms: the two reserved words below, and the name of
+// any rule set this build registered (docs/DESIGN_GAMEPLAY_RULES.md §1). The
+// reserved words are the vocabulary every persisted and reported value uses;
+// a registered name is a selection the host carries from its flag or its
+// settings file to the session, which resolves it once and then reports the
+// reserved word its set derives from.
 type Mode string
 
 const (
@@ -11,17 +21,68 @@ const (
 	Strict31 Mode = "strict-3.1"
 )
 
+// NameRegistry is how a build tells this package which rule-set names it can
+// select. The names belong to internal/session, which owns the registry and
+// would be an import cycle here, so the session installs a view of it instead
+// and this package stays a leaf.
+type NameRegistry interface {
+	// Known reports whether a word names a selectable rule set, reserved or
+	// registered. It is asked once per parsed or normalized word and never in
+	// a tick, but it is a lookup rather than a listing so that answering
+	// allocates nothing.
+	Known(name string) bool
+	// Names lists every selectable name for a diagnostic, reserved first.
+	Names() []string
+}
+
+// names is the installed view, written once before any word is parsed and
+// read-only afterwards. A build that installs none — a test binary of a
+// package below the session, for instance — knows only the reserved words.
+var names NameRegistry
+
+// UseNameRegistry installs the build's selectable rule-set names. It is an
+// init-time call with a single writer (internal/session), so nothing
+// synchronizes it: every read happens after every package init has run.
+func UseNameRegistry(r NameRegistry) { names = r }
+
+// selectable reports whether this build can select the word as it stands.
+func (m Mode) selectable() bool {
+	if m == Modern || m == Strict31 {
+		return true
+	}
+	return names != nil && names.Known(string(m))
+}
+
+// selectableNames lists what a rejected word could have been.
+func selectableNames() []string {
+	if names != nil {
+		return names.Names()
+	}
+	return []string{string(Modern), string(Strict31)}
+}
+
+// Normalize canonicalizes a stored or parsed selection: a reserved word and a
+// registered name are kept as they stand, and a word this build cannot select
+// becomes Modern, the default. It is what a settings loader, a host option and
+// a session constructor apply to a word of unknown provenance.
+//
+// Normalize answers the *selection* question, not the strict-versus-modern
+// one. A registered set declares which reserved set it derives from and the
+// session's bound set answers that instead; see
+// docs/DESIGN_GAMEPLAY_RULES.md §1.
 func (m Mode) Normalize() Mode {
-	if m == Strict31 {
-		return Strict31
+	if m.selectable() {
+		return m
 	}
 	return Modern
 }
 
+// Parse accepts a reserved word or the name of a rule set this build
+// registered, and rejects anything else with the selectable names in the
+// diagnostic so the caller can act on the failure.
 func Parse(text string) (Mode, error) {
-	switch Mode(text) {
-	case Modern, Strict31:
-		return Mode(text), nil
+	if mode := Mode(text); mode.selectable() {
+		return mode, nil
 	}
-	return Modern, fmt.Errorf("nanolathe: invalid gameplay mode: logical path <command line>, providers searched [gameplay], expected modern or strict-3.1")
+	return Modern, fmt.Errorf("nanolathe: invalid gameplay rule set %q: logical path <command line>, providers searched [gameplay, mods], expected one of %s", text, strings.Join(selectableNames(), ", "))
 }

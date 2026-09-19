@@ -1,3 +1,8 @@
+// The approved Modern order policies, gathered behind the package's rule seam.
+// Each body is the one that previously ran behind a mode projection on the
+// queue binding; reaching a method here already means Modern is selected, so
+// the projection test is gone and nothing else changed.
+
 package orders
 
 import (
@@ -5,12 +10,34 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
+// ModernRules carries the approved Modern order policies. It holds no state:
+// every body reads the acting unit's own queue binding, so one value serves a
+// whole session and is used by pointer.
+type ModernRules struct{}
+
+// Modern's authoritative Hold Fire also closes the guard's forced combat join,
+// which retail's force flag bypasses. The guard keeps its follow/assistance
+// record and its ordinary movement and repair behavior.
+// Nanolathe Modern policy: docs/DESIGN_UNITS_ORDERS_COB.md "Modern Hold Fire".
+func (*ModernRules) HoldsFire(u *units.Unit) bool {
+	return u != nil && u.Flags>>stanceFireShift&stanceFieldMask == 0
+}
+
+// An accepted Modern bombing pass reaches release and finishes overflight
+// before its return-to-post leash applies. Phase 6 is dispatched after
+// overflight; ordinary completion then clears weapon targets and resumes the
+// queued return move. Target and cancel checks still precede this decision.
+// Nanolathe Modern policy: DESIGN_MOVEMENT_PATH §3.4.1.
+func (*ModernRules) DeferBomberLeash(u *units.Unit, n *Node) bool {
+	return n != nil && n.Phase >= 1 && n.Phase <= 5 && DescriptorFor(n.ID).Name == "AirStrike"
+}
+
 // Nanolathe Modern policy: DESIGN_UNITS_ORDERS_COB "Modern guard assistance".
 // A guard keeps its ward and queue while borrowing the patrol pad selection.
 // The existing landing and repair executors own travel, attachment and healing.
-func modernGuardSeekPad(u *units.Unit, n *Node, tick uint32) bool {
+func (*ModernRules) GuardSeeksPad(u *units.Unit, n *Node, tick uint32) bool {
 	b := bindingFor(u)
-	if b == nil || !b.ModernGuardAssistance || !unitCanFly(u) || !combat.AirBelowThreeQuarters(u) {
+	if b == nil || !unitCanFly(u) || !combat.AirBelowThreeQuarters(u) {
 		return false
 	}
 	pad := pickCandidate(u, airBasePads(u))
@@ -28,9 +55,9 @@ func modernGuardSeekPad(u *units.Unit, n *Node, tick uint32) bool {
 // Modern guards finish their ward's assistance first, then select nearby work
 // in stable enumeration order. Selection is read-only and draws no randomness;
 // the ordinary work rows retain their own resource admission and RNG effects.
-func modernGuardNearbyWork(u *units.Unit, n *Node, tick uint32) bool {
+func (*ModernRules) GuardWorksNearby(u *units.Unit, n *Node, tick uint32) bool {
 	b := bindingFor(u)
-	if b == nil || !b.ModernGuardAssistance || !canRepairGuard(u) || !hasMover(u) {
+	if b == nil || !canRepairGuard(u) || !hasMover(u) {
 		return false
 	}
 	q := QueueOfUnit(u)
@@ -69,9 +96,9 @@ func modernGuardNearbyWork(u *units.Unit, n *Node, tick uint32) bool {
 // The landing executor leaves a healed patient attached to its repair pad.
 // Only Modern aircraft guarding from such a pad may use the normal takeoff
 // preamble to resume; transport cargo keeps the retail carried-guard rejection.
-func modernGuardOnRepairPad(u *units.Unit) bool {
+func (*ModernRules) GuardResumesFromPad(u *units.Unit) bool {
 	b := bindingFor(u)
-	if b == nil || !b.ModernGuardAssistance || !unitCanFly(u) {
+	if b == nil || !unitCanFly(u) {
 		return false
 	}
 	pad := lookupTarget(u, u.Attachment.Carrier)

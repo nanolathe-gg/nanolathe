@@ -308,8 +308,10 @@ interpretation `[08 R-SAVE-ORDER-01]` `[08 R-SAVE-02 §6]`.
 ### Modern Hold Fire
 
 **Nanolathe Modern policy (user-authorized).** The central `gameplay.Mode`
-projects `orders.QueueBinding.ModernHoldFire`; false preserves Strict 3.1.
-Modern Hold Fire refuses the guard's forced combat join even though retail's
+selects the order package's rule set, `orders.Rules`, which the queue carries
+on its binding; the queue asks it `HoldsFire` at the join. `orders.StrictRules`
+answers the retail way, so Strict 3.1 is preserved by the seam's zero-size
+default. Modern Hold Fire refuses the guard's forced combat join even though retail's
 force flag bypasses both standing-order fields `[04 R-STANCE-01 §3]`
 `[04 R-UNIT-06 §1]`. The guard retains its existing follow/assistance order and
 continues its ordinary movement/repair behavior. Standing move still has its
@@ -328,8 +330,10 @@ combat-join suppression, and cover Strict bypass and Return Fire.
 ### Modern guard assistance
 
 **Nanolathe Modern policy (user-authorized).** The central `gameplay.Mode`
-projects `orders.QueueBinding.ModernGuardAssistance`; false preserves Strict
-3.1. This applies to the unit executing `Follow_Ground` or `VTOL_Follow`,
+selects the order package's rule set, `orders.Rules`, whose three guard
+decisions — `GuardSeeksPad`, `GuardWorksNearby` and `GuardResumesFromPad` — the
+guard legs ask in place of a mode test; `orders.StrictRules` answers all three
+the retail way, so Strict 3.1 is preserved. This applies to the unit executing `Follow_Ground` or `VTOL_Follow`,
 with its original Guard record and queued successors retained. It does not
 turn the guarded unit into an area-work command. The stationary
 `Guard_NoMove` keeps its existing behavior.

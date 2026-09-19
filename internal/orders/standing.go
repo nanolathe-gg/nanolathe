@@ -695,7 +695,7 @@ func autoEngage(u *units.Unit, target *units.Unit, force bool) bool {
 	}
 	// Modern's authoritative Hold Fire also closes the forced guard join.
 	// Nanolathe Modern policy: docs/DESIGN_UNITS_ORDERS_COB.md "Modern Hold Fire".
-	if b := bindingOfUnit(u); b != nil && b.ModernHoldFire && u.Flags>>stanceFireShift&stanceFieldMask == 0 {
+	if rulesOfUnit(u).HoldsFire(u) {
 		return false
 	}
 	if !force {

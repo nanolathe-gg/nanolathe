@@ -14,6 +14,29 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
+// modernCombatRules reports whether the session bound the combat service's
+// Modern rule set. The two former booleans are one seam now, so one question
+// covers both policies.
+func modernCombatRules(svc *combat.Service) bool {
+	_, ok := svc.Rules.(*combat.ModernRules)
+	return ok
+}
+
+// modernOrderRules reports whether a composed binding carries the Modern order
+// rule set. The three mode projections it replaces were always set together,
+// so one identity test covers all of them.
+func modernOrderRules(b *orders.QueueBinding) bool {
+	_, modern := b.Rules.(*orders.ModernRules)
+	return modern
+}
+
+// modernBuildClearance reports whether the session bound the Modern
+// construction rule set; Strict binds construction.StrictRules.
+func modernBuildClearance(s *Session) bool {
+	_, ok := s.Build.Rules.(*construction.ModernRules)
+	return ok
+}
+
 // Modern policy is a host extension, not a retail contract.
 func TestGameplayChangesAtCommandBoundary(t *testing.T) {
 	s := &Session{Clock: &clock.State{GlobalTick: 10}, Combat: &combat.Service{}, Build: &construction.Service{OrderBinding: &orders.QueueBinding{}}}
@@ -21,15 +44,15 @@ func TestGameplayChangesAtCommandBoundary(t *testing.T) {
 	if err := s.EnqueueHumanCommand(HumanCommand{Kind: HumanGameplay, Gameplay: gameplay.Strict31}); err != nil {
 		t.Fatal(err)
 	}
-	if !s.Combat.ModernTerrainAdmission || !s.Combat.ModernHoldFire || !s.Build.ModernConstructionClearance || !s.Build.OrderBinding.ModernHoldFire || !s.Build.OrderBinding.ModernBomberPass || !s.Build.OrderBinding.ModernGuardAssistance {
+	if !modernCombatRules(s.Combat) || !modernBuildClearance(s) || !modernOrderRules(s.Build.OrderBinding) {
 		t.Fatal("presentation changed combat before command boundary")
 	}
 	s.applyHumanCommands(11)
-	if s.Gameplay != gameplay.Strict31 || s.Combat.ModernTerrainAdmission || s.Combat.ModernHoldFire || s.Build.ModernConstructionClearance || s.Build.OrderBinding.ModernHoldFire || s.Build.OrderBinding.ModernBomberPass || s.Build.OrderBinding.ModernGuardAssistance {
+	if s.Gameplay != gameplay.Strict31 || modernCombatRules(s.Combat) || modernBuildClearance(s) || modernOrderRules(s.Build.OrderBinding) {
 		t.Fatal("strict command did not apply")
 	}
 	s.SetGameplay("")
-	if !s.Combat.ModernTerrainAdmission || !s.Combat.ModernHoldFire || !s.Build.ModernConstructionClearance || !s.Build.OrderBinding.ModernHoldFire || !s.Build.OrderBinding.ModernBomberPass || !s.Build.OrderBinding.ModernGuardAssistance {
+	if !modernCombatRules(s.Combat) || !modernBuildClearance(s) || !modernOrderRules(s.Build.OrderBinding) {
 		t.Fatal("default must be modern")
 	}
 }
@@ -47,7 +70,7 @@ func TestModernAdmissionSharesSessionWind(t *testing.T) {
 		t.Fatal("terrain admission missed the phase-8 wind redraw")
 	}
 	s.SetGameplay(gameplay.Strict31)
-	if s.Combat.ModernTerrainAdmission {
+	if modernCombatRules(s.Combat) {
 		t.Fatal("strict mode left modern admission active")
 	}
 }
@@ -63,10 +86,10 @@ func TestModernOrderPolicyComposition(t *testing.T) {
 	for _, mode := range []gameplay.Mode{gameplay.Modern, gameplay.Strict31, gameplay.Modern} {
 		s.SetGameplay(mode)
 		modern := mode == gameplay.Modern
-		if s.Combat.ModernHoldFire != modern || s.Build.ModernConstructionClearance != modern || s.Build.OrderBinding.ModernHoldFire != modern || s.Build.OrderBinding.ModernBomberPass != modern || s.Build.OrderBinding.ModernGuardAssistance != modern {
+		if modernCombatRules(s.Combat) != modern || modernBuildClearance(s) != modern || modernOrderRules(s.Build.OrderBinding) != modern {
 			t.Fatalf("policy projection differs for %s", mode)
 		}
-		if b := s.newOrderBinding(); b.ModernHoldFire != modern || b.ModernBomberPass != modern || b.ModernGuardAssistance != modern {
+		if b := s.newOrderBinding(); modernOrderRules(b) != modern {
 			t.Fatalf("new queue retained wrong policy for %s", mode)
 		}
 		for _, u := range s.Units.Iter() {
@@ -75,7 +98,7 @@ func TestModernOrderPolicyComposition(t *testing.T) {
 				if !ok {
 					t.Fatalf("unit %d has no queue", u.Handle)
 				}
-				if q.Binding().ModernHoldFire != modern || q.Binding().ModernBomberPass != modern || q.Binding().ModernGuardAssistance != modern {
+				if modernOrderRules(q.Binding()) != modern {
 					t.Fatalf("unit %d retained wrong policy for %s", u.Handle, mode)
 				}
 			}

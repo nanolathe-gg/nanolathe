@@ -10,6 +10,11 @@ import (
 	"io"
 	"math"
 	"path/filepath"
+
+	// The rule sets this build can select beyond the two reserved ones. The
+	// import is what registers them, and it sits beside the flag that names
+	// one so the two are read together (docs/DESIGN_GAMEPLAY_RULES.md §8).
+	_ "github.com/nanolathe-gg/nanolathe/mods"
 )
 
 // Options is the command-line surface for the retail runtime and its host
@@ -178,7 +183,7 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.StringVar(&opts.CPUProfile, "cpuprofile", "", "write a pprof CPU profile of the --shot compose path to this file")
 	set.StringVar(&opts.MemProfile, "memprofile", "", "write a pprof allocation profile of the --shot compose path to this file")
 	set.IntVar(&opts.ProfileSeconds, "profile-seconds", 0, "with classic --shot, run the CPU viewer loop headlessly for this many seconds of battle time and report ms per frame")
-	set.Func("gameplay", "gameplay rules: modern (default) or strict-3.1; omitted uses saved preference", func(text string) error {
+	set.Func("gameplay", "gameplay rule set: modern (default), strict-3.1, or a registered set's name (see mods/); omitted uses saved preference", func(text string) error {
 		mode, err := gameplay.Parse(text)
 		opts.Gameplay = mode
 		return err

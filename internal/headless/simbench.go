@@ -171,6 +171,7 @@ type SimBenchGC struct {
 // SimBenchReport is the whole run: scene, timings, census and provenance.
 type SimBenchReport struct {
 	Gameplay           gameplay.Mode       `json:"gameplay"`
+	Rules              string              `json:"rules"` // bound rule set name; Gameplay is only its base word
 	SceneVersion       int                 `json:"scene_version"`
 	Map                string              `json:"map"`
 	SimulationSeed     uint32              `json:"simulation_seed"`
@@ -274,6 +275,7 @@ func runSimBenchmarkWithContent(opts SimBenchOptions, fs vfs.FSOps, catalog *con
 	sess := composed.Session
 	report := SimBenchReport{
 		Gameplay:     opts.Gameplay.Normalize(),
+		Rules:        sess.Rules.Name,
 		SceneVersion: SimBenchSceneVersion, Map: opts.Map,
 		SimulationSeed: opts.Seed, CRTSeed: opts.Seed, Difficulty: opts.Difficulty,
 		WarmupTicks: opts.WarmupTicks, MeasuredTicks: opts.MeasureTicks,

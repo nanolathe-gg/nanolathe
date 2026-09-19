@@ -9,7 +9,6 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/cob"
 	"github.com/nanolathe-gg/nanolathe/internal/economy"
 	"github.com/nanolathe-gg/nanolathe/internal/features"
-	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/mission"
 	"github.com/nanolathe-gg/nanolathe/internal/movement"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
@@ -634,7 +633,15 @@ func RetailBattleSummary(s *Session, description, gameID string, configuredUnitL
 	} else {
 		// Skirmish is session kind 2, the same game type the summary panel
 		// renders as `Skirmish (%d players)` [08 R-SAVE-02 §3] [08 R-SAVE-02 §4].
-		if s.Gameplay.Normalize() == gameplay.Modern {
+		// TODO(question): a save records no rule-set name. The retail bank's
+		// box vocabulary is fixed and Nanolathe adds no metadata area of its
+		// own, so there is nowhere to store the bound set's name without
+		// inventing a box, and a loaded game therefore runs under the
+		// session's current set (docs/DESIGN_GAMEPLAY_RULES.md §6). Settled
+		// by a decision on a Nanolathe-side save metadata area — a sidecar
+		// file or an agreed additional box — which is a save-format question,
+		// not a retail one.
+		if s.unitLimitRules().RecordsLiveUnitLimit() {
 			summary.MaxUnits = int32(sessionUnitLimit(s))
 		}
 		summary.Gametype = GametypeMultiplayer

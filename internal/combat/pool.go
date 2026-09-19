@@ -204,14 +204,13 @@ type pendingAim struct {
 // Records is the parallel named storage (107-byte retail identity, I13) moved
 // identically to the metadata on compaction.
 type Service struct {
-	// ModernHoldFire is projected from the central gameplay mode. It suppresses
-	// new launches while held; false retains retail standing-fire behavior.
-	// Nanolathe Modern policy: docs/DESIGN_WEAPONS_PROJECTILES.md §2.6.1.
-	ModernHoldFire bool
-
-	// ModernTerrainAdmission enables the user-requested terrain preflight
-	// policy. False retains the retail admission gate [06 R-WPN-05 §1].
-	ModernTerrainAdmission bool
+	// Rules is the gameplay rule set the firing pipeline consults, bound by the
+	// session from the central gameplay mode. StrictRules answers as retail
+	// [06 R-WPN-05 §1] [04 R-STANCE-01 §2]; ModernRules carries the terrain
+	// preflight and Hold Fire policies of
+	// docs/DESIGN_WEAPONS_PROJECTILES.md §2.3.1 and §2.6.1. A nil field is
+	// Strict 3.1, so a fixture built without rules keeps the retail path.
+	Rules Rules
 
 	// ProjectileWind is the session-owned wind used by ballistic admission.
 	// Its phase-8 deadline bounds future wind knowledge [01 §7.3].
@@ -225,6 +224,12 @@ type Service struct {
 	presentationIDs [ProjectileCapacity]uint64
 	doubleShot      bool
 	halfShot        bool
+	// shotQuery is the fire pipeline's reusable ShotQuery. It exists so a fire
+	// attempt allocates nothing: the spawner puts the query to an interface,
+	// which would otherwise force one heap query per shot. It is transient
+	// scratch owned by the attempt that arms it, which puts back the value it
+	// found; nothing outside the attempt reads it and nothing saves it.
+	shotQuery ShotQuery
 
 	Events      func(Event)               // optional ordered combat event sink; nil-safe
 	pendingAims map[pendingKey]pendingAim // Aim dispatch tracking ON-04 [06 §3.3]

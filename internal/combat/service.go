@@ -1265,16 +1265,26 @@ func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terra
 		ShooterMaxHealth: u.MaxHealth,
 		ShooterKills:     u.Kills,
 	}
-	terrainBlocked := false
-	if svc.ModernTerrainAdmission {
-		ports.AdmitTerrain = func(muzzle, aim Vec3, launch Slot) bool {
-			var target *units.Unit
-			if tgt.Kind == TargetUnit && w != nil {
-				target = w.Unit(tgt.Unit)
-			}
-			terrainBlocked = modernTerrainAdmission(launch, muzzle, aim, tick, terrain, target, svc.ProjectileWind) == terrainShotBlocked
-			return !terrainBlocked
+	// The fire-attempt query, armed only for a rule set that previews the
+	// launch: the retail path presents nothing and pays nothing
+	// [06 R-WPN-05 §1]. The spawner fills in the muzzle, aim and post-spread
+	// slot and puts the query to the rule set at the one admission point.
+	//
+	// The query is the service's, not this frame's, because the spawner hands
+	// it to an interface, which would force a heap query on every attempt. The
+	// attempt puts back the value it found, so the field is a stack of one and
+	// an attempt reached from a fire callback cannot clobber an outer one. It
+	// is transient scratch: no phase reads it outside the attempt that armed
+	// it, and nothing saves it.
+	var savedQuery ShotQuery
+	if previewsShot(svc.rules()) {
+		var target *units.Unit
+		if tgt.Kind == TargetUnit && w != nil {
+			target = w.Unit(tgt.Unit)
 		}
+		savedQuery = svc.shotQuery
+		svc.shotQuery = ShotQuery{Tick: tick, Terrain: terrain, Target: target, Wind: svc.ProjectileWind}
+		ports.Shot = &svc.shotQuery
 	}
 	cSlot = Slot{
 		Weapon:       weapon,
@@ -1296,7 +1306,11 @@ func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terra
 	// R-WPN-05 §5].
 	scriptAdapter.slot = &cSlot
 	_, ok := TryFire(svc, &cSlot, idx, tgt, tick, ports)
-	if terrainBlocked {
+	blocked := false
+	if ports.Shot != nil {
+		blocked, svc.shotQuery = ports.Shot.Blocked, savedQuery
+	}
+	if blocked {
 		// Modern policy: a refused launch keeps the relative Aim pair. The
 		// muzzle query converted its temporary yaw to absolute; copying that
 		// back would add hull heading again on every retry [06 R-WPN-05 §4].
@@ -1497,7 +1511,7 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 			// Cancel only the unlaunched remainder. The parked template never
 			// becomes a moving shot, and previously cloned pellets continue.
 			// Nanolathe Modern policy: docs/DESIGN_WEAPONS_PROJECTILES.md §2.6.1.
-			if s.ModernHoldFire && w != nil && s.holdsFire(w.Unit(p.Shooter)) {
+			if w != nil && s.holdsFire(w.Unit(p.Shooter)) {
 				s.MarkDead(h)
 				continue
 			}

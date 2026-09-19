@@ -60,7 +60,7 @@ func TestSuccessfulShotPublishesOrderEvent(t *testing.T) {
 					})
 					catalog := &content.Catalog{Weapons: map[string]*content.WeaponDef{"event": weapon}}
 					catalog.RebuildWeaponIndex()
-					svc := Service{ModernTerrainAdmission: mode == gameplay.Modern, ModernHoldFire: mode == gameplay.Modern}
+					svc := Service{Rules: rulesForModern(mode == gameplay.Modern)}
 					econ := &economy.Service{}
 					econ.Players[shooter.Owner].Stock[economy.Energy] = 100
 					econ.Players[shooter.Owner].Stock[economy.Metal] = 100

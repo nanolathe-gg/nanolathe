@@ -140,14 +140,14 @@ func TestModernTerrainRefusesBeforeShotSideEffects(t *testing.T) {
 	queries := 0
 	r := rng.NewSimulation(1)
 	script, events := &scriptRecorder{}, &eventRecorder{}
-	ports := FirePorts{Origin: Vec3{}, MuzzlePiece: func(int) int32 { queries++; return 3 }, MuzzleWorld: func(int32) (Vec3, bool) { return muzzle, true }, RNG: &r, Script: script, Events: events, ShooterHealth: 100, ShooterMaxHealth: 100,
-		AdmitTerrain: func(actualMuzzle, actualAim Vec3, _ Slot) bool {
-			if actualMuzzle != muzzle || actualAim != aim {
-				t.Fatal("preflight did not receive resolved muzzle and aim")
-			}
-			return directTerrainAdmission(weapon, actualMuzzle, actualAim, 10, terrain, nil) != terrainShotBlocked
-		}}
-	var svc Service
+	var shot ShotQuery
+	ports := FirePorts{Origin: Vec3{}, MuzzlePiece: func(int) int32 { queries++; return 3 }, MuzzleWorld: func(int32) (Vec3, bool) { return muzzle, true }, RNG: &r, Script: script, Events: events, ShooterHealth: 100, ShooterMaxHealth: 100, Shot: &shot}
+	svc := Service{Rules: &terrainSpyRules{admit: func(q *ShotQuery) bool {
+		if q.Muzzle != muzzle || q.Aim != aim {
+			t.Fatal("preflight did not receive resolved muzzle and aim")
+		}
+		return directTerrainAdmission(weapon, q.Muzzle, q.Aim, 10, terrain, nil) != terrainShotBlocked
+	}}}
 	if _, ok := TryFire(&svc, &Slot{Weapon: weapon}, 0, Target{Kind: TargetPoint, X: aim.X, Y: aim.Y, Z: aim.Z}, 10, ports); ok {
 		t.Fatal("blocked terrain shot fired")
 	}
@@ -176,7 +176,7 @@ func TestModernTerrainServicePreservesCostsAndRetryAim(t *testing.T) {
 			var econ economy.Service
 			econ.Players[shooter.Owner].Stock[economy.Energy] = 500
 			econ.Players[shooter.Owner].Stock[economy.Metal] = 50
-			svc := &Service{ModernTerrainAdmission: modern}
+			svc := &Service{Rules: rulesForModern(modern)}
 			var sum UnitStepSummary
 			svc.firePreparedSlot(shooter, slot, 0, &slotPrep{weapon: weapon, tgtPos: aim}, 10, terrain, &econ, nil, w, nil, &sum)
 			if modern {
@@ -287,7 +287,23 @@ func TestModernGuidedPursuitReachesBeyondTheFirstTick(t *testing.T) {
 // central gameplay mode: Strict 3.1 never reaches the preview at all.
 func TestModernGuidedPursuitIsModernOnly(t *testing.T) {
 	svc := &Service{}
-	if svc.ModernTerrainAdmission {
-		t.Fatal("terrain admission must default off; Strict 3.1 keeps retail's path [I11]")
+	if previewsShot(svc.rules()) || !svc.rules().AdmitShot(&ShotQuery{}) {
+		t.Fatal("unbound rules must answer Strict 3.1; retail previews no terrain and admits [I11]")
 	}
 }
+
+// terrainSpyRules answers AdmitShot from the presented query, so a test can
+// both inspect what the spawner hands the seam and choose the verdict. It
+// previews, which is what makes the spawner run the spread on value copies.
+type terrainSpyRules struct {
+	admit func(q *ShotQuery) bool
+}
+
+func (r *terrainSpyRules) AdmitShot(q *ShotQuery) bool {
+	q.Blocked = !r.admit(q)
+	return !q.Blocked
+}
+
+func (r *terrainSpyRules) HoldsFire(*units.Unit) bool { return false }
+
+func (r *terrainSpyRules) previewsShot() bool { return true }

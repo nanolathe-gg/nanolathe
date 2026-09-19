@@ -200,8 +200,10 @@ consults reload, ammunition or cost.
 The central gameplay mode defaults to **Modern**. **Strict 3.1** preserves the
 retail shot-admission path, including shots into terrain. This choice is
 independent of Classic / Modern rendering and applies to every player.
-`internal/gameplay` owns the vocabulary; the session projects the choice into
-`combat.Service.ModernTerrainAdmission`.
+`internal/gameplay` owns the vocabulary; the session binds the choice as the
+combat service's `combat.Rules` seam, whose `AdmitShot` answer is this preview
+for `combat.ModernRules` and retail's unconditional admission for
+`combat.StrictRules`.
 
 This is a maintained gameplay contract. A difference from the cited retail
 algorithms is not grounds to remove it. Every extension to this policy must
@@ -483,7 +485,9 @@ anchor outlives its shooter.
 ### 2.6.1 Modern Hold Fire
 
 **Nanolathe Modern policy (user-authorized).** The central `gameplay.Mode`
-projects `combat.Service.ModernHoldFire`; false preserves Strict 3.1. This is
+selects the combat service's `combat.Rules` seam, whose `HoldsFire` answer is
+this policy for `combat.ModernRules`; `combat.StrictRules` answers false at
+every site and preserves Strict 3.1. This is
 an intentional departure from the retail standing-fire readers
 `[04 R-STANCE-01 §2]` `[04 R-STANCE-01 §3]`, which allow an already assigned
 explicit attack target to fire and allow forced guard combat joins.

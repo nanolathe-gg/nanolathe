@@ -25,7 +25,9 @@ func TestBomberPointAttackReleasesBombs(t *testing.T) {
 				u.InstallWeapon(0, u.Def.Weapon1Def)
 				u.Flags |= units.ArmedStatus | 2<<units.StandingFireShift
 				q := orders.QueueForUnit(u)
-				q.Binding().ModernBomberPass = modern
+				if modern {
+					q.Binding().Rules = &orders.ModernRules{}
+				}
 				q.Binding().World = &orders.WorldQueryAdapter{SeaLevel: func() uint8 { return 0 }}
 				q.Binding().Weapons = &orders.WeaponAdapter{InhibitSlot: combat.InhibitWeaponSlot, ReleaseSlot: combat.ReleaseWeaponSlot, FirePoint: combat.FireWeaponPoint, StopFiring: combat.StopWeaponFiring}
 				pos := orders.ResolvePos{X: numeric.FixedFromInt(480), Z: numeric.FixedFromInt(256), HasFeature: feature}

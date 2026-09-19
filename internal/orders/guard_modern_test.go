@@ -27,7 +27,7 @@ func TestModernGuardPadSelectionKeepsGuardAndSuccessor(t *testing.T) {
 			f := newAirGuardFixture(t)
 			q := QueueForUnit(f.guard)
 			b := q.Binding()
-			b.ModernGuardAssistance = tc.modern
+			b.Rules = modeRules(tc.modern)
 			f.guard.Health = tc.health
 			pad := &units.Unit{Handle: 3, Alive: true, Activated: true, Def: &content.UnitDef{Builder: true, IsAirBase: true}, X: f.guard.X, Z: f.guard.Z}
 			carrier := &units.Unit{Handle: 4, Alive: true, Activated: true, Def: &content.UnitDef{Builder: true, IsAirBase: true, CanMove: true}, X: f.guard.X, Z: f.guard.Z}
@@ -99,7 +99,7 @@ func TestModernGuardNearbyWorkPriorityAndBypass(t *testing.T) {
 				f := newGuardFixture(t, 1, 1)
 				q := QueueForUnit(f.guard)
 				b := q.Binding()
-				b.ModernGuardAssistance = modern
+				b.Rules = modeRules(modern)
 				f.guard.Def.Builder, f.guard.Def.CanReclamate, f.guard.Def.CanResurrect = true, true, true
 				f.guard.Def.CanFly, f.guard.Def.BMCode, f.guard.Def.SightDistance = air, 1, 128
 				b.Movement.InstallAir = func(AirGoalRequest) bool { return true }
@@ -184,7 +184,7 @@ func TestModernGuardLowEnergyStillResurrectsOnlyEligibleNearbyWreck(t *testing.T
 			f := newGuardFixture(t, 1, 1)
 			q := QueueForUnit(f.guard)
 			b := q.Binding()
-			b.ModernGuardAssistance = true
+			b.Rules = &ModernRules{}
 			f.guard.Def.Builder, f.guard.Def.CanReclamate, f.guard.Def.CanResurrect = true, true, capable
 			f.guard.Def.BMCode, f.guard.Def.SightDistance = 1, 128
 			resources := ResourceView{Stock: [2]float32{0, 19}, Capacity: [2]float32{100, 100}}
@@ -234,7 +234,7 @@ func TestGuardPadResumptionDoesNotReleaseStrictOrTransportCargo(t *testing.T) {
 	for _, modern := range []bool{false, true} {
 		f := newAirGuardFixture(t)
 		q := QueueForUnit(f.guard)
-		q.Binding().ModernGuardAssistance = modern
+		q.Binding().Rules = modeRules(modern)
 		carrier := &units.Unit{Handle: 3, Alive: true, Def: &content.UnitDef{Builder: true, IsAirBase: !modern}}
 		q.Binding().Lookup = func(h pool.Handle) *units.Unit {
 			if h == f.ward.Handle {
@@ -260,7 +260,7 @@ func TestModernGuardFailedLandingWaitsForMaintenanceRetry(t *testing.T) {
 	f := newAirGuardFixture(t)
 	q := QueueForUnit(f.guard)
 	b := q.Binding()
-	b.ModernGuardAssistance = true
+	b.Rules = &ModernRules{}
 	f.guard.Health = 50
 	pad := &units.Unit{Handle: 3, Alive: true, Activated: true, Def: &content.UnitDef{Builder: true, IsAirBase: true}, X: f.guard.X, Z: f.guard.Z}
 	b.Lookup = func(h pool.Handle) *units.Unit {

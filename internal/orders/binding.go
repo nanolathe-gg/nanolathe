@@ -21,20 +21,13 @@ import (
 // reconstruction an explicit value transfer instead of a collection of
 // package-level fallbacks [04 §3.3][04 §3.4][06 §11.1].
 type QueueBinding struct {
-	// ModernHoldFire is projected from the central gameplay mode. It prevents
-	// forced guard combat joins while held; false retains the retail bypass.
-	// Nanolathe Modern policy: docs/DESIGN_UNITS_ORDERS_COB.md "Modern Hold Fire".
-	ModernHoldFire bool
-
-	// ModernBomberPass defers the maneuver leash until a bombing pass ends.
-	// Projected from the central gameplay mode; false retains Strict 3.1.
-	// Nanolathe Modern policy: DESIGN_MOVEMENT_PATH §3.4.1.
-	ModernBomberPass bool
-
-	// ModernGuardAssistance enables aircraft pad visits and nearby builder work.
-	// Projected from gameplay.Mode; false preserves Strict 3.1.
-	// Nanolathe Modern policy: DESIGN_UNITS_ORDERS_COB "Modern guard assistance".
-	ModernGuardAssistance bool
+	// Rules answers the gameplay decisions this package defers rather than
+	// deciding itself — the Hold Fire join, the bomber pass leash and the three
+	// guard assistance legs. The session selects the set from the central
+	// gameplay mode; a nil field answers as Strict 3.1, so a binding composed
+	// without one runs the retail path. See rules.go and
+	// docs/INVARIANTS.md I11.
+	Rules Rules
 
 	Economy interface {
 		UnitBuckets(pool.Handle) *[2]economy.Bucket
