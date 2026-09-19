@@ -141,7 +141,7 @@ func runShot(opts Options, cs *contentSet) error {
 	if err != nil {
 		return fmt.Errorf("nanolathe: client: %w", err)
 	}
-	cl.SetModelFS(cs.fs)
+	cl.SetModelFS(cs.unmappedMount)
 	// A capture reads the same stored display block the windowed shell
 	// installs, so `Anti_Alias` and `Shading` come from the settings file
 	// (NANOLATHE_SETTINGS selects it) rather than from the client's built-in
@@ -173,7 +173,7 @@ func runShot(opts Options, cs *contentSet) error {
 		return err
 	}
 	if opts.BattleBenchmark != "" {
-		return runBattleBenchmark(opts, b, cl)
+		return runBattleBenchmark(opts, cs, b, cl)
 	}
 
 	// Sampling starts after content load and battle composition so a profile

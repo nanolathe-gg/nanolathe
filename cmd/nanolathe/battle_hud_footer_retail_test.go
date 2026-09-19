@@ -108,7 +108,7 @@ func footerComposeShot(t *testing.T, b *battleSession, cs *contentSet, cam *came
 	cl.SetCamera(cam)
 	cl.SetPalette(pal)
 	cl.SetFNT(b.hud.console)
-	cl.SetModelFS(cs.fs)
+	cl.SetModelFS(cs.unmappedMount)
 	cl.Input().Mouse.SetPosition(float32(mx), float32(my))
 	b.updateFooterHover(mx, my)
 	cl.SetUIStage(battleHUDUIStage{hud: b.hud, battle: b})

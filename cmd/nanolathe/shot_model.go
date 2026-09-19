@@ -24,7 +24,7 @@ func runModelShot(opts Options, cs *contentSet) error {
 	if cs == nil || cs.fs == nil {
 		return fmt.Errorf("nanolathe: shot model: retail VFS is unavailable")
 	}
-	r, err := client.NewModelPreviewRenderer(cs.fs)
+	r, err := client.NewModelPreviewRenderer(cs.unmappedMount)
 	if err != nil {
 		return err
 	}
@@ -35,7 +35,7 @@ func runModelShot(opts Options, cs *contentSet) error {
 		}
 	}
 	requestedModel := strings.TrimSpace(opts.ShotModel)
-	catalog, err := content.Compile(cs.fs)
+	catalog, err := cs.compileCatalog(nil)
 	if err != nil {
 		return fmt.Errorf("nanolathe: shot model: compile unit definitions: %w", err)
 	}
@@ -108,7 +108,7 @@ func runModelShot(opts Options, cs *contentSet) error {
 // definition. It intentionally does not encode ARMSOLAR's dish angles: the
 // stock COB writes the per-piece accumulators and this snapshot publishes the
 // resulting values [03 §2.4][04 §4.1].
-func actualActivatedModelPose(fs *vfs.FS, def *content.UnitDef) ([]frame.PieceView, error) {
+func actualActivatedModelPose(fs vfs.FSOps, def *content.UnitDef) ([]frame.PieceView, error) {
 	if fs == nil || def == nil {
 		return nil, fmt.Errorf("nanolathe: shot model: activation pose requires a compiled unit definition")
 	}

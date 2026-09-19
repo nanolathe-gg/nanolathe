@@ -287,7 +287,7 @@ func fuFrameRun(t *testing.T, prefix string, cfg session.SkirmishConfig, seed in
 	if err != nil {
 		t.Fatal(err)
 	}
-	cl.SetModelFS(cs.fs)
+	cl.SetModelFS(cs.unmappedMount)
 	b, err := composeBattleEntry(sess, cat, cs, cl, nil)
 	if err != nil {
 		t.Fatal(err)

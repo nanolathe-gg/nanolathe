@@ -99,15 +99,21 @@ type Catalog struct {
 	// Categories is the sorted case-insensitive unit-membership registry
 	// compiled from all UnitDef category and target fields [R-P0-03].
 	Categories *CategoryRegistry
-	Weapons    map[string]*WeaponDef     // key = CanonicalKey(section name) [02 §5]
-	Features   map[string]*FeatureDef    // key = CanonicalKey(feature name) [02 §5]
-	Movement   map[string]*MovementClass // key = CanonicalKey(class Name) [02 "Movement class record"]
-	Sides      []*SideDef                // index = SIDE ordinal [02 §6] C8
-	Sounds     map[string]*SoundCategory // key = CanonicalKey(category name) [02 "Sound category record"]
-	Maps       map[string]*MapHeader     // key = CanonicalKey(basename) [02 "Map files"]
-	LOS        *LOSTables                // compiled gamedata/los.tdf [02 §6] C15 [PLAN_02]
-	Sight      *SightShapes              // compiled anims/vismask*.gaf sight shapes [03 §3.2]
-	Meteor     *MeteorDefaults           // compiled gamedata/meteor.tdf [02 §6] C15 [PLAN_02]
+	// Limits are the table sizes and read caps this catalog was compiled under: the retail
+	// baseline unless a content profile raised them (docs/DESIGN_CONTENT_VFS.md
+	// §5 "Content profiles"). Retained so a consumer can report the domain the
+	// definition IDs live in and load terrain under the same whole-file cap
+	// without re-resolving the profile.
+	Limits   Limits
+	Weapons  map[string]*WeaponDef     // key = CanonicalKey(section name) [02 §5]
+	Features map[string]*FeatureDef    // key = CanonicalKey(feature name) [02 §5]
+	Movement map[string]*MovementClass // key = CanonicalKey(class Name) [02 "Movement class record"]
+	Sides    []*SideDef                // index = SIDE ordinal [02 §6] C8
+	Sounds   map[string]*SoundCategory // key = CanonicalKey(category name) [02 "Sound category record"]
+	Maps     map[string]*MapHeader     // key = CanonicalKey(basename) [02 "Map files"]
+	LOS      *LOSTables                // compiled gamedata/los.tdf [02 §6] C15 [PLAN_02]
+	Sight    *SightShapes              // compiled anims/vismask*.gaf sight shapes [03 §3.2]
+	Meteor   *MeteorDefaults           // compiled gamedata/meteor.tdf [02 §6] C15 [PLAN_02]
 
 	// AIProfiles holds ai/*.txt profiles (10 in retail, incl default.txt) [08 "Computer-controlled players"].
 	// Not in the minimal PLAN_02 Public API snippet but discovery is part of WU-02-6 and consumed by phase 11.
@@ -169,24 +175,44 @@ type Catalog struct {
 // pointer [03 §2.4] C13 and computes Catalog.Hash over canonical bytes including
 // defaults, independent of map iteration, identical across two runs (I1) [02 §5] C12.
 func Compile(fs vfs.FSOps) (*Catalog, error) {
-	return CompileWithProgress(fs, nil)
+	return CompileWithOptions(fs, Options{})
 }
 
-// CompileWithProgress is Compile with an observer. The observer is told when
-// each family finishes, and is told the running percentage inside the map
-// census, which is the one family whose cost is proportional to the install.
-// A nil observer makes this exactly Compile.
-func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
+// Options carry the load-time decisions a compile needs that are not in the
+// mounted content itself. The zero value is the retail compile: retail table
+// limits and no progress observer, so Compile admits exactly the content it
+// always did.
+type Options struct {
+	// Limits are the table sizes the compile enforces. A zero count keeps the
+	// retail baseline. A host resolves them from the mounted content set's
+	// profile (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles").
+	Limits Limits
+	// Progress is the optional family observer. It is told when each family
+	// finishes, and is told the running percentage inside the map census,
+	// which is the one family whose cost is proportional to the install. A nil
+	// observer reports nothing and changes nothing else.
+	Progress Progress
+}
+
+// CompileWithOptions is Compile under explicit load-time options. It is the
+// entry point a host uses once it has resolved the mounted content set's
+// profile; every other entry point delegates here with the retail baseline.
+func CompileWithOptions(fs vfs.FSOps, opts Options) (*Catalog, error) {
 	if fs == nil {
 		return nil, fmt.Errorf("content: nil VFS")
 	}
+	limits, err := opts.Limits.normalize()
+	if err != nil {
+		return nil, err
+	}
+	report := opts.Progress
 
 	// Stage 1: discover and parse every family into typed records [02 §5] C1.
 	// Each compiler walks the VFS logical paths per PLAN_02 Discovery, filtering
 	// by extension already (units *.fbi, weapons *.tdf — the family is exactly
 	// Weapons/*.tdf; gamedata/weapons.tdf is never read [02 §5 R-CONTENT-02] —
 	// features recursive features/<group>/*.tdf, etc.).
-	weapons, weaponDuplicates, err := CompileWeaponsWithDuplicates(fs)
+	weapons, weaponDuplicates, err := CompileWeaponsWithDuplicates(fs, limits)
 	if err != nil {
 		// Weapons are required for linking but not directly part of Validate's
 		// fatal trio; propagate error so whole-install compile is error-free.
@@ -200,7 +226,7 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 	units := unitResult.units
 	records := unitResult.records
 	report.Report(FamilyUnits, 100)
-	categories, err := compileCategoryRecords(records, units)
+	categories, err := compileCategoryRecords(records, units, limits)
 	if err != nil {
 		return nil, err
 	}
@@ -246,7 +272,7 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 		aliasOrder = soundData.AliasOrder
 	}
 	report.Report(FamilySounds, 100)
-	maps, mapWarnings, err := compileMapsWithDiagnostics(fs, report)
+	maps, mapWarnings, err := compileMapsWithDiagnostics(fs, limits, report)
 	if err != nil {
 		// Maps header discovery [02 "Map files"]; retail has 275 each; allow empty
 		// on a minimal fixture but whole-install expects them.
@@ -260,11 +286,11 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 		return nil, err
 	}
 	// Battle tables [02 §6] C15 [PLAN_02] WU-02-8: phases 5 and 9 only consume immutable values, never re-parse (I8).
-	losTables, err := CompileLOSTables(fs)
+	losTables, err := CompileLOSTables(fs, limits)
 	if err != nil {
 		return nil, err
 	}
-	meteorDefaults, err := CompileMeteor(fs)
+	meteorDefaults, err := CompileMeteor(fs, limits)
 	if err != nil {
 		return nil, err
 	}
@@ -314,6 +340,7 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 	manifest, _ := manifestHashFor(fs)
 
 	c := &Catalog{
+		Limits:             limits,
 		Units:              units,
 		unitRecords:        records,
 		Categories:         categories,
@@ -597,9 +624,7 @@ func (c *Catalog) ResolveCategoryMask(name string) (CategoryMask, bool) {
 		return CategoryMask{}, false
 	}
 	if u, ok := c.Unit(name); ok && u != nil {
-		var m CategoryMask
-		_ = m.set(u.UnitDefID)
-		return m, true
+		return MaskForID(u.UnitDefID), true
 	}
 	return c.Category(name)
 }
@@ -647,7 +672,7 @@ func (c *Catalog) RestrictToCreatable(names []string) error {
 	sortUnitRecords(records)
 	c.unitRecords = records
 	c.Units = firstUnitNames(records)
-	reg, err := compileCategoryRecords(records, c.Units)
+	reg, err := compileCategoryRecords(records, c.Units, c.compileLimits())
 	if err != nil {
 		return err
 	}
@@ -655,6 +680,16 @@ func (c *Catalog) RestrictToCreatable(names []string) error {
 	// The catalog digest covers definition identity, and identity moved.
 	c.Hash = catalogHash(c)
 	return nil
+}
+
+// compileLimits returns the table limits this catalog was compiled under,
+// falling back to the retail baseline for a catalog assembled by hand rather
+// than by CompileWithOptions.
+func (c *Catalog) compileLimits() Limits {
+	if c == nil || c.Limits.Units <= 0 {
+		return RetailLimits()
+	}
+	return c.Limits
 }
 
 // SortedUnitKeys returns unique name-index keys sorted ascending (I1).

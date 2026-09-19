@@ -282,7 +282,10 @@ func (s battleHUDUIStage) DrawUI(c *client.Client, presented client.UIFrame) {
 // resource set, and the opening panel used by the windowed entry.
 func newGameShell(opts Options, cs *contentSet) (*gameShell, error) {
 	shell := &gameShell{opts: opts, cs: cs, frontend: ui.NewFrontend(modeMenuMain)}
-	maps, err := enumerateSkirmishMaps(cs.fs)
+	// The map census and the TNT reader are typed on the concrete overlay,
+	// so they read `maps` unmapped; no content profile renames it, and a test
+	// in this package asserts that (DESIGN_CONTENT_VFS §5 "Content profiles").
+	maps, err := enumerateSkirmishMaps(cs.unmappedMount)
 	if err != nil {
 		return nil, err
 	}
@@ -379,7 +382,7 @@ func runGameShell(opts Options, cs *contentSet) error {
 		return fmt.Errorf("nanolathe: client: %w", err)
 	}
 	clPtr = cl // entering a battle morphs THIS client
-	cl.SetModelFS(cs.fs)
+	cl.SetModelFS(cs.unmappedMount)
 	cl.SetCamera(shell.cam)
 	// The preferences were read before the client existed, so the three
 	// display-option bits reach it here [07 R-FE-01 §6].
@@ -571,7 +574,7 @@ func loadRetailPanelStrict(cs *contentSet, guiName, pcxName, gafName, expected s
 func retailFrontendAssetError(cs *contentSet, what, logical, expected string, cause error) error {
 	providers := []string(nil)
 	if cs != nil && cs.fs != nil {
-		providers = cs.fs.ProviderIDs()
+		providers = cs.unmappedMount.ProviderIDs()
 	}
 	base := &missingProductError{what: what, logical: logical, providers: providers, expected: expected}
 	if cause == nil {

@@ -225,18 +225,33 @@ func fsWithMap(t *testing.T, ota string) *vfs.FS {
 	return fs
 }
 
+// TestStrictCatalogCompilesUnderTheCallerLimits locks the plumbing a host
+// needs when it hands a constructor a filesystem instead of a catalog: the
+// limits it resolved from the mounted content set's profile reach the compile
+// rather than being replaced by the retail baseline
+// (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles"). A domain past the
+// runtime identity width is refused before any content is read, so the refusal
+// is proof the value arrived without needing a mounted install.
+func TestStrictCatalogCompilesUnderTheCallerLimits(t *testing.T) {
+	limits := content.Limits{Units: content.MaxDefinitionDomain + 1}
+	_, err := strictCatalogWithProgress(vfs.New(), nil, limits, nil)
+	if err == nil || !strings.Contains(err.Error(), "content profile asks for a larger unit-definition domain") {
+		t.Fatalf("compile under caller limits = %v, want the content-profile domain refusal", err)
+	}
+}
+
 func TestStrictCatalogValidatesSuppliedCatalog(t *testing.T) {
 	missingMovement := &content.Catalog{
 		Sides: []*content.SideDef{{Name: "ARM"}},
 	}
-	if _, err := strictCatalogWithProgress(nil, missingMovement, nil); err == nil || !strings.Contains(err.Error(), "moveinfo.tdf") {
+	if _, err := strictCatalogWithProgress(nil, missingMovement, content.Limits{}, nil); err == nil || !strings.Contains(err.Error(), "moveinfo.tdf") {
 		t.Fatalf("missing MOVEINFO supplied catalog error = %v, want exact validation diagnostic", err)
 	}
 
 	missingSides := &content.Catalog{
 		Movement: map[string]*content.MovementClass{"testmove": {}},
 	}
-	if _, err := strictCatalogWithProgress(nil, missingSides, nil); err == nil || !strings.Contains(err.Error(), "sidedata.tdf") {
+	if _, err := strictCatalogWithProgress(nil, missingSides, content.Limits{}, nil); err == nil || !strings.Contains(err.Error(), "sidedata.tdf") {
 		t.Fatalf("missing SIDEDATA supplied catalog error = %v, want exact validation diagnostic", err)
 	}
 
@@ -244,7 +259,7 @@ func TestStrictCatalogValidatesSuppliedCatalog(t *testing.T) {
 		Movement: map[string]*content.MovementClass{"testmove": {}},
 		Sides:    []*content.SideDef{{Name: "ARM"}},
 	}
-	got, err := strictCatalogWithProgress(nil, valid, nil)
+	got, err := strictCatalogWithProgress(nil, valid, content.Limits{}, nil)
 	if err != nil {
 		t.Fatalf("minimally valid supplied catalog: %v", err)
 	}

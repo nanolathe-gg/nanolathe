@@ -137,8 +137,9 @@ picks a duplicate policy explicitly instead of inheriting one.
 ### 2.3 `internal/content` — compiled catalogs
 
 `content.Compile(fs)` walks the install and returns a `*Catalog`;
-`CompileWithProgress` is the same compile with an observer for the loading
-screen, and a nil observer makes it exactly `Compile` `[07 §4]`.
+`CompileWithOptions(fs, Options{...})` is the same compile under explicit
+load-time options — the table limits it enforces and an observer for the
+loading screen — and the zero value makes it exactly `Compile` `[07 §4]`.
 
 The compile is two-stage `[02 §5]`. Stage 1 discovers and parses each family
 into typed records; stage 2 links cross-references. FBI records retain the
@@ -692,6 +693,180 @@ foreign copyright line and `Version=9.9`, absence of the incompatibility
 diagnostic, the retained loose-file drop, and the unchanged record order and
 definition IDs of a retail-shaped fixture set; the retail-tier catalog-hash
 test covers the installed corpus.
+
+**Content profiles (Nanolathe policy).** Retail reads its authored families
+from fixed directory names — `units`, `weapons`, `gamedata`, `guis`,
+`unitpics`, `download`, `ai` — and sizes its definition tables and read caps
+for its own content. A content set built for a patched executable moves its
+trees so the retail executable ignores them: TA: Escalation ships `unitsE
+weaponE gamedatE guiE unitpicE downloadsE aE`, ProTA `weaponP gamedatP guiP
+unitpicsP downloadP`, TA Zero `ZUnits ZWeapon ZGameDat ZGui ZUnitPic
+ZBuildMenu ZI`. The replaced retail tree is not read at all. The evidence is
+those content sets' own archives, readmes and `.ini` files; no patched
+executable was examined.
+**Nanolathe answers with a content profile**: a named, load-time description
+of a mounted content set carrying a directory table and the limits its content
+needs. `internal/content/profiles` embeds four — `retail` (empty), `escalation`,
+`prota`, `zero` — as JSON, so adding one is a data edit. After mounting and
+before anything reads content, detection walks the profiles in a fixed order —
+escalation, prota, zero, retail — and takes the first whose every marker
+resolves; `retail` carries no markers and is therefore the fallback. The
+selected profile's table becomes a `vfs.Layout`, a read view over the mounted
+overlay that rewrites the first path segment on the way down and reverses it on
+the way back, so the compiler keeps asking for `units/` and provenance, the
+catalog hash inputs and every diagnostic stay retail-named. An empty table
+returns the overlay unchanged.
+
+A content profile is not a gameplay rule set. It is chosen before a session
+exists, it never reaches a tick, and it is orthogonal to Modern and Strict 3.1
+[I11]. `--content-profile <name|path>` overrides detection on both commands, a
+path selecting a user-authored profile JSON file; the settings key
+`contentProfile` is the saved preference, and the precedence is explicit flag,
+saved preference, detection. The displayless report, the simulation benchmark
+report, the windowed battle benchmark's scene metadata and the inventory probe
+carry the resolved name as `content_profile`.
+
+*Boundaries.* The layout rewrites the **first** segment only, matched
+case-insensitively like every other lookup (C7); a later segment of the same
+name is untouched. It is a read view: mounting, provider precedence,
+`Providers`, `Entries` and the pinned mount report what is on disk and are not
+redirected, so a shadowing question is still answered in the mounted set's own
+names. The overlay's two optional reports survive wrapping — `Sources` returns
+retail-named entries, `ManifestHash` forwards the mount identity — and a
+wrapper over a view that has neither answers exactly as that view would. The
+overlay's optional byte-range capability survives wrapping too: a wrapper over
+a `vfs.RangeReader` forwards `ReadFileRange` under the rewritten path, and one
+over a view without it offers no such method, so the map census keeps its
+header-range fast path under a profile instead of decompressing every terrain
+file whole. A read error's *logical path* is retail-named; the host cause it wraps names the
+file that was actually read, which is what a reader needs to find it on disk.
+Both commands apply the table at their one mount boundary: the displayless
+runner wraps the overlay it mounts, and the graphical command's content set
+holds the wrapped view as the read surface every loader takes — catalog, sides,
+sound aliases, GUI, translations, pictures, build menus, maps and saves. Two
+surfaces there are still typed on the concrete overlay rather than on a read
+view and therefore read unmapped: the presentation model cache
+(`objects3d`, `textures`, `anims`) and the skirmish OTA map census (`maps`).
+The menu's TNT preview now reads through the layout view. No shipped profile
+renames those four families, and a test
+fails if one ever does, which is what would force those surfaces to be widened
+first. The concrete overlay is also what still answers the questions that are
+about the disk rather than about content — mounting an override, listing
+providers for a diagnostic, and closing.
+
+*Which limits are live.* A profile's `limits` block is read by the compile it
+belongs to, one count at a time as the units that consume them land. Live now:
+`units`, the size of the unit-definition ID domain; `weapons`, the size of the
+weapon record table; `tnt_bytes`, the largest whole map terrain file a loader
+will read; and `los_bytes`, the largest battle-table file the LOS and meteor
+compilers will read. `content.Limits` carries exactly those four;
+`content.RetailLimits()` is the retail baseline — a 512-bit domain, so IDs
+1..511 are usable, a 256-record weapon table, a 16 MiB map read and a 1 MiB
+battle-table read — and `content.LimitsFromProfile` converts a profile, keeping
+the retail value for any count the profile leaves unset.
+`content.CompileWithOptions(fs, content.Options{Limits: ...})` is the entry
+point that takes them; `Compile` and any options that leave the counts unset
+keep the retail baseline, so every caller that has not resolved a profile
+admits exactly the content it always did. The two single-family battle-table
+entry points take the limits directly — `content.CompileLOSTables(fs, limits)`
+and `content.CompileMeteor(fs, limits)`, with `content.RetailLimits()` as the
+baseline — while the map census is reached only through the catalog compile.
+The displayless runner, the simulation benchmark and the inventory probe
+resolve the profile at mount and compile through it. Both commands compile
+under the resolved profile's limits: the graphical command's content set
+carries them beside its read view, every compile it runs takes them, and it
+passes them to battle entry and to a retail save load, so a constructor handed
+a filesystem instead of a catalog compiles under the same policy instead of
+falling back to the retail tables. The catalog retains these limits, and both
+`world.Load` (shared by skirmish, mission and save entry) and the battle minimap
+read its `TNTBytes` cap. The menu preview takes the same limit from the mounted
+content set before a catalog exists. Carried in profiles but not yet consumed:
+`unit_limit` and `search_entries`.
+
+*What the read caps are and are not.* They are host byte budgets, not authored
+table sizes. `tnt_bytes` bounds every whole-file terrain read: the catalog's
+fallback census, battle terrain, battle minimap and menu preview. A ranged
+catalog census is unaffected, because it reads two short header ranges and
+never the whole terrain. Consequently a listed map can still exceed the cap
+when opened; range support must not bypass the full-load cap. The resolved
+retail profile uses 16 MiB and the three shipped mod profiles use 64 MiB.
+Applying this existing profile policy to runtime readers replaces their former
+independent 32 MiB terrain/radar and 1 GiB menu limits. Detached callers with
+no catalog limit retain the bounded 32 MiB terrain/radar fallback; a menu
+fixture with no content-set limit retains its former 1 GiB fallback. These are
+host admission limits, not recovered retail mechanics.
+`los_bytes` bounds each of the two
+battle-table reads, `gamedata/los.tdf` and `gamedata/meteor.tdf`, so a content
+set that raises one raises both. Neither cap changes how a byte is parsed, and
+a cap a profile leaves unset is the retail cap rather than an unbounded read.
+
+*What the LOS compile now accepts, and what it still refuses.* It accepts any
+declared table count, any line count and any point count a file spells: the
+retail loader sizes all three of its nested lists from the file
+`[03 R-COMP-02 §1]`, so there is no slot count to exceed, and the compiled
+slot-fill rule (slot `d` holds the section named `TABLE d+1`, undeclared
+sections retained as residue) is unchanged at ninety tables. TA: Escalation and
+ProTA both ship a ninety-table file of radius up to ninety and compile under
+their profiles' 8 MiB cap. It still refuses a file the cap refuses, and — above
+16 MiB, whatever the cap says — a file the TDF parser's own document bound
+refuses, since the battle tables are parsed under the default TDF limits. It
+does not raise sensor ranges or footprints: those are authored record fields
+admitted by their own families, not by this cap.
+
+*What a raised domain does and does not change.* The domain decides how many
+definitions are admitted and how wide a membership mask is; it never changes
+what an admitted definition does in a tick, and it is orthogonal to the
+gameplay mode [I11]. Membership masks are only as wide as their highest member
+needs, and a definition's digest and the catalog hash are computed from a
+canonical 32-bit form padded to the retail registry width, so a retail
+catalog's hash is bit-for-bit what it was. Two ceilings stand above any
+profile. The runtime definition identity a unit carries to the pool and to the
+committed frame is a 16-bit field, so `content.MaxDefinitionDomain` refuses a
+domain past 65536 rather than truncating an identity (I13: retail record sizes
+do not dictate Go layout, but a field that must survive publication does). And
+the authored CTRL_F type filter is a retail record — a 512-bit bitset indexed
+by definition ID [07 §9] — which cannot be widened; a definition above 511 is
+therefore absent from a CTRL_F-filtered group recall, a presentation-only
+consequence already diagnosed by `hud.TypeFilterPasses`. Retail's own save and
+mission records are not a constraint: a mission trigger's resolved definition
+index is 16 bits, the saved restriction list writes a `u32` per definition, and
+the build-order side channel carries the definition *name* through the
+`UTYPENAME` string table [08 "Save-file organization"], so 16000 fits all three. No
+retail save field is widened by this policy.
+
+A weapon section whose `ID` is at or past the end of the record table is
+refused rather than aliased into a neighbouring slot: retail's table is fixed
+at 256 records and the record a section fills is chosen by its own ID [02
+"Weapon record"], so an ID past the end addresses no record and the executable
+defines no outcome for it.
+
+*Verification.* The graphical command locks its own mount boundary: an
+authored install published under TA Zero's directory names is detected as
+`zero`, its catalog, sound-alias and GUI loaders resolve the retail names
+through the view while the raw mount does not, provenance stays retail-named,
+and a marker-free install resolves `retail` and keeps the mounted overlay
+itself. `vfs` locks the redirection both ways, the untouched later
+segment, the two optional reports with and without them underneath, the
+unchanged view for an empty table, and one short concatenation per redirected
+lookup. `internal/content/profiles` locks the four shipped tables against the
+inventory, the detection order and its all-markers rule, the override and
+user-authored-profile paths, and — on an authored fixture install published
+twice, once retail-named and once under TA: Escalation's names — an identical
+catalog hash and retail-named provenance. The retail tier adds the real
+content sets when their roots are given by environment variable: TA Zero and
+ProTA compile through their directory tables and profile limits. Escalation
+passes the definition and read caps but still stops on missing corpse models;
+this is not a claim of complete gameplay support for any mod. The Escalation
+test separately exercises ranged header reads and the deliberately range-less
+fallback's rejection under retail caps. Synthetic terrain, menu and radar
+fixtures lock exact-size admission, smaller-cap rejection and authored versus
+generated minimap selection. A retail install detects `retail` and its catalog
+hash is unchanged. `internal/content`
+locks the domain itself: an authored set of 600 definitions is refused under
+`RetailLimits()` with the unchanged retail diagnostic and compiles under a
+profile domain of 16000, with identity, membership and intersection holding on
+both sides of ID 511; a definition's digest does not move when the domain is
+widened; and a domain past the runtime identity width is refused.
 
 **Ordered roots and host discovery (Nanolathe policy).** The user-requested
 startup extension accepts repeated `--root` in both commands. Command-line

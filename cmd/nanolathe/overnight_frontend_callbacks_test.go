@@ -54,7 +54,7 @@ func TestRetailUnusableMainMenuFailsShellConstruction(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "guis", "mainmenu.gui"), []byte("[broken"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.fs.MountDirectory(dir, 1000000); err != nil {
+	if err := cs.unmappedMount.MountDirectory(dir, 1000000); err != nil {
 		t.Fatal(err)
 	}
 	g, err := newGameShell(Options{Root: cs.root}, cs)

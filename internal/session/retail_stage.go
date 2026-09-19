@@ -35,6 +35,11 @@ type RetailLoadDeps struct {
 	// A missing or zero saved value falls back to this word, with zero selecting the
 	// ordinary startup default. Campaign pools use the mission's limit.
 	UnitLimit int
+	// ContentLimits are the table sizes a catalog compile runs under when the
+	// caller supplies no catalog. They come from the mounted content set's
+	// profile (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles"); the zero
+	// value is the retail baseline.
+	ContentLimits content.Limits
 }
 
 // RetailBattleStage is an unreachable, fully detached staging result. The
@@ -65,7 +70,7 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 	if deps.FS == nil {
 		return nil, fmt.Errorf("session: retail battle staging requires filesystem")
 	}
-	cat, err := strictCatalogWithProgress(deps.FS, deps.Catalog, nil)
+	cat, err := strictCatalogWithProgress(deps.FS, deps.Catalog, deps.ContentLimits, nil)
 	if err != nil {
 		return nil, fmt.Errorf("session: retail catalog resolution: %w", err)
 	}

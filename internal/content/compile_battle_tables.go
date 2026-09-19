@@ -129,11 +129,27 @@ func compileLOSTable(sec *formats.Section, num int) LOSTable {
 // The authored LOS table is required by the terrain-ray visibility path. A
 // missing or malformed file is therefore returned as a provenance-rich content
 // error; fixtures must provide an authored table [03 §3.2][PLAN_05 C2].
-func CompileLOSTables(fs vfs.FSOps) (*LOSTables, error) {
+//
+// Nothing here assumes how many tables, lines or points an authored file may
+// carry. The retail loader's storage for this file is three nested dynamic
+// arrays: it resizes the table list to the declared numtables, a table's line
+// list to its declared numlines, and a line's point list to the pairs the line
+// spells [03 R-COMP-02 §1]. A content set that authors ninety tables is
+// therefore read the same way a nine-table one is, and the only host bound is
+// the read cap below.
+//
+// The one host bound is limits.LOSBytes, the content profile's battle-table
+// read cap; RetailLimits() is the retail baseline. Only the cap moves with the
+// profile — the compiled shape, the slot fill and the hash do not.
+func CompileLOSTables(fs vfs.FSOps, limits Limits) (*LOSTables, error) {
 	if fs == nil {
 		return nil, fmt.Errorf("content: nil VFS")
 	}
-	data, err := fs.ReadFileLimit("gamedata/los.tdf", 1<<20)
+	limits, err := limits.normalize()
+	if err != nil {
+		return nil, err
+	}
+	data, err := fs.ReadFileLimit("gamedata/los.tdf", limits.LOSBytes)
 	if err != nil {
 		return nil, requiredContentError(fs, "gamedata/los.tdf", "retail LOS.TDF terrain-ray tables", err)
 	}
@@ -251,11 +267,18 @@ func CompileLOSTables(fs vfs.FSOps) (*LOSTables, error) {
 // read failures remain compilation failures. A present but invalid block is
 // retained for the selected-schema startup path to reject if it is needed;
 // otherwise a complete authored schema is valid without it [02 §6][06 §6.5].
-func CompileMeteor(fs vfs.FSOps) (*MeteorDefaults, error) {
+//
+// limits.LOSBytes is the read cap, the same one the LOS table is read under: a
+// content set that raises one raises both.
+func CompileMeteor(fs vfs.FSOps, limits Limits) (*MeteorDefaults, error) {
 	if fs == nil {
 		return nil, fmt.Errorf("content: nil VFS")
 	}
-	data, err := fs.ReadFileLimit("gamedata/meteor.tdf", 1<<20)
+	limits, err := limits.normalize()
+	if err != nil {
+		return nil, err
+	}
+	data, err := fs.ReadFileLimit("gamedata/meteor.tdf", limits.LOSBytes)
 	if err != nil {
 		if !errors.Is(err, vfs.ErrNotFound) {
 			return nil, requiredContentError(fs, "gamedata/meteor.tdf", "retail METEOR.TDF default table", err)

@@ -154,7 +154,7 @@ func TestWeaponSameIDWholeRecordReplacement(t *testing.T) {
 		fixtureFile{path: "weapons/a_first.tdf", data: first},
 		fixtureFile{path: "weapons/z_second.tdf", data: second},
 	)
-	weapons, dups, err := CompileWeaponsWithDuplicates(fs)
+	weapons, dups, err := CompileWeaponsWithDuplicates(fs, RetailLimits())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +219,7 @@ func TestWeaponFamilyIsWeaponsDirOnly(t *testing.T) {
 		fixtureFile{path: "gamedata/weapons.tdf", data: inert},
 		fixtureFile{path: "weapons/cormine2_weapon.tdf", data: family},
 	)
-	weapons, dups, err := CompileWeaponsWithDuplicates(fs)
+	weapons, dups, err := CompileWeaponsWithDuplicates(fs, RetailLimits())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +267,7 @@ func TestWeaponDuplicateDiscoveryOrderFieldOverwrite(t *testing.T) {
 		fixtureFile{path: "weapons/alpha.tdf", data: first},
 		fixtureFile{path: "weapons/beta.tdf", data: second},
 	)
-	weapons, dups, err := CompileWeaponsWithDuplicates(fs)
+	weapons, dups, err := CompileWeaponsWithDuplicates(fs, RetailLimits())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +326,7 @@ func TestWeaponIDLessSectionsInert(t *testing.T) {
 		fixtureFile{path: "weapons/m_shared.tdf", data: shadowed},
 		fixtureFile{path: "weapons/z_real.tdf", data: real},
 	)
-	weapons, dups, err := CompileWeaponsWithDuplicates(fs)
+	weapons, dups, err := CompileWeaponsWithDuplicates(fs, RetailLimits())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -564,7 +564,7 @@ func TestWeaponSameIDRetainsDamageOverrides(t *testing.T) {
 		t.Run(later, func(t *testing.T) {
 			fs := newFixtureFS(t, fixtureFile{path: "weapons/duplicates.tdf", data: "[old]{ID=7; range=9; [DAMAGE]{default=8; ARMCOM=20; ARMCK=25;}}" +
 				"[new]{ID=7;" + later + "}"})
-			weapons, _, err := CompileWeaponsWithDuplicates(fs)
+			weapons, _, err := CompileWeaponsWithDuplicates(fs, RetailLimits())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -593,7 +593,7 @@ func TestWeaponSameIDDamageCaseVariantWins(t *testing.T) {
 	for _, keys := range [][2]string{{"ARMCOM", "armcom"}, {"armcom", "ARMCOM"}} {
 		t.Run(keys[1], func(t *testing.T) {
 			fs := newFixtureFS(t, fixtureFile{path: "weapons/duplicates.tdf", data: fmt.Sprintf("[old]{ID=7;[DAMAGE]{%s=20;}}[new]{ID=7;[DAMAGE]{%s=30;}}[last]{ID=7;}", keys[0], keys[1])})
-			weapons, _, err := CompileWeaponsWithDuplicates(fs)
+			weapons, _, err := CompileWeaponsWithDuplicates(fs, RetailLimits())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -615,7 +615,7 @@ func TestWeaponSameIDRetainedDamageContributesToHash(t *testing.T) {
 	var hashes [2]string
 	for i := range hashes {
 		fs := newFixtureFS(t, fixtureFile{path: "weapons/duplicates.tdf", data: fmt.Sprintf("[old]{ID=7;[DAMAGE]{ARMCOM=%d;}}[new]{ID=7;}", 20+i)})
-		weapons, _, err := CompileWeaponsWithDuplicates(fs)
+		weapons, _, err := CompileWeaponsWithDuplicates(fs, RetailLimits())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -630,7 +630,7 @@ func TestWeaponDamageLookupOrderContributesToHash(t *testing.T) {
 	var hashes [2]string
 	for i, blocks := range [][2]string{{"ARMCOM=20;", "armcom=30;"}, {"armcom=30;", "ARMCOM=20;"}} {
 		fs := newFixtureFS(t, fixtureFile{path: "weapons/duplicates.tdf", data: "[old]{ID=7;[DAMAGE]{" + blocks[0] + "}}[new]{ID=7;[DAMAGE]{" + blocks[1] + "}}"})
-		weapons, _, err := CompileWeaponsWithDuplicates(fs)
+		weapons, _, err := CompileWeaponsWithDuplicates(fs, RetailLimits())
 		if err != nil {
 			t.Fatal(err)
 		}

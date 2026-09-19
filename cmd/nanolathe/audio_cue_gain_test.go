@@ -54,7 +54,7 @@ func TestOrdinaryCueProducersShareBaseGain(t *testing.T) {
 		svc.DrainEvents(30, nil)
 		prefs := settings.DefaultAudio()
 		prefs.FXVol = int(fx * 64)
-		shell := &gameShell{cs: &contentSet{fs: fs}, audioOwner: svc, frontendAliasesBound: true, audioPrefs: prefs}
+		shell := &gameShell{cs: testContentSet(fs), audioOwner: svc, frontendAliasesBound: true, audioPrefs: prefs}
 		shell.playRetailSoundTest()
 		svc.SetViewport(audio.Viewport{Width: 40, Height: 30})
 		pos := [3]numeric.Fixed{320 * 65536, 0, 240 * 65536}

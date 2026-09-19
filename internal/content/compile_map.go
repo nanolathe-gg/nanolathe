@@ -250,12 +250,15 @@ type tntHeaderLite struct {
 // kilobytes of headers is what a map census costs if it opens files instead of
 // ranges. Retail's own census opens only the OTA of each map and never its
 // terrain [07 §4].
-func loadTNTHeaderLite(fs vfs.FSOps, logical string) (tntHeaderLite, error) {
+// maxBytes bounds only the fallback that reads the file whole, which is what
+// a provider without a range reader forces. It is the content profile's map
+// read cap: host policy, not a retail terrain size [content.Limits].
+func loadTNTHeaderLite(fs vfs.FSOps, logical string, maxBytes int64) (tntHeaderLite, error) {
 	read := func(offset int64, length int) ([]byte, error) {
 		if ranged, ok := fs.(vfs.RangeReader); ok {
 			return ranged.ReadFileRange(logical, offset, length)
 		}
-		data, err := fs.ReadFileLimit(logical, 16<<20)
+		data, err := fs.ReadFileLimit(logical, maxBytes)
 		if err != nil {
 			return nil, err
 		}
@@ -327,15 +330,17 @@ func baseNameWithoutExt(logical string) string {
 // It is headers only in this phase — OTA is parsed via formats/ota.go and TNT header
 // via a lightweight header reader inspired by formats/tnt.go [PLAN 02].
 // It returns a map keyed by CanonicalKey(basename) [02 §5].
+// The retail read caps apply; a host that has resolved a content profile
+// compiles its maps through the catalog's CompileWithOptions instead.
 func CompileMaps(fs vfs.FSOps) (map[string]*MapHeader, error) {
-	maps, _, err := compileMapsWithDiagnostics(fs, nil)
+	maps, _, err := compileMapsWithDiagnostics(fs, RetailLimits(), nil)
 	return maps, err
 }
 
 // compileMapsWithDiagnostics retains per-candidate rejection diagnostics for
 // the catalog. A parsed OTA without GlobalHeader is a nonfatal discovery miss,
 // before any terrain access [02 R-MAP-01 §2][02 R-MAP-01 §9].
-func compileMapsWithDiagnostics(fs vfs.FSOps, report Progress) (map[string]*MapHeader, []string, error) {
+func compileMapsWithDiagnostics(fs vfs.FSOps, limits Limits, report Progress) (map[string]*MapHeader, []string, error) {
 	if fs == nil {
 		return nil, nil, fmt.Errorf("content: nil VFS")
 	}
@@ -395,7 +400,7 @@ func compileMapsWithDiagnostics(fs vfs.FSOps, report Progress) (map[string]*MapH
 			return nil, warnings, fmt.Errorf("content: %s: %w", otaLogical, err)
 		}
 		// TNT header lightweight [fmt tnt].
-		hdr, err := loadTNTHeaderLite(fs, tntLogical)
+		hdr, err := loadTNTHeaderLite(fs, tntLogical, limits.TNTBytes)
 		if err != nil {
 			return nil, warnings, fmt.Errorf("content: %s: %w", tntLogical, err)
 		}

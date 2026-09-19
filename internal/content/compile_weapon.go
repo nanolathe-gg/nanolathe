@@ -558,9 +558,19 @@ func compileWeaponSectionWithPrior(section *formats.Section, sectionName string,
 // all write into the one scratch slot just before record 0, the last one wins
 // it, and the runtime name scan never reaches that slot — they appear only in
 // diagnostics here [02 §5 R-CONTENT-02].
-func CompileWeaponsWithDuplicates(fs vfs.FSOps) (map[string]*WeaponDef, []WeaponDuplicate, error) {
+// limits size the record table: retail's is 256 records and the record a
+// section fills is chosen by its own ID [02 "Weapon record"]
+// [02 §5 R-CONTENT-02], so an ID at or past the end of the table addresses no
+// record at all and the executable defines no outcome for it. That is
+// diagnosed rather than aliased into a neighbouring slot; a content profile
+// raises the table instead (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles").
+func CompileWeaponsWithDuplicates(fs vfs.FSOps, limits Limits) (map[string]*WeaponDef, []WeaponDuplicate, error) {
 	if fs == nil {
 		return nil, nil, fmt.Errorf("content: nil VFS")
+	}
+	limits, err := limits.normalize()
+	if err != nil {
+		return nil, nil, err
 	}
 	// Record table substitute: slot (ID) -> record, replacing scalars while
 	// preserving each slot's accumulated damage overrides [02 R-CONTENT-02].
@@ -582,6 +592,9 @@ func CompileWeaponsWithDuplicates(fs vfs.FSOps) (map[string]*WeaponDef, []Weapon
 				continue
 			}
 			wd := compileWeaponSectionWithPrior(section, name, prov, slots[section.IntValue("ID", -1)])
+			if int64(wd.ID) >= int64(limits.Weapons) {
+				return fmt.Errorf("content: weapon %q ID %d is outside the %d-record weapon table", wd.CanonicalKey, wd.ID, limits.Weapons)
+			}
 			if wd.ID >= 0 {
 				keysPerID[wd.ID] = append(keysPerID[wd.ID], wd.CanonicalKey)
 				// The later section owns the scalar fields and catalog name;
@@ -594,9 +607,9 @@ func CompileWeaponsWithDuplicates(fs vfs.FSOps) (map[string]*WeaponDef, []Weapon
 		return nil
 	}
 
-	entries, err := discoverArchiveContent(fs, "weapons", ".tdf")
-	if err != nil {
-		return nil, nil, fmt.Errorf("content: weapons: %w", err)
+	entries, entriesErr := discoverArchiveContent(fs, "weapons", ".tdf")
+	if entriesErr != nil {
+		return nil, nil, fmt.Errorf("content: weapons: %w", entriesErr)
 	}
 	// ReadDir resolves duplicate logical paths first-provider-wins in mount
 	// order and then sorts by Path [vfs.ReadDir] — provider mount precedence,

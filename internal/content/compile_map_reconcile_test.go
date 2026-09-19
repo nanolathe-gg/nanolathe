@@ -14,7 +14,7 @@ func TestTNTHeaderLiteSkipsAbsentMinimapPointer(t *testing.T) {
 	binary.LittleEndian.PutUint32(data[0x28:], ^uint32(0))
 	// Canonical slot 11 is clear, so the pointer is unrelated metadata.
 	fs := newFixtureFS(t, fixtureFile{path: "maps/no-mini.tnt", data: string(data)})
-	h, err := loadTNTHeaderLite(fs, "maps/no-mini.tnt")
+	h, err := loadTNTHeaderLite(fs, "maps/no-mini.tnt", RetailLimits().TNTBytes)
 	if err != nil {
 		t.Fatal(err)
 	}

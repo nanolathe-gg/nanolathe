@@ -337,6 +337,36 @@ func legacyTNTBytes(t *testing.T) []byte {
 	return b
 }
 
+// Content profiles bound full terrain reads even when the mount also offers
+// range reads for the catalog census (DESIGN_CONTENT_VFS "Content profiles").
+func TestTerrainLoadUsesCatalogReadCap(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "maps"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data := legacyTNTBytes(t)
+	if err := os.WriteFile(filepath.Join(dir, "maps", "legacy.tnt"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fs := vfs.New()
+	t.Cleanup(func() { fs.Close() })
+	if err := fs.MountDirectory(dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	cat := &content.Catalog{Limits: content.Limits{TNTBytes: int64(len(data) - 1)}}
+	if _, err := Load(fs, cat, "legacy"); err == nil {
+		t.Fatal("terrain bypassed the catalog's whole-file cap")
+	}
+	cat.Limits.TNTBytes++
+	if _, err := Load(fs, cat, "legacy"); err != nil {
+		t.Fatalf("exact-size cap refused authored terrain: %v", err)
+	}
+	cat.Limits.TNTBytes = 0
+	if _, err := Load(fs, cat, "legacy"); err != nil {
+		t.Fatalf("unset cap did not retain the bounded legacy fallback: %v", err)
+	}
+}
+
 // TestLegacyTerrainLoads locks the world side of the legacy (0x1020) path:
 // header wind/gravity always win, per-cell metal comes from attribute byte 6,
 // and ApplySchema must not overwrite it [02 "Terrain file"]. Void fixup still

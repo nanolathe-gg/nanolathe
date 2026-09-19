@@ -76,7 +76,7 @@ func TestBattleExitFadeSurvivesShellMenuPump(t *testing.T) {
 	}
 	b := newTestBattle(testCatalogON05(), testWorldON05(40, 40))
 	b.sess.Audio = s
-	g := &gameShell{audioOwner: s, cs: &contentSet{fs: fs}, frontend: ui.NewFrontend(modeMenuMain), battle: b}
+	g := &gameShell{audioOwner: s, cs: testContentSet(fs), frontend: ui.NewFrontend(modeMenuMain), battle: b}
 	b.shell = g
 	cl, err := client.New(client.Options{Buffer: b.sess.Snapshot, Width: 640, Height: 480})
 	if err != nil {

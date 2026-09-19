@@ -1,0 +1,21 @@
+{
+  "name": "zero",
+  "detect": ["TAZ31.gp3", "ZUnits"],
+  "layout": {
+    "ai": "ZI",
+    "download": "ZBuildMenu",
+    "gamedata": "ZGameDat",
+    "guis": "ZGui",
+    "unitpics": "ZUnitPic",
+    "units": "ZUnits",
+    "weapons": "ZWeapon"
+  },
+  "limits": {
+    "units": 16000,
+    "weapons": 16000,
+    "tnt_bytes": 67108864,
+    "los_bytes": 8388608,
+    "unit_limit": 1500,
+    "search_entries": 66650
+  }
+}

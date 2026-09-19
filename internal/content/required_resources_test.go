@@ -47,7 +47,7 @@ func TestCompileSightShapesRequiresPluralAuthoredResource(t *testing.T) {
 }
 
 func TestCompileLOSTablesRequiresAuthoredResource(t *testing.T) {
-	_, err := CompileLOSTables(newFixtureFS(t))
+	_, err := CompileLOSTables(newFixtureFS(t), RetailLimits())
 	if err == nil {
 		t.Fatal("CompileLOSTables accepted a missing required resource")
 	}
@@ -75,7 +75,7 @@ func TestCompileLOSTablesReadsAuthoredFixture(t *testing.T) {
     line1=1,0,1;
 }
 `})
-	lt, err := CompileLOSTables(fs)
+	lt, err := CompileLOSTables(fs, RetailLimits())
 	if err != nil {
 		t.Fatalf("CompileLOSTables: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestCompileLOSTablesReadsAuthoredFixture(t *testing.T) {
 }
 
 func TestCompileMeteorMissingResourceKeepsRetailEmptyDefaults(t *testing.T) {
-	md, err := CompileMeteor(vfs.New())
+	md, err := CompileMeteor(vfs.New(), RetailLimits())
 	if err != nil {
 		t.Fatalf("CompileMeteor missing resource: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestCompileMeteorReadsAuthoredFixture(t *testing.T) {
     MeteorInterval=60;
 }
 `})
-	md, err := CompileMeteor(fs)
+	md, err := CompileMeteor(fs, RetailLimits())
 	if err != nil {
 		t.Fatalf("CompileMeteor: %v", err)
 	}

@@ -164,7 +164,7 @@ func TestUnitSecondaryMissingPreservesUninitializedLinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	categories, err := compileCategoryRecords(result.records, result.units)
+	categories, err := compileCategoryRecords(result.records, result.units, RetailLimits())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestUnitSecondaryMissingPreservesUninitializedLinks(t *testing.T) {
 		t.Fatal("discovery state or stable index lost")
 	}
 	all, _ := categories.Lookup("ALL")
-	if unparsed.UnitMask != (CategoryMask{}) || all.Contains(2) || !all.Contains(1) {
+	if !unparsed.UnitMask.IsZero() || all.Contains(2) || !all.Contains(1) {
 		t.Fatal("unparsed record gained category membership")
 	}
 	if unparsed.Weapon1Def != nil || unparsed.Weapon2Def != nil || unparsed.ExplodeAsDef != nil || parsed.Weapon1Def != sentinel {

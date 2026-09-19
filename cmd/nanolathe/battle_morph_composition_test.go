@@ -37,7 +37,7 @@ func TestMenuBattleMorphJoinsThePresentationCRT(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cl.SetModelFS(cs.fs)
+	cl.SetModelFS(cs.unmappedMount)
 	if cl.HasPresentationCRT() {
 		t.Fatal("a fresh client already has a CRT; the assertion below proves nothing")
 	}

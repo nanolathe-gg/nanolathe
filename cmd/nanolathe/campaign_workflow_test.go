@@ -46,7 +46,7 @@ func campaignWorkflowFixture(t *testing.T) (*contentSet, []mission.Campaign) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &contentSet{fs: fs}, campaigns
+	return testContentSet(fs), campaigns
 }
 
 func TestCampaignSelectionSurvivesFreshAndOppositeSideListRebuild(t *testing.T) {

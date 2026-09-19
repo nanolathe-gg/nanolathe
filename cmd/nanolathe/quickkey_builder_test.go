@@ -96,7 +96,7 @@ func TestRetailWindowBuilderGAFAndArrowBypasses(t *testing.T) {
 	if err := fs.MountDirectory(root, 0); err != nil {
 		t.Fatal(err)
 	}
-	shell := &gameShell{cs: &contentSet{fs: fs}, quickKeyPreclearDisabled: true, assets: &menuAssets{common: &formats.GAF{Entries: []formats.GAFEntry{widgetArtEntry("BUTTONS0", 1)}}}}
+	shell := &gameShell{cs: testContentSet(fs), quickKeyPreclearDisabled: true, assets: &menuAssets{common: &formats.GAF{Entries: []formats.GAFEntry{widgetArtEntry("BUTTONS0", 1)}}}}
 	w := &gui.Window{Gadgets: []gui.Gadget{
 		{Kind: gui.KindPanel},
 		{Kind: gui.KindButton, Name: "ODD", Text: "Odd", QuickKey: 'Q', GAFFile: -1, ColorF: 19, Rect: gui.Rect{W: 2, H: 3}},

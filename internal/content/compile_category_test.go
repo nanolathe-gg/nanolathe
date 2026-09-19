@@ -40,31 +40,31 @@ func TestCompileCategoriesRegistryAndMasks(t *testing.T) {
 	// Stable IDs are one-based: alpha=1, bravo=2, zulu=3.
 	arm, _ := r.Lookup("ArM")
 	if !arm.Contains(3) || arm.Contains(1) || !arm.Contains(3) {
-		t.Fatalf("arm membership = %#v", arm.Words)
+		t.Fatalf("arm membership = %#v", arm)
 	}
 	tank, _ := r.Lookup("tank")
 	if !tank.Contains(1) || !tank.Contains(3) {
-		t.Fatalf("tank membership = %#v", tank.Words)
+		t.Fatalf("tank membership = %#v", tank)
 	}
 	unknown, _ := r.Lookup("UNKNOWN")
 	if !unknown.Contains(1) || !unknown.Contains(2) {
-		t.Fatalf("unknown membership = %#v", unknown.Words)
+		t.Fatalf("unknown membership = %#v", unknown)
 	}
 	if !r.SentinelMembership().Contains(1) || !r.SentinelMembership().Contains(3) {
-		t.Fatalf("ALL membership = %#v", r.SentinelMembership().Words)
+		t.Fatalf("ALL membership = %#v", r.SentinelMembership())
 	}
 	if r.SentinelMembership().Contains(0) || units["alpha"].DefinitionMask().Contains(0) {
 		t.Fatal("null definition ID 0 must remain an unassigned sentinel")
 	}
 	none, _ := r.Lookup("none")
 	if !none.IsZero() {
-		t.Fatalf("none is an ordinary empty token in this fixture, got %#v", none.Words)
+		t.Fatalf("none is an ordinary empty token in this fixture, got %#v", none)
 	}
 	if !units["alpha"].BadTargetCategoryWPRIMask.IsZero() {
-		t.Fatalf("unit name gained category membership = %#v", units["alpha"].BadTargetCategoryWPRIMask.Words)
+		t.Fatalf("unit name gained category membership = %#v", units["alpha"].BadTargetCategoryWPRIMask)
 	}
 	if !units["alpha"].BadTargetCategoryWSECMask.Contains(2) {
-		t.Fatalf("category target mask = %#v", units["alpha"].BadTargetCategoryWSECMask.Words)
+		t.Fatalf("category target mask = %#v", units["alpha"].BadTargetCategoryWSECMask)
 	}
 }
 
@@ -79,8 +79,10 @@ func TestCompileCategoriesWordBoundaryAndOverflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	m, _ := r.Lookup("BOUNDARY")
-	if m.Words[0]&(1<<30) == 0 || m.Words[1]&1 == 0 {
-		t.Fatalf("word boundary mask = %#v", m.Words)
+	// IDs are one-based, so the 32 fixture units span the 32-bit word
+	// boundary of the retail registry's canonical form.
+	if !m.Contains(30) || !m.Contains(32) {
+		t.Fatalf("word boundary mask = %#v", m)
 	}
 	tooMany := make(map[string]*UnitDef, 512)
 	for i := 0; i < 512; i++ {
@@ -120,7 +122,7 @@ func TestCatalogCategoryCloneAndDigest(t *testing.T) {
 	if clone.Categories == c.Categories || clone.Units["unit"] == c.Units["unit"] {
 		t.Fatal("clone shares category or unit pointers")
 	}
-	if clone.Hash != c.Hash || clone.Categories.SentinelMembership() != c.Categories.SentinelMembership() || clone.Units["unit"].DefinitionMask() != c.Units["unit"].DefinitionMask() {
+	if clone.Hash != c.Hash || !clone.Categories.SentinelMembership().Equal(c.Categories.SentinelMembership()) || !clone.Units["unit"].DefinitionMask().Equal(c.Units["unit"].DefinitionMask()) {
 		t.Fatal("clone changed immutable category digest")
 	}
 }

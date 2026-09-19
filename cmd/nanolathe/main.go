@@ -140,6 +140,10 @@ func run(opts Options, out *os.File) error {
 	}
 	defer content.Close()
 	opts.Root, opts.Roots = content.root, content.roots
+	// The mount boundary owns profile selection, so the resolved name — not
+	// the selector the command line carried — is what the reports state
+	// (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles").
+	opts.ContentProfile = content.profile
 
 	if opts.ShotDebris != "" {
 		return runDebrisShot(opts, content)

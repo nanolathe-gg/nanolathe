@@ -822,8 +822,11 @@ func writeUnitCanonical(u *UnitDef) []byte {
 	writeFlags(u.ZBuffer, u.IsAirBase, u.IsTargetingUpgrade, u.Teleporter, u.HideDamage, u.ShootMe, u.ArmoredState, u.ActivateWhenBuilt, u.CanFly, u.CanHover, u.Upright, u.Floater, u.Amphibious, u.IsFeature, u.NoShadow, u.ImmuneToParalyzer, u.HoverAttack, u.AntiWeapons, u.Digger, u.OnOffable, u.MobileStandOrders, u.FireStandOrders, u.CanStop, u.CanAttack, u.CanGuard, u.CanPatrol, u.CanMove, u.CanLoad, u.CanReclamate, u.CanResurrect, u.CanCapture, u.CanDGun, u.Kamikaze, u.NoRestrict, u.ShowPlayerName, u.Commander, u.CantBeTransported, u.Wacky)
 	fmt.Fprintf(&b, "%s|%t|", u.SelfDestructCountdown, u.SelfDestructCountdownPresent)
 	fmt.Fprintf(&b, "catmasks|")
+	// Masks hash in their canonical 32-bit form, padded to the retail
+	// registry width, so a definition's digest depends on which IDs are
+	// members and not on the domain the catalog was compiled over [02 §5] C12.
 	for _, m := range []CategoryMask{u.UnitMask, u.BadTargetCategoryWPRIMask, u.BadTargetCategoryWSECMask, u.BadTargetCategoryWSPEMask, u.NoChaseCategoryMask} {
-		for _, word := range m.Words {
+		for _, word := range m.canonicalWords32(CategoryMaskWords) {
 			fmt.Fprintf(&b, "%08x|", word)
 		}
 	}

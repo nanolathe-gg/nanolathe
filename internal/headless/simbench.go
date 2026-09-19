@@ -51,17 +51,21 @@ const (
 
 // SimBenchOptions is the whole benchmark request.
 type SimBenchOptions struct {
-	Gameplay     gameplay.Mode `json:"gameplay"`
-	Root         string
-	Roots        []string
-	OutputDir    string
-	Map          string
-	Seed         uint32
-	Difficulty   int
-	UnitLimit    int
-	WarmupTicks  uint32
-	MeasureTicks uint32
-	CensusCount  int
+	Gameplay gameplay.Mode `json:"gameplay"`
+	Root     string
+	Roots    []string
+	// ContentProfile selects the mounted content set's directory table by
+	// name or profile path; empty detects it from the mounted markers
+	// (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles").
+	ContentProfile string
+	OutputDir      string
+	Map            string
+	Seed           uint32
+	Difficulty     int
+	UnitLimit      int
+	WarmupTicks    uint32
+	MeasureTicks   uint32
+	CensusCount    int
 	// PhaseTiming installs the host phase observer. It costs one wall-clock
 	// read per phase boundary; the authoritative run is identical either way,
 	// which the report proves by carrying the fingerprint.
@@ -172,6 +176,7 @@ type SimBenchGC struct {
 type SimBenchReport struct {
 	Gameplay           gameplay.Mode       `json:"gameplay"`
 	Rules              string              `json:"rules"` // bound rule set name; Gameplay is only its base word
+	ContentProfile     string              `json:"content_profile,omitempty"`
 	SceneVersion       int                 `json:"scene_version"`
 	Map                string              `json:"map"`
 	SimulationSeed     uint32              `json:"simulation_seed"`
@@ -260,11 +265,17 @@ func RunSimBenchmark(opts SimBenchOptions) (SimBenchReport, error) {
 	}
 	defer fs.Close()
 
-	catalog, err := content.Compile(fs)
+	view, profile, err := contentProfileView(fs, opts.ContentProfile)
+	if err != nil {
+		return SimBenchReport{}, err
+	}
+	opts.ContentProfile = profile.Name
+
+	catalog, err := content.CompileWithOptions(view, content.Options{Limits: content.LimitsFromProfile(profile.Limits)})
 	if err != nil {
 		return SimBenchReport{}, diagnostic("catalog compile failed: "+err.Error(), opts.Map, fs.ProviderIDs(), "a complete compiled catalog")
 	}
-	return runSimBenchmarkWithContent(opts, fs, catalog, log)
+	return runSimBenchmarkWithContent(opts, view, catalog, log)
 }
 
 func runSimBenchmarkWithContent(opts SimBenchOptions, fs vfs.FSOps, catalog *content.Catalog, log io.Writer) (SimBenchReport, error) {
@@ -274,9 +285,10 @@ func runSimBenchmarkWithContent(opts SimBenchOptions, fs vfs.FSOps, catalog *con
 	}
 	sess := composed.Session
 	report := SimBenchReport{
-		Gameplay:     opts.Gameplay.Normalize(),
-		Rules:        sess.Rules.Name,
-		SceneVersion: SimBenchSceneVersion, Map: opts.Map,
+		Gameplay:       opts.Gameplay.Normalize(),
+		Rules:          sess.Rules.Name,
+		ContentProfile: opts.ContentProfile,
+		SceneVersion:   SimBenchSceneVersion, Map: opts.Map,
 		SimulationSeed: opts.Seed, CRTSeed: opts.Seed, Difficulty: opts.Difficulty,
 		WarmupTicks: opts.WarmupTicks, MeasuredTicks: opts.MeasureTicks,
 		PhaseTiming: opts.PhaseTiming, Scene: scene,

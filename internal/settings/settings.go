@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // FileVersion is the schema tag. A file whose Version is unrecognised is
@@ -324,7 +325,13 @@ type Settings struct {
 	// starts under the default instead of failing to load
 	// (docs/DESIGN_GAMEPLAY_RULES.md §8).
 	Gameplay gameplay.Mode `json:"gameplay"`
-	Version  int           `json:"version"`
+	// ContentProfile is the selected content profile: a shipped profile's
+	// name, the path of a user-authored profile JSON file, or empty to detect
+	// the profile from the mounted content set's own markers. It is a
+	// load-time content fact, not a gameplay rule set
+	// (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles").
+	ContentProfile string `json:"contentProfile,omitempty"`
+	Version        int    `json:"version"`
 	// Fullscreen is Nanolathe's desktop presentation preference, independent of
 	// retail display options. Absent in older settings files means windowed.
 	Fullscreen bool `json:"fullscreen"`
@@ -671,6 +678,11 @@ func (s *Skirmish) Normalize() {
 // Normalize applies Skirmish.Normalize and the top-level defaults.
 func (s *Settings) Normalize() {
 	s.Gameplay = s.Gameplay.Normalize()
+	// A stored profile selector is kept verbatim apart from surrounding
+	// space: it may be a shipped name or a host path, and this package owns
+	// neither vocabulary. An unknown selector is rejected where it is
+	// resolved, at the mount boundary, so a typo names itself there.
+	s.ContentProfile = strings.TrimSpace(s.ContentProfile)
 	if s.Version == 0 {
 		s.Version = FileVersion
 	}

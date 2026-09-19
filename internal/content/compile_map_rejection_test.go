@@ -50,7 +50,7 @@ func TestMapDiscoveryRejectsMissingHeaderBeforeTerrainRead(t *testing.T) {
 		fixtureFile{path: "maps/z-playable.ota", data: "[GlobalHeader] { [Schema 0] { Type=Network 1; } }"},
 		fixtureFile{path: "maps/z-playable.tnt", data: mapDiscoveryTerrainFixture()},
 	)
-	maps, warnings, err := compileMapsWithDiagnostics(fs, nil)
+	maps, warnings, err := compileMapsWithDiagnostics(fs, RetailLimits(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -25,8 +25,8 @@ func TestGuardFallbackRequiresFailedDamageJoin(t *testing.T) {
 				QueueForUnit(f.guard).Binding().World.DeclaresAlliance = func(_, _ uint8) bool { return true }
 			}},
 			{name: "excluded category", wake: guardCombatJoinBit, configure: func(f *guardLegsFixture) {
-				f.enemy.Def.UnitMask.Words[0] = 1
-				f.guard.Def.NoChaseCategoryMask.Words[0] = 1
+				f.enemy.Def.UnitMask = content.MaskForID(1)
+				f.guard.Def.NoChaseCategoryMask = content.MaskForID(1)
 			}},
 			{name: "forced join succeeds", wake: guardCombatJoinBit, join: true, configure: func(f *guardLegsFixture) { f.guard.Def.CanAttack = true }},
 			{name: "forced join fails", wake: guardCombatJoinBit, retarget: true},

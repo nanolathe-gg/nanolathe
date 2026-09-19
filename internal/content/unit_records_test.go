@@ -88,7 +88,7 @@ func TestUnitRecordsLinkCloneHashAndRestriction(t *testing.T) {
 	result := unitCompileResult{records: records, units: firstUnitNames(records)}
 	var err error
 	c := &Catalog{Units: result.units, unitRecords: result.records, Weapons: map[string]*WeaponDef{"laser": {DefinitionHeader: DefinitionHeader{CanonicalKey: "laser"}, ID: 1, Name: "laser"}}}
-	c.Categories, err = compileCategoryRecords(result.records, result.units)
+	c.Categories, err = compileCategoryRecords(result.records, result.units, RetailLimits())
 	if err != nil {
 		t.Fatal(err)
 	}

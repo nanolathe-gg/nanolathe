@@ -46,6 +46,16 @@ This is an explicit exception to rule 1 for approved policy, not permission to
 invent unresolved retail mechanics. Renderer and host preferences retain their
 separate controls.
 
+Use the existing interfaces and `session.RuleSet` registry described in
+[DESIGN_GAMEPLAY_RULES](docs/DESIGN_GAMEPLAY_RULES.md), especially §9, for
+future gameplay work. Extend the owning interface and both reserved defaults
+when a new decision is needed; justify a new owning-package seam only when
+none fits, and compose it through the same `RuleSet`. Do not add a second
+registry, capability-selection system, or scattered gameplay booleans.
+Load-time content profiles remain separate from gameplay selection. Research
+an extension before proposing its contract; evidence that a patch implements
+a behavior is not authorization to enable that behavior in Nanolathe.
+
 Current policies: [terrain admission](docs/DESIGN_WEAPONS_PROJECTILES.md#231-modern-terrain-admission),
 [Hold Fire](docs/DESIGN_UNITS_ORDERS_COB.md#modern-hold-fire), and
 [factory-exit yielding](docs/DESIGN_ECONOMY_CONSTRUCTION.md#modern-factory-exit-yielding), and
@@ -81,6 +91,8 @@ Keep the address trail in `$HOME/ta-decompile/notes/` for reproducibility.
 research/
   formats/                  one doc per file format — byte layouts, defaults,
                             conversions. Source of truth for HOW TO READ BYTES.
+  extensions/               non-retail extension contracts and evidence policy;
+                            see extensions/README.md. Never retail evidence.
   retail-executable-spec/   behavioral contracts. Source of truth for WHAT
                             RETAIL DOES.
     README.md               index, reading order, evidence language
@@ -93,13 +105,24 @@ research/
                             08 sessions/campaign/AI/save/replay
 ```
 
-**Adding a finding:** edit the owning category document in place; corrections
-replace old text, with the change explained in the commit. Put closed gaps inline
+**Adding a retail finding:** edit the owning category document in place;
+corrections replace old text, with the change explained in the commit. Put closed gaps inline
 under the `R-<id>` heading cited by code, preserving old anchors such as `[R-P0-01]`,
 `[04 §5.4]`, and `[GAP T15]`. Format details belong in
-`research/formats/<format>.md`. Do not create research notes, new directories,
-or gap-analysis files. Open questions belong in code `TODO(T23)` / `TODO(T25)` /
-`TODO(question)` markers and the category doc's **Unknown** list.
+`research/formats/<format>.md`. Except for the authorized extension reference
+below, do not create research notes, new directories, or gap-analysis files.
+Open questions belong in code `TODO(T23)` / `TODO(T25)` / `TODO(question)`
+markers and the category doc's **Unknown** list.
+
+**Non-retail extension research:** `research/extensions/` is explicitly
+authorized for curated extension contracts, under its
+[README](research/extensions/README.md) evidence policy. Primary patch
+documentation, authored content, and appropriately licensed source can support
+extension claims, with source version, scope and confidence recorded. Describe
+behavior independently; do not disassemble third-party patches. Use the
+extension evidence policy rather than the retail executable-analysis workflow.
+Do not promote extension evidence into the retail specification or treat this
+directory as approval for new mechanics.
 
 **Citations.** By document and section, never by line number: `[04 §7.2]` for
 numbered docs, `[05 "Two-stage settlement algorithm"]` for docs 05 and 08
@@ -107,7 +130,8 @@ numbered docs, `[05 "Two-stage settlement algorithm"]` for docs 05 and 08
 inline addendum section whose heading retains that exact anchor.
 
 **Precedence:** `research/retail-executable-spec` owns retail behavior;
-`research/formats` owns byte layout. Explicitly approved Modern gameplay
+`research/formats` owns byte layout; `research/extensions` owns sourced
+non-retail extension behavior only. Explicitly approved Modern gameplay
 departures are owned by their design contracts, as described above.
 
 **Our implementation docs** (not retail evidence):
@@ -228,7 +252,7 @@ is accountable for the diff it lands:
 7. Check `docs/INVARIANTS.md`: no `map` range in sim-visible paths, no
    `float64` outside the I2 allowlist, no `time.Now()` in sim packages, no new
    module dependencies, unknowns are `TODO(...)` markers, research the unit
-   added follows "Adding a finding" above.
+   added follows the applicable research rules above.
 
 **When a unit lands badly:** fix it **forward** with a new commit that says
 what changed and why. Never revert/reset/rebase/amend on `main`. If the whole
@@ -255,8 +279,11 @@ sink the presentation layer drains.
 **When research does not answer:** grep the category docs and `research/formats`
 first. If it is a T23/T25 item, write `TODO(T23)` / `TODO(T25)` with the chosen
 placeholder behavior and a one-line justification, and keep going. If it is a
-genuine gap, analyze the executable in `$HOME/ta-decompile`, then write the
-finding up clean-room in the owning doc before implementing dependent behavior.
+genuine retail gap, analyze the retail executable in `$HOME/ta-decompile`, then
+write the finding up clean-room in the owning doc before implementing dependent
+behavior. For non-retail extension gaps, follow `research/extensions/README.md`:
+use primary documentation, authored content, appropriately licensed source or
+manual observations; do not disassemble third-party patches.
 Sub-agents investigate and edit only within their assigned ownership; report
 upstream research or API needs to the orchestrator. If the gap cannot be settled,
 record it under rule 1 and report the missing evidence. The gap blocks behavior
@@ -316,6 +343,8 @@ client     — Ebitengine window loop presents a software framebuffer from the c
   behavior changes, read the owning `docs/DESIGN_*.md`, relevant invariants,
   and cited research sections; use `research/retail-executable-spec/README.md`
   to locate the evidence. Read benchmark docs for the performance checks below.
+  For gameplay extensions, also read `docs/DESIGN_GAMEPLAY_RULES.md` §9 and
+  `research/extensions/README.md`; reuse or extend the existing interfaces.
   A wording-only correction needs the affected text and its context.
 - There is **no Oracle** in this repo. For retail validation use
   `~/TotalAnnihilation` assets and a manual retail install if needed, but do

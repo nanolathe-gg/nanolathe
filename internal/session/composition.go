@@ -568,7 +568,15 @@ func (s *Session) bindUnitCOB(fs vfs.FSOps, u *units.Unit) error {
 	return nil
 }
 
-func strictCatalogWithProgress(fs vfs.FSOps, cat *content.Catalog, report content.Progress) (*content.Catalog, error) {
+// strictCatalogWithProgress returns the caller's catalog, or compiles one when
+// the caller supplied none. The compile runs under the limits the caller
+// resolved from the mounted content set's profile: a host that hands this
+// constructor a filesystem instead of a catalog hands it the same load-time
+// content policy the host would have compiled under itself
+// (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles"). The zero value is the
+// retail baseline, so a caller that resolves no profile compiles exactly the
+// catalog it always did.
+func strictCatalogWithProgress(fs vfs.FSOps, cat *content.Catalog, limits content.Limits, report content.Progress) (*content.Catalog, error) {
 	if cat != nil {
 		if err := cat.Validate(); err != nil {
 			return nil, fmt.Errorf("session: catalog validate: %w", err)
@@ -578,7 +586,7 @@ func strictCatalogWithProgress(fs vfs.FSOps, cat *content.Catalog, report conten
 	if fs == nil {
 		return nil, fmt.Errorf("session: nil filesystem and nil catalog [02 §5]")
 	}
-	compiled, err := content.CompileWithProgress(fs, report)
+	compiled, err := content.CompileWithOptions(fs, content.Options{Limits: limits, Progress: report})
 	if err != nil {
 		return nil, fmt.Errorf("session: catalog compile: %w", err)
 	}

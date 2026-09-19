@@ -481,7 +481,7 @@ func TestBattleComposesAtTheChosenDisplayMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cl.SetModelFS(cs.fs)
+	cl.SetModelFS(cs.unmappedMount)
 	b, err := composeBattleEntry(sess, cat, cs, cl, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -906,7 +906,7 @@ func retailBattleOptionsShell(t *testing.T) (*gameShell, *battleSession, *client
 	if err != nil {
 		t.Fatal(err)
 	}
-	cl.SetModelFS(cs.fs)
+	cl.SetModelFS(cs.unmappedMount)
 	b, err := composeBattleEntry(sess, cat, cs, cl, shell)
 	if err != nil {
 		t.Fatal(err)

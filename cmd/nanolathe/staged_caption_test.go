@@ -33,7 +33,8 @@ func TestStagedBuilderTranslatesFragmentsAfterWholeCaptionAndArt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cs := &contentSet{fs: fs, translations: table}
+	cs := testContentSet(fs)
+	cs.translations = table
 	for _, name := range []string{"named", "checkbox", "missing art", "external bypass"} {
 		t.Run(name, func(t *testing.T) {
 			w, err := cs.loadGUI("stage.gui")

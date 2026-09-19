@@ -5,11 +5,13 @@ import (
 	"flag"
 	"fmt"
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
+	contentprofiles "github.com/nanolathe-gg/nanolathe/internal/content/profiles"
 	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
 	"io"
 	"math"
 	"path/filepath"
+	"strings"
 
 	// The rule sets this build can select beyond the two reserved ones. The
 	// import is what registers them, and it sits beside the flag that names
@@ -20,8 +22,16 @@ import (
 // Options is the command-line surface for the retail runtime and its host
 // configuration. Developer probes and capture modes are separate tools.
 type Options struct {
-	Gameplay           gameplay.Mode
-	GameplaySet        bool
+	Gameplay    gameplay.Mode
+	GameplaySet bool
+	// ContentProfile selects the mounted content set's directory table. The
+	// flag takes a shipped profile's name or the path of a profile JSON file;
+	// an omitted flag falls back to the saved preference and then to
+	// detection. openContent resolves it and run replaces this field with the
+	// resolved name, so everything downstream — the headless report among it —
+	// reports the profile the mount actually used
+	// (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles").
+	ContentProfile     string
 	Arrival            bool    // modern battle opening (GPU §36)
 	ShotArrivalTime    float64 // seconds into a reproducible opening capture; negative disables
 	UnitLimit          int     // zero uses the saved preference; explicit CLI values override it
@@ -183,6 +193,18 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.StringVar(&opts.CPUProfile, "cpuprofile", "", "write a pprof CPU profile of the --shot compose path to this file")
 	set.StringVar(&opts.MemProfile, "memprofile", "", "write a pprof allocation profile of the --shot compose path to this file")
 	set.IntVar(&opts.ProfileSeconds, "profile-seconds", 0, "with classic --shot, run the CPU viewer loop headlessly for this many seconds of battle time and report ms per frame")
+	set.Func("content-profile", "content profile: "+strings.Join(contentprofiles.Names(), ", ")+", or the path of a profile JSON file; omitted uses the saved preference, then detection (docs/DESIGN_CONTENT_VFS.md §5)", func(text string) error {
+		// Resolve here only to reject an unusable selector while the command
+		// line is still the thing being read. The selector itself is what
+		// travels: the mount boundary resolves it again so a path-selected
+		// profile is read from the file the user named, and it is the mount
+		// boundary that reports the name it settled on.
+		if _, err := contentprofiles.Lookup(text); err != nil {
+			return err
+		}
+		opts.ContentProfile = text
+		return nil
+	})
 	set.Func("gameplay", "gameplay rule set: modern (default), strict-3.1, or a registered set's name (see mods/); omitted uses saved preference", func(text string) error {
 		mode, err := gameplay.Parse(text)
 		opts.Gameplay = mode

@@ -42,7 +42,7 @@ func TestUnitLimitReachesTheBattleRequest(t *testing.T) {
 		t.Fatalf("captureSettings UnitLimit = %d, want 320", got)
 	}
 
-	req, err := skirmishBattleRequest(Options{Map: maps[0]}, &contentSet{fs: vfs.New()}, cfg, headlessScenarioSkirmish, nil, nil)
+	req, err := skirmishBattleRequest(Options{Map: maps[0]}, testContentSet(vfs.New()), cfg, headlessScenarioSkirmish, nil, nil)
 	if err != nil {
 		t.Fatalf("skirmishBattleRequest: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestUnitLimitReachesTheBattleRequest(t *testing.T) {
 // TestUnitLimitDefaultsWithoutAStoredBlock is the direct `-map` path and a
 // first run: no preferences file, so Nanolathe's default reaches battle entry.
 func TestUnitLimitDefaultsWithoutAStoredBlock(t *testing.T) {
-	req, err := directMapBattleRequest(Options{Map: "Anteer Straight"}, &contentSet{fs: vfs.New()}, nil)
+	req, err := directMapBattleRequest(Options{Map: "Anteer Straight"}, testContentSet(vfs.New()), nil)
 	if err != nil {
 		t.Fatalf("directMapBattleRequest: %v", err)
 	}
@@ -87,14 +87,14 @@ func TestUnitLimitCLIAndConfigPrecedence(t *testing.T) {
 		if shell.setup.UnitLimit != want || shell.captureSettings().UnitLimit != want {
 			t.Fatalf("shell/captured limit = %d/%d, want %d", shell.setup.UnitLimit, shell.captureSettings().UnitLimit, want)
 		}
-		req, err := directMapBattleRequest(opts, &contentSet{fs: vfs.New()}, nil)
+		req, err := directMapBattleRequest(opts, testContentSet(vfs.New()), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if req.value.Skirmish.UnitLimit != want {
 			t.Fatalf("direct limit = %d, want %d", req.value.Skirmish.UnitLimit, want)
 		}
-		req, err = skirmishBattleRequest(opts, &contentSet{fs: vfs.New()}, shell.setup, headlessScenarioSkirmish, nil, nil)
+		req, err = skirmishBattleRequest(opts, testContentSet(vfs.New()), shell.setup, headlessScenarioSkirmish, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

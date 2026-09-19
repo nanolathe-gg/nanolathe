@@ -294,7 +294,7 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 		cl.SetCamera(cam)
 		cl.SetPalette(pal)
 		cl.SetFNT(b.hud.console)
-		cl.SetModelFS(cs.fs)
+		cl.SetModelFS(cs.unmappedMount)
 		cl.SetUIStage(battleHUDUIStage{hud: b.hud, battle: b})
 		file, err := os.Create(shot)
 		if err != nil {
@@ -384,7 +384,7 @@ func TestRetailNoSelectionClosesCommandWindows(t *testing.T) {
 		cl.SetCamera(cam)
 		cl.SetPalette(pal)
 		cl.SetFNT(b.hud.console)
-		cl.SetModelFS(cs.fs)
+		cl.SetModelFS(cs.unmappedMount)
 		cl.SetUIStage(battleHUDUIStage{hud: b.hud, battle: b})
 		file, err := os.Create(shot)
 		if err != nil {
@@ -448,7 +448,7 @@ func writeRetailHUDShot(t *testing.T, b *battleSession, cs *contentSet, cam *cam
 	cl.SetCamera(cam)
 	cl.SetPalette(pal)
 	cl.SetFNT(b.hud.console)
-	cl.SetModelFS(cs.fs)
+	cl.SetModelFS(cs.unmappedMount)
 	cl.SetUIStage(battleHUDUIStage{hud: b.hud, battle: b})
 	file, err := os.Create(path)
 	if err != nil {

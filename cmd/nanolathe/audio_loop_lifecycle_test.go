@@ -67,7 +67,7 @@ func TestMenuLoopLifecycleDefersAndStopsAtTransitions(t *testing.T) {
 	audio.SetGlobalOutput(output)
 	t.Cleanup(func() { audio.SetGlobalOutput(old) })
 
-	shell := &gameShell{cs: &contentSet{fs: fs}, frontend: ui.NewFrontend(modeMenuMain), audioPrefs: settings.DefaultAudio()}
+	shell := &gameShell{cs: testContentSet(fs), frontend: ui.NewFrontend(modeMenuMain), audioPrefs: settings.DefaultAudio()}
 	shell.ensureFrontendAudio().Registry.RegisterPath(menuBGMAlias, "sounds/bgm.wav")
 	cl, err := client.New(client.Options{Buffer: &frame.Buffer{}, Width: 64, Height: 48})
 	if err != nil {

@@ -109,7 +109,7 @@ func runDebrisShot(opts Options, cs *contentSet) error {
 	if err != nil {
 		return fmt.Errorf("nanolathe: client: %w", err)
 	}
-	cl.SetModelFS(cs.fs)
+	cl.SetModelFS(cs.unmappedMount)
 	applyVisualOptions(cl, loadedSettings().Display)
 	// Every Enhanced switch on: the point of the capture is the lighting pass.
 	cl.SetEffects(drawlist.Effects{Water: true, Lighting: opts.ShotDebrisLighting, Finish: true, Distortion: true, Marks: true})

@@ -154,9 +154,9 @@ func TestRetaliationOrderRespectsNoChaseAndBadTarget(t *testing.T) {
 	cat := &content.Catalog{}
 	w := newOrdersFixtureWorld(8, cat)
 	attackerDef := &content.UnitDef{UnitName: "reactvtol", CanAttack: true, MaxDamage: 100}
-	attackerDef.UnitMask.Words[0] = 1 << 5
+	attackerDef.UnitMask = content.MaskForID(5)
 	victimDef := &content.UnitDef{UnitName: "reactgun2", CanAttack: true, MaxDamage: 100}
-	victimDef.NoChaseCategoryMask.Words[0] = 1 << 5
+	victimDef.NoChaseCategoryMask = content.MaskForID(5)
 
 	victimH, _ := w.Create(victimDef, 0, 0, 0, 0)
 	attackerH, _ := w.Create(attackerDef, 1, 0, 0, 0)
@@ -170,7 +170,7 @@ func TestRetaliationOrderRespectsNoChaseAndBadTarget(t *testing.T) {
 		t.Fatal("a no-chase attacker must not draw a counter-order [08 R-AI-01 §11]")
 	}
 	victimDef.NoChaseCategoryMask = content.CategoryMask{}
-	victimDef.BadTargetCategoryWPRIMask.Words[0] = 1 << 5
+	victimDef.BadTargetCategoryWPRIMask = content.MaskForID(5)
 	if RetaliationOrder(victim, attacker) {
 		t.Fatal("a bad-target attacker must not draw a counter-order [08 R-AI-01 §11]")
 	}

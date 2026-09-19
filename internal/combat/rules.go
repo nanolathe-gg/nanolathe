@@ -36,8 +36,9 @@ type Rules interface {
 // for a point target) and the session wind whose phase-8 deadline bounds future
 // wind knowledge [01 §7.3].
 //
-// The caller builds it on its own stack and hands over the address, so the
-// pipeline allocates nothing per shot. Launch, Muzzle and Aim are filled by the
+// The service reuses its own query storage and saves/restores it across nested
+// fire attempts, so interface dispatch allocates nothing per shot. Rules must
+// not retain the query. Launch, Muzzle and Aim are filled by the
 // spawner once the muzzle query and accuracy spread have run [06 §4.4]; Blocked
 // is the answer's output, read by the caller after the attempt returns.
 type ShotQuery struct {

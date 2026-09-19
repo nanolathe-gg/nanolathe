@@ -597,11 +597,21 @@ func canonicalWindAndGravity(mh *content.MapHeader) (windMin, windMax int32, gra
 	return windMin, windMax, numeric.Fixed(0x1FDB), 112
 }
 
-// Load loads terrain for mapKey through the VFS and catalog [03 §2.2].
-// mapKey is the map basename (e.g. "ashap plateau") case-insensitively [02 §5].
-// It validates the TNT version [03 §2.2] C2, expands tile data [03 §2.2] C5,
-// and resolves wind/gravity/tidal per [03 §2.2] C3/C4 and sea level per C9.
+// Load loads terrain for mapKey through the VFS and catalog
+// [03 §2.2]. mapKey is the map basename (e.g. "ashap plateau")
+// case-insensitively [02 §5]. It validates the TNT version [03 §2.2] C2,
+// expands tile data [03 §2.2] C5, and resolves wind/gravity/tidal per
+// [03 §2.2] C3/C4 and sea level per C9.
+//
+// A compiled catalog carries the profile's whole-file read cap. Taking it
+// here covers skirmish, mission and save entry alike, including callers that
+// supply an already compiled catalog. Uncompiled fixtures retain the former
+// 32 MiB fallback (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles").
 func Load(fs vfs.FSOps, cat *content.Catalog, mapKey string) (*Terrain, error) {
+	maxTNTBytes := int64(32 << 20)
+	if cat != nil && cat.Limits.TNTBytes > 0 {
+		maxTNTBytes = cat.Limits.TNTBytes
+	}
 	if fs == nil {
 		return nil, fmt.Errorf("world: nil VFS")
 	}
@@ -622,7 +632,7 @@ func Load(fs vfs.FSOps, cat *content.Catalog, mapKey string) (*Terrain, error) {
 		// VFS paths are case-folded lower [vfs.path] and logical is maps/<key>.tnt.
 		logicalTNT = "maps/" + strings.ToLower(key) + ".tnt"
 	}
-	data, err := fs.ReadFileLimit(logicalTNT, 32<<20)
+	data, err := fs.ReadFileLimit(logicalTNT, maxTNTBytes)
 	if err != nil {
 		return nil, fmt.Errorf("world: %s: %w", logicalTNT, err)
 	}

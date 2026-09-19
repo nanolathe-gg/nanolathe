@@ -26,7 +26,7 @@ func (*atomicTestUIStage) DrawUI(*client.Client, client.UIFrame) {}
 
 func TestFreshBattleRequestsCarryExplicitSeedPair(t *testing.T) {
 	opts := Options{Seed: 73}
-	cs := &contentSet{fs: vfs.New()}
+	cs := testContentSet(vfs.New())
 
 	missionRequest, err := missionBattleRequest(opts, cs, "campaign:MISSION0", 0, 0, 0, nil, newBattleSeedSource(opts))
 	if err != nil {
@@ -113,7 +113,7 @@ func TestEnterBattlePreparationFailureIsAtomic(t *testing.T) {
 	shell := &gameShell{
 		battle: oldBattle, cam: oldCamera, frontend: frontend,
 		loading: newLoadingState("old"), campaignProgress: progress,
-		campaignProgressSet: true, cs: &contentSet{fs: contentFS}, audioOwner: oldSession.Audio,
+		campaignProgressSet: true, cs: testContentSet(contentFS), audioOwner: oldSession.Audio,
 	}
 	cl, err := client.New(client.Options{Width: 64, Height: 64, Buffer: oldSession.Snapshot})
 	if err != nil {

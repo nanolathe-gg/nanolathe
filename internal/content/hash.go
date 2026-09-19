@@ -31,7 +31,7 @@ func catalogHash(c *Catalog) string {
 	if c.Categories != nil {
 		for _, e := range c.Categories.entries {
 			fmt.Fprintf(h, "category %s", e.Name)
-			for _, word := range e.Membership.Words {
+			for _, word := range e.Membership.canonicalWords32(CategoryMaskWords) {
 				fmt.Fprintf(h, " %08x", word)
 			}
 			fmt.Fprintln(h)

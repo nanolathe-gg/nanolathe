@@ -52,7 +52,7 @@ func skirmishBattleRequest(opts Options, cs *contentSet, cfg session.SkirmishCon
 		Kind:     kind, Map: cfg.MapName, Difficulty: cfg.Difficulty, Skirmish: cfg,
 		LocalOwner: localOwner, Watching: watching,
 		SimulationSeed: cfg.RNGSimSeed, CRTSeed: cfg.RNGCrtSeed,
-		FS: cs.fs, Progress: progress,
+		FS: cs.fs, ContentLimits: cs.limits, Progress: progress,
 		PresentationWidth: retailScreenW, PresentationHeight: retailScreenH,
 	}}, nil
 }
@@ -71,7 +71,7 @@ func missionBattleRequest(opts Options, cs *contentSet, identity string, difficu
 		CampaignIndex: campaignIndex, CampaignSlot: campaignSlot,
 		Difficulty: difficulty, LocalOwner: -1,
 		SimulationSeed: uint32(seeds.Simulation), CRTSeed: seeds.CRT,
-		FS: cs.fs, Progress: progress,
+		FS: cs.fs, ContentLimits: cs.limits, Progress: progress,
 		PresentationWidth: retailScreenW, PresentationHeight: retailScreenH,
 	}}, nil
 }

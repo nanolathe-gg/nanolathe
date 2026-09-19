@@ -39,6 +39,11 @@ type MissionEntryOptions struct {
 	Gameplay        gameplay.Mode
 	SelectedSide    int
 	SelectedSideSet bool
+	// ContentLimits are the table sizes a catalog compile runs under when the
+	// caller supplies no catalog. They come from the mounted content set's
+	// profile (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles"); the zero
+	// value is the retail baseline.
+	ContentLimits content.Limits
 }
 
 // NewMissionWithEntryOptions is the explicit battle-entry constructor used by
@@ -58,7 +63,7 @@ func NewMissionWithEntryOptions(fs vfs.FSOps, cat *content.Catalog, path string,
 	if fs == nil {
 		fs = vfs.New()
 	}
-	cat, err := strictCatalogWithProgress(fs, cat, report)
+	cat, err := strictCatalogWithProgress(fs, cat, options.ContentLimits, report)
 	if err != nil {
 		return nil, err
 	}

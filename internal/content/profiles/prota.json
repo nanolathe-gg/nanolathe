@@ -1,0 +1,19 @@
+{
+  "name": "prota",
+  "detect": ["ProTA.gp3", "weaponP"],
+  "layout": {
+    "download": "downloadP",
+    "gamedata": "gamedatP",
+    "guis": "guiP",
+    "unitpics": "unitpicsP",
+    "weapons": "weaponP"
+  },
+  "limits": {
+    "units": 16000,
+    "weapons": 16000,
+    "tnt_bytes": 67108864,
+    "los_bytes": 8388608,
+    "unit_limit": 1500,
+    "search_entries": 66650
+  }
+}

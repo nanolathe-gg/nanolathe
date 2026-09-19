@@ -177,20 +177,31 @@ Modern type and no retail call site imports a Modern package.
 These are the reason the seam is cheap enough to sit in the tick at all, and
 they are checked by tests rather than trusted:
 
-1. **Every implementation is zero size or used by pointer.** A zero-size
-   value converts to an interface without allocating; a pointer to
-   session-lifetime state boxes nothing per call. A non-empty value
-   implementation is a defect.
+1. **Every cached implementation holds no state.** A zero-size value converts
+   to an interface without allocating; a pointer is allowed only when its
+   pointee is also zero size. The registry shares implementations across
+   sessions, so pointers to mutable session scratch are not permitted.
+   `TestCachedRuleSetImplementationsHoldNoState` checks the pointee as well as
+   the value; the allocation test alone is not a state-ownership check.
+   Mutable state belongs to the supplied service, unit, manager or request
+   (for example the `path.Search` returned by a stateless kernel). A rule
+   must not hide mutable state in globals or retain request arguments.
+   Supporting stateful implementations later requires a deliberate lifecycle,
+   isolation, switching and save/restore design (§9), not weakening the guard.
 2. **No call site builds a closure per call.** A method takes the concrete
    state its answer needs — the unit, the order record, the resolved fire
-   attempt as a pointer to the caller's stack, the tick — and never a closure
+   attempt as a pointer to caller-owned reusable storage, the tick — and never a closure
    or a slice it retains.
 3. **A method is asked at the same site the mode projection was read.**
    Introducing a seam moves no logic; it only changes who answers. That is
    what makes an identity fingerprint the correct gate for a seam unit.
-4. **A Strict answer draws no randomness and writes no state.** Strict is the
-   retail baseline, so it cannot move a shared stream. A Modern answer that
-   draws receives the stream explicitly.
+4. **Strict policy answers add no randomness or state writes.** The policy
+   methods in `combat.Rules`, `orders.Rules`, `construction.Rules` and
+   `UnitLimitRules` preserve the retail path without extra work. The whole
+   subsystem seams still execute retail search and planner behavior, including
+   their established state writes and RNG consumption; they are not no-ops.
+   An approved Modern change documents its RNG and resource effects and uses
+   only the owning service's supplied stream, never a new private stream.
 5. **Binding happens outside a tick.** Composition and the phase-1 command
    boundary are the only two places a set may be bound, so no phase selects an
    implementation ([INVARIANTS.md](INVARIANTS.md) I1).
@@ -229,6 +240,12 @@ creating new ones. There is deliberately no detach or rollback step: an
 unwind would be new behaviour in both directions and would need its own
 contract and its own tests. A player who wants a clean Strict run starts one.
 
+Future extensions must state which in-flight work keeps its original
+implementation and which subsequent decisions use the newly bound set. They
+must also specify residual orders, deadlines, request storage and resource
+commitments, and test switches in both directions. The current rebind has no
+extension-specific migration hook; do not assume it cancels or converts work.
+
 ## 6. Save interaction
 
 A save records **no rule-set name**. The retail bank's box vocabulary is
@@ -243,6 +260,11 @@ composition, and the restored battle continues under it. The code site
 carries a `TODO(question)` naming what is missing: a decision on a
 Nanolathe-side save metadata area — a sidecar file, or an agreed additional
 box — which is a save-format question rather than a retail one.
+
+A future extension that needs persistent identity or private state must first
+settle the metadata format, versioning, missing-set behavior and restoration
+contract in the owning save design. The current omission is a limitation,
+not permission to invent save bytes or infer a set from loaded content.
 
 Two consequences are worth stating because they are observable:
 
@@ -305,8 +327,8 @@ tick.** Selection happens at composition and at the phase-1 command boundary;
 everything after that holds the bound set ([INVARIANTS.md](INVARIANTS.md) I1).
 A lookup builds its set at most once and keeps it, so the same built set is
 handed to every session in the process — which is exactly why §3's rule that
-an implementation is zero size or a pointer to *session-independent* state is
-checked by a test rather than trusted.
+an implementation and any pointee are zero size is checked by a test rather
+than trusted. These cached objects cannot own session scratch.
 
 Registration is a **build-time** act, so it panics rather than reporting:
 
@@ -321,10 +343,11 @@ and fills every unstated seam from that base set — not from the owning
 packages' own nil fallbacks, which answer Strict 3.1 and would silently
 contradict a Modern-based set.
 
-`Base` is the set's answer to every strict-versus-modern question asked outside
-the seams: the save unit-limit policy, the developer spawn gate, what the
-session reports and persists. A session carries its bound set's base in
-`Session.Gameplay`, so logic that only knows the two reserved behaviors needs
+`Base` is the set's answer to strict-versus-modern questions outside the
+seams, such as the developer spawn gate and the headless report's `gameplay` field.
+The save unit-limit decisions themselves use `UnitLimitRules`, so a named
+set may override those answers independently of its base. A session carries
+its bound set's base in `Session.Gameplay`, so logic that only knows the two reserved behaviors needs
 no knowledge of the registry, and the developer spawn gate keeps reading that
 word unchanged.
 
@@ -372,6 +395,76 @@ Two consequences are worth stating because they are observable:
   reserved set a selection derives from (`session.BaseModeOf`), and toggling
   it selects a reserved set — replacing a third-party selection. Selecting a
   set by name is a command-line or settings-file choice.
-- A session reports and persists its base, so a third-party set's name appears
-  in neither the headless report nor a save (§6). The set a run used is a
-  property of the invocation, not of the saved battle.
+- Headless and simulation-cost reports include `rules` for the bound set
+  name; session debug captures also include `rules`. The headless report
+  exposes the session base separately as `gameplay`. A retail save still
+  carries no rule-set name (§6). Reports identify a run's selection but do not
+  make loading a save restore that selection.
+
+## 9. Extending the existing mechanism
+
+Future gameplay work uses the interfaces in §2 and the registry in §8. This
+section is the implementation workflow, not approval for new mechanics.
+Existing user authorization carries forward: implement an already authorized
+mechanic and extend its owning interfaces autonomously within that scope.
+Documenting its contract and tests is implementation work, not a requirement
+to ask for the same approval again.
+
+1. **Establish the contract and owner.** Read the owning subsystem design,
+   retail baseline and any versioned extension evidence in
+   [research/extensions](../research/extensions/README.md). Separate established
+   source behavior, unresolved questions and an explicitly approved Nanolathe
+   Modern policy. Name the trigger, strict answer, new answer, affected state,
+   ordering, RNG/resource effects and boundaries before implementing it.
+2. **Use the existing interface.** Compose a shipped implementation when it
+   already answers the question. Add a method to the owning `combat.Rules`,
+   `orders.Rules`, `construction.Rules` or `session.UnitLimitRules` when the
+   package needs a new decision. Implement both Strict and Modern defaults,
+   with Modern delegating to the strict answer where no departure is approved.
+   Keep unbound fixtures' retail behavior. For a replacement search or think
+   step, use `path.Kernel` or `ai.Planner` within their existing boundaries.
+3. **Add a seam only for a missing owner or boundary.** Explain in the owning
+   design why the existing interfaces cannot express the contract. Put the
+   narrow interface in that algorithm's package and compose its field in the
+   same `session.RuleSet`: both reserved constructors, base completion,
+   binding/rebinding and later-created/restored owners must agree. Do not
+   introduce another registry, capability-selection system, per-unit policy
+   selector or collection of compatibility booleans. Keep selection at
+   composition or the phase-1 command boundary and dispatch at request
+   granularity (§4).
+4. **Keep state with its owner.** Cached rule objects and pointees remain zero
+   size (§3). New state in an existing owner needs documented initialization,
+   lifetime, cleanup, save/restore and switch behavior. If a rule object itself
+   must hold state, first design per-session construction and isolation,
+   rebind idempotence, disposal, in-flight work and save identity/versioning.
+   The current registry is not a per-session factory and supplies none of
+   those facilities; no such redesign is authorized by this guidance.
+5. **Verify the contract.** Test the extension behavior and the Strict bypass,
+   including RNG draws and resource effects; retain allocation, composition,
+   restoration and registry guards. Test any added state across rebinding and
+   switches, plus independent sessions when state isolation matters. A seam
+   refactor preserves both modes' fingerprints (§7); an approved behavior
+   change explains its expected differences in the owning design. Run the
+   applicable verification and performance gates from
+   [ARCHITECTURE](ARCHITECTURE.md#6-verification) and AGENTS.md.
+
+### Content profiles are a separate input
+
+`internal/content/profiles` selects load-time directory layout and content
+limits through `vfs.Layout`; see [DESIGN_CONTENT_VFS §5](DESIGN_CONTENT_VFS.md).
+It does not select `session.RuleSet`. A patch or content pack may require both
+a load-time profile and separately authorized gameplay support; record those
+two requirements independently. A detected marker, install name, file path or
+asset-provider identity must not become a hidden runtime gameplay selector.
+Keep renderer and host preferences under their existing controls as well.
+
+### Decisions still required for future extensions
+
+The existing mechanism deliberately does not settle stateful rule lifecycles,
+new migration/cancellation semantics on switching, or persistent rule-set
+identity and compatibility across saves. These require concrete extension
+requirements, an approved design and tests before dependent behavior can be
+implemented. Record unresolved behavior as `TODO(question)` at its code site
+and in its owning research contract; record Nanolathe design decisions in the
+owning design document. The existence of a seam or an extension reference does
+not authorize changing either reserved set's behavior.

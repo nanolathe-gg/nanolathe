@@ -92,7 +92,7 @@ func TestGeneratedPageReparsesSourceThenBuildsOnce(t *testing.T) {
 		fs:            fs,
 		side:          &content.SideDef{NamePrefix: "ARM"},
 		windows:       map[string]*gui.Window{"armdl": built},
-		windowContext: &battleWindowContext{content: &contentSet{fs: fs}, preclearDisabled: &disabled},
+		windowContext: &battleWindowContext{content: testContentSet(fs), preclearDisabled: &disabled},
 	}
 	w, _, err := h.numberedPage("armlab2", []frame.GeneratedProductPlacement{{ProductKey: "product", Button: 4}})
 	if err != nil {

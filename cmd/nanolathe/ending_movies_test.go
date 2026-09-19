@@ -143,7 +143,7 @@ func TestMovieSequenceMalformedReelKeepsDiagnostic(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "broken.zrb"), []byte("authored invalid movie"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.fs.MountDirectory(root, 1000); err != nil {
+	if err := cs.unmappedMount.MountDirectory(root, 1000); err != nil {
 		t.Fatal(err)
 	}
 	if err := g.startMovieSequence(cl, "broken.zrb", creditsMoviePath); err != nil {

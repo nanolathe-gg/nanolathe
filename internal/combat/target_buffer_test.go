@@ -21,11 +21,11 @@ func targetBufferFixture(t testing.TB, count int, secondary, invalid, stunned bo
 	// Definition mask word 0 bit 1 is the authored bad-target membership;
 	// bit 2 is preferred. The catalog pointer makes the production path use
 	// these masks rather than the fixture-only legacy category word.
-	shooterDef.BadTargetCategoryWPRIMask.Words[0] = 1 << 1
+	shooterDef.BadTargetCategoryWPRIMask = content.MaskForID(1)
 	prefDef := &content.UnitDef{UnitName: "preferred", MaxDamage: 100, Limit: -1}
-	prefDef.UnitMask.Words[0] = 1 << 2
+	prefDef.UnitMask = content.MaskForID(2)
 	fallbackDef := &content.UnitDef{UnitName: "fallback", MaxDamage: 100, Limit: -1}
-	fallbackDef.UnitMask.Words[0] = 1 << 1
+	fallbackDef.UnitMask = content.MaskForID(1)
 
 	shooterHandle, err := w.Create(shooterDef, 0, numeric.FixedFromInt(0), numeric.FixedFromInt(10), numeric.FixedFromInt(0))
 	if err != nil {

@@ -573,7 +573,7 @@ func TestRetailTalkCapture(t *testing.T) {
 	cl.SetCamera(cam)
 	cl.SetPalette(pal)
 	cl.SetFNT(b.hud.console)
-	cl.SetModelFS(cs.fs)
+	cl.SetModelFS(cs.unmappedMount)
 	cl.SetUIStage(battleHUDUIStage{hud: b.hud, battle: b})
 	b.cl = cl
 	if !b.openTalk(cl.Input(), cl) {

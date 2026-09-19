@@ -65,7 +65,12 @@ type Report struct {
 	Gameplay gameplay.Mode `json:"gameplay"`
 	// Rules is the bound rule set's name. Gameplay reports only the reserved
 	// base word, so a registered third-party set is visible only here.
-	Rules                     string           `json:"rules"`
+	Rules string `json:"rules"`
+	// ContentProfile is the resolved content profile: `retail` for an
+	// unmodified install, otherwise the profile whose markers the mounted
+	// overlay presented or the one the host selected explicitly
+	// (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles").
+	ContentProfile            string           `json:"content_profile,omitempty"`
 	ScenarioKind              ScenarioKind     `json:"scenario_kind"`
 	ScenarioIdentity          string           `json:"scenario_identity"`
 	SimulationSeed            uint32           `json:"simulation_seed"`
@@ -174,6 +179,7 @@ func buildReport(request Request, kind ScenarioKind, identity string, sess *sess
 		ScenarioKind:     kind,
 		Gameplay:         sess.Gameplay.Normalize(),
 		Rules:            sess.Rules.Name,
+		ContentProfile:   request.ContentProfile,
 		ScenarioIdentity: identity,
 		SimulationSeed:   request.SimulationSeed,
 		CRTSeed:          request.CRTSeed,

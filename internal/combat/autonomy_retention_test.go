@@ -136,8 +136,7 @@ func TestAutonomousScanRequiresTheSlotAutonomyBit(t *testing.T) {
 func TestRetentionDropsAlliedAndBadMaskTargets(t *testing.T) {
 	// One shared bit, used both as the target's definition identity and as the
 	// slot's bad-target mask; the fixture's two units share one definition.
-	var oneBit content.CategoryMask
-	oneBit.Words[0] = 1 << 3
+	oneBit := content.MaskForID(3)
 
 	setup := func(t *testing.T) (*Service, *units.World, *world.Terrain, *content.Catalog, *units.Unit, *units.Unit) {
 		t.Helper()

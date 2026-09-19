@@ -542,7 +542,13 @@ range, so the last loaded table `TABLE numtables` is unreachable, and group 0
 reads a record whose content is Unknown — an empty line list there is the
 sanctioned divergence `[03 §3.2]` `[03 R-COMP-02 §1]` (SC9). A declared slot
 whose section is absent keeps its empty line list; it never pulls a
-higher-numbered table down into it.
+higher-numbered table down into it. Nothing in the compile or the raster is
+bounded by a table count: the retail loader sizes its table list to the declared
+`numtables`, its line list to the declared `numlines` and its point list to the
+pairs a line spells `[03 R-COMP-02 §1]`, so a content set that authors ninety
+tables of radius up to ninety is read exactly the way the nine-table retail file
+is. The only host bound is the battle-table read cap, which a content profile
+raises (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles").
 
 **C3** Sprite-mask publication clips start-inclusive/end-exclusive, skips
 negative origins to `max(0, −origin)`, compares bounds unsigned so a signed

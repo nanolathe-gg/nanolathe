@@ -136,7 +136,7 @@ func TestSC24ArchiveDefinitionsWinAndLooseDefinitionsAreUnobservable(t *testing.
 		t.Fatalf("SC24 unit = %#v, want archived definition", got)
 	}
 
-	weapons, duplicates, err := CompileWeaponsWithDuplicates(fs)
+	weapons, duplicates, err := CompileWeaponsWithDuplicates(fs, RetailLimits())
 	if err != nil {
 		t.Fatalf("compile weapons: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestSC24LooseWeaponIsFilteredBeforeItsUnreadableBytesAreOpened(t *testing.T
 		},
 		path: "weapons/loose.tdf",
 	}
-	weapons, _, err := CompileWeaponsWithDuplicates(fs)
+	weapons, _, err := CompileWeaponsWithDuplicates(fs, RetailLimits())
 	if err != nil {
 		t.Fatalf("compile weapons opened filtered loose winner: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestSC24ShadowedLooseWinnerDoesNotRecoverArchivedUnitOrWeapon(t *testing.T)
 		t.Fatalf("shadowed loose winner compiled units = %#v, want no recovered archive definition", units)
 	}
 
-	weapons, duplicates, err := CompileWeaponsWithDuplicates(fs)
+	weapons, duplicates, err := CompileWeaponsWithDuplicates(fs, RetailLimits())
 	if err != nil {
 		t.Fatalf("compile shadowed weapon: %v", err)
 	}

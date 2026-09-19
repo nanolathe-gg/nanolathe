@@ -110,7 +110,7 @@ func TestCampaignResultListCachesAdmissionMetricBeforeFontSelection(t *testing.T
 	if err := fs.MountDirectory(dir, 10); err != nil {
 		t.Fatal(err)
 	}
-	g := &gameShell{cs: &contentSet{fs: fs}, font: &formats.FNT{Height: 4}}
+	g := &gameShell{cs: testContentSet(fs), font: &formats.FNT{Height: 4}}
 	window := &gui.Window{Gadgets: []gui.Gadget{{Kind: gui.KindPanel}, {Kind: gui.KindListBox, Name: "Missions", Attribs: 0x101, ColorF: 7, Rect: gui.Rect{X: 1, Y: 1, W: 10, H: 8}}, {Kind: gui.KindFont, FilePath: "row.fnt"}}}
 	p := ui.NewPanel(window)
 	p.FillTextListAt(1, []string{"\xff", "\xff"}, nil, 4)

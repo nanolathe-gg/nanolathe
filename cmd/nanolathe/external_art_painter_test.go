@@ -36,7 +36,7 @@ func TestFrontendNonbuttonPainterKeepsItsKindArtAfterExternalPrepass(t *testing.
 			gad := gui.Gadget{Kind: kind, Name: "TOY", Active: 1, GAFFile: 1, Rect: gui.Rect{X: 2, Y: 2, W: 8, H: 8}}
 			w := &gui.Window{Rect: gui.Rect{W: 32, H: 24}, Gadgets: []gui.Gadget{{Kind: gui.KindPanel}, gad}}
 			ordinary := &formats.GAF{Entries: []formats.GAFEntry{bindingEntry("TOY", 37)}}
-			g := &gameShell{cs: &contentSet{fs: fs}, frontend: ui.NewFrontend(modeMenuMain), assets: &menuAssets{panel: map[shellMode]*retailPanelAssets{modeMenuMain: {window: w, art: ordinary}}}}
+			g := &gameShell{cs: testContentSet(fs), frontend: ui.NewFrontend(modeMenuMain), assets: &menuAssets{panel: map[shellMode]*retailPanelAssets{modeMenuMain: {window: w, art: ordinary}}}}
 			g.installRetailWindowButtonArt(w, ordinary)
 			p := ui.NewPanel(w)
 			g.frontend.Panels.Replace(p)

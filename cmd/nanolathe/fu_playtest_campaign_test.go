@@ -384,7 +384,7 @@ func TestFUPlaytestCampaignNondefaultVisibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.fs.MountDirectory(overlay, remasterPriority); err != nil {
+	if err := cs.unmappedMount.MountDirectory(overlay, remasterPriority); err != nil {
 		t.Fatalf("mount overlay %s: %v", overlay, err)
 	}
 	cases := []struct {

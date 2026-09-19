@@ -18,7 +18,7 @@ func TestMusicOptionsModeKeepsBattleCategory(t *testing.T) {
 	svc := audio.NewService(fs)
 	svc.Music.Open(16)
 	svc.Music.Configure(audio.ModeSequential, 0)
-	shell := &gameShell{cs: &contentSet{fs: fs}, audioOwner: svc, audioPrefs: settings.DefaultAudio()}
+	shell := &gameShell{cs: testContentSet(fs), audioOwner: svc, audioPrefs: settings.DefaultAudio()}
 	optionsState = &retailOptionsState{track: 1}
 	optionsState.categories[0] = 3
 	shell.applyRetailMusicMode()

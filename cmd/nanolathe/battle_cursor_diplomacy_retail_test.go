@@ -50,7 +50,7 @@ func TestRetailCursorDiplomacyUsesInstalledCursors(t *testing.T) {
 	cl.SetTerrain(b.sess.World)
 	cl.SetCamera(b.cam)
 	cl.SetPalette(retailPaletteForTest(t, shotContent))
-	cl.SetModelFS(shotContent.fs)
+	cl.SetModelFS(shotContent.unmappedMount)
 
 	// The target is deliberately a different owner only in the committed
 	// presentation copy. snapshotUnitCopy therefore has no usable queue

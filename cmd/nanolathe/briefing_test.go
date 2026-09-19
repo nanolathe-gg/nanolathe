@@ -19,7 +19,7 @@ import (
 func TestRetailContinuationPreflightFailureIsAtomic(t *testing.T) {
 	progress := session.BankProgress{BetweenMissions: 1, WL: [10]byte{'L'}, Thumbs: [25]byte{'W'}}
 	shell := &gameShell{
-		cs: &contentSet{fs: vfs.New()}, campaignIdx: 4, missionIdx: 3,
+		cs: testContentSet(vfs.New()), campaignIdx: 4, missionIdx: 3,
 		missionDifficultyValue: 2, missionSide: 1, campaignProgress: progress,
 		campaignProgressSet: true,
 	}

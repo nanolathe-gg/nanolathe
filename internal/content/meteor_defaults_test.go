@@ -10,7 +10,7 @@ import (
 func TestCompileMeteorDefersPresentDefaultValidation(t *testing.T) {
 	valid := func(body string) *MeteorDefaults {
 		t.Helper()
-		md, err := CompileMeteor(newFixtureFS(t, fixtureFile{path: "gamedata/meteor.tdf", data: body}))
+		md, err := CompileMeteor(newFixtureFS(t, fixtureFile{path: "gamedata/meteor.tdf", data: body}), RetailLimits())
 		if err != nil {
 			t.Fatalf("CompileMeteor: %v", err)
 		}
@@ -60,7 +60,7 @@ func (f meteorReadFailureFS) ReadFileLimit(string, int64) ([]byte, error) {
 }
 
 func TestCompileMeteorRejectsProviderFailure(t *testing.T) {
-	_, err := CompileMeteor(meteorReadFailureFS{newFixtureFS(t)})
+	_, err := CompileMeteor(meteorReadFailureFS{newFixtureFS(t)}, RetailLimits())
 	if err == nil || !strings.Contains(err.Error(), "nanolathe: required authored resource: logical path gamedata/meteor.tdf, providers searched [], expected retail METEOR.TDF default table: provider read failed") {
 		t.Fatalf("CompileMeteor provider failure = %v", err)
 	}

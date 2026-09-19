@@ -19,7 +19,7 @@ func TestC09CategoryTokenizerPreservesHighBytesAndUsesOnlyCRTSpace(t *testing.T)
 	for _, name := range []string{"\xc0", "\xe0", "alpha"} {
 		m, ok := r.Lookup(name)
 		if !ok || !m.Contains(1) {
-			t.Fatalf("category %q = %#v, want unit membership", name, m.Words)
+			t.Fatalf("category %q = %#v, want unit membership", name, m)
 		}
 	}
 }

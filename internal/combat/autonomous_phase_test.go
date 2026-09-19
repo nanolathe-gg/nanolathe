@@ -28,8 +28,7 @@ func TestAutonomousReplacementAndDeferredClear(t *testing.T) {
 			}
 			slot := shooter.SlotAt(0)
 			slot.Target = units.Target{Kind: units.TargetUnit, Unit: target.Handle}
-			var bad content.CategoryMask
-			bad.Words[0] = 1 << 3
+			bad := content.MaskForID(3)
 			target.Def.UnitMask = bad
 			shooter.Def.BadTargetCategoryWPRIMask = bad
 			program := progWithAim([]uint32{0x10021001, 1, 0x10065000}, "TargetCleared", 0)

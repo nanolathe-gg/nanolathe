@@ -7,14 +7,38 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
+	contentprofiles "github.com/nanolathe-gg/nanolathe/internal/content/profiles"
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
 	"github.com/nanolathe-gg/nanolathe/internal/install"
+	"github.com/nanolathe-gg/nanolathe/internal/settings"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // contentSet is the mounted install plus the notes gathered while mounting.
 type contentSet struct {
-	fs           *vfs.FS
+	// fs is the read view every content reader takes: the mounted overlay
+	// with the resolved content profile's directory table applied, so a
+	// loader keeps asking for `units/` whatever the content set spells it
+	// (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles"). A retail content
+	// set has an empty table, and an empty table is the overlay itself.
+	fs vfs.FSOps
+	// unmappedMount is the concrete overlay, kept for the jobs that are about
+	// what is on disk rather than about content — mounting an override,
+	// listing providers for a diagnostic, closing — and for the two reader
+	// surfaces still typed on the overlay (§5 names them). Reading a content
+	// product through it bypasses the profile's directory table, so a read
+	// here is wrong unless one of those cases applies.
+	unmappedMount *vfs.FS
+	// profile is the resolved content profile's name, for the reports.
+	profile string
+	// limits are the table sizes that profile compiles under: the size of the
+	// unit-definition ID domain and of the weapon record table. Every compile
+	// this command runs, and every session constructor it hands a filesystem
+	// without a catalog, takes them, so the window admits exactly the content
+	// the displayless command does (docs/DESIGN_CONTENT_VFS.md §5 "Content
+	// profiles"). A retail content set resolves to the retail baseline.
+	limits content.Limits
+
 	root         string
 	roots        []string
 	notes        []string
@@ -22,10 +46,10 @@ type contentSet struct {
 }
 
 func (c *contentSet) Close() error {
-	if c.fs == nil {
+	if c.unmappedMount == nil {
 		return nil
 	}
-	return c.fs.Close()
+	return c.unmappedMount.Close()
 }
 
 // missingProductError is the standard diagnostic shape from
@@ -81,14 +105,36 @@ func openContent(opts Options) (*contentSet, error) {
 			return nil, err
 		}
 	}
-	set := &contentSet{fs: fileSystem, root: roots[0], roots: append([]string(nil), roots...), notes: fileSystem.Notes()}
+	// The content profile is resolved after mounting and before anything
+	// reads content, because detection asks the mounted overlay for its
+	// markers. Precedence is the explicit flag, then the saved preference,
+	// then detection — the same order the displayless command follows
+	// (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles").
+	selector := opts.ContentProfile
+	if strings.TrimSpace(selector) == "" {
+		stored, _ := settings.Load()
+		selector = stored.ContentProfile
+	}
+	profile, err := contentprofiles.Resolve(fileSystem, selector)
+	if err != nil {
+		fileSystem.Close()
+		return nil, err
+	}
+	set := &contentSet{
+		fs:            profile.Layout().Apply(fileSystem),
+		unmappedMount: fileSystem,
+		profile:       profile.Name,
+		limits:        content.LimitsFromProfile(profile.Limits),
+		root:          roots[0], roots: append([]string(nil), roots...), notes: fileSystem.Notes(),
+	}
 
 	// One required product proves the mount produced game data rather than an
 	// empty directory. MOVEINFO.TDF and SIDEDATA.TDF are the hard requirements
 	// [02 §1]; GAMEDATA.TDF is not — it does not exist in a real install
-	// (docs/SPEC_CONFLICTS.md SC2).
+	// (docs/SPEC_CONFLICTS.md SC2). The probe goes through the profile view,
+	// so a content set that ships `gamedata` under another name satisfies it.
 	for _, required := range []string{"gamedata/moveinfo.tdf", "gamedata/sidedata.tdf"} {
-		if _, err := fileSystem.Stat(required); err != nil {
+		if _, err := set.fs.Stat(required); err != nil {
 			set.Close()
 			return nil, &missingProductError{
 				what:      "required content is missing",
@@ -101,7 +147,7 @@ func openContent(opts Options) (*contentSet, error) {
 	// The modeled startup state selects retail's literal lowercase English
 	// default before GUI parsing. TODO(T25): host command-line/registry
 	// non-default language selection has not been integrated yet.
-	translations, err := content.LoadTranslationTable(fileSystem, "english")
+	translations, err := content.LoadTranslationTable(set.fs, "english")
 	if err != nil {
 		set.Close()
 		return nil, fmt.Errorf("nanolathe: loading default GUI translation table: %w", err)
@@ -112,11 +158,33 @@ func openContent(opts Options) (*contentSet, error) {
 	// (docs/DESIGN_GPU_RENDERER.md §29.1). An install may replace the embedded
 	// table by supplying client.MaterialTablePath; a broken override is
 	// reported and ignored, because presentation art must never fail a load.
-	if err := client.LoadMaterialTable(fileSystem); err != nil {
+	if err := client.LoadMaterialTable(set.fs); err != nil {
 		set.notes = append(set.notes, err.Error())
 		fmt.Fprintln(os.Stderr, err)
 	}
 	return set, nil
+}
+
+// contentProfileName is the resolved profile's name for a report. A benchmark
+// or capture written without a mounted content set names none rather than
+// claiming the retail profile.
+func (c *contentSet) contentProfileName() string {
+	if c == nil {
+		return ""
+	}
+	return c.profile
+}
+
+// compileCatalog compiles the one immutable catalog under the resolved
+// profile's limits. It is the command's own compile seam: a caller that needs
+// a catalog before a session exists takes this rather than content.Compile,
+// which would silently admit only what the retail tables hold
+// (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles").
+func (c *contentSet) compileCatalog(report content.Progress) (*content.Catalog, error) {
+	if c == nil || c.fs == nil {
+		return nil, fmt.Errorf("nanolathe: catalog compile: no mounted content")
+	}
+	return content.CompileWithOptions(c.fs, content.Options{Limits: c.limits, Progress: report})
 }
 
 func (c *contentSet) loadGUI(name string) (*gui.Window, error) {

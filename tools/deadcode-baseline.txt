@@ -44,6 +44,7 @@ github.com/nanolathe-gg/nanolathe/internal/docs normHeading
 github.com/nanolathe-gg/nanolathe/internal/docs resolve
 github.com/nanolathe-gg/nanolathe/internal/docs scanGoFile
 github.com/nanolathe-gg/nanolathe/internal/pool NewUnitsSliced
+github.com/nanolathe-gg/nanolathe/internal/session NewSkirmishWithProgress
 github.com/nanolathe-gg/nanolathe/internal/sim/numeric FixedFromRaw
 github.com/nanolathe-gg/nanolathe/internal/sim/rng CRTFromState
 github.com/nanolathe-gg/nanolathe/internal/sim/rng SeedGlobal

@@ -165,8 +165,8 @@ func TestGuardCombatJoinRespectsDiplomacyAndNoChase(t *testing.T) {
 	f.ward.Owner = 0
 
 	// A target in the guard's no-chase array is not joined either.
-	f.enemy.Def.UnitMask.Words[0] = 1 << 5
-	f.guard.Def.NoChaseCategoryMask.Words[0] = 1 << 5
+	f.enemy.Def.UnitMask = content.MaskForID(5)
+	f.guard.Def.NoChaseCategoryMask = content.MaskForID(5)
 	q.primary = nil
 	if code := guardHandler(f.guard, n, 0x10, 100); code != Code(2) || len(q.primary) != 0 {
 		t.Fatalf("a no-chase target must not be joined: code %d queue %v", code, f.queueNames())
@@ -273,8 +273,8 @@ func TestGuardSlotRetargetRebindConditions(t *testing.T) {
 
 	// The per-slot bad-target array is the third rebind condition.
 	f.guard.Slots[0].Target = held
-	near.Def.UnitMask.Words[0] = 1 << 3
-	f.guard.Def.BadTargetCategoryWPRIMask.Words[0] = 1 << 3
+	near.Def.UnitMask = content.MaskForID(3)
+	f.guard.Def.BadTargetCategoryWPRIMask = content.MaskForID(3)
 	guardHandler(f.guard, n, guardCombatJoinBit, 100)
 	if f.guard.Slots[0].Target.Unit != f.enemy.Handle {
 		t.Fatalf("a bad-target-categorised slot target must be rebound, got %+v", f.guard.Slots[0].Target)

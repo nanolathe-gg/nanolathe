@@ -471,7 +471,13 @@ func buildBattleRadar(fs vfs.FSOps, cat *content.Catalog, mapName string, terrai
 	var bakedW, bakedH int
 	if fs != nil && cat != nil && cat.Maps != nil {
 		if mh := cat.Maps[content.CanonicalKey(mapName)]; mh != nil && mh.LogicalTNT != "" {
-			if data, err := fs.ReadFileLimit(mh.LogicalTNT, 32<<20); err == nil {
+			// Use the same profile cap as world.Load, so a large admitted map
+			// keeps its authored minimap instead of silently generating one.
+			maxTNTBytes := int64(32 << 20)
+			if cat.Limits.TNTBytes > 0 {
+				maxTNTBytes = cat.Limits.TNTBytes
+			}
+			if data, err := fs.ReadFileLimit(mh.LogicalTNT, maxTNTBytes); err == nil {
 				if tnt, err := formats.LoadTNT(data); err == nil {
 					w, h := int(tnt.MinimapWidth), int(tnt.MinimapHeight)
 					if tnt.MiniMapPresent && w > 0 && h > 0 && len(tnt.Minimap) == w*h {

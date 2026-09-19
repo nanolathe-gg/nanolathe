@@ -686,7 +686,11 @@ the displayless adapters build, so a battle composed with a window and one
 composed without take the same constructor path
 `[08 R-ENTRY-01 §2]`. `Request` adds the host-side knobs: the install root, the
 scenario selector, difficulty, the two seeds, the tick limit and the report
-path.
+path. A request that carries a filesystem and no catalog also carries the
+content limits the mounted content set's profile resolved to, which the
+constructor's own compile runs under — the same input `MissionEntryOptions`,
+`SkirmishEntryOptions` and `RetailLoadDeps` take, with the zero value keeping
+the retail baseline (DESIGN_CONTENT_VFS §5 "Content profiles").
 
 `Run` and `RunSession` advance a composed session through the ordinary bounded
 `Step` loop and then build the report. The observer is a read of committed

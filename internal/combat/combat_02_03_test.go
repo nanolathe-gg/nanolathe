@@ -11,11 +11,10 @@ import (
 )
 
 func TestCompiledCategoryMasksUseUnitMembership(t *testing.T) {
-	var arm, vtol content.CategoryMask
-	arm.Words[0] = 1 << 3
-	vtol.Words[0] = 1 << 7
+	arm := content.MaskForID(3)
+	vtol := content.MaskForID(7)
 	if !arm.Contains(3) || arm.Contains(7) {
-		t.Fatalf("compiled ARM membership = %#v", arm.Words)
+		t.Fatalf("compiled ARM membership = %#v", arm)
 	}
 	if !IsPreferredCategoryMask(arm, vtol) {
 		t.Fatal("different unit-ID membership sets should be preferred")

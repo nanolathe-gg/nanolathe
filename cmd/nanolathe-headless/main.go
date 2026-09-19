@@ -14,6 +14,9 @@ import (
 	"runtime/pprof"
 	"time"
 
+	"strings"
+
+	contentprofiles "github.com/nanolathe-gg/nanolathe/internal/content/profiles"
 	"github.com/nanolathe-gg/nanolathe/internal/headless"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
 
@@ -147,6 +150,7 @@ func parse(args []string, output io.Writer) (headless.Request, string, profileOp
 	var ticks int64
 	var unitLimit int
 	var warmup, measured int64
+	var contentProfile string
 	flags := flag.NewFlagSet("nanolathe-headless", flag.ContinueOnError)
 	flags.SetOutput(output)
 	flags.Func("root", "content root; repeat in load order (later roots win); omitted uses $NANOLATHE_TA_ROOT or installation discovery", func(root string) error {
@@ -165,6 +169,7 @@ func parse(args []string, output io.Writer) (headless.Request, string, profileOp
 		bench.Gameplay = mode
 		return err
 	})
+	flags.StringVar(&contentProfile, "content-profile", "", "content profile: "+strings.Join(contentprofiles.Names(), ", ")+", or the path of a profile JSON file; omitted detects it from the mounted content set (docs/DESIGN_CONTENT_VFS.md §5)")
 	flags.StringVar(&request.Map, "map", "", "map name without extension")
 	flags.StringVar(&request.Mission, "mission", "", "campaign selector, e.g. camps/Arm Campaign.tdf:MISSION0")
 	flags.IntVar(&request.Difficulty, "difficulty", 1, "battle difficulty: 0 easy, 1 medium, 2 hard (skirmish and campaign)")
@@ -193,6 +198,15 @@ func parse(args []string, output io.Writer) (headless.Request, string, profileOp
 	if unitLimitSet && (unitLimit < settings.MinUnitLimit || unitLimit > settings.MaxUnitLimit) {
 		return request, reportPath, profiles, bench, fmt.Errorf("nanolathe: invalid unit limit: logical path <command line>, providers searched [unit-limit], expected %d..%d", settings.MinUnitLimit, settings.MaxUnitLimit)
 	}
+	// Precedence is explicit flag, stored preference, then detection — the
+	// same order the unit limit follows. An unknown selector is rejected at
+	// the mount boundary, where the mounted providers can be named.
+	if contentProfile == "" {
+		stored, _ := settings.Load()
+		contentProfile = stored.ContentProfile
+	}
+	request.ContentProfile = contentProfile
+	bench.ContentProfile = contentProfile
 	bench.UnitLimit = headless.SimBenchDefaultUnitLimit
 	if unitLimitSet {
 		request.UnitLimit = unitLimit

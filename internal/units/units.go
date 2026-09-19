@@ -1563,10 +1563,12 @@ func (w *World) defIDForDef(def *content.UnitDef) (uint16, error) {
 }
 
 // catalogID narrows a catalog index into the pool's uint16 identity space,
-// keeping 0 reserved as the free sentinel [P0-16 §3.1]. The compiled catalog
-// caps definitions at 511 ([R-P0-03] 512-bit category domain), so the
-// narrowing is unreachable for compiled content; a synthetic definition with
-// an out-of-range stamp is treated as unstamped.
+// keeping 0 reserved as the free sentinel [P0-16 §3.1]. A retail catalog caps
+// definitions at 511 ([R-P0-03] 512-bit category domain) and a content profile
+// may raise that domain, but never past what this 16-bit identity carries
+// (content.MaxDefinitionDomain, docs/DESIGN_CONTENT_VFS.md §5 "Content
+// profiles"), so the narrowing stays unreachable for compiled content; a
+// synthetic definition with an out-of-range stamp is treated as unstamped.
 func (w *World) catalogID(idx uint32) (uint16, bool) {
 	if idx == 0 || idx > 0xFFFF {
 		return 0, false

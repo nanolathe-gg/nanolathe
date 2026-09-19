@@ -16,6 +16,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/cob"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/content/profiles"
 	"github.com/nanolathe-gg/nanolathe/internal/install"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
@@ -77,7 +78,7 @@ func compileTolerant(inv *inventory, roots []string) (*vfs.FS, *content.Catalog,
 		if err != nil {
 			return nil, nil, fmt.Errorf("mount: %w", err)
 		}
-		cat, err := content.Compile(wrap(fs))
+		cat, err := content.CompileWithOptions(wrap(fs), content.Options{Limits: contentLimits})
 		if err == nil {
 			return fs, cat, nil
 		}
@@ -117,66 +118,18 @@ func compileTolerant(inv *inventory, roots []string) (*vfs.FS, *content.Catalog,
 	return nil, nil, fmt.Errorf("gave up after 400 substitutions")
 }
 
-// mappedFS renames top-level content directories the way a patched
-// executable does (e.g. units -> unitsE). The map is keyed by the retail name
-// in lower case; every path whose first segment matches is redirected.
-type mappedFS struct {
-	inner vfs.FSOps
-	m     map[string]string
-}
+// contentView applies the selected content profile's directory table to a
+// mounted overlay, so the catalog keeps asking for the retail directory names
+// while a content set that renames its trees still answers
+// (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles"). The selected profile is
+// resolved once in main and shared by every mount this probe makes.
+var contentLayout vfs.Layout
 
-func (f mappedFS) rewrite(name string) string {
-	first, rest := name, ""
-	if i := strings.IndexByte(name, '/'); i >= 0 {
-		first, rest = name[:i], name[i:]
-	}
-	if to, ok := f.m[strings.ToLower(first)]; ok {
-		return to + rest
-	}
-	return name
-}
+// contentLimits are the selected profile's table limits, resolved beside the
+// directory table and handed to every catalog compile this probe makes.
+var contentLimits = content.RetailLimits()
 
-// unrewrite maps a provider path under a renamed directory back to the
-// retail-named path the catalog expects to see in entry metadata.
-func (f mappedFS) unrewrite(path string) string {
-	first, rest := path, ""
-	if i := strings.IndexByte(path, '/'); i >= 0 {
-		first, rest = path[:i], path[i:]
-	}
-	for retail, modded := range f.m {
-		if strings.EqualFold(first, modded) {
-			return retail + rest
-		}
-	}
-	return path
-}
-
-func (f mappedFS) Open(name string) (vfs.File, error) { return f.inner.Open(f.rewrite(name)) }
-func (f mappedFS) ReadFileLimit(name string, max int64) ([]byte, error) {
-	return f.inner.ReadFileLimit(f.rewrite(name), max)
-}
-func (f mappedFS) ReadDir(name string) ([]vfs.EntryInfo, error) {
-	entries, err := f.inner.ReadDir(f.rewrite(name))
-	for i := range entries {
-		entries[i].Path = f.unrewrite(entries[i].Path)
-	}
-	return entries, err
-}
-func (f mappedFS) Stat(name string) (vfs.EntryInfo, error) {
-	info, err := f.inner.Stat(f.rewrite(name))
-	info.Path = f.unrewrite(info.Path)
-	return info, err
-}
-func (f mappedFS) CacheStamp(name string) (string, error) { return f.inner.CacheStamp(f.rewrite(name)) }
-
-var dirMap = map[string]string{}
-
-func wrap(fs *vfs.FS) vfs.FSOps {
-	if len(dirMap) == 0 {
-		return fs
-	}
-	return mappedFS{inner: fs, m: dirMap}
-}
+func wrap(fs *vfs.FS) vfs.FSOps { return contentLayout.Apply(fs) }
 
 // opLen is the instruction length in words for each retail opcode, keyed by
 // the dispatch-masked word. Anything absent is an opcode our VM does not
@@ -524,14 +477,44 @@ func reportUnknown(title string, mod, base map[string][]string) {
 	}
 }
 
+// resolveContentProfile mounts the roots once, resolves the content profile
+// against them, installs its directory table for every later mount, and
+// returns the resolved name.
+func resolveContentProfile(roots []string, selector string) (string, int) {
+	fs, err := mount(roots)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer fs.Close()
+	profile, err := profiles.Resolve(fs, selector)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	contentLayout = profile.Layout()
+	contentLimits = content.LimitsFromProfile(profile.Limits)
+	// The definition count under the retail name is the one measurement the
+	// directory table alone establishes: it needs neither the raised read caps
+	// nor a successful compile, so it is reported even when the catalog
+	// compile stops on one of those.
+	units := 0
+	for _, name := range listDir(wrap(fs), "units") {
+		if strings.HasSuffix(name, ".fbi") {
+			units++
+		}
+	}
+	return profile.Name, units
+}
+
 func main() {
 	var baseRoots, modRoots rootList
 	flag.Var(&baseRoots, "base", "baseline content root (repeatable, load order)")
 	flag.Var(&modRoots, "root", "mod content root appended after the baseline (repeatable, load order)")
 	label := flag.String("label", "mod", "label for the report")
 	tree := flag.Bool("tree", false, "only print per-directory file counts of the -root roots mounted alone")
-	dump := flag.String("dump", "", "UNIT:SCRIPT — print a linear listing of one script from the mod roots (after -dirmap), then exit")
-	dirmap := flag.String("dirmap", "", "retail=modded directory renames, comma separated (e.g. units=unitsE,weapons=weaponE); applied to the mod build only")
+	dump := flag.String("dump", "", "UNIT:SCRIPT — print a linear listing of one script from the mod roots, then exit")
+	profile := flag.String("content-profile", "", "content profile applied to the mod build: "+strings.Join(profiles.Names(), ", ")+", or a profile JSON path; omitted detects it from the mod roots")
 	flag.Parse()
 	if *tree {
 		fs, err := mount(modRoots)
@@ -584,11 +567,7 @@ func main() {
 		os.Exit(1)
 	}
 	all := append(append(rootList{}, baseRoots...), modRoots...)
-	for _, pair := range strings.Split(*dirmap, ",") {
-		if k, v, ok := strings.Cut(strings.TrimSpace(pair), "="); ok {
-			dirMap[strings.ToLower(k)] = v
-		}
-	}
+	profileName, profileUnits := resolveContentProfile(all, *profile)
 	if *dump != "" {
 		unit, script, _ := strings.Cut(*dump, ":")
 		fs, err := mount(all)
@@ -609,6 +588,12 @@ func main() {
 
 	fmt.Printf("# Inventory: %s\n", *label)
 	fmt.Printf("roots: %s\n", strings.Join(all, " | "))
+	fmt.Printf("content profile: %s", profileName)
+	for _, row := range contentLayout.Names() {
+		fmt.Printf(" %s=%s", row[0], row[1])
+	}
+	fmt.Println()
+	fmt.Printf("unit definitions visible under units/: %d\n", profileUnits)
 	fmt.Printf("providers (%d): %s\n", len(mod.providers), strings.Join(mod.providers, ", "))
 	fmt.Printf("top-level dirs: %s\n", strings.Join(mod.topDirs, ", "))
 	if mod.compileErr != nil {

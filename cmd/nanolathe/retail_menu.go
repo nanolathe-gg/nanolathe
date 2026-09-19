@@ -96,8 +96,15 @@ func (g *gameShell) mapDataFor(name string) *retailMapData {
 		d.description = ota.MissionDescription
 		d.size = ota.Size
 	}
-	tnt, _ := formats.LoadTNTFile(g.cs.fs, "maps/"+name+".tnt")
-	d.tnt = tnt
+	// The menu precedes catalog compilation, so take the same resolved cap
+	// from the content set and read through its layout view.
+	maxTNTBytes := g.cs.limits.TNTBytes
+	if maxTNTBytes <= 0 {
+		maxTNTBytes = 1 << 30 // the former format-loader fallback for fixtures
+	}
+	if data, err := g.cs.fs.ReadFileLimit("maps/"+name+".tnt", maxTNTBytes); err == nil {
+		d.tnt, _ = formats.LoadTNT(data)
+	}
 	g.mapData[key] = d
 	return d
 }

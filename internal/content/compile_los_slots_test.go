@@ -41,7 +41,7 @@ func TestLOSTablesFillSlotsByGeneratedName(t *testing.T) {
     line1=1,0,6;
 }
 `})
-	lt, err := CompileLOSTables(fs)
+	lt, err := CompileLOSTables(fs, RetailLimits())
 	if err != nil {
 		t.Fatalf("CompileLOSTables: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestLOSTablesKeepUndeclaredSections(t *testing.T) {
     line1=3,0,1,0,2,0,3;
 }
 `})
-	lt, err := CompileLOSTables(fs)
+	lt, err := CompileLOSTables(fs, RetailLimits())
 	if err != nil {
 		t.Fatalf("CompileLOSTables: %v", err)
 	}

@@ -305,12 +305,26 @@ restored queues inherit the same set, and an unbound seam answers as retail.
 The mode word also selects a **registered** set by name: a third-party set is
 compiled in through `mods/`, which only a command may import, and it composes
 the shipped implementations rather than reimplementing a policy. Such a set
-declares the reserved set it derives from, and that base — not its name — is
-what the session persists and what every strict-versus-modern question reads,
-so Strict 3.1 remains the retail baseline and no registered name can shadow
-either reserved set. The seam list, the registry, the allocation and
-granularity rules, the switch timing and what a save knows about a set are in
+declares the reserved set it derives from. `Session.Gameplay` carries that
+base for strict-versus-modern questions; `Session.Rules.Name` carries the
+selected name, which headless and simulation-cost reports expose as `rules`.
+The retail save does not store the selected name. Strict 3.1 remains the
+retail baseline and no registered name can shadow either reserved set. The
+seam list, the registry, the allocation and granularity rules, the switch timing and what a save knows about a set are in
 [DESIGN_GAMEPLAY_RULES](DESIGN_GAMEPLAY_RULES.md).
+
+Extend the existing owning interface for a new gameplay decision, implement
+both reserved defaults, and test the Modern contract and Strict bypass,
+including RNG and resources. Add an owning-package seam only with a documented
+boundary that existing interfaces cannot serve, and bind it through the same
+`session.RuleSet`; no second registry or capability-selection system. Cached
+implementations hold no state, including through pointers: mutable request or
+session state belongs to its existing owner. Stateful rule objects require an
+explicit lifecycle, switching and save design before implementation. Content
+profiles select load-time content layout independently; detecting an install
+or content marker does not select gameplay. Extension research belongs in
+[research/extensions](../research/extensions/README.md), separate from retail
+evidence; documenting a patch is not approval to adopt its mechanics.
 
 Strict 3.1 retains the retail firing pipeline, including documented faults.
 Outside an explicitly approved Modern contract, reproduce retail bugs
@@ -333,6 +347,12 @@ Unit catalog admission is sanctioned content policy (DESIGN_CONTENT_VFS §5
 "Unit admission"): the retail `Version` and `Copyright` drop gates and their
 incompatibility report are deliberately not implemented, while the loose-file
 gate, record order, definition IDs and the retail catalog hash are unchanged.
+
+The content profile is sanctioned content policy (DESIGN_CONTENT_VFS §5
+"Content profiles"): a named, load-time description of the mounted content set
+— a directory table and the limits its content needs — detected or selected
+before the catalog compiles, never reaching a tick and orthogonal to the
+gameplay rule set, with provenance and the catalog hash staying retail-named.
 
 The user-requested skirmish unit-limit default of 1000 and expanded configured
 range are sanctioned setup policy (DESIGN_CONTENT_VFS §5), with CLI and JSON

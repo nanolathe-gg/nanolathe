@@ -1,0 +1,13 @@
+{
+  "name": "retail",
+  "detect": [],
+  "layout": {},
+  "limits": {
+    "units": 512,
+    "weapons": 256,
+    "tnt_bytes": 16777216,
+    "los_bytes": 1048576,
+    "unit_limit": 250,
+    "search_entries": 1333
+  }
+}

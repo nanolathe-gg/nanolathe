@@ -524,14 +524,36 @@ const (
 	FamilyScripts   = "scripts"
 )
 
-// NewSkirmishWithProgress is the strict production constructor. It never
+// SkirmishEntryOptions carries the load-time inputs of skirmish battle entry
+// that are not part of the setup record: the load observer, and the table
+// limits a catalog compile runs under when the caller supplies no catalog.
+// They are deliberately not fields of SkirmishConfig — that record is the
+// lobby setup a save round-trips [08 R-SKIR-01 §2], while these are host
+// load-time choices that never reach a tick.
+type SkirmishEntryOptions struct {
+	Progress content.Progress
+	// ContentLimits come from the mounted content set's profile
+	// (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles"); the zero value is
+	// the retail baseline.
+	ContentLimits content.Limits
+}
+
+// NewSkirmishWithProgress is NewSkirmishWithEntryOptions with only a load
+// observer, so a caller that resolved no content profile compiles under the
+// retail baseline.
+func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig, report content.Progress) (*Session, error) {
+	return NewSkirmishWithEntryOptions(fs, cat, cfg, SkirmishEntryOptions{Progress: report})
+}
+
+// NewSkirmishWithEntryOptions is the strict production constructor. It never
 // fabricates an empty catalog, nil terrain, or invented commander; missing
 // retail content aborts with a diagnostic [02 §5][03 §2.2][P0-16].
 //
 // The load observer sees the catalog's families first and then this
 // constructor's own, so a caller painting the retail loading screen can drive
 // it from one stream. A nil observer reports nothing and changes nothing else.
-func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig, report content.Progress) (*Session, error) {
+func NewSkirmishWithEntryOptions(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig, options SkirmishEntryOptions) (*Session, error) {
+	report := options.Progress
 	if err := cfg.Normalize(); err != nil {
 		return nil, err
 	}
@@ -550,7 +572,7 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 		return nil, fmt.Errorf("session: nil filesystem for skirmish battle [02 §5]")
 	}
 	// 1. mount/receive VFS and compile one immutable catalog [02 §5]
-	cat, err := strictCatalogWithProgress(fs, cat, report)
+	cat, err := strictCatalogWithProgress(fs, cat, options.ContentLimits, report)
 	if err != nil {
 		return nil, err
 	}

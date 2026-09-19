@@ -100,6 +100,7 @@ package implements.
 | `formats` | Lossless readers and writers for the authored formats — TDF (comments blanked with byte offsets preserved), GAF, TNT, 3DO, OTA, PAL, PCX, FNT, WAV, GUI, SCT, BMP | DESIGN_CONTENT_VFS |
 | `formats/zrb` | Stateful Smacker 2 movie decoder: indexed frames, palette deltas, PCM soundtrack and authored cadence | DESIGN_CONTENT_VFS |
 | `internal/content` | Compiles authored data into immutable definitions with defaults and conversions applied once: units, weapons, features, movement classes, sides, sounds, maps, AI profiles, battle tables; the catalog hash; and the authored animation metadata the SIMULATION depends on — a feature's burn/die/reclaim frame geometry and lifetimes in visits, an effect entry's frame count (`CompileSimArt`), compiled before the session's features and strips exist so headless and windowed battles run one simulation | DESIGN_CONTENT_VFS |
+| `internal/content/profiles` | Content profiles: the embedded per-content-set directory tables and limits, marker detection and selection by name or authored JSON file, applied as a `vfs.Layout` at the mount boundary | DESIGN_CONTENT_VFS §5 |
 | `internal/settings` | Front-end preferences that survive a restart (last skirmish setup, per-slot side/colour/ally, difficulty) | DESIGN_CONTENT_VFS |
 
 ### Runtime core

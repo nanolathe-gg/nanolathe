@@ -122,7 +122,7 @@ func TestMissingOptionalStillEntersBattle(t *testing.T) {
 	}
 	sess.Step(1)
 
-	providers := cs.fs.Providers()
+	providers := cs.unmappedMount.Providers()
 	base := cs.fs
 	for _, hide := range [][]string{
 		{"anims/igtitles.gaf"},
@@ -152,7 +152,7 @@ func TestMissingOptionalStillEntersBattle(t *testing.T) {
 			cl.SetTerrain(sess.World)
 			cl.SetPalette(pal)
 			cl.SetFNT(hud.console)
-			cl.SetModelFS(cs.fs)
+			cl.SetModelFS(cs.unmappedMount)
 			b := &battleSession{sess: sess, cat: sess.Catalog, cam: nil, hud: hud}
 			cl.SetUIStage(battleHUDUIStage{hud: hud, battle: b})
 			defer func() {
@@ -187,7 +187,7 @@ func TestMissingMandatoryFailsBeforeClientWithDiagnostic(t *testing.T) {
 		t.Fatalf("battleSide: %v", err)
 	}
 	mandatoryFont := "fonts/" + strings.ToLower(side.Font) + ".fnt"
-	providers := cs.fs.Providers()
+	providers := cs.unmappedMount.Providers()
 	hfs := newHiddenFS(cs.fs, providers, mandatoryFont)
 	_, err = loadRetailBattleHUD(hfs, sess, sess.Catalog, pal, nil, newBattleWindowContext(cs, nil))
 	if err == nil {

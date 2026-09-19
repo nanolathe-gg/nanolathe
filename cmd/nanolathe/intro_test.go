@@ -97,7 +97,7 @@ func TestIntroMissingAndMalformed(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { fs.Close() })
-		g.cs = &contentSet{fs: fs}
+		g.cs = testContentSet(fs)
 		queuedWindowTail(cl)
 		g.activateGadget("INTRO")
 		if g.intro != nil || cl.Input().PendingTokens() != 0 {

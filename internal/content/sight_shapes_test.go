@@ -53,7 +53,7 @@ func TestSightShapesFromInstall(t *testing.T) {
 // and supplies twelve. The clamp uses the declared count.
 func TestCompileLOSTables(t *testing.T) {
 	fs := mountRetail(t)
-	lt, err := CompileLOSTables(fs)
+	lt, err := CompileLOSTables(fs, RetailLimits())
 	if err != nil {
 		t.Fatal(err)
 	}

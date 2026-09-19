@@ -31,7 +31,7 @@ func runHeadless(opts Options, cs *contentSet, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if _, err := installHeadlessModelTextureRegistry(authoritative.Session, cs.fs); err != nil {
+	if _, err := installHeadlessModelTextureRegistry(authoritative.Session, cs.unmappedMount); err != nil {
 		return err
 	}
 	if authoritative.Session.Features != nil {
@@ -77,10 +77,13 @@ func installHeadlessModelTextureRegistry(sess *session.Session, fs *vfs.FS) (*cl
 
 func headlessFreshBattleRequest(opts Options, cs *contentSet, source BattleSeedSource) (freshBattleRequest, headless.Request, error) {
 	reportRequest := headless.Request{
-		Gameplay:   opts.Gameplay,
-		Map:        opts.Map,
-		Mission:    opts.Mission,
-		Difficulty: opts.Difficulty,
+		Gameplay: opts.Gameplay,
+		// run replaced the selector with the name the mount boundary
+		// resolved, so this is the profile the run actually used.
+		ContentProfile: opts.ContentProfile,
+		Map:            opts.Map,
+		Mission:        opts.Mission,
+		Difficulty:     opts.Difficulty,
 	}
 	if cs == nil || cs.fs == nil {
 		return freshBattleRequest{}, reportRequest, unavailableBattleContentError()
@@ -98,7 +101,7 @@ func headlessFreshBattleRequest(opts Options, cs *contentSet, source BattleSeedS
 			Gameplay: opts.Gameplay,
 			Map:      opts.Map, Mission: opts.Mission, Difficulty: opts.Difficulty,
 			LocalOwner: -1, SimulationSeed: uint32(seeds.Simulation), CRTSeed: seeds.CRT,
-			FS: cs.fs, PresentationWidth: retailScreenW, PresentationHeight: retailScreenH,
+			FS: cs.fs, ContentLimits: cs.limits, PresentationWidth: retailScreenW, PresentationHeight: retailScreenH,
 		}
 	} else if opts.Mission != "" {
 		request, err = missionBattleRequest(opts, cs, opts.Mission, opts.Difficulty, -1, -1, nil, source)

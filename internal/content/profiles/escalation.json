@@ -1,0 +1,21 @@
+{
+  "name": "escalation",
+  "detect": ["TAESC.gp3", "unitsE"],
+  "layout": {
+    "ai": "aE",
+    "download": "downloadsE",
+    "gamedata": "gamedatE",
+    "guis": "guiE",
+    "unitpics": "unitpicE",
+    "units": "unitsE",
+    "weapons": "weaponE"
+  },
+  "limits": {
+    "units": 16000,
+    "weapons": 16000,
+    "tnt_bytes": 67108864,
+    "los_bytes": 8388608,
+    "unit_limit": 1000,
+    "search_entries": 66650
+  }
+}

@@ -50,7 +50,7 @@ func TestRestartKeepsAllContentRoots(t *testing.T) {
 	if !shell.prepareBattleRestartContent() {
 		t.Fatal("restart remount failed")
 	}
-	data, err := shell.cs.fs.ReadFile("gamedata/sidedata.tdf")
+	data, err := shell.cs.fs.ReadFileLimit("gamedata/sidedata.tdf", 1<<20)
 	if err != nil || string(data) != "[TEST] { value=mod; }" {
 		t.Fatalf("restart lost mod: %q, %v", data, err)
 	}

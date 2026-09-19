@@ -9,6 +9,7 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/ai"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/content/profiles"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/install"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
@@ -45,22 +46,28 @@ const (
 // camera and HUD from the completed authoritative session [08 R-ENTRY-01
 // §2–§8][I6].
 type FreshBattleRequest struct {
-	Gameplay           gameplay.Mode
-	SelectedSide       int
-	SelectedSideSet    bool
-	Kind               ScenarioKind
-	Map                string
-	Mission            string
-	CampaignIndex      int
-	CampaignSlot       int
-	Difficulty         int
-	Skirmish           session.SkirmishConfig
-	LocalOwner         int
-	Watching           bool
-	SimulationSeed     uint32
-	CRTSeed            uint32
-	FS                 vfs.FSOps
-	Catalog            *content.Catalog
+	Gameplay        gameplay.Mode
+	SelectedSide    int
+	SelectedSideSet bool
+	Kind            ScenarioKind
+	Map             string
+	Mission         string
+	CampaignIndex   int
+	CampaignSlot    int
+	Difficulty      int
+	Skirmish        session.SkirmishConfig
+	LocalOwner      int
+	Watching        bool
+	SimulationSeed  uint32
+	CRTSeed         uint32
+	FS              vfs.FSOps
+	Catalog         *content.Catalog
+	// ContentLimits are the table sizes the session's own catalog compile runs
+	// under when Catalog is nil. An adapter resolves them from the mounted
+	// content set's profile (docs/DESIGN_CONTENT_VFS.md §5 "Content
+	// profiles"); the zero value is the retail baseline, and a supplied
+	// Catalog already carries the limits it was compiled under.
+	ContentLimits      content.Limits
 	Progress           content.Progress
 	PresentationWidth  int32
 	PresentationHeight int32
@@ -99,6 +106,12 @@ type Request struct {
 	CRTSeed        uint32
 	TickLimit      uint32
 	UnitLimit      int // zero uses the skirmish default; campaign keeps authored maxunits
+	// ContentProfile selects the mounted content set's directory table and
+	// limits by name or by the path of a profile JSON file. Empty detects the
+	// profile from the mounted markers. Run overwrites it with the resolved
+	// name, so the report always carries the profile the run actually used
+	// (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles").
+	ContentProfile string
 }
 
 // Run mounts a retail install and enters the ordinary session composition and
@@ -110,12 +123,30 @@ func Run(request Request) (Report, error) {
 	}
 	defer fs.Close()
 
+	// The content profile is resolved after mounting and before anything
+	// reads content, because detection asks the mounted overlay for its
+	// markers. Everything downstream reads the returned view, so the
+	// required-product check below already goes through the directory table.
+	view, profile, err := contentProfileView(fs, request.ContentProfile)
+	if err != nil {
+		return Report{}, err
+	}
+	request.ContentProfile = profile.Name
+
 	for _, required := range []string{"gamedata/moveinfo.tdf", "gamedata/sidedata.tdf"} {
-		if _, err := fs.Stat(required); err != nil {
+		if _, err := view.Stat(required); err != nil {
 			return Report{}, diagnostic("required content is missing", required, fs.ProviderIDs(), "a mounted archive or loose file supplying it")
 		}
 	}
-	return RunWithContent(request, fs, nil)
+	// The catalog compiles here rather than inside composition because the
+	// table limits are the profile's, and the profile is only known after the
+	// mount. A retail content set resolves to the retail baseline, so this is
+	// the same catalog the session would have compiled for itself.
+	catalog, err := content.CompileWithOptions(view, content.Options{Limits: content.LimitsFromProfile(profile.Limits)})
+	if err != nil {
+		return Report{}, diagnostic("catalog compile failed: "+err.Error(), request.Map, fs.ProviderIDs(), "a complete compiled catalog")
+	}
+	return RunWithContent(request, view, catalog)
 }
 
 // RunWithContent reuses an already mounted VFS. Passing a nil catalog keeps
@@ -173,9 +204,9 @@ func ComposeFreshBattle(request FreshBattleRequest) (FreshBattle, error) {
 	var sess *session.Session
 	switch kind {
 	case ScenarioCampaign:
-		sess, err = session.NewMissionWithEntryOptions(request.FS, request.Catalog, identity, request.Difficulty, request.SimulationSeed, request.CRTSeed, session.MissionEntryOptions{Gameplay: request.Gameplay, SelectedSide: request.SelectedSide, SelectedSideSet: request.SelectedSideSet}, request.Progress)
+		sess, err = session.NewMissionWithEntryOptions(request.FS, request.Catalog, identity, request.Difficulty, request.SimulationSeed, request.CRTSeed, session.MissionEntryOptions{Gameplay: request.Gameplay, SelectedSide: request.SelectedSide, SelectedSideSet: request.SelectedSideSet, ContentLimits: request.ContentLimits}, request.Progress)
 	case ScenarioDirectOTA, ScenarioSkirmish:
-		sess, err = session.NewSkirmishWithProgress(request.FS, request.Catalog, cfg, request.Progress)
+		sess, err = session.NewSkirmishWithEntryOptions(request.FS, request.Catalog, cfg, session.SkirmishEntryOptions{Progress: request.Progress, ContentLimits: request.ContentLimits})
 	default:
 		err = fmt.Errorf("headless: unsupported fresh battle kind %q", kind)
 	}
@@ -312,6 +343,20 @@ func mountContentRoots(root string, roots []string) (*vfs.FS, error) {
 		return nil, diagnostic("mounting install failed: "+err.Error(), "<content roots>", roots, "readable Total Annihilation content directories")
 	}
 	return fs, nil
+}
+
+// contentProfileView resolves the content profile for a mounted overlay and
+// returns the read view the loaders should use, plus the resolved profile —
+// its name for the report and its limits for the catalog compile. A retail content set resolves to an empty directory
+// table, and an empty table returns the overlay itself — so an unmodified
+// install keeps the concrete overlay, its manifest identity and its catalog
+// hash (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles").
+func contentProfileView(fs *vfs.FS, selector string) (vfs.FSOps, profiles.Profile, error) {
+	profile, err := profiles.Resolve(fs, selector)
+	if err != nil {
+		return nil, profiles.Profile{}, err
+	}
+	return profile.Layout().Apply(fs), profile, nil
 }
 
 func validateRoot(root string) error {
