@@ -57,6 +57,8 @@ func (r *Renderer) resetSources(release func(*ebiten.Image)) {
 		retire(pg.colour)
 	}
 	retire(r.modelDirect.params.img)
+	retire(r.modelDirect.groups.key)
+	retire(r.modelDirect.groups.colour)
 	retire(r.fog.atlas)
 	retire(r.fog.grid)
 	retire(r.water.mask)
@@ -82,7 +84,7 @@ func (r *Renderer) resetSources(release func(*ebiten.Image)) {
 	r.heat = treeHeat{disabled: r.heat.disabled}
 	r.water = waterLayer{disabled: r.water.disabled, shader: r.water.shader, wakeShader: r.water.wakeShader}
 	r.reflections = waterReflections{disabled: r.reflections.disabled, sourceShader: r.reflections.sourceShader, resolveShader: r.reflections.resolveShader, softResolveShader: r.reflections.softResolveShader}
-	r.modelDirect = modelDirectLane{keyShader: r.modelDirect.keyShader, colourShader: r.modelDirect.colourShader, shaderErr: r.modelDirect.shaderErr}
+	r.modelDirect = modelDirectLane{keyShader: r.modelDirect.keyShader, colourShader: r.modelDirect.colourShader, shaderErr: r.modelDirect.shaderErr, groups: modelGroupMergeLane{shader: r.modelDirect.groups.shader}}
 	r.fog = fogPass{shader: r.fog.shader, shaderErr: r.fog.shaderErr, compiled: r.fog.compiled}
 	r.arrival = arrivalLayer{shader: r.arrival.shader}
 	// Retained compiled runs and options also reference source images. Drop

@@ -16,7 +16,7 @@ import (
 const reflectionVertexLimit = 32768
 
 type reflectionRun struct {
-	page                                 int32
+	page, occlusionPage                  int32
 	frame                                *formats.GAFFrame
 	first, count, firstIndex, indexCount int
 }
@@ -70,11 +70,11 @@ func (s *waterReflections) resetFrame() {
 	s.verts, s.indices, s.runs = s.verts[:0], s.indices[:0], s.runs[:0]
 }
 
-func (s *waterReflections) run(page int32, f *formats.GAFFrame) *reflectionRun {
-	if n := len(s.runs); n > 0 && s.runs[n-1].page == page && s.runs[n-1].frame == f {
+func (s *waterReflections) run(page int32, f *formats.GAFFrame, occlusionPage int32) *reflectionRun {
+	if n := len(s.runs); n > 0 && s.runs[n-1].page == page && s.runs[n-1].frame == f && s.runs[n-1].occlusionPage == occlusionPage {
 		return &s.runs[n-1]
 	}
-	s.runs = append(s.runs, reflectionRun{page: page, frame: f, first: len(s.verts), firstIndex: len(s.indices)})
+	s.runs = append(s.runs, reflectionRun{page: page, occlusionPage: occlusionPage, frame: f, first: len(s.verts), firstIndex: len(s.indices)})
 	return &s.runs[len(s.runs)-1]
 }
 
@@ -104,7 +104,18 @@ func (r *Renderer) reflectModelFace(f *drawlist.ModelFace, ox, oy, scale, cx, cy
 	if high <= 0 {
 		return
 	}
-	run := s.run(page, nil)
+	// An isolated construction child samples its own finished colour (so
+	// erased pixels stay erased) and additionally tests the merged group key.
+	// Sampling group colour instead could reflect a surviving plate pixel at
+	// the erased child's height (GPU design §22.4).
+	occlusionPage := int32(-1)
+	var groupX, groupY, mode float32
+	if group := r.modelDirect.groupReflection; group.ok {
+		groupX = float32(group.x-s.region.x) + 2*float32(s.region.bounds.Min.X-group.bounds.Min.X)
+		groupY = float32(group.y-s.region.y) + 2*float32(s.region.bounds.Min.Y-group.bounds.Min.Y)
+		occlusionPage, mode = group.page, -1
+	}
+	run := s.run(page, nil, occlusionPage)
 	for _, v := range f.Vertices {
 		sx, sy := ox+fattenBy(float32(v.X), cx, scale, fat), oy+fattenBy(float32(v.Y), cy, scale, fat)
 		height := g.WorldHeight + v.Height - g.ReflectionSea
@@ -118,8 +129,8 @@ func (r *Renderer) reflectModelFace(f *drawlist.ModelFace, ox, oy, scale, cx, cy
 		// its key gradient would otherwise ride (model_shaders.go,
 		// modelQuadFrame): the parameters are subject-local.
 		s.verts = append(s.verts, ebiten.Vertex{DstX: x, DstY: y, SrcX: sx, SrcY: sy,
-			ColorR: ox - modelQuadLocalBias, ColorG: oy - modelQuadLocalBias, ColorA: 1,
-			Custom0: height, Custom1: r.modelDirect.laneKey(v.Key), Custom2: float32(quad), Custom3: 0})
+			ColorR: ox - modelQuadLocalBias, ColorG: oy - modelQuadLocalBias, ColorB: groupX, ColorA: groupY,
+			Custom0: height, Custom1: r.modelDirect.laneKey(v.Key), Custom2: float32(quad), Custom3: mode})
 	}
 	if quad != 0 {
 		s.fan(run, n)
@@ -176,7 +187,7 @@ func (r *Renderer) prepareProjectileReflections(l *drawlist.List) {
 		// water-plane projection. Only model packets can clip individual pieces.
 		pivot := float32(sp.Y) + sp.ReflectionHeight*.5
 		y0, y1 := 2*pivot-y, 2*pivot-(y+h)
-		run := s.run(-1, f)
+		run := s.run(-1, f, -1)
 		for _, v := range [4][4]float32{{x, y0, 0, 0}, {x + w, y0, w, 0}, {x + w, y1, w, h}, {x, y1, 0, h}} {
 			s.verts = append(s.verts, ebiten.Vertex{DstX: v[0], DstY: v[1], SrcX: v[2], SrcY: v[3], ColorA: 1, Custom0: sp.ReflectionHeight, Custom3: 1})
 		}
@@ -193,7 +204,7 @@ func (r *Renderer) prepareProjectileReflections(l *drawlist.List) {
 			dx, dy, length = 1, 0, 1
 		}
 		nx, ny := -dy/length, dx/length
-		run := s.run(-1, nil)
+		run := s.run(-1, nil, -1)
 		for _, v := range [4][3]float32{{x0 + nx, y0 + ny, l.ReflectionHeight0}, {x1 + nx, y1 + ny, l.ReflectionHeight1}, {x1 - nx, y1 - ny, l.ReflectionHeight1}, {x0 - nx, y0 - ny, l.ReflectionHeight0}} {
 			s.verts = append(s.verts, ebiten.Vertex{DstX: v[0], DstY: v[1], ColorA: 1, Custom0: v[2], Custom1: float32(l.Index), Custom3: 2})
 		}
@@ -221,7 +232,7 @@ func (r *Renderer) drawWaterReflections(c drawlist.Terrain) {
 		// Displace only the reflected mesh, retaining its original atlas samples.
 		// Shared corners move together; boats receive a small baseline wobble.
 		// Height ramp and wave are Enhanced art choices (GPU design §26.6).
-		if v.Custom3 == 0 {
+		if v.Custom3 <= 0 {
 			amount := max(0, min((v.Custom0/scale-64)/96, 1))
 			amount = max(.35, amount*amount*(3-2*amount))
 			x, y := float32(c.OriginX)+v.DstX/scale, float32(c.OriginY)+v.DstY/scale
@@ -261,6 +272,9 @@ func (r *Renderer) drawWaterReflections(c drawlist.Terrain) {
 			if run.page >= 0 {
 				pg := &r.modelDirect.pages[run.page]
 				imgs = [4]*ebiten.Image{pg.colour, pg.key, nil, r.modelDirect.params.img}
+				if run.occlusionPage >= 0 {
+					imgs[2] = r.modelDirect.pages[run.occlusionPage].key
+				}
 			} else {
 				imgs[0] = r.placeholderImage()
 				imgs[1] = r.tables.atlas
@@ -396,6 +410,10 @@ func Fragment(dst vec4, src vec2, color vec4, custom vec4) vec4 {
   key=key-floor(key/256)*256
   stored:=floor(imageSrc1AtFromSrc0Pos(imageSrc0Origin()+p+vec2(.5)).r*255+.5)
   if key<stored { return vec4(0) }
+  if custom.w < -0.5 {
+   group:=floor(imageSrc2AtFromSrc0Pos(imageSrc0Origin()+p+color.ba+vec2(.5)).r*255+.5)
+   if key<group { return vec4(0) }
+  }
   c=imageSrc0At(imageSrc0Origin()+p+vec2(.5))
  } else {
   idx:=custom.y

@@ -3309,7 +3309,7 @@ The doubled lane is the recorder's own packet when it carries one, half-pixel
 offset included (§17.3); a packet without one has its native corners doubled
 here.
 
-An attached-unit group composes in **one** region over the union of its bounds:
+An ordinary attached-unit group composes in **one** region over the union of its bounds:
 the carrier's faces, then each mergeable child's with its signed height delta
 added to the keys, saturating at the byte's range where retail would wrap
 [03 R-REN-03A §4]. A carried child that casts a shadow composes a **second** time
@@ -3320,7 +3320,9 @@ them, and the second composition is suppressed from the reflection source so the
 same world geometry does not reflect twice. A shadow whose source region is
 invalid is **omitted**, never cut from texels that are not the subject's.
 
-Two passes over ONE vertex batch draw the whole frame's subjects at once:
+Two passes over ONE vertex batch draw the whole frame's subjects at once.
+Groups containing a construction reveal then merge their separately finished
+children as described in §22.4:
 
 1. **Key.** Each face's height key, narrowed to a byte as the span writers narrow
    it, into a key plane under a MAX blend, so a texel holds the highest key drawn
@@ -3388,7 +3390,7 @@ sprites and terrain are untouched, as terrain is authored to be drawn as is.
 | structure supersample, ALP downscale blending with index 1 | every subject at 2×, resolved in the commit fragment by coverage: an edge or a thin feature is a coverage alpha over what is beneath, never the red/purple fringe [03 R-REN-03A §7]; a mobile subject is supersampled too, where retail draws it at 1× |
 | structure shadow punched by body coverage | same punch, both planes resolved from the pages |
 | Digger and mobile shadow: the finished body image copied, flattened, clipped, blitted at the ground point five pixels right | the body's own raster read at that placement in the commit fragment; a mobile is never punched, as retail's is not |
-| child composed alone, its erased pixels transparent, then `prior > key + delta` keeps prior, wrapped store | child faces in the group region under the same admission with the shifted key; the sum saturates instead of wrapping; a child texel its own reveal or clip erases stays a hole where retail shows the carrier through it |
+| child composed alone, its erased pixels transparent, then `prior > key + delta` keeps prior, wrapped store | child faces in the group region under the same admission with the shifted key; the sum saturates instead of wrapping; construction groups merge finished child pixels (§22.4); other groups still leave a hole where a child clip erases its colour |
 
 A subject no page can hold falls back to painter-order native triangles straight
 on the composite (no key, no supersample, no reveal, no children) and its shadow
@@ -3573,15 +3575,53 @@ not reproduce that omission, and no software fallback is added.
 
 1. Richer material response and per-pixel lighting remain future work beyond
    §23, §29 and §31.
-2. A carried child texel that the child's own reveal or clip erases stays a hole
-   where retail shows the carrier through it, because the child's key reached the
-   group's key plane; reproducing that needs the child composed in its own region
-   and merged under the staging admission. Only a transport's cargo is carried in
-   this build and it is a finished unit, so no stock scene reaches it.
+2. Non-construction groups still share a key plane: a child texel erased by
+   its own clipping can leave a hole where retail shows the carrier. Construction
+   groups use the isolated composition below. The earlier claim that only
+   completed transport cargo uses attachment was stale: factory products attach
+   to the build piece too (`Client.attachedChildren`).
 3. The recorder still builds the doubled packet's faces. A packet with a doubled
    lane has its native faces read only by the fallback and the bounds; the doubled
    corners of a direct projection are exact rather than native × 2 plus an offset,
    so the offset alone cannot replace them.
+
+#### Construction-child composition
+
+**Established (implementation).** A group with a mergeable child carrying a
+reveal on either its native or doubled packet gives every mergeable child an
+independent atlas region. Each child finishes its own reveal, outline and live
+lanes before its non-transparent pixels can compete with the carrier
+[03 R-REN-03A §4]. This prevents the erased nanoframe interior's key from
+rejecting the factory plate. Every child in the affected group takes this path
+so a later transparent child cannot erase an earlier sibling, and ties still
+admit the later recorded child. Ordinary groups retain the existing path.
+
+The construction path keeps the existing shifted-key saturation and own/carrier clip
+verdicts. After all atlas pages finish, each child's expanded rectangle merges
+in recorded order under `parentKey <= childKey`, only where the child's
+finished colour has nonzero coverage. Two reusable scratch images hold the
+merged colour and key before they are copied into the parent region. Earlier
+children need four small device draws each. The last child needs only two when
+no silhouette shadow or water reflection reads the resulting key; this covers
+ordinary land factories with one product. Child reflection geometry samples its
+own finished colour and additionally tests the final group key, preserving both
+reveal holes and factory occlusion. No GPU readback or additional full atlas page
+is required by the merge itself. Independent child regions can increase normal
+atlas packing. The rectangle includes the existing two-texel margin and is
+intersected with the parent's allocation, preventing neighbour-slot reads.
+Allocation failure retains the existing whole-group overflow fallback. Source
+reset releases both scratch planes and preserves the merge shader.
+
+`DirectGroupMerges`, `DirectGroupPixels` (2× texels) and
+`DirectGroupScratchBytes` report the extra work and retained logical scratch
+storage. The device fixture locks preserved plate pixels, visible reveal and
+outline, factory occlusion, sibling admission and ties, native/doubled reveal
+selection, and both atlas pages. Optional `NANOLATHE_FACTORY_CAPTURE` captures
+ARM and CORE factory products at early and halfway construction, using actual
+committed session/COB poses and relative attachment positions at scales 1 and 2.
+Resources are replenished for those diagnostic scenes; retail art stays outside
+the repository. This renderer-only correction was visually reviewed with ARM
+and CORE factories; gameplay and the retail baseline are unchanged.
 
 ## 23. Battle lighting (Enhanced)
 
@@ -4877,8 +4917,8 @@ back should be heard before the lane becomes permanent.
   key the lane by identity and let it be pruned with the feature set, which is
   owed work on the publication boundary, not on the renderer.
 - The recorder still builds the doubled packet's native faces (§22.4).
-- A carried child texel its own reveal or clip erases stays a hole where retail
-  shows the carrier through it (§22.4), and the modern executor omits a child
+- Outside construction groups, a carried child texel its own clip erases can
+  leave a hole where retail shows the carrier through it (§22.4), and the modern executor omits a child
   packet that is keyless or itself has children (§22.3).
 - `DontShadow` exists in the pose and is compared with it but the shadow
   projection does not consult it (§13.12).

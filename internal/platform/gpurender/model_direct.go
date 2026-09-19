@@ -21,7 +21,8 @@ import (
 //
 //   - Every subject of the frame, and its shadow, gets a region of a per-frame
 //     2× atlas page, packed by shelf, no residency; an attached-unit group
-//     composes in one region, and a carried child that casts a shadow composes
+//     composes in one region (construction children finish separately before
+//     merging, model_group.go), and a carried child that casts a shadow composes
 //     a second time in a region of its own, because a shadow is cut from its
 //     subject's own finished image [03 R-REN-03D §1]. Faces are
 //     fan-triangulated straight from the packet's projected corners: the
@@ -171,6 +172,8 @@ type modelDirectLane struct {
 	soloSlotFor *drawlist.ModelGeometry
 
 	keyShader, colourShader *ebiten.Shader
+	groups                  modelGroupMergeLane
+	groupReflection         modelDirectRegion
 	shaderErr               error
 
 	// params is the lane's parameter image: mapped faces and subject
@@ -225,6 +228,9 @@ func (r *Renderer) initModelDirect() error {
 	if d.shaderErr == nil {
 		d.colourShader, d.shaderErr = ebiten.NewShader([]byte(modelDirectColourShaderSource()))
 	}
+	if d.shaderErr == nil {
+		d.groups.shader, d.shaderErr = ebiten.NewShader([]byte(modelGroupMergeShaderSource))
+	}
 	return d.shaderErr
 }
 
@@ -264,6 +270,8 @@ func (d *modelDirectLane) resetFrame() {
 		clear(d.solo)
 	}
 	d.soloPass = false
+	d.groupReflection = modelDirectRegion{}
+	d.groups.merges = d.groups.merges[:0]
 	// The per-packet reuse holds slices and boxes of this frame's packets only.
 	d.soloOutline, d.soloOutlineFor, d.soloSlotFor = nil, nil, nil
 	d.runs, d.verts, d.idx = d.runs[:0], d.verts[:0], d.idx[:0]
@@ -508,6 +516,7 @@ func (r *Renderer) prepareModelDirect(l *drawlist.List) {
 		}
 		r.modelStats.DirectPasses += 2
 	}
+	r.mergeModelGroups()
 }
 
 // assignGroupRegions places one subject's regions and nothing else, so the
@@ -517,6 +526,8 @@ func (r *Renderer) prepareModelDirect(l *drawlist.List) {
 //     mergeable children's, which the whole group composes into;
 //   - each mergeable child's entry, a sub-rectangle of that group region —
 //     the child's texels within it, the carrier's beside and beneath them;
+//     construction groups instead allocate each child independently and merge
+//     only finished visible pixels afterwards (model_group.go);
 //   - a region of its own for each carried child that casts a shadow, because
 //     a shadow is cut from its subject's FINISHED image [03 R-REN-03D §1] and
 //     the group region's texels at the child's box are the carrier's as much as
@@ -534,6 +545,7 @@ func (d *modelDirectLane) assignGroupRegions(g *drawlist.ModelGeometry) modelDir
 	if !region.ok {
 		return region
 	}
+	separate := modelGroupNeedsMerge(g)
 	for _, child := range g.Children {
 		cg := child.Geometry
 		if !mergeableChild(cg) {
@@ -543,6 +555,24 @@ func (d *modelDirectLane) assignGroupRegions(g *drawlist.ModelGeometry) modelDir
 		d.regions[cg] = modelDirectRegion{
 			x: region.x + 2*int32(cb.Min.X-bounds.Min.X), y: region.y + 2*int32(cb.Min.Y-bounds.Min.Y),
 			page: region.page, bounds: cb, ok: true,
+		}
+		if separate {
+			childRegion, ok := d.allocRegion(cb)
+			if !ok {
+				// Keep the existing whole-group overflow fallback; never submit
+				// an incomplete staged factory as a successful body.
+				d.regions[g] = modelDirectRegion{}
+				for _, pending := range g.Children {
+					if mergeableChild(pending.Geometry) {
+						d.regions[pending.Geometry] = modelDirectRegion{}
+						if pending.Geometry.Shadow != nil {
+							d.solo[pending.Geometry] = modelDirectRegion{}
+						}
+					}
+				}
+				return modelDirectRegion{}
+			}
+			d.regions[cg] = childRegion
 		}
 		if cg.Shadow == nil {
 			continue
@@ -581,7 +611,8 @@ func (d *modelDirectLane) shadowSource(g *drawlist.ModelGeometry) (modelDirectRe
 // from [03 R-REN-03A §4][03 R-REN-03D §1]. A subject the atlas cannot hold is
 // recorded with an invalid region and takes the fallback at commit time; its
 // shadow is then omitted, as the slot stage omitted a shadow it could not
-// place.
+// place. Construction groups finish each child in isolation before merging
+// its visible pixels (model_group.go).
 func (r *Renderer) placeModelDirect(g *drawlist.ModelGeometry) {
 	d := &r.modelDirect
 	region := d.assignGroupRegions(g)
@@ -591,6 +622,9 @@ func (r *Renderer) placeModelDirect(g *drawlist.ModelGeometry) {
 	}
 	r.modelStats.DirectSubjects++
 	r.appendPacket(g, region, false, 0, nil)
+	separate := modelGroupNeedsMerge(g)
+	mergeStart := len(d.groups.merges)
+	needsKey := g.ReflectWater || (g.Shadow != nil && g.Shadow.Silhouette)
 	for _, child := range g.Children {
 		cg := child.Geometry
 		if !mergeableChild(cg) {
@@ -598,7 +632,15 @@ func (r *Renderer) placeModelDirect(g *drawlist.ModelGeometry) {
 			continue
 		}
 		r.modelStats.DirectSubjects++
-		r.appendPacket(cg, region, false, child.KeyDelta, g)
+		childRegion := region
+		if separate {
+			childRegion = d.regions[cg]
+			d.groups.merges = append(d.groups.merges, modelGroupMerge{parent: region, child: childRegion, key: true})
+			d.groupReflection = region
+		}
+		needsKey = needsKey || cg.ReflectWater
+		r.appendPacket(cg, childRegion, false, child.KeyDelta, g)
+		d.groupReflection = modelDirectRegion{}
 		solo, carried := d.solo[cg]
 		if !carried {
 			continue
@@ -611,6 +653,12 @@ func (r *Renderer) placeModelDirect(g *drawlist.ModelGeometry) {
 		d.soloPass = true
 		r.appendPacket(cg, solo, false, 0, nil)
 		d.soloPass = false
+	}
+	if len(d.groups.merges) > mergeStart && !needsKey {
+		// A final child's key has no remaining reader: body commits and
+		// projected shadows use colour only. Keep it for silhouettes and
+		// water reflections, and for every earlier child's admission.
+		d.groups.merges[len(d.groups.merges)-1].key = false
 	}
 	if g.Shadow != nil && !g.Shadow.Silhouette {
 		r.placeModelDirectShadow(g.Shadow)

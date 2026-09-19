@@ -53,6 +53,9 @@ type ModelStats struct {
 	// finished image and the group region holds the carrier's texels too
 	// [03 R-REN-03D §1] (§22).
 	DirectCargoImages int
+	// Construction groups merge finished child pixels after the atlas passes.
+	// Pixels counts the 2x rectangles processed; scratch is two RGBA planes.
+	DirectGroupMerges, DirectGroupPixels, DirectGroupScratchBytes int
 	// DirectRetained is the packets (bodies and projected shadows) whose
 	// packed vertices were replayed from the retained store rather than
 	// packed again, DirectWarm the packets appended warm — a key miss whose

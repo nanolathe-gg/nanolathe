@@ -24,6 +24,8 @@ func TestLifecycleResetSourcesReleasesBattleResources(t *testing.T) {
 		fog:          fogPass{shader: shader, compiled: true, atlas: shared, atlasGray: [4]*formats.GAFEntry{{}}},
 		scene2D:      shader, surfaces: [2]*ebiten.Image{output}, w: 640, h: 480,
 	}
+	groupKey, groupColour := &ebiten.Image{}, &ebiten.Image{}
+	r.modelDirect.groups = modelGroupMergeLane{key: groupKey, colour: groupColour, shader: shader}
 	flash := &ebiten.Image{}
 	r.sched.flash.img = flash
 	reflectionHeight := &ebiten.Image{}
@@ -33,7 +35,7 @@ func TestLifecycleResetSourcesReleasesBattleResources(t *testing.T) {
 	r.surfaceCache[0] = surfaceUpload{identity: 8, entry: sceneEntry{ok: true}}
 	released := map[*ebiten.Image]int{}
 	r.resetSources(func(img *ebiten.Image) { released[img]++ })
-	if released[tile] != 1 || released[shared] != 1 || released[flash] != 1 || released[reflectionHeight] != 1 || len(released) != 4 {
+	if released[tile] != 1 || released[shared] != 1 || released[flash] != 1 || released[reflectionHeight] != 1 || released[groupKey] != 1 || released[groupColour] != 1 || len(released) != 6 {
 		t.Fatalf("shared source release counts=%v", released)
 	}
 	if len(r.tileAtlases) != 0 || len(r.gafImages) != 0 || len(r.scene.pages) != 0 || len(r.scene.frames) != 0 || len(r.scene.pcx) != 0 || len(r.scene.fonts) != 0 || len(r.textureAtlas.slots) != 0 {
@@ -44,6 +46,9 @@ func TestLifecycleResetSourcesReleasesBattleResources(t *testing.T) {
 	}
 	if r.heat.sources != nil || !r.heat.disabled {
 		t.Fatal("source reset retained heat sources or lost its comparison control")
+	}
+	if r.modelDirect.groups.key != nil || r.modelDirect.groups.colour != nil || r.modelDirect.groups.shader != shader {
+		t.Fatal("source reset retained group scratch or lost its shader")
 	}
 	if r.scene2D != shader || r.fog.shader != shader || !r.fog.compiled || r.tables.atlas != table || r.surfaces[0] != output || r.w != 640 || r.h != 480 {
 		t.Fatal("source reset changed renderer configuration")
