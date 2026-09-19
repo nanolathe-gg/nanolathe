@@ -37,15 +37,18 @@ func TestUnitRecordSortEqualNamesAtPartitionBoundary(t *testing.T) {
 
 func TestUnitDiscoveryCompactionPreservesRetailDuplicateOrder(t *testing.T) {
 	for _, abort := range []bool{false, true} {
+		// units/a.fbi is dropped by the retail archive gate — the one unit
+		// drop gate Nanolathe keeps [02 R-CAT-01 §4] — so its slot is the
+		// hole the discovery compaction fills from the end.
 		files := []fixtureFile{
-			{path: "units/a.fbi", data: "[UNITINFO]{UnitName=SAME; Version=3.2;}"},
+			{path: "units/a.fbi", data: "[UNITINFO]{UnitName=SAME;}"},
 			{path: "units/b.fbi", data: "[UNITINFO]{UnitName=SAME; Name=middle;}"},
 			{path: "units/c.fbi", data: "[UNITINFO]{UnitName=SAME; Name=last;}"},
 		}
 		if abort {
 			files = append(files, fixtureFile{path: "units/d.fbi", data: "[OTHER]{}"})
 		}
-		result, err := compileUnitsWithLanguage(newFixtureFS(t, files...), "")
+		result, err := compileUnitsWithLanguage(newLooseUnitFS(newFixtureFS(t, files...), "units/a.fbi"), "")
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -318,6 +318,11 @@ existing directory policy when omitted (DESIGN_SESSIONS_AI_SAVE §5). With that
 explicit override, filename normalization applies only to the leaf name and
 rejects path components so dotted ancestors cannot redirect the write.
 
+Unit catalog admission is sanctioned content policy (DESIGN_CONTENT_VFS §5
+"Unit admission"): the retail `Version` and `Copyright` drop gates and their
+incompatibility report are deliberately not implemented, while the loose-file
+gate, record order, definition IDs and the retail catalog hash are unchanged.
+
 The user-requested skirmish unit-limit default of 1000 and expanded configured
 range are sanctioned setup policy (DESIGN_CONTENT_VFS §5), with CLI and JSON
 configuration. Campaign limits remain authored by the mission.

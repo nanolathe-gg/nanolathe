@@ -660,6 +660,39 @@ behaviour.
   discards the result and gathers the numbered keys unconditionally — which
   the executable itself does, so this is retail rather than a divergence.
 
+**Unit admission (Nanolathe policy).** Retail runs three drop gates over
+every discovered `units\*.FBI` record: a `Version` gate (a version newer than
+the executable's 3.1 is rejected, and the surviving pass raises the retail
+`Error` box telling the player to download the latest version), a `Copyright`
+gate (the line must equal the authored template byte for byte once the four
+year characters are normalized, dropping silently), and the loose-file gate
+`[02 R-MALF-01 §5]` `[02 R-CAT-01 §4]`.
+**Nanolathe implements only the third.** A unit definition is admitted whatever
+its `Version` number and `Copyright` string say; the incompatibility report has
+no producer and is retired with the gate. This is a deliberate, user-authorized
+content-admission departure (2026-09-17), not a parity defect, and it is not a
+gameplay-mode toggle: the catalog is compiled before any session exists and is
+shared across modes, so a mode-selected gate would mean two catalogs. Reason:
+every surveyed community mod already spells the expected copyright line and an
+in-range version precisely so the retail gate passes, so the gate rejects
+nothing hostile and blocks only honest content that forgot the incantation.
+
+*Boundaries.* The loose-file gate is unchanged: unit content must come from a
+mounted archive, so a loose FBI winner is still parsed and then dropped, and no
+shadowed archive entry is substituted (C1, SC24). Discovery order, the
+end-swap discovery compaction, the compiler's stable sort and the assignment of
+definition IDs from 1 are untouched, so a retail-only install — which passed
+both dropped gates anyway — keeps its record order, its definition IDs and its
+catalog hash. `Version` and `Copyright` stay known FBI keys, so they are not
+reported as unknown authored keys. Retail research keeps describing all three
+gates as retail behaviour; it is not wrong, it is simply not implemented here.
+
+*Verification.* `internal/content` locks admission of a definition carrying a
+foreign copyright line and `Version=9.9`, absence of the incompatibility
+diagnostic, the retained loose-file drop, and the unchanged record order and
+definition IDs of a retail-shaped fixture set; the retail-tier catalog-hash
+test covers the installed corpus.
+
 **Ordered roots and host discovery (Nanolathe policy).** The user-requested
 startup extension accepts repeated `--root` in both commands. Command-line
 order is load order: root priority is compared before archive/loose tier and

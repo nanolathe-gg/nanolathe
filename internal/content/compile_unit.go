@@ -4,12 +4,10 @@ package content
 
 import (
 	"fmt"
-	"math"
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/cob"
-	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
@@ -852,10 +850,9 @@ func CompileUnits(fs vfs.FSOps) (map[string]*UnitDef, error) {
 }
 
 type unitCompileResult struct {
-	units                  map[string]*UnitDef
-	records                []*UnitDef
-	incompatibilityWarning bool
-	warnings               []string
+	units    map[string]*UnitDef
+	records  []*UnitDef
+	warnings []string
 }
 
 func compileUnitsWithLanguage(fs vfs.FSOps, language string) (unitCompileResult, error) {
@@ -876,7 +873,6 @@ func compileUnitsWithLanguage(fs vfs.FSOps, language string) (unitCompileResult,
 	// ReadDir already sorts by Path [vfs.ReadDir], so iteration is stable (I1).
 	records := make([]*UnitDef, len(entries))
 	completed := true
-	versionDropped, suppressWarning := false, false
 	for i, entry := range entries {
 		e := entry.info
 		data, err := readContentEntry(fs, entry)
@@ -899,16 +895,15 @@ func compileUnitsWithLanguage(fs vfs.FSOps, language string) (unitCompileResult,
 			completed = false
 			break
 		}
-		versionOK := compatibleUnitVersion(unitSection.FloatValue("version", 0))
-		copyright, _ := unitSection.StringValue("copyright", "")
-		copyrightOK := compatibleUnitCopyright(copyright)
-		if !versionOK {
-			versionDropped = true
-		}
-		if !copyrightOK || !entry.archive {
-			suppressWarning = true
-		}
-		if !versionOK || !copyrightOK || !entry.archive {
+		// Nanolathe admits a unit definition whatever its authored Version
+		// and Copyright text say. Retail drops a definition whose Version is
+		// newer than 3.1 or whose copyright line does not match its template
+		// [02 R-MALF-01 §5]; that gate is deliberately not implemented here
+		// (DESIGN_CONTENT_VFS §5 "Unit admission (Nanolathe policy)").
+		// The third retail drop gate is a separate rule and is retained:
+		// unit content must come from a mounted archive, so a loose FBI
+		// winner is parsed and then dropped [02 R-CAT-01 §4].
+		if !entry.archive {
 			continue
 		}
 		// Discovery initializes only the admission/display subset. Gameplay
@@ -947,31 +942,7 @@ func compileUnitsWithLanguage(fs vfs.FSOps, language string) (unitCompileResult,
 		}
 		u.Hash = HashDefinition(writeUnitCanonical(u))
 	}
-	return unitCompileResult{units: firstUnitNames(records), records: records, incompatibilityWarning: versionDropped && !suppressWarning, warnings: warnings}, nil
-}
-
-const incompatibleUnitsWarning = "Incompatible units found.  They will be ignored.  Please download the latest version of the game."
-
-func compatibleUnitVersion(version float64) bool {
-	// The catalog saves the parsed Version as binary64, floors that saved value,
-	// then applies the shared signed-64 narrowing helper. It retains the
-	// original binary64 for the minor expression, which is itself saved and
-	// floored before narrowing [02 R-MALF-01 §5][01 R-DET-01 §3].
-	original := float64(version)
-	major := numeric.TruncateFloat64ToLow32(math.Floor(original))
-	minorInput := (original - float64(major)) * 10.0
-	minor := numeric.TruncateFloat64ToLow32(math.Floor(minorInput))
-	return major < 3 || major == 3 && minor <= 1
-}
-
-func compatibleUnitCopyright(value string) bool {
-	const template = "Copyright 0000 Humongous Entertainment. All rights reserved."
-	if len(value) != len(template) {
-		return false
-	}
-	normalized := []byte(value)
-	copy(normalized[len("Copyright "):len("Copyright ")+4], "0000")
-	return string(normalized) == template
+	return unitCompileResult{units: firstUnitNames(records), records: records, warnings: warnings}, nil
 }
 
 // linkUnitWeaponRecords resolves weapon1..3 (and explodeas/selfdestructas) after all weapons

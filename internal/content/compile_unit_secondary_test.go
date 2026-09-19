@@ -9,12 +9,14 @@ import (
 )
 
 func TestUnitSecondaryDiscoveryAndOverwriteFields(t *testing.T) {
-	// The secondary file fails discovery admission, but has no such gate when
-	// another admitted definition reopens it by stored name [02 R-CAT-01 §5].
-	fs := newFixtureFS(t,
+	// The secondary file fails discovery admission — it is a loose-directory
+	// winner, the one retail drop gate Nanolathe keeps [02 R-CAT-01 §4] — but
+	// there is no such gate when another admitted definition reopens it by
+	// stored name [02 R-CAT-01 §5].
+	fs := newLooseUnitFS(newFixtureFS(t,
 		fixtureFile{path: "units/a.fbi", data: `[UNITINFO]{UnitName=target; Name=first; Side=ARM; AI_Weight=weight 25; AI_Limit=limit 2; Wacky=1; NoRestrict=1; ObjectName=old; BuildCostEnergy=11; BuildCostMetal=12; MaxDamage=999; BankScale=9; TEDClass=old;}`},
-		fixtureFile{path: "units/target.fbi", data: `[UNITINFO]{Version=99; UnitName=renamed; Name=second; Side=CORE; AI_Weight=weight 90; AI_Limit=limit 9; Wacky=0; BuildCostEnergy=0; MaxDamage=42; MaxVelocity=1.5; TEDClass=new;}`},
-	)
+		fixtureFile{path: "units/target.fbi", data: `[UNITINFO]{UnitName=renamed; Name=second; Side=CORE; AI_Weight=weight 90; AI_Limit=limit 9; Wacky=0; BuildCostEnergy=0; MaxDamage=42; MaxVelocity=1.5; TEDClass=new;}`},
+	), "units/target.fbi")
 	result, err := compileUnitsWithLanguage(fs, "")
 	if err != nil {
 		t.Fatal(err)
@@ -199,11 +201,14 @@ func TestUnitSecondaryResourceExtensionReplacesLastPeriod(t *testing.T) {
 }
 
 func TestUnitSecondaryPreservesDuplicateRecordIDs(t *testing.T) {
-	result, err := compileUnitsWithLanguage(newFixtureFS(t,
+	// units/shared.fbi is a loose-directory winner, so discovery drops it
+	// [02 R-CAT-01 §4] and it reaches the records only as the secondary
+	// resource both duplicates reopen by stored name [02 R-CAT-01 §5].
+	result, err := compileUnitsWithLanguage(newLooseUnitFS(newFixtureFS(t,
 		fixtureFile{path: "units/a.fbi", data: `[UNITINFO]{UnitName=shared; Side=ARM;}`},
 		fixtureFile{path: "units/b.fbi", data: `[UNITINFO]{UnitName=shared; Side=CORE;}`},
-		fixtureFile{path: "units/shared.fbi", data: `[UNITINFO]{Version=99; UnitName=renamed; ObjectName=model;}`},
-	), "")
+		fixtureFile{path: "units/shared.fbi", data: `[UNITINFO]{UnitName=renamed; ObjectName=model;}`},
+	), "units/shared.fbi"), "")
 	if err != nil {
 		t.Fatal(err)
 	}

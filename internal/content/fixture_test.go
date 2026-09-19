@@ -33,9 +33,8 @@ func mustParseTDF(t *testing.T, body string) *formats.Document {
 
 // fixtureFile is one logical path and its bytes in a fixtureFS.
 type fixtureFile struct {
-	path                 string
-	data                 string
-	preserveUnitMetadata bool
+	path string
+	data string
 }
 
 // fixtureFS is a minimal vfs.FSOps over in-memory files. ReadDir returns
@@ -46,39 +45,14 @@ type fixtureFS struct {
 
 func newFixtureFS(t *testing.T, files ...fixtureFile) *fixtureFS {
 	t.Helper()
+	// Unit fixtures carry no compatibility metadata: the catalog admits every
+	// unit definition whatever its Version and Copyright say
+	// (DESIGN_CONTENT_VFS §5 "Unit admission (Nanolathe policy)").
 	fs := &fixtureFS{files: make(map[string]string, len(files))}
 	for _, f := range files {
-		if strings.HasPrefix(strings.ToLower(f.path), "units/") && !f.preserveUnitMetadata {
-			f.data = fixtureCompatibleUnitMetadata(f.data)
-		}
 		fs.files[f.path] = f.data
 	}
 	return fs
-}
-
-// fixtureCompatibleUnitMetadata supplies the established compatibility fields
-// only for fixture construction. Explicit authored values and tests opting out
-// through preserveUnitMetadata reach the production compiler unchanged.
-func fixtureCompatibleUnitMetadata(data string) string {
-	lower := strings.ToLower(data)
-	if !strings.Contains(lower, "[unitinfo]") {
-		return data
-	}
-	add := ""
-	if !strings.Contains(lower, "version=") {
-		add += "\nVersion=3.1;"
-	}
-	if !strings.Contains(lower, "copyright=") {
-		add += "\nCopyright=Copyright 1997 Humongous Entertainment. All rights reserved.;"
-	}
-	if add == "" {
-		return data
-	}
-	end := strings.LastIndex(data, "}")
-	if end < 0 {
-		return data
-	}
-	return data[:end] + add + data[end:]
 }
 
 func (f *fixtureFS) Open(name string) (vfs.File, error) {
@@ -122,6 +96,37 @@ func (f *fixtureFS) ReadDir(name string) ([]vfs.EntryInfo, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out, nil
+}
+
+// looseUnitFS marks named logical paths as loose-directory winners while every
+// other fixture path keeps its archive provenance. It exercises the one retail
+// unit drop gate Nanolathe keeps — unit content must come from a mounted
+// archive, so a loose FBI winner is parsed and then dropped [02 R-CAT-01 §4] —
+// without building a real overlay.
+type looseUnitFS struct {
+	*fixtureFS
+	loose map[string]bool
+}
+
+func newLooseUnitFS(fs *fixtureFS, loose ...string) *looseUnitFS {
+	set := make(map[string]bool, len(loose))
+	for _, path := range loose {
+		set[strings.ToLower(path)] = true
+	}
+	return &looseUnitFS{fixtureFS: fs, loose: set}
+}
+
+func (f *looseUnitFS) ReadDir(name string) ([]vfs.EntryInfo, error) {
+	entries, err := f.fixtureFS.ReadDir(name)
+	if err != nil {
+		return nil, err
+	}
+	for i := range entries {
+		if f.loose[strings.ToLower(entries[i].Path)] {
+			entries[i].Source = vfs.Provenance{LogicalPath: entries[i].Path, ProviderType: "directory", SourcePath: entries[i].Path}
+		}
+	}
+	return entries, nil
 }
 
 func (f *fixtureFS) Stat(name string) (vfs.EntryInfo, error) {

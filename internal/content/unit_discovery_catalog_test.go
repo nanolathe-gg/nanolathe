@@ -1,53 +1,93 @@
 package content
 
-import (
-	"testing"
+import "testing"
 
-	"github.com/nanolathe-gg/nanolathe/vfs"
-)
-
-func TestUnitCompatibilityGatesAndCollectedWarning(t *testing.T) {
-	if !compatibleUnitVersion(3.1) || compatibleUnitVersion(3.2) {
-		t.Fatal("version boundary did not preserve 3.1 acceptance and 3.2 rejection")
-	}
-	// The catalog floors each binary64 operand before the signed-64 low-word
-	// conversion. These exact binary fractions make the negative floor and
-	// low-word wrap observable in the final acceptance result [02 R-MALF-01 §5].
-	const wrapped = -4294967296.0
-	if !compatibleUnitVersion(wrapped + 3.125) {
-		t.Fatal("floored wrapped Version 3.125 fraction was rejected")
-	}
-	if compatibleUnitVersion(wrapped + 3.25) {
-		t.Fatal("floored wrapped Version 3.25 fraction was accepted")
-	}
-	if !compatibleUnitCopyright("Copyright 1997 Humongous Entertainment. All rights reserved.") {
-		t.Fatal("copyright year normalization rejected an accepted template")
-	}
-	if compatibleUnitCopyright("Copyright 1997 Other. All rights reserved.") {
-		t.Fatal("nonmatching copyright was accepted")
-	}
-	fs := newFixtureFS(t, fixtureFile{path: "units/new.fbi", data: "[UNITINFO]{ unitname=new; Version=3.2; Copyright=Copyright 1997 Humongous Entertainment. All rights reserved.; }"})
+// TestUnitAdmissionIgnoresCopyrightAndVersion locks the Nanolathe content
+// admission policy of DESIGN_CONTENT_VFS §5 "Unit admission": a definition is
+// admitted whatever its `Copyright` string and `Version` number say, and no
+// incompatibility diagnostic is produced. Retail drops both of these records
+// and reports the version case [02 R-MALF-01 §5]; dropping that gate is a
+// deliberate, user-authorized departure, not a parity defect.
+func TestUnitAdmissionIgnoresCopyrightAndVersion(t *testing.T) {
+	fs := newFixtureFS(t,
+		fixtureFile{path: "units/modern.fbi", data: "[UNITINFO]{ unitname=modern; Version=9.9; Copyright=Copyright 2026 Somebody Else. All rights reserved.; }"},
+		fixtureFile{path: "units/nometa.fbi", data: "[UNITINFO]{ unitname=nometa; }"},
+		fixtureFile{path: "units/retail.fbi", data: "[UNITINFO]{ unitname=retail; Version=3.1; Copyright=Copyright 1997 Humongous Entertainment. All rights reserved.; }"},
+	)
 	result, err := compileUnitsWithLanguage(fs, "")
-	if err != nil || len(result.units) != 0 || !result.incompatibilityWarning {
-		t.Fatalf("version gate = (%#v, %v), want one collected warning", result, err)
+	if err != nil {
+		t.Fatalf("compile units: %v", err)
 	}
-	loose := &topologyFixtureFS{fixtureFS: fs, providers: map[string]vfs.Provenance{"units/new.fbi": {ProviderType: "directory"}}}
-	result, err = compileUnitsWithLanguage(loose, "")
-	if err != nil || result.incompatibilityWarning {
-		t.Fatalf("loose incompatible unit warning suppression = (%#v, %v)", result, err)
+	if len(result.units) != 3 {
+		t.Fatalf("admitted units = %d (%v), want all three definitions", len(result.units), result.units)
+	}
+	for _, name := range []string{"modern", "nometa", "retail"} {
+		if result.units[name] == nil {
+			t.Fatalf("definition %q was dropped; admission must ignore Copyright and Version", name)
+		}
+	}
+	for _, w := range result.warnings {
+		t.Fatalf("admission produced the diagnostic %q; the incompatibility report is retired with the gate", w)
 	}
 }
 
-func TestCatalogUnitWarningsRetainCompatibilityAndBuildMenuDiagnostics(t *testing.T) {
+// TestUnitAdmissionKeepsLooseFileDrop locks the boundary of the policy above:
+// the loose-file drop is a separate retail rule [02 R-CAT-01 §4] and is
+// unchanged. A loose FBI winner is parsed and then dropped, so a unit whose
+// only provider is a directory does not reach the catalog even though its
+// authored compatibility metadata is now irrelevant.
+func TestUnitAdmissionKeepsLooseFileDrop(t *testing.T) {
+	loose := newLooseUnitFS(newFixtureFS(t,
+		fixtureFile{path: "units/loose.fbi", data: "[UNITINFO]{ unitname=loose; Version=3.1; Copyright=Copyright 1997 Humongous Entertainment. All rights reserved.; }"},
+	), "units/loose.fbi")
+	result, err := compileUnitsWithLanguage(loose, "")
+	if err != nil {
+		t.Fatalf("compile units: %v", err)
+	}
+	if len(result.units) != 0 {
+		t.Fatalf("loose definition admitted = %v, want the retail archive gate to drop it", result.units)
+	}
+}
+
+// TestUnitAdmissionRetailFixtureOrderUnchanged locks record ordering and
+// definition-ID assignment across the admission change: a fixture set that
+// every retail gate admitted before — archive-provided, Version 3.1, the
+// retail copyright line — still compacts and sorts to the same order, with
+// IDs assigned from 1 in sorted canonical-key order. Enumeration order is
+// deliberately the reverse of the final order, so a perturbed compaction or
+// sort would show here [02 R-CAT-01 §5].
+func TestUnitAdmissionRetailFixtureOrderUnchanged(t *testing.T) {
+	const retail = " Version=3.1;\nCopyright=Copyright 1997 Humongous Entertainment. All rights reserved.;\n"
+	fs := newFixtureFS(t,
+		fixtureFile{path: "units/a.fbi", data: "[UNITINFO]{ unitname=zulu;" + retail + "}"},
+		fixtureFile{path: "units/b.fbi", data: "[UNITINFO]{ unitname=mike;" + retail + "}"},
+		fixtureFile{path: "units/c.fbi", data: "[UNITINFO]{ unitname=alpha;" + retail + "}"},
+	)
+	result, err := compileUnitsWithLanguage(fs, "")
+	if err != nil {
+		t.Fatalf("compile units: %v", err)
+	}
+	want := []string{"alpha", "mike", "zulu"}
+	if len(result.records) != len(want) {
+		t.Fatalf("records = %d, want %d", len(result.records), len(want))
+	}
+	for i, name := range want {
+		got := result.records[i]
+		if got.CanonicalKey != name || got.UnitDefID != uint32(i+1) {
+			t.Fatalf("record %d = %q ID %d, want %q ID %d", i, got.CanonicalKey, got.UnitDefID, name, i+1)
+		}
+	}
+}
+
+func TestCatalogUnitWarningsRetainBuildMenuDiagnostics(t *testing.T) {
 	units := map[string]*UnitDef{
 		"new": {UnitName: "NEW"},
 	}
 	menus := map[string]*BuildMenuPage{
 		"builder": {Builder: "BUILDER", Buttons: []string{"new"}, BaseButtonCount: 1},
 	}
-	warnings := catalogUnitWarnings(true, units, menus)
+	warnings := catalogUnitWarnings(units, menus)
 	want := []string{
-		incompatibleUnitsWarning,
 		"Hey! Somebody forgot to set downloadable=1 for NEW",
 	}
 	if len(warnings) != len(want) {

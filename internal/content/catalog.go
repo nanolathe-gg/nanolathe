@@ -289,7 +289,7 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 	if err != nil {
 		return nil, err
 	}
-	warnings := catalogUnitWarnings(unitResult.incompatibilityWarning, units, nil)
+	warnings := catalogUnitWarnings(units, nil)
 	warnings = append(warnings, unitResult.warnings...)
 	warnings = append(warnings, mapWarnings...)
 	warnings = append(warnings, enforceDownloadableRecords(records, MenuButtonNames(buildMenus))...)
@@ -349,11 +349,12 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 // compatibility collection precedes the build-menu downloadable enforcement
 // [02 R-MALF-01 §5][02 "Unit record"].  Keep this at the assembly seam so a
 // later warning source cannot overwrite either earlier result.
-func catalogUnitWarnings(incompatible bool, units map[string]*UnitDef, buildMenus map[string]*BuildMenuPage) []string {
+// catalogUnitWarnings collects the catalog's non-fatal unit diagnostics.
+// Retail also reports dropped incompatible units here; Nanolathe admits every
+// unit definition, so that message has no producer and is retired with the
+// gate (DESIGN_CONTENT_VFS §5 "Unit admission (Nanolathe policy)").
+func catalogUnitWarnings(units map[string]*UnitDef, buildMenus map[string]*BuildMenuPage) []string {
 	var warnings []string
-	if incompatible {
-		warnings = append(warnings, incompatibleUnitsWarning)
-	}
 	if len(buildMenus) > 0 {
 		warnings = append(warnings, EnforceDownloadable(units, MenuButtonNames(buildMenus))...)
 	}
