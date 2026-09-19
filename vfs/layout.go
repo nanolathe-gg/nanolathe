@@ -143,6 +143,13 @@ func (l Layout) Apply(inner FSOps) FSOps {
 	// would. Forwarding it matters because the map census reads two short
 	// header ranges out of every TNT; without this a profiled content set
 	// would decompress every terrain file whole to collect them.
+	if ordered, ok := inner.(retailDirReader); ok {
+		orderedView := &layoutOrderedFS{layoutFS: view, ordered: ordered}
+		if ranged, ok := inner.(RangeReader); ok {
+			return &layoutRangeOrderedFS{layoutOrderedFS: orderedView, ranged: ranged}
+		}
+		return orderedView
+	}
 	if ranged, ok := inner.(RangeReader); ok {
 		return &layoutRangeFS{layoutFS: view, ranged: ranged}
 	}
@@ -230,5 +237,34 @@ var (
 // ReadFileRange forwards a partial read under the rewritten path. The result
 // is bytes, not provenance, so nothing needs restoring on the way back.
 func (f *layoutRangeFS) ReadFileRange(name string, offset int64, length int) ([]byte, error) {
+	return f.ranged.ReadFileRange(f.layout.rewrite(name), offset, length)
+}
+
+// Retail directory enumeration is a capability too: download membership uses
+// the provider's order, rather than ReadDir's sorted order [02 R-CAT-01 §8].
+// Keep it only when the wrapped view has it, preserving synthetic fallbacks.
+type retailDirReader interface {
+	RetailReadDir(string) ([]EntryInfo, error)
+}
+
+type layoutOrderedFS struct {
+	*layoutFS
+	ordered retailDirReader
+}
+
+func (f *layoutOrderedFS) RetailReadDir(name string) ([]EntryInfo, error) {
+	entries, err := f.ordered.RetailReadDir(f.layout.rewrite(name))
+	for i := range entries {
+		entries[i].Path = f.layout.restore(entries[i].Path)
+	}
+	return entries, err
+}
+
+type layoutRangeOrderedFS struct {
+	*layoutOrderedFS
+	ranged RangeReader
+}
+
+func (f *layoutRangeOrderedFS) ReadFileRange(name string, offset int64, length int) ([]byte, error) {
 	return f.ranged.ReadFileRange(f.layout.rewrite(name), offset, length)
 }

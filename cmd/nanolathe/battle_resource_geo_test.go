@@ -78,6 +78,8 @@ func TestResourceGeothermalYardClassification(t *testing.T) {
 	// A solar-like name does not let a vent requirement leak into ground builds.
 	b.cat.Units["geo"].SoundCategory = "TEST_SOLAR"
 	b.cat.BuildMenus["armcons"].Buttons = []string{"geo"}
+	// Membership is published; update the fixture through a tick.
+	b.sess.Step(b.sess.Clock.ScaledAnchor + 1)
 	_, solar, geo := b.resourceProducts("armcons")
 	if solar != nil || geo == nil {
 		t.Fatal("vent-dependent solar category misclassified")
@@ -92,11 +94,15 @@ func TestResourceGeothermalAvailabilityAndRange(t *testing.T) {
 		t.Fatal("distant ground should still select solar")
 	}
 	b.cat.BuildMenus["armcons"].Buttons = []string{"armsolar"}
+	// Membership is published; update the fixture through a tick.
+	b.sess.Step(b.sess.Clock.ScaledAnchor + 1)
 	x, y = o5ScreenWorld(b.cam, numeric.FixedFromInt(328), 0, numeric.FixedFromInt(328))
 	if _, ok := b.resourceSite(x, y); ok {
 		t.Fatal("vent without build capability should not become solar")
 	}
 	b.cat.BuildMenus["armcons"].Buttons = []string{"geo"}
+	// Membership is published; update the fixture through a tick.
+	b.sess.Step(b.sess.Clock.ScaledAnchor + 1)
 	cl.SetEnhanced(false)
 	resourceClickAt(b, cl, x, y, true)
 	ms.ms += 100

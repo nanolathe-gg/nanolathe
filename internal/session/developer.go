@@ -81,7 +81,7 @@ func (s *Session) publishDeveloper(f *frame.Frame) {
 					key = content.CanonicalKey(u.Def.UnitName)
 				}
 				if menu := s.Catalog.BuildMenus[key]; menu != nil {
-					for _, name := range menu.Buttons {
+					for _, name := range s.buildProducts(key) {
 						// Candidate scores need the owning player's AI context,
 						// which human owners do not have here. This first delivery
 						// leaves scores explicitly unavailable (DESIGN_DEVELOPER_TOOLS §3.1).

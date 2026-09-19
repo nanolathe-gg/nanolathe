@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"github.com/nanolathe-gg/nanolathe/internal/construction"
 	"sort"
 
 	"github.com/nanolathe-gg/nanolathe/internal/content"
@@ -209,6 +210,8 @@ type Manager struct {
 	// this field at composition and at the phase-1 command boundary, never
 	// inside a tick [I1].
 	Planner Planner `json:"-"`
+	// The same construction policy used by human admission, bound by Session.
+	ConstructionRules construction.Rules `json:"-"`
 }
 
 // GetPlayer satisfies Selector [PLAN_11 WU-11-4] — Manager.Player 0..9.
@@ -414,11 +417,11 @@ func (m *Manager) hasBuildOptionsForDef(def *content.UnitDef) bool {
 	}
 	if cat != nil && cat.BuildMenus != nil {
 		ck := canonicalKey(def.UnitName)
-		if page, ok := cat.BuildMenus[ck]; ok && page != nil && len(page.Buttons) > 0 {
+		if page, ok := cat.BuildMenus[ck]; ok && page != nil && len(construction.BuildProducts(m.ConstructionRules, page)) > 0 {
 			return true
 		}
 		if ck2 := canonicalKey(def.CanonicalKey); ck2 != ck {
-			if page, ok := cat.BuildMenus[ck2]; ok && page != nil && len(page.Buttons) > 0 {
+			if page, ok := cat.BuildMenus[ck2]; ok && page != nil && len(construction.BuildProducts(m.ConstructionRules, page)) > 0 {
 				return true
 			}
 		}
@@ -1625,4 +1628,19 @@ func (m *Manager) doRally(tick uint32, w *units.World, econ *economy.Service) {
 		}
 		m.submitResolvedOrder(u, id, nil, m.rallyBestX, m.rallyBestY, m.rallyBestZ, tick, 0, 0)
 	}
+}
+
+// BuildProducts borrows the session-selected immutable build membership.
+func (m *Manager) BuildProducts(builder string) []string {
+	if m == nil {
+		return nil
+	}
+	cat := m.Catalog
+	if cat == nil {
+		cat = m.Strategic.Catalog
+	}
+	if cat == nil {
+		return nil
+	}
+	return construction.BuildProducts(m.ConstructionRules, cat.BuildMenus[canonicalKey(builder)])
 }

@@ -708,11 +708,17 @@ executable was examined.
 of a mounted content set carrying a directory table and the limits its content
 needs. `internal/content/profiles` embeds four — `retail` (empty), `escalation`,
 `prota`, `zero` — as JSON, so adding one is a data edit. After mounting and
-before anything reads content, detection walks the profiles in a fixed order —
-escalation, prota, zero, retail — and takes the first whose every marker
-resolves; `retail` carries no markers and is therefore the fallback. The
-selected profile's table becomes a `vfs.Layout`, a read view over the mounted
-overlay that rewrites the first path segment on the way down and reverses it on
+before anything reads content, detection checks each known layout's complete
+set of renamed directories in the mounted logical namespace. It does not
+require a particular archive filename or version. One complete layout selects
+its preset; multiple complete layouts produce an ambiguity error requesting an
+explicit selector; no matching layout uses `retail`. The fixed preset order
+only orders diagnostics. Ordinary launches need no `--content-profile` flag:
+retail-layout mods use the ordinary mounted overlay, and known renamed layouts
+are detected automatically. Unknown renamed layouts remain selectable through
+an authored JSON table; directory prefixes and suffixes are not enough evidence
+to infer which families they contain. The selected profile's table becomes a
+`vfs.Layout`, a read view over the mounted overlay that rewrites the first path segment on the way down and reverses it on
 the way back, so the compiler keeps asking for `units/` and provenance, the
 catalog hash inputs and every diagnostic stay retail-named. An empty table
 returns the overlay unchanged.
@@ -722,8 +728,11 @@ exists, it never reaches a tick, and it is orthogonal to Modern and Strict 3.1
 [I11]. `--content-profile <name|path>` overrides detection on both commands, a
 path selecting a user-authored profile JSON file; the settings key
 `contentProfile` is the saved preference, and the precedence is explicit flag,
-saved preference, detection. The displayless report, the simulation benchmark
-report, the windowed battle benchmark's scene metadata and the inventory probe
+saved preference, detection. Detection does not save its result as a preference,
+so switching mounted roots does not retain an automatically selected preset.
+An intentionally saved selector continues to override detection. The presets
+only describe loading; no named-mod check selects simulation behavior.
+The displayless report, the simulation benchmark report, the windowed battle benchmark's scene metadata and the inventory probe
 carry the resolved name as `content_profile`.
 
 *Boundaries.* The layout rewrites the **first** segment only, matched
@@ -738,8 +747,12 @@ overlay's optional byte-range capability survives wrapping too: a wrapper over
 a `vfs.RangeReader` forwards `ReadFileRange` under the rewritten path, and one
 over a view without it offers no such method, so the map census keeps its
 header-range fast path under a profile instead of decompressing every terrain
-file whole. A read error's *logical path* is retail-named; the host cause it wraps names the
-file that was actually read, which is what a reader needs to find it on disk.
+file whole. The optional `RetailReadDir` capability also survives under mapped
+paths and preserves provider enumeration order for download membership's
+ordered list extension. A wrapped view without it still takes the ordinary `ReadDir`
+fallback. Preserving either capability must not hide the other. A read error's
+*logical path* is retail-named; the host cause it wraps names the file that was
+actually read, which is what a reader needs to find it on disk.
 Both commands apply the table at their one mount boundary: the displayless
 runner wraps the overlay it mounts, and the graphical command's content set
 holds the wrapped view as the read surface every loader takes — catalog, sides,
@@ -849,7 +862,8 @@ itself. `vfs` locks the redirection both ways, the untouched later
 segment, the two optional reports with and without them underneath, the
 unchanged view for an empty table, and one short concatenation per redirected
 lookup. `internal/content/profiles` locks the four shipped tables against the
-inventory, the detection order and its all-markers rule, the override and
+inventory, complete logical-tree detection without archive-name markers,
+ambiguous-layout rejection, the override and
 user-authored-profile paths, and — on an authored fixture install published
 twice, once retail-named and once under TA: Escalation's names — an identical
 catalog hash and retail-named provenance. The retail tier adds the real

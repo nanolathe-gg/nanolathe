@@ -11,6 +11,7 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/hud"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
@@ -71,7 +72,13 @@ func (b *battleSession) resourceProducts(builder string) (extractor, solar, geot
 	if menu == nil {
 		return nil, nil, nil
 	}
-	for _, key := range menu.Buttons {
+	products := menu.Buttons
+	if f, ok := b.currentSnapshot(); ok {
+		if view, found := snapshotUnitByHandle(f, f.CommandPage.Builder); found && content.CanonicalKey(view.DefName) == content.CanonicalKey(builder) {
+			products = hud.AllowedBuildProducts(b.cat, f)
+		}
+	}
+	for _, key := range products {
 		u, ok := b.cat.Unit(key)
 		if !ok || u == nil {
 			continue

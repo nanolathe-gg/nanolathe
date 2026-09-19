@@ -1,6 +1,14 @@
 {
   "name": "escalation",
-  "detect": ["TAESC.gp3", "unitsE"],
+  "detect": [
+    "aE",
+    "downloadsE",
+    "gamedatE",
+    "guiE",
+    "unitpicE",
+    "unitsE",
+    "weaponE"
+  ],
   "layout": {
     "ai": "aE",
     "download": "downloadsE",

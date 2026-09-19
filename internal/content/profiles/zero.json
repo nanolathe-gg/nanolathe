@@ -1,6 +1,14 @@
 {
   "name": "zero",
-  "detect": ["TAZ31.gp3", "ZUnits"],
+  "detect": [
+    "ZBuildMenu",
+    "ZGameDat",
+    "ZGui",
+    "ZI",
+    "ZUnitPic",
+    "ZUnits",
+    "ZWeapon"
+  ],
   "layout": {
     "ai": "ZI",
     "download": "ZBuildMenu",

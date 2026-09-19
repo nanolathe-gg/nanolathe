@@ -287,3 +287,58 @@ func TestLayoutForwardsRangeReadsUnderTheRewrittenPath(t *testing.T) {
 		t.Fatalf("ManifestHash through the range view = %q (%v), want the inner identity", hash, err)
 	}
 }
+
+// Nonlexical order matters when the download pass appends builder products.
+// Exercise all combinations so preserving one capability cannot hide another.
+type orderedFS struct{ *recordingFS }
+
+func (r orderedFS) RetailReadDir(name string) ([]EntryInfo, error) {
+	r.note(name)
+	return []EntryInfo{r.info("downloadp/z.tdf"), r.info("downloadp/a.tdf")}, nil
+}
+
+type orderedRangedFS struct {
+	orderedFS
+}
+
+func (r orderedRangedFS) ReadFileRange(name string, offset int64, length int) ([]byte, error) {
+	return (rangedFS{richFS{r.recordingFS}}).ReadFileRange(name, offset, length)
+}
+
+func TestLayoutPreservesRetailEnumerationCapabilityAndOrder(t *testing.T) {
+	for _, hasRange := range []bool{false, true} {
+		for _, hasOrder := range []bool{false, true} {
+			inner := newRecordingFS("downloadp/z.tdf", "downloadp/a.tdf")
+			var source FSOps = inner
+			if hasOrder && hasRange {
+				source = orderedRangedFS{orderedFS{inner}}
+			} else if hasOrder {
+				source = orderedFS{inner}
+			} else if hasRange {
+				source = rangedFS{richFS{inner}}
+			}
+			view := NewLayout(map[string]string{"download": "downloadP"}).Apply(source)
+			ordered, ok := view.(retailDirReader)
+			if ok != hasOrder {
+				t.Fatalf("range=%v order=%v: ordered capability=%v", hasRange, hasOrder, ok)
+			}
+			if _, ok := view.(RangeReader); ok != hasRange {
+				t.Fatalf("range=%v order=%v: range capability=%v", hasRange, hasOrder, ok)
+			}
+			if hasOrder {
+				entries, err := ordered.RetailReadDir("download")
+				if err != nil || len(entries) != 2 || entries[0].Path != "download/z.tdf" || entries[1].Path != "download/a.tdf" {
+					t.Fatalf("ordered entries=%+v, error=%v", entries, err)
+				}
+				if len(inner.asked) != 1 || inner.asked[0] != "downloadP" {
+					t.Fatalf("ordered request=%v", inner.asked)
+				}
+			} else {
+				entries, err := view.ReadDir("download")
+				if err != nil || len(entries) != 2 {
+					t.Fatalf("fallback entries=%+v, error=%v", entries, err)
+				}
+			}
+		}
+	}
+}

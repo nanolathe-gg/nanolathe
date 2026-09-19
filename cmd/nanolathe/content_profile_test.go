@@ -9,17 +9,17 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	contentprofiles "github.com/nanolathe-gg/nanolathe/internal/content/profiles"
+	"github.com/nanolathe-gg/nanolathe/internal/settings"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
 // authorRenamedInstall publishes a loose install whose families sit under TA
-// Zero's directory names, together with the two markers that profile detects.
+// Zero's directory names, without a version-specific archive filename.
 // Every byte is authored here; none is copied from a content set.
 func authorRenamedInstall(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
 	files := map[string]string{
-		"TAZ31.gp3":             "authored marker, not an archive\n",
 		"ZGameDat/moveinfo.tdf": "[CLASS0]\n{\nName=TANK3;\nFootprintX=3;\nFootprintZ=3;\nMinWaterDepth=0;\nMaxWaterDepth=0;\nMaxSlope=15;\n}\n",
 		"ZGameDat/sidedata.tdf": "[SIDE0]\n{\nname=ARM;\ncommander=ARMCOM;\nfont=scratch.fnt;\n" + authoredSideAnchors() + "}\n",
 		"ZGameDat/allsound.tdf": "[PROBECUE]\n{\nsound=probe;\n}\n",
@@ -69,6 +69,7 @@ func authoredSideAnchors() string {
 // a loader asking for a retail directory reaches the tree the content set
 // actually ships (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles").
 func TestWindowedMountAppliesTheContentProfileTable(t *testing.T) {
+	t.Setenv(settings.EnvPath, filepath.Join(t.TempDir(), "settings.json"))
 	cs, err := openContent(Options{Roots: []string{authorRenamedInstall(t)}})
 	if err != nil {
 		t.Fatalf("mount renamed install: %v", err)
@@ -136,6 +137,7 @@ func TestWindowedMountAppliesTheContentProfileTable(t *testing.T) {
 // returns the mounted overlay itself — so a retail run reads exactly what it
 // read before content profiles existed.
 func TestRetailMountKeepsTheConcreteOverlay(t *testing.T) {
+	t.Setenv(settings.EnvPath, filepath.Join(t.TempDir(), "settings.json"))
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "gamedata"), 0o700); err != nil {
 		t.Fatal(err)
@@ -180,5 +182,38 @@ func TestConcreteMountFamiliesAreNeverRedirected(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestContentSelectorPrecedenceAndDetectionDoesNotPersist(t *testing.T) {
+	root := authorRenamedInstall(t)
+	settingsPath := filepath.Join(t.TempDir(), "settings.json")
+	t.Setenv(settings.EnvPath, settingsPath)
+	cs, err := openContent(Options{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs.Close()
+	if _, err := os.Stat(settingsPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("automatic detection wrote settings: %v", err)
+	}
+	// A saved selector is intentional, even if these new roots would detect
+	// another layout. The explicit flag remains the strongest override.
+	stored := settings.Defaults()
+	stored.ContentProfile = "retail"
+	if err := stored.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if cs, err := openContent(Options{Root: root}); err == nil {
+		cs.Close()
+		t.Fatal("saved retail selection was silently replaced by detection")
+	}
+	cs, err = openContent(Options{Root: root, ContentProfile: "zero"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	if cs.profile != "zero" {
+		t.Fatalf("explicit profile = %q", cs.profile)
 	}
 }

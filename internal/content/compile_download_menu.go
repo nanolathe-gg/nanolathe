@@ -125,6 +125,12 @@ func applyDownloadRecordMenus(records []*UnitDef, units map[string]*UnitDef, men
 	}
 	if menus != nil {
 		ensureBuilderMenus(units, menus)
+		for _, key := range sortedBuildMenuKeys(menus) {
+			menu := menus[key]
+			if menu != nil {
+				menu.AuthoredButtons = append([]string(nil), menu.Buttons...)
+			}
+		}
 	}
 	var firstProducts []string
 	for _, placement := range placements {
@@ -144,10 +150,16 @@ func applyDownloadRecordMenus(records []*UnitDef, units map[string]*UnitDef, men
 			builder.BuildPageCount = int32(placement.Menu)
 		}
 		menu := menus[builder.CanonicalKey]
-		if !placement.ProductResolved || !builder.Builder || menu == nil || len(menu.Buttons) > 30 {
+		if !placement.ProductResolved || !builder.Builder || menu == nil {
 			continue
 		}
-		menu.Buttons = append(menu.Buttons, placement.Product)
+		// Preserve authored order and repetitions, including MENU=0 records.
+		// Modern construction admission can use these without guessing patch
+		// semantics; Strict retains the established cutoff [02 R-CAT-01 §8].
+		menu.AuthoredButtons = append(menu.AuthoredButtons, placement.Product)
+		if len(menu.Buttons) <= 30 {
+			menu.Buttons = append(menu.Buttons, placement.Product)
+		}
 	}
 	if menus != nil {
 		for _, key := range sortedBuildMenuKeys(menus) {

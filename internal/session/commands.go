@@ -965,6 +965,8 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		if u == nil || s.Catalog == nil {
 			return
 		}
+		// Factory products come from the installed GUI name, independently of
+		// CANBUILD membership [07 §9][07 R-P0-11 §1].
 		s.bindOrderQueue(u)
 		count := c.FactoryBuild.Count
 		if count == 0 {

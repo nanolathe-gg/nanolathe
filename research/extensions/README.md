@@ -5,14 +5,16 @@
 This directory is the authorized home for independently worded contracts for
 non-retail patches and extensions. It is a curated reference, not a notebook,
 a list of desired features, or evidence about retail Total Annihilation.
-No extension behavior has been established here yet; this README defines the
-evidence policy and index only.
 
 Add one owning document per extension or coherent extension family when there
 is sourced research to record, and link it from this index with its subject
 and source version. Update that document in place as evidence improves; do
 not add session notes or gap-analysis files. Each contract belongs under a
 stable named heading and keeps its unresolved questions beside it.
+
+| Reference | Scope and source version |
+|---|---|
+| [Extended build menus](build-menus.md) | TA Zero Alpha 5 authored placements, repeated membership records, and documented twelve-slot sidebar; patch membership semantics remain unknown. |
 
 ## Evidence policy
 

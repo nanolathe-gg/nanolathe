@@ -339,6 +339,15 @@ func pruneRestrictedBuildMenus(cat *content.Catalog, names []string) {
 					base++
 				}
 			}
+			if page.AuthoredButtons != nil {
+				authored := make([]string, 0, len(page.AuthoredButtons))
+				for _, button := range page.AuthoredButtons {
+					if _, ok := keep[content.CanonicalKey(button)]; ok {
+						authored = append(authored, button)
+					}
+				}
+				page.AuthoredButtons = authored
+			}
 			page.Buttons = kept
 			page.BaseButtonCount = base
 		}

@@ -151,7 +151,7 @@ func TestQueueCountLabelPenLeftRightCentre(t *testing.T) {
 func generatedPageFixture(name string) *gui.Window {
 	gadgets := make([]gui.Gadget, 10)
 	for i := range gadgets {
-		gadgets[i] = gui.Gadget{Name: "UNCHANGED", Art: "IGPATCH", GrayedOut: 3, CommonAttribs: 9}
+		gadgets[i] = gui.Gadget{Kind: gui.KindButton, Name: "UNCHANGED", Art: "IGPATCH", GrayedOut: 3, CommonAttribs: 13}
 	}
 	return &gui.Window{Name: name, Gadgets: gadgets}
 }

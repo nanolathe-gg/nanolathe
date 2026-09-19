@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -883,6 +884,7 @@ func (c *Catalog) Clone() *Catalog {
 			if v.Buttons != nil {
 				cp.Buttons = append([]string(nil), v.Buttons...)
 			}
+			cp.AuthoredButtons = slices.Clone(v.AuthoredButtons)
 			out.BuildMenus[k] = &cp
 		}
 	}

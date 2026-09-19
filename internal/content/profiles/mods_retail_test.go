@@ -85,7 +85,7 @@ func unitDefinitionFiles(t *testing.T, view vfs.FSOps) int {
 // inventory recorded, with retail-named provenance.
 func TestZeroContentSetCompilesThroughItsDirectoryTable(t *testing.T) {
 	fs := mountWithMod(t, "zero")
-	profile, err := profiles.Detect(fs)
+	profile, err := profiles.Resolve(fs, "")
 	if err != nil {
 		t.Fatalf("detect: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestZeroContentSetCompilesThroughItsDirectoryTable(t *testing.T) {
 // at the definition count the inventory recorded.
 func TestProTAContentSetCompilesUnderItsProfile(t *testing.T) {
 	fs := mountWithMod(t, "prota")
-	profile, err := profiles.Detect(fs)
+	profile, err := profiles.Resolve(fs, "")
 	if err != nil {
 		t.Fatalf("detect: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestProTAContentSetCompilesUnderItsProfile(t *testing.T) {
 // stops on a packaging gap that is not this unit's.
 func TestEscalationReadCapsAdmitItsMapAndLOSTable(t *testing.T) {
 	fs := mountWithMod(t, "escalation")
-	profile, err := profiles.Detect(fs)
+	profile, err := profiles.Resolve(fs, "")
 	if err != nil {
 		t.Fatalf("detect: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestEscalationReadCapsAdmitItsMapAndLOSTable(t *testing.T) {
 // raising anything.
 func TestEscalationContentSetStopsAtItsPackagingGap(t *testing.T) {
 	fs := mountWithMod(t, "escalation")
-	profile, err := profiles.Detect(fs)
+	profile, err := profiles.Resolve(fs, "")
 	if err != nil {
 		t.Fatalf("detect: %v", err)
 	}

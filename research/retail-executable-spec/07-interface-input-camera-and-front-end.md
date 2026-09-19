@@ -6594,8 +6594,11 @@ Build pages are driven by `CANBUILD`, `BUILDER.GUI`, per-builder GUI files,
 and side/build GAF assets. A builder’s available products are patched into
 named build buttons. Pages support previous/next navigation, product slots,
 queue counts, on/off controls, and command enable/disable state. The build
-button name and unit definition remain data-driven; the GUI is not allowed to
-invent a product absent from the builder’s authored build list.
+button name and unit definition remain data-driven. **Established:** factory
+queue activation resolves the installed product gadget's name; CANBUILD is
+not an additional whitelist for that queue producer (activation identity and
+[R-P0-11 §1] below). Authored physical pages may name a different product than
+CANBUILD; this must not be corrected by changing either authored source.
 
 **Page encoding is closed.** Page switching validates the selected-builder
 identity first (nonzero single-select id and nonzero definition id) and guards

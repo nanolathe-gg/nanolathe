@@ -1,21 +1,26 @@
 package construction
 
 import (
+	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
-// Rules is the construction service's gameplay seam. It carries the one
-// decision that is not retail behaviour: whether a blocked product exit, a
-// refused yard close or a blocked build site may ask idle units of the same
-// player to walk away. Retail has no such request, so StrictRules answers
-// with nothing at all [04 R-FAC-02 §5] [04 R-FAC-02 §6].
+// Rules is the construction service's gameplay seam: authored product admission
+// and whether a blocked exit, refused yard close or blocked site may ask idle
+// units of the same player to walk away. Strict retains retail membership and
+// issues no clearance requests [02 R-CAT-01 §8][04 R-FAC-02 §5–§6].
 //
 // The implementation is chosen once when the session binds a rule set; the
 // call sites below never build a closure or select a mode per call. Every
-// implementation is therefore a zero-size value or a pointer to
-// session-lifetime state, so dispatch allocates nothing.
+// implementation is therefore a zero-size value or a pointer to one, so
+// dispatch allocates nothing; scratch belongs to the service or request.
 type Rules interface {
+	// BuildProducts borrows immutable compiled membership. Strict preserves
+	// the retail append cutoff; Modern admits every resolved authored entry
+	// (DESIGN_ECONOMY_CONSTRUCTION, "Modern authored build membership").
+	BuildProducts(*content.BuildMenuPage) []string
+
 	// YieldObstruction is called on each blocked construction attempt with the
 	// rectangle that must become clear: the product exit rectangle, the cells
 	// a refused close selected, or the snapped build-site footprint.
@@ -51,4 +56,33 @@ func (s *Service) rules() Rules {
 		return strictRules
 	}
 	return s.Rules
+}
+
+// BuildProducts borrows the selected list without allocating or changing state.
+// Unbound callers retain the retail baseline [02 R-CAT-01 §8].
+func BuildProducts(rules Rules, menu *content.BuildMenuPage) []string {
+	if menu == nil {
+		return nil
+	}
+	if rules == nil {
+		return menu.Buttons
+	}
+	return rules.BuildProducts(menu)
+}
+
+func (StrictRules) BuildProducts(menu *content.BuildMenuPage) []string {
+	if menu == nil {
+		return nil
+	}
+	return menu.Buttons
+}
+
+func (*ModernRules) BuildProducts(menu *content.BuildMenuPage) []string {
+	if menu == nil {
+		return nil
+	}
+	if menu.AuthoredButtons != nil {
+		return menu.AuthoredButtons
+	}
+	return menu.Buttons
 }

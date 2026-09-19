@@ -50,6 +50,7 @@ func TestUseOnlyRestrictionPrunesBuildMenus(t *testing.T) {
 			// merely truncates would be caught.
 			Buttons:         []string{"ARMWIN", "ARMSOLAR", "CORCOM", "ARMWIN"},
 			BaseButtonCount: 3,
+			AuthoredButtons: []string{"ARMWIN", "ARMSOLAR", "ARMWIN", "ARMSOLAR"},
 		},
 		// A builder the restriction removes keeps no list at all.
 		"corcom": {Builder: "CORCOM", Buttons: []string{"ARMSOLAR"}, BaseButtonCount: 1},
@@ -69,6 +70,12 @@ func TestUseOnlyRestrictionPrunesBuildMenus(t *testing.T) {
 	}
 	if got := page.Buttons; len(got) != 1 || got[0] != "ARMSOLAR" {
 		t.Fatalf("restricted ARMCOM page %v, want only the permitted ARMSOLAR [02 R-CAT-01 §5 step 6]", got)
+	}
+	if got := page.AuthoredButtons; len(got) != 2 || got[0] != "ARMSOLAR" || got[1] != "ARMSOLAR" {
+		t.Fatalf("authored membership bypassed restriction: %v", got)
+	}
+	if len(base.BuildMenus["armcom"].AuthoredButtons) != 4 {
+		t.Fatal("restriction mutated shared authored membership")
 	}
 	// The base prefix has to shrink with the list: a stale count would slice
 	// download products into the authored page window [07 R-HUD-03 §6].

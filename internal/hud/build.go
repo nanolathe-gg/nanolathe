@@ -38,8 +38,9 @@ func ProductArmsPlacement(def *content.UnitDef) bool {
 	return def != nil && def.BMCode == 0
 }
 
-// BuildProductsFor returns the authored build list for a builder key [02 "Build-menu catalog keys"].
-// It is the sole source of product names; GUI may not invent products absent here [R-P0-03].
+// BuildProductsFor copies the retail baseline list [02 "Build-menu catalog keys"].
+// Live presentation uses AllowedBuildProducts so the bound construction rule
+// remains authoritative; this baseline also supports hand-built frame fixtures.
 func BuildProductsFor(cat *content.Catalog, builderKey string) []string {
 	if cat == nil || builderKey == "" {
 		return nil
@@ -50,23 +51,6 @@ func BuildProductsFor(cat *content.Catalog, builderKey string) []string {
 		return out
 	}
 	return nil
-}
-
-// ValidateBuildProduct reports whether product is in the builder's authored list [R-P0-03].
-func ValidateBuildProduct(cat *content.Catalog, builderKey, product string) bool {
-	if cat == nil {
-		return false
-	}
-	ck := content.CanonicalKey(product)
-	if ck == "" {
-		return false
-	}
-	for _, b := range BuildProductsFor(cat, builderKey) {
-		if content.CanonicalKey(b) == ck {
-			return true
-		}
-	}
-	return false
 }
 
 // The page cycle [07 R-HUD-03 §6]. Page 0 is the orders state and pages
@@ -237,4 +221,36 @@ func QueueCountLabel(queues []frame.OrderQueueView, product string) string {
 		return ""
 	}
 	return fmt.Sprintf("+%d", total)
+}
+
+// AllowedBuildProducts reads the complete membership published for the selected
+// builder. Legacy hand-authored frames fall back to the retail catalog list.
+// The returned frame slice is immutable; callers must not modify it [I6].
+func AllowedBuildProducts(cat *content.Catalog, f *frame.Frame) []string {
+	if f == nil || f.CommandPage.Builder == 0 {
+		return nil
+	}
+	if f.CommandPage.AllowedProducts != nil {
+		return f.CommandPage.AllowedProducts
+	}
+	for _, unit := range f.Units {
+		if unit.Slot == f.CommandPage.Builder {
+			return BuildProductsFor(cat, content.CanonicalKey(unit.DefName))
+		}
+	}
+	return nil
+}
+
+// BuildProductAllowed uses the committed rule-selected list for placement.
+func BuildProductAllowed(cat *content.Catalog, f *frame.Frame, product string) bool {
+	key := content.CanonicalKey(product)
+	if key == "" {
+		return false
+	}
+	for _, candidate := range AllowedBuildProducts(cat, f) {
+		if content.CanonicalKey(candidate) == key {
+			return true
+		}
+	}
+	return false
 }

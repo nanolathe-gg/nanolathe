@@ -199,6 +199,13 @@ func buildOptionsForBuilder(m Selector, builder *units.Unit) []string {
 	if !ok || b == nil {
 		return nil
 	}
+	if policy, ok := m.(interface{ BuildProducts(string) []string }); ok && builder != nil && builder.Def != nil {
+		products := policy.BuildProducts(builder.Def.UnitName)
+		if products == nil {
+			products = policy.BuildProducts(builder.Def.CanonicalKey)
+		}
+		return append([]string(nil), products...)
+	}
 	cat := b.GetCatalog()
 	if cat != nil && cat.BuildMenus != nil && builder != nil && builder.Def != nil {
 		key := canonicalKey(builder.Def.UnitName)

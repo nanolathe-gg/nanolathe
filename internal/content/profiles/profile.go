@@ -29,9 +29,8 @@ import (
 var shipped embed.FS
 
 // detectionOrder is the order detection walks the shipped profiles. It is an
-// explicit list rather than a directory listing: the first profile whose
-// markers are all present wins, so the order is behaviour, and `retail` is
-// last because it carries no markers and therefore always matches [I1].
+// explicit list rather than a directory listing so ambiguity diagnostics have
+// a stable order [I1]. Retail is the fallback when no renamed layout matches.
 var detectionOrder = [...]string{"escalation", "prota", "zero", "retail"}
 
 // RetailName is the profile every unmodified install resolves to.
@@ -62,8 +61,8 @@ type Profile struct {
 	// the word the reports carry.
 	Name string `json:"name"`
 	// Detect is the marker set. A profile is detected when every marker
-	// resolves in the mounted overlay; an empty list always matches, which is
-	// how `retail` is the fallback.
+	// resolves in the mounted overlay. Shipped presets name all their renamed
+	// directories; the empty retail marker list denotes the fallback.
 	Detect []string `json:"detect"`
 	// Directories maps the retail directory the loaders ask for to the
 	// directory this content set ships. Keys are the retail names in lower
@@ -140,30 +139,43 @@ func Lookup(selector string) (Profile, error) {
 	return parse(data, trimmed)
 }
 
-// Detect returns the first shipped profile whose every marker resolves in the
-// mounted overlay, which for an unmodified install is `retail`. Markers are
-// matched by the overlay's ordinary case-insensitive lookup, and a marker may
-// be a file or a directory: a content set is recognised by its own archive
-// and by one of its renamed trees, and either kind answers a Stat.
+// Detect selects a complete known directory layout in the mounted namespace.
+// Archive filenames are packaging, not content: an archive need not expose its
+// host filename through Stat. Multiple matching layouts require an explicit
+// selector rather than silently choosing one content set by preset order.
 func Detect(mounted vfs.FSOps) (Profile, error) {
 	if mounted == nil {
 		return load(RetailName)
 	}
+	var matches []Profile
 	for _, name := range detectionOrder {
+		if name == RetailName {
+			continue
+		}
 		profile, err := load(name)
 		if err != nil {
 			return Profile{}, err
 		}
 		matched := true
 		for _, marker := range profile.Detect {
-			if _, err := mounted.Stat(marker); err != nil {
+			if info, err := mounted.Stat(marker); err != nil || !info.IsDir {
 				matched = false
 				break
 			}
 		}
 		if matched {
-			return profile, nil
+			matches = append(matches, profile)
 		}
+	}
+	if len(matches) > 1 {
+		names := make([]string, len(matches))
+		for i, profile := range matches {
+			names[i] = profile.Name
+		}
+		return Profile{}, fmt.Errorf("nanolathe: content layout is ambiguous: logical path <content-profile>, providers searched [%s], expected one mounted content layout or an explicit --content-profile selector", strings.Join(names, ", "))
+	}
+	if len(matches) == 1 {
+		return matches[0], nil
 	}
 	return load(RetailName)
 }

@@ -1,6 +1,12 @@
 {
   "name": "prota",
-  "detect": ["ProTA.gp3", "weaponP"],
+  "detect": [
+    "downloadP",
+    "gamedatP",
+    "guiP",
+    "unitpicsP",
+    "weaponP"
+  ],
   "layout": {
     "download": "downloadP",
     "gamedata": "gamedatP",

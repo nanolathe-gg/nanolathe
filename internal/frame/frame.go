@@ -528,6 +528,9 @@ type CommandPageView struct {
 	Page        uint16
 	PageCount   uint16
 	ProductKeys []string
+	// AllowedProducts is the complete construction-rule-selected membership,
+	// independent of visible page. Presentation never reselects gameplay rules.
+	AllowedProducts []string
 	// GeneratedProducts retains the explicit product-to-slot records authored
 	// by download/*.tdf for this visible page. ProductKeys remains the
 	// canonical membership union used by dispatch; this slice preserves sparse
@@ -1102,6 +1105,7 @@ func (f *Frame) Reserve(c Capacities) {
 	f.Events = reserve(f.Events, c.Cues)
 	f.Selection.Handles = reserve(f.Selection.Handles, c.Selection)
 	f.CommandPage.ProductKeys = reserve(f.CommandPage.ProductKeys, c.CommandProducts)
+	f.CommandPage.AllowedProducts = reserve(f.CommandPage.AllowedProducts, c.CommandProducts)
 	f.CommandPage.GeneratedProducts = reserve(f.CommandPage.GeneratedProducts, c.CommandProducts)
 	f.Visibility.Visible = reserve(f.Visibility.Visible, c.Visibility)
 	f.Radar.Contacts = reserve(f.Radar.Contacts, c.RadarContacts)
@@ -1158,6 +1162,8 @@ func (f *Frame) Reset() {
 	}
 	clear(f.Selection.Handles)
 	f.Selection.Handles = f.Selection.Handles[:0]
+	clear(f.CommandPage.AllowedProducts)
+	f.CommandPage.AllowedProducts = f.CommandPage.AllowedProducts[:0]
 	clear(f.CommandPage.ProductKeys)
 	f.CommandPage.ProductKeys = f.CommandPage.ProductKeys[:0]
 	clear(f.CommandPage.GeneratedProducts)
@@ -1200,6 +1206,7 @@ func (f *Frame) Reset() {
 	f.Selection = SelectionView{Handles: f.Selection.Handles}
 	f.CommandPage = CommandPageView{
 		ProductKeys:       f.CommandPage.ProductKeys,
+		AllowedProducts:   f.CommandPage.AllowedProducts,
 		GeneratedProducts: f.CommandPage.GeneratedProducts,
 	}
 	// Keep immutable presentation copies aside while the public frame returns to

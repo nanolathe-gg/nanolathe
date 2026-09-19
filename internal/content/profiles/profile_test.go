@@ -24,7 +24,7 @@ func (m markerFS) Stat(name string) (vfs.EntryInfo, error) {
 	if !m.present[folded] {
 		return vfs.EntryInfo{}, os.ErrNotExist
 	}
-	return vfs.EntryInfo{Name: folded, Path: folded}, nil
+	return vfs.EntryInfo{Name: folded, Path: folded, IsDir: !strings.Contains(folded, ".")}, nil
 }
 func (m markerFS) CacheStamp(string) (string, error) { return "", os.ErrNotExist }
 
@@ -50,7 +50,7 @@ func TestShippedProfilesCarryTheInventoryTables(t *testing.T) {
 			limits: profiles.Limits{Units: 512, Weapons: 256, TNTBytes: 16 << 20, LOSBytes: 1 << 20, UnitLimit: 250, SearchEntries: 1333},
 		},
 		"escalation": {
-			markers: []string{"TAESC.gp3", "unitsE"},
+			markers: []string{"aE", "downloadsE", "gamedatE", "guiE", "unitpicE", "unitsE", "weaponE"},
 			directories: map[string]string{
 				"units": "unitsE", "weapons": "weaponE", "gamedata": "gamedatE",
 				"guis": "guiE", "unitpics": "unitpicE", "download": "downloadsE", "ai": "aE",
@@ -58,7 +58,7 @@ func TestShippedProfilesCarryTheInventoryTables(t *testing.T) {
 			limits: profiles.Limits{Units: 16000, Weapons: 16000, TNTBytes: 64 << 20, LOSBytes: 8 << 20, UnitLimit: 1000, SearchEntries: 66650},
 		},
 		"prota": {
-			markers: []string{"ProTA.gp3", "weaponP"},
+			markers: []string{"downloadP", "gamedatP", "guiP", "unitpicsP", "weaponP"},
 			directories: map[string]string{
 				"weapons": "weaponP", "gamedata": "gamedatP", "guis": "guiP",
 				"unitpics": "unitpicsP", "download": "downloadP",
@@ -66,7 +66,7 @@ func TestShippedProfilesCarryTheInventoryTables(t *testing.T) {
 			limits: profiles.Limits{Units: 16000, Weapons: 16000, TNTBytes: 64 << 20, LOSBytes: 8 << 20, UnitLimit: 1500, SearchEntries: 66650},
 		},
 		"zero": {
-			markers: []string{"TAZ31.gp3", "ZUnits"},
+			markers: []string{"ZBuildMenu", "ZGameDat", "ZGui", "ZI", "ZUnitPic", "ZUnits", "ZWeapon"},
 			directories: map[string]string{
 				"units": "ZUnits", "weapons": "ZWeapon", "gamedata": "ZGameDat",
 				"guis": "ZGui", "unitpics": "ZUnitPic", "download": "ZBuildMenu", "ai": "ZI",
@@ -102,44 +102,59 @@ func TestShippedProfilesCarryTheInventoryTables(t *testing.T) {
 			t.Errorf("%s limits = %+v, want %+v", name, profile.Limits, expected.limits)
 		}
 	}
-	// Retail is last so that its empty marker list cannot shadow a content set.
+	// Keep the public preset list stable, with the fallback last.
 	if names[len(names)-1] != profiles.RetailName {
 		t.Fatalf("detection order = %v, want %s last", names, profiles.RetailName)
 	}
 }
 
-// TestDetectionTakesTheFirstCompleteMarkerSet locks both halves of the rule:
-// every marker must be present, and the fixed order decides when more than one
-// profile's markers are.
-func TestDetectionTakesTheFirstCompleteMarkerSet(t *testing.T) {
-	for _, tt := range []struct {
-		name    string
-		mounted markerFS
-		want    string
-	}{
-		{name: "bare install", mounted: markers(), want: "retail"},
-		{name: "escalation", mounted: markers("TAESC.gp3", "unitsE"), want: "escalation"},
-		{name: "prota", mounted: markers("prota.gp3", "weaponp"), want: "prota"},
-		{name: "zero", mounted: markers("TAZ31.GP3", "ZUNITS"), want: "zero"},
-		{name: "one marker only", mounted: markers("TAESC.gp3"), want: "retail"},
-		{name: "order decides", mounted: markers("TAESC.gp3", "unitsE", "ProTA.gp3", "weaponP"), want: "escalation"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			profile, err := profiles.Detect(tt.mounted)
+// Detection follows complete logical trees, even after an archive is renamed.
+// An unrelated or incomplete tree must not accidentally select a preset.
+func TestDetectionRequiresOneCompleteLayout(t *testing.T) {
+	for _, name := range []string{"retail", "escalation", "prota", "zero"} {
+		t.Run(name, func(t *testing.T) {
+			preset, err := profiles.Lookup(name)
 			if err != nil {
-				t.Fatalf("Detect: %v", err)
+				t.Fatal(err)
 			}
-			if profile.Name != tt.want {
-				t.Fatalf("detected %q, want %q", profile.Name, tt.want)
+			profile, err := profiles.Resolve(markers(preset.Detect...), "")
+			if err != nil || profile.Name != name {
+				t.Fatalf("Resolve = %q, %v; want %s", profile.Name, err, name)
+			}
+			for i := range preset.Detect {
+				partial := append([]string(nil), preset.Detect[:i]...)
+				partial = append(partial, preset.Detect[i+1:]...)
+				profile, err := profiles.Detect(markers(partial...))
+				if err != nil || profile.Name != "retail" {
+					t.Fatalf("without %s: Detect = %q, %v; want retail", preset.Detect[i], profile.Name, err)
+				}
 			}
 		})
+	}
+	profile, err := profiles.Detect(markers("TAESC.gp3", "unitsE"))
+	if err != nil || profile.Name != "retail" {
+		t.Fatalf("archive filename and one tree selected incomplete layout: %q, %v", profile.Name, err)
+	}
+}
+
+func TestDetectionRejectsAmbiguousLayoutsUnlessExplicitlySelected(t *testing.T) {
+	escalation, _ := profiles.Lookup("escalation")
+	zero, _ := profiles.Lookup("zero")
+	mounted := markers(append(escalation.Detect, zero.Detect...)...)
+	if _, err := profiles.Resolve(mounted, ""); err == nil || !strings.Contains(err.Error(), "content layout is ambiguous") || !strings.Contains(err.Error(), "escalation, zero") {
+		t.Fatalf("ambiguous resolution = %v", err)
+	}
+	profile, err := profiles.Resolve(mounted, "zero")
+	if err != nil || profile.Name != "zero" {
+		t.Fatalf("explicit resolution = %q, %v", profile.Name, err)
 	}
 }
 
 // TestResolvePrefersTheExplicitSelector covers the override path, including a
 // user-authored profile read from a file, and the rejection a typo produces.
 func TestResolvePrefersTheExplicitSelector(t *testing.T) {
-	mounted := markers("TAESC.gp3", "unitsE")
+	preset, _ := profiles.Lookup("escalation")
+	mounted := markers(preset.Detect...)
 	profile, err := profiles.Resolve(mounted, "  Zero ")
 	if err != nil {
 		t.Fatalf("Resolve by name: %v", err)

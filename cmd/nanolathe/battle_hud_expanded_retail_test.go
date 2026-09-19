@@ -3,7 +3,11 @@
 package main
 
 import (
-	"strings"
+	"fmt"
+	"image/png"
+	"os"
+	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/client"
@@ -12,7 +16,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/testsupport"
 )
 
-func TestRetailExpandedSidebarShowsTwoAuthoredCommanderPages(t *testing.T) {
+func TestRetailExpandedSidebarFlatCommanderProducts(t *testing.T) {
 	cs, err := openContent(Options{Root: testsupport.RetailRoot(t), Map: "ashap plateau", Seed: 7})
 	if err != nil {
 		t.Fatal(err)
@@ -53,102 +57,117 @@ func TestRetailExpandedSidebarShowsTwoAuthoredCommanderPages(t *testing.T) {
 		t.Fatal("no selected commander")
 	}
 	def, _ := cat.Unit(view.DefName)
-	second, _ := b.hud.sidebarBuildPage(cat, def, hud.NextPageButton(int(f.CommandPage.Page), int(f.CommandPage.PageCount)))
-	if second == nil {
-		t.Fatal("second authored page failed to load")
-	}
-	first, _ := b.hud.sidebarBuildPage(cat, def, int(f.CommandPage.Page))
-	var firstBottom, secondBottom int32
-	secondTop := int32(1<<31 - 1)
-	var arrows, repair, capture, move gui.Rect
-	var authoredGap int32
-	for i, source := range b.hud.expandedSidebar.sources {
-		g := w.Gadgets[i]
-		r := w.PlacedRect(i)
-		if g.CommonAttribs&4 != 0 {
-			if source.window == first {
-				firstBottom = max(firstBottom, r.Y+r.H)
-			}
-			if source.window == second {
-				secondTop, secondBottom = min(secondTop, r.Y), max(secondBottom, r.Y+r.H)
-			}
-		}
-		if sidebarNavigation(g) && commandButtonName(g.Name) == "" {
-			arrows = r
-		}
-		switch commandButtonName(g.Name) {
-		case "REPAIR":
-			repair = r
-			original := source.window.PlacedRect(source.window.GadgetIndex(g.Name))
-			for j, gad := range source.window.Gadgets {
-				if commandButtonName(gad.Name) == "MOVE" {
-					authoredGap = source.window.PlacedRect(j).Y - (original.Y + original.H)
-				}
-			}
-		case "CAPTURE":
-			capture = r
-		case "MOVE":
-			move = r
-		}
-	}
-	if firstBottom != secondTop || secondBottom > arrows.Y || arrows.Y+arrows.H > repair.Y || capture.Y+capture.H > move.Y || repair.H == 0 || move.H == 0 {
-		t.Fatalf("retail bands are not builds/arrows/orders/footer: first=%d second=%d..%d arrows=%+v repair=%+v capture=%+v move=%+v", firstBottom, secondTop, secondBottom, arrows, repair, capture, move)
-	}
-	if got := move.Y - (repair.Y + repair.H); got != authoredGap || authoredGap <= 0 {
-		t.Fatalf("stock orders-to-footer gap = %d, want authored %d pixels", got, authoredGap)
-	}
-	// Walk every adaptive page against the actual source records. A taller
-	// surface must neither repeat the early authored pages nor omit later ones.
+	// Expected sequence comes from resolved authored records, independent of
+	// CANBUILD and of the layout compiler under test.
 	type productSource struct {
 		window *gui.Window
 		name   string
 	}
-	want, got := make(map[productSource]int), make(map[productSource]int)
+	var want []productSource
 	for page := 1; page < int(f.CommandPage.PageCount); page++ {
 		source, _ := b.hud.sidebarBuildPage(cat, def, page)
-		for _, g := range source.Gadgets {
-			if g.CommonAttribs&4 != 0 && !strings.EqualFold(g.Name, "IGPATCH") {
-				want[productSource{source, g.Name}]++
+		if source == nil {
+			t.Fatalf("missing source page %d", page)
+		}
+		var indices []int
+		for i, g := range source.Gadgets {
+			if g.Active != 0 && g.CommonAttribs&4 != 0 && !sidebarEmptySlot(g.Name) {
+				indices = append(indices, i)
 			}
 		}
-	}
-	state, active := b.hud.expandedSidebarPaging(b, f)
-	if !active {
-		t.Fatal("retail adaptive paging unavailable")
-	}
-	controlRects := make(map[string]gui.Rect)
-	for page := 1; page < state.Count; page++ {
-		b.hud.selectExpandedSidebarPage(b, f, page)
-		composed, _, err := b.hud.windowForRequired(b, f)
-		if err != nil {
-			t.Fatal(err)
-		}
-		products := 0
-		for i, g := range composed.Gadgets {
-			if g.CommonAttribs&4 != 0 && !strings.EqualFold(g.Name, "IGPATCH") {
-				products++
-				got[productSource{b.hud.expandedSidebar.sources[i].window, g.Name}]++
+		slices.SortStableFunc(indices, func(i, j int) int {
+			a, b := source.PlacedRect(i), source.PlacedRect(j)
+			if a.Y != b.Y {
+				return int(a.Y - b.Y)
 			}
-			if commandButtonName(g.Name) != "" || sidebarNavigation(g) {
-				r := composed.PlacedRect(i)
-				if page == 1 {
-					controlRects[g.Name] = r
-				} else if r != controlRects[g.Name] {
-					t.Fatalf("retail page %d moved %s: %+v want %+v", page, g.Name, r, controlRects[g.Name])
+			return int(a.X - b.X)
+		})
+		for _, i := range indices {
+			want = append(want, productSource{source, source.Gadgets[i].Name})
+		}
+	}
+	for _, height := range []int{480, 768, 1080} {
+		t.Run(fmt.Sprintf("height%d", height), func(t *testing.T) {
+			cl.Resize(1280, height)
+			state, active := b.hud.expandedSidebarPaging(b, f)
+			if !active {
+				t.Fatal("retail flat paging unavailable")
+			}
+			var got []productSource
+			controlRects := make(map[string]gui.Rect)
+			for page := 1; page < state.Count; page++ {
+				b.hud.selectExpandedSidebarPage(b, f, page)
+				composed, _, err := b.hud.windowForRequired(b, f)
+				if err != nil {
+					t.Fatal(err)
+				}
+				commands := make(map[string]bool)
+				for _, g := range composed.Gadgets {
+					commands[commandButtonName(g.Name)] = true
+				}
+				for _, command := range []string{"MOVE", "STOP", "ATTACK", "REPAIR", "CAPTURE"} {
+					if !commands[command] {
+						t.Fatalf("build page %d lost %s", page, command)
+					}
+				}
+				products := 0
+				for i, g := range composed.Gadgets {
+					r := composed.PlacedRect(i)
+					if g.CommonAttribs&4 != 0 && !sidebarEmptySlot(g.Name) {
+						products++
+						got = append(got, productSource{b.hud.expandedSidebar.sources[i].window, g.Name})
+						if r.W != 64 || r.H != 64 || r.Y < 128 || r.Y+r.H > int32(height) {
+							t.Fatalf("product %s is not a fitted grid cell: %+v", g.Name, r)
+						}
+						if hit := composed.HitTest(r.X+r.W/2, r.Y+r.H/2); hit != i {
+							t.Fatalf("product %s covered by gadget %d", g.Name, hit)
+						}
+					}
+					if commandButtonName(g.Name) != "" || sidebarNavigation(g) {
+						if page == 1 {
+							controlRects[g.Name] = r
+						} else if r != controlRects[g.Name] {
+							t.Fatalf("page %d moved %s: %+v want %+v", page, g.Name, r, controlRects[g.Name])
+						}
+					}
+				}
+				if products == 0 {
+					t.Fatalf("empty adaptive page %d", page)
+				}
+				if dir := os.Getenv("NANOLATHE_MENU_SHOTS"); dir != "" && (page == 1 || page == state.Count-1) {
+					cl.SetUIStage(battleHUDUIStage{hud: b.hud, battle: b})
+					cl.SetSnapshot(sess.Snapshot)
+					cl.SetPalette(retailPaletteForTest(t, cs))
+					file, err := os.Create(filepath.Join(dir, fmt.Sprintf("ota-modern-%d-page%d.png", height, page)))
+					if err != nil {
+						t.Fatal(err)
+					}
+					err = png.Encode(file, cl.ComposeFrame())
+					closeErr := file.Close()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if closeErr != nil {
+						t.Fatal(closeErr)
+					}
 				}
 			}
-		}
-		if products == 0 {
-			t.Fatalf("retail adaptive page %d contains only placeholders", page)
-		}
-	}
-	if len(got) != len(want) {
-		t.Fatalf("retail adaptive source coverage=%d want=%d", len(got), len(want))
-	}
-	for source, count := range want {
-		if got[source] != count {
-			t.Fatalf("retail product %s appeared %d times, want authored %d", source.name, got[source], count)
-		}
+			if !slices.Equal(got, want) {
+				t.Fatalf("product sequence mismatch: got %v want %v", got, want)
+			}
+			b.hud.selectExpandedSidebarPage(b, f, 0)
+			orders, _, err := b.hud.windowForRequired(b, f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			commands := make(map[string]bool)
+			for _, g := range orders.Gadgets {
+				commands[commandButtonName(g.Name)] = true
+			}
+			if !commands["REPAIR"] || !commands["CAPTURE"] {
+				t.Fatalf("Orders lost commander commands: %v", commands)
+			}
+		})
 	}
 
 }

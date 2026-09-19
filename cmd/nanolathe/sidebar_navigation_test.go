@@ -32,7 +32,7 @@ func sidebarNavigationFixture(t *testing.T) (*battleSession, *client.Client) {
 	}
 	b.hud.windows["armfav3"] = third
 	paletteCallbackFrame(t, b, func(f *frame.Frame) { f.CommandPage.PageCount = 4 })
-	cl.Resize(1280, 780)
+	cl.Resize(1280, 704)
 	expandedWindow(t, b)
 	return b, cl
 }
@@ -79,28 +79,34 @@ func TestAdaptiveSidebarNavigationUsesVisiblePages(t *testing.T) {
 	b, cl := sidebarNavigationFixture(t)
 	initial, _ := b.currentSnapshot()
 	page, count := b.buildPageNavigationState(initial)
-	if page != 1 || count != 4 {
-		t.Fatalf("initial visible range = %d/%d", page, count)
+	capacity := len(visibleSidebarProducts(expandedWindow(t, b)))
+	if capacity == 0 || capacity >= 9 || page != 1 || count != 1+(18+capacity-1)/capacity {
+		t.Fatalf("initial visible range = %d/%d, capacity=%d", page, count, capacity)
 	}
+	assertPage := func(page int) {
+		t.Helper()
+		assertSidebarProducts(t, b, (page-1)*capacity, min(page*capacity, 18))
+	}
+	last := count - 1
 	click := func(name string) {
 		t.Helper()
 		w := expandedWindow(t, b)
 		paletteCallbackClick(t, b, cl, w, expandedIndex(t, w, name), false, false)
 	}
-	assertSidebarProducts(t, b, 0, 8)
+	assertPage(1)
+	for next := 2; next <= last; next++ {
+		click("NEXT")
+		assertPage(next)
+	}
 	click("NEXT")
-	assertSidebarProducts(t, b, 8, 16)
-	click("NEXT")
-	assertSidebarProducts(t, b, 16, 18)
-	click("NEXT")
-	assertSidebarProducts(t, b, 0, 8)
+	assertPage(1)
 	click("PREV")
-	assertSidebarProducts(t, b, 16, 18)
+	assertPage(last)
 
 	// The period/comma producers include Orders; the buttons above do not.
 	b.nextBuildPage()
 	f, _ := b.currentSnapshot()
-	if state, ok := b.hud.expandedSidebarPaging(b, f); !ok || state.Page != 0 || state.Remembered != 3 {
+	if state, ok := b.hud.expandedSidebarPaging(b, f); !ok || state.Page != 0 || state.Remembered != last {
 		t.Fatalf("Orders did not remember the visible build page: %+v (%t)", state, ok)
 	}
 	w := expandedWindow(t, b)
@@ -109,21 +115,21 @@ func TestAdaptiveSidebarNavigationUsesVisiblePages(t *testing.T) {
 	if orders.stage != 1 || build.stage != 0 {
 		t.Fatal("tab stages followed committed authored bits instead of local page selection")
 	}
-	assertSidebarProducts(t, b, 16, 18)
+	assertSidebarProducts(t, b, (last-1)*capacity, min(last*capacity, 18))
 	click("BUILD")
-	assertSidebarProducts(t, b, 16, 18)
+	assertPage(last)
 	b.prevBuildPage()
-	assertSidebarProducts(t, b, 8, 16)
+	assertPage(last - 1)
 	click("ORDERS")
 	click("BUILD")
-	assertSidebarProducts(t, b, 8, 16)
+	assertPage(last - 1)
 
 	paletteCallbackToken(t, b, cl, '2')
-	assertSidebarProducts(t, b, 0, 8)
+	assertPage(1)
 	paletteCallbackToken(t, b, cl, '3')
-	assertSidebarProducts(t, b, 8, 16)
+	assertPage(2)
 	paletteCallbackToken(t, b, cl, '9')
-	assertSidebarProducts(t, b, 8, 16)
+	assertPage(2)
 	if len(b.sess.PendingHumanCommands()) != 0 {
 		t.Fatal("presentation paging submitted a simulation command")
 	}
@@ -135,7 +141,7 @@ func TestAdaptiveSidebarNavigationUsesVisiblePages(t *testing.T) {
 	// SwitchAlt still routes the other digit arm to squad recall.
 	b.switchAlt = true
 	b.routeDigit(2, true, false, cl)
-	assertSidebarProducts(t, b, 0, 8)
+	assertPage(1)
 	b.routeDigit(2, false, false, cl)
 	pending := b.sess.PendingHumanCommands()
 	if len(pending) != 1 || pending[0].Kind != session.HumanGroupRecall {

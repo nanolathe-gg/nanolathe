@@ -23,8 +23,8 @@ const (
 
 // ModernRules carries the approved construction-clearance policy. It is
 // zero-size and stateless — the search works entirely from the service and
-// the call's arguments — but it is held by pointer so a future rule set may
-// give it session-lifetime scratch without changing any call site.
+// the call's arguments — and its pointer also refers to a zero-size value. Mutable scratch
+// belongs to the service or request, never a cached rule implementation.
 // Contracts: DESIGN_ECONOMY_CONSTRUCTION, "Modern factory-exit yielding" and
 // "Modern construction-site yielding".
 type ModernRules struct{}

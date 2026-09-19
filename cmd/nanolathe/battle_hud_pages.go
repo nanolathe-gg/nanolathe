@@ -13,7 +13,6 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
-	"github.com/nanolathe-gg/nanolathe/internal/hud"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
@@ -168,17 +167,12 @@ func (h *retailBattleHUD) numberedPage(name string, placements []frame.Generated
 	}
 	window := cloneGUIWindow(source)
 	for _, placement := range placements {
-		// Stock generated pages have exactly six authored product slots at
-		// gadget indexes BUTTON+4. Retain the authored byte and refuse values
-		// outside that safe representable range; clamping would invent a slot
-		// [07 §9][fmt tdf].
-		if placement.Button >= hud.RetailBuildButtonsPerPage {
-			hudAssetWarning(h.fs, "download/*.tdf", fmt.Sprintf("generated page %s product %s has invalid BUTTON %d [07 §9]", name, placement.ProductKey, placement.Button), fmt.Errorf("button outside six stock slots"))
-			continue
-		}
+		// Download BUTTON retains the authored record offset. A template may
+		// author more than the stock six slots, but a command is never a slot.
+		// Host extension: DESIGN_INTERFACE_HUD_INPUT §3.3.
 		index := int(placement.Button) + 4
-		if index < 4 || index >= len(window.Gadgets) {
-			hudAssetWarning(h.fs, "guis/"+sourceName+".gui", fmt.Sprintf("generated page %s has no gadget index %d for product %s [07 §9]", name, index, placement.ProductKey), fmt.Errorf("template does not expose authored slot"))
+		if index >= len(window.Gadgets) || !sidebarProductSlot(window.Gadgets[index]) {
+			hudAssetWarning(h.fs, "guis/"+sourceName+".gui", fmt.Sprintf("generated page %s has no product slot at gadget index %d for product %s", name, index, placement.ProductKey), fmt.Errorf("template does not expose authored slot"))
 			continue
 		}
 		gad := &window.Gadgets[index]
@@ -272,6 +266,7 @@ func (h *retailBattleHUD) loadParsedGeneratedWindow(name string) (*gui.Window, *
 	if err != nil {
 		return nil, nil, hudAssetError(h.fs, "guis/"+name+".gui", "generated builder GUI "+name+" [07 §9]", err)
 	}
+	preserveSidebarOrigin(window)
 	return window, h.resolvePageArt(name), nil
 }
 
@@ -292,6 +287,7 @@ func (h *retailBattleHUD) loadWindowInternal(name string, required bool) (*gui.W
 		}
 		return nil, nil, nil
 	}
+	preserveSidebarOrigin(window)
 	page := h.resolvePageArt(name)
 	if h.windows == nil {
 		h.windows = make(map[string]*gui.Window)

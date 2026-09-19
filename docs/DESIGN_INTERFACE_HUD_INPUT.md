@@ -1278,115 +1278,168 @@ selection and health, projectiles, explosions, gadgets, squad overlays. The
 compositor is DESIGN_PRESENTATION_CLIENT's; this document owns the gadget
 layer's contents `[07 §6]` `[03 §1]`.
 
-#### Modern expanded sidebar prototype
+#### Oversized authored build pages
 
-This is a user-requested presentation extension, not retail evidence. Classic
-keeps the single authored command window and the unused lower rail described
-by [07 R-HUD-05]. Modern can use that rail for additional controls when the
-framebuffer is tall enough. World zoom does not change the available UI pixels.
-The Nanolathe options page's **Expanded sidebar** switch enables this layout.
-It defaults on, persists in `presentation.expandedSidebar`, and previews through
-the live shell with the page's ordinary Cancel, Undo and Restore transactions.
-Off restores the authored single page even when the surface has spare height.
+**Nanolathe host presentation policy.** The authored-layout path fits oversized
+command canvases below the minimap. Classic and Expanded sidebar Off use this
+path; Modern expansion uses the flat layout below when supported. The ordinary GUI loader retains its retail
+640×480 header clamp [fmt gui]; the battle page loader preserves an explicit
+header origin at or below the minimap when its authored canvas exceeds that
+height. Fitting stock pages keep their existing geometry in the authored-layout path.
+Oversized-page fitting is independent of gameplay mode: it makes authored
+controls accessible on the chosen host surface.
 
-The modern view partitions resolved build pages into complete authored rows.
-Rows retain button identities, artwork, horizontal geometry, empty slots and
-internal spacing. They form one sequence in authored page and vertical row
-order, rather than a list reconstructed from build membership. Each visible
-page takes as many complete rows as fit after reserving tabs, page navigation,
-orders and the common command footer. There is no fixed six- or twelve-item
-limit: an ordinary two-column GUI can show eight or ten items when four or
-five rows fit. The last page stops at the sequence end without repeating rows
-from its beginning. Trailing template-only rows from each source page do not
-contribute to pagination; holes before or beside real product records retain
-their authored positions. Navigation, orders and footer positions reserve the
-same build-area height on every visible page, including a partially filled last
-page. A builder whose entire row sequence fits uses only that sequence's height.
-Additional orders remain above the normal bottom command
-buttons, preserving the Orders page's authored gap before that block.
+Generated placements retain `BUTTON + 4` record addressing [07 R-HUD-03 §6].
+The target must be an authored button marked as a product or an empty `IGPATCH`
+slot, including numeric artwork-family suffixes. There is no inferred six-slot
+capacity and command records cannot be overwritten. ProTA 4.8's authored GUI
+has a 128-pixel header origin with a 640-pixel canvas and mixed 16/32/64-pixel
+shipyard controls. TA Zero base with Alpha 5 authors twelve `IGPATCH3` slots
+and download records targeting the later slots. These are authored-content
+observations supporting the host layout; they make no claim about retail or
+third-party patch execution.
 
-Visible page numbering is presentation state, independent of the authored GUI
-page numbers and committed unit page bits. Page zero selects Orders while
-displaying the remembered visible build page. Positive pages select partitions
-of the row sequence; Count includes Orders. Arrow buttons cycle among visible
-build pages, comma/period also visit Orders, and digit d selects visible page
-d−1 if it exists. The existing SwitchAlt gate still chooses paging versus squad
-recall. BUILD returns to the remembered visible build page. These navigation
-actions update the view and its cue without submitting simulation commands.
+An oversized build page keeps its own fonts, artwork, controls and associations.
+Vertically intersecting product rectangles and artwork form an indivisible
+group, preserving unequal widths, heights and starting positions. The complete
+navigation and command block stays at the bottom, with authored spacing
+reserved between products and controls. Whole groups are partitioned into
+visible pages; trailing empty slots do not create pages. A partition never
+mixes different authored page scaffolds. The existing local sidebar pager owns
+navigation and resize anchoring, without changing the committed page state.
+Orders loads the authored side GEN or explicit custom unit-zero window and
+moves its complete button block below the minimap. Empty IGPATCH template slots
+are omitted from Orders; real product records retain their source, geometry
+and normal click behavior. During fitting, a textless, unbound button can be
+omitted only when its complete hit/art extent is covered by a later active
+product or empty product slot. Commands, navigation, captions, links, shortcuts
+and partially exposed controls are retained. This handles CORE's covered
+placeholder records without a side-name rule. BUTTONS0 extent uses only the
+selected size family's reachable states, not unrelated sizes in that GAF entry. Drawing, pointer activation, hover,
+and keyboard service share this geometry. Changing pages or size releases
+old retained pointer capture.
 
-Resizing repartitions the rows and selects the new page containing the previous
-first visible authored row. A changed builder or externally changed authored
-page seeds the view from that source page. Switching to Classic or disabling
-expansion discards this local state and restores ordinary authored paging.
-Layouts whose rows, navigation and bottom commands cannot be separated and
-combined safely retain the original single page.
+This fit supports button/font windows contained within the rail, with product
+and command blocks separable vertically. Unsupported widgets, a product group
+that cannot fit beside the complete command block, and oversized Orders blocks
+retain the original path; arbitrary GUIs are not promised. No source window,
+catalog, or committed frame is mutated. The synthetic overflow tests lock
+extended-slot safety, mixed groups, product reachability and resize anchoring.
+`TestRetailOversizedModMenus` optionally checks all installed commander products
+and Orders for every authored faction at 480, 768 and 1080 pixels under both renderer
+selections. Supply
+`NANOLATHE_MOD_ROOTS_PROTA` and `NANOLATHE_MOD_ROOTS_ZERO` as host path lists,
+with the usual retail asset variable; `NANOLATHE_MENU_SHOTS` saves HUD
+captures outside the repository.
 
-The mod boundary is explicit:
+#### Modern expanded sidebar
 
-| Authored by assets | Owned by engine code |
-|---|---|
-| `.GUI` gadget names, rectangles, activity, labels, shortcuts, associations and font choices | Command-window selection, command interpretation, retained pointer service and page navigation |
-| GAF button and panel artwork, including dimensions | Sidebar/minimap/world regions, screen-edge anchoring and modern block placement |
-| Side-data interface names, fonts, colours and readout anchors | Dynamic selection, command availability, queue counts and resource text |
-| Numbered GUI pages and download-menu placements | Resolving physical/generated windows and preserving their product identities |
+This is a user-approved host presentation policy, independent of the central
+Modern / Strict 3.1 gameplay rules. The Modern renderer with **Expanded sidebar**
+enabled uses a flat list of logical build cells. Classic and Expanded sidebar Off retain the
+authored layout, including the fitted oversized-page path above. The preference
+defaults on and retains its existing preview, Cancel, Undo, Restore and persistence
+behavior. World zoom does not change the available UI pixels.
 
-These responsibilities follow [02 §6], [07 §4], [07 §6] and
-[07 R-HUD-03 §6]. The extension uses resolved windows through the existing VFS;
-it neither replaces mod art nor derives pages by slicing the combined build
-membership list. Sparse and reordered download placements retain their authored
-slots. A layout the prototype cannot compose safely falls back to the original
-single-page UI; this is not a promise of support for arbitrary replacement GUIs.
-Adaptive rows require consistent row height and pitch, compatible column slots,
-and matching navigation/footer geometry across the source build pages. A row
-may omit a column or repeat a record without changing its placement. The first
-source page supplies the spacing skeleton even when a visible page starts on
-a shorter source page; each gadget still uses its own source art and font.
-In particular, the prototype accepts button/font pages with controls and art
-contained in the rail. Bounds include every artwork state's visible extent
-without changing the authored hit rectangle; a border wider than the button
-can still fit. Linked controls, editors, sliders, unsupported widget
-kinds and art that spills into the world retain the original UI. Definitions
-with a custom `<unit>0.GUI` also retain the original path: that pre-existing
-orders-page support is outside this prototype.
+Compile each builder's list once from resolved numbered GUI windows, after
+applying download placements. Read pages in authored page order and products in
+vertical then horizontal reading order, with stable source-record tie breaking.
+Real products on a custom page zero also belong to this list. Omit empty IGPATCH
+slots and inactive records; retain duplicate real entries and separate directional
+shipyard definitions. CANBUILD is an availability/placement contract, not a source
+of button identities: in particular a physical factory button may name a product
+that differs from CANBUILD. Do not reconstruct this list from membership or infer
+relationships from unit-name suffixes. Arbitrary building rotation is deferred.
 
-The composed window keeps source artwork and font lookup per gadget. Matching
-order groups share the single command latch; unrelated associations remain
-separate per source block. Only repeated semantic command
-and navigation controls are omitted; product records and empty slots are not
-deduplicated. Quickkeys retain source record precedence among displayed
-controls. The layout caches source definitions, surface, visible and authored
-page state, and the transport capability that chooses LOAD versus BLAST.
+Each list entry is one logical cell containing one or more product buttons.
+The host lays cells out in two columns of 64-by-64 squares in the 128-pixel rail
+below the minimap. A single product keeps the normalized presentation: its
+artwork is centered and fitted without distorting its aspect ratio.
 
-Drawing, hit testing, hover cards and retained pointer/keyboard service must
-share the composed geometry. Source-window identity must survive composition
-for font and artwork resolution. Resize, page/selection change and renderer
-switch must release stale pointer capture. No composed window may mutate cached
-source windows, committed frames, catalogs or simulation state.
+**Composite cells are an approved Modern presentation policy.** After download
+placements and art resolution, group multiple active, resolved products only
+when their positive hit rectangles completely tile a 64-by-64 square on the same
+source page, without overlap, crossing products, or artwork extending outside
+a child's rectangle. The candidate square starts at an authored child corner;
+if multiple possible tilings share any child, leave those products separate.
+Do not group merely because four nearby icons exist, and do not consult unit
+names, mod identities or gameplay relationships. Sparse, overlapping or otherwise ambiguous layouts retain individual normalized
+cells; duplicate product records are never removed. Empty slots
+are not products and cannot complete a composite. This conservative geometric
+rule recognizes ProTA's directional shipyard artwork without changing which
+unit any button builds. In the installed ProTA ARM and CORE commander menus,
+the resolved shipyard controls tile one square as two 16-by-64 side strips and
+two stacked 32-by-32 centre buttons; resolved art geometry matters because CORE's
+GUI text gives different initial dimensions for the side strips.
 
-Verification: authored synthetic layouts exercise translated activation,
-source identity, unsupported-shape fallback and capture changes; retail checks
-exercise physical and generated pages. GPU captures review the expanded rail
-and compare classic and short modern surfaces against their previous pixels.
-The row-paging checks include partial source pages, non-overlapping navigation,
-last-page behavior, resize anchoring and unchanged-frame persistence. GPU
-captures verify intermediate capacities and source artwork across page
-boundaries. Both options-panel captures fit the caption and Off/On control at
-640×480; transaction checks cover live preview, persistence, Cancel, Undo and
-Restore.
+A composite preserves each child's authored offset and size within the square.
+Keep its children in source record order for shortcut/widget precedence, and
+sort logical cells in source page and spatial reading order. Pagination never
+splits a composite. Every child retains its product identity, shortcut, help,
+source window, font, artwork, association and ordinary build action. Hit testing,
+hover, queue counts and drawing share each child's rectangle; there is no parent
+build action or new submenu. Source geometry still selects the original button
+art family. Availability remains a draw/input decision and never repaginates or
+regroups the list. Building rotation remains outside this policy.
 
-The row prototype's stock ARM captures show eight items at 1280×780, ten at
-1280×844, twelve at 1280×908 and eighteen at 1920×1080. Advancing the eight-item
-view shows the next eight records. A loose GUI override that swaps two build
-buttons retains that order across the source-page boundary. Classic at
-1920×1080 and short Modern at 640×480 match the pre-prototype baseline pixels.
-These sizes describe the checked stock layout, not fixed engine thresholds.
-The empty-page regression capture at 1280×844 verifies that Next wraps after
-the populated pages. At 1280×908, the first and partially filled final page
-render identical pixels throughout the navigation/orders/footer region.
+Reserve the complete command panel before allocating build rows. Commands remain
+visible on every local page, including Orders: normal commands occupy the bottom
+of the rail, supplementary Orders controls sit above them, and the build grid
+uses as many complete rows as fit above both. The Orders source is the custom
+unit-zero GUI when present, otherwise the ordinary side Orders GUI; it owns the
+common commands as well as its additional controls. Deduplicate matching named
+controls from the first numbered build page, adding its unique controls (usually
+page arrows) immediately above the Orders panel. Keep tabs below the minimap.
+Retain authored row gaps, bottom padding and the gaps around the page arrows
+and below the tabs, including artwork extents. On a surface too short for these
+gaps plus one build row, compress only the gaps proportionally, retaining at least
+one pixel in every positive gap. Preserve horizontal geometry, source record
+precedence and overlapping row geometry. Allocate all remaining complete build
+rows after reserving this spaced panel.
+All numbered sources must agree on command identities, stages and grouping so
+flattening cannot hide a later-page-only control. Compare retained numbered
+controls' shortcuts using the widget service's ASCII-only case equivalence;
+extended bytes remain exact. Shared named commands replaced by Orders use the
+Orders shortcut consistently, even if numbered pages author different keys (OTA's
+advanced aircraft plant authors Guard as `q` on one source and `g` on another).
+This canonical shortcut choice is Modern host policy; Classic keeps each source's
+own shortcut. No source records are rewritten. Shared commands
+connect source-local association groups; reject contradictory mappings rather
+than silently changing radio-button behavior. Source fonts and artwork survive
+composition. Unsafe widgets, incompatible scaffolds or panels that leave no
+complete build row retain the authored/fitted fallback. Different product sizes
+or sparse slots alone are not a fallback reason. Controls stay stationary across
+all pages, including the partial final page and Orders; hit regions and artwork
+must not overlap build cells.
 
-Frozen-frame GPU timing was unavailable during prototype verification: the
-baseline Metal profiling path failed on both attempts before the comparison
-reached this prototype.
+The row count is the number of complete 64-pixel cells that fit after reserving
+controls. Build-page count is the ceiling of logical cell count divided by cell capacity;
+there are no empty trailing pages or fixed per-builder item caps. Page zero is
+Orders, which continues to display the remembered build partition; positive
+pages select partitions of the list. The pager remains host state: arrows
+cycle build pages, comma/period also visit Orders, digit d selects visible page
+d-minus-one, and BUILD returns to the remembered build page. Existing SwitchAlt
+and squad behavior remains unchanged. These operations do not submit simulation
+commands or rewrite the committed authored page bits.
+
+On resize, show the new page containing the previous first visible product. A
+new builder, changed selection or external authored-page change seeds the view
+from that source page. Renderer/preference changes discard local paging state.
+Compile the immutable list independently of the composed-window cache so page
+changes and resizes do not re-extract all source pages. Source windows, catalogs
+and committed frames must not be mutated. Resize, selection/page changes and
+renderer/preference switches retire stale retained pointer capture.
+
+Verification covers ordered exact product coverage across physical and generated
+pages, empty slots, duplicates, mixed artwork dimensions, short and tall surfaces,
+resize anchoring, source identity, factory button identity, custom Orders,
+shared input/shortcuts, composite tiling ambiguity, indivisible child groups,
+fallback and capture retirement. Installed OTA, ProTA and
+Zero checks exercise all factions and visually inspect normalized products and
+controls. OTA coverage must also enter after the completed front-end transition
+and select every builder with authored product pages; testing only commanders or
+pre-transition windows masks retained shortcut differences. Classic and preference-Off use the existing layout tests. This is a
+host UI extension, not a promise to support arbitrary replacement command GUIs.
 
 ### 3.4 Screens, dispatch and preferences (C16…C18)
 

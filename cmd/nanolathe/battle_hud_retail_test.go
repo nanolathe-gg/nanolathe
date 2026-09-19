@@ -263,7 +263,7 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 		candidates := append([]string{gad.Name, gad.Text}, gad.Labels...)
 		buttonNames = append(buttonNames, candidates...)
 		for _, candidate := range candidates {
-			if !hud.ValidateBuildProduct(cat, content.CanonicalKey(commanderName), candidate) {
+			if !hud.BuildProductAllowed(cat, cur, candidate) {
 				continue
 			}
 			r := w.PlacedRect(i)

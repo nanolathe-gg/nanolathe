@@ -13,6 +13,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/ai"
 	"github.com/nanolathe-gg/nanolathe/internal/combat"
 	"github.com/nanolathe-gg/nanolathe/internal/construction"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/path"
@@ -380,6 +381,7 @@ func (s *Session) BindRules(set RuleSet) {
 	for player := range s.AI {
 		if s.AI[player] != nil {
 			s.AI[player].Planner = set.Planner
+			s.AI[player].ConstructionRules = set.Construction
 		}
 	}
 }
@@ -414,4 +416,12 @@ func (s *Session) unitLimitRules() UnitLimitRules {
 // caller selected.
 func unitLimitRulesForMode(mode gameplay.Mode) UnitLimitRules {
 	return RuleSetForMode(mode).UnitLimit
+}
+
+// buildProducts reads immutable membership through the bound construction rule.
+func (s *Session) buildProducts(builder string) []string {
+	if s == nil || s.Catalog == nil {
+		return nil
+	}
+	return construction.BuildProducts(s.Rules.Construction, s.Catalog.BuildMenus[content.CanonicalKey(builder)])
 }

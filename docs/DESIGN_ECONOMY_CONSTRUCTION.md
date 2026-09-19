@@ -1150,3 +1150,62 @@ still carry are these, each with the observation that would settle it:
 * How retail partitions a live-anchor overlap between two feature footprints;
   the stamper's dense-pack teardown and last-write-wins ordering is what the
   established stamp service states `[05 R-FEAT-01 §3]`.
+
+
+## Modern authored build membership
+
+**Nanolathe Modern policy (user-authorized September 18, 2026).** A builder
+may offer every resolved product authored in its CANBUILD and download records,
+without losing later entries to the retail download append cutoff. This is a
+shared content-driven rule, independent of mod names and content profiles.
+The motivating authored evidence is recorded in
+[Extended build menus](../research/extensions/build-menus.md). The patch's own
+replacement cutoff and duplicate semantics remain unknown; this policy does
+not claim to reproduce them.
+
+Strict 3.1 uses the unchanged compiled `BuildMenuPage.Buttons`: downloads append
+while the prior count is at most 30 [02 R-CAT-01 §8]. The compiler additionally
+retains `AuthoredButtons`, preserving base membership, resolved download order
+and duplicates, including records with omitted placement keys. Such records
+extend membership but do not gain a visible button: authored GUI files and
+explicit MENU/BUTTON placements still exclusively determine presentation.
+Unknown products, non-builder download recipients and unresolved builder names
+remain excluded by the existing compiler. No capacity, weighting rule, name
+suffix filter or fabricated product is inferred from a patch.
+
+`construction.Rules.BuildProducts` borrows one immutable list: Strict selects
+`Buttons`, Modern selects `AuthoredButtons`, with `Buttons` as the fallback
+for hand-built catalogs without retained authored data. Nil rules remain
+Strict. This extends the existing construction seam and the same session
+RuleSet; no parallel selector exists. AI managers inherit that construction
+rule during binding, rebinding and creation. Mobile placement admission, resource
+shortcuts and structure-button availability use `CommandPage.AllowedProducts`, a committed
+copy of the selected builder's complete list; page-local products remain separate.
+Mission restrictions prune both lists in the session catalog copy.
+
+The decision itself allocates nothing and consumes no resources or RNG. AI
+selection retains authored duplicates and may consequently choose different
+products or consume different later draws when the extended list changes its
+candidates; this is an intended downstream Modern effect. Ordinary resource
+costs, order insertion, placement and construction execution remain shared.
+The placement producer validates against its committed rule-selected list.
+Already queued commands retain their captured product across a rule switch;
+the authoritative drain does not add a CANBUILD whitelist [04 R-ORD-02 §1].
+Factory queue products retain the resolved
+installed GUI identity [07 §9][07 R-P0-11 §1]; CANBUILD is not their admission
+whitelist. The stock seaplane platform's GUI names ARMCSA while CANBUILD names
+ARMCA, and both ordinary and fitted menus must preserve the former on click.
+Do not add physical GUI products to AI candidate lists to conceal this distinction.
+Switching rules changes future published placement admission and AI candidates;
+queued commands and construction orders are not canceled or rewritten. Catalogs are never mutated
+by binding, and no new save state is introduced. As with other rules, saves
+currently use the host-selected rules on restore.
+
+Verification: a repeated download prefix fills the retail list before a visible
+factory; the complete authored list retains that factory. Tests preserve the
+Strict cutoff, duplicate order, allocation-free dispatch, independent catalog
+clones, campaign restrictions, snapshot ownership and both directions of rule
+rebinding for human/AI consumers without immediate RNG or stock changes.
+Installed-mod GUI checks must also activate a factory and submit a legal build
+placement, because catalog and simulation-only smoke tests cannot establish
+that a menu is usable.

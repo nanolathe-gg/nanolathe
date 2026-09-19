@@ -18,9 +18,12 @@ import (
 // authored; consumers compare case-insensitively via CanonicalKey.
 type BuildMenuPage struct {
 	DefinitionHeader
-	Builder         string   // the CANBUILD child-section name, verbatim
-	Buttons         []string // final authoritative products: base first, downloads appended [02 R-CAT-01 §8]
-	BaseButtonCount int      // prefix authored by CANBUILD before download extension [02 R-CAT-01 §5,§8]
+	Builder string   // the CANBUILD child-section name, verbatim
+	Buttons []string // final authoritative products: base first, downloads appended [02 R-CAT-01 §8]
+	// AuthoredButtons retains the complete resolved membership before the retail
+	// download cutoff. Rules select it without mutating this immutable catalog.
+	AuthoredButtons []string
+	BaseButtonCount int // prefix authored by CANBUILD before download extension [02 R-CAT-01 §5,§8]
 }
 
 // BaseButtons returns a copy of the CANBUILD-authored prefix. Generated pages

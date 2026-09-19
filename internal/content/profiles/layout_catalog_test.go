@@ -143,7 +143,7 @@ func mountArchive(t *testing.T, name string, files []vfs.ArchiveFile) *vfs.FS {
 // TestRenamedTreesCompileToTheRetailCatalogHash is the contract E1 exists for:
 // the catalog is a function of the definitions, not of the directories they
 // were shipped in. It also locks detection — the renamed install presents TA:
-// Escalation's two markers and must be recognised as that profile — and the
+// Escalation's complete directory layout without an archive-name marker — and the
 // provenance rule, because a logical path that leaked a mod directory name
 // would reach every diagnostic and every manifest built from it.
 func TestRenamedTreesCompileToTheRetailCatalogHash(t *testing.T) {
@@ -157,10 +157,9 @@ func TestRenamedTreesCompileToTheRetailCatalogHash(t *testing.T) {
 	if err != nil {
 		t.Fatalf("look up the escalation profile: %v", err)
 	}
-	// The marker file sits beside the renamed trees, as the content set ships
-	// it; the renamed `unitsE` tree is the second marker.
-	renamedFS := mountArchive(t, "authored-renamed.hpi", renameTrees(retail, escalation.Directories,
-		vfs.ArchiveFile{Path: "TAESC.gp3", Data: []byte("authored fixture marker\n")}))
+	// Only logical content proves the layout; the archive's arbitrary host
+	// filename is deliberately different from the original distribution.
+	renamedFS := mountArchive(t, "authored-renamed.hpi", renameTrees(retail, escalation.Directories))
 
 	detected, err := profiles.Detect(renamedFS)
 	if err != nil {

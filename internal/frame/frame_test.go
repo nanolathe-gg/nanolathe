@@ -134,15 +134,19 @@ func TestFrameResetRetainsNestedCapacities(t *testing.T) {
 
 func TestFrameResetClearsGeneratedProductReferences(t *testing.T) {
 	f := Frame{CommandPage: CommandPageView{
-		ProductKeys: []string{"base", "download"},
+		ProductKeys:     []string{"base", "download"},
+		AllowedProducts: []string{"base", "download", "overflow"},
 		GeneratedProducts: []GeneratedProductPlacement{{
 			ProductKey: "download",
 			Button:     4,
 		}},
 	}}
 	f.Reset()
-	if len(f.CommandPage.ProductKeys) != 0 || len(f.CommandPage.GeneratedProducts) != 0 {
+	if len(f.CommandPage.ProductKeys) != 0 || len(f.CommandPage.GeneratedProducts) != 0 || len(f.CommandPage.AllowedProducts) != 0 {
 		t.Fatalf("reset command page = %+v, want empty slices", f.CommandPage)
+	}
+	if f.CommandPage.AllowedProducts[:1][0] != "" {
+		t.Fatal("reset retained allowed product reference")
 	}
 	if got := f.CommandPage.GeneratedProducts[:1][0]; got.ProductKey != "" || got.Button != 0 {
 		t.Fatalf("reset retained generated placement reference: %+v", got)

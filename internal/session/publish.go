@@ -421,6 +421,12 @@ func (s *Session) publishSnapshot(tick uint32) {
 				// be told to build a round.
 				pageCount := hud.BuilderPageCount(u.Def)
 				published.CommandPage.Builder = u.Handle
+				// A nonnil empty slice is an authoritative empty list. Nil is
+				// reserved for older hand-built presentation fixtures.
+				if published.CommandPage.AllowedProducts == nil {
+					published.CommandPage.AllowedProducts = make([]string, 0)
+				}
+				published.CommandPage.AllowedProducts = append(published.CommandPage.AllowedProducts, s.buildProducts(u.Def.CanonicalKey)...)
 				const buttonsPerPage = hud.RetailBuildButtonsPerPage // authored build rail page [07 §9]
 				// Page 0 is the orders state, not a build page: the count is
 				// the definition's page-count byte, compiled from the

@@ -36,6 +36,8 @@ func resourceFixture(t *testing.T, deposit bool) (*battleSession, *client.Client
 		b.cat.Units[item.key] = &u
 	}
 	b.cat.BuildMenus["armcons"].Buttons = []string{"armsolar", "extractor", "advanced"}
+	// Membership is published; update the fixture through a tick.
+	b.sess.Step(b.sess.Clock.ScaledAnchor + 1)
 	if deposit {
 		fd := &content.FeatureDef{FootprintX: 3, FootprintZ: 3, Metal: 100, Indestructible: true}
 		fd.CanonicalKey = "deposit"
@@ -155,6 +157,8 @@ func TestResourceDepositCentersBothExtractorSizes(t *testing.T) {
 			wantCell := int32(19)
 			if !advanced {
 				b.cat.BuildMenus["armcons"].Buttons = []string{"armsolar", "extractor"}
+				// Membership is published; update the fixture through a tick.
+				b.sess.Step(b.sess.Clock.ScaledAnchor + 1)
 				product = "extractor"
 				wantCell = 20
 			}
@@ -180,6 +184,8 @@ func TestResourceFoggedDepositNeverFallsBackToSolar(t *testing.T) {
 		t.Run("product="+product, func(t *testing.T) {
 			b, cl, ms, _ := resourceFixture(t, true)
 			b.cat.BuildMenus["armcons"].Buttons = []string{"armsolar", product}
+			// Membership is published; update the fixture through a tick.
+			b.sess.Step(b.sess.Clock.ScaledAnchor + 1)
 			cur, _ := b.currentSnapshot()
 			written := b.sess.Snapshot.BeginWrite()
 			*written = *cur
@@ -322,6 +328,8 @@ func TestResourceClassificationAvoidsOtherProducers(t *testing.T) {
 	u.SoundCategory = "METAL"
 	b.cat.Units[u.CanonicalKey] = &u
 	b.cat.BuildMenus["armcons"].Buttons = []string{"fabricator"}
+	// Membership is published; update the fixture through a tick.
+	b.sess.Step(b.sess.Clock.ScaledAnchor + 1)
 	mex, sun, _ := b.resourceProducts("armcons")
 	if mex != nil || sun != nil {
 		t.Fatal("fabricator accepted")

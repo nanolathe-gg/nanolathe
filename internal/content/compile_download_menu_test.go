@@ -211,3 +211,32 @@ func TestDownloadMenusPreserveFallbackReadDirOrder(t *testing.T) {
 		t.Fatalf("fallback ReadDir order was changed: %#v", placements)
 	}
 }
+
+// A hidden (missing MENU/BUTTON) repeated prefix must not erase authored
+// player products. Retail membership stays capped at the established boundary.
+func TestDownloadMembershipRetainsOverflowForRules(t *testing.T) {
+	units := map[string]*UnitDef{"builder": testUnit("builder", true, 2), "ai": testUnit("ai", false, 0), "factory": testUnit("factory", true, 2)}
+	menus := map[string]*BuildMenuPage{}
+	var placements []DownloadMenuPlacement
+	for i := 0; i < 32; i++ {
+		placements = append(placements, DownloadMenuPlacement{Builder: "builder", Product: "ai", BuilderResolved: true, ProductResolved: true, ItemOrder: i})
+	}
+	placements = append(placements, DownloadMenuPlacement{Builder: "builder", Product: "factory", Menu: 2, Button: 9, BuilderResolved: true, ProductResolved: true, ItemOrder: 32})
+	ApplyDownloadMenus(units, menus, placements)
+	menu := menus["builder"]
+	if len(menu.Buttons) != 31 || len(menu.AuthoredButtons) != 33 || menu.AuthoredButtons[32] != "factory" {
+		t.Fatalf("retail=%v authored=%v", menu.Buttons, menu.AuthoredButtons)
+	}
+	clone := (&Catalog{BuildMenus: menus}).Clone()
+	clone.BuildMenus["builder"].AuthoredButtons[32] = "changed"
+	if menu.AuthoredButtons[32] != "factory" {
+		t.Fatal("catalog clone aliases authored membership")
+	}
+}
+
+func TestBuildMenuClonePreservesExplicitEmptyAuthoredList(t *testing.T) {
+	cat := &Catalog{BuildMenus: map[string]*BuildMenuPage{"builder": {Buttons: []string{"retail"}, AuthoredButtons: []string{}}}}
+	if cat.Clone().BuildMenus["builder"].AuthoredButtons == nil {
+		t.Fatal("clone changed explicit empty membership to legacy fallback")
+	}
+}

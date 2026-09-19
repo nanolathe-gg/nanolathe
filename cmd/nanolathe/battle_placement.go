@@ -183,7 +183,7 @@ func (b *battleSession) commitBuild(queued bool) bool {
 	if !found || b.sess == nil || v.Owner != b.sess.LocalOwner || !b.snapshotBuilder(v) {
 		return false
 	}
-	if b.cat != nil && !hud.ValidateBuildProduct(b.cat, v.DefName, b.battleState().Input.BuildDef) {
+	if b.cat != nil && !hud.BuildProductAllowed(b.cat, frame, b.battleState().Input.BuildDef) {
 		return false // GUI may not invent products absent from authored list [R-P0-03]
 	}
 	if !b.battleState().Input.BuildOK {

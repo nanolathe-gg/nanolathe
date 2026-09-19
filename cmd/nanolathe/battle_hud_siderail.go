@@ -51,16 +51,27 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, f *fr
 			continue
 		}
 		grey := gad.GrayedOut&1 != 0 || command.grey
+		artGadget := gad
+		flatProduct := window == h.expandedSidebar.window && h.expandedSidebar.key.flat && gad.CommonAttribs&4 != 0
+		if flatProduct {
+			source := h.expandedSidebar.sources[i]
+			artGadget.Rect = source.window.Gadgets[source.index].Rect
+		}
 		var frameArt *formats.GAFFrame
 		if isCommand {
 			frameArt = commandButtonFrame(h.gadgetArtEntry(gad, sourceArt), gad, command.stage, grey, down != 0)
 		} else {
-			frameArt = h.gadgetButtonFrame(gad, sourceArt, down, stage, grey)
+			frameArt = h.gadgetButtonFrame(artGadget, sourceArt, down, stage, grey)
 		}
 		if frameArt != nil {
 			// .GUI controls use the authored rectangle origin; unlike the PANEL
 			// shell, their GAF offsets are not applied [07 §4].
-			c.UIBlit(frameArt, int(r.X), int(r.Y))
+			if flatProduct {
+				fit := sidebarFittedArtRect(r, frameArt)
+				c.UIBlitFrameScaledClipped(frameArt, int(fit.X), int(fit.Y), int(fit.W), int(fit.H), int(r.X), int(r.Y), int(r.W), int(r.H))
+			} else {
+				c.UIBlit(frameArt, int(r.X), int(r.Y))
+			}
 		} else if gad.Kind == gui.KindButton {
 			v := retailButtonVerdict(gad, 0, int(gad.ArtFrame), down, command.stage, grey)
 			drawGUIBevel(c, r, h.guiColor(v.top), h.guiColor(v.bot), h.guiColor(v.fill))

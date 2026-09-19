@@ -28,6 +28,7 @@ import (
 type retailBattleHUD struct {
 	expandedSidebar expandedSidebarLayout
 	sidebarPaging   sidebarRowPaging
+	sidebarProducts map[sidebarProductCatalogKey]*sidebarProductCatalog
 
 	commandWindowInput commandWindowInputState
 	// palettePanels retain the generic widget state per selected command-window
