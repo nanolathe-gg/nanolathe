@@ -37,6 +37,14 @@ func initializeBattleAI(s *Session, player uint8, profile *ai.Profile, sessionKi
 		Catalog:         s.Catalog,
 		SurfaceMetal:    surfaceMetal,
 		MissionGateFlag: int32(sessionKind),
+		// The bound rule set's think step, taken here because a manager may
+		// be constructed after the set was bound — this path serves a
+		// restored battle as well as a fresh one. Session.BindRules projects
+		// onto the managers that already exist, so the two directions agree
+		// and a rebind is idempotent. An unbound session leaves this nil,
+		// which the manager reads as the retail step
+		// (docs/DESIGN_GAMEPLAY_RULES.md "The computer player's think step").
+		Planner: s.Rules.Planner,
 	}
 	// Bind before Strategic.Init so the construction-time class vectors and
 	// every later gated refresh use the same live battle inputs. At battle

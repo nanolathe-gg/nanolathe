@@ -6,12 +6,17 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nanolathe-gg/nanolathe/internal/ai"
 	"github.com/nanolathe-gg/nanolathe/internal/clock"
 	"github.com/nanolathe-gg/nanolathe/internal/combat"
 	"github.com/nanolathe-gg/nanolathe/internal/construction"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/economy"
 	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
+	"github.com/nanolathe-gg/nanolathe/internal/mission"
+	"github.com/nanolathe-gg/nanolathe/internal/movement"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
+	"github.com/nanolathe-gg/nanolathe/internal/path"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
@@ -82,7 +87,7 @@ func TestReservedRuleSetsMatchTheModeVocabulary(t *testing.T) {
 // binding composed before the switch. An unbound session answers Strict at the
 // order seam, which is the fallback a reconstructed queue relies on.
 func TestBindRulesProjectsEverySeam(t *testing.T) {
-	s := &Session{Combat: &combat.Service{}, Build: &construction.Service{OrderBinding: &orders.QueueBinding{}}}
+	s := &Session{Combat: &combat.Service{}, Build: &construction.Service{OrderBinding: &orders.QueueBinding{}}, Movement: &movement.System{}}
 	if _, strict := s.orderRules().(orders.StrictRules); !strict {
 		t.Fatal("an unbound session must answer Strict at the order seam")
 	}
@@ -94,9 +99,67 @@ func TestBindRulesProjectsEverySeam(t *testing.T) {
 		if s.Combat.Rules != set.Combat || s.Build.Rules != set.Construction || s.Build.OrderBinding.Rules != set.Orders {
 			t.Fatalf("%s did not reach every service", set.Name)
 		}
+		if s.Movement.Kernel != set.Path {
+			t.Fatalf("%s did not reach the movement search kernel", set.Name)
+		}
 		if s.orderRules() != set.Orders || s.unitLimitRules() != set.UnitLimit {
 			t.Fatalf("%s accessors did not read the bound set", set.Name)
 		}
+	}
+}
+
+// Both reserved sets bind the retail search kernel: no approved Modern policy
+// changes how a route is found, and the scheduler owns when one publishes
+// (docs/DESIGN_GAMEPLAY_RULES.md "The seams"). A Modern kernel would be a
+// behaviour change with its own contract, so this test is what makes adding
+// one a deliberate edit rather than a silent one.
+func TestReservedRuleSetsBindTheRetailSearchKernel(t *testing.T) {
+	for _, set := range reservedRuleSets() {
+		if _, retail := set.Path.(path.RetailKernel); !retail {
+			t.Fatalf("%s bound search kernel %T, want the retail kernel", set.Name, set.Path)
+		}
+	}
+}
+
+// The composer projects the path seam onto the movement system it creates, so
+// a composed session searches with its rule set's kernel rather than the
+// package fallback. The projection has to survive the order the composer
+// builds in: the movement system is created after the first rule-set
+// selection, so only the re-projection at the end of composition can reach it.
+func TestCompositionProjectsTheSearchKernelOntoMovement(t *testing.T) {
+	cat := &content.Catalog{
+		Units:    map[string]*content.UnitDef{"armflea": {UnitName: "armflea", MaxDamage: 100, FootprintX: 1, FootprintZ: 1, MaxVelocity: 65536, TurnRate: 100}},
+		Sides:    []*content.SideDef{{Commander: "armflea"}},
+		Maps:     map[string]*content.MapHeader{},
+		Movement: map[string]*content.MovementClass{},
+		Features: map[string]*content.FeatureDef{},
+	}
+	terrain := &world.Terrain{CellW: 20, CellH: 20, Plot: make([]world.PlotCell, 400)}
+	for i := range terrain.Plot {
+		terrain.Plot[i].SetFeature(world.PlotFeatureNone)
+		terrain.Plot[i].SetHeight(10)
+		terrain.Plot[i].SetMinHeight(10)
+		terrain.Plot[i].SetMaxHeight(10)
+	}
+	terrain.ApplySchema(nil, 0)
+	w, err := newSlicedWorld(cat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Session{
+		Catalog: cat,
+		World:   terrain,
+		Units:   w,
+		Mission: &mission.Mission{Type: mission.TypeSkirmish, TerrainKey: "test", Schema: mission.Schema{Name: "test"}},
+	}
+	if err := createAndBindServicesForTest(t, s); err != nil {
+		t.Fatalf("createAndBindServices: %v", err)
+	}
+	if s.Movement == nil {
+		t.Fatal("composition created no movement system")
+	}
+	if s.Movement.Kernel == nil || s.Movement.Kernel != s.Rules.Path {
+		t.Fatalf("movement holds kernel %T, the bound set holds %T", s.Movement.Kernel, s.Rules.Path)
 	}
 }
 
@@ -137,6 +200,43 @@ func TestBoundRuleDispatchDoesNotAllocate(t *testing.T) {
 				t.Fatal("Modern answered false for a held shooter; the measured dispatch was elided")
 			}
 		})
+	}
+}
+
+// The computer player's think step reaches every manager the session owns,
+// and both reserved sets bind the retail step: no Modern planner exists, and a
+// replacement would change the simulation stream's call order and therefore
+// the whole battle, so it needs its own approved policy first
+// (docs/DESIGN_GAMEPLAY_RULES.md "The computer player's think step").
+//
+// The walk is player-indexed with nil holes, so a session with only two
+// computer players is the shape to bind against.
+func TestBindRulesProjectsThePlannerOntoEveryComputerPlayer(t *testing.T) {
+	s := &Session{Combat: &combat.Service{}, Build: &construction.Service{OrderBinding: &orders.QueueBinding{}}}
+	s.AI[0] = &ai.Manager{Player: 0}
+	s.AI[3] = &ai.Manager{Player: 3}
+	for _, set := range reservedRuleSets() {
+		if _, retail := set.Planner.(ai.RetailPlanner); !retail {
+			t.Fatalf("%s binds planner %T; both reserved sets run the retail step", set.Name, set.Planner)
+		}
+		s.BindRules(set)
+		for player, mgr := range s.AI {
+			if mgr == nil {
+				continue
+			}
+			if mgr.Planner != set.Planner {
+				t.Fatalf("%s did not reach the computer player in slot %d", set.Name, player)
+			}
+		}
+	}
+	// One indirect call per player per tick and nothing else. The gate the
+	// economy record closes is the argument shape that makes the retail step
+	// return without work, so what is measured is the dispatch.
+	var econ economy.Service
+	econ.Players[0].Exists = true
+	mgr := s.AI[0]
+	if allocs := testing.AllocsPerRun(200, func() { mgr.Tick(100, nil, &econ) }); allocs != 0 {
+		t.Fatalf("the projected think step allocated %v per dispatch", allocs)
 	}
 }
 
@@ -241,6 +341,8 @@ func TestLookupRuleSetBuildsOnceAndCompletesFromItsBase(t *testing.T) {
 		{name: "Combat", got: first.Combat, want: modern.Combat},
 		{name: "Construction", got: first.Construction, want: modern.Construction},
 		{name: "UnitLimit", got: first.UnitLimit, want: modern.UnitLimit},
+		{name: "Path", got: first.Path, want: modern.Path},
+		{name: "Planner", got: first.Planner, want: modern.Planner},
 		{name: "Orders", got: first.Orders, want: modern.Orders, overridden: true},
 	} {
 		same := reflect.TypeOf(seam.got) == reflect.TypeOf(seam.want)

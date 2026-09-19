@@ -465,6 +465,12 @@ unbound manager keeps an empty rally vector rather than granting omniscient
 target knowledge, and infers no hostility from ownership or side identity
 `[08 R-AI-01 §9]` `[08 R-AI-01 §19]`.
 
+What the manager *does* with that state on a dispatched tick is selected by the
+session's bound rule set: `ai.Planner` is the think step `Manager.Tick`
+dispatches, both reserved sets bind the retail one, and the manager keeps
+owning its state, its save and its restore either way
+([DESIGN_GAMEPLAY_RULES](DESIGN_GAMEPLAY_RULES.md#the-computer-players-think-step)).
+
 `TaskKind` is the ten-slot task vector and its order is load-bearing. Slot 0
 holds no task object at all — the dispatcher's null test skips it — while slot
 5 holds a real object of the null task class whose body returns immediately but

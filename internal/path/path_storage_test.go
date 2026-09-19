@@ -78,7 +78,7 @@ func TestPathStorageBehaviorFingerprint(t *testing.T) {
 	for _, sc := range pathStorageScenarios() {
 		t.Run(sc.name, func(t *testing.T) {
 			cfg := storageConfig(sc, sc.pass)
-			one := Search(cfg)
+			one := RunSearch(cfg)
 			s := NewSession(cfg)
 			for !s.IsDone() {
 				before := s.Popped()
@@ -114,7 +114,7 @@ func TestPathStorageNoSimulationRandomDraws(t *testing.T) {
 	rng.SeedGlobal(7, 11)
 	state, draws := rng.Global.Sim.State, rng.Global.Sim.Draws()
 	sc := pathStorageScenarios()[2]
-	_ = Search(storageConfig(sc, sc.pass))
+	_ = RunSearch(storageConfig(sc, sc.pass))
 	if rng.Global.Sim.State != state || rng.Global.Sim.Draws() != draws {
 		t.Fatalf("path search advanced the simulation stream: state %#x -> %#x, draws %d -> %d", state, rng.Global.Sim.State, draws, rng.Global.Sim.Draws())
 	}
@@ -126,7 +126,7 @@ func BenchmarkPathStorage(b *testing.B) {
 			cfg := storageConfig(sc, sc.pass)
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				_ = Search(cfg)
+				_ = RunSearch(cfg)
 			}
 		})
 	}

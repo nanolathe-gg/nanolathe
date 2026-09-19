@@ -10,10 +10,12 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/nanolathe-gg/nanolathe/internal/ai"
 	"github.com/nanolathe-gg/nanolathe/internal/combat"
 	"github.com/nanolathe-gg/nanolathe/internal/construction"
 	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
+	"github.com/nanolathe-gg/nanolathe/internal/path"
 )
 
 // RuleSet bundles one implementation per gameplay seam. It is bound once at
@@ -44,6 +46,19 @@ type RuleSet struct {
 	Orders       orders.Rules
 	Construction construction.Rules
 	UnitLimit    UnitLimitRules
+	// Path is the search kernel one route request is opened with. It is a
+	// whole-subsystem seam rather than a policy one: it decides how a route
+	// is found, while the scheduler keeps admission order, the per-player
+	// step allowance and the publication boundary, so a replacement cannot
+	// move when a route becomes visible. Both reserved sets bind the retail
+	// kernel; there is no Modern kernel yet.
+	Path path.Kernel
+	// Planner is the computer player's per-tick think step, projected onto
+	// every manager this session owns. The retail manager keeps owning its
+	// own state, its save and its restore; this seam is only the decision it
+	// makes with that state on a dispatched tick (docs/DESIGN_GAMEPLAY_RULES.md
+	// "The computer player's think step").
+	Planner ai.Planner
 }
 
 // UnitLimitRules is the save/restore unit-limit policy seam
@@ -109,6 +124,8 @@ func StrictRuleSet() RuleSet {
 		Orders:       orders.StrictRules{},
 		Construction: construction.StrictRules{},
 		UnitLimit:    StrictUnitLimit{},
+		Path:         path.RetailKernel{},
+		Planner:      ai.RetailPlanner{},
 	}
 }
 
@@ -124,6 +141,14 @@ func ModernRuleSet() RuleSet {
 		Orders:       &orders.ModernRules{},
 		Construction: &construction.ModernRules{},
 		UnitLimit:    ModernUnitLimit{},
+		// The retail search is what Modern means for pathfinding too: no
+		// approved Modern policy touches how a route is found.
+		Path: path.RetailKernel{},
+		// The retail step, because no Modern planner exists: a replacement
+		// would change the simulation stream's call order and therefore the
+		// whole battle, so it needs its own approved policy and its own
+		// contract before it can be the default [I11].
+		Planner: ai.RetailPlanner{},
 	}
 }
 
@@ -252,6 +277,12 @@ func completeRuleSet(name string, set RuleSet) RuleSet {
 	if set.UnitLimit == nil {
 		set.UnitLimit = base.UnitLimit
 	}
+	if set.Path == nil {
+		set.Path = base.Path
+	}
+	if set.Planner == nil {
+		set.Planner = base.Planner
+	}
 	return set
 }
 
@@ -336,6 +367,19 @@ func (s *Session) BindRules(set RuleSet) {
 		s.Build.Rules = set.Construction
 		if s.Build.OrderBinding != nil {
 			s.Build.OrderBinding.Rules = set.Orders
+		}
+	}
+	if s.Movement != nil {
+		s.Movement.Kernel = set.Path
+	}
+	// The computer players are player-indexed with nil holes, so this is a
+	// direct indexed walk and never a map range [RS-02][I1]. A manager
+	// composed after the binding takes the same field from the bound set at
+	// construction (initializeBattleAI), which is what makes re-projection
+	// idempotent here.
+	for player := range s.AI {
+		if s.AI[player] != nil {
+			s.AI[player].Planner = set.Planner
 		}
 	}
 }

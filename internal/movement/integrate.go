@@ -59,6 +59,20 @@ type System struct {
 	Grid      *OccupancyGrid
 	Scheduler *path.Scheduler
 
+	// Kernel opens the resumable search behind one admitted path request. It
+	// is the path seam of the session's gameplay rule set
+	// (docs/DESIGN_GAMEPLAY_RULES.md): bound once, outside any tick, and
+	// asked once per request rather than once per expanded node. Nil means
+	// the retail kernel, which is what both reserved rule sets bind, so a
+	// fixture or a system reconstructed by a restore searches the way retail
+	// does [04 §7.2].
+	//
+	// The scheduler above owns everything the kernel does not: admission
+	// order, the per-player step allowance [04 R-PATH-01 §10] and the
+	// full-or-empty publication boundary [04 §7.3]. A replacement kernel may
+	// change how a route is found, never when one publishes.
+	Kernel path.Kernel
+
 	// airLegHandler is runAirOrderLeg bound once. The session re-registers
 	// every unit's owned rows on every visit, and a method value taken at
 	// that site is a fresh heap closure per unit per tick; the bound value
@@ -200,7 +214,10 @@ func (s *System) dropPathSession(idx int) {
 	if s == nil || idx < 0 || idx >= len(s.sessions) {
 		return
 	}
-	if ws := s.sessions[idx]; ws != nil {
+	// The working set holds the search through the kernel's interface, so the
+	// nil test is on the interface rather than on a typed pointer: a nil
+	// interface has no method to call.
+	if ws := s.sessions[idx]; ws != nil && ws.session != nil {
 		ws.session.Release()
 	}
 	s.sessions[idx] = nil
@@ -415,7 +432,7 @@ type PathFailure struct {
 // owning request is therefore identified by its goal object and its activation
 // token, which is what a replan or a queue-head replacement changes.
 type pathWorkingSet struct {
-	session    *path.Session
+	session    path.Search
 	goal       path.Goal
 	activation uint64
 }
@@ -2455,10 +2472,22 @@ func (s *System) headingFor(h pool.Handle) uint16 {
 	return 0
 }
 
-// searchFunc is the injected SearchFunc bound to path.Search with profile passability
-// over System.Terrain and occupancy. It honors the 100-pops-per-request-per-call
-// budget and full-or-empty publication [04 §7.3] C11 C12 via a resumable Session
-// per unit held in deterministic slice storage indexed by handle [I1].
+// pathKernel is the kernel searches are opened with. An unbound Kernel is the
+// retail one: the zero-size literal converts to the interface without
+// allocating, so the fallback costs nothing a bound field would not
+// (docs/DESIGN_GAMEPLAY_RULES.md §3).
+func (s *System) pathKernel() path.Kernel {
+	if s == nil || s.Kernel == nil {
+		return path.RetailKernel{}
+	}
+	return s.Kernel
+}
+
+// searchFunc is the injected SearchFunc that binds profile passability over
+// System.Terrain and occupancy to the search the bound kernel opens. It honors
+// the 100-pops-per-request-per-call budget and full-or-empty publication
+// [04 §7.3] C11 C12 via a resumable search per unit held in deterministic
+// slice storage indexed by handle [I1].
 func (s *System) searchFunc(r path.Request, scale int32, budget int) path.WorkResult {
 	if s == nil {
 		return path.WorkResult{Status: path.StatusRejected, Done: true}
@@ -2477,7 +2506,7 @@ func (s *System) searchFunc(r path.Request, scale int32, budget int) path.WorkRe
 	}
 	ws := handleRow(s.sessions, idx)
 	needsNew := ws == nil || ws.session == nil || ws.goal != r.Goal || ws.activation != r.Activation
-	var sess *path.Session
+	var sess path.Search
 	if !needsNew {
 		sess = ws.session
 	}
@@ -2591,7 +2620,11 @@ func (s *System) searchFunc(r path.Request, scale int32, budget int) path.WorkRe
 		// it, so a goal or activation change does not leave it lent.
 		s.dropPathSession(idx)
 		cfg.Workspace = s.Scheduler.Workspace()
-		sess = path.NewSession(cfg)
+		// The bound kernel opens the search. This is the one place a request
+		// chooses a search implementation, and it is reached once per
+		// request — the resumption below and every node it expands stay
+		// inside the opened search.
+		sess = s.pathKernel().NewSession(cfg)
 		setHandleRow(&s.sessions, idx, &pathWorkingSet{session: sess, goal: r.Goal, activation: r.Activation})
 		// Request setup reports its established 0x100/0x200 notification to
 		// the goal object's owning order even when search work continues. These

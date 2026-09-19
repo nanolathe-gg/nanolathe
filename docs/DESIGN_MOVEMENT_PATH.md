@@ -178,6 +178,20 @@ greedy forward walk with its alternating two-sided wall follow; its only product
 is the acceptance threshold and the connect flag `[04 R-PATH-01 §5]`
 `[04 R-PATH-01 §15]`.
 
+**The search kernel** (`kernel.go`). `Kernel` opens one request's search and
+`Search` is that resumable object behind its interface, so this is the only
+place a request chooses a search implementation. The movement system holds the
+bound kernel on `System.Kernel` and asks it once per admitted request — never
+once per budget slice and never once per expanded node. **The kernel is
+selected by the session's gameplay rule set** (`RuleSet.Path`, see
+[DESIGN_GAMEPLAY_RULES](DESIGN_GAMEPLAY_RULES.md#the-path-search-kernel)),
+which binds it at composition and at the phase-1 command boundary; both
+reserved sets bind `RetailKernel`, the search described above, and a system
+with no kernel bound searches the same way. The scheduler keeps admission
+order, the per-player step allowance `[04 R-PATH-01 §10]` and the full-or-empty
+publication boundary `[04 §7.3]`, so a replacement kernel may change how a
+route is found and never when one publishes.
+
 **The scheduler** (`queue.go`). `Scheduler` holds one active request at a time,
 and it also owns the search's per-cell `Workspace`. That ownership is the point:
 a generation-stamped table is shared storage, and the scheduler is what decides

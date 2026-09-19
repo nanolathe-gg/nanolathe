@@ -4,7 +4,7 @@ import "testing"
 
 func TestReconciliationDirectRayAndRoute(t *testing.T) {
 	cfg := SearchConfig{Start: Cell{}, Goal: PointGoal(Cell{4, 0}, 0), PassableValue: func(Cell) uint8 { return 3 }, Scale: 65536, FootPrintX: 2, FootPrintZ: 4}
-	r := Search(cfg)
+	r := RunSearch(cfg)
 	if r.Status != 0 || len(r.Points) == 0 || r.Notified != StatusAlreadySatisfied {
 		t.Fatalf("direct route status=%#x notified=%#x pops=%d seeded=%v points=%v", r.Status, r.Notified, r.Popped, r.Seeded, r.Points)
 	}
@@ -14,7 +14,7 @@ func TestReconciliationDirectRayAndRoute(t *testing.T) {
 }
 
 func TestReconciliationRayChargeIsExposed(t *testing.T) {
-	r := Search(SearchConfig{Goal: PointGoal(Cell{4, 0}, 0), PassableValue: func(Cell) uint8 { return 3 }})
+	r := RunSearch(SearchConfig{Goal: PointGoal(Cell{4, 0}, 0), PassableValue: func(Cell) uint8 { return 3 }})
 	if r.SetupSteps == 0 {
 		t.Fatal("ray setup must expose its charged step count")
 	}
@@ -164,7 +164,7 @@ func TestRayCursorsMeetEndsTheRay(t *testing.T) {
 
 func TestReconciliationBudgetContinuation(t *testing.T) {
 	cfg := SearchConfig{Start: Cell{}, Goal: PointGoal(Cell{120, 0}, 0), PassableValue: func(Cell) uint8 { return 3 }, Scale: 65536}
-	one := Search(cfg)
+	one := RunSearch(cfg)
 	s := NewSession(cfg)
 	if _, _, done := s.Resume(7); done || s.Popped() != 7 {
 		t.Fatalf("first slice done=%v pops=%d", done, s.Popped())

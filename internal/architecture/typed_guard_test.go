@@ -509,7 +509,10 @@ var mapFunctionHashes = map[string]string{
 	// and the order every consumer sees are unchanged (I1).
 	"internal/features/service.go *Service.sortedInstanceKeys":    "039ab36d7a77f4e480107a0613c31452e218f0e58a6ccbfec64b6f5689119730",
 	"internal/save/battle_image.go validateCarrierReferenceGraph": "3dd0048516ffdf5e47c88f0d813e8ea79da1990b598ab004ebc0fd0f6d031da0",
-	"internal/session/ai_entry.go initializeBattleAI":             "dcfe11a8f7d0c19b5c30f5f0342d56c6785414e911fabe66e1d5dc473838890e",
+	// Re-audited: the manager literal now also takes the bound rule set's
+	// think step (internal/ai.Planner). The catalog-key union, its sort and
+	// the order every consumer sees are unchanged (I1).
+	"internal/session/ai_entry.go initializeBattleAI":             "0cd899871796ecedc17c21fb80eb25318534782f7e58b4ebd61ff1a274636b26",
 	"internal/session/mission.go pruneRestrictedBuildMenus":       "83d3b5133ab38d04122d1387192dfc78679578f581c1a7abc6719332765b642e",
 	"internal/units/cob_binding.go bindUnitPortHandlers":          "31dfa18e2683e5bec165669f55e4f5dad260588513831504622f3b1596ba5548",
 	"internal/units/cob_binding.go bindCOBWithPortsAndVisibility": "68a25d9937cf032996d5feb8d96ce60224e51e9aa8e1bc13808fd2eff2ecfe75",

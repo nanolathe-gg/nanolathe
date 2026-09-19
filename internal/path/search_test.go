@@ -326,7 +326,7 @@ func TestDiagonalDestinationOnly(t *testing.T) {
 		HasBounds: true,
 		Bounds:    bounds,
 	}
-	res := Search(cfg)
+	res := RunSearch(cfg)
 	if len(res.Points) == 0 {
 		t.Fatalf("diagonal destination-only: path should exist (corner cutting allowed) but got empty, status %#x [04 §7.1] C3", res.Status)
 	}
@@ -355,7 +355,7 @@ func TestEarlyExits(t *testing.T) {
 		HasBounds:     true,
 		Bounds:        bounds,
 	}
-	res1 := Search(cfg1)
+	res1 := RunSearch(cfg1)
 	if res1.Status != StatusAlreadySatisfied {
 		t.Fatalf("early exit 1 start satisfies want 0x100 got %#x [04 §7.2] C10", res1.Status)
 	}
@@ -379,7 +379,7 @@ func TestEarlyExits(t *testing.T) {
 		HasBounds:     true,
 		Bounds:        bounds,
 	}
-	res2 := Search(cfg2)
+	res2 := RunSearch(cfg2)
 	if res2.Status != StatusRejected {
 		t.Fatalf("early exit 2 OOB want 0x200 got %#x [04 §7.2] C10", res2.Status)
 	}
@@ -410,7 +410,7 @@ func TestEarlyExits(t *testing.T) {
 		HasBounds: true,
 		Bounds:    bounds,
 	}
-	res3 := Search(cfg3)
+	res3 := RunSearch(cfg3)
 	if res3.Notified != StatusAlreadySatisfied {
 		t.Fatalf("early exit 3 ray connects want notified 0x100 got %#x [04 §7.2] C10", res3.Notified)
 	}
@@ -446,7 +446,7 @@ func TestEarlyExits(t *testing.T) {
 		HasBounds: true,
 		Bounds:    bounds,
 	}
-	res4 := Search(cfg4)
+	res4 := RunSearch(cfg4)
 	// This should trigger early exit 4 because ray best (at start) >= startScaled (equal)
 	if res4.Status != StatusRejected {
 		t.Fatalf("early exit 4 ray best>=start want 0x200 got %#x [04 §7.2] C10", res4.Status)
@@ -472,7 +472,7 @@ func TestEarlyExits(t *testing.T) {
 		HasBounds:     true,
 		Bounds:        bounds,
 	}
-	res5 := Search(cfg5)
+	res5 := RunSearch(cfg5)
 	if res5.Status != StatusAlreadySatisfied {
 		t.Fatalf("order: start satisfies should win over OOB want 0x100 got %#x", res5.Status)
 	}
@@ -501,7 +501,7 @@ func TestToleranceWriteOnce(t *testing.T) {
 		HasBounds: true,
 		Bounds:    bounds,
 	}
-	res := Search(cfg)
+	res := RunSearch(cfg)
 	if len(res.Points) == 0 {
 		t.Fatalf("tolerance: expected path to frontier (write-once threshold) but got empty [04 §7.2] C9")
 	}
@@ -523,7 +523,7 @@ func TestToleranceWriteOnce(t *testing.T) {
 	}
 	// Verify write-once: tolerance should not be updated after initial walkRay.
 	// We can check that second Search with same params yields same result (deterministic) - implying not updated
-	res2 := Search(cfg)
+	res2 := RunSearch(cfg)
 	if len(res.Points) != len(res2.Points) {
 		t.Fatalf("tolerance write-once: second run mismatch")
 	}
@@ -552,7 +552,7 @@ func TestEndToEndSmallGrid(t *testing.T) {
 		FootPrintX:    0,
 		FootPrintZ:    0,
 	}
-	res := Search(cfg)
+	res := RunSearch(cfg)
 	if len(res.Points) == 0 {
 		t.Fatalf("end-to-end: expected path, got empty status %#x", res.Status)
 	}
@@ -591,7 +591,7 @@ func TestEndToEndSmallGrid(t *testing.T) {
 		HasBounds: true,
 		Bounds:    bounds,
 	}
-	res2 := Search(cfg2)
+	res2 := RunSearch(cfg2)
 	if len(res2.Points) == 0 {
 		t.Fatalf("detour: expected path around blocked (1,1)")
 	}
@@ -612,7 +612,7 @@ func TestEndToEndSmallGrid(t *testing.T) {
 		FootPrintX:    bias.X,
 		FootPrintZ:    bias.Z,
 	}
-	res3 := Search(cfg3)
+	res3 := RunSearch(cfg3)
 	if res3.Points[0] != (Point{5 * 8, 7 * 8}) {
 		t.Fatalf("footprint: first point want (40,56) got %v [04 R-PATH-01 §7]", res3.Points[0])
 	}
@@ -639,7 +639,7 @@ func TestEqualCostDetourPinsRouteAndPopCharge(t *testing.T) {
 			return 3
 		},
 	}
-	result := Search(cfg)
+	result := RunSearch(cfg)
 	want := []Point{{0, 0}, {16, 16}, {32, 0}}
 	if len(result.Points) != len(want) {
 		t.Fatalf("equal-cost route length = %d, want %d: %v", len(result.Points), len(want), result.Points)
@@ -689,7 +689,7 @@ func TestFiveEntryFanAfterFirst(t *testing.T) {
 		HasBounds:     true,
 		Bounds:        bounds,
 	}
-	res := Search(cfg)
+	res := RunSearch(cfg)
 	// Just ensure search completes and fan logic didn't cause 9 entries after first (would still succeed but we lock via unit test)
 	if len(res.Points) == 0 {
 		t.Fatalf("fan: expected path")
@@ -714,7 +714,7 @@ func TestResumableBudgetHonoring(t *testing.T) {
 		FootPrintX:    0,
 		FootPrintZ:    0,
 	}
-	oneShot := Search(cfg)
+	oneShot := RunSearch(cfg)
 	if oneShot.Popped <= 100 {
 		t.Fatalf("one-shot fixture requires >100 pops to test budget, got %d; widen grid or obstacle [04 §7.3] C11", oneShot.Popped)
 	}
@@ -799,7 +799,7 @@ func TestResumableHeapExhaustion(t *testing.T) {
 		HasBounds: true,
 		Bounds:    bounds,
 	}
-	oneShot := Search(cfg)
+	oneShot := RunSearch(cfg)
 	if oneShot.Status != StatusRejected || len(oneShot.Points) != 0 {
 		t.Fatalf("heap exhaustion one-shot should publish empty rejected")
 	}
@@ -856,7 +856,7 @@ func TestResumableWriteOnceSlots(t *testing.T) {
 	if !done2 {
 		t.Fatalf("should finish")
 	}
-	oneShot := Search(cfg)
+	oneShot := RunSearch(cfg)
 	if len(pts) != len(oneShot.Points) {
 		t.Fatalf("write-once resume vs one-shot mismatch")
 	}
@@ -883,7 +883,7 @@ func TestValuePassabilityOnlyZeroBlocks(t *testing.T) {
 			Bounds:        Rect{Min: Cell{X: 0, Z: 0}, Max: Cell{X: 23, Z: 23}},
 			PassableValue: vals,
 		}
-		return Search(cfg)
+		return RunSearch(cfg)
 	}
 	for _, ring := range []uint8{1, 2, 3} {
 		res := run(ring)
@@ -921,7 +921,7 @@ func TestReviseRunsBeforeExpansion(t *testing.T) {
 			armed = true
 		},
 	}
-	res := Search(cfg)
+	res := RunSearch(cfg)
 	if reviseRuns != 1 {
 		t.Fatalf("revise must run exactly once per request init, got %d [04 §6.1 R-DOC04-B]", reviseRuns)
 	}
@@ -933,7 +933,7 @@ func TestReviseRunsBeforeExpansion(t *testing.T) {
 	armed = false
 	cfg2 := cfg
 	cfg2.Goal = PointGoal(Cell{X: 2, Z: 2}, 0) // start satisfies
-	_ = Search(cfg2)
+	_ = RunSearch(cfg2)
 	if reviseRuns != 1 {
 		t.Fatalf("revise must run even on the start-satisfied early exit, got %d", reviseRuns)
 	}

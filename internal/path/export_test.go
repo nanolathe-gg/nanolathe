@@ -18,9 +18,9 @@ type SearchResult struct {
 	Seeded     bool
 }
 
-// Search runs cfg to completion in one call and returns its result. It is the
+// RunSearch runs cfg to completion in one call and returns its result. It is the
 // same session the scheduler drives, resumed with a budget no search reaches.
-func Search(cfg SearchConfig) SearchResult {
+func RunSearch(cfg SearchConfig) SearchResult {
 	s := NewSession(cfg)
 	if !s.done {
 		s.Resume(1 << 30)

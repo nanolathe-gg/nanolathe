@@ -199,6 +199,16 @@ type Manager struct {
 	// RS-06: per-session isolated RNG [I4][RS-P0-018]. A nil stream is an
 	// unbound setup and must not fall back to process-global randomness.
 	RNG *rng.Simulation `json:"-"`
+
+	// Planner is the think step Tick dispatches: the seam where what to do
+	// with this manager's state can be answered differently while the manager
+	// keeps owning the state itself (planner.go, and
+	// docs/DESIGN_GAMEPLAY_RULES.md for the seam contract). Nil is the retail
+	// step, so a fixture and a manager a restore rebuilt both run the
+	// executable's behaviour. The session projects its bound rule set onto
+	// this field at composition and at the phase-1 command boundary, never
+	// inside a tick [I1].
+	Planner Planner `json:"-"`
 }
 
 // GetPlayer satisfies Selector [PLAN_11 WU-11-4] — Manager.Player 0..9.
@@ -416,11 +426,28 @@ func (m *Manager) hasBuildOptionsForDef(def *content.UnitDef) bool {
 	return false
 }
 
-// Tick runs computer tasks, autonomous weapon maintenance, then the separate
-// strategic refresh. The session owns player eligibility and calls it before
-// the settlement deadline [08 "Dispatch gates and order sinks"]
+// Tick is the per-player dispatch entry: the session's before-deadline hook
+// calls it once per tick for each computer player, and it runs the bound think
+// step. It is the seam every caller reaches, so a fixture and the composed
+// session dispatch the same way; a nil planner is the retail step
+// (planner.go).
+//
+// Player eligibility belongs to the session's settlement walk, and the step's
+// own gates belong to the step [08 "Dispatch gates and order sinks"]
 // [05 "Authoritative settlement order"].
 func (m *Manager) Tick(tick uint32, w *units.World, econ *economy.Service) {
+	if m == nil {
+		return
+	}
+	m.planner().Step(m, tick, w, econ)
+}
+
+// retailStep runs computer tasks, autonomous weapon maintenance, then the
+// separate strategic refresh, with both dispatch gates in front
+// [08 "Dispatch gates and order sinks"]. It is RetailPlanner's body and moved
+// here unchanged when the seam was introduced; the gates stay inside it so
+// every caller of the step, including a composing planner, passes them.
+func (m *Manager) retailStep(tick uint32, w *units.World, econ *economy.Service) {
 	if m == nil || econ == nil || int(m.Player) >= len(econ.Players) {
 		return
 	}

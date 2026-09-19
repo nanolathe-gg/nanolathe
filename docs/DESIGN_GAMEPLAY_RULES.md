@@ -37,14 +37,17 @@ type RuleSet struct {
     Orders       orders.Rules
     Construction construction.Rules
     UnitLimit    UnitLimitRules
+    Path         path.Kernel
+    Planner      ai.Planner
 }
 ```
 
 `StrictRuleSet()` and `ModernRuleSet()` are the two reserved sets;
 `RuleSetForMode` resolves a selection word to a set and `Session.BindRules`
 projects each field onto the service that asks it — `Combat.Rules`,
-`Build.Rules`, `Build.OrderBinding.Rules` — and onto every queue binding
-composed afterwards. `Session.SetRules(name)` is the selection entry point
+`Build.Rules`, `Build.OrderBinding.Rules`, `Movement.Kernel`, and every
+computer player's `Planner` — and onto every queue binding composed
+afterwards. `Session.SetRules(name)` is the selection entry point
 that can report an unknown name; `SetGameplay` is the same selection for a
 word already known to be selectable, and it is what the phase-1 command
 boundary calls.
@@ -71,15 +74,88 @@ as a second way to select a policy: a composed session always binds.
 | `orders.Rules` | `internal/orders` | [Hold Fire](DESIGN_UNITS_ORDERS_COB.md#modern-hold-fire) at a combat join, the deferred bomber leash ([DESIGN_MOVEMENT_PATH §3.4.1](DESIGN_MOVEMENT_PATH.md#341-modern-bomber-pass-completion)), and the three guard-assistance legs |
 | `construction.Rules` | `internal/construction` | [factory-exit](DESIGN_ECONOMY_CONSTRUCTION.md#modern-factory-exit-yielding) and [construction-site](DESIGN_ECONOMY_CONSTRUCTION.md#modern-construction-site-yielding) clearance |
 | `session.UnitLimitRules` | `internal/session` | [Modern save unit limits](DESIGN_SESSIONS_AI_SAVE.md#modern-save-unit-limits) |
+| `path.Kernel` | `internal/path` | the search a route request is opened with ("The path search kernel" below); both reserved sets bind `path.RetailKernel` |
+| `ai.Planner` | `internal/ai` | the computer player's per-tick think step ("The computer player's think step" below); both reserved sets bind `ai.RetailPlanner` |
 
-Two whole-subsystem seams are planned and not yet built: a path search kernel
-behind the scheduler's request entry, and the per-player planner dispatch
-entry, with the retail search and the retail `ai.Manager` as their Strict
-implementations. Both are request-granularity replacements (§4). A
-replacement kernel may be faster but may not change *when* a route publishes,
-because publication timing is ordering behaviour owned by the tick; a
-replacement planner necessarily changes simulation-RNG call order and is
-therefore Modern-only, with Strict always binding the retail manager.
+The last two rows are the **whole-subsystem** seams: each replaces an
+algorithm rather than answering a question inside one, and both now exist.
+Neither has a Modern implementation — both reserved sets bind the retail one —
+because replacing either is a behaviour change with its own contract rather
+than a selection. Both are request-granularity replacements (§4), and the two
+sections below state each one's boundary: a kernel may not change *when* a
+route publishes, because publication timing is ordering behaviour owned by the
+tick, and a planner may not draw from the simulation stream in a different
+order, because that call order is the whole future of the battle.
+
+### The path search kernel
+
+`path.Kernel` has one method: it opens one request's resumable search, and
+`path.Search` is that search behind an interface. `path.RetailKernel` is the
+retail ray-and-A\* search, it is zero size, and **both reserved sets bind
+it** — there is no Modern kernel, because no approved Modern policy changes
+how a route is found. `Session.BindRules` projects the field onto
+`movement.System.Kernel`; a system with nothing bound searches as retail does,
+which is the fallback a fixture and a restored system rely on.
+
+The boundary is what makes this a rule-set seam rather than a rewrite hatch.
+A kernel decides **how** a route is found. It decides nothing about **when**
+one appears, because that is ordering behaviour the tick owns and every kernel
+shares:
+
+- the scheduler's single active request and its admission cursor,
+- the per-player step allowance and heuristic weight,
+- the full-or-empty publication boundary — a budget slice publishes nothing,
+- route consumption by the follower, and the notification bits a request
+  raises on its order record.
+
+A kernel that wanted to change any of those would be a movement contract
+change with its own design section and its own fingerprint, not a rule-set
+selection. `path.SearchFunc` stays what the scheduler calls; the kernel sits
+inside it, at the one point that used to name the retail search directly.
+
+### The computer player's think step
+
+`ai.Planner` is the per-player *think step*, not a replacement computer
+player. The session's before-deadline hook dispatches one step per computer
+player per tick through `ai.Manager.Tick`, and the bound planner answers what
+to do with that manager's state on that tick:
+
+```go
+type Planner interface {
+    Step(m *Manager, tick uint32, w *units.World, econ *economy.Service)
+}
+type RetailPlanner struct{} // the retail step, unchanged
+```
+
+The split is deliberate. The session reads the retail manager's state deeply —
+the strategic record, the ten task deadlines, the nine group vectors, the
+session bindings, and everything a save writes and a restore rebuilds — so the
+`*ai.Manager` stays, owning its bookkeeping, its save and its restore, and only
+the decision is replaceable. `Manager.Tick` is the seam every caller reaches,
+so a fixture and the composed session dispatch the same way, and the retail
+gates stay inside the step so no caller can skip them.
+
+A replacement answers the same step from the same manager. It may draw from the
+simulation stream only through the manager's own accessor and only in the order
+the retail step draws, because that call order is the whole future of the
+battle; a planner that draws differently is a Modern gameplay policy needing
+its own contract, so **both reserved sets bind `RetailPlanner`** — there is no
+Modern planner today, and Strict 3.1 could never bind one. A set assembled
+outside `internal/ai` composes the retail step by calling
+`ai.RetailPlanner{}.Step`; the retail body itself stays unexported.
+
+The manager's field is the binding point: nil is the retail step, so a fixture
+and a manager a restore rebuilt run the executable's behaviour rather than none
+at all. `Session.BindRules` projects the bound set onto every computer player
+the session already owns, and `initializeBattleAI` takes the same field from
+the bound set for a manager composed later, including on the restore path; both
+directions agree, which is what keeps rebinding idempotent (§1).
+
+**Out of scope, deliberately:** a replacement planner with state of its own.
+That would need its own save and restore contract, its own place in the
+per-player settlement walk, and a decision about what a save written by one
+planner means to another. Nothing here provides that: a planner is asked a
+question and answers it from the retail manager's state.
 
 ### The package seams are in-package extension points
 
@@ -129,7 +205,10 @@ redesigned as a per-request one — a precomputed mask, a decision cached for
 the request — or it is not a rule-set seam.
 
 `path.Goal` already sits inside the search loop. It predates this document,
-it is not a gameplay seam, and it is not a precedent for adding one.
+it is not a gameplay seam, and it is not a precedent for adding one. The
+search kernel above is the worked example of the rule in the other direction:
+one whole subsystem, one interface question per request, and the per-node work
+entirely inside the object that question returns.
 
 If a seam ever shows in a profile, two measures come before redesign: cache
 the concrete decision once per tick where the answer cannot change within the
@@ -197,7 +276,11 @@ Two consequences are worth stating because they are observable:
 | A registered name is selectable through the vocabulary, and an unselectable word is rejected with the name list | `session.TestGameplayVocabularyKnowsTheRegisteredNames`, `gameplay.TestARegisteredNameParsesAndSurvivesNormalization`, `gameplay.TestAnUnselectableWordIsRejectedWithTheSelectableNames`, `gameplay.TestWithoutARegistryOnlyTheReservedWordsAreSelectable` |
 | A set composed outside `internal/` registers, overrides one answer and inherits its base | `example.TestTheExampleSetIsRegisteredAndSelectable`, `example.TestTheExampleSetOverridesOneAnswerAndInheritsModern`, `example.TestSelectingTheExampleSetProjectsTheOverride` |
 | Only a command imports the mod list | `architecture.TestOnlyCommandsImportTheModList` |
+| Both reserved sets bind the retail search kernel, and the composer projects it onto the movement system | `session.TestReservedRuleSetsBindTheRetailSearchKernel`, `session.TestCompositionProjectsTheSearchKernelOntoMovement` |
+| The retail kernel opens the retail search, is asked once per request, and its dispatch adds no allocation | `path.TestRetailKernelOpensTheRetailSearch`, `path.TestAKernelIsAskedOncePerRequest`, `path.TestRetailKernelDispatchAddsNoAllocation`, `movement.TestSearchFuncOpensItsSearchThroughTheBoundKernel`, `movement.TestAnUnboundKernelIsRetailAndCostsNothing` |
 | Both rule sets' fingerprints are locked to constants | `headless.TestStrictFingerprintIsLocked`, `headless.TestModernFingerprintIsLocked` |
+| The think step reaches every computer player, both reserved sets bind the retail step, and the dispatch allocates nothing | `session.TestBindRulesProjectsThePlannerOntoEveryComputerPlayer` |
+| A nil planner is the retail step, a bound one answers in its place, and neither dispatch allocates | `ai.TestANilPlannerRunsTheRetailStep`, `ai.TestABoundPlannerAnswersTheStepInPlaceOfRetail`, `ai.TestPlannerDispatchDoesNotAllocate` |
 
 Each Modern policy keeps its own behaviour tests in the package that owns it;
 those are listed by the owning design document, not here.
