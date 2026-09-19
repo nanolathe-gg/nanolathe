@@ -119,6 +119,25 @@ type WeaponDef struct {
 	StartSmoke   bool // startsmoke
 	EndSmoke     bool // endsmoke
 
+	// Non-retail target keys authored by community content sets. Retail's
+	// weapon record has no reader for any of them [02 R-KEYS-01], and neither
+	// gameplay mode reads them here: they are parsed so a settled contract
+	// needs no loader change, and nothing else.
+	//
+	// TODO(question): no primary source establishes any of their admission
+	// tests. The release notes of the sets that author them establish each
+	// effect's intent and the content establishes which weapons carry which
+	// key, but the operand and the site are unsettled for every one of the
+	// four; `toaironly` has no documentation at all. The evidence, the
+	// per-key confidence and what would settle each question are recorded in
+	// research/extensions/weapon-target-keys.md. Do not supply an admission
+	// test from the names; a settled one belongs on the combat.Rules seam
+	// (docs/DESIGN_GAMEPLAY_RULES.md §9).
+	NotToAir        bool // nottoair
+	ToAirOnly       bool // toaironly
+	NotToUnderwater bool // nottounderwater
+	SurfaceFire     bool // surfacefire
+
 	// Asset names [02 "Weapon record"] — string 256 default empty.
 	Model             string // model
 	ExplosionGaf      string // explosiongaf
@@ -175,6 +194,8 @@ var knownWeaponKeys = map[string]struct{}{
 	"noautorange": {}, "soundtrigger": {}, "guidance": {}, "tracks": {}, "lineofsight": {}, "ballistic": {}, "unitsonly": {}, "groundbounce": {}, "waterweapon": {}, "toairweapon": {},
 	"smoketrail": {}, "turret": {}, "selfprop": {}, "propeller": {}, "noexplode": {}, "burnblow": {}, "twophase": {}, "cruise": {}, "commandfire": {}, "stockpile": {},
 	"targetable": {}, "interceptor": {}, "beamweapon": {}, "shellweapon": {}, "dropped": {}, "vlaunch": {}, "meteor": {}, "noradar": {}, "paralyzer": {}, "startsmoke": {}, "endsmoke": {},
+	// Non-retail target keys with a typed reader; they no longer reach Unknown.
+	"nottoair": {}, "toaironly": {}, "nottounderwater": {}, "surfacefire": {},
 	"model": {}, "explosiongaf": {}, "explosionart": {}, "waterexplosiongaf": {}, "waterexplosionart": {}, "lavaexplosiongaf": {}, "lavaexplosionart": {}, "soundstart": {}, "soundhit": {}, "soundwater": {},
 }
 
@@ -330,6 +351,14 @@ func compileWeaponSectionWithPrior(section *formats.Section, sectionName string,
 	startSmoke := storedFlag(section, "startsmoke", false)
 	endSmoke := storedFlag(section, "endsmoke", false)
 
+	// The non-retail target keys read exactly as the retail flags above do:
+	// the integer accessor's default 0 consumed as a boolean. Retail content
+	// authors none of them, so every retail record reads false.
+	notToAir := storedFlag(section, "nottoair", false)
+	toAirOnly := storedFlag(section, "toaironly", false)
+	notToUnderwater := storedFlag(section, "nottounderwater", false)
+	surfaceFire := storedFlag(section, "surfacefire", false)
+
 	// Asset names — string 256 default empty [02 "Weapon record"]
 	model, _ := section.StringValue("model", "")
 	explosionGaf, _ := section.StringValue("explosiongaf", "")
@@ -481,6 +510,10 @@ func compileWeaponSectionWithPrior(section *formats.Section, sectionName string,
 		Paralyzer:          paralyzer,
 		StartSmoke:         startSmoke,
 		EndSmoke:           endSmoke,
+		NotToAir:           notToAir,
+		ToAirOnly:          toAirOnly,
+		NotToUnderwater:    notToUnderwater,
+		SurfaceFire:        surfaceFire,
 		Model:              model,
 		ExplosionGaf:       explosionGaf,
 		ExplosionArt:       explosionArt,
@@ -524,6 +557,23 @@ func compileWeaponSectionWithPrior(section *formats.Section, sectionName string,
 	b.WriteString("unknown|")
 	for _, k := range wd.UnknownKeysSorted() {
 		fmt.Fprintf(&b, "%s=%s|", k, wd.Unknown[k])
+	}
+	// The non-retail target keys contribute only when authored, in one fixed
+	// order. An unset key emits nothing, so a record that authors none — every
+	// retail record — canonicalizes to exactly the bytes it did before the keys
+	// had a typed reader, and the retail catalog digest is unchanged [02 §5] C12.
+	for _, ext := range [...]struct {
+		key string
+		set bool
+	}{
+		{"nottoair", wd.NotToAir},
+		{"nottounderwater", wd.NotToUnderwater},
+		{"surfacefire", wd.SurfaceFire},
+		{"toaironly", wd.ToAirOnly},
+	} {
+		if ext.set {
+			fmt.Fprintf(&b, "%s=1|", ext.key)
+		}
 	}
 	wd.Hash = HashDefinition([]byte(b.String()))
 	return wd

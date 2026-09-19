@@ -194,6 +194,20 @@ the computer player's rally task needs it and does not carry its operands
 `[08 R-AI-01 §19]`. Neither form tests radar, cloak or jamming, and neither
 consults reload, ammunition or cost.
 
+Four weapon-level keys that community content sets author — `nottoair`,
+`nottounderwater`, `surfacefire` and `toaironly` — are **parsed onto
+`content.WeaponDef` and read by nothing**. Retail's weapon record has no reader
+for any of them `[02 R-KEYS-01]`, so they change no answer in either gameplay
+mode, and the loader keeps them off the definition digest unless a record
+authors one. What each key is for, which content authors it and what is still
+unsettled is recorded in
+[research/extensions/weapon-target-keys.md](../research/extensions/weapon-target-keys.md):
+the release notes establish each effect's intent and the content establishes
+which weapons carry which key, but no primary source establishes an admission
+test, so no Modern behavior is built on them. Settling one would add its answer
+to the existing `combat.Rules` seam and a Modern policy block here, following
+[DESIGN_GAMEPLAY_RULES §9](DESIGN_GAMEPLAY_RULES.md#9-extending-the-existing-mechanism).
+
 ### 2.3.1 Modern terrain admission
 
 **Nanolathe policy, explicitly requested by the user; not retail evidence.**

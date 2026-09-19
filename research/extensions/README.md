@@ -15,6 +15,7 @@ stable named heading and keeps its unresolved questions beside it.
 | Reference | Scope and source version |
 |---|---|
 | [Extended build menus](build-menus.md) | TA Zero Alpha 5 authored placements, repeated membership records, and documented twelve-slot sidebar; patch membership semantics remain unknown. |
+| [Non-retail weapon target keys](weapon-target-keys.md) | `nottoair`, `nottounderwater` and `surfacefire` as authored and described by TA: Escalation Gold 10.2.0, and `toaironly` as authored by ProTA 4.8; TA Zero Alpha 5 uses none. Documented intent and authored census only — no patch admission algorithm is established, and `toaironly` remains unknown. |
 
 ## Evidence policy
 
