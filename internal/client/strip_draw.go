@@ -148,6 +148,7 @@ func (c *Client) drawStripViews(cur *frame.Frame, views []frame.StripView) Strip
 				Index:         v.Fill,
 				Style:         drawlist.FillSolid,
 				Nano:          v.Family == frame.StripFamilyNano,
+				NanoSubmerged: c.nanoSubmerged(v),
 				WorldHeight:   float32(v.Y.Raw()) / 65536 * float32(c.viewScale().Float()),
 				LightingScale: float32(c.viewScale().Float()),
 				Clip:          drawlist.Rect{W: int32(rw), H: int32(rh)},
@@ -349,4 +350,15 @@ func stripLightingFade(remaining uint32) float32 {
 		return 1
 	}
 	return float32(remaining+1) / stripLightingFadeTicks
+}
+
+// Nano emission is an Enhanced surface treatment. Below-water spray keeps its
+// retail core [03 §5.5] without projecting green pools through the water onto
+// painted deposits (GPU design §23.5). Dry low ground is not submerged.
+func (c *Client) nanoSubmerged(v frame.StripView) bool {
+	if v.Family != frame.StripFamilyNano || c.terrain == nil || c.terrain.SeaLevel == 0 || v.Y >= c.terrain.SeaLevelWorld() {
+		return false
+	}
+	ground := c.terrain.HeightAt(v.X, v.Z)
+	return ground >= 0 && ground < c.terrain.SeaLevelWorld()
 }

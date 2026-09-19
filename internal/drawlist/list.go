@@ -247,6 +247,9 @@ type Fill struct {
 	// Nano marks a visibility-admitted construction particle for Enhanced glow
 	// and local lighting (GPU design §23.5). Classic ignores this metadata.
 	Nano bool
+	// NanoSubmerged suppresses Enhanced emission beneath the wet sea surface;
+	// the original particle core remains unchanged (GPU design §23.5).
+	NanoSubmerged bool
 	// WorldHeight and LightingScale use record pixels, as on Sprite.
 	WorldHeight, LightingScale float32
 	// Rect is the destination rectangle in screen pixels.

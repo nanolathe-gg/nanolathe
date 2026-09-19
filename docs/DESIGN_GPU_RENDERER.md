@@ -3704,6 +3704,14 @@ The viewport travels with the fill because source gathering precedes world-regio
 replay, and fractional zoom can record beyond the device's pixel extent. Fill
 ownership, clone and reset retain or release the metadata with its pixels.
 
+**Submerged emission.** A nano particle strictly below sea level over wet terrain
+records `NanoSubmerged`; Enhanced skips both its glow and its light contribution.
+Its original palette core still draws. This prevents underwater construction from
+projecting broad green light through the surface over painted metal deposits.
+Particles at the sea plane, above it, or over dry ground keep normal emission.
+Admission uses the particle position and terrain, independently of the Water
+switch and gameplay mode. No particle lifetime, RNG call or classic pixel changes.
+
 **NL2 — spray glow.** The existing glow source pass receives a palette-coloured
 quad extending two world pixels beyond each side of the particle core, at gain
 0.45. The existing two blur octaves resolve it beneath fog and interface. No
@@ -3885,7 +3893,16 @@ stationary hovercraft emit nothing, while previously emitted specks finish fadin
 Hover bob and turning in place do not count as travel. Grounded mode admits
 hovercraft without comparing model Y to the
 centre terrain height, because the four-corner conform can differ from that sample
-[04 R-MOV-01 §5]. Hot or damaging liquid receives no water foam.
+[04 R-MOV-01 §5]. Hot or damaging liquid receives no water foam. Building foam also excludes
+cloaked units. Its surface test uses the canonical committed model transforms and
+hierarchy visibility [03 §2.4], excludes selection faces, unused vertices and
+non-drawing primitives, and requires one visible face to span the sea plane
+inclusively. Static definition bounds can include hidden or retracted geometry;
+they cannot prove a building intersects the surface. Missing models and entirely
+submerged poses emit no foam. Mobile units do not feed building foam; Enhanced
+hover dust remains restricted to dry ground, and terrain waves depend only on
+terrain and wind. Retail script sprinkles keep their existing draw and lifetime.
+
 
 GPU ownership is `water.go` and `water_reflections.go`. A conservative water/shore
 mask is cached in painted map coordinates through the terrain inverse projection
@@ -3966,7 +3983,7 @@ stepping at 30 Hz on a faster display.
 | Mark | Admission | Emission and life |
 |---|---|---|
 | land hover spray | the producer rules of §26.1 | authored COB wake timing and two-vertex emitter directions; two scattered 2×2 white specks per emission, half a world pixel of travel per tick, 48–64 ticks from opacity 0.45 with quadratic decay; each sample projects onto its current dry terrain height, and the shader clips fragments to dry ground |
-| building foam (`water_buildings.go`) | a visible completed floating building on wet terrain, its model top reaching the surface, its committed base height equal to sea minus authored waterline [05 "Geothermal requirement"] — **not** the FBI `Floater` flag, which stock water-yard buildings such as tidal generators do not set | broken elliptical ripples, bounded to 1,024 visible rings; two staggered rings expand and dissolve inside each quad so the footprint is not outlined as a square. This approximates displacement around the base, not the model's waterline intersection, and the shared mask clips it to water |
+| building foam (`water_buildings.go`) | a visible completed floating building on wet terrain, a visible posed polygon touching or crossing the sea plane, its committed base height equal to sea minus authored waterline [05 "Geothermal requirement"] — **not** the FBI `Floater` flag, which stock water-yard buildings such as tidal generators do not set | broken elliptical ripples, bounded to 1,024 visible rings; two staggered rings expand and dissolve inside each quad so the footprint is not outlined as a square. This approximates displacement around the base, not the model's waterline intersection, and the shared mask clips it to water |
 
 **Nanolathe Modern renderer policy — land air cushion.** The stock scripts
 suppress wake emissions in land occupancy band 4; retail water sprinkles also die

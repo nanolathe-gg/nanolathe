@@ -2,6 +2,8 @@ package client
 
 import (
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/model"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"testing"
 )
@@ -9,7 +11,7 @@ import (
 // The ring phase carries the presentation fraction, so the foam advances at
 // display rate. It still wraps with the tick and is unchanged at fraction zero.
 func TestBuildingFoamPhaseUsesPresentationFraction(t *testing.T) {
-	c, f := wakeScene(t)
+	c, f := buildingFoamScene(t)
 	c.terrain.SeaLevel = 10
 	u := &f.Units[0]
 	u.IsBuilding, u.Floater, u.CanHover = true, false, false
@@ -52,7 +54,7 @@ func TestBuildingFoamPhaseUsesPresentationFraction(t *testing.T) {
 }
 
 func TestBuildingFoamRequiresVisibleCompletedFloater(t *testing.T) {
-	c, f := wakeScene(t)
+	c, f := buildingFoamScene(t)
 	c.terrain.SeaLevel = 10
 	u := &f.Units[0]
 	u.IsBuilding, u.Floater, u.CanHover = true, false, false
@@ -85,5 +87,70 @@ func TestBuildingFoamRequiresVisibleCompletedFloater(t *testing.T) {
 	c.terrain.LavaWorld = true
 	if read() != 0 {
 		t.Fatal("building foam appeared on lava")
+	}
+}
+
+func buildingFoamScene(t *testing.T) (*Client, *frame.Frame) {
+	c, f := wakeScene(t)
+	piece := &c.models["wake-fixture"].compiled.Pieces[0]
+	piece.Vertices = [][3]numeric.Fixed{{0, 0, 0}, {0, 12 * numeric.FixedOne, 0}, {8 * numeric.FixedOne, 0, 0}}
+	piece.Primitives = []model.Primitive{{IsColored: 1, VertexIndices: []uint16{0, 1, 2}}}
+	return c, f
+}
+
+func TestBuildingFoamRequiresVisibleSurfaceIntersection(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*Client, *frame.UnitView)
+		want   int
+	}{
+		{"surface", func(*Client, *frame.UnitView) {}, 1},
+		{"submerged pose", func(_ *Client, u *frame.UnitView) {
+			u.Pieces = []frame.PieceView{{Index: 0, Ty: -9 * numeric.FixedOne}}
+		}, 0},
+		{"touching surface", func(_ *Client, u *frame.UnitView) {
+			u.Pieces = []frame.PieceView{{Index: 0, Ty: -8 * numeric.FixedOne}}
+		}, 1},
+		{"above surface", func(_ *Client, u *frame.UnitView) { u.Pieces = []frame.PieceView{{Index: 0, Ty: 5 * numeric.FixedOne}} }, 0},
+		{"hidden piece", func(_ *Client, u *frame.UnitView) { u.Pieces = []frame.PieceView{{Index: 0, Hidden: true}} }, 0},
+		{"cloaked", func(_ *Client, u *frame.UnitView) { u.Cloaked = true }, 0},
+		{"selection only", func(c *Client, _ *frame.UnitView) { c.models["wake-fixture"].compiled.Pieces[0].Selection = true }, 0},
+		{"unused tall vertex", func(c *Client, _ *frame.UnitView) {
+			p := &c.models["wake-fixture"].compiled.Pieces[0]
+			p.Vertices[1][1] = 3 * numeric.FixedOne
+			p.Vertices = append(p.Vertices, [3]numeric.Fixed{0, 100 * numeric.FixedOne, 0})
+		}, 0},
+		{"missing model", func(_ *Client, u *frame.UnitView) { u.Model = "" }, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, f := buildingFoamScene(t)
+			c.terrain.SeaLevel = 10
+			u := &f.Units[0]
+			u.IsBuilding, u.CanHover = true, false
+			u.Y = c.terrain.SeaLevelWorld() - numeric.Fixed(u.Waterline)*numeric.FixedOne
+			tc.change(c, u)
+			c.drawBuildingFoam(f)
+			var sink wakeCollector
+			c.list.Replay(&sink)
+			if len(sink.marks) != tc.want {
+				t.Fatalf("recorded %d foam rings, want %d", len(sink.marks), tc.want)
+			}
+		})
+	}
+}
+
+func TestSubmergedMobileUnitsDoNotProduceEnhancedSurfaceMarks(t *testing.T) {
+	for _, hover := range []bool{false, true} {
+		c, f := buildingFoamScene(t)
+		c.terrain.SeaLevel = 40
+		f.Units[0].CanHover = hover
+		startWake(c, f)
+		c.drawSurfaceWakes()
+		c.drawBuildingFoam(f)
+		var sink wakeCollector
+		c.list.Replay(&sink)
+		if len(sink.marks) != 0 {
+			t.Fatalf("submerged mobile unit (hover=%v) emitted %d surface marks", hover, len(sink.marks))
+		}
 	}
 }

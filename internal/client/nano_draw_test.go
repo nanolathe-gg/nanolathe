@@ -7,6 +7,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // A particle's mark is two by two, because retail's rectangle filler is
@@ -146,4 +147,45 @@ func TestNanoLightingMetadataRequiresVisibleParticle(t *testing.T) {
 	cur.Visibility = frame.VisibilityView{}
 	c.drawStripBarrier(cur, 6)
 	c.list.VisitNanoSources(func(drawlist.Fill) { t.Fatal("missing visibility emitted light") })
+}
+
+// The Enhanced source tag may change at the sea plane; the retail core does not.
+func TestSubmergedNanoPreservesCoreWithoutEmission(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		y, ground int32
+		want      bool
+	}{
+		{"underwater", 9, 0, true},
+		{"surface", 10, 0, false},
+		{"above water", 11, 0, false},
+		{"dry ground", 9, 10, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &Client{width: 64, height: 64, indexed: make([]uint8, 64*64), cam: &camera.Camera{ViewW: 64, ViewH: 64}}
+			c.terrain = &world.Terrain{CellW: 4, CellH: 4, SeaLevel: 10, Plot: make([]world.PlotCell, 16)}
+			for i := range c.terrain.Plot {
+				c.terrain.Plot[i].SetHeight(uint8(tc.ground))
+			}
+			cur := &frame.Frame{Visibility: fullVisibility(), Strips: []frame.StripView{{Strip: 6, Family: frame.StripFamilyNano, Fill: 0xa3, X: px(20), Y: px(tc.y), Z: px(20)}}}
+			for _, enhanced := range []bool{false, true} {
+				c.enhanced = enhanced
+				c.list.Reset()
+				stats := c.drawStripBarrier(cur, 6)
+				if stats.Filled != 1 {
+					t.Fatal("submerged particle core lost")
+				}
+				count := 0
+				c.list.VisitNanoSources(func(fill drawlist.Fill) {
+					count++
+					if fill.NanoSubmerged != tc.want || fill.Index != 0xa3 || fill.Rect.W != 2 || fill.Rect.H != 2 {
+						t.Fatalf("particle metadata/core = %+v", fill)
+					}
+				})
+				if count != 1 {
+					t.Fatal("particle record lost")
+				}
+			}
+		})
+	}
 }

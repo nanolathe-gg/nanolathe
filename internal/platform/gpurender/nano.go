@@ -46,7 +46,7 @@ func (r *Renderer) prepareNanoLighting(list *drawlist.List) {
 	l.nanoCount = 0
 	color := nanoLightColor(&r.displayPalette)
 	list.VisitNanoSources(func(f drawlist.Fill) {
-		if !r.nanoInView(f) {
+		if f.NanoSubmerged || !r.nanoInView(f) {
 			return
 		}
 		scale := nanoScale(f)
@@ -107,7 +107,7 @@ func nanoLightColor(pal *[256][4]byte) (color [3]float32) {
 // glowNano widens the emission footprint around the existing two-pixel core.
 // The existing blur and fog composite soften it; the particle draw is untouched.
 func (r *Renderer) glowNano(f drawlist.Fill) {
-	if !r.glowActive() || !r.nanoInView(f) {
+	if f.NanoSubmerged || !r.glowActive() || !r.nanoInView(f) {
 		return
 	}
 	pad := 2 * nanoScale(f)

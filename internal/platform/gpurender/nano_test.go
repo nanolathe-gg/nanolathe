@@ -126,7 +126,10 @@ func checkNanoDevicePixels() error {
 	if !bytes.Equal(off, read(false, false)) {
 		return fmt.Errorf("disabled nano effects persisted")
 	}
-	return checkNanoShimmerDevicePixels()
+	if err := checkNanoShimmerDevicePixels(); err != nil {
+		return err
+	}
+	return checkSubmergedNanoDevicePixels()
 }
 
 // Enhanced emission must not turn the short looping particle ramp into a
@@ -267,4 +270,98 @@ func TestNanoSparseLightTracksCountWithoutThreshold(t *testing.T) {
 			t.Fatalf("sparse spray jumped to %g energy; want %g for %d particles", energy, want, count)
 		}
 	}
+}
+
+// Submerged spray keeps its core but cannot cast broad pools or bloom through
+// water. A dry/surface spray in the same list must retain normal emission.
+func TestSubmergedNanoCannotJoinSurfaceCluster(t *testing.T) {
+	r := &Renderer{w: 128, h: 128}
+	for i := 161; i <= 167; i++ {
+		r.displayPalette[i] = [4]byte{60, 255, 30, 255}
+	}
+	f := drawlist.Fill{Nano: true, Rect: drawlist.Rect{X: 60, Y: 60, W: 2, H: 2}, Index: 163, WorldHeight: 9}
+	var l drawlist.List
+	l.RecordFill(f)
+	r.prepareBattleLighting(&l)
+	want := r.lighting.lights[0]
+	f.NanoSubmerged = true
+	for range 20 {
+		l.RecordFill(f)
+	}
+	clone := l.Clone()
+	l.Reset()
+	r.prepareBattleLighting(&clone)
+	if len(r.lighting.lights) != 1 || r.lighting.lights[0] != want {
+		t.Fatal("submerged particles amplified or moved surface light")
+	}
+	l.RecordFill(f)
+	r.prepareBattleLighting(&l)
+	if len(r.lighting.lights) != 0 {
+		t.Fatal("submerged spray emitted light")
+	}
+}
+
+func checkSubmergedNanoDevicePixels() error {
+	pal := fixturePalette()
+	for i := 161; i <= 167; i++ {
+		pal.Base[i] = [4]byte{60, 255, 30, 255}
+	}
+	pal.Base[40], pal.Base[41] = [4]byte{35, 65, 90, 255}, [4]byte{110, 120, 125, 255}
+	const w, h = 240, 140
+	r, err := NewChecked(&pal, w, h)
+	if err != nil {
+		return err
+	}
+	terrain := groundFixtureTerrain(40)
+	// Authored cool water/metal-like detail makes the former broad green pool
+	// readable; it is not copied retail art.
+	for i := range terrain.TileSet[0] {
+		x, y := i%32, i/32
+		if (x-16)*(x-16)+(y-16)*(y-16) < 72 {
+			terrain.TileSet[0][i] = 41
+		}
+	}
+	read := func(submerged, effects bool) []byte {
+		var list drawlist.List
+		list.RecordClear()
+		list.RecordTerrain(drawlist.Terrain{Terrain: terrain, Cam: &camera.Camera{}, DstW: w, DstH: h, Scale: camera.ViewScaleNative})
+		for i := 0; i < 20; i++ {
+			list.RecordFill(drawlist.Fill{Nano: true, NanoSubmerged: submerged, Rect: drawlist.Rect{X: 100 + int32(i%5)*2, Y: 60 + int32(i/5)*2, W: 2, H: 2}, Index: 163, WorldHeight: 9})
+		}
+		list.RecordWorld(drawlist.WorldSpace{})
+		list.RecordExpand()
+		r.setBattleLighting(effects)
+		r.SetGlow(effects)
+		pixels := make([]byte, w*h*4)
+		r.Execute(&list, w, h).ReadPixels(pixels)
+		return pixels
+	}
+	base, submerged, surface := read(true, false), read(true, true), read(false, true)
+	if !bytes.Equal(base, submerged) {
+		return fmt.Errorf("submerged nano changed pixels outside its ordinary core")
+	}
+	if bytes.Equal(base, surface) {
+		return fmt.Errorf("surface nano lost emission")
+	}
+	if !bytes.Equal(submerged, read(true, true)) {
+		return fmt.Errorf("surface emission persisted into submerged replay")
+	}
+	if dir := os.Getenv("NANOLATHE_NANO_SHOTS"); dir != "" {
+		for i, pixels := range [][]byte{surface, submerged} {
+			name := []string{"underwater-before", "underwater-after"}[i]
+			file, err := os.Create(filepath.Join(dir, name+".png"))
+			if err != nil {
+				return err
+			}
+			err = png.Encode(file, &image.RGBA{Pix: pixels, Stride: w * 4, Rect: image.Rect(0, 0, w, h)})
+			closeErr := file.Close()
+			if err != nil {
+				return err
+			}
+			if closeErr != nil {
+				return closeErr
+			}
+		}
+	}
+	return nil
 }
