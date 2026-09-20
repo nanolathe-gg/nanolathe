@@ -146,7 +146,12 @@ armies standing still until something came into weapon range.
 own clock: tile reveal, descent, impact, and the red-hot model cooling while
 the commander walks to the nearest permanent metal deposit and builds an
 extractor through the player's own command path. It needs a fresh scene with
-no `pre_ticks`, and must be the scene of the shot it opens.
+no `pre_ticks`, and must be the scene of the shot it opens. Unless the scene
+keeps its fog, the map is revealed *before* the opening frame is published
+(`Session.RevealStagedMap`), so the whole view fades in tile by tile; the
+ordinary reveal command would land on the first tick, which the arrival holds,
+and the intro would show one line-of-sight disc with the rest popping in at
+handoff. The film also trims most of the arrival's half-second of lead black.
 
 Explosion camera shake is always off in a capture, through the `+noshake`
 developer switch's own bit: under a scripted move it reads as judder.
@@ -182,6 +187,19 @@ The camera is evaluated **once per tick**, never per presented frame. Enhanced
 samples the camera origin at the authoritative step and blends the two samples
 itself (§13.5), which is what makes a pan sub-pixel smooth at 60 or 120 FPS;
 moving it per frame would fight that blend instead of feeding it.
+
+Each tick's camera is installed as an **exact continuous view**
+(`camera.SetPresentationView`), not through the integer jump. The jump snaps
+every sample to a whole world pixel — two screen pixels at 2× — and floors the
+centre-to-origin conversion again as the factor changes, which shows up as a
+side-to-side shimmer during any push. The exact view keeps the scripted centre
+to rounding noise; a camera test holds both halves of that claim.
+
+A zoom key below the map's own floor is kept as the *request*: that is what
+selects the full strategic view at the floor (DESIGN_GPU_RENDERER §16.7), so a
+pull-back ends on icons alone. Between 0.5× and 0.625× the renderer draws
+models and fading-in icons together (§16.11); a script that wants a clean
+hand-off crosses that band in a few ticks rather than easing through it.
 
 Shots cut hard. At a cut the capture collapses the camera blend onto the
 incoming shot (`SnapCameraBlend`), so the outgoing framing is not a move the

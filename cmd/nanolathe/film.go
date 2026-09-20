@@ -118,6 +118,13 @@ func (g *filmGame) startScene(opts Options, cs *contentSet, scene film.Scene) er
 	}
 	if scene.Opening {
 		filmOpeningMex(sess)
+		if !scene.Fog {
+			// The reveal command lands on the first tick, which the arrival
+			// holds: the intro would fade in one line-of-sight disc and the
+			// rest of the map would pop in at handoff. Lift the fog before the
+			// opening frame is published so the whole view arrives together.
+			sess.RevealStagedMap()
+		}
 	}
 
 	var (
@@ -268,7 +275,9 @@ func (g *filmGame) Draw(screen *ebiten.Image) {
 	if g.opening {
 		// After the step, which may add its own cooling time, and before the
 		// frame is recorded: the film's clock is the only one that counts.
-		seconds := (float64(cursor.ShotTick) + cursor.Fraction) / film.SimulationTPS
+		// The authored half-second of black before the reveal is for a window
+		// settling; a film trims most of it.
+		seconds := (float64(cursor.ShotTick)+cursor.Fraction)/film.SimulationTPS + 0.3
 		g.cl.SetArrivalSeconds(float32(seconds))
 		if float32(seconds) >= drawlist.ArrivalCoolingEndSeconds {
 			g.opening = false
@@ -344,8 +353,10 @@ func (g *filmGame) prepareScene(cursor film.Cursor) bool {
 	return true
 }
 
-// applyCamera installs the shot's camera for one tick. Zoom is set first: it
-// changes the size of the view the centring then works from.
+// applyCamera installs the shot's camera for one tick as an exact continuous
+// view. The integer jump would snap every sample to a whole world pixel and
+// floor the centre-to-origin conversion again as the factor changes, which is
+// a visible lateral shimmer during a push (camera.SetPresentationView).
 func (g *filmGame) applyCamera(shot *film.Shot, tick float64) {
 	x, z, zoom, world := shot.CameraAt(tick)
 	cam := g.cam.cam
@@ -353,15 +364,18 @@ func (g *filmGame) applyCamera(shot *film.Shot, tick float64) {
 		x += float64(g.anchorX)
 		z += float64(g.anchorZ)
 	}
-	requested := camera.Zoom(int32(zoom*float64(camera.ZoomUnit) + 0.5))
-	floor := camera.MinZoomFor(cam.ViewW, cam.ViewH, cam.MapW, cam.MapH)
-	requested = min(max(requested, floor), camera.ZoomMax)
-	if requested != cam.EffectiveZoom() {
-		mx, my := battleViewCentre(cam)
-		jumpBattleZoom(g.cam, mx, my, requested, true)
-	}
-	cam.JumpToBattleViewCenter(int32(x), int32(z))
-	cam.Clamp()
+	// The map's own floor is the camera's to apply: it keeps the request, which
+	// is what turns a floor above the icon cutoff into the strategic view.
+	zoom = min(max(zoom, camera.ZoomFloor.Float()), camera.ZoomMax.Float())
+	// The origin is the world point under surface pixel zero; the battle
+	// viewport starts OriginX columns in and is inset OriginY rows top and
+	// bottom, so its centre sits (W+OriginX)/2 across and H/2 down [03 §4.1].
+	cam.SetPresentationView(camera.PresentationView{
+		X:      x - float64(cam.ViewW+camera.OriginX)/(2*zoom),
+		Z:      z - float64(cam.ViewH)/(2*zoom),
+		Factor: zoom,
+	})
+	g.cam.zoom.Reset()
 }
 
 // crop copies the written frame out of the composed surface. A clean capture

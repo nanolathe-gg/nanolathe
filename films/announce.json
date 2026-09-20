@@ -99,15 +99,29 @@
      "tick": 0,
      "x": 0,
      "z": -20,
-     "zoom": 0.5,
+     "zoom": 0.45,
      "ease": "linear"
+    },
+    {
+     "tick": 24,
+     "x": 0,
+     "z": -20,
+     "zoom": 0.45,
+     "ease": "linear"
+    },
+    {
+     "tick": 36,
+     "x": 2,
+     "z": -22,
+     "zoom": 0.7,
+     "ease": "in"
     },
     {
      "tick": 135,
      "x": 20,
      "z": -40,
      "zoom": 1.7,
-     "ease": "in"
+     "ease": "out"
     }
    ],
    "text": [
@@ -148,29 +162,33 @@
     "kind": "battle",
     "map": "Coast To Coast",
     "seed": 7,
-    "pre_ticks": 260,
+    "pre_ticks": 170,
     "roster": "naval",
     "per_side": 12,
     "air": 18,
-    "gap": 380,
+    "gap": 300,
     "columns": 3,
     "patrol": true,
-    "buildings": -1
+    "buildings": -1,
+    "anchor": [
+     1150,
+     760
+    ]
    },
    "camera": [
     {
      "tick": 0,
-     "x": -330,
-     "z": -120,
-     "zoom": 1.5,
+     "x": -400,
+     "z": -10,
+     "zoom": 1.55,
      "ease": "linear"
     },
     {
      "tick": 120,
-     "x": -200,
-     "z": -60,
-     "zoom": 1.9,
-     "ease": "linear"
+     "x": -250,
+     "z": 0,
+     "zoom": 1.2,
+     "ease": "inout"
     }
    ],
    "text": [
@@ -196,7 +214,7 @@
      "in": 10,
      "out": 10,
      "lines": [
-      "Modern GPU renderer / Water reflections / Soft shadows"
+      "Shoreline waves / Water reflections / Soft shadows"
      ],
      "size": 0.029,
      "y": 0.84,
@@ -256,7 +274,7 @@
      "in": 10,
      "out": 10,
      "lines": [
-      "Dynamic lighting / Bloom / Heat distortion"
+      "Dynamic lighting / Bloom / Glow"
      ],
      "size": 0.029,
      "y": 0.84,
@@ -265,66 +283,7 @@
    ]
   },
   {
-   "name": "wildfire",
-   "ticks": 105,
-   "scene": {
-    "kind": "battle",
-    "map": "Great Divide",
-    "seed": 7,
-    "pre_ticks": 700,
-    "roster": "flame",
-    "per_side": 120,
-    "columns": 10
-   },
-   "camera": [
-    {
-     "tick": 0,
-     "x": 120,
-     "z": -30,
-     "zoom": 1.6,
-     "ease": "linear"
-    },
-    {
-     "tick": 105,
-     "x": 215,
-     "z": -20,
-     "zoom": 2.0,
-     "ease": "linear"
-    }
-   ],
-   "text": [
-    {
-     "at": 8,
-     "ticks": 97,
-     "style": "lower",
-     "anim": "rise",
-     "in": 10,
-     "out": 10,
-     "lines": [
-      "THE FOREST BURNS."
-     ],
-     "size": 0.071,
-     "y": 0.78,
-     "scrim": 0.12
-    },
-    {
-     "at": 18,
-     "ticks": 87,
-     "style": "lower",
-     "anim": "rise",
-     "in": 10,
-     "out": 10,
-     "lines": [
-      "Spreading fire / Smoke / Scorched ground"
-     ],
-     "size": 0.029,
-     "y": 0.84,
-     "font": "body"
-    }
-   ]
-  },
-  {
-   "name": "aftermath",
+   "name": "feel-the-heat",
    "ticks": 105,
    "scene": {
     "kind": "battle",
@@ -339,16 +298,76 @@
    "camera": [
     {
      "tick": 0,
-     "x": 20,
-     "z": -170,
-     "zoom": 1.3,
+     "x": 50,
+     "z": -215,
+     "zoom": 1.85,
      "ease": "linear"
     },
     {
      "tick": 105,
-     "x": 110,
-     "z": -200,
-     "zoom": 1.7,
+     "x": 120,
+     "z": -205,
+     "zoom": 2.0,
+     "ease": "linear"
+    }
+   ],
+   "text": [
+    {
+     "at": 8,
+     "ticks": 97,
+     "style": "lower",
+     "anim": "rise",
+     "in": 10,
+     "out": 10,
+     "lines": [
+      "FEEL THE HEAT."
+     ],
+     "size": 0.071,
+     "y": 0.78,
+     "scrim": 0.12
+    },
+    {
+     "at": 18,
+     "ticks": 87,
+     "style": "lower",
+     "anim": "rise",
+     "in": 10,
+     "out": 10,
+     "lines": [
+      "Heat shimmer / Blast distortion / Glowing wrecks"
+     ],
+     "size": 0.029,
+     "y": 0.84,
+     "font": "body"
+    }
+   ]
+  },
+  {
+   "name": "aftermath",
+   "ticks": 105,
+   "scene": {
+    "kind": "battle",
+    "map": "Comet Catcher",
+    "seed": 7,
+    "pre_ticks": 520,
+    "roster": "heavy",
+    "per_side": 110,
+    "columns": 8,
+    "gap": 260
+   },
+   "camera": [
+    {
+     "tick": 0,
+     "x": 90,
+     "z": 0,
+     "zoom": 1.8,
+     "ease": "linear"
+    },
+    {
+     "tick": 105,
+     "x": 160,
+     "z": 10,
+     "zoom": 2.0,
      "ease": "linear"
     }
    ],
@@ -365,7 +384,7 @@
      ],
      "size": 0.071,
      "y": 0.78,
-     "scrim": 0.12
+     "scrim": 0.3
     },
     {
      "at": 18,
@@ -375,7 +394,7 @@
      "in": 10,
      "out": 10,
      "lines": [
-      "Cooling wrecks / Flying debris / Craters"
+      "Flying debris / Scorch marks / Craters"
      ],
      "size": 0.029,
      "y": 0.84,
@@ -532,11 +551,25 @@
      "ease": "linear"
     },
     {
+     "tick": 60,
+     "x": 0,
+     "z": -25,
+     "zoom": 0.72,
+     "ease": "linear"
+    },
+    {
+     "tick": 72,
+     "x": 0,
+     "z": -28,
+     "zoom": 0.44,
+     "ease": "out"
+    },
+    {
      "tick": 180,
      "x": 0,
      "z": -40,
-     "zoom": 0.5,
-     "ease": "out"
+     "zoom": 0.4,
+     "ease": "linear"
     }
    ],
    "text": [

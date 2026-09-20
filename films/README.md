@@ -18,12 +18,12 @@ development status and original-game asset requirement.
 
 | Time | Scene | Shows |
 | --- | --- | --- |
-| 0–10 s | Greenhaven, skirmish opening | Tile reveal, commander drop, red-hot cooling, first extractor; title and music rise together |
-| 10–14.5 s | Great Divide, 250 a side plus air | Strategic-to-close zoom into a full battle |
-| 14.5–18.5 s | Coast To Coast, fleets plus air | Water, reflections, soft aircraft shadows |
-| 18.5–22 s | Metal Heck, armor plus air | Dynamic light, bloom, heat distortion |
-| 22–25.5 s | Great Divide, flame units | Burning trees lighting the ground |
-| 25.5–29 s | Lava Run, heavy units | Wrecks, debris, craters |
+| 0–10 s | Greenhaven, skirmish opening | Whole-view tile reveal, commander drop, red-hot cooling, first extractor; title and music rise together |
+| 10–14.5 s | Great Divide, 250 a side plus air | Strategic icons, then a zoom into the full battle |
+| 14.5–18.5 s | Coast To Coast, fleets plus air off a beach | Shoreline waves, reflections, soft aircraft shadows |
+| 18.5–22 s | Metal Heck, armor plus air | Dynamic light, bloom, glow |
+| 22–25.5 s | Lava Run, heavy units | Heat shimmer, blast distortion, glowing wrecks |
+| 25.5–29 s | Comet Catcher, heavy units | Debris, scorch marks, craters |
 | 29–32.5 s | Ice Scream, builders and factories | Nanolathe construction; open source and modding |
 | 32.5–36 s | Gasbag Forests, kbots plus air | Windows, macOS and Linux |
 | 36–42 s | Painted Desert, 220 a side | Pull back to strategic icons; name and website |
