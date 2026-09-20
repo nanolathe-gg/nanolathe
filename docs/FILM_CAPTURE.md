@@ -237,7 +237,7 @@ python3 -m unittest discover -s tools -p film_test.py
 
 ## Cost
 
-The announcement writes 1,440 frames at 1920×1080/60 FPS. Cost depends on the
+The announcement writes 1,440 frames at 1280×720/60 FPS. Cost depends on the
 maps, unit counts, title sizes and detail-art cache; each fresh scene pays its
 own loading and warmup cost. Offline capture is not a real-time performance
 claim. It takes no benchmark host lock and must not run alongside a benchmark.

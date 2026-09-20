@@ -1,6 +1,6 @@
 # Announcement reel
 
-`announce.json` is a 24-second, 1080p/60 FPS trailer. It is meant to sell the
+`announce.json` is a 24-second, 720p/60 FPS trailer. It is meant to sell the
 feeling of returning to Total Annihilation, then give viewers one next step:
 **nanolathe.gg**. Technical implementation detail belongs on the website.
 
@@ -19,18 +19,20 @@ development status and original-game asset requirement.
 | Time | Scene | Purpose |
 | --- | --- | --- |
 | 0–3 s | Great Divide, combined-arms firefight | Recognizable action and the return of Total Annihilation |
-| 3–5.5 s | Metal Heck, armor | Introduce Nanolathe and its open-source engine |
+| 3–5.5 s | Comet Catcher, combined arms | Introduce Nanolathe and its open-source engine |
 | 5.5–8.5 s | Coast to Coast, aircraft | A different palette and modern water reflections |
 | 8.5–11 s | Great Divide, close firefight | Battlefield light, bloom and heat distortion |
-| 11–13.5 s | Metal Heck, later armor clash | Metallic finishes, cooling wrecks and scorched ground |
+| 11–13.5 s | Comet Catcher, later close firefight | Explosive light, flying debris and scorched ground |
 | 13.5–16 s | Great Divide, factory line | Open source and modding |
-| 16–19 s | Greenhaven, armor | Windows, macOS and Linux |
+| 16–19 s | Greenhaven, combined arms | Windows, macOS and Linux |
 | 19–24 s | Great Divide, wide pullback | Name, website and invitation to try/contribute |
 
 White condensed headlines, restrained amber accents and readable mixed-case
 supporting text leave the central action visible. Cuts land on the score's
-half-second beat grid. Only the hook, platform card and final call to action
-use a full-frame contrast scrim. The final five seconds deliberately hold one
+half-second beat grid. The hook, platform card and final call to action use a contrast scrim;
+the pale lunar battlefield gets a lighter one to keep its copy readable. The 720p capture canvas brings units and effects closer at the renderer’s
+2× detail limit; larger output dimensions widen the world viewport rather than
+simply increasing pixel density. The final five seconds deliberately hold one
 address instead of introducing another feature.
 
 To iterate, render a short preview with `--film-frames 120`. For later shots,

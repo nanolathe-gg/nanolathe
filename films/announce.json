@@ -1,6 +1,6 @@
 {
-  "width": 1920,
-  "height": 1080,
+  "width": 1280,
+  "height": 720,
   "fps": 60,
   "clean": true,
   "letterbox": 0.04,
@@ -23,14 +23,14 @@
           "tick": 0,
           "x": 0,
           "z": -100,
-          "zoom": 1.55,
+          "zoom": 1.25,
           "ease": "linear"
         },
         {
           "tick": 90,
           "x": 30,
           "z": -65,
-          "zoom": 1.85,
+          "zoom": 1.5,
           "ease": "linear"
         }
       ],
@@ -74,27 +74,27 @@
       "ticks": 75,
       "scene": {
         "kind": "battle",
-        "map": "Metal Heck",
+        "map": "Comet Catcher",
         "seed": 7,
-        "pre_ticks": 270,
-        "per_side": 128,
+        "pre_ticks": 480,
+        "per_side": 160,
         "buildings": 16,
         "factories": true,
-        "roster": "armor"
+        "roster": "mixed"
       },
       "camera": [
         {
           "tick": 0,
           "x": -70,
           "z": 0,
-          "zoom": 1.55,
+          "zoom": 1.6,
           "ease": "linear"
         },
         {
           "tick": 75,
           "x": 30,
           "z": -25,
-          "zoom": 1.8,
+          "zoom": 1.9,
           "ease": "linear"
         }
       ],
@@ -110,7 +110,8 @@
             "MEET NANOLATHE."
           ],
           "size": 0.071,
-          "y": 0.78
+          "y": 0.78,
+          "scrim": 0.12
         },
         {
           "at": 14,
@@ -148,16 +149,16 @@
       "camera": [
         {
           "tick": 0,
-          "x": -120,
+          "x": -380,
           "z": -50,
-          "zoom": 1.65,
+          "zoom": 1.6,
           "ease": "linear"
         },
         {
           "tick": 90,
-          "x": 120,
+          "x": -280,
           "z": -100,
-          "zoom": 1.85,
+          "zoom": 1.9,
           "ease": "linear"
         }
       ],
@@ -261,17 +262,17 @@
       ]
     },
     {
-      "name": "metal-and-fire",
+      "name": "impact-and-aftermath",
       "ticks": 75,
       "scene": {
         "kind": "battle",
-        "map": "Metal Heck",
+        "map": "Comet Catcher",
         "seed": 7,
-        "pre_ticks": 420,
-        "per_side": 128,
+        "pre_ticks": 600,
+        "per_side": 160,
         "buildings": 16,
         "factories": true,
-        "roster": "armor"
+        "roster": "mixed"
       },
       "camera": [
         {
@@ -301,7 +302,8 @@
             "EVERY IMPACT LEAVES A MARK."
           ],
           "size": 0.055,
-          "y": 0.8
+          "y": 0.8,
+          "scrim": 0.12
         },
         {
           "at": 12,
@@ -311,7 +313,7 @@
           "in": 10,
           "out": 8,
           "lines": [
-            "Metallic finishes / Glowing wreckage / Scorch marks"
+            "Explosive light / Flying debris / Scorched ground"
           ],
           "size": 0.024,
           "y": 0.855,
@@ -395,25 +397,25 @@
         "kind": "battle",
         "map": "Greenhaven",
         "seed": 7,
-        "pre_ticks": 240,
-        "per_side": 128,
+        "pre_ticks": 600,
+        "per_side": 160,
         "buildings": 16,
         "factories": true,
-        "roster": "armor"
+        "roster": "mixed"
       },
       "camera": [
         {
           "tick": 0,
           "x": 20,
           "z": -80,
-          "zoom": 1.35,
+          "zoom": 1.0,
           "ease": "linear"
         },
         {
           "tick": 90,
           "x": -45,
           "z": -30,
-          "zoom": 1.6,
+          "zoom": 1.2,
           "ease": "linear"
         }
       ],
@@ -470,14 +472,14 @@
           "tick": 0,
           "x": 0,
           "z": -80,
-          "zoom": 1.4,
+          "zoom": 1.1,
           "ease": "linear"
         },
         {
           "tick": 150,
           "x": 0,
           "z": -100,
-          "zoom": 1.05,
+          "zoom": 0.85,
           "ease": "linear"
         }
       ],
