@@ -1,0 +1,81 @@
+{
+  "width": 1920,
+  "height": 1080,
+  "fps": 60,
+  "clean": true,
+  "letterbox": 0.055,
+  "scene": {
+    "kind": "battle",
+    "map": "Great Divide",
+    "seed": 7,
+    "pre_ticks": 240,
+    "per_side": 160,
+    "buildings": 16,
+    "factories": true
+  },
+  "shots": [
+    {
+      "name": "opening",
+      "ticks": 180,
+      "camera": [
+        {"tick": 0, "x": 0, "z": 40, "zoom": 0.62},
+        {"tick": 180, "x": 0, "z": 0, "zoom": 0.82, "ease": "inout"}
+      ],
+      "text": [
+        {"at": 20, "ticks": 140, "style": "title", "anim": "wipe", "in": 22, "out": 24, "lines": ["NANOLATHE"]},
+        {"at": 52, "ticks": 106, "style": "subtitle", "anim": "fade", "in": 20, "out": 24,
+         "lines": ["A CLEAN-ROOM TOTAL ANNIHILATION ENGINE"]}
+      ]
+    },
+    {
+      "name": "line",
+      "ticks": 150,
+      "camera": [
+        {"tick": 0, "x": -240, "z": -60, "zoom": 1.0},
+        {"tick": 150, "x": 240, "z": 40, "zoom": 1.0, "ease": "inout"}
+      ],
+      "text": [
+        {"at": 18, "ticks": 110, "style": "lower", "anim": "rise", "in": 14, "out": 18, "rule": true,
+         "lines": ["FIXED-POINT SIMULATION AT 30 HZ", "COB SCRIPTS, RETAIL PATHFINDING, RETAIL WEAPONS"]}
+      ]
+    },
+    {
+      "name": "factories",
+      "ticks": 140,
+      "camera": [
+        {"tick": 0, "x": 560, "z": -40, "zoom": 1.15},
+        {"tick": 140, "x": 480, "z": 30, "zoom": 1.45, "ease": "inout"}
+      ],
+      "text": [
+        {"at": 16, "ticks": 100, "style": "lower", "anim": "rise", "in": 14, "out": 18, "rule": true,
+         "lines": ["ECONOMY, CONSTRUCTION AND PRODUCTION", "READ FROM THE ORIGINAL GAME DATA"]}
+      ]
+    },
+    {
+      "name": "melee",
+      "ticks": 150,
+      "camera": [
+        {"tick": 0, "x": 0, "z": 0, "zoom": 1.5},
+        {"tick": 150, "x": 40, "z": -30, "zoom": 2.0, "ease": "inout"}
+      ],
+      "text": [
+        {"at": 16, "ticks": 96, "style": "caption", "anim": "fade", "in": 16, "out": 20,
+         "lines": ["ENHANCED RENDERER: TRUE COLOUR, GLOW, WATER, DEBRIS LIGHTING"]}
+      ]
+    },
+    {
+      "name": "endcard",
+      "ticks": 150,
+      "camera": [
+        {"tick": 0, "x": 0, "z": 0, "zoom": 0.9},
+        {"tick": 150, "x": 0, "z": -20, "zoom": 0.7, "ease": "out"}
+      ],
+      "text": [
+        {"at": 10, "ticks": 130, "style": "title", "anim": "fade", "in": 20, "out": 26, "size": 0.062,
+         "lines": ["NANOLATHE"]},
+        {"at": 34, "ticks": 106, "style": "subtitle", "anim": "type", "in": 30, "out": 26,
+         "lines": ["MIT LICENSED. BRING YOUR OWN RETAIL ASSETS."]}
+      ]
+    }
+  ]
+}
